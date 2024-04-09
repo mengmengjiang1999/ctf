@@ -1,0 +1,32 @@
+[x] Starting local process './luck_guy' argv=[b'./luck_guy'] 
+[+] Starting local process './luck_guy' argv=[b'./luck_guy'] : pid 545560
+[DEBUG] Received 0xad bytes:
+    b'Welcome to Cyber SWAT2019.\n'
+    b'Designed by Solar,wish you can enjoy it and have fun.\n'
+    b'Good luck (^_^)\n'
+    b'_________________\n'
+    b'try to patch me and find flag\n'
+    b'please input a lucky number\n'
+[DEBUG] Sent 0x1 bytes:
+    b'2'
+[*] Switching to interactive mode
+[DEBUG] Sent 0x1 bytes:
+    b'q'
+[DEBUG] Sent 0x1 bytes:
+    b'u'
+[DEBUG] Received 0xac bytes:
+    b"emmm,you can't find flag 23333\n"
+    b"emmm,you can't find flag 23333\n"
+    b"emmm,you can't find flag 23333\n"
+    b"emmm,you can't find flag 23333\n"
+    b"emmm,you can't find flag 23333\n"
+    b'OK,see you again\n'
+emmm,you can't find flag 23333
+emmm,you can't find flag 23333
+emmm,you can't find flag 23333
+emmm,you can't find flag 23333
+emmm,you can't find flag 23333
+OK,see you again
+[*] Got EOF while reading in interactive
+[*] Process './luck_guy' stopped with exit code 0 (pid 545560)
+[*] Got EOF while sending in interactive

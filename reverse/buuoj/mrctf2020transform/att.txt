@@ -1,0 +1,10 @@
+.data:000000000040F040 ; signed int bytearray_40index[40]
+.data:000000000040F040 bytearray_40index dd 9, 0Ah, 0Fh, 17h, 7, 18h, 0Ch, 6, 1, 10h, 3, 11h, 20h
+.data:000000000040F040                 dd 1Dh, 0Bh, 1Eh, 1Bh, 16h, 4, 0Dh, 13h, 14h, 15h, 2, 19h
+.data:000000000040F040                 dd 5, 1Fh, 8, 12h, 1Ah, 1Ch, 0Eh, 8 dup(0)
+.data:000000000040F0E0 ; _BYTE bytearray_96[96]
+.data:000000000040F0E0 bytearray_96    db 67h, 79h, 7Bh, 7Fh, 75h, 2Bh, 3Ch, 52h, 53h, 79h, 57h
+.data:000000000040F0E0                                         ; DATA XREF: main+EF↑o
+.data:000000000040F0E0                 db 5Eh, 5Dh, 42h, 7Bh, 2Dh, 2Ah, 66h, 42h, 7Eh, 4Ch, 57h
+.data:000000000040F0E0                 db 79h, 41h, 6Bh, 7Eh, 65h, 3Ch, 5Ch, 45h, 6Fh, 62h, 4Dh
+.data:000000000040F0E0                 db 3Fh dup(0)

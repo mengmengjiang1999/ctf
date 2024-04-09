@@ -1,0 +1,6 @@
+0x08055866 : lea edx, [eax + 0x30] ; mov eax, dword ptr [ecx] ; mov dword ptr [edx], eax ; ret
+0x0809a696 : mov dword ptr [eax], ecx ; mov eax, dword ptr [0x80eca64] ; mov dword ptr [edx], eax ; ret
+0x0805586b : mov dword ptr [edx], eax ; ret
+0x0809a698 : mov eax, dword ptr [0x80eca64] ; mov dword ptr [edx], eax ; ret
+0x08055869 : mov eax, dword ptr [ecx] ; mov dword ptr [edx], eax ; ret
+0x0809a697 : or byte ptr [ecx + 0x80eca64], ah ; mov dword ptr [edx], eax ; ret

@@ -1,0 +1,283 @@
+['f', 'l', 'a', 'g', '{', 'e', -1, '6', '5', '4', '2', '1', '1', '1', '0', 'b', 'a', '0', '3', '0', '9', '9', 'a', '1', 'c', '0', '3', '9', '3', '3', '7', '}']
+input your flag:Correct!
+
+flag{e!65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e"65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e#65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e$65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e%65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e&65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e'65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e(65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e)65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e*65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e+65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e,65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e-65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e.65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e/65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e065421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e165421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e265421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e365421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e465421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e565421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e665421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e765421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e865421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e965421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e:65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e;65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e<65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e=65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e>65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e?65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e@65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eA65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eB65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eC65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eD65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eE65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eF65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eG65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eH65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eI65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eJ65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eK65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eL65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eM65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eN65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eO65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eP65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eQ65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eR65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eS65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eT65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eU65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eV65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eW65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eX65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eY65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eZ65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e[65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e\65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e]65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e^65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e_65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e`65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ea65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eb65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ec65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ed65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ee65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ef65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eg65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eh65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ei65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ej65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ek65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{el65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{em65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{en65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eo65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ep65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eq65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{er65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{es65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{et65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{eu65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ev65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ew65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ex65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ey65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{ez65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e{65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e|65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e}65421110ba03099a1c039337}
+input your flag:Correct!
+
+flag{e~65421110ba03099a1c039337}
