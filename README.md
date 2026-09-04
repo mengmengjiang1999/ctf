@@ -1,8 +1,12 @@
 # CTF 题目与 Writeup 归档
 
+[![Public audit](https://github.com/mengmengjiang1999/ctf/actions/workflows/public-audit.yml/badge.svg)](https://github.com/mengmengjiang1999/ctf/actions/workflows/public-audit.yml)
+
 这是一个 CTF 学习与复现仓库，包含 Crypto、Pwn、Reverse、Web、Misc 等方向的题目附件、实验脚本和部分 writeup。
 
-仓库最初是一次性上传的个人记录：文件命名和目录层级不统一，部分脚本未完成，也有编译产物、IDA 数据库及第三方工具。本轮整理遵循“保留历史、先补文档、逐题验证”的原则，没有移动或删除原文件。
+> **剧透与安全提示：**仓库包含题目答案、flag、利用脚本和来源不一的可执行文件。请只在获得授权的题目环境中使用；浏览 writeup 前请注意剧透，不要在宿主机直接运行未知附件。
+
+仓库最初是一次性上传的个人记录：文件命名和目录层级不统一，部分脚本未完成，也有编译产物、IDA 数据库及第三方工具。本轮整理遵循“保留题目附件、先补文档、逐题验证”的原则；只移除了可再生成的缓存、编辑器数据库和调试日志。
 
 ## 快速导航
 
@@ -36,7 +40,7 @@
 - 一些目录只保存了解题脚本，没有原始二进制；另一些只有附件，没有 solve。
 - 多个 Pwn 脚本写死了已经失效的 BUUOJ 地址，应改为“本地默认、远程可选”。
 - `pk/pkcrack-1.2.2`、`tctf2023/binaryai` 下包含第三方源码，后续需要补许可证与来源。
-- 历史提交中已有缓存、编译产物和逆向数据库；本轮只通过 `.gitignore` 阻止继续新增，不擅自删除。
+- Git 历史中仍存在早期缓存和大型逆向数据库；当前版本已清理可再生成文件，但彻底缩减历史体积仍需单独执行历史重写。
 
 ## 贡献要求
 
@@ -48,3 +52,15 @@
 - 解释关键漏洞/算法、完整复现命令和依赖版本的 `README.md`。
 
 仅含 flag 或只粘贴脚本的记录不算完整 writeup。
+
+详细流程见 [贡献指南](CONTRIBUTING.md)。提交前可运行：
+
+```bash
+python3 scripts/public_audit.py
+python3 scripts/generate_challenge_docs.py
+git diff --check
+```
+
+## 许可与第三方内容
+
+仓库作者原创代码采用 MIT License，原创文档与 writeup 采用 CC BY 4.0；比赛附件、二进制和第三方源码不因此获得重新许可。使用或分发前请阅读 [LICENSE](LICENSE) 与 [第三方内容说明](THIRD_PARTY_NOTICES.md)。安全问题或误提交的敏感信息请按 [安全策略](SECURITY.md) 处理。

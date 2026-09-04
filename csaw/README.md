@@ -18,7 +18,6 @@
 
 | 文件 | 用途 |
 | --- | --- |
-| `.gdb_history` | 附件 |
 | `babysfirst.py` | 源码或辅助脚本 |
 | `bot_send.py` | 源码或辅助脚本 |
 | `flag.txt` | 题目输入/输出 |

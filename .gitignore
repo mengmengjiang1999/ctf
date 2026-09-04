@@ -27,8 +27,11 @@ flag.txt
 secret.py
 .env
 
-# Keep historical artifacts that were already committed.  These rules only
-# prevent new generated files from being added accidentally.
+# Large reproducible debug logs from misc/pre
+/misc/pre/result*.txt
+
+# Challenge binaries and original attachments remain tracked intentionally;
+# these rules prevent newly generated local files from being added.
 
 # The tracked decomposed-Unicode filename is presented by macOS as this NFC
 # alias. Ignore only the phantom alias so a fresh checkout stays clean.
