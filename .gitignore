@@ -1,0 +1,35 @@
+# OS / editors
+.DS_Store
+.vscode/
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Native build products and reverse-engineering databases
+*.o
+*.out
+*.gch
+*.id0
+*.id1
+*.id2
+*.idb
+*.i64
+*.nam
+*.til
+.gdb_history
+
+# Local challenge secrets and transient output
+flag
+flag.txt
+secret.py
+.env
+
+# Keep historical artifacts that were already committed.  These rules only
+# prevent new generated files from being added accidentally.
+
+# The tracked decomposed-Unicode filename is presented by macOS as this NFC
+# alias. Ignore only the phantom alias so a fresh checkout stays clean.
+/crypto/buuoj/base64flag/етЪЧbaseЃПЃП.txt
