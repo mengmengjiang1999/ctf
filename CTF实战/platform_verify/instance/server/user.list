@@ -1,0 +1,20 @@
+{
+	"type":"USER_DEFINE",
+	"subtype":"SERVER_STATE"
+}
+{
+	"user_name":"zhao",
+	"passwd":"123",
+}
+{
+	"user_name":"qian",
+	"passwd":"456",
+}
+{
+	"user_name":"sun",
+	"passwd":"123",
+}
+{
+	"user_name":"li",
+	"passwd":"456",
+}

@@ -1,0 +1,137 @@
+## **0x00** **前言**  
+
+**与2018年网鼎杯的pwn题相比，今年初赛的pwn中，vm的题目比较多，题型更加灵活。本题是玄武组的一道pwn题。至今网络上没发现其writeup，故写下此文。**
+
+##  **0x01** **分析**
+
+老规矩，查看pwn的防护措施，libc为2.23，ubuntu16，赛前以为本场比赛为libc2.27或者libc2.29。在保护全开的情况下，最常见的就是覆盖malloc_hook、free_hook或
+io_file结构。
+
+![image.png](https://image.3001.net/images/20200611/1591845939_5ee1a433dbf28.png!small)
+
+由于本题是类似于执行opcode的操作，需要深入调试分析，且F5是失效的，所以这里算是第一个难点吧。程序具体流程如下：取用户输入的数据，转换为ascii码的值，用此值乘以4，然后从opcode_table中查找对应位置的opcode的码替换原用户输入的数据。接着通过jmp
+rax跳转到对应的代码块的分支上执行。如下图所示。
+
+![image.png](https://image.3001.net/images/20200611/1591845971_5ee1a45307ea9.png!small)
+
+红框中是用户输入的数据已经被替换为opcode的数据。
+
+![image.png](https://image.3001.net/images/20200611/1591845982_5ee1a45e26472.png!small)
+
+下图就是所有的opcode组合起来的一个opcode_table。
+
+![image.png](https://image.3001.net/images/20200611/1591845990_5ee1a466ed63d.png!small)
+
+经过大量调试后发现几个重要的opcode码，其中用0x6060buf代表bss上0x060结尾的数组。以下表示opcode码和对应的操作。
+
+Opcode=0  |  0x6060buf-1  
+---|---  
+Opcode=1  |  0x6060buf+1  
+Opcode=4|14（opcode=4存在6060buf校验）  |  putchar(0x6060buf)  
+Opcode=5|15（opcode=5时候，存在6060buf校验）  |  getchar(0x6060buf)  
+Opcode=8  |  重新开始循环  
+  
+## **0x02 libc** **泄露和漏洞利用思路**
+
+既然知道了这几个关键的opcode码，当opcode=0时候，0x6060buf-1，如果一直使0x6060buf-1，那么配合上opcode=14的puchar，就可以泄露程序的pie地址和libc的地址了，如下图红框所示。
+
+![image.png](https://image.3001.net/images/20200611/1591846016_5ee1a4806ec9d.png!small)
+
+这里给出一个参考payload。
+
+    
+    
+    pay='\x5b\0\x07'+'\x00'*0x58+'\x14\x01'*6+'\x00'*6+'\x00'*0x10+'\x14\x01'*6+'\x08'
+    
+    p.sendline(pay)
+    
+    data =p.recvuntil('>>')
+    
+    leak_pie= u64((data[:6]).ljust(8,b'\x00'))
+    
+    leak_libc= u64((data[6:12]).ljust(8,b'\x00'))
+
+细心的同学可能会问，为什么payload的后面字节都没有进行对应的opcode_table的转换，为什么要以\x5b开始，而不是\x00开始呢？别急，后面会有解释。
+
+既然知道了putchar可以泄露pie和libc内容，那么利用getchar就可以写入内容。由于0x6060buf是在bss段上面的。如果通过opcode=0的方式将0x6060buf的指针指向stderr的位置，利用opcode=15的getchar劫持stderr，修改stderr的vtable的finish为one_gadgets，利用程序的fclose(stderr)触发one_gadgets就可以达到getshell的目的了。
+
+下图是bss段上，6060buf距离stderr的位置，只有0x20个字节。
+
+![image.png](https://image.3001.net/images/20200611/1591846029_5ee1a48dae596.png!small)
+
+同样的，这里给出一个参考payload
+
+    
+    
+    p.send('\x5b\0\x07'+'\x00'*0x20+'\x15\x01'*0x100+'\x04')
+    
+    fake_io_file= p64(6060buf)  # 在stderr处写入 0x6060buf 地址
+    
+    fake_io_file= '\x00'*0x18 # 填满0x20个了。
+    
+    fake_io_file+= p64(0xfbad8000)  #  
+    
+    fake_io_file+= p64(oneshell) #oneshell 68
+    
+    fake_io_file= fake_io_file.ljust(0xd8+0x20,b'\0') #libc223 x64 offset是d8
+    
+    fake_io_file+= p64(6060buf-8) # 虚拟的vtable
+
+![image.png](https://image.3001.net/images/20200611/1591846049_5ee1a4a110ffc.png!small)
+
+**![image.png](https://image.3001.net/images/20200611/1591846057_5ee1a4a9b0691.png!small)**
+
+##  **0x03** **绕过opcode转换表** ****
+
+为什么要使用'\x5b\0\x07'呢。再次经过漫长的调试会发现如果不绕过opcode_table来执行程序，这个漏洞的利用点很难成立。所以如何绕过opcode_table呢？
+
+1）当用户输入为’\x00’的时候，可以直接绕过opcode_table中判断，用户输入任何数据，将不会再转换。绕过原因如下图红框所示。
+
+![image.png](https://image.3001.net/images/20200611/1591846068_5ee1a4b48c742.png!small)
+
+2）第一个问题解决了，但是程序会判断用户输入的内容中存在’\x00‘的时候，就会将’\x00’替换为8。打断我们精心构造的opcode链。如下图所示。
+
+![image.png](https://image.3001.net/images/20200611/1591846077_5ee1a4bdbef02.png!small)
+
+那么如何绕过这个坑呢，如果你是从0~9都调试一遍的话，会发现使用opcode=6的时候（也就是\x5b），代码块会判断用户数据是否是7，如果不是7，继续累加到下一位数据，如果是7，则终止累加。程序接着跳入下一个指令继续执行，这里已经不再校验用户输入的数据是经过opcode_table转化的数据了。
+
+用简化的代码表示一下，
+
+    
+    
+    Buf[0]={‘\x6\x00\x7\xopcode’};
+    
+    if(buf[i]==6)
+    
+    {
+    
+    Whie(1){
+    
+    //执行opcode=6的代码块中，
+    
+           If(buf[i+1]!=7)
+    
+           {
+    
+                  i ++;
+    
+    }else if(buf[i+1]==7)
+    
+    {
+    
+    Break;
+    
+           //跳转到其他数据执行。
+    
+    }
+    
+     
+    
+    }
+    
+    }
+
+至此，本题目分析完毕。同时希望大家好好学习web~
+
+ ***本文作者：张道全，转载请注明来自FreeBuf.COM**  
+

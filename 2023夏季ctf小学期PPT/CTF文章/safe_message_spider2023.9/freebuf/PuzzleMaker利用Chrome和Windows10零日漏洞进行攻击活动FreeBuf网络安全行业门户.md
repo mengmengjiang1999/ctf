@@ -1,0 +1,151 @@
+2021年4月14-15日，卡巴斯基检测到一波针对多家公司的针对性攻击活动。进一步的分析表明，这些攻击利用了一系列Google
+Chrome和Microsoft Windows零日漏洞。虽然我们无法在Chrome
+web浏览器中检索到远程代码执行（RCE）漏洞，但我们发现并分析了用于反沙箱并获取系统权限的提权（EoP)漏洞。
+
+提权漏洞经过了细微修改，针对Windows 10最新和最突出的版本（17763 – RS5、18362 – 19H1、18363 – 19H2、19041
+– 20H1、19042 – 20H2），并利用了两个不同的Microsoft
+Windows操作系统内核漏洞。2021年4月20日，我们向微软提交了这些漏洞，微软分配了漏洞编号，信息泄露漏洞编号为CVE-2021-31955，提权漏洞编号为CVE-2021-31956，微软已于2021年6月8日对这两个漏洞进行了修复。
+
+## 远程代码执行漏洞
+
+所有攻击都是通过Chrome浏览器执行的，但是我们无法检索到带有完整漏洞利用代码的JavaScript，不过攻击事件时间使我们怀疑存在一个特定的漏洞。
+
+Pwn2Own大赛于2021年4月6-8日举行，这是一场计算机黑客大赛，其中Google Chrome
+web浏览器就是目标之一。根据ZDI（零日漏洞计划，Pwn2Own组织者）网站消息，一个参赛团队使用Typer Mismatch
+bug成功利用了Chrome render进程。
+
+2021年4月12日，Chromium的开发人员向开源存储库V8（Chrome和Chromium
+web浏览器使用的JavaScript引擎）提交了issue 1196683和issue
+1195777修复与Typer相关的bug。一个bug修复（issue
+1196683）旨在修补Pwn2Own大赛期间使用的漏洞，bug修复与回归测试一起提交 ——
+JavaScript文件触发这些漏洞。同一天，Twitter用户@r4j0x00在Github上发布了一个有效的远程代码执行漏洞，针对Google
+Chrome最新版本，使用了源于issue 1196683的漏洞，在浏览器renderer的上下文中执行shellcode。
+
+![](https://image.3001.net/images/20210611/1623423270_60c3792698739d91e80d9.png!small)2021年4月12日发布的Chrome零日漏洞截图
+
+这个漏洞不包含沙箱规避，因此，仅在使用命令行选项启动浏览器时才起作用。
+
+2021年4月13日，Google发布了适用于Windows、Mac和Linux的Chrome更新89.0.4389.128，修复了两个漏洞，CVE-2021-21220（Pwn2Own期间使用的漏洞）就是其中之一。
+
+我们的一些客户在2021年4月14-15日遭到攻击，他们的Chrome已经更新到了89.0.4389.128，这就是我们认为攻击中没有使用CVE-2021-21220的原因。
+
+2021年4月14日，Google发布了适用于Windows、Mac和Linux的Chrome更新90.0.4430.72，修复了37个漏洞，同一天，一个新的Chrome漏洞被披露。
+
+![](https://image.3001.net/images/20210611/1623423273_60c37929c6d9a87a17fbd.png!small)2021年4月14日Github存储库发布的Chrome零日漏洞截图
+
+这个新发布的漏洞源于issue 1195777，针对新发布的Chrome
+90.0.4430.72，2021年4月20日修复了该漏洞CVE-2021-21224。
+
+我们怀疑攻击者使用此JavaScript文件对开发（或者从其他人获取）的漏洞进行回归测试，并可能在其攻击中使用了CVE-2021-21224。
+
+## 提权漏洞
+
+CVE-2021-31955是ntoskrnl.exe中的信息泄露漏洞，该漏洞与Windows操作系统功能SuperFetch有关。SuperFetch是在Windows
+Vista中引入的，旨在通过将常用的应用程序预加载到内存中来减少软件加载时间。为了实现SuperFetch，函数NtQuerySystemInformation实现了一个特殊的系统信息类SystemSuperfetchInformation，这个系统信息类包含十多个不同的SuperFetch信息类。漏洞位于SuperFetch信息类SuperfetchPrivSourceQuery的NtQuerySystemInformation函数返回的数据，包含当前执行进程的EPROCESS内核地址。
+
+值得注意的是，在我们发现以及微软修复该漏洞之前，该漏洞代码早在几年前就已经出现在Github上。
+
+![](https://image.3001.net/images/20210611/1623423276_60c3792c30032e130f131.png!small)
+
+在MemInfo实用程序源代码中观察到CVE-2021-31955
+
+另一个漏洞CVE-2021-31956是ntfs.sys中堆缓冲区溢出漏洞。函数NtfsQueryEaUserEaList处理文件的扩展属性列表并将检索到的值存储到缓冲区。此函数可通过ntoskrnl系统调用访问并可以控制输出缓冲区的大小。如果扩展属性的大小未对齐，该函数将进行填充并且下一个扩展属性将被存储为32位对齐。该代码检查输出缓冲区是否足够长以适应带有填充的扩展属性，但它不检查可能的整数下溢。因此，可能发生堆缓冲区溢出。
+
+    
+    
+    for(cur_ea_list_entry=ea_list;;cur_ea_list_entry=next_ea_list_entry )
+    
+    {
+    
+    ...
+    
+    out_buf_pos=(DWORD *)(out_buf+padding+occupied_length);
+    
+    if(NtfsLocateEaByName(eas_blocks_for_file,eas_blocks_size,&name,&ea_block_pos))
+    
+    {
+    
+    ea_block=eas_blocks_for_file+ea_block_pos;
+    
+    ea_block_size=ea_block->DataLength+ea_block->NameLength+9;
+    
+    if(ea_block_size<=out_buf_length-padding)// integer-underflow is possible
+    
+    {
+    
+    memmove(out_buf_pos,(constvoid*)ea_block,ea_block_size);// heap buffer overflow
+    
+    *out_buf_pos=0;
+    
+    }
+    
+    }
+    
+    else
+    
+    {
+    
+    ...
+    
+    }
+    
+    ...
+    
+    occupied_length+=ea_block_size+padding;
+    
+    out_buf_length-=ea_block_size+padding;
+    
+    padding=((ea_block_size+3)&0xFFFFFFFC)-ea_block_size;
+    
+    ...
+    
+    }
+
+函数NtfsQueryEaUserEaList中易受攻击代码的伪代码
+
+利用CVE-2021-31956和Windows通知工具（WNF）创建任意内存读写原语，我们计划之后会发布该技术的更多信息。
+
+由于利用CVE-2021-31955获取EPROCESS结构的内核地址，因此可以利用常见的渗透技术窃取SYSTEM令牌。但是，该漏洞使用罕见的”PreviousMode“技术，CHAINSHOT框架曾使用该技术，甚至在2019年的CanSecWest/BlueHat上对其进行了介绍。该漏洞使用这种技术将恶意模块注入系统进程并执行它。
+
+## 恶意模块
+
+除了上述的漏洞，完整的攻击链还包括四个恶意模块，如下所示：
+
+> Stager
+>
+> Dropper
+>
+> Service
+>
+> Remote shell
+
+stager模块用于反馈漏洞利用成功信息，也从远程服务器下载并执行更为复杂的恶意dropper模块。每个stager都是通过个性化的配置blob投递到受害主机的，该blob定义了C2
+URL、会话ID、解密下一阶段恶意软件的密钥以及其他信息。
+
+目前为止，我们发现的所有stager模块都配置为使用相同的URL地址hxxps://p{removed}/metrika_upload/index.php，下载加密的恶意dropper模块。
+
+我们认为远程代码执行漏洞的JavaScript有可能托管在同一个看似合法的地缘政治新闻门户上，但我们没有发现水坑攻击的证据。从受害者来看，漏洞利用活动具有高针对性。
+
+dropper模块用于安装两个可执行文件，这两个文件伪装成Microsoft
+Windows操作系统的合法文件。其中一个文件（%SYSTEM%\WmiPrvMon.exe）被注册为服务，用于启动第二个可执行文件。第二个可执行文件（%SYSTEM%\wmimon.dll）具有远程shell的功能，是攻击活动中的主要payload。我们没有找到任何此恶意软件与其他已知恶意软件之间的相似之处。
+
+远程shell模块内部包含一个硬编码C2（media-seoengine[.]com），C2服务器和客户端之间的所有通信都是经过授权和加密的。远程shell模块能够下载和上传文件、创建进程、静默特定时间以及从受感染主机删除自身。
+
+我们分析的所有组件似乎与已知的攻击组织都没有密切的联系，与CHAINSHOT的唯一相似之处是”PreviousMode“技术，但众所周知不同组织都使用该技术，因此我们将该活动背后的攻击者命名为PuzzleMaker。
+
+## IoCs
+
+> C2：media-seoengine[.]com
+>
+> 可执行文件：%SYSTEM%\WmiPrvMon.exe
+>
+> MD5 09A5055DB44FC1C9E3ADD608EFFF038C
+>
+> 可执行文件：%SYSTEM%\wmimon.dll
+>
+> MD5 D6B850C950379D5EE0F254F7164833E8
+
+## 参考文献
+
+https://securelist.com/puzzlemaker-chrome-zero-day-exploit-chain/102771/#
+

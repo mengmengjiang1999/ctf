@@ -1,0 +1,425 @@
+# Hook_IAT实现调包Win32API函数
+
+阅读量 **195449**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-11-25 10:00:40
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## 0、说明
+
+如何调包Win32API函数？其实就是`Hook`PE文件自己的IAT表。
+
+PE文件在加载到内存后，IAT中存储对应函数名（或函数序号）的地址，所以我们只需要把用作替换的函数地址，覆盖掉IAT中对应函数名（或函数序号）的地址，就能实现调包导入模块的函数。（不仅包括Win32API，包括所有通过dll模块导入的函数，在exe中都有一块导入表与之对应）。
+
+下面先回顾一下PE文件导入表知识，再操作hook IAT。
+
+> 环境：Win10
+>
+> 语言：C
+>
+> 编译：VS2019-x86
+
+## 1、导入表及IAT大致工作原理
+
+这部分涉及到PE文件导入表的知识，所以又回顾了一下PE文件的导入表及IAT大致工作原理。
+
+> 导入表在目录项中的第二项（导出表之后）。对应目录项中的VirtualAddress（RVA）即指向的导入表。
+
+![](https://p3.ssl.qhimg.com/t01c0156fe240177a87.png)
+
+    
+    
+    typedef struct _IMAGE_IMPORT_DESCRIPTOR {
+        union {
+            DWORD   Characteristics;            // 0 for terminating null import descriptor
+            DWORD   OriginalFirstThunk;         // RVA to original unbound IAT (PIMAGE_THUNK_DATA)
+        } DUMMYUNIONNAME;
+        DWORD   TimeDateStamp;                  // 0 if not bound,
+                                                // -1 if bound, and real date\time stamp
+                                                //     in IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT (new BIND)
+                                                // O.W. date/time stamp of DLL bound to (Old BIND)
+    
+        DWORD   ForwarderChain;                 // -1 if no forwarders
+        DWORD   Name;
+        DWORD   FirstThunk;                     // RVA to IAT (if bound this IAT has actual addresses)
+    } IMAGE_IMPORT_DESCRIPTOR;
+    typedef IMAGE_IMPORT_DESCRIPTOR UNALIGNED *PIMAGE_IMPORT_DESCRIPTOR;
+    
+
+这个结构体有5个4字节数据，占20字节，但只需特别记住这三个RVA即可，下面会分别详细说明。
+
+三个RVA所指向的地址大概是这样的：
+
+![](https://p0.ssl.qhimg.com/t01fcd5933403a601b8.png)
+
+注意这是PE文件在 **加载内存前** 的样子！
+
+上面涉及到的IMAGE_THUNK_DATA这个结构数组，其实就是一个4字节数，本来是一个union类型，能表示4个数，但我们只需掌握两种即可，其余两种已经成为历史遗留了。
+
+###  （1）OriginalFirstThunk
+
+OriginalFirstThunk这个RVA所指向的是INT表（Import Name
+Table），这个表每个数据占4个字节。顾名思义就是表示要导入的函数的名字表。
+
+但是之前学导出表有了解到，导出函数可以以名字导出，亦可以序号导出。所以为了方便区分，就将这INT表的每个值做了细微调整：
+
+`INT`：如果这个4字节数的最高位（二进制）为1，那么抹去这个最高位之后，所表示的数就是要导入的函数的序号（即这个函数通过序号导入）；如果最高位是0，那这个数就也是一个RVA，指向`IMAGE_IMPORT_BY_NAME`结构体（包含真正的导入函数的名字字符串，以0结尾）。INT表以4字节0结尾。
+
+`IMAGE_IMPORT_BY_NAME`:前两个字节是一个序号，不是导入序号，一般无用，后面接着就是导入函数名字的字符串，以0结尾。
+
+![](https://p3.ssl.qhimg.com/t0157eb4068ba3eae77.png)
+
+###  （2）Name
+
+这个结构体变量也是一个RVA，直接指向一个字符串，这个字符串就是这个导入表对应的DLL的名字。说到这，大家明白，一个导入表只对应一个DLL。那肯定会有多个导入表。所以对应目录项里的VirtualAddress（RVA）指向的是所有导入表的首地址，每个导入表占20字节，挨着。最后以一个空结构体作为结尾（20字节全0结构体）。
+
+###  （3）FirstAddress
+
+FirstAddress（RVA）指向的就是IAT表！IAT表也是每个数据占4个字节。最后以4字节0结尾。
+
+注意上图PE文件 **加载内存前** ，IAT表和INT表的完全相同的，所以此时IAT表也可以判断函数导出序号，或指向函数名字结构体。
+
+而在 **加载内存后**
+，差别就是IAT表发生变化，系统会先根据结构体变量Name加载对应的dll（拉伸），读取dll的导出表，对应原程序的INT表，匹配dll导出函数的地址，返回其地址，贴在对应的IAT表上，挨个修正地址（也就是GetProcAddress的功能）。
+
+所以上文说到，IAT表会存储dll的函数的地址，方便调用该函数时，直接取IAT表这个地址内的值，作为函数地址，去CALL。
+
+![](https://p5.ssl.qhimg.com/t016fecf83706ba27ab.png)
+
+（这是PE文件 **加载内存后** 的样子，注意IAT表发生变化！）
+
+## 2、根据函数名Hook IAT表
+
+上面大概回顾了一下PE文件导入表的知识，现在就直接尝试写hook IAT的代码，把这一块封装成一个函数。
+
+###  （1）函数定义
+
+    
+    
+    #include<Windows.h>
+    //hook自己pe文件的IAT导入表
+    //参数1:自己进程的句柄
+    //参数2:要Hook的函数名称指针
+    //参数3:需要覆盖的新的函数指针。
+    //返回值：为0则代表失败（不是PE文件则返回0且弹MessageBox，没有找到被hook函数仅仅返回0），
+    //返回值：正常返回被hook函数的原始地址。
+    int Hook_IAT_By_FuncName(HANDLE hMyProcess, PBYTE pOldFuncName, PDWORD pNewFuncAddr);
+    
+
+###  （2）定位到导入表
+
+    
+    
+        PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)hMyProcess;
+        PIMAGE_NT_HEADERS32 pNtHeader = (PIMAGE_NT_HEADERS32)((DWORD)pDosHeader + pDosHeader->e_lfanew);
+        PIMAGE_OPTIONAL_HEADER pOptionHeader = (PIMAGE_OPTIONAL_HEADER)((DWORD)pNtHeader + 4 + IMAGE_SIZEOF_FILE_HEADER);
+    
+        //判断参数一句柄指向的模块是否为PE文件
+        if (*(PWORD)pDosHeader != 0x5A4D || *(PDWORD)pNtHeader != 0x4550) {
+            MessageBox(NULL, L"Not PE File!!", L"error!", NULL);
+            return 0;
+        }
+        //定位到可选头目录项
+        PIMAGE_DATA_DIRECTORY pDateDirectory = (PIMAGE_DATA_DIRECTORY)pOptionHeader->DataDirectory;
+        //定位到导入表
+        PIMAGE_IMPORT_DESCRIPTOR pImportDescriptor = (PIMAGE_IMPORT_DESCRIPTOR)((DWORD)pDosHeader + pDateDirectory[1].VirtualAddress);
+    
+
+###  （3）遍历每块导入表
+
+这一部分，遍历每块导入表的每个函数名，根据导入表中INT表指向的函数名，逐个对比。
+
+直到找到我们寻找的函数名， **切记先更改IAT表中对应地址内存的读写权限** ，再写入hook函数的地址。
+
+    
+    
+        //遍历每块导入表
+        while (pImportDescriptor->Name)
+        {
+            //指向INT
+            PDWORD pThunkINT = (PDWORD)((DWORD)pDosHeader + pImportDescriptor->OriginalFirstThunk);
+            //指向IAT
+            PDWORD pThunkIAT = (PDWORD)((DWORD)pDosHeader + pImportDescriptor->FirstThunk);
+            while (*pThunkINT)
+            {
+                //因为们是根据函数名Hook，所以默认排除以序号导入的函数
+                if (*pThunkINT & 0x80000000) {
+                    ;
+                }
+                else
+                {    //寻址函数名字结构体
+                    PIMAGE_IMPORT_BY_NAME pImportByName = (PIMAGE_IMPORT_BY_NAME)((DWORD)pDosHeader + *pThunkINT);
+                    //比较导入表中的函数名和我们参数2提供的函数名
+                    //下面这行代码：如果pOldFuncName指向“MessageBox”，但导入表中只有"MessageBoxW"，也比较成功，进入if内。
+                    if (!memcmp(pOldFuncName, pImportByName->Name, strlen((char*)pOldFuncName))) {
+                           //找到对应函数名后，
+                        //先更改IAT表中对应地址内存的读写权限
+                        DWORD lpflOldProtect;
+                        BOOL flag = VirtualProtect((LPVOID)pThunkIAT, sizeof(DWORD), PAGE_EXECUTE_READWRITE, &lpflOldProtect);
+                        //记录被hook函数的原始地址
+                        DWORD OldAddr = *pThunkIAT;
+                        //写入hook函数的地址，即第三个参数
+                        *pThunkIAT = (DWORD)pNewFuncAddr;
+                        //返回被hook函数的原始地址
+                        return OldAddr;
+                    }
+                }
+                //每次循环，如果函数名不对应，那么这两个指针同时增加。
+                //为满足pThunkINT指向的名字和pThunkIAT指向的地址是一一对应的！
+                pThunkINT++;
+                pThunkIAT++;
+            }
+               //结构体指针自增，表示指向下一块导入表。
+            pImportDescriptor++;
+        }
+        //最后跳出while循环，表示没有找到对应函数名的导入函数
+        //则直接return 0；
+        return 0;
+    
+
+## 3、测试
+
+上述封装好hookIAT的函数，现在编写main函数调用测试一下，
+
+我们选择测试hook `MessageBox`函数。
+
+###  （1）编写hook函数
+
+编写hook函数用于调包被hook函数，即替换掉，表面代码是调用MessageBox函数，弹出框，实际上并不会执行MessageBox函数，而是执行我们的hook函数。
+
+所以这里有一个 **细节** ：hook函数的定义最好与被hook函数一致。
+
+未避免报错，最好连调用约定都定义为一样的，否则很可能会报如下错误：
+
+![](https://p0.ssl.qhimg.com/t010e3c6bbb5620b613.png)
+
+由于MessageBox的函数定义为：
+
+    
+    
+    WINUSERAPI
+    int
+    WINAPI
+    MessageBoxW(
+        _In_opt_ HWND hWnd,
+        _In_opt_ LPCWSTR lpText,
+        _In_opt_ LPCWSTR lpCaption,
+        _In_ UINT uType);
+    #define MessageBox  MessageBoxW
+    
+
+且上网查了一下MessageBox的调用约定为`__stdcall`，
+
+所以进行如下定义hook函数（函数内容只是简单测试一下）：
+
+    
+    
+    int __stdcall NewFunc(HWND x, LPCWSTR y, LPCWSTR z, UINT m) {
+        printf("\n\n");
+        printf("x=%d\n", x);
+        printf("y=%s\n", y);
+        printf("z=%s\n", z);
+        printf("m=%d\n", m);
+           printf("\n\n");
+        printf("Sorry! :\"MessageBox\" Function has been hooked!\n ");
+        return 1;
+    }
+    
+
+###  （2）编写main函数进行调用测试
+
+    
+    
+    int main() {
+        //我们要hook函数的函数名
+        char FuncName[] = "MessageBox";
+        //参数字符串
+        char str[] = "Hello World!\n";
+        //定义函数指针类型
+        typedef int(__stdcall* MessageBoxFunc)(HWND, LPCWSTR, LPCWSTR, UINT);
+    
+        //先调用正常MessageBox函数
+        MessageBox(NULL,L"HOOK IAT",L"Tip",NULL);
+        //调用先前编写的hookIAT函数，进行hook
+        //同时返回被hook函数的地址，定义函数指针变量接收
+        MessageBoxFunc OldFunc = (MessageBoxFunc)Hook_IAT_By_FuncName(GetModuleHandle(NULL), (PBYTE)FuncName, (PDWORD)NewFunc);
+    
+        //测试函数指针变量接收的函数地址
+        OldFunc(NULL, L"MessageBox is here", L"Tip", NULL);
+    
+        //此时MessageBox函数已经被hook，不会再弹出框，
+        //用于调包的hook函数是在控制台输出
+        MessageBox((HWND)1, (LPCWSTR)FuncName, (LPCWSTR)str, (UINT)2);
+    
+        printf("Got it !\n");
+    
+        return 0;
+    }
+    
+
+###  （3）测试
+
+第一个正常的MessageBox
+
+![](https://p0.ssl.qhimg.com/t01755511378b69cf21.png)
+
+点击确认后执行hookIAT函数
+
+第二个MessageBox是定义的函数指针变量接收的hookIAT函数返回的地址。
+
+![](https://p0.ssl.qhimg.com/t010d3478d4b648d3e1.png)
+
+点击确认后，再次执行MessageBox，但此时已经被hook调包了，在控制台输出语句。
+
+![](https://p5.ssl.qhimg.com/t01830d2fde03113e87.png)
+
+看来MessageBox已经被hook了。
+
+## 4、所有源码
+
+因为代码量并不多，所以直接写到一个cpp文件里即可。
+
+> 环境：Win10
+>
+> 语言：C
+>
+> 编译：VS2019-x86
+    
+    
+    #include<Windows.h>
+    #include<stdio.h>
+    
+    //hook自己pe文件的IAT导入表
+    //参数1:自己进程的句柄
+    //参数2:要Hook的函数名称指针
+    //参数3:需要覆盖的新的函数指针。
+    //返回值：为0则代表失败（不是PE文件则返回0且弹MessageBox，没有找到被hook函数仅仅返回0），
+    //返回值：正常返回被hook函数的原始地址。
+    int Hook_IAT_By_FuncName(HANDLE hMyProcess, PBYTE pOldFuncName, PDWORD pNewFuncAddr);
+    
+    int __stdcall NewFunc(HWND x, LPCWSTR y, LPCWSTR z, UINT m);
+    
+    int main() {
+    
+        char FuncName[] = "MessageBox";
+    
+        char str[] = "Hello World!\n";
+        typedef int(__stdcall* MessageBoxFunc)(HWND, LPCWSTR, LPCWSTR, UINT);
+    
+        MessageBox(NULL,L"HOOK IAT",L"Tip",NULL);
+    
+        MessageBoxFunc OldFunc = (MessageBoxFunc)Hook_IAT_By_FuncName(GetModuleHandle(NULL), (PBYTE)FuncName, (PDWORD)NewFunc);
+    
+        OldFunc(NULL, L"MessageBox is here", L"Tip", NULL);
+    
+        MessageBox((HWND)1, (LPCWSTR)FuncName, (LPCWSTR)str, (UINT)2);
+    
+        printf("Got it !\n");
+    
+    
+        return 0;
+    }
+    
+    int __stdcall NewFunc(HWND x, LPCWSTR y, LPCWSTR z, UINT m) {
+        printf("\n\n");
+        printf("x=%d\n", x);
+        printf("y=%s\n", y);
+        printf("z=%s\n", z);
+        printf("m=%d\n", m);
+        printf("\n\n");
+        printf("Sorry! :\"MessageBox\" Function has been hooked!\n ");
+        return 1;
+    }
+    
+    
+    //hook自己pe文件的IAT导入表
+    //参数1:自己进程的句柄
+    //参数2:要Hook的函数名称指针
+    //参数3:需要覆盖的新的函数指针。
+    //返回值：为0则代表失败（不是PE文件则返回0且弹MessageBox，没有找到被hook函数仅仅返回0），
+    //返回值：正常返回被hook函数的原始地址。
+    int Hook_IAT_By_FuncName(HANDLE hMyProcess, PBYTE pOldFuncName, PDWORD pNewFuncAddr) {
+        PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)hMyProcess;
+        PIMAGE_NT_HEADERS32 pNtHeader = (PIMAGE_NT_HEADERS32)((DWORD)pDosHeader + pDosHeader->e_lfanew);
+        PIMAGE_OPTIONAL_HEADER pOptionHeader = (PIMAGE_OPTIONAL_HEADER)((DWORD)pNtHeader + 4 + IMAGE_SIZEOF_FILE_HEADER);
+        //判断参数一句柄指向的模块是否为PE文件
+        if (*(PWORD)pDosHeader != 0x5A4D || *(PDWORD)pNtHeader != 0x4550) {
+            MessageBox(NULL, L"Not PE File!!", L"error!", NULL);
+            return 0;
+        }
+        //定位到可选头目录项
+        PIMAGE_DATA_DIRECTORY pDateDirectory = (PIMAGE_DATA_DIRECTORY)pOptionHeader->DataDirectory;
+        //定位到导入表
+        PIMAGE_IMPORT_DESCRIPTOR pImportDescriptor = (PIMAGE_IMPORT_DESCRIPTOR)((DWORD)pDosHeader + pDateDirectory[1].VirtualAddress);
+    
+        while (pImportDescriptor->Name)
+        {
+    
+            PDWORD pThunkINT = (PDWORD)((DWORD)pDosHeader + pImportDescriptor->OriginalFirstThunk);
+            PDWORD pThunkIAT = (PDWORD)((DWORD)pDosHeader + pImportDescriptor->FirstThunk);
+            while (*pThunkINT)
+            {
+    
+                if (*pThunkINT & 0x80000000) {
+                    ;
+                }
+                else
+                {    //寻址函数名字结构体
+                    PIMAGE_IMPORT_BY_NAME pImportByName = (PIMAGE_IMPORT_BY_NAME)((DWORD)pDosHeader + *pThunkINT);
+                    if (!memcmp(pOldFuncName, pImportByName->Name, strlen((char*)pOldFuncName))) {
+                        DWORD lpflOldProtect;
+                        BOOL flag = VirtualProtect((LPVOID)pThunkIAT, sizeof(DWORD), PAGE_EXECUTE_READWRITE, &lpflOldProtect);
+                        DWORD OldAddr = *pThunkIAT;
+                        *pThunkIAT = (DWORD)pNewFuncAddr;
+                        return OldAddr;
+                    }
+                }
+                pThunkINT++;
+                pThunkIAT++;
+            }
+            pImportDescriptor++;
+        }
+        return 0;
+    }
+    
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **1nt3** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/260057](/post/id/260057)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [逆向分析](/tag/逆向分析)
+  * [PE](/tag/PE)
+  * [IAT-HOOK](/tag/IAT-HOOK)
+
+ **+1** __4赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t010857340ce46bb672.jpg) 1nt3
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

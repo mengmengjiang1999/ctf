@@ -1,0 +1,352 @@
+# 【技术分享】Windows内核利用之旅：熟悉HEVD（附视频演示）
+
+阅读量 **162398**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-06-20 16:45:08
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：hshrzd.wordpress.com
+
+原文地址：<https://hshrzd.wordpress.com/2017/06/05/starting-with-windows-kernel-exploitation-part-2/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+译者：[興趣使然的小胃](http://bobao.360.cn/member/contribute?uid=2819002922)
+
+预估稿费：200RMB
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+**一、前言**
+
+最近我正开始学习Windows内核利用，因此我决定以博文形式分享一些学习笔记。
+
+之前的一篇文章中，我介绍了如何搭建实验环境。现在，让我们学习一下Ashfaq
+Ansari开发的HackSysExtremeVulnerableDriver来熟悉整个实验环境。在接下来的文章中，我计划进一步通过漏洞演示以及利用技术学习来与读者一起探索Windows内核利用之旅。
+
+本文中我们需要准备以下条件：
+
+1、前文介绍的实验环境。
+
+2、HEVD（HackSys Extreme Vulnerable Driver，极其脆弱的HackSys驱动程序）：预编译版本以及源代码。
+
+3、OSR驱动加载器。
+
+4、DebugView（SysInternals工具集中的一员）。
+
+5、Visual Studio 2012（任意版本都可以）。
+
+  
+
+**二、安装及测试HEVD**
+
+首先来看看如何安装HEVD。我们将对被调试主机（Debugee）以及调试器（Debugger）进行配置，以查看调试字符串以及HEVD的符号链接。我们也会做一些漏洞利用研究。你可以查看如下视频，阅读相关说明：
+
+  
+
+**2.1 观察调试字符串**
+
+HEVD以及待分析的漏洞会以调试字符串形式打印大量信息。我们可以在调试端（Debugger，使用WinDbg工具）以及被调试端（Debugee，使用DebugView工具）上观察这些信息。
+
+在安装HEVD之前，我们需要对环境进行配置，才能观察驱动初始化过程中打印的字符串信息。
+
+在调试端（Debugger）：
+
+我们需要打断被调试端（Debugger）的执行过程，以便获得kd命令提示符（在WinDbg中，依次选择Debug、Break）。然后，我们通过如下命令开启调试字符串打印功能：
+
+    
+    
+    ed nt!Kd_Default_Mask 8
+
+之后，我们使用如下命令恢复被调试端的执行过程。
+
+    
+    
+    g
+
+警告：打开这个功能会降低被调试端的运行性能。因此，如果条件允许，尽量在本地观察调试字符串（即只在被调试端上观察调试字符串）。
+
+在被调试端：
+
+我们需要以管理员权限运行DebugView。然后在菜单中依次选择如下选项：Capture->Capture Kernel。
+
+**2.2 安装驱动**
+
+首先，我们需要在被调试端（即受害者主机）上下载预编译包（驱动+利用程序），安装并测试预编译包。我们可以在Github上的HackSysTeam代码仓库中找到预编译包。预编译包中包含两个版本的驱动：存在漏洞的版本以及不存在漏洞的版本。我们选择存在漏洞的32位（i386）版驱动。
+
+在OSR驱动加载器中，我们选择服务启动方式为自启动方式。然后点击“Register Service”，服务注册成功后再点击“Start
+Service”开启服务。
+
+此时我们应该可以在调试主机的WinDbg上以及被调试主机的DbgView上看到HEVD的banner信息。
+
+**2.3 添加符号**
+
+HEVD的预编译版本包含了符号（sdb文件）信息，我们可以在调试端中添加这些信息。首先，我们可以向被调试端发送一个中断信号打断其执行流程，然后观察已加载的所有模块：
+
+    
+    
+    lm
+
+设置过滤器，查看HEVD模块：
+
+    
+    
+    lm m H*
+
+然后我们会发现它并没有附加任何符号，但这个问题很容易解决。首先，为了打印WinDbg在搜索符号时所引用的路径信息，我们可以打开noisy模式：
+
+    
+    
+    !sym_noisy
+
+然后尝试重载这些符号：
+
+    
+    
+    .reload
+
+接着再试试查找这些符号。此时你就可以发现这些路径信息，我们可以从这些路径中拷贝pdb文件。将pdb文件移动到Debugger主机上的合适位置，然后再次重载符号。我们可以尝试打印HEVD的所有函数来进行测试：
+
+    
+    
+    x HEVD!*
+
+读者可以查看视频以了解详细信息。
+
+**2.4 测试漏洞利用**
+
+预编译包中同样包含一系列专用漏洞。我们可以通过合适的命令来运行这些漏洞。让我们试着部署其中一些漏洞，并设置cmd.exe为待执行的程序。
+
+部署内核池溢出（Pool Overflow）漏洞：
+
+如果漏洞利用成功，那么目标程序（cmd.exe）会以管理员权限运行。
+
+我们可以使用“whoami”命令确定目标程序的运行权限：
+
+同时，我们可以在调试端上看到漏洞打印出的调试字符串：
+
+除了“double fetch”这个漏洞之外，所有的漏洞都能在单独一个核心上完美运行。如果我们想要复现“double
+fetch”漏洞，需要开启被调试主机的双核功能。
+
+警告：某些漏洞并不能100%被成功复现，系统在复现这些漏洞时可能会崩溃。不要在意这些细节，这种情况是正常的。
+
+  
+
+**三、来跟驱动打个招呼吧**
+
+与用户环境中的漏洞利用情况类似，内核中的漏洞利用也是从查找关键点开始，利用这些关键点，我们可以为程序提供一个输入数据。然后，我们需要查找能够破坏程序执行过程的输入数据（与用户环境相反，内核中崩溃点会直接导致系统蓝屏！）。最后，我们会尝试控制输入以便控制漏洞程序的执行流程。
+
+为了能够在用户态与驱动通信，我们需要向驱动发送IOCTL（Input Output
+controls，输入输出控制码）控制消息。我们可以利用IOCTL从用户态的输入缓冲区向驱动发送某些输入数据。这也是我们尝试进行漏洞利用的出发点。
+
+HEVD包含许多类漏洞样例。每个漏洞样例都可以使用不同的IOCTL触发，然后通过输入缓冲区加以利用。某些（不是全部）漏洞在触发时会导致系统蓝屏。
+
+**3.1 查找设备名以及IOCTL**
+
+在与驱动通信前，我们需要知道以下两点信息：
+
+1、驱动创建的设备（如果驱动没有创建任何设备，我们就无法与它通信）。
+
+2、驱动能接受的IOCTL列表。
+
+HEVD是个开源项目，因此我们可以直接从源代码中阅读所需的所有信息。在现实世界中，大多数情况下我们需要对驱动进行逆向才能获取所需的信息。
+
+让我们来看看HEVD创建设备的那部分代码。
+
+设备名如上图所示。
+
+现在让我们找到设备所能接受的IOCTL列表。我们先来看看与IRP数组有关的那部分代码：
+
+与IRP_MJ_DEVICE_CONTOL绑定的那个函数用来派遣发往驱动的IOCTL。因此，我们需要看一下这个函数的内部代码。
+
+代码中包含一个switch条件分支，会根据具体条件调用处理函数，以正确处理特定的IOCTL。我们可以根据switch的条件分支，构造出我们所需的IOCTL列表。所生成的IOCTL列表位于头文件中：
+
+**3.2 编写客户端程序**
+
+现在我们已经收集了足够多的信息，接下来我们可以使用自己的程序与驱动通信。我们可以将所有信息汇集在一个头文件中，如hevd_constants.h头文件：
+
+    
+    
+    #pragma once
+    #include <windows.h>
+     
+    const char kDevName[] = "\\.\HackSysExtremeVulnerableDriver";
+     
+    #define HACKSYS_EVD_IOCTL_STACK_OVERFLOW                  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_STACK_OVERFLOW_GS               CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_ARBITRARY_OVERWRITE             CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_POOL_OVERFLOW                   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_ALLOCATE_UAF_OBJECT             CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_USE_UAF_OBJECT                  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_FREE_UAF_OBJECT                 CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_ALLOCATE_FAKE_OBJECT            CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_TYPE_CONFUSION                  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_INTEGER_OVERFLOW                CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_NULL_POINTER_DEREFERENCE        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_UNINITIALIZED_STACK_VARIABLE    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_UNINITIALIZED_HEAP_VARIABLE     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80C, METHOD_NEITHER, FILE_ANY_ACCESS)
+    #define HACKSYS_EVD_IOCTL_DOUBLE_FETCH                    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80D, METHOD_NEITHER, FILE_ANY_ACCESS)
+
+每个IOCTL的编号由一个宏确定，这个宏位于标准的Windows头文件winioctl.h中：
+
+如果你在程序中包含了windows.h头文件，上面这个宏就会被自动添加到代码中。现在，我们不要被这些常量的具体含义所困扰，我们可以直接使用已定义好的这些元素。
+
+我们准备写个简单的用户态程序，来与驱动交流。首先，我们使用CreateFile函数打开设备。然后，我们使用DeviceControl函数向设备发送IOCTL。
+
+简单的示例程序如下所示。这个程序会向驱动发送STACK_OVERFLOW IOCTL，程序源码为send_ioctl.cpp：
+
+    
+    
+    #include <stdio.h>
+    #include <windows.h>
+     
+    #define HACKSYS_EVD_IOCTL_STACK_OVERFLOW    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_NEITHER, FILE_ANY_ACCESS)
+     
+    const char kDevName[] = "\\.\HackSysExtremeVulnerableDriver";
+     
+    HANDLE open_device(const char* device_name)
+    {
+        HANDLE device = CreateFileA(device_name,
+            GENERIC_READ | GENERIC_WRITE,
+            NULL,
+            NULL,
+            OPEN_EXISTING,
+            NULL,
+            NULL
+        );
+        return device;
+    }
+     
+    void close_device(HANDLE device)
+    {
+        CloseHandle(device);
+    }
+     
+    BOOL send_ioctl(HANDLE device, DWORD ioctl_code)
+    {
+        //prepare input buffer:
+        DWORD bufSize = 0x4;
+        BYTE* inBuffer = (BYTE*) HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, bufSize);
+     
+        //fill the buffer with some content:
+        RtlFillMemory(inBuffer, bufSize, 'A');
+     
+        DWORD size_returned = 0;
+        BOOL is_ok = DeviceIoControl(device,
+            ioctl_code,
+            inBuffer,
+            bufSize,
+            NULL, //outBuffer -> None
+            0, //outBuffer size -> 0
+            &size_returned,
+            NULL
+        );
+        //release the input bufffer:
+        HeapFree(GetProcessHeap(), 0, (LPVOID)inBuffer);
+        return is_ok;
+    }
+     
+    int main()
+    {
+        HANDLE dev = open_device(kDevName);
+        if (dev == INVALID_HANDLE_VALUE) {
+            printf("Failed!n");
+            system("pause");
+            return -1;
+        }
+     
+        send_ioctl(dev, HACKSYS_EVD_IOCTL_STACK_OVERFLOW);
+     
+        close_device(dev);
+        system("pause");
+        return 0;
+    }
+
+编译这个代码，然后将其部署到被调试主机上。运行DebugView，观察驱动打印的调试信息。
+
+如果你在调试主机上启动了调试字符串打印功能，你应该可以看到类似输出：
+
+正如你在输出信息中看到的那样，驱动的确收到了我们的输入，然后输出了对应的信息。
+
+**3.3 练习时间：引起系统崩溃**
+
+作为一个练习，我为HEVD创建了一个小型客户端，客户端可以根据所需的输入缓冲区长度向HEVD发送许多不同的IOCTL。读者可以阅读相关源码以及编译好的32位程序了解更多信息。
+
+你可以尝试使用各种不同的IOCTL，直到系统崩溃为止。由于被调试主机运行在调试主机的控制之下，因此不会出现系统蓝屏，相反，崩溃点会触发WinDbg。让我们尝试对每种情况都做个简单的崩溃分析。首先从打印信息开始：
+
+    
+    
+    !analyze -v
+
+其他一些有用的命令：
+
+k – 栈跟踪
+
+kb – 带有参数的栈跟踪
+
+r – 寄存器
+
+dd [address]- 从address处开始以DWORD形式显示数据
+
+你可以参考WinDbg的帮助文件查看更多命令：
+
+.hh
+
+在我们的示例程序中，用户缓冲区被字符“A”（即ASCII 0x41）填满。
+
+    
+    
+    RtlFillMemory(inBuffer, bufSize, 'A');
+
+因此，不论我们在崩溃分析的哪个地方看到这个特征，都意味着这段特定的数据可以被用户填充。
+
+示例 #1：
+
+示例 #2：
+
+需要注意的是，你在触发同样的漏洞时可能会得到不同的输出，这取决于崩溃点的实时来源，这些来源包括溢出点的大小、当前内存的布局等等。
+
+  
+
+**四、附录**
+
+1\. <https://github.com/mwrlabs/win_driver_plugin>：
+
+Sam Brown开发的一个IDA Pro插件，在处理IOCTL控制码或者逆向Windows驱动时非常有用。
+
+本文翻译自hshrzd.wordpress.com
+[原文链接](https://hshrzd.wordpress.com/2017/06/05/starting-with-windows-kernel-exploitation-part-2/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **興趣使然的小胃** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/86296](/post/id/86296)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[hshrzd.wordpress.com](https://hshrzd.wordpress.com/2017/06/05/starting-with-windows-kernel-exploitation-part-2/)
+
+如若转载,请注明出处： <https://hshrzd.wordpress.com/2017/06/05/starting-with-windows-kernel-exploitation-part-2/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p3.ssl.qhmsg.com/dm/200_200_100/t0104d1b8b4ca36e961.jpg) 興趣使然的小胃
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

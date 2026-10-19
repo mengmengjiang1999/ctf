@@ -1,0 +1,453 @@
+**作者：深信服千里目安全实验室  
+原文链接：<https://mp.weixin.qq.com/s/LIugWEiETPwYmmLwZLe7Ag>**
+
+## 一、组件介绍
+
+### 1.1 基本信息
+
+ZenTaoPMS（ZenTao Project Management
+System），中文名为禅道项目管理软件。ZenTaoPMS是易软天创公司为了解决众多企业在管理过程中出现的混乱，无序的现象，开发出来的一套项目管理软件。
+
+禅道项目管理软件的主要管理思想基于国际流行的敏捷项目管理方式——Scrum。scrum是一种注重实效的敏捷项目管理方式，但众所周知，它只规定了核心的管理框架，但具体的细节还需要团队自行扩充。禅道在遵循其管理方式基础上，又融入了国内研发现状的很多需求，比如bug管理，测试用例管理，发布管理，文档管理等。因此禅道不仅仅是一款scrum敏捷项目管理工具，更是一款完备的项目管理软件。基于scrum，又不局限于scrum。
+
+禅道还首次创造性的将产品、项目、测试这三者的概念明确分开，产品人员、开发团队、测试人员，这三者分立，互相配合，又互相制约，通过需求、任务、bug来进行交相互动，最终通过项目拿到合格的产品。
+
+### 1.2 版本介绍
+
+禅道项目管理软件基于自主研发的PHP开发框架---禅道PHP框架开发而成，企业或者第三方的开发者可以通过这套框架，灵活的对禅道进行功能的修改或者扩展。经过逐年演化，禅道项目管理软件发展成为四大系列、功能完善的项目管理软件。禅道项目管理软件发展至今其核心开发系列共有以下三个，即禅道企业版、禅道专业版、禅道集团版、禅道开源版。其中禅道开源版是基础版本；而专业版、企业版是根据禅道开源版进行二次开发而成，其间仅存在功能性上的不同，所以专业版、企业版是兼容同级开源版的；而集团版仅为部署架构上的不同，核心还是企业版，具体如下：
+
+（1）禅道开源版（2009-2020）是禅道项目管理软件的基础版本，属于禅道项目的开发框架，其中仅开发了项目管理的基本模块。
+
+（2）禅道专业版（2012-2020）是在禅道开源版的基础上增加增强功能。专业版推出的初衷是为IT企业或部门提供更完善的服务，专业版增强功能更加适合企业的内部流程化管理。同时专业版的增强功能都以收费插件的方式发布在禅道官网里，为用户提供单独下载使用的服务。
+
+（3）禅道企业版（2017-2020），在禅道专业版功能的基础上，增加了运维管理、OA办公管理、反馈管理，以及文档的版本管理及在线预览等功能，可以为企业项目管理流程提供更全面的支撑。
+
+（4）禅道集团版（2019-2020）主要包含主站平台和子站点两部分。集团版用户可以通过主站平台给旗下的 部门、
+子公司或者第三方开发团队分别开通一个独立的子站点进行项目管理。集团版的子站点由禅道项目管理软件企业版提供项目管理服务，
+每个子站点的数据都是独立且互不影响的。
+
+版本细分如下图所示：
+![version](https://images.seebug.org/content/images/2020/12/22/1608605101000-zentao_version.png-w331s)
+
+### 1.3 使用量及使用分布
+
+根据全网数据统计，使用ZenTaoPMS的网站多达4万余个，其中大部分集中在国内，约占使用量的75%以上。其中，广东、浙江、北京、上海四省市使用量最高，由此可见，ZenTaoPMS在国内被广泛应用。
+
+## 二、高危漏洞介绍
+
+通过对ZenTaoPMS漏洞的收集和整理，过滤出其中的高危漏洞，可以得出如下列表。
+
+漏洞名称 | 漏洞ID | 影响版本 | 漏洞披露日期  
+---|---|---|---  
+禅道 8.2-9.2.1 SQL注入导致前台Getshell | 无 | 禅道开源版 8.2-9.2.1 | 2018  
+禅道 后台代码注入漏洞 | 无 | 禅道开源版 <= 11.6 | 2019  
+禅道 后台任意文件删除漏洞 | 无 | 禅道开源版 <= 11.6 | 2019  
+禅道 后台任意文件读取漏洞 | 无 | 禅道开源版 <= 11.6 | 2019  
+禅道 后台文件包含漏洞 | 无 | 禅道开源版 <= 11.6 | 2019  
+禅道 后台SQL注入漏洞 | 无 | 禅道开源版 <= 11.6 | 2019  
+禅道 任意文件上传漏洞 | CNVD-C-2020-121325 | 10.x < 禅道开源版 < 12.4.3 | 2020  
+禅道 Pro 8.8.2 命令注入漏洞 | CVE-2020-7361 | 禅道Pro <=8.8.2 | 2020  
+  
+从以上表可以看出，近年来禅道漏洞频发，从2018年开始，每年都会爆出比较严重的高危漏洞，通过这些高危漏洞均可对服务器造成一定的影响，甚至获取服务器的最高权限。
+
+从漏洞分布的情况来看，禅道大部分的漏洞均属于后台漏洞，这源于禅道属于项目管理软件，均需要登录授权后方可操作系统中的任意模块，而系统中的未授权接口很少，在18年爆发一个未授权漏洞后，官方将对外开放的接口全部筛选修复后，就导致对外开发接口极少，切很难有漏洞利用点，故截止到现在，禅道所爆发的漏洞均需要后台一定的权限账户方可执行。
+
+我们可以看到2018年禅道爆发出多个漏洞，其实这些漏洞原理基本一致，均为越权调用getModel函数导致，后面我们会在详细分析中讲解该部分漏洞的原理。另外，我们发现禅道爆发的漏洞基本存在于开源版，但这不意味着这些漏洞仅存在于开源版，开源版是禅道其他系列的基础框架版本，所以开源版的漏洞大概率也会在于对应兼容系列的对应版本中。且禅道具有可扩展性，所以大部分使用者均可采用开源版，在进行二次开发，适用到自己项目中。
+
+## 三、漏洞利用链
+
+基于ZenTaoPMS高危漏洞，我们可以得出几种可以利用的高危利用链。
+
+#### 3.1 无需权限
+
+![chain1](https://images.seebug.org/content/images/2020/12/22/1608605104000-zentao_chain_1.png-w331s)
+
+**ZenTaoPMS (8.2-9.2.1) - GetShell**
+
+  * 首先明确ZenTao框架系列版本,访问该路径可获取版本信息：`/zentao/index.php?mode=getconfig`
+  * 如果利用此漏洞，需要系统有文件写入权限。
+
+#### 3.2 仅需低权限
+
+![chain1](https://images.seebug.org/content/images/2020/12/22/1608605104000-zentao_chain_2.png-w331s)
+
+**ZenTaoPMS <11.6 - GetShell**
+
+  * 首先明确ZenTao框架系列版本,访问该路径可获取版本信息：`/zentao/index.php?mode=getconfig`
+  * 需要获取到ZenTaoPMS的后台用户登录账号密码或者cookie，执行以上漏洞生成shell，最终可getshell。
+
+#### 3.3 需要管理员权限
+
+![chain1](https://images.seebug.org/content/images/2020/12/22/1608605104000-zentao_chain_3.png-w331s)
+
+**ZenTaoPMS < 12.4.3 - GetShell**
+
+  * 首先明确ZenTao框架系列版本,访问该路径可获取版本信息：`/zentao/index.php?mode=getconfig`。
+  * 需要获取到ZenTaoPMS的后台管理员账户登录账号密码或者cookie。
+  * 漏洞只适用于Windows一键安装版（未加安全限制）、Linux一键安装版（未加安全限制）、安装包版。Windows/Linux一键安装版(加入安全限制)由于做过新上传文件限制，无法执行上传后的文件，导致漏洞无法利用。
+
+**ZenTaoPMS Pro <= 8.8.2 - GetShell**
+
+  * 需要获取到ZenTaoPMS的后台管理员账户登录账号密码或者cookie。
+  * 该漏洞命令执行无回显，可通过certutil.exe下载安装远程可利用恶意软件，最终getshell。
+
+## 四、高可利用漏洞分析
+
+### 4.0 技术背景：禅道项目管理系统路由模式
+
+禅道有两种路由模式PATH_INFO、GET方式，其中GET方式为常见的m=module&f=method形式传递模块和方法名，而PATH_INFO则是通过路径和分隔符的方式传递模块和方法名，路由方式及分隔符定义在config/config.php中。
+
+  * PATHINFO：`user-login-L3plbnRhb3BtczEwLjMuMS93d3cv.html` 以伪静态形式在html名称中传参
+  * GET：`index.php?m=block&f=main&mode=getblockdata` 类似于其他常规cms在get参数中传参我们
+
+我们从禅道的入口index.php文件来进行讲解：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605104000-index.PNG-w331s)
+
+从`index.php`文件，首先看到加载了一些framework中的框架类，然后声明了一个路由$app，之后就做了一些系统的基本判断，最重要的就在最下方的三句话，分别是三个功能：解析请求、检测权限、加载模块；
+
+    
+    
+    $app->parseRequest();
+    $common->checkPriv();
+    $app->loadModule();
+
+即parseRequest()函数就是路由解析入口。进入到`\framework\base\router.class.php`文件中的`parseRequest()`函数：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605104000-parseRequest.PNG-w331s)
+
+`parseRequest()`函数首先用于解析判断url是否采用了'GET'或者是'PATH_INFO'模式，其中有一个点就是`isGetUrl()`函数，该函数用于判断url是否采用了GET模式，具体有以下三种模式：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605104000-isGet.PNG-w331s)
+
+我们回到parseRequest()函数中可以得出，如果系统的默认解析模式是PATH_INFO，而你的url采用的是GET模式，系统则会将此次访问的路由解析模式配置修改GET，故当你的url模式与系统默认解析模式不同，系统也会解析，不会报错。所以禅道系统的两种路由解析模式可同时使用。
+
+（1）路由解析中，GET模式属于非默认模式，但是该种解析方式是PHP类CMS的常规解析模式，即m=block&f=main，m参数负责传递模块名（module），f参数负责传递方法名（method），由此就可以定位到对应module中的`control.php`文件，以及该文件中对应的method。
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605104000-module.PNG-w331s)
+
+（2）路由解析中，PATH_INFO模式属于系统默认模式，我们在配置文件中可以看到系统默认模式以及对应的分隔符、参数含义:
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605104000-config.PNG-w331s)
+
+我们可以看出PATH_INFO的默认分隔符是
+-，然后我们进入到path_info模式下的`setRouteByPathInfo()`函数，通过分隔符将url分割后，第一个值为模块名称`module`，第二个值即为方法`method`:
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605105000-parsepathino.PNG-w331s)
+
+总，两种解析模式解析后获取的最终module、method通过 `$this->setControlFile();`方法来寻找对应的文件：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605105000-controlfile.PNG-w331s)
+
+自此路由解析结束，定位到对应的模块方法后，就进行了权限验证，即使用者身份是否可以调用该模块与方法，`$common->checkPriv();`，文件`module/common/model.php`:
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605105000-checkpriv.png-w331s)
+
+从此方法看出，除了`isOpenMethod`之外，均需要登录后具有对应权限才可访问，不需登录的方法如下所示。
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605105000-isOpenMethod.png-w331s)
+
+### 4.1 禅道 8.2-9.2.1 SQL注入漏洞导致Getshell
+
+#### 4.1.1 漏洞简介
+
+漏洞名称：禅道8.2-9.2.1SQL注入前台Getshell  
+漏洞编号：无  
+漏洞类型：SQL注入  
+CVSS评分：无  
+漏洞危害等级：高危
+
+#### 4.1.2 漏洞概述
+
+禅道项目管理软件集产品管理、项目管理、质量管理、文档管理、组织管理和事务管理于一体，是一款功能完备的项目管理软件。该漏洞影响版本为禅道8.2--9.2.1。漏洞出现在系统orm框架中，在拼接order
+by的语句过程的时候，未对limit部分过滤并直接拼接，导致攻击者构造执行SQL语句。在mysql权限配置不当的情况下，攻击者可利用该漏洞获取webshell。
+
+#### 4.1.3 漏洞影响
+
+禅道8.2 - 9.2.1
+
+#### 4.1.4 漏洞修复
+
+1.建议受影响的用户升级至ZenTao
+9.2.1以上版本或打上对应补丁包，下载地址：<https://www.zentao.net/download.html>
+
+#### 4.1.5 漏洞利用过程
+
+0x0：随便访问一个不存在的路径，返回页面会出现报错，报错回显出文件的存放路径为。
+
+0x1：根据报错回显的路径，构造SQL注入语句将木马写入系统的EXP。
+
+0x2：将上述EXP进行ASCIIhex加密，得到加密后的字符串。
+
+0x3：然后将加密后的字符串放入：
+
+    
+    
+    {"orderBy":"order limit 1;SET @SQL=0x(加密后字符串);PREPARE pord FROM @SQL;EXECUTE pord;-- -","num":"1,1","type":"openedbyme"}
+
+0x4：然后将上述语句进行base64加密。
+
+0x5：最终通过访问以下语句执行漏洞
+
+    
+    
+    http://siteserver/zentao/index.php?m=block&f=main&mode=getblockdata&blockid=case&param=base64加密字符串
+
+#### 4.1.6 代码分析
+
+我们根据漏洞PoC来跟踪漏洞执行流程，从技术背景中的路由解析我们可以定位到漏洞存在的模块是block模块中的main方法，在经过路由解析后，系统将通过loadModule()方法加载对应模块，如下图所示：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605105000-sql_a1.png-w331s)
+
+在处理完url路由后，就开始处理方法中的各种参数，通过setParamsByGET()函数将参数解析：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605105000-sql_a2.png-w331s)
+
+在参数解析后，就对各个参数进行过滤检测，若没有问题，最终将解析过滤后的参数进行保存：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605105000-sql_a3.png-w331s)
+
+在路由解析和参数解析过滤完之后，就需要通过call_user_func_array()函数来调用对应模块的对应方法，然后就进入到block模块中的control.php文件：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605105000-sql_a4.png-w331s)
+
+在module/blocak/control.php文件中的构造函数中，存在一个判断，即需要存在referer，否则无法执行对应模块的函数。
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605105000-sql_refer.png-w331s)
+
+在进入到block模块中的main函数中，通过mode参数进入到一下if分支，在该分支中，首先对params参数进行base64解码
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605106000-sql_a5.png-w331s)
+
+然后通过进一步的解析参数，获取到执行getblocakdata操作的的函数为printCaseBlock()
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605106000-sql_a6.png-w331s)
+
+然后进入到本文件中的printCaseBlock()函数中，通过解析params参数后，得到type属性为openedbyme（可构造），进入到下面的elseif分支，我们可以看到参数要进入到orderby函数中进行处理，继续跟入到orderby函数中：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605106000-sql_a7.png-w331s)
+
+在oderby函数，系统将oder参数进行解析，获取到orders和limit参数值
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605106000-sql_a8.png-w331s)
+
+接下来就进入到了漏洞产生的关键，即`$order = join(',', $orders) . ' ' . $limit;`
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605106000-sql_a9.png-w331s)
+
+在该SQL语句中将$limit直接拼接到最后，导致`limit
+1;`闭合了之前的SQL语句，而之后的攻击PoC就可被执行，由此就造成了该漏洞的SQL注入，该SQL注入可以写入文件，导致最终的getshell。
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605106000-sql_a10.png-w331s)
+
+### 4.2 禅道 后台代码注入漏洞
+
+#### 4.2.1 漏洞简介
+
+漏洞名称：禅道后台代码注入漏洞  
+漏洞编号：无  
+漏洞类型：代码注入  
+CVSS评分：无  
+漏洞危害等级：高危
+
+#### 4.2.2 漏洞概述
+
+禅道项目管理软件集产品管理、项目管理、质量管理、文档管理、组织管理和事务管理于一体，是一款功能完备的项目管理软件。漏洞属于一种越权调用，普通权限（用户组为1-10）的攻击者可通过module/api/control.php中getModel方法，越权调用module目录下所有的model模块和方法，从而实现SQL注入、任意文件读取、远程代码执行、文件包含等攻击。
+
+#### 4.2.3 漏洞影响
+
+禅道开源版 < 11.6
+
+#### 4.2.4 漏洞修复
+
+1.建议受影响的用户升级至ZenTao 11.6以上版本，下载地址：<https://www.zentao.net/download.html>
+
+#### 4.2.5 漏洞利用过程
+
+0x0：首先登陆获取登陆cookie：zentaosid。
+
+0x1：然后访问api-getModel-editor-save-filePath后再api中生成shell。
+
+0x2：最后访问api-getModel-api-getMethod-filePath=，最后文件包含shell，执行PHP代码。
+
+#### 4.2.6 代码分析
+
+我们根据漏洞PoC来跟踪漏洞执行流程，从技术背景中的路由解析我们可以定位到漏洞存在的模块是api模块中的getModel方法，在经过路由解析后，系统将通过loadModule()方法加载对应模块，如下图所示：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605106000-zhuru_a1.png-w331s)
+
+进入到api的getModel()方法中，获取到需要调用的三个参数module：editor，method：save，params：filePath。
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605106000-zhuru_a2.png-w331s)
+
+然后通过回调函数call_user_func_array进入到editor模块中：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605106000-zhuru_a3.png-w331s)
+
+进入到editor模块中的model.php文件中的save()函数，通过save函数的file_put_contents将fileContent内容生成为一个文件，
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605106000-zhuru_a4.png-w331s)
+
+最终将输出结果后，进程结束。
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605106000-zhuru_a5.png-w331s)
+
+然后通过访问api-getModel-api-getMethod-filePath文件，解析出module为api，method为getModel()，在getmodel()函数中又调用了api模块的getmethod()方法，
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605107000-zhuru_a6.png-w331s)
+
+进入到getMethod方法中，进入到import方法：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605107000-zhuru_a7.png-w331s)
+
+在import()方法中，通过include()函数包含了filePath下的文件，最终执行PHP代码
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605107000-zhuru_a8.png-w331s)
+
+### 4.3 禅道 后台文件上传漏洞
+
+#### 4.3.1 漏洞简介
+
+漏洞名称：禅道后台代码注入漏洞  
+漏洞编号：CNVD-C-2020-121325  
+漏洞类型：文件上传  
+CVSS评分：无  
+漏洞危害等级：高危
+
+#### 4.3.2 漏洞概述
+
+禅道官方发布了开源版12.4.3的更新公告，本次安全更新禅道官方修复了一个高危漏洞：禅道任意文件上传漏洞，漏洞编号：CNVD-C-2020-121325。登录后的任意攻击者可通过fopen/fread/fwrite方法结合FTP、File等协议上传或读取任意文件，成功利用该漏洞可以执行任意代码，最终获取服务器最高权限。
+
+#### 4.3.3 漏洞影响
+
+10.x < 禅道开源版 < 12.4.3
+
+#### 4.3.4 漏洞修复
+
+1.建议受影响的用户升级至ZenTao 12.4.3及以上版本，下载地址：<https://www.zentao.net/download.html>
+
+#### 4.3.5 漏洞利用过程
+
+0x0：首先登陆获取登陆cookie：zentaosid。
+
+0x1：然后访问client-download-[$version参数]-[base64加密后的恶意文件地址]-1.html后再下载远程文件到服务器中
+
+0x2：最后访问data/cliten/1/文件，执行PHP代码。
+
+#### 4.3.6 代码分析
+
+我们根据漏洞PoC来跟踪漏洞执行流程，从技术背景中的路由解析我们可以定位到漏洞存在的模块是client模块中的download方法，在经过路由解析后，系统将通过loadModule()方法加载对应模块：
+
+进入到client的download()方法中，获取到需要调用的2个参数link
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605107000-upload_a1.png-w331s)
+
+然后跟进到download()重点中的downloadZipPackage()函数，全局中共有两个downloadZipPackage函数，其中一个在module/client/ext/model/xuanxuan.php：进入到该函数中，我们发现该函数首先将version,
+$link);
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605107000-upload_a2.png-w331s)
+
+接下来进入到module/client/model.php中的接下来进入到module/client/model.php：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605107000-upload_a3.png-w331s)
+
+在该方法中，我们可以看到version参数用于创建一个新的文件夹，即/data/client/${version}，
+
+然后将link参数值进行base64解码，最终在新建文件夹下新建文件，然后将远程文件写入到该文件中，最终达到远程文件上传漏洞的目的。
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605107000-upload_a4.png-w331s)
+
+### 4.4 禅道 Pro版本任意命令执行漏洞
+
+#### 4.4.1 漏洞简介
+
+漏洞名称：禅道项目管理软件Pro版本任意命令执行漏洞  
+漏洞编号：CVE-2020-7361  
+漏洞类型：命令执行  
+CVSS评分：CVSS 2.0:9.0; CVSS 3.x:8.8  
+漏洞危害等级：高危
+
+#### 4.4.2 漏洞概述
+
+EasyCorp ZenTao
+Pro是中国自然易软网络技术（EasyCorp）公司的一套开源项目管理软件。该软件包括产品管理、项目管理、质量管理和文档管理等功能。EasyCorp
+ZenTao Pro 8.8.2及之前版本中的/pro/repo-create.html文件存在操作系统命令注入漏洞。攻击者可借助‘path’参数利用该漏洞以SYSTEM权限执行任意命令。
+
+#### 4.4.3 漏洞影响
+
+禅道 Pro <= 8.8.2
+
+#### 4.4.4 漏洞修复
+
+目前厂商已发布升级补丁以修复漏洞，补丁获取链接：
+
+1.建议受影响的用户升级至ZenTao pro 8.8.2以上版本，下载地址：<https://www.zentao.net/download.html>
+
+#### 4.4.5 漏洞利用过程
+
+0x0：首先登陆到管理员账户。
+
+0x1：通过`/repo-create.html(/index.php?m=repo&f=create)`页面下的client参数执行系统命令，将恶意软件下载到服务器中。
+
+    
+    
+    SCM=Git&name=test2&path=C%3A%5CProgramData&encoding=utf-8&client=cmd1
+
+0x2：通过repo-create.html页面下的client参数执行系统命令，使用反弹shell，以达到getshell的目的。
+
+    
+    
+    SCM=Git&name=test2&path=C%3A%5CProgramData&encoding=utf-8&client=cmd2
+
+#### 4.4.6 代码分析
+
+我们根据漏洞PoC来跟踪漏洞执行流程，从技术背景中的路由解析我们可以定位到漏洞存在的模块是repo模块中的create方法，在经过路由解析后，系统将通过loadModule()方法加载对应模块，如下图所示：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605107000-cmd_a1.png-w331s)
+
+然后通过call_user_func_array()函数调用对应模块以及对应方法：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605108000-cmd_a2.png-w331s)
+
+在module/repo/control.php文件中的create()函数中，如果是post的数据，首先进入到`$repoID =
+$this->repo->create();`该处的create()方法是调用的model.php文件中的create()方法：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605108000-cmd_a3.png-w331s)
+
+进入到module/repo/model.php方法中，首先进入到create()方法中，发现第一步需要执行checkConnection():
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605108000-cmd_a4.png-w331s)
+
+在checkConnection()函数中，首先获取到对应参数值，由此发现参数在此未做过滤，继续往下看：
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605108000-cmd_a6.png-w331s)
+
+如果SCM=git的话，则判断path下的文件是否存在，如果不存在则返回false。
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605108000-cmd_a7.png-w331s)
+
+然后进入到本漏洞的触发点了，command参数直接与tag 2>&1拼接，带入到exec()函数执行:
+
+![image](https://images.seebug.org/content/images/2020/12/22/1608605108000-cmd_a5.png-w331s)
+
+## 五、漏洞利用
+
+最后，通过深信服千里目实验室 **漏洞利用工具Sniper** 进行最后的漏洞利用，具体操作如以下视频所示：
+
+### 5.1 禅道 8.2-9.2.1 SQL注入漏洞导致Getshell
+
+相关视频请转至[原文](https://mp.weixin.qq.com/s/LIugWEiETPwYmmLwZLe7Ag)观看
+
+### 5.2 禅道 后台代码注入漏洞
+
+相关视频请转至[原文](https://mp.weixin.qq.com/s/LIugWEiETPwYmmLwZLe7Ag)观看
+
+### 5.3 禅道 后台文件上传漏洞(CNVD-C-2020-121325)
+
+相关视频请转至[原文](https://mp.weixin.qq.com/s/LIugWEiETPwYmmLwZLe7Ag)观看
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1435/>
+

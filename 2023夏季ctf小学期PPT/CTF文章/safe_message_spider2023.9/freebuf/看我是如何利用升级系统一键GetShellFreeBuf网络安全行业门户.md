@@ -1,0 +1,424 @@
+**i春秋作家：小猪**
+
+ **原文来自：**[
+**看我是如何利用升级系统一键GetShell**](https://bbs.ichunqiu.com/thread-46603-1-1.html?from=beef)
+
+### 漏洞名称：看我是如何利用升级系统一键GetShell
+
+程序下载地址：<https://pan.baidu.com/s/1VdoPLqNP6V6aguodza9uQQ>马子文件下载地址：<https://pan.baidu.com/s/1fwDQ7fdiqsv_Azr9Ii89mg>提取码：dm8q版本：V4.9.015简介：PHPOK企业站系统（以下简称系统或本系统），采用PHP+MYSQL语言开发，是一套成熟完善的企业站CMS系统。本系统函盖功能全面，自定义功能强大，扩展性较好、安全性较高。可以轻松解决大部分企业站需求。
+
+## 0x01 程序安装到复现
+
+1.第一步安装系统
+
+![image.png](https://image.3001.net/images/20181009/1539072672_5bbc62a0b9520.png!small)  
+
+2.第二步这里要创建数据库，不然他不会自动创建。
+
+![image.png](https://image.3001.net/images/20181009/1539072677_5bbc62a588f65.png!small)  
+
+3.第三步完成安装，然后我们点击进入后台。
+
+![image.png](https://image.3001.net/images/20181009/1539072684_5bbc62ac82de9.png!small)  
+
+4.第四步进入后台-》程序升级-》升级配置
+
+![image.png](https://image.3001.net/images/20181009/1539072694_5bbc62b6c2109.png!small)  
+
+5.第五步，服务端构建代码，创建`index.php`放在网页根目录
+
+  
+![image.png](https://image.3001.net/images/20181009/1539072708_5bbc62c40296d.png!small)  
+
+6.第六步，后台-》程序升级-》在线升级，我这里改下`1999-09-09 09:09:09`代表是我服务器的升级软件
+
+![image.png](https://image.3001.net/images/20181009/1539072714_5bbc62ca2a416.png!small)  
+
+7.第七步，我们点击升级，在用D盾监听下目录是否上传成功木马文件。
+
+![image.png](https://image.3001.net/images/20181009/1539072718_5bbc62ce6d216.png!small)  
+
+8.第八步，访问木马文件，看看是否能访问成功
+
+![image.png](https://image.3001.net/images/20181009/1539072724_5bbc62d4cfd71.png!small)  
+
+## 0x02 代码审计
+
+漏洞所在文件：`\framework\admin\update_control.php(在后台程序升级)`
+
+漏洞文件代码：(只贴上相关代码)
+
+  
+![image.png](https://image.3001.net/images/20181009/1539072730_5bbc62da74963.png!small)  
+
+首先我们看第369行，`$file =
+$this->get('file','int');`，这里我们看到他这里是接收`GET`变量中的`file`值，那么`int`就是把接收的值转换成`int`类型。
+
+第370行，`if(!$file)`判断`$file`变量是否有赋值，如果没有复制那么就提示一个`JSON`数据。
+
+第373行，`$urlext = 'file='.rawurlencode($file);`，`rawurlencode`函数代表空格转换成`%20`。
+
+第374行，`$rs =
+$this->service(5,$urlext);`，这里可以看到调用本身文件中的`service`方法，那我们进入这个方法看看，在文章的第465行。
+
+  
+![image.png](https://image.3001.net/images/20181009/1539072736_5bbc62e00bfd1.png!small)  
+
+第465行，`if(!file_exists($this->dir_root.'data/update.php'))`，`file_exists`函数代表检查文件或目录是否存在。
+
+第470行，`$uconfig = array();`，申明一个空数组。
+
+第471行，`include($this->dir_root.'data/update.php');`，`include`函数代表引入一个文件，如果没有找到这个文件只会提示个警告不会终止错误。
+
+第478行，`if(file_exists($this->dir_root.'data/update.xml'))`，`file_exists`函数代表检查文件或目录是否存在。
+
+第486行，`if(substr($url,-1) != '/')`，`substr`函数代表字符串切割，并且判断不等于`/`那么就进入487行区间。
+
+第489行，`$url .=
+'index.php?version='.rawurlencode(trim($info['version'])).'&time='.$this->time.'&type='.$type;`，URL地址拼接，`rawurlencode`函数代表空格转换成`%20`，`trim`函数代表移除字符串两侧的空白字符。
+
+第493行，`if($type == 1 || $type == 4)`，判断外部传入的`$type`是否等于1或者等于4。
+
+第494行，`$onlyid = $uconfig['onlyid'] ? $uconfig['onlyid'] :
+$this->_onlyid();`，这里使用了3元运算符。
+
+第495行，`$domain =
+$this->lib('server')->domain($this->config['get_domain_method']);`，这里代表是获取当前访问的网址。
+
+第496行，`$client_ip = $this->lib('common')->ip();`，获取客户端Ip
+
+第497行，`$url .=
+"&domain=".rawurlencode($domain)."&ip=".rawurlencode($client_ip);`，URL地址拼接，`rawurlencode`函数代表空格转换成`%20`。
+
+第498行，`$url .= "&onlyid=".$onlyid."&phpversion=".PHP_VERSION;`，也是URL地址拼接。
+
+第499行，`if(function_exists('php_uname'))`，`function_exists`函数代表判断是否有某函数。
+
+第502行，`$soft = $_SERVER['SERVER_SOFTWARE'];`，获取服务器PHP版本。
+
+第506行，`$mysqlversion = $this->db->version('server');`，获取服务端mysql版本号。
+
+第511行，`$this->lib('html')->setting('timeout',900);`，这里是设置CURL请求的超时时间。
+
+第513行，`$this->lib('html')->ip($uconfig['ip']);`，设置请求IP。
+
+第515行，`$info = $this->lib('html')->get_content($url);`，请求URL地址，返回`XML`内容。
+
+下面就是返回`XML`数据，那么我们回到第一张图片。
+
+![image.png](https://image.3001.net/images/20181009/1539072743_5bbc62e7994c0.png!small)  
+
+第375行，`$rs = $this->lib('json')->decode($rs);`，这里代表是把接收到的`XML`内容转换成`JSON`数据。
+
+第376行，`if($rs['status'] != 'ok')`，判断`$rs['status']`不等于`ok`。
+
+第379行，`if(!$rs['content'])`，判断是否为空。
+
+第382行，`$info =
+base64_decode($rs['content']);`，把接收到的`$rs['content']`值，从`base64`转换成实体。
+
+第383行，`file_put_contents($this->dir_root.'data/tmp.zip',$info);`，写入当前文件，第一个参数代表路径，第二个参数代表内容。
+
+第384行，`$this->lib('phpzip')->unzip($this->dir_root.'data/tmp.zip','data/update/');`，我们看到这里的意思就是解压文件到某个目录。
+
+第386行，`$this->lib('file')->rm($this->dir_root.'data/tmp.zip');`，删除写入的文件。
+
+第386行，`$verinfo =
+substr($file,0,1).".".substr($file,1,1).".".substr($file,2);`，这里是字符串切割。
+
+第387行，`$info = $this->update_load($verinfo);`，这里调用自定义方法，也是在本文章第152行。
+
+![image.png](https://image.3001.net/images/20181009/1539072750_5bbc62ee4e933.png!small)  
+
+第154行，`$list = array();`，定义一个空数组。
+
+第155行，`$this->lib('file')->deep_ls($this->dir_root.'data/update/',$list);`，这里大概意思是遍历当前文件所有文件名，这里我就不去找代码，就把代码直接复制出来。
+
+那么代码路径在`framework\libs\file.php`中第297-313行
+
+    
+    
+        /**
+         * 获取文件夹及子文件夹等多层文件列表（无限级，长度受系统限制）
+         * @参数 $folder 文件夹
+         * @参数 $list 引用变量
+        **/
+        public function deep_ls($folder,&$list)
+        {
+                $this->read_count++;
+                $tmplist = $this->_dir_list($folder);
+                foreach($tmplist AS $key=>$value){
+                        if(is_dir($value)){
+                                $this->deep_ls($value,$list);
+                        }else{
+                                $list[] = $value;
+                        }
+                }
+        }
+
+第156行，`if(!$list || count($list) < 1)`，判断`$list`是否为空，并且判断他的数据是不是小于1。
+
+第159行，`$strlen = strlen($this->dir_root."data/update/");`，`strlen`代表统计字符串长度。
+
+第162行，`foreach($list as $key=>$value)`，`foreach`循环遍历数组。
+
+第163行，`$value = trim($value);`，`trim`代表移除字符串两侧的字符。
+
+第165行，`continue;`，这里代表跳出循环。
+
+第167行，`$tmp = substr($value,$strlen);`，`substr`代表字符串切割。
+
+第168行，`if($tmp == 'version.txt')`，这里判断`$tmp`是否等于`version.txt`。
+
+第169行，`$verinfo =
+trim(file_get_contents($value));`，`trim`代表移除字符串两侧的字符，`file_get_contents`代表写入文件。
+
+第183行，`if(substr($tmp,0,10) ==
+'framework/')`，`substr`代表字符串切割，从0到10切割判断等于`framework/`。
+
+第185行，`if(is_file($value))`，`is_file`代表判断文件是否存在。
+
+第187行，`$this->lib('file')->mv($value,$this->dir_phpok.$tmp1);`，剪切文件到某个目录。
+
+第189行，`if(is_dir($value) &&
+!is_dir($this->dir_phpok.$tmp1))`，`is_dir`代表判断目录是否存在，并且判断临时文件是否不存在。
+
+第190行，`$this->lib('file')->make($this->dir_phpok.$tmp1,'folder');`，创建目录。
+
+第194行，`if(is_file($value) && $tmp !=
+'table.sql')`，`is_file`代表判断文件是否存在，并且判断`$tmp`不等于`table.sql`文件的进入区间。
+
+第194行-第210行都是一样，剪切和创建目录。
+
+第205行，`$dlist = file($delfile);`，`file`代表整个文件读入一个数组中。
+
+第209行，`foreach($dlist AS $key=>$value)`，`foreach`代表数组循环。
+
+第213行，`$value = trim($value);`，`trim`代表移除字符串两侧的字符。
+
+第214行，`if($value &&
+is_file($this->dir_root.$value))`，判断`$value`是否有值，并且判断文件是否存在。
+
+第215行，`$this->lib('file')->rm($this->dir_root.$value);`，代表删除文件。
+
+第218行，`if($value &&
+is_dir($this->dir_root.$value))`，判断`$value`是否有值，并且判断目录是否存在。
+
+第225行，`$this->update_table();`这里又看到调用自己的方法。
+
+# 为何还有那么多代码要分析。
+
+我们接下来继续往下分析，这里的话我就把代码Copy出来，代码太多截图不好看。
+
+我这里挑重要的函数讲解下，这里都是sql执行语句，没有什么可以分析的。
+
+函数：
+
+`file_exists`，代表检查文件或目录是否存在。
+
+`file_get_contents`，代表读取文件，如果携带2个参数那么就是写入。
+
+`str_replace`，代表字符串替换。
+
+`strlen`，代表查看字符串长度。
+
+`substr`，代表字符串切割。
+
+`unset`，代表变量删除。
+
+`explode`，代表把字符串切割成数组。
+
+`trim`，代表移除字符串两侧的字符。
+
+    
+    
+        private function update_table()
+        {
+                if(!file_exists($this->dir_root.'data/update/table.sql')){
+                        return false;
+                }
+                //创建新表临时
+                $prefix = 'tmp_'.$this->db->prefix;
+                $sqlcontent = file_get_contents($this->dir_root.'data/update/table.sql');
+                $sqlcontent = str_replace('qinggan_',$prefix,$sqlcontent);
+                $this->sql_run($sqlcontent);
+                //比较新表结果
+                $list = $this->db->list_tables();
+                $tblist = array();
+                $nlength = strlen($prefix);
+                $olength = strlen($this->db->prefix);
+                foreach($list as $key=>$value){
+                        //跳过扩展表
+                        $continue_1 = substr($value,0,strlen($prefix.'list_'));
+                        $continue_2 = substr($value,0,strlen($this->db->prefix.'list_'));
+                        if($continue_1== $prefix.'list_' ||  $continue_2 == $this->db->prefix."list_"){
+                                continue;
+                        }
+                        if(substr($value,0,$nlength) == $prefix){
+                                $tblid = substr($value,$nlength);
+                                $tblist[$tblid]['new'] = $value;
+                        }
+                        if(substr($value,0,$olength) == $this->db->prefix){
+                                $tblid = substr($value,strlen($this->db->prefix));
+                                $tblist[$tblid]['old'] = $value;
+                        }
+                }
+                foreach($tblist as $key=>$value){
+                        if(!$value['new']){
+                                continue;
+                        }
+                        if(!$value['old']){
+                                $sql = "SHOW CREATE TABLE ".$value['new'];
+                                $rs = $this->db->get_one($sql);
+                                if(!$rs['Create Table']){
+                                        continue;
+                                }
+                                $rs['Create Table'] = str_replace($prefix,$this->db->prefix,$rs['Create Table']);
+                                $this->db->query($rs['Create Table']);
+                                continue;
+                        }
+                        //比较新表
+                        $nlist = $this->db->list_fields_more($value['new']);
+                        $olist = $this->db->list_fields_more($value['old']);
+                        foreach($nlist as $k=>$v){
+                                if($olist[$k] && $olist[$k]['type'] == $v['type']){
+                                        continue;
+                                }
+                                if(!$olist[$k]){
+                                        $sql = "ALTER TABLE ".$value['old']." ADD `".$k."` ".$v['type']." ";
+                                }else{
+                                        $sql = "ALTER TABLE `".$value['old']."` CHANGE `".$k."` `".$k."` ".$v['type']." ";
+                                }
+                                if($v['null'] == 'NO'){
+                                        $sql .= " NOT NULL ";
+                                        if($v['default'] != ''){
+                                                $sql .= " DEFAULT ".$v['default']." ";
+                                        }
+                                }else{
+                                        $sql .= " DEFAULT ".($v['default'] != '' ? $v['default'] : ' NULL ')." ";
+                                }
+                                if($value['extra']){
+                                        $sql .= " ".$v['extra']." ";
+                                }
+                                if($v['comment']){
+                                        $sql .= " COMMENT '".$v['comment']."'";
+                                }
+                                $this->db->query($sql);
+                        }
+                        unset($nlist,$olist);
+                }
+                //删除临时表操作
+                foreach($list as $key=>$value){
+                        if(substr($value,0,$nlength) == $prefix){
+                                $sql = "DROP TABLE ".$value;
+                                $this->db->query($sql);
+                        }
+                }
+                unset($list,$tbllist);
+                return true;
+        }
+    
+        private function sql_run($sql='')
+        {
+                $sql = str_replace("\r","\n",$sql);
+                $ret = array();
+                $num = 0;
+                foreach(explode(";\n", trim($sql)) as $query){
+                        $queries = explode("\n", trim($query));
+                        foreach($queries as $query){
+                                $ret[$num] .= $query[0] == '#' || $query[0].$query[1] == '--' ? '' : $query;
+                        }
+                        $num++;
+                }
+                foreach($ret as $query){
+                        $query = trim($query);
+                        if($query){
+                                $this->db->query($query);
+                        }
+                }
+                return true;
+        }
+
+好了 我们回到上上张图片。
+
+![image.png](https://image.3001.net/images/20181009/1539072774_5bbc63069bfad.png!small)  
+
+第231行，`$info =
+trim(file_get_contents($value));`，`trim`代表移除字符串两侧的字符，`file_get_contents`代表写入文件。
+
+第233行，`$info =
+str_replace('qinggan_',$this->db->prefix,$info);`，`str_replace`代表字符串替换。
+
+第240行，`if(file_exists($this->dir_root."data/update/run.php"))`，`file_exists`代表检查文件或目录是否存在。
+
+第241行，`include($this->dir_root.'data/update/run.php');`，`include`引入一个文件。
+
+第243行，`$this->lib('file')->rm($this->dir_root.'data/update/');`，代表删除文件。
+
+第244行，`$list =
+$this->lib('file')->ls($this->dir_root.'data/update/');`，代表把目录结构挪列出来。
+
+第245行，`if($list && count($list)>0)`，判断`$list`值是否存在，并且判断他的数量是否小于0。
+
+第247行，`$this->lib('file')->rm($value,'folder');`，这里代表循环删除某个文件。
+
+第251行，`$this->success_version($verinfo);`这里又进入一个自定义方法区间。
+
+老样子，Copy代码，代码量不多我就Copy出来。
+
+    
+    
+        //更新成功后，修改记录
+        private function success_version($version='')
+        {
+                if(!$version){
+                        return false;
+                }
+                //写入到最新版本
+                $html = '<?xml version="1.0" encoding="utf-8"?>'."\n";
+                $html.= '<phpok>'."\n";
+                $html.= "\t".'<version>'.trim($version).'</version>'."\n";
+                $html.= "\t".'<time>'.date("Y-m-d H:i:s",$this->time).'</time>'."\n";
+                $html.= '</phpok>';
+                file_put_contents($this->dir_root.'data/update.xml',$html);
+                if(is_writeable($this->dir_root.'version.php') && file_exists($this->dir_data.'version.tpl')){
+                        $info = file_get_contents($this->dir_data.'version.tpl');
+                        $info = str_replace('{version}',trim($version),$info);
+                        $info = str_replace('{updatetime}',date("Y年m月d日 H时i分s秒",$this->time),$info);
+                        file_put_contents($this->dir_root.'version.php',$info);
+                }
+                $this->lib('file')->rm($this->dir_root.'data/tpl_admin/');
+                $this->lib('file')->rm($this->dir_root.'data/tpl_www/');
+                $this->lib('file')->rm($this->dir_cache);
+                return true;
+        }
+
+那么我们还是做简单的介绍下重要函数。
+
+`trim`，代表移除字符串两侧的字符。
+
+`is_writeable`，判断文件是否可写。
+
+`file_exists`，代表检查文件或目录是否存在。
+
+`str_replace`，字符串替换。
+
+`file_put_contents`，写入文件或读取文件。
+
+这里已经介绍完毕了，整个审计分析逻辑在上面。
+
+## 0x03 漏洞修复
+
+路径：`\framework\admin\update_control.php`
+
+第152行，方法里面的`foreach`循环加上这段代码去过滤。
+
+`$verinfo = str_replace(['eval','assert','system','phpinfo'],
+['ｅｖａｌ','ａｓｓｅｒｔ','ｓｙｓｔｅｍ','ｐｈｐｉｎｆｏ'],
+strtolower(trim(file_get_contents($value))));`，这里我只写了比较有危害的关键字。
+
+  
+![image.png](https://image.3001.net/images/20181009/1539072781_5bbc630de8f7e.png!small)  
+
+# 大家有任何问题可以提问，更多文章可到[i春秋论坛](https://bbs.ichunqiu.com/portal.php?from=beef)阅读哟~
+

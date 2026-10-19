@@ -1,0 +1,334 @@
+# 【技术分享】AtomBombing：全新的Windows代码注入技术
+
+阅读量 **238603**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2016-10-31 11:52:18
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：breakingmalware
+
+原文地址：<https://breakingmalware.com/injection-techniques/atombombing-brand-new-code-injection-for-windows/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+**翻译：**[ **Ox9A82**
+****](http://bobao.360.cn/member/contribute?uid=2676915949)
+
+**稿费：250RMB（不服你也来投稿啊！）**
+
+**投稿方式：发送邮件至linwei#360.cn，或登陆[
+**网页版**](http://bobao.360.cn/contribute/index)在线投稿**
+
+最近，我们发现了一种称为AtomBombin的新的代码注入技术，它利用了Windows的异步过程调用（简称APC）机制。目前，这种技术还不能够被防入侵的安全工具检测到。
+
+代码注入作为一种强大的武器已经存在于黑客武器库中很多年了。有关代码注入的背景及其在APT攻击中的各种用法，请查看：
+
+[http://blog.ensilo.com/atombombing-a-code-injection-that-bypasses-current-security-solutions](http://blog.ensilo.com/atombombing-a-code-injection-that-bypasses-current-security-solutions)
+
+  
+
+**概述**
+
+我们开始窥探一下，看看攻击者如何努力找到一种安全厂商不知道的新方法，以实现绕过大多数的安全产品。
+它还需要能够在不同的进程上工作，而不是只是能适应特定的进程。
+
+在这里，我想向你介绍的就是AtomBombing – 一种全新的Windows代码注入技术。
+
+AtomBombing需要以下三步来实现：
+
+1.任意地址写任意值（Write-What-Where） – 能够将任意数据写入目标进程的地址空间中的任意位置。
+
+2.执行 – 劫持目标进程的线程以执行在步骤1中写入的代码。
+
+3.恢复 – 清理并且恢复执行在步骤2中被劫持的线程。
+
+  
+
+**AtomBombing 步骤1: 任意地址写任意值（Write-What-Where）**
+
+我是在偶然之间发现这几个非常有趣的API函数的：
+
+GlobalAddAtom – 向全局原子表中添加一个字符串，并返回一个唯一的值（一个原子）来标识字符串。
+
+GlobalGetAtomName – 通过指定一个全局原子来检索它对应的字符串副本。
+
+通过调用GlobalAddAtom，可以在全局原子表中存储一个空终止的缓冲区。并且此表可以被系统上的每个进程访问。然后可以通过调用GlobalGetAtomName来检索缓冲区。
+GlobalGetAtomName函数接收一个指向输出缓冲区的指针，因此调用者可以选择将空终止缓冲区存储在哪里。
+
+理论上，我可以通过调用GlobalAddAtom向全局原子表添加一个包含shellcode的缓冲区，然后以某种方式使目标进程调用GlobalGetAtomName，那么就可以将代码从我的进程复制到目标进程，而不需要调用WriteProcessMemory。
+
+从我的当前进程中调用GlobalAddAtom是非常简单的，但是如何使目标进程调用GlobalGetAtomName呢？
+
+可以使用线程异步过程调用（APC）来解决：
+
+QueueUserApc()函数： 向指定线程的APC队列添加用户模式APC对象。
+
+函数原型如下：
+
+    
+    
+    DWORD WINAPI QueueUserAPC(
+    _In_ PAPCFUNC  pfnAPC, 
+    _In_ HANDLE    hThread, 
+    _In_ ULONG_PTR dwData
+    );
+
+QueueUserApc函数的第一个参数是指向APC功能函数(APCProc)的指针，这个函数的函数原型如下：
+
+    
+    
+    VOID CALLBACK APCProc(
+      _In_ ULONG_PTR dwParam
+    );
+
+GlobalGetAtomName的原型是：
+
+    
+    
+    UINT WINAPI GlobalGetAtomName(  
+    _In_  ATOM   nAtom,  
+    _Out_ LPTSTR lpBuffer,  
+    _In_  int    nSize
+    );
+
+由于GlobalGetAtomName需要3个参数（而APCProc的定义只有1个参数），因此我们不能使用QueueUserApc来直接调用目标进程中的GlobalGetAtomName。
+
+让我们来看看QueueUserApc的内部：
+
+正如图示的一样，QueueUserApc内部使用未公开的NtQueueApcThread系统调用，来将APC添加到目标线程的APC队列。
+
+有趣的是，NtQueueApcThread接受的APC函数的指针并不是调用者传递给QueueUserApc的原始APCProc函数指针。
+相反，实际传递的函数指针是ntdll!RtlDispatchAPC，并且传递给QueueUserApc的原始APCProc函数是作为参数传递给ntdll！RtlDispatchAPC的。
+
+再让我们来看看ntdll!RtlDispatchAPC：
+
+它首先检查第三个参数是否有效，这意味着在分派APC之前需要激活ActivationContext。
+
+如果需要激活ActivationContext：
+
+函数ntdll!RtlDispatchAPC函数的执行流程如下：
+
+1.传递的ActivationContext（当前在ESI中）将通过调用RtlActivateActivationContextUnsafeFast函数来激活。
+
+2.将原来APCProc函数的参数（即传递给QueueUserApc的第三个参数）压到栈中。因为我们要调用原来的APCProc函数。
+
+3.在分发APC之前，调用CFG（__guard_check_icall_fptr）以确保APC的目标是CFG有效的函数。（译注：CFG指的是控制流保护）
+
+4.调用原始的APCProc，APC被成功调度。
+
+一旦APCProc返回，ActivationContext会被激活：
+
+另一方面，如果不需要激活ActivationContext：
+
+那么代码会跳过所有ActivationContext相关的东西，并在调用CFG后立即调度APC。
+
+这意味着什么？当调用QueueUserApc时，我们被迫传递一个只有一个参数的APCProc。但是，在内部QueueUserApc使用NtQueueApcThread来调用ntdll!RtlDispatchAPC，而它使用3个参数。
+
+我们之前的目标是什么？是为了调用GlobalGetAtomName。
+
+那它需要多少个参数呢？3个！
+
+我们能够满足要求吗？ 能！
+
+怎么样实现呢？ 通过NtQueueApcThread！
+
+请参阅AtomBombing的GitHub中的main_ApcWriteProcessMemory。
+
+  
+
+**AtomBombing 步骤2：执行**
+
+显然，我从来没指望能在我的目标进程中找到RWX(译注:指可读可写可执行，因为目前的保护机制使得一般可读写的内存不可执行。而可执行的内存不可写。)的代码段。我需要一种能在目标进程中持续分配RWX内存的方法，而且不需要在被注入进程的环境中调用VirtualAllocEx函数。遗憾的是，我找不到任何这样的函数，可以使我通过APC调用来分配可执行内存或者更改现有内存的保护标志。
+
+我们到目前为止拥有了什么？一个任意地址写+想得到可执行内存的强烈欲望。我想了很久，发现很难克服这个障碍，但是马上我突然想到了。当DEP被发明时，它的创造者认为，“就像这样，数据不再是可执行的了，因此再也没有人能够利用漏洞了”。然而不幸的是，情况并非如此;
+一种新的技术被开发出来，来专门实现绕过DEP：这就是ROP – 返回导向编程。
+
+那么我们该如何使用ROP来巩固我们的优势，从而在目标进程中执行我们的shellcode呢？
+
+我们可以将我们的代码复制到目标进程中的RW代码段（使用步骤1中的方法）。然后通过精心制作的ROP链来分配RWX内存，再把代码从RW代码区复制到新分配的RWX内存块中，最后跳转到RWX内存中执行它。
+
+找到RW代码段并不难，对于这个概念证明，我决定使用在kernelbase的数据部分之后的未使用的空间。
+
+请参阅AtomBombing的GitHub中的main_GetCodeCaveAddress。
+
+**ROP链:**
+
+我们的ROP链需要实现三件事：
+
+1.分配RWX内存
+
+2.将shellcode从RW代码段复制到新分配的RWX内存中
+
+3.执行刚分配的RWX内存中的代码
+
+**ROP链第一步：分配RWX内存**
+
+我们想分配一些RWX内存。第一个想到的函数是VirtualAlloc –
+一个非常有用的功能，可以用来分配RWX内存。唯一的问题是函数返回的内存指针是储存在EAX寄存器中的，这将使我们的ROP链复杂化，因为必须找到一种方法将存储在EAX中的值传递给链中的下一个函数。
+
+通过一个非常简单的技巧可以简化我们的ROP链，并且使它更高级。我们可以使用ZwAllocateVirtualMemor来代替VirtualAlloc，这个函数使用新分配的RWX内存地址作为输出参数。这样我们就可以设置我们的堆栈，使ZwAllocateVirtualMemory返回的新分配的内存地址进一步沿堆栈传递到链中的下一个函数中（见表1）。
+
+**ROP链第二步：拷贝Shellcode**
+
+我们需要的下一个函数的功能是将一个缓冲区中的内存复制到另一个缓冲区中。这里有两个选项：memcpy和RtlMoveMemory。当创建这种ROP链时，可能最初是倾向于使用RtlMoveMemory的，因为它使用stdcall调用约定，这意味着它会自己清理堆栈。但是这里是一个特殊情况，我们需要将内存复制到一个地址上（由ZwAllocateVirtualMemory压在栈上），之后需要调用这个地址。如果我们使用RtlMoveMemory，它将在返回时立即弹出RWX
+shellcode的地址。 另一方面，如果我们使用memcpy，栈上的第一项将是memcpy的返回地址，后面是memcpy的目标参数（即RWX
+shellcode）。
+
+**ROP链第三步：执行新分配的RWX内存**
+
+我们已经分配了RWX内存并将我们的shellcode复制了进去。我们即将从memcpy返回，但是栈上的RWX
+shellcode的地址距离返回地址还有4个字节的差距。因此，我们所要做的就是在ROP链中添加一个非常简单的gadgets。这个gadgets简单执行个“ret”指令就可以。memcpy会返回到这个gadgets上，它会“重新”进入我们的RWX
+shellcode。
+
+将EIP设置为指向ZwAllocateVirtualMemory，并将ESP指向此ROP链：
+
+表1:完整的ROP链
+
+请参阅AtomBombing的GitHub中的main_BuildROPChain。
+
+**调用ROP链：**
+
+还有一个事情需要解决，就是APC只允许我们传递3个参数。但是显然我需要在堆栈上存储11个参数。所以我们最好的选择就是将栈转移到一块RW内存，并在这块内存中存放ROP链。（例如，kernelbase中的RW代码洞）。
+
+那我们怎么翻转栈呢？
+
+    
+    
+    NTSYSAPI NTSTATUS NTAPI NtSetContextThread(
+    _In_       HANDLE  hThread,  
+    _In_ const CONTEXT *lpContext
+    );
+
+这个系统调用将hThread句柄指定的线程的Context（寄存器值）设置为包含在lpContext中的值。如果我们可以让目标进程调用这个系统调用，使lpContext中的ESP指向我们的ROP链、EIP指向ZwAllocateVirtualMemory，那么我们的ROP链就可以被执行，而且ROP链会让我们的shellcode也得到执行。
+
+如何让目标进程来进行此调用？APC到目前为止很好用，但是这个系统调用需要的是2个参数而不是3个，所以当它返回时堆栈将被破坏，并且后果将是未知的。也就是说，如果我们传递一个当前线程的句柄作为hThread，那么函数永远不会返回。原因是一旦执行到内核，线程的Context将被设置为由lpContext指定的Context，并且将不会有NtSetContextThread曾被调用的踪迹。
+如果一切都按我们的希望工作，我们将成功地劫持一个线程，并让它执行我们的恶意shellcode。
+
+请参阅AtomBombing的GitHub中的main_ApcSetThreadContext。
+
+  
+
+**AtomBombing 步骤3：恢复**
+
+但是我们确实还有一个问题。我们劫持的线程在我们劫持它之前是正在运行的。如果我们不恢复它的执行的话，就很有可能会对进程造成未知的影响。
+
+我们如何恢复执行？我想提醒你，我们现在是在一个APC的上下文中。当APC功能完成时，执行的某些东西会被安全的恢复。 让我们看看从目标进程的角度来分配APC。
+
+看起来负责调度APCs的函数（在本例中为WaitForSingleObjectEx）像是ntdll！KiUserApcDispatcher。
+
+我们可以在这个代码块中看到3个“call”指令。第一个call是CFG，下一个call是ECX（这是APC函数的地址），最后会调用未公开的函数ZwContinue。
+
+ZwContinue希望接收一个指向CONTEXT结构的指针以恢复执行。实际上，内核将检查线程的APC队列中是否还有更多的APC，并在最终恢复线程的原始执行之前进行分发，但是我们可以忽略它。
+
+传递给ZwContinue的CONTEXT结构在调用APC函数（存储在ECX中）之前存储在EDI中。我们可以在我们的shellcode的开头保存EDI的值，并在shellcode结尾处使用EDI的原始值调用ZwContinue，从而安全地恢复执行。
+
+请参阅AtomBombing的GitHub中的AtomBombingShellcode
+
+我们必须确保EDI的值在调用NtSetContextThread时不会被覆盖，因为它修改了寄存器的值。这可以通过将ContextFlags（传递给NtSetContextThread的CONTEXT结构的成员）设置为CONTEXT_CONTROL来实现，这意味着只有EBP，EIP，SEGCS，EFLAGS，ESP和SEGSS会受到影响。
+只要（CONTEXT.ContextFlags | CONTEXT_INTEGER == 0），一切就没有问题。
+
+如上图所示，我们成功注入代码到chrome.exe中。我们注入的代码生成了经典的calc.exe以证明它是可用的。
+
+让我们尝试将代码注入vlc.exe
+
+完整的实现可以在GitHub上找到。已经针对Windows 10 x64 Build 1511（WOW）和Windows 10 x86 Build
+10240进行过测试。使用release版进行编译。
+
+让我们对mspaint.exe进行相同的操作：
+
+糟糕，它crash掉了。
+
+  
+
+**最后一步**
+
+我们还可以进一步做点什么？其实我已经做完了，但是在这一点上我宁愿把这作为一个留给读者的练习。留一个简单的提示，我建议您查看我以前的博客文章
+
+<https://breakingmalware.com/documentation/documenting-undocumented-adding-control-flow-guard-exceptions>
+
+我相信你也会找到一些我没找到的创造性想法的，我很愿意能进行关于这个的讨论。
+
+你可以使用下面的评论或直接@我(@tal_liberman)。我也会在一周内通过Twitter发布一些新闻。无论如何，我将在下周发布我的解决方案。
+
+  
+
+**附录:查找alertable线程**
+
+我们还没有提到的一件事是QueueUserApc只适用于处于alertable状态的线程。 那么如何使线程进入alertable状态呢？
+
+援引自Microsoft：
+
+A thread can only do this by calling one of the following functions with the
+appropriate flags:
+
+SleepEx
+
+WaitForSingleObjectEx
+
+WaitForMultipleObjectsEx
+
+SignalObjectAndWait
+
+MsgWaitForMultipleObjectsEx
+
+When the thread enters an alertable state, the following events occur:
+
+1 The kernel checks the thread’s APC queue. If the queue contains callback
+function pointers, the kernel removes the pointer from the queue and sends it
+to the thread.
+
+2 The thread executes the callback function.
+
+3 Steps 1 and 2 are repeated for each pointer remaining in the queue.
+
+4 When the queue is empty, the thread returns from the function that placed it
+in an alertable state.
+
+<https://msdn.microsoft.com/en-us/library/windows/desktop/aa363772(v=vs.85).aspx>
+
+为了使我们的技术有效，目标进程中必须至少有一个线程处于alertable状态，或者可以在某个时刻进入alertable状态，否则我们的APC将永远不会被执行。
+
+我检查了各种软件并且注意到，我检查过的大多数程序都至少有一个alertable线程。示例：Chrome.exe，Iexplore.exe，Skype.exe，VLC.exe，MsPaint.exe，WmiPrvSE.exe等等
+
+所以我们现在必须能够在目标进程中找到一个alertable线程。有很多方法都可以实现这一点，这里我选择使用一种琐碎的方法，它可以在大多数情况下工作，并且易于实现和解释。
+
+我们给目标进程中的每一个线程都创建一个事件，然后要求每个线程设置其相应的事件。我们会等待有线程去触发它，触发的那个线程就是一个alertable线程。
+
+如何设置事件呢？通过调用SetEvent（HANDLE hEvent）就可以。
+
+我们如何在目标进程中调用SetEvent？当然可以通过APC。由于SetEvent只接收一个参数，我们可以使用QueueUserApc来调用它。具体的实现细节可以在AtomBombing的GitHub中的main_FindAlertableThread找到。
+
+本文翻译自breakingmalware [原文链接](https://breakingmalware.com/injection-techniques/atombombing-brand-new-code-injection-for-windows/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Ox9A82** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/84818](/post/id/84818)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [breakingmalware](https://breakingmalware.com/injection-techniques/atombombing-brand-new-code-injection-for-windows/)
+
+如若转载,请注明出处： <https://breakingmalware.com/injection-techniques/atombombing-brand-new-code-injection-for-windows/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p2.ssl.qhmsg.com/dm/200_200_100/t01ae2ab9a52b1881a6.jpg) Ox9A82
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

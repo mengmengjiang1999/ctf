@@ -1,0 +1,115 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+##  **前言**
+
+ **** **大家好，今天我要来分享的是一个关于Google的简单漏洞，该漏洞原因在于，Google服务端发生网页请求时，HTTP
+Referer报文头中泄露了用户隐私和token信息，依葫芦画瓢，我发现Google的4个服务端存在该漏洞，最终收获了共$4633.7美金的赏金。我们一起来看看。**
+
+ ** **![google-bug-bounty-program.png](https://image.3001.net/images/20181127/1543309995_5bfd0aab84303.png!small)****
+
+## Referrer Policy 介绍
+
+HTTP
+Referer：Referer报文头是网页请求头的一部分，当浏览器向web服务器发送请求的时候，一般会带上Referer，告诉服务器我是从哪个页面链接过来的，服务器藉此可以获得一些信息用于处理。例如在[www.sina.com.cn/sports/](http://www.sina.com.cn/sports/)上点击一个链接到达cctv.com首页，那么就referrer就是[www.sina.com.cn/sports/](http://www.sina.com.cn/sports/)了。
+
+Referrer 在分析用户来源时很有用，有着广泛的使用，如Web Analytics。但 URL
+可能包含用户敏感信息，如果被第三方网站拿到很不安全，比如有些网站直接将 sessionid 或是 token 放在地址栏里传递的，会原样不动地当作
+Referrer 报头的内容传递给第三方网站。因此，就有了 [Referrer
+Policy](https://www.w3.org/TR/referrer-policy/)，新策略中包含了以下指令值：
+
+    
+    
+    enum ReferrerPolicy {
+    
+      "",
+    
+      "no-referrer",
+    
+      "no-referrer-when-downgrade",
+    
+      "same-origin",
+    
+      "origin",
+    
+      "strict-origin",
+    
+      "origin-when-cross-origin",
+    
+      "strict-origin-when-cross-origin",
+    
+      "unsafe-url"
+    
+    };
+
+其中，origin和origin-when-cross-origin指令中，规定需要过滤掉当前页面的参数及路径部分。所有规定目的都是限制传递用户Referrer值，以免造成用户隐私泄露。
+
+## 漏洞1
+
+这个漏洞是我有一天在课后，在阅读别人写的一篇Google XSS漏洞分析文章之后有所启发的，其中讲述了在Google
+Colab中存在的一个XSS漏洞，你可以[点此阅读](https://blog.bentkowski.info/2018/06/xss-in-google-colaboratory-csp-bypass.html)。当时，我习惯性地打开了<https://colab.research.google.com>，根本没想着能发现漏洞的可能，只是在上面胡乱点点各个功能按钮，看看它们会产生什么操作。
+
+其中有一个功能是这样的，它可以从Github中导入项目，从这里，我嗅到一丝丝可能，于是我就用BurpSuite通过请求头方式来测试它的SSRF，不寻常的是，其中的referer报文头引起了我的注意。如果Google
+Colab服务端中不包含任何用户身份的token信息，那么它的行为没有异常，但是，很多的Google服务端产品都具备一个功能，那就是通过一个唯一且可共享的URL链接来分享某个文档，那么这种情况下，就可能会泄露用户的Referer敏感信息。在如下请求中，从Google
+Colab服务中链接到api.github.com时，就存在Referer信息泄露：
+
+    
+    
+    GET /search/repositories?sort=updatedℴ=desc&q=user:name+fork:true HTTP/1.1
+    
+    Host: api.github.com
+    
+    User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:52.0) Gecko/20100101 Firefox/52.0
+    
+    Accept: */*
+    
+    Accept-Language: en-US,en;q=0.5
+    
+    origin: <https://colab.research.google.com>
+    
+    Referer: <https://colab.research.google.com/drive/>
+    
+    DNT: 1
+    
+    BUG 1Connection: close
+
+向Google上报之后，我获得了他们$3133.7美金的奖励，但我想，Google
+Colab不只是存在这个漏洞的唯一服务端吧，这个漏洞可能还有其它存在的可能，也会对Google用户产生更大的影响，所以，我又继续做了一波测试。
+
+## 漏洞2
+
+想到URL中的token问题，就得来看看YouTube的Unlisted 视频了。YouTube的分享机制早前主要基于 “private” 和
+“public”
+两种，前者只允许用户指定的好友能访问视频（好友必须有YouTube帐号），后者则允许任何人查看，视频也会出现在搜索结果中。而Youtube后期推出的Unlisted
+视频不会显示在用户公开主页的列表中或者搜索结果中，前提是需要知道视频的URL地址可以访问这个视频。
+
+但当我在一个Unlisted 视频评论下发表了一个URL链接之后，存在一种Youtube
+redirector机制把我带入到那个URL链接中去，形如<https://www.youtube.com/redirect?q=http%3A%2F%2Fevil.com>，而在我困惑的时候，我发现了Youtube主页中的Gaming栏目，点击进去，它跳转到了Youtube子域网站<https://gaming.youtube.com>，好吧，我来试试看是否存在Referer信息泄露。
+
+> 1、随便打开一个视频；
+>
+> 2、我也懒得打开Burp了，就在视频评论中复制进入这个链接吧<https://whatismyreferer.com>；
+>
+> （<https://whatismyreferer.com>网站可以自动读取出跳转过程中的referer信息）
+>
+> 3、之后，打开上述复制进去的<https://whatismyreferer.com>链接，哇，它竟然泄露了Referer的ID号信息！
+
+上报了这个漏洞后，我收获了Google官方$500美金奖励。
+
+## 漏洞3
+
+有了以上的发现后，我像个野兽一样按图索骥地测试Google的各种服务端，之后，又发现了一个名为Google Fusion Tables
+的网站（<https://fusiontables.google.com>）存在此种漏洞，该网站允许用户在其中插入一个链接，我插入
+<https://whatismyreferer.com>之后，再打开它，它又存在Referer信息泄露，我又在这个漏洞上收获了$500美金。
+
+## 漏洞4
+
+还记得漏洞2的Youtube Gaming吗，之后，有一天我在浏览Google新闻时发现，Youtube
+Gaming作了大量改版，就连其中的小图标也变了，我就想着，这种改版会不会忽视之前的安全问题呢，这一试确实没错，之前那个漏洞2还仍然存在，又是$500美金到手！
+
+感谢Google的漏洞奖励计划（Vulnerability Reward Program），给了我如此多的$，谢谢！
+
+![af00faaf5ae314fc805c7154ec4677b6.gif](https://image.3001.net/images/20181127/1543309981_5bfd0a9d5c58f.gif!small)
+***参考来源：[thesecurityexpert](https://thesecurityexperts.wordpress.com/2018/10/28/journey-through-google-referer-leakage-bugs/)，clouds编译，转载请注明来自FreeBuf.COM** **  
+  
+**
+

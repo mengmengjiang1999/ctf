@@ -1,0 +1,87 @@
+近日，Apache Tomcat曝出安全绕过漏洞。漏洞的CVE编号为CVE-2018-1305。  
+
+ **千里百科**
+
+Apache Tomcat是由Apache软件基金会下属的Jakarta项目开发的一个Servlet容器，按照Sun
+Microsystems提供的技术规范，实现了对Servlet和Java Server
+Page（JSP）的支持，并提供了作为Web服务器的一些特有功能，如Tomcat管理和控制平台、安全域管理和Tomcat阀等。Tomcat
+很受广大程序员的喜欢，因为它运行时占用的系统资源小，扩展性好，支持负载平衡与邮件服务等开发应用系统常用的功能。
+
+ **漏洞描述**
+
+此次Apache Tomcat的安全绕过漏洞出现在Tomcat的部分版本中。Apache Tomcat Servlet
+注释定义的安全约束，仅在Servlet加载后才应用。由于以这种方式定义的安全约束适用于URL模式及该点下任何URL，因此可能根据Servlet的加载顺序而对某些安全约束不适用。攻击者能够利用这个漏洞，绕过某些安全限制来执行未经授权的操作，以达到攻击的目的。
+
+ **漏洞复现**
+
+上面描述的可能过于专业化，我们准备了一个案例让各位小伙伴们直观的了解一下。
+
+由于触发此漏洞的前提是：
+
+  1. 业务系统部署在低版本的Tomcat中。
+
+  2. 业务系统通过注解的方式定义安全约束。
+
+据此搭建一套JDK1.8，Apache Tomcat 8.5.24的运行环境。
+
+  
+![1.png](https://image.3001.net/images/20180302/15199581744499.png!small)  
+
+![2.png](https://image.3001.net/images/20180302/15199581903609.png!small)  
+
+新建一个Web工程，导入annotations-api.jar（annotations-api.jar是使用注解所需jar包，不导入会报错）等jar包文件。
+
+![3.png](https://image.3001.net/images/20180302/15199582052580.png!small)  
+
+由于ServletSecurity注释可以直接用来修饰Java
+Servlet，对Servlet进行类ACL保护，如果在ServletSecurity中添加ServletSecurity注释，在servlet_two中不添加ServletSecurity注释，就可能导致未授权访问，新建servlet_one.java和servlet_two.java文件，代码如下：
+
+  
+![4.png](https://image.3001.net/images/20180302/151995821572.png!small)  
+
+  
+![5.png](https://image.3001.net/images/20180302/15199582302645.png!small)  
+
+通过上面俩文件比较可以清晰地看出，servlet_one前增加了ServletSecurity注释，而servlet_two前没有ServletSecurity注释。
+
+修改web.xml文件如下（在web.xml对servlet给出名称和定制的URL。用servlet元素分配名称，使用servlet-mapping元素将定制的URL与刚分配的名称相关联。）
+
+  
+![6.png](https://image.3001.net/images/20180302/1519958242704.png!small)  
+
+这里可以明显的看出有两个servlet（servlet_one和servlet_two），servlet_one的访问路径是“/servlet1/”，servlet_two的访问路径是“/servlet1/servlet2”，由于存在漏洞的版本根据Servlet的加载顺序而对某些安全约束不适用，在没有访问/servlet1/的前提下直接访问/servlet1/servlet2，使得servlet1的ServletSecurity注解没有生效，并没有保护到“/servlet1/servlet2”路径，可能导致一些资源外泄的风险。
+
+![7.png](https://image.3001.net/images/20180302/15199582561097.png!small)  
+
+这个时候直接访问servlet_one的访问路径“/servlet1/”，此时ServletSecurity注解生效，拒绝访问此资源。
+
+  
+![8.png](https://image.3001.net/images/20180302/15199582655111.png!small)  
+
+在不重启Tomcat的情况下，访问一次servlet_one的访问路径“/servlet1/”后再次访问servlet_two的访问路径“/servlet1/servlet2”时，ServletSecurity注解已经触发，所以无法再次访问servlet_two资源，会提示拒绝访问此资源。（此方法可以作为临时防御方法，但是不建议使用此方法，应尽快升级）
+
+![9.png](https://image.3001.net/images/20180302/15199582767670.png!small)  
+
+ **影响版本**
+
+ **修复建议**
+
+由于在不了解对方网站架构的情况下，很容易先触发网站的安全约束，所以此漏洞利用条件困难，不过也建议小伙伴们及时更新到Apache Tomcat
+8.5.28，Apache Tomcat 8.0.50，Apache Tomcat 7.0.85版本。
+
+ **更新链接：**  
+
+Apache Tomcat 7.0.85:<https://tomcat.apache.org/download-70.cgi>
+
+Apache Tomcat 8.0.50:<https://tomcat.apache.org/download-80.cgi>
+
+Apache Tomcat 8.5.28:<https://tomcat.apache.org/download-80.cgi>
+
+Apache Tomcat 9.0.5:<https://tomcat.apache.org/download-90.cgi>
+
+参考链接
+
+CVE链接:<http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2018-1305>
+
+Bugtraq链接:<https://www.securityfocus.com/bid/103144/discuss>
+

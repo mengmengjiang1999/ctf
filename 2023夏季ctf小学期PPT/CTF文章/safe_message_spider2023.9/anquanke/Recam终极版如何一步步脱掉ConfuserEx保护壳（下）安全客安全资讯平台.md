@@ -1,0 +1,585 @@
+# Recam终极版：如何一步步脱掉ConfuserEx保护壳（下）
+
+阅读量 **214506**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-12-13 09:58:47
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 Holger Unterbrink and Christopher
+Marczewski，文章来源：talosintelligence.com
+
+原文地址：<http://blog.talosintelligence.com/2017/12/recam-redux-deconfusing-confuserex.html>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01fdbc85904d4086f2.png)
+
+## 传送门
+
+[Recam终极版：如何一步步脱掉ConfuserEx保护壳（上）](https://www.anquanke.com/post/id/89730)
+
+> 在本文中，我们介绍了如何解密经过.NET ConfuserEx保护的恶意软件。我们通过Advanced Malware Protection
+> （AMP，高级恶意软件防护）感知数据发现了处于活跃期的这款恶意软件。恶意软件借助恶意Word文档来传播，最终会在内存中执行来自Recam恶意软件家族的一个嵌入式载荷（Recam是一款信息窃取恶意软件）。虽然这款恶意软件已活跃数年之久，但出于各种原因，有关该软件内部工作机理的分析文章少之又少。因为恶意软件作者花了许多精力来延缓安全人员对样本的分析研究，使用了包括多层数据加密、字符串混淆、分段置零以及数据缓冲区构造器等技术。这款恶意软件使用了自定义的C2二进制协议，协议本身及相关数据（传输之前）都经过严格加密处理。
+
+## 技术细节
+
+在本篇文章的下部分，将着重介绍恶意载荷部分。
+
+### 恶意载荷
+
+前面提到过，恶意软件作者花了许多精力来阻拦安全人员对样本的分析，使用了多层混淆技术，包括多层数据加密、字符串混淆、分段置零以及数据缓冲区构造器等技术，也使用了自定义的C2二进制通信协议。所有相关数据在传输前都经过严格加密处理。
+
+释放出的程序经过vanilla UPX加壳处理过。这部分很容易解开，棘手的是下一阶段。当原始的OEP（Original Entry
+Point）恢复后，程序开始使用一些自制的加密初始化过程来处理某些值，整个运行周期中会经常用到这些值。初始化过程结束后，这些值中大多数保持不变，但有些会随着时间发生改变。随后不久程序会初步解开某些混淆字符串，其中包括一个硬编码在程序中的命令控制（C2）服务器IP地址。
+
+    
+    
+    call Recam_string_decode2
+    mov [esp+12Ch+var_12C], ebx
+    mov [esp+12Ch+len], 0FFh
+    mov [esp+12Ch+ciphertext], offset decode2_var_len255
+    call Recam_string_decode2
+    mov [esp+12Ch+var_12C], ebx
+    mov [esp+12Ch+len], 20h
+    mov [esp+12Ch+ciphertext], offset aPassword ; "Password"
+    call Recam_string_decode2
+    mov [esp+12Ch+var_12C], ebx
+    mov [esp+12Ch+len], 10h
+    mov [esp+12Ch+ciphertext], offset HostID_plus_rand ; "HostId-%Rand%Â°Ã¥"
+    call Recam_string_decode2
+    mov [esp+12Ch+var_12C], ebx
+    mov [esp+12Ch+len], 8
+    mov [esp+12Ch+ciphertext], offset mutex_name
+    
+
+这个去混淆函数比较少用，主要是通过单字节XOR（异或）循环完成解码任务。另一个解码函数较为常用，该函数使用JIT（Just-In-Time）技术，依赖于硬编码的一个解码密钥。幸运的是，IDA Pro的Appcall功能可以简化这些解码过程。
+
+![](https://p0.ssl.qhimg.com/t0161525dce04b752bb.png)
+
+图18
+
+这些前导函数结束后，我们会到达条件分支语句。尽管经过大量不必要的代码及计算过程，程序总是会跳转到40849B位置，程序中与文件修改及进程创建的代码仅仅是一些诱饵，实际执行过程中会跳过这些代码。
+
+    
+    
+    lea ebx, [esp+83Ch+var_618]
+    mov [esp+83Ch+lpValueName], 204h
+    mov [esp+83Ch+uExitCode], offset decode2_unk_len128
+    mov [esp+83Ch+Mode], ebx
+    call Recam_getenv
+    mov [esp+83Ch+uExitCode], 1
+    call Recam_arg0_AND_constant
+    test al, al
+    jz loc_40849B ; jmp taken (skip mangling & proc creation)
+    
+    
+    Recam_arg0_AND_constant proc near
+    
+    var_1C= dword ptr -1Ch
+    arg_0= dword ptr 4
+    
+    sub esp, 1Ch
+    mov [esp+1Ch+var_1C], offset flow_constant3
+    call Recam_base10_to_base16
+    and eax, [esp+1Ch+arg_0]
+    cmp eax, [esp+1Ch+arg_0]
+    setz al
+    add esp, 1Ch
+    retn
+    
+
+继续分析，恶意软件会在注册表中设置一个Run表项，达到系统驻留目的。在函数末尾附近，程序会创建一个额外的线程，启动键盘记录器（keylogger）组件，所记录的数据存放在`%APPDATA%Logs`目录中，文件名使用`<日期>-<月份>-<年份>`格式。记录数据以括号作为分隔符，最终数据在将写入磁盘文件之前，程序会先对这些数据做加密处理。
+
+接下来，恶意软件会创建名为`.Identifier`的一个ID文件。如果样本当前目录中已存在这个文件（通过GetModuleFilename这个API获取当前目录），则会直接读取这个文件，不会再次创建。
+
+![](https://p2.ssl.qhimg.com/t0129e3e6cd6b338102.png)
+
+图19
+
+数据会逐个生成并写入该文件中，格式如下所示：
+
+1、（4字节）静态ID值
+
+2、（13字节）HostId（包含数字字母的6个随机字符，以系统时间为种子）
+
+3、（19字节）19个空（null）字节
+
+4、（19字节）系统时间或者本地时间
+
+5、（13字节）13个空字节
+
+![](https://p0.ssl.qhimg.com/t018da3b3bc23de94da.png)
+
+图20
+
+由于用到了一个静态ID，因此文件的前4个字节始终保持一样（但用来加密C2数据的加密方法比这复杂得多）。
+
+![](https://p0.ssl.qhimg.com/t01d9842beb75a1e949.png)
+
+图21
+
+![](https://p2.ssl.qhimg.com/t013fb466c27fab3c0e.png)
+
+图22a
+
+![](https://p4.ssl.qhimg.com/t01217678348676d6de.png)
+
+图22b
+
+与`.Identifier`文件一样，初始的C2信令数据长度始终为68个字节。每一个C2消息（客户端及服务端）均使用如下方式：
+
+1、（4字节）数据长度
+
+2、（1字节）C2命令
+
+3、（n字节）与命令对应的具体数据
+
+对于许多恶意软件家族而言，在解密它们所使用的C2信令数据时，解开所使用的指令往往是非常简单的工作。这款工具的开发者选择使用自定义的加密方案，使得每次运行时生成的都是随机化的信令数据（只有长度值及C2命令保持不变），增大加密协议实现方式的复杂度及碎片化程度。
+
+![](https://p4.ssl.qhimg.com/t01591a580528a8c2c5.png)
+
+图23
+
+![](https://p1.ssl.qhimg.com/t01db576a9cdddcb3a7.png)
+
+图24
+
+![](https://p1.ssl.qhimg.com/t0134df7fdb8374adf8.png)
+
+图25
+
+发送信令后，样本会等待服务器的响应数据。我们所分析的C2服务器目前处于离线状态，会重置（reset）连接请求，但我们在沙盒环境中捕捉到了前期的pcap包，从这些包中我们可以猜测出剩余通信数据包的内容。如下所示，这个pcap包中包含信令数据、初始响应数据、一次客户端传输数据以及一系列“保活（keep
+alive）”消息（单字节命令）。
+
+![](https://p4.ssl.qhimg.com/t014869dd9a3b258719.png)
+
+图26
+
+此时，代码执行流程取决于某个流状态标签，整个程序中这个标签的值设置了若干次（初始设置为0xFFFFFFFF）。就响应数据长度及C2命令而言，这个标签进一步规定了这些数据中每个属性的具体值。比如，负责检查响应数据长度的函数也会检查流状态标签。如果状态发生改变，函数会检查消息长度是否超过0x30000。如果标签处于默认状态，函数会检查长度值是否为0x41（信令消息及预期响应的长度）。对于命令数据而言，默认状态会检查通信中的信令阶段是否设置了命令字节（0x85）。一旦发生改变，函数会检查命令字节是否小于或等于0xD2。
+
+![](https://p5.ssl.qhimg.com/t01dbaf94a2dadb127f.png)
+
+图27
+
+![](https://p5.ssl.qhimg.com/t01ccb443a6cc772a88.png)
+
+图28
+
+响应数据及后续数据（如果存在的话）会被送到一个大型跳转表中，跳转表用来检查命令字节，根据服务器发送的指令进一步执行后续动作。
+
+![](https://p3.ssl.qhimg.com/t01bdd4dbb9229a73c0.png)
+
+图29
+
+前面提到的那个函数及这个跳转表会再次检查流状态，查看相关参数现在是否等于先前设置的状态值（除0xFFFFFFFF以外）。如果满足这种情况，程序会解密服务器返回的上一个响应数据，解密函数与样本之前加密传输数据所使用的函数为同一个函数。如果处于默认状态，命令字节会传递给LEA（Load
+Effective Address，加载有效地址）指令（对应下图中的lea eax, [esi+7Fh]）。这种情况下，由于指令引用了零扩展（zero-extended）的命令字节，因此这里不会使用计算地址，相反，程序会将0x7F加入命令字节中。EAX中存放的是DWORD值，AL存放的是单字节值，程序会将AL存放的值与0x51进行比较，如果两个值相等，则函数处理完毕，不会有其他操作。如果两个值不相等，AL中存放的值会被零扩展到EAX中，乘以4然后传递给跳转表，以确定服务器指定的下一个操作。
+
+![](https://p3.ssl.qhimg.com/t017f41e72b5274115d.png)
+
+图30
+
+从跳转表中可知，服务器可以返回82种命令。然而，这些命令有所重复。比如，下图中高亮标出了一些偏移地址，当没有执行任何操作时，许多跳转地址最终会跳转到同一个地址（RVA
+0x227C）。
+
+![](https://p1.ssl.qhimg.com/t01e2e307ea333c5aa2.png)
+
+图31
+
+受时间所限，实际环境中我们无法深入检查每一条跳转路径，但根据沙盒收集到的pcap包，结合我们对命令协议额的理解，我们可以分析服务器发送的命令，自己计算跳转情况。例如，这个Recam变种所具备的部分功能如下所示（前半部分为命令字节）：
+
+0x85（case 4）：处理服务器返回的初始确认消息，设置流状态。
+
+0x81（case 0）：保活消息。
+
+0xBD（case 12）：下载文件至`%TEMP%`目录，或者下载文件至`%TEMP%`目录并创建新线程。
+
+0x87（case 6）：根据参数创建新进程。
+
+0x89（case 8）：关闭网络套接字，释放互斥量，调用WSACleanup，结束进程。
+
+## 总结
+
+恶意软件是个不断变化的目标，会在恶意软件作者及安全研究人员的军备竞赛中不断发展。本文介绍了攻击者为了规避检测而采用的一些复杂技术。
+
+混淆本身就是一门技术。这个技术的覆盖范围非常广泛，包括经常变化的加壳工具以及恶意软件中使用的多种技术。当反混淆工具或报告公之于众后，恶意软件作者通常会去修改他们使用的加壳工具。在很多情况下，他们只需要少量修改混淆工具，就能对抗反混淆工具。因此，恶意软件研究者不能依赖这些工具，在必要时候必须手动来解开混淆代码的真面目。
+
+我们需要了解攻击者用来规避检测及分析的具体方法，这对保护系统免受恶意软件威胁而言至关重要。从本文分析的这个案例中，我们了解到有些工具（如[AMP](https://www.cisco.com/c/en/us/products/security/advanced-malware-protection)以及[Threatgrid](https://www.cisco.com/c/en/us/solutions/enterprise-networks/amp-threat-grid/index.html)）能够在高级恶意软件分析中发挥重要作用。
+
+## IOC
+
+**恶意Word文档**
+
+    
+    
+    C3b1a98c6bc9709f964ded39b288aff66abc5c39b9662fdd28ddfcc178152d67
+    
+
+**释放器程序**
+
+    
+    
+    99371d8da86e964cc52bd719fd85f1f0015e4c60a9705747bb9b8ac52fd29b4a
+    
+
+**攻击载荷（Recam）**
+
+    
+    
+    1fd8520246c75702c000f4fac3f209d611c21bfdb81df054c9558d5e002a85ce
+    
+
+**命令控制服务器**
+
+    
+    
+    185.140.53.212
+    
+
+**命令控制服务器域名**
+
+    
+    
+    U811696.nvpn.so
+    
+
+**域名所有者**
+
+    
+    
+    meridoncharles@yahoo.com
+    
+
+**目录及文件**
+
+    
+    
+    %AppData%mozilla firefoxfirefox.exe
+    %AppData%mozilla firefox.Identifier
+    %Temp%Update.txt
+    
+
+**注册表项**
+
+    
+    
+    表项：HKEY_CURRENT_USERSoftwareMicrosoftWindowsCurrentVersionRunUpdate
+    键值：cmd /c type C:UsersdexAppDataLocalTempUpdate.txt | cmd
+    
+
+**相关文件**
+
+_释放器相关文件_
+
+    
+    
+    006583023242bf4a8dcd0190aef32500dcacfacf1dda7b24409133dfccbfd186
+    0086bb92bd34b41e180bec90dd15d4b0d0eb9c7384a68b66354d603ad8e14706
+    01226da791e32f8cc907f88b2b672068b78b86b1a0d154bd22274234a7d9b5e6
+    031046538b60f9b243aa74bdec2a13ab2aee4b941a136daca12de78c3419dd6e
+    038aa33ab7363ea484efe9c79c718de500acf766266166b6a70e69b0a67c3984
+    03fe0caa0f3e21f1975bdceaa5e38e00d725879322c8815e7b3b60b1c0cfec20
+    13010c16d07c00d22ffebd78c7e00ee40678088f3f46292d3fc7e7b299296361
+    14d341bd2c2b7ea90b3b15fcb8154caa036b629156199d955047fb081de6669d
+    237ed26f6d9b19ddd2fc368ba871c1df651bf20e21f0f2cf2f1a0d9a885fdfab
+    2442515adb2cbc03f54b4edce7762e3b4ce0763ad073666cfec5743ff1bc62e2
+    264ba90eb6e5e38905bb8333830ea0ef86126d06d68a8609efbe18068d0861e8
+    26a6f02efcda37e1c0d1a66ce57ccfe0fb95bf1ddf9b20106e0d90407cb89d0c
+    289ab18d2c67c1c2f92829e11761ba3ec3a9088f36993031a002a0dbe7ab08d5
+    2a1a0356d96f97a4710511a5e023d43124e7e97261154b5e82d6047fd6dc85e1
+    2b3fe2be93456173aa1d998764284c687ce68db9c5bfc5175ccf475b090809c1
+    2fbd846efe0cbf9aa0e51da044403f7d96f159ab655bf44ed697062888fd4fbd
+    30c0f9250fbe8b8eccbf9b195a4803d33b320d20da4252763cd91b5a8c261872
+    31442c2ed9a803eba0e162616c16907985487f3bfddcfbc4e30e699fc58847e6
+    3e7aaa364e5d15d974fab62f828a7ab1f14f5c79ceca7e3dd8560f9a863517ad
+    3fa46682f660e7f0136544ec995657150bd42dd33ef4362bb0c002d25c9327c2
+    490183ce7288fe6b35f2ad05514cbdc8d212121c661edf570530980634983276
+    550db43b5965301a33d2bf71760c4e17c7ae249bcbb1f6b0c9173d76774623c4
+    61788dbc231ec56f115607e6d7b3cfe2962ecdc112bfbd0a8f2ef1e3f145b25b
+    6ac23f995572bd1b9caf860384abf62921cf6d572e679872314f67038bc076ab
+    6b965cc215758d529edaff3a2913226823848c47146121855a482059a6e8ee38
+    6e74c3a1f5bc17f38da7305068f9203943090067b2dfa67fb9361fa1821a674b
+    7960bc0d2d9422df90216d1b81fb4420c04607c374289ffe10eb9a80e18990cf
+    7c127f9f22a346d4369405f540c4e467abac02bcf4589dbd6d3e97f18fbe0f98
+    7dedf655e19430f538faab5638ec76383d651abf5c24ed799e101abb7c9f40b8
+    99371d8da86e964cc52bd719fd85f1f0015e4c60a9705747bb9b8ac52fd29b4a
+    9d0671ee5279abd7973a426c60f44723503fd09d4d771092e2453ac4a3e9334c
+    9dfee20b6e5c57387968da91ec6efd4e0ac8abce219c437a2cd4b5df36f2a79e
+    a9b4e5cf351bbb3f20fcdcd7cf0b2c03df788c4d0c0d59a31cbab09cccc335d1
+    c064c70d887ea1ccf37e3edd19dc717b53f2c0513424416fc783654ab9f61134
+    c13d2ce1b561ed02c02c9a2899a7d7e9c97400ef8f81eb48d6ba02a90d76c689
+    c2fef90a5ad97a030712b9245fccffb26f226370bd6f67c989bbf95e02ca03b8
+    c8d98b7f1cf8811c3e75b0ec8c1011d0ed4c3951420f04e3b743da564869e02b
+    cdd98208665360ca7745a1e5577e1e9607c49ac8790ffde2edd93e2c64ead8a1
+    d7d94b3aea52f0a9bda593806d56f962c09f4d389820cd9016ceed73767feb55
+    df46d34c0ff71d994f157cfe158ae7dba9dbf16ffb021a10e401bc9afb2f4e8d
+    e20c3b8e3460f719219cb4ddac61231db047c125818a391d34d87dab1726f070
+    e3704aa7bfb90e8e7f96aa529cbd96319696157cda076d92bab9eae07cfe977e
+    e8a4a890d34b328857389d48d837fcf4b9ab4774a29bcc582b4cdf05ac3a49db
+    f7ac275c2971820fb311f41049c5e460251486625696caa0fc60d0ffc683fb70
+    fc0bd596957f70e87954ef42acc0bfe0123c11be6879c7c910a4a7e434e36c46
+    
+
+_RTF文档相关文件_
+
+    
+    
+    27bf1851e64f5e6d6e33b2b3bc89b82dda2da2fd9a747c847c148909dda028d3
+    7a63150ebd09fd4f8c8f1b7485a0139108f22aea043c9759239d9976948b5c75
+    a27ebd73ac836d659512befe4fee57f9343eca992448242b1ab40730506a747c
+    ac2e9c83c7e23514c196b14e49f93345bfed2ed8fc10343c21d358ec3e809928
+    6f3a8557e2c95a717cb48080042293045011e74f2a4c79aaeffbfcc86456eb37
+    5a234b3e389a22b70da242b1c93d65f358d60f1347b03101f7613fa1db032645
+    660a6197a032cd2baf35df713575f16b71ebdcda67b89deb1afc45f2b986490a
+    7c7d00e12273fe924a9dc945add40c91692b8e468682240cf241a418d3ce198f
+    1d604531fd15a7476296612cbfcfa4761148a61d54f44351d97b5feb1bb293e4
+    46907300ed93309f083181489bf68ef8f357b1a583bda501b3ab5249f55778ad
+    6fed760b5eefd70dddef34daaf678f3d999a91c0f638c8afbe844dd8097c4bc8
+    f231bca66d0d8b241dfbd49630602405297c18cbe108b609f420ff6e9c987e7e
+    d3de3093b173746fd5cf892e32caafabb898616766953ccad2b6a303930731d4
+    662f7b3816dd59c5f1988c9d7b5b62b61b94028fa513ddfe0c00e21a79367883
+    b9d38a08e7b888940ad0bafb6032dfe45d4b6cab2f09a734f46d05d718eda57e
+    1fd682146e278a76b216215ba9bc8040f9fc4e817f0676ccbfd46ccc13ca95d4
+    135db94b1b75fbeccf2e28abf568e3384e14dc452e5f638cdb1cb533794d2bca
+    51e1da451e38159e73bf185f627fedf63aca03734e95f88dfbf85536eb6bef9a
+    18ba9d4175c48148d4dfa7d022a687e4c63da18337fd86a3f48efd5afa5cfcde
+    4f6dd728633bba78841da6fce1ce9a3e8673830588bd51e2bfd283e2afcb0ecb
+    6943484dad1a3246a82b1a9444811e0f4c561770291dd936a1f1a5314e13fda9
+    53c325566fc88c8355478e001445da54debb009c60581e2e6c3345f10c4f65f0
+    a546965c6a46e9f19c374b1195ba0924c0a6d462a9d37210527d1f2801719932
+    2752ed543f880807557ba9556838e4ef6a1582ea50351fc2723e4d63f4f57ad9
+    771f02d96d7eb5b4e8b719e3d9848482220a27ca0704c0a156c613348e3a64bd
+    8ecb075bba3f583d350e136b9df81d2a773f26174a014c59f26915eca785dc4a
+    57e31a5ea3b7fa86cf8b1b257cf91e5e499e633b17d2a9bff388beba2fd101d7
+    41015210e0faac0825b1c51dde385d390bc7cba7b4c45a534688d58cea5d0d58
+    2c69630f2fc87ff69cd7644e312b484c118b7d447985c655ba772954085c8f33
+    8481f95d09058d24f4a764223c128bd38e430aa9211f135e684744cc3bbc1b6c
+    42b1093ebfd76a869f8a50e7529348f6a5b9d8b85c0d6b2b90d243a32e35baea
+    3ee302f650b87c151bb6e91d2b3ff38ab49b1e4ad30f6f18224d8236d9784ad7
+    2a8410b31c50f966704f0abb5a976f0faf59604116c4a4908992b33bb9dc4e19
+    05ce4c14144b9935de8d30dee60dfaa513bebdccb35099c8892ece10c86f0a6d
+    5885ea86add67e7a149634e8c9ae4da63e35b431c5210256a570b56387ee1f8a
+    5daba9df4ce8d4e7bc3e5bb6dc43dac7034185a218e53a261f814d6398eabadd
+    e5666e76d755a8c1e0430860677dbb1991c9025b99318e42dabefc09f276b91e
+    5df14265d5ce37ae0dc0dcb332c42b7331cdc305fc1b265b767bb96d6e6d93cf
+    180734591883412d5ad4db3f768b59e7e918fcc987915fb130e72077a27f15a0
+    aa3f5e91fb4f447bfff93123c404a62b8ebe2a9790ebbd02c57f5ab61d2d2882
+    70ebcc2aa157230051490f5480d49dcef22ad8c26be1307ad8eab63bd4233c40
+    a2139efcf459ad80e6ffe1e3e346d18c466dd4a0c1e9973771e3c674abd56456
+    98b4862bba7bda1169bc8a3f4726c0033b0a02f9d4d934265c56307c8a9cae11
+    944f1bd37c0b223d45b1f33f1b5cb77bee2eb720ac2d17b1098ad770d85083a5
+    aed64804a5191a6c119cba1f81ad5f09260bac0f8642d1f0101da73e8a7b3329
+    e338747a4f62d1826ee92cf74ae3161bb817a19eefec7902f4f334c43bf94399
+    888f9c76d26cdfa7340779a015d95785253cf14a1a850fe79ec64a6a24b1deac
+    26092c74ff3ad634577f5b890fbdc911b8813b337b77aa5db5132b5d3a51990d
+    810afd3bee3016d443536163cffdb7819cdabbf69b16fffc9108f9747d6314a8
+    5062a698879870e73250973e45cadcaade05a314f4f17fb17f14f82007bd6b1b
+    f4ecc8fc573401cbd54022d91fe1fe4575d16fe899aa7e30fcc7c17cd8b66ade
+    5f485d6c9b210bdb7a7dc4987a3bef3c180cff3a389229853987818673032823
+    9cb7191e87fc0efe04f38e8881dd09367c267a5abf0fac51f54d89b6fe1c74e3
+    2da4433c077bc5b7a9bb74e89b77e2f441e6f3faca86f1b33ec62745f9d1c119
+    31e1bf4c259b09f9a0af1d25e1978fb1cb0aff4dd3ed19c40654b2cf0fc7baa7
+    b05d350a806200a7d98386b0955e778f5cde98d1c0b29ae94245731b811983c3
+    678fa6d2731f25e7529ead56c1274b40a15275fa8df95004e3c8fa8fb4f87985
+    3d4324f0e9eb827b180b8c406c7893a57524cb9c943d0cf51851277c55fa137b
+    ff9403de6d602fdfbce67c39929425a6ddf1702f8ccb5f73a45590f41ec9b298
+    75ded8ff160d4a4cb1a15617ba82c2fd979f4c6de068ad3c1628c3fa96ccb06e
+    c167a67bf9f07204a6d4f15848d40c152138d56d1e105cf851dda74049ef4e02
+    d873d716210c4c3eb86d2e27c72ec5b083b29a3ceaa0e71e0a784aac74667670
+    9299804183d38a89f7790527b21acbc958c40dd09b09c40fe19c4629cdeaacf0
+    b9b5adb3b3918e9652b73d06e2ea98370a48c3a58ef86405f56c47771cc21af4
+    f982fb8ef63466c16cdc5c8d107770f986e4b28c476edf5d848a600e2f4320fa
+    202e364f3b50fd785831515c6991f5db2c03923890785788c15c04e8128b4e12
+    4789ee4e6c8490b31fa68b40dc134d29baae0872dd1fda04a28d62f8455fcf2e
+    167594296c9be12c0aa8f9ab40e83409361ba0e4eb8044fe3276d0c927fcd3c7
+    90d293195bf573c14d39eac6aa6e0786b3282bbd3f4bff850b7dedb7eebb6049
+    ecee734d28bf51f199efea4d27e42865fdafe0d880ba6b9ed846a502050d8e20
+    7cdcb22b02294c4d981c161e6f527b9a4b9e0ec8a63778f0f9ba4b0d86daac2a
+    84684f264b035865a26dca9631f0bb0d88597daaed3cfe1bb69c6c81892cb20f
+    b89ebe23b4d2d47885c7431ddb1ffd084e1537c59585fb29a825a06581af0dea
+    bbe8d4f57f896b96cb2f1c147afdf4bd50277d436bb68c03216547bdc9d88b7a
+    603c5d3dffc0ecfb898bbab51130b7b1c95c95c0dba8691873eed5a21ef8a052
+    2f8141c3517394dfd818bd9ae762332a9454c8ae12b815de7eb73851a47d9b83
+    17db38e774338602058f883997841aa4ca2e647b605768b9a5dbdd89ac252d5e
+    e83f5d93e97625407ed4529e05f6e6116cbd183177e3ba65f2acd8e81f07bf36
+    bf38e39eb1dc78c4b854546f8e212527aeb8990e7fff3d63f49b8c15846d19b0
+    3823a6914e7fa21764df33c51efb307a53385bc4692d167af5220e7ec7425235
+    c8e01564f14c5677db7c0e264cd2b125952edee26731b42d280d476b3c191a56
+    88a58c8848ab67c3552acac7250fb8408c06c398e6dd79df8437e064b209023b
+    9068cb2c0257b905d8079bcb40033fc58e832e7c0d2d687a1d942542443634a0
+    ca2ce6f6cf845e5b17934c3a5a0f43ef860fb5ed67ec771f293baf4d9938cc50
+    3963c2ebbcbb893f2695e90249dcb6ebc546a0fbd0ba126d398d9774071262b1
+    ca270cae900efb83979e0aa2f997876aaab68714c242ab131b5a0929ca661ea8
+    1f262c5c54bbb0f6622fb8b5ca806d8544cac3fe6184d300c8f28074e180b9f7
+    9923f18495de93f7c957fe991f0dd3b185c8c7660b9ef93f9a83ebd4bc31cc1a
+    d451a59c8900f7e9fbd535d1a3bba645d2f7bce4bf95df73fbca72755602325b
+    147fd5fb0f771d22f38f33d217be393358c3e3b6452b3064922acdb1f160e164
+    ce0e5fb3022a01bb6ff24d9430e599eb50cf670e6f3d6c3e96adb448774e510f
+    eb8973d6ad89e13c5f87e14c5cfc897d5d44436891dc9ed651388334041a5f31
+    47883497485f0f841395071590f9bef0e13a6d2859a511002cb2a3060c128c02
+    e6bf577e20cf0834f2b7ab050f81e475ad41cd1580f53dd040e919b58bf57ccb
+    33bd585673e1c40499e7702bdf04d6326ef440da297611301c190ac508c107f1
+    2433294309a1c514ce9733b0ee8b0ad4ce807d4f93c0df17a2370168577e10c4
+    b710e3f9bf878c2c7940bba099ae0fc8363a5446f6c9a2428f5fb6fef39cd814
+    449f09003bc890df9bf5cc8885eb1e278a724eb3872bbf95fbabb504aacc9ca4
+    77e77ebd338d1829ac00047f4c64fe84443699290f67ac0ebe01697b38b6d439
+    ae8404e4404174a6fab8477b27e60d49a19b72ee623ef60e37b391812682944c
+    ff68a536f40f20c0bca80d30077949a9b69f37b5bbc4bf32eeb0e36803a1cce7
+    723b22279a368ab7e1db69352ecd4e4524f3d062a30a3dbeb4101d3ed681002f
+    a40f324c032f9af3a0a26be7d21655f75381058bdbd7ec49f6cf9fa6ec01074d
+    
+
+_载荷相关文件_
+
+    
+    
+    08433debdfd2e520ac5d2f0ec922f84020e8f4beb711fff868e607f06f40e133
+    0a6be4d49ec1c9fa2e4d0f097d3808802117836effe1f4087cb9743a88695bc0
+    104024e27738377f05a24aa493561d9ebc9d38d462fedd0d888830cbaae670e0
+    155033e85069c716c3819c5e81fa876ad0c4269d911f3832c4cc61dd45bc2aa7
+    15a6a46e678ecf4d5d9a9d9d75eb12aa33d55611ed8cb555079315e4b9e22553
+    16e6b6bd449f4ffb634df45808adaf78456c91b53bee79b8b8b7bff1ed3d4b50
+    191a3d8104ad83ac76cb36014021f2c7ab81b74ae15eae59d799bdc0f4798951
+    1f3a5878104747d51c08d75ef0c7eb644859ea01e46246d97c278292d4251960
+    20208b337e4f0a418a0e3329f7f863700538bed1a50ca720db05e7f0f9ad8c4e
+    2258fd874969f13c8b6b62db03c5db12df9848bceb2e0fc6654690b691956889
+    22e249f2d2bef1632aa61d6f07909eeeda706670e5d89f11aa8c3bb89bc92f16
+    234add1226f0ce30f83f72afa1067329ac22b20759c5333c404926775f298119
+    281729d8c1131999a6ac0f784a5f0ba45ca83149406bcbbf06f866f446d88ce2
+    2a917a89e324402b23e084820fcfec8c3e98e4a1124be1f29323e1694b5755d6
+    2eebd42599746cf252f08338f81ed3df9e975342c12e13ca8c70fafa4c4dc83b
+    2f4a6936dafd89cef6b8ba828e90439daa81a2a898c2da0767bec6b51cdaf11a
+    2fb2b9863d534f9436e438f86275ea1e0c4741fb8fa5d9aa7311cc025f78f30a
+    300f8301f23487e2433002999f1acbc804f4f684f6403e3a4c65f4e5979540e5
+    304b15d20b64622250cf0d0954f3c887a059c4c98642b3fd6b3e3eb94b07546a
+    344d063a2ce0b614cd073725b9b9a018c8706b6b9f380800506eadd80e92bd7a
+    3738bbfd8ab9a37a5ad5bff41f4fabfc3a7ad0f4085a5290b83c1fc7ee3723b4
+    37907c564942af4f1b235ec8592b60f7286de2e67206506733955c8a70ae5d7b
+    39675f4f6648317e322593cb654094e548bf2735df063537ee896037e946d451
+    396f61528c9b25144b89cb20e5668daa965489311bb8a00b7a6244feb0b79190
+    3cc77f145194653036c846505fd26563f3a1fac0cc2d3fd5123701685e84b28e
+    3cf115056782e777dbfa2b6393ab1463547401c8bb2d59ab89455bf77305ea98
+    3d825d79bda177aadb305d8c6822bb97f7fe2ee451e5257e85bad42e99535606
+    40e90e30cee9c1726154b6678221fead406b94bc3259ba8386ab438cd5ebb250
+    41475ce4186414fbbb8589f29d5f7001bb286167e77324ce4da719acb21f4dea
+    42a4cd926419aa35a4b17264d190256b9cb52cdfc33c943e68e578566ceae334
+    43024e16cbd0ef8ef160355e051477a3b31018c9dbe0afb8cac06576f57deca9
+    43b361398583c3c0ce75429a84b30ff10e047e757223eb433414a99d35160a0d
+    45c375bfea191f576e2a5deaaacc8e695d2d7868ae5b87859411dc5438240212
+    4976a6ad02ff39f568cb9cd7a1ebdea8c381b8f9600909c273f7f53436dd0f05
+    4a1d7a0688318d216c3b3c9883b7e35c4ff2bcc9cd7ecf63486e622339bf5059
+    4c959c764c3bc7d5141cd002c261382b95db1d22c371071409c08d771bb5e413
+    4cfac44cf32a5c067383d815997f7d474af97bb82ebbfa25d909f86a1081eabd
+    51b4cdf23ea83bf87d741e92522c6f6670b98cc0b2b13bb41b7cb24afba959b7
+    53546e823073cbda154c74b6e511556cb17db067f2a2e746693c2d1c7f1f7eda
+    556f0b284c63cc884661c583726ddc5bdec2e679f53e2b3bb52233b1750d78aa
+    5934d3620e3d2905cba1cc431e8040f00ca0b763c8a38a6fbb1121e9c4c25cf6
+    593516e03212b03296720bd0a1f09221e156c19067d713b723fe57a81d3d5faf
+    5c9154974d5daaf850614fc660e1e9864f9df8f4d7e0ce68ca3e00b3e15d4e58
+    5ce46c27795fb25bea268f233f89be52336e344737e059bb21f3daa9815eda96
+    5cf4effade63cf1aa9a3cc6909bcf2e16867ce8db60e7f20a9d08dd4a5c59bfc
+    5deeb0fd202427f5763562bc80672096884655b834e219d527ab200f2ba5f01b
+    62387f4d55f15ea72c8d7f5d2ab1bd4029d895fe3f22d95980291b2595a658e6
+    63c0153b2deff5a9286db1bbf41c327d55e4afeb938472b04f5f2e5367a1418f
+    64f2e9c68908a7ce978ddeb17b661e787f1464ae706eb1ff1ce006cafe81e07e
+    6c8eadfcecafdebccc737420d83c1f8493d12fcbecf13198aff88c10017316fc
+    713a536264bff75649da55d367804c47333c55ed326be5ff73384fc3f2e87977
+    72adc4612c53415a4b924acff7f8f400d1f20f5eb7d02f5e2d12488db168fd9d
+    73afba6db12fda23caf12b2e71310631abbe6b9467636d8343ddb3674a49f527
+    771000d6307e4372f2f51b6958e8b7e7a35ee34e9f9fb636b77559534a9fc1ce
+    789481741e0df019d839bf61181b5cdd085b2334123be58a4b64c12fa7bd6193
+    7e53b73cca7189e97e46de3e6e056edcb98b1aec6c2c338e043b8732ae46580e
+    806f0d040303841e913e0a2a3ac96ce4427c269dafe6f135b1b64f5d9ba3d740
+    8263655df987bd6c2bf8087e6b8759a360482757cd28a1d7e1742f652fb6bfc5
+    8321a2104d185e9ddeb7f19c15bfc92ec4fe7fba67ba5a167270706fdb90e6bb
+    85007ecdc6baec70a7e259395066c96fb7ddafd1be8a84244c92a7dc52a003e4
+    87ae17f03b47f54fd9f2a3cf9f3e1e4d5cdfa6592bec4a05214c30756599a3ef
+    8af2013a53c58346f9d558155691d9d736b253a6b179a40fc9e167cfee025dba
+    8b42ef0774a9eb367ad36d51e990ca5bcc2708c33380dbaeeeffb29e113656b6
+    8c9c9a4689a4b0319a32f32ded1e97dce3185d1d91fb3338b38081d28ccfb80c
+    8f256697f2c7c5c19671c5ffec1b7458a609efbfa3c54b0aa83d71c524afb3b4
+    903b5ca6aace73bc14ea9a22c900772078f063cccd9c144de6236513184d07b8
+    9172fef013aca4eeef4bc4abfe0a283f89acaa58c6fb61a654eb66fe60bfb42b
+    942d5bebedebee78c19d4dfce09c2a8e69c94ed77d55e7f16db3e0dd8f179f9b
+    94948ea1285abe593df349b24340cf176726e92b0e20b35a3d9668de43b856dc
+    94ef90e1cf5286566afb6ff7204b2045f5cc44d895f4e1ed3691b61ffd961bfa
+    9510899b01066f15d622a79611c3b1f3444559ccc483aad04f52ef3ed0c0e955
+    9751f750493d38ee62c7139cbc4ee4191ca6c7f9a6ba629468f33d8c653cf660
+    989a36bca1548dc37bbe8c9716e69d789cc1eece69dc0b3c1ffccbf01764a0e5
+    9b7442f32111a4acff0f85a4c38b79dd756f2dae3b73545ee53a4c000aba8b1f
+    9e56b2771f3bfc3003183d0cda39821c2d1d8f427ea521ba0cbce0bf69734005
+    a07c4ced1cc47b8df61eb5d4be42ea64a79d47ef6dd4967e9c956dc49796ba80
+    a0dacb034d3b1e563714ad91fe51a71fe83c488a5931c1fb82f8cad04ae2fc1d
+    a54ab03086af7b96b88efa0fa1abad56870947ebca89c05eb6503eee5f9a4cf8
+    a6693a690c7b1f1363d61301db838c0854f7f95f5322ad38353f9888dd386346
+    b25b113c1159e0fd35eb6b07a4f2318439e779ce9916af6b8e909e1eca744809
+    b8c92c94113509e2d60ee97c0233d107ccd4dd11ce1bbdb2eb5b92113b4d27cd
+    bcf5b70de961cf53dcb845ad766ed8d36653408e72478f3c4f36883018cf4264
+    bee0a43ffaeda2d39e0bb754ab6ac5f3bf159f8bf79d5c3619086eb26974aac9
+    bf9ff9889bcbd338586a17ea8a7f270efd45efeea367f118cf2c036b9a63c45f
+    c0d71564ae30d7336504ae8bac556eca7338f519586060edb378250f2af46ca2
+    c2e56d8c1090398b2d60370b55cb5bd3359630451acdb554ee8c1aa7f5c1b51c
+    c5d2fb553d6406100c0b4a1be2f9e11ac2101bfa081527e211b7ac113fff6ff5
+    c63281c74f8ca4309b1651a18241a69979fb135048beac2267620efc46e798e3
+    cbfc83e8341728851650b3bb78855e5e16e030e33fc64dcbb8e27004dce7b290
+    ce0c460160d5a2000e807f225940fbcd8e0e629f3bbec52e952c3355ffa688ff
+    d27406627260481d000551236d65bfb284ada771f105adf41ee231041fe5b2fe
+    d8a8f29bcea4e4b3a2515b31926abd1ce7b2adb0679a26a68df992c2c14ec730
+    d9a3fc467e1198db9eec0a2231396f94d5fc44206d829ddf74dbeb529cb6e6f6
+    d9ea0bc4909f894c30368ab6fcce37046523945bc64ab46b671491bea1d48904
+    dab2045ebb2a37e78f0c3a0fff063b32ca66e16acecb197e33e671948f9ba4fc
+    db5ea1d29e6681c30c49f640020fac8aab39e696e2b871ce4cdae45bacc1da0e
+    dbba4d5a7f81feff29265babf103cf6c5e240254a6dc157ddc4bc3cfa2941b75
+    dbdddbe487c70319c928d8b4a9a499dbe18c347a622ef78e665b27d9563340c5
+    ddaf881c973e8302146ca59f0d65327ea0fc4b9bd30961e245fea693f377e893
+    de1edc5dacc285b7f4910f4252a01c3d418b5f9fe14b76c33b00e8eaaef9976c
+    dee635d66b0ecd41655f180a9e51967a84c6c65be8574197da161f3cf51662b7
+    e242f942726ebd6c123a6d868d6a5c8c420e15056f0662773c14f218b20c550d
+    eacf6fbc19a4a8d39ba16be72a51d0f376d59ab09b6726e0632eabd00382dba2
+    f013c00f93260c72da674522b0169a65553b67c71ccf2bdc1879c7c91381332e
+    f070a3e1450d56266a24d0f8f0878d249ec777305f85b4b4b55e1f1aa474c5c0
+    f0e38d842f1ef4d67c7510440f7c8985cd79b6c52bbaf07c43aa370e178a10dd
+    f14fb553d340d6f62c640711e058f147d186a9f51b0f422bd55187dc3c34ca8c
+    f2b47d7b9becbcdaea350fc0fb01f258e5e31ebc3a39b8e9e170730b194869d2
+    f47254880625736325ba64853ddaf35a5fdf940843fb8af7ea66008953539170
+    f62cfb5f412ce47c611430e4445c14376791eb68ed665ab8641731b923643b14
+    f63c4ece8caee488bb4873d7a494f8d52b0bcfa8746794fb5e0b913808b3f1e6
+    fd80d1c741ca0f648f7ea14bb8f345358681f5335d909f4f0e56f14640bde1df
+
+本文翻译自talosintelligence.com
+[原文链接](http://blog.talosintelligence.com/2017/12/recam-redux-deconfusing-confuserex.html)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **興趣使然的小胃** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/90174](/post/id/90174)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[talosintelligence.com](http://blog.talosintelligence.com/2017/12/recam-redux-deconfusing-confuserex.html)
+
+如若转载,请注明出处： <http://blog.talosintelligence.com/2017/12/recam-redux-deconfusing-confuserex.html>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Recam](/tag/Recam)
+  * [ConfuserEx](/tag/ConfuserEx)
+  * [加壳](/tag/加壳)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p4.ssl.qhmsg.com/dm/200_200_100/t0104d1b8b4ca36e961.jpg) 興趣使然的小胃
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

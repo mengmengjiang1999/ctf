@@ -1,0 +1,162 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+**今天给大家介绍的是一款名叫ROPGenerator的ROP漏洞利用开发工具，它能够自动寻找gadget，并构建ROP漏洞利用链，该工具当前版本支持x86和x64源码。**
+
+![1.png](https://image.3001.net/images/20180718/15318680746457.png!small)
+
+## 工具介绍
+
+ROPGenerator使用了[ROPgadget工具](https://github.com/JonathanSalwan/ROPgadget)来从二进制代码中提取出可利用的gadget，并利用[barf-project](https://github.com/programa-stic/barf-project)来对它们进行反汇编。提取出gadget之后，它将会对这些gadget进行分析，并解析代码语义，最后根据它们的实用性来存储gadget信息。分析完成之后，测试人员就可以利用ROPGenerator来自动化查询gadget，并通过语义查询来构建相关的ROP漏洞利用链。
+
+ROPGenerator采用Python开发，该工具目前只支持Python 2环境。
+
+注：ROPGenerator目前仍处于测试阶段，当前主分支版本为v0.5，目前我正在开发v1.0版本，这个版本的速度会更快，功能也会更强，大概几周之后就可以发布。
+
+### ROPGenerator的优势
+
+> 1\. 优秀的命令行接口：工具提供了一个流畅且易于使用的命令行接口；
+>
+> 2\. 基于语义的gadget查询：你可以通过指定语义来快速查询相关的gadget；
+>
+> 3\. Gadget链构建引擎：单个gadget无法满足你的需求？没关系，ROPGenerator可以帮你构建ROP利用链；
+>
+> 4\. 完全自动化实现：ROPGenerator能够帮你自动化构建出完整的漏洞利用链。
+
+## 工具安装
+
+### 安装ROPGenerator
+
+你可以使用下列命令下载安装并运行ROPGenerator：
+
+    
+    
+    $ python setup.py install
+    $ ROPGenerator  
+    
+
+### 安装依赖
+
+ROPGenerator的运行需要ROPgadget、prompt_toolkit、enum、python-magic、pwntools和barf
+v0.4.0：
+
+1\. prompt_toolkit、enum、python-magic和barf v0.4.0会在工具安装过程中自动完成添加；
+
+2\. 如果你没有安装ROPgadget的话，它同样会在工具安装过程中自动安装，但是该工具当前托管在pypi上的版本并不是最新版，所以你需要手动进行更新。
+
+## 工具使用
+
+ROPGenerator的使用非常简单，下面给出一些参考实例。
+
+### 加载源码
+
+第一步就是从你想要利用的源码中加载gedget，你可以使用“load”命令实现：
+
+    
+    
+    >>>load /your/binary/goes/here
+
+这条命令将运行ROPgadget来从代码中提取gadget，接下来工具会对所有提取出来的gadget进行分析，并计算语义，然后将分析结果存储在一个gadget数据库中。
+
+### 语义查询
+
+你可以使用“find”命令查询gadget和ROP利用链，你需要指定一个想要完成的操作，随后ROPGenerator将生成相应的ROP利用链，支持的表达式如下：
+
+    
+    
+    reg =reg +/- cst
+    reg =mem(reg +/- cst)
+    mem(reg +/- cst ) = reg +/- cst  
+    
+
+样例：
+
+    
+    
+    >>>find rax=rbx
+    >>>find mem(rax+0x18)=rbx
+    >>>find rbx = mem(rsp+8)  
+    
+
+如果你不确定哪一个寄存器可用，你可以使用“registers”命令来进行查询。如果你想进行有针对性的查询，你还可以使用“find”命令提供的其他选项：
+
+    
+    
+    -b,--bad-bytes:指定gadget地址中禁止的字节数据；
+    -k,--keep-regs: 指定生成的ROP利用链不应修改的寄存器列表；
+    -f,--output-format: 指定ROP链的输出格式；  
+    
+
+样例：
+
+    
+    
+    >>>find --bad-bytes 0F,0A,56  rcx=rdx
+    >>>find --keep-regs rax,rbx  mem(rax)=rdx
+    >>>find --output-format python  rax=mem(rsp)  
+    
+
+## 构建漏洞利用代码
+
+加载代码之后，你可以使用“exploit”命令来自动化构建漏洞利用代码，ROPGenerator提供了多种漏洞利用方法：
+
+> 1\. run-payload：向可执行内存区域发送Payload，并跳转执行；
+>
+> 2\. call：通过中断或系统调用来调用系统函数；
+>
+> 3\. 更多功能敬请期待！
+
+可用的漏洞利用调试选项如下：
+
+    
+    
+    -v,--verbose:打印ROPGenerator在构建漏洞利用代码过程中的相关信息；
+    -f,--output-format: 指定漏洞利用的输出格式；  
+    
+
+样例：
+
+    
+    
+    >>>exploit --verbose --output-format python run-payload
+
+注：ROPGenerator提供了一个嵌入式Payload数据库，你也可以直接使用“payload”命令来管理和调用其中的Payload。
+
+### “run-payload”方法
+
+“run-payload”策略会尝试通过调用mprotect来制作.bss
+RWX，然后将payload拷贝进相应的内存区域，并跳转执行payload。你通过使用下列命令来使用“run-payload”策略：
+
+    
+    
+    >>>payload select        (select a payloadto execute)
+    >>>exploit run-payload   (build exploit withrun-payload strategy)  
+    
+
+### “call”方法
+
+正在开发中，敬请期待:D
+
+## 运行截图
+
+启动ROPGenerator：
+
+![2.png](https://image.3001.net/images/20180718/15318682208876.png!small)
+
+获取帮助信息：
+
+![3.png](https://image.3001.net/images/20180718/1531868227789.png!small)
+
+从源码文件加载gadget：
+
+![4.png](https://image.3001.net/images/20180718/15318682339396.png!small)
+
+快速查询gadget：
+
+![5.png](https://image.3001.net/images/20180718/15318682452503.png!small)![6.png](https://image.3001.net/images/20180718/15318682457789.png!small)![7.png](https://image.3001.net/images/20180718/15318682453409.png!small)![8.png](https://image.3001.net/images/20180718/15318682457544.png!small)
+
+自动化生成漏洞利用代码：
+
+![9.png](https://image.3001.net/images/20180718/15318682566884.png!small)
+
+ ***参考来源：[ropgenerator](https://github.com/Boyan-MILANOV/ropgenerator)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

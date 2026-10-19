@@ -1,0 +1,582 @@
+**不管是windows还是Linux都有用户组的概念，用户组不仅保证了登录用户的账号安全，还是进程执行的凭证，这次专门来讲解一下用户组的概念**
+
+# 用户
+
+讲解用户，我准备依靠/etc/passwd文件下的字段来进行讲解。我们首先来看一下该文件下都有哪些字段  
+![image.png](https://image.3001.net/images/20211122/1637591392_619ba96045dbc1e59e085.png!small)该文件下存储了所有用户的相关信息，并且对全用户开放。一共7个字段，每个字段之间用冒号分隔。我们来看一下每个字段都记录了什么。
+
+  1. 首先是用户名，就是我们打开Linux时候的登录名
+  2. 密码文件，存放着我们的加密以后的密码。如果密码字段为空那么登录该用户的时候就不需要输入密码，而密码有一定的规则：首先字符以[a-zA-Z0-9./]构成，并且长度最多13位。如果不符合规则，那么该用户将无法登录。那么为什么我的密码字段是X呢？因为我启用了shadow密码(后面会讲)，如果开启shadow密码那么系统就不会对该字段进行解析并且存放为x。
+  3. 第三个字段是用户id。这就像我们的学号一样，一个名字对应一个学号。该字段用32位比特位来进行存储。虽然一个用户名对应了一个用户id，但是一个用户id可以使用多个用户名。也就是说一个用户可以使用不同的密码去访问相同的资源。如果用户id为0，那么该用户为特权用户，也就是我们的root
+  4. 第四个是组id。每一个用户创建的时候都会创建一个和用户名相同名字的组，id也和用户id相同。该组被称为用户的首选属组。第四个字段存放的组id就是用户首选属组的id
+  5. 第五个字段存放了一些相关注释
+  6. 第六个字段存放着用户的家目录。如果我们将其改变那么环境变量HOME也会随之改变
+  7. 默认的shell
+
+# 组
+
+由于多用户可能需要对相同的资源进行访问等操作，所以出现了组的概念。Linux最开始的时候一个用户只能有一个属组，用户可以改变属组，但是需要用户提供组密码(后面会提到。)那么到了现在，一个用户可以有多个属组，并且组密码一般也不再使用。
+
+/etc/group文件下存放着组相关的一些信息  
+![image.png](https://image.3001.net/images/20211123/1637643799_619c7617c4b9c83789b63.png!small)然后我们来看一下该文件中存放了哪些字段
+
+  1. 首先就是组名。类似于用户名
+  2. 组密码。刚刚提到的但是现在不用。对应于用户的shadow文件组也有相应的文件，叫做gshadow，里面存放着shadow密码。
+  3. 组ID
+  4. 组成员，由于改组内只有一个默认成员，如果不是默认成员则会写上
+
+# shadow密码文件
+
+曾经的密码经过加密以后将会存放到passwd文件下。但是很多非特权进程需要获取用户的相关信息，就不得不访问该文件。于是一些恶意软件就出现了，访问passwd文件的密码字段并且对其进行碰撞(因为加密算法不可逆)。为了防止这种情况的发生只能将密码重新放置到shadow文件中。该文件非特权用户不得访问。
+
+我们看一下shadow文件中存放了哪些东西
+
+  1. 用户名
+  2. 加密后的密码
+  3. 上次修改密码的时间(从1970.1.1开始的总天数)
+  4. 两次修改密码间隔的最少天数，如果为0，则没有限制
+  5. 两次修改密码间隔最多的天数,表示该用户的密码会在多少天后过期，如果为99999则没有限制
+  6. 提前多少天警告用户密码将过期
+  7. 在密码过期之后多少天禁用此用户
+  8. 用户过期日期(从1970.1.1开始的总天数)，如果为0，则该用户永久可用  
+保留
+
+`test2:$6$C/vGzhVe$aKK6QGdhzTmYyxp8.E68gCBkPhlWQ4W7/OpCFQYV.qsCtKaV00bToWh286yy73jedg6i0qSlZkZqQy.wmiUdj0:17470:0:99999:7:::`  
+这是一个shadow中记载的一行的示例。破解该密码必须通过碰撞的方式(如果有一天加密算法被破解或许可以逆运算)
+
+**注意看这个加密后的密码字段，它有它的固定格式。$id$salt$encrypted。其中id代表着采用什么加密算法，例如1代表MD5，5代表sha256，6代表sha512；salt也就是我们俗称的加盐。系统将会随机生成；最后是我们密码的哈希值**
+
+# 获取用户组的相关信息
+
+这里将会介绍这样的几个函数  
+![image.png](https://image.3001.net/images/20211123/1637645376_619c7c409a0a1d71c425f.png!small)获得passwd文件中的相关信息。pwd.h库中定义了一个结构体passwd。该结构体中的成员为：
+
+    
+    
+    struct passwd {
+                   char   *pw_name;       /* username */
+                   char   *pw_passwd;     /* user password */
+                   uid_t   pw_uid;        /* user ID */
+                   gid_t   pw_gid;        /* group ID */
+                   char   *pw_gecos;      /* user information */
+                   char   *pw_dir;        /* home directory */
+                   char   *pw_shell;      /* shell program */
+               };
+    
+
+与passwd文件中的每个字段一一对应。两个函数的功能相同，只不过一个通过输入用户名查找，一个输入uid进行查找。最后返回一个passwd对象的指针。然后我们可以简单写一个程序
+
+    
+    
+    #include <stdio.h>
+    #include <sys/types.h>
+    #include <pwd.h>
+    void main(){
+    	struct passwd *pwd;
+    	uid_t uid;
+    	char *username;
+    	scanf("%d",&uid);
+    	pwd = getpwuid(uid);
+    	printf("%s\n",pwd->pw_name);
+    	printf("%s\n",pwd->pw_passwd);
+    	printf("%d\n",pwd->pw_uid);
+    	printf("%d\n",pwd->pw_gid);
+    	printf("%s\n",pwd->pw_gecos);
+    	printf("%s\n",pwd->pw_dir);
+    	printf("%s\n",pwd->pw_shell);
+    	scanf("%s",username);
+    	pwd = getpwnam(username);
+    	printf("%s\n",pwd->pw_name);
+    	printf("%s\n",pwd->pw_passwd);
+    	printf("%d\n",pwd->pw_uid);
+    	printf("%d\n",pwd->pw_gid);
+    	printf("%s\n",pwd->pw_gecos);
+    	printf("%s\n",pwd->pw_dir);
+    	printf("%s\n",pwd->pw_shell);
+    }
+    
+
+![image.png](https://image.3001.net/images/20211123/1637646103_619c7f17c28d279e12e8c.png!small)这是最后的运行结果  
+ **这两个函数都返回一个指针，该指针指向了一个静态结构。也就是说我们每一次调用这两个函数都会覆盖原来的静态结构。所以我们需要随调随访问**
+
+有用户的相关信息，那么就能获取组相关的信息  
+![image.png](https://image.3001.net/images/20211123/1637646936_619c825816dd7f6e55dbd.png!small)同样grp.h中也定义了一个结构体
+
+    
+    
+    struct group {
+                   char   *gr_name;        /* group name */
+                   char   *gr_passwd;      /* group password */
+                   gid_t   gr_gid;         /* group ID */
+                   char  **gr_mem;         /* NULL-terminated array of pointers
+                                              to names of group members */
+               };
+    
+
+与组文件中的字段一一对应。我们也写一个查询组信息的程序
+
+    
+    
+    #include <stdio.h>
+    #include <sys/types.h>
+    #include <grp.h>
+    void main(){
+    	struct group *grp;
+    	gid_t gid;
+    	char *groupname;
+    	scanf("%d",&gid);
+    	grp = getgrgid(gid);
+    	printf("%s\n",grp->gr_name);
+    	printf("%s\n",grp->gr_passwd);
+    	printf("%d\n",grp->gr_gid);
+    	for(int i = 0;grp->gr_mem[i]!=NULL;i++)
+    			printf("%s\n",grp->gr_mem[i]);
+    	scanf("%s",groupname);
+    	grp = getgrnam(groupname);
+    	printf("%s\n",grp->gr_name);
+    	printf("%s\n",grp->gr_passwd);
+    	printf("%d\n",grp->gr_gid);
+    	for(int i = 0;grp->gr_mem[i]!=NULL;i++)
+    			printf("%s\n",grp->gr_mem[i]);
+    
+    }
+    
+
+![image.png](https://image.3001.net/images/20211123/1637647579_619c84dba18f364541981.png!small)
+
+接下来学习一组比较有威力的函数  
+![image.png](https://image.3001.net/images/20211123/1637649126_619c8ae65d2ec7a8a30a1.png!small)getpwent函数将会从密码文件中逐条返回信息，如果到达密码文件末尾将会返回NULL。当函数开始调用的时候，就会打开密码文件然后逐条进行读取。读取的过程中也会移动文件位置指针。endpwent函数的作用就是用来将密码文件关闭。而setpwent函数将会将密码文件的文件位置指针移动到最前面。通过这个函数我们能够遍历所有的用户信息
+
+    
+    
+    #include <stdio.h>
+    #include <sys/types.h>
+    #include <pwd.h>
+    void main()
+    {
+    	struct passwd *pwd;
+    	while((pwd = getpwent()) != NULL){
+    		printf("===========================\n");
+    		printf("%s\n",pwd->pw_name);
+    		printf("%s\n",pwd->pw_passwd);
+    		printf("%d\n",pwd->pw_uid);
+    		printf("%d\n",pwd->pw_gid);
+    		printf("%s\n",pwd->pw_gecos);
+    		printf("%s\n",pwd->pw_dir);
+    		printf("%s\n",pwd->pw_shell);
+    		}
+      endpwent();
+    }
+    
+
+最后输出一下结果
+
+    
+    
+    ===========================
+    root
+    x
+    0
+    0
+    root
+    /root
+    /bin/bash
+    ===========================
+    daemon
+    x
+    1
+    1
+    daemon
+    /usr/sbin
+    /usr/sbin/nologin
+    ===========================
+    bin
+    x
+    2
+    2
+    bin
+    /bin
+    /usr/sbin/nologin
+    ===========================
+    sys
+    x
+    3
+    3
+    sys
+    /dev
+    /usr/sbin/nologin
+    ===========================
+    sync
+    x
+    4
+    65534
+    sync
+    /bin
+    /bin/sync
+    ===========================
+    games
+    x
+    5
+    60
+    games
+    /usr/games
+    /usr/sbin/nologin
+    ===========================
+    man
+    x
+    6
+    12
+    man
+    /var/cache/man
+    /usr/sbin/nologin
+    ===========================
+    lp
+    x
+    7
+    7
+    lp
+    /var/spool/lpd
+    /usr/sbin/nologin
+    ===========================
+    mail
+    x
+    8
+    8
+    mail
+    /var/mail
+    /usr/sbin/nologin
+    ===========================
+    news
+    x
+    9
+    9
+    news
+    /var/spool/news
+    /usr/sbin/nologin
+    ===========================
+    uucp
+    x
+    10
+    10
+    uucp
+    /var/spool/uucp
+    /usr/sbin/nologin
+    ===========================
+    proxy
+    x
+    13
+    13
+    proxy
+    /bin
+    /usr/sbin/nologin
+    ===========================
+    www-data
+    x
+    33
+    33
+    www-data
+    /var/www
+    /usr/sbin/nologin
+    ===========================
+    backup
+    x
+    34
+    34
+    backup
+    /var/backups
+    /usr/sbin/nologin
+    ===========================
+    list
+    x
+    38
+    38
+    Mailing List Manager
+    /var/list
+    /usr/sbin/nologin
+    ===========================
+    irc
+    x
+    39
+    39
+    ircd
+    /var/run/ircd
+    /usr/sbin/nologin
+    ===========================
+    gnats
+    x
+    41
+    41
+    Gnats Bug-Reporting System (admin)
+    /var/lib/gnats
+    /usr/sbin/nologin
+    ===========================
+    nobody
+    x
+    65534
+    65534
+    nobody
+    /nonexistent
+    /usr/sbin/nologin
+    ===========================
+    systemd-network
+    x
+    100
+    102
+    systemd Network Management,,,
+    /run/systemd/netif
+    /usr/sbin/nologin
+    ===========================
+    systemd-resolve
+    x
+    101
+    103
+    systemd Resolver,,,
+    /run/systemd/resolve
+    /usr/sbin/nologin
+    ===========================
+    syslog
+    x
+    102
+    106
+    
+    /home/syslog
+    /usr/sbin/nologin
+    ===========================
+    messagebus
+    x
+    103
+    107
+    
+    /nonexistent
+    /usr/sbin/nologin
+    ===========================
+    _apt
+    x
+    104
+    65534
+    
+    /nonexistent
+    /usr/sbin/nologin
+    ===========================
+    uuidd
+    x
+    105
+    111
+    
+    /run/uuidd
+    /usr/sbin/nologin
+    ===========================
+    avahi-autoipd
+    x
+    106
+    112
+    Avahi autoip daemon,,,
+    /var/lib/avahi-autoipd
+    /usr/sbin/nologin
+    ===========================
+    usbmux
+    x
+    107
+    46
+    usbmux daemon,,,
+    /var/lib/usbmux
+    /usr/sbin/nologin
+    ===========================
+    dnsmasq
+    x
+    108
+    65534
+    dnsmasq,,,
+    /var/lib/misc
+    /usr/sbin/nologin
+    ===========================
+    rtkit
+    x
+    109
+    114
+    RealtimeKit,,,
+    /proc
+    /usr/sbin/nologin
+    ===========================
+    cups-pk-helper
+    x
+    110
+    116
+    user for cups-pk-helper service,,,
+    /home/cups-pk-helper
+    /usr/sbin/nologin
+    ===========================
+    speech-dispatcher
+    x
+    111
+    29
+    Speech Dispatcher,,,
+    /var/run/speech-dispatcher
+    /bin/false
+    ===========================
+    whoopsie
+    x
+    112
+    117
+    
+    /nonexistent
+    /bin/false
+    ===========================
+    kernoops
+    x
+    113
+    65534
+    Kernel Oops Tracking Daemon,,,
+    /
+    /usr/sbin/nologin
+    ===========================
+    saned
+    x
+    114
+    119
+    
+    /var/lib/saned
+    /usr/sbin/nologin
+    ===========================
+    avahi
+    x
+    115
+    120
+    Avahi mDNS daemon,,,
+    /var/run/avahi-daemon
+    /usr/sbin/nologin
+    ===========================
+    colord
+    x
+    116
+    121
+    colord colour management daemon,,,
+    /var/lib/colord
+    /usr/sbin/nologin
+    ===========================
+    hplip
+    x
+    117
+    7
+    HPLIP system user,,,
+    /var/run/hplip
+    /bin/false
+    ===========================
+    geoclue
+    x
+    118
+    122
+    
+    /var/lib/geoclue
+    /usr/sbin/nologin
+    ===========================
+    pulse
+    x
+    119
+    123
+    PulseAudio daemon,,,
+    /var/run/pulse
+    /usr/sbin/nologin
+    ===========================
+    gnome-initial-setup
+    x
+    120
+    65534
+    
+    /run/gnome-initial-setup/
+    /bin/false
+    ===========================
+    gdm
+    x
+    121
+    125
+    Gnome Display Manager
+    /var/lib/gdm3
+    /bin/false
+    ===========================
+    wjl
+    x
+    1000
+    1000
+    wjl,,,
+    /home/wjl
+    /bin/bash
+    ===========================
+    sshd
+    x
+    122
+    65534
+    
+    /run/sshd
+    /usr/sbin/nologin
+    
+
+还有从shadow密码文件获取记录的函数。这些函数和从用户获取信息的函数异曲同工。我们再来看一下  
+![image.png](https://image.3001.net/images/20211123/1637652001_619c9621903c913301bb1.png!small)shadow.h中同样定义了一个结构体
+
+    
+    
+    struct spwd {
+                   char *sp_namp;     /* Login name */
+                   char *sp_pwdp;     /* Encrypted password */
+                   long  sp_lstchg;   /* Date of last change
+                                         (measured in days since
+                                         1970-01-01 00:00:00 +0000 (UTC)) */
+                   long  sp_min;      /* Min # of days between changes */
+                   long  sp_max;      /* Max # of days between changes */
+                   long  sp_warn;     /* # of days before password expires
+                                         to warn user to change it */
+                   long  sp_inact;    /* # of days after password expires
+                                         until account is disabled */
+                   long  sp_expire;   /* Date when account expires
+                                         (measured in days since
+                                         1970-01-01 00:00:00 +0000 (UTC)) */
+                   unsigned long sp_flag;  /* Reserved */
+               };
+    
+
+同样和shadow文件中的字段一一对应。函数的返回和前面的规则都是一样的。我们直接跳过这些讲解来进行编程
+
+    
+    
+    #include <shadow.h>
+    #include <stdio.h>
+    int main(){
+    	struct spwd *sp;
+    	while((sp = getspent())!=NULL){
+    		printf("%s\n",sp->sp_namp);
+    		printf("%s\n",sp->sp_pwdp);
+    	}
+    
+    }
+    
+
+我们就输出两个字段。另外还得提一下，由于只有特权用户才能访问shadow文件，所以运行之前需要使用sudo。
+
+# 用户登录认证
+
+由于密码的加密算法不可逆，所以验证登录密码的时候需要将我们输入的密码放入一个加密函数，密码被加密以后和记录在shadow文件中的密码字段进行比对，比对成功就可以成功登录。另外，我们的ssh和ftp这类服务，也需要输入密码进行登录，同样的道理。
+
+然后我们来看一个加密函数  
+![image.png](https://image.3001.net/images/20211123/1637661359_619cbaaf88042b86effcb.png!small)  
+该函数放入一个key和salt，最后返回一个字符串。这个函数就是对加密算法的封装。该字符串也是返回一个指针，真正的字符串存放在静态区内。
+
+还有一个函数，读取密码的函数。我们sudo以后将会出现一串字符，并且让我们输入一串密码，密码不会被显示。使用的就是这个函数  
+![image.png](https://image.3001.net/images/20211123/1637661565_619cbb7d868718feb4d69.png!small)该函数将会返回我们输入的字符并且将字符存入静态区。我们看一下该函数的具体效果
+
+    
+    
+    #include <unistd.h>
+    #include <stdio.h>
+    int main(){
+    	char *buff = "";
+    	buff = getpass("please input your password\n");
+    	printf("%s\n",buff);
+    
+    }
+    
+
+![image.png](https://image.3001.net/images/20211123/1637662130_619cbdb274260f974acdb.png!small)中间的那个缺口就是我输入的时候，系统关闭了回显留下的。通过这种方式我们或许可以实现ssh输入密码的一个模块。这里就先不进行代码的实现了。
+
+ **总结：这些就是用户组的相关知识，其中包括了一些基础的知识，后面还有一些相关的函数。后面会进行详细的讲解**
+

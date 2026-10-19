@@ -1,0 +1,364 @@
+**本文中涉及的原理等都是基于互联网搜集的资料，以及个人的理解。水平有限，如有错漏之处欢迎指教！**
+
+ **Wi-Fi** （发音： [/ˈwaɪfaɪ/]），又称“无线热点”或“无线网络”，是Wi-Fi联盟的商标，一个基于IEEE
+802.11标准的无线局域网技术[1]。IEEE 802.11是IEEE 802标准委员会（IEEE 802 LAN/MAN Standards
+Committee）下属的无线局域网工作组，也指代由该组织制定的无线局域网标准[2]。目前我们常用的Wi-Fi标准为802.11
+a/b/g/n/ac这5中，其中802.11 b/g/n 在 2.4GHz频段使用较多，近几年来兴起的5GHz则是以 802.11 n/ac为主。
+
+## 802.11协议
+
+802.11协议的初始版本发布于1997年，随后对无线传输的速率、安全性等不断进行更新，发布了众多的协议和版本。其中我们生活中普遍接触的有802.11
+a/b/g/n/ac这几种协议。
+
+协议| 频率| 调制方式| 最大传输速率| 发布时间  
+---|---|---|---|---  
+802.11| 2.4Ghz| FHSS ， DSSS| 2Mbps| 1997  
+802.11a| 5GHz| OFDM| 54Mbps| 1999  
+802.11b| 2.4GHz| DSSS| 11Mbps| 1999  
+802.11g| 2.4GHz| DSSS，OFDM| 54Mbps| 2003  
+802.11n| 2.4GHz或5GHz| MIMO-OFDM| 150Mbps(单条流，40M频宽)| 2009  
+802.11ac| 2.4GHz或5GHz| MIMO-OFDM| 866.7Mbps(单条流，160M频宽)| 2013  
+  
+在主流家用路由器的无线设置中都支持修改协议。
+
+## 802.11无线帧
+
+对于不同的802.11协议，其区别主要集中在物理层对数据的编码、调制、MIMO支持上，而在设备接入、认证方面几乎是相同的。
+
+下图为802.11无线帧的格式，该帧位于数据链路层。
+
+![xxMACFrameFormat.png](https://image.3001.net/images/20200623/1592878192_5ef1647020591.png!small)
+
+其中，`MAC Header`部分为帧的控制字段，表示帧类型、源目的地址等；`Frame
+Body`部分则是承载的数据，其内容会根据帧类型而有所不同；`FCS`是“Frame Check Sequence（帧校验序列）”的缩写，保证帧的完整性。
+
+`MAC Header -> Frame Control -> Type`定义了当前帧的分类。802.11无线帧中有三种帧类型：数据帧、控制帧和管理帧。
+
+ **数据帧** 主要是传输数据、进行ACK响应、QoS等； **控制帧**
+主要控制传输速率、协商信道以及保证信道畅通（实现CSMA/CA载波侦听/冲突避免）；而 **管理帧**
+则是负责站点的探测、关联认证、解除关联等动作，这部分也是大部分Wi-Fi安全关注的部分。
+
+下面就详细说明一下802.11管理帧。
+
+管理帧的类型如下：
+
+    
+    
+    Association Request(关联请求)  
+    Association Response (关联响应)  
+    Reassociation Request(重关联请求)  
+    Reassociation Response(重关联响应)  
+    Probe Request(探测请求)  
+    Probe Response(探测响应)  
+    Beacon(信标帧)  
+    ATIM(通知传输指示信息)  
+    Disassociation(解除关联)  
+    Authentication(身份验证)  
+    Deauthentication(解除身份验证)
+
+站点接入基站的过程主要分为四步：扫描（获取附近基站信息）、连接（身份认证）、传输（与基站交换信息）、断开。
+
+先引入一个全局视图：
+
+![image-20200623100438495.png](https://image.3001.net/images/20200623/1592878206_5ef1647e31674.png!small)
+
+## 扫描阶段
+
+扫描对于用户操作来说直观感受就是打开Wi-Fi列表，看到设备发现附近热点的名称。扫描分为两种方式， **主动扫描和被动扫描** 。
+
+![image-20200619150224845.png](https://image.3001.net/images/20200623/1592878217_5ef16489361a2.png!small)
+
+### 主动扫描
+
+主动扫描指的是站点在对应信道上主动广播一个探测请求（Probe Request），并等待基站的响应。
+
+![image-20200610101310303.png](https://image.3001.net/images/20200623/1592878230_5ef1649605bd0.png!small)
+
+在发送Probe Request帧时，其中`SSID`字段若 **有指定的字符** ，则称为 "Directed
+probe（直接探测）"，此时若该信道上存在对应SSID名称的基站则会发送探测响应；而`SSID`字段为`NULL`时，该帧称为 "Broadcast
+probe（广播探测）"，对应信道上所有接收到这个帧的基站均会发送探测响应。
+
+在主动扫描模式下，由于站点会广播Probe Request帧，如果攻击者违背协议规定，对所有收到的Probe Request进行响应，则会造成 **Wi-Fi钓鱼** 的攻击。具体例子可以参考《[WiFi
+Pineapple的Karma攻击与原理探究](https://www.freebuf.com/articles/77055.html)》、《[聊聊WiFi
+Hacks：为何你的Karma攻击不好使了](https://www.freebuf.com/articles/wireless/145259.html)》。
+
+### 被动扫描
+
+被动扫描是通过被动接受基站定期发送的Beacon包来发现周围热点的方式。一般来说，使用被动扫描可以有效规避Wi-Fi钓鱼的攻击。然而站点（无线客户端）在收到的Beacon包中如果发现自己连接过的SSID，则会尝试连接。利用这种特性，如果攻击者尝试大量枚举SSID，尤其是公共Wi-Fi的SSID（如星巴克、麦当劳、肯德基等）则依然可以实现Wi-Fi钓鱼攻击（参见《[主动触发被动模式从而挟持无线客户端 – Passive Karma
+Attack](https://www.freebuf.com/articles/wireless/44378.html)》）。
+
+此外，利用扫描阶段的机制，可以进行 **伪AP（Rouge AP）**
+攻击。伪AP主要通过设置一个与真实AP名称、加密方式、密码都相同的热点，并利用无线客户端在扫描到多个名称和加密方式相同的热点时会优先选择信号最好的连接这一特性，引导无线客户端连接到攻击者设置的伪AP上，进而进行中间人、嗅探等一系列攻击。其实现原理可参见《[基于伪AP的无线局域网中间人攻击方法及隐患分析](https://www.docin.com/p-1668171406.html)》，搭建方法可参见《[无线安全课堂：手把手教会你搭建伪AP接入点](https://www.freebuf.com/news/141977.html)》。
+
+### 相关工具
+
+ **Kismet**
+
+Kismet是802.11 数据链路层的扫描器和嗅探器。它会将无线网卡设置为Monitor
+Mode，监听并记录附近所有的无线流量，分析热点和设备的配对关系等。详细介绍和用法可以参考：[Kismet Package
+Description](https://tools.kali.org/wireless-attacks/kismet)
+
+![kismet.png](https://image.3001.net/images/20200623/1592878238_5ef1649ec6892.png!small)
+
+## 接入阶段
+
+当扫描完成，用户选择某一个AP进行接入，或无线客户端自动连接某AP时，进入接入阶段。
+
+![image-20200619150312552.png](https://image.3001.net/images/20200623/1592878247_5ef164a7bef65.png!small)
+
+接入阶段分为两个部分，参数协商和密码验证。Association Request 和 Association
+Response帧负责协商接入AP的STA是否满足要求（如支持的频段、速率、信道等）；Authentication帧负责协商认证算法（开放式、PSK、SAE等）和一些辅助数据（如Challenge
+Text等, WEP加密会在这个阶段传输认证数据）。
+
+802.11支持的加密方式很多，如下图为OpenWRT系统中提供的加密方式：
+
+![image-20200619151741540.png](https://image.3001.net/images/20200623/1592878279_5ef164c734f9f.png!small)
+
+### WEP认证
+
+WEP认证有两种方式，“WEP 开放式系统” 和 “WEP 共享密钥”两种方式。
+
+“WEP 开放式系统” 指的是，任意客户端（STA）都可以连入热点（AP），但是在信道上传输的数据依然使用WEP提供的加密方式加密；而 “WEP 共享密钥”
+则需要在接入之前先验证密钥，当验证通过之后才允许STA接入。
+
+ **“WEP 共享密钥”** 的认证过程如下图所示：
+
+![image-20200619164809124.png](https://image.3001.net/images/20200623/1592878287_5ef164cfc6b39.png!small)
+
+其简单的流程为，AP端在认证过程中向STA发送一个`Challenge
+Text`，由STA加密后将密文传送给AP，AP端校验收到的密文与自己计算的密文如果相等则允许站点接入，否则将拒绝。使用Wireshark抓包的流程如下：
+
+![image-20200619164643763.png](https://image.3001.net/images/20200623/1592878293_5ef164d562626.png!small)
+
+认证通过后，后续的数据包的内容都以WEP的密钥流进行加密，STA需要以相同的密钥流解密，才能正常的收发数据。
+
+ **“WEP 开放式系统”**
+则跳过了这一认证阶段，允许任何STA加入网络，但后续通信中的数据包是加密的。因此即使STA连入AP，但没有正确的密码也无法正常通信。可以通过简单的实验来验证：
+
+  1. 将路由器的加密配置为 “WEP 开放系统”， 并配置密码；
+
+  2. 用手机或电脑（STA）尝试连入该AP，密码输入任意字符（但别输正确的密码）；
+
+  3. 此时发现STA显示已连接，但是会卡在“获取IP地址”的部分（如果路由器开启了DHCP）；
+
+  4. 即使手动配置IP后，依然无法进行通信。
+
+以上的实验中，无法获取到IP地址或配置IP后无法通信，是因为密码错误，STA无法解密数据包，因此无法通信。
+
+### WEP密码破解
+
+WEP密码破解的应用实际上工具很多，如Besside-ng，AirCrack-ng等，以及很多集成该功能的无线安全审计套件，其教程也很容易搜索到。这里简单介绍一下其破解原理。
+
+WEP是一个已经被完全破解的加密算法，其原理涉及到密码学和数学的很多知识，这里不展开详细叙述，感兴趣的可以去看看《[密码分析学——深度分析WEP密钥恢复攻击（PTW攻击）](https://zhuanlan.zhihu.com/p/57677761)》，其中对WEP破解的每一步原理都有详细的分析，本人觉得是写得非常好的一篇文章。
+
+RC-4
+流密码算法是将输入种子密钥进行某种置换和组合运算来生成WEP密钥流的，发送的数据与该密钥流异或，则得到最终的密文。而加密数据（负载）的第一个字节是802.2逻辑链路层的头部数据，而每个数据帧的该字节都是一样的，因此可以得到密文的第一个字节、对应的明文字节。
+
+![image-20200622102900122.png](https://image.3001.net/images/20200623/1592878304_5ef164e01325a.png!small)
+
+![image-20200622103037907.png](https://image.3001.net/images/20200623/1592878313_5ef164e915456.png!small)
+
+> 注：使用Wireshark解密可参考官方文档《[How to Decrypt
+> 802.11](https://wiki.wireshark.org/HowToDecrypt802.11)》
+
+同时，IV信息是包含在头部信息中一起传输的，因此已知 初始向量IV、第一字节密钥流、第一字节明文，针对RC-4算法是可以计算并确定WEP密钥。
+
+### WPA四次握手
+
+WPA的认证过程与WEP略有区别。大致的连接、认证过程如下图：
+
+![image-20200622103724702.png](https://image.3001.net/images/20200623/1592878322_5ef164f264341.png!small)
+
+在Authentication阶段，WPA并不进行实际认证，而是传输`Open System`来直接允许STA连入：
+
+![image-20200622103548051.png](https://image.3001.net/images/20200623/1592878337_5ef1650117092.png!small)
+
+而实际的密钥认证在“四次握手”阶段。
+
+“WPA 四次握手” 是验证密钥，并且生成对数据包的加密密钥的过程。流程如下：
+
+![686769-20161117152254170-216963418.png](https://image.3001.net/images/20200623/1592878342_5ef16506cbb11.png!small)
+
+连接过程中，用户输入的 ”WPA密码“ 在认证过程中称为`PSK(Pre-Shared Key)`，即
+”预共享密钥“。利用`PSK`以及无线网络的`ssid`，使用 ”PBKDF2“
+算法可以计算出`PMK`。利用`PMK`，以及认证过程中传输的`ANonce`、`SNonce`、`STA的MAC地址`、`AP的MAC地址`，使用hmac
+sha1算法可以计算出`PTK`。最后使用`PTK`的前16个字节以及整个`802.1X Authentication`数据包，计算出`MIC`。
+
+![image-20200622112834875.png](https://image.3001.net/images/20200623/1592878355_5ef1651374617.png!small)
+
+### WPA-PSK密码破解
+
+从上面的流程中可以看出，密钥的认证使用摘要算法，因此破解方式只能是暴力破解。但是计算步骤中，除了Wi-Fi密码（PSK）外，所有参数都可以从交互的数据包中获取，因此可以捕获STA的接入包进行离线破解。最终通过计算出的MIC与捕获包中的MIC比对，得出最终结果。
+
+在整个暴力破解过程中，PMK的计算是最耗时的，同时因为PMK与`SSID`直接相关，因此生成字典较难复用；同时需要有足够大的密码字典才能提高命中率，而巨大的密码字典的生成与保存也是一个问题。
+
+### WPS认证与破解
+
+WPS 是 Wi-Fi Protected Setup（Wi-Fi保护设置）的缩写，为了简化STA与AP的连接过程。在使用WPS接入网络的过程中，用户仅需要输入8位数字组成的PIN码，即可接入网络。在这一过程中，STA与AP之间通过`EAP
+Request`和`EAP Response`帧来验证用户输入的PIN码，并传输后续的信息（如SSID、密码等）。
+
+![image-20200623093408305.png](https://image.3001.net/images/20200623/1592878364_5ef1651c638ba.png!small)
+
+图片来自：<https://netsecurity.51cto.com/art/201504/471508_all.htm>
+
+由于PIN码为8位纯数字，因此理论上有10 ^ 8
+中不同的组合；而一般情况下，每次验证PIN码需要3~10秒左右的时间（与信号强度、干扰等有关），因此在理论上来看，即使以 3sec/PIN 的速度破解，
+10 ^ 8 个PIN码遍历完需要 （10 ^ 8 * 3) / 3600 / 24 =
+3472.2天，因此在理论上来说这种方式应对暴力破解是完全没有问题的。
+
+但是，在协议设计的时候，第8位 PIN 为校验位，因此实际需要暴力破解的位数变成7位。此外，在验证 PIN 码失败后，AP会返回`EAP-NACK`的响应包，通过响应包的内容，可以分别判断前4位和后3位是否正确（由于手边没有支持WPS的路由器，因此此部分无法抓包验证）。
+
+基于这样的特性，WPS的暴力破解变成了分别猜解前4位和后3位，即 (10 ^ 4 + 10 ^ 3) 种可能性，依然按照 3sec/PIN
+的速度推算，完整跑完全部PIN需要约
+9.16小时，而根据在网上搜索破解WPS的结果来看，即使信号不好（如破解隔壁邻居的AP），时间也不超过12小时即可跑出结果。
+
+### 相关工具
+
+ **[coWPAtty](https://tools.kali.org/wireless-attacks/cowpatty)**
+是一个WPA/WPA2离线破解工具，可以生成PMK字典并且计算MIC来进行密码破解。其生成字典的命令如下：
+
+    
+    
+    root@kali:~# genpmk -f /usr/share/wordlists/nmap.lst -d cowpatty_dict -s securenet  
+    genpmk 1.3 - WPA-PSK precomputation attack. \&ampltjwright@hasborg.com\&ampgt  
+    File cowpatty_dict does not exist, creating.  
+    key no. 1000: pinkgirl  
+    1641 passphrases tested in 3.60 seconds: 456.00 passphrases/second
+
+ **[Wifite](https://tools.kali.org/wireless-attacks/wifite)**
+是一个综合性的无线安全审计工具，集成了WPA/WPA2、WEP等破解工具。用法简单便捷。
+
+    
+    
+    root@kali:~# wifite -h  
+    ​  
+      .;'                     `;,  
+     .;'  ,;'             `;,  `;,   WiFite v2 (r85)  
+    .;'  ,;'  ,;'     `;,  `;,  `;,  
+    ::   ::   :   ( )   :   ::   ::  automated wireless auditor  
+    ':.  ':.  ':. /_\ ,:'  ,:'  ,:'  
+     ':.  ':.    /___\    ,:'  ,:'   designed for Linux  
+      ':.       /_____\      ,:'  
+               /       \  
+    ​  
+       COMMANDS  
+        -check <file>   check capfile <file> for handshakes.  
+        -cracked        display previously-cracked access points  
+    ​  
+       GLOBAL  
+        -all            attack all targets.              [off]  
+        -i <iface>      wireless interface for capturing [auto]  
+        -mac            anonymize mac address            [off]  
+        -c <channel>    channel to scan for targets      [auto]  
+        -e <essid>      target a specific access point by ssid (name)  [ask]  
+        -b <bssid>      target a specific access point by bssid (mac)  [auto]  
+        -showb          display target BSSIDs after scan               [off]  
+        -pow <db>       attacks any targets with signal strenghth > db [0]  
+        -quiet          do not print list of APs during scan           [off]  
+    ​  
+    ​  
+       WPA  
+        -wpa            only target WPA networks (works with -wps -wep)   [off]  
+        -wpat <sec>     time to wait for WPA attack to complete (seconds) [500]  
+        -wpadt <sec>    time to wait between sending deauth packets (sec) [10]  
+        -strip          strip handshake using tshark or pyrit             [off]  
+        -crack <dic>    crack WPA handshakes using <dic> wordlist file    [off]  
+        -dict <file>    specify dictionary to use when cracking WPA [phpbb.txt]  
+        -aircrack       verify handshake using aircrack [on]  
+        -pyrit          verify handshake using pyrit    [off]  
+        -tshark         verify handshake using tshark   [on]  
+        -cowpatty       verify handshake using cowpatty [off]  
+    ​  
+       WEP  
+        -wep            only target WEP networks [off]  
+        -pps <num>      set the number of packets per second to inject [600]  
+        -wept <sec>     sec to wait for each attack, 0 implies endless [600]  
+        -chopchop       use chopchop attack      [on]  
+        -arpreplay      use arpreplay attack     [on]  
+        -fragment       use fragmentation attack [on]  
+        -caffelatte     use caffe-latte attack   [on]  
+        -p0841          use -p0841 attack        [on]  
+        -hirte          use hirte (cfrag) attack [on]  
+        -nofakeauth     stop attack if fake authentication fails    [off]  
+        -wepca <n>      start cracking when number of ivs surpass n [10000]  
+        -wepsave        save a copy of .cap files to this directory [off]  
+    ​  
+       WPS  
+        -wps        only target WPS networks         [off]  
+        -wpst <sec>     max wait for new retry before giving up (0: never)  [660]  
+        -wpsratio <per> min ratio of successful PIN attempts/total tries    [0]  
+        -wpsretry <num> max number of retries for same PIN before giving up [0]  
+    ​  
+       EXAMPLE  
+        ./wifite.py -wps -wep -c 6 -pps 600  
+    ​  
+     [+] quitting
+
+ **[Pyrit](https://tools.kali.org/wireless-attacks/pyrit)**
+支持离线破解，可指定含有WPA四次握手的捕获数据包进行破解。该工具还可以生成PMK字典文件，加速破解进度。具体用法可参见工具[官方Github](https://github.com/JPaulMora/Pyrit/wiki/Usage)
+
+    
+    
+    root@kali:~# pyrit -i /usr/share/wordlists/metasploit/password.lst import_passwords  
+    Pyrit 0.5.1 (C) 2008-2011 Lukas Lueg - 2015 John Mora  
+    https://github.com/JPaulMora/Pyrit  
+    This code is distributed under the GNU General Public License v3+  
+    ​  
+    Connecting to storage at 'file://'...  connected.  
+    88396 lines read. Flushing buffers....  
+    All done.
+
+ **[Reaver](https://tools.kali.org/wireless-attacks/reaver)** 是一款破解WPS
+PIN码并获取目标AP接入密码的工具。其官方宣称：理论破解时间在2~10小时，实际破解时间为理论时间的一半。
+
+    
+    
+    root@kali:~# reaver -i wlan0mon -b E0:3F:49:6A:57:78 -v  
+    ​  
+    Reaver v1.6.5 WiFi Protected Setup Attack Tool  
+    Copyright (c) 2011, Tactical Network Solutions, Craig Heffner <cheffner@tacnetsol.com>  
+    ​  
+    [+] Waiting for beacon from E0:3F:49:6A:57:78  
+    [+] Associated with E0:3F:49:6A:57:78 (ESSID: ASUS)  
+    [+] Trying pin 12345670
+
+## 断开阶段
+
+断开阶段有两种数据帧：`Deauthenticaion（解除认证）`和`Deassociation（解除关联）`。
+
+![image-20200622143155410.png](https://image.3001.net/images/20200623/1592878408_5ef165488568c.png!small)
+
+一般情况下，我们在日常使用的时候很少会经历这个阶段，或者说对用户是无感的。当用户切换Wi-Fi连接时，在Wireshark中捕获到相关的数据帧如下：
+
+![image-20200622142620358.png](https://image.3001.net/images/20200623/1592878418_5ef16552657f8.png!small)
+
+一般的，在802.11关联过程（Association process, 即本文提及的接入阶段）中，会经历4种状态：
+
+  1. 未认证、未关联
+
+  2. 已认证但未关联
+
+  3. 已认证、已关联
+
+  4. 已认证、已关联且已通过802.1x认证
+
+起初STA处于 **状态1** ，AP端会与STA协商采用怎样的认证（该部分可以参见 “WEP认证” 章节），如“开放系统”等。当协商完成并进行认证后，进入
+**状态2** 。此时双方关联(Association Request / Response)，进入 **状态3** 。
+
+此时，如果加密方式需要802.1x认证（如WPA-PSK），则开始这一步骤，完成后进入 **状态4**
+。在状态4中，如果双方收到`Deassociation`帧，则 **退回到状态2** ；如果收到`Deauthenticaion`帧则 **退回状态1**
+。
+
+由于802.11管理帧是没有校验机制的，因此攻击者可以任意伪造这两类帧，达到断开用户连接的目的。连续大量发送这两类帧可以造成拒绝服务；而更多情况下攻击者会利用这一机制短暂的让客户端掉线，以收集认证过程中的数据包（WEP的认证或WPA的四次握手），以便用来破解Wi-Fi密码。
+
+### 相关工具
+
+这部分在Kali中没有独立的工具，都包含在其他的工具集中，如[mdk3](https://tools.kali.org/wireless-attacks/mdk3)。
+
+# 总结
+
+Wi-Fi安全已经不是一个新鲜的话题，甚至已经是一个烂大街的话题了。本文尝试系统的梳理Wi-Fi安全的可能攻击点，以及部分攻击的原理，希望能够在Wi-Fi安全方面有个全局的观念，而不是停留在针对某个点的利用，比如破解你邻居的Wi-Fi密码。
+
+在实际的应用中，这些攻击点可以被组合利用进行各种各样的攻击，而WiFi
+Pineapple等项目则是很好的集成了这些工具。如果后期有时间，我会尝试结合攻击点来分析这些测试工具。
+

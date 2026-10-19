@@ -1,0 +1,9 @@
+{
+	"CUBE_PATH":"/root/centoscloud/cube-1.3"
+}
+{
+	"CUBE_APP_PATH":"/home/player/platform_verify",
+	"INSTANCE":"instance/node/ekget",
+	"CUBE_DEFINE_PATH":"/root/centoscloud/cube-tcm/define:/root/centoscloud/cube_tcmplugin/define",
+	"CUBE_APP_PLUGIN":"/root/centoscloud/cube-tcm/plugin:/root/centoscloud/cube_tcmplugin/plugin",
+}

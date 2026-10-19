@@ -1,0 +1,165 @@
+# Meltdown与Spectre：近期CPU特性漏洞安全公告
+
+阅读量 **190366**
+
+|评论 **5**
+
+发布时间 : 2018-01-04 16:13:30
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t013269b0e15815f19b.jpg)
+
+## 0x00 事件描述
+
+2018年1月4日，Jann Horn等安全研究者披露了”Meltdown”(CVE-2017-5754)和”Spectre”(CVE-2017-5753
+& CVE-2017-5715)两组CPU特性漏洞。
+
+据悉，漏洞会造成CPU运作机制上的信息泄露，低权级的攻击者可以通过漏洞来远程泄露（浏览器形式）用户信息或本地泄露更高权级的内存信息。
+
+实际攻击场景中，攻击者在一定条件下可以做到，
+
+  * 泄露出本地操作系统底层运作信息，秘钥信息等;
+  * 通过获取泄露的信息，可以绕过内核(Kernel), 虚拟机超级管理器(HyperVisor)的隔离防护;
+  * 云服务中，可以泄露到其它租户隐私信息；
+  * 通过浏览器泄露受害者的帐号，密码，内容，邮箱, cookie等用户隐私信息；
+
+目前相关的平台，厂商，软件提供商都在积极应对该系列漏洞，部分厂商提供了解决方案。
+
+经过360安全团队评估，”Meltdown”和”Spectre”漏洞影响严重， **修复流程较复杂，建议相关企业/用户作好相关的修复评估工作** 。
+
+## 0x01 事件影响面
+
+### **影响面**
+
+**漏洞风险等级严重，影响广泛：**
+
+  * 近20年的Intel, AMD, Qualcomm厂家和其它ARM的处理器受到影响；
+  * 因为此次CPU漏洞的特殊性，包括Linux, Windows, OSX等在内的操作系统平台参与了修复；
+  * Firefox, Chrome, Edge等浏览器也发布了相关的安全公告和缓解方案；
+
+### **漏洞编号**
+
+  * Meltdown 
+    * **CVE-2017-5754**
+  * Spectre漏洞 
+    * **CVE-2017-5715**
+    * **CVE-2017-5753**
+
+### **相关安全公告**
+
+  * Intel 
+    * <https://newsroom.intel.com/news/intel-responds-to-security-research-findings/>
+    * [https://security-center.intel.com/advisory.aspx?intelid=INTEL-SA-00088&languageid=en-fr](https://security-center.intel.com/advisory.aspx?intelid=INTEL-SA-00088&languageid=en-fr)
+  * Microsoft 
+    * <https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/ADV180002>
+  * Amazon 
+    * <https://aws.amazon.com/de/security/security-bulletins/AWS-2018-013/>
+  * ARM 
+    * <https://developer.arm.com/support/security-update>
+  * Google 
+    * <https://googleprojectzero.blogspot.co.at/2018/01/reading-privileged-memory-with-side.html>
+    * <https://www.chromium.org/Home/chromium-security/ssca>
+  * MITRE 
+    * <http://www.cve.mitre.org/cgi-bin/cvename.cgi?name=2017-5715>
+    * <http://www.cve.mitre.org/cgi-bin/cvename.cgi?name=2017-5753>
+    * <http://www.cve.mitre.org/cgi-bin/cvename.cgi?name=2017-5754>
+  * Red Hat 
+    * <https://access.redhat.com/security/vulnerabilities/speculativeexecution>
+  * Xen 
+    * <http://xenbits.xen.org/xsa/advisory-254.html>
+  * Mozilla 
+    * <https://blog.mozilla.org/security/2018/01/03/mitigations-landing-new-class-timing-attack/>
+  * VMware 
+    * <https://www.vmware.com/us/security/advisories/VMSA-2018-0002.html>
+  * AMD 
+    * <https://www.amd.com/en/corporate/speculative-execution>
+
+## 0x02 漏洞信息
+
+**注： 本段文字中部分引用了相关安全公告，如有异议请联系cert@360.cn。**
+
+现代处理器（CPU）的运作机制中存在两个用于加速执行的特性，推测执行（Speculative Execution）和间接分支预测（Indirect
+Branch Prediction)。
+
+表面上看，处理器是依次顺序执行既定的处理器指令。但是，现代处理器为了更好利用处理器资源，已经开始启用并行执行，这个技术已经应用了20年左右(1995年开始)。假设，基于猜测或概率的角度，在当前的指令或分支还未执行完成前就开始执行可能会被执行的指令或分支，会发生什么？如果猜对了，直接使用，CPU执行加速了。如果猜测不正确，则取消操作并恢复到原来的现场（寄存器，内存等），结果会被忽略。整个过程过程并不会比没有猜测的时候慢，即CPU的推测执行（Speculative
+Execution）技术。
+
+不幸的是，尽管架构状态被回滚了，仍然有些副作用，比如TLB或缓存状态并没有被回滚。这些副作用随后可以被黑客通过旁道攻击(Side Channel
+Attack)的方式获取到缓存的内容。如果攻击者能触发推测执行去访问指定的敏感数据区域的话，就可能可以读取到原本是其它用户或更高特权级的敏感数据。
+
+此外，猜测过程是可以被“污染”的，攻击者可以构造出类似ROP攻击的逻辑去影响推测过程。根据作者提供的思路，主要有三种场景：
+
+  1. “边界检查绕过”：通过污染分支预测，来绕过kernel或hypervisor的内存对象边界检测。比如，攻击者可以对高权级的代码段，或虚拟环境中hypercall，通过构造的恶意代码来触发有越界的数据下标，造成越界访问。
+  2. “分支目标注入”： 污染分支预测。抽象模型比较好的代码往往带有间接函数指针调用的情况，CPU在处理时需要会进行必要的内存访问，这个过程有点慢，所以CPU会预测分支。攻击者可以通过类似的ROP的方式来进行信息泄露。
+  3. “流氓数据加载”：部分CPU上，为了速度并不是每次都对指令作权限检查的，检查的条件存在一定的缺陷；
+
+实际攻击场景中，攻击者在一定条件下可以做到，
+
+  * 泄露出本地操作系统底层运作信息，秘钥信息等;
+  * 通过获取泄露的信息，可以绕过内核(Kernel), 虚拟机超级管理器(HyperVisor)的隔离防护;
+  * 云服务中，可以泄露到其它租户隐私信息；
+  * 通过浏览器泄露受害者的帐号，密码，内容，邮箱, cookie等用户隐私信息；
+
+目前几大系统厂商各自在操作系统内核中引入了KPTI的技术，旨在和用户态的页表隔离，这样一来就可以解决”Meltdown”和”Spectre”漏洞问题。但根据相关的外部信息，这样一来可能带来5%到30%性能上的损失。
+360安全团队会持续关注芯片厂商修复方案的出台。
+
+## 0x03 安全建议
+
+“Meltdown”和”Spectre”漏洞修复流程相对复杂，可能会有部分软件不兼容问题（如杀毒软件等）。
+
+**360CERT建议相关企业/用户务必作好相关的修复评估工作。**
+
+具体评估和修复工作，可以参考相关厂商的安全公告。
+
+## 0x04 时间线
+
+2018-01-04 Google的Jann Horn发布漏洞信息
+
+2018-01-04 360安全团队发布预警通告
+
+## 0x05 参考资料
+
+  * <https://meltdownattack.com/meltdown.pdf>
+  * <https://spectreattack.com/spectre.pdf>
+  * <http://xenbits.xen.org/xsa/advisory-254.html>
+  * [https://security-center.intel.com/advisory.aspx?intelid=INTEL-SA-00088&languageid=en-fr](https://security-center.intel.com/advisory.aspx?intelid=INTEL-SA-00088&languageid=en-fr)
+  * <https://support.microsoft.com/en-us/help/4073119/windows-client-guidance-for-it-pros-to-protect-against-speculative-exe>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **360CERT安全通告** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/93599](/post/id/93599)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞](/tag/漏洞)
+  * [CPU](/tag/CPU)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p2.ssl.qhmsg.com/dm/200_200_100/t013be54b59d8ac5fe6.jpg)
+360CERT安全通告
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

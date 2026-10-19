@@ -1,0 +1,1499 @@
+国家太空安全是国家安全在空间领域的表现。随着太空技术在政治、经济、军事、文化等各个领域的应用不断增加，太空已经成为国家赖以生存与发展的命脉之一，凝聚着巨大的国家利益，太空安全的重要性日益凸显[1]。而在信息化时代，太空安全与信息安全紧密地结合在一起。
+
+2020年9月4日,美国白宫发布了首份针对太空网络空间安全的指令——《航天政策第5号令》，其为美国首个关于卫星和相关系统网络安全的综合性政策，标志着美国对太空网络安全的重视程度达到新的高度。在此背景下，美国自2020年起，连续两年举办太空信息安全大赛“黑掉卫星（Hack-A-Sat）”，在 **《Hack-A-Sat太空信息安全挑战赛深度解析》** 一书中有详细介绍，本文介绍了Hack-A-Sat黑掉卫星挑战赛的解读卫星遥测数据verizon这道赛题的解题过程。
+
+## 题目介绍
+
+> LaunchDotCom's ground station is streaming telemetry data from its Carnac1.0
+> satellite on a TCP port. Implement a decoder from the XTCE definition.
+
+本挑战题的背景是LaunchDotCom地面站正在从Carnac1.0卫星接收遥测数据。本挑战题要求根据XTCE定义实现解码器，从而实现对遥测数据的解码。
+
+本挑战题给出了一个链接地址，使用netcat连接到题目给的链接后，会给出进一步提示，如图4-7所示，遥测服务运行在另外一个地址上，继续使用netcat连接该地址，如图4-8所示，显示遥测服务正在发送一系列二进制数据，打印出来是乱码，在此我们没有观察到明显的flag，根据题目信息，参赛者需要对此二进制数据，根据XTCE定义实现解码，才可得到flag值。
+
+![](https://image.3001.net/images/20221128/1669636326_6384a0e6449a9506b4266.png!small)
+
+图4-7 verizon题目的提示信息
+
+![](https://image.3001.net/images/20221128/1669636358_6384a106523407a5e9f14.png!small)
+
+图4-8 连接到遥测服务后，接收到的数据
+
+给出的资料是telemetry.zip，解压缩后就只有一个文件telemetry.xtce，它是一个XTCE格式的文件，XTCE是描述遥测和命令的数据规范（参考下文XTCE背景知识介绍），通过该文件可以解析遥测服务发送的二进制数据的含义。
+
+## 题目编译及测试
+
+本挑战题的代码位于verizon目录下，查看challenge、solver目录下的Dockerfile，发现其中用到的是python:3.7-slim，为了加快题目的编译进度，在verizon目录下新建一个文件sources.list，内容如下：
+
+> deb https://mirrors.tuna.tsinghua.edu.cn/debian/ bullseye main contrib non-> free
+>
+> deb https://mirrors.tuna.tsinghua.edu.cn/debian/ bullseye-updates main
+> contrib non-free
+>
+> deb https://mirrors.tuna.tsinghua.edu.cn/debian/ bullseye-backports main
+> contrib non-free
+>
+> deb https://mirrors.tuna.tsinghua.edu.cn/debian-security bullseye-security
+> main contrib non-free
+
+将sources.list复制到verizon、challenge、solver目录下，修改challenge、solver目录下的Dockerfile，在所有的FROM
+python:3.7-slim下方添加：
+
+> ADD sources.list /etc/apt/sources.list
+
+打开终端，进入verizon所在目录，执行命令：
+
+> sudo make build
+
+使用make test命令进行测试，会顺利通过，其输出信息如图4-9所示。
+
+![](https://image.3001.net/images/20221128/1669636395_6384a12b1624e3595e653.png!small)
+
+图4-9 verizon挑战题测试输出
+
+## 相关背景知识
+
+### 1．CCSDS
+
+CCSDS（Consultative Committee for Space Data
+Systems，空间数据系统咨询委员会）成立于1982年，是一个国际空间合作组织，自20世纪90年代以来制定了一系列的空间数据系统的协议规范和标准。CCSDS研究和制定的数据标准涵盖了飞行器、空间链路、地面操作控制等。
+
+CCSDS 批准发布的文件如图4-10所示，根据其用途和标准化过程的不同阶段分为8种不同类别，以8种不同的颜色表示：
+
+  * 蓝皮书（Blue）：建议的标准文件（Recommended Standards）。
+  * 洋红皮书（Magenta）：建议的实践文件（Recommended Practices）。
+  * 绿皮书（Green）：信息报告文件（Informational Reports）。
+  * 红皮书（Red）：标准或实践文件的草稿（Draft Standards/Practices）。
+  * 橙皮书（Orange）：试验类文件（Experimental）。
+  * 黄皮书（Yellow）：管理类文件（Administrative）。
+  * 银皮书（Silver）：已退出使用的历史文件（Historical）。
+  * 粉皮书（Pink）：用于评审的修订稿（Draft Revisions For Review）。
+
+![](https://image.3001.net/images/20221128/1669636429_6384a14d6b0d8f27acd6d.png!small)
+
+图4-10 CCSDS发布的文件
+
+### 2．XTCE
+
+XTCE（XML Telemetric and Command Exchange）是一套由OMG（Object Management
+Group）提出的，利用XML语言来描述遥测和命令的数据规范。OMG是国际化的、开放成员的、非营利性的计算机行业协会，其制定XTCE目的是提供一种国际化的新体制与标准，为不同机构和系统在航天任务的各个阶段对卫星数据的有效交换提供支持。XTCE规范的1.0版符合CCSDS绿皮书规范，1.1版已被采纳为CCSDS蓝皮书规范。XTCE的内容和XTCE体系结构的版本以规范的形式在不断地更新。
+
+国际著名的航天机构与卫星制造商（包括美国洛克希德·马丁公司、欧空局、法国航天局、波音公司、美国航天局等）参与了XTCE标准的联合研究，并已经逐步应用到航天项目中。目前，CCSDS
+XTCE标准在验证和不断完善中，并已经陆续在美国、欧洲研制的卫星系统中得到了较多的应用，如美国的陆地卫星数据连续任务（Landsat Data
+Continuity
+Mission，LDCM）等。XTCE已成为一种较通用的卫星数据信息描述和表达方法，一些卫星研制机构和厂商还根据自身的设计需求开发出了相应的XTCE应用软件，用于卫星载荷数据信息的设计中。
+
+XTCE标准中元素节点的结构如图4-11所示。XTCE标准文件以空间系统元素为根元素，其下面包括头部元素、遥测元数据元素、遥控元数据元素、服务元素及子空间系统元素。元数据是描述数据的数据，可以描述数据属性。
+
+![](https://image.3001.net/images/20221128/1669636480_6384a1808a4e69e4b7795.png!small)
+
+图4-11 XTCE 标准中元素节点的结构
+
+头部元素主要描述与 XTCE
+文件本身相关的信息，包括来源、日期、版本、作者等信息。服务元素可以对流进行定义。空间系统还可以进行层次划分，称为子空间系统，它的元素与 XTCE
+数据文件中的空间系统根元素类型相同，也就是说，每个空间系统下可以包含一个或多个子空间系统，并且它们包含的元素都是相同的。XTCE
+数据文件采用分层次的结构对空间系统进行描述，实际上与真实环境下的航天器空间系统的结构是相同的，因此更有利于对真实环境下的空间系统信息进行描述。通过采用这种分层次的结构，一方面由于同一空间系统的信息名称不能重复，因此可以减少空间系统间参数名称的碰撞，另一方面可以对不同的空间系统进行描述，便于管理，避免了集成困难的问题。下面重点对遥测元数据和遥控元数据进行介绍。
+
+（1）遥测元数据是对遥测数据的描述，定义参数类航天器系统参数类型集、参数、容器、消息、数据流、算法等。具体含义如下：
+
+  * ParameterTypeSet（参数类型集）：遥测参数的元数据集合，参数类型实例化后即可描述遥测参数。参数类型包含的信息有：数据类型、说明信息、告警阈值、输出数据的工程单元、长度以及在天地传输过程中的编码方式等。
+  * ParameterSet（参数集）：一组遥测参数及其引用的集合。参数是实例化的参数类型，包含一个名称和一个指向参数类型的引用（ParameterTypeRef）。引用一般指以前在其他ParameterSet中定义的参数引用。
+  * SequenceContainer（序列容器）：一组有序的参数序列，可以描述包、数据帧、子帧或结构数据项。序列容器可以由基础容器派生，方便数据定义的重用。例如，不同的数据包中有一部分相同的参数序列，可以先建立一个基础容器来描述这些相同的参数序列，然后让描述各个数据包的容器继承这个基础容器，实现数据定义的继承与重用，从而使遥测和遥控数据配置文件更加灵活。
+  * ContainerSet（容器集）：一组无序的序列容器的集合。
+  * MessageSet（消息集）：消息在服务中通过匹配方式唯一标识一个容器的替代方法，并通过比较容器中的元素与预定值是否一致，实现对容器的过滤。例如，在消息中定义minorframeID=21，这个消息就是就是第21个子帧容器。这种方法可以用来对容器进行分类，同类的容器可以通过1个消息被找到。
+  * StreamSet（数据流集）：一组无序的数据流（Stream）的集合。航天器上、下行数据均是数据流，在数据流层面有很多处理和操作。StreamSet包含所有包括组帧、解帧在内的上、下行数据的处理算法。
+  * AlgorithmSet（算法集）：对于地面系统，事先构造一些处理遥测、遥控数据的基础算法，有利于重构复杂逻辑的数据处理算法。
+
+描述遥测参数的步骤如下：首先用ParameterSet定义遥测参数；接着用ParameterTypeSet定义遥测参数的数据类型；然后定义容器Container；再定义遥测数据流集StreamSet；最后定义遥测数据处理算法集AlgorithmSet。
+
+（2）遥控元数据。
+
+遥控元数据的格式与遥测元数据相似，除了含有与遥测元数据一致的ParameterTypeSet、ParameterSet、MessageSet、StreamSet和AlgorithmSet等，还有ArgumentTypes和Metacommand。
+
+  * ArgumentTypes（判据类型集）：判据类型集与参数类型集很相似，区别是判据类型实例化后通常与特定的遥控命令绑定。该集合包含的信息有数据类型、文本描述、正常值范围、工程单元等。
+  * Metacommand（元指令集）：元指令集用于描述遥控指令。通过描述指令名称、指令参数、指令间约束关系、指令序列、指令容器、指令验证集等定义遥控指令。
+
+### 3．ASCII码
+
+ASCII（American Standard Code for Information
+Interchange）是美国（国家）信息交换标准（代）码，是一种使用7个或8个二进制位进行编码的方案，最多可以给256个字符（包括字母、数字、标点符号、控制字符及其他符号）分配（或指定）数值。ASCII码于1968年提出，用于在不同计算机硬件和软件系统中实现数据传输标准化，在大多数的小型机和全部的个人计算机都使用此码，ASCII码是目前计算机最通用的编码标准之一。
+
+ASCII码划分为两个集合：128个字符的标准ASCII码（7位二进制编码）和附加的128个字符的扩展ASCII码（8位二进制编码）。
+
+因为计算机只能接收数字信息，ASCII码将字符作为数字来表示，以便计算机能够接收和处理。例如，大写字母N的ASCII码是78。
+
+标准ASCII码中，0～32号及127号是控制字符，常用的有LF（换行）、CR（回车）；33～126号是字符，其中48～57号为0～9
+10个数字；65～90号为26个大写英文字母，97～122号为26个小写英文字母，其余的是一些标点符号、运算符号等。
+
+表4-1 标准ASCII码
+
+ASCII值
+
+|
+
+字符
+
+|
+
+ASCII值
+
+|
+
+字符
+
+|
+
+ASCII值
+
+|
+
+字符
+
+|
+
+ASCII值
+
+|
+
+字符  
+  
+---|---|---|---|---|---|---|---  
+  
+0
+
+|
+
+ ** **NUT****
+
+|
+
+32
+
+|
+
+ ** **(space)****
+
+|
+
+64
+
+|
+
+ ** **@****
+
+|
+
+96
+
+|
+
+ ** **、****  
+  
+1
+
+|
+
+SOH
+
+|
+
+33
+
+|
+
+！
+
+|
+
+65
+
+|
+
+A
+
+|
+
+97
+
+|
+
+a  
+  
+2
+
+|
+
+ ** **STX****
+
+|
+
+34
+
+|
+
+ ** **”****
+
+|
+
+66
+
+|
+
+ ** **B****
+
+|
+
+98
+
+|
+
+ ** **b****  
+  
+3
+
+|
+
+ ** **ETX****
+
+|
+
+35
+
+|
+
+ ** **#****
+
+|
+
+67
+
+|
+
+ ** **C****
+
+|
+
+99
+
+|
+
+ ** **c****  
+  
+4
+
+|
+
+ ** **EOT****
+
+|
+
+36
+
+|
+
+ ** **$****
+
+|
+
+68
+
+|
+
+ ** **D****
+
+|
+
+100
+
+|
+
+ ** **d****  
+  
+5
+
+|
+
+ ** **ENQ****
+
+|
+
+37
+
+|
+
+ ** **%****
+
+|
+
+69
+
+|
+
+ ** **E****
+
+|
+
+101
+
+|
+
+ ** **e****  
+  
+6
+
+|
+
+ ** **ACK****
+
+|
+
+38
+
+|
+
+ ** **&****
+
+|
+
+70
+
+|
+
+ ** **F****
+
+|
+
+102
+
+|
+
+ ** **f****  
+  
+7
+
+|
+
+ ** **BEL****
+
+|
+
+39
+
+|
+
+ ** **,****
+
+|
+
+71
+
+|
+
+ ** **G****
+
+|
+
+103
+
+|
+
+ ** **g****  
+  
+8
+
+|
+
+ ** **BS****
+
+|
+
+40
+
+|
+
+ ** **(****
+
+|
+
+72
+
+|
+
+ ** **H****
+
+|
+
+104
+
+|
+
+ ** **h****  
+  
+9
+
+|
+
+ ** **HT****
+
+|
+
+41
+
+|
+
+ ** **)****
+
+|
+
+73
+
+|
+
+ ** **I****
+
+|
+
+105
+
+|
+
+ ** **i****  
+  
+10
+
+|
+
+ ** **LF****
+
+|
+
+42
+
+|
+
+ ** *******
+
+|
+
+74
+
+|
+
+ ** **J****
+
+|
+
+106
+
+|
+
+ ** **j****  
+  
+11
+
+|
+
+ ** **VT****
+
+|
+
+43
+
+|
+
+ ** **+****
+
+|
+
+75
+
+|
+
+ ** **K****
+
+|
+
+107
+
+|
+
+ ** **k****  
+  
+12
+
+|
+
+ ** **FF****
+
+|
+
+44
+
+|
+
+ ** **,****
+
+|
+
+76
+
+|
+
+ ** **L****
+
+|
+
+108
+
+|
+
+ ** **l****  
+  
+13
+
+|
+
+ ** **CR****
+
+|
+
+45
+
+|
+
+ ** **-****
+
+|
+
+77
+
+|
+
+ ** **M****
+
+|
+
+109
+
+|
+
+ ** **m****  
+  
+14
+
+|
+
+ ** **SO****
+
+|
+
+46
+
+|
+
+ ** **.****
+
+|
+
+78
+
+|
+
+ ** **N****
+
+|
+
+110
+
+|
+
+ ** **n****  
+  
+15
+
+|
+
+ ** **SI****
+
+|
+
+47
+
+|
+
+ ** **/****
+
+|
+
+79
+
+|
+
+ ** **O****
+
+|
+
+111
+
+|
+
+ ** **o****  
+  
+16
+
+|
+
+ ** **DLE****
+
+|
+
+48
+
+|
+
+ ** **0****
+
+|
+
+80
+
+|
+
+ ** **P****
+
+|
+
+112
+
+|
+
+ ** **p****  
+  
+17
+
+|
+
+ ** **DCI****
+
+|
+
+49
+
+|
+
+ ** **1****
+
+|
+
+81
+
+|
+
+ ** **Q****
+
+|
+
+113
+
+|
+
+ ** **q****  
+  
+18
+
+|
+
+ ** **DC2****
+
+|
+
+50
+
+|
+
+ ** **2****
+
+|
+
+82
+
+|
+
+ ** **R****
+
+|
+
+114
+
+|
+
+ ** **r****  
+  
+19
+
+|
+
+ ** **DC3****
+
+|
+
+51
+
+|
+
+ ** **3****
+
+|
+
+83
+
+|
+
+ ** **X****
+
+|
+
+115
+
+|
+
+ ** **s****  
+  
+20
+
+|
+
+ ** **DC4****
+
+|
+
+52
+
+|
+
+ ** **4****
+
+|
+
+84
+
+|
+
+ ** **T****
+
+|
+
+116
+
+|
+
+ ** **t****  
+  
+21
+
+|
+
+ ** **NAK****
+
+|
+
+53
+
+|
+
+ ** **5****
+
+|
+
+85
+
+|
+
+ ** **U****
+
+|
+
+117
+
+|
+
+ ** **u****  
+  
+22
+
+|
+
+ ** **SYN****
+
+|
+
+54
+
+|
+
+ ** **6****
+
+|
+
+86
+
+|
+
+ ** **V****
+
+|
+
+118
+
+|
+
+ ** **v****  
+  
+23
+
+|
+
+ ** **TB****
+
+|
+
+55
+
+|
+
+ ** **7****
+
+|
+
+87
+
+|
+
+ ** **W****
+
+|
+
+119
+
+|
+
+ ** **w****  
+  
+24
+
+|
+
+ ** **CAN****
+
+|
+
+56
+
+|
+
+ ** **8****
+
+|
+
+88
+
+|
+
+ ** **X****
+
+|
+
+120
+
+|
+
+ ** **x****  
+  
+25
+
+|
+
+ ** **EM****
+
+|
+
+57
+
+|
+
+ ** **9****
+
+|
+
+89
+
+|
+
+ ** **Y****
+
+|
+
+121
+
+|
+
+ ** **y****  
+  
+26
+
+|
+
+ ** **SUB****
+
+|
+
+58
+
+|
+
+ ** **:****
+
+|
+
+90
+
+|
+
+ ** **Z****
+
+|
+
+122
+
+|
+
+ ** **z****  
+  
+27
+
+|
+
+ ** **ESC****
+
+|
+
+59
+
+|
+
+ ** **;****
+
+|
+
+91
+
+|
+
+ ** **[****
+
+|
+
+123
+
+|
+
+ ** **{****  
+  
+28
+
+|
+
+ ** **FS****
+
+|
+
+60
+
+|
+
+ ** **<****
+
+|
+
+92
+
+|
+
+ ** **/****
+
+|
+
+124
+
+|
+
+ ** **|****  
+  
+29
+
+|
+
+ ** **GS****
+
+|
+
+61
+
+|
+
+ ** **=****
+
+|
+
+93
+
+|
+
+ ** **]****
+
+|
+
+125
+
+|
+
+ ** **}****  
+  
+30
+
+|
+
+ ** **RS****
+
+|
+
+62
+
+|
+
+ ** **> ****
+
+|
+
+94
+
+|
+
+ ** **^****
+
+|
+
+126
+
+|
+
+ ** **~****  
+  
+31
+
+|
+
+ ** **US****
+
+|
+
+63
+
+|
+
+ ** **?****
+
+|
+
+95
+
+|
+
+ ** **—****
+
+|
+
+127
+
+|
+
+ ** **DEL****  
+  
+  
+
+标准ASCII编码是7位的，所以有27=128个字符（包括一些不可显示字符）。但是计算机中1字节为8位。早期的计算机不太可靠，数据经常出错，所以这1字节的8位中最高位就用来做数据校验，一般是奇偶校验。在标准ASCII中，其最高位用作奇偶校验位。但是后来的计算机变得可靠了，校验的意义就没有那么大了，因此有了一个扩展ASCII字符集。
+
+扩展ASCII字符集包含28=256个字符，编码是8位的。扩展ASCII字符集中的前128个字符与原来的ASCII字符集相同（就是原来的ASCII字符集的7位编码前面加一个0），而后面128个字符高位都是1。扩展ASCII码允许将每个字符的第8位用于确定附加的128个特殊符号字符、外来语字母和图形符号。
+
+### 4．bitstring模块简介
+
+bitstring是一个用来简化创建和分析二进制数据操作的Python
+模块，bitstring的对象可直接从包括整数、浮点数、十六进制数、十进制数和二进制数、字节数据中构造。可以使用简单的功能或切片符号对它们进行切片、合并、反转、插入、覆盖等操作。类似于文件或流，也可以从中读取、搜索和替换。bitstring模块有4个类，包括Bits、ConstBitStream、BitArray和BitStream，其中BitArray继承自Bits，BitStream继承自ConstBitStream和BitArray，ConstBitStream也继承自Bits。
+
+![](https://image.3001.net/images/20221128/1669636533_6384a1b5c469b0b62d3ae.png!small)
+
+图4-12 bitstring继承关系图
+
+（1）构造bitstring。
+
+使用pack方法进行构建，传入格式和变量值，则会一一对应进行构造，注意此方法返回的是BitStream类型。
+
+> width, height = 352, 288
+>
+> s = bitstring.pack('0x000001b3, 2*uint:12', width, height)
+
+其中，2*uint:12表示构造两个bit位为12的变量，对应的是width和height变量，0x000001b3本身就是格式化后的变量值，因此不需要再传入变量。
+
+（2）BitStream解析数据。
+
+BitStream提供了一种和readlist类似的方法unpack，可以按照一定的格式从头开始解析。例如，对于之前构造的BitStream类型的s，解析如下：
+
+> >>> s.unpack('bytes:4, 2*uint:12, uint:4')
+>
+> ['\x00\x00\x01\xb3', 352, 288]
+
+### 题目解析
+
+题目提示需要根据XTCE定义实现解码器。打开telemetry.xtce，可以看到该文件有几个部分。
+
+通过快速查看XTCE文件，可以找到flag是如何定义的：
+
+> <!-- Parameters used by FLAG Gen -->
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG11"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG12"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG13"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG14"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG15"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG16"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG17"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG18"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG19"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG10"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG1"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG2"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG3"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG4"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG5"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG6"/>
+>
+> <xtce:Parameter parameterTypeRef="7BitInteger" name="FLAG7"/>
+
+查看上述flag包格式，除了包头，flag包内容只有FLAGXXX字段，每个字段看起来像flag中的单个字符，但它们是7位编码的。但是计算机中8位ASCII码表示一个字符，这意味着，如果我们查看原始二进制文件，我们将不会看到有意义的flag。
+
+在SequenceContainer中，我们可以看到包的结构。包头结构如下：
+
+> <xtce:SequenceContainer name="AbstractTM Packet Header"
+> shortDescription="CCSDS TM Packet Header" abstract="true">
+>
+> <xtce:EntryList>
+>
+> <xtce:ParameterRefEntry parameterRef="CCSDS_VERSION"/>
+>
+> <xtce:ParameterRefEntry parameterRef="CCSDS_TYPE"/>
+>
+> <xtce:ParameterRefEntry parameterRef="CCSDS_SEC_HD"/>
+>
+> <xtce:ParameterRefEntry parameterRef="CCSDS_APID"/>
+>
+> <xtce:ParameterRefEntry parameterRef="CCSDS_GP_FLAGS"/>
+>
+> <xtce:ParameterRefEntry parameterRef="CCSDS_SSC"/>
+>
+> <xtce:ParameterRefEntry parameterRef="CCSDS_PLENGTH"/>
+>
+> </xtce:EntryList>
+
+该部分指定了一个名为AbstractTM Packet
+Header的容器。注意parameterRef参数，它指向ParameterSet部分先前定义的参数：
+
+> <xtce:ParameterSet>
+>
+> <!-- Parameters used by space packet primary header -->
+>
+> <xtce:Parameter parameterTypeRef="3BitInteger" name="CCSDS_VERSION"/>
+>
+> <xtce:Parameter parameterTypeRef="1BitInteger" name="CCSDS_TYPE"/>
+>
+> <xtce:Parameter parameterTypeRef="1BitInteger" name="CCSDS_SEC_HD"/>
+>
+> <xtce:Parameter parameterTypeRef="11BitInteger" name="CCSDS_APID"/>
+>
+> <xtce:Parameter parameterTypeRef="2BitInteger" name="CCSDS_GP_FLAGS"/>
+>
+> <xtce:Parameter parameterTypeRef="14BitInteger" name="CCSDS_SSC"/>
+>
+> <xtce:Parameter parameterTypeRef="2ByteInteger" name="CCSDS_PLENGTH"/>
+
+从这里我们可以得知，包头结构如图4-13所示。
+
+![](https://image.3001.net/images/20221128/1669636569_6384a1d9d887615f70a6a.png!small)
+
+图4-13 包头结构
+
+如果把以上所有的字段加起来，会得到一个6字节长的包头。其中我们可以观察到CCSDS_APID参数，本题中APID的含义是应用过程识别符，它能够唯一标识特定类型数据包的类型ID。
+
+查看flag包的格式：
+
+> <xtce:SequenceContainer name="AbstractFlag Packet" shortDescription="Flag TM
+> Packet Header" abstract="true">
+>
+> <xtce:EntryList>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG1"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG2"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG3"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG4"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG5"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG6"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG7"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG8"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG9"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG10"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG11"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG12"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG13"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG14"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG15"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG16"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG17"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG18"/>
+>
+> ……(略)
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG110"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG111"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG112"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG113"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG114"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG115"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG116"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG117"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG118"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG119"/>
+>
+> <xtce:ParameterRefEntry parameterRef="FLAG120"/>
+>
+> </xtce:EntryList>
+>
+> <xtce:BaseContainer containerRef="AbstractTM Packet Header">
+>
+> <xtce: **RestrictionCriteria** >
+>
+> <xtce:ComparisonList>
+>
+> <xtce:Comparison parameterRef="CCSDS_VERSION" value="0"/>
+>
+> <xtce:Comparison parameterRef="CCSDS_TYPE" value="0"/>
+>
+> <xtce:Comparison parameterRef="CCSDS_SEC_HD" value="0"/>
+>
+> <xtce:Comparison parameterRef=" **CCSDS_APID** " value=" **102** "/>
+>
+> </xtce:ComparisonList>
+>
+> </xtce: **RestrictionCriteria** >
+>
+> </xtce:BaseContainer>
+>
+> </xtce:SequenceContainer>
+>
+> </xtce:ContainerSet>
+>
+> </xtce:TelemetryMetaData>
+>
+> </xtce:SpaceSystem>
+
+我们可以在这里看到一个新的部分——RestrictionCriteria（限制标准）。限制标准是一种匹配条件。该部分告诉我们，解析器应该满足哪些条件才能将内容解析为flag包。也就是说，flag数据包的包头满足以下条件：
+
+  * CCSDS_VERSION为0。
+  * CCSDS_TYPE为0。
+  * CCSDS_SEC_HD为0。
+  * CCSDS_APID为102。
+
+至此，这道题目的解题思路可以分为4步：
+
+（1）根据如图4-13所示的包头结构，解码出包头APID的值。
+
+（2）取出APID为102的数据包，即flag包。
+
+（3）针对该数据包，依次提取7bit的字符，每7bit编码的FLAGXXX字段最高位加0，变为8bit的ASCII字符。
+
+（4）转换后的FLAGXXX字段拼接得到flag值。
+
+关键代码如下：
+
+> import bitstring
+>
+> import os
+>
+> import sys
+>
+> import socket
+>
+>  
+>
+>
+> FLAG_APID = 102 # 定义flag包的APID为102
+>
+> EPS_APID = 103
+>
+> PAYLOAD_APID = 105
+>
+> HOST = '172.16.26.1'
+>
+>  
+>
+>
+> if __name__ == '__main__':
+>
+>  
+>
+>
+> sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)#IPv4
+>
+> sock.connect((HOST, 31333))
+>
+>  
+>
+>
+> line = sock.recv(128)
+>
+> sock.close()
+>
+>  
+>
+>
+> _, Port = line.split(b" ")[-1].split(b":")
+>
+> # print(Host,Port)
+>
+> sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+>
+> sock.connect((HOST, int(Port)))
+>
+>  
+>
+>
+> while True:
+>
+> data = b''
+>
+>  
+>
+>
+> while len(data) < 6:
+>
+> data += sock.recv(6 - len(data))
+>
+>  
+>
+>
+> s = bitstring.BitArray(data)
+>
+>  
+>
+>
+> version, type, sec_header, apid, sequence_flags, sequence_count, data_length
+> = s.unpack('uint:3, uint:1, uint:1, uint:11, uint:2, uint:14, uint:16')
+>
+> print("APID: {}\nLength: {}\n".format(apid, data_length))# 解析包头
+>
+> data = b''
+>
+>  
+>
+>
+> while len(data) < data_length+1:
+>
+> data += sock.recv(data_length+1 - len(data))
+>
+>  
+>
+>
+> if apid != FLAG_APID: # 不是flag包，忽略
+>
+> print("Ignoring APID we don't care about")
+>
+> continue
+>
+>  
+>
+>
+> s = bitstring.ConstBitStream(data) # 是flag包
+>
+>  
+>
+>
+>  
+>
+>
+> char = ' '
+>
+> flag = ''
+>
+>  
+>
+>
+> while char != '}':
+>
+> # 是flag包，依次读出7bit
+>
+> # 将7bit的内容转换成8bit字符类型，最高位补0
+>
+> char = chr(s.read('uint:7'))
+>
+> flag += char
+>
+>  
+>
+>
+> print(flag)
+>
+> break
+
+  
+
+  
+

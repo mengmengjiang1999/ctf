@@ -1,0 +1,640 @@
+上一篇文章主要介绍物联网终端设备的固件获取方法、文件系统提取及分析技巧。本篇将系统性介绍终端设备固件仿真的概念、技术、工具和框架，以及手动固件仿真的过程和技巧。
+
+## 0x01 背景
+
+在漏洞研究过程中，我们会遇到若干不可控的因素影响实体设备的使用，比如：
+
+  * 目标设备比较昂贵，采购预算不足
+  * 国外设备不易采购，缺乏采购渠道
+  * 调试过程中的设备损耗导致设备数量不足
+
+固件仿真就可以很好解决以上问题，原因如下：
+
+  * 无需采购，零成本
+  * 调试更加灵活可控
+  * 突破数量限制，可无限制仿真设备
+
+当然，固件仿真也有不少缺点，比如：
+
+  * 固件运行环境碎片化，仿真成功率低
+  * 仿真设备在某些方面无法完美模拟真实设备
+  * 部分固件的仿真配置比较繁琐，有一定的技术门槛
+
+无论如何，固件仿真与实体设备之间是相辅相成、互为补充的关系，都是物联网漏洞挖掘的基础环境。（ ps：如果不差钱，还是实体设备香！）
+
+## 0x02 应用场景
+
+固件仿真技术可应用于：
+
+  1. 漏洞研究
+  2. 模糊测试
+  3. 漏洞靶场
+  4. IoT蜜罐
+
+## 0x03 概念介绍
+
+> 本章梳理了仿真技术的分类分级、仿真工具和仿真框架，便于读者系统性了解仿真技术的概念。
+
+### 3.1 仿真概念
+
+首先，什么是仿真？仿真是利用模型复现实际系统中发生的本质过程，并通过对系统模型的实验来研究存在的或设计中的系统，又称模拟。而固件仿真其实就是固件模拟运行。
+
+那么，固件仿真可以达到什么样的效果呢？
+
+利用成熟的仿真工具/框架，模拟运行固件中的全部或特定服务，提供与真实设备服务尽可能相似或无差别的体验，支撑漏洞研究、靶场、蜜罐应用。
+
+固件仿真技术的分类有哪些呢？
+
+目前固件仿真是主要技术分为用户态仿真和系统级仿真 （将会在3.2.1 和3.2.2分别展开讲解）。
+
+在此之上，还有人提出了一些仿真技术的思想：
+
+  *  **应用级仿真** ——指并不执行程序，而是仅仅加载网络应用对应页面的方式。最简单的应用级仿真是直接用对应架构的操作系统系统，将网页文件复制出来，使用常用的网络服务启动。
+  *  **代码片段仿真** ——只执行二进制文件中的一部分代码，使用Patch、预设数据等方式使得代码可以正常执行
+
+ **3.1.1 用户态仿真技术**
+
+用户态仿真是在宿主机上主要针对 **单个**
+可执行程序进行的仿真，调试和运行方便，无需配置其他的环境，如内核、磁盘映像以及虚拟网桥等。例如，在x86架构宿主机上运行一个arm架构的程序，同时可提供该arm程序的gdb调试入口。
+
+ **3.1.2 系统级仿真技术**
+
+系统仿真是在宿主机上对指定架构的操作系统的模拟运行（包括CPU和其他周边设备），既可以让单个可执行程序正常运行，也可以支持 **多个** 可执行程序并行。
+
+例如，在x86架构宿主机上模拟出arm架构的操作系统环境，运行固件解包后得文件系统中的启动脚本/etc/rcS（其内部执行了多个程序）。
+
+### 3.2 仿真工具
+
+> 以下讲述了常用的2种固件仿真工具的相关介绍
+
+ **3.2.1 QEMU**
+
+QEMU是一个通用的开源机器仿真器和虚拟化器。当用作机器仿真器时，QEMU可以在另一台机器（例如自己的PC）上运行为一台机器（例如ARM架构的操作系统和程序）。通过使用动态翻译，它实现了非常好的性能。用作虚拟化器时，用其他VMM(Xen，KVM，etc)来使用硬件提供的虚拟化支持，创建接近于主机性能的虚拟机。QEMU
+在 Xen 虚拟机管理程序下执行或在 Linux 中使用 KVM 内核模块时支持虚拟化。使用 KVM 时，QEMU 可以虚拟化 x86、服务器和嵌入式
+PowerPC、64 位 POWER、S390、32 位和 64 位 ARM 以及 MIPS 客户机。 **QEMU仿真** 主要使用的两种运作模式如下：
+
+  *  **qemu-user** ：启动不同CPU架构的linux程序，模拟程序运行
+
+  *  **qemu-system** ：模拟包括CPU及其它外设的整个操作系统，支持对应架构的多个程序在其中同时运行
+
+ **3.2.2 Unicorn**
+
+Unicorn是基于qemu的CPU仿真跨平台架构框架，主要目的就是在QEMU之上构建自己的工具。Unicorn 只关注 CPU
+操作，可以在没有上下文的情况下模拟原始代码。使用Unicorn可以从 CPU
+执行到内存访问的各种事件注册自定义处理程序，为程序员提供了在仿真环境下监视和分析代码所需的所有功能。QEMU 不能同时处理多个
+CPU。相比之下，Unicorn被设计和实现为一个框架，以便一个程序可以在一瞬间模拟不同类型CPU的多个代码。
+
+### 3.3 仿真框架
+
+ **为什么要使用仿真框架？**
+手动仿真时需要对错误逐一修复，耗时耗力。而仿真框架封装并融合了仿真工具和周边配套系统的能力，对已知错误做了内部处理，并且进行了仿真自动化的工程建设，自动化程度比较成熟，极大提高了仿真的效率。下表列举了一些常见或经典的仿真框架，并对各个框架进行了简单的介绍。
+
+框架名称
+
+|
+
+ **底层依赖**
+
+|
+
+框架介绍  
+  
+---|---|---  
+  
+[Firmadyne](https://github.com/firmadyne/firmadyne)
+
+  
+
+|
+
+qemu
+
+  
+
+|
+
+以系统级仿真为基础，使用定制动态链接库完成库函数劫持支撑NVRAM设备调用，基于定制内核完成操作系统启动、探测网络结构、虚拟硬件，通过系统配置完成网络构建，调用QEMU仿真异架构操作系统完成仿真  
+  
+[Firmware Analysis Toolkit](https://github.com/attify/firmware-analysis-toolkit)
+
+|
+
+简化firmadyne执行流程的脚本 （[AttifyOS](https://github.com/adi0x90/attifyos)已集成）  
+  
+[FirmAE](https://github.com/pr0v3rbs/FirmAE)
+
+|
+
+基于Firmadyne：但相比Firmadyne，提高了仿真成功率  
+  
+[Firmware Analysis Plus](https://github.com/liyansong2018/firmware-analysis-plus)
+
+  
+
+|
+
+基于Firmadyne、Firmware Analysis Toolkit：精简不必要组件，优化仿真流程，优化网络环境大幅压缩安装时间，提高了仿真成功率  
+  
+[qiling](https://github.com/qilingframework/qiling.git)
+
+  
+
+|
+
+unicorn
+
+|
+
+由国内京东牧者安全实验室在2019年Defcon首次推出，
+以用户态仿真为思想，相比qemu支持更多平台，包括Windows，MacOS，Linux和BSD的一款分析框架。（由于一直在更新，对应demo无法运行且缺少对应版本固件仿真说明文档，不适合入门使用）  
+  
+## 0x04 仿真逻辑
+
+> 本章分别讲解qemu-user和qemu-system固件仿真逻辑
+
+### 4.1 用户态仿真逻辑
+
+在宿主机环境内，chroot改变根目录到固件文件系统（一个正常固件通常包含uboot、kernel和文件系统3部分，对固件解包就可以获取到文件系统）的目录下，使用qemu-user执行待仿真程序。
+
+![](https://image.3001.net/images/20220720/1658313193_62d7d9e9bfc0b666a52d4.jpg!small)
+
+### 4.2 系统仿真逻辑
+
+首先，在宿主机环境内架设虚拟网桥，然后使用qemu-system加载内核和磁盘镜像启动仿真系统，此时宿主机与仿真系统间能够进行正常的网络通信。接下来，将固件解包后提取的文件系统拷贝到仿真系统中，挂载文件系统到指定目录。最后，使用chroot命令改变根目录到固件文件系统目录，运行目标程序或脚本文件，比如
+httpd服务程序、/etc/rcS启动脚本等。
+
+![](https://image.3001.net/images/20220720/1658314139_62d7dd9b0b3f330ed4714.jpg!small)
+
+## 0x05 仿真实践
+
+> 本章以D-link
+> DIR-816A2_v1.10CNB03_D77137.img固件为例，手动模拟启动固件中的web服务goahead。注：部分仿真框架（如Firmadyne、FirmAE、FAT等）无法自动化仿真上述固件的web服务。
+
+### 5.1 环境安装
+
+宿主机系统：kali-linux-2022.2-amd64 工具：
+
+  * binwalk （kali已集成）
+  * qemu 安装
+
+    
+    
+    sudo apt install qemu-user
+    sudo apt install qemu-user-static
+    sudo apt install qemu-system
+
+  * 网桥工具
+
+    
+    
+    sudo apt install bridge-utils uml-utilities
+
+### 5.2 仿真示例
+
+ **5.2.1 用户态模拟**
+
+下图描述的固件中的二进制程序的架构是mipsel32架构，所以需要使用适配mips架构的qemu-mipsel-static程序进行仿真。
+
+![](https://image.3001.net/images/20220720/1658319683_62d7f343446c626ce1ee1.png!small)
+
+将qemu-mipsel-static拷贝到当前固件的文件系统目录中。
+
+![](https://image.3001.net/images/20220720/1658319762_62d7f3929252eccc06122.png!small)
+
+接下来，使用chroot切换根目录，使用qemu-mipsel-static工具翻译执行程序goahead。我们使用chroot命令的原因是为了程序查找相对路径下的动态链接库。
+
+![](https://image.3001.net/images/20220720/1658319788_62d7f3ac5afae9d98d3cf.png!small)
+
+如上图所示，程序执行出现错误："cannot open pid file"。根据错误信息，在ida中对字符串调用定位报错点，发现报错原因：无法打开
+/var/run/goahead.pid。查看文件系统内并没有此文件，通过`touch
+./var/run/goahead.pid`命令创建该文件可以解决该错误。
+
+![](https://image.3001.net/images/20220720/1658319829_62d7f3d5296bd68dbaade.png!small)![](https://image.3001.net/images/20220720/1658319879_62d7f40735f0aee90bdf8.png!small)![](https://image.3001.net/images/20220720/1658319890_62d7f412da509b6b2674d.png!small)
+
+完成第一个报错修复后重新仿真程序，程序继续执行时出现错误："waiting for nvram_daemon"，如下图所示。
+
+![](https://image.3001.net/images/20220720/1658319980_62d7f46cdea62e2e7ddc8.png!small)
+
+如下图，根据字符串定位在ida中发现了报错原因：无法打开/var/run/nvramd.pid。查看文件系统内并没有此文件，通过`touch
+./var/run/nvramd.pid`命令创建该文件可以解决该错误。
+
+![](https://image.3001.net/images/20220720/1658320004_62d7f484905473008b750.png!small)
+
+已经修复了2处报错点。再次重新运行程序，出现了第三个报错："failed to convert to binary ip data"，如下图所示。
+
+![](https://image.3001.net/images/20220721/1658390289_62d90711c081652399022.png!small)
+
+如下图所示，ida中提示报错原因：nvram_bufget函数无法读取lan_ipaddr，而nvram_bufget是从/dev/nvram中读取数据。在Linux操作系统中，硬件设备也被看做文件来处理，/dev/nvram是非易失性存储器nvram设备（具体概念在5.3.2章节进行介绍）。为此，我们将分别讲解劫持动态链接库和patch共2种方法来解决仿真过程中设备缺失的问题。
+
+![](https://image.3001.net/images/20220721/1658390349_62d9074d9e64de066cbb5.jpg!small)
+
+####  **5.2 .1.1 使用LD_PRELOAD方式劫持动态链接库实现nvram设备的模拟**
+
+劫持动态链接库是什么意思呢？例如，程序nvram_xxx函数都是通过动态链接方式来链接libnvram-0.9.28.so这个函数库的，我们只要在加载libnvram-0.9.28.so之前加载我们自己的so文件就可以劫持这些函数，所以我们需要实现一个自己的so文件。FirmAE提供的libnvram库[（https://github.com/pr0v3rbs/FirmAE/tree/master/sources/libnvram）](https://github.com/pr0v3rbs/FirmAE/tree/master/sources/libnvram)已经写好了最关键的nvram_bufget函数，如下图所示。并且libnvram目录下中的config.h中已经提供了一部分nvram中的初始数据。
+
+![](https://image.3001.net/images/20220721/1658390484_62d907d4a665f3527511c.png!small)
+
+为了适配我们的环境，需要对config.h做一下修改:
+
+  * 设置nvram读取挂载点 （创建目录存放nvram数据），为此我们需要在文件系统中创建目录`mkdir ./mnt/libnv``ram`.
+
+![](https://image.3001.net/images/20220721/1658390514_62d907f2a32c0ca97ab23.png!small)
+
+  * config.h —— 修改启动web IP地址 为eth0网卡 IP。
+
+![](https://image.3001.net/images/20220721/1658390572_62d9082c7015074f2c780.png!small)
+
+修改完成后，进行动态链接库libnvram.so的编译。
+
+    
+    
+    mipsel-linux-gnu-gcc -c -O2 -fPIC -Wall nvram.c -o nvram.o
+    mipsel-linux-gnu-gcc -shared -nostdlib nvram.o -o libnvram.so 
+
+手动加载修改后的libnvram.so再次运行，如下图所示，仍然遇到报错，发现还是缺少相关键值对！
+
+![](https://image.3001.net/images/20220721/1658390626_62d90862a4094cfeed077.png!small)
+
+根据报错信息提示，利用ida进行字符串定位，简易分析获取键值，在config.h添加对应数据，再次编译。这个过程需要耐心。由于每个人分析方法不同，填入的值不同，最终面临的报错就不同。以下是修复后的config.h
+（65-68行的IP根据个人环境修改）。
+
+    
+    
+    #ifndef INCLUDE_CONFIG_H
+    #define INCLUDE_CONFIG_H
+    
+    // Determines whether debugging information should be printed to stderr.
+    #define DEBUG               1
+    // Determines the size of the internal buffer, used for manipulating and storing key values, etc.
+    #define BUFFER_SIZE         256
+    // Determines the size of the "emulated" NVRAM, used by nvram_get_nvramspace().
+    #define NVRAM_SIZE          2048
+    // Determines the maximum size of the user-supplied output buffer when a length is not supplied.
+    #define USER_BUFFER_SIZE    64
+    // Determines the unique separator character (as string) used for the list implementation. Do not use "\0".
+    #define LIST_SEP            "\xff"
+    // Special argument used to change the semantics of the nvram_list_exist() function.
+    #define LIST_MAGIC          0xdeadbeef
+    // Identifier value used to generate IPC key in ftok()
+    #define IPC_KEY             'A'
+    // Timeout for the semaphore
+    #define IPC_TIMEOUT         1000
+    // Mount point of the base NVRAM implementation.
+    #define MOUNT_POINT         "/mnt/libnvram/"
+    // Location of NVRAM override values that are copied into the base NVRAM implementation.
+    #define OVERRIDE_POINT      "/mnt/libnvram.override/"
+    
+    // Define the semantics for success and failure error codes.
+    #define E_FAILURE  0
+    #define E_SUCCESS  1
+    
+    // Default paths for NVRAM default values.
+    #define NVRAM_DEFAULTS_PATH \
+        /* "DIR-505L_FIRMWARE_1.01.ZIP" (10497) */ \
+        PATH("/var/etc/nvram.default") \
+        /* "DIR-615_REVE_FIRMWARE_5.11.ZIP" (9753) */ \
+        PATH("/etc/nvram.default") \
+        /* "DGL-5500_REVA_FIRMWARE_1.12B05.ZIP" (9469) */ \
+        TABLE(router_defaults) \
+        PATH("/etc/nvram.conf") \
+        PATH("/etc/nvram.deft") \
+        PATH("/etc/nvram.update") \
+        TABLE(Nvrams) \
+        PATH("/etc/wlan/nvram_params") \
+        PATH("/etc/system_nvram_defaults") \
+        FIRMAE_PATH("/image/mnt/nvram_ap.default") \
+        /* "DCS-931L_FIRMWARE_1.04B1.ZIP" by SR */\
+        FIRMAE_PATH("/etc_ro/Wireless/RT2860AP/RT2860_default_vlan") \
+        FIRMAE_PATH("/etc_ro/Wireless/RT2860AP/RT2860_default_novlan") \
+        /* "DGN3500-V1.1.00.30_NA.zip" */\
+        FIRMAE_PATH2("/usr/etc/default") \
+        /* "JR6150-R6050-V1.0.0.22.zip" by SR */ \
+        FIRMAE_PATH("/image/mnt/nvram_whp.default") \
+        FIRMAE_PATH("/image/mnt/nvram_rt.default") \
+        FIRMAE_PATH("/image/mnt/nvram_rpt.default") \
+        FIRMAE_PATH("/image/mnt/nvram.default")
+    
+    // Default values for NVRAM.
+    #define NVRAM_DEFAULTS \
+        /* Linux kernel log level, used by "WRT54G3G_2.11.05_ETSI_code.bin" (305) */ \
+        ENTRY("console_loglevel", nvram_set, "7") \
+        /* Reset NVRAM to default at bootup, used by "WNR3500v2-V1.0.2.10_23.0.70NA.chk" (1018) */ \
+        ENTRY("restore_defaults", nvram_set, "1") \
+        ENTRY("sku_name", nvram_set, "") \
+        ENTRY("wla_wlanstate", nvram_set, "") \
+        ENTRY("lan_if", nvram_set, "br0") \
+        /* eth0 IP */\
+        ENTRY("lan_ipaddr", nvram_set, "192.168.0.128")\
+        ENTRY("lan_bipaddr", nvram_set, "192.168.0.255")\
+        ENTRY("oldlan_ipaddr", nvram_set, "192.168.0.50")\
+        ENTRY("lan_netmask", nvram_set, "255.255.255.0") \
+        /* Set default timezone, required by multiple images */ \
+        ENTRY("time_zone", nvram_set, "PST8PDT") \
+        /* Set default WAN MAC address, used by "NBG-416N_V1.00(USA.7)C0.zip" (12786) */ \
+        ENTRY("wan_hwaddr_def", nvram_set, "01:23:45:67:89:ab") \
+        /* Attempt to define LAN/WAN interfaces */ \
+        ENTRY("wan_ifname", nvram_set, "eth0") \
+        ENTRY("lan_ifnames", nvram_set, "eth1 eth2 eth3 eth4") \
+        /* Used by "TEW-638v2%201.1.5.zip" (12898) to prevent crash in 'goahead' */ \
+        ENTRY("ethConver", nvram_set, "1") \
+        /* Used by "Firmware_TEW-411BRPplus_2.07_EU.zip" (13649) to prevent crash in 'init' */ \
+        ENTRY("lan_proto", nvram_set, "dhcp") \
+        ENTRY("wan_ipaddr", nvram_set, "0.0.0.0") \
+        ENTRY("wan_netmask", nvram_set, "255.255.255.0") \
+        ENTRY("wanif", nvram_set, "eth0") \
+        /* Used by "DGND3700 Firmware Version 1.0.0.17(NA).zip" (3425) to prevent crashes */ \
+        ENTRY("time_zone_x", nvram_set, "0") \
+        ENTRY("rip_multicast", nvram_set, "0") \
+        ENTRY("bs_trustedip_enable", nvram_set, "0") \
+        /* Set default MAC address, used by "linux-lzma(550A)" by SR */ \
+        FIRMAE_ENTRY("et0macaddr", nvram_set, "01:23:45:67:89:ab")\
+        /* Used by "AC1450-V1.0.0.34_10.0.16.zip" to prevent crashes by SR */ \
+        FIRMAE_ENTRY("filter_rule_tbl", nvram_set, "") \
+        /* Used by Netgear "R6200V2-V1.0.1.14_1.0.14.zip" by SR */ \
+        FIRMAE_ENTRY("pppoe2_schedule_config", nvram_set, "127:0:0:23:59") \
+        FIRMAE_ENTRY("schedule_config", nvram_set, "127:0:0:23:59") \
+        /* Used by Netgear WNDR3400v3, WNDR3500v3 "WNR3500L-V1.2.0.18_40.0.67" to prevent crashes due to following "atoi" func by SR */ \
+        FIRMAE_ENTRY("access_control_mode", nvram_set, "0") \
+        FIRMAE_ENTRY("fwpt_df_count", nvram_set, "0") \
+        FIRMAE_ENTRY("static_if_status", nvram_set, "1") \
+        /* R8500 patch to prevent crashes in httpd */ \
+        FIRMAE_ENTRY("www_relocation", nvram_set, "") \
+        FIRMAE_FOR_ENTRY("usb_info_dev%d", nvram_set, "A200396E0402FF83@1@14.4G@U@1@USB_Storage;U:;0;0@", 0, 101) \
+        /* R6200V2, R6250-V1, R6300v2, R6400, R6700-V1, R7000-V1, R7900, R8000, R8500 patch to prevent crashes in httpd */ \
+        FIRMAE_FOR_ENTRY("wla_ap_isolate_%d", nvram_set, "", 1, 5) \
+        /* R6200V1 patch to prevent crashes in httpd */ \
+        FIRMAE_FOR_ENTRY("wlg_ap_isolate_%d", nvram_set, "", 1, 5) \
+        FIRMAE_FOR_ENTRY("wlg_allow_access_%d", nvram_set, "", 1, 5) \
+        /* R6400-V1, R7900-V1, R8000, R8500 patch to prevent crashes in httpd */ \
+        FIRMAE_FOR_ENTRY("%d:macaddr", nvram_set, "01:23:45:67:89:ab", 0, 3) \
+        FIRMAE_FOR_ENTRY("lan%d_ifnames", nvram_set, "", 1, 10)\
+        ENTRY("portal_manage_enable", nvram_set, "0") \
+        ENTRY("TZ", nvram_set, "EST5EDT") \
+        ENTRY("OperationMode", nvram_set, "2") \
+        ENTRY("wanConnectionMode", nvram_set, "DHCP") \
+        ENTRY("AuthMode", nvram_set, "0") \
+        ENTRY("IEEE8021X", nvram_set, "0") \
+        ENTRY("BssidNum", nvram_set, "11") \
+        ENTRY("WscModeOption", nvram_set, "7") \
+        ENTRY("WscConfMethods", nvram_set, "0x680") \
+        ENTRY("WscConfigured", nvram_set, "0")\
+        ENTRY("telnetEnabled", nvram_set, "0")\
+        ENTRY("Language", nvram_set, "EN")\
+        ENTRY("Login", nvram_set, "admin")\
+        ENTRY("Password", nvram_set, "")\
+        ENTRY("ProductModemVersion", nvram_set, "")\
+        ENTRY("HardwareVersion", nvram_set, "A2")\
+        ENTRY("Login_encode", nvram_set, "")\
+        ENTRY("FirmwareVersion", nvram_set, "")\
+        ENTRY("IPPortFilterRules", nvram_set, "0")\
+        ENTRY("IPPortFilterRules0", nvram_set, "0")\
+        ENTRY("acl_rules", nvram_set, "web")\
+        ENTRY("portal_addr", nvram_set, "")\
+        ENTRY("HostName", nvram_set, "")\
+        ENTRY("NTPEnable", nvram_set, "")\
+        ENTRY("NTPServerIP", nvram_set, "")\
+        ENTRY("NTPSync", nvram_set, "1")
+    #endif
+
+手动加载修改后的libnvram.so再次运行，web界面已经可以正常打开了。
+
+![](https://image.3001.net/images/20220721/1658390726_62d908c6045d8efa561bf.png!small)
+
+使用提前设置好的用户名密码也可以正常登录进入后台啦~
+
+![](https://image.3001.net/images/20220721/1658390750_62d908de83c4468af5c96.png!small)
+
+####  **5.2.1.2 使用patch方式实现关键跳转的绕过**
+
+使用qemu并将程序挂载在23946端口，等待调试。
+
+![](https://image.3001.net/images/20220721/1658391376_62d90b509020438583760.png!small)
+
+在报错跳转处地址0x45cdbc下断点。
+
+![](https://image.3001.net/images/20220721/1658391404_62d90b6cd90cfc97c58ce.png!small)
+
+ida远程连接调试端口，按F9运行 (调试连接IP为eth0网卡 IP)。
+
+![](https://image.3001.net/images/20220721/1658392676_62d91064842ac62c442e7.png!small)
+
+断点断下来后，将V0寄存器原值0xFFFFFFFF 修改为非-1值后可跳过报错，然后继续执行程序。
+
+![](https://image.3001.net/images/20220721/1658392705_62d910813b7fbca84e66a.png!small)
+
+输入eth0 本机IP 192.168.0.128 可以跳转，无法正常对页面加载。
+
+![](https://image.3001.net/images/20220721/1658392739_62d910a3481d273857bc4.png!small)
+
+由于缺少nvram中lan_ipaddr值，所以只能手动补全url：192.168.0.128/dir_login.asp
+可以正常访问登录网页，但输入用户名和密码登录依然进行报错。
+
+![](https://image.3001.net/images/20220721/1658392851_62d91113dc1cc2019967d.png!small)
+
+问题出在登录检验。由于缺失nvram，无法读取相关数据，必须强行修改跳转。在地址0x4570fc和0x457118下断点。
+
+![](https://image.3001.net/images/20220721/1658392884_62d91134827d0861a684e.png!small)
+
+重复之前的步骤，成功打开登录界面后，输入用户名密码点击登录后会在断点断下，将V0寄存器值都修改为0跳过报错，继续运行。
+
+![](https://image.3001.net/images/20220721/1658392924_62d9115c3a33a88c7d086.png!small)
+
+发现可以成功跳转到后台页面。
+
+![](https://image.3001.net/images/20220721/1658392971_62d9118b8f1be597570c0.png!small)
+
+手动补全url后：192.168.0.128/index.asp 可以正常访问后台界面了。
+
+![](https://image.3001.net/images/20220721/1658393002_62d911aa0fad3b072cd70.png!small)
+
+  * 注：此固件是mipsel架构的，熟悉此架构的小伙伴可以通过ida在之前的跳转处修改opcode保存，再次运行时可以不用再重复以上的调试步骤。
+
+ **5.2.2 系统级模拟**
+
+####  **5.2.2.1 配置网络**
+
+  * 首先根据下表依次操作
+
+    
+    
+    #0.安装网桥
+    sudo apt-get install bridge-utils uml-utilities
+    
+    #1.配置桥接网卡
+    sudo gedit /etc/network/interfaces
+    #追加写入以下内容
+    auto br0
+    iface br0 inet dhcp
+    bridge_ports eth0
+    bridge_maxwait 0
+    
+    #2.创建QEMU的网络接口启动脚本
+    sudo gedit /etc/qemu-ifup
+    #追加在最后写入以下内容：
+    #!/bin/sh
+    echo "Executing /etc/qemu-ifup"
+    echo "Bringig $1 for bridged mode..."
+    sudo /sbin/ifconfig $1 0.0.0.0 promisc up
+    echo "Adding $1 to br0..."
+    sudo /sbin/brctl addif br0 $1
+    sleep 3
+    
+    
+    #3.重启网络
+    sudo ifup br0
+    sudo /etc/init.d/networking restart
+
+  * 完成上述操作后，如果发现eth0 IP地址与br0 IP地址一样，需要手动修改：ifconfig eth0 192.168.0.200/24，否则会影响到与qemu虚拟机的通信
+
+![](https://image.3001.net/images/20220721/1658393404_62d9133cebc7ac60ec190.png!small)
+
+####  **5.2.2.2 启动qemu虚拟机**
+
+  * 下载对应架构内核和硬盘镜像
+
+    
+    
+    wget https://people.debian.org/~aurel32/qemu/mipsel/debian_squeeze_mipsel_standard.qcow2
+    wget https://people.debian.org/~aurel32/qemu/mipsel/vmlinux-2.6.32-5-4kc-malta
+
+  * 打包文件系统
+
+    
+    
+    tar -czvf DIR-816.tar ./squashfs-root/
+
+  * 启动虚拟机 用户名和密码都是 root
+
+    
+    
+    sudo qemu-system-mipsel -M malta -kernel vmlinux-2.6.32-5-4kc-malta -hda debian_squeeze_mipsel_standard.qcow2 -append "root=/dev/sda1 console=tty0" -net nic -net tap -nographic
+
+  * 此时状态，互相之间都可以正常通信
+
+kali br0:192.168.0.128
+
+kali eth0:192.168.0.200
+
+qemu eth0 : 192.168.0.121
+
+####  **5.2.2.3 移植修改文件系统**
+
+  * 将kali中打包的文件系统tar包以及之前修改好的libnvram.so 上传到qemu虚拟机中
+
+    
+    
+    scp DIR-816.tar libnvram.so root@192.168.0.104:/root/
+
+  * 在qemu虚拟机中解压
+
+    
+    
+    tar xzvf DIR-816.tar
+
+  * 切换根目录固件文件系统
+
+    
+    
+    mount -o bind /dev ./squashfs-root/dev/
+    mount -t proc /proc/ ./squashfs-root/proc/
+    chroot squashfs-root sh
+
+![](https://image.3001.net/images/20220721/1658393788_62d914bcac90a798d4e0a.png!small)
+
+  * 创建目录防止报错
+
+    
+    
+    mkdir /var/run
+    touch /var/run/goahead.pid
+    touch /var/run/nvramd.pid
+    mkdir /mnt/libnvram
+
+####  **5.2.2.4 运行待仿真程序**
+
+手动加载修改的libnvram.so 运行程序。
+
+    
+    
+    LD_PRELOAD="./libnvram.so" /bin/goahead
+
+  * 如下图，运行过程仍然遇到了报错：缺少wscd命令。
+
+![](https://image.3001.net/images/20220721/1658393876_62d9151456cea31e4144c.png!small)
+
+  * 发现固件中本身缺少相关程序，本着缺什么补什么的思想，从D-link其他型号固件中找到了相同架构的wscd程序并提取其依赖动态库上传至qemu虚拟机中。
+
+![](https://image.3001.net/images/20220721/1658394071_62d915d7d6be89fd1d44f.png!small)![](https://image.3001.net/images/20220721/1658394111_62d915ff99f987bdec4f2.png!small)
+
+  * 测试wscd程序并运行，发现依然报错，暂时无法解决报错。
+
+![](https://image.3001.net/images/20220721/1658394173_62d9163d9dabbe8543e59.png!small)![](https://image.3001.net/images/20220721/1658394204_62d9165c0645cc5dafda2.png!small)
+
+  * 在实体设备中利用漏洞获取shell后，发现也并没有wscd程序。遂更换思路，发现只需要nvram中 OperationMode设置为2（满足!='3' && !='0' && != '1'条件），即可避免执行wscd相关命令。
+
+![](https://image.3001.net/images/20220721/1658394269_62d9169d58676b4ec6236.png!small)
+
+  * config.h 中修改OperationMode值。并修改lan_ipaddr值，重新编译（注：qemu eth0要与kali br0进行通信，IP重复冲突的话会导致qemu中程序运行起来而kali虚拟机无法访问）。
+
+![](https://image.3001.net/images/20220721/1658394316_62d916cc91e1add08fae9.png!small)![](https://image.3001.net/images/20220721/1658394330_62d916da4468a461f31c1.png!small)
+
+  * 重新上传libnvram.so到qemu虚拟机中，并挂载运行，能正常访问登陆界面，且输入用户名密码也能正常登录后台。
+
+![](https://image.3001.net/images/20220721/1658394620_62d917fc4be0157ac7051.jpg!small)
+
+### 5.3 仿真问题汇总
+
+> 本章讲述仿真过程中在文件、设备中出现的问题以及解决方案
+
+ **5.3.1 文件**
+
+进程在执行时需要进程本身的可执行文件、可执行文件依赖的动态链接库文件、用于配置程序的配置文件，以及用于写入临时文件、日志文件、进程当前信息的目录等文件与目录环境。在仿真时通常会通过加载原本固件的文件系统的方式来构建文件系统的运行环境，但是设备固件并不遵循统一的标准，提取出的文件系统可能并不完整，会存在部分文件无法找到的情况。另外，有的文件是设备在运行时动态创建的，简单的文件系统提取并不能获取对应的文件。
+
+  
+
+我们总结了问题的解决方法，其中最关键的方法就是根据报错信息定位报错点，再一步步修复即可。以下是几个常见的案例：
+
+  * 如下图中缺失文件，只需要对应路径创建文件。
+
+![](https://image.3001.net/images/20220721/1658394774_62d918965208e00e47cb9.png!small)![](https://image.3001.net/images/20220721/1658394797_62d918ada744ebc3e1e03.png!small)
+
+  * 从文件读取的内容不匹配无法完成正常的跳转，此时需要手动修改文件内容填入正确的值。
+
+ **5.3.2 设备**
+
+物联网设备通常需要大量的外部硬件设备参与运行，主要是运算与控制设备、网络设备、存储设备与输入输出设备。模拟器仅对常见的硬件设备进行了支持，其中包含了运算与控制设备、部分内存与磁盘设备、部分输入输出设备。但是物联网设备中存在着大量的定制外部设备，如定制的NVRAM、Flash存储设备、网络设备等，在执行到和这些设备相关的系统调用时，可能会面临缺少输入输出设备与网络设备，设备的硬件调用得不到宿主机支持等问题。
+
+下图是程序与nvram的交互流程：程序加载动态链接库，动态链接库根据标准用户库中的标准输入输出相关的函数构造对应的系统调用转发到内核层，内核根据系统调用对应执行设备驱动中的代码。
+
+![](https://image.3001.net/images/20220721/1658395170_62d91a2204ae6c65a9241.jpg!small)
+
+对于缺少nvram的问题，有以下几种解决方案:
+
+  1. 自定义动态链接库在软件层劫持相关的调用，通过预加载的方式通过该链接库控制对硬件的调用，当程序调用对应函数的时候，会优先调用自定义的动态链接库，从而模拟NVRAM功能，使仿真程序正常运行
+
+  2. 通过调试的方式：
+
+    * 在nvram相关函数返回数据后，手动修改寄存器，给与正常的数据使仿真程序正常运行
+
+    * 强行修改跳转，使仿真程序继续运行
+
+  3. 自定义内核模块的方式来实现虚拟的设备：在Linux操作系统中，硬件设备也被看做文件来处理，有对应的文件标准操作。根据驱动定义标准设计内核模块，对于每一种设备，以内核驱动的方式，模拟实现文件的标准操作，通过定制内核模块完成外部设备的软件形式实现
+
+当然，解决方案不恒定，需要根据实际情况思考并使用。
+
+## 0x06 总结
+
+本文系统性讲解了固件仿真的概念、技术、工具和框架，并从用户态、系统级2个角度进行了实际的手动仿真实践。仿真过程中会遇到一些文件、设备等方面的问题和错误，本文也给出了相应的解决方案。
+
+希望各位读者朋友读完此文能有所收获！
+
+# 0x07 参考文章
+
+[1]<https://blog.lyle.ac.cn/2021/07/09/uemu/>
+
+[2] [https://www.freebuf.com/sectool/264053.html](../sectool/264053.html)
+
+[3] <https://www.ics-cert.org.cn/portal/page/121/8b078dd28bcf42dfaf894e585d880cea.html>
+
+[4] [https://www.freebuf.com/sectool/264053.html﻿](../sectool/264053.html)
+

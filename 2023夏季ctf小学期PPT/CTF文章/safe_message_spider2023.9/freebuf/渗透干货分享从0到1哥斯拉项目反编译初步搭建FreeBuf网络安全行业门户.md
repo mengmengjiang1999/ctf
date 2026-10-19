@@ -1,0 +1,565 @@
+# 0x01 起因
+
+今天上github搜索哥斯拉项目时，看到了有人发布了哥斯拉源码的项目。
+
+项目地址如下：
+
+> <https://github.com/808Mak1r/GodzillaSource>
+
+![](https://image.3001.net/images/20211008/1633677989_615ff2a51861d944ae55e.jpg!small)
+
+最初以为是哥斯拉作者发布了项目源码，点进这个项目一看，原来是反编译构建的哥斯拉源码。
+
+![](https://image.3001.net/images/20211008/1633677996_615ff2ac83c97f15d9c4d.jpg!small)
+
+于是心血来潮，决定也对该哥斯拉3.0.3版本，也就是哥斯拉作者发布的最新版本进行反编译生成可运行的项目。
+
+0x02 构建pom.xml
+
+此次使用的环境：
+
+jdk1.8.0_301
+
+jdk-11.0.12
+
+IntelliJ IDEA 2021.2 (Ultimate Edition)
+
+JD-Gui version 1.6.6
+
+ **要对哥斯拉项目进行反编译，首先要下载哥斯拉项目的jar包** 。项目地址如下：
+
+https://github.com/BeichenDream/Godzilla
+
+下载最新版的v3.0.3-godzilla
+
+![](https://image.3001.net/images/20211008/1633678004_615ff2b48ade14f4536a7.jpg!small)
+
+将下载后的文件用jd-gui打开
+
+![](https://image.3001.net/images/20211008/1633678012_615ff2bc7c5797e895f6e.jpg!small)
+
+一般来讲引入的第三方库在maven已经com下，因此如果建构pom.xml时首先需要把这两处地方的第三方库引入。
+
+接下来打开IDEA，新建一个maven项目
+
+![](https://image.3001.net/images/20211008/1633678021_615ff2c5eef25fc664b81.jpg!small)
+
+![](https://image.3001.net/images/20211008/1633678029_615ff2cd3387c9c13e335.jpg!small)
+
+因为maven要下载第三方库，最好先在pom文件中配置下载源，不然会下载很慢，个人常用的源如下：
+
+<repositories>
+
+<repository>
+
+<id>alimaven</id>
+
+<name>aliyun maven</name>
+
+<url>//maven.aliyun.com/nexus/content/groups/public/</url>
+
+</repository>
+
+<repository>
+
+<id>jcenter</id>
+
+<name>bintray</name>
+
+<url>http://jcenter.bintray.com</url>
+
+</repository>
+
+</repositories>
+
+![](https://image.3001.net/images/20211008/1633678391_615ff43755da9e4577e8a.jpg!small)
+
+>  **注意 这里构建的pom.xml文件在之后反编译过程中还会进行修改，并不是最终版本**
+
+先对jd-gui中的maven下的地方库进行配置，我们可以在jd-gui中的pom.properties文件查看到maven引入的第三方库的版本和名称，可以在 https://mvnrepository.com/
+网站找到对应的配置信息，构建后的pom.xml的以来如下：
+
+<dependencies>
+
+<dependency>
+
+<groupId>org.xerial</groupId>
+
+<artifactId>sqlite-jdbc</artifactId>
+
+<version>3.34.0</version>
+
+</dependency>
+
+<dependency>
+
+<groupId>org.javassist</groupId>
+
+<artifactId>javassist</artifactId>
+
+<version>3.27.0-GA</version>
+
+</dependency>
+
+<dependency>
+
+<groupId>com.miglayout</groupId>
+
+<artifactId>miglayout-swing</artifactId>
+
+<version>5.3</version>
+
+</dependency>
+
+<dependency>
+
+<groupId>com.miglayout</groupId>
+
+<artifactId>miglayout-core</artifactId>
+
+<version>5.3</version>
+
+</dependency>
+
+<!-- https://mvnrepository.com/artifact/com.formdev/svgSalamander -->
+
+<dependency>
+
+<groupId>com.formdev</groupId>
+
+<artifactId>svgSalamander</artifactId>
+
+<version>1.1.2.4</version>
+
+<scope>runtime</scope>
+
+</dependency>
+
+</dependencies>
+
+![](https://image.3001.net/images/20211008/1633678403_615ff4432ee2c1d9e7ddc.jpg!small)
+
+jd-gui的maven文件夹下的相关依赖添加到pom.xml中后，继续添加com文件夹下的第三方依赖。(但对于com文件夹下的第三方依赖有两种加载方式，一种是在pom.xml中添加依赖配置选项，另一种则是直接在项目中引入第三方依赖，例如导入jar包或者源代码。这里我选择先使用在pom.xml中引入第三方的依赖库。)
+
+由于个人能力有限，在com文件夹下找不到依赖包对应的版本信息。最开始就卡住了，只能凭经验选择对应的版本。
+
+jd-gui的com文件夹下包依赖如下
+
+![](https://image.3001.net/images/20211008/1633678412_615ff44c855ad789e5725.jpg!small)
+
+但在 (https://mvnrepository.com/) 网站并未找到com.jgoodies.common 以及
+com.kitfox.svg的包(此时选择在maven中添加第三方依赖的我还没意识到问题)，暂时选用 com.jgoodies.jgoodies-common 和 com.kitfox.svg.svg-salamander 包进行代替。
+
+构造的pom.xml中的依赖如下：
+
+<!-- com文件夹下的依赖 -->
+
+<dependency>
+
+<groupId>com.formdev</groupId>
+
+<artifactId>flatlaf</artifactId>
+
+<version>1.1.2</version>
+
+<scope>runtime</scope>
+
+</dependency>
+
+<dependency>
+
+<groupId>com.kitfox.svg</groupId>
+
+<artifactId>svg-salamander</artifactId>
+
+<version>1.0</version>
+
+</dependency>
+
+<dependency>
+
+<groupId>com.jgoodies</groupId>
+
+<artifactId>forms</artifactId>
+
+<version>1.2.1</version>
+
+</dependency>
+
+<dependency>
+
+<groupId>com.jgoodies</groupId>
+
+<artifactId>jgoodies-common</artifactId>
+
+<version>1.7.0</version>
+
+</dependency>
+
+![](https://image.3001.net/images/20211008/1633678423_615ff4574c3108f868dde.jpg!small)
+
+pom.xml文件构建好后，使用maven reload来加载第三方库。
+
+![](https://image.3001.net/images/20211008/1633678432_615ff460b4571033f0ea7.jpg!small)
+
+到这里第三方依赖就加载完成(后续会对pom.xml文件进行更改)。
+
+#  **0x03 反编译哥斯拉源代码**
+
+这里反编译源代码，我们用IDEA提供的java-decompiler.jar包，只要安装了IDEA，在IDEA安装目录下的plugins -> java-decompiler -> lib文件夹中都有该jar包。
+
+首先我们在哥斯拉文件的同级目录下新建一个文件夹，我这里取名为demo
+
+![](https://image.3001.net/images/20211008/1633678441_615ff46957a5866b27d8e.jpg!small)
+
+然后我们在哥斯拉文件所在的文件夹路径下调用如下命令，切记要用是jdk11的java.exe来调用该命令，IDEA的java-decompiler.jar的路径请根据实际情况修改。
+
+"C:\Program Files\Java\jdk-11.0.12\bin\java" -cp "C:\Program
+Files\JetBrains\IntelliJ IDEA 2021.2\plugins\java-decompiler\lib\java-decompiler.jar"
+org.jetbrains.java.decompiler.main.decompiler.ConsoleDecompiler -dgs=true
+Godzilla.jar demo
+
+![](https://image.3001.net/images/20211008/1633678449_615ff4713b6c6500245bf.jpg!small)
+
+命令调用完成后在demo文件夹下会生成一个jar包，Godzilla.jar
+
+![](https://image.3001.net/images/20211008/1633678458_615ff47a8b3758a1fc37a.jpg!small)
+
+对该jar包进行解压
+
+![](https://image.3001.net/images/20211008/1633678467_615ff4831876928f719b4.jpg!small)
+
+进入解压后的文件夹，该文件夹下就是IDEA的java-decompile.jar反编译后的源代码
+
+![](https://image.3001.net/images/20211008/1633678477_615ff48daea298ad6321d.jpg!small)
+
+因为第三方库已经加载完成，我们不需要第三方库的源代码，哥斯拉项目的源代码在如下几个文件夹中
+
+├─core
+
+│ ├─annotation
+
+│ ├─imp
+
+│ ├─shell
+
+│ └─ui
+
+│ ├─component
+
+│ │ ├─dialog
+
+│ │ ├─menu
+
+│ │ └─model
+
+│ ├─imp
+
+│ └─model
+
+├─images
+
+├─net
+
+│ └─miginfocom
+
+│ ├─layout
+
+│ └─swing
+
+├─shells
+
+│ ├─cryptions
+
+│ │ ├─cshapAes
+
+│ │ │ └─template
+
+│ │ ├─JavaAes
+
+│ │ │ └─template
+
+│ │ └─phpXor
+
+│ │ └─template
+
+│ ├─payloads
+
+│ │ ├─csharp
+
+│ │ │ └─assets
+
+│ │ ├─java
+
+│ │ │ └─assets
+
+│ │ └─php
+
+│ │ └─assets
+
+│ └─plugins
+
+│ ├─cshap
+
+│ │ └─assets
+
+│ ├─java
+
+│ │ └─assets
+
+│ └─php
+
+│ └─assets
+
+└─util
+
+└─http
+
+分别是 core 、 images 、net 、 shells 、 util
+
+我们只需要拷贝这几个文件夹，到IDEA的哥斯拉项目中即可。注意其中的net文件夹后续会删除。
+
+![](https://image.3001.net/images/20211008/1633678489_615ff4993414b815e558c.jpg!small)
+
+# 0x04 调整依赖
+
+哥斯拉的项目启动文件是 core.ui.MainActivity ，找到该文件后直接启动项目
+
+![](https://image.3001.net/images/20211008/1633678498_615ff4a253dd74c6f6703.jpg!small)
+
+当然是启动失败的呢
+
+第一条错误信息为 java: 程序包com.formdev.flatlaf.demo.intellijthemes不存在
+
+![](https://image.3001.net/images/20211008/1633678519_615ff4b725ee34523801e.jpg!small)
+
+好的，现在开始对依赖文件进行调整。
+
+上面错误信息的原因搭配上IDEA中爆红的部分，我们可以看出这是由于我们引入的com.formdev.flatlaf包缺乏com.formdev.flatlaf.demo这个子包，而哥斯拉项目需要引用这个子包中的文件。
+
+这时候去github查看flatlaf项目的源代码，查看官方是否有提供有jar包，同时该jar包中有demo这个子包。
+
+在github的搜索结果中，第一个项目 JFormDesigner/FlatLaf
+是flatlaf的官方项目，我们先不看，因为有个更有意思的项目在下方，该项目写着 Godzilla 依赖的 flatlaf-demo-1.4.jar mvn
+重新构建。
+
+项目地址如下：
+
+https://github.com/yhy0/flatlaf-demo-1.4
+
+![](https://image.3001.net/images/20211008/1633678529_615ff4c104606760bd1d4.jpg!small)
+
+点击进入该项目，我们可以看到该项目中介绍了Gozilla依赖的是flatlaf-demo库，且版本为1.4的版本。该项目的作者发现官方没有提供flatlaf-demo的1.4版本的jar包，而且官方源代码的gradle生成的jar包存在问题，于是将官方1.4版本的源代码进行maven重新构建，生成了1.4版本的jar包，同时在该项目中提供了作者重新构建好的jar包。另外该项目的最下方提供了之前我们在github上面看到的哥斯拉源代码项目的地址。
+
+![](https://image.3001.net/images/20211008/1633678538_615ff4cabe8c6ea52c720.jpg!small)
+
+那么官方是真的没有提供flatlaf.demo的1.4版本的jar包吗。我们首先进行官方的github项目。项目地址如下:
+
+https://github.com/JFormDesigner/FlatLaf
+
+在github项目中我们可以看到一个demo的位置，该位置提供了下载flatlaf-demo的jar包，我们点击下载。
+
+![](https://image.3001.net/images/20211008/1633678549_615ff4d5f03721606784d.jpg!small)
+
+![](https://image.3001.net/images/20211008/1633678558_615ff4de98202a21031dc.jpg!small)
+
+可以看到下载的版本是1.6版本。复制下载链接，链接如下：
+
+https://download.formdev.com/flatlaf/flatlaf-demo-latest.jar
+
+该链接是下载最新版本的，那么如果我们修改下载的文件后缀呢，例如修改为
+
+https://download.formdev.com/flatlaf/flatlaf-demo-1.4.jar
+
+访问发现，可以成功下载1.4版本的jar包
+
+![](https://image.3001.net/images/20211008/1633678567_615ff4e7d3ce328b82a31.jpg!small)
+
+那么既然1.4版本的jar包已经下载下来了，我们需要在IDEA中导入该依赖，导入步骤如下。
+
+ **第一步、在IDEA中新建一个文件夹，名为lib**
+
+![](https://image.3001.net/images/20211008/1633678577_615ff4f17eb97a51c2ce5.jpg!small)
+
+ **第二步、将下载下来的1.4版本的jar包放入该文件夹下**
+
+![](https://image.3001.net/images/20211008/1633678589_615ff4fda35dffe02589d.jpg!small)
+
+ **第三步、右键该文件夹，选择 Add as Library**
+
+![](https://image.3001.net/images/20211008/1633678601_615ff5094f4264f8aa635.jpg!small)
+
+至此，成功将该jar包加载为项目的依赖。添加依赖后，我们可以在项目中展开该jar包。
+
+![](https://image.3001.net/images/20211008/1633678610_615ff512d644990ba407d.jpg!small)
+
+展开后我们发现该jar包中的com文件夹下的依赖和我们之前在pom.xml引入的com下的依赖一样，这时我们删除pom.xml中的com中的依赖。同时我们发现该jar包中net.miginfocom和我们之前引入到项目中的net文件夹内容一致，这时我们可以删除引入到项目中的net文件夹。
+
+重构之后的项目目录如下。
+
+![](https://image.3001.net/images/20211008/1633678620_615ff51ceea76ef1390e5.jpg!small)
+
+重构之后的完整的pom.xml内容如下：
+
+<?xml version="1.0" encoding="UTF-8"?>
+
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+
+xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+http://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+<modelVersion>4.0.0</modelVersion>
+
+<groupId>org.example</groupId>
+
+<artifactId>Gozilla</artifactId>
+
+<version>1.0-SNAPSHOT</version>
+
+<properties>
+
+<maven.compiler.source>8</maven.compiler.source>
+
+<maven.compiler.target>8</maven.compiler.target>
+
+</properties>
+
+<dependencies>
+
+<dependency>
+
+<groupId>org.xerial</groupId>
+
+<artifactId>sqlite-jdbc</artifactId>
+
+<version>3.34.0</version>
+
+</dependency>
+
+<dependency>
+
+<groupId>org.javassist</groupId>
+
+<artifactId>javassist</artifactId>
+
+<version>3.27.0-GA</version>
+
+</dependency>
+
+<dependency>
+
+<groupId>com.miglayout</groupId>
+
+<artifactId>miglayout-swing</artifactId>
+
+<version>5.3</version>
+
+</dependency>
+
+<dependency>
+
+<groupId>com.miglayout</groupId>
+
+<artifactId>miglayout-core</artifactId>
+
+<version>5.3</version>
+
+</dependency>
+
+<!-- https://mvnrepository.com/artifact/com.formdev/svgSalamander -->
+
+<dependency>
+
+<groupId>com.formdev</groupId>
+
+<artifactId>svgSalamander</artifactId>
+
+<version>1.1.2.4</version>
+
+<scope>runtime</scope>
+
+</dependency>
+
+</dependencies>
+
+<repositories>
+
+<repository>
+
+<id>alimaven</id>
+
+<name>aliyun maven</name>
+
+<url>http://maven.aliyun.com/nexus/content/groups/public/</url>
+
+</repository>
+
+<repository>
+
+<id>jcenter</id>
+
+<name>bintray</name>
+
+<url>http://jcenter.bintray.com</url>
+
+</repository>
+
+</repositories>
+
+</project>
+
+此时我们再用maven reload一下依赖，然后重新运行项目。
+
+![](https://image.3001.net/images/20211008/1633678642_615ff532941528e417256.jpg!small)
+
+仍然报错了，但是错误原因变了，这次是由于 com.formdev.flatlaf.demo.intellijthemes.IJThemeInfo
+类不对外开放。
+
+![](https://image.3001.net/images/20211008/1633678651_615ff53becb9371e93af2.jpg!small)
+
+访问发现该类并不是public类。这时候可以从官方的源代码中修改该类为public类，然后重新打包成jar包，但是我决定偷懒，直接用之前看到的项目作者打包提供的1.4版本的jar包。或者可以用哥斯拉源代码项目中lib下的1.4版本的jar包。两个项目的地址如下：
+
+https://github.com/yhy0/flatlaf-demo-1.4
+
+https://github.com/808Mak1r/GodzillaSource
+
+替换lib中的jar包后，重新运行项目。至此，依赖问题已经解决，剩下的就是反编译后的源代码存在的语法问题了。
+
+![](https://image.3001.net/images/20211008/1633678661_615ff545ca939d421668a.jpg!small)
+
+# 0x05 语法错误修改，成功运行项目
+
+因为反编译后的语法问题都大同小异，因此挑几个不重复的语法问题讲。
+
+> java: 不兼容的类型: boolean无法转换为int
+
+![](https://image.3001.net/images/20211008/1633678672_615ff550712e69699a4e3.jpg!small)
+
+当出现这种boolean无法转换为int类型的语法问题是，我们查看反编译后的源代码，可以看到在这里readOneNum是表示从inputStream中读取的字节个数，因此，将readOneNum只定义一次，值修改为0即可。
+
+![](https://image.3001.net/images/20211008/1633678682_615ff55aa5a025c214dcd.jpg!small)
+
+java: 无法为最终变量cmdString分配值
+
+![](https://image.3001.net/images/20211008/1633678692_615ff5641778aa868560f.jpg!small)
+
+这里的语法问题是为已经用final关键字定义过的变量cmdString重复赋值，该变量在定义时已经赋值为null了，重复赋值会报错，要解决该语法问题，直接在该变量定义时不赋值即可。
+
+![](https://image.3001.net/images/20211008/1633678700_615ff56c80540a0bc7a31.jpg!small)
+
+修改完语法问题后运行项目，即可成功运行。
+
+![](https://image.3001.net/images/20211008/1633678709_615ff5756075b6dd0d2e7.jpg!small)
+
+# 0x06 后续问题
+
+上面步骤已经能成功将哥斯拉作为项目运行了，但是运行后的项目依旧存在一些问题，如下。
+
+![](https://image.3001.net/images/20211008/1633678731_615ff58bdd5cac6e4ae88.jpg!small)
+
+![](https://image.3001.net/images/20211008/1633678742_615ff59661f59e9eaadb1.jpg!small)
+
+因此还需要对报异常的位置进行查看，来做更进一步的修改。这里就由读者去进行后续的跟进了，修改源码也是学习的一环，当然也可以直接使用github上别人已经逆向出的源代码。
+

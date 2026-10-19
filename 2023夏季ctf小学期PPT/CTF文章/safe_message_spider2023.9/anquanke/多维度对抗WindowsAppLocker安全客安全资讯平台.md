@@ -1,0 +1,293 @@
+# 多维度对抗Windows AppLocker
+
+阅读量 **259881**
+
+发布时间 : 2018-12-26 10:28:57
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t01cef85bcc9caae9bd.gif)
+
+作者：Ivan1ee@360云影实验室
+
+## 0x01 对抗安全策略的意义
+
+对抗的意义可以从两个维度去考究：从运维人员的视角来看往往采用SRP或者AppLocker等安全策略提高系统的安全性；从黑客攻击的视角来看攻击者们在红队渗透活动中试图寻求操作系统中自带微软数字签名的可执行文件或者脚本、程序集来绕过安全策略，它们的终极目标只有一个“实现恶意软件在低权限下突破安全策略运行”。
+
+## 0x02 SRP简介
+
+在介绍AppLocker之前需要来看下它的前辈SRP策略，SRP全称 SoftWare Restriction Policies
+，中文翻译过来是软件限制策略，这套策略从WindowsXP开始引入，目前各个版本均支持。
+
+![](https://p3.ssl.qhimg.com/t01f1290626e317e078.png)
+
+SRP策略有两个子项，分别是安全等级和附加规则，默认情况下创建的SRP策略中附加规则包含两条对注册表键值的添加项，分别对%SystemRoot% 和
+%ProgramFilesDir%
+两个系统变量目录执行允许运行，非受限模式。这样的模式下Windows和ProgramFiles目录下的所有应用程序可以正常运行，这也是保证了在普通账户下Windows系统能正常运行。
+
+![](https://p0.ssl.qhimg.com/t01140c310c9670a2ee.png)
+
+SRP策略中的安全等级在不修改注册表的情况下只能看到三种模式，分别是UnRestricted （非受限） 、Basic User（基本用户）
+、DisAllowed（不允许）
+，其中非受限模式表示用户当前的访问权限决定了运行时的权限；基本用户模式表示运行程序访问一般用户可以访问到的资源，但不具有管理员的访问权；不允许模式表示系统开始菜单列表中的软件无法正常运行。
+
+## 0X03 AppLocker简介
+
+AppLocker 也就是应用锁，它隶属于应用控制策略分类下（Applocation Control
+Policies），功能上和SRP很接近属于替代SRP功能的全新系统管理工具，可配置五种文件类型，分别为可执行文件、脚本、系统安装文件、程序集、应用安装文件。
+
+![](https://p1.ssl.qhimg.com/t01115c2704c279f216.png)
+
+AppLocker支持默认规则和自定义规则两种创建规则方法，首先介绍创建默认规则，以可执行文件举例创建的默认规则都是非受限的模式，并且只对Windows目录、ProgramFiles目录、以及对Administrators组开放可执行权限
+， 如下
+
+![](https://p2.ssl.qhimg.com/t01af92f2c2f8ab218c.png)
+
+创建好默认规则如下图
+
+![](https://p2.ssl.qhimg.com/t018399b476824bf3f0.png)
+
+图上默认创建了三条规则，并且它们的共同条件都是基于Path路径的方式创建。如果创建自定义规则需要从发布者、路径、文件哈希这三种条件中选择，其中以发布者、文件哈希安全系数高；路径安全系数较低，因为某些场景下攻击者通过拷贝或移动单个文件就可以绕过路径的规则限制。
+
+接下来分别来看下三种条件，笔者通过新建Path路径的方式禁止运行PowerShell.exe所在目录下拒绝执行的规则
+
+![](https://p3.ssl.qhimg.com/t0144280849443aba06.png)
+
+第二种基于文件哈希配置，笔者以PowerShell.exe为例，如下图
+
+  
+文件哈希配置相对来说安全很多，假定攻击者通过改名或者移动文件到其它的目录执行依旧绕不过这条安全策略，这种配置的方式比路径安全许多。接下来介绍安全系数最高的基于发布者条件选择配置，发布者条件内置了五种级别：版本、文件名、产品签名、发布者、任意发布者，这五种级别安全系数依次递进增强，以下图为例
+
+![](https://p4.ssl.qhimg.com/t0184cdf8e58f9b4855.png)
+
+当前笔者依旧选择PowerShell.exe为例，将左侧箭头选择在文件名级别，那么文件版本所在的文本框默认置为星号，代表了任意版本均受影响，如果将左侧箭头继续拔高到产品签名位置，那么文件名和文件版本都将是星号代替，进一步扩大了规则的适用面，依次类推逐级提高安全策略受影响的面会越来越大。
+
+从选择条件来看，路径条件最容易绕过，发布者和文件哈希条件相对来说安全系数高，为了方便接下来对攻击向量的演示，下图创建了一条基于文件路径的拒绝Powershell所在目录下可执行程序运行的规则
+
+![](https://p1.ssl.qhimg.com/t01d21b5a76749be220.png)
+
+## 0x04 攻击向量（MSBuild & csproj）
+
+这个攻击向量的利用场景：
+
+突破Applocker限制powershell的策略，达到运行任意指令  
+---  
+  
+MSBuild.exe全称Microsoft Build Engine ，通常用来生成指定的项目和解决方案，MSBuild可在未安装Visual
+Studio的环境中编译.net的工程文件。所在目录的位置”C:\Windows\Microsoft.NET\FrameWork\V4.0.30319\”题外话这个目录下还有很多的可执行文件在红队渗透中经常能用到，例如csc.exe、还有vbc.exe等等，csproj文件则是visualstudio平台下的工程文件，如果是C#开发的工程文件就是csproj，如果是vb开发的话就是vbproj；
+MSBuild最大的特点可以编译特定格式的XML文件，在.NET Framework 4.0中支持了一项新功能 Inline
+Tasks，被包含在元素UsingTask中，可用来在xml文件中执行csproj代码，参考下面这段demo
+
+    
+    
+    <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    
+      <Target Name="Hello">
+    
+       <HelloWorld />
+    
+      </Target>
+    
+      <UsingTask
+    
+        TaskName="HelloWorld"
+    
+        TaskFactory="CodeTaskFactory"
+    
+        AssemblyFile="C:\Windows\Microsoft.Net\Framework\v4.0.30319\Microsoft.Build.Tasks.v4.0.dll" >
+    
+        <ParameterGroup/>
+    
+        <Task>
+    
+          <Using Namespace="System" /> 
+    
+          <Code Type="Fragment" Language="cs">
+    
+            <![CDATA[Console.WriteLine("Written By Ivan1ee");]]>
+    
+          </Code>
+    
+        </Task>
+    
+        </UsingTask>
+    
+    </Project>
+
+![](https://p3.ssl.qhimg.com/t015c739ad60946f6e6.png)
+
+要实现PowerShell功能需引入核心程序集System.Management.Automation.dll ，国外黑客 @subTee
+@Cn33liz已经实现了PowerShell的工程文件<https://raw.githubusercontent.com/Cn33liz/MSBuildShell/master/MSBuildShell.csproj>
+文件中已经实现了Powershell.exe所有的方法，在命令行下输入 MSBuild.exe Shell.csproj载入之后的效果见下图
+
+![](https://p3.ssl.qhimg.com/t01a733111217ac9443.png)
+
+生成PowerShell时间大约3秒，执行内置命令$psversiontable得到执行后的结果，达到了绕过安全策略的目的。
+
+![](https://p0.ssl.qhimg.com/t014220ec210734010d.png)
+
+## 0x05 攻击向量（CL_LoadAssembly）
+
+这个攻击向量的利用场景：
+
+默认策略禁止Windows/Tasks目录可执行文件运行，需通过LoadAssembly.ps1脚本绕过达到运行任意可执行文件  
+---  
+  
+![](https://p1.ssl.qhimg.com/t011e580116b78fb575.png)
+
+CL_LoadAssembly.ps1
+位于C:\Windows\diagnostics\system\\(AERO/Audio)两个目录下均存在，功能上来说它是诊断系统故障的一个powershell脚本。脚本中定义了LoadAssemblyFromPath方法，底层通过反射机制调用了静态方法LoadFile成功加载外界的可执行文件或程序集，如下图
+
+![](https://p2.ssl.qhimg.com/t01d508a171a58e4481.png)
+
+笔者当前的环境是Windows2016，默认自带的版本是Powershell5.0，而5.0中提高了安全机制，内置了一种Contrained
+Language Mode 能阻止某些Powershell代码的运行，所以首先需要降级到2.0版本
+，再导入CL_LoadAssembly.ps1，调用LoadAssemblyFromPath方法加载Tasks目录下的calcrun.exe，而calcrun.exe是笔者精心构造的一个可执行文件，文件代码如下：
+
+![](https://p3.ssl.qhimg.com/t01a68f0472b8e90489.png)
+
+定义了命名空间为calcrun、声明公共类getcalc、定义公共方法runing()，文件运行后实现弹出计算器。
+
+如果在ps脚本中调用需要使用命令空间.类名::静态方法名就OK了。实施步骤分为如下四步
+
+    
+    
+    Powershell –v 2 –ep bypass
+    
+    Import-Module .\CL_LoadAssembly.ps1
+    
+    LoadAssemblyFromPath ..\..\..\Tasks\calcrun.exe
+    
+    [calcrun.getcalc]::running()
+
+在命令行下依次输入这四条指令后就可以成功绕过规则，弹出计算器，如图
+
+![](https://p3.ssl.qhimg.com/t016e7523ba5f18ca77.png)
+
+## 0x06 攻击向量（InstallUtil）
+
+这个攻击向量的利用场景：
+
+默认策略禁止Windows/Tasks目录可执行文件运行，需通过InstallUtil绕过达到运行任意可执行文件  
+---  
+  
+InstallUtil.exe 位于C:\Windows\Microsoft.Net\FrameWork\版本号\
+两个版本目录下均存在，具有安装或者卸载主机资源文件的功能。攻击者利用MetaSploit生成ShellCode放入cs文件中，再利用csc.exe生成可执行文件，最后利用InstallUtil
+/U卸载动作来加载外界的程序。首先看下cs文件中的核心实现代码
+
+![](https://p4.ssl.qhimg.com/t01abc4f022551ccad1.png)
+
+这里声明一个类继承System.Configuration.Install.Installer类，然后将MetaSploit生成的ShellCode注入重写的方法Uninstall方法体内，再通过csc.exe
+/unsafe /platform:x86 /out:InstallUtilMetasploit.exe
+ShellCode.cs编译成可执行文件，并调用InstallUtil卸载
+
+生成过程
+
+|
+
+卸载动作  
+  
+---|---  
+csc.exe /unsafe /platform:x86 /out:InstallUtilMetasploit.exe ShellCode.cs |
+InstallUtil.exe/U InstallUtilMetasploit.exe  
+  
+攻击效果如下图
+
+![](https://p0.ssl.qhimg.com/t01b784ecc7be7a7020.png)
+
+## 0x07 攻击向量（Regasm/Regsvcs）
+
+这个攻击向量的利用场景：
+
+默认策略禁止Windows/Tasks目录可执行文件运行，需通过Regasm绕过达到运行任意可执行文件  
+---  
+  
+Regasm.exe 全称Registry Assembly 位于C:\Windows\Microsoft.Net\FrameWork\版本号\
+两个版本目录下均存在，它是程序集注册工具，能读取元数据并且添加到注册表中。Regsvcs.exe 全称 Registry Services
+，它是服务安装工具可加载并注册程序集。这里以Regasm为例，攻击者利用MetaSploit生成ShellCode放入cs文件中，再利用csc.exe生成可执行文件，最后利用Regasm.exe
+/U卸载动作来加载外界的程序集。首先看下cs文件中的核心实现代码
+
+![](https://p1.ssl.qhimg.com/t01307a2d64386ea9af.png)
+
+代码中声明一个类继承ServicedComponent（服务组件）
+，再声明一个方法UnRegisterClass被定义为非托管的组件注销方法[ComUnregisterFunction]，将MetaSploit生成的ShellCode注入重写的方法UnRegisterClass方法体内，从而实现监听反弹，实施步骤可参考下表
+
+1
+
+| CSC编译成DLL  
+---|---  
+  
+2
+
+| Regasm.exe /U 加载DLL  
+  
+攻击者只需要在MSF中监听一个端口，反弹效果如下
+
+![](https://p3.ssl.qhimg.com/t0153bd33b6878a52db.png)
+
+## 0x08 其它向量
+
+以下两种攻击向量攻击成本较高，所以归纳在一起谈
+
+### 8.1、CMSTP
+
+Cmstp.exe
+可以通过加载外部的inf文件，在inf文件里可加载远程的sct脚本小程序文件，就可以实现旁路攻击，但是利用成本较高，需要在超管权限下触发，所以利用场景有限。具体的命令可参考下图
+
+![](https://p1.ssl.qhimg.com/t01b2fdfe9530acf7fc.png)
+
+### 8.2、BGINFO
+
+Bgifo.exe
+是一款信息显示工具，最重要的一点不是系统默认自带的工具，需要额外去微软的网站上下载，利用成本很高。原理通过加载外部的vbs脚本可以实现旁路攻击。
+
+## 0x09 自动化工具
+
+笔者在做这个项目的时候有感操作繁琐，有必要自动化一下，支持Regasm、InstallUtil两种攻击向量的生成，且支持强大的msf的shellcode，自动生成对应的程序集或者可执行文件。界面如图所示
+
+![](https://p1.ssl.qhimg.com/t013e9662497337cc68.png)
+
+项目地址已经同步到github上：<https://github.com/Ivan1ee/Regasm_InstallUtil_ApplockerBypass>
+
+## 0x10 一点总结
+
+从运维视角可以加强对Windows和ProgramFiles目录下的子目录写入、执行权限的控制，为了防止第三方程序调用核心程序集例如Powershell的System.Managment.Automation.dll，也需要加入禁止的规则中去，策略配置的时候建议选择安全系数高的条件，例如发布者。对于红队渗透来说需要不断拓展新的旁路攻击方式来绕过AppLocker安全策略。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **云影实验室** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/168633](/post/id/168633)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [渗透测试](/tag/渗透测试)
+  * [AppLocker](/tag/AppLocker)
+  * [安全运维](/tag/安全运维)
+  * [攻防对抗](/tag/攻防对抗)
+
+ **+1** __5赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t012b723966029ed2c4.png) 云影实验室
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

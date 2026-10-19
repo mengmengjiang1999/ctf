@@ -1,0 +1,176 @@
+  
+
+蜜罐（PC终端版）：
+
+从防守方的视角，利用欺骗伪装技术，实现主动对抗，及时诱捕、发现、处置、溯源，甚至反制攻击者。
+
+  
+
+## 蜜罐作用
+
+一般是直接放入恶意程序，点击运行的，所以PC蜜罐需要起到的作用：
+
+1\. 查看攻击者的操作行为，比如是否上传一些扫描工具、漏洞利用工具，进行攻击者画像。
+
+2\. 获取攻击者的基础攻击设施，例如域名、远控IP，再通过现有的能力来排查是否有其他主机被入侵。
+
+3\. 尝试诱导攻击者下载运行安装了后门的恶意程序，进行最直接的钓鱼反制。
+
+4\. 诱导攻击者对服务器蜜罐进行攻击。
+
+5\. 蜜罐本身需要有足够的安全性，不至于成为突破口。
+
+## 初步设想
+
+一般来说，红队进行钓鱼，获取办公网节点后，一般会做哪些动作？
+
+1\. 后渗透信息收集，获取PC上的敏感信息，例如：
+
+  * IT资产信息
+  * 通讯录（邮箱）
+  * 凭据信息（代码、浏览器、WiFi以及其他应用Navicat、SSH、RDP等）
+  * 历史命令
+  * 路由信息、网络拓扑图、域信息
+
+2\. 以此PC作为跳板，进行横向移动。
+
+  * 内网代理、端口转发
+  * 维持权限、植入后门
+  * 域渗透、提权等
+
+既然是为了进行反制，那么就可以投其所好，可以准备一些伪造的东西。
+
+以开发中招为例：
+
+  * 浏览记录：伪造一份浏览记录。
+  * 聊天工具：微信、QQ，可以买个没用的测试号。
+  * 运维工具：Navicat、Xshell，里面放置一些假的连接记录。
+  * 办公软件：云盘、Office、PDF、谷歌浏览器、IDEA
+
+当然，可以放一些装了后门的安装包（VPN、安装包）作为诱饵使用，诱骗攻击者进行点击，便于反制。
+
+比如，装了后门的可执行程序或者安装包 （像VPN这些还可以附上安装说明文档显得更真实）：
+
+  * VPN客户端.msi，后门程序本身做好免杀，拿破轮胎等工具进行dll注入，使用NSIS打包成setup.exe。 **  
+**
+
+  * 批量运维工具.exe，打包一个恶意的程序。
+  * 0day漏洞检查工具.exe，同上
+  * 密码管理器.exe，或使用 MSI wrapper打包成msi程序。
+  * 堡垒机安装包.msi，同上。
+
+或者再来点：
+
+  * 某某领导贪污证据.zip（内含 财务流水记录.xlsx.一堆空格.exe）
+  * IT运维表.rar，内容同上
+  * HW培训.rar，有office 0day/1day 的话，可以用一些。
+  * 某某系统代码一套，放置后门。 如果攻击者下载过去本地运行调试的话，就有机会植入。
+  * 还有一些虚假的SSH、RDP、FTP、WEB账户密码，诱骗攻击者，还可以和WEB蜜罐进行联动。
+
+当然除了这些，我们还需要得知攻击者实际拿到了这台服务器权限，会做什么动作？
+
+这里采用了开源的HIDS，wazuh + sysmon，进行基本的行为监测。
+
+  
+
+## 实际搭建
+
+准备：
+
+  1. 一台远控服务器（ 域前置 + nginx + cs + 机器人上线提醒）
+  2. 一台Ubuntu 虚拟机，主要安装wazuh， 来监控Win虚拟机行为。
+  3. 一台Win虚拟机，主要做蜜罐使用，安装sysmon + wazuh agent。 
+
+安装包：
+
+  * sysmon 
+  * wazuh agent 
+  * wazuh server 
+
+具体安装步骤就不写了，这里就列几点实际部署中遇到的注意点：
+
+1\. 虚拟机直接显示宿主机信息
+
+为了尽可能的不让攻击者察觉到这是一个虚拟机，因此这里简单的做了下主机信息的修改：
+
+在*.vmx文件中添加一行配置SMBIOS.reflectHost = "TRUE"，这样主机信息会显示的是物理机的信息。
+
+2\. 修改虚拟机网段，可以改成10.x.x.x , 同时关闭共享服务。
+
+3\. sysmon 安装失败时，如出现”error getting the evt dll (wevtapi.dll)“
+错误，考虑是否缺少安装系统补丁导致。
+
+4\. wazuh 在使用docker部署时，最好先修改密码，再进行部署，避免后面修改kibana密码时比较麻烦。
+
+5\. wazuh + sysmon联动， 参考 https://www.jianshu.com/p/9e07f638dbd9
+，不过需要注意的是，wazuh每个版本的匹配规则都有点不一样，如4.1版本和参考文章内的写法也不一样，如下，除此之外其他和参考文章一致。
+
+<group name="sysmon,MITRE,">
+
+<rule id="355001" level="12">
+
+<if_group>sysmon_event1</if_group>
+
+<field name="win.eventdata.image">\\.+</field>
+
+<description>Sysmon - Event 1: Process creation
+$(win.eventdata.image)</description>
+
+</rule>
+
+<rule id="355002" level="11">
+
+<if_group>sysmon_event3</if_group>
+
+<field name="win.eventdata.image">\\.+</field>
+
+<description>Sysmon - Event 3: Network connection
+$(win.eventdata.image)</description>
+
+</rule>
+
+</group>  
+  
+---  
+  
+6\. 部署时如果Ubuntu服务端启用ufw做端口访问限制，由于ufw和docker机制的问题， 则需要修改ufw默认配置
+
+7\. 蜜罐不要联入公司网络，这样即使被逃逸也没事。
+
+## 实现截图
+
+蜜罐搭建的截图：
+
+![](https://image.3001.net/images/20210414/1618387246_6076a12e1a75382763fc4.png!small)HIDS告警信息截图：
+
+![](https://image.3001.net/images/20210414/1618387285_6076a1552def04cc33dba.png!small)![](https://image.3001.net/images/20210414/1618387306_6076a16a39b7ca01485d9.png!small)
+
+攻击者如果中招， 则Cobalt Strike 会上线，相关截图：
+
+![](https://image.3001.net/images/20210414/1618387332_6076a1848f5d502b20d73.png!small)
+
+## 最后
+
+剩下的工作就是等红队进行邮件附件钓鱼，我们丢进去执行就行了，然后：
+
+  * 看HIDS， 观察红队行为，准备溯源
+  * 通过现有能力以及红队IP、域名、附件HASH等IOC信息，是否内网是否有其他机器中招。
+  * 等着CS机器人上线提醒
+
+  
+
+## 参考文章
+
+  
+1\. https://www.jianshu.com/p/9e07f638dbd9
+
+2\. https://blog.csdn.net/weixin_30271335/article/details/97185916
+
+3\. https://blog.csdn.net/ElsonHY/article/details/113098588
+
+4\. https://www.freebuf.com/sectool/122779.html
+
+5\. https://documentation.wazuh.com/current/learning-wazuh/replace-stock-rule.html
+
+6\. https://documentation.wazuh.com/current/installation-guide/wazuh-agent/wazuh_agent_package_windows.html
+

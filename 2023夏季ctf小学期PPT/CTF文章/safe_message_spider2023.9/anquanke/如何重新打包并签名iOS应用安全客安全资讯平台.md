@@ -1,0 +1,1057 @@
+# 如何重新打包并签名iOS应用
+
+阅读量 **341534**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-07-27 12:00:26
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：mwrinfosecurity.com
+
+原文地址：<https://labs.mwrinfosecurity.com/blog/repacking-and-resigning-ios-applications/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01ea57bee061f1b02a.jpg)
+
+## 一、简介
+
+随着iOS新版本的不断更迭，想顺利越狱已变得越来越难，重新打包、签名iOS应用并在未越狱的iOS设备实现侧加载（sideload）一直都是一个热门话题，近年来引起了许多安全研究人员极大的关注。由于iOS内核中强制部署了许多代码签名机制，因此在非越狱设备上侧加载应用会受到各种限制，这样就可以避免恶意攻击者在不知情用户的设备上传播并运行不受信的代码。将这种强制代码签名机制与Apple在AppStore上的应用审核流程结合起来后，就能大大减少恶意应用给iOS用户的风险。
+
+采用这些措施后，虽然攻击者的确更难攻击AppStore的用户，但也让安全研究人员更加难以独立评估iOS应用的安全性。出于各种需求，安全研究人员也需要侧加载iOS应用，其中最常见的两种需求是：
+
+1、应用开发者可能部署了多种二进制防护机制，防止针对应用程序的逆向分析，研究人员可能想在不绕过这种防护机制的前提下对应用进行分析；
+
+2、某些版本的iOS并没有公开的越狱方法。
+
+本文的目的是帮助安全分析人员分析重新打包及签名iOS应用上可能面临的各种挑战，顺便给出了解决这些问题的一些建议。
+
+## 二、已有成果
+
+关于如何在未越狱设备上重新打包并签名应用，之前已经有较好的一些[研究成果](http://www.delaat.net/rp/2016-2017/p50/report.pdf)及[文章](https://github.com/OWASP/owasp-mstg/blob/master/Document/0x06c-Reverse-Engineering-and-Tampering.md#dynamic-analysis-on-non-jailbroken-devices)。然而，这些研究成果要么缺乏足够的技术细节，要么只给出了如何重新打包并签名iOS应用的简单案例。
+
+这也是本文最初的创作动力，本文的目标是解决各种版本的非越狱设备上的应用重新打包及签名问题。更具体一些，本文主要针对的是如下场景的重新打包及重新签名问题：
+
+1、从AppStore上下载的应用；
+
+2、包含Framework以及（或者）dylib的应用；
+
+3、使用[App Extensions](https://developer.apple.com/app-extensions/)以及[Advanced
+App Capabilities](https://developer.apple.com/support/app-capabilities/)的应用；
+
+4、封装了WatchKit应用的应用。
+
+## 三、主要思路
+
+iOS应用的重新打包过程基本上可以分为以下6个步骤：
+
+1、解密应用IPA文件中捆绑的MachO二进制数据；
+
+2、使用自定义的代码或者库来patch应用程序；
+
+3、生成适用于目标iOS设备的Provisioning Profile文件（配置文件）；
+
+4、更新应用的元数据以匹配Provisioning Profile；
+
+5、重新签名应用的MachO二进制数据；
+
+6、归档文件并在目标iOS设备上侧加载。
+
+本文也会采用这些步骤，向大家演示如何重新打包并签名示例iOS应用。
+
+## 四、准备工作
+
+在开始操作之前，研究人员首先需要准备好合适工具以及环境，包括一个已越狱的iOS设备（用来解密AppStore上的应用）以及一个未越狱的iOS设备（用来侧加载重新打包后的应用）。
+
+在本文中，我们使用的是利用Saigon beta2越狱的iPod Touch 6（搭载iOS 10系统）以及未越狱的iPhone 6s（搭载iOS
+11系统）。需要注意的是，这两款设备均采用64位架构。
+
+其他环境包括：
+
+[MacOS High Sierra](https://www.apple.com/uk/macos/high-sierra/)：
+
+在MacOS上执行重新打包iOS应用所需的各种操作，其中包括Xcode、otool以及codesign。在本文撰写时，作者没有专门去寻找能够执行iOS应用重新打包任务的FOSS（自由和开源软件
+）替代方案，如果未来有可用的FOSS工具，本文会及时跟进并更新。
+
+[Xcode 9+](https://developer.apple.com/xcode/)
+
+重新打包过程中需要使用带有正确entitlement（权限）的Provisioning Profile，使用该工具可以生成匹配的Provisioning
+Profile。
+
+[optool](https://github.com/alexzielenski/optool)
+
+这款开源工具可以patch MachO二进制文件，在本文中，我们使用这款工具将加载命令添加至MachO二进制文件中。
+
+[FridaGadget](https://www.frida.re/docs/gadget/)
+
+为了演示如何使用自定义代码patch应用程序，本文将Frida服务器捆绑为共享库加以使用（也就是FridaGadget）。当patch后的应用启动时就会加载dylib，启动Frida服务器。随后我们可以连接到这个服务器，实时指挥应用程序。
+
+[idevice*系列工具](https://github.com/libimobiledevice)
+
+为了在目标设备上安装重新打包的应用，我们可以选择使用idevice*系列工具。本文使用了`ideviceinstaller`、`ideviceimagemounter`以及`idevicedebug`来安装并运行重新打包的应用。如果想运行使用`debugserver`的应用程序，只需要用到`ideviceimagemounter`和`idevicedebug`即可。
+
+## 五、重新打包应用
+
+###  重新打包AppStore上的应用
+
+应用名 | Simple Notepad  
+---|---  
+URL | <https://itunes.apple.com/us/app/simple-notepad-best-notebook-text-editor-pad-to-write/id1064117835?mt=8>  
+版本号 | 1.1  
+IPA SHA1 | 0e7f8f53618372c6e3a667ead6f37d7afc5ab057  
+  
+我们可以使用iTunes
+12.6从AppStore上下载iOS应用的IPA文件。需要注意的是，较新版的iTunes不支持从AppStore上下载应用，我们可以通过[这个链接](https://support.apple.com/en-gb/HT208079)下载iTunes 12.6版。我们选择了Simple Note这款iOS应用，比较简单，有助于读者熟悉前面提到过的6个步骤。
+
+使用`unzip`（或类似工具）解开Simple Notepad IPA后，我们可以看到里面包含名为“Plain
+Notes”的一个MachO可执行文件。Simple Notepad应用包中的MachO布局如下所示：
+
+    
+    
+    Payload/
+        Plain Notes.app/
+            Plain Notes
+    
+
+**1、解密MachO文件**
+
+已经有一些自动化工具（如[Clutch](https://github.com/KJCracks/Clutch)、[dumpdecrypted](https://github.com/stefanesser/dumpdecrypted)或者<a
+href=”https://codeshare.frida.re/[@lichao890427](https://github.com/lichao890427
+"@lichao890427")/dump-ios/”>dump-ios）可以解密AppStore上的程序。然而，如果这些程序部署了二进制防护机制（比如调试器检测功能以及（或者）hook检测功能），那么有些自动化解决方案中就难以正常工作。这也是为什么有时候我们需要手动来解密这些二进制文件。大家可以访问[此链接](https://kov4l3nko.github.io/blog/2016-03-01-decrypting-apps-from-appstore/)学习关于解密AppStore程序的详细说明。
+
+解密Simple Notepad的第一步就是设置`debugserver`，以便在应用程序启动时拦截并附加（attach）到程序。
+
+    
+    
+    amarekano-ipod:~/amarekano root# ./debugserver *:6666 -waitfor "Plain Notes" 
+    debugserver-@(#)PROGRAM:debugserver  PROJECT:debugserver-360.0.26.1
+     for arm64.
+    Waiting to attach to process Plain Notes...
+    Listening to port 6666 for a connection from *...
+    
+
+`debugserver`设置完成并成功拦截到Simple
+Notepad的启动动作后，我们可以使用`lldb`连接到`debugserver`。为了在内存中定位解密后的镜像，我们需要知道镜像的大小以及镜像的偏移信息。我们可以使用`otool`分析应用程序的加载命令，收集关于偏移量的信息：
+
+    
+    
+    Amars-Mac:Plain Notes.app amarekano$ otool -l Plain Notes | grep -A4 LC_ENCRYPTION_INFO_64
+              cmd LC_ENCRYPTION_INFO_64
+          cmdsize 24
+         cryptoff 16384
+        cryptsize 1146880
+          cryptid 1
+    
+
+由于iOS系统强制启用了ASLR，因此我们需要在内存中找到镜像的基址，然后根据该地址计算偏移量。一旦`lldb`连接到`debugserver`并attach到进程上，我们就可以完成这个任务：
+
+    
+    
+    (lldb) image list "Plain Notes"
+    [  0] BA5E5051-D100-3B60-B5C8-181CAC0BB3EE 0x000000010004c000 /var/containers/Bundle/Application/2FD88AFF-6841-44D2-878D-8BA1698F3343/Plain Notes.app/Plain Notes (0x000000010004c000)
+    
+
+`0x000000010004c000`这个值即为程序镜像在内存中的基址。根据这个值，现在我们可以导出解密后的镜像。所使用的`lldb`命令如下：
+
+    
+    
+    (lldb) memory read --force --outfile ./decrypted.bin --binary --count 1146880 0x000000010004c000+16384
+    1146880 bytes written to './decrypted.bin',
+    
+
+`count`参数为`cryptsize`的值，解密后数据所对应的偏移量为`基地址 +
+cryptoffset`。一旦我们导出解密后的内存区域，接下来就需要将其拼接成原始的AppStore程序。通过iTunes下载的iOS应用通常包含各种架构的FAT二进制文件。为了正确patch二进制文件，我们首先需要使用`otool`来定位arm64架构的偏移量：
+
+    
+    
+    Amars-Mac:Plain Notes.app amarekano$ otool -fh Plain Notes | grep -A5 architecture 1 
+    architecture 1
+        cputype 16777228
+        cpusubtype 0
+        capabilities 0x0
+        offset 1441792
+        size 1517824
+    
+
+利用加密信息中加密区域的偏移量值，配合FAT文件中arm64架构的偏移量，我们可以使用`dd`将解密后的镜像拼接成原始的二进制文件。如下所示，其中`seek`值为这两个偏移量之和（即FAT文件中的`cryptoff
++ offset`值）：
+
+    
+    
+    Amars-Mac:Plain Notes.app amarekano$ dd seek=1458176 bs=1 conv=notrunc if=./decrypted.bin of=Plain Notes 
+    1146880+0 records in
+    1146880+0 records out
+    1146880 bytes transferred in 4.978344 secs (230374 bytes/sec)
+    
+
+成功patch后，我们需要将`cryptid`值设置为0.我们可以将patch后的文件载入[MachO-View](https://sourceforge.net/projects/machoview/)，选择正确的架构以及`Load`命令，然后如下图所示更新对应的值：
+
+![](https://p4.ssl.qhimg.com/t01d4a9deaa99cf39f9.png)
+
+更新完成后，保存对二进制镜像的修改，将修改后的文件复制到已解开的IPA文件中。
+
+**2、Patch应用程序**
+
+将`FridaGadget.dylib`以及`FridaGadget.config`拷贝到IPA文件的`Payload/Plain
+Notes.app/`目录中，整体布局如下所示：
+
+    
+    
+    Payload/
+        Plain Notes/
+            Plain Notes
+            FridaGadget.dylib
+            FridaGadget.config
+    
+
+`FridaGadget.config`文件的具体内容如下：
+
+    
+    
+    Amars-Mac:Plain Notes.app amarekano$ cat FridaGadget.config 
+    {
+      "interaction": {
+        "type": "listen",
+        "address": "0.0.0.0",
+        "port": 8080,
+        "on_load": "wait"
+      }
+    
+
+其中`address`以及`port`的值可以配置为目标设备上能够访问的任意接口以及任意端口，这里设为Frida服务器所监听的接口及端口信息。
+
+使用`optool`向应用文件中添加`load`命令。这条`load`命令可以指示应用程序将`FridaGadget.dylib`加载到应用的进程空间中。
+
+    
+    
+    Amars-Mac:sandbox amarekano$ optool install -c load -p "@executable_path/FridaGadget.dylib" -t Payload/Plain Notes.app/Plain Notes 
+    Found FAT Header
+    Found thin header...
+    Found thin header...
+    Inserting a LC_LOAD_DYLIB command for architecture: arm
+    Successfully inserted a LC_LOAD_DYLIB command for arm
+    Inserting a LC_LOAD_DYLIB command for architecture: arm64
+    Successfully inserted a LC_LOAD_DYLIB command for arm64
+    Writing executable to Payload/Plain Notes.app/Plain Notes...
+    
+
+**3、生成Provisioning Profile**
+
+Patch完应用文件使其能加载自定义的dylib（如`FridaGadget`）后，接下来就可以开始对应用文件进行签名，使其能够在未越狱的目标设备上侧加载。第一步操作就是为目标设备生成匹配的Provisioning
+Profile。我们可以创建一个与非越狱设备匹配的空的Xcode项目。
+
+![](https://p4.ssl.qhimg.com/t0190db8e33074e4d04.png)
+
+![](https://p1.ssl.qhimg.com/t01230aaff9866088e5.png)
+
+在编译该项目之前，我们通常需要往Xcode中添加一个AppleID，然后生成并管理应用程序的签名证书。AppleID可以是免费开发者账户所对应的AppleID，也可以是Apple开发者计划的一部分。在Xcode上，我们可以访问菜单中的“Preferences
+> Accounts”路径来设置AppleID，所使用的签名证书如下图所示：
+
+![](https://p1.ssl.qhimg.com/t0144b6a74535d04de5.png)
+
+注意：在编译空项目时，如果不小心把项目部署到设备上，那么在侧加载重新打包的应用时请务必删除之前的项目。
+
+下一步就是从空项目中提取Provisioning Profile，用在待打包的目标应用上。Provisioning Profile的具体路径如下：
+
+    
+    
+    ~/Library/Developer/Xcode/DerivedData/repackdemo-<a random string>/Build/Products/Debug-iphoneos/repackdemo.app/embedded.mobileprovision
+    
+
+将该文件拷贝到已解开应用的`Payload/Plain Notes.app`目录中，目录结构如下所示：
+
+    
+    
+    Payload/
+        Plain Notes/
+            Plain Notes
+            FridaGadget.dylib
+            FridaGadget.config
+            embedded.mobileprovision
+    
+
+使用如下命令从生成的Provisioning Profile中提取entitlement：
+
+    
+    
+    Amars-Mac:repackdemo.app amarekano$ security cms -D -i embedded.mobileprovision > profile.plist
+    Amars-Mac:repackdemo.app amarekano$ /usr/libexec/PlistBuddy -x -c 'Print :Entitlements' profile.plist > entitlements.plist
+    Amars-Mac:repackdemo.app amarekano$ cat entitlements.plist 
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+        <key>application-identifier</key>
+        <string>6M9TEGX89M.com.example.amarekano.repackdemo</string>
+        <key>com.apple.developer.team-identifier</key>
+        <string>6M9TEGX89M</string>
+        <key>get-task-allow</key>
+        <true/>
+        <key>keychain-access-groups</key>
+        <array>
+            <string>6M9TEGX89M.*</string>
+        </array>
+    </dict>
+    </plist>
+    
+
+`entitlements.plist`文件中包含应用程序在非越狱iOS环境上所需的entitlement。在应用文件的重新签名过程中，这些`entitlements.plist`文件将派上用场。
+
+**4、更新应用元数据**
+
+接下来需要将Simple Notepad应用的Bundle Identifier更新为之前生成的Provisioning
+Profile的bundle标识符。在本例中，Provisioning
+Profile中的bundle标识符为`com.example.amarekano.repackdemo`。使用如下命令更新`Payload/Plain
+Notes.app`目录中的`Info.plist`文件：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.example.amarekano.repackdemo" Payload/Plain Notes.app/Info.plist
+    
+
+**5、重新签名MachO文件**
+
+为了在MacOS系统上生成一系列有效的代码签名标识，我们可以使用如下命令：
+
+    
+    
+    Amars-Mac:~ amarekano$ security find-identity -p codesigning -v
+      1) 49808436B649808449808436B6651498084336B6 "iPhone Developer: m******"
+      2) F4F6830FB32AAF4F6830E2C5F4F68309F4FF6830 "Mac Developer: m*******"
+      3) 41A1537676F3F41A153767FCC41A153767CC3767 "iPhone Developer: A******"
+      4) 1E309C6B45C0E309C69E10E309C670E309C69C60 "iPhone Developer: a*********"
+         4 valid identities found
+    
+
+可以使用用来生成Provisioning Profile的签名标识来重新签名各种MachO文件。首先先签名`FridaGadget.dylib`：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m***************" Payload/Plain Notes.app/FridaGadget.dylib 
+    Payload/Plain Notes.app/FridaGadget.dylib: replacing existing signature
+    
+
+接下来签名应用文件（已带有前面生成的entitlement）：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m*****************" --entitlements entitlements.plist  Payload/Plain Notes.app/Plain Notes 
+    Payload/Plain Notes.app/Plain Notes: replacing existing signature
+    
+
+**6、打包并安装**
+
+应用文件重新签名后，我们可以使用`zip`工具将`Payload`目录重新打包为IPA文件：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ zip -qr Simple_Notes_resigned.ipa Payload/
+    
+
+然后使用`ideviceinstaller`将重新打包的IPA安装到目标设备上：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ ideviceinstaller -i Simple_Notes_resigned.ipa 
+    WARNING: could not locate iTunesMetadata.plist in archive!
+    Copying 'Simple_Notes_resigned.ipa' to device... DONE.
+    Installing 'com.example.amarekano.repackdemo'
+    Install: CreatingStagingDirectory (5%)
+    Install: ExtractingPackage (15%)
+    Install: InspectingPackage (20%)
+    Install: TakingInstallLock (20%)
+    Install: PreflightingApplication (30%)
+    Install: InstallingEmbeddedProfile (30%)
+    Install: VerifyingApplication (40%)
+    Install: CreatingContainer (50%)
+    Install: InstallingApplication (60%)
+    Install: PostflightingApplication (70%)
+    Install: SandboxingApplication (80%)
+    Install: GeneratingApplicationMap (90%)
+    Complete
+    
+
+**7、运行重新打包后的应用**
+
+我们需要挂在目标设备上与iOS版本对应的`DeveloperDiskImage`，以便使用`debugserver`启动目标应用。不同iOS版本的Developer
+Disk镜像位于MacOS上的如下目录：
+
+    
+    
+    /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/DeviceSupport
+    
+
+有两个文件比较关键，分别为Disk镜像以及对应的签名：
+
+  * DeveloperDiskImage.dmg
+  * DeveloperDiskImage.dmg.signature
+
+使用`ideviceimagemounter`将磁盘镜像挂载到目标设备上，具体命令如下：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ ideviceimagemounter DeveloperDiskImage.dmg DeveloperDiskImage.dmg.signature 
+    Uploading DeveloperDiskImage.dmg
+    done.
+    Mounting...
+    Done.
+    Status: Complete
+    
+
+成功挂载后，使用`idevicedebug`以debug模式启动应用程序：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ idevicedebug -d run com.example.amarekano.repackdemo
+    
+
+之所以需要以debug模式运行应用程序，原因在于这样应用的主线程就可以在启动时处于挂起（suspended）状态，使Frida服务器能够有充足的时间启动并在设定的端口上监听。
+
+在debug模式下运行后，我们可以使用如下命令连接Frida服务器，让应用线程恢复运行：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ frida -H 192.168.1.196:8080 -n Gadget
+         ____
+        / _  |   Frida 10.7.7 - A world-class dynamic instrumentation toolkit
+       | (_| |
+        > _  |   Commands:
+       /_/ |_|       help      -> Displays the help system
+       . . . .       object?   -> Display information about 'object'
+       . . . .       exit/quit -> Exit
+       . . . .
+       . . . .   More info at http://www.frida.re/docs/home/
+    
+    [Remote::Gadget]-> %resume
+    [Remote::Gadget]-> String(ObjC.classes.NSBundle.mainBundle().objectForInfoDictionaryKey_('CFBundleName'))
+    "Plain Notes"
+    [Remote::Gadget]-> String(ObjC.classes.NSBundle.mainBundle().objectForInfoDictionaryKey_('CFBundleIdentifier'))
+    "com.example.amarekano.repackdemo"
+    [Remote::Gadget]->
+    
+
+这里目标iOS设备的IP地址为`192.168.1.196`，Frida服务器在`8080`端口上监听。连接上Frida服务器后，我们可以使用Frida指挥应用的后续操作。
+
+###  重新打包使用Framework的应用
+
+应用名 | Adobe Acrobat  
+---|---  
+URL | <https://itunes.apple.com/app/adobe-reader/id469337564?mt=8>  
+版本号 | 18.03.31  
+IPA SHA1 | 1195a40f3f140b3c0ed57ae88cfbc017790ddba6  
+  
+当重新打包使用framwork的应用时，我们还需要解密并patch位于应用IPA文件中的framework文件。这里我们以Adobe
+Acrobat的iOS应用作为演示案例。
+
+首先解压缩Acrobat IPA文件，可知MachO文件的布局如下：
+
+    
+    
+    Payload/
+        Adobe Acrobat.app/
+            Frameworks/
+                AdobeCreativeSDKCore.framework/
+                    AdobeCreativeSDKCore
+                AdobeCreativeSDKUtility.framework/
+                    AdobeCreativeSDKUtility
+                AdobeCreativeSDKGoogleLogin.framework/
+                    AdobeCreativeSDKGoogleLogin
+            Adobe Acrobat
+    
+
+应用所使用的Framework位于`Frameworks/`目录中。某些应用还会包含一些dylib，同样位于`Framework/`目录中。我们所使用的这款Adobe
+Acrobat应用并不包含任何dylib。
+
+**1、解密MachO文件**
+
+为了解密包含framework的应用，我们需要在重新打包之前解密主应用文件以及各个framework。我们可以手动attach调试器，从内存中导出解密后的镜像。或者我们可以选择自动化处理方案，比如使用`Clutch2`来生成解密后的文件。应用程序的部分加密信息以及使用`lldb`从内存中导出的加密应用数据如下所示：
+
+    
+    
+    Amars-Mac:Adobe Acrobat.app amarekano$ otool -l Adobe Acrobat | grep -A4 LC_ENCRYPTION_INFO_64
+              cmd LC_ENCRYPTION_INFO_64
+          cmdsize 24
+         cryptoff 16384
+        cryptsize 16465920
+          cryptid 1
+    
+    ....
+    (lldb) image list "Adobe Acrobat"
+    [  0] 397432D5-9186-37B8-9BA6-181F633D9C1F 0x000000010009c000 /var/containers/Bundle/Application/15E6A273-A549-4317-99D3-34B8A6623B5E/Adobe Acrobat.app/Adobe Acrobat (0x000000010009c000)
+    (lldb) memory read --force --outfile ./decbins/acrobat.bin --binary --count 16465920 0x000000010009c000+16384
+    16465920 bytes written to './decbins/acrobat.bin'
+    
+
+同样，我们也需要解密Adobe Acrobat应用中绑定的3个framework。`AdobeCreativeSDKCore`
+framework文件的部分加密信息以及使用`lldb`从内存中导出的加密framework数据如下所示：
+
+    
+    
+    Amars-Mac:AdobeCreativeSDKCore.framework amarekano$ otool -l AdobeCreativeSDKCore | grep -A4 LC_ENCRYPTION_INFO_64
+              cmd LC_ENCRYPTION_INFO_64
+          cmdsize 24
+         cryptoff 16384
+        cryptsize 770048
+          cryptid 1
+    
+    ....
+    (lldb) image list AdobeCreativeSDKCore
+    [  0] 3FA3C800-9B6A-3117-A193-36C775B81A43 0x00000001015ac000 /private/var/containers/Bundle/Application/15E6A273-A549-4317-99D3-34B8A6623B5E/Adobe Acrobat.app/Frameworks/AdobeCreativeSDKCore.framework/AdobeCreativeSDKCore (0x00000001015ac000)
+    (lldb) memory read --force --outfile ./decbins/AdobeCreativeSDKCore.bin --binary --count 770048 0x00000001015ac000+16384
+    770048 bytes written to './decbins/AdobeCreativeSDKCore.bin'
+    
+
+解密应用文件以及framework文件后，将解密后的这些文件拼接成原始二进制文件，然后使用`MachO
+View`将每个二进制文件的`cryptid`标志设为0。
+
+**2、Patch应用程序**
+
+将`FridaGadget.dylib`以及`FridaGadget.config`拷贝到IPA文件的`Payload/Adobe
+Acrobat.app/`目录中，拷贝完毕后，使用`optool`向应用文件中添加一条加载命令，如下所示：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ optool install -c load -p "@executable_path/FridaGadget.dylib" -t Payload/Adobe Acrobat.app/Adobe Acrobat 
+    Found FAT Header
+    Found thin header...
+    Found thin header...
+    Inserting a LC_LOAD_DYLIB command for architecture: arm
+    Successfully inserted a LC_LOAD_DYLIB command for arm
+    Inserting a LC_LOAD_DYLIB command for architecture: arm64
+    Successfully inserted a LC_LOAD_DYLIB command for arm64
+    Writing executable to Payload/Adobe Acrobat.app/Adobe Acrobat...
+    
+
+**3、更新应用元数据**
+
+更新应用的`Info.plist`中的bundle标识符，使其匹配所生成的Provisioning Profile。生成Provisioning
+Profiles的方法前面已经介绍过：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.example.amarekano.repackdemo" Payload/Adobe Acrobat.app/Info.plist
+    
+
+将匹配目标设备的Provisioning Profile拷贝到`Payload/Adobe Acrobat.app/`目录中。
+
+**4、重新签名MachO文件**
+
+先删除已解压的`Adobe
+Acrobat.app`应用的`_CodeSignature`目录以及每个framework目录中对应的目录，移除已有的代码签名，目录布局如下所示：
+
+    
+    
+    Payload/
+        Adobe Acrobat.app/
+            _CodeSignature
+            Frameworks/
+                AdobeCreativeSDKCore.framework/
+                    _CodeSignature
+                AdobeCreativeSDKUtility.framework/
+                    _CodeSignature
+                AdobeCreativeSDKGoogleLogin.framework/
+                    _CodeSignature
+    
+
+删除这些目录后，准备开始签名程序文件。首先我们先签名`FridaGadget.dylib`：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m***************" Payload/Adobe Acrobat.app/FridaGadget.dylib 
+    Payload/Adobe Acrobat.app/FridaGadget.dylib: replacing existing signature
+    
+
+接下来签名Framework文件：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m***************" Payload/Adobe Acrobat.app/Frameworks/AdobeCreativeSDKCore.framework/AdobeCreativeSDKCore
+    Payload/Adobe Acrobat.app/Frameworks/AdobeCreativeSDKCore.framework/AdobeCreativeSDKCore: replacing existing signature
+    
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m***************" Payload/Adobe Acrobat.app/Frameworks/AdobeCreativeSDKGoogleLogin.framework/AdobeCreativeSDKGoogleLogin
+    Payload/Adobe Acrobat.app/Frameworks/AdobeCreativeSDKGoogleLogin.framework/AdobeCreativeSDKGoogleLogin: replacing existing signature
+    
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m***************" Payload/Adobe Acrobat.app/Frameworks/AdobeCreativeSDKUtility.framework/AdobeCreativeSDKUtility 
+    Payload/Adobe Acrobat.app/Frameworks/AdobeCreativeSDKUtility.framework/AdobeCreativeSDKUtility: replacing existing signature
+    
+
+最后签名带有正确entitlement的应用文件：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m***************" --entitlements entitlements.plist Payload/Adobe Acrobat.app/Adobe Acrobat
+    Adobe Acrobat: replacing existing signature
+    
+
+从Provisioning Profile中生成entitlement的方法前文已介绍过。
+
+**5、打包并安装**
+
+重新签名所有的MachO文件后，只需要将其打包成IPA文件，然后在目标设备上侧加载即可：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ zip -qr Adobe_resigned.ipa Payload/
+    
+
+为了在目标设备上安装应用，我们可以使用`ideviceinstaller`，具体命令如下：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ ideviceinstaller -i Adobe_resigned.ipa 
+    WARNING: could not locate iTunesMetadata.plist in archive!
+    Copying 'Adobe_resigned.ipa' to device... DONE.
+    Installing 'com.example.amarekano.repackdemo'
+    Install: CreatingStagingDirectory (5%)
+    ...<truncated for brevity>...
+    Install: GeneratingApplicationMap (90%)
+    Install: Complete
+    
+
+**6、运行重新打包后的应用**
+
+使用`idevicedebug`，以debug模式启动应用：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ idevicedebug -d run com.example.amarekano.repackdemo
+    
+
+一旦应用以debug模式运行，连接至Frida服务器：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ frida -H 192.168.1.116:8080 -n Gadget
+         ____
+        / _  |   Frida 10.7.7 - A world-class dynamic instrumentation toolkit
+       | (_| |
+        > _  |   Commands:
+       /_/ |_|       help      -> Displays the help system
+       . . . .       object?   -> Display information about 'object'
+       . . . .       exit/quit -> Exit
+       . . . .
+       . . . .   More info at http://www.frida.re/docs/home/
+    
+    [Remote::Gadget]-> %resume
+    [Remote::Gadget]-> String(ObjC.classes.NSBundle.mainBundle().objectForInfoDictionaryKey_('CFBundleName'))
+    "Adobe Acrobat"
+    [Remote::Gadget]-> String(ObjC.classes.NSBundle.mainBundle().objectForInfoDictionaryKey_('CFBundleIdentifier'))
+    "com.example.amarekano.repackdemo"
+    [Remote::Gadget]->
+    
+
+###  重新打包使用App Extensions的应用
+
+应用名 | LinkedIn  
+---|---  
+URL | <https://itunes.apple.com/gb/app/linkedin/id288429040?mt=8>  
+版本号 | 2018.04.05  
+IPA SHA1 | 275ca4c75a424002d11a876fc0176a04b6f74f19  
+  
+某些iOS应用会使用App Extensions（应用扩展）来利用iOS上提供的进程间通信（IPC）功能。比如Share
+Extension可以支持跨应用的内容共享。这些扩展通常会以独立可执行文件的形式嵌入到IPA中。举个例子，LinkedIn应用中MachO文件的部分布局如下所示：
+
+    
+    
+    Payload/
+        LinkedIn.app/
+            Frameworks/
+                lmdb.framework/
+                    lmdb
+                ...
+                libswiftAVFoundation.dylib
+                ...
+    
+            Plugins/
+                IntentsExtension.appex/
+                    IntentsExtension
+                IntentsUIExtension.appex/
+                    IntentsUIExtension
+                ...
+    
+            LinkedIn
+    
+
+如上所示，App Extension位于`Plugins/`目录中。每个App Extension都有一个对应的`.appex`后缀名。
+
+**1、解密MachO文件**
+
+当处理带有App Extension的应用时，除了解密应用文件以及framework之外，我们还需要解密App
+Extension的二进制镜像。为了解密App Extension，首先需要设置`debugserver`来拦截并attach到已启动的App
+Extension。比如，可以使用如下命令设置`debugserver`并attach到`IntentsExtension`：
+
+    
+    
+    amarekano-ipod:~/amarekano root# ./debugserver *:6666 -waitfor IntentsExtension &
+    
+
+设置完`debugserver`后，启动App Extension。我们可以通过如下命令手动执行这步操作：
+
+    
+    
+    amarekano-ipod:~/amarekano root# /var/containers/Bundle/Application/AC8C5212-67D0-41AB-A01A-EEAF985AB824/LinkedIn.app/PlugIns/IntentsExtension.appex/IntentsExtension
+    
+
+`debugserver` attach后，使用`lldb`连接并从内存中导出已解密的镜像。
+
+    
+    
+    (lldb) image list IntentsExtension
+    [  0] 2F48A100-110F-33F9-A376-B0475C46037A 0x00000001000f0000 /var/containers/Bundle/Application/AC8C5212-67D0-41AB-A01A-EEAF985AB824/LinkedIn.app/PlugIns/IntentsExtension.appex/IntentsExtension (0x00000001000f0000)
+    (lldb) memory read --force --outfile ./decbins/intentsextension.bin --binary --count 114688 0x00000001000f0000+16384
+    114688 bytes written to './decbins/intentsextension.bin'
+    (lldb) exit
+    
+
+解密完成后，将导出的二进制数据拼接成原始的App Extension文件，像解密其他MachO文件那样将`cryptid`标志设置为0。
+
+**2、Patch应用程序**
+
+与前文介绍的方法一样，patch应用文件以便加载`FridaGadget`。
+
+    
+    
+    Amars-Mac:sandbox amarekano$ optool install -c load -p "@executable_path/FridaGadget.dylib" -t Payload/LinkedIn.app/LinkedIn 
+    Found FAT Header
+    Found thin header...
+    Found thin header...
+    Inserting a LC_LOAD_DYLIB command for architecture: arm
+    Successfully inserted a LC_LOAD_DYLIB command for arm
+    Inserting a LC_LOAD_DYLIB command for architecture: arm64
+    Successfully inserted a LC_LOAD_DYLIB command for arm64
+    Writing executable to Payload/LinkedIn.app/LinkedIn...
+    
+
+**3、生成Provisioning Profile**
+
+通常情况下，使用App Extension的应用基本上都需要[Advanced App
+Capabilities](https://developer.apple.com/support/app-capabilities/)（高级应用功能）。这些功能通常可以帮助应用开发者使用Apple的各种技术，如Siri、Apple
+Pay、iCloud等等。比如，LinkedIn应用使用了iCloud以及Siri功能。我们可以分析应用的entitlement来验证这一点：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ codesign -d --entitlements :- "Payload/LinkedIn.app/"
+    Executable=/Users/amarekano/Desktop/sandbox/Payload/LinkedIn.app/LinkedIn
+    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+        <dict>
+            ... <truncated for brevity> ...
+            <key>application-identifier</key>
+            <string>8AXPVS6C36.com.linkedin.LinkedIn</string>
+    
+            ...<truncated for brevity>...
+            <key>com.apple.developer.icloud-services</key>
+            <array>
+                <string>CloudDocuments</string>
+            </array>
+    
+            <key>com.apple.developer.siri</key>
+            <true/>
+            ... <truncated for brevity>,,,
+        </dict>
+    
+
+只有使用付费开发者账户的iOS开发者才能使用Advanced App
+Capabilities。因此，为了在重新打包的应用中使用这些app功能，我们需要使用付费的开发者账户来生成匹配的Provisioning
+Profile。我们可以创建一个Xcode项目，指定一个付费开发者签名证书，如下图所示：
+
+![](https://p4.ssl.qhimg.com/t01d5ff7c102b4be669.png)
+
+![](https://p5.ssl.qhimg.com/t01db678ac6cc3f0a4e.png)
+
+创建项目后，我们可以在“Capabilities”选项卡中启用应用所需的具体功能。本例中Xcode项目所启用的功能如下图所示：
+
+![](https://p5.ssl.qhimg.com/t01f331577c75329ca7.png)
+
+编译这个Xcode项目，我们就能生成一个有效的Provisioning
+Profile，其中包含重新打包LinkedIn应用所需的entitlement。从生成的Provisioning
+Profile中提取出的这些entitlement如下所示：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ security cms -D -i embedded.mobileprovision > profile.plist
+    Amars-Mac:sandbox amarekano$ /usr/libexec/PlistBuddy -x -c 'Print :Entitlements' profile.plist > entitlements.plist
+    Amars-Mac:sandbox amarekano$ cat entitlements.plist 
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+        <key>application-identifier</key>
+        <string>MS4K289Y4F.com.example.amarekano.advrepackdemo</string>
+        ...<truncated for brevity>...
+    
+        <key>com.apple.developer.icloud-services</key>
+        <string>*</string>
+        <key>com.apple.developer.siri</key>
+        <true/>
+        <key>com.apple.developer.team-identifier</key>
+        <string>MS4K289Y4F</string>
+    
+        ... <truncated for brevity>...
+        <key>get-task-allow</key>
+        <true/>
+        <key>keychain-access-groups</key>
+        <array>
+            <string>MS4K289Y4F.*</string>
+        </array>
+    </dict>
+    </plist>
+    
+
+**4、更新应用元数据**
+
+成功生成Provisioning Profile后，将profile文件添加到应用包中，更新应用以及应用扩展中的各种`Info.plist`文件，如下所示：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.example.amarekano.advrepackdemo" Payload/LinkedIn.app/Info.plist 
+    Amars-Mac:sandbox amarekano$ /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.example.amarekano.advrepackdemo.IntentsExtension" Payload/LinkedIn.app/PlugIns/IntentsExtension.appex/Info.plist 
+    Amars-Mac:sandbox amarekano$ /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.example.amarekano.advrepackdemo.IntentsUIExtension" Payload/LinkedIn.app/PlugIns/IntentsUIExtension.appex/Info.plist 
+    Amars-Mac:sandbox amarekano$ /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.example.amarekano.advrepackdemo.MessagingNotificationContentExtension" Payload/LinkedIn.app/PlugIns/MessagingNotificationContentExtension.appex/Info.plist  
+    Amars-Mac:sandbox amarekano$ /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.example.amarekano.advrepackdemo.NewsModuleExtension" Payload/LinkedIn.app/PlugIns/NewsModuleExtension.appex/Info.plist 
+    Amars-Mac:sandbox amarekano$ /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.example.amarekano.advrepackdemo.ShareExtension" Payload/LinkedIn.app/PlugIns/ShareExtension.appex/Info.plist 
+    Amars-Mac:sandbox amarekano$ /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.example.amarekano.advrepackdemo.WVMPTodayExtension" Payload/LinkedIn.app/PlugIns/WVMPTodayExtension.appex/Info.plist 
+    Amars-Mac:sandbox amarekano$
+    
+
+需要注意的是，我们需要唯一的bundle标识符才能生成可以使用Advanced App Capabilities的Provisioning
+Profile。在这个例子中，所使用的bundle标识符为`com.example.amarekano.advrepackdemo`。
+
+**5、重新签名MachO文件**
+
+重新签名应用文件时，如果应用带有多个可执行文件时，那么文件的签名顺序就非常重要。首先，使用如下命令重新签名App Extension：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m***************" Payload/LinkedIn.app/PlugIns/IntentsExtension.appex/IntentsExtension 
+    Payload/LinkedIn.app/PlugIns/IntentsExtension.appex/IntentsExtension: replacing existing signature
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m***************" Payload/LinkedIn.app/PlugIns/IntentsUIExtension.appex/IntentsUIExtension 
+    Payload/LinkedIn.app/PlugIns/IntentsUIExtension.appex/IntentsUIExtension: replacing existing signature
+    ...
+    
+
+然后签名Framework以及dylib：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m***************" Payload/LinkedIn.app/Frameworks/lmdb.framework/lmdb 
+    Payload/LinkedIn.app/Frameworks/lmdb.framework/lmdb: replacing existing signature
+    ...
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m***************" Payload/LinkedIn.app/Frameworks/libswiftAVFoundation.dylib
+    Payload/LinkedIn.app/Frameworks/libswiftAVFoundation.dylib: replacing existing signature
+    ...
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m***************" Payload/LinkedIn.app/FridaGadget.dylib 
+    Payload/LinkedIn.app/FridaGadget.dylib: replacing existing signature
+    
+
+最后使用前面生成的entitlement重新签名LinkedIn应用程序：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ codesign --force --sign "iPhone Developer: m***************" --entitlements entitlements.plist Payload/LinkedIn.app/LinkedIn 
+    Payload/LinkedIn.app/LinkedIn: replacing existing signature
+    
+
+**6、打包并安装**
+
+重新签名应用后，将`Payload`目录打包成IPA文件，并将重新打包的IPA文件安装到目标设备上：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ zip -qr LinkedIn_resigned.ipa Payload/
+    
+    Amars-Mac:sandbox amarekano$ ideviceinstaller -i LinkedIn_resigned.ipa 
+    WARNING: could not locate iTunesMetadata.plist in archive!
+    Copying 'LinkedIn_resigned.ipa' to device... DONE.
+    Installing 'com.example.amarekano.advrepackdemo'
+    Install: CreatingStagingDirectory (5%)
+    ...<truncated for brevity>...
+    Install: GeneratingApplicationMap (90%)
+    Install: Complete
+    
+
+**7、运行重新打包的应用**
+
+重新打包后的应用成功安装在目标设备上后，使用`idevicedebug`启动该应用并连接到Frida服务器上：
+
+    
+    
+    Amars-Mac:sandbox amarekano$ idevicedebug -d run com.example.amarekano.advrepackdemo &
+    
+    Amars-Mac:sandbox amarekano$ frida -H 192.168.1.91:8080 -n Gadget
+         ____
+        / _  |   Frida 10.7.7 - A world-class dynamic instrumentation toolkit
+       | (_| |
+        > _  |   Commands:
+       /_/ |_|       help      -> Displays the help system
+       . . . .       object?   -> Display information about 'object'
+       . . . .       exit/quit -> Exit
+       . . . .
+       . . . .   More info at http://www.frida.re/docs/home/
+    
+    [Remote::Gadget]-> %resume
+    [Remote::Gadget]-> String(ObjC.classes.NSBundle.mainBundle().objectForInfoDictio
+    naryKey_('CFBundleName'))
+    "LinkedIn"
+    [Remote::Gadget]-> String(ObjC.classes.NSBundle.mainBundle().objectForInfoDictio
+    naryKey_('CFBundleIdentifier'))
+    "com.example.amarekano.advrepackdemo"
+    [Remote::Gadget]->
+    
+
+###  重新打包带有WatchOS版本的应用
+
+应用名 | Tube Map – London Underground  
+---|---  
+URL | <https://itunes.apple.com/gb/app/tube-map-london-underground/id320969612?mt=8>  
+版本号 | 5.6.12  
+IPA SHA1 | 727f80c3f096dc25da99b9f950a1a8279af1b36c  
+  
+通常情况下，应用开发者会在移动版应用中捆绑对应的一款[WatchOS](https://www.apple.com/watchos/)应用。为了演示如何应付这种场景，我们以Tube
+Map这款应用为例。应用IPA中的MachO文件布局如下所示：
+
+    
+    
+    Payload/
+        TubeMap.app/
+            Frameworks/
+                AFNetworking.framework/
+                    AFNetworking
+                .... <truncated for brevity> ...
+    
+            Watch/
+                TubeMap WatchKit App.app/
+                    Frameworks/
+                        libswiftCore.dylib
+                        ... <truncated for brevity> ...
+                    Plugins/
+                        TubeMap WatchKit Extension.appex/
+                            TubeMap WatchKit Extension
+                    TubeMap WatchKit App
+    
+            TubeMap
+    
+
+**1、解密MachO文件**
+
+在重新打包捆绑WatchOS应用的应用程序时，解密程序文件现在对我们来说是一个全新的挑战。到目前为止，本文所举的应用例子全都是面向单个处理器体系结构编译的应用，因此我们可以在调试器中启动加密过的这些文件，然后导出解密后的数据。WatchOS程序专为armv7k架构设计，不幸的是，此时我手头上并没有一个越狱的iWatch来解密WatchOS程序。解决解密难题的方法如下所述。
+
+如果不打算分析WatchOS应用，我们可以直接删除`Watch/`目录，然后按照前文介绍的方法重新打包应用。然而在运行应用时，这种方法可能会导致出现稳定性问题，如果所分析的功能刚好涉及到WatchOS应用，那么更可能出现这类问题。
+
+如果我们手头上有个已越狱的iWatch，那么我们可以在watch上设置`debugserver`，然后在调试器中启动WatchOS应用。一旦应用在调试器内运行，我们就可以参考普通iOS应用解密数据的导出方法，导出WatchOS应用的解密数据。
+
+**2、Patch应用程序**
+
+Patch解密应用的方法与之前大同小异，依然是将`FridaGadget`
+dylib添加到解开后的IPA中，然后使用`optool`将`load`命令插入应用文件中以加载Frida dylib。
+
+**3、更新应用元数据**
+
+为了更新TubeMap应用元数据，我们需要更新应用的`Info.plist`文件以及应用扩展的`Info.plist`文件。我们还需要将匹配的Provisioning
+Profile添加到针对特定设备的IPA中。
+
+**4、重新签名MachO文件**
+
+首先签名捆绑的所有framework以及dylib，然后签名应用文件。
+
+    
+    
+    Amars-Mac:Frameworks amarekano$ codesign --force --sign "iPhone Developer: m*******" AFNetworking.framework/AFNetworking 
+    AFNetworking.framework/AFNetworking: replacing existing signature
+    ...
+    
+    Amars-Mac:Frameworks amarekano$ codesign --force --sign "iPhone Developer: m*******" libswiftCore.dylib
+    libswiftCore.dylib: replacing existing signature
+    ...
+    
+    Amars-Mac:TubeMap.app amarekano$ codesign --force --sign "iPhone Developer: m*******" --entitlements ../../entitlements.plist TubeMap
+    
+
+**5、打包并安装**
+
+重新签名应用后，将`Payload`目录打包为IPA文件，将重新打包的IPA安装到目标设备上。
+
+    
+    
+    Amars-Mac:sandbox amarekano$ zip -qr TubeMap_resigned.ipa Payload/
+    Amars-Mac:sandbox amarekano$ ideviceinstaller -i TubeMap_resigned.ipa 
+    WARNING: could not locate iTunesMetadata.plist in archive!
+    Copying 'TubeMap_resigned.ipa' to device... DONE.
+    Installing 'com.example.amarekano.repackdemo'
+    Install: CreatingStagingDirectory (5%)
+    ...<tuncated for brevity>...
+    Install: GeneratingApplicationMap (90%)
+    Install: Complete
+    
+
+**6、运行重新打包的应用**
+
+重新打包的应用成功安装到目标设备上后，我们可以使用`idevicedebug`启动应用，连接到Frida服务器。
+
+    
+    
+    Amars-Mac:sandbox amarekano$ frida -H 192.168.1.67:8080 -n Gadget
+         ____
+        / _  |   Frida 10.7.7 - A world-class dynamic instrumentation toolkit
+       | (_| |
+        > _  |   Commands:
+       /_/ |_|       help      -> Displays the help system
+       . . . .       object?   -> Display information about 'object'
+       . . . .       exit/quit -> Exit
+       . . . .
+       . . . .   More info at http://www.frida.re/docs/home/
+    
+    [Remote::Gadget]-> %resume
+    [Remote::Gadget]-> String(ObjC.classes.NSBundle.mainBundle().objectForInfoDictio
+    naryKey_('CFBundleName'))
+    "Tube Map"
+    [Remote::Gadget]-> String(ObjC.classes.NSBundle.mainBundle().objectForInfoDictio
+    naryKey_('CFBundleIdentifier'))
+    "com.example.amarekano.repackdemo"
+    [Remote::Gadget]->
+    
+
+## 六、总结
+
+重新打包应用程序并不会总是那么一帆风顺，有时候研究人员在运行重新打包过的应用程序时会碰到各种问题，出现这种情况可能有几个原因，比如程序在运行时可能会检查bundle
+id，判断是否存在重新打包行为，比如应用可能会检测是否存在调试器等。为了检查具体出现什么问题，我们需要检查设备的syslog以及dmesg，查看运行重新打包的应用时是否出现过什么错误或者警告。这两个信息源可以为我们提供宝贵的信息，帮助我们了解进程运行时的细节。
+
+再次提一句，本文提供的方法旨在为安全研究人员在评估iOS应用安全漏洞方面提供帮助。
+
+本文翻译自mwrinfosecurity.com
+[原文链接](https://labs.mwrinfosecurity.com/blog/repacking-and-resigning-ios-applications/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **興趣使然的小胃** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/152952](/post/id/152952)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [mwrinfosecurity.com](https://labs.mwrinfosecurity.com/blog/repacking-and-resigning-ios-applications/)
+
+如若转载,请注明出处： <https://labs.mwrinfosecurity.com/blog/repacking-and-resigning-ios-applications/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [iOS](/tag/iOS)
+  * [签名](/tag/签名)
+  * [MachO](/tag/MachO)
+
+ **+1** __2赞
+
+ __收藏
+
+![](https://p1.ssl.qhmsg.com/dm/200_200_100/t0104d1b8b4ca36e961.jpg) 興趣使然的小胃
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

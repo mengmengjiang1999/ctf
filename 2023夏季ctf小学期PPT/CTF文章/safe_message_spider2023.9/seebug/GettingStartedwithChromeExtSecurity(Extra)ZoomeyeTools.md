@@ -1,0 +1,353 @@
+**Author: LoRexxar'@Knownsec 404 Team  
+Chinese Version: <https://paper.seebug.org/1115/>  
+**
+
+Our last two researches are about Chrome Ext security. This time we will put
+Chrome extension security aside and introduce an extra part of Chrome Ext -Zoomeye Tools.
+
+Starting from developing a plugin, this paper allows us to look at the
+problems between different levels of chrome in a different perspective.
+
+Our main purpose is to complete a Zoomeye auxiliary plugin.
+
+  * [Download Zoomeye Tools](https://chrome.google.com/webstore/detail/zoomeye-tools/bdoaeiibkccgkbjbmmmoemghacnkbklj)
+
+# Core and Function Design
+
+In zoomeye Tools, we mainly added auxiliary functions for zoomeye. Before
+designing, we must know what kind of functions we need.
+
+Here we need to implement two major functions,
+
+1.First, we need to complete a simple version of zoomeye interface, which is
+used to display the search results of the corresponding IP of the current
+domain.
+
+2.We will complete some auxiliary functions of zoomeye, such as copying the
+left and right ip of search results with one click, etc ...
+
+Here we study the parts needed for these two functions separately:
+
+## zoomeye minitools
+
+Regarding some auxiliary functions of Zoomeye, here we first take a
+requirement as an example. We need a function that can copy all the IPs in the
+Zoomeye page, so we can write scripts or just use this information.
+
+Before we start, we must clarify the permission system and communication
+methods between different levels in the chrome plugin:
+
+I focused on this part in the first article.
+
+  * [Getting Started with Chrome Ext Security from Zero（1） -- A New Chrome Ext](https://lorexxar.cn/2019/11/22/chrome-ext-1/#%E6%9D%83%E9%99%90%E4%BD%93%E7%B3%BB%E5%92%8Capi)
+
+This function we need to complete can be simply quantified as the following
+process:
+
+    
+    
+    User clicks on browser plug-in function
+    ->
+    Browser plugin reads content of current Zoomeye page
+    ->
+    Parse the content and extract the content and write it to the clipboard according to the format
+
+Of course, this is human thinking. Combined with the permission system and
+communication method of the chrome plugin, we need to disassemble each part
+into a corresponding solution.
+
+  * The ability of users to click on browser plugins
+
+When the user clicks the icon of the browser plug-in, the functions in
+popup.html will be displayed and the corresponding js code added in the page
+will be executed.
+
+  * Browser plugin reads content of current Zoomeye page
+
+Since the popup script does not have permission to read the page content, we
+must communicate the content script through `chrome.tabs.sendMessage`, and
+read the page content through the content script.
+
+  * Parse and extract the content and write it to the clipboard according to the format
+
+After the content script reads the page content, it needs to send data back
+via `sendResponse`.
+
+After the popup receives the data, we need to write the data to the clipboard
+through special techniques
+
+    
+    
+     function copytext(text){
+        var w = document.createElement('textarea');
+        w.value = text;
+        document.body.appendChild(w);
+        w.select();
+    
+    
+        document.execCommand('Copy');
+    
+        w.style.display = 'none';
+        return;
+    }
+
+Here we creat a new textarea tag and select its content, then copy it.
+
+The overall process is as follows
+
+![](https://images.seebug.org/content/images/2020/02/f8e2b740-9369-4f2a-a38e-836befb83f55.png-w331s)
+
+## Zoomeye Preview
+
+Different from the functions of minitools, the first problem we encounter is
+the authentication system of zoomeye itself.
+
+In the design of Zoomeye, most of the search results need to be used after
+logging in, and the corresponding multiple request APIs are verified by jwt.
+
+![](https://images.seebug.org/content/images/2020/01/9b5e40a0-1388-4093-b47c-70499ab8624e.png-w331s)
+
+This jwt token will be stored in the browser's local storage during the login
+period.
+
+![](https://images.seebug.org/content/images/2020/01/85c46e35-d4a0-42fc-b333-67aa451505a4.png-w331s)
+
+We can simply draw the architecture like this
+
+![](https://images.seebug.org/content/images/2020/01/cbf9a0f6-df4e-466c-89a1-eb55c489f1af.png-w331s)
+
+Before we continue to design the logic of the code, we must first determine
+the logic flow. We still quantify the flow into the following steps:
+
+    
+    
+    The user clicks on the Zoomeye tools plugin
+    -->
+    After checking the data, the plug-in confirms that it is not logged in and tells the user.
+    -->
+    The user clicks the button to jump to the login page
+    -->
+    The plugin obtains the credentials and stores it
+    -->
+    The user clicks the plugin after opening the website
+    -->
+    The plugin obtains zoomeye data through credentials and requested host
+    -->
+    Feed some data into the page
+
+Then we cooperated with the logic of the chrome plug-in system to convert the
+previous steps into the program logic flow.
+
+  * User clicks on Zoomeye tools plugin
+
+The plugin will load the popup.html page and execute the corresponding js
+code.
+
+  * After checking the data, the plug-in confirms that it is not logged in and tells the user.
+
+The plugin will obtain the zoomeye token stored in `chrome.storage`, and then
+request`zoomeye.org / user` to determine whether the login credentials are
+valid. If it doesn't work, it will show need login in popup.html. And hide
+other div windows.
+
+  * The user clicks the button to jump to the login page 
+
+When the user clicks the button, the browser will open `https:
+//sso.telnet404.com/cas/login? service = https% 3A% 2F% 2Fwww.zoomeye.org%
+2Flogin`
+
+If the user is currently logged in, this page will be directed to zoomeye and
+the corresponding data will be written to localStorage.
+
+  * Saved after the plugin obtains credentials
+
+Due to the separation of front-end and back-end operations, all bg scripts
+need an obvious sign to prompt the need to obtain the login credentials of the
+browser front-end. I set this as **When the tab changes, the domain belongs to
+zoomeye.org and is not logged in** At this time, the bg script will use
+`chrome.tabs.executeScript` to enable the front end to obtain localStorage and
+store it in chrome.storage.
+
+In this way, the plugin gets the most critical jwt token
+
+  * The user clicks the plugin after opening the website
+
+After completing the login problem, the user can use the proview function
+normally.
+
+After the user opens the website, in order to reduce the waiting time for data
+loading, the bg script will start to get the data directly.
+
+  * The plugin obtains zoomeye data through credentials and requested host
+
+The back-end bg script inspires the data acquisition event by judging the tab
+state change, and the plug-in requests it through the account credentials
+obtained earlier.
+
+`https: //www.zoomeye.org/searchDetail? type = host & title =` And parse the
+json to get the corresponding IP data.
+
+  * Feed some data into the page
+
+When the user clicks on the plugin, the popup script checks whether the URL of
+the current tab is consistent with the data in the back-end global variables,
+and then passes
+
+    
+    
+    bg = chrome.extension.getBackgroundPage ();
+
+To get the global variables of bg. The data is then written to the page.
+
+The structure of the entire process is as follows:
+
+![](https://images.seebug.org/content/images/2020/01/32467390-67b4-401c-84b7-bce8b36c04b5.png-w331s)
+
+# Complete The Plugin
+
+After completing the architecture design, as long as we follow the various
+permission systems between different levels of the plugin, we can complete the
+basic design. With our functions, the manifest.json we generated is as follows
+
+    
+    
+    {
+        "name": "Zoomeye Tools",
+        "version": "0.1.0",
+        "manifest_version": 2,
+        "description": "Zoomeye Tools provides a variety of functions to assist the use of Zoomeye, including a proview host and many other functions",
+        "icons": {
+            "16": "img/16_16.png",
+            "48": "img/48_48.png",
+            "128": "img/128_128.png"
+        },
+        "background": {
+            "scripts": ["/js/jquery-3.4.1.js", "js/background.js"]
+        },
+        "content_scripts": [
+            {
+                "matches": ["*://*.zoomeye.org/*"],
+                "js": ["js/contentScript.js"],
+                "run_at": "document_end"
+            }
+         ],
+        "content_security_policy": "script-src 'self' 'unsafe-eval'; object-src 'self';",
+        "browser_action": {
+            "default_icon": {
+                "19": "img/19_19.png",
+                "38": "img/38_38.png"
+            },
+            "default_title": "Zoomeye Tools",
+            "default_popup": "html/popup.html"
+        },
+        "permissions": [
+            "clipboardWrite",
+            "tabs",
+            "storage",
+            "activeTab",
+            "https://api.zoomeye.org/",
+            "https://*.zoomeye.org/"
+        ]
+    }
+
+# Upload Plugin to Chrome Store
+
+Chrome no longer allows self-signed plugins. If you want to install this on
+chrome, you must spend $5 to register as a chrome plugin developer.
+
+Chrome has its own security system. If you have plugins that work under
+multiple domain names, you have to add additional review before reviewing
+plugins. If you want to submit your plugin quickly, then you must follow the
+rules of chrome.
+
+You can do this in Chrome's Developer Information Center.
+
+![
+](https://images.seebug.org/content/images/2020/01/8d773148-62b9-4594-8213-5566fbdfb499.png-w331s)
+
+# Instructions of Zoomeye Tools
+
+## Installation
+
+All Chrome browsers can be downloaded directly
+
+  * <https://chrome.google.com/webstore/detail/zoomeye-tools/bdoaeiibkccgkbjbmmmoemghacnkbklj>
+
+After completing installation
+![](https://images.seebug.org/content/images/2020/02/bad4d79b-169f-4e8f-b2c8-995a9ad78277.png-w331s)
+
+## Instructions
+
+Because Zoomeye Tools provides two functions, one is Zoomeye auxiliary tool,
+and the other is Zoomeye preview.
+
+### Zoomeye Auxiliary Tools
+
+First of all, the first function is to cooperate with Zoomeye, which will only
+take effect in the Zoomeye domain. This function does not require login to
+Zoomeye.
+
+Open Zoomeye and search for any banner, wait for the page to load, and then
+click the plugin icon in the upper right corner to see the two additional
+options.
+
+![](https://images.seebug.org/content/images/2020/02/3cabfcff-59f9-462e-9535-c2e8ea2a34e9.png-w331s)
+
+If we choose copy all ip with LF, then the clipboard is
+
+    
+    
+    23.225.23.22:8883
+    23.225.23.19:8883
+    23.225.23.20:8883
+    149.11.28.76:10443
+    149.56.86.123:10443
+    149.56.86.125:10443
+    149.233.171.202:10443
+    149.11.28.75:10443
+    149.202.168.81:10443
+    149.56.86.116:10443
+    149.129.113.51:10443
+    149.129.104.246:10443
+    149.11.28.74:10443
+    149.210.159.238:10443
+    149.56.86.113:10443
+    149.56.86.114:10443
+    149.56.86.122:10443
+    149.100.174.228:10443
+    149.62.147.11:10443
+    149.11.130.74:10443
+
+If we choose copy all url with port
+
+    
+    
+    '23.225.23.22:8883','23.225.23.19:8883','23.225.23.20:8883','149.11.28.76:10443','149.56.86.123:10443','149.56.86.125:10443','149.233.171.202:10443','149.11.28.75:10443','149.202.168.81:10443','149.56.86.116:10443','149.129.113.51:10443','149.129.104.246:10443','149.11.28.74:10443','149.210.159.238:10443','149.56.86.113:10443','149.56.86.114:10443','149.56.86.122:10443','149.100.174.228:10443','149.62.147.11:10443','149.11.130.74:10443'
+
+### Zoomeye Preview
+
+The second function is a simplified version of Zoomeye. This function requires
+login to Zoomeye.
+
+In any domain, we click Login Zoomeye in the upper right corner. If you have
+previously logged in to Zoomeye, you will be automatically logged in directly.
+If not, you need to log in from the telnet404 page.
+
+After accessing the webpage, click the plug-in icon in the upper right corner,
+we can see the relevant IP information and open ports
+![](https://images.seebug.org/content/images/2020/02/9df18fdc-89a0-4e5f-8c47-e4d6937db81a.png-w331s)
+
+# Summary
+
+Finally, we can publish it on Chrome Developer Center as long as we get
+approval.
+
+The final chrome plugin download link:
+
+  * [Download Zoomeye Tools](https://chrome.google.com/webstore/detail/zoomeye-tools/bdoaeiibkccgkbjbmmmoemghacnkbklj)
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1116/>
+

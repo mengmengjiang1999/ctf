@@ -1,0 +1,1149 @@
+# 前言
+
+上一篇讲过了了COdeQL的安装以及简单的使用，这节主要讲述一下QL语言。主要还是对官方文档给出的四个例子进行讲解。
+
+# QL简介
+
+QL的基本语法类似于SQL，也是一种逻辑编程语言，由逻辑公式构建而成。QL使用公共逻辑连接词（如and，or，和
+not）、量词（如forall和exists）、以及其他重要的逻辑概念。QL 还支持递归和聚合。这允许您使用简单的 QL
+语法编写复杂的递归查询，并直接使用聚合，例如，count，sum,average
+
+## 运行查询
+
+    
+    
+    import java
+    
+    select "hello world"
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939249_63988271b978a1d7f707f.png!small)
+
+此查询返回字符串。"`hello world`"
+
+官方给出基本查询结构如下：
+
+    
+    
+    /**
+     *
+     * Query metadata
+     *
+     */
+    
+    import /* ... CodeQL libraries or modules ... */
+    
+    /* ... Optional, define CodeQL classes and predicates ... */
+    
+    from /* ... variable declarations ... */
+    where /* ... logical formula ... */
+    select /* ... expressions ... */
+    
+
+其中三个子句是我们目前主要关注点：
+
+**from：**声明在查询中需要使用的变量
+
+**where：**对from中声明对变量加以限制的逻辑条件。
+
+**select：**寻找那些from声明的、满足where条件的所有查询结果
+
+    
+    
+    import java
+     
+    from int q
+    where q = 1
+    select q
+    
+
+第一行表示我们要引入CodeQl的类库，因为我们分析的项目是java的，所以在ql语句里，必不可少
+
+`from int q`表示定义一个int类型的变量q，表示我们从CodeQL数据库中获取所有的int类型的数据
+
+`where q = 1`表示表示当q等于1的时候，符合条件
+
+`select q`，表示输出符合上边的q
+
+是不是很像SQL，`select q from database where q=1`
+
+![image.png](https://image.3001.net/images/20221213/1670939272_63988288136b0058c90c2.png!small)
+
+## 简单的样例
+
+查询也可以有许多结果，例如，以下查询计算 1 到 10 之间的所有`毕达哥拉斯三元组`（勾股定理）
+
+    
+    
+    import java
+    
+    from int x, int y, int z
+    where x in [1..10] and y in [1..10] and z in [1..10] and
+          x*x + y*y = z*z
+    select x, y, z
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939287_639882976d869bc10c788.png!small)
+
+如果我们想复用这段代码，该如何操作呢？我们可以引入一个表示 1 到 10
+之间的整数的类。我们还可以在该类中定义一个谓词整数`SmallInt()`。以这种方式定义类和谓词可以轻松重用代码，而不必每次都重复代码来看以下代码：
+
+    
+    
+    class SmallInt extends int {
+      SmallInt() { this in [1..10] }
+      int square() { result = this*this }
+    }
+    
+    from SmallInt x, SmallInt y, SmallInt z
+    where x.square() + y.square() = z.square()
+    select x, y, z
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939312_639882b0aeecf66d41525.png!small)
+
+是不是就能简单理解`谓词`这个概念了，谓词有点类似于其他语言中的函数，但又与函数不同，谓词用于描述构成`QL`程序的逻辑关系。确切的说，谓词描述的是给定参数与元组集合的关系
+
+当然谓词也有很多种，有返回值的谓词，无返回值的谓词，递归谓词等，后面会专门写一篇内容来详细记录。
+
+# Find the thief
+
+CodeQL官方给出了四个实际的案例来帮助我们理解QL中一些重要的概念，这一节是其中一节
+
+## 介绍
+
+有一个世外桃源般的村庄，按方位分为东、西、南、北四部分。有一天，位于村庄中心的神秘城堡发生了失窃案件：王冠被偷了。并且，已知这件事是村子里的人干的，我们的任务就是找出这个人是谁。已经知道小偷肯定是这个村的村民，那么，就很有必要收集全村村民的个人信息，具体内容如下所示：
+
+![image.png](https://image.3001.net/images/20221213/1670939333_639882c5cd7b84580e8bc.png!small)
+
+实际上就是建立了一个表，看到表我们很容易就会联想到数据库。上一篇我们也利用源代码建立了数据库。CodeQL的中心思想就是要想处理数据一样处理代码
+
+我们在询问村民的过程中获得以下信息：
+
+| 问题| 答  
+---|---|---  
+1| 小偷身高超过150厘米吗？| 是的  
+2| 小偷有金发吗？| 不  
+3| 小偷秃了吗？| 不  
+4| 小偷还不到30岁吗？| 不  
+5| 小偷住在城堡以东吗？| 是的  
+6| 小偷有黑色还是棕色的头发？| 是的  
+7| 小偷身高超过180厘米还是身材低于190厘米？| 不  
+8| 小偷是村里最年长的人吗？| 不  
+9| 小偷是村里最高的人吗？| 不  
+10| 小偷比一般村民矮吗？| 是的  
+11| 小偷是村东最年长的人吗？| 是的  
+  
+## QL库
+
+平台已经定义好了许多QL谓词，以帮助我们从表中提取数据。  
+![image.png](https://image.3001.net/images/20221213/1670939354_639882da20ad8b8f93ec8.png!small)  
+为了便于使用，平台将这些谓词（即库函数）都保存到了一个名为`tutorial.qll`的QL库中了。当我们需要访问这个库的时候，直接在查询控制台中键入`import
+tutorial`语句即可。例如，假设我们已经定义了一个表示村民的变量`t`，那么，直接通过`t.getHeight()`就可以读取村民的身高了。
+
+## 开始搜索
+
+针对第一个问题“小偷身高是否超过150厘米”的答案”是“，可以编写以下查询，
+
+    
+    
+    from Person t
+    where t.getHeight() > 150
+    select t
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939374_639882eebf8b1b17e71ab.png!small)
+
+可以看到有77个结果，接下来我们就需要使用更多的条件来缩小范围。
+
+## 逻辑连接词
+
+使用逻辑连接词，例如or，not，and等，可以编写更复杂的查询来组合不同的信息片段。其表示的含义与SQL中的语义一致。
+
+可以单独使用一个连接词，也可以将这些连接词组合成更长的语句：
+
+    
+    
+    where t.getAge() > 30
+      and (t.getHairColor() = "brown" or t.getHairColor() = "black")
+      and not t.getLocation() = "north"
+    
+
+注意：我们在 or 子句的前后使用了一对圆括号，以使查询符合预期。如果没有括号的话，由于连接词and的优先级别高于连接词or，所以，实际上就会变成
+
+    
+    
+    where (t.getAge() > 30 and t.getHairColor() = "brown")
+      or (t.getHairColor() = "black" and not t.getLocation() = "north")
+    
+
+谓词不总是只返回一个值，有可能返回多个值，有可能不返回值，
+
+如果一个人p的头发正在由黑变灰，那么可以用`p.getHairColor() = "black" andp.getHairColor() =
+"gray"`来表示。如果小偷是秃头怎么办？在这种情况下，小偷没有头发，因此，谓词`getHairColor()`就不应返回任何结果！如果知道小偷肯定不是秃头，那么一定有一种颜色与小偷的头发颜色相匹配，可以引入一个字符串类型的新变量
+c，并找出头发颜色，即`t.getaircolor()`返回结果与变量c 的值相匹配的那些人。
+
+    
+    
+    from Person t, string c
+    where t.getHairColor() = c
+    select t
+    
+
+我们只是暂时引入了变量，并且在子句中根本不需要它。在这种情况下，最好使用下面这种写法
+
+    
+    
+    from Person t
+    where exists(string c | t.getHairColor() = c)
+    select t
+    
+
+`exists`引入了一个字符串类型的临时变量c，并且仅在至少有一个字符串c满足条件 `t.getHairColor()`=
+c时，这个where子句才成立。
+
+> QL语言中exists对应于逻辑学中的存在量词，表示“存在某个”或“至少有一个
+>
+> 此外，QL语言中还提供了一个通用量词，即forall，表示“所有的”，或“每一个”
+
+## 真正的调查
+
+有了前面的学习，我们来编写复杂一点的语句来满足前8个条件：
+
+| 问题| 答  
+---|---|---  
+1| 小偷身高超过150厘米吗？| 是的  
+2| 小偷有金发吗？| 不  
+3| 小偷秃了吗？| 不  
+4| 小偷还不到30岁吗？| 不  
+5| 小偷住在城堡以东吗？| 是的  
+6| 小偷有黑色还是棕色的头发？| 是的  
+7| 小偷身高超过180厘米还是身材低于190厘米？| 不  
+8| 小偷是村里最年长的人吗？| 不  
+  
+其中问题3和问题8可能比较难：
+
+  * 对于问题3，请记住，秃头的人没有头发颜色换句话说，如果查询某人，返回了头发的颜色，那么，说明这个人肯定不是秃子。所以，这个线索等价于下面的语句：
+
+  * 对于问题8，请注意，如果一个人 _不是_ 最年长的，那么至少有一个人比他们年长，因此，可以将其变成判断存在性的问题：
+
+    
+    
+    import tutorial
+    
+    from Person t
+    where
+    /* 1 */ t.getHeight() > 150 and
+    /* 2 */ not t.getHairColor() = "blond" and
+    /* 3 */ exists (string c | t.getHairColor() = c) and
+    /* 4 */ not t.getAge() < 30 and
+    /* 5 */ t.getLocation() = "east" and
+    /* 6 */ (t.getHairColor() = "black" or t.getHairColor() = "brown") and
+    /* 7 */ not (t.getHeight() > 180 and t.getHeight() < 190) and
+    /* 8 */ exists(Person p | p.getAge() > t.getAge())
+    select t
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939396_639883042bb04d0fcfc18.png!small)
+
+这下将结果缩小到了9个人，接下来对剩下3个条件进行语句编写：
+
+## 高级查询
+
+当我们需要找出村子里最老、最年轻、最高、最矮的人的时候，除了使用`exists`间接完成之外，还有一种更有效的方法，那就是使用`聚合函数`，例如`max`和`min`函数等。
+
+通常来说，聚合函数就是对多个数据块进程处理，并返回单个值的函数。常见的聚合函数为`count、max、 min、avg和sum`。聚合函数使用方法为：
+
+例如，可以使用聚合函数max来查找村中最年长的人的年龄：
+
+    
+    
+    max(int i | exists(Person p | p.getAge() = i) | i)
+    
+
+此语句有点绕，首先max聚合函数考察的是所有整数 `i`，然后进一步将 `i`限制为与村民年龄相匹配的值，最后返回与村民年龄相匹配的整数中最大的那一个
+
+如果小偷是村里最老的那个人，那么就意味着小偷的年龄等于村民年龄中的最大值：
+
+    
+    
+    from Person t
+    where t.getAge() = max(int i | exists(Person p | p.getAge() = i) | i)
+    select t
+    
+
+这种通用的聚合语法非常冗长；不过，在大多数情况下，其中的某些部分是可以省略的。实际上，QL语言提供了一种非常有用的特性：`有序聚合`。利用这种特性，我们可以通过`order
+by`对表达式进行排序。如果有SQL语言的基础，看这个就会特别简单
+
+例如，如果使用有序聚合，那么选择最年长的村民的过程就会简单得多。
+
+    
+    
+    select max(Person p | | p order by p.getAge())
+    
+
+有序聚合会考察每个人 p
+，并选择年龄最大的人。就本例来说，对于要考察的人没有其他方面的限制，因此，逻辑公式子句为空。请注意，如果有多个人具有相同的最大年龄，那么，该查询将列出所有这些人。
+
+下面是一些聚合的示例代码：
+
+    
+    
+    min(Person p | p.getLocation() = "east" | p order by p.getHeight())
+    
+
+上面的代码的作用是找出村东最矮的人。
+
+    
+    
+    count(Person p | p.getLocation() = "south" | p)
+    
+
+上面的代码的作用是统计住在村南的村民人数。
+
+    
+    
+    avg(Person p | | p.getHeight())
+    
+
+上面的代码的作用是计算村民的平均身高。
+
+    
+    
+    sum(Person p | p.getHairColor() = "brown" | p.getAge())
+    
+
+上面的代码的作用是计算头发为棕色的村民的年龄总和
+
+最后一个完整的查询代码如下
+
+    
+    
+    import tutorial
+    
+    from Person t
+    where
+    /* 1 */ t.getHeight() > 150 and
+    /* 2 */ not t.getHairColor() = "blond" and
+    /* 3 */ exists (string c | t.getHairColor() = c) and
+    /* 4 */ not t.getAge() < 30 and
+    /* 5 */ t.getLocation() = "east" and
+    /* 6 */ (t.getHairColor() = "black" or t.getHairColor() = "brown") and
+    /* 7 */ not (t.getHeight() > 180 and t.getHeight() < 190) and
+    /* 8 */ exists(Person p | p.getAge() > t.getAge()) and
+    /* 9 */ not t = max(Person p | | p order by p.getHeight()) and
+    /* 10 */ t.getHeight() < avg(float i | exists(Person p | p.getHeight() = i) | i) and
+    /* 11 */ t = max(Person p | p.getLocation() = "east" | p order by p.getAge())
+    select "The thief is " + t + "!"
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939417_63988319e721591922362.png!small)
+
+## 小结
+
+通过一个简单的案例，学习了逻辑连接词和常见聚合函数，和SQL语言对照着学习QL语言，感觉就很简单了。
+
+# Catch the fire starter
+
+## 简介
+
+几个人在村北的一块田地里生火，把庄稼都烧坏了，有一些其他信息。村庄的北部和南部之间有很强的竞争，你知道罪犯住在南部。
+
+## 缩小范围
+
+这次只需要考虑一个特定的村民群体，即居住在村南的村民。可以定义一个新的`谓词`，而不是写入所有查询：`getLocation() = "south"`
+
+    
+    
+    predicate isSouthern(Person p) {
+      p.getLocation() = "south"
+    }
+    
+
+使用谓词`isSouthern(Person p)`时，提供`单个参数p`来检查`参数p`的参数是否满足条件
+
+注意：谓词的名称始终以小写字母开头：驼峰命名是个不错的选择。
+
+现在使用以下方法列出所有南方人：
+
+    
+    
+    /* define predicate `isSouthern` as above */
+    
+    from Person p
+    where isSouthern(p)
+    select p
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939435_6398832b0d9b9f59ce882.png!small)
+
+这样就很简单的找出来所有的南方人，但站在效率的角度看，这并不是最优解，上面的语句会查询每一个村民，然后限制为满足的村民，相反，我们可以定义一个`新类`，精确地包含我们想要考虑的人
+
+    
+    
+    class Southerner extends Person {
+      Southerner() { isSouthern(this) }
+    }
+    
+
+QL中的类表示`逻辑属性`：当值满足该属性时，它是该类的成员。这意味着一个值可以位于许多类中
+---位于特定类中并不会阻止它位于其他类中。例如，3既属于“整数”类，也属于“奇数”类，同时属于“质数”类。
+
+> 这一点不同于面向对象编程语言中的类，Java中的类表示某类事物，其事物可以拥有多种属性。通过多个属性可以描写出来一个对象。
+
+在上面的类的定义中，表达式`southern(this)`定义了这个类所表示的逻辑属性，我们称这个谓词为这个类的特征谓词，如果此时满足条件，this代表的村民就属于Southerner类，也就是居住在村南的村民
+
+在QL语言中，我们通常需要根据现有的类（超集）来定义新的类（子集）。
+在我们的例子中，Southerner是村民中的一个特殊群体，所以，我们说Southerner（住在村南的村民）类继承自Person（村民）类，换句话说，Southerner是Person的一个子集
+
+借助于这个类，可以简单地将居住在南部的所有人列出为：
+
+    
+    
+    from Southerner s
+    select s
+    
+
+第一句是声明变量，就是住在村南的村民，然后，没有附加任何条件就直接列出这些变量了。完整的代码如下所示：
+
+    
+    
+    import tutorial
+    
+    predicate isSouthern(Person p) {
+        p.getLocation() = "south"
+      }
+    
+    class Southerner extends Person {
+        Southerner() { isSouthern(this) }
+    }
+    
+    from Southerner s
+    select s
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939453_6398833d89d618ef2ab9e.png!small)
+
+通过上面的例子，可以发现有些谓词是以参数的形式传递变量，例如`southern(p)`，而有些谓词是跟在某些变量后面的，例如`p.getAge()`这是因为，`getAge()`是一个定义在类Person中的一个成员谓词（类似于成员函数），也就是说，它是一个只能用于该类中的成员变量的谓词。
+
+相反，谓词`southern`是单独定义的，不属于任何类。实际上，我们还可以将多个成员谓词串起来完成一系列的操作，例如`p. getage
+().sqrt()`，这里首先获取村民p的年龄，然后计算年龄的平方根。
+
+## 出行管制
+
+发生王冠失窃案后，村子里实施了出行管制。案发之前，村民是可以在村子里自由走动的，因此，谓词`isAllowedIn(string
+region)`是适用于任何村民和任何区域的。举例来说，下面的查询代码将会列出所有村民，因为他们都可以去村北：
+
+    
+    
+    from Person p
+    where p.isAllowedIn("north")
+    select p
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939469_6398834de33f9c326b0cc.png!small)
+
+在发生盗窃案之后，不再允许10岁以下的儿童离开居住地，例如，村北的孩子不能到村南、村东、村西去玩了。这就意味着，谓词`isAllowedIn(string
+region)`已经不再适用于所有村民和所有区域，所以，当p表示一个孩子时，我们应该临时覆盖原来的谓词`isAllowedIn(string
+region)`
+
+首先定义一个类`Child`，用以表示10岁以下所有村民。然后，在类Child类中，我们重新定义成员谓词`isAllowedIn(string
+region)`，以使孩子们只能在自己的地盘上走动。这一限制可以通过`region =
+this.getLocation()`来进行表示。实际上就是重新定义父类中的成员谓词。这不就是`Java`中的重写父类方法吗？
+
+    
+    
+    class Child extends Person {
+      /* the characteristic predicate */
+      Child() { this.getAge() < 10 }
+    
+      /* a member predicate */
+      override predicate isAllowedIn(string region) {
+        region = this.getLocation()
+      }
+    }
+    
+
+现在，当我们将谓词`isAllowedIn(string
+region)`应用于表示村民的变量p上的时候，如果变量p的类型不是Child，也就是这个村民不是一个孩子的时候，则使用该谓词原来的定义；但是如果变量p的类型为Child，也就是说这个变量表示的村民是一个孩子，那么，该谓词将会使用Child类中的新定义，从而覆盖原来的代码。
+
+根据现有的线索，我们知道纵火犯住在村南，所以，他们必定是被允许到村北走动的。为此，我们可以编写一个查询来找出可能的嫌疑犯。同时，我们还可以扩展select子句来列出嫌疑人的年龄。具体代码如下所示：
+
+    
+    
+    import tutorial
+    
+    predicate isSouthern(Person p) { p.getLocation() = "south" }
+    
+    class Southerner extends Person {
+    /* the characteristic predicate */
+    Southerner() { isSouthern(this) }
+    }
+    
+    class Child extends Person {
+    /* the characteristic predicate */
+    Child() { this.getAge() < 10 }
+    
+    /* a member predicate */
+    override predicate isAllowedIn(string region) { region = this.getLocation() }
+    }
+    
+    from Southerner s
+    where s.isAllowedIn("north")
+    select s, s.getAge()
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939491_6398836321291dae98e1d.png!small)
+
+## 识别秃头土匪
+
+这次找到了目击证人！就在火灾发生后，住在田地旁边的农民看见两个人仓皇逃跑了。虽然他们只看到了嫌疑人的背影，却注意到他们都是秃头。
+
+写了一个 QL 查询来选择所有秃头的人：
+
+    
+    
+    from Person p
+    where not exists (string c | p.getHairColor() = c)
+    select p
+    
+
+可以定义另一个新谓词将以上代码封装：
+
+    
+    
+    predicate bald(Person p) {
+        not exists (string c | p.getHairColor() = c)
+    }
+    
+
+当村民p是一个秃子时，属性`bald(p)`便成立，查询代码可以简化为：
+
+    
+    
+    from Person p
+    where bald(p)
+    select p
+    
+
+结合所有的条件，最终的QL语句为：
+
+    
+    
+    import tutorial
+    
+    predicate isSouthern(Person p) { p.getLocation() = "south" }
+    
+    class Southerner extends Person {
+    /* the characteristic predicate */
+    Southerner() { isSouthern(this) }
+    }
+    
+    class Child extends Person {
+    /* the characteristic predicate */
+    Child() { this.getAge() < 10 }
+    
+    /* a member predicate */
+    override predicate isAllowedIn(string region) { region = this.getLocation() }
+    }
+    
+    predicate isBald(Person p) { not exists(string c | p.getHairColor() = c) }
+    
+    from Southerner s
+    where s.isAllowedIn("north") and isBald(s)
+    select s
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939508_63988374ce441601e53aa.png!small)
+
+## 小结
+
+学习了谓词和类的一些知识，有点类似于面向对象编程中的类和函数的概念，例如可以重新父类中的方法。
+
+# Crown the rightful heir
+
+## 简介
+
+老国王死了，老国王既没结过婚，也没有自己的孩子，所以，没有人知道应该由谁来继承国王的城堡和财产。这时，许多村民都声称自己是国王家族的后裔，是合法的继承人。为此，人们争论不休，鸡犬不宁。我们需要找到真正的王位继承人
+
+## 寻找继承人
+
+为了深入了解国王及其家世，我们开始进入城堡查找相应的线索，最终找到了一些古老的家谱。掌握这条重要的线索后，我们立刻查询现有的数据库中，看看国王家族中是否还有人健在。
+
+为此，我们可以借助于一个谓词：`parentOf(Person p)`。它的作用是，输入一个表示村民的变量p，该谓词就会返回该村民的父母。
+
+谓语| 描述  
+---|---  
+`parentOf(Person p)`| 返回``p` 的父级  
+      
+    
+    from Person p
+    select parentOf(p) + " is a parent of " + p
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939529_6398838956a5adf8476a2.png!small)
+
+我们知道国王自己没有孩子，但也许他有兄弟姐妹。编写QL查询以找出：
+
+    
+    
+    from Person p
+    where parentOf(p) = parentOf("King Basil") and
+      not p = "King Basil"
+    select p
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939542_639883968536419520030.png!small)
+
+既然国王年事已高，他的4个兄弟姐妹肯定也不小了，需要检查他们中是否有人还活着.
+
+谓语| 描述  
+---|---  
+`isDeceased()`| 如果该人已故，则保留  
+      
+    
+    from Person p
+    where parentOf(p) = parentOf("King Basil") and
+      not p = "King Basil"
+      and not p.isDeceased()
+    select p
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939557_639883a58af731cf896be.png!small)
+
+不幸的是，巴西尔国王的兄弟姐妹都没有活着。是时候进一步调查其兄弟姐妹的后代了，为此，我们可以定义一个谓词`childOf()`，用来返回某人的子女。
+
+我们知道，当且仅当村民p是某人的父母时，某人才是村民p的子女。所以，在定义谓词`childOf()`时，我们可以借助于前面介绍过的谓词`parentOf()`，具体如下所示
+
+    
+    
+    Person childOf(Person p) {
+        p = parentOf(result)
+    }
+    
+
+遍历所有村民，把符合`p = parentOf(result)`条件的村民作为返回值。来看看国王的兄弟姐妹是否有后代
+
+    
+    
+    from Person p
+    where parentOf(p) = parentOf("King Basil") and
+        not p = "King Basil"
+    select childOf(p)
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939581_639883bd7b95945405f54.png!small)
+
+## 寻找远亲
+
+目前直系亲属是没有，我们尝试来找到远房亲戚，定义一个谓词`relativeOf(Person p)`，以便帮忙找出某人的所有亲属。
+
+需要对亲属关系下一个精确地定义：如果两个人有共同的祖先，他们就是亲属关系。这时，我们可以定义一个谓词`ancestorOf(Person
+p)`，用来找出某人p的所有祖先。当然，某人p的祖先可以是p的父辈，或者p的父辈的父辈，或者p的父辈的父辈的父辈，依此类推。不过，如果这样做的话，我们就会得到一个无穷无尽的父辈名单。很明显，我们必须寻找一个更可行的方法。
+
+重新翻译上面的关于祖先的定义，这里所说的祖先，要么是某人的父母，要么是已知为某人祖先的人的父母。好了，下面我们将上面的话翻译成QL语言，具体如下所示：
+
+    
+    
+    Person ancestorOf(Person p) {
+        result = parentOf(p) or
+        result = parentOf(ancestorOf(p))
+    }
+    
+
+我们在谓词`ancestorOf()`的定义中调用了它自己。这实际上是一个递归的例子。对于这种递归来说，其中的同一个操作（在本例中为谓词`ancestorOf()`）被应用了多次，这在QL语言中是非常常见的，被称为操作的传递闭包。在处理传递闭包时，有两个特殊的符号极其有用，即`+`和`*`，具体如下所示：
+
+  * `parentOf+(p)`，这表示对变量p应用一次或多次谓词parentOf()，它等价于ancestorOf(p)。
+
+  * `parentOf*(p)`，这表示对变量p应用零次或多次谓词parentOf()，因此，它要么返回变量p的祖先，要么返回变量p本身。
+
+尝试使用这个新符号来定义谓词`relativeOf()`并使用它来列出国王的所有在世亲属。
+
+    
+    
+    Person relativeOf(Person p) {
+        parentOf*(result) = parentOf*(p)
+    }
+    
+
+当然，如果想要列出国王的所有在世亲属，我们还可以借助于谓词`isDeceased()`
+
+    
+    
+    import tutorial
+     
+    Person relativeOf(Person p) {
+        parentOf*(result) = parentOf*(p)
+    }
+     
+    from Person p
+    where not p.isDeceased() and
+        p = relativeOf("King Basil")
+    select p
+    
+
+![image.png](https://image.3001.net/images/20221213/1670939629_639883eddd37157f3b400.png!small)
+
+## 合法的王位继承人
+
+国王有两个在世的亲戚。为了决定谁应该继承国王的财产，村民们仔细阅读了村章：
+
+ _“王位继承人是国王在世的近亲。任何有犯罪记录的人都不会被考虑。如果有多个候选人，年龄最大的人是继承人“_
+
+我们需要考察这两位候选者是否有过犯罪记录，为此，我们可以编写一个谓词`criminalRecord(p)`，检查村民p是否有案底。根据前面的文章可知，村里至少有三个人是有案底的，他们分别是`Hester`、`Hugh`和`Charlie`。假设其他村民都是遵纪守法的，那么，谓词`criminalRecord(p)`的定义则为：
+
+    
+    
+    predicate criminalRecord(Person p) {
+        p = "Hester" or
+        p = "Hugh" or
+        p = "Charlie"
+    }
+    
+
+至此，我们就可以查询真正的王位继承人了，完整的代码如下所示：
+
+    
+    
+    import tutorial
+    
+    Person relativeOf(Person p) { parentOf*(result) = parentOf*(p) }
+    
+    predicate hasCriminalRecord(Person p) {
+    p = "Hester" or
+    p = "Hugh" or
+    p = "Charlie"
+    }
+    
+    from Person p
+    where
+    not p.isDeceased() and
+    p = relativeOf("King Basil") and
+    not hasCriminalRecord(p)
+    select p
+    
+
+## 小结
+
+这里我们学习了几个新谓词，最重要的还是传递闭包这个操作，有点类似于高级编程语言中的递归
+
+# Cross the river
+
+## 简介
+
+过河问题是一个经典的逻辑问题，它要求在一定约束下将山羊、卷心菜和狼运到对岸。限制条件为
+
+> 他的船只能带自己，最多一件物品作为货物。 问题是，如果山羊和卷心菜单独在一起，它会吃掉它。 如果狼和山羊单独在一起，它会吃掉它。
+> 他怎么把所有东西都过河？
+
+## 抽象问题
+
+我们可以抽象的将问题看成：货物物品和河两岸的岸边。 首先将它们建模为类。
+
+首先明确一点，由于农夫可以不带任何东西过河，我们同样可以将”Nothing“定义为一件货物，这样更方便进行约束：
+
+定义一个包含不同货物的`Cargo`类：
+
+    
+    
+    /** A possible cargo item. */
+    class Cargo extends string {
+      Cargo() {
+        this = "Nothing" or
+        this = "Goat" or
+        this = "Cabbage" or
+        this = "Wolf"
+      }
+    }
+    
+
+其次，任何物品都可以在两个海岸之一。让我们称这些为“左岸”和“右岸”。 定义一个河岸类`Shore`包含`"Left"，"Right"`
+
+此外，农夫可能需要在两岸之间多次摆渡，这就涉及到“对岸”的概念，所以，我们可以在Shore类中定义一个成员谓词，专门求对岸，例如，给出左岸，该谓词将返回右岸，反之亦然
+
+    
+    
+    /** One of two shores. */
+    class Shore extends string {
+      Shore() {
+        this = "Left" or
+        this = "Right"
+      }
+    
+      /** Returns the other shore. */
+      Shore other() {
+        this = "Left" and result = "Right"
+        or
+        this = "Right" and result = "Left"
+      }
+    }
+    
+
+此外，我们还需要设法跟踪农夫、山羊、卷心菜和狼的位置。在这里，我们把这些组合在一起的位置信息称为“状态”。为此，我们可以定义一个类`State`，来表示每件货物的位置。例如，如果农夫在左岸，山羊在右岸，卷心菜和狼在左岸，那么，当前的状态应该是左、右、左、左
+
+我们此时可以引入一些变量来表示农夫和货物所在河岸，在类的定义中，这些临时变量被称为`字段`。
+
+    
+    
+    /** A record of where everything is. */
+    class State extends string {
+      Shore manShore;
+      Shore goatShore;
+      Shore cabbageShore;
+      Shore wolfShore;
+     
+      State() { this = manShore + "," + goatShore + "," + cabbageShore + "," + wolfShore }
+    }
+    
+
+为了解决这个过河问题，我们对其中的两种特定的状态非常关注，即`初始状态`和`目标状态`。假设刚开始的时候，所有货物都在左岸，成功渡河后，所有货物都在右岸，那么，我们可以通过State类派生两个子类，一个是表示初始状态的`InitialState`类，另一个是表示目标状态的`GoalState`类。
+
+    
+    
+    /** The initial state, where everything is on the left shore. */
+    class InitialState extends State {
+      InitialState() { this = "Left" + "," + "Left" + "," + "Left" + "," + "Left" }
+    }
+     
+    /** The goal state, where everything is on the right shore. */
+    class GoalState extends State {
+      GoalState() { this = "Right" + "," + "Right" + "," + "Right" + "," + "Right" }
+    }
+    
+
+我们可以引入一个助手谓词`renderState`，来帮我们以适当的形式呈现状态数据
+
+    
+    
+    State() { this = renderState(manShore, goatShore, cabbageShore, wolfShore) }
+    
+
+到目前为止的 QL 代码如下所示：
+
+    
+    
+    /** A possible cargo item. */
+    class Cargo extends string {
+      Cargo() {
+        this = "Nothing" or
+        this = "Goat" or
+        this = "Cabbage" or
+        this = "Wolf"
+      }
+    }
+    
+    /** One of two shores. */
+    class Shore extends string {
+      Shore() {
+        this = "Left" or
+        this = "Right"
+      }
+    
+      /** Returns the other shore. */
+      Shore other() {
+        this = "Left" and result = "Right"
+        or
+        this = "Right" and result = "Left"
+      }
+    }
+    
+    /** Renders the state as a string. */
+    string renderState(Shore manShore, Shore goatShore, Shore cabbageShore, Shore wolfShore) {
+      result = manShore + "," + goatShore + "," + cabbageShore + "," + wolfShore
+    }
+    
+    /** A record of where everything is. */
+    class State extends string {
+      Shore manShore;
+      Shore goatShore;
+      Shore cabbageShore;
+      Shore wolfShore;
+    
+      State() { this = renderState(manShore, goatShore, cabbageShore, wolfShore) }
+    }
+    
+    /** The initial state, where everything is on the left shore. */
+    class InitialState extends State {
+      InitialState() { this = renderState("Left", "Left", "Left", "Left") }
+    }
+    
+    /** The goal state, where everything is on the right shore. */
+    class GoalState extends State {
+      GoalState() { this = renderState("Right", "Right", "Right", "Right") }
+    }
+    
+
+## 模拟”摆渡“的动作
+
+摆渡就是将农夫和一种货物送到对岸，这时，自然会产生一个新的状态。
+
+为了模拟这种行为，我们可以在`State`类中引入一个成员谓词，比如将其命名为`ferry`，让它来指出在摆渡特定货物后状态会变成什么样子。在编写这个谓词时，我们可以借助于前面定义的谓词`other`
+
+    
+    
+    /** Returns the state that is reached after ferrying a particular cargo item. */
+      State ferry(Cargo cargo) {
+        cargo = "Nothing" and
+        result = renderState(manShore.other(), goatShore, cabbageShore, wolfShore)
+        or
+        cargo = "Goat" and
+        result = renderState(manShore.other(), goatShore.other(), cabbageShore, wolfShore)
+        or
+        cargo = "Cabbage" and
+        result = renderState(manShore.other(), goatShore, cabbageShore.other(), wolfShore)
+        or
+        cargo = "Wolf" and
+        result = renderState(manShore.other(), goatShore, cabbageShore, wolfShore.other())
+      }
+    
+
+并非所有的摆渡动作都是可行的。所以，我们需要添加一些额外的限制，以确保摆渡过程是“安全的”。也就是说，摆渡过程中不能出现山羊或卷心菜被吃掉的情况。例如，我们可以：
+
+  1. 定义一个谓词`isSafe`，使其在状态本身是安全的时候才成立。实际上，我们就是用它来表示山羊和卷心菜都不会被吃掉的条件。
+
+  2. 定义一个谓词`safeFerry`，用以约束谓词`ferry`只能执行安全的摆渡动作。
+
+    
+    
+    /**
+       * Holds if the state is safe. This occurs when neither the goat nor the cabbage
+       * can get eaten.
+       */
+      predicate isSafe() {
+        // The goat can't eat the cabbage.
+        (goatShore != cabbageShore or goatShore = manShore) and
+        // The wolf can't eat the goat.
+        (wolfShore != goatShore or wolfShore = manShore)
+      }
+     
+    /** Returns the state that is reached after safely ferrying a cargo item. */
+      State safeFerry(Cargo cargo) { result = this.ferry(cargo) and result.isSafe() }
+    
+
+## 寻找状态迁移的路径
+
+实际上，我们要编写的查询的主要目的，就是寻找一条能够从初始状态到达目标状态的路径，即由连续摆渡动作组成的一个列表。
+
+在寻找答案的过程中，我们必须要避免“没有尽头的”路径。例如，农夫可以把山羊来回摆渡很多次，虽然这种动作是不会触发不安全的状态的，但是，即使不停重复这个动作，只会徒增渡河次数，却对于解决问题没有任何帮助。
+
+为了帮助我们将路径的渡河次数限制在一定的范围内，可以定一个成员谓词`State reachesVia(string path, int
+steps)`，其返回结果是可以从当前状态（this）通过给定路径以指定的有限步数到达的所有状态。
+
+实际上，我们可以将其写成递归型谓词，具体的终止条件和递归步骤如下所示：
+
+**·**如果this是结果状态，那么它（可以直接）通过一个空路径零步到达结果状态。
+
+**·**如果this可以到达某个中间状态（对应于path和steps的某些值），并且从该中间状态到结果状态存在safeFerry操作，则可以达到任何其他状态。
+
+为了确保谓词的执行次数是有限的，我们应该将steps限制为特定的数值。
+
+    
+    
+    /**
+       * Returns all states that are reachable via safe ferrying.
+       * `path` keeps track of how it is achieved and `steps` keeps track of the number of steps it takes.
+       */
+      State reachesVia(string path, int steps) {
+        // Trivial case: a state is always reachable from itself
+        steps = 0 and this = result and path = ""
+        or
+        // A state is reachable using pathSoFar and then safely ferrying cargo.
+        exists(int stepsSoFar, string pathSoFar, Cargo cargo |
+          result = this.reachesVia(pathSoFar, stepsSoFar).safeFerry(cargo) and
+          steps = stepsSoFar + 1 and
+          // We expect a solution in 7 steps, but you can choose any value here.
+          steps <= 7 and
+          path = pathSoFar + "\n Ferry " + cargo
+        )
+      }
+    
+
+如果步数的上界很大的话，其中仍然可能包含循环。换句话说，由于存在多次重复经历相同的状态，所以，渡河方案的效率是非常低的。
+
+实际上，我们可以完全避免计算步数，这样也就无需为步数选择上限而操心了。例如，如果我们跟踪已经历过的状态，并确保每个摆渡操作都通向一个新的状态的话，那么得到的渡河方案就肯定不会包含任何循环。
+
+为此，我们可以将之前定义的成员谓词更改为`State reachesVia(string path, string
+visitedStates)`。这个该谓词的返回结果，就是可以通过给定路径，从当前状态（this）开始，在不重复之前经历过的状态的情况下，可以到达的所有状态。
+
+  * 和前面一样，如果this是结果状态，那么它（通常可）通过一个空路径和一个表示已经历状态的空字符串到达结果状态。
+
+  * 如果this可以通过某路径在不重复之前经历过的状态的情况下达到某个中间状态，并且存在从中间状态到结果状态的safeFerry操作的话，则可以到达任何其他状态。需要注意的是，要想检查某个状态以前是否被经历过，可以检查是否存在该状态发生时的`visitedStates`索引
+
+    
+    
+    /**
+       * Returns all states that are reachable via safe ferrying.
+       * `path` keeps track of how it is achieved.
+       * `visitedStates` keeps track of previously visited states and is used to avoid loops.
+       */
+      State reachesVia(string path, string visitedStates) {
+        // Trivial case: a state is always reachable from itself.
+        this = result and
+        visitedStates = this and
+        path = ""
+        or
+        // A state is reachable using pathSoFar and then safely ferrying cargo.
+        exists(string pathSoFar, string visitedStatesSoFar, Cargo cargo |
+          result = this.reachesVia(pathSoFar, visitedStatesSoFar).safeFerry(cargo) and
+          // The resulting state has not yet been visited.
+          not exists(int i | i = visitedStatesSoFar.indexOf(result)) and
+          visitedStates = visitedStatesSoFar + "/" + result and
+          path = pathSoFar + "\n Ferry " + cargo
+        )
+      }
+    
+
+## 展示找到的路径
+
+定义好相关的类和谓词之后，我们就可以编写一个`select`子句来返回找到的路径了
+
+    
+    
+    from string path
+    where any(InitialState i).reachesVia(path, _) = any(GoalState g)
+    select path
+    
+
+其中，谓词`reachesVia`的第二个参数是一个特殊的符号，即`_`，它代表`visitedStates`的任意值。实际上，我们通常在无需关心，或可以忽略的地方使用这个符号，完整的代码如下：
+
+    
+    
+    /**
+     * A solution to the river crossing puzzle.
+     */
+     
+    /** A possible cargo item. */
+    class Cargo extends string {
+      Cargo() {
+        this = "Nothing" or
+        this = "Goat" or
+        this = "Cabbage" or
+        this = "Wolf"
+      }
+    }
+     
+    /** One of two shores. */
+    class Shore extends string {
+      Shore() {
+        this = "Left" or
+        this = "Right"
+      }
+     
+      /** Returns the other shore. */
+      Shore other() {
+        this = "Left" and result = "Right"
+        or
+        this = "Right" and result = "Left"
+      }
+    }
+     
+    /** Renders the state as a string. */
+    string renderState(Shore manShore, Shore goatShore, Shore cabbageShore, Shore wolfShore) {
+      result = manShore + "," + goatShore + "," + cabbageShore + "," + wolfShore
+    }
+     
+    /** A record of where everything is. */
+    class State extends string {
+      Shore manShore;
+      Shore goatShore;
+      Shore cabbageShore;
+      Shore wolfShore;
+     
+      State() { this = renderState(manShore, goatShore, cabbageShore, wolfShore) }
+     
+      /** Returns the state that is reached after ferrying a particular cargo item. */
+      State ferry(Cargo cargo) {
+        cargo = "Nothing" and
+        result = renderState(manShore.other(), goatShore, cabbageShore, wolfShore)
+        or
+        cargo = "Goat" and
+        result = renderState(manShore.other(), goatShore.other(), cabbageShore, wolfShore)
+        or
+        cargo = "Cabbage" and
+        result = renderState(manShore.other(), goatShore, cabbageShore.other(), wolfShore)
+        or
+        cargo = "Wolf" and
+        result = renderState(manShore.other(), goatShore, cabbageShore, wolfShore.other())
+      }
+     
+      /**
+       * Holds if the state is safe. This occurs when neither the goat nor the cabbage
+       * can get eaten.
+       */
+      predicate isSafe() {
+        // The goat can't eat the cabbage.
+        (goatShore != cabbageShore or goatShore = manShore) and
+        // The wolf can't eat the goat.
+        (wolfShore != goatShore or wolfShore = manShore)
+      }
+     
+      /** Returns the state that is reached after safely ferrying a cargo item. */
+      State safeFerry(Cargo cargo) { result = this.ferry(cargo) and result.isSafe() }
+     
+      string towards() {
+        manShore = "Left" and result = "to the left"
+        or
+        manShore = "Right" and result = "to the right"
+      }
+     
+      /**
+       * Returns all states that are reachable via safe ferrying.
+       * `path` keeps track of how it is achieved.
+       * `visitedStates` keeps track of previously visited states and is used to avoid loops.
+       */
+      State reachesVia(string path, string visitedStates) {
+        // Trivial case: a state is always reachable from itself.
+        this = result and
+        visitedStates = this and
+        path = ""
+        or
+        // A state is reachable using pathSoFar and then safely ferrying cargo.
+        exists(string pathSoFar, string visitedStatesSoFar, Cargo cargo |
+          result = this.reachesVia(pathSoFar, visitedStatesSoFar).safeFerry(cargo) and
+          // The resulting state has not yet been visited.
+          not exists(int i | i = visitedStatesSoFar.indexOf(result)) and
+          visitedStates = visitedStatesSoFar + "/" + result and
+          path = pathSoFar + "\n Ferry " + cargo
+        )
+      }
+    }
+     
+    /** The initial state, where everything is on the left shore. */
+    class InitialState extends State {
+      InitialState() { this = renderState("Left", "Left", "Left", "Left") }
+    }
+     
+    /** The goal state, where everything is on the right shore. */
+    class GoalState extends State {
+      GoalState() { this = renderState("Right", "Right", "Right", "Right") }
+    }
+     
+    from string path
+    where any(InitialState i).reachesVia(path, _) = any(GoalState g)
+    select path + "."
+    
+
+![image-20221209150454653](https://image.3001.net/images/20221213/1670940033_63988581d862d0d2584e7.png!small)
+
+目前，谓词`reachesVia`中定义的路径只显示货物的摆渡顺序。所以，我们还可改进这个谓词和相应的select子句，以使得返回的渡河方案更加容易理解，例如：
+
+**·**显示更多信息，如货物的运送方向，例如“将山羊送到左岸”。
+
+**·**详细描述每一步的状态，例如“山羊：左，农夫：左，卷心菜：右，狼：右”。
+
+**·**以更“可视化”的方式显示路径，例如使用箭头显示状态之间的转换。
+
+## 其他解决方案
+
+官方文档给出其他三种解决方案：https://codeql.github.com/docs/writing-codeql-queries/cross-the-river/ 这里不一一赘述
+
+  1. 修改path来更细致的描述结果路径
+
+  2. 使用了抽象类和谓词
+
+  3. 通过代数数据类型来对各种情形进行建模，而不是将所有要素都定义为String的子类
+
+## 小结
+
+这节是比较难理解的，因为是解决了一个复杂的逻辑问题，我们需要将问题抽象的表达出来，对逻辑抽象能力比较高。可以多多思考这个问题，有助于我们编写更复杂的查询。
+

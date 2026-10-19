@@ -1,0 +1,414 @@
+思科最近发现了一个针对印度政府和军事人员的攻击活动，攻击者使用了两个商业 RAT（NetwireRAT 和
+WarzoneRAT）。攻击者将诱饵文件伪装成与印度政府基础设施运营相关的指南，指南以恶意 Office 文档和压缩文件（RAR、ZIP）等形式出现。
+
+攻击者使用的一些诱饵文件和攻击方式与 Transparent Tribe 和 SideCopy 组织非常相似，包括使用的受感染网站和虚假域名。
+
+## 感染链
+
+最早发现的攻击行动是在 2020 年 12 月利用恶意 Office 文档的攻击，该文档包含恶意 VBA 宏代码。
+
+文档的内容从安全建议、会议日程和软件安装说明。恶意文档在失陷主机上下载并执行下一阶段的 Payload，最终投递 RAT。
+
+使用的一些文件名是：
+
+> KAVACH-INSTALLATION-VER-1.docm
+>
+> Security-Updates.docm
+>
+> Online meeting schedule for OPS.doc
+>
+> schedule2021.docm
+
+有趣的是，在 SideCopy 最近的攻击行动中使用以
+`Kavach`为主题的恶意文档和二进制文件。![1632549914_614ebc1a83a40ff9ce0ef.png!small?1632549914895](https://image.3001.net/images/20210925/1632549914_614ebc1a83a40ff9ce0ef.png!small?1632549914895)
+
+## Loader
+
+这些 Loader 将使用以下任意技术来执行最终的 Payload：
+
+> 下载 Payload 使用进程 Hollowing 技术激活
+>
+> 解码嵌入的 Payload 并使用进程 Hollowing 技术激活
+
+根据变种，Loader 还可以执行以下活动：
+
+> 修复`AmsiScanBuffer`的前六个字节来禁用 AMSI 扫描
+>
+> 通过修改注册表`HKCU\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run`进行持久化
+
+## Downloader
+
+在 2021 年 3 月和 4 月，攻击者利用 Downloader 下载和执行 RAT。该 Downloader 的早期版本使用 RunPE DLL
+通过进程 Hollowing 将 Payload 注入目标进程。
+
+![image.png-202.9kB](https://image.3001.net/images/20210925/1632550297_614ebd9978685f9b7d1e1.png!small)
+
+2021 年 5 月，攻击者更新使用基于 C# 的 Downloader 访问诱饵
+URL，只有在通信失败时才继续执行。![image.png-155.7kB](https://image.3001.net/images/20210925/1632550298_614ebd9a6fa3a7a73a5ae.png!small)
+
+修复 `AmsiScanBuffer`绕过 AMSI 并建立持久化，下一阶段的 Payload 包含木马化的 .NET 应用程序，具备解密和部署
+NetwireRAT
+恶意软件的能力。![image.png-297kB](https://image.3001.net/images/20210925/1632550299_614ebd9b4601fe881b372.png!small)
+
+2021 年 6 月初，攻击者开始尝试使用 Pastebin 托管 Payload。
+
+Downloader
+的演变如下所示：![image.png-80.4kB](https://image.3001.net/images/20210925/1632550300_614ebd9c07c2a3332a67e.png!small)
+
+## 嵌入 Payload 的 Loader
+
+攻击者基于开源代码进行修改，基于 .NET 二进制文件可追溯到 2020 年 12 月的 RAT Loader，其  
+中一个 Dropper 是 [Pangantucan Community High
+School](https://github.com/bwjctan1999/PCHS-Library-Manager)。![image.png-174.5kB](https://image.3001.net/images/20210925/1632550300_614ebd9c92cb1b50d7c83.png!small)
+
+![image.png-171kB](https://image.3001.net/images/20210925/1632550301_614ebd9d5649dfbfa49b9.png!small)
+
+Loader 通过调用函数修改登录表单，加载一个名为 `SimpleUI`的 DLL Loader。第二阶段 Loader 是从名为 `Draw`.NET
+资源中提取而来。
+
+从 `Draw`资源中提取的程序集负责解码和加载 Netwire，该模块作为 AuthorizationRule 存储在原始 Loader
+中。![image.png-628.5kB](https://image.3001.net/images/20210925/1632550301_614ebd9df32fc68cd7d4e.png!small)
+
+将存储在其 .NET 资源中的 Netwire RAT 注入目标进程中，例如 vbc.exe。
+
+## Payload
+
+Netwire 和 AveMaria RAT 最终会被下载执行，在某些情况下，还发现了基于 .NET
+的自定义文件枚举模块的部署，这些模块生成和泄露失陷主机上特定文件扩展名的文件路径列表。
+
+攻击者的感染链并非一成不变，恶意文档中的宏代码下载并执行 VBS 代码，而非直接下载 Payload。
+
+VBS 包含许多与实际恶意代码混合在一起的垃圾评论，恶意代码会执行编码的 PowerShell 命令下载下一个 Payload。
+
+PowerShell 下载解压缩程序和压缩文件，解压后运行 Payload。解压的命令如下所示：
+
+7za.exe x -y -aoa -bso0 -bse0 -bb0
+-bd![image.png-82.6kB](https://image.3001.net/images/20210925/1632550304_614ebda0395012fd30867.png!small)
+
+完整感染链如下所示：![image.png-83.2kB](https://image.3001.net/images/20210925/1632550305_614ebda11e414906655cf.png!small)
+
+## 基于压缩文件的感染
+
+在可追溯到 202 年 12 月的其他感染链中，攻击者在受感染网站上部署了包含恶意 Payload 的 ZIP 文件。这些压缩文件的 URL
+很可能被发送给受害者，下载并执行
+Payload。![image.png-91.1kB](https://image.3001.net/images/20210925/1632550305_614ebda1981d303223180.png!small)
+
+## NetwireRAT
+
+> 该恶意软件包含多种功能：
+>
+> 从浏览器窃取凭据
+>
+> 执行任意命令
+>
+> 收集系统信息
+>
+> 文件操作
+>
+> 枚举\终止进程
+>
+> 键盘记录
+
+![image.png-381.4kB](https://image.3001.net/images/20210925/1632550306_614ebda279ea55f0f2785.png!small)
+
+## WarzoneRAT
+
+WarzoneRAT 是一种商业 RAT，尽管有破解版的 WarzoneRAT
+公开流传，但是还是有很多人购买。![image.png-334.9kB](https://image.3001.net/images/20210925/1632550307_614ebda331dc591b6bbd6.png!small)
+
+与 NetwireRAT 一样，WarzoneRAT 也包含多种功能：
+
+> 远程桌面
+>
+> 摄像头捕获
+>
+> 浏览器/电子邮件客户端凭据窃取
+>
+> 文件操作
+>
+> 执行任意命令
+>
+> 键盘记录
+>
+> 反向 Shell
+>
+> 枚举/终止进程
+
+![image.png-293.9kB](https://image.3001.net/images/20210925/1632550308_614ebda428f3bf0af2297.png!small)
+
+## 文件枚举
+
+除了这两种 RAT，攻击者还有其他用于侦察的恶意软件用于部署。攻击者使用特定工具枚举某些文件扩展名的文件，找到的文件列表/路径会被上传到攻击者控制的 C&C
+服务器。
+
+目标位置：
+
+> C:\Users\\\Downloads\
+>
+> C:\Users\\\Desktop\
+>
+> C:\Users\\\Documents\
+>
+> C:\Users\\\OneDrive\Downloads\
+>
+> C:\Users\\\OneDrive\Desktop\
+>
+> C:\Users\\\OneDrive\Documents\
+
+搜索的文件扩展名包括
+`.txt`、`.doc`、`.dot`、`.wbk`、`.docx`、`.docm`、`.dotx`、`.dotm`、`.docb`、`.xls`、`.xlt`、`.xlm`、`.xlsx`、`.xlsm`、`.xltx`、`.xltm`、`.xlsb`、`.xla`、`.xlam`、`.xll`、`.xlw`、`.ppt`、`.pot`、`.pps`、`.pptx`、`.pptm`、`.potx`、`.potm`、`.ppam`、`.ppsx`、`.ppsm`、`.sldx`、`.sldm`、`.pdf`。
+
+![image.png-228.3kB](https://image.3001.net/images/20210925/1632550309_614ebda5c04ca19736a0f.png!small)
+
+## 归因
+
+攻击行动中使用的常见主题是印度政府的 `Kavach`应用程序，这是政府人员用来访问电子邮件的双因子认证应用。最近，SideCopy
+组织针对印度政府的攻击也使用了这个主题。一些文件名为：
+
+> KAVACH-INSTALLATION-VER-1.docm
+>
+> KAVACH-INSTALLATION-VER1.5.docm
+>
+> KAVACH-INSTALLATION-VER-3.docm
+>
+> kavach-2-instructions.zip
+>
+> kavach-2-instructions.exe
+>
+> KAVACH-INSTALLATION-V3.zip
+>
+> KAVACH-INSTALLATION-V3.exe
+
+其他针对军事人员和政府人员的文件名为：
+
+> CONFD-PERS-Letter.docm
+>
+> PERS-CONFD-LETTER.exe
+>
+> Admiral_Visit_Details_CONFD.exe
+>
+> Pay and Allowance Details.xls
+
+## 被入侵的网站
+
+攻击者依靠被入侵的网站和虚假域名来进行攻击，这种方式也类似于 Transparent Tribe。这次攻击旨在破坏准军事和政府相关网站以托管
+Payload，为了使受害者看起来链接合法。
+
+2021 年 1 月以来，攻击者攻入了属于国防服务军官协会的国防相关网站（dsoipalamvihar.co.in），并使用该网站部署与
+NetwireRAT 相关的 Payload。攻击者还攻击了印度陆军公立学校的网站（apsdigicamp.com），也用于部署 NetwireRAT。
+
+攻击者在 2021 年 7 月也使用虚假域名 govrn.xyz
+部署恶意软件。![image.png-333.6kB](https://image.3001.net/images/20210925/1632550310_614ebda67d1fdd72f7487.png!small)
+
+## 恶意邮件
+
+攻击者使用了多种邮件程序分发恶意文件、恶意链接：
+
+> TeamCC ninjaMailer v1.3.3.7
+>
+> Leaf PHPMailer 2.7
+>
+> Leaf PHPMailer 2.8
+
+基于 PHP 的脚本能够配置 SMTP
+选项并生成鱼叉邮件，再发送给其他受害者。![image.png-80.9kB](https://image.3001.net/images/20210925/1632550311_614ebda712d27dec759d9.png!small)
+
+## 管理
+
+攻击者使用两种类型（PHP、Perl）的脚本来管理被入侵的网站。使用的 WebShell 是：
+
+> PhpSpy
+>
+> b374k 2.7
+>
+> Older b374k web shell
+
+![image.png-16.7kB](https://image.3001.net/images/20210925/1632550311_614ebda7a9591e6ff988b.png!small)
+
+![image.png-315.2kB](https://image.3001.net/images/20210925/1632550312_614ebda846e923df2fe9d.png!small)
+
+攻击者还部署了一个由 `Pakistan Haxors Crew`创建的文件上传程序，无需通过 WebShell 就能将文件上传到网站。
+
+![image.png-68.4kB](https://image.3001.net/images/20210925/1632550313_614ebda94fbae7d2c98d7.png!small)
+
+## 结论
+
+攻击从 2020 年底开始一直在进行，攻击者部署商业 RAT 使归因变得困难，也为攻击者节省了开发恶意软件的工作。
+
+## IOC
+
+> 5.252.179.221:6200  
+> 64.188.13.46  
+> 66.154.103.106:13374  
+> 66.154.103.106:13371  
+> 66.154.103.106:13377  
+> 9b7c0465236b7e1ba7358bdca315400f8ffc6079804f33e2ca4b5c467f499d1f  
+> eb40d1aab9a5e59e2d6be76a1c0772f0d22726dd238110168280c34695a8c48f  
+> 6b0fde73e638cb7cdb741cff0cc4ec872338c106ffe0c3a6712f08cdb600b83d  
+> 2b23c976b4aca2b9b61c474e0d6202644d97b48fa553cd6c9266c11b79d3cd13  
+> 41b1c3fa6b8a11fde6769650977d7bc34e0da91a23dd2b70220beec820e17d7a  
+> e6a73ef757c834e155a039619a1fdb1388f2a7ebe80accae8d13deeb3fd66471  
+> 89280f7e1785b1c85432b4cf3a284e44d333b2a1a43a2e52d7ce8680a807be03  
+> 302a973dc432975395c5f69a4c8c75bfffc31350176f52bddb8e4717bdbad952  
+> 5d3220db34868fc98137b7dfb3a6ee47db386f145b534fb4a13ef5e0b5df9268  
+> 62a890cce10f128f180d6e2b848ffff42e32859fe58a023b2bdb35dbe0a1713b  
+> 0d64fd162d94601ddd806df804103f3713c4aa43c201fffb9c92783c29d6094c  
+> 824bb11ef1520aecca35ad9abd8e043e4e00193668590d4aee2a41f205db7388  
+> bdb40d5e73e848ada64f334eddd184fb67e2fcdc149248db641bb8d804468f1d  
+> eef5e86ebff5c59204009f4d421b80518ce3edf9c9b1bb45fb2197d9f652a927  
+> c1eba59ce0ff5d8f57fe0ae0a9af20cb0fa725fc05a58869bb0b85c2d3b815fb  
+> 49485a737673365489cb89ef1f5c29545051b33aa1642a8940e15ad281b76dfc  
+> a8c67a11ed522bf597feb8b-50a5b63f12a5ac724ae6adcc945475654128f6d64  
+> f8748c726bda6d67c7130aae8777d7dcb5b0cca8695041b290e9d9cb95a0a633  
+> 3cdedd433c9dde56bfa0a6559a97287c7aec3346178ce2d412a255d8ed347307  
+> 626f00a260880c6bfa0a955fd0c89336a691e438c4bc9206182a05db3774b75a  
+> 89db68dcdbae6fca380029c1e5c5158fb5d95db8034f1ee7dbac36cf07057828  
+> 68ddb86dd74285a0b6f12ec8adca9a8ea4569ef1143bec9e8ebe411b2a71720f  
+> c8ffb9d14a28fbc7e7f6d517b22a8bb83097f5bc464c52e027610ab93caec0d6  
+> d09cac8cd7c49b908e623220a9b2893822263ae993c867b5bd4fce562d02dcd5  
+> 5965bba31eb30dedf795012e744fe53495d5b0c1bea52eea32e9924819e843d1  
+> 455ac9cc21fcb20a14caa76abd1280131fecae9d216b1f6961af2f13081c2932  
+> 304c2f88ccd6b0b00cfcb779b8958d9467c78f32b7177949899d3e818b3b9bed  
+> cf2261c7911f8481f7267b73b64546ca851b5471dab3290ce0140f956823348a  
+> 6f8267a673ca5bc9fa67198c9c74d34109baf862f9194bbb0ebcc7ddd7b66b91  
+> ea201379e3d7343fc7a8fbe0451766f1cea36b66c13cfbf78c4ac7ffb1eb3d93  
+> 1455a003412e344d60c8bad71977aa42bb9825cffa5417e45b08070b14e5df3f  
+> 91acdc04a03134c17ccff873f10e90c538ed74c7ab970b9899ac5c295e165a75  
+> b76be2491b127a75c297b72e1cf79f46f99622ddf4ba3516a88b47d9b6df9131  
+> d5b7edfc886c8228197b0cf20ab35f1bc0b5c652b1d766456d4e055ba6c9ea6e  
+> fd413ec8d9d798c28fc99c0633e6477f6eabc218788ad37c93be4de758a02962  
+> cf2aec2969353dc99a7f715ac818212b42b8cff7a58c9109442f2c65ff62de42  
+> 8284550711419f4c65083dc5de3c6b92164d8d0835ec864e9a2db9c4c0d067e4  
+> 5f6571251fd36a4ec0b101c3b0be4099bc1c812d57bef57f310291d314e638ba  
+> 39ff95ecb1036aab88a146714bb5b189f6afc594ecf8ffbe8b123d1579a3a259  
+> 3e59b3504954efd9b4231cb208296ed9f19f4430e19db81e942b304ee0255324  
+> cd43bac8f7a0a3df4f654ed698f5828db7a05c771956b924bfd6bd5ba09e2360  
+> 051f67ba58bd2b7751541bf2eb3a09642a00a43052c0d3487a182345828ee076  
+> aa3d57993bbc7aefdc05e0e99ccdb5e884aa530ae90437157c7ba2308d9c4d3c  
+> 8ce30043aba8c9ad33c11c3de152fe142ba7b710384f77d332076957d96e19b2  
+> 5226a12dc7f7b5e28732ad8b5ad6fa9a35eadfbeec122d798cd53c5ef73fe86a  
+> 2a7f0af4650edb95eb7a380de6d42db59d8dd220bb4831e30e06450e149eea49  
+> 7c12a820fd7e576f3a179cdccaefbfcd090e0f890fccfab7615bc294795dc244  
+> 977d5b4b945cfce92e40e4d5447626f3ffb7697d98f651b9598edfd58074b9c0  
+> 98337b43e214906b10222722607f76d07a5c0419a9dc3b3af415680c60944809  
+> 2443e8ccdf51e82d310466955a70013155c139564672b2f79db7209207776bd2  
+> de10443785cf7d22db92fada898a77bc32c7505931b692110d2d5cd63c5b4853  
+> b891fad315c540439dba057a0f4895ae8bae6eed982b0bf3fb46801a237c8678  
+> aa2b8412cf562c334052d5c34a2e5567090e064b570884d6f4d3e28806822487  
+> 999f4892d10eb6cfabe172338c1e7dd3126a2cd435bdb59748178f1d4d2d3b33  
+> 140e0524f4770fc2543b86f1d62aaa6b3018c54e40250040feaa2f24bdbe974d  
+> 0df12b0f704dbd5709f86804db-5863bd0e6d6668d45a8ff568eefbaa2ebfb9fd  
+> 369e794e05e0d7c9bba6dde5009848087a2cd5e8bf77583d391e0e51d21a52cd  
+> 480e57131bd186e31ab5ea534381d7b93c8030f8b5757bde9d0b6039efa3e64d  
+> df780cccc044ee861af1089eb7498a612e6d740a609e500fd3c2a35d2c9c31e0  
+> a20970aa236aa60d74841e7af53990c5da526f406c83fd1bedb011290517d9b0  
+> 54a65835dc5370b089c38414972c8da589512cf73b159e8187cdda62092dc463  
+> 3634b81f8b91d723733cc44429d221e53b2a7bf121e42bd26078602f4ff48f86  
+> e9edb427d080c0a82e7b1c405171746cb632601b3d66f9d7ad5fa36fd747e4e4  
+> 2f98235351c6d6bafbb237195f2556abde546578aefd7d94f8087752551afc15  
+> 87fc9901eb7c3b335b82c5050e35458a2154747cd3e61110eed4c107f4ffada9  
+> b4c0f24a860f14b7a7360708a4aee135bf1a24d730d7794bc55e53a31a0e57a5  
+> ba710351cfdf6b198d7479a91e786562ddb5e80db5dc9ad42278093a3395fca9  
+> 8e7d5805a104dc79355387dbd130e32d183b645f42f7b35c195041d1cf69f67e  
+> 2b7ac9063a530e808ffac5cf9812d850dd5fa4d1f014ba5134ad023fde503d21  
+> de245cd946e48a4b1c471b17beff056b1a2566770a96785208c698f85fb73db2  
+> 689f3ff0a3331e198ea986864b2b23a62631c930d83b971382b4732474884953  
+> 3794cfe8f3da39924cabd03d74aa95fb5d0c25c73d09cc99ad95c3f4e17252b8  
+> 5a351acfe61a0ad9444b8d23c9915d7beb084abd7b346b9d064e89914552596d  
+> a8af6228296bc9ac2cd7b7bf503c9755947c844fec038255189a351bcb92bb6d  
+> b54f21a5d20457424440fdf5a57c67924854b47cf85d6a5f26daeaf183e82b69  
+> 8ea420deaa86c778fc6a3b1b22bd0c2ea822089e948ad8f113c9e5b0539e92a7  
+> c86f6fdb6b360c12de1f75c026dc287aa9de1b8e9b5e5439eeab9e33de3e475e  
+> 8cca06ea80a92f31418f2ed0db5e1780cc982ab185f9bf15fa6f396b561aad1f  
+> b9b04fcae747407b9e5ddec26438d9edf046de0745ea4175e4d534a7b575d152  
+> 4ded1042a6cd3113bb42c675257d7d0153a22345da62533bd059d9bdd07c000f  
+> 65ed397a4a66f45f332269bec7520b2644442e8581f622d589a16ad7f5efbf82  
+> c6ea094954a62cf50d3369f6ea1d9e7d539bb7eb6924005c3c1e36832ed3d06e  
+> c9a88d569164db35c8b32c41fda5c3bd4be0758fa0ea300f67fbb37ddc1f3f8d  
+> c75cc5af141dc8ea90d7d44d24ff58a6b3b0c205c8d4395b07de42d285940db1  
+> 8b4a7d6b3de3083a8b71ec64ff647218343f4431bbb93a6ce18cb5f33571a38e  
+> 37d0d9997776740ae3134ec6a15141930a9521cd11e2fbb8d0df6d308398f32e  
+> http://service.clickaway.com//ccrs_tool/uploads/722CDfdBpfUbRyg.bbc  
+> http://service.clickaway.com/ccrs_tool/uploads/feedback.docm  
+> http://service.clickaway.com/ccrs_tool/uploads/Security-Updates.docm  
+> http://service.clickaway.com/ccrs_tool/uploads/r.docm  
+> http://service.clickaway.com/ccrs_tool/uploads/abc/r.docm  
+> http://service.clickaway.com/ccrs_tool/uploads/abc/CONFD-PERS-Letter.docm  
+> http://service.clickaway.com/ccrs_tool/uploads/KAVACH-INSTALLATION-> VER1.5.docm  
+> http://service.clickaway.com/ccrs_tool/uploads/ma/KAVACH-INSTALLATION-> VER-1.docm  
+> https://aps.govrn.xyz/schedule2021.docm  
+> http://www.bookiq.bsnl.co.in/data_entry/circulars/QA2E.exe  
+> http://www.bookiq.bsnl.co.in/data_entry/circulars/Host1.exe  
+> http://www.bookiq.bsnl.co.in/data_entry/circulars/mac.exe  
+> http://www.bookiq.bsnl.co.in/data_entry/circulars/mmaaccc.exe  
+> http://www.bookiq.bsnl.co.in/data_entry/circulars/mac.exe  
+> http://www.bookiq.bsnl.co.in/data_entry/circulars/mmaaccc.exe  
+> http://www.bookiq.bsnl.co.in/data_entry/circulars/mmaaccc.exe  
+> http://www.bookiq.bsnl.co.in/data_entry/circulars/Host1.exe  
+> http://bookiq.bsnl.co.in/data_entry/circulars/Host.exe  
+> https://kavach.govrn.xyz/shedule.exe  
+>
+> http://unicauca.edu.co/regionalizacion/sites/default/files/kavach-1-5/Acrobat.exe  
+> http://45.79.81.88/ccrs_tool/uploads/mac.exe  
+> http://45.79.81.88/ccrs_tool/uploads/maaccc.exe  
+> http://45.79.81.88/ccrs_tool/uploads/maacc.exe  
+> http://45.79.81.88/ccrs_tool/uploads/VPN.exe  
+> http://45.79.81.88/ccrs_tool/uploads/conhost213.exe  
+> http://45.79.81.88/ccrs_tool/uploads/new_war.exe  
+> http://45.79.81.88/ccrs_tool/uploads/private.exe  
+> http://45.79.81.88/ccrs_tool/uploads/notice.exe  
+> http://service.clickaway.com/ccrs_tool/uploads/conhost123.exe  
+> http://service.clickaway.com/ccrs_tool/uploads/Host1.exe  
+> http://service.clickaway.com/ccrs_tool/uploads/mac.exe  
+> http://service.clickaway.com/ccrs_tool/uploads/maaacccc.exe  
+> http://service.clickaway.com/ccrs_tool/uploads/maaccc.exe  
+> http://service.clickaway.com/ccrs_tool/uploads/maacc.exe  
+> http://service.clickaway.com/ccrs_tool/uploads/VPN.exe  
+> http://service.clickaway.com/ccrs_tool/uploads/new_war.exe  
+> http://service.clickaway.com/ccrs_tool/uploads/ma/mmmaaaacccccc.exe  
+> http://service.clickaway.com/ccrs_tool/uploads/client.exe  
+> http://service.clickaway.com/ccrs_tool/uploads/private.exe  
+> http://service.clickaway.com/ccrs_tool/uploads/notice.exe  
+> http://service.clickaway.com/swings/haryanatourism/gita-jayanti/invited.exe  
+> http://service.clickaway.com/swings/haryanatourism/gita-jayanti/details.exe  
+> https://www.ramanujan.edu.in/cctv-footage/footage-346.exe  
+> http://thedigitalpoint.co.in/zomato/vouchers/zomato-voucher.zip  
+> http://66.154.112.212/GOM.exe  
+> https://dsoipalamvihar.co.in/manage/OperatorImages/exe/GOM_Player.exe  
+> http://64.188.13.46/oiasjdoaijsdoiasjd/  
+> https://www.unicauca.edu.co/regionalizacion/sites/default/files/Meeting-> details.zip  
+>
+> https://www.unicauca.edu.co/regionalizacion/sites/default/files/kavach-1-5/kavach-2-instructions.zip  
+>
+> http://www.unicauca.edu.co/regionalizacion/sites/default/files/kavach-1-5/KAVACH-> INSTALLATION-V3.zip  
+> https://dsoipalamvihar.co.in/pdf/important_notice.zip  
+> http://lms.apsdigicamp.com/webapps/uploads/acc/cctv-footages/student-> termination-and-proof.zip  
+> http://beechtree.co.in/Admin/IconImages/progress-reports/Progress-> report-43564.zip  
+> http://service.clickaway.com/ccrs_tool/uploads/RunPe.dll  
+> https://www.dropbox.com/s/w8tc18w2lv1kv6d/msovb.vbs?dl=1  
+> https://www.dropbox.com/s/lt7a981theoyajy/adobecloud.7z  
+> https://pastebin.com/raw/mrwtZi34  
+> http://lms.apsdigicamp.com/webapps/uploads/resume/mailer.php.zip  
+> http://lms.apsdigicamp.com/webapps/uploads/resume/mailer.php/mailer.php  
+> http://lms.apsdigicamp.com/webapps/uploads/resume/mailer.php  
+> http://lms.apsdigicamp.com/webapps/uploads/resume/4O4.php  
+> http://lms.apsdigicamp.com/webapps/uploads/resume/b374k_rs.pl  
+> http://lms.apsdigicamp.com/webapps/uploads/resume/pack.php  
+> http://lms.apsdigicamp.com/webapps/uploads/resume/cc.php  
+> http://lms.apsdigicamp.com/webapps/uploads/resume/leafmailer2.8.php  
+> http://lms.apsdigicamp.com/webapps/uploads/acc/oodi.html  
+> http://lms.apsdigicamp.com/webapps/uploads/progress-report/  
+> http://lms.apsdigicamp.com/webapps/uploads/progress-report/index.html  
+> http://service.clickaway.com/ccrs_tool/uploads/1594066203_4O4.php  
+> http://service.clickaway.com/ccrs_tool/uploads/mailer.php  
+> http://service.clickaway.com/ccrs_tool/uploads/leaf.php  
+> http://service.clickaway.com/ccrs_tool/uploads/leafmailer2.8.php  
+> http://service.clickaway.com/ccrs_tool/uploads/1622640929_myshell.php  
+> http://service.clickaway.com/ccrs_tool/uploads/newfil.html  
+> http://service.clickaway.com/ccrs_tool/uploads/1594066203_ang3l.html  
+> http://service.clickaway.com/ccrs_tool/uploads/1594066203_up.htm
+
+## 参考来源
+
+> [TalosIntelligence](https://blog.talosintelligence.com/2021/09/operation-> armor-piercer.html)
+

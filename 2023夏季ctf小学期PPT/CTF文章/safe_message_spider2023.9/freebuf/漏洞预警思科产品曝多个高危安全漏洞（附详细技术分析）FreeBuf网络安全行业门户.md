@@ -1,0 +1,96 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+**近日，360企业安全集团代码卫士团队安全研究人员发现了思科公司网络设备的多个高危安全漏洞（CVE-2018-0423、CVE-2018-0424、CVE-2018-0425、CVE-2018-0426），并第一时间向思科公司报告，协助其修复漏洞。**  
+
+2018年9月5日，思科公司发布了4个安全公告，公开致谢360企业安全集团代码卫士团队，并且发布相应的补丁固件版本修复漏洞。
+
+![漏洞情况思科.jpg](https://image.3001.net/images/20180910/1536559911_5b960b2743875.jpg!small)
+
+图 思科公司官方公告
+
+  
+![致谢7.jpg](https://image.3001.net/images/20180910/1536559940_5b960b44959c6.jpg!small)
+
+图 致谢360代码卫士
+
+本次思科公司修复的漏洞中，CVE-2018-0423 是一个缓冲区溢出漏洞，CVSS评分为9.8分，本文将针对该漏洞进行技术分析。
+
+## 0x00 CVE-2018-0423 概述
+
+该漏洞是一个未授权的缓冲区溢出漏洞，影响 Cisco RV110W Wireless-N VPN Firewall、RV130WWireless-N
+Multifunction VPN Router、RV215WWireless-N VPN Router
+等型号。漏洞出现在访客模式的强制门户网站上，不需要进行任何的身份认证，任何用户均可访问，当一个已登陆的访客，主动退出时将触发一个 POST 请求，其
+URL为：https://[target_ip]/guest_logout.cgi，其中 POST 数据的 cip
+参数未进行合理的IP地址校验，并且可被绕过，导致精心构造的 cip
+参数可以触发缓冲区溢出漏洞，甚至直接获得设备的rootshell，此漏洞最终的CVSS评分为9.8，具体可以参见思科（Cisco）发布的安全公告，如下所示：
+
+![image.png](https://image.3001.net/images/20180910/1536569520_5b9630b0a9ae6.png!small)
+
+图 CVE-2018-0423安全公告
+
+##  **0x01技术分析**
+
+通过逆向分析固件文件系统中的httpd应用，并修复其中的符号表后，可以定位到在处理 guest_logout.cgi 时，将调用 sub_ 2B320
+函数，而后进入 sub_2AFB0 函数，sub_2AFB0 函数主要获取POST请求中的 cmac、cip 和submit_button 的值，并对
+cmac 和 cip 分别进行 MAC 地址和 IP 地址的合法性检验，如果 MAC 地址和 IP 地址都验证成功，则返回1，将进入包含漏洞函数
+**get_client_vlan_id** 的分支(具体的漏洞函数 get_client_vlan_id 将在后文进行说明)，其中 sub_2AFB0
+函数的部分伪代码如下：
+
+![image.png](https://image.3001.net/images/20180910/1536569537_5b9630c1bf8cb.png!small)
+
+图 sub_2AFB0 函数部分伪代码
+
+从业务逻辑处理上看，这样处理是没有任何问题的，因为 cmac 和 cip 是用户可控的参数，必然需要先进行合法性校验的，当然由于我们知道触发漏洞的函数在
+get_client_vlan_id 上，此函数将用户可控的 cip 作为参数，因此这里着重分析 VERIFY_IPv4 函数对 cip
+的校验流程，1)首先利用 sscanf() 判断是否存在合法的点分十进制IP地址；2)再利用 inet_aton()
+判断是否可以将点分十进制IP地址串转换成网络序的IP地址。其关键的部分伪代码如下所示：
+
+![image.png](https://image.3001.net/images/20180910/1536569675_5b96314b3814c.png!small)
+
+图 VERIFY_IPv4() 函数部分伪代码
+
+VERIFY_IPv4函数从 cip 提取 "%d.%d.%d.%d" 形式的IP地址，这很容易满足，只需要cip包含合法的点分十进制形式的 IP
+地址即可，如192.168.1.100。
+
+随后关键分析 inet_aton 函数对字符串 IP 地址的处理，如果处理成功则返回1，这里要实现触发缓冲区溢出漏洞就必须让 inet_aton
+处理成功，返回1，通过逆向分析发现，假设合法的IP地址后增加了一个字符，如：192.168.1.100X，那么程序会判断这个 X 是否为 \x00，是否是
+ascii 码，并且是否为空白字符，如果不为 \x00，并且是 ascii 码，但又不是空白字符，那么就会返回 0，这样就表示 inet_aton
+函数处理失败，但是如果X不为\x00，并且是 ascii 码，又是空白字符，那就会绕过空白字符之后的字符校验，并且能成功返回1，这样就表示inet_aton
+函数处理成功，其部分伪代码如下：
+
+![image.png](https://image.3001.net/images/20180910/1536569714_5b9631729baa5.png!small)
+
+图 inet_aton() 函数部分伪代码
+
+因此，恶意用户就可通过：点分十进制IP地址 + 一个空白字符 +
+任意字符长度的数据内容的形式来实现绕过VERIFY_IPv4函数的校验，而空白字符可以是空格、制表符等，这里可以直接使用空格即可实现绕过。
+
+而后程序将用户可控的 cip 值当作参数传递给使用危险函数的 **get_client_vlan_id** 函数，此函数未对 cip
+做任何过滤或处理，直接利用 strcpy 函数将其拷贝至大小固定的栈空间上，通过逆向分析可知其中 0x84-0x88 存放着返回地址 ->LR
+的值，因此一旦cip的长度超过0x84将直接覆盖返回地址，导致缓冲区溢出的发生，其部分汇编代码如下：
+
+![image.png](https://image.3001.net/images/20180910/1536569733_5b96318527f4e.png!small)
+
+图 get_client_vlan_id() 函数部分汇编代码
+
+## 0x02 参考链接
+
+1\.
+_<https://tools.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-20180905-rv-routers-overflow>_ （官方公告：CVE-2018-0423）
+
+2\.
+<https://tools.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-20180905-rv-routers-injection>（官方公告：CVE-2018-0424）
+
+3\.
+_<https://tools.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-20180905-rv-routers-disclosure>_ （官方公告：CVE-2018-0425）
+
+4\.
+_<https://tools.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-20180905-rv-routers-traversal>_ （官方公告：CVE-2018-0426）
+
+##  **0x03 关于360代码卫士**
+
+“360代码卫士”是360企业安全集团旗下专注于软件源代码安全的产品线，能力涵盖了源代码缺陷检测、源代码合规检测、源代码溯源检测三大方向，分别解决软件开发过程中的安全缺陷和漏洞问题、代码编写的合规性问题、开源代码安全管控问题。“360代码卫士”系列产品可支持Windows、Linux、Android、AppleiOS、IBM
+AIX等平台上的源代码安全分析，支持的编程语言涵盖C、C++、C#、Objective-C、Java、JSP、JavaScript、PHP、Python、Go、区块链智能合约Solidity等。目前360代码卫士已应用于上百家大型机构，帮助用户构建自身的代码安全保障体系，消减软件代码安全隐患。
+
+ ***本文作者360代码卫士，转载请注明来自FreeBuf.COM**
+

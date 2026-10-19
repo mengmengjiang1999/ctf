@@ -1,0 +1,162 @@
+{
+	"head":
+	{
+		"name":"dtype_mac_label",
+		"type":"TYPELIST"
+	},
+	"record":
+	{
+		"elem_no":1,
+		"elemlist":
+		[
+			"MAC_LABEL=0x1110",
+		]
+	}
+}
+{
+	"head":
+	{
+		"name":"subtype_label_define",
+		"type":"SUBTYPELIST"
+	},
+	"record":
+	{
+		"type":"MAC_LABEL",
+		"elem_no":4,
+		"elemlist":
+		[
+           	"LABEL",
+			"SUBJECT",
+			"OBJECT",
+			"ADDR"
+		]
+	}
+}
+
+{
+	"head":
+	{
+		"name":"flag_sec_class",
+		"type":"NAMELIST"
+	},
+	"record":
+	{
+		"elem_no":4,
+		"elemlist":
+		[
+			"RESEARCH=0x01",
+			"PRODUCE=0x02",
+			"TEST=0x04",
+            "PUBLIC=0x10"
+		]
+	}
+}
+{
+	"head":
+	{
+		"name":"mac_label_label",
+		"type":"RECORDTYPE"
+	},
+	"record":
+	{
+		"type":"MAC_LABEL",
+		"subtype":"LABEL",
+		"struct_desc":
+		{
+			"elem_desc":
+			[
+				{"name":"sec_class","type":"SFLAG","ref_name":"flag_sec_class"},
+				{"name":"sec_label","type":"UCHAR"},
+				{"name":"inte_label","type":"UCHAR"}
+			]
+		}
+	}
+}
+{
+	"head":
+	{
+		"name":"mac_label_subject",
+		"type":"RECORDTYPE"
+	},
+	"record":
+	{
+		"type":"MAC_LABEL",
+		"subtype":"SUBJECT",
+		"struct_desc":
+		{
+			"elem_desc":
+			[
+				{"name":"user_name","type":"ESTRING","size":64},
+				{"name":"user_id","type":"INT"},
+				{"name":"label","type":"SUBSTRUCT","ref_name":"mac_label_label"},
+				{"name":"exec_label","type":"SUBSTRUCT","ref_name":"mac_label_label"}
+			]
+		}
+        	"flag_no":1,
+		"index":
+		[
+        		{
+            	 		"flag":"INDEX",
+             			"elemlist":"user_name"
+        		}
+		]
+	}
+}
+{
+	"head":
+	{
+		"name":"mac_label_object",
+		"type":"RECORDTYPE"
+	},
+	"record":
+	{
+		"type":"MAC_LABEL",
+		"subtype":"OBJECT",
+		"struct_desc":
+		{
+			"elem_desc":
+			[
+				{"name":"file_name","type":"ESTRING","size":128},
+				{"name":"object_uuid","type":"UUID"},
+				{"name":"label","type":"SUBSTRUCT","ref_name":"mac_label_label"}
+			]
+		}
+        	"flag_no":1,
+		"index":
+		[
+        		{
+            	 		"flag":"INDEX",
+             			"elemlist":"file_name"
+        		}
+		]
+	}
+}
+{
+	"head":
+	{
+		"name":"mac_label_addr",
+		"type":"RECORDTYPE"
+	},
+	"record":
+	{
+		"type":"MAC_LABEL",
+		"subtype":"ADDR",
+		"struct_desc":
+		{
+			"elem_desc":
+			[
+				{"name":"node_uuid","type":"UUID"},
+				{"name":"proc_name","type":"STRING","size":32},
+				{"name":"user_name","type":"ESTRING","size":32}
+			]
+		}
+        "flag_no":1,
+		"index":
+		[
+        		{
+            	 		"flag":"INDEX",
+             			"elemlist":"node_uuid,proc_name"
+        		}
+		]
+	}
+}

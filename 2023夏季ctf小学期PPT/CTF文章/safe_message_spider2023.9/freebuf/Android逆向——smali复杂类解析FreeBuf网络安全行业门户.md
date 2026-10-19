@@ -1,0 +1,457 @@
+[i春秋作家：HAI_](https://bbs.ichunqiu.com/thread-40710-1-1.html?from=beef)  
+
+之前在[Android逆向——初识smali与java类](https://bbs.ichunqiu.com/thread-40321-1-1.html?from=beef)中讲解了基本的HelloWorld和简单类。这节课就要进一步深入。如果能够耐下心来分析一定会有所收获。——写给自己和后来人。
+
+# 0x00 前言
+
+## 1.内容
+
+### 1.1 smali复杂类分析（前菜）
+
+1.基本属性  
+2.构造方法  
+3.基本方法  
+4.简单的练习
+
+### 1.2 smali类相互调用（主菜）
+
+1.两个类相互调用
+
+### 1.3 小练习（甜点）
+
+1.写一个smali  
+2.调用其他两个类里的方法
+
+# 0x01 smali复杂类分析
+
+## 1.java复杂类
+
+如果有什么地方不懂，请看：[JAVA总纲](https://bbs.ichunqiu.com/thread-40710-1-1.html?from=beef)
+或者[构造方法](https://bbs.ichunqiu.com/thread-40710-1-1.html?from=beef)  
+![image.png](https://image.3001.net/images/20180523/15270646531857.png!small)这里贴代码，很简单没有难度。  
+
+## 2.smali代码
+
+我们要把java代码转为smali代码，可以参考[java转smali](https://bbs.ichunqiu.com/thread-40710-1-1.html?from=beef)  
+
+![image.png](https://image.3001.net/images/20180523/15270646798796.png!small)  
+
+![image.png](https://image.3001.net/images/20180523/15270646856933.png!small)我们还是分模块来看。
+
+### 2.1 第一个模块——信息模块
+
+  
+![image.png](https://image.3001.net/images/20180523/15270646982859.png!small)  
+
+这个模块就是基本信息，说明了类名等，知道就好对分析帮助不大。
+
+### 2.2 第二个模块——构造方法
+
+  
+![image.png](https://image.3001.net/images/20180523/15270647089490.png!small)我们来一句一句解析，如果有之前解析重复的地方就不再重复了。但是会提供链接。  
+
+    
+    
+    .method public constructor <init>(Ljava/lang/String;I)V
+
+这一句话分为
+
+    
+    
+    .method
+    public
+    constructor
+    <init>
+    (Ljava/lang/String;I)
+    v 
+
+#### 2.2.1 .method
+
+意思就是方法
+
+#### 2.2.2 public
+
+修饰方法,公共属性
+
+#### 2.2.3 constructor
+
+构造器 这里就是说这个方法是一个构造方法
+
+#### 2.2.4 `<init>`
+
+Java在编译之后会在字节码文件中生成<init>方法，称之为实例构造器，该实例构造器会将语句块，变量初始化，调用父类的构造器等操作收敛到<init>方法中，收敛顺序（这里只讨论非静态变量和语句块）为：
+
+  1. 父类变量初始化
+  2. 父类语句块
+  3. 父类构造函数
+  4. 子类变量初始化
+  5. 子类语句块
+  6. 子类构造函数
+
+所谓收敛到<init>方法中的意思就是，将这些操作放入到<init>中去执行
+
+#### 2.2.5 (Ljava/lang/String;I)
+
+括号里的内容首先是 Ljava/lang/String，这里就是说第一个参数为String类型。  
+`;` 后面有一个I就是说同样属于 Ljava/lang这里的有一个int型参数。
+
+#### 2.2.6 v
+
+最后面有一个v的含义就是void。也就是没有返回值类型。
+
+* * *
+
+我们来看第二句的意思。
+
+    
+    
+    .registers 6
+
+寄存器 6个。这里的寄存器就是从v0-v5开始。这个很好理解。
+
+* * *
+
+第三句话。
+
+    
+    
+    .prologue
+
+开场，意思是程序的开始。
+
+* * *
+
+第四句话。
+
+    
+    
+    .line 10
+
+第10行代码的意思。
+
+* * *
+
+第五句话是：
+
+    
+    
+    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+
+首先先分解这句话。
+
+    
+    
+    invoke-direct
+    {p0}
+    Ljava/lang/Object;-><init>
+    ()
+    V
+    
+    
+    invoke-direct
+
+就是方法调用的意思。
+
+    
+    
+    {p0}
+
+p0就是说第一个参数。但是这里并没有第一个参数，这里默认就是this，我们自己传进去的参数从p1开始计数。
+
+    
+    
+    Ljava/lang/Object;-><init>
+
+调用`<init>`方法
+
+()里没有内容就是说没有参数。v相当于void，这里不再重复。
+
+* * *
+
+第六句话是
+
+    
+    
+    iput-object p1, p0, LPerson;->name:Ljava/lang/String;
+
+分解一下
+
+    
+    
+    iput-object p1,p0
+    LPerson;->name:Ljava/lang/String;
+
+iput-object p1,p0的含义就是把p1的内容给p0。
+
+    
+    
+    LPerson;->name:Ljava/lang/String;
+
+这句话的含义就是说把Person类里的一个名为name，类型为String的属性拿过来，这些是为了修饰p0。其实也就是this.name.
+
+* * *
+
+第七句话
+
+    
+    
+    iput p2, p0, LPerson;->age:I
+
+这里也分解为两个部分。
+
+    
+    
+    iput p2, p0
+    LPerson;->age:I
+
+`iput p2, p0`，这里就是把p2的值给p0
+
+    
+    
+    LPerson;->age:I
+
+说明了age这个数据类型是int。
+
+这里可能会发现调用两个属性不一样，这里就是因为String并不是一个基本数据类型。所以使用了iput-object，如果是基本数据类型为iput。
+
+* * *
+
+第八句话
+
+    
+    
+     sget-object v0, Ljava/lang/System;->out:Ljava/io/PrintStream;
+
+分解
+
+    
+    
+     sget-object v0
+     Ljava/lang/System;->out:
+     Ljava/io/PrintStream;
+
+sget-object v0 就是获取到后见面的东西给v0。
+
+`Ljava/io/PrintStream;`这个的含义就是说由这个类里的一个`Ljava/lang/System;->out:`这个方法。
+
+* * *
+
+第九句话
+
+    
+    
+    new-instance v1, Ljava/lang/StringBuilder;
+
+新建一个StringBuilder的类给v1。
+
+* * *
+
+第十句话
+
+    
+    
+    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
+
+和之前的类似，从构造方法里调用v1。
+
+* * *
+
+第十一句话
+
+    
+    
+    const-string v2, "name:"
+
+const-string 常量字符串。 v2，内容是name:
+
+* * *
+
+第十二句话
+
+    
+    
+     invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+分解一下就是
+
+    
+    
+    invoke-virtual {v1, v2}
+    Ljava/lang/StringBuilder;
+    ->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+
+invoke-virtual {v1, v2} 调用虚方法，  
+`->append(Ljava/lang/String;)Ljava/lang/StringBuilder;`调用一个名为append的，参数为String类型，返回值为StringBuilder类型。
+
+* * *
+
+第十三句话
+
+    
+    
+    move-result-object v1
+
+就是把上一句的结果给v1寄存器。
+
+之后的内容就是相似的了。  
+![image.png](https://image.3001.net/images/20180523/15270647802699.png!small)  
+
+有兴趣可以自己继续向下分析。
+
+## 2.3 方法模块
+
+这个模块在之前的一篇文章里已经说过了，这里就不再啰嗦了。
+
+## 2.4 练习
+
+这个练习我们就自己添加一个构造方法。
+
+    
+    
+    .method public constructor <init>()V
+        .registers 1
+        invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+        return-void
+    .end method
+
+这个是我们自己写的一个构造方法。无参无返回值。
+
+编译成jar文件进行查看。
+
+  
+![image.png](https://image.3001.net/images/20180523/15270648078708.png!small)  
+
+# 0x02 smali类相互调用
+
+## 1\. java代码
+
+在0x01的前提上我们再写一个调用demo。
+
+    
+    
+    public class Demo{
+        public static void main(String[]args)
+        {
+            Person p=new Person("zhuzhu",14);
+        }
+    }
+
+代码很简单。
+
+## 2.smali代码
+
+这里我们要使用
+
+    
+    
+    javac -source 1.6 -target 1.6 *.java
+
+编译所有.java文件
+
+然后使用
+
+    
+    
+    dx --dex --output=demo.dex *.class
+
+把所有的.class文件编译成dex文件。
+
+  
+![image.png](https://image.3001.net/images/20180523/15270648205871.png!small)  
+
+我们来主要看看main函数。
+
+    
+    
+    .method public static main([Ljava/lang/String;)V
+        .registers 4
+    
+        .prologue
+        .line 4
+        new-instance v0, LPerson;
+    
+        const-string v1, "zhuzhu"
+    
+        const/16 v2, 0xe
+    
+        invoke-direct {v0, v1, v2}, LPerson;-><init>(Ljava/lang/String;I)V
+    
+        .line 5
+        return-void
+    .end method
+    
+    
+    new-instance v0, LPerson;
+
+新建一个类，v0
+
+    
+    
+    const-string v1, "zhuzhu"
+
+然后定义一个常量 v1。
+
+    
+    
+    const/16 v2, 0xe
+
+定义一个16位的常量
+
+    
+    
+    invoke-direct {v0, v1, v2}, LPerson;-><init>(Ljava/lang/String;I)V
+
+调用Person类的构造方法，然后把v0,v1,v2当做参数传进去。
+
+其实类之前的交互调用其实并不难。
+
+## 3.总结
+
+我们调用其他类的时候。
+
+1.new-instance 实例化一个对象  
+2.invoke-direct 调用构造方法
+
+# 0x03 小练习（甜点）
+
+首先来看看我们写的程序。
+
+![image.png](https://image.3001.net/images/20180523/15270648311366.png!small)  
+
+然后是手写的smali代码。
+
+    
+    
+    .class public LPd;
+    .super Ljava/lang/Object;
+    .source "Pd.java"
+    
+    # direct methods
+    .method public constructor <init>()V
+        .registers 1
+    
+        .prologue
+        invoke-direct {p0}, Ljava/lang/Object;-><init>()V
+    
+        return-void
+    .end method
+    
+    .method public static main([Ljava/lang/String;)V
+    
+        .registers 4
+    
+        .prologue
+    
+        new-instance v0,LPerson;
+    
+        invoke-direct {v0}, LPerson;-><init>()V
+    
+        return-void
+    .end method
+    
+
+有兴趣自己练习即可。
+
+有问题大家可以留言哦，也欢迎大家到春秋论坛中来耍一耍
+[>>>点击跳转](https://bbs.ichunqiu.com/portal.php?from=beef)
+

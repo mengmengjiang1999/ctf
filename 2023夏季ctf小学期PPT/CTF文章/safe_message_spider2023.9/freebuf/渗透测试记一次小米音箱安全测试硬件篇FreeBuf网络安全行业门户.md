@@ -1,0 +1,647 @@
+> 被测设备：小米小爱音箱play-LX05，全志R328(请记住这个芯片,因为他的某些特性致使我测试终止)-ARMV7；  
+> 串口：波特率115200 8 N 1  
+> 版本信息：  
+> Linux Kernel：LINUX '1.50.10'  
+> SQUASHFS-ROOTFS： SQAFS '1.50.10'
+
+## 一、测试起因
+
+### 1.设备存在TTL串口
+
+家里有一个小米小爱音箱play，拆开之后发现存在未焊接可调试的ttl串口接口；  
+那就焊接插针，使用USB转串口模块通过杜邦线连接排针，通电开机查看输出信息，看看能不能搞点事情；  
+![image](https://image.3001.net/images/20210718/1626610765_60f41c4dca78cdf13b160.png!small)
+
+### 2.破解登录获取root权限
+
+通过学习了解到，现在某些型号设备低版本的固件，开机后根据SN号可以算出root密码；我的版本符合，root登录成功；  
+![image](https://image.3001.net/images/20210718/1626610795_60f41c6b10cdf4d04d453.png!small)
+
+    
+    
+    备注：root密码某些型号的设备已经使用了PEM，不再使用SN+SALT 计算；
+    而使用SN+SALT计算root的设备又根据不同设备型号，使用了A、B两种；
+    又根据不同固件版本为分界线：新版本固件使用了：A-NEW或B-NEW；老版本固件使用了：A-OLD或B-OLD；各位需要根据设备型号、固件版本使用不同的SALT值进行计算root密码；
+    
+
+### 3.测试思路
+
+wireshark抓包发现，所有的流量都走了https、mqtt密钥加密，无法查看明文；那就尝试在linux系统安装burp证书，然后使用burp进行抓包；由此也就有了下面艰辛且最终失败的折腾过程！
+
+    
+    
+    备注：还是因为不细心没经验，如果发现芯片支持“secure boot and secure efuse”功能，且设备开机信息中提示设备使用了SBOOT进行了固件证书签名，我一定会先弄明白sboot的原理，并停止下面测试，转到其他方式方面进行测试；
+    
+    但是也因此，通过下面的折腾学到了很多，还是非常值得的！
+    
+
+## 二、艰辛的测试过程记录
+
+干货较多，还请慢慢看；
+
+### 1.通过热点进行网络抓包
+
+#### 1.1开启wifi热点
+
+通过手机APP设置，让音箱连接我的kali-wifi热点，通过wireshark抓包看看先（最开始不知道kali系统自带热点功能，自己尝试了各种折腾：双网卡走桥接上网、双网卡通过iptables走net转换上网，都没成功；然后突然发现kali自带开启热点功能！！！我心中真是一万个。。。）；  
+![image](https://image.3001.net/images/20210718/1626610825_60f41c890e2ba9a4448c1.png!small)
+
+![image](https://image.3001.net/images/20210718/1626610844_60f41c9c0eb2008ce5048.png!small)
+
+#### 1.2wireshark抓包
+
+![image](https://image.3001.net/images/20210718/1626610854_60f41ca61fc3411115987.png!small)
+
+看了一下数据，所有的流量都走了https，无法查看明文。  
+因为曾经我在安卓手机root后，安装证书使用fiddler可以完成应用流量抓取，也想试着在linux系统中安装证书，再使用burp或者fiddler进行抓包；
+
+### 2.安装证书
+
+因为设备默认不启动ssh服务，使用如下命令开启ssh服务，然后通过ssh进行连接和传输下载文件
+
+    
+    
+    # dropbear -r /data/dropbear_rsa_host_key
+    
+
+2.1查看系统当前证书所在路径
+
+![image](https://image.3001.net/images/20210718/1626610867_60f41cb3b8ce3bc1911c6.png!small)
+
+证书在/etc/ssl/certs目录下；而且也和安卓一样，每个证书还需要根据证书hash值做一个软链接；
+
+2.2安装证书
+
+2.2.1复制一份当前设备中的一份证书到自己的电脑中(小米音箱没有openssl)，验证当前证书使用的hash计算方法；
+
+    
+    
+    root@mico:/etc/ssl/certs# ls -al |grep USERTrust_RSA_Certification_Authority
+    
+    USERTrust_RSA_Certification_Authority.crt
+    fc5a8f99.0 -> USERTrust_RSA_Certification_Authority.crt
+    
+
+可以看到“USERTrust_RSA_Certification_Authority”证书的hash是“fc5a8f99”
+
+2.2.2然后使用openssl看看设备使用的哪种计算方式：
+
+    
+    
+    #openssl x509 -inform PEM -subject_hash_old -in USERTrust_RSA_Certification_Authority.crt
+    35105088
+    
+    #openssl x509 -inform PEM -subject_hash -in USERTrust_RSA_Certification_Authority.crt
+    fc5a8f99
+    
+
+可以看到，本设备的证书hash使用的是“subject_hash”这个参数进行计算的hash；而我之前安卓设备使用的是“subject_hash_old”这个参数计算的证书hash；
+
+2.2.3复制burp证书到设备
+
+如果一切顺利的话，复制证书到系统证书目录，并新建证书软链接，就可以进行burp中间人抓取https流量，高兴坏了。
+
+如果一切顺利，就不会有下面的内容了。。。。
+
+    
+    
+    root@mico:/etc/ssl/certs# touch test.txt
+    touch: test.txt: Read-only file system
+    
+    root@mico:/etc/ssl/certs# touch hahah.txt
+    touch: hahah.txt: Read-only file system
+    
+    root@mico:/etc/ssl/certs# mount
+    /dev/root on / type squashfs (ro,noatime)
+    devtmpfs on /dev type devtmpfs (rw,relatime,size=29128k,nr_inodes=7282,mode=755)
+    proc on /proc type proc (rw,nosuid,nodev,noexec,noatime)
+    sysfs on /sys type sysfs (rw,nosuid,nodev,noexec,noatime)
+    tmpfs on /tmp type tmpfs (rw,nosuid,nodev,noatime)
+    tmpfs on /dev type tmpfs (rw,nosuid,relatime,size=512k,mode=755)
+    devpts on /dev/pts type devpts (rw,nosuid,noexec,relatime,mode=600,ptmxmode=000)
+    debugfs on /sys/kernel/debug type debugfs (rw,noatime)
+    pstore on /sys/fs/pstore type pstore (rw,relatime)
+    /dev/by-name/UDISK on /data type ext4 (rw,relatime,data=ordered)
+    /dev/by-name/UDISK on /etc/shadow type ext4 (rw,relatime,data=ordered)
+    
+
+这个目录无法新增文件；其实是整个linux的 / 目录都是可读不可写！因为这个设备的系统使用的是squashfs。  
+目前可写的文件只有/data /tmp；
+
+### 3.自定义并重新打包系统固件
+
+因为设备采用的是双系统(双kernel+双rootfs)，所以可以在当前启动的系统中，将新系统安装到另一个分区中，也能通过双系统机制保证即使刷机失败，可以启用另一个系统也不会变砖；
+
+    
+    
+    root@mico:/dev/by-name# ls -alh
+    
+    Nov 26 15:37 env -> /dev/nand0p1
+    #这个是双系统都共同使用的环境变量分区
+    
+    Nov 26 15:37 kernel1 -> /dev/nand0p2
+    Nov 26 15:37 kernel2 -> /dev/nand0p4
+    #这个是双系统各自的kernel分区
+    
+    Nov 26 15:37 misc -> /dev/nand0p6
+    Nov 26 15:37 private -> /dev/nand0p7
+    
+    Nov 26 15:37 rootfs1 -> /dev/nand0p3
+    Nov 26 15:37 rootfs2 -> /dev/nand0p5
+    #这个是双系统各自的rootfs分区，也就是liux系统文件
+    
+    Nov 26 15:37 crashlog -> /dev/nand0p8
+    
+    Nov 26 15:37 UDISK -> /dev/nand0p9
+    #这个我们理解成sd卡分区，存在里面的文件双系统都可用且重启不删除
+    
+
+#### 3.1从当前系统分区备份、修改、打包、烧写
+
+    
+    
+    root@mico:/dev/by-name# ls -al /dev/root 
+    12 Nov 26 15:37 /dev/root -> /dev/nand0p5
+    
+
+##### 3.1.1备份当前系统
+
+通过上面信息知道当前启动的是系统2(nand0p5-->rootfs2)，所以备份当前系统文件，并安装到系统1分区(nand0p3-->rootfs1)；
+
+    
+    
+    #dd if=/dev/nand0p5 of=/tmp/rootfs2.img
+    
+
+##### 3.1.2解压系统
+
+使用unsquashfs先查看一下系统文件的信息,记住Block size 262144；
+
+    
+    
+    #unsquashfs -s hack.img
+    Found a valid SQUASHFS 4:0 superblock on hack.img.
+    Creation or last append time Sat Jul 17 11:24:55 2021
+    Filesystem size 22017210 bytes (21501.18 Kbytes / 21.00 Mbytes)
+    Compression gzip
+    Block size 262144
+    Filesystem is exportable via NFS
+    Inodes are compressed
+    Data is compressed
+    Uids/Gids (Id table) are compressed
+    Fragments are compressed
+    Always-use-fragments option is not specified
+    Xattrs are compressed
+    Duplicates are removed
+    Number of fragments 84
+    Number of inodes 1855
+    Number of ids 1
+    
+
+解压系统：
+
+    
+    
+    #unsquashfs  hack.img
+    
+
+##### 3.1.3修改系统
+
+默认开机自启动ssh服务：
+
+    
+    
+    #cat /squashfs-root/etc/rc.local
+    ......
+    dropbear -r /data/dropbear_rsa_host_key #在文件的最后exit上面加上启动ssh服务
+    
+    exit 0
+    
+
+增加证书和证书hash软链接
+
+    
+    
+    #ls -al /squashfs-root/etc/ssl/certs |grep burp
+    lrwxrwxrwx 1 root root      8  7月 15 11:03 7bf17d07.0 -> burp.crt
+    -rw-r--r-- 1 root root   1326  7月 15 11:00 burp.crt
+    
+
+##### 3.1.4重新打包系统img
+
+    
+    
+    #mksquashfs squashfs-root hack-ssh+burp.img -b 262144
+    其中-b 就是上面的Block size 262144；
+    
+
+##### 3.1.5烧写固件到系统1分区
+
+通过scp将文件上传到设备的 /tmp目录下，因为dropbear启动的ssh服务不支持sftp，所以只能使用scp上传。
+
+    
+    
+    #dd if=/tmp/hack-ssh+burp.img of=/dev/by-name/rootfs1 bs=1024
+    
+
+##### 3.1.6重启系统修改boot环境变量启动系统1
+
+通过usb串口模块连接设备，使用串口调试助手软件打开串口，断电重启并一直按回车键直到系统进入uboot
+
+    
+    
+    [252]HELLO! SBOOT is starting!
+    [255]sboot commit : 38c3a04b2a905c8689df26944e3d69666e680ae4 
+    [292]set pll start
+    [294]set pll end
+    [296]board init ok
+    .
+    .
+    .
+    U-Boot 2018.05 (Nov 26 2019 - 07:15:04 +0000) Allwinner Technology, Build: jenkins-Mico_lx05_ota_publish-86
+    
+    CPU:   Allwinner Family
+    Model: sun8iw18
+    I2C:   ready
+    DRAM:  64 MiB
+    .
+    .
+    .
+    try to burn key
+    out of usb burn from boot: not need burn key
+    Hit any key to stop autoboot:  0   ###########输入回车或者任何键停止boot启动
+    => 
+    => 
+    => env edit bootcmd   				     ###########编辑系统环境变量如下，启动系统1
+    edit: run setargs_first boot_first
+    => env save												 ###########保存环境变量
+    => boot														 ###########启动系统1
+    partinfo: name kernel1, start 0x600, size 0x3000
+    hash compare is not correct
+    32字节
+    >>>>>>>hash of file<<<<<<<<<<
+    cb 72 71 0f 39 89 49 17 8d e8 27 bd 95 db f3 0d 
+    f9 45 71 49 7c 58 80 66 ab b9 b5 3a d6 ee 8a 78 
+    
+    >>>>>>>hash in certif<<<<<<<<<<
+    59 f9 d4 33 9f 0d c7 f1 40 21 fe 6a e6 64 01 38 
+    67 8c 25 35 e5 ac ad aa e9 83 e1 9a 62 46 d6 31 
+    
+    partition rootfs1 verify failed
+    bootm - boot application image from memory
+    
+
+是的没有成功，看到提示的信息是rootfs1的hash值和存在某个地方的hash不一致(就是签名不一致)，所以无法启动！我们一会分析一下到底什么原因，看看还能不能抢救尝试一下。。。。
+
+#### 3.2下载官方发布的固件.bin文件再修改打包后烧写
+
+##### 3.2.1下载官方发布的固件
+
+下面的方法在设备中自带，但是只能下载最新系统的bin文件；
+
+    
+    
+    root@mico:/sbin# matool_check_upgrade
+    https://cdn.cnbj1.fds.api.mi-img.com/xiaoqiang/rom/lx05/mico_skr_firmware_74be6_1.74.7.bin
+    
+
+我还是通过某些方法找到了当前版本1.50.10的镜像；1.50.10-mico_firmware.bin
+
+##### 3.2.2解压系统
+
+因为官方的mico_firmware.bin文件中不仅仅含有rootfs文件，还可能还有uboot、kernel、rootfs等文件；所以使用binwalk看看这个版本的bin文件有什么：
+
+    
+    
+    #binwalk 1.50.10-mico_firmware.bin
+    
+    DECIMAL       HEXADECIMAL     DESCRIPTION
+    --------------------------------------------------------------------------------    
+    736           0x2E0           Android bootimg, kernel size: 3114992 bytes。。。。。
+    15503         0x3C8F          gzip compressed data, maximum compression。。。。。
+    3119840       0x2F9AE0        Certificate in DER format (x509 v3), header length: 4, sequence length: 862
+    3121952       0x2FA320        Squashfs filesystem, little endian, version 4.0, compression:gzip, size: 22018646 bytes, 1853 inodes, blocksize: 262144 bytes, created: 2019-11-26 07:39:16
+    25142052      0x17FA324       Certificate in DER format (x509 v3), header length: 4, sequence length: 862
+    
+
+这个官方的bin中，有kernel、cert证书1、Squashfs、cert证书2；
+
+我们把需要上面的四个都分解出来，后面要用到；
+
+    
+    
+    第一种方法：使用binwalk自动提取文件
+    #binwalk -eM 1.50.10-mico_firmware.bin   可以自动提取文件
+    #ls _1.50.10-mico_firmware.bin.extracted -al
+    -rw-r--r--  1 root root 22018646  7月 15 09:35 2FA320.squashfs
+    -rw-r--r--  1 root root  5246936  7月 15 09:35 3C8F
+    -rwxrwxrwx  1 root root  3119104  7月 17 13:31 boot.img
+    -rw-r--r--  1 root root  3114992  7月 16 15:35 bootimg
+    -rw-r--r--  1 root root      866  7月 17 20:47 mi2.der
+    drwxr-xr-x 17 root root     4096 11月 26  2019 squashfs-root
+    
+    
+    第二种方法：使用dd手动提取
+    1、提取bootimg
+    dd if=../1.50.10-mico_firmware.bin bs=1 skip=736 count=3114992 of=bootimg
+    
+    2、binwalk自动提取的gzip是错误的，因为在bootimg里面涵盖了gzip的开头，且bootimg内部包含gzip文件，而binwalk自动提取的gzip文件大小超出了bootimg边界范围；
+    
+    3、提取2个证书
+    dd if=1.50.10-mico_firmware.bin bs=1 skip=3119840 count=866 of=mi1.der
+    dd if=1.50.10-mico_firmware.bin bs=1 skip=25142052 count=866 of=mi2.der
+    
+    4、提取Squashfs
+    dd if=1.50.10-mico_firmware.bin bs=1 skip=3121952 count=22018646 of=rootfs.img
+    
+    
+    计算MD5值
+    ➜  _1.50.10-mico_firmware.bin.extracted md5sum rootfs.img
+    257484d9cea75e59c94763e7d865e5ae
+    ➜  _1.50.10-mico_firmware.bin.extracted md5sum 2FA320.squashfs
+    257484d9cea75e59c94763e7d865e5ae  2FA320.squashfs
+    由此可见，由binwalk自动提取的rootfs文件，和我们手动提取的文件一致；
+    
+
+如果使用binwalk自动提取的话，其实binwalk内部已经调用了unsquashfs进行文件解压；而自己手动提取的还需要和上面一样进行手动解压
+
+    
+    
+    #unsquashfs  1.5-rootfs
+    
+
+##### 3.1.3参考上面步骤3~6
+
+修改系统、重新打包系统img、烧写固件到系统1分区、重启系统修改boot环境变量启动系统1；
+
+结果是一样的，系统烧写成功了，但是签名验证没有通过，所以uboot启动系统的时候并没有启动成功；  
+为了能达到我烧写系统的目的，还得继续看看怎么回事， **努力抢救一下。。。。**
+
+### 4.分析启动失败的原因
+
+#### 4.1失败的信息提示：
+
+    
+    
+    => boot
+    partinfo: name kernel1, start 0x600, size 0x3000
+    hash compare is not correct
+    32字节
+    
+    >>>>>>>hash of file<<<<<<<<<<
+    >>>>>>>cb 72 71 0f 39 89 49 17 8d e8 27 bd 95 db f3 0d 
+    >>>>>>>f9 45 71 49 7c 58 80 66 ab b9 b5 3a d6 ee 8a 78 
+    
+    >>>>>>>hash in certif<<<<<<<<<<
+    >>>>>>>59 f9 d4 33 9f 0d c7 f1 40 21 fe 6a e6 64 01 38 
+    >>>>>>>67 8c 25 35 e5 ac ad aa e9 83 e1 9a 62 46 d6 31 
+    
+    partition rootfs1 verify failed
+    bootm - boot application image from memory
+    
+
+就是我们自己修改后的rootfs镜像，在uboot计算的hashA，和存在证书中的官方hashB不一致，校验失败，所以uboot启动失败；
+
+#### 4.2找hash值存在哪
+
+上面提示正确的hashB在证书中，那就尝试将证书中的hashB修改为为我们自己打包的hashA
+
+根据binwalk -s 的信息可知，在bin中文件顺序如下：
+
+    
+    
+    1.kernel
+    +
+    2.cert1
+    +
+    3.rootfs
+    +
+    4.cert2
+    
+
+所以kernel的hash应该存在了cert1中；rootfs的hash应该存在了cert2中；
+
+我们打开cert2寻找hash内容；  
+![image](https://image.3001.net/images/20210718/1626610902_60f41cd6d332cff05a0bb.png!small)
+
+#### 4.3根据官方rootfs的格式仿造
+
+##### 4.3.1查看官方固件的格式：rootfs+0+证书(中有hash)
+
+![image](https://image.3001.net/images/20210718/1626610921_60f41ce9c9669961888f9.png!small)
+
+##### 4.3.2我们将自己打包后的rootfs后面按照格式填0+证书(并修改其中的hash值)
+
+![image](https://image.3001.net/images/20210718/1626610935_60f41cf713d17beb47a7b.png!small)
+
+#### 4.4烧写镜像
+
+尝试了这么久，这次应该能成功吧！
+
+是的，还是失败了！而且这次的错误信息和上次一模一样！所以上面提示的 “hash in certif”的hash，我修改的证书中的hash并并不是一个地址；
+
+到底是什么机制导致hash验证失败的呢？或者说到底什么原因？  
+先说答案： **secure boot and secure efuse，也就是SBOOT(secure boot)机制，而且还是芯片级支持的**
+
+! _ !
+
+! _ !
+
+#### 5.简单说说SBOOT
+
+##### 5.1启动信息
+
+就想文章开头说的，设备启动时输出信息已经提示了sboot，如果我先了解什么是sboot后面的弯路就可以少走；
+
+    
+    
+    [252]HELLO! SBOOT is starting!
+    [255]sboot commit : 38c3a04b2a905c8689df26944e3d69666e680ae4 
+    [292]set pll start
+    。。。。。。。。
+    [847]load rotpk hash
+    [909]load optee-key hash
+    [974]load kernel1-key hash
+    [1038]load kernel2-key hash
+    [1103]load rootfs1-key hash
+    [1168]load rootfs2-key hash
+    [1234]load u-boot-key hash
+    [1243]monitor entry=0x0
+    [1245]uboot entry=0x43000000
+    [1248]optee entry=0x41a00000
+    [1251]run out of boot0
+    
+
+##### 5.2系统启动的顺序和校验机制： **启动sboot---- >uboot---->kernel---->rootfs；**
+
+1.启动sboot首先会通过出厂时就存储在OTP(一次性烧写不可改)中的公钥hashX值  
+2.计算uboot的hashY，进行X 和 Y的比较，如果一致则启动uboot，不一致则启动失败；  
+3.启动uboot首先会通过出厂时就存储在OTP中的公钥hashX值，去校验kernel的hash和rootfs的hash，如果一致则启动kernel+rootfs，如果不一致，系统启动失败；
+
+因为我们仅更改了rootfs，所以系统启动时校验kernel的hash是通过的，校验rootfs的hash时校验不通过；
+
+##### 5.3芯片自身支持安全机制
+
+> 后面再遇到修改固件的问题，先看芯片手册是否支持sboot，然后再测试设备是否开启并使用了证书验证hash。
+
+通过下载R328芯片的datesheet手册，可以看到  
+![image](https://image.3001.net/images/20210718/1626610945_60f41d016035c608dc015.png!small)
+
+![image](https://image.3001.net/images/20210718/1626611057_60f41d7195b093e484ca4.png!small)
+
+## 三、总结一下
+
+1.本想通过安装证书然后抓取https数据包，设备启动了sboot验证，所以自己修改的rootfs系统文件失败；
+
+2.虽然无法做到安装证书抓包，但是可以查看/bin /usr/bin /usr/sbin
+目录下的大量sh脚本和逆向核心的可执行程序和.so库文件，也是一种方案；不过成本较大，后面继续尝试这个思路；
+
+3.因为手机安卓是可以root安装证书的，而小米音箱、小爱同学等小米app也是可以和音箱互动的，可以从app角度继续进行测试。
+
+4.通过ubus 命令应该可以看到和控制，可以继续深入；
+
+5.再通过逆向试一下uboot中的签名验证流程，看看是否还有一些漏洞可用。
+
+4.虽然这是一次没有达到最终目的的文章记录，但是这个过程还是学到了很多，非常值得。特此分享给大家和有缘人~~
+
+## 四、最后再补充几点
+
+1.因为我在kali虚拟机中启动的wifi热点，也就是需要再单独购买一个独立wifi网卡，且需要被kali能识别加载；我买的是comfast网卡，网卡在kali中需要安装驱动才能识别；驱动官方也有，github也有；
+
+2.因为音箱连接的是kali虚机提供的wifi热点，所以音箱获取的ip地址也只有kali可以ping通互联；而我的宿主机MAC系统无法ping通音箱；所以可以通过在MAC启动ssh连接kali并映射一个socket5代理端口到MAC的3128端口，然后我在MAC通过代理使用ssh连接到小米音箱；
+
+第一步：Mac连接kali并在本地监听3128端口
+
+![image](https://image.3001.net/images/20210718/1626611072_60f41d8036a483d58e595.png!small)
+
+第二步：ssh通过代理连接小米音箱  
+ssh -o ProxyCommand="nc -X 5 -x 127.0.0.1:3128 %h %p" root@10.42.0.205  
+即可连接到小米音箱
+
+3.已经把小米音箱的文件系统复制下来了，可以看看系统启动流程和一些sh脚本！还是很有意思的。。。  
+3.1官方的系统升级流程在 /bin/otc 中，其中核心的一步就是：flash.sh $OTA_FILE "$SILENT"  
+flash.sh 官方.bin 1 #silent设置1就是静默升级，会关闭led灯自动重启；  
+升级流程相关脚本： /bin/otc 、/bin/flash.sh、/bin/boardupgrade.sh；
+
+3.2使用官方命令烧写官方固件.bin
+
+    
+    
+    烧写kernel：miso -r -x /tmp/1.50.10-mico_firmware.bin -f kernel.img -n |  dd of=/dev/by-name/kernel1 bs=1024
+    烧写rootfs：miso -r -x /tmp/1.50.10-mico_firmware.bin -f rootfs.img -n |  dd of=/dev/by-name/kernel1 bs=1024
+    
+
+3.3打开关闭led
+
+    
+    
+    打开led灯：ubus -t 1 call led show "{\"L\":2}"
+    
+    关闭led灯：ubus -t 1 call led shut "{\"L\":2}"
+    
+
+3.4可以内存
+
+    
+    
+    cat /proc/meminfo | grep MemFree
+    cat /proc/meminfo | grep MemFree | awk '{print $2}'
+    
+
+3.5Magic魔法自己尝试
+
+    
+    
+    #uci -c /usr/share/mico show
+    
+    #matool_get_super_admin
+    
+    #matool_check_registration_status
+    
+    #matool_get_hardware
+    
+    #matool_get_mac
+    
+    #matool_get_miot_did
+    
+    #matool_get_sn
+    
+    #matool_get_broker_address
+    
+    #matool_get_rom_channel
+    
+    #matool_get_rom_version
+    
+    
+    #matool_get_id_for_vendor soundai
+    
+    #matool_localtime_r
+    
+    #matool_time_sync
+    
+    #matool_request_access_token
+    
+    #miso -c mico_ota.bin  | grep "file type"| cut -d ":" -f 2
+    1: skr package；0: normal package
+    
+    #miso -c mico_ota.bin
+    
+    #miso -r -x mico_ota.bin -f "version"
+    
+    检查是否有 env.fex
+    #miso -c /tmp/system_upgrade/mico_ota.bin -f "env.fex"
+    
+    提取env
+    #miso -r -x /tmp/system_upgrade/mico_ota.bin -f "env.fex"
+    
+    播放响应声音
+    #ubus -t 1 call qplayer play {\"play\":\"/usr/share/sound/wakeup_ei_01.wav\"}
+    
+    播放本地音乐
+    #ubus call mediaplayer player_play_url {\"url\":\"file:///tmp/Island.mp3\",\"type\":1}
+    
+    小愛 TTS 功能
+    #ubus call mibrain text_to_speech "{\"text\":\"你好我是小爱同学\",\"save\":0}" > /dev/null 2>&1
+    #ubus call mibrain text_to_speech "{\"text\":\"你好我是小爱同学今天你吃饭了吗\",\"save\":0}"
+    
+    #ubus monitor 
+    
+    播放对应音乐（本地、网络）的方法，实际很简单，小爱音响提供了工具：
+    #/usr/bin/mphelper tone http://zkvideo-oss.myzaker.com/rgcms/201906/5cff0bd91bc8e08a1b000061.mp3
+    
+    # mphelper pause
+    # mphelper play
+    
+    设置音量的方法（两种都是可以的）：
+    # amixer sset mysoftvol 100
+    Simple mixer control 'mysoftvol',0
+      Capabilities: volume
+      Playback channels: Front Left - Front Right
+      Capture channels: Front Left - Front Right
+      Limits: 0 - 255
+      Front Left: 100 [39%]
+      Front Right: 100 [39%]
+     
+    设置音量百分比
+    # mphelper volume_set 20
+    {
+            "code": 0
+    }
+    
+
+4.uboot还可以看到一些信息
+
+    
+    
+    查看当前环境变量
+    => env print
+    
+
+5.日志文件-信息较多
+
+    
+    
+    /tmp/log/messages
+    /data/mibrain/mibrain_asr_nlp.rcd
+    
+

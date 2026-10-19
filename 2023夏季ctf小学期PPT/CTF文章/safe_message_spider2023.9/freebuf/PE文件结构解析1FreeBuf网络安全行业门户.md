@@ -1,0 +1,472 @@
+# 0x0导读
+
+今天复习一下pe文件结构，本文主要讲了pe文件结构基本概念和Dos头,Nt头，可选头的一些比较重要的成员，话不多说来看文章。
+
+# 0x1环境
+
+编译器:VirsualStudio2022
+
+16进制查看工具:winhex
+
+# 0x2基本概念
+
+我们先来看下百度给出的定义:
+
+`PE文件的全称是Portable Executable，意为可移植的可执行的文件，常见的EXE、DLL、OCX、SYS、COM都是PE文件。`
+
+我的理解:
+
+pe文件结构就像一张说明书，用来说明这个pe文件的情况，而pe文件结构是表示符合pe文件结构的文件如exe，sys(驱动文件)，com等文件的信息。举个例子，买电脑的时候都会有一张配置单，来说明这个电脑的cpu是啥，内存条多大，显卡是哪个厂的等信息。pe文件结构就像是这一张配置单，只不过配置单里面的信息是表示这台电脑的情况，而pe文件结构表示的是这个exe(这里就只用exe来举例)，相关的信息，比如哪一部分是代码，哪一部分是数据，执行的时候加载到内存的哪里，pe文件的大小是多少等信息。
+
+下面是pe文件结构图，因为pe文件结构内容太多了所以今天只讲Dos头，PE文件头(nt头)，标准pe头(file头)，可选文件头(option头)，剩下的以后在讲(因为清楚的图片比较大上传不上去只能凑活着看了)。
+
+![wKg0C2IzGqWABUtgAAE2L8me6cw390.png](https://image.3001.net/images/20220520/1653016049_628705f14f0864e1c8e77.png!small)
+
+# 0x3Dos头解析
+
+Dos头定义，其实就是一个结构体，比较重要的有e_magic和e_lfanew，这两个成员。
+
+    
+    
+    typedef struct _IMAGE_DOS_HEADER {      // DOS .EXE header
+        WORD   e_magic;                     // Magic number
+        WORD   e_cblp;                      // Bytes on last page of file
+        WORD   e_cp;                        // Pages in file
+        WORD   e_crlc;                      // Relocations
+        WORD   e_cparhdr;                   // Size of header in paragraphs
+        WORD   e_minalloc;                  // Minimum extra paragraphs needed
+        WORD   e_maxalloc;                  // Maximum extra paragraphs needed
+        WORD   e_ss;                        // Initial (relative) SS value
+        WORD   e_sp;                        // Initial SP value
+        WORD   e_csum;                      // Checksum
+        WORD   e_ip;                        // Initial IP value
+        WORD   e_cs;                        // Initial (relative) CS value
+        WORD   e_lfarlc;                    // File address of relocation table
+        WORD   e_ovno;                      // Overlay number
+        WORD   e_res[4];                    // Reserved words
+        WORD   e_oemid;                     // OEM identifier (for e_oeminfo)
+        WORD   e_oeminfo;                   // OEM information; e_oemid specific
+        WORD   e_res2[10];                  // Reserved words
+        LONG   e_lfanew;                    // File address of new exe header
+      } IMAGE_DOS_HEADER, *PIMAGE_DOS_HEADER;
+    
+
+`e_magic`是一个WORD类型，两个字节，用来判断该pe文件是不是可执行的，值是0x4D5A,用字符串就是MZ所以它也叫mz标记，如果把它给改掉那么程序就无法执行。
+
+修改前：
+
+![wKg0C2IzHPaAKzOsAAAb7CStWlQ552.png](https://image.3001.net/images/20220520/1653016049_628705f193a5abcd1482d.png!small)
+
+修改后：
+
+![wKg0C2IzHUqAKzW2AAAphWXOMqE674.png](https://image.3001.net/images/20220520/1653016049_628705f1c71b4f49a17b6.png!small)
+
+![wKg0C2IzHWyAOLBEAABANUCyZ1M652.png](https://image.3001.net/images/20220520/1653016050_628705f203efb603cc077.png!small)
+
+`e_lfanew`是一个LONG类型大小是4字节，可以把它理解为一个偏移，通过它加基址(代码开始的地方)来找到pe文件头(nt头)。
+
+![wKg0C2IzHnAdEOHAADSS7KZtUQ243.png](https://image.3001.net/images/20220520/1653016050_628705f23ab3209b5f558.png!small)
+
+代码解析：
+
+    
+    
+    #include <stdio.h>
+    #include <Windows.h>
+    #define path "C:\\Users\\allen\\Desktop\\ipmsg.exe"
+    
+    void main()
+    {
+    FILE* fp = fopen(path, "rb");
+    fseek(fp, 0, SEEK_END);
+    int size = ftell(fp);
+    rewind(fp);
+    PBYTE ptr = (PBYTE)malloc(size);
+    memset(ptr, 0, size);
+    fread(ptr, size, 1, fp);
+    PIMAGE_DOS_HEADER Dos = (PIMAGE_DOS_HEADER)ptr;
+    printf("E_magic:%x\n", Dos->e_magic);
+    printf("E_lfanew:%x\n", Dos->e_lfanew);
+    getchar();
+    }
+    
+    
+
+前三行代码主要是包含头文件，因为不包含头文件有一些函数就无法使用，第三行是定义一个宏来作为`fopen`函数的参数。
+
+`FILE* fp = fopen(path,
+"rb");`定义一个文件指针来接受`fopen`函数返回值，`fopen`第一个参数是要打开文件的路径，第二个参数是以什么方式打开，这里是rb也就是以二进制方式打开一个文件，只能读不可以写。
+
+`fseek(fp, 0,
+SEEK_END);`第一个参数是要设置文件的文件指针，第二个参数是一个相对于第三个参数是一个偏移量，第三个参数`SEEK_END`代表文件的末尾，代码大致意思文件流重定向到文件末尾。
+
+`int size =
+ftell(fp);`定义一个变量用来接收ftell函数的返回值，`ftell`函数作用是计算文件的大小，第一个参数是要计算那个文件的文件指针。
+
+`rewind(fp);`将文件流重定向到文件开头，为下面读取数据做准备。
+
+`PBYTE ptr =
+(PBYTE)malloc(size);`定义一个指针指向`malloc`函数申请的内存，`malloc`函数第一个参数是申请内存的大小，`PBYTE`就是`char*`。
+
+`memset(ptr, 0, size);`填充刚才申请的内存块为0，第一个参数内存块的地址，第二个参数用什么填充，第三个参数填充多大。
+
+`fread(ptr, size, 1,
+fp);`用于读取数据到内存，第一个参数是要读到哪里，第二个参数是读多少字节，第三个参数读多少次，第四个参数要读取文件的文件指针。
+
+`PIMAGE_DOS_HEADER Dos =
+(PIMAGE_DOS_HEADER)ptr;`定义一个结构体指针来指向那块内存，也就是用这块内存中的数据来填充这个结构体指针所指向的结构体。
+
+    
+    
+    printf("E_magic:%x\n", Dos->e_magic);//打印结构体成员e_magic的值，打印结构体成员要用->
+    printf("E_lfanew:%x\n", Dos->e_lfanew);//打印结构体成员e_lfanew的值
+    getchar();//暂停等待用户输入。
+    
+
+程序执行结果，因为我这里打开的是另一个程序所以`e_lfanew`的值不一样。
+
+![wKg0C2IzKTWAWqyRAACvYJFGDgo926.png](https://image.3001.net/images/20220520/1653016050_628705f27ee28053ec4d7.png!small)
+
+# 0x3Nt头解析
+
+Nt头定义。
+
+    
+    
+    typedef struct _IMAGE_NT_HEADERS {
+        DWORD Signature;
+        IMAGE_FILE_HEADER FileHeader;
+        IMAGE_OPTIONAL_HEADER32 OptionalHeader;
+    } IMAGE_NT_HEADERS32, *PIMAGE_NT_HEADERS32;
+    
+
+`Signature`是一个DWORD里面存储着PE标记也就是0x4550,这个值代表此文件是一个有效的pe文件，如果被修改程序也会无法运行。
+
+`FileHeader`一个结构体，是标准pe头开始的地方，结构体定义如下，大小是20个字节。因为主要讲的是nt头所以对此结构说的不是很详细，下面会讲到此结构。
+
+    
+    
+    typedef struct _IMAGE_FILE_HEADER {
+        WORD    Machine;
+        WORD    NumberOfSections;
+        DWORD   TimeDateStamp;
+        DWORD   PointerToSymbolTable;
+        DWORD   NumberOfSymbols;
+        WORD    SizeOfOptionalHeader;
+        WORD    Characteristics;
+    } IMAGE_FILE_HEADER, *PIMAGE_FILE_HEADER;
+    
+
+`OptionalHeader`也是一个结构体，是可选头开始的地方，定义如下，因为主要讲的是nt头所以对此结构说的不是很详细，下面会讲到这个结构。
+
+    
+    
+    typedef struct _IMAGE_OPTIONAL_HEADER {
+        //
+        // Standard fields.
+        //
+    
+        WORD    Magic;
+        BYTE    MajorLinkerVersion;
+        BYTE    MinorLinkerVersion;
+        DWORD   SizeOfCode;
+        DWORD   SizeOfInitializedData;
+        DWORD   SizeOfUninitializedData;
+        DWORD   AddressOfEntryPoint;
+        DWORD   BaseOfCode;
+        DWORD   BaseOfData;
+    
+        //
+        // NT additional fields.
+        //
+    
+        DWORD   ImageBase;
+        DWORD   SectionAlignment;
+        DWORD   FileAlignment;
+        WORD    MajorOperatingSystemVersion;
+        WORD    MinorOperatingSystemVersion;
+        WORD    MajorImageVersion;
+        WORD    MinorImageVersion;
+        WORD    MajorSubsystemVersion;
+        WORD    MinorSubsystemVersion;
+        DWORD   Win32VersionValue;
+        DWORD   SizeOfImage;
+        DWORD   SizeOfHeaders;
+        DWORD   CheckSum;
+        WORD    Subsystem;
+        WORD    DllCharacteristics;
+        DWORD   SizeOfStackReserve;
+        DWORD   SizeOfStackCommit;
+        DWORD   SizeOfHeapReserve;
+        DWORD   SizeOfHeapCommit;
+        DWORD   LoaderFlags;
+        DWORD   NumberOfRvaAndSizes;
+        IMAGE_DATA_DIRECTORY DataDirectory[IMAGE_NUMBEROF_DIRECTORY_ENTRIES];
+    } IMAGE_OPTIONAL_HEADER32, *PIMAGE_OPTIONAL_HEADER32;
+    
+    
+    
+    
+    
+    
+    
+    
+    
+
+代码解析：
+
+    
+    
+    #include <stdio.h>
+    #include <Windows.h>
+    #define path "C:\\Users\\allen\\Desktop\\ipmsg.exe"
+    
+    void main()
+    {
+    FILE* fp = fopen(path, "rb");
+    
+    fseek(fp, 0, SEEK_END);
+    int size = ftell(fp);
+    rewind(fp);
+    PBYTE ptr = (PBYTE)malloc(size);
+    memset(ptr, 0, size);
+    fread(ptr, size, 1, fp);
+    PIMAGE_DOS_HEADER Dos = (PIMAGE_DOS_HEADER)ptr;
+    
+    printf("E_magic:%x\n", Dos->e_magic);
+    printf("E_lfanew:%x\n", Dos->e_lfanew);
+    PIMAGE_NT_HEADERS Nt = (PIMAGE_NT_HEADERS)(ptr + Dos->e_lfanew);
+    printf("Signature:%x\n", Nt->Signature);
+    printf("FileHeader:%x\n", Nt->FileHeader);
+    printf("OptionalHeader:%x\n", Nt->OptionalHeader);
+    getchar();
+    }
+    
+    
+
+上面讲过的代码就不在赘述了。
+
+`PIMAGE_NT_HEADERS Nt = (PIMAGE_NT_HEADERS)(ptr +
+Dos->e_lfanew);`也是定义一个结构体指针然后指向基址加上Dos头的e_lfanew成员，定位到nt头，并填充这个结构体指针指向的结构体。实际上还是基址加偏移的方式定位的。
+
+    
+    
+    printf("Signature:%x\n", Nt->Signature);
+    printf("FileHeader:%x\n", Nt->FileHeader);
+    printf("OptionalHeader:%x\n", Nt->OptionalHeader);
+    
+
+上面这几行代码就是打印结构体的数据了，`printf`函数就是打印数据。
+
+程序运行结果：
+
+![wKg0C2IzLyWAVi5cAADbr69IKYQ356.png](https://image.3001.net/images/20220520/1653016050_628705f2b7457b2dbbd65.png!small)
+
+# 0x4File头解析
+
+File头定义，大小20字节。
+
+    
+    
+    typedef struct _IMAGE_FILE_HEADER {
+        WORD    Machine;
+        WORD    NumberOfSections;
+        DWORD   TimeDateStamp;
+        DWORD   PointerToSymbolTable;//COFF符号表格的偏移位置。此字段只对COFF除错信息有用
+        DWORD   NumberOfSymbols;//COFF符号表格中的符号个数。该值和上一个值在release版本的程序里为0
+        WORD    SizeOfOptionalHeader;
+        WORD    Characteristics;
+    } IMAGE_FILE_HEADER, *PIMAGE_FILE_HEADER;
+    
+
+`Machine`大小两字节，表示当前pe文件的目标CPU类型，0代表任何平台，14c代表i386及后续处理器。
+
+`NumberOfSections`大小两字节，代表节表(区块)的数量。
+
+`TimeDateStamp`大小四字节，一个时间戳，表示当前pe文件何时创建时间。
+
+因为`PointerToSymbolTable`和`NumberOfSymbols`这两个成员很少被使用所以就不多介绍，直接看`SizeOfOptionalHeader`大小两字节，表示可选头(Option头)的大小。
+
+`Characteristics`大小两字节，表示文件的类型，010f代表可执行文件。
+
+代码解析：
+
+    
+    
+    #include <stdio.h>
+    #include <Windows.h>
+    #define path "C:\\Users\\allen\\Desktop\\ipmsg.exe"
+    
+    void main()
+    {
+    FILE* fp = fopen(path, "rb");
+    fseek(fp, 0, SEEK_END);
+    int size = ftell(fp);
+    rewind(fp);
+    PBYTE ptr = (PBYTE)malloc(size);
+    memset(ptr, 0, size);
+    fread(ptr, size, 1, fp);
+    PIMAGE_DOS_HEADER Dos = (PIMAGE_DOS_HEADER)ptr;
+    printf("E_magic:%x\n", Dos->e_magic);
+    printf("E_lfanew:%x\n", Dos->e_lfanew);
+    PIMAGE_NT_HEADERS Nt = (PIMAGE_NT_HEADERS)(ptr + Dos->e_lfanew);
+    printf("Signature:%x\n", Nt->Signature);
+    printf("FileHeader:%x\n", Nt->FileHeader);
+    printf("OptionalHeader:%x\n", Nt->OptionalHeader);
+    PIMAGE_FILE_HEADER File = (PIMAGE_FILE_HEADER)(ptr + Dos->e_lfanew + 4);
+    printf("Machine:%x\n", File->Machine);
+    printf("NumberOfSections:%x\n", File->NumberOfSections);
+    printf("Characteristics:%x\n",File->Characteristics);
+    printf("TimeDateStamp:%x\n", File->TimeDateStamp);
+    printf("SizeOfOptionalHeader:%x\n", File->SizeOfOptionalHeader);
+    printf("TimeDateStamp:%x\n",File->TimeDateStamp);
+    getchar();
+    }
+    
+    
+
+`PIMAGE_FILE_HEADER File = (PIMAGE_FILE_HEADER)(ptr + Dos->e_lfanew +
+4);`先定义一个结构体指针，在用基址+Dos头的e_lfanew成员定位到nt头，跟据nt头的结构体定义可知到Signature成员后面就是File头而Signature的大小是四字节，所以加4就定位到File头，用File头的数据填充上面定义的结构体指针指向的结构体即可。
+
+程序运行结果：
+
+![wKg0C2IzNQmAXgIOAAEyqPYqH0E767.png](https://image.3001.net/images/20220520/1653016050_628705f2ef95ef2458107.png!small)
+
+# 0x5Option头解析
+
+Option头结构体定义：
+
+    
+    
+    typedef struct _IMAGE_OPTIONAL_HEADER {
+        //
+        // Standard fields.
+        //
+    
+        WORD    Magic;
+        BYTE    MajorLinkerVersion;
+        BYTE    MinorLinkerVersion;
+        DWORD   SizeOfCode;
+        DWORD   SizeOfInitializedData;
+        DWORD   SizeOfUninitializedData;
+        DWORD   AddressOfEntryPoint;
+        DWORD   BaseOfCode;
+        DWORD   BaseOfData;
+    
+        //
+        // NT additional fields.
+        //
+    
+        DWORD   ImageBase;
+        DWORD   SectionAlignment;
+        DWORD   FileAlignment;
+        WORD    MajorOperatingSystemVersion;
+        WORD    MinorOperatingSystemVersion;
+        WORD    MajorImageVersion;
+        WORD    MinorImageVersion;
+        WORD    MajorSubsystemVersion;
+        WORD    MinorSubsystemVersion;
+        DWORD   Win32VersionValue;
+        DWORD   SizeOfImage;
+        DWORD   SizeOfHeaders;
+        DWORD   CheckSum;
+        WORD    Subsystem;
+        WORD    DllCharacteristics;
+        DWORD   SizeOfStackReserve;
+        DWORD   SizeOfStackCommit;
+        DWORD   SizeOfHeapReserve;
+        DWORD   SizeOfHeapCommit;
+        DWORD   LoaderFlags;
+        DWORD   NumberOfRvaAndSizes;
+        IMAGE_DATA_DIRECTORY DataDirectory[IMAGE_NUMBEROF_DIRECTORY_ENTRIES];
+    } IMAGE_OPTIONAL_HEADER32, *PIMAGE_OPTIONAL_HEADER32;
+    
+
+`Magic`大小两字节，用于表示是32位pe文件还是64位pe文件，如果是10B就代表32位文件，20B代表64位文件。
+
+`SizeOfCode`大小四字节，代码总大小，需要文件对齐。
+
+`SizeOfInitializedData`大小四字节，代表已经初始化数据的大小，需要按照文件对齐
+
+`SizeOfUninitializedData`大小四字节，代表未初始化数据大小，也是要按照文件对齐。
+
+`AddressOfEntryPoint`大小四字节，是程序入口地址，也就是OEP(需要加上ImageBase才是真正的程序入口)。
+
+`BaseOfCode`大小四字节，代码节开始的地方。
+
+`BaseOfData`大小四字节，数据开始的地方。
+
+`ImageBase`大小四字节，内存镜像基址也就是程序加载进内存中时的基址(一般是0x400000)。
+
+`FileAlignment`大小四字节，文件对齐，如果文件对齐是200那么不足200的会在后面补0，如过一个数是188那么它按照文件对齐后就是200，主要作用是提高cpu工作效率。
+
+`SectionAlignment`大小四字节，内存对齐，和文件对齐一样，也是为了提高cpu工作效率。
+
+`SizeOfImage`大小四字节，PE文件在内存中的总大小，按照内存对齐
+
+`SizeOfHeaders`大小四字节，所有头的大小，Dos头+Nt头成员Signature+File头+Option头+节表的总大小，需要按照文件对齐。
+
+代码解析：
+
+    
+    
+    #include <stdio.h>
+    #include <Windows.h>
+    #define path "C:\\Users\\blue\\Desktop\\ipmsg.exe"
+    
+    void main()
+    {
+    FILE* fp = fopen(path, "rb");
+    fseek(fp, 0, SEEK_END);
+    int size = ftell(fp);
+    rewind(fp);
+    PBYTE ptr = (PBYTE)malloc(size);
+    memset(ptr, 0, size);
+    fread(ptr, size, 1, fp);
+    PIMAGE_DOS_HEADER Dos = (PIMAGE_DOS_HEADER)ptr;
+    printf("E_magic:%x\n", Dos->e_magic);
+    printf("E_lfanew:%x\n", Dos->e_lfanew);
+    PIMAGE_NT_HEADERS Nt = (PIMAGE_NT_HEADERS)(ptr + Dos->e_lfanew);
+    printf("Signature:%x\n", Nt->Signature);
+    printf("FileHeader:%x\n", Nt->FileHeader);
+    printf("OptionalHeader:%x\n", Nt->OptionalHeader);
+    PIMAGE_FILE_HEADER File = (PIMAGE_FILE_HEADER)(ptr + Dos->e_lfanew + 4);
+    printf("Machine:%x\n", File->Machine);
+    printf("NumberOfSections:%x\n", File->NumberOfSections);
+    printf("Characteristics:%x\n",File->Characteristics);
+    printf("TimeDateStamp:%x\n", File->TimeDateStamp);
+    printf("SizeOfOptionalHeader:%x\n", File->SizeOfOptionalHeader);
+    printf("TimeDateStamp:%x\n",File->TimeDateStamp);
+    PIMAGE_OPTIONAL_HEADER32 Option=(PIMAGE_OPTIONAL_HEADER32)(ptr + Dos->e_lfanew + 20+4);
+    printf("AddressOfEntryPoint:%x\n",Option->AddressOfEntryPoint);
+    printf("BaseOfCode:%x\n",Option->BaseOfCode);
+    printf("BaseOfData:%x\n",Option->BaseOfData);
+    printf("FileAlignment:%x\n",Option->FileAlignment);
+    printf("SectionAlignment:%x\n",Option->SectionAlignment);
+    printf("ImageBase:%x\n",Option->ImageBase);
+    printf("Magic:%x\n",Option->Magic);
+    printf("SizeOfCode:%x\n",Option->SizeOfCode);
+    printf("SizeOfHeaders:%x\n",Option->SizeOfHeaders);
+    printf("SizeOfImage:%x\n",Option->SizeOfImage);
+    printf("SizeOfInitializedData:%x\n",Option->SizeOfInitializedData);
+    printf("SizeOfUninitializedData:%x\n",Option->SizeOfUninitializedData);
+    getchar();
+    }
+    
+    
+
+`PIMAGE_OPTIONAL_HEADER32 Option=(PIMAGE_OPTIONAL_HEADER32)(ptr +
+Dos->e_lfanew + 20+4);`还是定义一个结构体指针，然后填充结构体指针指向的结构体，咱们主要看怎么找到Option头的，`(ptr +
+Dos->e_lfanew +
+20+4);`还是先通过基址加Dos头成员e_lfanew找到nt头在加Nt头成员Signature的大小找到File头这里加上File头的大小就可以定位到Option头。
+
+程序运行结果：
+
+![wKg0C2IzO2SAEE9AAGMeYT2eQc261.png](https://image.3001.net/images/20220520/1653016051_628705f35533fe178f933.png!small)
+
+# 0x6结语
+
+主要是介绍了Dos头,Nt头，File头，Option头的一些比较重要的成员，和如何定位到它们，涉及到指针与结构体相关操作。
+
+由于作者水平有限，文章如有错误欢迎指出。
+

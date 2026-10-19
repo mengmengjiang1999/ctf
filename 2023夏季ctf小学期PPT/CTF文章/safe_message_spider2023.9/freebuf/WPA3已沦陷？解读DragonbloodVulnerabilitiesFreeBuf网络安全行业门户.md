@@ -1,0 +1,262 @@
+***本文原创作者：星空111，本文属于FreeBuf原创奖励计划，未经许可禁止转载**  
+
+## 一、前言
+
+![屏幕快照 2019-04-13
+14.27.37.png](https://image.3001.net/images/20190413/1555136867_5cb181630ee61.png!small)
+
+ **今天早上一觉醒来，按照往常的习惯刷了一下 ZDNet，惊奇的发现了一篇名为《Dragonblood vulnerabilities disclosed
+in WiFi WPA3 standard》，我的妈呀，如果我没有记错的话，记得WPA3是Wi-Fi联盟组织于2018年1月8日在Las
+Vegas的国际消费电子展(CES)上发布的Wi-Fi新加密协议，是Wi-Fi身份验证标准[WPA2](https://baike.baidu.com/item/WPA2)技术的的后续版本，旨在提供更好的保护，防止脱机字典攻击和密码猜测尝试，即使使用不太复杂的密码也能提高安全性，并提前保密即使密码已被泄露，也可以保护通信。**
+
+2018年6月26日，WPA3协议最终完成，WPA3将提供个人和企业版本，将逐步取代WPA2，但它可能需要几年时间才能被广泛采用，与此同时，WPA2将继续得到维护和改进。时隔不到1年，WPA3这么快就沦陷了！
+
+我英语水平还不是很渣，那就研究研究喽，《 **Dragonblood vulnerabilities disclosed in WiFi WPA3
+standard** 》是由一位叫
+卡塔琳·西帕努的安全记者报道的，这哥们是ZDNet的一名安全记者，他报道过网络安全、数据泄露、黑客攻击以及其他相关话题。他曾在Bleeping
+Computer and Softpedia担任安全记者。
+
+两位安全研究人员（Mathy Vanhoef）、（Eyal
+Ronen）于2019-4-10披露了一组被统称为Dragonblood的漏洞的细节，值得注意的是，
+**Vanhoef，这哥们还是发现WPA2漏洞的研究人员之一，称为KRACK（密钥重新安装攻击）** ，这也是WiFi联盟最先开发WPA3的主要原因，
+一人的研究成果影响了WiFi联盟开发WPA3，足见他真的是这方面的大内高手哈；Dragonblood漏洞影响了WiFi联盟发布的WPA3 Wi-Fi安全和认证标准。
+
+最重要的是，这个漏洞一旦被利用，将允许攻击者在受害者网络范围内恢复Wi-Fi密码，并渗透到目标网络，可以获取密码并获取敏感信息，例如密码，电子邮件，支付卡号码以及通过即时消息应用程序发送的数据。
+
+## 二、关于“龙血”漏洞
+
+总共有5个Dragonblood漏洞需要注意的点，分别是：
+
+1>拒绝服务攻击
+
+2>两个降级攻击和两个侧通道信息泄漏。他们还发现了一个漏洞，可以利用这个漏洞在绕过WPA3中的DoS保护机制后在接入点(AP)上导致拒绝服务(DoS)条件。
+
+3>然而拒绝服务攻击并不严重，因为它只会导致兼容wpa3的访问点崩溃，并不会引发信息泄露，但其他四个攻击可以用来恢复用户密码，造成信息泄露。
+
+4>两次降级攻击和两个侧通道泄漏都利用了WPA3标准的Dragonfly密钥交换中的设计缺陷引起(客户端在WPA3路由器或接入点上进行身份验证的机制)。
+
+那什么是 **Dragonfly密钥交换协议** ？直接查对应的RFC研究呗！
+
+## 三、Dragonfly Key Exchange
+
+我查了一下RFC 7664---Dragonfly Key Exchange。
+
+### 1.简介
+
+![image.png](https://image.3001.net/images/20190413/1555155041_5cb1c8613fb81.png!small)
+
+它是使用离散对数的密钥交换，使用密码或口令进行身份验证的密码学。更重要的是它可以抵抗主动攻击、被动攻击和离线攻击字典攻击。想必大家对离散对数一定不陌生，它是是一种基于同余运算和原根的一种对数运算。
+
+### 2.假设
+
+为了避免攻击Dragonfly 协议,作了一些基本假设：
+
+2.1 函数H是一个随机oracle，这个随机oracle是不定长度的二进制字符映射到一个固定的x位的二进制字符串：
+
+    
+    
+    H:{0,1}^* -->{0,1}^x
+
+2.2
+函数F是映射函数，它从群组中获得一个元素并返回一个整数。对于ECC组，函数F()返回元素X的坐标，这个坐标点位于椭圆曲线上；对于FFC组，函数F()是恒等函数，因为在FFC组中的所有元素都是整数小于素数。表达式如下：
+
+    
+    
+    ECC:  x=F(P),   where P=(x,y)
+    
+    FFC: x=F(x)
+
+2.3 KDF是一个键值推导函数，它是将一个键值赋值给stretch，并将一个label绑定到这个键值上，label，和期望的输出表明：
+
+    
+    
+    n:stretch= KDF-n (k,label), so,  len(stretch)=n。
+
+2.4 所选群的离散对数问题比较困难,也就是说,给定G，P和Y = G ^ mod
+P，为确定x，在计算上是不可行的。同样，我们为ECC也给定了曲线的定义，一个G和Y = x * G，为确定x的值，在计算上是不可行的。
+
+2.5 存在一个密码的密码共享池的两对。
+**这个池可以由单词组成字典，每个密码在这池都有一个相同的概率被共享密码。所有潜在的攻击者可以访问该池的密码，这应该就是造成此漏洞的元凶。**
+
+2.6 这些“对”有能力产生高质量的随机数。
+
+### 3.密码的派生
+
+3.1 算法的实现如下：
+
+    
+    
+    found = 0
+    
+            counter = 1
+    
+            n = len(p) + 64
+    
+            do {
+    
+              base = H(max(Alice,Bob) | min(Alice,Bob) | password | counter)
+    
+              temp = KDF-n(base, "Dragonfly Hunting And Pecking")
+    
+              seed = (temp mod (p - 1)) + 1
+    
+              if ( (seed^3 + a*seed + b) is a quadratic residue mod p)
+    
+              then
+    
+                if ( found == 0 )
+    
+                then
+    
+                  x = seed
+    
+                  save = base
+    
+                  found = 1
+    
+    fi fi
+    
+              counter = counter + 1
+    
+            } while ((found == 0) || (counter <= k))
+    
+            y = sqrt(x^3 + ax + b)
+    
+            if ( lsb(y) == lsb(save) )
+    
+            then
+    
+              PE = (x,y)
+    
+            else
+    
+              PE = (x,p-y)
+    
+            fi
+
+3.2 检测一个值是否二次剩余模 并且是否可以泄漏信息价值的边信道攻击。
+
+算法实现如下：
+
+    
+    
+    do {
+    
+            qr = random() mod p
+    
+          } while ( lgr(qr, p) != 1)
+    
+          do {
+    
+            qnr = random() mod p
+    
+          } while ( lgr(qnr, p) != -1)
+    
+       Algorithmically, the masking technique to find out whether or not a
+    
+       value is a quadratic residue looks like this:
+    
+          is_quadratic_residue (val, p) {
+    
+              r = (random() mod (p - 1)) + 1
+    
+              num = (val * r * r) mod p
+    
+              if ( lsb(r) == 1 )
+    
+                 num = (num * qr) mod p
+    
+                 if ( lgr(num, p) == 1)
+    
+                 then
+    
+                    return TRUE
+    
+                 fi
+    
+              else
+    
+                 num = (num * qnr) mod p
+    
+                 if ( lgr(num, p) == -1)
+    
+                 then
+    
+                    return TRUE
+    
+                 fi
+    
+    fi
+    
+              return FALSE
+    
+          }
+
+###  **4.交换确定**
+
+在确认Exchange时，双方确认他们得到相同的秘钥，因此拥有相同的密码。提交交换由数据交换的随机函数的输出，H()确认键，两个标量和两个元素交换的承诺交换。标量和元素的顺序是：标量在元素之前，发送方的值在接受者的值之前。所以从每个对的角度来看，产生：  
+
+    
+    
+    confirm = H(kck | scalar | peer-scalar |
+    
+                                Element | Peer-Element | <sender-id>)
+
+Note：
+
+其中<sender-id>是确认消息的发送方的身份。这个身份应当提供确认消息的发送方。
+
+两对交换这些确认和验证其它对的正确性。如果其他对的确认是有效的，认证成功；如果其他对的确认无效，身份验证失败。
+
+如果身份验证失败，作为特定的一部分创建的所有短暂的状态运行的Dragonfly交换必须挽回的破坏。如果验证成功，可以导出可作为身份验证和密钥，可以使用由另一个协议，例如IPsec，保护其他数据。  
+
+## **四、Exploit**
+
+4.1 在降级攻击中：支持WiFi WPA3的网络可能会被迫使用更旧、更不安全的密码交换系统，这可以让攻击者使用更老的漏洞检索网络密码。
+
+4.2 在侧通道信息泄漏攻击中：支持WiFi WPA3的网络可以欺骗设备使用较弱的算法，泄漏少量关于网络密码的信息。通过反复攻击，最终可以恢复完整的密码。
+
+4.3 降级到字典攻击：工作在网络上的WPA3和WPA2同时支持通过WPA3的“过渡模式”。最近发布的三星 **Galaxy S10**
+手机证实了这一攻击。  
+
+![屏幕快照 2019-04-13
+20.06.47.png](https://image.3001.net/images/20190413/1555160237_5cb1dcad6106c.png!small)
+
+如果客户端和AP都支持WPA2和WPA3，则对手可以设置一个只支持WPA2的流氓AP。这导致客户端(即受害者)使用WPA2的4路握手进行连接。虽然客户端在4路握手过程中检测到降级到WPA2，but
+it's too late！检测到降级之前交换的4路握手消息提供了足够的信息来发起离线字典攻击。
+
+4.4 组降级攻击：
+
+当WPA3被配置为与多个密码算法组(而不是一个组)一起工作时才有效果。基本降级攻击：假设客户端支持椭圆曲线P-521和P-256，并且更愿意按照这个顺序使用它们。在这种情况下，即使AP也支持P-521曲线，对手也可以强迫客户端和AP使用较弱的P-256曲线。
+**这可以通过干扰Dragonfly握手的消息，并伪造一条表示不支持某些曲线的消息来实现** 。
+
+4.5 基于缓存的边通道攻击(CVE-2019-9494)--->利用Dragonfly协议的“hunting and pecking"
+algorithm”。
+
+如果对方能够确定If -then-else分支的哪个分支被取走，那么他们就可以知道在这个算法的特定迭代中是否找到了password元素。在实践中发现，如果对方可以在受害机器上运行非特权代码，就能够使用基于缓存的攻击来确定密码生成算法的第一次迭代中采用了哪个分支。此信息可被滥用来执行密码分区攻击(类似于离线字典攻击)。
+
+4.6 基于时间的边通道攻击(CVE-2019-9494) --->利用WPA3的“乘法组”特性。  
+
+当Dragonfly握手使用特定的乘法组时，密码编码算法使用可变数量的迭代器来编码密码。精确的迭代次数取决于使用的密码，以及AP和客户机的MAC地址。对方可以对密码编码算法执行远程定时攻击，以确定编码密码需要多少次迭代。恢复的信息可以被滥用来执行密码分区攻击，这类似于离线字典攻击。  
+
+据专家介绍，这些密码分区攻击可以使用价值125美元的Amazon
+EC2计算能力执行8个字符的小写密码。CVE标识符CVE-2019-9494已分配给侧通道缺陷。  
+
+Note: 大家要是有兴趣研究这个漏洞的详细信息和如何Explot,可以参考Mathy Vanhoef和Eyal
+Ronen合著的学术论文《Dragonblood: WPA3的SAE握手的安全分析》(Dragonblood: A Security Analysis of
+WPA3's SAE Handshake)对这些漏洞都有更详细的解释，或专门介绍Dragonblood漏洞的网站。
+
+ **Last but not least:**
+
+ **Dragonblood也影响EAP-PWD。**
+
+除了WPA3之外，Dragonblood漏洞还会影响之前的WPA和WPA2 WiFi认证标准支持的EAP-pwd(可扩展认证协议)。在大多数实现EAP-pwd的产品中都发现了 **严重的bug** 。这些bug允许对方冒充 any users，从而在不知道用户密码的情况下访问Wi-Fi网络。
+
+## 五、缓解措施
+
+在Vanhoef和Ronen公开披露了Dragonblood漏洞之后，WiFi联盟今天宣布了WPA3标准的安全更新。WiFi联盟今天在一份新闻稿中表示:"这些问题都可以通过软件更新得到缓解，而不会影响设备的协同工作能力。
+
+WiFi产品供应商现在必须通过固件更新将这些更新到他们的产品中"。但愿我们的WIFI产品供应商能做出对应的应急响应，保障我们用户的隐私权。
+
+ ***本文原创作者：星空111，本文属于FreeBuf原创奖励计划，未经许可禁止转载**
+

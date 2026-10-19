@@ -1,0 +1,626 @@
+# 威胁披露机密信息：深入分析RagnarLocker勒索软件
+
+阅读量 **275142**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-06-12 15:30:11
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 mcafee，文章来源：mcafee.com
+
+原文地址：<https://www.mcafee.com/blogs/other-blogs/mcafee-labs/ragnarlocker-ransomware-threatens-to-release-confidential-information>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01b88e362c134b8079.jpg)
+
+## 一、摘要
+
+RagnarLocker勒索软件在2019年12月底首次在野外出现，该勒索软件作为针对受感染网络发起攻击的一个组成部分。
+
+勒索软件的代码较小，在删除其自定义加壳程序后仅有48KB，并且使用高级编程语言（C/C++）进行编码。如同所有勒索软件一样，该恶意软件的目标是对可以加密的所有文件进行加密，并提出勒索，要求用户支付赎金以进行解密。
+
+就像我们最近见到的其他恶意软件，RagnarLocker的运营者威胁说如果不支付赎金，就会公开发布他们从受感染主机上获取到的信息。
+
+在进行侦查之后，勒索软件运营者会进入到受害者的网络，在预部署阶段窃取信息，然后投放勒索软件，以对受害者计算机中的所有文件进行加密。
+
+迄今为止，影响最大的一次RagnarLocker勒索软件攻击是针对一家大型企业，勒索软件运营者首先将其部署，然后要求勒索近1100万美元的赎金，以保证不将从公司内部窃取的信息泄露出去。在这篇文章中，我们就将分析在此次攻击中所使用的样本。
+
+截止到撰写本文时，还没有免费的RagnarLocker解密工具可用。通过部署个人防病毒软件、终端产品和安全网关，可以有效防护免受威胁的侵害。
+
+## 二、RagnarLocker概述
+
+在将勒索软件脱壳后，得到的是一个32位的二进制文件，以EXE形式存在。
+
+恶意软件基本信息：
+
+![](https://p2.ssl.qhimg.com/t01e1e18c094e2ce77f.webp)
+
+我们可以看到，该样本是在2020年4月6日编译的。前面提到的攻击活动发生在编译恶意软件的几天之后，因此该样本是为受害者精心制作的，我们将在后面进行解释。
+
+名称：malware.exe
+
+大小：48460字节，不同样本之间存在差异，加壳的大小是可变的
+
+文件类型：EXE 32位（不同样本之间存在差异）
+
+SHA-256：7af61ce420051640c50b0e73e718dd8c55dddfcb58917a3bead9d3ece2f3e929
+
+SHA-1：60747604d54a18c4e4dc1a2c209e77a793e64dde
+
+编译时间：2020年4月6日（不同样本之间存在差异）
+
+## 三、技术细节
+
+正如我们经常在勒索软件中看到的那样，RagnarLocker会针对独联体（CIS）国家，在勒索软件中嵌入一些Unicode形式的自定义语言字符串。
+
+嵌入在堆栈代码中的语言字符串：
+
+![](https://p4.ssl.qhimg.com/t015d9187bd3fe32413.png)
+
+硬编码的语言包括：格鲁吉亚语、俄语、乌克兰语、摩尔达维亚语、白俄罗斯语、阿塞拜疆语、土库曼语、吉尔吉斯语、哈萨克语、乌兹别克语、塔吉克语。  
+在准备这些字符串之后，恶意软件使用函数`GetLocaleInfoW`来获取`LOCALE_SYSTEM_DEFAULT`语言作为一个字符串。在获取后，它将检查系统语言是否属于黑名单中的语言，如果匹配，勒索软件将使用`TerminateProcess`函数来结束其自身，并返回错误代码`0x29A`。这样的功能，我们之前已经在许多不同的恶意软件样本中见到过。
+
+检查黑名单中的语言：
+
+![](https://p5.ssl.qhimg.com/t01543dcd6717e173d5.png)
+
+针对`LOCALE_SYSTEM_DEFAULT`的检查是为了防止特定国家的用户感染勒索软件，判断所在国家的依据主要是Windows中选择的语言。当然，并非所有这些国家的人都会在Windows中使用独联体国家的语言，他们也可能使用英语。与其他勒索软件一样，如果选择其他语言作为默认语言，则无法避免被感染。
+
+在此之后，恶意软件将使用`GetComputerNameW`函数获取受感染计算机的名称，并使用`GetUserNameW`获取当前用户的用户名。
+
+获取计算机名称和用户名：
+
+![](https://p5.ssl.qhimg.com/t0174b08d5c58bf0b7d.png)
+
+之后，恶意软件将读取两个注册表项：
+
+1、读取`HKLMSOFTWAREMicrosoftCryptography`和子项`MachineGuid`，以获取受害计算机的GUID；
+
+2、读取`HKLMSOFTWAREMicrosoftWindows
+NTCurrentVersion`和子项`ProductName`，以获取操作系统的名称。
+
+为此，恶意软件在配置单元`HKEY_LOCAL_MACHINE`中使用了`RegOpenKeyExW`、`RegQueryValueExW`和`RegCloseKey`函数，在这里无需管理员权限即可读取该配置单元。
+
+从注册表中读取操作系统名称和GUID：
+
+![](https://p5.ssl.qhimg.com/t0172f5b51ff52b489c.png)
+
+接下来，RagnarLocker将使用函数`lstrcpyW`准备堆栈中的第一个字符串，然后再使用函数`lstrcatW`将字符串连接起来。
+
+其顺序是：计算机的GUID、Windows操作系统名称、登录计算机的用户、受害计算机的名称。
+
+获取用户和主机信息，并组合到字符串中：
+
+![](https://p3.ssl.qhimg.com/t01cf71ddde577e9d9c.png)
+
+在截图中，我修改了一些值，以避免暴露我的虚拟机详细信息。在获取上述信息并准备好字符串之后，恶意软件会对每个对象进行自定义哈希计算。
+
+恶意软件将使用`VirtualAlloc`预留一些内存空间，并获取字符串的大小，在一个小循环中完成哈希值的计算。之后，它将使用函数`wsprintfW`对哈希值进行格式化，使其符合Unicode字符串的格式。
+
+生成自定义哈希值，并将格式设置为Unicode字符串：
+
+![](https://p2.ssl.qhimg.com/t01bea48aa8b96de3e2.png)
+
+哈希值将按照以下顺序生成：
+
+1、主机名称（例如：0xf843256f）；
+
+2、登录到计算机的用户名（例如：0x56ef3218）；
+
+3、受感染主机的GUID（例如：0x78ef216f）；
+
+4、操作系统名称（例如：0x91fffe45）；
+
+5、包含上述所有字符串的完整字符串（例如：0xe35d68fe）。
+
+我已经对上述值进行了更改，以保护我的主机安全。
+
+随后，恶意软件将使用函数`wsprintfW`和模板字符串`%s-%s-%s-%s-%s`对自定义哈希值以及它们之间的连字符进行格式化，但在这里，哈希值是按照以下的顺序：
+
+1、GUID；
+
+2、操作系统名称；
+
+3、登录用户名；
+
+4、受感染机器的名称；
+
+5、将完整字符串与所有其他字符串连接在一起。
+
+创建字符串的自定义哈希值，并按照特殊顺序对最后的字符串进行格式化：
+
+![](https://p5.ssl.qhimg.com/t01d51e3dd47277439f.png)
+
+该恶意软件将获取运行进程的命令行，并使用`GetCommandLineW`函数检查是否包含多个参数（第一个参数始终在C/C++中），获取带有参数的完整命令行。如果带有参数，则使用`CommandLineToArgvW`获取该参数。
+
+如果存在多个参数，则恶意软件将不会再执行下一个步骤。为了保证技术细节部分的连续性，我们将仅介绍一个参数时发生的情况。在这种情况下，恶意软件将尝试使用带有所有哈希值格式化后的字符串名称来创建Windows事件，如前所述。在我们的案例中，该字符串为78ef216f-91fffe45-56ef3218-f843256f-e35d68fe。
+
+在尝试创建事件后，恶意软件将使用`GetLastError`函数检查最后一个错误，并将其与`ERROR_ALREADY_EXISTS
+(0xB7)`进行比较。如果事件已经存在，则恶意软件将检查计数器的值是否为0x8000
+(32768)。如果不是该值，则会将计数器加一，然后再次尝试创建该事件，并检查最后一个错误，以此类推，直到其最终达到该值，或者达到计数器中的最大值（64233）。如果无法创建事件，则恶意软件将使用`GetCurrentProcess`函数，将伪句柄移动到自身的进程，随后使用函数`TerminateProcess`将其终止，并返回错误代码`0x29A`。
+
+检查命令行后创建事件循环：
+
+![](https://p0.ssl.qhimg.com/t01470421eca537546e.png)
+
+这样做有几个原因：
+
+1、创建该事件，是为了避免同时重新启动该恶意软件的另一个实例。
+
+2、如果启动了另一个恶意软件实例，则会检查计数器，以等待前一个实例完成后再继续执行该进程，这就避免了恶意软件检查加密文件的问题。
+
+3、该参数的检查可用于避免事件行为，因此恶意软件将始终尝试加密文件。而这也正是为什么如果恶意软件运营者使用1作为参数执行恶意软件，就会导致针对该恶意软件的免疫无效的原因之一。
+
+在此之后，恶意软件将尝试以传统的物理方式，访问连接到受害计算机的所有单元，并准备字符串`\.PHYSICALDRIVE%d`。该字符串将使用函数`wsprintfW`进行格式化，循环过程将从0一直到16。在进行格式化之后，恶意软件将使用`CreateFileW`并检查是否返回错误`ERROR_INVALID_HANDLE`，该报错表示无法访问该单元或该单元不存在。如果返回这个错误，则计数器加一，并继续使用计数器新的取值来格式化字符串。如果可以在原模式下打开设备的句柄，恶意软件将会使用`DeviceIoControl`函数发送两个命令。
+
+这两个命令分别是：  
+1、0x7C0F4 ->
+IOCTL_DISK_SET_DISK_ATTRIBUTES，其属性为`DISK_ATTRIBUTE_READ_ONLY`和`DISK_ATTRIBUTE_OFFLINE`。
+
+2、0x70140 ->
+IOCTL_DISK_UPDATE_PROPERTIES，会让驱动器更新其分区表。在属性更新后，就可以在磁盘上以共享模式访问恶意软件。
+
+控制物理磁盘，以对其进行访问：
+
+![](https://p1.ssl.qhimg.com/t01a588b3200ebc109a.png)
+
+勒索软件的下一个动作是检查存在的单元，确保可以毫无问题地访问这些单元。这一过程可以通过以下两种方式来完成，第一种是使用函数`FindFirstVolumeA`、`FindNextVolumeA`和`FindVolumeClose`。
+
+获取卷盘符和信息，以检查其是否存在，确保可以访问：
+
+![](https://p1.ssl.qhimg.com/t011ce725180a5820b3.png)
+
+前两个函数返回卷盘符和与之关联的特殊内部值。这个信息来自Windows，因此恶意软件需要将其转换为与卷关联的逻辑单元盘符。这一过程可以通过函数`GetVolumePathNamesForVolumeNameA`来完成，该函数将返回与所检查的卷相关联的逻辑盘符。
+
+然后，通过该盘符可以使用函数`GetVolumeInformationA`来获取卷的信息（如果存在且已启用）。如果该卷不存在或无法检查，则该函数将运行失败，并且忽略该卷，将继续尝试计算机中的下一个卷。
+
+另一项检查会使用到函数`GetLogicalDrives`，该函数将返回结构，并通过检查一个特定字节，判断该单元是否存在。
+
+随后，恶意软件将准备密钥，后续将使用该密钥对文件进行加密。为此，它将使用函数`CryptAquireContextW`获取加密的上下文，该函数将使用`CryptGenRandom`生成随机数据，并使用SHA-512算法替换该值。这些值是Salsa20算法的密钥和随机数，将在以后用于加密文件。
+
+获取加密上下文，生成一些数据，并准备计算SHA-512哈希值：
+
+![](https://p0.ssl.qhimg.com/t0188fa7b369ad5f9ac.png)
+
+恶意软件会继续按照以下两个步骤解密某些字符串，其中在相对较大函数中的第一个步骤用于第一层，而第二个步骤用于第二层和服务的最终字符串。停止的服务是：
+
+    
+    
+    vss
+    sql
+    memtas -> associated with MailEnable
+    mepocs -> associated with MailEnable
+    Sophos -> associated with Sophos Antivirus
+    Veeam -> associated with a program to make backups and save in the cloud
+    Backup -> associated with Asus WebStorage
+    Pulseway -> associated with remote control software for IT departments
+    Logme -> associated with remote control software
+    Logmein -> associated with a remote control software
+    Conectwise -> associated with a remote control software
+    Splastop -> associated with a remote control software
+    Mysql -> associated with a program of databases
+    Dfs -> associated with the Distribute File System (Microsoft)
+    
+
+请注意，服务列表可能会取决于样本的不同而有所不同。
+
+在解密字符串后，恶意软件使用`OpenSCManagerA`函数访问SCManager。如果不需要访问，它将忽略所有服务，并继续下一步。
+
+如果可以打开其句柄，则将会使用函数`EnumServicesStatusA`获取服务的状态，如果服务已经停止，则会传递给下一个服务。恶意软件两次调用该函数，首先是获得该函数所需的正确大小，最后一次进行错误检查的过程会使用`GetLastError`检查值是否为`0xEA`（ERROR_ALREADY_EXISTS）。如果存在该错误值，则表明应用程序需要更多的内存来填充该函数给出的所有信息。
+
+打开服务管理器和ENUMSERVICESTATUS：
+
+![](https://p3.ssl.qhimg.com/t018391c5eff46ccea5.png)
+
+这部分内存将被保留，以便稍后再调用该函数并获取实际状态，如果不被停止，恶意软件将使用函数`OpenServiceA`打开服务，并使用函数`QueryServiceStatusEx`查询服务的状态。如果服务没有停止，它将通过`EnumDependentServicesA`获取该服务的所有依赖关系，最后将通过`ControlService`函数控制该服务使其停止。
+
+打开服务并进行控制：
+
+![](https://p4.ssl.qhimg.com/t01052c8fe2c986430b.png)
+
+之后，该恶意软件会解密一系列进程，如果在受感染的计算机中找到它们，将会尝试终止这些进程。对于这一解密过程，恶意软件使用一个字符串，该字符串将会被转换为整数，并使用整数作为临界值来解密列表。
+
+对于这项任务，恶意软件将根据下列黑名单，创建系统中所有进程的快照：
+
+    
+    
+    sql
+    mysql
+    veeam
+    oracle
+    ocssd
+    dbsnmp
+    synctime
+    agntsvc
+    isqlpussvc
+    xfssvccon
+    mydesktopqos
+    ocomm
+    dbeng50
+    sqbcoreservice
+    excel
+    infopath
+    msaccess
+    mspub
+    onenote
+    outlook
+    powerpnt
+    steam
+    thebat
+    thunderbird
+    visio
+    wordpad
+    winword
+    EduLink2SIMS
+    bengine
+    benetns
+    beserver
+    pvlsvr
+    beremote
+    VxLockdownServer
+    postgres
+    fdhost
+    WSSADMIN
+    wsstracing
+    OWSTIMER
+    dfssvc.exe
+    swc_service.exe
+    sophos
+    SAVAdminService
+    SavService.exe
+    
+
+请注意，进程列表可能会取决于样本的不同而有所不同。
+
+在制作快照后，它将会使用`Process32FirstW`和`Process32NextW`函数枚举所有进程，并为找到的每个进程调用`WideCharToMultyByte`函数，以获取将Unicode返回的进程名称转换为ASCII所需的大小。随后，将会为不同名称的进程保留内存，并调用相同的函数进行字符串转换。
+
+获取所有系统进程：
+
+![](https://p5.ssl.qhimg.com/t017f39de9e41392f1e.png)
+
+如果恶意软件在使用`StrStrIA`函数进行比较之后，检测到了某些黑名单中的进程，则会使用`OpenProcess`函数打开该进程，并使用`TerminateProcess`函数终止该进程，返回代码为0x29A。
+
+打开并终止黑名单中的进程：
+
+![](https://p2.ssl.qhimg.com/t0129f44bb5cddd3138.png)
+
+该恶意软件将使用字符串中的一部分来检查黑名单中的所有进程，并非是使用确切的名称。由于不使用扩展名，将会带来更大的迷惑性，但也同时可能导致某些使用该字符串的进程被意外关闭的风险。
+
+此后，恶意软件将检查操作系统是否为64位，使用的是`GetNativeSystemInfo`函数，如果值为9，则表示使用了64位系统。
+
+如果操作系统是64位，则将使用`LoadLibraryW`和`GetProcAddress`获得函数`Woe64EnableWow64FsRedirection`，以删除默认情况下在64位操作系统中出现的重定向。该调用以动态方式完成，但恶意软件不会检查是否已经成功检索到该函数。通常情况下是没问题的，但是并不能100%确定，并且可能会发生调用空指针的崩溃情况。
+
+检查操作系统，并在需要时禁用重定向：
+
+![](https://p4.ssl.qhimg.com/t016f7b79fb0ab272ed.png)
+
+此后，恶意软件将使用嵌入到代码中的字符串`wmic.exe shadowcopy
+delete`，并使用函数`CreateProcessW`调用它。在调用之后，将会使用函数`WaitForSingleObject`等待一个没有上限的时间，以便`wmic.exe`进程在各种卷大小、卷数量、主机可用资源的场景中都可以执行完成。
+
+当然，恶意软件还将使用经典的`vssadmin`程序通过命令`vssadmin delete shadows /all
+/quiet`和`CreateProcessW`函数来删除卷影。之后，它将再次使用`WaitForSingleObject`等待新进程的结束。
+
+在完成之后，恶意软件将再次检查操作系统是否为64位，如果是，则将使用`LoadLibraryW`和`GetProcAddress`获取函数`Wo64EnableWow64FsRedirection`，像以前一样使用重定向来离开系统。同样，恶意软件不会检查函数是否成功解析，而是直接以动态方式进行调用。
+
+销毁卷影并重新启用重定向：
+
+![](https://p2.ssl.qhimg.com/t01c4221f9017fb7105.png)
+
+尽管再次破坏卷影似乎是一个错误，但实际并非如此，因为RagnarLocker勒索软件也同样支持Windows
+XP，而XP操作系统中不存在WMIC类，所以就需要使用存在于Windows中的旧版本程序`vssadmin`来同时兼容新旧操作系统。
+
+该恶意软件继续解密以Base64编码的一个PEM块，并在内存中存储了赎金提示信息。
+
+解密后的PEM块和赎金提示信息：
+
+![](https://p4.ssl.qhimg.com/t01d44c00b8fada93ba.png)
+
+下面展示了赎金提示信息，其中已经删除了敏感信息。
+
+赎金提示信息示例：
+
+![](https://p0.ssl.qhimg.com/t0127c11433d68fb73c.png)
+
+在完成上述两项任务之后，恶意软件会将Base64编码后的PEM块解码为一个对象，获得一个密钥，该密钥将用于使用RSA算法加密进程中使用的密钥。随着恶意软件的发展，这一过程可能会在以后的样本中发生变化。
+
+使用Base64解码并解码对象，以便稍后使用：
+
+![](https://p2.ssl.qhimg.com/t0148b809d86474d415.png)
+
+使用这个密钥，将会加密先前生成的两个随机密钥，以在内存中对其进行保护。随后，加密功能将释放内存。
+
+此后，将会再次获取被感染主机的名称，得到名称的大小，并使用与之前相同的算法来计算自定义哈希值。
+
+对之前生成的值进行加密，并获取计算机名称：
+
+![](https://p4.ssl.qhimg.com/t01355e5dcfa54938c6.png)
+
+使用这个哈希值，将会准备具有以下结构的字符串：
+
+1、`RGNR_`
+
+2、受害主机名称的哈希值
+
+3、扩展名.txt
+
+4、以反斜杠字符开头的字符串
+
+这一过程通过函数`lstrcatW`来实现。
+
+创建赎金提示信息名称：
+
+![](https://p2.ssl.qhimg.com/t0163bf948eb3afd664.png)
+
+使用这个字符串，勒索软件将利用`SHGetSpecialFolderPathW`函数获取所有用户“我的文档”的文件夹路径。这个包含文件夹路径的字符串将与赎金提示信息名称字符串结合在一起，共同组合创建文件的最终路径。
+
+获取我的文档文件夹所在路径，以在稍后写入赎金提示信息：
+
+![](https://p1.ssl.qhimg.com/t01b38cf649bf3b24c6.png)
+
+此后，将使用`CryptBinaryToStringA`函数对关键信息进行Base64编码以解密文件。恶意软件第一次使用该函数来获取所需的大小并保留相应内存，然后再次使用该函数对数据进行编码。在对数据进行编码后，它会在文档路径中创建一个勒索提示文件，该字符串先前已经通过`CreateFileW`函数与路径进行连接，并且将会写入已经在内存中准备好的赎金提示信息内容。随后，将使用一些硬编码的特定字符串“—RAGNAR
+SECRET—”对内容进行格式化，并以其作为块的开头和结尾，在二者之间，将写入Base64编码后的字符串和赎金提示信息。
+
+创建赎金提示信息并在其末尾加入Ragnar Secret：
+
+![](https://p0.ssl.qhimg.com/t01cbc7bbcc36b880e0.png)
+
+随后，恶意软件将使用以下两个字符串组合生成一个新的字符串：
+
+1、`.ragnar_`
+
+2、受害者主机名称的哈希值
+
+该字符串稍后将用作加密文件的新扩展名。此后，恶意软件将再次使用`函数`遍历系统内的逻辑单元，并且再次检查这些单元是否正确，使用`GetLogicalDrivesW`函数检查该单元的类型，以规避CD-ROM（只读）。对于每个逻辑单元，恶意软件将遍历所有的文件和文件夹，并开始加密过程。
+
+获取所有逻辑单元并逐一检查：
+
+![](https://p5.ssl.qhimg.com/t01d62ca13bbee12973.png)
+
+在开始加密过程之前，恶意软件先尝试将赎金记录写入每个单元的根目录中，以便易于被用户发现。
+
+该恶意软件将忽略包含以下名称的文件夹：
+
+    
+    
+    Windows
+    Windows.old
+    Internet Explorer
+    Google
+    Opera
+    Opera Software
+    Mozilla
+    Mozilla Firefox
+    $Recycle.Bin
+    ProgramData
+    All Users
+    
+
+赎金提示信息将会写入到所有受影响的文件夹中，这一点与其他的勒索软件相同。在这里，将使用`FindFirstFileW`和`FindNextFileW`函数遍历每个文件夹中的所有内容。
+
+检查文件夹名称是否在黑名单中：
+
+![](https://p0.ssl.qhimg.com/t01ae62557b058d611b.png)
+
+RagnarLocker还会避免加密某些特定的文件，包括：
+
+    
+    
+    autorun.inf
+    boot.ini
+    bootfont.bin
+    bootsect.bak
+    bootmgr
+    botmgr.efi
+    bootmgfw.efi
+    desktop.ini
+    iconcache.db
+    ntldr
+    ntuser.dat
+    ntuser.dat.log
+    ntuser.ini
+    thumbs.db
+    RGNR_<hash>.txt
+    
+
+检查文件名是否在黑名单中：
+
+![](https://p5.ssl.qhimg.com/t01d87f8bdefd306cd8.png)
+
+如果文件使用了上述名称，则将会被忽略。不仅如此，如果文件使用特定的扩展名，恶意软件也同样会不对其进行加密处理，这些扩展名包括：
+
+    
+    
+    .db
+    .sys
+    .dll
+    .lnk
+    .msi
+    .drv
+    .exe
+    
+
+检查文件扩展名是否在黑名单中：
+
+![](https://p3.ssl.qhimg.com/t01f7076bb9d1cd25d3.png)
+
+以上就是全部的检查过程，这样可以充分防止勒索软件破坏操作系统，因为他们需要受害者能够访问主机，这样才能看到勒索信息并有可能支付赎金。
+
+对于通过检查后的所有文件，恶意软件将会创建一个线程对其进行加密。创建所有线程后，恶意软件将使用`WaitForMultipleObjects`函数等待运行完成。
+
+在加密进程的线程中，恶意软件通过`SetFilePointerEx`函数读取文件的最后9个字节，判断文件末尾是否带有“ _RAGNAR_
+”标记。如果带有此标记，则该文件将会在加密过程中被忽略，并将再次对其重命名。
+
+检查文件中是否有加密标记：
+
+![](https://p2.ssl.qhimg.com/t01fea3dd1955485e1e.png)
+
+在其他情况下，恶意软件将会对文件进行加密，并在文件末尾写入密钥的加密块（256字节）、随机数（256字节）和“ _RAGNAR_
+”标记，最后以一个NULL字符结尾（9字节）。在Salsa20算法中使用的密钥和随机数由嵌入在恶意软件中的RSA公钥进行加密。这样一来，就可以确保只有恶意软件开发人员才拥有RSA私钥，并有能力解密系统中的文件。
+
+在写入信息前，恶意软件将使用`LockFile`函数，并在写入函数进程执行完成后使用`UnlockFile`函数释放已经加密的文件。这样做是为了防止在加密过程中文件被更改或删除。
+
+在文件末尾写入新的内容：
+
+![](https://p5.ssl.qhimg.com/t01f8fa87cefe1df228.webp)
+
+在加密后，或者判断文件已经被加密后，恶意软件会将扩展名修改为新的扩展名，例如“.ragnar_45EF5632”。
+
+修改文件扩展名：
+
+![](https://p5.ssl.qhimg.com/t0110cf6926b289b437.png)
+
+在结束所有加密线程之后，恶意软件尝试获取终端服务会话，或使用`WTSGetActiveConsoleSessionId`函数登录本地计算机的用户会话。在这个会话中，恶意软件会使用`GetCurrentProcess`函数获取恶意软件的当前进程，并使用`OpenProcessToken`函数获取该进程的令牌。对于先前获得的会话，它尝试使用`DuplicateTokenEx`函数来复制令牌，并使用`SetTokenInformation`函数设置为这个令牌。之后，将使用`GetSystemDirectoryW`函数获取系统目录，并将字符串`notepad.exe`连接到该路径后面。
+
+获取本地用户或终端服务的会话并管理令牌：
+
+![](https://p0.ssl.qhimg.com/t01be030fe19e0c6ae3.png)
+
+在准备好这项工作之后，恶意软件将运行记事本，并将赎金提示信息展示给用户。在这一过程，使用的函数是`CreateProcessAsUserW`，以模拟此前用户的会话。
+
+创建记事本进程，并展示赎金提示信息：
+
+![](https://p2.ssl.qhimg.com/t01f344bebee6bbe083.png)
+
+在这一步骤之后，恶意软件就完成了其全部的功能，并使用`ExitProcess`函数退出，退出代码为0。
+
+## 四、勒索软件免疫
+
+在技术部分，我们已经详细分析了该勒索软件的工作原理。如果精心制作一个可以生成特定事件的程序，那么理论上就可以实现该勒索软件的免疫。如上一章所述，如果在系统中存在特定事件，则恶意软件就不会再产生破坏。但是，这种免疫的方式并不是一个长期稳妥的解决方案，原因主要在于：
+
+1、恶意软件开发人员可以更改算法，或者调整事件名称的顺序，或者使用互斥锁来替代事件，这将导致免疫失效。
+
+2、该算法具有硬编码值。如果更改此值，则最终的哈希值将会有所不同，并且免疫将会失效。
+
+3、恶意软件的开发方式是，如果具有至少两个参数，则不会创建该事件，因此，如果恶意软件运营人员希望安全地执行，只需要带有一个参数执行即可，例如`<malware.exe>
+1`。
+
+4、恶意软件可能随着时间不断发展，因此上述免疫方式可能非常脆弱，或受到一定限制。
+
+## 五、总结
+
+RagnarLocker勒索软件非常具有典型性，由于其体积较小，再加上恶意软件运营人员采取了比较激进的行为模式，以及其中使用了多种技术，导致该勒索软件可能会轻松进入到企业网络中，勒索企业人员支付赎金以防止信息泄露。RagnarLocker勒索软件在以后可能会成为一个巨大的威胁，这一点只能交由时间去证明。我们综合评估该勒索软件的代码质量是中等水平。
+
+## 六、MITRE ATT&CK
+
+1、命令和控制：标准应用层协议  
+2、逃避防御：禁用安全工具  
+3、侦查：侦查安全软件  
+4、侦查：侦查软件  
+5、侦查：侦查系统信息  
+6、侦查：侦查系统服务  
+7、侦查：侦查系统时间  
+8、侦查：查询注册表  
+9、执行：命令行界面  
+10、执行：通过API执行  
+11、渗出：数据加密  
+12、影响：加密数据以产生影响  
+13、影响：停止服务
+
+## 七、YARA规则
+
+    
+    
+    rule RagnarLocker
+    {
+        /*
+          This YARA rule detects the ransomware RagnarLocker in memory or unpacked in disk for the sample with hash SHA1 97f45184770693a91054075f8a45290d4d1fc06f and perhaps other samples
+        */
+    
+        meta:
+            author      = “McAfee ATR Team”
+            description = “Rule to detect unpacked sample of RagnarLocker”
+            version     = “1.0”
+    
+        strings:
+            $a = { 42 81 F1 3C FF 01 AB 03 F1 8B C6 C1 C0 0D 2B F0 3B D7 }
+    
+        condition:
+            $a
+    }
+    
+    import “pe”
+    rule ragnarlocker_ransomware
+    {
+       meta:
+          description = “Rule to detect RagnarLocker samples”
+          author = “Christiaan Beek | Marc Rivero | McAfee ATR Team”
+          reference = “https://www.bleepingcomputer.com/news/security/ragnar-locker-ransomware-targets-msp-enterprise-support-tools/”
+    
+          date = “2020-04-15”
+          hash1 = “63096f288f49b25d50f4aea52dc1fc00871b3927fa2a81fa0b0d752b261a3059”
+          hash2 = “9bdd7f965d1c67396afb0a84c78b4d12118ff377db7efdca4a1340933120f376”
+          hash3 = “ec35c76ad2c8192f09c02eca1f263b406163470ca8438d054db7adcf5bfc0597”
+          hash4 = “9706a97ffa43a0258571def8912dc2b8bf1ee207676052ad1b9c16ca9953fc2c”
+    
+       strings:
+          //—RAGNAR SECRET—
+    
+          $s1 = {2D 2D 2D 52 41 47 4E 41 52 20 53 45 43 52 45 54 2D 2D 2D}
+          $s2 = { 66 ?? ?? ?? ?? ?? ?? 66 ?? ?? ?? B8 ?? ?? ?? ?? 0F 44 }
+          $s3 = { 5? 8B ?? 5? 5? 8B ?? ?? 8B ?? 85 ?? 0F 84 }
+          $s4 = { FF 1? ?? ?? ?? ?? 3D ?? ?? ?? ?? 0F 85 }
+          $s5 = { 8D ?? ?? ?? ?? ?? 5? FF 7? ?? E8 ?? ?? ?? ?? 85 ?? 0F 85 }
+    
+          $op1 = { 0f 11 85 70 ff ff ff 8b b5 74 ff ff ff 0f 10 41 }
+    
+          $p0 = { 72 eb fe ff 55 8b ec 81 ec 00 01 00 00 53 56 57 }
+          $p1 = { 60 be 00 00 41 00 8d be 00 10 ff ff 57 eb 0b 90 }
+    
+          $bp0 = { e8 b7 d2 ff ff ff b6 84 }
+          $bp1 = { c7 85 7c ff ff ff 24 d2 00 00 8b 8d 7c ff ff ff }
+          $bp2 = { 8d 85 7c ff ff ff 89 85 64 ff ff ff 8d 4d 84 89 }
+    
+       condition:
+         uint16(0) == 0x5a4d and
+         filesize < 100KB and
+         (4 of ($s*) and $op1) or
+         all of ($p*) and pe.imphash() == “9f611945f0fe0109fe728f39aad47024” or
+         all of ($bp*) and pe.imphash() == “489a2424d7a14a26bfcfb006de3cd226”
+    }
+    
+
+## 八、威胁指标
+
+SHA256 7af61ce420051640c50b0e73e718dd8c55dddfcb58917a3bead9d3ece2f3e929  
+SHA256 c2bd70495630ed8279de0713a010e5e55f3da29323b59ef71401b12942ba52f6  
+SHA256 dd5d4cf9422b6e4514d49a3ec542cffb682be8a24079010cda689afbb44ac0f4  
+SHA256 63096f288f49b25d50f4aea52dc1fc00871b3927fa2a81fa0b0d752b261a3059  
+SHA256 b670441066ff868d06c682e5167b9dbc85b5323f3acfbbc044cabc0e5a594186  
+SHA256 68eb2d2d7866775d6bf106a914281491d23769a9eda88fc078328150b8432bb3  
+SHA256 1bf68d3d1b89e4f225c947442dc71a4793a3100465c95ae85ce6f7d987100ee1  
+SHA256 30dcc7a8ae98e52ee5547379048ca1fc90925e09a2a81c055021ba225c1d064c
+
+本文翻译自mcafee.com [原文链接](https://www.mcafee.com/blogs/other-blogs/mcafee-labs/ragnarlocker-ransomware-threatens-to-release-confidential-information)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **P!chu** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/208365](/post/id/208365)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [mcafee.com](https://www.mcafee.com/blogs/other-blogs/mcafee-labs/ragnarlocker-ransomware-threatens-to-release-confidential-information)
+
+如若转载,请注明出处： <https://www.mcafee.com/blogs/other-blogs/mcafee-labs/ragnarlocker-ransomware-threatens-to-release-confidential-information>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [勒索软件](/tag/勒索软件)
+
+ **+1** __2赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t01bd1dba67fe13cdc6.png) P!chu
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

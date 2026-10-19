@@ -1,0 +1,173 @@
+![](https://image.3001.net/images/20201113/1605248301_5fae252dc5dbbf50dcd00.png!small)
+
+## Unimap
+
+Unimap是一款基于Nmap实现的扫描速度提升工具，我们只需要提供一个IP地址给Unimap，即使是大量数据，Unimap也能够以非常快的速度完成网络扫描。Unimap是“Unique
+Nmap Scan”的缩写，该工具的当前版本支持在Linux、macOS、Windows或Android（Termux）等平台上正常运行。
+
+如果你打算使用Nmap来对一个组织内部的网络系统进行扫描的话，我们首先需要考虑的是，这个网络系统内可能会有几十个、几百个甚至是上千个指向同一个IP地址的子域名。当扫描任务执行到某个时刻时，我们可能就没办法继续去执行扫描任务了。除此之外，由于针对同一个远程主机地址进行了多次扫描之后，我们的IP地址可能会被屏蔽。
+
+Unimap利用自己的技术对所有子域的IP地址进行初始解析，完成后，根据用户配置的线程数，用唯一的IP地址创建一个向量，然后利用Nmap进行并行扫描任务。与此同时，它还能够分析Namp文件中的数据，并尝试寻找出每个IP地址对应的相关信息。最后，Unimap会关联与子域相关联的每个IP地址的信息。比如说，如果你有50个指向同一个IP地址的子域，那么在Unimap的帮助下，我们只需要执行一次Nmap扫描，就可以同时获取到与每个子域关联的所有数据，在一次大规模网络扫描任务中，Unimap将帮助我们节省数天或者数周的时间。
+
+## 工具安装
+
+首先，我们需要在自己的计算机上安装好Rust和Nmap，然后再运行下列命令：
+
+    
+    
+    cargo install unimap
+
+该命令将从crates.io源安装Unimap。
+
+除此之外，广大研究人员也可以使用下列命令安装和配置Unimap：
+
+    
+    
+    git clone https://github.com/Edu4rdSHL/unimap.git
+    
+    cd unimap
+    
+    cargo build --release
+
+此时，构建好的代码将存储在“./target/release/unimap”路径下。
+
+## 使用AUR包（Arch Linux）
+
+除了上述方法之外，我们还可以使用AUR包来安装Unimap。比如说：
+
+    
+    
+    yay -S unimap
+
+如果你想的话，你还可以克隆AUR包，然后使用makepkg对包代码进行编译。比如说：
+
+    
+    
+    git clone https://aur.archlinux.org/unimap.git
+    
+    cd unimap
+    
+    makepkg -si
+
+## 工具使用
+
+Unimap需要root/管理员权限来启动Nmap TCP
+SYN扫描，这是出于扫描结果的准确率和扫描性能方面的考虑。如果你使用的是Linux或类Unix系统的话，可以直接使用一个root
+shell或使用sudo来运行该工具。在Windows平台下，我们可以使用管理员权限来打开一个命令行中断窗口，然后使用相同的命令来运行该工具。
+
+### 下列选项不需要我们提供任何值：
+
+ ** **选项****
+
+|
+
+ ** **描述****  
+  
+---|---  
+  
+\--fast-scan
+
+|
+
+针对端口执行快速扫描，仅扫描前1000个端口，不支持版本检测。  
+  
+-o, --output
+
+|
+
+将扫描结果输出至文件，日志文件名形式为unimap-log-$date。  
+  
+-k, --keep-nmap-logs
+
+|
+
+针对每一个扫描的IP地址，将Nmap XML文件存储至logs/目录下，这些数据可以用于之后的分析任务。  
+  
+### 下列选项需要提供相应的参数值：
+
+ ** **参数****
+
+|
+
+ ** **描述****  
+  
+---|---  
+  
+\--resolvers
+
+|
+
+包含DNS IP地址列表的文件路径，支持多个文件输入。如果不指定的话，将使用来自 public-dns.info内置可用DNS服务器的1600多条数据。  
+  
+-f, --file
+
+|
+
+将目标列表写入文件，并将文件作为输入使用。  
+  
+\--iport
+
+|
+
+自定义初始扫描的端口范围。  
+  
+\--lport
+
+|
+
+自定义最后扫描的端口范围。  
+  
+\--logs-dir
+
+|
+
+存储当前扫描进程数据的CSV文件路径。  
+  
+\--min-rate
+
+|
+
+控制Nmap的--min-rate，默认为30000。  
+  
+-t, --target
+
+|
+
+如果你只想扫描单一主机并从中提取数据，可以使用该参数。  
+  
+\--threads
+
+|
+
+扫描线程数，默认为30。  
+  
+-u, --unique-output
+
+|
+
+指定输出数据的存储路径。  
+  
+## 工具使用样例
+
+下列命令可以执行完整的扫描任务，并将输出存储至log.csv中：
+
+    
+    
+    unimap -f targets.txt -u log.csv
+
+下列命令将执行快速扫描，并将日志文件存储至logs/目录下：
+
+    
+    
+    unimap -f targets.txt --fast-scan -o
+
+下列命令将扫描1-1000端口，并探测相应的服务和版本：
+
+    
+    
+    sudo unimap -f targets.txt --iport 1 --lport 1000 --min-rate 1000
+
+## 项目地址
+
+Unimap：【[ _GitHub传送门_](https://github.com/Edu4rdSHL/unimap)】
+

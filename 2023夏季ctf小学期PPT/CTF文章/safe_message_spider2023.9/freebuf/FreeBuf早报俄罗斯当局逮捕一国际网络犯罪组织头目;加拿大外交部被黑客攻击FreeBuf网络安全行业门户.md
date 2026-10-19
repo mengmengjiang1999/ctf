@@ -1,0 +1,76 @@
+## 【全球动态】
+
+### 1\. 俄罗斯当局逮捕一国际网络犯罪组织的头目
+
+俄罗斯当局逮捕了国际网络盗窃团伙“Infraud
+Organization”的四名成员。【外刊-[阅读原文](https://securityaffairs.co/wordpress/127116/cyber-crime/infraud-organization-head-arrested.html)】
+
+### 2\. 澳大利亚证券和投资委员会与五家公司合作开发公司信息披露技术平台
+
+澳大利亚证券和投资委员会(ASIC)宣布，它正在与五家监管科技公司合作创建一个新的平台，旨在更好处理上市公司的信息。【外刊-[阅读原文](https://www.zdnet.com/article/asic-working-with-five-companies-to-develop-corporate-disclosure-regtech-platform/)】
+
+### 3\. 加拿大外交部被黑客攻击，导致一些服务中断
+
+加拿大政府外交领事关系部门——加拿大全球事务部上周遭受了一次网络攻击。【外刊-[阅读原文](https://www.bleepingcomputer.com/news/security/canadas-foreign-affairs-ministry-hacked-some-services-down/)】
+
+### 4\. 去年全球共记录1862起数据泄漏事件 刷新历史记录
+
+报告显示，过去一年中共发生了 1862 起数据泄露事件，刷新了 2020 年（1108 起）和 2017 年（1506
+起）的最高记录。【[阅读原文](https://www.cnbeta.com/articles/tech/1229865.htm)】
+
+### 5.黑客入侵白俄罗斯国营铁路系统网络以阻止俄罗斯的军事集结
+
+白俄罗斯的黑客周一表示，他们用勒索软件入侵了该国国营铁路系统的网络，以要求国家军队停止援助俄罗斯军队。【[阅读原文](https://www.cnbeta.com/articles/tech/1229765.htm)】
+
+### 6.黑客利用OpenSea漏洞窃取并转卖价值100万美元的NFT内容
+
+NFT市场OpenSea的一个漏洞被利用，黑客以远低于市场价值的价格购买NFT。【[阅读原文](https://www.cnbeta.com/articles/tech/1229659.htm)】
+
+## 【安全事件】
+
+### 1\. CWP漏洞允许获得Linux服务器上的root权限
+
+两个影响控制Web面板(CWP)软件的安全漏洞可以被未经身份验证的攻击者链接起来，以获取受攻击的Linux服务器上的远程代码执行(RCE)作为root权限。【外刊-[阅读原文](https://www.bleepingcomputer.com/news/security/cwp-bugs-allow-code-execution-as-root-on-linux-servers-patch-now/)】
+
+### 2\. Android恶意软件BRATA会在窃取数据后格式化你的设备
+
+名为BRATA的安卓恶意软件在其最新版本中增加了新的危险功能，以及对设备进行出厂重置以清除所有恶意活动痕迹的功能。
+【外刊-[阅读原文](https://www.bleepingcomputer.com/news/security/android-malware-brata-wipes-your-device-after-stealing-data/)】
+
+### 3\. 由于在荷兰交友软件中缺乏支付选项，苹果公司将面临每周500万欧元的罚款
+
+荷兰消费者与市场管理局将对苹果公司(Apple)处以每周500万欧元的罚款，只要该公司继续阻止约会软件免费使用非苹果支付系统。【外刊-[阅读原文](https://www.zdnet.com/article/apple-faces-eur5-million-weekly-fine-for-lacking-payment-options-in-dutch-dating-apps/)】
+
+### 4\. 布基纳法索和也门的互联网服务在政变和爆炸后恢复
+
+也门和布基纳法索上周发生暴力事件导致网络中断，目前两国的一些互联网服务已经恢复。【[阅读原文](https://www.zdnet.com/article/internet-service-returns-to-burkina-faso-and-yemen-after-coup-bombings/)】
+
+### 5\. 勒索软件团伙加大力度招募内部人员进行攻击
+
+最近一项针对北美100家大型IT公司的调查显示，勒索软件的参与者正在更努力地招募目标公司的内部人员来协助攻击。【外刊-[阅读原文](https://www.bleepingcomputer.com/news/security/ransomware-gangs-increase-efforts-to-enlist-insiders-for-attacks/)】
+
+### 6\. 红十字会担心国家和网络罪犯会滥用被盗数据
+
+国际红十字委员会(ICRC)发布了一份关于网络攻击的最新报告，该网络攻击导致数据泄露，影响到接受该组织服务的50多万弱势群体。
+【外刊-[阅读原文](https://www.zdnet.com/article/red-cross-worried-about-misuse-of-stolen-data-by-nation-states-cybercriminals/)】
+
+## 【优质文章】
+
+### 1\. 如何使用Web Cache Vulnerability Scanner检测Web缓存投毒
+
+Web Cache Vulnerability
+Scanner是一款功能强大的安全漏洞扫描工具，该工具基于Go语言开发，是一款命令行接口（CLI）工具，可以帮助广大研究人员轻松检测网站中的Web缓存投毒问题。【[阅读原文](https://www.freebuf.com/articles/web/319954.html)】
+
+### 2\. 数千工业组织的企业电子邮件账户失窃，被滥用进行下一次攻击
+
+2021
+年，卡巴斯基的工控安全专家注意到工控环境计算机上检出间谍软件的统计数据中存在部分异常。【[阅读原文](https://www.freebuf.com/articles/ics-articles/320764.html)】
+
+### 3\. 假旗or升级？疑似海莲花利用Glitch平台的攻击样本再现
+
+奇安信红雨滴团队持续关注全球APT组织的攻击活动，其中包括海莲花（OceanLotus）APT组织。【[阅读原文](https://www.freebuf.com/articles/paper/320395.html)】
+
+### *本文内容收集自全球范围内的媒体与刊物，制作者对其完整性负责，但不对其真实性和有效性负责。
+
+### *标明为【外刊】的内容主要来源为英语国家的媒体与刊物，部分内容需要注册免费账号后方可阅读。
+

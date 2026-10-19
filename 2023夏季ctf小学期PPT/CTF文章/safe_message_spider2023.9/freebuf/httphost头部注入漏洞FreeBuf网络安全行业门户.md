@@ -1,0 +1,146 @@
+最近在实习，参加了渗透测试项目，老大的测试报告中包含一个中危，叫做http host
+头部注入漏洞，我对这个漏洞了解不多，甚至是第一次见到，所以，在此进行总结
+
+在此奉上抓包图片（修改host值后，涉及到302跳转的页面都会包含此漏洞，在当前情况下）
+
+![1212121212](https://image.3001.net/images/20210717/1626455332_60f1bd245a776c8ba5762.png!small)
+
+![232323232323](https://image.3001.net/images/20210717/1626455335_60f1bd274f44d2ac6ba29.png!small)
+
+在项目中使用了 request.getServerName 导致漏洞的出现 不要使用request中的serverName，也就是说host
+header可能会在攻击时被篡改，依赖request的方法是不可靠的，形如JSP头部中的： String path =
+request.getContextPath(); String basePath =
+request.getScheme()+"://"+request.getServerName()+":"+request.getServerPort()+path+"/";
+这样的使用方法就会被漏洞检测工具查出来，认定有头攻击漏洞。
+
+在某些情况下，返回包中会直接包含html页面，其中可能包含一些链接或超链接，可能会直接使用http
+host值进行拼接，如果此时在host值中注入恶意代理，就极有可能会产生反射型XSS
+
+## 漏洞描述
+
+在一般情况下，几个网站可能会放在同一个服务器上，或者几个 web 系统共享一个服务器，host 头来指定应该由哪个网站或者 web 系统来处理用户的请求。
+为了方便获得网站域名，开发人员一般依赖于HTTP Host
+header。例如，在php里面用_SERVER["HTTP_HOST"]。但是这个header是不可信赖的，如果应用程序没有对 host
+header值进行处理，就有可能造成恶意代码的传入。
+
+## 解决办法
+
+web应用程序应该使用SERVER_NAME而不是host。在Apache和Nginx里可以通过设置一个虚拟机来记录所有的非法host
+header。在Nginx里还可以通过指定一个SERVER_NAME名单，Apache也可以通过指定一个SERVER_NAME名单并开启UseCanonicalName选项。
+
+### 具体步骤
+
+#### 项目代码
+
+> 程序编写中避免使用HTTP_HOST,如有需要使用SERVER_NAME替代
+
+#### nginx配置
+
+配置文件中server_name上设置具体域名.eg:
+
+    
+    
+    server_name example.com;
+
+在nginx上设置一个default_server处理其他域名来处理默认的请求.即,非设置域名返回一个http status code 4xx 的代码
+
+    
+    
+    server{  
+    listen       80  default_server;  
+    server_name  _;  
+    return       400;  
+    }
+
+#### Apache配置
+
+ **方法一** : 修改\conf\httpd.conf配置文件中server_name,设置具体域名.eg:
+
+    
+    
+    ServerName example.com:80  # 指定域名和端口号
+
+添加下列行
+
+    
+    
+    UseCanonicalName On # 使用指定的域名和端口号
+
+ **方法二** : 修改\conf\httpd.conf文件,参考以下配置添加：
+
+    
+    
+    NameVirtualHost 127.0.0.1  
+      
+    <VirtualHost 127.0.0.1>  
+      
+    ServerName 127.0.0.1  
+      
+    <Location />  
+      
+    Order Allow,Deny  
+      
+    Deny from all # 拒绝直接通过IP地址的任何访问  
+      
+    </Location>  
+      
+    </VirtualHost>  
+      
+      
+      
+    <VirtualHost 127.0.0.1>  
+      
+    DocumentRoot "C:\www\example"  
+      
+    ServerName example.com # 仅允许通过域名访问  
+      
+    </VirtualHost>
+
+ **方法三** : 修改\conf\httpd.conf文件,找到"#LoadModule rewrite_module
+modules/mod_rewrite.so"去除前面的"#"号,添加类似以下配置：
+
+    
+    
+    RewriteEngine on  
+    ​  
+    RewriteCond %{HTTP_HOST} !^127.0.0.1$ [NC]  
+    ​  
+    RewriteRule ^(.*)$ /error.html
+
+> 配置修改后都需要重启nginx/apache
+
+#### 基于tomcat的修复方案
+
+打开tomcat的conf目录中的server.xml文件，在<Host>节点做如下配置：
+
+    
+    
+    <Host name="localhost"  appBase="webapps"    
+    unpackWARs="true" autoDeploy="true"    
+    xmlValidation="false" xmlNamespaceAware="false">   
+    <Alias>10.1.8.158</Alias><!--10.1.8.158 本地局域网-->    
+    <Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs"    
+    prefix="localhost_access_log." suffix=".txt"  resolveHosts="false"    
+    pattern="%a %A %b %B %h %H %l %m %p %s %S %t %u %U %v %D %T" />    
+    </Host>
+
+此种方式仅支持Tomcat6.0.x以上版本的修复
+
+## 漏洞修复总结
+
+对Host字段进行检测。 Nginx，修改ngnix.conf文件，在server中指定一个server_name名单，并添加检测。
+Apache，修改httpd.conf文件，指定ServerName，并开启UseCanonicalName选项。
+Tomcat，修改server.xml文件，配置Host的name属性。
+
+### 漏洞验证
+
+1.需要安装burpsuite工具 burpsuite 为渗透测试工具 具体介绍自行百度
+
+2.设置浏览器的代理，为后续抓包使用
+
+3.在Proxy页面访问漏洞链接时使用burp抓包，右键将抓到的数据包发送到repeater，切换到repeater选项卡点击go，查看返回的内容
+
+4.在Proxy页面将抓到的数据包再次右键发送到repeater，修改host的值，点击go，查看返回结果
+判断：若是修改host值后，返回的结果不一样，则不存在host头攻击漏洞，反之一样不存在。 修改host baidu.com后，如果响应包返回400
+则是不存在的 或者看响应包中Location是否包含修改后的Host字段值
+

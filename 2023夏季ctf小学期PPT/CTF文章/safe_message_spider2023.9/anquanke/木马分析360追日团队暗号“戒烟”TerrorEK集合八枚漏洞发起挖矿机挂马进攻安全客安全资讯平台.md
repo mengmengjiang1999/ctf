@@ -1,0 +1,236 @@
+# 【木马分析】360追日团队： 暗号“戒烟”：Terror EK集合八枚漏洞发起挖矿机挂马进攻
+
+阅读量 **185633**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-09-11 18:29:21
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：安全客
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+**一、概述**
+
+****
+
+近期，360安全团队监测到一个利用漏洞攻击包Terror Exploit
+Kit（简称TerrorEK）散播门罗币挖矿软件的挂马行为，通过内嵌作者的门罗币地址，将用户的机器强占为自己挖矿赚钱的工具。
+
+这是我们近期在国内发现TerrorEK的传播记录，360第一时间发现并进行分析，该TerrorEK除了集成了多个常见的IE和Flash漏洞以外，还加入了最新的IE漏洞组合
+**CVE-2017-0037** 和 **CVE-2017-0059**
+，有着更高的攻击成功率。经过我们的测试，现有的360安全卫士防御体系早已能够给用户提供多层次保护，抵御此类挂马攻击。
+
+TerrorEK于2016年底出现，作者有时候也会使用Blaze、Neptune、Eris等名字来作为贩卖名称，作者在Twitter上的发言宣称该攻击包包含多个浏览器的不同漏洞[1]，本次发现的攻击页面包含了近几年常见的针对IE浏览器主流漏洞。
+
+  
+
+**二、挂马分析**
+
+****
+
+通过我们的来源追溯，发现此次攻击行为仍然是采用 **广告挂马**
+的形式。攻击者躲避了在线广告运营商的审查上线了挂马页面，并选择在色情网站上线展示，使得大量的用户在访问时遭受到了恶意攻击。这种方式低成本高回报，能够迅速的进行大范围攻击，因此被越来越多的攻击者所选择[2]。
+
+图1 整体挂马流程
+
+本次挂马的网址为hxxp://howtoquitsmoking.review，图1概要展示了整个攻击流程。
+
+这个页面被伪装成了一个正常的网页，其主要内容是一篇关于“HOW TO QUIT
+SMOKING”的文章，在浏览过程中会载入一个js文件，通过该文件悄悄的加载攻击页面：
+
+http://howtoquitsmoking.review/loadCss.js
+
+图2挂马伪装页面
+
+图3 加载代码
+
+这个js文件内容如图所示，该文件进行了一定的加密和混淆，整理后的内容如下：
+
+图4 整理后的加载代码
+
+该段脚本用于向当前html文档中写入一个iframe，使浏览器访问其指定的链接。写入的popunder.php页面是TerrorEK的入口，主要功能是跳转到后续的攻击页面。这个页面中的内容是动态生成的，服务端会对这个页面访问的请求根据浏览器的User-Agent进行过滤，根据设置采用不同的攻击策略并返回不同的内容。我们发现的这个页面中，如果是来自非IE浏览器的请求，则会跳转到谷歌主页上去，只有使用IE浏览器，才会继续加载下一步页面触发挂马行为，并且对于不同的浏览器和操作系统，会返回不同的攻击页面。如果请求的浏览器版本小于IE10，则接受到的是一个包含较少漏洞攻击的页面，如果请求的浏览器为IE10以上，则返回的是最全的漏洞攻击页面。
+
+图5 攻击页面
+
+下面按照修复时间逐一列出此次挂马所使用的漏洞信息。
+
+**1\. CVE-2013-2551**
+
+这是个较旧的IE浏览器漏洞，因为近几年新的漏洞的出现，较少出现，不过本次挂马中仍然保留了这个漏洞的攻击代码。
+
+图6 CVE-2013-2551漏洞代码
+
+**2\. CVE-2014-6332**
+
+这是一个经典的IE浏览器VBScript漏洞，在漏洞被公开后便被大量用于网络挂马，这个漏洞利用简单，国内黑产也曾多次使用这个漏洞在国内成功进行了大范围的挂马攻击。
+
+图7 CVE-2014-6332漏洞代码
+
+**3\. CVE-2015-2419**
+
+该漏洞通常是被国外的EK所使用，在国内并没有流行起来。这个漏洞的公开代码经过了一定混淆，修改起来有一定困难，而这次使用的代码，在之前公开的代码基础之上，又使用了javascript-obfuscator这个库进行二次混淆，因此较难识别出来起。关于该漏洞在EK利用中的相关详细分析，可以参见[3]，通过对该页面的调试发现这段漏洞利用代码仍然有问题，无法正常执行。
+
+图8 CVE-2015-2419漏洞代码
+
+**4\. CVE-2015-7645**
+
+该Flash文件是对漏洞CVE-2015-7645
+的利用，由于文件采用了繁杂的混淆和加密措施，漏洞的利用代码不能直观的展示出来，我们通过二进制调试来确定漏洞编号，如下：
+
+图9 CVE-2015-7645调试过程
+
+在图中选中部分执行“sar
+eax,3”这条指令时，此时eax值为0x000000e2，该值的低三位（此处为2）表示的是数据的类型，根据AVMPLUS的定义，2表示BKIND_VAR类型，而正常情况下，此处应为BKIND_METHOD类型，其值应为1，这与CVE-2015-7645漏洞的成因一致。
+
+**5\. CVE-2015-8651**
+
+CVE-2015-8651漏洞是在国外黑客组织DarkHotel针对国内企业高管的攻击行动中被发现的，随后国外各个漏洞攻击包也迅速整合了这个漏洞。
+
+图10 CVE-2015-8651漏洞代码
+
+**6\. CVE-2016-0189**
+
+CVE-2016-0189是去年出现的比较新的浏览器VBScript漏洞，漏洞利用代码改写简单，短时间内被大量攻击者采用。
+
+图11 CVE-2016-0189漏洞代码
+
+**7\. CVE-2016-4117**
+
+目前已知被利用的Flash漏洞中最新的一个，常见于各种国外漏洞攻击包。
+
+图12 CVE-2016-4117特征代码
+
+**8\. CVE-2017-0037/0059**
+
+这两个组合漏洞，是目前针对IE浏览器的最新的可以利用的漏洞，于2017年7月公开利用代码，现在逐渐被整合入漏洞攻击包中，但是目前公开的漏洞利用代码只能在64位Windows
+7并且IE11版本<=11.0.37上正常攻击，有一定局限性。
+
+图13 CVE-2017-0037特征代码
+
+图14 CVE-2017-0059特征代码
+
+攻击者通过以上多个漏洞同时攻击用户电脑，一旦成功触发了某个漏洞，都会调用shellcode在cmd命令行中执行Jscript代码，然后下载恶意程序。
+
+  
+
+**三、挖矿软件分析**
+
+****
+
+首先执行的恶意程序是使用SmokeLoader[4]作为加载保护方案的一个加载器，这个加载器会通过多种方法躲避检测，有比较强的迷惑性，具有一定的对抗自动化分析能力。
+
+首先SmokeLoader会进行反虚监控和反虚拟机的检测，一旦检测到，则直接进入Sleep循环不再展开功能。
+
+图15 反虚拟机功能
+
+对一些C2等配置信息，会进行加密保存，执行时才自动解密得到明文内容。
+
+图16 解密功能
+
+此外，比较特殊的一点是，该样本会选取
+**HKEY_LOCAL_MACHINESoftwareMicrosoftWindowsCurrentVersionUninstall**
+的HelpLink中的正规URL，进行网络访问，表现出很强的迷惑性。
+
+图17 流量伪装
+
+而在下载功能PE过程中，会发起一个POST请求，在返回数据中包含对应的PE，但这个请求的HTTP返回代码是404错误，有比较强的迷惑作用，一般容易被忽视。下载到的最终样本会注入WINDOWS升级进程wuapp.exe中，在后台悄悄的进行门罗币挖矿。
+
+根据软件内置信息中的账户设置，我们可以从矿池查询到目前的收益，可以看出这个帐号每天大约能够收入0.2个门罗币，约合25刀。
+
+图18 矿池信息
+
+图19 算力变化
+
+  
+
+**四、总结**
+
+****
+
+这次攻击者释放的是挖矿软件，随着近期比特比等电子货币价格高涨，越来越多的攻击者选择挖矿攻击，相比之前的勒索软件，挖矿软件更能够提供持续的产出，并且在当前高涨的电子货币价格下显得越来越划算。
+
+这次挂马是我们监测到的同时利用漏洞最多的挂马攻击事件，攻击者通过多个漏洞的混合攻击能够有效的提供攻击成功率，这些漏洞大多数已经被修复，用户只要及时给系统打补丁并更新Flash到最新版本就可以免受攻击，而360安全卫士也会从多个层次对网页挂马进行防御，对已知和未知漏洞进行有效拦截，确保用户电脑安全。
+
+本文由360 QEX团队和追日团队合作完成。
+
+  
+
+**五、IOC信息**
+
+****
+
+**C2:**
+
+    
+    
+    hxxp://newtryguys.win/
+    hxxp://shadowaproch.win/
+    hxxp://thenewthing.online/
+    hxxp://meemsaas.site/
+    hxxp://sossen.site/
+    hxxp://bumdid.site/
+    hxxp://youhap.online/
+
+**MD5:**
+
+    
+    
+    bc2ae675e7fbc01a50b424d7c243fd9a hyefhqg6btgi.swf
+    c5c987b04916fef4ad283b1cb3c21191 ydfxe5glulrr.swf
+    28cfddc186a3b455dfa46261677373a1 y8tvhog8nvkb.swf
+    2C812EEB662E23546C3A135CD6391CB4 iedhebgc.exe
+    F3C8A3F61A15C05BC0DE9D60119C56D8 A3F5.tmp.exe
+
+**参考文献**
+
+****
+
+[1] Terror Exploit Kit? More like Error Exploit Kit
+[https://www.trustwave.com/Resources/SpiderLabs-Blog/Terror-Exploit-Kit–More-like-Error-Exploit-Kit/](https://www.trustwave.com/Resources/SpiderLabs-Blog/Terror-Exploit-Kit--More-like-Error-Exploit-Kit/)
+
+[2] Hiking Club Malvertisements Drop Monero Miners Via Neptune Exploit Kit
+<https://www.fireeye.com/blog/threat-research/2017/08/neptune-exploit-kit-malvertising.html>
+
+[3] 钓鱼工具包（EK）支持CVE-2015-2419漏洞 <http://bobao.360.cn/learning/detail/577.html>
+
+[4] Smoke Loader Adds Additional Obfuscation Methods to Mitigate Analysis
+<https://info.phishlabs.com/blog/smoke-loader-adds-additional-obfuscation-methods-to-mitigate-analysis>
+
+[5] Experts from Talos Team discovered changes made to the Terror exploit kit
+(EK) that allow it to fingerprint victims and target specific vulnerabilities.
+<http://securityaffairs.co/wordpress/59321/malware/terror-exploit-kit-fingerprinting.html>
+
+本文翻译自安全客 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **360追日团队** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/86816](/post/id/86816)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [安全客]()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p2.ssl.qhmsg.com/dm/200_200_100/t0197f181dbf0d58d06.jpg) 360追日团队
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

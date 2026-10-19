@@ -1,0 +1,325 @@
+**Frida是一款非常强大的框架，其可向Windows、MacOS、Linux、iOS、Android，QNX的应用中注入Javascript，进而拦截应用传输的数据。本文仅使用到其中少部分功能，更多可以参考Frida文档，强烈建议读者最好是在熟悉了其基本概念以及常用功能后再进行阅读。推荐两篇不错的译文：使用Frida配合Burp
+Suite追踪API调用；
+如何在iOS应用程序中用Frida来绕过“越狱检测”?大家在做渗透测试的时候有没有遇到这样的问题？当你要对一个协议的内容进行修改的时候，发现只要修改一个字节进行发送，服务器返回的结果就是错误的；用原始包进行重放操作就是没问题的。**  
+![](https://image.3001.net/images/20200516/1589591586_5ebf3e225e766.png!small)通过观察发现包头中有个sign字段对包中的内容进行校验，所以服务器才会返回错误的结果。看到这里聪明的你一定会想到，找到sign的算法，把sign字段计算出来不就可以了吗。但是，通过跟踪发现sign的计算方法，被放到了so文件中并且此段算法已经被VM了，没有这个能力还原算法还原朋友可以看看我这篇文章。
+
+山人自有妙招，今天这篇文章的就是告诉大家说应该怎么解决这个问题。
+
+下面截图是通过本文的方法的产出的结果，可以看到通过BurpSuit自动化的对有签名验证的协议进行批量测试。
+
+![](https://image.3001.net/images/20200516/1589591636_5ebf3e549c755.png!small)
+
+##  **一、必备工具：**
+
+操作系统: WIN10_X64
+
+BurpSuit: 渗透神器，如果你还不知道这个，那么只能说明你不是圈内人，赶快去百度一下吧。
+
+Frida:
+
+>
+> Frida是一款非常强大的框架，其可向Windows、MacOS、Linux、iOS、Android，QNX的应用中注入Javascript，进而拦截应用传输的数据。本文仅使用到其中少部分功能，更多可以参考Frida文档，强烈建议读者最好是在熟悉了其基本概念以及常用功能后再进行阅读。推荐两篇不错的译文：使用Frida配合Burp
+> Suite追踪API调用； 如何在iOS应用程序中用Frida来绕过“越狱检测”?
+
+Brida(Ver:0.3): BurpSuit的插件，这是此篇文章的重点。
+
+> Brida是一款 Burp Suite 扩展，作为一座桥梁连接着Burp
+> Suite以及Frida，以帮助用户修改应用程序与后端服务器之间的通信数据为己任。在分析移动端应用时遇到应用使用随机密钥式对称加密，如果不知道其使用的密钥就无法篡改其通信数据，通过Burp也就无法对所有的交换数据进行更改了，于是Brida就这样出现在我们视野中。
+>
+> GitHub: <https://github.com/federicodotta/Brida>
+
+Jadx（Ver:1.1.0）:
+
+> 一款免费的apk反编译软件。
+>
+> GitHub: <https://github.com/skylot/jadx>
+
+Python2.7: 我使用的是Brida是v0.3版本的，所以只支持Python2。
+
+##  **二、目标分析:**
+
+###  1.静态分析，找到关键位置
+
+首先，找到要分析的APK，用jadx载入进行反编译，查找sign算法的位置（至于如何查找算法不是本文的重点所以这里就不详细说查找的步骤了），找到算法call后发现如下：
+
+    
+    
+    tps.addHeaderParam(JNISecurity.signJava(sb.toString())
+
+继续跟进，发现是计算sign的函数在so文件中，用ida打开看看，发现用VM加密了。
+
+    
+    
+    public class JNISecurity {
+    
+            private static native String sign(String str);
+    
+        static {
+    
+            System.loadLibrary("xxxx");}
+    
+        public static String signJava(String str) {
+    
+            String sign = sign(str);
+    
+            return "" + sign;}
+    
+        }
+
+虽然核心函数被VM加密了，我们看不到sign的算法是怎么实现的，但是我们可以调用这个so文件中的算法进行计算，只要把参数传对，不就可以让app帮我们计算了么?
+
+###  2 还原参数算法
+
+确定想法以后，开始看参数是怎么形成的。通过jadx反编译，找到传参的地方如下：
+
+    
+    
+    private void signParam(tps tps) {
+    
+            try {
+    
+                StringBuilder sb = new StringBuilder();
+    
+                String str = System.currentTimeMillis() + "";
+    
+                sb.append("KEYKEYKEYKEYKEYKEY");
+    
+                sb.append(str);
+    
+                if (tps.getBodyParam() != null && !tps.getBodyParam().isEmpty()) {
+    
+                    ArrayList<String> arrayList = new ArrayList<>();
+    
+                    for (Map.Entry<String, String> key : tps.getBodyParam().entrySet()) {
+    
+                        arrayList.add(key.getKey());
+    
+                    }
+    
+                    Collections.sort(arrayList);
+    
+                    for (String str2 : arrayList) {
+    
+                        String str3 = tps.getBodyParam().get(str2);
+    
+                        if (TextUtils.isEmpty(str3)) {
+    
+                            str3 = "";
+    
+                        }
+    
+                        sb.append(str2);
+    
+                        sb.append(HttpUtils.EQUAL_SIGN);
+    
+                        sb.append(str3);
+    
+                    }
+    
+                }
+    
+                tps.addHeaderParam(JNISecurity.signJava(sb.toString(), new String("X.XX.XX")));
+    
+            } catch (Exception e) {
+    
+            }
+    
+        }
+
+上面代码的意思是把body中字段的内容取出，一个固定的KEY加上当前的时间戳进行拼接后（KEYKEYKEYKEYKEYKEY+body+time），传给signJava进行计算。
+
+> 如：
+>
+> body内容为：nickname=99bbe4
+>
+> 进行拼接后的字符串：
+>
+> KEYKEYKEYKEYKEYKEY99bbe41589531540770
+
+###  3 动态分析，使用Brida自动计算出sign的值
+
+> 如果不会安装Brida与Frida的同学可以参考这篇文章：Brida Python3环境下的不完全折腾手册:
+> <https://www.freebuf.com/column/232055.html>
+
+BurpSuit中的Brida插件中有一个功能，可以把用户选定的内容，传入到Brida通过调用frida进行hook，来执行sign的算法
+
+![](https://image.3001.net/images/20200516/1589592625_5ebf4231d73b1.png!small)
+
+brida.js脚本如下：
+
+    
+    
+    contextcustom1: function(message) {
+    
+                var data = hexToString(message);
+    
+                var timestamp = new Date().getTime();
+    
+                data = 'KEYKEYKEYKEYKEYKEY'+timestamp+data;
+    
+                var sign;
+    
+                Java.perform(function () {
+    
+                    try {
+    
+                        //hook class
+    
+                        var calclass = Java.use('com.xxxx.xxxx.JNISecurity');
+    
+                        //hook method
+    
+                        sign = calclass.signJava(data);
+    
+                    } catch (error) {
+    
+                        console.log("[!]Exception:" + error.message);
+    
+                    }
+    
+                });
+    
+                return stringToHex(sign);
+    
+            },
+
+上面的代码意思其实很简单，HOOK
+app中的com.xxxx.xxxx.JNISecurity这个类，填入参数(用户选定的参数)，执行signJava方法，让app帮我们计算出sign.
+
+准备完成后，启动brida，并且载入brdia.js脚本。
+
+![](https://image.3001.net/images/20200516/1589592676_5ebf426446a4e.png!small)
+
+###  4 效率太低，怎么才能改进？
+
+虽然这样做，可以进行渗透测试了，但每改一次修改一个值，就需要
+
+右键===》Cutoms1===>删除原来的sign===》复制新生产的sign===》调整格式===>发送协议，
+
+而且这样只能一个一个协议的测试，速度非常的慢，慢还可以忍，关键还不能进行批量暴力测试，也就失去了价值。
+
+在BurpSuit中如果当发送内容的时候自动可以自动把sign替换掉，是不是就不用这么麻烦了，于是仔细看了看Brida的文档，首先了解下Brida的工作方式：
+
+![](https://image.3001.net/images/20200516/1589592716_5ebf428c8887d.png!small)太好了，Brida通过Pyro4与Frida进行联系，这样就把Burp和Frida联系在一起了。Brida提供了这个功能（用户自定义插件），正好做做尝试。
+
+###  5 使用自定义插件(Custom plugin with Brida stub)
+
+这个过程可能有点绕，我画个图，一图顶万语！（图中我省略了Pyro4和Frida与Brida的交互过程）
+
+![](https://image.3001.net/images/20200516/1589592760_5ebf42b81b550.png!small)
+
+如上图所示：插件接收到Burp传过来的Reuqest和Body的内容，会自动修改Brup中要发送的Request的内容。
+
+这里使用的是python，如果你擅长java，也是可以的，原理是相同。
+
+Python插件脚本关键代码如下：
+
+    
+    
+    def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
+    
+            if messageIsRequest and self.check_Flag(toolFlag):
+    
+                # Get request bytes
+    
+                request = messageInfo.getRequest()
+    
+                # Get a IRequestInfo object, useful to work with the request
+    
+                analyzedRequest = self.helpers.analyzeRequest(request)
+    
+                headers = list(analyzedRequest.getHeaders())
+    
+                bodyOffset = int(analyzedRequest.getBodyOffset())
+    
+            body = request[bodyOffset:]
+    
+                bodyString = "".join(map(chr, body))
+    
+                if self.find_header('Host: xxxx.xxxx.com', headers):
+    
+                    # get sign from brida
+    
+                    _sign = self.get_sign(bodyString)
+    
+                    # gen new headers by sign
+    
+                    _newheaders = self.gen_headers(headers, _sign)
+    
+                    # rebuild request
+    
+                    if len(_newheaders) > 0:
+    
+                        _newRequest = self.helpers.buildHttpMessage(
+    
+                            _newheaders, body)
+    
+                        # send packet
+    
+                        messageInfo.setRequest(_newRequest)
+    
+                pass
+
+从Brida中获取到sign的值,(这段代码从Brida插件中的Python stub中获得)
+
+    
+    
+    def get_sign(self, bodyString):
+    
+            uri = 'PYRO:BridaServicePyro@localhost:9999'
+    
+            pp = Pyro4.Proxy(uri)
+    
+            args = []
+    
+            if len(bodyString) > 0:
+    
+                args.append(bodyString)
+    
+            else:
+    
+                args.append('')
+    
+            # get sign from brida.js script
+    
+            _retvalue = pp.callexportfunction('getsign', args)
+    
+            pp._pyroRelease()
+    
+            return _retvalue
+
+###  6 批量暴力攻击测试
+
+在Burp的Extend中加入自己写的Python插件,加入成功后，前面会显示打钩，表面插件加入成功。
+
+![](https://image.3001.net/images/20200516/1589592865_5ebf432125d48.png!small)
+
+选择修改用户信息的协议加入intruder中进行批量测试，测试成功。
+
+![](https://image.3001.net/images/20200516/1589592911_5ebf434fa13f0.png!small)
+
+##  **三、 总结**
+
+本文通过一个案例，从apk反编译到加密分析，到让应用自动算出sign；从刚开始的手动解密sign，到后来的自动解密并替换sign，到最后的批量测试，Brida插件给我们带来了非常大的帮助。
+
+在网络协议渗透测试的方面，BrupSuit用的会多一些，所以Brida插件是渗透测试人员必要掌握的一个工具。从本文可以看到，Brida帮我们在进行渗透测试的时候节省不少的时间，毕竟是先要通过人工分析后，才能有思路达到自动化脚本的目的。
+
+其中用到的插件与脚本，<https://github.com/yearnwang/Brida_Custom_Plugs>，需要的可以去下载。
+
+有什么问题大家可以随时留言给我或者Email给我。
+
+##  **四、 参考文献**
+
+> Brida – A step-by-step user guide
+> <https://techblog.mediaservice.net/2018/04/brida-a-step-by-step-user-guide/>
+>
+> Brida <https://github.com/federicodotta/Brida>
+>
+> Brida使用Frida进行移动应用渗透测试 <https://www.freebuf.com/sectool/143360.html>
+>
+> Brida操作指南 <https://bbs.pediy.com/thread-248977.htm>
+>
+> Brida Python3环境下的不完全折腾手册 <https://www.freebuf.com/column/232055.html>
+
+***本文作者：Mr极品混混，转载请注明来自FreeBuf.COM**
+

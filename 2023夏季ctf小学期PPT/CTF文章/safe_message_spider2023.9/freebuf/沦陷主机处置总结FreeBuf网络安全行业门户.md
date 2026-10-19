@@ -1,0 +1,155 @@
+## **SETP1：** 将主机和当前业务网络隔离
+
+操作意义：将沦陷主机从业务环境中隔离出来防止黑客通过该主机进行下一步渗透
+
+方法1:直接交换机上shutdown该服务器接口
+
+实例设置方式：int G0/0/24 shutdown （G0/0/24为示例接口）
+
+方法2:直接服务器上关闭网卡
+
+实例设置方式：ifdown eth0（eth0为示例接口）
+
+方法3:断开网线
+
+实例操作：将服务器网口线缆移除
+
+## **SETP2：** 接入到带网络的隔离环境中（建议带网络）并对流量进行捕获，检查。（可以扩展30页）
+
+操作意义：记录下当前沦陷主机工作的网络连接方便溯源和检查异常的通信程序
+
+方法1：直接接入带网络的环境然后通过TCPDUMP或者 Wireshark 本地抓包
+
+实际操作：tcpdump -i eth10 -c 10000 -w eth1.cap，
+
+或者直接在Wireshark上选择接口开始抓包，然后通过netstat -anob >> 1.txt
+保存一份连接信息，最后对抓出来的数据包进行分析和过滤（例如你应用是使用TCP8080端口 你可以使用过滤器not tcp.port == 8080
+查看非业务流量）
+
+方法2：通过端口镜像进行抓包
+
+实际操作：通过使用端口镜像命令将服务器流量引入到抓包主机对流量进行收集
+
+然后通过netstat -anob >> 1.txt 保存一份连接信息，最后对抓出来的数据包进行分析和过滤
+
+## **SETP3：** 日志保存和分析（可以扩展30页）
+
+操作意义：检查日志服务器日志和本地日志（不仅限于服务器）发现入侵痕迹。
+
+优先检查secure日志，和系统应用日志，cron ，btmp日志等。
+
+/var/log/message 系统启动后的信息和错误日志
+
+/var/log/secure 与安全相关的日志信息
+
+/var/log/maillog 与邮件相关的日志信息
+
+/var/log/cron 与定时任务相关的日志信息
+
+/var/log/spooler 与UUCP和news设备相关的日志信息
+
+/var/log/boot.log 守护进程启动和停止相关的日志消息
+
+/var/log/httpd，/var/log/mysqld.log 应用日志（该httpd只是举例说明）
+
+/var/run/utmp 记录着现在登录的用户  
+/var/log/lastlog 记录每个用户最后的登录信息  
+/var/log/btmp 记录错误的登录尝试  
+/var/log/dmesg内核日志  
+/var/log/cpus CPU的处理信息  
+/var/log/syslog 事件记录监控程序日志  
+/var/log/auth.log 用户认证日志  
+/var/log/daemon.log 系统进程日志
+
+## **SETP** **4：** 通过应用副本文件检查应用服务端有没有被篡改（可以扩展5页）
+
+操作意义：检查应用是否受到感染。
+
+方法1：通过MD5sum 命令 对比正常副本和当前服务器副本的MD5差距。检查应用是否受到感染。
+
+方法2：通过类似Beyond Compare这类文件进行文件不同的比对。
+
+## **SETP** **5：** 检查常规用户和文件权限配置和系统配置（可以扩展10页）
+
+操作意义：检查系统异常表现，推测入侵手段。
+
+  1. 检查帐户  
+# less /etc/passwd  
+# grep :0: /etc/passwd（检查是否产生了新用户，和UID、GID是0的用户）  
+#
+[ls](https://www.baidu.com/s?wd=ls&tn=SE_PcZhidaonwhc_ngpagmjz&rsv_dl=gh_pc_zhidao)
+[-l](https://www.baidu.com/s?wd=-l&tn=SE_PcZhidaonwhc_ngpagmjz&rsv_dl=gh_pc_zhidao)
+/etc/passwd（查看文件修改日期）  
+# awk -F: ‘$3= =0 {print $1}’ /etc/passwd（查看是否存在特权用户）  
+# awk -F: ‘length($2)= =0 {print $1}’ /etc/shadow（查看是否存在空口令帐户）
+
+（window下可以 net user 类命令查看）
+
+  1. 检查进程  
+# ps -aux（注意UID是0的）  
+#
+[ls](https://www.baidu.com/s?wd=ls&tn=SE_PcZhidaonwhc_ngpagmjz&rsv_dl=gh_pc_zhidao)of
+-p pid（察看该进程所打开端口和文件）  
+# cat /etc/inetd.conf | grep -v “^#”（检查守护进程）  
+检查隐藏进程  
+# ps -ef|awk ‘{print }’|sort -n|uniq >1  
+#
+[ls](https://www.baidu.com/s?wd=ls&tn=SE_PcZhidaonwhc_ngpagmjz&rsv_dl=gh_pc_zhidao)
+/porc |sort -n|uniq >2
+
+  2. 检查后门  
+# cat /etc/crontab  
+# ls /var/spool/cron/  
+# cat /etc/rc.d/rc.local  
+# ls /etc/rc.d  
+# ls /etc/rc3.d  
+# find / -type f -perm 4000
+
+（windows可以通过ICESWORD和任务管理器之类的工具检查）
+
+检查计划任务  
+注意root和UID是0的schedule  
+# crontab –u root –l  
+# cat /etc/crontab  
+# ls /etc/cron.*
+
+检查装载的内核模块
+
+#lsmod
+
+检查系统服务
+
+Chkconfig
+
+查目录权限
+
+Ls -l
+
+（windows鼠标右键的权限管理）
+
+## **SETP** **6：** 服务器杀毒（可以扩展2页）
+
+操作意义：通过杀毒程式检测后门
+
+操作示例：直接安装较不热门且较强力杀毒软件查杀，例如麦咖啡，小红伞 avast！之类的。（推荐使用两款以上，防止免杀）。
+
+**SETP7** **：** 业务数据备份（可以扩展4页）
+
+操作意义:备份业务数据用于恢复
+
+操作示例：看业务环境 可以直接通过复制还是通过相关设备或者软件直接备份。
+
+## **SETP8** **：** 操作系统的重新安装，打上最新补丁（系统和服务软件），系统加固
+
+## 并恢复业务（可以扩展8页）
+
+操作意义：恢复业务运行，并加固系统
+
+操作示例：通过重新安装官方下载的操作系统和服务程序，打上最新补丁保证主机不会因旧漏洞沦陷，通过最小权限规则法把用户权限设置为最低。
+
+## **SETP9** **：** 服务安全性重新评估（可以扩展15页）
+
+操作意义：检测服务器加固最优状态下的防御能力
+
+操作示例：各种扫描器伺候，各种渗透测试。
+

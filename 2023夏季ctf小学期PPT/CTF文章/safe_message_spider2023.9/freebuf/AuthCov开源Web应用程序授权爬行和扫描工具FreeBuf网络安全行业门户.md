@@ -1,0 +1,148 @@
+##  介绍
+
+**AuthCov是一款用于Web应用扫描工具，AuthCov使用Chrome浏览器拦截并记录API请求以及在加载阶段的页面。然后，它以不同的帐户登录，并尝试访问先前发现的每个API请求或页面。重复此步骤。最后，它会生成一份详细的报告，列出发现的资源以及入侵者用户是否可以访问这些资源。**
+
+![](https://image.3001.net/images/20191017/1571318766_5da86beeb11a5.png!small)
+
+##  特点
+
+> 1.适用于单页应用程序和传统的多页应用程序
+>
+> 2.处理基于令牌和基于cookie的身份验证机制
+>
+> 3.生成HTML格式的报告
+>
+> 4.可以在报告中查看爬取的每个页面的截图
+
+##  安装
+
+安装node 10. 然后运行：
+
+    
+    
+    $ npm install -g authcov
+
+##  用法
+
+为您要扫描的站点生成一个配置：
+
+    
+    
+    $ authcov new myconfig.js
+
+更新myconfig.js中的值
+
+通过运行此命令来测试您的配置值，确保浏览器可以登录。
+
+    
+    
+    $ authcov test-login myconfig.js --headless=false
+
+抓取网站：
+
+    
+    
+    $ authcov crawl myconfig.js
+
+尝试在爬取阶段发现资源：
+
+    
+    
+    $ authcov intrude myconfig.js
+
+在以下位置查看生成的报告： ./tmp/report/index.html
+
+##  配置
+
+可以在配置文件中设置以下选项：
+
+选项  |  类型  |  描述  
+---|---|---  
+baseUrl  |  串  |  网站的URL。这就是爬虫的起点。  
+crawlUser  |  对象  |  用户在其下爬行网站。例：{"username": "admin", "password": "1234"}  
+intruders  |  数组  |
+将爬取发现的api端点和页面的用户。通常，这些用户将具有与crawlUser相同的特权。要以未登录用户身份入侵，请添加用户名“
+Public”和密码为空的用户。例：[{"username": "john", "password": "4321"}, {"username":
+"Public", "password": null}]  
+type  |  串  |  这是单页应用程序（即查询API后端的javascript前端）还是更“传统”的多页应用程序。（选择"mpa"或"spa"）。  
+authenticationType  |  串  |
+该网站是否使用浏览器发送的cookie或请求标头中发送的令牌对用户进行身份验证，对于MPA，将其设置为"cookie"。在SPA中，可以是"cookie"或"token"。  
+authorisationHeaders  |  数组  |  为了验证用户，需要发送哪些请求标头，如果authenticationType =
+cookie，则应将其设置为["cookie"]。如果authenticationType = token，则：["X-Auth-Token"]。  
+maxDepth  |  整数  |  爬取的最大深度。建议从1开始。  
+verboseOutput  |  布尔值  |  详细输出，对于调试很有用。  
+saveResponses  |  布尔值  |  保存来自API的响应正文，以便您可以在报告中查看它们。  
+saveScreenshots  |  布尔值  |  保存已抓取页面的浏览器屏幕截图，以便您可以在报告中查看它们。  
+clickButtons  |  布尔值  |
+（实验功能）在每个页面上进行了爬取，单击该页面上的所有按钮并记录所有发出的API请求。在通过模式，弹出窗口等具有大量用户互动的网站上非常有用。  
+xhrTimeout  |  整数  |  搜寻每个页面时等待XHR请求完成的时间。（秒）  
+pageTimeout  |  整数  |  爬取时等待页面加载的时间。（秒）  
+headless  |  布尔值  |  将此值设置为false可使爬虫程序打开chrome浏览器，以便您可以实时查看抓取过程。  
+unAuthorizedStatusCodes  |  数组  |
+HTTP响应状态代码，用于决定是否向请求它的用户授权API端点或页面。（可选）定义一个函数responseIsAuthorised来确定请求是否被授权。例：[401,
+403, 404]  
+ignoreLinksIncluding  |  数组  |
+排除此数组中包含任何字符串的URL。例如，如果设置为，["/logout"]则不会抓取URL：<http://localhost:3000/logout>。（可选）在下面定义一个函数ignoreLink（url），以确定是否应爬网URL。  
+ignoreAPIrequestsIncluding  |  数组  |
+排除包含此数组中任何字符串的URL进行的API记录。（可选）定义一个函数ignoreApiRequest（url）以确定是否应记录请求。  
+ignoreButtonsIncluding  |  数组  |
+如果clickButtons设置为true，则不要单击外部HTML包含此数组中任何字符串的按钮。（可选）在下面定义一个函数ignoreButton（url）。  
+loginConfig  |  宾语  |
+配置浏览器如何登录到您的Web应用程序。（可选）定义一个异步函数loginFunction（页面，用户名，密码）  
+cookiesTriggeringPage  |  串  |  （可选）当authenticationType =
+cookie时，这将设置一个页面，以便入侵者浏览到此页面，然后从浏览器捕获cookie。如果站点在cookie上设置路径字段，这将很有用。默认为options.baseUrl。  
+tokenTriggeringPage  |  串  |  （可选）当authenticationType =
+token时，将设置一个页面，以便入侵者浏览到此页面，然后从拦截的API请求中捕获authorisationHeader。如果站点的baseUrl没有发出任何API请求，因此无法捕获该页面的auth标头，则此方法很有用。默认为options.baseUrl。  
+  
+###  **配置登录**
+
+有两种方法可以在配置文件中配置登录名：
+
+使用默认的登录机制，该机制使用puppeteer将用户名和密码输入到指定的输入中，然后单击指定的提交按钮。可以通过这样loginConfig在配置文件中设置选项进行配置。也请参见此[示例](https://github.com/authcov/authcov/blob/master/examples/example-spa-config.js#L27-L32)。
+
+    
+    
+    "loginConfig": {
+      "url": "http://localhost/login",
+      "usernameXpath": "input[name=email]",
+      "passwordXpath": "input[name=password]",
+      "submitXpath": "#login-button"
+    }
+
+如果您的登录表单更复杂并且涉及更多的用户交互，那么您可以在配置文件中定义自己的puppeteer函数，如下所示。也请参见此[示例](https://github.com/authcov/authcov/blob/master/examples/example-mpa-config.js#L25-L37)。
+
+    
+    
+     "loginFunction": async function(page, username, password){
+        await page.goto('http://localhost:3001/users/sign_in');
+        await page.waitForSelector('input[type=email]');
+        await page.waitForSelector('input[type=password]');
+        await page.type('input[type=email]', username);
+        await page.type('input[type=password]', password);
+        await page.tap('input[type=submit]');
+        await page.waitFor(500);
+        return;
+      }
+
+authcov test-login为了使浏览器成功登录，请不要在头部模式下运行该命令。
+
+##  贡献
+
+###  单元测试：
+
+    
+    
+    $ npm test test/unit
+
+###  **集成测试：**
+
+首先下载并运行[示例应用程序](https://github.com/evanrolfe/example_app)。然后运行测试：
+
+    
+    
+    $ npm test test/integration
+
+***参考来源：[github](https://github.com/authcov/authcov)，FB小编周大涛编译，转载请注明来自FreeBuf.COM**
+
+  
+

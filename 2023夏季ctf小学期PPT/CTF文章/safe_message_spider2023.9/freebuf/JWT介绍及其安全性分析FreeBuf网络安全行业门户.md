@@ -1,0 +1,455 @@
+## 0x00 前言
+
+ **JWT（JSON Web令牌）是REST API中经常使用的一种机制，可以在流行的标准（例如OpenID
+Connect）中找到它，但是有时也会使用OAuth2遇到它。有许多支持JWT的库，该标准本身具有“对加密机制的丰富支持”，但是这一切是否意味着JWT本质上是安全的？**
+
+由于在我日常工作中就遇到了jwt token的问题，测试环境和生产环境都有遇到过类似的情况，下面我们一起研究一下，参考&总结一下。
+
+## 0x01 JWT 介绍
+
+> JSON Web Token (JWT) is a compact, URL-safe means of representing claims to
+> be transferred between two parties. The claims in a JWT are encoded as a
+> JSON object that is used as the payload of a JSON Web Signature (JWS)
+> structure or as the plaintext of a JSON Web Encryption (JWE) structure (…)
+
+RFC 7519如上解释。
+
+简而言之，JWT是以JWS（JSON Web签名）或JWE（JSON
+Web加密）结构编码的JSON格式字符序列（<https://www.json.org/>）。此外，每个选项都必须以紧凑的方式进行序列化（JWS和JWE中的两个序列化之一）。大多数情况下，您会看到JWS，而这种结构通常被称为JWT。
+
+![image.png](https://image.3001.net/images/20191105/1572919579_5dc0d91bdfdf1.png!small)
+
+jwt 分为三个部分，header，payload和signature签名部分。
+
+三个元素是使用BASE64URL算法编码的（看起来与BASE64非常相似，但是其中输出中的加号（+）替换为减号（-），斜杠（/）替换为下划线（_），而且没有标准的BASE64填充，把等号（=）去掉。
+
+一般来说，知道签名的加密字，可以上<https://jwt.io/>来解密，或者在这个站点中加密自己所需要的jwt token。
+
+    
+    
+     1public class JwtToken {  
+     2    public static String createToken() throws Exception{  
+     3        Map<String, Object> map = new HashMap<String, Object>();  
+     4        map.put("alg", "HS256");  
+     5        map.put("typ", "JWT");  
+     6        String token = JWT.create()  
+     7                .withHeader(map)//header  
+     8                .withClaim("name", "DesM0nd")//payload  
+     9                .withClaim("age", "18")  
+    10                .sign(Algorithm.HMAC256("secret"));//加密  
+    11        return token;  
+    12    }  
+    13}  
+
+## 0x02 JWT和安全问题
+
+eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiIxNjYwNDYiLCJleHAiOjE1NzI4Mzk4NTZ9.aAwuJZBuG2zKBJ04QQ36FvLP-9PesiO30j9VCDDgKR0
+
+使用base64url解密以后，我们看到如下信息
+
+    
+    
+     1header
+     2{
+     3  "alg": "HS256"
+     4}
+     5payload
+     6{
+     7  "iss": "166046",
+     8  "exp": 1572839856
+     9}
+    10VERIFY SIGNATURE
+    11HMACSHA256(
+    12  base64UrlEncode(header) + "." +
+    13  base64UrlEncode(payload), 111）
+
+所见，使用此“
+API密钥”（其主要内容在payload中），我们可以实现身份验证（我有与API进行通信的特权）和授权（在上面的有效负载中，您可以看到示例操作）可以由密钥的所有者执行）。  
+
+基本是常见的场景下，jwt是用来做身份校验的，识别请求者的身份以及用于鉴权
+
+那么，从安全性的角度来看，至少存在两个潜在的问题。
+
+> 1、缺乏机密性-> 我们能够轻松解码有效载荷payload（和报头header）。有时间就是这样要求的，但是当我们要求对令牌中发送的数据进行保密时，有一种更好的方法可以做到这一点：JWE（JSON
+> Web加密）。
+>
+>
+> 2、用户插入另一个操作（例如删除）并绕过授权的潜在可能性。在这种情况下，解决方案是在令牌中使用签名（请注意，在上面的示例中，我们看到了“签名”）。标头中指示的HS256算法是标准的HMAC-> SHA256
+> –一种确保整个消息完整性的机制（由于这样，用户无法更改有效负载）在签名验证期间检测篡改）。要配置HS256，您需要生成一个密钥（字符串）并将其放入API配置中。
+
+![image.png](https://image.3001.net/images/20191105/1572919617_5dc0d941a0b99.png!small)
+
+综上所述，JWT看上去比API密钥灵活得多-您可以轻松地传输任何数据，确保其完整性，并在必要时保持机密性。此外，所有信息（秘密密钥除外）都可以位于令牌本身中。但是，世界上没有十全十美
+
+主要问题之一是JWT是一种非常复杂的机制。JWT / JWS / JWE /
+JWK，多种密码算法，两种不同的编码（序列化），压缩方式，一个以上签名的可能性，对多个接收者的加密-这些仅是几个示例。所有与JWT相关的规范都有300多个页面！
+
+问题二，根据JWT的正式规范，虽然通常假定“适当的” JWT是带有签名（JWS）的JWT，但是签名不是强制性的
+
+因此，会有这种header
+
+    
+    
+    {
+    
+    “alg “: “none “,
+    
+    “typ “: “JWT “
+    
+    }
+
+有趣的是，"none" 这个算法配置是根据RFC实现的两种算法之一，在JSON
+Web算法[JWA]中指定的签名和MAC算法中，仅"HS256"和"none"通过符合JWT的实现。
+
+下面的攻击方法是从资料里看来的。
+
+## 攻击方法一：修改签名算法
+
+攻击者可以获得一个JWT（带有签名），对其进行更改（例如，添加新权限等），然后将其放在标头{"
+alg":"none"}中。然后将整个内容发送到API（带或不带签名）。这时候，服务器应该接受这样的令牌吗？从理论上讲是可以的，但是它将破坏JWT签名的整个思想。然而，这样的情况真的发生了。
+
+在许多图书馆实施JWTs：<https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/>，cvedetail：<https://www.cvedetails.com/cve/CVE-2018-1000531/>。
+
+![1.png](https://image.3001.net/images/20191106/15730251911607.png!small)
+
+## 攻击方法二：删除签名
+
+如果标头中有一个签名算法（例如HS256或HS512），但是我们从令牌中删除了整个签名部分，会发生什么？
+
+案例链接<https://github.com/FusionAuth/fusionauth-jwt/issues/2>
+
+正如你所看到的，有时候这样的令牌就会被验证，这是比上面方法更危险的配置。
+
+JWTDecoder.decode中的输入验证漏洞，即使缺少有效签名，该漏洞也可能导致JWT被解码并因此被隐式验证。
+
+![2.png](https://image.3001.net/images/20191106/15730252076020.png!small)
+
+## 攻击方法三：插入错误信息
+
+如果攻击者不知道如何创建适当的签名，也许会将其插入错误消息中<https://github.com/jwt-dotnet/jwt/issues/61>
+
+![3.png](https://image.3001.net/images/20191106/15730252279098.png!small)
+
+因此，如果有人更改了有效负载并将此类令牌发送给服务器，则服务器会礼貌地通知我们有关信息，并提供与我们的有效负载匹配的正确令牌。
+
+为了使系统正常运行，必须将服务器配置为向用户显示异常，虽然这很普遍，但是这是个不安全的配置。
+
+另一个例子<https://auth0.com/docs/security/bulletins/cve-2019-7644>
+
+低于1.0.4的所有Auth0-WCF-Service-JWT NuGet软件包版本
+均在JWT签名验证失败时发出的错误消息中包含有关预期JWT签名的敏感信息。
+
+## 攻击方法四：破解HMAC密钥
+
+这个方法就是我常用的方法了，由于加密字的强度过低，因此hmac的密钥可以被破解。
+
+破解jwt的加密字，标准方法采用API生成的令牌并运行经典的蛮力/字典/混合攻击
+
+  
+一次迭代需要计算两个SHA256哈希（这是HMAC-SHA256的工作方式），并且还有一些工具可以使整个操作自动化，例如hashcat使用GPU实现JWT密钥的破解。借助几个快速的GPU，您可以实现每秒超过十亿次检查的速度。而且，整个操作可以脱机完成，而无需与API进行任何交互（足以获得一个带有签名的任意令牌）。
+
+    
+    
+    1hashcat -m 16500 jwt.txt -a 3 -w 3 ?a?a?a?a?a?a
+
+![4.png](https://image.3001.net/images/20191106/15730252759471.png!small)
+
+破解工具：
+
+> c-jwt-cracker <https://github.com/brendan-rius/c-jwt-cracker>
+>
+> hashcat
+>
+> PyJWT library
+> <https://github.com/jpadilla/pyjwt>,<https://github.com/hashcat/hashcat/issues/1057>
+    
+    
+    1>>> import jwt
+    2>>> encoded = jwt.encode({'some': 'payload'}, 'secret', algorithm='HS256')
+    3'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzb21lIjoicGF5bG9hZCJ9.4twFt5NiznN84AWoo1d7KO1T_yoc0Z6XOpOVswacPZg'
+    4>>> jwt.decode(encoded, 'secret', algorithms=['HS256'])
+    5{'some': 'payload'}
+
+因此，密钥太弱会被爆破，那么我们该用什么强度的密钥呢？
+
+RFC里有规定
+
+> A key of the same size as the hash output (for instance, 256 bits for
+> “HS256”) or larger MUST be used with this algorithm.(This requirement is
+> based on Section 5.3.4 (Security Effect of the HMAC Key) of NIST SP 800-117
+> [NIST.800-107], which states that the effective security strength is the
+> minimum of the security strength of the key and two times the size of the
+> internal hash value.).
+
+此算法必须使用与哈希输出大小相同的密钥（例如，“ HS256”为256位）或更大。（此要求基于NIST SP 800-117
+[NIST.800-107]的第5.3.4节（HMAC密钥的安全性影响），其中规定，有效的安全性强度是密钥的安全强度中的最小值。两倍于内部哈希值的大小）。
+
+## 攻击方法五：利用签名方法
+
+很多jwt的安全问题来源于复杂的标准。到目前为止，JWS签名算法已经有HMAC和SHA256函数，但是这并不是唯一的选择，各种签名的描述可以在这个链接里找到<https://auth0.com/blog/json-web-token-signing-algorithms-overview/>
+
+常见的选择是使用非对称算法-RSA。在这种情况下，我们将在header中的"alg":" RS512"或"alg":" RS256"中看到。
+
+提醒一下：RSA私钥用于签名，与其关联的公钥可以验证签名。因此，在这种情况下，我们生成了一对RSA密钥，而不是对称密钥（如HS256算法中的对称密钥）。
+
+如果您第一次看到RS512或RS256，您可能会想到使用512或256位RSA密钥的要求？
+
+但是，这样的密钥可以以最小的成本和时间来破坏（请参阅：https
+://eprint.iacr.org/2015/1000.pdf或<https://www.theregister.co.uk/2010/01/07/rsa_768_broken/>）。
+
+即使是1024位RSA密钥也不被认为是安全的。幸运的是，这仅指向与RSA结合使用的特定SHA函数。例如，RS512表示RSA加SHA512功能。但是RSA密钥呢？长度由生成它的人员设置，这是另一个潜在的问题（此外，在不同的在线教程中，您可以使用OpenSSL并生成1024位密钥来找到特定的命令）
+
+回到这一点，使用RSA算法，我们至少还有一个有趣的安全问题。如我之前所写，公钥用于签名验证，因此通常会在API配置中将其设置为verify_key。在这里，值得注意的是，对于HMAC，我们只有一个对称密钥同时用于签名和验证。
+
+攻击者如何伪造JWT令牌？
+
+> 1、他获得了一个公共密钥（它的名字表明它可以公开使用）。有时，它在JWT自身内部传输。
+>
+>
+> 2、使用header中设置的HS256算法发送令牌（有效载荷已更改）（即HMAC，而不是RSA），并使用公共RSA密钥对令牌进行签名。是的，这里没有错误–我们使用公共RSA密钥（以字符串形式给出）作为HMAC的对称密钥。
+>
+> 3、服务器接收令牌，检查将哪种算法用于签名（HS256），验证密钥在配置中设置为公共RSA密钥。
+>
+> 4、签名经过验证（因为使用了完全相同的验证密钥来创建签名，并且攻击者将签名算法设置为HS256）。
+
+![image.png](https://image.3001.net/images/20191105/1572919722_5dc0d9aae5e73.png!small)
+
+有趣吧！
+
+尽管我们打算仅使用RSA验证令牌的签名，但有可能由用户提供签名算法。因此，要么我们只强制一个选定的签名算法（我们不提供通过更改令牌来更改它的可能性），要么让我们为我们支持的每种签名算法提供单独的验证方法（和密钥！）
+
+下面是这个漏洞的真实案例：<https://www.cvedetails.com/cve/CVE-2016-10555/>
+
+> Since "algorithm" isn't enforced in jwt.decode()in jwt-simple 0.3.0 and
+> earlier, a malicious user could choose what algorithm is sent sent to the
+> server. If the server is expecting RSA but is sent HMAC-SHA with RSA's
+> public key, the server will think the public key is actually an HMAC private
+> key. This could be used to forge any data an attacker wants.
+>
+> 由于在jwt-simple 0.3.0及更低版本的jwt.decode（）中未实施“算法”，因此恶意用户可以选择将哪种算法发送到服务器。
+>
+> 如果服务器期望使用RSA，但使用RSA的公钥向其发送了HMAC-SHA，则服务器将认为该公钥实际上是HMAC私钥。这可用于伪造攻击者想要的任何数据。
+
+## 攻击方法六：信任攻击者密钥
+
+攻击者可以在令牌中提供自己的密钥，然后API会使用该密钥进行验证！
+
+请参阅CVE-2018-0114中的节点 node-jose漏洞的细节：
+
+<https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2018-0114>
+
+> A vulnerability in the Cisco node-jose open source library before 0.11.0
+> could allow an unauthenticated, remote attacker to re-sign tokens using a
+> key that is embedded within the token. The vulnerability is due to node-jose
+> following the JSON Web Signature (JWS) standard for JSON Web Tokens (JWTs).
+> This standard specifies that a JSON Web Key (JWK) representing a public key
+> can be embedded within the header of a JWS. This public key is then trusted
+> for verification. An attacker could exploit this by forging valid JWS
+> objects by removing the original signature, adding a new public key to the
+> header, and then signing the object using the (attacker-owned) private key
+> associated with the public key embedded in that JWS header.
+
+该漏洞是由于遵循JSON Web令牌（JWT）的JSON Web签名（JWS）标准而导致的节点丢失。该标准指定可以将表示公共密钥的JSON
+Web密钥（JWK）嵌入JWS的标头中。然后将此公钥信任进行验证。攻击者可以通过以下方法来伪造有效的JWS对象：删除原始签名，向标头添加新的公钥，然后使用与该JWS标头中嵌入的公钥关联的（攻击者拥有的）私钥对对象进行签名，从而利用此漏洞
+
+早于2016年，在Go-jose库（<https://mailarchive.ietf.org/arch/msgif/jose/gQU_C_QURVuwmy-Q2qyVwPLQlcg>）中检测到类似的漏洞
+
+另一个例子<https://github.com/DCIT/perl-Crypt-JWT/commit/b98a59b42ded9f9e51b2560410106207c2152d6c>
+
+## 攻击方法七：恢复私钥
+
+那么jwt加密呢？
+
+在这里，您可以从几种算法中选择（消息本身的加密或用于加密消息的对称密钥的加密）。再次，有一些有趣的研究，即JWE的几种实现使攻击者可以恢复私钥：<https://blogs.adobe.com/security/2017/03/critical-vulnerability-uncovered-in-json-encryption.html>。更具体地说，ECDH-ES算法的实现存在问题（顺便说一下，在相关的RFC文档中是推荐级别https : //tools.ietf.org/html/rfc7518）。
+
+也许以前的漏洞只是一个意外？让我们在GCM模式下查看AES：https
+://rwc.iacr.org/2017/Slides/nguyen.quan.pdf。谷歌研究人员正在JWT的背景下写这篇文章，他们总结道：GCM很脆弱，但很少检查其实现。
+
+我们还可以选择带有PKCS1v1.5填充的RSA算法。它出什么问题了？自1998年以来该问题已经知道：ftp://ftp.rsa.com/pub/pdfs/bulletn7.pdf。而有些人
+概括起来是这样的：<https://blog.cryptographyengineering.com/2012/09/06/on-provable-security-of-tls-part-1/>
+
+PKCS＃1v1.5非常棒–如果您要教授关于如何攻击密码协议的课程。
+
+使用JWE会永远注定失败吗？当然不是，但是值得验证我们是否使用了适当的安全加密算法（及其安全实现）。
+
+现在，我们对众多选择感到有些不知所措。毕竟，我们只想在API端“解码”令牌并使用其中包含的信息。但是请记住，“decode”并不总是与“verify”相同，但是不同的库可能提供不同的功能来解码和/或验证令牌。可以在下面链接找到此类问题或疑问的示例。<https://github.com/auth0/jwt-decode/issues/4>
+
+简而言之，如果我使用encode（）函数，则可能只对BASE64URL的有效负载（或标头）进行解码，而无需进行任何验证。验证可以是一个单独的函数，尽管它也可以内置在decode（）中。有时，是用户要求这种选项（在下面引用的情况下），有人要求重载decode（）方法，以便它也可以接受令牌本身（没有密钥）：
+
+## 攻击方法八：上下文相同令牌
+
+JWT经常指出的优点之一是，无需执行对数据库的查询，即可实现身份验证（或授权-取决于将使用整个上下文的上下文）。此外，我们可以在几个独立的服务器（API）上并行执行此操作。毕竟，仅令牌的内容就足以在此处做出决定。它还有一个缺点–如果许多服务器上可用的签名密钥以某种方式泄漏了怎么办？当然，有可能生成使用适当密钥进行验证的所有机器所接受的正确签名的令牌。攻击者可以从中获得什么？例如，未经授权访问API函数或其他用户帐户。
+
+在这种情况下，可以使用规范本身定义的某些参数：iss（发出者）和aud（听众）。多亏了他们，令牌才被我们的特定接收者接受。
+
+    
+    
+    {
+    
+    “iss ” = “my_api “,
+    
+    “login ” = “manager “,
+    
+    “aud ” = “store_api “
+    
+    }
+
+## 攻击方法九：重放JWT
+
+如果特定令牌只能使用一次怎么办？让我们想象一个场景，当用户编写一个生成的令牌以执行我们API中的DELETE方法时。然后，例如一年后（理论上他不再拥有相应的权限）之后，他尝试再次使用它（所谓的重播攻击）。
+
+为此，请使用以下声明：jti和exp。Jti（JWT
+ID）是令牌标识符，必须是唯一的，而exp是令牌到期日期的定义。这两个字段的组合将使我们在适当程度上缩短令牌的有效性及其唯一性。
+
+但是，值得注意的是，我们是否正确实施了这两个部分。现在看看根本没有考虑exp值的bug（<https://github.com/jwt-dotnet/jwt/issues/134>）。
+
+JWT不会在.NetCore中抛出ExpiredTokenException
+
+库开发人员使用到期声明（不在JWT规范中）执行到期检查；报告后，该错误已得到纠正。
+
+## 攻击方法十：定时攻击签名
+
+如果通过具有正确签名的字节接一个字节地检查来自JWS 的签名（由接受JWS的一方生成），并且如果验证在第一个不一致的字节上完成，则我们可能会受到时间攻击。
+
+请注意，在这种情况下，我们拥有的匹配字节越多，需要的比较就越多，因此响应所需的时间越长。
+
+可以通过生成连续的签名来观察响应时间，从签名的第一个字节开始，然后再移至第二个签名。有关此类攻击的确切描述，请参见：<https://hackernoon.com/can-timing-attack-be-a-practical-security-threat-on-jwt-signature-ba3c8340dea9>
+
+根据报告，在产生大量流量（每秒多达55,000个请求）的情况下，可以在22小时（实验室条件）中获得任何消息的签名。当然，如果流量减少，我们将需要更多的时间（数天），但是效果可能令人震惊（我们可以生成任何JWT并准备将被验证为正确的签名）。
+
+在现实生活中这种袭击真的可能吗？您可以想象，响应时间的变化很小，但是您可以尝试测量它们。在这一点上，还应该提醒您一些有关时间攻击的较旧的文章：https :
+//[www.cs.rice.edu/](http://www.cs.rice.edu/)~dwallach/pub/crosby-timing2009.pdf。已实现以下测量：
+
+我们的工作基于准确测量网络响应时间和本地网络以及整个Internet上的抖动来分析攻击的局限性。我们提出的滤波器设计可显着降低抖动的影响，使攻击者能够在Internet上以15-100µs的精度测量事件，在本地网络上以100ns的精度进行测量。
+
+## 其他问题
+
+除了以上的攻击方法以外，在实际开发生产中也会产生各种问题。
+
+> 1、生产和测试使用相同的密钥
+>
+> 2、服务器端缺少对token的记录和校验。当收到request时，只校验签名是否合法，而没有校验是否由自己生产，这也是伪造jwt
+> token能够成功攻击的一个原因（但不是全部）
+
+## 0x03 JWT安全性讨论
+
+so？JWT安全吗？
+
+安全界的意见分歧。有些人坚决不鼓励使用JWT，另一些人则指出准备不充分的实现，而另一些人则准确地描述了JWT机制本身，将决定权留给了用户。此外，JWT是一种非常流行的机制，没有标准的，流行的替代方法，它还证明了其安全性。
+
+之前指出的安全问题可以分为三类：
+
+> 1、JWT规范本身存在问题（例如，无算法）。
+>
+> 2、库实现错误，包括密码算法实现错误（可能是最多的一组）。
+>
+> 3、库使用不正确。
+
+![image.png](https://image.3001.net/images/20191105/1572920018_5dc0dad22970f.png!small)
+
+### 首先
+
+>
+> 1、了解您要使用的内容：考虑您是否需要JWS或JWE，选择合适的算法，了解它们的用途（至少在一般级别上，例如HMAC，公钥，私钥）。找出究竟能提供所选择的JWT库的内容。也许可以使用一种现成的，更直接的机制？
+
+### 密钥
+
+> 2、使用适当的复杂对称/非对称密钥。
+>
+> 3、编写一个方案以防万一密钥泄露（泄露）。
+>
+> 4、将密钥放在安全的地方（例如，不要在源代码中永久性地对其进行硬编码）。
+>
+> 5、理想情况下，不允许发送方设置任意签名算法（最好在服务器端强制使用特定的签名算法）。
+
+### 签名
+
+> 6、检查您的实现是否不接受无签名算法。
+>
+> 7、检查您的实现是否不接受空签名（即未选中签名）。
+>
+> 8、如果您使用JWE，请检查您是否在使用安全算法以及这些算法的安全实现。
+>
+> 9、区分verify（）和decode（）。换句话说，请检查您是否确定要验证签名。
+
+### 通用规则
+
+10、检查在一个地方生成的令牌是否不能在另一个地方使用以获取未经授权的访问。
+
+11、检查调试模式是否已关闭，并且不能通过简单的技巧将其激活（例如？debug = true）。
+
+12、避免在URL中发送令牌（这可能会泄漏敏感数据–例如，然后将此类令牌写入Web服务器日志）。
+
+### Payload
+
+> 13、检查是否在JWS有效负载中放置了机密信息（不推荐）。
+>
+> 14、确保您免受重放攻击（重新发送令牌）。
+>
+> 15、确保令牌具有足够短的有效期（例如，通过使用“ exp”声明）。
+>
+> 16、确保已实际检查“ exp”。考虑是否需要使特定令牌无效（标准没有为此提供工具，但是有几种方法可以实现这种类型的机制）
+>
+> 库
+>
+> 17、仔细阅读库的文件。
+>
+> 18、检查您使用的库中的漏洞（例如，在服务：cvedetails.com或项目网站上）。
+>
+> 19、检查您以前的项目是否不使用易受攻击的库；检查您是否正在监视库中的新错误（例如，在实施一个月后，它们可能会出现）。
+>
+> 20、跟踪支持JWT的库中的新漏洞。也许将来，有人会在另一个项目中发现一个漏洞，该漏洞在您正在使用的库中以相同的形式存在。
+
+## 0x04 JWT的替代
+
+> <https://paseto.io/>
+>
+> Paseto是您对JOSE（JWT，JWE，JWS）所钟爱的一切，而没有困扰JOSE标准的许多设计缺陷。
+>
+>
+> 简而言之，PASETO将成为JWT的安全版本。它真的能兑现诺言吗？目前，真的很难说–这是一个非常年轻的项目，尚处于开发阶段。在<https://paragonie.com/blog>和<https://developer.okta.com/blog/2019/10/17/a-thorough-> introduction-to-paseto>可以找到更多信息。
+
+## 0x05 一些有用的资源
+
+> 1\. JSON Web令牌最佳实践：
+>
+> <https://tools.ietf.org/html/draft-ietf-oauth-jwt-bcp-04>
+>
+> 2\. JWT手册：
+>
+> <https://auth0.com/resources/ebooks/jwt-handbook>
+>
+> 3.讨论JWT的漏洞：
+>
+> <https://lobste.rs/s/r4lv76/jwt_is_bad_standard_everyone_should_avoid>
+>
+> <https://medium.com/swlh/hacking-json-web-tokens-jwts-9122efe91e4a>
+>
+> 4\. Java JWT速查表（OWASP）。
+>
+> <https://www.owasp.org/index.php/JSON_Web_Token_>(JWT)_Cheat_Sheet_for_Java
+>
+> 5.关于如何更安全地使用JWT的一些想法：
+>
+> <https://dev.to/neilmadden/7-best-practices-for-json-web-tokens>
+>
+> 6.一组反对使用JWT创建会话的参数：
+>
+> <http://cryto.net/>~joepie91/blog/2016/06/13/stop-using-jwt-for-sessions/
+>
+> 7\. JWT与会话ID的比较以及有关相关安全功能的建议：
+>
+> <http://by.jtl.xyz/2016/06/the-unspoken-vulnerability-of-jwts.html>
+
+## 0x06 References
+
+> <http://blog.rangeforce.com/tutorial/2019/05/29/Breaking-JWTs/>
+>
+> <https://research.securitum.com/jwt-json-web-token-security/>
+>
+> <https://tools.ietf.org/html/rfc7519>
+>
+> <https://blog.csdn.net/weixin_42506905/article/details/82053888>
+
+ ***本文作者：不瘦二十斤不改名，转载请注明来自FreeBuf.COM**
+

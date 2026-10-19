@@ -1,0 +1,180 @@
+原创： S3cana 合天智汇
+
+原创投稿活动：https://mp.weixin.qq.com/s/Nw2VDyvCpPt_GG5YKTQuUQ
+
+ELF文件格式的相关知识是Linux下进行pwn以及reverse的基础，是二进制可执行文件的一种形式，下面我们通过一个ELF文件的生成，并结合其ELF文件结构分析一下一个二进制文件在系统中执行时与权限相关的一些ELF结构知识点。文章内容较为浅显，大佬可略过，文章有不足之处，也恳请批评指正。
+
+ELF文件的生成
+
+一个main.c的文件，在linux系统上，经过gcc编译后可以生成一个可以执行的文件，以hello.c为例
+
+#include<stdio.h> int main(){ printf("Hello World \n"); return 0; }
+
+一个ELF的生成，最开始是在系统中编写的一个源文件，依次会经过预处理，编译，汇编，链接过程后，会生成一个ELF格式的可以执行的文件。我们往往通过gcc
+hello.c -o hello即可生成一个文件名为hello的可执行文件，该程序会输出Hello World。
+
+![v2-04faa965fc914d9a78a361f1a0cd40f5_hd.j](https://pic3.zhimg.com/80/v2-04faa965fc914d9a78a361f1a0cd40f5_hd.jpg)
+
+在如上中，我们通过gcc
+一条命令将hello.c编译成能够执行的二进制文件，但在这一条命令中，同时包含了预处理，编译，汇编，链接的过程。下面分别来看这几个过程
+
+预处理
+
+主要是处理头文件，预编译主要是处理那些源代码中的以"#"开始的预编译指令，会删除注释
+
+gcc -E hello.c -o hello.i
+
+![v2-07eaac6b9fa5cb8f85610b23ddfc2292_hd.j](https://pic1.zhimg.com/80/v2-07eaac6b9fa5cb8f85610b23ddfc2292_hd.jpg)
+
+编译
+
+编译，经过编译后，可以生成.s的汇编文件
+
+gcc -S hello.i -o hello.s
+
+![v2-bb3bebbdfa03c1cb797803cffbc568ef_hd.j](https://pic4.zhimg.com/80/v2-bb3bebbdfa03c1cb797803cffbc568ef_hd.jpg)
+
+汇编
+
+汇编，经过汇编后，生成机器指令
+
+as hello.s -o hello.o or gcc -c hello.s -o hello.o
+
+![v2-e158faa753dd4d20d1da00cf364a5db8_hd.j](https://pic2.zhimg.com/80/v2-e158faa753dd4d20d1da00cf364a5db8_hd.jpg)
+
+链接
+
+经过汇编后生成的是目标文件，编译器编译源代码后生成的文件叫目标文件，在目标文件中，其本身是按照ELF文件的格式存储的，但是其中的一些符号以及地址还没有被调整，再经过链接后，其生成的即是hello的二进制的可执行文件。
+
+ld -s -o hello hello.o
+
+ELF文件内容解析
+
+一个标准的ELF文件，是由文件头(ELF Header),程序头(Segment Header)，节头(Section Header),符号表(
+Symbol Table)，动态符号表(Dynamic Symbol Table)等组成，我们在010editor中，通过ELF
+Template来看一下hello的文件格式,如下图
+
+![v2-c3e18701700da5f058ad82ca23db0f70_hd.j](https://pic2.zhimg.com/80/v2-c3e18701700da5f058ad82ca23db0f70_hd.jpg)
+
+ELF Header
+
+在ELF Header中的 file_identification 指明该文件类型为ELF的二进制文件
+
+![v2-d69e6183aa032aa77c06db9fcae599fa_hd.j](https://pic4.zhimg.com/80/v2-d69e6183aa032aa77c06db9fcae599fa_hd.jpg)
+
+在ELF File Header中通(e_phoff e_shoff两个变量，我们可以找到Segment Header和 Section
+Header的位置,从而找到程序头和节表头的位置，在这两个表中，有对各自段以及节的详细的介绍。
+
+![v2-fa781ba9cab3cd289fdbdbd290152547_hd.j](https://pic2.zhimg.com/80/v2-fa781ba9cab3cd289fdbdbd290152547_hd.jpg)
+
+在ELF Header中的e_entry_START_ADDRESS中，保存着程序执行的入口，地址0x400430,程序的start的入口地址
+
+![v2-5621b88bb553c07f7dc0228241287687_hd.j](https://pic3.zhimg.com/80/v2-5621b88bb553c07f7dc0228241287687_hd.jpg)
+
+在程序实际中，我们可以看到start的位置也在0x400430的位置处。
+
+![v2-637ab7f226a97f700c12a1179b44ffcf_hd.j](https://pic2.zhimg.com/80/v2-637ab7f226a97f700c12a1179b44ffcf_hd.jpg)
+
+ELF程序头
+
+ELF程序头，是程序装载不可缺少的一部分，可以分为以下几个段
+
+  * PT_LOAD ，即可以装载到系统中的段  
+
+  * PT_DYNAMIC, 动态段时动态链接的文件所必须的，包含着动态链接所需要的信息。  
+
+  * PT_NOTE，保存一些系统相关的附加信息  
+
+  * PT_INTERP，段只将位置和大小信息存放在一个以null 为终止符的字符串 中，是对程序解释器位置的描述  
+
+  * PT_PHDR 段保存了程序头表本身的位置和大小  
+
+![v2-a6961a93dc7791877ffd170c4ffaaff3_hd.j](https://pic3.zhimg.com/80/v2-a6961a93dc7791877ffd170c4ffaaff3_hd.jpg)
+
+其中在段的p_flags中，确定了该段的权限，在后文的节表头中，对相应的表有进一步的权限的确定。
+
+![v2-ce5cb0ef295cad0da13eb4204aadda7e_hd.j](https://pic4.zhimg.com/80/v2-ce5cb0ef295cad0da13eb4204aadda7e_hd.jpg)
+
+memsz的值对应的时1788,hex(1788)=0x6fc,所以该段的权限是读和可执行的权限，在0x400238到0x4006fc只有只读权限，这是由于节表中权限的设置导致的。
+
+![v2-e8e50d00f40c41c288a0c0a8d5ace636_hd.j](https://pic3.zhimg.com/80/v2-e8e50d00f40c41c288a0c0a8d5ace636_hd.jpg)
+
+在ELF节表中的权限
+
+![v2-f2117d2883277856fc2ad86e6797aba2_hd.j](https://pic1.zhimg.com/80/v2-f2117d2883277856fc2ad86e6797aba2_hd.jpg)
+
+ELF 节表头
+
+ELF中，包含很多的节表，我们可以通过readelf -S hello来查看
+
+![v2-d3864f19c92e5b3e533fb6ea333e89d6_hd.j](https://pic2.zhimg.com/80/v2-d3864f19c92e5b3e533fb6ea333e89d6_hd.jpg)
+
+我们可以看到各种节表信息，常用以下几项
+
+  * .text 该节保存了程序代码  
+
+  * .bss 该节主要保存  
+
+  * .data 保存了初始化的全局变量  
+
+  * .plt 包含了动态链接器调用从共享库导入的函数必需的相关的代码  
+
+  * .got.plt 保存了全局的偏移表等表，got表位于该节  
+
+在ELF 的描述节表的相关的数据结构中，s_flags的标志用于描述该节的权限，不同的数值，分别对应了不同的权限，具体如下图
+
+![v2-c001fe8a403ca48a55e628377e286b0f_hd.j](https://pic3.zhimg.com/80/v2-c001fe8a403ca48a55e628377e286b0f_hd.jpg)
+
+攻击相关got表劫持原理
+
+在CTF的pwn相关题目中，我们可以通过栈溢出，以及堆溢出来实现shell权限的获取，获取权限往往可以通过劫持got表来实现，而这个实现的前提需要got表(.got.plt)权限为可写权限。首先看一下什么是plt表和got表
+
+plt表，是过程链接表，程序动态调用的符号在可执行文件中是位置无关的符号，当程序调用时，会通过plt表将符号转移到绝对地址。
+
+got表中保存了ELF文件在共享库中的绝对地址，在程序一开始运行的时候，got表是空的，当符号第一次调用的时候，会动态解析符号的绝对地址并填充到got表中，在第二次调用同一符号的时候，直接通过got表跳转。
+
+![v2-a839e21bcc13f373276e259f822df538_hd.j](https://pic3.zhimg.com/80/v2-a839e21bcc13f373276e259f822df538_hd.jpg)
+
+这里对程序第一次解析符号的过程不加以详细描述，仅描述第二次调用时的跳转过程,改造源程序hello.c,将断点停在程序执行到第二个printf("Hello")时
+
+#include<stdio.h> int main(){ printf("hello world"); printf("Hello"); return
+0; }
+
+这里是call <0x400400>
+
+![v2-449ede7945ed666064565a2242856944_hd.j](https://pic3.zhimg.com/80/v2-449ede7945ed666064565a2242856944_hd.jpg)
+
+我们来看一下0x400400处的汇编代码,这里是跳转，jmp QWORT PTR[rip + 0x200c12]
+
+![v2-fba6502f09df1ead385ed80b3bc5066c_hd.j](https://pic1.zhimg.com/80/v2-fba6502f09df1ead385ed80b3bc5066c_hd.jpg)
+
+可以看到是跳转到0x601018处，在下图中我们可以看到在0x601018处的值为0x00007ffff7a62800
+
+![v2-14a73b0d2cba097266da14482b6d6aaf_hd.j](https://pic4.zhimg.com/80/v2-14a73b0d2cba097266da14482b6d6aaf_hd.jpg)
+
+下面我们通过单步调试s跟进程序，可以看到rip指向了0x00007ffff7a62800
+
+![v2-0bc80b1d85b63cb7c3a50111bb03fb83_hd.j](https://pic1.zhimg.com/80/v2-0bc80b1d85b63cb7c3a50111bb03fb83_hd.jpg)
+
+通过readelf -S hello可以查看到其got表的起始位置0x601000
+
+![v2-e0b6f8bf47d6ed0df17b2d1ef3c1729a_hd.j](https://pic4.zhimg.com/80/v2-e0b6f8bf47d6ed0df17b2d1ef3c1729a_hd.jpg)
+
+在实际的攻击的过程中，当我们将此处的got表的值更改为我们需要的system函数的时候，再配合传入实际的参数/bin/sh即可实现shell权限的获取。
+
+防御相关
+
+可以通过复写got表，实现got表劫持，当我们设置got表不可写的时候，该攻击也就失效了,RELRO技术可以实现该保护。在程序编译的时候，我们可以通过如下命令，实现got表不可写，需要注意的是，RELRO保护可分为
+Partial RELRO 和Full RELRO，当编译的时候，我们指定 Partial RELRO 的时候，其got表仍旧可写
+
+#Partial RELRO,gcc 默认也是Partial RELRO gcc -z lazy -o test test.c #Full RELRO
+gcc hello.c -o -z now
+
+合天网安实验室相关实验：ELF
+
+[实验:ELF(合天网安实验室)](http://www.hetianlab.com/expc.do?ec=ECID9d6c0ca797abec2016111111063500001)
+
+声明：笔者初衷用于分享与普及网络知识，若读者因此作出任何危害网络安全行为后果自负，与合天智汇及原作者无关
+
+  
+

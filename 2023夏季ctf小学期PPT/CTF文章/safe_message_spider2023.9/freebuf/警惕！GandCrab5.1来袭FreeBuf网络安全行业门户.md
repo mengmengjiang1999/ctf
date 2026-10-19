@@ -1,0 +1,246 @@
+>
+> 近日，深信服EDR安全团队收到客户反馈，其中一台服务器中了勒索病毒，服务器文件被加密。经过分析排查发现，该勒索病毒家族为GandCrab。GandCrab勒索病毒是2018年勒索病毒家族中最活跃的家族，该勒索病毒首次出现于2018年1月，在将近一年的时候内，经历了五个大版本的更新迭代，此勒索病毒的传播感染多式多种多样，使用的技术也不断升级，勒索病毒主要采用RSA+salsa20相结合的加密算法，导致加密后的文件，无法被解密。
+
+ **本次发现的是GandCrab家族的最新版本GandCrab5.1。**
+
+##  **一、** **入侵分析**
+
+文件加密时间为2019/1/22 4:22左右。排查日志发现，服务器在2019/1/224:11:54被远程登录过。该IP后面又分别在2019/1/22
+4:32:45和2019/1/22 5:02:25再次登录该服务器。登录后，通过浏览器下载了勒索病毒体并进行勒索。
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298497_5c49290104415.jpg!small)
+
+勒索完成后，再次通过浏览器下载内网扫描工具Advanced IP Scanner 2，试图勒索更多内网主机。
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298503_5c49290739316.jpg!small)
+
+##  **二、** **样本分析**
+
+1.相对于GandCrab之类的版本，GandCrab5.1版本同样采用了静态对抗反汇编的方法，阻止安全分析人员对样本进行静态分析，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298514_5c492912a5069.png!small)
+
+2.样本的勒索信息版本号变为了5.1，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298526_5c49291e105cf.png!small)
+
+3.遍历进程，结束相关进程，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298542_5c49292e6bf0b.png!small)
+
+相关的进程列表如下所示：
+
+> msftesql.exe、sqlagent.exe、sqlbrowser.exe、sqlwriter.exe、oracle.exe、ocssd.exe
+>
+> dbsnmp.exe、synctime.exe、agntsvc.exeisqlplussvc.exe、xfssvccon.exe
+>
+> sqlservr.exe、mydesktopservice.exe、ocautoupds.exe、agntsvc.exeagntsvc.exe
+>
+> agntsvc.exeencsvc.exe、firefoxconfig.exe、tbirdconfig.exe、mydesktopqos.exe
+>
+> ocomm.exe、mysqld.exe、mysqld-nt.exe、mysqld-opt.exe、dbeng50.exe
+>
+> sqbcoreservice.exe、excel.exe、infopath.exe、msaccess.exe、mspub.exe
+>
+> onenote.exe、outlook.exe、powerpnt.exe、steam.exe、sqlservr.exe、thebat.exe
+>
+> thebat64.exe、thunderbird.exe、visio.exe、winword.exe、wordpad.exe
+
+4.创建互斥变量体，变量名Global\\[随机字符串]+[.fuck]，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298582_5c492956e150d.png!small)
+
+5.查询操作系统安装的输入法以及语言版本，GandCrab5.1版本同样增加了不对叙利亚地区的主机进行加密操作，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298617_5c492979576b0.png!small)
+
+当操作系统语言为如下国家时，则不进行加密，执行自删除操作，相应的国家列表如下：
+
+> 419(LANG_RUSSIAN俄语) 422(LANG_UKRAINIAN乌克兰)
+>
+> 423(LANG_BELARUSIAN白俄罗斯) 428(LANG_TAJIK塔吉克)
+>
+> 42B(LANG_ARMENIAN亚美尼亚) 42C(阿塞拜疆，拉丁美洲(AZ))
+>
+> 437(LANG_GEORGIAN格鲁吉亚人) 43F(LANG_KAZAK哈萨克族)
+>
+> 440(LANG_KYRGYZ吉尔吉斯) 442(LANG_TURKMEN土库曼)
+>
+> 443(乌兹别克斯坦，拉丁语(UZ))444(LANG_TATAR俄罗斯(RU))
+>
+> 82C(LANG_AZERI阿塞拜疆，西里尔(亚利桑那州)) 843(LANG_UZBEK乌兹别克)
+>
+> 45A(叙利亚SYR)2801(叙利亚SY)
+
+6.获取主机相关信息，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298762_5c492a0a6c9fb.png!small)
+
+获取的相关信息列表如下：
+
+> 用户名
+>
+> 主机名
+>
+> 工作组
+>
+> 操作系统语言
+>
+> 操作系统键盘输入法
+>
+> 操作系统版本类型信息
+>
+> CPU类型及型号信息
+>
+> 安全软件信息
+>
+> 磁盘类型及空间信息
+
+遍历主机上的安全软件，收集安全软件相关信息，相应的安全软件信息，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298774_5c492a16806cb.png!small)
+
+相应的安全软件列表信息，如下所示：
+
+> AVP.EXE、ekrn.exe、avgnt.exe、ashDisp.exe、NortonAntiBot.exe、Mcshield.exe
+>
+> avengine.exe、cmdagent.exe、smc.exe、persfw.exe、pccpfw.exe、fsguiexe.exe
+>
+> cfp.exe、msmpeng.exe
+
+将收集到的信息，进行加密，加密过程，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298791_5c492a277f7c7.png!small)
+
+加密后的数据，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298803_5c492a336e05c.png!small)
+
+7\. 从内存中解密出RSA公钥信息，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298817_5c492a41363f4.png!small)
+
+生成再通过微软的函数生成RSA公私钥对，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298849_5c492a611ce50.png!small)
+
+生成的RSA的公私钥，并设置到相应的注册表，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298863_5c492a6f6a152.png!small)
+
+8.内存解密出勒索信息等字符串，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298874_5c492a7af3b9b.png!small)
+
+9\. 然后生成随机的加密后缀名，并转化为大写字母，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298886_5c492a8631f42.png!small)
+
+10\. 创建两个线程，分别遍历磁盘目录和共享目录文件夹下的文件进行加密，遍历磁盘目录，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298897_5c492a9117a01.png!small)
+
+遍历共享目录文件，如下所示：
+
+![20.png](https://image.3001.net/images/20190124/1548298907_5c492a9b7eab1.png!small)
+
+11\. 从内存中解密出相应的加密文件后缀名列表以及相应的目录，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298919_5c492aa7284db.png!small)
+
+相应的后缀名列表，如下所示：
+
+> rar zip cab arj lzh tar 7z gzip iso7-zip lzma vmx vmdk vmem vdi vbox 1st602
+> doc xlm xlsx xlsm xltx xltm xlsb xla xlam xll xlw ppt pot pps pptx pptmpotx
+> potm ppam ppsx ppsm sldx sldm xps xls xlt doc dotm docx abw act adoc aimans
+> apkg apt asc asc ascii ase aty awp awt aww bad bbs bdp bdr bean bib
+> bibbibtex bml bna boc brx btd bzabw cal ca charset chart chord cnm cod crwl
+> cwscyi dca dfti dgs diz dne dot doc docm dotx docx doc xml docz dox dropbox
+> dscdvi dwd dx dxb dxp eio eit emf eml emlx emulecollection epp err etf etx
+> eucfadeintemplate faq fbl fcf fdffdr fds fdt fdx fdxt fft fgs flr fodt
+> fountainfpt frt fwd fwdn gmd gpd gpn gsd gthr gv hbk hht hs hwp hwp hz idx
+> iil ipfipspot jarvis jis jnp joe jp1 jrtf jtd kes klg knt kon kwd latex
+> lbtlis lnt loglp2 lst lst ltr ltx lue luf lwp lxfml lyt lyx man mbox mcw md5
+> me mell mellelmin mnt msg mw mwd mwp nbndoc nfo ngloss njx note notes now
+> nwctxt nwm nwp ocrodif odm odo odt ofl opeico openbsd ort ott p7s pages
+> pages-tef pdpcmd pfx pjtplain plantumlpmo prt prt psw pu pvj pvm pwd pwdp
+> pwdpl pwi pwr qdl qpf radreadme rft ris rpt rst rtd rtf rtfd rtx run rvf rzk
+> rzn saf safetext sam samsave scc scm scriv scrivx sct scw sdm sdoc sdw se
+> session sgm sig skcard slaslagzsmf sms ssa story strings stw sty sublime-> project sublime-workspace sxgsxw tab tab tdf tdf template text textclipping
+> thp tlb tm tmd tmdx tmv tmvx tpctrelby tvj txt u3i unauth unx uof uot upd
+> utf8 utxt vct vntvw wbk webdoc wn wpwp4 wp5 wp6 wp7 wpa wpd wpd wpd wpl wps
+> wpswpt wpt wpw wri wsd wtt wtx xbdoc xbplatexdl xdl xwp xwp xwp xyxy3 xyp
+> xyw zabw zrtf zw ani cab cpl cur diagcab diagpkgdrv lock hlpldf icl icnsico
+> ics lnk key idx mod mpa msc msp msstyles msunomedia ocx prf rom rtp scr shs
+> spl sys theme
+
+遍历磁盘如果为以下目录，则不加密文件，相应的目录列表，如下所示：
+
+> \ProgramData\
+>
+> \IEIldCache\
+>
+> \Boot\
+>
+> \Program Files\
+>
+> \Tor Browser\
+>
+> \All Users\
+>
+> \Local Settings\
+>
+> \Windows\
+
+12\. 遍历文件进行加密，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298934_5c492ab69cfe7.png!small)
+
+加密后的文件，后缀为随机的后缀名，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298944_5c492ac08e0d4.png!small)
+
+13\. 加密之后，将之前获取的主机相关信息加密之后，上传到远程服务器，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298956_5c492acc5b74d.png!small)
+
+相应的远程服务器地址：[www.kakaocorp.link](http://www.kakaocorp.link)
+
+14.生成相应的勒索信息文本文件，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298968_5c492ad8de203.png!small)![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298970_5c492ada6b217.png!small)
+
+并设置勒索信息桌面背景图片，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548298984_5c492ae8cc5e9.png!small)
+
+15\. 打开相应的TOR网络地址，如下所示：
+
+![GandCrab5.1来袭](https://image.3001.net/images/20190124/1548299000_5c492af8a865b.png!small)
+
+##  **解决方案**
+
+针对已经出现勒索现象的用户，由于暂时没有解密工具，建议尽快对感染主机进行断网隔离。提醒广大用户尽快做好病毒检测与防御措施，防范此次勒索攻击。
+
+## **病毒检测查杀**
+
+可下载如下工具，免费进行检测查杀。
+
+<http://edr.sangfor.com.cn/tool/SfabAntiBot.zip>
+
+## **病毒防御**
+
+> 1、及时给电脑打补丁，修复漏洞。
+>
+> 2、对重要的数据文件定期进行非本地备份。
+>
+> 3、不要点击来源不明的邮件附件，不从不明网站下载软件。
+>
+> 4、尽量关闭不必要的文件共享权限。
+>
+> 5、更改账户密码，设置强密码，避免使用统一的密码，因为统一的密码会导致一台被攻破，多台遭殃。
+
+最后，建议企业对全网进行一次安全检查和杀毒扫描，加强防护工作。
+
+*本文作者：
+

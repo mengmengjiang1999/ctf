@@ -1,0 +1,357 @@
+![](https://image.3001.net/images/20220208/1644290950_6201e3860e4928be03123.jpeg!small)  
+
+## 关于pip-audit
+
+pip-audit是一款功能强大的安全漏洞扫描工具，该工具主要针对Python环境，可以帮助广大研究人员扫描和测试Python包中的已知安全漏洞。pip-audit使用了[ _Python_ __ _Packaging_ __
+_Advisory数据库_](https://github.com/pypa/advisory-db)和[ _PyPI_ __ _JSON_ __
+_API_](https://warehouse.pypa.io/api-reference/json.html)作为漏洞报告源。
+
+## 功能介绍
+
+> 1、支持对本地环境和依赖组件（requirements风格文件）进行安全审计；
+>
+> 2、支持多种漏洞服务（PyPI、OSV）；
+>
+> 3、支持以CycloneDX XML或JSON格式发送SBOM；
+>
+> 4、提供人类和机器均可读的输出格式（columnar、JSON）；
+>
+> 5、无缝接入 / 重用本地pip缓存；
+
+## 工具安装
+
+pip-audit基于Python开发，且要求本地环境为Python
+3.7或更新版本。安装并配置好Python环境之后，就可以使用下列命令并通过pip来安装pip-audit了：
+
+    
+    
+    python -m pip install pip-audit
+
+### 第三方包
+
+pip-audit的正常运行需要使用到多个第三方包，具体组件包名称和版本如下图所示：
+
+![](https://image.3001.net/images/20220208/1644291000_6201e3b8e0116d4ac33f6.png!small)
+
+除此之外，我们还可以通过conda来安装pip-audit：
+
+    
+    
+    conda install -c conda-forge pip-audit
+
+## 工具使用
+
+我们可以直接将pip-audit以独立程序运行，或通过“python -m”运行：
+
+    
+    
+    pip-audit --help
+    
+    python -m pip_audit --help
+    
+    
+    usage: pip-audit [-h] [-V] [-l] [-r REQUIREMENTS] [-f FORMAT] [-s SERVICE]
+    
+                     [-d] [-S] [--desc [{on,off,auto}]] [--cache-dir CACHE_DIR]
+    
+                     [--progress-spinner {on,off}] [--timeout TIMEOUT]
+    
+                     [--path PATHS] [-v] [--fix] [--require-hashes]
+    
+     
+    
+    audit the Python environment for dependencies with known vulnerabilities
+    
+     
+    
+    optional arguments:
+    
+      -h, --help            show this help message and exit
+    
+      -V, --version         show program's version number and exit
+    
+      -l, --local           show only results for dependencies in the local
+    
+                            environment (default: False)
+    
+      -r REQUIREMENTS, --requirement REQUIREMENTS
+    
+                            audit the given requirements file; this option can be
+    
+                            used multiple times (default: None)
+    
+      -f FORMAT, --format FORMAT
+    
+                            the format to emit audit results in (choices: columns,
+    
+                            json, cyclonedx-json, cyclonedx-xml) (default:
+    
+                            columns)
+    
+      -s SERVICE, --vulnerability-service SERVICE
+    
+                            the vulnerability service to audit dependencies
+    
+                            against (choices: osv, pypi) (default: pypi)
+    
+      -d, --dry-run         without `--fix`: collect all dependencies but do not
+    
+                            perform the auditing step; with `--fix`: perform the
+    
+                            auditing step but do not perform any fixes (default:
+    
+                            False)
+    
+      -S, --strict          fail the entire audit if dependency collection fails
+    
+                            on any dependency (default: False)
+    
+      --desc [{on,off,auto}]
+    
+                            include a description for each vulnerability; `auto`
+    
+                            defaults to `on` for the `json` format. This flag has
+    
+                            no effect on the `cyclonedx-json` or `cyclonedx-xml`
+    
+                            formats. (default: auto)
+    
+      --cache-dir CACHE_DIR
+    
+                            the directory to use as an HTTP cache for PyPI; uses
+    
+                            the `pip` HTTP cache by default (default: None)
+    
+      --progress-spinner {on,off}
+    
+                            display a progress spinner (default: on)
+    
+      --timeout TIMEOUT     set the socket timeout (default: 15)
+    
+      --path PATHS          restrict to the specified installation path for
+    
+                            auditing packages; this option can be used multiple
+    
+                            times (default: [])
+    
+      -v, --verbose         give more output; this setting overrides the
+    
+                            `PIP_AUDIT_LOGLEVEL` variable and is equivalent to
+    
+                            setting it to `debug` (default: False)
+    
+      --fix                 automatically upgrade dependencies with known
+    
+                            vulnerabilities (default: False)
+    
+      --require-hashes      require a hash to check each requirement against, for
+    
+                            repeatable audits; this option is implied when any
+    
+                            package in a requirements file has a `--hash` option.
+    
+                            (default: False)
+
+## 退出代码
+
+任务完成后， pip-audit将会退出运行，并返回一个代码以显示其状态，其中：
+
+> 0：未检测到已知漏洞；
+>
+> 1：检测到了一个或多个已知漏洞；
+
+## 工具使用样例
+
+审计当前Python环境中的依赖：
+
+    
+    
+    $ pip-audit
+    
+    No known vulnerabilities found
+
+审计给定requirements文件的依赖：
+
+    
+    
+    $ pip-audit -r ./requirements.txt
+    
+    No known vulnerabilities found
+
+审计一个requirements文件，并排除系统包：
+
+    
+    
+    $ pip-audit -r ./requirements.txt -l
+    
+    No known vulnerabilities found
+
+审计依赖中发现的安全漏洞：
+
+    
+    
+    $ pip-audit
+    
+    Found 2 known vulnerabilities in 1 package
+    
+    Name  Version ID             Fix Versions
+    
+    ----  ------- -------------- ------------    
+    Flask 0.5     PYSEC-2019-179 1.0
+    
+    Flask 0.5     PYSEC-2018-66  0.12.3
+
+审计依赖（包含描述）：
+
+    
+    
+    $ pip-audit --desc
+    
+    Found 2 known vulnerabilities in 1 package
+    
+    Name  Version ID             Fix Versions Description
+    
+    ----  ------- -------------- ------------ --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------    
+    Flask 0.5     PYSEC-2019-179 1.0          The Pallets Project Flask before 1.0 is affected by: unexpected memory usage. The impact is: denial of service. The attack vector is: crafted encoded JSON data. The fixed version is: 1. NOTE: this may overlap CVE-2018-1000656.
+    
+    Flask 0.5     PYSEC-2018-66  0.12.3       The Pallets Project flask version Before 0.12.3 contains a CWE-20: Improper Input Validation vulnerability in flask that can result in Large amount of memory usage possibly leading to denial of service. This attack appear to be exploitable via Attacker provides JSON data in incorrect encoding. This vulnerability appears to have been fixed in 0.12.3. NOTE: this may overlap CVE-2019-1010083.
+
+审计JSON格式依赖：
+
+    
+    
+    $ pip-audit -f json | jq
+    
+    Found 2 known vulnerabilities in 1 package
+    
+    [
+    
+      {
+    
+        "name": "flask",
+    
+        "version": "0.5",
+    
+        "vulns": [
+    
+          {
+    
+            "id": "PYSEC-2019-179",
+    
+            "fix_versions": [
+    
+              "1.0"
+    
+            ],
+    
+            "description": "The Pallets Project Flask before 1.0 is affected by: unexpected memory usage. The impact is: denial of service. The attack vector is: crafted encoded JSON data. The fixed version is: 1. NOTE: this may overlap CVE-2018-1000656."
+    
+          },
+    
+          {
+    
+            "id": "PYSEC-2018-66",
+    
+            "fix_versions": [
+    
+              "0.12.3"
+    
+            ],
+    
+            "description": "The Pallets Project flask version Before 0.12.3 contains a CWE-20: Improper Input Validation vulnerability in flask that can result in Large amount of memory usage possibly leading to denial of service. This attack appear to be exploitable via Attacker provides JSON data in incorrect encoding. This vulnerability appears to have been fixed in 0.12.3. NOTE: this may overlap CVE-2019-1010083."
+    
+          }
+    
+        ]
+    
+      },
+    
+      {
+    
+        "name": "jinja2",
+    
+        "version": "3.0.2",
+    
+        "vulns": []
+    
+      },
+    
+      {
+    
+        "name": "pip",
+    
+        "version": "21.3.1",
+    
+        "vulns": []
+    
+      },
+    
+      {
+    
+        "name": "setuptools",
+    
+        "version": "57.4.0",
+    
+        "vulns": []
+    
+      },
+    
+      {
+    
+        "name": "werkzeug",
+    
+        "version": "2.0.2",
+    
+        "vulns": []
+    
+      },
+    
+      {
+    
+        "name": "markupsafe",
+    
+        "version": "2.0.1",
+    
+        "vulns": []
+    
+      }
+    
+    ]
+
+审计并尝试自动审计存在漏洞的依赖：
+
+    
+    
+    $ pip-audit --fix
+    
+    Found 2 known vulnerabilities in 1 package and fixed 2 vulnerabilities in 1 package
+    
+    Name  Version ID             Fix Versions Applied Fix
+    
+    ----- ------- -------------- ------------ ----------------------------------------    
+    flask 0.5     PYSEC-2019-179 1.0          Successfully upgraded flask (0.5 => 1.0)
+    
+    flask 0.5     PYSEC-2018-66  0.12.3       Successfully upgraded flask (0.5 => 1.0)
+
+## 许可证协议
+
+本项目的开发与发布遵循 Apache 2.0开源许可证协议。
+
+## 项目地址
+
+ **pip-audit：** 【[ _GitHub传送门_](https://github.com/trailofbits/pip-audit)】
+
+## 参考资料
+
+> [ _https://github.com/pypa/advisory-db_](https://github.com/pypa/advisory-> db)
+>
+> [ _https://warehouse.pypa.io/api-> reference/json.html_](https://warehouse.pypa.io/api-reference/json.html)
+>
+> [ _https://www.trailofbits.com/_](https://www.trailofbits.com/)
+>
+> [ _https://warehouse.pypa.io/api-reference/json.html#known-> vulnerabilities_](https://warehouse.pypa.io/api-reference/json.html#known-> vulnerabilities)
+>
+> [ _https://osv.dev/docs/_](https://osv.dev/docs/)
+>
+> [ _https://cyclonedx.org/﻿_](https://cyclonedx.org/)
+

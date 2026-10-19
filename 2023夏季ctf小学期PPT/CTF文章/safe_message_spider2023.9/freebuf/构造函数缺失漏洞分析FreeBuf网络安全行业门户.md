@@ -1,0 +1,207 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+##  **一、前言**
+
+ **构造函数缺失漏洞自智能合约产生以来就一直出现，归根到底是由于新进开发者对 solidity
+代码结构不熟悉造成的。BUGX.IO团队本次就来介绍一下漏洞的基本原理、表现形式以及对开发者的建议。**
+
+##  **二、漏洞原理**
+
+###  **1\. 什么是构造函数**
+
+Solidity编写合约和面向对象编程语言非常相似，我们可以通过构造函数（constructor）来初始化合约对象。构造函数就是方法名和合约名字相同的函数，创建合约时会调用构造函数对状态变量进行数据初始化操作。
+
+![图片1.png](https://image.3001.net/images/20180724/15324144179270.png!small)
+
+构造函数可用的函数类型为 public 或 internal，如果有 payable 修饰，就只能是 public 类型。而大部分人的写法都是 public
+或者不写。不写类型则由函数可见性默认为 public 类型。同时，如果构造函数带参数，则一定要放在合约下的第一个函数。
+
+    
+    
+    pragma solidity 0.4.21;
+    
+    contract Foo {
+    
+      function Foo() public {
+    
+        // ...
+    
+      }
+    
+    }
+
+合约结构的规范化写作可以让其他人更好地阅读，并且 constructor 和 fallback 函数要放在前面以便更好地查看。官方建议以如下顺序写作：
+
+* constructor
+
+* fallback function (if exists)
+
+* external
+
+* public
+
+* internal
+
+* private
+
+合约结构的规范写法如下：
+
+    
+    
+    contract A {
+        constructor() public {
+            ...
+        }
+    
+        function() external {
+            ...
+        }
+    
+        // External functions
+        // ...
+    
+        // External functions that are view
+        // ...
+    
+        // External functions that are pure
+        // ...
+    
+        // Public functions
+        // ...
+    
+        // Internal functions
+        // ...
+    
+        // Private functions
+        // ...
+    }  
+    
+
+###  **2\. 构造函数缺失与危害**
+
+构造函数缺失则是由于构造函数与合约名字不同，而又为 public
+类型，就变成了一个公有函数了，可以被任何人调用，一般函数函数比较敏感，用于初始化合约时定义通证数量、管理员地址等基本变量状态，一时变成了公有函数，危害可想而知，权限控制、通证管理基本全线奔溃。
+
+###  **3\. 版本升级后构造函数的变化**
+
+从 `0.4.22`版本开始，solidity 编译器引入了 constructors
+关键字，以替代低版本的将合约名作为构造函数名的语法，避免程序员容易出现的编码错误。使用旧写法会出现 warning 信息。
+
+新版本写法为：
+
+    
+    
+    contract Ownable {
+        address public owner;
+        address public admin;
+    
+        constructor() public {
+            owner = msg.sender;
+            admin = msg.sender;
+        }
+    
+        // Other code
+    }  
+    
+
+##  ** **三、常见漏洞代码形式****
+
+###  **1\. 构造函数使用库合约名称，使得构造函数变成了公有函数，可被任意调用。**
+
+我们发现了不少这种错误写法的合约，在主合约中，构造函数写成了 Token() 或 ERC20Token() 。这样子的函数非构造函数，变成了普通函数了。
+
+如 DealGuard 合约：
+
+<https://etherscan.io//address/0xb47c5e8f389dc1fa8247c9a4b9e5dcdc79754152#code>
+
+![2.png](https://image.3001.net/images/20180724/15324150224025.png!small)
+
+### **2\. 合约名与构造函数名不同，如大小写不同、拼写错误等，使得构造函数变成了公有函数，可被任意人调用。**
+
+只能说开发者太大意，对智能合约开发有什么误解吧。经常看到的漏洞形式是合约名与构造函数不同，只与 name
+变量名相同，估计是开发者以为合约名相同就行了，却忽略了构造函数。
+
+如 ReaperCoin11 合约：
+
+<https://etherscan.io//address/0x1b7cd071187ec0b2995b96ee82296cfa639572f1#code>
+
+![3.png](https://image.3001.net/images/20180724/15324150522639.png!small)还有这个
+Krypticoin 合约，乍一看看不出来，仔细瞅瞅，再仔细瞅瞅，原来 coin 拼错了 。  
+
+![4 .png](https://image.3001.net/images/20180724/15324150726615.png!small)
+
+之前知道创宇发布了关于 `owned`大小写编码漏洞的文章。同时，我们也可以找一些类似的容易大小写错误的库合约，如
+`ownable`。不过经过我们的分析，还是以 owned 大小写错误为主。
+
+如 MORPH 合约：
+
+<https://etherscan.io//address/0x2ef27bf41236bd859a95209e17a43fbd26851f92#code>
+
+    
+    
+    contract Owned {
+        address public owner;
+    
+        function owned() public {
+            owner = msg.sender;
+        }  
+    
+
+###  **3\. constructor 前加了function ，或者加了 fucntion 然后开头的 C写成了大写，即 `function
+Constructor()public {}`，使得构造函数变成了公有函数，可被任意人调用。**
+
+版本升级后的构造函数只需要单独使用 constructor 即可，但很多开发者却忽略了此细节。上面这个写法错误在于两点：
+
+ **1) 加入了 function 变成了普通函数形式。但是这时编辑器中会报 warning 信息：**
+
+![5.png](https://image.3001.net/images/20180724/15324151179429.png!small)
+
+但是有开发者忽了此警告，写出了错误代码。
+
+如 MDOT 合约：
+
+<https://etherscan.io//address/0xef7d906fd1c0eb5234df32f40c6a1cb0328d7279#code>
+
+    
+    
+        function constructor() public {
+            totalSupply = 5000000000000;       // Set the total supply (in base units)
+            balances[0xbfC729007CE9CBBE54132Fb9BFa097D80AAC791C] = 5000000000000;    // Initially assign the entire supply to the specified account
+        }  
+    
+
+ **2) 但是如果将 `constructor`错写成了 `Constructor`，使得编辑器识别其为普通函数名，没有任何 warning 信息。**
+
+![21.png](https://image.3001.net/images/20180724/15324152268008.png!small)
+
+如 TOGToken 合约：
+
+<https://etherscan.io//address/0xb9d5c2548266428795fd8b1f12aedbdeb417fe54#code>
+
+![6.png](https://image.3001.net/images/20180724/15324152748498.png!small)
+
+## ****四、常见漏洞代码形式****
+
+使用新版本写法，并且检查句式、拼写的正确性。
+
+##  ** **五、漏洞影响范围****  
+
+通过我们对以太坊上的合约进行整体监测，发现有此漏洞的竟达两千多份，大小写编码错误的约有20 份。其中不乏正在使用中的合约。
+
+## ![7.png](https://image.3001.net/images/20180724/15324153895084.png!small)
+** **六、资料****  
+
+<https://solidity.readthedocs.io/en/latest/contracts.html?highlight=constructor#creating-contracts>
+
+<https://solidity.readthedocs.io/en/latest/style-guide.html?highlight=constructor#order-of-functions>
+
+<https://ethereum.stackexchange.com/questions/30223/should-the-constructor-function-be-public>
+
+<http://solidity.readthedocs.io/en/develop/contracts.html?highlight=private#visibility-and-getters>
+
+## 七、公司介绍  
+
+BUGX.IO是一家致力于区块链领域的安全公司。核心团队组建于2014年，我们在区块链生态安全、行业解决方案、安全建设、红蓝对抗等方面有深厚积累与过硬专业素养。  
+
+***本文作者BUGX.IO-Tri0nes，转载请注明来自FreeBuf.COM**
+

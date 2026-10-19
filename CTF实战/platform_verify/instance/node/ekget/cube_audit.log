@@ -1,0 +1,56 @@
+time: 0.000594 :read 3 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/namelist.json!
+time: 0.000861 :read 4 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/dispatchnamelist.json!
+time: 0.000999 :read 1 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/typelist.json!
+time: 0.001587 :read 7 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/subtypelist.json!
+time: 0.001684 :read 1 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/baseflag.json!
+time: 0.002156 :read 3 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/memdb.json!
+time: 0.003295 :read 7 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/msghead.json!
+time: 0.003768 :read 2 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/msgrecord.json!
+time: 0.005163 :read 11 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/base_msg.json!
+time: 0.007480 :read 9 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/return.json!
+time: 0.008052 :read 3 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/dispatchrecord.json!
+time: 0.008339 :read 2 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/exmoduledefine.json!
+time: 0.008599 :read 1 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/sys_conn.json!
+time: 0.009355 :read 6 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/cube_audit.json!
+time: 0.010042 :read 5 elem from file tcm_value.json!
+time: 0.017793 :read 49 elem from file tcm_general_define.json!
+time: 0.039727 :read 107 elem from file tcm_input_define.json!
+time: 0.040138 :read 3 elem from file tcm_libinfo.json!
+time: 0.040826 :read 4 elem from file tcm_manage.json!
+time: 0.042528 :read 11 elem from file tcm_keydesc.json!
+time: 0.042561 :proc_share_data_setvalue: set proc_name to ekget
+time: 0.053904 :this machine's local uuid is 7bb67b9b2a7e4cf3b09193a761e94d848d48b116797c0e73dd6bbe198d091c65
+
+time: 0.053924 :proc_share_data_setvalue: set uuid to {∂{õ*~LÛ∞ëìßaÈMÑçH±y|s›kæç	e
+time: 0.059628 :read 1 connector!
+
+time: 0.059801 :read 1 policy from router_policy file!
+time: 0.059868 :system plugin router_proc is prepared!
+time: 0.060101 :proc_share_data_setvalue: set uuid to ≈kπ_¬†Êh_ÏÛ°Ã‘p˙Åüâà"πtAÿ≤!⁄
+time: 0.060116 :virtual_node init :change virtual node uuid to 0fc56bb95fc2a0e6685fec12f31ea1cc03d470fa819f89038822b9741741d8b2!
+time: 0.065975 :system plugin connector_proc is prepared!
+time: 0.066037 :ex_module connector_proc started successfully!
+time: 0.066054 :proc_share_data_getvalue: get uuid value ≈kπ_¬†Êh_ÏÛ°Ã‘p˙Åüâà"πtAÿ≤
+time: 0.066074 :proc_share_data_getvalue: get proc_name valutime: 0.066074 :proc_share_data_getvalue: get proc_name value ekget
+time: 0.066113 :ex_module virtual_node started successfully!
+time: 0.066142 :ex_module tcm_init started successfully!
+time: 0.066152 :client ca_client connect succeed!
+
+time: 0.066169 :ex_module ek_get started successfully!
+time: 0.066179 :proc_share_data_getvalue:time: 0.066179 :proc_share_data_getvalue: get uuid value ≈kπ_¬†Êh_ÏÛ°Ã‘p˙Åüâà"πtAÿ≤
+time: 0.066191 :proc_share_data_getvalue: get proc_name value ekget
+time: 0.076440 :proc conn client receive 265 data!
+
+time: 0.076626 :send 322 data to conn ca_client!
+
+time: 0.076638 :client ca_client send 322 ack data to server !
+
+time: 0.081400 :router get proc connector_proc's message 
+time: 1.066276 :proc_share_data_getvalue: get uuid value ≈kπ_¬†Êh_ÏÛ°Ã‘p˙Åüâà"πtAÿ≤
+time: 1.130121 :router get proc ek_get's message 
+time: 1.130153 :new msg match path ekpub_send's policy
+time: 1.130523 :send message to conn process!
+time: 1.134840 :send 376 data to conn ca_client!
+
+time: 1.134858 :send (13056  1)message 376 to conn ca_client!
+

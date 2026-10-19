@@ -1,0 +1,312 @@
+# Windows调试艺术——PE文件变形（一）
+
+阅读量 **267626**
+
+|评论 **3**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-05-15 10:30:28
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t01ec860206cd24c71d.jpg)
+
+上次的文章中我们着重探讨了导入函数和导出函数的具体过程，实际上也潜在地分析了PE文件的大部分结构，比如：导入表、导出表、延迟绑定表等等，这篇文章就把剩余的PE结构进行一下详细的总结，并在我们已经学过的知识的基础上进行简单的PE变形技术，为我们后期写壳做好充分准备。
+
+阅读本篇前建议阅读：
+
+[Windows调试艺术——导入函数和导出函数](https://www.anquanke.com/post/id/177462)
+
+说起header大家应该都不陌生，jpg有jpg的头，zip有zip的头，http传输中有http头，特别是在ctf比赛中header更是“重灾区”，经常被拿来做手脚。头实际上就是起到了总览和标记的作用。所谓标记也就是标示这个文件是个啥，是pe还是zip，起到了分类的作用；所谓总览就是把文件的一些整体性的、重要的信息放进来。如此可见头的重要性。
+
+我们还是通过一张笔者自制的图来总体浏览一下头的结构
+
+![](https://raw.githubusercontent.com/Asa9ao/pic/master/20190506174901.png)
+
+可以看到PE的头主要由Dos header、nt_header两部分组成，我们一点一点看
+
+## Image_Dos_Header && Dos_Stub介绍和变形技术
+
+看到dos就知道这些是“老古董”，它主要是为了兼容MS-DOS操作系统，stub其实就是在dos环境下的代码段，header其实就是dos环境下的头，实际上在dos操作系统上，我们可以认为pe文件就是Image_Dos_Header和Dos_Stub组成的文件，其他是“垃圾数据”。
+
+dos_header结构体如下：
+
+    
+    
+    typedef struct _IMAGE_DOS_HEADER {        
+    WORD   e_magic;                         // Magic number  
+        WORD   e_cblp;                      // Bytes on last page of file  
+        WORD   e_cp;                        // Pages in file  
+        WORD   e_crlc;                      // Relocations  
+        WORD   e_cparhdr;                   // Size of header in paragraphs  
+        WORD   e_minalloc;                  // Minimum extra paragraphs needed  
+        WORD   e_maxalloc;                  // Maximum extra paragraphs needed  
+        WORD   e_ss;                        // Initial (relative) SS value  
+        WORD   e_sp;                        // Initial SP value  
+        WORD   e_csum;                      // Checksum  
+        WORD   e_ip;                        // Initial IP value  
+        WORD   e_cs;                        // Initial (relative) CS value  
+        WORD   e_lfarlc;                    // File address of relocation table  
+        WORD   e_ovno;                      // Overlay number  
+        WORD   e_res[4];                    // Reserved words  
+        WORD   e_oemid;                     // OEM identifier (for e_oeminfo)  
+        WORD   e_oeminfo;                   // OEM information; e_oemid specific  
+        WORD   e_res2[10];                  // Reserved words  
+        LONG   e_lfanew;                    // File address of new exe header  
+      } IMAGE_DOS_HEADER, *PIMAGE_DOS_HEADER;
+    
+
+虽说是为了兼容Dos的老古董，但它的某些结构我们还是需要了解的。magic是魔术字，它的值固定为0x4D5A，实现的就是上面提到的标记的作用。第二个需要关心的就是最后的e_lfanew，它实际上是NT头的偏移，因为Dos部分的大小是不确定的，PE加载器要通过这个字段来找到NT头。
+
+![](https://raw.githubusercontent.com/Asa9ao/pic/master/20190506203052.png)
+
+如图所示，lfanew的值为00 00 00 80，0+80=80，而80处正是NT头的起始位置。
+
+实际上，我们经常通过对这部分的修改来实现PE变形，只知道这些字段的意思还远远不够，我们必须知道哪些部分能动，哪些部分不能动才能实现操作，例如：我们可以在Dos头中藏入密钥实现解密，加入效验位检查文件是否被篡改，病毒文件还可以通过在此处设置标志位来检验文件是否已经被感染等。  
+这里作者尝试修改了每一项的数据进行测试，结论是——除了lfanew和magic以外的字段可以随意修改。
+
+Dos_Stub也就是Dos程序的代码段，默认情况下我们编写的PE程序都会自动添上一段Dos代码，功能很简单：打印一句话。当然我们可以在大小范围内随意修改，只要你会写Dos。
+
+但由于在windows上Stub并不会运行，所以，我们可以将敏感数据甚至是别的程序（病毒经常会采取这样的手段，后期再将程序释放出来）藏在这里。那这样我们就需要扩充Stub的大小了，Dos_Header的lfanew是NT头的偏移，而Dos头的大小是固定的，我们修改了它就相当于是修改了Stub的大小。下面我们就来实际试一下，程序仍沿用上次文章中的test。
+
+  * 修改lfanew的值，这里我们就改成1080好了（因为1000恰好是4kb，也就是1个页的大小）  
+
+  * 修改Image_Optional_Header的AddressOfEntryPoint，虽然还没讲到这部分，大家可以根据010Editor的提示先进行修改，这其实就是程序的入口点，因为之后我们要把后面的内容整体往后移1000h，所以实际上入口点的偏移（这里要注意，包括下边提到的字段大都是RVA，并不是具体的值，加1000不是说入口点的值加了1000，而是入口点对应的偏移往后偏移了1000，详细的计算之前的文章提到过了，读者可自行证明）也需要加1000h  
+
+  * 修改Image_Optional_Header的SizeOfImage，这是整个映像的大小，同样要加1000  
+
+  * 修改Image_Optional_Header的SizeOfHeaders，同样加1000，这里的值并不是RVA了，而是头部的大小，所以加1000的意思就是加了1000的大小  
+
+  * Image_Section_Header的VirtualAddress和PointerToRawData，同样加1000，这里有好几个节头，就不再一一放截图了
+  * 调整Image_Optional_Header的Image_Data_Directory中各个表的virtualAddress以及对应的表的RVA内容，此处要修改的内容较多，建议参考上一篇文章的进行修改。
+  * 复制原来Stub之后所有的内容到新lfanew的偏移  
+  
+好了，大功告成，保存后运行，程序一切正常，完美！
+
+## Image_NT_Header介绍和变形技术
+
+此结构是程序在Windows中运行的真实头部，主要有三部分构成：Signatrue如同Dos的magic，他也是起到了标志的作用，值固定为0x4550，也就是字母PE；Image_File_Header是文件头的意思，它保存着最基本的信息；Image_Optional_Header我们已经打过交道了，可以看到它保存着各种重要的信息，有的书将它译作“可选头”，但显然它必须有，而不是“可选”，所以我一般叫它拓展头。
+
+    
+    
+    typedef struct _IMAGE_FILE_HEADER {  
+        WORD    Machine;  
+        WORD    NumberOfSections;  
+        DWORD   TimeDateStamp;  
+        DWORD   PointerToSymbolTable;  
+        DWORD   NumberOfSymbols;  
+        WORD    SizeOfOptionalHeader;  
+        WORD    Characteristics;  
+    } IMAGE_FILE_HEADER, *PIMAGE_FILE_HEADER;
+    
+
+首先来看文件头，各个字段含义如下：
+
+  * Machine是指程序运行的cpu平台，AMD还是Intel，一般不需要关心
+  * NumberOfSections是程序中节的数量
+  * TimeDateStamp是时间戳，一般是链接器帮我们填写的，之前windbg调试时我们曾用它作为标志来检验我们找的偏移是否正确
+  * PointerToSymbolTable，COFF文件符号表在文件中的偏移
+  * NumberOfSymbols，符号的数量
+  * SizeOfOptionalHeader，后续扩展头的大小
+  * Characteristics，PE文件的属性，这个较为复杂，这里给出详细的表单，不再做过多说明，需要时可对照010Editor进行查看
+
+    
+    
+    #define IMAGE_FILE_RELOCS_STRIPPED           0x0001  // Relocation info stripped from file.  
+    #define IMAGE_FILE_EXECUTABLE_IMAGE          0x0002  // File is executable  (i.e. no unresolved externel references).  
+    #define IMAGE_FILE_LINE_NUMS_STRIPPED        0x0004  // Line nunbers stripped from file.  
+    #define IMAGE_FILE_LOCAL_SYMS_STRIPPED       0x0008  // Local symbols stripped from file.  
+    #define IMAGE_FILE_AGGRESIVE_WS_TRIM         0x0010  // Agressively trim working set  
+    #define IMAGE_FILE_LARGE_ADDRESS_AWARE       0x0020  // App can handle >2gb addresses  
+    #define IMAGE_FILE_BYTES_REVERSED_LO         0x0080  // Bytes of machine word are reversed.  
+    #define IMAGE_FILE_32BIT_MACHINE             0x0100  // 32 bit word machine.  
+    #define IMAGE_FILE_DEBUG_STRIPPED            0x0200  // Debugging info stripped from file in .DBG file  
+    #define IMAGE_FILE_REMOVABLE_RUN_FROM_SWAP   0x0400  // If Image is on removable media, copy and run from the swap file.  
+    #define IMAGE_FILE_NET_RUN_FROM_SWAP         0x0800  // If Image is on Net, copy and run from the swap file.  
+    #define IMAGE_FILE_SYSTEM                    0x1000  // System File.  
+    #define IMAGE_FILE_DLL                       0x2000  // File is a DLL.  
+    #define IMAGE_FILE_UP_SYSTEM_ONLY            0x4000  // File should only be run on a UP machine  
+    #define IMAGE_FILE_BYTES_REVERSED_HI         0x8000  // Bytes of machine word are reverse
+    
+
+可以看到文件头并不复杂，实际上大多数的重要数据都是在扩展头里的，下面就来看一下扩展头的结构
+
+    
+    
+    typedef struct _IMAGE_OPTIONAL_HEADER {  
+        WORD    Magic;  
+        BYTE    MajorLinkerVersion;  
+        BYTE    MinorLinkerVersion;  
+        DWORD   SizeOfCode;  
+        DWORD   SizeOfInitializedData;  
+        DWORD   SizeOfUninitializedData;  
+        DWORD   AddressOfEntryPoint;  
+        DWORD   BaseOfCode;  
+        DWORD   BaseOfData;  
+        DWORD   ImageBase;  
+        DWORD   SectionAlignment;  
+        DWORD   FileAlignment;  
+        WORD    MajorOperatingSystemVersion;  
+        WORD    MinorOperatingSystemVersion;  
+        WORD    MajorImageVersion;  
+        WORD    MinorImageVersion;  
+        WORD    MajorSubsystemVersion;  
+        WORD    MinorSubsystemVersion;  
+        DWORD   Win32VersionValue;  
+        DWORD   SizeOfImage;  
+        DWORD   SizeOfHeaders;  
+        DWORD   CheckSum;  
+        WORD    Subsystem;  
+        WORD    DllCharacteristics;  
+        DWORD   SizeOfStackReserve;  
+        DWORD   SizeOfStackCommit;  
+        DWORD   SizeOfHeapReserve;  
+        DWORD   SizeOfHeapCommit;  
+        DWORD   LoaderFlags;  
+        DWORD   NumberOfRvaAndSizes;  
+        IMAGE_DATA_DIRECTORY DataDirectory[IMAGE_NUMBEROF_DIRECTORY_ENTRIES];  
+    } IMAGE_OPTIONAL_HEADER32, *PIMAGE_OPTIONAL_HEADER32;
+    
+
+  * Magic代表拓展头的类型，0x10b是32位的，0x20b是64位的。
+  * MajorLinkerVersion和MinorLinkerVersion是链接器版本的高位和低位
+  * SizeOfCode为代码段的总的大小
+  * SizeOfInitializedData是初始化了的数据的大小
+  * SizeOfUninitializedData是未初始化的数据的大小
+  * AddressOfEntryPoint是程序的入口点的RVA，当然这里要说明，不同的编译器编译出来的入口点千差万别，可千万不要以为这就是main函数了
+  * BaseOfCode为代码段的起始地址
+  * BaseOfData为数据段的起始地址
+  * ImageBase是加载的推荐基地址，前面我们在重定位表中提到过了
+  * SectionAlignment，节对齐，假如这个值是0x1000，那么每个节的起始地址的低12位都为0。如果做过pwn的同学应该很熟悉
+  * FileAlignment，节在文件中的对齐，由于PE从文件到内存可以看作是一个放大的过程，所以SectionAlignment的值是一定要大于FileAlignment
+  * MajorOperatingSystemVersion&&MinorOperatingSystemVersion，操作系统的版本号，和上面的链接器一样，是高位和地位
+  * MajorImageVersion、MinorImageVersion，pe的版本号，是开发者自己制定的
+  * MajorSubsystemVersion、MinorSubsystemVersion，子系统的版本号，所谓的子系统可以看作是Windows为了兼容某些程序而特意准备的虚拟环境，在64位的Windows上使用32程序实际上就是用了WOW64（Windows-on-Windows 64-bit）的子系统
+  * Win32VersionValue，保留的标志位，必须为0
+  * SizeOfImage，pe占用虚拟内存的大小
+  * SizeOfHeaders，所有头的大小，上面我们在修改Dos Stub的时候实际上修改过了
+  * CheckSum，映象文件的校验和，我们在《Windows调试艺术——断点和反调试》中用到了相似的技巧来检测是否有断点指令0xcc，而在这实际上就是看看文件有没有被篡改过
+  * Subsystem，指定的子系统，上面说过了
+  * DllCharacteristics，dll文件的属性，非常复杂，现阶段不需要了解
+  * SizeOfStackReserve，线程的栈的保留内存的大小
+  * SizeOfStackCommit，线程的栈的占用内存的大小
+  * SizeOfHeapReserve&&SizeOfHeapCommit：同上
+  * LoaderFlags，保留，必须为0。
+  * NumberOfRvaAndSizes，这是DataDirectory里保存的表项的数量
+  * DataDirectory，上一篇《Windows调试艺术》已经详细讲过了
+
+到这我们就详细看完了NT头的所有内容，和Dos头不同，NT头的内容确确实实和我们的程序运行密切相关，所以想和Dos头那样随心所欲的改是不可能了，但其实也正是因为它对程序的重大影响，让我们有更多的可玩空间。
+
+还是让我们来看看NT头中有哪些可以随意修改的空间，以下为笔者测试得到的通用结果，在不同版本Windows上可能还有其他可用的，大家感兴趣的话可以在自己系统上进行尝试。
+
+    
+    
+    File Header
+    DWORD   TimeDateStamp;  //时间戳自然是随意修改
+    DWORD   PointerToSymbolTable;  //程序运行时不需要符号
+    DWORD   NumberOfSymbols;    //同上
+    
+    
+    
+    Optional Header
+    BYTE    MajorLinkerVersion;  //链接器的版本自然和程序执行没关系
+    BYTE    MinorLinkerVersion;  
+    DWORD   SizeOfCode;         //大小够大就行了
+    DWORD   SizeOfInitializedData;  
+    DWORD   SizeOfUninitializedData;
+    
+
+上面对于Dos我们试了试空间扩充，那这次就来搞一下空间压缩，对于病毒来说这是至关重要的，毕竟100多m的恶意程序可太好发现了，病毒作者总是想方设法的想要缩小空间的。
+
+最简单当然是指定对齐的大小SectionAlignment和
+FileAlignment了，我们常常可以在程序中看到大片的00，这些数据实际上是用来填充实现程序的对齐的，如果我们将这个对齐的值改的小一点是不是就可以避免大量的补00了呢？我们可以通过链接器的/OPT:NOWIN98将section的对齐由标准的4k改为512字节，这样能一定程度上压缩程序大小。
+
+合并也是常见的压缩手段，其中最重要的一种思路就是合并头，因为Dos Header和Dos
+Stub其实在Windows上是不需要的，我们可以通过覆盖的方式让Dos头和Optional头合二为一。
+
+![](https://raw.githubusercontent.com/Asa9ao/pic/master/20190511154323.png)
+
+原理很简单，就是因为DOS头的lfanew指向的是PE头，我们可以将它指定为Dos头的一部分，又因为DOS头的大部分数据是可改的，所以可以随意填充NT
+Header的内容，注意lfanew所在的字段就是nt header的一部分了，所以它的位置就必须是NT头中可以随意指定的。过程如下：
+
+  * 首先选择我们要设置lfanew的位置，该位置必须是NT头中可任意修改的，这里我们选择SizeOfCode  
+
+  * 计算偏移值，原本的NT头从0x80开始，所以偏移为0x1c，要把它作为lfanew的话需要让它变为DOS的0x30，所以起始的NT头应该在0x20处
+  * 将原来的DOS头0x20后0xF8大小（即NT头的大小）的内容全部删除，然后将复制的PE头粘贴上去  
+
+  * 可以看到值为E0也就是SizeOfCode了，修改为0x20即可
+
+![](https://raw.githubusercontent.com/Asa9ao/pic/master/20190511163107.png)
+
+上述操作实现的映射关系如下：
+
+    
+    
+    dos.reserved  ----> NT header
+    ...
+    ...
+    ...
+    dos.lfanew   ----> Optional.SizeOfCode
+    
+
+当然实现怎么样的映射就全凭你喜欢了，只要遵守上面的做法即可。不过有一点需要注意——我们需要拿自己的数据去填满删除的部分，或者按照Dos头变形中的Dos
+Stub扩展的方法去修改几个重要的结构，否则会因为文件偏移改变而导致程序不能执行。
+
+###  需要注意的内容
+
+在修改PE文件时很容易因为修改了文件大小而导致文件的偏移需要修改，比如代码本来文件中0x100的位置，你对文件变形后0x100变成了自己的数据，那就乱套了，所以有一些数据必须要十分注意，这里为大家整理出来：
+
+    
+    
+    OptionalHeader:
+    DWORD   AddressOfEntryPoint; 
+    DWORD   BaseOfCode;  
+    DWORD   BaseOfData; 
+    IMAGE_DATA_DIRECTORY DataDirectory[IMAGE_NUMBEROF_DIRECTORY_ENTRIES];
+    
+    
+    DosHeader:
+    LONG   e_lfanew;  
+    
+    FileHeader:
+    DWORD    NumberOfSections; 
+    DWORD    SizeOfOptionalHeader;
+    
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Asa9ao** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/178088](/post/id/178088)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Windows](/tag/Windows)
+  * [PE](/tag/PE)
+
+ **+1** __5赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t01898082a58ca4c715.png) Asa9ao
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

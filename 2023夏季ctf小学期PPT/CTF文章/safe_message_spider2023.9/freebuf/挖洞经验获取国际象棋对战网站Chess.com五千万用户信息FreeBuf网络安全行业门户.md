@@ -1,0 +1,130 @@
+**![](https://image.3001.net/images/20210224/1614162758_60362b4621f1a8b36f3b0.jpg!small)本篇Writeup漏洞涉及知名国际象棋在线对战网站Chess.com，漏洞情况非常简单，可以通过消息交互机制获取其他用户的session_id，实现对其他用户的账户劫持。关键在于其影响非常严重，通过该漏洞可获取Chess.com网站中来自全世界各地多达5000万的注册用户信息。**
+
+## 漏洞发现背景
+
+对网站Chess.com的测试要追溯到2019年底了，当时我花了好多时间对其部署的原生WEB应用服务进行了分析，最后只发现了一个没啥特别的反射型XSS：  
+![](https://image.3001.net/images/20210224/1614162188_6036290cef87bb7fafce5.png!small)当时我对该反射型XSS的考虑是这样的，攻击者可以通过"Connect
+to
+Google"的URL链接，验证通过拥有的账户后，然后用XSS方式构造HTTP回调请求，把其账户与受害者的Chess.com账户绑定，以此实现账户后门化提权。
+
+![](https://image.3001.net/images/20210224/1614162237_6036293d11df6279aeebd.png!small)
+
+这应该算是XSS武器化应用的一个妙招了，但我却不满足止步于该发现，我努力尝试去发现一个更有影响力的高危漏洞。在那段时间，我时不时都会对Chess.com做一些测试，但都无功而返，没什么进展。
+
+## 账户劫持漏洞
+
+而在我用手机和BurpSuite完成了对另外一家公司的安全测试后，我才意识到，我竟然从来没有测试过Chess.com的APP应用。说做就做，经过对Chess.com
+APP应用的流量抓包，我发现了此前从没发现过的一个子域名api.chess.com：
+
+![](https://image.3001.net/images/20210224/1614162265_603629599ba1ea4f5b010.png!small)
+
+"api.chess.com"用来执行验证过的API通信交互，可以确定的是，从该子域名的请求来看，这下貌似就有得搞头了。从请求路径看，每个请求都具备标准的形式化请求头，且都是有效的。测试范围瞬间感觉豁然开朗。刚开始的几个请求样式如下：
+
+    
+    
+    GET /v1/users/validate-username/test?signed=iOS3.9.7-047a13c395ee9c059f98f1af74bb11c802047d47 HTTP/1.1
+    Host: api.chess.com
+
+我试图对其请求进行篡改操控，但却发现"signed"是经验证的一个哈希，它即是整个请求的参数。根本无法对它进行篡改，貌似服务端以这种散列哈希执行某种密码形式的验证，来实现请求通信交互。所以，即使更改了其哈希值，最终的请求也无法成功。
+
+好在，我们手机中的请求是经过验证的，所以理论上来说，是可以从这些请求中继续深挖发现隐藏的相关密码信息，或是进而编写脚本进行验证性请求生成测试的。在尝试对请求篡改之前，我又仔细地点击了Chess.com
+APP的各项功能，希望能有新的功能发现。
+
+果不其然，当我与hikaru发消息后，我在请求中搜索用户名 "hikaru"
+时，发现了一个非常有意思的HTTP请求，它看似是负责与其它用户的消息发送，以下是与用户hikaru相关的详细请求和响应信息：
+
+请求：
+
+    
+    
+    GET /v1/users?loginToken=98a16127fb8cb4dc97a3a02103706890&username=hikaru&signed=iOS3.9.7-7b9f1383b669614302e9503ba7db81875e440d7e HTTP/1.1
+    Host: api.chess.com
+
+响应：
+
+    
+    
+    {
+    "status": "success",
+    "data": {
+    "email": "REDACTED@REDACTED.COM",
+    "premium_status": 3,
+    "id": 15448422,
+    "uuid": "REDACTED",
+    "country_id": 2,
+    "avatar_url": "https://images.chesscomfiles.com/uploads/v1/user/15448422.90503d66.200x200o.f323efa57fd0.jpeg",
+    "last_login_date": REDACTED,
+    "session_id": "REDACTED",
+    "location": "Sunrise, Florida",
+    "username": "Hikaru",
+    "points": 52,
+    "chess_title": "GM",
+    "first_name": "Hikaru Nakamura",
+    "last_name": null,
+    "country_name": "United States",
+    "member_since": REDACTED,
+    "about": "",
+    "is_blocked": false,
+    "is_tracked": false,
+    "are_friends": false,
+    "friend_request_exists": true,
+    "is_able_to_change_username": null,
+    "flair_code": "diamond_traditional",
+    "show_ads": true,
+    "is_fair_play_agreed": true
+    }
+    }
+
+我第一眼查看响应内容时，觉得太好了，其中竟然包含了该用户的注册邮箱名，也就意味着，用这种方式可以获取任意用户的绑定邮箱了，而且这至少是一个中危漏洞。所以，即使我们无法对请求执行篡改，也可以通过查看其中的交互内容，发现一些有用的东西。
+
+![](https://image.3001.net/images/20210224/1614162369_603629c1d42846894b805.png!small)
+
+在我打算编写漏洞报告之前，我又在请求中仔细地筛查了一遍，看看能否从中发现一些与用户身份相关的泄露信息。最后，在我APP通信内容中，我又发现了以下信息：
+
+    
+    
+    "session_id":"56c5257a0800d.....86d28934868a88",
+    "session_id":"1f3d112b9a3f.....dbbf19438fcd8d",
+
+这应该是包含在我APP与两个单独用户发生消息交互或在线对战时产生的请求信息中，另外，可见以上两个
+"session_id"是不同的，而且它们都返回了不同的用户对象，所以它们并不属于我APP的session_id。于是，我马上到浏览器中查看了我的存储Cookie，在"PHPSESSID"中，我发现了我自己的"session_id"：
+
+![](https://image.3001.net/images/20210224/1614162484_60362a347a2ffb2ea719f.png!small)
+
+    
+    
+    HTTP/1.1 200 OK
+    Date: Sat, 9 Dec 2020 05:52:47 GMT
+    Content-Type: application/json
+    ..."session_id":"3947398c39ef15a.....56523b5a4533"...
+
+由于PHPSESSID是用户与服务端进行会话的验证标识，存在于Cookie信息中，因此，这也就意味着，只要通过消息或在线对战的方式，我们就能获取对对方用户的session_id信息，且可以劫持其交互会话！Jackpot！这就是完全的账户劫持啊！
+
+## 劫持Chess.com网站管理员账户
+
+为了在漏洞报告中说明问题，我利用该漏洞方式获得了Chess.com网站管理员之一Daniel Rensch的PHPSESSID
+cookie信息。但用该信息进行验证登录后，刚开始无法看到管理员界面。
+
+![](https://image.3001.net/images/20210224/1614162553_60362a796f34d97ea4bda.png!small)反复分析后，我才意识到，此前测试过程中曾有一个名为
+"admin.chess.com" 的子域名，于是，我将Daniel Rensch的PHPSESSID
+cookie信息进行了范围限定，设置为".chess.com" ，然后打开 **https://admin.chess.com**
+链接，Jackpot！我直接进行了其管理页面：
+
+![](https://image.3001.net/images/20210224/1614162578_60362a92ad0f117673877.png!small)然后调出了其个人资料：
+
+![](https://image.3001.net/images/20210224/1614162595_60362aa3d485398772bf7.png!small)对于恶意攻击者来说，利用该漏洞可以劫持Chess.com网站的任意用户，而且，还能利用该漏洞修改个人信息和象棋积分排名。
+
+![](https://image.3001.net/images/20210224/1614162617_60362ab93224830e750ff.png!small)
+
+漏洞上报后，Chess.com在一小时后就给出了响应，两小时后就修复了漏洞。
+**另外，Chess.com还设有自己的漏洞众测项目，大家可以[点此查看](https://www.chess.com/news/view/chess-com-bug-bounty-policy)。**
+
+## 漏洞上报和处理进程
+
+2020.12.12 12:34 AM 漏洞上报  
+2020.12.12 03:17 AM 漏洞确认  
+2020.12.12 07:42 AM 漏洞修复  
+2020.12.16 02:40 PM 漏洞奖励
+
+>  **参考来源：[samcurry](https://samcurry.net/hacking-chesscom/)**
+

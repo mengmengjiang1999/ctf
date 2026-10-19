@@ -1,0 +1,1015 @@
+# hgame2021 逆向题目
+
+阅读量 **194634**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-03-17 16:30:03
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t0119b9ccc37405eb3e.jpg)
+
+一个月hgame结束了，做完了逆向题，收获很大，misc的签到题做来玩了一下。
+
+## Re
+
+###  apacha
+
+考了一个xxtea加密算法：key是{1, 2, 3, 4}
+
+![](https://p0.ssl.qhimg.com/t0161d17bb03cdd4cca.png)
+
+跟着算法逻辑逆一下就行了：
+
+    
+    
+    #include <stdio.h>
+    
+    unsigned int LEN = 35;
+    unsigned int delat = 0x9E3779B9 * (52 / LEN) - 0x4AB325AA;
+    unsigned int KEY[] = {1, 2, 3, 4};
+    
+    unsigned char ENC[] =
+    {
+       35, 179,  78, 231,  54,  40, 167, 183, 226, 111, 
+      202,  89, 193, 197, 124, 150, 116,  38, 128, 231, 
+      230,  84,  45,  61,  86,   3, 157, 138, 156, 195, 
+      220, 153, 237, 216,  38, 112, 173, 253,  51, 106, 
+       10,  85, 150, 244, 158, 111, 156,  92,  76, 208, 
+      229,  27,  23, 174,  35, 103, 194, 165, 112,  82, 
+       10,  19,  66, 172, 178, 103, 190, 132, 121, 199, 
+       92, 112, 152,  61,  81,  92,  45, 218,  54, 251, 
+       69, 150,  23,  34, 157,  82, 227,  92, 251, 225, 
+      137, 209, 137, 212,  91, 232,  31, 209, 200, 115, 
+      150, 193, 181,  84, 144, 180, 124, 182, 202, 228, 
+       23,  33, 148, 249, 227, 157, 170, 161,  90,  47, 
+      253,   1, 232, 167, 171, 110,  13, 195, 156, 220, 
+      173,  27,  74, 176,  83,  52, 249,   6, 164, 146
+    };
+    
+    void de_xxtea()
+    {
+        unsigned int *enc = (unsigned int *)ENC;
+        unsigned int *key = (unsigned int *)KEY;
+    
+        do
+        {
+            unsigned char delat1 = (unsigned char)(delat >> 2);
+            enc[LEN-1] -= ((key[((LEN-1)^delat1)&3]^enc[LEN-2])+(enc[0]^delat)) ^ (((4*enc[0])^(enc[LEN-2]>>5))+((16*enc[LEN-2])^(enc[0]>>3)));
+    
+            int i = LEN-2;
+            do
+            {
+                enc[i] -= ((key[(i^delat1)&3]^enc[i-1])+(enc[i+1]^delat)) ^ (((4*enc[i+1])^(enc[i-1]>>5))+((16*enc[i-1])^(enc[i+1]>>3)));
+                i--; 
+            }while(i != 0);
+            enc[0] -= ((key[(0^delat1)&3]^enc[LEN-1])+(enc[1]^delat)) ^ (((4*enc[1])^(enc[LEN-1]>>5))+((16*enc[LEN-1])^(enc[1]>>3)));
+    
+            delat += 0x61C88647;
+        }while(delat != 0);
+    
+    }
+    
+    int main(void)
+    {
+        int i = 0;
+    
+        de_xxtea();
+        for(i = 0; i < 35; i++)
+        {
+            printf("%c", ENC[i*4]);
+        }
+    }
+    //hgame{l00ks_1ike_y0u_f0Und_th3_t34}
+    
+
+###  helloRe
+
+就是一个异或解密，但是可以从这里学习一下STL模板中的string的结构。
+
+能猜测出v14就是我们输入字符串的长度，但是怎么来的呢？其实使用了string结构。
+
+![](https://p2.ssl.qhimg.com/t01d7839bdd3dcc0bcf.png)
+
+string结构：一共占24个字节（这也是一个可以让我们用来识别的特征）
+
+    
+    
+    struct string
+    {
+        char _Buf[16];           // 当字符串长度小于等于0xF时，数据存储在_Buf数组中
+                                 // 大于0xF时将分配一个变量，_Buf存储的是该变量地址。
+        unsigned int _Mysize;    // 字符串长度
+        unsigned int _Myres;     // 可存储的最大长度
+    }
+    
+
+来测试一个输入看看：
+
+![](https://p3.ssl.qhimg.com/t01df0694e72949d805.png)
+
+最后题解：
+
+    
+    
+    from ida_bytes import *
+    addr = 0x07FF756E13480
+    cnt = 0xff
+    flag = ''
+    for i in range(22):
+        flag += chr(get_byte(addr)^cnt)
+        cnt -= 1
+        addr += 1
+    print(flag)
+    #hgame{hello_re_player}
+    
+
+###  pypy
+
+给了通过dis模块得到的python反汇编代码，我把对应的python代码注释了下：
+
+    
+    
+      4           0 LOAD_GLOBAL              0 (input)
+                  2 LOAD_CONST               1 ('give me your flag:\n')
+                  4 CALL_FUNCTION            1
+                  6 STORE_FAST               0 (raw_flag)     #raw_flag = input('give me your flag:\n')
+    
+      5           8 LOAD_GLOBAL              1 (list)
+                 10 LOAD_FAST                0 (raw_flag)
+                 12 LOAD_CONST               2 (6)
+                 14 LOAD_CONST               3 (-1)
+                 16 BUILD_SLICE              2
+                 18 BINARY_SUBSCR
+                 20 CALL_FUNCTION            1
+                 22 STORE_FAST               1 (cipher)    #cipher = list(raw_flag[6:-1])
+    
+      6          24 LOAD_GLOBAL              2 (len)
+                 26 LOAD_FAST                1 (cipher)
+                 28 CALL_FUNCTION            1
+                 30 STORE_FAST               2 (length)    #length = len(cipher)
+    
+      8          32 LOAD_GLOBAL              3 (range)
+                 34 LOAD_FAST                2 (length)
+                 36 LOAD_CONST               4 (2)
+                 38 BINARY_FLOOR_DIVIDE
+                 40 CALL_FUNCTION            1    #range(length/2)
+                 42 GET_ITER
+            >>   44 FOR_ITER                54 (to 100)
+                 46 STORE_FAST               3 (i)        #for i in range(length/2):
+    
+      9          48 LOAD_FAST                1 (cipher)
+                 50 LOAD_CONST               4 (2)
+                 52 LOAD_FAST                3 (i)
+                 54 BINARY_MULTIPLY
+                 56 LOAD_CONST               5 (1)
+                 58 BINARY_ADD
+                 60 BINARY_SUBSCR            #cipher[2*i+1]
+                 62 LOAD_FAST                1 (cipher)
+                 64 LOAD_CONST               4 (2)
+                 66 LOAD_FAST                3 (i)
+                 68 BINARY_MULTIPLY
+                 70 BINARY_SUBSCR            #cipher[2*i]
+                 72 ROT_TWO            #swap 改变指针的指向来实现
+                 74 LOAD_FAST                1 (cipher)
+                 76 LOAD_CONST               4 (2)
+                 78 LOAD_FAST                3 (i)
+                 80 BINARY_MULTIPLY
+                 82 STORE_SUBSCR
+                 84 LOAD_FAST                1 (cipher)
+                 86 LOAD_CONST               4 (2)
+                 88 LOAD_FAST                3 (i)
+                 90 BINARY_MULTIPLY
+                 92 LOAD_CONST               5 (1)
+                 94 BINARY_ADD
+                 96 STORE_SUBSCR            #cipher[2*i], cipher[2*i+1] = cipher[2*i+1], cipher[2*i]
+                 98 JUMP_ABSOLUTE           44    
+                        #for i in range(length/2):
+                            #cipher[2*i], cipher[2*i+1] = cipher[2*i+1], cipher[2*i]    
+    
+     12     >>  100 BUILD_LIST               0
+                102 STORE_FAST               4 (res)    #res = []
+    
+     13         104 LOAD_GLOBAL              3 (range)
+                106 LOAD_FAST                2 (length)
+                108 CALL_FUNCTION            1
+                110 GET_ITER
+            >>  112 FOR_ITER                26 (to 140)
+                114 STORE_FAST               3 (i)        for i in range(length)
+    
+     14         116 LOAD_FAST                4 (res)
+                118 LOAD_METHOD              4 (append)
+                120 LOAD_GLOBAL              5 (ord)
+                122 LOAD_FAST                1 (cipher)
+                124 LOAD_FAST                3 (i)
+                126 BINARY_SUBSCR
+                128 CALL_FUNCTION            1        
+                130 LOAD_FAST                3 (i)
+                132 BINARY_XOR
+                134 CALL_METHOD              1        #res.append(ord(cipher[i])^i)
+                136 POP_TOP
+                138 JUMP_ABSOLUTE          112
+    
+     15     >>  140 LOAD_GLOBAL              6 (bytes)
+                142 LOAD_FAST                4 (res)
+                144 CALL_FUNCTION            1
+                146 LOAD_METHOD              7 (hex)
+                148 CALL_METHOD              0
+                150 STORE_FAST               4 (res)    #res = bytes(res).hex()
+    
+     16         152 LOAD_GLOBAL              8 (print)
+                154 LOAD_CONST               6 ('your flag: ')
+                156 LOAD_FAST                4 (res)
+                158 BINARY_ADD
+                160 CALL_FUNCTION            1        #print('your flag: ' + res)
+                162 POP_TOP
+                164 LOAD_CONST               0 (None)
+                166 RETURN_VALUE
+    
+    # your flag: 30466633346f59213b4139794520572b45514d61583151576638643a
+    
+
+最后简单逆一下：
+
+    
+    
+    enc = '30466633346f59213b4139794520572b45514d61583151576638643a'
+    enc = bytes.fromhex(enc)
+    flag = [b^i for b, i in enumerate(enc)]
+    for i in range(len(flag)//2):
+        flag[2*i], flag[2*i+1] = flag[2*i+1], flag[2*i]
+    print(''.join(map(chr, flag)))
+    #G00dj0&_H3r3-I$Y@Ur_$L@G!~!~
+    
+
+###  ezApk
+
+简单的安卓，只有java代码，找到按钮活动。
+
+![](https://p0.ssl.qhimg.com/t019a49d2b7dda0ce0e.png)
+
+就是取出文本内容，然后把输入和密文传入s方法，验证是否正确。
+
+到s方法：一个cbc模式的aes加密，填充方式为PKCS7Padding。
+
+![](https://p1.ssl.qhimg.com/t01bb0752a31ab36865.png)
+
+所以解密密文就应该是flag了，使用java用同样的方式调用一下解密方法。这里注意一点就是：java中自带的是PKCS5Padding填充，直接使用PKCS7Padding会报错，但搜索到这2个使用起来是一样的，就直接改成PKCS5Padding就好了。
+
+    
+    
+    package ctf;
+    import java.io.UnsupportedEncodingException;
+    import java.security.InvalidAlgorithmParameterException;
+    import java.security.InvalidKeyException;
+    import java.security.MessageDigest;
+    import java.security.NoSuchAlgorithmException;
+    import java.util.Arrays;
+    
+    import javax.crypto.BadPaddingException;
+    import javax.crypto.Cipher;
+    import javax.crypto.IllegalBlockSizeException;
+    import javax.crypto.NoSuchPaddingException;
+    import javax.crypto.spec.IvParameterSpec;
+    import javax.crypto.spec.SecretKeySpec;
+    import java.util.Base64;
+    
+    
+    class cry{
+        public static byte[] hash(String a, String b) throws NoSuchAlgorithmException, UnsupportedEncodingException{
+            MessageDigest v2 = MessageDigest.getInstance(a);
+            byte[] v3 = b.getBytes("UTF-8");
+            byte[] ans = v2.digest(v3);
+            return ans;
+        }
+    }
+    
+    public class aes_test {
+    
+        public static void main(String[] args) throws NoSuchAlgorithmException, UnsupportedEncodingException, NoSuchPaddingException, InvalidKeyException, InvalidAlgorithmParameterException, IllegalBlockSizeException, BadPaddingException{
+    
+            String key = "A_HIDDEN_KEY";
+            String input = "EEB23sI1Wd9Gvhvk1sgWyQZhjilnYwCi5au1guzOaIg5dMAj9qPA7lnIyVoPSdRY";
+            Base64.Decoder decoder = Base64.getDecoder();
+            byte[] enc = decoder.decode(input);
+            SecretKeySpec v1 = new SecretKeySpec(cry.hash("SHA-256", key), "AES");
+            IvParameterSpec v2 = new IvParameterSpec(cry.hash("MD5", key));
+            Cipher v5 = Cipher.getInstance("AES/CBC/PKCS5Padding");
+            v5.init(2, v1, v2);
+            System.out.println("key: " + byte_hex.bytes2hex(v1.getEncoded()));
+            System.out.println("iv: " + byte_hex.bytes2hex(v2.getIV()));
+            byte[] plain = v5.doFinal(enc);
+            System.out.println(new String(plain));
+    
+        }
+    
+    }
+    
+    /*
+    key: fca5fed0bc096dbb2f21c64b77a908b5c9944dfcaba05a482b2424a44a15ffe6
+    iv: 99c6bd34c31b78b4c4b964a7745e6300
+    hgame{jUst_A_3z4pp_write_in_k07l1n}
+    */
+    
+
+其实也不用这么麻烦的，关键是想练习一下java。
+
+自己算一下hash得到的key和iv用python或者在线网站解密一下，方便的多。
+
+    
+    
+    #coding:utf-8
+    import base64
+    from Crypto.Cipher import AES
+    
+    class AesEncry(object):
+        key = 'fca5fed0bc096dbb2f21c64b77a908b5c9944dfcaba05a482b2424a44a15ffe6'
+        key = bytes.fromhex(key)                            
+    
+        iv = '99c6bd34c31b78b4c4b964a7745e6300'
+        iv = bytes.fromhex(iv)
+    
+        def encrypt(self, data):
+            mode = AES.MODE_ECB
+            padding = lambda s: s + (16 - len(s) % 16) * chr(16 - len(s) % 16)
+            cryptos = AES.new(self.key, mode)
+            cipher_text = cryptos.encrypt(data)
+            return cipher_text.hex()
+    
+        def decrypt(self, data):
+            cryptos = AES.new(self.key, AES.MODE_CBC, self.iv)
+            decrpytBytes = base64.b64decode(data)
+            plaint = cryptos.decrypt(decrpytBytes)
+            return plaint
+    
+    enc = 'EEB23sI1Wd9Gvhvk1sgWyQZhjilnYwCi5au1guzOaIg5dMAj9qPA7lnIyVoPSdRY'
+    flag = AesEncry().decrypt(enc)
+    print(flag)
+    
+
+###  helloRe2
+
+首先输入pass1的逻辑，转化一个128位的大数与指定大数比较，然后以挂起创建自身进程的子进程，调用CreateFileMappingA()函数把文件映像到内存，再使用MapViewOfFile()函数把文件视映像到进程地址空间上（用于把当前进程的内存空间的数据与子进程共享），然后在非调试状态下对要共享的数据简单的异或加密一下，最后恢复启动刚刚创建的子进程，自身进程睡眠挂起：
+
+![](https://p0.ssl.qhimg.com/t01ef96ec5e831153ed.png)
+
+子进程启动后，调用OpenFileMappingA()与MapViewOfFile()查看父进程共享的内存数据，若存在则调用输入pass2的逻辑，然后一个cbc模式的aes加密。
+
+![](https://p1.ssl.qhimg.com/t01b40d0e8cb1c9895f.png)
+
+使用python解密一下得到pass2：
+
+    
+    
+    #coding:utf-8
+    import base64
+    from Crypto.Cipher import AES
+    
+    key = b'2b0c5e6a3a20b189'
+    key = [key[i]^i for i in range(len(key))]
+    key = bytes(key)
+    #key = bytes.fromhex(key)                            
+    
+    iv = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    iv = bytes(iv)
+    #iv = bytes.fromhex(iv)
+    
+    def encrypt(data):
+        mode = AES.MODE_ECB
+        padding = lambda s: s + (16 - len(s) % 16) * chr(16 - len(s) % 16)
+        cryptos = AES.new(self.key, mode)
+        cipher_text = cryptos.encrypt(data)
+        return cipher_text.hex()
+    
+    def decrypt(data):
+        cryptos = AES.new(key, AES.MODE_CBC, iv)
+        decrpytBytes = base64.b64decode(data)
+        plaint = cryptos.decrypt(decrpytBytes)
+        return plaint
+    
+    enc = 't/7+2Qd2eWU/Tl9i1QL2fg=='
+    flag = decrypt(enc)
+    print(flag)
+    
+    #7a4ad6c5671fb313
+    
+
+最后： **hgame{2b0c5e6a3a20b189_7a4ad6c5671fb313}**
+
+###  fake_debugger beta
+
+nc连上后，空格加回车进行单步调试。
+
+容易发现，是对输入一位一位的异或加密后与指定值比较，不对则退出。
+
+![](https://p5.ssl.qhimg.com/t016d231bd7ebd84f7a.png)
+
+开始的格式是知道的，所以后面一位一位慢慢的跟一下就好了。
+
+**hgame{You_Kn0w_debuGg3r}**
+
+###  gun
+
+jadx反编译后没有发现MainActivity，但从几个特征可以知道app进行梆梆加固免费版进行加固。
+
+![](https://p0.ssl.qhimg.com/t0146819d9bcfd20169.png)
+
+我们的目的主要是得到解密后的关键dex分析MainActivity，所以可以直接考虑用frida-dumpdex来dump出内存中的dex。项目地址：<https://github.com/hluwa/FRIDA-DEXDump>
+
+搭建frida环境时注意一点：安装的frida的版本要和服务端安装的frida-server版本要一致。
+
+dump出dex后从到小的拖进jeb中反编译，0xbf03a000.dex是我们要找的。
+
+可以看到，创建了多个线程进行操作。
+
+![](https://p5.ssl.qhimg.com/t01e3e2d50a8bb43d0c.png)
+
+看一下功能：
+
+![](https://p1.ssl.qhimg.com/t0149ed46ad9130ee4e.png)
+
+继续看fd.i方法：
+
+![](https://p0.ssl.qhimg.com/t01e825a7b8ae3633d8.png)
+
+到这里基本上就可以知道，是开启多个线程进行发送数据，然后每个线程有不同的睡眠时间，这就有了先后顺序。
+
+我是直接把所有数据按时间建立关系后，打印出来。
+
+    
+    
+    #include <stdio.h>
+    
+    char a[0xfffffff];
+    
+    int main(void)
+    {
+        int i = 0;
+    
+        a[19530] = 'q', a[0x75F4] = 'e', a[0xA161] = 'd', a[7337] = 'f';
+        a[0x5B0D] = 'e', a[0xC266] = 'x', a[0x887F] = 'q', a[50475] = 'u';
+        a[0xC05D] = 'a', a[0x909B] = 'u', a[8488] = 'a', a[0xC1CF] = 'r';
+        a[78545] = '0', a[0x4B4C] = 't', a[0xC807] = 'q', a[0x8C9B] = 'q';
+        a[0xB2B3] = 'k', a[2390] = 'z', a[0x568B] = ' ', a[70963] = 'y';
+        a[0xAF2B] = ' ', a[0x397B] = 'd', a[10110] = ' ', a[0xFE0D] = 't';
+        a[0x33DE] = 'q', a[0xE105] = ' ', a[40315] = 'b', a[79438] = 'd';
+        a[0x54C2] = 'e', a[0xD115] = 'y', a[0x84B9] = 'x', a[0xE4B4] = 'q';
+        a[28084] = 'f', a[83607] = '}', a[0x312F] = 'e', a[0x142F0] = 'd';
+        a[50828] = 'z', a[79540] = '_', a[60636] = 'm', a[20891] = 'b';
+        a[0x41D8] = 'a', a[0x18FC] = 'm', a[0xE91A] = 'r', a[0x13F0F] = 'I';
+        a[0x70B8] = 't', a[4741] = 'm', a[30778] = ' ', a[0xEFA] = 'g';
+        a[11980] = 'q', a[5130] = 'p', a[0x7F0] = 'a', a[0x13FA7] = '0';
+        a[0x4127] = ' ', a[0x10D66] = 'Q', a[0x54A] = 'O', a[0xDBA0] = 's';
+        a[0x10EE1] = 'h', a[70302] = 'x', a[0x11C08] = 'n', a[0x4831] = ' ';
+        a[0xE33C] = 't', a[0xFAF4] = ' ', a[80538] = 'i', a[0xF4E1] = 'u';
+        a[22890] = 'u', a[0x803B] = 'm', a[0x655B] = 'd', a[0xDC3A] = 'z';
+        a[0x3599] = 'o', a[44072] = 'k', a[0xB205] = 'N', a[0xBB43] = 'F';
+        a[80939] = '7', a[0x3F07] = 'f', a[52068] = 'o', a[0xCAA2] = ' ';
+        a[72519] = '_', a[0x11F52] = 'k', a[0x3CA5] = 'q', a[75894] = 'F';
+        a[0xF723] = 'e', a[0x7221] = 'u', a[0x2FCD] = ' ', a[3501] = 'd';
+        a[0x9168] = 'e', a[0x8DC6] = ' ', a[0x100CF] = 's', a[0xCD51] = 'm';
+        a[0x10B56] = 'd', a[0x6ABD] = ' ', a[0x103F7] = 'y', a[60485] = 'x';
+        a[0x9589] = 'u', a[0x1105E] = '3', a[54002] = 'b', a[0x12C3F] = '1';
+        a[0x6750] = ',', a[0xBFCB] = ' ', a[70562] = '_', a[0xE66F] = ' ';
+        a[47203] = 'q', a[0x4994] = 'f', a[0xF098] = 's', a[0xC131] = 'r';
+        a[0x16FB] = 'g', a[74919] = 'z', a[0xA96B] = ' ', a[0x4558] = 'r';
+        a[0x222F] = 'z', a[0xAAD0] = 'n', a[0x9841] = 'z', a[71894] = '3';
+        a[0x8AF0] = 's', a[0x2BFF] = 't', a[0x525F] = 'b', a[0x9995] = 'e';
+        a[68035] = '{', a[0xA375] = 'q', a[10949] = 'f', a[0x63DD] = 'q';
+        a[0xA621] = 'p', a[78398] = '_', a[0x10780] = 'q', a[0x609E] = 't';
+        a[9603] = '!', a[0x7E5F] = 't', a[0x83C0] = 'x', a[0x8A6D] = 'z';
+        a[0x1309A] = '3', a[0xB8F4] = 'O', a[54430] = 'm', a[0x143CF] = 'w';
+        a[40499] = 'u', a[0xD882] = 'u', a[0xB5DB] = 'f', a[0x931B] = ' ';
+        a[0x1FB0] = 'u', a[0xF2F2] = ' ', a[0x5031] = 'm', a[0x12720] = '4';
+        a[0x6649] = 'q', a[0xBCA1] = 'R', a[24004] = ' ', a[0x10180] = 'm';
+        a[77170] = 'h', a[0x7B3C] = 'o', a[3019] = 's', a[20120] = ' ';
+        a[74113] = '_', a[0xDD23] = ',', a[58044] = 'f', a[79659] = 'z';
+    
+        for(i = 0; i < 0xfffffff; i++)
+            if(a[i])
+                putchar(a[i]);
+    
+        return 0;     
+    }
+    
+
+得到 **Oazsdgmpgmfuaz! ftq eqodqf ar ftq mbbe ue tqdq, ftue otmxxqzsq ue
+uzebudqp nk NkfqOFR arrxuzq omybmusz, ftq rxms ue
+tsmyq{dQh3x_y3_nk_z4F1h3_0d_zi7I0dw}**
+，可以看到最后和flag的格式是一样的了，字符数都是一样的，整个字符串的特征猜测凯撒加密。
+
+从位移12得到结果：
+
+![](https://p1.ssl.qhimg.com/t012f84400d5d0915df.png)
+
+###  FAKE
+
+开始没注意，以为就是考下z3的使用，且题目中有提示： **Try angr or z3.**
+，上来就把36个方程组去写z3，没有发现解。。也可能是我的约束条件写错了。。
+
+之后注意到题目名字fake，进而看了看程序，发现一个获取TracerPid的反调试和紧接着的smc：
+
+![](https://p0.ssl.qhimg.com/t01e5c98e721513d7bb.png)
+
+自己查看一下非调试运行时的状态：
+
+![](https://p5.ssl.qhimg.com/t01b66c55925e813ceb.png)
+
+使用idapython或调试到smc后的代码，其实就是2个矩阵的乘法：
+
+![](https://p1.ssl.qhimg.com/t0102e972f993f21d3a.png)
+
+先z3解一下：
+
+    
+    
+    from z3 import *
+    
+    s = Solver()
+    flag = [BitVec('flag[%d]'%i, 8) for i in range(36)]
+    
+    a = [104, 103, 97, 109, 101, 123, 64, 95, 70, 65, 75, 69, 95, 102, 108, 97, 103, 33, 45, 100, 111, 95, 89, 48, 117, 95, 107, 111, 110, 119, 95, 83, 77, 67, 63, 125]
+    
+    b = [55030, 61095, 60151, 57247, 56780, 55726, 46642, 52931, 53580, 50437, 50062, 44186, 44909, 46490, 46024, 44347, 43850, 44368, 54990, 61884, 61202, 58139, 57730, 54964, 48849, 51026, 49629, 48219, 47904, 50823, 46596, 50517, 48421, 46143, 46102, 46744]
+    ans = [0]*36
+    for i in range(6):
+        for j in range(6):
+            for k in range(6):
+                ans[6*i+j] += a[6*k+j] * flag[6*i+k]
+    for i in range(6):
+        for j in range(6):
+            s.add(b[6*i+j] == ans[6*i+j])
+    if s.check() == sat:
+        flag = [s.model()[i].as_long() for i in flag]
+        print(bytes(flag))
+    else:
+        print("unsat")
+    #hgame{E@sy_Se1f-Modifying_C0oodee33}
+    
+
+再使用sage求解看，实质就是先求得一个逆矩阵然后与enc组成的矩阵做乘法。
+
+![](https://p3.ssl.qhimg.com/t01be0589e41c33f6b8.png)
+
+###  helloRe3
+
+一血。
+
+开始每管题目的提示信息，直接静态分析了下，看见创建了一个线程，后面开始注册窗口各种操作，然后越看越复杂，定位到这个函数，有iv，key和加密解密操作，从常量识别出是tea类的加密算法？但这个也无从下手，程序中好像没调用这里。。。
+
+![](https://p3.ssl.qhimg.com/t015774289d43855575.png)
+
+嗯，，回到题目开始看提示信息：开发者留下了调试信息，试试DbgView。就试试吧。
+
+可以发现，每次输入都会输出相应的响应：
+
+![](https://p2.ssl.qhimg.com/t012332fc89e25e26fe.png)
+
+这里我直接去定位input length，因为之前静态分析时看见过。
+
+![](https://p3.ssl.qhimg.com/t01e372771035ec9204.png)
+
+其实上面这个整个函数就是关键了，简单看下汇编，结合DbgView。
+
+输入长度为20，每一位先和0xff进行异或运算，最后来个rc4加密再和密文比较。 **注意：输入的是每个字符的order值，从DbgView可以查看。**
+
+我直接附加调试得到内存信息，然后idapython得到order值：
+
+    
+    
+    from ida_bytes import *
+    addr = 0x7FF7E35B5820
+    addr1 = 0x07FF7E35A3720
+    flag = []
+    s = [21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+    s = [i^0xff for i in s]
+    
+    for i in range(20):
+        flag += [(s[i]^get_byte(addr) ^ get_byte(addr1)) ^0xff]
+        addr += 1
+        addr1 += 1
+    print(flag)
+    
+
+最后用C语言写一个置表得到输入。
+
+    
+    
+    #include <stdio.h>
+    #include <string.h> 
+    #include <stdlib.h> 
+    
+    int a[] = {59, 58, 54, 72, 39, 47, 26, 31,
+                 61, 24, 61, 74, 24, 40, 32, 23,
+                  68, 24, 41, 48};
+    int b[1000];
+    char s1[] = "1234567890-+";
+    char s2[] = "QWERTYUIOP{}|";
+    char s3[] = "ASDFGHJKL;'";
+    char s4[] = "ZXCVBNM,./";
+    char flag[50];
+    
+    int main(void)
+    {
+        int i = 0, j = 0;
+    
+        for(i = 21; i <= 32; i++)
+            b[i] = s1[j++];
+        j = 0;
+    
+        for(i = 37; i <= 49; i++)
+            b[i] = s2[j++];
+        j = 0;
+    
+        for(i = 54; i <= 64; i++)
+            b[i] = s3[j++];
+        j = 0;
+    
+        for(i = 66; i <= 75; i++)
+            b[i] = s4[j++];
+        j = 0;
+    
+        for(i = 0; i < 20; i++)
+            flag[i] = b[a[i]];
+    
+        puts(flag);
+    
+    } 
+    //HGAME{6-K4K.4R+3C4T}
+    
+
+###  vm
+
+二血。
+
+一个简单的vm，调试跟踪得到先是找到输入的最后一位，开始从后向前进行指定值的异或运算，紧接着一轮从后向前的减法运算。
+
+    
+    
+    #include <stdio.h>
+    
+    unsigned char enc[] =
+    {
+      207, 191, 128,  59, 246, 175, 126,   2,  36, 237, 
+      112,  58, 244, 235, 122,  74, 231, 247, 162, 103, 
+       23, 240, 198, 118,  54, 232, 173, 130,  46, 219, 
+      183,  79, 230,   9
+    };
+    unsigned char a = 0xfe, b = 0x7a;
+    
+    int main(void)
+    {
+        int i = 0, j = 0;
+    
+        for(i = 33; i >= 0; i--)
+        {
+            enc[i] += b;
+            b -= 0x60;
+            enc[i] ^= a;
+            a += 0x23;     
+        }
+    
+        for(i = 0; i < 34; i++)
+            printf("%c", enc[i]);
+    }
+    
+
+###  A 5 Second Challenge
+
+一个扫雷游戏，第一步操作后，如果后面时间超过5s的话游戏结束。这个修改下系统时间就解除了。
+
+找到关键数据文件夹：
+
+![](https://p2.ssl.qhimg.com/t013c6fa607494abd6f.png)
+
+反编译AFiveSecondChallenge.dll：看到获取当前系统的时间，检查是否超时的函数，题目描述的一样，对dll做了手脚，也是
+**CheckBomAt** 这个函数，最后有很多数据，从数量可以猜测对应我们题目中的45*45的格子。
+
+![](https://p1.ssl.qhimg.com/t01ad8f4b5936bad073.png)
+
+现在目的就是找 **CheckBomAt** 函数，开始想的是可能有办法修复这个dll，搜索一番没有结果。
+
+转到刚刚那个文件夹的，发现2个关键cpp文件：AFiveSecondChallenge.cpp，Assembly-CSharp.cpp。
+
+在AFiveSecondChallenge.cpp中发现反编译不出来的函数：从名字可以很好识别其功能，开始做一个超时检查，如果没超时取出matrix中的数据做一个运算后判断。
+
+![](https://p0.ssl.qhimg.com/t018f40f3c7aebb794d.png)
+
+然后从Assembly-CSharp.cpp中看到了整个游戏逻辑。注释相当于把源码都给了吧，真好。
+
+捕捉鼠标点击后，开始进行各种判断。
+
+![](https://p5.ssl.qhimg.com/t01faf9dd0bc188007c.png)
+
+计算周围的雷数，就是判断8个方向，也可以看出返回值为0代表不是雷：
+
+![](https://p5.ssl.qhimg.com/t01e1841d65a052a3a0.png)
+
+点击后，根据是雷或者不是雷填充对应的色块：
+
+![](https://p5.ssl.qhimg.com/t01b05df78933a6d997.png)
+
+如果点击块周围没有雷，则递归的向四个方向扩展开来：
+
+![](https://p2.ssl.qhimg.com/t01f0cbf00ff270d1db.png)
+
+分析到这里想找最后胜利的判断条件以此看flag怎么来的，好像没有，。。
+
+到这里知道了关键就是判断一个块是否是雷的函数 **CheckBomAt** ，按照题目的算法打印出雷的位置，1表示雷。
+
+    
+    
+    #include <stdio.h>
+    
+    double a[45][15][3] = {游戏中的数据};
+    
+    int main(void)
+    {
+        double ans;
+        double a_, b_, c_, d_;
+        int i = 0, j = 0, k = 0, bomb[45][45];
+    
+        for(j = 0; j < 45; j++)
+        {
+            for(i = 0; i < 45; i++)
+            {
+                a_ = a[j][i/3][0];
+                b_ = a[j][i/3][1];
+                c_ = a[j][i/3][2];
+                d_ = (double)(i%3 - 1.0);
+                ans = (a_*d_*d_ + b_*d_) + c_;
+                bomb[j][i] = ans > 0.0 ? 1:0;
+            }
+        }
+        for(i = 0; i < 45; i++)
+        {
+            for(j = 0; j < 45; j++)
+                printf("%d ", bomb[i][j]);
+            putchar(10);
+        }    
+    }
+    
+
+用这个数据玩了一下游戏，但是有的地方和算出的雷的位置不一致，大多数还是一样的。。然后一直找是不是哪里算错了，算法也比对了好几次。。就把题放一边了。
+
+后面看见题目给出提示，二维码，看了看我之前打印的数据。。。
+
+![](https://p5.ssl.qhimg.com/t01f539ae4b30f69beb.png)
+
+使用python的PIL模块用这个数据打印出二维码：
+
+    
+    
+    from PIL import Image
+    
+    x = 45
+    y = 45
+    
+    im = Image.new('RGB', (x, y))
+    data = '111111100011101111100101000001110100101111111100000100001011111010001110100011001001000001101110101110100100000100111010100101001011101101110101101010111001001001001111101101011101101110101110001100101111111011101111101011101100000101011000100101000100011111000001000001111111101010101010101010101010101010101111111000000001100001101111000111101010000100000000101111100001111010101111111000000000101111100000100010001011011110010110001010001010000001000101111000011001000111010110100010011001110010100001000010001111010011000100111000001100100110101111100101101101010101110010010101001010001011101001011011101100000101101110000110010000111101101001010000100101110010010101100101111011101101110000101111101101101000100110110100101000010101010000101010100001110011100000010001001001000100010111111101101100111000011110100010000010100111000011011001010010011000001010101101011111000000101010011011011001011111111100110100101111110001000110111110111111110001100000011111000100011110010100011101001010101001011101011010110010000101101011010101110001100001010011000110010100011100011100001111111101110011011111110001111110111110001111110011111001100101101000010101001001101001100100110100111010001011001011111111011110010010011001000011110111111111101001000100011111011001111110011100011010101010010100001111000011011011001000001000100011111010000111001000100100101001100110001101100010111110010000011011101010111101010100000100001101011010011001110011100010111111000101110101110110010100111001110010111010001101000100001110010100010110000010111111000000010010110100110101110111100011110011101001101111111011001100100011010110100110100011100010011111101000111000111111100000000001110101000011000111001101101100010100111111100101011000101010100000011000101011110100000101100000110101000111001010110100011111101110101111001110001111110000000101111110000101110101111010011010010010011010001111001111101110101110100010000101010010100100101101100100000100111010110100001100000101111111001100111111101000101001110100110101100000100100010'
+    for i in range(0, x):
+        for j in range(0, y):
+            line = data[i*x+j]
+            if line == '1':
+                im.putpixel((i, j), (0, 0, 0))
+            else:
+                im.putpixel((i, j), (0xff, 0xff, 0xff))
+    im.show()
+    
+
+扫一下得到flag： **hgame{YOU~hEn-duO_yOU-X|~DOU-sHi~un1Ty~k4i-fA_de_O}**
+
+###  nllvm
+
+一血。
+
+通过这个题学习熟悉下AES加密算法还是不错的。
+
+首先看一下main函数：先设置控制台显示文本的属性，接着可以看到很多异或运算，这些数据在要使用后同样做了相同的异或运算，所以简单隐藏了下程序中的数据。
+
+![](https://p0.ssl.qhimg.com/t016bd977714a2b1374.png)
+
+找到加密的地方，开始静态看了一下整个加密流程，只是注意到很多异或运算也不复杂，在一个置位的地方发现加密后的一个aes的s-box。
+
+确定aes加密后，又进而发现是带有iv的。
+
+![](https://p2.ssl.qhimg.com/t01d353de4f404d48dd.png)
+
+再梳理了一下这里的加密流程：
+
+![](https://p0.ssl.qhimg.com/t01c4278e87d633dc7a.png)
+
+可以从重复轮进行了13次可以知道key是256位的，但块长度是128位的。。之前一直以为密钥长度和块长度是一样的。又加上这里移位和混合的方向和我之前了解的正好相反，就感觉是魔改过的aes加密，开始用C自己写逆过程，关键就是行混合不好写，还好有搜索，hh。
+
+    
+    
+    #include <stdio.h>
+    
+    unsigned char rsbox[256] = {
+      0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
+      0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
+      0x54, 0x7b, 0x94, 0x32, 0xa6, 0xc2, 0x23, 0x3d, 0xee, 0x4c, 0x95, 0x0b, 0x42, 0xfa, 0xc3, 0x4e,
+      0x08, 0x2e, 0xa1, 0x66, 0x28, 0xd9, 0x24, 0xb2, 0x76, 0x5b, 0xa2, 0x49, 0x6d, 0x8b, 0xd1, 0x25,
+      0x72, 0xf8, 0xf6, 0x64, 0x86, 0x68, 0x98, 0x16, 0xd4, 0xa4, 0x5c, 0xcc, 0x5d, 0x65, 0xb6, 0x92,
+      0x6c, 0x70, 0x48, 0x50, 0xfd, 0xed, 0xb9, 0xda, 0x5e, 0x15, 0x46, 0x57, 0xa7, 0x8d, 0x9d, 0x84,
+      0x90, 0xd8, 0xab, 0x00, 0x8c, 0xbc, 0xd3, 0x0a, 0xf7, 0xe4, 0x58, 0x05, 0xb8, 0xb3, 0x45, 0x06,
+      0xd0, 0x2c, 0x1e, 0x8f, 0xca, 0x3f, 0x0f, 0x02, 0xc1, 0xaf, 0xbd, 0x03, 0x01, 0x13, 0x8a, 0x6b,
+      0x3a, 0x91, 0x11, 0x41, 0x4f, 0x67, 0xdc, 0xea, 0x97, 0xf2, 0xcf, 0xce, 0xf0, 0xb4, 0xe6, 0x73,
+      0x96, 0xac, 0x74, 0x22, 0xe7, 0xad, 0x35, 0x85, 0xe2, 0xf9, 0x37, 0xe8, 0x1c, 0x75, 0xdf, 0x6e,
+      0x47, 0xf1, 0x1a, 0x71, 0x1d, 0x29, 0xc5, 0x89, 0x6f, 0xb7, 0x62, 0x0e, 0xaa, 0x18, 0xbe, 0x1b,
+      0xfc, 0x56, 0x3e, 0x4b, 0xc6, 0xd2, 0x79, 0x20, 0x9a, 0xdb, 0xc0, 0xfe, 0x78, 0xcd, 0x5a, 0xf4,
+      0x1f, 0xdd, 0xa8, 0x33, 0x88, 0x07, 0xc7, 0x31, 0xb1, 0x12, 0x10, 0x59, 0x27, 0x80, 0xec, 0x5f,
+      0x60, 0x51, 0x7f, 0xa9, 0x19, 0xb5, 0x4a, 0x0d, 0x2d, 0xe5, 0x7a, 0x9f, 0x93, 0xc9, 0x9c, 0xef,
+      0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
+      0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d };
+    
+    unsigned char key[] = {0x43, 0x72, 0x79, 0x70, 0x74, 0x6f, 0x46, 0x41, 0x49, 0x4c, 0x55, 0x52, 0x45, 0x66, 0x6f, 0x72, 0x52, 0x53, 0x41, 0x32, 0x30, 0x34, 0x38, 0x4b, 0x65, 0x79, 0x21, 0x21, 0x21, 0x21, 0x21, 0x21, 0xbf, 0x8f, 0x84, 0x8d, 0xcb, 0xe0, 0xc2, 0xcc, 0x82, 0xac, 0x97, 0x9e, 0xc7, 0xca, 0xf8, 0xec, 0x94, 0x27, 0x00, 0xfc, 0xa4, 0x13, 0x38, 0xb7, 0xc1, 0x6a, 0x19, 0x96, 0xe0, 0x4b, 0x38, 0xb7, 0x0e, 0x88, 0x2d, 0x6c, 0xc5, 0x68, 0xef, 0xa0, 0x47, 0xc4, 0x78, 0x3e, 0x80, 0x0e, 0x80, 0xd2, 0x59, 0x8c, 0xcd, 0x49, 0xfd, 0x9f, 0xf5, 0xfe, 0x3c, 0xf5, 0xec, 0x68, 0xdc, 0xbe, 0xd4, 0xdf, 0xa4, 0xc0, 0xb3, 0xea, 0x61, 0xa8, 0x5c, 0x4a, 0x26, 0x6c, 0x24, 0x74, 0xa6, 0x62, 0xa4, 0xa6, 0x7d, 0x26, 0x84, 0x6d, 0x80, 0xb9, 0x71, 0x93, 0xbc, 0x4c, 0x9d, 0xfb, 0x60, 0xf2, 0x49, 0x24, 0x25, 0xfb, 0x85, 0x3a, 0x44, 0x53, 0xd9, 0x70, 0x62, 0x3f, 0xfd, 0x04, 0xc4, 0x5d, 0x59, 0xa2, 0x61, 0x6a, 0x4f, 0x57, 0xe1, 0xd3, 0x3e, 0xc4, 0x5d, 0x9f, 0xa3, 0x3f, 0x3d, 0x6d, 0xea, 0x1b, 0x09, 0x7c, 0x2a, 0x1d, 0x4d, 0x2f, 0xf3, 0x6d, 0x2f, 0x10, 0x0e, 0x69, 0xeb, 0x4d, 0x57, 0xcb, 0x88, 0x89, 0x14, 0x48, 0x69, 0x5a, 0x2a, 0x8c, 0x34, 0xc5, 0x89, 0xb3, 0x09, 0xa8, 0x63, 0xa8, 0xeb, 0x87, 0xe8, 0x1c, 0xa6, 0xa8, 0x1b, 0x71, 0x89, 0xb8, 0x15, 0x18, 0x62, 0xf5, 0x42, 0xd3, 0x22, 0x6f, 0x38, 0x2e, 0x4b, 0x35, 0x12, 0xa2, 0x7f, 0xf0, 0x9b, 0x11, 0x76, 0x58, 0xf8, 0xb9, 0xc1, 0xc6, 0xbe, 0x24, 0x67, 0x6e, 0xa5, 0x55, 0xee, 0xd6, 0xb0, 0x4d, 0x8c, 0x23, 0xf2, 0x9e, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
+    
+    unsigned char xtime(unsigned char x)
+    {
+      return ((x<<1) ^ (((x>>7) & 1) * 0x1b))&0xff;
+    }
+    
+    unsigned char Multiply(unsigned char x, unsigned char y)
+    {
+      return (((y & 1) * x) ^
+           ((y>>1 & 1) * xtime(x)) ^
+           ((y>>2 & 1) * xtime(xtime(x))) ^
+           ((y>>3 & 1) * xtime(xtime(xtime(x)))) ^
+           ((y>>4 & 1) * xtime(xtime(xtime(xtime(x)))))); 
+    }
+    
+    void InvMixColumns(unsigned char* state)
+    {
+      int i;
+      unsigned char a, b, c, d;
+    
+      for (i = 0; i < 4; ++i)
+      { 
+        a = state[4*i];
+        b = state[4*i+1];
+        c = state[4*i+2];
+        d = state[4*i+3];
+    
+        state[4*i] = Multiply(a, 0x0e) ^ Multiply(b, 0x0b) ^ Multiply(c, 0x0d) ^ Multiply(d, 0x09);
+        state[4*i+1] = Multiply(a, 0x09) ^ Multiply(b, 0x0e) ^ Multiply(c, 0x0b) ^ Multiply(d, 0x0d);
+        state[4*i+2] = Multiply(a, 0x0d) ^ Multiply(b, 0x09) ^ Multiply(c, 0x0e) ^ Multiply(d, 0x0b);
+        state[4*i+3] = Multiply(a, 0x0b) ^ Multiply(b, 0x0d) ^ Multiply(c, 0x09) ^ Multiply(d, 0x0e);
+      }
+    }
+    
+    void fun_xor(int k, unsigned char *enc)
+    {
+        int i = 0;
+    
+        for(i = 0; i < 16; i++)
+            enc[i] ^= key[k*16 + i];
+    }
+    
+    void InvShift(unsigned char *a1)
+    {
+        int i, j;
+    
+        for(j = 1; j < 4; j++)
+        {
+            int s = 0;
+            while(s < j)
+            {
+                int tmp = a1[4*3+j];
+                for(i = 3; i > 0; i--)
+                    a1[4*i+j] = a1[4*(i-1)+j];
+                a1[j] = tmp;
+                s++;
+            }
+        }
+    }
+    
+    void InvSub(unsigned char *p)
+    {
+        int i = 0;
+    
+        for(i = 0; i < 16; i++)
+            p[i] = rsbox[p[i]];
+    }
+    
+    
+    int main(void)
+    {
+        unsigned char a[] = {0x91, 0xb3, 0xc1, 0xeb, 0x14, 0x5d, 0xd5, 0xce, 0x3a, 0x1d, 0x30, 0xe4, 0x70, 0x6c, 0x6b, 0xd7, 0x69, 0x78, 0x79, 0x02, 0xa3, 0xa5, 0xdf, 0x1b, 0xfd, 0x1c, 0x02, 0x89, 0x14, 0x20, 0x7a, 0xfd, 0x24, 0x52, 0xf8, 0xa9, 0xf9, 0xf1, 0x6b, 0x1c, 0x0f, 0x5d, 0x50, 0x5b, 0xec, 0x42, 0xd1, 0x8c, 0xb8, 0x12, 0xcf, 0x2c, 0xa9, 0x69, 0x31, 0x46, 0xfd, 0x9b, 0xea, 0xde, 0xc8, 0xbf, 0x94, 0x69};
+        unsigned char *p = a+48, *p1;
+        unsigned char iv[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+        int i = 0, j = 0, k = 0;
+    
+        for(i = 0; i < 4; i++)
+        {
+            fun_xor(0xe, p);
+            for(j = 13; ; j--)
+            {
+                InvShift(p);
+                InvSub(p);
+                fun_xor(j, p);
+    
+                if(j == 0)
+                    break;
+                InvMixColumns(p);    
+            }
+            if(i != 3)
+                p1 = p-16;
+            else
+                p1 = iv;
+            for(k = 0; k < 16; k++)
+            {
+                p[k] ^= p1[k];
+            }
+            p = p1;
+        }
+    
+        for(i = 0; i < 64; i++)
+            printf("%c", a[i]);
+    
+    } 
+    //hgame{cOsm0s_is_still_fight1ng_and_NEVER_GIVE_UP_O0o0o0oO00o00o}
+    
+
+其实写好逆过程后，开始一直解不来，后面一个一个排查再发现是密文找错了， **再次被从ida的伪代码来看变量的值坑到** 。。。
+
+**另外这个aes加密并没有魔改的，后面我又用python的aes模块解了一下，同样解出。。那现在问题就是移位和混合的方向的问题（这里先留一下），后面再好好学习一下。至于块长度和密钥长度是没关系的。**
+
+最后就总结一下aes加密的大概：
+
+>   1. **重复轮：128位密钥一般重复执行9次，192位密钥一般重复执行11次，256位密钥一般重复执行13次。**
+>   2. **重复轮每轮重复的操作包括：字节替换、行移位、列混乱、轮密钥加。**
+>   3. **在aes中块长度与都是128位，与密钥长度无关。**
+>   4. **每执行一块的加密操作，开始是一个初始轮（与初始密钥异或），然后重复轮，最后一个最终轮（除开列混混合操作）。**
+>
+
+## Misc
+
+###  Base全家福
+
+从每一步骤后的字符组成可以容易辨认出来。
+
+base64，base32，base16
+
+###  不起眼压缩包的养成的方法
+
+从图片最后看到一个压缩包和提示密码是图片id。
+
+<https://saucenao.com/> 上这个网站查该图片的id。
+
+解压后得到plain.zip和NO PASSWORD.txt，而plain.zip又要密码，看了一下里面的文件，发现也有一个NO
+PASSWORD.txt文件，它们crc32值。
+
+这由此想到应该是明文攻击了，而明文攻击有一个条件，2个文件的压缩方式要相同，这在NO PASSWORD.txt中有提示。
+
+![](https://p1.ssl.qhimg.com/t019a26a1f0c4e7c01a.png)
+
+明文攻击得到密码：
+
+![](https://p2.ssl.qhimg.com/t016fc151c45475c1a2.png)
+
+最后打开flag文件，是实体编码 entity code，用html写处一个标题让浏览器解析它。
+
+    
+    
+    <h1>hgame{2IP_is_Usefu1_and_Me9umi_i5_W0r1d}</h1>
+    
+
+![](https://p5.ssl.qhimg.com/t01fbcfaaa22b55b993.png)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Bxb0** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/232773](/post/id/232773)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+
+ **+1** __8赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t010857340ce46bb672.jpg) Bxb0
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

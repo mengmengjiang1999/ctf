@@ -1,0 +1,161 @@
+**HW期间，为防范钓鱼，即日起FreeBuf将取消投稿文章的一切外部链接。给您带来的不便，敬请谅解~**
+
+![](https://image.3001.net/images/20210407/1617801074_606daf7270534a29a87ee.png!small)
+
+## 关于Scylla
+
+Scylla是一款基于Python
+3.6开发的OSINT工具，Scylla可以帮助广大研究人员针对Instagram和Twitter账户、网站/网络服务器、电话号码和姓名执行高级搜索。除此之外，Scylla还允许研究人员查找跟特定用户名相关的所有社交媒体的配置文件（支持主流平台）。值得一提的是，Scylla还支持Shodan引擎，所以我们还可以使用Scylla搜索物联网设备，而且它还带有非常专业的地理定位功能。Scylla带有一个跟财务相关的模块，可以帮助研究人员检查信用卡/借记卡号码是否在数据泄露事件中被泄露出去，并返回信用卡/银行标识代码上的信息。
+
+## 工具安装
+
+广大研究人员可以使用下列命令将该项目源码克隆至本地，并完成工具的依赖组件配置：
+
+    
+    
+    git clone https://www.github.com/DoubleThreatSecurity/Scylla
+    
+    cd Scylla
+    
+    sudo python3 -m pip install -r requirments.txt
+    
+    python3 scylla.py --help
+
+## 工具使用
+
+下列命令将返回指定Instagram和Twitter账户的账户信息：
+
+    
+    
+    python3 scylla.py --instagram davesmith --twitter davesmith
+
+下列命令将返回指定用户名相关的所有社交媒体账号信息（支持主流平台）：
+
+    
+    
+    python3 scylla.py --username johndoe
+
+下列命令将重复执行第二条命令，但它还会进行深度Google搜索（-l参数）。注意，在使用空格搜索查询时，请确保在引号中添加等号，后跟查询语句。如果你没有添加空格的话，应该这样搜索：
+
+    
+    
+    python3 scylla.py --username johndoe -l query
+
+下列命令将返回有关Web服务器/网站的关键WHOIS信息：
+
+    
+    
+    python3 scylla.py --info google.com
+
+下列命令将会导出指定手机号的相关信息（包括运营商和地理位置等）：
+
+    
+    
+    python3 scylla.py -r +14167777777
+
+下列命令将会导出Shodan可以搜索到的所有Apache服务器的IP地址，这里需要使用到API密钥：
+
+    
+    
+    python3 scylla.py -s apache
+
+下列命令将导出互联网上所有开放的网络摄像头的IP地址和端口，shodan可以根据您的API密钥获取这些地址和端口。你也可以只使用webcam查询，但使用webcamxp会返回更详细的结果：
+
+    
+    
+    python3 scylla.py -s webcamxp
+
+下列命令将给出指定IP地址的地理定位信息，它将会返回经纬度、城市、州/省、国家、邮政编码和地区信息：
+
+    
+    
+    python3 scylla.py -g 1.1.1.1
+
+下列命令将检索输入的信用卡/借记卡号码的IIN信息，并检查信用卡/借记卡号码是否在数据泄露事件中被泄露出去。Scylla将返回该IIN的卡片品牌、卡片方案、卡片类型、货币、国家和银行信息。注意：如果你想查看是否泄露，请输入完整的卡号。如果您只想检查前6-8位的数据（即银行标识代码/个人识别号），只需输入信用卡/借记卡号码的前6、7或8位。最后，生成的所有这些信息都是公开的，因为这是一个OSINT工具，不能生成任何透露细节的信息。这样可以防止恶意使用：
+
+    
+    
+    python3 scylla.py -c 123456789123456
+
+## 工具运行菜单
+
+    
+    
+    usage: scylla.py [-h] [-v] [-ig INSTAGRAM] [-tw TWITTER] [-u USERNAME]
+    
+                     [--info INFO] [-r REVERSE_PHONE_LOOKUP] [-l LOOKUP]
+    
+                     [-s SHODAN_QUERY] [-g GEO] [-c CARD_INFO]
+    
+     
+    
+    optional arguments:
+    
+      -h, --help            show this help message and exit
+    
+      -v, --version         returns scyla's version
+    
+      -ig INSTAGRAM, --instagram INSTAGRAM
+    
+                            return the information associated with specified
+    
+                            instagram account
+    
+      -tw TWITTER, --twitter TWITTER
+    
+                            return the information associated with specified
+    
+                            twitter account
+    
+      -u USERNAME, --username USERNAME
+    
+                            find social media profiles (main platforms) associated
+    
+                            with given username
+    
+      --info INFO           return information about the specified website(WHOIS)
+    
+                            w/ geolocation
+    
+      -r REVERSE_PHONE_LOOKUP, --reverse_phone_lookup REVERSE_PHONE_LOOKUP
+    
+                            return information about the specified phone number
+    
+                            (reverse lookup)
+    
+      -l LOOKUP, --lookup LOOKUP
+    
+                            performs a google search of the 35 top items for the
+    
+                            argument given
+    
+      -s SHODAN_QUERY, --shodan_query SHODAN_QUERY
+    
+                            performs a an in-depth shodan search on any simple
+    
+                            query (i.e, 'webcamxp', 'voip', 'printer', 'apache')
+    
+      -g GEO, --geo GEO     geolocates a given IP address. provides: longitude,
+    
+                            latitude, city, country, zipcode, district, etc.
+    
+      -c CARD_INFO, --card_info CARD_INFO
+    
+                            check if the credit/debit card number has been pasted
+    
+                            in a breach...dumps sites. Also returns bank
+    
+                            information on the IIN
+
+## API相关
+
+项目中带有的用于反向电话号码查找功能的API最多只支持发送250次请求，免费版本肯定会被用完。如果要继续生成API密钥，请访问https://www.numverify.com，并在创建帐户后选择免费方案。此时，需要打开scylla.py文件，并替换其中的原始API密钥即可。
+
+## 许可证协议
+
+本项目的开发与发布遵循MIT开源许可证协议。
+
+## 项目地址
+
+Scylla：https://github.com/DoubleThreatSecurity/Scylla
+

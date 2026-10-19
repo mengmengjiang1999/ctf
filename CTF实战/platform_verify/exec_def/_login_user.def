@@ -1,0 +1,7 @@
+{
+	"CUBE_PATH":"/root/centoscloud/cube-1.3"
+}
+{
+	"CUBE_APP_PATH":"/home/player/platform_verify",
+	"INSTANCE":"instance/node/user",
+}

@@ -1,0 +1,244 @@
+**Platinum黑客组织是亚太地区技术最先进的APT之一。在最近的分析中发现Platinum使用了一种新的后门，我们称之为Titanium。Titanium分为多个阶段，通过模仿常见软件将每一步都隐藏起来。**
+
+研究中发现这次攻击的主要目标位于南亚和东南亚。
+
+![](https://image.3001.net/images/20191112/1573525660_5dca189cad17f.png!small)
+
+## 简介
+
+TitaniumAPT包括复杂的dropping、下载和安装阶段，最后一步是部署木马后门。每一步都模仿已知的软件，如安全软件、制作DVD视频的软件、声音驱动软件等。
+
+默认包括以下内容：
+
+> 1、能够以系统用户身份执行代码的攻击
+>
+> 2、下载下一阶段下载程序的shellcode
+>
+> 3、下载包含Windows任务安装脚本的SFX下载程序
+>
+> 4、带有木马后门安装程序的SFX
+>
+> 5、安装程序脚本（ps1）
+>
+> 6、DLL（加载程序）
+>
+> 7、后门本身
+
+## 传播媒介
+
+TitaniumAPT使用带有恶意代码的内网网站开始传播。
+
+### 1.Shellcode
+
+已知的传播方式是使用需要注入进程的Shellcode。在本例中是winlogon.exe。
+
+### 2.包装器dll
+
+攻击者使用各种“包装器”。每个包装通常是一个COM
+DLL，带有相应的导出函数。这些库的主要目的是解密文件并将文件加载到系统内存中，然后将对包装器本身的调用重定向到有效payload的导出函数。
+
+另一种包装器DLL的设计目的是从调用方传递的导出函数参数中获取命令行并创建新进程。
+
+### 3.Windows任务安装程序（SFX）
+
+这是一个密码加密的SFX文档，可以通过BITS下载程序下载，密码被硬编码到下载程序中，下载程序使用-p命令行参数来解密SFX。其目的是安装Windows任务，持久控制受感染的系统。
+
+### 4.木马后门安装程序（SFX）
+
+后门本身使用一个SFX文档，必须使用密码从命令行启动该文件才能将其解压缩。
+
+### 5.BITS下载程序
+
+此组件用于从C&C服务器下载加密文件，解密并启动它们。
+
+## Shellcode
+
+Shellcode不需要以前加载的库（Kernel32.dll除外）。它的唯一目的是连接到硬编码的C&C地址，下载加密的有效负载（受密码保护的SFX），然后使用硬编码密码解密并启动它。通常的命令行是：
+
+    
+    
+    "rundll32 "$temp\IOZwXLeM023.tmp",GetVersionInfo -t 06xwsrdrub2i84n6map3li3vz3h9bh4vfgcw"  
+    
+
+## BITS Downloader
+
+BITS下载程序是一个DLL文件，它只有一个导出函数：getversioninfo。这个库的主要目的是从C&C下载加密文件并启动它们。
+
+### 执行顺序
+
+下载程序要做的第一件事是检查是否使用系统用户启动。如果是，它将使用WMI启动命令行参数（这些参数传递给下载程序DLL加载的二进制文件）。如果不是使用系统用户启动的，下载程序会将命令行参数传递到参数分析器中
+
+![](https://image.3001.net/images/20191112/1573527385_5dca1f59bfb78.png!small)
+
+如果其中一个参数存在，下载器将收集有关已安装的防病毒产品的信息，并将其发送到C&C。作为响应，C&C发送一个在%USERPROFILE%目录中下载的文件。为了解密下载的文件，下载程序使用字符串加密密钥的MD5散列。
+
+确认URL请求和文件下载
+
+Default (hardcoded) URL: <http://70.39.115.196/payment/confirm.gif> The
+request is a string such as: <http://70.39.115.196/payment/confirm.gif?f=1>
+(x86) <http://70.39.115.196/payment/confirm.gif?f=2> (x64)
+
+Payload
+
+这是加密文件的结构：
+
+    
+    
+    typedef struct {
+    
+        byte hash[16]; // md5 hash of the following data
+    
+        dword data_size;
+    
+        byte data[data_size];
+    
+    } enc_data;  
+    
+
+下载程序并检查数据字段哈希，如果哈希正确，则执行以下操作：
+
+> 1、附加扩展（DLL或EXE，具体取决于数据类型）
+>
+> 2、将下载的文件存储在%TMP%文件夹中
+
+下载程序通过命令行来启动下载的文件。如果文件是DLL，命令行将是：
+
+    
+    
+    "%systemroot%\system32\rundll32.exe %(SystemTimeAsFileTime.dwLowDateTime)%.TMP,-peuwewh383eg -t 06xwsrdrub2i84n6map3li3vz3h9bh4vfgcw"  
+    
+
+如果是exe文件：
+
+    
+    
+    %(SystemTimeAsFileTime.dwLowDateTime)%.TMP -peuwewh383eg -t 06xwsrdrub2i84n6map3li3vz3h9bh4vfgcw  
+    
+
+执行后进行自删除：
+
+    
+    
+    /c for /L %i in (1,1,100) do ( for /L %k in (1,1,100) do (del /f /q module_path > NUL & if not exist module_path exit /b 0))  
+    
+
+### 文件启动
+
+要启动下载的文件，下载程序使用WMI类Win32_ProcessStartup、Win32_Process方法。
+
+### 使用BITS下载文件
+
+下载程序使用BITS服务及其COM接口IBackgroundCopyManager。它创建一个名为Microsoft
+Download的任务，然后指定远程和本地文件路径。
+
+## Windows任务安装
+
+包括以下内容：
+
+![](https://image.3001.net/images/20191113/1573608386_5dcb5bc279843.png!small)
+
+下载内容：
+
+![](https://image.3001.net/images/20191113/1573608410_5dcb5bda16401.png!small)
+
+结果：
+
+![](https://image.3001.net/images/20191113/1573608443_5dcb5bfb409d5.png!small)
+
+执行参数：
+
+![](https://image.3001.net/images/20191113/1573608473_5dcb5c198615b.png!small)
+
+### p.bat
+
+它启动h.ps1脚本以获取有关系统代理设置的信息。之后启动e.ps1脚本来计算对C&C的请求中使用的SystemID。
+
+### Request 1
+
+![](https://image.3001.net/images/20191113/1573608569_5dcb5c79e7f8a.png!small)
+
+![](https://image.3001.net/images/20191113/1573608596_5dcb5c9469f58.png!small)
+
+下载x.dat文件，并由f1.ps1脚本解密生成u.xml。
+
+### Request 2
+
+![](https://image.3001.net/images/20191113/1573608679_5dcb5ce77b075.png!small)
+
+下载b.dat文件，f2.ps1脚本解密生成i.bat。
+
+### Task installation
+
+任务安装：
+
+![](https://image.3001.net/images/20191113/1573608785_5dcb5d51dd359.png!small)
+
+## 后门安装
+
+文件解压位置：
+
+![](https://image.3001.net/images/20191113/1573608868_5dcb5da461913.png!small)
+
+![](https://image.3001.net/images/20191113/1573608895_5dcb5dbf4f9e1.png!small)
+
+### psinstrc.ps1
+
+psinstrc.ps1是安装脚本，会将DvDupdate.dll注册为“DVDMaker帮助”服务并将其入口点设置为DllGetClassObject，它需要管理员权限才能正确执行。
+
+有两种安装方式：
+
+> 1、系统服务，以DllGetClassObject exported函数作为ServiceMain函数
+>
+> 2、COM对象，用它自己替换现有的CLSID注册表路径
+
+### DvDupdate.dll
+
+这是一个服务DLL，是一个有效payload装载机。
+
+整个代码通过不同的Windows API调用和循环混淆，不是为了使逆向工程更难，而是为了绕过一些简单的仿真引擎。
+
+### DllGetClassObject
+
+加载程序创建一个线程来解密负载，恢复其PE和MZ头，然后将其加载到内存中并启动它。
+
+### nav_downarrow.png
+
+其中包含payload，负载是具有后门功能的DLL文件。
+
+它所做的第一件事是从SFX中解密另一个加密的二进制文件（包含配置数据）：
+
+![](https://image.3001.net/images/20191113/1573609340_5dcb5f7ccb51f.png!small)
+
+配置数据：
+
+    
+    
+    the C&C address
+    traffic encryption key
+    the UserAgent string
+    other less important parameters  
+    
+
+接下来会启动线程，负责从C&C服务器接收命令并发送响应；初始化C&C通信，发送一个base64编码的请求，该请求包含唯一的系统ID、计算机名称和硬盘序列号，之后开始接收命令；为了从C&C接收命令向C&C发送一个空请求。它使用配置中的UserAgent字符串和一个特殊的cookie生成算法来准备请求，恶意软件还可以从Internet
+Explorer获取代理设置；为了响应这个请求，C&C使用一个包含隐写数据的PNG文件进行应答。此数据使用与C&C请求相同的密钥加密。解密的数据包含后门命令和参数。
+
+### C&C命令
+
+> 从文件系统中读取任何文件并将其发送到C&C
+>
+> 删除文件系统中的文件
+>
+> 下载文件并运行
+>
+> 运行命令行并将执行结果发送到C&C
+>
+> 更新配置参数（AES加密密钥除外）
+>
+> 交互模式
+
+## 总结
+
+TitaniumAPT有一个非常复杂的渗透方案，它涉及许多步骤，需要所有步骤之间的良好协调。此外，使用了加密和无文件技术，文件系统中的任何文件都不会被检测为恶意文件，并模仿合法软件使检测更加困难。
+
+ ***参考来源：[securelist](https://securelist.com/titanium-the-platinum-group-strikes-again/94961/)，由Kriston编译，转载请注明来自FreeBuf.COM**
+

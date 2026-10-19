@@ -1,0 +1,372 @@
+##  0x00 写在前面
+
+**攻防对立。程序调试与反调试之间的对抗是一个永恒的主题。在安卓逆向工程实践中，通过修改和编译安卓内核源码来对抗反调试是一种常见的方法。但网上关于此类的资料比较少，且都是基于AOSP（即"Android
+开放源代码项目",可以理解为原生安卓源码）进行修改，然后编译成二进制镜像再刷入Nexus 或者Pixel 等
+谷歌亲儿子手机。但因为谷歌的亲儿子在国内没有行货销售渠道，市场占有率更多的是国产手机，而修改国产手机系统内核的教程却很少，加之部分国产手机的安卓内核和主线
+AOSP
+存在些许差异，照搬原生安卓代码的修改方法无法在国产手机上实现某些功能，甚至无法编译成功。所以本文以某国产手机为例，通过研究其内核源码，对关键代码进行分析、修改，编译内核、打包成刷机镜像，对全过程予以展示。**
+
+##  0x01 常见反调试手段及对抗策略简介
+
+在安卓程序的开发过程中，反调试的手段有很多种，简单列举若干：
+
+**(1) 检测特定进程或端口号。** 如 IDA Pro 在对安卓应用进行调试时，需要在手机端启动调试程序 android_server
+，该调试程序默认开启端口23946。目标程序若发现手机里有 android_server
+进程或开启了端口23946，目标程序就自动退出，以达到反调试的目的。
+
+**(2)检测某些关键文件的状态。** 如目标程序在调试状态时，Linux内核会向部分系统文件内写入一些进程状态信息，包括但不限于向 “
+/proc/目标程序pid/status ” 这一文件的 TracerPid 字段写入调试进程的 pid 。有部分程序会检查这些字段，比如目标程序发现对应的
+TracerPid 不等于 0 ，则说明自己本身正在被别的程序调试，比如：
+
+![](https://image.3001.net/images/20200309/1583729732_5e65cc44ac1e6.png!small)（Pid为19707的进程正在被Pid为24741的进程调试）
+
+(3) **检测软件断点。**
+在对目标程序进行调试的过程中，难免会出现断点。有些程序会通过检测在调试状态下的软件断点（如读取ELF文件在内存中的某些地址是否存在断点指令）来判断自己是否正在被调试。
+
+相应的，反调试的对抗策略也层出不穷。比如相针对以上第（2）种的反调试手段，在实战中存在有以下几种方案来对抗：
+
+A.修改 Android 系统的 kernel 源码，对“进程状态”相关的函数源码进行修改，然后对内核源码进行重新编译并刷写到手机里以骗过反调试检测。
+
+B.提取手机 boot.img ,用工具对 boot.img文件进行解包处理，解包之后得到 Android 的二进制内核文件。使用 IDA
+对其进行逆向分析及修改某些位置，其实质也是修改内核“进程状态”相关函数，
+
+C.hook 系统 fopen 函数，或者 hook 目标程序 对 /proc/pid/status 等文件的读取等，使其返回错误的值以骗过反调试检测。
+
+综合以上方案，不难看出，在内核层面进行修改无疑为一劳永逸的办法。关于修改内核源码，网上当前的资料都是基于原生安卓源码进行修改。前面我们也说过，照搬原生安卓的修改办法，往往并不能在国产手机上通过。本文便采取以上第
+A 种方案，通过修改 **某手机** 的内核源码，并在Ubuntu 上进行交叉编译，然后打包成刷机镜像，刷入手机，对抗反调试。
+
+##  0x02 源码获取及修改
+
+不同于 AOSP 大大方方的开源，国产手机的开源代码却有点”遮遮掩掩“，不太好找。（但是 小米手机 除外，小米的开源做的是越来越好了，在
+[他们的Github ](https://www.freebuf.com/wp-admin/post.php?post=229624&action=edit&message=1)上公开了好多机型的代码。）而该手机的 kernel
+源码就得在它的英文版网站上才能找到（以某手机为例）：其内核源码下载 ，这个地址实在是不太好找。进入正题，我手头上的是 Android 7.0, EMUI
+5.0 的系统，我们下载对应的 kernel 源码，然后解压到硬盘上，如图（本文的源码存放目录是
+/home/lazarus/Huawei_Kernel/Code_Opensource ）：
+
+![](https://image.3001.net/images/20200308/1583597597_5e63c81d7b251.png!small)
+
+kernel 目录里是该手机
+的内核源码，这是整个手机系统的核心，它负责着内存管理、CPU和进程管理、文件系统、设备管理和驱动、网络通信，以及系统的初始化（引导）、系统调用等。经过分析研究以及查阅资料得知，我们要修改的源文件位于
+/Code_Opensource/kernel/fs/proc 目录下，array.c 和 base.c 这两个文件，总共3处需要修改，如图:
+
+![](https://image.3001.net/images/20200308/1583598406_5e63cb46ba036.png!small)
+
+接下来，我们用文本编辑器分别打开这两个文件，开始进行如下修改：
+
+###  **第1处，** /Code_Opensource/kernel/fs/proc/array.c (115行)：
+
+具体操作如下：
+
+    
+    
+    static const char * const task_state_array[] = {
+        "R (running)",        /*   0 */
+        "S (sleeping)",        /*   1 */
+        "D (disk sleep)",    /*   2 */
+        "T (stopped)",        /*   4 */
+        "S (sleeping)",        /*   1 */  //第二步，再加上一行，保持数组大小不变
+    // "t (tracing stop)",    /*   8 */   //第一步，把这一行注释掉（或删掉）
+        "X (dead)",        /*  16 */
+        "Z (zombie)",        /*  32 */
+    };
+
+这一处操作是修改Linux内核对进程状态的描述，主要是改掉"t (tracing
+stop)"，这表示进程处于跟踪状态或者暂停状态，会写入进程状态的描述文件的。修改时要 **注意**
+保持数组大小不变，因为后面的代码会检查这个数组大小，如果数组大小变动了，编译的时候会出错。
+
+###  **第2处，** /Code_Opensource/kernel/fs/proc/array.c (163行)：
+
+![](https://image.3001.net/images/20200308/1583640299_5e646eeb55bab.png!small)
+
+具体操作如下：
+
+    
+    
+        tpid = 0;    //添加上这一行，将 tpid 重新赋值为 0
+        seq_printf(m,
+            "State:\t%s\n"
+            "Tgid:\t%d\n"
+            "Ngid:\t%d\n"
+            "Pid:\t%d\n"
+            "PPid:\t%d\n"
+            "TracerPid:\t%d\n"
+            "Uid:\t%d\t%d\t%d\t%d\n"
+            "Gid:\t%d\t%d\t%d\t%d\n"
+            "FDSize:\t%d\nGroups:\t",
+            get_task_state(p),
+            tgid, ngid, pid_nr_ns(pid, ns), ppid, tpid,
+            from_kuid_munged(user_ns, cred->uid),
+            from_kuid_munged(user_ns, cred->euid),
+            from_kuid_munged(user_ns, cred->suid),
+            from_kuid_munged(user_ns, cred->fsuid),
+            from_kgid_munged(user_ns, cred->gid),
+            from_kgid_munged(user_ns, cred->egid),
+            from_kgid_munged(user_ns, cred->sgid),
+            from_kgid_munged(user_ns, cred->fsgid),
+            max_fds);
+
+这一处操作是对 tpid 进行重新赋值。tpid 是描述进程状态的一个变量，它关联着进程状态描述的TracerPid 的值，表示 ptrace 对应的进程
+id ，可以理解为如果目标程序处于调试状态，tpid的值 == 调试程序的pid；如果目标程序未处于调试状态，则 tpid 的值 == 0 。
+
+###  **第3处，** /Code_Opensource/kernel/fs/proc/base.c (243行)：
+
+![](https://image.3001.net/images/20200308/1583640872_5e6471280c52e.png!small)
+
+具体操作如下：
+
+    
+    
+    static int proc_pid_wchan(struct seq_file *m, struct pid_namespace *ns,
+                  struct pid *pid, struct task_struct *task)
+    {
+        unsigned long wchan;
+        char symname[KSYM_NAME_LEN];
+    
+        wchan = get_wchan(task);
+    
+        if (wchan && ptrace_may_access(task, PTRACE_MODE_READ_FSCREDS)
+                && !lookup_symbol_name(wchan, symname))
+    
+          //在此处增加代码如下：
+                {
+            if (strstr(symname, "trace")) { 
+             seq_printf(m, "%s", "sys_epoll_wait"); 
+           } 
+          //增加到到这里为止。
+    
+            seq_printf(m, "%s", symname);
+        }
+        else
+            seq_putc(m, '0');
+    
+        return 0;
+
+这一处操作是针对 proc_pid_wchan() 函数，它影响着 /proc/目标进程PID/wchan 这一文件，当进程处于调试状态下,
+wchan文件会显示ptrace_stop。
+
+以上就是对两个文件的修改及简要讲解。注意：在修改代码时注意不要出现语法错误，以免编译的时候报错。修改完毕之后，我们进入下一章，也就是紧张刺激的交叉编译环节。
+
+###  0x03 交叉编译环境配置及编译流程
+
+建议使用 Liunx 系统编译，我用的是 Ubuntu 。在开始编译之前，我们当然要先对编译环境进行一番配置。下载的源代码中有个 “
+README_Kernel.txt ” 的文本文档，里面简要描述了编译要求，这里我们展开再详细讲一下。该文档是这么说的：
+
+    
+    
+    1. How to Build
+    - get Toolchain
+    From android git server, codesourcery and etc ..
+    - aarch64-linux-android-4.9
+    - edit Makefile
+    edit CROSS_COMPILE to right toolchain path(You downloaded).
+    Ex)   export PATH=$PATH:$(android platform directory you download)/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin
+    Ex)   export CROSS_COMPILE=aarch64-linux-android-    $ mkdir ../out
+    $ make ARCH=arm64 O=../out merge_hi3650_defconfig
+    $ make ARCH=arm64 O=../out -j8
+    2. Output files
+    - Kernel : out/arch/arm64/boot/Image.gz
+    - module : out/drivers/*/*.ko
+    3. How to Clean
+    $ make ARCH=arm64 distclean
+    $ rm -rf out
+
+也就是说， **第一步** : 我们要先获得交叉编译的工具链(该手机是 aarch64 架构)：
+
+    
+    
+    aarch64-linux-android-4.9
+
+这个可以从网上下载，比如 Google 官方地址(因众所周知的原因，访问该URL可能需要科学上网)
+
+>
+> <https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-> android-4.9/>
+
+当然也可以从github等处找到。（我用的是之前编译 AOSP 时的工具链，所以我就没有再下载。）
+
+下载后解压到某个目录，比如我的在 /home/lazarus/aarch64-linux-android-4.9 这个目录：
+
+![](https://image.3001.net/images/20200308/1583642864_5e6478f069029.png!small)
+
+**第二步** : 把工具链的路径放到系统变量里面，好让我们的操作系统在编译的时候知道去哪儿找到工具链。打开终端，输入如下命令：
+
+    
+    
+    export PATH=$PATH:/home/lazarus/aarch64-linux-android-4.9/bin
+
+（你需要将 /home/lazarus/aarch64-linux-android-4.9 换成你自己的工具链存放路径）
+
+**第三步** : 设置交叉编译参数，在刚才的终端里再输入
+
+    
+    
+    export CROSS_COMPILE=aarch64-linux-android-
+(不知为何，有的时候在开始编译时 gcc会报错，这时把 CROSS_COMPILE
+后面的参数设为了完整路径即：/home/lazarus/aarch64-linux-android-4.9/bin/aarch64-linux-android- 就好了 ……)
+
+**第4步** ：还记得我们下载的某手机kernel源码吗？我们在该终端内输入以下命令，来到kernel的源码目录：
+
+    
+    
+    cd /home/lazarus/Huawei_Kernel/Code_Opensource/kernel
+
+**第5步** ：按照 “ README_Kernel.txt ”的说明，在kernel
+目录的上一级新建一个目录（或称之为文件夹也行），这个目录将用来存放我们编译出来的内核二进制文件：
+
+    
+    
+    mkdir ../out
+
+**第6步** ：设置编译参数，将目标文件存放路径设为刚才的 out 目录，编译设置从 merge_hi3650_defconfig 中读取：
+
+    
+    
+    make ARCH=arm64 O=../out merge_hi3650_defconfig
+
+**第7步** ：开始编译。输入以下命令，准备起飞吧！
+
+    
+    
+    make ARCH=arm64 O=../out -j8
+
+第1～7步的输入如下图所示：
+
+![](https://image.3001.net/images/20200308/1583645836_5e64848c8932e.png!small)
+
+经过一番等待，编译完成后，我们最会在 ~/Code_Opensource/out/arch/arm64/boot 目录中发现 Image.gz
+这一文件，这个就是编译完成后的二进制内核文件——的压缩包。接下来我们需要做的，就是把这个内核放到手机系统里，让它跑起来就行了。不过……这个压缩包怎么写入手机系统里面呢？这是系统内核，可不是简单复制粘贴就能完事儿的。我们且看下一章节。
+
+##  0x04 将内核刷入手机
+
+经常刷机的朋友们想必知道 fastboot 。在安卓手机中，fastboot 是一种比 recovery
+更底层的刷机模式（俗称引导模式）。需要使用USB数据线连接手机，然后刷入相应的镜像文件。较为常见的镜像大多是 **boot.img** （内核/引导） ，
+**recovery.img** (恢复界面，大众喜爱的第三方recovery TWRP 就是此类镜像)， **system.img**
+（这个一般比较大，里面是安卓系统。常见的第三方ROM就是通过修改它得来的）。
+
+我们这次需要通过给手机刷入 boot.img 来更新手机内核。简单的说，boot.img 包含两部分，分别为 kernel 和 ramdisk 。而其中的
+kernel 就包含我们刚才编译出来的内核文件。那么 boot.img
+从哪里可以搞的到呢？第一种方法：如果你硬盘里存放的有这款手机的刷机包的话，可以通过解包等操作来获取手机的 boot.img
+。不过这种方法显然略显苛刻，那既然 boot.img 是被刷入手机中的，可不可以直接从手机中提取出来呢？答：可以（前提是手机已经 root
+），这就是我们要讲的第二种方法，看操作：
+
+###  （1）找到 boot.img 的“藏身之处”
+
+手机打开开发者模式，勾选允许USB调试，然后通过USB数据线接入电脑。在电脑端启动一个终端，输入如下命令：
+
+    
+    
+    adb shell
+    su
+    cd /dev/block/platform/hi_mci.0/by-name
+    ls -l boot
+
+简要解释以下这段命令的意思：首先进入 ADB shell 并获得 su 权限（这也是需要手机已经 root 的原因），然后切换到
+/dev/block/platform/hi_mci.0/by-name
+这一目录。如果你在手机里面的文件管理器中打开这个目录，会发现里面是一堆类似于Windows系统中的“快捷方式”一类的东西，其实这个在Linux系统中叫做“软链接”（或者叫“符号链接”），不同名字的软链接会指向它们真正的所在的mmcblk（块设备）。比如
+以上命令最后一句 ls -l boot 的意思就是显示 boot 分区 所在的mmcblk。如下图，boot 分区存放在“mmcblk0p28” 之中：
+
+![](https://image.3001.net/images/20200309/1583724071_5e65b627e81b5.png!small)
+
+###  （2）将boot.img 提取到手机
+
+找到了 boot 分区的存放位置，我们用 Linux 的 dd 命令将其提取到手机的内部存储空间中：
+
+    
+    
+    dd if=/dev/block/mmcblk0p28 of=/sdcard/boot.img
+
+简单解释下：dd 命令的用途是用指定大小的块拷贝一个文件，其中 “ if = ” 后面跟着的，是输入文件名，也就是 我们上一步找到的 boot
+分区藏身之处，而“ of= ” 后面跟着的，是输出文件名，也就是我们想要的boot.img 。这样，我们就把手机的boot f分区内容提取到了手机的
+/sdcard 目录中，你可以在手机的内部存储空间里找到它。
+
+然后再开启一个终端，将boot .img 从手机的/sdcard 目录中复制到电脑上：
+
+    
+    
+    adb pull  /sdcard/boot.img  boot.img
+
+这个命令很简单，不用解释了吧？复制完成后，我们可以在 电脑硬盘中找到 boot.img，如图：
+
+![](https://image.3001.net/images/20200309/1583725183_5e65ba7f89675.png!small)
+
+###  (3) 对 boot.img 进行修改，放入新内核
+
+既然得到了 boot.img ,下一步就是把修改 boot.img 。我们需要先把 boot.img
+解包，然后将新内核替换进去，再重新打包，然后刷入手机。这里我们需要一个工具，叫做 **Android Image Kitchen**
+（这一步你也可以在Windows上操作，但我用了Ubuntu，所以要下载这个工具的 Linux 版本，它也有Windows 版本你可以到 [这里下载
+](https://forum.xda-developers.com/showthread.php?t=2073775)，也可以网上搜索）。下载后解压到硬盘，同时为了方便操作，我们把刚才提取的
+boot.img 也放到 **Android Image Kitchen** 所在的目录中。然后再开一个终端，定位到该目录，执行
+./unpackimg.sh 进行解包，如下图：
+
+![](https://image.3001.net/images/20200309/1583725890_5e65bd426ccfb.png!small)
+
+解包完成后，目录下会多出两个文件夹。其中一个名叫 split_img ，我们要替换的 kernel 就在里面存放着。我们打开这个文件夹，会发现一个叫做
+**boot.img-zImage** 的文件——这个就是我们要找的东西了！还记得之前我们编译出来的新内核文件吗？我们把新内核文件重命名为
+**boot.img-zImage** ，复制到 split_img 文件夹，替换掉之前这个旧的内核文件。然后执行 ./repackimg.sh 对
+boot 镜像进行重新打包，这样会生成一个新的 boot 镜像文件 “image-new.img” ，如下图：
+
+![](https://image.3001.net/images/20200309/1583726397_5e65bf3dd6477.png!small)
+
+到了这一步，工作基本上就接近尾声了。接下来，我们要是把这个新镜像刷入手机。
+
+###  （4）通过fastboot刷入新内核
+
+将该手机通过USB数据线连接电脑（记得开USB调试），在刚才的终端内执行以下命令 进入fastboot：
+
+    
+    
+    adb reboot bootloader
+
+手机会自动重启到 fastboot 界面。进入fastboot界面以后，在终端内执行以下命令，将 image-new.img 刷入手机的 boot 分区：
+
+    
+    
+    su
+    fastboot flash boot image-new.img
+
+一切顺利的话，如下图所示：
+
+![](https://image.3001.net/images/20200309/1583726956_5e65c16c20f68.png!small)
+
+此处要声明两个情况：
+
+（1）我的 Ubuntu 的fastboot 需要在 su 权限下运行，也许有的人不需要 su 就可以。另外也可以用 Windows
+系统也进行fastboot 。（2）如果出现 FAILED (remote: Command not allowed)
+的错误信息，很有可能是没有关闭“手机找回”这一功能所致，需要在手机里面关闭手机找回功能。可以参考
+[该帖子的2楼回帖](https://cn.club.vmall.com/viewthreaduni-14793198-filter-lastpost-orderby-lastpost-page-2-1.html) 。
+
+刷入完毕后，对手机进行重启：
+
+    
+    
+    fastboot reboot
+
+重启完毕后，你亲手编译的新内核就运行在你手机上了。看看新鲜出炉的内核版本：
+
+![](https://image.3001.net/images/20200309/1583727301_5e65c2c509e4a.png!small)
+
+##  0x05 真机测试
+
+好了，大功告成。到了我们喜闻乐见的真机测试环节。我们将手机连接电脑，push IDA 的gdb调试器到手机的 /data/local/tmp
+目录，启动gdb调试器，开启端口转发，启动IDA Pro ……(具体操作自行查阅用IDA 调试 Android 的方法。）这一章节我用了 Windows
+10 系统，安装的是 IDA Pro 7.0:
+
+![](https://image.3001.net/images/20200309/1583730014_5e65cd5e5d825.png!small)就以我手机上的
+“com.example.root.myapplication” 这个程序来测试吧，记下它的 进程PID 是 **13819** ，我们附加上去开始调试……
+
+此时，我们再开一个命令行窗口，进入手机 adb shell ，用如下命令查看PID 13819 的进程状态：
+
+    
+    
+    cat /proc/13819/status
+
+![](https://image.3001.net/images/20200309/1583730208_5e65ce2059654.png!small)
+
+在我们对内核修改之前，TracerPid 的值应该是 android_server 的 PID 。而现在，我们仔细观察它的 TracerPid
+字段，是不是已经变成 0 了
+？说明我们编译的内核已经正常运行，而且实现了我们想要的对抗反调试的功能。然后你就拥有了一个开启“无敌模式”的手机，某些（通过检测自身状态）带有反调试功能的程序在里面将无法察觉自身的状态，已然完全任你摆布(调试)了——用
+IDA 附加上去，开始起飞吧！
+
+【全文完】
+
+ ***本文作者：张召忠，转载请注明来自FreeBuf.COM**
+

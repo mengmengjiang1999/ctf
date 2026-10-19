@@ -1,0 +1,486 @@
+## 概述
+
+双尾蝎APT团伙是一个长期针对中东地区的高级威胁组织，其最早于2017年被披露。其至少自2016年5月起，便持续针对巴勒斯坦教育机构、军事机构等重要领域开展了有组织，有计划，有针对性的攻击，该组织拥有针对Windows和Android双平台攻击能力。
+
+近日，奇安信威胁情报中心红雨滴团队在日常的威胁狩猎中捕获多个伪装成视频、文档和图片的可执行文件，此类样本将图标设置为对应的诱饵类型，诱导受害者点击执行。当样本执行后，将释放展示相关诱饵迷惑受害者。释放展示的诱饵包括CIA对哈马斯支持的相关政治类诱饵、巴勒斯坦地区美女视频图片、简历相关文档等。奇安信威胁情报中心经过溯源关联后发现，此次捕获样本疑似均来自APT组织：双尾蝎。
+
+奇安信威胁情报中心在发现此次攻击活动的第一时间便向安全社区进行了预警。
+
+![1606875864_5fc6fad81debf8f84349d.png!small?1606875864778](https://image.3001.net/images/20201202/1606875864_5fc6fad81debf8f84349d.png!small?1606875864778)
+
+## 样本信息
+
+此次捕获的样本具有Pascal,VC两个版本，并伪装成视频，图片，文档等几种诱饵类型，伪装成文档类的样本信息如下：
+
+ **文件名**
+
+|
+
+ **MD5**  
+  
+---|---  
+  
+ **Financing USA is illegal and suspicious organizations.exe**
+
+|
+
+9fcb1cb7e8bb3424ce7e83ce5ad9a78d  
+  
+ **My Cv.docx.exe**
+
+|
+
+ae0b53e6b378bf74e1dd2973d604be55  
+  
+ **serati al thatia.docx.exe**
+
+|
+
+c27f925a7c424c0f5125a681a9c44607  
+  
+ **My Cv-4786789573896-2347675-docx.exe**
+
+|
+
+faff57734fe08af63e90c0492b4a9a56  
+  
+释放展示的文档内容包括CIA资助哈马斯相关信息，简历信息，诱饵内容如下：
+
+![1606876022_5fc6fb7616333aefe1e1d.png!small?1606876022793](https://image.3001.net/images/20201202/1606876022_5fc6fb7616333aefe1e1d.png!small?1606876022793)
+
+9fcb1cb7e8bb3424ce7e83ce5ad9a78d ae0b53e6b378bf74e1dd2973d604be55
+
+![1606876034_5fc6fb82be5355cd2d72a.png!small?1606876035138](https://image.3001.net/images/20201202/1606876034_5fc6fb82be5355cd2d72a.png!small?1606876035138)
+
+c27f925a7c424c0f5125a681a9c44607 faff57734fe08af63e90c0492b4a9a56
+
+  
+
+除文档类诱饵以外，捕获的样本还会释放展示视频，图片等影音类诱饵，此类部分样本信息如下：
+
+ **文件名**
+
+|
+
+ **MD5**  
+  
+---|---  
+  
+ **sun is crying in a door and what it tells tells my country Take me on my
+homelandd.exe**
+
+|
+
+1507f7ecc5fe8ef4c90c853d64e1a9f9  
+  
+ **PhoneProviders.exe**
+
+|
+
+9af8f2a02befa7ceb9b72359ce30c0bb  
+  
+ **bihbik lamaa bitahki tarsum eishafafik dahka hbihbik lamaa bitahki.exe**
+
+|
+
+26a1fc2f983fb8abae4b47b0c7edfee6  
+  
+ **Her hands are following my pain Irfana, I am suffering What lightness and
+my pain wasted me.exe**
+
+|
+
+e0f8e726e4d5a4ad22de8a62c98e1737  
+  
+ **gift.mp4.exe**
+
+|
+
+835f86e1e83a3da25c715e89db5355cc  
+  
+ **Video02042020.mp4.exe**
+
+|
+
+f5bac4d2de2eb1f8007f68c77bfa460e  
+  
+  
+
+影音类诱饵主要以中东地区美女视频，照片为主，部分诱饵内容如下：
+
+![1606876073_5fc6fba910b136f5d652b.png!small?1606876073669](https://image.3001.net/images/20201202/1606876073_5fc6fba910b136f5d652b.png!small?1606876073669)
+
+1507f7ecc5fe8ef4c90c853d64e1a9f9 9af8f2a02befa7ceb9b72359ce30c0bb
+
+![1606876095_5fc6fbbf475bc646b3e73.png!small?1606876095524](https://image.3001.net/images/20201202/1606876095_5fc6fbbf475bc646b3e73.png!small?1606876095524)
+
+e0f8e726e4d5a4ad22de8a62c98e1737 835f86e1e83a3da25c715e89db5355cc
+
+  
+
+## 详细分析
+
+### VC后门
+
+ **文件名**
+
+|
+
+ **Financing USA is illegal and suspicious organizations.exe**  
+  
+---|---  
+  
+ **MD5**
+
+|
+
+9fcb1cb7e8bb3424ce7e83ce5ad9a78d  
+  
+ **诱饵内容**
+
+|
+
+CIA资助哈马斯相关信息  
+  
+ **C2**
+
+|
+
+ansonwhitmore[.]live  
+  
+ **图标**
+
+|
+![1606876125_5fc6fbddcf660e93e4574.png!small?1606876126044](https://image.3001.net/images/20201202/1606876125_5fc6fbddcf660e93e4574.png!small?1606876126044)  
+  
+样本伪装成word文档，执行后将从资源中获取数据释放到Financing USA is illegal and suspicious
+organizations.docx，并打开该文档迷惑受害者。
+
+![1606876159_5fc6fbff874db74784ce0.png!small?1606876159877](https://image.3001.net/images/20201202/1606876159_5fc6fbff874db74784ce0.png!small?1606876159877)
+
+释放展示文档内容为CIA资助哈马斯行动相关信息，诱饵内容如下：
+
+![1606876169_5fc6fc0926b0aab77ad1e.png!small?1606876169728](https://image.3001.net/images/20201202/1606876169_5fc6fc0926b0aab77ad1e.png!small?1606876169728)
+
+之后在启动项目录创建lnk文件实现持久化
+
+![1606876185_5fc6fc19b7954762cac8e.png!small?1606876186137](https://image.3001.net/images/20201202/1606876185_5fc6fc19b7954762cac8e.png!small?1606876186137)
+
+在%temp%目录下创建SwitcherDataModel文件夹。
+
+![1606876191_5fc6fc1fbe5fa631f71a6.png!small?1606876191975](https://image.3001.net/images/20201202/1606876191_5fc6fc1fbe5fa631f71a6.png!small?1606876191975)
+
+尝试读取%temp%\\\SwitcherDataModel\\\Secombe.txt文件,若读取失败，则获取计算机名加随机字符写入该文件。
+
+![1606876198_5fc6fc26c39e567e69fa2.png!small?1606876199056](https://image.3001.net/images/20201202/1606876198_5fc6fc26c39e567e69fa2.png!small?1606876199056)
+
+之后获取杀软，系统版本等信息。
+
+![1606876207_5fc6fc2fe3426601c1913.png!small?1606876208198](https://image.3001.net/images/20201202/1606876207_5fc6fc2fe3426601c1913.png!small?1606876208198)
+
+与C2: ansonwhitmore.live/yohann/bordalas/ignasI通信，发送收集的计算机基本信息。
+
+![1606876216_5fc6fc388ba60390b716c.png!small?1606876217038](https://image.3001.net/images/20201202/1606876216_5fc6fc388ba60390b716c.png!small?1606876217038)
+
+若成功通信则进入后续命令分发函数，获取Secombe.txt数据与C2:
+ansonwhitmore.live/yohann/bordalas/alejandro获取命令执行。
+
+![1606876224_5fc6fc40aded94ad6b32e.png!small?1606876225031](https://image.3001.net/images/20201202/1606876224_5fc6fc40aded94ad6b32e.png!small?1606876225031)
+
+与双尾蝎组织常用手法一致的是，该样本也利用人名作为指令。相关指令功能如下：
+
+ **指令**
+
+|
+
+ **功能简介**  
+  
+---|---  
+  
+ **germain**
+
+|
+
+执行信息收集函数，休眠  
+  
+ **gustavo**
+
+|
+
+休眠  
+  
+ **steve**
+
+|
+
+请求新地址  
+  
+ **Isabella**
+
+|
+
+下载文件并执行。  
+  
+  
+
+### Pascal后门
+
+ **文件名**
+
+|
+
+ **My Cv-4786789573896-2347675-docx.exe**  
+  
+---|---  
+  
+ **MD5**
+
+|
+
+faff57734fe08af63e90c0492b4a9a56  
+  
+ **诱饵内容**
+
+|
+
+简历信息  
+  
+ **C2**
+
+|
+
+Judystevenson[.]info  
+  
+ **图标**
+
+|
+![1606876241_5fc6fc51e24f5589a4d0a.png!small?1606876242435](https://image.3001.net/images/20201202/1606876241_5fc6fc51e24f5589a4d0a.png!small?1606876242435)  
+  
+该样本是采用Pascal语言编写的可执行文件
+
+![1606876252_5fc6fc5c3a7d5625c3a3d.png!small?1606876252518](https://image.3001.net/images/20201202/1606876252_5fc6fc5c3a7d5625c3a3d.png!small?1606876252518)
+
+样本将图标设置为word文档图标，并以简历为诱饵名，诱导受害者执行，执行后将释放展示简历信息迷惑受害者。
+
+![1606876259_5fc6fc6314dde0d32bb4e.png!small?1606876259565](https://image.3001.net/images/20201202/1606876259_5fc6fc6314dde0d32bb4e.png!small?1606876259565)
+
+通过资源文件可发现该样本存在一个主窗口，三个定时器，两个按钮，以及一个Lazarus IDE的多行编辑框memo：
+
+![1606876269_5fc6fc6d77bfb7193458d.png!small?1606876269816](https://image.3001.net/images/20201202/1606876269_5fc6fc6d77bfb7193458d.png!small?1606876269816)
+
+其中三个定时器分别对应不同的功能，两个按钮对应Post和Get请求功能，memo记录每一步操作。
+
+![1606876276_5fc6fc7463e6e4cb9f74b.png!small?1606876276886](https://image.3001.net/images/20201202/1606876276_5fc6fc7463e6e4cb9f74b.png!small?1606876276886)
+
+定时器Timer3功能为拷贝自身，当计算机中未安装卡巴时候，拷贝自身到%PROGRAMDATA%\\\SecProcessingWindowsSystem.exe
+
+![1606876283_5fc6fc7bdc3a4290ab72b.png!small?1606876284192](https://image.3001.net/images/20201202/1606876283_5fc6fc7bdc3a4290ab72b.png!small?1606876284192)
+
+定时器Timer2则主要负责持久化操作，启动后首先判断计算机中是否安装了如下杀软：
+
+ **Kasper**  
+  
+---  
+  
+ **eScan**  
+  
+ **360**  
+  
+ **Corporate**  
+  
+ **F-Secure**  
+  
+ **Bitdefender**  
+  
+之后将尝试建立持久化，将设置自身lnk带上-rq参数避免每次开机都打开诱饵文档让用户产生怀疑。同时对不同环境将执行不同的持久化操作：
+
+  
+
+ **检测到系统存在杀软**
+
+|
+
+ **WindowsXP**
+
+|
+
+ **C:\\\Documents and Settings\\\Start Menu\\\Programs\\\Startup\\\**
+
+ **SecProcessingWindowsSystem.lnk**  
+  
+---|---|---  
+  
+除XP外的Windows系统
+
+|
+
+%APPDATA%\\\Microsoft\\\Windows\\\StartMenu\\\Programs\\\Startup\\\SecProcessingWindowsSystem.lnk并写入注册表Software\\\Microsoft\\\Windows\\\CurrentVersion\\\Run来实现持久化  
+  
+ **未检测到杀软**
+
+|
+
+将lnk文件放入startup目录实现持久化
+
+C:\\\Users\\\Administrator\\\AppData\\\Roaming\\\Microsoft\\\Windows\\\StartMenu\\\Programs\\\Startup  
+  
+定时器Timer1主要功能为释放诱饵文档以及与C2通信
+
+当Time1执行后将检测当前的启动参数，若不带-rq则将MYDATA资源中的诱饵文档释放到%temp%\\\Manal Cv.docx。
+
+![1606876447_5fc6fd1f11b44e18924c5.png!small?1606876447405](https://image.3001.net/images/20201202/1606876447_5fc6fd1f11b44e18924c5.png!small?1606876447405)
+
+之后获取计算机用户名，杀软，系统版本等信息，Base64编码后以如下格式拼接：
+
+ **vcqmxylcv**
+
+|
+
+ **计算机名，用户名**  
+  
+---|---  
+  
+ **vcnwaapcv**
+
+|
+
+杀软信息  
+  
+ **vcllgracv**
+
+|
+
+系统版本信息  
+  
+ **vcwjlxycv**
+
+|
+
+当前运行目录  
+  
+ **vccodwfcv**
+
+|
+
+软件版本  
+  
+将获取的信息上传到hxxp://judystevenson[.]info/vcapicv/vchivmqecv/vbqsrot
+
+![1606876493_5fc6fd4d7fedb3d413b47.png!small?1606876493826](https://image.3001.net/images/20201202/1606876493_5fc6fd4d7fedb3d413b47.png!small?1606876493826)
+
+与C2通信后获取指令执行，功能号使用MD5表示：
+
+![1606876499_5fc6fd530d6e3e591a056.png!small?1606876499261](https://image.3001.net/images/20201202/1606876499_5fc6fd530d6e3e591a056.png!small?1606876499261)
+
+指令功能如下：
+
+ **eadb5aebe89133bccce354dfc68824b1**
+
+|
+
+ **远程Shell**  
+  
+---|---  
+  
+ **25431262a6689fe80d8516eb141fc7ef**
+
+|
+
+截图  
+  
+ **3b040104b112d52d9baef903e9c3c768**
+
+|
+
+下载执行  
+  
+  
+
+## 溯源关联
+
+奇安信威胁情报中心红雨滴团队对利用奇安信威胁情报中心ALPHA（ti.qianxin.com）平台对此次攻击活动恶意代码，攻击手法等方面分析发现，此次捕获的样本疑似来自APT组织双尾蝎。
+
+经关联分析，我们从样本库中发现样本7ef3520da2151c3724e3615943833a5f与此次捕获VC版本后门样本代码几乎一致。
+
+![1606876516_5fc6fd64574ea7f69d4d8.png!small?1606876516663](https://image.3001.net/images/20201202/1606876516_5fc6fd64574ea7f69d4d8.png!small?1606876516663)
+
+其中一处相似代码如下：
+
+![1606876525_5fc6fd6d393dfd1d749d9.png!small?1606876525445](https://image.3001.net/images/20201202/1606876525_5fc6fd6d393dfd1d749d9.png!small?1606876525445)
+
+且样本7ef3520da2151c3724e3615943833a5f C2：katesacker[.]club在ALPHA平台已有双尾蝎组织相关标签。
+
+![1606876533_5fc6fd7515a951124e8fb.png!small?1606876533398](https://image.3001.net/images/20201202/1606876533_5fc6fd7515a951124e8fb.png!small?1606876533398)
+
+同时双尾蝎组织常常在样本中使用人名组成C2路径等，此次捕获的样本中也是如此。
+
+## 总结
+
+双尾蝎组织是常年活跃在中东地区APT团伙，其具有Windows和Android双平台攻击武器，且仅Windows平台恶意代码就丰富多变，具有多种语言编译的后门，奇安信威胁情报中心将持续追踪该组织。
+
+同时基于奇安信威胁情报中心的威胁情报数据的全线产品，包括奇安信威胁情报平台（TIP）、天擎、天眼高级威胁检测系统、奇安信NGSOC等，都已经支持对此类攻击的精确检测。
+
+## IOCs
+
+89e9823013f711d384824d8461cc425d
+
+21aa63b42825fb95bf5114419fb42157
+
+9fcb1cb7e8bb3424ce7e83ce5ad9a78d
+
+4694bf0093c95fa9a7f49af3a7722211
+
+1507f7ecc5fe8ef4c90c853d64e1a9f9
+
+26a1fc2f983fb8abae4b47b0c7edfee6
+
+9af8f2a02befa7ceb9b72359ce30c0bb
+
+e0f8e726e4d5a4ad22de8a62c98e1737
+
+ae0b53e6b378bf74e1dd2973d604be55
+
+c27f925a7c424c0f5125a681a9c44607
+
+835f86e1e83a3da25c715e89db5355cc
+
+f5bac4d2de2eb1f8007f68c77bfa460e
+
+faff57734fe08af63e90c0492b4a9a56
+
+c4a90110acd78e2de31ad9077aa4eff6
+
+9d76d59de0ee91add92c938e3335f27f
+
+a0e681a0637988baea55b50cfff5c3ad
+
+51ae5a914f10945edcc4668550c5d880
+
+  
+
+malpas-west-rook[.]live
+
+charmainellauzier[.]host
+
+judystevenson[.]info
+
+jaime-martinez[.]info
+
+krasil-anthony[.]icu
+
+ansonwhitmore[.]live
+
+gonzalez-anthony[.]info
+
+gallant-william[.]icu
+
+doloresabernathy[.]icu
+
+## 参考链接
+
+> [1]. https://twitter.com/RedDrip7/status/1331458999628091395
+>
+> [2]. https://mp.weixin.qq.com/s/yobOH_jdKx69m4_i1qDrLA
+>
+> 近期双尾蝎APT组织利用伪造社交软件等针对多平台的攻击活动分析
+

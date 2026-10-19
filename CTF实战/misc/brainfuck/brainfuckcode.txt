@@ -1,0 +1,19 @@
+,
+>
+++
+<
+[
+    -
+    [
+        >
+        .
+        >
+        +
+        <
+        <
+        -
+    ]
+    >+.-->[<.>-]<+<,]
+
+
+https://www.dcode.fr/brainfuck-language

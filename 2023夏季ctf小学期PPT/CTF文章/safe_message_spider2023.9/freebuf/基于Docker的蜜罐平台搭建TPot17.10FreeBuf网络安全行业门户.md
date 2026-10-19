@@ -1,0 +1,238 @@
+***本文作者：枫夜丶，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**  
+
+>
+> 这几年随着威胁情报的成熟，蜜罐技术被关注的越来越多，也渐形成低交互、中交互、高交互等交互程度的各类蜜罐，从web业务蜜罐、ssh应用蜜罐、网络协议栈蜜罐到系统主机型蜜罐的各功能型蜜罐。小到一个word文档的蜜标，到一个系统级的服务蜜罐，再到多功能蜜罐组成的蜜网，大到包含流控制重定向分布式蜜网组成的蜜场。
+>
+>
+> 随着虚拟化技术的发展，各种虚拟蜜罐也得到发展，可以通过虚拟机来实现高交互蜜罐，以及通过docker实现的业务型蜜罐，不再像是以前需要昂贵硬件设备的部署支撑，这也大大减少了蜜罐的部署成本，一台主机就可以实现整个集数据控制，数据捕获和数据分析于一体多功能多蜜罐高交互蜜网的体系架构。也已经产生了一些不错的开源蜜罐产品或项目，比如
+> [MHN(现代蜜网)](https://github.com/threatstream/mhn)、HoneypotProject。 MHN
+> 现代蜜网简化了蜜罐的部署，集成了多种蜜罐的安装脚本，可以快速部署、使用，也能够快速的从节点收集数据。国外也有很多公司做基于蜜罐的欺骗技术产品创新。
+>
+>
+> **蜜罐高保真高质量的数据集把安全人员从以前海量日志分析的繁琐过程中解脱出来，对于蜜罐的连接访问都是攻击信息，并且不再像以前的特征分析具有一定的滞后性，可以用于捕获新型的攻击和方法。**
+> 前段时间作者就通过高交互蜜罐捕获了ssh自动化爆破工具，能够针对整个互联网进行爆破尝试，并能够自动识别某些低交互蜜罐。
+>
+>
+> 现在各功能蜜罐这么多，虽然MHN简化了各蜜罐的部署过程，但还是需要手动安装多个系统sensor来实现多个不同蜜罐。在蜜罐的研究过程中，有没有一个提供能更简单方便的平台实现我们对蜜罐的研究与使用。
+
+以上内容摘录自 Freebuf.com **失路之人** 的文章
+[T-Pot多蜜罐平台：让蜜罐实现更简单](http://www.freebuf.com/sectool/134504.html)
+
+他的文章介绍了[T-Pot16.10](https://dtag-dev-sec.github.io/mediator/feature/2016/10/31/t-pot-16.10.html)，目前该蜜罐已更新到T-Pot17.10。 **安装一次系统，就可以轻松使用里面多种蜜罐， 并且提供良好的可视化。** 官方英文介绍：<http://dtag-dev-sec.github.io/mediator/feature/2017/11/07/t-pot-17.10.html> 。
+
+ **本文对T-Pot17.10进行简要介绍，并讲讲我在安装该平台时遇到的坑和坑和坑，希望对大家有帮助。**
+
+## T-Pot17.10开源多蜜罐平台
+
+![基于Docker的蜜罐平台搭建：T-Pot17.10](https://image.3001.net/images/20180727/1532684116_5b5ae7548b737.jpg!small)
+
+T-Pot17.10基于Ubuntu Server 16.04.x LTS的一个蜜罐平台。 蜜罐程序以及正在使用的其他支持组件使用docker进行了容器化。
+我们可以在同一台设备上运行多个蜜罐进程，每个蜜罐占用的空间较小并限制在蜜罐自己的环境中运行。
+
+该平台的架构图如下：
+
+![基于Docker的蜜罐平台搭建：T-Pot17.10](https://image.3001.net/images/20180727/1532684121_5b5ae7595efe9.png!small)
+
+在T-Pot17.10中，作者将docker容器化后的蜜罐、ELK数据日志平台、几个管理工具整合了到一个平台中。
+
+总结来说，该平台整合了以下docker容器：
+
+> [conpot](https://github.com/dtag-dev-sec/conpot)：低交互工控蜜罐，提供一系列通用工业控制协议,
+> 能够模拟复杂的工控基础设施。
+>
+> [cowrie](https://github.com/dtag-dev-sec/cowrie)：基于kippo更改的中交互ssh蜜罐,
+> 可以对暴力攻击账号密码等记录，并提供伪造的文件系统环境记录黑客操作行为, 并保存通过wget/curl下载的文件以及通过SFTP、SCP上传的文件。
+>
+> [dionaea](https://github.com/dtag-dev-> sec/dionaea)：Dionaea是运行于Linux上的一个应用程序，将程序运行于网络环境下，它开放Internet常见服务的默认端口，当有外来连接时，模拟正常服务给予反馈，同时记录下出入网络数据流。网络数据流经由检测模块检测后按类别进行处理，如果有
+> shellcode 则进行仿真执行；程序会自动下载 shellcode 中指定或后续攻击命令指定下载的恶意文件。
+>
+> [elasticpot](https://github.com/dtag-dev-sec/elasticpot)：模拟elastcisearch
+> RCE漏洞的蜜罐，通过伪造函数在/,/search, /nodes的请求上回应脆弱ES实例的JSON格式消息。
+>
+> [elk-stack](https://github.com/dtag-dev-> sec/elk)：ELK架构，可以同时实现日志收集、日志搜索和日志分析的功能。
+>
+> [emobility](https://github.com/dtag-dev-> sec/emobility)：Kibana可视化的插件，能建立更美观的Dashboard。
+>
+> [ewsposter](https://github.com/dtag-dev-sec/ews)：数据分析工具ewsposter，将蜜罐数据进行关联。
+>
+> [glastopf](https://github.com/dtag-dev-sec/glastopf)：低交互型Web应用蜜罐,
+> Glastopf蜜罐它能够模拟成千上万的web漏洞，针对攻击的不同攻击手段来回应攻击者，然后从对目标Web应用程序的攻击过程中收集数据。它的目标是针对自动化漏洞扫描/利用工具，通过对漏洞利用方式进行归类，针对某一类的利用方式返回对应的合理结果，以此实现低交互。
+>
+> [honeytrap](https://github.com/dtag-dev-> sec/honeytrap)：观察针对TCP或UDP服务的攻击，作为一个守护程序模拟一些知名的服务，并能够分析攻击字符串，执行相应的下载文件指令。
+>
+> [mailoney](https://github.com/dtag-dev-sec/mailoney)：SMTP的蜜罐。
+>
+> [netdata](https://github.com/dtag-dev-sec/netdata)：web端设备性能的实时监控工具。
+>
+> [portainer](https://github.com/dtag-dev-sec/ui-for-docker)：web端docker容器管理工具。
+>
+> [rdpy](https://github.com/dtag-dev-sec/rdpy)：python搭建的远程桌面蜜罐。
+>
+> [spiderfoot](https://github.com/dtag-dev-sec/spiderfoot)：web端的一个自动化爬虫工具。
+>
+> [suricata & p0f](https://github.com/dtag-dev-sec/suricata)：网络安全监控引擎和指纹识别系统。
+>
+> [vnclowpot](https://github.com/dtag-dev-sec/vnclowpot)：vnc服务的低交互蜜罐。
+>
+> [Wetty](https://github.com/krishnasrinivas/wetty)：web端的SSH控制台。
+
+### 美观的统计界面
+
+Kibana DashBoard 界面图：
+
+![基于Docker的蜜罐平台搭建：T-Pot17.10](https://image.3001.net/images/20180727/1532684131_5b5ae7632fef8.png!small)
+
+ES head
+界面图：![基于Docker的蜜罐平台搭建：T-Pot17.10](https://image.3001.net/images/20180727/1532684152_5b5ae778930c1.png!small)
+
+Netdata
+性能监控界面图：![基于Docker的蜜罐平台搭建：T-Pot17.10](https://image.3001.net/images/20180727/1532684147_5b5ae7732420f.png!small)
+
+Docker管理界面图：![基于Docker的蜜罐平台搭建：T-Pot17.10](https://image.3001.net/images/20180727/1532684159_5b5ae77f58657.png!small)
+
+SpiderFoot界面图：
+
+![基于Docker的蜜罐平台搭建：T-Pot17.10](https://image.3001.net/images/20180727/1532684163_5b5ae783a8794.png!small)
+
+## 监听的端口
+
+T-Pot17.10蜜罐平台监听了大部分常见的端口，进行蜜罐数据的捕获。
+
+详细的docker端口映射如下图所示：
+
+![基于Docker的蜜罐平台搭建：T-Pot17.10](https://image.3001.net/images/20180727/1532684170_5b5ae78ab564d.png!small)
+
+## 安装与配置流程
+
+ **该平台需要满足硬件要求： T-Pot 安装需要至少4G 内存， 64G 磁盘空间， 并且联网。**
+
+官网提供了两种T-Pot的安装方式，这里默认在虚拟机环境安装。在物理机上安装类似。
+
+> 1、ISO镜像网络安装。直接丢进虚拟机即可。
+>
+> 2、虚拟机安装好Ubuntu Server 16.04.x LTS后，运行官网提供的自动安装shell脚本即可。
+
+这里强烈建议 **使用第二种方式进行安装**
+。主要原因是该平台需要从Ubuntu源、github和docker等仓库下载文件。如果网络不稳，很大概率会失败。
+
+ISO是网络安装的镜像，除非保证自己网络很流畅，否则基本上会安装失败。就算安装成功，耗费的时间也远大于安装好Ubuntu之后再安装T-Pot17.10平台。
+
+并且自动安装脚本就算安装失败了，还可以重新运行脚本，容错性较大。还可以将已执行的代码注释掉，大大提高安装的效率。也方便追踪安装进度。
+
+ **所以强烈建议使用自动安装脚本进行安装** 。本人偷懒用ISO安装，装了一个晚上，还是不完整的系统。
+
+### 自动安装shell脚本 install.sh
+
+虽说自动安装shell脚本的安装方式比较简单，但是坑还是很多的。
+
+比如删除nginx服务器的默认页面，如果第一次安装不成功，第二次安装就会因为nginx默认页面而报错。
+
+本人一开始每次运行install.sh还要touch创建3个文件。
+
+下面先介绍下详细流程。
+
+ **基本流程**
+
+1、准备普通用户，并为普通用户创建公私钥，用于密钥登录。
+
+以普通用户z为例
+
+创建RSA密钥对
+
+`z@ubuntu:~$ ssh-keygen -t rsa`
+
+添加公钥
+
+`z@ubuntu:~$ cat /home/z/.ssh/id_rsa.pub >> /home/z/.ssh/authorized_keys`
+
+保存私钥/home/z/.ssh/id_rsa 文件，用于后面的登录。
+
+    
+    
+    z@ubuntu:~$ ssh-keygen -t rsa  
+    Generating public/private rsa key pair.  
+    Enter file in which to save the key (/home/z/.ssh/id_rsa):  
+    Created directory '/home/z/.ssh'.  
+    Enter passphrase (empty for no passphrase):  
+    Enter same passphrase again:  
+    Your identification has been saved in /home/z/.ssh/id_rsa.  
+    Your public key has been saved in /home/z/.ssh/id_rsa.pub.  
+    The key fingerprint is:  
+    SHA256:ZEVXpFGTbX+e/RoGkF/XxN9McBKt7MUvaZxAZ7XL/Tw z@ubuntu  
+    The key's randomart image is:  
+    +---[RSA 2048]----+  
+    |         .o o+OO+|  
+    |         . o.o+=O|  
+    |        o o..+.B*|  
+    |       o   o..+.@|  
+    |        S   o+ B*|  
+    |             .Bo=|  
+    |             .oE+|  
+    |             . .o|  
+    |              .. |  
+    +----[SHA256]-----+  
+    ​  
+    z@ubuntu:~$ ls -la ./.ssh  
+    total 16  
+    drwx------ 2 z z 4096 Oct 26 14:56 .  
+    drwxr-xr-x 4 z z 4096 Oct 26 14:56 ..  
+    -rw------- 1 z z 1766 Oct 26 14:56 id_rsa  
+    -rw-r--r-- 1 z z  390 Oct 26 14:56 id_rsa.pub  
+    z@ubuntu:~$ cat /home/z/.ssh/id_rsa.pub >> /home/z/.ssh/authorized_keys
+
+2、以root用户运行install.sh，之后按提示操作即可。
+
+ **安装中遇到的坑和坑和坑**
+
+1、如果安装失败，需要重新安装，需要删除install.sh产生的日志文件：install.err和install.log，才能再次运行脚本。
+
+2、apt-get install 下载一些必要软件时链接失败。
+
+解决方法：更新apt源。本人改成了163源。
+
+3、python更新pip后，报没找到main函数错。
+
+解决方法：重启安装脚本或在运行install.sh之前先更新好pip。
+
+4、脚本执行过一次nginx已删除默认页面后，再次运行显示无默认页面，报错退出。
+
+解决方法：新建这三个文件。简单粗暴但是麻烦。
+
+    
+    
+    touch /etc/nginx/sites-enabled/default  
+    touch /etc/nginx/sites-available/default  
+    touch /usr/share/nginx/html/index.html  
+
+5、pip install 安装docker-compose或elasticsearch-curator因网络问题失败。
+
+这个问题本人曾经尝试用清华源来解决，结果失败了。清华源中没有这两个包。
+
+解决方法：运行install.sh前先安装好docker-compose和elasticsearch-curator
+
+    
+    
+    pip install docker-compose==1.16.1  
+    pip install elasticsearch-curator==5.2.0 
+
+如果网络实在太差，无法下载，下载安装包进行安装：
+
+    
+    
+    pip install docker_compose-1.16.1-py2.py3-none-any.whl  
+    pip install elasticsearch-curator-5.2.0-py2.py3-none-any.whl
+
+本人在安装过程中遇到了以上坑，这些坑和KVM的端口转发折腾了我两天多。这些坑或许有更好的解决方法，但是本人能力有限，基本使用了最为简单粗暴的解决办法。
+
+ **针对中国区修改install.sh**
+
+针对以上坑和坑和坑，本人对install.sh脚本进行了修改，添加了中国源，基本解决以上方法。感谢<https://github.com/n3uz/t-pot-autoinstall>提供的加速思路，n3uz大牛未更新到17.10版本，本人根据他的思路进行了17.10版本install.sh脚本的修改。
+
+git链接如下：<https://github.com/Panjks/t-pot-autoinstall>
+
+由于`elasticsearch-curator`的whl文件找不到了，所以提供了库的源代码。
+
+小白第一次发文，表述不清的地方请各位大佬指出。
+
+ ***本文作者：枫夜丶，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+

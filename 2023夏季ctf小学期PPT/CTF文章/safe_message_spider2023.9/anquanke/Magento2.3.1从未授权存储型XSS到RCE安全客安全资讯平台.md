@@ -1,0 +1,226 @@
+# Magento 2.3.1：从未授权存储型XSS到RCE
+
+阅读量 **279428**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-07-05 14:30:05
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 ripstech，文章来源：blog.ripstech.com
+
+原文地址：<https://blog.ripstech.com/2019/magento-rce-via-xss/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t0166af922390cd9efd.png)
+
+## 0x00 前言
+
+本文介绍了如何在非常流行的电子商务（eCommerce）解决方案Magento中（版本<=2.3.1），利用HTML过滤漏洞以及Phar反序列化漏洞构造较为严重的漏洞利用链。未授权攻击者可以滥用这条漏洞利用链来完全控制特定的Magento平台，重定向用户的付款过程。
+
+## 0x01 漏洞影响
+
+成功利用漏洞后，未授权攻击者可以将一个JavaScript payload永久性植入Magento平台的管理后端。这个JavaScript
+payload在触发时，可以以受害者身份在浏览器中自动化执行漏洞利用步骤。我们在[这个视频](https://blog.ripstech.com/videos/magento-unauthenticated-stored-xss.mp4)中演示了基于JavaScript RIPS shell的攻击过程。
+
+当Magento平台的某个员工登录管理页面时，被注入的JavaScript
+payload就会运行，劫持该员工的管理员会话。随后攻击者可以利用未授权RCE（远程代码执行）漏洞，完全控制整个平台。攻击者可以对运行该平台的企业造成经济损失。比如，攻击者可以将所有付款操作重定向至自己的银行账户，或者直接窃取信用卡信息。
+
+如果Magento平台使用的是内置的Authorize.Net支付模块（这是允许使用信用卡支付的一种Visa解决方案），那么就受该漏洞影响。需要注意的是，Authorize.Net本身并不存在漏洞，漏洞存在于Magento的自身实现中。由于Authorize.Net是比较流行的一种信用卡支付处理服务，因此这条漏洞利用链会影响许多Magento平台。鉴于探测目标平台是否使用Authorize.Net模块是非常简单的一个任务，并且可以自动化实现，因此攻击者可能大规模利用该漏洞。
+
+由于攻击者不需要了解目标平台任何背景信息，也不需要访问Magento平台，不需要使用社会工程学技巧，因此我们将这个漏洞利用链的严重等级标记为高（high）。考虑到所有Magento平台每年的交易额超过1550亿美元，攻击者有充足的动机实施行动。
+
+## 0x02 受影响版本
+
+该漏洞能够影响启用Authorize.Net模块并且版本在一定范围内的所有Magento平台，具体受影响版本如下：
+
+分支 | 漏洞修复版本 | 存在漏洞版本  
+---|---|---  
+2.3 | 2.3.2 | <= 2.3.1  
+2.2 | 2.2.9 | <= 2.2.8  
+2.1 | 2.1.18 | <= 2.1.17  
+  
+## 0x03 技术分析
+
+在下文中，我们来分析能够组合使用的两个不同的安全漏洞。由于这些问题比较严重，我们特意忽略了某些漏洞利用细节。
+
+###  未授权存储型XSS
+
+针对不同场景，Magento提供了多种数据清理过滤方法。这里我们详细分析下如何绕过escapeHtmlWithLinks()过滤方法，以及如何在取消新产品订单的注记（note）中利用这种绕过方法实现未授权存储型XSS漏洞。
+
+在讨论这个方法前，我们先来了解一下Magento的数据清理原理以及主要的清理方法：escapeHTML()。
+
+vendor/magento/framework/Escaper.php：
+
+/**  
+* Escape string for HTML context.  
+*  
+* AllowedTags will not be escaped, except the following: script, img, embed,  
+* iframe, video, source, object, audio  
+*  
+* @param string|array $data  
+* @param array|null $allowedTags  
+* @return string|array  
+*/  
+public function escapeHtml($data, $allowedTags = null)
+
+需要知道的是，escapeHTML()会解析用户的输入（$data），删除没有在第二个参数中（$allowedTags）指定的所有HTML标签。如果没有设置第二个参数，那么就会简单转义处理整个用户输入字符串。该方法还支持在允许的标签中设置若干个HTML属性，包括id、class、href、style以及其他属性。
+
+我们无法绕过escapeHTML()，因此我们搜索能够处理被escapeHTML()过滤后的用户数据的代码，因为对清理过的数据再次修改可能会出现一些问题。我们找到了一个方法：escapeHtmlWithLinks()。在下文中我们会解释该方法的工作原理、其中存在的一个逻辑缺陷以及如何利用该缺陷触发XSS漏洞。
+
+escapeHtmlWithLinks()的目的是在用户输入字符串中，删除除白名单标签之外的所有HTML标签。与escapeHTML()不同的是，这个函数还会删除用户输入字符串<a>标签中除href属性之外的所有属性，以确保链接更加安全。
+
+如下代码片段所示，escapeHtmlWithLinks()会在函数开头处将用户输入字符串中的所有<a>标签解析到一个数组中（$matches）。
+
+vendor/magento/module-sales/Helper/Admin.php：
+
+public function escapeHtmlWithLinks($data, $allowedTags = null)  
+{  
+⋮  
+$data = str_replace(‘%’, ‘%%’, $data);  
+$regexp = “#(?J)<a”  
+.”(?:(?:\s+(?:(?:href\s*=\s*([‘\”])(?<link>.*?)\\\1\s*)|(?:\S+\s*=\s*([‘\”])(.*?)\\\3)\s*)*)|>)”  
+.”>?(?:(?:(?<text>.*?)(?:<\/a\s*>?|(?=<\w))|(?<text>.*)))#si”;  
+while (preg_match($regexp, $data, $matches)) {  
+⋮
+
+下一步是清理href属性中包含的链接以及URL文本，代码会重新创建一个简约标签（如下代码片段164-169行所示）来完成该操作。
+
+清理后的链接会存储到$links数组中，以便后续使用。escapeHtmlWithLinks()随后会替换刚被清理的原始<a>标签，将其替换为用户输入字符串中的%$is，这里$i就是被替换的<a>标签的编号。
+
+⋮  
+while (preg_match($regexp, $data, $matches)) {  
+$text = ”;  
+if (!empty($matches[‘text’])) {  
+$text = str_replace(‘%%’, ‘%’, $matches[‘text’]);  
+}  
+$url = $this->filterUrl($matches[‘link’] ?? ”);  
+//Recreate a minimalistic secure a tag  
+$links[] = sprintf( // line 164  
+‘<a href=”%s”>%s</a>’,  
+htmlspecialchars($url, ENT_QUOTES, ‘UTF-8’, false),  
+$this->escaper->escapeHtml($text)  
+);  
+$data = str_replace($matches[0], ‘%’ . $i . ‘$s’, $data); // line 169  
+++$i;  
+}
+
+为了让大家有个直观的理解，这里我们举个例子，以如下用户输入数据为例：
+
+<i>Hello, <a href=”/the-world/” title=”Hello World”>World!</a></i>
+
+这个输入会被转换成：
+
+<i>Hello, %1s</i>
+
+当escapeHtmlWithLinks()将用户输入字符串中的所有<a>标签替换为对应的%s后，会将结果传递给escapeHTML()。这可以安全清理用户输入字符串（如下代码片段172行），但在下一行代码中，函数通过vsprintf()将已清理的链接插回到现在已清理过的字符串中。这正是存在XSS漏洞的代码位置，接下来我们分析这个XSS漏洞的工作原理。
+
+⋮  
+} // End of while  
+$data = $this->escaper->escapeHtml($data, $allowedTags); // line 172  
+return vsprintf($data, $links);
+
+这里简单将已清理过的链接插入已被转义的用户输入字符串会存在一个问题，因为escapeHtmlWithLinks()并没有考虑到字符串中<a>标签的具体位置。我们可以通过如下表格演示这种操作如何导致HTML属性注入问题：
+
+步骤 | 用户输入字符串  
+---|---  
+解析用户输入字符串中的<a>标签 | <i id=” <a href=’http://onmouseover=alert(/XSS/)’>a
+link</a> “><br/> a malicious link<br/></i>  
+将<a>标签替换为%s | <i id=” %1s “> a malicious link </i>  
+删除用户输入字符串中不需要的标签 | <i id=” %1s “> a malicious link </i>  
+将清理后的<a>标签插回清理后的字符串 | <i id=” <a href=”http://onmouseover=alert(/XSS/)>”>a
+link</a> “><br/> a malicious link<br/></i>  
+  
+如上表所示，<a>标签会被替换为%1s，用户输入字符串会被清理。由于%1s并不是一个危险值，因此会通过清理检查过程。当escapeHtmlWithLinks()将清理后的链接使用vsprintf()重新插回时，会将双引号符注入<i>标签中，因此就出现属性注入问题。
+
+通过这种方式，攻击者可以将任意HTML属性注入结果字符串中。攻击者可以注入恶意onmouseover事件处理程序以及适当的style属性，使恶意链接在整个页面上不可见，当受害者访问包含这种XSS
+payload的页面并移动鼠标时，就会触发XSS攻击。
+
+当用户使用Authorize.Net开始处理订单，但随后取消订单时，Magento会使用escapeHtmlWithLinks()方法来清理这个过程创建的订单取消注记（note）。攻击者可以滥用上文描述的绕过方法，将任意JavaScript注入刚取消订单的概览页面。当平台员工查看已取消的订单时，就会触发XSS
+payload。
+
+###  Phar反序列化
+
+一旦攻击者劫持通过身份认证的用户会话，就可以滥用一个Phar反序列化漏洞，该漏洞存在于WYSIWYG编辑器中负责渲染图像的控制器中。如下代码片段所示，其中POST参数__directive会被传递给图像适配器类的open()方法。该方法在内部实现中会将用户输入传递给getimagesize()函数，而该函数存在Phar反序列化漏洞（大家可参考我们的[这篇文章](https://blog.ripstech.com/2018/new-php-exploitation-technique/)了解更多信息）。
+
+vendor/magento/module-cms/Controller/Adminhtml/Wysiwyg/Directive.php：
+
+public function execute()  
+{  
+$directive = $this->getRequest()->getParam(‘___directive’);  
+$directive = $this->urlDecoder->decode($directive);  
+⋮  
+$image =
+$this->_objectManager->get(\Magento\Framework\Image\AdapterFactory::class)->create();  
+try {  
+$image->open($imagePath);  
+⋮
+
+攻击者可以将一个phar://流封装器注入图像文件处理函数中，触发PHP对象注入，然后可以从Magento核心中构造POP
+gadget链，最终实现远程代码执行。
+
+## 0x04 时间线
+
+日期 | 进展  
+---|---  
+2018/09/25 | 我们报告Magento 2.2.6中存在存储型XSS漏洞  
+2018/11/28 | Magento在2.2.7以及2.1.16中修复了存储型XSS漏洞  
+2018/12/13 | 我们提交绕过Magento 2.3.0补丁的方法  
+2019/01/11 | 我们向Magento安全团队提交Phar反序列化漏洞报告  
+2019/01/26 | 我们发现在特定配置的Magento平台上，未授权攻击者可以触发存储型XSS漏洞，向Magento反馈相关情况  
+2019/01/29 | Magento验证漏洞存在  
+2019/03/26 | Magento发布安全更新，在Magento
+2.3.1、2.2.8以及2.1.17中修复Phar反序列化漏洞。官方没有在改动日志中提到存储型XSS漏洞，也没有发布补丁。  
+2019/04/09 | Magento将存储型XSS漏洞案例标记为“已解决”状态  
+2019/04/09 |
+我们询问Magento是否该问题已解决，因为没有在改动日志中发现相关信息，并且escapeHTMLWithLinks()方法也没有做任何改动。  
+2019/04/10 | Magento重新激活漏洞案例  
+2019/06/25 | 官方为2.3.2、2.2.9以及2.1.18版推出安全补丁  
+  
+## 0x05 总结
+
+本文详细介绍了如何将未授权存储型XSS漏洞与Phar反序列化漏洞结合起来，大规模劫持Magento平台。在现在环境中，想成功利用某些安全缺陷往往需要依赖于产品在多重数据清理、代码逻辑以及环境配置上的缺陷。我们强烈建议所有用户更新到最新版Magento。
+
+## 0x06 参考资料
+
+  * [MyBB <= 1.8.20: From Stored XSS to RCE](https://blog.ripstech.com/2019/mybb-stored-xss-to-rce/)
+  * [WordPress 5.1 CSRF to Remote Code Execution](https://blog.ripstech.com/2019/wordpress-csrf-to-rce/)
+  * [osClass 3.6.1: Remote Code Execution via Image File](https://blog.ripstech.com/2016/osclass-remote-code-execution-via-image-file/)
+  * [WordPress 5.0.0 Remote Code Execution](https://blog.ripstech.com/2019/wordpress-image-remote-code-execution/)
+  * [WordPress Design Flaw Leads to WooCommerce RCE](https://blog.ripstech.com/2018/wordpress-design-flaw-leads-to-woocommerce-rce/)
+
+本文翻译自blog.ripstech.com [原文链接](https://blog.ripstech.com/2019/magento-rce-via-xss/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **興趣使然的小胃** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/181588](/post/id/181588)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [blog.ripstech.com](https://blog.ripstech.com/2019/magento-rce-via-xss/)
+
+如若转载,请注明出处： <https://blog.ripstech.com/2019/magento-rce-via-xss/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [xss](/tag/xss)
+  * [Web安全](/tag/Web安全)
+  * [RCE](/tag/RCE)
+
+ **+1** __4赞
+
+ __收藏
+
+![](https://p2.ssl.qhmsg.com/dm/200_200_100/t0104d1b8b4ca36e961.jpg) 興趣使然的小胃
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

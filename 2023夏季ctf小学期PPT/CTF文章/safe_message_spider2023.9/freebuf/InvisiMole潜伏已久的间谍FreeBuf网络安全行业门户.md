@@ -1,0 +1,359 @@
+**今天为大家介绍InvisiMole的两款恶意组件的操作方式。
+他们会将受影响的计算机变成摄像机，让攻击者可以得知受害者的办公室发生的事情或者获取设备的位置。
+InvisiMole的操控者能够擅自访问该系统，密切监控受害者的活动并窃取受害者的隐私。**
+
+我们的监测数据表明，该恶意软件背后的操控者至少在2013年以来就一直处于活跃状态，但是直到乌克兰和俄罗斯的受感染计算机上的ESET产品发现该[网络间谍](https://www.welivesecurity.com/category/espionage/)工具时才被分析和检测。
+
+该活动的针对性很强 - 难怪恶意软件的感染率较低，只有几十台计算机受到影响。
+
+InvisiMole有一个模块化的体系结构，通过一个加壳的DLL开始它的恶意行为，并使用两个嵌入在资源段的模块执行其行为。这两个模块都是功能丰富的后门，能够尽可能多地收集关于目标的信息。
+
+它还会采取额外的措施来避免引起受害者的注意，从而使恶意软件能够更长时间的驻留在系统上。然而对于[间谍软件](https://www.welivesecurity.com/category/spyware/)是如何传播到受感染的机器还需进一步调查确定。所有感染方法都有可能，包括通过对机器的物理访问进行安装。
+
+## 安装和持久化
+
+我们正在研究的恶意软件的第一部分是一个加壳的DLL，它是用Free Pascal
+Compiler编译的。我们发现这个DLL被放置在Windows文件夹中，伪装成具有伪造版本信息资源的合法mpr.dll库文件。
+
+![1.png](https://image.3001.net/images/20180612/15288132782083.png!small)Fingure1-加壳的dll通过其名称和版本信息构成合法的mpr.dll库
+
+我们还没有看到名称不同的DLL; 但是，DLL代码中显示它也可能被命名为fxsst.dll或winmm.dll。
+
+恶意软件的第一种启动方式是动态库劫持。
+与explorer.exe放在同一文件夹中，加壳的DLL在Windows启动过程中被加载到Windows资源管理器进程中，而不是位于％windir％\
+system32文件夹中的合法库。
+
+我们发现了32位和64位版本的恶意软件，这使这种持久性技术在两种体系结构上均可正常工作。
+
+除了动态库劫持这种方法，其他加载和持久性方法也是可能的。此DLL文件的导出函数名为GetDataLength。当这个函数被调用的时候，dll会检测它是否由父进程为的explorer.exe或svchost.exe的rundll32.exe进程加载，只有这样，它才会加载payload。这表明其他可能的持久性方法，例如通过计划任务（例如svchost.exe作为父进程）或通过设置自启动注册表项（explorer.exe是父进程）。
+
+无论是哪种持久化方法，恶意软件和payload的行为在所有情况下都是相同的。DLL加载存储在其资源中的模块，名为RC2FM和RC2CL和（如果使用DLL劫持），最后将合法库加载到explorer.exe进程中，以便不中断应用程序的正常操作并且保持隐藏。
+
+![2.png](https://image.3001.net/images/20180612/15288133329175.png!small)
+
+Figure2-Dll的导出函数
+
+## 技术分析
+
+恶意软件编译的确切日期未知 - 最近的DLL样本被恶意软件作者篡改，PE文件时间戳被手动设置为零值。
+然而，在我们的研究中，我们发现了一个早期版本的恶意软件，它的时间戳为2013年10月13日，所以后期版本的更新时间会更近。
+
+![3.png](https://image.3001.net/images/20180612/15288133492281.png!small)
+
+Fiture3-所有最新的样本中编译时间戳都被设置为零
+
+## 加密与解密
+
+为了提高其隐身程度，恶意软件通过加密其字符串、内部文件、配置数据和网络通信来躲避管理员和分析师。虽然RC2FM模块使用少量自定义密码，但DLL和RC2CL模块为所有目的共享一个特定例程，特别是用于解密嵌入在DLL中的其他恶意模块。
+
+[ESET’smalware-research GitHub repository](https://github.com/eset/malware-research/tree/master/invisimole)提供了一个能够从DLL中提取嵌入模块RC2FM和RC2CL的脚本。
+
+![4a_4b-1024x891.png](https://image.3001.net/images/20180612/15288133689014.png!small)
+
+Figure4-样本中使用的加密程序（反编译和反汇编）
+
+## RC2FM模块
+
+第一个较小的模块RC2FM包含一个后门，支持15种命令。 这些都是在受到攻击者指示的情况下在受影响的计算机上执行的。
+该模块旨在对系统进行各种更改，但它也同时提供了一些间谍命令。
+
+日志选项在整个文件中实现，但日志文件的名称未在分析的示例中配置。 这表明它只在恶意软件的开发过程中使用。
+
+### 网络通信
+
+该模块通信的C&C服务器地址被硬编码在样本中，或者后期由攻击者进行更新。
+
+而且，即使在受感染的计算机上配置了代理，模块也可以与C＆C服务器联系。如果直接连接不成功，模块将使用本地配置的代理或为不同浏览器(Firefox, Pale
+Moon, and Opera)配置的代理来与它任意的C&C服务器进行连接。
+
+RC2FM会检查最近执行的应用程序列表，并专门查找浏览器可执行文件：
+
+> FirefoxPortable.exe
+>
+> OperaPortable.exe
+>
+> Run waterfox.exe
+>
+> OperaAC.exe
+>
+> Palemoon-Portable.exe
+
+如果受害者在配置了代理服务器的情况下使用这些浏览器之一，则恶意软件可以根据用户的偏好找到并使用该代理与其C＆C服务器进行通信。
+
+C＆C通信由一系列HTTPGET和POST请求组成，如图5所示。加密的请求数据中包括一个PC标识符和时间戳以及可选的其他数据。值得注意的是，与其他InvisiMole组件不同，RC2FM模块使用多种加密方法（简单异或加密的变种）。
+
+![5.png](https://image.3001.net/images/20180612/15288133935840.png!small)
+
+Figure 5-RC2FM模块发送给C＆C服务器的请求示例
+
+在向C＆C服务器成功注册受害者之后，会下载其他数据，这些数据将在本地计算机上作为后门命令。
+
+### 功能
+
+RC2FM支持列出基本系统信息和对系统进行简单更改的命令，但也包括一些间谍软件功能。当攻击者需要时，它能够远程激活受感染计算机上的麦克风并捕获声音。使用合法的lame.dll库将音频录制内容编码为MP3格式，该内容能够被攻击者下载并使用。
+
+恶意软件获取受害者隐私的另一种方式是截取屏幕截图，这是另一种后门的命令。
+
+恶意软件还会监视本地系统上映射的所有固定和可移动驱动器。 无论何时插入新驱动器，它都会创建驱动器上所有文件的列表，并将其加密存储在文件中。
+
+所有收集到的数据最终都会在发出适当的命令时发送给攻击者。
+
+### 后门命令
+
+后门支持15中命令，如下所示，后门函数如图6所示
+
+**Command ID** |  **Command description**  
+---|---  
+0  |  List information about mapped drives, list files in a folder, list
+network shares  
+2  |  Create, move, rename, execute or delete a file, delete a directory using
+the specified path  
+4  |  Open a file, set the file pointer to the file beginning  
+5  |  Close a previously opened file  
+6  |  Write data into a previously opened file  
+7  |  Modify file times / delete a file  
+8  |  Open a file, set the file pointer to the end of the file  
+10  |  Modify file times / delete a file  
+12  |  Search files by supplied file mask in a specified directory  
+13  |  Take a screenshot  
+14  |  Upload or modify files with internal data  
+15  |  Record sound using input audio devices, list available devices, send
+recordings, change configuration  
+16  |  Check whether this module currently has any files open  
+17  |  Update list of C&C servers  
+19  |  Create, set, copy, enumerate or delete the specified registry keys or
+values  
+  
+![6A_6B.png](https://image.3001.net/images/20180612/15288134247654.png!small)
+
+Figure 6-后门函数（原始的和经过我们的分析后，使用IDA Pro的Group Nodes功能进行了更改，以获得更好的可读性）
+
+## RC2CL模块
+
+RC2CL模块也是一个具有广泛间谍功能的后门。 它由DLL启动，与RC2FM模块同时启动。
+这个更复杂，并提供了尽可能多地收集受感染计算机的数据的功能，而不是用于更改系统。
+
+有趣的是，RC2CL模块中有一个选项可以关闭它的后门功能并充当代理。
+在这种情况下，恶意软件会关闭Windows防火墙并创建一个客户端与C＆C服务器之间或两个客户端之间通信的服务器。
+
+### 网络通信
+
+恶意软件通过TCP套接字与其C＆C服务器进行通信。 从客户端发送的消息模仿HTTP协议，但请注意图7中示例中无效的“HIDE”HTTP verb。
+
+发送给攻击者的请求中包含被入侵的PC的标识符，请求类型和加密数据，例如后门命令的结果或对进一步指令的请求。
+
+![7.png](https://image.3001.net/images/20180612/15288134496975.png!small)
+
+Figure7 - 由RC2CL模块发送到C＆C服务器的请求示例
+
+### 功能
+
+根据收到的命令，后门可以在受感染的计算机上执行各种操作。
+常见的后门通常支持诸如文件系统操作，文件执行，注册表键操作或远程shell之类的命令。这个间谍软件支持所有这些指令，并且它的84个命令使攻击者能够更加密切的监控受害者。
+
+恶意软件可以检查受感染的计算机，并提供各种数据，从系统信息（如活动进程列表、运行服务、加载的驱动器或可用的驱动器）到网络信息，包括IP转发表和互联网连接的速度。
+
+InvisiMole能够在受损系统上扫描启用的无线网络。 它会记录可见Wi-Fi接入点的SSID和MAC地址等信息。
+然后可以将这些数据与公共数据库进行比较，使攻击者跟踪受害者的地理位置。
+
+其他命令可以提供有关受感染计算机的用户信息，例如他们的帐户和以前的会话的信息。
+
+攻击者对安装在受感染计算机上的软件特别感兴趣。 系统上安装了哪些程序？ 哪些是在系统启动或用户登录时自动执行的？ 哪些程序被特定用户使用？
+如果攻击者有兴趣，只需一个命令就可以获得重要数据。
+
+恶意软件能够搜索最近使用的文档或其他有趣的文件。 它可以监视特定目录和可移动设备，一旦攻击者感兴趣的文件被更改或泄露，就将此信息反馈给攻击者。
+
+恶意软件可启用或禁用用户帐户控制（UAC），甚至绕过UAC并在安全位置处理文件而无需管理员权限（请参阅<https://wikileaks.org/ciav7p1/cms/page_3375231.html>）。
+如果恶意软件在自动升级的explorer.exe进程下运行，它可以创建一个COM对象，并使用它来删除或移动需要管理员权限的位置中的文件。
+
+更令人不安的是，它可以远程激活受害者的摄像头和麦克风，并通过拍摄和录制声音来窥探受害者。屏幕活动可以通过捕捉屏幕截图来监控。
+InvisiMole中特别有趣的是，不仅是常用的“全屏显示”屏幕截图 - 它还可以分别捕捉每个窗口，即使窗口是重叠的。这有助于攻击者获得更多信息。
+
+此外，其中一个后门命令用于替换驱动程序的内容，其名称如下：
+
+> blbdrive.sys
+>
+> compbatt.sys
+>
+> secdrv.sys
+
+我们还没有观察到实际使用这个命令的攻击者，但我们可以推测这样做是为了在32位系统上实现额外的持久性。
+
+虽然后门能够干扰系统（例如注销用户，终止进程或关闭系统），但它大多提供被动操作。只要有可能，它就会试图隐藏它的活动。
+
+例如，恶意软件在系统的有趣地点周围嗅探，读取最近的文档，甚至修改一些文件。
+这会在系统上留下痕迹，并且上次访问或修改文件的时间会由于此类活动而改变，可能会引起受害者的怀疑。为防止这种情况发生，恶意软件会始终恢复原始文件访问或修改的时间，以便用户不会察觉其操作。
+
+攻击者如何试图暗中行事的另一个例子是他们对待磁盘上留下的痕迹的处理方法。
+恶意软件会收集大量敏感数据，然后将其临时存储在文件中，并在成功上传到C＆C服务器后将其删除。但是，即使被删除的文件也可以由有经验的系统管理员恢复，在受害者意识到之后，可以进一步调查攻击。这种情况是可能存在的，因为即使在文件被删除之后，一些数据仍然驻留在磁盘上。为了防止这种情况发生，攻击者需要安全地删除所有文件，这意味着它首先用零或随机字节覆盖文件中的数据，然后才删除该文件。
+
+### 内部存储器
+
+后门的配置信息和收集到的数据存储工作目录或注册表中。 大部分后门命令用于操纵这些存储位置及其内容。
+
+工作目录的位置由远程服务器的指令决定。该目录用作临时存储收集的受感染计算机数据的文件。这些文件共享一个通用的命名约定，加密算法和结构。它们使用的XOR加密算法的简单变体进行加密。文件的类型可以从文件开始时放置的4字节控制序列导出。
+
+除了作为收集数据的仓库外，工作目录还包含合法的WinRAR.exe应用程序的副本。这被恶意软件复制并被攻击者滥用以压缩泄露的数据。
+
+注册表中存储配置的数据，以及工作目录中的文件列表。 数据被恶意软件二进制文件中实现的Zlib例程压缩，并使用与内部文件相同的密码进行加密。
+
+Subdirectory name  |  File name  |  Control sequences  |  File content  
+---|---|---|---  
+\  |  ~mrc_%random%.tmp  |  932101DA  |  Audio recordings  
+\  |  ~src_%random%.tmp  |  958901DA  |  Audio recordings  
+\  |  ~wbc_%random%.tmp  |  938901DA  |  Webcam photos  
+Sc\  |  ~sc%random%.tmp  |  DFE43A08  |  Screenshots  
+~zlp\  |  zdf_%random%.data  |  B1CBF218  |  Zlib-compressed packages  
+~lcf\  |  tfl_%random%  |  C0AFF208  |  Internal data  
+fl_%timestamp%\strcn%num%\  |  fdata.dat  |  A1CAF108  |  Data from removable
+drives  
+fl_%timestamp%\strcn%num%\  |  index.dat  |  BAAB0019  |  Data from removable
+drives  
+Winrar\  |  WinRAR.exe  |  \-  |  Copy of a legitimate application  
+Winrar\  |  comment.txt  |  \-  |  \-  
+Winrar\  |  descript.ion  |  \-  |  \-  
+Winrar\  |  Default.SFX  |  \-  |  \-  
+Winrar\  |  main.ico  |  \-  |  \-  
+  
+### 后门命令
+
+后门提供了80多条利用工作目录和注册表键来存储其中间结果和配置数据的命令。后门功能如图8所示。
+
+大约三分之一的命令专门用于读取和更新存储在注册表中的配置数据。 下表列出了其余命令。
+
+> Command ID(s) Command description
+>
+> 4 List information about files in adirectory
+>
+> 6 Upload a file
+>
+> 20 List information about active processes
+>
+> 22 Terminate a process by ID
+>
+> 24 Execute a file
+>
+> 26 Delete a file
+>
+> 28 Get the IP forward table
+>
+> 30 Write data to a file
+>
+> 31 Sleep
+>
+> 38 List account information
+>
+> 40 List information about services on thesystem
+>
+> 42 List information about loaded drivers
+>
+> 43 Collect basic system information (computername, OS version, memory
+> status, local time, drive information, configuredproxy information, system
+> and process DEP policy…)
+>
+> 44 List installed software
+>
+> 46 List local users and session information
+>
+> 48 List applications accessed by users
+>
+> 52 Create a directory structure
+>
+> 78 Create a remote shell
+>
+> 81 Execute a command via a remote shell
+>
+> 91 Enable/disable UAC
+>
+> 93 Log off the user/shutdown/restart thesystem
+>
+> 101 Monitor and record changes in the specifieddirectories
+>
+> 103 Delete directories
+>
+> 109 Turn the monitor on/off/onto standby
+>
+> 120 Capture screenshots of the display/activewindows
+>
+> 126 Capture screenshots of the display/activewindows & update configuration
+> data
+>
+> 130 List information about resources on unmappeddrives
+>
+> 132 Rename/move a file, modify create/access/writetimes of the file to the
+> given values
+>
+> 134 List information about recently opened files
+>
+> 152 Disconnect (previously connected) remotedrives
+>
+> 155 Create/delete a registry key, set/delete aregistry key value, or
+> enumerate registry values/keys/data
+>
+> 159, 161 Disable routing/firewall, create a proxyserver on a specified port
+>
+> 172 Repeatedly display a dialog requesting theuser to reboot the computer
+>
+> 175 Bypass UAC to manipulate a file
+>
+> 177 Create and write a file, set thecreate/access/modify times
+>
+> 181 Remove all system restore points
+>
+> 183 Drop (legitimate) WinRAR components
+>
+> 185 Add files to a password-protected archive(password = "12KsNh92Dwd")
+>
+> 187 Decrypt, unpack and load a DLL, loadexecutables from its resources
+> RC2CL, RC2FM
+>
+> 189 Create a system restore point
+>
+> 191 Extract a password-protected archive(12KsNh92Dwd)
+>
+> 193 Modify an encrypted file
+>
+> 195 Restart itself after the primary processfinishes
+>
+> 197 Send 198 bytes of data hardcoded in the sample
+>
+> 199 Rename/move a file
+>
+> 206 Decrypt, unpack and load a DLL, loadexecutables from its resources
+> RC2CL, RC2FM
+>
+> 211 Upload collected information (capturedscreenshots, audio recordings,
+> etc.)
+>
+> 213 List information about active windows
+>
+> 218 API for recording input audio devices
+>
+> 220 API for capturing webcam photos
+>
+> 224 List files executed with each system start
+>
+> 226 List information about enabled wirelessnetworks (MAC address, SSID,
+> beacon interval)
+>
+> 228 Drop a Zlib-compressed package
+
+![8a-1024x400.png](https://image.3001.net/images/20180612/15288134842268.png!small)![8b-1024x332.png](https://image.3001.net/images/20180612/15288134874858.png!small)
+
+Figure 8-后门函数功能（原始的和经过我们的分析后，使用IDA Pro的Group Nodes功能进行了更改，以获得更好的可读性）
+
+## 总结
+
+InvisiMole是功能齐全的间谍软件，它的丰富功能可以与其他间谍工具相抗衡。
+
+我们只能想知道为什么作者决定使用两个具有重叠功能的模块。
+人们可能会认为较小的模块RC2FM被用作初始侦察工具，而较大的RC2CL模块仅用于感兴趣的目标。然而，情况并非如此 -两个模块都是同时启动的。另一种可能的解释是，这些模块可能是由不同的作者制作的，然后捆绑在一起为恶意软件运营商提供更复杂的功能。
+
+恶意软件只使用少数几种技术来避免检测和分析，然而，针对极少数高价值目标部署的恶意软件至少可以保持五年的隐藏状态。
+
+## IOCs
+
+在[GitHub](https://github.com/eset/malware-ioc/tree/master/invisimole)上可以找到完整和全面的IoC，C＆C服务器列表以及注册表项和值。
+
+ *** 原文：[WeLiveSecurity](https://www.welivesecurity.com/2018/06/07/invisimole-equipped-spyware-undercover/)，作者：JustPlay，转载注明来自FreeBuf.COM**  
+

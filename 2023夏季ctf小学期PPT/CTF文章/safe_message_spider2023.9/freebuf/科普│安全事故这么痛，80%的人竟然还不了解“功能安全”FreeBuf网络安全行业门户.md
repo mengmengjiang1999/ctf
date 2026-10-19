@@ -1,0 +1,3 @@
+引言：当前工业有两大主要的安全问题，“功能安全”和“信息安全”，“信息安全”很多人都有所了解，但是“功能安全”还是有很多小伙伴表示并没有听说过。本期就带大家了解什么是“功能安全”以及功能安全的
+发展现状～![1.jpeg](https://image.3001.net/images/20190702/1562032260_5d1ab88458e67.jpeg!small)![2.jpg](https://image.3001.net/images/20190702/1562032260_5d1ab88471a19.jpg!small)![3.jpg](https://image.3001.net/images/20190702/1562032260_5d1ab88476061.jpg!small)![4.jpg](https://image.3001.net/images/20190702/1562032260_5d1ab884f0ddd.jpg!small)![5.jpg](https://image.3001.net/images/20190702/1562032261_5d1ab88544ef7.jpg!small)![6.jpg](https://image.3001.net/images/20190702/1562032261_5d1ab8852a30d.jpg!small)  
+

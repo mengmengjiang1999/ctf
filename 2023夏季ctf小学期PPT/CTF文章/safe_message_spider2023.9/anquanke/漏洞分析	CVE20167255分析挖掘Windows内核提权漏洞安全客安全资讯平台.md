@@ -1,0 +1,199 @@
+# 【漏洞分析】 CVE-2016-7255：分析挖掘Windows内核提权漏洞
+
+阅读量 **215434**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2016-12-30 14:30:31
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：securingtomorrow.mcafee.com
+
+原文地址：[https:/securingtomorrow.mcafee.com/mcafee-labs/digging-windows-kernel-privilege-escalation-vulnerability-cve-2016-7255/](https:/securingtomorrow.mcafee.com/mcafee-labs/digging-windows-kernel-privilege-escalation-vulnerability-cve-2016-7255/)
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+****
+
+**翻译：**[ **overXsky**
+****](http://bobao.360.cn/member/contribute?uid=858486419)
+
+**预估稿费：190RMB（不服你也来投稿啊！）**
+
+******投稿方式：发送邮件至**[ **linwei#360.cn**](mailto:linwei@360.cn) **，或登陆**[
+**网页版**](http://bobao.360.cn/contribute/index) **在线投稿******
+
+**前言**
+
+Windows内核提权漏洞CVE-2016-7255已经受到了很多媒体的关注。在11月份的Patch
+Tuesday中，微软发布了针对此漏洞的修复程序，将其作为MS16-135公告的一部分。根据微软的说明，CVE-2016-7255主要用于执行有针对性的攻击，并且可以通过一些“野路子”来找到样本。
+谷歌和微软已经证实俄罗斯黑客集团APT28使用了一个Flash漏洞（CVE-2016-7855）和这个内核提权漏洞执行了一次有针对性的攻击，谷歌也发布了一些针对此漏洞的讨论：
+
+[https://security.googleblog.com/2016/10/disclosing-vulnerabilities-to-protect.html](https://security.googleblog.com/2016/10/disclosing-vulnerabilities-to-protect.html)
+
+[https://threatpost.com/microsoft-says-russian-apt-group-behind-zero-day-attacks/121722/](https://threatpost.com/microsoft-says-russian-apt-group-behind-zero-day-attacks/121722/)
+
+[http://securityaffairs.co/wordpress/53242/hacking/cve-2016-7255-zero-day.html](http://securityaffairs.co/wordpress/53242/hacking/cve-2016-7255-zero-day.html)
+
+McAfee Labs的漏洞研究团队花费了大量时间来分析此漏洞。我们将在这篇文章中，简要讨论我们的一些发现。
+
+  
+
+**分析**
+
+我们首先从MS16-135的补丁开始着手分析，很快我们就注意到MS16-135在目标系统上更新了win32k.sys，于是我们下一步就开始比较（通过二进制差分手段）两个win32k.sys文件（安装补丁前后）。另外一提，我们的测试系统运行的是Windows
+7，版本号为6.1.7601.23584。
+
+看看二进制差分的结果，我们注意到以下功能被修改。
+
+图1：在win32k.sys中被更改的函数——xxxNextWindow
+
+经过这些初步调查后我们得出结论：CVE-2016-7255的补丁程序完全应用于修复win32k.sys中的xxxNextWindow函数。
+
+以下截图显示了补丁中对xxxNextWindow(x, x)所做更改的更高级概括：
+
+图2：对函数xxxNextWindow进行高级差分的结果
+
+我们可以看到在被修复函数中增添了一些新的逻辑（用红色突出显示）。放大到第一个新插入的基本块，我们可以看到新引入的代码进行了对eax +
+0x23的值的比较操作：
+
+图3：xxxNextWindow中插入的第一个基本块
+
+然后，我们在下一个新插入的基本块中看到了类似的逻辑。
+
+图4：xxxNextWindow中插入的第二个基本块
+
+谷歌已经声明了该漏洞“可以通过win32k.sys系统调用NtSetWindowLongPtr()为GWL_STYLE设置为WS_CHILD的窗口句柄上的索引GWLP_ID触发。“
+
+事实上，NtSetWindowLongPtr()只起到了触发这个漏洞的作用，而根本原因在于xxxNextWindow。更具体地说，由NtSetWindowLongPtr()设置的不合适的参数可以触发xxxNextWindow中的“任意地址写入”场景。
+
+现在让我们来看看未打补丁的xxxNextWindow(x, x, …)的反编译版本。
+
+图5：未修复的xxxNextWindow的反编译版本
+
+应用补丁后，xxxNextWindow(x, x, …)如下所示：
+
+图6：已修复的xxxNextWindow的反编译版本
+
+打补丁后的代码使用条件分支语句“(*(_BYTE *)(v8 + 0x23) & 0xC0) != 0x40”增强了参数验证。
+
+在这个新语句中，变量v8（在eax中）是上一个GetNextQueueWindow调用的返回值。 （见下图）
+
+图7：变量v8来自对GetNextQueueWindow的调用：“v8 = _GetNextQueueWindow(v7, v31, 1);”
+
+快速查看_GetNextQueueWindow(x, x, …)的实现，它揭示了该函数实际上返回一个指向tagWND结构的指针。
+
+下图显示了windbg中的tagWND结构：
+
+图8：tagWND的结构
+
+分析此代码，我们可以从中得知tagWND结构中偏移量0x78处的字段是与漏洞相关的。以下来自未修复函数的反编译代码行证实了这一点：
+
+图9：未修复的xxxNextWindow中的问题代码
+
+现在问题变得简单了：如果我们可以控制在v8+0x78地址处的值，就能够在内核区域中任意地址进行写入操作，并且这很可能就可以实现提权。幸运的是，一个用户态中的API（NtSetWindowLongPtr）就可用于在该位置设置任意值。
+
+下图显示，我们传递给NtSetWindowLongPtr的值（0x41414141）被反射到了tagWND结构中，通过此漏洞可以轻松实现任意内存写入。
+
+图10：在tagWnd结构中设置了一个任意值
+
+为了触发此漏洞，新创建的窗口的WS_CHILD属性必须被分配，并且GWLP_ID属性必须通过API函数NtSetWindowLongPtr()来进行设置。此外，最后一个障碍是如何触发xxxNextWindow。经过一番研究，我们发现可以通过按Alt
++ Tab的组合键或者用keybd_event API模拟按键来触发它。
+
+  
+
+**漏洞复现和进一步分析**
+
+现在，我们已经从上层了解此漏洞的根本原因，下面就让我们来尝试复现此漏洞。我们将创建一个简单的窗口，并在其tagWND结构中填充一些值。
+
+    
+    
+    HWND hwnd = CreateWindowEx(0, L”TestWnd”, 0, WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CHILD, 5, 5, 1, 1, hWndParent, 0/*hMenu */, h, 0);
+    SetWindowLongPtr(hwnd, GWLP_ID,/*0xfffffff4=GWLP_ID*/ 0x41414141);
+
+图11：调试存在漏洞的函数xxxNextWindow
+
+上面的截图显示了实时调试输出。这里ebx寄存器保存了指向tagWND结构的指针，并且写入违规将很快发生。正如下图所看到的，违规指令的目的地正是我们以前通过NtSetWindowLongPtr
+API传递的地址（加上0x14），这完美地证实了一次任意地址写入攻击。
+
+图12：任意地址写入攻击的场景
+
+让我们回到微软的补丁，它首先检查tagWND结构起偏移0x23后的值。 在补丁代码中，我们可以看到新引入的语句
+
+    
+    
+    (*(_BYTE *)(v8 + 0x23) & 0xC0) != 0x40
+
+在打补丁后的函数中，ebx指向了tagWND结构
+
+    
+    
+    ebx + 0x23 = 0x54
+    0x54＆0xc0 = 0x40;
+    0x40！= 0x40;
+
+现在这个语句变成false。 因此，程序跳过以下尝试修改内存的代码行，从而避免了程序崩溃（写入访问冲突）。
+
+    
+    
+    *（_ DWORD *）（*（_ DWORD *）（v30 + 0x78）+ 0x14）＆= 0xFFFFFFFB;
+    *（_ DWORD *）（*（_ DWORD *）（v8 + 0x78）+ 0x14）| = 4u;
+
+如何利用此漏洞实现提权？与允许将任意值写入任意地址相比，此漏洞只能更改一个比特位; 也就是说，地址上的值将0x04（或其倍数）进行逻辑或运算，如下所示：
+
+    
+    
+    Value = Value | 0x04;
+    Value = Value | 0x0400;
+    Value = Value | 0x040000
+    Value = Value | 0x04000000
+
+在这种情况下，如果攻击者可以在内核区域中找到某个对象数组，并使用此逻辑或原语扩大对象数组的索引（例如tagWnd->
+cbWndExtra）从而导致越界访问，这样攻击者就能够从用户态（通过使用一些用户态API）获得任意地址读/写的能力。我们目前知道一些这种利用技能（指的是API），如GetBitmapbits
+/SetBitmapbits（首先由KeenTeam发现）SetWindowText/GetWindowText。
+
+**  
+**
+
+**总结**
+
+如今，使用内核态漏洞的提权仍然是打破应用程序沙箱（Internet
+Explorer的EPM或Edge的AppContainer）的主载体。这个方式已经被我们所看到的针对Internet
+Explorer/Edge/Adobe
+Reader和Flash的大多数成功的漏洞利用证明了。对于当前使用多层防御的Windows版本，使用内核提权突破沙箱仍然是攻击者的第一选择。KeUsermodeCallback过去是一种非常流行的Windows内核漏洞，它可能导致内核模式的代码执行，我们在CVE-2014-4113和CVE-2015-0057中就可以看到。微软在解决内核漏洞和增加更多缓解安全特性方面的工作导致了这种类型的攻击下降。道高一尺魔高一丈，攻击者已经开始研究内核字体和GDI漏洞。Windows
+10已经限制了Edge中的win32k调用，从而显著减少了攻击面。微软也已经修复了利用GDI共享句柄表的内核内存信息披露问题。毫无疑问，内核利用将变得越来越困难。然而，我们预见攻击者仍然会使用win32k作为主攻击面来利用内核实现代码执行或特权提升。对于攻击者和防御者双方战斗都将继续围绕这个热点持续蔓延。
+
+本文翻译自securingtomorrow.mcafee.com
+[原文链接](https:/securingtomorrow.mcafee.com/mcafee-labs/digging-windows-kernel-privilege-escalation-vulnerability-cve-2016-7255/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **overXsky** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/85232](/post/id/85232)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[securingtomorrow.mcafee.com](https:/securingtomorrow.mcafee.com/mcafee-labs/digging-windows-kernel-privilege-escalation-vulnerability-cve-2016-7255/)
+
+如若转载,请注明出处： [https:/securingtomorrow.mcafee.com/mcafee-labs/digging-windows-kernel-privilege-escalation-vulnerability-cve-2016-7255/](https:/securingtomorrow.mcafee.com/mcafee-labs/digging-windows-kernel-privilege-escalation-vulnerability-cve-2016-7255/)
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p4.ssl.qhmsg.com/dm/200_200_100/t01484ec090964be218.jpg) overXsky
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

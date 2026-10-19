@@ -1,0 +1,116 @@
+# Modsecurity介绍
+
+Modsecurity起初是Apache服务器的一个开源模块，用于实现一个简单的WAF，但随着Web服务的发展，Nginx的使用量越来越多，最新统计如下：  
+![](https://image.3001.net/images/20210525/1621941917_60acde9d77b7dd2116b77.png!small)  
+但是如果想Nginx也能使用Modsecurity，实现WAF功能，则必须安装Apache相关的软件，因为这个时候，Modsecurity是强依赖于Apache的。所以，作者在最新版V3.x后，直接重构了Modsecurity，去掉了所有Apache相关的依赖，直接把Modsecurity变成了一个库，也就是libmodsecurity，具体区别，可以查看：http://www.modsecurity.cn/practice/post/13.html
+
+# 安装前说明
+
+如果想要Nginx可以使用libmodsecurity，来实现WAF功能，总共要安全三个部分：
+
+  * 最新版的Nginx：额，为什么是最新版？因为这样最简单。如果是比较旧的版本，就得去查查是否支持了。
+
+  * [ModSecurity-nginx connector](https://github.com/SpiderLabs/ModSecurity-nginx)：负责调用libmodsecurity对Nginx请求进行识别。
+
+  * libmodsecurity：modsecurity核心部分，用于实现请求识别。  
+当上述的三部分安装完了，Nginx就具备了WAF功能了，但是刚开始，没有任何规则，有和没有一样。因此我们需要一批初始化的规则，来实现基本的WAF功能，这里有三个免费的规则集，可以用来完成WAF规则初始化。
+
+  * [CRS](https://github.com/coreruleset/coreruleset/)：OWASP维护，也是modsecurity官方规则集
+
+  * [Comodo](https://waf.comodo.com/)：comodo维护的免费规则，comodo是个商业化安全公司，需要注册账号才能下载，下载时要选择 nginx/modsecurityV3.0 那个版本下载。
+
+  * [AtomiCorp](https://atomicorp.com/free-modsecurity-rules/)：AtomiCorp维护的规则，也需要注册账号才能下载。
+
+# 实践安装
+
+由于Nginx默认是不支持modsecurity，所以Nginx要采用编译安装，在编译时，把modsecurity模块编译到Nginx里，安装步骤分为三步：
+
+  1. 编译libmodsecurity，得到libmodsecurity 库和头文件。
+
+  2. 下载ModSecurity-nginx connector：`git clone https://github.com/SpiderLabs/ModSecurity-nginx.git`
+
+  3. 编译Nginx，指定configure参数：./configure --add-module=/path/to/ModSecurity-nginx
+
+## 编译libmodsecurity
+
+  1. 从项目主页：https://github.com/SpiderLabs/ModSecurity 获取最新的release版本，截止本文发表时，最新版本是V3.0.4
+
+  2. 解压下载到的压缩包，得到目录：modsecurity-v3.0.4
+
+  3. 运行以下命令，编译并安装：
+
+    
+    
+    cd modsecurity-v3.0.4
+    ./build.sh
+    ./configure --prefix=/usr/local/modsecurity
+    make && make install
+    
+
+这样就得到了libmosecurity相关的文件，以供Nginx调用。  
+![](https://image.3001.net/images/20210525/1621941918_60acde9e296c78452dc8b.png!small)
+
+## 编译Nginx
+
+  1. 从Nginx主页：http://nginx.org/en/download.html 下载最新的Nginx源码包，本教程用的是nginx-1.18.0
+
+  2. 下载ModSecurity-nginx connector：`git clone https://github.com/SpiderLabs/ModSecurity-nginx.git`
+
+  3. 解压Nginx和ModSecurity-nginx源码包，得到两个文件夹：modsecurity-nginx-v1.0.1和nginx-1.18.0
+
+  4. 运行一下命令编译Nginx:
+
+    
+    
+    cd nginx-1.18.0
+    ./configure --add-module=/root/download/modsecurity-nginx-v1.0.1/ --prefix=/usr/local/nginx 
+    make && make install
+    
+
+以上命令没有任何错误输出，即表示安装成功。
+
+## 配置Nginx并启动
+
+  1. 从libmodsecurity源码文件夹里，获取modsecurity配置文件：modsecurity.conf-recommended
+
+  2. 执行命令：mv modsecurity.conf-recommended /usr/local/nginx/conf/modsecurity.conf
+
+  3. 修改Nginx配置文件，启用modsecurity  
+![](https://image.3001.net/images/20210525/1621941919_60acde9fa9e4df76cff29.png!small)
+
+  4. 下载CRS规则集：git clone https://github.com/coreruleset/coreruleset/
+
+  5. 在modsecurity.conf文件中修改：SecRuleEngine为on，并在末尾增加如下配置(注意修改路径)：
+
+    
+    
+    Include /root/coreruleset/crs-setup.conf
+    Include /root/coreruleset/rules/*.conf
+    
+
+  6. 启动Nginx: /usr/local/nginx/sbin/nginx
+
+# 效果对比
+
+为了验证modsecurity是否真的可以起到web应用防火墙的作用，这里搭建一个[开源安全靶机](https://github.com/zhuifengshaonianhanlu/pikachu)（搭建方法点击打开项目主页即可获取），并且使用AWVS进行扫描，观察使用前后的漏洞数量变化，结果如下：  
+![](https://image.3001.net/images/20210525/1621941921_60acdea1920eb5081d0f8.png!small)  
+从上倒下分别是：
+
+  * 不开启modsecurity：高危漏洞11个
+
+  * 开启modsecurity，使用comodo规则：高危漏洞7个
+
+  * 开启modsecurity，使用crs规则：高危漏洞6个
+
+  * 开启modsecurity，只记录，不拦截攻击：高危漏洞11个
+
+由此可以，开源的规则可以帮我们拦截掉一些攻击，但不能拦截所有的。  
+modsecurity提供了完整的WAF功能，但是如果拦截、识别攻击，需要我们自己根据自己的业务形态，自定义规则去识别。
+
+# 写在最后
+
+modsecurity提供了完整的WAF功能，并且免费的规则集可以帮助我们快速搭建起一个可用的WAF，降低Web服务被攻击的风险。但是如果想识别的准确、降低误报率，这还需要我们自己去学习modsecurity规则编写的方法，根据自己公司业务的需求，制定规则。  
+还有两个地方，在使用modsecurity时需要注意的，第一就是如果服务器时Apache，那么请使用V2.x版本，因为现在apache
+connector还不太稳定。第二就是别期望太高，正如前面所说的，modsecurity提供的是WAF功能，不是规则，所以，要想准确识别攻击，还是需要自己写规则，这个逃不过去。  
+如果你想使用modsecurity，这个Modsecurity中文站上的教程还是很完整的，可以多看看：http://modsecurity.cn/
+

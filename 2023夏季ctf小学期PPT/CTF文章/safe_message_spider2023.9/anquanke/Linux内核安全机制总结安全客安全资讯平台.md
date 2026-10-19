@@ -1,0 +1,753 @@
+# Linux 内核安全机制总结
+
+阅读量 **426370**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-04-28 10:00:33
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## 前言
+
+之前面试被问到了内核安全机制的相关问题，但是没有很好的回答出来，所以在此以学习的目的总结这方面的知识。欢迎各位师傅一起交流讨论。
+
+## 防御框架
+
+说到Linux内核防御就不得不提起那张广泛流传的`Linux Kernel Defence
+Map`。这里放出两个不同版本的对比图，可以看到新版本中又对老版本的地图做了一些修改和添加。新图在老图的基础上修改了一些语言描述，并且调整了排列顺序，增加了ARM，Intel的硬件防护，clang的CFI，PAX_RAP。所以这里我会按照新图的顺序来讲解。
+
+![](https://p1.ssl.qhimg.com/t01217baca52e9b61cf.jpg)
+
+这个地图把Linux内核的防御相关内容划分成了八种不同的类别，这里简单介绍一下：
+
+  * 绿色标记：Linux内核的主线防御
+  * 白色标记：通用防御技术
+  * 深蓝色标记：主线不支持的防御
+  * 紫色标记：bug检测
+  * 灰色标记：商用防御
+  * 粉色标记：漏洞
+  * 浅蓝色标记：硬件防御
+  * 黄色标记：利用技术
+
+防御方面会总结Linux的主线防御，商用防御和硬件防御，主线不支持的防御将不会出现。
+
+## 防御技术
+
+###  RANDSTRUCT
+
+它是作为一个GCC的插件，能够随机化C写的结构体布局，这个选项开启的时候会把内核中的结构体字段重新排列。这个重新排列的过程发生在编译期间，插件会获得一个随机种子，根据这个来重新排列结构体字段，使得攻击者无法精确知道结构体对应位置的字段。因此，提高了漏洞利用的难度。
+
+参考：<https://lwn.net/Articles/722293/>
+
+###  LATENT_ENTROPY
+
+GCC的插件之一，这个插件为了缓解内核在启动和启动之后生成加密密钥的熵太少的问题。这个插件会把随机值混入到有`__latent_entropy`属性标记的函数中的`latent_entropy`全局变量中。这个全局变量的值会被加入到内核熵池中用来增加熵。
+
+参考：<https://lwn.net/Articles/688492/>
+
+###  PAX_RANDKSTACK
+
+由PaX
+Team实现的`PAX_RANDKSTACK`是针对进程内核栈的随机化。由于内核栈本身的实现，内核中是可以任意访问没有任何防护的。随机化对栈布局的打乱，配合内核栈信息的擦除，能够有效防止内核信息泄漏，不容易猜透内存的布局。
+
+实现总结：
+
+  1. pax_randomize_kstack的实现。这个函数读取时钟（随机数）对进程内核栈基址进行掩码异或，获取有随机化偏移的栈基址，赋值给相应的内核结构，栈增长时就会基于这个随机化地址。
+  2. 在相应的系统调用入口处插入随机化的函数。因为进程內核栈的使用是通过进程触发系统调用（当然还有异常和中断），陷进内核，来切换到进程内核栈，随机化应该在这些地方插入执行。而它放置的位置是在系统调用返回之前。
+  3. 配合性地，PaX 实现了 pax_erase_kstack 函数，在内核/用户空间切换的时候进行内核信息抹除，填充。
+
+参考：<https://github.com/hardenedlinux/grsecurity-101-tutorials/blob/master/grsec-code-analysis/PAX_RANDKSTACK.md>
+
+###  __ro_after_init
+
+为了减少内核中的攻击面，会标记内核的一部分为只读内容。内核在初始化过程中会写入一些内容，但在初始化之后这部分内容确定为只读作用，这种情况下我们不能使用const，因为实际上它是有写入修改的，所以就诞生了`__ro_after_init`。它会在内核初始化完成之后把这些内存区域标记为只读。
+
+参考：<https://lwn.net/Articles/676145/>
+
+###  PAX_CONSTIFY_PLUGIN
+
+为了缓解修改函数指针劫持控制流的攻击方式而推出的GCC插件。它会使得所有的函数指针的结构体都变为只读。
+
+参考：<https://isopenbsdsecu.re/mitigations/missing_features/>
+
+###  PAX_SIZE_OVERFLOW
+
+用于检测溢出用的GCC插件，它会用double类型大小的数据结构来保存size表达式的计算结果，然后拿这个结果和实际的输出大小作比较，以此来检查溢出的情况。但是，这个检测不会针对整个源码，只会对一些特定的地方做检查，比如内存分配的时候错误的大小导致的缓冲区溢出。也可以对一些地方做标记，跳过对它们的溢出检查。
+
+参考：<https://ir.library.oregonstate.edu/downloads/zp38wj554>
+
+###  REFCOUNT_FULL
+
+这个是一个针对引用计数的溢出保护，在对引用计数操作的函数中添加指令检测refcount是否为负。如果没有这个保护，内核对象引用计数不断增加，当发生溢出时，引用计数为负数，内存即可被释放，而此时程序还有对该指针所值内存的引用，就有可能发生`use
+after free`，可以用做攻击利用。
+
+参考：<https://lwn.net/Articles/728626/>
+
+类似的保护`PAX_REFCOUNT`
+
+参考：<https://github.com/hardenedlinux/grsecurity-101-tutorials/blob/master/grsec-code-analysis/PAX_REFCOUNT.md>
+
+###  TIF_FSCHECK flag
+
+一些执行路径会临时升高`addr_limit`，为了内核代码能够像读写用户内存一样读写内核内存，但如果就这样返回到用户态，那么在用户态就可以读写到内核内存，所以这个标志位会在返回用户态时检查`addr_limit`的值。对任何调用了`set_fs()`都会设置线程标记`TIF_FSCHECK`。
+
+参考：<https://patchwork.kernel.org/project/kernel-hardening/patch/20180514130316.23855-2-mpe@ellerman.id.au/>
+
+###  SCHED_STACK_END_CHECK
+
+这个选项是为了检查在调用`schedule()`时的栈溢出情况。如果栈结束的位置发现被覆盖，那么这些被覆盖区域的内容是不可信的。这是为了确保不会发生错误行为，被覆盖区域如果执行可能会在后续阶段出现数据损坏或崩溃。这个检查的运行时开销很小。
+
+参考：<https://cateee.net/lkddb/web-lkddb/SCHED_STACK_END_CHECK.html>
+
+###  GRKERNSEC_KSTACKOVERFLOW
+
+Grsecurity 的 KSTACKOVERFLOW 特性是针对进程内核栈溢出的一些加固措施，主要包括：
+
+  * 进程内核栈初始化时的`vmap`与 `thread_info`的分离
+  * `double_fault` 中 `Guard page` 的检测
+  * 一些指针的检查
+  * 一些配合性的初始化
+
+参考：<https://github.com/hardenedlinux/grsecurity-101-tutorials/blob/master/grsec-code-analysis/KSTACKOVERFLOW.md>
+
+以下是另外两个相关的防御机制
+
+####  VMAP_STACK
+
+这个机制是采用vmalloc申请的内存作为内核栈，这样可以利用vmalloc自带的`guard
+page`增强栈溢出检测能力，同时这些申请的内存空间在物理上可能是不连续的，能够减少内存的碎片化。
+
+参考：<https://blog.csdn.net/rikeyone/article/details/105971720>
+
+####  THREAD_INFO_IN_TASK
+
+这个选项开启的时候会把`thread_info`放入到`task_struct`中，在原来的结构中`task_struct`和`thread_info`是分开的，这个`thread_info`位于线程栈的最低地址处，但又比`task_struct`地址高，所以如果发生溢出会使得`thread_info`的数据结构被破坏，不会被判断为栈溢出。
+
+    
+    
+    union thread_union {
+    #ifndef CONFIG_ARCH_TASK_STRUCT_ON_STACK
+        struct task_struct task;
+    #endif
+    #ifndef CONFIG_THREAD_INFO_IN_TASK
+        struct thread_info thread_info;
+    #endif
+        unsigned long stack[THREAD_SIZE/sizeof(long)];
+    };
+    
+
+参考：<https://zhuanlan.zhihu.com/p/84591715>
+
+###  HARDENED_USERCOPY
+
+这个安全机制是从`PAX_USERCOPY`中借鉴学习的。Linux内核的设计中，内核地址空间和用户地址空间是隔离的，不能直接透过地址去访问内存。因此，当需要发生用户空间和内核空间进行数据交换时，需要将数据拷贝一份到另一个的内存空间中。在内核中
+copy_from_user 和 copy_to_user
+这组函数承担了数据在内核空间和用户空间之间拷贝的任务。这就带来一个问题，如果从用户空间拷贝到内核空间的数据长度超过内核的缓冲区长度，就会产生溢出破坏内核的空间数据导致有漏洞利用的可能。`HARDENED_USERCOPY`在这组函数中实现了对缓冲区长度的检查，当长度检查发现有溢出的可能时，就不会执行数据的复制，防止非法拷贝覆盖内存，破坏栈帧或堆。
+
+参考：<https://github.com/hardenedlinux/grsecurity-101-tutorials/blob/master/grsec-code-analysis/PAX_USERCOPY.md>
+
+###  STACKLEAK
+
+这个机制的出现时为了缓解内核栈的溢出和泄露类型的漏洞。主要作用：
+
+  * 减少内核栈信息泄露漏洞能泄露的信息
+  * 阻止一些未初始化栈变量攻击
+  * 检测进程内核栈的溢出
+
+整体的实现方法借鉴了`PAX_MEMORY_STACKLEAK`，一个是实现了再进出内核空间时对进程内核栈的数据进行擦除，这样就算有泄露信息的漏洞也只能得到无效数据；另外一个用于检测栈溢出的功能可以与`VMAP_STACK`和`THREAD_INFO_IN_TASK`搭配。
+
+参考：<https://a13xp0p0v.github.io/2018/11/04/stackleak.html>  
+<https://github.com/hardenedlinux/grsecurity-101-tutorials/blob/master/grsec-code-analysis/MEMORY_LEAK.md>
+
+###  slub_debug
+
+![](https://p3.ssl.qhimg.com/t01fff7e6edb72d5dd8.png)
+
+####  Z（Red Zone）
+
+Red zone出现在内存分配对象的后面，以及后一个对象的前面，用于检测越界访问的问题，在这里面会填充`magic num`，之后检测Red
+zone区域数据就能够判断是否发生溢出。
+
+####  F（free）
+
+激活完整性检查功能，在特定的环节比如free的时候增加各种条件判断，验证数据是否完好。可以用来检测多次free的情况。
+
+####  P（Posion）
+
+当对象被新分配的时候回被填充特殊的`magic num
+0x5a`，这时出现对象使用就会触发未初始化使用的错误，而在对象释放之后会被填充`0x6b`，这时如果对象被使用就会触发`use after
+free`的漏洞检测。
+
+    
+    
+    #define POISON_INUSE         0x5a    /* for use-uninitialised poisoning */
+    #define POISON_FREE          0x6b    /* for use-after-free poisoning */
+    #define POISON_END           0xa5    /* end-byte of poisoning */
+    
+
+参考：<http://www.wowotech.net/memory_management/427.html>
+
+###  FORTIFY_SOURCE
+
+检查内存拷贝类函数的目的缓冲区是否存在溢出。检测的函数包括：`memcpy`, `mempcpy`, `memmove`, `memset`,
+`strcpy`,`stpcpy`, `strncpy`, `strcat`,
+`strncat`,`sprintf`,`vsprintf`,`snprintf`,`vsnprintf`,`gets`。
+
+参考：<https://access.redhat.com/blogs/766093/posts/1976213>
+
+###  UBSAN_BOUNDS
+
+这是一个ubsan的配置选项，用于执行数组指针越界的检查。选项开启之后能够检测出在编译期间已知数组长度的越界访问漏洞，但这个选项也有较大的局限性，它不能保护因为内存拷贝类函数造成的数组溢出。这个缺点可以用`FORTIFY_SOURCE`来解决。
+
+参考：<https://github.com/torvalds/linux/blob/master/lib/Kconfig.ubsan>
+
+###  SLAB_FREELIST_HARDENED
+
+加固slab
+freelist的元数据的防御，许多内核堆的攻击都尝试针对slab的缓存元数据和其他基础结构，这个选项能以较小的代价加固内核slab分配器，使得通用的freelist利用方法更加难以使用。具体的做法是修改了保存在每个释放的空间的数据,
+也就是freelist那个链表不再是直接取数据就能用的, 需要进行逆运算才能得到下一个空间的地址，运算过程在freelist_ptr函数中。
+
+参考：<https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2482ddec>  
+<https://hardenedlinux.github.io/system-security/2017/12/02/linux_kernel_4.14%E7%9A%84SLAB_FREELIST_HARDENED%E7%9A%84%E7%AE%80%E8%A6%81%E5%88%86%E6%9E%90.html>
+
+###  PAGE_POISONING
+
+和`PAX_MEMORY_SANITIZE`类似的功能，在释放的页上做内存数据擦除工作。在`free_pages()`之后填入特殊的数据，在分配页之前会验证这个数据，以达到防御`use
+after free`的效果，而填充的数据能减少信息泄露。这个选项对内核的执行效率会有一定的影响。
+
+参考：<https://cateee.net/lkddb/web-lkddb/PAGE_POISONING.html>
+
+###  PAX_MEMORY_SANITIZE
+
+这个是一个用于将已被释放的内存，进行全面的擦除的特性。实现思路很简单但效果很好，能够有效防御`use after
+free`的攻击和减少部分信息泄露问题。整个擦除的过程是放在`slab`对象释放时进行，通过检测一开始设置好的`SLAB_`的标志位来确定是否对内存执行擦除。
+
+参考：<https://github.com/hardenedlinux/grsecurity-101-tutorials/blob/master/grsec-code-analysis/MEMORY_LEAK.md#pax_memory_sanitize>
+
+###  init_on_free/init_on_alloc
+
+这两个选项的目标是阻止信息泄露和依赖于未初始化值的控制流漏洞。开启两个选项之一能保证页分配器返回的内存和SL[A|U]B是会被初始化为0。SLOB分配器现在不支持这两个选项，因为它的kmem仿真缓存让`SLAB_TYPESAFE_BY_RCU`缓存的处理变得复杂。开启`init_on_free`也能保证页和堆对象在它们释放之后能立即初始化，因此无法使用悬挂指针访问原始数据。
+
+参考：<https://lwn.net/Articles/791380/>
+
+###  X86: X86_INTEL_UMIP
+
+用于intel的用户模式指令防护（User Mode Instruction
+Prevention，UMIP），UMIP是一个intel新CPU推出的安全特性。如果开启，在用户模式下执行了`SGDT`，`SLDT`，`SIDT`，`SMSW`，`STR`指令就会出现报错，这些指令会泄露硬件状态信息。这些指令很少会有程序使用，大多只会出现在软件仿真上。
+
+参考：<https://cateee.net/lkddb/web-lkddb/X86_INTEL_UMIP.html>
+
+###  kptr_restrict
+
+内核提供的控制变量`/proc/sys/kernel/kptr_restrict`可以用来控制内核的一些信息输出。默认情况值为0，root和普通用户都能读取内核地址，值为1时只有root用户有权限获取，值为2时所有用户都没有权限获得。
+
+参考：<https://blog.csdn.net/gatieme/article/details/78311841>
+
+###  GRKERNSEC_HIDESYM
+
+隐藏内核符号的配置选项，如果开启选项，获取加载模块的信息和通过系统调用显示所有内核符号的操作都会被`CAP_SYS_MODULE`限制。而为了兼容性，`/proc/kallsyms`能限制root用户。
+
+参考：<https://xorl.wordpress.com/2010/11/20/grkernsec_hidesym-hide-kernel-symbols/>
+
+###  SECURITY_DMESG_RESTRICT
+
+用来限制未授权访问内核syslog，内核syslog包含着对漏洞利用非常有效的调试信息，例如：内核堆地址。这个方案比清除数百上千的调试信息更好，而且不会破坏这些重要的调试信息。开启选项之后只有`CAP_SYS_ADMIN`能够读取内核syslog。类似的还有`GRKERNSEC_DMESG`。
+
+参考：<https://lwn.net/Articles/414813/>
+
+###  INIT_STACK_ALL_ZERO
+
+这个选项开启之后会把新分配的栈上的所有数据都初始化为0，这样就消除了所有的未初始化栈变量的漏洞利用以及信息泄露。初始化为0能让字符串，指针，索引等更安全。
+
+参考：<https://cateee.net/lkddb/web-lkddb/INIT_STACK_ALL_ZERO.html>
+
+###  STRUCTLEAK_BYREF_ALL
+
+和`PAX_MEMORY_STRUCTLEAK`类似，只初始化那些在栈上被传输引用的变量，而剩下的没被传输出去的变量不做初始化操作。
+
+参考：<https://www.openwall.com/lists/kernel-hardening/2019/03/11/2>
+
+###  PAX_MEMORY_STRUCTLEAK
+
+开启选项后，内核会对之后要复制到用户态的局部变量初始化为0，这样做同样是防止未初始化的变量泄露信息。它的代价相比`PAX_MEMORY_STACKLEAK`更小，而覆盖的范围也相对更小。
+
+参考：<https://en.wikibooks.org/wiki/Grsecurity/Appendix/Grsecurity_and_PaX_Configuration_Options>
+
+###  bpf_jit_harden
+
+开启选项之后能加固BPF JIT编译器，能够支持eBPF
+JIT后端。启用后会牺牲部分性能，但能减少JIT喷射攻击。一共有三个选项，0表示关闭，1表示针对非特权用户会做加固，2表示针对所有用户都会做加固。这个加固的实现方法是把JIT生成的立即数全部做拆分，生成一个随机数与原来的立即数做异或得到一个值，随后在使用之前再通过异或来还原原始立即数。这样攻击者想利用的立即数就会拆解，导致JIT喷射失败。
+
+    
+    
+    mov    $0xa8909090,%eax
+    =>
+    mov    $0xe1192563,%r10d
+    xor    $0x4989b5f3,%r10d
+    mov    %r10d,%eax
+    
+
+参考：<https://www.kernel.org/doc/Documentation/sysctl/net.txt>  
+<https://arthurchiao.art/blog/cilium-bpf-xdp-reference-guide-zh/>
+
+###  GRKERNSEC_JIT_HARDEN
+
+如果开启选项，则将对内核的BPF
+JIT引擎生成的代码做加固，用来防止JIT喷射攻击。JIT喷射会将对攻击者有用的指令放入JIT生成的32位立即数字段中，通过跳转进生成指令的中间部分来执行攻击者构造的指令序列。而这个选项可以把JIT产生的32位立即数做拆分以此来防御攻击。
+
+参考：<https://en.wikibooks.org/wiki/Grsecurity/Appendix/Grsecurity_and_PaX_Configuration_Options>
+
+###  MODULE_SIG*
+
+一个检查模块签名的选项，内核提供了`SHA1`，`SHA224`，`SHA256`，`SHA384`，`SHA512`五种hash算法。需要注意的是在签名完成之后不要做去除符号表等修改操作。
+
+参考：<https://github.com/torvalds/linux/blob/master/Documentation/admin-guide/module-signing.rst>
+
+###  SECURITY_LOADPIN
+
+LoadPin是一个用来确保所有内核加载的文件都是没有被篡改的Linux安全模块，整体的实现方法是利用新的内核文件加载机制去中断所有尝试加载进内核的文件，包括加载内核模块，读取固件，加载镜像等等，然后会把需要加载的文件与启动之后第一次加载使用的文件作比较，如果没有匹配，那么这次的加载操作会被阻止。
+
+参考：<https://lwn.net/Articles/682302/>
+
+###  LDISC_AUTOLOAD is not set
+
+这个是一个控制自动加载TTY行规程的选项，在历史上当有用户要使用`TIOCSETD
+ioctl`或者其他方法加载内核模块时，内核总是会自动加载内核模块中的任何行规程。如果你之后不会使用一些古老的行规程，最好是把自动加载选项关闭或者设置`CAP_SYS_MODULE`权限来限制一般用户。在系统运行时还可以设置`dev.tty.ldisc_autoload`的值来改变选项。
+
+参考：<https://cateee.net/lkddb/web-lkddb/LDISC_AUTOLOAD.html>
+
+###  GRKERNSEC_MODHARDEN
+
+这是一个加固模块自动加载的选项，开启之后会限制非特权用户使用模块自动加载功能，主要目的是保护内核不要自动加载一些容易受攻击的模块。
+
+参考：<https://xorl.wordpress.com/2010/11/08/grsecuritys-grkernsec_modharden-protection-and-the-rds-local-root-exploit/>
+
+###  DEBUG_WX
+
+在启动的时候对`W+X`执行权限的映射区域产生警告，这个选项的开启能够有效的发现内核在应用`NX`之后遗留的`W+X`映射区域，而这些映射都是高风险的利用区域。需要注意的是这个选项只会在内核启动时检查一次，不会在启动之后再次检查。
+
+参考：<https://cateee.net/lkddb/web-lkddb/DEBUG_WX.html>
+
+###  ARM: RODATA_FULL_DEFAULT_ENABLED
+
+这是ARM版Linux内核中的一个选项，开启之后会把只读的属性应用到虚拟内存的其他线性别名上，这样可以防止代码段或一些只读数据通过其他的内存映射页被修改。这个额外的加固能够在运行时传输`rodata=off`关闭选项。如果想要在选项开启时对只读区域做修改，可以临时设置一个新的可写内存映射，做出修改之后再取消映射完成更新。
+
+参考：<https://cateee.net/lkddb/web-lkddb/RODATA_FULL_DEFAULT_ENABLED.html>
+
+###  STRICT_{KERNEL,MODULE}_RWX
+
+一共两个选项，一个是`STRICT_KERNEL_RWX`，开启选项之后，内核的`text`段和`rodata`段内存将会变成只读，并且非代码段的内存将会变成不可执行。这个保护防御了堆栈执行和代码段被修改的攻击。另外一个`STRICT_MODULE_RWX`，主要目的是设置加载的内核模块数据段不可执行和代码段只读，基本情况和`STRICT_KERNEL_RWX`一样。
+
+参考：<https://cateee.net/lkddb/web-lkddb/STRICT_KERNEL_RWX.html>  
+<https://cateee.net/lkddb/web-lkddb/STRICT_MODULE_RWX.html>
+
+###  PAX_KERNEXEC
+
+`PAX_KERNEXEC` 是 PaX 针对内核的 No-execute 实现，可以说是内核空间版的 pageexec/mprotect。由于
+PAGEEXEC 的实现已经完成了一部分工作（实际上内核的内存访问同样也是透过 page-fault
+去处理），`KERNEXEC`选项的代码实现主要包括这几方面：
+
+  * 对内核空间的内存属性进行设置（RO & NX）
+  * 内核态的内存访问的控制
+  * 可加载内核模块（W^X）和 bios/efi 内存属性的控制
+  * 透过 gcc-plugin 的配合实现
+
+参考：<https://github.com/hardenedlinux/grsecurity-101-tutorials/blob/master/grsec-code-analysis/PAX_KERNEXEC.md>
+
+###  STACKPROTECTOR
+
+检查栈缓冲区溢出的保护，这个选项开启之后会产生大家都很熟悉的`canary`，在函数开头部分一个值会被放进栈的返回地址之前。当发成栈溢出覆盖到`canary`，在函数返回时会检查先前放入的值，如果与前面生成的值不匹配则会终止程序。`canary`产生的条件是栈空间大于等于8字节，需要gcc
+4.2版本以上。
+
+参考：<https://cateee.net/lkddb/web-lkddb/STACKPROTECTOR.html>
+
+###  ARM: SHADOW_CALL_STACK
+
+这个选项会开启Clang的影子调用栈，它会用一个影子栈来保存函数的返回地址，这样即使攻击者修改了返回地址也无法劫持控制流，但它只能用在Clang作为编译语言的情况下。然而当攻击者知道影子栈的位置，并拥有写入的权限，那么这个防护将会失效。
+
+参考：<https://cateee.net/lkddb/web-lkddb/SHADOW_CALL_STACK.html>
+
+###  Control Flow Integrity
+
+为了缓解各种控制流劫持攻击而提出的一种防御手段，在最原始的设计中是通过分析程序的控制流图，获取间接转移指令（包括间接跳转、间接调用、和函数返回指令）目标的白名单，并在运行过程中，核对间接转移指令的目标是否在白名单中。但这种检查针对系统中的每一个跳转和调用就会造成极大的系统开销，而粗粒度的检查又会导致安全性的下降。所以现在的安全研究员在探索新的CFI技术，使其在可接受的开销下能获得高安全性。
+
+####  ARM: ARM64_PTR_AUTH + ARM64_BTI_KERNEL
+
+`ARM64_PTR_AUTH`是开启指针认证支持的选项，开启之后会提供签名和认证指针的指令并产生相关的密钥，这些保护能阻止ROP类修改地址的攻击。需要ARMv8.3才能支持的新特性。
+
+`ARM64_BTI_KERNEL`开启选项会把分支目标识别（BTI）应用到内核中，能够对间接跳转的目标进行限制，能阻止JOP类的跳转攻击。与指针认证结合使用能很大程度上减少控制流劫持攻击。需要ARMv8.5才能支持的新特性。
+
+参考：<https://cateee.net/lkddb/web-lkddb/ARM64_PTR_AUTH.html>  
+<https://cateee.net/lkddb/web-lkddb/ARM64_BTI_KERNEL.html>  
+<https://www.secrss.com/articles/9812>
+
+####  X86: Intel CET
+
+Intel开发的新安全机制控制流执行技术CET（Control-flow Enforcement
+Technology），主要提供了两个功能，间接分支跟踪和影子栈。间接分支跟踪能提供对间接分支的保护，用来防御`JOP/COP`类的攻击方法。影子栈可以提供对返回地址的保护，用来防御`ROP`类的攻击方法，影子栈的实现方式大多类似，这里同样是保存返回地址然后在函数返回时对地址做检查。
+
+参考：<https://newsroom.intel.com/editorials/intel-cet-answers-call-protect-common-malware-threats/#gs.yeecux>
+
+####  PAX_RAP
+
+PaX/Grsecurity团队在2015年提出的针对Linux内核的新安全机制。其中的防御思路也分成两个部分，其一，针对返回地址的保护，它将返回地址保存在`rbx`中并与`r12`异或，在函数返回之前再异或回来并与返回地址作比较。例子如下：
+
+    
+    
+    push %rbx
+    mov 8(%rsp),%rbx
+    xor %r12,%rbx
+    ...
+    xor %r12,%rbx
+    cmp %rbx,8(%rsp)
+    jnz .error
+    pop %rbx
+    retn
+    .error:
+    ud2
+    
+
+其二，针对非直接控制跳转的保护，它这里会在调用之前检查调用地址是否在白名单中，在调用返回之前也会进行检查。
+
+调用执行之前：
+
+    
+    
+    cmpq $0x11223344,-8(%rax)
+    jne .error
+    call *%rax
+    ...
+    cmpq $0x55667788,-16(%rax)
+    jne .error
+    call *%rax
+    ...
+    dq 0x55667788,0x11223344
+    func:
+    
+
+调用返回之前：
+
+    
+    
+    call ...
+    jmp 1f
+    dq 0xffffffffaabbccdd
+    1:
+    ...
+    mov %(rsp),%rcx
+    cmpq $0xaabbccdd,2(%rcx)
+    jne .error
+    retn
+    
+
+参考：<https://pax.grsecurity.net/docs/PaXTeam-H2HC15-RAP-RIP-ROP.pdf>
+
+###  SMEP/PXN
+
+在x86架构下为SMEP（Supervisor Mode Execution
+Prevention，管理模式执行保护），在ARM架构下为PXN（Privileged eXecute Never，永不执行权限）。
+
+SMEP是禁止内核执行用户空间的代码，如果在内核中执行了用户空间的代码就会触发页错误。开启条件是`CR4`寄存器的第21位为1，如果被设置为0则保护关闭。（这也给突破保护留下了机会，如果能通过漏洞把`CR4`寄存器的第20位设置为0即可绕过）
+
+PXN 是一个防止用户空间代码被内核空间执行的安全特性（和SMEP一样）。在 ARMv7 的硬件支持下，通过 PXN
+比特位的设定，决定该页的内存是否可被内核执行，可有效防止 ret2usr 攻击。需要ARMv7的硬件支持。
+
+参考：<https://github.com/hardenedlinux/grsecurity-101-tutorials/blob/master/grsec-code-analysis/PXN.md>  
+<https://blog.csdn.net/qq_40827990/article/details/98937960>
+
+###  SMAP/PAN
+
+在x86架构下为SMAP（Supervisor Mode Access
+Prevention，管理模式访问保护），在ARM架构下为PAN（Privileged Access Never，永不访问权限）。
+
+SMAP是禁止内核访问用户空间的数据，如果在内核中访问了用户空间的代码就会出现错误。开启条件是`CR4`寄存器的第22位为1，如果被设置为0则保护关闭。绕过的方式同样可以是利用漏洞修改`RC4`寄存器的值。
+
+PAN是一个防止用户空间数据被内核空间访问的安全特性（和SMAP一样）。需要ARMv8.1的硬件支持，下面有两个PAN相关的内核配置选项。
+
+参考：<https://mp.weixin.qq.com/s/ErugGvrJxhrf0qoxzWgQAQ>
+
+####  ARM: CPU_SW_DOMAIN_PAN
+
+选项开启之后，启用CPU的PAN保护，确保内核无法访问用户空间数据来提高安全性。实现思路是用不同的内存映射来做约束，但遇到内核确实需要访问用户空间数据的情况时，会临时关闭保护。
+
+参考：<https://cateee.net/lkddb/web-lkddb/CPU_SW_DOMAIN_PAN.html>  
+<a href=”https://patchwork.kernel.org/project/linux-arm-kernel/patch/E1ZSmQG-0002za-E3[@rmk](https://github.com/rmk
+"@rmk")-PC.arm.linux.org.uk/””>https://patchwork.kernel.org/project/linux-arm-kernel/patch/E1ZSmQG-0002za-E3@rmk-PC.arm.linux.org.uk/
+
+####  ARM: ARM64_SW_TTBR0_PAN
+
+这个选项是用`TTBR0_EL1`交换来仿真实现PAN保护。开启选项之后通过把`TTBR0_EL1`指向保留归零区域和保留的ASID来阻止内核直接访问用户空间数据。当需要访问的时候会临时恢复合法的`TTBR0_EL1`。
+
+参考：<https://cateee.net/lkddb/web-lkddb/ARM64_SW_TTBR0_PAN.html>
+
+###  PAX_MEMORY_UDEREF
+
+这个防御机制是针对 Linux
+的内核/用户空间做地址分离，再结合`KERNEXEC`能够防御大量针对内核的漏洞利用，比如`ret2usr/ret2dir`这类将特权级执行流引向用户空间的攻击方式。在
+32-bit 的 x86 下，分离的特性很大部分是透过分段机制的寄存器去实现的，而 amd64 以后由于段寄存器功能的削弱，PaX 针对 64-bit
+精心设计了`KERNEXEC/UDEREF`，包括使用 PCID 特性和`per-cpu-pgd`的实现等。后续UDEREF的改进(2017版)主要是利用硬件特性SMAP提升了性能的同时保证安全性。
+
+UDEREF的实现主要包括几个方面：
+
+  * `per-cpu-pgd` 的实现，将内核/用户空间的页目录彻底分离，彼此无法跨界访问
+  * PCID 特性的使用，跨界访问的时候产生硬件检查
+  * 内核/用户空间切换时，将用户空间映射为不可执行以及一些刷新 TLB 配合实现
+
+由于 UDEREF 经过漫长的演变，而且不同的硬件设施会产生不同的防御效果和安全性能，因此 PaX 实现了如下几种模式的 UDEREF：
+
+  * 无硬件 PCID 支持的，维护的页目录数量只有一个，进出内核的时候屏蔽页目录项的相关访问权限
+  * 有硬件 PCID 支持的 WEAKUDEREF，维护两个页目录，并且将用户空间也备份进内核页目录，屏蔽相关访问位，进出内核时切换 CR3
+  * 有硬件 PCID 支持的 STRONGUDEREF，维护两个页目录，不备份用户空间，内核空间的 TLB 常驻不刷新，减少性能损耗
+
+参考：<https://github.com/hardenedlinux/grsecurity-101-tutorials/blob/master/grsec-code-analysis/PAX_MEMORY_UDEREF.md>
+
+###  DEFAULT_MMAP_MIN_ADDR=65536
+
+`MMAP_MIN_ADDR`是内核中的一个配置选项，它能指定mmap产生的最小虚拟地址。如果这个值设置过于小会增加内核空指针问题导致的安全风险，小地址空间也可能配合其他漏洞做进一步的利用。阻止程序映射较低虚拟内存地址也有不方便的地方，有少部分应用会依赖映射低地址，比如`dosemu`，`qemu`，`wine`。
+
+参考：<https://wiki.debian.org/mmap_min_addr>
+
+###  X86: pti=on (PAGE_TABLE_ISOLATION)
+
+内核页表隔离（KPTI）的前身为KAISER，它是在其基础上增加实现了完全分离用户空间与内核空间的页表来解决页表泄露的问题。实现细节上，在创建全局页目录（PGD）的时候会创建两份，一份在内核运行时使用，另外一份在用户空间运行时使用，这样在切换内核空间和用户空间时PGD也会切换，这两个PGD有着相同的结构，但属于用户空间的PGD中的内核空间大部分会缺失。
+
+参考：<https://lwn.net/Articles/741878/>
+
+###  ARM: kpti=on (UNMAP_KERNEL_AT_EL0)
+
+选项开启后当在用户空间运行时会取消内核的映射，这个保护是针对之前爆出的熔断漏洞，它利用CPU的推测行为绕过MMU权限检查，泄露内核数据到用户空间中。在因为系统调用触发中断等等情况时又会把内核暂时映射回来。
+
+参考：<https://cateee.net/lkddb/web-lkddb/UNMAP_KERNEL_AT_EL0.html>
+
+###  mitigations=auto,nosmt
+
+选项控制针对CPU的保护措施，`auto`会开启所有的保护，`nosmt`会关闭CPU的同步多线程功能。这样每个CPU核的辅助CPU将不会被激活，并且只使用每个CPU核上的主线程。
+
+参考：<https://unix.stackexchange.com/questions/554908/disable-spectre-and-meltdown-mitigations>
+
+###  X86: MICROCODE
+
+Intel为了应对幽灵，针对MICROCODE的生成问题打上补丁。在原来的微码ROM下面又增加了一小块SRAM存储，利用它来在ROM上打补丁。补丁的过程需要微码解码器的硬件支持，基本是向量替换的方式。
+
+参考：<https://zhuanlan.zhihu.com/p/86432216>
+
+###  RESPECTRE
+
+`Pax/Grsecurity`开发出的防御幽灵的安全机制。它是一个gcc编译器插件，它会理解代码的原始含义并自动的重构，用来消除能基于推测的侧信道信息。实际的效果测试表明只占用内核性能的0.3%。
+
+参考：<https://grsecurity.net/respectre_announce>
+
+###  Manual usage of nospec barriers
+
+内核提供的通用API确保在分支预测的情况下边界检查是符合预期的。这里主要设计了两个API `nospec_ptr(ptr, lo,
+hi)`和`nospec_array_ptr(arr, idx,
+sz)`，第一个API会限制ptr在lo和hi的范围内，防止指针越界；第二个API会限制idx只有在`[0,sz)`的范围中才能获得`arr[idx]`的数据。
+
+参考：<https://lwn.net/Articles/743278/>
+
+###  X86: spectre_v2=on (RETPOLINE)
+
+这是针对幽灵和熔断安全漏洞的v2补丁，引入了`retpoline`技术通过`spectre_v2`参数控制。参数有多个配置选项，总结如下：
+
+  * on，表示无论硬件如何，都开启
+  * off，表示物理硬件如何，都关闭
+  * auto，表示内核根据当前CPU model自动选择mitigation方法。参考的因素包括： 
+    * cpu model
+    * 是否有可用微码(也就是针对IBRS和IBPB提供的固件)
+    * 内核配置选项CONFIG_RETPOLINE是否配置
+    * 编译内核用的编译器是否提供了新的编译选项：-mindirect-branch=thunk-extern
+  * retpoline/retpoline,generic/retpoline,amd 一共三种`RETPOLINE`选项，最后对应五种配置
+
+参考：<http://happyseeker.github.io/kernel/2018/05/31/about-spectre_v2-boot-parameters.html>
+
+###  ARM: HARDEN_BRANCH_PREDICTOR
+
+这个配置选项是为了阻止分支预测攻击加固分支预测，针对CPU的分支预测攻击是控制分支预测执行攻击者精心构造的分支路径。通过清除内部分支预测的状态并限制某些情况下的预测逻，可以部分缓解这种攻击。
+
+参考：<https://cateee.net/lkddb/web-lkddb/HARDEN_BRANCH_PREDICTOR.html>
+
+###  X86: spec_store_bypass_disable=on
+
+这个配置选项控制是否开启对`Speculative Store Bypass`的加固以及采用什么方式加固。配置选项如下：
+
+  * off，表示不开启任何加固
+  * on，表示全局关闭CPU的`Speculative Store Bypass`优化
+  * prctl，表示使用prctl进行加固
+  * seccomp，表示使用seccomp进行加固
+  * auto，表示自动选择加固方式，若系统支持seccomp框架，则默认采用 seccomp 加固方式，否则采用 prctl 加固方式
+
+幽灵的v4版本开始利用`store buffer bypass`泄露信息，现代的CPU为了提升性能都会假设`store
+buffer`中不存在当前内存地址的更新值，直接开始执行之后的指令，如果之后发现`store
+buffer`中确实存在更新的值，就会丢弃之前执行的结果，然而这导致之前执行时已经泄露相关的信息。所以这里推荐的是直接关闭CPU的`Speculative
+Store Bypass`优化。
+
+参考：<https://www.sohu.com/a/357494787_467784>
+
+###  ARM: ssbd=force-on
+
+一个ARM架构针对`Speculative Store Bypass`的加固配置，控制`Speculative Store Bypass
+Disable`的开关，和x86的配置比较相似。配置选项如下：
+
+  * force-on，无条件对内核和用户空间开启加固
+  * force-off，无条件对内核和用户空间关闭加固
+  * kernel，开启对内核的加固，并且为用户空间提供用来加固的prctl接口，可以选择性的加固需要的地方。
+
+参考：<https://lkml.org/lkml/2018/5/24/812>
+
+###  X86: mds=full,nosmt
+
+MDS（Microarchitectural Data Sampling，微架构的数据采样）攻击是利用处理器的预测执行，通过测信道获取`store
+buffer`，`fill buffer`，`load
+buffer`中的数据。通过这个攻击能从用户空间获得内核数据，但是由于攻击无法构造特定的内存地址以获取特定地址处的内存数据，因而只能通过采样的方式获取某一内存地址处对应的数据，攻击者需要收集大量数据才有可能推测出敏感数据。
+
+这个配置的选项如下：
+
+  * off，表示不开启MDS的加固
+  * full，表示开启CPU buffer clear，但是不关闭SMT
+  * full+nosmt，表示开启CPU buffer clear，同时会关闭SMT
+
+而针对MDS攻击的加固主要是从内核态切换到用户态时对`store buffer`，`fill buffer`，`load
+buffer`等缓存进行清空，另外还需要配合关闭SMT，以防止同一个核心上的辅助CPU重新填充这些缓存。
+
+参考：<https://www.kernel.org/doc/html/latest/admin-guide/hw-vuln/mds.html>  
+<http://www.360doc.com/content/21/0207/15/15915859_961159696.shtml>
+
+###  X86: l1tf=full,force
+
+L1TF（L1 Terminal Fault，L1终端错误）同样是利用CPU的预测执行来获取物理页的内容。Linux中使用PTE（page table
+entry）来实现虚拟地址到物理地址之间的转换，PTE其中的PFN（page frame number）字段描述对应`page
+frame`的物理地址，P（present）表示当前虚拟地址是否存在对应的物理地址，即是否为该虚拟地址分配了对应的 physical page
+frame。进程在使用虚拟地址访问内存时，会首先找到该虚拟地址对应的 PTE，若 P 字段为 0，则会发生 page fault；若 P 字段为 1，根据
+PFN 字段的值在 L1 data cache 中寻找是否存在缓存。
+
+Intel 处理器在判断 P 标志位是否为 1 的时候，在判断尚未结束之前会预测执行之后的代码，即根据 PFN 字段的值在 L1 data cache
+中寻找是否存在缓存。若缓存命中，那么通过 cache 侧信道攻击，攻击者就可以获取某一物理地址处的内存数据。
+
+这个配置的选项如下：
+
+  * off，表示不开启任何L1TF加固
+  * flush，表示开启条件性的L1D flush加固，关闭SMT Disabling
+  * flush+nowarn，同样开启L1D flush加固，关闭SMT Disabling，不会产生waring警告
+  * flush+nosmt，表示开启条件性的L1D flush加固，开启SMT Disabling加固
+  * full，表示开启无条件的L1D flush加固，开启SMT Disabling加固
+  * full+force，与full效果相同，但无法通过sysfs接口在运行时动态开启或关闭L1D flush或者SMT Disabling
+
+考虑到攻击的条件是对应物理地址在L1数据缓存中命中，那么每次在切换时把缓存清除即可。L1D flush是指在host
+kernel每次进入guest之前，都清空L1的数据缓存，由于清除缓存会带来性能下降的问题，所以又分成条件性清除和无条件清除，无条件就是应用到每次的`VMENTER`都会进行清除，条件执行是当`VMEXIT`和`VMENTER`之间执行的代码都是不重要的路径时，不会执行清除操作。
+
+参考：<https://www.kernel.org/doc/html/latest/admin-guide/hw-vuln/l1tf.html>  
+<http://www.360doc.com/content/21/0207/15/15915859_961159696.shtml>
+
+###  SLAB_FREELIST_RANDOM
+
+开启配置选项会随机化slab的freelist，随机化用于创建新页的freelist为了减少对内核slab分配器的可预测性。这样能增加堆溢出攻击的难度。
+
+参考：<https://cateee.net/lkddb/web-lkddb/SLAB_FREELIST_RANDOM.html>
+
+###  SHUFFLE_PAGE_ALLOCATOR
+
+开启配置选项会使得页分配器随机分配内存，页分配器的随机化分配过程会提高内存端缓存映射的平均利用率，并且随机化的过程也能让页面分配不可预测，能够搭配`SLAB_FREELIST_RANDOM`让整个分配过程更加难以预测。尽管随机化能提高缓存利用率，但会对没有缓存的情况产生影响，因此，默认情况下，只会在运行时检测到有内存缓存之后才会启用随机化，也可以使用内核命令行参数`page_alloc.shuffle`强制开启。
+
+参考：<https://cateee.net/lkddb/web-lkddb/SHUFFLE_PAGE_ALLOCATOR.html>
+
+###  slab_nomerge
+
+选项开启之后会禁止相近大小的slab合并，这个能有效防御一部分堆溢出的攻击，如果slab开启合并，被堆溢出篡改的slab块合并之后通常可以扩大攻击范围，让整个攻击危害更大。
+
+参考：<https://tails.boum.org/contribute/design/kernel_hardening/>  
+<a href=”https://patchwork.kernel.org/project/kernel-hardening/patch/1497915397-93805-24-git-send-email-[keescook@chromium.org](mailto:keescook@chromium.org)/””>https://patchwork.kernel.org/project/kernel-hardening/patch/1497915397-93805-24-git-send-email-keescook@chromium.org/
+
+###  unprivileged_userfaultfd=0
+
+这个标志位是控制低权限用户是否能使用`userfaultfd`系统调用，标志设置为1时，允许低权限用户使用，设置为0时禁止低权限用户使用，只有高权限用户能够调用。`userfaultfd`是Linux中处理内存页错误的机制，用户可以自定义函数处理这种事件，在处理函数没有结束之前，缺页发生的位置将会处于暂停状态，这会导致一些条件竞争漏洞的利用。所以最好的办法是只让高权限用户有使用的权限。
+
+参考：<a href=”https://patchwork.kernel.org/project/linux-fsdevel/patch/20190319030722.12441-2-[peterx@redhat.com](mailto:peterx@redhat.com)/””>https://patchwork.kernel.org/project/linux-fsdevel/patch/20190319030722.12441-2-peterx@redhat.com/
+
+###  DEBUG_{LIST,SG,CREDENTIALS,NOTIFIERS,VIRTUAL}
+
+这一组配置选项用于调试内核。
+
+  * `DEBUG_LIST`：用于调试链表操作，开启之后会在链表操作中执行额外检查
+  * `DEBUG_SG`：用于调试SG表的操作，开启之后会检查scatter-gather表，这个能帮助发现那些不能正确初始化SG表的驱动
+  * `DEBUG_CREDENTIALS`：用于调试凭证管理，开启之后对凭证管理做调试检查，追踪`task_struct`到给定凭证结构的指针数量没有超过凭证结构的使用上限
+  * `DEBUG_NOTIFIERS`：用于调试通知调用链，开启之后会检测通知调用链的合法性，这个选项对于内核开发人员非常有用，能确保模块正确的从通知链中注销
+  * `DEBUG_VIRTUAL`：用于调试虚拟内存转换，开启之后在内存转换时会合法性检查（待确认）
+
+参考：<https://cateee.net/lkddb/web-lkddb/DEBUG_LIST.html>  
+<https://github.com/torvalds/linux/blob/master/lib/Kconfig.debug#L1540>
+
+###  BUG_ON_DATA_CORRUPTION
+
+开启配置选项会在检查到数据污染时触发一个bug，如果想要检查内核内存结构中的数据污染可以开启这个选项。能有效防御缓冲区溢出类漏洞。
+
+参考：<https://cateee.net/lkddb/web-lkddb/BUG_ON_DATA_CORRUPTION.html>
+
+###  STATIC_USERMODEHELPER
+
+这个选项会强制所有的`usermodehelper`通过单一的二进制程序调用。在默认情况下，内核会通过`usermodehelper`的内核接口调用不同的用户空间程序，其中的一些会在内核代码中静态定义或者作为内核配置选项。然而，其中的另外一些是在运行时动态创建的或者在内核启动之后能修改。为了增强安全性，会重定向所有的调用到一个特定的不能改变的二进制程序上，这个程序的第一个参数是需要被执行的用户空间程序。
+
+参考：<a href=”https://patchwork.kernel.org/project/kernel-hardening/patch/[20170116165044.GC29693@kroah.com](mailto:20170116165044.GC29693@kroah.com)/””>https://patchwork.kernel.org/project/kernel-hardening/patch/20170116165044.GC29693@kroah.com/
+
+###  LOCKDOWN_LSM
+
+这个相关的`locked_down`能让LSM（Linux Security
+Module）通过hook的方法锁定内核，阻止一些高危操作。比如加载未签名的模块，访问特殊文件`/dev/port`等等。
+
+参考：<https://lwn.net/Articles/791863/>
+
+## 总结
+
+内核防御机制多种多样，大体上较为通用的思路有限制权限的以SMEP，SMAP为代表，有做地址空间分离的，有通过随机化增加预测难度的，有插入特殊数据块或者检查返回地址防御缓冲区溢出的，有擦除混淆数据防止泄露的。最后可以看到Linux内核的很多优秀的防御机制都来自于`PaX/Grsecurity`，该组织提供的防御思路比各大厂商领先好几年，在学习之余不由得敬佩这20年来他们为内核防御做出的杰出贡献。
+
+## Reference
+
+<https://ayesawyer.github.io/2019/08/16/%E7%B3%BB%E7%BB%9F%E5%AE%89%E5%85%A8%E6%9C%BA%E5%88%B6%E2%80%94%E2%80%94Android-Linux/>
+
+<https://www.jianshu.com/p/4bc65d4477d3>
+
+<https://github.com/bsauce/kernel-security-learning>
+
+<https://github.com/hardenedlinux/grsecurity-101-tutorials>
+
+<https://kernsec.org/wiki/index.php/Main_Page>
+
+<https://hardenedlinux.github.io/announcement/2017/04/29/hardenedlinux-statement2.html>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **hurricane618** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/238363](/post/id/238363)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [linux](/tag/linux)
+  * [Kernel](/tag/Kernel)
+  * [安全机制](/tag/安全机制)
+
+ **+1** __16赞
+
+ __收藏
+
+![](https://p2.ssl.qhimg.com/t01edac59ecef59b68a.png) hurricane618
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

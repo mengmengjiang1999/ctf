@@ -1,0 +1,402 @@
+> **近日，思科在遥测中发现了一个恶意 PowerShell 脚本，进一步分析发现了 ServHelper 远控木马的身影，疑似与 TA505
+> 组织有关。**
+
+TA505 是一个网络犯罪组织，自 2014 年来非常活跃。TA505 经常在攻击行动中使用 Dridex 和 CLOP 勒索软件，有人认为 2021 年
+6 月在乌克兰被捕的 CLOP 团伙成员就是从 TA505 组织而来的。
+
+![image.png-463.9kB](https://image.3001.net/images/20210827/1630075077_6128f8c5774a75c59c88e.png!small)
+
+本次攻击行动中，不仅发现了 TA505 常用的恶意软件（Raccoon 和 Amadey），也有一些新的技术使用。例如 TA505 开始使用有有效证书签名的
+MSI 安装程序、基于 GoLang 实现的 Dropper 等。
+
+## 发现
+
+发现初始 PowerShell 恶意脚本：
+
+![image.png-41.8kB](https://image.3001.net/images/20210827/1630075079_6128f8c78b271abf62a48.png!small)
+
+下载了另一个 PowerShell 脚本，又拉取并执行了 start.vbs。
+
+![image.png-76.4kB](https://image.3001.net/images/20210827/1630075080_6128f8c8118181fcc00c5.png!small)
+
+start.vbs 是一个简单的程序，针对虚拟机检查系统管理 BIOS 内存大小，然后执行脚本 `ready.ps1`。
+
+![image.png-65.3kB](https://image.3001.net/images/20210827/1630075080_6128f8c88f7ceff701df8.png!small)
+
+ready.ps1解码 base64 编码的字符串，禁用 AMSI 接口。安全软件经常利用该接口扫描混淆的 PowerShell、VBA、VBS
+的脚本文件。接着执行 resolve-domain.ps1。
+
+![image.png-172.1kB](https://image.3001.net/images/20210827/1630075081_6128f8c9297f7d3460b9f.png!small)
+
+## Loader
+
+Loader 包含解密实际 PowerShell Loader 的 TripleDES 程序。
+
+![image.png-264.9kB](https://image.3001.net/images/20210827/1630075081_6128f8c9d32b1d70647e5.png!small)
+
+通过硬编码的七字节异或密钥对加密区解密：
+
+![image.png-145.3kB](https://image.3001.net/images/20210827/1630075082_6128f8ca7d8c84e70a89b.png!small)
+
+Payload 将被释放到以下位置：
+
+> C:\Windows\branding\mediasvc.png
+>
+> C:\Windows\branding\mediasrv.png
+>
+> C:\Windows\branding\wupsvc.jpg
+>
+> C:\Windows\system32\rdpclip.exe
+>
+> C:\Windows\system32\rfxvmt.dll
+
+PowerShell 脚本中另一个 URL 下载（<http://45.61.136.223/get/m5.php>）只有在显卡内存大于 4MB
+时才会执行。
+
+![image.png-49.3kB](https://image.3001.net/images/20210827/1630075083_6128f8cb1a9eb8543e35e.png!small)
+
+## 挖矿
+
+程序为每个字符增加十进制 92，再通过 base64 进行编码。在 C:\Windows\system32\update-request.ps1创建另一个
+PowerShell 脚本，并修改注册表进行持久化。
+
+![image.png-93.3kB](https://image.3001.net/images/20210827/1630075083_6128f8cb979bbd66cda99.png!small)
+
+update-request.ps1也使用了前述样本类似的混淆方式。样本拉取执行加密货币挖矿软件，在门罗币和以太坊之间选择。
+
+以太坊挖矿保存在 C:\windows\system32\mui_pack_es.json而门罗币挖矿保存在
+C:\windows\system32\mui_pack.json。
+
+挖矿程序会利用
+[RunPE](https://github.com/d35ha/RunPE/blob/master/RunPE.cpp)通过反射加载到合法进程
+c:\windows\system32\msiexec.exe中。
+
+跟踪以太坊的钱包地址（0x12420E4083F1E37b91AFA0E054682d049F9505C6），在不到四个月的时间收入 17 个
+ETH，折合市价高于三万美元。门罗币钱包地址为
+47EEBQeqq661AchrUwicX1Nxqeuizqoxp4XEV7dUyhkzQgpxGdbJLYGa4xLeQXiBDqQ8xZFUbLCK1Gj2qFmDEZAREwGLjDG。
+
+![image.png-98kB](https://image.3001.net/images/20210827/1630075084_6128f8cc300e6a7da812e.png!small)
+
+## SERVHELPER
+
+resolve-domain.ps1负责安装 ServHelper。而 ServHelper 的加载由两个主要的 DLL 模块和辅助模块组成，以支持通过
+RDP 通信。
+
+通过 PowerShell 脚本修改了默认端口由 3389 转为 7201 上。新的远程桌面服务 Termservice 将 ServiceDLL 指向
+DLL 加载程序 C:\Windows\branding\mediasrv.png。
+
+![image.png-253.1kB](https://image.3001.net/images/20210827/1630075084_6128f8ccce46901fdcb41.png!small)
+
+ServHelper 使用 Delphi 编写，使用自定义的 Vigneres 密码进行加解密，解密的 IDAPython 脚本如下所示：
+
+    
+    
+    import sys
+    import idaapi
+    import idc
+    import ida_bytes
+    import ida_expr
+    import ida_kernwin
+    #Load this Python script into IDAPro. To run it, position the cursor at the screen address of the string to deobfuscate and press the F2 key.
+    def getString(ea):
+        # We get the item-head because the `GetStringType` function only works on the head of an item.
+        string_type = idc.get_str_type(idaapi.get_item_head(ea))
+        string_content = idc.get_strlit_contents(ea, strtype=string_type)
+        return string_content,string_type 
+    
+    
+    # Python code to implement Vigenere Cipher as implemented in the Delphi code at
+    # https://stackoverflow.com/questions/6800326/how-to-crypt-or-hide-a-string-in-delphi-exe/6801163
+    # This algorithm was implemented in ServHelper malware
+    
+    # Generate the key stream from the keyword
+    def generateKey(string, key):
+        key = list(key)
+        if len(string) == len(key):
+            return(key)
+        else:
+            for i in range(len(string) - len(key)):
+                key.append(key[i % len(key)])
+        return("" . join(key))
+    
+    
+    # Decrypt the original text, skip non-alphabet characters
+    
+    def originalText(cipher_text, key):
+        orig_text = []
+        for i in range(len(cipher_text)):
+            if (ord(cipher_text[i]) >= ord('A') and ord(cipher_text[i]) <= ord('Z')):
+                x = (ord(cipher_text[i]) - ord(key[i]) + 26) % 26
+                x += ord('A')
+                orig_text.append(chr(x))
+    
+            elif (ord(cipher_text[i]) >= ord('a') and ord(cipher_text[i]) <= ord('z')):
+                x = (ord(cipher_text[i].upper()) -                     ord(key[i]) + 26) % 26
+                x += ord('a')
+                orig_text.append(chr(x))
+    
+            else:
+                orig_text.append(cipher_text[i])
+    
+        return("" . join(orig_text))
+    
+    
+    
+    def patchString(strng):
+        """Patch a decrypted utf-16le encoded string back to IDAPro"""
+        ida_bytes.patch_bytes(idc.get_screen_ea(), strng.encode('utf-16le'))
+    
+    
+    def decryptString(keyword = 'WBORRHOS'):
+        #change the keyword to a string appropriate for the sample under analysis
+        kemi,strtype=getString(idc.get_screen_ea())
+        strkemi=str(kemi,'utf-8')
+        key= generateKey(strkemi,keyword)
+        decrypted=originalText(strkemi,key)
+        patchString(decrypted)
+    
+        #Make sure what was patched is defined as a string literal
+        ida_bytes.create_strlit(idc.get_screen_ea(),ida_bytes.get_item_size(idc.get_screen_ea()),strtype)
+    
+    
+    
+    def key_decrypt():
+        decryptString( 'WBORRHOS')
+    
+    
+    #Assign the decryption function to the function key F2
+    ida_kernwin.add_hotkey('F2', key_decrypt)
+
+ServHelper 启动许多线程，一些接受命令，一些通过 OpenSSH 传输数据等。支持的命令如下所示：
+
+> xl
+>
+> info
+>
+> fixrdp
+>
+> reboot
+>
+> updateuser
+>
+> deployns
+>
+> keylogadd
+>
+> keylogdel
+>
+> keyloglist
+>
+> keylogreset
+>
+> keylogstart
+>
+> sshurl
+>
+> getkeylog
+>
+> getchromepasswords
+>
+> getmozillacookies
+>
+> getchromecookies
+>
+> search
+>
+> bkport
+>
+> hijack
+>
+> persist
+>
+> stophijack
+>
+> sethijack
+>
+> setcopyurl
+>
+> forcekill
+>
+> nop
+>
+> tun
+>
+> slp
+>
+> killtun
+>
+> shell
+>
+> update
+>
+> load
+>
+> socks
+
+ServHelper 的 hijack 应该由 DLL 导出的 gusiezo3 来具体实现，但实际上进入了无限循环的睡眠状态。
+
+![image.png-155.5kB](https://image.3001.net/images/20210827/1630075085_6128f8cd78a17ae5206df.png!small)
+
+利用 C&C 域名关联到了另一个 GoLang 的 Dropper。
+
+## GOLANG Dropper
+
+Dropper 使用 [go-clr](https://github.com/ropnop/go-clr)，从 rdate 段提取数据，gzip
+解压后加载到内存执行。默认的 base64 编码数据已损坏，避免被自动提取：
+
+![image.png-154.3kB](https://image.3001.net/images/20210827/1630075086_6128f8ce0d14f7004142d.png!small)
+
+加载的程序是 ServHelper 的常用 Dropper，提取脚本并启动感染。
+
+![image.png-197.1kB](https://image.3001.net/images/20210827/1630075086_6128f8ce999676c0ea062.png!small)
+
+该 Dropper 是由 MSI 安装程序安装的，该程序未被任何反病毒软件检出。
+
+![image.png-71.9kB](https://image.3001.net/images/20210827/1630075087_6128f8cf6507f73820637.png!small)
+
+## MSI
+
+使用的证书来自俄罗斯公司 SGP-GEOLOGIYA, OOO，样本在 VirusTotal 上发现的时间是 5 月 2 日和 7 月 15 日。
+
+MSI 安装程序通过 [Advanced
+Installer](https://www.advancedinstaller.com/)的试用版创建。AI_PreRequisite 表中包含指向
+URL 的地址：
+
+![image.png-20.7kB](https://image.3001.net/images/20210827/1630075087_6128f8cff09a40238e984.png!small)
+
+filename.exe 应该是 ServHelper Dropper 的 Downloader。
+
+## RACCOON 和 AMADEY
+
+下载的 filename.exe 是 Raccoon 的变种。该样本与 C&C 服务器（34.76.8.115）通信。
+
+Raccoon 使用 HTTP 协议通信，数据通过 RC4 加密，密钥硬编码在程序内。
+
+![image.png-190.5kB](https://image.3001.net/images/20210827/1630075088_6128f8d076f8c04493cea.png!small)
+
+所分析样本的 RC4 密钥是 $Z2s`ten\@bE9vzR，解密流量可见配置如下所示：
+
+![image.png-117kB](https://image.3001.net/images/20210827/1630075089_6128f8d1149c078324be8.png!small)
+
+除 RACCOON 外，还有 AMADEY 也被安装进来。
+
+![image.png-225.6kB](https://image.3001.net/images/20210827/1630075089_6128f8d1a98b7c0abb2ec.png!small)
+
+## 总结
+
+本次发现的攻击行动，被怀疑是由 TA505 发起的，安装了多个旨在窃密和泄露数据的恶意软件。未来可能有更多类似 TA505
+的攻击团伙来使用这些工具和技术，对检测能力的提升要求更高。
+
+## IOC
+
+> 45.61.137.91  
+> 91.212.150.205  
+> 193.150.70.5  
+> 94.158.245.88  
+> 93.157.63.171  
+> www.homate.xyz  
+> www.dsfamsi4b.cn  
+> www.afspfigjeb.cn  
+> www.pgf5ga4g4b.cn  
+> www.wheredoyougo.cn  
+> www.novacation.cn  
+> dssagrgbe3irggg.xyz  
+> dsgiutugagb.cn  
+> asfggagsa3.xyz  
+> sagbbrrww2.cn  
+> kbpsorjbus6.pw  
+> www.sdfisdgj.xyz  
+> www.kbpsorjbus6.pw  
+> sdfisdgj.xyz  
+> dsfamsi4b.cn  
+> novacation.cn  
+> wheredoyougo.cn  
+> asdjausg.cn  
+> pgf5ga4g4b.cn  
+> homate.xyz  
+> www.asdjausg.cn  
+> afspfigje..cn  
+> geyaeb.dev  
+> telete.in  
+> 185.163.45.103  
+> 206.188.197.221  
+> 206.188.196.143  
+> 46.17.96.8  
+> 45.61.137.91  
+> http://94.158.245.88/bi.ps1  
+> http://94.158.245.88/bf/start.vbs  
+> http://94.158.245.88/bf/Get-Content.ps1  
+> http://94.158.245.88/bf/ready.ps1  
+> http://ww16.enroter1984.cn/bif/b.php  
+> http://novacation.cn/bif/b.php  
+> http://novacation.cn/juytfft/b.php  
+> http://193.150.70.5/al.exe  
+> http://bromide.xyz/ssh.zip  
+> http://91.212.150.205/al.exe  
+> http://94.158.245.88/cap/Get-Content.ps1  
+> http://94.158.245.88/drc.ps1  
+> http://94.158.245.88/cap/start.vbs  
+> http://94.158.245.88/cap/ready.ps1  
+> http://94.158.245.88/mae/start.vbs  
+> http://94.158.245.88/mae/Get-Content.ps1  
+> http://94.158.245.88/mae/ready.ps1  
+> http://45.61.136.223/get/m5.php  
+> http://beautyiconltd.cn/ethged.txt  
+> http://beautyiconltd.cn/ethcnf.txt  
+> http://beautyiconltd.cn/rigged.txt  
+> http://beautyiconltd.cn/cnf.txt  
+> http://93.157.63.171/filename.exe  
+> http://93.157.63.171/al.exe  
+> https://mepcontechnologies.com/DiscordSetup.msi  
+> https://raw.githubusercontent.com/sqlitey/sqlite/master/speed.ps1  
+> f36277c6faaed23129efacc83847153091cd1ef0b05650e0b8c29d13d95182a5  
+> a9fa2da9be5b473da0f2367f78494d3dc865774bf1ad93c729bbe329a29a1f9d  
+> f80df34accc8780a1eb9c733e4e5e5874cce6ad22e57ec8b827aa7f28318c5d1  
+> 0fde5e73f96e6df0b75cc15cffb8d7ff0d7a1cda33777e7ee23c5d07011e6ae8  
+> 569d0618131bbbe08498c1f90518df90d394c37e5c146ac3bc74429c4f7f113a  
+> 45732f9c8b3e853484464d5748a8879a7095dc0c1c08e66854d350254c38bb42  
+> a2b0ef2413399dbdb01de3a0d2dd310ba127bbfdad09352fecb8444d88a05662  
+> 02390b9368add3c496f779db617d19171379b36f1d79c0fa4ab3a07afc7c3e46  
+> 9c7fc1304f9dada69594f64d230cb20ce3c1f83a41ca0e27b6274361941b3c67  
+> 74333b02f97c1fbf44592463210a6962f1601ab91a4e28d037756b9804c5b2a0  
+> 5b6b7899dd459fa0bb234a0b102af91f4ee412abf36b1c54d1253ae59dda6ee2  
+> 9520067abc34ce8a4b7931256e4ca15f889ef61750ca8042f60f826cb6cb2ac9  
+> f00f8b0d2602fc2e8bcf5899377f6a23beae9ea9df2c0a3c4e9aad4cae2ef522  
+> b65273062c9be6bfc6343438e51d7f68aaecf8382ae1373ff1b3adfacff1fd5d  
+> 0d650a1ab25e820a8bcd2b49144daef20439c931d5bbd5b547c65511aab6d334  
+> 5d4a0661cfb3cca59acd8a9fa433ec2c48d686da36f3890b73e7b9f37c60e980  
+> a1351912f8ffeeb5ebe2eb8abf45e50a52b67f82328090ad4b1ba89f30106e00  
+> 7a9fae49143829692253d09fa7c66f6c2809d29cff52734567db688c91a01924  
+> 20eb050c3c94f134ca7c812c712deb45870f6952086608a11d4d4e78ca3c8ff6  
+> ffcdccdae62c13b61f32d6fa0ad73ddbfda89d0e4fcab3bf074003ca73d522a5  
+> 4390543ecc7f39f0dcf6db2816edaaa6b64f720263c401c108f18df291241cb5  
+> 1f2f7c7e0ad496e8991e4495b8830961314baee109fb7e0d15d2c3dc0857ef0b  
+> 42c277ada9c6f8ddcd6211e4792a8df1fa0d0ad8cbb867eee1a431cc1b79834d  
+> 0b25a462efbb3c5459febae122e434f4a6ec6d2dbfacf03e4537e437f91c5dcc  
+> 64926d011513a3083b0af3425b38fbfc66d2bad0e3993898ec4651252812685b  
+> 45e81832542da0e190a1bf44c58b0c96f3ec11b488450aad7eb7a3e6e16f0703  
+> baad7552e8fc0461babc0293f7a3191509b347596d9ca8d2a82560992ff2c48e  
+> fe40b63a00a7d737baa87f493751a1b92ac782baaef2304b0ae65c5a1cbec58d  
+> 5202c92268cb86785644bf0fd22eb6290498034878b6c41e84ac5b4bcc7d671a  
+> 44815a42eb3317c7e567f8e20388bd9e28cf71096f45f4ee6094f26888dcfb0c  
+> 8aa55a77613e1246a7ce499a85cd52ee2d48b4f4730d62850e249d6249214abf  
+> b3e3132a078fd8d266d709ecf351fc9283a63fbdcce4023c460363896593f6b8  
+> 32c18e01aa78a0d07025e36ebaef5ae582cadb6d53d47aab1ee629ba4eee2fab  
+> 526273ef0f1bfe161af24d9f1946bb72797d06a5b21ed750988797597d16c28d  
+> 6ad5b2b54e8c01ca7f59a40564e897352c1e24ce0899ef10ee3c3e035f510c59  
+> 6eca26fcfabbb12c6a37eb689de222e75b31574dd25e7fd3d8b446d700c40133  
+> 8fa841c71a956755f6f393ca92a04d0a6950343a7a765a3035f4581dda198488  
+> 82d290c62cb838a94e1948ba84c2a90c42c0ad44bb79413ea0b8ae2560436c8e  
+> 3dccc313dcf21c5504ce1808595979dec90f94626bdc8ef18518176ab20418a2  
+> 7516b2271e4a887156d52f661cdfc561fded62338a72b56f50bf188c2f5f222a  
+> 5f008ff774ae78a416b10f320840287d7c00affb9c1b2ea8e8c1931300135985  
+> e7e6e479b0fa5edb03f220084756fff778cf46865fe370924d272545e8181865  
+> db710c90eaa2f83be99f1004b9eda6cfbf905a1ab116d1738a89f4eac443f4fe  
+> fea63897b4634538e9e73c0f69c2e943aebc8cebcffc1415f5ce21207fdfef92  
+> fdc9788b38e06eafe34c6050f37224409e423f37d67d637ddac25e9cf879e2f2  
+> 561e9e4263908c470bb2ef9b64cac7174e43aeb795cb0168699cd4c219eab93c
+
+## 参考来源
+
+> [TalosIntelligence](https://blog.talosintelligence.com/2021/08/raccoon-and-> amadey-install-servhelper.html)
+

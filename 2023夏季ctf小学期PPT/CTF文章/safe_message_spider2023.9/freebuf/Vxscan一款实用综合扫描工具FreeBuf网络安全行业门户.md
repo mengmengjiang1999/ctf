@@ -1,0 +1,387 @@
+**Vxscan是用python3写的综合扫描工具，主要用来敏感文件探测(目录扫描与js泄露)，WAF/CDN识别，端口扫描，指纹/服务识别，操作系统识别，弱口令探测，POC扫描，SQL注入，绕过CDN，查询旁站等功能。**
+
+## 安装说明
+
+要求Python版本大于3.6：
+
+    
+    
+    git clone <https://github.com/al0ne/Vxscan> 
+    
+    cd Vxscan 
+    
+    apt install libpq-dev nmap 
+    
+    wget <https://geolite.maxmind.com/download/geoip/database/GeoLite2-City.tar.gz> 
+
+解压后将里面的GeoLite2-City.mmdb放到vxscan/db/GeoLite2-City.mmdb。
+
+    
+    
+    pip3 install -r requirements.txt
+
+## 主要功能
+
+使用多线程扫描目录；
+
+使用笛卡尔乘积方式生成字典列表，支持自定义字典列表；
+
+随机的UserAgent、XFF、X-Real-IP；
+
+存活探测，对扫描目标先通过socket.gethostbyname判断解析在通过ping判断存活；
+
+自定义404页面识别，访问随机页面然后通过difflib对比相似度，识别自定义302跳转；
+
+扫描目录时先探测http端口，将一个主机多个http端口加入到扫描目标中；
+
+过滤无效Content-Type，无效状态吗；
+
+WAF/CDN探测，集成100+常见WAF与CDN指纹；
+
+使用socket发包探测常见端口，发送不同payload探测端口服务指纹；
+
+遇到全端口开放的主机(portspoof)自动跳过；
+
+调用wappalyzer.json与WebEye判断网站指纹，集成1200+常见指纹；
+
+检测到CDN或者WAF网站自动跳过；
+
+调用nmap识别操作系统指纹；
+
+根据端口开放调用弱口令探测脚本(FTP/SSH/TELNET/Mysql/MSSQL...)；
+
+根据指纹识别或者端口调用POC扫描,或将IP开放的WEB端口上打一遍；
+
+分析js文件里面的敏感资产信息(域名、邮箱、apikey、password等)；
+
+抓取网站连接，测试SQL注入，LFI等；
+
+调用一些在线接口获取信息，通过VT
+pdns判断真实IP，通过[www.yougetsignal.com](http://www.yougetsignal.com)、api.hackertarget.co查询网站旁站。
+
+## 使用方式
+
+ **python3 Vxscan.py -h**
+
+    
+    
+    optional arguments:
+      -h, --help            show this help message and exit  
+      -u URL, --url URL     Start scanning this url -u xxx.com  
+      -i INET, --inet INET  cidr eg. 1.1.1.1 or 1.1.1.0/24  
+      -f FILE, --file FILE  read the url from the file  
+      -t THREADS, --threads THREADS  
+                            Set scan thread, default 150  
+      -e EXT, --ext EXT     Set scan suffix, -e php,asp  
+      -w WORD, --word WORD  Read the dict from the file
+    
+
+**1.扫描一个网站**
+
+    
+    
+    python3 vxscan.py -u http://www.xxx.com/ 
+
+**2.从文件列表里扫描网站**
+
+    
+    
+    python3 vxscan.py -f hosts.txt 
+
+**3.扫描一个C段**
+
+    
+    
+    python3 vxscan.py -i 127.0.0.0/24 
+
+**4.设置线程100，组合只用php后缀，使用自定义字典**
+
+    
+    
+    python3 vxscan.py -u http://www.xxx.com -e php -t 100 -w ../dict.txt 
+
+## 目录结构
+
+    
+    
+    /
+    ├─Vxscan.py  主文件
+    ├─db
+    │  ├─apps.json  Web指纹信息
+    │  ├─apps.txt  Web指纹信息(WEBEYE)
+    │  ├─password.txt  密码字典
+    ├─report    报告目录
+    ├─lib       
+    │  ├─common.py    判断CDN、端口扫描、POC扫描等
+    │  ├─color.py   终端颜色输出
+    │  ├─active.py   判断dns解析与ping ip存活
+    │  ├─save_html.py     生成html报表
+    │  ├─crack.py     测试弱密码
+    │  ├─waf.py     waf规则
+    │  ├─osdetect.py   操作系统版本识别
+    │  ├─random_header.py   自定义header头
+    │  ├─scan_port.py        端口扫描脚本
+    │  ├─jsparse.py      抓取网站js连接，分析ip地址，链接，Email等
+    │  ├─settings.py      设置脚本
+    │  ├─pyh.py     生成html
+    │  ├─wappalyzer.py    指纹识别脚本
+    │  ├─SQLi.py    抓取网站连接，测试SQL注入脚本
+    ├─script  
+    │  ├─Poc.py         Poc脚本
+    │  ├─......
+    ├─requirements.txt
+    ├─logo.jpg
+    ├─error.log
+
+## 配置文件
+
+修改lib/settings.py
+
+    
+    
+    # 全局超时时间
+    TIMEOUT = 5
+    # 要排除的状态吗
+    BLOCK_CODE = [
+        301, 403, 308, 404, 405, 406, 408, 411, 417, 429, 493, 502, 503, 504, 999
+    ]
+    # 设置扫描线程
+    THREADS = 100
+    # 要排除的 内容类型
+    BLOCK_CONTYPE = [
+        'image/jpeg', 'image/gif', 'image/png', 'application/javascript',
+        'application/x-javascript', 'text/css', 'application/x-shockwave-flash',
+        'text/javascript', 'image/x-icon'
+    ]
+    
+    # 是否跳过目录扫描
+    SKIP = True
+    
+    # 保存的文件名
+    html_name = time.strftime("%Y%m%d%H%M%S", time.localtime())
+    
+    # shodan
+    shodan_api = ''
+    
+    # VT接口
+    virustotal_api = 'xxxxxxxxxxxxxxxxxxxxxxxxxx'
+    
+    # 添加Cookie
+    COOKIE = {'Cookie': 'Vxscan 1.0'}
+    
+    # 设置密码
+    PASS = ['password']  
+    
+
+## POC编写
+
+### 案例1 根据端口开放或者指纹识别结果来调用POC
+
+在script目录下新建python文件，定义好check函数，传进来的参数主要是ip地址、端口列表、指纹识别列表，然后将结果return回去：
+
+    
+    
+    import pymongo
+    from lib.verify import verify
+    
+    timeout = 2
+    vuln = ['27017', 'Mongodb']
+    
+    def check(ip, ports, apps):
+        # verify用来验证扫描列表中是否有Mongodb相关的结果，如果端口没有开启则不进行扫描  
+        if verify(vuln, ports, apps):  
+            try:  
+                conn = pymongo.MongoClient(host=ip, port=27017, serverSelectionTimeoutMS=timeout)  
+                database_list = conn.list_database_names()  
+                if not database_list:  
+                    conn.close()  
+                    return  
+                conn.close()  
+                return '27017 MongoDB Unauthorized Access'  
+            except Exception as e:  
+                pass
+
+### 案例2 在目标IP开放的每个HTTP端口上遍历一遍
+
+根据传递过来的端口服务列表生成要扫描的url，然后在每个web端口中去访问一遍，下面脚本会获取ip每个http端口的标题：
+
+    
+    
+    from lib.verify import Probe
+    from lib.random_header import HEADERS
+    from lxml import etree
+    import requests
+    
+    def get_title(url):  
+        try:  
+            r = requests.get(url, headers=HEADERS, timeout=3, verify=False)  
+            html = etree.HTML(r.text)  
+            title = html.xpath('//title/text()')  
+            return url + ' | ' + title[0]  
+        except:  
+            pass  
+      
+      
+    def check(ip, ports, apps):  
+        result = []  
+        probe = Probe(ip, ports)  
+        for i in probe:  
+            out = get_title(i)  
+            if out:  
+                result.append(out)  
+        return result
+
+### 案例3 根据端口开放调用弱口令探测：
+
+    
+    
+    from lib.verify import verify, GetHosts  
+    import concurrent.futures  
+    import pymysql  
+      
+    vuln = ['mysql', '3306']  
+    user = ['root']  
+    result = ''  
+      
+      
+    def mysqlBruteforce(task):  
+        global result  
+        address, username, password = task.split('|')  
+        try:  
+            db = pymysql.connect(address, username, password, "mysql")  
+            result = 'Mysql User: ' + username + ' Pass: ' + password  
+    except:  
+            pass  
+      
+      
+    def check(ip, ports, apps):  
+        global result  
+    if verify(vuln, ports, apps):
+            # GetHosts会根据ip和用户名还有lib/settings.py里设置的密码生成一个要爆破的列表，   
+            hosts = GetHosts(ip, user)  
+            with concurrent.futures.ThreadPoolExecutor(max_workers=40) as executor:  
+                executor.map(mysqlBruteforce, hosts)  
+        return result
+
+## 程序输出
+
+![logo.jpg](https://image.3001.net/images/20190611/1560248429_5cff806ddb11a.jpg!small)![logo2.jpg](https://image.3001.net/images/20190611/1560248440_5cff807859998.jpg!small)
+
+    
+    
+    [
+        {
+            "testphp.vulnweb.com": {
+                "WAF": "NoWAF",
+                "Webinfo": {
+                    "apps": [
+                        "PHP",
+                        "Nginx",
+                        "DreamWeaver",
+                        "php"
+                    ],
+                    "title": "Home of Acunetix Art",
+                    "server": "nginx/1.4.1"
+                },
+                "Ports": [
+                    "ftp:21",
+                    "http:80",
+                    "ssh:22",
+                    "http:8443"
+                ],
+                "Vuln": [
+                    "MySQL SQLi:http://testphp.vulnweb.com/search.php?test=query",
+                    "MySQL SQLi:http://testphp.vulnweb.com/listproducts.php?cat=2",
+                    "MySQL SQLi:http://testphp.vulnweb.com/artists.php?artist=2"
+                ],
+                "URLS": [
+                    {
+                        "rsp_code": 200,
+                        "rsp_len": 3864,
+                        "title": "search",
+                        "contype": "html",
+                        "url": "/search.php"
+                    },
+                    {
+                        "rsp_code": 200,
+                        "rsp_len": 4671,
+                        "title": "login page",
+                        "contype": "html",
+                        "url": "/login.php"
+                    },
+                    {
+                        "rsp_code": 200,
+                        "rsp_len": 143,
+                        "title": "None",
+                        "contype": "xml",
+                        "url": "/.idea/scopes/scope_settings.xml"
+                    },
+                    {
+                        "rsp_code": 200,
+                        "rsp_len": 1,
+                        "title": "None",
+                        "contype": "plain",
+                        "url": "/CVS/Root"
+                    },
+                    {
+                        "rsp_code": 200,
+                        "rsp_len": 224,
+                        "title": "None",
+                        "contype": "xml",
+                        "url": "/crossdomain.xml"
+                    },
+                    {
+                        "rsp_code": 200,
+                        "rsp_len": 3265,
+                        "title": "Home of WASP Art",
+                        "contype": "zip",
+                        "url": "/index.zip"
+                    }
+                    ......
+
+## 项目地址
+
+<https://github.com/al0ne/Vxscan>  
+
+## 参考说明
+
+参考了cnnetarmy Srchunter设计思路。
+
+参考了brut3k1t的弱口令模块：
+
+> <https://github.com/ex0dus-0x/brut3k1t>
+
+指纹识别主要调用Wappalyzer与WebEye：
+
+> <https://github.com/b4ubles/python3-Wappalyzer>
+>
+> <https://github.com/zerokeeper/WebEye>
+
+Poc参考了:
+
+> BBscan扫描器 <https://github.com/lijiejie/BBScan>
+>
+> POC-T <https://github.com/Xyntax/POC-T/tree/2.0/script>
+>
+> Perun <https://github.com/WyAtu/Perun>
+
+参考了anthx的端口扫描、服务判断：
+
+> <https://raw.githubusercontent.com/AnthraX1/InsightScan/master/scanner.py>
+
+注入爬虫参考了：
+
+> DSSS <https://github.com/stamparm/DSSS>
+
+js敏感信息正则提取参考了：
+
+> <https://github.com/nsonaniya2010/SubDomainizer>
+
+WAF判断使用的是waf00f与whatwaf的判断规则：
+
+> <https://github.com/EnableSecurity/wafw00f>
+>
+> <https://github.com/Ekultek/WhatWaf>
+
+***本文原创作者：al0ne_，本文属于FreeBuf原创奖励计划，未经许可禁止转载**
+

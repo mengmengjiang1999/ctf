@@ -1,0 +1,379 @@
+*****本文原创作者：糖果L5Q，属于FreeBuf原创奖励计划，未经许可禁止转载**  
+**
+
+##  **0x01 需求背景**
+
+**在生产环境中有重要的安全设备和关键服务设备，这些设备都在关键的结位置，依赖影响了很多服务。一旦设备出现问题对生产环境的影响是显而易见的。所以平是对这些设备和监控是很重要。**  
+
+一般对普通的服务器，可以使用HIDS或是类似的审计代理程序。对于特殊的安全设备可能会支持SNMP（Simple Network Management
+Protocol）的协议通信，可以通过SNMP的方式取得，被监控安全设备的相关信息：硬盘、内存、网络等相关信息。
+
+并且SNMP也可以用于普通的服务器进行机器相关状态信息的取得, 只需要安装相关的Net-SNMP服务即可。
+
+这次我们要讨论的是另一种可能，能不能通过开源的方式，以取得服务器相关信息为目标，但使用一种更灵活的方式来控制整个信息取得过程，从被监控服务器数据信息取得，到客户端的信息请求，以Python脚本的方式取得。
+
+综上所述，这次我们以OSQuery与Django RPC为基础，创建一套服务器审计信息取得的方案的展示流程。 ****
+
+## **0x02 现有工作模式**
+
+![1.png](https://image.3001.net/images/20190529/1559106596_5cee142465e07.png!small)
+
+在进入OSQuery方案之前，先回顾一下SNMP的工作流程。
+
+对于特殊的安全设备会提供SNMP的审计信息取得服务，
+我们通过支持SNMP客户端的监控程序来取得当前设备的信息，命令行的方式就是SNMPWalk、Python也支持SNMP客户端。
+
+安全设备会在服务器端部署SNMP服务，然后监控机通过SNMP客户端程序与SNMP服务器进行通信，取得诸如：内存、CPU、网络等相关数据信息。
+
+取得相关信息后，我们即可通过Zabbix或是脚本的方式监控这些关键数据指标，只要相关数据不在我们设定的安全数值区域的时候，就报警进行提示。
+
+![2.jpg](https://image.3001.net/images/20190529/1559106605_5cee142d00da6.jpg!small)SNMP的信息项目与OID是相对应的，一个OID（Object
+Identifier）对应一个对象指标信息。
+
+Snmpwalk -v 2c -c public localhost .1.3.6.1.2.1.1.1  
+
+上面这条指令的执行就是取得设备的计算机名，对应的OID就是：1.3.6.1.2.1.1.1。
+
+OID可以服务器SNMP服务进行设定，我们可以在Zabbix中图形化的监控这些指标数据，然后配置报警。 我们的重点是用OSQuery创建审计查询服务，
+并不是用Zabbix创建SNMP监听，以上的图只是在说明，Zabbix也可以通过对指定的OID进行监控的事实列图对应说明。
+
+本节提到的方案，我们都是工具的使用者，下一节，我们将进入一个造轮子的过程，不使用SNMP方式， 在一个普通的设备、服务器进行相关信息的取得。
+
+##  **0x03 OSQuery方案**
+
+在一般服务器数据审计，基于Linux本身的libAudit库，能过底层的库可以取得服务器上的相关审计数据。可以使用C、Python、Go等多种语言封装库取得审计数据。
+
+OSQuery是一个中间件库，提供了一种将服务器审计数据，可以能过SQL方式进行查询取得。把审计数据二维表格化，用户可以想查询二维表一样进行审计数据查询。
+
+![3.png](https://image.3001.net/images/20190529/1559106623_5cee143f44a4a.png!small)
+
+我们使用的OSQuery作为数据取得的基础中间件，最大的好处是将审计数据取得的技术成本降低，并且OSQuery是跨平台，支持多语言的客户端。
+
+## **0x04 基础软件架构**
+
+![4.png](https://image.3001.net/images/20190529/1559106645_5cee1455c5f30.png!small)
+
+有了OSQuery本身不能直接对外提供直接服务，如果我们不使用Filebeat+OSQuery的组合方式进行数据集中到ES集群这种形式，我们可以尝试在服务器上创建RPC服务，对外提供公共服务，并且在服务器与监控机间进行点对点的权限许可。
+
+用Django创建RPC服务进行展示，快速容易理解。上图是通过Django框架提供RPC服务，监控机可以将服务提交RPC调用，你调用普通函数一样，调用运程服务器上的RPC函数。
+
+当然可以使用任何语言和框加对OSQuery进行封装提供对外服务，只是我们这里主要用了Django、Django
+RPC、DjanogREST作为核心组件，快速搭建服务。
+
+## **0x05 实现展示与测试**
+
+我们能过一段OSQuery客户端代码来展示，如何通过OSQuery取得服务的Cron信息地过程，看看OSQuery如何的简单便利的取得审计信息。
+
+![carbon.png](https://image.3001.net/images/20190529/1559106516_5cee13d4a0c39.png!small)
+
+Django
+RPC提供是一个拉取数据的过程，与SNMP服务器与SNMPWalk之间的互动是一样的，为了方便展示OSQuery核心功能，样例程序，实现的是一个反向的数据推送功能，这样我们没有服务端创建服务，没有打开新端口。
+
+在服务器打开一个进程，然后样例程序间隔一定时间，通过OSquery取得Cron表信息，然后对数据进行Hash化，将数据发送到日志中心，然后我们通过对数据中心的数据进行，按照一定规则策略进行数据合法判断的操作。
+
+##  **0x06 构建审计查询服务**
+
+这篇文章实际的重点，还是展示我们在实践中如何运用OSQuery的，然后给出脱敏样例程序。 为了更具体的说明，我们将Django
+RPC构建的过程在此叙述一遍，并且展示核心的代码实现， 工程代码过多，后续github查看全工程文件。
+
+### 第一步：创建完整的依赖环境
+
+我们之前也介绍了很多基于Django的实践方案，但都是以架构思路为主，这次根据架构的构想，做一次one step by step的展示。
+因数过于细节可能比较长，这次集中起来介绍一次，其实基于Django的方案落地都可以举一反三。
+
+1\. 安装虚拟环境
+
+Python现在有2.x和3.x 版本的区别，为了可以有一个平滑的运行环境，我们用virtualenv创建了一个虚拟的运行环境，我们以Python
+2为主，使用virtualenvwrapper是因为，可以使用virtualenvwrapper在各个虚拟环境中切换。  
+
+sudo pip install virtualenv
+
+sudo pip install virtualenvwrapper --upgrade --ignore-installed
+
+2..安装virtualevnwraaper的bash_profile启动项目。
+
+如果不在bash_profile中加入启动脚本,virtualenvwraper的功能，比如workon是不会生效的。  
+
+source /usr/local/bin/virtualenvwrapper.sh
+
+3\. 创建Python环境
+
+虚拟环境安装好后，我们创建一个审计工程，基于python 2的，创建完后直接企划到新的虚拟环境下，
+使用virtualenvwrapper的workon命令快速切换。  
+
+mkvirtualenv py27 -p /usr/bin/python
+
+workon py27
+
+4\. 安装Django框架
+
+我们选用Django1.11.15作为样例的框架版本，没有用太新的，也没有用特另古老的版本。==后面指定版本号非常方便，过于老的Django版本就不推荐大家使用了。  
+
+pip install django==1.11.15
+
+5\. 安装Django REST
+
+Django REST可以方便的对外提供REST API服务，用较少的代码，写较多的功能。最好用3.8.2的这个版本，
+其它的版的代码可能在新库出来后，代码样式和库调用都过期了，或是名称已经被替换。  
+
+pip install djangorestframework==3.8.2
+
+6\. 安装Django RPC
+
+Django RPC的实现其实有很多的版本，在架构图上我们只是提到了使用Django RPC,但是具体使用那个Django RPC并没明确指出。
+在这里说明一下，我们使用的django RPC是samuraisam写的RPC版本，
+并且我们并没有通过pip的方式安装，而是采用源码的方式安装的，如果能过requirements安装依赖的话，可能就会出现环境安装问题。  
+
+git clone git://github.com/samuraisam/django-json-rpc.git
+
+cd django-json-rpc
+
+python setup.py install
+
+这样我们在第一步，把架框中最主要的Django RPC和Django REST对介绍了，这两个部件是OSQuery以外最核心的内容。  
+
+### 第二步：创建Django工程
+
+创建Django工程就没有什么特别的地方了，传统的Django创建工程的方式。  
+
+django-admin startproject cronfinger
+
+### 第三步：.创建Django APP
+
+我们创建一个独立的Django APP，这个APP就是RPC单体具体代码实现的地方。
+
+django-admin startapp cronosquery
+
+### 第四步：环境部署  
+
+Django JSON RPC是我们手动安装的APP，我们要在setting.py配置文件加入到配置中， 这样Django才能引用到Django JSON
+RPC。这点需要特别注意下。  
+
+Add 'jsonrpc' to your INSTALLED_APPS in your settings.py file
+
+### 第五步：RPC方法声明
+
+再创建Django RPC的APP以后，我们可以像声明普通函数一样创建RPC函方法。 由于本人实在搞不定Workpress中代码高亮的操作，
+就直接给大家贴关键的代码了。下面的代码们只是通过OSQuery取得了当前服务上Crontab中列表信息，然后进行Hash归一。如果读者愿意，可以将OSQuery提供的审计数据，封装成各种函数，提供给外部调用，就是OID对应调备的审计数据项目。
+
+OSQuery提供的SQL审计查询表不是一个，为了方便说明，我们就拿cron表作为例子，因为我们就想做一个cron表的hash指纹提供给客户端审计。  
+
+    
+    
+    table_name("crontab")
+    
+    description("Line parsed values from system and user cron/tab.")
+    
+    schema([
+    
+        Column("event", TEXT, "The job @event name (rare)"),
+    
+        Column("minute", TEXT, "The exact minute for the job"),
+    
+        Column("hour", TEXT, "The hour of the day for the job"),
+    
+        Column("day_of_month", TEXT, "The day of the month for the job"),
+    
+        Column("month", TEXT, "The month of the year for the job"),
+    
+        Column("day_of_week", TEXT, "The day of the week for the job"),
+    
+        Column("command", TEXT, "Raw command string"),
+    
+        Column("path", TEXT, "File parsed"),
+    
+    ])
+    
+    attributes(cacheable=True)
+    
+    implementation("crontab@genCronTab")
+
+因为我要特别的详细的写出我们的代码级的操作过程，也就不向现类OSQuery的文章一样介绍档了， 要是细我们可以更具体一点，
+大家直接看源码：<https://github.com/facebook/osquery/blob/1.7.6/specs/crontab.table>
+
+源码的细节信息，其实有时比文档还详细。
+
+    
+    
+    from jsonrpc import jsonrpc_method
+    
+    import osquery  
+    
+    
+    @jsonrpc_method('myapp.osquery')
+    
+    def get_cron_info(request, cmd='crontab'):
+    
+            instance= osquery.SpawnInstance()
+    
+            instance.open()
+    
+            ret = instance.client.query("select command as cmd from crontab")
+    
+            res_s = ret.response
+    
+            joinstr = ""
+    
+            for item in res_s:
+    
+                    joinstr= joinstr +  item['cmd']
+    
+                    joinstr = joinstr + '192.168.1.5'
+    
+            import hashlib
+    
+            m1 = hashlib.md5()
+    
+            m1.update(joinstr)
+    
+            token = m1.hexdigest()
+    
+      return "token %s" % token
+
+### 第六步：RPC方法调用
+
+简单点说，我们就是想用RPC协议代替SNMP协议， 想用OSQuery代替SNMP的MIB管理。
+然后可以做到像SNMP一样，通过自制的客户端口去查询审计服务器上的各种信息， 这次我们并没有查询进程或者其它的数据，
+就是特定的用osquery查了crontab。
+
+大家也看到了， 用Django RPC构建OSquery的查询函数成本不高，封装成本也不高，就像下面的设计函数调用就几行代码。
+
+启动RPC服务  
+
+python manager.py runserver 0.0.0.0 5000
+
+客户端调用代码：  
+
+from jsonrpc.proxy import ServiceProxy
+
+s = ServiceProxy('<http://localhost:5000/json/>')
+
+ret = s.myapp.osquery('cron')
+
+因为每台机器的Cron是不一样 ， Hash出来的结果也是不样的，但晚们可能都会得到下面样式的一个串：
+
+返回结果：ZGphbmdvIHJwYyBvc3F1ZXJ5
+
+一般情况下，如果我们不主动的修改cron这个串的内容是不会改变的，
+一旦有人改了这个串与历史库中的串不一致，并且不是我们自己改的。我们就需要判断是不是有非法改了我们的crontab。
+
+### 第七步：Django Command测试
+
+我们用Django
+RPC快速创建了查询服务，但是直接通行Python代码总是不够方便，我们需要一个像snmapwalk一样的客户端。怎么办？我要向读者介绍细节。其实，之前也介绍过我，使用Django
+Command 快速创建一个具有Django项目特色的， 命令行程序 ，如下：
+
+    
+    
+    #-*- coding:utf-8 -*-    
+    from django.core.management.base import BaseCommand, CommandError
+    
+    class Command(BaseCommand):
+    
+        def add_arguments(self, parser):
+    
+            parser.add_argument(
+    
+                '-i',
+    
+                '--index',
+    
+                action='store',
+    
+                dest='index',
+    
+                default='close',
+    
+                help='name of author.',
+    
+            )
+    
+            parser.add_argument(
+    
+                '-f',
+    
+                '--file',
+    
+                action='store',
+    
+                dest='file',
+    
+                default='open',
+    
+                help='name of author.',
+    
+            )
+    
+        def handle(self, *args, **options):
+    
+            try:
+    
+                if options['index']:
+    
+                    print 'hello world, %s' % options['index']
+    
+                if options['file']:
+    
+                    print 'input file, %s' % options['file']
+    
+                from jsonrpc.proxy import ServiceProxy
+    
+                s = ServiceProxy('<http://localhost:5000/json/>') 
+    
+                s.myapp.osquery('cron')
+    
+                self.stdout.write(self.style.SUCCESS(u'命令%s执行成功, 参数为%s' % (__file__, options['index'])))
+    
+            except Exception, ex:
+    
+    self.stdout.write(self.style.ERROR(u'命令执行出错'))
+
+我们创建了一个getcron.py的python文件，有这个文件，再也不用担心去执行那些，可能让人迷惑的Python代码。审计查询用户，只要执行下面的代码，如果执行我们上面定义的Django
+RPC函数， 让OSquery返回我们查到审计信息，前提是服务器端封装了你所需要的数据接口  
+
+python manager.py getcron
+
+返回结果：ZGphbmdvIHJwYyBvc3F1ZXJ5
+
+一样不一样的都是神奇。我们通过代码把关键架构展示了一下，最后实现的结果是：
+
+服务器端口执行：
+
+workon py27  
+
+python manager runserver 0.0.0.0 5000
+
+客户端执行：
+
+python manager.py getcron
+
+就会返回服务器Crontab的表Hash结果，当然读者可以选择用任何的语言和RPC服务封装创建OSQuery为核心的审计监控服务，并且用Python也不一定要用Django
+Command，可以用其它的命令行库， 这里只是做一个展示用，展示基础框架的DEMO的部分代码。
+
+如果SNMP的方式适合您的安全设备管理，尽可采用SNMP的方式。如果在内网有些设备可以在SNMP以外还可以自主采用数据采集的方式。我们可以尝试本文的方式进行灵敏据取得。
+
+采用OSQuery为数据取得核，我们了可以做为其它审计方式的一种补充。可以用Django RPC这种方式进行PULL方式的取得审计。
+也可以采用数据Agent的方式，将服务器的数据推送到数据中心，后续进行集中规则策略处理。
+
+Agent数据推送模式的好处是，可以在数据中心则，进行多设备规则依赖判断。PULL拉取请求好处，可以将服务让任何支持RPC客户端服务代码使用。
+
+如果没相写代码也可用OSQueryd加上Filebeat的形式，将数据集中到数据集群，以上已经提到。具体看需求是要写工程代码，还是只是将用现有工具链进行安全数据运维。
+
+##  **0x07 总结**
+
+这篇核心不是讲SNMP的监控，不要被Zabbix的配置图片所迷惑。那只是为了讲明SNMP的运作流程， 然后我们
+徒手写工程，用Django各强大的功能部件封装OSQuery，如果让OSQuery主动或是被动提供审计数据服务，才是真正想说的。因为用了Django
+Command直接调用RPC接口，就没用再说明REST API的调用样式。  
+
+OpenSOC推荐了一款基于OSQuery的开源审计产品KOLIDE
+Fleet，提供了一整套的开源解决主案，对于小型服务，考虑各种成本，不想造轮子也可以尝试开源方案，将数据接入到数据中心，如果只是几单设备的信息收集量，脚本就可以处理，如果是大量设备的信息收集，不得不考虑使用Kakfa、ES、Clickhouse等相对比较重的工具。
+
+本文只是提供基本实践DEMO与构建方向，让大家了解OSQuery的神奇和我们在实践中的一些应用，Cron表的Hash指纹为监控点作为显示点，仅供参考。
+
+本文中涉及到样例代码如下：  
+
+> 样例代码位置：<https://github.com/freebuf-friends/cronfinger>  
+>
+
+***本文原创作者：糖果L5Q，属于FreeBuf原创奖励计划，未经许可禁止转载**
+

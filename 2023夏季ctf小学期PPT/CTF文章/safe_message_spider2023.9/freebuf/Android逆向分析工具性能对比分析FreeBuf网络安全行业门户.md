@@ -1,0 +1,508 @@
+## 前言
+
+本次测试对比是为了呈现incinerator与PNFSofteware出品的JEB以及国内出品GDA在Android逆向工程能力的对比，从而让大家更好更直观的了解相关的详细信息
+
+ **本次测试对比的产品信息如下：**
+
+Incinerator： 1.0.0
+
+JEB：3.19.1.202005071620
+
+GDA：3.9.0
+
+ **注：文章编写日期与发布时间有一定时间间隔，所以以下内容并不代表各产品的后续性能指标。**
+
+## 反编译器对循环结构的还原能力测试
+
+### Test1
+
+第一个测试中，设计了循环头和锁节点都为二路条件循环结构，为了测试循环结构化分析能力，多嵌套了几个if语句（代码标号为基本块号）。程序简单如下：
+
+`public void test1(int y, int a) { while(y > 0) { if(a <= 0) { a = a + 1; y =
+y + 1; } else { if(a > 10) { if(a > 100) { a = a * 5; break; } else { y = y /
+a; } } } } }`
+
+![1665978135_634ccf17ecbcf23ced8bb.png!small?1665978137918](https://image.3001.net/images/20221017/1665978135_634ccf17ecbcf23ced8bb.png!small?1665978137918)
+
+编写testdemo将代码段生成apk后，并分别使用JEB、GDA、Incinerator来进行反编译操作，从而进行代码可读性和语义准确性上的对比，如下图所示：
+
+![1665978254_634ccf8eb95cc7eb947fb.png!small?1665978256490](https://image.3001.net/images/20221017/1665978254_634ccf8eb95cc7eb947fb.png!small?1665978256490)
+
+test1
+
+通过上述对比可以看出
+
+在语义准确性上，JEB发生了语义错误，在a > 100时，丢失了a *= 5的代码块，Incinerator与GDA保持了语义的准确性。
+
+在代码可读性上，三者相差不大可读性都很好。Incinerator在if-else上做了相应的优化，可读性略有提升。
+
+在代码还原度上，Incinerator做了对应优化，GDA重复声明了a、y变量，其他方面最为接近源码。而JEB存在代码块丢失。
+
+反编译器| 语义准确性| 代码可读性| 代码还原度  
+---|---|---|---  
+Incinerator| ✓| 高| 高  
+JEB| ×| 高| 中  
+GDA| ✓| 高| 高  
+  
+### Test2
+
+接下来看看他们对双层循环的结构化分析的能力，设计一个双层循环，在内层循环break出外层循环，实际上基本块5即if(a >
+10)，不仅会是内存循环的锁节点，也会是外层循环的锁节点。并且该锁节点为二路条件节点，其一个分支路径回到内层循环，另外一个分支结构回到外层循环。一般对循环结构算法都是循环头-锁节点一一对应，因此处理过程中可能会复杂化该类结构。代码实现非常简单如下：
+
+    
+    
+    public void test2(int y, int a) {
+            while(y > 0) {
+                while(a > 0) {
+                    if(a <= 0) {
+                        a = a + 1;
+                        y = y + 1;
+                    } else {
+                        if(a > 10) {
+                            break;
+                        }
+                    }
+                }
+            }
+            attachBaseContext(this);
+        }
+
+重新编译apk后，再进行反编译后，如下图所示：
+
+![1665978273_634ccfa11d2dd07d13d4a.png!small?1665978275066](https://image.3001.net/images/20221017/1665978273_634ccfa11d2dd07d13d4a.png!small?1665978275066)
+
+test2
+
+通过上述对比可以看出
+
+在语义准确性上，Incinerator、JEB保持了语义的准确性，都识别除了双重循环，GDA仅有函数声明，丢失了整个函数的代码块。
+
+在代码可读性上，Incinerator优化了if-else组合，JEB在if中加入continue省略else语句，两者可读性都很好。
+
+在代码还原度上，Incinerator、JEB除了各自在if-else上的优化，还原度都很高。
+
+反编译器| 语义准确性| 代码可读性| 代码还原度  
+---|---|---|---  
+Incinerator| ✓| 高| 高  
+JEB| ✓| 高| 高  
+GDA| ×| 低| 低  
+  
+### Test3
+
+这一段代码在退出循环的”if(a>10)”语句中内嵌了另外一个if语句，这会导致内层循环的锁节点发生变化，并且给内层循环添加了一个跟随节点，另外代码做了稍稍的改动。如下：
+
+    
+    
+    public void test3(int y, int a) {
+            while(y > 0) {
+                while(a > 50) {
+                    a = a + 1;
+                    y = y + 1;
+                    if(a > 10) {
+                        if(a > 100) {
+                            a = a * 5;
+                            break;
+                        } else {
+                            y = y / a;
+                        }
+                    }
+                }
+                this.attachBaseContext(this);
+            }
+        }
+
+继续编译成apk，再进行反编译操作，如下图所示：
+
+![1665978296_634ccfb8406808adc3df5.png!small?1665978297950](https://image.3001.net/images/20221017/1665978296_634ccfb8406808adc3df5.png!small?1665978297950)
+
+test3
+
+通过对比可以看出
+
+在语义准确性上，Incinerator、JEB仍然保持了语义的准确性，GDA重复声明了a、y变量，并且继续丢失函数内部的代码块。
+
+在代码可读性上，Incinerator、JEB保持很好的代码可读性，JEB使用了continue来分割嵌套的if。
+
+在代码还原度上，Incinerator最为接近源码，JEB改为使用continue来分割嵌套的if。
+
+反编译器| 语义准确性| 代码可读性| 代码还原度  
+---|---|---|---  
+Incinerator| ✓| 高| 高  
+JEB| ✓| 高| 高  
+GDA| ×| 低| 低  
+  
+### Test4
+
+在内层循环的第一个if-else结构上添加一个后随节点，并且最后break出内层循环到外层循环。并且将a=a*5语句后的break改成continue。代码如下：
+
+    
+    
+    public void test4(int y, int a) {
+            while(y > 0) {
+                y++;
+                while(a > 50) {
+                    a = a + 1;
+                    y = y + 1;
+                    if(a > 10) {
+                        if(a > 100) {
+                            a = a * 5;
+                            continue;
+                        } else {
+                            y = y / a;
+                        }
+                    }
+                    y = a * y;
+                    break;
+                }
+                this.attachBaseContext(this);
+            }
+        }
+
+同样编译成apk后再反编译，如下图所示：
+
+![1665978304_634ccfc065f243a22562d.png!small?1665978306137](https://image.3001.net/images/20221017/1665978304_634ccfc065f243a22562d.png!small?1665978306137)
+
+test4
+
+通过上述对比可以看出
+
+在语义准确性上，Incinerator在a *= 5; 后面丢失了continue，在y *= a;
+后面丢失了退出循环的break；JEB保持了语义的正确性；GDA重复声明变量，也丢失了函数内的代码块。
+
+在代码可读性上，Incinerator、JEB可读性都很好。
+
+在代码还原度上，Incinerator与源码最为相似，但是丢失了continue、break；JEB使用continue分开了if-else，将else后面的y /= a，与y *= a合并为新的 y = y / a * a，并加入break，还原度上有了一定的改变。
+
+反编译器| 语义准确性| 代码可读性| 代码还原度  
+---|---|---|---  
+Incinerator| ×| 高| 中  
+JEB| ✓| 高| 中  
+GDA| ×| 低| 低  
+  
+### Test5
+
+这次在“if(a>10)”内部加入switch，在a为11、12时，执行“a = a * 5”，并continue返回内循环while，a为13时，执行“a
+= a * 6”，继续往下执行，并不退出，a为14时，执行“a = a * 7” 退出switch， 与default中加入if-else，代码如下：
+
+    
+    
+    public void test5(int y, int a) {
+            while(y > 0) {
+                y++;
+                while(a > 50) {
+                    a = a + 1;
+                    y = y + 1;
+                    if(a > 10) {
+                        switch(a) {
+                            case 11:
+                            case 12:
+                                a = a * 5;
+                                continue;
+                            case 13:
+                                a = a * 6;
+                            case 14:
+                                a = a * 7;
+                                break;
+                            default:
+                                if(a > 100) {
+                                    a = a * 5;
+                                    continue;
+                                } else {
+                                    y = y / a;
+                                }
+                        }
+                    }
+                    y = a * y;
+                    break;
+                }
+                this.attachBaseContext(this);
+            }
+        }
+
+最后编译成apk后反编译，如下图所示：
+
+![1665978351_634ccfef0610ab844ca1d.png!small?1665978352757](https://image.3001.net/images/20221017/1665978351_634ccfef0610ab844ca1d.png!small?1665978352757)
+
+test5
+
+通过上述对比可以看出
+
+在语义准确性上，Incinerator在switch将a为11、12、default中的continue错误表达为break，丢失了y *=
+a后面退出内循环的break；JEB保持了语义的正确性在，但在label_18的break之后，多了两句无用的代码a
+*=8;continue；GDA没有识别出内循环，使用if与goto做处理，switch中a为11、12时多了break，没有识别出a=14，且在default中，执行完y=y/a后继续执行"a
+= a * 7"。
+
+在代码可读性上，Incinerator识别出双循环、switch-case可读性上最好，JEB、GDA多次出现goto，在代码可读性上存在一定的影响。
+
+在代码还原度上，Incinerator与源码最为相似，但在节点的退出上存在一定的问题，JEB、GDA在代码的还原度上膨胀比较大。
+
+反编译器| 语义准确性| 代码可读性| 代码还原度  
+---|---|---|---  
+Incinerator| ×| 高| 中  
+JEB| ✓| 中| 中  
+GDA| ×| 中| 低  
+  
+## 调试能力测试
+
+逆向工程工具针对Apk可调试，对于研究人员来说有着极大的帮助，而对于已经发布后的应用再进行调试的话，可调试的前提条件会比较苛刻，如：设备是否root、调试属性是否开启、能否重打包等，这些因素都会影响着是否能够调试，而影响调试功能的好坏、支持与否，取决于：能否stepover、stepinto、breakpoint，能否获取/修改变量值等，这些因素都体现着调试器是否好用。所以我们从上述多个维度，对Incinerator、JEB的调试做下简单对比，但因GDA不支持调试，所以下面的内容无法针对GDA进行测试对比。
+
+这里直接使用Android Studio自带的example：Login Activity进行对比，如图1-2所示：
+
+![1665978376_634cd00894898303330f8.png!small?1665978378243](https://image.3001.net/images/20221017/1665978376_634cd00894898303330f8.png!small?1665978378243)
+
+图1
+
+![1665978384_634cd0100aed34466c2f6.png!small?1665978385642](https://image.3001.net/images/20221017/1665978384_634cd0100aed34466c2f6.png!small?1665978385642)
+
+图2
+
+在登录验证的位置做细微修改，让它基本不可能登录成功，然后再分别使用JEB、Incinerator进行分析登录过程，并绕过登录限制。修改的代码与登录失败，如图3-4所示：
+
+![1665978418_634cd0328bc017ad81856.png!small?1665978420370](https://image.3001.net/images/20221017/1665978418_634cd0328bc017ad81856.png!small?1665978420370)
+
+图3![1665978440_634cd048508cc649dbb39.png!small?1665978442013](https://image.3001.net/images/20221017/1665978440_634cd048508cc649dbb39.png!small?1665978442013)图4
+
+调试设备：Nexus 5X
+
+系统版本：7.1.2
+
+root状态：已root
+
+主要测试功能：
+
+  1. 下断点
+  2. 步进
+  3. 步过
+  4. 跑至光标
+  5. 显示与修改变量值
+  6. 免debugger属性调试
+  7. smali调试
+  8. 伪代码调试
+
+## JEB调试
+
+首先手动安装编译好的apk，然后使用JEB反编译对应apk，点击JEB上的start. 如图5所示：
+
+![1665978655_634cd11f78c3ad9e5a89a.png!small?1665978657070](https://image.3001.net/images/20221017/1665978655_634cd11f78c3ad9e5a89a.png!small?1665978657070)图5
+
+出来Attach界面，因为应用还没启动，所以并没有看到Processes中有进程列表，如图6所示：
+
+![1665978685_634cd13d3482387ebae13.png!small?1665978686807](https://image.3001.net/images/20221017/1665978685_634cd13d3482387ebae13.png!small?1665978686807)
+
+图6
+
+通过命令（adb shell am start -D -n
+com.testdemo3/.ui.login.LoginActivity）启动进程，JEB点击（Refresh Machines
+List）刷新列表，看到已经跑起的测试案例，如图7所示：
+
+![1665978693_634cd14540541ce97d88b.png!small?1665978694887](https://image.3001.net/images/20221017/1665978693_634cd14540541ce97d88b.png!small?1665978694887)
+
+图7
+
+点击Attach后，发现无法debug，按提示指app没有开启debuggable属性或者设备没有root，建议使用模拟器、root设备或者重打包app。（实际上设备已root），如图8所示：
+
+![1665978698_634cd14abe68e9f71cc1d.png!small?1665978700334](https://image.3001.net/images/20221017/1665978698_634cd14abe68e9f71cc1d.png!small?1665978700334)
+
+图8
+
+我们在AndroidManifest中加入android:debuggable="true"并重新编译（如果是第三方的app只能尝试用apktool等工具进行重打包，有签名、完整性等校验的话再想办法将其绕过）
+
+现在可以成功Attach上去。
+
+我们使用JEB反编译登录界面的activity：LoginActivity，在按钮的点击触发代码中加入断点，如图9所示：
+
+![1665978712_634cd158903732eaf7d09.png!small?1665978714190](https://image.3001.net/images/20221017/1665978712_634cd158903732eaf7d09.png!small?1665978714190)
+
+图9
+
+因不支持在伪代码中加入断点，我们切换回smali（快捷键Q），在onClick的第一行按Ctrl+B加入断点，如图10所示：
+
+![1665978721_634cd1612647a8ae380b5.png!small?1665978722765](https://image.3001.net/images/20221017/1665978721_634cd1612647a8ae380b5.png!small?1665978722765)
+
+图10
+
+操作app，输入帐号密码，点击：SIGN IN OR REGISTER，在JEB中成功触发断点，如图11所示：
+
+JEB此处有个优势，它的布局可以根据个人喜好随意拖拉
+
+![1665978731_634cd16b31828c7e0dfc0.png!small?1665978733005](https://image.3001.net/images/20221017/1665978731_634cd16b31828c7e0dfc0.png!small?1665978733005)
+
+图11
+
+当前显示的变量似乎有些异常，我们此时忽略他，鼠标放到 00000040 处，点击JEB的"Run to line"，成功跳到指定行，如图12所示：
+
+![1665978737_634cd171eb9233a93d0f7.png!small?1665978739592](https://image.3001.net/images/20221017/1665978737_634cd171eb9233a93d0f7.png!small?1665978739592)
+
+图12
+
+JEB一开始将所有变量当作int类型处理，我们分析代码，可以知道此处的V1、V2是输入的帐号与密码，类型是String，因此，我们点击V1、V2中的Type将int改为String，如图13所示：
+
+![1665978746_634cd17aca8da2c0cf501.png!small?1665978748450](https://image.3001.net/images/20221017/1665978746_634cd17aca8da2c0cf501.png!small?1665978748450)
+
+图13
+
+v1、v2成功修正类型，对应的值也成功显示出我们测试输入的帐号密码。
+
+在JEB中点击步进（Step Into）到LoginViewModel的login方法，如图14所示：
+
+![1665978753_634cd1813ae9e4097feb9.png!small?1665978754898](https://image.3001.net/images/20221017/1665978753_634cd1813ae9e4097feb9.png!small?1665978754898)
+
+图14
+
+成功步进LoginViewModel的login方法，但是在这里可以看到，刚才修改的类型（此处对应的是p1、p2）又重新变回了int。
+
+根据smali可知道，接下来会调用LoginRepository的login方法，随后返回Result
+
+我们再继续点击两次步进（Step Into）进入LoginRepository的login方法，如图15所示：
+
+![1665978759_634cd18761e6ae9cb657b.png!small?1665978761010](https://image.3001.net/images/20221017/1665978759_634cd18761e6ae9cb657b.png!small?1665978761010)
+
+图15
+
+在此方法中，它会继续将帐号密码传给LoginDataSource的login方法，返回Result
+
+继续步进（Step Into）两次，进入LoginDataSource的login方法，如图16所示：
+
+![1665978765_634cd18d3e201155708f5.png!small?1665978766908](https://image.3001.net/images/20221017/1665978765_634cd18d3e201155708f5.png!small?1665978766908)
+
+图16
+
+在这方法中，可以看到密码传进来后，跟通过StringBuilder类组合起来的当前时间戳字符串对比，基本不可能相等，随后抛出"Invalid
+password"的异常。
+
+为了成功登录，我们得令他们的对比结果一致
+
+我们按步过（Step Over）一直跳到00000032处，将v0的值改为true，如图17-18所示：
+
+![1665978771_634cd193e0777bd8a7a8e.png!small?1665978773538](https://image.3001.net/images/20221017/1665978771_634cd193e0777bd8a7a8e.png!small?1665978773538)
+
+图17
+
+![1665978780_634cd19cacb72130280ee.png!small?1665978782315](https://image.3001.net/images/20221017/1665978780_634cd19cacb72130280ee.png!small?1665978782315)
+
+图18
+
+继续步过（Step Over）发现成功绕过验证，如图19所示：
+
+![1665978797_634cd1ad2af51b8d8c428.png!small?1665978798780](https://image.3001.net/images/20221017/1665978797_634cd1ad2af51b8d8c428.png!small?1665978798780)
+
+图19
+
+之后直接点击Run，让他恢复继续执行，如图20所示：
+
+![1665978804_634cd1b48aea3f1b8c823.png!small?1665978806258](https://image.3001.net/images/20221017/1665978804_634cd1b48aea3f1b8c823.png!small?1665978806258)
+
+图20
+
+由上面的测试步骤可以看出，JEB的调试需要依赖debuggable属性的开启，支持Smali调试可以在上面下断点，不支持伪代码调试，支持Step
+Into、Step Over、Run to line等常用功能，可以查看与修改变量值，但类型有时候需要手动纠正。
+
+## Incinerator调试
+
+使用Incinerator反编译apk，反编译完毕后，我们打开“Set Debug
+Device”确认设备已经连接上之后（如果有多个设备可以点击切换），点击Start debug，如图21所示：
+
+![1665978814_634cd1beb834b3a49f675.png!small?1665978816581](https://image.3001.net/images/20221017/1665978814_634cd1beb834b3a49f675.png!small?1665978816581)
+
+图21
+
+无需过多的操作，apk已经自动安装、启动，并进入调试状态。
+
+使用Incinerator反编译登录界面的activity：LoginActivity，然后，鼠标在LoginActivity的第207行点一下（button点击事件中），按Tab切换到smali模式，随后在onClick的第一行加入断点，如图22-23所示：
+
+![1665978825_634cd1c9d8e74105c5088.png!small?1665978827587](https://image.3001.net/images/20221017/1665978825_634cd1c9d8e74105c5088.png!small?1665978827587)
+
+图22
+
+![1665978833_634cd1d120af79dfa92f8.png!small?1665978834885](https://image.3001.net/images/20221017/1665978833_634cd1d120af79dfa92f8.png!small?1665978834885)
+
+图23
+
+操作app，输入帐号密码，点击：SIGN IN OR REGISTER，在Incinerator中成功触发断点，如图24所示：
+
+![1665978840_634cd1d8d702af9495b22.png!small?1665978842652](https://image.3001.net/images/20221017/1665978840_634cd1d8d702af9495b22.png!small?1665978842652)
+
+图24
+
+在Smali中可以看到，接下来会将登录信息传入到LoginViewModel.login（52行）方法进行验证。
+
+在login所在行（52行）鼠标点一下，然后点击F10(Run to cursor)，成功跳到光标所在行，如图25所示：
+
+![1665978865_634cd1f161c1346b15485.png!small?1665978867137](https://image.3001.net/images/20221017/1665978865_634cd1f161c1346b15485.png!small?1665978867137)
+
+图25
+
+可以看出Incinerator支持smali调试。
+
+Smali代码相对来说不方便阅读，我们按Tab切换到伪代码界面，随后，按步进（Step Into）进入LoginViewModel的login方法
+
+成功步进LoginViewModel的login方法后，在Variables的列表中，可以看到我们输入的帐号，密码，如图26所示：
+
+![1665978874_634cd1fa3fe59a3d89baf.png!small?1665978876021](https://image.3001.net/images/20221017/1665978874_634cd1fa3fe59a3d89baf.png!small?1665978876021)
+
+图26
+
+根据伪代码可知道，接下来会调用LoginRepository的login方法，随后返回Result 点击一次步进（Step
+Into）进入LoginRepository的login方法，如图27所示：
+
+![1665978880_634cd200c036f1a170fe1.png!small?1665978882913](https://image.3001.net/images/20221017/1665978880_634cd200c036f1a170fe1.png!small?1665978882913)
+
+图27
+
+在此方法中，它会继续将帐号密码传给LoginDataSource的login方法，返回Result 再步进（Step
+Into）一次，进入LoginDataSource的login方法，如图28所示：
+
+![1665978892_634cd20c35b9e21934965.png!small?1665978893943](https://image.3001.net/images/20221017/1665978892_634cd20c35b9e21934965.png!small?1665978893943)
+
+图28
+
+在这方法中，可以看到密码传进来后，跟当前时间戳所组成的字符串对比，基本不可能相等，随后抛出"Invalid password"的异常。
+
+为了成功登录，我们得令密码跟时间戳一致。
+
+我们F8(Step Over) 3次，去到if所在行，如图29所示：
+
+![1665978898_634cd212a8dd7c96b3363.png!small?1665978900442](https://image.3001.net/images/20221017/1665978898_634cd212a8dd7c96b3363.png!small?1665978900442)
+
+图29
+
+现在可以看到时间戳的具体数值，我们将它复制出来，如图30所示：
+
+![1665978904_634cd2182aad1932cef6b.png!small?1665978905824](https://image.3001.net/images/20221017/1665978904_634cd2182aad1932cef6b.png!small?1665978905824)
+
+图30
+
+随后将password设为跟时间戳一致的字符串，如图31-32所示：
+
+![1665978909_634cd21d1bdf57edfa9f0.png!small?1665978910713](https://image.3001.net/images/20221017/1665978909_634cd21d1bdf57edfa9f0.png!small?1665978910713)
+
+图31
+
+![1665978915_634cd2233b1066cf55238.png!small?1665978916847](https://image.3001.net/images/20221017/1665978915_634cd2233b1066cf55238.png!small?1665978916847)
+
+图32
+
+设置完毕之后，点击一次F8(Step Over)，可以看到已经成功绕过验证，如图33所示：
+
+![1665978921_634cd22932c23fcf3c2f5.png!small?1665978922954](https://image.3001.net/images/20221017/1665978921_634cd22932c23fcf3c2f5.png!small?1665978922954)
+
+图33
+
+直接点击F9，让他恢复继续执行，如图34所示：
+
+![1665978927_634cd22f90e64f1ecdd86.png!small?1665978929277](https://image.3001.net/images/20221017/1665978927_634cd22f90e64f1ecdd86.png!small?1665978929277)
+
+图34
+
+由上面的测试步骤可以看出，Incinerator调试更为便捷，基本可以一键调试，同样支持Step Into、Step Over、Run to
+line、下断点、查看与修改变量值等常用功能，并且同时支持smali、伪代码调试。
+
+反编译器| 下断点| 步进| 步过| 跑到光标| 显/改变量值| 免debugger属性调试| smali调试| 伪代码调试  
+---|---|---|---|---|---|---|---|---  
+Incinerator| ✓| ✓| ✓| ✓| ✓| ✓| ✓| ✓  
+JEB| ✓| ✓| ✓| ✓| ✓| ×| ✓| ×  
+GDA| ×| ×| ×| ×| ×| ×| ×| ×  
+  
+>
+> 源地址：[https://liansecurity.com/#/main/news/w6s2z4MBqlWBhJyCO8jt/detail﻿](https://liansecurity.com/#/main/news/w6s2z4MBqlWBhJyCO8jt/detail)
+

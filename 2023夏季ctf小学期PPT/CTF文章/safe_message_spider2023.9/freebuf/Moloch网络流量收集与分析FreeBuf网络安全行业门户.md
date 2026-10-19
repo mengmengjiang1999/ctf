@@ -1,0 +1,230 @@
+***本文原创作者：Shell.，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+
+##  **背景**
+
+ **本篇文章主要介绍Moloch溯源平台的部署以及配合Suricata实现对网络流量的监控与检测, 提取IOC的网络行为。**
+
+##  **需求**
+
+> 1\. 具备NIDS能力;
+>
+> 2\. 支持对全量数据包的存储;
+>
+> 3\. 支持快速对多个节点中的数据包进行预览、下载等操作;
+
+针对以上的需求, 直接部署Suricata基本可以满足。主要2、3点的需求, 更加偏向溯源的方向, Suricata在这一方面稍显欠缺。首先,
+Suricata在触发了告警之后只会保存攻击载荷(Payload)的数据包信息。但是, 对于一些有趣的事件,
+我们很可能会需要查看整笔会话(Flow)的内容, 这个时候单独的一个告警数据包并不能起到很好的溯源效果。当然Suricata本身也提供了全数据包捕获的功能,
+但因为没有Web界面的关系,
+实际使用起来并不是很方便。不过我们使用Suricata的实际需求还是看重它的NIDS功能。当然你也可以选择直接怼一个安全洋葱(Security
+Onion), Bro也是个很牛X NIDS。但是这样一来对于蜜罐的机器配置就有所要求了。
+
+为了满足2、3点的需求, 我这边采用的是Moloch。Moloch本身并不具备IDS功能, 好在Moloch-V1.5增加了Suricata的插件(
+**suricata.so** ), 可以直接提取Suricata的告警信息并Merge到Moloch的数据中。前提是你得安装Sruciata。
+
+**Moloch:** Moloch是一个开源，大规模，完整的数据包捕获，索引和数据库系统。
+Moloch扩展了您当前的安全基础架构，以标准PCAP格式存储和索引网络流量，提供快速的索引访问。为PCAP浏览，搜索和导出提供了直观简单的Web界面。
+Moloch公开了API，允许直接下载和使用PCAP数据和JSON格式的会话数据。
+Moloch以标准PCAP格式存储和导出所有数据包，使您在分析工作流程中也可以使用您喜欢的PCAP摄取工具，例如: Wireshark。
+
+Suricata的安装方法就不阐述了, 网上随便找一篇即可。这里主要说下Moloch的安装以及如何启用Sruicata插件的支持。
+
+**注: 由于我主要是部署在蜜罐环境的宿主机上, 暂不考虑性能问题。
+性能相关可参考:[pfring_Settings](https://github.com/aol/moloch/wiki/Settings#Reader_pfring_Settings)**
+
+宿主机环境: Ubuntu 16.04 x64
+
+###  1\. 下载
+
+[Moloch](https://molo.ch/#downloads)
+
+###  2\. 安装
+
+    
+    
+    dpkg -i moloch-master_ubuntu16_amd64.deb
+
+###  3\. 配置
+
+3.1 指定捕获网卡
+
+对于情报收集我并不关注宿主机网卡的流量, 我只关注Docker上层容器的流量。所以我这里网卡选择了 **docker0** 。
+
+这里会问你是否要安装ES, 我已经部署好了ES, 所以这里选择了NO, 接下来就是让你写你ES地址了, ES是存储SPI数据的,
+你就理解成协议解析之后的数据就可以了。
+
+    
+    
+    root@hujulongpan:/data/moloch/bin# /data/moloch/bin/Configure
+    
+    
+    Found interfaces: br-56add4565de5;br-ab64bc2f60bc;br-bb44b4b226cc;br-ff0873fcf29d;docker0;eth0;lo;veth350673b;veth41b53b9;veth6a5150e;veth8cb7c00;veth9d411c1;vethaa368c0;vethe528737;vethf1bf361
+    
+        Semicolon ';' seperated list of interfaces to monitor [eth1] docker0
+    
+        Install Elasticsearch server locally for demo, must have at least 3G of memory, NOT recommended for production use (yes or no) [no] no
+    
+        Elasticsearch server URL [[http://localhost:9200](http://localhost:9200/)] [http://es_host:9200](http://my.freebuf.com/post/edit/?id=183984&status=2)
+    
+        Password to encrypt S2S and other things [no-default] hello_world!
+    
+        Moloch - Creating configuration files
+    
+        Not overwriting /data/moloch/etc/config.ini, delete and run again if update required (usually not), or edit by hand
+    
+        Installing systemd start files, use systemctl
+    
+        Download GEO files? (yes or no) [yes] yes
+    
+        Moloch - Downloading GEO files
+    
+        WARNING: timestamping does nothing in combination with -O. See the manual
+    
+        for details.
+
+3.2 启用Suricata.so插件支持
+
+默认安装阶段不会让你选择是否启用Suricata的插件支持, 需要单独修改配置文件。
+
+    
+    
+    vim /data/moloch/etc/config.ini
+    
+    
+    plugins=suricata.so
+    
+        suricataAlertFile=/var/log/suricata/eve.json # Suricata需开启eve.json。
+    
+        suricataExpireMinutes=60
+
+**注: 默认会由于权限问题导致报错。**
+
+    
+    
+    Jul 31 13:22:14 suricata.c:395 suricata_open(): ERROR - Permissions problem, can't open suricataAlertFile '/var/log/suricata/eve.json'
+
+**解决方法:**
+
+\- 添加读取权限
+
+    
+    
+    chmod o+r /var/log/suricata/eve.json
+
+\- 修改用户
+
+    
+    
+    vim /data/moloch/etc/config.ini
+    
+    
+    # User to drop privileges to. The pcapDir must be writable by this user or group below
+    
+    
+    dropUser=nobod # 指定用户
+
+插件请戳: [Plugins](https://github.com/aol/moloch/wiki/Settings#Plugins)
+
+3.3 定期删除PCAP
+
+    
+    
+    vim /data/moloch/etc/config.ini
+    
+    
+    # Delete pcap files when free space is lower then this in gigabytes OR it can be
+    
+        # expressed as a percentage (ex: 5%). This does NOT delete the session records in
+    
+        # the database. It is recommended this value is between 5% and 10% of the disk.
+    
+        # Database deletes are done by the db.pl expire script
+    
+        freeSpaceG = 5%    # 根据实际情况进行调整
+
+3.4 bfp过滤无用数据
+
+其实我这边已经指定抓取了Docker内部的流量, 宿主机本身的流量我是不进行抓取的. 所以基本上没有"脏"数据.
+
+    
+    
+    # bpf=not port 9200
+
+3.5 Moloch Viewer Web User
+
+    
+    
+    /data/moloch/bin/moloch_add_user.sh admin "Admin User" THEPASSWORD --admin # 登陆Web的密码, 溯源的时候用得着。
+
+3.6 初始化Elasticsearch数据库
+
+    
+    
+    /data/moloch/db/db.pl http://ESHOST:9200 init
+
+3.7 启动进程
+
+    
+    
+    systemctl start molochcapture.service    # Moloch 采集进程
+    
+        systemctl start molochviewer.service      # Moloch Web进程 (溯源时候用的着)
+
+如果没啥报错, 一切就搞定啦, 下面可以看下Moloch的基本功能。
+
+##  **Moloch Viewer**
+
+    
+    
+    http://x.x.x.x:8005 # Web默认端口 8005
+
+![](https://image.3001.net/images/20180909/1536504345_5b953219f28e6.png!small)
+
+Moloch支持在同一个Web界面上对多个节点的数据包进行查看以及下载, 可以更加方便的对网络攻击进行溯源。
+
+![](https://image.3001.net/images/20180909/1536504411_5b95325b452c6.png!small)
+
+Moloch + Suricata的告警
+
+![](https://image.3001.net/images/20180909/1536504422_5b9532660545d.png!small)
+
+Moloch 协议解析方面也比Suricata强
+
+![](https://image.3001.net/images/20180909/1536504487_5b9532a7a5a4b.png!small)
+
+利用Moloch可以查询到可疑IP与外网IP的关联
+
+src -> dst
+
+![](https://image.3001.net/images/20180914/1536890905_5b9b181997279.png!small)dst
+-> src
+
+![](https://image.3001.net/images/20180914/1536890922_5b9b182a31771.png!small)src
+-> asn
+
+![](https://image.3001.net/images/20180914/1536890935_5b9b183750b19.png!small)
+
+被解析的协议字段均可做关联
+
+![](https://image.3001.net/images/20180914/1536891250_5b9b197217e9a.png!small)
+
+**SPI Data**
+
+![](https://image.3001.net/images/20180909/1536504501_5b9532b5ada01.png!small)
+
+Moloch 支持将SPI Data 数据发送到ES上, 可以看到SPI Data会记录同一笔会话中共触发了多少次告警及告警名称等信息.
+Moloch也帮助我们做了一层简单的聚合.
+
+![](https://image.3001.net/images/20180909/1536504514_5b9532c254eef.png!small)
+
+##  **总结**
+
+ **Moloch** 是一个很好的开源全流量捕获平台, 溯源起来也非常的方便,
+我个人觉得从溯源分析的角度来说比洋葱更加方便。不过在使用的时候也发现了一个问题。 **Moloch** 貌似暂不支持将SPI
+Data发送到Redis或者Kafka, 目前是直接发送到ES的, 这样流量一大就担心丢数据。我翻了一下Wiki并没有查到相关配置. 不知道是不是我有遗漏,
+如果有知道的可以告知我一下, 感谢!
+
+第一次写文章, 有不对的地方还请各位小伙伴及时指出。不喜勿喷, 谢谢!
+
+ ***本文原创作者：Shell.，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

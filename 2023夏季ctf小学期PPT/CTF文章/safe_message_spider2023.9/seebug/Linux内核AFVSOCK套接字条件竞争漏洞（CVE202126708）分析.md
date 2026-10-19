@@ -1,0 +1,123 @@
+**作者：启明星辰ADLab  
+原文链接:<https://mp.weixin.qq.com/s/WMFkPJOd29yOiGoC92QFJA>**
+
+### 一、漏洞背景
+
+近期，国外安全研究人员在oss-security上披露了一个AF_VSOCK套接字条件竞争高危漏洞CVE-2021-26708（CNVD-2021-10822、CNNVD-202102-529）。根据披露细节，该漏洞是由于错误加锁导致，可以在低权限下触发并自动加载易受攻击驱动模块创建AF_VSOCK套接字，进而导致本地权限提升。该漏洞补丁已经合并到Linux内核主线中。
+
+### 二、VSOCK介绍和架构
+
+#### 2.1 VSOCK介绍
+
+VM套接字最早是由Vmware开发并提交到Linux内核主线中。VM套接字允许虚拟机与虚拟机管理程序之间进行通信。虚拟机和主机上的用户级应用程序都可以使用VM
+套接字API，从而促进guest虚拟机与其host之间的快速有效通信。该机制提供了一个vsock套接字地址系列及其vmci传输，旨在与接口级别的UDP和TCP兼容。VSOCK机制随即得到Linux社区的响应，Redhat在VSOCK中为vsock添加了virtio传输，QEMU/KVM虚拟机管理提供支持，Microsoft添加了HyperV传输。
+
+#### 2.2 VSOCK架构
+
+VM套接字与其他套接字类型类似，例如Berkeley
+UNIX套接字接口。VM套接字模块支持面向连接的流套接字（例如TCP）和无连接数据报套接字（例如UDP）。VM套接字协议系列定义为“AF_VSOCK”，并且套接字操作分为SOCK_DGRAM和SOCK_STREAM。如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/29ca82f5-0454-45c7-b907-f7d667f2a652.png-w331s)
+
+VSOCK支持socket API。AF_SOCK地址簇包含两个要素：CID和port。 CID为Context
+Identifier，上下文标识符；port为端口。TCP/IP应用程序几乎不需要更改就可以适配，每一个地址表示为。还有一层为transport，VSOCK
+transport用于实现guest和host之间通信的数据通道。如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/058d1956-dbe4-48d0-9a68-9b78cfbd3464.png-w331s)
+
+Transport根据传输方向分为两种（以SOCK_STREAM类型为例），一种为G2H
+transport，表示guest到host的传输类型，运行在guest中。另一种为H2G
+transport，表示host到guest的传输类型。以QEMU/KVM传输为例，如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/b0dfa9e2-38bc-46d1-a32c-843fe13c2914.png-w331s)
+
+该传输提供套接字层接口的驱动分为两个部分：一个是运行在guest中的virtio-transport，用于配合guest进行数据传输；另一个是运行在host中的vhost-transport，用于配合host进行数据传输。VSOCK
+transport还提供多传输通道模式，该功能是为了支持嵌套虚拟机中的VSOCK功能。如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/8fe885b3-e5d0-4e56-b50e-bf032af1f4a4.png-w331s)
+
+支持L1虚拟机同时加载H2G和G2H两个传输通道，此时L1虚拟机即是host也是guest，通过H2G传输通道和L2嵌套虚拟机通信，通过G2H传输通道和L0
+host通信。VSOCK transport还支持本地环回传输通道模式，不需要有虚拟机。如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/1aa29520-d9e4-4b31-9a28-cff6020f0a87.png-w331s)
+
+该模式用于测试和调试，由vsock-loopback提供支持，并对地址簇中的CID进行了分类，包含两种类型：一种是VMADDR_CID_LOCAL，表示本地环回；一种为VMADDR_CID_HOST，表示H2G传输通道加载，G2H传输通道未加载。
+
+### 三、漏洞分析与触发过程
+
+#### 3.1漏洞分析
+
+    
+    
+    该漏洞触发原因是错误加锁导致条件竞争，根据补丁可知，存在多处错误加锁，这里以
+
+vsock_stream_setsockopt()函数补丁为例，如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/84902dd3-aa1d-465a-8363-17dce7337e39.png-w331s)
+
+补丁很简洁，将第1564行代码移动到第1571行，中间就隔着第1569行代码：lock_sock(sk)。加锁前，vsk->transport已经赋值到transport变量中，这里产生了一个引用，然后才进行lock_sock(sk)将sk锁定。但是vsk->transport会在多处被调用甚至被释放，这就有可能通过条件竞争造成Use
+After Free。
+
+#### 3.2触发过程
+
+    
+    
+    首先找到修改或释放vsk->transport的调用路径，来看关键函数vsock_assign_transport()的实现。对于多传输模式，该函数用于根据不同CID分配不同的传输通道。实现代码如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/dcaa1670-2933-4515-af30-fae640c60a10.png-w331s)
+
+根据sk->sk_type分为SOCK_DGRAM和SOCK_STREAM，在SOCK_STREAM中，分为三种传输通道。这里可以通过将CID设置为本地环回模式，得到transport_local传输通道。接下来如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/d8f34fdf-6508-4316-9320-5e903708e7ac.png-w331s)
+
+如果vsk->transport不为空，则进入if语句。先判断vsk->transport是否等于new_transport，如果等于直接返回，在触发过程中，要保证能走到vsock_deassign_transport()函数，该函数是析构函数，用于释放transport。如下代码所示：
+
+![](https://images.seebug.org/content/images/2021/03/60680a13-cf7f-41b1-a1fa-43833e589c36.png-w331s)
+
+行411，调用vsk->transport->destruct()，要明确使用transport类型，前文已经确定使用transport_local。Transport_local为全局变量，会在vsock_core_register()函数中被初始化。该函数被调用情况如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/84e18b27-0ae4-435b-a20c-59bec915e9e8.png-w331s)
+
+*_init()函数用来初始化transport的回调函数，根据第二部分介绍，vhost_vsock_init()、virtio_vsock_init()和vsock_loopback_init()函数为QEMU/KVM环境下的支持函数。我们发现transport->destruct()函数的最后实现都是同一个函数。如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/7e16b7a1-d0cd-405b-b547-5fb3a59e3cac.png-w331s)
+
+该destruct()函数释放vsk->trans，如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/31618308-003b-45d4-89e9-8f5775c3bc6b.png-w331s)
+
+而vsk->trans指针是指向transport的。结构体vsock_sock定义如下所示：
+
+![](https://images.seebug.org/content/images/2021/03/ebffefd2-a78c-4862-9d7e-c8eb5c8bcf0d.png-w331s)
+
+最终可以构造一个释放transport的函数路径为：vsock_stream_connect->
+vsock_assign_transport->virtio_transport_destrcut。
+
+找到了释放路径，下一步找使用路径，virtio_transport_notify_buffer_size()函数会使用transport。如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/021c3cc1-c3d3-4872-815b-27ef9ca7bfe2.png-w331s)
+
+第492行，通过vsk->trans获取指向transport的指针，第497行，解引用vvs指针，对vvs->buf_alloc进行赋值。而调用virtio_transport_notify_buffer_size()函数最终会被vsock_stream_setsockopt()函数调用。最终可以构造一个使用transport的函数路径为：vsock_stream_setsockopt->
+vsock_update_buffer_size->virtio_transport_notify_buffer_size。
+
+接下来就是营造一个抢锁的条件竞争环境，很明显必须是connect()系统调用先抢到锁对transport进行释放，然后再调用setsockopt()才能触发漏洞。有开发人员提出使用userfaultfd机制先将lock_sock锁定，然后在去释放锁，进行条件竞争。漏洞触发过程如下图所示：
+
+![](https://images.seebug.org/content/images/2021/03/63a4c69e-bc6e-4de6-a432-4c77ca99c654.png-w331s)
+
+蓝框中是connect()调用过程，最后调用virtio_transport_destruct()函数释放vsk->trans。红框中是setsockopt()调用过程，调用virtio_transport_notify_buffer_size()函数使用vvs，该值是0xffff888107a74500，在0xffff888107a74500+0x28处会写入4字节。
+
+### 四、参考链接
+
+1.<https://github.com/torvalds/linux/commit/d021c344051af91f42c5ba9fdedc176740cbd238>
+
+2.<https://static.sched.com/hosted_files/devconfcz2020a/b1/DevConf.CZ_2020_vsock_v1.1.pdf>
+
+3.<https://github.com/jordan9001/vsock_poc>
+
+4.[https://terenceli.github.io/%E6%8A%80%E6%9C%AF/2020/04/18/vsock-internals](https://terenceli.github.io/技术/2020/04/18/vsock-internals)
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1504/>
+

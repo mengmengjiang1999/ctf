@@ -1,0 +1,123 @@
+***严正声明：本文仅限于技术讨论与分享，严禁用于非法途径**
+
+## 0x00 背景
+
+10月9号国内几家安全媒体公布了Joomla RCE的漏洞预警，并且网上已公布漏洞利用[EXP](https://www.exploit-db.com/exploits/47465)，影响版本包括Joomla 3.0.0 - 3.4.6。
+
+## 0x01 环境搭建
+
+Joomla是一套全球知名的内容管理系统。Joomla是使用PHP语言加上MySQL数据库所开发的软件系统，目前最新版本是3.9.11
+。可以在Linux、Windows、MacOSX等各种不同的平台上执行。
+
+Joomla环境搭建下载：<https://github.com/joomla/joomla-cms/releases/tag/3.4.6>
+
+PS：搭建环境要求php 5.3.10以上
+
+## 0x02 漏洞分析
+
+### Session会话机制
+
+PHP本身对Session的存储默认放在文件中，当有会话产生使用到Session时候，将会在网站服务端设置好的路径写入相应的Session文件，文件的内容为默认序列化处理器序列化后的数据。然而在Joomla中则改变了PHP的默认处理规则，相反将序列化之后的数据存放在数据库的”
+hzlnp_session”表中存储：
+
+![](https://image.3001.net/images/20191012/1570858776_5da16718aa493.png!small)
+
+将序列化之后的数据存放在数据库中所对应的处理函数为由session_set_save_handler（）设置的\libraries\joomla\session\storage\database.php
+中的write():
+
+![](https://image.3001.net/images/20191012/1570858797_5da1672db309f.png!small)
+
+相应的取值函数read()也位于\libraries\joomla\session\storage\database.php中
+
+![](https://image.3001.net/images/20191012/1570858810_5da1673a37f6d.png!small)
+
+接着从代码中可以看出，在存入数据库之前，会将传入数据中的chr(0) . '*' .chr(0) 替换为\0\0\0，
+原因是mysql数据库无法处理NULL字节，而protected
+修饰符修饰的字段在序列化之后是以\x00\x2a\x00开头的。然后从数据库中取出来的时候，再将字符进行替换还原，防止无法正常反序列化。
+
+### Session会话逃逸
+
+session 在 Joomla 中的处理存在一些问题，它会把没有通过验证的用户名和密码存储在hzlnp_session表中
+
+![](https://image.3001.net/images/20191012/1570858831_5da1674f3d9d5.png!small)
+
+当用户在登陆过程中，会有一个 303 的跳转，主要是用于write()数据库写入用户会话然后read()相应取出会话进行对比，显示结果
+
+![](https://image.3001.net/images/20191012/1570858851_5da16763629b1.png!small)
+
+![](https://image.3001.net/images/20191012/1570858864_5da167708e9de.png!small)
+
+通过分析Session会话机制和Session逃逸我们还不明确Session形成的漏洞到底在哪！
+
+首先需要了解一下PHP的序列化的机制，PHP在序列化数据的过程中，如果序列化的字段是一个字符串，那么将会保留该字符串的长度，然后将长度写入到序列化之后的数据，反序列化的时候按照长度进行读取。
+
+![](https://image.3001.net/images/20191012/1570858883_5da167833365d.png!small)
+
+知道PHP序列化过程之后，针对Joomla的内置序列化方法write和read函数，如果写入数据库的时候，是\0\0\0， 取出来的时候将会变成chr(0)
+. '*' . chr(0)，这样的话，入库的时候生成的序列化数据长度为6(\0\0\0)， 取出来的时候将会成为3(N*N，
+N表示NULL)，依据PHP反序列化原理，该数据在反序列化的时候，如果按照原先的长度进行读取，就会导致溢出。
+
+那么由”
+\0\0\0”溢出会造成什么问题呢？按照PHP反序列化的特点，PHP按照长度读取指定字段的值，读取完成以分号结束，接着开始下一个，如果我们能够控制两个字段的值，第一个用来溢出第一个字段和第二个字段的前一部分，第二个字段的另一部分用来构造序列化利用的payload，最终序列化结果将会把第一个字段开始部分到第二个字段的前一部分当成第一个字段的全部内容，第二个字段内容成功逃逸出来并且被反序列化。
+
+为了触发我们的任意对象并实现RCE，我们需要将登录框处的两个字段username和password进行处理，第一个字段将导致“溢出”，第二个字段将包含漏洞利用的最后一部分。
+
+### 漏洞利用大概思路
+
+![](https://image.3001.net/images/20191012/1570858908_5da1679c181f6.png!small)
+
+编写本地测试代码
+
+![](https://image.3001.net/images/20191012/1570858918_5da167a6d72f7.png!small)
+
+此处伪代码对Joomla内置的write()、read()函数进行模拟，username字段通过9组”\0\0\0”进行赋值，其值序列化存入数据库db.txt长度为54，反序列化取出长度变为27，加上后面第二个字段password的27个字符构成实际的username值:
+
+O:4:"User":2:{s:8:"username";s:57:"xx。。。xxx";s:8:"password";s:nn:"payload";}
+
+由于";s:8:"password";s:nn:"长度为23，\0\0\0经read()函数处理之后会减半，所以要想覆盖password字段值，username字段值就要取9组”\0\0\0”，同时password的字段值长度至少需要是两位(nn代表占位符)，因为实际上payload的长度会大于10。
+
+测试结果 实现任意对象的注入
+
+![](https://image.3001.net/images/20191012/1570858933_5da167b57f698.png!small)
+
+### 构造POP执行链，执行任意代码
+
+首先参考PHITHON 师傅的一篇文章“Joomla远程代码执行漏洞分析“收获很多，依据PHITHON
+师傅的思路，同样，在我们可以控制反序列化对象以后，我们只需构造一个能够一步步调用的执行链，即可进行一些危险的操作了。exp构造的执行链，分别利用了JDatabaseDriverMysqli和SimplePie类
+
+我们可以在JDatabaseDriverMysqli类（\libraries\joomla\database\driver\mysqli.php）的析构函数里找到一处敏感操作：
+
+![](https://image.3001.net/images/20191012/1570858949_5da167c5c3345.png!small)
+
+由于exp构造的对象反序列化后，将会成为一个JDatabaseDriverMysqli类对象，不管中间如何执行，最后都将会调用__destruct魔法函数，__destruct将会调用disconnect，disconnect里有一处敏感函数：call_user_func_array。但很遗憾的是，这里的call_user_func_array的第二个参数是我们无法控制的，但是，我们可以进行回调利用：
+
+call_user_func_array([$obj,"任意方法"],array( &$this))
+
+进一步跟踪到SimplePie类（\libraries\simplepie\simplepie.php）,通过将SimplePie对象和它本身的init()函数可以组成一个回调函数[new
+SimplePie(), 'init']，传入call_user_func_array
+
+分析init()函数
+
+![](https://image.3001.net/images/20191012/1570858964_5da167d42c3a5.png!small)
+
+通过分析代码发现此处的call_user_func 参数可控，只要满足条件$this->cache=true &&
+$parsed_feed_url['scheme'] !==
+Null,将其中第二个call_user_func的第一个参数cache_name_function赋值为assert，第二个参数赋值为我们需要执行的代码，这样就可以构成一个可利用的“回调后门“，达到任意代码执行效果。
+
+PS：对于网上爆的利用回调后门在网站根目录下的configuration.php中写入一句话木马getshell这种方式，在真实环境中大多都不能利用成功（权限问题），效果并不是太好。
+
+## 0x03 漏洞预防
+
+> 1、版本更新
+>
+> 2、对session信息进行编码存储
+
+## 0x04 参考链接
+
+>
+> [https://blog.hacktivesecurity.com/index.php?controller=post&action=view&id_post=41](https://blog.hacktivesecurity.com/index.php?controller=post&action=view&id_post=41)
+>
+> <https://www.leavesongs.com/PENETRATION/joomla-unserialize-code-execute-> vulnerability.html>
+
+***本文原创作者：Qftmer，本文属于FreeBuf原创奖励计划，未经许可禁止转载**
+

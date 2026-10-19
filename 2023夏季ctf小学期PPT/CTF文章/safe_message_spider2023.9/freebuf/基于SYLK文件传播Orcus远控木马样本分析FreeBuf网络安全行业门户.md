@@ -1,0 +1,211 @@
+## 0x01 背景
+
+**近日，腾讯反病毒实验室发现一例利用符号链接文件(SYLK文件)传播远控Orcus远控木马的攻击样本，黑客使用SYLK文件做为初始攻击载体，在SYLK文档中使用DDE加载powershell进而加载Orcus远控木马执行。对大多数用户来说，SYLK文件都很陌生，SYLK文件为微软的一种数据文件，默认由Excel程序加载，使用SYLK文件做为初始攻击载体在很大程度上可以躲避安全软件的查杀，至本文发稿，该样本仍未被腾讯电脑管家之外的各大安全厂商查杀。**
+
+黑客利用该样本的典型的攻击场景为：将免杀的SYLK恶意文档做为附件对目标用户进行钓鱼攻击，诱导用户执行进而控制用户的计算机系统；利用水坑攻击，将SYLK恶意文档替换用户信任站点的下载链接，等待用户主动下载执行。
+
+整个样本的攻击流程过程如下所示。
+
+![1.png](https://image.3001.net/images/20180402/15226361153637.png!small)  
+
+在这起攻击事件中，有两点值的关注：
+
+1\.
+大多数的安全厂商在自己杀毒引擎中都有对doc、xls等常见文档的格式解析功能，但对于不常见的文档结构类型(如本例中的SYLK文档结构)重视不够，没有实现对这类文档的解析功能模块，因此导致这类文档中的恶意代码无法杀毒引擎正确识别查杀。
+
+2\.
+从样本编译时间戳来看，loader样本于2018年3月22日完成，Orcus远控木马样本于2018年3月24日生成，该样本时间较新，黑客们最近已经尝试出这类的免杀手段，以后使用该手段的恶意样本的可能会出现一定程度的增长。
+
+因此，本文将对该类样本进行详细分析，供安全社区共享，共同提高安全能力，保护个人、企业、机关等用户的计算机安全。
+
+## 0x02 样本分析
+
+### 2.1 SYLK文件
+
+原始样本文件名为K*****.slk，.slk后缀名为SYLK文件后缀。符号链接(SYLK)是Microsoft的一种文件格式，通常用于在应用程序(特别是电子表格)之间交换数据。SYLK文件的后缀名为.slk。该格式的文件由可显示的ANSI字符组成，即使创建SYLK文件的应用程序支持UNICODE,SYLK
+文件在系统中也会以ANSI编码。  
+
+使用010edit打开文件后显示如下：
+
+![2.png](https://image.3001.net/images/20180402/15226361238844.png!small)  
+
+第一行的ID;PWXL;N;E申明了文档格式，P开头的行表示了不同的样式，在安装office的情况下，SYLK文件默认由EXCEL程序打开。
+
+默认打开时，EXCEL会弹出下面的安全提示，如果用户此时点击禁用，还可免受攻击威胁。
+
+![3.png](https://image.3001.net/images/20180402/15226361306276.png!small)  
+
+当用户点击了启用后，OFFICE软件会提示”远程数据不可访问”对话框，同时给出了只有信任该数据时再点击是按钮，防止合法应用程序被病毒恶意利用。
+
+![4.png](https://image.3001.net/images/20180402/15226361344628.png!small)  
+
+再次点击是按钮后，恶意的powershell就会得以执行，此后，再无需用户的交互，机器就已经被黑客完全控制。
+
+运行时的进程树如下：
+
+![5.png](https://image.3001.net/images/20180402/15226361423989.png!small)  
+
+观察原始的SYLK文件，可以在153行的内容看到恶意代码：
+
+![6.png](https://image.3001.net/images/20180402/15226361524899.png!small)  
+
+153行代码的含义为在单元格中使用公式加载DDE，使用“\\..\\..\\..\Windows\System32\cmd.exe”加载powershell执行。执行的命令为：
+
+对下载回来的Formules.exe进行分析
+
+### 2.2 Formules.exe分析
+
+Formules.exe充当了混淆壳的功能。Formules.exe使用.NET编写，在dnspy中显示代码经过混淆，混淆的效果如下：
+
+![7.png](https://image.3001.net/images/20180402/15226361619924.png!small)  
+
+Formules.exe资源中保存着114张图片，Formules.exe最终会从这些图片中解码出PE数据。资源截图如下：
+
+![8.png](https://image.3001.net/images/20180402/15226361699081.png!small)  
+
+Formules.exe将自身代码在内存中解码出来后，dump出来后可以看到还原后的代码。从还原后的代码可以看到，在Main函数中调用Resources解码资源后，调用Form1执行，在Form1的初始化中直接调用Form1的close方法，在Form1的close方法中才真正的加载解码出来的Multi.exe执行，Multi.exe本身为一个loaderPe程序，用来加载最终的远控木马。
+
+上面描述的过程从代码层面看，Main函数调用Application.Run(new Form1());
+
+![9.png](https://image.3001.net/images/20180402/15226361754096.png!small)  
+
+在Form1的Load方法中调用了Resources.Class9.smethod_1,而Resources.Class9.smethod_1又会调用Form1的close方法。
+
+![10.png](https://image.3001.net/images/20180402/15226361801570.png!small)  
+
+在Form1的close方法，使用Invoke调用解码出来的Multi.exe(loader程序)的入口点执行(此处我Invoke函数与EntryPoint函数经过人工的重命名)。
+
+![11.png](https://image.3001.net/images/20180402/15226361846900.png!small)  
+
+Form1.smethod_1函数的功能就是解码出Multi.exe，代码截图如下：
+
+![12.png](https://image.3001.net/images/20180402/15226361893262.png!small)  
+
+### 2.3 Multi.exe-loader
+
+Multi.exe编译时间戳为2018年03月22日，该样本最近才开始构建完成。
+
+Multi.exe的功能就是PELoader,
+Multi.exe通过AES解码出加载PE所需的函数名称进而得到函数地址，使用CreateProcess传递CREATE_SUSPENDED参数创建处于挂起状态的进程后，GetThreadContext来获取被挂起进程的CONTEXT，最终使用SetThreadContext来设置线程的上下文，将EIP设置成要加载的PE的入口处，ResumeThread恢复线程执行，实现加载PE的功能。
+
+Multi.exe使用AES算法解密出配置字符串：
+
+![13.png](https://image.3001.net/images/20180402/15226361962906.png!small)  
+
+对应的配置信息如下表
+
+**选项** |  **值**  
+---|---  
+Install |  TRUE  
+Install.Folder |  0x0000000B  
+Install.Key |  Software\Microsoft\Windows\CurrentVersion\RunOnce  
+Install.ValueName |  pitsuvxlikk  
+Install.FileName |  printing.exe  
+Install.StartupFolder |  TRUE  
+Notify |  FALSE  
+Options.Compress |  FALSE  
+Options.CheckVM |  FALSE  
+Options.CheckSandbox |  FALSEs  
+Options.DelayTime |  0x00000019  
+Options.MonitorPackage |  FALSE  
+Options.MonitorRegistry |  FALSE  
+Options.MonitorSelf |  FALSE  
+Options.HostIndex |  0x00000000  
+Files.Main |  Orcus.exe文件的内容  
+Files.Count |  0  
+Options.Melt |  FALSE  
+MeltFileName |  Name of the melted file  
+  
+其中最关键的配置项为Files.Main，其表明要在内存中加载的PE文件。
+
+Multi.exe加载PE时，获取函数地址的代码如下：
+
+![14.png](https://image.3001.net/images/20180402/15226362041615.png!small)  
+
+向傀儡进程写入PE文件的代码
+
+![15.png](https://image.3001.net/images/20180402/1522636210490.png!small)  
+
+此处的Files.Main指定的PE文件为Orcus远控木马程序，将Orcus保存出来留做下面分析。
+
+### 2.4 远控木马-Orcus.exe
+
+Orcus.exe文件的编译时间戳显示为2018年03月24日，比Multi.exe的编译时间(2018.03.22)晚两天。
+
+Orcus为商业远控软件，售价为40美元，该远控软件自2016年就开始出现，此后一直持续的更新维护，官方最新版本为1.9.1，除了远控木马的基本功能外，Orcus最大的产品亮点在于，它能够加载由用户开发的自定义插件和攻击者可以在远程计算机上实时执行C＃和VB.net代码。
+
+Orcus目前官方的插件库中包含5个插件，其中包含增加文件体积防止云查杀的功能插件，使用系统关键进程保护，进程被杀后强制蓝屏的插件等。
+
+对于官方的Orcus远控软件，在远控被控端运行时，会有如下的运行风险提示，官网的Orcus也一在重审，软件为远程管理类软件，并不是远控木马。但在腾讯反病毒实验室检测到的Orcus做为木马使用的情况下，都不会出现下面的对话框。
+
+![16.png](https://image.3001.net/images/20180402/15226362178781.png!small)  
+
+远控软件的远程进程管理、文件管理、注册表管理、服务管理、网络连接管理等基本功能代码截图如下：
+
+![17.png](https://image.3001.net/images/20180402/15226362248362.png!small)  
+
+常规的远控木马功能不再赘述，本文将结合作者理解对该远控软件比较特色的功能简单介绍。
+
+ **恶作剧功能**
+
+软件集成了恶作剧功能，可以在受害机器上播放蚊子声音，龙卷风声音，鬼叫声等。
+
+![18.png](https://image.3001.net/images/20180402/15226362341184.png!small)  
+
+**世界地图功能**
+
+软件集成了世界地图功能，可以在地图上显示各受害者所在的地理位置。
+
+![19.png](https://image.3001.net/images/20180402/15226362434400.png!small)  
+
+同时，统计功能也以图表的形式给出指定时间内的上线情况统计。
+
+![20.png](https://image.3001.net/images/20180402/15226362515592.png!small)  
+
+**远程源代码直接执行功能**
+
+软件具有远程源代码直接执行的功能，目前支持支持Visual C#、VB NET、 Batch脚本的直接执行。如下图，将直接在受害机器上执行选中的C#代码。
+
+![21.png](https://image.3001.net/images/20180402/15226362712091.png!small)  
+
+动态调试得到远控木马的上线地址为：d***r.com:9**0。调试截图如下：
+
+![22.png](https://image.3001.net/images/20180402/15226362795285.png!small)  
+
+## 0x03 总结
+
+DDE技术从开始提出，腾讯反病毒实验室就一直持续跟进，先后在freebuf发布《利用DDE钓鱼文档传播勒索病毒事件分析》，《Office
+DDEAUTO技术分析报告》，《无需开启宏即可渗透：在Office文档中利用DDE执行命令》等多篇文章对该类技术进行分析，此次的攻击样本同样使用DDE技术，但却与以往的利用方式存在少许差异：以往的DDE技术利用在.doc文档和.xls文档中，而此次的DDE技术利用在.slk文档中。而正是这一简单的改变就导致了诸多杀软的集体失声。
+
+对于上文中提到的攻击样本，给出下面的安全建议：
+
+一．
+提高用户网络安全意识，对上面的样本，如果用户能够在两次确认的过程中，及时的选择不允许执行，即可以阻断攻击过程。，不随意打开陌生人发送的文件可以最快的阻断攻击。
+
+二． 建议用户尽快排查自身网络内是否有可疑C&C地址的访问，一旦发现有终端主机对上述远控C&C地址发起请求连接则极有可能已经沦陷。
+
+三． 建议用户安装腾讯电脑管家等终端安全产品。保持终端安全产品的及时更新从而达到有效防护。
+
+四．
+可以在企业边界部署御界高级威胁检测系统（<http://s.tencent.com/product/gjwxjc/index.html>），御界高级威胁检测系统已经能够对该威胁进行阻断与报警。
+
+![御界截图.png](https://image.3001.net/images/20180402/15226530401300.png!small)  
+
+## 0x04 参考：
+
+> <https://en.wikipedia.org/wiki/SYmbolic_LinK_(SYLK)>
+>
+> [https://www.fortinet.com/blog/threat-research/a-peculiar-case-of-Orcus-rat-> targeting-bitcoin-investors.html](https://www.fortinet.com/blog/threat-> research/a-peculiar-case-of-orcus-rat-targeting-bitcoin-investors.html)
+>
+> [https://Orcustechnologies.com/](https://orcustechnologies.com/)
+>
+> <https://github.com/OrcusTechnologies>
+>
+> <http://www.freebuf.com/column/152267.html>
+>
+> <http://www.freebuf.com/articles/terminal/152064.html>
+>
+> <http://www.freebuf.com/articles/terminal/150285.html>
+
+ ***本文作者：腾讯电脑管家，转载请注明来自 FreeBuf.COM**
+

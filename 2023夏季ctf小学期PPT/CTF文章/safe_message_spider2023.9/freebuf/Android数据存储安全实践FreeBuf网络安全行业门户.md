@@ -1,0 +1,178 @@
+##  0x00 数据存储安全
+
+**Android操作系统自问世以来凭借其开放性和易用性成为当前智能手机的主流操作系统之一，作为与人们关系最密切的智能设备，越来越多的通讯录、短信、视频等隐私数据以明文的方式保存在手机中，这些数据虽然有锁屏密码或者指纹保护，但是由于Android系统自身的安全性，专业人士可以毫不费力的获取到手机数据镜像，个人隐私面临泄露风险。另一方面，日益繁荣的移动互联网应用也是基于用户数据和应用程序构成，如何保护这些用户数据安全性是应用发展的基石。随着人们对数据安全重视，如何更好地保护用户数据成为移动应用开发者的一大挑战。**
+
+本文以Android开发实践出发，由浅入深讨论Android数据的存储、加密等实现方法供移动开发进行参考。并结合自身经验探讨对Android数据安全的一些思考。
+
+##  0x01常用数据存储方法及实例
+
+###  **文件**
+
+存储数据最直接的方法就是以文件的形式保存在手机中，Android开发主要基于Java语言，因此，在文件读写等基本操作相同，文件操作和数据流来源于java.IO.*，但是对于Android而言，开发者需要注意一下几点：
+
+1、文件目录 Android权限管理中各个应用程序有独立的存储空间，存储结构如下：
+
+![](https://image.3001.net/images/20180925/1537807280_5ba913b0b3297.png!small)
+
+2、常见文件目录及路径
+
+> /data/data/(packageName)/cache目录 应用缓存文件，目录获取方法：File cache = getCacheDir()
+>
+> /data/data/(packageName)/files目录，即应用一般文件，目录获取方法：File file = getFilesDir()
+>
+> /data/data/(packageName)/shared_prefs目录，存放应用SharedPreference文件目录位置
+>
+> /data/data/(packageName)/databases目录，应用数据库目录（SQLite）
+>
+> /storage/emulated/0/sdcard内置sd卡目录，获取方法：String sdcard = getInnerSDCardPath()
+>
+> /storage/extSdCard外置sd卡目录，获取方法：String exsdcard =
+> Environment.getExternalStorageDirectory().getPath()
+
+在Android手机中，获取默认sd卡目录方法明确，但是由于Android手机本身不一定支持外置sd卡，或者有/没有插入外置sd卡，因此在获取外sd卡时需要留心有坑，一是避免异常，二是分清内置和外置。
+
+关键：位置。通过文件保存用户或者应用数据时，首先要遵循Android开发的规则，在应用目录中根据文件的类型选择保存的外置。在sd卡中存放时，避免直接保存在根目录下，这样做是避免造成用户手机文件管理的混乱；二是避免文件被修改、删除等。
+
+###  **数据库**
+
+Android 数据库采用SQLite，SQLite
+是一款内置到移动设备上的轻量型的数据库，是遵守ACID（原子性、一致性、隔离性、持久性）的关联式数据库管理系统。Android开发中可以通过SQLiteOpenHelper或者自定义类SQLiteOpenHelper来实现数据存储查询修改的功能。此外SQLite数据库支持加密操作，通过sqlite3.exe或者SQLiteConnection均可对数据库进行加密操作。SQLiteEncrypt、SQLiteCrypt、SQLCipher等工具提供对数据库的加密操作，但是前两个需要收费，SQLCipher是开源工具，GitHub地址为：
+[SQLCipher](https://github.com/sqlcipher)；通过SQLiteConnection类加密方法如下：
+
+    
+    
+    SQLiteConnection conn = new SQLiteConnection("Data Source=TestDatabase.sqlite;Version=3;"); conn.SetPassword("password"); conn.open();
+
+###  **SharedPreferences存储**
+
+SharedPreferences存储方式是Android中存储轻量级数据的一种方式,内部以Map方式进行存储，保存的数据以xml格式存放在本地的/data/data/(packagename)/shared_prefs文件夹下。SharedPreference<key,value>value支持Java的基本操作类型，如Boolean、Int，Float等，文件轻量级数据要求保存数据value大小不能太大，数据太大会给系统GC、内存带来压力，甚至造成Activity程序卡顿。
+
+    
+    
+    SharedPreferences pref = getSharedPreferences("test", MODE_PRIVATE); SharedPreferences.Editor editor=pref.edit(); SharedPreferences.Editor editor=pref.edit();editor.putString("name", "root");//保存字符串 editor.putInt("age", 12);//保存整型数据 editor.commit(); //putXXX 方法中第一个参数是key，第二参数为value
+    
+    
+    SharedPreferences pref = getSharedPreferences(“setting”, 0);
+    pref.getInt("key_name", -1); // getting Integer pref.getFloat("key_name", null); // getting Float pref.getLong("key_name", null); // getting Long //getXXX方法第一个参数表示key名称，第二个表示value默认值
+
+##  0x02 Android加密算法及实现
+
+DES，对称加密，同理有3DES，3DES在DES的基础上进行3重加密，以牺牲效率来提高加密安全性。
+
+    
+    
+    //DES加密[] encrypt([] data,String key){
+         {
+             [] bkey = key.getBytes();
+             // 初始化向量IvParameterSpec iv = IvParameterSpec(bkey);
+             DESKeySpec desKey = DESKeySpec(bkey);
+             // 创建密匙工厂，把DESKeySpec转换成securekey
+             SecretKeyFactory keyFactory = SecretKeyFactory.getInstance();
+             SecretKey securekey = keyFactory.generateSecret(desKey);
+             Cipher cipher = Cipher.getInstance();
+             // 用密匙初始化Cipher对象cipher.init(Cipher., securekey, iv);
+             // 现在，获取数据并加密
+             // 加密操作cipher.doFinal(data);
+         } (Throwable e) {
+             e.printStackTrace();
+         }
+         ;
+     }
+    
+    
+    //DES解密[] decrypt([] src, String key) Exception {
+         [] bkey = key.getBytes();
+         // 初始化向量IvParameterSpec iv = IvParameterSpec(bkey);
+         // 创建一个DESKeySpec对象DESKeySpec desKey = DESKeySpec(bkey);
+         // 创建密匙工厂SecretKeyFactory keyFactory = SecretKeyFactory.getInstance();
+         // 把DESKeySpec对象转换成SecretKey对象SecretKey securekey = keyFactory.generateSecret(desKey);
+         // Cipher对象实际完成解密操作Cipher cipher = Cipher.getInstance();
+         // 用密匙初始化Cipher对象cipher.init(Cipher., securekey, iv);
+         // 真正开始解密操作cipher.doFinal(src);
+     }
+
+AES 高级加密标准，用来替代DES的对称加密算法
+
+    
+    
+    //AES 加密[] encrypt([] data, [] key) {
+         {
+             KeyGenerator kgen = KeyGenerator.getInstance();// 创建AES的Key生产者kgen.init(128, SecureRandom(key));// 128位的key生产者SecretKey secretKey = kgen.generateKey();// 根据key生成密钥[] enCodeFormat = secretKey.getEncoded();// 返回基本编码格式的密钥SecretKeySpec aesKey = SecretKeySpec(enCodeFormat, );// 转换为AES密钥Cipher cipher = Cipher.getInstance();// 创建密码器cipher.init(Cipher., aesKey);// 初始化为加密模式的密码器
+             // 加密cipher.doFinal(data);
+         }(NoSuchAlgorithmException e){
+             e.printStackTrace();
+         } (NoSuchPaddingException e) {
+             e.printStackTrace();
+         }(InvalidKeyException e) {
+             e.printStackTrace();
+         } (IllegalBlockSizeException e) {
+             e.printStackTrace();
+         } (BadPaddingException e) {
+             e.printStackTrace();
+         }
+         ;
+     }//AES 解密[] decrypt([] data, [] key) {
+         {
+             KeyGenerator kgen = KeyGenerator.getInstance();// 创建AES的Key生产者kgen.init(128, SecureRandom(key));
+             SecretKey secretKey = kgen.generateKey();// 根据用户密码，生成一个密钥[] enCodeFormat = secretKey.getEncoded();// 返回基本编码格式的密钥SecretKeySpec aesKey = SecretKeySpec(enCodeFormat, );// 转换为AES专用密钥Cipher cipher = Cipher.getInstance();// 创建密码器cipher.init(Cipher., aesKey);// 初始化为解密模式的密码器
+             //解密cipher.doFinal(data);  
+         } (NoSuchAlgorithmException e) {
+             e.printStackTrace();
+         } (NoSuchPaddingException e) {
+             e.printStackTrace();
+         } (InvalidKeyException e) {
+             e.printStackTrace();
+         } (IllegalBlockSizeException e) {
+             e.printStackTrace();
+         } (BadPaddingException e) {
+             e.printStackTrace();
+         }
+         ;
+     }
+
+对称加密特点是实现效率快，但是由于加/解密密钥相同，在密钥保存、分发、安全各方面出现许多问题，例如密钥管理，密钥泄露。基于此，将加密密钥和解密密钥分开，形成客户端端使用公钥加密，服务端用私钥解密的非对称加密，将加解密密钥分开，加密密钥不必担心泄露风险。常用的非对称加密算法如RSA。
+
+RSA加解密实现
+
+    
+    
+    // 生成 public and private keysKeyPair buildKeyPair() NoSuchAlgorithmException {
+         keySize = 2048;
+         KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance();
+         keyPairGenerator.initialize(keySize);
+         keyPairGenerator.genKeyPair();
+     }
+    //RSA 加密 [] encrypt(PrivateKey privateKey, [] data) Exception {
+         Cipher cipher = Cipher.getInstance();
+         cipher.init(Cipher., privateKey);
+         //加密cipher.doFinal(data);
+     }
+    //RSA 解密 [] decrypt(PublicKey publicKey, [] enData) Exception {
+         Cipher cipher = Cipher.getInstance();
+         cipher.init(Cipher., publicKey);
+         //解密cipher.doFinal(enData);
+     }
+
+在常用数据加密方法中，通常也会遇到md5、sha-256算法等，但是这些算法是明文的hash值，哈希算法和加密算法的本质是是否可逆，即由密文通过运算得到明文。特别注意，base64编码是一种编码格式，除了增加可读性难度没有任何安全性。
+
+##  0x03 存储安全进阶
+
+在上文中介绍了常用的Android数据存储方式和加密算法，通过直观的介绍进入到Android存储安全中，在实际的应用中数据存储安全性问题是一个复制的系统性问题，不仅仅表现在开发中，从数据结构到编码以及密钥的生成和管理都会涉及到数据存储安全。
+
+文件的隐藏
+Android创建隐藏文件或者文件夹，在文件名或者文件夹名字前加一个“.”号即可（这里是英文输入法下的.号），隐藏文件/文件夹可直接进行读写。这是一个容易被开发者忽略的问题，乍一看好像没什么难度，问题在于开发者和用户视角问题。由于Android手机默认带文件查看器，因此用户可以轻松查看、修改sdcard目录下的文件，当使用隐藏文件是最大的作用是避免用户误操作。
+
+密钥的保存
+如果将密钥保存到手机文件中，或者通过硬编码的方式写在代码中，容易被逆向出来，在通常情况下，采用对称加密密钥需要保存在用户手机中，这和安全性想违背。通常最好的方式是不要保有密钥，通过固定数据或者字符串做加密密钥因子，例如用户唯一账号属性等。
+
+编码方式
+Android代码主要有Java编码，打包文件时Java代码打包成dex文件防到安装包文件中，但是dex文件容易被逆向回smali代码或者Java文件。虽然目前混淆和加壳甚至是虚拟机保护（VMP）技术已经很成熟，简单逆向工作无法获取代码逻辑和硬编码字符串，但是Java代码依然存在很高的安全风险。因此，将加解密相关操作通过Native代码实现很有必要，不仅保证效率而且在so保护技术之上安全性更高。
+
+##  0x04 Android数据安全思考
+
+随着移动互联网深入发展，目前移动应用正在发生质的改变。相比繁荣初始的粗狂、野蛮，现在的移动应用开始考虑安全和质量，特别是当前我国互联网信息安全的大形势，数据安全关乎企业和应用的生存的前提，保护应用数据安全至关重要。在Android数据存储安全中，由于Android系统的安全机制，用户获取root权限后可以访问手机所有目录，包括应用私有目录，因此，数据存储要考虑到一个白盒环境，或者非可信环境。这种情况下，数据加密的密钥成为关键。一机一密、动态密钥、密钥白盒等手段各有优缺点。一机一密需要保护密钥生成方法逻辑；动态密钥需要考虑密钥时效性，有效性以及链路安全；密钥白盒由于目前没有广泛认可，在兼容性安全性方面有待考验。
+
+（后面有时间针对一机一密、动态密钥、密钥白盒单独介绍）
+
+ ***本文作者：root001，转载请注明来自FreeBuf.COM**
+

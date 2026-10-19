@@ -1,0 +1,302 @@
+**AFLSmart 是一个在 AFL 基础上，结合了 Peach 的结构化输入组件的灰盒 smart fuzz 工具。**
+
+> AFLSmart 链接：<https://github.com/aflsmart/aflsmart>
+>
+> 参考资料：《Smart Greybox Fuzzing》
+
+##  什么是 AFLSmart
+
+###  灰盒 smart fuzz
+
+灰盒测试是基于程序运行时刻的外部表现同时又结合程序内部逻辑结构来设计用例，执行程序并采集程序路径执行信息和外部用户接口结果的测试技术。
+
+具有结果反馈功能的模糊测试即属于灰盒 fuzz，如 AFL，会对待测程序进行插装，从而监控每个输入的路径覆盖率，为下一次选择输入文件进行变异提供依据。
+
+smart fuzz 是面向具有高度结构化输入（如，PPT，mp3，PDF 等）的程序进行测试的一类模糊测试工具，典型的 smart fuzz 工具如
+Peach。使用 Peach 的关键在于名为「Peach Pit」的 xml 配置文件。「Peach Pit」主要包含了文件的数据信息。
+
+###  AFLSmart
+
+AFLSmart 在 AFL 的基础上，参照了 Peach 的 File Cracker 组件，将文件按 chunk 划分，抽象为一个可以用 xml
+文件描述的树形的结构，如下图为一个 wav 格式的文件抽象为 xml 文件的表示：
+
+![](https://image.3001.net/images/20190322/1553242372_5c949904b8599.png!small)针对结构化的输入，AFL
+提供了基于字典的方法进行解决，然而该方法的缺陷在于，在变异的时候，仍然处于 bit 级别的变异，AFL 无法对一个文件块进行增加和删除操作。  
+
+AFLSmart 源码中，对 chunk 结构的定义如下：
+
+    
+    
+    struct chunk {
+      unsigned long
+          id; /* The id of the chunk, which either equals its pointer value or, when
+                 loaded from chunks file, equals to the hashcode of its chunk
+                 identifer string casted to unsigned long. */
+      int type;                /* The hashcode of the chunk type. */
+      int start_byte;          /* The start byte, negative if unknown. */
+      int end_byte;            /* The last byte, negative if unknown. */
+      char modifiable;         /* The modifiable flag. */
+      struct chunk *next;      /* The next sibling child. */
+      struct chunk *children;  /* The children chunks linked list. */
+    };
+
+一个 chunk 结构里定义了 chunk 的类型、开始位置、结束位置、表示是否被修改的标志位、以及 chunk 的子节点和 next 节点。
+
+在 AFL 的 bit 级别的变异的基础上，AFLSmart 增加了对 chunk 级别的变异操作，主要包括三种操作：
+
+**smart deletion：**
+
+在这种方法中，会对给定的种子文件，随机选取 chunk 进行删除。
+
+**![](https://image.3001.net/images/20190322/1553246999_5c94ab172c17f.png!small)**
+
+**smart addition：**
+
+在这种方法中，给定一个种子文件 S1，随机选取一个种子文件 S2，在 S2 中随机选取一个 chunk C2，将 C2 插入到 S1 中和 C2
+具有相同父节点的 chunk C1 的后面（C1.parent.type ==C2.parent.type）  
+
+**![](https://image.3001.net/images/20190322/1553247017_5c94ab29bb1bb.png!small)**
+
+**smart splicing：**
+
+这种方法中，对于给定的种子文件 S1，随机选取 chunk C1，随机选取种子文件 S2，找到 S2 中与 C1 类型相同的 chunk C2，将 C2
+替换到 C1 的位置上。  
+![](https://image.3001.net/images/20190322/1553247038_5c94ab3eceb33.png!small)
+
+##  **AFLSmart 的安装**
+
+1\. 安装 automake 及一些其他的包
+
+    
+    
+    sudo apt-get install build-essential automake libtool libc6-dev-i386 python-pip g++-multilib
+
+2\. 安装 mono 包，为了在 Linux 上支持 C#
+
+    
+    
+    sudo apt-get install mono-complete
+
+3\. 安装 gcc-4.4 以及 g++-4.4，（Peach 中的 Pin 组件在更高的 gcc 版本中会发生一些编译问题）
+
+    
+    
+    sudo add-apt-repository ppa:ubuntu-toolchain-r/test
+    
+        sudo apt-get update
+    
+        sudo apt install gcc-4.4
+    
+        sudo apt install g++-4.4
+
+如成功，则直接看第四步，如不能成功，可尝试以下命令
+
+    
+    
+    sudo gedit /etc/apt/sources.list
+
+向文件中添加如下内容：
+
+    
+    
+    deb http://dk.archive.ubuntu.com/ubuntu/ trusty main universe
+
+然后安装
+
+    
+    
+    sudo apt-get update
+    
+        sudo apt install gcc-4.4
+    
+        sudo apt install g++-4.4
+
+4\. 环境成功准备好后，开始 AFLSmart 的安装
+
+    
+    
+    git clone <https://github.com/aflsmart/aflsmart>
+    
+        cd aflsmart
+    
+        make clean all
+    
+        cd ..
+    
+        export AFLSMART=$(pwd)/aflsmart
+    
+        export WORKDIR=$(pwd)
+
+5\. 修改 Peach 的版本
+
+    
+    
+    cd $AFLSMART
+    
+        wget <https://sourceforge.net/projects/peachfuzz/files/Peach/3.0/peach-3.0.202-source.zip>
+    
+        unzip peach-3.0.202-source.zip
+    
+        patch -p1 < peach-3.0.202.patch
+    
+        cd peach-3.0.202-source
+    
+        CC=gcc-4.4 CXX=g++-4.4 ./waf configure
+    
+        CC=gcc-4.4 CXX=g++-4.4 ./waf install
+
+6\. 设置 PATH 的环境变量
+
+    
+    
+    export PATH=$PATH:$AFLSMART:$AFLSMART/peach-3.0.202-source/output/linux_x86_64_debug/bin
+    
+        export AFL_PATH=$AFLSMART
+    
+        export LD_LIBRARY_PATH=/usr/local/lib
+
+7\. 进入到 AFLSmart 目录，输入
+
+    
+    
+    ./afl-fuzz
+
+出现如下界面，说明安装成功。
+
+![](https://image.3001.net/images/20190324/1553433637_5c978425b0e0c.png!small)**AFLSmart
+的使用**
+
+熟悉 AFL 的朋友，对于 AFLSmart 的使用应该不会太陌生，AFlSmart 的使用方法与 AFL 基本一致。这里还是以 tcpdump 为例，对
+AFLSmart 的使用进行一个简单的介绍。
+
+测试 tcpdump 之前，首先应该下载 tcpdump 源码包，下载地址：<http://www.tcpdump.org/>，在这个地址，下载
+tcpdump 包与 libpcap 包。
+
+下载 tcpdump 的一些其他依赖包：下载 bison
+包，下载地址：[ftp.gnu.org/gnu/bison](ftp://ftp.gnu.org/gnu/bison/)， 下载 m4
+包，下载地址：[ftp.gnu.org/gnu/m4/。](ftp://ftp.gnu.org/gnu/m4/)
+
+1\. 安装 libpcap：
+
+    
+    
+    tar -zxvf libpcap-1.3.0.tar.gz 
+    
+        cd libpcap-1.3.0
+    
+        ./configure
+    
+        make 
+    
+        make install
+
+2\. 输入命令，安装 flex
+
+    
+    
+    sudo apt-get install flex
+
+3.bison 与 m4 包的安装步骤与 libpcap 的相同，参照上述命令即可。
+
+4\. 使用 afl-gcc 对 tcpdump 进行编译，afl-gcc 会在对 tcpdump 进行编译时，对 tcpdump
+进行插桩，从而方便监控用例的路径覆盖情况。命令如下：
+
+    
+    
+    tar -zxvf tcpdump-4.3.0.tar.gz 
+    
+        cd tcpdump-4.3.0
+    
+        CC=./aflsmart 安装目录/afl-gcc ./configure
+    
+        make clean all
+    
+        make install
+
+编译过程中，出现如下界面，说明使用 afl-gcc 对 tcpdump 进行编译成功。
+
+![](https://image.3001.net/images/20190324/1553434921_5c978929487c9.png!small)
+
+tcpdump 的命令格式如下：
+
+> tcpdump [ -adeflnNOpqRStuvxX ] [ -c 数量 ] [ -C 文档尺寸 ] [ -F 文档名 ] [ -i 网络接口 ]
+> [ -m 文档名 ] [ -r 文档名 ] [ -s 长度 ] [ -T 类型 ] [ -w 文档名 ] [ -E algo:secret ] [
+> 表达式 ]
+
+tcpdump 常用命令行选项：
+
+> -a 将网络地址和广播地址转变成容易识别的名字
+>
+> -d 将已截获的数据包的代码以人容易理解的格式输出；
+>
+> -dd 将已截获的数据包的代码以 C 程式的格式输出；
+>
+> -ddd 将已截获的数据包的代码以十进制格式输出；
+>
+> -e 输出数据链路层的头部信息；
+>
+> -f 将 internet 地址以数字形式输出；
+>
+> -l 将标准输出变为行缓冲方式；
+>
+> -n 不将网络地址转换成易识别的主机名，只以数字形式列出主机地址 (如 IP 地址)，这样能够避免 DNS 查询；
+>
+> -t 不输出时间戳；
+>
+> -v 输出较周详的信息，例如 IP 包中的 TTL 和服务类型信息；
+>
+> -vv 输出详尽的报文信息；
+>
+> -c 在捕获指定个数的数据包后退出；
+>
+> -F 从指定的文档中读取过滤规则，忽略命令行中指定的其他过滤规则；
+>
+> -i 指定监听的网络接口；
+>
+> -r 从指定的文档中读取数据包 (该文档一般通过-w 选项产生)；
+>
+> -w 将截获的数据包直接写入指定的文档中，不对其进行分析和输出；
+>
+> -T 将截获的数据包直接解释为指定类型的报文，现在支持的类型有 cnfp、rpc、rtp、snmp、vat 和 wb。
+
+接下来，我们将使用 AFLsmart 对 tcpdump 的 -nr 功能进行测试，该参数的作用是从指定的文档中读取数据包。
+
+6\. 收集测试用例。我们需要 pcap 格式的输入，对 tcpdump 的-nr 功能进行测试。在 tcpdump 源码包中有一个 tests
+文件夹，包含了许多我们测试所需的 pcap 文件。这里，我们直接使用这些 pcap 文件进行测试。
+
+新建一个 tcpdumptest 文件夹，方便测试。将 testes 文件夹复制过来，只保留 pcap 的数据。
+
+    
+    
+    cd tcpdumptestmkdir incd testscp *.pcap ../incd ..rm -f tests
+
+AFL 中还有一些对数据进行处理的工具，可以对输入数据进行覆盖率分析等，压缩输入文件的大小，从而提高测试的效率。如 afl-tmin、afl-cmin。网上已有许多介绍 AFL 的文章了，这里对这些工具就不重复介绍了。
+
+你可以使用这些工具对 pcap 包进行一个处理，也可以不处理，直接使用它们进行测试。
+
+7\. 测试 tcpdump
+
+输入命令：
+
+    
+    
+    cd aflsmart ./afl-fuzz -i ../testaflsmart/tcpdump/in/ -o ../testaflsmart/tcpdump/out/ tcpdump -nr @@
+
+可能会出现如下界面：
+
+![](https://image.3001.net/images/20190324/1553435636_5c978bf4b8e65.png!small)按照图片提示，进入
+root 用户模式，输入命令即可。
+
+最终运行界面如下图所示：
+
+![](https://image.3001.net/images/20190324/1553435774_5c978c7e3bd7c.png!small)**AFLSmart
+的测试**
+
+在 smart greybox fuzz 文中提到，他们使用 AFLSmart 与 AFL、Peach、AFLfast
+对几种具有结构化输入的程序进行测试，结果如下如所示：
+
+![](https://image.3001.net/images/20190324/1553436126_5c978dde15270.png!small)由上图可以看出，AFLSmart
+在测试 AVI、WAV、JPEG2000 这三种格式时，与其他三种工具相比，优势明显。
+
+ ***本文作者：红玫瑰与黑玫瑰，转载请注明来自FreeBuf.COM**
+

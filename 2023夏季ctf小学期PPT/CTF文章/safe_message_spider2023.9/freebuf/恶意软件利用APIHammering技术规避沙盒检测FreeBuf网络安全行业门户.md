@@ -1,0 +1,81 @@
+研究人员在最近发现的 Zloader 和 BazarLoader 样本中发现了沙盒规避技术 API Hammering 的新实现。攻击者将 API
+Hammering 对 Windows API 的大量调用作为休眠的一种实现形式，用以规避沙盒检测。
+
+## 恶意软件休眠形式
+
+恶意软件最简单的休眠方式就是调用 Windows API Sleep，另一种较为隐蔽的方式是 ping sleep 技术，恶意软件会在循环中不断将 ICMP
+数据包发送到指定的 IP 地址，发送和接收这些无用的 ping 消息需要一定的时间，恶意软件会间接实现休眠。这两种方法都已经很容易被沙盒检测出来。
+
+## 什么是 API Hammering？
+
+API Hammering 也是一种已知的沙盒规避技术，研究人员最近发现 Zloader 与 BazarLoader 都使用了新的 API
+Hammering 技术来保持隐蔽。
+
+API Hammering 会大量调用无用的 Windows API 函数，这些调用执行的时间就会延迟恶意软件实际功能的执行，这也间接实现了休眠功能。
+
+## BazarLoader 中的 API Hammering
+
+BazarLoader 的旧变种会使用固定的 1550 个 printf 函数调用来实现休眠，而在新版本中有了更加复杂的实现。
+
+如下所示为新的 BazarLoader 样本是如何实现休眠的，其利用了一个随机计数的循环，在循环中不断重复访问随机的 Windows 注册表项。
+
+![image.png-124kB](https://image.3001.net/images/20220701/1656645219_62be6663b1df6db74f2df.png!small)BazarLoader
+实现
+
+为了生成随机循环与注册表项，样本文件会从 System32
+目录读取与预定义大小匹配的首个文件。如下所示，并对文件进行编码以删除其中大部分空字节，根据该文件的第一个空字节的偏移量计算用于控制循环的随机数。注册表项的列表是通过编码文件的固定长度块生成的。
+
+![image.png-109kB](https://image.3001.net/images/20220701/1656645220_62be66648f164ba3ce23d.png!small)BazarLoader
+编码
+
+对于不同版本的 Windows 操作系统以及不同补丁的小版本，System32 目录中有不同的文件，这也导致了 BazarLoader
+在不同机器上会执行不同的循环次数与访问不同的注册表项。
+
+如下所示，BazarLoader 的 API Hammering 函数包含在加壳程序中。这会延迟 Payload
+的脱壳过程来躲避检测，如果脱壳未能完成，看起来 BazarLoader 样本只是在随机访问注册表而已，这种行为很多良性软件中也会存在。
+
+![image.png-451.4kB](https://image.3001.net/images/20220701/1656645221_62be66655c140c0569fba.png!small)延迟脱壳
+
+## Zloader 中的 API Hammering
+
+BazarLoader 的样本依赖循环实现 API Hammering，但 Zloader
+不依赖循环而是使用四个大函数来实现的，其中包含非常多较小函数的嵌套调用，如下所示。
+
+![image.png-475.2kB](https://image.3001.net/images/20220701/1656645223_62be66674eb4469499c21.png!small)Zloader
+大函数
+
+每个较小的函数内部都包含四个与文件 I/O 相关的 API 函数调用，为 GetFileAttributesW、ReadFile、CreateFileW 和
+WriteFile。
+
+![image.png-361.9kB](https://image.3001.net/images/20220701/1656645225_62be6669234301a320df3.png!small)Zloader
+小函数
+
+通过调试器可以计算出对四个文件 I/O 函数的调用次数，如下所示。样本一共会调用超过一百万次 API，而无需 BazarLoader 实现的单个大循环。
+
+![image.png-95.2kB](https://image.3001.net/images/20220701/1656645226_62be666a44997859fc96e.png!small)调试日志
+
+统计如下所示：
+
+![image.png-19kB](https://image.3001.net/images/20220701/1656645226_62be666ae5949297f389f.png!small)API
+调用统计
+
+四个大函数的执行时间很长，大大延迟了 Zloader Payload 的注入行为。如果没有完整地执行完这些函数，该样本看起来就只是一个执行文件 I/O
+的良性样本。
+
+以下反汇编代码显示了 API Hammering 的过程：
+
+![image.png-379.5kB](https://image.3001.net/images/20220701/1656645227_62be666b7b8dd679b1229.png!small)注入行为之前
+
+## 结论
+
+恶意软件为了规避沙盒检测使用了各种各样的方法，API Hammering 不会是最后一个，以后也会有各种各样的变种。
+
+## IOC
+
+> ce5ee2fd8aa4acda24baf6221b5de66220172da0eb312705936adc5b164cc052  
+> 44ede6e1b9be1c013f13d82645f7a9cff7d92b267778f19b46aa5c1f7fa3c10b
+
+## 参考来源
+
+> [Unit 42](https://unit42.paloaltonetworks.com/api-hammering-malware-> families/)
+

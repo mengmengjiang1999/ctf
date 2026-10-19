@@ -1,0 +1,439 @@
+# 网络情报
+
+### 简介
+
+![](https://image.3001.net/images/20220823/1661265054_6304e49eef5c1a9ca8e94.jpg!small)
+
+网络情报是通过从电子媒体收集威胁，分析和检测可能损害任何级别机构和组织的业务要素和安全的威胁。它是一种情报，允许机构和组织通过识别攻击者的攻击目标、方法或类型作为分析的结果来采取早期措施。
+
+当我们查看最近遇到的数据泄露事件时，发现在网络攻击期间或之后采取的预防措施并不总是有效。由于我们所处的网络世界和技术的快速发展，随时都会遇到新的威胁，机构随时可能受到数百次网络攻击。
+
+在互联网世界中，要跟踪网络犯罪分子及其针对关键系统的方法并不容易，并且已经出现了必须处理需要大量资金的大数据的情况。而此时，网络情报的概念应运而生，并开始在网络攻击中发挥重要作用。
+
+如果我们总结网络情报；情报，从可以访问的开放、半开放和机密来源获得的数据，以防止可能威胁国家安全的因素，决策者在做出将对国家产生积极影响的决策时所需的数据（信息）国家利益，分类，根据其准确性进行比较，制作和分析过程中获得的信息。
+
+### 情报分类
+
+#### 基于人的情报 ( HUMINT )
+
+这是一种古老的情报收集方法。通过使用人类渗透目标，收集有关其优势和劣势、目标和意图的信息。它经常用于作战和战术情报。这个系统的信息流通常很慢。
+
+#### 地理情报( GEOINT )
+
+它被定义为地理空间智能。它在土耳其语中的意思是地理定位智能。使用卫星和航空摄影获得的数据用于 GEOINT Intelligence
+
+#### 图像情报 ( IMINT )
+
+它被称为从借助卫星、红外、无人机、潜艇、激光和电光学等不同传感器收集的照片或图片获得的情报。
+
+#### 视频情报 ( VIDINT )
+
+#### 图像情报 ( PHOTINT )
+
+#### 测量和标牌情报 ( MASINT )
+
+它是一种借助传感器来检测固定或移动物体的智能。 例如;
+你在一个军事哨所，一枚daodan正在接近该站。我们需要能够事先查明这枚daodan是朝这里飞来的。使用
+MASINT，我们可以检测到该daodan，因此我们可以采取相应的行动。
+
+#### 开源情报( OSINT )
+
+OSINT 被定义为 Open Source Intelligence 的缩写，在土耳其语中是 Open Source Intelligence 的意思。
+
+OSINT
+被定义为不需要任何机密性、向公众开放并通过过滤为特定目的收集的信息而获得的情报活动，无论是否为情报。随着互联网的普及和媒体资源的增加，开源的丰富，催生了
+OSINT。OSINT 价格低廉且通常易于访问这一事实揭示了它的优势，而在 OSINT 环境中无法访问某些信息这一事实表明了 OSINT 资源的弱点。
+
+开源情报多样化和丰富的最大原因之一是互联网和社交媒体工具的使用和传播。
+
+众所周知，70% 的情报来自开源
+
+#### 技术情报 ( TECHINT )
+
+通过分析外国武装部队使用的武器和装备获得的情报。
+
+#### 信号情报( SIGINT )
+
+它是一个信号智能系统，它涵盖了ELINT和COMINT技术。
+
+通过对特定目标的电子信号的收集、分析和通信获得的情报。
+在这种情况下，它们是使我们能够做出决定并可能为组织、机构或个人带来战略优势的活动。在当今世界，情报机构经常使用 SIGINT 技术来收集国内外数据。
+
+最初，SIGINT 通常由通信情报 (COMINT) 组成。SIGINT
+现在有两个主要方法。COMINT，通过渗透个人的通信收集，以及通过使用电子传感器收集的 ELINT（电子情报） SIGINT
+生成的信息帮助我们在目标的行动、能力和目标实现之前采取行动。
+
+信息至上在军事决策中至关重要。在这方面，信号情报是战术情报和战略的重要信息来源。
+通过各种软件，可以将传入的信号分类为敌我，根据设备类型，我们可以获得信号来自哪里的信息，并获得地理情报。
+
+#### 通信情报（COMINT）
+
+COMINT，通过渗透个人的通信收集
+
+#### 电子情报（ELINT）
+
+通过使用电子传感器收集的 ELINT（电子情报）
+
+#### 社交媒体情报 (SOCMINT)
+
+它提供了特殊的方法，通过使用机构、情报组织、国家或组织的社交网络，使用监控、倾听、监控和解释工具，根据趋势和需求揭示有意义的信息。
+
+### OSINT工具
+
+  * • GOOGLE DORKING
+  * • WHOIS查询
+  * • SPOKEO
+  * • ONYPHE
+  * • SHODAN
+  * • THEHARVESTER
+  * • R3CON1Z3R
+  * • OSRFRAMEWORK
+  * • SOCMINT
+
+### 在线工具
+
+  * • 只需两个简单步骤即可找到 Facebook ID | 查找 Facebook ID
+  * • https://findmyfbid.in/
+  * • https://github.com/AlanTheBlank/Facebook-Open-Source-Intelligence-Tool
+  * • GitHub - tomoneill19/FacebookOSINT: FBOSINT - 替代 facebook 图搜索的工具
+  * • https://github.com/tomoneill19/FacebookOSINT
+  * • GitHub - andrew-vii/Entro.py: Facebook OSINT Collection和分析工具
+  * • https://github.com/andrew-vii/Entro.py
+  * • GitHub - pashayogi/SETAN: Hack fb
+  * • https://github.com/pashayogi/SETAN
+  * • Hashtagify.me - 搜索和查找最佳 Twitter Hashtags - 免费
+  * • http://hashtagify.me/
+  * • SnapMap
+  * • https://snapmap.knightlab.com/
+  * • https://tofo.me/
+  * • GitHub - sc1341/InstagramOSINT: Instagram 开源情报工具
+  * • https://github.com/sc1341/InstagramOSINT
+  * • Osintgram,Osintgram 是 Instagram 上的开源情报工具,下载Osintgram的源码_GitHub_帮酷 它提供了一个交互式外壳，可以通过其昵称 GitHub 对任何用户的 Instagram 帐户进行分析
+  * • https://github.com/Datalux/Osintgram
+  * • th3unkn0n/osi.ig：Information Gathering Instagram
+  * • https://github.com/th3unkn0n/OSI.IG
+  * • instaloctrack,Instagram OSINT 工具，用于收集 Instagram 个人资料上所有可用的地理标记位置，以便在地图上绘制它们，并将它们转储到 JSON 中，下载instaloctrack的源码_GitHub_帮酷
+  * • https://github.com/bernsteining/InstaLocTrack
+  * • Bluenod
+  * • https://bluenod.com/
+  * • https://getcrate.co/
+  * • 由 Foller.me 提供的 Twitter 分析
+  * • http://foller.me/
+  * • Hashtags.org | 标签分析 | 组织全球主题标签，提供主题标签分析和跟踪
+  * • http://www.hashtags.org/
+  * • 使用视觉效果的最智能方式 | CrowdRiff
+  * • http://crowdriff.com/riffle/
+  * • 锡漏 | 推特用户的免费档案
+  * • https://tinfoleak.com/
+  * • http://socialrank.com/firstfollower
+  * • Home - Trendsmap
+  * • http://trendsmap.com/
+  * • Twitterfall
+  * • http://twitterfall.com/
+  * • GitHub - twintproject/twint：用 Python 编写的高级 Twitter 抓取和 OSINT 工具，不使用 Twitter 的 API，允许您抓取用户的关注者、关注者、推文等，同时规避大多数 API 限制
+  * • https://github.com/twintproject/twint
+  * • GitHub - vaguileradiaz/tinfoleak: Twitter 情报分析最完整的开源工具
+  * • https://github.com/vaguileradiaz/tinfoleak
+  * • GitHub - batuhanskr/twitter-intelligence: Twitter Intelligence OSINT 项目对 Twitter 进行跟踪和分析
+  * • https://imgur.com/search?q=
+  * • http://www.redditinvestigator.com/
+  * • http://redditmetrics.com/
+  * • https://atomiks.github.io/reddit-user-analyser/
+  * • GitHub - tatsui-geek/twitter-osint：来自 twitter 流 API 的威胁情报收集器
+  * • https://github.com/tatsui-geek/twitter-osint
+  * • http://vk.barkov.net
+  * • http://targetolog.com
+  * • https://targethunter.net/
+
+### HUMINT TOOL
+
+  * • 自动搜索 Facebook 用户
+  * • http://graph.tips/beta
+  * • 它检测 Facebook ID 并使用不同的过滤器进行搜索。
+  * • https://www.whopostedwhat.com/
+  * • TikTok 快速搜索
+  * • https://www.osintcombine.com/tiktok-quick-search
+  * • 旨在搜索 TikTok 上的用户和主题标签。
+  * • https://www.osintcombine.com/social-geo-lens
+  * • 为社交媒体平台上的地理搜索提供地图界面。
+  * • https://www.osintcombine.com/instagram-explorer
+  * • 旨在按日期在 Instagram 的特定位置查找图片
+  * • https://www.osintcombine.com/world-social-media-platforms
+  * • 显示在选定国家/地区使用的最受欢迎的社交媒体平台。
+  * • https://www.osintcombine.com/snapchat-multi-viewer
+  * • 它旨在使用 Snapchat 提供的嵌入功能提高在 Snapchat 上查看多个区域的效率。
+  * • https://www.osintcombine.com/reddit-post-analyser
+  * • 专为快速查看 Reddit 帖子而设计。
+  * • http://socilab.com/
+  * • 可视化和分析您自己的 LinkedIn 网络
+  * • https://intoli.com/blog/f5bot/
+  * • 在 Reddit 上提供无限搜索
+  * • https://botometer.osome.iu.edu/
+  * • 在他的 Twitter 帐户上检查他的活动，并通过给他打分来揭露他的虚假。
+  * • https://unionmetrics.com/free-tools/instagram-account-checkup/
+  * • 提供 Instagram 帐户检查。
+  * • https://unionmetrics.com/free-tools/instagram-account-checkup/
+  * • 会判断您的 Twitter 关注者是否是假的
+  * • https://github.com/twintproject/twint
+  * • 一种工具，它可以为用户的追随者、追随者、推文等提供更多信息，而无需担心 Twitter 的 API 安全性。
+  * • https://citizenevidence.amnestyusa.org/
+  * • 从 Youtube 视频中提取数据并在 Google 搜索中扫描图像。
+  * • 用户名检查工具。您可以按姓名、电话、地址或电子邮件搜索以搜索有关
+  * • https://nixintel.info/osint-tools/instagram-osint-a-promising-new-python-tool/
+
+Spokeo联系人的信息。Instagram 通过 Instagram API 检索有用的信息，包括
+Osint用户名、个人资料名称和个人简介、用户是否最近加入、他们是否连接到 Facebook
+用户以及帐户是否经过双重验证。BeenVerified公司搜索员工。
+
+  * • https://www.beenverified.com/
+  * • https://findmyfbid.com/
+
+检测 Facebook 帐户的 ID。
+
+InstaLocTrack
+
+是一种工具，旨在抓取 Instagram 帐户上的地理标记位置。提供 JSON 格式的输出和交互式地图。
+
+Osi.IG
+
+Instagram osint 工具。
+
+  * • https://github.com/bernsteining/InstaLocTrack
+
+### 网络威胁情报
+
+网络威胁是恶意人员或团体未经授权访问管理系统设备或网络，破坏网络结构或使其无法使用。网络威胁可以来自不同的人、机构和组织。如果我们想给这些人举个典型的例子：
+
+  * • 黑客
+  * • 商业竞争对手
+  * • 间谍
+  * • 国家和情报机构
+  * • 不开心的员工
+  * • 有组织的犯罪集团
+
+我上面提到的网络威胁源所采取的造成伤害的行为称为网络威胁。这些威胁创造了一个想法，即恶意的人在攻击他们的目标时会遵循什么样的场景。举一个我提到的网络威胁的例子:
+恶意软件；恶意软件 间谍软件；间谍软件 恶意广告；嵌入广告的恶意软件 中间人；中间人攻击
+雨刷攻击；它是一种恶意软件，会以无法恢复的方式删除受感染系统上的所有内容。 分布式拒绝服务；拒绝服务攻击 勒索软件；勒索软件
+僵尸网络；攻击受感染的僵尸计算机，主要用于 DDoS 目的 木马；也称为特洛伊木马，它是提供对计算机的远程访问的恶意软件。 网络钓鱼；网络钓鱼攻击
+数据海滩；数据泄露 蠕虫; 蠕虫 键盘记录器；记录键盘操作的恶意软件 后门；后门软件重新获得对系统的访问权限 高级持续威胁；有针对性的攻击
+
+网络威胁情报是网络安全领域，专注于收集和分析有关威胁机构、组织或资产安全的当前和当前攻击的数据。网络威胁情报的好处在于它可以防止数据泄露并节省财务成本。其目的是展示、分析和保护针对机构/组织及其自身的威胁。
+
+网络威胁情报旨在通过对收集到的信息进行分析后，发现攻击者的思想和目的、方法和手段。
+
+网络威胁情报是可行的解决方案。因此，可以针对可能的威胁采取及时的行动并做好准备。
+
+#### 网络威胁情报分组
+
+  * • 战略情报：一种旨在识别目标的情报。它是通过倾听可能造成伤害的机构/组织/个人/团体而创建的。它包含有关攻击者的意图、方法和策略、他们过去的行为和可能的攻击的信息。
+  * • 运营情报：这类情报包括攻击者的技术、方法和程序。这些信息将提供给提供SOC（安全运营中心）服务的团队，然后由他们进行分析并用作防范可能的攻击的预防措施。
+  * • 战术情报：包含识别系统和网络上潜在威胁活动的数据。这些数据在其结构中是异常和可疑的运动数据。如战术情报、SIEM、IDP/IPS、DLP、反垃圾邮件、防火墙、端点保护等。集成到防火墙解决方案中。
+
+#### 为什么需要网络威胁情报，有什么好处？
+
+根据Ponemon Institute 2015 年进行的一项调查；40% 的公司在过去 2
+年经历了财务上导致的安全漏洞，并且已经确定可以通过网络威胁情报来防止或最小化 80% 的漏洞。
+
+只有 36% 的受访者认为他们公司的安全性很强。一半的受访者增加了他们的情报数据以防止或减少攻击的后果。
+
+这些公司每周平均收到 16,937 条警报。只有 19% 的警报被评为可靠。只能调查 4%
+的警报。经查明，他为应对虚假警告，每年花费127万美元。这些提到的问题是正确的。可以通过威胁情报方法最小化。
+
+威胁情报旨在提高对可能威胁的认识。这是在内部不良威胁发生之前对其进行干预的必要区域。通过这种方式，防火墙被最大化并采取了必要的预防措施。如果我们想举例说明威胁情报的好处；
+
+#### 数据丢失防护
+
+网络威胁情报系统可以监控恶意 IP 地址和域名的访问尝试，检测可能针对员工的网络钓鱼攻击。收集和分析这些信息为相同的可能情况创建了一个预防属性。
+
+#### 检测数据泄露
+
+越早检测到已经发生或正在发生的数据泄露，对组织造成的损害就越小。在这里检测数据泄露和泄漏可以预防财务问题和机构声誉损失。
+
+#### 事件响应
+
+它有助于识别其信息将受到损害的系统，我们上面提到的数据丢失或数据泄漏正在/正在发生的设备。因此，为避免同样的违规行为而采取的措施更加自觉
+
+#### 威胁分析
+
+它提供了关于必要的防御机制和可以采取的措施的想法。此分析基于先前的攻击或在攻击发生之前检测到的攻击。目的是了解攻击者的技术、方法和程序，并针对可能构成威胁的点提供正确的解决方案。
+
+#### 数据分析
+
+分析发现的数据有助于获得针对攻击者已创建或可能构成的威胁的附加信息。
+
+### 如何收集网络威胁情报？
+
+机构和组织可以从大型数据库和日志记录中访问数以千计的网络威胁情报数据。IT
+团队无法从这些数据中受益。高级威胁参与者，例如政府、有组织的网络犯罪分子和网络间谍参与者，是当今组织面临的最大信息安全威胁。尽管这些威胁具有隐私性、资源复杂性和努力，许多公司仍难以检测到这些威胁。只有通过他们留下的数字痕迹才能看到公司的有组织和持续的威胁行为者。由于这些原因，企业需要超越网络边界对专门针对其公司和基础设施的高级威胁的可见性。网络威胁情报的重要性由此显现。
+
+#### 威胁行为者
+
+威胁参与者是用于调查和识别已被破坏的系统的信息片段。这些部分在 IT 行业中已经存在了很长时间，但是信息安全行业以更加语义化和一致的方式使用这些信息。
+
+#### 文件哈希和信誉值
+
+恶意软件的文件摘要是病毒、木马、rootkit、键盘记录器或其他类型的标识符。被检测为恶意的文件通常是使用 md5 和 sha1
+算法类型的这些文件的摘要。这些摘要构成了恶意软件的指纹。文件摘要示例，“098f6bcd4621d 373cade
+4e832627b4f6”它是出现在表单中的文本。除文件摘要外，还使用恶意软件的信誉数据。这些数据是互联网网络上网页的风险等级，例如 IP 地址和
+URL。例如; 钓鱼网页的风险评分也会很高。恶意软件、垃圾邮件、网络钓鱼地址和其他诈骗页面、僵尸网络指挥与控制中心、无法追踪的 IP 地址
+(TOR)、创建匿名的代理服务。
+
+#### 技术资源
+
+为了创建恶意软件的签名，安全研究人员首先尝试寻找被在野外传播的恶意软件感染的病毒。他们通过创建模拟网络服务器、电子邮件服务器和其他系统的生存能力的蜜罐网络、计算机和网上冲浪计算机用户来做到这一点。这些方法收集公司系统和用户在正常操作期间遇到的消息和电子邮件。
+
+恶意软件研究人员对以前未检测到的恶意软件进行静态分析（通过检查程序的命令和与恶意软件相关的文本字符串）和动态行为分析（允许编写代码执行和观察恶意进程）。如果两种类型的分析都表明它包含恶意软件代码，研究人员会创建一个签名。
+
+#### 恶意软件分析
+
+恶意软件分析提供了对样本行为及其背后攻击者意图的宝贵洞察。动态分析和沙盒技术提供最详细的自动恶意软件分析。使用沙盒，可以在与公司网络隔离的沙盒中找到恶意或可疑文件。该文件被允许在执行环境中运行。沙箱观察文件采取的所有动作，包括恶意活动，并将其输出给我们，如下所示：
+
+  * • 在注册表中制作不寻常的条目
+  * • 禁用系统上的防病毒软件
+  * • 在服务器上搜索名称为“admin”或“password”的用户
+  * • 用于命令和控制 Web 服务器的指示器
+  * • 连接到用于嵌入和泄露被盗数据的服务器
+
+#### 战略网络威胁情报
+
+它旨在提供有关针对机构和组织的特定敌人以及他们将在不久的将来带来的危险的信息。
+
+网络犯罪分子、网络间谍特工和我们之前确定的团体已经开发了一个他们参与的地下世界。在这个暗网/深网环境中，这些组运行以下组织：
+
+  * • 网络犯罪、网络间谍活动及其目标、策略、工具等。交换其他方面的信息
+  * • 提供创建和使用恶意软件、自定义攻击、创建网络钓鱼活动、DDoS 攻击方面的专业知识
+  * • 策划协调思想政治启蒙运动
+  * • 销售/购买漏洞利用工具包、黑客、转移、恶意软件保护技术和工具
+  * • 基础设施和复杂活动，例如虚假网站设计、密码破解；为各种威胁参与者提供服务，包括出租黑客、出租僵尸网络、DDoS 即服务、勒索软件即服务和外包
+  * • 销售/购买数据，包括信用卡、社会安全号码、个人信息和身份信息
+  * • 深层网络包括在线论坛、电子邮件提供商、即时通讯平台、社交媒体甚至在线商店。虽然其中许多场馆对公众开放，但最重要的场馆只接受受邀成为会员，外国人很难适应。
+
+#### 有了动机和意图
+
+安全研究人员可以在这个地下世界中收集各种各样的信息，这些信息始于动机和意图。动机和意图可以证明哪些竞争对手最有可能瞄准您的行业、您的​​组织以及您的哪些资产。
+
+网络犯罪分子的目标通常很明确：创收。但有时他们的意图可能会改变。一些针对特定的财务或个人数据；其他人则专注于特定的机构和组织。
+
+敌人和网络间谍人员表现出过多的动机和目的。这些是为了窃取产品设计、知识产权和商业计划，以发现提案和提案的细节，并获取与政治防御相关的情报。
+
+#### 技术、策略和程序
+
+事先了解敌人的战术、技术和程序非常重要。这不仅可以帮助公司知道要寻找什么来检测攻击，还可以提供有关在何处加强其防火墙的信息。
+
+安全研究人员通常可以通过监视他们在网络上的活动来报告很多关于敌人的战术方法和程序的信息。主要证据包括：
+
+  * • 在论坛和社交媒体网站上讨论目的和方法
+  * • 就已开发的新漏洞和工具交换意见
+  * • 购买工具和服务
+  * • 出售信用卡号码、个人信息和其他数字资产
+  * • 泄露的数据和详细信息
+
+### 如何使用网络威胁情报?
+
+它是目标。如果这些基本的概念理解是最有见识的、设计得最好的、过时的和彻底分析的，那么磨蚀性就不是一件有用的事情。网络威胁情报最重要的特征是“可用”和“可用”。
+
+#### IT 运营
+
+紧急性、修正和阻止 在战术层面，网络情报阻止技术的使用是有针对性的，有助于补丁合规性，并允许安全中心 (SOC) 分析师快速准确地确定哪些警报。
+
+#### 网络运营
+
+这些产品使用他们的工具来控制受控制和威胁（由用户扫描所使用的数据或用户为用户）控制的工具，以实现糟糕的实施，以及用于安全措施的攻击预测器。其剩余要素的质量归结为正常师和NOC人员的师。可提供网络安全审计、采购采购等预警，指导NOC工作人员预防和纠正。多数机构和组织的网络进展，网关、防火墙、IDS/IPS等产品和软件进行了审查
+
+#### 补丁
+
+通过使用这种帮助，基础设施可以改进其改进，更好地把握可能紧急且可能与工作无关的窗口。对于用户来说，校正过程将花费大量时间。补丁管理、服务器、边缘和网络以及安全系统的类别。
+
+#### 安全运营中心
+
+在大多数公司中，他们会检查并将其划分为事件响应等类别。
+
+事件团队中的人员会审查垃圾邮件警报的不耐烦程度，但它足以做出决定。
+
+SIEM考虑了比 IR 安全可以调查的更多的考虑因素，预先分配了适当的分数它允许 SIEM
+或分析师查询安全数据库并将其与与其投诉相关的其他上下文链接（可以在介绍中进行评估）例如，工业控制系统 SCADA 可以询问 SIEM，并且 SIEM
+的软件也可以从查询用户编程到知识库，以自动返回有关软件的信息。
+
+#### 事件响应团队
+
+在偶然层面，安全审计和响应团队的取证，分析团队对检测组中的事件的领导 复杂的操作
+
+在攻击中被分析以更快更全面的响应
+
+他们使用什么策略？
+
+什么迹象？
+
+攻击将是什么，哪些系统已被破坏，哪些系统已被攻击？
+
+哪个攻击者可以阻止它并在以后修复它？
+
+您将从电子邮件、应用程序日志、网格、系统系统、分析和其他用户中进行选择。刚开始时，我的响应团队会很紧张，警报是事件或事件的一个地方，只不过是一个“命令和（C＆C）控制链接，它提到了一个词。干预，敌人可以用这个来审问计划了解更多信息，例如敌人的目标是什么以及他们可以训练哪些基础设施。
+
+### 威胁情报工具
+
+  * • AlienVault USM Anywhere
+  * • IBM X-Force Exchange
+  * • ThreatConnect
+  * • SurfWatch Tehdit Analisti
+  * • Ek Tehdit İstihbarat Araçları
+  * • Alexa Top 1 Million sites
+  * • Apility.io
+  * • APT Groups and Operations
+  * • AutoShun
+  * • BGP Ranking
+  * • Botnet Tracker
+  * • BOTVRIJ.EU
+  * • BruteForceBlocker
+  * • C&C Tracker
+  * • CertStream
+  * • CCSS Forum Malware Certificates
+  * • CI Army List
+  * • Cisco Umbrella
+  * • Critical Stack Intel
+  * • C1fApp
+  * • Cymon
+  * • Disposable Email Domains
+  * • DNSTrails
+  * • Emerging Threats Firewall Rules
+  * • Emerging Threats IDS Rules
+  * • ExoneraTor
+  * • Exploitalert
+  * • ZeuS Tracker
+  * • FireHOL IP Lists
+  * • FraudGuard
+  * • Grey Noise
+  * • Hail a TAXII
+  * • HoneyDB
+  * • Icewater
+  * • I-Blocklist
+  * • Majestic Million
+  * • Malc0de DNS Sinkhole
+  * • MalShare.com
+  * • Malware Domain List
+  * • MalwareDomains.com
+  * • Metadefender.com
+  * • Minotaur
+  * • Netlab OpenData Project
+  * • NoThink!
+  * • NormShield Services
+  * • OpenPhish Feeds
+  * • PhishTank
+  * • Ransomware Tracker
+  * • Rutgers Blacklisted IPs
+  * • SANS ICS Suspicious Domains
+  * • signature-base
+  * • The Spamhaus project
+  * • SSL Blacklist
+  * • Statvoo Top 1 Million Sites
+  * • Strongarm, by Percipient Networks
+  * • Talos Aspis
+  * • Technical Blogs and Reports, by ThreatConnect
+  * • Threatglass
+  * • ThreatMiner
+  * • WSTNPHX Malware Email Addresses
+  * • VirusShare
+  * • Yara-Rules
+  * • ZeuS Tracker
+  * • 码字排版不易，喜欢就给个关注吧支持一下
+

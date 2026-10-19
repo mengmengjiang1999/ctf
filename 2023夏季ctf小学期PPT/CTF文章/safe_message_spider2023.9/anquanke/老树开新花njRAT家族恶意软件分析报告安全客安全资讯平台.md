@@ -1,0 +1,399 @@
+# 老树开新花--njRAT家族恶意软件分析报告
+
+阅读量 **199879**
+
+发布时间 : 2018-06-26 18:45:28
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t011eb948eee88fb132.jpg)
+
+## 前言
+
+近日，360CERT监测到“njRAT”家族恶意软件的新型变种正在活跃，该木马家族使用.NET框架编写，并且本文中所讲的样本带有严重代码混淆妨碍安全人员分析。
+
+njRAT又称Bladabindi，是一个插件化的远控木马程序，由于木马简单易学，大大降低了利用门槛，在该团伙的恶意利用过程中，我们总结出以下特点：
+
+恶意载荷层层加密存储
+
+> 解密流程可控
+>
+> 代码混淆，做了较强anti reverse
+>
+> 全局字符串加密存储
+>
+> 具备勒索软件能力（新功能）
+>
+> 盗取数字货币（新功能）
+
+此外，我们在后续的追踪关联过程中，发现该团伙的历史行为，均为通过高交互强社工技巧配合钓鱼邮件传播恶意软件，且目标均为银行，税务等机构，本次我们捕获到的样本相较以往更多的利用了漏洞、低交互攻击技巧进行样本落地。
+
+![](https://p403.ssl.qhimgs4.com/t01cdfbb95a9260a356.png)
+
+## 技术分析
+
+DDE是Inter-Process Communication（进程间通信-IPC）机制下的一种遗留功能，最早可以追溯到1987年，它可以与一个由其他基于Microsoft
+Windows程序所创建的文档建立一条动态数据交换（DDE）链接。在office场景下，除了漏洞，宏之外。DDE也是一种常用的载荷投递方式。
+
+DDE常用的攻击方法，是嵌入DDEAUTO对象，例如：
+
+{DDEAUTO c:\windows\system32\cmd.exe “/k calc.exe”}
+
+与Powershell结合，可以进行远程载荷下载，恶意代码解码释放，远程命令执行等。因为DDE的危险性，微软在去年12月，在office中禁用了DDE协议。
+
+本次样本是一个excel文件，请求更新通过DDE协议执行msiexec远程下载并运行恶意载荷。
+
+![](https://p403.ssl.qhimgs4.com/t01e3eb632451a08c5c.png)
+
+![](https://p403.ssl.qhimgs4.com/t019494632e2dc4ccff.jpeg)
+
+首先执行的文件为memo.msi文件，在临时目录继续释放下一层载荷运行，里面包含一个Base64编码的C#代码，转码后对代码动态转换为程序集，使用Invoke()加载。运行后会再次释放一段Payload进行加载运行，经过两次释放，恶意代码主体开始运行。
+
+具体释放流程如下：
+
+1、通过DDE执行下载恶意载荷并释放至“C:\Users\ADMINI~1\AppData\Local\Temp\mome.msi”执行。
+
+![](https://p403.ssl.qhimgs4.com/t0145389908dc28a5eb.jpeg)
+
+2、在临时目录继续释放下一层载荷运行。
+
+![](https://p403.ssl.qhimgs4.com/t0127faf2066bca9d50.png)
+
+3、解密通过BASE64编码的C#代码动态转换为程序集后将自身资源内数据解密加载进入下一层载荷。
+
+4、读取自身文件的资源通过特定算法解密，得到Stub.exe(病毒主体)与adderalldll.dll(注入功能DLL)。
+
+5、添加开机启动项后通过加载adderalldll.dll(注入功能DLL)将Stub.exe(病毒主体)注入到RegAsm.exe(傀儡进程)运行。
+
+### 样本流程图
+
+样本释放：
+
+![](https://p403.ssl.qhimgs4.com/t01b017e43ecc8f7ce6.jpeg)
+
+病毒执行：
+
+![](https://p403.ssl.qhimgs4.com/t01158404d05b8aeef9.jpeg)
+
+  * 主要功能概述
+  * 计划任务建立及删除
+  * 获取主机信息
+  * 注册表操作
+  * USB设备感染
+  * 键盘记录
+  * 获取当前窗口Tittle
+  * 获取运行进程信息
+  * 检测杀软及运行环境
+  * 比特币行为监控
+  * 勒索
+  * DDOS(slowloris和ARME)
+  * 向远程C2发送数据
+  * 接收C2指令，进行指定操作
+
+### C2指令
+
+    
+    
+    偏移    指令名                            行为
+    3052    "TextToSpeech"                    朗读文本
+    2436    “delchrm”                        清除Chrome Cookie
+    2608    “taskmgrON”                        启动任务管理器
+    2812    “OpenWebpageHidden”                Hidden模式打开iexplore.exe
+    2698    “MonitorOFF”                        关闭显示器
+    2188    “RwareDEC”                        勒索
+    2722    “NormalMouse”                    恢复鼠标控制
+    2170    “chngWLL”                        更换壁纸
+    3088    “kl”                                键盘记录及获取当前窗口tittle
+    2904    “msgbox”                            弹出消息框
+    2380    “ddos.slowloris.start”                启动slowloris
+    2652    “DisableCMD”                        禁用CMD
+    2208    “RwareSU”                        展示勒索信息
+    2424    “seed”                            进行种子下载
+    2566    “HideBar”                        隐藏托盘
+    2994    “restartme”                        重启电脑
+    2454    GiveMeAdmin                        Bypass UAC
+    2502    “BitcoinOFF”                        关闭比特币相关进程监控
+    2584    “taskmgrOFF”                        关闭任务管理器
+    2526    “EventLogs”                        删除记录的信息（键盘记录及窗口Tittle）
+    2940    “antiprocstop”                        停止检测杀软
+    3016    “shutdownme”                    关机
+    2748    “ReverseMouse”                    劫持鼠标
+    2968    “spreadusbme”                    感染USB设备
+    2776    “ClearClp”                        清空剪切板
+    2630    “EnabeCMD”                        启用CMD
+    2676    “MonitorON”                        打开显示器
+    2796    “SetClp””                            设置剪切板
+    2306    “ddos.ARME.stop&”                停止ARME
+    2338    “ddos.slowloris.stop(”                停止slowloris
+    2850    “OpenWebpage”                    打开程序
+    2272    “ddos.ARME.start”                    使用ARME进行DDoS
+    3040    “botk”                            定时任务创建及删除
+    2480    “BitcoinON”                        比特币相关进程监控
+    “Rware”                            进行加密
+    2254    “pcspecs”                        发送系统信息
+    3096    “prof”                            注册表操作（增，删）                
+    2548    “ShowBar”                        显示托盘
+    2876    “BlockWeb”                        劫持网站（host方式）
+    2920    “antiproc”                        启动检测杀软进程
+    2226    “searchwallet”                        检测系统中安装的比特币钱包并发送给C2
+    7554    “PLG”                            检测插件并使用C2进行配置
+    
+
+### 技术细节
+
+样本属于njRAT家族，使用C#编写生成。当成功感染目标后，样本自身copy到主机中进行驻留（样本最初在内存中运行），并添加计划任务常驻系统。
+
+![](https://p403.ssl.qhimgs4.com/t01b56d87403b203bca.png)
+
+样本做了混淆，关键部位的参数和字段都进行了加密。首先进行解密，解密后相关位置的内存为：
+
+![](https://p403.ssl.qhimgs4.com/t016f363e3db4d73528.png)
+
+可以编写脚本进行字段查询，或者批量解密字段。
+
+样本运行时，根据运行状态，会开启以下几个主要线程：
+
+  * MyAntiProcess（检测杀软）
+  * Bitgrb（监控比特币应用）
+  * CHuNbRc6NBDgA1N5fN.RLSH5Jqs2M.WRK（键盘及窗口tittle记录）
+  * CHuNbRc6NBDgA1N5fN.C6yF5G7kY（发送数据及接收C2指令）
+
+**MyAntiProcess**
+
+MyAntiProcess 主要功能是检测杀软和反调试反沙箱，如果检测一些进程到会尝试进行关闭。
+
+**Bitgrb**
+
+Bitgrb进程启动后，会进行进程扫描，对含有BITCOIN字符串的进程命进行监测。当进行购买或者销售比特币时，会对加密钱包进行跟踪。同时伴有对剪切板内容的一些操作。
+
+**CHuNbRc6NBDgA1N5fN.RLSH5Jqs2M.WRK**
+
+这个函数是进行键盘记录和窗口tittle记录的。每次记录20480个数据。将键盘记录的信息写到注册表中，进行数据中转。
+
+![](https://p403.ssl.qhimgs4.com/t01aaa3af7252f2e04c.png)
+
+![](https://p403.ssl.qhimgs4.com/t01d01a0831459c1fdb.png)
+
+**CHuNbRc6NBDgA1N5fN.C6yF5G7kY**
+
+C6yF5G7kY分为三个部分，第一个是循环发送主机信息，其中包括：
+
+  1. 系统名称
+  2. 用户名
+  3. Windows版本(64位/32位)
+  4. 网络摄像头（是/否）
+  5. 活动窗口tittle
+  6. CPU
+  7. GPU
+  8. 内存
+  9. 磁盘
+  10. 感染时间
+
+![](https://p403.ssl.qhimgs4.com/t01f000bb0bef761603.png)
+
+第二部分接受C2指令，进行相关操作。
+
+C2的指令是通过savage进行分割，并且提取第一部分的hash值进行区分。
+
+第三个是提供一个Socket.send接口，向C2发送一些信息。函数名为ISqOs4Ltj。传入一个字符串，会将其信息发送给C2。
+
+关于C2的信息:
+
+主机名: apache202[.]duckdns[.]org
+
+端口：7752
+
+C2的信息，位于：
+
+![](https://p403.ssl.qhimgs4.com/t01dd7e207a1395edb3.png)
+
+进行Tcp连接的位置为：
+
+**执行的两种方法**
+
+样本中执行的方法可以分为两种，一个是使用Interaction.shell
+
+另外一种是使用thread.start()进行执行操作
+
+**勒索**
+
+勒索主要的指令有三个RwareDEC，RwareSU，Rware。
+
+Rware为加密模块，采用AES进行加密，主要是对拓展名.lime的文件。
+
+![](https://p403.ssl.qhimgs4.com/t018bdb36a01ba06cfc.png)
+
+在此随机生成一个字符数组，Lime将输出字符串放在％AppData％\ Microsoft \ MMC \hash位置
+
+并且会对界面输出勒索信息：
+
+**U盘感染**
+
+样本有U盘感染的行为，首先检测主机上的磁盘盘符，之后会对检索到的磁盘盘符递增一个，进行文件复制。如果只有C，D盘，则在复制目录数组返回C，D，E，因为插入优盘时盘符自增，所以达到传播到U盘的目的。
+
+![](https://p403.ssl.qhimgs4.com/t01df31e20c73fc04fc.png)
+
+**Bypass UAC**
+
+样本中有一个提权操作，使用了注册表劫持来Bypass UAC。
+
+## 样本关联分析
+
+从顶级域名上来看：这是个动态域名，其顶级域名注册人与本次事件并无关联。
+
+我们根据C&C指向的IP 185.208.211.142发现历史解析域名：
+
+### secureserver202[.]duckdns[.]org
+
+我们在HYBRID沙箱中发现了一个样本与该域名有关联：
+
+<https://www.hybrid-analysis.com/sample/9a76ac2c893154592a09a179e5af2c86c8871265d009014bfb5ab25fabdb448a?environmentId=120>
+
+从沙箱的报告中得知，该样本功能与本文中所提到的样本功能类似，但他会分别连接两个服务器：181[.]215[.]247[.]31、185[.]208[.]211[.]142。与我们发现的样本不同的是C&C端口为25255。
+
+根据IP：181[.]215[.]247[.]31我们在360威胁情报中心获得他的历史关联信息：
+
+![](https://p403.ssl.qhimgs4.com/t01d09387c1027f2323.png)
+
+根据关联信息我们得知该团伙还有个域名：sandeeprecruit[.]duckdns[.]org
+
+目前该域名A记录解析：91[.]192[.]100[.]26
+
+![](https://p403.ssl.qhimgs4.com/t012803ae3c0b6c539f.png)
+
+![](https://p403.ssl.qhimgs4.com/t010300ef099545652c.png)
+
+根据VT的信息来看，该团伙的样本至少在2月24日就开始在活跃。
+
+![](https://p403.ssl.qhimgs4.com/t018e3b605cebf35a9c.png)
+
+![](https://p403.ssl.qhimgs4.com/t013b282b35df6b5316.png)
+
+![](https://p403.ssl.qhimgs4.com/t017f030710823e3c12.png)
+
+三台机器开放的服务犹如克隆一般，不过根据样本获知的C2端口(2404、25255、7752、1933)均已关闭。
+
+### anotis[.]publicvm[.]com
+
+在该域名下我们发现了两个IOC样本：
+
+8cabb48e50d72bcc315bc53a5ab62907dae22f68d08c78a5e7ed42270080d4d1
+
+21e16f82275a9c168f0ce0d5c817cdbbc5d6d7764bb2e2ab8b63dff70f972600
+
+而通过这两个样本我们找到了由proofpoint在今年3月23日发布的分析报告：<https://www.proofpoint.com/us/threat-insight/post/tax-themed-email-campaigns-steal-credentials-spread-banking-trojans-rats-ransomware>
+
+报告中指出：该样本以税收为主题通过电子邮件传播银行木马、RAT和勒索软件，其利用方式与本文中所说样本类似。
+
+### anotiz[.]erlivia[.]ltd
+
+目前该域名解析的IP地址：198.54.117.200
+
+通过威胁情报我们得知：
+
+![](https://p403.ssl.qhimgs4.com/t01729db43883083081.png)
+
+该团伙很有可能利用过或者正在利用该服务器通过邮件传播恶意载荷。
+
+根据他们之间的关系，最终我们总结了一张图：
+
+![](https://p403.ssl.qhimgs4.com/t015a253f3484933bff.jpeg)
+
+上图数据来源：360NetLab
+
+## IOC
+
+filename/url | hash  
+---|---  
+apache202[.]duckdns[.]org:7752 | N/A  
+<hxxp://calogistics>[.]ga/memo[.]msi | N/A  
+bill_06_13_2018.xls | 4DE8A3637E2E6127AA0CDA56A9EE406F59B64CAB  
+memo.msi | EB02F1A546C9ADD107D0F3AD85726387A742F204  
+Binary.exe | E99F9426B2D1239FFEC43AE4371B6738C5897D81  
+payload.bin | 51F361FA7F492E560F31824FB9836CD59B67D37C  
+adderalldll.dll | CCA96E199E144EAAA2E4C7300081E36BDFB0BB0B  
+Stub.exe | 2E7D6F6B4EEA61EE1334CECC539E5F9298179EA2  
+  
+## 总结
+
+njRAT这个木马简单易学，在网上随便搜搜就有一大片配置木马或做免杀的文章教程，且他强大的功能完全可以满足犯罪的需要，所以近年来该家族的木马在互联网上非常的活跃，我们在分析完以后总结出以下几点：
+
+1、勒索
+
+2、数字货币盗取
+
+3、键盘记录
+
+4、自动感染USB设备
+
+5、检测杀软及反调试
+
+6、远程控制
+
+7、劫持HOST
+
+8、恶意载荷加密混淆
+
+9、字符串加密
+
+10、代码混淆
+
+11、注入傀儡进程运行
+
+我们在分析过程中发现该样本在利用傀儡进程运行时，注入完成后存在兼容性问题，可能需要在指定环境中才可以成功执行，所以我们推断这可能是一次定向攻击，并非大范围攻击，我们溯源后得知该团伙至少在今年2月24日就开始在活
+跃，并且目前他的服务器还保持可连通状态，根据360安全大脑-大数据提供的相关信息来看，目前还没有发现中国的计算机受到该团伙的攻击。
+
+## 安全建议
+
+1、请不要接收或者打开任何陌生人通过邮件或者聊天软件等发来的任何文档。
+
+2、下载安装“360安全卫士”并保持所有防护开启状态并定时检查软件更新。
+
+## 时间线
+
+2018-06-26 360CERT完成分析报告
+
+## 参考链接
+
+  1. <https://www.proofpoint.com/us/threat-insight/post/tax-themed-email-campaigns-steal-credentials-spread-banking-trojans-rats-ransomware>
+
+审核人：Atoo 编辑：少爷
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **360CERT安全通告** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/149654](/post/id/149654)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意软件](/tag/恶意软件)
+  * [安全研究](/tag/安全研究)
+  * [njRAT](/tag/njRAT)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p0.ssl.qhmsg.com/dm/200_200_100/t013be54b59d8ac5fe6.jpg)
+360CERT安全通告
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

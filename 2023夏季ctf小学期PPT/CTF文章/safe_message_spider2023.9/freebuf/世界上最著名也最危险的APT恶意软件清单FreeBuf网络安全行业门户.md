@@ -1,0 +1,192 @@
+**本文尝试列举出由各国军事情报处的网络安全部门开发的最危险、最有效也是最闻名的恶意软件清单，其中有些可以说早已盛名在外，另一些可能你还没听过……然而这正是它最危险之处。**
+
+## 一、Regin
+
+ **![1.png](https://image.3001.net/images/20190716/15632660904585.png!small)**
+
+Regin被认为是有史以来国家级最先进的恶意软件系列，由NSA开发，并与其五眼联盟合作伙伴（主要是GCHQ）共享。
+
+在2014年被公开披露，但最早的样本可以追溯到2011年，但也有一些人怀疑Regin早在2003年就被创建了。
+
+一些已为人知的Regin野外部署案例包括比利时电信公司，德国政府反动，以及最近的一个案例，俄罗斯搜索巨头Yandex。
+
+在技术层面上，安全研究人员认为Regin是迄今为止最先进的恶意软件框架，它具有数十个功能模块，其中绝大多数模块都是围绕监控操作设计，保证感染主机后也不被发现。
+
+## 二、Flame
+
+![2.png](https://image.3001.net/images/20190716/1563266181609.png!small)
+
+当它在2012年被发现时，安全研究人员并没有准确地用“恶意软件”这个词来描述Flame。当时，Flame非常先进以至于大家都愿意称之为“攻击工具包”。
+
+Flame有点类似它的“大哥”Region，也是在框架之上工作的模块集合，根据操作员所需要的特性进行部署。
+
+2012年，伊朗国家认证中心的MAHER
+Center在针对伊朗政府机构的袭击中发现了Flame。而这一发现和stuxnet恶意软件攻击时隔两年，并很快与方程式组织（美国国家安全局的代号）联系到了一起。后来在针对其他中东政府的袭击中也发现了Flame。目前，Flame的维基百科页面保存了所有与flame相关的发现。
+
+## 三、Stuxnet
+
+![3.png](https://image.3001.net/images/20190716/156326619362.png!small)
+
+Stuxnet是名单上唯一一个拥有自己的纪录片的恶意软件。
+
+该恶意软件是在2000年代由美国国家安全局和以色列8200部队（以色列军方的网络部门）共同共同开发的。2010年在伊朗部署，作为两国致力破坏伊朗核计划的一部分。
+
+据说，Stuxnet在释放时使用了四个不同的零日漏洞，被专门编码为工业控制系统。它的作用是通过提高和降低转子速度来修改控制核浓缩操作的离心机的设置，最终引起振动并破坏机器。
+
+这个恶意软件很成功，据说已经感染了20多万台计算机，最终在伊朗纳坦兹核设施摧毁了近1000台离心机。
+
+## 四、Shamoon
+
+![4.png](https://image.3001.net/images/20190716/15632662068810.png!small)
+
+Shamoon是名单上第一个非美国开发的恶意软件，它是由伊朗国家黑客开发，2012年首次部署在沙特阿拉伯最大的石油生产商沙特阿美石油公司的网络上。在2012年的攻击中，一个数据雨刷器，摧毁了超过30000台电脑。
+
+2016年，针对同一目标，它进行了第二次部署，最近，则是被部署在了意大利石油和天然气承包商Saipem上，据称摧毁了该公司10％的PC机队。
+
+## 五、Triton
+
+![5.png](https://image.3001.net/images/20190716/15632662155841.png!small)
+
+Triton，也称为Trisis，是最近添加到名单里的，这个恶意软件被认为是由俄罗斯研究实验室开发。
+
+Triton在 2017年部署，是专门为Schneider
+Electric的Triconex安全仪表系统的控制器交互而设计的。根据Fireeye、Dragos和Symantec的技术报告，Triton的设计目的是关闭生产流程或允许Tricon控制的机器在不安全状态下工作。恶意软件的代码泄露，最终在Github上发布。
+
+## 六、Industroyer
+
+![6.png](https://image.3001.net/images/20190716/15632662234570.png!small)
+
+Industroyer也称为CrashOverride，是俄罗斯国家黑客开发的恶意软件框架，2016年12月部署在针对乌克兰电网的网络攻击中。
+
+这场攻击切断了乌克兰首都基辅一部分的电力，并持续了一个小时之久。该恶意软件被认为是Havex和Blacknergy等的进化（它们也曾被用来攻击乌克兰电网）。然而，与Havex和Blacknergy不同，它们更像是针对管理工业系统部署的Windows通用恶意软件，而Industroyer则是专门设计了与西门子电网设备交互的组件。
+
+## 七、Duqu
+
+![7.png](https://image.3001.net/images/20190716/15632662369849.png!small)
+
+Duqu被认为是以色列臭名昭著的8200军事网络单位所建立的，2011年匈牙利安全研究人员在发现了Duqu，其第二个版本又于2015年被发现，代号为duqu
+2.0。
+
+第一个版本帮助stuxnet攻击，第二个版本则危害俄罗斯防病毒公司kaspersky
+lab的网络。在美国/欧盟与伊朗就核计划和经济制裁进行国际谈判的奥地利和瑞士酒店的计算机上，同样也发现了duqu 2.0。
+
+## 八、PlugX
+
+![8.png](https://image.3001.net/images/20190716/15632662442484.png!small)
+
+PlugX首次出现在2012年，是一个来源于中国黑客的远程访问特洛伊木马（RAT）。
+
+被发现以后，中国黑客似乎彼此共享了这个软件，现在它被广泛应用于中国国家组织，以至于直接将其归为一个群体并不是容易的事情。
+
+[这里有一个关于plugx的技术报告。](https://logrhythm.com/blog/deep-dive-into-plugx-malware/)
+
+## 九、Winnti
+
+![9.png](https://image.3001.net/images/20190716/15632662604007.png!small)
+
+Winnti和PlugX非常相似。这是另一个中国制造的APT恶意软件病毒，最初由一个群体使用，但随着时间的推移，逐渐在中国所有APT中共享。
+
+该恶意软件自2011年发展至今，被称之为模块化后门木马。[
+安全研究人员最近还发现了Linux变种。](https://www.zdnet.com/article/security-researchers-discover-linux-version-of-winnti-malware/)
+
+Winnti和PlugX非常相似。这是另一个中国制造的APT恶意软件病毒，最初由一个群体使用，但随着时间的推移，逐渐在中国所有APT中共享。
+
+该恶意软件自2011年发展至今，被称之为模块化后门木马。 安全研究人员最近还发现了Linux变种。
+
+## 十、Uroburos
+
+![10.png](https://image.3001.net/images/20190716/15632662676654.png!small)
+
+Uroburos是由臭名昭着的Turla集团开发的rootkit，要知道Turla集团是世界上最先进的民族国家黑客组织之一，和俄罗斯政府有一些联系。
+
+根据G DATA报告，“rootkit能够控制受感染的计算机，执行任意命令并隐藏系统活动。”
+
+Uroburos（也称为Turla或Snake rootkit）被广泛部署，并且非常有效，因为它的目的非常明确：获得持久启动并下载其他恶意软件。
+
+Uroburos是Turla
+APT攻击的核心部分，早在2008年就出现在欧洲，美国和中东的受感染计算机上，目标通常是政府机构。它曾经先后出现在45个国家，并且在
+2014年还发现了Linux变体。
+
+## 十一、ICEFOG
+
+![11.png](https://image.3001.net/images/20190716/15632662837490.png!small)
+
+ICEFOG是另一个曾被一个集团使用的中国恶意软件，后来被其他人共享和重用。
+
+ICEFOG于2013年首次亮相，在过去两年卷土重来，推出了新版本，甚至是Mac版本。[更多地可以见报道。](https://www.zdnet.com/article/ancient-icefog-apt-malware-spotted-again-in-new-wave-of-attacks/)
+
+## 十二、WARRIOR PRIDE
+
+![12.png](https://image.3001.net/images/20190716/15632662983417.png!small)
+
+WARRIOR
+PRIDE是由美国国家安全局和英国GCHQ共同开发，作为清单中唯一的移动恶意软件。它适用于Android和iPhone，在2014年Snowden泄露期间被发现。
+
+至于功能，iPhone的变体远比Android的变体先进。它可以从受感染的主机中检索任何内容，通过静默启用麦克风来收听附近的会话，甚至可以在手机处于睡眠模式时工作。
+
+## 十三、Olympic Destroyer
+
+![13.png](https://image.3001.net/images/20190716/15632663091679.png!small)
+
+在2018年平昌冬季奥运会开幕式期间，Olympic Destroyer被部署在网络上，电视台和记者大多受到这次袭击事件的影响。
+
+据称，Olympic
+Destroyer是由俄罗斯黑客创建，对国际奥委会的一场报复，原因是反抗俄罗斯运动员参加冬季奥运会的兴奋剂指控，以及禁止其他人在俄罗斯国旗下的竞争。
+
+恶意软件本身就是一个信息窃取程序，它将应用程序密码转储到受感染的系统上，使得黑客用它来升级对系统的访问权限，此后他们触发数据擦除攻击，导致一些服务器和路由器崩溃。在攻击发生几个月后，即2018年6月，新的Olympic
+Destroye版本再次被发现。
+
+## 十四、VPNFilter
+
+![14.png](https://image.3001.net/images/20190716/15632663182047.png!small)
+
+VPNFilter是名单中唯一为感染路由器而创建的APT恶意软件。它是由俄罗斯国家黑客开发，在即将举行2018年欧洲冠军联赛决赛的乌克兰进行了提前部署。
+
+原定计划是在决赛的现场实时传输过程中部署恶意软件和损坏路由器，类似于在2018年平昌冬季奥运会开幕式期间Olympic Destroyer的攻击方式。
+
+幸运的是，思科Talos的安全研究人员看到VPNFilter僵尸网络正在组装，并在FBI的帮助下将其取下。据FBI称，该恶意软件是由Fancy Bear
+APT创建的。
+
+## 十五、WannaCry
+
+![15.png](https://image.3001.net/images/20190716/15632663364625.png!small)
+
+尽管原因各不相同，但2017年的三次勒索软件爆发都是由民族黑客开发的恶意软件。
+
+第一个是WannaCry勒索软件，由朝鲜黑客开发，其唯一目的是感染受害者并收集平壤政权的赎金，因为当时该政权受到严厉的经济制裁，为了减轻制裁的影响，该政权就利用国家黑客抢劫银行，开采加密货币或运行勒索软件来收集资金。
+
+然而，WannaCry代码中存在的问题使得它不仅仅传播到本地网络，勒索软件的内部自我复制（蠕虫）组件还变得混乱并且感染了所有可见的东西，导致了全球的爆发。
+
+## 十六、NotPetya
+
+![16.png](https://image.3001.net/images/20190716/15632663576626.png!small)
+
+在WannaCry事件两个月后，第二次勒索软件爆发席卷全世界。这个勒索软件被称为NotPetya，由俄罗斯的Fancy
+Bear（APT28）组织编码，最初只在乌克兰部署。
+
+然而，由于共享网络和企业VPN导致了NotPetya在全球范围内传播，和WannaCry类似，造成了数十亿美元的损失。NotPetya也是使用EternalBlue漏洞作为其蠕虫组件的核心部分。
+（有关EternalBlue的更多信息，请参阅最后一章）
+
+## 十七、Bad Rabbit
+
+![17.png](https://image.3001.net/images/20190716/15632663711500.png!small)
+
+2017年的最后一次全球勒索软件爆发，也是国家黑客带来的。就像NotPetya一样，Bad
+Rabbit也是俄罗斯黑客的作品，他们同样在乌克兰部署了它，随后在全球范围内传播，尽管和WannaCry、NotPetya相比，影响较小。
+
+Bad Rabbit与NotPetya不同，它没有使用EternalBlue作为其主要传播机制，并且还包括许多权力的游戏参考。
+
+## 十八、EternalBlue
+
+![18.png](https://image.3001.net/images/20190716/15632663852940.png!small)
+
+EnternalBlue本身可能并不是恶意软件，在这个词的经典含义中，更多的是一种利用，当然，它仍然是由国家开发的，算是符合这份清单。EnternalBlue由美国国家安全局创建，并于2017年4月公开，结果，当时有一群名为The
+Shadow Brokers的神秘黑客在线发布了该代码。
+
+发布之后，它是先被用于加密货币挖掘活动，而真正成为一个广为人知和可识别的术语，是在它被嵌入到2017年三个勒索软件爆发的代码中，即WannaCry，NetPetya和Bad
+Rabbit。
+
+从那以后，EternalBlue一直没有消亡，并且被各种网络犯罪行为广泛使用，通过利用Windows计算机上错误配置的SMBv1客户端，将EternalBlue作为传播到受损网络内其他系统的机制。
+
+ ***参考来源：[ZDNet](https://www.zdnet.com/article/ancient-icefog-apt-malware-spotted-again-in-new-wave-of-attacks/)，kirazhou编译整理，转载请注明来自 FreeBuf.COM**  
+

@@ -1,0 +1,240 @@
+***本文作者：m0nst3r@丁牛网安实验室，转载请注明来源。**  
+  
+吐槽一句，Freebuf的投稿编辑器可以容纳的字数太少了，本来想一篇文章说完，避免看官看得不过瘾，但无奈得分两部分发布。  
+弄得好像是在追求产出一样，不好意思了都。。。  
+  
+这两篇文章的提纲先列出来给大家，让大家心中有个数。（其实是Markdown语法的[TOC]）  
+  
+概要
+
+  * 1\. 哪儿的问题？
+  * 2\. Sysinternals Autoruns
+  * 3\. 4个半公开的绕过方法
+    * 3.1 Nested Commands (命令嵌套)
+      * 怎么隐藏
+      * 利用方法
+    * 3.2 Shell32.dll Indirection (间接调用Shell32.dll)
+      * 利用方法
+    * 3.3 DLL Hijacking (DLL劫持)
+      * 木马Dridex的做法
+    * 3.4 SyncAppvPublishingService
+      * 利用方法
+  * 4\. 4个未公开的绕过方法
+    * 4.1Service DLL Bug
+      * Standalone Service
+      * Shared Service
+      * 利用方法
+    * 4.2 Extension Search Order Bug (扩展名的搜索顺序利用漏洞)
+      * 利用方法
+    * 4.3 SIP Hijacking (SIP劫持)
+      * 工具
+      * 利用方法
+    * 4.4 .INF Scriptlets
+      * 利用方法
+  * 5\. 结语
+
+## 概要
+
+在网络攻防的对抗中，对于攻击者而言，对目标系统的权限维持（也称持久化）非常重要；对于防御者来说，发现网络中的这些点也非常重要。
+
+本文主要内容来自Kyle和Chris在DerbyCon
+7中的分享，主要展示了一些半公开和尚未公开的技术，用于绕过Autoruns这个最常用的持久化枚举检查工具。
+
+## 哪儿的问题？
+
+Windows系统可能有成百上千种方法去加载/调用一些库或可执行程序，有时是在启动时，有时是在用户登陆时，也有时是当一个程序执行时。我们称这些点为`ASEPs`（Auto
+Start Entry
+Points），例如Skype，Skype一般会设置成“开机启动”，这样可以省去每次开机都要打开Skype的麻烦，Skype会告诉Windows系统，我是一个合法的程序，请每次开机的时候启动我。但攻击者也会从中受益，因为攻击者可以把恶意代码设置为一个服务，并设置为“开机启动”。
+
+作为防御方，我们可能会想到一些自动检查这些ASEPs的工具，而且我们有MSDN可以查。但是有很多东西是无法MSDN文档中找到的，收集这些自启动点也是非常困难的。另外，攻击者一般会使用一些间接的方法来扰乱安全排查软件的视线。
+
+## Sysinternals Autoruns
+
+Sysinternals Autoruns 是一款 由Mark Russinovich开发和维护的软件，它可以检查到的ASEP也是最多的，如：
+
+  * Run Keys，运行键
+  * Services
+  * Schedualed Tasks
+  * Providers
+  * Drivers
+  * WMI
+
+这款工具不是专门为安全人员设计开发的，它能简单枚举出计算机中的`自启动`的位置，但是需要用户去确定这个自启动程序的合法性。即使如此，它也常常被当作一个安全工具来使用，因为作者还集成了VirusTotal来检测自启动位置上的恶意软件，所以恶意软件的制作者们也一直在寻找可以躲过Autoruns检查的方法。
+
+## 4个半公开的绕过方法
+
+### Nested Commands (命令嵌套)
+
+`Nested Commands` 是一种将多条命令集合成一条命令的机制。  
+之所以要这样做，是因为我们不想让Autoruns软件检测出我们运行的恶意代码，这些命令会让Autoruns或防御者认为我们的命令是在运行一个具有合法签名的程序。这是一个绕过的基础知识。随着安全人员和攻击者越来越多的关注这些绕过方式，相信在将来还会出现更加复杂的方式。
+
+#### 怎么隐藏
+
+![15.png.jpg](https://image.3001.net/images/20180306/15203012714100.jpg!small)  
+
+这是一张Autoruns的截图。Autoruns可以告诉机器上所有的`自启动项`，注册表中哪些是开机启动的，哪些是登陆时启动的，哪些是作为服务启动的，甚至还有哪些是作为驱动来启动的，以及一些计划任务和Winsock
+Prividers。  
+从图中可以看出，在我们没有使用隐藏技术的时候，当我们开启了Autoruns的过滤功能后，我们安装的自启动项就暴露在眼前了，包括我们启动项所在位置，执行的命令以及加载的DLL信息。
+
+我们要做的是利用Autoruns的两个功能，这两个功能本来是要帮助安全人员在检查自启动程序时缩小排查范围的，但是可以利用这两个功能来达到隐藏的目的：
+
+  * 隐藏Microsoft条目：这个功能可以把具有Microsoft签名的条目隐藏。
+  * 隐藏Windows条目：这个功能可以把具有Windows证书签名的条目隐藏。
+
+这两个功能可以帮助安全人员把注意力集中在第三方安装的自启动项中，一般情况下，这些启动项有比较大的概率是恶意的。
+
+在介绍隐藏技术之前，首先来了解一下基本的背景知识：
+
+  * Process Exit Codes  
+每个运行的进程/程序都会有一个返回码（Process Exit
+Code），根据这个返回码可以判断程序的运行结果是成功或失败。如果返回码是`0`，则表示成功；若为返回码为`非0`的数值，则表示失败。
+
+  * 逻辑操作符  
+逻辑操作符的作用是根据其他程序的失败或成功来执行命令的批处理语法。  
+例如：`foo.exe && bar.exe`。  
+在批处理脚本中，我们有如下三种操作符可用：
+
+    * `& [block]`：执行完前一个命令后，立刻执行后面的命令，不管前面的命令是否成功执行。
+    * `&& [if success]`：当且仅当前面的命令执行成功，才执行后面的命令。
+    * `!! [if not success]`：当且仅当前面的命令执行失败，才执行后面的命令。
+
+#### 利用方法
+
+  1. 选一个合法的自启动项：  
+比如 ：`C:\Windows\system32\VBoxTray.exe`
+
+  2. 将命令修改为如下格式：  
+`cmd.exe /c start C:\Windows\system32\VBoxTray.exe & evil.exe`
+
+![19.png](https://image.3001.net/images/20180306/15203013028538.png!small)  
+
+`cmd.exe`会在`VBoxTray.exe`执行完成后，马上启动另一个进程执行我们的`evil.exe`。相当于我们用一条命令运行了两个程序。值得注意的是，我们这里用的是`&`而不是`&&`，因为VBoxTray不会退出。
+
+Autoruns会检测到什么结果呢？看下图：
+
+![20.png](https://image.3001.net/images/20180306/15203013236524.png!small)  
+
+在版本`<13.80`的Autoruns里面，我们修改的启动项会以VBoxTray名字显示，而且图标也是正常的，发布者显示来自Oracle，包括执行的文件（`Image
+Path`）都显示正常，唯一能发现我们更改的地方是详细信息里面。作为防御者，在看到正常的启动项时，估计很少有人看详细信息。  
+这样，我们就达到了某种程度的成功。
+
+但是这样就安全了吗？呵呵…
+
+![22.png](https://image.3001.net/images/20180306/1520301339551.png!small)  
+
+我们看到，在版本`>=13.80`的Autoruns里面，执行文件就显示成了`cmd.exe`，我们显然已经不在VBoxTray的保护下面了。
+
+这样的变化提示防御者，单纯使用Autoruns并不能够帮你排除所有的恶意启动项，我们还需要加入自己的分析。
+
+### Shell32.dll Indirection (间接调用Shell32.dll)
+
+简单的说，这个技术是结合`rundll32.dll`和`shell32.dll`来执行程序，以便能够欺骗Autoruns。
+
+Shell32.dll是一个Microsoft签名的程序，它提供了`explorer.exe`的功能，比如”找开“，”运行程序“等，我们可以使用IDA打开这个DLL然后查看导出表。  
+对攻击者而言，这个DLL还有非常多的有用的函数可用，可以用来加载别的DLL文件或者执行一个程序，比如`ShellExec_RunDLL`，`Control_RunDLL`，`DllInstall`等等。
+
+#### 利用方法
+
+我们通过如下的方法，可以启动一个程序：  
+`rundll32.exe shell32.dll,ShellExec_RunDLL calc.exe`
+
+这条语种的执行流程如下：
+
+![30.png](https://image.3001.net/images/20180306/15203013631404.png!small)  
+
+如果我们通过这种方式来设置我们的启动项的话，在Autoruns里面会是什么样子呢？
+
+Autoruns < 13.80 不启用MS过滤  
+
+![31.png](https://image.3001.net/images/20180306/15203013867835.png!small)
+
+Autoruns < 13.80 启用MS过滤
+
+![32.png](https://image.3001.net/images/20180306/15203023522676.png!small)  
+
+我们看到，在不启用过滤时，Autoruns将其识别为`shell32.dll`，但是，当防御者打开”过滤Microsoft签名的程序“时，被安装在机器上的自启动项便不见了。
+
+Autoruns >= 13.80 启用MS过滤
+
+![33.png](https://image.3001.net/images/20180306/15203023899826.png!small)  
+
+  
+
+但是，在高版本的Autoruns中，即使我们启用了过滤，我们的启动项依然会被显示出来，即`rundll32.exe`。  
+一些正常的程序也会使用rundll32.exe来进行自启动，比如打印机驱动。所以即使我们的启动项被显示出来了，但是这里还是需要一些安全知识背景才能确定这个启动项是不是恶意的。
+
+### DLL Hijacking (DLL劫持)
+
+`DLL Hijacking`，或`DLL劫持`，是一种利用Windows加载动态链接库时的`Search
+Order`（搜索顺序）来加载/执行恶意代码的技术手段。  
+在Autoruns中，如果利用这种技术手段设置启动项的话，Autoruns只会显示可执行程序的信息，它并不关心这个程序加载的是哪个DLL。所以，Autoruns在遇到DLL劫持的技术时，是帮不了防御者的忙的。
+
+那什么是搜索顺序呢？
+
+  * Search Order:  
+程序通过`LoadLibrary()`函数来请求Windows系统去加载一个DLL到内存中，而Windows会遵循一个已定义好的搜索方法去查找被请求的DLL，具体顺序如下：
+
+    * 程序运行目录
+    * 系统system32目录
+    * 系统system目录
+    * Windows目录（C:\Windows）
+    * 当前目录
+    * PATH环境变量中的目录列表
+
+Windows会根据搜索顺序一个一个的查找被请求加载的DLL，只要找到一个DLL的名字与被请求的DLL名字一致，Windows就会停止继续查找，并去加载它，不管它是不是恶意的DLL。
+
+所以我们只需将恶意的DLL一个合适的目录中，并且保证这个目录在搜索顺序中比放置合法DLL的目录靠上，我们的恶意DLL就会被加载。
+
+#### 木马Dridex的做法
+
+木马Dridex就是一个使用一种叫作`AtomBombing`的技术对DLL进行劫持的变种，而使用Autoruns检查的时候，Autoruns只会将可执行程序显示出来。
+
+  1. Dridex木马会利用DLL劫持技术将自己隐藏在一个有合法签名的可执行程序下面，它获取可执行程序的哈希值，直到找到一个符合的，然后将这个程序复制到用户目录下的`AppData\Roaming`文件夹中。
+  2. 从程序的导入表中随机选取一个DLL，并且复制到包含正常可执行程序的目录中，将恶意代码注入到DLL中，让恶意代码在DLL加载时执行。
+  3. 在注册表中新建一个键，并指向合法的可执行程序，并且设置为当用户登陆时运行。
+
+用Autoruns来检查感染Dridex木马的机器时，是这样的：  
+
+![44.jpg](https://image.3001.net/images/20180306/15203024534811.jpg!small)  
+
+可以看到，Autoruns只识别出了合法的程序，并且这个启动项并没有什么异常！
+
+### SyncAppvPublishingService
+
+`SyncAppvPublishingService`是PowerShell的提供`App Virtualization
+Publishing`功能的一个命令。这个功能是做什么的，可自行百度，但不懂也没关系。  
+有意思的是，这个命令自带了2个VBS文件和1个EXE文件。这个是`helpers`，可以帮助我们在无需PowerShell命令行中执行PowerShell命令。比如我们想从命令行或一个脚本中来运行PowerShell命令。它就是将获取我们在命令行中的参数进行格式化，并将其传递给PowerShell模块来执行。
+
+![48.jpg](https://image.3001.net/images/20180306/15203025615517.jpg!small)
+
+![49.jpg](https://image.3001.net/images/20180306/15203025613628.jpg!small)
+
+![50.jpg](https://image.3001.net/images/20180306/15203025619204.jpg!small)  
+
+如图所示，它用`g_cmdArgs`来接收命令行参数，然后传给`syncCmd`进行`简单的拼接`，然后调用PowerShell模块执行。所以这里就有一个`命令注入`的漏洞。`SyncAppvPublishingService.exe`与这个helper是一样的漏洞。
+
+#### 利用方法
+
+我们可以通过如下方法启动一个计算器，执行流程如下：
+
+![52.png](https://image.3001.net/images/20180306/15203026836011.png!small)  
+
+  
+
+Autoruns的检测结果：
+
+![53.png](https://image.3001.net/images/20180306/15203027179378.png!small)
+
+  
+
+可以看到，我们的启动项变为了Microsoft签名的，所以当防御者打开过滤的时候，我们的启动项就会被隐藏起来。  
+
+  
+
+  
+由于内容长度限制，下一篇中再分享《4个未公开的绕过方法》！
+
+  
+
+ ***本文作者：m0nst3r@丁牛网安实验室，转载请注明来源。**
+

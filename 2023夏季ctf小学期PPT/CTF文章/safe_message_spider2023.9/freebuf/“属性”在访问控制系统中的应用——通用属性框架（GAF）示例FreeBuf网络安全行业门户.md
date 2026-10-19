@@ -1,0 +1,363 @@
+本文整理了《“属性”在访问控制系统中的应用》第二部分内容， **完整内容请查看阅读原文** 。
+
+摘要：在利用属性实现逻辑访问控制的方法中，授权组件按照策略、规则或用于描述给定属性集和许可操作的关系，通过评估与主体、客体、请求操作和环境相关的属性来确定访问决策。
+
+ **关键词** ：访问控制，访问控制机制，访问控制模型，访问控制策略，属性，基于属性的访问控制，授权，权限
+
+ **第二部分**
+
+ **通用属性框架（GAF）示例**
+
+ **1**
+
+ **通用属性框架**
+
+在将访问控制应用于多主机环境（如企业系统）时，属性的准备和准确性尤其重要。在企业系统中，属性由不同的组织单位创建和管理，并由本地（组织单元）和全局（企业）的访问控制策略使用，因此，需要一种机制来缓解属性定义的语法和语义差异。通用属性框架（GAF）就是一个典型的解决方案，它提供了一种满足语法和语义准确度要求的属性定义方法，该方案可以用在企业ABAC环境下的联邦和网络系统中，其中初始访问控制策略可以使用自然语言，而不具有形式化的属性定义。本章介绍了GAF在属性准确性方面的使用问题。
+
+为了在整个企业中实施AC策略，策略必须表示为计算机（为信息系统执行访问控制的主机，即决策引擎）可理解的格式。然而，大多数初始AC策略源自自然语言，决策引擎无法接受和处理这些语言。因此，有必要将自然语言策略转换为机器可理解的策略规则。一般方法是由特定领域（例如，隐私政策的法律或法规）专家检查系统的主体属性，并根据应用的策略将访问权限映射到目标对象。在工作完成后，当策略或系统更新时，该领域的专家需要再次介入。由于每个系统都需要特定领域的专家基于本地属性定义对策略进行转换，因此管理开销的总成本极易失控。
+
+在企业模式和特定应用程序模式之间进行属性映射时，也会出现这个问题，特别是在定义企业模式之前构建的属性模式和/或具有内置属性模式的商用现货（COTS）产品（例如，通常为传统信息系统建立的属性模式）。为了保证属性的准确性，组织必须对主体属性名和值进行规范，或者维护一个等价术语的映射表，并由权威机构集中管理。
+
+因此，设计一个通用可移植的属性框架是非常重要的，以便AC管理员可以利用该框架编写AC策略，规避与特定领域相关的翻译转换和学习成本。GAF应使用通用属性（通用属性可应用于不同应用领域中任何信息系统的特定属性）从预期策略的内容和本体构建。国家身份交换联合会（NIEF）属性注册表定义了一组典型属性，供希望在NIEF环境下实施联合身份和权限管理的组织和团体使用，其中列出的每个属性定义都是以机器可理解的方式开发的[9]，以便组织相互交换属性数据。图4给出了每个独立系统的特定领域策略和机器可理解策略之间的关系。
+
+![](https://image.3001.net/images/20211018/1634521365_616cd115b241f2b3333d8.png!small)
+
+图4 未使用（a）和使用（b）GAF定义的访问控制策略
+
+GAF的目标是提供一个框架，作为NLP和机器可理解策略和规则之间的一个中间层，支持AC策略管理员编写相应策略，而不需具备与目标客体相关的特定领域的专家知识。通过分析策略规则的内容和本体，GAF包含了与主客体通用属性相关联的访问规则，这些属性对于使用ABAC系统的任何领域都是通用的。简而言之，GAF是一种具有基于访问控制元素（主体/客体属性、环境条件和操作）通用属性的ABAC策略。GAF访问控制规则的格式为：
+
+IF <subject generic attribute1> …….. AND/OR<subject generic attributen> AND  
+<environment condition1>…..AND/OR <environment conditionn>THEN ALLOW  
+{  
+<action1> …….. AND <actionn> ACCESS TO OBJECT WITH <object generic  
+attribute1> …….. AND/OR <object generic attributen>  
+. . .  
+conditionz cmdn;  
+}
+
+GAF需要使用通用词汇表提供通用属性的清晰定义和描述，以便任何AC策略管理员都能理解它们。要在信息系统上实施该策略，AC策略管理员只需通过审查系统中现有的主体和客体属性，将GAF的通用属性以标记或元数据的形式指派给主体和客体，没有必要重新（用GAF属性）创建策略规则，因为它们已经嵌入GAF中。
+
+![](https://image.3001.net/images/20211018/1634521437_616cd15d2a734f34f316e.png!small)
+
+图5列出了OMB M-06-16[16]和OMB M07-16 [17]中隐私规则的部分原始文本。
+
+图6显示了一个GAF示例，包含了一些与隐私法规相关的通用基本属性，其中“计算机”包含了环境条件，“主体属性/值”包含了主体的通用属性，“操作”包含了允许的操作行为；“客体属性”包含了客体的通用属性；“审计”列出了授予访问权限后必须执行的操作。例如，图6中的第一条规则规定，联邦机构的远程用户在经过双因子认证（Level
+3）后，可以读取具有PII通用属性的对象。注意，“计算机”这一列包含的是主、客共享的通用属性，“审计”列包含了执行访问操作后所需的“职责”（注，NIST
+SP 800-178中的概念）操作。
+
+![](https://image.3001.net/images/20211018/1634521453_616cd16d93a84d84760a1.png!small)
+
+图6 OMB M-06-16和OMB M-07-16中的规则示例
+
+下面通过几个具体实例，来说明如何映射到图6所示的OMB
+M-06-16隐私规则GAF。示例1（表10）适用于信息共享中心（ISC），它根据ISC的数据格式来指派本地的主、客体属性。示例2（表11）适用于通过人力资源部（HRD）获取主、客体属性的联邦组织。这两个例子展示了GAF对于不同领域内信息系统的可移植性。“通用属性”行是指GAF中的通用属性，“本地属性”行给出了必须审查的示例系统属性，以确定其向通用属性映射的资格（是或否）。符合OMB
+M-06-16规则的GAF访问控制规则由行中的所有通用属性组成：
+
+对具有以下属性的用户授予对具有PII属性的资源的读访问权限：远程用户、联邦机构和双因子（级别3）。
+
+例1：
+
+表10 OMB M-06-16规则的通用属性到ISC系统的映射
+
+ **属性**
+
+|
+
+ **主体属性**
+
+|
+
+ **操作行为**
+
+|
+
+ **客体属性**  
+  
+---|---|---|---  
+  
+通用属性
+
+|
+
+Remote User
+
+|
+
+Federal Agencies
+
+|
+
+Two-factor(Level 3)
+
+|
+
+Action
+
+|
+
+PII
+
+|
+
+PII  
+  
+本地属性
+
+|
+
+<远程登录ID>
+
+|
+
+联邦ID
+
+|
+
+数字身份
+
+|
+
+读取
+
+|
+
+车辆年份
+
+|
+
+车牌号  
+  
+同样，下面的ISE访问控制规则也可以通过GAF实现：
+
+对于具有<Remote Login ID>、联邦ID和数字身份ID的用户，授予对具有车辆年份和车牌号属性的资源的读取权限。
+
+例2：
+
+表11 OMB M-06-16规则的通用属性到联邦组织人力资源系统的映射
+
+ **属性**
+
+|
+
+ **主体属性**
+
+|
+
+ **操作行为**
+
+|
+
+ **客体属性**  
+  
+---|---|---|---  
+  
+通用属性
+
+|
+
+Remote User
+
+|
+
+Federal Agencies
+
+|
+
+Two-factor(Level 3)
+
+|
+
+Action
+
+|
+
+PII  
+  
+本地属性
+
+|
+
+<远程登录ID>
+
+|
+
+机构HRD ID
+
+|
+
+远程访问密钥
+
+|
+
+读取
+
+|
+
+SSN  
+  
+同样，可以通过GAF实现针对人力资源开发系统的以下AC规则：
+
+对具有<Remote Login ID>、HRD ID和远程访问密钥的用户，授予对具有SSN属性的资源的读取权限。
+
+附录中列出了上述示例的XACML[12]实现。
+
+注意，为了确保GAF的健壮性，需要对通用属性之间的本体进行扩展，因为它们涉及已识别的子规则以及规则的层次关系。此外，基于断言的策略规则也会出现在一些策略中，对这些特性的处理也必须在GAF的开发中解决。
+
+ **2**
+
+ **属性评估方案**
+
+属性评估方案应根据组织的需求和能力确定，同时还应考虑风险、性能和成本。本文不打算构建一个适合所有业务需求和功能的通用方案，只提供了一些针对一般AC系统进行度量映射的示例，用户在定义其属性评估方案时可以以这些系统为原型，按目标系统的实际情况进行调整，以满足组织的特定需求。
+
+ **2.1**
+
+ **属性评估方案示例**
+
+在前文讨论的基础上，表12给出了一个属性评估方案的分类示例。注意，不同系统或组织要关注的问题可能不同，取决于它们的安全要求，因此，它们应该按照组织的操作和性能要求进行分配，并在特定的条件下通过联邦系统进行合并。另外，访问决策方案的层级差异也应该重点考虑，例如，访问决策同时使用两个属性，但一个是低级别，另一个是高级别。
+
+表12 属性评估方案（针对远程AC功能或属性提供者提供的属性）示例
+
+![](https://image.3001.net/images/20211018/1634521490_616cd192f3f78e11201d7.jpg!small)
+
+注意，由于在不同的操作环境中，主体、客体和环境条件这三类属性的特征有所不同，因此它们的属性评估方案可能应遵从根据不同的原则，这就要求需要在评估方案中包含不同的方法集合，以确保评估的灵活性。例如，表12中的属性评估方案可应用于其属性由远程AC功能或外部属性提供者提供的组织。而该方案自然不同于不需要获取外部属性的组织所使用的方案，在这种情况下，可以适当放宽方案中对映射限制性的考虑，如表13所示。
+
+表13 属性评估方案（针对由非远程AC功能或属性提供者提供的属性）示例
+
+![](https://image.3001.net/images/20211018/1634521505_616cd1a10961aade4e463.jpg!small)
+
+《属性元数据：一种评估联合属性的拟议模式》（NISTIR
+8112）[3]探讨了元数据的准确性，并提供了一个信任评估框架及相关组件的建立指南，以实现标准化的属性可信度评估。
+
+ **2.2**
+
+ **属性实践声明**
+
+对远程AC功能或属性提供者的内部互操作过程以及在攻击、错误或故障等方面的安全性评估，可以建立对远程AC功能或属性提供者的信任，这些评估通常建立在未经验证的有效性断言之上，而不是基于共同商定的标准。
+
+属性实践声明（APS）是关于操作对属性评估方案影响的示例文档管理，该声明提供了准备在整个企业中使用的属性列表，并可以用于确定企业的权威属性源。此外，还需要一些网络基础设施功能（包括维护属性真实性、安全性和及时性的能力），以便在组织内部和跨组织共享和复制权威主体属性数据。例如，属性实践声明可以基于信任框架，如《开发支持身份联合的信任框架》（NISTIR
+8149）[18]，以建立属性的真实性评估方案。开发制定可审计的声明将对远程AC功能或属性提供者的操作标准，以及所提供属性的可信度进行公正评估。
+
+因此，更高级别的属性评估方案应该是按相应策略进行过审核的APS。较低级别的属性评估方案适用于那些自报告遵守策略、或不公布其操作细节的远程AC功能或属性提供者。
+
+ **3**
+
+ **结论**
+
+基于属性的AC系统根据访问控制规则（定义了允许授权的操作、主体/客体属性组合），通过对实体（即主、客体）、操作以及与访问请求相关的环境的属性评估，来限制对客体的访问。本文从基本保障的角度讨论了属性应用时的一些注意事项，包括规划设计、真实性、安全性、及时性和管理机制五个方面的考虑。
+
+除了这些考虑因素之外，本文还展示了一个通用的属性框架及其示例，以说明在联邦访问控制环境中属性的语义和语法准确性的重要性，特别是使用自然语言策略作为初始策略的时候。最后，总结了文中讨论的注意事项，举例说明了应用于不同安全需求的属性评估方案。显然，属性评估方案框架的开发需要额外的研究，并与使用ABAC的组织的利益密切相关。
+
+ **附录A-表10和表11的XACML实现**
+
+本附录列出了OMB M-07-16隐私规则的XACML实现[17]。
+
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<Policy xmlns="urn:oasis:names:tc:xacml:2.0:policy:schema:os" PolicyId="GAF
+sample1" RuleCombiningAlgId="urn:oasis:names:tc:xacml:1.0:rule-combining
+algorithm:deny-overrides">
+
+<Description>XACML sample for generic attributes of an OMB M-06-16 privacy
+rule</Description>
+
+<Target />
+
+<Rule Effect="Permit" RuleId="OMB M-06-16 Privacy rule">
+
+<Description>Grant Read access for the user who has the attributes: Remote
+User,
+
+Federal Agencies, and 2- factor (Level 3) to the resource data with the PII
+
+attributes.</Description>
+
+<Target>
+
+<Subjects>
+
+<Subject>
+
+<SubjectMatch MatchId="urn:oasis:names:tc:xacml:1.0:function:boolean-equal">
+
+<AttributeValue
+DataType="http://www.w3.org/2001/XMLSchema#boolean">True</AttributeValue>
+
+<SubjectAttributeDesignator AttributeId=""Remote Login ID""
+
+DataType=http://www.w3.org/2001/XMLSchema#boolean MustBePresent="true" />
+
+</SubjectMatch>
+
+<SubjectMatch MatchId="urn:oasis:names:tc:xacml:1.0:function:boolean-equal">
+
+<AttributeValue
+DataType="http://www.w3.org/2001/XMLSchema#boolean">True</AttributeValue>
+
+<SubjectAttributeDesignator AttributeId=""Federal Agency""
+
+DataType=http://www.w3.org/2001/XMLSchema#boolean MustBePresent="true" />
+
+</SubjectMatch>
+
+<SubjectMatch MatchId="urn:oasis:names:tc:xacml:1.0:function:boolean-equal">
+
+<AttributeValue
+DataType="http://www.w3.org/2001/XMLSchema#boolean">True</AttributeValue>
+
+<SubjectAttributeDesignator AttributeId=""2- factor (Level 3)""
+
+DataType="http://www.w3.org/2001/XMLSchema#boolean" MustBePresent="true" />
+
+</SubjectMatch>
+
+</Subject>
+
+</Subjects>
+
+<Resources>
+
+<Resource>
+
+<ResourceMatch MatchId="urn:oasis:names:tc:xacml:1.0:function:boolean-e qual">
+
+<AttributeValue
+DataType="http://www.w3.org/2001/XMLSchema#boolean">True</AttributeValue>NIST
+SP 800-205 ATTRIBUTE CONSIDERATIONS FOR ACCESS CONTROL SYSTEMS 31 This
+publication is available free of charge from:
+https://doi.org/10.6028/NIST.SP.800-205
+
+<ResourceAttributeDesignator AttributeId=""PII""
+DataType="http://www.w3.org/2001/XMLSchema#boolean" MustBePresent="true" />
+
+</ResourceMatch>
+
+</Resource>
+
+</Resources>
+
+<Actions>
+
+<Action>
+
+<ActionMatch MatchId="urn:oasis:names:tc:xacml:1.0:function:string-equal">
+
+<AttributeValue
+DataType="http://www.w3.org/2001/XMLSchema#string">Read</AttributeValue>
+
+<ActionAttributeDesignator
+AttributeId="urn:oasis:names:tc:xacml:1.0:action:action-id"DataType="http://www.w3.org/2001/XMLSchema#string" MustBePresent="true" />
+
+</ActionMatch>
+
+</Action>
+
+</Actions>
+
+</Target>
+
+</Rule>
+
+</Policy>
+
+END
+

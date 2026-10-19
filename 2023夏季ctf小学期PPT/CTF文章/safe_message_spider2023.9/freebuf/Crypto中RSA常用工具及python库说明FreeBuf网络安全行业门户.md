@@ -1,0 +1,564 @@
+本文介绍了在CTF比赛中密码学中常用的工具及python库：简要讲解了下载方法，常用的使用方法。
+
+## RSA常用工具
+
+### RSAtool
+
+  * 任意给定两个素数（p，q）或者（模数n，私钥d）都可以计算出RSA（p,q,n,d,e）及RSA-CRT (dP, dQ, qInv)
+
+  * 返回参数可以以pem或der文件格式保存私钥文件
+
+#### 下载
+
+  * git clone https://github.com/ius/rsatool.git
+
+  * cd rsatool
+
+#### 使用
+
+  * 根据p，q生成私钥文件key.pem  
+`python rsatool.py -f PEM -o key.pem -n 13826123222358393307 -d
+9793706120266356337`  
+  
+
+    
+    
+    Using (n, d) to initialise RSA instance
+    n = 13826123222358393307 (0xbfe041d1197381db)
+    e = 65537 (0x10001)
+    d = 9793706120266356337 (0x87ea3bd3bd0b9671)
+    p = 4184799299 (0xf96ef843)
+    q = 3303891593 (0xc4ed6289)
+    Saving PEM as key.pem
+    
+
+  * 根据（p,q）生成key.der  
+`python rsatool.py -f DER -o key.der -p 4184799299 -q 3303891593`  
+  
+
+    
+    
+    Using (p, q) to initialise RSA instance
+    n = 13826123222358393307 (0xbfe041d1197381db)
+    e = 65537 (0x10001)
+    d = 9793706120266356337 (0x87ea3bd3bd0b9671)
+    p = 4184799299 (0xf96ef843)
+    q = 3303891593 (0xc4ed6289)
+    Saving DER as key.der
+    
+
+### openssl
+
+openssl可以查看公钥得到n和e，也可以利用私钥文件解密公钥加密的内容
+
+#### 下载
+
+  * kail中自带
+
+  * windows下可下载：OpenSSL-Win32
+
+#### 使用
+
+  * 查看公钥文件  
+`openssl rsa -pubin -in pubkey.pem -text -modulus`
+
+  * 解密  
+`rsautl -decrypt -inkey private.pem -in flag.enc -out flag`
+
+### 整数拆分工具
+
+#### 网站拆分：http://factordb.com/
+
+#### 命令行拆分：factordb-pycli，借用 factordb
+数据库：https://github.com/ryosan-470/factordb-python
+
+##### 下载
+
+    
+    
+    FactorDB存储了已经知道的整数的拆分，这个工具可以在命令行上使用，对python2和python3也适用
+    
+
+  * 本地对应pip下载即可：  
+`pip3 install factordb-python`
+
+  * 更新factordb-python  
+`pip3 install --upgrade factordb-python`
+
+##### 使用
+
+  * 命令行使用  
+`C:\Users\fishmouse>factordb 16`  
+  
+
+    
+    
+    2 2 2 2
+    
+
+  * 获得更多信息：  
+`C:\Users\fishmouse>factordb --json 16`  
+  
+
+    
+    
+    {"id": "http://factordb.com/api/?id=2", "status": "FF", "factors": [2, 2, 2, 2]}
+    
+
+  * FacotrDB库的使用
+
+    
+    
+    from factordb.factordb import FactorDB
+    f = FactorDB(16)
+    
+    
+    
+    f.get_factor_list()
+    
+    
+    
+    []
+    
+    
+    
+    f.connect()
+    
+    
+    
+    <Response [200]>
+    
+    
+    
+    f.get_factor_list()
+    
+    
+    
+    [2, 2, 2, 2]
+    
+    
+    
+    f.get_factor_from_api()
+    
+    
+    
+    [['2', 4]]
+    
+    
+    
+    f.get_status()
+    
+    
+    
+    'FF'
+    
+
+#### yafu本地拆分
+
+##### windows下使用
+
+`xxx\yafu-1.34> .\yafu-x64.exe`
+
+`factor(21)`
+
+## RSA常用python库
+
+### gmpy2
+
+#### windows下下载
+
+  * whl文件形式下载,下载对应python版本的whl文件：https://www.lfd.uci.edu/~gohlke/pythonlibs/
+
+`pip3 install gmpy2-2.0.8-cp37-cp37m-win_amd64.whl`
+
+#### kail中下载
+
+下载gmpy2这个库还需要一些相应的环境mpfr和mpc
+
+  * 首先下载mpfr，因为要下载mpc必须先下载mpfr  
+`root@kali:~# wget https://www.mpfr.org/mpfr-current/mpfr-4.1.0.tar.bz2`  
+若失败到官网：https://www.mpfr.org/mpfr-current查看最新  
+`root@kali:~# tar -jxvf mpfr-4.1.0.tar.bz2`  
+`root@kali:~# cd mpfr-4.1.0`  
+`root@kali:~/mpfr-4.1.0# ./configure`  
+`root@kali:~/mpfr-4.1.0# make && make check && make install`
+
+  * 下载mpc  
+`root@kali:~# wget ftp://ftp.gnu.org/gnu/mpc/mpc-1.1.0.tar.gz`  
+`root@kali:~# tar -zxvf mpc-1.1.0.tar.gz && cd mpc-1.1.0`  
+`root@kali:~/mpc-1.1.0# ./configure`  
+`root@kali:~/mpc-1.1.0# make && make check && make install`
+
+  * 下载gmpy2  
+`root@kali:~# pip3 install gmpy2`
+
+#### 常用函数
+
+##### gmpy2.gcd最大公约数
+
+    
+    
+    import gmpy2
+    gmpy2.gcd(2,4)
+    
+    
+    
+    mpz(2)
+    
+
+##### gmpy2.invert求逆元
+
+    
+    
+    gmpy2.invert(5,26)
+    
+    
+    
+    mpz(21)
+    
+
+##### gmpy2.gcdext求逆元
+
+    
+    
+    gmpy2.gcdext(5,26)#传入（a,b）;返回最大公约数、x、y  :g= ax+by
+    
+    
+    
+    (mpz(1), mpz(-5), mpz(1))
+    
+
+##### gmpy2.iroot开次方根
+
+    
+    
+    gmpy2.iroot(4,2)
+    
+    
+    
+    (mpz(2), True)
+    
+
+### libnum
+
+#### pip下载
+
+`pip3 install libnum`
+
+#### 常用函数
+
+##### libnum.gcd求最大公约数
+
+    
+    
+    import libnum
+    libnum.gcd(2,4)
+    
+    
+    
+    2
+    
+
+##### libnum.invmod求逆元
+
+    
+    
+    libnum.invmod(5,26)
+    
+    
+    
+    21
+    
+
+##### libnum.xgcd扩展欧几里得
+
+    
+    
+    libnum.xgcd(5,26)# xgcd(a,b)返回：x,y,g ；ax+by=g
+    
+    
+    
+    (-5, 1, 1)
+    
+
+##### libnum.s2n字符串转为整数
+
+    
+    
+    libnum.s2n("hell0")
+    
+    
+    
+    448378203184
+    
+
+##### libnum.n2s整数转换为字符串
+
+    
+    
+    libnum.n2s(448378203184)
+    
+    
+    
+    'hell0'
+    
+
+### pycryptodome
+
+#### pip下载
+
+`pip3 install pycryptodome`
+
+下载后，可以使用 **Crypto** 这个模块，注意点：在对应python下的库Lib\site-packages中crypto开头为小写时，将其改为
+**Crypto** 即可
+
+## 小结
+
+### 整数到字符串（字节串的相互转换）
+
+#### 整数和字符串
+
+    
+    
+    # 字符串到整数
+    import libnum
+    libnum.s2n("hello")
+    
+    
+    
+    448378203247
+    
+    
+    
+    # 整数到字符串
+    libnum.n2s(448378203247)
+    
+    
+    
+    'hello'
+    
+
+#### 整数和字节串
+
+    
+    
+    # 字节串到整数
+    from Crypto.Util.number import long_to_bytes,bytes_to_long
+    bytes_to_long('hello'.encode())
+    
+    
+    
+    448378203247
+    
+    
+    
+    # 整数到字节串
+    long_to_bytes(448378203247)
+    
+    
+    
+    b'hello'
+    
+
+### 素数产生
+
+#### 脚本
+
+    
+    
+    # 检测大整数是否是素数,如果是素数,就返回True,否则返回False
+    # miller_rabin算法
+    import random
+    def rabin_miller(num):
+        s = num - 1
+        t = 0
+        while s % 2 == 0:
+            s = s // 2
+            t += 1
+    
+        for trials in range(5):
+            a = random.randrange(2, num - 1)
+            v = pow(a, s, num)
+            if v != 1:
+                i = 0
+                while v != (num - 1):
+                    if i == t - 1:
+                        return False
+                    else:
+                        i = i + 1
+                        v = (v ** 2) % num
+        return True
+    
+    
+    def is_prime(num):
+        # 排除0,1和负数
+        if num < 2:
+            return False
+    
+        # 创建小素数的列表,可以大幅加快速度
+        # 如果是小素数,那么直接返回true
+        small_primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193, 197, 199, 211, 223, 227, 229, 233, 239, 241, 251, 257, 263, 269, 271, 277, 281, 283, 293, 307, 311, 313, 317, 331, 337, 347, 349, 353, 359, 367, 373, 379, 383, 389, 397, 401, 409, 419, 421, 431, 433, 439, 443, 449, 457, 461, 463, 467, 479, 487, 491, 499, 503, 509, 521, 523, 541, 547, 557, 563, 569, 571, 577, 587, 593, 599, 601, 607, 613, 617, 619, 631, 641, 643, 647, 653, 659, 661, 673, 677, 683, 691, 701, 709, 719, 727, 733, 739, 743, 751, 757, 761, 769, 773, 787, 797, 809, 811, 821, 823, 827, 829, 839, 853, 857, 859, 863, 877, 881, 883, 887, 907, 911, 919, 929, 937, 941, 947, 953, 967, 971, 977, 983, 991, 997]
+        if num in small_primes:
+            return True
+    
+        # 如果大数是这些小素数的倍数,那么就是合数,返回false
+        for prime in small_primes:
+            if num % prime == 0:
+                return False
+    
+        # 如果这样没有分辨出来,就一定是大整数,那么就调用rabin算法
+        return rabin_miller(num)
+    
+    
+    # 得到大整数,默认位数为1024
+    def get_prime(key_size=1024):
+        while True:
+            num = random.randrange(2**(key_size-1), 2**key_size)
+            if is_prime(num):
+                return num
+    print(get_prime(50))
+    
+    
+    
+    602912217591119
+    
+
+#### libnum
+
+    
+    
+    import libnum
+    libnum.generate_prime(30)
+    
+    
+    
+    936552131
+    
+    
+    
+    libnum.generate_prime_from_string("abc")
+    
+    
+    
+    418262526581
+    
+
+#### Crypto.Util.number
+
+    
+    
+    from Crypto.Util.number import getPrime
+    getPrime(30)
+    
+    
+    
+    930767861
+    
+
+### rsa库简单使用
+
+#### 密钥生成
+
+    
+    
+    import rsa
+    (pubkey, privkey) = rsa.newkeys(128)
+    pubkey,privkey
+    
+    
+    
+    (PublicKey(210654150686773160921155565886246123127, 65537),
+     PrivateKey(210654150686773160921155565886246123127, 65537, 45430608142070156598272456648718438625, 245259021963773848463, 858904797874827929))
+    
+
+#### rsa加密
+
+    
+    
+    m = "hello".encode('utf-8')
+    rsa.encrypt(m,pubkey)
+    
+    
+    
+    b']\xd6\xb2w\xc4\x89[\xfcu`\x0b&\xa0\xc9`\xd2'
+    
+
+#### rsa解密
+
+    
+    
+    rsa.decrypt(b']\xd6\xb2w\xc4\x89[\xfcu`\x0b&\xa0\xc9`\xd2',privkey)
+    
+    
+    
+    b'hello'
+    
+
+### 公钥文件查看方式
+
+#### openssl
+
+`openssl rsa -pubin -in pubkey.pem -text -modulus`
+
+#### rsa库
+
+    
+    
+    import rsa
+    with open('publickey.pem',mode='rb') as f:
+        keydata= f.read()
+    pubckey = rsa.PublicKey.load_pkcs1_openssl_pem(keydata)
+    pubckey.n
+    pubckey.e
+    
+
+### 私钥文件生成方式
+
+#### rsatool.py
+
+`python rsatool.py -f PEM -o prvkey.pem -p 4184799299 -q 3303891593`
+
+#### from Crypto.PublicKey import RSA
+
+    
+    
+    # coding=utf-8
+    import math
+    import sys
+    from Crypto.PublicKey import RSA
+    
+    rsa_components=(n,e,int(d),p,q)
+    
+    keypair=RSA.construct(rsa_components)
+    
+    private = open('private.pem', 'wb')
+    private.write(keypair.exportKey())
+    private.close()
+    
+
+### 根据私钥文件读取公钥加密后密文方式
+
+#### 利用rsa库直接读
+
+    
+    
+    import rsa
+    prikey = rsa.PrivateKey(n , e , d , p , q)
+    with open("test.enc" , "rb") as fp:
+        print(rsa.decrypt(fp.read(), prikey).decode())
+    
+
+#### 利用openssl
+
+`OpenSSL> rsautl -decrypt -in test.enc -inkey private.pem`
+
+### 字符串异或
+
+#### Crypto.Util import strxor
+
+    
+    
+    from Crypto.Util import strxor
+    strxor(b"hhh",b"aaa")
+    
+

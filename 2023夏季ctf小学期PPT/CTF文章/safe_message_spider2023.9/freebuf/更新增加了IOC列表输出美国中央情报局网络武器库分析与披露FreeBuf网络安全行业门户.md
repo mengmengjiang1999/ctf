@@ -1,0 +1,751 @@
+# **引言**  
+
+2017年3月7日，维基解密首次在其网站对外曝光了美国中央情报局（CIA）相关资料，并且代号为Vault7[参考链接:
+5]，并且从当月直至9月7日每周都会对外披露其中一个项目的相关资料内容[4]。在这批泄露资料中，主要涉及其相关网络武器库和行动项目的代号和对应文档介绍，鲜有具体的涉及implant（植入物）的技术实现和利用细节。
+
+2017年4月，国外安全厂商赛门铁克和卡巴斯基分别发布了对相关网络武器库的研究报告，其分别命名为Longhorn[1]和The
+Lamberts[2]。在相关的研究报告中给出了涉及多种网络武器的命名和分类，以及其归属的关联性判断依据等，但涉及实际技术分析的内容依然很少。
+
+奇安信威胁情报中心红雨滴团队对历史曝光的CIA网络武器及相关资料进行研究，并发现了多种网络武器文件，并且根据分析的结果与现有公开资料内容进行了关联和判定。并且我们还发现这些网络武器曾用于攻击中国的目标人员和机构，其相关攻击活动主要发生在2012年到2017年（与Vault7资料公开时间相吻合），并且在其相关资料被曝光后直至2018年末，依然维持着部分攻击活动，目标可能涉及国内的航空行业。
+
+本报告是结合对具体网络武器样本的技术分析，并与公开情报中的相关资料和代号相对应起来。
+
+# 2020年3月4日，奇安信威胁情报中心从VirusTotal平台中识别得到部分CIA网络武器相关样本HASH，并在Github平台更新了APT
+Digital Weapon 项目，IOC列表更新至文末。
+
+  
+
+#  **网络武器**
+
+##  **Athena（雅典娜）项目**
+
+###  **简介**
+
+Athena（雅典娜）项目是维基解密于2017年5月19日披露的，其用于在Windows系统（从XP到Windows
+10）上提供远程信标（beacon）和程序加载的木马程序，从其功能介绍也可以推断出其更可能用于获取到攻击立足时，向目标主机植入的攻击模块，并用于加载和执行下阶段载荷。Athena是由CIA与美国本土的Siege
+Technologies公司合作开发的（后者于2016年被Nehemiah Security收购）。
+
+我们找到了和Athena相关的样本文件，并且发现其就是卡巴斯基报告中提及的Black Lambert。
+
+###
+
+###  **Loader模块**
+
+这里对样本进行分析，该样本也在卡巴报告中的Black Lambert中所提及，该样本曾出现在利用Windows
+字体0day漏洞CVE-2014-4148的攻击事件中。可以看到其导出函数并不是正常的字母名字，而是一个数字编号。我们也发现这一特征在多种攻击样本中出现，这也符合Vault7相关泄露资料中，其关于相关攻击代码的开发的约定策略。
+
+![图片.png](https://image.3001.net/images/20200305/1583389932_5e609cec33392.png!small)  
+
+样本运行之后首先会检测一些windows中的指定进程是否存在（可以看到这些都是一些比较少见的windows相关进程），如果存在则获取对应的processid，否则获取当前进程的processid，用于之后的注入。
+
+![图片.png](https://image.3001.net/images/20200305/1583389940_5e609cf473a51.png!small)  
+
+其从样本指定偏移的位置读取payload，这个字段的偏移通过遍历节表，找到正常节代码最后的部分，该部分是一个去掉头的payload，获取到对应的位置后，读取其中的内容并修复对应的pe头，并且加载执行。
+
+###
+
+###  **Payload模块**
+
+Loader模块释放的pe文件如下所示，从该后门的函数量可以看出这是一个功能复杂的攻击模块，其入口函数为winlib_1。
+
+![图片.png](https://image.3001.net/images/20200305/1583389952_5e609d0099d42.png!small)  
+
+其实现了非常丰富的控制指令，其中也包括一些特殊功能，如：
+
+支持GUI程序的后台点击；
+
+支持作为隧道转发工具；
+
+使用共享命名管道实施横向移动和模块执行。
+
+#### **字符串解密算法**  
+
+该后门对其中使用的字符串都进行了加密，每一个加密的字符串实际上是以下的格式保存的，即前四个字节保存了加密字符中block的个数，通过xor
+key保存，每个block 4个字节，通过do，while循环中的算法解密。
+
+![图片.png](https://image.3001.net/images/20200305/1583389960_5e609d0846af5.png!small)  
+
+####  **控制指令**
+
+控制指令相关同样是加密存放，下面对解密后的部分重要指令进行说明：
+
+ **指令**|  **功能**  
+---|---  
+cmd_at| 该指令用于计划任务相关的设置。  
+cmd_idlewatch| 该指令主要通过GetLastInputInfo监控机器设备的活动情况  
+cmd_wincontrol|
+通过postMessage向指定gui发送消息，结合SendInput鼠标左键的操作，再配合一开始设置的隐藏桌面，以实现对用户机器上任意GUI应用的控制。  
+cmd_catInstall| 该指令主要通过DCOM loader设置IPC$,ADMIN$共享的方式以实现在局域网的传播。  
+  
+其中cmd_catInstall通过共享的方式传播下发后续的载荷，代码下发之后删除该共享，所以这里其实需要攻击者获取到相关设备的访问凭据，否则无法设置对应的共享。
+
+####  **关联和归属**
+
+从下图可以看到Payload模块实现的指令几乎涵盖了维基解密泄露的Athena项目文档中所提及的所有相关控制指令。这也是我们将Black
+Lambert和Athena项目相关联的原因。
+
+![图片.png](https://image.3001.net/images/20200305/1583389969_5e609d1152285.png!small)  
+
+###
+
+###  **下阶段植入物**
+
+下阶段植入物是由Payload模块通过IPC$共享方式下发和执行的，并且在分析过程中，我们确实找到了相关的佐证依据。
+
+下阶段植入物为一个dll模块，其落地文件名可能以随机字符串文件名或伪装成网络协议相关，如Winhttp32，winDNS，winftp32，winrdp64等。其启动主要通过两种方式：一是通过远程IPC管道利用regsv***注册安装，二是首次在目标机器安装后，后续以服务形态执行和持久性维持。结合其启动方式特点，推测该模块主要用于内网横向移动阶段，并维持持久性。
+
+这里我们以模块名为winhttp32.dll为例分析，其主要通过服务的方式启动：
+
+![图片.png](https://image.3001.net/images/20200305/1583389975_5e609d176b019.png!small)  
+
+将自身注册为NativeService的服务。
+
+![图片.png](https://image.3001.net/images/20200305/1583389981_5e609d1d170fa.png!small)![图片.png](https://image.3001.net/images/20200305/1583389987_5e609d2349215.png!small)  
+
+其通过命名管道的方式，和自身拷贝的子进程进行通信。
+
+![图片.png](https://image.3001.net/images/20200305/1583389993_5e609d291e93a.png!small)  
+
+其实现了包括可以注入代码到进程，获取系统版本信息以及执行代码的三种功能。
+
+![图片.png](https://image.3001.net/images/20200305/1583390000_5e609d309c106.png!small)  
+
+####  **关联和归属**
+
+在分析过程中，我们发现下阶段植入物用于运行不止一种载荷类型，其中常见的为分发运行Fluxwire Node模块，以及另外一种未知的执行模块。
+
+##  **Fluxwire Node**
+
+###  **简介**
+
+Fluxwire是CIA为了实现mesh
+networking而创建的项目，在泄露的文档中包括了一份关于Fluxwire的Linux版本控制端的介绍和使用手册：
+
+![图片.png](https://image.3001.net/images/20200305/1583390008_5e609d386f685.png!small)  
+
+通过手册内容，可以看到整个fluxwire是支持多个平台，覆盖了window，linux，mac os等，且支持多个指令集的平台。
+
+![图片.png](https://image.3001.net/images/20200305/1583390015_5e609d3fdfbc1.png!small)  
+
+从文档中可以看到fluxwire一直到2015年11月都还在更新，遗憾的是整个fluxwire的文档主要在说明相关的攻击端使用，对用于失陷机器上植入的木马的设计并未详细介绍，只是说明其植入的模块称为Node。
+
+![图片.png](https://image.3001.net/images/20200305/1583390021_5e609d457fbd4.png!small)  
+
+###  **Node模块**
+
+如下所示可以看到其依赖于两个参数，这两个参数为命令行中的argc，argv。Node模块启动时确实会传入一个文件路径参数，并通常伪装成数据文件，结合Node模块的功能分析，我们推测该数据文件才是具体的功能核心实现。
+
+![图片.png](https://image.3001.net/images/20200305/1583390029_5e609d4de93bc.png!small)  
+
+进入fun_Entry，首先判断参数是否为2，即是否传入了路径参数，之后读取参数路径文件中的内容，并搜索指定偏移的位置，根据该偏移进行后续的解密及倒入表的修复。
+
+![图片.png](https://image.3001.net/images/20200305/1583390035_5e609d53f13b5.png!small)  
+
+寻找偏移的算法如下，找到0x4286A1F5，且其后0x2c为0xF3D781AF的地址。
+
+![图片.png](https://image.3001.net/images/20200305/1583390041_5e609d59bf38b.png!small)  
+
+之后调用后续的模块，由于传入的文件无法获取，因此不知道攻击的后续。
+
+![图片.png](https://image.3001.net/images/20200305/1583390047_5e609d5fb72f7.png!small)  
+
+在分析中，我们发现Node模块通常伪装成Netmeet.exe，而Netmeet是微软在Win95到WinXP内置的VoIP程序，Vista以后被移除。这也许就是在后续的失陷机器上我们没有找到对应伪装成netmeet载荷的原因之一。
+
+###  **关联和归属**
+
+在分析的样本中包含了一个PDB路径未被移除。
+
+c:\users\bot\fluxwire-cmake\delta\mswin-x86\build\base\cmake\ddk_node\objfre_wxp_x86\i386\node.pdb
+
+其中的pdb路径包含了fluxwire和node的关键词。我们直接google相关关键词，可以找到泄露的fluxwire相关文档时间是在2015年11月，而我们看到的包含了pdb的文件却是在2015年3月进行的攻击，因此存在嫁祸的可能性较小。
+
+![图片.png](https://image.3001.net/images/20200305/1583390054_5e609d6659a4c.png!small)  
+
+结合文档中对Node启动方式的介绍：
+
+![图片.png](https://image.3001.net/images/20200305/1583390065_5e609d71553fd.png!small)  
+
+从文档中我们可以得知其Node程序在Windows下会以cmd.exe或者CreateProcess两种方式启动。在分析过程中我们确实找到了两种启动方式的证据，而后一种启动为则是通过winhttp32模块启动后通过命名管道执行的。
+
+####  **另一种横向移动模块**
+
+在分析中，我们找到了另一个直接通过winhttp32模块启动的载荷，但代码实现和fluxware node不同。
+
+其主函数很简单，就是一个简单的loader。
+
+![图片.png](https://image.3001.net/images/20200305/1583390070_5e609d76caf65.png!small)  
+
+首先通过动态获取函数地址的方式，获取到socket相关的函数，之后通过xor0x7F的方式解密的对应的cc。通过解密我们发现cc只是一个内网地址，因此基本可以确定，该模块是用于攻击者已经控制了内网中的一台主机，并将其转化为了对应的cc节点。
+
+![图片.png](https://image.3001.net/images/20200305/1583390077_5e609d7d118b8.png!small)  
+
+下载cc下发的模块，经过处理后设置内存页属性，并启动。
+
+![图片.png](https://image.3001.net/images/20200305/1583390086_5e609d86d3532.png!small)  
+
+我们在研究Fluxwire使用手册时，其确实是支持在内网下做更多模块下发，并且有的还支持命名管道的通信方式。由于缺乏必要的证据链，我们暂时无法猜测该模块和Node的更多关联性。
+
+##  **Gray Lambert**
+
+我们找到了几个样本和卡巴报告中的Gray Lambert相似，由于暂未和CIA已知项目联系起来，所以这里延续卡巴的命名。
+
+###  **Loader模块**
+
+poolstr.dll是一个服务启动的dll，其可以由winhttp32模块启动。
+
+![图片.png](https://image.3001.net/images/20200305/1583390101_5e609d95cb490.png!small)  
+
+其首先会读取资源，并解密。原始资源和解密后的字符串如下。
+
+![图片.png](https://image.3001.net/images/20200305/1583390107_5e609d9bdf728.png!small)  
+
+![图片.png](https://image.3001.net/images/20200305/1583390112_5e609da079118.png!small)  
+
+通过访问注册表的SYSTEM\CurrentControlSet\Services，这里应该是利用的lanmanserver，并写入Parameters下的ServiceDll。
+
+![图片.png](https://image.3001.net/images/20200305/1583390118_5e609da6acafb.png!small)  
+
+  
+
+接下来动态获取文件相关API，分配内存，并创建线程
+
+![图片.png](https://image.3001.net/images/20200305/1583390138_5e609dba72e66.png!small)  
+
+从上述来看该dll应该是主要维持持久化的。
+
+###
+
+###  **另一个Loader模块**
+
+msapi32.dll同样是一个服务dll。其有两个资源文件：
+
+![图片.png](https://image.3001.net/images/20200305/1583390144_5e609dc0b8be7.png!small)  
+
+在线程中首先解密两个资源，1024资源是解密释放文件的路径：
+
+![图片.png](https://image.3001.net/images/20200305/1583390150_5e609dc622a7f.png!small)  
+
+然后从1023资源解密tlb文件，并写入目标路径，最后将其运行。
+
+![图片.png](https://image.3001.net/images/20200305/1583390155_5e609dcb4bdd4.png!small)![图片.png](https://image.3001.net/images/20200305/1583390161_5e609dd163b86.png!small)  
+
+我们在一个主机上看到poolstr.dll和msapi32.dll几乎同时存在，我们推测poolstr是用来持久化运行msapi32.dll的。
+
+###
+
+###  **Payload模块**
+
+mwapi32是一个网络流量监控和过滤模块，是由msapi32.dll从资源释放加载。
+
+其首先尝试通过驱动获取过滤的流量。该dll会从下图的注册表项获取Description值，其中存储的是驱动注册的文件名，从而实现和驱动的通信。
+
+![图片.png](https://image.3001.net/images/20200305/1583390172_5e609ddc2481e.png!small)  
+
+若不存在对应驱动，那么其采用Windows的ETW机制来实现网络流量的过滤。其会启动ndiscap服务。
+
+![图片.png](https://image.3001.net/images/20200305/1583390180_5e609de4100ab.png!small)![图片.png](https://image.3001.net/images/20200305/1583390185_5e609de986354.png!small)  
+
+接着通过etw机制对网络日志进行监控。
+
+![图片.png](https://image.3001.net/images/20200305/1583390195_5e609df3af123.png!small)  
+
+其注册的监控session名为“K432ISD”加上一个UUID字符串。
+
+![图片.png](https://image.3001.net/images/20200305/1583390201_5e609df93a33e.png!small)  
+
+##  **White Lambert**
+
+在分析过程中，我们发现了多个样本与卡巴披露的White Lambert类似，其包含一个用户态dll和NDIS过滤驱动。
+
+###  **用户态模块**
+
+该样本为一个dll，其导出函数如下所示，其主要功能在DllMain中，该样本最终加载一个驱动。可以看到部分导出名同样以数字序号的形式存在。
+
+![图片.png](https://image.3001.net/images/20200305/1583390207_5e609dff59364.png!small)  
+
+DllMain中开启新线程以执行主要的功能。
+
+![图片.png](https://image.3001.net/images/20200305/1583390214_5e609e0684fc6.png!small)  
+
+样本中的主要字符串经过加密，加密算法如下，前四字节中保存了xor 后的长度，之后按4字节一个block的模式进行解密。
+
+![图片.png](https://image.3001.net/images/20200305/1583390220_5e609e0c608cb.png!small)  
+
+之后从中解密出两个驱动，并分别加载，其中驱动的加密方式和字符串一致，并通过RtlDecompressBufferat解压缩，相关驱动的信息保存到一段名为var_Driverinfo的内存中，其中第一个加载的驱动应该是一个测试驱动，第二个驱动才是真正的恶意代码。
+
+![图片.png](https://image.3001.net/images/20200305/1583390227_5e609e1373981.png!small)  
+
+var_Driverinfo格式如下所示
+
+![图片.png](https://image.3001.net/images/20200305/1583390233_5e609e192b804.png!small)  
+
+之后设置对应的服务注册表，并通过函数NtLoadDriver将对应的驱动加载运行起来。
+
+可以看到第一个驱动为speedfan.sys，第二个驱动为UNC.sys。
+
+![图片.png](https://image.3001.net/images/20200305/1583390238_5e609e1eb96e9.png!small)  
+
+可以看到speedfan实际上是一款系统监控相关的软件。
+
+![图片.png](https://image.3001.net/images/20200305/1583390244_5e609e24bbd13.png!small)  
+
+Speedfan.sys入口如下，简单创建了一下设备及对应的设备链接，对应的MajorFuncton中的dispatch函数也只是针对系统层的调用返回一些参数，因此这个地方猜测其作用应该是作为第一个驱动先加载，以确保其能正确加载起来，再加载之后的恶意驱动。
+
+恶意驱动如下所示，加载之后首先同样是通过和之前一致的算法在配合RtlDecompressBufferat解压出最终的驱动，并寻址到入口并调用。
+
+###  **驱动模块**
+
+这个驱动似乎并不能通过osr driverloader的方式进行加载，因此推测其应该有自己实现的加载器。
+
+![图片.png](https://image.3001.net/images/20200305/1583390252_5e609e2cd1786.png!small)  
+
+这个驱动本身是一个加载器，解密出的内容是一个pe文件，其同样是个驱动。
+
+后续解密的驱动是一个通过ndis流量过滤的rookit，通过过滤指定的cc流量以实现具体的功能，函数首先通过fun_Searchndissys确保系统中存在ndis.sys驱动，之后在函数fun_NdisRegisterProtocol中通过ndis注册了一个自有的协议，通过这个的回调来过滤对应网卡中的流量数据。
+
+![图片.png](https://image.3001.net/images/20200305/1583390258_5e609e328641e.png!small)  
+
+如下所示，fun_NdisRegisterProtocol中实际调用的是NdisRegisterProtocol，该函数用于注册一个自有的协议，其中的第三个参数中包含了对应的协议回调函数，这里奇怪的是这些回调函数似乎都没有实现，其中包含最终重要的ReceiveHandler（表示网卡收到数据时，会把对应的流量传入到该回调函数中），这里需要注意的是，攻击者注册的自有协议名为“KAPERSKY”与卡巴斯基名称kaspersky仅一字之差。这个函数最后将NdisRegisterProtocol注册成功之后的ndis句柄给返回了。
+
+![图片.png](https://image.3001.net/images/20200305/1583390265_5e609e39a8ace.png!small)  
+
+前面说到自有协议在实现的时候并没有设置回调函数，但是事实上并非如此，通过返回的ndis句柄直接在内存中搜索对应的TCPIP字段，然后将其中的内存地址替换成具体的函数，这里猜测，应该是通过ndis句柄的方式搜索回调函数在内存中的位置，并手动替换（因为驱动本身是在内核中，因此是可以通过一个句柄搜索到具体的回调对象中函数指针的位置的）。
+
+![图片.png](https://image.3001.net/images/20200305/1583390271_5e609e3f3e92c.png!small)  
+
+通过流量过滤出攻击这个特殊流量，解析之后通过va_Dispitchtable调用指定的处理函数，如下所示可以看到THIS_IS_OUR_EOF，这句话的意思就是“这是我们的流量”
+
+![图片.png](https://image.3001.net/images/20200305/1583390278_5e609e4662bc6.png!small)  
+
+整个样本支持的功能如下所示：
+
+指令| 含义  
+---|---  
+Copy| 拷贝文件  
+Move| 移动文件  
+Rename| 修改文件名  
+Info| 获取系统信息  
+Exit| 设置退出标记  
+Close| 同上  
+Quit| 同上  
+Uninstall| 卸载该驱动  
+Ndisls| 列举自有协议信息  
+Dir| 列目录  
+Ls| 同上  
+Pwd| 获取当前目录  
+Cd| 切换目录  
+touch| 创建文件  
+del| 删除文件  
+rm| 同上  
+Rmdir| 删除目录  
+Mkdir| 创建目录  
+Cat| 查看文件  
+Type| 同上  
+view| 同上  
+Ps| 列举进程  
+lsmod| 加载驱动  
+Kill| 关闭进程  
+Fexec| 文件执行  
+bexec| 脚本执行  
+Close| 文件句柄关闭  
+of| 打开文件  
+cf| 关闭文件句柄  
+rf| 读文件  
+wf| 写文件  
+  
+##  **Backdoor.Trojan.LH1**
+
+我们结合Twitter上一条相关推文进行扩展。
+
+![图片.png](https://image.3001.net/images/20200305/1583390288_5e609e50d4d8e.png!small)  
+
+根据该推文的线索进行拓展，我们发现其中一个样本被检出为LH1，即为赛门铁克报告中提到的一类后门。
+
+![图片.png](https://image.3001.net/images/20200305/1583390295_5e609e57bb18c.png!small)  
+
+其注册为BiosSrv服务运行。
+
+![图片.png](https://image.3001.net/images/20200305/1583390301_5e609e5d2fc89.png!small)  
+
+主体逻辑通过创建线程执行，并且随机休眠一段时间。
+
+![图片.png](https://image.3001.net/images/20200305/1583390315_5e609e6b54a16.png!small)![图片.png](https://image.3001.net/images/20200305/1583390319_5e609e6fd8577.png!small)其首先从资源当中提取C2和PFX证书信息，其中101为PFX证书，102为域名。
+
+![图片.png](https://image.3001.net/images/20200305/1583390342_5e609e86f3a73.png!small)  
+
+PFX证书导出key为空，通过“opensslpkcs12 -in 1.pfx -out 1.key”命令导出其中的证书和私钥信息。
+
+![图片.png](https://image.3001.net/images/20200305/1583390349_5e609e8d484a7.png!small)  
+
+然后获取主机信息，包括Mac地址，计算机名，以及当前用户。
+
+创建注册表SOFTWARE\\\BiosInnovations，生成用户UUID，该UUID会作为标识并用于后续HTTPS通信头部的X-MV-Host字段。
+
+该模块与远程服务器域名进行HTTPS通信，并接收如下指令：
+
+ **控制命令**|  **功能描述**|  **相关网络行为**  
+---|---|---  
+  
+|  初始行为，获取指令| GET /agent/checkin  
+ **get-scanner**|  获取扫描模块| GET /agent/get-scanner  
+ **run-scanner**|  运行扫描模块，并回传扫描结果| POST /agent/put-scan回传扫描结果  
+ **exfil-file**|  压缩并回传文件| POST /agent/put-file上传文件  
+ **destroy-agent**|  销毁|  
+  
+  
+##  **Green Lambert**
+
+Green Lambert为可执行文件，并且与LP（Listening Post）通信。其也是唯一一个目前发现同时存在Windows版本和Mac版本的项目。
+
+###  **Windows版本**
+
+该样本为一个exe，通过分析之后发现这个样本的主要功能用于和远端的LP进行连接设置，同时具备浏览器相关凭据窃取及模块加载的功能。
+
+代码的入口如下所示，首先通过函数fun_Init进行初始化，之后创建一个服务运行之后的主流程，服务名为smcsrv。
+
+![图片.png](https://image.3001.net/images/20200305/1583390359_5e609e977aa43.png!small)  
+
+该样本中fun_init的操作中做了很多有意思的操作。
+
+![图片.png](https://image.3001.net/images/20200305/1583390367_5e609e9f3144d.png!small)  
+
+首先在fun_getallstr中一次解密出大量之后使用的字符串。
+
+之后在fun_Getconf中解密出对应的配置文件，其中可以看到远端的LP配置。
+
+在fun_InitfunBlock中按功能函数地址+功能字符的格式将对应的功能函数保存到一块内存中，如下所示可以看到其主要功能是设置对应的LP及简单的模块装载功能，其实现的指令集比Black
+Lambert少一些。
+
+![图片.png](https://image.3001.net/images/20200305/1583390375_5e609ea76360d.png!small)  
+
+和LP通信，首次连接主要通过.login.php及getconf.php做登陆及配置文件更新的操作。
+
+通过getfile.php下载后续攻击代码。
+
+![图片.png](https://image.3001.net/images/20200305/1583390381_5e609eaddaf6c.png!small)  
+
+通过upload2.php上传相关数据。
+
+![图片.png](https://image.3001.net/images/20200305/1583390387_5e609eb3b840d.png!small)  
+
+同时该样本通过访问signons.sqlite文件获取firefox相关的凭据，需要注意的是firefox从2017年之后就将相关的文件由signons.sqlite变成logins.json。
+
+![图片.png](https://image.3001.net/images/20200305/1583390393_5e609eb983f8c.png!small)  
+
+通过pstorec.dll的PStoreCreateInstance函数来提取IE凭证信息。
+
+![图片.png](https://image.3001.net/images/20200305/1583390399_5e609ebf98b02.png!small)  
+
+使用guid “abe2869f-9b47-4cd9-a358-c22904dba7f7”解密保存的IE密码。
+
+![图片.png](https://image.3001.net/images/20200305/1583390406_5e609ec69c3d4.png!small)![图片.png](https://image.3001.net/images/20200305/1583390412_5e609eccb4487.png!small)  
+
+如下所示可以看到该样本中生成的函数结构体和BlackLambert也是完全一致的。
+
+![图片.png](https://image.3001.net/images/20200305/1583390423_5e609ed7c8b6e.png!small)  
+
+####  **早期版本**
+
+我们还发现一个dll版本，其中的配置文件没有加密，猜测是早期的版本。
+
+提取所有Windows版本的GreenLambert如下所示，第一列为配置文件中提取的样本id，其中红色的版本在卡巴的文章中出现过，而其他的版本则是之前未知的，这里猜测其每一个样本在攻击的行动中设定了特定的代号。
+
+![图片.png](https://image.3001.net/images/20200305/1583390429_5e609edd7ca86.png!small)  
+
+###  **Mac OSX版本**
+
+Green Lambert存在一个Mac OSX版本。
+
+其导出表中可以看出存在诸多初始化执行的方法，其会在main函数前执行。其主要用于初始化一些功能函数指针和参数。
+
+![图片.png](https://image.3001.net/images/20200305/1583390434_5e609ee26b4eb.png!small)  
+
+例如这里将对应的函数指针添加到一个链表中，保存在全局的指针中。
+
+![图片.png](https://image.3001.net/images/20200305/1583390441_5e609ee96846b.png!small)![图片.png](https://image.3001.net/images/20200305/1583390445_5e609eedf0e0a.png!small)  
+
+可以看到这里有个版本号信息
+
+![图片.png](https://image.3001.net/images/20200305/1583390453_5e609ef5e810c.png!small)  
+
+这里对20个InitFunc的接口功能进行总结：
+
+函数名| 功能  
+---|---  
+InitFunc_0| 获取版本信息  
+InitFunc_1| 通过/etc/init.d和/etc/rc.d写入ConfigInitdFile维持持久化  
+InitFunc_2| 通过写入多种shell的配置文件维持持久化  
+InitFunc_3| 通过写入XSession相关配置文件维持持久化  
+InitFunc_4| 从代理URL中解析网络代理  
+InitFunc_5| URL相关解析  
+InitFunc_6| 常量赋值  
+InitFunc_7| 生成UUID  
+InitFunc_8| 从系统环境变量获取代理配置  
+InitFunc_9| HTTP通信函数初始化  
+InitFunc_10| HTTP通信接口函数  
+InitFunc_11| HTTP代理函数初始化  
+InitFunc_12| 本地环回接口处理  
+InitFunc_13| TCP通信函数初始化  
+InitFunc_14| 密钥链访问，实现HTTP协议的登录访问  
+InitFunc_15| API获取系统代理配置  
+InitFunc_16| 使用LoginItem维持持久化  
+InitFunc_17| 使用StartupItems维持持久化  
+InitFunc_18| 使用LaunchAgent维持持久化  
+InitFunc_19| 获取home路径下配置文件获取代理配置  
+InitFunc_20| SSL通信函数初始化  
+  
+main函数中会解析传入的启动参数：
+
+![图片.png](https://image.3001.net/images/20200305/1583390462_5e609efe06376.png!small)  
+
+####  **字符串解密算法**
+
+样本中所有字符串均被加密：
+
+其中第一个字符通常为0，第二个字符为待解密字符串长度，第三和第四字符计算成xor key，从第五个字符起为加密字符串。
+
+###  **关联和归属**
+
+Green Lambert的Windows和Mac OS版本使用了几乎完全一样的字符串解密函数版本。
+
+![图片.png](https://image.3001.net/images/20200305/1583390495_5e609f1f7606d.png!small)![图片.png](https://image.3001.net/images/20200305/1583390502_5e609f26519cc.png!small)  
+
+  
+
+而Windows版本中解密的配置脚本的id字段和卡巴斯基文章提到的是一致的，因此确定这一系列的样本为Green Lambert。
+
+![图片.png](https://image.3001.net/images/20200305/1583390508_5e609f2c4bd94.png!small)  
+
+##  **其他**
+
+在分析中，我们还发现一些与CIA网络武器相关的样本文件，但暂时未发现其与上述网络武器之前的相互关系。
+
+###  **Stolen Goods**
+
+####  **简介**
+
+Stolen
+Goods是CIA用来实现持久性的一个项目，其用于持久化Grasshopper安装器和Shellterm的shellcode注入程序。其涉及的一些文件如下，我们找到了其中一个内存加载模块的样本。
+
+####  **内存加载模块**
+
+从Stolen Goods文档中发现有个样本命中。从文档上得知其应该是内存加载器。其首先动态获取底层文件读写API：
+
+![图片.png](https://image.3001.net/images/20200305/1583390518_5e609f36cb706.png!small)  
+
+然后物理读写文件
+
+![图片.png](https://image.3001.net/images/20200305/1583390527_5e609f3f70744.png!small)![图片.png](https://image.3001.net/images/20200305/1583390531_5e609f438ab14.png!small)  
+
+读取文件后，计算其sha256值
+
+![图片.png](https://image.3001.net/images/20200305/1583390547_5e609f53040ca.png!small)  
+
+将生成的sha256格式化为以下字符串的驱动路径，然后和其通信。
+
+![图片.png](https://image.3001.net/images/20200305/1583390555_5e609f5b3f5a9.png!small)  
+
+然后从自身文件句柄中查找843和304号资源，并解密。但在这个dll中并未看到对应的资源文件。
+
+![图片.png](https://image.3001.net/images/20200305/1583390561_5e609f614f363.png!small)  
+
+最后将其加载到内存中。
+
+![图片.png](https://image.3001.net/images/20200305/1583390567_5e609f6731b72.png!small)  
+
+#  **控制基础设施**
+
+从维基解密披露文档我们得知CIA用于控制基础设施部署的项目名为HIVE，其由EDB部门所开发。下图是我们根据泄露的HIVE资料对其内部说明设计图进行了部分备注。
+
+HIVE分为3个部分，implant，LP和CC。
+
+其中Blot为隐藏的服务器。Honeycomb是植入物的行动管理网关。
+
+其通信逻辑为：
+
+1.选择一个看似正常的域名（coverdomain）和商用VPS服务，其上安装组件。VPS服务器连接Blot；
+
+2.正常用户访问时，由于开启了可选验证标记（其利用了一个特殊的HTTPS服务选项“Optional Client
+Authentication”），则不验证并定向到CoverServer；
+
+3.植入物访问时，会访问Honeycomb。
+
+![图片.png](https://image.3001.net/images/20200305/1583390574_5e609f6e0fbe0.png!small)  
+
+在实际的分析中，我们在LH1和Green
+Lambert中确实发现了implant中存在和LP通信的证据，并且在LH1中还利用了证书pinning来实现和远程的HTTPS通信。
+
+我们对LH1中涉及的域名进行历史注册情况查询，可以发现该域名在2014年7月被注销，推测是否和相关活动被曝光有关：
+
+![图片.png](https://image.3001.net/images/20200305/1583390580_5e609f747f86f.png!small)  
+
+#  **攻击链**
+
+我们结合上述分析按照攻击链绘制了相关网络武器的利用过程和关系，并对其TTP进行横向对比。
+
+  
+| Execution| Credential Access| Lateral Movement| Persistence|
+Exfiltrate/Monitor| Command and Control| Evasion  
+---|---|---|---|---|---|---|---  
+Athena(Black Lambert)| Y|  
+| Y| Y|  
+|  
+| Y  
+Fluxwire Node| Y|  
+|  
+|  
+|  
+| Y| Y  
+Gray Lambert| Y|  
+|  
+| Y| Y|  
+| Y  
+White Lambert| Y|  
+|  
+|  
+| Y|  
+| Y  
+LH1| Y|  
+|  
+|  
+| Y| ![3f40e729-b255-49ea-ab14-4c88e4d3b370.png](https://shanghai.lx.qianxin.com/bsafe/3f40e729-b255-49ea-ab14-4c88e4d3b370.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=RORI4SUJR6CTECQDOGNE%2F20200305%2Fshanghai%2Fs3%2Faws4_request&X-Amz-Date=20200305T061006Z&X-Amz-Expires=3600&X-Amz-SignedHeaders=host&X-Amz-Signature=d4589543fc0334e583f598322b2c6fd1642edea987640c2aef4aff37f6e44194)Y|
+Y  
+Green Lambert| Y| Y|  
+| Y| Y| Y| Y  
+Stolen Goods| Y|  
+|  
+| Y|  
+|  
+|  
+  
+  
+#
+
+#
+![图片.png](https://image.3001.net/images/20200305/1583390594_5e609f823e2a5.png!small)  
+ ****
+
+#  **总结**
+
+奇安信威胁情报中心红雨滴团队对CIA网络武器库中相关Implant进行了复盘分析，并基于公开报告和内部威胁情报数据对其进行了分类和攻击链的还原尝试。虽然部分环节依旧存在证据缺失，但我们基本可以结合具体样本和公开泄露资料对CIA网络攻击活动进行更加深入的认识，并找到其留下的痕迹和模式。
+
+如有更多技术细节可以联系奇安信威胁情报中心红雨滴团队。
+
+  
+
+ **IOC**
+
+Hash| Type| First_Seen| Name  
+---|---|---|---  
+8987652f26732607b769247adb4e9cce| Win32 DLL| 2019/11/5 7:10|  
+  
+82e950a2caf7844cc305c94ad1cc1288| Win32 DLL| 2019/10/8 9:04|  
+  
+5dbdade5d72feca45c6bc08f05d9bdb0| Win32 DLL| 2019/10/8 9:02|
+5dbdade5d72feca45c6bc08f05d9bdb0.virobj  
+7260cd78fbe583da47f992fca5bb4137| Win32 DLL| 2019/10/8 8:52|  
+  
+b76e8611057d9607c6ce0acc0ba4de2b| Win32 DLL| 2019/10/8 8:48|  
+  
+79e263f78e69110c09642bbb30f09ace| Win32 DLL| 2019/10/6 15:07|  
+  
+41fe4ea8912918cedd6528ab99f3d999| Win32 EXE| 2019/6/21 12:57| MasStoDb.EXE  
+42793c3ed137f999b525b1020b52d432| Win32 EXE| 2019/6/20 8:38| aaa.exe  
+7397a01c220392444ed3b81d6a6c8fa3| Win32 EXE| 2019/6/20 8:34| netqps.exe  
+1a27ba4f541d3f6066c90822f9f25e9f| Win32 DLL| 2019/6/19 10:27| avcnet  
+99b9a986f92c0720414cedb3c3d17a0d| Win32 EXE| 2019/3/12 21:14|  
+  
+517d86f7f494a9d7f2405020b44521eb| Win32 DLL| 2019/3/12 13:41|
+94c9400a7c092d39b053b98d3fb9b241ebd40d820894fa0aaf806d5f813eba06_dump_0x00bb0000_reconstructed  
+33118348b533434a995e477a6aa9b9a9| Win32 EXE| 2018/11/20 23:05|  
+  
+4a16643a1c0ddb03f4833d28f80edcad| Win32 EXE| 2018/10/6 18:42|
+6790ef2b47a8a05ff4c2942b024f9895da30739253f4e5d5ef1897642289b7fc.sample  
+4dcd011b08ff854b3789c3188b8ee95b| Win32 EXE| 2018/7/24 14:29|
+2cba711f579dec2caaac188db6c22bb2cc83251449a11bfc34112d6f3112b86a.sample  
+853c44d5408781395f3ac65e768f7e65| Win32 EXE| 2018/4/11 13:33|
+30b11cd15d64c7a8c21c5173e806cd1b53736dda03cd67037a5401e96afae6f8.sample  
+672351dee7f6a05f0ed60dc72b95988a| Win32 DLL| 2018/3/19 1:08| dump.dll  
+628b3aa25724b00ea995b43dc2bc7ce2| Win64 DLL| 2018/2/1 13:36| rsasusb  
+cb434677126a06ce6eb66c4aedf98bfe| ZIP| 2017/11/19 5:13|
+83779b1230fe8e4ca6878b9944f85b873eb5fe6e  
+41575fc8e178672d3f53714cdcbbaf02| Win32 DLL| 2017/11/16 4:35| decoded.bin  
+dd8c03517abc9760d662ad51555f030b| Win32 DLL| 2017/11/2 4:36| avcnet  
+42f43edc9937e4aa5f985773f5ea9daa| Win32 DLL| 2017/10/27 6:29| avcnet  
+8eb5c5ed448288ee3b7536f571284631| Win32 EXE| 2017/6/4 2:00|  
+  
+6c466283e7f8757973ba253aa6080d8c| Win32 EXE| 2017/4/26 8:26| MasStoDb.EXE  
+6d1e003143b5a5b6cc3cba9c5433c07a| Win32 EXE| 2017/4/26 8:25|
+6d1e003143b5a5b6cc3cba9c5433c07a.virus  
+2a8d9b5c18d314a36e7ef82f0ac3635e| Win32 DLL| 2017/4/8 9:55|
+425bbe7020fc443a8311099c2b74b1c6419700317603aae73988adb4113a8bff.bin  
+d6f6ffd201709e4f03cef21b1fec5f25| Win32 EXE| 2017/4/8 9:48| ColoredLambert  
+99ef1e473ac553cf80f6117b2e95e79b| Win32 EXE| 2017/4/8 9:42| MasStoDb.EXE  
+a4863fcea90680a474a6eaa1e790ace5| Win32 EXE| 2015/10/11 15:31| gpisrv.exe  
+c55a70c3413818cb5be7913002c1c486| Win32 DLL| 2015/1/17 13:43|
+c55a70c3413818cb5be7913002c1c4861228183841593167392.tmp  
+f0b812de90184e91ce2ec056e7ef3279| Mach-O executable| 2014/9/3 12:16|
+GrowlHelper  
+c60b4b5f0e6982787c204aa169c65b8b| Win32 DLL| 2014/8/20 15:26| hdmsvc.dll  
+03bc7a8584fadeceb3d948304b531c3f| Win32 DLL| 2014/8/15 13:10| plasrv.dll  
+683afdef710bf3c96d42e6d9e7275130| Win32 EXE| 2014/8/14 12:30|
+683afdef710bf3c96d42e6d9e7275130.virus  
+74e94cd60ba77069ed9c4d43845739b3| Win32 EXE| 2014/7/24 20:23| netqps.exe  
+52d750ab9e557cf4f358a63593be6e99| Win64 DLL| 2014/7/21 14:27| aec6260  
+21a5d5f7ec429822a3caf3ed782bf787| Win32 EXE| 2013/12/15 6:07| file  
+116f4e1288862c4f8714e133cf45a1e8| Win32 DLL| 2013/12/14 22:17| file  
+459f8181e7fbaa0e1bf86c15f97de0ba| Win32 EXE| 2013/12/14 22:05| PassSafePkg.exe  
+d857d7e49324a67bbf3e0f845a273a19| Win32 EXE| 2013/9/17 19:50| vixmgr.exe  
+5f060940b231db5ba3fff4cb12abb7f7| Win32 EXE| 2012/6/11 14:46|
+e7591998e01cc0bea4643f9c743114b3dcffcb3513b89ed57863f396aeefcce4.vir  
+7bfa16de414bdd6e02aeb9c5f1fbc586| Win32 DLL| 2012/3/2 22:06| tmC.tm_.rew  
+5b92b64e41353ecf11ddd908d365ad45| Win32 DLL| 2011/9/12 20:37|
+0000000000002A1D[9830]  
+0ca4f3e99e9a6f834bf6eaf8209a8147| Win32 DLL| 2011/8/26 10:36| mdmm  
+452d86e050ad691dfc46a7abc0ef8a2f| Win32 EXE| 2011/8/9 17:42| LaNz7Znr  
+9935a4541edeb6dd8f0bafff6bc322b9| Win32 EXE| 2011/1/14 23:05|
+/local/sarvam/repo/repo_02/9935a4541edeb6dd8f0bafff6bc322b9  
+b84f2b6fea1550f49109fabf0c396b54| Win32 EXE| 2010/3/17 7:59|  
+  
+ba38a75f6b2669098710b56afdf1d7d1| Win32 EXE| 2009/12/2 14:17| dlcsvc  
+e0127cc8567b0d8d8bb6d205a258283b| Win32 EXE| 2007/2/6 12:38| hiddrv.sys  
+1a9e2265495978d05023ffb33c656e5b| Win64 EXE| 2020/2/13 10:08| shelldri  
+bc9813cab225aebe39776efb7c342495| Win64 EXE| 2020/2/10 19:41|
+UNC1832.sys_cb0a0f2dbe26cca92eb08083e1705c68.bin  
+  
+ **关于APT Digital Weapon项目**
+
+项目相关的信息均来自红雨滴团队内部日常运营分析所发现关联的APT团伙IOC以及公开报告涉及的IOC信息，且仅提供在VirusTotal上存在实体样本文件的HASH及相关信息。IOC详细内容位于GitHub的APT_Digital_Weapon资料库（
+**<https://github.com/RedDrip7/APT_Digital_Weapon>**
+），目前已包含超过150个团伙或战役的条目。主要由APT组织（比如：海莲花、方程式、APT28等）、相关行动（比如：Operation
+Dustysky），以及部分有较大影响范围的网络犯罪团伙（比如：TA505、MageCart等）组成，共接近两万个文件Hash
+IOC条目，可能是目前为止最为全面的APT数字武器***息源。
+
+![图片.png](https://image.3001.net/images/20200305/1583390615_5e609f977af14.png!small)  
+
+对每个ATP组织，我们均提供了简短描述，有助于快速了解该组织的背景、历史活动及影响范围。由于安全厂商对同一APT组织命名可能有所不同，在别名一节加入了APT组织的其它名称，以便不同背景的用户更好的进行对应。最后的参考引用可让用户快速查看更多的详细报告：
+
+![图片.png](https://image.3001.net/images/20200305/1583390624_5e609fa051f92.png!small)  
+
+在对应的IOC页面，列举了APT组织武器库样本的HASH、类型、家族等信息，有助于用户识别来自该APT组织的具体威胁并采取对抗缓解措施。点击样本HASH后，可跳转至对应的VirusTotal页面，以快速查看与该样本相关的更多细节：
+
+![图片.png](https://image.3001.net/images/20200305/1583390630_5e609fa6a2f9d.png!small)![图片.png](https://image.3001.net/images/20200305/1583390637_5e609fad3263b.png!small)  
+
+奇安信威胁情报中心红雨滴团队将持续关注全球范围内发生的APT、高级威胁、网络犯罪等网络安全事件，并同步更新APT Digital
+Weapon资料库里的相关IOC信息。我们将会长期维护、更新该项目，并希望以此为安全社区贡献一份微薄之力，也希望社区提出意见和建议，可随时联系
+ti_support@qianxin.com 反馈，共同完善对于APT攻击的拼图。
+
+​  
+
+#  **参考链接**
+
+1.<https://www.symantec.com/connect/blogs/longhorn-tools-used-cyberespionage-group-linked-vault-7>
+
+2.<https://securelist.com/unraveling-the-lamberts-toolkit/77990/>
+
+3.<https://www.forbes.com/sites/thomasbrewster/2018/03/09/cia-russian-hackers-on-same-china-server-says-kaspersky/#304658659a30>
+
+4.<https://wikileaks.org/vault7/>
+
+5.<https://wikileaks.org/ciav7p1/>
+

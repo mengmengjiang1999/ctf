@@ -1,0 +1,143 @@
+## **漏洞概述**
+
+VMware Tools没有正确的检查客户端请求的授权，导致包含一个本地权限提升漏洞，可以使虚拟机中的计算机账号由非管理员权限提升到管理员权限。
+
+##  **影响范围**
+
+ **Windows：**
+
+vm-tools：12.x.y，11.x.y 和10.x.y
+
+ **Linux：**
+
+open-vm-tools：12.x.y，11.x.y和10.x.y
+
+vm-tools：10.x.y
+
+##  **复现环境**
+
+ **操作系统：**
+
+Win7 sp1 32位操作系统，VMware Tools V11.3.5
+
+ **分析工具：**
+
+IDA、OD、openssl、sigxml、procexp.exe
+
+##  **分析过程**
+
+根据官方公告，该提权漏洞是由VMware Tools导致的。VMware
+Tools是VMware客户机（guest）中安装的一套工具，可以提高虚拟机中安装的客户机操作系统性能并改善虚拟机管理。一般情况下，为了方便虚拟机中的客户机和真实主机（host）之间的交互，都会选择安装该工具。
+
+既然是提权漏洞，应该和VMware
+Tools的高权限程序有关。先使用进程管理工具procexp.exe查看该工具安装后的常驻进程，可以看到与VMware相关的进程，有普通进程vmtoolsd.exe，服务进程VGAuthService.exe、vm3dservice.exe和vmtoolsd.exe，其中服务进程均具有高权限，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053171_63202d73e9bb32a62c52e.png!small)
+
+同时，VMware开源了针对Linux系统的open-vm-tools工具的代码，可以看到，在补丁文件open-vm-tools/vgauth/serviceImpl/proto.c中，增加了对公共管道请求的安全检查，只允许SessionRequest类型的请求通过，初步说明该提权漏洞与请求授权相关。如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053190_63202d865fb70bc3227ce.png!small)根据补丁文件proto.c代码，发现与服务进程VGAuthService.exe相关，该进程的服务名称为VGAuthService，显示名称为VMware
+Alias Manager and Ticket
+Service。首先了解下VGAuthService.exe的大致功能，直接运行查看帮助，该程序的功能是针对VMware的产品，提供SAML令牌和票据身份验证。vm-tools安装后，该程序默认被安装为服务程序，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053206_63202d96b67abf9aca6ce.png!small)
+
+使用IDA打开VGAuthService.exe进行反编译，然后定位到补丁附近的代码。发现补丁代码是在一个名为Proto_SecurityCheckRequest（来自开源代码）的函数内部，该函数负责检查客户端请求的安全性。根据请求的类型，分别进行安全检查，检查通过后再调用对应的处理函数，处理完请求后返回结果，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053223_63202da7424f1fab04376.png!small)
+
+那么究竟是什么请求导致了提权漏洞？
+
+直接查看VGAuthService.exe的导入表和字符串，审计是否有提权相关的函数调用或者字符串。经过查找，发现权限相关的系统函数LsaLogonUser和字符串“SeTcbPrivilege”，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053253_63202dc58a48a901276f8.png!small)![](https://image.3001.net/images/20220913/1663053260_63202dcc35f1236036eda.png!small)
+
+LsaLogonUser函数能够在不需要计算机账号密码的情况下，登录指定账号，登录成功后返回该账号的令牌（token），当然调用该函数的程序需要SeTcbPrivilege权限，该服务程序也拥有此权限。这似乎和提权漏洞密切相关，如果能够控制登录的账号，用管理员的账号登录，再创建指定进程，那么创建的进程将拥有管理员权限。
+
+遗憾的是，该程序里并没有创建进程相关的函数调用。参考open-vm-tools的开源代码以及逆向分析，发现该服务程序会将登录成功后的令牌复制给与自己通信的进程，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053283_63202de32598a23a5fe43.png!small)
+
+这似乎给提权又增加了一丝希望，那么剩下的问题是如何与这个服务程序进程通信，以及是否能控制LsaLogonUser函数的登录账号。
+
+首先分析下如何与这个服务进程通信。可以从代码中看到，该程序中使用了管道“\\\\.\pipe\vgauth-service”进行通信，并且没有权限限制，开源代码中称之为公共通道（public channel），与之相反的还有私有通道（private
+channel）。任何程序均可连接这个公共通道，连接成功后可以发送数据到该服务进程，也可以收到该服务程序返回的数据，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053300_63202df411d265a808f51.png!small)
+
+那么接下来分析如何控制LsaLogonUser函数登录的计算机账号。分析后发现，这个计算机账号来自于请求的数据中，是可以控制的。这个请求的名字为ValidateSamlBToken，对应的处理函数为ServiceProtoValidateSamlBearerToken。
+
+为了控制LsaLogonUser函数登录的计算机账号，需要控制发送的请求数据，也就需要知道请求的数据格式。从处理请求的函数一步步倒着分析，找到读取和解析请求的函数，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053315_63202e037ebb8641c0123.png!small)从字符串比较函数中可以看到请求中的合法关键字，进一步分析发现，这些关键字需要组合成XML格式的请求数据。比如需要调用处理函数ServiceProtoValidateSamlBearerToken，请求的数据格式如下：
+
+    
+    
+    <?xml version="1.0" encoding="UTF-8" ?> <request> <sequenceNumber>【任意数字】</sequenceNumber> <requestName>ValidateSamlBToken</requestName> <samlToken>【samlToken数据】</samlToken> <userName>【计算机用户账号】</userName> <validateOnly>【是否只验证，不返回令牌】</validateOnly> </request>
+    
+
+其中request表示包含请求数据，sequenceNumber表示请求的序号，无校验，可以是任意数字；requestName表示请求的名称，不同的请求名称将调用不同的处理函数；剩下字段是请求的参数信息，不同的请求名称可能需要不同的参数。示例中的userName表示请求的计算机账号，也就是可能传递给LsaLogonUser函数的账号；validateOnly表示是否只验证，不返回Token，比如需要使用认证成功后的令牌，则需要设置该参数为1；samlToken表示认证需要的SAML格式的数据。
+
+如果要获取到返回的令牌，该认证必须要验证通过，要想验证通过则必须要保证SAML数据正确，而且计算机账号必须是存在的。那么问题来了，传递什么样的SAML数据，才能通过这个认证，获取到返回的令牌数据？
+
+那什么是SAML?
+
+SAML是安全断言标记语言（Security Assertion Markup
+Language），是一个基于XML的开源标准数据格式，用于交换身份验证和授权数据，经常应用于WEB系统的单点登录功能。详细的介绍和数据格式等问题读者可以自行搜索，这里主要分析该服务程序验证需要的一些SAML数据。
+
+验证SAML数据的相关函数为SAML_VerifyBearerTokenAndChain。在该函数中，先使用函数VerifySAMLToken验证SAML格式的正确性，然后使用函数ServiceVerifyAndCheckTrustCertChainForSubject对证书和Subject的认证，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053359_63202e2fdc19190514e47.png!small)在函数VerifySAMLToken中，验证SAML格式的正确性。首先要满足SAML格式要求，比如需要有Subject，Conditions等关键字，还要有表示有效时间NotBefore，NotOnOrAfter关键字，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053379_63202e43545762ae81039.png!small)
+
+还需要有X509证书以及签名数据，X509证书可以借助开源工具openssl生成自签名的证书，但签名数据的计算可难住了笔者。在查阅了大量资料和尝试后，终于使用开源的signxml完成了SAML的签名计算，通过了该验证函数。一个有效的SAML数据如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053400_63202e582014bead0ad3b.png!small)
+
+在函数ServiceVerifyAndCheckTrustCertChainForSubject中，会验证请求的计算机账号是否存在，存在后，再读取默认配置情况下的证书存储文件C:\ProgramData\VMware\VMware
+VGAuth\aliasStore\user-【计算机账号】.xml或者C:\ProgramData\VMware\VMware
+VGAuth\aliasStore\mapping.xml的内容，然后和请求的x509证书和Subject字段进行比较，如果相同，则通过验证；否则验证失败，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053435_63202e7b30542e2821a55.png!small)如果VerifySAMLToken和ServiceVerifyAndCheckTrustCertChainForSubject均通过了验证，则进入WinToken_GenerateTokenForUser使用LsaLogonUser登录请求的计算机账号，最后把登录成功的令牌复制给客户端程序，并将令牌数据作为请求的回应消息发送给客户端程序，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053452_63202e8c70ed5b5b063b1.png!small)
+
+到现在为止，已经把可能产生提权漏洞的请求ValidateSamlBToken对应的处理函数ServiceProtoValidateSamlBearerToken分析完毕，是不是就可以利用漏洞了呢？
+
+其实还有一个问题没有解决，那就是上面提到的保存x509证书和Subject数据的两个文件user-【计算机账号】.xml和mapping.xml是如何来的。如果没有这两个文件，认证是会失败的，必然也不会调用LsaLogonUser。那怎么才能产生这两个文件？经过交叉引用分析，这两个文件可以由另外一个请求AddAlias产生，其对应的处理函数为ServiceAliasAddAlias。这个请求的数据格式如下：
+
+    
+    
+    <?xml version="1.0" encoding="UTF-8" ?> <request> <sequenceNumber>【任意数字】</sequenceNumber> <requestName>AddAlias</requestName> <userName>【计算机用户账号】</userName> <addMappedLink>【是否生成xml文件，需要，则设置为1】</addMappedLink> <pemCert>【x509证书】</pemCert> <aliasInfo> <subject>【subject名字，需要与验证请求一致】</subject> <comment>【任意字符】</comment> </aliasInfo> </request>
+
+在这个请求的处理函数ServiceAliasAddAlias中，首先会检查请求的计算机用户账号是否存在，如果存在，则再验证证书格式是否正确，正确后再将证书和Subject数据写入user-【计算机账号】.xml和mapping.xml文件中保存，以便认证时使用，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053489_63202eb1e261f261fabf2.png!small)
+
+到现在为止，可以通过AddAlias请求添加证书文件user-【计算机账号】.xml和mapping.xml文件，然后再发送ValidateSamlBToken请求，认证刚才添加的证书文件，认证成功后使用LsaLogonUser登录，最后获取登录成功后的令牌，完成漏洞利用。
+
+但是还忽略了一个问题，那就是请求中的计算机账号可以任意指定？
+
+虽然请求中的计算机账号是可以控制的，但是别忘了在最开始分析的时候，补丁附近还有Proto_SecurityCheckRequest函数负责检查请求的安全性。在这个函数中，会检查连接是否来自公共通道，也就是是否来自管道“\\\\.\pipe\vgauth-service”，这正是现在使用的管道，如下图所示：
+
+![](https://image.3001.net/images/20220913/1663053507_63202ec334a6f609d77af.png!small)
+
+如果是，则默认认为该连接是不安全的，并设置该管道的拥有者计算机账号为system，然后会增加额外的安全检查，在AddAlias请求的时候，如果请求的计算机账号名不是system，则会请求失败。也就是说目前只能添加system账号的证书数据，但是认证的时候使用LsaLogonUser登录system账号会失败，查询一番后发现不能使用system账号登录，导致漏洞利用失败。
+
+那么怎么利用这个漏洞呢，还有哪些代码没分析清楚，可以导致提权漏洞的呢？
+
+未完待续，敬请期待。
+
+##  **补丁链接**
+
+<https://www.vmware.com/security/advisories/VMSA-2022-0024.html>
+
+##  **参考链接**
+
+<https://github.com/vmware/open-vm-tools/blob/CVE-2022-31676.patch/README.md>
+
+<https://www.vmware.com/security/advisories/VMSA-2022-0024.html>
+
+[原文链接](https://mp.weixin.qq.com/s?__biz=MzkzNjMxNDM0Mg==&mid=2247485348&idx=1&sn=700b30c98292f2253bdf81aa3a73ba8d&chksm=c2a1d32df5d65a3b57f5d7aa1fb72564de6931061ba1eb2e9d005fc941236d61391afa214f42&token=1722037184&lang=zh_CN#rd)
+

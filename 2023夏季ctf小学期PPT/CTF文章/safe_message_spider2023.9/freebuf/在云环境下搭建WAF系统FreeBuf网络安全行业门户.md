@@ -1,0 +1,143 @@
+**0x01 概要**
+
+过去会我们多次去介绍过WAF系统的构成，这次我们将分享一下云WAF具体在云上实施。我们利用云平台提供的容器技术，快速实现一个WAF防护系统。将设计图上的系统落地成实际可运行的系统。现实生产中基于物理机和负载均衡设备，具体设定各种网络配置才能完成的系统，在云环境上实施可以大幅度的降低了系统运维和部署的成本，我们用一个简单的图来画出流量流向，展示我们的系统的大体工作流。
+
+  
+![1.png](https://image.3001.net/images/20181210/1544425498_5c0e101ac421e.png!small)  
+
+ **0x02 WAF又那些基础软件构成？**
+
+上图的重点是流量镜像、docker快速部署、容器的负载均衡。然而如何实现这套系统呢？我们通过在云市场上上架了三款软件，其中两款与我们这次实践息息相关，这两款软件是基础，我们用这两款软件，扩展实现了上面的系统，这两个软件一个是框架LOR，另一个Orange：基于Openresty的应用网关，正是基于这个网关，来搭建我们演示用的WAF系统。
+
+1.Lapis:一款基于Openresty的LUA语言WEB框架。这个框架可以和其它两款一样，做到一键部署到云上，部署后的容器自动安装了Openresty、luarocks、luajit、lapis、moonscript等软件。
+
+  
+![2.png](https://image.3001.net/images/20181210/1544425548_5c0e104c267a0.png!small)  
+
+2.LOR框架：是一款轻量级的WEB框架， 这个框架是Orange网关的基础，Orange正是基于Lor框架的基础上编码实现的。
+
+  
+![3.png](https://image.3001.net/images/20181210/1544425560_5c0e105847b01.png!small)  
+
+3.Orange网关WAF：Orange是一款基于Openresty的网关，提供本文重点核心要使用的一个功能WAF，其实只是网关的一个插件。
+
+  
+![4.png](https://image.3001.net/images/20181210/1544425570_5c0e10621ac5c.png!small)  
+
+ **0x03 流量镜像**
+
+对WAF系统来说，有两个关键的指标：误报率与漏报率。 还有一个就是回退状态的跟踪统计。
+
+漏报率的统计与策略的制定有关系，策略制定的完备性决定了漏报率。
+这个不讨论，还有一个因为升级WAF或是变更策略，可能统计跟踪WAF的功能回退状态。策略的条数是一个积累的过程，如何保证不误拦是我们要考虑的一个问题，基于这种考虑，我们通过对正式环境中的流量进行镜像，再对镜像流量生效策略加以应用测试。WAF在云上都是集群部署的，我们在生产结点和测试结间，通过数据库进行策略的通信和分享，将测试过有效的策略由测试系统推送到生产系统。
+
+  
+![5.png](https://image.3001.net/images/20181210/1544425613_5c0e108d611e5.png!small)  
+
+对于ＨＴＴＰ７层镜像，最简单的工具是Nginx的http-mirror功能，可以用他轻松的做流量镜像，配置也相对简单。
+
+    
+    
+      
+    
+
+location / {
+
+default_type text/html;
+
+mirror /mirror;
+
+mirror_request_body off;
+
+proxy_pass http://lord.applinzi.com;
+
+}
+
+location /mirror {
+
+internal;
+
+proxy_pass http://lapis.applinzi.com$request_uri;
+
+proxy_set_header X-Original-URI $request_uri;
+
+}
+
+ **0x04 负载均衡**
+
+负载均衡用于缓解和并行分解大流量的请求，
+降低用户请求响应的时间。负载均衡实现有很多种，运行模式也有很多种，如果在物理机上搭建成本并不低，在云上的负载均衡部署有时是隐藏出现的，因为云上使用了docker技术，对WAF结点的扩展非常的便利。
+
+  
+![6.png](https://image.3001.net/images/20181210/1544425639_5c0e10a7dcfa8.png!small)  
+
+如果之前是在云商店上直接部署安全了Lapis实例 ，可以在云上将一个容器实例，扩展成你想要Ｎ个实例的结点，这些结点共同承接流量。
+
+  
+![7.png](https://image.3001.net/images/20181210/1544425655_5c0e10b7869f8.png!small)  
+
+如果设置多个实例的话，流量就会将原始的请求负载到不同的实例上，实际当中我们安装了一个Orange应用，但可以克隆运行多个实例，同个源的请求，被多个WAF分担。
+
+  
+![8.png](https://image.3001.net/images/20181210/1544425676_5c0e10ccae3cd.png!small)  
+
+调整实例数据是一件很容易的事。基于这种部署的方式，如果我们的容器不是一般的Openresty实例，而是有具体防护功能的WAF系统，这样由生产环境镜像过来的流量，可以负载到后端的多个WAF容器应用上进行处理，基于这种方式可以快速扩展WAF结点。
+
+ **0x05 WAF的实现方式**
+
+前对于一般的WAF来说，基于Nginx和Openresty实现方式是很流行的，而的扩展功的实现，由可以分成两种：一种就是直接写C扩展，实现有一定门槛，C语言的实现复杂难度要比Lua复杂一些。另外一种方式就是使用Lua扩展写的WAF的扩展功能。
+
+C扩展方式：我们这里只介绍基于Lua的Orange网关WAF，之后会上架一版初版的C版WAF。基于C模块的方式有一点可以先说的是，为了不影响生产环境的正常运行，我们采用把WAF模块编译成.so的方式进行管理，在Nginx、Openresty、tengine中动态进行动态加载。
+
+在编译动态的.so时，基于DSO的方式相对就很方便，Tengine提供了这种方式管理.so，这样如果一个模块发生变更，不会重新编译整Tengine服务,
+Openresty与Nginx类似的技术也是同理。
+
+静态方式的.o文件：
+
+?./configure --add-module=/root/candylab/ngx-http-candylab-module?
+
+动态方式的.so文件：
+
+sudo ./dso_tool -a=/root/candylab/ngx-http-candylab-module?
+
+Lua扩展方式：针对Lua的方式实现，我们也可以将Lua编成.o文件实现WAF的功能扩展，这种在二进制打包WAF功能时具有保密性，对于私用环境来说，直接用明文的Lua文件也可以。
+
+ **0x06 网关型WAF**
+
+Orange是一款网关产品，在他的众多的功能中，WAF是其中的一个子功能，因为在编译Openresty和nginx时加入--with-http_stub_status_module选项，我们可以在orange方便的看到整体镜像流量的状态。
+
+  
+![9.png](https://image.3001.net/images/20181210/1544425709_5c0e10ed8e413.png!small)  
+
+实际我们扩展WAF结点时，
+有这个的控制面板监控方板很方便，可以清楚的知道，各个结点的WAF开启状态，因为云容器技术的便利性，让多结点管理变的很方便，但Orange没有针对多结点时的WAF，提供一个中央控制面板，在一个界面上显示所以结点的状态，这个在后续的使用过程中可以自己定制。
+
+  
+![10.png](https://image.3001.net/images/20181210/1544425731_5c0e110384fc9.png!small)  
+
+进入WAF管理界面，就可以可视化的创建拦截规则。
+
+  
+![11.png](https://image.3001.net/images/20181210/1544425751_5c0e1117df72b.png!small)  
+
+对于Orange来说，说创建一个拦截器过滤器是很方便的事，其它的功能也统一使用了这种配置操作模式，一看就会。
+
+  
+
+  
+![12.png](https://image.3001.net/images/20181210/1544425767_5c0e1127ccb9d.png!small)  
+
+0x07 总结
+
+这篇主要讲如何在云环境下，快速的部署一个容器型的WAF系统，就是依赖之前已经在云商店上上架的WAF应用，并利用云环境下的一键安装部署功能，轻松落地WAF系统。云环境对于一些特定场景的用户来说，运维的成本低，效率高。用于应用站长来说，可以通过架设这么一个拦截系统，对自己的服务进行防护，如果想在非云的环境下部署这套系统也是可以。针对后期的策略推送、结点管理、回退测试，误报率统计等功能，还有很多要做的工作，后续篇幅继续介绍。
+
+三款应用的链接入口：
+
+Lapis框架：[进入](https://market.sinacloud.com/#/dashbord/detail?id=131)
+
+Lor框架：[进入](https://market.sinacloud.com/#/dashbord/detail?id=142)
+
+Orange网关WAF：[进入](https://market.sinacloud.com/#/dashbord/detail?id=143)
+
+  
+

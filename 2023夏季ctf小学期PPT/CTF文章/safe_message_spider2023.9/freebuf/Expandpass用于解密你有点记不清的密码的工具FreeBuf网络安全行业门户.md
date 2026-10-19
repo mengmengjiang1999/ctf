@@ -1,0 +1,381 @@
+**expandpass是一个简单的字符串扩展器，主要用于帮助你破解那些你有点记不清的密码。**
+
+## 简单示例
+
+转换构造如下的种子文件：
+
+    
+    
+    { "apple" "banana" }( "!" "123" )
+
+扩展字符串列表，如下所示：
+
+    
+    
+    apple!123
+    banana!123
+    apple123!
+    banana123!
+
+定义一个种子文件，并将其作为参数传递给expandpass（默认为seed.txt）
+
+    
+    
+    expandpass -i path/to/seed.txt
+
+它将种子的完整扩展输出到stdout，或者你可以使用以下命令定义输出文件
+
+    
+    
+    expandpass -o path / to / output.txt
+
+它也可以以标准的unix-y方式运行（并按预期运行）
+
+    
+    
+    echo '{ "apple" "banana" }[m5]' | expandpass | grep 4
+
+## 参数
+
+> -i input_file：指定用作种子的文件（默认为seed.txt，也接受stdin w/o specification）
+>
+> -o output_file：指定要打印结果的文件（默认stdout）
+>
+> -b＃：指定在打印到输出之前要填充的缓冲区大小（字节）（默认为1M，实验上只要大于~20个字节，就不会影响性能）
+>
+> -f[aA|A|a|#|aA#|@|l] [#]：按属性过滤输出（有关详细信息，请使用--> help查看）。可选数字作为参数，量化要求。expandpass -f# -fa -fA -fl 10
+>
+> -c # [progress_file]：设置将进度保存到进度文件的频率（默认为：never）（“set
+> Checkpoint”）。在将进度写入文件之前将输出＃密码（也可以选择指定；默认值：“seed.progress”）。expandpass -c
+> 1000000 my_seed.progress
+>
+> -r [checkpoint_file]：从可选定义的（默认值：seed.progress）进度文件中恢复。注意 -> 使用其他种子文件创建的进度文件将产生不可预测的结果。expandpass -r my_seed.progress
+>
+> \--estimate
+> [@600000]：打印从给定种子文件生成的密码数的估计值，以及在指定的输出/秒（默认值：600000）通过这些密码进行枚举所需的时间的预测。注意：在处理修改中近似分组长度；容易出错。expandpass
+> --estimate @7000
+>
+> \--unroll＃：指定组大小的临界值（默认为1000; 0 == don't unroll）。
+>
+> \--normalize：打印标准化/优化的种子文件（实际生成时使用）。--unquoted：将无效字符视为单字符串。
+>
+> \--help：显示简单用法菜单。expandpass --help
+>
+> \--version：显示版本。expandpass --version
+
+## SEED（种子）
+
+种子的最基本原子是字符串，使用""指定
+
+种子文件：
+
+    
+    
+    "banana"
+
+输出：
+
+    
+    
+    banana
+
+空字符串可以指定为""，也可以不加引号 -
+ **注意：** 要在字符串中包含"，请用\对其进行转义（例如：“ Hello\"World\"”即
+Hello"World"）。要包含\，同样请用\\\对其进行转义。
+
+下一层是 **Option Group** ，由{}指定
+
+种子文件：
+
+    
+    
+    {
+    "banana"
+    "apple"
+    }
+
+输出：
+
+    
+    
+    banana
+    apple
+
+接下来， **Sequence Group** ，用<>指定
+
+种子文件：
+
+    
+    
+    <
+    "banana"
+    "apple"
+    >
+
+输出：
+
+    
+    
+    bananaapple
+
+最后， **Permutation Group** ，用()指定
+
+种子文件：
+
+    
+    
+    (
+    "banana"
+    "apple"
+    )
+
+输出：
+
+    
+    
+    bananaapple
+    applebanana
+
+然后，作为特殊情况，是用[]指定的修饰符。注意 - 修饰符适用于修饰符之前的分组。（有关语法的详细信息，请参见“MODIFIER”部分）
+
+种子文件：
+
+    
+    
+    "banana"
+    [ s1 "abcdefghijklmnopqrstuvwxyz" ]
+
+输出：
+
+    
+    
+    aanana
+    banana
+    canana
+    ...
+    zanana
+    banana
+    bbnana
+    bcnana
+    ...
+    bananz
+
+所有这些都可以任意嵌套。例如：
+
+种子文件：
+
+    
+    
+    (
+      "Jean"
+      < { "M" "m" } "arry" { "M" "m" } "e" >
+    )
+    "123"
+    [-s1 "0123456789"]
+    {
+    "!"
+    "!!"
+    }
+
+输出：（你可以自己运行它！它已在seed.txt文件中了，输出的行数应该为496行）
+
+ **注意** \- 种子文件在其周围指定了默认的隐式序列组（implicit Sequence Group）<>。
+
+## MODIFIERS（修饰符）
+
+这里有5种类型的修改： **'i'njections** ， **'s'ubstitutions** ， **'d'eletions** ，
+**s'm'art substitutions** 和 **'c'opies** ，我假设每个修改都需要按照自己的路线进行（尽管这不是语法强制的）。
+
+你指定要使用[]修改先前指定的组（或字符串），并指定修改内容。例如，如果我想要“banana”的所有实例，但删除了一个字符，则将其放入种子文件中：
+
+    
+    
+    "banana"
+    [
+    d1
+    ]
+
+这意味着“在该字符串上尝试所有单字符删除”操作，结果为：
+
+    
+    
+    "anana"
+    "bnana"
+    "baana"
+    "banna"
+    "banaa"
+    "banan"
+
+你还可以指定尝试所有单字符替换 - 但要这么做，你还必须定义一个gamut：
+
+    
+    
+    "banana"
+    [
+    s1 "ABC"
+    ]
+
+结果为：
+
+    
+    
+    "Aanana"
+    "Banana"
+    "Canana"
+    "bAnana"
+    ...
+    "bananC"
+
+Injection的结果与之相同：
+
+    
+    
+    "banana"
+    [
+    i1 "ABC"
+    ]
+
+结果为：
+
+    
+    
+    "Abanana"
+    "Bbanana"
+    "Cbanana"
+    "bAanana"
+    ...
+    "bananaC"
+
+Smart Substitution会查看字符并尝试常见的substitutions（而无需定义gamut！）：
+
+    
+    
+    "banana"
+    [
+    m1
+    ]
+    
+    "Banana"
+    "bAnana"
+    "b4nana"
+    "baNana"
+    ...
+
+Copy仅重复前一组n次
+
+    
+    
+    "banana"
+    [
+    c3
+    ]
+    
+    "bananabananabanana"
+
+同样，这些功能的强大之处在于它们的可组合性。最简单的方法是将1递增为2
+
+    
+    
+    "banana"
+    [
+    s2 "ABC"
+    ]
+
+结果为：
+
+    
+    
+    "AAnana"
+    "ABnana"
+    ...
+    "banaCC"
+
+可以组成多种修改类型：
+
+    
+    
+    "banana"
+    [
+    s1d1 "ABC"
+    ]
+    
+    
+    "Anana"
+    "Bnana"
+    "Cnana"
+    "bAana"
+    "bBana"
+    "bCana"
+    ...
+
+ **注意：** 这不能保证完全的唯一性。删除第一个字母并将第二个字母替换为“A”等同于删除第二个字母并替换第一个字母。因此，组合修改可能是多余的。
+
+你也可以在sequence中组合修改：
+
+    
+    
+    "banana"
+    [
+      d1
+      s1 "ABC"
+    ]
+
+结果为：
+
+    
+    
+    "anana"
+    ... (all the deletes)
+    "banan"
+    "Aanana"
+    "Banana"
+    ..
+
+ **注意：** sequence中的新修改用换行符或定义的gamut来描述。因此，可以将先前的种子交替指定为：
+
+    
+    
+    "banana" [ d1 "" s1 "ABC" ]
+
+最后，“null”修改为破折号 -
+    
+    
+    "banana"
+    [
+    -    d1
+    ]
+
+将确保在修改之前先将banana打印为未修改的。
+
+ **注意：** \- 是单一修改（不需要进一步描述）。因此，你可以同样指定"banana"[-d1]
+
+## 性能
+
+基准测试：
+
+    
+    
+    time echo '( "Jean" < { "M" "m" } "arry" { "M" "m" } "e" > ) [m5] "123" [-s1 "0123456789"] { "!" "!!" }' | expandpass | wc -l
+
+最坏的情况（经过多次试验）：
+
+    
+    
+     954800
+    
+    real	0m0.507s
+    user	0m0.500s
+    sys	0m0.020s
+
+在2014 Macbook Air，1.4 GHz Intel Core i5上运行。可以达到~2M lines/s的速度。
+
+ **注意** \- 性能仍有提升的空间。但在我没有找到足够的理由之前，我并不打算把工作重心放到这方面。也就是说，我下一步的计划将是：
+
+> 当迭代发生在其他地方时，为blit缓存supgroup输出。
+>
+> 并行化（Parallelize ）
+>
+> 在适当的位置编辑密码迭代，而不是完全重建密码（将需要适当的重构。可能会导致并行化更加困难）。
+
+***参考来源：[GitHub](https://github.com/Phildo/expandpass)，FB小编secist编译，转载请注明来自FreeBuf.COM**
+

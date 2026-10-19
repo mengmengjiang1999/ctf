@@ -1,0 +1,152 @@
+****
+
+**memtriage是一款Windows内存取证工具。该工具使用[Winpmem](https://github.com/google/rekall/tree/master/tools/pmem/resources/winpmem)来抓取内存dump，并使用[Volatility](https://github.com/volatilityfoundation/volatility)进行分析。**
+
+ **注意事项：**
+
+> 当启用Device Guard时，该工具将无法正常工作；
+>
+> 应该在部署之前在机器上进行测试
+
+## Volatility 插件
+
+以下是当前所支持的插件：
+
+> pslist
+>
+> dlllist
+>
+> ldrmodules
+>
+> modules
+>
+> handles
+>
+> malfind
+>
+> driverirp
+>
+> psxview
+>
+> privs
+>
+> svcscan
+>
+> getsids
+>
+> vadinfo
+>
+> netscan
+>
+> cmdline
+>
+> envars
+>
+> verinfo
+>
+> atoms
+>
+> shimcachemem
+>
+> apihooks
+>
+> procdump
+>
+> dlldump
+>
+> moddump
+>
+> dumpfiles
+>
+> volshell
+
+## 使用示例
+
+    
+    
+    usage: memtriage.exe [-h] [--unload] [--load] [--debug] [--service SERVICE]
+                         [--output OUTPUT] [--dumpdir DUMPDIR] [--base BASE]
+                         [--offset OFFSET] [--memory MEMORY] [--pid PID] [--leave]
+                         [--plugins PLUGINS] [--physoffset PHYSOFFSET]
+                         [--physical] [--ignore] [--regex REGEX] [--name NAME]
+                         [--keepname]
+    
+    Memtriage options:
+    
+    optional arguments:
+      -h, --help            显示帮助信息并退出
+      --unload              卸载驱动程序并退出
+      --load                加载驱动程序并退出
+      --debug               运行时输出调试消息
+      --service SERVICE     更改服务名称（默认为：pmem）
+      --output OUTPUT       输出类型：json/text/csv
+      --dumpdir DUMPDIR     将文件转储到的目录
+                            （dlldump,procdump,moddump,vaddump,dumpfiles）
+      --base BASE           转储PE文件 (dlldump,procdump,moddump)
+      --offset OFFSET       进程物理偏移量
+                            (dlldump,procdump,moddump,vaddump,dumpfiles)
+      --memory MEMORY       Carve作为一个内存样本而不是exe/disk
+                            (dlldump,procdump,moddump)
+      --pid PID             对此进程ID进行操作
+      --leave               让pmem服务与驱动程序一起运行
+      --plugins PLUGINS     以逗号分隔要运行的插件列表：dlldump
+                            netscan cmdline procdump envars moddump handles
+                            dlllist psxview vadinfo dumpfiles svcscan malfind
+                            atoms apihooks volshell vaddump privs driverirp
+                            shimcachemem ldrmodules modules verinfo pslist getsids
+      --physoffset PHYSOFFSET
+                            在物理地址PHYSOFFSET转储文件对象
+                            (dumpfiles)
+      --physical            显示对象的物理地址
+                            (pslist,handles,modules)
+      --ignore              忽略模式匹配中的大小写(dumpfiles,verinfo)
+      --regex REGEX         转储匹配REGEX的文件 (dumpfiles,driverirp,privs)
+      --name NAME           要操作的进程/对象的名称
+      --keepname            保留原始文件名 (dumpfiles)
+      --outfile OUTFILE     合并输出文件 (默认为：stdout)
+
+###  **无需指定配置文件**
+
+Memtriage会自动查找配置文件并选择使用适当的设置运行。如果没有完全匹配，Memtriage将尝试使可用的最接近的命名配置文件。因此，对象定义可能不会准确排列（如进程名称等），在使用不正确的配置文件运行Volatility时也可能会看到。可以将配置文件添加到Volatility代码中，可执行文件将会被pyinstaller重新编译。
+
+###  **加载和卸载驱动程序**
+
+默认情况下，memtriage.exe将在首次运行时尝试加载驱动程序，并在退出时进行卸载。此外，你也可以使用--load和--unload选项来手动加载和卸载驱动程序。你也可以使用--leave选项，使插件在运行完成后仍然保持加载状态。
+
+    
+    
+    > memtriage.exe --leave --plugins=dumpfiles --dumpdir=outdir --physoffset=1066160184 --keepname 
+
+### **服务名称**
+
+创建的默认服务名称是pmem。你可以使用--service=选项来指定其他的服务名称。如果你保持驱动程序加载状态，则必须使用此选项以用于将来的调用。示例：
+
+    
+    
+    > memtriage.exe --leave --service=somename --plugins=dlllist --pid=2924
+    [snip]
+    > memtriage.exe --unload --service=somename 
+
+### **运行插件**
+
+你可以使用--plugins=选项以逗号分隔来指定多个插件一次同时执行。示例：
+
+    
+    
+    > memtriage.exe --plugins=pslist,handles,dlllist
+
+![Memtriage：一款Windows内存取证工具](https://image.3001.net/images/20180802/1533165827_5b624103754c5.png!small)
+
+其他选项：
+
+    
+    
+    > memtriage.exe --plugins=pslist,handles,dlllist,dlldump,dumpfiles,shimcachemem,volshell --outfile=outfile.txt --pid=2924 --dumpdir=outdir --leave --keepname --physoffset=1066160184
+
+## 下载
+
+你可以在这里下载到该工具，包括pyinstaller的独立可执行文件：<https://github.com/gleeda/memtriage/releases>
+
+ ** *参考来源：[github](https://github.com/gleeda/memtriage)，FB小编 secist
+编译，转载请注明来自FreeBuf.COM**
+

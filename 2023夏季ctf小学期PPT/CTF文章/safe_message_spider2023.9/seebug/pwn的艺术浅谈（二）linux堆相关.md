@@ -1,0 +1,449 @@
+**作者：天融信阿尔法实验室  
+公众号：<https://mp.weixin.qq.com/s/CjIsHpPPhVqI69oZT4xEqg>**
+
+这是linux pwn系列的第二篇文章，[前面一篇文章](http://paper.seebug.org/1108/
+"前面一篇文章")我们已经介绍了栈的基本结构和栈溢出的利用方式，堆漏洞的成因和利用方法与栈比起来更加复杂，为此，我们这篇文章以shellphish的how2heap为例，主要介绍linux堆的相关数据结构和堆漏洞的利用方式，供大家参考。
+
+### 0.前置知识
+
+#### 0.0 编译+patch方法
+
+how2heap源码地址<https://github.com/shellphish/how2heap>，为了方便调试编译时使用gcc -g -fno-pie xx.c –o xx。这里先介绍一种linux下patch文件加载指定版本libc的方法，patchelf --set-interpreter
+设置elf启动时使用指定ld.so（elf文件在启动时ld.so查找并加载程序所需的动态链接对象，加载完毕后启动程序，不同libc版本需要不同的加载器，不同版本libc和加载器下载地址<https://github.com/5N1p3R0010/libc-ld.so>，然后patchelf --set-rpath :/ 设置elf启动时加载指定libc。编译+patch示例
+
+![](https://images.seebug.org/content/images/2020/01/c2a60c5b-a4fb-474e-b317-fb8e5b2572d0.png-w331s)
+
+#### 0.1 linux堆管理简图及源码地址
+
+Linux ptmalloc堆内存管理未加tcache机制的一张简图如下，linux
+malloc.c源码地址<https://code.woboq.org/userspace/glibc/malloc/malloc.c.html>
+
+![](https://images.seebug.org/content/images/2020/01/2269a869-1247-4f7c-9456-f101a8015b5e.jpg-w331s)
+
+#### 0.2 linux堆的数据结构
+
+##### 0.2.1堆块数据结构
+
+首先介绍下linux下堆的基本数据结构。
+
+![](https://images.seebug.org/content/images/2020/01/eecf3b97-a19c-4480-bebe-9bbe8da85d71.png-w331s)
+
+各字段含义如下：
+
+0.mchunk_prev_size。当当前堆物理相邻的前一个堆为空闲状态时mchunk_prev_size记录前一个空闲堆的大小，当当前堆物理相邻的前一个堆为占用状态时mchunk_prev_size可用于存储前一个堆的数据。
+
+1.mchunk_size，记录当前堆包含堆头的大小，堆的大小在申请时会进行对齐，对齐后堆的大小为2*size_t的整数倍，size_t为机器字长。mchunk_size的低三比特位对堆的大小没有影响，ptmalloc用它来记录当前堆的状态，三个比特位从高到低依次：
+
+  * NON_MAIN_ARENA，记录当前堆是否不属于主线程，1 表示不属于，0 表示属于。
+
+  * IS_MAPPED，记录当前堆是否是由 mmap 分配的。
+
+  * PREV_INUSE，记录前一个堆是否被分配。
+
+2.fd、bk，堆处于分配状态时，堆结构体偏移fd的位置存储数据；堆处于空闲状态时，fd、bk分别记录物理相邻的前一空闲堆、物理相邻的后一空闲堆，即用于对应空闲链表的管理
+
+3.fd_nextsize、bk_nextsize，large
+chunk处于空闲状态时使用，分别用于记录前一个与当前堆大小不同的第一个空闲堆、后一个与当前堆大小不同的第一个空闲堆
+
+##### 0.2.2 空闲链表
+
+理解ptmalloc堆漏洞利用的另一个比较重要的结构体是bin，为了节省内存分配开销，用户释放掉的内存并不会马上返还给系统，而是保存在相应的空闲链表中以便后续分配使用。Ptmalloc使用的空闲链表bin有四种，fastbin、samllbin、largebin、unsortedbin
+，一个好的内存分配器应该是内存碎片少、且能在较低算法复杂度和较少内存分配次数的情况下满足用户使用内存（申请和释放）的需求，四种bin的实现就体现了这种思想。
+
+![](https://images.seebug.org/content/images/2020/01/7bcc6e84-fa12-4684-bd3b-b7ee9dd15298.png-w331s)
+
+为了减少内存碎片，ptmalloc在释放当前堆cur_chunk时会检测cur_chunk的prev_inuse位（标识物理相邻前一个堆（物理低地址）是否处于空闲状态）和cur_chunk的物理相邻下一个堆是否是top_chunk、物理相邻下一个堆的prev_inuse位。若cur_chunk的prev_inuse位为0则合并后向堆并将后向堆的地址作为新的合并后的堆的起始地址；若cur_chunk的物理相邻下一个堆的prev_inuse位为0则进行前向合并并将cur_chunk的地址作为新的合并后的堆的起始地址。若待释放的cur_chunk的物理相邻下一个堆为top_chunk则将cur_chunk和top_chunk合并，并将cur_chunk的地址作为新的top_chunk起点。
+
+![](https://images.seebug.org/content/images/2020/01/85a987f9-1dd5-492c-8def-cbf978f1363b.png-w331s)
+
+Ptmalloc堆的一些参数
+
+###### 0） fastbin
+
+fastbin是保存一些较小堆（32位系统默认不超过64字节，64位系统默认不超过128字节）的单链表结构。由于fastbin中相同index链接的都是相同大小的堆，ptmalloc认为不同位置的相同大小的堆没有区别，因此fastbin使用lifo的方法实现，即新释放的堆被链接到fastbin的头部，从fastbin中申请堆也是从头部取，这样就省去了一次遍历单链表的过程。fastbin的内存分配策略是exact
+fit，即只释放fastbin中跟申请内存大小恰好相等的堆。
+
+###### 1） smallbin
+
+smallbin中包含62个循环双向链表，链表中chunk的大小与index的关系是2 _size_t_
+index。由于smallbin是循环双向链表，所以它的实现方法是fifo；smallbin的内存分配策略是exact fit。
+
+![](https://images.seebug.org/content/images/2020/01/3a2d1519-823a-4da3-90cd-2fa2aeb0195b.png-w331s)
+
+从实现中可以看出smallbin链接的chunk中包含一部分fastbin大小的堆，fastbin范围的堆是有可能被链入其他链表的。当用户申请smallbin大小的堆而smallbin又没有初始化或者申请大于smallbin最大大小的堆时，fastbin中的堆根据prev_inuse位进行合并后会进入如上unsortedbin的处理流程，符合smallbin或largebin范围的堆会被链入相应的链表。
+
+###### 2） largebin
+
+largebin包含63个循环双向链表，每个链表链接的都是一定范围大小的堆，链表中堆的大小按从大到小排序，堆结构体中的fd_nextsize和bk_nextsize字段标识链表中相邻largechunk的大小，即fd_nextsize标识比它小的堆块、bk_nextsize标识比它大的堆块。
+
+对于相同大小的堆，释放的堆插入到bin头部，通过fd、bk与其他的堆链接形成循环双向链表。
+
+Largebin的分配策略是best
+fit，即最终取出的堆是符合申请内存的最小堆（记为chunk）。若取出的chunk比申请内存大至少minsize，则分割chunk并取合适大小的剩余堆做为last
+remainder；若取出的chunk比申请内存不大于minsize，则不分割chunk直接返回做为用户申请内存块。
+
+###### 3） unsortedbin
+
+unsortedbin可以视为空闲chunk回归其所属bin之前的缓冲区，分配策略是exact
+fit。可能会被链入unsortedbin的堆块是申请largebin大小堆块切割后的last
+remainder；释放不属于fastbin大小且不与topchunk紧邻的堆块时会被先链入unsortedbin；在特定情况下将fastbin内的堆合并后会进入unsortedbin的处理流程（特定情况为申请fastbin范围堆fastbin为空；申请非fastbin范围smallbin的堆但smallbin未初始化；申请largechunk）
+
+### 1.how2heap调试
+
+#### 1.0 First_fit
+
+<https://github.com/shellphish/how2heap/blob/master/first_fit.c>
+
+这个程序阐释了glibc分配内存的一个策略：first fit，即从空闲表中取出的堆是第一个满足申请内存大小的堆（fastbin、smallbin
+exact fit，largebin best fit）
+
+![](https://images.seebug.org/content/images/2020/01/d3f86b58-8df0-4f7f-b4ca-e2c738d07aeb.png-w331s)
+
+Shellphish给出的例子中先申请了0x512和0x256大小的两个堆，然后释放掉0x512大小的堆（申请0x256大小的堆的作用是避免释放不是mmap分配的堆a的时候合并到topchunk），实例中再次申请0x500大小的堆由于largebin的best
+fit分配策略glibc会分割堆后返回堆a，即堆c等价于堆a，这时我们输出堆a的内容即输出修改后的堆c的内容。
+
+glibc的first fit分配策略可用于use after
+free(uaf,释放后重用)的利用，即修改新分配堆的内容等价于修改被释放的堆，uaf一般是由于释放堆后指针未置零造成的，不过在uaf的利用过程中我们一般使新分配的堆的大小等于被释放的堆的大小。
+
+#### 1.1 fastbin_dup
+
+<https://github.com/shellphish/how2heap/blob/master/fastbin_dup.c>
+
+fastbin下doublefree的一个示例（未加tcache机制）。
+
+![](https://images.seebug.org/content/images/2020/01/ac3af942-8cb7-4cdf-a772-2850054c15ff.png-w331s)
+
+Shellphish给出的例子中先申请了3个0x8大小的堆（同样地申请c的原因是避免合并到topchunk），然后释放a（
+再次释放a构成doublefree双重释放，但是由于glibc在释放fastbin大小的堆时检查且仅检查fastbin头部的堆和要释放的堆是否相等，若相等则报错），为了绕过glibc在释放堆时对bin头结点的检查，我们free(b)，此时fastbin如下(b=0x602020,a=0x602000；由于fastbin是单链表且LIFO，后释放的b被插入到链表头)
+
+![](https://images.seebug.org/content/images/2020/01/0a60fc7b-4ba5-4b83-a5ae-c59e870ac876.png-w331s)
+
+然后我们再次free(a)，由于此时bin头结点指向b，所以对头结点的检查被绕过，free(a)之后
+
+![](https://images.seebug.org/content/images/2020/01/74343930-a712-4359-846d-7785c01a9fc9.png-w331s)
+
+可以看到此时fastbin中有两个a，如果此时我们申请三个0x8大小的堆，则依次从fastbin头部取得到a、b、a三个堆。
+
+#### 1.2 fastbin_dup_into_stack
+
+    
+    
+    <https://github.com/shellphish/how2heap/blob/master/glibc_2.25/fastbin_dup_into_stack.c>
+
+fastbin下doublefree的利用示例（未开启tcache机制）。主要思路是在doublefree时我们有一次申请一个存在于fastbin链表的堆的机会，然后通过伪造堆的内容可以使得fastbin链入伪造的堆，再次申请内存可以得到伪造地址处的堆。
+
+![](https://images.seebug.org/content/images/2020/01/6bf9571c-d0c3-4bfe-ae6a-a8546d18e165.png-w331s)
+
+示例中先申请了3个0x8大小的堆，然后通过free(a)、free(b)、free(a)构成一次doublefree（原理同fastbin_dup），此时fastbin的连接状态是a->b->a。再次申请两个0x8大小的堆，由于fastbin的lifo，此时fastbin中只剩a，且此时堆a存在于fastbin和用户申请的堆中，即我们可以控制一个存在于fastbin的堆的内容。容易想到的一种利用方式是伪造fastbin链表的内容，进而达到在伪造地址处申请堆的效果。
+
+示例中在栈中伪造了一个0x20大小的堆（伪造堆头如下图选中部分，其中a=0x405000，&stack_var=0x00007fffffffdfb0），此时堆a的fd指向&stack_var，即fastbin:a->stack_var，此时第二次申请不超过0x18大小的堆（64位系统，跟申请堆时字节对齐有关，返回的堆的大小会被转化成满足条件的最小2*size_sz的倍数，最大0x10+8，8字节可占用下一个堆的prev_size）即可返回栈地址处的伪造堆。
+
+![](https://images.seebug.org/content/images/2020/01/0f69486f-9251-4eb6-92e7-67c2ac4e6871.png-w331s)
+
+#### 1.3 fastbin_dup_consolidate
+
+<https://github.com/shellphish/how2heap/blob/master/glibc_2.25/fastbin_dup_consolidate.c>
+
+fastbin
+attack构成doublefree的一个示例。原理是利用申请一次largebin大小的堆会将fastbin的堆进行合并进入unsortedbin的处理流程，此时再次free
+fastbin中的堆会绕过free时对fastbin链表头节点的检查进而构成一次doublefree。
+
+![](https://images.seebug.org/content/images/2020/01/ba35da23-7f68-4ac8-94df-1f0356557124.png-w331s)
+
+从下图free的流程中我们可以看出free时只会检查释放fastbin大小的堆时被释放的堆是否和fastbin的头结点是否一致，而在申请0x400的largechunk时，fastbin链表非空，fastbin中的堆会进行合并并且进入unsortedbin的处理流程，在unsortedbin的处理流程中符合fastbin大小的堆会被放入smallbin，这样就绕过了free时对fastbin头结点的检查，从而可以构成一次对fastbin大小的堆的doublefree。
+
+![](https://images.seebug.org/content/images/2020/01/2c4404cf-a3ab-476b-bd95-0a1367ec8efb.png-w331s)
+
+#### 1.4 unsafe_unlink
+
+<https://github.com/shellphish/how2heap/blob/master/glibc_2.26/unsafe_unlink.c>
+
+堆可以溢出到下一个堆的size域且存在一个指向堆的指针时堆溢出的一种利用方式。
+
+![](https://images.seebug.org/content/images/2020/01/8f2e32ba-6f41-4eff-b10b-9724e318b8cb.png-w331s)
+
+Unsafe
+unlink利用的前提是可以溢出到下一个堆的size域，利用的大致思路是在chunk0构造fakechunk且fakechunk可以绕过unlink双向链表断链的检查，修改chunk1的pre_size使之等于fakechunk的大小，修改chunk1中size域的prev
+inuse位为0以便free(chunk1)时检查前后向堆是否空闲时（这里是后向堆，即物理低地址）触发unlink双向链表断链构成一次任意地址写。下面看一下unlink的具体细节和原理。
+
+示例中首先申请了两个0x80大小的堆chunk0和chunk1（非fastbin大小，因为fastbin大小的堆为了避免合并pre_inuse总是为1），然后在chunk0中构造fake_chunk
+
+![](https://images.seebug.org/content/images/2020/01/80a999d1-6943-4dd4-ab4e-e7874c68c1a8.png-w331s)
+
+需要注意的是，我们构造的fake chunk的起点是chunk0的数据部分即fd，fake chunk的prev
+size和size域正常赋值即可（最新的libc加入了cur_chunk’size=next_chunk’s prev_size），fake
+chunk中关键的部分是fake data，这一部分要绕过unlink双向链表断链的检查，即fd->bk=p&&bk->fd=p
+
+![](https://images.seebug.org/content/images/2020/01/8e65ea2d-9604-48d8-9056-7637ac01c994.png-w331s)
+
+chunk的结构体如下
+
+![](https://images.seebug.org/content/images/2020/01/f2c787a7-4159-4b1e-8a29-94fbd080acd0.png-w331s)
+
+所以由结构体的寻址方式可得
+
+(fd->bk=fd+3* size_t)=p
+
+(bk->fd=bk+2* size_t)=p
+
+所以可得
+
+fd=p-3* size_t
+
+bk=p-2* size_t
+
+即fakechunk中fd和bk域如上构造即可绕过unlink双向链表的断链检查。
+
+构造完fakechunk还需要修改下chunk1的prevsize和size的数据，
+
+首先是prevsize要修改成fakechunk的大小（包含堆头，原因是glibc寻找下一个堆的宏如下，即将当前堆偏移size的数据视为下一个堆）
+
+![](https://images.seebug.org/content/images/2020/01/451064ac-c6b0-4b90-8a99-a7a1ad3ffd72.png-w331s)
+
+chunk1
+size部分的inuse位要置0，即标识物理相邻低地址堆为空闲状态（这也是unlink无法使用fastbin大小的堆的原因，fastbin大小的堆为了减少堆合并的次数inuse位总是置1）
+
+最后构造的fakechunk+chunk1部分数据如下，chunk0堆头0x405000，fakechunk堆头0x405010，chunk1堆头0x405090，图中选中部分为fakechunk
+
+![](https://images.seebug.org/content/images/2020/01/76c142b4-7f89-43a8-a05c-9365456fb55b.png-w331s)
+
+其中fakechunk的fd要使用指向堆节点的指针（如指向该节点的全局变量，非堆地址）的原因是unlink源码中传入的第二个参数是struct
+malloc_chunk * p。
+
+下面分析下unsafeunlink是如何导致任意地址写的。阅读源码可以发现smallbin范围内非fastbin范围的堆在unlink时只检查了双向链表的完整性，然后执行了双向链表摘除节点的操作。
+
+![](https://images.seebug.org/content/images/2020/01/c6ef75ba-99f6-4af3-97f5-96631e406fb5.png-w331s)
+
+断链的过程
+
+fd->bk=bk 即(fd->bk=p)=(bk=p-2* size_t)
+
+bk->fd=fd 即(bk->fd=p)=(fd=p-3* size_t)
+
+最终相当于
+
+p=p-3* size_t
+
+即获得了两个相等的指针（struct malloc_chunk *
+p），试想如果此时我们可以修改一个指针指向的地址同时可以修改另一个指针指向的内容不就可以构成一次任意地址写了吗？巧的是(;p)我们恰好可以达到这样的效果。
+
+此时我们修改fake_chunk[3]为要写的地址，修改fake_chunk[0]为要写的地址的内容即可。原因是fake_chunk[3]-3*size_t=fake_chunk，这里相当于给fake_chunk指向一个新的地址；fake_chunk[0]访问的是&fake_chunk[0]地址处的值，即上一步修改的地址处的内容。这样就构成了一次任意地址写^.^
+
+![](https://images.seebug.org/content/images/2020/01/6c78866b-a035-439d-abd0-8a95c502c660.png-w331s)
+
+#### 1.5 house_of_spirit
+
+<https://github.com/shellphish/how2heap/blob/master/glibc_2.25/house_of_spirit.c>
+
+利用fastbin范围的堆释放时粗糙的检查可以在任意地址处伪造fastbin范围fakechunk进而返回fakechunk的一种利用方式。思路是在指定地址处伪造fastbin范围的fakechunk，释放掉伪造的fakechunk，再次申请释放掉的fakechunk大小的堆即可得到fakechunk。
+
+![](https://images.seebug.org/content/images/2020/01/2ae742ee-88c9-45c5-9139-6b0b1da32753.png-w331s)
+
+其中fastbin范围的堆释放时的检查如下图所示，
+
+![](https://images.seebug.org/content/images/2020/01/b557386f-3ebe-4c34-b6f5-ae5e7e34ca9b.png-w331s)
+
+我们构造的fakechunk只需要绕过free时的检查即可：
+
+  1. 2*size_sz<next chunksize<sys mem，即图中0x123要满足限制在这个范围
+
+  2. 伪造的fakechunk不能是fastbin的头结点，即不能直接构成doublefree
+
+利用house of spirit可以得到fakechunk处的堆，同时如果我们有fakechunk处写的权限利用fastbinattack即可劫持控制流。
+
+#### 1.6 poison_null_byte
+
+<https://github.com/shellphish/how2heap/blob/master/glibc_2.25/poison_null_byte.c>
+
+由于glibc在返回用户申请的堆时不恰当的更新堆的presize域和错误的计算nextchunk的位置可以导致一次堆重叠。
+
+![](https://images.seebug.org/content/images/2020/01/35a61aff-ffb0-4dea-acba-8e8cdbe17d19.png-w331s)
+
+方法是先申请堆然后释放掉中间位置的一个堆bchunk（假设堆的大小都如图所示），假设存在一个off by
+null的漏洞，由于前一个堆是占用状态时prevsize域用来存储前一个堆的数据，这样我们可以从achunk溢出到bchunk的size域最低位将其置0。
+
+此时申请一个0x100大小的堆会返回释放掉的bchunk位置的堆。原因是在申请一个smallbin且非fastbin范围的堆时会检查smallbin是否为空，本例中smallbin为空则执行smallbin的初始化过程，即将可能的fastbin中的堆进行合并进入unsortedbin的处理流程，申请的堆的大小是smallbin范围，此时会取largebin头结点的一个堆进行切割返回（同样地为了减少内存碎片，largebin的堆从大到小排序）。这里largebin中只含一个0x200大小的堆，则直接对其进行切割然后返回给用户。
+
+![](https://images.seebug.org/content/images/2020/01/ff58c6ca-a1b4-4cb9-852e-6e71ab0cb9d6.png-w331s)
+
+然后再次申请一个0x80大小的堆。原因是0x100+0x80+两个堆头=0x200使之结束的位置正好落于cchunk
+
+这时free(b1)、free(c)释放掉两个堆，由于nextchunk即cchunk的preinuse为0会触发前向合并（向物理高地址）过程。原因是fake了一个cchunk的presize，系统修改的是我们的fake
+presize，即下图的0xf0，系统依然认为bchunk的位置有一个0x210的fakechunk。
+
+![](https://images.seebug.org/content/images/2020/01/d69bdb36-8838-4c54-b521-d02f17578b4e.png-w331s)
+
+此时再次申请一个0x300大小的堆，由于合并后bchunk和cchunk的大小为0x300，系统会返回合并后的bchunk。又由于此时b2chunk没有被释放处于占用态，b2chunk位于合并的bchunk内，此时构成一次堆重叠。
+
+#### 1.7 house_of_lore
+
+<https://github.com/shellphish/how2heap/blob/master/glibc_2.26/house_of_lore.c>
+
+利用伪造smallbin链表来最终达到一次任意地址分配内存的效果。前提是可以在要分配的地址处伪造堆（修改结构体中fd、bk的指向），且可以修改victim堆（被释放的smallbin堆）的bk指针。
+
+![](https://images.seebug.org/content/images/2020/01/bdd95b96-94a5-49ea-911b-9af37625d64d.png-w331s)
+
+方法是在要分配的内存地址（如栈地址）处构造一个fake smallbin chunk链，使之如下图所示。
+
+![](https://images.seebug.org/content/images/2020/01/25269928-d42d-4924-8880-e7b4df45c8bb.png-w331s)
+
+然后申请一个堆防止释放victim的时候合并到topchunk，释放掉victim，此例中victim会进入fastbin链表。
+
+再次申请一个largechunk，触发fastbin的合并过程并使fastbin的堆进入unsortedbin的处理流程，victim处于smallbin的范围最终被链入smallbin头结点。而由于我们事先构造了如上的fake
+smallbin链，此时smallbin的链接情况是smallbin:victim->stack_buf1->stack_buf2。
+
+由于smallbin的exact
+fit和fifo策略，此时申请一个victim大小的堆会直接返回bin结点bk指向的victim（bin的结构体是mchunkptr*），然后断链并修改bin的bk指针指向victim的bk节点即stack_buf1。glibc取smallbin的chunk源码如下。
+
+![](https://images.seebug.org/content/images/2020/01/6129f20d-3017-4732-b7f3-8303915b6924.png-w331s)
+
+此时stack_buf1的结构如下(其中0x7fffffffdfb0=stack_buf1，0x7ffff7dd4b98=smallbin，0x7fffffffdf90=stack_buf2)，即此时smallbin:stack_buf1->stack_buf2
+
+![](https://images.seebug.org/content/images/2020/01/2bf71608-4d39-4af8-b20a-56c933b9a3cc.png-w331s)
+
+这样此时再申请一个victim大小的堆直接取smallbin的bk指向的stack_buf1即得到相应地址处的堆，达到了任意地址分配内存的效果。
+
+#### 1.8 overlapping_chunks
+
+<https://github.com/shellphish/how2heap/blob/master/glibc_2.26/overlapping_chunks.c>
+
+通过修改一个位于空闲链表的堆的size域可以构成一次堆重叠
+
+![](https://images.seebug.org/content/images/2020/01/5db829bc-c4fb-40b6-a675-da7c6cf5ba2c.png-w331s)
+
+过程如上。修改位于bin的p2的size域，修改后p2结构如下（p2=0x405110，选中部分为p2 data部分）
+
+![](https://images.seebug.org/content/images/2020/01/60374370-e5e9-45da-9b0e-6c6cfd9efb6d.png-w331s)
+
+此时申请一个修改后的p2 size的堆会得到从p2位置起始的fake size大小的堆p4，如下图
+
+![](https://images.seebug.org/content/images/2020/01/b98ea047-5795-4a09-8ad1-d760b613162d.png-w331s)
+
+#### 1.9 overlapping_chunks_2
+
+<https://github.com/shellphish/how2heap/blob/master/glibc_2.25/overlapping_chunks_2.c>
+
+通过堆溢出修改下一个占用态堆的size域构成一次堆重叠
+
+![](https://images.seebug.org/content/images/2020/01/2e3ea1d0-11ba-440c-9797-2daaf33dafc4.png-w331s)
+
+shellphish给出的示例中先free掉p4（我个人感觉这一步是没有必要的，shellphish可能是出于演示的目的考虑？因为稍后可以看到我们可以观察到p5的prevsize在free(p2)后会发生变化，如果有小伙伴看到这里可以一起交流，snip3r[at]163.com）。free
+p4后p5的prevsize为3f0
+
+![](https://images.seebug.org/content/images/2020/01/b944291a-e6cf-4871-945b-221c890dd7de.png-w331s)
+
+然后修改p2的size域为p2+p3+标志位，释放掉。此时glibc会认为p2的size域的大小包围的堆是要被释放的，会错误的修改p5的prevsize值。free
+p2后p5的prevsize为bd0
+
+![](https://images.seebug.org/content/images/2020/01/918e30ea-ae89-4c2f-8a8e-787a9b6a06bf.png-w331s)
+
+此时由于物理相邻的前向堆p4处于空闲态，fake
+p2会和p4合并链入largebin。然后申请2000大小的largechunk会将上述合并后的堆切割后返回p2起始的堆，从而构成一次堆重叠。
+
+#### 1.10 house_of_force
+
+<https://github.com/shellphish/how2heap/blob/master/glibc_2.25/house_of_force.c>
+
+利用topchunk分配内存的特点可以通过一次溢出覆盖topchunk的size域得到一次任意地址分配内存的效果。
+
+![](https://images.seebug.org/content/images/2020/01/799dd292-bc1e-4534-b374-41b9b35de5ec.png-w331s)
+
+首先通过一次堆溢出覆盖topchunk的size域为一个超大的整数（如-1），避免申请内存时进入mmap流程。
+
+然后申请一个evilsize大小的堆改变topchunk的位置。evilsize的计算如下，这么计算的原因是当bin都为空时会从topchunk处取堆
+
+![](https://images.seebug.org/content/images/2020/01/121b0f86-e1d5-4a49-aec4-6f6537e7f069.png-w331s)
+
+修改topchunk到目标地址后在申请一次堆即可对目标地址处的内存进行改写。
+
+#### 1.11 unsorted_bin_into_stack
+
+<https://github.com/shellphish/how2heap/blob/master/glibc_2.26/unsorted_bin_into_stack.c>
+
+通过修改位于unsortedbin的堆的size域和bk指针指向目标fakechunk，在目标地址构造fakechunk（构造size和bk指针。我们也可以不修改victim的size，malloc两次得到目标地址的fakechunk；原理都是构造fake
+unsortedbin链表）可以得到一次任意地址申请内存的机会。
+
+![](https://images.seebug.org/content/images/2020/01/b303e99d-3be0-4343-82fa-548ed7061911.png-w331s)
+
+其中如果要伪造victim的size的话要满足check 2*SIZE_SZ (> 16 on x64) && < av->system_mem
+
+通过溢出修改位于unsortedbin的victim的size和bk，并构造fakechunk，最终构造出如下fake smallbin链表
+
+![](https://images.seebug.org/content/images/2020/01/36ff3d65-c97a-4ef4-adea-8f901b4508ab.png-w331s)
+
+在下一次申请内存时glibc遍历unsortedbin找到exact fit的堆块并返回，最终可以得到目标地址处的伪造堆。
+
+#### 1.12 unsorted_bin_attack
+
+<https://github.com/shellphish/how2heap/blob/master/glibc_2.26/unsorted_bin_attack.c>
+
+通过伪造unsortbin链表进行unsortedbin attack泄露信息（libc基址）的一种方法。
+
+![](https://images.seebug.org/content/images/2020/01/53adf392-a8eb-4cf1-a0de-3bc5dbbb8143.png-w331s)
+
+方法是构造如下fake unsortedbin链表，
+
+![](https://images.seebug.org/content/images/2020/01/e64da530-19ae-4993-9e96-29c829502e51.png-w331s)
+
+这样在申请得到victim后会将victim断链，从而target_addr fake
+chunk的fd会指向相应的bin，进而可以泄露libc基址。（当然也可以泄露bk之类位置的其他信息，如果有的话;p）
+
+#### 1.13 large_bin_attack
+
+<https://github.com/shellphish/how2heap/blob/master/glibc_2.26/large_bin_attack.c>
+
+利用malloc进行unsortedbin处理时插入largebin通过修改largebin链表上的堆的bk、bk_nextsize均可以得到任意地址写的机会。
+
+![](https://images.seebug.org/content/images/2020/01/45f4ebab-5469-42a7-843b-13f3a4fe92e4.png-w331s)
+
+首先要申请如上图3个堆和相应的为了避免合并到topchunk的barrier（只申请barrier3应该就够用了，shellphish这么写可能是在之后复杂的申请释放中不在考虑合并到topchunk的情况），其中p1要保证是smallbin且非fastbin范围（且保证在后续申请堆时堆大小够用），p2、p3要保证是largebin范围。
+
+（1）然后依次释放p1、p2，由于非fastbin范围的堆在释放后会首先链入unsortedbin，此时unsortedbin的情况是。（简单说就是unsortedbin:p2->p1，其中各个指针的指向如图）
+
+![](https://images.seebug.org/content/images/2020/01/53c5e621-5d94-4312-a2cd-0e27f400506e.png-w331s)
+
+（2）此时申请一个0x90大小的堆，从glibc的源码中可以看到遍历unsortedbin的过程是从bin头结点的bk指针开始遍历。这样取到的第一个堆是0x320大小的p1，p1满足0x90的申请，glibc会从p1中分割出0x90的大小，然后继续遍历unsortedbin直至遍历结束；此时得到链表的第二个堆0x400大小的p2，p2非smallbin范围且largebin为空，被链入largebin
+
+![](https://images.seebug.org/content/images/2020/01/b491f534-60e1-40ba-9438-f14abb193aef.png-w331s)
+此时unsortbin：(p1-0x90)，largebin：p2.
+
+（3）然后释放0x400大小的p3，p3非fastbin范围被链入unsortedbin头结点（fd指向p3）。
+
+（4）此时利用溢出或其他手段修改largebin中的p2的bk、bk_nextsize（或、且）和size。可以看到p2修改前的size为0x411，shellphish把它修改成了0x3f1，这样做是因为largebin中链接的一定范围的堆是从大到小降序排列的，修改后0x400大小的p3被链入largebin时会被链入头结点。
+
+在做好以上的准备工作后再次申请一个0x90大小的堆，同（2）过程依然由p2分割得到堆，由于p3>修改后的p2的size，p3被链入largebin头结点。链入的过程类似unlink，类似的我们得到了一次任意地址写的机会。
+
+![](https://images.seebug.org/content/images/2020/01/521d64dd-ebe3-484e-9dd7-55068ca44372.png-w331s)
+
+#### 1.14 house_of_einherjar
+
+<https://github.com/shellphish/how2heap/blob/master/glibc_2.26/house_of_einherjar.c>
+
+利用一次off by null修改下一个占用态chunk的prev_inuse位，同时修改下一个下一个占用态chunk的prev_size值，利用top
+chunk和后向合并（物理低地址）机制得到一次任意地址分配内存的机会。这种off by
+null利用的前提是可以在目标地址处（最终分配内存的地址处）构造fakechunk。
+
+![](https://images.seebug.org/content/images/2020/01/75155da1-d606-43ff-b1b6-a2745048c065.png-w331s)
+
+了绕过双向链表完整性的检测fd、和bk均可置为fakechunk。其中设置fakechunk的prev_size和size的值是可以但没必要的。
+
+由于占用态的堆prev_size会用来存储前一个堆的数据，所以天然的prev_size域可以修改；当存在off by
+null时可以将下一个占用态堆的prev
+inuse置0。我们修改a的prev_size为fake_size，b的prev_inuse为0。这时我们释放掉b，由于b和topchunk紧邻，b会和topchunk合并；同时由于b的prev_inuse为0会触发后向合并（物理低地址），glibc寻找下一个空闲堆的方式是chunk_at_offset(p,
+-((long)
+prevsize))，即将当前位置偏移prev_size的位置视为nextchunk，这样（b+b.prev_size）得到下一个堆位于fakechunk，合并到topchunk并最终得到新的topchunk起点为fakechunk。此时再次申请堆从topchunk处取即可得到target处的fakechunk。
+
+![](https://images.seebug.org/content/images/2020/01/75e0fd65-d0fd-45bf-8b1d-ff8c32555ade.png-w331s)
+
+这样通过反推target=b_chunk_header-fake_size得到fake_size=b_chunk_header-target。
+
+### 2.总结
+
+本文到这里就结束了，linux
+pwn基础知识的介绍到这里也就结束了，但是glibc还在不断更新，堆管理一些细节也在不断微调，一些新的提高性能的机制如tcache也开始应用于新版本的libc，关于不断更新的新版本libc的漏洞利用方式的探索还远远没有结束。
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1109/>
+

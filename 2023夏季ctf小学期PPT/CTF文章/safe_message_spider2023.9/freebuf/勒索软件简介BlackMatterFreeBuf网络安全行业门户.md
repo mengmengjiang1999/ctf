@@ -1,0 +1,165 @@
+BlackMatter
+是一种勒索软件，它会加密文件并威胁如果不支付赎金就会泄露被盗数据。该集团以年收入超过1亿美元的大公司为目标，并在扩大业务的同时积极招募附属公司。由于两个勒索软件组织都采用了独特的加密程序，BlackMatter可能是现已解散的网络犯罪组织DarkSide的品牌重塑或衍生产品。
+
+## BlackMatter是什么?
+
+BlackMatter是一种勒索软件变体，它使用Salsa20和1024位RSA加密文件，并需要大量加密货币进行解密。
+
+与许多其他勒索软件组织一样，BlackMatter通过泄露数据的威胁来增加获得支付的机会。在执行最后一个勒索软件有效载荷之前，BlackMatter的操作人员会从被入侵的系统中窃取数据，并威胁称，除非受害者支付赎金，否则就会在该组织的泄露网站上公布数据。
+
+BlackMatter作为一种勒索软件即服务 (RaaS)
+运行，在这种商业模式下，分支机构只要将恶意软件投放到受损的系统上，就可以获得一部分赎金。BlackMatter还与初始接入经纪人合作，这些人愿意出售接入受损网络的权限。根据目标的不同，初始接入代理将获得3000至10万美元的网络接入费用。
+
+## BlackMatter和DarkSide之间可能存在联系
+
+DarkSide是2021年5月Colonial
+Pipeline袭击的勒索软件团伙，该袭击导致美国各地燃料短缺和价格飙升。在美国和俄罗斯当局前所未有的压力下，DarkSide被迫在几周后关闭了其运营。
+
+有证据表明DarkSide，或者至少是DarkSide的一些成员，可能以BlackMatter的绰号回归。在调查了泄露的BlackMatter解密器后，Emsisoft的分析师确定BlackMatter使用了
+DarkSide以前在攻击中使用的相同加密例程，包括DarkSide独有的定制的Salsa20 矩阵。
+
+## BlackMatter的历史
+
+BlackMatter于2021年7月下旬首次被观察到，当时别名“BlackMatter”在俄语网络犯罪论坛XSS和Exploit上注册。用户将4个比特币(当时价值约
+150,000 美元)存入其 Exploit
+托管账户，表明他们作为威胁参与者的合法性和严肃性。不久之后，该用户发布了一则广告，提供初始访问经纪人3,000至100,000美元用于访问符合该组标准的公司网络。
+
+2021年9月上旬，美国卫生与公众服务部的卫生部门网络安全协调委员会发布了一份关于 BlackMatter的威胁简报。
+
+![](https://image.3001.net/images/20211015/1634263545_6168e1f943f8e93e4bf27.png!small)  
+自 BlackMatter 首次被发现以来，已有44份提交给 ID Ransomware。(ID Ransomware
+是一种在线工具，可帮助勒索软件的受害者识别哪些勒索软件对其文件进行了加密。)
+
+估计只有25%的受害者向 ID Ransomware 提交了申请，这意味着自勒索软件出现以来，总共可能发生了176起 BlackMatter
+事件。在此期间，该组织还在其泄密网站上公布了10个组织的被盗数据。
+
+## BlackMatter 赎金记录
+
+加密过程完成后，BlackMatter
+会在用户可访问的文件夹中放置赎金通知，并将桌面壁纸更改为赎金通知。某些版本的勒索软件还会通过从每个受感染的端点向默认打印机发送打印作业来打印赎勒索信的物理副本。
+
+勒索信指出受害者的文件已被加密，并提供了有关如何与攻击者通信的说明。该说明还指定了在攻击期间被盗的数据类型，以及“保证”威胁行为者将通过解密受害者的文件并在收到付款后删除泄露的数据来维护他们的交易目的。
+
+ **以下是 BlackMatter 赎金票据示例：**
+
+> BLACK
+>
+> Matter
+>
+> >>> What happens?
+>
+> Your network is encrypted, and currently not operational. We have downloaded
+> 1TB from your fileserver.
+>
+> We need only money, after payment we will give you a decryptor for the
+> entire network and you will restore all the data.
+>
+> >>> What guarantees?
+>
+> We are not a politically motivated group and we do not need anything other
+> than your money.
+>
+> If you pay, we will provide you the programs for decryption and we will
+> delete your data.
+>
+> If we do not give you decrypters or we do not delete your data, no one will
+> pay us in the future, this does not comply with our goals.
+>
+> We always keep our promises.
+>
+> >> Data leak includes
+>
+> Full emloyeers personal data
+>
+> Network information
+>
+> [REDACTED]
+>
+> Finance info
+>
+> >>> How to contact with us?
+>
+> Download and install TOR Browser (hxxps://www.torproject.org/).
+>
+> Open [URL REDACTED].
+>
+> >>> Warning! Recovery recommendations.
+>
+> We strongly recommend you to do not MODIFY or REPAIR your files, that will
+> damage them.
+
+## BlackMatter 的目标是谁?
+
+BlackMatter针对的目标是资源丰富的大型企业。该集团拥有攻击位于美国，英国，加拿大，澳大利亚，印度，巴西，智利和泰国的企业，但受影响的国家还在增加。![](https://image.3001.net/images/20211015/1634263508_6168e1d496803b7905216.png!small)  
+BlackMatter组织开发了适用于Windows和Linux的勒索软件版本，使攻击者能够攻击基于Linux的环境，包括ESXi、Ubuntu、Debian和CentOS。
+
+BlackMatter 声称它不会攻击某些行业，因为这样做会引起不必要的关注。这包括：
+
+> 医院
+>
+> 关键基础设施(核电站、发电厂、水处理设施)
+>
+> 石油和天然气工业(管道、炼油厂)
+>
+> 国防工业
+>
+> 非营利公司
+>
+> 政府部门
+
+如果这些行业之一的实体受到攻击(可能是无意中或由一个粗心的附属机构)，该组织声称它将提供免费解密。
+
+但网络犯罪集团提出的任何声明都应该受到怀疑。此外，即使该组织确实向受影响的实体提供免费解密，恢复可能仍需要数天、数周或数月才能完成。此类事件可能导致重大中断和经济损失;在医疗保健领域，这可能意味着丧失生命。
+
+## BlackMatter是如何传播的?
+
+ **BlackMatter
+攻击从破坏目标网络开始，通常是通过受损的远程桌面协议、网络钓鱼活动、利用已知漏洞或被盗凭据。因此，减少软件安全漏洞，在软件开发过程中通过[静态代码检测工具](https://www.woocoom.com/b031.html)查找编码缺陷和安全漏洞，可以降低企业遭到BlackMatter
+攻击的风险。**
+
+BlackMatter 执行时，会验证当前用户的权限。如果权限受到用户帐户控制的限制，恶意软件会尝试使用 ICMLuaUtil COM
+接口提升其权限。DarkSide 和 LockBit 使用了相同的技术。在获得必要的权限后，BlackMatter
+会终止一些与生产力相关的进程并删除目标目录的卷影副本。在加密开始之前，攻击者还会窃取数据，作为额外的手段来迫使受害者支付赎金。
+
+在加密期间，BlackMatter
+会尝试挂载和加密未挂载的分区。它的目标是存储在本地和网络共享上的文件，以及可移动媒体，而忽略特定的目录、文件和文件扩展名，这些是设备运行所必需的。
+
+由于 BlackMatter 作为 RaaS 运行并且可以由许多不同的附属机构分发，因此攻击的确切结构可能因事件而异。
+
+## 主要 BlackMatter 攻击
+
+奥林巴斯：2021年9月，日本科技巨头奥林巴斯受到 BlackMatter
+的打击。在检测到欧洲、非洲和中东网络上的可疑活动后，该公司被迫暂停受影响系统中的数据传输，作为预防措施。动员了一个专门的响应小组来解决这个问题。
+
+## 如何保护网络免受 BlackMatter 和其他勒索软件的侵害
+
+1.由于大多数勒索软件是通过用户发起的行为传播的，因此企业或组织应实施侧重于向最终用户传授网络安全基础知识的培训计划。勒索软件和传播方法在不断发展，因此培训必须是一个持续的过程，以确保最终用户能够应对当前的威胁。
+
+2.实行良好的凭证卫生有助于防止暴力攻击，减轻凭证盗窃的影响并降低未经授权的网络访问风险。
+
+3.MFA 提供了额外的安全层，可以帮助防止对帐户、工具、系统和数据存储库的未授权访问。企业应考虑尽可能启用 MFA。
+
+4.各种规模的组织都应该有一个强大的补丁管理策略，以确保尽快应用所有端点、服务器和设备上的安全更新，以最大限度地减少攻击机会。当然，
+**若能在软件开发期间就及时修正可见安全漏洞，如通过静态代码分析技术等发现问题并改正，可以减少软件中的安全漏洞，同时减少补丁数量。**
+
+5.备份是减轻勒索软件事件影响的最有效方法之一。许多勒索软件可以在网络中横向传播并加密本地存储的备份，因此组织应该使用混合媒体存储，并在现场和异地存储备份副本。
+
+6.加固网络、服务器、操作系统和应用程序对于减少攻击面和管理潜在的安全漏洞至关重要。禁用不需要的和可能被利用的服务，例如
+PowerShell、RDP、Windows Script Host、Microsoft Office
+宏等，可以降低初始感染的风险，同时实施最小权限原则可以帮助防止横向移动。
+
+7.许多勒索软件系列是通过宏嵌入的 Microsoft Office 或 PDF
+文档提供的。组织应该审查他们对宏的使用，考虑阻止Internet上的所有宏，并且只允许从受信任的位置执行经过审查和批准的宏。
+
+8.组织可以使用各种电子邮件身份验证技术(例如发件人策略框架、域密钥识别邮件和基于域的邮件身份验证、报告和一致性)来检测电子邮件欺骗并识别可疑邮件。
+
+9.有效的网络隔离有助于控制事件、防止恶意软件传播并减少对更广泛业务的干扰。
+
+10.各种规模的组织都必须有适当的系统来监控可能的数据泄露渠道并立即响应可疑活动。
+
+企业除了做好以上各种防御措施，还应制定全面的事件响应计划。快速响应有助于防止恶意软件传播，最大限度地减少中断并确保尽可能有效地修复事件。
+
+> 文章来源：
+>
+> https://blog.emsisoft.com/en/39121/ransomware-profile-blackmatter/
+

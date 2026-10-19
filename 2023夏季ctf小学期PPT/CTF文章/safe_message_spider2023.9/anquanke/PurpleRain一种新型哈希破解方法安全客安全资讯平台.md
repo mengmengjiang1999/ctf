@@ -1,0 +1,232 @@
+# Purple Rain：一种新型哈希破解方法
+
+阅读量 **142834**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-01-18 15:08:14
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 netmux，文章来源：netmux.com/blog
+
+原文地址：<http://www.netmux.com/blog/purple-rain-attack>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t0168ed1112b6e72e3c.jpg)
+
+## 一、前言
+
+在渗透测试时，你是否面临着这样的窘境：当你穷尽了所有的密码破解攻击技术却仍然一无所成，即使翻遍各种笔记、分析密码策略及当前的破解结果、一页页翻阅[哈希破解手册](http://a.co/9aQkthI)，仍然于事无补。这时候你需要创新实验思路，最好的方法就是生成随机密码来尝试攻击。此时最大的问题来自于你自己，固有的偏见以及过去的成功经验反而成了你思想上的束缚，打破常规才可能让你坦然面对后续攻击尝试。在这种困境中，
+**Purple Rain attack（紫雨攻击）** 能够帮助你打破僵局。Purple
+Rain还有一个好处，它可以在接近无限长的时间内运行，唯一限制是用户所提供的字典大小。如果你没有足够的时间精心挑选破解技术，可以考虑使用这种完美的即用型攻击方法，好好享受这种“一劳永逸”的哈希破解过程。
+
+Purple
+Rain究竟能做什么呢？它可以帮我们想出自己永远想不到的密码模式和规则集。将可用的模式和密码组合使用是非常有效的一种方法，单凭这种方法，即便只有一个简单的字典，我们也可以在24小时内轻松破解掉75%的LinkedIn数据。有几个问题，比如是否所有的模式和密码都是有效的？当然不是。我们会不会花了很长时间却拿不到关键的哈希结果？答案是肯定的。但想象一下，在长时间的攻击过程中，某一天梦想中的哈希结果突然在控制台上现身，这是多么美妙的一个场景。此时，你肯定会回头浏览这篇文章，由衷感叹这种攻击的巧妙性，感谢这些工具背后开发者的天才思想。
+
+为什么要叫这个名字？这里我们玩了一个文字游戏，攻击过程中用到了[PRINCEprocessor
+Hashcat](https://github.com/hashcat/princeprocessor)工具，再与Prince的著名歌曲《Purple
+rain》相结合，最终定下了这个名字。在本文中，我们假设你正在尝试破解类似NTLM之类的哈希，并且已经枚举完7个字符以内的所有密码（也就是说，本文中PRINCE只需要生成长度超过8个字符的候选密码：`--pw-min=8`）。最后，你手头还需要一套破解平台，可以选择使用Budget Cracking Rig或者Portable Cracking
+Rig。请关注我们的Twitter获取最新消息。
+
+![](https://p2.ssl.qhimg.com/t0156843770a038edf8.gif)
+
+## 二、参考资源
+
+大家可以先参考这几处链接：
+
+[Hashcat](https://hashcat.net/hashcat/)
+
+[PRINCEprocessor Hashcat Utility](https://github.com/hashcat/princeprocessor)
+
+[List of Possible Dictionaries](https://weakpass.com/wordlist)
+
+Purple Rain的典型用法如下：
+
+    
+    
+    shuf dict.txt | pp64.bin --pw-min=8 | hashcat -a 0 -m #type -w 4 -O hashes.txt -g 300000
+    
+
+## 三、随机生成
+
+关于PRINCE（PRobability INfinite Chained
+Elements）攻击技术以及随机规则生成方面内容，大家可以在网上找到两篇非常好的文章，这也是Purple Rain的灵感来源。我强烈推荐你阅读[Matt
+Weir](https://sites.google.com/site/reusablesec/)发表的有关PRINCE工作原理及具体功能的一篇[文章](http://reusablesec.blogspot.com/2014/12/tool-deep-dive-prince.html)。同时我也推荐你阅读@evilmog写的有关“raking”（random password candidate
+generation，随机密码候选词生成）技术的相关[文章](https://github.com/evilmog/evilmog/wiki/Hashcat-Raking---generated2.rule)，然后再搭建自己的环境，在hashcat中使用随机生成的规则来破解哈希。简而言之，PRINCE可以根据输入的字典集，随机组合生成输入词链（阅读[此处](https://hashcat.net/events/p14-trondheim/prince-attack.pdf)了解更多细节）。配合hashcat的`-g`参数（[随机规则](https://hashcat.net/wiki/doku.php?id=rule_based_attack)生成选项），你可以进一步增强PRINCE候选密码的输出结果。
+
+## 四、字典选择
+
+你可以为Purple Rain提供两种类型的字典：专用字典（Targeted wordlist）或者通用字典（General Purpose
+wordlist）。如果你手上没有任何字典，你可以使用比较优秀的“通用型”字典，如[rockyou.txt](http://www.mediafire.com/file/ncftcayy7t84vm2/rockyou.txt.gz)字典。对于PRINCE而言，我并不推荐使用非常大的字典（比如大小超过500MB的字典）。你可以直接使用最常用的1000万个[密码集](http://www.mediafire.com/file/lurtcr5e48ybbkb/10_million_password_list_top_1000000.txt.gz)（只有3.8MB），也可以参考[weakpass.com](https://weakpass.com/)，根据实际需要选择合适的词典。最后，将字典输入PRINCEprocessor之前，你可以先使用`shuf`这条命令洗一下牌。通过这种随机化过程，可以保证每次发起Purple
+Rain攻击时，PRINCEprocessor会创建不同的词链。你可以运行如下命令，多试几次，比较输出结果有何不同：
+
+    
+    
+    pp64.bin --pw-min=8 < dict.txt | head -20
+    shuf dict.txt | pp64.bin --pw-min=8 | head -20
+    
+
+## 五、规则数
+
+选择规则时，我建议先从Hashcat自带的dive.rule开始。这个规则可以将已知密码的衍生密码与PRINCEprocessor随机生成的候选密码组合在一起，并且由于dive.rule会按概率大小进行排序，因此你可能会早点拿到结果。复杂一点的话，我会选择使用Hashcat的随机规则生成功能，最少使用50,000条随机规则，你可以根据情况扩充到1,000,000条规则。如果你不想使用太多的规则，我建议每次运行时使用300,000条规则（在命令行中加入`-g
+300000`参数）。需要注意的是，生成的随机规则集越大，Hashcat启动的时间也会越长，因为Hashcat每次运行时都需要动态生成这些规则。此外，PRINCEprocessor自己也带有[prince_generated和prince_optimized](https://github.com/hashcat/princeprocessor/tree/master/rules)这两个规则集，你也可以选择试一下这两个规则集。
+
+## 六、命令解析
+
+现在来看一下Purple Rain攻击中用到的一些命令。
+
+###  基本用法
+
+    
+    
+    shuf dict.txt | pp64.bin --pw-min=8 | hashcat -a 0 -m #type -w 4 -O hashes.txt -g 300000
+    
+
+具体字段含义如下：
+
+**shuf：** 将字典输入PRINCEprocessor之前，先随机处理一下。
+
+**dict.txt：** 专用型或通用型字典，根据实际情况选择。
+
+**pp64.bin：** Hashcat提供的PRINCEprocessor工具。
+
+**—pw-min=8：** 要求PRINCE生成长度至少为8个字符的密码。
+
+**hashcat -a 0：** 以Straight模式启动Hashcat，获取stdin的输入数据。
+
+**-m #type：** 指定哈希模式的编号，比如`-m 1000`对应的是NTLM。
+
+**-w 4：** 指定Hashcat采用最高的工作负载来运行。
+
+**hashes.txt：** 包含待破解哈希的输入文件。
+
+**-g 300000：** 指定Hashcat生成300,000条随机规则。
+
+两点建议：
+
+1、再次执行相同任务前，我建议将运行时间限制在1小时到24小时之间。
+
+2、可以收集行之有效的那些随机规则，参数为`--debug-mode=1 --debug-file=success_purplerain.rules`。
+
+###  高级用法
+
+如果你想随机使用`dict/`目录下的字典，你可以使用如下命令：
+
+    
+    
+    ls dict/ | sort -R | shuf 'dict/' `tail -1` | pp64.bin --pw-min=8 | hashcat -a 0 -m #type -w 4 -O hashes.txt -g 300000
+    
+
+你可以将上面的`tail -1`命令替换成自己所需的命令。
+
+你也可以随机组合使用多个字典，以增加输入数据的多样性，命令如下：
+
+    
+    
+    cat dict1.txt dict2.txt | shuf | pp64.bin --pw-min=8 | hashcat -a 0 -m #type -w 4 -O hashes.txt -g 300000
+    
+
+###  高级选项
+
+在PRINCEprocessor中，我们可以使用`--elem-cnt-min`以及`--elem-cnt-max`选项，增加输入字典的单词/元素的链接数。
+
+在Hashcat随机规则生成中，我们可以使用`--generate-rules-func-min`以及`--generate-rules-func-max`选项，增加或减少每个规则的函数数量。
+
+## 七、典型应用
+
+让我们举个简单的例子，介绍如何配置Purple Rain攻击及运行环境。
+
+1、从[rockyou](http://www.mediafire.com/file/ncftcayy7t84vm2/rockyou.txt.gz)字典中，随机提取30,000个密码：
+
+    
+    
+    shuf rockyou.txt | head -30000 > test_rockyou.txt
+    
+
+2、使用md5算法处理test_rockyou.txt，将生成的哈希值存入文件中（需要一定时间才能完成）：
+
+    
+    
+    while read line; do echo -n $line | md5sum; done < test_rockyou.txt | awk -F " " '{print$1}' > hashes.txt
+    
+
+3、创建一个小型字典，以便测试刚才生成的哈希值：
+
+    
+    
+    hashcat -a 3 -i ?a?a?a --stdout >> test_dict.txt
+    
+
+4、我们也可以获取google上前20,000个英文单词（参考此处[链接](https://github.com/first20hours/google-10000-english/blob/master/20k.txt)），加入前面那个字典中：
+
+    
+    
+    cat google-20k.txt >> test_dict.txt
+    
+
+5、先使用dive.rule规则，花1个小时执行Purple Rain攻击：
+
+    
+    
+    shuf test_dict.txt | pp64.bin | hashcat -a 0 -m 0 -w 4 -O hashes.txt -r dive.rule
+    
+
+运行过程中，你可以观察Hashcat中不断出现的各种候选密码。
+
+6、接下来，使用随机生成的200,000条规则，花8个小时执行Purple Rain攻击：
+
+    
+    
+    shuf test_dict.txt | pp64.bin | hashcat -a 0 -m 0 -w 4 -O hashes.txt -g 200000
+    
+
+通过8小时的运行时间，你可以了解到这种方法不需要过多人工参与，可以持续、自主完成攻击过程。你会看到你根本无法想到的一些密码组合。请记住一点：不确定的输出结果是你最好的朋友。
+
+在破解过程中，差之毫厘则失之千里，我们不能放弃丝毫的可能性。
+
+## 八、总结
+
+希望这种攻击方法的确对你有所帮助，可以加到你的知识储备笔记本中。对于刚接触密码破解的新手来说，这种攻击方法也非常简单方便，运行起来无需人工参与，可以取得较好的效果。有空的话你可以翻阅一下[Hash
+Crack v2.0: Password Cracking
+Manual](http://a.co/7VZZEBW)这个手册，从中你可以找到许多类似的攻击方法以及其他有用的参考资料。请记住一点：在破解过程中，随机性可以拓宽你的视野，带来新的可能性以及原先无法预测的结果。另外，记得关注即将发布的新型破解平台：[Portable
+Cracking Rig](http://www.netmux.com/blog/portable-cracking-rig)（如下图所示），只需1,000美元你就可以在渗透测试中用到它的强大功能。这个价格非常实惠，毕竟没有多少人能搭建价值15,000美元、使用8个GPU的破解阵列。请关注我们的Twitter
+@netmux，了解后续更新及相关文章。
+
+![](https://p5.ssl.qhimg.com/t014a28f2cedd83384a.jpg)
+
+研究人员需要付出许多精力才能生产并发行这些工具，因此看到“捐助（DONATE）”按钮时，你可以考虑贡献自己的一份薄力。这些社区让整个世界更加美好，也让我们受益匪浅。
+
+本文翻译自netmux.com/blog [原文链接](http://www.netmux.com/blog/purple-rain-attack)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **興趣使然的小胃** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/95138](/post/id/95138)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [netmux.com/blog](http://www.netmux.com/blog/purple-rain-attack)
+
+如若转载,请注明出处： <http://www.netmux.com/blog/purple-rain-attack>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [哈希破解](/tag/哈希破解)
+  * [Purple Rain](/tag/Purple Rain)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p2.ssl.qhmsg.com/dm/200_200_100/t0104d1b8b4ca36e961.jpg) 興趣使然的小胃
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

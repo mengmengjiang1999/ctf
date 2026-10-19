@@ -1,0 +1,451 @@
+# 【木马分析】使用高级反调试与反HOOK的安卓恶意ROOT软件的深度分析（二）：JAVA层分析
+
+阅读量 **164079**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-02-07 15:42:57
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：fortinet.com
+
+原文地址：<http://blog.fortinet.com/2017/01/26/deep-analysis-of-android-rootnik-malware-using-advanced-anti-debug-and-anti-hook-part-ii-analysis-of-the-scope-of-java>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+****
+
+翻译：[ **shinpachi8**](http://bobao.360.cn/member/contribute?uid=2812295712)
+
+预估稿费：200RMB
+
+投稿方式：发送邮件至[linwei#360.cn](mailto:linwei@360.cn)，或登陆[网页版](http://bobao.360.cn/contribute/index)在线投稿
+
+**  
+**
+
+**前言**
+
+在这篇博客的[第一部分](http://bobao.360.cn/learning/detail/3463.html)，我们完成了Native层的分析，并获得了解密的辅助dex文件。
+在这一部分我们继续分析它。为了保持连续性，我们将保持第一部分的章节和图片下标。
+
+  
+
+**辅助的dex文件**
+
+下边的是一解密出的文件，是一个jar文件。 它通过MultiDex机制来动态加载为第二个DEX文件
+
+图25 解密的包含DEX文件的APK文件
+
+在解压"decrypt.dump"文件之后，你可以在文件夹内看到一个名为"class.dex"的文件。
+
+图26
+
+接下来，我们分析这个DEX文件
+
+图27 反编译DEX文件及它的AndroidManifest.xml文件
+
+从上图中，我们可以看到"class.dex"是名为"file Helpler"的恶意软件的主要逻辑。 下图是 com.sd.clip.activity.
+FileManagerActivity类的onCreate
+
+函数
+
+图28 FileManagerActivity类的onCreate函数
+
+图29 initadv函数
+
+图30 Nws类
+
+Nws类的getStart函数是用来启动 com.hg.mer.PG 服务。下边是PG类的定义。
+
+图31 com.hg.mer.PG服务类
+
+当startService函数被调用了之后，紧接着onCreate函数被调用,
+然后调用onHandleIntent函数。在上边的图中，我们用红线标明了四个关键代码，接下来我们按顺序分析它们。
+
+**  
+**
+
+**readDex()**
+
+下图是readDex函数的代码片段。
+
+图32 readDex函数
+
+基于我的分析，Shen类是使用了base64 的类, 所以Sheu.decode("S0suYmlu") 的结果是字符串 "KK.bin"。
+下一步，程序在它的资产文件夹就打开KK.bin文件并读取其中的一些有用的信息。
+
+下边是KK.bin的内容
+
+图33 在文件夹中的KK.bin文件
+
+程序可以从KK.bin文件末尾提取出一些内容。有七个使用Base64编码的字符串存储在数组列表中，getAppid函数是用来解码这些字符串。
+
+图34 getAppid函数
+
+解码的七个字符串如下：
+
+    
+    
+    Pls.Kbin: wddex.jar
+    Pls.OI: xdt
+    Pls.PL: com.svq.cvo.Rtow
+    Pls.Jr: getDex
+    Pls.Wv: sgdex
+    Pls.As: dos.jar
+    Pls.NQ: KK.bin
+
+  
+
+**dxfile()**
+
+下边是dxfile的代码片段:
+
+图35 dxfile函数
+
+图36 UnZipFolder函数
+
+Pls.UnZipFolder函数从KK.bin文件中提取加密的内容。其在KK.bin中的位置是从偏移位0X20至偏移位0x1CDB,
+然后保存为/data/data/com.web.sdfile/files/wddex.jar 文件。 其内容是使用的DES算法来加密的。
+
+在dxfile函数中，程序将/data/data/com.web.sdfile/files/wddex.jar
+解密至文件/data/data/com.web.sdfile/app_sgdex/dos.jar中
+
+**  
+**
+
+**DexClassLoader()**
+
+它的构造函数如下：
+
+在这个调用中，dexPath的值是"/data/data/com.web.sdfile/app_sgdex/dos.jar",
+optimizedDirectory的值是 "/data/data/com.web.sdfile/app_xdt"
+
+这个函数从.jar,.apk文件中加载包含 class.dex入口的类。这个函数是用来执行应用未安装的那一部分的代码。优化的DEX文件被写入
+data/data/com.web.sdfile/app_xdt 文件夹下的dos.dex中。
+
+一旦加载完 data/data/com.web.sdfile/app_sgdex/dos.jar 中的类，这个文件就会被删除。
+
+1\. 在com.svq.cvo.Rtow dynamically类中调用getDex()函数
+
+接下来，让我们检查一下dos.dex文件。
+
+图37 反编译dos.dex
+
+下图是com.svq.cvo.Rtow类的getDex函数
+
+图38 com.svq.cvo.Rtow类的getDex函数
+
+图39 Dwol类的构造函数
+
+com.kdw.xoa.Dwol类的构造函数中，一个新文件mda.ico 在文件夹
+/data/data/com.web.sdfile/files/中被创建。然后它调用downloadFile函数来从远端服务器http://gt.rogsob.com/stmp/ad.png
+下载一个payload 并保存至/data/data/com.web.sdfile/files/mda.ico.
+这个payload使用DES加密算法来加密。
+
+图40 downloadFile函数
+
+图41 initData函数
+
+接下来是silentInstall的定义
+
+图42 silentInstall函数
+
+以红线标记的五个部分在下边解释
+
+a. Dwol的dxfile函数是用来对 /data/data/com.web.sdfile/files/mda.ico
+这个payload来解密的，解密完的payload保存在 /data/data/com.web.sdfile/app_snex/dkt.jar
+
+b. Ngss类的upZipFile函数将解密的payload 即 dkt.jar解压至/data/data/com.web.sdfile/files/
+文件夹内。它包括以下几个文件
+
+图43 payload文件
+
+c. 在解压完之后，它删除了文件/data/data/com.web.sdfile/app_snex/dkt.jar和
+/data/data/com.web.sdfile/files/mda.ico ,并将目录
+/data/data/com.web.sdfile/app_snex/也删除了。
+
+d. 在文件夹/data/data/com.web.sdfile/files/ 中将class.dex重命名为wsh.jar
+
+e. 在/data/data/com.web.sdfile/files/wsh.jar 中动态加载类，最优的目录app_outdex
+存储dex的缓存文件为wsh.dex。
+
+f. 调用com.rootdex.MainActivity类的getDex函数
+
+接下来，我们深入wsh.dex， 它主要是执行root工具来root设备并在系统目录里安装文件。
+
+图44 反编译wsh.dex
+
+下图是com.rootdex.MainActivity类的getDex函数的定义。
+
+图45 com.rootdex.MainActivity类的getDex函数的定义
+
+a. GetActive函数是用来收集用户信息然后传给服务器。服务器的URL是：
+http://grs[.]gowdsy[.]com:8092/active.do 下边是流量:
+
+图46 发送收集的信息至服务器的流量
+
+b. 查看在文件夹/data/data/com.web.sdfile/files/
+下是否有文件,然后将它们的文件名保存至下一步用来root设备的数组列表中。 c. 在设备中执行root工具。
+
+然后，run函数会调用HandleRoot函数
+
+图47 HandleRoot函数
+
+下边是copyRootFile函数的关键代码
+
+图48 copyRootFile函数
+
+在这个函数中，主要有四步：
+
+1\. FileUtil.dxfile函数用来解密 文件 /data/data/com.web.sdfile/files/png.ico，
+然后将它保存成文件/data/data/com.web.sdfile/app_dex/.do 。
+
+2\. FileUtil.UnZipb函数将上一步的 /data/data/com.web.sdfile/app_dex/.do 文件解压至文件夹
+/data/data/com.web.sdfile/.rtt,
+这个文件夹是一个包含六个ELF可执行文件的隐藏文件夹，如下图所示，它包含四个root利用代码： r1-r4
+
+图49 root利用文件
+
+1\. 程序会删除解密的文件/data/data/com.web.sdfile/app_dex/.do 与文件夹
+/data/data/com.web.sdfile/app_dex .
+
+2\. 然后会在文件夹/data/data/com.web.sdfile/files/ 下创建一个文件，名为：psneuter.js。 它的内容如下：
+
+图50 psneuter.js的内容
+
+executeRootAct函数调用了hanleOriMiddle函数。下边是用来通过SHELL命令来执行root的四段代码。
+
+图51 通过SHELL来root
+
+在调查完这些可执行文件后，我发现r3是一个dashi root 工具来的MTK root 机制, 而r4的利用代码是由开源工程[android-rooting-tool](https://github.com/android-rooting-tools/android_run_root_shell)的一个[CVE-2013-6282](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2013-6282)利用代码来的。而r2是一个用来root Samsung Exynos的
+[CVE-2012-6422](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2012-6422)
+
+函数hanleOriMiddle通过命令行来执行root脚本和其他的一些命令。 所有执行的shell命令如下：
+
+图52 root命令时执行的所有shell
+
+在成功获得root权限后， psneuter.js脚本 会以超级用户权限来执行。这个脚本的作用是用来在/system/priv-app/
+目录下安全root权限的应用。
+
+接下来，我们会探讨这两个APK应用。 为了防止被用户发现，这两个应用在安装之后并没有图标。
+
+另外，名为rsh的脚本也会通过shell命令来执行。
+
+图53 rsh 脚本通过命令执行。
+
+不同的是，rsh 基于Build.MANUFACTURER属性。 它如下所示：
+
+图54 rsh脚本（1）
+
+图54-1 rsh脚本(2)
+
+  
+
+**BSetting.apk是怎样工作滴**
+
+如图50所示， abc.apk被放在了 /system/priv-app/ 文件夹下且重命名为 BSetting.apk, 同时通过pm安装 。
+
+BSetting.apk作为一个远程控制服务器的客户端, 它从远程服务器收取并执行任务。
+
+这个APP在后台运行并且没有运行图标， 下边图示为它的信息：
+
+图55 BSetting.apk的信息
+
+这个APP将它自己伪装为一个Android同步服务，它的反编译如下图：
+
+图56 BSetting.apk的反编译信息
+
+图57 BSetting.apk的AndroidManifest.xml文件
+
+广播接收类的com.sfy.oyr.R 是整个APP的主要逻辑。
+
+图58 类R
+
+程度首先解密其资产文件夹下的jif.png文件，它是一个dex文件。然后程序使用Java反射来加载类和调用其中的一些方法。
+
+我们反编译了解密后的dex文件，如下所示:
+
+图59 反编译的class.dex
+
+在ADService类中的launchTancTask函数的用来从远程服务器接收并执行任务。
+
+图60 从远程服务器获得任务
+
+获取任务的流量抓包如下图。其远程服务器有两个域名，其中一个域名是grs[.]gowdsy[.]com,
+另外一个备用的域名是grs[.]rogsob[.]com.
+http的返回值是格式为xml，包含了任务类型，推送色情广告的URL，下载APK的URL，需要安装apk的类型等等。
+
+图61 从远程服务器获取任务的流量
+
+根据不同的任务类型，程度使用不同的方式来执行任务。 关键的代码片段如下:
+
+图62 依据任务类型来执行任务
+
+远程控制服务器可以执行多种恶意行为，包括但不限于以下几种：
+
+**  
+**
+
+**卸载应用**
+
+它使用android系统的 "pm uninstall" 来卸载应用。
+
+图63 使用pm unistall 来卸载应用
+
+**  
+**
+
+**色情推广**
+
+下边是一些色情推广的截图
+
+图64 app推送到设备的色情广告
+
+**在屏幕上创建快捷方式**
+
+快捷方式包括色情广告，热点APP， 热点视频等。下边是程序的代码代码与创建的快捷方式的截图
+
+图65 在屏幕上创建快捷方式的代码段
+
+图66 屏幕的快捷方式
+
+**  
+**
+
+**应用和广告推送**
+
+除了获得设备的ROOT权限，这个root类的恶意软件的作者还推送APP与广告以获得收入。它的APP与广告的推送相当积极而且相当恼人。
+
+下面是它推送的一些广告的截图:
+
+图67 广告与app推送
+
+  
+
+**正常的app安装与静默安装**
+
+恶意程序根据不同的任务类型来选择不同app安装方式。下边是一个在安装时有着用户界面的正常的app安装的代码段。
+
+图68 正常安装
+
+这个APP使用android系统的工具 "pm install -r" 来静默安装非系统的软件,同时它APK文件拖进/system/priv-app/
+文件夹来安装 系统应用。
+
+图69 静默安装非系统应用
+
+在/data/app/ 文件夹下，我们发现了一些(包含但不限于)已经安装 的应用：
+
+图70 已经被恶意软件安装的应用
+
+图71 安装系统应用的命令
+
+在 /system/priv-app/,我们发现了一些apk文件（包含但不限于）也已经被安装了
+
+图72 安装在/system/priv-app/下的恶意软件
+
+**  
+**
+
+**推送通知**
+
+恶意软件会推送通知来诱导用户点击来在浏览器中打开URL
+
+下面是推送通知的代码段:
+
+图73 推送通知的代码段
+
+图74 恶意软件推送的通知
+
+**  
+**
+
+**下载文件**
+
+我们发现有很多文件和文件夹下载在 /sdcard/ 里，
+包括apk文件，jar文件，图片，日志等。这些文件是由安装的app生成的，且其中可能会有一些来执行恶意的行为。
+
+图75 下载在 /sdcard/ 中的文件和文件夹
+
+  
+
+**解决办法**
+
+恶意软件被Fortinet Antivirus检测并标记为 Android/Rootnik.PAC!tr.
+
+与远程C2服务器的通信流量可以由 Fortinet IPS 检测并标记为 Android.Rootnik.Malware.C2.
+
+  
+
+**总结**
+
+从上面的分析可以看出，rootnik恶意软件很强大，并且使用非常先进的反调试和反HOOK技术来防止逆向，以及对文件和字符串进行不同类型的加密.
+除此之外，它还使用multidex机制来动态加载和安装作为恶意软件的主要逻辑的辅助dex文件。它使用一些开源的Android root
+利用工具和来自dashi root工具的MTK root方案，以便在在Android设备上获得root权限。
+在成功取得设备的root权限后，rootnik恶意软件可能会执行各种恶意软件，包括应用和广告推送，推送色情内容，在主屏幕上创建快捷方式，静默安装应用程序以及推送通知等。
+
+  
+
+**附录**
+
+**Rootnik Malware Sample**
+
+**Package Name: com.web.sdfile**
+
+SHA256: E5E22B357893BC15A50DC35B702DD5FCDFEAFC6FFEC7DAA0D313C724D72EC854
+
+Additional APK files dropped into system partition by Rootnik malware
+
+**Package Name: com.br.srd**
+
+SHA256: E2BDCFE5796CD377D41F3DA3838865AB062EA7AF9E1E4424B1E34EB084ABEC4A
+
+**Package Name: com.oyws.pdu**
+
+SHA256: CEE6584CD2E01FAB5F075F94AF2A0CE024ED5E4F2D52E3DC39F7655C736A7232
+
+**C &C Server**
+
+gt[.]rogsob[.]com
+
+grs[.]gowdsy[.]com
+
+qj[.]hoyebs[.]com
+
+qj[.]hoyow[.]com
+
+gt[.]yepodjr[.]com
+
+本文翻译自fortinet.com [原文链接](http://blog.fortinet.com/2017/01/26/deep-analysis-of-android-rootnik-malware-using-advanced-anti-debug-and-anti-hook-part-ii-analysis-of-the-scope-of-java)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **shinpachi8** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/85427](/post/id/85427)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [fortinet.com](http://blog.fortinet.com/2017/01/26/deep-analysis-of-android-rootnik-malware-using-advanced-anti-debug-and-anti-hook-part-ii-analysis-of-the-scope-of-java)
+
+如若转载,请注明出处： <http://blog.fortinet.com/2017/01/26/deep-analysis-of-android-rootnik-malware-using-advanced-anti-debug-and-anti-hook-part-ii-analysis-of-the-scope-of-java>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p4.ssl.qhmsg.com/dm/200_200_100/t00df551a583a87f4e9.jpg)
+shinpachi8
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

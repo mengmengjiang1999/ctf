@@ -1,0 +1,93 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+##  **前言**
+
+ **** **Facebook 和它的旗下应用 Instagram都是把照片/视频存储在Facebook自身的CDN服务器 "*.fbcdn.net" 或
+"*.cdninstagram.com" 之上，然后，再通过其各个子CDN域名网站提供针对请求的内容缓存分发服务。本文中作者分享的是一个针对Facebook
+CDN服务器的XSS漏洞，利用该漏洞可以绕过链接中的校验机制，任意执行JS代码。**
+
+ ** **![635745453002615318-AXX-FACEBOOK-XX.jpg](https://image.3001.net/images/20181214/1544755765_5c131a35624fc.jpg!small)****
+
+##  **前言**
+
+****Facebook存储在CDN服务器上的图片和视频，都在自身访问链接中包含了一个HASH串，这个HASH串目的在于对Facebook自身存储的图片或视频起到一个签名校验的保护作用，且其HASH串都是以像
+'oh' 或 'oe' 这样的两个字母参数来赋值的。
+
+>
+> [https://instagram.fpnq2-1.fna.fbcdn.net/v/t51.2885-15/12494762_1700832180174667_9131300789175210564_n.jpg?_nc_cat=0&oh=cb7024e12c863937b69c3d6c15589697&oe=5B31E89F](https://instagram.fpnq2-1.fna.fbcdn.net/v/t51.2885-15/12494762_1700832180174667_9131300789175210564_n.jpg?_nc_cat=0&oh=cb7024e12c863937b69c3d6c15589697&oe=5B31E89F)  
+>
+
+如果我们把其文件格式做个更改，如把.jpg改为.html，那么无疑，服务器访问就会出错。
+
+所以，我一开始的想法就是，是否可以把这种链接中的多余参数去掉，让它简化一下成为以下这样呢：
+
+>
+> <https://instagram.fpnq2-1.fna.fbcdn.net/12494762_1700832180174667_9131300789175210564_n.jpg>
+
+但这确实有点想当然了，请求响应是: “Access
+Denied”。在经过一番研究之后，我找到了能针对所有图片和视频，绕过其链接中HASH串签名校验的方法，即使用户上传的某些图片视频对应的链接是过期“expired”状态，我一样可以从Facebook
+CDN服务器中访问到它们。
+
+## 漏洞发现
+
+>
+> [https://instagram.fpnq2-1.fna.fbcdn.net/v/t51.2885-15/12494762_1700832180174667_9131300789175210564_n.jpg?_nc_cat=0&oh=cb7024e12c863937b69c3d6c15589697&oe=5B31E89F](https://instagram.fpnq2-1.fna.fbcdn.net/v/t51.2885-15/12494762_1700832180174667_9131300789175210564_n.jpg?_nc_cat=0&oh=cb7024e12c863937b69c3d6c15589697&oe=5B31E89F)
+
+观察以上URL，在其中，首先是存在一个参数"/v/"，用来限制当前URL是否能访问后续的HASH串，但是删除 “/v/”
+这个参数后仍然会返回错误:“Access
+Denied”。后来，我想如果让它跨域访问又如何呢，比如说，instagram.fpnq2-1.fna.fbcdn.net存在一个别名记录（CNAME）如下：
+
+> instagram.fpnq2-1.fna.fbcdn.net. 3599 IN CNAME scontent.xx.fbcdn.net.  
+>
+
+也就是说，如果把请求instagram.fpnq2-1.fna.fbcdn.net的图片链接中的CDN服务器换成scontent.xx.fbcdn.net，那会怎样呢？在我简单的看来，这两个不同的子域名网站虽同属一个CDN根服务器，但这种一替换可能就不会存在一些跨域的校验限制了。
+
+我一试，去除
+“/v/”参数，去除HASH校验串_nc_cat=0&oh=cb7024e12c863937b69c3d6c15589697&oe=5B31E89F之后，竟然可以访问到目标图片！Boom!
+
+那么如此说来，能不能更改访问图片的后缀格式了呢？比如说，我们在上传图片中加入一些js脚本，然后把它改为.html，不就能实现Payload执行了吗？也或者能把上传的图片改为".html/.svg"
+或 ”.php“呢。试试看吧。
+
+## PoC
+
+做如下测试，我们结合Burp抓包，在上传图片中加入一个带XSS
+Payload的外链.js脚本，可以成功上传到instagram.fpnq2-1.fna.fbcdn.net的服务器上，然后，获取到服务器上当前上传图片的具体访问链接，把图片.jpg格式改为.html格式，就能成功实现js脚本中的XSS
+Payload运行。这里我用到的带XSS Payload的外链.js为：
+
+> <https://www.amolbaikar.com/wp/js/instagram.js>
+
+也就是，提取到当前上传到CDN服务器中图片的具体访问链接：
+
+>
+> [https://instagram.fpnq2-1.fna.fbcdn.net/v/t51.2885-15/12494762_1700832180174667_9131300789175210564_n.jpg?_nc_cat=0&oh=cb7024e12c863937b69c3d6c15589697&oe=5B31E89F](https://instagram.fpnq2-1.fna.fbcdn.net/v/t51.2885-15/12494762_1700832180174667_9131300789175210564_n.jpg?_nc_cat=0&oh=cb7024e12c863937b69c3d6c15589697&oe=5B31E89F)
+
+然后，把它更改为简化后去除 “/v/”参数、去除HASH校验串，且为instagram.fpnq2-1.fna.fbcdn.net
+别名scontent.xx.fbcdn.net ，但图片名称 12494762_1700832180174667_9131300789175210564_n
+一样，但把.jpg格式更改为.html格式，具体的访问链接如下：
+
+>
+> <https://scontent.xx.fbcdn.net/t51.2885-15/12494762_1700832180174667_9131300789175210564_n.html>
+
+由于其中加入了带XSS Payload的外链.js，在html文件的解析执行下，可以成功触发Payload。验证视频如下：
+
+##
+![d8bcz-2qv4b.gif](https://image.3001.net/images/20181214/1544755123_5c1317b3556cc.gif!small)总结
+
+由于Facebook没有考虑“校验签名”绕过或其它“数据泄露”问题的严重性，且没把通过CDN服务器访问到图片或视频原始链接的问题考虑在内，（点此参考其它分析文章），因此，造成了它本该是内部的数据，由此变成了公开的内容。
+
+攻击者利用该漏洞可以在Facebook
+CDN服务器上执行任意JS代码，好在有沙盒防护机制，其不能读取用户的cookies/session信息，但应用在实际的攻击场景中，该漏洞可以绕过Facebook的链接黑名单系统
+Linkshim，也能用其实施钓鱼行为。
+
+## 漏洞上报进程
+
+> 2018.3.8: 漏洞初报
+>
+> 2018.3.10: 漏洞确认
+>
+> 2018.3.23: 漏洞修复
+>
+> 2018.3.28：Facebook官方$1500赏金发放
+
+ ***参考来源：[amolbaikar](https://www.amolbaikar.com/xss-on-facebook-instagram-cdn-server-bypassing-signature-protection/)，clouds编译，转载请注明来自FreeBuf.COM**  
+

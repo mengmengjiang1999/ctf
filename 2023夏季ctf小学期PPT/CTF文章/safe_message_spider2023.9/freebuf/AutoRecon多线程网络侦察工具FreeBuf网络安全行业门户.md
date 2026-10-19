@@ -1,0 +1,442 @@
+**AutoRecon是一个多线程的网络侦察工具，可自动化的执行服务枚举任务。其旨在减少任务的执行时间，非常适用于CTF和某些渗透环境（例如OSCP）。在实际参与中它可能对你也很有帮助。**
+
+该工具首先会执行端口/服务检测扫描，并根据获取的从初始结果，使用许多其他不同的工具对这些服务进行进一步的枚举扫描。例如，如果找到HTTP，则将启动nikto等等。
+
+该工具中的所有内容都是高度可配置的。默认配置执行非自动化利用，以确保工具符合OSCP考试规则。如果你希望在配置中添加自动利用工具，则需要你自行承担风险。作者对于因误用此工具而导致的一系列后果，不承担任何责任！
+
+##  灵感来源
+
+AutoRecon的灵感来自于作者在OSCP
+labs中使用的三款工具：[Reconnoitre](https://github.com/codingo/Reconnoitre)，[ReconScan](https://github.com/RoliSoft/ReconScan)和[bscan](https://github.com/welchbj/bscan)。虽然这三款工具都很有用，但它们的缺点也显而易见就是各自为伍，没有一款工具能同时满足我所有的需求。而AutoRecon则结合了上述工具各自的优势，同时还实现了许多其他新的功能，可以帮助测试人员枚举多个目标。
+
+##  特性
+
+> 支持以IP地址，IP范围（CIDR表示法）和可解析主机名形式的多个目标。
+>
+> 可以同时扫描目标，如果有多个处理器可用的话。
+>
+> 可定制的端口扫描配置文件，可实现初始扫描的灵活性
+>
+> 可自定义的服务枚举命令和建议的手动后续命令。
+>
+> 用于结果收集的直观目录结构。
+>
+> 完整记录已运行的命令以及失败时的错误。
+>
+> 全局和每次扫描模式匹配，因此你可以高亮显示/从干扰中提取重要信息。
+
+##  依赖项
+
+> Python 3
+>
+> colorama
+>
+> toml
+
+安装Python 3后，pip3可用于安装其他依赖项：
+
+    
+    
+    $ pip3 install -r requirements.txt
+
+有人曾向我表示，在OSCP Kali版本上通过apt安装pip3会使主机出现不稳定的情况。这种情况，可以通过运行以下命令来安装pip3：
+
+    
+    
+    $ curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+    $ python3 get-pip.py
+
+现在“pip3”命令应该可以使用了。
+
+AutoRecon中使用的几个命令引用了SecLists项目，位于/usr/share/seclists/目录。你可以手动将SecLists项目下载到该目录（<https://github.com/danielmiessler/SecLists>），或者如果你使用的是Kali
+Linux（强烈推荐），则可以运行以下命令：
+
+    
+    
+    $ sudo apt install seclists
+
+如果不安装SecLists，AutoRecon仍将运行，但有些命令可能会失败，并且某些手动命令也可能无法运行。
+
+此外，你可能还需要安装以下命令，这具体取决于你的操作系统：
+
+    
+    
+    curl
+    enum4linux
+    gobuster
+    nbtscan
+    nikto
+    nmap
+    onesixtyone
+    oscanner
+    smbclient
+    smbmap
+    smtp-user-enum
+    snmpwalk
+    sslscan
+    svwar
+    tnscmd10g
+    whatweb
+    wkhtmltoimage
+
+##  使用
+
+AutoRecon使用Python 3特定功能，不支持Python 2。
+
+    
+    
+    usage: autorecon.py [-h] [-ct <number>] [-cs <number>] [--profile PROFILE]
+                        [-o OUTPUT] [--nmap NMAP | --nmap-append NMAP_APPEND] [-v]
+                        [--disable-sanity-checks]
+                        targets [targets ...]
+    Network reconnaissance tool to port scan and automatically enumerate services
+    found on multiple targets.
+    positional arguments:
+      targets               IP addresses (e.g. 10.0.0.1), CIDR notation (e.g.
+                            10.0.0.1/24), or resolvable hostnames (e.g. foo.bar)
+                            to scan.
+    optional arguments:
+      -h, --help            show this help message and exit
+      -ct <number>, --concurrent-targets <number>
+                            The maximum number of target hosts to scan
+                            concurrently. Default: 5
+      -cs <number>, --concurrent-scans <number>
+                            The maximum number of scans to perform per target
+                            host. Default: 10
+      --profile PROFILE     The port scanning profile to use (defined in port-                            scan-profiles.toml). Default: default
+      -o OUTPUT, --output OUTPUT
+                            The output directory for results. Default: results
+      --nmap NMAP           Override the {nmap_extra} variable in scans. Default:
+                            -vv --reason -Pn
+      --nmap-append NMAP_APPEND
+                            Append to the default {nmap_extra} variable in scans.
+      -v, --verbose         Enable verbose output. Repeat for more verbosity.
+      --disable-sanity-checks
+                            Disable sanity checks that would otherwise prevent the
+                            scans from running.
+
+##  示例：
+
+###  **扫描单个目标**
+
+    
+    
+    python3 autorecon.py 127.0.0.1
+    [*] Scanning target 127.0.0.1
+    [*] Running service detection nmap-full-tcp on 127.0.0.1
+    [*] Running service detection nmap-top-20-udp on 127.0.0.1
+    [*] Running service detection nmap-quick on 127.0.0.1
+    [*] Service detection nmap-quick on 127.0.0.1 finished successfully
+    [*] [127.0.0.1] ssh found on tcp/22
+    [*] [127.0.0.1] http found on tcp/80
+    [*] [127.0.0.1] rpcbind found on tcp/111
+    [*] [127.0.0.1] postgresql found on tcp/5432
+    [*] Running task tcp/22/nmap-ssh on 127.0.0.1
+    [*] Running task tcp/80/nmap-http on 127.0.0.1
+    [*] Running task tcp/80/curl-index on 127.0.0.1
+    [*] Running task tcp/80/curl-robots on 127.0.0.1
+    [*] Running task tcp/80/whatweb on 127.0.0.1
+    [*] Running task tcp/80/nikto on 127.0.0.1
+    [*] Running task tcp/111/nmap-nfs on 127.0.0.1
+    [*] Task tcp/80/curl-index on 127.0.0.1 finished successfully
+    [*] Task tcp/80/curl-robots on 127.0.0.1 finished successfully
+    [*] Task tcp/22/nmap-ssh on 127.0.0.1 finished successfully
+    [*] Task tcp/80/whatweb on 127.0.0.1 finished successfully
+    [*] Task tcp/111/nmap-nfs on 127.0.0.1 finished successfully
+    [*] Task tcp/80/nmap-http on 127.0.0.1 finished successfully
+    [*] Task tcp/80/nikto on 127.0.0.1 finished successfully
+    [*] Service detection nmap-top-20-udp on 127.0.0.1 finished successfully
+    [*] Service detection nmap-full-tcp on 127.0.0.1 finished successfully
+    [*] [127.0.0.1] http found on tcp/5984
+    [*] [127.0.0.1] rtsp found on tcp/5985
+    [*] Running task tcp/5984/nmap-http on 127.0.0.1
+    [*] Running task tcp/5984/curl-index on 127.0.0.1
+    [*] Running task tcp/5984/curl-robots on 127.0.0.1
+    [*] Running task tcp/5984/whatweb on 127.0.0.1
+    [*] Running task tcp/5984/nikto on 127.0.0.1
+    [*] Task tcp/5984/curl-index on 127.0.0.1 finished successfully
+    [*] Task tcp/5984/curl-robots on 127.0.0.1 finished successfully
+    [*] Task tcp/5984/whatweb on 127.0.0.1 finished successfully
+    [*] Task tcp/5984/nikto on 127.0.0.1 finished successfully
+    [*] Task tcp/5984/nmap-http on 127.0.0.1 finished successfully
+    [*] Finished scanning target 127.0.0.1
+
+默认端口扫描配置文件首先会执行完整的TCP端口扫描，前20个UDP端口扫描以及前1000个TCP端口扫描。你可能会问为什么AutoRecon会在进行完整的TCP端口扫描（也会扫描这些端口）的同时扫描前1000个TCP端口。原因很简单：大多数开放端口通常都位于前1000个端口范围内，而我们希望的是快速开始枚举服务，而不是等待Nmap逐一的扫描每个端口。如你所见，所有服务枚举扫描实际上在完成TCP端口扫描之前已经完成。虽然工作有一点重复，但实际的枚举结果将更快地返回给测试人员。
+
+注意，如果你的终端支持，实际的命令行输出将被着色。
+
+###  **扫描多个目标**
+
+    
+    
+    python3 autorecon.py 192.168.1.100 192.168.1.1/30 localhost
+    [*] Scanning target 192.168.1.100
+    [*] Scanning target 192.168.1.1
+    [*] Scanning target 192.168.1.2
+    [*] Scanning target localhost
+    [*] Running service detection nmap-quick on 192.168.1.100
+    [*] Running service detection nmap-quick on localhost
+    [*] Running service detection nmap-top-20-udp on 192.168.1.100
+    [*] Running service detection nmap-quick on 192.168.1.1
+    [*] Running service detection nmap-quick on 192.168.1.2
+    [*] Running service detection nmap-top-20-udp on 192.168.1.1
+    [*] Running service detection nmap-full-tcp on 192.168.1.100
+    [*] Running service detection nmap-top-20-udp on localhost
+    [*] Running service detection nmap-top-20-udp on 192.168.1.2
+    [*] Running service detection nmap-full-tcp on localhost
+    [*] Running service detection nmap-full-tcp on 192.168.1.1
+    [*] Running service detection nmap-full-tcp on 192.168.1.2
+    ...
+
+AutoRecon支持一次扫描多个目标，并将扩展CIDR表示法中提供的IP范围。默认情况下，一次只扫描5个目标，每个目标扫描10次。
+
+###  **使用高级选项扫描多个目标**
+
+    
+    
+    python3 autorecon.py -ct 2 -cs 2 -vv -o outputdir 192.168.1.100 192.168.1.1/30 localhost
+    [*] Scanning target 192.168.1.100
+    [*] Scanning target 192.168.1.1
+    [*] Running service detection nmap-quick on 192.168.1.100 with nmap -vv --reason -Pn -sV -sC --version-all -oN "/root/outputdir/192.168.1.100/scans/_quick_tcp_nmap.txt" -oX "/root/outputdir/192.168.1.100/scans/_quick_tcp_nmap.xml" 192.168.1.100
+    [*] Running service detection nmap-quick on 192.168.1.1 with nmap -vv --reason -Pn -sV -sC --version-all -oN "/root/outputdir/192.168.1.1/scans/_quick_tcp_nmap.txt" -oX "/root/outputdir/192.168.1.1/scans/_quick_tcp_nmap.xml" 192.168.1.1
+    [*] Running service detection nmap-top-20-udp on 192.168.1.100 with nmap -vv --reason -Pn -sU -A --top-ports=20 --version-all -oN "/root/outputdir/192.168.1.100/scans/_top_20_udp_nmap.txt" -oX "/root/outputdir/192.168.1.100/scans/_top_20_udp_nmap.xml" 192.168.1.100
+    [*] Running service detection nmap-top-20-udp on 192.168.1.1 with nmap -vv --reason -Pn -sU -A --top-ports=20 --version-all -oN "/root/outputdir/192.168.1.1/scans/_top_20_udp_nmap.txt" -oX "/root/outputdir/192.168.1.1/scans/_top_20_udp_nmap.xml" 192.168.1.1
+    [-] [192.168.1.1 nmap-quick] Starting Nmap 7.70 ( https://nmap.org ) at 2019-03-01 17:25 EST
+    [-] [192.168.1.100 nmap-quick] Starting Nmap 7.70 ( https://nmap.org ) at 2019-03-01 17:25 EST
+    [-] [192.168.1.100 nmap-top-20-udp] Starting Nmap 7.70 ( https://nmap.org ) at 2019-03-01 17:25 EST
+    [-] [192.168.1.1 nmap-top-20-udp] Starting Nmap 7.70 ( https://nmap.org ) at 2019-03-01 17:25 EST
+    [-] [192.168.1.1 nmap-quick] NSE: Loaded 148 scripts for scanning.
+    [-] [192.168.1.1 nmap-quick] NSE: Script Pre-scanning.
+    [-] [192.168.1.1 nmap-quick] NSE: Starting runlevel 1 (of 2) scan.
+    [-] [192.168.1.1 nmap-quick] Initiating NSE at 17:25
+    [-] [192.168.1.1 nmap-quick] Completed NSE at 17:25, 0.00s elapsed
+    [-] [192.168.1.1 nmap-quick] NSE: Starting runlevel 2 (of 2) scan.
+    [-] [192.168.1.1 nmap-quick] Initiating NSE at 17:25
+    [-] [192.168.1.1 nmap-quick] Completed NSE at 17:25, 0.00s elapsed
+    [-] [192.168.1.1 nmap-quick] Initiating ARP Ping Scan at 17:25
+    [-] [192.168.1.100 nmap-quick] NSE: Loaded 148 scripts for scanning.
+    [-] [192.168.1.100 nmap-quick] NSE: Script Pre-scanning.
+    [-] [192.168.1.100 nmap-quick] NSE: Starting runlevel 1 (of 2) scan.
+    [-] [192.168.1.100 nmap-quick] Initiating NSE at 17:25
+    [-] [192.168.1.100 nmap-quick] Completed NSE at 17:25, 0.00s elapsed
+    [-] [192.168.1.100 nmap-quick] NSE: Starting runlevel 2 (of 2) scan.
+    [-] [192.168.1.100 nmap-quick] Initiating NSE at 17:25
+    [-] [192.168.1.100 nmap-quick] Completed NSE at 17:25, 0.00s elapsed
+    [-] [192.168.1.100 nmap-quick] Initiating ARP Ping Scan at 17:25
+    ...
+
+在本示例中，-ct选项将并发目标数限制为2，-cs选项将每个目标的并发扫描数限制为2。-vv选项表示详细输出，显示正在运行的每个扫描的输出。-o选项为要保存的扫描结果设置自定义输出目录。
+
+##  Verbosity
+
+AutoRecon支持三个级别的详细程度：
+
+> （none）最小输出。AutoRecon将宣布目标扫描何时开始和结束，以及哪些服务被标识。
+>
+> （-v）详细输出。AutoRecon还将指定正在运行的命令，并高亮显示在命令输出中匹配的任何模式。
+>
+>
+> （-vv）更为详细的输出。AutoRecon将输出所有内容。当同时扫描多个目标时，这可能导致巨大的输出量。除非你需要查看命令的实时输出，否则我不建议你使用-> vv。
+
+##  结果
+
+默认情况下，结果将存储在./results目录中。为各个目标创建一个新的子目录。该子目录的结构如下：
+
+    
+    
+    .
+    ├── exploit/
+    ├── loot/
+    ├── report/
+    │   ├── local.txt
+    │   ├── notes.txt
+    │   ├── proof.txt
+    │   └── screenshots/
+    └── scans/
+        ├── _commands.log
+        ├── _manual_commands.txt
+        └── xml/
+
+> exploit目录包含你为目标下载/写入的exploit代码。
+>
+> loot目录包含你在目标上找到的loot（例如哈希等）。
+>
+> report目录包含一些自动生成的文件和目录，这些文件和目录对报告很有用：
+>
+> local.txt可用于存储目标上找到的local.txt flag。
+>
+> notes.txt应该包含一个基本模板，你可以在其中为每个发现的服务编写注释。
+>
+> proof.txt可用于存储在目标上找到的proof.txt flag。
+>
+> screenshots目录包含用于记录目标攻击的屏幕截图。
+
+scans目录中包含了AutoRecon执行扫描的所有结果，包括端口/服务检测扫描以及任何其他的服务枚举扫描。它还包含另外两个文件：
+
+> _commands.log包含AutoRecon针对目标运行的各个命令的列表。如果其中一个命令失败并且你希望通过修改再次运行它，这将非常有用。
+>
+>
+> _manual_commands.txt包含任何被认为“危险”而无法自动运行的命令，原因可能是这些命令过于有侵入性，需要根据人工分析进行修改，或者是有人盯着时会更好的工作。
+
+如果扫描导致错误，则名为_errors.log的文件也将出现在scans目录中，其中包含一些提示信息。
+
+如果输出与定义的模式匹配，则名为_patterns.log的文件也将出现在scans目录中，其中包含有关匹配输出的详细信息。
+
+scans/xml目录将任何XML输出（例如来自Nmap扫描）与主扫描输出分开存储，因此scans目录本身不会太杂乱。
+
+##  端口扫描配置文件
+
+你可以在port-scan-profiles.toml文件中定义初始端口扫描/服务检测命令。配置文件使用TOML格式，这里已经解释过了：<https://github.com/toml-lang/toml>
+
+这是一个名为“quick”的示例配置文件：
+
+    
+    
+    [quick]
+        [quick.nmap-quick]
+            [quick.nmap-quick.service-detection]
+            command = 'nmap {nmap_extra} -sV --version-all -oN "{scandir}/_quick_tcp_nmap.txt" -oX "{scandir}/xml/_quick_tcp_nmap.xml" {address}'
+            pattern = '^(?P<port>\d+)\/(?P<protocol>(tcp|udp))(.*)open(\s*)(?P<service>[\w\-\/]+)(\s*)(.*)$'
+        [quick.nmap-top-20-udp]
+            [quick.nmap-top-20-udp.service-detection]
+            command = 'nmap {nmap_extra} -sU -A --top-ports=20 --version-all -oN "{scandir}/_top_20_udp_nmap.txt" -oX "{scandir}/xml/_top_20_udp_nmap.xml" {address}'
+            pattern = '^(?P<port>\d+)\/(?P<protocol>(tcp|udp))(.*)open(\s*)(?P<service>[\w\-\/]+)(\s*)(.*)$'
+
+注意，缩进是可选的，在这里使用它纯粹是为了美观。“quick”配置文件定义了一个名为“nmap-quick”的扫描。此扫描具有服务检测命令，通过使用nmap扫描前1000个TCP端口。该命令使用两个引用：{scandir}是目标的扫描目录的位置，{address}是目标的地址。
+
+定义了一个正则表达式模式，它匹配输出中的三个命名组（端口，协议和服务）。每个服务检测命令必须具有与这三个组匹配的相应模式。AutoRecon将尝试进行一些检查，如果缺少这些组中的任何一个，则拒绝扫描。
+
+此外，还定义了一个几乎相同的扫描，称为“nmap-top-20-udp”。这将扫描前20个udp端口。
+
+下面是一个更为复杂的例子：
+
+    
+    
+    [udp]
+        [udp.udp-top-20]
+            [udp.udp-top-20.port-scan]
+            command = 'unicornscan -mU -p 631,161,137,123,138,1434,445,135,67,53,139,500,68,520,1900,4500,514,49152,162,69 {address} 2>&1 | tee "{scandir}/_top_20_udp_unicornscan.txt"'
+            pattern = '^UDP open\s*[\w-]+\[\s*(?P<port>\d+)\].*$'
+            [udp.udp-top-20.service-detection]
+            command = 'nmap {nmap_extra} -sU -A -p {ports} --version-all -oN "{scandir}/_top_20_udp_nmap.txt" -oX "{scandir}/xml/_top_20_udp_nmap.xml" {address}'
+            pattern = '^(?P<port>\d+)\/(?P<protocol>(udp))(.*)open(\s*)(?P<service>[\w\-\/]+)(\s*)(.*)$'
+
+在本例中，名为“udp”的配置文件定义了名为“udp-top-20”的扫描。此扫描有两个命令，一个是端口扫描，另一个是服务检测。定义端口扫描命令时，它将始终首先运行。相应的模式必须与从输出中提取端口号的命名组“port”匹配。
+
+服务检测将在端口扫描命令完成并使用新引用{ports}后运行。此引用是由port-scan命令提取的所有端口的逗号分隔字符串。注意，在服务检测模式中定义了相同的三个命名组（端口、协议和服务）。
+
+端口扫描和服务检测命令都使用{scandir}和{address}引用。
+
+注意，如果定义端口扫描命令时没有相应的服务检测命令，AutoRecon将拒绝扫描。
+
+这个复杂的示例只有在你想要将unicornscan的速度与nmap的服务检测能力结合使用时才真正有用。如果你对使用Nmap进行端口扫描和服务检测感到满意，则无需使用此设置。
+
+##  服务扫描
+
+你可以在service-scans.toml文件中定义服务枚举扫描和与某些服务关联的其他手动命令。
+
+以下是一个简单配置的示例：
+
+    
+    
+    [ftp]
+    service-names = [
+        '^ftp',
+        '^ftp\-data'
+    ]
+        [[ftp.scan]]
+        name = 'nmap-ftp'
+        command = 'nmap {nmap_extra} -sV -p {port} --script="(ftp* or ssl*) and not (brute or broadcast or dos or external or fuzzer)" -oN "{scandir}/{protocol}_{port}_ftp_nmap.txt" -oX "{scandir}/xml/{protocol}_{port}_ftp_nmap.xml" {address}'
+            [[ftp.scan.pattern]]
+            description = 'Anonymous FTP Enabled!'
+            pattern = 'Anonymous FTP login allowed'
+        [[ftp.manual]]
+        description = 'Bruteforce logins:'
+        commands = [
+            'hydra -L "{username_wordlist}" -P "{password_wordlist}" -e nsr -s {port} -o "{scandir}/{protocol}_{port}_ftp_hydra.txt" ftp://{address}',
+            'medusa -U "{username_wordlist}" -P "{password_wordlist}" -e ns -n {port} -O "{scandir}/{protocol}_{port}_ftp_medusa.txt" -M ftp -h {address}'
+        ]
+
+注意，缩进是可选的，这里使用它纯粹是为了美观。这里定义了服务“ftp”。 service-names数组包含正则表达式字符串，它应与服务检测扫描中的服务名称匹配。service-names数组以白名单为基础；只要其中一个正则表达式字符串匹配，服务就会被扫描。
+
+如果要从匹配中将某些正则表达式字符串列入黑名单，也可以定义可选的ignore-service-names数组。
+
+ftp.scan部分定义了一个名为nmap-ftp的扫描。此扫描定义了一个命令，该命令使用几个与ftp相关的脚本运行nmap。这里引用了：
+
+> 默认情况下，{nmap_extra}设置为“-vv --reason -Pn”，但可以分别使用--nmap或--nmap-> append命令行选项覆盖或追加此选项。如果协议是UDP，则还将附加“-sU”。
+>
+> {port}是运行该服务的端口。
+>
+> {scandir}是目标scans目录的位置。
+>
+> {protocol}是正在使用的协议（tcp或udp）。
+>
+> {address}是目标的地址。
+
+为nmap-ftp扫描定义了一个模式，该模式与简单模式“允许匿名FTP登录”相匹配。如果此模式与nmap-ftp命令的输出匹配，则模式描述（“Anonymous FTP
+Enabled!”）将保存到scans目录中的_patterns.log文件中。可以在描述中使用特殊引用{match}来引用整个匹配或第一组捕获。
+
+ftp.manual部分定义了一组手动命令。该组包含用户的描述，以及用户可以运行命令的数组。这里定义了两个新引用：{username_wordlist}和{password_wordlist}，它们在service-scans.toml文件的顶部配置，默认为SecLists提供的用户名和密码wordlist。
+
+这是一个更为复杂的配置：
+
+    
+    
+    [smb]
+    service-names = [
+        '^smb',
+        '^microsoft\-ds',
+        '^netbios'
+    ]
+        [[smb.scan]]
+        name = 'nmap-smb'
+        command = 'nmap {nmap_extra} -sV -p {port} --script="(nbstat or smb* or ssl*) and not (brute or broadcast or dos or external or fuzzer)" --script-args="unsafe=1" -oN "{scandir}/{protocol}_{port}_smb_nmap.txt" -oX "{scandir}/xml/{protocol}_{port}_smb_nmap.xml" {address}'
+        [[smb.scan]]
+        name = 'enum4linux'
+        command = 'enum4linux -a -M -l -d {address} 2>&1 | tee "{scandir}/enum4linux.txt"'
+        run_once = true
+        ports.tcp = [139, 389, 445]
+        ports.udp = [137]
+        [[smb.scan]]
+        name = 'nbtscan'
+        command = 'nbtscan -rvh {address} 2>&1 | tee "{scandir}/nbtscan.txt"'
+        run_once = true
+        ports.udp = [137]
+        [[smb.scan]]
+        name = 'smbclient'
+        command = 'smbclient -L\\ -N -I {address} 2>&1 | tee "{scandir}/smbclient.txt"'
+        run_once = true
+        ports.tcp = [139, 445]
+        [[smb.scan]]
+        name = 'smbmap-share-permissions'
+        command = 'smbmap -H {address} -P {port} 2>&1 | tee -a "{scandir}/smbmap-share-permissions.txt"; smbmap -u null -p "" -H {address} -P {port} 2>&1 | tee -a "{scandir}/smbmap-share-permissions.txt"'
+        [[smb.scan]]
+        name = 'smbmap-list-contents'
+        command = 'smbmap -H {address} -P {port} -R 2>&1 | tee -a "{scandir}/smbmap-list-contents.txt"; smbmap -u null -p "" -H {address} -P {port} -R 2>&1 | tee -a "{scandir}/smbmap-list-contents.txt"'
+        [[smb.scan]]
+        name = 'smbmap-execute-command'
+        command = 'smbmap -H {address} -P {port} -x "ipconfig /all" 2>&1 | tee -a "{scandir}/smbmap-execute-command.txt"; smbmap -u null -p "" -H {address} -P {port} -x "ipconfig /all" 2>&1 | tee -a "{scandir}/smbmap-execute-command.txt"'
+        [[smb.manual]]
+        description = 'Nmap scans for SMB vulnerabilities that could potentially cause a DoS if scanned (according to Nmap). Be careful:'
+        commands = [
+            'nmap {nmap_extra} -sV -p {port} --script="smb-vuln-ms06-025" --script-args="unsafe=1" -oN "{scandir}/{protocol}_{port}_smb_ms06-025.txt" -oX "{scandir}/xml/{protocol}_{port}_smb_ms06-025.xml" {address}',
+            'nmap {nmap_extra} -sV -p {port} --script="smb-vuln-ms07-029" --script-args="unsafe=1" -oN "{scandir}/{protocol}_{port}_smb_ms07-029.txt" -oX "{scandir}/xml/{protocol}_{port}_smb_ms07-029.xml" {address}',
+            'nmap {nmap_extra} -sV -p {port} --script="smb-vuln-ms08-067" --script-args="unsafe=1" -oN "{scandir}/{protocol}_{port}_smb_ms08-067.txt" -oX "{scandir}/xml/{protocol}_{port}_smb_ms08-067.xml" {address}'
+        ]
+
+这里的主要区别是几次扫描有一些新的设置：
+
+> ports.tcp数组定义了可以对其运行命令的TCP端口的白名单。如果在非白名单中的端口上检测到该服务，则不会对其运行该命令。
+>
+> ports.udp数组定义了可以对其运行命令的UDP端口的白名单。它的操作方式与ports.tcp数组相同。
+
+为什么要进行这些设置？有些命令只会对特定端口运行，并且不能被告知要对任何其他端口运行。例如，enum4linux将仅针对TCP端口139,389和445以及UDP端口137运行。
+
+事实上，enum4linux在运行时总是会尝试这些端口。因此，如果在TCP端口139和445上找到SMB服务，AutoRecon可能会无故尝试运行Enum4Linux两次。这就存在第三个设置的原因：
+
+> 如果run_once设置为true，则该命令将仅针对该目标运行一次，即使在多个端口上找到SMB服务也是如此。
+
+***参考来源：[GitHub](https://github.com/Tib3rius/AutoRecon)，FB小编secist编译，转载请注明来自FreeBuf.COM**
+
+  
+

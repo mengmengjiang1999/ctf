@@ -1,0 +1,43 @@
+
+**************Begin new trust node proc****************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"connector_proc","receiver_u
+    uid":"","route":"","flow":"FINISH","state":"MATCH","flag":"NULL","ljump":1,"rjum
+    p":1,"record_type":"MESSAGE","record_subtype":"CONN_SYNI","record_num":1,"record
+    _size":89,"expand_num":0,"expand_size":0,"msg_uuid":"f00212ebe7070cbc6b65b569ace
+    fd5767d90599f88b1a9490801ecd701898ada"},
+"RECORD":[
+    {"uuid":"0fc56bb95fc2a0e6685fec12f31ea1cc03d470fa819f89038822b9741741d8b2","serv
+        er_name":"term","service":"trust_server","server_addr":"£","flags":0,"nonce":"A
+        AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"msg_send","receiver_uuid":"
+    :user_client","route":"pcrquote-req","flow":"QUERY","state":"MATCH","flag":"NULL
+    ","ljump":1,"rjump":1,"record_type":"GENERAL_RETURN","record_subtype":"STRING","
+    record_num":1,"record_size":0,"expand_num":0,"expand_size":0,"msg_uuid":"399b4f1
+    52b7095e498347dafcce8a22c745c16af09f9a8b90633ca395c467340"},
+"RECORD":[
+    {"name":"pcrquote-req","return_value":"7|11|14"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"msg_send","receiver_uuid":"
+    msg_send","route":"ctrl_msg","flow":"DELIVER","state":"MATCH","flag":"LOCAL","lj
+    ump":1,"rjump":1,"record_type":"MESSAGE","record_subtype":"CTRL","record_num":1,
+    "record_size":0,"expand_num":0,"expand_size":0,"msg_uuid":"c0e0ef4f3e3a1173a046f
+    b3eff6f964bc2f82fd25c409571bd37d12dfee96701"},
+"RECORD":[
+    {"ctrl":"EXIT","name":"local"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************

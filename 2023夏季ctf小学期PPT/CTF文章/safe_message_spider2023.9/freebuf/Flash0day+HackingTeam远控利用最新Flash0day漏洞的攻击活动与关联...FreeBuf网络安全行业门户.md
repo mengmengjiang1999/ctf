@@ -1,0 +1,396 @@
+## 前言
+
+ **360威胁情报中心在2018年11月29日捕获到两例使用Flash 0day漏洞配合微软Office
+Word文档发起的APT攻击案例，攻击目标疑似乌克兰。这是360威胁情报中心本年度第二次发现在野0day漏洞攻击。攻击者将包含Flash
+0day漏洞的Word诱饵文档发送给目标，一旦用户打开该Word文档便会触发漏洞并执行后续的木马程序，从而导致电脑被控制。360威胁情报中心在确认漏洞以后第一时间通知了厂商Adobe，Adobe在今日发布的安全通告中致谢了360威胁情报中心。**
+
+![](https://image.3001.net/images/20181206/1544066542_5c0895ee939fa.png!small)
+
+Adobe反馈确认漏洞存在并公开致谢
+
+整个漏洞攻击过程非常巧妙：攻击者将Flash
+0day漏洞利用文件插入到Word诱饵文档中，并将诱饵文档和一个图片格式的压缩包（JPG+RAR）打包在一个RAR压缩包中发送给目标。目标用户解压压缩包后打开Word文档触发Flash
+0day漏洞利用，漏洞利用代码会将同目录下的JPG图片（同时也是一个RAR压缩包）内压缩保存的木马程序解压执行，通过该利用技巧可以躲避大部分杀毒软件的查杀。360威胁情报中心通过对木马样本进行详细分析，发现本次使用的木马程序为Hacking
+Team 2015年泄露的远程控制软件的升级版！相关数字攻击武器与Hacking Team有很强的关联性，且使用相同数字签名的Hacking
+Team木马最早出现在2018年8月。
+
+由于此漏洞及相应的攻击代码极有可能被黑产和其他APT团伙改造以后利用来执行大规模的攻击，构成现实的威胁，因此，360威胁情报中心提醒用户采取应对措施。
+
+## 事件时间线
+
+时间 | 内容  
+---|---  
+2018年11月29日 | 360威胁情报中心发现定向攻击样本线索  
+2018年11月30日 | 发现并确认Flash 0day漏洞的存在并上报Adobe  
+2018年12月03日 | 厂商Adobe确认漏洞的存在  
+2018年12月05日 | 360威胁情报中心发布分析报告  
+  
+## 相关漏洞概要
+
+**漏洞名称** | Adobe Flash Player远程代码执行漏洞  
+---|---  
+**威胁类型** | 远程代码执行  
+**威胁等级** | 高  
+**漏洞ID** | CVE-2018-15982  
+**利用场景** |
+攻击者通过网页下载、电子邮件、即时通讯等渠道向受害者发送恶意构造的Office文件诱使其打开处理，可能触发漏洞在用户系统上执行任意指令获取控制。  
+**受影响系统及应用版本** | Adobe Flash Player（31.0.0.153及更早的版本）  
+**不受影响影响系统及应用版本** | Adobe Flash Player 32.0.0.101（修复后的最新版本）  
+**修复及升级地址** | <https://get.adobe.com/flashplayer/>  
+  
+## 样本概况
+
+从捕获到的样本相关信息推测判断这是一起针对乌克兰地区的APT攻击。样本于11月29日被上传到VirusTotal以后的几天内只有很少的杀毒软件能够检出，
+360威胁情报中心通过细致的分析发现了其中包含的0day漏洞利用。
+
+被捕获的其中一个Word文档在VirusTotal上的查杀情况如下：
+
+![](https://image.3001.net/images/20181206/1544066557_5c0895fd32563.png!small)
+
+## 攻击过程分析
+
+通过对样本执行过程的跟踪记录，我们还原的样本整体执行流程如下：
+
+![](https://image.3001.net/images/20181206/1544066569_5c0896097e5c2.png!small)
+
+包含Flash 0day的恶意文档整体执行流程
+
+### 诱饵文档和图片格式的压缩包
+
+攻击者疑似首先向相关人员发送了一个压缩包文件，该压缩包含一个利用Flash
+0day漏洞的Word文档和一张看起来有正常内容的JPG图片，并诱骗受害者解压后打开Word文档：
+
+![](https://image.3001.net/images/20181206/1544066574_5c08960e953f9.png!small)
+
+而scan042.jpg图片实际上是一个JPG图片格式的RAR压缩包，文件头部具有JPG文件头特征，而内部包含一个RAR压缩包。由于RAR识别文件格式的宽松特性，所以该文件既可以被当做JPG图片解析，也可以当做RAR压缩包处理：
+
+![](https://image.3001.net/images/20181206/1544066581_5c0896153af00.png!small)
+
+JPEG文件头
+
+![](https://image.3001.net/images/20181206/1544066586_5c08961a8f0c0.png!small)
+
+内置RAR压缩包
+
+诱饵文档为俄语内容，是一份工作人员的调查问卷，打开后会提示是否播放内置的Falsh，一旦用户允许播放Flash，便会触发0day漏洞攻击：
+
+![](https://image.3001.net/images/20181206/1544066593_5c08962187d88.png!small)
+
+### Flash 0day漏洞对象
+
+该诱饵文档在页眉中插入了一个Flash 0day漏洞利用对象：
+
+![](https://image.3001.net/images/20181206/1544066599_5c089627c5219.png!small)
+
+提取的Flash 0day漏洞利用文件如下：
+
+![](https://image.3001.net/images/20181206/1544066605_5c08962dd583d.png!small)
+
+Flash文件中包含的ShellCode：
+
+![](https://image.3001.net/images/20181206/1544066611_5c0896334b28e.png!small)
+
+### ShellCode
+
+Flash
+0day漏洞利用成功后执行的ShellCode会动态获取函数地址，随后调用RtlCaptureContext获得当前的栈信息，然后从栈中搜索0xDEC0ADDE、0xFFEFCDAB标志，此标志后的数据为CreateProcess函数需要使用的参数，最后调用CreateProcess函数创建进程执行命令：
+
+![](https://image.3001.net/images/20181206/1544066616_5c0896385adc8.png!small)
+
+动态获取函数地址：
+
+![](https://image.3001.net/images/20181206/1544066620_5c08963cdedff.png!small)
+
+![](https://image.3001.net/images/20181206/1544066625_5c089641d5f05.png!small)
+
+搜索CreateProcess函数需要使用的参数：
+
+![](https://image.3001.net/images/20181206/1544066630_5c0896469bf8b.png!small)
+
+![](https://image.3001.net/images/20181206/1544066634_5c08964ae60fe.png!small)
+
+调用CreateProcess函数执行命令：
+
+![](https://image.3001.net/images/20181206/1544066639_5c08964f299b1.png!small)
+
+### 通过Flash 0day漏洞执行命令
+
+漏洞利用成功后执行的ShellCode最终会执行以下命令：
+
+    
+    
+    cmd.exe /c set path=%ProgramFiles(x86)%\WinRAR;C:\Program Files\WinRAR; && cd /d %~dp0 & rar.exe e -o+ -r -inul *.rar scan042.jpg & rar.exe e -o+ -r -inul scan042.jpg backup.exe & backup.exe
+
+该命令行的最终目的是将当前文档路径下的scan042.jpg文件使用WinRAR解压后并执行其中的backup.exe，从而完成对目标用户电脑的控制：
+
+![](https://image.3001.net/images/20181206/1544066647_5c089657da64a.png!small)
+
+## Flash 0day漏洞分析
+
+360威胁情报中心对该漏洞产生的原因及利用方法进行了详细分析，过程如下：
+
+### 漏洞分析 – 释放后重用漏洞（UAF）
+
+反编译提取的漏洞SWF文件如下所示，Exploit中的代码没有经过任何混淆：
+
+![](https://image.3001.net/images/20181206/1544066654_5c08965e7287c.png!small)
+
+经过分析可以发现，漏洞和今年年初Group 123组织使用的Flash 0day CVE-2018-4878十分类似，CVE-2018-4878
+是由于Flash om.adobe.tvsdk包中的DRMManager导致，而该漏洞却和com.adobe.tvsdk中的Metadata有关。
+
+SWF样本一开始定义了三个Vector（主要用于抢占释放的内存空间，其中Var15，Var16分别在32位和64位版本中使用）：
+
+![](https://image.3001.net/images/20181206/1544066659_5c08966394fdf.png!small)
+
+进入Var17函数后，该函数一开始进行了一些常规的SPRAY，然后申明了一个名为Metadata的对象。Metadata类似于一个map：
+
+![](https://image.3001.net/images/20181206/1544066665_5c08966998c34.png!small)
+
+Metadata为Flash提供的SDK中的类，其支持的方法如下所示：
+
+![](https://image.3001.net/images/20181206/1544066670_5c08966e792af.png!small)
+
+漏洞触发的关键代码如下，通过setObject向Metadata中存储ByteArray对象，并设置对应的key：
+
+![](https://image.3001.net/images/20181206/1544066677_5c089675895c9.png!small)
+
+然后调用Var19()，该函数会导致Flash中GC垃圾回收器调用，从而使导致Meatdata被释放：
+
+![](https://image.3001.net/images/20181206/1544066681_5c089679bc073.png!small)
+
+随后调用的keySet会根据设置的key返回对应的Array，并赋值给_local_6，setObject函数的定义如下所示：
+
+![](https://image.3001.net/images/20181206/1544066686_5c08967ead809.png!small)
+
+KeySet函数如下所示：
+
+![](https://image.3001.net/images/20181206/1544066691_5c089683d22f6.png!small)
+
+Metadata中的array被释放后，此处直接通过Var14遍历赋值抢占对应的内存，抢占的对象为Class5：
+
+![](https://image.3001.net/images/20181206/1544066696_5c089688c3044.png!small)
+
+Class5定义如下所示：
+
+![](https://image.3001.net/images/20181206/1544066700_5c08968ce77ca.png!small)
+
+最后遍历_local_6，找到对应被释放之后被Class5抢占的对象，判断的标准是Class5中的24，之后通过对象在内存中的不同来判断运行的系统是32位还是64位。而再次调用Var19函数将导致之前的Class5对象内存再次被释放，由于Var14这个Vector中保存了对该Class5对象的引用，最终根据系统版本位数进入对应的利用流程：
+
+![](https://image.3001.net/images/20181206/1544066706_5c0896926c19f.png!small)
+
+进入函数Var56后，由于之前的Var14 Vector中的某个Class5对象已经释放，此处同样通过给Var15
+Vector遍历赋值来抢占这个释放掉的Class5对象，此处使用的是Class3对象：
+
+![](https://image.3001.net/images/20181206/1544066710_5c089696dc0ea.png!small)
+
+Class3如下所示，其内部定义了一个Class1，最终由Class1完成占位：
+
+![](https://image.3001.net/images/20181206/1544066715_5c08969bcbc2f.png!small)
+
+可以看到Class1对象的定义如下，此时由于Var14和V15中都存在对最初Class5内存的引用，而Var14和V15中对该内存引用的对象分别是Class5，Class3，从而导致类型混淆：
+
+![](https://image.3001.net/images/20181206/1544066722_5c0896a2d0e53.png!small)
+
+由于Class3，Class5是经过攻击者精心设计的，此时只需操作Var14，Var15中的引用对象即可以获得任意地址读写的能力：
+
+![](https://image.3001.net/images/20181206/1544066727_5c0896a79272b.png!small)
+
+获取任意地址读写后便可以开始搜索内存，获取后续使用的函数地址，之后的流程便和一般的Flash漏洞利用一致：
+
+![](https://image.3001.net/images/20181206/1544066734_5c0896ae93191.png!small)
+
+## 木马分析 - backup.exe
+
+后续执行的木马程序使用VMProtect加壳，样本相关信息如下：
+
+MD5 | 1CBC626ABBE10A4FAE6ABF0F405C35E2  
+---|---  
+文件名 | backup.exe  
+数字签名 | IKB SERVICE UK LTD  
+加壳信息 | VMProtect v3.00 - 3.1.2 2003-2018  
+  
+### 伪装NVIDIA显卡控制程序
+
+木马伪装成了NVIDIA的控制面板程序，并有正常的数字签名，不过该数字签名的证书已被吊销：
+
+![](https://image.3001.net/images/20181206/1544066741_5c0896b54aa1f.png!small)
+
+NVIDIA Control Panel Application
+
+![](https://image.3001.net/images/20181206/1544066747_5c0896bb9f952.png!small)
+
+### 证书信息
+
+木马程序中还会模仿正常的NVIDIA控制面板程序发送DirectX相关的调试信息：
+
+![](https://image.3001.net/images/20181206/1544066754_5c0896c2cd233.png!small)
+
+有趣的是木马作者拼写单词Producer时发生了拼写错误，将Producer拼写成了Producet：
+
+    
+    
+    DXGI WARNING: Live Producet at 0x%08x Refcount: 2. [STATE_CREATION WARNING #0: ]
+
+### 通过特定窗口过程执行木马功能
+
+通过对VMProtect加密后的代码分析发现，木马运行后会首先创建一个名为“DXGESZ1Dispatcher”的窗口类，该窗口类对应的窗口过程函数就是整个木马的主要控制流程函数，木马程序的主要功能将通过分发窗口消息的方式来驱动执行：
+
+![](https://image.3001.net/images/20181206/1544066760_5c0896c8cafa5.png!small)
+
+当CreateWindowExW被调用时，会向窗口过程函数发送WM_CREATE消息，当窗口过程函数收到WM_CREATE消息时会创建3个线程，分别进行环境检测、用户是否有输入操作检测等来检测程序是否在真实环境下运行：
+
+![](https://image.3001.net/images/20181206/1544066765_5c0896cd4e268.png!small)
+
+当检测通过后，会继续向窗口过程发送WM_USER+1消息，进一步控制程序的运行流程。当窗口过程函数收到该消息后，会再创建一个线程来初始化SHLWAPI.DLL和WS_32.DLL里需要使用的API函数：
+
+![](https://image.3001.net/images/20181206/1544066770_5c0896d28ae6e.png!small)
+
+紧接着利用OutputDebugStringA输出一个伪装的Debug信息：“DXGI WARNING: Live Producet at 0x%08x
+Refcount: 2. [STATE_CREATION WARNING #0:
+]”，该信息是正常程序在使用了DirectX编程接口后可能会输出的调试信息，木马程序以此来进一步伪装NVIDIA控制面板程序：
+
+![](https://image.3001.net/images/20181206/1544066776_5c0896d888708.png!small)
+
+另外还会判断当前的进程ID是否为4，如果是则结束当前进程运行，该技巧一般被用于检测杀毒软件的虚拟机：
+
+![](https://image.3001.net/images/20181206/1544066781_5c0896dd94710.png!small)
+
+### 检测杀毒软件
+
+该木马程序还会通过一些技巧判断当前计算机是否安装某些特定的杀毒软件，比如检测驱动目录里是否存在avckf.sys，而avckf.sys正是BitDefender杀毒软件特有的驱动模块：
+
+![](https://image.3001.net/images/20181206/1544066785_5c0896e1ed4be.png!small)
+
+以及通过WMI执行命令“Select*from Win32_Service WhereName='WinDefend' AND StateLIKE
+'Running’ ”来确定是否有Windows Defender正在运行：
+
+![](https://image.3001.net/images/20181206/1544066790_5c0896e64546e.png!small)
+
+### 持久化
+
+木马程序会将自身拷贝到%APPDATA%\ NVIDIAControlPanel\NVIDIAControlPanel.exe：
+
+![](https://image.3001.net/images/20181206/1544066794_5c0896ead1a24.png!small)
+
+然后通过发送窗口消息的方式触发主线程设置计划任务来实现持久化：
+
+![](https://image.3001.net/images/20181206/1544066799_5c0896ef839e2.png!small)
+
+### 上线并加密上传本机信息
+
+当木马窗口过程收到消息类型为WM_USER的消息时，木马会创建一个线程用于获取本机的进程信息、CPU信息、用户信息、计算机所在时区信息等，并把获取的信息加密后通过HTTP协议上传到C&C地址：188.241.58.68，然后等待获取新的指令进行远程控制：
+
+从注册表获取已安装软件：
+
+![](https://image.3001.net/images/20181206/1544066804_5c0896f4db101.png!small)
+
+执行命令SELECT*FROM Win32_TimeZone获取时区：
+
+![](https://image.3001.net/images/20181206/1544066810_5c0896fa0226e.png!small)
+
+获取磁盘信息：
+
+![](https://image.3001.net/images/20181206/1544066814_5c0896fe3de38.png!small)
+
+连接C&C地址：188.241.58.68，并上传本机信息：
+
+![](https://image.3001.net/images/20181206/1544066820_5c089704d48bf.png!small)
+
+![](https://image.3001.net/images/20181206/1544066826_5c08970a32ae2.png!small)
+
+## 溯源与关联 - Hacking Team
+
+360威胁情报中心通过对木马样本进行详细分析，发现本次使用的木马程序为Hacking Team
+2015年泄露的远程控制软件的升级版！本次的木马程序将字符串进行了加密处理，且增加了使用窗口消息来对木马流程进行控制等功能。
+
+### 与Hacking Team泄露源码的关联
+
+由于后门程序backup.exe使用VMProtect加密的影响，我们无法截取到比较完美的IDA
+F5伪代码，但我们确定其绝大多数的功能代码和逻辑都与Hacking Team之前泄露的源码一致，下面是我们展示的部分IDA F5伪代码与Hacking
+Team泄露源码的对比：
+
+![](https://image.3001.net/images/20181206/1544066834_5c089712886a7.png!small)
+
+检测沙箱
+
+![](https://image.3001.net/images/20181206/1544066839_5c089717638eb.png!small)
+
+初始化WINHTTP
+
+![](https://image.3001.net/images/20181206/1544066848_5c08972078ae8.png!small)
+
+关闭WINHTTP HANDLE
+
+### 同源样本关联
+
+360威胁情报中心通过本次0day漏洞攻击使用的木马程序还关联到两个同类样本，两个木马程序使用了相同的数字签名，木马功能也基本一致，同样是来源于Hacking
+Team的远控木马，且使用相同数字签名的Hacking Team木马最早出现在今年8月。
+
+其中一个木马程序同样是伪装成NVIDIA控制面板程序，C&C地址为：80.211.217.149，另外一个木马程序则伪装成Microsoft
+OneDrive程序，C&C地址为：188.166.92.212
+
+![](https://image.3001.net/images/20181206/1544066854_5c08972698d39.png!small)
+
+伪装成Microsoft OneDrive程序的Hacking Team远控
+
+## 关于Hacking Team
+
+360威胁情报中心结合多方面的关联，列举本次0day攻击事件和历史Hacking Team之间的一些对比：
+
+本次0day漏洞的Exploit执行的后续木马为Hacking Team泄露的远程控制软件的升级版
+
+在过去Hacking Team泄露资料中表明其对Flash 0day漏洞和利用技术有深厚的基础；而本次0day漏洞中的利用手法实现也是非常通用
+
+Hacking Team长期向多个情报机构或政府部门销售其网络间谍武器
+
+## 总结
+
+至此，360威胁情报中心通过捕获到的0day漏洞利用样本和后续执行的木马程序关联到Hacking Team组织，自Hacking
+Team泄露事件以来，其新的相关活动及其开发的间谍木马也被国外安全厂商和资讯网站多次披露，证明其并没有完全销声匿迹。
+
+## 防护建议
+
+360威胁情报中心提醒各单位/企业用户，谨慎打开来源不明的文档，并尽快通过修复及升级地址下载安装最新版Adobe Flash
+Player，也可以安装360安全卫士/天擎等防病毒软件工具以尽可能降低风险。
+
+## 参考
+
+> 补丁公告： <https://helpx.adobe.com/security/products/flash-> player/apsb18-42.html>
+>
+> 修复及升级地址： <https://get.adobe.com/flashplayer/>
+>
+> 360威胁情报中心早期发现的疑似Hacking Team的Flash 0day漏洞分析:
+> <https://ti.360.net/blog/articles/cve-2018-5002-flash-0day-with-apt-> campaign/>
+>
+> Hacking Team泄露源码: <https://github.com/hackedteam/scout-win>
+>
+> <https://www.welivesecurity.com/2018/03/09/new-traces-hacking-team-wild/>
+
+## IOC
+
+**Word文档**  
+---  
+9c65fa48d29e8a0eb1ad80b10b3d9603  
+92b1c50c3ddf8289e85cbb7f8eead077  
+**Word文档作者信息**  
+tvkisdsy  
+Кирдакова  
+**Flash 0day漏洞利用文件**  
+8A64017953D0840323318BC224BAB9C7  
+**Flash 0day漏洞利用文件编译时间**  
+Sep 15, 2014  
+**Hacking Team后门程序**  
+1cbc626abbe10a4fae6abf0f405c35e2  
+7d92dd6e2bff590437dad2cfa221d976  
+f49da7c983fe65ba301695188006d979  
+**C &C地址**  
+188.241.58.68:80  
+188.166.92.212:80  
+80.211.217.149:80  
+**Hacking Team使用的数字签名**  
+Name: IKB SERVICE UK LTD  
+Serial number: 57 5f c1 c6 bc 47 f3 cf ab 90 0c 6b c1 8a ef 6d  
+Thumbprint: d8 7a a2 1d ab 22 c2 f1 23 26 0b 1d 7a 31 89 3c 75 66 b0 89  
+  
+***本文作者：360天眼实验室，转载请注明来自FreeBuf.COM**
+

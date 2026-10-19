@@ -1,0 +1,126 @@
+##  介绍
+
+**Python代码审计方法多种多样，但是总而言之是根据前人思路的迁移融合扩展而形成。目前Python代码审计思路，呈现分散和多样的趋势。Python微薄研发经验以及结合实际遇到的思路和技巧进行总结，以便于朋友们的学习和参考。**
+
+##  SQL注入和ORM注入
+
+这两者注入相似度较高，所以打算放在一起分析和总结。它们所用原理OWASP TOP TEN
+中的描述非常合适，“将不受信任的数据作为命令或查询的一部分发送到解析器时，会产生诸如SQL注入、NoSQL注入、OS注入和LDAP注入的注入缺陷。攻击者的恶意数据可以诱使解析器在没有适当授权的情况下执行非预期命令或访问数据。”。
+
+###  SQL注入
+
+Python
+中常见存在风险SQL语句，在id或者Name可控的情况下存在安全隐患。可控参数可以将咱么期望他执行的代码按照语法进行拼接，从而执行原本预期之外的代码。
+
+    
+    
+    sql = "select id,name from user_table where id = %s and name = %s" % (id, name)
+    cur.execute(sql)
+
+然而在实际案例中，这种执行SQL语句并不多，比较典型的案例。实例代码如下：
+
+    
+    
+    import urllib
+    import MySQLdb
+    import SocketServer
+    from SimpleHTTPServer import SimpleHTTPRequestHandler
+    class MyHandler(SimpleHTTPRequestHandler):
+        def _set_headers(self):
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+        def do_GET(self):
+            print("got get request %s" % (self.path))
+            hql = urllib.splitquery(self.path)[1]
+            uri_c = str(hql)
+            print('cmd===%s' % (uri_c))
+            sql = "select id from user_table where id = %s" % uri_c
+            db = MySQLdb.connect("localhost", "testuser", "test123", "TESTDB", charset='utf8')
+            cursor = db.cursor()
+            cursor.execute(sql)
+            data = cursor.fetchone()
+            self.wfile.write(data)
+    def start_server():
+        httpd = SocketServer.TCPServer(("127.0.0.1", 8090), MyHandler)
+        print('Starting httpd...')
+        httpd.serve_forever()
+    if __name__ == "__main__":
+        start_server()
+
+这是一个简单的HTTP服务器，目前在Python2中可以正常运行。通过urllib.splitquery获取GET请求的参数，uri_c
+里面为请求参数的值。用值传递到SQL语句中拼接，从而产生注入问题。这是比较简单的一种，正常情况下调用链可能会比较长，长短取决于平台的设计架构。
+
+###  ORM注入
+
+**sqlalchemy ORM注入（CNVD-2019-17301）**
+
+考虑到的理解上比较容易，用模块进行举例，并不涉及到框架。ORM注入是SQL注入的一种特殊情况，ORM模块将SQL语句进行模板化，所以找SQL语句字符串的办法不好用了。那么应该怎么办？根据模块来找寻执行方法，如果模块存在问题和未妥善过滤或转义、存在可控变量则可能会产生问题。如何去发现和查找Python
+ORM模块，展现朋友们搜索技能的时候到了，不再老生常谈。下面进入案例：
+
+    
+    
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    import sqlalchemy
+    print("sqlalchemy_version:",sqlalchemy.__version__)
+    engine = create_engine('mysql://root:123456@192.168.56.101:3306/mysql?charset=utf8')
+    DB_Session = sessionmaker(bind=engine)
+    session = DB_Session()
+    session.execute('use mysql;')
+    print(
+            session.execute(
+                """
+                    select * from user where User='root' and 1=1;
+                """
+        ).fetchall()
+    )
+
+这个是使用sqlalchemy的ORM注入，它存在任意执行SQL语句的接口。道理上讲这个是功能，实际情况大多数程序员都会认为ORM是能够防御SQL注入，这个可能会成为漏洞。通过转义可以更好的解决问题，但是官方可能并不重视。另外还有sqlalchemy几个问题利用order_by注入、利用"limit"和"offset"关键词向"select()"函数传递注入等等，方法一样利用模块过滤不严，暂不多论。
+
+**Django JSON SQL注入（CVE-2019-14234）**
+
+咱们继续看来 Django JSON
+SQL注入，关于这个漏洞已经有前人分析过了。这个分析有些难度需要咱们了解Django和PostgreSQL，如果感觉吃力不妨先去学习一番。了解在PostgreSQL之中关于JSON数据的查询主要使用ArrayField、JSONField、HStoreField，通过Django如何进行查询PostgreSQL，Json.objects.filter()和QuerySet.filter()实现，准备工作就绪。
+
+1、查询使用方法如下：
+
+    
+    
+    # 查询方法
+    # 查询data数据下名称为test的内容为'user'的整个字段
+    Json.objects.filter(data__test='user')
+    or
+    Json.objects.filter(**{"data__test":'user'})
+
+2、通过补丁判断实现方法使用了 self.key_name ，QuerySet.filter()的调用和self.key_name传递有关。
+
+![](https://image.3001.net/images/20191129/1575021628_5de0ec3ce94c7.png!small)
+
+3、紧接着发现类 KeyTransformFactory 调用了 KeyTransform 传入了 self.key_name
+，后续是字符串拼接。这里不多详细阐述感兴趣的朋友跟下流程。
+
+    
+    
+    class KeyTextTransform(KeyTransform):
+        operator = '->>'
+        ...
+        # 字符串拼接
+        (%s %s %s)" % (lhs, self.operator, lookup)
+
+4、结合注入的知识进行实施测试，结果如下。
+
+    
+    
+    # 使用注入
+    # 拼接补全SQL语法
+    Json.objects.filter(**{"""data__breed'='"a"') OR 1=1 OR('d""":'x',})
+
+##  总结
+
+本次总结Python的SQL注入和ORM注入的挖掘方法和相关案例，SQL注入方面没有找到对应的实际案例，咱们编写简单的案例作为参考。ORM注入为两个案例，分别是关于模块和框架。综合作为实战挖掘的参考，个人之力，恐有疏漏，盼斧正。
+
+ ***本文原创作者： 米怀特，本文属于FreeBuf原创奖励计划，未经许可禁止转载**  
+  
+  
+

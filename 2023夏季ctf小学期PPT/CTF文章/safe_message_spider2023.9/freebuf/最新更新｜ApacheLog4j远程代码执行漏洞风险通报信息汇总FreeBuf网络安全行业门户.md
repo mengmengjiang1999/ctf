@@ -1,0 +1,157 @@
+2021年12月9日，国内多家机构监测到Apache Log4j存在任意代码执行漏洞，并紧急通报相关情况。由于Apache
+Log4j存在递归解析功能，未取得身份认证的用户，可以从远程发送数据请求输入数据日志，轻松触发漏洞，最终在目标上执行任意代码。鉴于Apache
+Log4j本身涉及多种应用组件，FreeBuf将漏洞等级评为「危险」。
+
+> 最新更新：12月10日，Apache Log4j官方发布安全通告，修复了包含i影响的2.0
+> beta9至2.14.1所有版本中蕴含的远程代码执行漏洞，漏洞编号为CVE-2021-44228。目前，官方已经正式发布Log4j
+> 2.15.0正式版，其中默认禁用了JNDI功能。
+
+![](https://image.3001.net/images/20211210/1639101469_61b2b41def95cc4c91fca.jpeg!small)
+
+## 漏洞时间线：
+
+![](https://image.3001.net/images/20211213/1639363182_61b6b26edb3b401e874e8.png!small)
+
+## 漏洞预警汇总：
+
+以下厂商按首字母顺序排序
+
+### 360漏洞云：
+
+Apache Log4j 是 Apache 的一个开源项目，Apache
+Log4j2是一个基于Java的日志记录工具。该工具重写了Log4j框架，并且引入了大量丰富的特性。我们可以控制日志信息输送的目的地为控制台、文件、GUI组件等，通过定义每一条日志信息的级别，能够更加细致地控制日志的生成过程。该日志框架被大量用于业务系统开发，用来记录日志信息。  
+2021年12月9日，360漏洞云团队在网上监测到一则 Apache Log4j任意代码执行漏洞正在被广泛利用的信息 。漏洞编号：暂无，漏洞威胁等级：严重。
+
+Log4j-2中存在JNDI注入漏洞，当程序将用户输入的数据被日志记录时，即可触发此漏洞，成功利用此漏洞可以在目标服务器上执行任意代码。鉴于此漏洞危害较大，建议客户尽快采取措施防护此漏洞。
+
+经360漏洞云安全专家研判，log4j2是全球使用广泛的java日志框架，同时该漏洞还影响很多全球使用量的Top序列的通用开源组件，例如 Apache
+Struts2、Apache Solr、Apache Druid、Apache
+Flink等。该漏洞利用方式简单，危害严重，官方已经发布该产品的最新版本，建议用户尽快升级组件，修复缓解该漏洞。Apache Log4j 是 Apache
+的一个开源项目，Apache
+Log4j2是一个基于Java的日志记录工具。该工具重写了Log4j框架，并且引入了大量丰富的特性。我们可以控制日志信息输送的目的地为控制台、文件、GUI组件等，通过定义每一条日志信息的级别，能够更加细致地控制日志的生成过程。该日志框架被大量用于业务系统开发，用来记录日志信息。
+
+目前360已推出相应解决方案：
+
+> <https://www.freebuf.com/articles/database/309573.html>
+>
+> <https://mp.weixin.qq.com/s/V4oSpmdIrlxPSsrpUXMNLA>
+
+### 阿里云应急响应：
+
+Apache Log4j2是一款优秀的Java日志框架。2021年11月24日，阿里云安全团队向Apache官方报告了Apache
+Log4j2远程代码执行漏洞。由于Apache
+Log4j2某些功能存在递归解析功能，攻击者可直接构造恶意请求，触发远程代码执行漏洞。漏洞利用无需特殊配置，经阿里云安全团队验证，Apache
+Struts2、Apache Solr、Apache Druid、Apache Flink等均受影响。阿里云应急响应中心提醒 Apache Log4j2
+用户尽快采取安全措施阻止漏洞攻击。
+
+> <https://help.aliyun.com/noticelist/articleid/1060971232.html>
+
+### 安天CERT：
+
+Apache
+Log4j是一个基于Java的日志记录工具。Log4j是几种Java日志框架之一。该项目在Apache接手后进行了代码重构，解决了框架中的架构问题并在Log4j
+2中提供了一个插件架构，这使其更具扩展性。用户可以更为精确的对日志进行细粒度的控制，支持将日志信息发送到服务器、写入到文件或是发送给GUI组件等，通过定义日志信息的级别、输出格式，发送参数来对日志进行更完善的管理。
+
+Log4j
+2.X中采用了LDAP的简单目录服务结构进行日志的查询。在进行递归查询时，JNDI方法在处理查询参数的过程中存在注入漏洞，攻击者可利用该漏洞在未授权的情况下，构造恶意参数以远程方式在目标服务器上执行恶意代码。
+
+>
+> [https://www.antiy.cn/research/notice&report/research_report/20211210.html](https://www.antiy.cn/research/notice&report/research_report/20211210.html)
+
+### 斗象科技：
+
+攻击者可以通过发送精心构造的数据请求到受影响的应用来利用此漏洞。在应用使用Apache Log4j
+作为日志组件，并对攻击者的恶意输入进行打印的情况下，将触发远程代码执行漏洞，经验证 Apache Log4j 2.x <=
+2.14.1受该漏洞影响，目前，Apache Log4j 官方已发布
+log4j-2.15.0-rc2修复版本，建议受影响用户，尽快升级到安全版本，并升级其它相关受影响应用及组件。
+
+> <https://vas.riskivy.com/vuln-detail?id=105>
+
+### 杰思安全
+
+Apache Log4j2是一款优秀的 Java 日志框架。该工具重写了 Log4j
+框架，并且引入了大量丰富的特性。该日志框架被大量用于业务系统开发，用来记录日志信息。由于Apache
+Log4j2某些功能存在递归解析功能，未经身份验证的攻击者通过发送特别构造的数据请求包，可在目标服务器上执行任意代码。
+
+鉴于该漏洞的严重性，建议使用Apache Log4j2组件的客户尽快自查是否受漏洞影响，并及时升级版本。
+
+> <https://mp.weixin.qq.com/s/sCEkZMXrZjrT5-ACFpCFWw>
+
+### 绿盟科技：
+
+12月9日，绿盟科技CERT监测到网上披露Apache Log4j2 远程代码执行漏洞，由于Apache
+Log4j2某些功能存在递归解析功能，未经身份验证的攻击者通过发送特别构造的数据请求包，可在目标服务器上执行任意代码。漏洞PoC已在网上公开，默认配置即可进行利用，该漏洞影响范围极广，建议相关用户尽快采取措施进行排查与防护。
+
+Apache Log4j2是一款开源的Java日志框架，被广泛地应用在中间件、开发框架与Web应用中，用来记录日志信息。
+
+>
+> [https://open.work.weixin.qq.com/wwopen/mpnews?mixuin=3_HVCQAABwBHKvwGAAAUAA&mfid=WW0310-6x9-BwAABwB7tPj8XTxKnQJm-1T5c&idx=0&sn=d38bbc1075de2cdc8c9f67fc6d09894a&ampnotreplace=true](https://open.work.weixin.qq.com/wwopen/mpnews?mixuin=3_HVCQAABwBHKvwGAAAUAA&mfid=WW0310-6x9-BwAABwB7tPj8XTxKnQJm-1T5c&idx=0&sn=d38bbc1075de2cdc8c9f67fc6d09894a¬replace=true)
+
+### 默安科技：
+
+Apache Log4j2是一个基于Java的日志记录工具，是Log4j的升级，在其前身Log4j
+1.x基础上提供了Logback中可用的很多优化，同时修复了Logback架构中的一些问题，是目前最优秀的Java日志框架之一。该日志框架被大量用于业务系统开发，用来记录日志信息。开发者可能会将用户输入造成的错误信息写入日志中。
+
+此次 Apache Log4j2 漏洞触发条件为只要外部用户输入的数据会被日志记录，即可造成远程代码执行。
+
+> <https://mp.weixin.qq.com/s/xEG0ujl443AkbYV9DW0uhg>
+
+### 奇安信：
+
+Apache Log4j是Apache的一个开源项目，Apache log4j2是Log4j的升级版
+本，我们可以控制日志信息输送的目的地为控制台、文件、GUI 组件等，通过定 义每一条日志信息的级别，能够更加细致地控制日志的生成过程。  
+近日，奇安信CERT监测到Apache Log4j存在任意代码执行漏洞，经过分析， 该组件存在Java
+JNDI注入漏洞，当程序将用户输入的数据进行日志，即可触发 此漏洞，成功利用此漏洞可以在目标服务器上执行任意代码。  
+经奇安信CERT验证，Apache Struts2、Apache Solr、Apache Druid、Apach  
+e Flink等众多组件与大型应用均受影响，鉴于此漏洞危害巨大，利用门槛极低， 奇安信 CERT 建议用户尽快参考缓解方案阻止漏洞攻击。
+
+> <https://mp.weixin.qq.com/s/0OU-U6gdcfJLR_-_RfjEEA>
+
+### 盛邦安全：
+
+近日，WebRAY安全服务部监测到Apache
+Log4j2存在远程代码执行漏洞，通过构造恶意的代码即可利用该漏洞，从而导致服务器权限丢失。由于该漏洞危害较大，盛邦安全建议相关用户及时采取安全措施阻止漏洞攻击。
+
+Log4j是Apache的一个开源项目，通过使用Log4j，可以控制日志信息输送的目的地是控制台、文件、GUI组件，甚至是套接口服务器、NT的事件记录器、UNIX
+Syslog守护进程等；也可以控制每一条日志的输出格式；通过定义每一条日志信息的级别，能够更加细致地控制日志的生成过程，这些可以通过一个配置文件来灵活地进行配置，而不需要修改应用的代码。
+
+Apache
+Log4j2是Log4j的升级版本，该版本与之前的log4j1.x相比带来了显著的性能提升，并且修复一些存在于Logback中固有的问题的同时提供了很多在Logback中可用的性能提升，Apache
+Struts2、Apache Solr、Apache Druid、Apache Flink等均受影响。
+
+我司已对该漏洞进行复现并确认漏洞存在，目前Log4j 2.15.0-rc1补丁已被绕过，建议升级至Log4j
+2.15.0-rc2，WebRAY安全服务部也将持续关注该漏洞进展，第一时间为您更新该漏洞信息。
+
+> https://www.webray.com.cn/skippath/gongsixinwen/gongsixinwen_1653.html
+
+## 影响范围：
+
+Apache Log4j 2.x <= 2.15.0
+
+## 修复方案建议：
+
+综合国内机构意见，目前针对Apache Log4j漏洞的主要应对方法如下：
+
+1\. Apache Log4j 官方已经发布了解决上述漏洞的安全更新，建议受影响用户尽快升级到安全版本：
+
+### 安全版本:
+
+> log4j-2.15.0正式版
+
+### 官方安全版本下载可以参考以下链接：
+
+>
+> [https://mvnrepository.com/artifact/org.apache.logging.log4j/log4j-core/2.15.0](https://github.com/apache/logging-> log4j2/releases/tag/log4j-2.15.0-rc2)
+
+2\. 建议对 Apache Struts2/Apache Solr/Apache Flink/Apache Druid 等已知受影响的应用及组件进行升级
+
+### 临时缓解措施：
+
+1\. 禁止没有必要的业务访问外网
+
+2\. 使用jvm参数启动 -Dlog4j2.formatMsgNoLookups=true
+
+3\. 设置 log4j2.formatMsgNoLookups=True
+
+4\. 系统环境变量中将 FORMAT_MESSAGES_PATTERN_DISABLE_LOOKUPS 设置为true
+

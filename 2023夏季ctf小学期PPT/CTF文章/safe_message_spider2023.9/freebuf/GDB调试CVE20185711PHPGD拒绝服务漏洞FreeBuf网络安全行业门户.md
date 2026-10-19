@@ -1,0 +1,210 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+###  ***本文原创作者：xiaoyinglicai，属于Freebuf原创奖励计划，禁止转载**  
+
+### 下载、编译PHP源码  
+
+从github的PHP-src克隆下含有漏洞的版本，最好采取7.0以上版本，编译时候会比较简单，本次选用PHP7.1.9。编译环境为 阿里云 Ubuntu
+16.04 LTS
+
+    
+    
+    git clone --branch PHP-7.1.9 https://github.com/php/php-src
+    Cloning into 'php-src'...
+    remote: Counting objects: 725575, done.
+    remote: Compressing objects: 100% (34/34), done.
+    remote: Total 725575 (delta 11), reused 12 (delta 3), pack-reused 725538
+    Receiving objects: 100% (725575/725575), 301.72 MiB | 11.96 MiB/s, done.
+    Resolving deltas: 100% (562883/562883), done.
+    Checking connectivity... done.
+    
+
+由于下载的源码是没有configure文件的，首先要编译buildconf文件
+
+    
+    
+    ./buildconf --force
+    
+
+可以使用-h选项看到帮助
+
+    
+    
+    ./configure -h  
+    
+
+为了方便快速编译，我编写了一个脚本。 因为我们要来调试gd，所以要加上 with-gd
+
+    
+    
+    #!/bin/sh
+    make distclean
+    ./buildconf --force
+    ./configure \
+            --enable-maintainer-zts \
+            --enable-debug \
+            --enable-cli \
+            --with-gd \
+            "$@"
+    
+
+配置好后一般会有错误提示，如果无错误提示可以使用 make -j2 来编译源码。由于我采用的是阿里云单核主机，所以使用j2参数。检测安装情况
+
+    
+    
+    sapi/cli/php -v
+    PHP 7.1.9 (cli) (built: Feb  2 2018 11:28:48) ( ZTS DEBUG )
+    Copyright (c) 1997-2017 The PHP Group
+    Zend Engine v3.1.0, Copyright (c) 1998-2017 Zend Technologies
+    
+
+可以看到目前PHP和gd库已经正常安装。
+
+### 安装GDBGUI
+
+为了方便我们的调试，我们安装一个很方便的GDBGUI，具体的网址可以GOOGLE一下。 快速安装的命令为
+
+    
+    
+    pip install gdbgui
+    
+
+以后我们可以运行gdbgui来进行远程调试。记得加上--auth选项，-r选项开启外网访问。
+
+    
+    
+    screen gdbgui -r --auth  
+    View gdbgui at http://0.0.0.0:5000
+    exit gdbgui by pressing CTRL+C
+
+### 开始调试
+
+运行后PHP后可以发现触发漏洞
+
+![WeChatWorkScreenshot_78df5986-66b8-4fb2-a815-66c2b5b7dc4f.png](https://image.3001.net/images/20180202/15175852682519.png!small)  
+
+然后我们来部署一下POC环境  
+
+    
+    
+    /usr/src/php-src/sapi/cli/php
+    
+
+在命令行输入参数 开始执行
+
+    
+    
+     run /root/poc.php
+    
+
+![WeChatWorkScreenshot_8dfedbf1-aba3-4bc6-8635-6d8e57c52aba.png](https://image.3001.net/images/20180202/15175852801119.png!small)  
+
+根据之前的问题分析，我们定位到问题出现在源码/usr/src/php-src/ext/gd/libgd/gd_ gif_in.c 中我们在左侧输入地址，并在
+gdImageCreateFromGifCtx 函数放置断点
+
+运行到断点处
+
+    
+    
+    Breakpoint 3, php_gd_gdImageCreateFromGifCtx (fd=0x7ffff4077000) at /usr/src/php-src/ext/gd/libgd/gd_gif_in.c:135
+    
+
+观察一下上下文目前并没什么特别。一路运行到 第214行 ，前面全部是GIF头和color table的解析，如果文件结构不合理，会返回并提示 invalid
+GIF file.
+
+可以看到目前处理字符是 逗号 （0x2c），如果我们查看 poc.gif 的话。已经处理到了20位置，  
+
+![WeChatWorkScreenshot_5e08c708-1750-417e-a42b-bc2bf0604f73.png](https://image.3001.net/images/20180202/15175854942334.png!small)  
+
+  
+
+![WeChatWorkScreenshot_4824b466-48c3-44f1-bee1-dda8749096c0.png](https://image.3001.net/images/20180202/15175853525529.png!small)  
+
+继续向后读取9个 bytes之后到达 29h 位置。后面的03 FF为触发漏洞的第一处关键。
+
+![WeChatWorkScreenshot_8b37887e-6820-4d82-9cdd-caf68fc3611e.png](https://image.3001.net/images/20180202/15175855194632.png!small)  
+
+继续向下执行，进入到ReadImage方法，到代码 568行，读取了一个byte （03） 去与 MAX_LWZ_BITS
+做比较，只有小约等于MAX_LWZ_BITS的时候才会继续进行。MAX_LWZ_BITS定义为12.
+
+![WeChatWorkScreenshot_01064662-9019-459e-ad46-5e709fcf0fc8.png](https://image.3001.net/images/20180202/15175855436129.png!small)  
+
+一路步入LWZReadByte_方法, 第一次调用是在做一些初始化操作。
+
+![WeChatWorkScreenshot_e3510845-320a-43ae-b17f-26889960588f.png](https://image.3001.net/images/20180202/15175855807258.png!small)  
+
+随后进入while loop中,flag为0且sd->fresh为true， 进入第458行。 （如果为了方便可以直接在这里下断点。
+随后进入真正触发漏洞的do while loop）
+
+![WeChatWorkScreenshot_1b0b1621-cf64-40cb-90ba-6db48274af5d.png](https://image.3001.net/images/20180202/15175856009975.png!small)  
+
+此个do while loop的终止条件为sd->firstcode != sd->clear_code ,  
+
+其中 sd->clear_code = 8 , sd->codesize = 4 , *ZeroDataBlockP = 0 。
+
+first code为GetCode的返回值。当first_code为8的时候，此处循环就会继续进行
+
+步入GetCode 首先是一系列判断数据长度的对循环终止条件的判断。
+
+此处发现，如果 scd->done 为true时候会返回-1 ，同时结束外层do while loop。
+
+![WeChatWorkScreenshot_9352d6e5-59af-4e2b-824e-2b7f51ff8f19.png](https://image.3001.net/images/20180202/15175857494320.png!small)  
+
+接下来走到了第398行，此处为本次漏洞的第一现场，由于count为unsigned char，而GetDataBlock 读取文件完毕后会返回-1。
+而count不会被至于-1。
+
+![WeChatWorkScreenshot_357aeb98-1448-4ef0-944b-281204f04eb0.png](https://image.3001.net/images/20180202/15175858147500.png!small)  
+
+截止至此，其他的大多文章都分析到这里。我对GIF的构造和具体的问题成因还是很感兴趣，所以我们在深入一层，结合GIF的构造，探索造成问题的根源。水平有限，如果有问题请尽情指正
+
+步入GetDataBlock_ 方法。 继续步入ReadOK， ctx->getBuf 通过一个动态指针调用到 fileGetbuf 方法。
+
+fileGetbuf 中会 fread 方法读取文件内内容。
+
+    
+    
+    size_t fread ( void *buffer, size_t size, size_t count, FILE *stream) ;
+    
+
+![WeChatWorkScreenshot_32243389-eeb9-44e2-9d80-9f60ab01601a.png](https://image.3001.net/images/20180202/15175858974597.png!small)  
+
+对参数进行分析。 buf为存储数据的目标， size为1, count为1，最后一个为数据源。
+
+即是此处从stream中读取1个1byte数据到buffer中。 并返回成功读取的大小。
+
+此处我们可以看到 fctx->f 即将被读取的为 ff 。
+
+执行后 返回数值为1. buf中第一个byte为 ff. 回到 GetDataBlock领空之后的stack状态为 count = 255 （ff）
+
+![WeChatWorkScreenshot_a178a6b9-8858-4596-ab6e-88fe51672aee.png](https://image.3001.net/images/20180202/15175859626981.png!small)  
+
+进入下一个if条件，再次进入 fileGetbuf 其中 size为 255. 读取的内容即为 ff 后面的 垃圾数据
+
+载入位置为 之前 ff所在位置（0x7ffffffe9877）+255 = 0x7fffffff9b62
+
+再次回到GetDataBlock领空 此时count为 255（0xff）， buf中储存的是随后的GIF中的数据（0x88）。
+
+一路读取数据 直到 scd->buf 装满我们构造的数据。
+
+继续执行若干次后进入了死循环，触发漏洞。
+
+![WeChatWorkScreenshot_357aeb98-1448-4ef0-944b-281204f04eb0.png](https://image.3001.net/images/20180202/15175861416468.png!small)  
+
+对跳出循环条件进行分析，除了其中一个跳出条件为异常处理外，另外两处
+
+>   1. Line 398: scd->done = TRUE;
+> 这个理论上来说应该是文件读取完成后，由GetDataBlock返回-1从而退出循环，但是本次漏洞根源即为count无法为负值，因此不可行
+>   2. Line 411: ret |= ((scd->buf[i / 8] & (1 << (i % 8))) != 0) << j;
+> 此处提取了buf中的数据的一个byte中的第一位。 如在我们poc.gif中均为0x88，
+> 每次ret运算结果即为8。而sd->clear_code即为8 从而导致无法退出循环。
+>
+
+我们也可以尝试，如果我们使用77替换POC.gif中的88后，并无法触发漏洞。因为ret处将取值为7，从而满足 sd->first_code !=
+sd->clear_code。 因此精心构造的poc可以在利用条件1的基础上，构造满足条件2的情况即可触发漏洞。
+
+### 修补方法
+
+可以看到，官网对本漏洞的修补即为将count的类型变更为int。 即保证当文件读取完成后可以退出循环。  
+
+ ***本文原创作者：xiaoyinglicai，属于Freebuf原创奖励计划，禁止转载**
+

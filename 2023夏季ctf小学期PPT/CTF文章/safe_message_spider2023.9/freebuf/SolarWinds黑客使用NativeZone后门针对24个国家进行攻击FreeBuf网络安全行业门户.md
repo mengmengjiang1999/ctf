@@ -1,0 +1,59 @@
+微软周四透露，SolarWinds 供应链黑客背后的黑客重返威胁领域， **目标是位于包括美国在内的 24 个国家的政府机构、智囊团、顾问和非政府组织**
+
+ **“这一波攻击针对 150 多个不同组织的大约 3,000 个电子邮件帐户”** 微软负责客户安全和信任的企业副总裁 Tom
+Burt[说](https://blogs.microsoft.com/on-the-issues/2021/05/27/nobelium-cyberattack-nativezone-solarwinds/)。“至少有四分之一的目标组织参与了国际发展、人道主义和人权工作。”
+
+ **微软将入侵归咎于它追踪的俄罗斯黑客 Nobelium** ，以及更广泛的网络安全社区，名为 **APT29、UNC2452
+(FireEye)、SolarStorm (Unit 42)、StellarParticle (Crowdstrike) 和 Dark Halo
+(Volexity)** 。
+
+据称，一系列入侵中的最新[一波](https://www.microsoft.com/security/blog/2021/05/27/new-sophisticated-email-based-attack-from-nobelium/)始于 2021 年 1 月 28 日，然后在 5 月 25
+日达到新的升级水平。这些攻击利用名为 Constant Contact 的合法群发邮件服务来隐藏其恶意活动和伪装作为总部位于美国的开发组织
+USAID，参与一项大规模的网络钓鱼活动，该活动将网络钓鱼电子邮件分发给各种组织和垂直行业。
+
+[![SolarWinds黑客使用NativeZone后门针对24个国家进行攻击](https://image.3001.net/images/20210531/1622450147_60b49fe3d1666c8e32f04.png!small)](https://image.3001.net/images/20210531/1622450147_60b49fe3d1666c8e32f04.png!small)
+
+“Nobelium 通过访问美国国际开发署的 Constant Contact 帐户发起了本周的攻击，”伯特说。
+
+这些看似真实的电子邮件包含一个链接，点击该链接后，会发送恶意光盘映像文件（“ICA-declass.iso”），以注入名为
+NativeZone（“Documents.dll”）的自定义 Cobalt Strike Beacon 植入物。正如在之前的事件中所观察到的那样，
+**后门具备保持持续访问、进行横向移动、泄露数据和安装其他恶意软件的功能。**
+
+##  **它是如何工作的？**
+
+最近的攻击浪潮始于 2021 年 1 月，并在 5 月 25 日达到顶峰。攻击始于网络钓鱼活动，并利用名为 Constant Contact
+的群发邮件服务。为了隐藏恶意活动， **他们将其伪装成美国国际开发署** 。恶意网络钓鱼电子邮件被分发到各种垂直行业和组织。
+
+[![SolarWinds黑客使用NativeZone后门针对24个国家进行攻击](https://image.3001.net/images/20210531/1622450151_60b49fe7b0adf54e84b7f.jpg!small)](https://image.3001.net/images/20210531/1622450151_60b49fe7b0adf54e84b7f.jpg!small)
+**黑客发送的钓鱼邮件**
+
+这些看似无害的电子邮件包含一个链接，点击该链接后，会立即发送名为 **ICA-declass.iso 的恶意光盘映像文件** ，并通过
+**Documents.dll** 注入名为 NativeZone的自定义Cobalt Strike Beacon植入物。
+
+[![SolarWinds黑客使用NativeZone后门针对24个国家进行攻击](https://image.3001.net/images/20210531/1622450152_60b49fe863b052d0cf2a6.jpg!small)](https://image.3001.net/images/20210531/1622450152_60b49fe863b052d0cf2a6.jpg!small)
+**感染链流程**
+
+在4月之前检测到的目标攻击的另一种形式中，Nobelium在电子邮件收件人单击链接后尝试对目标计算机进行性能分析。如果底层操作系统是
+iOS，受害者将被重定向到第二个远程服务器，以针对当时的 **零日漏洞CVE-2021-1879** 分发利用。苹果公司于 3 月 26
+日解决了该漏洞，承认“这个问题可能已被积极利用”。
+
+[![SolarWinds黑客使用NativeZone后门针对24个国家进行攻击](https://image.3001.net/images/20210531/1622450152_60b49fe8e29b82ed6a5e3.png!small)](https://image.3001.net/images/20210531/1622450152_60b49fe8e29b82ed6a5e3.png!small)
+
+[证实](https://www.volexity.com/blog/2021/05/27/suspected-apt29-operation-launches-election-fraud-themed-phishing-campaigns/)了调查结果的网络安全公司
+Volexity表示，该活动专门针对位于美国和欧洲的非政府组织 (NGO)、研究机构、政府实体和国际机构。
+
+最新的攻击进一步证明了黑客对每个目标使用独特的基础设施和工具的反复模式，从而为攻击者提供了高度的隐蔽性，并使他们能够在很长一段时间内不被发现。
+
+Nobelium 的商业技术不断发展的性质也可能是对广为人知的 SolarWinds
+事件的直接反应，这表明攻击者可以进一步继续试验他们的方法来实现他们的目标。
+
+“再加上对 SolarWinds 的攻击，很明显，Nobelium
+的部分策略是获得可信赖的技术提供商的访问权并感染他们的客户，”伯特说。“通过搭载软件更新和现在的大量电子邮件提供商，Nobelium
+增加了间谍活动附带损害的机会，并破坏了对技术生态系统的信任。”
+
+## 参考链接：
+
+> <https://thehackernews.com/2021/05/solarwinds-hackers-target-think-> tanks.html>
+>
+> <https://www.hackread.com/solarwinds-hackers-return-nativezone-backdoor/>
+

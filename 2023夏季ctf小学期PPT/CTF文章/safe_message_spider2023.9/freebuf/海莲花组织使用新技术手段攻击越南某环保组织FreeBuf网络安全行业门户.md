@@ -1,0 +1,256 @@
+  
+
+海莲花（OceanLotus），是一个据称越南背景的APT组织。该组织最早于2015年5月被天眼实验室（奇安信威胁情报中心红雨滴团队的前身）所揭露并命名，其攻击活动最早可追溯到2012
+年4月，攻击目标包括中国海事机构、海域建设部门、科研院所和航运企业，后扩展到几乎所有重要的组织机构，并持续活跃至今。
+
+红雨滴（@RedDrip7）团队一直对海莲花团伙的活动保持高强度的跟踪，在近期发布了重磅报告《海莲花团伙对中南半岛国家攻击活动的总结：目标、手法及技术演进》后，再次发现一起针对越南攻击，该活动主要针对一名越南环保人士，攻击过程中使用了新的恶意载荷以及恶意软件，在此我们披露了此次攻击活动的细节与安全业界一起完善关于海莲花这个团伙的拼图。
+
+##  **诱饵分析** ****
+
+本次投放的样本是越南语诱饵的zip压缩包
+
+Thông tin về chuyên đề môi trường_Nhờ anh Đặng Vũ Lượng tư
+vấn thêm.zip
+
+  
+
+从压缩包内容来看，分别是以越南语”插图”命名的三幅图片，分别表现出越南目前河边垃圾众多，工厂四处排烟，臭水沟全是垃圾的场景。此情此景，令人作呕。同时也更加明确，
+**实行垃圾强制分类** 的重要性。
+
+![图片.png](https://image.3001.net/images/20190620/1561014167_5d0b2f976b027.png!small)  
+
+除了图片外，主要的攻击样本便是名为Van nan moi truong Viet Nam hien nay va giai phap khac phuc
+hau qua_Phuong huong trong thoi gian toi的hta脚本
+
+翻译后为：越南目前的环境问题和克服后果的解决方案
+
+可见，无论是从压缩包的诱饵名称，还是作为攻击样本的诱饵名称，都符合攻击环保组织负责人的场景。
+
+因此我们将本次攻击，定性为: 海莲花组织攻击越南某环保组织负责人
+
+## **样本分析** ****
+
+海莲花本次的样本执行流程大致为：
+
+1、 hta样本解密并加载后续的附加数据
+
+2、 释放adobe reader的白利用文件，加载后会连接C2通信
+
+####  **载荷分析** ****
+
+hta脚本进行过混淆处理，处理方式会把字符串中的“,”，“.”，“ ”分别替换成“+”，“/”，“=”：
+
+![图片.png](https://image.3001.net/images/20190620/1561013586_5d0b2d5291203.png!small)
+图2.1 混淆后的hta脚本
+
+通过一些特征可见，该脚本使用cactusTorch框架生成的（https://github.com/mdsecactivebreach/CACTUSTORCH），其首先会解密出Loader模块，通过Loader模块解密附加数据，并在内存中执行解密后的shellcode：
+
+![图片.png](https://image.3001.net/images/20190620/1561013595_5d0b2d5bd8428.png!small)图2.2
+内存中加载Loader
+
+向Loader的“X”函数传递的参数如下：
+
+各个参数的意义如下表：
+
+参数名| 参数值| 意义  
+---|---|---  
+参数1| 163268915（0x6150DC03）| 4字节key，只是用前3个字节（0x03,0xdc,0x50）  
+参数2| 31529| Script末尾的位置，也就是附加数据的开始位置  
+参数3| 194| 释放的docx文件的名字的长度  
+参数4| 1292962| 附加数据的长度  
+  
+而第二个参数就是附加数据的开始位置：
+
+![图片.png](https://image.3001.net/images/20190620/1561013606_5d0b2d667c95e.png!small)图2.3
+hta文件后面的附加数据
+
+####  **Loader分析** ****
+
+解密出来的Loader的模块名为L.dll，该dll的功能主要是解密并加载hta后面的附加数据：
+
+![图片.png](https://image.3001.net/images/20190620/1561013614_5d0b2d6e1f423.png!small)
+图2.4 Loader的一些函数
+
+X函数主要是加密和加载shellcode的；解密算法是base64后再和key单字节循环异或，而key是由参数传递而来：
+
+![图片.png](https://image.3001.net/images/20190620/1561013623_5d0b2d77b24cc.png!small)
+
+图2.5 L.dll的X函数
+
+这里的key为1632689155（0x6150DC03），从算法看只用前3个字节（0x03,0xdc,0x50）逐字节异或解密：
+
+![图片.png](https://image.3001.net/images/20190620/1561013630_5d0b2d7e708dc.png!small)图2.6
+L.dll的Dec解密函数
+
+然后把解密后的数据在内存中执行起来：
+
+![图片.png](https://image.3001.net/images/20190620/1561013638_5d0b2d8684639.png!small)图2.7
+L.dll的B函数
+
+Loader执行的shellcode的功能主要是释放文件并实现持久化，从代码特征可见， **海莲花** 经常使用该shellcode发起攻击。
+
+![图片.png](https://image.3001.net/images/20190620/1561013648_5d0b2d9025df8.png!small)
+
+图2.8 海莲花常用到的shellcode
+
+Shellcode在内存中加载起来后，执行shellcode后其会在内存中加载dll文件
+
+![图片.png](https://image.3001.net/images/20190620/1561013659_5d0b2d9b4ecb1.png!small)图2.9
+shellcode内存中加载dll
+
+后续的释放文件都存放在资源中，从资源数据中通过RtlCompressBuffer解压出要释放的PE文件：
+
+![图片.png](https://image.3001.net/images/20190620/1561013672_5d0b2da81312d.png!small)图2.10
+获取解压API的地址
+
+资源名为0x65和0x66，如图所示，若0x65资源不存在则其会去获取0x66的资源数据。
+
+![图片.png](https://image.3001.net/images/20190620/1561013682_5d0b2db267b9b.png!small)图2.11
+获取资源数据
+
+获取的资源数据如下，包括文件名、文件大小和压缩后的数据：
+
+![图片.png](https://image.3001.net/images/20190620/1561013689_5d0b2db9c88dd.png!small)图2.12
+资源中的原始数据
+
+然后获取system32、Program
+File和Windows目录下的exe和dll文件名，插入到数组里，然后随机生成一个随机数，在数组里随机选中一个文件，获取该文件的文件名和文件描述，并分别作为释放的exe的文件名和恶意代码释放的所处文件夹名：
+
+![图片.png](https://image.3001.net/images/20190620/1561013701_5d0b2dc554808.png!small)图2.13
+获取指定目录的文件名
+
+如果随机选中rasman.dll，就会获取这个的文件描述作为恶意代码释放到的所处文件夹的名字，这里就是创建Remote Access Connection
+Manger文件夹，用于放置恶意代码。
+
+![图片.png](https://image.3001.net/images/20190620/1561013710_5d0b2dcec748f.png!small)图2.14
+rasman.dll的文件说明
+
+如果选中的文件的“文件说明”字段为空，这会使用默认的文件夹名“NLS_000001”：
+
+![图片.png](https://image.3001.net/images/20190620/1561013719_5d0b2dd70e26d.png!small)图2.15文件说明字段为空的处理
+
+在下列2个文件夹中（“Program Files”、“%appdata%”）创建子目录（名字为随机选择的“文件说明”内容），如果“Program
+Files”下无权限创建目录的话，会在“%appdata%”下创建目录：
+
+![图片.png](https://image.3001.net/images/20190620/1561013726_5d0b2ddea8b7f.png!small)图2.16
+创建子目录的处理函数
+
+然后把资源中解密出来的10个文件释放到新建的目录中；这次释放的目录名为：“C:\Program Files\Remote Access Connection
+Manager”，该目录是根据从随机选择的文件中取的“文件说明”字段创建。
+
+exe文件的名字为随机选中的文件的名字。
+
+rasman.db3为要加载的shellcode。
+
+![图片.png](https://image.3001.net/images/20190620/1561013734_5d0b2de65e0e9.png!small)图2.17
+释放的文件
+
+然后会写进注册表run项进行自启动，实现持久化。
+
+同时会在Temp下新建一个空的docx文件，然后打开，让受害者以为打开的是一个docx的文件：
+
+Thong tin chi tiet nhung san pham can dat hang qua shop zero waste_Bao gia chi
+tiet san pham.docx
+
+![图片.png](https://image.3001.net/images/20190620/1561013742_5d0b2dee61592.png!small)图2.18
+新建的空的docx文件
+
+翻译后意思为“有关产品的详细信息，需要供应商的详细零废物价格表”
+
+英文翻译：The details information about products need order shop zero waste details
+price list
+
+####  **Dropper分析** ****
+
+释放的rasman.exe是adobe的正常文件：Adobe 3D Utility：
+
+![图片.png](https://image.3001.net/images/20190620/1561013749_5d0b2df5f1229.png!small)
+图3.1 rasman.exe的版本信息
+
+rasman.exe会默认加载同目录下的dll，包括AGM.dll、BIB.dll、CoolType.dll和ACE.dll，是典型的白利用：
+
+![图片.png](https://image.3001.net/images/20190620/1561013766_5d0b2e061d92f.png!small)图3.2
+rasman.exe的导入表信息
+
+该4个dll的代码是一样的，是被劫持的dll，会被rasman.exe的白程序默认加载，虽然4个dll都有被执行dllmain的机会，但是唯一加载下一阶段payload的dll是CoolType.dll，因为攻击者设计了一个flag变量，来控制是否需要加载下一阶段payload：
+
+MD5| 文件名| 大小| flag| 备注  
+---|---|---|---|---  
+9ca638aeb4ce87936b1a993ef8e285fa| ACE.dll| 11441Kb| 0x8F|
+填充了无用数据的Loader，不加载shellcode文件  
+0a9d3ffff6083a015ab72117cba84fe0| AGM.dll| 11441Kb| 0x8F|
+填充了无用数据的Loader，不加载shellcode文件  
+840c754098c473faff6fd22ddb8163b7| BIB.dll| 11441Kb| 0x6D|
+填充了无用数据的Loader，不加载shellcode文件  
+a8ff3e6abe26c4ce72267154ca604ce3| rasman.db3| 910Kb|  | shellcode文件，文件名随机  
+e84927bc7e4bef6af8daf8640d95325e| rasman.exe| 246Kb|  | pdf白文件，文件名随机  
+d7c72d9394dc6e519dbce21830eb37cb| CoolType.dll| 11441Kb| 0x27|
+填充了无用数据的Loader，加载shellcode文件  
+f5220efbe14b98ac06bc2cadef5c0f23| MSVCP80.dll| 11441Kb|  | 填充了无用数据的库函数  
+321c4d24da35f39c4ab145b6cfc4da19| MSVCR80.dll| 11441Kb|  | 填充了无用数据的库函数  
+  
+AGM.dll的入口处代码可以看出， 2个if判断都不会进入，因为flag的值为0x8f，大于前两个判断，所以后续的payload不会被加载：
+
+![图片.png](https://image.3001.net/images/20190620/1561013782_5d0b2e166ef1a.png!small)图3.3
+AGM.dll的DllMain函数
+
+而CoolType.dll的代码的flag为0x27，小于0x46，所以会进入到第一个if判断里面，执行fun_LoadExportFun函数：
+
+![图片.png](https://image.3001.net/images/20190620/1561013793_5d0b2e21d01b8.png!small)图3.4
+CoolType.dll的DllMain函数
+
+fun_LoadExportFun的功能主要是覆盖exe的入口处的大片代码，循环插入配置中出现的垃圾代码，大小为0x20610字节，然后在最后面添加代码0xff、0x15，最终接上AGM_5的导出函数的地址，只为了最后执行加载shellcode的代码：
+
+![图片.png](https://image.3001.net/images/20190620/1561013801_5d0b2e2963a95.png!small)图3.5
+fun_LoadExportFun函数
+
+当程序回到exe的进程空间后，会跳回到fun_LoadExportFun函数所覆盖的代码区间里继续运行，并最终执行AGM_5的函数，这样做主要是为了避免被栈回溯到执行流程：
+
+![图片.png](https://image.3001.net/images/20190620/1561013808_5d0b2e309dcda.png!small)图3.6
+填充的大量平滑代码
+
+AGM_5被执行起来后，首先隐藏该进程的所有的子窗口，然后读取同目录下的同文件名的db3（这里为rasman.db3）后缀的文件，把读取到的内容加载到内存中执行起来：
+
+![图片.png](https://image.3001.net/images/20190620/1561013818_5d0b2e3a4892e.png!small)图3.7
+加载rasman.db3的shellcode
+
+加载的shellcode是海莲花的denis家族的恶意代码：
+
+![图片.png](https://image.3001.net/images/20190620/1561013824_5d0b2e40bbceb.png!small)图3.8
+rasman.db3的内容
+
+然后会去连接udt.sophiahoule.com和攻击者建立C2通信，最终导致电脑被控制：
+
+![图片.png](https://image.3001.net/images/20190620/1561013831_5d0b2e4736deb.png!small)图3.9
+建立C2的数据包
+
+这次恶意代码的特点：
+
+1、 在hta脚本末插入加密后的附加数据，避免多文件的形式存在
+
+2、 释放的文件根据电脑上的文件名和文件描述随机命名文件名和目录名，避免被溯源取证人员轻松取到样本和轻松下规则。
+
+3、 白利用方式仅选择其中的一个dll文件，并用垃圾代码填充exe的入口内存空间再做函数跳转从而避免栈回溯
+
+4、 文件体积膨胀，以避免样本上传
+
+##  **总结** ****
+
+海莲花组织无论是针对国内外进行攻击，其投放诱饵的手段、载荷变化、木马免杀技术，甚至是回连域名资产均在不停地演进变化，体现了非常强大的对抗能力和攻击意志。由于大多数APT团伙的跨国特性，我们很难从解决人的问题出发从根源上消除威胁，因此对于APT攻击跟踪和对抗将长期存在，我们所能做的只有不断提升自身的发现和遏制能力，从技术上压倒对手。
+
+目前，奇安信集团全线产品已经支持对本次活动的海莲花的攻击检测。
+
+##  **I** **OC** ****
+
+诱饵文件
+
+0dd468ee3a4ec0f6f84473bd8428a1e1
+
+Loader
+
+b28c80ca9a3b7deb09b275af1076eb55
+
+回连C2
+
+udt.sophiahoule.com
+

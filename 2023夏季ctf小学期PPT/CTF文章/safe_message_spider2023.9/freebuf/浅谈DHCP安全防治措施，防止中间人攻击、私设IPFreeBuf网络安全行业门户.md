@@ -1,0 +1,346 @@
+由于学习安全之前网工出身，对于网络设备上的各项安全配置相对更加了解，也是了解了许多硬件安全的相关知识，本文是几年前在进行园区网规划时针对DHCP安全的一些总结，可以有效防止中间人攻击及私设IP。针对一些DHCP的进阶技术进行阐述，文中简单的搭建采用了思科模拟器，而后续的DAI与IP源保护技术是基于真实网络设备配置，不足之处请指出。
+
+# DHCP Relay
+
+DHCP
+server功用来给用户分配地址。DHCP中继代理，就是在DHCP服务器和客户端之间转发DHCP数据包。当DHCP客户端与服务器不在同一个子网上，就必须有DHCP中继代理来转发DHCP请求和应答消息。
+
+DHCP中继代理的数据转发，与通常路由转发是不同的，通常的路由转发相对来说是透明传输的，设备一般不会修改IP包内容。而DHCP中继代理接收到DHCP消息后，进行转换源目的IP，MAC生成一个DHCP消息，然后转发出去。
+
+适用环境：
+
+![1669774915_6386be433ce5980dd8e60.png!small](https://image.3001.net/images/20221130/1669774915_6386be433ce5980dd8e60.png!small)
+
+PC所在的网关不提供DHCP功能，而是被迁移到了另外的设备上，此处使用路由器提供DHCP功能。
+
+配置要点：
+
+  * 网关处需要配置中继
+  * 提供DHCP功能的设备需要开启DHCP server服务并且配置路由可以到达网关处以下发配置
+
+只给出网关及中继相关的配置
+
+在中继处直接给VLAN10，VLAN20配置中继地址
+
+interface Vlan10
+
+ip address 192.168.10.254 255.255.255.0
+
+ip helper-address 12.1.1.1
+
+interface Vlan20
+
+ip address 192.168.20.254 255.255.255.0
+
+ip helper-address 12.1.1.1
+
+提供DHCP服务功能的路由器开启DHCP功能并且铺设路由
+
+Service DHCP
+
+ip dhcp pool VLAN10
+
+network 192.168.10.0 255.255.255.0
+
+default-router 192.168.10.254
+
+ip dhcp pool VLAN20
+
+network 192.168.20.0 255.255.255.0
+
+default-router 192.168.20.254
+
+ip route 192.168.10.0 255.255.255.0 12.1.1.2
+
+ip route 192.168.20.0 255.255.255.0 12.1.1.2
+
+在PC处查看获取地址效果
+
+![1669774942_6386be5e31ad00a2eb2e7.png!small](https://image.3001.net/images/20221130/1669774942_6386be5e31ad00a2eb2e7.png!small)
+
+PC已经可以正常获取到IP地址。
+
+![1669774999_6386be9727b50cd4b7921.png!small](https://image.3001.net/images/20221130/1669774999_6386be9727b50cd4b7921.png!small)
+
+ **DHCP** **中继服务要点是在网关处的helper-address需要配置好并且确实可达，DHCP服务器端也需要有相应的路由来找到网关提供服务。**
+
+# DHCP snooping高级特性
+
+DHCP
+snooping窥探功能是通过PC在动态获取IP地址的过程中窥探DHCP交互报文，实现监控，并且过滤掉非法服务器的过滤报文，防止用户端获取到非法DHCP服务器提供的地址而导致无法上网。
+
+DHCP Snooping trust端口
+
+由于DHCP报文使用的是广播形式，极有可能获取到非法DHCP服务器的应答报文，Snooping功能将端口类型分为trust和untrust端口。设备只接受Trust端口收到的DHCP应答报文，丢弃所有其他untrust口收到的DHCP报文，实现安全效果。
+
+![1669775018_6386beaa80a3bd9a76861.png!small](https://image.3001.net/images/20221130/1669775018_6386beaa80a3bd9a76861.png!small)
+
+实验环境
+
+在此环境中，DHCP服务器设置DHCP地址池为VLAN10用户动态分配IP地址，但是VLAN10的网关在核心交换机，所以使用DHCP中继为VLAN10用户传递DHCP报文。
+
+DHCPserver：
+
+Service dhcp
+
+ip dhcp pool vlan10
+
+network 192.10.10.0 255.255.255.0
+
+default-router 192.10.10.254
+
+核心交换机：
+
+interface Vlan10
+
+ip address 192.10.10.254 255.255.255.0
+
+ip helper-address 10.10.0.1
+
+接入交换机和核心交换机中间的链路需要开启trunk，保证VLAN流量的通行。
+
+Vlan 10
+
+interface GigabitEthernet 0/1
+
+switchport access vlan 10
+
+interface GigabitEthernet 0/24
+
+switchport mode trunk
+
+switchport trunk allowed vlan only 10
+
+PC连接到对应的VLAN口，开启自动获取IP地址,查看效果
+
+![1669775043_6386bec33be1cf7d90dcc.png!small](https://image.3001.net/images/20221130/1669775043_6386bec33be1cf7d90dcc.png!small)
+
+说明PC正常情况下获取IP地址无问题，但是为了防止私设DHCP服务器或静态IP，设置DHCP snooping功能。
+
+ ** _一定要先开启Snooping功能，再自动获取IP地址，Snooping表项中才会有记录。_**
+
+接入交换机
+
+Ip dhcp snooping
+
+\----全局开启DHCP snooping功能
+
+Interface gi0/24
+
+Ip dhcp snooping trust
+
+\----将上联接口设置为信任端口
+
+PC重新动态获取IP地址
+
+现在查看接入交换机的DHCP snooping binding表项
+
+![1669775062_6386bed648bf0ce862735.png!small](https://image.3001.net/images/20221130/1669775062_6386bed648bf0ce862735.png!small)
+
+发现来自Gi0/1口的设备已经被记录到表项中。
+
+测试通信无问题。
+
+![1669775067_6386bedb9f2623cfba06d.png!small](https://image.3001.net/images/20221130/1669775067_6386bedb9f2623cfba06d.png!small)
+
+接下来模拟用户私设IP地址，查看是否能正常上网。
+
+这里讲PC的IP地址设置为同网段的10.10，子网掩码网关不变。
+
+![1669775073_6386bee12a352c2996155.png!small](https://image.3001.net/images/20221130/1669775073_6386bee12a352c2996155.png!small)
+
+测试通信虽然可以成功ping到网关，但是snooping binding表项已经消失，这很不利于防DHCP欺骗的其它扩展功能。
+
+![1669775081_6386bee98b4f3bed29061.png!small](https://image.3001.net/images/20221130/1669775081_6386bee98b4f3bed29061.png!small)
+
+![1669775084_6386beecb3b17ef81944c.png!small](https://image.3001.net/images/20221130/1669775084_6386beecb3b17ef81944c.png!small)
+
+# DHCP Snooping+ARP-check+IP source Guard
+
+明显只设置信任端口的安全级别是不够的，用户私设同网段的静态IP地址还是可以实现通信，只是杜绝了外界的非法DHCP服务器。所以配合两种新技术使用提升安全级别。
+
+ARP-check
+
+开启该功能后，对于接口收到的ARP报文会检测ARP报文字段里面的Sender IP及Sender MAC。
+
+IP Source Guard
+
+将DHCP Snooping表的每个终端的IP&MAC信息写入交换机的硬件表项。
+
+功能简介：
+
+在用户PC动态获取IP地址的过程中，通过接入层交换机的DHCP Snooping功能将用户DHCP获取到的，正确的IP与MAC信息记录到交换机的DHCP
+Snooping软件表；然后通过IP Source guard功能将DHCP
+Snooping表的每个终端的IP&MAC信息写入交换机的硬件表项（类似端口安全的绑定）；最后使用ARP-check功能校验所有ARP报文的正确性。如果合法用户获取IP地址后试图进行ARP欺骗，或者是非法用户私自配置静态的IP地址，他们的ARP校验都将失败，这样的用户将无法使用网络。
+
+实验配置：
+
+在已经开启DHCP snooping功能的基础上进行配置，并且保证已经有dhcp snooping binding表项。
+
+在所有的终端接口开启IP source guard功能，实验中只对VLAN10进行配置。
+
+S1(config)#int ran gi0/1-4
+
+S1(config-if-range)#ip verify source port-security
+
+\------>开启源IP+MAC的报文检测，将DHCP Snooping形成的snooping表写入地址绑定数据库中，请正确配置ip verfiy
+soure port-security， 不要使用ip verify source（仅绑定IP），部分产品存在限制，只绑定IP的情况下可能出现异常。
+
+![1669775128_6386bf189a1bba34c1105.png!small](https://image.3001.net/images/20221130/1669775128_6386bf189a1bba34c1105.png!small)
+
+在配置完IP source Guard之后会有短暂的丢包现象，大约5S后恢复正常，应该是在将表项写入交换机硬件中，属于正常现象。
+
+然后配置arp-check功能，同样在终端接口。
+
+S1(config-if-range)#arp-check
+
+\------>开启该功能后，对于接口收到的ARP报文会检测ARP报文字段里面的Sender IP及Sender
+MAC，与地址绑定库中的IP及MAC进行匹配，如果匹配将放行，否则丢弃该ARP报文
+
+![1669775150_6386bf2e09b59befbaba0.png!small](https://image.3001.net/images/20221130/1669775150_6386bf2e09b59befbaba0.png!small)
+
+网络通信正常。
+
+现在所有功能已经基本配置完成，PC正常动态获取的IP地址也可以进行通信。DHCP snooping+IP source Guard+arp-check功能全部开启，现在测试如果用户私设IP地址会出现的情况。
+
+手动将IP地址改为192.10.10.10，其它参数不变。
+
+![1669775160_6386bf384eb20ba7d3fa5.png!small](https://image.3001.net/images/20221130/1669775160_6386bf384eb20ba7d3fa5.png!small)
+
+发现首先DHCP snooping binding表项中关于192.10.10.1的条目已经消失，再看与网关的通信已经被断掉，无法正常上网。
+
+![1669775165_6386bf3dc6b57cbb3560f.png!small](https://image.3001.net/images/20221130/1669775165_6386bf3dc6b57cbb3560f.png!small)
+
+![1669775179_6386bf4be872911a87d59.png!small](https://image.3001.net/images/20221130/1669775179_6386bf4be872911a87d59.png!small)
+
+测试结果：三种技术联合使用可以有效杜绝用户私设IP地址和非法DHCP服务器的影响。
+
+再次将PC置为动态获取IP地址之后表项出现，通信恢复正常。
+
+![1669775188_6386bf548154fe7492edd.png!small](https://image.3001.net/images/20221130/1669775188_6386bf548154fe7492edd.png!small)
+
+![1669775190_6386bf56d3a0ab18fc9b9.png!small](https://image.3001.net/images/20221130/1669775190_6386bf56d3a0ab18fc9b9.png!small)
+
+# DHCP snooping+DAI功能
+
+动态ARP监测，用于防止ARP欺骗的发生。DAI可以提取DHCP snooping数据库中的IP&MAC表项，
+_利用CPU过滤ARP报文发送者字段（sender’s MAC），如果ARP报文的发送者字段不存在与数据库中则丢弃该ARP报文_ 。
+
+非信任口：拒绝不存在于DHCP snooping数据库ARP报文
+
+信任口：允许所有ARP报文通过
+
+默认角色：非信任口
+
+实验环境：
+
+已经配置好DHCP地址池，PC可以正常获取到IP地址，且开启了DHCP snooping功能，表项中存在IP+MAC条目。
+
+首先在接入端口开启IP source Guard功能，保证表项可以被写入到交换机，否则配置DAI功能无效。
+
+在接入交换机部署DAI功能。
+
+S1(config)#int ran gi0/1-4
+
+S1(config-if-range)#ip verify source port-security
+
+Exit
+
+\----开启源保护功能，将表项写入到交换机硬件，类似于端口保护。
+
+S1(config)#ip arp inspection vlan 10
+
+————全局对VLAN10开启DAI检测功能
+
+S1(config)#int gi0/24
+
+S1(config-if-GigabitEthernet 0/24)#ip arp inspection trust
+
+————上联接口设置为信任接口，送往CPU的报文不进行DAI检测，但是仍由CPU处理。在全局配置完DAI之后会出现网络中断现象，此时在上联接口开启信任接口网络即恢复正常。
+
+![1669775242_6386bf8a7a464e8c17138.png!small](https://image.3001.net/images/20221130/1669775242_6386bf8a7a464e8c17138.png!small)
+
+中途的丢包便是因为上联接口不是信任接口的原因，开启后恢复正常。
+
+![1669775258_6386bf9a7ed63a14d9254.png!small](https://image.3001.net/images/20221130/1669775258_6386bf9a7ed63a14d9254.png!small)
+
+查看表项，DAI功能开启，snooping数据库也有对应的表项。网络通信正常。
+
+现在测试用户私设IP地址的影响。手动配置IP地址为192.10.10.10，其它参数不变。
+
+![1669775265_6386bfa1baa282c9e863c.png!small](https://image.3001.net/images/20221130/1669775265_6386bfa1baa282c9e863c.png!small)
+
+无法访问，说明DAI功能实现了拒绝用户私设IP地址的效果。
+
+# 各种防ARP欺骗比较
+
+环境/方案
+
+|
+
+Port-Securtiy+ARP-check
+
+|
+
+DHCP+Snooping+IP Source Guard+ARP-check
+
+|
+
+DHCP snooping+DAI
+
+|
+
+Supplicant授权+ARP-check  
+  
+---|---|---|---|---  
+  
+静态IP
+
+|
+
+√
+
+| | |  
+  
+静态IP+SAM
+
+| | | |
+
+√  
+  
+动态IP
+
+| |
+
+√
+
+|
+
+√
+
+|  
+  
+动态IP+SAM
+
+| |
+
+√
+
+|
+
+√
+
+|  
+  
+ **I** **P Source+ARP-check** **与DAI比较的优缺点**
+
+IP Source+ARP-check：配置简单，无需手工绑定每个用户的IP和MAC地址表项，属于硬件芯片检查表项，不消耗CPU资源
+
+DAI：优点：配置维护简单，无需手工的去做每个用户的IP&MAC绑定；和IP Source Guard相比，可以节省设备所需的硬件安全资源表项。
+
+缺点：DAI是将 _用户的ARP报文送CPU检查_ ，检查的来源是DHCP
+Snooping所记录的软件表项，会额外消耗设备的CPU资源，对于交换机上用户量较少，例如单台交换机带用户50个以内的可以采用，用户数超过此值时，建议推荐使用IP
+Source Guard方案 **。**
+
+原创声明：本文为ninggo所撰，转载请联系本人征得转载授权，并且注明文章原始出处和原作者。最先发表于公众号NG安全团队，文章内容是本人几年前所总结，首次发布。
+

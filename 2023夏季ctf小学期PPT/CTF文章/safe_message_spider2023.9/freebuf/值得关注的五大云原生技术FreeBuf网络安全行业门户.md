@@ -1,0 +1,86 @@
+**云原生（Cloud-Native）是一种文化，更是一种潮流，它是云计算的一个必然导向，是让云成为云化战略成功的基石。云计算时代，云原生技术注定将对现代化应用的建设、交付与运维产生颠覆性的影响。**
+
+根据相关调查结果显示：自 2017 年 12 月以来，云原生技术在生产中的使用量平均增长了 200% 以上。以 Kubernetes、Kubeflow
+为代表的云原生技术让“云原生”从一个模糊的概念，强势成长为通用技术。无论是 Google、微软、IBM
+这些互联网巨头，还是国内阿里巴巴、腾讯、百度、当当网等大厂都争相把云原生技术项目作为其技术重心。
+
+Kubernates是一个开源容器管理平台，现已成为云原生技术的主要支柱。自从把它移交给Cloud Native Compute
+Foundation（云原生计算基金会）以来，该项目在业界已经取得了前所未有的关注，目前没有一个公有云环境不提供Kubernates 托管服务。
+
+Kubernates 正迅速成为运行现代容器化应用的操作系统。
+
+Kubernates 的崛起导致了一个全新的生态系统的形成。目前有各种各样的 ISV 和 Sass
+提供商为构建云原生环境提供了构建工具。这个蓬勃的生态系统，可以轻松地与当时微软或 VMware 在 Windows 和 VSphere
+全盛时期所享有的地位相媲美。但它们之间的关键区别在于，云原生的产品大多都是开源的，并在云端提供一个商业托管版本。
+
+![https _blogs-images.forbes.com_janakirammsv_files_2018_09_containers.jpg](https://image.3001.net/images/20180918/1537252925_5ba09e3d4e22d.jpg!small)
+
+## 5大云原生技术
+
+下面是五个引起业界关注的开源项目。这些项目在 Kubernates 的基础上提供了额外的扩展功能，使得其成为运行 Web 规模和企业应用程序的坚实平台。
+
+### 1\. Istio
+
+在 Kubernates 之后， [Istio](https://istio.io/)
+是最受欢迎的云原生技术。它是一种服务网格，可以安全地连接一个应用程序的多个微服务。你也可以将 Istio
+视为内部和外部的负载均衡器，具有策略驱动的防火墙，支持全面的指标。开发人员和操作人员喜欢 Istio 的原因在于，其具有非侵入式的部署模式。此外，几乎任何
+Kubernates 服务都可以在无需更改代码或配置的情况下，与 Istio 进行无缝集成。
+
+Google 最近宣布在 GCP 上管理 Istio 服务。除 Google 外，IBM、Pivotal、Red Hat、Tigera 以及
+Weaveworkds 也都是该项目的积极贡献者和支持者。
+
+Istio 为 ISV 提供了向企业提供定制化解决方案和工具的绝佳机会。该项目必将成为建设云原生平台的核心项目之一，我希望每个托管 Kubernates
+服务的平台都有托管的 Istio 服务。
+
+### 2\. Prometheus
+
+[Prometheus](https://prometheus.io/) 是部署在 Kubernates
+上用于观察工作负载的一个云原生监控工具。它通过全面的指标和丰富的仪表板填补了云原生世界中存在的重要空白。在 Kubernates
+之后，它是唯一从云原生计算基金中毕业的项目。Prometheus 通过聚合可通过集中式仪表板显示的指标来填充 Istio 的空白。从反映
+Kubernates 集群运行状况的核心指标，到高级应用程序特定指标，可以毫不夸张地说，Prometheus 几乎可以监控所有内容。它整合了像
+Grafana 这样主流的数据可视化工具。Kubernates
+接下来推出的有关扩展和监控的功能都将取决于Prometheus，这使它成为云原生平台建设中至关重要的一个项目。
+
+### 3\. Helm
+
+如果说 Kubernates 是新型的操作系统，那么 [Helm](https://www.helm.sh/) 就是应用程序安装器。基于 Debian
+安装包和 Red Hat Linux RMPS设计，Helm 可以通过执行单个命令轻松地部署云原生工作负载。
+
+Kubernates 应用程序由各种元素组成，例如部署（deployments）、服务（services）、入口控制器（ingress
+controllers）、persistant volumes 等等。Helm
+则通过将云原生应用程序的所有元素和依赖关系聚合到称为“图表”（Chart）的部署单元中，来充当统一打包工具。
+
+由CNCF负责管理的 Helm 项目，目前的积极参与者主要包括 Bitnami、Google、Microsoft、CodeFresh
+以及Ticketmaster 等。Helm 正朝着成为真正意义上的云原生应用程序安装器的方向而努力。
+
+### 4\. Spinnaker
+
+云原生技术的主要承诺之一就是快速交付软件的能力。[Spinnaker](https://www.spinnaker.io/) 是一个最初在 Netflix
+上构建的开源项目，它就实现了这一承诺。Spinnaker 是一个版本管理工具，可以加速云原生应用程序的部署。通过瞄准传统的 Iass 环境（如 Amazon
+EC2 和运行在 Kubernates 上的现代 Cass 平台），Spinnaker
+无缝填补了传统虚拟机和容器之间的空白。其多云功能也使其成为跨不同云平台部署应用程序的理想平台。
+
+Spinnaker 可作为当前所有主流的云环境自托管平台。像
+[Armory](http://www.forbes.com/sites/janakirammsv/2018/08/23/armory-bets-big-on-spinnaker-the-open-source-continuous-delivery-platform-from-netflix/)
+这样的初创公司目前也正在提供基于服务等级协议（SLA）的商业级及企业级 Spinnaker。
+
+### 5\. KubeLess
+
+事件驱动计算正在成为现代应用程序架构不可或缺的一部分。功能即服务（Faas）是当前无服务计算的交付模型之一，它通过基于事件的调用来填补容器。现代应用程序会将服务打包为在同一环境中运行的容器和函数。随着
+Kubernates 成为云原生计算的首选平台，它必须与容器一起运行功能。
+
+来自Bitnami的开源项目
+[Kubeless](https://kubeless.io/)，是云原生生态系统中最受欢迎的无服务器（serverless）项目之一。它与 AWS
+lambda
+的兼容性与对主流语言的支持，使其成为理想的选择。所谓“无服务器”（serverless）架构，即基于互联网的系统，其中应用开发不使用常规的服务进程。相反，它们仅依赖于第三方服务（例如
+AWS Lambda 服务），客户端逻辑和服务托管远程过程调用的组合。
+
+CNCF 目前尚未将无服务器项目纳入其中。到目前为止最接近这种形式的是 CloudEvent ——一种以常见方式描述事件数据的标准规范。如果
+Kubeless 成为 CNCF 中的一个项目的话，那将会十分有意思。
+
+随着企业开始接受新的范例，一系列新的工具和平台也正在迅速涌现，以支持现代的云原生工作负载。
+
+ ***参考来源：
+_[forbes](https://www.forbes.com/sites/janakirammsv/2018/09/02/beyond-kubernetes-5-promising-cloud-native-technologies-to-watch/#4b362f1c48d1)_
+，米雪儿编译整理，转载请注明来自 FreeBuf.COM。 **  
+

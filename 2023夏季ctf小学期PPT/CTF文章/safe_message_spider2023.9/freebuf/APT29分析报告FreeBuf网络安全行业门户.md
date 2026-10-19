@@ -1,0 +1,442 @@
+##  简介
+
+ **APT29是威胁组织，已被归于俄罗斯政府情报组织，APT29至少从2008年开始运作，具有YTTRIUM、The Dukes、Cozy
+Duke、Cozy Bear、Office
+Monkeys等别名。主要攻击目标为美国和东欧的一些国家。攻击目的是为了获取国家机密和相关政治利益，包括但不限于政党内机密文件，操控选举等。与APT28，同属于俄罗斯政府的APT28相互独立，但在某种程度上会联合行动。APT29是东欧地区最为活跃的APT组织之一。该APT的许多组件均通过伪造的Intel和AMD数字证书进行签名。**
+
+##  活动分析
+
+![1575978512_5def86102b5ca.png](https://image.3001.net/images/20191216/15764737838429.png!small)
+
+2014年3月，位于华盛顿特区的一家私人研究机构的内部网络被发现感染了 Cozy duke（Trojan.Cozer）。 然后，Cozy
+Bear发起了一项鱼叉式钓鱼邮件攻击行动，试图诱使受害者点击内容为办公室猴子的Flash视频，其中也包含恶意可执行文件。到7月，该小组已经攻陷了部分了政府网络，并控制受
+Cozy duke病毒感染的系统将 Mini duke 安装到了被攻陷的网络上。同年夏天，荷兰通用情报和安全局的特工反向渗透了Cozy
+Bear，发现该组织将美国民主党，美国国务院，白宫作为目标。FBI开始对该组织展开调查。
+
+2015年4月卡巴斯基首次发布关于“舒适熊”黑客活动的公告，指出该组织正有目的地对美国部分国家机关发动网络攻击，其中可能包括美国白宫和国务院。
+
+在2016年12月美国DHS关于APT28，APT29组织在同年针对 民主党全国委员会
+的攻击事件以及干扰美国大选活动发布了相关调查报告，并将其恶意攻击活动称为GRIZZLY STEPPE，并直指俄罗斯情报部门。
+
+2016年6月，Cozy Bear与黑客组织Fancy Bear都牵涉到连到 民主党全国委员会
+网络攻击事件中。他们同时出现再民主党全国委员会的服务器中但是他们似乎没有意识到对方的存在，并且各自独立地窃取了相同的密码。一个CrowdStrike的取证小组判定
+Cozy Bear 的后门 在 民主党全国委员会 的服务器上存在了长达一年的时间，而 Fancy Bear 的后门只存在的几周。Cozy Bear
+更先进的交易手段和对传统长期间谍活动的兴趣表明了Cozy Bear起源于独立的俄罗斯情报机构
+
+在2016年总统大选之后，Cozy Bear对总部设立于美国的智囊团和非政府组织进行了一系列经过精心协调和计划的鱼叉式网络钓鱼攻击
+
+2017年2月3日 挪威警察安全局报告，Cozy
+Bear通过钓鱼邮件攻击了挪威外交部，挪威外交部和挪威工党的九个人。目标包括挪威辐射防护局，挪威警察安全局部门负责人，和一所大学。
+
+2017年2月 挪威报告，Cozy Bear和Fancy Bear 在过去的六个月中曾经多次尝试入侵荷兰总务部等政府部门试图获取机密文件
+
+##  关联组织
+
+> YTTRIUM
+>
+> The Dukes
+>
+> Cozy Duke
+>
+> Cozy Bear
+>
+> Office Monkeys
+
+##  攻击目标
+
+> 美国和东欧国家政府机构
+>
+> 美国一些知名智囊团、研究组织和非盈利组织（主要是政治上）
+
+![](https://image.3001.net/images/20191210/1575978511_5def860fefecd.png)
+
+##  攻击目的
+
+> 获取政治上的利益
+>
+> 或为俄罗斯相关部门提供情报支持
+
+##  采用技术
+
+###  利用Windows辅助功能执行后门
+
+Windows辅助功能包含以下
+
+> 屏幕键盘： C:\Windows\System32\osk.exe
+>
+> 放大镜： C:\Windows\System32\Magnify.exe
+>
+> 讲述人： C:\Windows\System32\Narrator.exe
+>
+> 显示切换器： C:\Windows\System32\DisplaySwitch.exe
+>
+> 应用切换器： C:\Windows\System32\AtBroker.exe
+
+这些功能可以在用户登录之前通过某些组合键启动，攻击者通过修改这些程序的二进制可执行文件来获取命令提示符或者启动后门程序，而无需登陆系统。
+
+比较常见的是粘滞键C:\Windows\System32\sethc.exe
+（按住shift键5次启动）和C:\Windows\System32\utilman.exe（在按Windows + U组合键时启动）
+
+在Windows的较新版本中，对于x64系统，需要对替换的二进制文件进行数字签名，且二进制文件必须位于%systemdir%\
+，由Windows文件或资源保护（WFP / WRP）保护。
+
+权限提升：对于Windows XP和更高版本以及Windows Server 2003 /
+R2和更高版本上的简单二进制替换，可以将程序（例如C:\Windows\System32\utilman.exe ）替换为
+cmd.exe（或其他后门程序）。通过这种方式启动的程序将获得 SYSTEM 权限
+
+对于Windows Vista和更高版本以及Windows Server 2008和更高版本上，可以通过 debugger method
+的方法绕过签名保护。通过修改注册表将cmd.exe或提后门程序配置为
+debugger的注册表项。修改注册表后，在键盘上或与RDP连接时在登录屏幕上相应的组合键将使配置的 debugger 程序以SYSTEM特权执行。
+
+##  UAC绕过 (Windows User Account control Bypass)
+
+Windows用户帐户控制（UAC）允许程序通过弹出提示来引导用户进行确认，用于用户授予应用程序SYSTEM 权限。
+
+如果计算机的UAC保护等级没有设置为最高级别，则某些Windows程序将被允许提升权限或执行某些可以提升权限的COM对象，而无需通过UAC弹出提示框提示用户，例如：
+
+> 使用rundll32.exe加载特制的DLL文件，该DLL文件会加载自动提升的COM对象，并于没有弹出提示的情况下在，高权限的受保护目录中执行文件操作。
+>
+> 恶意程序也可能被注入到受信任的进程中，以在不提示用户的情况下获得高级别的权限。 如果目标进程不受保护，则攻击者可以使用这些技术提升到管理员权限。
+
+已经发现了很多UAC绕过的方法，大部分方法已经收录于 [UACME](https://www.freebuf.com/wp-admin/%5Bhttps%3A//github.com/hfiref0x/UACME%5D\(https://github.com/hfiref0x/UACME))
+，但是仍然不断有新的绕过方法被发现。
+
+如果已经掌握管理员权限帐户的凭据，则可以通过某些横向移动技术进行另一种绕过，因为UAC是单一的系统安全机制，并且在一个系统上运行的进程的权限或者完整性在横向系统上是未知的，并且默认其为高度可信的。
+
+##  利用周知端口进行流量混淆
+
+攻击者通过利用周知端口（通过攻击者控制下的正常网站）做跳板来进行和被攻击计算机的通信，或者自己搭建完全不同的协议但是运行在周知端口上，并通过与正常的网络活动相似来混淆，减少后门被发现的概率。
+
+##  Domain Fronting 绕过技术
+
+这个绕过技术是用于攻击者的恶意后门程序突破域防火墙的检查，与攻击者的服务器进行通信。
+
+攻击者可以在TLS头部的SNI字段和HTTP
+头部的Host字段设置不同的域名，如在SNI字段设置为某正常网站的域名，而在Host字段设置为攻击者的服务器，最终请求会被导向攻击者的服务器。
+
+另外有一种 Domainless
+Fronting技术，如果CDN服务器尝试检验SNI字段和Host字段是否匹配，攻击者可以将SNI字段设置为空。这样如果CDN服务器检验的时候忽略了空的SNI字段，就可以成功导向攻击者的服务器。
+
+例如，如果domain-x和domain-y是同一CDN的客户，则可以将domain-x放在TLS标头中，而domain-y放在HTTP标头中。
+流量似乎将流向y域，但是CDN会将其路由到x域。
+
+##  入侵痕迹清除
+
+###  文件清除
+
+攻击者在被入侵的计算机上创建或者丢弃一些恶意软件，利用工具，或者其他非本机文件时，可能会留下关于网络内执行的操作和操作方式的痕迹。一般的文件删除操作只是系统认为硬盘中存放文件的数据段被接触占用，可以写入别的文件，这样删除的文件在实际储存区域被覆写前时可以恢复的。而攻击者显然希望他的攻击痕迹不会被任何形式追踪和发现。对于文件覆写，Windows系统有自带的一些命令可以用，例如cmd的
+DEL 命令，Windows Sysinternals SDelete 工具。同时攻击者也可以利用其他的第三方文件删除工具。
+
+###  日志清除
+
+攻击者会对入侵的痕迹进行清除或更改，包括系统日志和被捕获隔离的恶意文件。日志的存储位置和格式在不同的系统中会有所不同，比如Windows会将日志做为Windows
+events 而 Linux/macOS 会将其以文件的形式记录(Bash History 或 /var/log/*)
+
+通过对日志或者系统活动记录等信息进行清除，会让入侵检测、取证分析和应急响应变得更加困难，但是被清除的日志本身也是一种痕迹。
+
+ **Windows事件日志**
+
+Windows事件日志是计算机警报和通知的记录。 Microsoft将事件定义为“系统或程序中任何需要通知用户或将条目添加到日志的重大事件”。
+有三个系统定义的事件源：系统，应用程序和安全性。进行与帐户管理，帐户登录和目录服务访问等相关的操作的攻击者可以选择清除事件以隐藏其活动。攻击者可以使用以下实用程序命令清除事件日志：
+
+> wevtutil cl sys
+>
+> wevtutil cl application
+>
+> wevtutil cl security
+
+ **Linux事件日志**  
+
+Linux日志一般以文件的形式存放，不同的Linux发行版系统存放日志的目录可能不一样，不同的bash类程序使用的命令行记录也可能不一样。找到具体日志文件的位置可以通过rm命令删除。
+
+##  文件和信息混淆（隐写）
+
+攻击者可能试图通过加密，编码或其他方式混淆可执行文件或文件在系统中或传输中的内容，从而使其难以发现或分析。这种手段可以跨不同的平台和网络使用，用以逃避防御和检测手段。
+
+有效载荷可能被压缩，归档或加密，以避免被域防火墙之类的防御措施检测到。
+
+有效负载也可能被拆分为看似良性的单独文件，这些文件仅在重新组合后才会显示恶意功能。
+
+混淆的另一个例子是通过使用隐写术，这是一种将消息或代码隐藏在图像，音轨，视频剪辑或文本文件中的技术。例如Duqu恶意软件对从受害者系统中收集到的信息进行了加密，并将其隐藏到一个img映像文件中，然后将该映像传输到C2服务器。攻击者也使用Invoke-PSImage将PowerShell命令隐藏在图像文件（png）中，并在受害者的系统上解析成执行代码。
+
+##  多跳代理
+
+一种反追踪的手段。
+
+攻击者可以通过设置将多个代理服务器链接在一起作为跳板机，通常，防御者只能够确定在进入其网络之前经过的最后一个代理服务器。攻击者通过此技术来混淆恶意流量的来源来掩盖自己的身份或者信息，达到反追踪的目的。
+
+##  横向域渗透
+
+###  WMI(Windows Management Instrumentation) 利用
+
+WMI是Windows的一项管理功能，它为本地和远程访问Windows系统组件提供了统一的环境。它依靠WMI服务进行本地和远程访问，并依靠SMB(
+服务器消息块 )和RPCS( 远程过程调用服务 )进行远程访问。 RPCS通过端口135运行。
+
+攻击者可以使用WMI与本地和远程系统进行交互，并将其用作执行许多攻击方式的手段，例如信息收集以进行域主机探测和远程执行恶意程序。如使用WMI的功能订阅事件并在事件触发时执行任意代码，从而在系统上设置持久化后门。
+攻击者可能会通过将WMI脚本编译到Windows管理对象（MOF）文件（扩展名为.mof）中来逃避对此技术的检测。攻击者订阅的事件是一般是挂钟时间或计算机的正常运行时间。
+
+###  Pass the Ticket
+
+Kerberos是一种网络认证协议，其设计目标是通过密钥系统为 客户机 / 服务器
+的应用程序提供强大的认证服务。主要用于，一个用户在域内访问多台服务器都需要进行身份认证，但是没必要将用户的用户名密码储存于每台提供服务的服务器中。于是采用将用户认证相关信息储存于一台中央认证服务器上，用户于中央认证服务器获取凭证后即可访问域内的其他服务器提供的服务，而不需要额外的身份认证。
+
+PtT一种利用微软的Kerberos票据来窃取受害者身份进行身份验证的攻击手段，而无需知道用户的帐户密码。这种技术可以将有效帐户的有效Kerberos票据由凭证转储捕获。基于攻击者已经获得的权限等级，可以获取用户的服务票据(Service
+Tickers)或者票据授予票据(Ticket Granting Ticket) ，取得的服务票据可以用来访问该票据特定的资源，而
+票据授予票据可以用于伪装成正常用户从票据授予服务器 请求服务票据以进一步访问需要授权的域内资源。主要有以下两种攻击手段：
+
+> 可以为使用Kerberos作为身份验证机制的服务获取白银票据(Silver
+> Tickets)，并用于生成票证以访问该域下的特定资源和托管该资源的系统（例如：SharePoint）。
+>
+> 可以通过获取密钥分发服务帐户KRBTGT的帐户NTLM哈希获得该域的黄金票据(Golden Tickets)，这可以为同一个域活动目录(Active
+> Directory)中的任何帐户生成票据授予票据 。
+
+###  凭证转储(Credential Dumping)
+
+凭据转储是从操作系统和软件中获取身份凭证（包括帐户登录名和密码信息和其他凭证文件）的过程，通常以哈希或明文密码的形式。
+然后可以使用凭证执行横向渗透并获取域内受权限访问控制的敏感信息。
+
+攻击者和专业安全测试人员都可以使用以下的几种工具。 或者其他自制工具。
+
+**Windows**
+
+ **SAM (Security Accounts Manager)**
+
+SAM是一个数据库文件，其中包含主机的本地帐户，通常是使用“ net user”命令能找到的那些帐户。 要枚举SAM数据库，需要SYSTEM级别的访问权限。
+可使用多种工具通过转储并检索内存的技术来检索内存中的SAM文件，如：
+
+> pwdumpx.exe
+>
+> gsecdump
+>
+> Mimikatz、Mimikatz2
+>
+> secretsdump.py
+
+也可以使用Reg命令从注册表中提取：
+
+> reg save HKLM\sam sam
+>
+> reg save HKLM\system system
+
+然后，可以使用Creddump7在本地处理SAM数据库以检索用户凭证哈希如NTLM哈希。
+
+被缓存的凭证（Cached Credentials）
+
+Windows Vista和更高版本使用的DCC2（Domain Cached Credentials version 2） 会在域控( domain
+controller) 不可访问时缓存凭证，以防在网络出现某些故障的时候影响正常服务。
+默认可缓存凭据的数量各不相同，不同系统可以自己更改该设置。缓存下来的哈希凭据不能用于使用pass-the-hash攻击。可以使用多种工具通过转储并检索内存的技术来检索内存中的SAM文件来获取该凭据。如：
+
+> pwdumpx.exe
+>
+> gsecdump
+>
+> Mimikatz、Mimikatz2
+
+同样可以通过使用Reg命令从注册表中提取凭据文件，然后使用Creddump7在处理来获取凭证。
+
+本地安全授权密钥Local Security Authority (LSA) Secrets
+
+通过对本地主机SYSTEM 权限的接入，LSA通常允许从本地用户账户 到域用户账户的一般性访问。注册表被用于存储 LSA Secrets
+，在用户在本地用户账户或者域用户账户
+的环境下运行服务的时候，其密码将储存在注册表中。用户是否启用了自动登录的信息也会储存在注册表中。以下工具可以从内存中尝试获取该密钥：
+
+> pwdumpx.exe
+>
+> gsecdump
+>
+> Mimikatz、Mimikatz2
+>
+> secretsdump.py
+
+可以通过使用Reg命令从注册表中提取凭据文件，然后使用Creddump7在处理来获取凭证。
+
+备注：这种方式提取出来的用户密钥是通过UTF-16进行编码的，并未加密，这意味着可以获取明文用户密码。Windows 10 新增了这方面的安全保护。
+
+ **NTDS from Domain Controller**
+
+域活动目录(Active Directory)存储有关域成员（包括设备、应用程序和用户）的信息，以验证凭据和定义访问权限。 域活动目录(Active
+Directory)数据库存储在NTDS.dit文件中。 默认情况下，NTDS文件将位于域控( domain
+controller)计算机的％SystemRoot％\NTDS\Ntds.dit中。下列工具和技术可用于枚举NTDS文件和整个Active
+Directory哈希的内容：
+
+卷影复制 Volume Shadow Copy：用于在无法转储或访问NTDS文件的情况下
+
+secretsdump.py
+
+使用Windows内置的工具ntdsutil.exe
+
+Invoke-NinjaCopy
+
+ **组策略首选项（Group Policy Preference）文件**
+
+组策略首选项（GPP）是允许管理员创建带有嵌入式凭据的域策略的工具。这些策略允许域管理员对本地用户帐户进行设置。这些组策略存储在域控( domain
+controller)上的SYSVOL中，这意味着任何域用户都可以查看SYSVOL共享并解密密码（AES私钥已经在域内被泄露）。以下工具和脚本可用于从组策略首选项XML文件收集和解密密码文件：
+
+Metasploit的后渗透模块：“ post / windows / gather / credentials / gpp”
+
+Get-GPPPassword
+
+gpprefdecrypt.py
+
+备注：可以通过dir / s * .xml在SYSVOL共享上美剧潜在的GPP文件。
+
+明文凭证获取 Plaintext Credential
+
+用户登录到系统后，将生成各种凭证并将其存储在内存中的本地安全授权子系统服务（LSASS）的进程中。这些凭据可以由管理员权限或SYSTEM权限访问。以下工具可用于枚举凭据：
+
+> Windows Credential Editor
+>
+> Mimikatz、Mimikatz2
+
+与内存转储技术一样，LSASS进程内存也可以从目标主机中转储并在本地系统上进行分析。
+
+例如，在目标主机上使用procdump：
+
+procdump -ma lsass.exe lsass_dump
+
+在本地，可以运行mimikatz：
+
+sekurlsa::Minidump lsassdump.dmp
+
+sekurlsa::logonPasswords
+
+ **DCSync**
+
+DCSync是凭据转储的一种变体，可用于从域控( domain controller)获取敏感信息。该操作不是执行可识别的恶意代码，而是通过滥用域控(
+domain controller)的应用程序编程接口（API） ，以模拟来自远程域控制器的复制过程来获取敏感信息。
+
+域控( domain controller)上的Administrators，Domain Admins，Enterprise
+Admin组，或计算机帐户的任何成员都可以运行DCSync从Active
+Directory中提取密码数据，其中可能包括潜在有用帐户（例如KRBTGT和管理员）。 然后，这些Hash又可以用于创建黄金票据(Golden
+Tickets)，以用于Pass the Ticket技术或更改帐户密码。可以通过：
+
+Mimikatz的lsadump模块中已包含DCSync功能。
+
+Lsadump还包括NetSync，它通过旧版复制协议执行DCSync。
+
+**Linux**
+
+ **proc文件系统**
+
+Linux上的/proc文件系统包含有关正在运行的操作系统状态等大量信息。以root特权运行的进程可以使用此功能来抓取其他正在运行的程序的实时内存。
+如果这些程序中的任何一个以明文形式存储密码或在内存中存储密码哈希，则可以分别获取这些值以用于使用或暴力破解用户密码。
+
+MimiPenguin工具可用于转储进程内存，然后通过查找文本字符串和正则表达式模式来收集密码和哈希，以了解给定的应用程序（例如Gnome
+Keyring，sshd和Apache）如何使用内存来存储此类身份验证工件。
+
+##  Rundll32 绕过防护
+
+在Windows系统中，为了节省内存和实现代码重用，微软在Windows操作系统中实现了一种共享函数库的方式。这就是DLL（Dynamic Link
+Library）文件，即动态链接库，这种库包含了可由多个程序同时使用的代码和数据。Rundll.exe 和 Rundll32.exe
+的命令行实用程序，通过这两个程序可调用从16位或32位DLL导出的函数。现在Rundll.exe
+基本被淘汰，rundll32.exe格式为：RUNDLL32.EXE。
+
+在一些情况下，计算机上的杀毒软件或者防火墙之类的软件会检测运行中的程序来防御恶意程序。攻击者可以通过调用系统的rundll32.exe程序来执行恶意软件，并借此避开防护程序的检测。主要利用方式有以下几种：
+
+通过反汇编分析微软系统自带的DLL文件并找出可利用的函数，通过rundll32.exe调用来执行恶意操作，如
+
+    
+    
+    rundll32 url.dll, OpenURL file://c:\windows\system32\calc.exe
+    rundll32 url.dll, OpenURLA file://c:\windows\system32\calc.exe
+    rundll32 url.dll, FileProtocolHandler calc.exe
+
+通过调用rundll32.exe修改注册表，例如：
+
+先写一个reg.inf文件，用于增加注册表启动项：
+
+    
+    
+    [Version]
+    Signature="$WINDOWS NT$"
+    [DefaultInstall]
+    AddReg=My_AddReg_Name
+    DelReg=My_DelReg_Name
+    [My_AddReg_Name]
+    HKLM,SOFTWARE\Microsoft\Windows\CurrentVersion\Run,K**Run,0x00000000,c:/muma.exe
+
+然后用rundll32.exe运行
+
+    
+    
+    rundll32.exe setupapi,InstallHinfSection DefaultInstall 128 c:/reg.inf
+
+就可以增加一个键为K**Run，值为c:/muma.exe的注册表项。
+
+通过调用rundll32.exe开启一个服务，例如：
+
+先写一个srv.inf文件，用于开启新服务：
+
+    
+    
+    [Version]
+    Signature="$WINDOWS NT$"
+    [DefaultInstall.Services]
+    AddService=inetsvr,,My_AddService_Name
+    [My_AddService_Name]
+    DisplayName=Windows Internet Service
+    Description=提供对 Internet 信息服务管理的支持。
+    ServiceType=0x10
+    StartType=2
+    ErrorControl=0
+    ServiceBinary=%11%\muma.exe
+
+其中：
+
+> 1\. ServiceType表示服务类型：0×10为独立进程服务，0×20为共享进程服务（比如svchost）；
+>
+> 2\. StartType表示启动类型：0 系统引导时加载，1 OS初始化时加载，2 由SCM（服务控制管理器）自动启动，3 手动启动，4 禁用。
+>
+> 3\. ErrorControl表示错误控制：0 忽略，1 继续并警告，2 切换到LastKnownGood的设置，3 蓝屏。
+>
+> 4\.
+> ServiceBinary里的服务程序位置：%11%表示system32目录，%10%表示系统目录(WINNT或Windows)，%12%为驱动目录system32\drivers。其他取值参见DDK。你也可以不用变量，直接使用全路径。
+
+这四项是必须要有的。
+
+然后用rundll32.exe运行，会增加一个名字为inetsvr的服务：
+
+    
+    
+    rundll32.exe setupapi,InstallHinfSection DefaultInstall 128 c:/srv.inf
+
+##  任务计划相关功能利用 Scheduled Task
+
+攻击者可以使用任务计划设定在系统启动执行后门程序，或者定期运行恶意程序，作为横向渗透的一部分常被利用于远程执行代码、获得SYSTEM权限，或在指定用户的环境下运行恶意程序。
+
+Windows
+
+> Windows Task Scheduler
+
+Linux
+
+> crontab
+
+##  快捷方式劫持
+
+快捷方式或符号链接是引用其他文件或程序的方法，这些文件或程序在系统启动过程中单击或执行快捷方式时将被调用、打开或执行。攻击者可以利用快捷方式来执行其持久性后门程序。例如，创建一个新的快捷方式，以一种间接的方式，在快捷方式调用恶意程序并执行的同时打开正常应打开的文件，使其可以伪装成合法程序。另外，攻击者还可以通过编辑正常程序的快捷方式的目标路径来将其劫持到恶意程序上。
+
+##  软件加壳技术
+
+软件加壳是一种压缩或加密可执行文件的方法。 对可执行文件加壳会更改文件签名为伪造或盗用的合法签名，以尝试避免基于签名的检测。
+大多数解压缩技术都在内存中将可执行代码解压缩。这种技术会使取证人员在捕获到恶意程序后很难分析恶意程序的目的和来源。
+
+##  社会工程学攻击
+
+“安全的最大漏洞就是人，有人的地方就有安全漏洞”，攻击者进行攻击的第一步一般都是尝试对目标或者目标相关的个体或组织进行社会工程学攻击。包括但不限于：
+
+###  钓鱼邮件攻击
+
+攻击者一般都会利用人的好奇心或者缺乏安全意识，向目标发送包含能引起目标兴趣的内容的电子邮件来诱骗受害者点击或者下载攻击者的恶意程序并执行。APT29就曾使用命名为《办公室猴子》的搞笑Flash(内嵌攻击程序)，当用户执行该Flash视频文件的同时攻击程序就会启动。一般常见的文件格式包括：Microsoft
+Office文档、可执行文件、PDF或归档文件。
+
+###  钓鱼链接攻击
+
+攻击者在这种攻击中不将恶意程序以附件的形式添加到邮件中，而是诱骗受害者点击下载恶意软件，以此避开对电子邮件附件做检查的防御措施。
+
+通常，这些链接将伴随欺骗性的文本，并要求用户主动单击或复制URL并将其粘贴到浏览器中。
+访问的网站可能会利用漏洞利用Web浏览器，或者首先提示用户下载应用程序，文档，zip文件甚至可执行文件，具体取决于电子邮件中如何进行的欺骗。攻击者还可能包含旨在直接与电子邮件阅读器进行交互的链接，包括旨在直接利用终端系统或验证电子邮件的接收（即Web错误/
+Web信标）的嵌入式图像。 链接还可以将用户定向到旨在窃取应用程序访问令牌（例如OAuth令牌）的恶意程序，以获取对受保护的应用程序和信息的访问权限。
+
+ ***本文原创作者： LordCasser，本文属于FreeBuf原创奖励计划，未经许可禁止转载**
+

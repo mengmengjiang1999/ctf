@@ -1,0 +1,229 @@
+***漏洞已经被修复，本文主要用于学习和讨论。**
+
+**抖音海外版TikTok作为一款成功冲出国门，走到全球的现象级产品，2019年它在全球APP下载量排名第三，在成功的同时，这也引来了繁华势力的眼红，美国海军、陆军纷纷表示不得安装该应用。美国党派参议员指责TikTok“威胁国家安全”，可能被用来“监视美国公民”。**
+
+但TikTok方面表示，其所有的用户数据完全位于中国境外，美国用户数据被储存在美国本土，并在新加坡进行备份。此外，该公司有一个专门的技术团队负责数据隐私和网络安全等问题。
+
+而实际上，美国国防部12月16日发布的、关于“网络敏感性”的通知。其中声称，使用TikTok存在“潜在的安全隐患”，并要求所有国防部雇员“警惕下载的应用程序，检查手机上是否有反常或者来路不明的短信，并立即删除他们，卸载TikTok以避免任何个人信息的泄露”。
+
+配合近日发布的关于TikTok的漏洞报告，也许可以观测到，到底TikTok具有什么安全漏洞。
+
+本报告由以色列网络安全公司Check Point安全研究人员分析撰写。
+
+ **漏洞介绍视频↓**
+
+##  **技术细节**
+
+##  **一、短信链接篡改实施诈骗**
+
+在TikTok的主要网站：[www.tiktok.com](http://www.tiktok.com)上，有一项功能可以让用户向自己发送SMS短信以下载该应用程序，这也就造成了，TikTok可以将SMS短信发送到任何电话号码。
+
+![1.png](https://image.3001.net/images/20200109/15785418288975.png!small)
+
+希望向受害者发送SMS消息的攻击者可以使用代理工具（例如Burp
+Suite）捕获HTTP请求。该手机参数中，短信将发送到与电话号码DOWNLOAD_URL参数是会出现在SMS短信中的下载链接：
+
+![2.png](https://image.3001.net/images/20200109/15785418399944.png!small)
+
+正常发送的短信：
+
+![3.jpg](https://image.3001.net/images/20200109/15785418527116.jpg!small)
+
+那么，只要更改download_url参数，那么将导致发送已经伪造后的SMS消息，其中包含攻击者选择插入的恶意链接。
+
+以下屏幕截图演示了包含恶意链接的欺骗性SMS消息。使用以下链接attacker.com进行插入
+
+![4.png](https://image.3001.net/images/20200109/15785418625217.png!small)
+
+包含<https://attacker.com>链接的诈骗短信，但仍然来自官方的发信号。
+
+##  **二、应用层链接跳转**
+
+在Android手机上对TikTok应用程序进行逆向时发现它具有指定URL scheme的功能，可以通过浏览器在TikTok应用程序中调跳转到其他链接。
+
+下图为TikTok APP监听的目标是"<https://m.tiktok.com>"schema和"musically://"自定义schema：
+
+![6.png](https://image.3001.net/images/20200109/15785419202437.png!small)
+
+关于安卓schema可以看下图，然后就很好理解了。
+
+![图片1.png](https://image.3001.net/images/20200109/15785420627886.png!small)
+
+结合上面第一个SMS链接欺骗漏洞，攻击者可以发送包含上述schema的自定义链接。由于自定义链接将包含“ url
+”参数，因此当APP打开一个Web视图（浏览器）窗口，并从APP转到通过该参数编写的网页时候，这时任何请求将与 **用户的cookie一起发送** 。
+
+例如当点击这个链接后
+
+![7.jpg](https://image.3001.net/images/20200109/15785420757735.jpg!small)
+
+如代码所示，图中便是触发链接后将开始解析的代码，Tiktok将打开一个Web视图（浏览器）窗口，并转到<http://10.10.10.113:8000>
+，即由攻击者控制的Web服务器，从而使攻击者有可能代表用户发送请求。
+
+![8.jpg](https://image.3001.net/images/20200109/15785420895872.jpg!small)
+
+##  **三、使用域正则表达式绕过检测，重定向恶意网站**
+
+当受害者发送恶意链接，从而导致将受害者重定向到恶意网站。重定向打开了无需用户同意即可完成跨站点脚本（XSS），跨站点请求伪造（CSRF）和敏感数据暴露攻击的可能性。
+
+当攻击者发送源自Tiktok的域的合法登录链接时，就会发生重定向：
+
+> <https://login.tiktok.com> 。
+
+登录请求可以包含HTTP GET参数redirect_url，该示例是登录请求的示例，该登录请求将在成功登录尝试后重定向用户-
+> <https://login.tiktok.com/?redirect_url=https://www.tiktok.com>
+
+redirection参数将根据以下验证正则表达式将受害者重定向到tiktok的域网页（仅限客户端）：
+
+![9.png](https://image.3001.net/images/20200109/15785421224925.png!small)![10.png](https://image.3001.net/images/20200109/15785421228361.png!small)
+
+由于验证正则表达式未正确验证redirect_url参数的值，通过tiktok.com可以重定向到任何内容。
+
+出于演示目的，攻击者可以将用户重定向到<http://www.attacker-tiktok.com>网站，并如上所述进行进一步的攻击。
+
+![11.png](https://image.3001.net/images/20200109/15785421336779.png!small)
+
+##  **四、跨站脚本（XSS）**
+
+![图片2.png](https://image.3001.net/images/20200109/15785422463946.png!small)![12.png](https://image.3001.net/images/20200109/15785422592891.png!small)
+
+攻击者试图将JavaScript代码注入q参数（注入的值是URL编码的）。
+
+为了演示的目的，我们弹出了一个警告窗口，内容为“ xss”：
+
+>
+> <https://ads.tiktok.com/help/search?q=%22%3Cscript%20src%20%3Djavascript%3Aalert%28%29%3E>
+
+![13.png](https://image.3001.net/images/20200109/15785422829603.png!small)
+
+攻击者接管：代表用户执行操作
+
+##  **五、跨站请求伪造（CSRF）**
+
+在这一点上，有两个不同的流程，一可以代表单击攻击者发送的链接到任何受害者（如SMS链接欺骗中所述），从而执行JavaScript代码，二，可以通过XSS和开放重定向（将用户重定向到将执行的恶意网站）
+JavaScript代码并使用受害者的Cookie向Tiktok发送请求）。
+
+**从这可以看出checkpoint的研究员是将这几个漏洞结合利用的方法进行了说明。**
+
+由于缺乏反跨站点请求伪造机制，因此，无需受害者的同意，就可以执行JavaScript代码并代表受害者执行操作。
+
+##  **六、删除影片**
+
+可以通过HTTP GET请求删除视频，网址为
+
+<https://api-t.tiktok.com/aweme/v1/aweme/delete/?aweme_id=video_id>
+
+使用如上所述的JavaScript执行，可以发送HTTP GET请求以及攻击者希望删除的视频的所需aweme_id（视频ID）。
+
+以下屏幕截图演示了视频ID 6755373615039991045的请求删除：
+
+![14.png](https://image.3001.net/images/20200109/15785423044917.png!small)
+
+网络服务器响应指示视频已成功删除：
+
+![15.png](https://image.3001.net/images/20200109/15785423157687.png!small)
+
+##  **七、在其他人的账户上创建影片**
+
+为了在受害者的供稿上创建视频，攻击者首先必须发送一个请求，在其自己的供稿上创建视频。视频创建请求会生成一个新的视频ID。此时，攻击者将复制视频创建请求并将其丢弃。
+
+其次，攻击者使用如上所述的JavaScript执行，发布他复制的视频创建请求，并代表受害者发送HTTP POST请求。
+
+以下屏幕截图演示了在受害者的供稿上创建视频的请求：
+
+![16.png](https://image.3001.net/images/20200109/15785423324455.png!small)
+
+服务器响应指示视频已成功创建：
+
+![17.png](https://image.3001.net/images/20200109/15785423445495.png!small)
+
+##  **八、让受害者关注其他人**
+
+希望成为受害者帐户追随者的攻击者向受害者发送请求，并且受害者必须批准该请求。
+
+为了批准跟随者的请求，攻击者使用上述JavaScript执行方法，并代表受害者发送批准请求。
+
+发送批准请求和HTTP POST请求到以下路径：
+
+> <https://api-m.tiktok.com/aweme/v1/commit/follow/request/approve>
+
+POST请求具有一个参数from_user_id，其中包含希望成为关注者的用户ID。
+
+攻击者将from_user_id参数的值更改为自己的ID，并将请求发送到TikToks的服务器：
+
+![18.png](https://image.3001.net/images/20200109/15785423747710.png!small)
+
+就这样，攻击者成为受害者的粉丝：
+
+![19.png](https://image.3001.net/images/20200109/15785423859914.png!small)
+
+##  **九、将私人视频更改为公共视频**
+
+为了将视频从私有模式更改为公共模式，攻击者必须检索视频ID。
+
+如上所述，当攻击者是受害者的追随者时，可以检索视频ID。
+
+一旦攻击者获得了私人视频的视频ID，他/她就可以通过代表用户发送HTTP GET请求（使用上述JavaScript执行）来更改视频隐私设置：
+
+>
+> [https://api-m.tiktok.com/aweme/v1/aweme/modify/visibility/?aweme_id=video_id&type=1&aid=1233&mcc_mnc=42503](https://api-m.tiktok.com/aweme/v1/aweme/modify/visibility/?aweme_id=video_id&type=1&aid=1233&mcc_mnc=42503)
+
+请注意，使用“ type = 1 ”时，请求的视频将变为公共模式，而“ type = 2 ”将导致视频变为私有。
+
+以下屏幕截图演示了将视频ID 6755813399445261573从私有模式更改为公共模式的HTTP GET请求：
+
+![20.png](https://image.3001.net/images/20200109/15785424086583.png!small)
+
+服务器响应表明该视频已公开：
+
+![21.png](https://image.3001.net/images/20200109/15785424217504.png!small)
+
+##  **十、敏感数据暴露**
+
+随着研究的继续，安全研究员了解到可以使用XSS或提到的其他方法执行JavaScript代码来检索敏感信息。他们在<https://api-t.tiktok.com>
+
+和<https://api-m.tiktok.com>子域中找到了几个API调用。
+
+向上述API发出请求将揭示有关用户的敏感信息，包括电子邮件地址，付款信息，生日等。
+
+在尝试使用上面编写的JavaScript执行漏洞时，他们遇到了一个问题：跨源资源共享（CORS）机制和同源策略（SOP）安全限制。
+
+看来，API子域将仅允许某些来源发出请求（例如：[www.tiktok.com](http://www.tiktok.com)）。例如，以下屏幕截图演示了源自<https://cpr.checkpoint.com>的API请求：
+
+![22.png](https://image.3001.net/images/20200109/15785424426276.png!small)
+
+由于安全限制，响应被阻止：
+
+![23.png](https://image.3001.net/images/20200109/15785424512899.png!small)
+
+因此必须以某种方式绕过CORS和SOP安全机制，以检索在那里存在的所有敏感信息。
+
+紧接着，他们发现Tiktok实现了一个非常规的 **JSONP回调，该回调提供了一种从API服务器请求数据的方法，而没有CORS和SOP限制！**
+
+绕过那些安全机制，他们可以通过触发JSONP回调的AJAX请求来窃取受害者的所有敏感信息，从而使JavaScript函数包装JSON数据。
+
+下面的屏幕快照演示了一个AJAX请求，以检索与受害者钱包有关的所有敏感信息。该请求包含回调参数，其值是将要执行的JavaScript函数（myCallBackMethod）：
+
+![24.png](https://image.3001.net/images/20200109/15785424708614.png!small)
+
+下一个屏幕截图演示了包含从API检索到的所有敏感信息的数据。敏感数据会被渗透，并可以发送到攻击者的服务器：
+
+![25.png](https://image.3001.net/images/20200109/15785424823679.png!small)
+
+**![26.png](https://image.3001.net/images/20200109/15785424937815.png!small)**
+
+**完毕。**
+
+此外，研究人员私底下透露称，如果将多个漏洞结合在一起使用，将可以使他们远程执行恶意代码，并在未经受害者同意的情况下代表受害者执行有害的操作。
+
+TikTok既然已经修复漏洞，那自然是好事一桩，希望其能越来越安全，从而让"审查方"无话可说，从而发展越来越快，超越Facebook指日可待。
+
+然而，原本应用程序存在漏洞是一件很正常的事，毕竟代码都是人写的，及时修补没有造成重大损失便是万幸。但是近年来，基于政治原因，很多安全漏洞的问题逐渐上升到了人权、国家对抗等等敏感的层面，无论是西方，还是内部，都开始出现一些相关报道，用漏洞新闻来讽刺对手系统的脆弱性，从而营造出一种，这个系统不安全，他们要监控你的氛围，长期以此，将会是一个恶循环。
+
+曾经安全没有国界，自从有了第一个实施网络战的国家，国界就开始了。
+
+原文链接：
+
+> <https://research.checkpoint.com/2020/tik-or-tok-is-tiktok-secure-enough/>
+
+***本文作者：黑鸟，转载请注明来自FreeBuf.COM**
+

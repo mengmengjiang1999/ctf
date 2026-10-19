@@ -1,0 +1,169 @@
+**引言：**
+近年来，汽车的网络安全问题逐渐被重视，在汽车产品的全生命周期中，需要进行网络安全风险管理，其主要活动包括网络安全需求分析、安全策略设计与实施、运营阶段安全监控与应急响应等。
+**安全需求分析工作作为系统安全设计的第一步，将为系统后续的设计、开发、安全运营管理等活动起到重要的作用。**
+安全需求分析主要是对目标对象实施分析，以获得与安全相关设计需求的活动。安全需求主要用于指导后续的安全设计，以降低安全风险，为目标对象全生命周期中的安全活动提供决策依据。
+
+##  **01** **安全需求分析框架**
+
+ **本章节将基于所调研的相关标准、行业指南、论文等材料，介绍目前相关行业中，主流的网络安全需求分析方法框架。**
+由于并非所有的方法都显式地被称为需求分析方法。因此，在调研需求分析方法时规定，只要所开展活动的目标是辨识安全需求，则认为其是所需的方法。
+
+例如，在汽车网络安全领域中，并不常使用“安全需求分析”一词，取而代之的是“威胁分析与风险评估”（即TARA - Threat Analysis and
+Risk Assessment）。根据ISO
+21434标准规定，在系统设计的概念阶段，需要对目标系统实施网络安全目标的辨识。根据定义，网络安全目标是指目标对象的概念层网络安全需求，该安全需求可与一个或多个威胁场景相关联。简而言之，网络安全目标即为系统设计早期进行的最上层安全需求。而具体用于实施网络安全目标辨识活动的主要工作即为大家所熟知的TARA分析，TARA分析为安全需求分析的重要工作部分。
+
+以下为汽车及相关领域内常用的网络安全需求分析框架：
+
+ **· EVITA TARA**
+
+ **· NIST网络安全框架**
+
+ **· TVRA流程**
+
+ **· OCTAVE Allegro**
+
+ **· HEAVENS TARA**
+
+ **· FMVEA**
+
+ **· STPA-Sec**
+
+ **EVITA（E-Safety Vehicle Intrusion Protected
+Applications）是一个起始于2008年、由欧盟资助的研究项目，其目标在于设计、验证并试制一个安全的车载网络架构。**
+该项目中提出了一种系统的威胁分析及风险评估方法，其首先需辨识目标系统潜在的威胁，并从安全（safety）、隐私、经济及操作方面对所获得的威胁的严重性进行评估。然后，需评估每一个威胁实现的可能性。最后，根据风险等级映射表获得最终的风险评估结果[1]。EVITA
+TARA分析的输出可作为后续系统安全设计的需求输入。
+
+ **NIST网络安全框架是一种由美国国家标准技术研究所（NIST：National Institute of Standards and
+Technology）提出的、用于管理关键设施风险的大框架，其主要包括五个核心功能，分别为：辨识、保护、发现、响应和恢复。**
+其中，与TARA活动相关的步骤包括辨识并整理目标资产漏洞及风险、接收来自于共享资源的网络安全威胁信息、评估威胁潜在的商业影响及发生可能性等，并根据以上因素的分析结果，可最终获得相关风险的评估结果[2]。
+
+![1661404970_6307072af27826e41c4d9.jpg!small?1661404972031](https://image.3001.net/images/20220825/1661404970_6307072af27826e41c4d9.jpg!small?1661404972031)
+
+图1 Framework Core Structure[2]
+
+![1661404975_6307072f18fea1274c5ea.jpg!small?1661404976136](https://image.3001.net/images/20220825/1661404975_6307072f18fea1274c5ea.jpg!small?1661404976136)
+
+图2 Function and Category Unique Identifiers[2]
+
+ **TVRA（Threat, Vulnerabilities, and Implementation Risks
+Analysis）是一个由欧洲电信标准协会（ETSI）提出的流程驱动型威胁分析及风险评估方法。**
+TVRA中一共有十个工作步骤，包括辨识需要评估的目标（TOE: Target of
+Evaluation）、系统地辨识目标漏洞及威胁等级、计算攻击发生可能性及其影响等。TVRA主要基于攻击可能性及攻击对系统的影响来辨识目标系统存在的安全风险，从而采取相应的措施以避免攻击事件[3]。
+
+![1661404980_63070734b971f168679b1.jpg!small?1661404981782](https://image.3001.net/images/20220825/1661404980_63070734b971f168679b1.jpg!small?1661404981782)
+
+图3 Structure of Security Analysis and Development in Standards Documents[3]
+
+ **OCTAVE
+Allegro是一个针对信息财产的流程型方法，其共有八个步骤，包括建立风险测量标准、辨识威胁场景、辨识并分析风险，以及选择减轻威胁的方法等。**
+OCTAVE Allegro是从OCTAVE（Operationally Critical Threat, Asset, and Vulnerability
+Evaluation）方法变化而来的，前者优化了原有的信息安全风险评估流程，帮助组织能够在有限投入的情况下获得足够的评估结果。OCTAVE方法最早是于1999年由卡内基梅隆大学软件工程学院提出，并受到了美国国防部的资助[4]。
+
+![1661404986_6307073ac4a3f371be7b0.jpg!small?1661404987764](https://image.3001.net/images/20220825/1661404986_6307073ac4a3f371be7b0.jpg!small?1661404987764)
+
+图4 OCTAVE Allegro Roadmap[4]
+
+ **HEAVENS（HEAling Vulnerabilities to ENhance Software Security and
+Safety）是一个针对车辆电子电器系统的系统性安全需求分析方法，其中包括了用于威胁分析及风险评估的流程及支持工具[5]。**
+HEAVENS安全模型首先需基于功能用例分析系统的潜在威胁，并输出所辨识获得的威胁、目标资产及安全属性。然后，根据要求评定各潜在威胁的威胁等级及影响等级，并获得目标系统的安全等级评估。最终，设计者可从分析输出中提取用于指导系统安全设计的设计需求[6]。
+
+![1661404993_630707417afda4265ceec.jpg!small?1661404994481](https://image.3001.net/images/20220825/1661404993_630707417afda4265ceec.jpg!small?1661404994481)
+
+图5 Workflow of the HEAVENS Security Model[5]
+
+ **FMVEA（Failure Mode, Vulnerabilities and Effects Analysis）是一种由FMEA（Failure
+Mode and Effects Analysis）方法演变而来的、用于辨识系统漏洞因果链的分析方法。**
+FMVEA主要通过辨识系统的漏洞、威胁模式、威胁实施者、威胁影响、攻击概率等步骤，以最终获得目标系统的安全因果链及对各威胁模式的评价[7]。
+
+![1661405000_6307074843e8dada617a8.jpg!small?1661405001279](https://image.3001.net/images/20220825/1661405000_6307074843e8dada617a8.jpg!small?1661405001279)
+
+图6 FMVEA - Analysis Flow Chart[7]
+
+ **STPA-Sec是一种由STPA（System-Theoretic Process
+Analysis）方法演变而来的、用于分析系统安全损失场景的方法，其使用了系统理论过程分析框架，可自上而下地对系统的安全漏洞进行分** **析。**
+STPA-Sec的主要步骤包括：分析目标定义、目标系统控制结构的建立、不安全控制行为的辨识以及损失场景的辨识。最终，分析者可从所辨识出的损失场景中提取系统设计的安全需求[8]。
+
+![1661405004_6307074c9cfcbd9eb24b8.jpg!small?1661405005600](https://image.3001.net/images/20220825/1661405004_6307074c9cfcbd9eb24b8.jpg!small?1661405005600)
+
+图7 Overview of the Basic STPA Method[8]
+
+##  **02** **威胁分析及风险评估方法**
+
+上一章节中所介绍的安全需求分析方法均是在一个上层的流程或框架层面方法，而上述框架方法中的核心活动为对目标对象实施威胁分析及风险评估活动。针对这两项重点活动，相关领域内已有很多操作层面的技术，可以被灵活地运用于各个框架之中。在各类框架方法中，也涉及到了各类不同的操作方法。
+
+关于威胁辨识部分，HEAVENS和FMVEA方法使用了微软的STRIDE模型[9]来辨识潜在的威胁。EVITA项目中使用了攻击树的方法进行深入的攻击分析，并获得攻击路径即场景[1]。在EVITA流程中也可使用威胁及操作性分析方法（THROP）来实施功能层面的威胁辨识[6]。美国国家公路交通安全管理局（NHTSA）提出了一个基于威胁矩阵的综合威胁模型以帮助安全分析中的威胁辨识[10]。WP.29
+R155法规附录五的第一部分中枚举的共七大类32子类的威胁可作为安全威胁分析的基本引导词使用。该法规中也明确指出，在评估风险时，车辆制造商应该考虑附录五第一部分中罗列的所有威胁的风险，以及其他可能相关的风险（WP.29
+R155 7.3.3条款）[11]。
+
+关于风险评价部分，当前有以下几种主要的评价体系被使用：
+
+EVITA项目从系统的操作性、安全性（safety）、隐私性以及经济性四个方面对系统的网络安全进行评价，结合攻击概率、攻击影响以及可控制性等因素，最终获得一个风险等级（R0至R7+，R0表示最低风险，R7+表示最高风险）[1]。
+
+在HEAVENS流程中，通过对威胁等级以及影响等级打分评级后，根据映射矩阵最终获得系统的安全等级[6]。
+
+Ben
+Sapiro提出了一个二元风险分析方法（BRA），该方法首先需回答十个是与否的问题，并将问题的回答映射到对应的输入矩阵中，如威胁范围矩阵、保护能力矩阵等，然后通过可能性评价和影响评价，最终获得目标系统的风险等级。BRA是一个轻量级的用于快速构建的定性风险评价工具，可融合于现有的风险管理框架中使用[12]。
+
+通用漏洞评分系统（CVSS）是一个用于评价软件系统漏洞的开放框架。该系统根据相关漏洞的主要特征，生成一个可以反映该漏洞严重程度的分数以及相关解释[13]。ISO/SAE
+21434标准的G.3章节中，提供了基于CVSS评分标准的攻击可行性评估方法指南[14]。
+
+此外，ISO/SAE
+21434中定义了网络安全保障等级（CAL），该等级可依据系统威胁场景的影响力及暴露水平等参数而评定。标准中还依据该CAL评级，定义了一系列系统应该满足的网络安全保障需求，并可作为在产品的网络安全工程活动的决策依据[14]。正如车辆安全完整性等级（ASIL）在车辆功能安全领域内的作用一样，CAL可为参与到车辆生命周期内的相关厂商或组织提供了一个行业内统一的交流、设计及评价标准。
+
+##  **03** **总 结**
+
+本文主要介绍了汽车及相关领域内，用于实施网络安全需求分析的方法及技术，以展示该领域内的技术概况，帮助从业者更好地了解相关方法，以在实际工作中选用合适的方法进行工作。
+
+参考文献：
+
+[1] RUDDLE A, WARD D, WEYL B, et al. Security requirements for automotive on-board networks based on dark-side scenarios, Deliverable D2.3[R/OL]. 2010.
+https://evita-proje ct.org/deliverables.html.
+
+[2] National Institute of Standards and Technology. Framework for improving
+critical infras- tructure cybersecurity version 1.1[R]. 2018.
+
+[3] ETSI. ETSI TS 102 165-1: CYBER; Methods and Protocols. Part 1: Method and
+Pro Forma for Threat, Vulnerability[R]. 2017.
+
+[4] CARALLI R A, STEVENS J F, YOUNG L R, et al. Introducing OCTAVE allegro:
+Improving the information security risk assessment process[R]. Carnegie-Mellon
+Univ Pittsburgh PA Software Engineering Inst, 2007.
+
+[5] OLSSON M. HEAling Vulnerabilities to Enhance Software Security and
+Safety[R/OL]. Volvo Technology AB. 2016.
+
+https://www.vinnova.se/globalassets/mikrosajter/ffi/dokument/slutrapporter-ffi/elektronik-mjukvara-och-kommunikation-rapporter/2012-04625eng.pdf.
+
+[6] SAE International. J3061: Cybersecurity guidebook for cyber-physical
+vehicle systems[S]. 2016.
+
+[7] SCHMITTNER C, GRUBER T, PUSCHNER P, et al. Security application of failure
+mode and effect analysis (FMEA)[C]//International Conference on Computer
+Safety, Reliability, and Security. 2014: 310-325.
+
+[8] YOUNG W, LEVESON N. Systems thinking for safety and
+security[C]//Proceedings of the 29th Annual Computer Security Applications
+Conference. 2013: 1-8.
+
+[9] Microsoft. The STRIDE Threat Model[EB/OL]. 2009.
+https://docs.microsoft.com/en-us/p revious-versions/commerce-server/ee823878(v=cs.20)?redirectedfrom=MSDN.
+
+[10] MCCARTHY C, HARNETT K, CARTER A, et al. Characterization of potential
+security threats in modern automobiles: A composite modeling approach[R].
+United States. National Highway Traffic Safety Administration, 2014.
+
+[11] United Nations Economic and Social Council. PUN Regulation No. 155,
+Uniform provisions concerning the approval of vehicles with regards to cyber
+security and cyber security management system[S]. 2021.
+
+[12] SAPIRO B. Binary Risk Analysis[R/OL]. 2011.
+
+https://binary.protect.io/BRA_draft1.1.pdf.
+
+[13] FIRST. Common Vulnerability Scoring System v3.1: Specification[R/OL].
+
+https://www.fi rst.org/cvss/v3.1/specification-document.
+
+[14] International Organization for Standardization. ISO/SAE 21434:2021 - Road
+vehicles – Cybersecurity engineering[S]. 2021.
+

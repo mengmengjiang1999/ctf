@@ -1,0 +1,290 @@
+作者：[HAI_i](https://bbs.ichunqiu.com/thread-42982-1-1.html?from=beef)
+
+原文来自：[https://bbs.ichunqiu.com/thread-42982-1-1.html](https://bbs.ichunqiu.com/thread-42982-1-1.html?from=beef)
+
+# 0x00 前言
+
+Virtual App是一个很强大的存在，破坏了Android 系统本身的隔离措施，可以进行免root
+hook和其他黑科技操作，你可以用这个做很多在原来APP里做不到事情，于此同时Virtual
+App的[安全威胁](https://bbs.ichunqiu.com/thread-42982-1-1.html?from=beef)也不言而喻。可以去看看这篇文章。[VirtualApp技术黑产利用研究报告](https://bbs.ichunqiu.com/thread-42982-1-1.html?from=beef)。  
+当然还有其他东西，可以去各大论坛进行深度挖掘。  
+我们这次的重点是放在Anti_Virtual App上。
+
+## 1.内容
+
+#### 1.1 第一种思路和实现
+
+#### 1.2 第二种思路和实现
+
+我也不知道用什么来命名，感觉要是把思路直接写在标题里之后不好展开。不啰嗦了正文开始。
+
+# 0x01 第一种思路和实现
+
+## 1.思路
+
+### 1.1 思路是从哪来的？
+
+我们要防止App在VirtualAPP上运行就要通过Virtual启动App时的一些特征来逆向分析，VirtualAPP是开源的我们也可以结合源码来进行分析。
+
+### 1.2 思路挖掘
+
+>
+> Android应用隔离是基于Linux系统的多用户机制实现的，即每个应用在安装时被分配了不同的Linux用户uid/gid。而在VirtualApp中，client应用（通过VirtualApp安装的应用）与host应用（即VirtualApp本身）是具有相同用户uid的。
+
+这个是在Virtual资料里的介绍，这里有一个值得关注的地方就是，client应用和host应用具有相同的uid。
+
+我们来进行一个测试。
+
+这个是我们运行在正常环境下的。
+
+  
+![image.png](https://image.3001.net/images/20180720/15320551072507.png!small)  
+
+用grep过滤一下。![image.png](https://image.3001.net/images/20180720/15320551342462.png!small)然后我们运行在虚拟机下用grep过滤一下。![image.png](https://image.3001.net/images/20180720/15320551577022.png!small)  
+
+有一个前提就是，Android
+系统中的UID是在app安装的时候进行分配的，之后是不会进行更改的。而且为了可以进行沙箱和隔离，每一个APP分配到的UID是不同的，而且不同的UID仅仅拥有一个进程。这是Linux的多用户系统被阉割下成为了现在的状态，当然也提高了APP的安全性。相同的UID具有共享的特性。
+
+就这个不同的点，我们进行测试的实现。
+
+## 2\. 实现
+
+实现的方法直接使用NDK来进行开发，或者使用java也可以。  
+实现思路就是我在app里调用ps |grep，拿到返回行数，简单粗暴易懂，可能会有bug，针对一般情况。轻踩。
+
+我们需要做的第一步就是，获取到APP的UID对应的UNAME。  
+我这里使用的是封装方法。
+
+    
+    
+        struct passwd *pwd;
+        pwd = getpwuid(getuid());
+        char *find=pwd->pw_name;
+
+这样可以直接拿到UNAME  
+  
+
+然后我们使用字符串拼接，将命令结合，我是不是太啰嗦了。。。
+
+    
+    
+        char cmd[20]="ps | grep ";
+        LOGD("%s",cmd);
+        strcat(cmd,find);
+        LOGD("%s",cmd);
+
+使用popen进行命令的运行
+
+    
+    
+    int getEnd(char * cmd)
+    {
+        FILE *pp = popen(cmd, "r"); //建立管道
+        if (!pp) {
+            LOGD("error");
+        }
+        int i=0;
+        char tmp[1024]; //设置一个合适的长度，以存储每一行输出
+        while (fgets(tmp, sizeof(tmp), pp) != NULL) {
+            if (tmp[strlen(tmp) - 1] == '\n') {
+                tmp[strlen(tmp) - 1] = '\0'; //去除换行符
+                i++;
+            }
+            LOGD("%s",tmp);
+        }
+        LOGD("i:%d",i);
+        return i;
+    }
+
+最后进行调用判断。整合一下最后的结果。
+
+    
+    
+        struct passwd *pwd;
+        pwd = getpwuid(getuid());
+        char *find=pwd->pw_name;
+        LOGD("%s",find);
+        char cmd[20]="ps | grep ";
+        LOGD("%s",cmd);
+        strcat(cmd,find);
+        LOGD("%s",cmd);
+        int i =getEnd(cmd);
+        if (i>4)
+        {
+            LOGD("This is VA!");
+            kill(0, SIGKILL);
+        }
+
+## 3.测试
+
+### 3.1 正常环境
+
+  
+![image.png](https://image.3001.net/images/20180720/1532055188737.png!small)  
+
+### 3.2 VirtualApp环境测试
+
+  
+![image.png](https://image.3001.net/images/20180720/15320551935434.png!small)  
+
+# 0x02 第二种思路和实现
+
+## 1.思路
+
+Virtual
+App有一个特点，就是在运行app的时候，如果存在so文件的话，会将so文件拷贝到自己的目录下，那么是不是可以对so文件路劲进行读取，然后进行判断，就可以区分开Virtual
+App和正常运行环境呢。  
+这个实现要对/proc/PID/maps这个文件进行分析。实现起来可能有点复杂。去git上看看有没有开源项目。  
+最后锁定了一个目标。<https://github.com/ysrc/AntiVirtualApp>
+
+## 2.实现
+
+### 2.1 实现思路总结
+
+（1）拿到PID  
+（2）拿到/proc/PID/maps  
+(3) 拿到包名  
+（4）拿到SO路径  
+（5）分析比对
+
+### 2.2 拿到PID
+
+拿到当前进程的PID的方法很多。这里有一个很简单的方法就是
+
+    
+    
+    int pid=getpid();
+
+当然还有另外一种就是通过对java层进行反射拿到pid，两种都是实现了的。  
+反射三步走，轻松拿到，这里对返回值的掌控还没有到轻车熟路的程度，但是这样子的反射还是可以拿到的。
+
+    
+    
+        //反射拿到pid
+        jclass Process=env->FindClass("android/os/Process");
+        jmethodID myPid=env->GetStaticMethodID(Process,"myPid","()I");
+        LOGD("%d",(int)env->CallStaticIntMethod(Process,myPid));
+        return (int)env->CallStaticIntMethod(Process,myPid);
+
+### 2.3 拿到/proc/PID/maps
+
+这里通过文件拼接读取就可以拿到文件指针了。
+
+    
+    
+    char data[256];
+        char s[64] = {0};
+        int pid=getpid();
+        sprintf(s, "/proc/%d/maps", pid);
+        FILE *fd = fopen(s, "r");
+        if (fd==NULL)
+        {
+            LOGD("The file is field");
+        } else
+        {
+            LOGD("ok");
+        }
+
+### 2.4 拿到包名。
+
+包名可以通过/proc/PID/cmdline这个文件来拿到
+
+我们还是进行相同的操作。然后对文件进行处理，最后拿到了我们的包名。
+
+    
+    
+    char *buffer = (char *) malloc(1024);
+        memset(buffer, 0, 1024);
+        char path_t[256] = {0};
+        int pid = getpid();
+        sprintf(path_t, "/proc/%d/cmdline", pid);
+        int fd = open(path_t, O_RDONLY);
+        if (fd > 0) {
+            int read_count = (int) read(fd, buffer, 1024);
+            close(fd);
+            if (read_count > 0) {
+                return buffer;
+            }
+        }
+        free(buffer);
+        return NULL;
+
+进行一个测试：
+
+  
+  
+
+### 2.5拿到SO路径
+
+对我们拿到的maps进行处理。
+
+    
+    
+    char path[128] = {0};
+        char uid[10] = {0};
+        char * filter="libnative-lib.so";
+        while (fgets(data, 256, fd)) {
+            int len = (int) strlen(data);
+            if (len <= 0) {
+                continue;
+            }
+            data[--len] = '\0';
+            if (sscanf(data, "%*llx-%*llx %s %*s %*s %*s %s", uid, path) != 2) {
+                continue;
+            }
+                LOGD("%s",data);
+            if (strcmp(uid, "r-xp") == 0 && endsWith(path, filter)) {
+    
+                LOGD("getSoPath1:%s",path);
+                break;      
+          }
+        }
+
+进行测试  
+现在so也拿到了。  
+
+#### 2.6 分析比对
+
+比对的原理是so加载的地方大多只有三个，通过这三个加上包名进行比对，然后就可以发现VirtualApp下运行的App的so包地址已经更改为VirtualApp的地址，原因很有可能就是因为隔离的特性不能越界访问。
+
+    
+    
+    size_t len = strlen(p);
+        int i=0;
+        if (strstr(path,p) != NULL) {
+            if (startsWith(path, SO_APP_LIB)) {
+                if (strncmp(path + SO_APP_LIB_LEN, p, len)) {
+                    i++;
+                }
+            } else if (startsWith(path, SO_DATA_APP)) {
+                if (strncmp(path + SO_DATA_APP_LEN, p, len)) {
+                    i++;
+                }
+            } else if (startsWith(path, SO_DATA_DATA)) {
+                if (strncmp(path + SO_DATA_DATA_LEN, p, len)) {
+                    i++;
+                }
+            }
+        }
+
+### 2.7 最后进行一个结果测试
+
+在正常的环境下运行
+
+  
+![image.png](https://image.3001.net/images/20180720/15320552316620.png!small)  
+
+在VirtualApp下运行
+
+  
+![image.png](https://image.3001.net/images/20180720/15320552361850.png!small)  
+
+# 0x03 总结
+
+如果还想进一步深入的话，可以推荐看一下VirtualApp的源码，这样可能对各个方面理解会有很大的帮助。
+
+# 以上
+
+[有问题大家可以留言哦~也欢迎大家到春秋论坛中来玩耍呢！
+](https://bbs.ichunqiu.com/portal.php?from=beef)[>>>点击跳转](https://bbs.ichunqiu.com/portal.php?from=beef)  
+

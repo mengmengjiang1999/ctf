@@ -1,0 +1,415 @@
+##  0X00 工控安全案例
+
+###  2010年6月伊朗核电站“震网(Stuxnet)”事件
+
+ **2010 年 6 月，一个名为 Stuxnet 处于休眠状态的病毒潜伏在伊朗的铀浓缩设施网络中，Stuxnet
+在位于纳坦兹的离心机中被激活，控制了30%的纳坦兹设施的计算机，致使伊朗暂时关闭了核设施和核电厂，震网病毒感染了全球超过20万台电脑，摧毁了伊朗浓缩铀工厂五分之一的离心机。震网病毒的感染途经是通过U盘传播，然后修改PLC控制软件代码，使PLC向用于分离浓缩铀的离心机发出错误的命令。**![](https://image.3001.net/images/20191118/1574075004_5dd27a7c780d9.jpg!small)
+
+###  土耳其原油输送管道爆炸事件：
+
+2014年12月，土耳其境内，由伊拉克向土耳其输送原油的输油管道爆炸。
+为监控从里海通向地中海的1099英里的石油管道内的每一步，这条管道内安装了探测器和摄像头，然而管道爆炸破坏前前，却没有引发一个遇险
+信号，原因是黑客关闭了警报、切断了通信的同时给管道内原有大幅增压。
+**![](https://image.3001.net/images/20191118/1574075018_5dd27a8adc786.jpg!small)**
+
+### 乌克兰电网BlackEngery病毒事件:
+
+2015年12月23日，乌克兰电网遭网络攻击， 受 影响家庭70万户，这是有史以来首次导致大规模
+停电的网络攻击。以BlackEnergy等相关恶意代码为主要攻击工具，以邮件发送恶意代码载荷为最终攻击的直接突破入口，通过远程控制SCADA节点下达指令为断电手段，以摧毁破坏SCADA系统实现迟滞恢复和状态致盲，以DDoS
+作为干扰，最后达成长时间停电并制造社会混乱的具有信息战水准的网络攻击事件。![](https://image.3001.net/images/20191118/1574075048_5dd27aa80682b.jpg!small)
+
+###  2017年WannaCry病毒席卷全球，中石油2万多座加油站断网
+
+WannaCry勒索病毒蔓延全球，感染了150个国家的30多万台计算机。中国中石油公司超过2万座加油站也受到攻击，在断网约36小时左右才慢慢恢复。![](https://image.3001.net/images/20191118/1574075077_5dd27ac5588f0.jpg!small)
+
+###  2018年1月熔断(Meltdown)和幽灵(Spectre)两大新型漏洞，思科西门子多款工业交换机受影响
+
+“熔断”(Meltdown)和“幽灵”(Spectre)两大新型漏洞通过攻击获取数据、读取内核内存影响AMD、ARM、Intel系统和处理器等设备，思科800系列集成多业务路由器和工业以太网4000系列交换机以及西门子工业设备已确认受到影响。![](https://image.3001.net/images/20191118/1574075090_5dd27ad29e365.jpg!small)
+
+###  2018年2月欧洲废水处理服务器被恶意软件入侵：
+
+接入欧洲废水设施运营技术网络的服务器遭遇加密货币采矿恶意软件入侵，拖垮废水处理设备中的HMI服务器CPU，导致欧洲废水处理设备服务器瘫痪
+。![](https://image.3001.net/images/20191118/1574075138_5dd27b024a3df.jpg!small)
+
+###  2018年4月美国天然气输气管道公司遭到攻击：
+
+美国4家天然气输气管道公司遭供应链攻击，导致与客户通信系统被关闭。![](https://image.3001.net/images/20191118/1574075153_5dd27b1174feb.jpg!small)
+
+###  2018年6月三一重工泵车失踪案：
+
+通过源代码找到远程监控系统的漏洞，解锁设备，损失10亿元。![](https://image.3001.net/images/20191118/1574075176_5dd27b28af145.jpg!small)
+
+###  2018年8月3日，台积电感染WannaCry病毒
+
+台积电位于台湾新竹科学园区的12英寸晶圆厂和营运总部的部分生产设备受到魔窟勒索病毒WannaCry勒索病毒的一个变种感染，具体现象是电脑蓝屏，锁各类文档、数据库，设备宕机或重复开机。几个小时之内，台积电位于台中科学园区的Fab
+15厂，以及台南科学园区的Fab
+14厂也陆续被感染，这代表台积电在台湾北、中、南三处重要生产基地，同步因为病毒入侵而导致生产线停摆，损失高达26亿，发生该事件的原因为新机台接入时，未进行隔离，确认无病毒，直接联网，所有机台生产程序放在云端，每次生产需要重新下发安装，为提高效率，取消了各厂区间的防火墙，主机设备及系统过于陈旧，未进行升级，未安装防病毒软件。![](https://image.3001.net/images/20191118/1574075186_5dd27b32e9c0e.jpg!small)
+
+###  2019年3月，委内瑞拉国内大部分地区停电
+
+委内瑞拉发生全国范围的大规模停电，首都加拉加斯以及其他大部分地区陷入一篇漆黑，全国18个州电力供应中断，仅有5个州幸免，此次突发的电力系统崩溃没有任何预兆。停电给委内瑞拉带来了重大损失，全国交通瘫痪，地铁系统关闭，医院手术中断，所有通讯线路中断，航班无法正常起降。![](https://image.3001.net/images/20191118/1574075200_5dd27b40cf580.jpg!small)
+
+###  2019年7月，纽约停电4个小时
+
+美方报导称:伊朗革命卫队信息战部队成功的突破了美国信息战部队的围堵，闯入了纽约市三十多个变电站的控制中心，并对控制中心进行信息站破坏，导致了纽约全城大约4个小时的停电。这是几十年来的第一次大规模停电造成混乱。![](https://image.3001.net/images/20191118/1574075212_5dd27b4c97a7c.jpg!small)
+
+##  0X01工控系统漏洞存在现状和不足
+
+目前工控系统安全与传统IT系统安全不同有以下几点原因：
+
+###  ****一、从安全优先级来说: ****
+
+> 1.工控系统网络安全焦点问题是生产过程稳定可靠，强调的是可用性，不能停产，不能发生生产安全事故。
+>
+> 2.工控系统网络通讯协议不同，大量的工控系统采用私有协议。
+>
+> 3.系统运行环境不同，工控系统运行环境相对落后，对系统稳定性要求高。
+>
+>
+> 4.工控系统安全不是按照网络安全顺序排序，而是可用性最重要，完整性和机密性在后，故相对于传统IT系统的优先级由机密性>完整性>可用性来说，工控系统安全恰恰相反，工控系统优先级为可用性>完整性>机密性。
+
+###  二、从防病毒软件来说：
+
+> 1.工控网络通常不允许连接互联网，不具备及时更新病毒库的条件。
+>
+> 2.工业控制系统通常不允许在生产运行期间进行系统升级。
+>
+> 3.病毒误杀在工业控制系统中可能产生致命的后果，所以导致现在大量工作站处于无防护状态。
+
+###  三、从传统防护设备来说（如IDS/IPS:）：
+
+> 1.工业控制系统通常不允许在运行期间进行系统升级。
+>
+> 2.工控网络通常不允许连接互联网，不具备及时更新攻击库的条件。
+>
+> 3.IDS的高误报率一直是制约它广泛应用的主要因素。
+>
+> 4.IPS为了降低误报，很大程度上是以牺牲检出率为代价。
+
+###  四、工控安全当下趋势
+
+工业系统、工业网络大多以“物理隔离”为核心安全手段随着工控安全行业的蓬勃发展，随着人工智能、大数据、云计算等新一代信息技术的迅速发展，新技术的应用使得原来封闭的工业控制系统网络越来开放，尤其是“两化融合”的深入以及“工业4.0”、“中国制造2025”等战略的推进，关键基础设施逐渐开始采用以太网、通用协议、无线设备、远程配置等。在互联互通、纵向集成等新的生产模式下，关键基础设施正逐渐暴露于互联网中，工控系统下的安全问题所包含的软件隐患、网络边界隐患、环境和硬件隐患等问题，以及工控系统的网络安全协议问题，如操作系统的落后、补丁的更新不及时、缓冲区溢出问题、拒绝服务漏洞、关键设备没有冗余备份，不安全的远程访问ICS组件等问题带来的安全隐患问题。工控系统漏洞发现数量与日俱增，为网络攻击以及病毒的滋生与传播创造了适宜环境，如以勒索软件为代表的新型恶意软件不断出现，对工业系统安全运营构成威胁。针对工业领域的网络攻击呈组织化、递增化发展，且攻击方式呈现多样性。
+
+##  0X02 工控蜜罐CONPOT ICS/SCADA搭建
+
+###  1、Conpot介绍
+
+为了更好地学习工控相关知识，我们使用了Conpot进行搭建，Conpot是Glastopf下一个开源的ICS/SCADA蜜罐系统，工具可以实现ModBus
+SNMP等PLC的外部子站服务的模拟仿真。Conpot是一个部署在服务端的低交互ICS蜜罐，能够快速地部署、修改和拓展。开发者通过提供一系列的通用工控协议，使得我们能够非常快速地在我们的系统上构建一套复杂的工控基础设施用于欺骗未知的攻击者。
+Conpot一共支持bacnet、enip、guardian_ast、ipmi、kamstrup、misc、modbus、s7comm和snmp等10个协议。
+
+协议  |  介绍  
+---|---  
+bacnet  |  用于智能建筑的通信协议  
+enip  |  基于通用工业协议  
+ipmi  |  智能平台管理接口，可以智能地监视、控制和自动回报大量服务器的运作状况  
+modbus  |  一种串行通信协议  
+s7comm  |  西门子S7通讯协议簇里的一种  
+snmp  |  简单的网络管理协议  
+http  |  超文本传输协议  
+  
+###  2、蜜罐搭建方法
+
+注意：使用docker安装后的docker不是直接在conpot目录下，而应该在/home/conpot/.local/bin下。
+
+三种安装方式：
+
+    
+    
+    - Pre-Build镜像：
+      （1）docker pull honeynet/conpot
+      （2）docker run -it -p 80:80 -p 102:102 -p 502:502 -p 161:161/udp --network=bridge honeynet/conpot:latest /bin/sh
+      （3）conpot --template default
+      （4）访问http://MY_IP_ADDRESS
+    - 从源代码构建Docker映像
+      （1）git clone https://github.com/mushorg/conpot.git
+      （2）cd conpot
+      （3）docker build -t conpot .
+      （4）docker run -it -p 80:80 -p 102:102 -p 502:502 -p 161:161/udp --network=bridge conpot
+       （5）访问http://MY_IP_ADDRESS
+     -从源代码构建并使用docker-compose运行
+     （1）安装docker-compose
+     （2）git clone https://github.com/mushorg/conpot.git
+     （3）cd conpot/docker
+     （4）docker-compose build
+     （5）docker-compose up
+      （6）docker-compose up -d
+      （7）访问http://MY_IP_ADDRESS
+    - ubuntu安装
+      （1）sudo apt-get install libsmi2ldbl snmp-mibs-downloader python-dev libevent-dev libxslt1-dev libxml2-dev
+      （2）pip install conpot
+      （3）访问http://MY_IP_ADDRESS
+
+###  3、搭建过程
+
+这里我使用了从源代码构建并使用docker-compose进行蜜罐搭建:（1）git
+clone![](https://image.3001.net/images/20191118/1574075302_5dd27ba659263.jpg!small)（2）cd
+conpot/docker 后执行docker-compose
+build![](https://image.3001.net/images/20191118/1574075332_5dd27bc4281b6.jpg!small)（3）docker-compose
+up![](https://image.3001.net/images/20191118/1574075369_5dd27be9d0746.jpg!small)（4）访问![](https://image.3001.net/images/20191118/1574075385_5dd27bf93e965.jpg!small)
+
+##  0X03工控系统漏洞利用框架：
+
+###  1、框架介绍：
+
+工控ISF(Industrial exploit
+Framework)是一个基于Python的工控系统漏洞利用框架，整体类似于metasploit框架，我们使用该框架配合以上蜜罐环境进行演示。
+
+工控协议客户端
+
+名称  |  路径  |  描述  
+---|---|---  
+modbus_tcp_client  |  icssploit / clients / modbus_tcp_client.py  |  Modbus-TCP客户端工具  
+wdb2_client  |  icssploit / clients / wdb2_client.py  |
+WdbRPC版本2客户端工具（Vxworks 6.x）  
+s7_client  |  icssploit / clients / s7_client.py  |  s7comm客户端工具（S7 300/400
+PLC  
+  
+漏洞利用模块
+
+名称  |  路径  |  描述  
+---|---|---  
+s7_300_400_plc_control  |  exploits / plcs / siemens /
+s7_300_400_plc_control.py  |  S7-300 / 400 PLC启停脚本  
+s7_1200_plc_control  |  exploits / plcs / siemens / s7_1200_plc_control.py  |
+S7-1200 PLC启停/重置  
+vxworks_rpc_dos  |  exploits / plcs / vxworks / vxworks_rpc_dos.py  |  Vxworks
+RPC远程拒绝服务（CVE-2015-7599）  
+quantum_140_plc_control  |  exploits / plcs / schneider /
+quantum_140_plc_control.py  |  quantum_140_plc_control.py 施耐德Quantum
+140系列PLC启停脚本  
+crash_qnx_inetd_tcp_service  |  exploits / plcs / qnx /
+crash_qnx_inetd_tcp_service.py  |  QNX Inetd TCP服务崩溃  
+qconn_remote_exec  |  exploits / plcs / qnx / qconn_remote_exec.py  |
+qconn_remote_exec.py QNX QCONN远程代码执行  
+profinet_set_ip  |  exploits / plcs / siemens / profinet_set_ip.py  |
+Profinet DCP设备IP配置  
+  
+扫描模块
+
+名称  |  路径  |  描述  
+---|---|---  
+profinet-dcp-scan  |  scanners/profinet-dcp-scan.py  |  Profinet DCP 扫描器  
+vxworks_6_scan  |  scanners/vxworks_6_scan.py  |  Vxworks 6.x 扫描器  
+s7comm_scan  |  scanners/s7comm_scan.py  |  S7comm 扫描器  
+enip_scan  |  scanners/enip_scan.py  |  EthernetIP 扫描器  
+  
+ICS 协议模块 (使用Scapy编写)
+
+这些协议模块能够与其他Fuzz框架进行结合，具体Fuzz模糊测试相关内容，可以参考团队专栏小伙伴文章《基于Peach的Modbus协议模糊测试》。
+
+名称  |  路径  |  描述  
+---|---|---  
+pn_dcp  |  icssploit/protocols/pn_dcp  |  Profinet DCP 协议  
+modbus_tcp  |  icssploit/protocols/modbus_tcp  |  p Modbus TCP 协议  
+wdbrpc2  |  icssploit/protocols/wdbrpc2  |  WDB RPC Version 2 协议  
+s7comm  |  icssploit/protocols/s7comm.py  |  S7comm 协议  
+  
+###  2、漏洞利用框架搭建
+
+1）Python所依赖环境
+
+在个人安装过程中，python-nmap，gnureadline使用pip安装未成功，单独下载相关依赖包进行安装
+
+    
+    
+    gnureadline (OSX only)requestsparamikobeautifulsoup4pysnmppython-nmapscapy
+
+安装方式：
+
+> 1)git clone <https://github.com/dark-lbp/isf/>
+>
+> 2)cd isf
+>
+> 3)python isf.py 启动
+
+安装完成后，使用python
+isf.py，启动框架，如下图所示：![](https://image.3001.net/images/20191118/1574075427_5dd27c236c8d8.jpg!small)由于扫描和攻击操作仅模块不同，所以我们直接使用西门子plc漏洞利用模块进行攻击尝试，首先show
+options参数可以需要设置的相关参数如下图所示，：
+
+    
+    
+    exploits/plcs/siemens/s7_300_400_plc_control
+
+![](https://image.3001.net/images/20191118/1574075444_5dd27c349949d.jpg!small)此处设置攻击目标为我们上面搭建的蜜罐靶机，然后执行攻击模块：
+
+    
+    
+    set target 192.168.0.105
+    
+        run
+
+![](https://image.3001.net/images/20191118/1574075498_5dd27c6a56128.jpg!small)查看蜜罐发现收到了来自于攻击模块数据包。![](https://image.3001.net/images/20191118/1574075506_5dd27c72d9858.jpg!small)至此，一个简单的模拟攻击流程结束。
+
+##  0X04工控资产识别及发现
+
+###  1.网络空间搜索：
+
+以以下案例简单介绍几个网络空间安全搜索引擎，排名不分先后，若想了解更多资料，请至”TideSec安全团队“专栏查看。
+
+FOFA-网络空间安全搜索引擎
+
+网络空间资产检索系统（FOFA）是世界上数据覆盖更完整的IT设备搜索引擎，拥有全球联网IT设备更全的DNA信息。探索全球互联网的资产信息，进行资产及漏洞影响范围分析、应用分布统计、应用流行度态势感知等。
+
+例如搜索全球范围内，端口为102协议为S7的网络空间资产port="102" &&
+protocol=="s7"![](https://image.3001.net/images/20191118/1574075523_5dd27c834d158.jpg!small)
+
+ZoomEye-网络空间搜索引擎
+
+钟馗之眼网络空间搜索引擎是国内安全公司知道创宇开发的网络空间搜索引擎，通过这个搜索引擎开放他们的海量数据库，包括操作系统，Web服务，服务端语言，Web开发框架，Web应用，前端库及第三方组件等等，结合NMAP大规模扫描结果进行整合。
+
+例如搜索全球范围内，端口为102协议为S7的网络空间资产port:102 +app:"Siemens S7
+PLC"![](https://image.3001.net/images/20191118/1574075536_5dd27c90f0a06.jpg!small)Shodan-物联网的搜索引擎
+
+相对于ZoomEye，Shodan更侧重于主机层面，作为一个针对网络设备的搜索引擎，它可以在极短的时间内在全球设备中搜索到你想找的设备信息，此外Shodan是世界上第一个针对Internet连接设备的搜索引擎。
+
+例如搜索全球范围内，端口为102协议为S7的网络空间资产module: s7
+port:102"![](https://image.3001.net/images/20191118/1574075553_5dd27ca106536.jpg!small)
+
+###  2.nmap脚本
+
+Nmap是一款开源免费的网络发现（Network Discovery）和安全审计（Security Auditing）工具。软件名字Nmap是Network
+Mapper的简称。Nmap最初是由Fyodor在1997年开始创建的。随后在开源社区众多的志愿者参与下，该工具逐渐成为最为流行安全必备工具之一。一般情况下，Nmap用于列举网络主机清单、管理服务升级调度、监控主机或服务运行状况。Nmap可以检测目标机是否在线、端口开放情况、侦测运行的服务类型及版本信息、侦测操作系统与设备类型等信息。
+
+我们利用Nmap脚本可以对S7、modbus的plc设备进行详细扫描探测。
+
+Nmap默认安装在Windows环境下的脚本位置：
+
+C:\Program Files
+(x86)\Nmap\scripts，首先我们将自己收集有关工控扫描脚本复制到scripts目录下，如下图所示：![](https://image.3001.net/images/20191118/1574075566_5dd27cae5134a.jpg!small)
+
+以下为Nmap脚本参数的规则：
+
+    
+    
+    -sC: 等价于 –script=default，使用默认类别的脚本进行扫描。
+    –script=: 使用某个或某类脚本进行扫描，支持通配符描述
+    –script-args=: 为脚本提供默认参数
+    –script-args-file=filename: 使用文件来为脚本提供参数
+    –script-trace: 显示脚本执行过程中发送与接收的数据
+    –script-updatedb: 更新脚本数据库
+    –script-help=: 显示脚本的帮助信息，其中部分可以逗号分隔的文件或脚本类别。
+
+以下为Nmap脚本执行格式：
+
+    
+    
+    执行单个脚本：nmap –script /path/to/script.nse
+    执行多个脚本：nmap –script /path/to/script.nse,/another/path/script2.nse
+    执行文件夹包含的所有脚本：nmap –script/path/to/folder/
+
+探测s7协议的设备详细信息：
+
+nmap -v -script s7-info 172.16.111.162 -p
+102，如下图所示：![](https://image.3001.net/images/20191118/1574075584_5dd27cc07463d.jpg!small)
+
+工控协议还有还有很多，由于团队内小伙伴文章中已经对工控的资产发现和识别进行了详细的阐述，故此处暂时以探测s7协议的设备为举例。
+
+    
+    
+    Modbus
+    Modbus协议是应用于电子控制器上的一种协议。通过此协议设备间可以通信。它已成为一通用工业标准。
+    port:502
+    module modbus
+    Siemens S7
+    s7协议是SIEMENS s7协议族的标准通信协议，使用s7-应用接口的通信不依赖特定的总线系统。
+    port:102
+    module: s7
+    DNP3
+    DNP(Distributed Network Protocol，分布式网络规约)是一种应用于自动化组件之间的通讯协议，常见于电力、水处理等行业。SCADA可> 以使用DNP协议与主站、RTU、及IED进行通讯。
+    port:20000 source address
+    module: dnp3
+    Niagara Fox
+    Fox协议是Tridium公司开发的Niagara框架的一部分，广泛应用于楼宇自动化控制系统。
+    port:1911,4911 product:Niagara
+    module: fox
+    BACnet
+    楼宇自动控制网络数据通讯协议(BACnet)是针对采暖、通风、空调、制冷控制设备所设计，同时也为其他楼宇控制系统（例如照明、安保、消防等系统）的集成提供一个基本原则。
+    port:47808
+    module: bacnet
+    EtherNet/IP
+    Ethernet/IP是一个面向工业自动化应用的工业应用层协议。它建立在标准UDP/IP与TCP/IP协议之上，利用固定的以太网硬件和软件，为配置、访问和控制工业自动化设备定义了一个应用层协议。
+    port 44818
+    module: ethernetip, ethernetip-udp
+    GE-SRTP
+    GE-SRTP协议由美国通用电气公司开发，GE PLC可以通过GE-SRTP进行数据通信和数据传输。
+    port:18245,18246 product:"general electric"
+    module: general-electric-srtp
+    HART-IP
+    HART协议是美国Rosement公司于1985年推出的一种用于现场智能仪表和控制室设备之间的通信协议。现已成为全球智能仪表的工业标准 。
+    port:5094 hart-ip
+    module: hart-ip-udp
+    PCWorx
+    PCWorx协议由菲尼克斯电气公司开发，目前广泛使用于工控系统。PCWORX3.11是菲尼克斯电气公司的专用协议。
+    port:1962 PLC
+    module: pcworx
+    MELSEC-Q
+    MELSEC-Q系列设备使用专用的网络协议进行通讯，该系列设备可以提供高速、大容量的数据处理和机器控制。
+    port:5006,5007 product:mitsubishi
+    module: melsec-q-tcp
+    OMRON FINS
+    欧姆龙PLC使用网络协议FINS进行通信，可通过多种不同的物理网络，如以太网、控制器连接等。
+    port:9600 response code
+    module: omron-tcp
+    Crimson v3
+    协议被Crimson桌面软件用于与Red Lion G306工控系统的HMI人机接口。
+    port:789 product:"Red Lion Controls"
+    redlion-crimson3
+    Codesys
+    CoDeSys编程接口在全球范围内使用广泛，全球上百个设备制造商的自动化设备中都是用了该编程接口。
+    module: codesys
+    IEC 60870-5-104
+    IEC 60870-5-104是国际电工委员会制定的一个规范，用于适应和引导电力系统调度自动化的发展，规范调度自动化及远动设备的技术性能。
+    port:2404 asdu address
+    module: iec-104
+    ProConOS
+    ProConOS是德国科维公司(KW-Software GmbH)开发的用于PLC的实时操作系统，它是一个高性能的PLC运行时引擎，目前广泛使用于基于嵌入式和PC的工控系统。
+    port:20547 PLC
+    module: proconos
+    moxa-nport
+    Moxa 串口服务器专为工业应用而设计。不通配置组合的串口服务器更能符合不同工业现场的需求。NPort系列串口服务器让传统 RS-232/422/485设备立即联网，提供您基于IP的串口联网解决方案。
+    port:4800
+    moxa-nport
+
+###  3.wireshark
+
+Wireshark（前称Ethereal）是一个网络封包分析软件。网络封包分析软件的功能是撷取网络封包，并尽可能显示出最为详细的网络封包资料。Wireshark使用WinPCAP作为接口，直接与网卡进行数据报文交换。
+
+使用Wireshark抓取并分析西门子S7协议:![](https://image.3001.net/images/20191118/1574075612_5dd27cdc988e0.jpg!small)  
+使用Wireshark抓取并分析Modbus协议![](https://image.3001.net/images/20191118/1574075627_5dd27ceb89d7e.jpg!small)
+
+##  0X05工控系统安全防护建议：
+
+> 1)网络边界加强防护网络边界可部署访问控制设备，对需要远程访问的工控系统增加白名单的控制策略,仅开放需要的端口地址，如关闭Telnet等不必要端口。
+>
+> 2)安全漏洞加强管理 定期对工控系统进行漏洞扫描，对关键漏洞的修补制定跟踪计划。
+>
+> 3)重视网络安全工作 重视网络安全工作，加大工控系统暴露公网的整改力度。
+>
+> 4) 只有可信任的设备，才能接入控制网络，如外设管理，禁止未授权的U盘接入主机。
+>
+> 5) 只有可信任的消息，才能在网络上传输，应用白名单代替防病毒软件，例如设置应用程序白名单，阻止未授权程序运行，只有可信任的软件，才允许被执行。
+>
+> 6)工业防火墙代替IT防火墙，工控网络异常检测代替IDS，做好网络隔离，部署工业控制网络监测与审计设备。
+>
+> 7)重要工业控制设备前端部署工业协议DPI功能的工业防火墙，可将工业控制设备的控制参数限定在正常的范围，避免超出限值的违法操作或失误操作。
+>
+> 8)定时对数据进行备份，及时做好数据备份工作，及时建立应急响应及灾难恢复演练等流程。
+
+##  0X06 结束语
+
+该文章为Parad0x个人工控安全入门一些想法,还请各位大佬斧正，文中若涉及到攻击等手段，仅可用于研究测试使用，请勿非法用作他途。
+
+除本文中所涉及到的蜜罐及工控扫描脚本外个人还收集了部分工控资料，包括但不限于工控利用脚本、工控扫描探测脚本、工控设备默认密码、协议数据包、PLC、Scada等相关工具及资料，可以关注“TideSec安全团队”公众号回复"工控工具包"获取。
+
+##  0X07参考及感谢：
+
+>
+> [https://www.jianshu.com/p/4c*dcf7ce7](https://www.jianshu.com/p/4c***dcf7ce7)
+>
+> <https://www.freebuf.com/articles/ics-articles/209786.html>
+>
+> <http://www.mei.net.cn/jxgy/201904/819900.html>
+
+***本文原创作者：Parad0x，本文属于FreeBuf原创奖励计划，未经许可禁止转载**
+

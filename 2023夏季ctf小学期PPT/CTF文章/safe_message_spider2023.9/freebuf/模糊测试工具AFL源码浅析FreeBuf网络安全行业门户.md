@@ -1,0 +1,513 @@
+# 前言
+
+`AFL`是一款著名的模糊测试的工具，最近在阅读`AFL`源码，记录一下，方便以后查阅。
+
+# 环境
+
+  * 项目：[AFL](https://github.com/google/AFL.git)
+
+  * 编译项目：将编译的优化选项关闭，即改写成`-O0`
+
+![1](https://image.3001.net/images/20221025/1666684902_635797e62a67bf0c4cbdd.png!small)
+
+# afl-gcc.c
+
+使用`gdb`加载`afl-gcc`，并使用`set arg -o test test.c`设置参数
+
+![2](https://image.3001.net/images/20221025/1666684903_635797e7cd9425bdf01ba.png!small)
+
+## find_as函数
+
+  * `find_as`函数首先会通过`AFL_PATH`环境变量的值从而获得`AFL`对应的路径
+
+  * 若上述环境变量不存在则获取当前`afl-gcc`所在的文件路径
+
+  * 判断该路径下的`as`文件是否具有可执行权限
+
+    
+    
+    u8 *afl_path = getenv("AFL_PATH");  
+    ...   
+    if (afl_path) {  
+    ​  
+    tmp = alloc_printf("%s/as", afl_path); //将AFL所在路径与字符as进行拼接  
+    ​  
+    if (!access(tmp, X_OK)) { //函数用来判断指定的文件或目录是否有可执行权限，若指定方式有效则返回0，否则返回-1  
+    as_path = afl_path;  
+    ck_free(tmp);  
+    return;   
+    }  
+    ​  
+    ck_free(tmp);  
+    ​  
+    }  
+    ​  
+    slash = strrchr(argv0, '/'); //在参数argv0所指向的字符串中搜索最后一次出现字符'/'  
+    ​  
+    if (slash) {  
+    ​  
+    u8 *dir;  
+    ​  
+    *slash = 0;  
+    dir = ck_strdup(argv0);  
+    *slash = '/';  
+    ​  
+    tmp = alloc_printf("%s/afl-as", dir); //将当前AFL所在的路径跟afl-as进行拼接  
+    ​  
+    if (!access(tmp, X_OK)) {  
+    as_path = dir;  
+    ck_free(tmp);  
+    return;  
+    }  
+    ...
+
+【----帮助网安学习，以下所有学习资料免费领！加vx：yj009991，备注“freebuf”获取！】
+
+① 网安学习成长路径思维导图  
+② 60+网安经典常用工具包  
+③ 100+SRC漏洞分析报告  
+④ 150+网安攻防实战技术电子书  
+⑤ 最权威CISSP 认证考试指南+题库  
+⑥ 超1800页CTF实战技巧手册  
+⑦ 最新网安大厂面试题合集（含答案）  
+⑧ APP客户端安全检测指南（安卓+IOS）
+
+## edit_params函数
+
+  * `edit_params`函数实际就是准备需要传入编译器的参数，如编译器的类型`gcc`或`clang`
+
+  * 其次就是是否需要开启保护如`canary`等
+
+  * 最后就是判断是否开启内存泄漏探测的工具，如`ASAN`，该工具是针对C/C++ 的快速内存错误检测工具
+
+    
+    
+    ...  
+    cc_params = ck_alloc((argc + 128) * sizeof(u8*));  
+    ​  
+    name = strrchr(argv[0], '/'); //获取可执行文件名称  
+    if (!name) name = argv[0]; else name++; /*跳过路径符'/' */  
+    ​  
+    if (!strncmp(name, "afl-clang", 9)) { //判断编译器是否为clang  
+    ...  
+    }   
+    else {  
+    if (!strcmp(name, "afl-g++")) {  
+    u8* alt_cxx = getenv("AFL_CXX");  
+    cc_params[0] = alt_cxx ? alt_cxx : (u8*)"g++";  
+    } else if (!strcmp(name, "afl-gcj")) {  
+    u8* alt_cc = getenv("AFL_GCJ");  
+    cc_params[0] = alt_cc ? alt_cc : (u8*)"gcj";  
+    } else {  
+    u8* alt_cc = getenv("AFL_CC");   
+    cc_params[0] = alt_cc ? alt_cc : (u8*)"gcc"; //如环境变量没写入AFL_CC则默认使用gcc  
+    }  
+    }  
+    while (--argc) {  
+    u8* cur = *(++argv); //读取下一个参数  
+    ​  
+    if (!strncmp(cur, "-B", 2)) { //若参数是-B  
+    ​  
+    if (!be_quiet) WARNF("-B is already set, overriding"); //用于设置编译器的搜索路径  
+    ​  
+    if (!cur[2] && argc > 1) { argc--; argv++; }//继续读取下一个参数  
+    continue;  
+    ​  
+    }  
+    ​  
+    if (!strcmp(cur, "-integrated-as")) continue;  
+    ​  
+    if (!strcmp(cur, "-pipe")) continue;  
+    ​  
+    #if defined(__FreeBSD__) && defined(__x86_64__)  
+    if (!strcmp(cur, "-m32")) m32_set = 1;  
+    #endif  
+    ​  
+    if (!strcmp(cur, "-fsanitize=address") ||  
+    !strcmp(cur, "-fsanitize=memory")) asan_set = 1; //内存访问的错误  
+    ​  
+    if (strstr(cur, "FORTIFY_SOURCE")) fortify_set = 1;//缓冲区溢出问题的检查  
+    ​  
+    cc_params[cc_par_cnt++] = cur; //cc_params用于存放的参数  
+    ​  
+    }  
+    ​  
+    cc_params[cc_par_cnt++] = "-B"; //参数-B  
+    cc_params[cc_par_cnt++] = as_path; //afl-as的路径  
+    ​  
+    if (clang_mode)  
+    cc_params[cc_par_cnt++] = "-no-integrated-as";  
+    ​  
+    if (getenv("AFL_HARDEN")) {  
+    ​  
+    cc_params[cc_par_cnt++] = "-fstack-protector-all"; //canary保护  
+    ​  
+    if (!fortify_set)  
+    cc_params[cc_par_cnt++] = "-D_FORTIFY_SOURCE=2";  
+    ​  
+    }  
+    ​  
+    if (asan_set) {  
+    ​  
+    /* Pass this on to afl-as to adjust map density. */  
+    ​  
+    setenv("AFL_USE_ASAN", "1", 1);  
+    ​  
+    } else if (getenv("AFL_USE_ASAN")) {  
+    ​  
+    if (getenv("AFL_USE_MSAN"))  
+    FATAL("ASAN and MSAN are mutually exclusive");  
+    ​  
+    if (getenv("AFL_HARDEN"))  
+    FATAL("ASAN and AFL_HARDEN are mutually exclusive");  
+    ​  
+    cc_params[cc_par_cnt++] = "-U_FORTIFY_SOURCE";  
+    cc_params[cc_par_cnt++] = "-fsanitize=address";  
+    ​  
+    } else if (getenv("AFL_USE_MSAN")) {  
+    ​  
+    if (getenv("AFL_USE_ASAN"))  
+    FATAL("ASAN and MSAN are mutually exclusive");  
+    ​  
+    if (getenv("AFL_HARDEN"))  
+    FATAL("MSAN and AFL_HARDEN are mutually exclusive");  
+    ​  
+    cc_params[cc_par_cnt++] = "-U_FORTIFY_SOURCE";  
+    cc_params[cc_par_cnt++] = "-fsanitize=memory";  
+    }  
+    ...  
+    cc_params[cc_par_cnt++] = "-g";  
+    ...  
+    cc_params[cc_par_cnt++] = "-O3";  
+    cc_params[cc_par_cnt++] = "-funroll-loops";  
+    /* Two indicators that you're building for fuzzing; one of them is  
+    AFL-specific, the other is shared with libfuzzer. */  
+    cc_params[cc_par_cnt++] = "-D__AFL_COMPILER=1";  
+    cc_params[cc_par_cnt++] = "-DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION=1";  
+    }  
+    if (getenv("AFL_NO_BUILTIN")) {  
+    cc_params[cc_par_cnt++] = "-fno-builtin-strcmp";  
+    cc_params[cc_par_cnt++] = "-fno-builtin-strncmp";  
+    cc_params[cc_par_cnt++] = "-fno-builtin-strcasecmp";  
+    cc_params[cc_par_cnt++] = "-fno-builtin-strncasecmp";  
+    cc_params[cc_par_cnt++] = "-fno-builtin-memcmp";  
+    cc_params[cc_par_cnt++] = "-fno-builtin-strstr";  
+    cc_params[cc_par_cnt++] = "-fno-builtin-strcasestr";  
+    }  
+    cc_params[cc_par_cnt] = NULL;  
+    }
+
+ **通过edit_params函数后**
+
+![4](https://image.3001.net/images/20221025/1666684905_635797e914f95f755b35d.png!small)
+
+可以传递给编译器的参数增加了`-B . -g -O3 -funroll-loops -D__AFL_COMPILER=1
+-DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION=1`这几项
+
+## main函数
+
+  * 首先调用`isatty`函数判断描述符是否为终端机以及是否为静默模式，即不打印任何信息，`SAYF`即输出函数用于输出提示字符
+
+  * 接着通过`find_as`函数搜索`as`文件所在的路径
+
+  * 接着通过`edit_params`函数编辑获取需要传入编译器的参数
+
+  * 最后通过`execvp`函数启动`gcc`或其他编译器
+
+    
+    
+    /*  
+    isatty函数用于判断文件描述词是否是为终端机  
+    获取AFL_QUIET的环境变量  
+    */  
+    if (isatty(2) && !getenv("AFL_QUIET")) { //判断是否静默模式  
+    /*  
+    #ifdef MESSAGES_TO_STDOUT  
+    #  define SAYF(x...)    printf(x)  
+    #else   
+    #  define SAYF(x...)    fprintf(stderr, x)  
+    #endif   
+    */  
+    SAYF(cCYA "afl-cc " cBRI VERSION cRST " by <lcamtuf@google.com>\n");  
+    ​  
+    } else be_quiet = 1;  
+    ​  
+    if (argc < 2) { //参数个数小于两个  
+    ​  
+    SAYF("\n"  
+    "This is a helper application for afl-fuzz. It serves as a drop-in replacement\n"  
+    "for gcc or clang, letting you recompile third-party code with the required\n"  
+    "runtime instrumentation. A common use pattern would be one of the following:\n\n"  
+    ​  
+    "  CC=%s/afl-gcc ./configure\n"  
+    "  CXX=%s/afl-g++ ./configure\n\n"  
+    ​  
+    "You can specify custom next-stage toolchain via AFL_CC, AFL_CXX, and AFL_AS.\n"  
+    "Setting AFL_HARDEN enables hardening optimizations in the compiled code.\n\n",  
+    BIN_PATH, BIN_PATH);  
+    ​  
+    exit(1);  
+    ​  
+    }  
+    ​  
+    find_as(argv[0]); //用于寻找as所在路径  
+    ​  
+    edit_params(argc, argv);//用于获取编译参数  
+    ​  
+    execvp(cc_params[0], (char**)cc_params);//启动gcc或其他编译器
+
+ **大致流程图**
+
+![3](https://image.3001.net/images/20221025/1666684906_635797ea56ca2cc53c0af.png!small)
+
+`afl-gcc`可以看作是劫持了`gcc`的一个程序，从而修改`as`的路径(为了后续的插桩做准备)，并且添加所有`fuzzing`所需要的参数再传入实际的编译器中去(这里以`gcc`作为例子)
+
+# afl-as.c
+
+## edit_params函数
+
+`afl-as.c`的`edit_params`函数比较简单
+
+  * 首先是确定`as`文件所在的路径，若没有设置环境变量则直接使用`as`作为汇编器所在路径的参数
+
+  * 其次是检测`.s`文件是否在临时目录下，这里我做了测试如果`.s`不在临时目录则无法插桩成功
+
+  * 最后随机生成文件名，将该文件作为插桩后的文件并作为传输传入汇编器
+
+    
+    
+    u8 *tmp_dir = getenv("TMPDIR"), *afl_as = getenv("AFL_AS"); //afl-as的地址  
+    ...  
+    as_params = ck_alloc((argc + 32) * sizeof(u8*)); //给参数分配空间  
+    ​  
+    as_params[0] = afl_as ? afl_as : (u8*)"as";   
+    ​  
+    as_params[argc] = 0; //截断符  
+    ...  
+    //用于记录文件是64位还是32位  
+    for (i = 1; i < argc - 1; i++) {  
+    if (!strcmp(argv[i], "--64")) use_64bit = 1;  
+    else if (!strcmp(argv[i], "--32")) use_64bit = 0;    
+    ...  
+    if (strncmp(input_file, tmp_dir, strlen(tmp_dir)) &&  
+    strncmp(input_file, "/var/tmp/", 9) &&  
+    strncmp(input_file, "/tmp/", 5)) pass_thru = 1; //汇编文件需要放在临时目录下，否则后续无法对文件进行插桩  
+    ​  
+    }  
+    modified_file = alloc_printf("%s/.afl-%u-%u.s", tmp_dir, getpid(),  
+    (u32)time(NULL)); //随机生成文件名，作为插桩的目标文件  
+    ...  
+    as_params[as_par_cnt++] = modified_file; //将待修改的文件名作为汇编器的参数  
+    as_params[as_par_cnt]   = NULL;
+
+## add_instrumentation函数
+
+`add_instrumentation`函数是插桩的关键函数
+
+  * 首先是分别打开需要编译的文件以及存放插桩后的文件，并且对需要编译的文件逐行逐行进行扫描
+
+  * 其次对于以下情况的代码块不进行插桩处理
+
+    * `pass_thru = 1`，这里经调试发现只要`.s`文件存在于临时目录下`pass_thru`的值就会为0，`pass_thru = 1`的意思是只传递数据不进行插桩
+
+    * `skip_intel = 1`即为跳过`intel`的汇编语法的代码
+
+    * 不在`.text`段内
+
+    * 在`.text`段但是不处于函数标签或者分支标签
+
+  * `trampoline_fmt_64`与`trampoline_fmt_32`即为需要插桩的代码，并会记录总共插桩了几处
+
+  * 若进行了插桩处理，那么则需要在文件末尾插入`main_payload_64`，是与`afl`进行`fuzzing`相关的函数
+
+    
+    
+    ...  
+    if (input_file) { //需要编译的文件  
+    ​  
+    inf = fopen(input_file, "r");  
+    if (!inf) PFATAL("Unable to read '%s'", input_file);  
+    ​  
+    } else inf = stdin;  
+    ​  
+    outfd = open(modified_file, O_WRONLY | O_EXCL | O_CREAT, 0600); //打开存放插桩后的文件  
+    ​  
+    if (outfd < 0) PFATAL("Unable to write to '%s'", modified_file);  
+    ​  
+    outf = fdopen(outfd, "w");  
+    ​  
+    if (!outf) PFATAL("fdopen() failed");    
+    while (fgets(line, MAX_LINE, inf)) { //对需要汇编的文件进行一行一行的扫描  
+    ​  
+    /* In some cases, we want to defer writing the instrumentation trampoline  
+    until after all the labels, macros, comments, etc. If we're in this  
+    mode, and if the line starts with a tab followed by a character, dump  
+    the trampoline now. */  
+    ​  
+    //isalpha是一种函数：判断字符ch是否为英文字母  
+    //#  define R(x) (random() % (x))  
+    if (!pass_thru && !skip_intel && !skip_app && !skip_csect && instr_ok &&  
+    instrument_next && line[0] == '\t' && isalpha(line[1])) {  
+    ​  
+    fprintf(outf, use_64bit ? trampoline_fmt_64 : trampoline_fmt_32,  
+    R(MAP_SIZE)); //将插桩代码写入改写文件中,trampoline_fmt_64为64位程序的插桩代码，trampoline_fmt_32为32位程序的插桩代码  
+    ​  
+    instrument_next = 0;  
+    ins_lines++; //总共插桩了多少处地方  
+    }  
+    ...  
+    if (line[0] == '\t' && line[1] == '.') {  
+    ​  
+    /* OpenBSD puts jump tables directly inline with the code, which is  
+    a bit annoying. They use a specific format of p2align directives  
+    around them, so we use that as a signal.   
+    OpenBSD为一个类unix的操作系统  
+    */  
+    ​  
+    if (!clang_mode && instr_ok && !strncmp(line + 2, "p2align ", 8) &&  
+    isdigit(line[10]) && line[11] == '\n') skip_next_label = 1; //跳转到下一个标签  
+      
+    if (!strncmp(line + 2, "text\n", 5) ||  
+    !strncmp(line + 2, "section\t.text", 13) ||  
+    !strncmp(line + 2, "section\t__TEXT,__text", 21) ||  
+    !strncmp(line + 2, "section __TEXT,__text", 21)) {  
+    instr_ok = 1; //只要是text段就是我们应该插桩的段  
+    continue;   
+    }  
+    ​  
+    if (!strncmp(line + 2, "section\t", 8) ||  
+    !strncmp(line + 2, "section ", 8) ||  
+    !strncmp(line + 2, "bss\n", 4) ||  
+    !strncmp(line + 2, "data\n", 5)) {  
+    instr_ok = 0; //不需要插桩的段  
+    continue;  
+    }  
+    ​  
+    }     
+    ...  
+    if (line[0] == '\t') {//检测jnz等分支指令  
+    ​  
+    if (line[1] == 'j' && line[2] != 'm' && R(100) < inst_ratio) { //绝对跳转jmp不进行插桩处理  
+    ​  
+    fprintf(outf, use_64bit ? trampoline_fmt_64 : trampoline_fmt_32,  
+    R(MAP_SIZE)); //给分支跳转指令进行插桩  
+    ​  
+    ins_lines++; //插桩的指令数  
+    ​  
+    }  
+    continue; //插桩完直接跳过  
+    }  
+    ...  
+    if (strstr(line, ":")) { //检测标签  
+    ​  
+    if (line[0] == '.') {  
+    ​  
+    /* Apple: .L<num> / .LBB<num> */  
+      
+    if ((isdigit(line[2]) || (clang_mode && !strncmp(line + 1, "LBB", 3))) //分支标签  
+    && R(100) < inst_ratio) {  
+      
+    ...  
+    if (!skip_next_label) instrument_next = 1; else skip_next_label = 0;//若该标签不需要跳转则记录下来，该标签需要插桩  
+    ​  
+    }  
+    ​  
+    } else { //函数标签  
+    ​  
+    /* Function label (always instrumented, deferred mode). */  
+    ​  
+    instrument_next = 1;//函数标签都需要进行插桩  
+      
+    }  
+    ​  
+    }  
+    ​  
+    }  
+    if (ins_lines)  
+    fputs(use_64bit ? main_payload_64 : main_payload_32, outf); //若进行插桩处理则需要插入main_payload_64
+
+ **这里重点关注一下插桩的位置**
+
+  * 情况一：函数入口，例如`main`函数
+
+函数标签处的插桩如下图所示，插桩的位置是函数第一条指令的上方进行插桩
+
+![5](https://image.3001.net/images/20221025/1666684907_635797ebbaaf3b89f49a5.png!small)
+
+  * 情况二：分支跳转，例如`jle`指令
+
+扫描到分支跳转指令，则直接在跳转指令下方进行插桩处理，如下图所示
+
+![6](https://image.3001.net/images/20221025/1666684909_635797edb17368c800c37.png!small)
+
+  * 情况三：`.L<num>`标签
+
+`.L`为本地标签，`afl-as.c`也会扫描该标签并进行插桩处理，可以看到跳转指令的目的地地址就是以`.L<num>`，因此`.L<num>`可以认为分支的起始位置，与函数标签一样，会在第一条指令上方进行插桩处理
+
+![7](https://image.3001.net/images/20221025/1666684911_635797ef5ea47dc79e64b.png!small)
+
+## main函数
+
+`main`函数主要经过`edit_params`函数修改了传入汇编器的参数，并且对汇编文件进行插桩处理，最后使用`execvp`函数启动汇编器进行汇编处理
+
+    
+    
+    ...  
+    gettimeofday(&tv, &tz);  
+    ​  
+    rand_seed = tv.tv_sec ^ tv.tv_usec ^ getpid();//随机种子  
+    ​  
+    srandom(rand_seed);//通过种子生成随机数  
+    ​  
+    edit_params(argc, argv); //加载参数，并在/tmp/目录下生成临时的汇编文件  
+    ​  
+    if (inst_ratio_str) {  
+    ​  
+    if (sscanf(inst_ratio_str, "%u", &inst_ratio) != 1 || inst_ratio > 100)   
+    FATAL("Bad value of AFL_INST_RATIO (must be between 0 and 100)");  
+    ​  
+    }  
+    ​  
+    if (getenv(AS_LOOP_ENV_VAR))  
+    FATAL("Endless loop when calling 'as' (remove '.' from your PATH)");  
+    ​  
+    setenv(AS_LOOP_ENV_VAR, "1", 1);  
+    ​  
+    /* When compiling with ASAN, we don't have a particularly elegant way to skip  
+    ASAN-specific branches. But we can probabilistically compensate for  
+    that... */  
+    ​  
+    if (getenv("AFL_USE_ASAN") || getenv("AFL_USE_MSAN")) {  
+    sanitizer = 1;  
+    inst_ratio /= 3;  
+    }  
+    ​  
+    if (!just_version) add_instrumentation();//对文件进行插桩处理  
+    ​  
+    if (!(pid = fork())) {  
+    ​  
+    execvp(as_params[0], (char**)as_params);//将插桩后的文件传入汇编器中  
+    FATAL("Oops, failed to execute '%s' - check your PATH", as_params[0]);  
+    ​  
+    ...
+
+ **传入汇编器的参数情况**
+
+![8](https://image.3001.net/images/20221025/1666684913_635797f108f878fd7212c.png!small)
+
+ **大致流程图**
+
+![9](https://image.3001.net/images/20221025/1666684914_635797f250dc14a0d5476.png!small)
+
+`afl-as`相当于劫持了`as`从而修改汇编的文件名以及对相应的汇编文件进行插桩处理
+
+# afl-as.h
+
+该文件放置了插桩需要的代码如`trampoline_fmt_64`、`trampoline_fmt_32`、`main_payload_64`以及`main_payload_32`，这些代码结合`fuzzing`过程有关。
+
+# 总结
+
+`afl-gcc`与`afl-as`可以看作是劫持了编译器，将`fuzzing`相关的参数设置好并对编译文件进行相应的插桩后再调用实际的编译器。
+
+  
+

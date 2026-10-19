@@ -1,0 +1,1312 @@
+## **一、背景**
+
+如果运维工程师手中没有高效的运维监控工具，就很难快速处理网络故障。市面上有很多运维监控工具，例如商业版的Solarwinds,OpManager、开放源码的
+MRTG、Nagios、 Cacti、 Zabbix、 OpenNMS、
+Ganglia等。但它们之间产生的数据不相关联，不能共享，所以即使部署了这些工具，许多操作人员也没有真正地从中解脱，成千上万条警告信息聚集在一起，很难找出问题的根源。
+
+此外,在传统的运维环境中，在查看各种监控系统时需要多次登录，查看界面繁多，更新管理的大部分工作大多是手工操作，即使是简单的系统更改，也需要运维人员逐个登录系统，如果遇到问题，管理员就会在各种平台之间来回查询，或者用人工查找故障关键词，不断重复这种工作方式。一个被称为
+OSSIM，即开放源代码信息管理系统(Open Source Security Information
+Management)的优秀开放源代码平台，企业需要一个能够满足专业化、标准化和流程化需求的综合安全的运维平台，以便在关联分析的基础上及时发现故障隐患。
+
+OSSIM系统从架构上来说是一个开放的框架，其核心价值在于能够创新地集成各种开源软件，其中的模块包括 C/S架构和 B/S架构，但是作为终端用户，主要掌握
+OSSIM WebUI采用的是 B/S架构，而 Web服务器则使用 Apache。图1显示了 OSSIM系统的结构示意图。
+
+![1610156976_5ff90bb0435f7e16ff802.png!small?1610156980560](https://image.3001.net/images/20210109/1610156976_5ff90bb0435f7e16ff802.png!small?1610156980560)
+
+图1 OSSIM系统结构
+
+架构说明：
+
+第一层，属于数据采集层，采用不同的采集技术来收集流量信息、日志信息、各种资产信息，经过归一化处理后将其传递到核心层。改层层包含了安全事件源，入侵检测、防火墙、重要主机发送的日志等都是安全事件源，按照发送机制可分为两类：模式侦查器和异常监视(两者都收集警告信息，具有互补功能)安全事件由其收集，然后再由代理转换成统一格式发送给
+OSSIM服务器， Sensor将在该层中完成工作。  
+层次2，属于核心处理层，主要实现了对各种数据的深加工处理，包括操作监控，安全分析，策略管理，风险评估，关联分析，安全目标管理，漏洞管理，事件管理，报表管理等。OSSIM服务器是这一层的主角，
+OSSIM服务器的主要功能是安全事件的集中和集中后的事件的关联分析、风险评估和严重程度的标注等。“集中”就是把所有系统生成的安全事件告警信息(Alarms)以一种统一的格式组织起来，并将所有网络安全事件的告警信息存储到数据库中，这样就完成了对网络中生成事件的一个大视图。利用事件序列关联和启发式算法关联，系统能够更好地识别误报和发现攻击。  
+从本质上讲，
+OSSIM是通过对不同类型检测器和监视器产生的报警进行格式化处理，然后进行关联分析，通过后期这些处理可以改善探测性能，既减少了报警次数，又降低了关联引擎的压力，从整体上提高了报警质量。  
+第三层，属于数据显示层，主要负责完成与用户的交互，达到安全预警和事件监控，安全运行监控，综合分析的统一显示，形式上以图形的方式呈现给用户。控制台界面即
+OSSIM (Web User Interface, Web用户界面)，实际上是 OSSIM系统外部的门户网站，它主要由仪表盘、 SIEM控制台、
+Alarm控制台、资产漏洞扫描管理、可靠性监控、报告和系统策略等几部分组成。OSSIM传感器的部署和IDS传感器类似，在网络中的部署如下图所示。
+
+![1610155472_5ff905d00f44541ab2ba2.png!small?1610155476470](https://image.3001.net/images/20210109/1610155472_5ff905d00f44541ab2ba2.png!small?1610155476470)
+
+## 二、主要模块关系
+
+  
+OSSIM系统主要使用 PHP、 Python、 Perl和 C四种编程语言，
+OSSIM框架系统在软件层面由五大模块组成：代理模块、服务器模块、数据库模块、 Frameworkd模块和 Framework模块，组成结构图见2。
+
+![1610155025_5ff90411ddf79809a6fae.png!small?1610155030241](https://image.3001.net/images/20210109/1610155025_5ff90411ddf79809a6fae.png!small?1610155030241)
+
+图2 Ossim系统组成
+
+OSSIM主要功能模块与通信端口
+
+![1610157042_5ff90bf29a752b996e67f.png!small?1610157046859](https://image.3001.net/images/20210109/1610157042_5ff90bf29a752b996e67f.png!small?1610157046859)
+
+上述5个模块之间的数据流向如图3所示。
+
+![1610157126_5ff90c46c0ffba8f5786a.png!small?1610157131097](https://image.3001.net/images/20210109/1610157126_5ff90c46c0ffba8f5786a.png!small?1610157131097)  
+
+图3 5大模块的数据流向
+
+① Agent至Server：来自各个传感器的安全事件被对应Agent格式化后，以加密字符串传给Server。
+
+② Server至Agent：发送有关请求命令（request
+command），以字符串方式向Agent传送，主要是要求Agent完成插件的启动停止及获取信息等。
+
+③ Server至Frameworkd:发送请求命令，要求Frameworkd针对Alarm采取相应操作，例如执行外部程序或发出Email来通知管理员。
+
+④ Framework至Server：发送请求命令至Server。要求Server通知Agent对插件（Plugins）进行启动、停止等操作。
+
+⑤ Framework至Frameworkd:发送请求命令，要求Frameworkd启动OpenVas扫描进程。
+
+⑥ Frameworkd至Framework:传送OpenVas扫描结果在前端页面中显示。
+
+⑦ Database至Agent和Server：向Agent和Server提供数据。
+
+⑧ Server至Database：Server需要将Events、Alarms等数据存入数据库并索引或更新操作。
+
+⑨ Database至Frameworkd:在Frameworkd中的Openvas扫描和动作需要用调用数据库里的数据。
+
+⑩ Frameworkd至Database：在Frameworkd执行过程中将Openvas扫描结果存入数据库。
+
+⑾Database至Framework:PHP页面显示需要调用数据库的告警事件。
+
+⑿Framework至Database：用户参数设置信息需要存入数据库。
+
+  
+
+##  **三、安全插件（** **Plugins** **）**
+
+OSSIM系统中有很多插件，大致可以划分为采集(Collection)插件和监控(Monitor)插件。每一个插件又分为 ID和
+SID两大类。采集器插件主要通过诸如 SNMP, Syslog, WMI这样的协议来采集数据，在 Sensor中常见的采集器插件有ossec-single-line, ssh, syslog,wmi-system-logger等，其中 SNMP和 WMI协议在 Agent采集数据时都会主动地进行采集；而
+Syslog协议则是被动地接受采集数据。图4中显示了具体情况。
+
+![1610155891_5ff90773856cc537905c4.png!small?1610155895896](https://image.3001.net/images/20210109/1610155891_5ff90773856cc537905c4.png!small?1610155895896)
+
+图 4 查看插件
+
+监控插件包括malwaredomainlist、nessus、nmap、ntop、ocs、ossim等，如图5所示。
+
+![1610155891_5ff9077384f1d92e1a4f9.png!small?1610155895896](https://image.3001.net/images/20210109/1610155891_5ff9077384f1d92e1a4f9.png!small?1610155895896)
+
+当这些插件加载完毕之后，我们可以到Web UI中Configuration→Deployment→Components→Sensors栏目下的“Sensor
+Status”查看所添加的监控插件的工作状态，如图6所示。
+
+![1610153940_5ff8ffd49c36a805d7204.png!small?1610153945072](https://image.3001.net/images/20210109/1610153940_5ff8ffd49c36a805d7204.png!small?1610153945072)
+
+图6 查看Sensor监控插件工作状态
+
+  
+
+UNIX/Linux环境下，大部分系统都安装有SNMP与Syslog工具。如果采集数据的目标系统为Windows，那么考虑使用WMI协议，此时只需要在Windows上进行相关配置，以便能够远程访问，无需安装额外的工具软件。
+
+##  **四、** **采集与监控插件的区别**
+
+在OSSIM系统的Sensor端包含了采集（Collection）和监控（Monitor）这两类插件统称为安全插件，它们都安装在Sensor上。虽然都称为插件可工作原理却不同，检测插件（Detector）是检测器信息产生后，由代理自动向服务器发送，包括Snort、Apache等。而检测器插件需要主动采集安全设备接口上的信息，这类插件可分为Snort、P0f、Prads、Arpwatch、Apache、SSH、Sudo等。
+
+监控(Monitor)插件，必须由服务器主动发起查询请求。监控插件中定义了需要主动采集的安全设备接口，该模块接收控制中心发出的命令和查询，在OSSIM系统中典型Monitor插件有Ntop、Nmap、Nessus等。读者可在Alienvault控制台的Sensor配置中（Configure
+Monitor Plugins）查看。OSSIM主要安全插件如表1所示。
+
+表1 OSSIM主要插件分布情况
+
+![1610150469_5ff8f245c9d0058c85dba.png!small?1610150474279](https://image.3001.net/images/20210109/1610150469_5ff8f245c9d0058c85dba.png!small?1610150474279)
+
+对OSSIM插件位置的说明：在安装时系统将支持的插件，全部复制到目录/etc/ossim/agent/plugins/目录中，如Nagios插件的扩展名为“.cfg”的文本文件，可以用任何编辑器修改，在每个插件配置文件中最难理解的当属理解正则表达式(RegExp)。OSSIM下主要插件如图7所示。
+
+![1610157238_5ff90cb6ceb3af1b00818.png!small?1610157243127](https://image.3001.net/images/20210109/1610157238_5ff90cb6ceb3af1b00818.png!small?1610157243127)
+
+图7 规则与插件路径
+
+在安装过程中，选择插件系统在启动时的载入量(插件载入量越大消耗的内存越多)。要特别关注插件的详细信息，可以访问/etc/ossim/agent/config.cf
+g配置文件，同时还可以在系统/etc/ossim/ossim_setup.co
+nf的[sensor]项中找到监控插件(monitors)和检测插件(detector)各自包含的细节。就插件而言，
+OSSIM缺省提供了数百个插件，涉及8个大类，在表1-2中只列出了很小的一部分，
+OSSIM系统根据插件的分布和数量，包含了几乎所有的常用插件类型。比如运营设备 Cisco, CheckPoint,F5, Fortigate,
+Netscreen, Sonicwall,
+Symantec等等，如果遇到了无法识别设备的插件，就只能自己编写它了，后面的内容将详细介绍，插件已经载入，见图8。
+
+![1610154786_5ff903229ff43c0cebecc.png!small?1610154792547](https://image.3001.net/images/20210109/1610154786_5ff903229ff43c0cebecc.png!small?1610154792547)
+
+图8 查看传感器启用的插件情况
+
+从图中看出，此Sensor系统中启用了6个插件，如何在Web上展示出来呢？如图所示总共531个插件在Plugins enabled中启用了6个插件。
+
+![1610154846_5ff9035ec1ca586bae718.png!small?1610154851221](https://image.3001.net/images/20210109/1610154846_5ff9035ec1ca586bae718.png!small?1610154851221)
+
+图9 查看加载插件详情
+
+从图10看出这里显示9个插件，我们可打开/etc/ossim/ossim_setup.conf文件查看。
+
+![1610154214_5ff900e6234f5c7c640ce.png!small?1610154218549](https://image.3001.net/images/20210109/1610154214_5ff900e6234f5c7c640ce.png!small?1610154218549)
+
+图10 从Ossim配置文件中查看插件
+
+  
+
+##  **五、** **检测器（** **Detector** **）**
+
+在 OSSIM下的检测器可以收集资源信息和监听当前网段中的包，其中主要包括 ntop, prads, suricata,
+ossec等，后续章节将详细介绍有关内容。
+
+  
+
+##  **六、** **代理（** **Agent** **）**
+
+Agent (因为 Agent是用 Python语言编写的，因此可以在 Python
+Shell环境中运行而不需要编译)将运行在多个主机上，负责从安全设备收集相关信息(如报警日志等)，并将所收集的各种类型的信息进行统一的格式处理，最终将数据传送给服务器。  
+就收集方式而言， Agent属于主动收集，可以将图像理解为 OSSIM Server插入各个监控网段的“耳边”，由它们收集数据，并主动推送到
+Collector, Collector再与消息队列系统、缓存系统和存储系统相连。  
+在 OSSIM中，这些代理脚本位于/usr/share/alienvault/ossim-agent/目录下，并且在. pyo中对其进行了加密。
+
+![1610150673_5ff8f311673afc699f67c.png!small?1610150678377](https://image.3001.net/images/20210109/1610150673_5ff8f311673afc699f67c.png!small?1610150678377)
+
+举例来说， OSSIM代理(ossim-agent)直接读取存储在/var/log/suricata/unified2.al
+ert.1428975051日号文件中的数据。  
+Suricata的警报输出文件是/var/log/suricata/unified2.alert，它由/etc/suricata/suricata.
+yaml配置文件在第111行# alert output for use withBarnyard2中定义，因此可以在 SIEM控制台上显示ossim-agent直接读取该文件。  
+Agent的主要功能是接收或抓取由 Plugins发送或生成的日志，这些日志经过归一化处理，然后有序地传输到 OSSIM的服务器上，由于
+Agent设计时考虑到了 Agent和服务器之间的网络中断、阻塞、丢包等情况，所以其功能非常复杂。  
+OSSIM系统的免费版本在大多数情况下不能实现实时日志处理，但是可以实现准实时(FirmReal-Time)，并且通常需要在
+Agent端进行缓存，才能将数据发送到服务器端。代理将主动连接两个端口与外部通信，其中一个端口连接服务器的40001端口(在/etc/ossim/agent/config.cf
+g配置文件的选项[output-server]中可以看到通讯端口为40001)，另一个端口连接数据库的3306端口。在图11中可以看到。
+
+![1610155192_5ff904b87aa27ff426b81.png!small?1610155196795](https://image.3001.net/images/20210109/1610155192_5ff904b87aa27ff426b81.png!small?1610155196795)
+
+图11 日志归一化处理、收集与存储
+
+原始日志被分成若干段填充到相应的域中，这些字段如下：
+
+l
+date、sensor、interface、plugin_id、plugin_sid、priority、protocol、src_ip、src_port、dst_ip、dst_port
+
+l
+username、password、filename、userdata1、userdata2、userdata3、userdata4、userdata5、userdata6、userdata7、userdata8、userdata9
+
+其实Sensor的输出数据就是Ossim Server的输入“原料”，我们可在WebUI中查看Sensor的output情况。如图12所示。
+
+![1610154817_5ff9034187897a959bfc6.png!small?1610154821915](https://image.3001.net/images/20210109/1610154817_5ff9034187897a959bfc6.png!small?1610154821915)
+
+图12 Sensor输出
+
+##  **七、报警格式的解码**
+
+报警信息的接收过程中，为了应对报警信息格式的变化，OSSIM采用基于正则表达式的方法对报警信息进行匹配，解析报警事件获取关键信息。正则表达式是一串记录文本规则的代码组合，它的作用是用来进行文本匹配。例如对空白字符、数字字符、中英文字符、IP和
+E-mail地址等匹配，简单的说它就是一个普通的字符查找串。
+
+举例来说，下面的正则表达式匹配 Snort警报信息。
+
+5/26-01:02:17.670721 [**] [1:1419:9] SNMP trap udp [**] [Classification:
+Attempted
+
+Information Leak] [Priority: 2] {UDP} 20.20.13.17:162 -> 20.20.20.78:162
+
+<ids>
+
+<name>snort</name>
+
+<method>net_socket</method>
+
+<regex>^(\d+/\d+-\d+:\d+:\d+).\d+\s+[**] [\d:(\d+):\d+] \\.+[Classification:
+(\\.+)]
+
+[Priority: (\d)] {(\\.+)}
+(\d+.\d+.\d+.\d+)\p*(\d*)->(\d+.\d+.\d+.\d+)\p*(\d*)</regex>
+
+<order>time,id,classtype,priority,protocol,srcip,srcport,dstip,dstport</order>
+
+<mapping>snort_classtype,snort_id</mapping>
+
+</ids>
+
+这使得正则表达式能够提取诸如时间， ID，分类，警报级别，协议，源 IP，源端口，目标
+IP，目标端口等信息。接下来，您可以将这些字段存储到标准化表中，并最终通过 Web界面进行显示。
+
+  
+
+## 八、OSSIM Agent
+
+Agent运行在Sensor中，负责从各安全设备、安全工具的插件中采集相关信息(比如IIS服务日志、Snort报警日志等)，并将采集到的各类信息统一格式，再将这些数据传至Server，例如将Snort系统产生的报警信息收集并存储在OSSIM
+Server中。
+
+OSSIM
+Agent中所有脚本采用Python编写，相关目录在/etc/ossim/agent/，代理插件目录在/etc/ossim/agent/plugins/，配置文件路径：/etc/ossim/agent/config.cfg，OSSIM系统的代理信息查看方法，通过Analysis→Detection下的HIDS标签中Agents查看。结构如图13所示。
+
+![1610155066_5ff9043ac9f2ee695c04a.png!small?1610155071164](https://image.3001.net/images/20210109/1610155066_5ff9043ac9f2ee695c04a.png!small?1610155071164)
+
+图13 Agent结构
+
+  * 40002/tcp： 监听服务器的原始请求。
+  * Listener： 接收服务器连接请求。
+  * Active： 接收服务器输入并且根据请求扫描主机。
+  * Engine： 管理线程，处理监视器请求。
+  * Detector Plugin：读取日志和进行归一化处理。
+  * Monitor Plugin：请求监视器数据。
+  * DB-Connect： 连接到本地/远程OSSIM数据库。
+  * Watchdog： 监视进程启动/停止进程，检查各插件是否已经开始运行。
+
+如遇意外，它会发现并重启相关进程，它自动检查时间为180秒，重启进程时间为3600秒，其值可以在/etc/ossim/agent/config.cfg配置文件中修改。
+
+注意：OSSIM系统中出了引入HIDS（通过OSSEC实现），还引入了NIDS（通过suricata实现），因为基于主机的入侵检测系统还无法完全满足网络安全需要，NIDS可以捕捉和分析网络数据包也分析协议。NIDS可以部署在各个网段，只对监控网段进行监听，不会影响网络的运行。但做为Sensor也有缺点，如果网络流量一旦超过阈值，就会导致丢包。
+
+提示：OSSIM中定义的大部分插件其日志都默认存放在/var/log/syslog中，所以自定义插件式往往需要修改日志的存放位置，在下文中的例子将详细讲解。
+
+表2 插件的日志路径
+
+ **Ossim Agent** **插件**
+
+|
+
+ **ID**
+
+|
+
+ **日志位置**
+
+|
+
+ **备注**  
+  
+---|---|---|---  
+  
+Apache
+
+|
+
+1501
+
+|
+
+/var/log/apache2/access.log /var/log/apache2/error.log
+
+|
+
+  
+  
+  
+Arpwatch
+
+|
+
+1512
+
+|
+
+/var/log/ossim/arpwatch-eth0.log
+
+|
+
+  
+  
+  
+Avast
+
+|
+
+1567
+
+|
+
+/var/log/avast.log
+
+|
+
+  
+  
+  
+bind
+
+|
+
+1577
+
+|
+
+/var/log/bind.log
+
+|
+
+  
+  
+  
+bluecoat
+
+|
+
+1642
+
+|
+
+/var/log/bluecoat.log
+
+|
+
+  
+  
+  
+Cisco-asa
+
+|
+
+1636
+
+|
+
+/var/log/cisco-asa.log
+
+|
+
+  
+  
+  
+Cisco-pix
+
+|
+
+1514
+
+|
+
+/var/log/cisco-pix.log
+
+|
+
+  
+  
+  
+cisco-route
+
+|
+
+1510
+
+|
+
+/var/log/syslog
+
+|
+
+内容非常详细  
+  
+cisco-vpn
+
+|
+
+1527
+
+|
+
+/var/log/syslog
+
+|
+
+  
+  
+  
+Exchange
+
+|
+
+1603
+
+|
+
+/var/log/syslog
+
+|
+
+  
+  
+  
+Extreme-switch
+
+|
+
+1672
+
+|
+
+/var/log/extreme-switch.log
+
+|
+
+  
+  
+  
+F5
+
+|
+
+1614
+
+|
+
+/var/log/syslog
+
+|
+
+  
+  
+  
+fortigate
+
+|
+
+1554
+
+|
+
+/var/log/fortigate.log
+
+|
+
+  
+  
+  
+Fw1ngr60
+
+|
+
+1504
+
+|
+
+/var/log/ossim/fw1.log
+
+|
+
+  
+  
+  
+gfi
+
+|
+
+1530
+
+|
+
+/var/log/syslog
+
+|
+
+  
+  
+  
+heartbeat
+
+|
+
+1523
+
+|
+
+/var/log/ha-log
+
+|
+
+  
+  
+  
+iis
+
+|
+
+1502
+
+|
+
+/var/log/iisweb.log
+
+|
+
+  
+  
+  
+ipfw
+
+|
+
+1529
+
+|
+
+/var/log/messages
+
+|
+
+  
+  
+  
+Iptables
+
+|
+
+1503
+
+|
+
+/var/log/syslog
+
+|
+
+  
+  
+  
+Juniper-vpn
+
+|
+
+1609
+
+|
+
+/var/log/juniper-vpn.log
+
+|
+
+  
+  
+  
+kismet
+
+|
+
+1596
+
+|
+
+/var/log/syslog
+
+|
+
+  
+  
+  
+linuxdhcp
+
+|
+
+1607
+
+|
+
+/var/log/ossim/dhcp.log
+
+|
+
+  
+  
+  
+M0n0wall
+
+|
+
+1559
+
+|
+
+/var/log/syslog
+
+|
+
+  
+  
+  
+mcafee
+
+|
+
+1571
+
+|
+
+/var/log/mcafee.log
+
+|
+
+  
+  
+  
+monit
+
+|
+
+1687
+
+|
+
+/var/log/ossim/monit.log
+
+|
+
+  
+  
+  
+nagios
+
+|
+
+1525
+
+|
+
+/var/log/nagios3/Nagios.log
+
+|
+
+  
+  
+  
+nessus
+
+|
+
+90003
+
+|
+
+/var/ossec/logs/archive/archive.log
+
+|
+
+  
+  
+  
+Nessus-detector
+
+|
+
+3001
+
+|
+
+/var/log/ossim/nessus_jobs
+
+|
+
+  
+  
+  
+netgear
+
+|
+
+1519
+
+|
+
+/var/log/syslog
+
+|
+
+  
+  
+  
+Netscreen-firewall
+
+|
+
+1522
+
+|
+
+/var/log/netscreen.log
+
+|
+
+  
+  
+  
+nfs
+
+|
+
+1631
+
+|
+
+/var/log/syslog
+
+|
+
+  
+  
+  
+Nortel-switch
+
+|
+
+1557
+
+|
+
+/var/log/syslog
+
+|
+
+  
+  
+  
+openldap
+
+|
+
+1586
+
+|
+
+/var/log/openldap/slapd.log
+
+|
+
+  
+  
+  
+osiris
+
+|
+
+4001
+
+|
+
+/var/log/syslog
+
+|
+
+  
+  
+  
+Ossec-idm
+
+|
+
+50003
+
+|
+
+/var/ossec/logs/alerts/alerts.log
+
+|
+
+  
+  
+  
+Ossim-agent
+
+|
+
+6001
+
+|
+
+/var/log/ossim/agent.log
+
+|
+
+  
+  
+  
+P0f
+
+|
+
+1511
+
+|
+
+/var/log/ossim/p0f.log
+
+|
+
+  
+  
+  
+Alienvault-dummy-server
+
+|
+
+  
+
+|
+
+/var/log/ossim/sem.log
+
+|
+
+  
+  
+  
+prads
+
+|
+
+1683
+
+|
+
+/var/log/prads-asset.log
+
+|
+
+  
+  
+  
+Prads_eth0
+
+|
+
+1683
+
+|
+
+/var/log/ossim/prads-eth0.log
+
+|
+
+  
+  
+  
+postfix
+
+|
+
+1521
+
+|
+
+/var/log/mail.log
+
+|
+
+  
+  
+  
+snare
+
+|
+
+1518
+
+|
+
+/var/log/snare.log
+
+|
+
+  
+  
+  
+Snort_syslog
+
+|
+
+1001
+
+|
+
+/var/log/snort/alert
+
+|
+
+  
+  
+  
+snortunified
+
+|
+
+1001
+
+|
+
+/var/log/snort
+
+|
+
+  
+  
+  
+sophos
+
+|
+
+1581
+
+|
+
+/var/log/ossim/sophos.log
+
+|
+
+  
+  
+  
+suiqd
+
+|
+
+1553
+
+|
+
+/var/log/squid/access.log
+
+|
+
+  
+  
+  
+ssh
+
+|
+
+4003
+
+|
+
+/var/log/auth.log
+
+|
+
+  
+  
+  
+sudo
+
+|
+
+4005
+
+|
+
+/var/log/auth.log
+
+|
+
+  
+  
+  
+Suricata-http
+
+|
+
+8001
+
+|
+
+/var/log/suricata/http.log
+
+|
+
+  
+  
+  
+suricata
+
+|
+
+1001
+
+|
+
+/var/log/suricata/
+
+|
+
+  
+  
+  
+Symantec-ams
+
+|
+
+1556
+
+|
+
+/var/log/syslog
+
+|
+
+  
+  
+  
+Vmware-esxi
+
+|
+
+1686
+
+|
+
+/var/log/vmware-esxi.log
+
+|
+
+  
+  
+  
+vsftpd
+
+|
+
+1576
+
+|
+
+/var/log/vsftpd.log
+
+|
+
+  
+  
+  
+webmin
+
+|
+
+1580
+
+|
+
+/var/log/auth.log
+
+|
+
+  
+  
+  
+websense
+
+|
+
+19004
+
+|
+
+/var/log/websense.log
+
+|
+
+  
+  
+  
+  
+
+|
+
+  
+
+|
+
+  
+
+|
+
+  
+  
+  
+表2分析了目录/etc/ossim/agent/plugin/中主要插件的日志输出情况，通过该表我们能够很容易的了解正则表达式的匹配情况。我们进入/etc/ossim/agent/plugings/目录，其下有197个插件，如何能了解每个插件的日志的匹配情况呢？例如SSH插件对应的文件为ssh.cfg，记录的日志文件为/var/log/auth.log，匹配的详情我们通过以下命令实现(在OSSIM
+4.4之后的版本中已去除了regexp.py调试脚本，大家可以到作者博客下载该脚本 ，以便完成后续试验)。
+
+下面看个Apache访问日志的例子，首先在/var/log/apache2/access.log中的两条日志如下：
+
+![1610154352_5ff90170a13b4afb1e825.png!small?1610154357002](https://image.3001.net/images/20210109/1610154352_5ff90170a13b4afb1e825.png!small?1610154357002)
+
+图14 Apache日志实例
+
+插件检测格式：
+
+./regexp.py log_filename regexp modifier
+
+  * y:显示不匹配的行 v: 显示匹配的行
+  * q: 只显示摘要
+
+如同在Linux定义别名一样，在regexp.py脚本中也定义了别名，区别是它采用aliases定义，详情如下：
+
+![581253-20171220110851615-883715867.jpg](https://image.3001.net/images/20210109/1610151532_5ff8f66c9146444108f33.jpg!small)
+
+图15 定义别名
+
+为了方便插件内容的定义，插件中使用了经常用到的内容来定义别名，这样做的好处是当今后在定义某一插件内容时，便可使用已定义的别名代替那个元素，比如用IPV4代替\d{1,3{\\.\d{1,3}\\.\d{1,3}\d{1,3}的定义。由此可知，插件中定义的Apache访问日志的正则表达式为：
+
+regexp=(\IPV4) (\S+) (\S+)
+\\[(?P<date>(\d\d)\/(\w\w\w)\/(\d\d\d\d):(\d\d):(\d\d):(\d\d)).+"(?P<info>.+)"
+(?P<sid>\d+) (\S+)
+
+通过插件匹配的详细结果如下：
+
+![1610154501_5ff902055c90a462bc6c3.png!small?1610154505713](https://image.3001.net/images/20210109/1610154501_5ff902055c90a462bc6c3.png!small?1610154505713)
+
+图16 Apache匹配结果
+
+由此可见，经过处理后的日志内容并没变，为了适应SIEM事件显示需要，实际日志中各项的排列顺序发生了改变，目的是方便阅读，方便更好的展示在SIEM控制台上。再接着看SSH和Snare的日志。
+
+#/usr/share/ossim/scripts/regexp.py /etc/ossim/agent/plugins/ssh.cfg
+/var/log/auth.log q
+
+![1610154597_5ff90265552a785c96c2f.png!small?1610154601637](https://image.3001.net/images/20210109/1610154597_5ff90265552a785c96c2f.png!small?1610154601637)
+
+图17 SSH匹配结果
+
+又例如：
+
+#/usr/share/ossim/scripts/regexp.py /var/log/snare2.log
+/etc/ossim/agent/plugins/landesk.cfg q
+
+Multiple regexp mode used, parsing /etc/ossim/agent/plugins/landesk.cfg
+
+\-----------------------------------------------------------------------------
+Rule: Landesk-sync-job-successed
+
+Matched 273 times
+
+Counted 274 lines.
+
+Matched 273 lines.
+
+了解OSSIM的其他插件
+
+![1610151094_5ff8f4b629869186af510.png!small?1610151100211](https://image.3001.net/images/20210109/1610151094_5ff8f4b629869186af510.png!small?1610151100211)
+
+##  **九、** **代理与插件的区别**
+
+新手经常混淆了代理和插件的概念， Sensor
+(传感器)指的是在网络中安装软硬件传感器并收集和发送数据，而代理是运行在传感器上，用于收集和发送数据到服务器的脚本，一个插件需要了解特定系统的日志格式(如防火墙、
+IDS)，并需要通过一个插件获取数据。  
+如果有更多的插件可用，那么系统中收集到的各种数据就会更全面， Sensor中载入过多的插件将占据 OSSIM
+Server的数据库空间，读者需要了解以下经验值： OSSIM系统中每个事件占用大约1 KB的存储空间，而1 millions占用大约1.5
+GB的存储空间。
+
+##  **十、** **传感器（** **Sensor** **）**
+
+传感器（Sensor）俗称探针，用来收集监控网段内主机的信息，它工作在网卡的嗅探模式。
+
+传感器工作在一台Debian Linux主机上，通过ISO镜像安装，对于新手来讲非常容易操作，他的目的是收集信息，发送给OSSIM
+Server。在一个分布式OSSIM系统平台上，可以有十多个传感器协同工作。传感器可以收集来自多个数据源的数据包，包括来自主机的，也包括来自网络的数据包，另外传感器除了收集数据（比如SPAN，Agent）以提供分析之外，还具有过滤功能可以通过Agent里面的plugin实现过滤冗余和无效数据的功能，已达到减少OSSIM
+Server端数据量，提高数据速度的效果。举个例子在对于来自同一个IP地址的数据，传感器可以通过模式匹配的方法来判断冗余数据，最终聚合成很少量的数据传送给OSSIM
+Server。
+
+此外，传感器还可以与本地代理(如 Ossecagent, Snare)，事件收发器通信，但传感器之间没有直接通信。
+
+OSSIM系统中，把Agent和插件构成的一个具有网络行为监控功能的组合称为一个传感器，Sensor的功能范围主要有：
+
+· 入侵检测(最新版已换成支持多线程的Suricata)
+
+· 漏洞扫描(OpenVas、Nmap)
+
+· 异常检测(P0f、Prads、ARPWatch等)
+
+Arpwatch主要监视网络中新出现的MAC地址，它包含1个监视库，名为arp.dat，在OSSIM中位于/var/lib/arpwatch/arp.dat，所以它同样是AIDE监控的对象。
+
+提示：
+
+OSSIM具有强大的网络威胁监控，流量监测的功能，但无法将威胁阻断，所以不能将其串联在防火墙链路，最佳方法是作为旁路链接使用,这一点就像部署审计设备一样。
+
+在OSSIM系统的传感器的状态可在Configuration→Deployment→Components→Sensors中查看详情，如图18所示。
+
+![1610153786_5ff8ff3a1dae74a38c141.png!small?1610153790635](https://image.3001.net/images/20210109/1610153786_5ff8ff3a1dae74a38c141.png!small?1610153790635)
+
+图18 多传感器
+
+查询Server/Sensor使用操作系统版本号
+
+ _#cat /etc/debian_version_
+
+在OSSIM分布式应用中有多个传感器，这时在图182中可以查看每个传感器的工作状态，包括IP地址、名称、优先级、工作状态等信息。
+
+OSSIM系统发展到4.3版本之后，传感器查询方式发生了变化，路径为Configuration→Deployment→Alienvault
+Center→Sensor Configuration→Detection，而且启动程序也发生些的变化，由Suritata代替了Snort。OSSIM
+Server默认就启动Alienvautl HIDS Alienvault NIDS prads。这3个检测器的状态无法通过Web界面直接进行修改。
+
+![1610153687_5ff8fed7afd6348770877.png!small?1610153692102](https://image.3001.net/images/20210109/1610153687_5ff8fed7afd6348770877.png!small?1610153692102)
+
+图19 传感器详情
+
+大家如果使用OSSIM4.1系统，查看系统检测插件时，Snort为启动状态，但OSSIM
+4.2后的系统Snort是关闭状态，代替它的是性能更强大的Suricata系统，同一个系统中两者只能任选其一。而Prads（Passive RealTime
+Asset Detection System）是OSSIM
+4.2之后又一款被动实时资产探测系统，它的主要功能就是被判断资产特征，如同一个指纹库，保存了各种系统特征，可以识别资产的操作系统类型、由ARP发现新增资产，根据开放端口判断打开的网络应用，因为各种设备和服务打开状态并不是一成不变，所以需要用Prads来监控变化后的状态。
+
+##
+
+## 十一、关联引擎
+
+关联引擎（Server）是OSSIM安全集成管理系统的核心部分，它支持分布式运行，负责将Agents传送来的归一化安全事件进行关联，并对网络资产进行风险评估。其工作流程见图1-20所示。
+
+![1610155149_5ff9048de2eacfd3d7181.png!small?1610155154271](https://image.3001.net/images/20210109/1610155149_5ff9048de2eacfd3d7181.png!small?1610155154271)
+
+图20 关联引擎的工作流程
+
+OSSIM服务器的核心组件功能包含：事件关联、风险评估和确定优先次序和身份管理、报警和调度、策略管理、IP信誉管理等，其配置文件在/etc/ossim/server目录中，文件分别为：
+
+  * alienvault-attacks.xml
+  * alienvault-bruteforce.xml
+  * alienvault-dos.xml
+  * alienvault-malware.xml
+  * alienvault-network.xml
+  * alienvault-scan.xml
+  * alienvault-policy.xml
+
+以上这些文件由开源OSSIM免费提供，策略为84条，在USM中则具有2千多条，这一数量远高于国内的IDS硬件设备，在OSSIM中它们采用XML编写易于理解，维护简单。
+
+![1610154725_5ff902e5d66dffcff8000.png!small?1610154730512](https://image.3001.net/images/20210109/1610154725_5ff902e5d66dffcff8000.png!small?1610154730512)
+
+关联引擎结构如图21所示，其工作过程由下面6个步骤组成：
+
+40001/tcp:Server首先监听 40001/tcp 端口，接收Agent
+连接和Framework请求。该端口大小由OSSIM系统在配置文件/etc/ossim/ossim_setup.conf中定义。
+
+我们在OSSIM系统中通过以下命令可以清晰查看到其工作端口。
+
+#lsof –Pnl +M –i4 |grep ossim-ser
+
+![1610153484_5ff8fe0cbdf15ec5aceab.png!small?1610153489121](https://image.3001.net/images/20210109/1610153484_5ff8fe0cbdf15ec5aceab.png!small?1610153489121)
+
+Connect:当连接到端口为40002指定的Agent时，连接到端口为40001的其他Server
+对采集事件进行分配和传递。该端口大小在/etc/ossim/agent/config.cfg文件的[output-idm]项配置，不建议更改。
+
+Listener:接收各个Agent的连接数据，并细分为Forwarding Server连接、Framework连接。
+
+DB Connect:主要是OSSIM DB连接、Snort DB连接和OSSEC DB连接
+
+Agent Connect:启动Agent连接，Forwarding Server连接。
+
+Engine:事件的授权、关联、分类。
+
+在OSSIM系统关联引擎的状态可在Configuration→Deployment→Components→Servers中查看。
+
+关联引擎启动
+
+OSSIM系统会启动关联引擎，有时系统调试也需要用到手工启动方式，命令如下：
+
+#ossim-server -d -c /etc/ossim/server/config.xml
+
+OSSIM-Message: Entering daemon mode...
+
+##  **十二、** **数据库**
+
+Ossim关联引擎（简称OSSIM
+Server）将事件关联结果写入数据库。系统用户可通过Framework(Web前端控制台)对Database进行访问。数据库中alienvault.event表是整个系统事件分析和策略调整的信息源。OSSIM从总体上将其划分为事件数据库(EDB)、知识数据库(KDB)、用户数据库(UDB)。OSSIM数据库用来记录与安全事件关联及配置等相关的信息，对应于设计阶段的KDB和EDB的关联事件部分；在Framework中使用ACID/BASE来作为Snort数据库的前端控制台，对应于设计阶段的EDB。此外ACL数据库相关表格可包含在OSSIM数据库中，用来记录用户行为，对应于设计阶段的UDB库。
+
+Ossim数据库分关系型数据库和非关系型数据库。OSSIM系统默认使用的MySQL监听端口是3306，为增其其处理性能，在Alienvault
+USM中采用MongoDB作为非关系型数据库。2013年将OSSIM 4.2发行版中用Percona_server5.5替换了原来的MySQL
+5.1，由于使用了XtraDB存储引擎，而且对MySQL进行了优化和改进，使其在功能和性能上明显提升。在2019年底的最新版本USM
+5.7中将Percona_server升级为功能强大的5.7。如果大家对OSSIM的架构和组成的了解还意犹未尽，敬请参阅《开源安全运维平台OSSIM疑难解析》。
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+

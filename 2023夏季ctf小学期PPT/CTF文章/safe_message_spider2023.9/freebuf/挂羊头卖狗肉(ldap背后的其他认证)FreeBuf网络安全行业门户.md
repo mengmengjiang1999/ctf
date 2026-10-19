@@ -1,0 +1,179 @@
+**先讲一个故事:**
+
+故事背景 :
+
+XX 互联网公司，内网大多数的系统(其中包含wiki)采用LDAP 提供用户中心授权，LDAP 服务通过 windows 下的AD
+默认实现。办公网接入通过LDAP 完成上网的二次认证。 LDAP 密码要求每三个月更新一次密码。 看似很安全的一个一个上网环境。
+
+某天，该公司的一个高级别的员工的密码出现了泄露。 因为泄露密码触发了一系列的安全事件。
+
+  1. XX 通过该密码，进入了该公司的办公网
+  2. 登录到了wiki系统，wiki 大家都知道，相当于一个公司内部的说明书了。其中有一个列表页面，里边列出了内部所有的系统，其中包含 xxx 管理系统。
+  3. 使用 泄露的密码登录到了xxx管理系统，发送了一个非法的文章。 (入侵完成，至此该公司才感知到入侵)
+  4. 该文章正式发布，内部意识到，系统入侵。封掉了，所有的高级别账号。
+  5. 高层为了解决这个问题，一次命令要求公司内部所有的系统强制替换动态密码登录。
+  6. 各种代码可控的系统，更新完全没有问题，直接对接到公司的统一登录系统，然后限制统一登录系统使用动态登录就OK了。 但是，对于一些闭源的商用产品 比如 wiki , jira 等，就没有办法了。
+  7. .............
+
+ **解决故事最后的问题:**
+
+如何修改一个商用闭源的系统的登录认证，有如下的两个思路,各有不同,各有优缺点。
+
+ **方案1 做一个认证的壳，包裹后端的真实服务**
+
+  1. 外层使用 nginx ,openresty 这些开源代理软件，做一个认证代理。真实后端作为隐藏资源，限制本地的ACL 只允许认证代理的访问。
+  2. 当用户通过认证代理访问后端资源的时候，先判断当前用户的会话信息。如果其中包含了认证的信息,那么直接透明代理到后端的真实资源。 如果其中未包含认证的信息，那么跳转到统一认证，进行身份认证，认证完成，回跳到认证代理，写入认证信息，然后重新刷新当前的请求。 
+  3. 这种解决办法存在一个问题，对于用户来讲，需要认证两次： 一次是认证的壳 (认证代理)，另一个是认证的后端真实服务。
+  4. 当然这种解决办法也有一定的优点，由于使用一个认证代理报过了后端真实服务的所有请求，同时这些请求都是包含了实名认证信息的。所以，这些资源对于内部系统使用审计是不可多得的资源,同时对这些审计日志按照等保的要求去做处理，也就直接帮后端的系统做了合规了。
+  5. api 用户授权相对困难，因为，封装了一层壳，所以，原有的通过api 调用系统的代码，不得不再封装一层壳的认证信息。这些对于一个api 调用为主的系统(比如harbor)是极不友好的，他们不得不修改原有的api调用方法。
+  6. 扩展性很棒，只需要提供一次封装就可以灵活的往这种结构里接入任何系统。后端真实服务无需做任何修改。只需要做好ACL限制即可。
+  7. 最后：如果能协调好用户的使用情绪，也不失为一个很棒的解决方案。 
+
+**方案2 重新定义一个ldap 认证模块的壳，重新定义密码验证规则**
+
+  1. 大多数系统，开源也好，闭源也好。八九成的系统都会支持ldap协议配置用户认证。所以，我们做一个ldap 认证的壳就好了。该服务通过ldap 协议解析用户名，密码重新定义用户认证规则即可。
+  2. 当用户访问系统输入用户密码以后，通过后端配置好的 ldap 服务端口发送到我们自定义的认证服务,解析出用户名，密码进而自定义完成认证即可。 
+  3. 这种思路相对灵活，只需要修改目标软件的认证服务配置即可。 同时，后端认证服务为自助开发，可以封装更丰富的认证逻辑。同时这种方案，配置比较简单，在应用程序的配置范围内就可以解决问题，无需做其他修改。
+  4. api用户相对友好，因为，认证逻辑完全在后端拦截的服务中，调用方无感知的认证。所以，可以在接入动态认证的基础上，提供一定许可范围并且安全的静态密码（一定长度，一定规则，一定有效期），供api用户使用。
+  5. 但是这种方案也有缺点。对于少数不支持ldap认证配置的系统，这种方案就无能为力了。
+
+ **具体实现:**
+
+ **方案1 实现:**
+
+通过 openresty , nginx 的模块扩展来实现。 比如 : <https://github.com/Siecje/nginx-auth-proxy>。
+
+或者 也可以通过lua 控制 各个hook 来完成这个需求。
+
+具体实现本文不讲述。
+
+ **方案2 实现:**
+
+通过一个提供ldap 服务的类库来实现请求拦截。作者通过
+
+<https://github.com/vjeantet/ldapserver>的类库来完成封装一个伪ldap
+服务，本文的主要目的是完成认证，所以，直接忽略了bind以外的其他的请求。如果读者感兴趣也可以，实现 Add , Modify , Delete
+的请求，就可以完全替代 ldap 服务了。 （暗笑）不过你把ldap 服务都实现了 , 那公司的AD 也就没啥用了，所以
+
+适可而止吧，少年。
+
+参考:
+<https://github.com/vjeantet/ldapserver/blob/master/examples/simple/main.go>来实现bind
+请求 .
+
+    
+    
+    // Listen to 10389 port for LDAP Request
+    // and route bind request to the handleBind func
+    package main
+    
+    import (
+    	"log"
+    	"os"
+    	"os/signal"
+    	"syscall"
+    
+    	ldap "github.com/vjeantet/ldapserver"
+    )
+    
+    func main() {
+    
+    	//ldap logger
+    	ldap.Logger = log.New(os.Stdout, "[server] ", log.LstdFlags)
+    
+    	//Create a new LDAP Server
+    	server := ldap.NewServer()
+    
+    	routes := ldap.NewRouteMux()
+    	routes.Bind(handleBind)
+    	server.Handle(routes)
+    
+    	// listen on 10389
+    	go server.ListenAndServe(":10389")
+    
+    	// When CTRL+C, SIGINT and SIGTERM signal occurs
+    	// Then stop server gracefully
+    	ch := make(chan os.Signal)
+    	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+    	<-ch
+    	close(ch)
+    
+    	server.Stop()
+    }
+    
+    // 封装具体的自定义的用户认证逻辑
+    func authUser(bindName, bindPass string) bool {
+    	return true
+    }
+    
+    // 返回匹配用户的DN
+    func dnMaker(bindName string) string {
+    	return bindName
+    }
+    
+    func handleBind(w ldap.ResponseWriter, m *ldap.Message) {
+    	r := m.GetBindRequest()
+    	res := ldap.NewBindResponse(ldap.LDAPResultSuccess)
+    
+    	bindName := string(r.Name())
+    	bindPass := string(r.AuthenticationSimple())
+    
+    	log.Printf("Bind failed User=%s, Pass=%s", bindName, bindPass)
+    
+    	if authUser(bindName, bindPass) {
+    		res.SeMatchedDN(dnMaker(bindName))
+    		w.Write(res)
+    		return
+    	}
+    
+    	res.SetResultCode(ldap.LDAPResultInvalidCredentials)
+    	res.SetDiagnosticMessage("invalid credentials")
+    	w.Write(res)
+    }
+      
+      
+    
+
+注：这个实例代码只是实现了简单的bind 请求的判断。
+
+多数系统会让用户配置一个 base dn , filter 这类请求则需要用户实现 handleSearch 请求。
+
+这类认证的具体流程如下:
+
+  1. 使用admin dn ,pass 完成管理员认证
+  2. 通过 filter 构建搜索条件，发往认证服务器，完成搜索 ,获取用户的信息
+  3. 根据用户的返回信息再次触发bind 请求。 
+
+一个简单的handleSearch 实现如下:
+
+    
+    
+    func handleSearch(w ldap.ResponseWriter, m *ldap.Message) {
+    	r := m.GetSearchRequest()
+    	log.Printf("Request BaseDn=%s", r.BaseObject())
+    	log.Printf("Request Filter=%s", r.FilterString())
+    	log.Printf("Request Attributes=%s", r.Attributes())
+    
+    	select {
+    	case <-m.Done:
+    		log.Printf("Leaving handleSearch... for msgid=%d", m.MessageID)
+    		return
+    	default:
+    	}
+    
+    	e := ldap.NewSearchResultEntry("cn=Valere JEANTET, " + string(r.BaseObject()))
+    	// 配置邮件属性
+    	e.AddAttribute("mail", "valere.jeantet@gmail.com")
+    	// 通过 AddAttribute 可以添加其他复杂的属性
+    	w.Write(e)
+    
+    	res := ldap.NewSearchResultDoneResponse(ldap.LDAPResultSuccess)
+    	w.Write(res)
+    
+    }
+
+最后 , 对于动态认证的需求，需要在一个库中存储用户和种子的对应关系。当请求过来的时候，通过用户名获取匹配到的种子，通过OTP 算法计算对应的密码
+进行匹配即可。
+
+注: 种子数据注意加密，并妥善保管相应的秘钥。
+

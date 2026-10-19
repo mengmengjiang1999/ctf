@@ -1,0 +1,693 @@
+# 一种输入回显限制的CLI编写思路
+
+阅读量 **159940**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2022-01-13 14:30:10
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t011abbc6399dac836f.jpg)
+
+## 0x00 写在前面
+
+前两天对某厂商的路由器进行测试(已获授权)时，发现目标设备的`SSH/Telnet`连入后会被强制进入一个`CLI`中。此`CLI`会对用户的输入进行限制，当用户输入的命令不是预置命令时将会无法回车提交。于是对此种`CLI`的实现机制产生了兴趣，本文将说明一种可行的安全`CLI`的编写思路。
+
+## 0x01 实现思路
+
+首先最直观的想法，我们无法使用空格进行提交，说明回车符(`Space`)被程序忽略了。或者说，我们的输入并没有被预期的打印，那么按这个思路来想，可以很容易的想到`Linux`下的密码输入有同样的特点。
+
+![](https://p5.ssl.qhimg.com/t018665035e5e2c24f5.png)
+
+在输入密码时，我们的输入能被后端捕获，但是不会显示在屏幕上，同时`^C`之类的控制指令也会同时失效。
+
+## 0x02 库函数实现
+
+那么`Linux`是否提供了相应的函数以供我们使用呢？答案是肯定的，那就是`getpassword`函数。
+
+在`man`手册中，此函数的函数原型如下：
+
+    
+    
+    #include <unistd.h>
+    char *getpass(const char *prompt);
+    
+
+函数描述为：
+
+    
+    
+    DESCRIPTION         top
+           This function is obsolete.  Do not use it.  If you want to read
+           input without terminal echoing enabled, see the description of
+           the ECHO flag in termios(3).
+    
+           The getpass() function opens /dev/tty (the controlling terminal
+           of the process), outputs the string prompt, turns off echoing,
+           reads one line (the "password"), restores the terminal state and
+           closes /dev/tty again.
+    
+
+显然，此函数是一个过时函数了，但是我们或许可以从它的实现中找到我们真正感兴趣的东西。（函数定义位于`glibc/misc/getpass.c`）
+
+    
+    
+    /* Copyright (C) 1992-2019 Free Software Foundation, Inc.
+       This file is part of the GNU C Library.
+    
+       The GNU C Library is free software; you can redistribute it and/or
+       modify it under the terms of the GNU Lesser General Public
+       License as published by the Free Software Foundation; either
+       version 2.1 of the License, or (at your option) any later version.
+    
+       The GNU C Library is distributed in the hope that it will be useful,
+       but WITHOUT ANY WARRANTY; without even the implied warranty of
+       MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+       Lesser General Public License for more details.
+    
+       You should have received a copy of the GNU Lesser General Public
+       License along with the GNU C Library; if not, see
+       <http://www.gnu.org/licenses/>.  */
+    
+    #include <stdio.h>
+    #include <stdio_ext.h>
+    #include <string.h>        /* For string function builtin redirect.  */
+    #include <termios.h>
+    #include <unistd.h>
+    
+    #include <wchar.h>
+    #define flockfile(s) _IO_flockfile (s)
+    #define funlockfile(s) _IO_funlockfile (s)
+    #include <libc-lock.h>
+    
+    /* It is desirable to use this bit on systems that have it.
+       The only bit of terminal state we want to twiddle is echoing, which is
+       done in software; there is no need to change the state of the terminal
+       hardware.  */
+    
+    #ifndef TCSASOFT
+    #define TCSASOFT 0
+    #endif
+    
+    static void call_fclose (void *arg)
+    {
+      if (arg != NULL)
+        fclose (arg);
+    }
+    
+    char * getpass (const char *prompt)
+    {
+      FILE *in, *out;
+      struct termios s, t;
+      int tty_changed;
+      static char *buf;
+      static size_t bufsize;
+      ssize_t nread;
+    
+      /* Try to write to and read from the terminal if we can.
+         If we can't open the terminal, use stderr and stdin.  */
+    
+      in = fopen ("/dev/tty", "w+ce");
+      if (in == NULL)
+        {
+          in = stdin;
+          out = stderr;
+        }
+      else
+        {
+          /* We do the locking ourselves.  */
+          __fsetlocking (in, FSETLOCKING_BYCALLER);
+    
+          out = in;
+        }
+    
+      /* Make sure the stream we opened is closed even if the thread is
+         canceled.  */
+      __libc_cleanup_push (call_fclose, in == out ? in : NULL);
+    
+      flockfile (out);
+    
+      /* Turn echoing off if it is on now.  */
+    
+      if (__tcgetattr (fileno (in), &t) == 0)
+        {
+          /* Save the old one. */
+          s = t;
+          /* Tricky, tricky. */
+          t.c_lflag &= ~(ECHO|ISIG);
+          tty_changed = (tcsetattr (fileno (in), TCSAFLUSH|TCSASOFT, &t) == 0);
+        }
+      else
+        tty_changed = 0;
+    
+      /* Write the prompt.  */
+      __fxprintf (out, "%s", prompt);
+      __fflush_unlocked (out);
+    
+      /* Read the password.  */
+      nread = __getline (&buf, &bufsize, in);
+      if (buf != NULL)
+        {
+          if (nread < 0)
+        buf[0] = '\0';
+          else if (buf[nread - 1] == '\n')
+        {
+          /* Remove the newline.  */
+          buf[nread - 1] = '\0';
+          if (tty_changed)
+            /* Write the newline that was not echoed.  */
+            __fxprintf (out, "\n");
+        }
+        }
+    
+      /* Restore the original setting.  */
+      if (tty_changed)
+        (void) tcsetattr (fileno (in), TCSAFLUSH|TCSASOFT, &s);
+    
+      funlockfile (out);
+    
+      __libc_cleanup_pop (0);
+    
+      if (in != stdin)
+        /* We opened the terminal; now close it.  */
+        fclose (in);
+    
+      return buf;
+    }
+    
+
+可以看到，此函数有会在入口尝试启动一个新的`tty`用于之后的操作，若没有多余的`tty`，将会尝试直接使用`stdin`和`stderr`作为输入输出流，随后它调用了`tcsetattr`对`stdin`进行了设置，然后就进入了文本读取逻辑，最后同样调用了`tcsetattr`进行了设置恢复从而使`stdin`恢复了正常，那么看起来最核心的函数就是`tcsetattr`了。
+
+## 0x03 核心函数
+
+我们来看看`tcsetattr`函数的实现，在`man`手册中，它的函数原型如下：
+
+    
+    
+    #include <termios.h>
+    
+    int tcsetattr(int fildes, int optional_actions,const struct termios *termios_p);
+    
+
+`tcsetattr()`函数使用`termios_p`参数指向的`termios`结构体对`fildes`参数指定的文件描述符所对应的处于开启状态的文件流进行设置。`optional_actions`用于指定此配置生效的时机，定义如下：
+
+  * `TCSANOW`：此配置应立即生效。
+  * `TCSADRAIN`：在所有写入`fildes`的输出信息传输后生效，若更改会影响输出的参数时应使用此配置。
+  * `TCSAFLUSH`：在所有写入`fildes`的输出信息传输后生效，并且在更改之前应丢弃迄今为止接收到但未读取的所有输入。
+
+那么接下来来看看`termios`结构体：
+
+    
+    
+    tcflag_t c_iflag;      /* input modes */
+    tcflag_t c_oflag;      /* output modes */
+    tcflag_t c_cflag;      /* control modes */
+    tcflag_t c_lflag;      /* local modes */
+    cc_t     c_cc[NCCS];   /* special characters */
+    
+
+据`man`手册所述，没有对`termios`结构体的标准定义，但是一个`termios`结构体至少要求包含以上成员，而这恰好也是我们要用的成员变量。
+
+### 输入模式控制`c_iflag`——控制终端输入方式
+
+键值 | 意义  
+---|---  
+`IGNBRK` | 忽略`BREAK`键输入  
+`BRKINT` |
+如果同时设置了`IGNBRK`，`BREAK`键的输入将被忽略，如果设置了`BRKINT`但是没有设置`IGNBRK`，`BREAK`键将导致输入和输出队列被刷新。如果终端是前台进程组的控制终端，这会导致此终端向前台进程组发送`SIGINT`中断信号。
+当 `IGNBRK`和`BRKINT`均未设置时，`BREAK`键的输入将会被读取为空字节
+(`\0`)，除非设置了`PARMRK`，此时`BREAK`键的输入将会被读取为序列`\377 \0 \0`  
+`IGNPAR` | 忽略帧错误和奇偶校验错误  
+`PARMRK` | 如果设置了该位，则在输入传递给程序时会标记具有奇偶校验错误或帧错误的输入字节。
+仅当`INPCK`置位且`IGNPAR`未置位时，该位才有意义。 标记错误字节的方式是使用两个前面的字节，`\377`和`\0`。
+因此，对于从终端接收到的一个错误字节，该程序实际上读取了三个字节。
+如果有效字节的值为`\377`，并且未设置`ISTRIP`，则程序可能会将其与标记奇偶校验错误的前缀混淆。
+因此，这种情况下有效字节`\377`作为两个字节`\377
+\377`传递给程序。如果`IGNPAR`和`PARMRK`均未设置，则将具有奇偶校验错误或帧错误的字符读取为`\0`  
+`INPCK` | 对输入内容启用奇偶校验  
+`ISTRIP` | 去除字符的第`8`个比特  
+`INLCR` | 将输入的`NL`(换行)转换成`CR`(回车)  
+`IGNCR` | 忽略输入的回车  
+`ICRNL` | 将输入的回车转化成换行(如果`IGNCR`未设置的情况下)  
+`IUCLC` | 将输入的大写字符转换成小写字符(非`POSIX`)  
+`IXON` | 允许输入时对`XON/XOFF`流进行控制  
+`IXANY` | (`XSI`扩展)输入任何字符都将重新启动停止的输出(默认是只允许`START`字符重新启动输出)  
+`IXOFF` | 允许输入时对`XON/XOFF`流进行控制(笔者注：此处可能是手册有误，推测应为关闭`XON/XOFF`流控)  
+`IMAXBEL` | 当输入队列已满时响铃，`Linux`没有实现这个位，它会视为此标志永远被设置(非`POSIX`)  
+`IUTF8` | 将输入视为`UTF8`，这将允许在`cooked`模式下正确执行字符擦除  
+  
+>
+> ·`Break`键是电脑键盘上的一个键。`Break`键起源于`19`世纪的电报。在`DOS`时代，`Pause/Break`是常用键之一，但是近年来该键的使用频率逐年减少。在某些较旧的程序中，按这个键会使程序暂停，若同时按`Ctr`l，会使程序停止而无法执行。
+>
+> 因为`Break`可以中断程序，所以`Break`键也被称为`Pause`键。
+
+### 输出模式控制`c_oflag`——控制终端输出方式
+
+键值 | 意义  
+---|---  
+`OPOST` | 启用先处理后输出机制  
+`OLCUC` | 在输出时将小写字符映射为大写(非`POSIX`)  
+`ONLCR` | (`XSI`扩展)在输出时将`NL`(换行) 映射到`CR-NL`(回车-换行)  
+`OCRNL` | 将输入的`CR`(回车)转换成`NL`(换行)  
+`ONOCR` | 不在第`0`列输出`CR`(回车)  
+`ONLRET` | 不输出`CR`(回车)  
+`OFILL` | 发送填充字符以延迟终端输出，而不是使用定时延迟  
+`OFDEL` | 将填充字符设置为`ASCII DEL`(`0177`)，如果未设置此标志，则填充字符为`ASCII
+NUL`(`\0`)(未在`Linux`上实现)  
+`NLDLY` | 换行输出延时，可以取`NL0`(不延迟)或`NL1`(延迟`0.1s`)
+[需要`_BSD_SOURCE`或`_SVID_SOURCE`或`_XOPEN_SOURCE`]  
+`CRDLY` |
+回车输出延时，可以取`CR0`、`CR1`、`CR2`或`CR3`[需要`_BSD_SOURCE`或`_SVID_SOURCE`或`_XOPEN_SOURCE`]  
+`TABDLY` |
+水平制表符输出延时，可以取`TAB0`、`TAB1`、`TAB2`、`TAB3`(或`XTABS`，但请参阅`BUGS`部分)。`TAB3`即`XTABS`代表将制表符扩展为空格(每八列停止输出一次制表符)[需要`_BSD_SOURCE`或`_SVID_SOURCE`或`_XOPEN_SOURCE`]  
+`BSDLY` |
+`Backspace`延迟输出延时，可以取`BS0`或`BS1`(从未实现)[需要`_BSD_SOURCE`或`_SVID_SOURCE`或`_XOPEN_SOURCE`]  
+`VTDLY` | 垂直制表符输出延时，可以取`VT0`或`VT1`  
+`FFDLY` | 换页输出延时，可以取`FF0`或`FF1`
+[需要`_BSD_SOURCE`或`_SVID_SOURCE`或`_XOPEN_SOURCE`]  
+  
+### 终端控制`c_cflag`——指定终端硬件控制信息
+
+键值 | 意义  
+---|---  
+`CBAUD` | (非`POSIX`)设置波特率掩码(`4+1`位)[需要`_BSD_SOURCE`或`_SVID_SOURCE`]  
+`CBAUDEX` |
+(非`POSIX`)设置额外的波特率掩码(`1`位)，包含在`CBAUD`中(`POSIX`定义波特率存储在`termios`结构中，没有指定精确的位置，并提供`cfgetispeed()`和`cfsetispeed()`来获取它。一些系统使用`CBAUD`在`c_cflag`中选择的位，其他系统使用单独的字段，例如`sg_ispeed`和`sg_ospeed`)[需要`_BSD_SOURCE`或`_SVID_SOURCE`]  
+`CSIZE` | 设置字符长度掩码，取值范围为`CS5`、`CS6`、`CS7`或`CS8`  
+`CSTOPB` | 设置两个停止位，而不是一个  
+`CREAD` | 启用接收器  
+`PARENB` | 启用输出奇偶校验生成和输入奇偶校验  
+`PARODD` | 如果设置，则输入和输出的奇偶校验为奇校验，否则使用偶校验  
+`HUPCL` | 在最后一个进程关闭设备(挂起)后，降低调制解调器控制线  
+`CLOCAL` | 忽略调制解调器控制线  
+`LOBLK` | (非`POSIX`)阻止来自非当前`shell`层的输出。此选项供`shl`(`shell`层)使用(未在`Linux`上实现)  
+`CIBAUD` | (非`POSIX`)输入速度掩码。`CIBAUD`位的值与`CBAUD`位的值相同，向左移位`IBSHIFT`位
+[需要`_BSD_SOURCE`或`_SVID_SOURCE`](未在`Linux`上实现)  
+`CMSPAR` |
+(非`POSIX`)启用`stick`(标记/空格)奇偶校验(某些串行设备支持)：如果设置了`PARODD`，则奇偶校验位始终为`1`，如果
+`PARODD`未设置，则奇偶校验位始终为`0`[需要`_BSD_SOURCE`或`_SVID_SOURCE`]  
+`CRTSCTS` | (非`POSIX`)启用`RTS/CTS`(硬件)流控制 [需要`_BSD_SOURCE`或`_SVID_SOURCE`]  
+  
+### 本地模式`c_lflag`——控制终端编辑功能
+
+键值 | 意义  
+---|---  
+`ISIG` | 当接收到`INTR`、`QUIT`、`SUSP`或`DSUSP`中的任何字符时，生成相应的信号  
+`ICANON` | 启用规范编辑模式(以`\n`分割输入)  
+`XCASE` |
+(非`POSIX`,未在`Linux`上实现)如果还设置了`ICANON`，则终端仅是大写的。否则，输入将转换为小写，但以`\`开头的字符除外。在输出时，大写字符以`\`开头，小写字符转换为大写
+[需要`_BSD_SOURCE`或`_SVID_SOURCE`或`_XOPEN_SOURCE`]  
+`ECHO` | 回显输入的字符  
+`ECHOE` | 如果还设置了`ICANON`，`ERASE`字符会擦除前面的输入字符，`WERASE`会擦除前面的单词  
+`ECHOK` | 如果还设置了`ICANON`，`KILL`字符将擦除当前行  
+`ECHONL` | 如果还设置了`ICANON`，即使未设置`ECHO`，也会回显`NL`字符  
+`ECHOCTL` |
+(非`POSIX`)如果还设置了`ECHO`，除`TAB`、`NL`、`START`和`STOP`之外的终端特殊字符将作为`^X`回显，其中`X`是特殊字符的`ASCII`码值`+
+0x40`的字符。例如，字符`0x08 (BS)`回显为`^H`[需要`_BSD_SOURCE`或`_SVID_SOURCE`]  
+`ECHOPRT` | (非`POSIX`)如果还设置了`ICANON`和`ECHO`，则在擦除字符时将其打印
+[需要`_BSD_SOURCE`或`_SVID_SOURCE`]  
+`ECHOKE` |
+(非`POSIX`)如果还设置了`ICANON`，则按照`ECHOE`和`ECHOPRT`的规定，通过擦除行上的每个字符来回显`KILL`[需要`_BSD_SOURCE`或`_SVID_SOURCE`]  
+`DEFECHO` | (非`POSIX`,未在`Linux`上实现)仅在进程读取时回显  
+`FLUSHO` | (非`POSIX`,未在`Linux`上实现)刷新输出流。通过键入`DISCARD`字符来切换此标志状态
+[需要`_BSD_SOURCE`或`_SVID_SOURCE`]  
+`NOFLSH` | 在为`INT`、`QUIT`和`SUSP`字符生成信号时不再刷新输入和输出队列  
+`TOSTOP` | 将`SIGTTOU`信号发送到尝试写入其控制终端的后台进程的进程组  
+`PENDIN` |
+(非`POSIX`,未在`Linux`上实现)在读取下一个字符时重新打印输入队列中的所有字符。(`bash(1)`以这种方式处理预输入)
+[需要`_BSD_SOURCE`或`_SVID_SOURCE`]  
+`IEXTEN` |
+启用实现定义的输入处理。必须启用此标志以及`ICANON`才能对特殊字符`EOL2`、`LNEXT`、`REPRINT`、`WERASE`进行解释，并使
+IUCLC 标志有效  
+  
+## 0x04 实现过程
+
+###  最初的版本
+
+那么，有了核心函数，接下来就可以着手编写我们的`CLI`了。首先，最直接的思路，我们既然希望控制用户输入的字符，那么我们可以捕获用户键入的每一个字符，将其获取至`CLI`，然后由`CLI`进行初步处理后打印。那么以上思路就要解决以下两个问题：
+
+  * 通常情况下，当用户敲击回车后所输入的内容才会被提交至程序内的内容接收函数中。那么如何逐字符获取呢？
+  * 用户输入内容时，默认是回显的，如何不回显呢？
+
+那么注意到本地模式控制中的`ECHO`和`ICANON`配置项显然可以达成我们的要求，前者可以关闭用户输入的回显，后者则可以捕获即时敲击的内容。
+
+于是很容易写出代码如下：
+
+    
+    
+    #include <stdio.h>
+    #include <string.h>    
+    #include <termios.h>
+    #include <unistd.h>
+    
+    void init(){
+        setbuf(stdin, NULL);
+        setbuf(stdout, NULL);
+        setbuf(stderr, NULL);
+    }
+    
+    int main(){
+        FILE *in;
+        struct termios s, t;
+        int tty_changed;
+        char command[100000];
+        memset(command,0,100000);
+        char *commandPoint = command;
+    
+        init();
+        in = stdin;
+        if(tcgetattr (fileno(in), &t) == 0)
+        {
+            s = t;
+            t.c_lflag &= ~(ECHO|ICANON);
+            tty_changed = (tcsetattr (fileno (in), TCSANOW, &t) == 0);
+        }
+        else
+            tty_changed = 0;
+        while (1)
+        {
+            printf("蓝晶@汪汪系统:~$ ");
+            char inputChar;
+            read(fileno(in),&inputChar,1);
+            while (inputChar)
+            {
+                if(inputChar == '\n'){
+                    break;
+                }
+                *(commandPoint++) = inputChar;
+                write(1,&inputChar,1);
+                read(fileno(in),&inputChar,1);
+            }
+            printf("\n");
+            printf("%s\n",command);
+            memset(command,0,100000);
+            commandPoint = command;
+        }
+        if (tty_changed)
+            (void) tcsetattr (fileno (in), TCSANOW, &s);
+        return 0;
+    }
+    
+
+![](https://p5.ssl.qhimg.com/t01c11f712aed40f2b5.png)
+
+这里可以看到，我们为了最大程度的防止`stdin`文件流被破坏，我们选择与`getpass()`函数中一样，先使用`tcgetattr`读取`stdin`的配置，然后再进行`ECHO`、`ICANON`标志位的配置。随后我们定义了一个命令字符串用于存放用户输入的指令，同时定义了一个指针指向其开头，当获取到用户输入时，依次将其存入此数组，并在读取到回车(`\n`)后将其打印，随后将命令字符串清空，将指针置回字符串起始。当然在整个程序最后别忘了将终端的设置恢复，否则易导致终端异常的发生。
+
+###  解决退格的版本(?)
+
+不过我们测试其实可以发现，最初的版本中实际上是无法使用退格的，这是因为，在非标准输入模式下，我们需要对退格进行单独的处理，
+**`BackSpace`对应的并不是`\b`**，查阅`ASCII`码表可以发现，`backspace`对应的是`127`，那么我们只要新增对`127`的处理即可。
+
+    
+    
+    #include <stdio.h>
+    #include <string.h>    
+    #include <termios.h>
+    #include <unistd.h>
+    
+    void init(){
+        setbuf(stdin, NULL);
+        setbuf(stdout, NULL);
+        setbuf(stderr, NULL);
+    }
+    
+    int main(){
+        FILE *in;
+        struct termios s, t;
+        int tty_changed;
+        char command[100000];
+        memset(command,0,100000);
+        char *commandPoint = command;
+    
+        init();
+        in = stdin;
+        if(tcgetattr (fileno(in), &t) == 0)
+        {
+            s = t;
+            t.c_lflag &= ~(ECHO|ICANON);
+            tty_changed = (tcsetattr (fileno (in), TCSANOW, &t) == 0);
+        }
+        else
+            tty_changed = 0;
+        while (1)
+        {
+            printf("蓝晶@汪汪系统:~$ ");
+            char inputChar;
+            read(fileno(in),&inputChar,1);
+            while (inputChar)
+            {
+                if(inputChar == '\n'){
+                    break;
+                }else if(inputChar == 127){
+                    if(strlen(command) > 0){
+                        *(--commandPoint) = 0;
+                        printf("\b \b");
+                    }
+                }
+                *(commandPoint++) = inputChar;
+                write(1,&inputChar,1);
+                read(fileno(in),&inputChar,1);
+            }
+            printf("\n");
+            printf("%s\n",command);
+            memset(command,0,100000);
+            commandPoint = command;
+        }
+        if (tty_changed)
+            (void) tcsetattr (fileno (in), TCSANOW, &s);
+        return 0;
+    }
+    
+
+![](https://p1.ssl.qhimg.com/t0134b92285cb99ad63.png)
+
+注意此处我们并不是简单的输出`\b`，而是需要输出`\b \b`因为
+**`\b`的意义仅仅是将光标前移一位**。因此我们的处理逻辑是光标前移之后输出一个空格覆盖需要删除的内容，然后再退回输入点
+
+###  解决退格的版本
+
+根据上面的截图我们其实可以看出来事实上简单地进行退格信号处理是存在问题的，这不仅将导致指针越界，还会导致不应该被删除的内容被删除，因此我们需要对信号的处理加以限制。
+
+    
+    
+    #include <stdio.h>
+    #include <string.h>    
+    #include <termios.h>
+    #include <unistd.h>
+    
+    void init(){
+        setbuf(stdin, NULL);
+        setbuf(stdout, NULL);
+        setbuf(stderr, NULL);
+    }
+    
+    int main(){
+        FILE *in;
+        struct termios s, t;
+        int tty_changed;
+        char command[100000];
+        memset(command,0,100000);
+        char *commandPoint = command;
+    
+        init();
+        in = stdin;
+        if(tcgetattr (fileno(in), &t) == 0)
+        {
+            s = t;
+            t.c_lflag &= ~(ECHO|ICANON);
+            tty_changed = (tcsetattr (fileno (in), TCSANOW, &t) == 0);
+        }
+        else
+            tty_changed = 0;
+        while (1)
+        {
+            printf("蓝晶@汪汪系统:~$ ");
+            char inputChar;
+            read(fileno(in),&inputChar,1);
+            while (inputChar)
+            {
+                if(inputChar == '\n'){
+                    break;
+                }else if(inputChar == 127){
+                    if(strlen(command) > 0){
+                        *(--commandPoint) = 0;
+                        printf("\b \b");
+                    }
+                }else{
+                    *(commandPoint++) = inputChar;
+                    write(1,&inputChar,1);
+                }
+                read(fileno(in),&inputChar,1);
+            }
+            printf("\n");
+            printf("%s\n",command);
+            memset(command,0,100000);
+            commandPoint = command;
+        }
+        if (tty_changed)
+            (void) tcsetattr (fileno (in), TCSANOW, &s);
+        return 0;
+    }
+    
+
+此时，我们退格将不会在产生超预期的行为
+
+###  加一点细节的版本
+
+最后~我们加亿点细节，得到最终代码：
+
+    
+    
+    #include <stdio.h>
+    #include <string.h>    
+    #include <termios.h>
+    #include <unistd.h>
+    #define WHITELISTCOMMANDNUM 4
+    
+    static void call_fclose (void *arg)
+    {
+      if (arg != NULL)
+        fclose(arg);
+    }
+    
+    void init(){
+        setbuf(stdin, NULL);
+        setbuf(stdout, NULL);
+        setbuf(stderr, NULL);
+    }
+    
+    int main(){
+        FILE *in, *out;
+        struct termios s, t;
+        int tty_changed;
+        char command[100000];
+        memset(command,0,100000);
+        char *commandPoint = command;
+        char *whitelist[WHITELISTCOMMANDNUM] = {"exit","ver","ping","pig"};
+    
+        init();
+        in = stdin;
+        if(tcgetattr (fileno(in), &t) == 0)
+        {
+            s = t;
+            t.c_lflag &= ~(ECHO|ICANON);
+            tty_changed = (tcsetattr (fileno (in), TCSANOW, &t) == 0);
+        }
+        else
+            tty_changed = 0;
+        while (1)
+        {
+            printf("蓝晶@汪汪系统:~$ ");
+            printf("%s",command);
+            char inputChar;
+            read(fileno(in),&inputChar,1);
+            int commandStatus = 0;
+            char maybecommand[1000000];
+            int maybeCommandCount = 0;
+            memset(maybecommand,0,1000000);
+            while (inputChar)
+            {
+                if(inputChar == '\n'){
+                    memset(maybecommand,0,1000000);
+                    int maybecount = 0;
+                    commandStatus = 0;
+                    for(int whitelistidx = 0;whitelistidx < WHITELISTCOMMANDNUM;whitelistidx++){
+                        if(strlen(command) == strlen(whitelist[whitelistidx]) && !strncmp(command,whitelist[whitelistidx],strlen(whitelist[whitelistidx]))){
+                            commandStatus = 2;
+                            break;
+                        }else if(strstr(whitelist[whitelistidx],command) == whitelist[whitelistidx]){
+                            commandStatus = 1;
+                            maybeCommandCount++;
+                            strcat(maybecommand,whitelist[whitelistidx]);
+                            strcat(maybecommand,"\t");
+                        }
+                    }
+                    if(commandStatus == 1 && maybeCommandCount == 1) {
+                        memset(command,0,100000);
+                        strncpy(command,maybecommand,strlen(maybecommand)-1);
+                        printf("%s" , commandPoint);
+                        commandStatus = 2;
+                    }
+                    if(commandStatus != 0) break;
+                }else if(inputChar == 127){
+                    if(strlen(command) > 0){
+                        *(--commandPoint) = 0;
+                        printf("\b \b");
+                    }
+                }else{
+                    *(commandPoint++) = inputChar;
+                    write(1,&inputChar,1);
+                }
+                read(fileno(in),&inputChar,1);
+            }
+            printf("\n");
+            if(commandStatus == 1){
+                printf("%s\n",maybecommand);
+            }else if(commandStatus == 2){
+                if(!strcmp(command,"ver")){
+                    printf("自豪的由汪汪的小蓝蓝开发！是安全的兽人Shell！欢迎一起成为Furry！Version：0.1beta\n");
+                }else if(!strcmp(command,"exit")){
+                    printf("Bye!\n");
+                    break;
+                }else{
+                    printf("%s\n",command);
+                }
+                memset(command,0,100000);
+                commandPoint = command;
+            }
+        }
+        if (tty_changed)
+            (void) tcsetattr (fileno (in), TCSANOW, &s);
+        return 0;
+    }
+    
+
+![](https://p5.ssl.qhimg.com/t014764b185c881dd9b.png)
+
+添加的细节代码均为基础的`C`语言基础机制代码，此处不再解释，请读者自行识读~
+
+## 0x05 后记
+
+后面我会出一些基于此`CLI`(当然不是`beta`版本的`CLI`嘿嘿嘿)的`CTF`题目，同时也会在`CLI`中加入用户管理、Tab补全、敏感字符控制、密码学等元素，创造一个与双边协议系列类似的系列题目~敬请期待~
+
+大家有什么有趣的想法也欢迎来与我一起讨论~一起来当一个阴间题出题人吧~(不是)
+
+加成券.jpg
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **ERROR404** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/265153](/post/id/265153)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CLI](/tag/CLI)
+  * [安全沙箱](/tag/安全沙箱)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t01fc6ae8fa56997fe6.jpg) ERROR404
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

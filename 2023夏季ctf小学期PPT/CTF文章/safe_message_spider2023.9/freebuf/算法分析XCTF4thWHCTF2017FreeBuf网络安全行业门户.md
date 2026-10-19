@@ -1,0 +1,394 @@
+### 1.下载附件是一个32位无壳console的exe，运行一遍发现基本逻辑就是提示输入一个字符串，输入以后通过一个判断来提示不同内容
+
+![](https://image.3001.net/images/20220413/1649838100_62568814ec36200cba7e8.png!small)
+
+### 2.既然是exe，那先用OD跑一边
+
+#### ①查看是否有关键字符串
+
+#### 发现关键字符“Wrong！”，这个字符就在我们输入错误后提示的，可以看第一大步的图，双击找到这个字符串的引用（如下图）
+
+![](https://image.3001.net/images/20220413/1649838101_6256881543e0bd0df326c.png!small)
+
+#### ②大概分析引用“Wrong!”的代码段
+
+![](https://image.3001.net/images/20220413/1649838101_62568815848ceb1f151ec.png!small)
+
+####
+发现跳转到输出“Wrong!”函数的jnz在00401341，跳转条件就是eax不等于1，那说明只要eax只要等于1则就不跳转，执行输出“Right!flag
+is your input”，那现在我们需要做的就是逆推EAX的来源（如上图）
+
+#### ③逆推EAX的来源
+
+00401337 |. 8B4424 08 mov eax,dword ptr ss:[esp+0x8] ;
+kernel32.BaseThreadInitThunk
+
+0040133B |. 83C4 08 add esp,0x8
+
+0040133E |. 83F8 01 cmp eax,0x1
+
+00401341 |. 75 07 jnz short 1c40a4a4.0040134A
+
+00401343 |. 68 90A04000 push 1c40a4a4.0040A090 ; Right!flag is your input\n
+
+00401348 |. EB 05 jmp short 1c40a4a4.0040134F
+
+0040134A |> 68 C0A04000 push 1c40a4a4.0040A0C0 ; Wrong!\n
+
+0040134F |> E8 1C000000 call 1c40a4a4.00401370
+
+####
+阅读代码可以看到第一步跟踪到的eax是在00401337处被ss:[esp+0x8]赋值，那我们断点到00401337查看ss:[esp+0x8]的值，但是断点运行后居然没停下来而直接判断输出了“Wrong!”，（如下图）
+
+![](https://image.3001.net/images/20220413/1649838101_62568815db232a3455b26.png!small)
+
+#### 往上浏览代码，发现在004012D4出还有一个Wrong字符串和提示我们输入的信息，那说明这里有有一个初步的对我们输入的判断（如下图）
+
+![](https://image.3001.net/images/20220413/1649838102_625688167f79baccf69e5.png!small)
+
+004012A4 |. 68 D0A04000 push 1c40a4a4.0040A0D0 ; Please input flag:
+
+004012A9 |. E8 C2000000 call 1c40a4a4.00401370
+
+004012AE |. 8D4424 0C lea eax,dword ptr ss:[esp+0xC]
+
+004012B2 |. 50 push eax
+
+004012B3 |. 68 C8A04000 push 1c40a4a4.0040A0C8 ; %31s
+
+004012B8 |. E8 7A010000 call 1c40a4a4.00401437
+
+004012BD |. 8D7C24 14 lea edi,dword ptr ss:[esp+0x14]
+
+004012C1 |. 83C9 FF or ecx,0xFFFFFFFF
+
+004012C4 |. 33C0 xor eax,eax
+
+004012C6 |. 83C4 0C add esp,0xC
+
+004012C9 |. F2:AE repne scas byte ptr es:[edi]
+
+004012CB |. F7D1 not ecx
+
+004012CD |. 49 dec ecx
+
+004012CE |. 5F pop edi
+
+004012CF |. 83F9 13 cmp ecx,0x13
+
+004012D2 |. 74 1D je short 1c40a4a4.004012F1
+
+004012D4 |. 68 C0A04000 push 1c40a4a4.0040A0C0 ; Wrong!\n
+
+004012D9 |. E8 92000000 call 1c40a4a4.00401370
+
+004012DE |. 68 B8A04000 push 1c40a4a4.0040A0B8 ; pause
+
+004012E3 |. E8 B9000000 call 1c40a4a4.004013A1
+
+####
+阅读上面代码可以知道要执行输出“Wrong!”则使得004012D2处不跳转，那我们的目的是要让他不执行，所以要使得ecx等于0x13(19)，经过我对004012D2处断点测试得到这个0x13(19)就是要求输入的长度等于19
+
+#### 那我们继续往下走，发现004012D2处的跳转跳到了004012FA1（如下图）
+
+![](https://image.3001.net/images/20220413/1649838102_62568816d23e03474d7da.png!small)
+
+#### 那我们断点来到这个004012D2函数（记得输入19个字符）（如下图）
+
+####
+跳转成功以后执行了CreatfeFileA函数，第一个参数便是文件名“Your_input”,那我们执行完CreateFileA后exe就会在它所在目录创建一个叫作Your_input的文件（如果文件在则不创建），最后CreatfeFileA函数返回Your_input文件句柄值，返回的值放在eax中（通常函数返回值都是存在eax中，这里就是）
+
+![](https://image.3001.net/images/20220413/1649838103_625688172fa635e862c93.png!small)
+
+#### 继续往下走（如下图）
+
+####
+程序继续执行WriteFile函数，第一个函数便是待写入文件的文件的句柄值（hfile），第二个函数便是待写入的数据存储地址(Buffer)，第三个便是要写入的字节数(nBytesToWrite
+),那就可以知道exe是想把0019FF14处的内容写19个字节到刚才生成的Your_input文件中，查看0019FF14地址便可以看到写入的字符就是我们输入的19个字符
+
+![](https://image.3001.net/images/20220413/1649838103_625688178fe463f19a185.png!small)
+
+![](https://image.3001.net/images/20220413/1649838103_62568817dc2144c758d4f.png!small)
+
+#### 那我们先执行完WriteFile函数去看看是否存在Your_input文件并且写入成功了（如下图）
+
+![](https://image.3001.net/images/20220413/1649838104_625688183cec0238c26d8.png!small)
+
+####
+![](https://image.3001.net/images/20220413/1649838104_625688187be242e8d57f6.png!small)打开Your_input文件以后发现里面的内容根本就不是我们写入的1234567890123456789啊，而是一些其他字符但是WriteFile写入的字符串就是1234567890123456789，所以WriteFile指定出现了问题，我们跟进WriteFile看下函数（如下图）
+
+  
+
+####
+![](https://image.3001.net/images/20220413/1649838104_62568818cf3486d8caaea.png!small)
+
+####  
+
+跟进WriteFile内发现居然是个jmp！！！，那说明这个函数被做过手脚啊，通常这种写jmp的都是对这个函数进行了HOOK，所以，我们跳到00401080去看看到底发生了啥？（如下图）
+
+![](https://image.3001.net/images/20220413/1649838105_6256881942c887b8723ee.png!small)
+
+#### 果然是对WriteFile函数进行了HOOK,在执行了401000、401140函数后才执行了
+
+####
+WriteFile函数，那决定最终写入Your_input文件的字符串重点就是在这两个函数了，所以我们就跟进401000、401140两个函数进行分析,此时为了方便分析我们采用IDA来分析
+
+#### 拖进IDA pro 直接按G跳转到401000（如下图）
+
+![](https://image.3001.net/images/20220413/1649838105_6256881992b0dbd2d7901.png!small)
+
+####  **401000** **函数代码**
+
+int __cdecl sub_401000(int a1, int a2)
+
+{
+
+char i; // al
+
+char v3; // bl
+
+char v4; // cl
+
+int v5; // eax
+
+  
+
+for ( i = 0; i < a2; ++i )
+
+{
+
+if ( i == 18 )
+
+{
+
+*(_BYTE *)(a1 + 18) ^= 0x13u;
+
+}
+
+else
+
+{
+
+if ( i % 2 )
+
+v3 = *(_BYTE *)(i + a1) - i;
+
+else
+
+v3 = *(_BYTE *)(i + a1 + 2);
+
+*(_BYTE *)(i + a1) = i ^ v3;
+
+}
+
+}
+
+v4 = 0;
+
+if ( a2 <= 0 )
+
+return 1;
+
+v5 = 0;
+
+while ( byte_40A030[v5] == *(_BYTE *)(v5 + a1) )
+
+{
+
+v5 = ++v4;
+
+if ( v4 >= a2 )
+
+return 1;
+
+}
+
+return 0;
+
+}
+
+#### 401000两个参数a1,a2是什么呢？如下图
+
+![](https://image.3001.net/images/20220413/1649838106_6256881a0dde8683778eb.png!small)
+
+#### 可以看到esi是我们输入字符的长度，edi是我们输入的字符长度，但是这里有个入栈细节
+
+0040108C . 56 push esi
+
+0040108D . 57 push edi
+
+0040108E . E8 6DFFFFFF call 1c40a4a4.00401000
+
+#### 这里的推入参数入栈是从参数的左边开始向右边推入，例如：
+
+//c调用约定
+
+void add(a,b){}
+
+//对应汇编
+
+push b
+
+push a
+
+call add
+
+####
+所以esi是ida中伪代码的a2，也就是我们输入字符的长度，edi是ida中伪代码的a1，也就是我们输入字符所在的地址，那么此时我们阅读401000函数伪代码，就可以得到逻辑：
+
+#####
+1.循环a2（0x13）次，循环体内：判断此时的循环次数是否为19次，如果是第19次循环的话则将我们输入的字符串第19位字符a[18]与0x13异或再返回第19位，如果循环次数取模2不为0的话则将a[i+a1]-i的值赋值给v3,否则将a[i+a1+2]赋值给v3，最后，无论当前循环次数是否取模2等于0都将v3异或循环次数i的值赋值给a[i]
+
+##### 2.循环结束后判断a2(我们输入字符的长度)是否小于等于0，满足的话则推出函数返回1，但是看来这个判断是毫无意义的
+
+#####
+3.判断我们输入的字符串的每一位字符是否等于byte_40A030数组中的每一个对应的值，，等于的话就一直循环，知道循环了strlen(byte_40A030)后退出函数返回1，那我们查看一下byte_40A030数组是多少？（如图）
+
+  
+
+#####
+![](https://image.3001.net/images/20220413/1649838106_6256881a67fc29ee4ef43.png!small)strlen(byte_40A030)就是等于我们输入字符串的正确长度（0x13）,其实这里可以有很大程度可以确定byte_40A030就是flag最后的加密结果，但是为了严谨我们还是通过函数调用来具体分析
+
+![](https://image.3001.net/images/20220413/1649838106_6256881abf30e1f64203f.png!small)
+
+##### 如上图，找到了401000函数的调用者401080，我们分析一下401080的逻辑：
+
+#####
+定义整数变量v5接受401000的返回值（刚才分析过，只有0或1），接下来执行401140函数，跟进去看以后就只是一个HOOK相关的功能，不影响数据
+
+##### 最下面有一个判断，如果v5不为0则将lpNumberOfBytesWritten指向的值赋值为1
+
+if ( v5 )
+
+*lpNumberOfBytesWritten = 1;
+
+  
+
+#####
+往上一看lpNumberOfBytesWritten就是WriteFile中的第三个参数，也就是我们设定写入文件的字节数，从这里就得不到更多信息了，所以我们现在需要找到WriteFile函数的调用者，如下图
+
+![](https://image.3001.net/images/20220413/1649838107_6256881b2568db75dbdd2.png!small)
+
+##### 主函数调用了WriteFile函数，我们先理一下主函数的逻辑是什么？
+
+if ( NumberOfBytesWritten == 1 )
+
+sub_401370(aRightFlagIsYou);
+
+else
+
+sub_401370(aWrong);
+
+  
+
+#####
+通过跟入sub_401370函数发现该函数就是一个printf函数，参数就是输出的字符串变量，aRightFlagIsYou变量是提示我们输入的flag正确的字符串，aWrong字符串是提示我们输入的flag是错误的字符串，而要想执行提示我们输入正确则需要使得NumberOfBytesWritten
+== 1，这个NumberOfBytesWritten
+就是HOOK了WriteFile的函数中做出的赋值更改，但是在主函数中查案代码发现NumberOfBytesWritten
+还参与了sub_401240函数，而且还是在hook之后，也就是说有可能这个sub_401240函数更改了NumberOfBytesWritten
+,那到底sub_401240函数是否对NumberOfBytesWritten 做出更改还是得跟进去才知道如下图
+
+![](https://image.3001.net/images/20220413/1649838107_6256881b93dc5d60632dd.png!small)
+
+##### a1是我们输入得字符串所在的地址，a2是NumberOfBytesWritten所在的地址，阅读代码逻辑：
+
+##### 将字符串v4="This_is_not_the_flag"中v4[a1 - v4 +
+result]元素与v4[result]对比，如果相等则循环以下代码：
+
+if ( ++result >= (int)(v3 - 1) )
+
+{
+
+if ( result == 21 )
+
+{
+
+result = (int)a2;
+
+*a2 = 1;
+
+}
+
+return result;
+
+}
+
+#####
+从上面代码中可以看出唯一对NumberOfBytesWritten操作且等于1的地方只有for中的if满足条件执行，那我们就想办法去执行这个*a2 =
+1，但是再仔细读代码后发现这个函数中我们输入的字符串未参与任何运算，也得不到一个中继的加密值，所以我们无法从这个函数中获得任何切确的信息，而且一看v4字符串是"This_is_not_the_flag"，这很有可能说明作者写这个函数是用来误导我们的，所以综上所述我们只能去找NumberOfBytesWritten的另一个函数，也就是之前我们分析过的sub_401000函数，因为刚才我们上面已经分析过了，所以先通过sub_401000中的写出byte_40A030变量来反推出我们输入的flag因该是多少，解密脚本如下：
+
+#include
+
+#include
+
+  
+
+int main()
+
+{
+
+int v3 = 0;
+
+unsigned char a1[] =
+
+{
+
+0x61, 0x6A, 0x79, 0x67, 0x6B, 0x46, 0x6D, 0x2E, 0x7F, 0x5F,
+
+0x7E, 0x2D, 0x53, 0x56, 0x7B, 0x38, 0x6D, 0x4C, 0x6E, 0x00
+
+};
+
+for (size_t i = 19; i >0; i--)
+
+{
+
+if (i == 18)
+
+{
+
+*(BYTE *)(a1 + 18) ^= 0x13;
+
+  
+
+}
+
+else
+
+{
+
+v3 = *(BYTE *)(i + a1) ^ i;
+
+if (i%2)
+
+{
+
+*(BYTE *)(i + a1) = v3 + i;
+
+}
+
+else
+
+{
+
+*(BYTE *)(i + a1 + 2) = v3;
+
+}
+
+}
+
+}
+
+printf("%s",a1);
+
+system("pause");
+
+return 0;
+
+}
+
+#####
+此时我们得到了我们应该输入的flag，此时NumberOfBytesWritten的值已经是1了，那我们继续带入下面的sub_401240中看这个函数是否会将NumberOfBytesWritten改为0就可以了，经过测试，sub_401240带入我们推出的flag也是使得NumberOfBytesWritten变为1，所以main函数执行了输出提示正确的功能。
+
+![](https://image.3001.net/images/20220413/1649838107_6256881be78ff9235a01e.png!small)
+

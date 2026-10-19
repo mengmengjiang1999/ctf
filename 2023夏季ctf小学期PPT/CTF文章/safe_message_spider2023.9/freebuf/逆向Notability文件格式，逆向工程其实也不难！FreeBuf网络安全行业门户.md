@@ -1,0 +1,263 @@
+本文虫虫编译，源blog地址请[参考](https://jvns.ca/blog/2018/03/31/reverse-engineering-notability-format/)。原作者Julia Evans是一个科技漫画作者。有很多很不错的编程漫画作品，可以观看学习。  
+
+![5.png](https://image.3001.net/images/20180401/15225583431978.png!small)  
+
+  
+
+我日常喜欢画些有关编程的漫画。 在上周四，我买了一个iPad 和Apple Pencil，因为Apple
+Pencil是一个非常好的绘图工具。我开始使用iPad的Notability应用程序，他看起来非常不凑。但是我遇到了一个不爽的事情：
+
+我使用的Android应用程序中有很多的原始图片，但是用的格式是Squid！
+
+Notability可以导入pdf，但它们会变成只读，你可以在其上绘制，但不能编辑它们。很烦人，不是吗？
+
+趣味问答开始：
+
+> Julia：“我想把我的旧图纸转换到新的app里，但是没有办法做到这一点!”
+>
+> Kamal：“那么如果你反向工程Notability文件格式呢？”
+>
+> Julia：“呃，听起来好像需要很长时间”
+>
+> Kamal：“也许只要花上一个小时，看看会发生什么！”
+>
+> Julia：“好吧!”
+
+本文旨在弄清如何将SVG转换为Notability的原生格式（.note）。这是一种专有格式，而且好像还没有人对其进行过反向工程，所以我们的从头开始。
+
+如果你是伸手党，想直接用现成的程序SVG转换为Notability，可以参考github
+repo：svg2notability。它就用了不到200行的Python代码来实现。
+
+我会写出逆向工程这个文件格式的过程，因为它并没那么困难，逆向工程往往看起来很可怕，有点不可亲近。但是我昨天就开始做了，直到今天晚上，已经做了一些成果，已经足够实际使用。
+
+在这篇文章中，我会解释如何破解Notability的 .note格式的构的。
+
+## Ox00从.note文件开始
+
+我从APP中导出了一个.note文件，将它放入Dropbox，并将其复制到我的Linux工作机上。这简单，这个文件是template.note。
+
+Ox01 解压缩文件
+
+什么是.note文件呢？找出答案的方法就是用file命令探测他。原来它是一个zip包：
+
+$ file template.note
+
+template.note:Zip archive data, at least v2.0 to extract
+
+$ unzip template.note
+
+解压缩到名为template /的目录中。这里是它里面的文件组成：
+
+$ find template/
+
+template/
+
+template/thumbnail
+
+template/Assets
+
+template/Session.plist
+
+template/thumb3x.png
+
+template/Recordings
+
+template/Recordings/library.plist
+
+template/thumb2x.png
+
+template/thumbnail2x
+
+template/metadata.plist
+
+template/Images
+
+template/thumb6x.png
+
+template/thumb.png
+
+不错，好整洁！咦，有个.plist文件？
+
+## 0x02解码.plist文件
+
+通过谷歌（和file）搜索，我们得知.plist文件是某种苹果文件格式。谷歌显示，可以为XML格式或二进制格式。这里他是苹果二进制格式。
+
+$ file template/Session.plist  
+  
+template/Session.plist:Apple binary property list  
+
+###
+
+我但是对此有点担心，但还有一些谷歌搜索显示有一个名为plistutil的Linux工具，我可以在对其进行转化。先安装plistutil。
+
+我吧所有的二进制.plist文件转换XML，看看它们，很清楚的表明template/
+Session.plist是具有绘图数据的文件。一旦将其解码为XML，你可以看到它在这里的样子：notability_session.xml。
+
+你怎么知道这是绘图数据的地方，Julia？那么，它的内容内容这些非常动人关键字，如“curvespoints”。比如这个：
+
+  
+
+<key>curvespoints</key>  
+
+<data>
+
+mgG+QjOrB0NmuUBDVT3MQgA5kUNEJIlCTBXCQ2YWDEIAT7JCM4tqQ+YFUEMzGVlDJnKj
+
+QzOnR0Na4d5DMzU2QzMzukKafLZDM5dZQ2aDrkNmCqtDM4qmQzNJ6UMAkZ5DZpadQjPQ
+
+A0SFx51CsM4DRHjvnUI7zQNEsRCeQrTLA0QiU55CpsgDRKl6nkJUxQNEzZqeQs3AA0Sv
+
+rp5CEr8DRHW3nkIdvQNEM82eQma4A0RNHJ9CrqkDRNV2n0KUmANEmtGfQs2IA0QoPqBC
+
+p3UDRJugoEINZQNEANagQs1eA0SKIaFCC1QDREOEoULIRgNEzQyiQoA1A0TpVKJCUSsD
+
+ROCWokKvIgNEzcmiQrMdA0SVk6NCtAgDRH10pEJr9gJEzZOlQmbfAkTyaadCkrUCRFb8
+
+qUKYewJEmjCtQmY+AkTkaLBCSQICRKEqtEIkyAFEAPi3QjOSAUS+RbtCMGMBRK6lvkKk
+
+MwFEANDBQmYDAURBQMZCHb0ARCxqykKSdgBEzQDPQrMwAET6vtNCwdL/Q34M2UJwPv9D
+
+mT7eQpm6/kNsXuNCcjr+QzQE6EIV2f1DM7vsQjNi/UMSDu9C6CT9Qztz8UIY4fxDmRD0
+
+QpmY/EMwL/ZC3F/8Q0Fu+EKoJPxDM8L6Qmbl+0N9tf1Ck5P7Q6JnAENsOvtDmu4BQ5nf
+
++kOgxgJDQK36Q0OWA0MCe/pDmmQEQ5lF+kNbgQVDQ/v5Q6yaBkMkr/lDZr0HQzNk+UPB
+
+...
+
+</data>
+
+有人可能会认为这个“curvespoint”数据代表了文件中曲线上的点。答对了：它的就是。
+
+0x03解码曲线上的点
+
+这听起来很直接，但在实际的工作中，这是让我最头疼，最讨厌的部分。以下是我如何解读这个“curvespoints”的内容：
+
+1.发现他是base 64编码。这一部分很简单：我之前使用过base64编码数据，二进制数据通常是在文本文件中编码的。酷！
+
+2.在hexdump中的查看他数据
+
+3.混淆（“这只是随机字节？!!？我怎么知道这意味着什么？”）
+
+4.试着看看它是否是msgback（no），bencode（no）。感到困惑。抱怨。重复一个小时左右。
+
+5.最后，等等，突然想到，如果它只是一个32位浮点数阵列？事情将会变得简单，实际上，确实是这样的！。
+
+6.尝试将其解码为32位浮点数组
+
+7．OK，他工作正常。
+
+下面是来解码这个一个32位浮点数的Python代码。 Python中带有一个解析plist文件的内置模块。 非常有用
+
+import subprocess
+
+import plistlib
+
+import struct
+
+def unpack_struct(string, fmt):
+
+return struct.unpack('{num}{format}'.format(num=len(string)/4, format=fmt),
+string)
+
+plistlib.readPlistFromString(subprocess.check_output(['plistutil','-i',
+'file.plist']))
+
+curves_points= pl['$objects'][8]['curvespoints'].data
+
+unpack_struct(curvespoints,'f')
+
+这里有一些来自于我文件的浮点数。这些看起来非常清晰，就是曲线上的点：它是一个浮点数组，每个连续2个浮点组都是曲线上的一个点。干的好！
+
+(407.59869384765625,
+
+396.6827087402344,
+
+408.05926513671875,
+
+396.3546447753906,
+
+408.2127990722656,
+
+396.2452697753906,
+
+408.3787536621094,
+
+396.1249084472656,
+
+408.55938720703125,
+
+395.9921875)
+
+## 0x04解码其他字段
+
+解码其他字段很简单：
+
+curvenumpoints：32位整数数组，它是每条曲线上的点数（unpack_struct（curves
+['curvesnumpoints'].Data, 'i')），
+
+curveswidth：32位浮点数组，每条曲线的厚度
+
+curvescolors：32位RGBA值的数组（0x00FFEEFF是十六进制代码＃00FFEE，最后一位是不透明度）
+
+curvesfractionalwidths：可变长度曲线的宽度乘数。我不关心这些，我把它们全部设置为1.0。
+
+eventTokens：不确定，我只是将所有这些设置为浮点数1.0，它似乎都工作正常
+
+## 0x05在图上绘制点数
+
+为了确保这些点实际上是点，我要把他们绘制在图上，在本例中，我实际上是使用了一个源于zine的关于你和你经理的对话。以下是它的样子：
+
+  
+![1.png](https://image.3001.net/images/20180401/15225583816611.png!small)  
+
+非常酷！！！！我对我的成功感到非常激动。于是下午5点，我有时间去朋友家吃晚饭，所以我这样做了。
+
+## 0x06生成.note文件
+
+好的，现在我们有一些眉头，我们知道这个文件格式是如何运作的。我们如何生成这种格式的文件呢？
+
+基本的步骤如下：
+
+1、从现有的空的.note文件开始。
+
+2、除了Session.plist文件（绘图数据所在的位置）之外，所有内容都保持一致。
+
+3、设置curvesnumpoints, curveswidth, curvescolors等数据
+
+4、将它用Zip打包，将其导入我的app，并希望它能正常工作！
+
+有一种debug策略帮助我一路成功，那就是我尝试重新生成已有的.plist文件。我得到了我认为它表达的点的列表，并且自己生成了curvesnumpoints等字段，并确保它们与Notability对这些文件的真实数据相匹配。然后我进行单元测试！
+
+一路上有很多奇怪的工件和错误，但是这篇博文已经很长了，我不认为解释这个很有趣。
+
+## 0x07 结果
+
+结果如下！首先，我输入到我的svg2notability程序中的SVG如下所示：
+
+![2.png](https://image.3001.net/images/20180401/15225581909048.png!small)  
+
+在我转换它之后，它在Notability中！它看起来基本相同！而且我可以轻松编辑它，这就是要点。颜色，样式等一切都正常！
+
+![3.png](https://image.3001.net/images/20180401/15225582017191.png!small)  
+  
+
+ **0x08 未尽的部分**
+
+1、生成具有多个页面的文档（没有尝试）
+
+2、绘制正方形，我的一些绘图有完美的正方形，并且还有一个问题，我还没有制定出来
+
+3、在Notability中更改纸张尺寸以匹配原始纸张尺寸。相反，我只是缩放宽度以匹配Notability的默认纸张宽度，这已经可以了，但还可以更好。
+
+ ** 0x09 后记**
+
+我认为使逆向工程不那么难的事情是，开发人员重复使用代码！人们通常不会发明完全自定义的文件格式！这里没有任何东西真的很复杂，它只是一些现有的标准格式（zip，苹果plist，一组浮点数数组）以非常简单的方式组合在一起。
+
+这个事情很有趣，从一个看似棘手或非常繁重的任务开始， “等等，我是一名程序员!!”，并设法使用编程的力量来达成我想做的事情（至少是这样）！
+
+我发现所有这些移动绘图应用程序（Squid，Notability，Goodnotes等）都使用专有文件格式，如果没有逆向工程，就不能在对其互相转换。但逆向工程是就可以！
+squid_decoder反向工程了Squid格式（它基本上是一个谷歌缓冲协议）
+
+如果你想觉得看文章费劲，直接看代码： <https://github.com/jvns/svg2notability>。
+

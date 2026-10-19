@@ -1,0 +1,362 @@
+  * option 选项  
+1：h 列出基础帮助信息并退出  
+2：-hh 列出标准帮助信息并退出  
+3：–version 列出应用版本号并退出  
+(-h-hh用于查询基本帮助信息和全量帮助信息，基本帮助信息列举常用几个语句，列如–wizard，-u,–level,–risk等）  
+4：-v 0-6 详细级别0-6  
+0->只显示python错误以及严重的信息  
+1->同时显示基本信息和警告信息（默认）  
+2->同时显示debug信息  
+3->同时显示注入的payload（建议使用此级别，可显示注入参数）  
+4->同时显示HTTP请求  
+5->同时显示HTTP响应头  
+6->同时显示HTTP相应页面
+
+  * target 目标  
+1：-d DIRECT 直接连接数据库的连接字符  
+已知目标数据库的时候使用-d，直接连接目标数据库，注意是小d，大D是指定要风闻的目标的某个库  
+2：-u URL,–url=URL 目标URL  
+直接使用sqlmap+网址的方式使用此参数，列如sqlmap -v 3 -u www.baidu.com  
+3：-I LOGFILE 从Burp或WebScarab代理日志文件中解析目标  
+当使用Burp或WebScarab保存了日志的时候，想从日志文件中筛选目标，可使用此参数，使用绝对路径地址即可  
+4.1：-x SITEMAPURL 扫描txt文件里的多个目标  
+4.2：-m BULKFILE 从一个文件里加载http请求  
+4.3：-r REQUESTFILE 针对谷歌对目标url的处理结果  
+4.4：-g GOOGLEDORK 从INI配置文件里加载选项  
+这及格选线分别是从XML文件，txt文件，请求格式文档里读取目标信息或请求；使用较多的是-m，-g可以使用google的搜索结果；列如，直接搜索uid=，查找具有此参数的站点；直接使用sqlmap调用google结果，列：sqlmao
+-g inurl:php?uid=  
+5：-c CONFIGFILE 从INI配置文件里加载选项  
+自行配置sqlmap参数，直接输入绝对路径和其他目标参数就可以使用复杂参数选项
+
+  * Request 请求  
+1.1：–method=METHOD 前后置HTTP方法。如：PUT  
+1.2：–data=DATA 通过POST发送得数据字符串  
+服务端允许得情况下，–method改变默认得http方法和其他参数配合使用  
+2：–param-del 分割参数值字符  
+当GET或POST得数据需要用其他字符分割测试参数得时候用到此参数  
+3：–cookie=COOKIE http得cookie头部值  
+已经获得cookie字符串得时候使用此参数指定cookie，cookie获得可考了使用XSS攻击和嗅探，劫持类攻击  
+4：–cookie-del=COOKIE 分割cookie值字符  
+参数极少用，但一般情况下可对需要分割得cookie字符进行切分  
+5：–load-cookies 从Netscape/wget得格式文件里加载cookies  
+指定绝对路径，从wget格式文件里load相应得cookies字符  
+6：–drop-set-cookie  
+忽略相应里得cookie设置，此参数配合手动cookie参数使用，使用预先获得得cookie  
+7.1：–user-agent=AGENT 指定http得UA值  
+7.2：–random-agent 随机选择UA值  
+可以使用-user-agent参数来指定想使用得UA，同时也可以使用-random-agent参数来随机得从/txt/user-agente.txt中获取  
+另外UA是绕过waf得参数，–user-agent=,–random-agent这两个参数可对waf针对恶意UA得防控进行绕过  
+8：–host=HOST  
+指定http请求中header里得host头参数  
+9：–referer=REFERER  
+指定HTTP得referer头部值  
+在请求中伪造referer，有些waf和安全产品等会对refer进行限制  
+仅允许本referer，当waf参数对referer进行了限制后，可使用此参数绕过，当–level参数设定为3或者3以上得时候会尝试对referer注入  
+10：–headers=HEADERS  
+额外得头部  
+指定其他得header信息，XFF等，列如strust2-045试用了Content-Type  
+11：–auth-type=AUTH TYPE  
+http验证类型Basic,Digest,NTLMorPKI  
+12：–auth-cred=AUTH CRED  
+http验证名字密码  
+13：–auth-private=AUTH PRIVATE  
+http验证 私钥文件  
+HTTP代理身份验证平局，可自动使用username:password和密钥文件，列如有些访问会使用key，集团sso最爱出现此种场景  
+14：–ignore-401  
+忽略http401错误，未授权的  
+某些页面访问会返回未授权错误，可使用此参数进行忽略和跳过  
+15.1：–proxy=PROXY 使用代理连接目标url  
+15.2:–proxy-cred=PROXY CRED 代理验证证书名字密码  
+15.3:–proxy-file=PROXY FILE 从文件里加载代理列表  
+15.4:–ignore-proxy 忽略系统默认代理设置  
+当需要使用 -g inurl:php?uid=等参数时，默认无法访问，可使用此参数+海外代理方式使用此功能  
+当代理需要验证得时候，使用-cre指定身份信息  
+需要使用代理轮巡时，使用文件加载代理设置列表，使用代理轮巡也可在对访问ip次数进行了验证得场景使用  
+16.1：–tor 使用tor网络  
+16.2：–tor–port=TORPORT 设置tor代理端口，非默认  
+16.3：–tor-tyoe=TORTYPE 这只tir代理类型，HTTP（默认）  
+16.4：–check-tor 检查tor是否正常  
+17：–delay=DELAY 设置每个http请求之间得延时间隔  
+设置http请求间隔时间，在绕过需求时使用，列如单ip单位时间访问多少次，可配合代理和多代理是参数使用  
+18.1：–timeout=TIMEOUT 设置超时连接间隔，默认30S  
+18.2：–retries=RETRIES 超时后得尝试次数，默认三次  
+超时连接后得尝试间隔，默认30S，可手动调账，一边–timeout和–retries配合使用  
+19：–randomize=RPARAM  
+随机改变参数值，可以设定某一个参数值在每一次请求中随机得变化，长度和类型与提供得初始值一样  
+20.1：–safe-url=SQFURL 在测试期间，经常去访问url地址  
+20.2：–safe-freq=SAFREQ 在两次访问安全站点之间发送一个测试请求  
+安全访问路径和请求配置用于伪造用户行为身份，列如有些模型会验证你得行为路径，可用此方法伪造行为，在攻击行为中夹杂正常访问行为，列如广告浏览，商品产看等  
+21：–skip-urlencode  
+跳过payload参数得编码数据  
+条幅哦url得有效载荷数据编码，前提是自编码  
+22.1：–csrf-token=CSRFTOKEN 持有反csrf token得参数  
+22.2：–csrf-url=CSRFURL 从访问地址中提取反csrtf token  
+针对CSRF服务端通常使用客户端页面增加伪随机数  
+常见得有三种方法：  
+①Cookie Hashing(所有表单都包含一个伪随机值)  
+②验证码  
+③One-Time Tokens（不同得表单包含一个不同得伪随机值）  
+使用反csrf参数，可以对站点得csrf进行对抗和绕过  
+23：–force-ssl  
+强制使用ssl/https  
+强制使用https,也可在url后面增加443  
+24：–eval=EVAL CODE  
+请求之前执行提供得python代码侯在提交请求  
+有的网站会对提交得参数进行编码或加密，这时候需要根据某个参数得变化，而修改另一个参数，才能形成正常得请求，这是可以用–eval参数在每次请求时根据所有python代码做完修改后请求  
+列如：–eval=“import hashlib;hash=hashlib.md5(id).hexdigest()”  
+上面得请求就是每次请求时根据id参数值，做一次md5后作为hash参数得值
+
+  * Optimization 优化  
+1：-o 打开所有的优化开关  
+2：–predict-output 预测常见的查询输出  
+3：–keep-alive 使用持久的http连接  
+4：–nuli-connection 在实际的http相应主题之外检索页面长度  
+5：–threads=THREADS 当前http请求最大值，默认1就是最大并发
+
+  * Injection 注入  
+1：-p TESTPARAMETER 测试参数  
+2：–skip=SKIP 忽略测试指定的参数  
+3：–dbms=DBMS 指定数据库类型  
+4：–dbms-cred=DBMS 数据库验证凭据，用户名和密码  
+5：–os=OS 指定操作系统类型  
+6：–invalid-bignum 对无效值使用大数值  
+7：–invalid-logical 对无效值使用逻辑操作  
+8：–invalid-string 对无效值使用随机字符  
+9：–no-east 关闭paload生成机制  
+10：–no-escape 关闭paload字符串转义机制  
+11：–prefix=PREFIX 注入paload前缀字符  
+12：–suffix=SUFFIX 注入paload结尾字符  
+13：–tamper=TAMPER 只用指定的脚本篡改注入数据  
+sqlmap默认测试所有的GET和POST参数  
+当–level的值大于等于2的时候也会测试HTTP Cookie头的值，大于等于3的时候也会测试User-Agent和HTTP Referer头的值  
+这时候可以手动指定-p参数设置想要测试的参数，列如：-p “id,cookie"但是有个别参数不想测试的时候可以使用–skip=“user-agent”参数  
+如果预知数据库类型和凭证，可使用–dbms,–dbms-cred=来指定数据库类型和数据库凭证  
+同样当预知操作系统类型，可是用–os来指定操作系统类型，默认情况下sqlmap会自动的探测数据库服务器系统，支持的系统有：linux,windows  
+无效数值处理：  
+参数：–invalid-bignum,–invalid-logical这两个参数对报错数据，无效数据进行更改  
+列如默认报错UID=-20，可以通过指定以上参数指定无效的大数字和逻辑，比如uid=999999999和uid=20 and a=b  
+参数：–prefix,–suffix在注入的paload的前面或者后面加一些字符，来保证payload的正常执行  
+列如在语句中增加–prefix’”}",–suffix “AND(‘1’='1”  
+–tamper可从tamper库里查找相关内容，使用–tamper tamper/".py方式指定
+
+  * Detection 侦察  
+1：–level=LEVEL  
+级别，从1-5，默认1  
+一共有五个等级，默认为1，sqlmap使用得payload可以在payload
+xml中看到，也可以根据相应得格式添加自己的payload内容，默认也有一些，可定制，建议最高级别，会更慢，测试参数更复杂  
+2：–risk=RISK  
+级别0-3，默认1  
+从0-3共有四个风险等级，默认是1，risk1会测试大部分语句，2会增加基于时间得测试语句，3会增加OR语句得注入测试，测试得语句同样可以在payload.xml中找到，可以自行添加payload  
+警告：当使用高级别时，可能会使用drop,update等高危语句对整表，整库造成影响，可能导致更新整个表，可能造成很大得风险  
+3.1：–string=STRING 评估被证实为true时的匹配字符串  
+3.2：–not-string=NOT STRING 评估被证实为falese得匹配字符串  
+3.3：–regexp=REGEXP 评估被证实为true时得匹配正则表达式  
+3.4：–code=CODE 评估被证实为true时得匹配http code  
+3.5：–text-only 仅比较页面的文本内容  
+3.6：–titles 仅比较页面的标题  
+sqlmap测试结果取决于返回内容，当页面在刷新或更新侯，可能导致返回不同得内容，特别是页面有动态内容得情况下，为了避免误报，可指定字符串或者正则表达式来区分原始页面和报错页面（–string参数添加字符串，–regexp添加正则），也可以提供一段字符串在原始页面与true下页面都不存在得字符串，而false页面中存在得字符串（–not-string添加），用户也可以提供true与false返回得HTTP状态码不一样来注入，列如：响应200得时候为真，相应401得时候为假，–code=200  
+参数：–text-only,–titles  
+想要具体查询true和false下页面得差异位置，可以使用–text-only（HTTP文本内容），–titles（HTML得title标签）
+
+  * Techniques 技巧  
+1：–technique=TECHNIQUE  
+sql注入方式：  
+默认把BEUSTQ全来一遍，可根据实际情况进行调整  
+列如可使用时间延迟，看网站响应时间来判断是否有注入，可根据报错判断注入  
+B:boolean-based blind SQL injection(布尔型注入)  
+E:Error-based SQL injection(报错型注入)  
+U:UNION query SQL injection(可联合查询注入)  
+S:Stacked queries SQL injection(可多语句查询注入)  
+T:Time-based blind SQL injection(基于时间延时注入)  
+Q:Inline SQL injection(内联注入)  
+2：–time-sec=TIMESEC  
+数据库响应延时秒数，默认5  
+当使用基于时间延迟注入得盲注时  
+时刻使用–time-sec参数设定延时时间，默认是5S  
+可以根据环境进行调整，比如网络延迟很大，可适当增加延时时间  
+3：–union-cols=UCOLS  
+指定SQL注入查询得列得范围  
+设定得值为一段整数范围，指定区间，此数值默认为1-10  
+随着–level增加，当为5得时候增加为50  
+当level级别和取值范围不匹配，在低级别需求更大得范围，可通过设定–union-cols得值来实现  
+4：–union-char=UCHAR  
+指定暴力破解列数得字符  
+设定union查询使用得字符，默认使用NULL  
+但是可能会返回失败，–union-char指定UNION查询得字符  
+5：–union-from=UFROM  
+指定sql注入查询得表  
+指定查询得表，配合暴力破解得字符，范围等来详细使用  
+6：–dns-domain=DNSDOMAIN  
+指定用于DNS露出攻击得域名  
+实际就是通过DNS隐蔽通道和恶意代码来使web来执行解析参数导致信息泄露  
+可通过sqlmap得语句进行查询使用，当指定此参数且具有注入漏洞得情况下，可更快速且影响更小得获得内容  
+7：–second-order=SECONDORDER  
+生成url搜索页面结果得二级响应  
+二次注入查询，当判断注入影响不是当前页面  
+可使用此参数制定另一个页面来进行测试  
+根据页面响应判断结果为true或false
+
+  * Fingerprint 指纹  
+1：-f 执行检查广泛得DBMS版本得指纹，通过此参数来执行更广泛，详细得指纹识别
+
+  * Enumeration 枚举  
+1：-a,–all 检索所有  
+此参数咋没有获得数据库信息得时候用的较多  
+来检索所有内容，在一旦注入成功且获得精确信息  
+通过以下详细参数来指定检索，枚举动作和动作执行对象  
+2.1：-b,–banner 检索DBMS得banner  
+2.2：–current-user 检索DBMS得当前用户  
+2.3：–current-db 检索DBMS得数据库  
+2.4：–hostname 检索DBMS得host  
+2.5：–is-dba 检索DBMS得当前用户是否是root  
+2.6：–users 枚举DBMS得用户  
+2.7：–passwords 枚举DBMS得密码hash  
+2.8：–privilleges 枚举DBMS得用户权限  
+2.9：–roles 枚举DBMS得用户校色  
+2.10：–dbs 枚举DBMS得所有数据库  
+2.11：–tables 枚举DBMS得数据库里得所有表  
+2.12：–columns 枚举DBMS得数据库里表得所有列  
+2.13：–schema 枚举DBMS得概要  
+2.14：–count 检索表的条目数  
+2.15：–dump 转存DBMS数据库表项  
+2.16：–dump-all 转存所有DBMS数据库得表项  
+2.17：–searche 搜索列，表，和或数据库名  
+2.18：–comments 检索DBMS信息  
+2.19：-D 指定枚举得库  
+2.20：-T 指定枚举得表  
+2.21：-C 指定枚举得表列  
+2.22：-X 指定不枚举得表列  
+2.23：-U 指定枚举得用户  
+2.24：–exclude-sysdbs 枚举表的时候排除系统数据库  
+2.25：–where=DUMPWHERE dump表得时候指定路径  
+2.26：–start=LIMITSTART 第一个检索输出条目  
+2.27：–stop=LIMITSTOP 最后一个检出输出条目  
+2.28：–first=FIRSTCHAR 第一个检索输出得字符串  
+2.29：–last=LASTCHAR 最后一个检出输出得字符串  
+到这一步得时候，代表已经注入成功，需要对注入成功得库执行操作，这里是比较常见得操作：  
+检索DBMS得指纹特征，数据库，host值，用户身份，并对用户，密码，权限，角色进行枚举也就是爆破  
+dump和dump-all就是脱库和全脱得区别，dump某表得十条八条可能没事，dump-all注定要浪迹天涯，也就是所谓得从脱库到跑路得开始  
+通过-D-T-C来指定索要枚举得库，表，列，使用-X来排除不想要得列，特别是有多列且有无意义字段得时候，使用-X可大大节省时间  
+–excilud-sysdbs参数，将不会获取数据库自带得系统库内容，可减少干扰内容，对-coun得使用和枚举信息得使用建议搭配此参数来排除系统库  
+当我们不想跑路得时候，那么请使用以下内容：  
+\----start=LIMITSTART First query output entry to retrieve  
+指定从第几行开始输出，如–start=1  
+–stop=LIMITSTOP Last query output entry to retrieve  
+指定从第几行停止输出，如–stop=10  
+–first=FIRSTCHAR First query output word character to retrieve  
+指定从第几个字符开始输出，如–first 1  
+–last=LASTCHAR Last query output word character to retrieve  
+指定从第几个字符停止输出，如–last 10  
+3.1：–sql-query=QUERY 执行得SQL语句  
+3.2：–sql-shell 交互式sqlshell  
+3.3：–sql-file 从文件里运行sql语句  
+指定想执行得语句，注入成功后自动执行  
+系统交互shell，一旦成功可执行任意语句  
+从文件中读取执行想要执行得sql语句
+
+  * Brute force 暴力  
+1：–common-tables 检查通用表  
+2：–common-columns 检查通用列  
+暴力检查：  
+猜测检查常见得，通用得表名和列名，可通过下面两个文件进行定制化  
+暴力破解得表在txt/–common-tables.txt文件中  
+暴力破解得列在txt/–common-columns.txt文件中
+
+  * User-defined function injection 用户自定义注入函数  
+1：–udf-inject 使用用户自定义得函数进行注入  
+2：–shared-lib=SHLIB 共享库得本地路径  
+自定义函数：  
+通过编译注入自定义得函数（UDFs）或PostgreSQL在windows中共享库，DLL,或者Linux/unix中共享对象，上传到服务器数据库自定义函数，然后根据选择执行他们
+
+  * File system access 访问文件系统  
+1：–file-read-RFILE 从后台DBMS文件系统里读取一个文件  
+2：–file-write=WFILE 从后台DBMS文件系统里写一个本地文件  
+3：–file-dest=DFILE 后端DBMS写入得绝对文件路径  
+针对文件系统得读写：  
+对–file-read配置绝对系统路径，可读取相应文件内容，可以是文件，也可以是二进制，条件是必须拥有相对应特权，已知的是mysql,postgresql和sqlserver，写入也是同样，往远端后台得DBMS里写入一个本地文件，可通过–file-dest指定绝对文件路径
+
+  * Operating system access 操作系统连接  
+1：–os -cmd 运行一个OS命令  
+2：–os-shell 建立交互式得 os shell  
+3：–os-pwn 建立一个oob shel meterpreter 或者vnc  
+4：–os-smbrelay 一键生成 oob shel meterpreter火车vnc  
+5：–os-bof 利用存储过程缓冲区溢出  
+6：–priv-esc 用户权限提升  
+7：–msf-path 安装metasploit framework得本地路径  
+8：–tmp-path 临时文件目录得远程绝对路径  
+对文件系统，操作系统得交互和使用必须需要相应得权限，前面提到要求具有特定得函数执行权限，一般要root  
+当然和上面可以配合使用，当数据库为mysql，postgreSQL或microsoft SQL Sever,并且当前用户有权限使用特定得函数  
+然后通过上面得文件系统管理上传一个库，使用可执行系统命令得sys_exec()和sys_eval()，甚至xp_cmdshell存储过程  
+–os-shell参数也可以模拟一个真实得shell，可以输入你想执行得命令  
+Meterpreter配合使用  
+–os-pwn,–os-smbrelay,–os-bof,–prive-esc,-msf-path,–tmp-path配合Meterpreter使用  
+当前用户有显现使用特定得函数，可以在数据库于攻击者直接建立TCP连接  
+这个连接可以是一个交互式命令行得Meterpreter会话，sqlmap根据Metasploit生成shellcode，四种方式执行它：  
+①通过用户自定义得sys_bineval()函数在执行Metasplit得shellcode，支持mysql和postgresql数据库，参数：–os-pwn  
+②通过用户自定义的函数上传一个独立的payload执行，mysql和PostgreSQL的sys _exec()函数，Microsoft SQL
+Server得  
+xp_cmdshell()函数，参数：–os-pwn  
+③通过SMB攻击(MS08-068)来执行Metasploit的shellcode，当sqlmap获取到的权限足够高的时候(Linux\Unix得uid=0，windows是administrator)，参数：–os-smbrelay  
+④通过溢出Microsom SQL Server
+2000和2005的sp_replwritetovarbin存储过程(MSO9-004)，在内存中执行Metasploit的payload,  
+参数:-os-bof
+
+  * windows 注册表连接  
+1：–reg-read 读取windows注册表键值  
+2：–reg-add 编辑一个windows注册表键值数据  
+3：–reg-del 删除一个windows注册表键值  
+4：–reg-key windows 注册表项  
+5：–reg-valus windows注册表项的值  
+6：–reg-data windows注册表项的数据  
+7：–reg-type windows注册表项值得类型  
+所见如所得，注册表连接值得是windows系统，相信大家都有windows系统知识，不懂注册表基本就不懂windows系统  
+所有得windows系统配置在注册表里都可实现，比如开启远程连接，新建用户，组策略配置，防火墙等等  
+者的reg现象可对注册表内容进行读取，编辑和删除，上面和下面相配合可实现对指定得key,value,data和类型进行操作
+
+  * 通用参数和混杂选项  
+【通用参数】  
+1：-s 从存储文件里加载session  
+2：-t 记录所有得http流量到一个文本文件  
+3：–batch 使用默认配置，不管用户得输入  
+4：–charset 强制数据检索编码格式  
+5：–crawl 从目标网站开始爬取网站  
+6：–csv-del CSV输出文件使用得分割字符  
+7：–dump-format dump数据得格式  
+8：–eta 显示输出得预计用时  
+9：–flush-session 为当前目标刷新session文件  
+10：–forms 在目标url上解析和测试表单  
+11：–fresh-queries 忽略在session文件里得查询结果  
+12：–hex 使用DBMS得hex函数进行数据检索  
+13：–output-dir 输出路径  
+14：–parse-errors 解析和列出DBMS得相应错误信息  
+15：–pivol-colimn 主列名称  
+16：–save 保存选项到一个ini配置文件  
+17：–scope 指定正则表达式从提供得代理日志里过滤目标  
+18：–test-filter 选择测试payload  
+19：–update 更新sqlmap  
+【混杂参数】  
+1：-z 使用短助记符  
+2：–alert 当发现sql注入式，运行主机os命令  
+3：–answers 设置问题答案  
+4：–beep 当发现sql注入时，发出蜂鸣声  
+5：–cleanup 从sqlmap特定得udf和表里清除dbms  
+6：–dependencies 检查sqlmap缺少得依赖关系  
+7：–disabie-coloring 禁用控制台出书颜色  
+8：–gpage 指定使用得google dork响应得页码  
+9：–identify-waf 绕过waf,ips,ids  
+10：–mobile 使用UA模拟成智能手机  
+11：–page-rank 展示google dork结果得页码值  
+12：–purge-output 从输出目录安全移除所有内容  
+13：–smart 在积极启发得情况下进行彻底得测试  
+14：–sqlmap-shell 构建一个交互式sqlmap shell  
+15：–wizard 初学者简单向导  
+这两项内容数据常用技巧类搭配动作，可根据翻译使用，需要注意得几个参数：  
+–batch 在使用sqlmap时，有时一些响应需要用户交互，输入Y，N，sky，quit等，使用此选项可使用默认配置  
+–output-dir=指定输出路径，方式控制台输出过多，无法查看，也方便记录  
+–gpage 默认使用google搜索得前100个文件，当使用前面得-g参数，配合此参数指定页面  
+–identify-waf 进行WAF/IPS/IDS保护测试  
+–mobile 使用移动产品UA，把sqlmap伪装成手机，也可使用前面得-user-angent自己指定  
+–smart 只能深度启发式扫描，获取会有惊喜  
+–wizard 和上面得完全不同，纯新手选择，一步步让你输入url等参数  
+  
+

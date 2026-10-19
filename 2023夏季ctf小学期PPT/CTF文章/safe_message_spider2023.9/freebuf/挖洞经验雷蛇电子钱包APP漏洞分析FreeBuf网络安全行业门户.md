@@ -1,0 +1,211 @@
+![1589966834_5ec4f7f2168fb.png!small](https://image.3001.net/images/20200520/1589966834_5ec4f7f2168fb.png!small)
+
+雷蛇支付（Razer
+Pay）在新加坡和马来西亚被广泛使用，在该篇Writeup中，作者通过APP逆向分析，利用Frida调试，发现了雷蛇支付电子钱包（Razer Pay
+Ewallet）中的用户签名（Signature）生成漏洞，由此可读取雷蛇支付用户的聊天记录、删除用户绑定的银行账户并窃取用户个人敏感信息，漏洞最终获得了雷蛇官方将近$6,000的奖励。以下是作者的漏洞发现思路，仅当姿势学习借鉴。
+
+## 漏洞背景
+
+> 雷蛇（Razer
+> Inc，RΛZΞR）是一家在新加坡创立的游戏周边设备公司，又被称为“绿光灯厂”，近年开始进军电子消费业务。雷蛇的两个总部分别设立在新加坡及美国圣地牙哥。2017年11月在香港联交所上市，产品面向游戏玩家，其产品大多数都以肉食动物命名。2018年推出电子钱包Razer
+> Pay。2020年5月，开始生产外科口罩。
+
+在雷蛇支付电子钱包（Razer Pay
+Ewallet）的请求防篡改机制中，除auth_token之外，还使用了参数signature对不同用户的请求进行签名验证，每一个对服务端的GET和POST请求都会附带一个经过编码的signature参数值和用户id，如下图所示：
+
+![1589966554_5ec4f6daa5548.png!small](https://image.3001.net/images/20200520/1589966554_5ec4f6daa5548.png!small)
+
+因此，试图对任意请求参数的篡改重发都会无效，但经APK逆向分析发现，雷蛇支付电子钱包（Razer Pay
+Ewallet）存在用户签名（Signature）生成漏洞，结合Frida的分析利用可自动计算生成新的用户签名（Signature），由此可导致很多的越权（IDOR）问题。
+
+我在使用Burp对雷蛇支付APP的网络请求进行抓包时发现，由于请求中用户签名（Signature）的保护，所以其中很多参数都是无法篡改的，因此，我第一时间想到了注册另外一个雷蛇支付用户来进行配合测试，但在两个用户的同一请求的场景下，经会话Payload的替换操作后，执行无效，原因还是出在有用户签名（Signature）的会话请求保护。
+
+我决定切实分析一下用户签名（Signature）的生成机制，在apktool 和 Jadx-Gui
+的反编译帮助下，我对其APP的运行有了代码层次的理解，发现其中存在一个名为“MD5Encode”的方法函数，从名字上就知道是用了MD5加密算法。经过一些参数Payload的组合，我决定尝试一下生成用户签名（Signature），但怎么试也无法生成正确的用户签名，我猜想可能是参数次序错误，或它是一种非常规的MD5加密。
+
+![1589966629_5ec4f725a947c.png!small](https://image.3001.net/images/20200520/1589966629_5ec4f725a947c.png!small)
+
+## 删除其他用户的绑定银行账户
+
+不抛弃不放弃，我把其中涉及用户签名生成的所有相关代码拷贝出来，然后用IDE调试工具IntelliJ
+IDEA进行尝试生成，终于，在“MD5Encode”方法运用中，我组合对了正确的参数次序，不过由于有代码混淆，还需要做一些微调，但还算不太难。最终，在之前生成的请求主体中，插入正确的参数值，用上述代码即能生成正确的用户签名（Signature）字符串！
+
+（小编分析，在以下多个用户签名的生成过程中，用到了用户自己的token，其为参数之一，然后经MD5Encode方法，可以生成与多个用户id对应的不同用户签名，也就是可以成功生成雷蛇服务端分配给多个用户的各个用户签名Signature）
+
+![1589966641_5ec4f7312bf5a.png!small](https://image.3001.net/images/20200520/1589966641_5ec4f7312bf5a.png!small)
+
+![1589966648_5ec4f7380ad74.png!small](https://image.3001.net/images/20200520/1589966648_5ec4f7380ad74.png!small)
+
+由此，我首先想到的就是测试越权漏洞（IDOR），我选择了一个比较敏感的API接口/deleteBankAccount，也就是删除用户绑定的银行账户操作，然后在两个账户的测试场景下，竟然能成功删除掉另一雷蛇支付（Razer
+Pay）用户的绑定银行账户！
+
+![1589966664_5ec4f748a33c0.png!small](https://image.3001.net/images/20200520/1589966664_5ec4f748a33c0.png!small)
+
+## 加入其他用户创建的聊天群组
+
+到这步，我想肯定还有其它受Signature保护的API接口存在IDOR越权问题，于是我尝试用上述方法去做了一波测试，但毫无发现。而且其它API接口使用了不同代码混淆方法，导致我花费了很多时间去研究分析。没有头绪之时，那就用Frida来试试吧，Frida是一个非常好用的调试工具，我正好可以用它来识别一些可以hook利用的方法函数，结合上述的MD5Encode方法，找到正确的电子钱包代码包，同样可以用这些方法函数生成新的正确的用户签名Signature。
+
+如以下frida.js代码实现的功能是为当前用户生成的新的用户签名，以加入其他用户创建的聊天群组：
+
+``// frida.js - Use this for recalculating signature for adding user to other
+people's chatgroup``
+
+``
+
+````
+
+``
+
+``console.log("Starting...")``
+
+``
+
+````
+
+``
+
+``Java.perform(function () {``
+
+``
+
+````
+
+``
+
+``var MD5 = Java.use('com.mol.molwallet.view.MD5')``
+
+``
+
+````
+
+``
+
+``MD5.MD5Encode.implementation = function (arg)``
+
+``
+
+````
+
+``
+
+``{``
+
+``
+
+````
+
+``
+
+``console.log("Hooking class MD5 - method MD5Encode")``
+
+``
+
+````
+
+``
+
+``//Extra step - calculate new signature``
+
+``
+
+````
+
+``
+
+``var ret_value =
+this.MD5Encode("groupId=1x9&userIds=95xxx7&token=b6fxxxd3-2xxc-4xxf-bxx7-7fxxxxa6")``
+
+``
+
+````
+
+``
+
+``console.log("[+] signature= " + ret_value)``
+
+``
+
+````
+
+``
+
+``//Call method with original arguments so app doesn't crash ..``
+
+``
+
+````
+
+``
+
+``var ret_value = this.MD5Encode(arg) //original value``
+
+``
+
+````
+
+``
+
+``console.log("original ARG: " + arg) ``
+
+``
+
+````
+
+``
+
+``return ret_value;``
+
+``
+
+````
+
+``
+
+``}``
+
+``
+
+````
+
+``
+
+``})``
+
+``
+
+但是要运行Frida，需要root级别的访问，好在我另外发现了一个服务端漏洞可以让攻击者在一台root过的移动设备中执行操作，以下为在移动设备中启动Frida服务的命令：
+
+  
+
+`$ adb shell`
+
+``
+
+`# sudo su`
+
+``
+
+`# /data/local/tmp/frida-server`
+
+``
+
+  
+
+之后，在另一个终端窗口下，运行以下命令：
+
+    
+    
+    $ frida -l frida.js -U com.mol.molwallet
+
+然后，在移动设备中，我打开雷蛇支付APP，这其中任何调用到hook方法“MD5Encode”的操作都将会执行上述的frida.js脚本，最终我就能针对特定用户请求生成有效正确的用户签名Signature了，这里的测试用例是，我可以为我自己生成一个用户签名，以它为验证凭据加入其他用户创建的聊天群组中去，这种方式的危害之处在于，可以神不知鬼不觉地加入某个群组，然后获取别人的聊天内容，或点击领取抢掉别人发送的红包。
+
+![1589966924_5ec4f84c90719.png!small](https://image.3001.net/images/20200520/1589966924_5ec4f84c90719.png!small)
+
+![1589966930_5ec4f852aa710.png!small](https://image.3001.net/images/20200520/1589966930_5ec4f852aa710.png!small)
+
+## 导致的其它安全问题
+
+利用上述方法，我把其它受Signature影响的所有API接口都做了测试，发现可以从这些API接口获取用户群组聊天时分享的红包金额，另外还能修改并查看其他用户的转账记录和个人信息。
+
+ ***参考来源：[sambal0x](https://blog.sambal0x.com/2020/04/30/Hacking-razer-pay-ewallet-app.html)，clouds 编译整理，转载请注明来自 FreeBuf.COM**
+

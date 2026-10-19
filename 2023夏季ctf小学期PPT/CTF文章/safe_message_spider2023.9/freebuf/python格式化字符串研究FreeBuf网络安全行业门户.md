@@ -1,0 +1,164 @@
+原创 Ash 合天智汇
+
+## 前言  
+
+前两天与队友交流时提及python的格式化字符串漏洞，这个漏洞之前接触不多，所以写篇文章从基础部分仔细研究了研究。python环境是python3.7。
+
+## Python3里的格式化字符串  
+
+python3中的格式化字符串主要有以下两种形式：
+
+"test %s" % ('test') "test {0}".format('test')
+
+这两个语句的输出都是test test。虽然效果一样，但是在python
+web的开发中一般认为前者比后者要安全，因为后者可能会因为自身支持的一些特殊用法导致配置信息等的泄露。
+
+首先，format形式的格式化字符串基本用法如下：
+
+"I am {1},he is {0}".format("a","b")
+
+这个语句的输出是I am b,he is a，大括号{}中的数字代表了format的变量顺序。
+
+"I am {MyName},he is {HisName}".format(MyName="aa",HisName="bb")
+
+这个语句的输出是I am aa,he is bb，这种语句可以在format函数的参数通过key来赋值。
+
+"I am {},he is {}".format("a","b")
+
+这个语句的输出是I am a,he is b，这样的用法会让大括号与format的参数一一对应。
+
+当大括号与format的参数不能一一对应的时候便会报错，例如：
+
+"I am {0},he is also {0}".format('a') "I am {0},he is also {1}".format('a')
+
+前者会输出I am a,he is also a，而后者会报错tuple index out of range。
+
+这些format函数的基本用法并不是导致格式化字符串漏洞的根源，查看下列代码：
+
+"first {0[1]}, second {0}".format(['a','b'])
+
+输出为first b, second ['a',
+'b']，可见当format函数的参数是一个列表时，可以通过用方括号添加索引的方式来获取列表的值。同样的，这种用法也可以用在类的属性上，比如以下代码会输出字符串a的内置属性__class__:
+
+print("{0.__class__}".format('a'))
+
+输出结果是<class 'str'>
+
+## 一般利用  
+
+python的格式化字符串的利用与沙盒逃逸或者python
+SSTI很相似，但format与后两者的区别在于它只能读取属性而不能执行方法，这就限制了格式化字符串的利用与攻击链的构造。举个例子，python
+SSTI中可以通过'a'.__class__.__base__.__subclasses__()[12]来获取任意类，但是由于format函数无法执行__subclasses__()这样的方法，直接把这种payload套进格式化字符串的利用中会报错type
+object 'object' has no attribute '__subclasses__()'。
+
+在与队友讨论时我们用的测试代码简化如下：
+
+from secret.secret import secret class AppendStr(object): def __init__(self,
+message = 'test'): self.message = message def __str__(self): return
+self.message def test(): s = input("test\n") t = s + " by the way {0}"
+print(t.format(AppendStr())) while(1): test()
+
+可以看到这里format函数的参数是一个对象的实例，而secret保存在全局变量中。熟悉SSTI或者沙箱绕过的都知道，python的函数类有一个内置属性__globals__可以以字典的形式返回函数所在的全局命名空间所定义的全局变量。结合format函数的格式化字符串可以读取成员属性的特性，我们很容易知道只需通过一个调用链来获取一个函数类并读取它的__globals__属性即可。这里我们可以使用这样的payload：{0.__class__.__init__.__globals__}。由于AppendStr类定义了__init__函数，所以可以通过{0.__class__.__init__}来获取一个函数类<function
+AppendStr.__init__ at
+0x0000019C611D2730>，再读取这个类的__globals__属性来获取secret。这个思路也适用于一切的类的成员函数，假如把测试代码改为如下：
+
+def test(): s = input("test\n") t = s + " by the way {0}"
+print(t.format('test')) while(1): test()
+
+如果机械地套用上边的payload会报错'wrapper_descriptor' object has no attribute
+'__globals__'。可以通过以下代码来查看字符串类的成员属性：
+
+print('a'.__class__.__dict__)
+
+输出很多这里就不一一列举了。可以在输出的结果中看到字符串类并没有function类型的成员属性，所以不能通过格式化字符串来获得全局变量。
+
+## Flask下读取secret_key  
+
+把情景切换到flask下写出如下的测试代码：
+
+from flask import Flask from flask import request app = Flask(__name__)
+app.config['SECRET_KEY'] = 'gasidfjbodnjgfnof' class AppendStr(object): def
+__init__(self, message = 'test'): self.message = message def __str__(self):
+return self.message @app.route('/', methods=['GET']) def index(): template =
+'Hello {0}, This is your email: ' + request.args.get('email') return
+template.format(AppendStr()) if __name__ == '__main__': app.run('0.0.0.0',
+8080)
+
+前置步骤与之前讲的相似，get方法提交参数?email={0.__class__.__init__.__globals__}可以看到当前的全局变量，然而secret_key并不会出现在返回中。我本地测试时返回的是这些数据：
+
+![v2-23f4427abbb0f712b5a20db5fe2cf396_720w](https://pic2.zhimg.com/80/v2-23f4427abbb0f712b5a20db5fe2cf396_720w.png)
+
+似乎不能简单粗暴地通过这个payload来获取secret_key，我们再看看flask的代码app.py：
+
+# 部分包及代码省略 from .config import Config, ConfigAttribute class
+Flask(_PackageBoundObject): # 注释省略 config_class = Config testing =
+ConfigAttribute('TESTING') secret_key = ConfigAttribute('SECRET_KEY')
+session_cookie_name = ConfigAttribute('SESSION_COOKIE_NAME')
+
+可以看到Flask类的属性secret_key会保存当前的secret_key的值，而上边返回的全局变量里有'app': <Flask
+'template'>。我这个文件名是template，这就是当前的Flask类实例化的对象。所以只需要在上边那个payload后补充一些东西就能拿到secret_key，其内容如下：?email={0.__class__.__init__.__globals__[app].secret_key}。
+
+![v2-28d90f44e15f2d17d2fa26a0f49d22b6_720w](https://pic4.zhimg.com/80/v2-28d90f44e15f2d17d2fa26a0f49d22b6_720w.png)
+
+## django下读取SECRET_KEY  
+
+p师傅很早以前写过一篇文章讲解过这个利用方法，其链接如下：https://www.leavesongs.com/PENETRATION/python-string-format-vulnerability.html。p师傅在文章中给出了两个payload，但并没有仔细讲解其原理。所以我这里就逐步分析下其中一个payload的构造，另一个payload思路类似。测试代码如下：
+
+from django.http import HttpResponse def index(request): template = 'Hello
+{user}, This is your email: ' + request.GET.get('email') return
+HttpResponse(template.format(user=request.user))
+
+在未登录状态下，request.user是类AnonymousUser的实例化对象，类定义在django/contrib/auth/models.py文件中395行：
+
+![v2-e8668588e7387b6a8e0f467dd58bdefd_720w](https://pic1.zhimg.com/80/v2-e8668588e7387b6a8e0f467dd58bdefd_720w.png)
+
+402行看到该对象的_groups属性是一个EmptyManager类的对象。429行可知该对象的groups方法也被转化为了名为groups且值与_groups相同的类属性。EmptyManager类定义在django/db/models/manager.py的195行
+
+![v2-35f306195a6162de3fa4ff08a332b217_720w](https://pic4.zhimg.com/80/v2-35f306195a6162de3fa4ff08a332b217_720w.png)
+
+可以看到这个对象的model属性是与AnonymousUser类定义在同一个文件中的Group类，在django/contrib/auth/models.py文件中91行：
+
+![v2-a0f72ae754541fc75afdb0c039082a60_720w](https://pic2.zhimg.com/80/v2-a0f72ae754541fc75afdb0c039082a60_720w.png)
+
+Group类本身定义的东西没什么好看的，一路跟随至其父类的父类ModelBase，定义在django/db/models/base.py的71行，有）：
+
+![v2-5f752e6491a423d05bbedd8d675fa652_720w](https://pic2.zhimg.com/80/v2-5f752e6491a423d05bbedd8d675fa652_720w.png)
+
+在121行可以看到该类的_meta属性是一个Options类实例化的对象。跟踪至django/db/models/options.py的65行可以看到类定义（此处由于代码太长不截图了）：
+
+from django.apps import apps # 省略 class Options: # 省略 default_apps = apps def
+__init__(self, meta, app_label=None): self.app_label = app_label self.apps =
+self.default_apps # 省略 @property def app_config(self): # Don't go through
+get_app_config to avoid triggering imports. return
+self.apps.app_configs.get(self.app_label) # 省略
+
+可以看到app_config方法被转化为了只读属性，而该属性返回self.apps.app_configs.get(self.app_label)。审计代码可以清楚得发现self.apps就是导入的apps模块，即一个module类的对象。跟踪至django/apps/registry.py，可以看到类Apps的定义里，即原文件13行有
+
+class Apps: def __init__(self, installed_apps=()): self.app_configs = {} # 省略
+def populate(self, installed_apps=None): # 省略 for entry in installed_apps: if
+isinstance(entry, AppConfig): app_config = entry else: app_config =
+AppConfig.create(entry) # 91行 if app_config.label in self.app_configs: raise
+ImproperlyConfigured( "Application labels aren't unique, " "duplicates: %s" %
+app_config.label) self.app_configs[app_config.label] = app_config # 97行
+
+跟踪91行的AppConfig.create至django/apps/config.py，有：
+
+class AppConfig: # 省略 def create(cls, entry): try: module =
+import_module(entry)
+
+这个Options类实例化的对象的app_config属性返回会返回一个对象，而这个对象的module属性是python的一个模块即module。而对于我的测试代码这种情景，module的内容为<module
+'django.contrib.auth' from 'C:\\\python37\\\lib\\\site-packages\\\django\\\contrib\\\auth\\\\__init__.py'>。查看该模块的代码，可以在文件django/contrib/auth/admin.py中看到
+
+from django.conf import settings # 省略
+
+settings模块里就有我们需要的SECRET_KEY。故我们可以通过简单的模块包含关系利用格式化字符串漏洞来读取SECRET_KEY，故最终payload如下：[{user.groups.model._meta.app_config.module.admin.settings.SECRET_KEY}]
+Python编程指南：
+
+[课程:Python编程指南(合天网安实验室)](http://www.hetianlab.com/cour.do?w=1&c=C172.19.104.182015082711022000001)
+
+![v2-e9a2d8f5b1f8f14eb41ae3a1eeced399_720w](https://pic4.zhimg.com/80/v2-e9a2d8f5b1f8f14eb41ae3a1eeced399_720w.png)
+
+声明：笔者初衷用于分享与普及网络知识，若读者因此作出任何危害网络安全行为后果自负，与合天智汇及原作者无关！
+
+  
+

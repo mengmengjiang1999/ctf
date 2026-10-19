@@ -1,0 +1,217 @@
+本文是针对ASX to MP3 Converter软件进行的漏洞分析
+
+## 背景概述
+
+本来是浏览学长博客[ASX TO
+MP3本地代码执行漏洞](https://whereisk0shl.top/post/2016-11-04)感觉这个洞比较好入手，思路也比较清晰，就想着简单复现一下，但是在实际分析之中发现与博客原文写的有较大出入，于是自己一路分析上去，想搞清楚差异的地方探究真正的漏洞原因。
+
+实验环境与原博中一样：
+
+Asx to MP3 Converter 3.1.2（原博中写的是3.0.0，但提供的下载链接是3.1.2，是否是分析出现差异的原因？）
+
+Windows xp sp3
+
+Windbg
+
+IDA pro
+
+OD
+
+软件下载地址：https://www.exploit-db.com/apps/b31a84e79d9941d89336b6708ef52a20-ASXtoMP3Converter_3121.exe
+
+#### SEH攻击原理简述（详情可参考0day2）
+
+为了保证系统在遇到错误时不至于崩溃，仍能够健壮稳定地继续运行下去，Windows会对运行在其中的程序提供一次补救的机会来处理错误，这种机制称为Windows异常处理机制。S.E.H即异常处理结构体(Structure
+Exception Handler)S.E.H链表指针和异常处理函数句柄，共计8个字节。
+
+S.E.H结构体存放在系统栈中，线程初始化时，会自动向栈中安装S.E.H作为默认的异常处理。当异常发生时，操作系统会中断程序，并首先从T.E.B的0字节偏移处取出距离栈顶最近的S.E.H中的异常处理函数进行处理。
+
+![image-20200417205721152](https://image.3001.net/images/20221018/1666054507_634df96b59e63dc69b765.jpg!small)
+
+利用思路基本是：
+
+  1. 通过溢出覆盖栈中SEH，将指向下一条记录的指针覆盖为shellcode地址；
+
+  2. 触发一个SEH；
+
+  3. 应用程序处理SEH时调用了指令，将指向下一条记录的指针作为EIP内容；
+
+  4. 跳到shellcode地址，执行shellcode。
+
+## 原博中的分析思路复现
+
+利用poc生成一个畸形m3u文件，播放器打开文件，程序崩溃
+
+PoC:
+
+    
+    
+    poc = "\x41" * 50000
+    
+    rst = open("exploit.m3u",'w')
+    rst.write(poc)
+    rst.close();
+    
+
+原文理想中的情况应该是：
+
+1.使用windbg到达漏洞现场，使用kb发现堆栈调用全是系统dll的调用，无法回溯漏洞发生前的关键函数，于是更改思路
+
+2.想到该漏洞是一个文件格式的poc，那么在主程序中很有可能会通过fopen调用这个poc打开，以读取其中的文件从而触发文件格式的漏洞，于是想办法通过fopen函数来定位到漏洞发生前的函数
+
+3.在IDA Pro中找到5个fopen的字符串函数，在这几个地址处用windbg打断点
+
+4.发现在加载漏洞文件后windbg调用了fopen两次，第一次正常，在第二次时将畸形的文件格式读入到缓冲区中，而此时没有对文件的长度进行任何检查，而是直接读入缓冲区
+
+5.继续运行再调用后续函数时，返回地址被覆盖，导致出现一个错误，调出SEH，而SEH已经被覆盖，最终程序结束
+
+最终得出结论：
+_由于对于filename的长度检查不严格，导致直接作为参数回调到外层函数中，因此当外层函数结束时，程序返回到一个不可读的地址，从而触发了异常处理流程，因为文件畸形内容，导致了SEH指针被覆盖，程序可控。_
+
+我按照此思路复现实际遇到的情况：
+
+1.使用windbg达到漏洞现场，发现可以回溯漏洞发生前的关键函数，断在了00430402的位置
+
+![image-20200416171026626](https://image.3001.net/images/20221018/1666054508_634df96c40d0535204366.jpg!small)
+
+2.在IDA中同样搜寻到5个fopen的调用并在windbg中对应打了断点，但是在实际调用中加载漏洞文件后windbg调用了fopen仅1次而不是2次，之后又会断在00430402
+
+![image-20200417230817139](https://image.3001.net/images/20221018/1666054509_634df96d3f29999bb6b18.jpg!small)
+
+3.使用OllyDbg分析程序崩溃位置也与原博不同，原博程序是在执行到最后ret
+4时，跳转地址被覆盖为414141不可读出现错误，实际调试过程中并未执行到该函数段最后，而是在过程中读写错误崩溃的，具体原因是：
+
+0042BD1D |mov ecx,dword ptr ss:[esp+0xAA48] ；堆栈 ss:[000DBFB4]=41414141
+
+0042BD26 |push ecx ；堆栈000D1568 41414141 AAAA
+
+004303E9 | mov ebx,dword ptr ss:[esp+0x10] ；堆栈 ss:[000D1568]=41414141
+
+004303FE | mov esi,ebx ；ebx=41414141
+
+00430402 |rep movs dword ptr es:[edi],dword ptr ds:[esi]
+；ds:[esi]=[41414141]=???
+
+在执行rep movs操作中由于414141地址不可读导致出错，并且此时SEH已然被覆盖了
+
+![image-20200417234729856](https://image.3001.net/images/20221018/1666054510_634df96e31d4a013f29d6.jpg!small)
+
+#### 此时的疑问
+
+1.既然没有第二次fopen依然崩溃，问题可能并不出在fopen操作，那么问题出在哪？
+
+2.从图中可知SEH已经被覆盖，那么是在之前何处覆盖的？操作是什么？
+
+此时我发现不止有我对此质疑，网上另一篇帖子也无法复现，和我的情况完全相同，为我提供了下一步的思路
+
+[漏洞分析——ASX to MP3
+Converter本地代码执行漏洞](%5Bhttps%3A//ayesawyer.github.io/2019/07/08/%E6%BC%8F%E6%B4%9E%E5%88%86%E6%9E%90%E2%80%94%E2%80%94ASX-to-MP3-Converter%E6%9C%AC%E5%9C%B0%E4%BB%A3%E7%A0%81%E6%89%A7%E8%A1%8C%E6%BC%8F%E6%B4%9E/%5D\(https://ayesawyer.github.io/2019/07/08/%E6%BC%8F%E6%B4%9E%E5%88%86%E6%9E%90%E2%80%94%E2%80%94ASX-to-MP3-Converter%E6%9C%AC%E5%9C%B0%E4%BB%A3%E7%A0%81%E6%89%A7%E8%A1%8C%E6%BC%8F%E6%B4%9E/\))
+
+## 分析原因
+
+从崩溃地址00430402开始向上分析，追溯这一堆A的由来，首先断点依然在fopen处，虽然已经感觉问题不在这里，但还是看一下
+
+![image-20200418000156687](https://image.3001.net/images/20221018/1666054511_634df96f09f0df82f36e0.jpg!small)
+
+从地址428B46调用fopen，在428B72处调用freed读入文件的值，之后一直到fclose都没有任何异常数据，所以漏洞点并不在这部分代码中
+
+继续向下调试，发现在42B62B位置调用MSA2Mfil.Playlist_FindNextItem后就开始有异常数据，可以判断问题出在该函数内部，且在模块列表中发现该函数是在程序自带的Dll库中，是MSA2Mfilter03.dll
+
+![image-20200416181606697](https://image.3001.net/images/20221018/1666054511_634df96fb50e926cfb915.jpg!small)
+
+同时使用IDA查看MSA2Mfilter03.dll中的代码，在Functions中确实有Playlist_FindNextItem函数
+
+![image-20200416190947842](https://image.3001.net/images/20221018/1666054512_634df970a38569134b122.jpg!small)
+
+在OD中也进入该dll逐步调试，在10008D55位置第一次出异常数据，在IDA中对应发现在函数sub_10008D20中无论条件如何，最终都会输出该异常数据
+
+![image-20200418004152406](https://image.3001.net/images/20221018/1666054513_634df9717645934f78fff.jpg!small)
+
+![image-20200418003654169](https://image.3001.net/images/20221018/1666054514_634df9726728400af9e2d.jpg!small)
+
+![image-20200418003726435](https://image.3001.net/images/20221018/1666054515_634df9734d49c6fd6dc6b.jpg!small)
+
+![image-20200418092057997](https://image.3001.net/images/20221018/1666054515_634df973eaa8252365da5.jpg!small)
+
+继续向下走，依旧是在该dll中，发现在地址1000D3C3处为溢出点，SEH就是在此处被覆盖掉的
+
+![image-20200418005703356](https://image.3001.net/images/20221018/1666054517_634df9751e2b3177e8ff3.jpg!small)
+
+ida中查看REP MOVS循环，其实是使用函数strcpy完成循环复制，问题就出现在strcpy函数。
+
+![image-20200416222010065](https://image.3001.net/images/20221018/1666054518_634df9761295c0362a51e.jpg!small)
+
+![image-20200418090251250](https://image.3001.net/images/20221018/1666054518_634df976be6a9701717b3.jpg!small)
+
+此时我们就可以简单计算一下从覆盖的起点（由图可知D159C）到最近一个SEH（由图可知DBFA4）有多远了，它们相减是43528，看来poc设置50000还是有考虑的，经过多次测算调试，poc中设置43483个A（前面一串路径占了部分位置），后面的八个字符即正好是SEH的位置，后面写利用脚本可以使用该位置。
+
+![image-20200416224706440](https://image.3001.net/images/20221018/1666054519_634df977a1b5604e67f3f.jpg!small)
+
+![image-20200416224017391](https://image.3001.net/images/20221018/1666054520_634df978aed8d576c7e9b.jpg!small)
+
+![image-20200416224157265](https://image.3001.net/images/20221018/1666054521_634df97936134f59b6380.jpg!small)
+
+看到这里有没有朋友发现奇怪的地方，在第二部分原博复现：我实际的操作第3步中分析了程序不像原博中一样执行到了最后而是在中间断开的原因，起端就是如下图这个位置堆栈DBFB4的非法数据mov进了ecx，最终导致内存读写错误，而DBFB4的非法数据从何而来我们从上图就可以一清二楚
+
+![image-20200417102251074](https://image.3001.net/images/20221018/1666054521_634df979b04f7c5dbb37f.jpg!small)
+
+如果我们想要复现原博中的情况，让它执行到最后再跳转错误，只需要在构造poc时，中间多垫几层，在DBFB4位置输入一个合法地址就可以了，此时poc应该为
+
+    
+    
+    poc = "\x41" * 43483 SEH偏移
+    poc += "\x42\x42\x42\x42"   ；覆盖Nseh
+    poc += "\x41\x41\x41\x41"   ;覆盖SEH
+    poc += "\x90"*8
+    poc += "\xCC\xC7\x10\x00"  ；防止过程中内存读写出错构造的跳转地址
+    
+    
+    
+    rst = open("exploit.m3u",'w')
+    rst.write(poc)
+    rst.close();
+    
+    
+
+构建地址后，成功继续向下走，分析过程就与原博基本相同了，但是在最后一步retn
+4时，发现跳转为90909090也就是nop而不是A，仔细看堆栈，位置为DC5B8正好为防止内存出错构造地址的上一条
+
+![image-20200418095722792](https://image.3001.net/images/20221018/1666054523_634df97b3831a27a9d71d.jpg!small)
+
+则poc进一步改为
+
+    
+    
+    poc = "\x41" * 43483 SEH偏移
+    poc += "\x42\x42\x42\x42"   ；覆盖Nseh
+    poc += "\x41\x41\x41\x41"   ;覆盖SEH
+    poc += "\x90"*4
+    poc += "\x41\x41\x41\x41"  ;原博程序末尾 retn 4 跳转的地址
+    poc += "\xCC\xC7\x10\x00"  ；防止过程中内存读写出错构造的跳转地址
+    
+    
+    
+    rst = open("exploit.m3u",'w')
+    rst.write(poc)
+    rst.close();
+    
+    
+
+至此分析结束，进一步的利用exp可以在这个poc基础上改。
+
+## 总结
+
+综合看下来，该漏洞并不是由于fopen而产生的，具体产生原因应该是应用程序自带的MSA2Mfilter03.dll组件内Playlist_FindNextItem函数解析恶意.M3U文件时不正确的边界检查引起的，溢出点在1000D3C3地址处，REP
+MOVS循环，其实是使用函数strcpy完成循环复制，问题就出现在strcpy函数，精心构造的POC可导致SEH指针被覆盖，因此在函数结束时，程序返回到一个不可读的地址，从而触发了异常处理流程，关键节点的地址均可在poc中改变，程序可控。
+
+## 参考文献
+
+ASX TO MP3本地代码执行漏洞 https://whereisk0shl.top/post/2016-11-04
+
+[翻译]Windows漏洞利用开发 - 第3部分：偏移更改和重定位模块 https://bbs.pediy.com/thread-225831.htm
+
+漏洞分析——ASX to MP3 Converter本地代码执行漏洞
+<https://ayesawyer.github.io/2019/07/08/%E6%BC%8F%E6%B4%9E%E5%88%86%E6%9E%90%E2%80%94%E2%80%94ASX-to-MP3-Converter%E6%9C%AC%E5%9C%B0%E4%BB%A3%E7%A0%81%E6%89%A7%E8%A1%8C%E6%BC%8F%E6%B4%9E/>
+
+Windows漏洞利用开发教程 Part 4：SEH https://www.freebuf.com/articles/system/170703.html
+

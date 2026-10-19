@@ -1,0 +1,193 @@
+![](https://image.3001.net/images/20190912/1568245474_5d7986e267cb4.png!small)
+
+**yar是一款OSINT工具，主要用于侦察Github上的存储库、用户和组织。Yar会克隆给定的用户/组织的存储库，并按照提交时间顺序遍历整个提交历史，搜索密钥、令牌及密码等。每当你发现一个密钥时，它都会打印出来以供你进一步的评估分析。**
+
+Yar通过正则表达式，熵（entropy）或两者进行搜索，你可以根据实际情况自行选择。你可以把yar想象成是truffleHog的升级版，它能做truffleHog可以做的所有事情，甚至比它做的更多更好！
+
+##  安装
+
+安装只需运行以下命令即可。
+
+    
+    
+    go get github.com/Furduhlutur/yar
+
+只需确保在首选shell
+rc中设置了GOPATH环境变量，并且$GOPATH/bin目录位于PATH中。更多信息请[在此处](https://golang.org/doc/code.html#GOPATH)查看。
+
+##  使用
+
+**搜索组织密钥：**
+
+    
+    
+    yar -o orgname
+
+**在用户存储库中搜索密钥：**
+
+    
+    
+    yar -u username
+
+**在单个存储库中搜索密钥：**
+
+    
+    
+    yar -r repolink
+
+或者如果你已克隆了存储库：
+
+    
+    
+    yar -r repopath
+
+**在组织，用户和存储库中搜索密钥：**
+
+    
+    
+    yar -o orgname -u username -r reponame
+
+**有自己的预定义规则？**
+
+规则存储在JSON文件中，格式如下：
+
+    
+    
+    {
+        "Rules": [
+            {
+                "Reason": "The reason for the match",
+                "Rule": "The regex rule",
+                "Noise": 3
+            },
+            {
+                "Reason": "Super secret token",
+                "Rule": "^Token: .*$",
+                "Noise": 2
+            }
+        ]
+        "FileBlacklist": [
+            "Regex rule here"
+            "^.*\\.lock"
+        ]
+    }
+
+然后，你可以使用以下命令加载自己的规则集：
+
+    
+    
+    yar -u username --rules PATH_TO_JSON_FILE
+
+如果你已有一个truffleHog的配置并希望将它移植到yar配置中，那么config文件夹中有一个脚本可以为你完成。只需运行python3
+trufflestoconfig.py PATH_TO_TRUFFLEHOG_CONFIG，脚本就会为你生成一个名为yarconfig.json的文件。
+
+**不喜欢正则？**
+
+    
+    
+    yar -u username --entropy
+
+**两者同时进行：**
+
+    
+    
+    yar -u username --both
+
+**作为已身份验证用户进行搜索：**
+
+将github token添加到环境变量中。
+
+    
+    
+    export YAR_GITHUB_TOKEN=YOUR_TOKEN_HERE
+
+**将你的发现保存到JSON文件以供后续分析：**
+
+    
+    
+    yar -o orgname --save
+
+**不喜欢默认颜色，想添加自己的颜色设置？**
+
+可以通过环境变量自定义Yar的输出颜色。可供选择的颜色如下：
+
+    
+    
+    black
+    blue
+    cyan
+    green
+    magenta
+    red
+    white
+    yellow
+    hiBlack
+    hiBlue
+    hiCyan
+    hiGreen
+    hiMagenta
+    hiRed
+    hiWhite
+    hiYellow
+
+你可以添加bold参数让字体以粗体显示，例如 blue bold 蓝色粗体。
+
+这是通过以下env变量完成的：
+
+    
+    
+    YAR_COLOR_VERBOSE -> Color of verbose lines.
+    YAR_COLOR_SECRET  -> Color of the highlighted secret.
+    YAR_COLOR_INFO    -> Color of info, that is, simple strings that tell you something.
+    YAR_COLOR_DATA    -> Color of data, i.e. commit message, reason, etc.
+    YAR_COLOR_SUCC    -> Color of succesful messages.
+    YAR_COLOR_WARN    -> Color of warnings.
+    YAR_COLOR_FAIL    -> Color of fatal warnings.
+
+像这样 export YAR_COLOR_SECRET="hiRed bold"。
+
+##  帮助
+
+    
+    
+    usage: yar [-h|--help] [-o|--org "<value>"] [-u|--user "<value>"] [-r|--repo
+               "<value>"] [-c|--context <integer>] [-e|--entropy] [-b|--both]
+               [-f|--forks] [-n|--noise <integer>] [-s|--save] [--depth <integer>]
+               [--config <file>] [--cleanup] [--no-context]
+               Sail ye seas of git for booty is to be found
+    Arguments:
+      -h  --help        Print help information
+      -o  --org         Organization to plunder. 
+      -u  --user        User to plunder.
+      -r  --repo        Repository to plunder.
+      -c  --context     Show N number of lines for context. Default: 2
+      -e  --entropy     Search for secrets using entropy analysis. Default: false
+      -b  --both        Search by using both regex and entropy analysis. Overrides
+                        entropy flag. Default: false
+      -f  --forks       Specifies whether forked repos are included or not.
+                        Default: false
+      -n  --noise       Specify the maximum noise level of findings to output.
+                        Default: 3
+      -s  --save        Yar will save all findings to a file named findings.json if
+                        this flag is set. Default: false
+          --depth       Specify the depth limit of commits fetched when cloning.
+                        Default: 100000
+          --config      JSON file containing yar config.
+          --cleanup     Remove all cloned directories used for caching.
+          --no-context  Only show the secret itself, similar to trufflehog's regex
+                        output. Overrides context flag. Default: false
+
+##  致谢
+
+本项目的灵感主要来源于truffleHog这款工具，用于熵搜索的代码实际上是从truffleHog存储库中借用的，而truffleHog存储库则借用了[这篇文章](http://blog.dkbza.org/2007/05/scanning-data-for-entropy-anomalies.html)。
+
+另外，缺少以下库也不可能有该项目：、
+
+> [go-github](https://github.com/google/go-github/)
+>
+> [go-git](https://github.com/src-d/go-git/)
+>
+> [fatih/color](https://github.com/fatih/color)
+
+***参考来源：[GitHub](https://github.com/Furduhlutur/yar)，FB小编secist编译，转载请注明来自FreeBuf.COM**
+

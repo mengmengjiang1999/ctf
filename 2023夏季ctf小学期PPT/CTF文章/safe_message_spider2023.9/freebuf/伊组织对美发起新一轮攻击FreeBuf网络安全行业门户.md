@@ -1,0 +1,113 @@
+**研究人员近期发现了APT34利用新工具集进行的网络活动。根据此次发现的网络钓鱼文件，伊朗黑客组织将美国Westat员工或Westat提供服务的组织作为攻击目标。Westat是一家美国公司，为美国政府机构以及企业，基金会以及州和地方政府提供研究服务。**
+
+##  APT34背景
+
+APT34（也称为OilRig或Helix
+Kitten）是由伊朗政府支持的网络间谍组织，自2014年以来一直活跃。该组织的目标多为国际组织，主要集中在中东地区。他们的目标行业包括政府机构，金融服务，能源和公共服务，电信以及石油和天然气。2019年4月，该组织信息被揭露，包括受害者数据，黑客工具源代码和APT34操作的数据（Web
+Shell和域信息）。
+
+最近，FireEye揭露了APT34进行的鱼叉式网络钓鱼攻击，两次活动所使用的技术和工具相似，够确定此次针对Westat的攻击也是同一个组织所为。
+
+##  初始攻击
+
+在2020年1月下旬发现了名为survey.xls的文件，该文件看起来像是针对Westat员工或Westat客户量身定制的员工满意度调查。最初电子表格是空白的，仅当受害者启用宏后调查表才会显示给用户，恶意VBA代码开始执行。
+
+![](https://image.3001.net/images/20200324/1585017384_5e79722818f02.png!small)
+
+VBA将zip文件解压到临时文件夹中，提取“Client update.exe”可执行文件并将其安装到“C:Users<User>valsClient
+update.exe”。“Client update.exe”是TONEDEAF恶意软件修改版本，将其命名为TONEDEAF
+2.0。最后，crtt函数创建计划任务“CheckUpdate”。
+
+![](https://image.3001.net/images/20200324/1585017507_5e7972a3edbaa.png!small)提取的VBA代码和功能与FireEye报告中分析的代码相似：
+
+![](https://image.3001.net/images/20200324/1585017544_5e7972c84f14d.png!small)此外还发现了一个类似的文件，名为“Employee
+satisfaction survey.xls”。
+
+![](https://image.3001.net/images/20200324/1585017582_5e7972ee14efb.png!small)该文档的“代码页”字段是阿语，可见阿语是文档作者Microsoft
+Excel版本上安装的首选语言：
+
+![](https://image.3001.net/images/20200324/1585017647_5e79732f92b25.png!small)
+
+## TONEDEAF 2.0
+
+“Client
+update.exe”看起来是一个全新的后门恶意软件，进一步的检查显示它是一个修改版本。TONEDEAF后门通过HTTP与命令和控制服务器通信，接收和执行命令。FireEye最近的报告中提到了该工具是APT34组织定制工具之一。
+
+TONEDEAF 2.0与原始版本的目的相同，但是它有一个经过改进的C2通信协议和代码库。与原来的TONEDEAF不同，TONEDEAF
+2.0只包含shell执行功能，不支持任何预定义的命令。它还包含了动态导入、字符串解码和目标欺骗等新方法。
+
+在执行时程序会检查是否以“…”作为参数执行，如果在没有正确参数，例如通过双击启动它。它将向用户显示一个空白的窗口，使恶意软件看起来像一个合法的应用程序。
+
+![](https://image.3001.net/images/20200324/1585017928_5e7974484bd38.png!small)
+
+TONEDEAF 2.0还隐藏API，api名称以及dll被存储为字符串，在运行时按需解码和解析。
+
+![](https://image.3001.net/images/20200324/1585018014_5e79749e78f54.png!small)
+
+## C2通信
+
+后门使用HTTP进行C2通信，具有自定义编码和通信机制。后门发送的消息包含HTTP查询参数“?ser=<6
+digits>”作为标识符。前三位是<server_id>，后三位是<client_id>。消息格式：
+
+> 1、GET /dow?ser=<server_id><client_id> 请求消息，用于从服务器获取要执行的命令。
+>
+> 2、POST /upl?ser==<server_id><client_id> 回复命令消息，将执行的命令结果发送到服务器。
+
+![](https://image.3001.net/images/20200324/1585018187_5e79754baf718.png!small)
+
+在分析过程中C2处于活动状态，但不断向请求回复403 Forbidden HTTP错误代码。
+C2可能正在过滤目标，分析中发送的client_id参数与目标受害者参数不匹配。如果C2接受了ID，将使用<server_id>和后门需要执行的命令的编码消息进行回复。
+
+![](https://image.3001.net/images/20200324/1585018313_5e7975c983df2.png!small)
+
+该恶意软件将在命令前添加“ cmd U
+c”来执行该命令，并使用POST回复消息将命令结果发送回C2。当通过浏览器访问C2时，该站点尝试模仿<https://docs.microsoft.com/en-us/>，由于CSS配置错误无法正确显示 ：
+
+![](https://image.3001.net/images/20200324/1585018445_5e79764d6a496.png!small)还发现最近已生成与C2域匹配的SSL证书：
+
+![](https://image.3001.net/images/20200324/1585018490_5e79767a8f3e7.png!small)
+
+表明攻击者正在过渡到HTTPS通信，提高其OPSEC功能并避免检测。
+
+##  原始TONEDEAF痕迹
+
+通过对更改和新增部分的分析，有足够证据可将TONEDEAF 2.0与TONEDEAF聚类在一起。 虽然大部分代码已被修改，但总体流程和功能相似。
+C2通信不同，但仍然与TONEDEAF相似，例如对受害者和服务器使用三位数字标识符。此外，两种恶意软件中都在Windows状态栏中创建了一个通知图标。
+
+![](https://image.3001.net/images/20200324/1585018712_5e79775807dbe.png!small)![](https://image.3001.net/images/20200324/1585018741_5e797775dbdce.png!small)
+
+##  VALUEVAULT 2.0
+
+目前无法下载其他模块，但是可以确认活动中使用了VALUEVAULT。
+它是Golang中内置的浏览器凭证盗窃工具，是FireEye在分析APT34操作时发现的。用户上传的VALUEVAULT和TONEDEAF
+2.0，与同一用户上载到VirusTotal的Survey.xls文件仅相隔几分钟，表明这些恶意软件属于攻击的一部分。
+
+![](https://image.3001.net/images/20200324/1585018963_5e797853d88db.png!small)与以前的版本相比，此VALUEVAULT采用了更为简化的方法，舍弃了许多功能和字符串，
+现在仅支持Chrome密码转储。
+
+![](https://image.3001.net/images/20200324/1585019024_5e797890ed0b7.png!small)
+
+此外，VALUEVAULT 2.0是64位二进制文件，而VALUEVAULT 1.0是32位二进制文件。
+
+##  总结
+
+上个月APT34的最后一次操作是由FireEye揭露的，从目前的调查结果来看，本次针对美国公司的网络攻击行为也是该组织所为。对恶意软件变种技术分析显示，该组织已投入大量精力来升级其工具集，逃避检测。
+
+##  IOCs
+
+> manygoodnews[.]com
+>
+> c10cd1c78c180ba657e3921ee9421b9abd5b965c4cdfaa94a58e383b45bb72ca
+>
+> 4c323bc11982b95266732c01645c39618550e68f25c34f6d3d79288eae7d4378
+>
+> a897164e3547f0ce3aaa476b0364a200769e8c07ce825bcfdc43939dd1314bb1
+>
+> 20b3d046ed617b7336156a64a0550d416afdd80a2c32ce332be6bbfd4829832c
+>
+> d61eecd7492dfa461344076a93fc2668dc28943724190faf3d9390f8403b6411
+
+ ***参考来源：[intezer](https://intezer.com/blog-new-iranian-campaign-tailored-to-us-companies-uses-updated-toolset/)，由Kriston编译，转载请注明来自FreeBuf.COM**
+
+  
+

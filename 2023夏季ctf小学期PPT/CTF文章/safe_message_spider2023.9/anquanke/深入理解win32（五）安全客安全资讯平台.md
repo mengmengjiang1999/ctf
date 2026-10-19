@@ -1,0 +1,279 @@
+# 深入理解win32（五）
+
+阅读量 **306700**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-12-24 16:30:40
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t01e94717568627114f.jpg)
+
+## 前言
+
+在上一节中我们初步了解到了资源文件和如何在od中定位对话框的回调函数，今天我们来通过之前所学的知识来破解一个简单的小程序以及如何提取图标和寻找标题在资源文件中的位置。
+
+## 程序练习
+
+首先找到正确函数
+
+![](https://p5.ssl.qhimg.com/t01c23ba69f24f70d3d.png)
+
+在恭喜对话框前有一个`test eax,eax`语句，这个语句的作用是结果是1返回1，结果不为1都返回0，
+
+![](https://p3.ssl.qhimg.com/t01dba113d3b801cf09.png)
+
+继续往上看到有一个函数调用，f7跟进去看看，找到了编辑框、句柄以及获取编辑框内容的函数
+
+![](https://p3.ssl.qhimg.com/t014d6dba534e5297bd.png)
+
+这里往下跟一下eax，看一下eax进行了什么操作可以看到到函数的最后有两个`retn`
+
+第一个`retn`的eax做了`mov eax,0x1`的操作，也就是说从第一个出口出去的eax肯定为1
+
+第二个`retn`的eax做了`xor eax,eax`的操作，也就是说从第二个出口出去的eax肯定为0
+
+那我们就可以猜测到如果条件成立就从第一个`retn`出去返回成功的`messagebox`，如果条件不成立就从第二个`retn`出去返回失败的`messagebox`
+
+![](https://p0.ssl.qhimg.com/t01cc7886b84b05e9cd.png)
+
+继续往上看可以发现有两个jnz语句直接跳转到了下面那个`retn`的地方，而这两个jnz语句上面都是cmp语句
+
+所有就是判断`ecx == 0x3`和`ecx == 0x5`是否实现
+
+![](https://p0.ssl.qhimg.com/t0144eb0c56ebd143c1.png)
+
+继续往上看一下ecx的操作，可以发现这里在ecx的处理中用到了`repne scas`这个指令，但是这里没有接触过就先不管，单步跟一下看看
+
+![](https://p2.ssl.qhimg.com/t01ff3da9281c194b32.png)
+
+这里主要就是看一下这个`repne scas`前后的变化，在`repne scas`之前把ecx置为-1，把eax置为0
+
+![](https://p3.ssl.qhimg.com/t0100515b7d9777ff84.png)
+
+可以看到执行语句之后ecx的值+1，edi的值+1
+
+![](https://p3.ssl.qhimg.com/t01609a8d9c5c77d60c.png)
+
+这里我们再看一下之前没有接触过语句的含义
+
+>   * repne scasb 一般用来计算字符串的长度
+>
+
+>
+> ①scasb 来判断al数据是否在edi中，配合repne来使用（(当不为零时继续遍历)。该指令常用来判断字符串的长度。
+>
+> ②其思路是将ecx置为-1(计数器)，eax置为0（字符串结尾)，之后每扫描一个ecx会再次减少1，当edi中找到0时其会终止。
+>
+> ③此时ecx存储的是长度的负数，之后将not ecx来获取其长度，然后dec
+> ecx(因为从1开始计数并非0开始计数)，之后ecx就是存储着字符串的正确长度了。
+    
+    
+    00401060  |.  83C9 FF       or ecx,0xFFFFFFFF                //ecx置1
+    00401063  |.  33C0          xor eax,eax                        //eax置0
+    00401065  |.  F2:AE         repne scas byte ptr es:[edi]    //判断长度
+    00401067  |.  F7D1          not ecx                            //获取长度
+    00401069  |.  49            dec ecx                            //长度减1
+    0040106A  |.  83F9 03       cmp ecx,0x3                        //比较长度
+    
+
+这里就很明显了，比较ecx中的长度，那么就是第一个编辑框输入的字符的长度为3，第二个编辑框输入的字符的长度为5即可正确
+
+![](https://p1.ssl.qhimg.com/t01554f35c7f7570ab2.png)
+
+我们尝试一下进行正向代码的还原，如下所示
+
+    
+    
+        switch (LOWORD (wParam))                            
+            {                            
+            case IDC_BUTTON_Login :    
+    
+                //1.先获取文本框的句柄
+                hEditUser = GetDlgItem(hwndDlg,text1);
+                hEditPass = GetDlgItem(hwndDlg,text2);    
+    
+    
+                //2.通过句柄得到里面的内容
+                TCHAR szUserBuff[0x50];
+                TCHAR szPassBuff[0x50];
+    
+                GetWindowText(hEditUser,szUserBuff,0x50);
+                GetWindowText(hEditPass,szPassBuff,0x50);
+    
+    
+                if (wcslen((const unsigned short *)szUserBuff) == 3)
+                {
+                    if(wcslen((const unsigned short *)szPassBuff) == 5)
+                    {
+                        debugprintf("恭喜!");
+                        //MessageBox(NULL,TEXT("恭喜!"),TEXT("OK"),MB_OK);
+                    }
+                }
+            }
+    
+
+## 添加图标
+
+点击插入图标
+
+![](https://p0.ssl.qhimg.com/t01c20f0f8892ec47db.png)
+
+右侧点击引入并改名为`IDI_ICON_BIG`和`IDI_ICON_SMALL`，大图标就是在使用alt+tab切换的时候显示的图标，小图标就是其他时候使用的图标
+
+![](https://p1.ssl.qhimg.com/t01118effaabdb65a66.png)
+
+到`resource.h`文件可以看到多了两个宏
+
+![](https://p3.ssl.qhimg.com/t012b1598497c88599c.png)
+
+**LoadIcon**
+
+    
+    
+    HICON LoadIcon(
+    HINSTANCE hInstance, 
+    LPCTSTR lpIconName);
+    
+
+>   * _hInstance_ [in] Handle to an instance of the module whose executable
+> file contains the icon to be loaded. This parameter must be NULL when a
+> standard icon is being loaded.
+>   * _lpIconName_ [in] Long pointer to a null-terminated string that contains
+> the name of the icon resource to be loaded. Alternatively, this parameter
+> can contain the resource identifier in the low-order word and zero in the
+> high-order word. Use the
+> [**MAKEINTRESOURCE**](_wcesdk_win32_makeintresource.htm) macro to create
+> this value.
+>
+
+使用`LoadIcon`获取图标，图标会触发`WM_INITDIALOG`事件，所以这里设置一下
+
+这里的需要用到`hInstance`参数，首先定义一下
+
+![](https://p2.ssl.qhimg.com/t01e28e6297395f517d.png)
+
+![](https://p3.ssl.qhimg.com/t01c2c4652e053c9c20.png)
+
+到这里我们的图标就已经添加成功了
+
+![](https://p4.ssl.qhimg.com/t0181fea0f370b97ca6.png)
+
+代码如下
+
+    
+    
+        HICON hBigIcon;
+        HICON hSmallIcon;    
+    
+        case  WM_INITDIALOG :                                
+    
+            hBigIcon = LoadIcon (hIconInstance, MAKEINTRESOURCE (IDI_ICON_BIG));    
+            hSmallIcon = LoadIcon (hIconInstance, MAKEINTRESOURCE (IDI_ICON_SMALL));                                
+    
+            return TRUE ;
+    
+
+**SendMessage**
+
+    
+    
+    LRESULT SendMessage(
+    HWND hWnd, 
+    UINT Msg, 
+    WPARAM wParam, 
+    LPARAM lParam );
+    
+
+>   * _hWnd_ [in] Handle to the window whose window procedure will receive the
+> message. If this parameter is HWND_BROADCAST, the message is sent to all
+> top-level windows in the system, including disabled or invisible unowned
+> windows, overlapped windows, and pop-up windows; but the message is not sent
+> to child windows.
+>   * _Msg_ [in] Specifies the message to be sent.
+>   * _wParam_ [in] Specifies additional message-specific information.
+>   * _lParam_ [in] Specifies additional message-specific information.
+>
+
+使用`SendMessage`显示图标
+
+![](https://p4.ssl.qhimg.com/t0121be9414742b1285.png)
+
+    
+    
+    SendMessage(hwndDlg,WM_SETICON,ICON_BIG,(DWORD)hBigIcon);        
+    SendMessage(hwndDlg,WM_SETICON,ICON_SMALL,(DWORD)hSmallIcon);
+    
+
+查看一下效果
+
+![](https://p0.ssl.qhimg.com/t01e79c2d01e2978768.png)
+
+## 定位标题并修改
+
+首先把生成的exe拿出来
+
+![](https://p3.ssl.qhimg.com/t01d06c787f04939971.png)
+
+用LoadPE打开找到对话框
+
+![](https://p2.ssl.qhimg.com/t01663988c3b4d88e6e.png)
+
+点击保存到桌面
+
+![](https://p1.ssl.qhimg.com/t0108ce89f92e12b65d.png)
+
+使用winhex打开res.dmp，可以发现在资源文件里面所有字符都是Unicode
+
+![](https://p0.ssl.qhimg.com/t01e0600c01be0b9bea.png)
+
+搜索一下字符串
+
+![](https://p3.ssl.qhimg.com/t01b731730fe83590f7.png)
+
+![](https://p3.ssl.qhimg.com/t0176cf3c38f78bdb12.png)
+
+这里我将名字全部修改为D并保存
+
+![](https://p0.ssl.qhimg.com/t016fe3308b107f5836.png)
+
+可以看到修改成功了
+
+![](https://p3.ssl.qhimg.com/t0125037e70fb873f8a.png)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Drunkmars** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/262475](/post/id/262475)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [win32](/tag/win32)
+
+ **+1** __5赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t019bb9b9add2982923.jpg) Drunkmars
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

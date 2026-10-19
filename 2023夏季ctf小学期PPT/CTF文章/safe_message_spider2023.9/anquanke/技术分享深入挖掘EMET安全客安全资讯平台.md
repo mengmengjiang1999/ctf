@@ -1,0 +1,372 @@
+# 【技术分享】深入挖掘EMET
+
+阅读量 **161294**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2016-10-18 15:38:06
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：安全客
+
+原文地址：<https://www.insinuator.net/2016/09/diving-into-emet/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+上周，我们决定对微软提供的EMET库进行一次深入探究。这个库的创建目的是为了在无法源码编译的应用程序时，对应用程序引入几个安全功能。
+
+它还添加了一个额外层来保护应用程序免受过滤库调用的典型利用技术，阻止使用危险函数/组件以及增加了一些利用缓解技术。
+
+考虑到已经有很多研究者也在研究EMET，我们目前只是打算理清楚它的结构和各组件之间的交互方式。本篇文章将分享我们的一些研究发现。
+
+  
+
+**大体框架**
+
+* * *
+
+在安装了EMET5.51 (SHA1 (EMET Setup.msi) =
+98f0cb46df42bdd5ff8b92f87cad728e9373fe97）之后，我们看到了以下的新文件：
+
+· 程序文件
+
+· EMET5.5
+
+· 部署
+
+· 分组政策文件
+
+· EMET.adml
+
+· EMET.admx
+
+· 保护配置文件
+
+· CertTrust.xml
+
+· Popular Software.xml
+
+· Recommended Software.xml
+
+· DevExpress.BonusSkins.v15.1.dll
+
+· DevExpress.Data.v15.1.dll
+
+· DevExpress.Images.v15.1.dll
+
+· DevExpress.Utils.v15.1.dll
+
+· DevExpress.XtraBars.v15.1.dll
+
+· DevExpress.XtraEditors.v15.1.dll
+
+· DevExpress.XtraLayout.v15.1.dll
+
+· DevExpress.XtraTreeList.v15.1.dll
+
+· EMET_Agent.exe
+
+· EMET_CE.dll
+
+· EMET_Conf.exe
+
+· EMET.dll
+
+· EMET_GUI.exe
+
+· EMET_Service.exe
+
+· EMET_Service.exe.config
+
+· EMET_User’sGuideLink.txt
+
+· EULA.rtf
+
+· HelperLib.DLL
+
+· Microsoft.GroupPolicy.Management.dll
+
+· MitigationInterface.DLL
+
+· PKIPinningSubsystem.DLL
+
+· Privacy Statement.rtf
+
+· ReportingSubsystem.DLL
+
+· SdbHelper.dll
+
+· TelemetrySubsystem.DLL
+
+· TrayIconSubsystem.DLL
+
+· windows
+
+· AppPatch
+
+· EMET.dll
+
+· 定制
+
+· {f8c4cc07-6dc4-418f-b72b-304fcdb64052}.sdb
+
+得到这样一份安装文件清单之后，你会面临以下几个选项：
+
+1.解压缩安装程序包
+
+2.猜测安装目录
+
+3.使用镜像工具
+
+每一个选项都各有优缺点，第一个选项会呈现安装程序内的所有文件，即使是不会安装的文件也会呈现，但动态生成的文件可能不会出现。第二个选项或许是最简单的一个，但也是最容易犯错的一个，因为你永远都不会知道不同的文件是否存储在不同的地方。
+
+第三个选项可以概括出文件系统两种状态之间生成的所有文件内容，这个是最准确的一个选择，但同时也会产生最多的数据。
+
+我们决定采取第三个选择，这样可以不错过任何文件，我们使用“InstallWatch
+Pro”作为截屏工具，然后将镜像到的内容分类获得所有的创建/更改/删除文件和注册表项。
+
+最相关的文件位于C:Program FilesEMET 5.5 and
+C:WindowsAppPatch文件夹。第一个主要是存储于EMET进行交互的应用程序，第二个包含了实际的EMET库（在一个64位系统中也有一个EMET64.dll
+文件）。操作系统使用此文件夹来存储所谓的SHIM库。应用程序加载器会将这种库注入在应用程序和操作系统API之间。将导入表的条目设置为填充程序库而不是操作系统提供的库。因为这样的过程是在应用程序加载的过程中迅速完成的，所以这种SHIM库可以在应用程序启用过程中获得大多数函数调用。因此，SHIM库通常充当代理或筛选器，它们对于应用程序和操作系统来说是完全透明的。这些组件可以看做是直接交互。
+
+  
+
+**配置工具**
+
+* * *
+
+EMET有多个接口，用来配置受保护的应用程序。第一个，也是使用率最高的是GUI工具 EMET_GUI.exe。
+
+此应用程序使用.Net编写，并且没有采用混淆处理，所以很容易就可以看到源码。它负责显示（需要 UAC 特权提升）
+当前受保护应用程序的管理员，并允许管理员添加、删除和配置现有的保护机制。第二个应用是 EMET_Conf.exe，它也使用.Net编写，并提供通往 EMET
+配置的命令行界面。配置 EMET 的最后一个选项是通过使用分组策略，被存储在部署子文件夹中。
+
+一些应用程序第一次在OS上安装时，默认情况下就会受到EMET保护。这些应用程序可以在EMET的GUI配置面板上看到，以微软IE浏览器、java和ADOBE为例：
+
+然而，当用户想要配置其他应用程序受到EMET保护时，通常会从GUI与EMET进行交互。如下步骤图所示，第一步要选择要保护的应用程序，然后EMET会更新
+Shim DB “.sdb”文件，OS会使用这一文件来判定是否将EMET.dll
+文件注入到该应用程序中，与此同时，EMET应用程序还会创建一个相关的注册表键，以供应用程序启动时EMET使用。
+
+以上步骤完成并保存配置之后，windows OS会在检查Shim DB之后将 EMET.dll
+注入到应用程序中受保护的进程。此外，进程启用后，EMET.dll
+会通过查询相关的注册表项来检查该应用程序有哪些EMET保护并接管重置，然后相应地进行所需要的检查。
+
+有关EMET创建使用shim DB 和注册表项的更多信息可以参阅[HOW-EMET-WORKS] 和[EMET-UNCOVERED]。
+
+  
+
+**服务**
+
+* * *
+
+第一个真正有趣的应用是 EMET_Service.exe，这个服务本地使用SYSTEM权限运行，并且所有用户可以访问 \pipeEMET_Service
+命名管道。
+
+这项服务主要用来生成代表EMET库的日志事件，并验证证书链是否包含有一个固定的证书，如果有，还会检查该证书的有效性。
+
+与这项服务进行交互需要使用XML， EMET库会将内容发送给服务，然后信息会被该服务解析并执行处理。
+
+由于XML解析是出了名的不靠谱，所以我们还检查了所使用的解析器和配置。原来这项服务的开发人员似乎是意识到使用XML可能会出现的问题，他们使用了 .Net
+提供的System.Xml.XmlReader，这会禁用引擎的处理指令以及文档支持。这些设置可以防止大多数的一般性XML攻击，除了一些针对特定漏洞的攻击以及通过发送大量XML数据的Denial-of-Service 情况。
+
+文档中会存在以下清单中的三种不同类型的消息。
+
+第一个是由 EMET_CE.dll
+触发的消息，用于验证EMET的固定列表存储的证书。它包含了十六进制编码的列表中的证书（证书/请求/链）,下面是关于请求验证应用程序的一些信息：
+
+    
+    
+    <Request Sender="1948.1.400431297" Code="2" Subcode="0" Reply="1">
+      <Certificate>
+        <Chain>30820[...]</Chain>
+        <Chain>30820[...]</Chain>
+        <Chain>30820[...]</Chain>
+      </Certificate>
+      <Status>
+        <ChainIndex>-1</ChainIndex>
+        <ElementIndex>-1</ElementIndex>
+        <PolicyError>ERROR_SUCCESS</PolicyError>
+      </Status>
+      <Params>
+        <AuthType>2</AuthType>
+        <Checks>0</Checks>
+        <ServerName>*</ServerName>
+        <App>C:Program FilesInternet Exploreriexplore.exe</App>
+        <Message>Certificate Trust check failed:  Application  : C:Program FilesInternet Exploreriexplore.exe  User Name  : IE9WIN7IEUser  Session ID  : 1  PID   : 0x79C (1948)  TID   : 0xDA8 (3496)</Message>
+      </Params>
+    </Request>
+
+值得一提的是，如果如果验证失败， EMET_CE.dll 将无法阻止连接到发送这些链接的服务器，而是创建日志事件和由代理应用程序显示通知给用户。
+
+第二条消息用于在EMET命名空间中生成一般的日志事件。此信息的发件人能够选择信息的严重级别。
+
+    
+    
+    <Request Sender="768.1.355274575" Code="1" Subcode="0" Reply="0">
+      <Event Sender="1" Level="1">Test</Event>
+    </Request>
+
+最后一个消息负责生成漏洞检测事件。其中包含触发进程名的相关信息，消息会出现在事件日志中。
+
+    
+    
+    <Request Sender="768.1.355286753" Code="1" Subcode="0" Reply="0">
+      <Exploit Code="ASR">
+        <App>FOOBAR-APP</App>
+        <Message>FOOBAR-MSG</Message>
+        <Files>
+          <File>test</File>
+        </Files>
+        <Url Code="Trusted">FOOBAR-Url</Url>
+      </Exploit>
+    </Request>
+
+而大多数数据只是简单地包含在日志信息中，应用程序元素和文件/文件元素还会有一些额外的影响。服务会读取文件数组中包含的路径来计算MD5校验。代理之后会使用应用程序内容来创建windows错误报告。
+
+这意味着，你可以作为非特权用户来生成受保护文件的MD5总数，但是还是没有办法访问内容。
+
+**  
+**
+
+**代理**
+
+* * *
+
+正如前文所说，也有一个叫做EMET_Agent.exe
+的应用程序在当前桌面上运行。该代理的作用是生成错误报告并向用户显示通知。如果前文提到的服务收到了一条消息来利用此漏洞事件日志，它就会连接到一个通知。
+
+证书检查中出现问题时也会用到通知命令。
+
+  
+
+**EMET 执行 Dll**
+
+* * *
+
+这种保护机制主要由两个库中执行︰
+
+EMET.dll
+
+EMET64.dll
+
+EMET_CE.dll
+
+EMET_CE64.dll
+
+EMET.dll 包含针对内存损坏和筛选可能有害库调用的保护措施。这也是通过SHIM框架注入进程的库。
+
+EMET_CE.dll
+负责证书检查，主要用于在IE浏览器中检查证书链。因为它使用的是微软的证书存储库，所以无法在拥有自己证书库的应用程序中运行，比如Mozilla
+Firefox。
+
+  
+
+**以前的EMET绕过思路**
+
+* * *
+
+EMET是2009年末发布的，当时还只有几个缓解技术，为应用程序提供了针对覆盖结构化异常处理（SEH）的保护措施，通过使用数据执行保护（DEP）对堆栈执行代码防护。目前最新版本的EMET是5.5.1，在以前版本的基础上已经改进添加了很多新功能。
+
+尽管开发EMET的主要目的是为应用程序减少和防止可能的攻击，但是实际上它反而证明了那些老练的攻击者可能绕过EMET使用的各种保护技术。
+
+在本节中我们会简要地介绍一些最近用来规避EMET的技术。正如[BYPASS-EMET-ROP]一文的作者所述，EMET3.5可以被成功绕过，因为KernelBase.dll
+和其中的函数并没有受到保护，所以攻击者可以找到dll基址，从而使用VirtualProtect 函数击败DEP。
+
+正如Offensive安全的工作人员在[DISARM-EMET]、[DISARM-EMET5.0] 和[DISARM-EMET5.1]中所解释的那样，
+只要针对一个控制ROP的全局变量，就可以绕过EMET 4.1、EMET
+5.0和EMET5.1。这种旁路机制使用的技术受三个影响版本的不同而略有不同。在4.1版本中，只要将全局变量固定在一个指向EMET.dll 的
+“.data”部分的开关，再用0覆盖这个全局变量就可以了。在5.0和5.1中，这个全局变量不是直接指向那个开关，而是指向一个编码指针来定位一个叫做CONFIG_STRUCT的结构。
+
+在今年年初的美国黑帽大会上， FireEye
+研究人员公布了他们在EMET5.2.0.1中发现的漏洞，这会允许攻击者完全禁用EMET.dll部署的拦截。他们在
+[DISABLE_EMET16]中的研究论文中解释道，此漏洞的主要原因是因为微软的EMET团队没有使用 DLLMain Windows API卸载
+EMET.dll 。
+
+大约一个月之前，Blue Frost Security GmbH 的研究主任在HITB新加坡大会上介绍了一种针对EMET5.5
+ASR功能的旁路手段，作为他演讲的一部分(演讲题为”看妈妈，我不使用外壳代码“)。在这种旁路技术中，攻击者使用了类似于Offensive
+安全工作人员使用的技术，但不是为了找到可以禁用ROP保护功能的开关，而是找到用于检查ASR功能是否可用的开关。值得一提的是，研究人员说道微软目前还没有办法来解决这一旁路技术。
+
+  
+
+**参考链接**
+
+[[SHIMS]](https://technet.microsoft.com/en-us/library/dd837644%28v=ws.10%29.aspx) Understanding Shims
+
+[[EMET5.2]](http://expdev-kiuhnm.rhcloud.com/2015/05/29/emet-5-2-2/) EMET 5.2
+– Exploit Development Community
+
+[[DISABLE_EMET16]](https://www.blackhat.com/docs/us-16/materials/us-16-Alsaheel-Using-EMET-To-Disable-EMET.pdf) Using-EMET-To-Disable-EMET
+
+[[PERSIST]](https://www.blackhat.com/docs/asia-14/materials/Erickson/WP-Asia-14-Erickson-Persist-It-Using-And-Abusing-Microsofts-Fix-It-Patches.pdf)
+Persist It
+
+[[EMET-CERT]](https://blogs.technet.microsoft.com/srd/2013/05/08/emet-4-0s-certificate-trust-feature/) EMET 4.0’s Certificate Trust Feature
+
+[[INSIDE-EMET4.0]](https://www.youtube.com/watch?v=RGn-knmXf_Y) REcon 2013 –
+Inside EMET 4 0 (Elias Bachaalany)
+
+[[PIRATE-AV]](https://breakingmalware.com/vulnerabilities/captain-hook-pirating-avs-bypass-exploit-mitigations/) Captain Hook: Pirating AVs to Bypass
+Exploit Mitigations
+
+[[EMET-SINGLE]](http://forum.thewindowsclub.com/windows-security/37487-bypassing-emet-single-instruction.html) Bypassing EMET With a
+Single Instruction
+
+[[DEFEAT-AV]](https://breakdev.org/defeating-antivirus-real-time-protection-from-the-inside/) Defeating Antivirus Real-time Protection From The Inside
+
+[[DEFEAT-EMET5.x]](http://casual-scrutiny.blogspot.de/2015/03/defeating-emet-52.html) Defeating EMET 5.2 & 5.5
+
+[[LOOK-MOM]](http://gsec.hitb.org/materials/sg2016/D2%20-%20Moritz%20Jodeit%20-Look%20Mom%20I%20Don%27t%20Use%20Shellcode.pdf)
+Moritz Jodeit -Look Mom I Don’t Use Shellcode
+
+[[LOOK-MOM2]](https://labs.bluefrostsecurity.de/files/Look_Mom_I_Dont_Use_Shellcode-WP.pdf) Look Mom, I don’t use Shellcode – Browser Exploitation Case Study for
+Internet Explorer 11
+
+[[SECURE-HOST]](https://github.com/iadgov/Secure-Host-Baseline/blob/master/EMET/README.md) Secure-Host-Baseline
+
+[[SCRAMMED]](http://scrammed.blogspot.de/2014/03/reversing-emets-eaf-and-couple-of.html) Scrammed!: Reversing EMET’s EAF (and a couple of curious
+findings…)
+
+[[DISARM-EMET] ](https://www.offensive-security.com/vulndev/disarming-enhanced-mitigation-experience-toolkit-emet/)
+
+[[DISARM-EMET5.0] ](https://www.offensive-security.com/vulndev/disarming-emet-v5-0/)
+
+[[DISARM-EMET5.1] ](https://www.offensive-security.com/vulndev/disarming-and-bypassing-emet-5-1/)
+
+[[BYPASS-EMET-ROP] ](https://repret.wordpress.com/2012/08/08/bypassing-emet-3-5s-rop-mitigations/)
+
+[[HOW-EMET-WORKS] ](http://0xdabbad00.com/2010/09/12/how-emet-works/)
+
+[[EMET-UNCOVERED] ](http://0xdabbad00.com/wp-content/uploads/2013/11/emet_4_1_uncovered.pdf)
+
+本文翻译自安全客 [原文链接](https://www.insinuator.net/2016/09/diving-into-emet/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **默白** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/84748](/post/id/84748)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [安全客](https://www.insinuator.net/2016/09/diving-into-emet/)
+
+如若转载,请注明出处： <https://www.insinuator.net/2016/09/diving-into-emet/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p2.ssl.qhmsg.com/dm/200_200_100/t011edf3404f95091e3.jpg) 默白
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,75 @@
+![](https://image.3001.net/images/20200222/1582327856_5e506830b8935.jpg!small)
+
+**去年10月，Tenable研究员发现Jira
+v8.4.1版本存在一个跨站请求伪造漏洞（CSRF）-[CVE-2019-20099](https://zh-cn.tenable.com/security/research/tra-2020-05?tns_redirect=true)，籍此可以让目标Jira服务去连接任意内部主机，Atlassian
+Jira受该漏洞影响的版本范围为8.7.0到8.2.4之间的Jira Server 和 Data
+Center。以下即是具体发现CVE-2019-20099漏洞的过程。**
+
+## Jira部署的防CSRF策略
+
+跨站请求伪造（CSRF）攻击可以无需他人授权，假冒他人身份发起恶意操作。为了防止此类攻击行为，Jira在客户端某HttpOnly
+Cookie中部署了CSRF token，因此，对于执行状态更改的操作请求，Jira服务端会检查其中的token是否与CSRF
+Cookie和CSRF参数中的token匹配，这样一来，攻击者就很难重用cookie发起CSRF攻击。并且，其中的Referer
+header头信息还可验证与Jira服务端的域名和端口一致性，防止同源策略绕过操作。
+
+下图就是我对Jira服务端发起的POST示例请求，也就是从该请求中我发现了漏洞所在。其中 CSRF cookie 和CSRF
+参数分别是Atlassian.xsrf.token和atl_token，还包括了与Jira服务端IP和端口匹配的Referer
+header头信息。经过多次测试，我发现Jira服务端并不总是会去校验上述这些验证性信息的值。
+
+![](https://image.3001.net/images/20200222/1582327166_5e50657e51977.png!small)
+
+## 漏洞问题
+
+这里我们以内网中Jira架构邮件服务为例进行测试。在Jira中部署POP3邮件服务时需要管理员提交完整的邮件服务配置信息，如服务器名称、主机地址、端口号、用户凭据等等，在底部有两个按钮，一个是新建邮服请求，一个是测试当前建立邮服的连通性。注意，由于这里是内网，所以这里的邮件服务器主机地址就是内网地址。
+
+![](https://image.3001.net/images/20200222/1582327199_5e50659feb62f.png!small)
+
+邮服连通性测试操作会让Jira服务端去连接给定的POP3邮件服务器地址，该过程中会涉及到一个密码交换过程。当我测试该测试请求时发现，其中的Referer
+header头信息和CSRF参数校验都未执行，所以，这样一来，如果要对该请求实施CSRF攻击，那么唯一需要的仅只是重用当前已登录Jira系统的管理员Cookie。
+
+为了测试该请求，我特意设置了一个内网的POP3邮件服务器以便接收来自Jira服务端的验证连接，另外我还架设了一个内网Web服务器用来托管与CSRF脚本相关的网页。目的在于模拟Jira系统管理员点击了某个恶意链接后，被进行会话Cookie重用，请求Jira服务端发起针对我设置的邮件服务器的连通测试。以下是触发Jira服务端发起测试邮服连通请求的CSRF脚本:
+
+![](https://image.3001.net/images/20200222/1582327257_5e5065d923e6a.png!small)
+
+以下就是该CSRF脚本运行后，执行的对预定邮服172.16.68.229的连通性测试Wireshark包图：
+
+![](https://image.3001.net/images/20200222/1582327584_5e50672093c13.png!small)
+
+这样，当受害者172.16.68.1对Jira服务端172.16.68.248发送了一个POST请求后，接着，会起发针对预设邮件服务器172.16.68.229:110的连通测试，这是一个密码凭据交换验证过程，如果密码凭据验证不通过，则连接终止。不过，利用该脚本，我可以让Jira服务端去连接我自己设定的主机和端口。
+
+POP3邮服的连接验证请求需要在POST请求的参数中设置用户名和密码信息，当请求实现成功握手后，这些参数会被发送到指定的主机和端口，这也就提供了一种机制，攻击者可以通过这种渠道向邮服主机发送消息或命令实现主机监听。
+
+## 利用漏洞执行内网主机探测发现
+
+XMLHttpRequest对象存在一个readyState属性，它和onreadystatechange事件一起使用，readyState属性包含了0到4之间的不同状态表示值，如下：
+
+![](https://image.3001.net/images/20200222/1582327665_5e5067719f799.png!small)
+
+readyState属性值每次发生变化时，都会调用onreadystatechange事件进行处理，为此我在上述脚本中对XMLHttpRequest的state属性变化加入了alert方法，以便每次状态改变时能有所提醒。目的在于观察请求去连接不同主机和端口号时的状态变化差异。我在上述脚本中加入了以下state状态转化跟踪代码：
+
+![](https://image.3001.net/images/20200222/1582327687_5e506787ee1cd.png!small)
+
+当Jira服务端试图去连接一个内网不存在的IP地址时，其XMLHttpRequest请求的state属性会从1到4变化，从而去调用onreadystatechange事件，而只有当连接终止结束后，原始的POST请求才会得到相应的响应，这个过程会花费3秒左右（约3000多毫秒）的时间完成。
+
+## PoC
+
+最终我写了一段PoC脚本来让Jira服务端以测试邮件服务器连通性的CSRF操作去执行内网主机探测，当然，我把其中的邮件服务器地址设置为了一段内网IP地址，请求端口为110。运行PoC脚本后可以发现，那些花费3000多毫秒的主机IP是不存在的内网IP地址，只有少量耗时的IP才是存在IP，如下：
+
+![](https://image.3001.net/images/20200222/1582327712_5e5067a015e83.png!small)
+
+为了验证上述发现结果，我又用nmap进行了扫描，果然发现结果相同：
+
+![](https://image.3001.net/images/20200222/1582327733_5e5067b531a2a.png!small)
+
+在以下我用Wireshark抓包的图片中可以发现，PoC脚本会让Jira服务端去连接指定的IP主机端口，而且，还可以在之前用来进行凭据交换的用户字段中填入任意消息，发送给连接的指定IP主机。
+
+![](https://image.3001.net/images/20200222/1582327752_5e5067c8b7a86.png!small)
+
+![](https://image.3001.net/images/20200222/1582327923_5e506873f3753.gif!small)
+
+## 总结
+
+这是Jira服务端连接邮件服务器功能的一个CSRF漏洞，我利用它可以执行内网主机和端口的扫描探测。可利用场景是，针对Jira管理员构造恶意链接迷惑其点击执行，实现针对其内网的主机端口枚举探测。
+
+ ***参考来源：[medium](https://medium.com/tenable-techblog/exploiting-jira-for-host-discovery-43be3cddf023)，clouds 编译整理，转载请注明来自 FreeBuf.COM**
+

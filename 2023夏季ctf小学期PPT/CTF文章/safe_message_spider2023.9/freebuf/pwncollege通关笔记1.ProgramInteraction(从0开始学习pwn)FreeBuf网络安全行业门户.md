@@ -1,0 +1,1173 @@
+# 0x1.前言
+
+一直想要学习二进制安全但是不知道怎么入手，然后从学长那里知道了这个网站：[pwncollege](https://dojo.pwn.college/)。
+
+专下心来努力学了一段时间发现这个网站真的很不错，它从代码基础开始层层深入，分为多个模块，不仅有视频讲解还自带了很多的配套练习，难度都很合适，就这样逐步地教导你进行学习，特此分享给大家。
+
+然后这里分享一下我做题的经历，因为模块较多我不能在一篇文章中全部写完，所以会做个系列，每篇文章记录一个模块，另外就是我也是从0开始学习pwn，所以文章中不免会有些不恰当或者错误的地方，如果发现了还请在评论区中指出，我们共同进步，非常感谢！
+
+这篇文章是第一个模块：Program Interaction部分的解题记录。
+
+这一部分主要涉及到基本的程序交互方法，包括linux环境下运行程序一些基本方法和知识，除此以外也教了一些基本的shell脚本、python脚本、c语言等知识，做完之后好处多多~
+
+开始一直不知道这个题怎么做，在那瞎搞了好久，后来才知道怎么回事。（如果在做题时遇到什么问题可以点击网站上面的Chat进入讨论区，那里可以交流思路，是个很好的方式来学习）
+
+首先要注册个账号，然后先在平台上开启关卡，注意start是实战环境，需要你自己去/challenge运行程序读取/flag内容，而practice是练习模式，可以通过`sudo
+-i`命令来执行root命令，所以可以直接查看/flag内容，但是是假flag。
+
+然后在网站上打开关卡后就可以用ssh密钥连接上平台（不明白ssh可以搜索一下，或者直接点击网站上面的 **workspace**
+也可以直接开一个在线环境直接使用），连上之后就是相应的关卡，里面是封闭环境，但是工具挺多，总之去`/challenge`会有两个文件，一个叫`checker.py`，另一个叫`embryoio_level8`（这个部分的开始一些关卡是这样），实际上主体部分是checker.py，所有的相关函数都在checker.py，而embryoio_level8就是一个调用checker.py的可执行程序，通过不同的参数来调用checker.py以此过滤。
+
+这一部分是基础部分，应该都是讲一下基本操作什么的。
+
+查了查这一关的embryoio是啥，没想到是“胚胎”的意思，比baby还小，哈哈哈，不管怎么样，总算是全部通关了。
+
+# 0x2.关卡记录
+
+## 1.level1~3：密码传参
+
+前三关是传密码，第1关无密码，第二关运行后输入密码，第3关通过参数传密码。
+
+因为密码在提示中写了，认识英语就知道密码了。
+
+## 2.level4，7：环境变量
+
+4要求新增一个环境变量；
+
+7要求设置空环境变量；
+
+总而言之都用一条命令：
+
+    
+    
+    env -i <program>
+
+便可以重新设定环境变量运行程序，7的要求只需要不加环境变量参数即可，当然4也可以使用export完成吧。
+
+这些知识在挑战上方的视频中都有讲解，不明白可以看看。
+
+## 3.level5，6：重定向
+
+5重定向输入；
+
+6重定向输出。
+
+使用大小于号就可以重定向输入和输出。
+
+## 4.level8~14：shell脚本
+
+8创建一个shell脚本运行。
+
+9除了创建脚本还需要输入密码。
+
+10除了创建脚本还需要传参密码。
+
+11除了创建脚本还需要新增环境变量。
+
+12除了创建脚本还需要输入重定向。
+
+13除了创建脚本还需要输出重定向。
+
+14除了创建脚本还需要空环境变量。
+
+## 5.level15~21：ipython
+
+15要求用ipython来运行程序，但是直接进入ipython后用命令：
+
+    
+    
+    run checker.py
+
+来运行检测脚本会因为权限不足无法读取/flag。。。
+
+然后发现可以用命令：
+
+    
+    
+    import subprocess;subprocess.run(["./embryoio_level15"])
+
+来运行得到flag。
+
+16要求用ipython运行，还有输入密码（好家伙，又来一轮）
+
+17传参密码；18新增环境变量；19输入重定向；20输出重定向；21空环境
+
+## 6.level22~28：python脚本
+
+嗯，老套路。
+
+## 7.level29~35：c语言
+
+这个给了很多提示，大概是因为这个更涉及原理吧，原文如下：
+
+    
+    
+    [INFO] This challenge will now perform a bunch of checks.  
+    [INFO] If you pass these checks, you will receive the flag.  
+    [TEST] Performing checks on the parent process of this process.  
+    [TEST] Checking to make sure that the process is a custom binary that you created by compiling a C program  
+    [TEST] that you wrote. Make sure your C program has a function called 'pwncollege' in it --- otherwise,  
+    [TEST] it won't pass the checks.  
+    [HINT] If this is a check for the *parent* process, keep in mind that the exec() family of system calls  
+    [HINT] does NOT result in a parent-child relationship. The exec()ed process simply replaces the exec()ing  
+    [HINT] process. Parent-child relationships are created when a process fork()s off a child-copy of itself,  
+    [HINT] and the child-copy can then execve() a process that will be the new child. If we're checking for a  
+    [HINT] parent process, that's how you make that relationship.  
+    [INFO] The executable that we are checking is: /usr/bin/bash.  
+    [HINT] One frequent cause of the executable unexpectedly being a shell or docker-init is that your  
+    [HINT] parent process terminated before this check was run. This happens when your parent process launches  
+    [HINT] the child but does not wait on it! Look into the waitpid() system call to wait on the child!  
+    ​  
+    [HINT] Another frequent cause is the use of system() or popen() to execute the challenge. Both will actually  
+    [HINT] execute a shell that will then execute the challenge, so the parent of the challenge will be that  
+    [HINT] shell, rather than your program. You must use fork() and one of the exec family of functions (execve(),  
+    [HINT] execl(), etc).  
+    [FAIL] You did not satisfy all the execution requirements.  
+    [FAIL] Specifically, you must fix the following issue:  
+    [FAIL]    The process must be your own program in your own home directory.
+
+总之，总结一下看出来的知识点：
+
+  1. 对父进程的检测需要使用exec()系列的函数，因为system()或popen()函数都会执行一个shell，然后用shell来执行，所以此时父进程为shell（测试后是dash），而不是你的程序。
+
+  2. 而exec()只是替换掉正在exec()的进程，当用fork()函数时子进程调用exec()系列函数杀死自己的子进程副本的时候就会建立与当前主进程的父子关系。
+
+  3. 当一个父亲创建了一个孩子但没有等它结束就自己结束的话就可能造成系统异常，查询waitpid()的使用来等待孩子进程。
+
+另外查询了一下，说是exec系统调用，实际上在Linux中，并不存在一个exec()的函数形式，exec指的是一组函数，一共有6个，分别是：
+
+    
+    
+    #include <unistd.h>  
+    int execl(const char *path, const char *arg, ...);  
+    int execlp(const char *file, const char *arg, ...);  
+    int execle(const char *path, const char *arg, ..., char *const envp[]);  
+    int execv(const char *path, char *const argv[]);  
+    int execvp(const char *file, char *const argv[]);  
+    int execve(const char *path, char *const argv[], char *const envp[]);
+
+然后整理了一下基本使用：
+
+    
+    
+    #include <stdio.h>  
+    #include <unistd.h>  
+    ​  
+    void pwncollege(char* argv[],char *env[]){  
+        execve("/challenge/embryoio_level29",argv,env);//使用exec系列函数执行时不会改变新进程的父亲，相当于只是将当前进>程替换掉了  
+        return ;  
+    }  
+    ​  
+    int main(int argc,char* argv[],char* env[]){  
+        pid_t fpid;  
+    ​  
+        fpid=fork();//fork()执行之后，会复制一个基本一样的进程作为子进程，然后两个进程会分别执行后面的代码  
+        if(fpid<0)//如果fpid为-1，说明fork失败  
+                printf("error in fork!\n");  
+        else if (fpid==0){//成功则会出现两个进程，fpid==0的是子进程  
+                printf("我是子进程\n");  
+                pwncollege(argv,env);  
+        }  
+        else{//fpid==1的是父进程  
+                printf("我是父进程\n");  
+                wait(NULL);  
+        }  
+        return 0;  
+    }
+
+然后又是一次轮回。
+
+注意，设定参数数组时，第一个不是参数而是文件名，而且最后需要加NULL（因为数组最后一位需要为\0吧。），这两个任意错了一步就会导致运行子进程失败：
+
+    
+    
+    #include <stdio.h>  
+    #include <unistd.h>  
+    ​  
+    void pwncollege(char* argv[],char *env[]){  
+        char *newargv[]={"embryoio_level31","scfxabffgf",NULL};  
+        execve("/challenge/embryoio_level31",newargv,env);//使用exec系列函数执行时不会改变新进程的父亲，相当于只是将当前>进程替换掉了  
+        return ;  
+    }  
+    ​  
+    int main(int argc,char* argv[],char* env[]){  
+        pid_t fpid;  
+    ​  
+        fpid=fork();//fork()执行之后，会复制一个基本一样的进程作为子进程，然后两个进程会分别执行后面的代码  
+        if(fpid<0)//如果fpid为-1，说明fork失败  
+                printf("error in fork!\n");  
+        else if (fpid==0){//成功则会出现两个进程，fpid==0的是子进程  
+                printf("我是子进程\n");  
+                pwncollege(argv,env);  
+        }  
+        else{//fpid==1的是父进程  
+                printf("我是父进程\n");  
+                wait(NULL);  
+        }  
+        return 0;  
+    }
+
+## 8.level36~65：管道
+
+36：`/challenge/embryoio_level36 | cat`37关:grep
+
+38关:sed
+
+39关:rev
+
+40关:输入管道符
+
+41关:rev输入
+
+42~47:shell脚本+管道，然后依次grep,sed，rev，输入，rev输入
+
+48~53：ipython+管道（找了好久教程结果发现其实和重定向操作一样，就是将输入流和输出流互相绑定一下，如下：
+
+    
+    
+    import subprocess  
+    p1 = subprocess.Popen(["/challenge/embryoio_level48"], stdout=subprocess.PIPE)#只能用Popen，其他会失败  
+    p2 = subprocess.Popen(["cat"], stdin=p1.stdout, stdout=subprocess.PIPE)  
+    output = p2.communicate()[0]  
+    print(output)
+
+据提示说，pwntools也能进行这样的管道操作，可是我实在没找到，process()和subprocess中的run()一样，都不能进行这样的操作，之后再说吧。）
+
+之后就是一轮新的循环了，没啥好说的。
+
+54~59：python脚本+管道。
+
+60~65：c语言+管道。（其中管道和父进程直接相连通了，所以直接操作父进程即可）
+
+## 9.level66~67：find命令exec
+
+66是考find命令用-exec和-ok参数运行脚本：
+
+    
+    
+    find . -name "4*" -exec /challenge/embryoio_level66 \;
+
+然后67让输入参数密码。
+
+## 10.level68~73：shell脚本杂项
+
+68让运行时以shell脚本方式，并且在第284个参数输入密码，一行搞定：
+
+    
+    
+    /challenge/embryoio_level* `printf ' nzfslgudsh%0.s' {1..284}`
+
+69让空参数，这咋弄，不会啊。
+
+找了找方案，一种思路是加很多很多参数，让其参数列表“爆表”，结果其实不行，linux考虑到了这方面，经实验，参数到达65529个时就会报参数太长的错误（为啥是这个数字我也不知道）。
+
+另一种思路就还是利用c语言中的exec()系列函数来执行进程，此时可以设置参数序列为空，问题在于题目要求是在shell脚本中执行，而且需要在bash或sh环境（经尝试用system()函数是用的dash环境）。
+
+实在没办法了网上也没教程，我就仔细看了下它的checker.py源码是怎么写的，发现它的判断有点草率，如下：
+
+    
+    
+    def check_bash(process):
+        print("[TEST] Checking to make sure the process is the bash shell. If this is a check for the parent process, then,")
+        print("[TEST] most likely, this is what you do by default anyways, but we'll check just in case...")
+        check_exe_basename(process, 'bash')
+        assert len(process.cmdline()) == 1, f"The shell process must be running in its default, interactive mode (/bin/bash with no commandline arguments). Your commandline arguments are: {process.cmdline()}"
+    
+    def check_shellscript(process):
+        print("[TEST] Checking to make sure the process is a non-interactive shell script.")
+    
+        assert os.path.basename(process.exe()) in [ 'sh', 'bash' ], f"Process interpreter must be 'sh' or 'bash'. Yours is: {os.path.basename(process.exe())}"
+        assert len(process.cmdline()) == 2 and process.cmdline()[1].endswith(".sh"), f"The shell process must be executing a shell script that you wrote like this: `bash my_script.sh`"
+
+这两个判断其实只是检测了一下命令执行的文件名，第一个bash检测就是检测运行的程序名为bash即可，第二个检测是bash加一个结尾为`.sh`的参数即可，所以我就把自己编写的c语言程序改名为bash，然后加个参数不使用即可，具体操作如下：
+
+c源码：
+
+    
+    
+    #include <stdio.h>
+    #include <unistd.h>
+    
+    void pwncollege(char* argv[],char *env[]){
+            char *newenv[]={NULL};
+            execve("/challenge/embryoio_level69",newenv,env);//使用exec系列函数执行时不会改变新进程的父亲，相当于只是将当前 进程替换掉了
+            return ;
+    }
+    
+    int main(int argc,char* argv[],char* env[]){
+            pid_t fpid;
+    
+            fpid=fork();//fork()执行之后，会复制一个基本一样的进程作为子进程，然后两个进程会分别执行后面的代码
+            if(fpid<0)//如果fpid为-1，说明fork失败
+                    printf("error in fork!\n");
+            else if (fpid==0){//成功则会出现两个进程，fpid==0的是子进程
+                    printf("我是子进程\n");
+                    pwncollege(argv,env);
+            }
+            else{//fpid==1的是父进程
+                    printf("我是父进程\n");
+                    wait(NULL);
+            }
+            return 0;
+    }
+
+然后改名运行得到flag：
+
+    
+    
+    #改名：
+    gcc test.c -o bash
+    #运行，随便加个结尾为.sh的参数，实际并未使用：
+    ./bash a.sh
+
+70：env
+
+71：多参数+env
+
+72：重定向+临时文件夹
+
+73：要求主进程和子进程路径不同，不知道为啥一直不能成功。
+
+ **失败的方案：**
+
+    
+    
+    echo "这是主进程"
+    pwd
+    cd;bash script.sh &
+    sleep 3
+    
+    
+    echo "这是子进程"
+    pwd
+    /challenge/e*
+    
+    
+    echo "这是主进程"
+    
+    echo "子进程开始";cd /challenge;./e* &
+    
+    echo "主进程开始等待";sleep 3;echo "主进程结束"
+
+ **成功方案：**
+
+用了和上面那个一样的思路，shell脚本中不容易显式的创建一个子进程或者新进程，就用c语言创建一个子进程来起作用，如下：
+
+    
+    
+    #include <stdio.h>
+    #include <unistd.h>
+    
+    void pwncollege(char* argv[],char *env[]){
+            char *newenv[]={"embryoio_level65",NULL};
+            chdir("/tmp/coooni");
+            printf("current working directory: %s\n", getcwd(NULL, NULL));
+            execve("/challenge/embryoio_level73",argv,env);//使用exec系列函数执行时不会改变新进程的父亲，相当于只是将当前进 程替换掉了
+            return ;
+    }
+    
+    int main(int argc,char* argv[],char* env[]){
+            pid_t fpid;
+    
+            fpid=fork();//fork()执行之后，会复制一个基本一样的进程作为子进程，然后两个进程会分别执行后面的代码
+            if(fpid<0)//如果fpid为-1，说明fork失败
+                    printf("error in fork!\n");
+            else if (fpid==0){//成功则会出现两个进程，fpid==0的是子进程
+                    printf("我是子进程\n");
+                    pwncollege(argv,env);
+            }
+            else{//fpid==1的是父进程
+                    printf("我是父进程\n");
+                    wait(NULL);
+            }
+            return 0;
+    }
+
+## 11.level74~79：python脚本杂项
+
+74：让第264个参数为密码
+
+75：要求空参数，我尝试了os.execve和os.execvp，发现它底层的os.execv()要求参数二不能为空，和c语言的要求不太一样，就很无语。
+
+所以故技重施，假冒python的c程序，但是执行报了一个很让人无语的检测失败：
+
+    
+    
+    [FAIL]    Executable must be 'python'. Yours is: python
+
+这不一样嘛！唉，还得看源码：
+
+    
+    
+    def check_exe_basename(process, basename):
+        print(f"[INFO] The process' executable is {process.exe()}.")
+        if os.path.basename(process.exe()) == "docker-init":
+            print("[WARN] This process is the initialization process of your docker container (aka PID 1).")
+            print("[WARN] When the parent of a process terminates, that process is 'reparented' to PID 1.")
+            print("[WARN] So, the likely situation here is that your parent process terminated before")
+            print("[WARN] waiting on the child. Go fix that :-). Look into waitpid() in C, process.wait() for")
+            print("[WARN] pwntools, or Popen.wait() for subprocess.")
+        else:
+            print("[INFO] This might be different than expected because of symbolic links (for example, from /usr/bin/python to /usr/bin/python3 to /usr/bin/python3.8).")
+    
+        actual_basename = os.path.basename(os.path.realpath(shutil.which(basename)))
+        print(f"[INFO] To pass the checks, the executable must be {actual_basename}.")
+        assert os.path.basename(process.exe()) == actual_basename, f"Executable must be '{basename}'. Yours is: {os.path.basename(process.exe())}"
+    
+    def check_python(process):
+        print("[TEST] We will now check that that the process is a non-interactive python instance (i.e., an executing python script).")
+        check_exe_basename(process, 'python')
+        assert len(process.cmdline()) == 2 and process.cmdline()[1].endswith(".py"), f"The python process must be executing a python script that you wrote like this: `python my_script.py`"
+
+额，看来问题出在这个`actual_basename`上了，人家查的是实际的解析器名称，查一下：
+
+    
+    
+    hacker@embryoio_level75:~$ ls -l /bin/python
+    lrwxrwxrwx 1 root root 7 Apr 15  2020 /bin/python -> python3
+    hacker@embryoio_level75:~$ ls -l /bin/python3
+    lrwxrwxrwx 1 root root 9 Mar 13  2020 /bin/python3 -> python3.8
+    hacker@embryoio_level75:~$ ls -l /bin/python3.8
+    -rwxr-xr-x 1 root root 5490488 Sep 28 16:10 /bin/python3.8
+
+果然，把程序名改为python3.8就通过了。
+
+76：修改环境变量，这个subprocess.run就有参数可以指定。
+
+77：参数密码+环境变量
+
+78：输入重定向+临时文件夹
+
+79：临时文件夹+父子进程工作目录不同
+
+## 12.level80~85：子进程杂项
+
+80：c程序子进程+参数设置
+
+81：空参数
+
+82：环境变量
+
+83：参数设置+环境变量
+
+84：工作路径+输入重定向
+
+85：工作路径+父子进程工作路径不同
+
+## 13.level86~87：数据交互
+
+86：shell脚本+数据交互
+
+87：shell脚本+5个数据交互（简单运算）
+
+## 14.level88~89：改变argv[0]
+
+88：shell脚本+要求改变argv[0]的值，没办法，再次采用魔道打法
+
+89：shell脚本+要求改变argv[0]的值
+
+我正纳闷为啥要重复考这个，忽然发现人家给提示了！！对嘛，不然我只能一招吃遍天下了：
+
+    
+    
+    argv[0] is passed into the execve() system call *separately* from the program path to execute.This means that it does not have to be the same as the program path, and that you can actually control it. This is done differently for different methods of execution. For example, in C, you simply need to pass in a different argv[0]. Bash has several ways to do it, but one way is to use a combination of a symbolic link (e.g., the `ln -s` command) and the PATH environment variable.
+
+翻译版本：
+
+    
+    
+    argv[0]从要执行的程序路径分别传递到execve（）系统调用*中。这意味着它不必与程序路径相同，您可以实际控制它。这对于不同的执行方法是不同的。例如，在C中，您只需要传入不同的argv[0]。Bash有几种方法可以做到这一点，但其中一种方法是使用符号链接（例如，`ln -s`命令）和PATH环境变量的组合。
+
+what！好像很简单，我之前一直想复杂了吗？
+
+操作如下：
+
+    
+    
+    #在本目录建立软链接：
+    ln -s /challenge/embryoio_level89 ydntbk
+    
+    #将当前目录作为首个PATH变量
+    export PATH=.:$PATH
+    echo "ydntbk" > script.sh
+    bash script.sh
+
+耶！学到了，不过它说还有几种办法不知道是什么，另外在shell脚本中将参数数目变为空真的有可能吗。。
+
+## 15.level90~93：命名管道fifo
+
+90：让使用FIFO，我一直以为mkfifo和管道符一样呢，原来有区别啊。
+
+总而言之说一下我的理解，也懒得找官方解释。
+
+简单来说就是一个有实体的管道，创建时会以文件的形式出现在当前目录中，好像是单工通信，只能由一方传给另一方，而且如果没有消费者，生产者会阻塞等待，所以我们在运行时需要并发运行两个进程，不然会阻塞。
+
+下面放一下我的通关过程：
+
+    
+    
+    #创建FIFO通道：
+    mkfifo test
+    #写入shell脚本，是读方
+    echo '/challenge/embryoio_level* < test' > script.sh
+    #同时运行读写进程，所以需要用算数运算符|或&进行连接，注意不能用分号;，因为那样是串行执行：
+    echo vctmlgmx > test | bash script.sh
+
+91：fifo写重定向
+
+92：fifo读写重定向（需要2个通道）
+
+93：要求写个可交互式的双通道，写了如下shell脚本：
+
+    
+    
+    /challenge/embryoio_level* < t1 > t2 &
+    cat < t2 &
+    cat > t1
+
+## 16.level94：绑定文件描述符exec
+
+94：要求绑定235号文件描述符，想到exec命令可以绑定，通过代码如下：
+
+    
+    
+    echo 'exec 235<t1;/challenge/embryoio_level*' > script.sh
+    bash script.sh & cat > t1
+
+## 17.level95~96：简单
+
+95，96：shell脚本+输入密码（这么简单不知道是什么鬼，也没有提示）
+
+## 18.level97~98：信号signal
+
+97：要求给它发送指定信号，不知道怎么就过了（哦，它估计让发送一个SIGINT的信号，ctrl+c正好是）
+
+98：要求按顺序给它发送5个信号，这次了解了下linux下信号的知识，知道了利用kill命令发送信号，如下通关代码：
+
+    
+    
+    bash script.sh &
+    #回显：[TEST] You must send me (PID 90) the following signals, in exactly this order: ['SIGINT', 'SIGHUP', 'SIGHUP', 'SIGHUP', 'SIGHUP']
+    kill -SIGINT 90
+    kill -SIGHUP 90
+    kill -SIGHUP 90
+    kill -SIGHUP 90
+    kill -SIGHUP 90
+
+## 19.level99~111：python脚本杂项2
+
+99，100：python脚本+简单运算
+
+101，102：修改argv[0]
+
+103，104，105：fifo
+
+106：fifo+简单运算
+
+107：设定125文件描述符
+
+想要学上面在shell脚本中使用的方法，然后遇到了很多坑才写出来，如下：
+
+p.py内容：
+
+    
+    
+    import subprocess
+    import os
+    f=open("./t1")#打开fifo通道，因为没有写端，所以打开时会阻塞
+    f2=os.dup2(f.fileno(),125)#用os.dup2复制通道的文件描述符到125号文件描述符，python3.4以后文件描述符是默认子进程可共享的
+    print("新的文件描述符：%s"%f2)
+    print("可继承位：%s"%os.get_inheritable(f2))#检验是否真的子进程可继承，真的为True
+    #print("文件内容：%s"%f2.read())
+    #print(f.read())
+    argv=["/challenge/embryoio_level107"]
+    p=subprocess.Popen(argv,pass_fds=[0,1,2,125])#重点来了！子进程要想获取到这些主进程的文件描述符，必须要在调用Popen时设定pass_fds数组的值，不然无法获取，这里卡了好久。。。。
+    p.wait()#最后一个坑，主进程需要阻塞等待子进程，不然它的父亲会变成它爷爷，哈哈
+
+顺带一提，pwntools子进程想要使用先前绑定的文件描述符需要在process时设定参数 **`close_fds=False`**
+，默认是关闭了除0~2的所有文件描述符的。
+
+调用：
+
+    
+    
+    #因为打开命名通道时会阻塞，所以把它放到后台运行
+    python p.py & cat > t1
+
+不过突然想到好像也不用什么通道，直接把标准输入0给复制过去不就行了（嗯，试了一下确实可以）。
+
+108，109：输入密码
+
+110，111：发送信号
+
+## 20.level112~124：c语言杂项
+
+112，113：c程序+简单运算
+
+114，115：设置argv[0]
+
+和上面一样的循环。
+
+## 21.level125~139：交互脚本编写
+
+125：shell脚本，它让运算50次，很明显是让写脚本了。
+
+但是利用linux原生的工具进行操作我不太熟悉，更何况这个一般会python即可，就用python写吧：
+
+    
+    
+    #!/usr/bin/python3
+    from pwn import *
+    
+    p=process("/challenge/embryoio_level125")
+    for i in range(50):
+        #print(p.recvline())
+        print(p.recvuntil(b":\n"))
+        s=p.recvline()
+        print(s)
+        tmp=eval(s)
+        print(tmp)
+        p.sendline(b"%d"%tmp)
+    
+    print(p.recvall())
+
+结果发现不行，因为人家要求解析器为bash，所以不能直接执行python。
+
+我又换了一种思路，bash脚本虽然不会写，但是写个python运算器脚本，和原进程进行交互不就行了，所以写了如下一个运算器：
+
+t.py源码：
+
+    
+    
+    f1=open("./t1","rb")#利用t1通道进行输入数据
+    f2=open("./t2","wb")#t2通道输出数据
+    for i in range(200):
+        s=f1.readline()
+        print(s)
+        index=s.find(b": ")#如果有这个标志说明这一行是需要运算的
+        if index != -1:
+            t1=s[index+2:-1]
+            print(t1)
+            t2=eval(t1)#运算得到结果
+            print(b"%d\n"%t2)
+            f2.write(b"%d\n"%t2)#写入t2传回结果
+            f2.flush()#缓冲区清空是个大坑啊，我又栽这了好久。。。不加这一行原程序得不到我们的运行结果
+    
+    f1.close()
+    f2.close()
+
+script.sh内容：
+
+    
+    
+    #调试用命令：
+    python t.py & cat < t2 & cat > t1
+    /challenge/embryoio_level* > t1 < t2 & cat < t1 & cat > t2
+    /challenge/embryoio_level* > t1 < t2 & python t.py & cat > t2
+    
+    #通关命令：
+    /challenge/embryoio_level* > t1 < t2 & python t.py
+
+126：要输入500个答案，哈哈，这次运算也变得特别复杂，把输入给过滤掉可能能运算快点。
+
+稍微升级了下上面的脚本：
+
+    
+    
+    f1=open("./t1","rb")#利用t1通道进行输入数据
+    f2=open("./t2","wb")#t2通道输出数据
+    sum=0
+    for i in range(3000):
+        s=f1.readline()
+        if sum >=500:
+            print(s)
+            print(f1.read())
+            break
+        index=s.find(b": ")#如果有这个标志说明这一行是需要运算的
+        if index != -1:
+            sum+=1
+            t1=s[index+2:-1]
+            #print(t1)
+            t2=eval(t1)#运算得到结果
+            print("%d : %d"%(sum,t2))
+            f2.write(b"%d\n"%t2)#写入t2传回结果
+            f2.flush()#缓冲区清空是个大坑啊，我又栽这了好久。。。不加这一行原程序得不到我们的运行结果
+    
+    f1.close()
+    f2.close()
+
+127：让发送给进程50个指定信号，很明显又是脚本编写。
+
+但是问题在于那个程序直接输入进fifo命名管道里好像用了全缓冲区，导致我无论如何也无法在运行的同时获取到提示，这咋弄啊。（后来发现好像不是缓冲区的问题，看了下checker.py的源码，在执行这个挑战的时候会截取所有传到这个进程的信号进行处理，而使用管道的话管道好像也需要使用信号，就导致获取不到数据？好像也不对啊，在监听信号之前也有一部分输出的，但是那部分的输出也看不到，这有点说不通。）
+
+冥思苦想了好长时间，首先想到另外一个魔道打法（我怎么总是搞这些奇奇怪怪的打法，误）。
+
+一、把python3.8复制过来，改名为bash，这样就可以骗过checker.py说解析器是bash了
+
+当然这个方法上面的几道题也能用。
+
+这样做的好处是，虽然我不会处理怎么让程序运行时输出到命名管道里怎么无缓冲区输出，但是利用pwntools或者subprocess就没有这个烦恼了啊，然后只要将python脚本的后缀改为sh就能骗过检测了。
+
+如下操作：
+
+    
+    
+    cp /usr/bin/python3.8 bash
+    ./bash 127.sh
+
+127.sh源码：
+
+    
+    
+    from pwn import *
+    import os
+    import signal
+    
+    sh=process("/challenge/embryoio_level127")
+    #print(sh.recvline())
+    #print(sh.recvline())
+    sh.recvuntil(b"(PID ")
+    pid=int(sh.recvuntil(b")")[:-1])
+    print("该程序的pid为%d"%pid)
+    sh.recvuntil(b": ")
+    
+    s=sh.recvline()[:-1]
+    print("信号序列为")
+    print(s)
+    a=eval(s)
+    for i in range(len(a)):
+    	print("正在发送信号：%d"%i)
+    	print(pid,eval("signal."+a[i]))
+    	os.kill(pid,eval("signal."+a[i]))
+    	sh.recvline()
+    	sh.recvline()
+    print(sh.recvall())
+
+二、第二个想法是昨天查了查资料，说命名管道fifo其实可以控制阻塞输出和缓冲区大小，但是需要在c语言中调用api，所以如果操控好的话说不定也能获取到信息。
+
+128：猜都猜得出来，发送500个信号，直接用上面的脚本。
+
+129：有点变态，要求我用shell脚本编写，并且控制它的输入流指向cat，输出流也指向cat，还要我算50个复杂运算。
+
+所以我们只需要控制第一个cat的输入流和第二个cat的输出流即可。
+
+测试脚本（ps：这个脚本对127的题不起作用，就很神奇）：
+
+    
+    
+    f1=open("./t1","r")
+    f2=open("./t2","w")
+    while True:
+        s=f1.readline()
+        print("获取到了数据：")
+        print(s)
+    f1.close()
+    f2.close()
+
+通关脚本：
+
+    
+    
+    f1=open("./t1","r")
+    f2=open("./t2","w")
+    count=0
+    for i in range(3000):
+        if count >= 50:
+            print(f1.read(1024))
+            break
+        s=f1.readline()
+        #print("获取到了数据：")
+        print(s,end='')
+        if ": " in s:
+            count+=1
+            index=s.find(": ")
+            a=s[index+2:-1]
+            b=eval(a)
+            print(b)
+            f2.write("%d\n"%b)
+            f2.flush()
+    
+    f1.close()
+    f2.close()
+
+script.sh内容：
+
+    
+    
+    cat < t2 | /challenge/embryoio_level* | cat > t1 &
+    python 129.py
+
+130：用python脚本运算50次，直接用上面脚本
+
+131：500次
+
+重复上面的。
+
+然后134在管道上遇到了问题，然后研究了好长时间发现python可以直接利用os.pipe()创建一个linux的管道，真的是，白忙活了，不管怎么样学到了：
+
+    
+    
+    import subprocess
+    import fcntl
+    import os
+    
+    r1,w1=os.pipe()
+    
+    p0 = subprocess.Popen(["cat"], stdin=subprocess.PIPE, stdout=w1)
+    #flags = fcntl.fcntl(p0.stdout, fcntl.F_GETFL)
+    #fcntl.fcntl(p0.stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)#解为非阻塞
+    
+    r2,w2=os.pipe()
+    
+    p1 = subprocess.Popen(["/challenge/embryoio_level134"],stdin=r1, stdout=w2)
+    #flags = fcntl.fcntl(p1.stdout, fcntl.F_GETFL)
+    #fcntl.fcntl(p1.stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    
+    
+    p2 = subprocess.Popen(["cat"], stdin=r2, stdout=subprocess.PIPE)
+    
+    #flags = fcntl.fcntl(p2.stdout, fcntl.F_GETFL)
+    #fcntl.fcntl(p2.stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    
+    for i in range(50):
+    	s=''
+    	while True:
+    		s=p2.stdout.readline().decode()
+    		print(s,end="")
+    		if ": " in s or s=="":
+    			break
+    
+    	a=s[s.find(": ")+2:-1]
+    	print("式子为%s"%a)
+    	b=eval(a)
+    	print("答案为%d"%b)
+    	p0.stdin.write(b"%d\n"%b)
+    	p0.stdin.flush()
+    
+    for i in range(50):
+    	print(p2.stdout.readline().decode(),end="")
+
+135开始又是c语言的循环，因为c程序的子进程可以直接继承主进程的通道关系，所以类似于上面的bash时的脚本，直接交互即可。
+
+但是在137时又遇到了上面那个问题，信号的脚本获取不到数据啊，只要一用通道就得不到它的数据了，不知道什么毛病。
+
+这次想要浑水摸鱼好像有点不行，因为它除了要求用c程序运行以外，还要求argv[0]为空，这个我只能通过c程序来实现，python的os库虽然也有exec系列函数，但是参数长度不能为空，没办法实现，就很神奇。
+
+为啥就这个测试一旦使用通道就获取不到输出啊，只有结束运行之后才会出现显示结果。
+
+（后来我觉得有点不对劲，为啥c程序运行就能通过`argc==1`的检测，而python代码不能通过，而且前面的`argc==1`应该不是检测argv[0]为空的意思，所以就自己实验了一下，发现之前果然是我理解错了，一直有个地方没理解对。
+
+c程序是编译程序，而python和shell脚本是脚本解释形语言，而脚本解释语言的执行则需要一个解析器来执行，这就是脚本开头需要设置一个如：
+
+    
+    
+    #!/usr/bin/python
+    #!/bin/bash
+
+这样的语句来指定解释器的地址。
+
+而checker.py在检查的时候是这样检查的：
+
+    
+    
+    len(psutil.Process(os.getpid()).cmdline())==1
+
+而直接`./test.py`这样执行时，`psutil.Process(os.getpid()).cmdline()`产生的序列是这样的：
+
+    
+    
+    ['/usr/bin/python', './test.py']
+
+也就是说它在运行时会把解析器当做第一个参数来执行，这样序列长度就为2了，这就是我用python和bash脚本通过不了的原因。
+
+解决办法也简单，既然直接执行必须调用解释器，那我打包之后再执行不就行了？
+
+嗯，尝试了下，用pyinstaller包可以很轻易的打包好python脚本，但是问题在于，题目中的检测还有一层：它调用了`/usr/bin/nm`进行检测，要求有一个名为pwncollege的函数，而问题在于，用pyinstaller进行编译链接的时候，应该是把所有全局标志都去除了，导致用nm检测时没有标志，这就很无奈了。
+
+）
+
+（研究了下又有新发现，发现虽然用`./a.out | cat`这样获取不到输出，但是用python来：
+
+    
+    
+    p=subprocess.Popen("./a.out",stdin=subprocess.PIPE,stdout=subprocess.PIPE)
+
+却可以获取到输出，这就好说了，直接可以用上面的脚本改一下，把运行程序改成c程序即可：
+
+    
+    
+    from pwn import *
+    import os
+    import signal
+    
+    sh=process("./137.out")
+    #print(sh.recvline())
+    #print(sh.recvline())
+    sh.recvuntil(b"(PID ")
+    pid=int(sh.recvuntil(b")")[:-1])
+    print("该程序的pid为%d"%pid)
+    sh.recvuntil(b": ")
+    
+    s=sh.recvline()[:-1]
+    print("信号序列为")
+    print(s)
+    a=eval(s)
+    for i in range(len(a)):
+    	print("正在发送信号：%d"%i)
+    	print(pid,eval("signal."+a[i]))
+    	os.kill(pid,eval("signal."+a[i]))
+    	sh.recvline()
+    	sh.recvline()
+    print(sh.recvall())
+
+呼，总算把这两个通关了，没想到成为难到我的最后两题。
+
+）
+
+139也是运算50次，我基本上直接把129.py拿来使用了，但是有个检查比较奇怪，它要求主进程被cat运行，我新建了个名为cat的bash，然后这样执行：
+
+    
+    
+    cat < t2 | env -i "SHELL=./cat" ./a.out | cat > t1 & python 139.py
+
+就通过了，但是不太清楚是不是这样过的，也不知道它想考啥。
+
+## 22.level140~142：网络
+
+140这道题感觉很奇怪，正常来做感觉不可能达成啊。
+
+在运行题目的程序时，它在本地的1166端口开了一个服务，可以接收其他程序来的tcp连接。
+
+问题在于，它会检测你是不是通过shell脚本来连接的客户端，除此之外它还要求解析器必须为bash或sh。
+
+问题在于，我在使用netcat进行访问时它会说解析器是netcat，甚至我用这样：
+
+    
+    
+    cat < /dev/tcp/127.0.0.1/1166
+
+来访问，它也会说解析器是cat，无论在交互式环境执行还是shell脚本中。
+
+这就导致我如果想让它解析器识别为bash，必须在shell脚本中不依赖其他工具，直接访问到指定网络端口，但是不知道是不是我孤陋寡闻了，我不知道这样的方法也查不到。如果想要在shell脚本中访问网络，其实就是调用其他的工具进行执行啊，怎么可能只是利用bash？
+
+想不到方法的我只好又用了之前的方法，复制一个名为bash的python3.8，在140.sh文件中写入python代码，用python写一个小网络连接器，这样就能满足它的所有条件了。
+
+不知道它期待中的解法是怎么样的。
+
+140.sh源码：
+
+    
+    
+    #!/usr/bin/env python
+    #encoding=utf-8
+    
+    import socket
+    import threading
+    import time
+    from sys import argv,stdout,stderr,version_info
+    
+    PY2 = True if version_info[0] == 2 else False
+    if PY2:
+    	input=raw_input
+    	cout=stdout
+    else:
+    	cout=stdout.buffer
+    
+    def recvdata(conn):
+    	while not event.is_set():
+    		try:
+    			data=conn.recv(4096)
+    			if not data:
+    				stderr.write("客户端已断开连接\n")
+    				event.set()
+    				conn.close()
+    				break
+    			cout.write(data)
+    			stdout.flush()
+    		except Exception as e:
+    			stderr.write(str(e))
+    			conn.close()
+    			event.set()
+    			stderr.write("已断开连接\n")
+    
+    def senddata(conn):
+    	try:
+    		if PY2:
+    			while not event.is_set():
+    				data=input()
+    				if not event.is_set():
+    					conn.sendall(data+b'\n')
+    		else:
+    			while not event.is_set():
+    				data=input()
+    				if not event.is_set():
+    					conn.sendall(data.encode()+b'\n')
+    	except Exception as e:
+    		stderr.write(e)
+    		conn.close()
+    		event.set()
+    		stderr.write("发送数据错误！\n")
+    
+    def listener(host,port):
+    	if type(port)==type(''):
+    		port=int(port)
+    	s= socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    	s.bind((host,port))
+    	s.listen(1)
+    	stderr.write("listening on %s %s\n"%(host,port))
+    	conn,addr=s.accept()
+    	stderr.write("Connection received on %s %s\n"%addr)
+    	try:
+    		read=threading.Thread(target=recvdata,args=(conn,))
+    		read.setDaemon(True)#使线程在主进程结束时终止
+    		read.start()
+    		write=threading.Thread(target=senddata,args=(conn,))
+    		write.setDaemon(True)
+    		write.start()
+    		while not event.is_set(): time.sleep(1)
+    	except KeyboardInterrupt as e:
+    		conn.close()
+    		event.set()
+    		stderr.write("\n断开连接\n")
+    
+    def requester(host,port):
+    	if type(port)==type(''):
+    		port=int(port)
+    	s= socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    	s.connect((host,port))
+    	stderr.write("connected to %s %s\n"%(host,port))
+    	conn=s
+    	try:
+    		read=threading.Thread(target=recvdata,args=(conn,))
+    		read.setDaemon(True)#使线程在主进程结束时终止
+    		read.start()
+    		write=threading.Thread(target=senddata,args=(conn,))
+    		write.setDaemon(True)
+    		write.start()
+    		while not event.is_set(): time.sleep(1)
+    	except KeyboardInterrupt as e:
+    		conn.close()
+    		event.set()
+    		stderr.write("\n断开连接\n")
+    		
+    def main():
+    	stderr.write('''Usage:  ./myrequester.py <ip> <port>''')
+    	if len(argv)==3:
+    		host,port=argv[1:]
+    	elif len(argv)==2:
+    		port=argv[1]
+    	else:
+    		host=input("请输入要请求的ip地址:")
+    		if host=="":
+    			host="0.0.0.0"
+    		port=input("请输入要请求的端口：")
+    	requester(host,port)
+    	
+    if __name__=='__main__':
+    	event=threading.Event()
+    	main()
+    
+
+连上之后它会让你运算5次简单运算，输入即给flag。
+
+141：让用python脚本网络连接，直接用上面的脚本。
+
+142：让用c程序来网络连接，因为python打包的程序不能包含pwnchallenge()函数，所以老老实实的学了c语言的网络连接的方法写了个通过程序：
+
+    
+    
+    #include <sys/types.h>
+    #include <sys/socket.h>
+    #include <stdio.h>
+    #include <unistd.h>
+    #include <string.h>
+    #include <arpa/inet.h>
+    
+    
+    #define PORT 1848
+    #define SIZE 1024
+    
+    void pwncollege(){
+    	return;
+    }
+    
+    int ainb(char* a,char* b){
+    	long unsigned int len1=strlen(a);
+    	long unsigned int len2=strlen(b);
+    	//printf("len(a):%ld\n",len1);
+    	//printf("len(b):%ld\n",len2);
+    	
+    	if(len1>len2) return 0;
+    	
+    	int xflag=0;
+    	for(int i=0;i<len2-len1;i++){
+    		if(strncmp(a,b+i,len1)==0){
+    			xflag=1;
+    			break;
+    		}
+    	}
+    	return xflag;
+    }
+    
+    int main(int argc,char* argv[],char* env[])
+    {
+    	int client_socket = socket(AF_INET, SOCK_STREAM, 0);   //创建和服务器连接套接字
+    	if(client_socket == -1)
+    	{
+    		perror("socket");
+    		return -1;
+    	}
+    	struct sockaddr_in addr;
+    	memset(&addr, 0, sizeof(addr));
+    	
+    	addr.sin_family = AF_INET;  /* Internet地址族 */
+        addr.sin_port = htons(PORT);  /* 端口号 */
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);   /* IP地址 */
+    	inet_aton("127.0.0.1", &(addr.sin_addr));
+    
+    	int addrlen = sizeof(addr);
+    	int listen_socket =  connect(client_socket,  (struct sockaddr *)&addr, addrlen);  //连接服务器
+    	if(listen_socket == -1)
+    	{
+    		perror("connect");
+    		return -1;
+    	}
+    	
+    	printf("成功连接到一个服务器\n");
+    	
+    	char buf[SIZE] = {0};
+    	int ret;
+    	
+    	while(1)        //向服务器发送数据，并接收服务器转换后的大写字母
+    	{
+    		//读取服务器内容
+    		//int ret = read(client_socket, buf, strlen(buf));
+    		while(1){
+    			memset(buf, 0, SIZE);//每次读取前重置
+    			ret = read(client_socket, buf, SIZE);
+    			printf("ret = %d\n", ret);
+    			if(0>=ret) break;
+    			printf("buf = %s", buf);
+    			printf("\n");
+    			if(1==ainb("Please send the solution for: ",buf))
+    			{
+    				break;
+    			}
+    		}
+    		
+    		printf("请输入你相输入的：");
+    		scanf("%s", buf);
+    		write(client_socket, buf, strlen(buf));
+    		write(client_socket, "\n", 1);
+    	}
+    	close(listen_socket);
+    	
+    	return 0;
+    }
+
+# 0x3.结尾
+
+这一部分内容的关卡虽然大部分内容都很简单，但是在做题过程中我也学到了很多知识，或者是我以前没有好好了解忽略了的，或者是压根就不知道的，总之是受益匪浅。
+
+非常感谢pwncollege这个网站免费的为我们提供学习资源，也感谢大家的耐心观看，希望你继续关注我下面的文章，会随着学习讲解后面的模块，也希望你和我共同进步，有什么想法欢迎在评论区留言！
+

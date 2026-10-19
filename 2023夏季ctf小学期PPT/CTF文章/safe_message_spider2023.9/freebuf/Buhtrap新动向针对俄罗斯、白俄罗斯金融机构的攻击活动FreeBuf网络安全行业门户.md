@@ -1,0 +1,456 @@
+## 一、背景介绍
+
+**腾讯御见威胁情报中心在2018年底到2019年初，捕捉了几次针对俄罗斯、白俄罗斯的攻击活动，经过分析，为Buhtrap家族的最新攻击活动。该家族的木马主要针对俄罗斯、乌克兰等地的金融目标进行攻击，根据Group-IB和ESET的研究结果来看，该恶意文件至少从2014年就开始活跃。**
+
+Buhtrap木马家族被认为是俄罗斯的黑客攻击组织所有，但是由于Buhtrap的源代码早前被泄露，因此我们暂无法确认我们最近捕捉的攻击活动是否跟之前的攻击组织为同一个。
+
+## 二、攻击技术细节
+
+### 1、攻击方式
+
+攻击使用鱼叉攻击方式，针对特定的目标发送钓鱼邮件，如：
+
+![](https://image.3001.net/images/20190320/1553044097_5c919281cb4c0.png!small)
+
+![](https://image.3001.net/images/20190320/1553044112_5c919290cc058.png!small)
+
+### 2、诱饵文件
+
+诱饵形式主要有三种，分别是doc文档、js脚本、可执行文件。
+
+doc文档：
+
+文件hash | 文件名 | 文件类型 | 文档作者 | 最后修改者 | 最后修改时间 | 上传到VT时间  
+---|---|---|---|---|---|---  
+35be4860a6ea917a9f680f5d2faaa2e2 | kassovy_akt.doc | MS Word Document | N/A |
+N/A | 2019:02:11 16:20:00 | 2019-02-12 07:38:32  
+664e95fbd9c4439c9800cc93f0474d1b | akt_kass.doc | MS Word Document | N/A | N/A
+| 2019:02:11 16:18:00 | 2019-02-12 08:11:30  
+  
+![](https://image.3001.net/images/20190320/1553044127_5c91929fd3cee.png!small)
+
+![](https://image.3001.net/images/20190320/1553044132_5c9192a485599.png!small)
+
+js脚本：
+
+文件hash | 文件名 | 文件类型 | 文档作者 | 最后修改者 | 最后修改时间 | 上传到VT时间  
+---|---|---|---|---|---|---  
+397300962de90369be2a6639d66ec284 | кассовый документ.rar | RAR | N/A | N/A |
+2019-01-22 10:00:40 | 2019-01-23 09:24:09  
+37d1da63b313014d223d46c10a1e06f5 | кассовый документ.js | Text | N/A | N/A |
+2019-01-22 10:00:40 | 2019-01-23 09:58:13  
+  
+![](https://image.3001.net/images/20190320/1553044145_5c9192b1a3ebe.png!small)
+
+可执行文件：
+
+文件hash | 文件名 | 文件类型 | 文档作者 | 最后修改者 | 最后修改时间 | 上传到VT时间  
+---|---|---|---|---|---|---  
+faf833a1456e1bb85117d95c23892368 | Акты сверки декабрь.exe | Win32 EXE | N/A |
+N/A | 2018-03-23 20:19:04 | 2018-12-19 06:59:59  
+  
+该文件是个图标伪装成word文档的可执行文件：
+
+![](https://image.3001.net/images/20190320/1553044154_5c9192bae927c.png!small)
+
+### 3、恶意文件加载分析
+
+虽然诱饵文件有3个不同的类型，但是最后加载恶意文件的主要有两种方式：
+
+> 带有VBA宏的doc文档->释放js文件->下载nsis安装包->采用白加黑的方式执行恶意文件winmm.dll；
+>
+> C# loader->傀儡进程执行恶意代码->下发恶意文件winmm.dll->使用白加黑方式加载执行。
+
+而其中js版本的诱饵，同VBA宏里的释放的js，因此不再单独分析。下面就对两个主要的加载技术进行分析。
+
+ **1） doc版细节分析**
+
+宏代码：
+
+恶意的doc文档带有VBA宏，当启动宏后，会释放MSO1038.js文件到“%appdata%\Microsoft\Office\”目录：
+
+![](https://image.3001.net/images/20190320/1553044169_5c9192c9eb138.png!small)
+
+js文件的内容被硬编码后存储在宏代码中：
+
+![](https://image.3001.net/images/20190320/1553044186_5c9192daabf54.png!small)
+
+接着会创建任务计划，从而将上述js文件给运行起来，任务计划名称为“Office Update”：
+
+![](https://image.3001.net/images/20190320/1553044199_5c9192e72cb27.png!small)
+
+![](https://image.3001.net/images/20190320/1553044214_5c9192f69863a.png!small)
+
+MSO1038.js分析
+
+js代码经过了简单的混淆：
+
+![](https://image.3001.net/images/20190320/1553044226_5c919302839c9.png!small)
+
+而该js解密后最终的核心代码如下：
+
+![](https://image.3001.net/images/20190320/1553044239_5c91930f1c02a.png!small)
+
+大致功能是利用powershell
+从<http://85.217.170.37/vgs/uds/77.tmp>下载文件并命名为CGd94.exe，然后执行此pe文件。
+
+CGd94.exe分析
+
+此exe为一nsis打包的安装包文件，其中nsis的脚本如下所示：
+
+![](https://image.3001.net/images/20190320/1553044257_5c91932173dae.png!small)
+
+主要功能就是释放文件到“%APPDATA%\Yandex\PuntoSwitcher\User
+Data”目录，并执行其中的Data.exe和punto.exe：
+
+![](https://image.3001.net/images/20190320/1553044267_5c91932b15049.png!small)
+
+其中：
+
+Data.exe为一自解压程序，主要是释放一些配制文件：
+
+![](https://image.3001.net/images/20190320/1553044279_5c91933714ac2.png!small)
+
+Punto.exe有正常的签名，为俄罗斯的一款键盘布局工具，官方网站为<https://yandex.ru/soft/punto>
+
+![](https://image.3001.net/images/20190320/1553044289_5c9193418ec4d.png!small)
+
+Punto.exe导入表里有“winmm.dll”，所以会加载同目录下的winmm.dll，而同目录下的winmm.dll为木马文件，从而实现白利用：
+
+![](https://image.3001.net/images/20190320/1553044304_5c919350651aa.png!small)
+
+ **2） 可执行文件版分析**
+
+该版本采用c#编写的loader来执行最终的恶意文件。
+
+该c#的loader采用了静态调用c++模块的方式，因此反汇编c#后无法查看main函数源码：
+
+![](https://image.3001.net/images/20190320/1553044318_5c91935e94582.png!small)
+
+根据偏移在ida找到main函数的地址0x4066DD,大致如下所示：
+
+![](https://image.3001.net/images/20190320/1553044331_5c91936bbca11.png!small)
+
+可以看到，Main函数的主要功能是解密和执行shellcode：
+
+![](https://image.3001.net/images/20190320/1553044346_5c91937a77c55.png!small)
+
+Shellcode分析
+
+首先会获取LoadLibray 和GetProcAddress两个函数的地址，然后利用这两个函数获取shellcode需要的一些系统API的地址：
+
+![](https://image.3001.net/images/20190320/1553044361_5c919389a12ac.png!small)
+
+获取一些需要的系统api，都是利用下面这种方式：
+
+![](https://image.3001.net/images/20190320/1553044379_5c91939b00dbc.png!small)
+
+最终得到一个隐藏的exe（Client.exe）的地址，然后利用创建僵尸进程的方式，将此exe给执行起来：
+
+![](https://image.3001.net/images/20190320/1553044393_5c9193a917308.png!small)
+
+Client.exe分析
+
+Client.exe加了“ConfuserEx“壳：
+
+![](https://image.3001.net/images/20190320/1553044404_5c9193b4a9939.png!small)
+
+对其脱壳后进行分析相应功能。
+
+通过读注册表或加载dll的方式检测虚拟机，注册表项使用了base64编码，解码后为“System\CurrentControlSet\Services\Disk\Enum\”，检测的dll主要有“SbieDll.dll、dbghelp.dll、api_log.dll、dir_watch.dll、pstorec.dll、vmcheck.dll、wpespy.dll、snxhk.dll、guard32.dll”：
+
+![](https://image.3001.net/images/20190320/1553044420_5c9193c49d795.png!small)
+
+判断进程所在目录是否包含”
+Mozilla“关键字，如果不包含会将自身复制到”%appdata%\Mozilla”目录，并命名为“xaudiodg.exe”：
+
+![](https://image.3001.net/images/20190320/1553044430_5c9193ce22692.png!small)
+
+会收集string0中存储的url信息，string0经过base64和Rijndael加密，解密算法如下所示，后续的string1、string2等都是使用的相同的解密算法：
+
+![](https://image.3001.net/images/20190320/1553044444_5c9193dc60dc4.png!small)
+
+String0解密后如下所示：
+
+    
+    
+    ibank2,dbo,ibank,alfabank.ru,ibank.absolutbank.ru,avangard.ru,dbo.aversbank.ru,ibank2.ru,corp.akbars.ru,dbo.agroros.ru,elf.faktura.ru,faktura.ru,ibank.alexbank.ru,online.alefbank.ru,dbo.albank.ru,link.alfabank.ru,faktura.ru,dboul.baltinvest.ru,transact.bancaintesa.ru,lite.bancaintesa.ru,cb.zenit.ru,ibank.ipoteka-tut.ru,dbs.voz.ru,bystrobank.ru,online.bcs.ru,ibank.bcs-bank.com,falcon.binbank.ru,corp.binbank.ru,e-plat.mdmbank.com,wb.bbr.ru,ic-ca.openbank.ru,ic.openbank.ru,internetbankmb.open.ru,dbo.ofc.ru,ndbo.open.ru,ibank.finsb.ru,dbo.uralsibbank.ru,i.bspb.ru,online.round.ru,bo.vtb24.ru,ibank.mmbank.ru,c1.vbrr.ru,ibank.jtbank.ru,dbo.dalenabank.ru,ibank.globexbank.ru,ibank.geobank.ru,ibank2.genbank.ru,ib.gebank.ru,gws.sauberbank.com,online.efbank.ru,ibank.interprombank.ru,ib.zapsibkombank.ru,ibank.ipb.ru,dbo.inkaro.ru,kb.kubankredit.ru,ibrs.kubankredit.ru,ibank.crediteurope.ru,c.ikib.ru,online.k-bnk.ru,cb.mtsbank.ru,ibank.moskb.ru,ibank2.mosoblbank.ru,vbo.mkb.ru,clbank.minbank.ru,ib.minbank.ru,info.metib.ru,ibank.mcombank.ru,business.lockobank.ru,ibank.lockobank.ru,ibank.plus-bank.ru,ibank.pirbank.ru,dbo.pervbank.ru,internet.1mbank.ru,ibank.otpbank.ru,bc.nsbank.ru,ibank.newtimebank.ru,172.novikom.ru,enter1.ns-bank.ru,bank.trust.ru,b2.ndb24.ru,ibank2.rostfinance.ru,ibank.abr.ru,bss.abr.ru,online.abr.ru,online.roscap.ru,bc.rshb.ru,dbo.rosevrobank.ru,msk1.rosevrobank.ru,spb.rosevrobank.ru,mb.rosevrobank.ru,ib.rgsbank.ru,bankline.ru,ibank.rncb.ru,dbo.bcc-msk.ru,raiffeisen.ru,elbrus.raiffeisen.ru,sso.rbo.raiffeisen.ru,rbo.raiffeisen.ru,online.payment.ru,ibank2.pskb.com,dbo.pfbank.ru,online.pochtabank.ru,ibank.soyuzny.ru,ibc.banksoyuz.ru,ib.solidbank.ru,ibr.solidbank.ru,solid-bank.handybank.ru,bk.smpbank.ru,dbo.slaviabank.ru,i-skbbank.ru,ic.siab.ru,ibc.severgazbank.ru,my.morskoybank.com,teleweb.sdmnet.ru,sbi.sberbank.ru,ibank.rficb.ru,dbo.rusfinance.ru,ic.russobank.com,ibank.transcapital.com,ibank.tenderbank.ru,client.texbank.ru,ic.tavrich.ru,bsscl.psbst.ru,ibank.bank-hlynov.ru,ibank.bankffin.ru,ibank.forbank.ru,client.forabank.ru,dbo.forabank.ru,ibc.ubrr.ru,ib.ubrr.ru,dbo.uralfd.ru,ib.troikabank.com,online.transstroybank.ru,ibank.transcapital.com,ibank.unistream.ru,ru.unicreditbanking.net,ibank.sbibankllc.ru,ib.energobank.ru,online.centrinvest.ru,cex.io,bitfinex.com,hitbtc.com,bitstamp.net,poloniex.com,kraken.com,binance.com,exmo.me,bitmex.com,bitexbook.com,localbitcoins,bitflip.cc,livecoin.net,kucoin.com,bleutrade.com,yobit,bittrex.com
+
+枚举string1和string_3中存储的目录信息：
+
+![](https://image.3001.net/images/20190320/1553044457_5c9193e936de3.png!small)
+
+string1解密后如下：
+
+    
+    
+    1c,1c_to,alfa,bank,bifit,bitcoin,bs-client,bss,BSS,bss-client,btc,cbmain,clb,clientbk,coin,crypto,cryptopro,dbo,el_cli,electrum,ibank,Internet Bank,InternetBanking,javaw,jp2launcher,kb_cli,kl_to,kontur,reif,sbis,vtb,wallet,wallets
+
+String3解密后如下：
+
+    
+    
+    “альфа,АРМ,банк,банкклиент,банк обмен,банк-клиент,втб,выгрузка,выписк,дбо,Интернетбанк,Интернетбанк,Интернет-клиент,клиент банк,крипто,криптопро,криптопро,обмен,обмен выгрузка,обмен с банком,ПАО,райф,Промсвязь,”
+
+枚举string2中存储的文件等信息，其中string2解密后如下：
+
+    
+    
+    “punto.exe,jp2launcher.exe,_ftcgpk.exe,wallet,javaw.exe,default_wallet,cbmain.exe,cbank.exe,saplogon.exe,SGBClient.exe,CBSMAIN.exe,KlientBnk.exe,payments.exe,qiwicashier.exe,qiwiguard.exe,quickpay.exe,BClient.exe,webmoney.exe,bank.exe,bk.exe,CBSMAIN.exe”
+
+![](https://image.3001.net/images/20190320/1553044491_5c91940b54444.png!small)
+
+创建string4中任务计划，string4解密后为：
+
+    
+    
+    “schtasks/create /f /sc ONLOGON /RL HIGHEST /tn LimeRAT-Admin /tr”
+
+String9中存储的为c2,解密后为213.252.244.200。
+
+其它加密的字符串如下所示：
+
+![](https://image.3001.net/images/20190320/1553044506_5c91941acaa8e.png!small)
+
+接收的c2命令如下所示：
+
+命令字 | 功能  
+---|---  
+CLOSE | 关闭连接  
+DEL | 利用cmd命令删除自身  
+DW | 下载文件并执行  
+RD+ | 上传屏幕截图  
+RD- | 将“RD-“字符串加密后并上报  
+UPDATE | 存储新的exe并执行，再删除老的exe  
+  
+![](https://image.3001.net/images/20190320/1553044532_5c919434e54bd.png!small)
+
+最终会执行"DW"命令，下发Punto.exe和winmm.dll，跟之前doc的版本一样，使用白加黑的技术加载最终的恶意文件。
+
+### 4、恶意文件分析
+
+木马的主要功能从dllmain函数开始。主要功能有键盘记录、信息收集、下载执行pe。
+
+winmm.dll中的关键字符串都经过了加密：
+
+![](https://image.3001.net/images/20190320/1553044552_5c91944864b27.png!small)
+
+解密后的一些明文字符串如下所示：
+
+![](https://image.3001.net/images/20190320/1553044579_5c919463ed929.png!small)
+
+![](https://image.3001.net/images/20190320/1553044597_5c91947559a6a.png!small)
+
+木马首先会开启两个线程，一个用来与c2通信，另一个是keylogger功能的消息循环线程：
+
+![](https://image.3001.net/images/20190320/1553044611_5c9194833d52c.png!small)
+
+获取sdcard的一些信息：
+
+![](https://image.3001.net/images/20190320/1553044628_5c91949423225.png!small)
+
+获取用户名，系统版本等信息：
+
+![](https://image.3001.net/images/20190320/1553044767_5c91951f6eeb7.png!small)
+
+![](https://image.3001.net/images/20190320/1553044785_5c9195313f446.png!small)
+
+获取机器id，先利用GetComputerNameA获取计算机名，进行字符串运算得到一个dword值，再从注册表“"SYSTEM\CurrentControlSet\services\Disk\Enum"读一个字符串，进行运算后得到另一个dword值，然后两个dword值拼成一个16字节长的唯一机器码：
+
+![](https://image.3001.net/images/20190320/1553044809_5c9195490370d.png!small)
+
+![](https://image.3001.net/images/20190320/1553044824_5c919558d8cf1.png!small)
+
+获取的信息加密后存储在“%appdata%\ntuser.dat”文件中，最后以http post方式发送给c2。
+
+在存储的信息中会有"TEST_BOTNET"等字符串，并加上0x2711、0x2712等这样的id编号：
+
+![](https://image.3001.net/images/20190320/1553044840_5c919568c195b.png!small)
+
+Http post的数据中还会带上一个0x10字节的hash值，post时的数据如下所示：
+
+![](https://image.3001.net/images/20190320/1553044854_5c919576a7b06.png!small)
+
+向C2（如doc版本的<http://puntoyandex.in:7464/klog.php>）post数据后，如果从c2收到的是exe（”MZ”开头），存储文件后，直接调用CreateProcess函数将exe执行起来：
+
+![](https://image.3001.net/images/20190320/1553044871_5c9195872ef1c.png!small)
+
+如果是dll文件（“DL”开头），自加载后创建另一个线程执行：
+
+![](https://image.3001.net/images/20190320/1553044880_5c9195903b47b.png!small)
+
+键盘记录相关代码如下所示，会存储在%appdata%\adobesystem.log”文件中：
+
+![](https://image.3001.net/images/20190320/1553044894_5c91959e24194.png!small)
+
+## 三、关联分析
+
+根据上面分析的恶意文件的特征，如"TEST_BOTNET"，我们又从腾讯御见威胁情报中心的样本库里面搜到了另外的样本，如46d7770b7f62edeb8d5a5542113acf6e，该样本跟上述分析的高度的相似：
+
+如键盘记录：
+
+![](https://image.3001.net/images/20190320/1553044904_5c9195a85e171.png!small)
+
+如字符串解密函数：
+
+![](https://image.3001.net/images/20190320/1553044914_5c9195b246186.png!small)
+
+如发包时的协议格式：
+
+![](https://image.3001.net/images/20190320/1553044925_5c9195bdde485.png!small)
+
+如对服务器下发的内容进行“MZ” “DL”标记的判断，以确定是exe还是dll：
+
+![](https://image.3001.net/images/20190320/1553044938_5c9195ca8530b.png!small)
+
+此外我们找到了该文件的母体文件：“Счет №81-ФЛОРЛ-14-115.doc”，该样本的执行流程也跟该次攻击的高度相似：
+
+如都使用了NSIS安装包的方式：
+
+![](https://image.3001.net/images/20190320/1553044950_5c9195d68ab05.png!small)
+
+如都使用两次base64编码的方式对要检测的软件和查找的文件的名字进行加密：
+
+![](https://image.3001.net/images/20190320/1553044962_5c9195e2098a2.png!small)
+
+而检测的内容也基本一致。如检测的软件为：
+
+    
+    
+    “ip-client.exe,prclient.exe,rclient.exe,saclient.exe,SRCLBClient.exe,twawebclient.exe,vegaClient.exe,dsstart.exe,dtpaydesk.exe,eelclnt.exe,elbank.exe,etprops.exe,eTSrv.exe,ibconsole.exe,kb_cli.exe,KLBS.exe,KlientBnk.exe,lfcpaymentais.exe,loadmain.exe,lpbos.exe,mebiusbankxp.exe,mmbank.exe,pcbank.exe,pinpayr.exe,Pionner.exe,pkimonitor.exe,pmodule.exe,pn.exe,postmove.exe,productprototype.exe,quickpay.exe,rclaunch.exe,retail.exe,retail32.exe,translink.exe,unistream.exe,uralprom.exe,w32mkde.exe,wclnt.exe,wfinist.exe,winpost.exe,wupostagent.exe,Zvit1DF.exe,BC_Loader.exe,Client2008.exe,IbcRemote31.exe,_ftcgpk.exe,scardsvr.exe,CL_1070002.exe,intpro.exe,UpMaster.exe,SGBClient.exe,el_cli.exe,MWClient32.exe,ADirect.exe,BClient.exe,bc.exe,ant.exe,arm.exe,arm_mt.exe,ARMSH95.EXE,asbank_lite.exe,bank.exe,bank32.exe,bbms.exe,bk.exe,BK_KW32.EXE,bnk.exe,budget.exe,CB.exe,cb193w.exe,cbank.exe,cbmain.ex,CBSMAIN.exe,CbShell.exe,clb.exe,CliBank.exe,CliBankOnlineEn.exe,CliBankOnlineRu.exe,CliBankOnlineUa.exe,client2.exe,client6.exe,clientbk.exe,clntstr.exe,clntw32.exe,contactng.exe,Core.exe,cshell.exe,cyberterm.exe,client.exe,cncclient.exe,bbclient.exe,EximClient.exe,fcclient.exe,iscc.exe,kabinet.exe,SrCLBStart.exe,srcbclient.exe,Upp_4.exe,Bankline.EXE,GeminiClientStation.exe,_ClientBank.exe,ISClient.exe,cws.exe,CLBANK.EXE,IMBLink32.exe,cbsmain.dll,GpbClientSftcws.exe,Run.exe,SGBClient.ex,sx_Doc_ni.exe,icb_c.exe,Client32.exe,BankCl.exe,ICLTransportSystem.exe“
+
+查找是否存在的文件：
+
+    
+    
+    {%PROFILE%\.iBank2}{%APPDATA%\amicon %APPDATA%\bifit %APPDATA%\*bss %APPDATA%\*ibank}{%PROGRAMFILES32%\*gpb %PROGRAMFILES64%\*gpb %PROGRAMFILES32%\inist%PROGRAMFILES64%\inist %PROGRAMFILES32%\mdm %PROGRAMFILES64%\mdm%PROGRAMFILES32%\bifit %PROGRAMFILES64%\bifit %PROGRAMFILES32%\Aladdin%PROGRAMFILES64%\Aladdin %PROGRAMFILES32%\Amicon %PROGRAMFILES64%\Amicon%PROGRAMFILES32%\*bss %PROGRAMFILES64%\*bss %PROGRAMFILES32%\Signal-COM%PROGRAMFILES64%\Signal-COM %PROGRAMFILES32%\iBank2 %PROGRAMFILES64%\iBank2%PROGRAMFILES32%\*\bc.exe %PROGRAMFILES64%\*\bc.exe %PROGRAMFILES32%\*\*\intpro.exe%PROGRAMFILES64%\*\*\intpro.exe %PROGRAMFILES32%\*cft %PROGRAMFILES64%\cft%PROGRAMFILES32%\agava %PROGRAMFILES64%\agava %PROGRAMFILES32%\*R-Style%PROGRAMFILES64%\*R-Style %PROGRAMFILES32%\*AKB Perm %PROGRAMFILES64%\*AKBPerm}
+    
+    {C:\*SFTC:\*Agava C:\*Clnt C:\*CLUNION.0QT C:\*5NT C:\*BS C:\*ELBA C:\*Bank C:\ICB_CC:\*sped}
+    
+    {*ELBA}
+
+此外，还下载回来一个cab包，为7z的自解压包，解压后如下：
+
+![](https://image.3001.net/images/20190320/1553044978_5c9195f222539.png!small)
+
+其中lmpack.exe、pn_pack.exe、xtm.exe又是7z自解压程序，pskill.exe是杀进程用的正常程序，install.cmd是批处理安装脚本。
+
+Install.cmd中的脚本会根据包名拉起对应的自解压程序：
+
+![](https://image.3001.net/images/20190320/1553044989_5c9195fd137fe.png!small)
+
+其中pn_pack.exe会解压出1.dll、punto.exe、EncodeSpecific.exe等程序：
+
+![](https://image.3001.net/images/20190320/1553045006_5c91960e997ba.png!small)
+
+EncodeSpecific.exe会将1.dll解密成1.dat，而1.dat就是最终的木马文件：
+
+![](https://image.3001.net/images/20190320/1553045016_5c919618427ef.png!small)
+
+其中，加载同样使用了白加黑的技术，使用的白利用文件为punto，跟最新捕捉的利用文件一致：
+
+![](https://image.3001.net/images/20190320/1553045028_5c9196242e3ea.png!small)
+
+而该攻击的母体文件，我们关联到了样本文章：<https://www.welivesecurity.com/2015/04/09/operation-buhtrap/>。
+
+![](https://image.3001.net/images/20190320/1553045040_5c91963085003.png!small)
+
+![](https://image.3001.net/images/20190320/1553045067_5c91964b15d80.png!small)
+
+虽然我们发现的攻击细节跟之前曝光的Buhtrap恶意软件非常的相似，但是由于Buhtrap的源代码在2016年被泄露，因此暂时无更多的证据证明最近的几次攻击为之前的组织所为。
+
+四、TTPs总结
+
+事项 | 说明  
+---|---  
+攻击目标 | 俄罗斯、白俄罗斯、乌兰兰等金融机构  
+投递方式 | 鱼叉攻击  
+诱饵类型 | 带有漏洞的office文档、js脚本、图标伪装成文档图标的可执行文件等。  
+利用技术 | NSIS安装包、Yandex的Punto软件进行白加黑  
+驻留方式 | Buhtrap特种木马、创建新账户等  
+提权 | CVE-2013-3660等提权漏洞  
+横向移动 | 修改版的Mimikatz、"ADMIN$" " ipc$"共享  
+攻击目的 | 窃取相关资料文件  
+  
+## 五、解决方案
+
+1、不要打开不明来源的邮件附件；除非非常清楚文档来源可靠，否则建议不要启用Office执行宏代码；
+
+2、及时打系统补丁和重要软件的补丁；
+
+3、使用杀毒软件防御可能的病毒木马攻击；
+
+## 六、附录
+
+### 1、IOCs
+
+ **MD5:**
+
+    
+    
+     35be4860a6ea917a9f680f5d2faaa2e2
+    
+    664e95fbd9c4439c9800cc93f0474d1b
+    
+    d72a094f0333964c74091652dfaca39f
+    
+    e75615e610d5d1588f2c66a37f73da94
+    
+    4ce47693ba3af70725a14bad15dbdcd9
+    
+    c6d66c14ae265473bd89f127a439834c
+    
+    7cca9ee61d72f403b0158cbf39db985e
+    
+    2971c7fe58c597bdb720b44c8503a8b1
+    
+    aa690b8f97850356bb49cd4ae5d4851b
+    
+    e50cae2066267dca70b8c52c9f4c2133
+    
+    faf833a1456e1bb85117d95c23892368
+    
+    1b8b3657bcebd8ed094b6e8e943cc458
+    
+    3ee89dc8a2acd5bccaf814268715623f
+    
+    467be8cd950e1263bb7aa616cc3eebf4
+    
+    46d7770b7f62edeb8d5a5542113acf6e
+    
+    2dd786157bc8a6618bad11cb50e46ec4
+    
+    ce2151be577ab60777c9ee72a02ebbcb
+
+ **C &C:**
+
+[](http://puntoyandex.in:7464/klog.php)
+
+    
+    
+    <http://puntoyandex.in:7464/klog.php>
+    
+    <http://my1cprovider.xyz:6060/klog.php>
+    
+    <http://tinderminderorli1999.xyz:7764/klog.php>
+    
+    <http://dbosystem.pw:6060/klog.php>
+    
+    <http://85.217.170.37/vgs/uds/77.tmp>
+    
+    <http://balans2w.balans2.com/support/menu.php>
+    
+    <http://download.sendspace.biz/file/install.cab>
+    
+    <http://playback.savefrom.biz/video/video1.cab>
+    
+    213.252.244.200
+
+### 2、参考链接
+
+> 1) <https://www.welivesecurity.com/2015/04/09/operation-buhtrap/>
+>
+> 2) <https://www.group-ib.com/brochures/gib-buhtrap-report.pdf>
+
+***本文作者：腾讯电脑管家，转载请注明来自FreeBuf.COM**
+

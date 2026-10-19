@@ -1,0 +1,356 @@
+# 对 Hawkeye Keylogger - Reborn v8 恶意软件活动的深入分析
+
+阅读量 **382335**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-07-13 17:00:12
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：cloudblogs.microsoft.com
+
+原文地址：<https://cloudblogs.microsoft.com/microsoftsecure/2018/07/11/hawkeye-keylogger-reborn-v8-an-in-depth-campaign-analysis/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t0155c9c7fd65c06377.jpg)
+
+## 前言
+
+如今，大部分网络犯罪都是由地下市场助长的，在地下市场，恶意软件和网络犯罪服务是可以购买的。这些市场在深层网络商品化恶意软件运作。即使是网络犯罪新手也可以购买恶意软件工具包和恶意软件活动所需的其他服务：加密、托管、反查杀、垃圾邮件等。
+
+Hawkeye Keylogger(也称为iSpy
+Keylogger/键盘记录器)是一种窃取信息的恶意软件，被作为恶意软件服务出售。多年来，Hawkeye背后的恶意软件作者改进了恶意软件服务，增加了新的功能和技术。它上一次是在2016年的一次大规模运动中被使用的。
+
+今年标志着Hawkeye的复兴。四月，恶意软件作者开始兜售新版本的恶意软件，他们称之为Hawkeye Keylogger- Reborn
+v8。不久之后，在4月30日，Office 365 高级威胁防护 (ATP) 检测到了一个大规模的活动，分发了这个键盘记录器的最新变体。
+
+一开始，Office
+365封锁了电子邮件活动保护客户，其中52%的客户是软件和技术部门的。银行业(11%)、能源(8%)、化工(5%)和汽车业(5%)的公司也是最受关注的行业。
+
+[](https://p5.ssl.qhimg.com/t01af39c527310bb8a8.png
+"图1.2018年4月Hawkeye活动瞄准的行业")
+
+Office 365
+ATP使用智能系统检查附件和恶意内容链接，以保护客户免受像Hawkeye这种活动的威胁。这些自动化系统包括一个健壮的引爆平台(detonation
+platform)、启发式和[机器学习](https://cloudblogs.microsoft.com/microsoftsecure/2018/05/10/enhancing-office-365-advanced-threat-protection-with-detonation-based-heuristics-and-machine-learning/)模型。Office 365 ATP使用来自各种智能服务，包括Windows Defender Advanced
+Threat Protection中的多个功能([Windows Defender ATP](https://www.microsoft.com/en-us/windowsforbusiness/windows-atp?ocid=cx-blog-mmpc))。
+
+Windows Defender AV(Windows Defender
+ATP的一个组成部分)检测到并阻止了至少40个国家在该运动中使用的恶意附件。阿联酋在这些遭遇中占19%，而荷兰(15%)、美国(11%)、南非(6%)和英国(5%)则是在这场活动中使用诱饵文件的前5名国家中的其他国家。Windows
+Defender AV ([TrojanDownloader:O97M/Donoff](https://www.microsoft.com/en-us/wdsi/threats/malware-encyclopedia-description?Name=TrojanDownloader:O97M/Donoff),
+[Trojan:Win32/Tiggre!rfn](https://www.microsoft.com/en-us/wdsi/threats/malware-encyclopedia-description?Name=Trojan:Win32/Tiggre!rfn),
+[Trojan:Win32/Bluteal!rfn](https://www.microsoft.com/en-us/wdsi/threats/malware-encyclopedia-description?Name=Trojan:Win32/Bluteal!rfn),
+[VirTool:MSIL/NetInject.A](https://www.microsoft.com/en-us/wdsi/threats/malware-encyclopedia-description?Name=VirTool:MSIL/NetInject.A))中的通用保护和启发式保护的组合确保了这些威胁在客户环境中能被阻止。
+
+[](https://p5.ssl.qhimg.com/t0105391e0a0d2b8032.png "图2.在Hawkeye运动中遇到恶意文件的国家")
+
+作为我们保护客户免受恶意软件攻击的工作的一部分，Office 365
+ATP研究人员监控像Hawkeye这样的恶意软件活动和网络犯罪领域的其他发展。我们对类似Hawkeye等恶意软件活动的深入调查增加了我们从Microsoft
+Intelligent Security Graph获得的威胁情报，这使我们能够不断提高安全性标准。通过[Microsoft Intelligent
+Security Graph](https://www.microsoft.com/en-us/security/intelligence)，Microsoft
+365中的安全技术共享信号和检测，允许这些技术自动更新保护和检测机制，以及在整个Microsoft 365中组织修复。
+
+[](https://p3.ssl.qhimg.com/t019e4d83bacb51d88b.png "图3.微软365对Hawkeye的威胁防护")
+
+## 活动概览
+
+尽管它的名字，Hawkeye Keylogger – Reborn
+v8不仅仅是一个普通的键盘记录器。随着时间的推移，作者已经集成了各种模块，这些模块提供了高级功能，如隐身和检测规避，以及凭据窃取等等。
+
+像Hawkeye这样的恶意软件服务是在深度网络上做广告和销售的，这需要匿名网络(如Tor)来访问等等。有趣的是，“Hawkeye”的作者在网站上刊登了他们的恶意软件广告，甚至在网站上发布了教程视频。更有趣的是，在地下论坛，恶意软件作者雇佣了中介经销商，这是网络犯罪地下商业模式扩展和发展的一个例子。
+
+我们对2018年4月Hawkeye运动的调查显示，自2月份以来，网络犯罪分子就一直在为这一行动做准备，当时他们注册了他们后来在活动中使用的域名。
+
+在典型的恶意软件运动中，网络罪犯采取了以下步骤：
+
+  * 使用从地下获取的恶意软件生成器构建恶意软件样本和恶意软件配置文件。
+  * 建立武器化文件，用于社会工程诱饵(可能使用在地下购买的另一种工具)
+  * 包装或混淆样本
+  * 注册恶意软件要用的域名
+  * 发起了一场垃圾邮件活动(可能使用付费的垃圾邮件服务)来分发恶意软件。
+
+和其他恶意软件工具包一样，Hawkeye配备了一个管理面板，网络罪犯可以用来监视和控制攻击。
+
+[](https://p4.ssl.qhimg.com/t01067fd73c4d45c891.png "图4：Hawkeye的管理面板")
+
+有趣的是，在这次Hawkeye活动中使用的一些方法与以前的攻击是一致的。这表明，这场运动背后的网络罪犯可能是负责提供远程访问工具(RAT)Remcos和窃取信息的bot恶意软件Loki的同一组人。在这些活动中采用了下面的方法：
+
+  * 创建复杂的多阶段交付链的多个文档。
+  * 使用bit.ly短链接重定向
+  * 使用恶意宏、vbscript和powershell脚本运行恶意软件；Remcos活动使用了cve-2017-0199的漏洞，但使用了相同的域名。
+  * 多样本一致性混淆技术
+
+## 入口
+
+4月底，Office 365 ATP分析人员发现，主题行RFQ-GHFD456 ADCO
+5647在5月7日截止日期前发起了一场新的垃圾邮件活动，其中包含一个名为Scan Copy
+001.doc的Word文档附件。虽然附件的文件扩展名是.doc，但实际上它是一个恶意的Office Open
+XML格式文档，它通常使用.docx文件扩展名。
+
+这场活动总共使用了四个不同的主题和五个附件。
+
+[](https://p1.ssl.qhimg.com/t01aa73873795e9e3a7.png)
+
+[](https://p2.ssl.qhimg.com/t01875f7eb2bf6577ba.png "图5：Hawkeye活动中使用的电子邮件")
+
+由于附件包含恶意代码，因此打开Microsoft
+Word时会发出安全警告。文档使用了一个常见的社交工程诱饵：它显示一条假消息和一条指令，用于“启用编辑”和“启用内容”。
+
+[](https://p2.ssl.qhimg.com/t01dd8b43b566bc76d8.png "图6：带有社会工程诱饵的恶意文档")
+
+该文档包含使用短URL连接到远程位置的嵌入式框架。
+
+[](https://p1.ssl.qhimg.com/t01cd990bc730ccfcae.png
+"图7：文档中的setings.rels.xml中的框架")
+
+该框架从hxxp://bit[.]ly/Loadingwaitplez加载.rtf文件，重定向到hxxp://stevemike-fireforce[.]info/work/doc/10.doc。
+
+[](https://p2.ssl.qhimg.com/t01831f7ae0a69dbc5e.png "图8：作为框架加载到恶意文档中的RTF")
+
+RTF有一个嵌入的恶意.xlsx文件，其中宏作为OLE对象，该文件又包含一个名为PACKAGE的stream，其中包含.xlsx内容。
+
+宏脚本大部分是混淆过的，但是恶意软件payload的URL以明文形式出现。
+
+[](https://p2.ssl.qhimg.com/t01476fd601b56d3fbd.png "图9：混淆的宏入口点")
+
+反混淆全部代码，让它的意图变得清晰。第一部分使用PowerShell和System.Net.WebClient对象将恶意软件下载到路径C:UsersPublicsvchost32.exe并执行它。
+
+然后，宏脚本终止winword.exe和exel.exe。在Microsoft Word覆盖默认设置并以管理员权限运行的情况下，宏可以删除Windows
+Defender AV的恶意软件定义。然后，它将更改注册表以禁用Microsoft Office的安全警告和安全功能。
+
+总之，该活动的交付由多个层次的组件组成，目的是逃避检测，并可能使研究人员的分析复杂化。
+
+[](https://p4.ssl.qhimg.com/t010e6a589fec8d0228.png "图10：活动的实施阶段")
+
+下载的payload，svchost32.exe是一个名为Millionare的.NET程序集，它使用众所周知的开源.NET混淆器ConfuerEx的常规版本进行混淆处理。
+
+[](https://p0.ssl.qhimg.com/t01dfa434e8ca5b79c2.png
+"图11：混淆的.NET程序集Millionon显示了一些混淆的名称")
+
+混淆会修改.NET程序集的元数据，使所有类和变量名都是Unicode中的无意义和混淆名称。这种混淆导致一些分析工具(如 .NET
+Reflector)将某些名称空间或类名显示为空白，或者在某些情况下向后显示部分代码。
+
+[](https://p4.ssl.qhimg.com/t012c2086e7c545cef6.png "图12：由于混淆而向后显示代码的.NET
+Reflector")
+
+最后，.NET二进制文件加载一个未打包的.NET程序集，其中包括嵌入式可移植可执行文件(PE)中的资源的DLL文件。
+
+[](https://p3.ssl.qhimg.com/t018e1f0db968358be3.png "图13：在运行时加载未打包的.NET程序集")
+
+## 恶意软件加载器
+
+启动恶意行为的DLL作为资源嵌入到未打包的.NET程序集中。它使用[process
+hollowing](https://cloudblogs.microsoft.com/microsoftsecure/2017/07/12/detecting-stealthier-cross-process-injection-techniques-with-windows-defender-atp-process-hollowing-and-atom-bombing/)
+技术加载到内存中，这是一种代码注入技术，涉及到生成一个合法进程的新实例，然后将其“空洞化(hollowing)”，即用恶意软件替换合法代码。[](https://p5.ssl.qhimg.com/t01e523b83d3367bdff.png
+"图14：在内存中解压恶意软件使用的process hollowing")
+
+以前的Hawkeye变体(V7)将主payload加载到自己的进程中，与此不同的是，新的Hawkeye恶意软件将其代码注入到MSBuild.exe、RegAsm.exe和VBC.exe中，它们是.NET框架附带的可签名可执行文件。这是一种伪装为合法过程的方法。
+
+[](https://p0.ssl.qhimg.com/t01351d083b6c137678.png "图15：使用.NET反射执行process
+hollowing注入例程的混淆糊调用，将恶意软件的主要payload注入RegAsm.exe")
+
+此外，在上一个版本中，process hollowing例程是用C编写的。在新版本中，这个例程被完全重写为一个托管.NET，然后调用本机Windows
+API。
+
+[](https://p3.ssl.qhimg.com/t01b39f73ff12430076.png
+"图16：使用本机API函数调用在.NET中实现的process hollowing例程")
+
+## 恶意软件功能
+
+由最新版本的恶意软件工具包创建的新的Hawkeye变体具有多种复杂的功能，可用于信息窃取和逃避检测和分析。
+
+###  信息窃取
+
+主键盘记录功能是使用钩子来实现的，钩子监控按键，鼠标点击和窗口环境，以及剪贴板钩子和屏幕截图功能。
+
+它具有从下列应用程序提取和窃取凭据的特定模块：
+
+  * Beyluxe Messenger
+  * Core FTP
+  * FileZilla
+  * Minecraft (在以前的版本中替换了RuneSscape模块)
+
+与许多其他恶意软件活动一样，它使用合法的BrowserPassView和MailPassView工具从浏览器和电子邮件客户端转储凭据。它还有一些模块，如果有摄像头的话，可以保存桌面截图。
+
+值得注意的是，恶意软件有一种访问某些URL的机制，用于基于点击的盈利方式.
+
+###  隐身和反分析
+
+在processes hollowing技术的基础上，该恶意软件使用其他隐身方法，包括从恶意软件下载的文件中删除Web标记(MOTW)的备用数据流。
+
+恶意软件可以被配置为将执行延迟任意秒，这是一种主要用于避免被各种沙箱检测到的技术。
+
+它为了防止反病毒软件检测使用了有趣的技术运行。它向注册表位置HKLMSoftwareWindowsNTCurrentVersionImage File
+Execution Options添加键，并将某些进程的Debugger
+值设置为rundll32.exe，这会阻止它执行。针对与防病毒和其他安全软件有关的进程：
+
+  * AvastSvc.exe
+  * AvastUI.exe
+  * avcenter.exe
+  * avconfig.exe
+  * avgcsrvx.exe
+  * avgidsagent.exe
+  * avgnt.exe
+  * avgrsx.exe
+  * avguard.exe
+  * avgui.exe
+  * avgwdsvc.exe
+  * avp.exe
+  * avscan.exe
+  * bdagent.exe
+  * ccuac.exe
+  * ComboFix.exe
+  * egui.exe
+  * hijackthis.exe
+  * instup.exe
+  * keyscrambler.exe
+  * mbam.exe
+  * mbamgui.exe
+  * mbampt.exe
+  * mbamscheduler.exe
+  * mbamservice.exe
+  * MpCmdRun.exe
+  * MSASCui.exe
+  * MsMpEng.exe
+  * msseces.exe
+  * rstrui.exe
+  * spybotsd.exe
+  * wireshark.exe
+  * zlclient.exe
+
+此外，它还阻止对某些域名的访问，这些域名通常与防病毒或安全更新相关联。它通过修改主机文件来做到这一点。要阻止的域列表由攻击者使用配置文件确定。
+
+这种恶意软件还保护自己的进程。它阻止命令提示符、注册表编辑器和任务管理器，通过修改本地组策略管理模板的注册表项来做到这一点。如果窗口标题与“ProcessHacker”、“ProcessExplorer”或“Taskmgr”匹配，它还会不断检查活动窗口并呈现不可用的操作按钮。
+
+同时，它可以防止其他恶意软件感染这台机器。它反复扫描和删除某些注册表项的任何新值，停止关联进程，并删除相关文件。
+
+Hawkeye试图避免自动分析。执行的延迟是为了防止为恶意软件的执行和分析分配一定时间的自动沙箱分析。它同样试图通过监视窗口并在发现以下分析工具时退出来逃避手动分析：
+
+  * Sandboxie
+  * Winsock Packet Editor Pro
+  * Wireshark
+
+## 保护邮箱、网站和网络免受持久性恶意软件攻击
+
+Hawkeye展示了恶意软件在网络犯罪地下的威胁环境中的持续演变。恶意软件服务使得即使是简单的操作者也可以访问恶意软件，同时使用诸如内存中解压缩和滥用.NET的CLR引擎的高级技术使恶意软件更加耐用。在本文中，我们介绍了它的最新版本Hawkeye
+Keylogger – Reborn v8的功能，重点介绍了以前版本的一些增强功能。鉴于其历史，Hawkeye很可能在未来发布一个新版本。
+
+各公司应继续对员工进行识别和预防社会工程攻击的教育。毕竟，Hawkeye复杂的感染链是从一封社交工程电子邮件和诱饵文件开始的。一支具有安全意识的员工队伍将在保护网络免受攻击方面发挥很大作用。
+
+更重要的是，使用先进的威胁保护技术保护邮箱、网站和网络，可以防止像Hawkeye这样的攻击、其他恶意软件操作和复杂的网络攻击。
+
+我们对最新版本的深入分析，以及我们对推动这一发展的网络犯罪操作的洞察力，使我们能够积极地建立起对已知和未知威胁的强有力保护。
+
+Office 365高级威胁保护(Office 365
+ATP)保护邮箱以及文件、在线存储和应用程序免受Hawkeye等恶意软件的攻击。它使用一个健壮的引爆平台、启发式和机器学习实时检查附件和链接中的恶意内容，确保携带Hawkeye和其他威胁的电子邮件不会到达邮箱和设备。
+
+Windows Defender Antivirus([Windows Defender AV](https://www.microsoft.com/en-us/windows/windows-defender?ocid=cx-blog-mmpc))通过检测通过电子邮件传递的恶意软件以及其他感染载体，提供了额外的保护层。使用本地和基于云的机器学习，Windows Defener
+AV的下一代保护可以在[Windows 10 S模式下](https://www.microsoft.com/en-us/windows/s-mode)和Windows 10上阻止新的和未知的威胁。
+
+此外，Windows防御高级威胁保护(Windows Defect AdvancedThreat，Windows Defect
+ATP)中的端点检测和响应(EDR)功能暴露了复杂的、回避性的恶意行为，例如Hawkeye所使用的行为。
+
+Windows Defender
+ATP丰富的检测库由机器学习驱动，允许安全操作团队检测和响应网络中的异常攻击。例如，当Hawkeye使用恶意PowerShell下载payload时，机器学习检测算法会出现以下警报：
+
+[](https://p3.ssl.qhimg.com/t01a2c9687593f102ca.png
+"图16：针对Hawkeye恶意PowerShell组件的Windows Defender ATP警报")
+
+Windows Defender ATP还提供了基于行为的机器学习算法，用于检测payload本身：
+
+[](https://p1.ssl.qhimg.com/t01cb078f95bc0e8481.png "图17：针对Hawkeye
+payload的Windows防御程序ATP警报")
+
+这些安全技术是Microsoft 365中高级威胁保护解决方案的一部分。通过Microsoft智能安全图增强Windows、Office
+365和企业移动+安全性中服务之间的信息共享，从而能够在Microsoft 365中自动更新保护和补救的安排。
+
+## IoC
+
+电子邮件主题:
+
+  * {EXT} NEW ORDER ENQUIRY #65563879884210#
+  * B/L COPY FOR SHIPMENT
+  * Betreff: URGENT ENQ FOR Equipment
+  * RFQ-GHFD456 ADCO 5647 deadline 7th May
+
+附件文件名:
+
+  * Betreff URGENT ENQ FOR Equipment.doc
+  * BILL OF LADING.doc
+  * NEW ORDER ENQUIRY #65563879884210#.doc
+  * Scan Copy 001.doc
+  * Swift Copy.doc
+
+域名：
+
+  * lokipanelhostingpanel[.]gq
+  * stellarball[.]com
+  * stemtopx[.]com
+  * stevemike-fireforce[.]info
+
+重定向短链接：
+
+  * hxxp://bit[.]ly/ASD8239ASdmkWi38AS (Remcos活动中也有使用)
+  * hxxp://bit[.l]y/loadingpleaswaitrr
+  * hxxp://bit[.l]y/Loadingwaitplez
+
+文件(SHA-256)：
+
+  * d97f1248061353b15d460eb1a4740d0d61d3f2fcb41aa86ca6b1d0ff6990210a – .eml
+  * 23475b23275e1722f545c4403e4aeddf528426fd242e1e5e17726adb67a494e6 – .eml
+  * 02070ca81e0415a8df4b468a6f96298460e8b1ab157a8560dcc120b984ba723b – .eml
+  * 79712cc97a19ae7e7e2a4b259e1a098a8dd4bb066d409631fb453b5203c1e9fe – .eml
+  * 452cc04c8fc7197d50b2333ecc6111b07827051be75eb4380d9f1811fa94cbc2 – .eml
+  * 95511672dce0bd95e882d7c851447f16a3488fd19c380c82a30927bac875672a – .eml
+  * 1b778e81ee303688c32117c6663494616cec4db13d0dee7694031d77f0487f39 – .eml
+  * 12e9b955d76fd0e769335da2487db2e273e9af55203af5421fc6220f3b1f695e – .eml
+  * 12f138e5e511f9c75e14b76e0ee1f3c748e842dfb200ac1bfa43d81058a25a28 – .eml
+  * 9dfbd57361c36d5e4bda9d442371fbaa6c32ae0e746ebaf59d4ec34d0c429221 – .docx (stage 1)
+  * f1b58fd2bc8695effcabe8df9389eaa8c1f51cf4ec38737e4fbc777874b6e752 – .rtf (stage 2)
+  * 5ad6cf87dd42622115f33b53523d0a659308abbbe3b48c7400cc51fd081bf4dd – .doc
+  * 7db8d0ff64709d864102c7d29a3803a1099851642374a473e492a3bc2f2a7bae – .rtf
+  * 01538c304e4ed77239fc4e31fb14c47604a768a7f9a2a0e7368693255b408420 – .rtf
+  * d7ea3b7497f00eec39f8950a7f7cf7c340cf9bf0f8c404e9e677e7bf31ffe7be – .vbs
+  * ccce59e6335c8cc6adf973406af1edb7dea5d8ded4a956984dff4ae587bcf0a8 – .exe (packed)
+  * c73c58933a027725d42a38e92ad9fd3c9bbb1f8a23b3f97a0dd91e49c38a2a43 – .exe (unpacked)
+
+审核人：yiwang 编辑：边边
+
+本文翻译自cloudblogs.microsoft.com
+[原文链接](https://cloudblogs.microsoft.com/microsoftsecure/2018/07/11/hawkeye-keylogger-reborn-v8-an-in-depth-campaign-analysis/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **yimeng** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/151641](/post/id/151641)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[cloudblogs.microsoft.com](https://cloudblogs.microsoft.com/microsoftsecure/2018/07/11/hawkeye-keylogger-reborn-v8-an-in-depth-campaign-analysis/)
+
+如若转载,请注明出处：
+<https://cloudblogs.microsoft.com/microsoftsecure/2018/07/11/hawkeye-keylogger-reborn-v8-an-in-depth-campaign-analysis/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意软件](/tag/恶意软件)
+  * [技术分析](/tag/技术分析)
+  * [Hawkeye](/tag/Hawkeye)
+
+ **+1** __4赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t016fefd8e565877ad5.png) yimeng
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

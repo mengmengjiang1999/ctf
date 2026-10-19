@@ -1,0 +1,97 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+前言  
+
+**在近期的一次Web应用测试过程中，我在该应用的SAML（[安全声明标记语言](https://www.csoonline.com/article/3232355/authentication/what-is-saml-what-is-it-used-for-and-how-does-it-work.html)）实现中发现了一个安全漏洞。该应用在实现其SAML功能时，采用了不安全的实践方法，再加上其本身的自定义认证机制也存在安全问题，因此导致了该漏洞的存在。**
+
+在这篇文章中，我们将跟大家演示如何利用该这些不安全的配置并结合有效的钓鱼攻击，来帮助攻击者远程访问那些可能包含敏感信息的安全页面。
+
+![](https://image.3001.net/images/20190312/1552371377_5c874eb11acf2.png!small)
+
+## 应用程序概述
+
+我们所测试的这个Web应用程序的客户端允许用户创建简单的Web页面以及Web表格。客户不仅可以使用这款应用程序来收集终端用户的信息，而且还可以作为托管人力资源档案以及其他潜在敏感材料的门户站点。与此同时，用户可以通过各种方式来保护这些资料的安全。比如说，他们可以为页面设置密码保护，这些页面将只允许授权用户访问。而且，该应用程序还支持使用SAML来实现单点登录（SSO，即用户只需要登录一次就可以访问所有相互信任的应用系统）。因此，测试这些认证机制就显得至关重要了，因为安全配置的实现是比较繁琐且复杂的，很多组织都无法正确地处理这些配置。
+
+### 验证功能
+
+我使用了一个管理员账号登录进了应用程序，然后创建了一个简单的页面。接下来，我添加了以下文本内容：“If you can see this，good for
+you.”。最后，我修改了配置，要求使用SSO认证功能。我将该页面命名为了“samlpage”，然后保存配置，并生成了一个新的URL：
+
+    
+    
+    https://clientwebsite.com/samlpage
+
+当我尝试使用未认证的浏览器会话来加载这个页面时，我收到了下列信息：
+
+![](https://image.3001.net/images/20190312/1552371445_5c874ef58ab1c.png!small)
+
+几秒钟之后，该页面重定向到了我们的单点登录页面。SAML识别提供商（IDP）为Anitian的SimpleSAMLphp，这里主要用来测试SAML实现。随后，Web页面重定向至了下面这个登录界面：
+
+![](https://image.3001.net/images/20190312/1552371457_5c874f01acd6e.png!small)
+
+如果输入错误的密码，则无法登录；如果输入正确的凭证，我就会被重定向到我们的客户端应用程序。经历了多次重定向之后，我通过了App的认证，并成功访问了受SAML保护的页面。
+
+![4.png](https://image.3001.net/images/20190312/1552371465_5c874f09ee1d6.png!small)
+
+至此，基础功能一切正常。
+
+接下来，我打算使用BurpSuite的SAMLRaider插件来进行测试，该插件可以进行一些标准安全测试，比如说签名修改等等，执行起来也很方便。在我的分析过程中，大多数基础的SAMLRaider测试都失败了。但是我发现，我能够将IDP返回的SAML响应重放给客户端应用程序或服务提供商(SP)。SAML响应的有效性按理来说只有因此，也就是一次性的。但是在测试过程中，如果在同一个用户账号下使用了多个有效会话，那么同一个SAML响应将能够多次使用。如果攻击者能够拦截SAML响应，他们就可以打开自己的会话并绕过验证机制了。这种攻击跟获取用户密码比较类似，但影响更加严重，因为攻击者此时将能够绕过IDP部署的多因素验证机制。
+
+在对SP和IDP之间的SAML流量进行了分析之后，我发现在SP将用户重定向至IDP以实现身份验证时，GET参数中包含了一个SAML声明参数，另一个参数为RelayState。
+
+![](https://image.3001.net/images/20190312/1552371474_5c874f1279013.png!small)
+
+这个RelayState参数包含了一个客户端应用程序内的页面URL地址。解码之后的地址如下：
+
+    
+    
+    https://clientwebsite.com/samlpage?sp_id=73
+
+这个地址就是我创建的保护页面地址，但现在它又包含了一个名叫“sp_id”的额外参数。SP会携带它自己的参数并将该地址发送给IDP。登录进IDP后，用户会收到指向SP（我们的客户端）的重定向请求，IDP会将SAML响应转发给SP并携带RelayState参数，而且这个参数是无法进行修改的，然后原样返回给SP。
+
+SAML响应会被发送给/sso/saml/acs/73页面，用户会被重定向至/samlpage受保护页面。
+
+![](https://image.3001.net/images/20190312/1552371484_5c874f1c13087.png!small)
+
+查看Burp日志后，你会发现SAML响应又以明文的形式发送了一遍。这一次请求是为了受保护的资源而发送的，它的作用跟RelayState参数类似。之前的URL为：
+
+    
+    
+    https://clientwebsite.com/samlpage?sp_id=73
+
+但这一次的URL如下：
+
+    
+    
+    https://clientwebsite.com/samlpage?saml_token=<reallylong string>
+
+我无法解码saml_token参数，但根据参数名，我觉得它应该挺重要。我猜它应该是用来判断是否允许访问samlpage页面的。为了测试，我用未认证浏览器会话加载了这个地址及saml_token参数。有趣的是，我竟然直接进入了受保护的页面，而且没有重定向至IDP，我也没有进行登录。如果我有一个有效的saml_token值，我就能访问并查看受保护页面了。
+
+接下来的问题就是，RelayState值的响应是什么？如果我能修改参数值，然后将用户重定向至任意站点，那么这里就是一个开放重定向漏洞了。
+
+重新进行SSO请求后，我拦截了发送至IDP的原始SAML请求，并修改了RelayState值，我选择使用了我自己的一台Web服务器。原来的URL如下：
+
+    
+    
+    https://clientwebsite.com/samlpage?sp_id=73
+
+我修改为了：
+
+    
+    
+    https://anitianwebsite.com/owned
+
+将请求转发给IDP后，浏览器会加载登录页面，使用已知有效账号登录后，IDP会将我重定向至SP。拦截请求后，我发现其中的RelayState参数仍然包含的是我修改后的值。客户端应用仍然能够认证SAML请求的有效性，并将我重定向至受保护的页面。而我能够重定向这个URL，这也就意味着，这里存在一个开放重定向漏洞：
+
+    
+    
+    https://anitianwebsite.com/owned?saml_token=<longvalue here>
+
+而且更可怕的是，saml_token也发送到了我的Web服务器上：
+
+![7.png](https://image.3001.net/images/20190312/1552371496_5c874f281823e.png!small)
+
+这下这个漏洞就更加严重了，因为作为访问受保护页面的关键，我拿到了saml_token，我就再也不需要用户密码或SAML响应了，我只需要用它就可以访问任意受保护页面了。
+
+ ***参考来源：[anitian](https://www.anitian.com/blog/owning-saml/)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

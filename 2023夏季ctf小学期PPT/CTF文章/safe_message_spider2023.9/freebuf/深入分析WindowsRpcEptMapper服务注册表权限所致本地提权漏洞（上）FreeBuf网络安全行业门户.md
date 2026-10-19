@@ -1,0 +1,255 @@
+此前，我曾经发布过一个Windows权限提升枚举脚本，即PrivescCheck，它是著名的PowerUp脚本的升级、扩展版本。当我在Windows
+7或Windows Server 2008
+R2上运行过该脚本时，经常会遇到一个反复出现的奇怪结果，刚开始的时候，我认为这是一个误报，后来才发现，这根本就不是误报，而是一个实实在在的Windows权限提升0day漏洞。下面，我们就来讲讲发现该漏洞的具体过程。
+
+  
+
+## 背景介绍
+
+  
+
+今年年初，我开始鼓捣一个权限提升枚举脚本：PriveSccheck。我的想法是：在著名的PowerUp工具现有功能的基础上，再实现一些我自认为非常必要的检查功能。我本指望能够通过该脚本快速枚举由系统错误配置引起的潜在漏洞，但是，却产生了一些意想不到的结果：准确来说，我通过它发现了Windows
+7 / Server 2008R2系统中的一个0day漏洞！
+
+  
+
+如果Windows计算机安装了完整的补丁程序，则可能导致本地权限提升的主要安全问题之一就是服务配置错误。如果普通用户能够修改现有服务，那么他/她就可以在本地/网络服务甚至本地系统的上下文中执行任意代码。下面介绍的是一些最常见的漏洞。对于已经熟悉这些概念的读者，可以跳过这一部分。
+
+  
+
+  * 服务控制管理器（Service Control Manager，SCM）：低特权用户可以通过SCM获取服务的特定权限。例如，由于具有SERVICE_START权限，普通用户可以使用命令exe start wuauserv启动Windows Update服务。这是一个非常常见的场景。但是，如果这个用户具有SERVICE_CHANGE_CONFIG，他/她将能够改变该服务的行为，并使其运行任意的可执行文件。
+
+  
+
+  * 二进制权限（Binary permissions）：对于典型的Windows服务来说，通常都有一个相关联的命令行。如果您可以修改相应的可执行文件（或者如果您在父文件夹中拥有写权限），那么您基本上就可以在该服务的安全上下文中执行所需的任何操作。
+
+  
+
+  * 未加引号的路径：这个问题与Windows系统解析命令行的方式有关。让我们考虑一个虚构的服务，其对应的命令行为：C:\Applications\Custom Service\service.exe /v。由于这条命令行具有歧义性，所以，Windows系统首先尝试执行C:\Applications\Custom.exe命令，并将Service\service.exe作为该命令的第一个参数，同时，将/v作为该命令的第二个参数。如果一个普通用户在C:\Applications目录中具有写权限，那么他/她就可以通过复制一个恶意的可执行文件到C:\Applications\Custom.exe来劫持该服务。这就是为什么路径应该总是用引号括起来的原因，特别是当它们包含空格时："C:\Applications\Custom Service\service.exe" /v。
+
+  
+
+  * 幻影DLL劫持（与可写的%PATH%文件夹）：即使在默认安装的Windows系统上，某些内置服务也会尝试加载并不存在的DLL。这本身并不是一个漏洞，但如果在%PATH%环境变量中列出的文件夹运行普通用户对其执行写操作，那么这些服务就可能被劫持。
+
+  
+
+  
+
+对于上述潜在的安全问题，PowerUp脚本都会对其进行相应的检查；但除此之外，还有一个地方也可能会出现配置错误：注册表。通常情况下，在创建服务时，可以通过sc.exe命令以管理员身份调用服务控制管理器。这时，会在HKLM\SYSTEM\CurrentControlSet\Services中创建一个以服务名称命名的子键，并且，所有的设置（命令行、用户等）都将保存在这个子键中。所以，如果这些设置是由SCM管理的，那么默认情况下它们应该是安全的。至少我是这么认为的……
+
+  
+
+## 检查注册表的权限
+
+  
+
+PowerUp脚本的核心函数之一是Get-ModifiablePath。这个函数的基本思想是提供一个通用的方法来检查当前用户是否可以通过某种方式修改一个文件或文件夹（例如：AppendData/AddSubdirectory）。它是通过解析目标对象的ACL，然后将其与通过其所属的所有组授予当前用户帐户的权限进行比较，以实现该任务的。虽然这项检查最初是针对文件和文件夹实现的，但注册表键也是需要检测的对象。因此，可以实现一个类似的函数来检查当前用户是否对注册表键具有写权限。这正是我所做的，为此，我添加了一个新的核心函数：Get-ModifiableRegistryPath。
+
+  
+
+然后，对Windows服务对应的可修改注册表键进行相应的检查，实现这一点并不难：首先，在Registry::HKLM\SYSTEM\CurrentControlSet\Services路径上调用PowerShell命令Get-ChildItem，然后，将上述命令的结果通过管道传给新的Get-ModifiableRegistryPath命令即可。
+
+  
+
+当我需要实现一个新的检查时，首先会在一台Windows
+10机器上完成编程工作，然后，还是在同一台机器上进行最初的测试，看看是否一切都按预期工作。当代码稳定后，我会将测试范围扩展到其他一些Windows虚拟机上，以确保代码不仅兼容PowerShell
+v2，同时还能在旧系统上运行。在这些过程中，使用最多的操作系统是Windows 7、Windows 2008 R2和Windows Server 2012
+R2。
+
+  
+
+当我在默认安装的Windows 10上运行升级后的脚本时，它并没有返回任何内容，这正是我所预期的结果。但后来，我在Windows
+7上运行该脚本时，竟然出现了如下所示的一幕：
+
+  
+
+![](https://image.3001.net/images/20201119/1605767928_5fb612f8b7d9ec1eb4e42.png!small)
+
+  
+
+根据预期，这里是不应该返回任何内容的，所以，刚开始我们以为这些都是误报，也就是自己的代码本身出现了问题。但是，在检查代码之前，我仔细看了一下这些内容……
+
+  
+
+## 真是误报吗？
+
+  
+
+根据脚本的输出结果来看，当前用户对下面的两个注册表键具有一定的写权限：
+
+  
+
+  * HKLM\SYSTEM\CurrentControlSet\Services\Dnscache
+  * HKLM\SYSTEM\CurrentControlSet\Services\RpcEptMapper
+
+  
+
+现在，让我们使用regedit
+GUI手动检查RpcEptMapper服务的权限。在“高级安全设置”窗口中，我最喜欢的就是“有效权限”选项卡。在这里，你可以选择任何用户或组名，并立即看到授予他们的有效权限，而无需单独检查所有的ACE。下面的截图显示了低权限的lab-user户账户的检查结果：
+
+  
+
+![](https://image.3001.net/images/20201119/1605767956_5fb6131440ab159e10f51.png!small)
+
+  
+
+实际上，授予该账户的大部分权限都是中规中矩的（如：Query Value），但有一项权限则特别突出：Create
+Subkey（创建子键）。这个权限对应的通用名称是AppendData/AddSubdirectory，这正是我们的脚本所报告的内容。
+
+  
+
+Name : RpcEptMapper
+
+ImagePath : C:\Windows\system32\svchost.exe -k RPCSS
+
+User : NT AUTHORITY\NetworkService
+
+ModifiablePath :
+{Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\RpcEptMapper}
+
+IdentityReference : NT AUTHORITY\Authenticated Users
+
+Permissions : {ReadControl, AppendData/AddSubdirectory,
+ReadData/ListDirectory}
+
+Status : Running
+
+UserCanStart : True
+
+UserCanRestart : False
+
+  
+
+Name : RpcEptMapper
+
+ImagePath : C:\Windows\system32\svchost.exe -k RPCSS
+
+User : NT AUTHORITY\NetworkService
+
+ModifiablePath :
+{Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\RpcEptMapper}
+
+IdentityReference : BUILTIN\Users
+
+Permissions : {WriteExtendedAttributes, AppendData/AddSubdirectory,
+ReadData/ListDirectory}
+
+Status : Running
+
+UserCanStart : True
+
+UserCanRestart : False
+
+  
+
+这到底是意味着什么呢？这意味着我们不能随便修改ImagePath之类的值。要做到这一点，我们需要获得WriteData/AddFile权限。相反，我们只能创建一个新的子键。
+
+  
+
+![](https://image.3001.net/images/20201119/1605767978_5fb6132a8d950e56f7e91.png!small)
+
+  
+
+这是否意味着这确实是个误报呢？当然不是。有趣的事情才刚刚开始！
+
+  
+
+## RTFM
+
+  
+
+到目前为止，我们知道可以在HKLM\SYSTEM\CurrentControlSet\Services\RpcEptMapper下创建任意子键，但是无法修改现有的子键和值。这些现有的子键包括Parameters和Security子键，它们对于Windows服务来说是非常常见的。
+
+  
+
+![](https://image.3001.net/images/20201119/1605768002_5fb61342e2279d6e5e013.png!small)
+
+  
+
+因此，我们想到的第一个问题是：有没有像Parameters和Security之类的其他预定义子键，可以用来有效地修改服务的配置，进而通过某种方式改变其行为呢？
+
+  
+
+为了找到上述问题的答案，我最初的计划是枚举出所有现有的键，并尝试找出其中的模式。这样做的目的是查看哪些子键对服务的配置是有意义的。我开始思考如何通过PowerShell实现这一想法，并对结果进行排序。但是，着手进行之前，我想知道公开的资料中是否有这种注册表结构方面的记录。于是，我在谷歌上搜索了类似“windows
+service configuration registry site:microsoft.com”这样的关键词，下面展示的排在最前面的搜索结果：
+
+  
+
+![](https://image.3001.net/images/20201119/1605768022_5fb613563c2aea2a0e316.png!small)
+
+  
+
+看起来很有希望，不是吗？乍一看，该文档在广度和深度方面并不太尽如人意。看到该标题后，我原本以为会提供某种树状结构，详细介绍定义服务配置的所有子键和值，但事实并非如此。
+
+  
+
+![](https://image.3001.net/images/20201119/1605768043_5fb6136b219c6f0ca5ffc.png!small)
+
+  
+
+不过，我还是快速浏览了每一段。而且，我很快就发现了关键词“Performance”和“DLL”。在“Perfomance”的副标题下，我们可以看到以下内容。
+
+  
+
+Performance：一个指定可选性能监控信息的键。该键下的值指定了驱动程序的性能DLL的名称和该DLL中某些导出函数的名称。您可以使用驱动程序INF文件中的AddReg项向该子键添加值项。
+
+  
+
+根据这段话来看，理论上可以在驱动服务中注册一个DLL，以便通过Performance子键来监控其性能。好吧，听起来很不错！同时，在默认情况下，RpcEptMapper服务并没有提供该键，因此，它看起来正是我们所需要的。不过这里还有一个小问题，这个服务绝对不是驱动服务。不管怎么说，它还是值得一试的，但我们首先需要有关此“性能监控”功能的更多信息。
+
+  
+
+![](https://image.3001.net/images/20201119/1605768065_5fb613811123fed63e747.png!small)
+
+  
+
+注意：在Windows中，每个服务都有一个给定的类型。其中，服务类型包括：SERVICE_KERNEL_DRIVER(1)、SERVICE_FILE_SYSTEM_DRIVER(2)、SERVICE_ADAPTER(4)、SERVICE_RECOGNIZER_DRIVER(8)、SERVICE_WIN32_OWN_PROCESS(16)、SERVICE_WIN32_SHARE_PROCESS(32)或SERVICE_INTERACTIVE_PROCESS(256)。
+
+  
+
+经过一番搜索，我们找到了如下所示的一篇文档：“Creating the Application’s Performance Key”。
+
+  
+
+![](https://image.3001.net/images/20201119/1605768090_5fb6139a39406cd77af92.png!small)
+
+  
+
+首先，这里有一个漂亮的树形结构，列出了我们要创建的所有键和值。然后，在描述部分还给出了以下与键有关的信息：
+
+  
+
+  * 值Library可以包含一个DLL名称或DLL的完整路径。
+  * 值Open、Collect和Close可以用来指定应该从DLL中导出的函数的名称。
+  * 这些值的数据类型是REG_SZ（对于值Library来说，其类型为REG_EXPAND_SZ）。
+
+  
+
+如果您访问这篇文章的参考文献中的相关链接，甚至可以找到这些函数的原型以及一些代码示例，具体见：“Implementing
+OpenPerformanceData”。
+
+  
+
+DWORD APIENTRY OpenPerfData(LPWSTR pContext);
+
+DWORD APIENTRY CollectPerfData(LPWSTR pQuery, PVOID* ppData, LPDWORD pcbData,
+LPDWORD pObjectsReturned);
+
+DWORD APIENTRY ClosePerfData();
+
+  
+
+我想理论上的东西已经够了，是时候开始写一些代码了!
+
+  
+
+## 小结
+
+在本文中，我们为读者详细介绍了Windows系统中因RpcEptMapper服务不安全的注册表权限所致本地提权漏洞的发现过程，在接下来的文章中，我们将为读者介绍如何编写和测试相应的PoC代码。
+
+原文链接：https://itm4n.github.io/windows-registry-rpceptmapper-eop/
+
+  
+
+ **（未完待续）**
+

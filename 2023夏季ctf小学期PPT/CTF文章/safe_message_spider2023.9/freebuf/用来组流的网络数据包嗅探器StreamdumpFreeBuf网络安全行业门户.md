@@ -1,0 +1,133 @@
+## 前言
+
+ **在平时需要对数据包进行分析和统计，亦或是进行抓包时，通常会使用 Wireshark 或者 tcpdump 等工具。这两个工具以及
+tshark（wireshark
+的命令行），基本上已经涵盖了绝大部分的需求场景，但是如果需要大规模地拆分单个流，进行分析、特征提取时，似乎这些工具都没有能够提供很方便的切流解决方案。**
+
+更常见的做法是，通过一个比较抽象的过滤规则，将符合该规则的所有数据包通通记录在一个 pcap 包里，接着再编写一个 Python 脚本或者通过 tshark
+与 shell 脚本来实现切流的操作。这似乎没有是么难度，而且也已经解决了问题，应该现成的方案也不少。
+
+## Wireshark 与 Tshark 切流的方案
+
+在 Wireshark 中，我们通常是在过滤条件中，输入`tcp.stream == ?`，？表示某个流在整个包中的编号，而 Wireshark
+会根据该编号的 packet 的四元组找出所有符合条件的流进行组装。
+
+![](https://image.3001.net/images/20190318/15529012495651.png!small)
+
+但是使用这样需要一个个手动地操作，效率不得不说实在是太低下了，而使用 tshark 来进行切流会快得多，命令：
+
+    
+    
+    >tshark -r $LINE -T fields -e tcp.stream|sort -n | uniq -c | awk -F ' ' '{if ($2>=0)print $2 }' >tcp_stream_number.txt
+    
+
+$LINE 代表 pcap 文件名，-T 和 -e 组合使用表示打印 Wireshark 中相应的字段，本例中表示输出 tcp.stream
+字段，即流号。因为是针对每一个报文都要输出该报文对应的流号，因此需要做排序，去重的工作。将最后的所有的流号按照大小顺序输入到
+tcp_stream_number.txt 文件中。
+
+最后，再将输入的流提取出来：
+
+    
+    
+    tshark -r $LINE -Y "tcp.stream == $(($tcpnumber)) " -w $filedic/$streamname.pcap
+    
+
+$LINE 代表pcap文件名，$tcpnumber 表示从 tcp_stream_number.txt
+文件中读出的每一行的内容，$(($tcpnumber))转换成数字，$filedic，$streamname 分别表示文件目录和文件名，上述的命令表示从
+$LINE 报文中提取流。
+
+如此，就可以进行切流操作了。但是总的来说，虽然 tshark 比起 Wireshark 手动单个操作的方式效率高得多，但是，tshark
+是一次性将整个数据包读入内存，分析好后再统一输出的，针对超大文件进行分析时，对资源的需求十分巨大。
+
+换句话说，如果你不是有庞大的内存资源，使用 tshark
+来对大文件进行切流操作，是很难进行下去的！另外值得注意的是，当流文件个数过多的时候，由于产生的文件句柄过多，会出现错误，没法继续进行下去。
+
+更重要的一点，切分单个流，我们通常通过四元组进行确定，这只能确定单个方向的流，而更多情况下，我们需要对双向的流进行分析。
+
+## StreamDump
+
+所以为了满足前文说的大规模的单个流的组装与分析，本次要介绍的是一个我们小组里一直在使用的一个小工具 —— StreamDump，根据 TCP
+流的四元组来将每个 TCP 重新组装还原，并分别保存成一个单独的 pcap 文件。为了运行效率和编译方便，程序使用 Golang 来实现。
+
+程序的几个特点：
+
+支持 BPF 过滤规则，可根据需求来进行自定义过滤
+
+支持捕获双向数据流，保存的文件根据四元组来进行命名：`IP[Port]-IP[Port].pcap`，在保存双向数据流的情况下，以捕获到的第一个
+packet 中的四元组参数进行命名
+
+不仅支持从网卡中实时捕获流量，还支持从 pcap 文件中读取分析，过滤出自己需要的单个的流文件
+
+功能虽然不多，但是却可以做很多的事情！特别当需要解析一个 10G 或者 20G pcap 文件的时候，使用 Python 来解析是效率十分低下的！
+
+分拆出来的 TCP 流有什么用？如果你需要对某个特定的流，或者某组，或者某个特定应用的流进行分析，我想这个工具对你一定十分有用，会让你节省很多时间！
+
+废话少说，下面简单说说如何使用这个小工具：
+
+### 编译
+
+编译就十分轻松了，go 自带了编译工具，只需要将包里的依赖库取回本地，直接编译就可以了
+
+    
+    
+    >go get github.com/google/gopacket
+    >go build -o streamdump streamdump.go
+    
+
+### 用例
+
+    
+    
+    Usage: streamdump [-hv] [-i interface]
+    Options:
+      -b    Capture bidirectional data flow
+      -d string
+            The domain name of the packet to be captured
+      -f string
+            BPF filter rules for pcap (default "tcp")
+      -h    print this help message and exit
+      -i string
+            Interface to get packets from (default "en0")
+      -l int
+            SnapLen for pcap packet capture (default 1600)
+      -promisc
+            Set promiscuous mode (default true)
+      -r string
+            Filename to read from, overrides -i
+      -s string
+            Filepath to save pcap files (default "./pcap_s")
+      -v    Logs every packet in great detail
+    
+
+**程序会将两分钟内没有数据传输的连接视为无效**
+
+从默认网卡（en0）捕获 baidu.com 对应 ip 以及 443 端口的 tcp 流量：
+
+命令：`./streamdump -f 'tcp and port 443' -s './stream/' -d
+'[[www.baidu.com](http://www.baidu.com)](<http://www.baidu.com>)'`
+
+程序会主动查询`[[www.baidu.com](http://www.baidu.com)](<http://www.baidu.com>)`这个域名对应的
+ip，并根据过滤条件进行过滤，将符合这个过滤条件的 TCP 流保存下来，如图：
+
+![](https://image.3001.net/images/20190318/15529013507517.png!small)
+
+从 pcap 文件中过滤出单个 TCP 流量:
+
+命令：`./streamdump -r './file.pcap' -f 'tcp' -s './stream/'`
+
+![](https://image.3001.net/images/20190318/15529013684486.png!small)
+
+![](https://image.3001.net/images/20190318/15529013786949.png!small)
+
+还有很多自定义的组合，需要大家自己动手操作了！比如使用`-b`选项进行双向数据保存！
+
+好了，简要的介绍就到这里了，希望这个小工具能够为大家稍稍提升一些效率！
+
+重要地方来了！！！ **我们已经对程序进行了开源** ，更详细的用例在 Github 上已有说明，需要的同学自行阅读！
+
+> [开源地址](https://github.com/scu-igroup/StramDump)
+>
+> [可执行程序下载地址](https://github.com/scu-igroup/StramDump/releases)
+
+ ***本文作者：scu-igroup，转载请注明来自FreeBuf.COM**
+

@@ -1,0 +1,182 @@
+*** 本文作者：yangyangwithgnu，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+
+ **千辛万苦拿下的 webshell 不是 www-data 用户就是 networkservice
+权限，要想拓展攻击面、扩大战果，提权，是必经之路，也是后渗透阶段成功的关键。windows 提权，我常用的手法包括 DB 命令执行提权、内核 exp
+提权、dll 劫持提权、路径未带引号的服务提权、滥用高权 token
+提权、三方软件提权，每个手法有各自的使用门槛及适用场景，通常需要多种措施并举，才能拿下目标。**
+
+个人而言，习惯先从 DB 入手，不论是否站库分离，web 终究得有 DB，一方面，DB 内部自带命令执行模块，另一方面，DB 常以 system
+权限运行，那么，一旦拿下 DB，相当于获得了以 system 权限执行命令的能力，变向实现提权。要进入
+DB，最直观的方式使用正确的账号/密码登录，账号/密码通常位于 web.config 中，有 webshell 就有 web.config，有
+web.config 就有 DB 的账号/密码，如果再有一点小运气，找到的是 SA 账号的密码，基本上，你已经成功一半了。现在，用 SA 账号进入 DB 的
+xp_cmdshell 模块执行命令“whoami”，得到报错信息“调用 CreateProcess 失败，错误代码:
+5”，刚刚的阳光灿烂立马阴转暴雨，显然，管理员禁用了 DB 的命令执行功能（该模块仍可访问）。后续，把余下的攻击模型逐一尝试，无果。
+
+放弃是不可能的。再琢磨琢磨，既然有 DB 的 SA 账号，何不用相同的密码登录 OS 的 administrator 账号试试？先找到
+web.config，由于该 web 连接了多个 DB，所以配置文件中出现了多项 DB 信息：
+
+![image.png](https://image.3001.net/images/20180504/15254229037006.png!small)  
+
+剔重后得到 5 个密码：victim@2014、victim、victim2015、sf0618@sf0618、xtepxscm。怎么验证？用
+administrator 作为用户名、上述五个密码作为密码字典，用 hydra 暴破 RDP，方便快捷。
+
+不幸的是，目标环境未将 3389 暴露至公网，好吧，只得端口转发。
+
+端口转发大概需要三步，先在自己的 VPS 上建立端口对应，再在攻击端连接 VPS 上的转发端口，最后在 webshell 上转发。具体而言：第一步，用
+sSocks（<https://sourceforge.net/projects/ssocks/>）在 VPS 上建立 3388 与 3389
+端口对应关系，实现流量互通：
+
+![image.png](https://image.3001.net/images/20180504/15254236524200.png!small)  
+
+第二步，从攻击端连接 VPS 的 3388 端口，第一次尝试 administrator/victim@2014。建议用 freerdp 而非
+rdesktop，因为前者支持远程与本地连接等待、文本复制粘贴、挂载远程文件系统：
+
+![image.png](https://image.3001.net/images/20180504/15254229575679.png!small)  
+
+第三步，立即在大马上执行端口转发，可能需要连续多次点击 start：
+
+![image.png](https://image.3001.net/images/20180504/1525422973665.png!small)  
+
+注意，整个过程对步骤先后顺序敏感，VPS 上 rcsocks 端口映射好以后就可以不管了，先在攻击端执行 xfreerdp，让其会话保持，再在
+webshell 上转发内网的 3389。
+
+如果看到如下报错，则说明账号或密码错误：
+
+![image.png](https://image.3001.net/images/20180504/15254229879698.png!small)  
+
+逐一尝试余下四个密码，均失败。
+
+administrators 群组中还有其他 6 成员，那么要尝试 5 × 6 次：
+
+![image.png](https://image.3001.net/images/20180504/15254229985661.png!small)
+
+咬咬牙，虽然累但十来分钟也能试完，无果。都到这个节目眼了，要不再试试常见弱口令？天，这不是累不累的问题了，哪怕只是 top100
+的弱口令，手工验证也完全不可行！我需要自动化。
+
+自动化，想到的第一个思路，尝试用 hydra 暴破本地回环 127.0.0.1 的 RDP。hydra 官方不再支持 windows，所以，我只得在
+cygwin 中源码构建可执行程序。我把 hydra.exe 及相关依赖打包到单独目录，脱离 cygwin 环境，在命令行中可正常运行 hydra.exe：
+
+![image.png](https://image.3001.net/images/20180504/15254230207958.png!small)  
+
+但，将 IP 设置为 127.0.0.1 后暴破 RDP 始终失败，原来，RDP 禁止从 127.0.0.1 登录。此路不通。
+
+第二个思路，将前面提到的三步封装到脚本中，调用 xfreerdp 远程登录（将用户名和密码作为字典）、调用 curl 驱动 webshell
+端口转发。大概半小时，写了个 bash 脚本，验证其功能，发现即便正确的密码，也不是 100% 成功，为何？前面提过，webshell
+上转发端口流量的功能不太稳定，需要连续多试几次，那么将 curl
+多调用几次或许能解决这个问题，具体几次合适，不好说。总感觉这种远程验证的方式，不仅麻烦、效率也低，我得想个更优的思路。
+
+第三个思路，缕一缕，我要的是效率高、无依赖、高精准、体积小的工具，嗯，win32 原生程序直接在目标机器上本地暴破所有 OS
+用户的密码，就它。这个工具要能帮我找到 are you admin? 的答案，所以，命名为 ruadmin。你知道，我移居 linux 多年，win32
+忘得差不多了，所以，我找 MSDN 帮忙，花了两个晚上，基本上，我付予了 ruadmin 几个核心能力：高效精准验证账号密码、自动获取 OS
+账号、内置高命中率弱口令、绿色无依赖不查杀、兼容 NT 架构的全版本系统。
+
+高效验证账号密码方面，调用 LogonUser()，不通过任何网络协议，直接本地验证：
+
+![image.png](https://image.3001.net/images/20180504/15254230372111.png!small)  
+
+甚至能验证空密码的账号。另外，一个账号对应一个暴破线程，进一步提高效率：
+
+![image.png](https://image.3001.net/images/20180504/15254230474909.png!small)  
+
+自动获取 OS 账号方面，调用 NetUserEnum() 获取包括隐藏账号（如 yangyangwithgnu$）在内的所有用户账号：
+
+![image.png](https://image.3001.net/images/20180504/15254230535526.png!small)  
+
+如果觉得破解所有账号耗时太长，你有两个选择，一是用 --user 指定暴破单一账号、二是用 --one-quit 告诉 ruadmin
+只要暴破出任一账号立即结束。
+
+内置高命中率弱口令方面，我把常见弱口令字典集成进 ruadmin，字典包含中国人弱口令、外国人弱口令、黑客常用口令等近 4W 条：
+
+![image.png](https://image.3001.net/images/20180504/15254230609082.png!small)  
+
+不满意，你可以用 --passwds-file 指定自己的字典文件。
+
+其他方面。纯 win32 实现，无任何依赖；没用恶意代码，不会触发 AV 报警；平台无关，x64 和 x86 都能运行；同时，在生成可执行文件时，我将 VS
+工程设置为 project - properties - configuration properties - general - general -platform toolset - vs2015 - windows xp (v140_xp)，这样，ruadmin 就能支持客户端系统
+winXP～win10、服务端系统 server_2003～server_2016。
+
+回到先前的目标环境中，看我如何用 ruadmin 实现提权。
+
+上传 ruadmin。有
+webshell，上传文件易如反掌，但我们上传的不是一般文件，而是可执行程序，得尽可能为程序运行铺平道路。从经验来看，有两点建议：一是上传目录方面，程序运行时可能生成临时文件，所以上传的目录最好具有读写权限，如
+C:\Windows\Temp\ 或 %temp% 是个选择；二是文件名方面，应考虑到 AV 的反应，基础名不要用
+exp、agent、xxxx、info、hack、admin 等等这类带有明显攻击性的字样，可以随机化（如，用 mneo
+就不错），扩展名方面，先在攻击端将其改为 txt，上传成功后再改回
+exe，甚至，若目标环境禁止改名，采用未关联任何打开程序的扩展名（如，*.128），windows 允许在命令行中直接 *.128
+这样的文件。具体而言，我将 ruadmin.exe 改为 amneo.128，进入 webshell 的 File Manager 模块，上传目录定为
+C:\Windows\Temp\，选择攻击端文件 amneo.128 上传：
+
+![image.png](https://image.3001.net/images/20180504/15254231204735.png!small)  
+
+采用内置密码暴破。进入 webshell 的 CmdShell 模块，不带任何命令行选项直接运行 amneo.128：
+
+![image.png](https://image.3001.net/images/20180504/15254231313621.png!small)  
+
+ruadmin 采用默认选项，采用 39526 个字典项暴破自动获取的 8 个操作系统账号，半分钟后，显示未找到任何密码。
+
+采用 web.config 中的密码暴破。显然，内置字典无效，前面分析过 web.config 中含有多个 DB
+的密码：victim@2014、victim、victim2015、sf0618@sf0618、xtepxscm，我将其写入目标上的 p0.txt
+中，指定使用 p0.txt 作为密码字典文件，运行后仍然无果：
+
+![image.png](https://image.3001.net/images/20180504/15254231442837.png!small)  
+
+采用社工密码暴破。我得根据该目标的属型，重新制作一个具有社工型的字典。简单分析发现，该网站域名含有 victim，而 DB 的密码出现过
+victim@2014、victim2015，那么，我可以合理猜测管理员密码由 victim、特殊字符、年份等三部分组成，但是 victim
+有大小写、特殊字符有十来个、年份也不确定，排列组合结果太多，必须找个工具基于规则自动生成。密码字典生成，我推荐两个工具
+hashcat、crunch，这里以前者为例。对滴，hashcat 不仅是哈希暴破神器，也支持基于规则生成密码字典，规则库位于 hashcat/rules：
+
+![image.png](https://image.3001.net/images/20180504/15254231505886.png!small)  
+
+其中，dive.rule 含有我需要的规则，选之。我把
+victim@2014、victim、victim2015、sf0618@sf0618、xtepxscm 视为基础信息存入 base.txt 中作为输入，让
+dive.rule 模仿学习生成类似的密码字典，保存至 passwds.txt：
+
+![image.png](https://image.3001.net/images/20180504/15254231541914.png!small)  
+
+生成的字典有 26w 个，目标上有 8 个账号，也就要枚举 268446 × 8 次，通过 webshell
+执行耗时较长的命令时，页面将报超时错误，无法正常显示程序运行结果，所以，将命令执行结果重定向到文本中：
+
+![image.png](https://image.3001.net/images/20180504/1525423160138.png!small)  
+
+大概十分钟之后 foo.txt 体积达到 1k 左右，说明命令执行完成，查看 foo.txt：
+
+![image.png](https://image.3001.net/images/20180504/1525423167865.png!small)  
+
+成功暴破出两个管理员账号的密码。
+
+以管理员身份登录远程桌面，实现提权。组合使用目标上的 webshell、VPS 上的 rcsocks、攻击端上的 xfreerdp 将内网的 RDP
+端口转发至公网后，输入 administrator/Victim@2017 成功登录目标：
+
+![image.png](https://image.3001.net/images/20180504/15254231754355.png!small)  
+
+某些环境限定了 RDP 源 IP，即便做了端口转发也无法登录。没关系，既然我有管理员的密码，那么只要找到类似 linux 上的 su
+命令，也可以以管理员身份执行任意命令。windows 上的 runas
+就具备这个功能，但它没法将密码作为命令行参数中，所以，用支持在命令行参数中输入密码的开源版本
+cpau（<http://www.joeware.net/freetools/tools/cpau/>）。具体要执行什么命令？根据各人喜好，我会直接反弹一个管理员权限的
+meterpreter。运行 cpau：
+
+![image.png](https://image.3001.net/images/20180504/15254231856697.png!small)  
+
+其中，我将 cpau.exe 重命名为 asdf.64，tybdf.16 为 msfvenom 生成的反弹 payload。很快将获得管理员的
+meterpreter：
+
+![image.png](https://image.3001.net/images/20180504/15254231922721.png!small)  
+
+当然，ruadmin 并不完美，两个致命伤你有必要了解，以评估是否具备使用环境。第一，对于开启试错锁定账号策略的环境，ruadmin
+很可能导致账号被锁，存在影响业务的风险，我建议你用 --user 指定一个普通账号先测试系统是否开启锁定账号的策略，再做下一步打算；第二，ruadmin
+使用的密码验证机制将导致生成大量登录失败的日志，可能引起管理员、AV 的注意，我没啥能建议，自求多福。
+
+从近期把 ruadmin 投入实战中的效果来看，成绩喜人！针对提权，大部份攻击者也就会 DB 命令执行、内核 exp
+这两招，稍微有一定道行的会翻下存放明文密码的文件、找下存在配置缺陷的服务，再高端点的会盗用特权
+token、攻击万能钥匙，而低门槛的本地暴破，却很少被纳入“正统”提权手法名录中，究其原因，大概有三：一是，完全没想这个意识，最多用 hydra 远程暴破下
+RDP；二是，有这个意识，但缺乏类似 ruadmin
+这类不依赖任何协议的本地暴破工具；三是，暴破乃是脚本小子的行为，进不了大黑阔的法眼。目标驱动，为了实现提权，暴破这个高收益的笨办法，你至少应该尝试。
+
+## 后记
+
+a、感谢 Shad0wpf、qglfnt 两位就细节的讨论；
+
+b、[hydra4win.exe、ruadmin.exe](https://pan.baidu.com/s/13EerPAOEUIh-oe-Es5R8fQ#list/path=%2F) 请自取，ruadmin 代码将尽快开源  
+
+*** 本文作者：yangyangwithgnu，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

@@ -1,0 +1,360 @@
+# SpringBoot2.2.x 版本CPU增高BUG分析
+
+阅读量 **435673**
+
+|评论 **9**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-04-28 14:00:45
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01798a1ee53318da6c.jpg)
+
+## 一、发现问题
+
+项目在上线之后，运行24小时之后CPU突然增高，导致不得不重启机器。
+
+## 二、分析及定位问题
+
+项目在上线前是经过压力测试，刚开始定位是QPS过大，通过增加机器。但结果并不是特别理想，始终会有几台机器增高。
+
+###  项目环境
+
+  * 测试机 1c2g
+
+###  1、测试
+
+通过jmeter对该机器接口进行压力测试，qps为90，cpu增高到40%持续没多久下降到10%，一直持续稳定。并未产生CPU过高的情况，该机器配置比正式环境要低4倍，第一步得出的结论应该不在接口上
+
+###  2、更换项目中比较早期版本的插件及线程池
+
+重新上线项目之后，运行1天之后，依然有2台机器的CPU持续增高，并且越往后增加越大
+
+###  3、开始针对线上高CPU服务器排查
+
+    
+    
+    #查看java的pid
+    top  
+    #查看pid下的占用高的tid 
+    top -Hp pid  
+    #打印tid16进制
+    printf "%xn" tid  
+    #查看栈 输出到xx.log
+    jstack pid|grep -A 2000 tid的16进制 > xx.log
+    
+    #查看gc 打印每2000ms输出一次，共10次
+    jstat -gcutil pid 2000 10
+    
+
+结论：栈信息基本都是RUN或TIME_WATING 并没有相关的死锁的线程，但是通过gc发现大量的YGC持续的增高，这时候考虑到可能堆的信息有异常
+
+###  4、针对堆信息查看
+
+    
+    
+    #查看堆
+    jmap pid  
+    jmap -heap pid  
+    jmap -histo:live pid  
+    ...
+    
+    #常用的是最后一个 加一个more 防止过多内容刷屏 
+    jmap -histo:live pid|more
+    
+
+执行多次最后一个命令，发现一个队列在持续的增高，几百几百的增加并无然后减少的情况
+
+    
+    
+          1:        111885      139385304  [Ljava.lang.Object;
+       3:         10515       15412904  [I
+       4:        142407       13450056  [C
+       5:         13892        4170928  [B
+       6:        135968        3263232  java.lang.String
+       .....
+      34:          6423         308304  java.util.HashMap
+      35:         12459         299016  java.util.concurrent.ConcurrentLinkedQueue$Node
+    
+
+最后一行就是发现增长过快的队列，到此算是发现了一个比较有用的信息，回头就去分析代码。但依然没有什么结论，代码逻辑并不复杂也并未使用到该队列。
+
+###  5、咨询大佬，建议通过火焰图定位某个阶段执行过程的消耗情况
+
+    
+    
+    #开始安装火陷图插件
+    #具体安装插件的过程，大家自行搜索，本文不具体描述如何安装火陷图
+    
+
+###  6、执行命令生成火陷图
+
+![](https://p2.ssl.qhimg.com/t0143d6090a83f4b767.jpg)
+
+通过上图，我们能直观的看到在MimeTypeUtils方法中，使用到了过多的这个队列，然后就直接去看源码了。目前官方已经修复了一版在2.2.6版本中（但是很不幸运，并没有完全修复）
+
+下面是2.2.6版本修复一版的代码，去除了之前的一些没有意义判断,MimeTypeUtils.java文件
+
+    
+    
+        private static class ConcurrentLruCache<K, V> {
+    
+            private final int maxSize;
+    
+            private final ConcurrentLinkedQueue<K> queue = new ConcurrentLinkedQueue<>();
+    
+            ....
+    
+            public V get(K key) {
+                this.lock.readLock().lock();
+                try {
+                    if (this.queue.size() < this.maxSize / 2) {
+                        V cached = this.cache.get(key);
+                        if (cached != null) {
+                            return cached;
+                        }
+                    }
+                    else if (this.queue.remove(key)) {
+                        this.queue.add(key);
+                        return this.cache.get(key);
+                    }
+                }
+                finally {
+                    this.lock.readLock().unlock();
+                }
+                this.lock.writeLock().lock();
+                try {
+                    // retrying in case of concurrent reads on the same key
+                    if (this.queue.remove(key)) {
+                        this.queue.add(key);
+                        return this.cache.get(key);
+                    }
+                    if (this.queue.size() == this.maxSize) {
+                        K leastUsed = this.queue.poll();
+                        if (leastUsed != null) {
+                            this.cache.remove(leastUsed);
+                        }
+                    }
+                    V value = this.generator.apply(key);
+                    this.queue.add(key);
+                    this.cache.put(key, value);
+                    return value;
+                }
+                finally {
+                    this.lock.writeLock().unlock();
+                }
+            }
+        }
+    
+
+单纯的阅读代码，并没有什么大的BUG，但是我们可以去关注队列本身的问题。
+
+查看ConcurrentLinkedQueue remove 源码
+
+    
+    
+    public boolean remove(Object o) {
+        if (o != null) {
+          Node<E> next, pred = null;
+          for (Node<E> p = first(); p != null; pred = p, p = next) {
+            boolean removed = false;
+            E item = p.item;
+            if (item != null) {
+              if (!o.equals(item)) {
+                next = succ(p);
+                continue;
+              }
+              removed = p.casItem(item, null);
+            }
+    
+            next = succ(p);
+            if (pred != null && next != null) // unlink
+              pred.casNext(p, next);
+            if (removed)
+              return true;
+          }
+        }
+        return false;
+    }
+    
+
+如果存在多个则删除第一个，并返回true，否者返回false，例如：多个线程同时要获取到同一个要删除的元素，则只删除一个，其他返回false，再结合MimeTypeUtils方法，会再去执行add，这就导致会对队列出现无限的增长【可能】（非百分百）。
+
+###  7、结论
+
+造成CPU性能过高，是因为队列长度过长，remove方法需要遍历整个队列内容。队列过长的原因是因为remove
+并发情况下返回false，开发过程中可能并未关注到remove会返回false，导致无限的执行add方法的可能。
+
+## 三、验证问题
+
+通过debug发现spring boot在执行过程中会针对用户请求的Accept和返回的Content-Type都会调用该方法。这时候其实就可以恶意构造Accept去请求某个api，Accept中每个用逗号分割都会过一次方法，导致大量性能消耗。本地通过构造多个Accpet值，发现在MimeTypeUtils中确实可以超出本身对队列的长度设置，导致缓慢增长。
+
+1、通过官方github-issues搜索相关问题，发现已经有人在最近提到过该问题，并已经被close。
+
+2、通过再次回复官方研发人员，并提供更多的相关信息证明2.2.6版本修复之后依然存在该问题
+
+  * <https://github.com/spring-projects/spring-framework/issues/24671#issuecomment-611427157>
+
+3、在此期间又有人给出通过MediaType 上传类型构造的Accept
+
+  * <https://github.com/spring-projects/spring-framework/issues/24767>
+
+4、具体构造验证
+
+找一台低配版的服务 1c2g
+
+使用jmeter，设置线程组，不需要特别高50个线程，永久发送
+
+设置header的Accpet，可以先使用内容如下：
+
+    
+    
+    application/stream+x-jackson-smile, application/vnd.spring-boot.actuator.v3+json, application/vnd.spring-boot.actuator.v2+json, application/json, multipart/form-data; boundary=----WebKitFormBoundaryVHfecvFDYeDEjhu4, multipart/form-data; boundary=----WebKitFormBoundarymKzwdDkWNDNzQFP0, multipart/form-data; boundary=----WebKitFormBoundaryiWpMXOUbWwBwq2AX, application/x-www-form-urlencoded, text/html;charset=UTF-8, application/octet-stream, application/vnd.ms-excel;charset=utf8, application/msword, multipart/form-data; boundary=----WebKitFormBoundaryGF2AJ2ZdPqbWOyEO, multipart/form-data; boundary=----WebKitFormBoundaryTZLPpyBs2F0ycmkB, multipart/form-data; boundary=----WebKitFormBoundaryBUClXdZPA3oxpUpx, image/jpeg;charset=UTF-8, multipart/form-data; boundary=----WebKitFormBoundarysODcdeMwzfHwEjtw, multipart/form-data; boundary=----WebKitFormBoundary26i2en6YQUSXUBzs, multipart/form-data; boundary=----WebKitFormBoundaryxUUWAyZnZjwlM1oy, multipart/form-data; boundary=----WebKitFormBoundarysVMYk11tVTTsXuEB, multipart/form-data; boundary=----WebKitFormBoundaryXsI4dpNsVTCWWrRo, multipart/form-data; boundary=----WebKitFormBoundaryiV1owCGwTHyQzja0, multipart/form-data; boundary=----WebKitFormBoundarygf1XpLmgasAQU9fi, multipart/form-data; boundary=----WebKitFormBoundaryBNaQtUvpQ2VV7YYA, multipart/form-data; boundary=----WebKitFormBoundaryW1rdrg4AbJ5Jn3Po, multipart/form-data; boundary=----WebKitFormBoundaryoBwFj2ABM5LflDmW, multipart/form-data; boundary=----WebKitFormBoundary40xI2TxryjbkSCtO, multipart/form-data; boundary=----WebKitFormBoundarytaCC9B6g8u4urnLF, multipart/form-data; boundary=----WebKitFormBoundaryOrhplGKYP9ozLkCs, multipart/form-data; boundary=----WebKitFormBoundaryvEUouFAr3R3YJYBh, multipart/form-data; boundary=----WebKitFormBoundaryuQ9tEKtn59w5hPLY, multipart/form-data; boundary=----WebKitFormBoundaryRGvPXUBAuZ6xJ95u, application/vnd.openxmlformats-officedocument.wordprocessingml.document, multipart/form-data; boundary=----WebKitFormBoundary7jpljZi4k61KhCNN, multipart/form-data; boundary=----WebKitFormBoundary7GVKDTHVuBABvjGB, multipart/form-data; boundary=----WebKitFormBoundaryZbNBPl3T4VZ44q6B, audio/mp3, multipart/form-data; boundary=----WebKitFormBoundaryI6rUM76YvxrIEcqv, multipart/form-data; boundary=----WebKitFormBoundaryag4BDWrzifHRdDiR, multipart/form-data; boundary=----WebKitFormBoundary1YRsWAdVqDin8g8p, multipart/form-data; boundary=----WebKitFormBoundaryDaatlrV3KAyZu7wA, multipart/form-data; boundary=----WebKitFormBoundaryyhvikZJdRGH1AjQq, multipart/form-data; boundary=----WebKitFormBoundary2z4SJhqeEx5XtVj4, multipart/form-data; boundary=----WebKitFormBoundaryeDLd1MTvuhmcmzNe, multipart/form-data; boundary=----WebKitFormBoundarybKizrvRESfhxHAMQ, multipart/form-data; boundary=----WebKitFormBoundary24U8tmsOluZqcRXX, multipart/form-data; boundary=----WebKitFormBoundarye4j6KdQyBjY4FqSk, multipart/form-data; boundary=----WebKitFormBoundaryjPmgLdzMcMYYB3yS, multipart/form-data; boundary=----WebKitFormBoundaryxzBZ9w6Je3IJ53NM, multipart/form-data; boundary=----WebKitFormBoundaryScy0j73cvx3iCFyY, multipart/form-data; boundary=----WebKitFormBoundaryTBoS8s4YWwmBGTDA, image/*, multipart/form-data; boundary=----WebKitFormBoundaryRUutFo3RXlNPgoBS, text/html;charset=utf-8, multipart/form-data; boundary=----WebKitFormBoundarykLObBi1tJMf158kt, multipart/form-data; boundary=----WebKitFormBoundary8M8MfCWBEFcsxnBU
+    
+
+开始进行请求，然后我们再通过服务器中针对堆信息查看命令，查看 ConcurrentLinkedQueue队列增长情况
+
+持续压测，然后再打开另三个jemter，做同样的请求操作，将header的Accept分别设置如下三种情况，也可以更多：
+
+    
+    
+    #第一种
+    text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9
+    #第二种
+    text/css,*/*;q=0.1
+    #第三种
+    application/json
+    
+
+以上三个线程可以设置每个为30，永久。
+
+我们再通过打印堆信息可以发现ConcurrentLinkedQueue队列开始突破限制突然增高，又突然减少，这时候可以把第一个jmeter请求先暂停。然后再持续观察堆信息
+
+    
+    
+    [xx[@xxx](https://github.com/xxx "@xxx") ~]$ jmap -histo:live 10114|grep java.util.concurrent.ConcurrentLinkedQueue
+      33:          4809         115416  java.util.concurrent.ConcurrentLinkedQueue$Node
+     768:            36            864  java.util.concurrent.ConcurrentLinkedQueue
+    [xx[@xxx](https://github.com/xxx "@xxx") ~]$ jmap -histo:live 10114|grep java.util.concurrent.ConcurrentLinkedQueue
+      30:          5530         132720  java.util.concurrent.ConcurrentLinkedQueue$Node
+     768:            36            864  java.util.concurrent.ConcurrentLinkedQueue
+    [xx[@xxx8](https://github.com/xxx8 "@xxx8") ~]$ jmap -histo:live 10114|grep java.util.concurrent.ConcurrentLinkedQueue
+      30:          5530         132720  java.util.concurrent.ConcurrentLinkedQueue$Node
+     767:            36            864  java.util.concurrent.ConcurrentLinkedQueue
+    [xx[@xxx](https://github.com/xxx "@xxx") ~]$ jmap -histo:live 10114|grep java.util.concurrent.ConcurrentLinkedQueue
+      29:          6994         167856  java.util.concurrent.ConcurrentLinkedQueue$Node
+     768:            36            864  java.util.concurrent.ConcurrentLinkedQueue
+    [xx[@xxx](https://github.com/xxx "@xxx") ~]$ jmap -histo:live 10114|grep java.util.concurrent.ConcurrentLinkedQueue
+      29:          7262         174288  java.util.concurrent.ConcurrentLinkedQueue$Node
+     768:            36            864  java.util.concurrent.ConcurrentLinkedQueue
+    [xx[@xxx](https://github.com/xxx "@xxx") ~]$ jmap -histo:live 10114|grep java.util.concurrent.ConcurrentLinkedQueue
+      26:          9829         235896  java.util.concurrent.ConcurrentLinkedQueue$Node
+     777:            36            864  java.util.concurrent.ConcurrentLinkedQueue
+    
+
+明显可以发现ConcurrentLinkedQueue在增高。到此针对SpringBoot在2.2.6版本中cpu持续增高情况已经可以完全的复现，复现过程可能会存在不成功，可以多试几次。
+
+## 四、解决方案
+
+1、目前发现在多核CPU的情况下增长比较缓慢，但是到一定的长度之后也会加速加大CPU的消耗，所以高配置可能是一个解决方案
+
+2、降级方案，目前通过对比。SpringFramework在5.1.x版本无太大影响。
+
+3、等待更新 目前master再次修复一版，预计4.27发布，官方也将MimeTypeUtils列为5.3.x版本重构之一
+
+    
+    
+    #修复方案从 ConcurrentLinkedQueue 队列切换到了 ConcurrentLinkedDeque 队列
+    
+
+## 五、补充
+
+验证 ConcurrentLinkedQueue 队列，出现false情况
+
+    
+    
+    import java.util.concurrent.ConcurrentLinkedQueue;
+    import java.util.concurrent.LinkedBlockingQueue;
+    
+    public class Main {
+        private static ConcurrentLinkedQueue<Integer> queue = new ConcurrentLinkedQueue<>();
+    
+        public static void main(String[] args) {
+            for (int i = 0; i < 1000; i++) {
+                Thread thread1 = new QueueThread(String.valueOf(i));
+                thread1.start();
+            }
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            System.out.println("end");
+        }
+    
+        static class QueueThread extends Thread {
+            private int value = 0;
+    
+            private String name;
+    
+            public QueueThread(String name) {
+                this.name = name;
+                queue.add(value);
+            }
+    
+            @Override
+            public void run() {
+                for (int i = 1; i < 1000; i++) {
+                    try {
+                        boolean flag = queue.remove(value);
+                        System.out.println("remove: " + value + " "+ flag);
+                        queue.add(value);
+                        value++;
+                    } catch (Exception e) {
+                        System.out.println(e);
+                    }
+                }
+            }
+        }
+    }
+    
+
+备注：如果是2.2.1-2.2.5 版本是会造成频繁的拿锁与解锁，本篇是以2.2.6版本为分析
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Lion.hao** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/203909](/post/id/203909)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [SpringBoot](/tag/SpringBoot)
+
+ **+1** __9赞
+
+ __收藏
+
+![](https://p1.ssl.qhmsg.com/dm/200_200_100/t00df551a583a87f4e9.jpg) Lion.hao
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

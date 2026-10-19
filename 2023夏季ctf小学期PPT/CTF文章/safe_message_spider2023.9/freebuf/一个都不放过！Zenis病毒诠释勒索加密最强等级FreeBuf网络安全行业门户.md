@@ -1,0 +1,283 @@
+**近期，360安全中心监测到一款名为“Zenis”的勒索病毒，其命名源自病毒作者的名字。与其他加密常见文件的勒索病毒不同，该病毒运行后，会对设备中超过200种格式的文件进行加密，另外非系统盘符下的所有格式文件也都将被锁，就连exe可执行程序都不会放过。同时，病毒还会删除系统中的备份文件，以避免中招用户恢复重要数据，可谓杀伤力惊人。**
+
+以下是对该病毒的详细分析。
+
+## 病毒初始化工作
+
+首先，病毒在执行时会先判断执行条件：
+
+> 1、 判断程序文件名是否为iis_agent32.exe
+>
+> 2、 判断注册表的HKCU\SOFTWARE\ZenisService项中，是否存在Active值。
+
+当文件名不为iis_agent32.exe或者注册表键值已经存在则直接退出不进行加密操作：
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218009828421.png!small)  
+
+图1
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218009915837.png!small)  
+
+图2
+
+执行条件满足后，会执行以下命令来删除卷影副本、禁用启动修复和清除系统事件日志（一般通过3389入侵会删除事件日志），同时会检测并结束掉以下进程：
+
+**进程名** **** |  **备注** ****  
+---|---  
+**sql** |  MSSQL数据库进程  
+**taskmgr** |  任务管理器进程  
+**regedit** |  注册表编辑器进程  
+**backup** |  备份程序相关进程  
+  
+表1
+
+删除卷影副本、禁用启动修复和清除系统事件日志及结束部分进程相关代码：
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218010019823.png!small)  
+
+图3
+
+## 文件加密部分
+
+Zenis采用的加密手段相对比较传统，是用RSA 1024 + RC4的方式对文件进行加密。即，病毒在每个用户的机器中会生成一对RSA 1024
+Session Key，而对每一个文件会生成一个RC4的会话密钥。
+
+对于在用户本地生成的RSA
+1024的解密私钥，病毒会使用代码中已经内置好的另一个RSA公钥进行加密（该公钥所对应的私钥在病毒作者手中，未放出）。而生成的RSA
+1024的加密公钥，则用于对每个文件生成的RC4 Key进行加密。
+
+加密的文件格式内置在病毒程序中，共204种。另外值得一提的是：即便文件扩展名不在此列表中也并不意味着安全——因为病毒会对非系统盘符下的所有文件进行加密（备份文件则删除）。
+
+加密流程如下图：
+
+![流程图.jpg](https://image.3001.net/images/20180329/15223118791268.jpg!small)
+
+图4
+
+使用的密钥概述：
+
+密钥 |  说明  
+---|---  
+**RPUBKEY** |  RSA 2048 Root Public Key，硬编码于程序中  
+**RPIVKEY** |  RSA 2048 Root Private Key，作者持有，目前未公开  
+**SPUBKEY** |  RSA 1024 Session Public Key, 每个受害用户唯一的会话密钥（公钥），用于加密RC4 KEY  
+**SPIVKEY** |  RSA 1024 Session Private Key，每个受害用户唯一的会话密钥（私钥），用于解密RC4 KEY  
+**FILEKEY** |  RC4 256Bit KEY，每一个文件生成一个，通过’MakeRandomStr(64)’生成并计算SHA256  
+**USERFLGKEY** |  RC4 512Bit KEY，每个受害用户生成一个，通过’MakeRandomStr(128)’生成并计算SHA512  
+**ENCFILEKEY** |  被SPUBKEY加密的FILEKEY，保存在于被加密的文件当中  
+**ENCRYPTED** |  先使用USERFLGKEY加密SPIVKEY再用RPUBKEY加密后写入Zenis-Instructions.html尾部  
+  
+表2
+
+首先，病毒会生成一对1024位的RSA_Key——用于加密的公钥SPUBKEY和用于解密的私钥SPIVKEY。并且用随机生成的RC4密钥USERFLGKEY加密新生成的RSA
+1024解密私钥SPIVKEY，然后再用内置的RSA
+2048加密公钥RPUBKEY加密这个RC4密钥USERFLGKEY。最终将生成的字符串数据会替换掉勒索信息中的%ENCRYPTED%字段，以备解密时使用：
+
+相关加密代码如下：
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218010269810.png!small)  
+
+图5
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218010356349.png!small)  
+
+图6
+
+病毒内置的RSA 2048加密公钥如下（解密私钥在作者手中）：
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218010429814.png!small)  
+
+图7
+
+逐一文件加密流程相关代码：
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218010509994.png!small)  
+
+图8
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218010586820.png!small)  
+
+图9
+
+病毒程序会将密钥信息写入加密文件尾部：
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218010667312.png!small)  
+
+图10
+
+RC4的相关加密代码如下：
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218010758885.png!small)  
+
+图11
+
+加密的文件扩展名如下表所示：
+
+.txt |  .doc |  .docx |  .xls |  .xlsx |  .ppt |  .pptx  
+---|---|---|---|---|---|---  
+.odt |  .jpeg |  .png |  .csv |  .sql |  .mdb |  .sln  
+.php |  .asp |  .aspx |  .html |  .xml |  .psd |  .sql  
+.mp4 |  .7z |  .rar |  .m4a |  .wma |  .avi |  .wmv  
+.csv |  .d3dbsp |  .zip |  .sie |  .sum |  .ibank |  .t13  
+.t12 |  .qdf |  .gdb |  .tax |  .pkpass |  .bc6 |  .bc7  
+.bkp |  .qic |  .bkf |  .sidn |  .sidd |  .mddata |  .itl  
+.itdb |  .icxs |  .hvpl |  .hplg |  .hkdb |  .mdbackup |  .syncdb  
+.gho |  .cas |  .svg |  .map |  .wmo |  .itm |  .sb  
+.fos |  .mov |  .vdf |  .ztmp |  .sis |  .sid |  .ncf  
+.menu |  .layout |  .dmp |  .blob |  .esm |  .vcf |  .vtf  
+.dazip |  .fpk |  .mlx |  .kf |  .iwd |  .vpk |  .tor  
+.psk |  .rim |  .w3x |  .fsh |  .ntl |  .arch00 |  .lvl  
+.snx |  .cfr |  .ff |  .vpp_pc |  .lrf |  .m2 |  .mcmeta  
+.vfs0 |  .mpqge |  .kdb |  .db0 |  .dba |  .rofl |  .hkx  
+.bar |  .upk |  .das |  .iwi |  .litemod |  .asset |  .forge  
+.ltx |  .bsa |  .apk |  .re4 |  .sav |  .lbf |  .slm  
+.bik |  .epk |  .rgss3a |  .pak |  .big |  .wallet |  .wotreplay  
+.xxx |  .desc |  .py |  .m3u |  .flv |  .js |  .css  
+.rb |  .p7c |  .pk7 |  .p7b |  .p12 |  .pfx |  .pem  
+.crt |  .cer |  .der |  .x3f |  .srw |  .pef |  .ptx  
+.r3d |  .rw2 |  .rwl |  .raw |  .raf |  .orf |  .nrw  
+.mrwref |  .mef |  .erf |  .kdc |  .dcr |  .cr2 |  .crw  
+.bay |  .sr2 |  .srf |  .arw |  .3fr |  .dng |  .jpe  
+.jpg |  .cdr |  .indd |  .ai |  .eps |  .pdf |  .pdd  
+.dbf |  .mdf |  .wb2 |  .rtf |  .wpd |  .dxg |  .xf  
+.dwg |  .pst |  .accdb |  .mdb |  .pptm |  .pptx |  .ppt  
+.xlk |  .xlsb |  .xlsm |  .xlsx |  .xls |  .wps |  .docm  
+.docx |  .doc |  .odb |  .odc |  .odm |  .odp |  .ods  
+.odt |  |  |  |  |  |  
+  
+表3
+
+加密完成后，文件的文件名也会被修改为“Zenis-[2个随机字符].[12个随机字符]”的格式：
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218010845422.png!small)  
+
+图12
+
+例如361test.txt被加密后会被改成了：Zenis-EO.V1OqyzpYfV5z
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218010925236.png!small)  
+
+图13
+
+而当病毒遍历文件时，一旦发现文件的扩展名符合备份文件的特点，则不会对其进行加密，而是用随即内容覆盖写入文件三次，在删除该备份文件。这是为了让中招者很难再从备份中恢复文件，要删除的备份文件扩展名列表如下：
+
+.win |  .wbb |  .w01 |  .v2i |  .trn |  .tibkp |  .sqb  
+---|---|---|---|---|---|---  
+.rbk |  .qic |  .old |  .obk |  .ful |  .bup |  .bkup  
+.bkp |  .bkf |  .bff |  .bak |  .bak2 |  .bak3 |  .edb  
+.stm |  |  |  |  |  |  
+|  |  |  |  |  |  
+  
+表4
+
+相关代码如下：
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218011024225.png!small)  
+
+图14
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218011095535.png!small)
+
+图15
+
+此外，病毒还会排除系统及一些杀软的目录，对这些目录中的文件不会进行加密操作：
+
+Windows |  NVIDIA Corporation  
+---|---  
+Program Files |  Microsoft.NET  
+ProgramData |  Internet Explorer  
+PerfLogs |  Kaspersky Lab  
+$Recycle.Bin |  McAfee  
+Microsoft |  Avira  
+Microsoft Help |  spytech software  
+Microsoft App |  sysconfig  
+Certification Kit |  Avast  
+Windows Defender |  Dr.Web  
+ESET |  Symantec  
+COMODO |  Symantec_Client_Security  
+Windows NT |  system volume information  
+Windows Kits |  AVG  
+Windows Mail |  Microsoft Shared  
+Windows Media Player |  Common Files  
+Windows Multimedia Platform |  Outlook Express  
+Windows Phone Kits |  Movie Maker  
+Windows Phone |  Chrome  
+Silverlight Kits |  Mozilla Firefox  
+Temp |  Opera  
+Windows Photo Viewer |  YandexBrowser  
+Windows Protable Devices |  ntldr  
+Windows Slidebar |  Wsus  
+WindowsPowerShell |  Public  
+|  
+  
+表
+
+加密所用的内置RSA公钥以及生成勒索提示信息”Zenis-Instructions.html”，包含说明以及与勒索软件作者联系的邮箱地址相关代码：
+
+  
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218011189400.png!small)  
+
+图16
+
+病毒生成的勒索页面中包含一个隐藏的Base64编码的字符串，该字符串实际就是前文所述——经双重加密过的解密私钥。而想要解密字符串拿到解密私钥，则只能使用病毒作者手中的私钥。而后续勒索成功后，病毒作者（若守信）也是通过该信息向中招用户下发对应的解密程序或密钥：
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218011292277.png!small)  
+
+图17
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218011368795.png!small)  
+
+图18
+
+ ****
+360反病毒专家尝试与病毒作者邮件进行联系：作者在成功解密了一个文件后以证明自己的解密能力后，要求将0.2018个比特币（本文发表时约合13000元人民币）转入该钱包地址：
+**17o83ughmzkeMKMsLz4bHRmf75UrjwLpKf**
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218011447371.png!small)  
+
+图19
+
+ ****![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218011524589.png!small)  
+
+图20
+
+## 结语
+
+由于Zenis勒索病毒加密格式多样，且会覆盖多次并删除备份相关的文件，一些PE格式的文件及一些常用软件的数据文件被加密或被删除后可能会出现无法正常运行的情况。故相较普通勒索病毒对系统更具破坏性，加之该病毒可能是通过入侵远程桌面弱口令攻入服务进行投毒，因此建议服务器用户：
+
+> 1、修改为较强的密码；
+>
+> 2、修改默认的3389端口；
+>
+> 3、服务器打最新的补丁；
+>
+> 4、启用网络身份验证NLA；
+>
+> 5、安装安全软件进行防护，360安全卫士已国内率先对该勒索病毒进行查杀，同时，360还可实现对各类勒索病毒的全面防御。
+
+![Clipboard
+Image.png](https://image.3001.net/images/20180323/15218012381475.png!small)  
+
+图21
+
+ ***本文作者：360安全卫士，转载请注明来自FreeBuf.COM**  
+

@@ -1,0 +1,328 @@
+# IE浏览器缓解技术逆向初探
+
+阅读量 **170765**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-11-30 15:24:37
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 LSC
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+##
+
+##
+
+作者：dwfault@野火研习社
+
+预估稿费：400RMB
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+## 前言
+
+浏览器中的UAF类漏洞触发时，通常用“exploit-friendly”对象占位之前释放的内存空间，通过数组下标索引即可读写此内存区域的对象，控制内存中的对象虚函数调用以执行流程劫持。虚函数调用本质上是通过函数指针进行的，往往形如“call
+register”或“call [register + offset]”，因此也被称为间接调用。
+
+2014年6月，微软在浏览器产品Internet Explorer中应用堆隔离技术(Isolated Heap)，把漏洞多发的对象与“exploit-friendly”对象分配在不同的堆空间；2014年7月微软在IE浏览器中加入延迟释放技术(Delayed
+Free)，其主要流程如下：对象释放时不立即释放堆块，而是加入等待列表中；当内存分配有压力时，从栈中检查是否存在对内存空间的引用，不存在时将堆块释放；针对劫持间接调用的攻击技术，微软在Windows
+10上实现了粗粒度的控制流保护技术(Control Flow Guard,
+CFG)。堆隔离、延迟释放、控制流保护技术使得传统的基于占位的利用技术发生变化，本文就来对这些缓解技术进行逆向初探，分析环境为Windows 10
+14393 32bit IE 11，主要分析对象涉及mshtml.dll、msvcrt.dll、ntdll.dll等。
+
+## 一、堆隔离技术
+
+在mshtml!DllMainStartup函数中，有:
+
+    
+    
+    call        ds: __imp__GetProcessHeap@0
+    
+    mov      ecx, eax
+    
+    mov      _g_hProcessHeap, ecx
+    
+    call        ?RegisterHeap@MemoryProtection@@YGXPAX@Z ;
+    
+    mov      _g_hIsolatedHeap, ecx
+
+当mshtml.dll被加载进入浏览器内存时，DllMainStartup函数首先被调用，初始化全局变量_g_hProcessHeap、_g_hIsolatedHeap，全部赋值为GetProcessHeap
+API的返回值，即首先将隔离堆的句柄初始化为进程默认堆。
+
+mshtml!DllProcessAttach函数中有:
+
+    
+    
+    push      ebx
+    
+    push      ebx               ; dwInitialSize
+    
+    push      ebx               ; flOptions
+    
+    call        ds:__imp__HeapCreate@12 ;
+    
+    mov      _g_hIsolatedHeap, eax
+
+这段代码创建了新的堆，随后为全局变量_g_hIsolatedHeap重新赋值。从这里开始隔离堆被创建。之后在隔离堆上分配对象时，设置HeapAlloc的参数为_g_hIsolatedHeap。下面代码已经简化：
+
+    
+    
+    mov      ecx, _g_hIsolatedHeap
+    
+    …
+    
+    call        ds:__imp__HeapAlloc@12
+
+按照同样的方法对jscript9.dll中的内存分配进行逆向分析。分析发现，一部分对象分配在系统堆上；大多数对象使用jscript9!HeapAllocator::Alloc分配，该函数实际是对malloc函数的封装，malloc函数位于msvcrt.dll中，跟踪进入该模块，发现这些对象分配在__crtheap中。
+
+查看全局变量_g_hIsolatedHeap的交叉引用，可得到分配在隔离堆的对象类型，其中包括DOM元素(CElement及其派生类)、DOM树节点(CTreeNode)、DOM树节点标记(CTreePos)、结构化标记(CMarkup)等。堆隔离技术使可用于内存占位的对象种类减少，因此占位难度增加，漏洞利用的难度增加。
+
+## 二、延迟释放技术
+
+mshtml.dll模块下的MemoryProtection命名空间实现了多个延迟释放技术相关的类，因此延迟释放技术也被称为MemoryProtection。CMemoryProtector是命名空间中的核心类，浏览器进程的每个线程维护一个该类的实例，该实例的索引存储在线程局部存储TLS中，总大小为0x1020字节，其结构如下：
+
+    
+    
+    class      CMemoryProtector
+    
+    +00       void * SBlockDescriptorArray
+    
+    +04       DWORD TotalSize
+    
+    +08       DWORD NumberOfUsed
+    
+    +0c       DWORD NumberOfTotal
+    
+    +10       BOOL IsSorted
+    
+    +14       BOOL IsForceMarkAndReclaim
+    
+    +18       DWORD StackHighAddress
+    
+    +1c       DWORD StackMarkerAddress
+    
+    +20       DWORD SAddressFilter[512]
+
+其中的SAddressFilter是一个bitmap，用来指示SBlockDescriptorArray中的堆块是否存在引用。SBlockDescriptor是SBlockDescriptorArray中的元素，大小为8字节，用以存储堆块的地址和大小。其结构如下：
+
+    
+    
+    struct    SBlockDescriptor
+    
+    +00       void *pAddress
+    
+    +04       DWORD nSize
+
+SBlockDescriptorArray表示等待列表，对象释放后堆块添加进该列表，以后再释放堆块。等待列表在初次分配时大小为0x8000字节，可以存放0x1000个SBlockDescriptor，NumberOfTotal表示等待列表的总容量，初始值为0x1000；NumberOfUsed表示已存储的堆块个数，初始值为0。当有新的堆块添加到SBlockDescriptorArray时，NumberOfUsed增加；当NumberOfUsed与NumberOfTotal相等时，说明SBlockDescriptorArray已满，此时调用HeapReAlloc重新分配SBlockDescriptorArray，大小翻倍。
+
+![](https://p5.ssl.qhimg.com/t01d2ef792a44aecb7f.png)
+
+图1 延迟释放技术相关函数调用关系
+
+被保护的对象在释放时，不直接调用Windows API
+HeapFree，而是调用MemoryProtection::HeapFree。该函数检查进程保护策略，包括是否启用延迟释放技术的保护等，若保护未开启，调用Windows
+API HeapFree直接释放堆块；否则调用CMemoryProtector::ProtectedFree。
+
+CMemoryProtector::ProtectedFree函数调用的核心函数是ReclaimMemory，此外调用有SBlockDescriptorArray::AddBlockDescriptor、SAddressFilter::AddBlock、memset。
+
+ReclaimMemory用于检查等待列表中的堆块。首先检查CMemoryProtector的TotalSize域，该值表示已经添加进等待列表的堆块总大小，当TotalSize小于等于0x186a0(100000)字节时不做处理，否则调用MarkBlock、ReclaimUnmarkedBlocks函数，这两个函数实现了标记清除式垃圾回收算法。算法首先从栈内存中查找堆块的引用，标记存在引用的堆块；然后释放未标记的堆块，为已标记的堆块去除标记以供下次检查。最后调用memset把堆块内容覆写为0。
+
+SBlockDescriptorArray::AddBlockDescriptor用于在等待列表中增加堆块；SAddressFilter::AddBlock用于进行bitmap的更新。
+
+图2展示了延迟释放技术相关代码的整体流程图：
+
+![](https://p2.ssl.qhimg.com/t01996b3dd8b5a0bdf1.png)
+
+图2 延迟释放技术相关代码流程图
+
+可将延迟释放技术总结如下：对象释放时不立即释放堆块，而是加入等待列表中，同时将堆块内存覆写为0；当列表标示的堆块总大小达到100000字节时，从栈中检查是否存在堆块的引用，若不存在引用则将堆块释放。
+
+延迟释放技术对基于占位的UAF漏洞利用具有有效的遏制作用。但由于IE浏览器采用保守垃圾回收算法，延迟释放机制存在严重缺陷：
+
+保守垃圾回收算法无法区分指针和数据，攻击者可以用Array等数据结构在栈中伪造堆块的指针，使伪造指针所指向的堆块不能被释放；以侧信道攻击配合，攻击者迭代地把指针置零可将MemoryProtection用作Oracle，询问进程内存空间是否可用；用这种方法将动态库模块加载到一个确定的地址，该地址就是本次置零的指针值。如图3所示，研究者利用延迟释放技术将Windows.data.pdff.dll加载到确定的地址：
+
+![](https://p5.ssl.qhimg.com/dm/1024_327_/t01388f7039f9874869.png)
+
+图3 利用延迟释放技术绕过ASLR技术示意图
+
+## 三、控制流保护技术
+
+Visual Studio
+2015及之后的版本支持CFG，相关编译参数为“/guard:cf”。编译时，编译器扫描所有的间接调用，在调用之前插入语句调用检查函数；且将潜在的间接调用的目的函数地址对齐到0x10字节，即函数地址值可整除16。
+
+链接过程中，模块的PE文件节区结构体IMAGE_LOAD_CONFIG_DIRECTORY末尾添加有GuardFlags和GuardCFFunctionTable、GuardCFFunctionCount等项。其中GuardCFFunctionTable是一个表，反汇编时该函数被识别为___guard_fids_table，表中以RVA形式存放函数指针，用1字节存放SuppressedFlag，每个表项5字节，GuardCFFunctionCount表明该表的容量。
+
+例如，某dll模块定义导出函数normal_function、sensitive_function，假设要求sensitive_function不能被间接调用，可在函数声明时添加“guard(suppress)”关键字。编译完成后，节区包含GuardCFFunctionTable如下：
+
+    
+    
+    10001040    _sensitive_function
+    
+    01
+    
+    10001070    _normal_function
+    
+    00
+    
+    100010C0   @__security_check_cookie@4
+    
+    00
+    
+    100013F0    __DllMainCRTStartup@12
+    
+    00
+
+对于_sensitive_function，SuppressedFlag值为1，标示为禁止间接调用；其他函数对应的SuppressedFlag值为0，标示为允许间接调用。该模块被加载进入进程内存空间后，进程bitmap添加对应的DWORD值来标示其中函数是否被允许间接调用。
+
+程序执行过程中，exe和dll模块中的代码在执行间接调用前会先调用函数__gurad_check_icall，其中EDI寄存器存放实际调用的函数，调用之前拷贝到ECX寄存器传入__gurad_check_icall函数进行检查：
+
+    
+    
+    mov      ecx, edi
+    
+    call        _guad_check_icall
+    
+    call        edi
+
+另外，有些函数中的间接调用会检查栈顶在调用前后是否发生变化：
+
+    
+    
+    mov      ebx, esp
+    
+    mov      ecx, edi
+    
+    call        _guad_check_icall
+    
+    call        edi
+    
+    cmp      ebx, esp
+    
+    jz          loc_continue:
+    
+    mov      ecx, 4
+    
+    int  29h
+
+静态分析时，函数_guad_check_icall在文件中指向无意义的函数，只包含RETN指令以兼容老版本的操作系统；在被加载进入进程时该函数被动态插装，指向的汇编代码横跨连续的三个函数：
+
+    
+    
+    ntdll!LdrpValidateUserCallTarget:
+    
+    mov      edx,dword ptr [ntdll!LdrSystemDllInitBlock+0x60]
+    
+    mov      eax,ecx
+    
+    shr        eax,8
+    
+    ntdll!LdrpValidateUserCallTargetBitMapCheck:
+    
+    mov      edx,dword ptr [edx+eax*4]
+    
+    mov      eax,ecx
+    
+    shr        eax,3
+    
+    test              cl,0Fh
+    
+    jne        ntdll!LdrpValidateUserCallTargetBitMapRet+0x1
+    
+    bt          edx,eax
+    
+    jae         ntdll!LdrpValidateUserCallTargetBitMapRet+0xa
+    
+    ntdll!LdrpValidateUserCallTargetBitMapRet:
+    
+    ret
+    
+    or          eax,1
+    
+    bt          edx,eax
+    
+    jae         ntdll!LdrpValidateUserCallTargetBitMapRet+0xa
+    
+    ret
+    
+    …
+    
+    ntdll!LdrpValidateUserCallTargetBitMapRet+0xa
+    
+    call        ntdll!RtlpHandleInvalidUserCallTarget
+
+本段代码中ntdll!LdrSystemDllInitBlock+0x60存放bitmap基地址的指针，该bitmap在大多数情况下是只读的。bitmap中的每个DWORD标示0x00-0xff范围内256个地址的合法性。例如，对于10001070处的_normal_function函数，地址的LSB为0x70，bitmap有对应10001000~100010FF范围的DWORD，该DWORD第14位为1，标示该函数是合法的。
+
+对于每个DWORD，偶数位可以为0或1，标示地址LSB为00、10、20、30、40、50、60、70、80、90、A0、B0、C0、D0、E0、F0处函数的合法性；每个DWORD的奇数位与地址LSB的其他值构成一对多的关系，一般均为0，表示这些地址全部非法。下表举例展示内存地址地址LSB与bitmap比特位的对应关系：
+
+表1 内存地址LSB与bitmap比特位的对应关系示例
+
+![](https://p2.ssl.qhimg.com/t01c301e16c7ade3b21.png)
+
+浏览器进程中间接调用的黑白名单由加载到进程的不同模块确定；在进程中也可以直接调用SetProcessValidCallTargets来修改黑白名单；进程代码如果调用Window
+API GetProcAddress，该API也会修改bitmap以标示对应函数为合法。
+
+CFG技术通过bitmap维护各模块中间接调用地址的黑白名单。由于进程bitmap不存在0x0c0c0c00~0x0c0c0cff所对应的DWORD值，CFG技术使堆喷射技术常用的0x0c0c0c0c等地址为非法地址；间接调用的目标为函数内部的情况也不合法，因为该地址不在bitmap标识的白名单之内。
+
+CFG技术主要保护间接调用。它不是为控制流完整性而设计，也不能保证控制流完整性。通过上述分析可知该技术有如下缺陷：
+
+不保护栈上的返回地址和其他函数指针(如SEH)。
+
+不保护call [data]类型的函数调用。
+
+CFG只提供粗粒度的保护。进程中的所有线程、模块查询同一个bitmap，因此共享相同的保护策略。由于兼容性原因，当不同模块的黑白名单冲突时只能将引起冲突的函数加入白名单。进程保护策略不好协调、不易确定，粗粒度的保护使CFG技术难以确保安全。
+
+进程中，如果某dll模块未开启CFG，则该模块内的间接调用均不受保护；如果exe主模块未开启CFG，则保护完全失效。
+
+CFG技术对于不改变程序执行流程的漏洞利用无保护作用。
+
+目前CFG技术最严重的缺陷在于它提供保护的粗粒度。根据前述CFG的流程可以实现一个调试插件以枚举CFG检查为合法的目标函数【3】，发现IE
+11浏览器进程中的合法目标函数不乏LoadLibrary、VirtualProtect、ProtectVirtualMemory等敏感API；另一方面存在2700个以上的DWORD的值为0xffffffff，意味着较老的模块中的任意地址均为合法地址；更重要的是，合法目标函数的总数在270000以上，理论上攻击者可以借鉴ROP技术实施代码重用攻击，将多个合法目标函数作为CFG
+gadget进行组合以绕过该技术的保护。
+
+## 四、小结
+
+新型缓解技术在UAF漏洞利用过程的各个阶段进行拦截，迫使高级漏洞利用技术也有所演进。
+
+## 五、参考资料
+
+Abusing Silent mitigations. Abdul-Aziz Hariri, Simon Zuckerbraum, Brian Gorenc
+
+Cross The Wall-Bypass All Modern Mitigations of Microsoft Edge. Henry Li
+
+https://github.com/dwfault/CFGValidEnum
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **安全客** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/87816](/post/id/87816)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [浏览器](/tag/浏览器)
+  * [IE](/tag/IE)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t01546a096e83e700fe.jpg) 安全客
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

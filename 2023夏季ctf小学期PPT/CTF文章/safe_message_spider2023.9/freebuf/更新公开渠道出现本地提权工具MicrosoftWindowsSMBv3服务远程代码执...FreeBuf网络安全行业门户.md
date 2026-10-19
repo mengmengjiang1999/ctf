@@ -1,0 +1,88 @@
+## 文档信息
+
+编号  |  QiAnXinTI-SV-2020-0008  
+---|---  
+关键字  |  SMB CVE-2020-0796  
+发布日期  |  2020年03月11日  
+更新日期  |  2020年03月31日  
+TLP  |  WHITE  
+分析团队  |  奇安信威胁情报中心  
+  
+  
+
+## 通告概述
+
+2020年3月11日，某国外安全公司发布了一个近期微软安全补丁包所涉及漏洞的综述，其中谈到了一个威胁等级被标记为Critical的SMB服务远程代码执行漏洞（CVE-2020-0796），攻击者可能利用此漏洞远程无需用户验证通过发送构造特殊的恶意数据导致在目标系统上执行恶意代码，从而获取机器的完全控制。
+
+目前奇安信息威胁情报中心红雨滴团队已经确认漏洞的存在，利用此漏洞可以稳定地导致系统崩溃，不排除执行任意代码的可能性，由于漏洞无需用户验证的特性，可能导致类似WannaCry攻击那样蠕虫式的传播。
+
+2020年3月12日微软发布了相应的安全补丁，强烈建议用户立即安装补丁以免受此漏洞导致的风险。2020年3月14日，已有可导致受影响系统蓝屏崩溃的漏洞利用POC在公开渠道发布，可以稳定地导致系统远程拒绝服务。
+
+3月22日奇安信代码安全团队发布了针对此漏洞的远程无损扫描器，可以帮助网络管理员快速地识别存在此漏洞的系统，欢迎使用。
+
+3月30日公开渠道出现利用此漏洞的本地提权利用代码，奇安信验证可用，本地攻击者可以利用漏洞从普通用户权限提升到系统权限。
+
+## 漏洞概要
+
+**漏洞名称** **** |  Microsoft Windows SMBv3服务远程代码执行漏洞  
+---|---  
+**威胁类型** **** |  远程代码执行  |  **威胁等级** **** |  严重  |  **漏洞** **ID** |
+CVE-2020-0796  
+**利用场景** **** |  攻击者可以通过发送特殊构造的数据包触发漏洞，无需用户验证就可能导致控制目标系统，同时影响服务器与客户端系统。  
+**受影响系统及应用版本** ****  
+Windows 10 Version 1903 for 32-bit Systems Windows 10 Version 1903 for
+ARM64-based Systems Windows 10 Version 1903 for x64-based Systems Windows 10
+Version 1909 for 32-bit Systems Windows 10 Version 1909 for ARM64-based
+Systems Windows 10 Version 1909 for x64-based Systems Windows Server, version
+1903 (Server Core installation) Windows Server, version 1909 (Server Core
+installation)  
+  
+## 漏洞描述
+
+漏洞存在于Windows的SMBv3.0（文件共享与打印服务）中，目前技术细节暂不公布，对于漏洞的利用无需用户验证，通过构造恶意请求即可触发导致任意代码执行，系统受到非授权控制。
+
+## 影响面评估
+
+此漏洞主要影响SMBv3.0协议，目前支持该协议的设备包括Windows 8、Windows 8.1、Windows 10、Windows Server
+2012 和 Windows Server 2016，但是从微软的通告来看受影响目标主要是Win10系统，考虑到相关设备的数量级，潜在威胁较大。
+
+## 处置建议
+
+### 修复方法
+
+1\. 微软已经发布了此漏洞的安全补丁，访问如下链接：
+
+<https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2020-0796>
+
+2\. 如果暂时无法安装补丁，微软当前建议按如下临时解决方案处理：
+
+执行以下命令
+
+Set-ItemProperty-Path
+"HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters"DisableCompression
+-Type DWORD -Value 1 -Force 禁用SMB 3.0的压缩功能，是否使用需要结合自己业务进行判断。
+
+### 扫描工具
+
+奇安信CVE-2020-0796漏洞远程无损扫描工具下载：
+
+<http://dl.qianxin.com/skylar6/CVE-2020-0796-Scanner.zip>
+
+## 参考资料
+
+<https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/ADV200005>
+
+[https://cc.bingj.com/cache.aspx?q=https%3a%2f%2fblog.talosintelligence.com%2f2020%2f03%2fmicrosoft-patch-tuesday-march-2020.html&w=NrvF66m3pULMCOMEBw-cKyRUwi9s1qXv&d=928684983196](https://cc.bingj.com/cache.aspx?q=https%3A%2F%2Fblog.talosintelligence.com%2F2020%2F03%2Fmicrosoft-patch-tuesday-march-2020.html&w=NrvF66m3pULMCOMEBw-cKyRUwi9s1qXv&d=928684983196)
+
+<https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2020-0796>
+
+## 时间线
+
+**时间** |  **事件**  
+---|---  
+2020年3月11日  |  奇安信发布关于未有补丁的漏洞相关初始报告  
+2020年3月12日  |  奇安信发布关于漏洞补丁更新的信息更新  
+2020年3月14日  |  公开渠道出现导致系统蓝屏崩溃的远程漏洞利用程序  
+2020年3月22日  |  奇安信首次公开发布对漏洞的远程无损扫描工具  
+2020年3月30日  |  公开渠道出现可利用漏洞执行本地权限提升的工具
+

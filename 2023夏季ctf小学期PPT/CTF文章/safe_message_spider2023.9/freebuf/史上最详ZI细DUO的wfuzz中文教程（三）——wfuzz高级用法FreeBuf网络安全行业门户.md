@@ -1,0 +1,757 @@
+今天给大家带来wfuzz系列的 3/4 《高级用法》。先给那些追求完美的表哥们！  
+  
+
+  * wfuzz 高级用法 
+    * 0x01 wfuzz全局配置
+    * Iterators：组合payloads
+    * Encoders 
+      * 使用Encoder
+      * 使用多个Encoder
+    * 0x02 扫描/解析插件 
+      * 自定义插件
+    * 0x03 Recipes(菜谱)
+    * 0x04 扫描模式 
+      * 超时
+    * 0x05 过滤器语法
+    * 0x06 过滤结果
+    * 0x07 过滤payload 
+      * 切片
+      * 预过滤
+      * 输出结果再利用
+
+## wfuzz 高级用法
+
+* * *
+
+### wfuzz全局配置
+
+wfuzz的全局配置文件位于`~/.wfuzz/wfuzz.ini`。
+
+  1. `┌─[michael@parrot]─[~/.wfuzz]`
+  2. `└──╼ $cat wfuzz.ini `
+  3. `[kbase]`
+  4. `discovery.blacklist = .svg-.css-.js-.jpg-.gif-.png-.jpeg-.mov-.avi-.flv-.ico #这里配置忽略的后缀，用 - 号分隔`
+  5.   
+
+  6. `[connection]`
+  7. `concurrent = 50 #并发数`
+  8. `conn_delay = 90 #连接间隔`
+  9. `req_delay = 90 #请求间隔`
+  10. `retries = 3 #重试次数`
+  11. `user-agent = Mozilla/5.0 (X11; Linux x86_64; rv:58.0) Gecko/20100101 Firefox/58.0 #UA，默认为Wfuzz/版本`
+  12.   
+
+  13. `[general]`
+  14. `default_printer = raw #默认输出格式`
+  15. `cancel_on_plugin_except = 1 #插件出错则退出`
+  16. `concurrent_plugins = 3 #最多同时指定的插件数量`
+  17. `lookup_dirs = /usr/share/wfuzz/wordlist,. #查找字典的目录，若让wfuzz自动查找字典，则在命令行中只指定字典名字即可`
+  18. `encode_space = 1 #编码空格`
+  19.   
+
+  20. `[plugins]`
+  21. `bing_apikey = #设置bing API在key`
+
+* * *
+
+### Iterators：组合payloads
+
+不同的payload可以通过`-m`参数指定的方式组合起来，在wfuzz中，提供这种组合能力的功能的，我们称为迭代器。  
+关于wfuzz中所有可用的iterators可参考`重要关键词`部分。
+
+下面我们举例说明各个iterator是如何工作的。
+
+  * zip:
+
+    1. ` ┌─[michael[@parrot](https://github.com/parrot)]─[~/.wfuzz]`
+    2. ` └──╼ $wfuzz -z list,a-b-c -z list,1-2-3 -m zip http://[www.baidu.com/FUZZ/FUZ2Z](http://www.baidu.com/FUZZ/FUZ2Z)`
+    3. ` ********************************************************`
+    4. ` * Wfuzz 2.2.9 - The Web Fuzzer *`
+    5. ` ********************************************************`
+    6.   
+
+    7. ` Target: http://[www.baidu.com/FUZZ/FUZ2Z](http://www.baidu.com/FUZZ/FUZ2Z)`
+    8. ` Total requests: 3`
+    9.   
+
+    10. ` ==================================================================`
+    11. ` ID Response Lines Word Chars Payload `
+    12. ` ==================================================================`
+    13.   
+
+    14. ` 000001: C=302 7 L 18 W 222 Ch "a - 1"`
+    15. ` 000002: C=302 7 L 18 W 222 Ch "b - 2"`
+    16. ` 000003: C=302 7 L 18 W 222 Ch "c - 3"`
+    17.   
+
+    18. ` Total time: 0.101380`
+    19. ` Processed Requests: 3`
+    20. ` Filtered Requests: 0`
+    21. ` Requests/sec.: 29.59160`
+  * chain:
+
+    1. ` ┌─[michael[@parrot](https://github.com/parrot)]─[~/.wfuzz]`
+    2. ` └──╼ $wfuzz -z list,a-b-c -z list,1-2-3 -m chain http://[www.baidu.com/FUZZ](http://www.baidu.com/FUZZ)`
+    3. ` ********************************************************`
+    4. ` * Wfuzz 2.2.9 - The Web Fuzzer *`
+    5. ` ********************************************************`
+    6.   
+
+    7. ` Target: http://[www.baidu.com/FUZZ](http://www.baidu.com/FUZZ)`
+    8. ` Total requests: 6`
+    9.   
+
+    10. ` ==================================================================`
+    11. ` ID Response Lines Word Chars Payload `
+    12. ` ==================================================================`
+    13.   
+
+    14. ` 000003: C=302 7 L 18 W 208 Ch "c"`
+    15. ` 000004: C=302 7 L 18 W 222 Ch "1"`
+    16. ` 000005: C=302 7 L 18 W 222 Ch "2"`
+    17. ` 000006: C=302 7 L 18 W 222 Ch "3"`
+    18. ` 000001: C=302 7 L 18 W 222 Ch "a"`
+    19. ` 000002: C=302 7 L 18 W 222 Ch "b"`
+    20.   
+
+    21. ` Total time: 0.041357`
+    22. ` Processed Requests: 6`
+    23. ` Filtered Requests: 0`
+    24. ` Requests/sec.: 145.0780`
+  * product:
+
+    1. ` ┌─[michael[@parrot](https://github.com/parrot)]─[~/.wfuzz]`
+    2. ` └──╼ $wfuzz -z list,a-b-c -z list,1-2-3 -m product http://[www.baidu.com/FUZZ/FUZ2Z](http://www.baidu.com/FUZZ/FUZ2Z)`
+    3. ` ********************************************************`
+    4. ` * Wfuzz 2.2.9 - The Web Fuzzer *`
+    5. ` ********************************************************`
+    6.   
+
+    7. ` Target: http://[www.baidu.com/FUZZ/FUZ2Z](http://www.baidu.com/FUZZ/FUZ2Z)`
+    8. ` Total requests: 9`
+    9.   
+
+    10. ` ==================================================================`
+    11. ` ID Response Lines Word Chars Payload `
+    12. ` ==================================================================`
+    13.   
+
+    14. ` 000008: C=302 7 L 18 W 222 Ch "c - 2"`
+    15. ` 000009: C=302 7 L 18 W 222 Ch "c - 3"`
+    16. ` 000001: C=302 7 L 18 W 222 Ch "a - 1"`
+    17. ` 000002: C=302 7 L 18 W 222 Ch "a - 2"`
+    18. ` 000003: C=302 7 L 18 W 222 Ch "a - 3"`
+    19. ` 000004: C=302 7 L 18 W 222 Ch "b - 1"`
+    20. ` 000005: C=302 7 L 18 W 222 Ch "b - 2"`
+    21. ` 000006: C=302 7 L 18 W 222 Ch "b - 3"`
+    22. ` 000007: C=302 7 L 18 W 222 Ch "c - 1"`
+    23.   
+
+    24. ` Total time: 0.042347`
+    25. ` Processed Requests: 9`
+    26. ` Filtered Requests: 0`
+    27. ` Requests/sec.: 212.5252`
+
+* * *
+
+### Encoders
+
+在wfuzz中，encoder的作用是将payload从一种格式转换成另一种格式。  
+关于wfuzz中所有可用的encoders可参考`重要关键词`部分。
+
+* * *
+
+#### 使用Encoder
+
+encoders是通过payload参数传进去的。有两种方法：
+
+  * 第一种稍长：
+
+    1. ` ┌─[michael[@parrot](https://github.com/parrot)]─[~/.wfuzz]`
+    2. ` └──╼ $wfuzz -z file --zP fn=common.txt,encoder=md5 <http://testphp.vulnweb.com/FUZZ>`
+    3. ` ********************************************************`
+    4. ` * Wfuzz 2.2.9 - The Web Fuzzer *`
+    5. ` ********************************************************`
+    6.   
+
+    7. ` Target: <http://testphp.vulnweb.com/FUZZ>`
+    8. ` Total requests: 950`
+    9.   
+
+    10. ` ==================================================================`
+    11. ` ID Response Lines Word Chars Payload `
+    12. ` ==================================================================`
+    13.   
+
+    14. ` 000034: C=404 7 L 12 W 168 Ch "9cdc4bbeede81cec7451d2c84028d26e"`
+    15. ` 000035: C=404 7 L 12 W 168 Ch "b37cb0782bed24a15f24b3e16d63d6e3"`
+    16. ` 000036: C=404 7 L 12 W 168 Ch "fb61758d0f0fda4ba867c3d5a46c16a7"`
+    17. ` 000001: C=404 7 L 12 W 168 Ch "e1671797c52e15f763380b45e841ec32"`
+    18. ` 000002: C=404 7 L 12 W 168 Ch "b4b147bc522828731f1a016bfa72c073"`
+    19. ` 000003: C=404 7 L 12 W 168 Ch "96a3be3cf272e017046d1b2674a52bd3"`
+    20. ` 000004: C=404 7 L 12 W 168 Ch "a2ef406e2c2351e0b9e80029c909242d"`
+    21. ` 000005: C=404 7 L 12 W 168 Ch "e45ee7ce7e88149af8dd32b27f9512ce"`
+    22. ` 000006: C=404 7 L 12 W 168 Ch "c4ca4238a0b923820dcc509a6f75849b"`
+    23. ` ...`
+  * 第二种比较短的方式：
+
+    1. ` ┌─[michael[@parrot](https://github.com/parrot)]─[~/.wfuzz]`
+    2. ` └──╼ $wfuzz -z file,common.txt,md5 <http://testphp.vulnweb.com/FUZZ>`
+    3. ` ********************************************************`
+    4. ` * Wfuzz 2.2.9 - The Web Fuzzer *`
+    5. ` ********************************************************`
+    6.   
+
+    7. ` Target: <http://testphp.vulnweb.com/FUZZ>`
+    8. ` Total requests: 950`
+    9.   
+
+    10. ` ==================================================================`
+    11. ` ID Response Lines Word Chars Payload `
+    12. ` ==================================================================`
+    13.   
+
+    14. ` 000034: C=404 7 L 12 W 168 Ch "9cdc4bbeede81cec7451d2c84028d26e"`
+    15. ` 000035: C=404 7 L 12 W 168 Ch "b37cb0782bed24a15f24b3e16d63d6e3"`
+    16. ` 000036: C=404 7 L 12 W 168 Ch "fb61758d0f0fda4ba867c3d5a46c16a7"`
+    17. ` 000037: C=404 7 L 12 W 168 Ch "c33e404a441c6ba9648f88af3c68a1ca"`
+    18. ` ...`
+
+* * *
+
+#### 使用多个Encoder
+
+  * 一次指定多个encoders，可以使用一个`-`号分隔的列表来指定，如：
+
+    1. ` ┌─[michael[@parrot](https://github.com/parrot)]─[~/.wfuzz]`
+    2. ` └──╼ $wfuzz -z list,1-2-3,md5-sha1-none <http://testphp.vulnweb.com/FUZZ>`
+    3. ` ********************************************************`
+    4. ` * Wfuzz 2.2.9 - The Web Fuzzer *`
+    5. ` ********************************************************`
+    6.   
+
+    7. ` Target: <http://testphp.vulnweb.com/FUZZ>`
+    8. ` Total requests: 9`
+    9.   
+
+    10. ` ==================================================================`
+    11. ` ID Response Lines Word Chars Payload `
+    12. ` ==================================================================`
+    13.   
+
+    14. ` 000001: C=404 7 L 12 W 168 Ch "c4ca4238a0b923820dcc509a6f75849b"`
+    15. ` 000002: C=404 7 L 12 W 168 Ch "356a192b7913b04c54574d18c28d46e6395428ab"`
+    16. ` 000005: C=404 7 L 12 W 168 Ch "da4b9237bacccdf19c0760cab7aec4a8359010b0"`
+    17. ` 000006: C=404 7 L 12 W 168 Ch "2"`
+    18. ` 000007: C=404 7 L 12 W 168 Ch "eccbc87e4b5ce2fe28308fd9f2a7baf3"`
+    19. ` 000008: C=404 7 L 12 W 168 Ch "77de68daecd823babbb58edb1c8e14d7106e83bb"`
+    20. ` 000004: C=404 7 L 12 W 168 Ch "c81e728d9d4c2f636f067f89cc14862c"`
+    21. ` 000003: C=404 7 L 12 W 168 Ch "1"`
+    22. ` 000009: C=404 7 L 12 W 168 Ch "3"`
+    23.   
+
+    24. ` Total time: 1.933195`
+    25. ` Processed Requests: 9`
+    26. ` Filtered Requests: 0`
+    27. ` Requests/sec.: 4.655503`
+  * 同时按顺序使用多个encoders，可以使用一个`@`号分隔的列表来指定，如：
+
+    1. ` ┌─[michael[@parrot](https://github.com/parrot)]─[~/.wfuzz]`
+    2. ` └──╼ $wfuzz -z list,1-2-3,sha1-sha1[@none](https://github.com/none) <http://testphp.vulnweb.com/FUZZ>`
+    3. ` ********************************************************`
+    4. ` * Wfuzz 2.2.9 - The Web Fuzzer *`
+    5. ` ********************************************************`
+    6.   
+
+    7. ` Target: <http://testphp.vulnweb.com/FUZZ>`
+    8. ` Total requests: 6`
+    9.   
+
+    10. ` ==================================================================`
+    11. ` ID Response Lines Word Chars Payload `
+    12. ` ==================================================================`
+    13.   
+
+    14. ` 000002: C=404 7 L 12 W 168 Ch "356a192b7913b04c54574d18c28d46e6395428ab"`
+    15. ` 000003: C=404 7 L 12 W 168 Ch "da4b9237bacccdf19c0760cab7aec4a8359010b0"`
+    16. ` 000004: C=404 7 L 12 W 168 Ch "da4b9237bacccdf19c0760cab7aec4a8359010b0"`
+    17. ` 000001: C=404 7 L 12 W 168 Ch "356a192b7913b04c54574d18c28d46e6395428ab"`
+    18. ` 000005: C=404 7 L 12 W 168 Ch "77de68daecd823babbb58edb1c8e14d7106e83bb"`
+    19. ` 000006: C=404 7 L 12 W 168 Ch "77de68daecd823babbb58edb1c8e14d7106e83bb"`
+    20.   
+
+    21. ` Total time: 0.896903`
+    22. ` Processed Requests: 6`
+    23. ` Filtered Requests: 0`
+    24. ` Requests/sec.: 6.689686`
+
+上面参数中的`sha1[@none](https://github.com/none)`，会将payload先进行`sha1`，然后传给`none`这个encoder。
+
+  * Encoders是分类的，我们还可以使用类型名称来指定同类的所有encoders：
+
+    1. ` ┌─[michael[@parrot](https://github.com/parrot)]─[~/.wfuzz]`
+    2. ` └──╼ $wfuzz -z list,1-2-3,hashes <http://testphp.vulnweb.com/FUZZ>`
+    3. ` ********************************************************`
+    4. ` * Wfuzz 2.2.9 - The Web Fuzzer *`
+    5. ` ********************************************************`
+    6.   
+
+    7. ` Target: <http://testphp.vulnweb.com/FUZZ>`
+    8. ` Total requests: 3`
+    9.   
+
+    10. ` ==================================================================`
+    11. ` ID Response Lines Word Chars Payload `
+    12. ` ==================================================================`
+    13.   
+
+    14. ` 000002: C=404 7 L 12 W 168 Ch "c4ca4238a0b923820dcc509a6f75849b"`
+    15. ` 000003: C=404 7 L 12 W 168 Ch "356a192b7913b04c54574d18c28d46e6395428ab"`
+    16. ` 000004: C=404 7 L 12 W 168 Ch "Mg=="`
+    17. ` 000005: C=404 7 L 12 W 168 Ch "c81e728d9d4c2f636f067f89cc14862c"`
+    18. ` 000006: C=404 7 L 12 W 168 Ch "da4b9237bacccdf19c0760cab7aec4a8359010b0"`
+    19. ` 000007: C=404 7 L 12 W 168 Ch "Mw=="`
+    20. ` 000008: C=404 7 L 12 W 168 Ch "eccbc87e4b5ce2fe28308fd9f2a7baf3"`
+    21. ` 000001: C=404 7 L 12 W 168 Ch "MQ=="`
+    22. ` 000009: C=404 7 L 12 W 168 Ch "77de68daecd823babbb58edb1c8e14d7106e83bb"`
+    23.   
+
+    24. ` Total time: 1.884471`
+    25. ` Processed Requests: 9`
+    26. ` Filtered Requests: 0`
+    27. ` Requests/sec.: 4.775873`
+
+* * *
+
+### 扫描/解析插件
+
+wfuzz的扫描和解析都是通过插件来实现的。  
+关于wfuzz中所有可用的scripts可参考`重要关键词`部分。  
+插件脚本（scripts）是分类的。一个脚本可以同时属于多个分类。
+
+wfuzz有两个分类：
+
+  * passive：这些插件实现分析已经得到的请求和响应，不产生新的请求。
+  * active：这些插件会向目标发送请求来探测漏洞是否存在。
+
+还有一类附加插件：
+
+  * discovery：这些插件会自动帮助wfuzz对目标站进行爬取，并将发现的内容提供给wfuzz进行请求。
+
+使用`-A`与`--script=default`相同。
+
+举例来说，一个分析robots.txt的wfuzz命令如下：
+
+  1. `┌─[michael@parrot]─[~/.wfuzz]`
+  2. `└──╼ $wfuzz --script=robots -z list,robots.txt http://[www.webscantest.com/FUZZ](http://www.webscantest.com/FUZZ)`
+  3. `********************************************************`
+  4. `* Wfuzz 2.2.9 - The Web Fuzzer *`
+  5. `********************************************************`
+  6.   
+
+  7. `Target: http://[www.webscantest.com/FUZZ](http://www.webscantest.com/FUZZ)`
+  8. `Total requests: 1`
+  9.   
+
+  10. `==================================================================`
+  11. `ID Response Lines Word Chars Payload `
+  12. `==================================================================`
+  13.   
+
+  14. `000001: C=200 6 L 10 W 101 Ch "robots.txt"`
+  15. ` |_ Plugin robots enqueued 4 more requests (rlevel=1)`
+  16. `000002: C=200 40 L 117 W 1528 Ch "/osrun/"`
+  17. `000003: C=200 55 L 132 W 1849 Ch "/cal_endar/"`
+  18. `000004: C=200 40 L 123 W 1611 Ch "/crawlsnags/"`
+  19. `000005: C=200 85 L 197 W 3486 Ch "/static/"`
+  20.   
+
+  21. `Total time: 1.709153`
+  22. `Processed Requests: 5 (1 + 4)`
+  23. `Filtered Requests: 0`
+  24. `Requests/sec.: 2.925424`
+
+* * *
+
+#### 自定义插件
+
+用户自己开发的脚本插件，应放在如下目录下：`~/.wfuzz/scripts`
+
+* * *
+
+### Recipes(菜谱)
+
+我们可以将wfuzz使用的选项保存成文档，方便下次执行和分享。
+
+要生成一个recipes，使用下面的命令：  
+`$ wfuzz --script=robots -z list,robots.txt --dump-recipe /tmp/recipes
+<http://www.webscantest.com/FUZZ>`
+
+要使用已经保存下来的recipes，对需要传递`--recipe`参数：
+
+  1. `┌─[michael@parrot]─[~/.wfuzz]`
+  2. `└──╼ $wfuzz --recip /tmp/recipes`
+  3. `********************************************************`
+  4. `* Wfuzz 2.2.9 - The Web Fuzzer *`
+  5. `********************************************************`
+  6.   
+
+  7. `Target: http://[www.webscantest.com/FUZZ](http://www.webscantest.com/FUZZ)`
+  8. `Total requests: 1`
+  9.   
+
+  10. `==================================================================`
+  11. `ID Response Lines Word Chars Payload `
+  12. `==================================================================`
+  13.   
+
+  14. `000001: C=200 6 L 10 W 101 Ch "robots.txt"`
+  15. ` |_ Plugin robots enqueued 4 more requests (rlevel=1)`
+  16. `000002: C=200 40 L 117 W 1528 Ch "/osrun/"`
+  17. `000003: C=200 55 L 132 W 1849 Ch "/cal_endar/"`
+  18. `000004: C=200 40 L 123 W 1611 Ch "/crawlsnags/"`
+  19. `000005: C=200 85 L 197 W 3486 Ch "/static/"`
+  20.   
+
+  21. `Total time: 1.700331`
+  22. `Processed Requests: 5 (1 + 4)`
+  23. `Filtered Requests: 0`
+  24. `Requests/sec.: 2.940602`
+
+* * *
+
+### 扫描模式
+
+当出现网络问题，如DNS解析失败，拒绝连接等时，wfuzz会抛出一个异常并停止执行：
+
+  1. `┌─[michael@parrot]─[~/.wfuzz]`
+  2. `└──╼ $wfuzz -z list,support-web-none <http://FUZZ.baidu.com/>`
+  3. `********************************************************`
+  4. `* Wfuzz 2.2.9 - The Web Fuzzer *`
+  5. `********************************************************`
+  6.   
+
+  7. `Target: <http://FUZZ.baidu.com/>`
+  8. `Total requests: 3`
+  9.   
+
+  10. `==================================================================`
+  11. `ID Response Lines Word Chars Payload `
+  12. `==================================================================`
+  13.   
+
+  14.   
+
+  15. `Fatal exception: Pycurl error 6: Could not resolve host: none.baidu.com`
+
+当我们使用`-Z`参数时，wfuzz就会忽略这些网络错误而继续执行：
+
+  1. `┌─[michael@parrot]─[~/.wfuzz]`
+  2. `└──╼ $wfuzz -z list,support-none -Z <http://FUZZ.baidu.com/>`
+  3. `********************************************************`
+  4. `* Wfuzz 2.2.9 - The Web Fuzzer *`
+  5. `********************************************************`
+  6.   
+
+  7. `Target: <http://FUZZ.baidu.com/>`
+  8. `Total requests: 2`
+  9.   
+
+  10. `==================================================================`
+  11. `ID Response Lines Word Chars Payload `
+  12. `==================================================================`
+  13.   
+
+  14. `000001: C=200 1485 L 3794 W 128348 Ch "support"`
+  15. `000002: C=XXX 0 L 0 W 0 Ch "none! Pycurl error 6: Could not resolve host: none.baidu.com"`
+  16.   
+
+  17. `Total time: 3.401754`
+  18. `Processed Requests: 2`
+  19. `Filtered Requests: 0`
+  20. `Requests/sec.: 0.587931`
+
+出现错误的payload会以返回码`XXX`来表示，Payload中还有出现的错误。
+
+理论上，我们就可以根据这个进行过滤，但是不知为什么并不会将产生错误的结果过滤掉。  
+`$ wfuzz -z list,support-none --hc XXX -Z <http://FUZZ.baidu.com/>`
+
+* * *
+
+#### 超时
+
+使用`--conn-delay`来设置wfuzz等待web server响应接连的秒数。  
+使用`--req-delay`来设置wfuzz等待响应完成的最大秒数。  
+这些功能有时候会很有用，比如使用代理/某个端口/主机名/虚拟主机进行扫描时。
+
+* * *
+
+### 过滤器语法
+
+wfuzz的过滤器是基于[pyparsing](http://pyparsing.wikispaces.com/)开发的，所以在使用`--filter`，`--prefilter`，`--slice`之前，请先安装上`pyparsing`。
+
+一个过滤器表达式必须使用由以下符号或操作符构成：
+
+  * Boolean Operators 是非操作符：`and`，`or`，`not`
+  * Expression Operators 逻辑操作符：`=`，`!=`，`<`，`>`，`>=`，`<=`，除此之外，还有下列用于文本的操作符：
+
+Operator | Description  
+---|---  
+=~ | 符合正则表达式则为True  
+~ | 等同于Python语法中的 “str2” in “str1”，不区分大小写  
+!~ | 与上面一条相反，“str2” not in “str1”，不区分大小写  
+  
+取值规则如下：
+
+  * 基本规则
+
+Long Name | Description  
+---|---  
+‘string’ | 转码后的字符串  
+0..9+ | 数字  
+XXX | HTTP请求的错误码  
+BBB | Baseline  
+  
+  * 值还可以使用下面的操作符进行修改
+
+Name | Short version | Description  
+---|---|---  
+value|unquote() | value|un() | 将值转换为未编码的值  
+value|lower() | value|l() | 将值转换为小写  
+value|upper() |  
+| 将值轮换为大写  
+value|encode(‘encoder’,’value’) | value|e(‘enc’,’val’) |
+返回encoder.encode(value)  
+value|decode(‘decoder’,’value’) | value|d(‘dec’,’val’) |
+返回encoder.decode(value)  
+value|replace(‘what’,’with’) | value|r(‘what’,’with’) | 返回用with替换what后的值  
+value|unique(value) | value|u(value) | 如果value唯一返回True  
+value|startswith(‘param’) | value|sw(‘param’) | 如果value以param开头返回True  
+  
+  * 如果wfuzz结果可用，那么还可以在运行时使用以下操作符进行检测
+
+Name | Short version | Description  
+---|---|---  
+description |  
+| wfuzz结果的描述  
+nres |  
+| wfuzz结果的识别码  
+code | c | HTTP返回码  
+chars | h | wfuzz结果的HTTP返回字符数  
+lines | l | wfuzz结果的HTTP返回行数  
+words | w | wfuzz结果的HTTP返回字数  
+md5 |  
+| wfuzz结果的HTTP返回的md5值  
+  
+  * 或者，wfuzz请求对象的属性：
+
+Name | Description  
+---|---  
+url | HTTP请求的值  
+method | HTTP请求的方法（动词）  
+scheme | HTTP请求的协议  
+host | HTTP请求的主机  
+content | HTTP响应的响应体  
+raw_content | 包括HTTP头的HTTP响应体  
+cookies.request | 请求的cookie  
+cookies.response | 响应的cookie  
+cookies.request.<<name>> | 请求的cookie  
+cookies.response.<<name>> | 响应的cookie  
+headers.request | 所有的HTTP请求头  
+headers.response | 所有的HTTP响应头  
+headers.request.<<name>> | 某个请求头  
+headers.response.<<name>> | 某个响应头  
+params | 所有HTTP请求的GET和POST参数  
+params.get | 所有的GET请求参数  
+params.post | 所有的POST请求参数  
+params.get/post.<<name>> | 某个GET/POST请求参数  
+  
+一个URL在经过`urlparse`模块解析之后，会被解析成很多小部分，格式为：`scheme://netloc/path;parameters?query#fragment`  
+举例来说，`<http://www.google.com/dir/test.php?id=1>`这个经过解析之后，我们可以得到如下值：
+
+Name | Value  
+---|---  
+url.scheme | http  
+url.netloc | [www.google.com](http://www.google.com)  
+url.path | /dir/test.php  
+url.params |  
+  
+url.query | id=1  
+url.fragment |  
+  
+url.domain | google.com  
+url.ffname | test.php  
+url.fext | .php  
+url.fname | test  
+url.pstrip | 返回使用去掉值之后的参数名来生成这个请求的哈希值  
+url.hasquery | 如果URL中有查询字段则返回True  
+url.ispath | 如果URL指向的是一个文件夹则返回True  
+url.isbllist | 如果一个URL的文件后缀在全局设置中的黑名单中则返回True  
+  
+使用FUZZ占位符还可以对Payload进行检查：
+
+Name | Description  
+---|---  
+FUZnZ | 指向第n个payload字符串  
+FUZnZ[field] | 指向第n个payload的属性  
+  
+属性即上面描述的（这里这个Field没看懂…）
+
+* * *
+
+### 过滤结果
+
+使用`--filter`参数加上上面的过滤器语法，我们可以写出比`--hc/hl/hw/hh`，`--sc/sl/sw/sh`和`--ss/hs`更加复杂和精细的过滤条件。  
+看下面的例子：
+
+  1. `┌─[michael@parrot]─[~/.wfuzz]`
+  2. `└──╼ $wfuzz -z range,0-10 --filter "c=200 and l>97" <http://testphp.vulnweb.com/listproducts.php?cat=FUZZ>`
+  3. `********************************************************`
+  4. `* Wfuzz 2.2.9 - The Web Fuzzer *`
+  5. `********************************************************`
+  6.   
+
+  7. `Target: <http://testphp.vulnweb.com/listproducts.php?cat=FUZZ>`
+  8. `Total requests: 11`
+  9.   
+
+  10. `==================================================================`
+  11. `ID Response Lines Word Chars Payload `
+  12. `==================================================================`
+  13.   
+
+  14. `000003: C=200 99 L 302 W 4442 Ch "2"`
+  15.   
+
+  16. `Total time: 1.222108`
+  17. `Processed Requests: 11`
+  18. `Filtered Requests: 10`
+  19. `Requests/sec.: 9.000840`
+
+利用输出结果和payload检查来找出含有某些特定内容的返回体：  
+`$ wfuzz -z list,echoedback -d searchFor=FUZZ --filter "content~FUZZ"
+<http://testphp.vulnweb.com/search.php?test=query>`
+
+上面的命令与这条命令等价：  
+`$ wfuzz -z list,echoedback -d searchFor=FUZZ --ss "echoedback"
+<http://testphp.vulnweb.com/search.php?test=query>`
+
+另一条更有意思的变形如下：  
+`$ wfuzz -w fuzzdb/attack/xss/xss-rsnake.txt -d searchFor=FUZZ --filter
+"intext~FUZZ" <http://testphp.vulnweb.com/search.php?test=query>`
+
+* * *
+
+### 过滤payload
+
+* * *
+
+#### 切片
+
+使用`--slice`参数，结合过滤器语法，我们可以对payload进行过滤。`--slice`参数必须在`-z`参数后。  
+看下面的例子：
+
+  1. `┌─[michael@parrot]─[~/.wfuzz]`
+  2. `└──╼ $wfuzz -z list,one-two-one-one --slice "FUZZ|u()" <http://localhost/FUZZ>`
+  3. `********************************************************`
+  4. `* Wfuzz 2.2.9 - The Web Fuzzer *`
+  5. `********************************************************`
+  6.   
+
+  7. `Target: <http://localhost/FUZZ>`
+  8. `Total requests: <<unknown>>`
+  9.   
+
+  10. `==================================================================`
+  11. `ID Response Lines Word Chars Payload `
+  12. `==================================================================`
+  13.   
+
+  14. `000001: C=404 9 L 32 W 276 Ch "one"`
+  15. `000002: C=404 9 L 32 W 276 Ch "two"`
+  16.   
+
+  17. `Total time: 0.095625`
+  18. `Processed Requests: 2`
+  19. `Filtered Requests: 0`
+  20. `Requests/sec.: 20.91499`
+
+* * *
+
+#### 预过滤
+
+`--prefilter`参数与`--slice`相似，不过它并没有和任何payload相关。它是一个通用的过滤，在HTTP请求发送之前进行。  
+在这种上下文环境中，我们是在对一个FuzzResult对象进行过滤，这个对象包括所有输入的payload，且没有被与它相关连的HTTP响应更新，所以是缺少一些信息的。
+
+* * *
+
+#### 输出结果再利用
+
+之前获得的HTTP请求/响应中包含很多有价值的数据。  
+利用已经得到的数据，我们可以进行下列方面的挖掘：
+
+  * 单个请求重放
+  * 对比测试请求与正常请求中的响应体中的头和体
+  * 从请求中查找URL中带有CSRF token的请求
+  * 从返回中查找返回体为Json内容但返回头的content-type设置错误。
+
+为了能够使用之前得到的结果，我们需要使用能够生成完整FuzzResult对象的payload。
+
+  * wfuzzp payload   
+wfuzz结果可以通过使用`-oF`参数进行保存：  
+`$ wfuzz --oF /tmp/session -z range,0-10
+<http://www.baidu.com/dir/test.php?id=FUZZ>`
+
+  * burpstate 和 burplog payload:   
+wfuzz能够读取burpsuite保存的state和日记文档，使得我们能够重复利用能够burpsuite代理生成的请求和响应信息。  
+要重放burp保存的请求，我们需要在命令行中使用FUZZ占位符：
+
+    1. ` $ wfuzz -z burpstate,a_burp_state.burp FUZZ`
+    2. ` $ wfuzz -z burplog,a_burp_log.burp FUZZ`
+    3. ` $ wfuzz -z wfuzzp,/tmp/session FUZZ`
+
+之前的请求还能够像平时那样通过命令行参数进行更改，比如：
+
+    * 增加新的header：   
+`$ wfuzz -z burpstate,a_burp_state.burp -H "addme: header" FUZZ`
+
+    * 使用新的cookie：   
+`$ wfuzz -z burpstate,a_burp_state.burp -z list,1-2-3 -b "cookie=FUZ2Z" FUZZ`
+
+    * 已经保存的HTTP请求还可以通过`--prev`参数被打印出来与新的结果进行比较： 
+      1. `$ wfuzz -z burpstate,testphp.burp --slice "cookies.request and url|u()" --filter "c!=FUZZ[c]" -b "" --prev FUZZ`
+      2. `...`
+      3. `000076: C=302 0 L 3 W 14 Ch "<http://testphp.vulnweb.com/userinfo.php>"`
+      4. ` |__ C=200 114 L 373 W 5347 Ch "<http://testphp.vulnweb.com/userinfo.php>"`
+    * 将相同的请求发送到另一个URL上：   
+`$ wfuzz -z burpstate,a_burp_state.burp -H "addme: header" -u
+<http://www.otherhost.com> FUZZ`
+
+如果不想使用保存的所有请求：
+
+  * 使用`attr`我们可以获得一些特定的HTTP对象内容：   
+`$ wfuzz -z wfuzzp,/tmp/session --zP attr=url FUZZ`
+
+  * 或者，通过`FUZZ[field]`的方式：   
+`$ wfuzz -z wfuzzp,/tmp/session FUZZ[url]`
+
+比如，我们可以在保存的值的基础上发送新的请求：
+
+    1. `$ wfuzz -z wfuzzp,/tmp/session -p localhost:8080 <http://testphp.vulnweb.com/FUZZ>[url.path]?FUZZ[url.query]`
+    2. `00001: C=200 25 L 155 W 1362 Ch "/dir/test.php - id=0"`
+    3. `...`
+    4. `00002: C=200 25 L 155 W 1362 Ch "/dir/test.php - id=1"`
+
+上述命令产生的HTTP请求如下 ：
+
+    1. ` GET /dir/test.php?id=10 HTTP/1.1`
+    2. ` Host: testphp.vulnweb.com`
+    3. ` Accept: */*`
+    4. ` Content-Type: application/x-www-form-urlencoded`
+    5. ` User-Agent: Wfuzz/2.2`
+    6. ` Connection: close`
+
+  
+
+*本文作者：丁牛网安实验室 m0nst3r，如需转载请标明来自FreeBuf.com。   
+

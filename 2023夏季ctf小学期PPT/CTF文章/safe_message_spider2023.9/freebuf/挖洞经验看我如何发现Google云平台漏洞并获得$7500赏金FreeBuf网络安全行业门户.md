@@ -1,0 +1,185 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+**![看我如何发现Google云平台漏洞并获得$7500赏金](https://image.3001.net/images/20180303/15200832121113.jpg!small)**
+
+**本文讲述了一名乌拉圭17岁高中生，因对信息安全感兴趣，通过学习研究，独立发现谷歌云平台漏洞并获得$7500美金（此前，他曾发现了价值[$10000美金的谷歌主机头泄露漏洞](http://www.freebuf.com/vuls/143959.html)）。在谈论该漏洞的具体细节之前，希望读者对谷歌云服务和API机制相关能有所了解，可以先来熟悉几个相关概念。**
+
+## 先导概念
+
+谷歌运行有一个名为[Google Service Management](https://cloud.google.com/service-management/overview)的管理服务，谷歌通过它来管理各种应用谷歌系统的内外部接口和用户自行创建的云端服务。在Google Service
+Management下，用户可以在自己的云平台项目中对使用到的Maps API、Gmail API、private
+APIs等个人接口服务进行个性化启用关闭，并且能通过[接口配置文件](https://cloud.google.com/service-management/overview#service_configurations)对各种服务进行实时管理控制。
+
+通常来说，作为开发人员的我们一般不会直接使用Google Service Management服务，大多交互操作都是通过云端控制台Google Cloud
+Console或命令行（如启用/关闭服务），或通过API管理接口Google Cloud Endpoints来完成，但值得一提的是，Google
+Service Management服务的一个有意思的API接口。
+
+该API接口不仅能实现上述服务管理功能，在谷歌官方说明文档中还记载说，可以使用该API接口去访问一些谷歌服务的隐藏功能。
+
+这些隐藏功能可以用多种方式来发现，但最简单最容易的一种就是，在用户的谷歌云平台项目Google Cloud Platform
+project中，启用Service Management的API接口，并开启用于项目流量过滤的组合框。步骤如下：
+
+![看我如何发现Google云平台漏洞并获得$7500赏金](https://image.3001.net/images/20180303/15200824797610.png!small)
+
+![看我如何发现Google云平台漏洞并获得$7500赏金](https://image.3001.net/images/20180303/15200825065594.png!small)
+
+![看我如何发现Google云平台漏洞并获得$7500赏金](https://image.3001.net/images/20180303/15200825192180.png!small)
+
+在以上最后一张图中，可以看到各种通过API来实现的功能方法，其中就包含了一些红框标注的隐藏方法。所谓隐藏方法就是，不允许非谷歌客户端对其进行访问，当非谷歌客户端尝试对其进行访问时，就会返回404错误。非常有意思的是，这种404错误不是以HTML页面一般那种‘这里出错’的提示出现，而是以JSON方式被给出的，它会提示该方法不存在。
+
+同样，在API本身中也存在一些隐藏方法，它们是一些公开方法中接收的隐藏参数，但相对来说，这些隐藏更难发现。
+
+对隐藏方法和隐藏参数来说，它们都使用了一种叫做“[Visibility](https://cloud.google.com/service-management/reference/rest/v1/services.configs#visibility)”的谷歌服务功能，该功能记录可从公开文档中查询，但只作为谷歌内部使用。  
+
+>
+> 提示：谷歌自身API的隐藏部分可以通过多种方式来发现，大多数时候它们也有一些隐藏的文档记录，而且，谷歌不认为这种隐藏的API功能泄露，或隐藏的API记录文档存在是一种安全漏洞。（我曾经报告过这些给谷歌）。  
+>
+
+但是，也有一些隐藏功能，如果可成功利用，就会被认为是一种安全漏洞，比如我在一年前发现的某隐藏参数，成功利用后形成漏洞，谷歌奖励了我$5000美金。由于目前该漏洞还处于修复期，现暂不方便透露。
+
+## 前期分析
+
+了解了上述知识后，我尝试用一种方法去访问这些谷歌的隐藏功能，说来也不难，只是在访问谷歌云端控制台Google Cloud
+Console时，去仔细分析其中产生的HTTP请求。
+
+谷歌云端控制台（Google Cloud Console）使用多个公开和私有的Google API，和自己的客户端程序，以及API密钥AIzaSyCI-zsRP85UVOi0DjtiCwWBwQ1djDy741g，来实现云端项目的信息访问。
+
+谷歌云端控制台（Google Cloud Console）客户端的常见请求如下所示：
+
+    
+    
+    GET /v1/services?key=AIzaSyCI-zsRP85UVOi0DjtiCwWBwQ1djDy741g HTTP/1.1
+    Host: servicemanagement.clients6.google.com
+    Authorization: SAPISIDHASH <SAPISIDHASH>
+    X-Origin: https://console.cloud.google.com
+    Cookie: <GOOGLE COOKIES>
+
+我们来看看其中的名部分含义：
+
+>
+> "clients6.google.com"：是请求"googleapis.com"的另外一种表示方法，由于其中的cookie只能访问到google.com的子域名，所以这种方式是必须的；
+>
+> "SAPISIDHASH"
+> ：据[StackOverflow论坛解释](https://stackoverflow.com/a/32065323)，是"TIMESTAMP_HASH"（时间戳_哈希）的值，论坛中其它多种生成SAPISIDHASH的方式，与本漏洞无关；
+>
+> "X-Origin"：也称 "Origin", 是这里SAPISIDHASH部分和客户端对访问网站进行受信验证不可缺少的头信息；
+>
+> Cookie：包括SID、HSID、SSID、APISID和SAPISID等，谷歌用户需要登录才能获取到这些Cookie信息。
+
+由此看来，要伪造谷歌云端控制台（Google Cloud Console）的请求非常简单，而且由于它是谷歌自身的客户端程序，因此它可以访问到多个Google
+API，甚至是一些私有Google API的某些内部功能，其中就包括Service Management的API。
+
+谷歌云端控制台（Google Cloud Console）客户端的多个功能之一就是，创建一个从一开始就附加了配置项的服务（一般的客户端通常会忽略
+"serviceConfig"参数，因为该参数是隐藏的，而且在创建服务时不产生初始配置操作），其简单的配置请求如下：
+
+    
+    
+    POST /v1/services?key=AIzaSyCI-zsRP85UVOi0DjtiCwWBwQ1djDy741g HTTP/1.1
+    Host: servicemanagement.clients6.google.com
+    Authorization: SAPISIDHASH <SAPISIDHASH>
+    X-Origin: https://console.cloud.google.com
+    Cookie: <GOOGLE COOKIES>
+    Content-Length: <CONTENT-LENGTH>
+    {
+      "serviceName": "<SERVICE NAME>",
+      "producerProjectId": "<PROJECT>",
+      "serviceConfig": {
+        "name": "<SERVICE NAME>",
+        "producerProjectId": "<PROJECT>",
+        "configVersion": 3
+    }
+
+## 漏洞分析
+
+通常来说，参数"serviceName"和"serviceConfig.name"必须与指定了两者的请求发生匹配，但在实际的服务创建过程中，当
+"configVersion"
+变量值被设置为1或2，或者是2147483648至4294967295之间的值时（相当于后端发生了一个整型溢出），这种匹配的受限条件并不会被检查实行，因此，任意用户都可以使用真实的名称（如“the-expanse.appspot.com”）来创建服务，只需在其配置文件中声明它其中还存在另一个不同的服务，如"my-private-secure-api.appspot.com"。Note：出于兼容性的某个特殊设置，该漏洞不会对一些旧版本的谷歌服务造成影响。  
+
+该漏洞的出现会对谷歌服务产生重要影响，一些重要的流程使用服务配置中的服务名称来执行除权限检查之外的任意操作，所以，如果配置中加入了不同的服务名称后，攻击者就可以在不同的服务中执行一些重要的操作。这些操作包括：  
+
+### 1#启用其它服务
+
+如果我拥有服务"the-expanse.appspot.com" ，和其在配置项中对应的"very-important-api.example.com"
+，当启用 "the-expanse.appspot.com"运行某项谷歌的云端项目时，谷歌服务会继续运行，因为我拥有启用"the-expanse.appspot.com" 的权限，但是，最终操作会实现在"very-important-api.example.com"的执行上，因此，最终可以启用"very-important-api.example.com"。
+
+如果用户设置了具备Google API 密钥或Google认证令牌的API，来对合法客户进行认证，那么，攻击者可以绕过这种身份验证机制。
+
+由于谷歌本身使用了这种方法来认证合法客户端，因此，攻击者可以使用一些用于开发的私有Google API，获取到一些仅供白名单用户（可信测试人员、Google
+My Business API等）才能访问的内部信息。
+
+### 2#访问隐藏功能
+
+Service Management
+API中的一个隐藏方法是“PatchProjectSettings”，这允许服务的所有者配置针对特定服务项目的某些隐藏设置，在这些设置中，可以选择配置可见性标签来对隐藏功能的访问进行管理。
+
+例如，如果我有服务“the-expanse.appspot.com”，和其配置项中的“cloudresourcemanager.googleapis.com”，我可以发送以下请求访问我的云端项目(the-expanse)中，由少数可信测试人员测试的功能。
+
+    
+    
+    PATCH /v1/services/the-expanse.appspot.com/projectSettings/the-expanse?updateMask=visibilitySettings&key=AIzaSyCI-zsRP85UVOi0DjtiCwWBwQ1djDy741g HTTP/1.1
+    <..SAME HEADERS AS BEFORE...>
+    {
+      "visibilitySettings": {
+        "visibilityLabels": [
+          "TRUSTED_TESTER"
+        ]
+      }}
+
+### 3#关闭他人云端项目的服务功能
+
+利用上述同样的方法，我们可以对某云端项目是否启用或关闭某项服务进行控制，但是，要注意的是，这种方法只能禁用其他人项目中的服务，不能执行服务启用操作。
+
+比如，如果我有服务"the-expanse.appspot.com"
+，以及配置项中的"cloudresourcemanager.googleapis.com" ，我可以发送以下请求去禁用位于Cloud
+SDK中的谷歌云端资源管理API：
+
+    
+    
+    PATCH /v1/services/the-expanse.appspot.com/projectSettings/google.com:cloudsdktool?updateMask=usageSettings&key=AIzaSyCI-zsRP85UVOi0DjtiCwWBwQ1djDy741g HTTP/1.1
+    <..SAME HEADERS AS BEFORE...>
+    {
+      "usageSettings": {
+        "consumerEnableStatus": "DISABLED"
+      }
+    }
+
+## 漏洞影响
+
+该漏洞可导致很多问题，如启用私有API、访问隐藏功能、禁用其他人项目中的服务，进而导致客户对谷歌云端服务的使用问题。我没一一进行过验证，但我可以肯定的是，该漏洞可以实现以下操作，对客户服务造成影响：
+
+> 访问各种处于开发阶段尚未公开的Google API和其中的内置功能；
+>
+> 免费使用一些收费的Google API功能；
+>
+> 访问那些使用谷歌云端服务来进行开发的私有API；
+>
+> 访问一些谷歌自身未向公众开放的API隐藏功能；
+>
+> 绕过一些特殊限制条件；
+>
+> 在该漏洞基础上，对其它潜在漏洞形成威胁利用；
+>
+> 对关键API的禁用导致的重要服务中断（如Cloud SDK无法访问项目，Android的YouTube应用无法检索视频的元数据等等）
+
+## 漏洞上报进程
+
+> 2018-01-27 发现漏洞
+>
+> 2018-01-27 漏洞初报
+>
+> 2018-01-29 谷歌开发团队修复了服务创建过程的漏洞
+>
+> 2018-01-29 漏洞报告分类
+>
+> 2018-01-30 与serviceName/serviceConfig.name不匹配的所有服务都被从谷歌系统中清除，该漏洞也不能再被利用
+>
+> 2018-01-30 谷歌安全团队不能复现第3#种威胁，但其测试工程师还能收到401 错误
+>
+> 2018-01-30 谷歌安全团队发现了疑似与该漏洞相关的入侵事件，并紧急发布了修复补丁
+>
+> 2018-01-31 谷歌方面告知我其开发团队在我的漏洞报告之后一小时，也独立发现了该漏洞, 但我的漏洞报告还是被发往谷歌安全团队以评估赏金
+>
+> 2018-02-14 谷歌方面向我发放了$7500的漏洞赏金
+
+ ***参考来源：[google-blog](https://sites.google.com/site/testsitehacking/-7-5k-Google-services-mix-up)，FreeBuf小编clouds编译，转载请注明来自FreeBuf.COM**  
+

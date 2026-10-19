@@ -1,0 +1,638 @@
+# 【技术分享】最新2016华山杯CTF writeup
+
+阅读量 **230079**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2016-09-11 13:06:28
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：安全客-FlappyPig
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+****
+
+作者：FlappyPig
+
+稿费：700RMB
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+**2016 华山杯 网络安全技能大赛** **解题报告**
+
+**队伍: FlappyPig**
+
+# **Web渗透**
+
+# **0x01 打不过~**
+
+添加type=”submin”，点击提交抓包
+
+有一串字符串，base64->md5，1931b。提交getflag
+
+## 0x02 系统管理
+
+源码有代码，先找0e开头的md5，然后user.php，直接反序列化绕过
+
+## 0x03 简单js
+
+看了下js,直接alert(a) 14208
+
+## 0x04 弹弹弹！
+
+<img src=1 onerror=alert(1)>
+
+## 0x05 233
+
+Jsfuck，解密后是一句话
+
+用工具解不开，直接自己写脚本吧ANSI->Unicode
+
+## 0x06 无间道
+
+这题怀疑出错了吧，函数的都没定义，咋传？还没get到出题人的意图，通过下一题直接读的源码
+
+## 0x07 php很烦人
+
+先看源码，用php://input改成admin，然后可以直接读文件，index中有个class.php
+
+    
+    
+    <?php  
+    class Read{//f1a9.php  
+        public $file;  
+        public function __toString(){  
+            if(isset($this->file)){  
+                echo file_get_contents($this->file);      
+            }  
+            return "__toString was called!";  
+        }  
+    }  
+    
+
+  
+
+没法直接读f1a9.php,反序列化去读
+
+## 0x08 More try
+
+靠上个题读到源码，然后看了下role有注入，还有两层base64
+
+Sqlmap有个base64encode.py的tamper，所以自己改下，改成两层
+
+然后sqlmap.py –r –tamper=”base2.py” –v 3 ,the_key表，key字段
+
+## 0x0A 三秒钟记忆
+
+[http://huashan.xdsec.cn/pic/login](http://huashan.xdsec.cn/pic/login)
+
+这里可以看到源码，
+
+重置密码的地方可以二次注入
+
+注册的时候带’的用户名，然后重置密码的时候会注入
+
+‘ and LEFT ((select flag from flag),x)=’ flag_Xd{hSh_ctf:dutwq}’
+
+如果充值成功了，密码就会变，所以就无法登陆了，写脚本跑下就好了,太慢了……
+
+## 0x0B 疯狂的js
+
+这个是plaidctf2014的原题，不过改了一个地方，
+
+var args = [].slice.apply(arguments).sort().filter(function(x,i,a){return
+a.indexOf(x) == i;});
+
+if(args.length != 5) return "数够参数了吗？";
+
+var flag = false; args.map(function(x){flag |= x >= 999;});
+
+if(flag) return "有点大了哦";
+
+    
+    
+    var m = args.map(cal);
+    if(m.filter(function(x,i){return m[2]+3*i==x;}).length < 1) return "no";
+    if(m.filter(function(x,i){return x == args[i];}).length < 2) return "nono";
+    if(m.filter(function(x,i){return x > m[i-1];}).length > 2) return "bala";
+    if(m.filter(function(x,i){return x < m[i-1];}).length > 1) return "balana~";
+
+满足条件即可弹出flag
+
+五次分别输入
+
+2.0
+
+2.00
+
+6
+
+76
+
+949
+
+# Reverse逆向破解
+
+# 0x01 Crackme1. Warming Up
+
+代码就是个简单变化，动态跟了几步，发现进行了如下操作：
+
+    
+    
+    """
+    xor 0x30 ^ 1
+    xor 0x32 ^ 2
+    xor 0x33 ^ 3
+    xor 0x34 ^ 1
+    xor 0x35 ^ 2
+    """
+
+最后进行字符串比较，反过来写下就可以，如下：
+
+    
+    
+    target = "VgobmndVlBVE"
+    result = ""
+    for index, item in enumerate(target):
+             result += chr(ord(item)^(((index)%3)+1))
+    print result
+
+## 0x02 Crackme2. 到手的钥匙
+
+这题的逻辑就不是常人的，有两个用户名和密码。
+
+开始那个还正常点
+
+用户名：amdin，
+
+密码的md5值知道，然后反查了下值为：xdadmin
+
+但是输完并没有什么用，提交也不对：
+
+后来发现另外一个函数也用到了用户名密码，如下：
+
+输入3247,5569得到如下：
+
+组合下输出的结果，提交不对，，，，，，，，，，
+
+不对啊，，，，，，，，，，
+
+仔细看代码，没别的逻辑了啊，，，，纠结了好久
+
+突然队友提交了“用户名+密码+输出”的结果，通过。。。。。。。。
+
+竟然通过了。。。。。。。。。
+
+## 0x03 Crackme3. 探囊取物
+
+题目是个图片，直接strings crackme3.jpg，得到一串01
+
+目测可以拼出来字，一共1177个，11*107
+
+## 0x04 Crackme4. 移动迷宫
+
+代码就是个简单的走迷宫，图如下：
+
+输入的东西，进行各简单变化，对应于走的方向，如下：
+
+走的逻辑如下：
+
+根据坐标生成方向即可，逆代码如下：
+
+    
+    
+    map_info = "***********####******#**#*****##*##********#*********#*#####***###***#*********#*********#********##"  
+    result = ""  
+    x = 0  
+    y = 0  
+    pos_list = []  
+    for i in range(len(map_info)):  
+             result += map_info[i]  
+             y = (i)%10  
+             x = i/10  
+             if (i+1)%10 == 0:  
+                       result += "n"  
+             if map_info[i] == "#":  
+                       pos_list.append((x, y))  
+    print map_info[0x28]  
+    print result  
+    print pos_list  
+    last = 0  
+    way_list = []  
+    way_list.append((1,0))  
+    way_list.append((0,-1))  
+    way_list.append((0,-1))  
+    way_list.append((1,0))  
+    way_list.append((1,0))  
+    way_list.append((1,0))  
+    way_list.append((0,1))  
+    way_list.append((0,1))  
+    way_list.append((-1,0))  
+    way_list.append((0,1))  
+    way_list.append((0,1))  
+    way_list.append((0,1))  
+    way_list.append((1,0))  
+    way_list.append((1,0))  
+    way_list.append((0,-1))  
+    way_list.append((1,0))  
+    way_list.append((1,0))  
+    way_list.append((1,0))  
+    way_list.append((1,0))  
+    way_list.append((0,1))  
+    way_list.append((0,1))  
+    way_list.append((0,1))  
+    way_list.append((0,1))  
+    way_list.append((-1,0))  
+    print len(way_list)  
+    map_dic = {}  
+    map_dic[(-1, 0)] = 3  
+    map_dic[(1, 0)] = 4  
+    map_dic[(0, -1)] = 1  
+    map_dic[(0, 1)] = 2  
+    result = []  
+    for i in way_list:  
+             result.append(map_dic[i])  
+    way_key = """0A1B  
+    a2b3  
+    4C5D  
+    c6d7  
+    8E9F  
+    e0f1"""  
+    way_key = way_key.split("n")  
+    print result  
+    print len(result)  
+    result_info = ""  
+    for i in range(4):  
+             for j in range(6):  
+                       result_info += way_key[j][result[i*6+j]-1]  
+    print way_key  
+    print result_info  
+    
+
+  
+
+flag如下：最后一行
+
+## 0x05 Crackme5. Do something
+
+虽然题目给了个jpg，但其实是个程序，主要的判断逻辑如下：
+
+    
+    
+    int __cdecl sub_401000(char *Src)  
+    {  
+      char Dst[20]; // [sp+0h] [bp-14h]@1  
+      Dst[0] = byte_415282;  
+      *(_DWORD *)&Dst[1] = 0;  
+      *(_DWORD *)&Dst[5] = 0;  
+      *(_DWORD *)&Dst[9] = 0;  
+      *(_DWORD *)&Dst[13] = 0;  
+      *(_WORD *)&Dst[17] = 0;  
+      Dst[19] = 0;  
+      strcpy_s(Dst, 17u, Src);  
+      check_equ_401320(Dst[0], Dst[8]);  
+      check_equ_401320(Dst[0], Dst[9]);  
+      check_equ_401320(Dst[1], Dst[10]);  
+      check_equ_401320(Dst[2], Dst[4]);  
+      check_equ_401320(Dst[3], Dst[5]);  
+      check_equ_401320(Dst[11], 5);  
+      check_equ_401320(Dst[7], 3 * Dst[11]);  
+      check_bigger_401350(Dst[12], 5 * Dst[14]);  
+      check_equ_401320(Dst[13], 2 * Dst[12]);  
+      check_bigger_401350(Dst[3], 3 * Dst[12]);  
+      check_bigger_401350(Dst[0], Dst[3]);  
+      check_bigger_401350(21, Dst[0]);  
+      check_equ_401320(Dst[0], Dst[6] + Dst[12]);  
+      check_equ_401320(Dst[6], 2 * Dst[15]);  
+      check_bigger_401350(Dst[2], 4 * Dst[14]);  
+      check_bigger_401350(Dst[6], Dst[2]);  
+      if ( Dst[2] % 3 )  
+      {  
+        printf(aNextTime);  
+        sub_40E644();  
+        exit(0);  
+      }  
+      check_bigger_401350(Dst[1], 7);  
+      check_bigger_401350(Dst[2], Dst[1]);  
+      return check_bigger_401350(Dst[0], Dst[1] + Dst[2]);  
+    }  
+    
+
+  
+
+就是一些列的条件，满足就会输出得到了flag，约束如下：
+
+    
+    
+    Dst[0] = Dst[8]  
+    Dst[0] == Dst[9]  
+    Dst[1] == Dst[10]  
+    Dst[2] == Dst[4]  
+    Dst[3] == Dst[5]  
+    Dst[11] == 5  
+    Dst[7] == 3 * Dst[11]  
+    Dst[12] > 5 * Dst[14]  
+    Dst[13] == 2 * Dst[12]  
+    Dst[3] > 3 * Dst[12]  
+    Dst[0] > Dst[3]  
+    21 > Dst[0]  
+    Dst[0] == Dst[6] + Dst[12]  
+    Dst[6] == 2 * Dst[15]  
+    Dst[2] > 4 * Dst[14]  
+    Dst[6] > Dst[2]  
+    Dst[2] % 3 == 0  
+    Dst[1] > 7  
+    Dst[2] > Dst[1]  
+    Dst[0] > Dst[1] + Dst[2])  
+    
+
+  
+
+直接用个求解器求解即可，结果如下：
+
+直接算出与加上0x60即可得到flag，如下：
+
+## 0x06 Crackme6. Help me
+
+这题目就是运行得时候，对一些不可访问的地址进行了写入，导致崩溃，看代码貌似是专门这样写的，如下：
+
+直接对[0x10]处进行了赋值，程序这样的位置还有好几处，如下：
+
+直接对其进行nop，然后将输出，转成printf即可，如下:
+
+Flag直接就打印出来了，如下：
+
+## 0x08 Crackme8. 忘记用户名
+
+代码就很简单，如下图：
+
+直接计算即可， 代码如下：
+
+    
+    
+    info = "ILoveXD"
+    result_info = ""
+    for i in range(7):
+        result_info += chr(ord(info[i])+7-i)
+    print result_info
+
+结果如下：
+
+## 0x09 Crackme9. 捉迷藏
+
+用户名: FindKey
+
+密码：T25Zb3VyQ29tcHV0ZXI= base64解码得: OnYourComputer
+
+生成了一个flag.jpg，里面的内容为FindKeyOnYourComputerArvinShow
+
+Flag的品相好差。
+
+# Crypto加密解密
+
+## 0x01 紧急报文
+
+ADFGX加密
+
+## 0x02 is it x or z ?
+
+给了3个文件 clear-1.txt
+crypt-1.txt和crypt-2.txt，用clear-1.txt和crypt-1.txt异或可以得到重复循环的片段，推测循环节即为密钥，用该密钥解密crypt-2即可得到flag
+
+## 0x03 分组加密模式检测
+
+这是个原题，见这里：[https://github.com/truongkma/ctf-tools/tree/master/cryptopals-solutions-master/set1/8](https://github.com/truongkma/ctf-tools/tree/master/cryptopals-solutions-master/set1/8)
+
+主要就是从一大堆CBC密文里检测出ECB密文，脚本一模一样抄即可。
+
+## 0x04 修复一下这份邀请函的部分内容
+
+打开就是flag，明文，直接交
+
+flag_Xd{hSh_ctf:flag xie can xie yu hen xing gao}
+
+## 0x0 5协议？认证？加密？
+
+这题先进行了DH交换密钥，然后用交换后的密钥加密的flag。A B P都不是很大，猜想这个离散对数问题比较容易解。
+
+[https://www.alpertron.com.ar/DILOG.HTM](https://www.alpertron.com.ar/DILOG.HTM)
+
+用这个工具可以直接求解出离散对数算出a的私有指数，然后计算B^a就作为密钥了。但是这题有一个地方很坑，得到的密钥只有8个字节，但是AES需要16个字节作为密钥，一开始卡这里卡了很久。后来才脑洞出来高位全部补x00，然后解完发现后一半flag是乱码，又是很坑，后来用CBC模式试了一下，iv取全0，解出来才正常。
+
+## 0x06 时间决定一切
+
+web的任意文件读取，直接读源码
+
+# Android
+
+## 0x01 错错错
+
+这题算法其实很简单，就是对随机字符串进行啦哈希操作然后进行一个替换作为密码。由于运行的时候用的hash函数是随机的，所以4个都试一下。
+
+    
+    
+    #!/usr/bin/env python  
+    import hashlib  
+    dic = "AabRcQPXdYVeTWUSfghijklCmDnEoGpqFrHsItKJLuvwxyz01M23O45N67Z89B"  
+    serial = "skxxRWi23"  
+    for i in range(4):  
+             ans = ''  
+             if (i==0):  
+                       enc = hashlib.md5(serial).hexdigest()  
+                       for j in range(8):  
+                                ans += str(dic.index(enc[j]))  
+                       print enc  
+                       print ans  
+             if (i==1):  
+                       enc = hashlib.sha1(serial).hexdigest()  
+                       for j in range(8):  
+                                ans += str(dic.index(enc[j]))  
+                       print enc  
+                       print ans  
+             if (i==2):  
+                       enc = hashlib.sha256(serial).hexdigest()  
+                       for j in range(8):  
+                                ans += str(dic.index(enc[j]))  
+                       print enc  
+                       print ans  
+             if (i==3):  
+                       enc = hashlib.sha384(serial).hexdigest()  
+                       for j in range(8):  
+                                ans += str(dic.index(enc[j]))  
+                       print enc  
+                       print ans  
+    
+
+  
+
+最后尝试发现：
+
+序列号：skxxRWi23
+
+哈希值：521c0892b9dc0a7026fbe9664e6a339e7fee9492605733ea09968fbd83f18dfff91fe87d9d620fa4d3dd3010b47495dc
+
+解锁码：545048447596050
+
+这一是正确的。
+
+## 0x02 寻找密码
+
+这题其实是给apk加了个壳，程序里把真实的apk经过了加密(异或255)拼到了apk的dex文件后面，所以我直接把dex文件提取出来，整个文件异或255，然后从第一个PK开始提取出原始APK。然后原始的APK扔到jeb里就很容易看出源代码了。
+
+算法很简单：
+
+    
+    
+    #!/usr/bin/env python  
+    import base64  
+    import hashlib  
+    username = base64.b64decode('U2hlMTFfTjZSYw==')  
+    v4 = hashlib.sha1(username).hexdigest()  
+    print username  
+    print v4[:16]  
+    
+
+  
+
+## 0x03 顺藤摸瓜
+
+apk用了zip伪加密，首先用010editor打开，将所有 0x50 0x4B 0x01
+0x02（PK..）的位置后的第五个字节改为0，即可成功安装或解压。可参考吾爱破解的文章帖子http://www.52pojie.cn/thread-287242-1-1.html。
+
+反编译apk后发现会调用Native函数check来验证密码，直接用ida将libdemo.so打开。如下
+
+三段比较简单的加密，直接用ipython解了
+
+把上面的result的值输入手机中，即可显示“碰头地点：太白南路2号”
+
+## 0x04 神奇的zip
+
+这个题首先也是一个伪加密，修复后即可正常安装和解压。
+
+首先apk一启动就会调用libgeneratekey.so中的isExit函数，如果该函数返回0那么apk就退出，而ida查看isExit函数的唯一作用就是返回0。因此可以使用apktool反编译apk，将SplashActivity.smali文件中第52行的if-eqz改为if-nez，即可绕过这个检测。
+
+随后会启动MainActivity，这个类的唯一操作就是将输入的字符串传入native层的函数encodePassword中，并且显示出encodePassword返回的字符串。因此我们使用ida查看encodePassword函数。主要逻辑如下
+
+可以看出，该函数会将输入的字符串与一串经过极其复杂变形的字符串进行比较，这里我们可以不去深入研究变形的过程，因为该函数没有将输入的字符串做任何变化，而是去直接比较的，因此我们可以使用调试或者hook的方法直接将变形完的字符串打印出来。这里我用frida直接hook了encodePS函数，打印出它的返回值即可，会打印两遍，取后一次。
+
+hook代码
+
+    
+    
+    let F =   Module.findExportByName('libgeneratekey.so', 'encodePS');  
+    Interceptor.attach(F,   {  
+        onLeave: function (retval) {  
+            let ptr = new NativePointer(retval);  
+            console.log(hexdump(ptr));  
+        }  
+    });  
+    
+
+  
+  
+  
+---  
+  
+输出：
+
+上图以l开头的字符串即为flag。
+
+# Misc
+
+# 0x01 Try Everything
+
+这题并不难，直接解压后发现是乱的
+
+  
+
+然后扔binwalk，得到文件名和偏移量，脚本分解出文件
+
+然后按照文件名排序解出并且合并文本
+
+## 0x02 挣脱牢笼
+
+Python沙盒逃逸题。
+
+一开始设想用[].__class__.__base__.__subclasses__()[40]来使用file读文件。后来发现他命令限制长度50，非常蛋疼。后来才发现可以直接设定__builtins__变量来把指令分成多条进行，就不会受这个限制了。最后的exp如下：  
+
+    
+    
+    __builtins__['ww']=().__class__.__base__  
+    __builtins__['w']=ww.__subclasses__()  
+    w[40]('./flag.txt').read();print k  
+    
+
+# Forensics
+
+# 0x01蒲公英的约定
+
+Stegsolve打开，里面有张二维码，反色下就好了
+
+扫码后base32
+
+## 0x02什么鬼
+
+Binwalk可以看到一个zip
+
+密码长度4位，直接爆破，密码：19bZ
+
+解开后将右边的块补上即可
+
+## 0x03客官，听点小曲儿？
+
+那个http的头里发现了：
+
+直接用mp3stego decode掉得到：
+
+可见字符，顺序乱了，考虑栅栏，长度为6的试了不行，后面应该长度有些许变化，手动切割，得到flag：
+
+    
+    
+    a="fdc3_# l{tsf# ahfte} gS:en _hmgc X_poe"  
+       b=a.split(" ")  
+       s=""  
+       for i in   range(6):  
+           for j in b:  
+               if i < len(j):  
+                   s+=j[i]  
+       print s  
+    
+
+  
+  
+  
+---  
+  
+本文翻译自安全客-FlappyPig [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **安全客** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/84545](/post/id/84545)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [安全客-FlappyPig]()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t01546a096e83e700fe.jpg) 安全客
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

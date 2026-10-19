@@ -1,0 +1,289 @@
+# 对 Smoke Loader 恶意软件新样本进行分析
+
+阅读量 **428107**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-07-12 16:04:25
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 Ben Baker,Holger Unterbrink，文章来源：blog.talosintelligence.com
+
+原文地址：<https://blog.talosintelligence.com/2018/07/smoking-guns-smoke-loader-learned-new.html>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t019e17973828ce4c3a.jpg)
+
+## 前言
+
+在Cisco Advanced Malware Protection’s (AMP) Exploit Prevention发布警告后的几个月里，Cisco
+Talos一直在跟踪一个新版本的Smoke
+Loader——一个恶意软件，它可以用来加载其他恶意软件。AMP成功地在恶意软件感染主机之前阻止了它，但是进一步的分析显示了Smoke
+Loader样本中的一些变化，这些是由这一系列引起我们兴趣的恶意软件引起的，包括在现实世界的恶意软件中第一次使用的PROPagate注入技术。除了上周发布的描述了一个以不同的RIG
+Exploit
+Kit为基础的运动的一份[报告](https://www.bleepingcomputer.com/news/security/propagate-code-injection-technique-detected-in-the-wild-for-the-first-time/)，我们还没有看到现实中的恶意软件利用这一点。
+
+Talos非常熟悉Smoke Loader。例如，它被用作网络攻击的下载程序，这个攻击是在1月份利用乌克兰会计软件开发商Crystal Finance
+Millennium (CFM)的官方网站发起的。
+
+与其他许多活动类似，最初的感染载体是一封带有恶意Microsoft
+Word文档的电子邮件。受害者被诱骗打开附件并启用嵌入的宏。这开始了恶意软件的下载链，一直到最后的Smoke Loader及其插件。
+
+Smoke Loader主要用于下载和执行额外的恶意软件，如勒索软件或挖矿程序。使用Smoke
+Loader僵尸网络的攻击者在恶意软件论坛上发布了试图出售第三方payload安装的帖子。这个Smoke
+Loader的样本没有传播任何额外的可执行文件，这意味着它可能不再像以前那样受欢迎，或者它只是用于私人目的。
+
+这些插件的设计目的都是为了窃取受害者的敏感信息，特别是针对存储的凭据或通过浏览器传输的敏感信息，包括Windows和TeamViewer凭据、电子邮件登录信息等。
+
+## 技术细节
+
+###  感染链
+
+如前面所说的，感染链始于电子邮件和附带的恶意Word文档(b98abdbdb85655c64617bb6515df23062ec184fe88d2d6a898b998276a906ebc)。你可以在下面看到这封电子邮件的内容：
+
+[](https://p2.ssl.qhimg.com/t01c79202bef37a2ed2.png "图1-钓鱼邮件")
+
+这个Word文档包含一个嵌入宏，该宏启动了第二阶段并下载了Trikbot恶意软件。(0be63a01e2510d161ba9d11e327a55e82dcb5ea07ca1488096dac3e9d4733d41）
+
+[](https://p1.ssl.qhimg.com/t017b3c34eb02b61f07.png "图2-电子邮件附件：
+IO08784413.doc")
+
+这个文档从hxxp://5[.]149[.]253[.]100/sg3.exe，或hxxp://185[.]117[.]88[.]96/sg3.exe as
+%TEMP%[a-zA-Z]{6-9}.exe下载并执行Trikbot恶意软件。这些URL在过去已经提供了多个恶意可执行文件，包括Trikbot的样本。
+
+在我们的案例中，恶意软件最终下载了Smoke
+Loader木马(b65806521aa662bff2c655c8a7a3b6c8e598d709e35f3390df880a70c3fded40)，它安装了5个额外的
+Smoke Loader插件。我们将在本文后面的插件部分中详细描述这些插件。
+
+###  TRICKBOT
+
+(0be63a01e2510d161ba9d11e327a55e82dcb5ea07ca1488096dac3e9d4733d41)
+
+Smoke Loader经常把Trickbot作为payload。这个样本混淆了代码，我们的测试显示这个样本安装了Smoke
+Loader后门。这很可能是恶意软件作为服务（malware-as-a-service）的一个例子，僵尸网络运营商收取费用，在受感染的计算机上安装第三方恶意软件。我们还没有进一步分析Trikbot样本，但是为了示范，我们在这里提供了Trikbot配置(出于安全原因，IP地址做了处理)：
+
+    
+    
+    <mcconf>
+    <ver>1000167</ver>
+    <gtag>wrm13</gtag>
+    <srv>185[.]174[.]173[.]34:443</srv>
+    <srv>162[.]247[.]155[.]114:443</srv>
+    <srv>185[.]174[.]173[.]116:443</srv>
+    <srv>185[.]174[.]173[.]241:443</srv>
+    <srv>62[.]109[.]26[.]121:443</srv>
+    <srv>185[.]68[.]93[.]27:443</srv>
+    <srv>137[.]74[.]151[.]148:443</srv>
+    <srv>185[.]223[.]95[.]66:443</srv>
+    <srv>85[.]143[.]221[.]60:443</srv>
+    <srv>195[.]123[.]216[.]115:443</srv>
+    <srv>94[.]103[.]82[.]216:443</srv>
+    <srv>185[.]20[.]187[.]13:443</srv>
+    <srv>185[.]242[.]179[.]118:443</srv>
+    <srv>62[.]109[.]26[.]208:443</srv>
+    <srv>213[.]183[.]51[.]54:443</srv>
+    <srv>62[.]109[.]24[.]176:443</srv>
+    <srv>62[.]109[.]27[.]196:443</srv>
+    <srv>185[.]174[.]174[.]156:443</srv>
+    <srv>37[.]230[.]112[.]146:443</srv>
+    <srv>185[.]174[.]174[.]72:443</srv>
+    </servs>
+    <autorun>
+    <module name="systeminfo" ctl="GetSystemInfo"/>
+    <module name="injectDll"/>
+    </autorun>
+    </mcconf>
+    
+
+###  Smoke Loader packer/注入详细资料
+
+恶意软件经常迭代进程列表以找到要注入的进程。安全研究人员非常了解这个过程，并创建了许多工具来跟踪这种技术中使用的Windows
+API，比如CreateToolhelp32Snapshot。这个Smoke Loader样本通过调用Windows API
+GetShellWindow来获取shell窗口的句柄，然后调用GetWindowThreadProcessId来获取explorer.exe的进程ID，从而避免迭代进程列表。
+
+然后，Smoke Loader使用标准注入API在Explorer中创建和写入两个内存段，一个用于shell代码，另一个稍后用于
+PROPagate注入的UxSubclassInfo结构。
+
+GetShellWindow -> GetWindowThreadProcessId -> NtOpenProcess -> NtCreateSection
+-> NtMapViewOfSection x2 -> NtUnmapViewOfSection
+
+从前面对GetShellWindow的调用中检索到的窗口句柄还有一个用途。Smoke
+Loader使用EnumChildWindows迭代每个句柄的子窗口，以找到一个包含属性UxSubclassInfo的窗口，这表明它很容易实现PROPagate注入。
+
+[一位安全研究人员](http://www.hexacorn.com/blog/2017/10/26/propagate-a-new-code-injection-trick/)在2017年末首次描述了PROPagate注入，尽管Smoke Loader开始使用时没有公共POC可用。Smoke
+Loader开发人员很可能使用公开可用的PROPagate注释来重新创造这种技术。
+
+[](https://p5.ssl.qhimg.com/t01c7bbff472a394203.png "图3-PROPagate注入")
+
+对于每个子窗口，注入器调用EnumPropsA迭代窗口属性，直到找到UxSubclassInfo。这个功能还说明了这个样本的packer使用的一些反分析（Anti-Analysis）技术。对于控制流混淆，有几个不必要的跳转，包括导致垃圾代码的样本不透明谓词(Opaque Predicates)。
+
+“deobf_NEXT_BULK”接受下一个代码块的大小和偏移量的参数，以便对下一个代码块进行去混淆处理和执行，因此根据需要对大部分恶意代码进行去混淆处理，一旦加载了下一个块，就可以再次混淆。混淆方法是一个简单的单字节XOR，每个块都有相同的硬编码值。
+
+这些反分析技术同时也使用反调试和反VM检查，以及用于扫描属于分析工具的进程和窗口的线程。这些特性使取证、跟踪和调试变得复杂。
+
+[](https://p5.ssl.qhimg.com/t01408f3d623efd8c63.png
+"图4-通过WM_NOTIFY和WM_PATE触发恶意事件处理程序")
+
+将shell代码和UxSubclassInfo数据写入远程进程后，注入器调用SetPropA更新窗口的属性，然后向目标窗口发送WM_NOTY和WM_PINE消息，以迫使其触发执行注入的shell代码的恶意事件处理程序。
+
+###  注入SHELLCODE：SMOKE LOADER
+
+Smoke
+Loader接收了五个有趣的插件，而不是额外的payload。每个插件都有自己的Explorer.exe进程可在其中执行，恶意软件使用较老的技术将每个插件注入到这些进程中。每个Explorer.exe进程都是使用CREATE_SUSPENDED选项创建的，注入shell代码，然后使用ResumeThread执行。这是复杂的，并留下六个运行在受感染的机器上的Explorer.exe
+进程。
+
+## 插件
+
+如前面所说的，这些插件的设计目的都是从受害者那里窃取敏感信息，明确地针对存储的凭据或通过浏览器传输的敏感信息。每个插件都使用互斥锁“opera_shared_counter”来确保多个插件不会同时向同一个进程注入代码。
+
+###  插件1
+
+这是最大的插件，大约有2，000个函数。它包含一个静态链接的SQLite库，用于读取本地数据库文件。
+
+  * 它针对Firefox、Internet Explorer、Chrome、Opera、QQ浏览器、Outlook和Thunderbird的存储信息。
+  * 递归地搜索名为logins.json的文件，解析这些文件的主机名、加密用户名和密码。
+  * vaultcli.dll——Windows凭据管理器
+  * POP3、SMTP、IMAP凭据
+
+###  插件2
+
+这个插件递归地搜索目录，寻找要解析的文件。
+
+    
+    
+    Outlook
+    *.pst
+    *.ost
+    Thunderbird
+    *.mab
+    *.msf
+    inbox
+    sent
+    templates
+    drafts
+    archives
+    The Bat!
+    *.tbb
+    *.tbn
+    *.abd
+    
+
+###  插件3
+
+当凭证和cookie通过HTTP和HTTPS传输时，它会注入到浏览器中，以拦截这些凭证和cookie。
+
+  * 如果设置了“fgclearcookies”，则会终止浏览器进程并删除cookie。
+  * iexplore.exe 和 microsoftedgecp.exe 
+    * HttpSendRequestA
+    * HttpSendRequestW
+    * InternetWriteFile
+    * firefox.exe
+  * nspr4.dll中的PR_Write或nss3.dll
+  * chrome.exe 
+    * chrome.dll内的未知函数
+  * opera.exe 
+    * opera_browser.dll 或 opera.dll内的未知函数
+
+###  插件4
+
+使用ws2_32!send和ws2_32!WSASend尝试窃取ftp、SMTP、POP 3和IMAP的凭据。
+
+###  插件5
+
+这个程序将代码注入TeamViewer.exe以窃取凭据。
+
+## IOC
+
+B98abdbdb85655c64617bb6515df23062ec184fe88d2d6a898b998276a906ebc
+(IO08784413.doc)
+
+0be63a01e2510d161ba9d11e327a55e82dcb5ea07ca1488096dac3e9d4733d41 (Trickbot)
+
+b65806521aa662bff2c655c8a7a3b6c8e598d709e35f3390df880a70c3fded40 (Smoke
+Loader)
+
+Mutex: opera_shared_counter
+
+Trickbot IPs:
+
+    
+    
+    185[.]174[.]173[.]34
+    162[.]247[.]155[.]114
+    185[.]174[.]173[.]116
+    185[.]174[.]173[.]241
+    62[.]109[.]26[.]121
+    185[.]68[.]93[.]27
+    137[.]74[.]151[.]148
+    185[.]223[.]95[.]66
+    85[.]143[.]221[.]60
+    195[.]123[.]216[.]115
+    94[.]103[.]82[.]216
+    185[.]20[.]187[.]13
+    185[.]242[.]179[.]118
+    62[.]109[.]26[.]208
+    213[.]183[.]51[.]54
+    62[.]109[.]24[.]176
+    62[.]109[.]27[.]196
+    185[.]174[.]174[.]156
+    37[.]230[.]112[.]146
+    185[.]174[.]174[.]72
+    
+
+Smoke Loade域名：
+
+    
+    
+    ukcompany[.]me
+    ukcompany[.]pw
+    ukcompany[.]top
+    
+
+后门文件：%appdata%MicrosoftWindows[a-z]{8}[a-z]{8}.exe
+
+Scheduled Task：Opera scheduled Autoupdate [0-9]{1-10}
+
+## 结论
+
+我们已经看到，特洛伊和僵尸网络市场不断发生变化。球员们在不断提高他们的素质和技术。他们不断修改这些技术，以增强绕过安全工具的能力。这清楚地表明，确保我们所有的系统都是最新的是多么重要。组织可以利用多层次的防御方法来检测和防范这类威胁。塔罗斯继续监测这些运动，因为它们的发展，以确保防御保护我们的客户。我们强烈鼓励用户和组织遵循推荐的安全实践，例如在可用时安装安全补丁，在接收未知第三方的消息时谨慎行事，并确保有一个强大的离线备份解决方案。这些做法将有助于减少妥协的威胁，并应有助于恢复任何此类攻击。
+
+审核人：yiwang 编辑：边边
+
+本文翻译自blog.talosintelligence.com
+[原文链接](https://blog.talosintelligence.com/2018/07/smoking-guns-smoke-loader-learned-new.html)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **秋真平** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/151580](/post/id/151580)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[blog.talosintelligence.com](https://blog.talosintelligence.com/2018/07/smoking-guns-smoke-loader-learned-new.html)
+
+如若转载,请注明出处： <https://blog.talosintelligence.com/2018/07/smoking-guns-smoke-loader-learned-new.html>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意软件](/tag/恶意软件)
+  * [技术分析](/tag/技术分析)
+  * [Smoke Loader](/tag/Smoke Loader)
+  * [TRICKBOT](/tag/TRICKBOT)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t010857340ce46bb672.jpg) 秋真平
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

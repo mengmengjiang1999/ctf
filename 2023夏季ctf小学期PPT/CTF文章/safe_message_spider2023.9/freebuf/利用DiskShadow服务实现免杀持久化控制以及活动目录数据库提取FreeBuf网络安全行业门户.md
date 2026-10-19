@@ -1,0 +1,182 @@
+**![01.jpg](https://image.3001.net/images/20180410/15233432975110.jpg!small)**
+
+**早在二月份，我就发表了《[利用Vshadow服务实现免杀持久化控制以及活动目录数据提取](https://bohops.com/2018/02/10/vshadow-abusing-the-volume-shadow-service-for-evasion-persistence-and-active-directory-database-extraction/)》的研究文章，因为Vshadow功能涉及卷影拷贝创建操作，容易被攻击者利用，比较有意思。老实说，Vshadow的免杀持久化滥用可能还不怎么样，其替代产品DiskShadow的这方面情况又如何呢？在这篇文章中，我会介绍DiskShadow服务现行的，用于免杀、持久化控制和数据提取的后渗透可利用性，以及一些具体的安全防护措施。**
+
+ **PS：本文仅用于技术讨论与分享，严禁用于任何非法用途**
+
+## DiskShadow服务介绍
+
+DiskShadow.exe是一个命令行工具，用于管理卷影复制服务 (Volume shadow copy Service,VSS)
+，而使用VSS可在特定卷上建立数据拷贝时间点以备后期执行数据丢失后的数据恢复，DiskShadow使用类似于DiskRaid或DiskPart的交互式命令解释器。Diskshadow
+作为硬件卷影复制方案的首个内部 VSS 请求程序包含在 Windows Server 2008
+、2012和2016系统版本中，利用Diskshadow能够创建并管理硬件和软件卷影副本。另外，DiskShadow功能还包含脚本模式。（具体参考
+[微软官网说明](https://docs.microsoft.com/en-us/windows-server/administration/windows-commands/diskshadow)）
+
+![02.png](https://image.3001.net/images/20180410/15233421762811.png!small)
+
+DiskShadow功能管理下的VSS服务需要UAC提升的特权访问权限，但是普通用户也可以使用其中的一些功能命令，所以，对于命令执行和免杀持久化来说，DiskShadow也是一个不错的选择。
+
+## DiskShadow 执行命令
+
+作为应用特征，交互式命令解析器和脚本模式都能支持EXEC命令，且特权用户和非特权用户，都可以在交互模式或脚本文件中调用命令和批处理脚本，如以下演示功能。
+
+Note：以下涉及到的实例都是在最新安装或更新的Windows Server
+2016上的非特权/非管理员帐户系统中实现的，所有操作依赖于系统版本配置，若要成功复现，请确保系统和应用进程的完整性。
+
+### 交互模式
+
+在以下实例中，一个正常用户能在DiskShadow环境中调用calc.exe：  
+
+![03.png](https://image.3001.net/images/20180410/15233422388237.png!small)  
+
+### 脚本模式
+
+在以下实例中，一下正常用户通过调用脚本文件diskshadow.txt，来实现对calc.exe和notepad.exe的启动：
+
+> diskshadow.exe /s c:\test\diskshadow.txt
+
+![04.png](https://image.3001.net/images/20180410/15233422689405.png!small)
+
+就像Vshadow一样，DiskShadow.exe可以生成自己的子进程，并且，子进程结束之后DiskShadow.exe还能继续运行。
+
+![05.png](https://image.3001.net/images/20180410/15233423067447.png!small)
+
+## 自启动式的持久化&免杀
+
+因为DiskShadow是Windows系统经过签名认证的文件，所以我们结合其它一些持久化和免杀的AutoRuns实例，来看看能有什么启示，我们会在接下来的实例中，更新脚本创建RunKey和任务计划。
+
+### 前期准备
+
+由于上述我们用到的DiskShadow功能都是“窗口响应”式的（比如会弹出命令窗口），所以我们需要更改脚本来调用执行外部命令且类似pass-thru的操作，另外，还要及时关闭DiskShadow父进程和后续的攻击载荷(Payload)。某些情况下，如果响应窗口时间过长，那么这种技术的隐蔽性就不太好，但是，如果这种窗口是在用户登录时的提示，那么就有可能被用户直接忽略掉。
+
+首先，我们来更改脚本diskshadow.txt来实现基本的程序调用，为实现命令交互，我们必须引用初始的EXEC命令形式：
+
+> EXEC "cmd.exe" /c c:\test\evil.exe
+
+接下来，往注册表中加入以下持久化隐蔽键值：
+
+> \- Run Key Value ->
+> reg add HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run /v
+> VSSRun /t REG_EXPAND_SZ /d "diskshadow.exe /s c:\test\diskshadow.txt"
+
+> \- User Level Scheduled Task ->
+> schtasks /create /sc hourly /tn VSSTask /tr "diskshadow.exe /s
+> c:\test\diskshadow.txt"
+
+![06.png](https://image.3001.net/images/20180410/15233424641016.png!small)
+
+之后，我们可以看看其运行效果。
+
+### AutoRuns – 从注册表键值看隐蔽效果
+
+在创建了持久化隐蔽键值之后，在打开系统自启动功能选择登录一栏后可以发现，我们的键值是隐蔽的。默认情况下，此视图中的Windows签名验证是不显示的：
+
+![07.png](https://image.3001.net/images/20180410/152334249583.png!small)
+
+但是在取消“隐藏微软项目”的选定之后，可以看到我们在AutoRuns下的定义的自启动项目：
+
+![08.png](https://image.3001.net/images/20180410/15233425193273.png!small)
+
+### AutoRuns – 从任务计划中看隐蔽效果
+
+与创建注册表键值相同，在任务计划栏的默认显示下，我们创建的任务计划是隐藏的：
+
+![09.png](https://image.3001.net/images/20180410/15233425565268.png!small)
+
+同样在取消“隐藏微软项目”的选定之后，可以看到我们在AutoRuns下的定义的自启动项目：
+
+![10.png](https://image.3001.net/images/20180410/15233425779294.png!small)
+
+## 提取活动目录数据
+
+由于DiskShadow本身就是一个卷影复制管理工具，那么，我们可以来看看卷影复制功能下，是如何来对活动目录数据库ntds.dit进行数据提取的。NTDS.DIT是一个二进制文件，就等同于本地计算机的SAM文件，它的存放位置是%SystemRoot%\ntds\NTDS.DIT，这里面包含的不只是Username和HASH，还有OU、Group等等。
+
+在以下应用中，我们假设活动目录域控制器已被攻击者成功拿下控制，并能有效在特权用户环境中以脚本模式执行DiskShadow命令。首先，我们要准备脚本，我们会先对包含活动目录数据库的目标磁盘驱动器号进行踩点侦测，了解未被系统磁盘使用的驱动器号。以下就是脚本diskshadow.txt的内容：
+
+    
+    
+    set context persistent nowriters
+    add volume c: alias someAlias
+    create
+    expose %someAlias% z:
+    exec "cmd.exe" /c copy z:\windows\ntds\ntds.dit c:\exfil\ntds.dit
+    delete shadows volume %someAlias%
+    reset  
+    
+
+在该脚本中，我们为C盘空间创建了一个持久性的卷影复本，然后设置系统可见驱动器别名为Z，以此为掩护执行复制操作实现敏感文件获取。通过磁盘加载过程，我们就能确定目标文件的拷贝路径，在卷影复本删除之前，我们需要把这个目标文件拷贝到“exfil”目录之下。（DiskShadow命令[参考手册](https://docs.datacore.com/WIK-WebHelp/VSS/DiskShadow_Commands_Example.htm)）
+
+注意，我们还可以通过指定卷影设备名称/唯一标识符来拷贝目标文件，这种方式隐蔽性较好，但还是要确保目标文件标签和UUID的正确性，以及脚本的有效性，这种方式更适合交互式模式。
+
+DiskShadow的命令和最终执行效果如下：
+
+> type c:\diskshadow.txt
+>
+> diskshadow.exe /s c:\diskshadow.txt
+>
+> dir c:\exfil
+
+![11.png](https://image.3001.net/images/20180410/15233427615319.png!small)  
+
+除了提取活动目录数据库数据之外，我们还可以提取目标系统的注册表配置单元（HIVE）信息：
+
+> reg.exe save hklm\system c:\exfil\system.bak
+
+![12.png](https://image.3001.net/images/20180410/15233428317412.png!small)
+
+当以上ntds.dit和system.bak文件从目标系统成功提取出来后，我们用脚本[SecretsDump.py](https://github.com/CoreSecurity/impacket/blob/master/examples/secretsdump.py)，就可以成功还原出文件中的NTLM哈希：
+
+> secretsdump.py -ntds ntds.dit -system system.bak LOCAL  
+>
+
+![13.png](https://image.3001.net/images/20180410/15233430618005.png!small)  
+
+## DiskShadow与Vshadow的利用性比较
+
+DiskShadow.exe和Vshadow.exe功能类似，但在应用服务中也存在本质不同，可以根据需求和实际环境来选择使用。
+
+### 操作系统包含性比较
+
+自 Windows Server 2008开始的操作系统中就内置了DiskShadow.exe，而Vshadow.exe只是在Windows
+SDK中才有，如果目标系统中安装有Windows
+SDK，我们就可采用Vshadow.exe，但在一些实际的操作系统环境中，用DiskShadow.exe还是相对较好。
+
+### 功能和实用性比较
+
+在普通用户环境中，我们可以非特权情况下使用DiskShadow的部分功能，在我之前发布的Vshadow测试场景中，Vshadow可能会受到权限的影响限制导致某些功能无法正常使用。而相反，DiskShadow在命令的交互效果上更加灵活可靠。
+
+### 命令行应用比较
+
+Vshadow对“命令行”的友好度相对较好，这一点上DiskShadow则需要交互式命令或脚本文件来实现某些功能。所以，在一些具备对目标系统远程控制的途径管道下（如backdoor）,DiskShadow命令实现可能会受到限制，而且其在目标系统中创建文件或脚本的方式可能会被检测到。因此，在一些安全性要求较高的系统环境中，Vshadow的利用要相对较隐蔽有效。
+
+### 自启动持久化和免杀比较
+
+在之前我发表的
+Vshadow利用文章中提到，Vshadow是由微软签名证书进行验证的，也就是说，如果在自启动项监测栏中，如果没设置隐藏微软签名的话它可能会被发现，而这一点上DiskShadow则是由系统证书验证的，能够在某种程度上实现隐蔽，相对较好。
+
+### 提取活动目录数据库比较
+
+假设在当前提取操作无效的情况下（如卷影磁盘名不是我们想要的），而DiskShadow又只有脚本模式一种可利用方式，那么可能需要其它附加手段来实现AD数据库提取。除了创建和运行脚本文件之外，逻辑驱动器可能需要映射到目标机器上才能复制ntds.dit，这存在一些安全风险，这种情况下Vshadow的处理要相对较好。
+
+## 总结
+
+总的来说，DiskShadow似乎更具渗透利用的操作和实用性，但是Vshadow和其它VSS方法也是不错的。而对于防御DiskShadow攻击来说，蓝队和安全管理人员可能考虑采用以下措施：
+
+> 监测卷影复制服务VSS，尤其是随机的卷影创建/删除和其它涉及活动目录数据库文件ntds.dit的可疑行为；
+>
+> 监测 System Event ID 7036（卷影复制服务运行事件）下的可疑实例，以及VSSVC.exe进程的调用；
+>
+> 监测Diskshadow.exe进程和其子进程的创建行为；
+>
+> 监测进程完整性，如果Diskshadow.exe进程为中等完整性状态，则可能存在安全风险；
+>
+> 监测服务终端的Diskshadow.exe实例创建事件，除非业务需要，否则Diskshadow.exe进程不应该出现在Windows操作系统中；
+>
+> 监测新的逻辑驱动器映射事件；
+>
+> 实行应用程序白名单机制，对应用程序运行实行权限控制，防止Diskshadow.exe进程的命令执行；
+>
+> 做好信息安全防护，提高员工安全意识！
+
+ ***参考来源：[bohops](https://bohops.com/2018/03/26/diskshadow-the-return-of-vss-evasion-persistence-and-active-directory-database-extraction/)，FreeBuf小编clouds编译，转载请注明来自FreeBuf.COM**  
+

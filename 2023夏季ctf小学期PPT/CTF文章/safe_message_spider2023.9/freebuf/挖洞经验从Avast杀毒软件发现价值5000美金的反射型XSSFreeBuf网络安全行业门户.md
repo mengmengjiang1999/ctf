@@ -1,0 +1,89 @@
+![](https://image.3001.net/images/20191111/1573463232_5dc924c0bb659.jpg!small)
+
+**本文讲述作者从Avast桌面版杀毒软件中发现的反射型XSS漏洞（CVE-2019–18653 &
+CVE-2019–18654），漏洞原因在于Avast在新加入某个无线网络时，通过对无线网络名称（SSID）的读取，Avast的网络接入提示（Avast
+Network Notification ）会反弹形成XSS漏洞，攻击者可以在用户接入的无线网络名称（SSID）中构造恶意XSS
+Payload形成假冒网页进而窃取用户密码凭据信息。漏洞最终被Avast官方分类为高危，并给予了$5000美金奖励。同样的漏洞也存在于与Avast同系列产品的**G杀毒软件中。**
+
+##  漏洞复现
+
+1、在Windows系统中安装有Avast桌面版杀毒软件；
+
+2、构造一个无线网络，其SSID名称为不超过32个字符的XSS
+Payload，可参考[BruteLogic](https://twitter.com/BruteLogic) 和[
+s0md3v](https://twitter.com/s0md3v) 给出的短XSS Payload构造法；
+
+![](https://image.3001.net/images/20191111/1573462721_5dc922c15a224.png!small)
+
+3、打开Avast杀毒软件，连入用XSS Payload新构造的无线网络，等待Avast的网络接入提示（Avast Network Notification
+），它会触发无线网络SSID中的XSS Payload。
+
+##  发现过程
+
+几年前我看过安全研究员Deral Heiland在测试一些大公司产品时，通过构造SSID包含XSS
+Payload的无线网络，以此方式来测试这些软件在连接这种恶意无线网络时，是否会触发XSS执行，最终他发现有很多软件都存在此种漏洞，他曾在2013年的BLACK
+HAT上有过技术分享《[Practical Exploitation Using A Malicious Service Set Identifier
+(SSID)](https://media.blackhat.com/eu-13/briefings/Heiland/bh-eu-13-practical-exploitation-heiland-slides.pdf)》。基于他的发现，我也在我的OS X系统中构造了一个SSID包含XSS
+Payload的无线网络来进行一些测试使用。
+
+几个月之后，我另外买了一台笔记本电脑（内置Windows），于是，出于方便，我就把这台新买笔记本连入了我OS X系统中SSID包含XSS
+Payload的无线网络，用它下载安装了一些必要的应用软件，最后还安装了Avast杀毒软件。后来有一天，我用这台新买笔记本电脑做在线培训时，网络连接突然出现了问题，电脑自动连接到了之前我安装软件的无线共享网络，并在桌面上跳出了包含链接[https://local.avast.com](https://local.avast.com/)的一个弹窗（如漏洞复现中给出的图示）。
+
+我有些疑惑，后来我才搞明白，原来之前我是用OS X系统中SSID包含XSS
+Payload的无线网络安装的Avast杀毒软件，而现在，Avast杀毒软件突然就连接到了这个无线网络，且其防火墙内置的网络接入提示（Avast
+Network Notification ）触发了其SSID包含XSS Payload，由于跳出了上述弹窗，形成了一个XSS漏洞。
+
+##  测试过程
+
+据Avast官方介绍，Avast是领先且具备下一代网络攻击防护的杀毒厂商，能实时阻止异常流量和黑客攻击，注重保护用户隐私和信息安全。Avast拥有先进的端到端防护技术，其中内置的“防火墙”功能就是一个典型应用，可以实时捕获用户系统中进出的异常流量。默认配置中，当Avast接入某个网络后，该防火墙会自动给出网络接入提示（Avast
+Network Notification ），如下图所示，它会提示用户，当前Avast和系统的接入网络为SSID是 “My Hotspot” 的无线网络。
+
+![](https://image.3001.net/images/20191111/1573462812_5dc9231ccd367.png!small)跳出弹窗后，用户可以选择当前接入网络的类型，有“Private”和
+“Public” 两种选项，但问题就在于，网络接入提示（Avast Network Notification
+）中不会对接入无线网络的SSID字段执行过滤，如果攻击者像我那样构造了恶意包含XSS Payload的SSID名称，那么，用户就会受到XSS攻击。
+
+###  XSS攻击
+
+攻击者可以用 “ > < : / ; 等特殊符号，与存储型XSS不同的是，这种反射型XSS场景中，只要用户接入到XSS
+Payload中的恶意URL链接，就会存在被XSS攻击可能。在这里的情况是，无线网络的SSID长度只能是32个字符以下，但是，我们一样有办法用短址方式突破这种限制，具体参考Brute
+Logic 和 S0md3v的一些研究技巧。
+
+> <https://brutelogic.com.br/blog/shortest-reflected-xss-possible/>
+>
+> <https://github.com/s0md3v/AwesomeXSS>
+
+###  短型XSS Payload
+
+一开始，我成功构造的弹窗，但不知如何深入利用，后来得益于Brute Logic 和 S0md3v的一些研究，我形成了短型XSS
+Payload，有效实现了预期效果。
+
+##  漏洞影响版本
+
+经测试，在Windows 10系统下，该漏洞影响以下产品：
+
+> Avast Internet Security 版本 19.3.2369 (build 19.3.4241.440)，以及Avast Free
+> Antivirus的Premiere类型产品
+>
+> **G Internet Security 版本 19.3.3084 (build 19.3.4241.440)
+
+##  漏洞危害
+
+攻击者利用Avast的网络接入提示（Avast Network Notification
+）弹窗，在接入的无线网络SSID中嵌入恶意URL链接，经解析显示，伪造成某些重要的登录窗口，诱导Avast用户输入相关密码凭据，以此在后台实现用户信息窃取。
+
+##  漏洞上报和处理进程
+
+> 2019.3.21：发现漏洞
+>
+> 2019.3.22：向bugs@avast.com提交漏洞
+>
+> 2019.3.25：Avast确认漏洞并给出了相关解释
+>
+> 2019.5.24：Avast回应该漏洞是否已在Avast 19.4版本中修复
+>
+> 2019.6.12：Avast认为该漏洞比较严重（Rather Serious），计划奖励我5000美金
+>
+> 2019.10.30：：漏洞被给予编号CVE-2019–18653（Avast）和CVE-2019–18654（**G）
+
+***参考来源：[medium](https://medium.com/bugbountywriteup/5-000-usd-xss-issue-at-avast-desktop-antivirus-for-windows-yes-desktop-1e99375f0968)，clouds编译整理，转载请注明来自 FreeBuf.COM**
+

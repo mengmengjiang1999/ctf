@@ -1,0 +1,425 @@
+# Citrix 从权限绕过到远程代码执行分析（CVE-2020-8193）
+
+阅读量 **343592**
+
+|评论 **4**
+
+发布时间 : 2020-07-13 09:45:07
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t01c390874676dca260.jpg)
+
+近日监测到Citrix 官方发布了Citrix ADC，Citrix Gateway和Citrix SD-WAN WANOP 组件中多个安全漏洞风险通告。  
+360灵腾安全实验室判断此次通告中的权限绕过漏洞（CVE-2020-8193）存在远程代码执行风险。该漏洞等级为`高`，利用难度`中`，威胁程度`高`，影响面`广`。
+
+360政企安全客户现可使用 360资产威胁与漏洞管理系统
+对该漏洞进行检测，如需帮助可联系[techsupport@360.cn](mailto:techsupport@360.cn)。
+
+同时，建议使用用户及时安装最新补丁，以免遭受黑客攻击。
+
+## 0x00 漏洞通告详情
+
+Citrix 产品中使用了PHP提供web服务，在其PHP代码中存在多处错误而导致了如下漏洞。
+
+CVE-ID | 漏洞类型 | 影响产品 | 漏洞利用基础  
+---|---|---|---  
+CVE-2019-18177 | 信息泄漏 | Citrix ADC, Citrix Gateway | 授权VPN用户  
+CVE-2020-8187 | 拒绝服务 | Citrix ADC, Citrix Gateway 12.0 & 11.1 | 未授权用户  
+CVE-2020-8190 | 用户权限提升 | Citrix ADC, Citrix Gateway | 授权用户  
+CVE-2020-8191 | 跨站脚本攻击 | Citrix ADC, Citrix Gateway, Citrix SDWAN WANOP |
+未授权用户  
+CVE-2020-8193 | 权限绕过 | Citrix ADC, Citrix Gateway, Citrix SDWAN WANOP | 未授权用户  
+CVE-2020-8194 | 代码注入 | Citrix ADC, Citrix Gateway, Citrix SDWAN WANOP | 未授权用户  
+CVE-2020-8195 | 信息泄漏 | Citrix ADC, Citrix Gateway, Citrix SDWAN WANOP | 授权用户  
+CVE-2020-8196 | 信息泄漏 | Citrix ADC, Citrix Gateway, Citrix SDWAN WANOP | 授权用户  
+CVE-2020-8197 | 权限提升 | Citrix ADC, Citrix Gateway | 授权用户  
+CVE-2020-8198 | 跨站脚本攻击 | Citrix ADC, Citrix Gateway, Citrix SDWAN WANOP |
+未授权用户  
+CVE-2020-8199 | 本地权限提升 | Citrix Gateway Plug-in for Linux | Linux本地用户  
+  
+## 0x01 权限绕过漏洞概述
+
+CVE-2020-8193权限绕过漏洞存在于Citrix ADC，Citrix Gateway和Citrix SD-WAN
+WANOP产品的report模块（all_profiles函数），攻击者可通过构造未授权的数据包进行特定读取、删除文件操作，一定条件下可导致远程代码执行，从而获得主机系统root权限。
+
+## 0x02 漏洞分析
+
+###  从权限绕过说起
+
+**创建无验证 Session 会话**
+
+Citrix系统绝大多数组件都需要鉴权访问，经过一番搜寻，发现代码中存在一处未授权即可访问功能点，在
+`admin_ui/php/application/controllers/pcidss/  
+pcidss.php` 文件中存在如下代码片段：
+
+`report()`
+
+    
+    
+    case 'allprofiles':
+        if($genPDF = $this->init($data))
+            if(isset($data['set']))
+                $this->all_profiles($data['set']);
+            else
+                $this->all_profiles("0");
+    break;
+    
+
+传入url参数即可走到这部分逻辑，该代码处理会先调用`pcidss`类的`init()` 函数，检查请求字段中是否包含 `sid`
+字段，并从请求包中取`username`字段赋给SESSION[‘username’]。
+
+`init()`
+
+    
+    
+     private function init($argsList)
+    {
+        session_cache_limiter('must-revalidate');
+        if(isset($argsList['sid']))
+        {
+            require_once(APPPATH. "controllers/common/utils.php");
+            utils::setup_webstart_session($argsList['sid']);
+            $this->sid = $argsList['sid'];
+            $_SESSION["username"] = $this->username =  $argsList['username'];
+        }
+    ...
+    
+
+随后带着`sid`和进入`utils.php`中的`setup_webstart_session()`函数，首先经过`validate_sid`检查（长度为32的hex字符串）创建一个未授权的`session`
+会话。
+
+`setup_webstart_session()`
+
+    
+    
+    // Validates sid and sets up the webstart user session before invoking a command
+    static function setup_webstart_session(&$sid, $redirect_on_error = true)
+    {
+        $sid = urldecode($sid);
+    
+        if(!self::validate_sid($sid))
+        {
+            if($redirect_on_error)
+            {
+                self::show_error_page("INVALID_SID");
+    
+                exit(0);
+            }
+    
+            return false;
+        }
+    
+        $_SESSION['NSAPI'] = $sid;
+        $_SESSION['NSAPI_DOMAIN'] = '';
+        $_SESSION['NSAPI_PATH'] = "/";
+    
+        return true;
+    }
+    
+
+至此，代码逻辑已经清晰，只要传入的 `username` 和 `sid` 满足条件判断即可使用任意 `username` 创建 `session` 会话。
+
+接着继续看`pcidss.php`，当设置好session会话后，随即进入`set`参数的检查，这里我们需要给 `set`
+赋一个大于0的值，才能进入后续操作，代码片段如下。
+
+`all_profiles()`
+
+    
+    
+       private function all_profiles($set)
+        {
+            ...
+            if($set == "0")
+                $this->fwconfig();
+            ...
+            if($set !== "0")
+            {
+            $set = intval($set);
+            }
+                if( $set < 0 )
+                {
+                    $this->fwconfig();
+                    $set = 0;
+                }
+                ...
+                for($i = $start; $i < $end && $this->args['global_pargs']['bindings'] < $MAX_BINDINGS_PER_PDF; ++$i)
+                    {
+                        $profile = $profiles[$i];
+                        $pargs = $this->args['global_pargs'];
+                        $pargs['set'] = $set;
+                        $this->args = array('global_pargs' => $pargs);
+                        $this->profile_no = $i + 1;
+                        $this->fwProfile($profile['name'], $profile);
+                    }
+            }
+        }
+    
+
+从 `all_profiles => fwProfile => execute_command`
+一路跟进，我们发现`admin_uiphpapplicationmodelscommonnitro_model.php` 文件的
+`command_execution`函数中存在一些对输入参数的过滤，我们需要一点小trick才能继续执行，首先看这里，不难看出`$query_params`的值是`?view=detail&sessionid=$_GET['sid']&args=`：
+
+`command_execution`
+
+    
+    
+    $query_params = "?view=detail";
+    
+    if(isset($_SESSION["NSAPI"]))
+    {
+        $query_params .= "&sessionid=" . urlencode($_SESSION["NSAPI"]);
+    }
+    ...
+    
+    if($args != "")
+    {
+        $query_params .= "&args=" . $args;
+    }
+    
+
+随后跟进`command_execution`函数第264行，发现这里对`$query_params`参数进行了过滤，需要`$query_params`参数中带有
+`loginchallengeresponse` 字符串才能走到 `if`
+逻辑里，随后检查`$query_params`参数重是否含有`requestbody`，才能进一步执行，覆盖参数`$query_params`，得到我们想要的结果。
+
+因此，我们需要在请求参数中携带`loginchallengeresponse`和`requestbody`，而此时请求参数`$query_params`仅包含了`view`和`sessionid`，根据上文分析，我们只能对sid参数进行控制：`sid=loginchallengeresponseIIIrequestbody`。command_execution函数过滤方法代码片段如下：
+
+`command_execution()`
+
+    
+    
+    if (strpos($query_params, 'loginchallengeresponse') !== false)
+        {
+            $query_array = explode("&", $query_params);
+            $request_body = "";
+            for ($i = 0; $i < count($query_array); $i++)
+            {
+                if (strpos($query_array[$i], 'requestbody') !== false)
+                {
+                    $request_body = $query_array[$i];
+                }
+            }
+    
+            if ($request_body !== "")
+            {
+                $request_json = explode("=", $request_body);
+                $request_array = json_decode($request_json[1], true);
+                $request_login_challenge_response = $request_array["loginchallengeresponse"];
+                $request_string = json_encode($request_login_challenge_response);
+                $query_params = '?view=detail&requestbody=' . $request_string . '&method=POST';
+            }
+        }
+    
+
+跟进分析，不难看出`query_params`变量决定了是否能通过后面的验证，只要 `ns_empty`
+判断失败就能返回正常结果，最终绕过权限验证。代码片段参考如下：
+
+`command_execution()`
+
+    
+    
+    $nitro = new nitro();
+    $nitro_return_value = $nitro->v1($arg_list[0], $arg_list[1] . $query_params);
+    
+    ...
+    
+    // Process result
+    if(ns_empty($nitro_return_value) || $nitro_return_value === false)
+    {
+        $this->set_error_code();
+        $this->set_error_message($command);
+    }
+    
+
+`ns_empty` 的实现附录如下,当该函数传入变量不为空且不等于 `"0"` 的时候返回 `true`，然而恰巧 `$nitro->v1` 的返回值是
+`0`，从而使得 `ns_empty` 返回结果为 `False` 最终实现绕过。
+
+`ns_empty()`
+
+    
+    
+    function ns_empty(&$var)
+    {
+        return empty($var) && ($var != "0");
+    }
+    
+
+至此，我们通过一系列分析使得`ns_empty`函数返回 False，从而绕过权限验证，创建了一个未授权的session
+
+![](https://p2.ssl.qhimg.com/t0191ca1e82c6a89aae.png)
+
+###  修复 Session
+
+此时，我们已经创建了一个未授权的
+`session`，由于在绕过`command_execution()`函数过滤时，我们将sid设置成了`loginchallengeresponseIIIrequestbody`，因此此时不能够直接使用创建的伪造session，我们需要对$_SESSION[‘NSAPI’]也就是sid进行修复。
+
+借助`admin_uiphpapplicationcontrollerscommonmenu.php` 文件中的 `setup_session` 函数，传入
+`username`、`sid` 以及 `force_setup` 参数，将这些参数重新赋给SESSION。这里，如果传入参数中包含
+`force_setup` 的值，就可以修复SESSION，从而达到权限绕过的目的。
+
+`setup_session()`
+
+    
+    
+    else if(isset($data["force_setup"]))
+    {
+        $this->load->helper('cookie');
+        utils::setup_webstart_user_session(urldecode($data["sid"]), $data["username"], null, true);
+    }
+    
+    ...
+    
+    require_once(APPPATH. "controllers/common/login.php");
+    $login = new login();
+    $login->setupUserSession($username, input_validator::get_default_value("timeout"), input_validator::get_default_value("unit"), $timezone_offset, input_validator::get_default_value("jvm_memory"));
+    
+
+![](https://p1.ssl.qhimg.com/t01a70116495f096e99.png)
+
+实际上此时伪造的SESSION只包含了一个我们自己构造的username和password，由于Citrix采用了集成认证体系，仅可以使用读取、删除文件等部分功能，并不能真正的达到完全接管用户的效果。  
+经过调试分析，我们发现了一个可以造成远程代码执行的风险点，接下来对远程代码执行风险进行验证分析。
+
+###  从任意文件读取到Getshell
+
+当我们获得了伪造的SESSION后，想要POST数据，首先需要通过GET /menu/neo 或 GET /menu/stc
+获取一个名为`rand_key` 的token，加入构造包中使得数据包成为正常请求，如下图所示。
+
+![](https://p3.ssl.qhimg.com/t018e21062a65374fde.png)
+
+拿到 `rand_key` 我们即可执行读取文件的命令，如下图所示。
+
+![](https://p5.ssl.qhimg.com/t01162e886628dec1ef.png)
+
+随后，尝试写入文件时发现存在一些问题，如下图，提示未授权用户。
+
+![](https://p2.ssl.qhimg.com/t0181f61174a0296924.png)
+
+跟进`uploadtext`函数发现文件上传的功能使用了SFTP的方式实现，此时我们并没有真正的用户密码，此处无法绕过执行，如下图所示。
+
+![](https://p2.ssl.qhimg.com/t019577150dff1355e5.png)
+
+经过一番思索，虽然不能直接写
+shell，但是已经拥有未授权读取文件的情况下，可以尝试读到高权限用户SESSION的方法，从而进行利用。通过列目录这个点，找到的 nsroot
+session 存放的位置：
+
+![](https://p3.ssl.qhimg.com/t011d19023b698cff8a.png)
+
+读取高权限 `session`：
+
+![](https://p5.ssl.qhimg.com/t0119b4fda4081c6033.png)
+
+Bingo!
+
+现在拿到的真正的管理员权限，尝试写文件：
+
+![](https://p1.ssl.qhimg.com/t0136ba0ef2e0c85887.png)
+
+如下图所示，可以发现已经写入`test123456789.txt`，此经可以通过写入`authorized_key`等文件，达到远程代码执行的目的。
+
+![](https://p1.ssl.qhimg.com/t01bf5dab39dfb22040.png)
+
+同时，也可以通过增加用户/修改密码的方式实施控制。
+
+![](https://p2.ssl.qhimg.com/t01bca16682ff38a2bb.png)
+
+最后，由于SESSION存在过期时间的限制，因此该漏洞存在一定利用条件。
+
+## 0x03 影响版本
+
+Citrix ADC and Citrix Gateway: < 13.0-58.30
+
+Citrix ADC and NetScaler Gateway: < 12.1-57.18
+
+Citrix ADC and NetScaler Gateway: < 12.0-63.21
+
+Citrix ADC and NetScaler Gateway: < 11.1-64.14
+
+NetScaler ADC and NetScaler Gateway: < 10.5-70.18
+
+Citrix SD-WAN WANOP: < 11.1.1a
+
+Citrix SD-WAN WANOP: < 11.0.3d
+
+Citrix SD-WAN WANOP: < 10.2.7
+
+Citrix Gateway Plug-in for Linux: < 1.0.0.137
+
+## 0x04 修复建议
+
+目前官方已发布对应补丁，对应组件至少升级到以下版本：
+
+Citrix ADC and Citrix Gateway: 13.0-58.30
+
+Citrix ADC and NetScaler Gateway: 12.1-57.18
+
+Citrix ADC and NetScaler Gateway:12.0-63.21
+
+Citrix ADC and NetScaler Gateway:11.1-64.14
+
+NetScaler ADC and NetScaler Gateway:10.5-70.18
+
+Citrix SD-WAN WANOP: 11.1.1a
+
+Citrix SD-WAN WANOP: 11.0.3d
+
+Citrix SD-WAN WANOP: 10.2.7
+
+Citrix Gateway Plug-in for Linux: 1.0.0.137
+
+## 0x05 关于我们
+
+灵腾实验室隶属360企业安全集团，专注于红队技术、威胁狩猎等攻防对抗技术研究和企业级安全产品孵化，开源多个自研安全工具，同时为360安全大脑输出核心攻防能力。
+
+在公安部及各部委历年来组织的实网攻防对抗演习中，实验室作为攻击队代表360公司多次参赛，均名列前茅；研究成果多次受邀BlackHat、DEFCON、POC、HITB等国际会议进行议题分享。
+
+## 0x06 时间线
+
+2020-07-07 Citrix官方发布通告
+
+2020-07-10 [@dmaasland](https://github.com/dmaasland "@dmaasland") 公布漏洞研究报告
+
+2020-07-12 灵腾安全实验室 发布漏洞风险通告
+
+## 0x07 参考链接
+
+Citrix provides context on Security Bulletin CTX276688 | Citrix Blogs  
+[<https://www.citrix.com/blogs/2020/07/07/citrix-provides-context-on-security-bulletin-ctx276688/>]
+
+Adventures in Citrix security research | dmaasland.github.io  
+[<https://dmaasland.github.io/posts/citrix.html>]
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **360灵腾安全实验室** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/210407](/post/id/210407)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞分析](/tag/漏洞分析)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t01fae47a70f20e70ec.png) 360灵腾安全实验室
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

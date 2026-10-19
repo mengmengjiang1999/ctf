@@ -1,0 +1,38 @@
+作者：[蒸米spark](http://weibo.com/zhengmin1989 "蒸米spark")
+
+项目地址：<https://github.com/zhengmin1989/GreatiOSJailbreakMaterial>
+
+#### Projects:
+
+iOS 8.4.1 Yalu Open Source Jailbreak Project: <https://github.com/kpwn/yalu>
+
+OS-X-10.11.6-Exp-via-PEGASUS:
+<https://github.com/zhengmin1989/OS-X-10.11.6-Exp-via-PEGASUS>
+
+iOS 9.3.* Trident exp: <https://github.com/benjamin-42/Trident>
+
+iOS 10.1.1 mach_portal incomplete jailbreak:
+<https://bugs.chromium.org/p/project-zero/issues/detail?id=965#c2>
+
+iOS 10.2 jailbreak source code: <https://github.com/kpwn/yalu102>
+
+Local Privilege Escalation for macOS 10.12.2 and XNU port Feng Shui:
+<https://github.com/zhengmin1989/macOS-10.12.2-Exp-via-mach_voucher>
+
+Remotely Compromising iOS via Wi-Fi and Escaping the Sandbox:
+<https://www.youtube.com/watch?v=bP5VP7vLLKo>
+
+Pwn2Own 2017 Safari sandbox: <https://github.com/maximehip/Safari-iOS10.3.2-macOS-10.12.4-exploit-Bugs>
+
+Live kernel introspection on iOS: <https://bazad.github.io/2017/09/live-kernel-introspection-ios/>
+
+iOS 11.1.2 IOSurfaceRootUserClient double free to tfp0:
+<https://bugs.chromium.org/p/project-zero/issues/detail?id=1417#c3>
+
+Keep updating...please follow, thanks.
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/482/>
+

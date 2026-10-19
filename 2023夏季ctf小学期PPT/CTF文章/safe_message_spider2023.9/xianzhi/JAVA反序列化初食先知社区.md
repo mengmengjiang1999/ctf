@@ -1,0 +1,245 @@
+# 基本常识
+
+序列化 类实例->字节流
+
+反序列化 字节流->类实例
+
+序列化时自动调用 writeObject
+
+反序列化 readObject
+
+# 类要实现序列化应满足的条件
+
+实现java.io.Serializeble接口
+
+该类所有属性必须可序列化
+
+如果有一个属性不可序列化，那么这个属性必须注明是短暂的
+
+# 反序列化漏洞利用条件
+
+有反序列化接口，能够提交序列化数据
+
+有可利用的类，最终可以实现文件读取，写入，和执行
+
+# 总结
+
+1.需要有一个可以提交序列化字节流的地方
+
+2.有可以被利用的类
+
+3.类序列化后，类实例已不再关注，我们的重点是执行了readObject方法
+
+# 实战
+
+## 源码
+
+    
+    
+    package com.ctfshow.entity;
+    
+    import java.io.IOException;
+    import java.io.ObjectInputStream;
+    import java.io.Serializable;
+    
+    //题目源码
+    
+    public class User implements Serializable {
+        private static final long serialVersionUID = -3254536114659397781L;
+        private String username;
+    
+        public User(String username) {
+            this.username = username;
+        }
+        public String getName(){
+            return this.username;
+        }
+    
+        private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException{
+            in.defaultReadObject();
+            Runtime.getRuntime().exec(this.username);
+        }
+    }
+    
+
+# 简单POP链
+
+## URLDUS链
+
+一句话总结
+
+不需要其他依赖，原生Java库，支持反序列化后触发一次dns查询请求
+
+### HashMap
+
+数据集合结构
+
+Hashcode存放键值对的集合，
+
+为了验证键有没有重复，会对键取哈希值操作。
+
+若HashCode相同则认为集合中含有该键，为避免一个键对应多个值，所以会覆盖
+
+后者覆盖前者
+
+### 利用了两个类
+
+**HashMap类和URL类**
+
+`HashMap`存在`readObject`方法，里面调用了`hash`方法，处理自己的`key`
+
+`hash`方法调用了`key`的`hashcode`方法
+
+当我们传入的`key`是`URL`对象时，就会调用`URL`对象的`hashCode`
+
+`URL`类的hashCode方法，只要自己的hashCode属性不是-1
+
+就会调用handler属性的hashCode属性
+
+handler是URLStreamHandler类，它的hashCode方法调用了URL类的getHostAddress方法
+
+最终调用了InetAddress.getByName(host)
+
+### 利用点
+
+验证反序列化漏洞存在，适合POC
+
+判断对方服务器是否出网
+
+# 攻击脚本ysoserial-all.jar
+
+## 用法
+
+### 列举用法命令
+
+    
+    
+    java -jar ysoserial.jar
+    
+
+### 生成payload
+
+    
+    
+    java -jar ysoserial.jar URLDNS 'http://127.0.0.1' >1.ser
+    
+    >1.ser是写入文件的意思，会写到脚本所在目录下
+    不能用双引号（windows）
+    
+
+# CC链
+
+# JNDI
+
+**Java Naming and Directory Interface ​**
+
+java命名和目录接口
+
+让配置参数和代码 解耦的规范或思想
+
+例，使用mysql数据库的语言，当需要更换其他数据库（本质就是更改配置文件），却又不想改代码，就需要JNDI
+
+是我们的数据更加 ： 低耦合，高内聚
+
+#### Name
+
+java对象通过命名绑定到容器环境
+
+我们可以将java对象和一个特定的名称关联到一起
+
+#### Directory
+
+将一个对象的所有的属性信息保存在一个容器环境
+
+## context.xml
+
+    
+    
+    <?xml version="1.0" encoding="UTF-8" ?>
+    <!-- 配置数据源 -->
+    <Context>
+        <Resource name="jndi/user"
+                  auth="Container"
+                  type="javax.sql.DataSource"
+                  username="root"
+                  password="root"
+                  driverClassName="com.mysql.cj.jdbc.Driver"
+                  url="jdbc:mysql://127.0.0.1:3306/blog"
+                  maxTotal="8"
+                  maxIdle="4"/>
+    </Context>
+    
+
+## DbUtil.java
+
+    
+    
+    package org.ctfer.util;
+    
+    import javax.naming.Context;
+    import javax.naming.InitialContext;
+    import javax.naming.NamingException;
+    import javax.sql.DataSource;
+    import java.io.IOException;
+    import java.sql.*;
+    
+    //专门处理数据库连接的工具类
+    public class DbUtil {
+        //由于构造方法属性为private，无法new为实例，所以要给一个数据库连接的专门拿法
+        private static  DbUtil instance;
+        private Connection connection;
+        private String connectionURL;
+        private DataSource dataSource;
+        private DbUtil(){
+            //数据库配置读取
+            PropertiesUtil propertiesUtil = null;
+            try {
+                propertiesUtil = new PropertiesUtil();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+            //this.connectionURL = propertiesUtil.getValue("url")+"&user="+propertiesUtil.getValue("db_username")+"&password="+propertiesUtil.getValue("db_password");
+            try {
+                //Class.forName("com.mysql.cj.jdbc.Driver");
+                Context context = new InitialContext();
+                dataSource = (DataSource) context.lookup("java:comp/env/jndi/user");
+                context.close();
+                //Class.forName("com.cj.mysql.jdbc.Driver");//mysql8的写法
+                this.connection = dataSource.getConnection();
+            } catch (NamingException | SQLException e) {
+                throw new RuntimeException(e);
+            }
+            //this.connection = DriverManager.getConnection(this.connectionURL);
+        }
+    
+        public static Connection getConnection(){
+            try {
+                return getInstance().connection;
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    
+        //过渡方法
+        public static DbUtil getInstance() throws IOException {
+            if(instance==null){
+                instance=new DbUtil();
+            }
+            return instance;
+        }
+    
+        public ResultSet query(String sql) {
+            Statement statement = null;
+            ResultSet resultSet;
+            try {
+                statement = this.connection.createStatement();
+                resultSet = statement.executeQuery(sql);
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+    
+            return resultSet;
+        }
+    }
+    
+

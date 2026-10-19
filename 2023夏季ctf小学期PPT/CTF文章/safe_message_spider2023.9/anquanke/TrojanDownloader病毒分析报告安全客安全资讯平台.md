@@ -1,0 +1,196 @@
+# TrojanDownloader病毒分析报告
+
+阅读量 **549394**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-10-11 16:30:02
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t010e16f85fa9c95fa2.jpg)
+
+## 零 前言
+
+TrojanDownloader(中文名：文件下载者病毒)主要通过游戏外挂等方式传播。是一款比较早期的病毒样本，已知最早的入库时间是在2008年，其本身危害性不高，但是由于他的作用，其危害性体现在其所下载的恶意代码上。
+
+## 一 目录
+
+  * 1.目录
+  * 2.样本信息
+  * 3.行为分析
+  * 4.样本分析
+  * 5.技术上的总结
+
+## 二 样本分析
+
+  * 1.样本名称：sample.WSDump.exe
+  * 2.样本md5：25a1eb3d3f8767a86050d16c226f9912
+  * 3.是否加壳：UPX
+  * 4.编写语言：VC++6.0
+  * 5.样本来源：网络获取
+
+## 三 行为分析
+
+病毒首先创建互斥体121212，和判断自身文件是否存在，如果存在就启用网络套接字以便执行下一步操作。如果不存在则退出程序。  
+
+在执行体函数中，程序首先初始化一些服务控制器的状态信息，然后创建”Net
+CLR”的互斥体，接着枚举二进制资源，加载hra33.dll这个dll文件，接下来分别创建三个线程，执行不同的操作。  
+
+## 四 样本分析
+
+###  ExecuteFun
+
+这个函数是程序的主要执行部分。
+
+  * 设置serviceStatus状态
+
+![](https://i.imgur.com/FLYazwS.png)
+
+  * 更新资源
+  * 加载hra33.dll这个动态链接库文件
+  * 创建三个线程
+
+![](https://i.imgur.com/Kj8IAzt.png)
+
+###  UpdateSource
+
+这个函数主要是用于更新资源的，但是由于注册表Services.Net CLR不存在导致函数提前退出。  
+
+  * 根据Service注册表下Net CLR文件，创建新文件
+
+![](https://i.imgur.com/eO39k7g.png)
+
+  * 然后利用跟新资源的方式让其像一个可执行文件
+
+![](https://i.imgur.com/A91JbCZ.png)
+
+###  Thread_1
+
+利用od跟入Thread_1函数。
+
+  * 获取本地主机的名称和地址
+
+![](https://i.imgur.com/4QH59S2.png)
+
+  * 获取本地网关
+
+![](https://i.imgur.com/2JGKjbK.png)
+
+  * 这里有个病毒作者的错误，本来他想的是如果主机用户是管理员则执行这个判断，但是他直接引用的是字符串，造成判断无效，所有用户都成立
+
+![](https://i.imgur.com/7VJTb4v.png)
+
+  * 利用上面得到的本地网关地址，和用户名及密码作为参数传入CreateFileAndExecuteFun(emmmm不像是真的)。
+
+![](https://i.imgur.com/dk8oKbI.png)
+
+###  CreateFileAndExecuteFun
+
+程序先与远程主机利用ipc$漏洞创建一个共享的命名管道，用IPC$,连接者甚至可以与目标主机建立一个空的连接而无需用户名与密码(当然,对方机器必须开了ipc$共享,否则你是连接不上的)，而利用这个空的连接，连接者还可以得到目标主机上的用户列表(不过负责的管理员会禁止导出用户列表的)。还可以访问共享资源,并使用一些字典工具，进行密码探测，以至于获得更高的权限。然后黑客从服务端可以利用nc等软件向主机发送一个shell。
+
+  * 创建映射方式，以便后期的文件操作，通过WNetAddConnection2A API将共享目录映射为本地磁盘，之后即可按本地文件形式访问文件，最后断开连接。[参考：<http://blog.sina.com.cn/s/blog_672355630102vnwa.html>]
+
+![](https://i.imgur.com/QtFlY04.png)
+
+  * 把本地文件复制到共享文件的C-E盘
+
+![](https://i.imgur.com/8jUIjNa.png)
+
+###  Thread_2
+
+  * 获取本地时间和20130221进行比较，如果大于则创建Thread3这个线程执行
+
+![](https://i.imgur.com/UFTq1t2.png)
+
+###  Thread_3
+
+  * 判断链接192.168.1.107是否正常  
+
+  * 利用switch 通过接收不同的指令，来决定执行的操作，如下图  
+
+    * 16号：  
+
+    * 18号：  
+
+    * 20号：  
+
+    * 6号：  
+
+    * 2号：  
+
+    * 3号：  
+
+    * 4号：  
+
+###  IsConnectFun()
+
+  * 解Base编码得到IP地址：192.168.1.107:83  
+
+###  GetInformationFun
+
+  * 识别出当前系统版本信息  
+
+  * 读取注册表，查看CPU的频率  
+  
+  
+
+  * 调用 GlobalMemoryStatusEx获取内存信息，  
+
+  * 查看网络适配器情况  
+
+## 五 技术上的总结
+
+调试程序比较难的地方在于跟入CreateThread创建的线程中，因为OD是单线程调试器，所以不会直接跟入创建的线程(子线程)中，我们采用Sleep函数来跟入线程函数中。
+
+  * 找到线程所指向的函数，在函数开头下断
+  * 修改调用CreateThread函数下一条语句，写入如下部分 
+    
+        push 100000  ;将Slepp的参数压入
+    Call Kernel32.Sleep
+    
+
+  * f8执行，函数自动断在线程函数刚刚下断的地方。
+
+参考自：<https://blog.csdn.net/whatday/article/details/9059281>
+
+关于ipc$的使用，参考自<https://blog.csdn.net/smithjackhack/article/details/78559970>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **HaCky** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/161100](/post/id/161100)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [逆向工程](/tag/逆向工程)
+  * [病毒分析](/tag/病毒分析)
+
+ **+1** __3赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t01487b5bd2c28db179.jpg) HaCky
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

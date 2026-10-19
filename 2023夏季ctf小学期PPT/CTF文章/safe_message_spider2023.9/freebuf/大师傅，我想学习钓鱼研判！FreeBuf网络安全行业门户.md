@@ -1,0 +1,242 @@
+> 这是蓝队相关的研判文章，红队实施可以参考文末资料！
+
+# 电子邮件投递
+
+涉及3种协议：SMTP，POP3，IMAP。
+
+### POP3与IMAP
+
+简而言之，IMAP（区别于POP3而言）有利于普通用户，跨多个设备同步和访问信息，因为它将信息存（接收，下载）于服务器上。  
+若收发共计100封历史邮件，用POP3的话换个设备可能看不见以前的100封邮件了，因为它将信息存于本地，需确认是否存在"服务器上保存"的按钮。
+
+ **SMTP**
+
+处理电子邮件的发送。您可以粗暴的将SMTP视为一种“路由交互”设备，因为实际发送的邮件会通过多个SMTP中继，最终到达目标的SMTP服务器
+
+例子：编写一封邮件点击发送给user@test.com，它会达到SMTP服务器，凡是采用命名之类的域也好主机名也罢，都会去DNS服务器查询（test.com）。经过各种
+SMTP 服务器，最终被中继到目的 SMTP 服务器。接收者登录电子邮件客户端，使用POP3/IMAP接收邮件。  
+SMTP，POP3，IMAP协议分为安全或者不安全，区别在于是否启用SSL功能：
+
+> https://help.dreamhost.com/hc/en-us/articles/215612887-Email-client-> protocols-and-port-numbers
+
+![image](https://image.3001.net/images/20220716/1657906856_62d1a6a87da44b86f8a85.png!small)
+
+# 电子邮件标题
+
+电子邮件有两个部分：标头与正文（类似于post方法中的HTTP头与body体）  
+电子邮件涉及到互联网消息格式 (IMF)RFC
+5322，包含标头与正文。没人会吃饱了撑着拿起RFC一顿啃，但需要时可借助它威胁溯源进行搜索：https://datatracker.ietf.org/doc/html/rfc5322  
+标头字段：From - 发送者 Subject - 主题 Date - 发送时间 To - 收件人  
+以上标头影响的地方只是UI界面我们看见的地方（发件人的地址可以是伪造的）。如下图所示：
+
+![image](https://image.3001.net/images/20220716/1657906945_62d1a70184da5cbfca9ec.png!small)
+
+获取以上标头字段的另一种方式是：查看原始原文，源代码，标头等各种八股文命名方式。  
+![image](https://image.3001.net/images/20220716/1657907018_62d1a74a9e5c4258a69c8.png!small)
+
+![image](https://image.3001.net/images/20220716/1657906985_62d1a729cfa688e35ef98.png!small)
+
+RFC5322使用示例：标头太多，质疑哪个搜哪个。假设对邮件原文中的Reply-To标头感兴趣。  
+在RFC的描述中，回复邮件默认是回给发件人的地址，如果它被赋予其他值，就会回到其他地方。有那威胁溯源味道了。  
+![image](https://image.3001.net/images/20220716/1657907072_62d1a7800eed9bf96781f.png!small)
+
+电子邮件标头分析参考资料：
+
+> https://mediatemple.net/community/products/all/204643950/understanding-an-> email-header
+
+# 电子邮件正文
+
+正文有纯文本或 HTML 格式（HTML的话右键源代码等方式查看）  
+除了正文可能还有附件，如下是附件的标头：  
+![image](https://image.3001.net/images/20220716/1657907135_62d1a7bfe6e3623d463f8.png!small)
+
+# 钓鱼邮件的类型
+
+先划重点：它就是钓鱼邮件，不用害怕记忆什么您甚至无需关注其他的分类命名，就叫它钓鱼邮件即可。  
+根据恶意的程度（是引流还是getshell），针对人群（高管还是老百姓）以及是否跳转（骗你要用手机去浏览），是否基于存在语音钓鱼等细节而出来一系列八股文：垃圾邮件，网络钓鱼，鱼叉式，捕鲸等等。  
+关于这些术语的定义，可以在此处嗨皮一下：
+
+> https://www.proofpoint.com/us/threat-reference/phishing  
+> https://www.rapid7.com/fundamentals/whaling-phishing-attacks/
+
+以下是网络钓鱼电子邮件的共同特征：
+
+改一改标头：sender头， subject头  
+正文加点超链接或短链接，恶意附件  
+正文超链接实际不是跳转到对应的官网或者不包含实际的URL  
+主题描述的官网与发件人地址不符  
+存在附件的话，先跑沙箱，注意多沙箱交叉验证
+
+● 交互式在线分析沙箱：https://app.any.run/
+
+不要误点超链接和附件：关于“去牙”defanged处理，就是http写成 hxxp等示意。  
+以下IBM参考资料中还有关于白名单的设置可以看看。
+
+>
+> https://www.ibm.com/docs/en/sqsp/32.0?topic=SSBRUQ_32.0.0/com.ibm.resilient.doc/install/resilient_install_defangURLs.htm
+
+# 像素跟踪
+
+为什么邮件默认不自动加载图像？  
+![image](https://image.3001.net/images/20220716/1657907240_62d1a828eeac2e54eebe6.png!small)  
+像素跟踪，通常（但不总是）隐藏在图像或链接中。 打开电子邮件后，像素内的代码会将信息发送回公司的服务器。
+
+可能造成的威胁：跟踪您是否打开了电子邮件、打开它的时间以及您当时的位置。  
+它们可能长成下面的模样：  
+![image](https://image.3001.net/images/20220716/1657907270_62d1a846c9013ed24c597.png!small)
+
+参考资料：https://www.theverge.com/22288190/email-pixel-trackers-how-to-stop-images-automatic-download
+
+# 研判的一些工具
+
+● 实际就是备份钓鱼邮件：邮件原文、正文和附件
+
+Sender头 - 发件人地址与IP 反向查找发件人 IP 地址  
+收件人地址（可能在CC/BCC字段中）  
+subject头 - 主题  
+Reply-to头 - 回复地址  
+任何 URL 链接  
+附件与哈希值（MD5,SHA1,SHA256）
+
+● 邮件原文消息头分析
+
+工具一：https://toolbox.googleapps.com/apps/main/  
+工具二：https://mha.azurewebsites.net/  
+工具三：https://mailheader.org/
+
+将整个邮件原文复制进去即可。  
+![image](https://image.3001.net/images/20220716/1657907344_62d1a89032172ef5b6e16.png!small)
+
+![image](https://image.3001.net/images/20220716/1657907351_62d1a897a7a2116fca3e0.png!small)
+
+●
+关于一些邮件服务器或者foxmail客户端的术语如下（有的企业搭建了自己的服务器可帮您先代理接收邮件，类似委托别人先“收货”，等您上班之后开启foxmail慢慢搞）。  
+![image](https://image.3001.net/images/20220716/1657907404_62d1a8cc07ee3f104d61f.png!small)
+
+![image](https://image.3001.net/images/20220716/1657907414_62d1a8d6caaae2b10f6db.png!small)
+
+IP地址分析工具：https://ipinfo.io/  
+网站扫描与分析工具：https://urlscan.io/  
+其他IP或URL工具：  
+https://www.url2png.com/  
+https://www.wannabrowser.net/  
+https://talosintelligence.com/reputation  
+https://phishtank.com/?  
+https://www.spamhaus.org/  
+https://mxtoolbox.com/
+
+● 邮件原文URL提取器  
+https://www.convertcsv.com/url-extractor.htm 原文直接复制进去即可  
+https://gchq.github.io/CyberChef/ 的 Extract URLs
+
+![image](https://image.3001.net/images/20220716/1657907453_62d1a8fd424753b73bb0c.png!small)
+
+● 恶意附件SHA256的分析网站  
+https://talosintelligence.com/talos_file_reputation  
+https://www.virustotal.com/gui/
+
+● 恶意软件沙箱  
+https://app.any.run/  
+https://www.hybrid-analysis.com/  
+https://www.joesecurity.org/#
+
+● 网络钓鱼自动分析工具 - 社区版免费
+
+较为笨重，但可作为商业研究与模仿。API 密钥连接其他在线分析网站如VT已获得关于恶意软件的反馈。  
+https://www.phishtool.com/
+
+# SPF 、DKIM与DMARC
+
+这里不涉及电子邮件安全其他的东西：垃圾邮件过滤器，标签，基于信任的IP和URL黑名单，安全意识培训等
+
+● Sender Policy Framework 发件人策略框架(SPF) 用于验证电子邮件的发件人
+
+● SPF检测工具：https://dmarcian.com/spf-survey/ 已百度为例  
+![image](https://image.3001.net/images/20220716/1657907513_62d1a9397c84f67553b8d.png!small)
+
+如果他邮件声称是百度发的，那对比一下是不是如下百度的信息：SPF记录中存在大量的键值对，比对这些值。  
+![image](https://image.3001.net/images/20220716/1657907543_62d1a957b1513b5f9512e.png!small)
+
+SPF语法表：  
+https://dmarcian.com/spf-syntax-table/  
+https://dmarcian.com/what-is-the-difference-between-spf-all-and-all/
+
+● 关于此图，我们只需注意用于验证SPF的DNS服务器是谁，SPF验证机制在哪触发（接收服务器）即可。
+
+例子：如果钓鱼者采用QQ邮件进行钓鱼，那发送到接收者服务器时，它会查QQ相关的DNS服务器中的SPF记录。  
+您可能会觉得那这不等于自己查自己吗？没错。看似鸡肋是因为我们还没有考虑到其他情况（比如攻击者私搭服务器发邮件）。
+
+![image](https://image.3001.net/images/20220716/1657907588_62d1a98441f809dbb066c.png!small)
+
+● DKIM（域密钥识别邮件） 用于对正在发送的电子邮件进行身份验证  
+DKIM 记录也在DNS中。引入了公钥签名，类似网站合法证书的检查。DNS服务器和验证机制触发与SPF一致。  
+去发送者DNS服务器上获取记录，比对一下里面的签名。  
+![image](https://image.3001.net/images/20220716/1657907631_62d1a9af99a50aa774f3c.png!small)
+
+您可能会觉得那这不等于自己查自己吗？没错。看似鸡肋是因为我们还没有考虑到其他情况（比如攻击者私搭服务器发邮件，比如它借助其他企业级服务器邮件推送假设存在此功能的话）。  
+参考资料：
+
+> https://dmarcian.com/what-is-dkim/  
+> https://dmarcian.com/dkim-selectors/  
+> https://help.returnpath.com/hc/en-us/articles/222481088-DKIM-DNS-record-> overview
+
+● DMARC（基于域的消息验证、报告和一致性）
+
+DMARC 记录也在DNS中。  
+它综合参考了SPF（比对那个域中的IP）与DKIM（比对那个域中的签名）的结果，和稀泥的添加一个称为DMARC的记录到邮件内容中。  
+原则上我们不能只参考SPF也不能只参考DKIM。它说用QQ发的邮件，SPF显示IP地址为非QQ的，而DKIM签名确实是QQ的。这就能说明恶意性出来了。因此来个协议自动帮我们综合比对。  
+你既要使用QQ声称的IP服务器发邮件，又得使用QQ声称的域名签名发邮件。  
+你注册个QQ发邮件，假设就从这三个角度检查，那都是合法的。  
+您可能会觉得那这不等于自己查自己吗？没错。看似鸡肋是因为我们还没有考虑到其他情况（比如攻击者私搭服务器发邮件，比如它借助其他企业级服务器邮件推送假设存在此功能的话）。
+
+DMARC记录如下：  
+v=DMARC1; p=quarantine; rua=mailto:user@test.com  
+根据p=quarantine的值进行是否垃圾邮件的分类。  
+rua=mailto:user@test.com和稀泥报告将发送到此电子邮件地址
+
+以上三协议检查工具：https://dmarcian.com/domain-checker/
+
+参考资料：
+
+> https://dmarcian.com/start-dmarc/  
+> https://dmarcian.com/dmarc-record/  
+> https://dmarc.org/overview/  
+> https://dmarcian.com/alignment/
+
+● S/MIME（安全/多用途 Internet 邮件扩展）
+
+安全证书与内容加密  
+![image](https://image.3001.net/images/20220716/1657907706_62d1a9fa5183f1c50cea8.png!small)
+
+● SMTP C2隧道
+
+大量的工具利用这个隧道  
+![image](https://image.3001.net/images/20220716/1657907737_62d1aa19e891f45328620.png!small)
+
+# SMTP流量相关
+
+参考资料：
+
+> https://docs.microsoft.com/en-us/exchange/security-and-compliance/smime-> exo/smime-exo  
+> https://attack.mitre.org/techniques/T1071/003/
+
+● SMTP流量相关以及一些状态码解释  
+![image](https://image.3001.net/images/20220716/1657907777_62d1aa41aef8946930c26.png!small)
+
+参考资料：
+
+> https://www.wireshark.org/docs/dfref/s/smtp.html  
+> https://www.mailersend.com/blog/smtp-codes  
+> https://www.incidentresponse.org/playbooks/phishing PPT素材  
+> https://www.malware-traffic-analysis.net/2018/12/19/index.html SMTP恶意流量
+
+您可能还对钓鱼的实施感兴趣：
+
+> https://tryhackme.com/room/phishingemails1tryoe 免费  
+> https://tryhackme.com/room/phishingemails2rytmuv 免费  
+> https://tryhackme.com/room/phishingyl 红队之高级网络钓鱼实施  
+> https://tryhackme.com/room/phishinghiddeneye 红队之简单网络钓鱼实施（免费）  
+> https://tryhackme.com/module/phishing
+
+感谢师傅们很有耐心的阅读到了这里。我们还会再见面的。共勉。
+

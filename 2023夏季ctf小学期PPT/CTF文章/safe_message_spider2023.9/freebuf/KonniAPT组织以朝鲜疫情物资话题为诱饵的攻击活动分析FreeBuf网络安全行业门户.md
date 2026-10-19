@@ -1,0 +1,324 @@
+## **概述**
+
+Konni APT 组织是朝鲜半岛地区最具代表性的 APT 组织之一，自 2014
+年以来一直持续活动，据悉其背后由朝鲜政府提供支持，该组织经常使用鱼叉式网络钓鱼的攻击手法，经常使用与朝鲜相关的内容或当前社会热点事件来进行攻击活动，该组织的主要目标为韩国政治组织，以及日本、越南、俄罗斯、中国等地区。
+
+微步情报局近期通过威胁狩猎系统监测到 Konni APT 组织最新攻击活动，经过分析有如下发现：
+
+> 攻击者以“朝鲜疫情物资”话题相关文章作为诱饵文档进行攻击活动，诱饵文档延续了该组织以往的攻击手法，将正文颜色设置为难以阅读的颜色以诱导用户启用宏。
+>
+> 在文档携带的恶意宏中，从失陷的服务器中下载后门模块并执行。
+>
+> 后门模块为 Amadey 家族木马，攻击者可利用该后门模块进行下一步恶意模块的分发，该组织经常使用此家族木马进行攻击活动。
+>
+> 根据样本关联信息显示，本次攻击活动手法与以往安全机构披露的“隐士”、“BlueSky” 等攻击活动手法类似，另外还与具有相同背景的半岛地区 APT 组织
+> Kimsuky 有诸多关联之处。
+>
+> 微步在线通过对相关样本、IP 和域名的溯源分析，共提取 31 条相关 IOC，可用于威胁情报检测。微步在线威胁感知平台 TDP、威胁情报管理平台
+> TIP、威胁情报云 API、互联网安全接入 OneDNS 等均已支持对此次攻击事件和团伙的检测。
+
+##  **详情**
+
+本次攻击活动依然采用 Konni APT 组织最常用的攻击方式，投递的诱饵文件具有一定的诱惑性，攻击者引用 NKNews 近期发表的朝鲜 COVID-19
+话题相关文章作为诱饵文档，将正文文字颜色设置为难以阅读的颜色，只有启用宏之后才能修改为容易阅读的颜色，原文链接：https://www.nknews.org/2020/10/pyongyang-stores-low-on-foreign-goods-amid-north-korean-covid-19-paranoia/。
+
+文件名称| Pyongyang stores low on foreign goods amid North Korean COVID-19
+paranoia (1).doc  
+---|---  
+SHA256| 9891b3d68ffbdb4a4bd0e7e49ba7b1e6d30ffb35935357551c312af5ae3a4f1e  
+创建时间| 2020/11/27 06:28  
+  
+![](https://image.3001.net/images/20210128/1611823528_601279a82141a1719363c.png!small)
+
+图1. doc诱饵文档启用宏前后
+
+![](https://image.3001.net/images/20210128/1611823548_601279bc0400cb2af49e3.png!small)
+
+图2. 样本执行流程图
+
+##  **样本分析**
+
+在 doc 文档携带的恶意宏中，首先将正文颜色修改为黑色以迷惑用户，之后从失陷的服务器（https://rabadaun.com/wordpress/wp-content/themes/TEMP.so）下载文件数据保存到主机 Templates 目录下 spolsve.exe 并执行。
+
+![](https://image.3001.net/images/20210128/1611823574_601279d6dc1c34bdf1cf4.png!small)
+
+图3. 文档中携带的恶意宏
+
+下载的文件为木马 Loader 模块，样本信息如下：
+
+文件名| TEMP.so、spolsve.exe、tlworker.exe  
+---|---  
+文件大小| 290816 字节 (284.00 KB)  
+MD5| f160c057fded2c01bfdb65bb7aa9dfcc  
+SHA1| 1e14de870b1c4b09cbf81206562a254c27178d85  
+SHA256| efc139dc0e280a374065dc59c55a45b5146f091a85a3abd6f0caf1a9a2f8b060  
+编译时间戳| 2016/12/06 11:35:32  
+  
+Loader 模块执行后，先通过累加一个比较大的数值 0xBAADBEEF，来制造一个比较大的延时效果，之后将 EnumChildWindows
+的回调函数进行动态解密并执行，这在一定程度上干扰了静态分析。
+
+![](https://image.3001.net/images/20210128/1611823594_601279ead8e92f0c90b93.png!small)
+
+图4. 调用EnumChildWindows反汇编代码片段
+
+之后找到 .pnuvq 区段数据，使用密钥“nfnljhbnntphxhxthxdpjdtdtjlppltxvrrzbbrlbvfvrnpp ”进行解密。
+
+![](https://image.3001.net/images/20210128/1611823611_601279fb63bb61e502771.png!small)
+
+图5. Loader模块的PE区段表
+
+解密后的数据为后门 PE 模块，紧接着再次创建一份自身进程，将后门模块注入执行。
+
+![](https://image.3001.net/images/20210128/1611823624_60127a085a49600d34462.png!small)
+
+图6. 后门模块PE头数据
+
+###  **Backdoor模块**
+
+文件大小| 68608 字节 (67.00 KB)  
+---|---  
+MD5| f108a4d064dd05c0a097f517ec738b1a  
+SHA1| f197a7be7fdb286bc9673a57b54994c02a7af8d6  
+SHA256| d1baefd0bdc7f3b0369c5b7126c3b98469a518cf4db788fad1d243d8661a17b9  
+编译时间戳| 2020/11/19 17:00:55  
+  
+后门模块中的字符串均以加密形式存储，使用密钥"a7963b909152f8ebc3ec69b1dee2b255a9678a5b7b827e8c75bd9b0"动态解密。
+
+![](https://image.3001.net/images/20210128/1611823652_60127a242c783c3df70dd.png!small)
+
+图7. 字符串解密函数反汇编代码片段
+
+该模块执行后，首先检查常见的杀软文件是否存在，用以检查主机上存在的杀软信息。
+
+![](https://image.3001.net/images/20210128/1611823666_60127a32baafd9ce87ee6.png!small)
+
+图8. 检查主机杀软信息
+
+再检查当前运行目录是否是 C:\ProgramData\a7963\TlWorker.exe，如果不是，则自我复制到该目录。
+
+![](https://image.3001.net/images/20210128/1611823682_60127a42e60529bf65365.png!small)
+
+图9. 后门模块的自我复制
+
+并调用 cmd 设置注册表开机启动项以在主机上建立持久化机制。
+
+![](https://image.3001.net/images/20210128/1611823697_60127a511d82cb0177bb8.png!small)
+
+图10. 设置开机启动项
+
+之后解密出 C2 地址。
+
+![](https://image.3001.net/images/20210128/1611823714_60127a62188138e4bfe0b.png!small)
+
+图11. 解密C2服务器地址
+
+将硬盘序列号、木马版本、是否为管理员、系统版本、杀软信息、主机名、用户名作为上线数据包以 HTTP 协议 POST 方法发送至 C2 服务器（http://
+186.122.150.107/cc/index.php）。
+
+![](https://image.3001.net/images/20210128/1611823731_60127a7365bd576f68ccd.png!small)
+
+图12. 向C2服务器上传的主机信息数据包
+
+然后接受 C2 服务器返回数据，从中取出服务器所下发的下载链接，继续下载其他恶意模块，每隔 60 秒与服务器通信 1
+次。截至分析时，服务器暂未下发有效指令。
+
+![](https://image.3001.net/images/20210128/1611823745_60127a813017e886497d2.png!small)
+
+图13. 响应C2服务器远程指令
+
+该 C2 服务器部署了 Amadey 家族木马服务端用以对目标进行控制。
+
+![](https://image.3001.net/images/20210128/1611823762_60127a924d458314806fd.png!small)
+
+图14. C2服务器上所部署的Amadey木马服务端
+
+在上线列表中发现已经有用户被感染，根据 IP 判断包括 1
+例韩国受害者，这符合该组织的攻击目标范围，攻击者可随时设置任务，下发给目标以进行下步恶意模块的分发。
+
+![](https://image.3001.net/images/20210128/1611823778_60127aa2a9dce76a5bc33.png!small)
+
+图15. Amadey木马服务端所显示的感染列表
+
+##  **关联分析**
+
+在关联分析工作中，另外发现一个以“俄罗斯专家介绍”为主题的诱饵文档。
+
+![](https://image.3001.net/images/20210128/1611823801_60127ab9e06d4ae195ea3.png!small)
+
+图16. 以“俄罗斯专家介绍”为主题的诱饵文档
+
+在其恶意宏中同样从失陷的网站服务器下载恶意模块执行（http://fd-com.fr/wp-content/themes/consultingservices/upload/tmp.txt），虽然目前已经无法正常下载，但根据关联分析信息，发现之后的恶意流程与上面样本一致，同样使用
+Amadey 木马在主机建立持久化机制，并从 C2
+服务器（http://108.62.118.185/cc/index.php）获取下载链接继续下一步恶意行为。
+
+![](https://image.3001.net/images/20210128/1611823818_60127aca4edebc925cc8a.png!small)
+
+图17. 恶意宏代码中的失陷服务器
+
+在本次攻击活动中，攻击者依然延续了以往的攻击手法，将诱饵文档颜色设置为不可读颜色诱导用户启用宏，从攻击手法多维度信息来看，与以往攻击活动手法基本一致，例如使用基本一致的解密算法。![](https://image.3001.net/images/20210128/1611823831_60127ad7d4ab05dc6fae4.png!small)
+
+图18. 一致的解密算法
+
+同样使用 Amadey 家族木马套件。
+
+![](https://image.3001.net/images/20210128/1611823845_60127ae5553bf7e610a80.png!small)
+
+图19. 一致的Amadey木马服务端
+
+在微步在线追踪溯源系统中检索攻击者使用的 C2 服务器的关联信息，发现历史解析域名基本都带有一定的迷惑性，推测攻击者用来进行钓鱼攻击，这符合 Konni
+以往的攻击手法。
+
+![](https://image.3001.net/images/20210128/1611823860_60127af490ef5776f9822.png!small)图20.
+微步在线追踪溯源系统关联信息
+
+### 与 Kimsuky APT 组织的关联性
+
+在 Kimsuky
+组织最近的一起攻击活动中，其使用了“世界卫生大会”相关内容作为诱饵文档（57b59b770f313b0a09b651bfba0c95cdba482d4a41fa2e95593674dd5cd83c5b），同样将正文颜色设置为难以阅读的颜色，且攻击者编辑文档环境为朝鲜语。
+
+![](https://image.3001.net/images/20210128/1611823881_60127b091b0ac5d868afb.png!small)
+
+图21. 以“世界卫生大会”为主题的诱饵文档
+
+Kimsuky 组织在以往攻击活动中经常使用带有恶意宏的文档进行攻击，在恶意宏中从 C2
+服务器拉取下阶段脚本代码执行，本次攻击活动依然使用同样的攻击手法，另外该组织以往还经常使用包含“.php?op={参数值}”的
+URL，其中参数值代表不同阶段的行为，在此次攻击活动中就使用到以下 URL：
+
+> http://documentserver.site/dark/index.php?op=5
+>
+> http://documentserver.site/dark/index.php?op=7
+
+![](https://image.3001.net/images/20210128/1611823896_60127b18cb6e0f03587ee.png!small)
+
+图22. Kimsuky组织使用的URL示例图
+
+而通过分析 Konni 以往所使用的 Amadey
+家族攻击样本，发现有攻击样本（544aaf0804060598138f2db809c31bb651dd8f4fce2e64b49f7db051fc54a764）曾使用过
+C2 服务器 http://securelevel.site/pppp/index.php，经过对比，与 Kimsuky 所使用的 C2 服务器 Whois
+注册信息完全一致。
+
+注册者| aoler jack  
+---|---  
+邮箱| poole.sion2015@yandex.com  
+电话| +82.12035386476  
+  
+  
+
+![](https://image.3001.net/images/20210128/1611823911_60127b27d33e05e9b6996.png!small)
+
+图23. Kimsuky和Konni两者相同的Whois注册信息
+
+由此我们发现，Konni 组织与具有相同朝鲜半岛背景的 Kimsuky
+组织有一定程度的资产重叠，从攻击目标与攻击手法来看也有不同程度的技术重叠，依靠现有的一些证据，可以合理地怀疑他们可能存在某种意义上的关联性，当然仅凭有限的内容来判定他们之间的关联并不容易，有必要继续跟踪观察他们之间的关系，通过大量的恶意文件样本和各种分析指标来获取更明确的答案。
+
+##  **结论**
+
+Konni APT 组织善于使用朝鲜相关热点话题进行攻击活动，且极具针对性，本次攻击活动中依然使用诱饵文档+Amadey
+家族木马套件的攻击方式，与相同背景的半岛地区 APT 组织 Kimsuky
+组织或有关联，基于该组织所在地区及目标的地缘政治敏感性，也可能会给我国带来一定程度的负面影响，微步在线情报局会对该组织攻击活动持续进行跟踪，及时发现安全威胁并快速响应处置。
+
+## 附录 – IOC
+
+### C&C
+
+> 186.122.150.107
+>
+> 108.62.118.185
+>
+> yahoo-login.rnail-suport.site
+>
+> login-protect.club
+>
+> yahoo-login.anlysis-info.xyz
+>
+> yahoo.mail-master.online
+>
+> noreply-sec.online
+>
+> accounts.goolg-e.com
+>
+> yahoo.help-master.online
+>
+> noreply-yahoo.com
+>
+> noreply-cc.online
+>
+> voipgoogle.com
+>
+> google-acount.com
+>
+> noreply-goolge.com
+>
+> myethrvvallet.com
+>
+> nidnaver.press
+>
+> helpnaver.online
+>
+> help-naver.site
+>
+> nidnaver.store
+>
+> helpnaver.host
+>
+> helpnaver.link
+>
+> helpnaver.site
+>
+> documentserver.site
+>
+> nicnaver.com
+>
+> emailnaver.com
+>
+> nidnaver.host
+>
+> nidnaver.site
+>
+> security-lnfo.com
+>
+> lnfo-master.com
+>
+> help-secure.info
+>
+> security-acount.info
+
+### Compromised Domain
+
+> rabadaun.com
+>
+> fd-com.fr
+
+### Hash
+
+> 9891b3d68ffbdb4a4bd0e7e49ba7b1e6d30ffb35935357551c312af5ae3a4f1e
+>
+> efc139dc0e280a374065dc59c55a45b5146f091a85a3abd6f0caf1a9a2f8b060
+>
+> d1baefd0bdc7f3b0369c5b7126c3b98469a518cf4db788fad1d243d8661a17b9
+>
+> 5bd48c2f61541124920d71e674ce3fd5927702f69c2baacc5a509debe3a893c8
+>
+> 9aab5a536b95963c4e3c990ab40bdeb25c850e2a862ea528b81d470d6acdadb1
+
+### Email
+
+> glorify0717@gmail.com
+>
+> mypretty0914@gmail.com
+>
+> norelyeverland@hanmail.net
+>
+> [poole.sion2015@yandex.com](mailto:poole.sion2015@yandex.com)
+
+##  **参考链接**
+
+>
+> https://s.threatbook.cn/report/file/efc139dc0e280a374065dc59c55a45b5146f091a85a3abd6f0caf1a9a2f8b060/?sign=history&env=win7_sp1_enx86_office2013
+>
+> https://s.tencent.com/research/report/727.html
+>
+> https://blog.alyac.co.kr/2308
+>
+> https://blog.alyac.co.kr/3390
+

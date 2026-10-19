@@ -1,0 +1,59 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+**之前的一篇[Intel产品AMT本地及远程提权漏洞（CVE-2017-5689）复现](http://www.freebuf.com/vuls/135549.html)，只是简单的复现了该漏洞，在文章最后提及到了如果进一步对该漏洞进行利用。但是有些大佬们看了一眼后觉得搞了几个并不知道如何利用。一直到有位私信我的，说用工具不能连vnc，好吧。都私信了，我这么热心肠的人怎么能拒绝呢，所以有了这篇更为详细的利用过程。**
+
+> 工具：[Open MDTK（需梯子）](http://www.meshcommander.com/open-manageability)和
+> [UltraVNC ](http://www.uvnc.com/downloads/ultravnc.html)
+>
+> 攻击机：win7
+>
+> 靶机：一台韩国思密达的服务器，在shodan上面随便找的
+
+步骤：首先找到一台存在漏洞的服务器，利用上一篇的方法，是用默认的admin/admin账号登陆截包删除response里的内容，发包添加管理员账号。
+
+![image.png](https://image.3001.net/images/20180130/15172841202463.png!small)  
+
+MDTK需要安装，安装后有很多图标，运行Manageability Automation Tool。
+
+右键空白处添加“被管理设备”，需要输入IP地址和刚刚设置的那个复杂的密码。
+
+![111.png](https://image.3001.net/images/20180130/15172845481632.png!small)  
+
+添加后，右键点击刚刚添加的那行，选择Manage Computer。
+
+软件会自动开始连接，当左侧出现目录时，即表示连接成功
+
+![22.png](https://image.3001.net/images/20180130/15172847003836.png!small)  
+
+这里的远程连接，其实相当于KVM，能方便的控制服务器  
+
+![image.png](https://image.3001.net/images/20180130/15172847594073.png!small)  
+
+这里要开启端口重定向，不然是无法点亮托管那个按钮的
+
+![33.png](https://image.3001.net/images/20180130/15172849009011.png!small)  
+
+开启vnc的话这里还需要设置 Remote Desktop，点击Remote Desktop Settings，开启Redirection Port
+(16993/16995)。
+
+![44.png](https://image.3001.net/images/20180130/15172850065345.png!small)  
+
+点击Remote Desktop Viewer，这里的Viewer Type选择UltraVNC，Viewer Path
+选择刚刚下载本机的vncviewer.exe  
+
+![55.png](https://image.3001.net/images/20180130/15172851327417.png!small)  
+
+![image.png](https://image.3001.net/images/20180130/15172852503088.png!small)  
+
+这样设置后，Launch Viewer就可以点击了，跟windows下的3389一样，没敢登录，，，还有域？思密达看不懂2333  
+
+![66.png](https://image.3001.net/images/20180130/15172853447400.png!small)  
+
+点击上面的托管，能实现远程开关机，并且在开机后自动进入BIOS
+
+![77.png](https://image.3001.net/images/20180201/15174793952395.png!small)  
+
+以上为本漏洞利用的详细步骤，大佬轻喷~
+
+ ***本文作者：test124，转载请注明来自FreeBuf.COM**
+

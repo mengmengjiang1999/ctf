@@ -1,0 +1,190 @@
+**自2020年开始，深信服安全团队监测到Linux恶意软件挖矿事件大量增多，且有持续上升的趋势。**
+
+与Windows下五花八门的勒索病毒家族不同，Linux下感染量较大的恶意软件就几个家族。但这几个家族占据了全球大部分的感染主机，几乎呈现出垄断的趋势。本文将介绍Linux环境下7个较常见的流行恶意软件家族，以及其对应的清除步骤。
+
+##  七大恶意软件家族
+
+###  BillGates
+
+BillGates在2014年被首次发现，由于其样本中多变量及函数包含字符串”gates”而得名，该病毒主要被黑客用于DDos，其特点是会替换系统正常程序（ss、netstat、ps、lsof）进行伪装。![](https://image.3001.net/images/20200426/1587890673_5ea549f1ae636.png!small)
+**主机中毒现象：**
+
+> [1] 在/tmp/目录下存在gates.lod、moni.lod文件。
+>
+> [2] 出现病毒文件夹/usr/bin/bsd-port/。
+>
+> [3] 主机访问域名[www.id666.pw](http://www.id666.pw/)。
+>
+> [4] 系统文件（ss、netstat、ps、lsof）被篡改过，修改时间异常。
+
+![](https://image.3001.net/images/20200426/1587890709_5ea54a155baa5.png!small)
+**病毒清除步骤：**
+
+> [1] 清除/usr/bin/bsd-port/getty、.ssh等病毒进程。
+>
+> [2] 清除/usr/bin/bsd-port/getty、/usr/bin/.sshd等病毒文件。
+>
+> [3] 从/usr/bin/dpkgd/目录恢复原系统文件。
+
+###  DDG
+
+DDG是目前更新最频繁的恶意软件家族，同时感染量也十分庞大，黑客使用P2P协议来控制这个僵尸网络，来实现隐藏C&C的目的，该病毒的主要目的为蠕虫式挖矿，特点是版本迭代过程中，病毒文件名保持以ddg.和i.sh的规范命名。
+
+**主机中毒现象：**
+
+> [1] /tmp/目录下出现有ddgs.+数字的ELF文件。
+>
+> [2] 在/tmp/目录下存在qW3xT.和SzDXM等随机名文件。
+>
+> [3] 存在下载i.sh的定时任务。
+
+![](https://image.3001.net/images/20200426/1587890774_5ea54a56cb090.png!small)![](https://image.3001.net/images/20200426/1587890798_5ea54a6e9476a.png!small)
+**病毒清除步骤：**
+
+> [1] 清除随机名挖矿进程及对应文件。
+>
+> [2] 删除母体文件ddg.*。
+>
+> [3] 删除带有i.sh字符串的定时任务。
+>
+> [4] 删除ssh缓存公钥authorized_keys。
+
+###  SystemdMiner
+
+SystemdMiner使用3种方式（YARN漏洞、Linux自动化运维工具、.ssh缓存密钥）进行传播，该病毒前期的文件命名带有Systemd字符串，而后期版本已更换为随机名，其特点是，善用暗网代理来进行C&C通信。
+
+**主机中毒现象：**
+
+> [1] 定时访问带有tor2web、onion字符串的域名。
+>
+> [2] 在/tmp目录下出现systemd的文件（后期版本为随机名）。
+>
+> [3] 存在运行systemd-login的定时任务（后期版本为随机名）。
+
+![](https://image.3001.net/images/20200426/1587890872_5ea54ab8540ae.png!small)![](https://image.3001.net/images/20200426/1587890882_5ea54ac2872c5.png!small)
+**病毒清除步骤：**
+
+> [1] 清除/var/spool/cron和/etc/cron.d目录下的可疑定时任务。
+>
+> [2] 清除随机名的挖矿进程。
+>
+> [3] 清除残留的systemd-login和.sh病毒脚本。
+
+![](https://image.3001.net/images/20200426/1587890913_5ea54ae1014c3.png!small)![](https://image.3001.net/images/20200426/1587890922_5ea54aeaa0c0d.png!small)
+
+###  StartMiner
+
+StartMiner于今年2月被发现，由于其进程及定时任务中包含2start.jpg字符串而得名，该病毒通过ssh进行传播，其特点是会创建多个包含2start.jpg字符串的恶意定时任务。
+
+**主机中毒现象：**
+
+> [1] 定时任务里有包含2start.jpg的字符串。
+>
+> [2] /tmp/目录下存在名为x86_的病毒文件。
+>
+> [3] /etc/cron.d出现多个伪装的定时任务文件：apache、nginx、root。
+
+![](https://image.3001.net/images/20200426/1587890954_5ea54b0a2d699.png!small)![](https://image.3001.net/images/20200426/1587890968_5ea54b18072d7.png!small)
+**病毒清除步骤：**
+
+> [1] 结束挖矿进程x86_。
+>
+> [2] 删除所有带有2start.jpg字符串的定时任务。
+>
+> [3] 清除所有带有2start.jpg字符串的wget进程。
+
+![](https://image.3001.net/images/20200426/1587890993_5ea54b3116f59.png!small)
+
+###  WatchdogsMiner
+
+2019年一个同样以Redis未授权访问漏洞及SSH爆破传播的WatchdogsMiner家族被发现，由于其会在/tmp/目录下释放一个叫watchdogs的母体文件而得名。WatchdogsMiner的初始版本会将恶意代码托管在pastebin.com上以绕过检测，不过后续版本已弃用，改为自己的C&C服务器.systemten.org。该病毒的特点是样本由go语言编译，并试用了伪装的hippies/LSD包（github_com_hippiesLSD）。![](https://image.3001.net/images/20200426/1587891035_5ea54b5bdfec5.png!small)
+**主机中毒现象：**
+
+> [1]存在执行pastebin.com上恶意代码的定时任务。
+>
+> [2]/tmp/目录下存在一个名为watchdogs的病毒文件。
+>
+> [3]访问*.systemten.org域名。
+
+![](https://image.3001.net/images/20200426/1587891058_5ea54b72aa183.png!small)![](https://image.3001.net/images/20200426/1587891064_5ea54b78b2fdd.png!small)
+**病毒清除步骤：**
+
+> [1] 删除恶意动态链接库 /usr/local/lib/libioset.so
+>
+> [2] 清理 crontab 异常项[3] 使用kill命令终止挖矿进程
+>
+> [4] 排查清理可能残留的恶意文件：
+>
+> (a) chattr -i /usr/sbin/watchdogs /etc/init.d/watchdogs /var/spool/cron/root
+> /etc/cron.d/root；
+>
+> (b) chkconfig watchdogs off；
+>
+> (c) rm -f /usr/sbin/watchdogs /etc/init.d/watchdogs。
+>
+> [5] 由于文件只读且相关命令被hook，需要安装busybox并使用busybox rm命令删除。
+
+###  XorDDos
+
+XorDDoS僵尸网络家族从2014年一直存活至今，因其解密方法大量使用Xor而被命名为XorDDoS，其主要用途是DDos公网主机，特点是样本运用了“多态”及自删除的方式，导致主机不断出现随机名进程，同时采用了Rootkit技术隐藏通信IP及端口。![](https://image.3001.net/images/20200426/1587891113_5ea54ba907cc1.png!small)
+**主机中毒现象：**
+
+> [1] 存在病毒文件/lib/libudev.so。
+>
+> [2] 在/usr/bin，/bin，/lib，/tmp目录下有随机名病毒文件。
+>
+> [3]存在执行gcc.sh的定时任务。
+
+![](https://image.3001.net/images/20200426/1587891138_5ea54bc2e1f7c.png!small)![](https://image.3001.net/images/20200426/1587891144_5ea54bc808381.png!small)
+**病毒清除步骤：**
+
+> [1] 清除/lib/udev/目录下的udev程序。
+>
+> [2] 清除/boot下的随机恶意文件（10个随机字符串数字）。
+>
+> [3] 清除/etc/cron.hourly/cron.sh和/etc/crontab定时器文件相关内容。
+>
+> [4] 如果有RootKit驱动模块，需要卸载相应的驱动模块，此次恶意程序主要它来隐藏相关的网络IP端口。
+>
+> [5] 清除/lib/udev目录下的debug程序。
+
+###  RainbowMiner
+
+RainbowMiner自2019年就频繁出现，由于其访问的C&C域名带有Rainbow字符串而得名，其最大的特点是会隐藏挖矿进程kthreadds，排查人员会发现主机CPU占用率高，但找不到可疑进程。
+
+**主机中毒现象：**
+
+> [1] 隐藏挖矿进程/usr/bin/kthreadds，主机CPU占用率高但看不到进程。
+>
+> [2] 访问Rainbow66.f3322.net恶意域名。
+>
+> [3] 创建ssh免密登录公钥，实现持久化攻击。
+>
+> [4] 存在cron.py进程持久化守护。
+
+![](https://image.3001.net/images/20200426/1587891200_5ea54c009f405.png!small)![](https://image.3001.net/images/20200426/1587891207_5ea54c07cb057.png!small)![](https://image.3001.net/images/20200426/1587891214_5ea54c0eb6020.png!small)
+**病毒清除步骤：**
+
+> [1] 下载busybox：wget
+> <http://www.busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-> musl/busybox-x86_64>。
+>
+> [2] 使用busybox top定位到挖矿进程kthreadds及母体进程pdflushs，并清除。
+>
+> [3] 删除/usr/bin/kthreadds及/etc/init.d/pdflushs文件，及/etc/rc*.d/下的启动项。
+>
+> [4] 删除/lib64/下的病毒伪装文件。
+>
+> [5] 清除python cron.py进程。
+
+##  加固建议
+
+> 1、Linux恶意软件以挖矿为主，一旦主机被挖矿了，CPU占用率高，将会影响业务，所以，需要实时监控主机CPU状态。
+>
+> 2、定时任务是恶意软件惯用的持久化攻击技巧，应定时检查系统是否出现可疑定时任务。
+>
+> 3、企业还大量存在ssh弱密码的现象，应及时更改为复杂密码，且检查在/root/.ssh/目录下是否存在可疑的authorized_key缓存公钥。
+>
+> 4、定时检查Web程序是否存在漏洞，特别关注Redis未授权访问等RCE漏洞。
+
+ ***本文作者：深信服千里目安全实验室，转载请注明来自FreeBuf.COM**
+

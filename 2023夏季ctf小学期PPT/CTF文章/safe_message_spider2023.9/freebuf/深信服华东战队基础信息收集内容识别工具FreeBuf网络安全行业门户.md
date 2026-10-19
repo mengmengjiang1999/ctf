@@ -1,0 +1,84 @@
+## 什么是内容发现
+
+首先，应该知道，在 Web
+应用安全的背景下，什么是内容？内容可以是很多东西，文件、视频、图片、备份、网站功能。当谈论内容发现时，不是在谈论我们可以在网站上看到的显而易见的东西。这些东西并没有立即呈现给我们，也并不总是供公众使用。
+
+例如，此内容可能是供员工使用的页面或门户、网站的旧版本、备份文件、配置文件、管理面板等...
+
+## robots.txt
+
+robots.txt
+文件，它告诉搜索引擎哪些页面可以显示，哪些页面不允许显示在搜索引擎结果中，或者禁止特定搜索引擎完全抓取该网站。通常的做法是限制某些网站区域，使其不会显示在搜索引擎结果中。这些页面可能是网站的管理门户或文件等区域。该文件为我们提供了网站上所有者不希望安全研究人员发现的位置的列表。
+
+## favicon
+
+### favicon 显示在浏览器的地址栏或选项卡中，用于品牌化网站
+
+![1648652696_62447198a0b45f6995397.png!small?1648652717873](https://image.3001.net/images/20220330/1648652696_62447198a0b45f6995397.png!small?1648652717873)
+
+当使用框架构建网站时，作为安装一部分的图标会留下，如果网站开发人员没有用自定义图标替换它，这可以让安全研究人员了解正在使用的框架。这里OWASP
+托管一个常见框架图标的数据库，研究人员可以使用它来检查目标 favicon
+<https://wiki.owasp.org/index.php/OWASP_favicon_database>
+
+![1648645626_624455fadc84407892d6a.png!small?1648645630601](https://image.3001.net/images/20220330/1648645626_624455fadc84407892d6a.png!small?1648645630601)
+
+例如，打开浏览器输入URL:[https://xxx.com.cn](https://static-labs.tryhackme.cloud/sites/favicon/)此时会看到特定的网站，我们会注意到一个图标，确认该站点正在使用网站图标。它将下载
+favicon 并获取其 md5 哈希值
+
+curl https://xxx.com.cn/images/favicon.ico | md5sum
+
+https://wiki.owasp.org/index.php/OWASP_favicon_database（查找对应值）
+
+![1648646538_6244598a013b3ec9843b5.png!small?1648646542001](https://image.3001.net/images/20220330/1648646538_6244598a013b3ec9843b5.png!small?1648646542001)
+
+## HTTP **标头信息**
+
+当向 Web 服务器发出请求时，服务器会返回各种 HTTP
+标头。这些标头有时可能包含有用的信息，例如网络服务器软件，可能还有正在使用的编程/脚本语言。在下面的示例中，可以看到网络服务器是 Microsoft-IIS/7.5 版本 7.5 并运行 ASP.NET 版本 。使用这些信息，可以找到正在使用的易受攻击的软件版本。
+
+![1648647953_62445f11774cf496a2de1.png!small?1648647954632](https://image.3001.net/images/20220330/1648647953_62445f11774cf496a2de1.png!small?1648647954632)
+
+## Google hacking
+
+Google hacking / Dorking 利用 Google 的高级搜索引擎功能，允许挑选自定义内容。例如，可以使用以下站点从某个域名中挑选出结果
+**：** 过滤器，例如（站点：[12345.com](http://tryhackme.com/)）可以将其与某些搜索词匹配，例如单词
+admin（站点:12345.com admin) 这只会返回来自 [12345.com](http://tryhackme.com/)网站的结果
+
+![1648648652_624461cc1ed172c24213c.png!small?1648648652497](https://image.3001.net/images/20220330/1648648652_624461cc1ed172c24213c.png!small?1648648652497)
+
+## Wappalyzer
+
+Wappalyzer ( <https://www.wappalyzer.com/>)
+是一种在线工具和浏览器扩展程序，可帮助识别网站使用的技术，例如框架、内容管理系统 (CMS)
+
+###
+目前支持：[Firefox](http://www.baidu.com/link?url=vVQZ5Kw3xTb0IaYErOos77CBllaZGBdJ4gcOMGe93R7RfoXiwZRQHn_ywBiFSOSd)、[Google
+Chrome
+网络浏览器](http://www.baidu.com/link?url=rssS4l2iuAPgw-u1Hq7z87TptEKqECd9gyvpfdpnb7W7zinmrzaHdZ-zSb2yNF2nrjK8GUyfYlnU8MkVVeXuYK)、[Edge Web
+浏览器](http://www.baidu.com/link?url=80L3yc8zF-68_JmyBPXxj0Cbqc1CytN4sYaRSTJ12bTdlZ4nr4Zrl9tPvCQntgeP)、[Safari
+浏览器](http://www.baidu.com/link?url=8RZIvTD9p7iHbMkxcDg96cIcSgf8-GAO4WWZGnXrjqUc9xACWV4sPbyELTbtSuJ2)
+
+![1648649150_624463beb3b275ef37087.png!small?1648649152334](https://image.3001.net/images/20220330/1648649150_624463beb3b275ef37087.png!small?1648649152334)
+
+##  **GitHub**
+
+要了解 GitHub，首先需要了解 Git。Git 是一个 **版本控制系统**
+跟踪项目中文件的更改。在团队中工作更容易，因为可以看到每个团队成员正在编辑的内容以及他们对文件所做的更改。当用户完成更改后，他们会通过一条消息提交它们，然后将它们推送回一个中央位置（存储库），以供其他用户将这些更改拉到他们的本地计算机上。
+
+GitHub 是互联网上托管的 Git 版本。存储库可以设置为公共或私有，并具有各种访问控制。可以使用 GitHub
+的搜索功能来查找公司名称或网站名称，以尝试找到属于测试的目标的存储库。一旦发现，就可以访问你尚未找到的源代码、密码或其他内容。
+
+![1648649589_62446575adf31065ba98e.png!small?1648649598545](https://image.3001.net/images/20220330/1648649589_62446575adf31065ba98e.png!small?1648649598545)
+
+## S3 Buckets
+
+S3 Buckets 是 Amazon AWS 提供的一种存储服务，允许人们将文件甚至静态网站内容保存在云中，可通过 HTTP 和 HTTPS
+访问。文件的所有者可以设置访问权限以使文件公开、私有甚至可写。有时这些访问权限设置不正确，无意中允许访问不应向公众提供的文件。
+
+S3 存储桶的格式为 http(s):// **{name}。**[
+**s3.amazonaws.com**](http://s3.amazonaws.com/)其中 {name} 由所有者决定，例如
+[123456-assets.s3.amazonaws.com](http://tryhackme-assets.s3.amazonaws.com/).
+可以通过多种方式发现 S3 存储桶，例如在网站的页面源、GitHub 存储库中查找
+URL，甚至是自动化该过程。一种常见的自动化方法是使用公司名称后跟常用术语，例如 **{name}** -assets、 **{name}** -www、
+**{name}** -public、 **{name}** -private 等....
+

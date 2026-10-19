@@ -1,0 +1,77 @@
+2020年RSA大会，吸引着全世界安全的目光。今年大会主题词是“Human
+Element”（人的要素），重点讨论人与技术的关系。RSA大会连续举办多年，到今年已经是29届。往届主题多以安全技术相关，这次颇为不同。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZf2EmEoOjNJs6TeId3TK4IYkibDOnnA8cEuCw4MePgtrUYOz19OA7CozwSNibOQc5zmh7icE3ykzqpibA/640?wx_fmt=png](https://image.3001.net/images/20200218/1581994161_5e4b50b1837f5.jpg!small)
+
+RSA大会官方网站上，对主题词命名做了解释：
+
+What is the most powerful tool toprevent cyberattacks? It’s you. Your ideas,
+your creativity and your knowledgeplay a huge role in protecting the digital
+world. That’s why the theme of RSAConference 2020 is Human Element.
+
+一、RSA大会趋势报告
+
+RSA大会组织者，征集2020年演讲，收到2400多个申请。在提交的内容当中，RSA选出了10个关键词，代表了最新的安全趋势。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZf2EmEoOjNJs6TeId3TK4IY0Pliab1wphMEhmDvLYjJ68zDJldxxUJOgbNInBB8ng20yicq2RNFUmsg/640?wx_fmt=png](https://image.3001.net/images/20200218/1581994169_5e4b50b9f0623.jpg!small)
+
+2020年RSA大会十个趋势
+
+**序号** |  **趋势** |  **解释**  
+---|---|---  
+**1**  
+|  Human Element |  人的因素  
+**2** |  Secure Product |  设计、开发和维护安全的产品  
+**3** |  IT and OT Security |  IT和OT安全融合和覆盖  
+**4** |  Secure Engineering |  聚焦在安全工程的流程  
+**5** |  Privacy |  隐私合规  
+**6** |  Threat Intelligence |  威胁情报分享和写作  
+**7** |  Frameworks |  安全框架  
+**8** |  Security Awareness |  安全意识培训  
+**9** |  Communication |  沟通  
+**10** |  Professional |  职业发展  
+  
+在这十个趋势里面，开发安全产品、隐私、安全意识、沟通与职业发展这些都是和“人”息息相关。网络安全，“人”作为重要的一个要素，不可忽视。我们常说的，三分技术，七分管理，还有ppt（People，Process，Techology）模型中，管理和流程说的都是人的要素。
+
+二、将网络安全注入到企业文化
+
+01
+
+网络安全作为企业文化的意义
+
+企业文化定义了企业的愿景，价值观等，企业员工需要了解并在日常工作中实践。数字化转型过程中，网络安全重要性与日俱增，网络安全如果能够作为企业文化，指导员工日常工作，势必能够帮助企业安全合规，业务持续。
+
+成熟的企业文化，需要组织内每一个人参与。企业安全团队，肩负着网络安全管理和运营的重任。这并不是说，企业的安全重任，全部由安全团队来负责。开发和测试人员，具有开发安全软件的意识和技能，贯穿整个软件开发生命周期。普通员工需要接受安全意识培训，学习基本的安全知识。在日常的工作中，做到提高警惕，避免泄密，避免钓鱼等等。
+
+ESG在2014年曾经发布企业信息安全成熟度模型。战略层面，成熟的组织将安全作为企业文化的一部分。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZf2EmEoOjNJs6TeId3TK4IYtBj6D79ZxwibUle4PE1tRTAvewibgvtiawCTgxFMlQVmic4XFdxbPGARDg/640?wx_fmt=png](https://image.3001.net/images/20200218/1581994178_5e4b50c228b03.jpg!small)
+
+02
+
+网络安全企业文化的实践
+
+ **1**.月月安全月
+
+近年来，国家每年都有安全周，提高全社会对网络安全的认知。安全周上很多主题活动，展览和论坛等。而且，针对重点行业，国家还组织大型的网络安全对抗。这些活动，对企业的安全意识和安全防护，都有很好的促进作用。我想说的是，网络安全是持续提升的过程，周周安全周，月月安全月。
+
+**2.** 个人安全等级考试
+
+定期举办个人安全等级考试。培训后测试才能有效果。培训结果与人力资源的绩效评定挂钩。
+
+**3.** 安全员每月例行检查
+
+办公区间每个楼层，设计网络安全员，每个季度到员工工位进行检查。
+
+**4.** 邮件钓鱼测试
+
+说到对抗防邮件钓鱼等社会工程，安全意识培训是一个老生常谈的节目。培训的效果是需要考虑的问题。事实表明，即使经过培训，经过安全等级考试，依然有人被成功钓鱼。
+
+2020年RSA大会，围绕“人的因素”这一主题开展。我们也希望每个企业都像RSA对主题的解释一样：你们的想法，你们的创造力，你们的知识，能够帮助企业成功对抗网络安全风险，永立数字之颠。
+
+**2020 RSA 问题征集**
+
+关于RSA，你有什么想知道的？ **欢迎关注绿盟科技公众号留言写下你的问题，** RSA现场，绿盟科技安全专家将为您现场答疑。
+
+  
+

@@ -1,0 +1,144 @@
+## **漏洞描述**
+
+6月29日，Atlassian官方发布安全公告，在Atlassian Jira
+多款产品中存在服务端请求伪造漏洞(SSRF)，经过身份验证的远程攻击者可通过向Jira Core REST
+API发送特制请求，从而伪造服务端发起请求，从而导致敏感信息泄露，同时为下一步攻击利用提供条件。需注意的是，若服务端开启注册功能，则未授权用户可通过注册获取权限进而利用。
+
+##  **利用范围**
+
+Jira Core Server, Jira Software Server, and Jira Software Data Center:
+
+  * Versions after 8.0 and before 8.13.22
+
+  * 8.14.x
+
+  * 8.15.x
+
+  * 8.16.x
+
+  * 8.17.x
+
+  * 8.18.x
+
+  * 8.19.x
+
+  * 8.20.x before 8.20.10
+
+  * 8.21.x
+
+  * 8.22.x before 8.22.4
+
+Jira Service Management Server and Data Center:
+
+  * Versions after 4.0 and before 4.13.22
+
+  * 4.14.x
+
+  * 4.15.x
+
+  * 4.16.x
+
+  * 4.17.x
+
+  * 4.18.x
+
+  * 4.19.x
+
+  * 4.20.x before 4.20.10
+
+  * 4.21.x
+
+  * 4.22.x before 4.22.4
+
+##  **漏洞分析**
+
+###  **环境搭建**
+
+使用docker搭建，在docker仓库（https://hub.docker.com/r/weareogury/atlassian-jira-software/tags）中可找到漏洞版本的Jira Software Server镜像。
+
+![](https://image.3001.net/images/20220811/1660197174_62f49936368bf833a4e33.png!small)![](https://image.3001.net/images/20220811/1660197188_62f49944a03f4d46ba680.png!small)按步骤进行配置即可。
+
+![](https://image.3001.net/images/20220811/1660197238_62f49976bcdae6975beb3.png!small)环境搭建成功
+
+![](https://image.3001.net/images/20220811/1660197254_62f499869ebd6e6c02314.png!small)
+
+###  **代码分析**
+
+分析Jira Mobile
+插件，在com.atlassian.jira.plugin.mobile.rest.v1_0.BatchResource中存在barch
+API接口，阅读代码，该API应该是用于接收多个请求并在服务端执行。
+
+![](https://image.3001.net/images/20220811/1660197290_62f499aa697f46865d472.png!small)分析下方的executeBatch函数。
+
+![](https://image.3001.net/images/20220811/1660197454_62f49a4ec94c3aee009a8.png!small)
+
+在如图所示代码，实际负责发送HTTP请求。其中batchService接口的实现类BatchServiceImpl位于com.atlassian.jira.plugin.mobile.service.impl.BatchServiceImpl.class
+
+分析batch函数。
+
+![](https://image.3001.net/images/20220811/1660197517_62f49a8d9d5891920198e.png!small)根据如上代码，定位execute函数。
+
+![](https://image.3001.net/images/20220811/1660197534_62f49a9eba5838b9d6b07.png!small)其中relativeLocation来自于requestBean.getLocation中的location。
+
+![](https://image.3001.net/images/20220811/1660197568_62f49ac01e30ac7292fbd.png!small)后续传入toJiraLocation函数
+
+![](https://image.3001.net/images/20220811/1660197583_62f49acf2ef01c8b23c0b.png!small)![](https://image.3001.net/images/20220811/1660197594_62f49ada133ccd5ab12c0.png!small)继续跟进，位于com.atlassian.jira.plugin.mobile.util.LinkBuilder.class
+
+![](https://image.3001.net/images/20220811/1660197612_62f49aecea3a51a52c563.png!small)
+
+URL通过简单的拼接构造，而其中的path来自于location，完全可控。
+
+继续回到execute函数。
+
+![](https://image.3001.net/images/20220811/1660197637_62f49b05b2cdee7c2ad14.png!small)
+
+location会从json对象中获取，在获取到URL对象后，再调用httpClientProvider发送Http请求。
+
+因为URL的后半部分是可控的，如果我们简单指定location为@xx.com，那么最终的URL为https://jira-host.com@xx.com，httpClientProvider实际上会对xx.com发送http请求，所以导致了SSRF漏洞产生。
+
+##  **漏洞复现**
+
+使用burpsuite自带的dnslog功能进行探测，成功发送请求。
+
+![](https://image.3001.net/images/20220811/1660197687_62f49b37990f95948e7d6.png!small)
+
+##  **修复建议**
+
+ **1\. 将受影响的产品升级到最新安全版本:**
+
+Jira Core Server、Jira Software Server 和 Jira Software Data Center 可升级至：
+
+  * 8.13.22
+
+  * 8.20.10
+
+  * 8.22.4
+
+  * 9.0.0
+
+Jira Service Management Server 和 Data Center 可升级至：
+
+  * 4.13.22
+
+  * 4.20.10
+
+  * 4.22.4
+
+  * 5.0.0
+
+ **2\. 缓解措施**
+
+(1) 关闭用户注册功能。
+
+(2) 禁用Mobile Plugin，具体步骤如下：
+
+a、在应用程序的顶部导航栏中，选择设置 -> 管理加载项或管理应用程序。
+
+b、找到Mobile Plugin for Jira Data Center and Server应用程序，然后选择禁用即可。
+
+(3) 升级Mobile Plugin至最新版本。
+
+##  **参考材料**
+
+https://confluence.atlassian.com/jira/jira-server-security-advisory-29nd-june-2022-1142430667.html
+

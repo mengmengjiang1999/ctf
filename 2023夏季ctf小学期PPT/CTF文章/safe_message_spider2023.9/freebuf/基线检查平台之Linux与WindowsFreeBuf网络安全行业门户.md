@@ -1,0 +1,431 @@
+**最近在做安全基线检查相关的，网上有一些代码比较零散；也有一些比较完整的项目，比如owasp中的安全基线检查项目，但是收费；还有一些开源且完整的，比如lynis，但是不符合我的要求。**
+
+我的要求如下：
+
+> 能够对操作系统、中间件和数据库进行基线检查
+>
+> 脚本在系统上进行基线检查后的结果或者收集到的数据能够传输到一个服务端
+>
+> 服务端要做可视化展示
+
+最终的效果是什么呢？最好能够达到阿里云里的安全基线检查的样子，差一点的话也没关系啦
+
+本篇文章是代码中在centos7和win2012系统中将要检查的项目，参考CIS标准而来。代码在SecurityBaselineCheck
+现在完成了Centos和Windows2012基线检查的编写，脚本(简称agent)只在要检查的服务器上运行并显示检查结果。之后会将检查的结果以json串的形式上传到基于django搭建的后端上，后端目前正在制作中。简要截图如下：
+
+agent:
+
+![Snipaste_2020-01-06_15-41-22.jpg](https://image.3001.net/images/20200106/1578303201_5e12fee1bf476.jpg!small)后端
+
+#
+![image.png](https://image.3001.net/images/20200106/1578303149_5e12fead63760.png!small)
+
+## 一、window检查的项目如下：
+
+### 0x01 账户策略
+
+1.1 密码策略
+
+[+]确保强制密码历史值为5或更高
+
+PasswordHistorySize=5
+
+[+]确保密码最长使用期限值为90天或更少，但不为0
+
+MaximumPasswordAge=90
+
+[+]确保密码最短使用期限值为1或更多
+
+MinimumPasswordAge=1
+
+[+]确保密码必须符合复杂性要求值为enabled
+
+PasswordComplexity=1
+
+[+]确保用可还原的加密来存储密码值为Disabled
+
+ClearTextPassword=0
+
+[+]确保密码长度最小值值为8或更高
+
+MinimumPasswordLength=8
+
+1.2 账户锁定策略
+
+[+]确保账户锁定时间值为15分钟或更长
+
+LockoutDuration=15
+
+[+]确保账户锁定阈值值为5或更少，但不为0
+
+LockoutBadCount=5
+
+[+]确保重置账户锁定计数器值为15分钟或更多，但值要小于Account lockout duration的值
+
+ResetLockoutCount=15
+
+### 0x02 审计策略
+
+[+]审核策略更改：成功
+
+AuditPolicyChange
+
+[+]审核登录事件：成功，失败
+
+AuditLogonEvents
+
+[+]审核对象访问：成功
+
+AuditObjectAccess
+
+[+]审核进程跟踪：成功，失败
+
+AuditProcessTracking
+
+[+]审核目录服务访问：成功，失败
+
+AuditDSAccess
+
+[+]审核系统事件：成功，失败
+
+AuditSystemEvents
+
+[+]审核帐户登录事件：成功，失败
+
+AuditAccountLogon
+
+[+]审核帐户管理：成功，失败
+
+AuditAccountManage
+
+值的含义：
+
+Setting value| Explanation  
+---|---  
+0| Indicates that this setting is set to None.  
+1| Indicates that this setting is set to Success Audits Only.  
+2| Indicates that this setting is set to Failure Audits Only.  
+3| Indicates that this setting is set to Success and Failure Audits.  
+4| Indicates that this setting is set to None.  
+  
+### 0x03 用户权限分配
+
+[+]确保作为受信任的呼叫方访问凭据管理器值为空，没有设置任何用户
+
+SeTrustedCredManAccessPrivilege
+
+[+]确保以操作系统方式执行值为空，没有设置任何用户。
+
+SeTcbPrivilege
+
+[+]确保将工作站添加到域值仅为特定的用户或用户组,不能有513，514，515
+
+SeMachineAccountPrivilege
+
+[+]确保创建全局对象值为空
+
+SeCreateGlobalPrivilege
+
+[+]确保拒绝作为批处理作业登录包含Guests
+
+SeDenyBatchLogonRight
+
+[+]确保拒绝以服务身份登录包含Guests
+
+SeDenyServiceLogonRight
+
+[+]确保拒绝本地登录包含Guests
+
+SeDenyInteractiveLogonRight
+
+[+]确保从远程系统强制关机值为administrators本地组和s-1-5-32-549(域控的一个内置组)
+
+SeRemoteShutdownPrivilege
+
+[+]确保修改对象标签值为空
+
+SeRelabelPrivilege
+
+[+]确保同步目录服务数据值为空
+
+SeSyncAgentPrivilege
+
+### 0x04 安全选项
+
+[+]确保账户：来宾账户状态值为已禁用
+
+EnableGuestAccount=0
+
+[+]确保账户：限制使用空密码的本地账户只能使用控制台登录值为Enabled
+
+MACHINE\System\CurrentControlSet\Control\Lsa\LimitBlankPasswordUse=4,1
+
+[+]配置账户：重命名系统管理员账户
+
+NewAdministratorName="NewAdministrator"
+
+[+]配置账户：重命名来宾账户
+
+NewGuestName="NewGuestName"
+
+[+]确保交互式登录：不显示上次登录用户名值为Enabled
+
+MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\DontDisplayLastUserName=4,1
+
+[+]确保交互式登录：无须按Ctrl+Alt+Del值为Disabled
+
+MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\DisableCAD=4,0
+
+[+]确保交互式登录：计算机不活动限制值为900秒或更少
+
+MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\InactivityTimeoutSecs=4,900
+
+[+]确保Microsoft 网络客户端: 将未加密的密码发送到第三方 SMB 服务器值为Disabled
+
+MACHINE\System\CurrentControlSet\Services\LanmanWorkstation\Parameters\EnablePlainTextPassword=4,0
+
+[+]确保Microsoft网络服务器：暂停会话前所需的空闲时间数量值为15分钟或更少，但不为0
+
+MACHINE\System\CurrentControlSet\Services\LanManServer\Parameters\AutoDisconnect=4,15
+
+[+]确保网络安全：再下一次改变密码时不存储LAN管理器哈希值值为Enabled
+
+MACHINE\System\CurrentControlSet\Control\Lsa\NoLMHash=4,1
+
+[+]确保网络访问：允许匿名SID/名称转换值为Disabled
+
+LSAAnonymousNameLookup = 0
+
+[+]确保网络访问：不允许SAM账户的匿名枚举值为Enabled
+
+MACHINE\System\CurrentControlSet\Control\Lsa\RestrictAnonymousSAM=4,1
+
+[+]确保网络访问：不允许SAM账户和共享的匿名枚举值为Enabled
+
+MACHINE\System\CurrentControlSet\Control\Lsa\RestrictAnonymous=4,1
+
+[+]确保关机：允许系统在未登录前关机值为Disabled
+
+MACHINE\System\CurrentControlSet\Control\Session Manager\Memory
+Management\ClearPageFileAtShutdown=4,0
+
+### 0x05 远程访问安全
+
+[+]确保RDP端口不为3389
+
+for /f "skip=2 tokens=3" %i in ('REG query
+HKLM\SYSTEM\CurrentControlSet\Control\Terminal" "Server\WinStations\RDP-Tcp /v
+PortNumber') do @echo %i
+
+### 0x06 系统网络安全
+
+关闭windows自动播放功能
+
+reg add HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer /v
+NoDriveTypeAutoRun /t REG_DWORD /d 233 /f
+
+## 二、Centos7检查的项目如下：
+
+### 0x01 初始设置
+
+1.1 文件系统配置：
+
+将/tmp挂载至一个单独的分区
+
+挂载时指定noexec,nosuid：不允许运行可执行文件
+
+1.2 安全启动设置：
+
+设置bootloader的配置文件的权限为600
+
+设置bootloader的密码：进入引导界面需输入密码
+
+为单用户启动认证机制
+
+1.3 强制访问控制：
+
+安装SELinux
+
+设置SELinux的状态为enforcing
+
+设置SELinux的policy为targeted
+
+### 0x02 服务配置
+
+2.1 时间同步设置：
+
+开启时间同步服务
+
+使用ntp或chrony来统一服务器的时间
+
+不安装X-windows系统：即不使用可视化界面
+
+### 0x03 网络配置
+
+3.1 hosts设置：
+
+配置/etc/hosts.allow与/etc/hosts.deny文件
+
+配置/etc/hosts.allow与/etc/hosts.deny文件的权限为0644
+
+配置/etc/hosts.allow与/etc/hosts.deny文件的属主为root
+
+3.2 防火墙配置
+
+安装iptables
+
+设置各个Chain的默认策略为drop
+
+### 0x04 审计设置
+
+安装并使用auditd
+
+配置记录审计日志的文件大小：8M
+
+配置记录审计日志的文件个数：5
+
+单个审计日志文件大小达到设定的值时触发的动作为：keep_logs/rotate
+
+磁盘空间满后触发的动作为：rotate
+
+auditd需配置的一些规则：
+
+    
+    
+     规则：审计更改日期和时间的操作  
+     规则：审计更改用户/组信息的操作  
+     规则：审计更改系统网络环境的操作  
+     规则：审计更改系统强制访问控制的操作  
+     规则：审计登入登出系统的事件  
+     规则：审计企图改变文件权限的操作  
+     规则：审计未授权情况下企图访问文件未成功的事件  
+     规则：审计使用提权命令的操作  
+     规则：审计删除文件的操作？？？？  
+     规则：审计sudoers文件的变更  
+     规则：审计sudoers日志文件的变更？？？？  
+     规则：审计日志文件audit.log不能被改变
+
+### 0x05 日志设置
+
+安装并启用`rsyslog｀
+
+### 0x06 认证授权
+
+6.1 配置cron:
+
+开启cron服务
+
+配置
+/etc/crontab,/etc/cron.hourly,/etc/cron.daily,/etc/cron.weekly,/etc/cron.monthly,//etc/cron.d文件的权限为0700
+
+设置cron.allow：只允许特定的用户可以使用cron
+
+6.2 配置SSH：
+
+配置/etc/ssh/sshd_config文件的权限为0600
+
+关闭X11Forwarding
+
+设置最大认证尝试次数：4
+
+开启IgnoreRhosts：不启用基于主机的认证
+
+关闭HostbasedAuthentication: 关闭基于主机的认证
+
+禁止使用root直接登录：PermitRootLogin no
+
+禁止使用空密码登录：PermitEmptyPasswords no
+
+禁止用户环境：PermitUserEnvironment no
+
+设置使用的MAC算法:
+
+    
+    
+     hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128etm@openssh.com,hmac-sha2-512,hmac-sha2-256,umac-128@openssh.com,curve25519sha256@libssh.org,diffie-hellman-group-exchange-sha256 
+
+设置空闲超时时间:180秒ClientAliveInterval 180
+
+设置一次登录花费时间：120秒LoginGraceTime 120
+
+6.3 配置PAM：
+
+密码长度最少位数：12
+
+密码中最少字符类型数：3
+
+配置密码锁定：？？？？
+
+配置密码重用限制：不使用最近5次的密码
+
+配置密码hash算法：SHA512
+
+6.5 用户账户和环境设置：
+
+密码有效时间：90天
+
+密码更改最短间隔：7天
+
+密码过期警告：7天
+
+自动禁用特定时间内没有活动的账号：365天
+
+配置系统账号的无法登录
+
+配置root账号默认群组的GID为0
+
+配置umask的默认值为027？？？
+
+配置shell超时关闭会话时间：180
+
+配置可以使用su命令的用户
+
+### 0x07 系统维护
+
+7.1 重要文件权限：
+
+    
+    
+     /etc/passwd 0644 uid 0 gid 0  
+     /etc/shadow 0000 uid 0 gid 0  
+     /etc/group 0644 uid 0 gid 0  
+     /etc/gshadow 0000 uid 0 gid 0  
+     /etc/passwd- 0644 uid 0 gid 0  
+     /etc/shadow- 0000 uid 0 gid 0  
+     /etc/group- 0644 uid 0 gid 0  
+     /etc/gshadow- 0000 uid 0 gid 0
+
+> 审计设置了SUID可执行文件的完整性 前面
+
+> 审计设置了SGID的可执行文件的完整性
+
+7.2 用户和组设置：
+
+不允许密码为空的账号
+
+只允许root账号的UID为0
+
+设置path环境变量中的目录只有owner可写，group及other都没有w的权限
+
+设置所有用户都有家目录
+
+设置所有用户家目录的权限为0750
+
+设置所有用户家目录的owner都为其自身
+
+设置用户家目录内以.开头的文件，只有owner可写，group及other都没有w的权限
+
+确保没有.netrc,.rhosts,.forward文件
+
+确保所有在/etc/passwd中的组都在/etc/group
+
+确保每个用户的UID都不同
+
+确保每个组的GID都不同
+
+确保用户名唯一
+
+确保组名唯一
+
+ ***本文作者：jerrybird，转载请注明来自FreeBuf.COM**
+

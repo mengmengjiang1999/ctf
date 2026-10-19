@@ -1,0 +1,312 @@
+***本文不涉及任何漏洞，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+##  0x00前言
+
+**解决问题的手段有很多种，也许存在优劣之分，这次选择了其中一种不那么好玩的方法——frida hook。**
+
+人脸识别校验状态存储在服务端，因此即使通过该种方法绕过客户端人脸识别，由于并未获得合法session，所以并无任何实际危害，仅做为IOS Hook学习思路。
+
+##  0x01准备
+
+越狱IOS(12.4.4)
+
+[Frida](https://frida.re/)
+
+[lxhToolHTTPDecrypt](https://github.com/lyxhh/lxhToolHTTPDecrypt)
+
+app一个
+
+登录时存在人脸识别：
+
+![](https://image.3001.net/images/20200601/1590995401_5ed4a9c9a3e7a.png!small)
+
+![](https://image.3001.net/images/20200601/1590995408_5ed4a9d095223.png!small)
+
+##  0x02 脱壳&安装
+
+CrackerXI+脱壳，ReProvision签名一条龙，有疑问的可以参考上一篇文章。一毛一样的app。
+
+##  0x03 寻找关键函数
+
+CrackerXI+脱壳后，二进制文件拉出来拖到ida中分析找到关键函数：
+
+XXXXBaseViewController loginSuccessIsNeedBind:WithInfo:
+
+    
+    
+    void __cdecl -[XXXXAPPBaseViewController loginSuccessIsNeedBind:WithInfo:](XXXXAPPBaseViewController *self, SEL a2, bool a3, id a4)
+    {
+      BOOL v4; // w22
+      XXXXAPPBaseViewController *v5; // x21
+      __int64 v6; // x19
+      void *v7; // x0
+      void *v8; // x0
+      void *v9; // x23
+      void *v10; // x0
+      void *v11; // x20
+      XXXXAPPLoginHelper *v12; // x0
+      void *v13; // x23
+      __int64 v14; // x1
+      __int64 v15; // x1
+      __int64 v16; // x0
+      struct objc_object *v17; // x0
+      void *v18; // x0
+      void *v19; // x22
+      void *v20; // x0
+      void *v21; // x23
+      int v22; // w24
+      void *v23; // x0
+      void *v24; // x0
+      __int64 v25; // x22
+      void *v26; // x0
+      __int64 v27; // x23
+      const char *v28; // x1
+      void **v29; // [xsp+0h] [xbp-70h]
+      __int64 v30; // [xsp+8h] [xbp-68h]
+      __int64 (__fastcall *v31)(); // [xsp+10h] [xbp-60h]
+      void *v32; // [xsp+18h] [xbp-58h]
+      XXXXAPPBaseViewController *v33; // [xsp+20h] [xbp-50h]
+      __int64 v34; // [xsp+28h] [xbp-48h]
+      __int64 v35; // [xsp+30h] [xbp-40h]
+      bool v36; // [xsp+38h] [xbp-38h]
+      v4 = a3;//赋值v4
+      v5 = self;
+      v6 = objc_retain(a4, a2);
+      v7 = objc_msgSend(&OBJC_CLASS___UIApplication, "sharedApplication");
+      v8 = (void *)objc_retainAutoreleasedReturnValue(v7);
+      v9 = v8;
+      v10 = objc_msgSend(v8, "delegate");
+      v11 = (void *)objc_retainAutoreleasedReturnValue(v10);
+      objc_release(v9);
+      if ( (unsigned int)-[XXXXAPPBaseViewController needInputIDCardInfomation:](v5, "needInputIDCardInfomation:", v6) )
+      {
+        +[PCUtil setObject:forKey:](&OBJC_CLASS___PCUtil, "setObject:forKey:", CFSTR("1"), CFSTR("maybeNeedBackLoginGuide"));
+        v12 = +[XXXXAPPLoginHelper sharedInstance](&OBJC_CLASS___XXXXAPPLoginHelper, "sharedInstance");
+        v13 = (void *)objc_retainAutoreleasedReturnValue(v12);
+        v29 = _NSConcreteStackBlock;
+        v30 = 3254779904LL;
+        v31 = sub_1000B05E4;
+        v32 = &unk_10263F2D8;
+        v33 = v5;
+        v36 = v4;
+        v34 = objc_retain(v11, v14);
+        v35 = objc_retain(v6, v15);
+        objc_msgSend(
+          v13,
+          "setCompleteGuideBlock:",
+          &v29,
+          _NSConcreteStackBlock,
+          3254779904LL,
+          sub_1000B05E4,
+          &unk_10263F2D8,
+          v5);
+        objc_release(v13);
+        objc_release(v35);
+        v16 = v34;
+    LABEL_9:
+        objc_release(v16);
+        goto LABEL_10;
+      }
+      if ( v4 ) //判断v4(bool)值,确定是否进入人脸识别
+      {
+        v17 = +[PNCMBankGlobal sharedData](&OBJC_CLASS___PNCMBankGlobal, "sharedData");
+        v18 = (void *)objc_retainAutoreleasedReturnValue(v17);
+        v19 = v18;
+        v20 = objc_msgSend(v18, "bindType");
+        v21 = (void *)objc_retainAutoreleasedReturnValue(v20);
+        v22 = (unsigned __int64)objc_msgSend(v21, "isEqualToString:", CFSTR("FACE"));
+        objc_release(v21);
+        objc_release(v19);
+        v23 = objc_msgSend(v11, "rootVC");
+        v24 = (void *)objc_retainAutoreleasedReturnValue(v23);
+        v25 = (__int64)v24;
+        v26 = objc_msgSend(v24, "navigationController");
+        v27 = objc_retainAutoreleasedReturnValue(v26);
+        if ( v22 )
+          v28 = "goToFaceCheckBindVC:info:";
+        else
+          v28 = "goSmsOrUKBindInfoVC:info:";
+        objc_msgSend(v5, v28, v27, v6);
+        objc_release(v27);
+        v16 = v25;
+        goto LABEL_9;
+      }
+      -[XXXXAPPBaseViewController AfterBindSuccess:isNeedBind:](v5, "AfterBindSuccess:isNeedBind:", v6, 0LL);
+    LABEL_10:
+      objc_release(v11);
+      objc_release(v6);
+    }
+
+分析代码发现：
+
+    
+    
+    void __cdecl -[XXXXAPPBaseViewController loginSuccessIsNeedBind:WithInfo:](XXXXAPPBaseViewController *self, SEL a2, bool a3, id a4)
+    v4 = a3;
+    //...
+    if ( v4 ) 
+    {
+    //...
+    //人脸识别函数
+    //...
+    }
+
+其中a3是参数传入，只要我们hook -[XXXXAPPBaseViewController
+loginSuccessIsNeedBind:WithInfo:]使其传入bool参数a3为永假，即可不进入人脸识别判断。
+
+手机中启动frida-server（手机中的frida版本须和PC中的版本一致）:
+
+![](https://image.3001.net/images/20200601/1590995455_5ed4a9ffafccc.png!small)
+
+PC上启动lxhToolHTTPDecrypt（ps：不使用该工具也可以，使用frida脚本能够直接查找类名函数等，但这个工具图形化界面比较直观，也有一些其他功能）
+
+![](https://image.3001.net/images/20200601/1590995461_5ed4aa05e0164.png!small)
+
+访问[http://127.0.0.1:8088](http://127.0.0.1:8088/)选择Identifier
+
+![](https://image.3001.net/images/20200601/1590995478_5ed4aa16c9a82.png!small)
+
+在Hook里选择类名
+
+![](https://image.3001.net/images/20200601/1590995484_5ed4aa1c96108.png!small)
+
+进入人脸识别时hook到该函数：
+
+![](https://image.3001.net/images/20200601/1590995494_5ed4aa26356e3.png!small)
+
+##  0x04 HOOK
+
+编写hook脚本hooking.js：
+
+    
+    
+    var search_class = ['XXXXXXBaseViewController'];
+    var search_method = ['loginSuccessIsNeedBind:WithInfo:'];
+    function search_methods(className) {
+    var methods_found = [];
+    var methods = ObjC.classes[className].$ownMethods;
+    if (Array.isArray(search_method) && search_method.length) { //search_method not empty
+    for (var j = 0; j < search_method.length; j++) {
+    if (methods.join(' ').toLowerCase().includes(search_method[j].toLowerCase())) {
+    for (var i = 0; i < methods.length; i++){
+    if (methods[i].toLowerCase().includes(search_method[j].toLowerCase())) {
+    methods_found.push(methods[i]);
+    }
+    }
+    }
+    }
+    }
+    else {
+    var methods = ObjC.classes[className].$ownMethods;
+    for (var i = 0; i < methods.length; i++){
+    methods_found.push(methods[i]);
+    }
+    }
+    return methods_found;
+    }
+    function search_classes(){
+    var classes_found = [];
+    for (var className in ObjC.classes) {
+    if (Array.isArray(search_class) && search_class.length) {
+    for (var i = 0; i < search_class.length; i++) {
+    if (className.toLowerCase().includes(search_class[i].toLowerCase())) {
+    classes_found.push(className);
+    }
+    }
+    }
+    }
+    return classes_found;
+    }
+    function print_arguments(args) {
+    var n = 100;
+    var last_arg = '';
+    for (var i = 2; i < n; ++i) {
+    var arg = (new ObjC.Object(args[i])).toString();
+    if (arg == 'nil' || arg == last_arg) {
+    break;
+    }
+    last_arg = arg;
+    console.log('\t[-] arg' + i + ': ' + (new ObjC.Object(args[i])).toString());
+    }
+    }
+    if (ObjC.available)
+    {
+    console.log('\n[*] Starting Hooking');
+    var classes_found = search_classes();
+    for (var i = 0; i < classes_found.length; ++i) {
+    var methods_found = 0;
+    methods_found = search_methods(classes_found[i]);
+    if (Object.keys(methods_found).length){
+    console.log(classes_found[i]);
+    }
+    for (var j = 0; j < methods_found.length; ++j) {
+    var _className = "" + classes_found[i];
+    var _methodName = "" + methods_found[j];
+    var hooking = ObjC.classes[_className][_methodName];
+    console.log('   ' + methods_found[j]);
+    Interceptor.attach(hooking.implementation, {
+    onEnter: function (args) {
+    this._className = ObjC.Object(args[0]).toString();
+    this._methodName = ObjC.selectorAsString(args[1]);
+    console.log('Detected call to:');
+    console.log('   ' + this._className + ' --> ' + this._methodName);
+    //print_arguments(args);
+    },
+    onLeave: function(returnValues) {
+    }
+    });
+    }
+    }
+    console.log('\n[*] Starting Intercepting');
+    }
+    else {
+    console.log('Objective-C Runtime is not available!');
+    }
+
+执行
+
+frida -l hooking.js -U "appname"
+
+![](https://image.3001.net/images/20200601/1590995535_5ed4aa4f5e088.png!small)
+
+从图上可见hook成功
+
+编写onEnter Hook传入参数修改成0x0：
+
+    
+    
+    onEnter: function (args) { 
+    this._className = ObjC.Object(args[0]).toString();
+    this._methodName = ObjC.selectorAsString(args[1]);
+    console.log('Detected call to:');
+    console.log('   ' + this._className + ' --> ' + this._methodName);
+    console.log('[-]原始值：'+ args[2]);
+    args[2]=ptr("0x0");
+    console.log('[+]修改值：'+ args[2]);
+    //print_arguments(args);
+    },
+
+运行Hook:
+
+![](https://image.3001.net/images/20200601/1590995558_5ed4aa6618e29.png!small)
+
+进入app输入密码登录，已不存在人脸识别。
+
+![](https://image.3001.net/images/20200601/1590995596_5ed4aa8c740a3.png!small)
+
+但登录后由于人脸识别验证在服务端，客户端中并无数据，因此无实际危害。
+
+![](https://image.3001.net/images/20200601/1590995601_5ed4aa913ef56.png!small)
+
+注：此种方式绕不涉及任何实际漏洞，仅作为IOS测试学习使用。
+
+##  0×05 后记
+
+> 参考工具地址：<https://github.com/trelis24/frida-ios>
+>
+> 高清原始文件：
+>
+> 链接: <https://pan.baidu.com/s/1kCCW5R_rsCX5ZtPuy_hZPA> 提取码: d2pr
+
+ ***本文作者： LDrakura，转载请注明来自FreeBuf.COM**  
+

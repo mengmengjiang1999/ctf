@@ -1,0 +1,427 @@
+##  一、说明
+
+**本篇文章主要想说一说我对入侵防范中前3个测评项的理解（对于centos系统而言），如果大家有其他的看法或者思路也可以在回复中提出，我也跟着学习学习。**
+
+##  二、测评项
+
+这3个测评项的内容如下：
+
+> a) 应遵循最小安装的原则，仅安装需要的组件和应用程序；
+>
+> b) 应关闭不需要的系统服务、默认共享和高危端口；
+>
+> c) 应通过设定终端接入方式或网络地址范围对通过网络进行管理的管理终端进行限制；
+
+这3个测评项都是跟业务紧密相关的，往往没有一个固定的标准答案，需要根据实际情况作出判断。
+
+##  三、测评项a
+
+> a) 应遵循最小安装的原则，仅安装需要的组件和应用程序；
+
+如果纯粹用这个测评项的要求去检测，我个人感觉无从下手。
+
+查询linux中安装的程序，一般使用yum list installed或者rpm
+-qa，关键是linux中随随便便都安装得有几百个组件，而且很多组件都是存在着依赖关系。
+
+你很难或者至少很难快速的判断某组件到底是必需的还是非必需的，而被测评单位方的人也一样，他也不可能知道。
+
+所以，我一般只能由b测评项的结果来推断a测评项了。
+
+##  四、 测评项b
+
+> b) 应关闭不需要的系统服务、默认共享和高危端口；
+
+###  4.1. 关系
+
+对于组件、服务、进程、端口而言，它们之间是存在着关系的：安装程序-->启动相关服务-->启动相关进程-->监听相关端口
+
+而且，一个程序（组件）可能有数个服务，而一个服务也可能实际启动了数个进程，当然一个进程应该就对应一个端口。
+
+比如nfs-utils组件，它就包含nfs和nfslock两个服务，而nfs服务，就可以启动数个进程：
+
+    
+    
+    [root@centos01 ~]# /etc/init.d/nfs status
+    rpc.svcgssd 已停
+    rpc.mountd 已停
+    nfsd 已停
+    rpc.rquotad 已停
+
+###  4.2. 查看端口
+
+一般我们使用netstat -ap或者netstat -anp查看系统中监听的端口以及对应的进程：
+
+    
+    
+    netstat -ap
+    Active Internet connections (servers and established)
+    Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name    
+    tcp        0      0 localhost:smux          0.0.0.0:*               LISTEN      11884/snmpd         
+    tcp        0      0 0.0.0.0:sunrpc          0.0.0.0:*               LISTEN      1/systemd           
+    tcp        0      0 0.0.0.0:ssh             0.0.0.0:*               LISTEN      5031/sshd           
+    tcp        0      0 localhost:smtp          0.0.0.0:*               LISTEN      1086/master  
+    ……
+    
+    
+    netstat -apn
+    Active Internet connections (servers and established)
+    Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name    
+    tcp        0      0 127.0.0.1:199           0.0.0.0:*               LISTEN      11884/snmpd         
+    tcp        0      0 0.0.0.0:111             0.0.0.0:*               LISTEN      1/systemd           
+    tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      5031/sshd           
+    tcp        0      0 127.0.0.1:25            0.0.0.0:*               LISTEN      1086/master   
+    ……
+
+如果命令参数中不使用n，那么结果中有些本地端口就不会显示出数字值，而是从/etc/services文件中，查找这个端口的数字值所在行，获取端口的名字：  
+![](https://image.3001.net/images/20190830/1567127459_5d6877a335d94.png!small)最左边的一栏即为端口的名字。
+
+虽然0到1023端口是周知端口，也即大家公认的每个端口都有固定所代表的内容，比如21端口是FTP端口，一般也不会有其他的某个进程也将自己的端口设置为21端口。  
+所以只要你看到端口值是21端口，那么你几乎就可以认定这是ftp进程在监听的端口。  
+但是这不是百分之一百的，说不准就有一些程序的进程监听的是动态端口，一不小心就把0到1023的某个端口给占用了。  
+所以最准确的判断方法是看端口的数值以及监听该端口的进程名，比如：
+
+    
+    
+    tcp        0      0 127.0.0.1:25            0.0.0.0:*               LISTEN      1086/master
+
+端口值是25，监听该端口的进程是master。
+
+如果还搞不懂，可以使用ps -ef显示所运行的所有进程，再查看要这个进程的具体信息。
+
+好，这些方法足够让你判断出开启的端口都大概都是些什么端口了。
+
+###  4.3. 判断端口
+
+一般服务器上监听的端口很多，你得了解一些常用的端口，比如80端口，以及常见的中间件的端口，比如tomcat默认端口是8080。  
+以及常见的数据库的端口，比如Oracle默认是1521，MySQL默认是3306。  
+以及一些常见服务的端口或经常，比如ftp是21、ssh是22、telnet是23、邮件服务是25、rpcbind是111、rpc.statd是动态端口（所以这里要用进程来判断）、打印服务（cups）端口是631等。
+
+所以从服务下手的话，比如不使用ftp，那么21就是多余端口。不用邮件服务，25就是多余端口，rpc.statd和nfs有关，不用nfs的话，那么rpc.statd监听的动态端口也是多余端口，以此类推。  
+多余端口就应该关闭，可以关闭相对应的服务或者卸载相对应的组件，也可以用iptables或者firewall进行拦截。
+
+至于高危端口，实际上某种意义上所有端口都是高危端口，反正只要你监听了，都有可能被入侵。  
+所以对于必须要使用的端口，比如22端口，最好的就是限制连接这个端口的ip，其次，就是修改默认端口。  
+当然，由于业务需要，不一定可以修改端口的数值和限制连接这个端口的ip，这个看自己怎么把握了。
+
+###  4.4. 最小化安装
+
+检查完测评项b，如果发现没有啥多余端口，那么就可以认定测评项a至少是部分符合，至于具体怎么打分，自己把握吧……  
+至于为什么这么说，因为在等级保护试行2.0的测评要求里是这么说的：  
+![](https://image.3001.net/images/20190830/1567127501_5d6877cde6dcc.png!small)
+
+这里说的是安装了非必要组件后关闭了也可以，不过等级保护正式版2.0又变回来了：  
+![](https://image.3001.net/images/20190830/1567127552_5d6878002ef93.png!small)
+
+说实话，我没搞明白，这是否遵循最小安装原则和是否未安装非必要的组件和应用程序，难道说的不是一回事吗？  
+所以，我觉得还是等级保护试行2.0说得更有道理一些。
+
+##  五、测评项c
+
+> c) 应通过设定终端接入方式或网络地址范围对通过网络进行管理的管理终端进行限制；
+
+对于centos而言，就是限制ssh端口的连接ip， **在主机层面**
+，一般可以用Iptables（centos6）、Firewall（centos7）这两防火墙实现，也可以用hosts.allow和hosts.deny配置文件实现，还可以用/etc/ssh/sshd_config配置文件实现。
+
+不过在实际测评当中可能会遇到的一种情况：
+
+就是被测评服务器开着ssh端口，也没有对这个端口的连接ip进行任何限制。但这个服务器所在网络是内网，且没有wifi，想要实现 **远程**
+管理这个服务器，需要你自己带着电脑跑去机房插网线才行。
+
+这种我觉得肯定不能算不符合，至少也有个3、4分吧，甚至我觉得打5分估计也没啥问题，不知大家怎么看。
+
+###  5.1. 防火墙
+
+centos6只有iptables，而centos7既可以用iptables也可以用Firewall。
+
+对于iptables，强烈建议大家看看这位博主写的教程：<http://www.zsythink.net/archives/1199>
+
+我一开始接触iptables时就被弄晕了，chain、table到底是个啥玩意？后来看了这篇教程才明白的。
+
+至于Firewall，这里就简单的说一下。
+
+简单的来说，可以用Firewall设定多个zone（区域），每个zone都有自己的过滤规则，然后每当有请求进来之时，根据zone中设置的source（源ip地址）、zone中绑定的interface（请求的网卡）来判断由使用哪个zone的规则，如果通过source和interface没有匹配到任何一个zone，则使用firewalld.conf中配置的默认zone。
+
+从优先级而言是：source、interface、默认zone
+
+所以，一个源（或重叠的源）不能被分配到多个区域。这样做的结果是产生一个未定义的行为，因为不清楚应该将哪些规则应用于该源。
+
+同样，一个网卡也只能分配到一个zone中。
+
+我们可以用如下命令，查看所有的zone（如果没有自己设置zone，那么应该只存在系统预设的zone）：
+
+    
+    
+    firewall-cmd --list-all-zones
+    block
+      target: %%REJECT%%
+      icmp-block-inversion: no
+      interfaces: 
+      sources: 
+      services: 
+      ports: 
+      protocols: 
+      masquerade: no
+      forward-ports: 
+      source-ports: 
+      icmp-blocks: 
+      rich rules: 
+    	
+    dmz
+      target: default
+      icmp-block-inversion: no
+      interfaces: 
+      sources: 
+      services: ssh
+      ports: 
+      protocols: 
+      masquerade: no
+      forward-ports: 
+      source-ports: 
+      icmp-blocks: 
+      rich rules: 
+    	
+    drop
+      target: DROP
+      icmp-block-inversion: no
+      interfaces: 
+      sources: 
+      services: 
+      ports: 
+      protocols: 
+      masquerade: no
+      forward-ports: 
+      source-ports: 
+      icmp-blocks: 
+      rich rules: 
+    	
+    external
+      target: default
+      icmp-block-inversion: no
+      interfaces: 
+      sources: 
+      services: ssh
+      ports: 
+      protocols: 
+      masquerade: yes
+      forward-ports: 
+      source-ports: 
+      icmp-blocks: 
+      rich rules: 
+    	
+    home
+      target: default
+      icmp-block-inversion: no
+      interfaces: 
+      sources: 
+      services: ssh mdns samba-client dhcpv6-client
+      ports: 
+      protocols: 
+      masquerade: no
+      forward-ports: 
+      source-ports: 
+      icmp-blocks: 
+      rich rules: 
+    	
+    internal
+      target: default
+      icmp-block-inversion: no
+      interfaces: 
+      sources: 
+      services: ssh mdns samba-client dhcpv6-client
+      ports: 
+      protocols: 
+      masquerade: no
+      forward-ports: 
+      source-ports: 
+      icmp-blocks: 
+      rich rules: 
+    	
+    public (active)
+      target: default
+      icmp-block-inversion: no
+      interfaces: em1
+      sources: 
+      services: ssh dhcpv6-client
+      ports: 39289/tcp
+      protocols: 
+      masquerade: no
+      forward-ports: 
+      source-ports: 
+      icmp-blocks: 
+      rich rules: 
+    	
+    trusted
+      target: ACCEPT
+      icmp-block-inversion: no
+      interfaces: 
+      sources: 
+      services: 
+      ports: 
+      protocols: 
+      masquerade: no
+      forward-ports: 
+      source-ports: 
+      icmp-blocks: 
+      rich rules: 
+    	
+    work
+      target: default
+      icmp-block-inversion: no
+      interfaces: 
+      sources: 
+      services: ssh dhcpv6-client
+      ports: 
+      protocols: 
+      masquerade: no
+      forward-ports: 
+      source-ports: 
+      icmp-blocks: 
+      rich rules:
+
+注意看，里面只有pulic这个zone的interfaces绑定了网卡，所以也只有这一个区域是活动的（active）。
+
+对于里面各个参数所代表的意义，大家可以在网上搜索搜索就知道了。
+
+###  5.2. hosts.allow和hosts.deny
+
+**5.2.1. 前置条件**
+
+通过这两个配置文件进行限制，需要条件， hosts.allow文件的注释内容如下：
+
+    
+    
+    #hosts.allow	This file contains access rules which are used to
+    #allow or deny connections to network services that
+    #either use the tcp_wrappers library or that have been
+    #started through a tcp_wrappers-enabled xinetd.
+
+也就是说：
+
+此文件包含用于允许或拒绝与以下网络服务的连接：
+
+> 1.使用了tcp包装库
+>
+> 2.或者通过启用了TCP_wrappers的xinetd启动。
+
+不是任何服务程序都能使用TCP_wrappers的，例如使用命令ldd
+/usr/sbin/sshd，如果输出中有libwrap，则说明可以使用TCP_wrappers,
+即该服务可以使用/etc/hosts.allow和/etc/hosts.deny,如果输出没有libwrap则不可使用。
+
+    
+    
+    [root@centos01 ~]# ldd /usr/sbin/sshd
+    	linux-vdso.so.1 =>  (0x00007fffa0da0000)
+    	libfipscheck.so.1 => /lib64/libfipscheck.so.1 (0x00007f0417aa6000)
+    	libwrap.so.0 => /lib64/libwrap.so.0 (0x00007f041789b000)
+    	libaudit.so.1 => /lib64/libaudit.so.1 (0x00007f041767e000)
+    	libpam.so.0 => /lib64/libpam.so.0 (0x00007f0417470000)
+    	libdl.so.2 => /lib64/libdl.so.2 (0x00007f041726c000)
+    	libselinux.so.1 => /lib64/libselinux.so.1 (0x00007f041704c000)
+    	libcrypto.so.10 => /usr/lib64/libcrypto.so.10 (0x00007f0416c6d000)
+    	libutil.so.1 => /lib64/libutil.so.1 (0x00007f0416a6a000)
+    	libz.so.1 => /lib64/libz.so.1 (0x00007f0416853000)
+    	libnsl.so.1 => /lib64/libnsl.so.1 (0x00007f041663a000)
+    	libcrypt.so.1 => /lib64/libcrypt.so.1 (0x00007f0416403000)
+    	libresolv.so.2 => /lib64/libresolv.so.2 (0x00007f04161e8000)
+    	libgssapi_krb5.so.2 => /lib64/libgssapi_krb5.so.2 (0x00007f0415fa4000)
+    	libkrb5.so.3 => /lib64/libkrb5.so.3 (0x00007f0415cbe000)
+    	libk5crypto.so.3 => /lib64/libk5crypto.so.3 (0x00007f0415a91000)
+    	libcom_err.so.2 => /lib64/libcom_err.so.2 (0x00007f041588d000)
+    	libnss3.so => /usr/lib64/libnss3.so (0x00007f041554f000)
+    	libc.so.6 => /lib64/libc.so.6 (0x00007f04151ba000)
+    	/lib64/ld-linux-x86-64.so.2 (0x0000003abde00000)
+    	libfreebl3.so => /lib64/libfreebl3.so (0x00007f0414f43000)
+    	libkrb5support.so.0 => /lib64/libkrb5support.so.0 (0x00007f0414d37000)
+    	libkeyutils.so.1 => /lib64/libkeyutils.so.1 (0x00007f0414b34000)
+    	libpthread.so.0 => /lib64/libpthread.so.0 (0x00007f0414917000)
+    	libnssutil3.so => /usr/lib64/libnssutil3.so (0x00007f04146ea000)
+    	libplc4.so => /lib64/libplc4.so (0x00007f04144e5000)
+    	libplds4.so => /lib64/libplds4.so (0x00007f04142e1000)
+    	libnspr4.so => /lib64/libnspr4.so (0x00007f04140a3000)
+    	librt.so.1 => /lib64/librt.so.1 (0x00007f0413e9b000)
+
+经过判断sshd是可以使用的。
+
+**5.2.2. 使用方法**
+
+修改/etc/hosts.deny，在其中加入
+
+    
+    
+    sshd:ALL
+
+修改：/etc/hosts.allow，在其中进行如下设置：
+
+    
+    
+    sshd:192.168.1.2
+
+表示只允许 ip为 192.168.1.2 登陆到sshd
+
+修改 /etc/hosts.allow，在其中加入
+
+    
+    
+    all:218.24.129.
+
+这样就会允许来自218.24.129.*域的所有的客户来访问。这只是举个例子，实际上，系统默认状态 下，都是能用这些网络服的
+
+修改 /etc/hosts.deny，在其中加入
+
+    
+    
+    all:218.24.129.
+
+就限制了来自218.24.129.*域的所有的所有的IP
+
+**5.2.3. 优先级**
+
+Wrappers 首先在 hosts.allow 文件中查找规则匹配。如果找到匹配，那么 tcpd 会根据规则停下来，批准或拒绝访问。如果在
+hosts.allow 文件中未找到匹配，那么 tcpd 会读取 hosts.deny 文件直到找到匹配。如果找到匹配，就拒绝访问，否则批准访问。
+
+而且这里的规则是匹配到立刻执行，也就是某ip遇到的第一个匹配到的语句是拒绝，那么就会被拒绝，无论之后的规则是啥。同样，如果遇到允许，那就允许，无论之后的规则是啥，所以关键是遇到的第一个匹配的规则。
+
+**5.2.4. 默认后缀**
+
+在allow文件中如果没有加上:option，默认会认为是:allow。
+
+所以虽然存在hosts.allow和hosts.deny两个文件，但根据规则的灵活性，可以只用一个文件，只要在使用时明确指后缀即可。
+
+比如修改 /etc/hosts.allow，在其中加入
+
+    
+    
+    all:218.24.129.:deny
+
+就是指明了后缀，代表拒绝218.24.129.*ip端的访问，如果不指明后缀，在hosts.allow默认为allow后缀，在hosts.deny里默认为deny后缀
+
+###  5.3. sshd_config配置文件
+
+**5.3.1. 白名单模式**
+
+    
+    
+    AllowUsers    aliyun test@192.168.1.1
+
+仅允许 aliyun和从 192.168.1.1 登录的 test 帐户通过 SSH 登录系统，用户名之间用空格。
+
+    
+    
+    AllowUsers    *@192.168.1.1
+
+仅允许从192.168.1.1 登录的帐户通过 SSH 登录系统。
+
+**5.3.2. 黑名单模式**
+
+使用Denyusers关键字，其余配置与AllowUsers一样。
+
+**5.3.3. 组模式**
+
+对应于用户，还有AllowGroups、DenyGroups关键字，和AllowUsers、Denyusers基本一样，只是后面需要填写的是组名，而且是主要组（基本组）的名字。
+
+##  六、结尾
+
+就先写到这把，其实对于端口限制方面，很多时候并不是靠主机上的策略来实现的，这个等下篇文章再说一说。入侵防范的剩余测评项，也到下篇文章一起说。
+
+ ***本文原创作者： 起于凡而非于凡，本文属于FreeBuf原创奖励计划，未经许可禁止转载**  
+

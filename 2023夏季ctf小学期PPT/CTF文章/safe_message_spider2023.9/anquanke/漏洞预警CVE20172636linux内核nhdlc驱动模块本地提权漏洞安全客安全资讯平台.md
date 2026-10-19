@@ -1,0 +1,116 @@
+# 【漏洞预警】CVE-2017-2636：linux 内核n_hdlc驱动模块 本地提权漏洞
+
+阅读量 **169338**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-03-09 11:26:30
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：安全客
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+  
+
+  
+
+**漏洞描述：**
+
+漏洞编号：CVE-2017-2636
+
+漏洞发现者：Alexander Popov
+
+漏洞危害：高危，低权限用户利用该漏洞可以在Linux系统上实现本地提权。
+
+影响范围：这个bug最早引入在2009年6月22号。在该日期发布后的内核版本均可能受该漏洞影响。详情请参看
+
+https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=be10eb7589337e5defbe214dae038a53dd21add8
+
+漏洞简述：该漏洞是Linux内核驱动 n_hdlc
+模块(drivers/tty/n_hdlc.c)发生条件竞争导致的，利用该漏洞可以进行权限提升。该驱动模块提供HDLC串行线路规则，在大多Linux发行版的内核配置为CONFIG_N_HDLC
+= m，n_hdlc被编译成模块并启用。
+
+**漏洞细节：**
+
+N_HDLC线路规则使用自制的单链表来获取缓冲区数据，当发生错误的时，n_hdlc.tbuf
+指针用于重新传输缓冲区数据。如果发送缓冲区数据不成功，它的地址就被保存在 n_hdlc.tbuf
+指针中，下次函数n_hdlc_send_frames（）将尝试首先重新发送它。
+
+在 commit be10eb7589337e5defbe214dae038a53dd21add8（“tty：n_hdlc 增加了 buffer
+flushing“）引入了对n_hdlc.tbuf 的竞争访问。
+
+在传输错误后并发执行flush_tx_queue（）和n_hdlc_send_frames（）函数将由n_hdlc.tbuf指向的缓冲区放入tx_free_buf_list两次。因此在n_hdlc_release（）中造成可利用的double
+free 漏洞。
+
+详细相关代码请参看：
+
+[https://git.kernel.org/cgit/linux/kernel/git/gregkh/tty.git/commit/?h=tty-linus&id=82f2341c94d270421f383641b7cd670e474db56b](https://git.kernel.org/cgit/linux/kernel/git/gregkh/tty.git/commit/?h=tty-linus&id=82f2341c94d270421f383641b7cd670e474db56b)
+
+**PoC：**
+
+    
+    
+    稍后更新
+
+**Linux各发行版本对于该漏洞相关信息：**
+
+Red Hat Enterprise Linux/CentOS
+
+<https://access.redhat.com/security/cve/CVE-2017-2636>
+
+Debian
+
+<https://security-tracker.debian.org/tracker/CVE-2017-2636>
+
+ubuntu
+
+<https://people.canonical.com/~ubuntu-security/cve/2017/CVE-2017-2636.html>
+
+SUSE/openSUSE
+
+<https://www.suse.com/security/cve/CVE-2017-2636.html>
+
+**修复建议：**
+
+建议用户通过系统更新到最新发行版修复此漏洞
+
+**参考：**
+
+<http://www.openwall.com/lists/oss-security/2017/03/07/6>
+
+[https://git.kernel.org/cgit/linux/kernel/git/gregkh/tty.git/commit/?h=tty-linus&id=82f2341c94d270421f383641b7cd670e474db56b](https://git.kernel.org/cgit/linux/kernel/git/gregkh/tty.git/commit/?h=tty-linus&id=82f2341c94d270421f383641b7cd670e474db56b)
+
+本文翻译自安全客 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **adlab_puky** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/85642](/post/id/85642)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [安全客]()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p0.ssl.qhmsg.com/dm/200_200_100/t018cbe53a3542c5db0.jpg)
+adlab_puky
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

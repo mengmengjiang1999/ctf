@@ -1,0 +1,99 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ **![github-logo.jpeg](https://image.3001.net/images/20191111/1573462520_5dc921f8018f2.jpeg!small)**
+
+**这几年来，信息安全研究一直是我的业余爱好，虽然有很多人专职做漏洞众测以获得奖励，但对我个人来说，我只对一些感兴趣的项目投入不多的时间去深入研究。今年，我想看看自己是否是全职漏洞赏金猎人的料，所以就从6月份开始每天抽出几个小时的时间去测试GitHub的安全漏洞。**
+
+我对GitHub的主要测试方法为，下载试用版的GitHub
+Enterprise，然后用[我写的脚本](https://gist.github.com/iscgar/e8ea7560c9582e4615fcc439177e22b7)把它反混淆（deobfuscate），然后观察GitHub的
+Rails
+代码查看是否有一些奇怪的行为或漏洞。从安全开发的角度来说，GitHub的的代码架构做得非常好，虽然我能偶而发现一两个由应用逻辑处理导致的小bug，但最终都不会导致大的安全问题，而且整个代码的运行权限较低，根本无从下手。看来GitHub做的滴水不漏，天衣无缝。但尽管如此，我还是想方设法绞尽脑汁地发现了GitHub的一些有趣漏洞，其中就包括它的一个OAuth授权验证绕过漏洞。
+
+## GitHub的OAuth授权验证机制
+
+在6月份的时候，我开始测试GitHub的OAuth授权验证机制代码，简单来说，这里的GitHub OAuth授权验证流程如下：
+
+1、某第三方应用 (这里暂且叫“Foo App”)
+想要访问GitHub用户的数据，它会向GitHub用户发送包含大量查询信息的链接：<https://github.com/login/oauth/authorize>；
+
+2、之后，GitHub用户端会显示以下授权页面：
+
+![oauth-flow-prompt.png](https://image.3001.net/images/20191111/1573462274_5dc9210259694.png!small)
+
+3、如果GitHub用户选择允许第三方应用访问，他需要点击“Authorize” 按钮，接着，就会跳转匹配到Foo
+App的查询字符串，这些字符串代码后续将会访问到GitHub用户的相关数据；（当然，GitHub用户也可以选择拒绝Foo App的访问）
+
+在检查该流程时，我首重查看了“Authorize”按钮的具体实现行为，之后我发现该“Authorize”按钮其中是一个独立的HTML格式，它会发送一个包含CSRF
+token在内的隐藏表单字段的POST请求。当该POST请求被发送后，此时其CSRF
+token是被验证过的，也就是代表GitHub用户想要授权给第三方APP访问权限。这种猜测基本是合理的。
+
+有意思的是，“Authorize”按钮对应的终端URL链接也是/login/oauth/authorize，它和授权验证页面是一样的URL，GitHub会根据HTTP请求方法的响应来确定如何执行下一步操作（GET请求会返回授权页面的信息，而POST请求会得到相应的授权）。
+
+这种行为切换实际上发生在Github的内部代码中，路由router会把GET 和 POST 请求转发到同一个控制器controller上，如下：
+
+    
+    
+    # In the router
+    
+    match "/login/oauth/authorize", # For every request with this path...
+    
+      :to => "[the controller]", # ...send it to the controller...
+    
+      :via => [:get, :post] # ... as long as it's a GET or a POST request.
+    
+    # In the controller
+    
+    if request.get?
+    
+      # serve authorization page HTML
+    
+    else
+    
+      # grant permissions to app
+    
+    end
+
+所以，最后路由router会接受GET 或 POST
+请求，而控制器controller会检查哪种请求被发送了，从而执行后续动作。乍一看，这不算是什么安全问题，但是，深入探究发现，路由router机制存在隐患。
+
+> Rails 路由能够识别 URL 地址，并把它们分派给控制器动作或 Rack 应用进行处理。它还能生成路径和 URL
+> 地址，从而避免在视图中硬编码字符串。
+
+## HTTP HEAD请求时Rails路由在说谎
+
+HEAD方法跟GET方法相同，只不过服务器响应时不会返回消息体。一个HEAD请求的响应中，HTTP头中包含的元信息应该和一个GET请求的响应消息相同。这种方法可以用来获取请求中隐含的元信息，而不用传输消息实体本身。也经常用来测试超链接的有效性、可用性和最近的修改。
+
+自HTTP协议被创建以来，HTTP的HEAD方法就一直存在了，但是人们对它的使用较少。当服务器收到HEAD请求时，只会向客户端发送回响应头，而不发送响应体，这有一些特殊用途。例如，在决定是否要开始下载文件之前，客户端可以发送HEAD请求来检查大文件的大小（通过内容长度响应头来确定）。
+
+显然，编写网络应用程序的人通常不想花时间来实现HEAD请求的行为。可以理解的是，获得一个有效的产品比符合超文本传输协议规范的特定部分更为重要。但总的来说，如果HEAD请求能够得到正确处理，这是件好事，前提是应用程序开发人员不必手动处理它们。所以Rails以及其它的一些网络框架采用了一个聪明的技巧：[它试图将HEAD请求路由到与GET请求相同的地方](https://github.com/rails/rails/blob/bc5d9567be44e6241a049c01605ad6cfefe42e10/actionpack/lib/action_dispatch/journey/router.rb#L133-L147)，然后运行控制器代码，以此省略掉消息响应体。
+
+这看上去很好，但却是一个漏洞百出的抽象概念，如果此时控制器发出request.get?的请求，对于这样的请求，因为现在控制器是HEAD请求，而不是GET请求，所以将会返回false。
+
+## 滥用HEAD请求
+
+如果我们向 ** _<https://github.com/login/oauth/authorize?>_**
+发送一个授权验证的HEAD请求，将会发生什么情况？前面我们说过，Rails路由会把它当成GET请求来处理，所以它会被发送到控制器中。但当HEAD请求到达控制器后，控制器会意识到这不是一个GET请求，所以控制器会检查它是否是一个经过授权验证的POST请求，之后，
+GitHub会找到请求中指定OAuth授权流程的APP，并给予相应的访问授权。
+
+这里的利用点是，GitHub的CSRF防护机制要求所有授权验证POST请求必须包含一个 CSRF
+token，但是HEAD请求由于不会造成过多影响，所以通常不需要CSRF
+token。但在此，我们可以无需告知目标用户的方法，通过跨站方式向用户发送一个给予任意OAuth权限的HEAD请求，以此实现我们的授权绕过目的。
+
+最终效果是，如果目标Github用户访问了由攻击者构造的页面，攻击者可以执行对目标Github用户隐私数据的读取或更改，可以[点击此PoC页面](https://not-an-aardvark.github.io/oauth-bypass-poc-fbdf56605489c74b2951/)进行体会（由于漏洞已经被修复，最终执行结果不再有效）
+
+我向Github上报了该漏洞后，它们在三小时内就积极进行了修复，最终我也收获了Github官方$25000的奖励！是我做Github漏洞测试以来的最大一笔奖金。
+
+## 漏洞上报及处理进程  
+
+> 2019-06-19 通过HackerOne向GitHub上报漏洞
+>
+> 2019-06-19 GitHub安全团队确认漏洞
+>
+> 2019-06-20 漏洞修复，GitHub确认补丁已成功释放
+>
+> 2019-06-26 GitHub推出修复版本的 Enterprise 2.17.3, 2.16.12、2.15.17 和 2.14.24
+>
+> 2019-06-26 GitHub奖励我$25000
+
+ ***参考来源：[teddykatz](https://blog.teddykatz.com/2019/11/05/github-oauth-bypass.html)，clouds 编译整理，转载请注明来自 FreeBuf.COM**  
+

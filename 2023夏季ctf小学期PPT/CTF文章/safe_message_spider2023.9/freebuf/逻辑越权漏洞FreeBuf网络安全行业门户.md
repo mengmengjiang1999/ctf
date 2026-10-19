@@ -1,0 +1,184 @@
+>
+> 部分内容来自[这篇](https://blog.csdn.net/lyc1401070320/article/details/83410065)，仅作为自己学习的记录，  
+> 还有跟着迪总所学。
+
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798175_6292f51fc0267d333eea9.png!small)
+
+## 水平越权和垂直越权概述
+
+`水平越权`：指攻击者尝试访问与他拥有相同权限的用户资源。  
+`垂直越权`：低权限用户尝试访问高权限用户的资源。（例如一个用户的个人信息管理页是 user.php，而管理员管理所有用户信息的页面是
+manageuser.php, 但管理页面没有相关的权限验证，导致任何人输入管理页面地址都可以访问）。
+
+## 漏洞产生原因
+
+越权漏洞形成的原因是后台使用了 不合理的权限校验规则导致的。  
+通常情况下，一个 Web 程序功能流程是登录 - 提交请求 - 验证权限 - 数据库查询 -返回结果。如果验证权限不足，便会导致越权。常见的程序都会认为通过登录后即可验证用户的身份，从而不会做下一步验证，最后导致越权。
+
+## 水平越权漏洞演示
+
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798176_6292f520173ad8afb08a7.png!small)  
+抓包  
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798176_6292f52059925a3ade899.png!small)  
+看到这里有个username的参数，可能会出现问题，  
+修改成lucy试一下 （这个用户名主要靠信息收集得到）。  
+放包  
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798176_6292f520b367795e3f89e.png!small)  
+我们看到了lucy的个人信息，
+
+我们查看源码，
+
+    
+    
+    if(isset($_GET['submit']) && $_GET['username']!=null){
+        //没有使用session来校验,而是使用的传进来的值，权限校验出现问题,这里应该跟登录态关系进行绑定
+        $username=escape($link, $_GET['username']);
+        $query="select * from member where username='$username'";
+        $result=execute($link, $query);
+        if(mysqli_num_rows($result)==1){
+            $data=mysqli_fetch_assoc($result);
+            $uname=$data['username'];
+            $sex=$data['sex'];
+            $phonenum=$data['phonenum'];
+            $add=$data['address'];
+            $email=$data['email'];
+         }
+    }
+    
+
+## 垂直越权漏洞演示
+
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798177_6292f52105b2c6a42cc3c.png!small)  
+我们是普通用户，只有查看的权限，  
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798177_6292f5214a789062c275f.png!small)  
+抓取普通用户的数据包，
+
+现在我们登录管理员用户，记录添加用户的数据包（就是需要我们能够获取添加用户的数据包）。  
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798177_6292f521b403476cee323.png!small)  
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798178_6292f52209b5382493eb3.png!small)  
+**这里我们将管理员用户添加用户的数据包，复制下来，将cookie换成我们普通用户的cookie，再放包（就是模拟一个普通用户，因为cookie是普通用户的，所以我们现在是普通用户，在普通用户知道了管理员用户添加用户的url和需要POST传递的参数的情况下）。**
+
+在实际情况下我们只是一个普通用户，我们没有管理员用户添加用户的数据包。  
+1、前端有操作界面，可以直接去抓取数据包，但是没有权限去操作，  
+2、我们可以去猜，根据页面的信息去推断，  
+3、如果可以下载网站的源码的话，我们可以在本地进行搭建，去模拟抓取。
+
+    
+    
+    POST /pikachu/vul/overpermission/op2/op2_admin_edit.php HTTP/1.1
+    Host: localhost
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:100.0) Gecko/20100101 Firefox/100.0
+    Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8
+    Accept-Language: zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2
+    Content-Type: application/x-www-form-urlencoded
+    Content-Length: 94
+    Origin: http://localhost
+    Connection: close
+    Referer: http://localhost/pikachu/vul/overpermission/op2/op2_admin_edit.php
+    Cookie: Idea-f7335eb6=4037ce81-12fd-4770-a2d6-33ce407696e2; Pycharm-26f0df2e=3ecb1945-9f74-4144-a79a-c05e33567ecf; PHPSESSID=9c5n0dbg2i71uuo2djemjssf44
+    Upgrade-Insecure-Requests: 1
+    Sec-Fetch-Dest: document
+    Sec-Fetch-Mode: navigate
+    Sec-Fetch-Site: same-origin
+    Sec-Fetch-User: ?1
+    
+    username=kobe&password=123456&sex=1&phonenum=111&email=11&address=11&submit=%E5%88%9B%E5%BB%BA
+    
+
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798178_6292f52266b6193c5ff2f.png!small)  
+可以看到成功了，普通用户执行了管理员用户添加用户的操作。（普通用户需要知道url和需要传递的参数）。
+
+查看源码：
+
+    
+    
+    $link=connect();
+    // 判断是否登录，没有登录不能访问
+    //这里只是验证了登录状态，并没有验证级别，所以存在越权问题。
+    if(!check_op2_login($link)){
+        header("location:op2_login.php");
+        exit();
+    }
+    if(isset($_POST['submit'])){
+        if($_POST['username']!=null && $_POST['password']!=null){//用户名密码必填
+            $getdata=escape($link, $_POST);//转义
+            $query="insert into member(username,pw,sex,phonenum,email,address) values('{$getdata['username']}',md5('{$getdata['password']}'),'{$getdata['sex']}','{$getdata['phonenum']}','{$getdata['email']}','{$getdata['address']}')";
+            $result=execute($link, $query);
+            if(mysqli_affected_rows($link)==1){//判断是否插入
+                header("location:op2_admin.php");
+            }else {
+                $html.="<p>修改失败,请检查下数据库是不是还是活着的</p>";
+    
+            }
+        }
+    }
+    
+
+## 漏洞原理解析
+
+ **1、前端安全造成：界面**  
+代码在这里只有判断用户是不是管理员，然后进行展示（判断用户等级后，代码界面部分进行可选显示）。  
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798178_6292f522cb88b3f8b6e91.png!small)
+
+但是只是前端显示有区别，并没有说非管理员用户不能编辑添加用户（只是没有给普通用户这个操作界面，但是不代表没有操作权限）。  
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798179_6292f5232f39696c2d447.png!small)
+
+因为：在adminedit.php文件中，只是判断了是否登录，没有再次判断级别问题就将数据插入数据库（也就是在代码层面判断等级）。
+
+ **2、后端安全造成：数据库**  
+管理员和普通用户同表:user表，  
+`id username password groupid`  
+当groupid为1时表示是管理员，groupid为2时表示是普通用户，  
+后端通过判断groupid来给用户进行授权或者通过判断username来进行授权，
+
+如果在访问网站数据包中有传输用户的编号、用户组号或用户类型号的时候，那么尝试对这个值进行修改，就是测试越权漏洞的甚本。|
+
+## 如何查找越权漏洞
+
+常见的越权高发功能点有：==根据订单号查订单==、==根据用户 ID 查看帐户信息==、==修改 / 找回密码==等。
+
+对于代码审计，可以先查看前端的网页源码，查看一些操作的表单提交的值。查看配置文件和一些过滤器，看是否对 URL
+有相关的筛选操作。最后查看后台处理逻辑，是否存在身份验证机制，逻辑是否异常，有时的逻辑漏洞也可导致越权操作。
+
+在与服务器进行数据交互时客户端携带着标识用户的身份的cookie，当服务端的session与cookie中的身份匹配成功后，才能允许该用户进行相关操作。除了cookie之外，在请求中可能会带一些参数，细览下可能存在辨别信息的唯一值，来进行测试。这里要说一点，传输的参数并不一定在请求参数中，也有可能存在URL链接的位置（GET和POST请求的区别）。当拦截一个请求后分析是否有参数：  
+1、请求中不存在参数，只用cookie进行身份验证，无法水平越权，可能出现垂直越权；
+
+2、==请求中存在参数，并且参数中的某些值可能是辨别信息的唯一值（如employeeID、departmentID、ID等），可能存在水平和垂直越权==；越权的原因是参数中的employeeID没有判断是否是cookie中用户所管辖的员工ID。
+
+## 漏洞预防
+
+1，类似于这种请求，例如查看用户信息等，不能只根据用户 id 去搜索，应该再次进行身份验证。
+
+2，可以从用户的加密认证 cookie 中获取当前用户 id，防止攻击者对其修改。或在 session、cookie 中加入不可预测、不可猜解的 user
+信息。
+
+3，在每个页面加载前进行权限认证，调用功能前验证用户是否有权限调用相关功能。
+
+4，特别敏感操作可以让用户再次输入密码或其他的验证信息。
+
+## 越权漏洞检测工具
+
+1、小米范越权漏洞检测工具  
+[下载地址](http://pan.baidu.com/s/1pLjaQKF)privilegecheck.jar  
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798179_6292f52387fcc8caf951d.png!small)
+
+有三个浏览器，我们可以登录两个用户，然后会自动进行抓包。用其中一个用户去发另一个用户的数据包，根据是否会有响应，判断是否存在水平或垂直越权漏洞。
+
+2、 **burpsuit插件Authz** （这个重要）  
+首先安装  
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798180_6292f524d3c18657b98d4.png!small)  
+这是这个插件的界面  
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798181_6292f525c9bd8eaa9fbcc.png!small)  
+Cookie填写普通用户的Cookie，就是以普通用户的登录凭据去测试其他的数据包（比如垂直越权那里添加用户的数据包）
+
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798182_6292f5266a68ccd740903.png!small)  
+登录admin，我们抓取这个添加用户的数据包  
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798182_6292f526bd48740656e27.png!small)  
+发现可以发送到Authz了  
+然后Cookie再写上普通用户的cookie  
+![在这里插入图片描述](https://image.3001.net/images/20220529/1653798183_6292f52730f92e82d5636.png!small)  
+绿色就代表了正常响应了数据包，存在越权漏洞（我这里演示好像出了点问题，但大概就是这个思路）。
+
+3、这个是非常专业的一个工具，常用与红蓝对抗，信息会到服务器上：  
+https://github.com/ztosec/secscan-authcheck
+

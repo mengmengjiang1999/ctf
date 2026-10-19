@@ -1,0 +1,149 @@
+2020年2月24日-28日，网络安全行业盛会RSA
+Conference将在旧金山拉开帷幕。绿盟君已经相继向大家介绍了入选今年创新沙盒的十强初创公司：Elevate Security 、Sqreen和Tala
+Security三家厂商，下面将介绍的是： **Tala Security** 。
+
+一、公司介绍
+
+Tala Security公司成立于2016年，总部位于美国加利福尼亚的弗里蒙特。其创始人兼CEO——Aanand
+Krishnan曾是Symantec（赛门铁克）产品管理的高级总监。据owler.com的数据显示，Tala
+Security自成立以来已经过4轮融资，总共筹集了850万美元。但crunchbase.com的数据则表明Tala
+Security已经得到了1460万美元的融资。
+
+二、产品介绍
+
+Tala Security的官方网站上展示的唯一一款产品是“Client-side WebApplication Firewall”（下简称“Tala
+WAF”）。产品宣称“具有强大的预防能力、自动化决策能力和无与伦比的性能，可抵御XSS、Magecart，以及最重要的，抵御明天的攻击”。按照官方网站的宣传，Tala
+WAF的主要功能是检测和防护各种针对WEB客户端（浏览器）的攻击。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZezicIWVtDzyKJKGYF50S4zmz8Lv7v8libWUVCes9DEushYSytVK7sOQpcnNxAucxobpMETMf6Y28UQ/640?wx_fmt=png](https://image.3001.net/images/20200219/1582083506_5e4cadb20ac3c.jpg!small)
+
+三、技术分析
+
+注：以下所有结论均通过公开资料整理推测得出，并非基于对实际产品的研究，可能并不反映Tala WAF产品的实际情况，仅供参考。
+
+**_01_**
+
+整体运作机制
+
+从官方白皮书来看，Tala WAF的运作主要依靠一些浏览器内置安全机制。具体包括：
+
+**1** **、** 内容安全策略（CSP）
+
+由服务端指定策略，客户端执行策略，限制网页可以加载的内容；
+
+一般通过“Content-Security-Policy”响应首部或“<meta>”标签进行配置。
+
+ **2** **、** 子资源完整性（SRI）
+
+对网页内嵌资源（脚本、样式、图片等等）的完整性断言。
+
+ **3** **、** iFrame沙盒
+
+限制网页内iframe的表单提交、脚本执行等操作。
+
+ **4** **、** Referrer策略
+
+避免将网站URL通过“Referer”请求首部泄露给其它网站。
+
+ **5** **、** HTTP严格传输安全（HSTS）
+
+一定时间内强制客户端使用SSL/TLS访问网站，并禁止用户忽略安全警告。
+
+ **6** **、** 证书装订（暂译，Certificate Stapling）
+
+服务端会在SSL/TLS协商中附带OCSP信息，以证实服务端证书的有效性。
+
+如果能够得到正确配置，CSP等客户端安全机制无疑是应对各类客户端侧攻击的有效方法。官方白皮书中称Tala
+WAF的核心功能是“在所有现代浏览器中动态部署并持续调整基于标准的安全措施”。
+
+由此推测，Tala WAF的关键机制有二：
+
+**1** **、** 自动化生成和调整上述安全策略
+
+和大部分的ACL一样，要严格配置这些安全机制并不是一件容易的事情。
+
+ **2** **、** 收集和分析这些安全策略的执行记录
+
+由于CSP具有Report机制，要收集其执行记录应该不算复杂。
+
+最关键的部分是生成安全策略和分析执行记录的算法。对此，但绿盟君没能找到任何有价值的***息。仅有的叙述来自官方网站：“Tala利用AI辅助分析引擎来评估网页体系结构和集成的50多个独特指标”。至于具体使用了何种模型则不得而知。
+
+**_02_**
+
+细节分析
+
+特别声明：我们不会在未经授权的情况下对他人网站采取任何进攻性行为。以下测试仅通过查看和修改本地通信来测试浏览器CSP的实现效果，并不能表明Tala
+Security网站存在或不存在任何安全漏洞。
+
+直接访问Tala Security官方网站，可见该网站的CSP配置如下：
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZezicIWVtDzyKJKGYF50S4zm9bBxbrb40PLUVXn9Tzs9fxpcDm9WichQ8ukxnmCwSJqUdKfS36TG3vw/640?wx_fmt=png](https://image.3001.net/images/20200219/1582083517_5e4cadbdabc49.png!small)
+
+可见是一组非常复杂的CSP，我们猜测Tala Security官方网站大概使用了Tala WAF。如果猜测属实，其中有一些细节值得注意：
+
+CSP响应首部
+
+我们首先发现，响应首部中配置的是“Content-Security-Policy-Report-Only”而非“Content-Security-Policy”。这意味着即使页面元素/脚本违背了CSP也不会被阻止，而是仅仅产生一条Report信息：
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZezicIWVtDzyKJKGYF50S4zmb0AZ8ibNKgsFj6CsBrkiagPfl7NCdGDSeDdvwooSib4ZAHicsGAryr0Q4w/640?wx_fmt=png](https://image.3001.net/images/20200219/1582083525_5e4cadc57b658.png!small)![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZezicIWVtDzyKJKGYF50S4zmEoI4CJpyTUvY24QN1ia8JyiaLb3n8HO8YGXT8xHXM532QLXdutJdf0gA/640?wx_fmt=png](https://image.3001.net/images/20200219/1582083532_5e4cadcc91d4c.png!small)![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZezicIWVtDzyKJKGYF50S4zmoUsgqeib3z4vkXFX2gCxcziaAaCP4Dick2Mj5M4EE9Mrt2H5DLSfgeNAg/640?wx_fmt=png](https://image.3001.net/images/20200219/1582083539_5e4cadd317ceb.png!small)
+
+上图可见，即使<script>标签缺少“nonce”属性也能正常执行，只是会产生Report信息。
+
+由此猜想，Tala WAF可能也无法以非常高的信心生成严格的CSP（而不影响网站正常业务）。Tala WAF可能会像态势感知系统那样，针对收集到的CSP
+Report信息使用某种异常检测模型。
+
+CSP中的report-uri
+
+Tala Security官方网站的report-uri指向站外地址“https://pilot.tsrs.cloud/r/7d9925a3e964e7eb0ed12fa82e9a3f891ae28372”。该网址不知为何无法正常访问，也正好避免测试过程产生虚假告警。绿盟君多次尝试删除Cookie并更换IP地址后刷新页面，但report-uri始终不变。
+
+由此猜测，Tala WAF可能是以云服务形式提供的，report-uri中一长串的hash可能唯一标识一个被保护的网站。如此一来，用户本地就能实现轻量化部署，且几乎不产生性能损耗（官网宣称的“no signatures,
+no agents”），但也意味着用户的CSPReport信息可能会被Tala Security公司收集。
+
+CSP的粒度
+
+Tala Security官方网站的大量页面（包括HTML、JS、CSS、甚至是图片资源和302跳转响应）都使用了相同的CSP配置。以下为测试中的部分记录：
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZezicIWVtDzyKJKGYF50S4zmib8YZlM5J8smCF9QVmT4iashWG5QfACCVrzauYfUtAJcDmCnJshfDxtQ/640?wx_fmt=png](https://image.3001.net/images/20200219/1582083547_5e4caddb65e42.jpg!small)
+
+可见除了script-src中随机生成的nonce值之外，其它字段全部相同。
+
+由此猜测，Tala
+WAF可能是对网站整体的资源引用情况进行分析，并产生一组静态策略，随后通过修改WEB中间件配置等方式应用到整个网站中。按理说，这是一种相对粗粒度的方法，当网站业务构成比较复杂时，可能难以有效发挥防护效果。但也不能排除有其它机制来适应这些场景。
+
+四、特征对比
+
+**_01_**
+
+优势和创新点
+
+Tala
+WAF似乎并不关注像SQL注入、任意文件上传这样的漏洞攻击，但它能够将客户端安全机制活性化，从而检测和阻止大部分常见的对客户端攻击，诸如XSS、挖矿脚本、广告注入等。即使攻击者能够运用各种五花八门的bypass技巧，在一套严格配置的CSP面前也会非常苦恼。
+
+绿盟君曾在应急响应中多次遇到通过推广平台发起的网页篡改攻击，其中大多数属于黑产流量变现（可以简单理解为薅羊毛的一种）。由于广告代理商层层外包，即使是一些看上去很正规的推广平台也可能会提供包含恶意代码的广告内容。这些恶意代码会嵌入到所有呈现该广告的网站页面上，并大面积攻击访问这些网站页面的用户。目前的常规WEB应用防护体系很难与之对抗，但Tala
+WAF的方法理应可以有效防范此类攻击。
+
+又例如有些XSS的Payload不会出现在通信流量中，一种常见情况是URL中“#”后面的部分（通常用来控制页面自动滚动定位）所构成的DOM型XSS。常规网络防护依赖对通信流量的检查，因此很难发现这种XSS。但正确配置的CSP能够阻止此类漏洞利用。
+
+整体来说，Tala WAF相对适合互联网行业，尤其是电商零售领域的网站，因为这些网站往往具有大量的第三方资源引用。Tala
+WAF可能会成为现有WEB安全防护体系中一个非常重要的补充。
+
+**_02_**
+
+劣势与挑战
+
+从公开的资料来看，Tala WAF并不具备对常规漏洞入侵的防御能力，因此可能不适合单独部署使用。Tala
+WAF可能也难以在企业内网环境中发挥优势——内部网站的内容资源大多可控性很高，且接入云服务也很困难。
+
+此外，Tala Security也面临一些外部挑战。引用Gartner高级总监分析师Dionisio Zumerle的观点：“Tala
+Security面临来自提供替代方法的供应商的竞争。一些应用内置保护的播放器提供客户端JavaScript监控。一些RASP和WAF供应商将CSP和SRI功能作为端到端应用程序安全平台的一部分来提供。此外，网站运营者对客户端应用程序的保护意识普遍不足。”
+
+五、总结
+
+长期以来，大多数网站安全建设都着重于防止服务器被入侵或泄露数据，而TalaSecurity的思想确实弥补了现有体系的一个短板，当之无愧为2020年度RSA大会的10大Sandbox创新厂商之一。不仅仅是CSP，如何能够快速而精确地调整各种安全策略配置，如何能够最大化地利用好现有的防护机制，都是值得我们深入思考的问题。
+
+· 参考链接 ·
+
+[1] https://www.talasecurity.io/
+
+  
+

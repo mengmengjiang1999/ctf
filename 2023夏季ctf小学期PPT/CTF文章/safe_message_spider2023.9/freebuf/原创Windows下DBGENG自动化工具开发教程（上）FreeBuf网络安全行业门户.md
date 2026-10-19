@@ -1,0 +1,161 @@
+## 引言
+
+众所周知，Windows下软件调试工具主要依赖于WinDBG，相关自动化工具也都是基于windbg，尤其是windbg本身支持python扩展后，更加方便了相关插件的开发。然而依赖于windbg的插件在批量自动化分析的overhead较大，且很多自动化工具不方便与windbg共存；同时windbg的本质上就是DBGENG.dll的图形化扩展。因此独立于windbg，且具备一定自动调试功能的程序开发是部分自动化工具的开发需求。但是，经过笔者的调研，Windows下独立于windbg的自动化调试工具的开发相关教程，尤其是中文教程，较为稀少，尤其是从零开始的相关教程，尚处于空白阶段。本教程基本上从零开始，力图展现基于dbgeng.dll的调试程序的开发大体流程以及用到的相关API，为各位有自动化开发需求的开发人员抛砖引玉。
+
+本期教程讲述dbgeng开发简单流程，完成在dbeng引擎下启动并运行被调试程序的代码。
+
+## 准备工作
+
+笔者采用的开发环境是Microsoft Visual Studio Community以及Windows
+驱动程序工具包（<https://docs.microsoft.com/zh-cn/windows-hardware/drivers/download-the-wdk>）。微软对dbgeng的相关api进行了介绍，虽然对整体流程的开发帮助不大，但还是有相关函数的调用方法（<https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/writing-dbgeng-extensions>）。
+
+## 开始
+
+与GDB不同，DBGENG.dll本身就是Windows自带的具有内核和应用软件调试功能的动态库，windbg实质上是一个DBGENG.dll的封装。在DBGENG.dll的封装，只需要遵循一定的开发流程，就可以定制自动化调试工具。
+
+首先，在vs里新建一个空工程，工程名称为dbgeng_test；工程建立完成后，打开工程属性->链接器->输入，找到附加依赖项，将Windows
+驱动程序工具包中的DbgEng.lib的位置按照编译平台(win32或者x64)加入进去，如图
+
+![1630220705_612b31a1076ec1119c51b.png!small?1630220705052](https://image.3001.net/images/20210829/1630220705_612b31a1076ec1119c51b.png!small?1630220705052)
+
+此时完成工程建立。
+
+在正式开始代码编写前，需要认识两个类，IDebugClient和IDebugControl。IDebugClient相当于是dbgeng的整体客户端，负责进程的加载(create)，附加（attach）,中止(terminate)，放弃(abandon)以及结束(end)等，相当于是windbg的菜单栏中File中相关功能。IDebugControl则是维护dbgeng的核心功能，包括执行执行，反汇编，断点管理等等。IDebugClient和IDebugControl两个类算是dbgeng.dll的基础，除此之外，还有IDebugDataSpaces，IDebugRegisters，IDebugSymbols以及IDebugSystemObjects等类，这些类与此次教程关系不大，在后面教程需要的时候再进行介绍。
+
+当前代码如下：
+
+    
+    
+    #include <iostream>
+    #include <DbgEng.h>
+    
+    int main(int argc, char** argv)
+    {
+        IDebugClient* g_client=nullptr;
+        IDebugControl* g_control = nullptr;
+        HRESULT g_hresult;
+        g_hresult = DebugCreate(__uuidof(IDebugClient), (void**)&g_client);
+        g_hresult = g_client->QueryInterface(__uuidof(IDebugControl), (void**)&g_control);
+        return 0;
+    }
+
+此代码完成IDebugClient和IDebugControl组件的注册，代码中需要引用DbgEng.h文件。由此代码可知，IDebugClient算是一个debugger的实体，通过DbgEng.dll中的DebugCreate函数创建一个debugger实体，然后在IDebugClient实体上注册IDebugControl组件，可通过g_client控制Debugger。
+
+IDebugClient的核心任务是维护Debugger的基本功能，目标程序的加载，附加都需要经过IDebugClient。现在，IDebugClient的CreateProcess函数加载应用程序：
+
+    
+    
+    #include <iostream>
+    #include <DbgEng.h>
+    
+    int main(int argc, char** argv)
+    {
+        IDebugClient* g_client=nullptr;
+        IDebugControl* g_control = nullptr;
+        HRESULT g_hresult;
+        g_hresult = DebugCreate(__uuidof(IDebugClient), (void**)&g_client);
+        g_hresult = g_client->QueryInterface(__uuidof(IDebugControl), (void**)&g_control);
+        g_hresult = g_client->CreateProcess(0, PSTR("calc.exe"), CREATE_NEW_CONSOLE | DEBUG_CREATE_PROCESS_NO_DEBUG_HEAP | DEBUG_PROCESS);
+        return 0;
+    }
+
+微软对CreateProcess函数的定义如下：
+
+> The **CreateProcess** method creates a process from the specified command
+> line.
+>
+> CreateProcess函数通过命令行创建一个新的进程。
+
+其定义如下：
+
+    
+    
+    HRESULT CreateProcess(
+      ULONG64 Server,
+      PSTR    CommandLine,
+      ULONG   CreateFlags
+    );
+
+其中，对于本地调试来说，Server参数一般为0。CommandLine参数则是目标程序启动的命令，代码中是启动计算器"calc.exe"，而CreateFlags参数则是目标程序启动时的附加参数，其具体定义在<https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/dbgeng/ns-dbgeng-_debug_create_process_options>中可查看。CREATE_NEW_CONSOLE表示另起一个新的命令行窗口，DEBUG_CREATE_PROCESS_NO_DEBUG_HEAP
+表示不在目标进程中使用调试堆，DEBUG_PROCESS表示目标进程为调试进程。对于自动化调试工具来说，CREATE_NEW_CONSOLE标志一般是不需要的。
+
+编译目标代码，然后在return
+0前设置断点，运行程序。此时我们发现计算机窗口并未出现。但是如果打开任务管理器，你就可以发现目标进程中是存在calc.exe的。
+
+![1630242884_612b88443b7a492102d0b.png!small?1630242884068](https://image.3001.net/images/20210829/1630242884_612b88443b7a492102d0b.png!small?1630242884068)
+
+其实这个很好理解，就像使用windbg加载一个目标程序一样，在没有给windbg发送相关指令前，目标程序也是不会跑起来的。而对debugger的控制，就需要使用到IDebugControl组件了，其中IDebugControl组件，IDebugControl组件中核心功能主要是断点管理和命令执行。其中命令执行依靠Execute函数，其定义如下：
+
+    
+    
+    HRESULT Execute(
+      ULONG OutputControl,
+      PCSTR Command,
+      ULONG Flags
+    );
+
+其第一个参数OutputControl是命令执行过程中的输出，其具体使用方法详见<https://docs.microsoft.com/en-us/windows-hardware/drivers/debugger/debug-outctl-xxx>，在这里，本文选择使用DEBUG_OUTCTL_IGNORE参数。第二个Command参数，和windbg中命令完全一致，具体相关命令可以在网上查阅各种手册，本文采用让程序直接运行的命令"g"。Flags参数用于控制Command字符串是否发送到output中，此处使用DEBUG_EXECUTE_ECHO。
+
+此时得到代码如下：
+
+    
+    
+    #include <iostream>
+    #include <DbgEng.h>
+    
+    int main(int argc, char** argv)
+    {
+        IDebugClient* g_client=nullptr;
+        IDebugControl* g_control = nullptr;
+        HRESULT g_hresult;
+        g_hresult = DebugCreate(__uuidof(IDebugClient), (void**)&g_client);
+        g_hresult = g_client->QueryInterface(__uuidof(IDebugControl), (void**)&g_control);
+        g_hresult = g_client->CreateProcess(0, PSTR("calc.exe"), CREATE_NEW_CONSOLE | DEBUG_CREATE_PROCESS_NO_DEBUG_HEAP | DEBUG_PROCESS);
+        g_hresult = g_control->Execute(DEBUG_OUTCTL_IGNORE, PCSTR("g"), DEBUG_EXECUTE_ECHO);
+        return 0;
+    }
+
+再次编译，运行。发现计算器窗口仍旧无法弹出，查看任务管理器，发现cacl.exe也在。
+
+此时我们仔细回想一下，在使用windbg调试程序的时候，程序加载进入windbg中，会自动触发一个INT
+3断点，这是调试进程必备的，而我们在Linux下开发ptrace相关代码时，在目标程序真正run起来之前，是需要等待一个INT
+3信号的。同理，IDebugControl组件中，有一个WaitForEvent方法，该方法就是等待调试器的事件发生，其中包括dbgeng.dll加载完毕目标程序信号。该函数定义如下：
+
+    
+    
+    HRESULT WaitForEvent(
+      ULONG Flags,
+      ULONG Timeout
+    );
+
+其中第一个参数官方直接建议设为0。第二个参数为等待事件，本文建议设为INFINITE。
+
+现在将代码修改如下：
+
+    
+    
+    #include <iostream>
+    #include <DbgEng.h>
+    
+    int main(int argc, char** argv)
+    {
+        IDebugClient* g_client=nullptr;
+        IDebugControl* g_control = nullptr;
+        HRESULT g_hresult;
+        g_hresult = DebugCreate(__uuidof(IDebugClient), (void**)&g_client);
+        g_hresult = g_client->QueryInterface(__uuidof(IDebugControl), (void**)&g_control);
+        g_hresult = g_client->CreateProcess(0, PSTR("calc.exe"), CREATE_NEW_CONSOLE | DEBUG_CREATE_PROCESS_NO_DEBUG_HEAP | DEBUG_PROCESS);
+        g_hresult = g_control->WaitForEvent(0, INFINITE);
+        g_hresult = g_control->Execute(DEBUG_OUTCTL_IGNORE, PCSTR("g"), DEBUG_EXECUTE_ECHO);
+        return 0;
+    }
+
+再次编译，并运行，发现计算器可以成功跑起来。
+
+![1630246772_612b97742ca05200ea3a7.png!small?1630246771925](https://image.3001.net/images/20210829/1630246772_612b97742ca05200ea3a7.png!small?1630246771925)
+
+到这里，已经算是开始自动化调试工具开发的第一步了。接下来的教程里，会继续讲解各种event的callback和input
+output的callback使用方法，丰富自动化调试工具的功能，本文将在教程的最后，完成windows下crash自动约减工具。同时，教程中如果出现错误或者不清楚的地方，欢迎留言指出！
+
+联系方式 QQ: 826484133
+

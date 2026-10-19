@@ -1,0 +1,322 @@
+## 写在前面的话  
+
+**在此之前，我一直都在研究JavaScript相关的反调试技巧。但是当我在网上搜索相关资料时，我发现网上并没有多少关于这方面的文章，而且就算有也是非常不完整的那种。所以在这篇文章中，我打算跟大家总结一下关于JavaScript反调试技巧方面的内容。值得一提的是，其中有些方法已经被网络犯罪分子广泛应用到恶意软件之中了。**
+
+![aa.png](https://image.3001.net/images/20180227/15197185957921.png!small)  
+
+对于JavaScript来说，你只需要花一点时间进行调试和分析，你就能够了解到JavaScript代码段的功能逻辑。而我们所要讨论的内容，可以给那些想要分析你JavaScript代码的人增加一定的难度。不过我们的技术跟代码混淆无关，我们主要针对的是如何给代码主动调试增加困难。
+
+本文所要介绍的技术方法大致如下：
+
+> 1\. 检测未知的执行环境（我们的代码只想在浏览器中被执行）；
+>
+> 2\. 检测调试工具（例如DevTools）；
+>
+> 3\. 代码完整性控制；
+>
+> 4\. 流完整性控制；
+>
+> 5\. 反模拟；
+
+简而言之，如果我们检测到了“不正常”的情况，程序的运行流程将会改变，并跳转到伪造的代码块，并“隐藏”真正的功能代码。
+
+## 一、函数重定义
+
+这是一种最基本也是最常用的代码反调试技术了。在JavaScript中，我们可以对用于收集信息的函数进行重定义。比如说，console.log()函数可以用来收集函数和变量等信息，并将其显示在控制台中。如果我们重新定义了这个函数，我们就可以修改它的行为，并隐藏特定信息或显示伪造的信息。
+
+我们可以直接在DevTools中运行这个函数来了解其功能：
+
+    
+    
+    console.log("HelloWorld");
+    var fake = function() {};
+    window['console']['log']= fake;
+    console.log("Youcan't see me!");
+
+运行后我们将会看到：
+
+    
+    
+    VM48:1 Hello World
+
+你会发现第二条信息并没有显示，因为我们重新定义了这个函数，即“禁用”了它原本的功能。但是我们也可以让它显示伪造的信息。比如说这样：
+
+    
+    
+    console.log("Normalfunction");
+    //First we save a reference to the original console.log function
+    var original = window['console']['log'];
+    //Next we create our fake function
+    //Basicly we check the argument and if match we call original function with otherparam.
+    // If there is no match pass the argument to the original function
+    var fake = function(argument) {
+        if (argument === "Ka0labs") {
+            original("Spoofed!");
+        } else {
+            original(argument);
+        }
+    }
+    // We redefine now console.log as our fake function
+    window['console']['log']= fake;
+    //Then we call console.log with any argument
+    console.log("Thisis unaltered");
+    //Now we should see other text in console different to "Ka0labs"
+    console.log("Ka0labs");
+    //Aaaand everything still OK
+    console.log("Byebye!");
+
+如果一切正常的话：
+
+    
+    
+    Normal function
+    VM117:11 This is unaltered
+    VM117:9 Spoofed!
+    VM117:11 Bye bye!
+
+实际上，为了控制代码的执行方式，我们还能够以更加聪明的方式来修改函数的功能。比如说，我们可以基于上述代码来构建一个代码段，并重定义eval函数。我们可以把JavaScript代码传递给eval函数，接下来代码将会被计算并执行。如果我们重定义了这个函数，我们就可以运行不同的代码了：
+
+    
+    
+    //Just a normal eval
+    
+    eval("console.log('1337')");
+    
+    //Now we repat the process...
+    
+    var original = eval;
+    
+    var fake = function(argument) {
+    
+        // If the code to be evaluated contains1337...
+    
+        if (argument.indexOf("1337") !==-1) {
+    
+            // ... we just execute a different code
+    
+            original("for (i = 0; i < 10;i++) { console.log(i);}");
+    
+        }
+    
+        else {
+    
+            original(argument);
+    
+        }
+    
+    }
+    
+    eval= fake;
+    
+    eval("console.log('Weshould see this...')");
+    
+    //Now we should see the execution of a for loop instead of what is expected
+    
+    eval("console.log('Too1337 for you!')");  
+    
+
+运行结果如下：
+
+    
+    
+    1337
+    VM146:1We should see this…
+    VM147:10
+    VM147:11
+    VM147:12
+    VM147:13
+    VM147:14
+    VM147:15
+    VM147:16
+    VM147:17
+    VM147:18
+    VM147:19
+
+正如之前所说的那样，虽然这种方法非常巧妙，但这也是一种非常基础和常见的方法，所以比较容易被检测到。
+
+## 二、断点
+
+为了帮助我们了解代码的功能，JavaScript调试工具（例如DevTools）都可以通过设置断点的方式阻止脚本代码执行，而断点也是代码调试中最基本的了。
+
+如果你研究过调试器或者x86架构，你可能会比较熟悉0xCC指令。在JavaScript中，我们有一个名叫debugger的类似指令。当我们在代码中声明了debugger函数后，脚本代码将会在debugger指令这里停止运行。比如说：
+
+    
+    
+    console.log("Seeme!");
+    debugger;
+    console.log("Seeme!");
+
+很多商业产品会在代码中定义一个无限循环的debugger指令，不过某些浏览器会屏蔽这种代码，而有些则不会。这种方法的主要目的就是让那些想要调试你代码的人感到厌烦，因为无限循环意味着代码会不断地弹出窗口来询问你是否要继续运行脚本代码：
+
+    
+    
+    setTimeout(function(){while (true) {eval("debugger")
+
+## 三、时间差异
+
+这是一种从传统反逆向技术那里借鉴过来的基于时间的反调试技巧。当脚本在DevTools等工具环境下执行时，运行速度会非常慢（时间久），所以我们就可以根据运行时间来判断脚本当前是否正在被调试。比如说，我们可以通过测量代码中两个设置点之间的运行时间，然后用这个值作为参考，如果运行时间超过这个值，说明脚本当前在调试器中运行。
+
+演示代码如下：
+
+    
+    
+    set Interval(function(){
+      var startTime = performance.now(), check,diff;
+      for (check = 0; check < 1000; check++){
+        console.log(check);
+        console.clear();
+      }
+      diff = performance.now() - startTime;
+      if (diff > 200){
+        alert("Debugger detected!");
+      }
+    },500);
+
+## 四、DevTools检测（Chrome）
+
+这项技术利用的是div元素中的id属性，当div元素被发送至控制台（例如console.log(div)）时，浏览器会自动尝试获取其中的元素id。如果代码在调用了console.log之后又调用了getter方法，说明控制台当前正在运行。
+
+简单的概念验证代码如下：
+
+    
+    
+    let div = document.createElement('div');
+    let loop = setInterval(() => {
+        console.log(div);
+        console.clear();
+    });
+    Object.defineProperty(div,"id", {get: () => {
+        clearInterval(loop);
+        alert("Dev Tools detected!");
+    }});
+
+## 五、隐式流完整性控制
+
+当我们尝试对代码进行反混淆处理时，我们首先会尝试重命名某些函数或变量，但是在JavaScript中我们可以检测函数名是否被修改过，或者说我们可以直接通过堆栈跟踪来获取其原始名称或调用顺序。
+
+arguments.callee.caller可以帮助我们创建一个堆栈跟踪来存储之前执行过的函数，演示代码如下：
+
+    
+    
+    function getCallStack() {
+        var stack = "#", total = 0, fn =arguments.callee;
+        while ( (fn = fn.caller) ) {
+            stack = stack + "" +fn.name;
+            total++
+        }
+        return stack
+    }
+    function test1() {
+        console.log(getCallStack());
+    }
+    function test2() {
+        test1();
+    }
+    function test3() {
+        test2();
+    }
+    function test4() {
+        test3();
+    }
+    test4();
+
+注意：源代码的混淆程度越强，这个技术的效果就越好。
+
+## 六、代理对象
+
+代理对象是目前JavaScript中最有用的一个工具，这种对象可以帮助我们了解代码中的其他对象，包括修改其行为以及触发特定环境下的对象活动。比如说，我们可以创建一个嗲哩对象并跟踪每一次document.createElemen调用，然后记录下相关信息：
+
+    
+    
+    const handler = { // Our hook to keep the track
+        apply: function (target, thisArg, args){
+            console.log("Intercepted a call tocreateElement with args: " + args);
+            return target.apply(thisArg, args)
+        }
+    }
+     
+    document.createElement= new Proxy(document.createElement, handler) // Create our proxy object withour hook ready to intercept
+    document.createElement('div');
+
+接下来，我们可以在控制台中记录下相关参数和信息：
+
+    
+    
+    VM64:3 Intercepted a call to createElement with args: div
+
+我们可以利用这些信息并通过拦截某些特定函数来调试代码，但是本文的主要目的是为了介绍反调试技术，那么我们如何检测“对方”是否使用了代理对象呢？其实这就是一场“猫抓老鼠”的游戏，比如说，我们可以使用相同的代码段，然后尝试调用toString方法并捕获异常：
+
+    
+    
+    //Call a "virgin" createElement:
+    try {
+        document.createElement.toString();
+    }catch(e){
+        console.log("I saw your proxy!");
+    }
+
+信息如下：
+
+    
+    
+    "function createElement() { [native code] }"
+
+但是当我们使用了代理之后：
+
+    
+    
+    //Then apply the hook
+    consthandler = {
+        apply: function (target, thisArg, args){
+            console.log("Intercepted a call tocreateElement with args: " + args);
+            return target.apply(thisArg, args)
+        }
+    }
+    document.createElement= new Proxy(document.createElement, handler);
+     
+    //Callour not-so-virgin-after-that-party createElement
+    try {
+        document.createElement.toString();
+    }catch(e) {
+        console.log("I saw your proxy!");
+    }
+
+没错，我们确实可以检测到代理：
+
+    
+    
+    VM391:13 I saw your proxy!
+
+我们还可以添加toString方法：
+
+    
+    
+    const handler = {
+        apply: function (target, thisArg, args){
+            console.log("Intercepted a call tocreateElement with args: " + args);
+            return target.apply(thisArg, args)
+        }
+    }
+    document.createElement= new Proxy(document.createElement, handler);
+    document.createElement= Function.prototype.toString.bind(document.createElement); //Add toString
+    //Callour not-so-virgin-after-that-party createElement
+    try {
+        document.createElement.toString();
+    }catch(e) {
+        console.log("I saw your proxy!");
+    }
+
+现在我们就没办法检测到了：
+
+    
+    
+    "function createElement() { [native code] }"
+
+就像我说的，这就是一场“猫抓老鼠“的游戏。
+
+## 总结
+
+希望我所收集到的这些技巧可以对大家有所帮助，如果你有更好的技巧想跟大家分享，可以直接在文章下方的评论区留言，或者在Twitter上艾特我（[@TheXC3LL](https://twitter.com/TheXC3LL)）。
+
+ *** 参考来源：[x-c3ll](https://x-c3ll.github.io/posts/javascript-antidebugging/)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

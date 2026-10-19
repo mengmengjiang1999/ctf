@@ -1,0 +1,689 @@
+# 理解windows内核——驱动开发
+
+阅读量 **225662**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2022-01-13 10:30:16
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t01d9aa7d1904cd3235.jpg)
+
+## 前言
+
+学习windows内核，就离不开驱动的开发。
+
+## 环境搭建
+
+vs2019 + SDK + WDK，SDK的版本要和WDK的版本相同。
+
+![](https://p4.ssl.qhimg.com/t01b6b30f9a88914f9f.png)
+
+![](https://p2.ssl.qhimg.com/t013a30c341e358eb4b.png)
+
+在xp上跑驱动的话就设置target os为win7就行了。
+
+![](https://p2.ssl.qhimg.com/t01bcc1206fc0a0c48f.png)
+
+然后就是改改“警告设为错误”等等，不要改警告等级。
+
+    
+    
+    #include <ntddk.h>
+    
+    // 提供一个Unload函数只是为了让程序能够动态卸载,方便调试
+    VOID DriverUnload(PDRIVER_OBJECT driver)
+    {
+        // 但是实际上我们什么都不做，只打印一句话:
+        DbgPrint("first: Our driver is unloading…\r\n");
+    }
+    
+    // DriverEntry，入口函数。第一个参数是驱动对象（一个内核模块结构体），第二个参数是在注册表的路径。
+    NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING reg_path)
+    {
+        // 这是我们的内核模块的入口，可以在这里写入我们想写的东西。
+        DbgPrint("注册表路径：%wZ 地址：%x Hello world!", reg_path,driver);
+    
+        // 设置一个卸载函数便于这个函数能退出。
+        driver->DriverUnload = DriverUnload;
+    
+        return STATUS_SUCCESS;
+    }
+    
+
+当启动和停止后，通过DebugView发现已经打印了注册表路径和驱动地址。
+
+![](https://p5.ssl.qhimg.com/t013b02a35673699fe6.png)
+
+在对应注册表路径下可以找到相关信息。
+
+![](https://p1.ssl.qhimg.com/t0195919e8c91600657.png)
+
+## 驱动调试
+
+在应用层，我们可以直接在vs2019上F9下一个断点，非常简单，而在0环，一个驱动程序的断点代表着整个操作系统都将被断下来。
+
+同样使用windbg，在symbol路劲中添加一条自己驱动的路径（就是你要加载什么驱动，就把他的pdb文件路径写在symbol路径中）。
+
+![](https://p3.ssl.qhimg.com/t01a984841d86e2d45b.png)
+
+代码为：
+
+    
+    
+    #include <ntddk.h>
+    
+    
+    // 提供一个Unload函数只是为了让程序能够动态卸载,方便调试
+    VOID DriverUnload(PDRIVER_OBJECT driver)
+    {
+        // 但是实际上我们什么都不做，只打印一句话:
+        DbgPrint("first: Our driver is unloading…\r\n");
+    }
+    
+    // DriverEntry，入口函数。相当于main。
+    NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING reg_path)
+    {
+    
+        _asm
+        {
+            int 3
+            mov eax, eax
+            mov eax ,eax 
+            mov eax, eax
+        }
+    
+        // 这是我们的内核模块的入口，可以在这里写入我们想写的东西。
+        DbgPrint("注册表路径：%wZ 地址：%x Hello world!", reg_path,driver);
+    
+        // 设置一个卸载函数便于这个函数能退出。
+        driver->DriverUnload = DriverUnload;
+    
+        return STATUS_SUCCESS;
+    }
+    
+
+int 3将会断点到0环。
+
+自动就会有对应的代码，因为我们给了pdb文件，可见pdb对于调试是非常重要的。
+
+![](https://p1.ssl.qhimg.com/t0146aed7e36831abca.png)
+
+## 内核空间与内核模块
+
+###  内核空间
+
+每个进程4GB独立的内存空间，在低2G是不同的，但是高2G内存空间对于所有的进程来说都是相同的。
+
+![](https://p0.ssl.qhimg.com/t0116eb52bc11eff917.png)
+
+有如下一段代码：
+
+    
+    
+    #include <ntddk.h>
+    
+    ULONG x = 0x12345678;
+    // 提供一个Unload函数只是为了让程序能够动态卸载,方便调试
+    VOID DriverUnload(PDRIVER_OBJECT driver)
+    {
+        // 但是实际上我们什么都不做，只打印一句话:
+        DbgPrint("first: Our driver is unloading…\r\n");
+    }
+    
+    
+    // DriverEntry，入口函数。相当于main。
+    NTSTATUS DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING reg_path)
+    {
+    
+        DbgPrint("%x", &x);
+        // 这是我们的内核模块的入口，可以在这里写入我们想写的东西。
+        DbgPrint("注册表路径：%wZ 地址：%x Hello world!", reg_path, driver);
+    
+        // 设置一个卸载函数便于这个函数能退出。
+        driver->DriverUnload = DriverUnload;
+    
+        return STATUS_SUCCESS;
+    }
+    
+
+定义一个全局变量，当然由于是驱动程序，地址在高2G，加载后通过debugview可以看到地址。
+
+![](https://p1.ssl.qhimg.com/t01c5de366e09632300.png)
+
+然后我们随便进入一个进程。
+
+    
+    
+    kd> .process 81ffc928
+    
+
+![](https://p3.ssl.qhimg.com/t01e27deeeeda1e881f.png)
+
+查看x的地址，发现正存储着0x12345678。
+
+![](https://p5.ssl.qhimg.com/t01aae50e1be2ef93b7.png)
+
+再换个进程看看。
+
+![](https://p2.ssl.qhimg.com/t01f1e1cef2caadab45.png)
+
+![](https://p1.ssl.qhimg.com/t011d3eda2dede8cc5d.png)
+
+所以即可证明，进程在高2G用的内存空间是同一块。
+
+###  内核模块
+
+驱动主要是为了给硬件使用的。但硬件种类繁多，不可能做一个兼容所有硬件的内核，所以，微软提供规定的接口格式，让硬件驱动人员安装规定的格式编写“驱动程序” 。
+
+这些驱动程序每一个都是一个模块，称为“内核模块”，都可以加载到内核中，都遵守PE结构。但本质上讲，任意一个.sys文件与内核文件没有区别。
+
+![](https://p4.ssl.qhimg.com/t0175547e71de452da5.png)
+
+>
+> 内核并不是一个孤立的整体，而是由多个模块一起组成的。比如我们逆向的`ntoskrnl.exe`文件，其实也只是其中的一个模块，我们自己编译的sys文件也是，但是并不是每一个模块都对应着一块驱动，比如安全人员写的驱动只是编写了一块驱动，很多时候并没有对应的硬件。
+
+###  DRIVER_OBJECT
+
+每个内核模块都有一个对应的结构体，来描述这个模块在内核中的：位置、大小、名称等等。`DriverEntry`的第一个参数就是这个结构体。
+
+    
+    
+    kd> dt _DRIVER_OBJECT
+    nt!_DRIVER_OBJECT
+       +0x000 Type             : Int2B
+       +0x002 Size             : Int2B
+       +0x004 DeviceObject     : Ptr32 _DEVICE_OBJECT
+       +0x008 Flags            : Uint4B
+       +0x00c DriverStart      : Ptr32 Void
+       +0x010 DriverSize       : Uint4B
+       +0x014 DriverSection    : Ptr32 Void
+       +0x018 DriverExtension  : Ptr32 _DRIVER_EXTENSION
+       +0x01c DriverName       : _UNICODE_STRING
+       +0x024 HardwareDatabase : Ptr32 _UNICODE_STRING
+       +0x028 FastIoDispatch   : Ptr32 _FAST_IO_DISPATCH
+       +0x02c DriverInit       : Ptr32     long 
+       +0x030 DriverStartIo    : Ptr32     void 
+       +0x034 DriverUnload     : Ptr32     void 
+       +0x038 MajorFunction    : [28] Ptr32     long
+    
+
+打印出地址后可以看到该结构体具体的值。
+
+    
+    
+    kd> dt _DRIVER_OBJECT 824ec030
+    nt!_DRIVER_OBJECT
+       +0x000 Type             : 0n4
+       +0x002 Size             : 0n168
+       +0x004 DeviceObject     : (null) 
+       +0x008 Flags            : 0x12
+       +0x00c DriverStart      : 0xf8a42000 Void
+       +0x010 DriverSize       : 0x6000
+       +0x014 DriverSection    : 0x822d2a98 Void
+       +0x018 DriverExtension  : 0x824ec0d8 _DRIVER_EXTENSION
+       +0x01c DriverName       : _UNICODE_STRING "\Driver\dbgDriver"
+       +0x024 HardwareDatabase : 0x80671ae0 _UNICODE_STRING "\REGISTRY\MACHINE\HARDWARE\DESCRIPTION\SYSTEM"
+       +0x028 FastIoDispatch   : (null) 
+       +0x02c DriverInit       : 0xf8a46000     long  dbgDriver!GsDriverEntry+0
+       +0x030 DriverStartIo    : (null) 
+       +0x034 DriverUnload     : 0xf8a43030     void  dbgDriver!DriverUnload+0
+       +0x038 MajorFunction    : [28] 0x804f454a     long  nt!IopInvalidDeviceRequest+0
+    
+
+可以看到有驱动名，有多大，从什么地方开始等信息。
+
+###  遍历内核模块
+
+我们通过`_DRIVER_OBJECT`结构可以获取当前自己驱动的一些信息，那么有没有方式可以获取其他内核模块的信息呢。
+
+通过`_DRIVER_OBJECT`结构体中`DriverSection`则可以实现。
+
+`DriverSection`是一个指针，实际上是对应着一个结构体：_LDR_DATA_TABLE_ENTRY
+
+    
+    
+    kd> dt _LDR_DATA_TABLE_ENTRY
+    
+
+![](https://p3.ssl.qhimg.com/t01ed583cca653a38c8.png)
+
++0x000 InLoadOrderLinks : _LIST_ENTRY
+
+是一个链表，就是将各个内核模块一起串起来。
+
++0x018 DllBase : Ptr32 Void
+
+是当前模块的首地址。
+
++0x020 SizeOfImage : Uint4B
+
+有多大。
+
++0x024 FullDllName : _UNICODE_STRING
+
+这个驱动文件的完整路径。
+
+比如我们这里的当前内核模块信息如下：
+
+    
+    
+    kd> dt _LDR_DATA_TABLE_ENTRY 0x822d2a98
+    
+
+![](https://p0.ssl.qhimg.com/t011bbba2df738c0716.png)
+
+通过InLoadOrderLinks可以查询到其他内核模块的信息。
+
+![](https://p4.ssl.qhimg.com/t010339e2adc1f36076.png)
+
+![](https://p3.ssl.qhimg.com/t012da618816d411313.png)
+
+依次内推，可以获取到其他所有的内核模块。
+
+## IRQL
+
+> 试想：当cpu在执行代码时，什么能够打断它？
+>
+> 答案就是中断，但当一个中断还没有执行结束，又产生了新的中断，这时候cpu应该继续执行之前的中断呢，还是执行新的中断呢？
+>
+> 答案就是IRQL。等级高的中断可以打断等级低的中断。
+
+IRQL全称Interrupt Request
+Level。一个由windows虚拟出来的概念，划分在windows下中断的优先级，这里中断包括了硬中断和软中断，硬中断是由硬件产生，而软中断则是完全虚拟出来的。
+
+#define PASSIVE_LEVEL 0  
+#define APC_LEVEL 1  
+#define DISPATCH_LEVEL 2  
+#define PROFILE_LEVEL 27  
+#define CLOCK1_LEVEL 28  
+#define CLOCK2_LEVEL 28  
+#define IPI_LEVEL 29  
+#define POWER_LEVEL 30  
+#define HIGH_LEVEL 31
+
+假设现在有一个中断等级为PASSIVE_LEVEL
+，正在被执行，此时产生了一个中断DISPATCH_LEVEL，那么中断等级为DISPATCH_LEVEL的程序异常处理将会被执行。反之则不然，这也是为什么众多内核api要求中断等级的原因，一个不注意将会导致蓝屏。
+
+![](https://p2.ssl.qhimg.com/t01cecab15ada13567d.png)
+
+比如当你想要hook一个函数的等级是DISPATCH_LEVEL，那么你在hook的代码中就不能使用 **分页内存** 。
+
+因为一旦你的内存为分页内存，那么对应的物理页很有可能已经被写到了硬盘上，正常情况下，会产生页异常（中断）去寻找到硬盘中存储的内存，而该中断等级为DISPATCH_LEVEL，那么当hook的代码执行的时候，就根本不会理会这个页异常的中断，因为此时他两的中断等级相同，所以会导致内存访问错误，这样就直接蓝屏了。
+
+> 一般情况下我们自己写的代码都在PASSIVE_LEVEL
+> 等级下，如果跑着跑着等级就上去了，那么大概率是你在hook别人的函数，别人的函数等级是DISPATCH_LEVEL。
+
+## 0环与3环通信（常规）
+
+通俗的说就是0环怎么把消息传给3环，3环怎么把消息传给0环。
+
+###  设备对象
+
+这里就可以和三环的窗口对象做对比。
+
+我们在开发窗口程序的时候，消息被封装成一个结构体：MSG，在内核开发时，消息被封装成另外一个结构体：IRP(I/O Request Package)。
+
+在窗口程序中，能够接收消息的只能是窗口对象。在内核中，能够接收IRP消息的只能是设备对象，而不能是驱动对象。
+
+![](https://p2.ssl.qhimg.com/t01a26dd3b9853a98fb.png)
+
+创建设备对象：
+
+    
+    
+    //创建设备名称
+    UNICODE_STRING Devicename;
+    RtlInitUnicodeString(&Devicename,L"\\Device\\MyDevice");   //“Device”不要随便改，最后的名字可以改
+    
+    //创建设备
+    IoCreateDevice(
+    pDriver,                //当前设备所属的驱动对象
+    0,
+    &Devicename,            //设备对象的名称
+    FILE_DEVICE_UNKNOWN,
+    FILE_DEVICE_SECURE_OPEN,
+    FALSE,
+    &pDeviceObj            //设备对象指针
+    );
+    
+
+###  交互数据的三种方式
+
+    
+    
+    pDeviceObj->Flags = DO_BUFFERED_IO;
+    
+
+**DO_BUFFERED_IO**
+
+该方式为：缓冲区方式读写。
+
+当我们与三环程序通信的时候，有可能因为进程的切换，导致0环在向3环读数据的时候读取到错误的地址，这种方式将会把3环程序地址对应的数据复制一份到0环地址中，这样能保证读取到正确的地址，缺点就是有点麻烦（速度慢），需要复制一份。
+
+**DO_DIRECT_IO**
+
+该方式为：直接方式读写。
+
+操作系统会将用户模式下的缓冲区锁住。然后操作系统将这段缓冲区在内核模式地址再次映射一遍（挂上物理页）。这样，用户模式的缓冲区和内核模式的缓冲区指向的是同一区域的物理内存。缺点就是要单独占用物理页面，无法将物理页存到硬盘上去，但是在需要有大量数据交互的时候此方法是比较好的。
+
+**其他方式读写**
+
+即不指定DO_BUFFERED_IO也不指定DO_DIRECT_IO。
+
+**这种方式是不建议的，并且非常危险**
+
+在使用其他方式读写设备时，派遣函数直接读写应用程序提供的缓冲区地址。在驱动程序中，直接操作应用程序的缓冲区地址是很危险的，因为三环进程会不断的切换，无法保证读取到的地址是一个正确的地址。只有驱动程序与应用程序运行在相同线程上下文的情况下，才能使用这种方式。
+
+###  创建符号链接
+
+我们创建的设备对象的`Devicename`是给内核看的，而三环要想知道这个设备对象，我们就需要给该设备对象起一个别名，即为符号链接。
+
+    
+    
+    //创建符号链接名称
+    RtlInitUnicodeString(&SymbolicLinkName,L"\\??\\MyTestDriver");
+    //创建符号链接
+    IoCreateSymbolicLink(&SymbolicLinkName,&Devicename);
+    
+
+特别说明：
+
+1、设备名称的作用是给内核对象用的，如果要在Ring3访问，必须要有符号链接，其实就是一个别名，没有这个别名，在Ring3不可见。
+
+2、内核模式下，符号链接是以“\??\”开头的，如C 盘就是“\??\C:”
+
+3、而在用户模式下，则是以“\\\\.\”开头的，如C 盘就是“\\\\.\C”:
+
+###  IRP与派遣函数
+
+![](https://p2.ssl.qhimg.com/t015e3bb34471affa6d.png)
+
+一个单机鼠标的操作被封装成MSG结构传给窗口对象，窗口对象找到单击鼠标对应的回调函数进行处理。
+
+CreateFile函数封装成IRP传给设备对象，设备对象找到CreateFile的派遣函数进行处理，所以这里派遣函数可以理解为回调函数，是给设备对象用的，设备对象收到什么样的IRP就用对应的派遣函数处理。
+
+**IRP的类型**
+
+当应用层通过CreateFile，ReadFile，WriteFile，CloseHandle等函数打开、从设备读取数据、向设备写入数据、关闭设备的时候，会使操作系统产生出`IRP_MJ_CREATE`，`IRP_MJ_READ`，`IRP_MJ_WRITE`，`IRP_MJ_CLOSE`等不同的IRP。
+
+但如ReadFile和WriteFile这些函数功能太过于单一，只能读或者只能写，有时候我们需要又读又写和干别的事情。更为常用的是`DeviceIoControl`函数和他对应的IRP类型`IRP_MJ_DEVICE_CONTROL`。
+
+**注册派遣函数**
+
+**派遣函数在哪里注册**
+
+    
+    
+    kd> dt _DRIVER_OBJECT
+    nt!_DRIVER_OBJECT
+       +0x000 Type             : Int2B
+       +0x002 Size             : Int2B
+       +0x004 DeviceObject     : Ptr32 _DEVICE_OBJECT
+       +0x008 Flags            : Uint4B
+       +0x00c DriverStart      : Ptr32 Void
+       +0x010 DriverSize       : Uint4B
+       +0x014 DriverSection    : Ptr32 Void
+       +0x018 DriverExtension  : Ptr32 _DRIVER_EXTENSION
+       +0x01c DriverName       : _UNICODE_STRING
+       +0x024 HardwareDatabase : Ptr32 _UNICODE_STRING
+       +0x028 FastIoDispatch   : Ptr32 _FAST_IO_DISPATCH
+       +0x02c DriverInit       : Ptr32     long 
+       +0x030 DriverStartIo    : Ptr32     void 
+       +0x034 DriverUnload     : Ptr32     void 
+       +0x038 MajorFunction    : [28] Ptr32     long
+    
+
+_DRIVER_OBJECT结构体中DriverUnload即为卸载函数，
+
+MajorFunction为派遣函数，可以看到派遣函数是一个数组。
+
+![](https://p0.ssl.qhimg.com/t016541fe536f64a9f9.png)
+
+比如是CreatFile的IRP，那么IRP_MJ_CREATE的派遣函数就在MajorFunction索引为0的位置，同样的如果是IRP_MJ_READ的派遣函数就在索引为3的位置。
+
+**派遣函数的格式**
+
+我们知道线程函数也有对应的格式，并不是乱写的。派遣函数也是有这自己对应格式，返回值和参数类型的固定的。
+
+    
+    
+    NTSTATUS MyDispatchFunction(PDEVICE_OBJECT pDevObj, PIRP pIrp)
+    {
+        //处理自己的业务...
+    
+        //设置返回状态
+        pIrp->IoStatus.Status = STATUS_SUCCESS;    //  getlasterror()得到的就是这个值
+        pIrp->IoStatus.Information = 0;        //  返回给3环多少数据 没有填0
+        IoCompleteRequest(pIrp, IO_NO_INCREMENT);
+        return STATUS_SUCCESS;
+    }
+    
+
+**通过IRP_MJ_DEVICE_CONTROL交互数据**
+
+这种方式是最常用的，能实现的功能多种多样，但是稍微复杂一点，需要在三环调用`DeviceIoControl`函数，参数等参考msdn
+
+![](https://p4.ssl.qhimg.com/t01758c94cf8ce6cae6.png)
+
+其中第二个参数code操作码也不是乱填的，具体就看下面实现代码，这里只是稍微提一下。
+
+![](https://p5.ssl.qhimg.com/t0193cc0efe6242423b.png)
+
+###  实验
+
+0环代码：
+
+    
+    
+    #include <ntddk.h>
+    
+    #define DEVICE_NAME L"\\Device\\MYDEVICE"
+    #define SYMBOL_NAME_LINK L"\\??\\devicesd"
+    
+    //自定义消息
+    #define CODE_READ CTL_CODE(FILE_DEVICE_UNKNOWN,0x800,METHOD_BUFFERED,FILE_ANY_ACCESS)
+    #define CODE_WRITE CTL_CODE(FILE_DEVICE_UNKNOWN,0x900,METHOD_BUFFERED,FILE_ANY_ACCESS)
+    
+    VOID DriverUpload(PDRIVER_OBJECT pDriver)
+    {
+        UNICODE_STRING symbolLink;
+        RtlInitUnicodeString(&symbolLink, SYMBOL_NAME_LINK);
+        IoDeleteSymbolicLink(&symbolLink);
+        IoDeleteDevice(pDriver->DeviceObject);
+        KdPrint(("卸载了\n"));
+        return;
+    }
+    NTSTATUS CreatCallBack(_In_ struct _DEVICE_OBJECT* DeviceObject, _Inout_ struct _IRP* Irp)
+    {
+        KdPrint(("创建我了\n"));
+        Irp->IoStatus.Status = STATUS_SUCCESS;   //3环调用getlasterror可以获取
+        Irp->IoStatus.Information = STATUS_SUCCESS;
+        IofCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_SUCCESS;
+    }
+    
+    NTSTATUS CloseCallBack(_In_ struct _DEVICE_OBJECT* DeviceObject, _Inout_ struct _IRP* Irp)
+    {
+        KdPrint(("关闭我了\n"));
+        Irp->IoStatus.Status = STATUS_SUCCESS;   //3环调用getlasterror可以获取
+        Irp->IoStatus.Information = STATUS_SUCCESS;
+        IofCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_SUCCESS;
+    }
+    
+    
+    NTSTATUS DispathCallBack(_In_ struct _DEVICE_OBJECT* DeviceObject, _Inout_ struct _IRP* Irp)
+    {
+        PIO_STACK_LOCATION ps1 = IoGetCurrentIrpStackLocation(Irp);
+        ULONG code = ps1->Parameters.DeviceIoControl.IoControlCode;
+        PVOID systembuf = Irp->AssociatedIrp.SystemBuffer;
+        ULONG inLen = ps1->Parameters.DeviceIoControl.InputBufferLength;
+        ULONG outLen = ps1->Parameters.DeviceIoControl.OutputBufferLength;
+    
+        switch (code)
+        {
+        case CODE_READ:
+            KdPrint(("CODE_READ： %x\n",CODE_READ));
+            if (outLen > 20)
+            {
+                memcpy(systembuf, "12345678", sizeof("12345678"));
+                Irp->IoStatus.Information = sizeof("12345678");
+            }
+            else
+            {
+                memcpy(systembuf,"1",sizeof("1"));
+                Irp->IoStatus.Information = 1;
+            }
+    
+            break;
+        case CODE_WRITE:
+            KdPrint(("CODE_READ： %x\n", CODE_WRITE));
+            KdPrint(("write： %s\n", systembuf));
+            Irp->IoStatus.Information = 0;
+            break;
+        }
+    
+        Irp->IoStatus.Status = STATUS_SUCCESS;
+        IofCompleteRequest(Irp, IO_NO_INCREMENT);
+    
+        return STATUS_SUCCESS;
+    }
+    NTSTATUS DriverEntry(PDRIVER_OBJECT pDriver, PUNICODE_STRING pReg)
+    {
+        UNICODE_STRING deviceName;
+        UNICODE_STRING symbolNameLink;
+        PDEVICE_OBJECT pDeviceObj;
+        NTSTATUS status;
+    
+        pDriver->DriverUnload = DriverUpload;
+    
+        RtlInitUnicodeString(&deviceName, DEVICE_NAME);
+        RtlInitUnicodeString(&symbolNameLink, SYMBOL_NAME_LINK);
+        status = IoCreateDevice(pDriver,0, &deviceName,FILE_DEVICE_UNKNOWN,FILE_DEVICE_SECURE_OPEN,TRUE,&pDeviceObj);
+    
+        if (!NT_SUCCESS(status))
+        {
+            KdPrint(("创建设备失败\n"));
+            return status;
+        }
+        status = IoCreateSymbolicLink(&symbolNameLink,&deviceName);
+    
+        if (!NT_SUCCESS(status))
+        {
+            IoDeleteDevice(pDeviceObj);
+            KdPrint(("创建符号链接失败\n"));
+            return status;
+        }
+    
+        //设置数据交互的方式
+        pDeviceObj->Flags = DO_BUFFERED_IO;
+        pDriver->MajorFunction[IRP_MJ_CREATE] = CreatCallBack;
+        pDriver->MajorFunction[IRP_MJ_CLOSE] = CloseCallBack;
+        pDriver->MajorFunction[IRP_MJ_DEVICE_CONTROL] = DispathCallBack;
+        return STATUS_SUCCESS;
+    }
+    
+
+3环代码
+
+    
+    
+    #include <windows.h>
+    #include <winioctl.h>
+    #include <stdlib.h>
+    #include <stdio.h>
+    
+    
+    #define CODE_READ CTL_CODE(FILE_DEVICE_UNKNOWN,0x800,METHOD_BUFFERED,FILE_ANY_ACCESS)
+    #define CODE_WRITE CTL_CODE(FILE_DEVICE_UNKNOWN,0x900,METHOD_BUFFERED,FILE_ANY_ACCESS)
+    
+    #define SYMBOL_NAME_LINK L"\\\\.\\devicesd"
+    
+    BOOLEAN openDevice(HANDLE* handle)
+    {
+        HANDLE _hHandle = CreateFile(SYMBOL_NAME_LINK, GENERIC_READ | GENERIC_WRITE,0,
+            NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+        *handle = _hHandle;
+        return (int)_hHandle > 0;
+    
+    }
+    
+    VOID CloseDevice(HANDLE handle)
+    {
+        CloseHandle(handle);
+    }
+    
+    VOID SendCode(HANDLE handle, DWORD code, PVOID inData,
+        ULONG Inlen, PVOID outData, ULONG outLen, LPDWORD resultLen)
+    {
+        //驱动句柄，操作码，要向0环传入多少数据和长度，要向0环取多少数据和长度，实际长度， OVERLAPPED指针（此处为0）
+        DeviceIoControl(handle, code, inData, Inlen, outData, outLen, resultLen,NULL);
+    
+    }
+    int main(int argc, char* argv[])
+    {
+        HANDLE handle;
+        if (!openDevice(&handle))
+        {
+            printf("打开设备失败\n");
+            return 0;
+        }
+    
+        char buf[30] = { 0 };
+        DWORD len = 0;
+    
+        SendCode(handle,CODE_READ,buf,30,buf,30,&len);
+        CloseDevice(handle);
+        printf("buf = %s\n",buf);
+        system("pause");
+        return 0;
+    }
+    
+
+三环能够从0环读取到数据，进行通信。
+
+![](https://p3.ssl.qhimg.com/t018f670a7294d08b0a.png)
+
+## 后记
+
+对于安全人员来说，学习驱动并不是了解几个api这么简单，而是要知道操作系统是如何实现的及其原理，内核知识困难并难以理解，文中有错误的地方也请指教。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **SD** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/262435](/post/id/262435)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [驱动](/tag/驱动)
+
+ **+1** __8赞
+
+ __收藏
+
+![](https://p2.ssl.qhimg.com/t01e9cf877ccc0925f9.jpg) SD
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

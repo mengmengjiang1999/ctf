@@ -1,0 +1,256 @@
+***本文作者：scu-igroup，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+
+## 前言
+
+**近几年，物联网设备已渗透到生活的方方面面，为人们带来了极大的方便。但是，因其承载有人们日常生活产生的数据和隐私信息，其安全性也越来越受到人们的关注。在上一篇中，我们讨论了用[脚本控制小米设备](http://www.freebuf.com/articles/terminal/181846.html)，这主要是从流量层面入手来进行的安全分析；在这一篇，主要从固件入手，分析固件的脆弱性。**
+
+## 开篇
+
+“工欲善其事，必先利其器”，在正式开始，先来讲讲固件分析环境的搭建，主要就是binwalk的安装。由于固件压缩打包的方式有很多种，单用apt instll
+binwalk这条命令安装，很多文件系统的格式是不支持解压的，需要将各种解压插件一并安装，才能正确解压出固件中的文件系统。完整安装可参考binwalk的[官方安装文档](https://github.com/ReFirmLabs/binwalk/blob/master/INSTALL.md)。但每次都要这样手动安装，笔者觉得很麻烦，因此写了安装脚本自动完成安装。
+
+同时，考虑到有很多依赖包需要安装，Ubuntu系统带的apt源下载贼慢，可将其更换成阿里云的源，主要参考[这篇文章](https://blog.csdn.net/zhangjiahao14/article/details/80554616)。但每次照着帖子操作，相当浪费时间，也写了一个脚本自动换源的脚本，如下所示。
+
+    
+    
+    #!/bin/bash
+    
+    # [*]change ubuntu system sources to aliyun source
+    #:<<BLOCK
+    sudo mv /etc/apt/sources.list /etc/apt/sources.list.bak.1
+    
+    codename=`lsb_release -c | cut -c 11-`
+    echo "codename is $codename"
+    
+    sudo touch /etc/apt/sources.list
+    
+    sudo echo "deb http://mirrors.aliyun.com/ubuntu/ $codename main restricted universe multiverse" >> /etc/apt/sources.list
+    sudo echo "deb-src http://mirrors.aliyun.com/ubuntu/ $codename main restricted universe multiverse" >> /etc/apt/sources.list
+    sudo echo "deb http://mirrors.aliyun.com/ubuntu/ $codename-security main restricted universe multiverse" >> /etc/apt/sources.list
+    sudo echo "deb-src http://mirrors.aliyun.com/ubuntu/ $codename-security main restricted universe multiverse" >> /etc/apt/sources.list
+    sudo echo "deb http://mirrors.aliyun.com/ubuntu/ $codename-updates main restricted universe multiverse" >> /etc/apt/sources.list
+    sudo echo "deb-src http://mirrors.aliyun.com/ubuntu/ $codename-updates main restricted universe multiverse" >> /etc/apt/sources.list
+    sudo echo "deb http://mirrors.aliyun.com/ubuntu/ $codename-backports main restricted universe multiverse" >> /etc/apt/sources.list
+    sudo echo "deb-src http://mirrors.aliyun.com/ubuntu/ $codename-backports main restricted universe multiverse" >> /etc/apt/sources.list
+    sudo echo "deb http://mirrors.aliyun.com/ubuntu/ $codename-proposed main restricted universe multiverse" >> /etc/apt/sources.list
+    sudo echo "deb-src http://mirrors.aliyun.com/ubuntu/ $codename-proposed main restricted universe multiverse" >> /etc/apt/sources.list
+    
+    sudo apt-get update
+    #BLOCK
+    # [*]change pip sources to aliyun source
+    if [ ! -d ~/.pip ];then
+        mkdir ~/.pip
+    fi
+       
+    if [ -f ~/.pip/pip.conf ];
+    then
+        sudo mv ~/.pip/pip.conf ~/.pip/pip.conf.bak
+        sudo touch ~/.pip/pip.conf
+    else
+        sudo touch ~/.pip/pip.conf
+    fi
+    
+    sudo echo "[global]" >> ~/.pip/pip.conf
+    sudo echo "index-url = https://mirrors.aliyun.com/pypi/simple" >> ~/.pip/pip.conf
+
+在脚本中，主要分为两部分，先是将Ubuntu系统的源换成阿里云的源，并按照Ubuntu系统codename的不同，形成有针对性的apt源文件；再将pip的源也换成的阿里云的源。换源后，安装速度快了几十倍。
+
+接着，就是对binwalk完整版的安装了，binwalk的安装文件和它的相关插件，我已从github上下载完成（在后文的工具中，已集成），如下图所示。
+
+![binwalk的安装文件和它的相关插件](https://image.3001.net/images/20181025/1540478774_5bd1d7364c325.png!small)
+
+安装脚本为:
+install_binwalk.sh，如下所示，即是按照官方的安装方案编写的脚本（官方虽然有./deps.sh自动安装脚本，安装很慢，表示不太好用），该脚本目前只适用于Python2.7。
+
+    
+    
+    #!/bin/bash
+    
+    #dependencies
+    sudo apt -y install python-lzma python-crypto
+    sudo apt -y install libqt4-opengl python-opengl python-qt4 python-qt4-gl python-numpy python-scipy python-pip
+    
+    sudo pip install pyqtgraph
+    sudo pip install capstone
+    
+    # Install standard extraction utilities（必选）  
+    sudo apt -y install mtd-utils gzip bzip2 tar arj lhasa p7zip p7zip-full cabextract cramfsswap squashfs-tools sleuthkit default-jdk lzop srecord
+    #Install binwalk
+    #sudo apt-get install binwalk
+    cd binwalk
+    sudo python setup.py install
+    cd ..
+    
+    # Install sasquatch to extract non-standard SquashFS images（必选）  
+    sudo apt -y install zlib1g-dev liblzma-dev liblzo2-dev  
+    cd sasquatch && sudo ./build.sh
+    cd ..
+    
+    # Install jefferson to extract JFFS2 file systems（可选）  
+    sudo pip install cstruct  
+    cd jefferson && sudo python setup.py install
+    cd ..
+    
+    # Install ubi_reader to extract UBIFS file systems（可选）  
+    sudo apt -y install liblzo2-dev python-lzo   
+    cd ubi_reader && sudo python setup.py install
+    cd ..
+    # Install yaffshiv to extract YAFFS file systems（可选）   
+    cd yaffshiv && sudo python setup.py install
+    cd ..
+    
+    #install unstuff (closed source) to extract StuffIt archive files
+    sudo cp stuff/bin/unstuff /usr/local/bin/
+
+运行该脚本，待binwalk安装好后，大部分的固件都能解压了。这里以dlink
+dir-300为例，已在binwalk安装包中给出，在命令行中运行：`binwalk -Me
+DIR-300_REVA_FIRMWARE_1.06B05_WW.zip`
+
+![在命令行中运行](https://image.3001.net/images/20181025/1540479323_5bd1d95b064ee.png!small)
+
+这是解压过程，其中，识别到squashfs文件系统，并解压出来。
+
+![解压出来](https://image.3001.net/images/20181025/1540479341_5bd1d96d5d5e9.png!small)
+
+系统文件目录如上图所示，已经解压出来了，下一步，即是对其中的文件进行分析了。
+
+## 正文
+
+### 1\. 远程登录口令分析
+
+很早之前，笔者就在想，很多固件都爆出了看似简单但危害又很大的安全隐患，如弱口令登录、web漏洞等，如果有一个脚本能自动地发现这些简单的安全隐患，那，真是一门省时的生意。不过，我能想到的东西，别人早实现了，见项目[firmwalk](https://github.com/craigz28/firmwalker)。运行十分简单，在系统当前路径下，运行：
+
+    
+    
+    firmwalk.sh firmware_file_system_path
+
+后跟固件中文件系统的路径即可，以dlinkdir-300为例，有如下结果。
+
+![以dlinkdir-300为例](https://image.3001.net/images/20181025/1540479479_5bd1d9f77c46e.png!small)
+
+这是脚本运行后的部分截图，可以看到，其中含包含admin，root，password等关键字的文件已列出，这些文件中，都有可能藏有口令信息。那我们就尝试着找一找这些文件中，是否包含口令信息，比如telnet、ftp、ssh、web等，都可能存在将口令硬编码到文件的情况。由上图所示，发现了telnet关键字，且在/etc/scripts/system.sh文件中出现，这个文件是随系统启动的脚本文件，那说明telnet服务是随系统启动了的，顺着这个线头捋应该有戏。打开这个文件，果然发现telnet的启动脚本，如下图所示。
+
+![发现telnet的启动脚本](https://image.3001.net/images/20181025/1540479499_5bd1da0ba4cad.png!small)
+
+跟到这个文件中再看一眼，用vim看下这个文件，如下所示：
+
+![用vim看下这个文件](https://image.3001.net/images/20181025/1540479519_5bd1da1f27d87.png!small)
+
+红色框标注的即是telnet的启动命令，嘿，-u就像是跟的用户名和密码，用户名为：Alphanetworks，密码是一个变量，这个变量是cat
+/etc/config/image_sign的值，看下这个值是多少，如下图所示。
+
+![红色框标注的即是telnet的启动命令](https://image.3001.net/images/20181025/1540479534_5bd1da2e1c8ca.png!small)
+
+密码就是：wrgg19_c_dlwbr_dir300，按图索骥很容易就找到了。那为什么-u后就一定确定是用户名和密码，可以到telnetd中看一看，用vim打开该二进制文件，搜索password，如下图所示，-u选项后的参数就一目了然了，即是用户名和密码。
+
+![用户名和密码](https://image.3001.net/images/20181025/1540479548_5bd1da3c5e790.png!small)
+
+图中已经给出了telnetd的用法，同时在网上搜这个固件的telnet密码，也是文中这个口令，说明已经找正确。
+
+另外，在其他一些固件中，会存在/etc/passwd或/etc/passwd.bak的文件，可用john命令进行密码破解，如下图所示。
+
+![可用john命令进行密码破解](https://image.3001.net/images/20181025/1540479564_5bd1da4c9b18e.png!small)
+
+解出来，口令是admin:1234。
+
+### 2\. 简单web的web漏洞发现与利用
+
+大部分固件都支持web访问，而在提取出的固件文件中，可直接查看到固件的网页源码。那么是否有工具能通过源码审计的方式发现一些简单的漏洞，当然是有的，这里将一个简单的PHP代码审计工具RIPS。它使用了静态分析技术，能够自动化地挖掘PHP源代码中潜在的安全漏洞。先来看看它的安装，由于这款工具也是由PHP语言编写，首先需要搭建PHP和web服务运行环境。安装以下程序：
+
+    
+    
+    sudo apt install apache2 php7.2 libapache2-mod-php7.2
+    
+    sudo /etc/init.d/apache2 restart
+
+下载RIPS，下载地址为[见这里](https://sourceforge.net/projects/rips-scanner/)；下载完成后将其解压并放到/var/www/html/目录下，如下图所示。
+
+![下载完成后将其解压](https://image.3001.net/images/20181025/1540479650_5bd1daa2e9921.png!small)
+
+再在浏览器中访问该路径即可：127.0.0.1/rips。
+
+![访问该路径即可](https://image.3001.net/images/20181025/1540479673_5bd1dab9e8197.png!small)
+
+在path/file这一栏填写待分析的网页源码，将固件网页源码的路径填入，点击scan就能看到结果了，如下如所示。
+
+![点击scan就能看到结果了](https://image.3001.net/images/20181025/1540479704_5bd1dad8af1eb.png!small)
+
+扫了320个文件，Nothing vulnerable found，啥也没发现~~。不过木事，算是简单的验证了下RIPS的本事，因为网上已爆出了dlink
+dir-300系列的一些漏洞。比如这个信息泄露漏洞，漏洞出现在suashfs-root/www/model/__show_info.php文件中，如下图所示。
+
+![信息泄露漏洞](https://image.3001.net/images/20181025/1540479722_5bd1daead6ea0.png!small)
+
+这里看到已经禁止了$REQUIRE_FILE的参数为var/etc/httpasswd和var/etc/hnapasswd。这么一看无法获取账号密码。但是我们可以从根路径开始配置httpasswd的路径，就可以绕过这个过滤了。Payload:
+
+    
+    
+    localhost/model/__show_info.php?REQUIRE_FILE=/var/etc/httpasswd
+
+这里设置REQUIRE_FILE=/var/etc/httpasswd 成功绕过上面的
+if判断，进行任意文件读取。这类漏洞看来还是得配合人工审计进行发现。那现在问题来了，已经找到的弱点，如何进行验证呢。
+
+## 固件模拟
+
+固件模拟的环境，笔者搭过，当时觉得很烦杂，本打算着写脚本来自动实现。不过，这也有人实现了，并打包成了虚拟机，可直接使用。[AttifyOS](https://github.com/adi0x90/attifyos)，了解一下，国外大牛打包的。下载后，在tools/firmadyne中，运行程序，模拟dlink
+dir-300固件运行，命令为：
+
+    
+    
+    python fat.py ./DIR-300_REVA_FIRMWARE_1.06B05_WW.zip
+
+![固件模拟](https://image.3001.net/images/20181025/1540479783_5bd1db273fd8b.png!small)
+
+如上图所示，当模拟出网卡，代表固件模拟成功。我们就可以试一下是否存在上面发现的脆弱点。先来看看web漏洞，在浏览器中运行：
+
+    
+    
+    192.168.0.1/model/__show_info.php?REQUIRE_FILE=/var/etc/httpasswd
+
+![web漏洞](https://image.3001.net/images/20181025/1540479802_5bd1db3a49a01.png!small)
+
+如上图所示，口令已经找到，用户名为admin，密码为空。以得到的口令尝试登陆，顺利进入到web系统，如下图所示。
+
+![顺利进入到web系统](https://image.3001.net/images/20181025/1540479820_5bd1db4c6b35b.png!small)
+
+那么，再来看看，telnet的口令是否能成功。先用nmap扫描，看是否开启了telnet服务，如下图所示。
+
+![先用nmap扫描](https://image.3001.net/images/20181025/1540479855_5bd1db6f3e3e2.png!small)
+
+如上图所示，23端口已经打开，表明telnet服务随系统开启了，那么尝试telnet登录，如下图所示。
+
+![尝试telnet登录](https://image.3001.net/images/20181025/1540479870_5bd1db7e10e9d.png!small)
+
+telnet给出了链接信息，感觉已经连上，但是没要求输入口令，执行命令也未回显。telnet服务似乎存在问题，想要进一步验证，可以下dir-300其他版本的固件，也可以买一个设备回来测。不过，虽然没有成功，但整个过程已清楚。下面给出整个过程用到的工具，本文的安装环境搭建和使用到的工具，见如下链接：
+
+> <https://github.com/scu-igroup/firmware_analysis>
+
+github上工具文件结构：
+
+    
+    
+    change_sources.sh……….….更换Ubuntu系统源和pip源脚本
+    
+    Install_full_binwalk……………安装完整版binwalk
+    
+    firmwalk………………….....….固件分析工具
+    
+    rips……………………………...PHP源码审计工具
+
+## 总结
+
+到此，固件安全分析的内容已讲完，看似内容比较简单，但对于刚入门来说，已经有相当的工作量了。光是分析环境搭建这一关，若对Linux不熟，都得费一些功夫。不过，耐心地一步一步来，总会有所得。本文，写了多个脚本程序，辅助大家搭建分析环境，同时，使用了多个工具来辅助进行固件脆弱点发现，也讲解了如何使用固件模拟的方式来验证脆弱点。对于高级的漏洞发现，那就靠自己不断地学习与分析了。在此，本文仅作抛砖引玉，欢迎大家一起讨论，并推荐一些好的固件分析方法，方便大家一起学习。
+
+## 参考资料
+
+> 1\. <https://github.com/ReFirmLabs/binwalk/blob/master/INSTALL.md>
+>
+> 2\. <https://blog.csdn.net/zhangjiahao14/article/details/80554616>
+>
+> 3\. <https://github.com/craigz28/firmwalker>
+>
+> 4\. <https://sourceforge.net/projects/rips-scanner/>
+>
+> 5\. <https://github.com/adi0x90/attifyos>
+
+***本文作者：scu-igroup，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+

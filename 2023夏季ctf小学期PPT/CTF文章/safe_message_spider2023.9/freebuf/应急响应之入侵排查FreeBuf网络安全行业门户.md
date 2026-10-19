@@ -1,0 +1,363 @@
+##
+
+## 一、前言
+
+常见的应急响应事件分类：
+
+    
+    
+    Web入侵：网页挂马、主页篡改、Webshell
+    系统入侵：病毒木马、勒索软件、远控后门
+    网络攻击：DDOS攻击、DNS劫持、ARP欺骗
+
+## 二、Windows入侵排查
+
+### 检查系统账号安全
+
+查看服务器是否有弱口令，远程管理端口3389，22等端口是否对公网开放
+
+    
+    
+    检查方法：问服务器管理员，简单直接，要么简单扫描测试一下也可以
+
+![1610508837_5ffe6a25cea03c10b7bb2.gif!small](https://image.3001.net/images/20210113/1610508837_5ffe6a25cea03c10b7bb2.gif!small)
+
+查看服务器是否存在可疑账号、新增账号
+
+    
+    
+    Win+R->lusrmgr.msc
+
+![1610508924_5ffe6a7ced96b424b9c71.png!small](https://image.3001.net/images/20210113/1610508924_5ffe6a7ced96b424b9c71.png!small)
+
+查看服务器是否存在隐藏账号、克隆账号
+
+    
+    
+    使用D盾或者其他小工具都可以查看隐藏账号
+
+![1610513230_5ffe7b4e6d132c31054db.png!small](https://image.3001.net/images/20210113/1610513230_5ffe7b4e6d132c31054db.png!small)![1610509050_5ffe6afa51cc83034180b.png!small](https://image.3001.net/images/20210113/1610509050_5ffe6afa51cc83034180b.png!small)
+
+结合日志，查看管理员登录时间、用户名是否存在异常
+
+    
+    
+    Win+R->eventvwr.msc
+    导出Windows的安全日志，利用LogParser进行分析
+
+### 检查异常端口、进程
+
+检查端口连接情况，是否有远程连接、可疑连接
+
+    
+    
+    netstat -ano
+    tasklist | find "PID"
+
+进程
+
+    
+    
+    使用D盾，查看可以进程，查看有没有签名信息，或者可以使用Process Explorer等工具查看
+
+![1610509213_5ffe6b9d8d9bd3febc996.png!small](https://image.3001.net/images/20210113/1610509213_5ffe6b9d8d9bd3febc996.png!small)![1610509267_5ffe6bd3ad9ad1eea82bf.png!small](https://image.3001.net/images/20210113/1610509267_5ffe6bd3ad9ad1eea82bf.png!small)
+
+### 检查启动项、计划任务、服务
+
+检查服务器是否有异常的启动项
+
+    
+    
+    火绒等安全软件查看
+    Win+R->regedit，打开注册表，查看开机启动项是否正常，特别注意一下三个注册表项
+    HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\run
+    HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Run
+    HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Runonce
+
+检查计划任务
+
+    
+    
+    控制面板->计划任务
+    Win+R->cmd->schtasks/at
+
+![1610509975_5ffe6e97a5ad936bc5219.png!small](https://image.3001.net/images/20210113/1610509975_5ffe6e97a5ad936bc5219.png!small)
+
+服务自启动
+
+    
+    
+    Win+R->services.msc
+
+### 检查系统相关信息
+
+查看系统版本以及补丁信息
+
+    
+    
+    Win+R->cmd->systeminfo
+
+查看可以目录及文件
+
+    
+    
+    查看用户目录，新建账号会生成一个用户目录
+    Win+R->cmd->%UserProfile%\Recent：查看最近打开的文件进行分析
+    文件夹/文件可以根据时间排序，可以看看最近有没有什么可疑的文件夹/文件
+
+### 自动化查杀
+
+病毒查杀
+
+    
+    
+    下载安全软件，更新病毒库，进行全盘扫描
+
+Webshell查杀
+
+    
+    
+    选择具体站点路径进行webshell查杀，建议最少选择两款查杀工具，可以互相补充规则库的不足
+
+### 日志分析
+
+系统日志
+
+    
+    
+    前提：开启审核策略
+    Win+R->eventvwr.msc->导出安全日志->LogParser进行分析
+
+Web访问日志
+
+    
+    
+    找到中间件的web日志，打包到本地进行分析
+    Linux下可以使用Shell命令组合查询分析
+
+## 三、Linux入侵排查
+
+### 账号安全
+
+必看文件
+
+    
+    
+    /etc/passwd
+    /etc/shadow
+
+必会命令：who，w，uptime，usermod，userdel
+
+入侵排查
+
+    
+    
+    查询特权用户：awk -F: ‘$3==0{print $1}’ /etc/passwd
+    查询可以远程登录的账号：awk ‘/\$1|\$6/{print $1}’ /etc/shadow
+    查询具有sudo权限的账号：more /etc/sudoers | grep -v “^#\|^$” grep “ALL=(ALL)”
+
+### 历史命令
+
+> 必会命令：history
+>
+> 入侵排查：cat .bash_history >>history.txt
+
+### 检查异常端口
+
+    
+    
+    netstat -antlp
+
+### 检查异常进程
+
+    
+    
+    ps aux
+
+### 检查开机启动项
+
+    
+    
+    more /etc/rc.local
+    /etc/rc.d/rc[0-6].d
+    ls -l /etc/rc.d/rc3.d/
+
+### 检查定时任务
+
+检查以下目录下是否有可疑文件
+
+    
+    
+    /var/spool/cron/* 
+    /etc/crontab
+    /etc/cron.d/*
+    /etc/cron.daily/* 
+    /etc/cron.hourly/* 
+    /etc/cron.monthly/*
+    /etc/cron.weekly/
+    /etc/anacrontab
+    /var/spool/anacron/*
+    /etc/cron.daily/*
+
+### 检查服务
+
+    
+    
+    chkconfig
+    修改/etc/re.d/rc.local文件，加入/etc/init.d/httpd start
+    使用nesysv命令管理自启动
+
+### 检查异常文件
+
+    
+    
+    查看敏感目录，如tmp目录下的文件，同时注意隐藏文件夹，以”..”为名的文件夹具有隐藏属性
+
+### 检查系统日志
+
+日志默认存放位置：/var/log
+
+日志分析技巧
+
+    
+    
+    1、定位有多少IP在爆破主机的root帐号：    
+    grep "Failed password for root" /var/log/secure | awk '{print $11}' | sort | uniq -c | sort -nr | more
+    定位有哪些IP在爆破：
+    grep "Failed password" /var/log/secure|grep -E -o "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"|uniq -c
+    爆破用户名字典是什么？
+    grep "Failed password" /var/log/secure|perl -e 'while($_=<>){ /for(.*?) from/; print "$1\n";}'|uniq -c|sort -nr
+     
+    2、登录成功的IP有哪些： 	
+    grep "Accepted " /var/log/secure | awk '{print $11}' | sort | uniq -c | sort -nr | more
+    登录成功的日期、用户名、IP：
+    grep "Accepted " /var/log/secure | awk '{print $1,$2,$3,$9,$11}' 
+    3、增加一个用户kali日志：
+    Jul 10 00:12:15 localhost useradd[2382]: new group: name=kali, GID=1001
+    Jul 10 00:12:15 localhost useradd[2382]: new user: name=kali, UID=1001, GID=1001, home=/home/kali
+    , shell=/bin/bash
+    Jul 10 00:12:58 localhost passwd: pam_unix(passwd:chauthtok): password changed for kali
+    #grep "useradd" /var/log/secure 
+    4、删除用户kali日志：
+    Jul 10 00:14:17 localhost userdel[2393]: delete user 'kali'
+    Jul 10 00:14:17 localhost userdel[2393]: removed group 'kali' owned by 'kali'
+    Jul 10 00:14:17 localhost userdel[2393]: removed shadow group 'kali' owned by 'kali'
+    # grep "userdel" /var/log/secure
+    5、su切换用户：
+    Jul 10 00:38:13 localhost su: pam_unix(su-l:session): session opened for user good by root(uid=0)
+    sudo授权执行:
+    sudo -l
+    Jul 10 00:43:09 localhost sudo:    good : TTY=pts/4 ; PWD=/home/good ; USER=root ; COMMAND=/sbin/shutdown -r now
+
+## 四、常见Webshell查杀工具
+
+### D盾：
+
+    
+    
+    http://www.d99net.net
+
+### 百度WEBDIR+
+
+    
+    
+    https://scanner.baidu.com
+
+### 河马
+
+    
+    
+    https://www.shellpub.com
+
+### Web Shell Detector
+
+    
+    
+    http://www.shelldetector.com
+
+### CloudWalker(牧云)
+
+    
+    
+    https://webshellchop.chaitin.cn
+
+### Sangfor WebShellKill
+
+    
+    
+    http://edr.sangfor.com.cn/backdoor_detection.html(已停止访问)
+
+### 深度学习模型检测PHP Webshell
+
+    
+    
+    http://webshell.cdxy.me
+
+### PHP Malware Finder
+
+    
+    
+    https://github.com/jvoisin/php-malware-finder
+
+### findWebshell
+
+    
+    
+    https://github.com/he1m4n6a/findWebshell
+
+### 在线Webshell查杀工具
+
+    
+    
+    http://tools.bugscaner.com/killwebshell
+
+## 五、如何发现隐藏的Webshell后门
+
+那么多代码里不可能我们一点点去找后门，另外，即使最好的Webshell查杀软件也不可能完全检测出来所有的后门，这个时候我们可以通过检测文件的完整性来寻找代码中隐藏的后门。
+
+### 文件MD5校验
+
+绝大部分软件，我们下载时都会有MD5文件，这个文件就是软件开发者通过md5算法计算出该如软件的“特征值”，下载下来后，我们可以对比md5的值，如果一样则表明这个软件是安全的，如果不一样则反之。
+
+Linux中有一个命令：md5sum可以查看文件的md5值，同理，Windows也有命令或者工具可以查看文件的md5值![1610513039_5ffe7a8fd2c5165c4e263.png!small](https://image.3001.net/images/20210113/1610513039_5ffe7a8fd2c5165c4e263.png!small)
+
+### Diff命令
+
+    
+    
+    Linux中的命令，可以查看两个文本文件的差异
+
+### 文件对比工具
+
+    
+    
+    Beyond Compare
+    WinMerge
+
+## 六、勒索病毒
+
+### 勒索病毒搜索引擎
+
+    
+    
+    360：http://lesuobingdu.360.cn
+    腾讯：https://guanjia.qq.com/pr/ls
+    启明：https://lesuo.venuseye.com.cn
+    奇安信：https://lesuobingdu.qianxin.com
+    深信服：https://edr.sangfor.com.cn/#/information/ransom_search
+
+### 勒索软件解密工具集
+
+    
+    
+    腾讯哈勃：https://habo.qq.com/tool
+    金山毒霸：http://www.duba.net/dbt/wannacry.html
+    火绒：http://bbs.huorong.cn/forum-55-1.html
+    瑞星：http://it.rising.com.cn/fanglesuo/index.html
+    Nomoreransom：https://www.nomoreransom.org/zh/index.html
+    MalwareHunterTeam：https://id-ransomware.malwarehunterteam.com
+    卡巴斯基：https://noransom.kaspersky.com
+    Avast：https://www.avast.com/zh-cn/ransomware-decryption-tools
+    Emsisoft：https://www.emsisoft.com/ransomware-decryption-tools/free-download
+    Github勒索病毒解密工具收集汇总：https://github.com/jiansiting/Decryption-Tools
+

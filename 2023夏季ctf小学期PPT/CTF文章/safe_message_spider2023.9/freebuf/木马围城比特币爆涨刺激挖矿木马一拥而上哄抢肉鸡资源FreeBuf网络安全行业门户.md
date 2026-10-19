@@ -1,0 +1,130 @@
+## 一、背景
+
+云主机是企业数字化转型的重要基础设施，承载着重要的数据和服务价值，也逐渐成为了黑客的重点攻击对象。随着虚拟机、云主机、容器等技术的普遍应用，传统安全边界逐渐模糊，网络环境中的主机资产盲点成倍增加，黑客入侵、数据泄露、病毒木马攻击风险随之增加。
+
+与此同时，各类数字加密货币价格迎来暴涨，2020年初至今，比特币价格一度超过了4万美元/BTC，是2019年底的10倍之多，达到了历史最高点，比特币一度摘取2020年度最佳持有资产的头衔。受比特币暴涨影响，各类数字虚拟币市值均有大幅增长，在如此大利益诱惑之下，通过传播挖矿木马来获取数字加密货币（以挖取门罗币最为普遍）的黑产团伙闻风而动，纷纷加入对主机计算资源的争夺之战。
+
+![](https://image.3001.net/images/20210113/1610502203_5ffe503b3a652fff153c3.png!small)
+
+比特币价格曲线（数据来源：coinmarketcap.com）
+
+根据腾讯安全威胁情报中心态势感知系统提供的数据，近期针对云主机的挖矿木马呈现成倍增长趋势。由于部分主机未对系统进行合理的访问策略控制、安全风险检查，导致其存在较多的弱口令、未授权访问、远程代码执行漏洞等安全缺陷，黑客团伙利用这些缺陷大规模入侵服务器并植入挖矿木马，再利用被控主机系统的计算资源挖矿数字加密货币获利。
+
+## 二、威胁情报数据
+
+腾讯安全态势感知数据显示，近期与挖矿相关的恶意样本检出、IP、Domain广度热度，探测到的挖矿威胁数量均有不同程度的上升。
+
+1.腾讯安全智能AI引擎检测到的挖矿木马样本量呈明显上涨。
+
+![](https://image.3001.net/images/20210113/1610502220_5ffe504c76375ff4d00fc.png!small)
+
+2.腾讯安全态势感知系统检测到挖矿团伙控制的IP、Domain广度也呈上涨趋势。
+
+![](https://image.3001.net/images/20210113/1610502230_5ffe50561cca1d4b38179.png!small)
+
+3.腾讯安全智能分析系统部署的探针检测到云上挖矿威胁数量也有较大程度上涨。
+
+![](https://image.3001.net/images/20210113/1610502245_5ffe50656c0bdfcc57f4e.png!small)
+
+## 三、近期典型挖矿事件
+
+### 3.1 挖矿事件应急处置
+
+腾讯安全工程师会对捕获到的有一定影响力的安全事件进行应急处置，对腾讯安全全系列产品进行安全策略升级，以覆盖最新的威胁防御、威胁检测和威胁清理能力；其中影响范围较大的病毒变种或新病毒家族会对外发布详细的病毒分析报告，给出具体的防御和清理建议，向广大用户和安全同行进行通告和预警。
+
+根据腾讯安全威胁情报中心运营数据，从2020/12/9至2021/1/9间的一个月时间内，上述需要人工参与应急处置的挖矿相关事件从平均每日2例增长到了每日5例，有较大增长。
+
+![](https://image.3001.net/images/20210113/1610502258_5ffe50728ea8850edaab3.png!small)
+
+### 3.2 老挖矿家族更加活跃
+
+在处置安全事件过程中我们发现，老牌挖矿木马团伙H2Miner、SystemdMiner非常活跃，并且这些家族分别针对云主机的系统和应用部署特性开发了新的攻击代码：2020年12月22日，H2Miner挖矿木马家族利用Postgres远程代码执行漏洞CVE-2019-9193攻击传播，2020年12月28日又发现H2Miner挖矿木马家族利用XXL-JOB未授权命令执行漏洞对云主机发起攻击。（参考链接：<https://mp.weixin.qq.com/s/koxWEnlBDAfgh18hDl8RhQ>）
+
+![](https://image.3001.net/images/20210113/1610502270_5ffe507e2de332217c80b.png!small)
+
+2020年12月，我们还发现SystemdMiner挖矿木马家族利用Postgres远程代码执行漏洞CVE-2019-9193进行攻击传播。（参考链接：<https://mp.weixin.qq.com/s/kkCm0eg1xshxgowHpabRFA>）
+
+2020年10月，WatchBogMiner挖矿木马变种利用Apache
+Flink任意Jar包上传导致远程代码执行漏洞入侵云主机。（参考链接：<https://mp.weixin.qq.com/s/zviLvGK3wTnl0iwtszHQlg>）
+
+2020年10月，8220挖矿团伙利用Nexus Repository Manager
+3远程代码执行漏洞CVE-2019-7238、Confluence远程代码执行漏洞CVE-2019-3396攻击传播。（参考链接：<https://mp.weixin.qq.com/s/w8dcdv-V7w8MUhADEvJeXA>）
+
+![](https://image.3001.net/images/20210113/1610502286_5ffe508ec30ec3cb7b518.png!small)
+
+### 3.3 新挖矿家族层出不穷
+
+自2020年11月以来，仅腾讯安全威胁情报中心新发现的感染量超过5000的挖矿木马家族就已超过5个，对应家族的命名、主要入侵方式、估计感染量如下：
+
+![](https://image.3001.net/images/20210113/1610502297_5ffe50999cc3957b35ead.png!small)
+
+SuperManMiner <https://mp.weixin.qq.com/s/jl_mSggGf_5NcF_pr55gLw>
+
+TOPMiner <https://mp.weixin.qq.com/s/9U1V0dkL0AUIPYZWmNSjpA>
+
+RunMiner <https://mp.weixin.qq.com/s/7SUXrdZ4WdTVenkVcMpZJQ>
+
+4SHMiner <https://mp.weixin.qq.com/s/iwtcUsiAOpOtDm79lsOXWw>
+
+z0Miner <https://mp.weixin.qq.com/s/cyPZpB4zkSQccViM0292Zg>
+
+MrbMiner <https://mp.weixin.qq.com/s/oq3z6rUcPfmMi0-KHQ3wwQ>
+
+其中，于2020.11.02日发现挖矿木马团伙z0Miner利用Weblogic未授权命令执行漏洞（CVE-2020-14882/14883）进行攻击，本次攻击是在Weblogic官方发布安全公告（2020.10.21）之后的15天之内发起，挖矿木马团伙对于新漏洞武器的采用速度之快，由此可见一斑。
+
+### 3.4 僵尸网络加入挖矿阵营
+
+2020年11月，腾讯安全威胁情报中心检测到TeamT*N*T僵尸网络通过批量扫描公网上开放2375端口的云服务器，并尝试利用Docker Remote
+API未授权访问漏洞对云服务器进行攻击，随后植入挖矿木马。（参考链接：<https://mp.weixin.qq.com/s/td6KznnHqwALFwqXdMvUDg>）
+
+![](https://image.3001.net/images/20210113/1610502310_5ffe50a6e6c41cf8ceda3.png!small)
+
+2020年12月，腾讯安全威胁情报中心发现Prometei僵尸网络变种开始针对Linux系统进行攻击，通过SSH弱口令爆破登陆服务器，之后安装僵尸木马uplugplay控制云主机并根据C2指令启动挖矿程序。Prometei僵尸网络于2020年7月被发现，初期主要以SMB、WMI弱口令爆破和SMB漏洞（如永恒之蓝漏洞）对Windows系统进行攻击传播。（参考链接：<https://mp.weixin.qq.com/s/mAKsscAFLHQU_WrbsVbQng>）
+
+  
+
+![](https://image.3001.net/images/20210113/1610502320_5ffe50b0bdff8d249546b.png!small)
+
+  
+
+## 四、总结
+
+“挖矿木马”开始大规模流行于2017年初，黑客通过网络入侵控制大量计算机并植入矿机程序后，利用计算机的CPU或GPU算力完成大量运算，从而获得数字加密货币。2017年开始爆发之后，挖矿木马逐渐成为网络世界主要的威胁之一。
+
+服务器一旦被挖矿木马团伙攻占，正常业务服务的性能会受到严重影响，挖矿木马感染，也意味着服务器权限被黑客夺取，企业机密信息可能泄露，攻击者也同时具备彻底破坏数据的可能性。
+
+面对越来越严峻的安全挑战，企业应该加大对主机安全的重视程度和建设力度。挖矿木马作为目前主机面临的最普遍威胁之一，是检验企业安全防御机制、环境和技术能力水平的试金石。如何有效应对此类安全威胁，并在此过程中促进企业网络安全能力提升，应当成为企业安全管理人员与网络安全厂商的共同目标。
+
+## 五、安全防护建议
+
+### 5.1 针对联网主机防护挖矿团伙入侵的一般建议
+
+> 对于Linux服务器SSH、Windows SQL Server等主机访问入口设置高强度的登录密码；
+>
+> 对于Redis、Hadoop Yarn、Docker、XXL-JOB、Postgres等应用增加授权验证，对访问对象进行控制。
+>
+> 如果服务器部署了Weblogic、Apache Struts、Apache
+> Flink、ThinkPHP等经常曝出安全漏洞的服务器组件，应密切关注相应组件官方网站和各大安全厂商发布的安全公告，根据提示及时修复相关漏洞，将相关组件升级到最新版本。
+
+### 5.2 失陷系统的排查及清除
+
+> 检查有无占用CPU资源接近甚至超过100%的进程，如有找到进程对应文件，确认是否属于挖矿木马，Kill 挖矿进程并删除文件；kill
+> 掉包含下载恶意shell脚本代码执行的进程；
+>
+>
+> 检查/var/spool/cron/root、/var/spool/cron/crontabs/root等文件中有无恶意脚本下载命令，有无挖矿木马启动命令，并将其删除；
+>
+> 如有发现挖矿相关进程、恶意程序，及时对服务器存在的系统漏洞、弱口令、Web应用漏洞进行排查和修复。
+
+## 六、腾讯安全产品解决方案
+
+![](https://image.3001.net/images/20210113/1610502336_5ffe50c0be80ae6146588.png!small)
+
+## 参考链接：
+
+> <https://mp.weixin.qq.com/s/eVBy5qLmxTNnbwBTQLSz0A>
+>
+> <https://blog.talosintelligence.com/2020/07/prometei-botnet-and-its-quest-> for-monero.html>
+>
+> <https://www.trendmicro.com/vinfo/hk-en/security/news/virtualization-and-> cloud/coinminer-ddos-bot-attack-docker-daemon-ports>
+

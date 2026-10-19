@@ -1,0 +1,342 @@
+# Wemo Insight 智能插座缓冲区溢出漏洞及其利用分析
+
+阅读量 **11726706**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-08-29 10:00:36
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：securingtomorrow.mcafee.com
+
+原文地址：<https://securingtomorrow.mcafee.com/mcafee-labs/insight-into-home-automation-reveals-vulnerability-in-simple-iot-product/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p5.ssl.qhimg.com/t0177dea2ae9a723fa0.jpg)
+
+## 前言
+
+物联网可以让我们的生活更轻松。想要远程打开和关闭灯和电器，并在线监控它们？一个简单的方法是，你需要一个“智能插座”，一个Wi-Fi连接的插座。但是，如果没有适当的安全保护，物联网设备就会变成攻击向量。
+
+McAfee实验室高级威胁研究团队致力于发现软件和硬件方面的安全问题，帮助他们的开发者为企业和消费者提供更安全的产品。我们最近调查了Belkin公司生产的一种产品。通过对Wemo
+Insight智能插座的研究，我们在libUPnPHndl.so库中发现了一个未报告的缓冲区溢出漏洞。这个漏洞（CVE-2018-6692）允许攻击者执行远程代码。根据[我们的披露政策](https://www.mcafee.com/enterprise/en-us/threat-center/advanced-threat-research/disclosure.html)，我们于5月21日向Belkin报告了这项研究。
+
+这个漏洞能导致有用的攻击吗？智能插座本身的影响很小。攻击者可能会关闭开关，或者在最坏的情况下让交换机过载。但是，如果插座与其他设备联网，潜在的威胁就会增加。这个插座现在可以成为一个更大的攻击的入口点。在报告的后面，我们将会讨论一次可能的攻击。
+
+## 寻找攻击面
+
+按照使用手册的建议，我们使用Wemo
+phone应用来安装插座。安装之后，我们可以远程打开和关闭插座。然后，我们测试了软件，包括端口扫描，监测网络流量，以及查阅一些研究。Wemo监听UPnP端口tcp
+49152和tcp 49153端口。手册、拆卸图和GPL都可以在线查看，它们提供了有关CPU体系结构、操作系统和应用程序的信息。
+
+之后我们转向硬件，拆卸了插座。我们在主板上识别出了芯片，找到了与插座通信的插头，并从闪存中取出内存。我们的在线研究提供了主板上每个芯片的数据表。
+
+我们在板上找到了通用异步收发传输器(UART)，并通过文档确认了它们。我们用锡线连接到这些插头上，看看它们是否在主动传输。为了测试与设备的通信，我们使用了Exodus
+XI Breakout板，如图所示：
+
+[](https://p3.ssl.qhimg.com/t0102ad4516d69ca723.png)
+
+通过暴力破解，我们能够通过UART接口获得调试信息。UART还提供了一个登录提示；然而，无论是通过网上的资料还是简单的猜测，我们都没有找到一个可用密码。
+
+![](https://p3.ssl.qhimg.com/t01cd0cedb5ed03ac61.jpg)
+
+![](https://p2.ssl.qhimg.com/t01aff068e416938a2d.jpg)
+
+## 提取和固件分析
+
+在主板上发现的闪存芯片是Maxronix的MX25L12835F，flashrom支持这种芯片。flashrom是一种著名的用于提取固件的开源工具。我们使用flashrom和XI
+Breakout板从Wemo插座中提取固件。在获得插座附带的原始固件映像之后，我们使用Wemo
+phone应用更新它。一旦设备被更新，我们再次从设备中提取固件，提供第二个映像。我们使用新固件进行了基本的健全检查，确保我们早期的软件侦察没有改变。
+
+在提取固件后，我们使用开源二进制分析工具binwalk对固件进行了分析。binwalk从固件中提取文件系统以便进行进一步的检查。通过对文件系统的访问，我们可以检查系统配置和访问二进制文件。
+
+## 查找漏洞
+
+网络或远程漏洞比本地漏洞更危险，因此我们仔细研究了侦听本地网络的UPnP端口。在这个阶段，我们的首席分析师参加了一门关于Exodus智能嵌入式开发的课程，其中一位老师Elvis
+Collado([@b1ack0wl](https://github.com/b1ack0wl "@b1ack0wl"))正在开发一个UPnP
+Fuzzer，并表示愿意协助我们的工作。使用这个工具，我们开始对打开的UPnP端口进行模糊测试，同时监视Wemo上的UART端口。过了一会儿，我们在UART界面上看到崩溃出现了。
+
+    
+    
+    11:37:16.702 stuntsx0x46ac6 STUN client transaction destroyed
+    sending SIGSEGV to wemoApp for invalid write access to
+    464d4945 (epc == 2ac1fb58, ra == 2ac1fccc)
+    Cpu 0
+    $ 0 : 00000000 00000001 0000006d 464d4945
+    $ 4 : 31d2e654 31d2e770 00000003 00000001
+    $ 8 : 0000007c fffffff8 00000007 00000002
+    $12 : 00000200 00000100 00000807 00000800
+    $16 : 31d2e6f0 31d2e898 004a1cb8 00000002
+    $20 : 31d2e638 31d2e6c0 004a1388 31d2e640
+    $24 : 00000400 2ac1fb30
+    $28 : 2ac77d40 31d2e600 31d2e648 2ac1fccc
+    Hi : 00000008
+    Lo : 00000000
+    epc : 2ac1fb58 Tainted: P
+    ra : 2ac1fccc Status: 0100fc13 USER EXL IE
+    Cause : 8080000c
+    BadVA : 464d4945
+    PrId : 0001964c
+    Modules linked in: softdog rt_rdm rt2860v2_ap(P) raeth
+    Process wemoApp (pid: 2157, threadinfo=80fa0000, task=802c87f0)
+    Stack : 2a0000d0 fffffffe 31d2e6f0 31d2e770 31d2e76f 31d2e6f0 31d2e6f0 31d2e770
+    00000000 31d2e604 00000000 00000000 2ac77d40 00000000 4f464751 4a484d4c
+    4e444241 47454f49 50464658 45414d42 43445044 464d4945 5552414c 46495048
+    4b524141 41445a4f 44534e4a 4e4e494c 44434357 494a4855 44515455 44494b45
+    55584a44 584e4f52 545a5247 51545954 595a4c42 4e594a45 484f5158 46474944
+    …
+    Call Trace:
+    
+    Code: 80a20000 50480004 a0600000 <5440fffa> a0620000 a0600000 10a00006 24840004 24a50001
+    thready: Destructor freeing name “ChildFDTask”.
+    Aborted
+    
+
+经过多次重复和观察实验，我们确定崩溃是由以下数据包造成的：
+
+    
+    
+    POST /upnp/control/basicevent1 HTTP/1.1
+    Host: 192.168.225.183:49154
+    User-Agent: python-requests/2.9.1
+    Accept: */*
+    Connection: keep-alive
+    SOAPAction: “urn:Belkin:service:basicevent:1#UpdateInsightHomeSettings”
+    Content-Type: text/xml
+    Accept-Encoding: gzip, deflate
+    Content-Length: 3253
+    
+    <?xml version=”1.0″ ?><s:Envelope s:encodingStyle=”http://schemas.xmlsoap.org/soap/encoding/” xmlns:s=”http://schemas.xmlsoap.org/soap/envelope/”><s:Body><b1ack0wl_ns:UpdateInsightHomeSettingsxmlns:b1ack0wl_ns=”urn:Belkin:service:basicevent:1″><EnergyPerUnitCost>210</EnergyPerUnitCost><Currency>236</Currency><EnergyPerUnitCostVersion>KWWZWIVYBQZKDGSSAAPBCQVQQFAVYZEOEUFIDXXQPDYGESTOD
+    GIJFERXZNMYAFJQLUZPSIJXFQSPADCRIVHDAJLLPQMPLAVECIQUWLXDLIGPLBKCROGPOCVUI
+    KTSLIIXULOEBVFKWIERCFGHWHCBBDLWFBKBZXAVGRKTDALDNRPOFQJDXAEOC(…snip…)XHU
+    OUZPCHUBFGLLWSJBFYFOMCGZZMJIQIUVCDETFBRBZVDVKNBVZFBRSVBSZPAYKZYNQZEQPDV
+    DWSZNDUPUDCPAVWNFBFBTYMXTBNCWTBJPKORUBHBSCQBPOPOBZNVADMGWRI
+    </EnergyPerUnitCostVersion></b1ack0wl_ns:UpdateInsightHomeSettings></s:Body></s:Envelope>
+    
+
+由于大小原因，一些payload已被删除。(“EnergyPerUnitCostVersion”的原始数据为2828个字符)。在检查崩溃数据和数据包后，这似乎是缓冲区溢出，其中数据被覆盖到堆栈中。我们继续进行模糊测试，现在专注于“EnergyPerUnitCost”字段，我们发现只需要32个字符就可以让程序崩溃。
+
+虽然崩溃转储为我们提供了很多有价值的信息，但仍然有很多信息我们不知道。例如，崩溃发生在“WemoApp”，并为我们提供了一个偏移量，但是这个库的基地址是什么呢？堆栈上覆盖了什么？如果没有在运行时访问应用，这些问题很难回答。因为我们已经获得了文件系统，所以我们可以静态地分析WemoApp二进制文件；但是我们仍然无法很容易地确定崩溃的确切点。
+
+要回答这些问题，有两种途径。我们可以虚拟化Wemo固件或二进制程序来继续测试；或者，如果我们能够在UART端口上确定根密码，就可以在设备本身上进行调试。一般来说，虚拟化固件并不简单，有时会导致不准确的测试结果，最好是在设备上进行调试。有了我们在测试过程中发现的所有信息，我们似乎有希望绕过根密码。(我们确实花了一些时间试图虚拟化WemoApp，但没有成功。)
+
+## 绕过根密码
+
+从提取的文件系统中，我们了解到Wemo运行嵌入式Linux系统OpenWRT，用户帐户信息保存在/etc/passwd或/etc/shadow文件中。我们从/etc/passwd中提取根密码的哈希值，并将其提交到一个破解平台。事实证明这种方法在合理的时间内是无效的。
+
+我们能够读取闪存芯片，现在我们有一个很好的机会去烧写芯片。除非在固件上进行校验和或验证，否则我们可以用已知的密码替换/etc/passwd文件。
+
+为了验证这个想法，我们必须重新打包固件。因为Wemo的GPL是公开的，所以我们使用开发人员使用的相同工具。使用GPL，我们用Izma编译了相同版本的squash
+tools
+3.0，并使用修改后的/etc/passwd文件重新打包了固件文件系统。然后增加了填充，确保固件部分与原始大小相同。然后，使用“dd”将新的文件系统段插入到固件二进制文件中。在此过程中，我们发现使用binwalk提取固件不能正确地重新打包固件。通过binwalk提供的信息，我们使用“dd”来提取用于重新打包的固件二进制文件的正确部分。
+
+有了新的固件二进制文件，我们使用XI Breakout板和flashrom在板上把固件写到闪存芯片。重新启动设备后，我们就可以使用新密码登录了。
+
+## 分析崩溃
+
+有了Wemo的根访问权限，我们可以在UPnP
+fuzzing期间收集更多有关崩溃的信息。首先，我们需要编译对这个架构进行更深入分析所需的工具。我们使用GPL为设备编译了gdbserver和gdb。Wemo有大量安装工具，例如“wget”，这使得添加文件变得很简单。我们从/tmp目录下载并执行这些工具。
+
+经过大量尝试，我们始终不能让gdb直接或远程地使用该设备运行。于是我们使用gdbserver和Interactive Disassembler
+Pro进行调试。连接调试器发送导致崩溃的数据包，我们看到了崩溃的确切位置。地址0x2AC15B98出现段错误。从linux
+proc目录中的内存布局，我们确定了它的内存地址驻留在libUPnPHndlr.so库中。
+
+    
+    
+    2abf3000-2ac4d000 r-xp 00000000 1f:02 82 /rom/lib/libUPnPHndlr.so
+    
+
+因为崩溃是由UPnP数据包引起的，所以在这个库中找到崩溃是合乎逻辑的。在基地址0x2abf3000下，我们计算出IDA中静态分析的偏移量为0x22b98。在这个地址，我们发现：
+
+    
+    
+    LOAD:00022B70  # =============== S U B R O U T I N E =======================================
+    
+    LOAD:00022B70
+    
+    LOAD:00022B70
+    
+    LOAD:00022B70                 .globl TokenParser
+    
+    LOAD:00022B70 TokenParser:                             # CODE XREF: ProcessEnergyPerunitCostNotify+84↓p
+    
+    LOAD:00022B70                                          # DATA XREF: LOAD:00004210↑o …
+    
+    LOAD:00022B70                 beqz    $a1, locret_22BC0
+    
+    LOAD:00022B74                 move    $a3, $zero
+    
+    LOAD:00022B78                 move    $a3, $zero
+    
+    LOAD:00022B7C                 b       loc_22BB4
+    
+    LOAD:00022B80                 li      $t0, 0x7C  # ‘|’
+    
+    LOAD:00022B84  # —————————————————————————
+    
+    LOAD:00022B84
+    
+    LOAD:00022B84 loc_22B84:                               # CODE XREF: TokenParser+28↓j
+    
+    LOAD:00022B84                 addiu   $a1, 1
+    
+    LOAD:00022B88                 addiu   $v1, 1
+    
+    LOAD:00022B8C
+    
+    LOAD:00022B8C loc_22B8C:                               # CODE XREF: TokenParser+48↓j
+    
+    LOAD:00022B8C                 lb      $v0, 0($a1)
+    
+    LOAD:00022B90                 beql    $v0, $t0, loc_22BA4
+    
+    LOAD:00022B94                 sb      $zero, 0($v1)
+    
+    LOAD:00022B98                 bnezl   $v0, loc_22B84
+    
+    LOAD:00022B9C                 sb      $v0, 0($v1)
+    
+    LOAD:00022BA0                 sb      $zero, 0($v1)
+    
+    LOAD:00022BA4
+    
+    LOAD:00022BA4 loc_22BA4:                               # CODE XREF: TokenParser+20↑j
+    
+    LOAD:00022BA4                 beqz    $a1, locret_22BC0
+    
+    LOAD:00022BA8                 addiu   $a0, 4
+    
+    LOAD:00022BAC                 addiu   $a1, 1
+    
+    LOAD:00022BB0                 addiu   $a3, 1
+    
+    LOAD:00022BB4
+    
+    LOAD:00022BB4 loc_22BB4:                               # CODE XREF: TokenParser+C↑j
+    
+    LOAD:00022BB4                 slt     $v0, $a3, $a2
+    
+    LOAD:00022BB8                 bnezl   $v0, loc_22B8C
+    
+    LOAD:00022BBC                 lw      $v1, 0($a0)
+    
+    LOAD:00022BC0
+    
+    LOAD:00022BC0 locret_22BC0:                            # CODE XREF: TokenParser↑j
+    
+    LOAD:00022BC0                                          # TokenParser:loc_22BA4↑j
+    
+    LOAD:00022BC0                 jr      $ra
+    
+    LOAD:00022BC4                 move    $v0, $a3
+    
+    LOAD:00022BC4  # End of function TokenParser
+    
+
+因为开发人员没有对二进制文件进行处理，所以我们可以把这个函数命名为TokenParser。段错误发生在分支语句上；但是在MIPS中，延迟指令是在分支发生之前执行的。所以0x22B9C上的指令导致了崩溃。在这里，应用程序尝试加载存储在$v1中的地址，并把它放到$v0中。查看寄存器，我们发现XML标记“EnergyPeritCostVersion”中数据包的数据以$v1为单位，导致了“invalid
+write access”段错误。
+
+在静态分析该函数之后，它似乎把数据从一个部分复制到另一个部分，而且三次查找0x7C或“”字符。如果没有找到“”，它就会继续复制到静态定义的缓冲区中。为了充分理解为什么会发生覆盖，让我们在遍历函数时查看堆栈：
+
+    
+    
+    2EF17630 2AC692F0 MEMORY:2AC692F0
+    2EF17634 00000000 MEMORY:saved_fp
+    2EF17638 34333231 MEMORY:34333231 ← 之前复制的数据
+    2EF1763C 00000035 MEMORY:retaddr+31  ← 下一字节将被写到0x2EF1763D
+    2EF17640 00000000 MEMORY:saved_fp  ← 复制前先清零
+    2EF17644 00000000 MEMORY:saved_fp
+    2EF17648 00000000 MEMORY:saved_fp
+    2EF1764C 00000000 MEMORY:saved_fp
+    2EF17650 2EF17638 MEMORY:2EF17638 ← 开始写入; 可能被覆盖
+    
+
+当函数将数据复制到堆栈时，它最终会复制原始缓冲区的地址。一旦这个地址被覆盖，函数将尝试在新值处写入下一个字节，在本例中为无效地址。这个溢出为攻击者提供了两个可利用的向量：write-what-where条件使得攻击者能在内存的任意位置中写入数据；通过继续覆盖堆栈上的数据，攻击者可以覆盖调用函数的$RA寄存器或返回地址，从而控制执行流。
+
+## 编写利用代码
+
+现在我们了解了这个漏洞，我们能利用它吗？因为这是一个标准的缓冲区溢出，我们需要回答两个问题。堆栈上有多少可用空间，是否存在无法放到堆栈上的“坏”字节？为了确定可用的空间，如果我们用有效地址修复覆盖在堆栈上的地址，就可以检查有多少payload使其进入堆栈。我们了解到只有91个字节可以写入堆栈。
+
+下一步是确定是否存在“坏”字节。经过几次测试，我们注意到只有ASCII字符才能进入堆栈。在执行易受攻击的代码之前，数据包将由开源xml解析器“mxml”解析。这个库遵循在标记之间只允许存在ASCII和Unicode字符的标准。
+
+这个标准对于shellcode和ROP技术都是非常困难的，因为内存地址和shellcode都倾向于使用大多数不可读的字符。我们可以使用几种技术来消除堆栈上的空间；但是由于通过XML对字符的严格限制，最好使用已经加载到内存中的函数。一种不需要大量shellcode的方法是使用“return
+to
+libc”攻击来执行系统命令。因为系统调用通常以字符串作为参数，这可能通过筛选器。因为WEMO不使用ASLR(地址空间布局随机化)，如果我们使用ROP，理论上可以调用系统而不需要通过XML过滤器传递额外的shellcode。
+
+还有一个重大挑战：只有完全包含ASCII字符的地址才能通过XML过滤器。这极大地限制了可用工具的范围。我们使用IDA查看libc和system加载到内存中的位置，发现：libuClibc-0.9.33.2.so在地址0x2B0C0FD4；libpthread-0.9.33.2.so在地址0x2AD104F4。但是，这两个地址都不满足通过XML过滤器的要求。因此，即使我们能够创建一个ROP链，我们也不能只发送数据包中系统的地址。
+
+具有非法字符的地址不是利用开发的新问题。最常见的绕过技术之一是使用加法或减法ROP
+gadget在寄存器中创建所需的地址并调用该寄存器。但是，由于XML过滤器，我们还面临着操作数可以用于这个加减方程的限制。
+
+在研究了内存布局之后，我们发现libuClibc-0.9.33.2.so位于一个具有可以绕过XML过滤器的地址。我们很幸运，这是一个大型库，提供了一个不错的地址列表，因为它是这一空间中的唯一库。有了这一发现，我们的团队创建了一个工具来帮助创建此漏洞。这个工具提取具有可用内存地址的所有可能的ROP
+garget，并确定只使用能绕过筛选器的值，加法或减法等式是否可以调用内存中找到的两个系统调用之一。libuClibc-0.9.33.2.so的系统地址0x2B0C0FD4中没有任何可用的操作数。但是0x2AD104F4有，我们找到了几个操作数，当它们加在一起时，等于0x2AD104F4。
+
+![](https://p2.ssl.qhimg.com/t01d77e8399d0aef862.jpg)
+
+我们将工具的输出用于所有可能的ROP
+garget，这些garget绕过过滤器构建ROP链，使用加法指令为系统创建最终地址，并将其存储在$S0中。加法指令之后，另一个garget将系统地址移动到$t9并调用system。最后一个garget还将可以从堆栈控制的地址移动到寄存器中，保存系统调用的参数。整个ROP链仅由三个garget组成，它们很容易适应缓冲区溢出提供的堆栈空间。
+
+![](https://p5.ssl.qhimg.com/t01b8ee83e7b1134bc0.jpg)
+
+## 组合所有东西
+
+更早的时候，我们发现了两种攻击技术，它们可以和这个漏洞一起使用：write-what-where，以及覆盖堆栈上的返回地址。每种技术每个发送的数据包都可以使用一次。要获得一个参数到系统调用，我们必须使用write-what-where在一个可写内存地址放置参数，并将这个地址传递给系统。幸运的是，这个易受攻击的应用留出了大量从未使用的可写内存，并且在一个可以绕过筛选器的有限地址集可以访问的范围内。不幸的是，调用系统的ROP链要求在ROP
+garget中使用write-what-where来处理额外的指令。这意味着执行该漏洞需要两个数据包：一个将系统参数写入内存，另一个将调用系统。因此，重要的是，第一个数据包完全退出而不使程序崩溃。
+
+一种方法是在payload内使用三个“|”，以便在适当的时间停止写入和退出TokenParser。还有同样重要的是，不要覆盖RA指针，这样程序可以在接收到数据包后继续正常执行。然后发送包含ROP链调用系统的第二分组，其中包含由前一个分组写入的参数的地址。
+
+## Payload
+
+发现能够调用系统的有效ROP链后，我们必须决定应该调用哪个系统。因为具有系统根权限，所以我们可以获得对设备的完全控制。我们的研究表明设备安装了许多Linux命令。我们在前面的wget中利用这一点将gdbserver复制到设备上。攻击者还可以从系统调用wget来下载和执行任何脚本。我们还探索了安装的应用，找到了Netcat，它允许攻击者编写脚本来创建反向shell。攻击者可以使用wget下载脚本，并执行包含Netcat命令的脚本来创建反向shell。我们测试并证明了这是一个打开一个反向shell的简单有效的方法。攻击者还可以选择其他许多方法来利用这个漏洞并执行代码。下面的视频演示了这个漏洞如何使用反向shell。
+
+视频地址（失效请看原博）：<https://players.brightcove.net/abf28780-a231-4e92-bedf-6e0fca7e9eea>
+
+作为演示，团队编写了一个攻击场景。在插座被破坏后，它可以使用内置的UPnP库在网络路由器上插入一个后门。这个漏洞为攻击者创建了一个后门通道用于远程连接，而网络上却没有注意到这一点。在下面的视频中，我们使用一个远程shell来控制连接到网络的TCL智能电视。电视的Roku
+API使用简单的未加密的HTTP
+GET/POST请求来发送命令，并且不对发送这些命令的机器进行身份验证，这使得远程控制变得非常容易。利用Wemo作为中间人，攻击者可以打开或关闭电视，安装或卸载应用，并访问任意在线内容。这只是使用WEMO攻击另一个设备的一个例子。由于攻击者已在网络上站稳脚跟并能够打开任意端口，任何连接到这个网络的计算机都将面临风险。由于可以通过WEMO进行攻击，并且使用此漏洞生成的端口映射在路由器的管理页面中不可见，因此很难检测到攻击者。
+
+演示视频（失效请看原博）：<https://players.brightcove.net/998394be-ef12-4056-a25f-6b8e644d945c>
+
+## 结论
+
+诸如CVE-2018-6692这样的发现证明了在所有设备上进行安全编码实践的重要性。从安全的角度来看，物联网设备经常被忽视；这可能是因为许多设备被用于看似无害的目的，例如简单的家庭自动化。然而，这些设备运行操作系统，需要与桌面计算机一样多的保护。我们发现的漏洞可能成为攻击者需要进入并危及整个业务网络的立足点。
+
+McAfee高级威胁研究小组的一个目标是识别和阐明当今复杂和不断发展的环境中的广泛威胁。通过分析和负责任的披露，我们的目标是指导产品制造商走向更全面的安全态势。
+
+本文翻译自securingtomorrow.mcafee.com
+[原文链接](https://securingtomorrow.mcafee.com/mcafee-labs/insight-into-home-automation-reveals-vulnerability-in-simple-iot-product/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **秋真平** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/157784](/post/id/157784)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[securingtomorrow.mcafee.com](https://securingtomorrow.mcafee.com/mcafee-labs/insight-into-home-automation-reveals-vulnerability-in-simple-iot-product/)
+
+如若转载,请注明出处： <https://securingtomorrow.mcafee.com/mcafee-labs/insight-into-home-automation-reveals-vulnerability-in-simple-iot-product/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞分析](/tag/漏洞分析)
+  * [代码执行](/tag/代码执行)
+  * [loT](/tag/loT)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t010857340ce46bb672.jpg) 秋真平
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

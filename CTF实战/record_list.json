@@ -1,0 +1,68 @@
+{
+	"type":"MAC_LABEL",
+	"subtype":"RECORD"
+}
+{
+	"name":"name",
+	"isleveladjust":0,
+	"isselfdefine":1,
+	"class":0,
+	"level_fix":1,
+	"level_adjust":0
+}
+{
+	"name":"ID",
+	"isleveladjust":0,
+	"isselfdefine":1,
+	"class":0,
+	"level_fix":1,
+	"level_adjust":0
+}
+{
+	"name":"department",
+	"isleveladjust":0,
+	"isselfdefine":1,
+	"class":0,
+	"level_fix":1,
+	"level_adjust":0
+}
+{
+	"name":"position",
+	"isleveladjust":0,
+	"isselfdefine":1,
+	"class":0,
+	"level_fix":1,
+	"level_adjust":0
+}
+{
+	"name":"YOF",
+	"isleveladjust":0,
+	"isselfdefine":1,
+	"class":0,
+	"level_fix":1,
+	"level_adjust":0
+}
+{
+	"name":"salary",
+	"isleveladjust":1,
+	"isselfdefine":1,
+	"class":"F",
+	"level_fix":1,
+	"level_adjust":0
+}
+{
+	"name":"cell",
+	"isleveladjust":1,
+	"isselfdefine":0,
+	"class":0,
+	"level_fix":1,
+	"level_adjust":-1
+}
+{
+	"name":"email",
+	"isleveladjust":1,
+	"isselfdefine":0,
+	"class":0,
+	"level_fix":1,
+	"level_adjust":-2
+}

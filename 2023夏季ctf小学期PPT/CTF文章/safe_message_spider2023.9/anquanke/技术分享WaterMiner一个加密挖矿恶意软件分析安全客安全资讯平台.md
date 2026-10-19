@@ -1,0 +1,249 @@
+# 【技术分享】WaterMiner：一个加密挖矿恶意软件分析
+
+阅读量 **177368**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-10-25 10:00:58
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：minerva-labs.com
+
+原文地址：<https://www.minerva-labs.com/post/waterminer-a-new-evasive-crypto-miner>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+****
+
+译者：[blueSky](http://bobao.360.cn/member/contribute?uid=1233662000)
+
+预估稿费：200RMB
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+**前言**
+
+Minerva
+实验室发现了一个能够揭露新的加密货币地下挖矿团队的恶意软件。本报告描述了恶意的加密货币挖矿机（cryptominers）的本质，剖析了这个新发现的恶意软件，并且阐述了它采用的隐藏技术和感染媒介，以及在攻击终端安全软件时采用的技术。我们同时还提供了该组织背后可能是谁在操控的细节。
+
+**  
+**
+
+**门罗币的淘金热**
+
+加密货币正在日益变得普遍。比特币是最常用的例子，就算在没有技术背景的人群中也很流行，而且像Expedia这样的知名商家也接受比特币支付。
+
+但是比特币不仅仅是一种加密货币。目前包括以太币、莱特币、Zcash和门罗币在内的加密货币市值超过10亿美元。它们之中有些非常类似，而有些又在实现过程中的数学和计算属性有着显著地不同。通过大量计算来获取加密货币作为奖励是有可能实现的，这种过程通常被称为挖矿。加密货币的挖矿恶意软件通过盗用受害者的资源来实现在挖矿过程中的大量运算，然后这些网络犯罪者独吞挖矿的奖励。最近，我们发现挖取一种特定加密货币——门罗币的恶意软件出现了增长。门罗币的设计使得它匿名且不可追踪，这就是它在网络犯罪者之中非常流行的原因。
+
+上个5月份，Proofpoint 揭露了Adylkuzz门罗币挖矿恶意软件，它与同时期传播的 WannaCry
+使用了相同的代码。上个月还发现了额外的关于对门罗币进行有争议地挖掘的例子，安全研究员@PaulWebSec 发现，像CBS Showtime、The
+Pirate Bay 和 many others这种流行的网站会从它们的访问者那里“借用”CPU时间来运行代码以挖掘门罗币。
+
+—-@PaulWebSec 列举了挖掘门罗币的头几个网站
+
+Minerva 最近发现了另一个非法的门罗币挖掘组织，该组织针对俄罗斯人传播恶意的门罗币挖掘机，具体描述如下。
+
+**  
+**
+
+**什么是WaterMiner？**
+
+这是一个窃取计算机资源的组织，我们称之为WaterMiner，它通过一个简单但有效的门罗币挖掘机来感染受害者，这个挖掘机被设计为隐藏在终端的监测工具之后。由于现在想要对一些已经完善的加密货币（如比特币）进行挖矿，不用一些昂贵的专门定做的高级设备是不可能的。那么这种挖矿软件在受害者机器CPU上的效率究竟能有多高效呢？
+
+有趣的是，由于门罗币所用加密算法的本质特点，因此在配备普通CPU的机器上对门罗币进行挖矿依旧是高效的。这种可能性，加上门罗币设计上的匿名性，让它对网络犯罪者的吸引力更大了。
+
+攻击者通过非法将这个恶意挖矿软件和游戏“mods”捆绑在一起来散播WaterMiner，该组织在一个俄语论坛上传播他们的恶意软件。举个例子，某个带木马的文件声称能“增强”流行的R级游戏GTA的表现。它会用“Arbuz”这个名字传播到受害者的机器中去，Arbuz在俄语中是西瓜的意思，这就是为什么我们将这个组织命名为WaterMiner的原因。几个论坛成员在不同的论坛上发布了Trojanized文件的下载链接，并向潜在受害者宣传其各种功能，甚至加上一个链接以用来告诉用户该文件在VirusTotal上的扫描结果是安全的，具体如下图所示：
+
+发布Trojanized mod的一个帖子，并注明了VT（VirusTotal）的链接
+
+另一个由不同昵称的会员张贴在不同论坛上的相同内容的情况
+
+Mod与挖矿机的的下载器捆绑在一起，并作为一个RAR文件被放在Yandex.Disk（俄罗斯版的Google Drive 或
+Dropbox）上。尽管这个RAR文件提供了游戏mod所声称的全部功能，但在许多文件中，它却包含了一个叫“pawncc.exe”的文件，如下面的屏幕截图所示，一旦mod运行该文件就会开始下载加密货币挖矿机恶意软件。
+
+一旦pawncc.exe在受害者的系统中运行起来，它将作为一个下载器，发布一系列任务，最终结果是运行WaterMiner这个恶意软件。pawncc.exe程序在运行的时候首先会去确认当前机器是否已经感染了这个恶意软件，如果挖矿软件还不存在，那么它会创建一个感染记号。这个感染记号会创建“HKLMSoftwareIntelPlatform”注册表项，并将“Ld566xsMp01a”的值设为“Nothing”，具体如下图所示：
+
+然后，pawncc.exe从一个Google
+Drive链接中下载WaterMiner并将该文件放在temp文件夹中，并将感染标记的值设为“loaded”。之后，挖矿机将以一个名为“Intel (R)
+Security Assistent.exe”的新进程运行，具体如下图所示：
+
+下载挖矿机，将其存在temp文件夹中并将其作为“Intel (R) Security Assistent.exe”运行
+
+如果感染标记的值已经是“loaded”，那么该恶意软件将不会继续执行，因此我们只要简单地利用注册表项就可以阻止该恶意软件继续运行。在下图可以看到，在对感染标记的测试中，如果感染标记已经被设定为了“loaded”，那么主导下载和运行恶意软件的函数将被跳过。
+
+如果找到了感染标记则会跳过
+
+在测试下载器的时候，Minerva找到了一个特殊的指示器，它帮助我们追踪到了Pastebin早期版本的源码，这是一个在线的复制粘贴服务。在这段代码中作者的注释直接提到了“挖矿功能”，并且显示攻击者是有意将挖矿机作为游戏mod功能的一部分，代码如下图所示：
+
+Martin 0pc0d3r在早期挖矿机程序下载器中写的注释
+
+从俄语翻译过来后，注释的第一部分与现有的功能相关：
+
+**加载11个挖矿机文件到temp文件夹中**
+
+**加入留存机制（persistency mechanism）**
+
+**隐藏文件和留存机制**
+
+**仅下载挖矿机文件一次**
+
+在TODO部分甚至有些注释表明了即将对挖矿机做的改进：
+
+**新建一个挖矿机的备份文件**
+
+**利用任务调度程度来做留存**
+
+**将挖矿机作为一个服务来运行以便将其隐藏**
+
+pawncc.exe将挖矿软件下载到受害者的系统中，将其命名为“%TEMP%Intel(R) Security
+Assistent.exe”这样一个64位的可执行文件，并使用RunOnce 注册表项来使得其能够在机器重启后继续运行，具体如下图所示：
+
+接下来，它会开始挖矿，并在TCP端口45560上与xmr.pool.minergate.com进行通信，该主机名属于一个挖矿池。多个挖矿者通过这些挖矿池之间相互合作，使得他们能够通过他们对挖矿池的贡献来共享资源和奖励。目前，有数十个门罗币挖矿池对公众开放。在检查过挖矿机后，Minerva发现它是一个改进版的开源挖矿机，该挖矿机叫做XMRig，如下图所示：
+
+左侧：XMRig指令，右侧：从挖矿机中提取出来的字符串
+
+XMRig本身并不是恶意的，但是未经许可地将其安装在不知情的受害者的系统中用于获取非法利益就是不合法的使用情景了。Minerva还遇到了老版本的Dropper，它分发了一个名为Nice
+Hash的不同挖矿软件。然而，攻击者切换到XMRig可能是因为Nice Hash需要几十个不同的文件才能在受害者的系统上正常运行。
+
+**  
+**
+
+**WaterMiner是如何绕过受害者检查的？**
+
+为了在受害者机器上执行挖矿任务，挖矿软件自然地会产生大量的计算，这在一定程度上会占用受害者很多的CPU资源。这意味着当受感染的系统变慢的时候，受害者可能会意识到机器哪里出现了问题。为了调查原因，受害者可能会打开Windows任务管理器或相应的应用程序来查看那个应用拖慢了系统。在WaterMiner攻击活动中，当有如下名字的窗口打开时，攻击者会使用原本的XMRig来避开检测，这些窗口名字是：
+
+**Windows Task Manager (英文或俄文)**
+
+**Task Manager**
+
+**AnVir (俄语的task manager)**
+
+**Process Hacke**
+
+下面的截图中显示了XMRig中检查这些窗口的代码：
+
+会让WaterMiner停止挖矿以逃避探查的窗口名
+
+挖矿机一旦检测到了上述任何应用，挖矿的进程就会停止，使得受害者难以发现恶意程序的存在。早期的同一个攻击组织传播的恶意软件变体包含了另一种不同的测试：挖矿机并不去查看窗口，而是试图通过检查运行进程列表来检测显示器上的应用，一旦下列进程被发现，则它会关闭其自身。
+
+如果找到Task Manager 或 AnVir 则调用 taskkill 来关闭恶意软件
+
+Minerva的反入侵平台通过使恶意软件以为它在持续地受到监视从而迫使其停止所有挖矿活动，该方法正好是利用了挖矿机本身的躲避机制。
+
+**  
+**
+
+**谁是WaterMiner背后的组织？**
+
+在网络犯罪的世界中，我们经常遇到品行良好的组织团伙。然而，似乎门罗币也吸引了很多聪明的独行侠，他们并不是我们通常情况下想象中像犯罪大师那种的攻击者，就如同阿拉斯加在淘金热中也同样引诱了很多挖矿者一样。
+
+阿拉斯加淘金热期间的挖矿
+
+根据几个论坛的帖子和Minerva追踪到的源码，WaterMiner组织背后的人似乎藏在“Martin
+Opc0d3r”这个化名之后，并且具有开发其他恶意软件的经验，例如bots木马和游戏mods。然而，他最近似乎意识到他开发的mods（用几种不同的恶意软件感染他的“客户”，其中包括加密货币挖矿机）是可以赚钱的。Minerva定位到了WaterMiner中的某个常量URL（hxxp://cw36634[.]tmweb[.]ru/getfile[.]php?file=12），在另外至少12个样本中，都存在由同一个人创建的，几乎从相同的URLs里下载恶意软件，具体如下图所示：
+
+Minerva定位到了更多的例子，它们使用了另一个域名，使用的URL都使用了一个相同的模式：
+
+有些内容已经失效，可能要么是被提供者移除，要么是攻击者自己移走了。但是，从其中尚且有效内容的探查中，我们找到了好几种版本的转换后的XMRig和NiceHash挖矿机，它们同WaterMiner组织之前的样本和代码片段非常相似。另一个0pc0d3r的代码片段在Pastebin上是公开的，这让我们相信，上面某些失效的内容正是木马使用的URL：
+
+其他证据指出，0pc0d3r老版本的带有木马mods被终端用户发现了。通过这条证据，Minerva定位到了另一个俄罗斯论坛，hxxps://video[.]fishyoutube[.]com/watch?v=lU0xJSuj-ZM, we observed the publication of a different mod. Its users posted comments
+to flag it with words such as “stealer”, “Trojan” and called 0pc0d3r “the
+result of incest”:
+
+从0pc0d3r差劲的操作来看，很明显我们并不是在面对一个老练的网络罪犯。通过跟踪与这个化名有关的活动，我们发现了背后这个人的可能的身份。在俄罗斯社交网络VK上，Anton
+[ redacted]这个人提供了0pc0d3r的mod：
+
+当一个用户指责Anton倒卖0pc0d3r的作品的时候，Anton非常骄傲地承认自己就是这个身份背后的人：
+
+结合其他我们在分析这个组织时收集到的敏感信息，我们相信Anton应该就是0pc0d3r-WaterMiner背后的人。
+
+**  
+**
+
+**结论与建议**
+
+有善必有恶，这句话也符合加密货币的快速发展。这个全新的领域，混合了前沿的加密算法和抽象的经济观点，人们很难抵御通过非法手段谋取利益的诱惑。当下，加密货币尚未完善，通过backlist主机和端口组合就可以成功地阻挡大部分挖矿机。然而，我们预测挖矿恶意软件将变得更加成熟，也会在防火墙和IPSIDS产品上实验。幸运的是，就如同其他常见的恶意软件一样，它们越想隐蔽，Minerva的反入侵平台就越能够高效地封锁它们。
+
+**  
+**
+
+**IOCs**
+
+**IP**
+
+·93[.]188[.]160[.]90
+
+·92[.]53[.]96[.]133
+
+**Hashes (SHA-256)**
+
+·1852bf95b91bc50fb10cd0388595d88ce524dca9607aa3621e7b2587f326ec9d (original
+mod)
+
+·b23ce6a8af6cbf7dae517f6736aa69c451347f6b5e7e66d5a1339a4d74e10e66 (WaterMiner
+downloader)
+
+·715c3a8f7d5cd921b321a4fa180862315846f408b903d9d2888ae95912dbb9ca (payload)
+
+·db4f825732f27f1163367226c7d565714455f3f51c1cdbd858ed4a0b2335515b (older
+payload)
+
+·f5f762a56578a939623da00d8a7bd857c10432b6623d335da20731f9a1b131ba (older
+payload)
+
+·1347fbbb5f0c41a27dd06d4d02588e72cd1c8ba6dd609ae15d042895ed1211e9 (older
+payload)
+
+·83cfa3f13e6e851c670e491ea29feafa98cb9554fb0458b4897b20b5b0598be2 (older
+payload)
+
+**Process Names**
+
+·Intel(R) Security Assistent.exe
+
+**URLs**
+
+**·Downloader:**
+
+hxxps://goo[.]gl/MWTs3Y
+
+hxxps://drive[.]google.com/uc?authuser=0&id=0B04cozXxVfySSGN6UEZfb2xpZms&export=download
+
+**·Payload delivery:**
+
+hxxp://cw36634[.]tmweb[.]ru
+
+hxxp://0psofter[.]esy[.]es
+
+本文翻译自minerva-labs.com [原文链接](https://www.minerva-labs.com/post/waterminer-a-new-evasive-crypto-miner)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **blueSky** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/87074](/post/id/87074)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [minerva-labs.com](https://www.minerva-labs.com/post/waterminer-a-new-evasive-crypto-miner)
+
+如若转载,请注明出处： <https://www.minerva-labs.com/post/waterminer-a-new-evasive-crypto-miner>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p3.ssl.qhmsg.com/dm/200_200_100/t01d4c6d0183e5e3280.jpg) blueSky
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

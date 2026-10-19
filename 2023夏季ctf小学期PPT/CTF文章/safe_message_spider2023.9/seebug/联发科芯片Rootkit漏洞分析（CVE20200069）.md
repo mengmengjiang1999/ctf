@@ -1,0 +1,203 @@
+**作者：启明星辰ADLab**  
+**原文链接：<https://mp.weixin.qq.com/s/ohMZkfyS_B_HVg3Xm0THbQ>**
+
+## 一、漏洞背景
+
+2020年3月，谷歌修补了一个存在于联发科芯片中的安全漏洞（CVE-2020-0069），漏洞影响20余款联发科芯片和数百万Android设备。该漏洞存在于MediaTek
+Command Queue驱动（CMDQ命令队列驱动），允许本地攻击者实现对物理内存地址的任意读写，从而导致权限提升。
+
+## 二、受影响国产手机型号
+
+  * Huawei GR3 TAG-L21
+
+  * Huawei Y5II
+
+  * Huawei Y6II MT6735 series
+
+  * Lenovo A5
+
+  * Lenovo C2 series
+
+  * Lenovo Tab E7
+
+  * Lenovo Tab E8
+
+  * Lenovo Tab2 A10-70F
+
+  * Meizu M5c
+
+  * Meizu M6
+
+  * Meizu Pro 7 Plus
+
+  * Oppo A59 series
+
+  * Oppo A5s
+
+  * Oppo A7x -- up to Android 8.x
+
+  * Oppo F5 series/A73 -- up to A.39
+
+  * Oppo F7 series -- Android 8.x only
+
+  * Oppo F9 series -- Android 8.x only
+
+  * Oppo R9xm series
+
+  * Xiaomi Redmi 6/6A series
+
+  * ZTE Blade A530
+
+  * ZTE Blade D6/V6
+
+  * ZTE Quest 5 Z3351S
+
+## 三、CMDQ驱动简析
+
+DMA（直接内存访问）是允许专用硬件直接从主存储器(RAM)发送或接收数据的一种特性。其目的是通过允许大内存访问而不过多占用CPU来加速系统。MediaTek
+Command Queue驱动(CMDQ命令队列驱动)允许从用户层与DMA控制器通信，以实现媒体或显示相关的任务。
+
+基于Redmi 6/6A 源代码分析，在cmdq_driver.h头文件中，声明cmdq驱动的IOCTL调用如下：
+
+![](https://images.seebug.org/content/images/2020/06/a0edc987-79ae-438b-ae06-c68e6e8561de.png-w331s)
+
+  * CMDQ_IOCTL_ALLOC_WRITE_ADDRESS指令为分配一个DMA缓冲区
+
+  * CMDQ_IOCTL_FREE_WRITE_ADDRESS指令为释放一个DMA缓冲区
+
+  * CMDQ_IOCTL_READ_WRITE_ADDRESS指令为读取一个DMA缓冲区中的数据
+
+  * CMDQ_IOCTL_EXEC_COMMAND指令运行发送其他命令
+
+### 1、分配过程
+
+通过CMDQ_IOCTL_ALLOC_WRITE_ADDRESS调用cmdqCoreAllocWriteAddress
+()函数，分配一个DMA缓冲区，该函数关键代码实现如下：
+
+![](https://images.seebug.org/content/images/2020/06/dcfd1ecb-f422-4bbe-8a1f-8f0285202648.png-w331s)
+
+然后，调用cmdq_core_alloc_hw_buffer()函数分配DMA缓冲区，pWriteAddr->va是虚拟地址，pWriteAddr->pa为物理地址，两者一一对应。并清理缓冲区。
+
+![](https://images.seebug.org/content/images/2020/06/92fed379-efd0-444f-b90c-fd97fb5a8484.png-w331s)
+
+最后，将物理地址赋值到paStart，并将pWriteAddr结构体添加到gCmdqContext.writeAddrList链表中。
+
+### 2、执行命令过程
+
+在CMDQ_IOCTL_EXEC_COMMAND调用中，采用cmdqCommandStruct结构体作为参数，结构体定义如下：
+
+![](https://images.seebug.org/content/images/2020/06/2e3ee4a8-2655-4556-9004-2ad8479c1139.png-w331s)
+
+pVABase指向用户层存放命令的缓冲区，缓冲区大小放在blockSize中。其中cmdqReadAddressStruct结构体定义如下：
+
+![](https://images.seebug.org/content/images/2020/06/eea2cc47-c566-4736-9b76-26660a2ee3fb.png-w331s)
+
+DmaAddresses是要读取的物理地址，读取的值存放在values中。在CMDQ_IOCTL_EXEC_COMMAND命令的执行过程，实现代码如下：
+
+![](https://images.seebug.org/content/images/2020/06/42de5570-44b5-4143-8d8d-c0ce244fc166.png-w331s)
+
+函数调用路径如下：
+
+![](https://images.seebug.org/content/images/2020/06/e41305db-59d4-4706-9007-072a11b793be.png-w331s)
+
+Cmdq_core_acquire_task()函数会将command绑定到task中执行。具体实现如下：
+
+![](https://images.seebug.org/content/images/2020/06/59c96118-1cd6-47e7-92c5-d9e0fd0c50c3.png-w331s)
+
+调用cmdq_core_find_free_task()函数获取一个空闲task。拿到空闲task并进行一些初始化设置，然后开始调用cmdq_core_insert_read_reg_command()函数执行命令。
+
+![](https://images.seebug.org/content/images/2020/06/bf91f31c-fa8a-48dd-8866-d68be00dc290.png-w331s)
+
+该函数实现分析，先拷贝用户层传入的命令到DMA缓冲区中。
+
+![](https://images.seebug.org/content/images/2020/06/2f18edf7-aa51-4674-a570-5479c11f9a3f.png-w331s)
+
+pCommandDesc->pVABase是存放命令的内存起始地址。拷贝完命令后，后面分几种方式结尾。
+
+![](https://images.seebug.org/content/images/2020/06/db020ebd-7b4d-4615-a6d1-ba65681298cd.png-w331s)
+
+这里不做深究，最后拷贝EOC和JUMP指令结尾。这里也是将用户层传入的命令拷贝过来。
+
+![](https://images.seebug.org/content/images/2020/06/9ff0963f-3dec-45ae-9090-bb743800841d.png-w331s)
+
+从cmdq_core_acquire_task()函数中返回后，如下：
+
+![](https://images.seebug.org/content/images/2020/06/c6482514-1cea-43d8-8a7d-0d4c19221218.png-w331s)
+
+调用cmdq_core_consume_waiting_list()函数执行task。先从等待队列中获取task。
+
+![](https://images.seebug.org/content/images/2020/06/8c080e12-3a7c-415f-ab2a-afe1d3eb3371.png-w331s)
+
+然后，获取空闲内核线程。
+
+![](https://images.seebug.org/content/images/2020/06/0bd7f944-4acf-4188-933f-d37d02dadfde.png-w331s)
+
+最后，将task绑定到thread中去执行。
+
+![](https://images.seebug.org/content/images/2020/06/f6ea802d-b801-4dbd-9ee3-615eafa1b257.png-w331s)
+
+## 四、读写命令分析
+
+以cmdq_test.c测试代码为例，分析理解一个完整的读写命令构造。cmdq驱动中定义了两类寄存器，一类是地址寄存器用于存放地址，一类是数值寄存器用于存放读取或写入的数值。
+
+![](https://images.seebug.org/content/images/2020/06/93485b14-b590-4094-99e2-636cbb1ceabe.png-w331s)
+
+regResults是虚拟地址，调用cmdq_core_alloc_hw_buffer()函数分配一个dma地址，regResultsMVA与之对应，然后设置regResults中的数据。开始拼接读取和写入命令：
+
+![](https://images.seebug.org/content/images/2020/06/81a54661-cbc3-4600-bb23-ec0e8bde7530.png-w331s)
+
+将regResults[0]的地址写入CMDQ_DATA_REG_DEBUG_DST类型的地址寄存器中。
+
+![](https://images.seebug.org/content/images/2020/06/e418bdb3-1376-42a7-b6f6-a1926814563d.png-w331s)
+
+然后，从CMDQ_DATA_REG_DEBUG_DST地址寄存器中读取数据并写入到CMDQ_DATA_REG_DEBUG数值寄存器中。这时候，CMDQ_DATA_REG_DEBUG数值寄存器中的值应该为0xdeaddead。
+
+![](https://images.seebug.org/content/images/2020/06/44fc09dc-f19d-46f2-b04d-01082bcb6197.png-w331s)
+
+接着，将regResults[1]的地址转存到CMDQ_DATA_REG_DEBUG_DST地址寄存器中。
+
+![](https://images.seebug.org/content/images/2020/06/383b9401-4ae3-42e7-96b2-de53021382b6.png-w331s)
+
+最后，将CMDQ_DATA_REG_DEBUG数值寄存器中的0xdeaddead写入到CMDQ_DATA_REG_DEBUG_DST地址寄存器中保存的regResults[1]的地址中。即regResults[1]=0xdeaddead。判断regResults[0]和regResults[1]是否相等。
+
+![](https://images.seebug.org/content/images/2020/06/f45014cb-4b5b-445d-a6d9-62ee272bd8e2.png-w331s)
+
+如果相等，说明读写成功。
+
+## 五、PoC分析与测试
+
+（1）PoC代码中，执行写操作的关键代码如下：
+
+![](https://images.seebug.org/content/images/2020/06/445eb097-5c51-4c61-b6f8-200664a751ba.png-w331s)
+
+写入过程中，先将value[count]移动到CMDQ_DATA_REG_DEBUG数值寄存器中，然后将pa_address+offset地址移动到CMDQ_DATA_REG_DEBUG_DST地址寄存器中，最后将CMDQ_DATA_REG_DEBUG数值寄存器中的value写入到CMDQ_DATA_REG_DEBUG_DST地址寄存器中保存的pa_address+offset地址中，即*(pa_address+offset)
+= value[count]。
+
+（2）PoC代码中，执行读操作的关键代码如下：
+
+![](https://images.seebug.org/content/images/2020/06/01944229-3aab-4dab-8f0b-d2c1100e3b61.png-w331s)
+
+读取过程中，第一步先将pa_address+offset地址移动到CMDQ_DATA_REG_DEBUG_DST地址寄存器中，然后从CMDQ_DATA__REG_DEBUG_DST地址寄存器中存储的地址pa_address+offset中读取数据放到CMDQ_DATA_REG_DEBUG数据寄存器中，再将dma_address+offset地址移动到CMDQ_DATA_REG_DEBUG_DST地址寄存器中，最后将CMDQ_DATA_REG_DEBUG数值寄存器中保存的数据写入到CMDQ_DATA_REG_DEBUG_DST地址寄存器中存储的dma_address+offset地址中，即
+_(dma_address + offset) =_ (pa_address + offset)。
+
+（3）在Reami6测试机中，执行PoC测试，成功将Linux修改成minix。
+
+![](https://images.seebug.org/content/images/2020/06/0bbde5b9-c706-4717-ad52-01163cf90682.png-w331s)
+
+## 六、参考链接
+
+  1. <https://github.com/MiCode/Xiaomi_Kernel_OpenSource/tree/cactus-p-oss/drivers/misc/mediatek/cmdq>
+
+  2. <https://github.com/quarkslab/CVE-2020-0069_poc/blob/master/jni/kernel_rw.c>
+
+  3. <https://blog.quarkslab.com/cve-2020-0069-autopsy-of-the-most-stable-mediatek-rootkit.html>
+
+  4. <https://forum.xda-developers.com/android/development/amazing-temp-root-mediatek-armv8-t3922213>
+
+  5. <https://source.android.com/security/bulletin/2020-03-01>
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1259/>
+

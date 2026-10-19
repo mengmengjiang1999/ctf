@@ -1,0 +1,174 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+**近日，深信服发现一种具有高强度病毒对抗行为的新型的挖矿病毒，其病毒机制与常规挖矿相差较大，一旦感染上，清理难度极大。目前该病毒处于爆发初期，深信服已将此病毒命名为EnMiner挖矿病毒，并将持续追踪其发展状况并制定详细的应对措施。**
+
+此EnMiner病毒，是目前遇到的“杀气”最重的挖矿病毒，具有高强度的病毒对抗行为，堪称“七反五杀”。能够反沙箱
+、反调试、反行为监控、反网络监控、反汇编、反文件分析、反安全分析的同时杀服务、杀计划任务、杀病毒、杀同类似挖矿甚至存在自杀的最大程度反抗分析行为！  
+
+## **病毒分析**
+
+###  **攻击场景**
+
+EnMiner病毒攻击，可谓有备而来，在干掉异己、对抗分析上做足了功夫。  
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294775274506.png!small)如上图，lsass.eXe为挖矿病毒体（C：\Windows\temp目录下），负责挖矿功能。Powershell脚本是base64加密的，存在于WMI中，有Main、Killer、StartMiner三个模块。Main模块负责启动，Killer负责杀服务、杀进程，StartMiner负责启动挖矿，当挖矿文件lsass.eXe不存在时，会从WMI中Base64解码重新生成，以执行挖矿。具体如下：
+
+首先，存在异常WMI项在定时启动PowerShell，根据WQL语句，为1小时自动触发一次。
+
+判断是否存在lsass.eXe这个文件，如果不存在，会读取WMI中
+
+root\cimv2:PowerShell_Command类中的EnMiner属性，并进行Base64解码写入lsass.eXe。
+
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294777006834.png!small)
+
+所有流程执行完后，就开始挖矿。
+
+###  **高级对抗**
+
+挖矿病毒体lsass.eXe本身除了有挖矿功能，还具有高级对抗行为，即千方百计阻止安全软件或者安全人员对其进行分析。
+
+lsass.eXe会创建一个线程，进行强对抗操作，如下：
+
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294777904501.png!small)
+
+遍历进程，发现有相关进程（譬如发现SbieSvc.exe这个沙箱进程）则结束自身：
+
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294778127017.png!small)相应的反汇编代码如下：
+
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294778617931.png!small)![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294778693577.png!small)总结其有“七反”操作，即当有以下安全分析工具或进程时，会自动退出，阻止被沙盒环境或安全人员分析。
+
+ **第一反：反沙箱**
+
+反沙箱文件：
+
+    
+    
+    SbieSvc.exe,SbieCtrl.exe,JoeBoxControl.exe,JoeBoxServer.exe 
+
+**第二反：反调试**
+
+反调试文件：
+
+    
+    
+    WinDbg.exe,OllyDBG.exe,OllyICE.exe,ImmunityDe
+    
+    bugger.exe,
+    
+    x32dbg.exe,x64dbg.exe,win32_remote.exe,win64_remote64.exe 
+
+**第三反：反行为监控**
+
+反行为监控文件：
+
+    
+    
+    RegMon.exe,RegShot.exe,FileMon.exe,ProcMon.exe,AutoRuns.exe,AutoRuns64.exe,taskmgr.exe,PerfMon.exe,ProcExp.exe,ProExp64.exe,
+    
+    ProcessHacker.exe,sysAnalyzer.exe,
+    
+    Proc_Analyzer.exe,Proc_Watch.exe,
+    
+    Sniff_Hit.exe
+
+ **第四反：反网络监控**
+
+反网络监控文件：
+
+    
+    
+    Wireshark.exe,DumpCap.exe,TShark.exe,APorts.exe,TcpView.exe
+
+ **第五反：反汇编**
+
+反汇编文件：
+
+    
+    
+    IDAG.exe,IDAG64.exe,IDAQ.exe,IDAQ64.exe
+
+ **第六反：反文件分析**
+
+反文件分析文件：
+
+    
+    
+    PEiD.exe,WinHex.exe,LordPE.exe,PEditor.exe,Stud_PE.exe,ImportREC.exe
+
+ **第七反：反安全分析**
+
+反安全分析软件：
+
+    
+    
+    HRSword.exe,
+    
+    HipsDaemon.exe,ZhuDongFangYu.exe,
+    
+    QQPCRTP.exe,PCHunter32.exe,
+    
+    PCHunter64.exe
+
+###  **大开杀戒**
+
+EnMiner挖矿为了实现利益最大化，执行了“五杀”（PentaKill）操作。
+
+ **第一杀：杀服务**
+
+碍事的服务进程都杀掉（所有杀操作都在Killer模块进行）。
+
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294779591131.png!small)
+**第二杀：杀计划任务**
+
+各种计划任务，浪费系统资源（挖矿最关心的CPU资源），都会被杀掉。
+
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294779883379.png!small)
+**第三杀：杀病毒**
+
+EnMiner有杀病毒功能。是为了做善事？
+
+当然不是，像WannaCry2.0,WannaCry2.1会导致蓝屏、勒索的，肯定影响EnMiner挖矿了，都会被杀掉。
+
+再如BillGates DDoS病毒，其具有DDoS功能，肯定也影响EnMiner挖矿了，通通干掉。
+
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294780163844.png!small)
+**第四杀：杀同行**
+
+同行是冤家，一机不容二矿，EnMiner不允许别人跟它抢“挖矿”这单生意。各种市面上的挖矿病毒，遇到一个杀掉一个。
+
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/1529478046900.png!small)为了保证同行彻底死掉，还额外通过端口进行杀进程（挖矿常用端口）。
+
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294780712738.png!small)
+**第五杀：自杀**
+
+前文有讲到，当EnMiner发现有相关的安全分析工具时，就会退出，即自杀，这是最大程度的反抗分析行为。
+
+###
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294781028136.png!small)
+**躺着挖矿**
+
+进行了“七反五杀”操作的EnMiner挖矿再无竞争者，基本上是躺着挖矿了。此外，挖矿病毒体lsass.eXe可以从WMI里面通过Base64解码重新生成。这意味着如果杀软仅仅只杀掉lsass.eXe，则WMI每隔1小时后又会重新生成，又可以躺着挖矿。
+
+截至目前，该病毒已挖有门罗币，目前该病毒处于爆发初期，深信服提醒广大用户加强防范。
+
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294782106011.png!small)
+
+##  **解决方案**
+
+1、隔离感染主机：已中毒计算机尽快隔离，关闭所有网络连接，禁用网卡。
+
+2、确认感染数量：推荐使用深信服下一代防火墙或者安全感知平台进行全网确认。
+
+3、删除WMI异常启动项：
+
+使用Autoruns工具（下载链接为：<https://docs.microsoft.com/zh-cn/sysinternals/downloads/autoruns>），找到异常的WMI启动项，并删除。
+
+![警惕EnMiner挖矿大开杀戒](https://image.3001.net/images/20180620/15294782874535.png!small)
+
+4、查杀病毒
+
+5、修补漏洞：系统若存在漏洞，及时打补丁，避免被病毒利用。
+
+6、修改密码：如果主机账号密码比较弱，建议重置高强度的密码，避免被爆破利用。
+
+ ***本文作者：千里目安全实验室，转载请注明来自 FreeBuf.COM**
+

@@ -1,0 +1,62 @@
+**![ZenMate.jpg](https://image.3001.net/images/20180919/1537328371_5ba1c4f3ee345.jpg!small)****近期，TheIntercept披露了一份[记载于2006年的NSA机密级文档](https://theintercept.com/snowden-sidtoday/4755596-efforts-against-virtual-private-networks-bear/)，据文档反映信息可知，NSA此前曾成功渗透入侵了一系列“高价值”目标的加密虚拟专用网络（Virtual Private
+NetWork），这些目标涉及半岛电视台、伊拉克军事部门和国家网络服务机构，以及包括伊朗航空、俄罗斯航空（Aeroflot）、
+巴拉圭SABRE航空、俄罗斯伽利略航空（Russian Galileo）在内的机票预订系统。该份泄露文档由爱德华·斯诺登曝光材料的持有者提供。**
+
+> 虚拟专用网络（Virtual Private
+> NetWork），也叫VPN，是公司或企业机构使用加密方式，方便雇员通过互联网连接到机构内部私有网络或企业内网的一种服务手段，由此，单位雇员无需身处办公室，就能远程通过互联网使用单位内部的文件共享或查询接口服务。  
+>
+
+## 文档内容
+
+![02.png](https://image.3001.net/images/20180919/1537328407_5ba1c51765d7e.png!small)该份泄露文档为NSA内部新闻网站SIDtoday的摘录，内容为NSA网络分析中心（Network
+Analysis
+Center）对入侵VPN网络的成果通报。文档显示，早在2006年以前NSA就具备了破解入侵大型企业VPN网络的技术能力，该信息的曝光引发了对VPN使用的广泛安全担忧。当前来说，很多网上用户会使用付费VPN来隐匿自身的网络访问痕迹，防止互联网服务商在后台的上网习惯分析，还能避免在
+Wi-Fi 环境下的网络窃听。
+
+其实，在2013年的时候，德国《明镜周刊》[就曾爆料称](http://www.spiegel.de/international/world/nsa-spied-on-al-jazeera-communications-snowden-document-a-919681.html)，半岛电视台受到NSA的通讯监听，但其中没有提及NSA入侵半岛电视台VPN系统的具体手段。
+
+由于在布什政府时期，半岛电视台播放了奥萨马·本·拉登的录音信息，之后，就有美国高级官员批评半岛电视台，指责这个总部设在卡塔尔的新闻机构有反美倾向。而与此同时，半岛电视台公开发声为自己辩护，并坚称自己的报道是非常客观中立的。在2001年，半岛电视台新闻主编
+Ahmed Al Sheikh
+在BBC的采访中表示，“在当前的世界格局中，不管你如何看待奥萨马·本·拉登，他都是危机的一方成员，如果我们不播出他的录音，那么作为媒体机构，我们就失去了报道的完整性和客观性，有失偏颇”。
+
+该份文档还可以看出，NSA还渗透入侵了伊朗航空、俄罗斯航空（Aeroflot）、 巴拉圭SABRE航空、俄罗斯伽利略航空（Russian
+Galileo）的机票预订系统，其中，巴拉圭SABRE航空和俄罗斯伽利略航空（Russian
+Galileo）都是私人运营的航空公司。机票预订系统是一种集中的电脑系统，提供方便旅客的航班预订等网上交易服务，世界上几乎所有的航空公司都会使用。  
+
+在伊拉克，NSA入侵了伊拉克国防部和内政部的VPN网络，而讽刺的是，这个所谓的伊拉克国防部，就是2004年美国攻占伊拉克之后，着手组建的临时国防部。NSA某未名工作人员[在2005年的描述时称](https://theintercept.com/2017/09/13/sloppy-u-s-spies-misused-covert-network-for-personal-shopping-and-other-stories-from-internal-nsa-documents/#spying-on-iraq)，“NSA还对伊拉克其它政府部门的开展过入侵攻击，可以说这是NSA对伊拉克的一场全面的网络渗透活动”。
+
+![01.png](https://image.3001.net/images/20180919/1537328434_5ba1c53253022.png!small)该份泄露文档，还有一些NSA技术进展描述，例如“尽管VPN网络对我们的信号情报收集（SIGINT）技术提出了特殊的挑战，但是目前我们对这种通信机制的入侵渗透有了显著成功”，另外，文档还提到NSA网络分析中心（Network
+Analysis
+Center）对VPN网络的入侵研究已经长达3年之久，现在终于有所突破。文档并未提及NSA入侵“高价值”目标VPN的具体技术，也没说明那些“高价值”目标使用的VPN机制。
+
+## 其它相关内容
+
+据早前TheIntercept[今年8月披露的一份文档](https://theintercept.com/document/2018/08/15/nsa-sidtoday-giving-answers-keeping-secrets/)显示，NSA入侵VPN网络的技术是NSA内部必须严格保守的秘密，其中的描述是这样的：“入侵渗透VPN网络用到了一些最先进的技术，因此，这种技术细节必须严格保密，不能对外公开“。同样，在该份文档中还提及了一种名为VIVIDDREAM的辅助工具，NSA人员可以利用它来发现那些存在漏洞，可以入侵的VPN网络。通过这种封装工具的应用，最大程度的避免了NSA一线分析师对该项技术细节的知晓。
+
+![03.png](https://image.3001.net/images/20180919/1537328198_5ba1c4464c454.png!small)在棱镜门事件中，斯诺登曝光给媒体机构的文档并未反映出NSA对具体VPN技术的入侵渗透能力，然而，还是有一些新闻机构基于这些文档，侧面分析报道了NSA的VPN入侵可能，甚至还有一些密码学家作出了一些有根据的猜测。
+
+2014年，TheIntercept曝光了[NSA的一份计划文档](https://theintercept.com/2014/03/12/nsa-plans-infect-millions-computers-malware/)，其记载日期为2009年8月，内容为NSA使用一种名为TURBINE的自动化系统感染了全球数百万台计算机，该文档中还提及了NSA的另外一种名为HAMMERSTEIN的工具，它用于安装在路由器中进行VPN流量交换，该工具可以将使用IPSec的VPN流量包转发回NSA控制中心进行解密，然而，其中也没对具体技术作太多说明。
+
+2014年12月，德国《明镜周刊》再次曝光了斯诺登泄露的[有关NSA入侵VPN网络的17份秘密文档](http://www.spiegel.de/international/germany/inside-the-nsa-s-war-on-internet-security-a-1010361.html)，这些文档多数是对TURBINE和HAMMERSTEIN工具在具体项目中的应用说明。
+
+## VPN网络安全性
+
+目前，有多种不同的在用VPN协议，安全性也参差不齐，每一种协议也能进行一些相应的安全性配置。宾夕法尼亚大学密码学研究员Nadia
+Heninger说，如PPTP的点对点隧道协议是一种相对早期而又不安全的协议，它存在一些已知的安全漏洞，所以被应用到一些野外的攻击案例中，也就不足为奇。据《明镜周刊》在2014年曝光的斯诺登泄露文档可知，NSA似乎至少还对其它另外一种VPN协议、Internet协议和IPSec协议具备入侵能力。
+
+Heninger解释说：“对于TLS和IPsec来说，这些协议既能配置安全的方式，也能配置为不安全的方式，因此它们不能真正被概括为‘安全’或‘不安全’，这两种协议都提供了很多可配置的选项，同时，这些配置选项也是当前公开的协议级漏洞的原由，而且这两种协议都涉及到密码组件和参数选择，它们都存在加密脆弱性”。尽管如此，Heninger还是坚信，有TLS和IPsec的安全配置方法，能够抵御所有已知的攻击。
+
+Heninger还说明，也可能存在另外一种可能性，NSA甚至不用密码就能破解VPNs上的加密方式，因为我们可以发现，现在大量使用的VPN相关设备都会存在硬编码密钥和其它软件漏洞，这种方式下就完全无需密码，入侵者只需在终端运行脚本提取密钥和其它有用信息即可，这点可在斯诺登事件后，影子经纪人（Shadow
+Brokers）泄露的NSA网络武器中发现一些端倪和可能。
+
+2015年，Heninger和其他13位密码学家联合发表了一篇题为《[Imperfect Forward Secrecy: How Diffie-Hellman Fails in Practice](https://weakdh.org/)》（不完美的前向加密-Diffie-Hellman如何在实践中失败》的论文，该文经过研究和实验，披露了当前流行的互联网协议存在的安全漏洞，并展示了一种名为Logjam的攻击方法，可以攻破约66%的IPSec
+VPN网络。同时论文经实验比对分析，还推测NSA已经具备对VPN加密网络的入侵破解能力，也侧面揭示了NSA可以解密互联网加密通信的原因，最终该论文获得了当年ACM
+CCS大会的最佳论文。
+
+> Perfect Forward Secrecy：PFS，在1990年被 C. G.
+> Günther提出，在密码学中，PFS是安全通信协议的一个属性，PFS保护过去的会话以免在未来秘钥或密码的（泄露）造成的危害。因为对手或恶意方会活跃地干扰，导致长期秘钥（long-> term secret keys）或者密码在未来可能被泄露，但是如果使用了PFS，即使秘钥被泄露，过去的加密的通信和会话记录也不会被恢复和解密。
+
+目前，针对此份TheIntercept披露的秘密文档内容，截至记者发稿前，NSA拒绝作出置评。
+
+ ***参考来源：[TheIntercept ](https://theintercept.com/2018/08/15/nsa-vpn-hack-al-jazeera-sidtoday/)，clouds 编译，转载请注明来自 FreeBuf.COM**  
+

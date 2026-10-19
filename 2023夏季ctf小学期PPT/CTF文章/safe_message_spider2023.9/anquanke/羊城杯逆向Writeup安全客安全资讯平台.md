@@ -1,0 +1,773 @@
+# 羊城杯逆向Writeup
+
+阅读量 **209946**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-10-09 15:30:36
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t0104ab0be92934d801.jpg)
+
+## BabySmc
+
+自解码，解密后代码虽然很多但从移位、密文及下面这个结构可以看出是base64编码：
+
+![](https://p1.ssl.qhimg.com/t012ba1e4f6265b14d9.png)
+
+细看一下他的加密过程，正常bases64的移位，但码表换了和最后多了一个异或。
+
+![](https://p1.ssl.qhimg.com/t017e149640e7e42281.png)
+
+所以解密的话就是先异或再提取出index，最后按照移位还原一下：
+
+    
+    
+    a = [0xE4, 0xC4, 0xE7, 0xC7, 0xE6, 0xC6, 0xE1, 0xC1, 0xE0, 0xC0, 0xE3, 0xC3, 0xE2, 0xC2, 0xED, 0xCD, 0xEC, 0xCC, 0xEF, 0xCF, 0xEE, 0xCE, 0xE9, 0xC9, 0xE8, 0xC8, 0xEB, 0xCB, 0xEA, 0xCA, 0xF5, 0xD5, 0xF4, 0xD4, 0xF7, 0xD7, 0xF6, 0xD6, 0xF1, 0xD1, 0xF0, 0xD0, 0xF3, 0xD3, 0xF2, 0xD2, 0xFD, 0xDD, 0xFC, 0xDC, 0xFF, 0xDF, 0x95, 0x9C, 0x9D, 0x92, 0x93, 0x90, 0x91, 0x96, 0x97, 0x94, 0x8A, 0x8E]
+    
+    enc = "H>oQn6aqLr{DH6odhdm0dMe`MBo?lRglHtGPOdobDlknejmGI|ghDb<Q"
+    ans = []
+    enc = list(enc.encode())
+    for i in range(0, len(enc), 4):
+        ans += [a.index(enc[i]^0xa6)]
+        ans += [a.index(enc[i+1]^0xa3)]
+        ans += [a.index(enc[i+2]^0xa9)]
+        ans += [a.index(enc[i+3]^0xac)]
+    
+    ans = ''.join(['{:0>6}'.format(bin(i)[2:]) for i in ans])
+    flag = ''
+    for i in range(len(ans)//8):
+        flag += chr(int(ans[8*i:8*(i+1)], 2))
+    print(flag)
+    
+
+## Babyvm
+
+开始简单调试了跟了一下，发现前面都是异或加密但后面有一部分加密有点复杂，跟起来会麻烦。
+
+所以提取出vm部分代码，然后在编译器中修改编译一下这部分代码。
+
+一是让程序直接打印出前面单字节异或加密对应的明文，二是打印出后面一部分的加密逻辑：
+
+    
+    
+    #include <stdio.h>
+    
+    int dword_804B080[] = {0x7B, 0x2F, 0x37, 0x0E8};
+    char s[] = "********************************************";
+    int dword_804B060 = 0x0CF1304DC;
+    int dword_804B064 = 0x283B8E84;
+    char flag[100];
+    int cnt, count;
+    
+    unsigned int sub_80487A8(unsigned int *a1)
+    {
+      unsigned char *v2; // [esp+18h] [ebp-20h]
+      //printf("%x\n", *(unsigned char *)a1[8] == 0xa1);
+      //return 0;
+    
+      while ( 1 )
+      {
+        if ( *(unsigned char *)a1[8] == 113 )
+        {
+        printf("*******************\n");    
+          a1[6] -= 4;
+          *(unsigned int *)a1[6] = *(unsigned int *)(a1[8] + 1);
+          a1[8] += 5;
+        }
+        if ( *(unsigned char *)a1[8] == 65 )
+        {
+            printf("%x += %x\n", a1[1], a1[2]);
+          a1[1] += a1[2];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 66 )
+        {
+            printf("%x -= %x\n", a1[1], a1[4]);
+          a1[1] -= a1[4];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 67 )
+        {
+            printf("%x *= %x\n", a1[1], a1[3]);
+          a1[1] *= a1[3];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 55 )
+        {
+            printf("a1[1] = %x\n", a1[5]);
+          a1[1] = a1[5];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 56 )
+        {
+            printf("a1[1]_%x ^= %x\n", a1[1], a1[4]);
+          a1[1] ^= a1[4];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 57 )
+        {
+            printf("a1[1]_%x ^= %x\n", a1[1], a1[5]);
+          a1[1] ^= a1[5];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 53 )
+        {
+            printf("a1[5] = %x\n", a1[1]);
+          a1[5] = a1[1];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 0xF7 )
+        {
+            printf("a1[9]_%x += %x\n", a1[9], a1[1]);
+          a1[9] += a1[1];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 68 )
+        {
+            printf("a1[1]_%x /= %x\n", a1[1], a1[5]);
+          a1[1] /= a1[5];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 0x80 )
+        {
+          a1[*(unsigned char *)(a1[8]+1)] = *(unsigned int *)(a1[8] + 2);
+          a1[8] += 6;
+          printf("%x\n", *(unsigned char *)(a1[8]));
+        }
+        if ( *(unsigned char *)a1[8] == 119 )
+        {
+            printf("a1[1]_%x ^= %x\n", a1[1], a1[9]);
+          a1[1] ^= a1[9];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 83 )
+        {
+          putchar(*(unsigned char *)a1[3]);
+          a1[8] += 2;
+        }
+        if ( *(unsigned char *)a1[8] == 34 )
+        {
+            printf("a1[1]_%x >>= %x\n", a1[1], a1[2]);
+          a1[1] >>= a1[2];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 35 )
+        {
+            printf("a1[1]_%x <= %x\n", a1[1], a1[2]);
+          a1[1] <<= a1[2];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 0x99 )
+          break;
+        if ( *(unsigned char *)a1[8] == 118 )
+        {
+            printf("??????????????????\n");
+          a1[3] = *(unsigned int *)a1[6];
+          *(unsigned int *)a1[6] = 0;
+          a1[6] += 4;
+          a1[8] += 5;
+        }
+        if ( *(unsigned char *)a1[8] == 84 )
+        {
+            printf("getchar()\n ------------------");
+          v2 = (unsigned char *)a1[3];
+          *v2 = getchar();
+          a1[8] += 2;
+        }
+        if ( *(unsigned char *)a1[8] == 48 )
+        {
+        printf("?????????????????????????????????????????????????\n");    
+          a1[1] |= a1[2];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 49 )
+        {
+            printf("a1[1]_%x &= %x\n", a1[1], a1[2]);    
+          a1[1] &= a1[2];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 50 )
+        {
+    
+          a1[3] = *(unsigned __int8 *)(a1[8] + 1);
+          printf("a1[3] = %x\n", a1[3]);
+          a1[8] += 2;
+        }
+        if ( *(unsigned char *)a1[8] == 9 )
+        {
+            printf("a1[1]_%x = 1877735783\n",  a1[1]);
+          a1[1] = 1877735783;
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 16 )
+        {
+            printf("a1[9]_%x = %x\n", a1[9], a1[1]);
+          a1[9] = a1[1];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 51 )
+        {
+            printf("a1[4]_%x = %x\n", a1[4], a1[1]);
+          a1[4] = a1[1];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 52 )
+        {
+    
+          a1[2] = *(unsigned char *)(a1[8] + 1);
+          printf("a1[2] = %x\n", a1[2]);
+          a1[8] += 2;
+        }
+        if ( *(unsigned char *)a1[8] == 0xFE )
+        {
+        printf("a1[1]_%x = %x\n", a1[1], a1[9]);    
+          a1[1] = a1[9];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 17 )
+        {
+            //printf("============================\n");
+          printf("%x\n", a1[1]);
+          ++a1[8];
+          //printf("%x\n", *(unsigned char *)(a1[8]));
+        }
+        if ( *(unsigned char *)a1[8] == 0xA0 )
+        {
+          if ( a1[1] != 1877735783 )
+            printf("a1[1] != 1877735783 %x\n\n\n\n\n", a1[1]);
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 0xA1 )
+        {
+          //read(0, s, 0x2Cu);
+          //if ( strlen(s) != 44 )
+            //exit(0);
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 0xB1 )
+        {
+             //printf("?????????????????????????????????????????????????\n");
+          a1[9] = dword_804B080[0];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 0xB2 )
+        {
+          a1[9] = dword_804B080[1];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 0xA4 )
+        {    
+          dword_804B080[*(unsigned __int8 *)(a1[8] + 1)] = a1[1];
+          a1[8] += 4;
+        }
+        if ( *(unsigned char *)a1[8] == 0xB3 )
+        {
+          a1[9] = dword_804B080[2];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 0xB4 )
+        {
+          a1[9] = dword_804B080[3];
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 0xC1 )
+        {
+    
+    
+          a1[1] = (unsigned char)s[*(unsigned char *)(a1[8] + 1)];
+          printf("a1[1] = %x\n", a1[1]);
+          a1[8] += 2;
+          if(count == 32)
+            {
+                printf("%x\n", *(unsigned char *)(a1[8]));
+            }
+          count++;
+        }
+        if ( *(unsigned char *)a1[8] == 0xC7 )
+        {
+          if ( dword_804B060 != a1[1] )
+            printf("%x != a1[1] %x\n\n\n", dword_804B060, a1[1]);
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 0xC8 )
+        {
+          if ( dword_804B064 != a1[1] )
+            printf("%x != a1[1] %x\n\n\n\n", dword_804B064, a1[1]);
+          ++a1[8];
+        }
+        if ( *(unsigned char *)a1[8] == 0xC2 )
+        {
+          if ( (unsigned __int8)*(unsigned int *)(a1[8] + 1) != a1[1] )
+          {
+            printf("(unsigned __int8)*(unsigned int *)(a1[8] + 1) != a1[1]\n");
+            flag[cnt++] = (unsigned __int8)*(unsigned int *)(a1[8] + 1)^'*'^a1[1];
+          }
+          a1[8] += 5;
+        }
+      }
+      return 1;
+    }
+    
+    int main(void)
+    {
+        unsigned char op[] = {0xA1, 0xC1, 0x00, 0xB1, 0x77, 0xC2, 0x4A, 0x01, 0x00, 0x00, 0xC1, 0x01, 0xB2, 0x77, 0xC2, 0x19, 0x01, 0x00, 0x00, 0xC1, 0x02, 0xB4, 0x77, 0xC2, 0xDD, 0x01, 0x00, 0x00, 0xC1, 0x03, 0xB3, 0x77, 0xC2, 0x0F, 0x01, 0x00, 0x00, 0xC1, 0x04, 0xB2, 0x77, 0xC2, 0x1B, 0x01, 0x00, 0x00, 0xC1, 0x05, 0xB4, 0x77, 0xC2, 0x89, 0x01, 0x00, 0x00, 0xC1, 0x06, 0xB1, 0x77, 0xC2, 0x19, 0x01, 0x00, 0x00, 0xC1, 0x07, 0xB3, 0x77, 0xC2, 0x54, 0x01, 0x00, 0x00, 0xC1, 0x08, 0xB1, 0x77, 0xC2, 0x4F, 0x01, 0x00, 0x00, 0xC1, 0x09, 0xB1, 0x77, 0xC2, 0x4E, 0x01, 0x00, 0x00, 0xC1, 0x0A, 0xB3, 0x77, 0xC2, 0x55, 0x01, 0x00, 0x00, 0xC1, 0x0B, 0xB3, 0x77, 0xC2, 0x56, 0x01, 0x00, 0x00, 0xC1, 0x0C, 0xB4, 0x77, 0xC2, 0x8E, 0x00, 0x00, 0x00, 0xC1, 0x0D, 0xB2, 0x77, 0xC2, 0x49, 0x00, 0x00, 0x00, 0xC1, 0x0E, 0xB3, 0x77, 0xC2, 0x0E, 0x01, 0x00, 0x00, 0xC1, 0x0F, 0xB1, 0x77, 0xC2, 0x4B, 0x01, 0x00, 0x00, 0xC1, 0x10, 0xB3, 0x77, 0xC2, 0x06, 0x01, 0x00, 0x00, 0xC1, 0x11, 0xB3, 0x77, 0xC2, 0x54, 0x01, 0x00, 0x00, 0xC1, 0x12, 0xB2, 0x77, 0xC2, 0x1A, 0x00, 0x00, 0x00, 0xC1, 0x13, 0xB1, 0x77, 0xC2, 0x42, 0x01, 0x00, 0x00, 0xC1, 0x14, 0xB3, 0x77, 0xC2, 0x53, 0x01, 0x00, 0x00, 0xC1, 0x15, 0xB1, 0x77, 0xC2, 0x1F, 0x01, 0x00, 0x00, 0xC1, 0x16, 0xB3, 0x77, 0xC2, 0x52, 0x01, 0x00, 0x00, 0xC1, 0x17, 0xB4, 0x77, 0xC2, 0xDB, 0x00, 0x00, 0x00, 0xC1, 0x18, 0xB1, 0x77, 0xC2, 0x19, 0x01, 0x00, 0x00, 0xC1, 0x19, 0xB4, 0x77, 0xC2, 0xD9, 0x00, 0x00, 0x00, 0xC1, 0x1A, 0xB1, 0x77, 0xC2, 0x19, 0x01, 0x00, 0x00, 0xC1, 0x1B, 0xB3, 0x77, 0xC2, 0x55, 0x01, 0x00, 0x00, 0xC1, 0x1C, 0xB2, 0x77, 0xC2, 0x19, 0x00, 0x00, 0x00, 0xC1, 0x1D, 0xB3, 0x77, 0xC2, 0x00, 0x01, 0x00, 0x00, 0xC1, 0x1E, 0xB1, 0x77, 0xC2, 0x4B, 0x01, 0x00, 0x00, 0xC1, 0x1F, 0xB2, 0x77, 0xC2, 0x1E, 0x00, 0x00, 0x00, 0xC1, 0x20, 0x80, 0x02, 0x18, 0x00, 0x00, 0x00, 0x23, 0x10, 0xC1, 0x21, 0x80, 0x02, 0x10, 0x00, 0x00, 0x00, 0x23, 0xF7, 0xC1, 0x22, 0x80, 0x02, 0x08, 0x00, 0x00, 0x00, 0x23, 0xF7, 0xC1, 0x23, 0xF7, 0xFE, 0x80, 0x02, 0x05, 0x00, 0x00, 0x00, 0x22, 0x77, 0x10, 0x80, 0x02, 0x07, 0x00, 0x00, 0x00, 0x23, 0x80, 0x02, 0x23, 0x77, 0xF1, 0x98, 0x31, 0x77, 0x10, 0x80, 0x02, 0x18, 0x00, 0x00, 0x00, 0x23, 0x80, 0x02, 0x20, 0xB9, 0xE4, 0x35, 0x31, 0x77, 0x10, 0x80, 0x02, 0x12, 0x00, 0x00, 0x00, 0x22, 0x77, 0xA0, 0xC1, 0x24, 0x80, 0x02, 0x18, 0x00, 0x00, 0x00, 0x23, 0x10, 0xC1, 0x25, 0x80, 0x02, 0x10, 0x00, 0x00, 0x00, 0x23, 0xF7, 0xC1, 0x26, 0x80, 0x02, 0x08, 0x00, 0x00, 0x00, 0x23, 0xF7, 0xC1, 0x27, 0xF7, 0xFE, 0x32, 0x20, 0x43, 0x33, 0x77, 0x80, 0x02, 0x11, 0x00, 0x00, 0x00, 0x22, 0x35, 0x37, 0x38, 0x77, 0x80, 0x02, 0x0D, 0x00, 0x00, 0x00, 0x23, 0x77, 0x38, 0x39, 0x10, 0x32, 0x20, 0x43, 0x33, 0x77, 0x80, 0x02, 0x11, 0x00, 0x00, 0x00, 0x22, 0x35, 0x37, 0x38, 0x77, 0x80, 0x02, 0x0D, 0x00, 0x00, 0x00, 0x23, 0x77, 0x38, 0x39, 0xC7, 0xC1, 0x28, 0x80, 0x02, 0x18, 0x00, 0x00, 0x00, 0x23, 0x10, 0xC1, 0x29, 0x80, 0x02, 0x10, 0x00, 0x00, 0x00, 0x23, 0xF7, 0xC1, 0x2A, 0x80, 0x02, 0x08, 0x00, 0x00, 0x00, 0x23, 0xF7, 0xC1, 0x2B, 0xF7, 0xFE, 0x32, 0x20, 0x43, 0x33, 0x77, 0x80, 0x02, 0x11, 0x00, 0x00, 0x00, 0x22, 0x35, 0x37, 0x38, 0x77, 0x80, 0x02, 0x0D, 0x00, 0x00, 0x00, 0x23, 0x77, 0x38, 0x39, 0x10, 0x32, 0x20, 0x43, 0x33, 0x77, 0x80, 0x02, 0x11, 0x00, 0x00, 0x00, 0x22, 0x35, 0x37, 0x38, 0x77, 0x80, 0x02, 0x0D, 0x00, 0x00, 0x00, 0x23, 0x77, 0x38, 0x39, 0xC8, 0x99};
+        unsigned int a1[10] = {0};
+        a1[8] = (unsigned int)op;
+        sub_80487A8(a1);
+        puts(flag);
+        //printf("%x\n", count);
+    
+    }
+    
+
+运行得到前面32字节明文： **16584abc45baff901c59dde3b1bb6701**
+
+后面12字节加密逻辑。
+
+前4字节：
+
+    
+    
+    a1[1] = 2a
+    80
+    23
+    a1[1]_2a <= 18
+    a1[9]_2f = 2a000000
+    a1[1] = 2a
+    23
+    a1[1]_2a <= 10
+    a1[9]_2a000000 += 2a0000
+    a1[1] = 2a
+    23
+    a1[1]_2a <= 8
+    a1[9]_2a2a0000 += 2a00
+    a1[1] = 2a
+    a1[9]_2a2a2a00 += 2a
+    a1[1]_2a = 2a2a2a2a
+    22
+    a1[1]_2a2a2a2a >>= 5
+    a1[1]_1515151 ^= 2a2a2a2a
+    a1[9]_2a2a2a2a = 2b7b7b7b
+    23
+    a1[1]_2b7b7b7b <= 7
+    31
+    a1[1]_bdbdbd80 &= 98f17723
+    a1[1]_98b13500 ^= 2b7b7b7b
+    a1[9]_2b7b7b7b = b3ca4e7b
+    23
+    a1[1]_b3ca4e7b <= 18
+    31
+    a1[1]_7b000000 &= 35e4b920
+    a1[1]_31000000 ^= b3ca4e7b
+    a1[9]_b3ca4e7b = 82ca4e7b
+    22
+    a1[1]_82ca4e7b >>= 12
+    a1[1]_20b2 ^= 82ca4e7b
+    a1[1] != 1877735783 82ca6ec9
+    
+
+后面4字节加密逻辑：
+
+    
+    
+    a1[1] = 2a
+    23
+    a1[1]_2a <= 18
+    a1[9]_82ca4e7b = 2a000000
+    a1[1] = 2a
+    23
+    a1[1]_2a <= 10
+    a1[9]_2a000000 += 2a0000
+    a1[1] = 2a
+    23
+    a1[1]_2a <= 8
+    a1[9]_2a2a0000 += 2a00
+    a1[1] = 2a
+    a1[9]_2a2a2a00 += 2a
+    a1[1]_2a = 2a2a2a2a
+    a1[3] = 20
+    2a2a2a2a *= 20
+    a1[4]_0 = 45454540
+    a1[1]_45454540 ^= 2a2a2a2a
+    22
+    a1[1]_6f6f6f6a >>= 11
+    a1[5] = 37b7
+    a1[1] = 37b7
+    a1[1]_37b7 ^= 45454540
+    a1[1]_454572f7 ^= 2a2a2a2a
+    23
+    a1[1]_6f6f58dd <= d
+    a1[1]_eb1ba000 ^= 2a2a2a2a
+    a1[1]_c1318a2a ^= 45454540
+    a1[1]_8474cf6a ^= 37b7
+    a1[9]_2a2a2a2a = 8474f8dd
+    a1[3] = 20
+    8474f8dd *= 20
+    a1[4]_45454540 = 8e9f1ba0
+    a1[1]_8e9f1ba0 ^= 8474f8dd
+    22
+    a1[1]_aebe37d >>= 11
+    a1[5] = 575
+    a1[1] = 575
+    a1[1]_575 ^= 8e9f1ba0
+    a1[1]_8e9f1ed5 ^= 8474f8dd
+    23
+    a1[1]_aebe608 <= d
+    a1[1]_7cc10000 ^= 8474f8dd
+    a1[1]_f8b5f8dd ^= 8e9f1ba0
+    a1[1]_762ae37d ^= 575
+    cf1304dc != a1[1] 762ae608
+    
+
+最后4字节加密逻辑与上一组加密逻辑相同（从相同测试输入得到相同的加密结果推出）
+
+按照打印出的加密逻辑，自己重写一下加密代码，再z3分组求解出对应的明文：
+
+    
+    
+    from z3 import *
+    
+    s = Solver()904182048
+    
+    '''
+    #第一组加密
+    tmp = BitVec('tmp', 32)
+    tmp = (tmp >> 5)^tmp
+    tmp = ((tmp << 7)&0x98f17723)^tmp
+    tmp = ((tmp << 0x18)&0x35e4b920)^tmp
+    tmp = (tmp >> 0x12)^tmp
+    s.add(tmp == 1877735783)
+    s.add((tmp&0xff) > 32, (tmp&0xff) < 127)
+    '''
+    
+    #第二组加密
+    flag = BitVec('flag', 64)
+    a = (flag*0x20)&0xffffffff
+    tmp = (a^flag)&0xffffffff
+    b = (tmp >> 0x11)&0xffffffff
+    tmp = ((b^a)^flag)&0xffffffff
+    tmp = ((tmp << 0xd)^flag^a^b)&0xffffffff
+    
+    t = tmp
+    a = (t*0x20)&0xffffffff
+    tmp = (t^a)&0xffffffff
+    b = (tmp >> 0x11)&0xffffffff
+    tmp = (a^b^t)&0xffffffff
+    tmp = ((tmp << 0xd)^t^a^b)&0xffffffff
+    #print(hex(tmp))
+    
+    s.add(tmp == 0x283b8e84)
+    #s.add((tmp&0xff) > 32, (tmp&0xff) < 127)
+    
+    
+    if s.check() == sat:
+        print(s.model())
+    else:
+        print('Not Found!')
+    
+
+得到： **a254b06cdc23**
+
+所以最后的flag就是： **16584abc45baff901c59dde3b1bb6701a254b06cdc23**
+
+## DeltX
+
+先看到输入格式的要求，格式为SangFor{{}，然后输入范围[0, 9]与[A-F]
+
+但最后交flag一直不对才注意到输入的第四组限定了输入的英文字符要为小写：
+
+![](https://p1.ssl.qhimg.com/t0175c4c7a6baa4a56f.png)
+
+然后加密的话就是乘法和加法（看结构，调试看输入与输出的关系
+
+最后z3约束求解：
+
+    
+    
+    from z3 import *
+    
+    data = [0x249E15C5, 0xFFFF59BC, 0x34C7EAE2, 0x216B, 0x637973BA, 0x819D, 0xE5FD104, 0x9393]
+    flag = ''
+    
+    for i in range(4):
+        s = Solver()
+        a, b = BitVecs("x1 x2", 32)
+        s.add(a*b == data[2*i+0])
+        s.add(a-b == data[2*i+1])
+        s.add(a > 0, a < 0xffff)
+        s.add(b > 0, b < 0xffff)
+        if s.check() == sat:
+            m = s.model()
+            flag += hex(m[a].as_long())[2:] + hex(m[b].as_long())[2:]
+        else:
+            print('Not Found!')
+    flag = flag[:12].upper()+flag[12:16].lower()+flag[16:].upper()
+    print('SangFor{'+flag+'}')
+    
+    #SangFor{2C7BD2BF862564baED0B6B6EA94F15BC}
+    
+
+## Ez_android
+
+jeb打开apk，逻辑就是输入用户名和密码，然后用密码到： **139.224.191.201 20080** 去取密钥作为base64编码的码表。
+
+用户名和密码jeb中直接就可以看到，但这里的密码的md5值是经过变换过的。
+
+![](https://p4.ssl.qhimg.com/t0145715e286164781d.png)
+
+简答处理一下得到密码的正确md5值：
+
+    
+    
+    >>> s = "c232666f1410b3f5010dc51cec341f58"
+    >>> s = bytes.fromhex(s)
+    >>> s
+    b'\xc22fo\x14\x10\xb3\xf5\x01\r\xc5\x1c\xec4\x1fX'
+    >>> s = [s[i]+1 for i in range(len(s))]
+    >>> s
+    [195, 51, 103, 112, 21, 17, 180, 246, 2, 14, 198, 29, 237, 53, 32, 89]
+    >>> bytes(s).hex()
+    'c33367701511b4f6020ec61ded352059'
+    >>>
+    
+
+查一下这个md5，得到：654321
+
+nc连接给的ip和端口后输入密码得到密钥。
+
+最后解密：
+
+    
+    
+    import base64
+    
+    s = "TGtUnkaJD0frq61uCQYw3-FxMiRvNOB/EWjgVcpKSzbs8yHZ257X9LldIeh4APom"
+    table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    enc = "3lkHi9iZNK87qw0p6U391t92qlC5rwn5iFqyMFDl1t92qUnL6FQjqln76l-P"
+    ans = enc.translate(str.maketrans(s, table))
+    
+    print(bytes(list(base64.b64decode(ans))))
+    #SangFor{212f4548-03d1-11ec-ab68-00155db3a27e}
+    
+
+## Safe Box
+
+程序用到父子进程反调试，Debug Blocker技术，其它来说流程都很清晰。
+
+利用int3（0x80000003）断点把异常传递给父进程，然后父进程根据断点位置的不同进行不同的操作。
+
+其中断点位置下个机器码是0x8b的地方将ecx改写了。
+
+![](https://p4.ssl.qhimg.com/t01030a2ad3c2ad9997.png)
+
+看到触发这个异常地方的代码：其实就是把随机数种子改成了0x534EB68
+
+![](https://p1.ssl.qhimg.com/t012ae77f7556dfdad4.png)
+
+另外一个触发断点异常位置的下一个机器码是0x48的地方是进行对程序中的一个函数进行了解密。
+
+![](https://p1.ssl.qhimg.com/t01aabdfbfdbf7d1fa9.png)
+
+再来看到程序的主逻辑：
+
+第一输入：
+
+![](https://p1.ssl.qhimg.com/t015e3b3a7a11d1bf92.png)
+
+这里z3约束求解即可。
+
+    
+    
+    from z3 import *
+    
+    s = Solver()
+    
+    Seed = BitVec('passwd', 64)
+    
+    v2 = (Seed % 0x2540BE3FF)&0xff
+    v3 = ((Seed % 0x2540BE3FF) >> 8) & 0xF
+    v4 = ((Seed % 0x2540BE3FF) >> 20) & 0xFFF
+    v5 = v2 + 1;
+    v6 = ((Seed % 0x2540BE3FF) >> 12)&0xff
+    v7 = v3 + 1;
+    v8 = v4 + ~v2
+    v9 = v4
+    v10 = 21 * v6
+    
+    for i in range(16):
+        v3 += v3 ^ v8
+        v2 += v4 | v2 & v7
+        v9 += (v10 + v9) % v5
+        v6 += v6 / v7
+    s.add(v3 == 0x38006F1)
+    s.add(v2 == 0x7291)
+    s.add(v9 == 0x8B3)
+    s.add(v6 == 0x80)
+    s.add(Seed > 0, Seed <= 0xffffffff)
+    
+    if s.check() == sat:
+        print(s.model())
+    else:
+        print('Not Found!')
+    #1915969329
+    
+
+第二个输入：
+
+![](https://p5.ssl.qhimg.com/t016b8bb140908c3127.png)
+
+上面对输入加密的函数sub_140001880就是父进程收到子进程断点异常后进行解密后的。
+
+这里程序运行后，dump出内存就能看到这个完整的解密函数了。魔改的xtea加密。
+
+![](https://p2.ssl.qhimg.com/t01105fa0880061f9ba.png)
+
+解密：
+
+    
+    
+    #include <stdio.h> 
+    
+    unsigned int get_delat()
+    {
+        int i = 0;
+        unsigned int ans = 0, delat = 0x12345678;
+    
+        for(i = 0; i < 32; i++)
+            ans += delat;
+    
+        return ans;
+    } 
+    
+    
+    void decipher(unsigned int num_rounds, unsigned int v[2], unsigned int const key[4]) {  
+        unsigned int i;  
+        unsigned int v0=v[0], v1=v[1], delta=0x12345678, sum=get_delat();  
+        for (i=0; i < num_rounds; i++) {  
+            v1 -= (((v0 >> 6) ^ (v0 << 5)) + v0) ^ (sum + key[(sum>>11) & 3]);  
+            sum -= delta;  
+            v0 -= (((v1 >> 6) ^ (v1 << 5)) + v1) ^ (sum + key[sum & 3]);  
+        }  
+        v[0]=v0; v[1]=v1;  
+    }  
+    
+    int main()  
+    {  
+    /*
+        unsigned int v[2]={0x36C128C5, 0x0C4799A63};  
+        unsigned int const k[4]={0x47, 0x57, 0x48, 0x54};  
+        unsigned int r=32;
+        decipher(r, v, k);  
+        printf("解密后的数据：%x %x\n",v[0],v[1]);  */
+        unsigned int v[] = {0x36C128C5, 0xC4799A63, 0xE8013E6C, 0xA9F49003, 0x607EF54A, 0x542C2DDF, 0x558BD01C, 0x65512CA2, 0xBE1E3D05, 0x3C467DAD};
+        unsigned int const k[4]={0x47, 0x57, 0x48, 0x54};  
+        unsigned int r=32;
+        for(int i = 0; i < 5; i++)
+        {
+            decipher(r, v+2*i, k);
+        }
+        for(int i = 0; i < 10; i++)
+        {
+            printf("%c", v[i]);
+        }
+    
+        return 0;  
+    } 
+    //S_s0_fuNny
+    
+
+第三个输入：利用修改后的随机数种子生成32个随机数然后用前16个和输入进行异或。
+
+![](https://p5.ssl.qhimg.com/t018a65ad13073cd5c9.png)
+
+生成随机数：
+
+    
+    
+    #include <stdio.h>
+    #include <stdlib.h> 
+    
+    unsigned int seed = 0x534EB68;
+    unsigned int a[16], b[16];
+    
+    int main(void)
+    {
+        srand(seed);    
+        for(int i = 0; i < 16; i++)
+        {
+            a[i] = rand();
+            printf("%#x, ", a[i]);
+        }
+    
+        putchar(10);
+        srand(seed + 1);
+        for(int i = 0; i < 16; i++)
+        {
+            b[i] = rand();
+            printf("%#x, ", b[i]);
+        }
+    }
+    
+
+最后的比较函数中还进行了一些运算和打乱顺序，但我们可以不关心。因为分析生成的随机数看到都是16位的而输入是8位，他们在异或后只会改变低字节位置的值。
+
+所以说我们只用把生成的前16字节随机数和密文中高字节和前16字节随机数高字节相同的数据找出来异或就是输入了。（虽然有相同的，但很少，简单多试就是
+
+![](https://p1.ssl.qhimg.com/t01b0d1e30f08dba8a3.png)
+
+异或一下得到明文：
+
+    
+    
+    >>> a = [0x4147, 0x2f06, 0x5017, 0x7d6c, 0x1583, 0x37ea, 0x6fdc, 0xd03, 0x3f43, 0x4156, 0xed7, 0x1094, 0x5c4f, 0x173f, 0x193a, 0x1357]
+    >>>
+    >>> b = [0x4118, 0x2F62, 0x00005027, 0x00007D33, 0x000015DA, 0x00003785, 0x00006F89, 0x00000D5C, 0x00003F72, 0x0000413F, 0x00000EBC, 0x000010A7, 0x00005C10, 0x0000174B, 0x0000190A, 0x00001338]
+    >>> ans = [a[i]^b[i] for i in range(16)]
+    >>> ans
+    [95, 100, 48, 95, 89, 111, 85, 95, 49, 105, 107, 51, 95, 116, 48, 111]
+    >>> bytes(ans)
+    b'_d0_YoU_1ik3_t0o'
+    
+
+最后所有拼接起来就是flag： **GWHT{r3_1S_s0_fuNny_d0_YoU_1ik3_t0o}**
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Bxb0** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/253059](/post/id/253059)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+  * [Reverse](/tag/Reverse)
+
+ **+1** __8赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t010857340ce46bb672.jpg) Bxb0
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

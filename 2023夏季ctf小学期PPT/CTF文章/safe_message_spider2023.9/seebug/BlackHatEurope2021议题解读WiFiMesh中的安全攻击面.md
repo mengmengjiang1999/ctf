@@ -1,0 +1,341 @@
+**作者：曲乐炜 &柯懂湘@百度AIoT安全团队  
+原文链接：<https://mp.weixin.qq.com/s/GUab_Cz-PlEUJXNuyiVTLQ>**
+
+近年来，随着万物互联技术的发展，Mesh技术逐渐兴起，Mesh技术是一种组网技术，可将多个接入点组成同一个网络来提供服务，相比于传统的WiFi组网技术，Mesh组网更稳定，更快，扩展性更强。而WiFi
+Mesh也凭借着自组织，自管理，自治愈的特性，在未来万物互联的场景中占据重要的地位。
+
+针对WiFi Mesh的新兴场景，百度安全的研究员曲乐炜和柯懂湘在北京时间11月11日晚上以线上的形式分享了议题《BadMesher: New Attack
+Surfaces of Wi-Fi Mesh Network》，该议题主要讨论了WiFi
+Mesh中的安全攻击面，设计并实现了一套自动化漏洞挖掘工具MeshFuzzer，并展示了其在实际漏洞挖掘过程中的效果。
+
+![](https://images.seebug.org/content/images/2021/11/e11999aa-9715-4fa0-a90f-eee1dcf4404f.jpg-w331s)
+
+# 议题解读
+
+## 基本概念
+
+### EasyMesh概念
+
+EasyMesh是WiFi联盟推出的一项标准化认证方案，其经历了三个发展阶段。
+
+![](https://images.seebug.org/content/images/2021/11/bccddc0f-a105-4eef-847b-725e95e1a48b.jpg-w331s)
+图 1 EasyMesh发展流程
+
+2018年，Mesh技术为厂商各自实现，缺乏统一的标准，因此不同厂商的设备之间无法互联互通。
+
+2019年，WiFi联盟推出EasyMesh V1版本，引入了Onboarding流程和Auto-Config流程，并使用1905控制协议来实现Mesh中大部分的控制功能。
+
+2020年，WiFi联盟推出EasyMesh V2和V3版本，V3版本丰富了更多的控制特性，尤其增加了安全特性，为控制消息添加了授权和完整性校验。
+
+目前通过EasyMesh认证的厂商已经有数十家，其中包括Mediatek、Huawei、ZTE等。
+
+### EasyMesh架构
+
+EasyMesh的架构如图2所示，其中包含两个关键链路，两个关键角色。
+
+![](https://images.seebug.org/content/images/2021/11/c72f6e3a-1d20-4c71-8d35-9a666b095f08.jpg-w331s)
+图 2 EasyMesh架构图
+
+#### 关键链路
+
+  1. Fronthaul链路：指的是暴露的WiFi链路，也就是我们手机能够正常连接的SSID。
+
+  2. Backhual链路：指的是隐藏的WiFi链路，即为是无法搜索到的SSID，是专门为Mesh提供的链路。
+
+#### 关键角色
+
+  1. Controller角色：Mesh网络的管理者，可向Agent发送控制指令，来完成Mesh网络的管理，达到自组织，自管理，自治愈的效果。
+
+  2. Agent角色：Mesh网络的执行者，通过接受Controller的控制指令来执行任务，并向Controller反馈执行结果。
+
+这里的角色并不针对具体的设备，是逻辑实体，一个设备既可以作为Controller也可以作为Agent，或者同时作为Contrller和Agent。
+
+### Mesh网络构建过程
+
+整个Mesh网络构建过程分为如下2步：
+
+  1. Onboarding
+
+  2. Discovery和Configuration
+
+#### Onboarding过程
+
+Onboarding过程是帮助一个未加入Mesh网络的设备加入Mesh网络，我们将未加入网络的设备称为Enrollee设备，整个过程是通过1905 Push
+Button Configueration协议（后面简称1905 PBC）来实现的，1905 PBC包含了如下3个特性：
+
+  1. 特性1：入网双方需要进行push button
+
+  2. 特性2：基于WiFi Protected Setup实现
+
+  3. 特性3：基于TLV
+
+从图 4中可看出，1905 PBC在Multi-AP
+Extension部分进行了专门的标记，也就是标记获取的是Backhaul的SSID。因此Entollee设备可通过1905
+PBC来获得Mesh链路的入网凭证。
+
+![](https://images.seebug.org/content/images/2021/11/a8be698b-9ca0-488f-85fa-43d614f97f06.jpg-w331s)
+图 3 Multi-AP Extension
+
+整个Onboarding的流程如图 4所示。
+
+![](https://images.seebug.org/content/images/2021/11/8e04961f-13b2-4956-b022-262951c4ce7f.jpg-w331s)
+图 4 Onboarding流程
+
+首先将两个设备进行Push Button，让两个设备进入配网状态。
+
+其次Enrollee设备通过1905 PBC来与Fronthaul SSID交互，经过M1-M8的过程后，最终Existing
+Agent将Backhual的SSID和password返回给Enrollee设备，之后Enrollee设备便能够连接Backhaul
+SSID，加入Mesh网络。
+
+至此Onboarding流程完成了。
+
+#### Discovery和Configuration过程
+
+整体流程如图 5所示。
+
+![](https://images.seebug.org/content/images/2021/11/0c27bc64-686f-4911-b0fe-b91f14882d43.jpg-w331s)
+图 5 Discovery和Configuration流程
+
+在完成Onborading流程后，Enrollee设备需要找到Mesh网络中的Controller来获得当前Mesh网络的基本配置，这里则使用IEEE1905.1a控制协议，Enrollee设备通过“AP
+Autoconfig Search”广播包来探测Controller是否存在，若网络中存在Controller, 则Controller会回复“AP
+Autoconfig Response”， Enrollee设备成功找到了Controller，至此，Discovery过程完成。
+
+Configuration过程则是将当前Mesh网络的配置信息同步给Enrollee设备，如Mesh网络的用户名密码，通信Channel的选择，网络稳定性的维持参数等，是通过“AP
+Autoconfig Wifi Sample
+Configuration”来实现的，Enrollee设备获取了Mesh网络的基本配置，可真正的Agent的身份加入Mesh大家庭里，至此整个Mesh
+网络构建完成。
+
+### Mesh网络控制过程
+
+Mesh网络的维护与管理是一项重要的工程，通过IEEE1905.1a来实现，IEEE1905.1a本质上是介于物理层和网络层的协议，是定义了家庭网络中的有线或无线的控制技术。在Mesh场景中，IEEE1905.1a是载体，提供了多种控制协议如设备发现、设备配置、设备管理等，其整个实现都是基于Type-Length-Value，部分EasyMesh控制协议如表 1所示。
+
+**_*Message type*_** | **_*Protocol*_** | **_*Value*_**  
+---|---|---  
+1905 Topology Notification message | STA capability | 0x0001  
+Multi-AP Policy Config Request message | Multi-AP configuration | 0x8003  
+Unassociated STA Link Metrics Response message | Link metric collection |
+0x8010  
+Backhaul Steering Request message | Backhaul optimizatio | 0x8019  
+Client Disassociation Stats message | Data Element | 0x8022  
+...... | …… | ……  
+  
+表 1 部分EasyMesh控制协议
+
+这里选择“Multi-AP Policy Config Request Message”来作为例子，可以看到图 6对应的命令字为
+0x8003，具体的Streeing Policy则满足基本的TLV，可以看到图
+6中Type为0x89，len为21，而value则为对应的payload。
+
+![](https://images.seebug.org/content/images/2021/11/c9067ae5-87dd-4736-87a8-87e5a0431bb0.jpg-w331s)
+图 6 Multi-AP Policy Config Message
+
+## 攻击面分析
+
+分析完了整个Mesh网络的组网和控制过程，我们来看看实际的攻击面，攻击的载体是两个关键协议。
+
+  1. 1905 Push Button Configuration Protocol
+
+  2. IEEE 1905.1a Control Protocol
+
+对应的是两个关键的攻击面。
+
+  1. 攻击网络构建过程
+
+  2. 攻击网络控制过程
+
+### 攻击Mesh网络构建过程
+
+#### 攻击Existing Agent
+
+攻击者：“Bad“ Enrollee Agent
+
+受害者：Exixting Agent
+
+攻击载体：1905 Push Button Configuration Protocol（M1、M3、M5、M7）
+
+整个攻击流程如图 7所示。
+
+![](https://images.seebug.org/content/images/2021/11/f61c9ca2-04e5-455d-8cb5-a817a64a2b70.jpg-w331s)
+图 7 攻击Existing Agent
+
+攻击者构造恶意的Enrollee设备来攻击Existing Agent，具体则是基于1905
+PBC发送畸形的M1、M3、M5、M7包来进行攻击，可触发Existing Agent在M1、M3、M5、M7过程中的TLV的解析漏洞。
+
+#### 攻击Enrollee Agent
+
+攻击者：“Bad” Existing Agent
+
+受害者：Enrollee Agent
+
+攻击载体：1905 Push Button Configuration Protocol（M2、M4、M6、M8）
+
+整个攻击流程如图 8所示。
+
+![](https://images.seebug.org/content/images/2021/11/fbb2d812-25a5-4944-8336-096b2f950bb7.jpg-w331s)
+图 8 攻击Enrollee Agent
+
+攻击者构造恶意的Existing Agent设备来攻击Enrollee设备，具体则是基于1905
+PBC回复畸形的M2、M4、M6、M8包来进行攻击，可触发Enrollee设备在M2、M4、M6、M8过程中的TLV解析漏洞。
+
+### 攻击Mesh网络控制过程
+
+分析完Mesh构建的攻击面，再看Mesh网络控制的攻击面。
+
+攻击者：“Bad” Existing Agent
+
+受害者：Controller和其他Existing Agent
+
+攻击载体：IEEE 1905.1a Control Protocol
+
+攻击者可发送畸形的1905包来触发Controller和Existing Agent中1905 TLV的解析漏洞，图
+9是我们针对“AP_AUTOCONFIGURATION_WSC_MESSAGE”设计的恶意包，可以看到，我们在SSID的len部分填入了0xFF，而实际的SSID最长为64，并在SSID的payload部分中全部填入0xFF，从图
+10实际获取的数据包中可以看到，实际的SSID部分充满了我们填充的0xFF的Payload，这是不符合SSID解析的预期。
+
+![](https://images.seebug.org/content/images/2021/11/5d76ca13-be14-49d5-87ee-32b39e677240.jpg-w331s)
+图 9 模拟发送畸形的IEEE 1905.1a控制包
+
+![](https://images.seebug.org/content/images/2021/11/0ee9b292-c360-49c3-818a-430bd9a90136.jpg-w331s)
+图 10 实际的IEEE 1905.1a控制包
+
+## 自动化工具MeshFuzzer
+
+### MeshFuzzer架构
+
+我们的Meshfuzzer包含两个Fuzzing子系统，分别是针对1905 PBC的Fuzzing以及针对1905.1a的Fuzzing，整体架构如图
+11所示。
+
+![](https://images.seebug.org/content/images/2021/11/e33b69bc-e7a3-4cea-b0eb-1a61d2a08ec6.jpg-w331s)
+图 11 MeshFuzzer架构
+
+上半部分是我们设计的针对1905 PBC的Fuzzing子系统，我们采用实际设备间的WPS交互数据作为输入，经过我们的TLV
+变异系统，最终使用我们的802.1的发包器来进行发包，与此同时对设备进行串口连接，实时监控crash的状态。
+
+下半部分是我们设计的针对IEEE
+1905.1a的Fuzzing子系统，我们实现了大部分EasyMesh中的控制协议字段，同样经过我们的TLV变异系统，最终使用我们的1905发包器来进行发包，通过独有的1905数据包来监控crash的状态。
+
+### 变异策略
+
+由于两个目标协议均是基于TLV实现的，我们可以用统一的变异策略来高效的辅助Fuzzing的进行。
+
+变异策略1：变异长度字段，通过过长或者过短的长度来触发TLV解析的一些常规内存破坏漏洞，比如长度过短会导致越界读，或者整数溢出，过长会导致越界写等问题，图
+12是我们实际测试中将长度字段变异为过短的效果。
+
+变异策略2：对现有的TLV块进行随机的增删改，这可能会导致的内存破坏相关的逻辑漏洞，如Double-Free、UAF等，图
+13是我们实际测试中随机增加TLV块的效果。
+
+![](https://images.seebug.org/content/images/2021/11/9cb66cfb-8b4d-4764-835d-9f32b8b209c8.jpg-w331s)
+图 12 过短的长度字段
+
+![](https://images.seebug.org/content/images/2021/11/b26759d2-9414-446a-bafd-280bd9473caf.jpg-w331s)
+图 13 随机对TLV块进行增加
+
+### Fuzzing网络构建过程
+
+#### 软硬件选择
+
+硬件部分：选择Ubuntu或者树莓派4，配合无线的USB网卡来进行发包操作。
+
+![](https://images.seebug.org/content/images/2021/11/718a9ce1-cfd0-4827-afc4-a8f9208bb8d7.jpg-w331s)
+![](https://images.seebug.org/content/images/2021/11/8ded332c-e67a-4c98-adf0-37ec57fb92e4.jpg-w331s)
+软件部分：选择了对wpa_supplicant进行改造来定制化我们的Fuzzer，具体原因则是wpa_supplicant本身支持1905
+PBC协议，因此我们可以在其不同的阶段中加入我们的变异策略，可高效稳定的实现Mesh网络构建阶段的Fuzzing工作。
+
+![](https://images.seebug.org/content/images/2021/11/34330c97-3ecf-4277-9897-6dc2fd77a392.jpg-w331s)
+图 14 wpa_supplicant实现代码
+
+#### 实际Fuzzing Existing Agent
+
+我们使用以上的定制化的Fuzzing工具，便可模拟整个1905 PBC过程，并对M1、M3、M5、M7阶段注入Fuzzing Payload，图
+15是我们在Fuzzing过程中，捕获到的的M7阶段的TLV解析导致的越界写入漏洞的崩溃日志，图 16是我们捕获的实际的数据包。
+
+![](https://images.seebug.org/content/images/2021/11/1cfeb780-5e75-403f-acd1-eef13a522699.jpg-w331s)
+图 15 M7阶段越界写问题
+
+![](https://images.seebug.org/content/images/2021/11/06f91c4c-cfe8-4503-a18f-5b522a3c9721.jpg-w331s)
+图 16 M7阶段越界写实际数据包
+
+我们监控崩溃的方式则是通过对目标设备进行Ping探测以及串口实时捕获崩溃日志。
+
+#### 实际Fuzzing “Existing” Agent
+
+Network构建过程另一个受害角色，则是未配网的“Enrollee”，我们模拟一个恶意的“Existing” Agent来fuzzing
+“Enrollee”。这里为了保证让Enrollee持续保持加入Mesh网络的状态，我们编写了一个脚本，如图 17所示。
+
+![](https://images.seebug.org/content/images/2021/11/8783eaa0-3b7f-470a-9010-6ea47d68491d.jpg-w331s)
+图 17 Enrollee保持加入Mesh网络脚本
+
+我们在M2、M4、M6、M8阶段注入了Fuzzing Payload，图 18是我们Fuzzing过程中，触发的M6阶段的TLV解析导致的越界写入漏洞。图
+19是我们捕获的实际的数据包。
+
+![](https://images.seebug.org/content/images/2021/11/7e597078-9d63-491a-9b2b-1bd599e0ebc7.jpg-w331s)
+图 18 M8阶段越界写问题
+
+![](https://images.seebug.org/content/images/2021/11/d57a10a0-06fb-4ea3-8c56-87d7dea2f0b4.jpg-w331s)
+图 19 M8阶段越界写实际数据包
+
+这里我们监控崩溃的方式仍然是通过对目标设备进行Ping探测以及串口实时捕获崩溃日志。
+
+### Fuzzing网络控制过程
+
+#### 软硬件选择
+
+硬件部分：选择了Macbook Pro，因为Macbook Pro可以较好的支持1905数据包的发送。
+
+软件部分：选择了现有的开源库pyieee1905，因此我们可以基于pyieee1905来开发自定义的协议字段，这将大大减少我们Fuzzer的开发工作量，我们只需要实现EasyMesh里的控制协议便可对网络控制部分进行Fuzzing测试。
+
+![](https://images.seebug.org/content/images/2021/11/e9e5e273-914d-453e-8599-fc33b035420c.jpg-w331s)
+图 20 pyieee1905
+
+#### 监控模块
+
+由于1905的处理模块大多是单独的进程，我们无法直接通过串口捕获崩溃，也无法通过对设备发送Ping探测包来监控1905进程的运行状态，这里我们选择EasyMesh里提供的1905
+Topology Query
+Message，该数据包是用于设备1905进程间探测互相支持的能力，因此通过设备对该包的回复与否，我们便可容易的知道，设备上的1905进程是否存活，或者是否在正常工作。
+![](https://images.seebug.org/content/images/2021/11/c0771dae-5750-4947-b65e-30ed718c5b8b.jpg-w331s)
+图 21 Topology Query Message
+
+每当我们发出一个Fuzzing Payload，便会发送一次1905 Topology Query，若得到回复，说明1905
+Daemon正常工作，若未得到回复，说明1905 Daemon可能出现了问题，此时我们会记录此次发送的Fuzzing
+Payload到本地保存，并等待进程的重启。
+
+![](https://images.seebug.org/content/images/2021/11/f77bb0d7-0809-49d2-b9d5-b643de88789c.jpg-w331s)
+图 22 1905 崩溃监控与保存
+
+![](https://images.seebug.org/content/images/2021/11/f5b4e03b-964f-476b-b86b-c375ad43a0d9.jpg-w331s)
+图 23 实际崩溃
+
+## 实际效果
+
+我们使用MeshFuzzer在Mediatek
+MT7915的EasyMesh解决方案中发现了多处TLV解析导致的内存破坏漏洞，并发现了1处违背安全设计准则的安全问题，累计获得了19个CVE，问题列表如图
+24所示，目前Mediatek已经修复了所有问题并输出了安全补丁。
+
+![](https://images.seebug.org/content/images/2021/11/a745e0d9-4c6e-41ef-9a51-a5cea00fa350.jpg-w331s)
+图 24 MT7915安全问题
+
+## 安全建议
+
+对于处理TLV解析导致的内存破坏漏洞，我们建议对数据包进行完整解析，然后一一检查类型和长度，最后进行处理，当长度和类型检查失败时对数据包进行丢弃。
+
+一个很好的例子是wpa_supplicant，图 25中显示了wpa_supplicant处理TLV包的过程，遵循解析->分发->验证->处理的过程。
+
+![](https://images.seebug.org/content/images/2021/11/22633ea9-fe36-4f75-918c-9de372a7d422.jpg-w331s)
+图 25 正确的TLV处理例子
+
+针对违背安全设计准则的问题，EasyMesh V3标准中有一节专门描述了1905协议的安全能力。例如，要隔离 Backhaul 和 FrontHaul
+链路，需要增加消息的完整性校验并1905包进行加密，建议厂商在实现EasyMesh时，遵守EasyMesh标准，实现1905协议的安全能力。
+
+## 总结
+
+对整个议题总结如下：
+
+  1. 我们发现了WiFi Mesh中的多个安全攻击面，攻击者可以在Mesh网络构建阶段和网络控制阶段对Mesh网络中的设备发起攻击
+
+  2. 我们开发了一款自动化漏洞挖掘工具MeshFuzzer，可以自动挖掘厂商在实现EasyMesh时引入的安全漏洞
+
+  3. 在实践中，我们在MT7915芯片的EasyMesh解决方案中发现了多处安全问题，获得了19个CVE，并给出相应的修复建议
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1762/>
+

@@ -1,0 +1,119 @@
+## **技术背景**  
+
+在我们先前的攻击技术研判中曾介绍了一种较新的UAC Bypass在野利用手法，本文将再次对其技术细节进行深入分析。该方法最初由Project
+Zero的研究员披露，并在随后被UACME项目的维护者完成武器化并在项目中公开。该UAC Bypass手法目前仍未被微软修复，具有较大的研究与实战价值。
+
+ **01** UAC & UAC Bypass
+
+UAC(User Account Control)用户账户控制，是微软在Windows
+Vista及更高版本的操作系统中采用的一种控制机制，是一种安全功能，防止用户在执行应用程序有对操作系统进行未授权的修改，当存在修改操作系统相关内容的修改时，会弹窗通知用户是否允许该操作，保证操作是有授权的。同时，恶意软件在执行过程中往往会涉及很多高权限的操作，UAC的出现同样起到对恶意软件的操作阻止的作用。UAC的实际效果如下：
+
+![1641523471_61d7a90fb174b8704cdd2.png!small?1641523473084](https://image.3001.net/images/20220107/1641523471_61d7a90fb174b8704cdd2.png!small?1641523473084)
+
+  
+
+UAC Bypass技术（ATT&CK
+T1548.002)是指攻击者绕过UAC机制的弹窗通知，在不提示用户的情况下达到执行高权限操作的攻击技法。该技术帮助攻击者在终端对抗中获取更高的权限，支撑票据获取等后续的后渗透操作。
+
+## 02 利用本地RPC接口的UAC Bypass方式
+
+ **可被利用的RPC服务接口**
+
+AppInfo是一个本地RPC服务，其接口ID为201ef99a-7fa0-444c-9399-19ba84f12a1a。该RPC服务中的RAiLaunchAdminProcess函数用于在权限不一致需要向上提权时进行UAC路由分发，具有以高权限启动进程的功能。当被启动的程序属于系统目录中的白名单进程时可避免弹窗以管理员权限启动。  
+RAiLaunchAdminProcess 的函数定义如下：
+
+    
+    
+    long RAiLaunchAdminProcess(  
+    handle_t hBinding,  
+    [in][unique][string] wchar_t* ExecutablePath,  
+    [in][unique][string] wchar_t* CommandLine,  
+    [in] long StartFlags,  
+    [in] long CreateFlags,  
+    [in][string] wchar_t* CurrentDirectory,  
+    [in][string] wchar_t* WindowStation,  
+    [in] struct APP_STARTUP_INFO* StartupInfo,  
+    [in] unsigned __int3264 hWnd,  
+    [in] long Timeout,  
+    [out] struct APP_PROCESS_INFORMATION* ProcessInformation,  
+    [out] long *ElevationType  
+    );
+
+通过分析手段还原出的接口参数基本与CreateProcessAsUser函数具有对应关系，例如CreateFlags参数对应dwCreationFlags。如果CreateFlags设置为CREATE_UNICODE_ENVIRONMENT
+|
+DEBUG_PROCESS，会启动对新的UAC进程的调试，并获取一个调试对象。StartFlags则是该接口独有的参数，可以控制新进程的权限，设置为1时会尝试提升进程权限，设置为0时则不会。
+
+ **复用调试对象绕过句柄权限限制**
+
+如果获取到高权限的完整控制权限句柄，则可实现恶意代码的注入和执行。使用NtQueryInformationProcess函数可以从RAiLaunchAdminProcess
+中创建的调试对象获取句柄。当我们在提升的UAC进程上启动调试并获取到调试对象的句柄时，便可以请求第一个调试事件，且该事件会返回对进程的完全访问权限的句柄。
+
+访问进程的调试对象句柄的访问权限需要是PROCESS_QUERY_INFORMATION。但由于安全限制，我们所能获得的进程句柄的访问权限是PROCESS_QUERY_LIMITED_INFORMATION，因此仅创建高权限进程是无法获取该进程的完全访问权限的。
+
+那我们可以通过什么手段绕过限制实现调试对象句柄的获取呢？等待调试对象事件是必须发生在创建进程的同一线程上，所以同一线程上创建的具有调试标志的所有进程是共享同一个调试对象。虽然不能获得权限提升进程的完全控制权限句柄，但未提升权限的进程则不受限制，进而获取其调试对象句柄。再与创建的新进程进行调试对象的共享，则可以实现获取到提升进程的具有完全控制权限调试对象句柄。
+
+ **完整利用过程**
+
+利用过程如下图：
+
+![1641523520_61d7a9406b40817ae6d3a.png!small?1641523524379](https://image.3001.net/images/20220107/1641523520_61d7a9406b40817ae6d3a.png!small?1641523524379)
+
+详细利用思路如下：  
+
+1\. 绑定RPC服务接口，将RAiLaunchAdminProcess
+的startFlags设置为0，同时设置CreateFlags为CREATE_UNICODE_ENVIRONMENT |
+DEBUG_PROCESS，此时会创建一个未提权的新进程，并且调试对象会初始化并分配给新进程
+
+    
+    
+    // 调用函数RAiLaunchAdminProcess   
+    AicLaunchAdminProcess(szProcess,   
+    szProcess,  
+    0,    // startflags设置为0  
+    CREATE_UNICODE_ENVIRONMENT | DEBUG_PROCESS, // debug_process创建标志设置 初始化服务器中 RPC 线程的 TEB 中的调试对象字段，并将其分配给新进程。  
+    g_ctx->szSystemRoot,  
+    T_DEFAULT_DESKTOP,  
+    NULL,  
+    INFINITE,  
+    SW_HIDE,  
+    &procInfo
+
+2.使用NtQueryInformationProcess，该函数会检索进程的信息，用该函数获取到该进程的句柄，并启动调试对象的句柄。
+
+3.将该进程终止，分离调试器。目的是为了下一步能够将现有的调试对象分配给下一步创建的新进程。
+
+4.再次使用RAiLaunchAdminProcess
+函数，这次使用时，startFlags设置为1，CreateFlags配置同上，此时会创建一个提权的新进程（由于是白名单程序所以不会弹窗）。由于调试对象在步骤1中已经初始化，所以会将在步骤2中现有的对象分配给新进程。
+
+    
+    
+    AicLaunchAdminProcess((LPWSTR)L"C:\\Windows\\System32\\taskmgr.exe",  
+    NULL,  
+    1,            \\ startFlags设置为1  
+    CREATE_UNICODE_ENVIRONMENT | DEBUG_PROCESS, \\ CreateFlags设置不变  
+    (LPWSTR)L"c:\\windows",(LPWSTR)L"WinSta0\\Default",  
+    NULL,INFINITE,SW_HIDE,&procInfo);
+
+5.检索将返回完整访问权限的进程句柄的初始调试事件。
+
+6.使用该进程句柄做代码注入，注入到提升的进程中，则可完成UAC绕过。在UACME项目中则利用高权限进程的句柄创建新进程，利用父进程欺骗的手段以高权限执行指定的程序。
+
+执行效果，创建高权限进程：
+
+![1641523547_61d7a95b437d397b21e44.png!small?1641523548880](https://image.3001.net/images/20220107/1641523547_61d7a95b437d397b21e44.png!small?1641523548880)
+
+##  **03** 总结
+
+该UAC Bypass方式覆盖Win7至今的操作系统版本，且从未被微软尝试修复，这说明利用系统合法接口功能的UAC
+Bypass方式更加隐蔽且难以修复。与其他UAC
+Bypass方式相比较，这种方法不局限于特定的白名单程序，攻击者可以自己选择所执行的目标程序，相对更加灵活多变。AppInfo等系统中存在的RPC接口还有其他众多已公开的武器化利用方式，利用RPC接口的批量挖掘仍是有价值的思路。
+
+参考
+
+<https://mp.weixin.qq.com/s/Hj38WoaH_MznVCUHIAmeaw>
+
+##  **绿盟科技 M01N Team 战队**
+
+绿盟科技M01N战队专注于Red
+Team、APT等高级攻击技术、战术及威胁研究，涉及Web安全、终端安全、AD安全、云安全等相关领域。通过研判现网攻击技术发展方向，以攻促防，为风险识别及威胁对抗提供决策支撑，全面提升安全防护能力。
+

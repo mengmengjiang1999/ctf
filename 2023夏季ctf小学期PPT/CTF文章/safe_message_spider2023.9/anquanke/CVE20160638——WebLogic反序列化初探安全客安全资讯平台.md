@@ -1,0 +1,284 @@
+# CVE-2016-0638——WebLogic反序列化初探
+
+阅读量 **259933**
+
+|评论 **5**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-12-07 14:30:30
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t0183403c7a04557994.jpg)
+
+## 一 、原理
+
+###  （一）概述
+
+[概述链接1](https://zh-cn.tenable.com/security/research/tra-2016-09?tns_redirect=true)
+
+[概述链接2](https://zh-cn.tenable.com/security/research/tra-2016-21?tns_redirect=true)
+
+接CVE-2015-4852，
+
+![](https://p0.ssl.qhimg.com/t0188aefe2ee2bfb7f3.png)
+
+Oracle使用黑名单进行了防护，如下，
+
+![](https://p3.ssl.qhimg.com/t0162aaf37c3f59c05e.png)
+
+看一下CVE-2015-4852调试过程中记录的信息，
+
+![](https://p0.ssl.qhimg.com/t018015f9fe83b1fadd.png)
+
+functors在3个点完全被禁，
+
+再看看触发时的调用栈，
+
+![](https://p1.ssl.qhimg.com/t01c3d7c3fe4801a859.png)
+
+结合上一次调试过程中记录的信息，我们可以看到，这个fix阻断了CVE-2015-4852的exp中在偏底层的位置（ServerChannelInputStream）对关键类的反序列化，可以说是打断了利用链。
+
+但同时，我们也要注意到，对那几个关键类的反序列化的禁止仅存在于那三个列出的反序列化点。也就是说，如果能在别的反序列化点，通过适当的readObject对那几个关键类进行反序列化，也有可能能触发RCE之类的漏洞。
+
+实际上，CVE-2016-3510、CVE-2016-0638和后来的几个漏洞的成功攻击就是基于对这三个反序列化点的黑名单的绕过。
+
+###  （二）CVE-2016-0638
+
+由于CVE-2015-4852的修复是基于黑名单的，所以我们如果能找到一个对象，其可以在自己的readObject中创建自己的InputStream的对象，并且不是在黑名单中的三个反序列化点进行的反序列化，最后调用readObject()方法进行反序列化的数据的读取，这样仍然可以执行含有恶意代码的序列化代码，甚至CVE-2015-4852的攻击链都不需要做太多的修改。
+
+就有大牛发现weblogic.jms.common.StreamMessageImpl的readExternal()，
+
+![](https://p5.ssl.qhimg.com/t01c1b4c3edd191b3b1.png)
+
+此函数可以进行反序列化操作的，而且不在这个黑名单之列，也就是说可以绕过这个基于黑名单的补丁。
+
+![](https://p5.ssl.qhimg.com/t01126e422fc8fda165.png)
+
+###  （三）原理
+
+这个漏洞的复现主要基于一个类似于ysoserial的工具——weblogic_cmd。
+
+接下来结合着自己的理解和调试过程谈一下漏洞的原理。
+
+**（一）工具分析**
+
+使用Github上的工具weblogic_cmd，
+
+[工具链接](https://github.com/5up3rc/weblogic_cmd)
+
+这个工具直接当做IDEA的工程打开即可，要求不高的话甚至不需要引入别的库。
+
+首先，我们看到Main.java中起关键作用的函数executeBlind()，
+
+![](https://p4.ssl.qhimg.com/t01074291911c3dd254.png)
+
+配置application参数，
+
+![](https://p2.ssl.qhimg.com/t01c608b996c7d6ae9f.png)
+
+配置好参数后，debug即可，
+
+![](https://p0.ssl.qhimg.com/t01bc573310bab1b1ae.png)
+
+跟进blindExecute()，里面会根据os参数的情况选择是“cmd”或是“/bin/bash”，继续跟进serialBlindData，
+
+![](https://p0.ssl.qhimg.com/t01d0c711933cfac0e6.png)
+
+下面我们会看到，这里面进行的就是常规的序列化操作，
+
+![](https://p0.ssl.qhimg.com/t01097434c1382378e7.png)
+
+![](https://p5.ssl.qhimg.com/t01a16623828cb9c20f.png)
+
+这里我们看到，其实这里就是封装ysoserial的commons collections1的链，  
+
+可以看到，这里进行的操作和CVE-2015-4852中构造的攻击链并无二致，
+
+![](https://p0.ssl.qhimg.com/t01c1d5ac78302624f2.png)
+
+这几个函数进行的是反序列化的操作，我们步出即可，
+
+![](https://p0.ssl.qhimg.com/t0139c454a756e016dc.png)
+
+可见这里的payload的类型为StreamMessage类，
+
+然后写出，
+
+![](https://p1.ssl.qhimg.com/t01761a3fac06c2e5da.png)
+
+继续向下执行，就到发送payload的一步了，
+
+![](https://p5.ssl.qhimg.com/t01c269808f52350e1e.png)
+
+T3ProtocolOperation.send()会将payload发出，另一个调试服务器的IDEA工程就会弹出，这一部分和漏洞的调试部分是一起完成的，关于漏洞的调试参见第二章的第三部分。
+
+**（二）漏洞成因**
+
+结合下面的调试进行分析。
+
+## 二、调试
+
+###  （一）环境搭建
+
+这次完全使用docker里的源码及jar文件进行调试，借鉴了一个良心博客，虽然最后搭建的环节应该没太大区别而且整个过程技术含量不高，但接触一点和之前不一样的东西总没坏处。
+
+[搭建环境](https://www.cnblogs.com/ph4nt0mer/archive/2019/10/31/11772709.html)
+
+语法，
+
+    
+    
+    docker cp [OPTIONS] CONTAINER:SRC_PATH DEST_PATH|-    docker cp [OPTIONS] SRC_PATH|- CONTAINER:DEST_PATH
+    
+
+这里使用，
+
+    
+    
+    docker cp 7dee:/root /tmp
+    
+
+![](https://p3.ssl.qhimg.com/t0196a197dc006f0843.png)
+
+然后idea打开/root/Oracle/Middleware/wlserver_10.3/目录
+
+![](https://p5.ssl.qhimg.com/t01762d35f8372ab615.png)
+
+然后使用命令把Middleware目录下所有的*.jar包都放在一个test的文件夹里，命令如下：
+
+    
+    
+    find ./ -name *.jar -exec cp {} ./test/ \;
+    
+
+![](https://p2.ssl.qhimg.com/t010ca63ab1cb334f15.png)
+
+但这种方法有个坑，就是同名的jar只能存在一个，对于这个漏洞的调试似乎没有影响，对于后面的漏洞（如CVE-2020-14645）的调试可能有一定影响（别问我怎么知道的，如果有同志发现并无影响也希望能联系我）。
+
+然后在libraries下添加test目录，
+
+![](https://p4.ssl.qhimg.com/t010a1efb78ceb93e10.png)
+
+在jdk这块选用weblogic10.3.6自带的jdk6，
+
+![](https://p3.ssl.qhimg.com/t016eb04a91a4cf338d.png)
+
+然后我们像之前一样添加远程服务器即可，
+
+###  （二）复现
+
+使用Github上的工具，
+
+[工具链接](https://github.com/5up3rc/weblogic_cmd)
+
+配置remote，Program arguments如下，
+
+    
+    
+    -H "192.168.0.47" -C "touch /tmp/sss1.txt" -B -os linux
+    
+
+![](https://p5.ssl.qhimg.com/t01afa3b3bd66b92c25.png)
+
+run一下，
+
+![](https://p4.ssl.qhimg.com/t01763df652c05709c2.png)
+
+查看目录，
+
+![](https://p5.ssl.qhimg.com/t018c02c60777dea37e.png)
+
+复现成功。
+
+###  （三）调试
+
+接着工具的分析，发送完payload之后docker那边就能收到，进而反馈到IDEA中，
+
+![](https://p4.ssl.qhimg.com/t01846f14fdbd5e3cd5.png)
+
+可以看到，进入了StreamMessageImple的readExternal函数，其中var4为一个getInputStream函数的返回值，这一块就是本漏洞调试的关键点，
+
+![](https://p1.ssl.qhimg.com/t01a596f7911f4c0f53.png)
+
+以view as
+text查看var4，可以看到这就是反序列化数据，接下来var5以var4为参数创建了一个ObjectInputStream，并调用了自身的readObject（重点，这也就是为什么大牛选择了这种类而不是其他不具备这个特点的类），到这里和CVE-2015-4852中攻击链中不一样的地方基本就讲完了，个人感觉就是反序列化的触发点换了一下。  
+讲个故事，一种药（payload）吃到孩子的胃（weblogic）里可以治病（get
+shell），小孩子吃了一次（CVE-2015-4852），嫌药苦，便不愿直接吃下，但病总得治（总要被攻击的），于是大人把药包到胶囊（StreamMessageImpl）里面，待到胶囊进入胃里，外壳便会化掉（readExternal()），药物（原有的payload）便会流出，进而发挥作用（get
+shell）。
+
+跟进var5.readObject()，
+
+![](https://p2.ssl.qhimg.com/t01c46e3e642189fcc3.png)
+
+进入了一堆底层函数，如何就进入了AnnotationInvocationHandler的invoker，
+
+接下来的流程就比较熟悉了，
+
+![](https://p2.ssl.qhimg.com/t019be9622c3aeb704f.png)
+
+由于是ysoserial的cc链1，这里走invoke，
+
+![](https://p5.ssl.qhimg.com/t0179a21e8e3ba337ce.png)
+
+调用LazyMap.get(“entrySet”)；下面的流程就和CVE-2015-4852的复现别无二致。
+
+![](https://p4.ssl.qhimg.com/t013c075225c83af462.png)
+
+查看docker情况，
+
+![](https://p4.ssl.qhimg.com/t01e5eb5157c65f083c.png)
+
+由时间差来看，sss1正是刚刚payload创建的
+
+## 三、收获与启示
+
+CVE-2016-0638主要还是对CVE-2015-4852的黑名单的绕过，内容上差别不大，所谓差异仅仅是触发点换了一下（由ServerChannelInputStream换到了自己的ReadExternal中的InputStream），因而绕过了黑名单。个人感觉是新瓶旧酒，攻击链甚至都不需要有太大的改动。
+
+结合调用栈我们可以看到，
+
+![](https://p0.ssl.qhimg.com/t0191cbd55f7c7c1e42.png)
+
+下面的InboundMsgAbbrev什么的都还在，只是参数不再是普通的AnnotationInvocationHandler，而是StreamMessageImpl，而这个类里面的readExternal也能反序列化其中的成员变量，这和下面的mashalledObject有异曲同工之妙。
+
+Oracle没有完全禁掉那几个关键类的反序列化而只是添加了个Filter必有高论，但那几个禁止了的反序列化点对于大牛来说实在是起不到非常有效的防护作用，找到了weblogic.jms.common.StreamMessageImpl的readExternal()也能发挥作用。这也就警示我们，基于黑名单的防护是存在不小的风险的，尤其是像weblogic这样代码量比较大的程序，说不定在哪里还会有别的能起到类似作用的触发点，令安全人员防不胜防。
+
+但是对于这样庞大的一个程序，再加上其引入的众多外部库，我一时也不知道如何用白名单去做防护，以我的水平能想到的只有应该进行对系统函数调用的限制。毕竟防护必须面面俱到，攻击攻破一点即可。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **northind** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/224343](/post/id/224343)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞分析](/tag/漏洞分析)
+  * [CVE-2016-0638](/tag/CVE-2016-0638)
+
+ **+1** __6赞
+
+ __收藏
+
+![](https://p4.ssl.qhimg.com/t01f28ccab3282fc24b.png) northind
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

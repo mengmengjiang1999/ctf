@@ -1,0 +1,218 @@
+## 写在前面
+
+这篇主要是分析一下WebSocket协议在Tomcat容器中的源码实现，方便大家在后面能够更好的了解下一篇Websocket型内存马的原理。
+
+这个也是内存马系列第七篇
+
+## Websocket
+
+### 什么是websocket？
+
+首先来了解一下什么是websocket
+
+`WebSocket`全双工通信协议，在客户端和服务端建立连接后，可以持续双向通信，和HTTP同属于应用层协议，并且都依赖于传输层的`TCP/IP`协议。
+
+虽然`WebSocket`有别于HTTP，是一种新协议，但是RFC 6455中规定:
+
+> it is designed to work over HTTP ports 80 and 443 as well as to support HTTP
+> proxies and intermediaries.
+
+  * `WebSocket`通过HTTP端口80和443进行工作，并支持HTTP代理和中介，从而使其与HTTP协议兼容。
+
+  * 为了实现兼容性，`WebSocket`握手使用HTTP`Upgrade`头从HTTP协议更改为`WebSocket`协议。
+
+  * `Websocket`使用`ws`或`wss`的统一资源标志符（URI），分别对应明文和加密连接。
+
+### 建立连接
+
+在双向通信之前，必须通过握手建立连接。Websocket通过 HTTP/1.1
+协议的101状态码进行握手，首先客户端（如浏览器）发出带有特殊消息头（Upgrade、Connection）的请求到服务器，服务器判断是否支持升级，支持则返回响应状态码101，表示协议升级成功，对于WebSocket就是握手成功。
+
+请求头实例
+
+    
+    
+    GET /test HTTP/1.1
+    Host: server.example.com
+    Upgrade: websocket
+    Connection: Upgrade
+    Sec-WebSocket-Key: tFGdnEL/5fXMS9yKwBjllg==
+    Origin: http://example.com
+    Sec-WebSocket-Protocol: v10.stomp, v11.stomp, v12.stomp
+    Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+    Sec-WebSocket-Version: 13
+    
+
+  * `Connection`必须设置`Upgrade`，表示客户端希望连接升级。
+
+  * Upgrade: websocket表明协议升级为websocket。
+
+  * `Sec-WebSocket-Key`字段内记录着握手过程中必不可少的键值，由客户端（浏览器）生成，可以尽量避免普通HTTP请求被误认为`Websocket`协议。
+
+  * `Sec-WebSocket-Version`表示支持的`Websocket`版本。RFC6455要求使用的版本是13。
+
+  * `Origin`字段是必须的。如果缺少`origin`字段，`WebSocket`服务器需要回复HTTP`403`状态码（禁止访问），通过`Origin`可以做安全校验。
+
+响应头实例
+
+    
+    
+    HTTP/1.1 101 Switching Protocols
+    Upgrade: websocket
+    Connection: Upgrade
+    Sec-WebSocket-Accept: HaA6EjhHRejpHyuO0yBnY4J4n3A=
+    Sec-WebSocket-Extensions: permessage-deflate;client_max_window_bits=15
+    Sec-WebSocket-Protocol: v12.stomp
+    
+
+`Sec-WebSocket-Accept`的字段值是由握手请求中的`Sec-WebSocket-Key`的字段值生成的。成功握手确立`WebSocket`连接之后，通信时不再使用HTTP的数据帧，而采用`WebSocket`独立的数据帧。
+
+贴一个网上的示例图
+
+![image-20220927144735539.png](https://image.3001.net/images/20220927/1664269014_6332bad6c485ff792e3f4.png!small)
+
+### 其优点
+
+  * 较少的控制开销。在连接建立后，服务器和客户端之间交换数据时，用于协议控制的数据包头部相对于HTTP请求每次都要携带完整的头部，显著减少。
+
+  * 更强的实时性。由于协议是全双工的，所以服务器可以随时主动给客户端下发数据。相对于HTTP请求需要等待客户端发起请求服务端才能响应，延迟明显更少。
+
+  * 保持连接状态。与HTTP不同的是，Websocket需要先建立连接，这就使得其成为一种有状态的协议，之后通信时可以省略部分状态信息。而HTTP请求可能需要在每个请求都携带状态信息（如身份认证等）。
+
+  * 更好的二进制支持。Websocket定义了二进制帧，相对HTTP，可以更轻松地处理二进制内容。
+
+  * 支持扩展。Websocket定义了扩展，用户可以扩展协议、实现部分自定义的子协议。
+
+  * 更好的压缩效果。相对于HTTP压缩，Websocket在适当的扩展支持下，可以沿用之前内容的上下文，在传递类似的数据时，可以显著提高压缩率。
+
+## 源码实现
+
+我们知道想要在Tomcat中使用Websocket服务有多种方法：
+
+  1. `@ServerEndpoint`注解的方式
+
+  2. 继承抽象类`Endpoint`类
+
+  3. ServerApplicationConfig的实现类
+
+那么在源码层面上Tomcat是如何提供对应的服务的呢？
+
+首先来看一下内部是如何加载相应的websocket服务的？
+
+Tomcat提供了一个`org.apache.tomcat.websocket.server.WsSci`来加载`WebSocket`服务，利用了SCI机制，什么是SCI机制呢？
+
+从源代码上面来讲主要是一个实现了`javax.servlet.ServletContainerInitializer`接口的，会在这时候触发对应的`onStartup`方法，做出一些初始化操作。
+
+我们看看这个接口。
+
+![image-20220927152017586.png](https://image.3001.net/images/20220927/1664269024_6332bae078aa141538534.png!small)
+
+从注释中我们也知道能够调用其`onStartup`方法，同样，我们也来看看`WsSci`类的源码。
+
+![image-20220927152200411.png](https://image.3001.net/images/20220927/1664269032_6332bae8b059fa435d14d.png!small)
+
+他实现了`ServletContainerInitializer`接口，并且重写了他的`onStartup`方法，这个类主要是注册一下以`ServerEndpoint`注解了的类，使得其类能够可以通过
+WebSocket 服务器发布 Endpoint。那流程就比较清楚了，`WsSci`主要做了一件事，就是扫描加载`Server
+Endpoint`，并将其加到`WebSocket`容器里
+
+主要的逻辑在`onStartup`方法中，我们跟进一下。
+
+![image-20220927152908033.png](https://image.3001.net/images/20220927/1664269039_6332baef1faebbdda782f.png!small)
+
+首先调用`init`方法创建了一个`WsServerContainer`类对象`sc`
+
+跟进方法
+
+![image-20220927152945269.png](https://image.3001.net/images/20220927/1664269045_6332baf5541e5f6c084b2.png!small)
+
+通过new了一个`WsServerContainer`传入servlet上传文创建了一个WsServerContainer对象。
+
+之后在上下文中设置了一个属性，这个属性`SERVER_CONTAINER_SERVLET_CONTEXT_ATTRIBUTE`为`javax.websocket.server.ServerContainer`。
+
+之后注册了一个`WsSessionListener`监听器给了上下文中，导致在http的session销毁的时候同样会导致`ws
+session`也会被消毁，达到了两者的一致性。
+
+再然后判断是否是初始化的时刻，如果是将会注册一个ws上下文监听器`WsContextListener`给servlet的上下文，导致在`servletContext`初始化的时候调用`WsSci`的`init`方法进行初始化，在其消毁的时候同样也会消毁。
+
+同样的，因为有着判断，所以，这个注册只会调用一次。
+
+再次回到`onStartup`方法的调用。
+
+![image-20220927154427058.png](https://image.3001.net/images/20220927/1664269052_6332bafce4137226d34c1.png!small)
+
+开局就创建了三个集合分别来存放不同的类对象。
+
+在try语句中，通过遍历clazzes中的类，首先在获取了类的相关信息之后，去除掉了不是public类型 / 抽象 / 接口 /
+或者没有暴露的类，接着进入了第二个if语句，将不会扫描WebSocket API的jar包，也就是`javax.websocket.`开头的包名都会排除掉。
+
+接着走
+
+![image-20220927154751081.png](https://image.3001.net/images/20220927/1664269062_6332bb0604e4e605754da.png!small)
+
+之后连着三个if语句将会判断满足前面条件的类是否是`ServerApplicationConfig`类的实现类，或者是否是`Endpoint`类的子类，
+又或者是否该类使用了`ServerEndpoint`注解，如果满足上面三个条件的任何一个，将会将该类放置于上面创建的对应的集合中。
+
+继续往下走
+
+![image-20220927155131422.png](https://image.3001.net/images/20220927/1664269068_6332bb0c72f072351e30a.png!small)
+
+开局一个官方给的注释`//Filter the results`过滤上面的到的结果，有趣，我们具体看看是过滤了哪些结果类。
+
+同样这里创建了两个集合`filteredEndpointConfigs /
+filteredPojoEndpoints`，之后首先判断前面获取的`serverApplicationConfigs`结合是否为空，如果为空，将会将`scannedPojoEndpoints`中的所有内容传入对应集合，所以这里也说明，@ServerEndpoint的服务器端是可以不用ServerApplicationConfig的。
+
+接下来看看不为空的情况下的逻辑
+
+首先会遍历`serverApplicationConfigs`这个集合中的元素，首先从config中取出Endpoint的子类，在其不为空的时候，将会将其传入`filteredEndpointConfigs`集合中，同样，也会在实现了`ServerEndpoint`注解的类获取对应的config进行添加。
+
+就这样得到了需要的`filteredEndpointConfigs`。
+
+来看看最后的处理。
+
+![image-20220927160245743.png](https://image.3001.net/images/20220927/1664269076_6332bb14428c1e178273b.png!small)
+
+在遍历了这个集合之后继承抽象类Endpoint的需要使用者手动封装成ServerEndpointConfig， 而加了注解@ServerEndpoint的类
+Tomcat会自动封装成ServerEndpointConfig
+
+最后都被加载进入了`WsServerContainer`中去
+
+我们可以跟进一下其`addEndpoint`方法中去，对于`Endpoint`子类是调用的是改方法。
+
+![image-20220927160749732.png](https://image.3001.net/images/20220927/1664269088_6332bb20dcb07483b6b92.png!small)
+
+该方法主要是在特定的path路径和配置信息提供endpoint
+
+跟进`addEndpoint`方法
+
+开局就是几个判断抛出异常的if语句，没啥用，从try语句开始分析。
+
+![image-20220927161441178.png](https://image.3001.net/images/20220927/1664269096_6332bb2801bce4379198e.png!small)
+
+首先从`ServerEndpointConfig`中获取对应的path路径，添加了一个`methodMapping`对象通过用户的配置
+
+而对于使用`ServerEndpoint`注解的方式构造的Endpoint，我们需要包装成`ServerEndpointConfig`类
+
+同样从try语句开始。
+
+![image-20220927162428529.png](https://image.3001.net/images/20220927/1664269103_6332bb2f5534e6c5bd3fd.png!small)
+
+首先是得到了对应类的注解信息，之后通过解析注解信息，获取了path路径，并且通过`ServerEndpointConfig.Builder.create`方法的调用封装了一个`ServerEndpointConfig`。
+
+![image-20220927164520827.png](https://image.3001.net/images/20220927/1664269111_6332bb371060db4f7f83f.png!small)
+
+并且在最后调用`addEndpoint`方法
+
+![image-20220927164845176.png](https://image.3001.net/images/20220927/1664269117_6332bb3dafc1ef5081910.png!small)
+
+  * 对加了`@ServerEndpoint`类的生命周期方法（`@OnOpen`、`@OnClose`、`@OnError`、`@OnMessage`）的扫描和映射封装
+
+  * 对`path`的有效性检查和`path param`解析
+
+## 总结
+
+上面从Websocket的介绍，到Tomcat中的websocket协议的处理进行了源码层面的分析，为之后的Websocket层的内存马提供了基础知识
+
+## Ref。
+
+https://stefan.blog.csdn.net/article/details/120025498
+

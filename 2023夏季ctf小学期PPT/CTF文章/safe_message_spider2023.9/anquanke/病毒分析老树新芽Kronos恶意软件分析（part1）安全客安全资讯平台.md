@@ -1,0 +1,408 @@
+# 【病毒分析】老树新芽：Kronos恶意软件分析（part 1）
+
+阅读量 **117827**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-09-04 09:47:45
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：malwarebytes.com
+
+原文地址：<https://blog.malwarebytes.com/cybercrime/2017/08/inside-kronos-malware/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+译者：[blueSky](http://bobao.360.cn/member/contribute?uid=1233662000)
+
+预估稿费：260RMB
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+**背景**
+
+****
+
+2014年6月，一个用户名为VinnyK的人用俄语在某黑市网站上首次售卖 **Kronos** 恶意软件：
+
+资料来源：<https://twitter.com/x0rz/status/893191612662153216>
+
+该帖子的全文已经被翻译成英文，并收录在[ **IBM的安全智能文章**](http://securityintelligence.com/the-father-of-zeus-kronos-malware-discovered/)中。
+
+我们发现Kronos
+恶意软件通过各种网络攻击包传播，例如Sundown（详情点击[这里](https://blog.malwarebytes.com/threat-analysis/2016/10/new-looking-sundown-ek-drops-smoke-loader-kronos-banker/)）。截至目前，该恶意软件仍然在疯狂的传播，[ **一个月前我们还捕获了通过Rig
+EK传播的一些最新的样本**](https://zerophagemalware.com/2017/07/14/rig-ek-delivers-kronos-banker/)。
+
+如今，Kronos经常用于下载其他恶意软件。[Proofpoint文章中描述了](https://www.proofpoint.com/us/threat-insight/post/kronos-banking-trojan-used-to-deliver-new-point-of-sale-malware)网络攻击者如何使用Kronos作为下载器进行网络攻击活动。
+
+  
+
+**分析样本**
+
+****
+
+**2014年捕获到的样本：**
+
+[01901882c4c01625fd2eeecdd7e6745a](https://www.virustotal.com/en/file/3bd4b8caf9ae975bd41dbee1f1719cf7be3efa4f52b8768aba30ba9a40569008/analysis/)
+首次观察到的Kronos样本（感谢[Kevin Beaumont](https://twitter.com/GossiTheDog)）
+
+f085395253a40ce8ca077228c2322010
+从[Lexsi文章中](https://www.lexsi.com/securityhub/overview-kronos-banking-malware-rootkit/?lang=en)获取到的样本
+
+[a81ba5f3c22e80c25763fe428c52c758](https://virustotal.com/en/file/4181d8a4c2eda01094ca28d333a14b144641a5d529821b0083f61624422b25ed/analysis/1502307205/)
+Kronos（最终有效载荷）
+
+[6c64c708ebe14c9675813bf38bc071cf](https://virustotal.com/en/file/ea216cede2a1eff5d76a2f8258d4a89d822f45c3951c5a4734c16ce163153a8f/analysis/1502307222/)
+injlib-client.dll（Kronos模块）
+
+**样本＃1（2016年）**
+
+[2452089b4a9d889f94843430a35fa34f
+](https://virustotal.com/en/file/e420e521f891c1a6245e377dc7a6ab70458b7c0d77ad39535cb59018a542fe15/analysis/)
+（加壳的）
+
+[9818958e65a0a71e29a2f5e7ffa650ca](https://virustotal.com/en/file/aad98f57ce0d2d2bb1494d82157d07e1f80fb6ee02dd5f95cd6a1a2dc40141bc/analysis/)
+Kronos（最终有效载荷）
+
+**样本＃2（2017年）**
+
+[de9ab737905e09b69b28dc0999d08894](https://virustotal.com/en/file/ffc1cfe4cfa36477ead629bd1a2c6ffb266502c3261b85de431137da411320a8/analysis/)
+– 加壳的
+
+[4f5006835669d72c6ce121e66b3034d7](https://virustotal.com/en/file/0457d848132769424673221e3eb598dc2711bcebd3b5d44d1b0bdcb5b7d27f95/analysis/1502119116/)
+加载器（第二阶段）
+
+[b8986fe9e40f613804aee29b34896707](https://virustotal.com/en/file/cd5c2bb8d7d3ba9dc522dae112133956096ffae465a7b21c8f3d3124d070f675/analysis/1502119090/)
+Kronos（最终有效载荷）
+
+[cb7e33e5ede49301e7cd9218addd5c29](https://virustotal.com/#/file/f9601f695ee80b14e7ecf3c1988bacade7f50f6886f1a89c6f98d0b162959709/details)
+– DLL模块
+
+  
+
+**行为分析**
+
+****
+
+运行后，Kronos恶意软件自动安装在一个新的文件夹中（ **%APPDATA%/Microsoft/[machine-specific GUID]**
+），如下图所示：
+
+恶意软件支持开机自启动，该功能是通过注册表中一个简单的Run键来实现的，如下图所示：
+
+在开始执行阶段，恶意软件会修改Firefox的配置文件，使用下面的内容覆盖user.js文件中的内容：
+
+    
+    
+    user_pref（“network.cookie.cookieBehavior”，0）;
+    user_pref（“privacy.clearOnShutdown.cookies”，false）;
+    user_pref（“security.warn_viewing_mixed”，false）;
+    user_pref（“security.warn_viewing_mixed.show_once”，false）;
+    user_pref（“security.warn_submit_insecure”，false）;
+    user_pref（“security.warn_submit_insecure.show_once”，false）;
+    user_pref（“app.update.auto”，false）;
+    user_pref（“browser.safebrowsing.enabled”，false）;
+    user_pref（“network.http.spdy.enabled”，false）;
+    user_pref（“network.http.spdy.enabled.v3”，false）;
+    user_pref（“network.http.spdy.enabled.v3-1”，false）;
+    user_pref（“network.http.spdy.allow-push”，false）;
+    user_pref（“network.http.spdy.coalesce-hostnames”，false）;
+    user_pref（“network.http.spdy.enabled.deps”，false）;
+    user_pref（“network.http.spdy.enabled.http2”，false）;
+    user_pref（“network.http.spdy.enabled.http2draft”，false）;
+    user_pref（“network.http.spdy.enforce-tls-profile”，false）;
+    user_pref（“security.csp.enable”，false）;
+
+这个新的设置能够使恶意软件更好地控制浏览器的行为并降低安全设置。然后，恶意软件自动注入到 **svchost**
+进程中，并从那里继续运行。值得注意的是，Kronos部署了一个简单的[用户级rootkit](https://blog.malwarebytes.com/threat-analysis/2016/12/simple-userland-rootkit-a-case-study/)，它将被感染的进程从监视工具中隐藏起来。因此，运行主模块的进程不能被监视到。然而，该rootkit没有以非常可靠的方式实现，并且隐藏效果并不好。一旦发现受感染机器上安装了浏览器，Kronos恶意软件便会将其模块注入到浏览器进程中，并将注入的模块与运行在
+**svchost** 进程内中的主模块建立连接。使用监视工具（例如 **ProcessExplorer**
+）查看由特定进程建立的TCP连接，我们可以看到浏览器与受感染的 **svchost** 进程成对出现：
+
+银行木马经常使用这个技巧来窃取浏览器中的数据。注入到浏览器中的恶意软件通过hook
+API函数来窃取数据。之后，将窃取到的数据发送到其他模块进行分析处理，并将处理的结果发送给C&C服务器。
+
+  
+
+**网络通信**
+
+****
+
+从样本数据中找到以下两个C&C服务器的地址：
+
+    
+    
+    http://springalove.at:80/noix/connect.php
+    http://springahate.at:80/noix/connect.php
+
+在分析的过程中我们发现，这两个个C&C服务器都已经无法访问，但是我们仍然可以发现这个恶意软件家族的典型特征。
+
+首先，恶意软件发送长度为74字节的标识：
+
+然后发送一大块数据：
+
+通过分析这两个请求，我们发现恶意软件作者使用带有随机字符的XOR操作对请求做了混淆处理。下图是标识字段经过XOR解码后的样子：
+
+我们发现恶意软件发出的所有请求都是以固定的数据头开始，该数据头中包含了被感染机器的GUID。
+
+关于解密Kronos通信的详细研究已经在[这里](https://www.lexsi.com/securityhub/kronos-decrypting-the-configuration-file-and-injects/?lang=en)进行了描述。
+
+  
+
+**有趣的字符串**
+
+****
+
+像大多数恶意软件一样，Kronos恶意软件使用了各种加壳和加密工具。分析第一层数据之后后，我们得到了恶意软件的payload。我们可以通过典型的字符串轻松识别Kronos：
+
+该恶意软件中有更多典型的字符串可以用来标识它：
+
+这些字符串是一些哈希值，用于动态加载特定导入模块中的函数。恶意软件作者使用这种方法来混淆使用的API函数，并通过这种方式隐藏其工具的真正意图。该恶意软件不使用显式名称来加载函数，它通过枚举特定DLL中的所有导入，计算其名称的hash值，如果hash与硬编码值匹配，则加载该函数。尽管这种做法很常见，但Kronos的实施并不“高明”。大多数恶意软件以
+**DWORD** 形式的hash存储，而Kronos将它们存储为字符串。
+
+在Kronos的早期样本中，我们可以找到调试符号的路径，该调试符号信息揭示构建代码的机器上的目录结构。以下路径是从一个Kronos的样本（01901882c4c01625fd2eeecdd7e6745a）中提取的：
+
+    
+    
+    C:UsersRootDesktopkronosVJF1BinariesReleaseVJF.1.pdb
+
+PDB路径也可以从属于2014年Kronos发行版的DLL（[6c64c708ebe14c9675813bf38bc071cf](https://virustotal.com/en/file/ea216cede2a1eff5d76a2f8258d4a89d822f45c3951c5a4734c16ce163153a8f/analysis/1502307222/)）中找到：
+
+    
+    
+    C:UsersRootDownloadsKronos2VJF1Botinjlibbininjlib-client-Releaseinjlib-client.pdb
+
+**injlib-client.dll**
+这个模块是注入到浏览器中的部分模块代码。在较新版本的Kronos中，可以找到类似的DLL，但是PDB路径被删除了。
+
+  
+
+**注入svchost**
+
+****
+
+Kronos的主要模块被注入到svchost进程（从2014年开始注入到explorer进程中）。恶意软件通过执行以下步骤来实现这种注入：
+
+1\. 创建挂起的svchost进程
+
+2\. 将其部分代码映射到自己的地址空间中
+
+3\. 添加自己的代码并修改入口点，以便重定向执行自己的代码
+
+4\. 恢复挂起的进程，让注入的代码执行
+
+通过下面的图，我们可以看到被感染的svchost进程的内存分布情况（在早期版本中，恶意代码被注入到浏览器中），恶意软件被添加到一个新的、虚拟的PE节中-在给定的示例中，映射地址为0x70000：
+
+上图就是修改svchost进程入口点后的结果，我们可以看到，执行被重定向到PE文件节内的地址中去了：
+
+注入的PE文件现在以不同的函数开始执行：
+
+恶意软件的原始入口点地址为RVA 0x12F22：
+
+如果恶意软件在检测到在VM或调试器的情况下运行，样本则会在注入后不久崩溃。
+
+  
+
+**从新的入口点运行样本**
+
+****
+
+恶意软件的主要操作在注入模块内部启动，下图所示为样本的新入口点：
+
+主要功能是负责加载导入恶意软件所需的模块，然后执行导入的各个功能。
+
+从上图可以看出，函数的第一块代码主要是负责填写注入模块的导入表。如果我们想要从新的入口点运行样本，而不是在样本注入后，我们需要关注下面一些事情：首先，装载器应该在注入的可执行文件中填充一些变量，例如
+**module_base** 变量。由于其他函数需要使用这些变量，如果不包含有效值，恶意软件样本在运行时会崩溃。此外，导入表中（除了 **.rdata**
+节）填充的函数需要设置为可写，这是因为完整的PE文件以RWX访问权限映射到内存中，因此恶意软件样本在注入之后也需要被设置为可写入。
+
+其实，从主函数的下一个代码块也可以成功运行Kronos样本，在这种情况下Windows加载程序会自动填充导入表，而不需要我们手动的去执行填充操作。
+
+下面我们来看一看恶意软件是如何绕过安全检测的。
+
+  
+
+**防御技巧**
+
+****
+
+恶意软件通过多次检测运行环境来部署防御。这些检查是非常标准的，例如搜索黑名单的进程，模块等。特定的一系列检查从下图中的一个函数调用开始，并将结果存储在一个变量中：
+
+如果检测到调试器或者是VM，则该变量被赋予非零值，并且恶意软件会崩溃以及中断分析。
+
+虽然恶意软件是一个32位的PE文件，但在32位或64位系统上会有不同的执行路径，因此恶意软件首先回去探测目标系统的指纹信息并设置一个标志位用来标识目标系统的体系架构：
+
+    
+    
+    DWORD is_system64_bit()
+    {
+        DWORD flag = 0;
+        __asm {
+        xor eax, eax
+        mov ax, cs
+        shr eax, 5
+        mov flag, eax
+    };
+        return flag;
+    }
+
+如果检测到 **调试器** 或者是 **VM** ，则表示架构的标志位会被重置：
+
+**这就是为什么一旦执行路径参数被设置，样本就会在下一步崩溃的原因** 。例如，如果样本部署在64位机器上，可以使用 **FS:[0xC0]**
+指定的地址来执行系统调用。但如果恶意软件在32位计算机上运行， **FS:[0xC0]** 指示的值将为NULL，因此如果调用它将会导致样本崩溃。
+
+在检测到VM或者调试器之后， **样本不会立即退出，这在一定程度上加大了分析人员找出崩溃的原因的难度，这也正是这种中断分析方法的高明之处** 。
+
+  
+
+**使用原始系统调用**
+
+****
+
+如前一段所述，Kronos使用原生系统调用。Syscall基本上意味着允许从用户模式调用内核实现的一些功能接口。应用程序通常通过系统DLL导出的API（可以在[EvilSocket的博客](https://www.evilsocket.net/2014/02/11/on-windows-syscall-mechanism-and-syscall-numbers-extraction-methods/)上找到的详细说明）来使用它们。由于监视工具可以轻松的检测到这些系统DLL导出这些API调用，因此一些恶意软件在实现上只是偷偷读取DLL中的系统调用号，并且通过它自己的代码来调用它们，这个技巧已经被[Floki
+bot](https://blog.malwarebytes.com/threat-analysis/2016/11/floki-bot-and-the-stealthy-dropper/)使用了。
+
+我们来看看它是如何在Kronos中实现的。首先，它从系统DLL中获取系统调用号。如前所述，函数通过其名称的哈希值来标识（[Lexsi报告](https://www.lexsi.com/securityhub/overview-kronos-banking-malware-rootkit/?lang=en)中有详细的阐述）。
+
+例如：
+
+    
+    
+    B6F6X4A8R5D3A7C6  - > NtQuerySystemInformation
+
+系统调用号存储在变量中，并使用一个常数做了XOR混淆。下图中的代码片段负责从DLL中提取原始系统调用：
+
+为了进一步使用它们，对于每一个使用过的系统调用程序，Kronos使用适当数量的参数来实现自己的包装函数，如下图所示：
+
+EAX寄存器包含系统调用号，在给定的例子中，它代表以下函数：
+
+    
+    
+    00000105  - > NtQuerySystemInformation
+
+一般情况下，由于与进程注入相关的函数通常会触发警报，因此Kronos使用原始系统调用来调用它们，通过这种方式调用的函数如下所示：
+
+    
+    
+    NtAllocateVirtualMemory
+    NtCreateFile
+    NtCreateSection
+    NtGetContextThread
+    NtOpenProcess
+    NtProtectVirtualMemory
+    NtQueryInformationProcess
+    NtQuerySystemInformation
+    NtResumeThread
+    NtSetContextThread
+    NtSetValueKey
+
+它与黑市中的那篇帖子中提到的“ 木马使用未被检测到的注入方法 ”（[来源](http://securityintelligence.com/the-father-of-zeus-kronos-malware-discovered/)）内容相匹配。
+
+  
+
+**Rootkit和hooking引擎**
+
+****
+
+Kronos 恶意软件提供的另一个功能是用户级rootkit，它通过
+hook进程的API使得安全检测工具无法注意到它的存在。它的hook是通过一个特制的shellcode块来实现的，这些块被植入每个可访问的运行过程中，具体操作流程如下所示：首先，Kronos准备要植入的shellcode块，并填写所有必要的数据，其中包括要使用的函数地址以及恶意软件安装过程中产生的需要隐藏的特殊数据；然后，它会搜索正在运行的进程，并尽可能地至此那个注入操作。有趣的是，
+**explorer.exe** 和 **chrome.exe** 被跳过了：
+
+shellcode被部署在受感染进程的新线程中：
+
+下面可以看到被感染进程内存中的shellocode：
+
+运行时，它将会对受感染进程的地址空间中的以下函数执行hook操作：
+
+    
+    
+    ZwCreateFile
+    NtOpenFile
+    ZwQueryDirectoryFile
+    NtEnumerateValueKey
+    RtlGetNativeSystemInformation
+    NtSetValueKey
+    ZwDeleteValueKey
+    ZwQueryValueKey
+    NtOpenProcess
+
+Kronos上面的实现与[MalwareTech在2015年1月的博客](https://www.malwaretech.com/2015/01/inline-hooking-for-programmers-part-2.html)上描述的一个hook引擎相似。通过对Kronos
+hook引擎的分析，我们发现Kronos的这一部分确实来源于MalwareTech的想法。然而，事实证明，这种技术早就出现了（即在[这里](http://www.rohitab.com/discuss/topic/33771-patch-hook/?p=10062694)，//感谢 [@xorsthings](https://twitter.com/xorsthings)的链接）。
+
+在执行hooking操作期间很有可能会遇到并发的问题，因为如果对一个函数正在执行修改操作的同时另一个线程也需要调用这个函数，那么就会导致应用程序将崩溃。因此为了避免这种情况，最好通过单个汇编指令来执行hook操作。MalwareTech引擎中使用
+**lock cmpxch8b** 指令来完成这个目的，类似的实现可以在Kronos中找到。
+
+通过分析我们发现Kronos恶意软件使用的hooking函数需要两个参数：要hook的函数地址以及用作代理的函数地址，下图所示的是植入的shellcode中的一个代码片段，在该代码片段中hooking函数被调用：
+
+首先，hooking函数在被攻击函数的代码中搜索合适的位置以用来执行hook操作：
+
+以上代码功能的实现可以在github上找到：
+
+<https://github.com/MalwareTech/BasicHook/blob/master/BasicHook/hook.cpp#L103>
+
+然后，恶意软件执行hook操作：
+
+我们发现，MalwareTech github上的代码实现和上述执行的hook操作几乎相同：
+
+<https://github.com/MalwareTech/BasicHook/blob/master/BasicHook/hook.cpp#L77>
+
+下图所示的是Kronos恶意软件对ZwResumeThread函数执行hook操作的一个例子，从图中我们可以看到， **lock cmpxch8b**
+指令确实被用来修改函数开始的代码：
+
+Hook操作完成后，每当受感染的进程调用被hook的函数时，执行将重定向到恶意模块中的代理代码：
+
+Kronos使用的hook机制整体看起来更加复杂，因为Kronos恶意软件使用的是一个shellcode而不是一个PE文件，在实现上难度就已经很高了，恶意软件作者必须自己填写所有的函数地址。而且，Kronos的作者在预测现实场景可能碰到的问题上也表现出更多的经验。例如，他特别注意检查代码是否没有被其他木马或监控工具hook：
+
+  
+
+**攻击浏览器**
+
+****
+
+Kronos恶意软件将一个额外的模块（ **injlib-client.dll**
+）注入到浏览器，下面我们可以看到一个注入到Firefox地址空间的一个DLL的例子：
+
+恶意软件在前期注入的shellcode的帮助下启动注入模块：
+
+通过分析我们可以发现，恶意软件对被攻击浏览器导入的一些函数执行了hook操作，以便通过它们的所有数据都能够被Kronos模块截获到，然后将被挂钩
+API抓取的数据发送到主模块，主模块在分析和处理之后将数据报告给C&C服务器。
+
+  
+
+**结论**
+
+****
+
+总体来说，Kronos的使用技巧表明，该作者在制作恶意软件方面具有丰富的经验。恶意软件的实现上代码是完全混淆的，并且还需要熟悉操作系统的一些底层操作技巧。作者不仅使用了有趣的技巧，而且还以合适的逻辑和方式将它们连接起来，因此我们觉得，Kronos恶意软件是由一个经验丰富的开发人员开发的。
+
+本文翻译自malwarebytes.com
+[原文链接](https://blog.malwarebytes.com/cybercrime/2017/08/inside-kronos-malware/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **blueSky** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/86752](/post/id/86752)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[malwarebytes.com](https://blog.malwarebytes.com/cybercrime/2017/08/inside-kronos-malware/)
+
+如若转载,请注明出处： <https://blog.malwarebytes.com/cybercrime/2017/08/inside-kronos-malware/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p5.ssl.qhmsg.com/dm/200_200_100/t01d4c6d0183e5e3280.jpg) blueSky
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,207 @@
+**作者：深信服千里目安全实验室**  
+**相关阅读：  
+1、[【Rootkit 系列研究】序章：悬顶的达摩克利斯之剑](https://paper.seebug.org/1867/ "【Rootkit
+系列研究】序章：悬顶的达摩克利斯之剑")  
+2、[【Rootkit 系列研究】Windows平台的高隐匿、高持久化威胁](https://paper.seebug.org/1868/
+"【Rootkit 系列研究】Windows平台的高隐匿、高持久化威胁")  
+3、[【Rootkit 系列研究】Linux平台的高隐匿、高持久化威胁](https://paper.seebug.org/1870/
+"【Rootkit系列研究】Linux平台的高隐匿、高持久化威胁")  
+4、[【Rootkit 系列研究】Rootkit检测技术发展现状](https://paper.seebug.org/1871/
+"【Rootkit系列研究】Rootkit检测技术发展现状")  
+5、[【Rootkit 系列研究】Windows平台的高隐匿、高持久化威胁（二）](https://paper.seebug.org/1872/
+"【Rootkit 系列研究】Windows平台的高隐匿、高持久化威胁（二）")**
+
+## 序言
+
+从西方APT组织的攻击历史及已经泄露的网络攻击武器来看，高隐藏、高持久化（Low&Slow）是已经成为区分威胁等级的关键特征，而Rookit则是达成此目的重要的技术手段之一。
+
+在之前的文章中，“序章：悬顶的达摩克利斯之剑”，带我们领略了Rootkit的前世今生，隐匿于Rootkit背后的影子以及针对Rootkit的基本检测思想。
+
+“Windows平台高隐匿、高持久化威胁”和“Linux平台高隐匿、高持久化威胁”各自从宏观角度讲述Windows平台和linux平台下，Rootkit技术原理、应用和发展现状以及攻防角度的总结。
+
+“Rootkit检测技术发展现状”让我们见识到了防御方对抗Rootkit的技术。
+
+本文则是在“Windows平台高隐匿、高持久化威胁”的基础上，结合攻击者在攻击中利用到的技术手段，对Windows平台上的rootkit的运行效果及应用方面进行介绍。
+
+## Rootkit威胁情报-战火从未停止
+
+2015年4月，安全研究团队发表了关于Turla组织的Rootkit分析报告。  
+2016年8月，安全研究团队发布了索伦之眼（ProjectSauron）相关的技术细节。  
+2018年10月，安全研究人员披露有驱动护体的挖矿病毒ProtectionX。  
+2019年4月，安全研究团队发布关于跨平台间谍Rootkit Scranos的文章。  
+2021年10月，安全研究团队披露了DirtyMoe Rootkit 驱动程序。  
+2021年12月，安全研究团队披露了方程式组织（Equation Group）的攻击框架DanderSpritz。  
+2022年1月，安全研究团队披露了紫狐（Purple Fox）僵尸网络通过伪装Telegram安装程序释放Rootkit的攻击事件。
+
+## 紫狐-黑产中Rootkit技术应用的代表
+
+紫狐是已经持续多年的、以营利为目的的网络黑产组织，他们历来每次出现在视野中，都会变化一种攻击方式或技术。
+
+攻击者控制大量受害终端，通过刷量、推广用户不需要的软件来获利，这会拖慢设备性能，严重影响受害者的正常使用。
+
+其恶意程序使用了Rootkit技术，以至于具有很高的隐蔽性， **很难被受害者发掘和清除。**
+
+在紫狐病毒释放器下载最终Purple Fox
+Rootkit载荷之前，我们注意到释放程序会安装一个名为“Driver.sys”的驱动程序，用于注销名为“360FsFlt”的Minifilter，并关闭名为“ZhuDongFangYu.exe”的进程，来规避安全软件检测。
+
+“ZhuDongFangYu.exe”的进程是从驱动启动的，用常规手段是无法关闭的。
+
+![](https://images.seebug.org/content/images/2022/03/9f84bbdf-c9d7-46f0-b7bf-9e687988f792.png-w331s)
+
+驱动服务运行后，通过一个独立的命令行工具进行调用，通过I\O 通讯传递指令，具有四种命令，对应四种功能。
+![](https://images.seebug.org/content/images/2022/03/779a48a7-0d96-452a-a8ee-fea4c2985718.png-w331s)
+
+实际运行效果如下：
+
+关闭指定文件过滤器
+![](https://images.seebug.org/content/images/2022/03/27fc46ff-c185-4b39-80ba-263a8e27572d.png-w331s)
+拷贝文件
+![](https://images.seebug.org/content/images/2022/03/c5ac8ebd-c1de-4d75-9ad7-ff5748a1dcac.png-w331s)
+删除文件
+![](https://images.seebug.org/content/images/2022/03/4a112431-14a1-4005-adcf-ff6e635f551b.png-w331s) 结束进程
+![](https://images.seebug.org/content/images/2022/03/4358e97a-929e-4090-ae68-edc8c831c242.png-w331s)
+在分析过程中我们发现，该驱动程序为了避免被检测，在文件拷贝和删除文件的过程中没有使用常规的API函数，而是通过IofCallDriver函数向文件设备发送带有操作的IRP数据，以此达到文件操作的目的。
+![](https://images.seebug.org/content/images/2022/03/aa88f1ec-2028-444a-ae27-d21a96224ed8.png-w331s)
+
+而在关闭进程功能上，更是提供了两种结束进程的方法，来规避检测。而且我们发现，该驱动目前仍是半成品的状态，也就是说，攻击者仍在进行功能的迭代升级。
+
+在完成安全软件进程关闭后，释放文件才会继续下载最后的Purple Fox
+Rootkit，经分析，该Rookit是基于开源Rookit项目“Hidden”修改，
+**具有隐藏注册表项和值、隐藏文件和目录、隐藏进程、保护指定进程等功能。**
+
+![](https://images.seebug.org/content/images/2022/03/81908513-6f58-4df4-8495-d65c8f49d1a3.png-w331s)
+
+文件隐藏运行效果：
+![](https://images.seebug.org/content/images/2022/03/1a2a6d54-255d-42d9-a6de-2c3067d93e05.png-w331s)
+![](https://images.seebug.org/content/images/2022/03/9d55786c-ed8a-483c-ab7a-da8f19dc7ae0.png-w331s)
+
+注册表隐藏运行效果：
+![](https://images.seebug.org/content/images/2022/03/28b695c0-c812-4345-9a00-942f4a107dbe.png-w331s)
+![](https://images.seebug.org/content/images/2022/03/7471c94a-9a6a-499d-ba71-5fd9f42e4f8b.png-w331s)
+
+进程保护运行效果：
+![](https://images.seebug.org/content/images/2022/03/0fd16e1f-6dc1-482e-a875-87aa68ddbb85.png-w331s)
+
+由此可见，学习开源项目也是攻击者提升攻击能力的有效方式，他们也在不断吸取新的技术，应用与攻击活动之中。
+
+## APT组织的高对抗利器
+
+Turla组织最早可以追溯到2004年，已经 **超过45个国家** 受到相关攻击， **涉及政府、大使馆、军事、教育、研究和制药公司等**
+多个行业。其攻击使用的技战术一直都有着较高的技术水平， **对于国家和行业机密有着极大的威胁。**
+
+本事件中使用的Rootkit主要功能是通过HOOK一系列系统调用函数，隐藏和保护其用户态组件。然后通过修改Ntoskrnl.exe和Ndis.sys的内存数据，在0xc3处创建一个新的IDT条目并重定向所有的被HOOK的函数到一个简单的中断句柄（ISR），每个被HOOK的函数都有一个唯一的标识符与ISR中的派遣函数相对应。
+
+![](https://images.seebug.org/content/images/2022/03/37e8ebd2-4ca6-4cad-b4ab-8b9d3756e484.png-w331s)
+
+由于能够该方法能够 **禁用任何主机内的HOOK机制** ，因此传统的针对Rookit的监测能力都受到了限制。
+
+Turla
+rootkit还使用了两个虚拟文件系统，一个NTFS文件系统和一个FAT文件系统，也就是说，受害者主机上有一个承载了文件系统的加密文件，攻击者将其作为工作空间使用。
+
+这里突出了Turla组织攻击活动所使用的工具非常 **具有高对抗** ，能够做到从系统层面避免安全软件的检测和查杀。
+
+除了Rootkit部分，还有一点值得注意，Turla在攻击过程中会使用一个名为“VBoxDrv.sys”的驱动程序，该驱动程序存在CVE-2008-3431漏洞，攻击者能够利用该漏洞完成权限提升。
+
+这里就要说到一个概念“VulnDriver”，也就是 **带有漏洞的驱动程序** ，比较常见的VulnDriver还有GDRV.sys
+（CVE-2018-19320），Novell (CVE-2013-3956), CPU-Z (CVE-2017-15302), ASUS
+(CVE-2018-18537)。
+
+挖矿木马常用的矿机所使用的WinRing0.sys也是一个非常常见的VulnDriver，这个驱动是一个名为NZXT
+CAM的计算机硬件性能监控产品内的一个便于程序访问Windows内核的组件。
+
+这个看起来不大的驱动程序上存在着 **多达11个CVE漏洞**
+，其中CVE-2020-13516可以越权直接从USB和PCI设备查询信息；CVE-2020-13515可以越权将数据写入I/O总线，可能会更改PCI配置信息或特定于供应商的数据寄存器，帮助其他程序完成提权；CVE-2020-13518可以越权直接访问rdmsr，任意读取MSR内数据；CVE-2020-13519可以越权直接访问writemsr，向MSR内写入数据。
+
+因此，利用这个驱动程序做很多事情，其利用成本低，很受以营利为目的网络攻击者欢迎。
+
+在前段时间Log4j 曝出存在RCE漏洞的时候，该漏洞被大量的黑产攻击者利用，这个驱动程序也连带着出现在了大众的视野之中。  
+![](https://images.seebug.org/content/images/2022/03/431c2838-aa55-4f74-b3c0-bde73f9443d6.png-w331s)
+
+这些VulnDriver **带着官方的签名** ，而且本身没有什么恶意行为，因此很多安全厂商都不会告警。
+![](https://images.seebug.org/content/images/2022/03/42a3b378-d795-4f42-9c10-112aeefc2020.png-w331s)
+
+在不久前被曝光的方程式组织的后渗透框架DanderSpritz中，也存在VulnDriver的利用，在其名为DoubleFeature的插件中，存在名为hidsvc.sys的驱动程序，该驱动程序存在
+CVE-2017-0005 漏洞，能够让攻击者 **通过用户层代码指定名称和参数来调用内核功能。**
+
+说到这，我们来简单了解一些方程式这个组织吧。
+
+**方程式组织被称为世界上最尖端的网络攻击组织之一** ，和恶名昭彰的震网（Stuxnet）和火焰（Flame）有着很深的联系。
+
+震网是一个全球性质的工业病毒，是世界上首个网络“超级破坏性武器”，曾被用来攻击伊朗核设施，手法极其阴险。
+
+同时，我国的工业设施也受到了一定的影响。
+
+因此他们的存在，是国家机密和关键基础设施巨大的威胁。
+
+在这次被曝光的项目中存在一个远程访问工具，其下有一个名为MSNDSRV.sys的驱动程序。
+
+![](https://images.seebug.org/content/images/2022/03/b7c73258-ac90-4ac1-8c63-534896097931.png-w331s)
+该驱动程序曾在2015年的EquationDrug
+组件中被提到，可以隐藏用户侧组件，另外可以在注册表遍历所有网卡，调用NdisRegisterProtocol函数注册一个NDIS流量监听器，可以接收到受害主机所有流量，实现通讯流量监控。
+
+在两个庞大的项目中，这个驱动程序显得微不足道，和之前提到的Rootkit程序相比，方程式组织的Rootkit技术没有核心组件的地位，只是整个项目下某一个插件下的一个组件，是一个
+**“随取随用”** 的地位。
+
+但就是这样一个看起来不值一提的组件，在两个程序中都出现了。
+
+足以说明，Rookit是方程式组织在攻击组件开发的过程中非常常用的技术，而对于这类常用的组件，攻击者也不会花太多心思进行二次开发。
+
+然而就算是这样，安全厂商仍旧鲜有捕获到方程式组织的活动痕迹，该组织的高隐匿技术之强，可想而知。
+
+## 检测-这是一场与攻击者的军备竞赛
+
+业界对反Rootkit软件使用的技术进行了分类。 **签名的检测** （Signature-based detection）、 **文件完整性监测**
+（File integrity monitoring）、 **Rootkit Hook检测** （Rootkit hooking detection）、
+**交叉视图分析** （Cross-view analysis）以及 **基于网络的检测** （Network-based detection）。
+
+基于签名的检测就是 **匹配rootkit软件字节特征**
+，缺点是无法匹配新的rootkit，而且特征容易更改，对于已安装rootkit的系统再实施检测不理想。
+
+文件完整性监测，该方法 **计算关键的、不变的操作系统文件的哈希，并将其与存储在数据库中的已知值进行比较。**
+这项技术对于在磁盘上修改系统二进制文件的rootkit很有效，但rootkit的作者很快使用hooking或DKOM技术，以此篡改执行结果，使得检测效果不理想。
+
+Rootkit Hook检测， **SSDT、IAT和IDT都有一组用于每个服务或中断的函数指针，它们都在内存中的特定范围内。**
+当rootkit修改Hook指向恶意服务或中断例程时，函数指针所指向的位置几乎总是位于特定内存地址范围之外。在这期间还发展了Inline
+Hook形式，来规避这些关键表的检测，后来发展了FSD Hook、FSD Inline Hook。
+
+交叉视图分析， **交叉视图分析涉及从“用户”或“API”视图查看系统，并将其与低级视图进行比较**
+，交叉视图方法可以检测基于DKOM和系统例程补丁的Rootkit，不能检测基于HOOK的Rootkit。
+
+基于网络的检测，理论上，rootkit可能会试图隐藏其网络通信，以逃避操作系统或用户的检测，但是 **从系统外部还是能看到流量的**
+，这方面成了C2隐藏通信和网络检测的较量。
+
+Windows也引进了一些防御技术，PatchGuard和DSE。PatchGuard用于内核完整性检测，守护容易被HOOK的地方。DSE用于检测驱动签名，限制未签名驱动加载。上文提到的Turla则绕过了这种限制，通过引入VulnDriver间接绕过。通过修改内存中的特殊变量就能关闭DSE功能，此时，加载第二个未签名的恶意驱动，直接
+**HOOK PatchGuard告警的关键函数** ，在下一个内核完整性校验过程中不让异常表现出来，从而完成了PatchGuard功能的绕过。
+
+## 总结
+
+说了这么多，其实只想说明一个问题，那就是Rootkit技术一直都没有过时，它一直都是攻击者青睐的攻击技术。
+**虽然他的热度被各式各样的新型网络威胁所掩盖，但在那些网络攻击的事件中，我们又常常能见到它的影子。**
+
+在我们忙于研究处理其他网络威胁技术的时候，它也在以某种的方式存在，并不断成长着。在安全厂商不断提升己方检测能力的同时，攻击者也在不断提升对抗能力，传统的检测方式不断的承受着一轮又一轮的攻击。
+
+对于高对抗的Rookit技术的检测，对于传统的检测技术是一个很大的挑战，安全厂商还有很多的工作要去完成。
+
+## 参考链接
+
+1 . <https://decoded.avast.io/martinchlumecky/dirtymoe-rootkit-driver/>
+
+2.<https://blog.talosintelligence.com/2020/12/vuln-spotlight-NZXT-CAM-.html>
+
+3.<https://blog.minerva-labs.com/malicious-telegram-installer-drops-purple-fox-rootkit>
+
+4.<https://www.lastline.com/labsblog/dissecting-turla-rootkit-malware-using-dynamic-analysis/>
+
+5.<https://mp.weixin.qq.com/s/a1LgQqmkGFYYq7JQLQKmMQ>
+
+6.《Eset-Turla-Outlook-Backdoor》
+
+7.<https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/>
+
+8.<https://unit42.paloaltonetworks.com/acidbox-rare-malware/>
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1872/>
+

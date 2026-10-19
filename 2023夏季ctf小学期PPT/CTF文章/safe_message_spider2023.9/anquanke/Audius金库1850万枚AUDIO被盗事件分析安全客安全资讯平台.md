@@ -1,0 +1,136 @@
+# Audius金库1850万枚AUDIO被盗事件分析
+
+阅读量 **130530**
+
+发布时间 : 2022-08-02 14:30:25
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t016d7898f47c3d5881.png)
+
+## 0x1 事件背景
+
+零时科技区块链安全情报平台监控消息，北京时间2022年7月24日，Web3音乐流媒体服务平台Audius社区金库被黑客攻击，损失1850万枚AUDIO
+Token，黑客地址0xa0c7BD318D69424603CBf91e9969870F21B8ab4c。零时科技安全团队及时对此安全事件进行分析。
+
+## 0x2 攻击信息
+
+**攻击者地址**
+
+0xa0c7BD318D69424603CBf91e9969870F21B8ab4c
+
+**攻击交易**
+
+0xfefd829e246002a8fd061eede7501bccb6e244a9aacea0ebceaecef5d877a984
+
+0x3c09c6306b67737227edc24c663462d870e7c2bf39e9ab66877a980c900dd5d5
+
+0x4227bca8ed4b8915c7eec0e14ad3748a88c4371d4176e716e8007249b9980dc9
+
+**攻击合约**
+
+0xa62c3ced6906b188a4d4a3c981b79f2aabf2107f
+
+0xbdbb5945f252bc3466a319cdcc3ee8056bf2e569
+
+**被攻击合约Governance**  
+0x35dd16dfa4ea1522c29ddd087e8f076cad0ae5e8
+
+## 0x3 攻击步骤
+
+  1. 攻击者部署攻击合约
+  2. 攻击者通过evaluateProposalOutcome方法评估目前 84 提案是否通过（84提案由攻击者发起，但缺少提案通过的条件）
+
+3.发起新的提案
+85，提案内容是通过transfer方法转移给0xbdbb5945f252bc3466a319cdcc3ee8056bf2e569转移大量资金。
+
+![](https://p4.ssl.qhimg.com/t01bebb1398c1efd01e.png)
+
+  1. 调用Staking.initialize初始化方法将攻击者合约地址设置为管理员地址（重点：攻击者为什么能调用初始化方法）
+  2. 调用DelegateManagerV2.initialize初始化方法更新管理员地址
+  3. 调用DelegateManager.setServiceProviderFactoryAddress方法更新serviceProviderFactoryAddress地址
+  4. 调用delegateStake方法给攻击者合约地址委托大量投票
+  5. 攻击者调用submitVote方法进行投票
+  6. 攻击者调用evaluateProposalOutcome方法评估 85 提案通过并成功完成转账。
+
+## 0x4 攻击核心
+
+**初始化 Initializable contract**
+
+  
+initializer() 修饰符判断中的三个条件：
+
+initializing：初始为false，方法执行结束后也是false。
+
+isConstructor()：初始部署合约时，代码在运行构造函数时仍未部署，对其代码大小的任何检查都会产生零。
+
+!initialized：初始为true，满足条件，方法执行结束后修改为false，不能进行二次调用。
+
+正常调用初始化合约，经过initializer修饰的方法只能调用一次，这里攻击者在多个合约中都进行了调用，什么情况？
+
+Audius平台存在代理合约， Governance合约由代理合约进行调用，部署时Governance合约会调用初始化合约中的修饰符。
+
+![](https://p1.ssl.qhimg.com/t01e572f1e2cb568b4a.png)
+
+初始化的结果是确定了governanceAddress地址，该地址存在第一个卡槽，并且此次初始化的修饰符条件中，变量的布尔值也存储在第一个卡槽，由此发生了存储冲突，之后的结果是initializing变量恒为true。initializer()
+修饰可多次调用。
+
+## 0x5 资金来源及流向
+
+**5.1 资金来源**
+
+攻击者资金来源于Binance链上Tornado.Cash混币平台
+
+![](https://p3.ssl.qhimg.com/t0173f671f8e6927a79.png)
+
+**5.2 资金流向**
+
+目前攻击者已将获利资金转移至Tornado.Cash混币平台
+
+![](https://p4.ssl.qhimg.com/t01f404b13774a92d46.png)
+
+## 0x6 总结及建议
+
+通过此次攻击来看，虽然openzeppelin官方的代理模式中声明了多种存储冲突的模式，但当多种逻辑组合在一起时，也会发生意外的存储冲突。目前Audius官方已在初始化修饰中增加了判断条件，防止二次利用，并在初始化合约中增加了存储参数。
+
+**安全建议**
+
+建议存在代理的合约在上线前对存储冲突问题进行专项审查
+
+建议项目方上线前进行多次审计，避免出现审计步骤缺失
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **零时科技** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/277154](/post/id/277154)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [区块链](/tag/区块链)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t01482eaf8414a7973c.png) 零时科技
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

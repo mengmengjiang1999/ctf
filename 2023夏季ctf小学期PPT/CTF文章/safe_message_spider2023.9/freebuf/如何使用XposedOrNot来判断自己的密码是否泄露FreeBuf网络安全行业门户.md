@@ -1,0 +1,83 @@
+##  XposedOrNot
+
+**XposedOrNot(XoN)这款工具可以搜索一个由约8.5亿个实时密码组成的xposed密码聚合存储库，而网络攻击这可以使用这种泄露的密码来对用户的个人账户产生威胁，因此广大用户可以使用这个密码库来判断自己的账户安全情况。**
+
+###  工具运行截图
+
+![](https://image.3001.net/images/20200110/1578585711_5e174e6fecd88.png!small)
+
+##  Xposed密码是什么？
+
+这个项目的主要目的是给公众提供一个免费的平台，帮助广大用户检查自己的密码是否暴露和泄露。这个大规模的密码聚合存储库，是由研究人员从世界各地各种数据泄露事件中收集到的，是真实密码的累积。其中，也有很多密码是利用漏洞获取到的，例如Collection#1和Yahoo等。此外，很多密码通常也会在pastebin.com的“剪切板”中泄露出来，我们已经获取到了超过40000次这样的密码泄露了，并且又一次将这些数据添加到了这个庞大的密码聚合存储库中。
+
+整理后的密码用高度安全的散列算法SHA-3（Keccak-512）进行散列运算，并以单向散列存储以供验证。我们的博文中没有明文存储的密码，匿名检查的过程也有详细说明，免费提供的这8.5亿个密码，只为增强网络安全态势。
+
+##  工具安装
+
+    
+    
+    git clone <https://github.com/Viralmaniar/XposedOrNot.git>
+    
+        cd XposedOrNot
+    
+        pip install -r requirements.txt
+    
+        python XposedorNot.py
+
+##  如何解析输出？
+
+工具的输出结果由JSON格式数据组成，给出的是JSON输出而不是YES或NO的主要原因是为了确保广大用户可以进一步使用这些数据来开发和改进聚集在这里的大量实时公开的密码。
+
+第一个元素“anon”被添加到存储在XoN中的所有密码散列中，以方便关注隐私的用户进行搜索。第二个元素“char”是一个密码特性列表，它可以进一步用于理解密码的强度，从而知道这是否能满足应用程序的需要，因为许多网站都有根据字符数、字母、数字和特殊字符的混合密码选择策略。
+
+###  下表用简单的术语详细说明了这些特性：
+
+**密码元素** |  **描述**  
+---|---  
+数字  |  数字的数量  
+字母  |  字母的数量  
+特殊字符  |  特殊字符的数量  
+长度  |  密码长度  
+  
+最后一个“count”表示在收集的exposed数据泄露中观察到该密码的次数。
+
+另外，还需要注意的一点是，我们使用了Keccak-512散列在XoN中搜索和存储数据。像MD5和SHA1这样的传统散列算法目前已经被弃用了，而且考虑到公开的记录数量巨大，因此这里使用Keccak-512散列算法。
+
+但是，Keccak-512的长度为128个字符，它将占用更多的存储空间。
+
+###  下面给出的是两个Keccak-512哈希：
+
+    
+    
+    test - 1e2e9fc2002b002d75198b7503210c05a1baac4560916a3c6d93bcce3a50d7f00fd395bf1647b9abb8d1afcc9c76c289b0c9383ba386a956da4b38934417789e pass - adf34f3e63a8e0bd2938f3e09ddc161125a031c3c86d06ec59574a5c723e7fdbe04c2c15d9171e05e90a9c822936185f12b9d7384b2bedb02e75c4c5fe89e4d4
+
+如果没有发现匹配的密码，则输出结果如下：
+
+    
+    
+    {
+    
+          "Error": "Not found"
+    
+        }
+
+##  密码收集时间轴
+
+![](https://image.3001.net/images/20200110/1578585766_5e174ea6ba14d.png!small)![](https://image.3001.net/images/20200110/1578585766_5e174ea6d6da3.png!small)![](https://image.3001.net/images/20200110/1578585766_5e174ea6c9a18.png!small)![](https://image.3001.net/images/20200110/1578585767_5e174ea749ed9.png!small)![](https://image.3001.net/images/20200110/1578585767_5e174ea792771.png!small)
+
+> 详细列表可以点击【[这里](https://xposedornot.com/xposed)】获取。
+
+##  许可证协议
+
+本项目的开发和发布遵循[Creative Commons Attribution
+4.0国际许可证](http://creativecommons.org/licenses/by/4.0/)。
+
+##  项目地址
+
+> XposedOrNot：【[GitHub传送门](https://github.com/Viralmaniar/XposedOrNot)】
+
+ ***
+参考来源：[Viralmaniar](https://github.com/Viralmaniar/XposedOrNot)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+
+  
+

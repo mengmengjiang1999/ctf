@@ -1,0 +1,171 @@
+[i春秋作家：TGhost](https://bbs.ichunqiu.com/thread-39238-1-1.html?from=beef)
+
+  
+
+专业的[渗透测试](https://bbs.ichunqiu.com/thread-39238-1-1.html?from=beef)者一般会使用直接链接到互联网的主机，这个主机一般具有公网IP，而且他们进行渗透测试时不受任何的防火墙和NAT设备的妨碍。如此自由的进行渗透测试，执行反弹shell，自然是最方便的。  
+  
+当然并不是每个人都有一台可以直接链接互联网的主机，随着免费公共IP地址的数量不断减少，这慢慢变成一件非常奢侈的事。所以更多的是在局域网的路由器或防火墙之后进行渗透测试。  
+然而将内网的流量和公网的流量进行互相转化，这不仅要保护在一些扫描中（比如端口扫描）不被打断，而且由于主机位于专用局域网中，位于路由器或防火墙之后，因此无法直接到达互联网。
+
+在这种情况下无论是发动攻击还是处理反向传入的shell都可能会有问题。
+
+在这篇文章中，我们将看看如何正确配置Meterpreter的payloads使整个渗透测试都位于NAT设备的后面。我们将使用浏览器漏洞利用来演示如何获得一个可用的Meterpreter的session，即使目标和Metasploit的攻击机都位于NAT之后。
+
+## 网落配置：
+
+以下是我将在这篇文章中配置的网络：  
+
+![image.png](https://image.3001.net/images/20180425/15246400292610.png!small)
+
+攻击者和目标都在NAT设备的后面。 我们不知道目标使用的IP范围，而且我们已经确定从互联网到目标网络没有直接的途径，因此目标没有公网IP。
+
+我们假设目标能够通过端口80和443连接到网络。  
+我使用IP 1.1.1.1来表示我们的攻击网络的IP。在尝试本文中的步骤时，您必须用您自己的公网IP替换此IP。
+
+我将使用Kali Linux作为攻击机，我已经设置了一个Metasploit Git仓库的克隆：  
+
+![image.png](https://image.3001.net/images/20180425/15246409243057.png!small)如果你已经建立了一个git克隆，确保使用“git
+pull”更新到最新的。  
+目标是一个Windows XP
+SP3（这不是重点，重点是浏览器漏洞），安装IE8（可以从[http://utilu.com/IECollection/](https://bbs.ichunqiu.com/thread-39238-1-1.html?from=beef)下在各种版本的IE）本文使用这个IE版本，因为已经果实，并且非常容易受到大多数IE8浏览器漏洞的攻击  
+
+##
+
+设置转发攻击方的流量：  
+  
+
+如果我们想要链接目标，我们就需要配置攻击者防火墙/NAT以特定端口上来转发流量。（确切的步骤还要看所使用的品牌/型号/类型的路由器和防火墙，超出了本文的讨论的范围）一般来说，是配置路由器/防火墙的80或443端口，以便将192.168.0.187（这是我的攻击者的内网IP）被转发到公网IP地址。在设置路由器/防火墙时，请确保检查路由器/防火墙（管理借口，VPN端点等）未使用端口80或443。  
+我们将使用端口80来提供浏览器漏洞，并使用端口443用来反向链接Meterpreter。首先，我们需要验证能否正常的转发。  
+在Kali上，我们先创建一个小的html文件并将其保存在/tmp下。
+
+![image.png](https://image.3001.net/images/20180425/1524640942372.png!small)
+
+接下来，我们要确定80和443端口没有运行什么别的服务。
+
+![image.png](https://image.3001.net/images/20180425/15246409539881.png!small)如果这两个命令没有输出什么，那表示80和443端口没有运行什么别的服务。但如果列出了某些内容，则需要查找占据该端口的进程，并终止该进程。以80端口为例，您可以使用以下lsof命令检查正在控制http端口的进程:  
+
+![image.png](https://image.3001.net/images/20180425/15246410283505.png!small)只需停止apache2服务即可:  
+
+![image.png](https://image.3001.net/images/20180425/1524641042771.png!small)当80和443端口都可用时，我们将运行一个简单的Web服务器并提供“test.html”页面。从而test.html文件的文件夹中，运行以下python命令：  
+![image.png](https://image.3001.net/images/20180425/1524641057716.png!small)如果您现在链接到Kali本身的<http://192.168.0.187/test.html>，您应该看到“It
+works”页面：
+
+  
+![image.png](https://image.3001.net/images/20180425/15246403508500.png!small)
+
+Kali输出应该列出链接并显示该页面的响应为200  
+
+![image.png](https://image.3001.net/images/20180425/15246410765970.png!small)完美，这说明了网络服务正常。在目标计算机上，链接到[http://1.1.1.1/test.html](https://bbs.ichunqiu.com/thread-39238-1-1.html?from=beef)（再次确认，用攻击者端的路由器/防火墙的公网IP替换1.1.1.1），你应该看到同样的东西。如果你没有看到该页面，请检查转发设置是否正确。
+
+  
+这适用于端口80，攻击者可以使用CTRL+C来终止python命令。当然我们可以再次启动该命令，这次使用端口443：  
+
+![image.png](https://image.3001.net/images/20180425/15246411208873.png!small)
+
+现在通过端口443访问网络服务器。尽管我们通常使用443并且443通常与https（加密）有关，但我们的pyhton处理程序并未使用加密。换句话说，我们仍需要在URL中使用http而不是https:（尴尬）![image.png](https://image.3001.net/images/20180425/15246404052420.png!small)![image.png](https://image.3001.net/images/20180425/15246411485777.png!small)（不要担心关于/favicon.ico有关的404消息-忽略它们就好了）
+
+如果您可以从目标计算机链接到[http://1.1.1.1:443/test.html](https://bbs.ichunqiu.com/thread-39238-1-1.html?from=beef)，我们就知道端口转发的80和443端口都能正常工作。如果发生了什么错误，那么就没有意义继续进行实验了。
+
+如果一切正常，就关闭pyhton命令以释放443端口。
+
+  
+
+  * Metasploit的设置：  
+  
+
+浏览器漏洞利用 - meterpreter / reverse https  
+首先，让我们设置Metasploit来为浏览器利用并处理反向https
+Meterpreter链接。利用思路是欺骗目标链接到80端口上的漏洞利用程序，并通过端口443服务meterpreter/reverse_https链接。  
+转到metasploit-framework文件夹，打开msfconsole（如果你是想从当前文件夹运行msfconsole，而不是与Kali一起安装的版本）并选择一个漏洞利用。在本实验中，我将使用ms13_069_caret.rb:  
+
+![image.png](https://image.3001.net/images/20180425/15246411878111.png!small)显示配置选项：
+
+![image.png](https://image.3001.net/images/20180425/15246415581688.png!small)这个漏洞首先需要设置SRVHOST和SRVPORT。这两个参数将被Metasploit用来确定Web服务器需要绑定和监听的IP和端口。
+
+实验的计划是欺骗目标连接到这个网络服务器，使用我们的防火墙/路由器的公网IP，然后将该流量转发到我们的Metasploit。
+
+  
+我们无法告诉Metasoloit的网络服务器去侦听路由器的公网IP，因为Metasploit无法将自己“绑定”到该IP地址。如果我们使用0.0.0.0，Metasploit的网络服务器将简单地监听传入流量的所有接口。换句话说，我们既可以将SRVHOST不改变其设置0.0.0.0，也可以将其设置为Kali本身的内网IP（本例中192.168.0.187）。本次实验中我们将保留默认的0.0.0.0。接下来，我们需要将端口更改为80，并将URLPATH设置为/（以便我们可以知道URL将会是上呢么，而不是让Metasploit来创建一个随机URL）：
+
+![image.png](https://image.3001.net/images/20180425/15246413101989.png!small)接下来，我们选择windows的payload,meterpreter
+reverse_https。如果我们再次运行“show options”，我们会看到：
+
+  
+
+![image.png](https://image.3001.net/images/20180425/15246413573816.png!small)
+
+选项SRVHOST和SRVPOR可以按照我们所希望的方式来设置。payload选项需要LOHOST和LPORT。根据上面的显示，Meterpreter尝试反向连接的LPORT已经设置为443端口。如果它未被设置为443框中，需要“set
+LPORT
+443”以确保Meterpreter处理程序将侦听443端口：![image.png](https://image.3001.net/images/20180425/15246413791874.png!small)注意：无论如何，为了让实验尽可能简单，请尝试将相同的端口用于特定的“服务”。也就是说，如果您主机的Web服务在防火墙的80端口上，请尝试确保将流量转发到攻击者/
+Metasploit框中的端口80，并将漏洞托管在Metasploit的端口80上。尝试确保转发到攻击者（Metasploit）上的80端口。并在Metasploit的80端口上利用漏洞。这一样适用于payload。如果我们在443端口上提供payload，请确定使用相同的端口在所以的地方。
+
+  
+LHOST有两个用处：
+
+  
+它指示Meterpreter shellcode要反向连接的IP地址（从目标反向攻击者）。
+
+它告诉Metasploit绑定到Meterpreter“handler”的地方。  
+  
+由于我们的攻击方主机位于NAT设备的后面，因此我们必须使用路由器/防火墙的公网IP地址作为LHOST。当攻击被执行时，这个IP将被嵌入到shellcode中，并且当初始的Meterpreter
+shellcode在目标上运行时，它将反向连接回这个IP地址。路由器/防火墙上的端口转发会将流量转发到攻击者主机的内网
+IP上。我们的路由器/防火墙上的端口转发会将流量转发到我们的攻击者主机的内网IP。
+因此，我们需要将LHOST设置为1.1.1.1（攻击者路由器/防火墙的公网IP）
+
+  
+直接使用公网IP作为LHOST就意味着Metasploit将在设置Meterpreter的处理程序时尝试将自己绑定到该IP。而此IP属于路由器/防火墙而不属于Metasploit，所以这显然会失败。不过Metasploit会自动回退到0.0.0.0，并且基本上为攻击者主机上所有本地IP的Meterpreter
+handler 提供服务，同时记住LHOST已设置为公网IP地址。 这是我们所需要的。  
+设置LHOST为1.1.1.1：
+
+![image.png](https://image.3001.net/images/20180425/15246413953207.png!small)如果我们不想让Meterpreterhandler程序回退到0.0.0.0，我们可以使用其中一个“高级”选项并告诉它监听内网
+IP地址：  
+
+![image.png](https://image.3001.net/images/20180425/1524641410414.png!small)启动漏洞利用：
+
+![image.png](https://image.3001.net/images/20180425/15246414295693.png!small)以上的输出告诉了我们：
+
+  
+  
+[http://0.0.0.0:80](https://bbs.ichunqiu.com/thread-39238-1-1.html?from=beef)（或[http://192.168.0.187:80](https://bbs.ichunqiu.com/thread-39238-1-1.html?from=beef)）正在执行浏览器漏洞。
+如果目标连接到[http://1.1.1.1](https://bbs.ichunqiu.com/thread-39238-1-1.html?from=beef)，则流量将转发到Kali的80端口上并进行该漏洞利用。
+
+  
+HTTPS handler正在反向侦听192.168.0.187端口443。
+
+  
+我们在输出中看不到的，是实际的Meterpreter shellcode包含IP地址1.1.1.1来连接回来. 该值是LHOST。  
+但如果您没有使用ReverseListenerBindAddress，却在运行“exploit”之后获得类似下面的输出内容，请检查以下内容：  
+
+1.检查端口是否可以使用
+
+2.确保你运行的是最新版本的Metasploit
+
+3.将ReverseListenerBindAddress设置为您的本地内网IP或0.0.0.0
+
+4.退出msfconsole并再次打开它。 在某些情况下，您会注意到，如果您之前运行过会话，则无法正确清理绑定。  
+
+![image.png](https://image.3001.net/images/20180425/15246414551694.png!small)如果我们现在的目标上使用IE8（来自IECollection），并在80端口上连接到攻击者路由器/防火墙的公共IP，我们应该看到：
+
+![image.png](https://image.3001.net/images/20180425/15246414902469.png!small)2.2.2.2是目标的公网IP。当目标连接到80端口时，Metasploit发送payload，利用浏览器并执行初始meterpreter的payload。  
+
+该payload将下载metsrv.dll（它首先由Metasploit修补，因此它将包含攻击者的公网IP和端口），将其加载到内存中（使用反射加载）并运行代码。完成后，我们将获得完整的Meterpreter会话。
+
+  
+所以，设置下面的变量，你应该很好去：  
+
+![image.png](https://image.3001.net/images/20180425/15246415129768.png!small)如果出于一些的原因，您还希望将Meterpreter处理程序托管在另一个端口上，而不是客户端将连接到的端口，那么您可以使用LPORT来指定目标将连接回的位置，并使用ReverseListenerBindPort指示handler需要的位置侦听。  
+
+当然，您需要确保端口转发将连接到攻击者计算机上的正确的端口。
+
+  
+
+  * 作者：Corelan Team (corelanc0d3r)
+  * 翻译：i春秋翻译小组-Btos
+  * 审核人员：F0mat
+  * 翻译来源：[https://www.corelan.be/index.php/2014/01/04/metasploit-meterpreter-and-nat/](https://bbs.ichunqiu.com/thread-39238-1-1.html?from=beef)
+
+  
+
+有问题可以留言哦，也欢迎大家到论坛中来耍一耍
+[>>>点击跳转](https://bbs.ichunqiu.com/portal.php?from=beef)
+

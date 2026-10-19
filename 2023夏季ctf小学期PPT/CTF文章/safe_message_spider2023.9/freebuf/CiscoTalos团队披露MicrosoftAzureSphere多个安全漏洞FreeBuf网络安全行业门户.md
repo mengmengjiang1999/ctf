@@ -1,0 +1,31 @@
+Cisco Talos团队的研究人员最近对Microsoft的Azure Sphere进行了测试，发现了七个安全漏洞。Microsoft Azure
+Sphere是一个云连接的SoC平台，为IoT应用程序提供持续的安全性。围绕Azure Sphere平台的基础设施是Microsoft的Azure
+Sphere云，它负责安全更新，应用部署，和定期检查设备的完整性。在内部，SoC是由一组具有不同作用的数个ARM核心组成的。
+
+Talos发现Azure
+Sphere中存在两个可联合使用的安全漏洞，如果攻击者可以显示恶意应用程序，则可利用漏洞任意写入/mnt/config分区任意位置，进一步提升权限。
+
+研究人员还在该平台中发现两个安全漏洞，攻击者可利用这两个漏洞在A7核心受限的Linux用户区执行任意shellcode，通常，A7核心受限的Linux用户区保证只有签名的代码才可在该设备上执行（除了ROP
+gadgets）。
+
+Talos团队还在Azure Sphere中发现了一个信息泄露漏洞，一个拒绝服务漏洞和一个内存损坏漏洞。
+
+Talos团队发现的这些安全漏洞的概要如下。
+
+研究人员发现的信息泄露漏洞存在于Microsoft Azure Sphere
+20.05版本的内核消息环缓冲区功能中。攻击者可通过klogctl访问该环形缓冲区利用该漏洞泄露敏感信息，例如内核或用户区内存地址。
+
+Azure Sphere 20.05版本Normal
+World的签名代码执行功能存在一个访问控制错误漏洞，攻击者可借助特制的shellcode利用ptrace系统调用触发该漏洞。此外，该功能还受到另一个访问控制错误漏洞的影响，攻击者可借助特制的shellcode通过/proc/self/mem在运行时修改该程序利用该漏洞执行代码。
+
+Azure Sphere 20.05版本的异步ioctl功能中也存在一个安全漏洞，攻击者可借助一系列特制的ioctl调用利用该漏洞造成拒绝服务。
+
+Talos团队披露的第五个漏洞存在于Azure Sphere 20.05版本的AF-AZSPIO
+socket功能中，攻击者可通过一系列socket操作利用该漏洞造成内存损坏。
+
+此外，研究人员还发现Azure Sphere 20.06版本存在两个安全漏洞。第一个漏洞存在于ASXipFS inode
+type功能中，攻击者可借助特制的图像数据包利用该漏洞提升权限。第二个漏洞是个访问控制错误漏洞，存在于mtd字符设备驱动程序中，攻击者可利用该漏洞提升权限。
+
+Cisco Talos表示已同Microsoft合作，确保上述漏洞得到修复。Microsoft也已为Azure
+Sphere发布了安全更新，不过，Microsoft拒绝为这些漏洞分配CVE编号。
+

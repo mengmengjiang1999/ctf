@@ -1,0 +1,367 @@
+## 前言
+
+ **近日，安天CERT（安全研究与应急处理中心）在梳理相关安全事件时发现多例对马拉维国民银行（National Bank of
+Malawi）的钓鱼邮件攻击样本。马拉维共和国（Republic of
+Malawi）是位于非洲东南部的内陆国家，国土面积11.8万平方公里。截至2017年9月，其全国共计人口2840万人，是非洲撒哈拉沙漠以南人口密度最高的国家之一。其国家经济长期依赖农业出口，政府常年靠举债度日，曾被联合国评为世界上最贫困的国家之一（摘自维基百科），国民银行是其国内最大的商业银行。**
+
+![](https://image.3001.net/images/20181128/1543393046_5bfe4f1658ab9.jpg!small)
+
+安天通过对攻击样本和关联线索的综合分析，发现这是一系列以金融机构电子邮件为突破口，通过邮件进行交叉渗透的定向攻击事件。攻击者使用对陈旧漏洞的免杀技巧构造攻击载荷执行入口，而攻击载荷采取对多个开源代码进行改写和重新编译，将二进制远控木马加密嵌入其中，实现内存执行，达到免杀和绕过安全机制的效果。
+
+## 一、概述
+
+在这一系列攻击事件中，有四家马拉维国民银行的地方分行，成为攻击者的重要目标，其中大南部区（southend）官方客服邮箱已经被攻击者盗用。攻击者利用事先从国民银行部分地区分行盗取的官方邮箱口令，向其他分行工作人员发送带有恶意文档附件的邮件，作为附件的恶意文档利用CVE-2014-6352漏洞[1]发起攻击。此漏洞可以绕过“沙虫”漏洞（SandWorm）补丁MS14-060的安全保护。漏洞利用成功后，样本会执行名为“Target.scr”的可执行程序，该程序由攻击者基于开源代码[2]修改编译生成，攻击者在重写了main函数代码，程序运行时并不会调用开源代码原有的功能函数，而是内存展开执行内嵌的DarkComet远控木马，进而向目标系统发起攻击。
+
+![](https://image.3001.net/images/20181128/1543393062_5bfe4f2607ec5.png!small)
+
+图 1-1攻击流程示意图
+
+### 1.1 钓鱼邮件详情
+
+钓鱼邮件<1>于马拉维时间2018年10月4日（周四）上午10:43被发送到马拉维国民银行大南部区（southend）客服中心某员工所管理的官方邮箱中（可能由于地理位置紧邻和管理成本问题，大南部区（southend）客服中心并入了利隆圭（Lilongwe）地区分行）。发件人为“Yousef
+Syda”，是马拉维国民银行萨利马（Salima）分行的员工，初步判断该邮箱已被盗。
+
+![](https://image.3001.net/images/20181128/1543393079_5bfe4f37df931.png!small)
+
+图 1-2 钓鱼邮件<1>内容
+
+钓鱼邮件<2>于马拉维时间2018年10月4日（周四）上午10:52被发送到马拉维国民银行松巴（Zomba）分行经理Thomas
+Chimkowola所管理的官方邮箱<zomba@natbankmw.com>中，显示发件人仍为“Yousef
+Syda”，时间上晚于钓鱼邮件<1>约9分钟。
+
+![](https://image.3001.net/images/20181128/1543393087_5bfe4f3fc6ad3.png!small)
+
+图 1-3 钓鱼邮件<2>内容
+
+被盗邮箱Yousef Syda <salima@natbankmw.com>两次发信的IP地址均为185.82.***.***。
+
+![](https://image.3001.net/images/20181128/1543393108_5bfe4f5412193.png!small)
+
+图1-4 被盗邮箱的IP地址
+
+两份邮件带有同一标题“MONEY GRAM ACTION PLAN FOR OCTOBER- DECEMBER
+2018（2018年10月到12月MoneyGram汇款计划）”，无正文，邮件标题字元集属性为UTF-8，并附有同一恶意文档“MONEY GRAM
+ACTION PLAN FOR OCTOBER- DECEMBER
+2018.ppsx”，该文档使用漏洞CVE-2014-6352[1]进行攻击，该漏洞可绕过“沙虫”漏洞（SandWorm）补丁MS14-060的安全保护。在接收人双击打开ppsx文档后，其会自动开始Slide
+Show播放模式，触发Verb动作，执行临时目录下释放的恶意代码“Target.scr”。
+
+### 1.2 被攻击者信息
+
+受害者的邮箱域名natbankmw.com归马拉维国民银行所有[3]。马拉维国民银行成立于1971年，由起源于南非的标准银行（Standard
+Bank）和英国巴克莱银行DCO（Dominion Colonial
+Overseas）合并成立，现共拥有850名员工，总部坐落于马拉维的金融和商业中心布兰太尔市（Blantyre）。截至2016年12月，该银行的总资产价值为3140亿MWK（马拉维克瓦查，约合4.4亿美元），是马拉维最大的商业银行[4]。
+
+![](https://image.3001.net/images/20181128/1543393119_5bfe4f5f79290.png!small)
+
+图 1-5 马拉维国民银行总部建筑(纬度：-15.8 经度：35.0)
+
+截至2018年4月，马拉维国民银行在马拉维全国维持了30多家分行，简称“客服中心”（Service
+Centers）。但由于银行缺乏资金和运营问题，多地“客服中心”管理混乱。2016年曾经发生巴拉卡（Balaka）地区分行的在职员工监守自盗取走上百万MWK银行存款的事件[5]。此次网络攻击事件也正是首先针对地区分行的薄弱点，盗取分行邮箱向其他分行员工发送钓鱼邮件的典型案例。
+
+![](https://image.3001.net/images/20181128/1543393127_5bfe4f67cb228.png!small)
+
+图 1-6 此次攻击事件受害者之一，马拉维国民银行利隆圭（Lilongwe）分行
+
+![](https://image.3001.net/images/20181128/1543393134_5bfe4f6e333e6.png!small)
+
+图 1-7 此次攻击事件受害者之一，马拉维国民银行松巴（Zomba）分行
+
+![](https://image.3001.net/images/20181128/1543393149_5bfe4f7d4694f.png!small)
+
+图 1-8 被盗邮箱所属分行，马拉维国民银行萨利马（Salima）分行
+
+事件相关的三个邮箱皆由国民银行三个地区分行“Salima Malawi”、“Zomba Malawi”及“Lilongwe
+Malawi”的员工所管理，邮箱地址均可从银行官方网站客服主页上获取，被盗取的是第一位员工Yousef Syda的邮箱，可能是攻击者完成的第一个突破口。
+
+![](https://image.3001.net/images/20181128/1543393157_5bfe4f85c9705.png!small)
+
+图 1-9公开在国民银行官网上的地区客服信息
+
+## 二、样本分析
+
+### 2.1 PPSX样本分析
+
+样本“MONEY GRAM ACTION PLAN FOR OCTOBER- DECEMBER
+2018.ppsx”由钓鱼邮件投递，利用了著名的“沙虫”（SandWorm）漏洞补丁的绕过漏洞CVE-2014-6352[1]
+。沙虫漏洞是OLE包管理INF任意代码执行漏洞，存在于Microsoft Windows服务器上的OLE包管理器，该漏洞影响Win
+Vista、Win7等以上操作系统，攻击者使用PowerPoint作为攻击载体。通过利用该漏洞可以在OLE打包文件（packer.dll）中下载并执行类似的INF外部文件，从而达到攻击者执行任意命令的目的。微软为沙虫漏洞发布了MS14-060补丁，但通过构造特殊的CLSID和Verb动作，该补丁可以被漏洞CVE-2014-6352绕过。之后微软再次发布MS14-064补丁针对CVE-2014-6352进行了修补。
+
+表2-1 事件中使用的ppsx样本标签
+
+![](https://image.3001.net/images/20181128/1543393170_5bfe4f924aba4.png!small)
+
+![](https://image.3001.net/images/20181128/1543393179_5bfe4f9b236d7.png!small)
+
+图 2-1 打开后的PPSX漏洞攻击文档内容为空
+
+PPSX相关文件内容为空，没有进行相关的内容构造和伪装。解压PPSX文档可以找到“\ppt\slides\
+slide1.xml”指定了嵌入OLE对象的ID为rId3。
+
+![](https://image.3001.net/images/20181128/1543393196_5bfe4fac69944.png!small)
+
+文档“\ppt\slides\\_rels\
+slide1.xml.rels”指定了rId3对应目录“\ppt\embeddings\”下的oleObject1.bin
+
+![](https://image.3001.net/images/20181128/1543393206_5bfe4fb61b87f.png!small)
+
+文件“\ppt\embeddings\oleObject1.bin”为嵌入了PE可执行程序的OLE Package对象。
+
+![](https://image.3001.net/images/20181128/1543393215_5bfe4fbf5693b.png!small)
+
+图 2-2 样本嵌入了包含PE的OLE对象
+
+OLE
+Package对象的“Olen0Native”流包含了一个完整的PE文件，流开头字符串能看出PE文件在攻击者机器上的原始保存路径“C:\Users\Analiz\Desktop\Target.scr”以及释放的路径“%TEMP%\Target.scr”。
+
+![](https://image.3001.net/images/20181128/1543393224_5bfe4fc82d4ee.png!small)
+
+图 2-3 OLE对象包含了完整的PE数据“Target.scr”和原始保存路径信息
+
+模块packager.dll调用CPackage::Load读入该OLE
+Package对象时，首先调用ReadClassStg获取OLE复合文档的CLSID判断文件类型，该样本OLE对象的CLSID：{0003000c-0000-0000-00c0-000000000046}。
+
+![](https://image.3001.net/images/20181128/1543393234_5bfe4fd2e506c.png!small)
+
+CLSID对应OldPackage类型，因此之后依次调用CPackage::PackageReadFromStream
+→CPackage::EmbedReadFromStream→ CopyStreamToFile将流数据拷贝至临时目录具体文件。
+
+![](https://image.3001.net/images/20181128/1543393242_5bfe4fda01d22.png!small)
+
+图 2-4 OLE对象被判断为OldPackage类型，流数据被读入
+
+![](https://image.3001.net/images/20181128/1543393249_5bfe4fe1ebde8.png!small)
+
+图 2-5 OLE对象流数据被写入临时文件“%TEMP%\Target.scr”
+
+微软为了修补“沙虫”漏洞CVE-2014-4114，发布了补丁MS14-060[6]，在CopyStreamToFile之后增添了MarkFileUnsafe函数将该临时文件进行MOTW处理，将其Security
+Zone标记为不可信来源，尝试安装运行时会弹出UAC安全警告窗口[7]。
+
+![](https://image.3001.net/images/20181128/1543393257_5bfe4fe9de2a4.png!small)
+
+图 2-6 方法CPackage::EmbedReadFromStream增添了MarkFileUnsafe标记
+
+![](https://image.3001.net/images/20181128/1543393264_5bfe4ff0c4edf.png!small)
+
+图 2-7 “%TEMP%\Target.scr”被标记为不可信
+
+此时“%TEMP%\Target.scr”已经被释放在临时目录，如果我们以双击的方式打开该PPSX样本，自动播放模式将会开启，模块packager.dll的CPackage::DoVerb方法将检查样本指定Verb动作“cmd”的值，将其赋给变量nVerb和nTrueVerb，来决定如何处理嵌入文件“Target.scr”。
+
+这里常见的利用手法是构造“cmd”值为3，这样就能模拟popup菜单操作执行右键菜单的第二项“以管理员权限运行”
+[8]，最终调用SHELL32!CDefFolderMenu::InvokeCommand方法执行“Target.scr”。
+
+然而这里样本“\ppt\slides\ slide1.xml”指定Verb动作“cmd=0”，独辟蹊径采用了另一条流程。
+
+![](https://image.3001.net/images/20181128/1543393278_5bfe4ffe2fbed.png!small)
+
+调试器中我们也看到此时nTureVerb已被赋值为0，开始执行函数CPackage::_ExecuteAttachment。
+
+![](https://image.3001.net/images/20181128/1543393288_5bfe5008b3e4a.png!small)
+
+进入CPackage::_ExecuteAttachment我们看到它调用了危险的CPackage::_ActivateEmbeddedFile方法，内部继续调用shdocvw!CAttachmentServices::Execute方法。
+
+![](https://image.3001.net/images/20181128/1543393297_5bfe5011ca73f.png!small)
+
+图 2-8 “cmd=0”时调用了危险的CPackage::_ActivateEmbeddedFile方法
+
+shdocvw!CAttachmentServices::Execute调用_OpZoneCheck检查“%TEMP%\Target.scr”的Security
+Zone标记，最后调用_OpUserTrust弹出UAC安全警告窗口提醒用户选择是否执行“%TEMP%\Target.scr”：
+
+![](https://image.3001.net/images/20181128/1543393308_5bfe501c2caa4.png!small)
+
+![](https://image.3001.net/images/20181128/1543393315_5bfe5023014f0.png!small)
+
+图 2-9 启动Security Zone标记检查，PPT页面弹出UAC安全警告窗口
+
+由于沙虫系列漏洞是一个链接执行漏洞，而非常见的格式文档溢出漏洞，DEP等内存安全防御机制对其无效，调高UAC的级别对类似漏洞有一定的防御效果。如果此时被攻击者选择了继续运行“Target.scr”，恶意代码将被执行。而如果被攻击者的系统关闭了UAC控制或在获取了管理员权限的情况下，该安全警告窗口将不会弹出，“Target.scr”会被静默无警告地执行。
+
+注：关于“沙虫”漏洞和其绕过漏洞CVE-2014-6352的更多细节可以参考安天[8]和360天眼实验室[9]及McAfee[10]的分析文章。
+
+### 2.2 Target.scr样本分析
+
+Target.scr样本伪装成屏幕保护程序，由Visual Basic 6.0编写且未加壳，基本信息见表2-2：
+
+表2-2 Target.scr样本标签
+
+![](https://image.3001.net/images/20181128/1543393337_5bfe503999d29.png!small)
+
+通过反编译分析发现该样本的原始文件描述为"Gate Pass Management System (Klash (Pvt) Ltd.)"：
+
+![](https://image.3001.net/images/20181128/1543393352_5bfe504888060.png!small)
+
+图 2-10 样本反编译后显示描述“Gate Pass Management System”
+
+样本反编译代码的更多部分是并不能被调用的各种数据库操作功能函数，以及大量的数据库操作语句。这些数据库功能代码和语句能够连接数据库并对管理账户和库存记录进行增删改查。
+
+例如函数AddNewIGPass()和DeleteIGPass()能通过SQL语句操作“tblIGMaster”和“tblIGDetails”表，新增和删除库存记录：
+
+![](https://image.3001.net/images/20181128/1543393361_5bfe5051aa160.png!small)
+
+图 2-11 通过“INSERT”和“DELETE”语句增删库存记录
+
+表2-3 部分数据库被操作表名和操作语句一览
+
+![](https://image.3001.net/images/20181128/1543393369_5bfe505902005.png!small)
+
+通过安天同源分析系统的比对，我们找出了对应的开源代码[2] ，根据项目描述，这份代码适用于公司的库存管理系统：
+
+![](https://image.3001.net/images/20181128/1543393389_5bfe506d5c1bd.png!small)
+
+图 2-12 该Visual Basic项目的描述（这份代码适用于公司的库存管理系统）
+
+该项目开发者是“Muhammad Assir Nadeem”，是巴基斯坦境内服装业公司Klash Private
+Limited的IT经理，根据我们的综合分析，没有理由怀疑该公司和项目开发者与攻击事件有关：
+
+![](https://image.3001.net/images/20181128/1543393397_5bfe50758074d.png!small)
+
+图 2-13 “IGOG Gate Pass System”开发者的个人介绍
+
+攻击者并未利用开源代码中的任何功能调用，而是将加密后的DarkComet远控木马作为一个数据块嵌入到相关代码中，通过修改Main函数Main_441770()的代码将木马运行起来，而开源代码的相关功能都不会被执行。关于使用正常数据库管理客户端源码进行修改的目的，根据2.3小节更多关联样本的分析，可以认为这是一种具有迷惑性的免杀方式。
+
+函数Main_441770()的修改主要是为了进行两个动作：
+
+其一是实现将%TEMP%目录下的文件“Target.scr”复制一份至启动目录下，在主机侧建立持久化：
+
+文件路径：“%AppData%\Roaming\Microsoft\Windows\Start
+Menu\Programs\Startup\patakia.exe”
+
+![](https://image.3001.net/images/20181128/1543393405_5bfe507d21e1a.png!small)
+
+图 2-14 复制自身至启动目录下“patakia.exe”
+
+“patakia.exe”的文件相关Version信息等，同公开的源码完全符合：
+
+![](https://image.3001.net/images/20181128/1543393413_5bfe508560f9c.png!small)
+
+图 2-15 文件“patakia.exe”的描述
+
+其二是实现解密资源节中存放的恶意代码并运行。样本在原有库管理客户端源码的基础上修改了执行逻辑，实际运行过程中解密运行资源节嵌入了加密的Darkcomet远控木马。“DarkComet
+RAT”又称“暗黑彗星”木马，具有远程操控、击键记录、摄像头监控、文件窃取和DDoS攻击等诸多丰富功能，是黑产活动中非常常见的木马类别。由于原有开源代码中的功能代码不会被调用执行，加之其文件拷贝的位置并不在对应的程序目录下，这基本排除掉了攻击者是为了替换原有主机环境的IT工具来建立持久化入口的猜测
+样本“patakia.exe”的资源节（ID=109处）包含了32,219字节的垃圾数据和276,995字节的加密数据（以[++...--...+]为标志头）：
+
+![](https://image.3001.net/images/20181128/1543393420_5bfe508c7c11d.png!small)
+
+图 2-16资源节ID=109处包含的加密数据
+
+加密数据会在内存中被加载、解密，并展开成一个完整的Darkcomet木马PE文件：
+
+![](https://image.3001.net/images/20181128/1543393427_5bfe5093b94a2.png!small)
+
+图 2-17从资源节ID=109加载由标志头开始的数据
+
+![](https://image.3001.net/images/20181128/1543393436_5bfe509c4cbdb.png!small)
+
+图 2-18从内存中dump出的PE包含典型Darkcomet木马特征
+
+木马尝试反向连接攻击者C&C服务器（desk1pc.ddns.net:700），其当前解析IP185.82.***.***即为两封钓鱼邮件的发信IP，可以认为攻击者掌控的资源相对有限。
+
+![](https://image.3001.net/images/20181128/1543393445_5bfe50a52882d.png!small)
+
+图2-19 TCP请求中包含的“KEEPALIVE+数字”用以维持同C&C的网络连接
+
+### 2.3 扩线分析
+
+根据本报告1.1节中的相关信息扩线可以找到其他一些手法如出一辙、攻击目标皆为银行的恶意邮件。但其并非从马拉维银行工作人员的信箱发出，而是盗用了其他金融机构的员工信箱，且邮件的发信方来自同一台攻击者主机。
+
+其中一封信的收信人是马拉维国民银行的纳卡洛（nchalo）分行。时间最早的一封邮件通过被盗邮箱Justin
+Akwuasaba发送，该被盗邮箱系加拿大皇家银行（Royal Bank of
+Canada）的员工工作信箱。发信时间为“2018年6月22日（周五）22:03”，发信IP为“185.82.***.***”，同1.1节中的发信IP
+185.82.***.***属同一C段。该恶意邮件还发送给了马拉维国民银行的另一待攻击目标nchalo，其为马拉维国民银行纳卡洛（nchalo）分行的官方联系邮箱。
+
+![](https://image.3001.net/images/20181128/1543393454_5bfe50ae9feef.png!small)
+
+图 2-20 马拉维国民银行nchalo分行收到的攻击邮件
+
+在攻击邮件中也有其他国家的银行目标，如其中一封邮件发送自邮箱“Audit Dept
+mgmt@prabhugroupusa.com”，系美国大型金融服务（银行间汇款转账）公司“Prabhu”
+[11]的员工工作邮箱。发信时间为“2018年8月25日（周六）
+10:19”，发信IP为“185.82.***.***”，与上述第一封邮件的发信IP一致。收信邮箱yenisey.salahov@ibar.az系阿塞拜疆国际银行（The
+International Bank of Azerbaijan）员工工作邮箱。
+
+![](https://image.3001.net/images/20181128/1543393465_5bfe50b955d4e.png!small)
+
+图 2-21 阿塞拜疆国际银行收到的同类攻击邮件
+
+这两封邮件的两个PPSX文件附件与1.1节中描述的样本一样，都利用了CVE-2014-6352漏洞，OLE对象的“Ole10Native”流都包含了完整PE数据（“Document.scr”、“Document.exe”），原始保存路径则出现了新的路径“C:\Users\kboy\”。Verb动作也都设置为“cmd=0”以执行临时目录下释放的绑定了恶意代码的正常程序。
+
+![](https://image.3001.net/images/20181128/1543393476_5bfe50c431893.png!small)
+
+图 2-22 释放的PE复制至启动目录后的文件名
+
+样本“Document.scr”和“Document.exe”同2.2节中的“Target.scr”构造手法完全一致，它们分别在开源程序“Tech2ks
+NComputing
+Caffe[12]”和国际象棋游戏“ChessQuest”的源代码中插入DarkComet木马，甚至连木马的回连C2都共用着同一个域名和端口：“desk1pc.ddns.net:700”。以样本“Document.exe”为例，同2.2节中的样本“Target.scr”进行特征比对能展示出更多相似之处：
+
+表2-4拓线样本特征对比
+
+![](https://image.3001.net/images/20181128/1543393485_5bfe50cd59aad.png!small)
+
+通过检查185.82.***.***~***这一段IP，我们发现IP
+185.82.***.***和185.82.***.***于今年10月初曾被用于上文的三个Visual
+Basic样本和其它远控木马作回传C&C服务器（皆绑定过临时二级域名kango.ddns.net、kinging.ddns.net、segun.ddns.net和desk1pc.ddns.net）。而IP
+185.82.***.***则于今年10月初被用于挂载知名勒索软件GandCrab。
+
+通过扩线分析可以看出，攻击者使用了多种公开源码程序作为掩护传播恶意代码，由于源程序代码并不能正常运行，而且所使用的开源程序并非常见金融场景下的应用或工具软件，所以我们认为攻击者并不是替换用户原有程序来实现持久化，而是以此作为免杀和干扰分析的技巧。
+
+## 三、小结
+
+从已有信息来看，本次马拉维国民银行及其他多国金融机构遭受的网络攻击均使用同一手法，这一系列网络攻击初步判断是以金融机构为目标，以金融资产侵害为目的的犯罪行为。目前除能判断马拉维银行相关信箱已被入侵并作为攻击跳板外，目前尚无法判断和知晓事件相关的几家分行客服员工是否已经触发攻击流程而造成了实际的损失。综合攻击者使用的漏洞、载荷、地址资源、社工技巧来看，系由一定技术能力的个人攻击者或犯罪团伙的可能性较大。
+
+金融机构的运行高度依赖于信息系统，传统金融机构更多依靠物理空间安全手段保证信息系统安全。但在互联网时代，由于为大量互联网用户提供服务以及银行间跨国汇兑转账等业务，金融机构的信息系统已经是一个事实上存在着互联网侧多暴露面的系统。金融系统的服务网站、网银接口、人员使用的工作电子邮件信箱、跨行转账服务等，在已有攻击事件中，成为攻击的入口。尤其金融机构的电子邮件由于是直接暴露的信息资产，极易成为攻击者的攻击入口，同时因为其中的员工邮箱遭受攻击后，容易在内部实现基于邮件信任链的攻击，导致连锁反应的发生。
+
+和安天既往复盘分析的针对金融机构的其他攻击——如针对在孟加拉国央行、越南先锋银行等多国SWIFT系统的网络攻击事件相比，本事件属于低水平攻击事件。攻击者并未使用0day漏洞，其攻击载荷也并无数字签名盗用等方式伪装，属于在基础结构安全和纵深防御层面可以有效对抗遏制的攻击。如果相关金融机构实施严格的安全策略，做好补丁升级和配置加固等基本工作，配套部署具有主动防御能力的终端防御软件并保持更新升级，就可以大大降低相关载荷的执行概率。本事件客观上代表了部分经济不发达国家的金融机构处于较低的防护水平之中，网络安全投入能力相对较差，本身抵御风险的能力也不足。网络攻击带来的风险，有可能转化为国家级的金融灾难。
+
+我国当前整个金融信息化发展水平较快，在网络安全防护方面也积累了大量模式和经验，但同时也面临着更高的安全风险，需要应对超高能力国家/地区威胁行为体所发动的网络攻击。这些行为体具有坚定的攻击意志、能够承担巨大的攻击成本。在大规模工程体系的支撑下，进行体系化的攻击作业。TAO组织攻击中东的最大SWIFT服务机构就是其中的代表事件。防御这一层面的网络攻击，需要以能力导向建设，按照“综合发展、深度结合、全面覆盖、动态综合”的安全理念，形成高水平的防御能力。在这个过程中，中国的能力型安全厂商，不仅要做好当下，也要逐步放眼全球，与中国金融机构共同积累沉淀安全防护理念、经验和解决方案，在未来对经济不发达国家的金融机构实现网络安全能力的支持和援助。
+
+## 四、参考资料
+
+> [1]CVE: CVE-2014-6352
+>
+> <https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-6352>
+>
+> [2]Freesourcecode：Gate Pass Management System in Visual Basic
+>
+> <http://freesourcecode.net/vbprojects/21006/Gate-Pass-Management-System--in-> Visual-Basic#.W8PphtlR2Ht>
+>
+> [3] Natbankmw：马拉维银行官网
+>
+> <https://www.natbankmw.com>
+>
+> [4]维基百科：National_Bank_of_Malawi
+>
+> <https://en.wikipedia.org/wiki/National_Bank_of_Malawi>
+>
+> [5]Malawi24：workers-steal-millions-from-national-bank
+>
+> <https://malawi24.com/2016/02/09/workers-steal-millions-from-national-bank/>
+>
+> [6]微软：Microsoft Security Bulletin MS14-060 – Important
+>
+> <https://docs.microsoft.com/en-us/security-> updates/securitybulletins/2014/ms14-060>
+>
+> [7]微软：Microsoft TechNet
+>
+> <https://technet.microsoft.com/en-us/ms537628>(v=VS.71)
+>
+> [8]安天：沙虫（CVE-2014-4114）相关威胁综合分析报告
+>
+> <http://www.antiy.com/response/cve-2014-4114.html>
+>
+> [9]Freebuf：CVE-2014-6352漏洞及定向攻击样本分析
+>
+> <http://www.freebuf.com/vuls/106853.html>
+>
+> [10]McAfee：Bypassing Microsoft’s Patch for the Sandworm Zero Day: Even
+> ‘Editing’ Can Cause Harm
+>
+> <https://securingtomorrow.mcafee.com/mcafee-labs/bypassing-microsofts-patch-> for-the-sandworm-zero-day-even-editing-can-cause-harm/>
+>
+> [11]Prabhu:about us
+>
+> <https://www.prabhuonline.com/information/why-us>
+>
+> [12]Freesourcecode：Tech2ks NComputing Caffe in Visual Basic较新版本
+>
+> <http://freesourcecode.net/vbprojects/17691/Tech2ks-NComputing-Caffe-in-> Visual-Basic#.W_vKmLEzZaQ>
+
+ ***本文作者：antiylab，转载请注明来自FreeBuf.COM**
+

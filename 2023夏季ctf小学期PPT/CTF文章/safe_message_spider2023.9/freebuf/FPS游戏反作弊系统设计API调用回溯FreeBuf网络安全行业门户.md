@@ -1,0 +1,175 @@
+## **0x01 前言**  
+
+**目前自己在制作csgo游戏的反作弊系统。国内外有名的游戏反作弊系统有TP/NP/BE和EAC，但国内外几乎没有关于反作弊系统方面的资料(其实是完全没有...)，一来是因为搞二进制安全的人特别少，二来这方面在某些公司属于"商业机密"。于是打算在freebuf上开个坑，把我的一些游戏反作弊思路展现给大家,本文尽量以白话文的方式简单易懂的把一些关键知识写出来.涉及代码量很少。希望如果后人有相关需求的可以参考一下本文。由于本文是一边制作一边写的，所以会分为几个部分来写，有些地方可能没有考虑周全，多多见谅。**
+
+##  **0x02 游戏外挂常见注入方式**
+
+目前大部分游戏外挂不再是以前那种createremotethread +
+loadlibary注入方式了,因为大部分反作弊有自己的minifilter文件过滤驱动与imageloadcallback镜像加载回调做判断,大部分反作弊软件在这种过滤钩子中做这种操作:
+
+    
+    
+    if(!CheckFileCertificateByR3(FilePatch)){
+      //把文件路径传回r3,r3判断文件数字签名是否在白名单数字签名里面(比如微软数字签名),如果是白名单文件,就放行,如果不是白名单文件,就拦截
+      //不是白名单文件...拦截
+      block;
+    }
+    //放行
+    pass;
+
+所以,外挂是特别难通过dll直接注入到游戏里面.因此大部分外挂通过一种 **无文件落地注入方式**
+所谓无文件落地注入方式,就是直接在游戏进程里面开辟一个内存空间,把外挂的dll的shellcode写入,之后手动修复输入表,然后解析pe文件头拿到dllmain,再通过createremotethread,apc或者hook方式让游戏执行这块内存地址,这样子外挂就注入了
+
+具体代码如下(抄自google):
+
+    
+    
+    //以下代码来自与谷歌搜索
+    void InjectorDLLByManualMap(const char* filepath, HANDLE hProcess)
+    {
+        LPVOID lpBuffer;
+        HANDLE hFile;
+        DWORD dwLength;
+        DWORD dwBytesRead;
+        DWORD dwThreadId;
+        ULONG_PTR lpReflectiveLoader;
+        LPVOID lpRemoteDllBuffer;
+        //打开文件
+        hFile = CreateFileA(filepath, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        //得到文件大小
+        dwLength = GetFileSize(hFile, NULL);
+        lpBuffer = HeapAlloc(GetProcessHeap(), 0, dwLength);
+        //读入文件
+        ReadFile(hFile, lpBuffer, dwLength, &dwBytesRead, NULL);
+        //修复导入表
+        dwReflectiveLoaderOffset = GetReflectiveLoaderOffset(lpBuffer);
+        //给游戏进程分配一段内存空间
+        lpRemoteDllBuffer = VirtualAllocEx(hProcess, NULL, dwLength, MEM_RESERVE|MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+        //写入文件shellcode到分配的内存空间
+        WriteProcessMemory(hProcess, lpRemoteDllBuffer, lpBuffer, dwLength, NULL)
+        lpReflectiveLoader = (ULONG_PTR)lpRemoteDllBuffer + dwReflectiveLoaderOffset;
+        //启动进程
+        CreateRemoteThread(hProcess, NULL, 1024*1024, (LPTHREAD_START_ROUTINE)lpReflectiveLoader, NULL, NULL, &dwThreadId)
+    }
+
+其特点是:内存标志为PAGE_EXECUTE_READWRITE,MEM_PRIVATE,无文件,无模块,不会触发minifilter和imageloadcallbacks,无法通过正常方式枚举到外挂模块,隐蔽性非常高.
+
+##  0x03 检测内存加载外挂
+
+之前的方法看起来非常的"无敌"实际上也是可以对抗的,因为其特征也非常明显:
+
+内存属性为MEM_PRIVATE,内存标志为PAGE_EXECUTE_READWRITE.大小会很大.
+
+所以检测方法也有几个:
+
+1.暴力搜索PE头,大部分这种内存加载的dll都有pe头.一个内存属性为mem_private居然还有pe头,就说明是外挂了.目前大部分反作弊都有这个机制
+
+外挂反制: 抹掉pe头.不止pe头,还可以抹掉一切pe特征.
+
+2.createthreadcallbacks得到线程地址,判断线程地址是否在一个内存属性的mem_private的内存里面.如果是,说明就是外挂了.
+
+外挂反制:不创建线程,使用hook方启动外挂.
+
+**3.api调用回溯.顾名思义,外挂总要调用一些api地址的,我们可以通过回溯是谁调用了api地址,然后判断这个调用地方内存属性是不是mem_private.有两种方法,一个是hook所有关键api,在hook部位用_returnaddres()得到调用地址(其实是读ESP/RSP寄存器)第二种通过int3断点触发异常,使用异常处理函数处理这个异常,判断调用者.**
+
+外挂反制: 第一种内联hook方式,直接写跳转跳过hook,比如你hook的时候:
+
+> jmp 你的hook地址
+>
+> push ebp
+>
+> push eax
+>
+> call xxxx;
+
+外挂可以直接从push ebp调用,不再调用你jmp ,就可以绕过
+
+第二种外挂反制目前没有特别的能反制的地方.除非外挂自己构造api函数调用更底层的api.当然我们可以混淆原底层api的地址(无限套娃),具体以后在说.
+
+##  0x04 实现调用回溯
+
+为了实现调用回溯,我们需要实现如下步骤:
+
+1\. 设置异常处理程序去捕获异常,代码如下:
+
+    
+    
+    AddVectoredExceptionHandler
+
+2\. 拷贝原API地址到自己的内存区域,然后填充原API地址为int,代码如下:
+
+    
+    
+    	LPVOID pHOOKAdress;
+    	pHOOKAdress = Megrez_GetProAdress(pszModuleName, pszProcName);
+    	vecInt3HookedAdress.push_back((DWORD)pHOOKAdress);		//用于检测
+    	if (pHOOKAdress == 0)
+    	{
+    		return 0;
+    	}
+    	DWORD dProSize = 0;
+    	LPBYTE pTemp = (LPBYTE)pHOOKAdress;
+    	BYTE bTemp = 0;
+    	for (dProSize = 0; ; )
+    	{
+    		bTemp = *pTemp++;
+    		dProSize++;
+    		if (bTemp == 0xcc)
+    		{
+    			break;
+    		}
+    	}
+    	DWORD dFileSize = dProSize - 1;
+    	PVOID pNewAddr = VirtualAlloc(NULL, dFileSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    	if (pNewAddr == NULL)
+    	{
+    		return 0;
+    	}
+    	Megrez_SetMemoryAttr(pHOOKAdress, dProSize);
+    	memcpy(pNewAddr, pHOOKAdress, dProSize - 1);
+    	memset(pHOOKAdress, 0xcc, 1);
+    	memset((PBYTE)pHOOKAdress + 1, 0xc3, 1);
+    	memset((PBYTE)pHOOKAdress + 2, 0x90, dProSize - 1  -2);
+    	memset((PBYTE)pHOOKAdress + 2 + dProSize - 1 - 2 - 1, 0xcc, 1);
+    	//memset((PBYTE)pHOOKAdress + 2 + dProSize - 3 - 2 , 0xcc, 2);
+    	mapAdress.insert(pair<DWORD, DWORD>((DWORD)pHOOKAdress, (DWORD)pNewAddr));
+    	Megrez_SetMemoryAttr(pHOOKAdress, dProSize);
+    	Megrez_SetMemoryAttr(pNewAddr, dFileSize);
+
+这样子原api函数就会变成int3 当调用时候就回触发int3异常 然后被我们的异常处理捕获
+
+3\.
+查询异常位置内存信息,如果是meme_private者调用的代码,则报告给服务端,代码如下(记住,x32位下保存调用者地址的是esp,x64位下保存调用者地址的是rsp,):
+
+    
+    
+            size_t sizeQuery = VirtualQuery((PVOID)caller_function, lpBuffer, sizeof(MEMORY_BASIC_INFORMATION));
+    	bool non_commit = lpBuffer->State != MEM_COMMIT;
+    	bool foreign_image = lpBuffer->Type != MEM_IMAGE && lpBuffer->RegionSize > 0x2000;
+    	bool spoof = *(PWORD)caller_function == 0x23FF; // jmp qword ptr [rbx],这是为了防止被欺骗
+    	return sizeQuery || non_commit || foreign_image || spoof; //返回
+
+处理完异常后,我们要跳到原来的保存的api内存里面正常调用(设置eip保存的内存地址)
+
+    
+    
+     ExceptionInfo->ContextRecord->Eip = mapAdress[(DWORD)ExceptionInfo->ExceptionRecord->ExceptionAddress];
+    #ifdef DEBUG
+            WCHAR _buf[256] = { 0 };
+            swprintf_s(_buf, 256, L"eIP：0x%08X\n", ExceptionInfo->ContextRecord->Eip);
+            OutputDebugStringW(_buf);
+    #endif
+            //已经处理了异常要再调用下一个异常处理来处理此异常
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+        //调用下一个处理器
+        return EXCEPTION_CONTINUE_SEARCH;
+
+可以看到,这样子就得到了api调用者的信息,从而做出判断.
+
+![](https://image.3001.net/images/20200421/1587462439_5e9ec127e31c9.jpg!small)(部分代码参考了BE)
+
+这样,一个能检测出绝大部分内存加载外挂的东西就做好了(谁调用谁就会被检测)
+
+ ***本文作者：huoji120，转载请注明来自FreeBuf.COM**
+

@@ -1,0 +1,737 @@
+## 概述
+
+netstat 是一款命令行工具，主要是用于列出系统上所有的网络套接字连接情况，包括 tcp, udp 以及 unix
+套接字，另外它还能列出处于监听状态（即等待接入请求）的套接字。除此之外，netstat 命令还可用于显示路由表，接口状态 (Interface
+Statistics)，masquerade 连接，多播成员 (Multicast Memberships)
+等。从整体上看，netstat的输出结果可以分为两个部分：
+
+### Active Internet connections有源TCP连接，UDP连接。
+
+    
+    
+    [root@localhost ~]# netstat -tnp | more
+    Active Internet connections (w/o servers)
+    Proto Recv-Q Send-Q Local Address               Foreign Address             State       PID/Program name
+    tcp        0      0 127.0.0.1:3050              127.0.0.1:32795             ESTABLISHED 3161/fbserver
+    tcp        0      0 10.228.90.11:22             10.41.166.94:58005          ESTABLISHED 13824/sshd
+    tcp        0      0 10.228.90.11:49168          10.41.103.97:443            TIME_WAIT   -    tcp        0  13032 10.228.90.11:8002           10.228.90.5:11111           ESTABLISHED 6738/./tcp_client
+    ...
+     
+    ======================== TCP SERVER ===================================================
+    [root@localhost ~]# netstat -anplt
+    Active Internet connections (servers and established)
+    Proto Recv-Q Send-Q Local Address               Foreign Address             State       PID/Program name
+    tcp    89768      0 10.228.90.5:11111           10.228.90.11:8002           ESTABLISHED 29561/./tcp_server
+    ...
+
+recv-Q:网络接收队列
+
+表示收到的数据已经在本地接收缓冲，但是还有多少没有被进程取走，recv()如果接收队列Recv-Q一直处于阻塞状态，可能是遭受了拒绝服务 denial-of-service 攻击；
+
+send-Q:网路发送队列
+
+本地没有发生的数据，如果发送队列Send-Q不能很快的清零，可能是有应用向外发送数据包过快，或者是对方接收数据包不够快；
+
+这两个值通常应该为0，如果不为0可能是有问题的。packets在两个队列里都不应该有堆积状态。可接受短暂的非0情况。如图上所示，tcp_server
+没有读取 tcp_client 发来的数据。
+
+### Active UNIX domain sockets
+
+有源Unix域套接口(和网络套接字一样，但是只能用于本机通信，性能可以提高一倍)。查看unix接口命令如下：
+
+    
+    
+    Proto RefCnt Flags       Type       State         I-Node Path
+    unix  12     [ ]         DGRAM                    10269  /dev/log
+    unix  2      [ ]         DGRAM                    7917   @/org/kernel/udev/udevd
+    unix  2      [ ]         DGRAM                    10481  @/org/freedesktop/hal/udev_event
+    unix  2      [ ]         DGRAM                    6939979
+    unix  2      [ ]         DGRAM                    6478837
+    unix  3      [ ]         STREAM     CONNECTED     6354883 /var/run/dbus/system_bus_socket
+    unix  3      [ ]         STREAM     CONNECTED     6354882
+    unix  3      [ ]         STREAM     CONNECTED     6255685 /var/run/dbus/system_bus_socket
+    unix  3      [ ]         STREAM     CONNECTED     6255684
+    unix  2      [ ]         DGRAM                    6255683
+    unix  2      [ ]         DGRAM                    5633176
+
+Proto 显示连接使用的协议  
+RefCnt 表示连接到本套接口上的进程号  
+Types 显示套接口的类型  
+State 显示套接口当前的状态  
+Path 表示连接到套接口的其它进程使用的路径名  
+
+## netstat和ss
+
+`ss`命令用来显示处于活动状态的套接字信息。ss命令可以用来获取socket统计信息，它可以显示和netstat类似的内容。
+
+但ss的优势在于它能够显示更多更详细的有关TCP和连接状态的信息，而且 **比**` **netstat**` **更快速更高效。**
+
+`netstat`的原理显示网络的原理仅仅只是解析`/proc/net/tcp`，所以如果服务器的socket连接数量变得非常大，那么通过`netstat`执行速度是非常慢。
+
+而`ss`采用的是通过`tcp_diag`的方式来获取网络信息，`tcp_diag`通过netlink的方式从内核拿到网络信息，这也是`ss`更高效更全面的原因。
+
+下图就展示了`ss`和`nestat`在监控上面的区别。
+
+![1671010262_639997d6b33d57663ce1a.png!small](https://image.3001.net/images/20221214/1671010262_639997d6b33d57663ce1a.png!small)
+
+`ss`是获取的`socket`的信息，而`netstat`是通过解析`/proc/net/`下面的文件来获取信息包括`Sockets`,`TCP/UDP`，`IP`，`Ethernet`信息。
+
+  * ss比netstat快的主要原因是，netstat是遍历/proc下面每个PID目录，ss直接读/proc/net下面的统计信息。所以ss执行的时候消耗资源以及消耗的时间都比netstat少很多。
+  * 当服务器的socket连接数量非常大时（如上万个），无论是使用netstat命令还是直接cat /proc/net/tcp执行速度都会很慢，相比之下ss可以节省很多时间。ss快的秘诀在于，它利用了TCP协议栈中tcp_diag，这是一个用于分析统计的模块，可以获得Linux内核中的第一手信息。如果系统中没有tcp_diag，ss也可以正常运行，只是效率会变得稍微慢但仍然比netstat要快。
+
+`netstat`和`ss`的效率的对比，找同一台机器执行:
+
+    
+    
+    time ss  
+    ........  
+    real	0m0.016s  
+    user	0m0.001s  
+    sys	    0m0.001s  
+    --------------------------------  
+    time netstat  
+    real	0m0.198s  
+    user	0m0.009s  
+    sys	    0m0.011s
+
+`ss`明显比`netstat`更加高效.
+
+## netstat原理分析
+
+`netstat`是在`net-tools`工具包下面的一个工具集，[net-tools](https://github.com/ecki/net-tools)提供了一份`net-tools`的源码，我们通过`net-tools`来看看`netstat`的实现原理。
+
+使用strace跟踪一下netstat的执行过程：
+
+    
+    
+    [root@localhost ~]# strace netstat -t
+    execve("/bin/netstat", ["netstat", "-t"], [/* 36 vars */]) = 0
+    brk(0)                                  = 0x1e4a000
+    mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7fe40f008000
+    access("/etc/ld.so.preload", R_OK)      = -1 ENOENT (No such file or directory)
+    open("/etc/ld.so.cache", O_RDONLY)      = 3
+    fstat(3, {st_mode=S_IFREG|0644, st_size=121484, ...}) = 0
+    mmap(NULL, 121484, PROT_READ, MAP_PRIVATE, 3, 0) = 0x7fe40efea000
+    close(3)                                = 0
+    open("/lib64/libselinux.so.1", O_RDONLY) = 3
+    read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0\1\0\0\0PX@\3201\0\0\0"..., 832) = 832
+    fstat(3, {st_mode=S_IFREG|0755, st_size=124624, ...}) = 0
+    mmap(0x31d0400000, 2221912, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x31d0400000
+    mprotect(0x31d041d000, 2093056, PROT_NONE) = 0
+    mmap(0x31d061c000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x1c000) = 0x31d061c000
+    mmap(0x31d061e000, 1880, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0) = 0x31d061e000
+    close(3)                                = 0
+    open("/lib64/libc.so.6", O_RDONLY)      = 3
+    read(3, "\177ELF\2\1\1\3\0\0\0\0\0\0\0\0\3\0>\0\1\0\0\0p\356\201\3161\0\0\0"..., 832) = 832
+    fstat(3, {st_mode=S_IFREG|0755, st_size=1926520, ...}) = 0
+    mmap(0x31ce800000, 3750152, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x31ce800000
+    mprotect(0x31ce98a000, 2097152, PROT_NONE) = 0
+    mmap(0x31ceb8a000, 20480, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x18a000) = 0x31ceb8a000
+    mmap(0x31ceb8f000, 18696, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_ANONYMOUS, -1, 0) = 0x31ceb8f000
+    close(3)                                = 0
+    open("/lib64/libdl.so.2", O_RDONLY)     = 3
+    read(3, "\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\3\0>\0\1\0\0\0\340\r\0\3171\0\0\0"..., 832) = 832
+    fstat(3, {st_mode=S_IFREG|0755, st_size=22536, ...}) = 0
+    mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7fe40efe9000
+    mmap(0x31cf000000, 2109696, PROT_READ|PROT_EXEC, MAP_PRIVATE|MAP_DENYWRITE, 3, 0) = 0x31cf000000
+    mprotect(0x31cf002000, 2097152, PROT_NONE) = 0
+    mmap(0x31cf202000, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_FIXED|MAP_DENYWRITE, 3, 0x2000) = 0x31cf202000
+    close(3)                                = 0
+    mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7fe40efe7000
+    arch_prctl(ARCH_SET_FS, 0x7fe40efe77a0) = 0
+    mprotect(0x31d061c000, 4096, PROT_READ) = 0
+    mprotect(0x31ceb8a000, 16384, PROT_READ) = 0
+    mprotect(0x31cf202000, 4096, PROT_READ) = 0
+    mprotect(0x31ce61f000, 4096, PROT_READ) = 0
+    munmap(0x7fe40efea000, 121484)          = 0
+    statfs("/selinux", {f_type="EXT2_SUPER_MAGIC", f_bsize=4096, f_blocks=5039583, f_bfree=516574, f_bavail=260574, f_files=1281120, f_ffree=831149, f_fsid={-1732439464, 1687617228}, f_namelen=255, f_frsize=4096}) = 0
+    brk(0)                                  = 0x1e4a000
+    brk(0x1e6b000)                          = 0x1e6b000
+    open("/proc/filesystems", O_RDONLY)     = 3
+    fstat(3, {st_mode=S_IFREG|0444, st_size=0, ...}) = 0
+    mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7fe40f007000
+    read(3, "nodev\tsysfs\nnodev\trootfs\nnodev\tb"..., 1024) = 304
+    read(3, "", 1024)                       = 0
+    close(3)                                = 0
+    munmap(0x7fe40f007000, 4096)            = 0
+    open("/usr/lib/locale/locale-archive", O_RDONLY) = 3
+    fstat(3, {st_mode=S_IFREG|0644, st_size=99158576, ...}) = 0
+    mmap(NULL, 99158576, PROT_READ, MAP_PRIVATE, 3, 0) = 0x7fe409156000
+    close(3)                                = 0
+    open("/usr/share/locale/locale.alias", O_RDONLY) = 3
+    fstat(3, {st_mode=S_IFREG|0644, st_size=2512, ...}) = 0
+    mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7fe40f007000
+    read(3, "# Locale name alias data base.\n#"..., 4096) = 2512
+    read(3, "", 4096)                       = 0
+    close(3)                                = 0
+    munmap(0x7fe40f007000, 4096)            = 0
+    open("/usr/share/locale/en_US.UTF-8/LC_MESSAGES/net-tools.mo", O_RDONLY) = -1 ENOENT (No such file or directory)
+    open("/usr/share/locale/en_US.utf8/LC_MESSAGES/net-tools.mo", O_RDONLY) = -1 ENOENT (No such file or directory)
+    open("/usr/share/locale/en_US/LC_MESSAGES/net-tools.mo", O_RDONLY) = -1 ENOENT (No such file or directory)
+    open("/usr/share/locale/en.UTF-8/LC_MESSAGES/net-tools.mo", O_RDONLY) = -1 ENOENT (No such file or directory)
+    open("/usr/share/locale/en.utf8/LC_MESSAGES/net-tools.mo", O_RDONLY) = -1 ENOENT (No such file or directory)
+    open("/usr/share/locale/en/LC_MESSAGES/net-tools.mo", O_RDONLY) = -1 ENOENT (No such file or directory)
+    fstat(1, {st_mode=S_IFCHR|0620, st_rdev=makedev(136, 1), ...}) = 0
+    mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7fe40f007000
+    write(1, "Active Internet connections (w/o"..., 42Active Internet connections (w/o servers)
+    ) = 42
+    write(1, "Proto Recv-Q Send-Q Local Addres"..., 88Proto Recv-Q Send-Q Local Address               Foreign Address             State
+    ) = 88
+    open("/proc/net/tcp", O_RDONLY)         = 3
+    fstat(3, {st_mode=S_IFREG|0444, st_size=0, ...}) = 0
+    mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_AN
+
+netstat是通过读取 /proc/net/路径下的tcp、udp、unix等文件来获取连接信息的。
+
+    
+    
+    [root@localhost ~]# netstat -ntp | grep 11111
+    tcp        0  13032 10.228.90.11:8002           10.228.90.5:11111           ESTABLISHED 6738/./tcp_client
+    [root@localhost ~]# cat /proc/net/tcp
+      sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode                                                    
+       0: 00000000:1E14 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 15313 1 ffff880422c8a340 299 0 0 2 -1                    
+       1: 00000000:1E35 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 15316 1 ffff880822abaf00 299 0 0 2 -1                    
+       2: 00000000:0015 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 14164 1 ffff880422a8edc0 299 0 0 2 -1                    
+    ...                 
+      44: 0B5AE40A:1F42 055AE40A:2B67 01 000032E8:00000000 04:000000A2 00000000     0        0 6940153 2 ffff880313f73700 20 0 0 10 -1                  
+    ...               
+
+只有当netstat加了-p参数需要展示进程id时才会有下面getdents这个函数调用，因为此时需要展示进程id，而/proc/net/tcp或者/proc/net/udp中没有包含进程id，只能去/proc目录下遍历。
+
+![1671013146_6399a31a717ff28d2be96.png!small?1671013147429](https://image.3001.net/images/20221214/1671013146_6399a31a717ff28d2be96.png!small?1671013147429)
+
+## netstat源代码调试
+
+下载`net-tools`之后，导入到`Clion`中，创建`CMakeLists.txt`文件，内容如下：
+
+修改根目录下的`Makefile`中的59行的编译配置为：
+
+CFLAGS ?= -O0 -g3
+
+![1671011647_63999d3f9b4a1dc736e19.png!small?1671011648056](https://image.3001.net/images/20221214/1671011647_63999d3f9b4a1dc736e19.png!small?1671011648056)
+
+按照如上图设置自己的编译选项
+
+以上就是搭建`netstat`的源代码调试过程。
+
+#### tcp show
+
+在netstat不需要任何参数的情况，程序首先会运行到2317行的`tcp_info()`
+
+    
+    
+    #if HAVE_AFINET
+    if (!flag_arg || flag_tcp) {
+    i = tcp_info();
+    if (i)
+    return (i);
+    }
+     
+    if (!flag_arg || flag_sctp) {
+    i = sctp_info();
+    if (i)
+    return (i);
+    }
+    .........
+
+`跟踪进入到tcp_info():`
+
+    
+    
+    static int tcp_info(void)
+    {
+    INFO_GUTS6(_PATH_PROCNET_TCP, _PATH_PROCNET_TCP6, "AF INET (tcp)",
+    tcp_do_one, "tcp", "tcp6");
+    }
+
+`参数的情况如下：`
+
+  * `_PATH_PROCNET_TCP，在lib/pathnames.h中定义，是#define _PATH_PROCNET_TCP "/proc/net/tcp"`
+  * `_PATH_PROCNET_TCP6, 在lib/pathnames.h中定义, 是#define _PATH_PROCNET_TCP6 "/proc/net/tcp6"`
+
+`tcp_do_one,函数指针，位于1100行，部分代码如下：`
+
+  * `tcp_do_one()就是用来解析/proc/net/tcp和/proc/net/tcp6每一行的含义的。`
+
+    
+    
+    static void tcp_do_one(int lnr, const char *line, const char *prot)
+    {
+    unsigned long rxq, txq, time_len, retr, inode;
+    int num, local_port, rem_port, d, state, uid, timer_run, timeout;
+    char rem_addr[128], local_addr[128], timers[64];
+    const struct aftype *ap;
+    struct sockaddr_storage localsas, remsas;
+    struct sockaddr_in *localaddr = (struct sockaddr_in *)&amplocalsas
+    struct sockaddr_in *remaddr = (struct sockaddr_in *)&ampremsas
+    ......
+
+``
+
+`INFO_GUTS6`
+
+    
+    
+    #define INFO_GUTS6(file,file6,name,proc,prot4,prot6) \
+    char buffer[8192]; \
+    int rc = 0; \
+    int lnr = 0; \
+    if (!flag_arg || flag_inet) { \
+    INFO_GUTS1(file,name,proc,prot4) \
+    } \
+    if (!flag_arg || flag_inet6) { \
+    INFO_GUTS2(file6,proc,prot6) \
+    } \
+    INFO_GUTS3
+
+`INFO_GUTS6采用了#define的方式进行定义，最终根据是flag_inet(IPv4)或者flag_inet6(IPv6)的选项分别调用不同的函数，我们以INFO_GUTS1(file,name,proc,prot4)进一步分析。`
+
+`INFO_GUTS1`
+
+    
+    
+    #define INFO_GUTS1(file,name,proc,prot) \
+    procinfo = proc_fopen((file)); \
+    if (procinfo == NULL) { \
+    if (errno != ENOENT && errno != EACCES) { \
+    perror((file)); \
+    return -1; \
+    } \
+    if (!flag_noprot && (flag_arg || flag_ver)) \
+    ESYSNOT("netstat", (name)); \
+    if (!flag_noprot && flag_arg) \
+    rc = 1; \
+    } else { \
+    do { \
+    if (fgets(buffer, sizeof(buffer), procinfo)) \
+    (proc)(lnr++, buffer,prot); \
+    } while (!feof(procinfo)); \
+    fclose(procinfo); \
+    }
+
+  1. `rocinfo = proc_fopen((file)) 获取/proc/net/tcp的文件句柄`
+  2. `fgets(buffer, sizeof(buffer), procinfo) 解析文件内容并将每一行的内容存储在buffer中`
+  3. `(proc)(lnr++, buffer,prot)，利用(proc)函数解析buffer。(proc)就是前面说明的tcp_do_one()函数`
+
+`tcp_do_one`
+
+`以" 14: 020110AC:B498 CF0DE1B9:4362 06 00000000:00000000 03:000001B2 00000000
+0 0 0 3 0000000000000000这一行为例来说明tcp_do_one()函数的执行过程。`
+
+`![1671011620_63999d24ddc0787b25868.png!small?1671011622417](https://image.3001.net/images/20221214/1671011620_63999d24ddc0787b25868.png!small?1671011622417)`
+
+`由于分析是Ipv4，所以会跳过#if HAVE_AFINET6这段代码。之后执行：`
+
+    
+    
+    num = sscanf(line,
+    "%d: %64[0-9A-Fa-f]:%X %64[0-9A-Fa-f]:%X %X %lX:%lX %X:%lX %lX %d %d %lu %*s\n",
+    &d, local_addr, &local_port, rem_addr, &rem_port, &state,
+    &txq, &rxq, &timer_run, &time_len, &retr, &uid, &timeout, &inode);
+    if (num < 11) {
+    fprintf(stderr, _("warning, got bogus tcp line.\n"));
+    return;
+    }
+
+`解析数据，并将每一列的数据分别填充到对应的字段上面。分析一下其中的每个字段的定义：`
+
+    
+    
+    char rem_addr[128], local_addr[128], timers[64];
+    struct sockaddr_storage localsas, remsas;
+    struct sockaddr_in *localaddr = (struct sockaddr_in *)&amplocalsas
+    struct sockaddr_in *remaddr = (struct sockaddr_in *)&ampremsas
+
+`在Linux中sockaddr_in和sockaddr_storage的定义如下：`
+
+    
+    
+    struct sockaddr {
+    unsigned short sa_family; // address family, AF_xxx
+    char sa_data[14]; // 14 bytes of protocol address
+    };
+     
+     
+    struct  sockaddr_in {
+    short  int  sin_family;                      /* Address family */
+    unsigned  short  int  sin_port;       /* Port number */
+    struct  in_addr  sin_addr;              /* Internet address */
+    unsigned  char  sin_zero[8];         /* Same size as struct sockaddr */
+    };
+    /* Internet address. */
+    struct in_addr {
+    uint32_t s_addr; /* address in network byte order */
+    };
+     
+    struct sockaddr_storage {
+    sa_family_t ss_family; // address family
+     
+    // all this is padding, implementation specific, ignore it:
+    char __ss_pad1[_SS_PAD1SIZE];
+    int64_t __ss_align;
+    char __ss_pad2[_SS_PAD2SIZE];
+    };
+
+`之后代码继续执行：`
+
+    
+    
+    sscanf(local_addr, "%X", &localaddr->sin_addr.s_addr);
+    sscanf(rem_addr, "%X", &remaddr->sin_addr.s_addr);
+    localsas.ss_family = AF_INET;
+    remsas.ss_family = AF_INET;
+
+`将local_addr使用sscanf(,"%X")得到对应的十六进制，保存到&localaddr->sin_addr.s_addr(即in_addr结构体中的s_addr)中,同理&remaddr->sin_addr.s_addr。运行结果如下所示:`
+
+`![1671011595_63999d0ba4aa875323bc8.png!small?1671011596289](https://image.3001.net/images/20221214/1671011595_63999d0ba4aa875323bc8.png!small?1671011596289)`
+
+`addr_do_one`
+
+    
+    
+    addr_do_one(local_addr, sizeof(local_addr), 22, ap, &localsas, local_port, "tcp");
+    addr_do_one(rem_addr, sizeof(rem_addr), 22, ap, &remsas, rem_port, "tcp");
+
+`程序继续执行，最终会执行到addr_do_one()函数，用于解析本地IP地址和端口，以及远程IP地址和端口。`
+
+    
+    
+    static void addr_do_one(char *buf, size_t buf_len, size_t short_len, const struct aftype *ap,
+    const struct sockaddr_storage *addr,
+    int port, const char *proto
+    )
+    {
+    const char *sport, *saddr;
+    size_t port_len, addr_len;
+     
+    saddr = ap->sprint(addr, flag_not & FLAG_NUM_HOST);
+    sport = get_sname(htons(port), proto, flag_not & FLAG_NUM_PORT);
+    addr_len = strlen(saddr);
+    port_len = strlen(sport);
+    if (!flag_wide && (addr_len + port_len > short_len)) {
+    /* Assume port name is short */
+    port_len = netmin(port_len, short_len - 4);
+    addr_len = short_len - port_len;
+    strncpy(buf, saddr, addr_len);
+    buf[addr_len] = '\0';
+    strcat(buf, ":");
+    strncat(buf, sport, port_len);
+    } else
+    snprintf(buf, buf_len, "%s:%s", saddr, sport);
+    }
+
+  1. `saddr = ap->sprint(addr, flag_not & FLAG_NUM_HOST); 这个表示是否需要将addr转换为域名的形式。由于addr值是127.0.0.1，转换之后得到的就是localhost，其中FLAG_NUM_HOST的就等价于--numeric-hosts的选项。`
+  2. `sport = get_sname(htons(port), proto, flag_not & FLAG_NUM_PORT);,port无法无法转换,其中的FLAG_NUM_PORT就等价于--numeric-ports这个选项。`
+  3. `!flag_wide && (addr_len + port_len > short_len 这个代码的含义是判断是否需要对IP和PORT进行截断。其中flag_wide的等同于-W, --wide don't truncate IP addresses。而short_len长度是22.`
+  4. `snprintf(buf, buf_len, "%s:%s", saddr, sport);,将IP:PORT赋值给buf.`
+
+`output`
+
+`最终程序执行`
+
+    
+    
+    printf("%-4s %6ld %6ld %-*s %-*s %-11s",
+    prot, rxq, txq, (int)netmax(23,strlen(local_addr)), local_addr, (int)netmax(23,strlen(rem_addr)), rem_addr, _(tcp_state[state]));
+
+`按照制定的格式解析，输出结果`
+
+`finish_this_one`
+
+`最终程序会执行finish_this_one(uid,inode,timers);.`
+
+    
+    
+    static void finish_this_one(int uid, unsigned long inode, const char *timers)
+    {
+    struct passwd *pw;
+     
+    if (flag_exp > 1) {
+    if (!(flag_not & FLAG_NUM_USER) && ((pw = getpwuid(uid)) != NULL))
+    printf(" %-10s ", pw->pw_name);
+    else
+    printf(" %-10d ", uid);
+    printf("%-10lu",inode);
+    }
+    if (flag_prg)
+    printf(" %-" PROGNAME_WIDTHs "s",prg_cache_get(inode));
+    if (flag_selinux)
+    printf(" %-" SELINUX_WIDTHs "s",prg_cache_get_con(inode));
+     
+    if (flag_opt)
+    printf(" %s", timers);
+    putchar('\n');
+    }
+
+`flag_exp 等同于-e的参数。-e, --extend display other/more information.举例如下：`
+
+    
+    
+    netstat -e
+    Proto Recv-Q Send-Q Local Address Foreign Address State User Inode
+    tcp 0 0 localhost:6379 172.16.1.200:46702 ESTABLISHED redis 437788048
+    netstat
+    Proto Recv-Q Send-Q Local Address Foreign Address State
+    tcp 0 0 localhost:6379 172.16.1.200:46702 ESTABLISHED
+
+  1. `发现使用-e参数会多显示User和Inode号码。而在本例中还可以如果用户名不存在，则显示uid  
+[getpwuid](https://linux.die.net/man/3/getpwuid)`
+
+`flag_prg等同于-p, --programs display PID/Program name for sockets.举例如下：`
+
+    
+    
+    netstat -pe
+    Proto Recv-Q Send-Q Local Address Foreign Address State User Inode PID/Program name
+    tcp 0 0 localhost:6379 172.16.1.200:34062 ESTABLISHED redis 437672000 6017/redis-server *
+    netstat -e
+    Proto Recv-Q Send-Q Local Address Foreign Address State User Inode
+    tcp 0 0 localhost:6379 172.16.1.200:46702 ESTABLISHED redis 437788048
+
+  1. `可以看到是通过prg_cache_get(inode)，inode来找到对应的PID和进程信息;`
+  2. `flag_selinux等同于-Z, --context display SELinux security context for sockets`
+
+`prg_cache_get`
+
+`对于上面的通过inode找到对应进程的方法非常的好奇，于是去追踪prg_cache_get()函数的实现。`
+
+    
+    
+    #define PRG_HASH_SIZE 211
+     
+    #define PRG_HASHIT(x) ((x) % PRG_HASH_SIZE)
+     
+    static struct prg_node {
+    struct prg_node *next;
+    unsigned long inode;
+    char name[PROGNAME_WIDTH];
+    char scon[SELINUX_WIDTH];
+    } *prg_hash[PRG_HASH_SIZE];
+     
+    static const char *prg_cache_get(unsigned long inode)
+    {
+    unsigned hi = PRG_HASHIT(inode);
+    struct prg_node *pn;
+     
+    for (pn = prg_hash[hi]; pn; pn = pn->next)
+    if (pn->inode == inode)
+    return (pn->name);
+    return ("-");
+    }
+
+`在prg_hash中存储了所有的inode编号与program的对应关系，所以当给定一个inode编号时就能够找到对应的程序名称。那么prg_hash又是如何初始化的呢？`
+
+`prg_cache_load`
+
+`我们使用debug模式，加入-p的运行参数,程序会运行到2289行的prg_cache_load(); 进入到prg_cache_load()函数中．`
+
+`由于整个函数的代码较长，拆分来分析.`
+
+`获取fd`
+
+    
+    
+    #define PATH_PROC "/proc"
+    #define PATH_FD_SUFF "fd"
+    #define PATH_FD_SUFFl strlen(PATH_FD_SUFF)
+    #define PATH_PROC_X_FD PATH_PROC "/%s/" PATH_FD_SUFF
+    #define PATH_CMDLINE "cmdline"
+    #define PATH_CMDLINEl strlen(PATH_CMDLINE)
+    if (!(dirproc=opendir(PATH_PROC))) goto fail;
+    while (errno = 0, direproc = readdir(dirproc)) {
+    for (cs = direproc->d_name; *cs; cs++)
+    if (!isdigit(*cs))
+    break;
+    if (*cs)
+    continue;
+    procfdlen = snprintf(line,sizeof(line),PATH_PROC_X_FD,direproc->d_name);
+    if (procfdlen <= 0 || procfdlen >= sizeof(line) - 5)
+    continue;
+    errno = 0;
+    dirfd = opendir(line);
+    if (! dirfd) {
+    if (errno == EACCES)
+    eacces = 1;
+    continue;
+    }
+    line[procfdlen] = '/';
+    cmdlp = NULL;
+
+  1. `dirproc=opendir(PATH_PROC);errno = 0, direproc = readdir(dirproc) 遍历/proc拿到所有的pid`
+  2. `procfdlen = snprintf(line,sizeof(line),PATH_PROC_X_FD,direproc→d_name); 遍历所有的/proc/pid拿到所有进程的fd`
+  3. `dirfd = opendir(line); 得到/proc/pid/fd的文件句柄`
+
+`获取inode`
+
+    
+    
+    while ((direfd = readdir(dirfd))) {
+    /* Skip . and .. */
+    if (!isdigit(direfd->d_name[0]))
+    continue;
+    if (procfdlen + 1 + strlen(direfd->d_name) + 1 > sizeof(line))
+    　　　continue;
+    memcpy(line + procfdlen - PATH_FD_SUFFl, PATH_FD_SUFF "/",
+    PATH_FD_SUFFl + 1);
+    safe_strncpy(line + procfdlen + 1, direfd->d_name,
+    sizeof(line) - procfdlen - 1);
+    lnamelen = readlink(line, lname, sizeof(lname) - 1);
+    if (lnamelen == -1)
+    continue;
+    lname[lnamelen] = '\0'; /*make it a null-terminated string*/
+    if (extract_type_1_socket_inode(lname, &inode) < 0)
+    if (extract_type_2_socket_inode(lname, &inode) < 0)
+    continue;
+
+  1. `memcpy(line + procfdlen - PATH_FD_SUFFl, PATH_FD_SUFF "/",PATH_FD_SUFFl + 1);safe_strncpy(line + procfdlen + 1, direfd->d_name, sizeof(line) - procfdlen - 1); 得到遍历之后的fd信息，比如/proc/pid/fd`
+
+`lnamelen = readlink(line, lname, sizeof(lname) - 1);
+得到fd所指向的link，因为通常情况下fd一般都是链接，要么是socket链接要么是pipe链接．如下所示：`
+
+    
+    
+    $ ls -al /proc/1289/fd
+    total 0
+    dr-x------ 2 username username 0 Dec 14 15:45 .
+    dr-xr-xr-x 9 username username 0 Dec 14 09:11 ..
+    lr-x------ 1 username username 64 Dec 14 16:23 0 -> 'pipe:[365366]'
+    l-wx------ 1 username username 64 Dec 14 16:23 1 -> 'pipe:[365367]'
+    l-wx------ 1 username username 64 Dec 14 16:23 2 -> 'pipe:[365368]'
+    lr-x------ 1 username username 64 Dec 14 16:23 3 -> /proc/uptime
+    
+    
+
+`通过extract_type_1_socket_inode获取到link中对应的inode编号．`
+
+    
+    
+    #define PRG_SOCKET_PFX "socket:["
+    #define PRG_SOCKET_PFXl (strlen(PRG_SOCKET_PFX))
+    static int extract_type_1_socket_inode(const char lname[], unsigned long * inode_p) {
+    /* If lname is of the form "socket:[12345]", extract the "12345"
+    as *inode_p. Otherwise, return -1 as *inode_p.
+    */
+    // 判断长度是否小于　strlen(socket:[)+3
+    if (strlen(lname) < PRG_SOCKET_PFXl+3) return(-1);
+    //函数说明：memcmp()用来比较s1 和s2 所指的内存区间前n 个字符。
+    ／／　判断lname是否以　socket:[　开头
+    if (memcmp(lname, PRG_SOCKET_PFX, PRG_SOCKET_PFXl)) return(-1);
+    if (lname[strlen(lname)-1] != ']') return(-1); {
+    char inode_str[strlen(lname + 1)]; /* e.g. "12345" */
+    const int inode_str_len = strlen(lname) - PRG_SOCKET_PFXl - 1;
+    char *serr;
+    // 获取到inode的编号
+    strncpy(inode_str, lname+PRG_SOCKET_PFXl, inode_str_len);
+    inode_str[inode_str_len] = '\0';
+    *inode_p = strtoul(inode_str, &serr, 0);
+    if (!serr || *serr || *inode_p == ~0)
+    return(-1);
+    }
+
+`获取程序对应的cmdline`
+
+    
+    
+    if (!cmdlp) {
+    if (procfdlen - PATH_FD_SUFFl + PATH_CMDLINEl >=sizeof(line) - 5)
+    continue;
+    safe_strncpy(line + procfdlen - PATH_FD_SUFFl, PATH_CMDLINE,sizeof(line) - procfdlen + PATH_FD_SUFFl);
+    fd = open(line, O_RDONLY);
+    if (fd < 0)
+    continue;
+    cmdllen = read(fd, cmdlbuf, sizeof(cmdlbuf) - 1);
+    if (close(fd))
+    continue;
+    if (cmdllen == -1)
+    continue;
+    if (cmdllen < sizeof(cmdlbuf) - 1)
+    cmdlbuf[cmdllen]='\0';
+    if (cmdlbuf[0] == '/' && (cmdlp = strrchr(cmdlbuf, '/')))
+    cmdlp++;
+    else
+    cmdlp = cmdlbuf;
+    }
+
+  1. `由于cmdline是可以直接读取的，所以并不需要像读取fd那样借助与readlink()函数，直接通过 read(fd, cmdlbuf, sizeof(cmdlbuf) - 1) 即可读取文件内容．`
+  2. `snprintf(finbuf, sizeof(finbuf), "%s/%s", direproc->d_name, cmdlp); 拼接pid和cmdlp，最终得到的就是类似与 6017/redis-server * 这样的效果`
+  3. `最终程序调用 prg_cache_add(inode, finbuf, "-"); 将解析得到的inode和finbuf 加入到缓存中.`
+
+`prg_cache_add`
+
+    
+    
+    #define PRG_HASH_SIZE 211
+    #define PRG_HASHIT(x) ((x) % PRG_HASH_SIZE)
+    static struct prg_node {
+    struct prg_node *next;
+    unsigned long inode;
+    char name[PROGNAME_WIDTH];
+    char scon[SELINUX_WIDTH];
+    } *prg_hash[　];
+    static void prg_cache_add(unsigned long inode, char *name, const char *scon)
+    {
+    unsigned hi = PRG_HASHIT(inode);
+    struct prg_node **pnp,*pn;
+    prg_cache_loaded = 2;
+    for (pnp = prg_hash + hi; (pn = *pnp); pnp = &pn->next) {
+    if (pn->inode == inode) {
+    /* Some warning should be appropriate here
+    as we got multiple processes for one i-node */
+    return;
+    }
+    }
+    if (!(*pnp = malloc(sizeof(**pnp))))
+    return;
+    pn = *pnp;
+    pn->next = NULL;
+    pn->inode = inode;
+    safe_strncpy(pn->name, name, sizeof(pn->name));
+    {
+    int len = (strlen(scon) - sizeof(pn->scon)) + 1;
+    if (len > 0)
+    safe_strncpy(pn->scon, &scon[len + 1], sizeof(pn->scon));
+    else
+    safe_strncpy(pn->scon, scon, sizeof(pn->scon));
+    }
+    }
+
+  1. `unsigned hi = PRG_HASHIT(inode); 使用inode整除211得到作为hash值`
+  2. `for (pnp = prg_hash + hi; (pn = *pnp); pnp = &pn->next) 由于prg_hash是一个链表结构，所以通过for循环找到链表的结尾;`
+  3. `pn = *pnp;pn->next = NULL;pn->inode = inode;safe_strncpy(pn->name, name, sizeof(pn→name)); 为新的inode赋值并将其加入到链表的末尾;`
+
+`所以prg_node是一个全局变量，是一个链表结果，保存了inode编号与pid/cmdline之间的对应关系;`
+
+`prg_cache_get`
+
+    
+    
+    static const char *prg_cache_get(unsigned long inode)
+    {
+    unsigned hi = PRG_HASHIT(inode);
+    struct prg_node *pn;
+    for (pn = prg_hash[hi]; pn; pn = pn->next)
+    if (pn->inode == inode)
+    return (pn->name);
+    return ("-");
+    }
+
+`分析完毕prg_cache_add()之后，看prg_cache_get()就很简单了．`
+
+  1. `unsigned hi = PRG_HASHIT(inode); 通过inode号拿到hash值`
+  2. `for (pn = prg_hash[hi]; pn; pn = pn->next) 遍历prg_hash链表中的每一个节点，如果遍历的inode与目标的inode相符就返回对应的信息．`
+
+## `总结`
+
+`通过对netstat的一个简单的分析，可以发现其实netstat就是通过遍历/proc目录下的目录或者是文件来获取对应的信息。如果在一个网络进程频繁关闭打开关闭，那么使用netstat显然是相当耗时的。由于ss和netstat数据获取的方式不同，导致在执行效率上面存在很大的差别．ss和netstat这两种方式也我我们需要获取主机上面的网络数据提供了一个很好的思路。`
+
+## `参考﻿`
+
+> `<https://paper.seebug.org/934/>`
+>
+> <https://www.cnblogs.com/lit10050528/p/9551795.html>
+>
+> ``
+>
+>  
+>
+

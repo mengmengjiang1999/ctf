@@ -1,0 +1,320 @@
+##### Author：京东云安全-Hugo
+
+#####
+[漏洞概述](https://cf.jd.com/pages/viewpage.action?pageId=227317497#%E6%BC%8F%E6%B4%9E%E6%A6%82%E8%BF%B0)
+
+近期，安全研究员 Andrew Danau 发现PHP-FPM在Nginx特定配置下存在任意代码执行漏洞。具体为：使用Nginx + PHP-FPM搭建的服务器在使用在类似如下配置的nginx.conf时：
+
+    
+    
+       location ~ [^/]\.php(/|$) {
+            fastcgi_split_path_info ^(.+?\.php)(/.*)$;
+            fastcgi_param PATH_INFO       $fastcgi_path_info;
+            fastcgi_pass   php:9000;
+            ...
+    
+
+Nginx中`fastcgi_split_path_info` 在处理存在“\n”(%oA) 的path_info时，会将传递给PHP-FPM的PATH_INFO置为空（`PATH_INFO=""`)，影响关键指针的指向，导致后续`path_info[0]=0`的置零操作位置可控，通过构造特定长度和内容的请求，可以覆盖写特定位置数据，插入特定环境变量，进而导致代码执行。
+
+####
+[漏洞分析](https://cf.jd.com/pages/viewpage.action?pageId=227317497#%E6%BC%8F%E6%B4%9E%E5%88%86%E6%9E%90)
+
+首先，分析其[补丁](https://github.com/php/php-src/commit/ab061f95ca966731b1c84cf5b7b20155c0a1c06a#diff-624bdd47ab6847d777e15327976a9227)：在进行`request_info`结构体初始化的`static
+void init_request_info(void)`函数中，增添对pilen 和slen的大小校验，规避了指针的非预期回溯移动。
+
+    
+    
+        // php-src/sapi/fpm/fpm/fpm_main.c
+        ...
+        if (pt) {
+            while ((ptr = strrchr(pt, '/')) || (ptr = strrchr(pt, '\\'))) {
+                // 对传入PATH_INFO 进行校验。通过判断文件状态，获取真实PATH_INFO
+                *ptr = 0;
+                f (stat(pt, &st) == 0 && S_ISREG(st.st_mode)) {
+                int ptlen = strlen(pt); # Path-translated CONTENT_LENGTH
+                int slen = len - ptlen;  //script length
+                int pilen = env_path_info ? strlen(env_path_info) : 0;  //Path info 长度 0
+                int tflag = 0;
+                char *path_info;
+    
+                if (apache_was_here) {
+                    /* recall that PATH_INFO won't exist */
+                    path_info = script_path_translated + ptlen;
+                    tflag = (slen != 0 && (!orig_path_info || strcmp(orig_path_info, path_info) != 0));
+                } else {
+            -       path_info = env_path_info ? env_path_info + pilen - slen : NULL; // 通过偏移设置新env_path_info，但是未对偏移量做校验
+            -       tflag = (orig_path_info != path_info);
+            +       path_info = (env_path_info && pilen > slen) ? env_path_info + pilen - slen : NULL;
+            +       tflag = path_info && (orig_path_info != path_info);
+                }
+    
+                if (tflag) {
+                    if (orig_path_info) {
+                    char old;
+    
+                    FCGI_PUTENV(request, "ORIG_PATH_INFO", orig_path_info);
+                    old = path_info[0];
+                    path_info[0] = 0; //置零操作
+                    if (!orig_script_name ||
+                        strcmp(orig_script_name, env_path_info) != 0) {
+                        if (orig_script_name) {
+                            FCGI_PUTENV(request, "ORIG_SCRIPT_NAME", orig_script_name);//触发入口
+                        }
+                        SG(request_info).request_uri = FCGI_PUTENV(request, "SCRIPT_NAME", env_path_info);
+                        } else {
+                        SG(request_info).request_uri = orig_script_name;
+                        }
+                        path_info[0] = old;
+                    }
+            ...
+    
+
+其中
+
+    
+    
+        //以http://localhost/info.php/test?a=b为例
+        PATH_INFO=/test
+        PATH_TRANSLATED=/docroot/info.php/test
+        SCRIPT_NAME=/info.php
+        REQUEST_URI=/info.php/test?a=b
+        SCRIPT_FILENAME=/docroot/info.php
+        QUERY_STRING=a=b
+    
+        pt = script_path_translated; // = env_script_filename => "/docroot/info.php/test"
+        len = script_path_translated_len  // 为"/docroot/info.php/test"
+    
+        // 经过重新计算处理后
+        int ptlen = strlen(pt); // strlen("/docroot/info.php")
+        int pilen = env_path_info ? strlen(env_path_info) : 0;  // 即len(PATH_INFO) "/test"
+        int slen = len - ptlen;   // len("/test")
+    
+        path_info = env_path_info + pilen - slen; // pilen 取值可能未0 或slen, 即偏移为0 或 -N
+    
+
+可见，当PATH_INFO为空时，path_info 指向发生向前偏移，偏移长度为`test`的长度。进而`path_info[0] =
+0;`可以将特定位置
+单字节置零。但是，普通位置的置零并不会造成RCE，进一步利用需要将特定控制位置零，且该控制位恰巧能控制写入位置。`request->env->data->pos`便是这样一处位置。这里需要说明一下各变量的存储方式。
+
+通过fastcgi协议传入的各环境变量会存储到_fcgi_request->env 这个fcgi_hash结构体中，供后续执行取用，器结构具体定义如下：
+
+    
+    
+        // php-src/sapi/fpm/fpm/fastcgi.c
+        typedef struct _fcgi_hash_bucket {
+            unsigned int              hash_value;
+            unsigned int              var_len;
+            char                     *var;
+            unsigned int              val_len;
+            char                     *val;
+            struct _fcgi_hash_bucket *next;
+            struct _fcgi_hash_bucket *list_next;
+        } fcgi_hash_bucket;
+    
+        typedef struct _fcgi_hash_buckets {
+            unsigned int               idx;
+            struct _fcgi_hash_buckets *next;
+            struct _fcgi_hash_bucket   data[FCGI_HASH_TABLE_SIZE];
+        } fcgi_hash_buckets;
+    
+        typedef struct _fcgi_data_seg {
+            char                  *pos;
+            char                  *end;
+            struct _fcgi_data_seg *next;
+            char                   data[1];
+        } fcgi_data_seg;
+    
+        typedef struct _fcgi_hash {
+            fcgi_hash_bucket  *hash_table[FCGI_HASH_TABLE_SIZE];
+            fcgi_hash_bucket  *list;
+            fcgi_hash_buckets *buckets;
+            fcgi_data_seg     *data;
+        } fcgi_hash;
+        ...
+        /* hash table */
+        //初始化操作
+        static void fcgi_hash_init(fcgi_hash *h)
+        {
+            memset(h->hash_table, 0, sizeof(h->hash_table));
+            h->list = NULL;
+            h->buckets = (fcgi_hash_buckets*)malloc(sizeof(fcgi_hash_buckets));
+            h->buckets->idx = 0;
+            h->buckets->next = NULL;
+            h->data = (fcgi_data_seg*)malloc(sizeof(fcgi_data_seg) - 1 + FCGI_HASH_SEG_SIZE); // 默认分配 (4*8 - 1) + 4096
+            h->data->pos = h->data->data; //指向环境变量初始写入位置
+            h->data->end = h->data->pos + FCGI_HASH_SEG_SIZE; 指向//data_seg末尾
+            h->data->next = NULL;
+        }
+        ...
+    
+
+其中我们主要关注其中的get/set操作实现如下：
+
+    
+    
+        static char *fcgi_hash_get(fcgi_hash *h, unsigned int hash_value, char *var, unsigned int var_len, unsigned int *val_len)
+        // 关联 FCGI_GETENV()
+        {
+            unsigned int      idx = hash_value & FCGI_HASH_TABLE_MASK;
+            fcgi_hash_bucket *p = h->hash_table[idx];
+    
+            while (p != NULL) {
+            //需要hast_value值相同，var_len相同才能取出值
+                if (p->hash_value == hash_value &&
+                    p->var_len == var_len &&
+                    memcmp(p->var, var, var_len) == 0) {
+                    *val_len = p->val_len;
+                    return p->val;
+                }
+                p = p->next;
+            }
+            return NULL;
+        }
+    
+        static char* fcgi_hash_set(fcgi_hash *h, unsigned int hash_value, char *var, unsigned int var_len, char *val, unsigned int val_len)
+        // 关联 FCGI_PUTENV()
+        {
+            unsigned int      idx = hash_value & FCGI_HASH_TABLE_MASK;  // 计算hash_value确定 index
+            fcgi_hash_bucket *p = h->hash_table[idx];  //获取原有hash_table中的对应值
+    
+            while (UNEXPECTED(p != NULL)) {
+                if (UNEXPECTED(p->hash_value == hash_value) &&
+                    p->var_len == var_len &&
+                    memcmp(p->var, var, var_len) == 0) {
+    
+                    p->val_len = val_len;
+                    p->val = fcgi_hash_strndup(h, val, val_len);
+                    return p->val;
+                }
+                p = p->next;
+            }
+    
+            if (UNEXPECTED(h->buckets->idx >= FCGI_HASH_TABLE_SIZE)) {
+                fcgi_hash_buckets *b = (fcgi_hash_buckets*)malloc(sizeof(fcgi_hash_buckets));
+                b->idx = 0;
+                b->next = h->buckets;
+                h->buckets = b;
+            }
+    
+            p = h->buckets->data + h->buckets->idx;
+            h->buckets->idx++;
+            p->next = h->hash_table[idx];
+            h->hash_table[idx] = p;
+            p->list_next = h->list;
+            h->list = p;
+    
+            p->hash_value = hash_value;
+            p->var_len = var_len;
+            p->var = fcgi_hash_strndup(h, var, var_len);
+            p->val_len = val_len;
+            p->val = fcgi_hash_strndup(h, val, val_len);
+            return p->val;
+        }
+    
+        static inline char* fcgi_hash_strndup(fcgi_hash *h, char *str, unsigned int str_len)
+        // 实际操作request->env->data,进行数据写入。
+        {
+            char *ret;
+    
+            if (UNEXPECTED(h->data->pos + str_len + 1 >= h->data->end)) {
+            //如果准备写入的数据长度大于当前指向的fcgi_hash_seg大小，则向前插入新的fcgi_hash_seg
+                    unsigned int seg_size = (str_len + 1 > FCGI_HASH_SEG_SIZE) ? str_len + 1 : FCGI_HASH_SEG_SIZE;//较长值，不跨越两个seg进行写入。
+                    fcgi_data_seg *p = (fcgi_data_seg*)malloc(sizeof(fcgi_data_seg) - 1 + seg_size);
+                    p->pos = p->data;
+                    p->end = p->pos + seg_size;
+                    p->next = h->data;
+                    h->data = p;
+                }
+    
+                ret = h->data->pos;
+                memcpy(ret, str, str_len); //于h->data->pos后写入数据
+                ret[str_len] = 0;
+                h->data->pos += str_len + 1; //后移h->data->pos到新的可写入位置
+                return ret;
+        }
+    
+
+由此，我们可以得出：`request->env->data->pos`的指向直接影响我们环境变量Key，Value的写入的其实位置，只要我们控制了`char*
+pos`的指向，就可能覆盖已有的数据。但是，要想达成RCE还存在以下要求及限制：1.
+指针前移受当前fcgi_hash_seg空间结构影响，过短无法将`char*
+pos`置零，过长会分配到新fcgi_hash_seg空间。(如传递“形如”[http://127.0.0.1/Somefile_exits/AAAAA.php/"也可造成指针后移，](http://127.0.0.1/Somefile_exits/AAAAA.php/))
+
+  1. `path_info[0] = 0` 仅能将单字节置零，最好为最低位，否则会造成指针位置偏离过多。3. 鉴于条件 2 被覆盖写的地址最低位应为0，且其后为符合条件的可覆盖的环境变量。4. 被覆盖位置环境变量的key必须与预期写入的key满足：var、hash_value和var_len均相同，才可能被读取。5. 执行`FCGI_PUTENV(request, "ORIG_PATH_INFO", orig_path_info);`时，分别写入`ORIG_SCRIPT_NAME`、`orig_script_name`（“ORIG_SCRIPT_NAME/index.php/PHP_VALUE\nAAAAAA”）。
+
+相应地，我们可以：
+
+1\.
+通过控制query_string的长度，使path_info恰好处于新fcgi_hash_seg的data首位，这时我们仅需移动`8+8+8+len("PATH_INFO\0")=34+N`即可完成对`char*
+pos`的篡改。满足条件1，2的要求。
+
+2\. 通过自定义`http header`，操纵`request
+header`的长度将预期覆盖的环境变量放置到特定的位置（0x____00+len(“ORIG_SCRIPT_NAME”)+len(“/index.php/”)）。满足条件3，5要求。（在NGINX中，HTTP中的请求头会以“HTTP_XXX”的传入PHP-FPM，随后写入到`request->env`中）
+
+![1.png](https://image.3001.net/images/20191030/1572413894_5db921c6bb18c.png!small)
+
+除此之外，鉴于PATH_INFO重新取值部分逻辑主要是处理PATH_INFO与真实path_info不同的情况，对开头提及的nginx配置项，存在一种情况，发起形如`[<http://localhost/index/info.php/test?a=b>](<http://localhost/index/info.php/test?a=b>)`的url，可以构造以下场景
+
+    
+    
+        //以http://localhost/index/info.php/test?a=b为例，index为存在的文件
+        PATH_INFO=/test
+        PATH_TRANSLATED=/docroot/index/info.php/test
+        SCRIPT_NAME=/index/info.php
+        REQUEST_URI=/index/info.php/test?a=b
+        SCRIPT_FILENAME=/docroot/index/info.php
+        QUERY_STRING=a=b
+    
+        pt = script_path_translated; // = env_script_filename => "/docroot/index/info.php/test"
+        len = script_path_translated_len  // 为"/docroot/index/info.php/test"
+    
+        // 经过重新计算处理后
+        int ptlen = strlen(pt); // strlen("/docroot/index")
+        int pilen = env_path_info ? strlen(env_path_info) : 0;  // 即len(PATH_INFO) "/test"
+        int slen = len - ptlen;   // len("/info.php/test ")
+    
+        path_info = env_path_info + pilen - slen;  // pilen < slen， 即偏移为-N
+    
+
+此时URL中无需存在`%0A`，亦可完成指针移位，漏洞过程与上述类似，不再赘述。
+
+![2.png](https://image.3001.net/images/20191030/1572413914_5db921daeeaab.png!small)
+
+####
+[漏洞利用](https://cf.jd.com/pages/viewpage.action?pageId=227317497#%E6%BC%8F%E6%B4%9E%E5%88%A9%E7%94%A8)
+
+[Exp作者](https://github.com/neex/phuip-fpizdam)利用`PHP_VALUE`向PHP传递多个环境变量，使PHP产生错误，以错误日志的形式将webshell输出到到/tmp/a，并通过auto_prepend_file自动执行/tmp/a中的恶意代码，达成getshell。
+
+    
+    
+    var chain = []string{
+     "short_open_tag=1",
+     "html_errors=0",
+     "include_path=/tmp",
+     "auto_prepend_file=a",
+     "log_errors=1",
+     "error_reporting=2",
+     "error_log=/tmp/a",
+     "extension_dir=\"<?=`\"",
+     "extension=\"$_GET[a]`?>\"",
+    }
+    
+
+####
+[漏洞修复](https://cf.jd.com/pages/viewpage.action?pageId=227317497#%E6%BC%8F%E6%B4%9E%E4%BF%AE%E5%A4%8D)
+
+可以通过 Nginx 增添配置`try_files %uri = 404`配置
+或php设置`cgi.fix_pathinfo=0`选项，可以临时规避漏洞影响。也可以选择使用官方已经释出的更新进行完全修复。京东云-WAF已支持对该漏洞的防护。
+
+####
+[参考链接](https://cf.jd.com/pages/viewpage.action?pageId=227317497#%E5%8F%82%E8%80%83%E9%93%BE%E6%8E%A5)
+
+  * [Sec Bug #78599](https://bugs.php.net/bug.php?id=78599)
+  * [fix commit](https://github.com/php/php-src/commit/ab061f95ca966731b1c84cf5b7b20155c0a1c06a#diff-624bdd47ab6847d777e15327976a9227)
+  * [vulhub-CVE-2019-11043](https://github.com/vulhub/vulhub/tree/master/php/CVE-2019-11043)
+  * [PHP Remote Code Execution 0-Day Discovered in Real World CTF Exercise](https://lab.wallarm.com/php-remote-code-execution-0-day-discovered-in-real-world-ctf-exercise/)
+  * [neex/phuip-fpizdam](https://github.com/neex/phuip-fpizdam)
+  * [PHP运行时配置](https://www.php.net/manual/zh/errorfunc.configuration.php)
+  * [PHP核心配置选项](https://www.php.net/manual/zh/ini.core.php)
+
+  
+

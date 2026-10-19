@@ -1,0 +1,158 @@
+**QBot也称为QakBot，已经活跃了很多年。
+它最初被称为金融恶意软件，旨在窃取用户凭据和键盘记录来对政府和企业进行金融欺诈。近期在野捕获的Office
+Word文档中发现QBot变体，但未发现其传播方式。本文将分析它在受害者机器上的工作方式及其使用的技术。**
+
+## QBot文档
+
+Word文档中包含一个恶意宏，打开文件后将要求受害者单击黄色按钮，如图1.1（左侧）所示。 右侧的图像显示了单击“启用内容”按钮后的内容，
+它让受害者误以为文档正在努加载数据。
+
+![image.png](https://image.3001.net/images/20200617/1592363524_5ee98a04d812a.png!small)
+
+实际情况是恶意宏（VBA代码）在后台执行，并调用Document_Open函数，在“C:\Users\Public\”中创建“tmpdir”文件夹。
+然后将QBot有效负载下载到此文件夹中。 攻击者将QBot有效负载文件放在五个位置：
+
+> hxxp://pickap[.]io/wp-content/uploads/2020/04/evolving/888888[.]png
+>
+> hxxp://decons[.]vn/wp-content/uploads/2020/04/evolving/888888[.]png
+>
+> hxxp://econspiracy[.]se/evolving/888888[.]png
+>
+> hxxp://enlightened-> education[.]com/wpcontent/uploads/2020/04/evolving/888888[.]png
+>
+> hxxp://kslanrung[.]com/evolving/888888[.]png
+
+使用PowerShell从五个Base64编码的字符串中解码URL。
+PowerShell代码在循环中选择五个URL之一，将有效载荷文件888888.png（EXE文件）下载到“
+C:\Users\Public\tmpdir\”中。 然后将其重命名为“ file * .exe”，并最终执行。
+
+![image.png](https://image.3001.net/images/20200617/1592363717_5ee98ac5537ce.png!small)
+
+## 执行Payload
+
+“ file1.exe”是受保护的有效负载， 启动时将QBot提取到内存中并执行。QBot提供了一些命令行参数，例如“/C”, “/W”, “/I”,
+“/P”, “/Q”等，执行不同的功能。 当由PowerShell启动时不提供任何参数，它会转到非参数分支，该分支首先使用命令行参数“
+/C”生成自身子进程。
+
+![image.png](https://image.3001.net/images/20200617/1592363884_5ee98b6c9cf7c.png!small)
+
+“/C”功能用于检查它是否在分析环境中运行。 以下是检测方式：
+
+> 1、使用关键字“ VMXh”执行ASM代码，如果在虚拟机中将触发异常。 异常处理程序可以捕获异常并返回1，否则返回0。下面是ASM代码段。
+    
+    
+    […]
+    .text:00403452                 push    ebx
+    .text:00403453                 push    ecx
+    .text:00403454                 push    edx
+    .text:00403455                 mov     dx, 5658h
+    .text:00403459                 mov     ecx, 564D5868h  ;; "VMXh".
+    .text:0040345E                 mov     eax, ecx
+    .text:00403460                 mov     ecx, 14h
+    .text:00403465                 in      eax, dx
+    .text:00403466                 mov     [ebp+var_1C], eax
+    .text:00403469                 pop     edx
+    .text:0040346A                 pop     ecx
+    […]
+
+> 2、调用API函数SetupDiEnumDeviceInfo枚举设备信息来检查它是否在虚拟机环境中运行。它检查设备信息是否包含以下文本，例如“
+> VMware”，“ VirtualBox”，“ CwSandbox”，“ Red Hat Virtualization”，“ QEMU”等等。
+>
+> “VMware Pointing", "VMware Accelerated", "VMware SCSI", "VMware SVGA",
+> "VMware Replay", "VMware server memory", "CWSandbox", "Virtual HD", "QEMU",
+> "Red Hat VirtIO", "srootkit", "VMware VMaudio", "VMware Vista", "VBoxVideo",
+> "VBoxGuest", "vmxnet", "vmscsi", "VMAUDIO", "vmdebug", "vm3dmp", "vmrawdsk",
+> "vmx_svga", "ansfltr", "sbtisht"
+>
+> 3、它检查是否运行了任何分析工具，例如“ VMware Tools Service”，“ VMware Activation Helper”，“
+> Metasploit Metsvc Backdoor”和“ Windump”，其进程名称分别为“ vmtoolsd.exe”，“
+> vmacthlp.exe” ，“ metsvc-server.exe”和“ windump.exe”。
+>
+> 4、它检查是否加载特殊Dll文件以及当前进程名称是否包含“ sample”，“ mlwr_smpl”或“
+> artifact.exe”来确定当前进程是否正在“ Sandboxie”中运行。
+>
+> 5、除上述方法外，它还通过调用ASM指令cpuid来检查CPU信息。
+
+当它检测到QBot在分析设备中运行时不会立即退出，它会转到另一个代码分支，在其中执行一些无关的操作。
+
+如果它不在分析设备中运行，它将继续在“％AppData％\ Microsoft
+\”文件夹下创建一个主文件夹，保存QBot过程和数据。主文件夹的名称是随机生成的，然后它将file1.exe复制到主文件夹中，并将其重命名为“
+mavrihvu.exe”，文件名是根据受害者的用户名生成的。
+
+![image.png](https://image.3001.net/images/20200617/1592364529_5ee98df1a1340.png!small)
+
+在此代码分支中，它将继续从当前进程中加载名为“307”的资源，这是QBot的核心模块。如果它检测到存在于分析设备中，“307”将解密失败，并不会发出错误警报。
+“307”的内容是加密的PE文件，它并没有真正加载核心模块“307”来执行工作，它从解密的“307”模块加载另一个名为“308”的资源。
+
+![image.png](https://image.3001.net/images/20200617/1592364650_5ee98e6abaa7d.png!small)
+
+如上图所示，“10 = spx97”中的“ spx97”是QBot的变量标识，3 = 1586971769是unix时间，资源“ 307”的创建时间
+。然后它创建一个名为“ mavrihvu.dat”的文件保存加密的配置数据。 以下是加密前的内容。
+
+![image.png](https://image.3001.net/images/20200617/1592367958_5ee99b568a99c.png!small)
+
+前14个字节是SHA1值，11 = 2记录硬盘驱动器类型，1 = 22.41.57-15 / 05/2020是在受害者设备上安装QBot的时间和日期， 2
+= 1589607717是Unix安装时间。 mavrihvu.dat文件将在以后频繁使用，加载和保存QBot的其他配置数据。
+
+还会创建一个WMI（Windows管理规范）对象，执行不带参数的“％AppData％\ Microsoft \ Vhdktrbeex \
+mavrihvu.exe”。 使用WMI命名空间“ ROOT \\\ CIMV2”调用ConnectServer API，使用“
+Win32_Process”调用CoSetProxyBlanket和GetObject。最后调用Put执行“%AppData%\Microsoft\Vhdktrbeex\mavrihvu.exe”和ExecMethod来运行它。
+
+图2.4显示了如何调用Put和ExecMethod：
+
+![image.png](https://image.3001.net/images/20200617/1592368447_5ee99d3fa9ed8.png!small)使用WMI运行QBot是比直接调用CreateProcess来保护进程更好。
+WMI由Windows进程“wmiprvse.exe”处理，该进程随后执行mavrihvu.exe。
+
+![image.png](https://image.3001.net/images/20200617/1592368577_5ee99dc1793ad.png!small)
+
+“file1.exe”在任务计划中创建任务，“C:\Windows\system32\schtasks.exe /Create /RU \"NT
+AUTHORITY\SYSTEM\" /tn qyuoeflyq /tr \"C:\Users\Public\tmpdir\file1.exe\" /I
+qyuoeflyq /SC ONCE /Z /ST 22:48 /ET 23:00””。创建的任务名称为“ qyuoeflyq”，它将执行“
+C:\Users\Public\tmpdir\file1.exe /I qyuoeflyq”. “/I qyuoeflyq”，“ / I
+qyuoeflyq”是命令行参数，代码会将“ file1.exe”的内容替换为“ calc.exe”， 销毁“
+file.exe”，然后删除“qyuoeflyq”一次性运行任务。
+
+图2.6显示“/I”代码分支中调用API CreateProcessW替换“file1.exe”内容：
+
+![image.png](https://image.3001.net/images/20200617/1592369002_5ee99f6a0591b.png!small)在Explorer.exe中执行QBot
+
+在“explorer.exe”中运行的代码主要任务是加载和解密资源“307”。它调用FindResourceA(), SizeofResource(),
+LoadResource()将资源“307”加载到内存中，然后通过调用R**函数解密“307”数据。
+
+![image.png](https://image.3001.net/images/20200617/1592369287_5ee9a087b38a5.png!small)转储并分析PE文件，发现它是一个Dll文件（QBot的核心模块）。
+它包含核心模块使用的三个资源“ 308”，“ 310”和“ 311”。.图4.2显示了PE分析工具中转储的三个资源。
+
+![image.png](https://image.3001.net/images/20200617/1592369365_5ee9a0d514aa8.png!small)
+
+它通过调用API VirtualAllocate将每个部分从“ 307” PE结构加载到新分配的内存中。
+然后修复重定位数据并导入必要的API，使核心模块可以在“ explorer.exe”中执行。完成上述步骤后调用核心模块的入口点。
+
+![image.png](https://image.3001.net/images/20200617/1592369440_5ee9a120dbaba.png!small)
+
+## 总结
+
+本报告第一部分中详细说明了Office
+Word文档如何通过恶意宏下载QBot变体，以及它如何使用复杂的技术隐藏和保护自己。QBot几乎每天都不断升级其有效负载文件，研究人员将继续跟踪并分析其最新操作。
+
+## IOCs:
+
+### URLs
+
+hxxp://pickap[.]io/wp-content/uploads/2020/04/evolving/888888.png  
+hxxp://decons[.]vn/wp-content/uploads/2020/04/evolving/888888.png  
+hxxp://econspiracy[.]se/evolving/888888.png  
+hxxp://enlightened-education[.]com/wp-content/uploads/2020/04/evolving/888888.png  
+hxxp://kslanrung[.]com/evolving/888888.png
+
+### Sample SHA-256
+
+[Original Word Document]  
+432B6D767539FD5065593B160128AA7DCE271799AD2088A82A16542E37AD92B0
+
+[file1.exe or 888888.png]  
+D3B38681DBC87049022A3F33C9888D53713E144A277A7B825CF8D9628B9CA898
+
+**参考来源**
+
+> **[fortinet](https://www.fortinet.com/blog/threat-research/deep-analysis-of-> a-qbot-campaign-part-1)**
+

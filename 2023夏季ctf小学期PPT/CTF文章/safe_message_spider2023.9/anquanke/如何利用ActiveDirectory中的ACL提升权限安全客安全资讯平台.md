@@ -1,0 +1,246 @@
+# 如何利用Active Directory中的ACL提升权限
+
+阅读量 **207694**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-05-04 12:00:02
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：blog.fox-it.com
+
+原文地址：<https://blog.fox-it.com/2018/04/26/escalating-privileges-with-acls-in-active-directory/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## 一、前言
+
+在内部渗透测试中，我们经常可以在几个小时以内获取域管访问权限，原因在于相关系统并没有经过足够的安全加固，运维人员使用了默认的不安全的Active
+Directory（活动目录）设置。在这种场景中，许多公开工具可以帮助我们查找并利用这些缺陷，最终获得域管理员访问权限。在本文中我们描述了一种渗透场景，其中我们无法使用标准的攻击方法，只能深入挖掘才能获得目标域中的高等级权限。我们介绍了如何使用访问控制列表（Acccess
+Control Lists）来提升权限，也发布了[Invoke-Aclpwn](https://github.com/fox-it/Invoke-ACLPwn)这款新型工具，该工具是[ntlmrelayx](https://github.com/CoreSecurity/impacket/blob/master/examples/ntlmrelayx.py)的扩充，可以自动执行这种高级的攻击步骤。
+
+## 二、AD、ACL以及ACE
+
+随着大家对网络安全方面的理解变得更加成熟也更加深刻，我们不得不深入研究才能在Active
+Directory（AD）中提升权限。在这类场景中，枚举是一项非常关键的技术。AD目录中的ACL（访问控制列表）经常容易被人忽视。ACL指的就是一组规则，定义了哪些实体在特定的AD对象上具备哪些权限。这些对象可以是用户账户、组、计算机账户、域本身等等。ACL可以在某个对象（比如用户账户）上进行配置，也可以在Organizational
+Unit（OU，类似于AD内的一个目录）上配置。在OU上配置ACL的主要优点在于，如果配置得当，所有的后继对象都将继承ACL。对象所属的OU对应的ACL中包含一个ACE（Access
+Control
+Entry，访问控制项），定义了OU以及/或者子对象上对应的标识以及权限。ACE中的标识不一定是用户账户本身；将权限应用于AD的安全组（security
+groups）是一种常见的做法。将用户账户添加为该安全组的成员后，该用户账户就可以被赋予ACE中配置的权限，因为用户账户与安全组为隶属关系。
+
+AD中的组成员关系属于递归从属关系，举个例子，假设我们有3个组：
+
+  * Group_A 
+    * Group_B 
+      * Group_C
+
+Group_C为Group_B的成员，而Group_B自己又是Group_A的成员。当我们将Bob添加为Group_C的成员，Bob不仅是Group_C的成员，也是Group_B以及Group_A的间接成员。这意味着当Group_A具备某个对象或者资源的访问权限时，Bob也同样具备该资源的访问权限。被访问的资源可以是NTFS文件共享、打印机或者某个AD对象（比如用户、计算机、组或者域本身）。
+
+为AD安全组提供权限以及访问控制权是维护和管理（访问）IT基础架构的好方法。然而，如果嵌套关系过于复杂，可能就会存在一些安全隐患。前面提到过，如果某个用户是某个组的直接或者间接成员，那么该用户就会继承该组对某个资源的所有权限。如果Group_A被赋予修改AD中域对象的权限，那么Bob自然就会继承这些权限。然而，如果某个用户仅属于某个组，是该组的直接成员，但这个组又是其他50个组的间接成员，那么想理清这种权限继承关系显然要花费不少精力。
+
+## 三、利用Exchange在AD中提升权限
+
+在最近的渗透测试中，我们成功获取了某个用户账户权限，该用户为`Organization
+Management`组的成员。当安装Exhcange时会创建这个组，赋予其访问Exchange相关活动的访问权限。除了能访问这些Exchange设置选项以外，该组的成员还可以修改其他Exchange安全组的组成员关系，比如`Exchange
+Trusted Subsystem`安全组。这个组是`Exchange Windows Permissions`安全组的成员之一。
+
+![](https://p3.ssl.qhimg.com/t01a91611ef196979f8.png)
+
+默认情况下，如果某个域安装了Exchange，那么`Exchange Windows
+Permissions`安全组就具备该域对象的`writeDACL`权限[1]。
+
+![](https://p2.ssl.qhimg.com/t010acf1e797e0039b0.png)
+
+`writeDACL`权限可以允许持有者修改特定对象的权限（换句话说就是修改ACL），这意味着只要成为`Organization
+Management`组的成员，我们就可以提升成为域管理员权限。
+
+为了利用这一点，我们将之前已获得的用户账户添加至`Exchange Trusted
+Subsystem`组中。再次登录后（因为只有在登录时才会加载安全组成员关系），现在我们已成为`Exchange Trusted
+Subsystem`以及`Exchange Windows Permission`组的成员，这样我们就可以修改域的ACL。
+
+如果我们可以修改某个AD对象的ACL，我们就可以给某个账户分配权限，使其可以向某个属性（比如包含电话号码的属性）中写入数据。除了为这些属性分配读写权限之外，我们还可以进一步分配，使其具备更多的权限。这些权限为预定义的任务，包括修改密码的权限、往邮箱发送电子邮件等等[2]。我们还可以为任意账户添加如下扩展权限，使其成为当前域的复制（replication）同伴：
+
+    
+    
+    Replicating Directory Changes
+    Replicating Directory Changes All
+    
+
+当我们给这个用户账户设置这些权限后，我们就可以请求域中任何用户的密码散列，其中也包括域的`krbtgt`账户。大家可以参考[GitHub](https://github.com/gdedrouas/Exchange-AD-Privesc)深入了解这种权限提升技术。
+
+当然，成功控制`Organization
+Management`组下某个用户账户并不是经常出现的事情。尽管如此，我们还是可以在更广泛的层面上使用这种技术。`Organization
+Management`组很有可能受另一个小组管理，而这个组又有可能被其他组管理，以此类推。这意味着域环境中存在一条难以发现的关系链，如果某一环出问题，整个域就可能沦陷。
+
+为了帮助大家利用关系链存在的这种安全风险，Fox-IT编写了两款工具。第一款工具使用PowerShell编写，可以在AD环境内部或者外部运行。第二款工具是ntlmrelayx工具的扩展，这个扩展可以让攻击者将身份标识（用户账户以及计算机账户）转发至活动目录，修改域对象的ACL。
+
+## 四、Invoke-ACLPwn
+
+Invoke-ACLPwn是一个Powershell脚本，可以使用集成的凭据或者指定的凭据来运行。这款工具的工作原理是使用SharpHound导出域内所有ACL以及当前用户账户下的组成员关系。如果用户不具备域对象的`writeDACL`权限，该工具会枚举域内ACL的所有ACE。ACE中的每个标识都拥有自己的ACL，也会被添加到枚举队列中进行处理。为了枚举所有信息，整个过程需要一点时间，但最终很有可能理出一条关系链，获得域对象的`writeDACL`权限。
+
+![](https://p1.ssl.qhimg.com/t01a143beacc43ce2a8.png)
+
+当算出关系链后，脚本就会开始处理链中可能被利用的每一环：
+
+1、将用户加入必要的组中；
+
+2、将两个ACE（`Replicating Directory Changes`、`Replicating Directory Changes
+All`）添加到域对象的ACL中：
+
+3、如果有必要，则使用Mimikatz的DCSync功能请求给定用户账户的哈希值。默认情况下会使用`krbtgt`账户。
+
+利用过程结束后，该脚本会移除利用过程中添加的组成员关系，也会删掉域对象ACL中的ACE。
+
+为了测试脚本是否能正常工作，我们创建了26个安全组。每个组都是另一个组的成员（即`testgroup_a`是`testgroup_b`，而`testgroup_b`又是`testgroup_c`的成员，以此类推，直到`testgroup_z`为止）。
+
+`testgroup_z`安全组具备修改`Organization Management`安全组的成员关系权限。前面提到过，这个组有权修改`Exchange
+Trusted Subsystem`安全组的组成员关系。只要我们成为该组的成员，就有权修改活动目录中域对象的ACL。
+
+现在我们拥有包含31条链接的一条关系链：
+
+1、26个安全组的间接成员关系；
+
+2、具备修改`Organization Management`安全组成员关系的权限；
+
+3、已成为`Organization Management`组的成员；
+
+4、具备修改`Exchange Trusted Subsystem`安全组成员关系的权限；
+
+5、已成为`Exchange Trusted Subsystem`以及`Exchange Windows Permission`安全组的成员。
+
+工具的输出结果如下图所示：
+
+![](https://p5.ssl.qhimg.com/t01eb3b9d7964eebfc4.png)
+
+需要注意的是，虽然这个例子中我们使用了ACL配置信息（Exchange安装过程中会进行配置），然而这款工具并不需要依赖Exchange或者其他产品来查找或者利用关系链。
+
+目前该工具只能枚举并利用域对象上的`writeDACL`权限，我们还可以利用其他对象上的其他类型的访问权限，比如`owner`、`writeOwner`、`genericAll`等。
+
+BloodHound团队在一篇[白皮书](https://www.specterops.io/assets/resources/an_ace_up_the_sleeve.pdf)中详细解释了这些访问权限，我们将在未来更新这款工具时将这些权限的利用方法包含在内。大家可以从我们的[GitHub](https://github.com/fox-it/Invoke-ACLPwn)上下载Invoke-ACLPwn工具。
+
+## 五、NTLMRelayx
+
+去年我们为ntlmrelay编写了新的[扩充](https://www.fox-it.com/en/insights/blogs/blog/inside-windows-network/)，使其支持中继至LDAP功能，这样就能将新用户添加到活动目录中，实现域枚举并提升至域管权限。之前ntlmrelayx中的LDAP攻击会检查中继账户是否为域管（Domain
+Admins）或者企业管理员（Enterprise Admins）组，如果是则会提升权限。
+
+虽然这种方法的确有效，但并没有考虑中继账户可能拥有的任何特殊权限。根据本文介绍的研究成果，我们在ntlmrelayx中引入了新的攻击方法。这种攻击首先会请求重要域对象的ACL，然后将二进制格式解析成工具能够理解的格式，接着枚举中继账户的权限。
+
+这样就能将中继账户所属的所有组（包括递归的组成员关系）考虑在内。一旦枚举完权限，ntlmrelayx就会检查用户是否具备足够高的权限，以便新用户或者现有用户提升权限。
+
+为了提升权限，我们可以使用两种不同的攻击方法。第一种攻击称为“ACL攻击”，其中域对象的ACL被修改，攻击者可控的某个账户被赋予域中的`Replication-Get-Changes-All`权限，这样就可以使用前面提到过的DCSync方法。如果无法修改ACL，则使用“Group攻击”将成员添加到域的高权限组中，这些高权限组包括：
+
+    
+    
+    Enterprise Admins
+    Domain Admins
+    Backup Operators（可以备份域控制器上的关键文件）
+    Account Operators（可以控制域中几乎所有的组）
+    
+
+如果使用`--escalate-user`标志指定已有的某个用户，那么在可以执行ACL攻击的前提下，该用户将被赋予`Replication`权限。如果使用的是“Group攻击”，则会将该用户添加到高权限组中。如果没有指定已有的用户，则可以考虑创建新的用户。用户可以创建在User容器中（用户账户的默认位置），或者在`OrganizationalUnit`中（类似IT部门等成员具备该容器的管理权限）。
+
+可能会有人注意到我们提到的是中继账户，而不是中继用户。这是因为这种攻击对具备高权限的计算机账户来说同样适用。比如Exchange服务器的计算机账户就属于这类账户，在默认配置下该账户属于Exchange
+Windows
+Permissions组的成员。如果攻击者能够让Exchange服务器向攻击者的主机发起身份认证请求（比如使用[mitm6](https://github.com/fox-it/mitm6)这种网络层的攻击技术），那么攻击者就能立即将权限提升为域管理员权限。
+
+![](https://p0.ssl.qhimg.com/t01ead1e01ede38a9d1.png)
+
+现在我们可以使用impacket的`secretsdump.py`或者Mimikatz导出`NTDS.dit`的哈希值。
+
+![](https://p3.ssl.qhimg.com/t0114e85f3b5eb9d3f7.png)
+
+同样，如果攻击者具备Exchange服务器的管理员权限，也有可能不需要导出任何密码或者机器账户哈希，就能实现域权限的提升。如果以`NT
+AuthoritySYSTEM`身份连接到攻击者的主机并使用NTLM进行身份认证，这样就足以向LDAP进行身份认证。如下图中，我们以`SYSTEM`权限使用`psexec.py`调用`Invoke-Webrequest`这个PowerShell函数，使用`-UseDefaultCredentials`启动NTLM的自动身份验证：
+
+![](https://p3.ssl.qhimg.com/t0136fee06ca19f0fa0.png)
+
+_备注：这里出现404错误非常正常，因为如果中继攻击完成后，`ntlmrelayx.py`会提供一个404页面。_
+
+需要注意的是，在默认配置的Active
+Directory中，针对LDAP的中继攻击有可能顺利完成。如果启用LDAP签名就能在一定程度上缓解这种攻击，然而LDAP签名默认处于禁用状态。即便启用了LDAP签名，攻击者还是有可能中继至LDAPS（基于SSL/TLS的LDAP），因为LDAPS可以当成一个签名通道。针对此类攻击的唯一缓解方法是在注册表中为LDAP绑定通道。
+
+如果想获取ntlmrelayx中的新功能，只需更新到[GitHub](https://github.com/CoreSecurity/impacket)上最新版本的impacket即可。
+
+## 六、安全建议
+
+为了缓解这类安全风险，Fox-IT有如下几点建议：
+
+1、移除危险的ACL。
+
+使用Bloodhound之类的工具来检查危险的ACL[3]。Bloodhound可以导出域内的所有ACL，帮助我们识别危险的ACL。
+
+2、移除Exchange Exterprise Servers的`writeDACL`权限。
+
+移除Exchange Exterprise
+Servers的`writeDACL`权限。更多信息请参考[这篇](https://technet.microsoft.com/en-us/library/ee428169\(v=exchg.80).aspx)技术文档。
+
+3、监控安全组。
+
+监控可能对域产生重大影响的安全组（的成员关系），比如`Exchange Trusted Subsystem`以及`Exchange Windows
+Permissions`。
+
+4、审核并监控对ACL的修改操作。
+
+审核域内ACL的修改操作。如果尚未部署这种机制，那么我们需要修改域控制器的策略。大家可以参考TechNet上的[这篇文章](https://blogs.technet.microsoft.com/canitpro/2017/03/29/step-by-step-enabling-advanced-security-audit-policy-via-ds-access/)了解更多细节。
+
+当域对象的ACL被修改后，就会出现ID为5136的一条事件日志。我们可以使用PowerShell查询Windows事件日志，比如我们可以使用如下一行语句查询Security事件日志中ID为5136的事件：
+
+    
+    
+    Get-WinEvent -FilterHashtable @{logname='security'; id=5136}
+    
+
+该事件中包含帐户名以及以SDDL（Security Descriptor Definition Language）格式表示ACL。
+
+![](https://p2.ssl.qhimg.com/t018549bcf26b770fb0.png)
+
+我们无法直接查看这个数据，但在Windows 10中有一个PowerShell cmdlet：`ConvertFrom-SDDL`[4]，这个cmdlet可以将SDDL字符串转化为可读性较好的ACL对象。
+
+![](https://p5.ssl.qhimg.com/t01116f6b603ad90a24.png)
+
+如果服务器运行的是Windows Server
+2016操作系统，我们还可能看到原始的以及修改后的描述符。大家可以参考[此链接](https://docs.microsoft.com/en-us/windows/security/threat-protection/auditing/event-4715)了解更多信息。
+
+获得这个信息后，我们就可以开始着手调查，发现哪些条目被修改过，研究背后的真实原因。
+
+## 七、参考资料
+
+[1] <https://technet.microsoft.com/en-us/library/ee681663.aspx>  
+[2] <https://technet.microsoft.com/en-us/library/ff405676.aspx>  
+[3] <https://github.com/BloodHoundAD/SharpHound>  
+[4] <https://docs.microsoft.com/en-us/powershell/module/Microsoft.powershell.utility/convertfrom-sddlstring>
+
+本文翻译自blog.fox-it.com [原文链接](https://blog.fox-it.com/2018/04/26/escalating-privileges-with-acls-in-active-directory/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **興趣使然的小胃** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/106949](/post/id/106949)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [blog.fox-it.com](https://blog.fox-it.com/2018/04/26/escalating-privileges-with-acls-in-active-directory/)
+
+如若转载,请注明出处： <https://blog.fox-it.com/2018/04/26/escalating-privileges-with-acls-in-active-directory/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [权限提升](/tag/权限提升)
+  * [Active Directory](/tag/Active Directory)
+  * [ACL](/tag/ACL)
+
+ **+1** __3赞
+
+ __收藏
+
+![](https://p4.ssl.qhmsg.com/dm/200_200_100/t0104d1b8b4ca36e961.jpg) 興趣使然的小胃
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

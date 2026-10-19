@@ -1,0 +1,40 @@
+{
+	"type":"MAC_LABEL",
+	"subtype":"SUBJECT"
+}
+{
+	"user_name":"zhao",
+	"user_id":1001,
+	"label":{
+		"sec_class":"RESEARCH|PRODUCE",
+		"sec_label":1,	
+		"inte_label":0
+	}
+}
+{
+	"user_name":"qian",
+	"user_id":1002,
+	"label":{
+		"sec_class":"PRODUCE|TEST",
+		"sec_label":3,	
+		"inte_label":0
+	}
+}
+{
+	"user_name":"sun",
+	"user_id":1004,
+	"label":{
+		"sec_class":"RESEARCH|PRODUCE|TEST",
+		"sec_label":2,	
+		"inte_label":0
+	}
+}
+{
+	"user_name":"li",
+	"user_id":1004,
+	"label":{
+		"sec_class":"PRODUCE|PUBLIC",
+		"sec_label":2,	
+		"inte_label":0
+	}
+}

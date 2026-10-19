@@ -1,0 +1,498 @@
+## **序言** ****
+
+智能手机每个人都在用，甚至已经成了生活的必需品，占据了人们每天的大部分时间，手机屏幕已经成为很多人的第一屏幕。随着智能手机的不断更新，相应的手机APP种类、数量也越来越多。现阶段，人们对于手机使用的安全意识已经慢慢重视起来，但依然低于对计算机安全的意识。
+
+随着移动办公的发展，不论是企业员工还是国家单位工作人员，都会用手机访问公司内部数据，根据IBM的研究，用户对移动设备上的网络钓鱼攻击的回应是桌面的三倍，而原因仅仅是因为手机是人们最先看到消息的地方，而且企业数据、政府数据的泄露导致的损失，很多时候是无法挽回的。如今，移动安全已经不仅仅是个人手机安全的问题，移动访问也越来越成为企业安全威胁的重要的来源，甚至影响到国家安全。
+
+移动恶意软件，随着目的性的增强与攻击范围的扩大，其技术手段与种类也更加的隐蔽与繁多。Android作为目前世界上最大的移动应用平台，必然成为恶意代码获取其犯罪收益、窃取敏感信息的重灾区。
+
+基于2019年上半年国内外各安全研究机构、安全厂商披露的Android平台相关威胁活动的公开资料，结合奇安信威胁情报中心红雨滴团队(RedDrip
+Team，@RedDrip7)的深入挖掘与跟踪，在本报告中总结一下国内外部分重大Android平台安全事件，使我们对Android平台的威胁图景有个初步的了解。
+
+##  **主要观点** ****
+
+ **Android软件获取平台的安全性影响整体安全的基本面**
+
+Android是一个完整独立的生态体系，其Google
+Play无疑是全球最大的Android软件获取平台，然而伴随的风险与责任也就越大。根据我们2019年上半年的研究报告，Google
+Play成为了重灾区，恶意软件通过各种方式混进Google Play，利用Google
+Play传播恶意软件，从而造成了大量的用户手机被病毒感染。而国内的Android应用平台种类繁多，由于缺乏统一的管理与法律法规，而且分析识别恶意代码的能力远不及Google，所以用户手机被感染的风险更大。
+
+ **Android恶意软件的种类更加繁多**
+
+Android恶意软件总是伴随着计算机恶意软件的更新而发展，而且相对苹果的iOS生态Android平台更加开放而碎片化。目前Android类恶意软件种类繁多，根据我们2019年上半年的研究报告，可以发现广告类、金融银行类、钓鱼类、挖矿类、APT类等恶意软件应有尽有，感染用户涉及的行业相比于计算机更多。
+
+ **Android恶意软件的目的性更加明确**
+
+Android类恶意软件发展到今天，其目的性已经更加明确，随着国际局势的不断变化，加之地缘政治与外交策略等立场，下面的很大部分案例显示Android平台的APT攻击已成常态，未来Android安全更是关系到国家安全。
+
+##  **影响面** ****
+
+我们对2019年上半年重大的Android事件进行统计，Android平台上的恶意事件以金融银行类恶意程序居多，其次的为定向攻击相关，受影响的国家分布如下图：![](https://ti.qianxin.com/uploads/2019/06/04/c8b958b1ac5b27f92e7b605c88bddadb.png)
+
+##  **主要事件概述** ****
+
+2019年上半年Android主要恶意事件时间线：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/7f6a6529e740e5d05cb1c0c45bc7a22b.png)
+
+###  **广告软件通过伪装成应用程序，感染了900万Google Play用户**
+
+事件时间| 2019.1.8  
+---|---  
+事件简要| 广告软件伪装成游戏，电视，遥控应用程序，感染了900万Google Play用户  
+事件类型| 恶意软件  
+发布机构| Trend Micro  
+发布链接| <https://blog.trendmicro.com/trendlabs-security-intelligence/adware-disguised-as-game-tv-remote-control-apps-infect-9-million-google-play-users/>  
+  
+####  **事件概括** ****
+
+2019年1月8号，趋势科技在Google
+play中发现了一个活跃的广告软件系列。该系列软件伪装成85个游戏，电视和遥控模拟器应用程序，该系列广告软件能够显示全屏广告，隐藏自身，监控设备的屏幕解锁功能以及在移动设备的后台运行。85个虚假应用程序，已在全球共下载了900万次，目前Google已下架该系列应用。
+
+Google Play上一些广告软件虚假应用截图：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/5090fac342656209154fb33930a897c0.png)
+
+###  **Google Play上韩国公交车应用系列软件，被利用攻击特定目标**
+
+事件时间| 2019.2.4  
+---|---  
+事件简要| Google Play上韩国公交车应用系列软件，被黑客利用下发虚假插件，攻击特定目标  
+事件类型| 恶意软件  
+发布机构| McAfee  
+发布链接| <https://securingtomorrow.mcafee.com/other-blogs/mcafee-labs/malbus-popular-south-korean-bus-app-series-in-google-play-found-dropping-malware-after-5-years-of-development/>  
+  
+####  **事件概括** ****
+
+2019年2月4日，迈克菲移动研究团队发现了一种新的恶意Android应用程序，伪装成由韩国开发人员开发的交通应用程序系列的插件。该系列软件为韩国各个地区提供了一系列信息，例如巴士站位置，巴士抵达时间等。
+
+当用户安装该系列应用程序后，它会从被黑客入侵的web服务器中下载伪装的恶意插件，而该恶意插件又会进一步进行恶意行为包括：从服务器接收控制指令进行远控、伪装Google进行钓鱼、搜索用户手机与军事政治有关的文件等。
+
+Google Play应用下载页面：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/af7ce7d66fe326bb9563c15eaebba729.png)  
+
+恶意软件感染流程：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/5d98cbe1abe4d0959cbd2ededba83c91.png)
+
+伪装的钓鱼页面：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/96d314682e6225bc21b7c53d6b3a5d12.png)
+
+###  **Google Play上发现的第一个剪贴板恶意软件**
+
+事件时间| 2019.2.8  
+---|---  
+事件简要| Google Play上发现了利用剪辑器，窃取加密货币的恶意软件  
+事件类型| 恶意软件  
+发布机构| ESET  
+发布链接| <https://www.welivesecurity.com/2019/02/08/first-clipper-malware-google-play/>  
+  
+####  **事件概括** ****
+
+2019年2月8日，ESET在Google
+Play上发现了利用剪辑器窃取加密货币的恶意软件，该恶意软件冒充为MetaMask合法服务，恶意软件的主要目的是窃取受害者的凭据和私钥，以控制受害者的以太坊资金。但是，它也可以用属于攻击者的地址替换复制到剪贴板的比特币或以太币钱包地址。
+
+这种形式的恶意软件于2017年在Windows平台上首次出现，于2018年夏天出现在Android应用商店，2019年2月ESET在Google
+Play上首次发现。
+
+Google Play上的MetaMask：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/e07fabe918a6f139282982411f222711.png)
+
+###  **Google Play上的Rogue广告软件** ****
+
+事件时间|  2019.3.13  
+---|---  
+事件简要| Check Point在Google Play商店中发现了一个新的广告系列，命名为“SimBad”  
+事件类型| 恶意软件  
+发布机构| Check Point  
+发布链接| <https://research.checkpoint.com/simbad-a-rogue-adware-campaign-on-google-play/>  
+  
+####  **事件概括** ****
+
+2019年3月13日，Check Point在Google
+Play商店中发现了一个新的广告系列，在206个应用程序中发现了这种特殊的广告软件，总计下载数量达到了1.5亿次，目前受感染的应用程序已从Google
+Play中删除。Check Point发现该恶意软件位于“RXDrioder”软件的SDK中，而且认为开发人员并不知情，被欺骗使用了该恶意SDK。
+
+SimBad具有三种功能，推送广告、在多个平台生成钓鱼页面进行网络钓鱼、推送其它应用程序。
+
+攻击流程图：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/1b4374207156fe245c0adf1577aeae80.png)  
+
+###  **BankThief：针对波兰和捷克的新型银行钓鱼攻击** ****
+
+事件时间|  2019.3.17  
+---|---  
+事件简要| 启明星辰ADLab发现了一款伪装成“Google Play”针对波兰和捷克的新型银行木马  
+事件类型| 恶意软件  
+发布机构| ADLab  
+发布链接| <https://www.freebuf.com/articles/paper/197523.html>  
+  
+####  **事件概括** ****
+
+2019年3月17日，启明星辰ADLab发现了一款全新的Android银行钓鱼木马，该木马将自身伪装成“Google
+Play”应用，利用系统辅助服务功能监控感染设备，以便在合法的银行APP运行时，启用对应的伪造好的银行钓鱼界面将其覆盖掉，来窃取受害用户的银行登录凭证。此次攻击的目标银行默认包含包括花旗银行在内的三十多家银行。
+
+目标银行Logo：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/359f4eead7cc6a7216c96782ad51f10c.png)
+
+BankThief行为：
+
+BankThief感染目标设备后，首先通过无障碍服务（无障碍服务是辅助身体不便或者操作不灵活的人来操作手机应用的，其可以被用于监控手机当前活动APP界面，实现对目标界面自动化操作。）监控感染设备。当监控到目标银行应用被打开时，银行木马会启动对应的伪装好的钓鱼页面覆盖掉真实的银行APP界面，在受害用户没有察觉的情况下窃取其银行登录凭证，“BankThief”会进一步将自身设置成默认短信应用来拦截银行短信，这样就绕过了基于SMS短信的双因素验证机制。其次，“BankThief主要利用Google
+Firebase 云消息传递服务（Google Firebase
+云消息传递服务是Google提供的能帮助开发者快速写出Web端和移动端应用通信的一种服务）来对感染设备进行远控，包含清空用户数据、卸载指定应用等恶意操作以及劫持包括花旗银行在内的数十家银行APP应用的恶意行为。
+
+BankThief流程图：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/e5f2a203bde80899ac81122f2b65b3e6.png)  
+
+###  **KBuster：以伪造韩国银行APP的韩国黑产活动披露** ****
+
+事件时间|  2019.3.22  
+---|---  
+事件简要| 对以伪造韩国银行APP的韩国黑产活动披露  
+事件类型| 恶意软件  
+发布机构| 奇安信红雨滴团队(RedDrip)  
+发布链接| <https://ti.qianxin.com/blog/articles/kbuster-fake-bank-app-in-south-korean/>  
+  
+####  **事件概括** ****
+
+2019年3月22日，奇安信红雨滴团队(RedDrip)发现了一例针对韩国手机银行用户的黑产活动，其最早活动可能从2018年12月22日起持续至今，并且截至文档完成时，攻击活动依然活跃，结合木马程序和控制后台均为韩语显示，红雨滴团队认为其是由韩国的黑产团伙实施的。
+
+KBuste攻击平台主要为Android，攻击目标锁定为韩国银行APP使用者，攻击手段为通过仿冒多款韩国银行APP，在诱骗用户安装成功并运行的前提下，窃取用户个人信息，并远程
+控制用户手机，以便跳过用户直接与银行连线验证，从而窃取用户个人财产。红雨滴团队一共捕获了55种的同家族Android木马，在野样本数量高达118个，并且经过关联分析，红雨滴团队还发现，该黑产团伙使用了300多个用于存放用户信息的服务器从事黑产。
+
+主要伪造的韩国银行APP：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/dda2f25d084265bd3eefb0928216c5df.png)
+
+恶意程序运行流程图：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/c5b101077722a353bdc9c2b6c92e0a3f.png)
+
+获取到的服务器：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/79acc6d9c7a5eaf1a0c6406162927427.png)
+
+后台远控界面：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/120b762ee4d8ad72d0d59184b5978b66.png)  
+
+###  **APT-C-37(拍拍熊)持续对某武装发起攻击** ****
+
+事件时间|  2019.3.25  
+---|---  
+事件简要| 从2015年10月起至今，拍拍熊组织（APT-C-37）针对某武装组织展开了有组织、有计划、针对性的长期不间断攻击  
+事件类型| APT  
+发布机构| 360烽火实验室  
+发布链接| <http://blogs.360.cn/post/analysis-of-apt-c-37.html>  
+  
+####  **事件概括** ****
+
+2019年3月25,360烽火实验室发现从2015年10月起至今，拍拍熊组织（APT-C-37）针对某武装组织展开了有组织、有计划、针对性的长期不间断攻击。其攻击平台为Windows和Android。
+
+某武装组织由于其自身的政治、宗教等问题，使其成为了众多黑客及国家的攻击目标。2017年3月，某武装组织Amaq媒体频道发布了一条警告消息，该消息提醒访问者该网站已被渗透，任何访问该网站的人都会被要求下载伪装成Flash安装程序的病毒文件。从消息中我们确定了某武装组织是该行动的攻击目标，其载荷投递方式至少包括水坑式攻击。
+
+拍拍熊攻击相关的关键时间事件点：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/ae63358196eb1e54653e2d11f537831c.png)
+
+此次拍拍熊组织载荷投递的方式主要为水坑攻击，Al
+Swarm新闻社网站是一个属于某武装组织的媒体网站，同样的原因，使其也遭受着来自世界各地的各种攻击，曾更换过几次域名，网站目前已经下线。拍拍熊组织除了对上述提到的Amaq媒体网站进行水坑攻击外，还对
+Al Swarm新闻社也同样被该组织用来水坑攻击。
+
+![](https://ti.qianxin.com/uploads/2019/06/04/95cabda2227f8aed444d1f0aedbb95a4.png)  
+
+###  **Gustuff Android银行木马针对125家银行，IM和加密货币应用程序** ****
+
+事件时间|  2019.3.28  
+---|---  
+事件简要| Gustuff Android银行木马针对125家银行，IM和加密货币应用程序  
+事件类型| 恶意软件  
+发布机构| [Group-IB](https://www.group-ib.com/)  
+发布链接| <https://www.zdnet.com/article/gustuff-android-banking-trojan-targets-100-banking-im-and-cryptocurrency-apps/>  
+  
+####  **事件概括** ****
+
+2019年3月28日，根据网络安全公司[Group-IB](https://www.group-ib.com/)在ZDNet的技术分享，他们持续跟踪了一款Android银行木马“Gustuff”，Gustuff可以为100多个银行应用程序和32个加密货币应用程序提供凭证和自动化银行交易。目标包括美国银行，苏格兰银行，摩根大通，富国银行，Capital
+One，TD银行和PNC银行等知名银行，以及BitPay，Cryptopay，Coinbase和比特币钱包等加密货币应用。此外，该木马还可以为各种其他Android
+pyment和消息应用程序提供凭据，例如PayPal，Western Union，eBay，Walmart，Skype，WhatsApp，Gett
+Taxi，Revolut等。
+
+Gustuff功能类似其它Android银行木马。它使用社交工程技术诱骗用户访问Android
+Accessibility服务，这是一项面向残障用户的功能，以及一个功能强大的工具，可以自动执行各种UI交互并代表用户点击屏幕项目。
+
+Gustuff独特之处在于它能够在辅助功能服务的帮助下执行ATS。ATS是特定于银行业务和银行恶意软件部门的术语。它代表自动转移服务。在恶意软件环境中使用时，它指的是银行木马能够从受感染用户的计算机进行交易，而不是窃取其帐户凭据，然后使用这些凭据通过其他计算机/智能手机窃取资金。基本上，由于Android
+Accessibility服务，Gustuff已经在用户的手机上实现了ATS系统。它可以打开应用程序，填写凭据和交易详细信息，并自行批准汇款。
+
+Gustuff在俄语的网络犯罪分子论坛上做广告：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/2d69c524e2a4045c3c2f7630631bc63e.png)  
+
+###  **Exodus：意大利制造的新Android间谍软件** ****
+
+事件时间|  2019.3.29  
+---|---  
+事件简要| 意大利公司eSurv开发了一款Android间谍软件并上传至Google Play商店中  
+事件类型| 恶意软件  
+发布机构| Security Without Borders  
+发布链接| <https://securitywithoutborders.org/blog/2019/03/29/exodus.html>  
+  
+####  **事件概括** ****
+
+2019年3月29日，Security Without Borders发现了一个新的Android间谍软件，他们将之命名为“Exodus”。
+
+Security Without Borders在Google
+Play中收集了2016年到2019年初的大量样本，他们发现Exodus是由意大利一家名为eSurv从事视频监控的公司开发的，其在Google
+Play中伪装为移动运行商的应用程序，页面与诱饵都是意大利语，通过Google
+Play公开的数据显示，最多的一个下载量达到了350个，目前这些软件都已从Google Play中删除。
+
+Exodus 的目的是收集有关设备的一些基本识别信息（即IMEI代码和电话号码）并将其发送到命令和控制服务器。
+
+Google Play中下载页面：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/b3b94a095cfe57292433bf7f7669f7ca.png)![](https://ti.qianxin.com/uploads/2019/06/04/6bb6293611989508466f70eb1353bf03.png)
+
+  
+
+### **新版XLoader通过伪装成移动应用与FakeSpy建立新的链接** ****
+
+事件时间|  2019.4.2  
+---|---  
+事件简要| 新版XLoader伪装成Android应用程序和iOS配置文件与FakeSpy建立新的链接  
+事件类型| 恶意软件  
+发布机构| Trend Micro  
+发布链接| <https://blog.trendmicro.com/trendlabs-security-intelligence/new-version-of-xloader-that-disguises-as-android-apps-and-an-ios-profile-holds-new-links-to-fakespy/>  
+  
+####  **事件概括** ****
+
+2019年4月2日，趋势科技研究人员发现了XLoader的一种新的变体，这款新的XLoader变体是Android设备的安全应用程序，使用恶意iOS配置文件来影响iPhone和iPad设备。除了部署技术的改变之外，其代码中的一些变化使其与以前的版本不同。这个最新的变种被命名为XLoader
+6.0版。
+
+感染链：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/1d3697dea20230e1ca51f33338a79117.png)
+
+趋势科技研究人员发现，新的XLoader变种使用虚假的网站进行传播，其中更是复制了日本移动电话运营商的网站，从而诱骗用户下载虚假的Android程序，并进一步感染用户手机。
+
+虚假网站：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/989c56483d24fba5480289c4bd0cf7d9.png)
+
+而对于Apple设备，感染链更加迂回。访问同一恶意网站会将用户重定向到另一个恶意网站（hxxp：// apple-icloud [。] qwq-japan
+[。] com或hxxp：// apple-icloud [。] zqo-japan [。]
+com）提示用户安装恶意iOS配置文件以解决阻止网站加载的网络问题。如果用户安装了配置文件，恶意网站将打开，将其显示为Apple网络钓鱼站点。
+
+钓鱼页面：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/5d80bb88d27dbb2fdd16d2f707a7cd40.png)
+
+同时趋势科技研究人员还发现另一个XLoader变种冒充为针对韩国用户的色情应用程序。“色情kr性”APK连接到在后台运行XLoader的恶意网站。该网站使用不同的固定推特账号（<https://twitter.com/fdgoer343>）。这种攻击方式只是应用于Android用户。
+
+![](https://ti.qianxin.com/uploads/2019/06/04/8c68dfc2bbc5559d02701f26352c3157.png)
+
+而本次最大的发现是新的变种XLoader 6.0与[FakeSpy的联系](https://blog.trendmicro.com/trendlabs-security-intelligence/fakespy-android-information-stealing-malware-targets-japanese-and-korean-speaking-users/)，其中一个明显的联系是XLoader
+6.0和FakeSpy使用的类似部署技术。它再次克隆了一个不同的合法日本网站来托管其恶意应用程序，类似于FakeSpy之前也做过的。通过查看可下载文件的命名方法，虚假网站的域结构以及其部署技术的其他细节，可以更清楚地看出它们的相似性，如下图：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/2e19a69ac90e6bc735a76ec4aea55745.png)  
+
+###  **Donot 肚脑虫团伙利用新特种安卓木马StealJob** ****
+
+事件时间|  2019.4.10  
+---|---  
+事件简要| 肚脑虫团伙利用新特种安卓木马StealJob进行新的攻击  
+事件类型| APT  
+发布机构| 奇安信红雨滴团队(RedDrip)  
+发布链接| <https://ti.qianxin.com/blog/articles/stealjob-new-android-malware-used-by-donot-apt-group/>  
+  
+  
+
+####  **事件概括** ****
+
+2019年4月10日，奇安信红雨滴团队(RedDrip)发现了肚脑虫(APT-C-35)使用了新的Android框架StealJob。肚脑虫(APT-C-35)，由奇安信高级威胁研究团队持续跟踪发现并命名，其主要针对巴基斯坦等南亚地区国家进行网络间谍活动的组织。此APT组织主要针对政府机构等领域进行攻击，以窃取敏感信息为主要目的。该APT组织除了以携带Office漏洞或者恶意宏的鱼叉邮件进行恶意代码的传播之外，还格外擅长利用恶意安卓APK进行传播。
+
+本次红雨滴团队发现的APK样本名为
+“KashmirVoice”(克什米尔之声)，样本名称通过仿冒为“KashmirVoice”(克什米尔之声),诱骗用户安装，当样本运行以后，会进行多达20种远控操作，其中包含测试操作，其远控操作有：获取用户手机通讯录、用户手机短信、用户手机通话记录、用户地理位置、用户手机文件、用户手机已安装软件等并进行上传。
+
+![](https://ti.qianxin.com/uploads/2019/06/04/1c26ba041fcf67f66fad6779c6115f1e.png)
+
+样本流程图：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/e6ebcf13a9632040625d9cf76d00f435.png)
+
+远控指令：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/7ddcb2ed83d755d44d174a7039d3f7bb.png)  
+
+###  **Anubis Android银行木马技术分析及新近活动总结** ****
+
+事件时间|  2019.5.6  
+---|---  
+事件简要| Anubis Android银行木马新近活动总结  
+事件类型| 恶意软件  
+发布机构| 奇安信红雨滴团队(RedDrip)  
+发布链接| <https://ti.qianxin.com/blog/articles/anubis-android-bank-trojan-technical-analysis-and-recent-activities-summary/>  
+  
+####  **事件概括** ****
+
+2019年5月6日，奇安信红雨滴团队(RedDrip)，经过分析国外安全研究者发现的一款仿冒为西班牙邮政运营商Correos的恶意软件，发现该恶意软件为Anubis银行木马。
+
+Anubis(阿努比斯)是[古埃及神话](https://baike.baidu.com/item/%E5%8F%A4%E5%9F%83%E5%8F%8A%E7%A5%9E%E8%AF%9D/2842452)中的死神，以[胡狼](https://baike.baidu.com/item/%E8%83%A1%E7%8B%BC)头、人身的形象出现在法老的壁画中。同时Anubis也是一种Android银行恶意软件，自2017年以来已经为全球100多个国家，300多家金融机构带来了相当大的麻烦。Anubis截止到目前为止，爆发地主要为欧洲国家，国内暂未发现该银行木马。
+
+Anubis主要通过伪装成金融应用、手机游戏、购物应用、软件更新、邮件应用、浏览器应用甚至物流应用等，从而渗透进谷歌应用商店，诱骗用户下载安装。
+
+Anubis木马功能强大，自身结合了钓鱼、远控、勒索木马的功能。Anubis通过仿冒各种应用诱骗用户安装使用，当软件被激活后，会展现给用户一个仿冒的钓鱼页面，从而获取用户敏感信息，如银行账号密码、个人身份信息等。Anubis具备一般银行木马的功能，包括屏蔽用户短信，获取转发用户短信等功能。Anubis同时可以从服务端获取远控指令，对用户手机进行进一步控制。Anubis还是第一个集成勒索软件功能的Android银行木马。Anubis功能之多、之强大，甚至可以作为间谍软件进行使用。
+
+![](https://ti.qianxin.com/uploads/2019/06/04/5e838c90dc97bea28eecbaa5d8d4e055.png)
+
+诱饵文件：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/e98aca760cfca285d7f828bae2e21023.png)
+
+Anubis2019年前四个月数量变化：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/6dc3be101f936b3f78ed2abad88c9b09.png)
+
+Anubis影响国家分布：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/3f92c8f6e52c17eb73a70b59cb6c8c4f.png)  
+
+###  **APT-C-23(双尾蝎)继续使用Android恶意软件攻击巴勒斯坦** ****
+
+事件时间|  2019.5.8  
+---|---  
+事件简要| APT-C-23(双尾蝎)继续使用带有政治主题的PDF，Android恶意软件攻击巴勒斯坦  
+事件类型| APT  
+发布机构| 奇安信红雨滴团队(RedDrip)  
+发布链接| <https://ti.qianxin.com/blog/articles/apt-c-23-analysis-of-attacks-on-palestinians-by-gangs-using-android-malware-with-political-themes/>  
+  
+####  **事件概括** ****
+
+2019年5月6日，奇安信红雨滴团队(RedDrip)，经过对Check
+Point发现的APT-C-23使用了带有政治主题的诱饵PDF文件分析，发现新样本在原有的基础上功能进行了增加，代码结构、控制指令等都进行了巨大的改变，程序运行后会显示带有政治主题的诱饵PDF文件，而随着巴以冲突的持续升温，APT-C-23再次更新其目的也显而易见。
+
+2017年3月15日奇安信红雨滴高级威胁分析团队已经对APT-C-23做了详细的揭露，APT-C-23组织的目标主要集中在中东地区，尤其活跃在巴勒斯坦的领土上。2016
+年 5 月起至今，双尾蝎组织（APT-C-23）对巴勒斯坦教育机构、军事机构等重要领域展开了有组织、有计划、有针对性的长时间不间断攻击。攻击平台主要包括
+Windows 与 Android。
+
+带有政治主题的PDF诱饵文件：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/bcbbaaca2554471ffadd6cdf613a04f6.png)
+
+通过SMS的控制指令下发：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/42b01482cbcb728fd984a1ead06f2169.png)
+
+通过FCM的控制指令下发：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/dd721f72abf6a27f061d59f4e5cb4e1e.png)  
+
+###  **海莲花组织针对移动设备攻击** ****
+
+事件时间|  2019.5.24  
+---|---  
+事件简要| 海莲花组织针对移动设备攻击  
+事件类型| APT  
+发布机构| 安天移动安全  
+发布链接| <https://www.antiy.com/response/20190524.html>  
+  
+####  **事件概括** ****
+
+2019年5月24日，安天移动安全对发生在我国的一起海莲花攻击事件进行了分析。此次进行分析的恶意软件，伪装为正常的应用，在运行后隐藏图标，并于后台释放恶意子包并接收远程控制指令，窃取用户短信、联系人、通话记录、地理位置、浏览器记录等隐私信息，私自下载apk、拍照、录音，并将用户隐私上传至服务器，造成用户隐私泄露。
+
+海莲花（OceanLotus）是一个据称越南背景的APT组织。该组织最早于2015年5月被天眼实验室(现“奇安信红雨滴团队(RedDrip)”)所揭露并命名，其攻击活动最早可追溯到2012
+年4月，攻击目标包括中国海事机构、海域建设部门、科研院所和航运企业，后扩展到几乎所有重要的组织机构，并持续活跃至今。
+
+恶意软件：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/cb6cda031daa72f7b09f0bfa46f3e2a5.png)
+
+![](https://ti.qianxin.com/uploads/2019/06/04/f4cb74787135213cc2e1ddcd386c7cb8.png)
+
+![](https://ti.qianxin.com/uploads/2019/06/04/3aa7dc360776e8b88425bce7f944912e.png)  
+
+###  **军刀狮组织（APT-C-38）攻击活动揭露** ****
+
+事件时间|  2019.5.27  
+---|---  
+事件简要| 军刀狮组织（APT-C-38）攻击活动揭露  
+事件类型| APT  
+发布机构| 360烽火实验室  
+发布链接| <http://blogs.360.cn/post/analysis-of-APT-C-38.html>  
+  
+####  **事件概括** ****
+
+2019年5月27日，360烽火实验室捕获到军刀狮组织的最新攻击活动，除发现Android端攻击外还发现该组织带有Windows端攻击，其中Android端RAT仍属于第四代。烽火实验室结合APT攻击的地缘政治因素、攻击组织使用的语言以及该组织发起的历史攻击活动，分析后认为该组织是位于西亚的中东某国家背景的APT组织。
+
+从2015年7月起至今，军刀狮组织（APT-C-38）在中东地区展开了有组织、有计划、针对性的不间断攻击。其攻击平台为Windows和Android，2018年5月，Kaspersky安全厂商发表报告《[Who’s
+who in the Zoo](https://securelist.com/whos-who-in-the-zoo/85394/)》，首次批露该组织为一个未归属的专注于中东目标的间谍活动组织，并命名ZooPark，涉及的攻击武器共包含四个迭代版本的Android端RAT，载荷投递方式包括水坑和Telegram频道。
+
+时间线：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/a7b29be3b3368e6d1d1532434ac38642.png)
+
+被披露后军刀狮组织当月新部署的一批网络基础设施：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/9bf1ab4d228a505ceb4f81a020b7a069.png)
+
+移动端远控指令：
+
+![](https://ti.qianxin.com/uploads/2019/06/04/340cd88ea6a703fd3bbc2c7bc7ba0b82.png)
+
+##  **总结** ****
+
+未来我们对智能手机的依赖会越来越大，而Android市场的占有率依旧很大而且可能越来越大，未来的智能设备会更多，覆盖的行业会更广。移动安全以后也不仅仅是个人的安全，更是关乎到企业与国家的安全。随着国际社会的不断变化，我们面对的威胁也不光光是为了牟利的个人团伙，更加可能面对的是国家之间的安全对抗。以史为鉴可以知兴替，通过我们对2019年上半年Android安全事件的分析与总结，未来奇安信红雨滴团队(RedDrip)，依然会在PC与移动领域持续保持警惕，追踪最新安全事件的进展。
+
+##  **附录** ****
+
+ **红雨滴高级威胁研究团队（RedDrip** ******Team）**
+
+奇安信旗下的高级威胁研究团队红雨滴（前天眼实验室）,成立于2015年，持续运营奇安信威胁情报中心至今，专注于APT攻击类高级威胁的研究，是国内首个发布并命名“海莲花”（APT-C-00，OceanLotus）APT攻击团伙的安全研究团队，也是当前奇安信威胁情报中心的主力威胁分析技术支持团队。
+
+目前，红雨滴团队拥有数十人的专业分析师和相应的数据运营和平台开发人员，覆盖威胁情报运营的各个环节：公开情报收集、自有数据处理、恶意代码分析、网络流量解析、线索发现挖掘拓展、追踪溯源，实现安全事件分析的全流程运营。团队对外输出机读威胁情报数据支持奇安信自有和第三方的检测类安全产品，实现高效的威胁发现、损失评估及处置建议提供，同时也为公众和监管方输出事件和团伙层面的全面高级威胁分析报告。
+
+依托全球领先的安全大数据能力、多维度多来源的安全数据和专业分析师的丰富经验，红雨滴团队自2015年持续发现多个包括海莲花在内的APT团伙在中国境内的长期活动，并发布国内首个团伙层面的APT事件揭露报告，开创了国内APT攻击类高级威胁体系化揭露的先河，已经成为国家级网络攻防的焦点。
+
+![](https://ti.qianxin.com/uploads/2019/06/04/ffcc08be48d5a0bb91e3056cd513408b.png)  
+
+##  **参考链接** ****
+
+1.[ https://blog.trendmicro.com/trendlabs-security-intelligence/adware-disguised-as-game-tv-remote-control-apps-infect-9-million-google-play-users/](https://blog.trendmicro.com/trendlabs-security-intelligence/adware-disguised-as-game-tv-remote-control-apps-infect-9-million-google-play-users/)
+
+2\. [https://securingtomorrow.mcafee.com/other-blogs/mcafee-labs/malbus-popular-south-korean-bus-app-series-in-google-play-found-dropping-malware-after-5-years-of-development/](https://securingtomorrow.mcafee.com/other-blogs/mcafee-labs/malbus-popular-south-korean-bus-app-series-in-google-play-found-dropping-malware-after-5-years-of-development/)
+
+3\. [https://www.welivesecurity.com/2019/02/08/first-clipper-malware-google-play/](https://www.welivesecurity.com/2019/02/08/first-clipper-malware-google-play/)
+
+4\. [https://research.checkpoint.com/simbad-a-rogue-adware-campaign-on-google-play/](https://research.checkpoint.com/simbad-a-rogue-adware-campaign-on-google-play/)
+
+5\.
+[https://www.freebuf.com/articles/paper/197523.html](https://www.freebuf.com/articles/paper/197523.html)
+
+6\. [https://ti.qianxin.com/blog/articles/kbuster-fake-bank-app-in-south-korean/](https://ti.qianxin.com/blog/articles/kbuster-fake-bank-app-in-south-korean/)
+
+7\. [http://blogs.360.cn/post/analysis-of-apt-c-37.html](http://blogs.360.cn/post/analysis-of-apt-c-37.html)
+
+8\. [https://www.zdnet.com/article/gustuff-android-banking-trojan-targets-100-banking-im-and-cryptocurrency-apps/](https://www.zdnet.com/article/gustuff-android-banking-trojan-targets-100-banking-im-and-cryptocurrency-apps/)
+
+9\.
+[https://securitywithoutborders.org/blog/2019/03/29/exodus.html](https://securitywithoutborders.org/blog/2019/03/29/exodus.html)
+
+10\. [https://blog.trendmicro.com/trendlabs-security-intelligence/new-version-of-xloader-that-disguises-as-android-apps-and-an-ios-profile-holds-new-links-to-fakespy/](https://blog.trendmicro.com/trendlabs-security-intelligence/new-version-of-xloader-that-disguises-as-android-apps-and-an-ios-profile-holds-new-links-to-fakespy/)
+
+11\. [https://ti.qianxin.com/blog/articles/stealjob-new-android-malware-used-by-donot-apt-group/](https://ti.qianxin.com/blog/articles/stealjob-new-android-malware-used-by-donot-apt-group/)
+
+12\. [https://ti.qianxin.com/blog/articles/anubis-android-bank-trojan-technical-analysis-and-recent-activities-summary/](https://ti.qianxin.com/blog/articles/anubis-android-bank-trojan-technical-analysis-and-recent-activities-summary/)
+
+13\. [https://ti.qianxin.com/blog/articles/apt-c-23-analysis-of-attacks-on-palestinians-by-gangs-using-android-malware-with-political-themes/](https://ti.qianxin.com/blog/articles/apt-c-23-analysis-of-attacks-on-palestinians-by-gangs-using-android-malware-with-political-themes/)
+
+14\. <https://www.antiy.com/response/20190524.html>
+
+15\. [http://blogs.360.cn/post/analysis-of-APT-C-38.html](http://blogs.360.cn/post/analysis-of-APT-C-38.html)
+
+16\. moz-extension://31fe3aa6-2f78-4821-ba7c-8d63f260bc87/static/pdf/web/viewer.html?file=https%3A//ti.qianxin.com/uploads/2019/01/02/56e5630023fe905b2a8f511e24d9b84a.pdf
+

@@ -1,0 +1,717 @@
+## **一、概述**
+
+泛在物联网通俗的表达就是广泛存在的物联网，它是一个分层的体系架构，自下至上由终层、网络层、平台层和业务层组成。终端层作为物联网的“触角”，主要由具有各种感知能力的业务终端组成，是物联网识别信息载体、采集信息的来源。
+
+终端层又可以细分为采集部件、智能业务终端、本地通信网络和物联代理等部件。在智能业务终端层，包含了芯片、操作系统、智能组件等基本功能架构，并以APP方式实现向业务终端制造厂商开放统一的接口。
+
+本地通信网络主要包括以太网、无源光网络、485总线为代表的有线通信网络和以WiFi、Zigbee、红外、蓝牙为代表的短距离无线通信网络组成。
+
+物联代理是泛在物联网与传统物联网的不同所在，主要完成多种通信协议适配、数据边缘智能处理、终端安全接入、数据模型统一化等功能。通过物联代理和物联网管理平台的引入，打破了业务系统彼此孤立的结构。
+
+##  **二、一般检测原则及检测内容**
+
+###  **2.1** **接入安全**
+
+应能向接入网络证明其网络身份，至少支持如下身份鉴别机制之一：
+
+> ( 1 ) 基于网络身份标识的鉴别；
+>
+> ( 2 ) 基于MAC地址的鉴别；
+>
+> ( 3 ) 基于通信协议的鉴别；
+>
+> ( 4 ) 基于通信端口的鉴别；
+>
+> ( 5 ) 基于对称密码机制的鉴别；
+>
+> ( 6 ) 基于非对称密码机制的鉴别。
+
+接入认证的作用是确保只有合法终端/授权用户才能接入到物联网系统，它需要物联代理所采用的接入认证协议，或至少能够向物联代理证明自己的网络身份。
+
+本地网络大多采用无线通信，在开放式环境中，无线通信缺少物理防护，只要在网络传输覆盖范围内，理论上任何人都有可能接入网络或对网络传输的数据进行窃听，所以网络接入认证和数据传输保密性是对物联网感知网络最基本的两项安全要求。
+
+本地感知网络接入主要是指接入本地感知层网关，所使用的接入认证协议通常与感知网络所采用的通信方式直接相关。例如：物联网络采用WIFI通信，则接入认证协议一般采用WPA/WPA2协议，物联网络采用LoRaWAN通信，则一般使用OTAA或ABP协议。通常每种主流通信方式都有与之相应的网络接入认证协议。
+
+以MQTT协议为例，某型采集终端使用MQTT协议+JSON方式与物管平台进行通信连接时无必要的认证方式，通过分析相关通信规约后，可任意伪造订阅/发布信息。
+
+未授权连接检测结果---
+    
+    
+    msf5 auxiliary(scanner/mqtt/connect) > exploit
+    
+    [*] 192.168.*.*:1883      - 192.168.*.*:1883 - Testing without credentials
+    
+    [+] 192.168.*.*:1883      - Does not require authentication
+    
+    [*] 192.168.*.*:1883      - Scanned 1 of 1 hosts (100% complete)
+    
+    [*] Auxiliary module execution completed
+
+通过MQTT.fx可构造发布订阅信息进行数据交换，在安全检测中，本项检测即不符合( 1 ) 基于网络身份标识的鉴别要求。
+
+###  **2.2** **设备安全**
+
+ **2.2.1** **操作系统安全**
+
+设备安全主要是针对物联终端自身安全，在实际场景中，物联终端又分为“具有操作系统的终端和无操作系统的终端”。本文所面向的是具有嵌入式操作系统的终端，如下所示----
+    
+    
+    sy****@S********A:~$ uname -a
+    
+    Linux S********A 3.10.108 #9 SMP Wed Apr 22 14:23:55 CST 2020 armv7l armv7l armv7l GNU/Linux
+    
+    sy****@S********A:~$ cat /proc/version
+    
+    Linux version 3.10.108 (root@ubuntu-work) (gcc version 4.6.3 20120201 (prerelease) (crosstool-NG linaro-1.13.1-2012.02-20120222 - Linaro GCC 2012.02) ) #9 SMP Wed Apr 22 14:23:55 CST 2020
+    
+    sy****@S********A:~$ cat /proc/cpuinfo
+    
+    processor : 0
+    
+    model name : ARMv7 Processor rev 5 (v7l)
+    
+    BogoMIPS  : 48.00
+    
+    Features  : swp half thumb fastmult vfp edsp neon vfpv3 tls vfpv4 idiva idivt vfpd32
+    
+    CPU implementer  : 0x41
+    
+    CPU architecture: 7
+    
+    CPU variant  : 0x0
+    
+    CPU part  : 0xc07
+    
+    CPU revision  : 5
+    
+     
+    
+    processor : 1
+    
+    model name : ARMv7 Processor rev 5 (v7l)
+    
+    BogoMIPS  : 48.00
+    
+    Features  : swp half thumb fastmult vfp edsp neon vfpv3 tls vfpv4 idiva idivt vfpd32
+    
+    CPU implementer  : 0x41
+    
+    CPU architecture: 7
+    
+    CPU variant  : 0x0
+    
+    CPU part  : 0xc07
+    
+    CPU revision  : 5
+
+如需深入测试，可以使用主机漏扫等对终端进行扫描，尤其关注提权漏洞问题。
+
+针对操作系统主要检测内容有--
+a.用户标识与鉴别。要求终端的操作系统用户应具有唯一标识，且用户登录时，需要对用户进行身份鉴别，用户口令应满足一定复杂度要求；
+
+b.访问控制，
+“应能控制操作系统用户的访问权限”和“操作系统用户应仅被授予完成任务所需的最小权限”。测试时可分别以不同角色用户（如操作员、审计员）登录操作系统，查看操作系统为各类用户分配的权限是否合理（如操作员无权删除审计记录、审计员无权执行业务操作），同时考察权限分配是否符合最小权限原则;
+
+c.终端应提供安全措施控制对其远程配置，很多物联终端的远程配置采用私有协议或WEB方式，测试时需考察其配置方式是否有安全防护机制（如身份鉴别、加密认证等）；
+
+d.日志审计，
+“应能为操作系统事件生成审计记录，审计记录应包括日期、时间、操作用户、操作类型等信息”，“应能由安全审计员开启和关闭操作系统的审计功能”，“应能提供操作系统的审计记录查阅功能”。
+
+e.配置检查，应对操作系统的配置信息进行检查。
+
+采用配置检查工具lynis对嵌入式操作系统进行检查的结果---
+    
+    
+    S************A:~/SecTool/lynis$ ./lynis audit system
+    
+    [ Lynis 3.0.0 ]
+    
+    [+] Initializing program
+    
+    ------------------------------------    
+      ###################################################################
+    
+      #                                                                 #
+    
+      #   非特权扫描模式 （非root）                                     #
+    
+      #                                                                 #
+    
+      ###################################################################
+    
+     说明:
+    
+      --------------    
+      * 某些测试将被跳过 (无root权限)
+    
+      * 某些测试将会给出不同的结果或者没有输出
+    
+     
+    
+    - OS侦测...                                           [完成 ]
+    
+    - 检查文件...                                          [完成 ]
+    
+     
+    
+      ---------------------------------------------------    
+      Program version:           3.0.0
+    
+      Operating system:          Linux
+    
+      Operating system name:     Ubuntu
+    
+      Operating system version:  16.04
+    
+      Kernel version:            3.10.108
+    
+      Hardware platform:         armv7l
+    
+      Hostname:                  **********
+    
+      ---------------------------------------------------    
+      Profiles:                  /home/sysadm/SecTool/lynis/default.prf
+    
+      Log file:                  /home/sysadm/lynis.log
+    
+      Report file:               /home/sysadm/lynis-report.dat
+    
+      Report version:            1.0
+    
+      Plugin directory:          ./plugins
+    
+      ---------------------------------------------------    
+      Auditor:                   [Not Specified]
+    
+      Language:                  en
+    
+      Test category:               all
+    
+      Test group:                all
+    
+      ---------------------------------------------------    
+      - Program update status...                                  [ 跳过 ]
+    
+     
+    
+    [1] 系统工具
+    
+    ------------------------------------    
+      - Scanning available tools...
+    
+      - Checking system binaries...
+    
+    [2] 插件 (phase 1)
+    
+    ------------------------------------    
+    Note: plugins have more extensive tests and may take several minutes to complete
+    
+     
+    
+      - Plugins 允许                                           [ 无 ]
+    
+    [3] 起动及服务
+    
+    ------------------------------------    
+      - Service Manager                                           [ 制度 ]
+    
+        - Boot loader                                             [ 未发现 ]
+    
+      - Check running services (systemctl)                            [完成 ]
+    
+            Result: 完成 14 running services
+    
+      - Check 允许 services at boot (systemctl)                     [完成 ]
+    
+            Result: 完成 15 允许 services
+    
+      - Check startup files (permissions)                              [ OK ]
+    
+    [4] 内核
+    
+    ------------------------------------    
+      - Checking default run level                                [ RUNLEVEL 5 ]
+    
+      - Checking kernel version and release                         [完成 ]
+    
+      - Checking kernel type                                      [完成 ]
+    
+      - Checking loaded kernel modules                            [完成 ]
+    
+          完成 36 活动模块
+    
+      - Checking Linux kernel configuration file                  [ 完成 ]
+    
+    grep: /etc/kernel-img.conf: No such file or directory
+    
+      - Checking for available kernel update                      [ 未知 ]
+    
+      - Checking core dumps configuration
+    
+        - configuration in systemd conf files                     [ DEFAULT ]
+    
+        - configuration in etc/profile                            [ DEFAULT ]
+    
+        - 'hard' configuration in security/limits.conf               [ DEFAULT ]
+    
+        - 'soft' configuration in security/limits.conf                [ DEFAULT ]
+    
+        - Checking setuid core dumps configuration                [ 禁用 ]
+    
+      - Check if reboot is needed                                 [ 未知 ]
+    
+    [5] 内存与进程
+    
+    ------------------------------------    
+      - Checking /proc/meminfo                                    [ 完成 ]
+    
+      - Searching for dead/zombie processes                        [ 未发现 ]
+    
+      - Searching for IO waiting processes                           [ 未发现 ]
+    
+      - Search prelink tooling                                      [ 未发现 ]
+
+附操作系统检测全图----
+![1604298567_5f9fa747568a6471a30cc.png!small](https://image.3001.net/images/20201102/1604298567_5f9fa747568a6471a30cc.png!small)
+
+图1 操作系统安全检测全图
+
+ **2.2.2** **设备本体安全**
+
+a.采取插卡方式进行网络身份鉴别时，应采取措施防止卡片被拔除或替换；
+
+b.对于存储加密数据或密钥的存储器应具有强拆自毁机制，并有明显警告标识防止误操作;
+
+![1604298663_5f9fa7a7006660cafcde1.png!small](https://image.3001.net/images/20201102/1604298663_5f9fa7a7006660cafcde1.png!small)
+
+图2 某型加密装置防拆警告
+
+c.失效保护,
+“物联终端应能自检出已定义的设备故障并进行告警，确保设备未受故障影响部分的功能正常”，此条的重点是故障告警功能和可用性。测试时可模拟传感器故障、网络故障等，查看感知终端能否发出告警，并考察其他功能是否受影响。对于控制类设备，要求通信故障不应影响控制功能。
+
+ **2.2.3** **容器安全**
+
+a.容器环境中秘密信息的加密检测，对容器环境中所存储秘密信息的加密算法的检测；
+
+b.容器镜像安全漏洞检测，对容器环境执行安全扫描；
+
+c.容器账户安全检测,检测容器账户安全策略是否存在问题;
+
+d 容器镜像一致性检测,检测容器镜像签名与可信源是否一致。
+
+运行于终端的容器可以导出为文件方便分析：
+
+![1604298696_5f9fa7c8a04561af6bdbf.png!small](https://image.3001.net/images/20201102/1604298696_5f9fa7c8a04561af6bdbf.png!small)
+
+图3 容器导出
+
+容器分析工具有很多选择，这里以开源工具dockerscan为例说明：
+
+info采集镜像基本信息---
+    
+    
+    [root@localhost tmp]# dockerscan image info basicimg.tar
+    
+    [ * ] Starting analyzing docker image...
+    
+    [ * ] Selected image: 'basicimg.tar'
+    
+    [ * ] Analysis finished. Results:
+    
+    [ * ] - Host name = 3827efb8b9b3
+    
+    [ * ] - Entry point:
+    
+    [ * ]   > /usr/local/monitor/appctl-daemon
+    
+    [ * ] - Created date = 2010-10-23T17:03:37.95190981Z
+    
+    [ * ] - Docker version = 18.09.6
+    
+    [ * ] - Environment:
+    
+    [ * ]   > PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    
+    Analyze分析运行权限：
+    
+    [root@localhost tmp]# dockerscan image analyze basicimg.tar
+    
+    [ * ] Starting the analysis of docker image...
+    
+    [ * ] Selected image: 'basicimg.tar'
+    
+    [ * ] Analysis finished. Results:
+    
+    [ * ] - Running user = root
+    
+    Extract提取镜像文件：
+    
+    [root@localhost tmp]# dockerscan image extract /tmp/basicimg.tar /basic
+    
+    [ * ] Starting the extraction of docker image...
+    
+    [ * ] Selected image: 'basicimg.tar'
+    
+    [ * ] Image content extracted
+
+镜像文件目录结构如下图---
+![1604298831_5f9fa84f200a4d6c0f3bb.png!small](https://image.3001.net/images/20201102/1604298831_5f9fa84f200a4d6c0f3bb.png!small)
+
+  
+
+图4 容器镜像文件目录
+
+查看密码文件---
+    
+    
+    [root@localhost /]# cat /basic/etc/passwd
+    
+    root:x:0:0:root:/root:/bin/ash
+    
+    bin:x:1:1:bin:/bin:/sbin/nologin
+    
+    daemon:x:2:2:daemon:/sbin:/sbin/nologin
+    
+    adm:x:3:4:adm:/var/adm:/sbin/nologin
+    
+    lp:x:4:7:lp:/var/spool/lpd:/sbin/nologin
+    
+    sync:x:5:0:sync:/sbin:/bin/sync
+    
+    shutdown:x:6:0:shutdown:/sbin:/sbin/shutdown
+    
+    halt:x:7:0:halt:/sbin:/sbin/halt
+    
+    mail:x:8:12:mail:/var/spool/mail:/sbin/nologin
+    
+    news:x:9:13:news:/usr/lib/news:/sbin/nologin
+    
+    uucp:x:10:14:uucp:/var/spool/uucppublic:/sbin/nologin
+    
+    operator:x:11:0:operator:/root:/bin/sh
+    
+    man:x:13:15:man:/usr/man:/sbin/nologin
+    
+    [root@localhost /]# cat /basic/etc/shadow
+    
+    也可将容器镜像导入至虚拟机环境，并进入容器环境内进一步分析---    
+    S***********A:~$ docker ps -a
+    
+    CONTAINER ID        IMAGE                   COMMAND                  CREATED             STATUS                      PORTS               NAMES
+    
+    E********d        basic_img-arm2:latest   "/usr/local/monitor/…"   9 days ago          Exited (0) 9 days ago                           romantic_swanson
+    
+    E********4        basic_img-arm2:latest   "/usr/local/monitor/…"   2 months ago
+
+加载container
+
+    
+    
+    S**********A:~$ docker start e**********4
+    
+    E***********4
+
+进入容器操作:
+
+    
+    
+    S**********A:~$ docker exec -it e***********4  bin/bash
+    
+    E************4
+
+Bin/bash无法登入可以尝试bin/sh。可以在容器中对数据库、应用等进行更加深入的测试。
+
+ **2.2.4** **固件安全**
+
+固件（firmware）是写入特殊应用集成电路（ASIC）或可编程逻辑器件（PLD）之中的闪存或EROM、EPROM(可编程只读存储器)中的程序，通俗的理解是“固化的软件”。
+
+a.应禁止固件通过公网升级（FTP、HTTP），关闭非必要端口；
+
+b.应支持远程安全升级更新；
+
+c.应采取措施由禁止外部直接读取存储器，防止绕过控制设备控制器（或处理器）直接读取芯片中内容；
+
+d.应控制MCU（或处理器）的Bootloader中读取Flash的流程，防止数据通过通信总线输出到主机端（如PC）；
+
+e.应禁用硬件开发调试时所使用的接口，包括但不限于JTAG/SWD和UART等接口。
+
+对于固件的检测，应首先检测终端电路是否暴露调试接口，如存在调试接口，可能导致固件信息被导出的风险。
+
+在获取固件文件的情况下（通常由厂商提供），可以从以下方面进行（部分）检测----
+ **序号**
+
+|
+
+ **检测项目**
+
+|
+
+  
+  
+  
+---|---|---  
+  
+1
+
+|
+
+文件hashes  
+  
+2
+
+|
+
+CPU架构  
+  
+3
+
+|
+
+操作系统  
+  
+4
+
+|
+
+文件系统  
+  
+5
+
+|
+
+固件格式  
+  
+6
+
+|
+
+用户密码信息泄露风险  
+  
+7
+
+|
+
+证书文件和密钥泄露风险  
+  
+8
+
+|
+
+软件成分识别  
+  
+9
+
+|
+
+恶意软件检测  
+  
+10
+
+|
+
+整数溢出缺陷检测  
+  
+11
+
+|
+
+安全缓解机制检测  
+  
+12
+
+|
+
+调试信息泄露  
+  
+公网有不少固件检测平台，未免广告嫌疑就不一一列举了。
+
+###  **2.3** **应用安全**
+
+ **2.3.1 APP** **安全**
+
+a.物联网终端应用软件（APP）产品应将代码中的各种元素，如变量、函数、类的名字改写成无意义的名字，以实现混淆的目的;
+
+b对物联网终端应用软件（APP）产品进行加固，以有效防止移动应用被破解、盗版、二次打包、注入、反编译等，保障程序的安全性、稳定性;
+
+c.物联网终端应用软件（APP）应采用认证签名机制;
+
+d.物联网终端应用软件（APP）宜支持密码保护解除锁定状态，例如口令、图案、生物特征识别等多种形态的密码;
+
+e.物联网终端应用软件（APP）应提供文件类用户数据的授权访问能力，当第三方应用访问被保护的用户数据时，应在用户确认的情况下才能访问。文件类用户数据包括图片、视频、音频和文档等;
+
+f.未经授权的任何实体应不能从物联网终端应用软件（APP）的加密存储区域的数据中还原出用户私密数据的真实内容;
+
+g.物联网终端应用软件（APP）应提供数据彻底删除功能，以保证被删除的用户数据不可再恢复出来;
+
+ **2.3.2 WEB** **应用安全**
+
+a.恶意代码防范：通过代码层屏蔽常见恶意攻击行为，防止非法数据提交；如：SQL注入；
+
+b.双因子授权认证：应对同一用户采用两种或两种以上组合的鉴别技术实现用户身份鉴别；
+
+c.密码复杂度：强制用户首次登录时修改初始口令；口令长度至少为8位，并由数字、大小字母与特殊字符组成；
+
+d.会话过期与超时：浏览器Cookie过期、无动作过期、强制过期、保持会话等进行限制；
+
+e.安全审计功能：
+
+一、审计覆盖到每个用户，对重要的用户行为和重要安全事件进行审计，如：登录、退出、添加、删除、修改或覆盖等；
+
+二、审计记录应包括事件的日期和时间、用户、事件类型、事件是否成功及其他与审计相关的信息。
+
+ **2.3.3 WEB** **安全风险检测要求**
+
+WEB检测一般可使用WEB漏扫开展，常用WEB漏扫有AWVS，NESSUS等。
+
+ **安全风险内容**
+
+|
+
+ **风险描述**  
+  
+---|---  
+  
+跨站脚本（XSS）
+
+|
+
+恶意攻击者往WEB页面里插入恶意的html代码，当用户浏览该页面时，嵌入其中的html代码会被执行，从而达到恶意用户的特殊目的；（钓鱼、盗取cookie、操纵受害者的浏览器、蠕虫攻击）  
+  
+SQL注入漏洞
+
+|
+
+用户输入的数据未经验证就用来构造SQL查询语句，查询数据库中的敏感内容,绕过认证添加、删除、修改数据、拒绝服务。  
+  
+XML注入
+
+|
+
+如果在查询或修改时，如果没有做转义，直接输入或输出数据，都将导致XML注入漏洞。攻击者可以修改XML数据格式，增加新的XML节点，对数据处理流程产生影响。  
+  
+跨站请求伪造(CSRF)
+
+|
+
+强迫受害者的浏览器向一个易受攻击的Web应用程序发送请求,最后达到攻击者所需要的操作行为。恶意请求会带上浏览器的Cookie。受攻击的Web应用信任浏览器的Cookie。  
+  
+任意文件下载
+
+|
+
+下载服务器任意文件，如脚本代码，服务及系统配置文件等；可用得到的代码进一步代码审计，得到更多可利用漏洞  
+  
+文件上传
+
+|
+
+Web应用程序在处理用户上传的文件时，没有判断文件的扩展名是否在允许的范围内，或者没检测文件内容的合法性，就把文件保存在服务器上，甚至上传脚本木马到web服务器上，直接控制web服务器。（未限制扩展名、未检查文件内容、病毒文件）  
+  
+远程命令执行
+
+|
+
+可远程执行代码，直接使用管理员权限执行恶意命令;  
+  
+敏感信息泄漏
+
+|
+
+泄漏敏感信息  
+  
+权限控制
+
+|
+
+一个正常的用户A通常只能够对自己的一些信息进行增删改查，但是由于程序员的一时疏忽，对信息进行增删改查的时候没有进行一个判断，判断所需要操作的信息是否属于对应的用户，可以导致用户A可以操作其他人的信息。​  
+  
+已解密的登录请求
+
+|
+
+可能会窃取诸如用户名和密码等未经加密即发送了的用户登录信息  
+  
+未设置验证码机制
+
+|
+
+恶意攻击者可以使用暴力破解的手段猜解帐号和密码  
+  
+APP检测推荐开源平台MobSF进行综合检测，该平台支持IOS及Android应用。部分检测结果截图如下---
+![1604298798_5f9fa82ee7587a0105bb0.png!small](https://image.3001.net/images/20201102/1604298798_5f9fa82ee7587a0105bb0.png!small)
+
+图5 APP检测结果
+
+ **2.3.4** **数据库安全**
+
+a.应对注册到数据库管理系统中的用户进行标识。用户标识信息是公开的信息，一般以用户名和用户ID实现。为管理方便，可将用户分组，也使用别名。无论用户名、用户ID、用户组还是用户别名，都要遵守标识的唯一性原则；
+
+b.用对登录到数据库的用户进行身份真实性鉴别。通过对用户所提供的“鉴别信息”的验证，证明该用户确有所声称的某种身份，这些“鉴别信息”必须是保密的，不易伪造的；
+
+c.应由数据库子语言定义，并与数据一起存放在数据字典中。对任何SQL对象进行操作应有明确的权限许可，并且权限随着操作和对象的变化而变化，安全系统应有能力判断这种权限许可；
+
+d.应以访问控制表或访问矩阵的形式表示，并通过执行相应的访问控制程序实现。每当执行SQL语句、有访问要求出现时，通过调用相应的访问控制程序，实现对访问要求的控制；
+
+e.应限制某一权限的用户将该权限传给其他用户。当一个用户被赋予某权限，同时拥有该将权限授予其他用户的权力时，该用户才具有对该授权的传播权。为了增强数据库系统的安全性，需要对授权传播进行某些限制。
+
+在实际检测过程发现，某些采用容器化应用的终端中，使用SQLlite轻量化数据存储业务数据，且未对数据库连接进行认证，存在数据库泄露风险----
+    
+    
+    S**********A:~$ docker exec -it e********4  /bin/sh
+    
+    / # find -name *.db
+    
+    ./usr/local/…/db/f********1.db
+    
+    ./usr/local/…/db/T********5.db
+    
+    ./usr/local/…/db/r********5.db
+
+基于SQLlite的特性，一个db文件即为一个数据库，可直接导出文件连接数据库，进行增删改查等操作，没有任何访问控制措施。
+
+![1604298905_5f9fa899edecb10b88bf5.png!small](https://image.3001.net/images/20201102/1604298905_5f9fa899edecb10b88bf5.png!small)
+
+图6 导出的部分数据表
+
+###  **2.4** **数据安全**
+
+ **2.4.1** **数据可用性**
+
+为确保终端数据可用性，终端设备需符合以下要求：
+
+a.应能够存储终端的配置数据信息；
+
+b.应支持对采集的实时数据进行分类管理和存储，时间不少于三个月；
+
+c.在网络中断时，应能缓存所连接的全部业务终端的业务数据；
+
+d.在与物联管理平台的网络连接中断并重新连接后，应能支持物联管理平台获取一定时间（时间可配置）的历史数据；
+
+e.上报物联管理平台的管理控制交互消息，应采用时间戳进行标识。
+
+对于采集终端而言，在设计中应具有数据暂存功能，防止在掉电、断网时暂时保存数据，恢复时可自动上传业务数。本类检测以人工检测为主，可构建模拟/测试环境开展测试。
+
+ **2.4.2** **数据完整性**
+
+为确保终端数据完整性，终端设备需符合以下要求：
+
+a.应采用校验技术或密码技术保证重要数据在存储过程中的完整性；
+
+b.应集成硬件密码模块或软件密码模块，实现与安全接入网关之间的身份认证和数据传输机密性和完整性保护，采用国家密码主管部门认可的密码算法，通过统一密码基础设施（设备）提供数字证书或密钥管理服务；
+
+c.应具备对传输数据完整性校验机制，能够利用校验码、消息摘要、数字签名等技术实现隐私数据、重要业务数据等重要数据的传输完整性保护。
+
+本类检测无通用工具，一般通过人工抓包方式进行分析。
+
+ **2.4.3** **数据保密性**
+
+为确保终端数据完整性，终端设备需符合以下要求：
+
+a.物联网终端南北向通信数据应通过国家密码部门认可的加密算法进行加密传输；
+
+b.宜对本地存储的用户口令等关键数据进行加密保护;
+
+c.应采用加密技术保护数据信息中的时间序列；
+
+d.应基于统一密码技术设施进行加密保护，可采用安全芯片或软件、密码模块等方式实现。
+

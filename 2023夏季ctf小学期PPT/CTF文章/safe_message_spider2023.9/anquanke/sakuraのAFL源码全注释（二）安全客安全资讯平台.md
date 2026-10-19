@@ -1,0 +1,1111 @@
+# sakuraのAFL源码全注释（二）
+
+阅读量 **379677**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-08-12 10:30:51
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t019bded1e48f69c18e.jpg)
+
+## afl-fast-clang中叙
+
+###  afl-llvm-rt
+
+AFL LLVM_Mode中存在着三个特殊的功能。这三个功能的源码位于afl-llvm-rt.o.c中。
+
+####  deferred instrumentation
+
+AFL会尝试通过仅执行一次目标二进制文件来优化性能。它会暂停控制流，然后复制该“主”进程以持续提供fuzzer的目标。该功能在某些情况下可以减少操作系统、链接与libc内部执行程序的成本。  
+选好位置后，将下述代码添加到该位置上，之后使用afl-clang-fast重新编译代码即可
+
+    
+    
+    #ifdef __AFL_HAVE_MANUAL_CONTROL
+      __AFL_INIT();
+    #endif
+    
+
+`__AFL_INIT()`内部调用`__afl_manual_init`函数。该函数的源代码如下
+
+    
+    
+    void __afl_manual_init(void) {
+      static u8 init_done;
+    
+      if (!init_done) {
+    
+        __afl_map_shm();
+        __afl_start_forkserver();
+        init_done = 1;
+    
+      }
+    
+    }
+    
+
+如果还没有被初始化，就初始化共享内存，然后开始执行forkserver，然后设置init_done为1。
+
+`__afl_map_shm`就是简单的通过读取环境变量`SHM_ENV_VAR`来获取共享内存，然后将地址赋值给`__afl_area_ptr`。否则，默认的`__afl_area_ptr`指向的是一个数组。
+
+`__afl_start_forkserver`的逻辑稍微复杂，分条叙述
+
+  * 首先设置`child_stopped`为0，然后通过`FORKSRV_FD + 1`向状态管道写入4个字节，告知AFL fuzz已经准备好了。
+  * 然后进入fuzz loop循环 
+    * 通过read从控制管道`FORKSRV_FD`读取4个字节，如果当前管道中没有内容，就会堵塞在这里，如果读到了，就代表AFL命令我们fork server去执行一次fuzz
+    * 如果`child_stopped`为0，则直接fork出一个子进程去进行fuzz 
+      * 然后此时对于子进程就会关闭和控制管道和状态管道相关的fd，然后return跳出fuzz loop，恢复正常执行。
+    * 如果`child_stopped`为1，这是对于persistent mode的特殊处理，此时子进程还活着，只是被暂停了，所以可以通过`kill(child_pid, SIGCONT)`来简单的重启，然后设置`child_stopped`为0。
+    * 然后fork server向状态管道`FORKSRV_FD + 1`写入子进程的pid，然后等待子进程结束，注意这里对于persistent mode，我们会设置waitpid的第三个参数为WUNTRACED，代表若子进程进入暂停状态，则马上返回。
+    * WIFSTOPPED(status)宏确定返回值是否对应于一个暂停子进程，因为在persistent mode里子进程会通过SIGSTOP信号来暂停自己，并以此指示运行成功，所以在这种情况下，我们需要再进行一次fuzz，就只需要和上面一样，通过SIGCONT信号来唤醒子进程继续执行即可，不需要再进行一次fuzz。 
+      * 设置`child_stopped`为1。
+    * 当子进程结束以后，向状态管道`FORKSRV_FD + 1`写入4个字节，通知AFL这次target执行结束了。
+
+####  persistent mode
+
+上面我们其实已经介绍过persistent
+mode的一些特点了，那就是它并不是通过fork出子进程去进行fuzz的，而是认为当前我们正在fuzz的API是无状态的，当API重置后，一个长期活跃的进程就可以被重复使用，这样可以消除重复执行fork函数以及OS相关所需要的开销。  
+所以的使用方法如下:
+
+    
+    
+    while (__AFL_LOOP(1000)) {
+      /* Read input data. */
+      /* Call library code to be fuzzed. */
+      /* Reset state. */
+    }
+    /* Exit normally */
+    
+
+循环次数不能设置过大，因为较小的循环次数可以将内存泄漏和类似故障的影响降到最低。所以循环次数设置成1000是个不错的选择。
+
+接下来我们来解读一下源码，首先介绍一个`__attribute__ constructor`，demo如下，代表被此修饰的函数将在main执行之前自动运行
+
+    
+    
+    __attribute__((constructor(1))) void before_main1(){
+        printf("before_main1\n");
+    }
+    __attribute__((constructor(2))) void before_main2(){
+        printf("before_main2\n");
+    }
+    __attribute__((destructor(1))) void after_main1(){
+        printf("after_main1\n");
+    }
+    __attribute__((destructor(2))) void after_main2(){
+        printf("after_main2\n");
+    }
+    int main(){
+        printf("main\n");
+    }
+    ...
+    ...
+    before_main1
+    before_main2
+    main
+    after_main2
+    after_main1
+    
+
+llvm mode里有一个函数`__attribute__((constructor(CONST_PRIO))) void
+__afl_auto_init(void)`，其逻辑如下
+
+  * 读取环境变量PERSIST_ENV_VAR的值，设置给is_persistent
+  * 读取环境变量DEFER_ENV_VAR的值，如果为1，就直接返回，这代表`__afl_auto_init`和deferred instrumentation不通用，这其实道理也很简单，因为deferred instrumentation会自己选择合适的时机，手动init，不需要用这个函数来init，所以这个函数只在没有手动init的时候会自动init。
+  * 执行`__afl_manual_init`函数，其含义见上文。
+
+宏定义`__AFL_LOOP`内部调用`__afl_persistent_loop`函数。  
+`__afl_persistent_loop(unsigned int max_cnt)`的逻辑如下
+
+  * 如果是第一次执行loop 
+    * 如果is_persistent为1 
+      * 清空`__afl_area_ptr`，设置`__afl_area_ptr[0]`为1，`__afl_prev_loc`为0
+    * 设置cycle_cnt的值为传入的max_cnt参数，然后直接返回1
+  * 如果不是第一次执行loop 
+    * 如果cycle_cnt减一（代表需要执行的循环次数减一）后大于0 
+      * 发出信号`SIGSTOP`来让当前进程暂停
+      * 设置`__afl_area_ptr[0]`为1，`__afl_prev_loc`为0，然后直接返回1
+    * 如果cycle_cnt为0 
+      * 设置`__afl_area_ptr`指向一个无关数组`__afl_area_initial`。
+
+我们将这些联系在一起，重新梳理一遍  
+假设我们是这么使用的:
+
+    
+    
+    while (__AFL_LOOP(1000)) {
+        fuzzAPI();
+    }
+    
+
+  * 首先在main函数之前读取共享内容，然后以当前进程为fork server，去和AFL fuzz通信。
+  * 当AFL fuzz通知进行一次fuzz，由于此时child_stopped为0，则fork server先fork出一个子进程。
+  * 这个子进程会很快执行到`__AFL_LOOP`包围的代码，因为是第一次执行loop，所以会先清空`__afl_area_ptr`和设置`__afl_prev_loc`为0，并向共享内存的第一个元素写一个值，然后设置循环次数1000，随后返回1，此时`while(__AFL_LOOP)`满足条件，于是执行一次fuzzAPI。
+  * 然后因为是while循环，会再次进入`__AFL_LOOP`里，此时将循环次数减一，变成999，然后发出信号`SIGSTOP`来让当前进程暂停，因为我们设置了WUNTRACED，所以waitpid函数就会返回，fork server将继续执行。
+  * fork server在收到`SIGSTOP`信号后就知道fuzzAPI已经被成功执行结束了，就设置child_stopped为1，并告知AFL fuzz
+  * 然后当AFL fuzz通知再进行一次fuzz的时候，fork server将不再需要去fork出一个新的子进程去进行fuzz，只需要恢复之前的子进程继续执行，并设置child_stopped为0
+  * 因为我们是 **相当于重新执行一次程序** ，所以将`__afl_prev_loc`设置为0，并向共享内存的第一个元素写一个值，随后直接返回1，此时`while(__AFL_LOOP)`满足条件，于是执行一次fuzzAPI，然后因为是while循环，会再次进入`__AFL_LOOP`里，再次减少一次循环次数变成998，并发出信号暂停。
+  * 上述过程重复执行，直到第1000次执行时，先恢复执行，然后返回1，然后执行一次fuzzAPI，然后因为是while循环，会再次进入`__AFL_LOOP`里，再次减少一次循环次数变成0，此时循环次数cnt已经被减到0，就不会再发出信号暂停子进程，而是设置`__afl_area_ptr`指向一个无关数组`__afl_area_initial`，随后将子进程执行到结束。 
+    * **这是因为程序依然会向后执行并触发到instrument，这会向`__afl_area_ptr`里写值，但是此时我们其实并没有执行`fuzzAPI`，我们并不想向共享内存里写值，于是将其指向一个无关数组，随意写值。同理，在deferred instrumentation模式里，在执行`__afl_manual_init`之前，也是向无关数组里写值，因为我们将fork点手动设置，就代表在这个fork点之前的path我们并不关心。**
+    * 重新整理一下上面的逻辑 
+      * loop第一次执行的时候，会初始化，然后返回1，执行一次fuzzAPI，然后cnt会减到999，然后抛出信号暂停子进程。
+      * loop第二次执行的时候，恢复执行，清空一些值，然后返回1，执行一次fuzzAPI，然后cnt会减到998，然后抛出信号暂停子进程。
+      * loop第1000次执行的时候，恢复执行，清空一些值，然后返回1，执行一次fuzzAPI，然后cnt会减到0，然后就设置指向无关数组，返回0，while循环结束，程序也将执行结束。
+  * 此时fork server将不再收到SIGSTOP信号，于是child_stopped仍为0。
+  * 所以当AFL fuzz通知fork server再进行一次fuzz的时候，由于此时child_stopped为0，则fork server会先fork出一个子进程，然后后续过程和之前一样了。
+  * 有点绕，可以结合代码再读一下 
+    
+        int __afl_persistent_loop(unsigned int max_cnt) {
+    static u8  first_pass = 1;
+    static u32 cycle_cnt;
+    if (first_pass) {
+      if (is_persistent) {
+        memset(__afl_area_ptr, 0, MAP_SIZE);
+        __afl_area_ptr[0] = 1;
+        __afl_prev_loc = 0;
+      }
+      cycle_cnt  = max_cnt;
+      first_pass = 0;
+      return 1;
+    }
+    if (is_persistent) {
+      if (--cycle_cnt) {
+        raise(SIGSTOP);
+        __afl_area_ptr[0] = 1;
+        __afl_prev_loc = 0;
+        return 1;
+      } else {
+        __afl_area_ptr = __afl_area_initial;
+      }
+    }
+    return 0;
+    }
+    
+
+####  trace-pc-guard mode
+
+要使用这个功能，需要先通过`AFL_TRACE_PC=1`来定义DUSE_TRACE_PC宏，从而在执行afl-clang-fast的时候传入`-fsanitize-coverage=trace-pc-guard`参数，来开启这个功能，和之前我们的插桩不同，开启了这个功能之后，我们不再是仅仅只对每个基本块插桩，而是对每条edge都进行了插桩。
+
+    
+    
+    ifdef AFL_TRACE_PC
+      CFLAGS    += -DUSE_TRACE_PC=1
+    endif
+    
+
+`__sanitizer_cov_trace_pc_guard`这个函数将在每个edge调用，该函数利用函数参数guard指针所指向的uint32值来确定共享内存上所对应的地址。  
+每个edge上都有应该有其不同(但其实可能相同，原因下述)的guard值
+
+    
+    
+    void __sanitizer_cov_trace_pc_guard(uint32_t* guard) {
+      __afl_area_ptr[*guard]++;
+    }
+    
+
+而这个guard指针的初始化在`__sanitizer_cov_trace_pc_guard_init`函数里，llvm会设置guard其首末分别为start和stop。  
+它会从第一个guard开始向后遍历，设置guard指向的值，这个值是通过`R(MAP_SIZE)`设置的，定义如下，所以如果我们的edge足够多，而`MAP_SIZE`不够大，就有可能重复，而这个加一是因为我们会把0当成一个特殊的值，其代表对这个edge不进行插桩。  
+这个init其实很有趣，我们可以打印输出一下`stop-start`的值，就代表了llvm发现的程序里总计的edge数。
+
+    
+    
+    #  define R(x) (random() % (x))
+    ...
+    ...
+      *(start++) = R(MAP_SIZE - 1) + 1;
+    
+      while (start < stop) {
+    
+        if (R(100) < inst_ratio) *start = R(MAP_SIZE - 1) + 1;
+        else *start = 0;
+    
+        start++;
+    
+      }
+    
+
+## afl-fuzz长叙
+
+###  初始配置
+
+####  setup_signal_handlers
+
+注册必要的信号处理函数
+
+  * [Linux进程间通信（一）：信号 signal()、sigaction()](https://www.cnblogs.com/52php/p/5813867.html)
+  * SIGHUP/SIGINT/SIGTERM 
+    * hangup/interrupt/software termination signal from kill
+    * 主要是”stop”的处理函数
+    * handle_stop_sig 
+      * 设置stop_soon为1
+      * 如果child_pid存在，向其发送SIGKILL终止信号，从而被系统杀死。
+      * 如果forksrv_pid存在，向其发送SIGKILL终止信号
+  * SIGALRM 
+    * alarm clock
+    * 处理超时的情况
+    * handle_timeout 
+      * 如果child_pid>0，则设置child_timed_out为1，并kill掉child_pid
+      * 如果child_pid==-1，且forksrv_pid>0，则设置child_timed_out为1，并kill掉forksrv_pid
+  * SIGWINCH 
+    * Window resize
+    * 处理窗口大小的变化信号
+    * handle_resize 
+      * 设置clear_screen=1
+  * SIGUSR1 
+    * user defined signal 1，这个是留给用户自定义的信号
+    * 这里定义成skip request (SIGUSR1)
+    * handle_skipreq 
+      * 设置skip_requested=1
+  * SIGTSTP/SIGPIPE 
+    * stop signal from tty/write on a pipe with no one to read it
+    * 不关心的一些信号
+    * SIG_IGN
+
+####  check_asan_opts
+
+check asan选项
+
+  * 读取环境变量ASAN_OPTIONS和MSAN_OPTIONS，做一些检查
+
+####  fix_up_sync
+
+如果通过-M或者-S指定了sync_id，则更新out_dir和sync_dir的值
+
+  * 设置sync_dir的值为out_dir
+  * 设置out_dir的值为`out_dir/sync_id`
+
+####  save_cmdline
+
+拷贝当前的命令行参数
+
+    
+    
+       00 ff 00 ff   55 00 00 00   buf-> 2f 55 73 65   72 73 2f 73   │ ····U···/Users/s │
+       61 6b 75 72   61 2f 67 69   74 73 6f 75   72 63 65 2f   │ akura/gitsource/ │
+       41 46 4c 2f   63 6d 61 6b   65 2d 62 75   69 6c 64 2d   │ AFL/cmake-build- │
+       64 65 62 75   67 2f 61 66   6c 2d 66 75   7a 7a 20 2d   │ debug/afl-fuzz - │
+       69 20 69 6e   70 75 74 20   2d 6f 20 6f   75 74 70 75   │ i input -o outpu │
+       74 20 2d 2d   20 2e 2f 74   65 73 74 00   00 f0 00 00   │ t -- ./test·····
+    
+
+####  fix_up_banner
+
+修剪并且创建一个运行横幅
+
+####  check_if_tty
+
+检查是否在tty终端上面运行。
+
+  * 读取环境变量AFL_NO_UI的值，如果为真，则设置not_on_tty为1，并返回
+  * `ioctl(1, TIOCGWINSZ, &ws)`通过ioctl来读取window size，如果报错为ENOTTY，则代表当前不在一个tty终端运行，设置not_on_tty
+
+####  get_core_count
+
+计数logical CPU cores
+
+####  check_crash_handling
+
+####  check_cpu_governor
+
+####  setup_post
+
+####  setup_shm
+
+配置共享内存和virgin_bits
+
+  * [Linux进程间通信（六）：共享内存 shmget()、shmat()、shmdt()、shmctl()](https://www.cnblogs.com/52php/p/5861372.html)
+  * 如果in_bitmap为空，则通过memset初始化数组virgin_bits[MAP_SIZE]的每个元素的值为’255’(\xff)
+  * 通过memset设置virgin_tmout[MAP_SIZE]和virgin_crash[MAP_SIZE]的每个元素的值为’255’(\xff)
+  * 调用shmget分配一块共享内存，`shmget(IPC_PRIVATE, MAP_SIZE, IPC_CREAT | IPC_EXCL | 0600);`,将返回的共享内存标识符保存到shm_id里。 
+    * `int shmget(key_t key, size_t size, int shmflg);`
+    * 第一个参数，程序需要提供一个参数key（非0整数），它有效地为共享内存段命名，shmget()函数成功时返回一个与key相关的共享内存标识符（非负整数），用于后续的共享内存函数。调用失败返回-1. 
+      * 这里shm_id取值是IPC_PRIVATE，所以函数shmget()将创建一块新的共享内存
+    * 第二个参数，size以字节为单位指定需要共享的内存容量 
+      * 这里取值为MAP_SIZE
+    * 第三个参数，shmflg是权限标志 
+      * IPC_CREAT 如果共享内存不存在，则创建一个共享内存，否则打开操作。
+      * IPC_EXCL 只有在共享内存不存在的时候，新的共享内存才建立，否则就产生错误。
+      * 421分别表示，读写执行3种权限。 比如，上面的6＝4＋2，表示读＋写。
+      * 0600 每一位表示一种类型的权限，比如，第一位是表示八进制,第二位表示拥有者的权限为读写，第三位表示同组无权限，第四位表示他人无权限。
+  * 注册atexit handler为remove_shm 
+    * remove_shm 
+      * shmctl(shm_id, IPC_RMID, NULL); 
+        * 第一个参数，shm_id是shmget()函数返回的共享内存标识符。
+        * 第二个参数，command是要采取的操作，它可以取下面的三个值 
+          * IPC_RMID：删除共享内存段
+        * 第三个参数，buf是一个结构指针
+  * 使用alloc_printf(“%d”, shm_id)来创建一个字符串shm_str 
+    
+         00 ff 00 ff   06 00 00 00  shm_str->36 35 35 33   38 00 f0 f0   │ ········65538··· │
+    
+
+  * 如果不是dumb_mode， **则设置环境变量SHM_ENV_VAR的值为shm_str**
+  * `trace_bits = shmat(shm_id, NULL, 0);`
+    * trace_bits是用做`SHM with instrumentation bitmap`
+    * 第一次创建完共享内存时，它还不能被任何进程访问，所以通过shmat来启动对该共享内存的访问，并把共享内存连接到当前进程的地址空间。
+    * `void *shmat(int shm_id, const void *shm_addr, int shmflg)`
+      * 第一个参数，shm_id是由shmget()函数返回的共享内存标识。
+      * 第二个参数，shm_addr指定共享内存连接到当前进程中的地址位置，通常为空，表示让系统来选择共享内存的地址。
+      * 第三个参数，shm_flg是一组标志位，通常为0。
+      * 调用成功时返回一个指向共享内存第一个字节的指针，如果调用失败返回-1.
+
+####  init_count_class16
+
+这其实是因为trace_bits是用一个字节来记录是否到达这个路径，和这个路径被命中了多少次的，而这个次数在0-255之间，但比如一个循环，它循环5次和循环6次可能是完全一样的效果，为了避免被当成不同的路径，或者说尽可能减少因为命中次数导致的区别。  
+在每次去计算是否发现了新路径之前，先把这个路径命中数进行规整，比如把命中5次和6次都统一认为是命中了8次，见下面这个。
+
+    
+    
+    static const u8 count_class_lookup8[256] = {
+            [0]           = 0,
+            [1]           = 1,
+            [2]           = 2,
+            [3]           = 4,
+            [4 ... 7]     = 8,
+            [8 ... 15]    = 16,
+            [16 ... 31]   = 32,
+            [32 ... 127]  = 64,
+            [128 ... 255] = 128
+    };
+    
+
+而为什么又需要用一个`count_class_lookup16`呢，是因为AFL在后面实际进行规整的时候，是一次读两个字节去处理的，为了提高效率，这只是出于效率的考量，实际效果还是上面这种效果。  
+初始化`u16 count_class_lookup16[65536]`
+
+    
+    
+    EXP_ST void init_count_class16(void) {
+    
+        u32 b1, b2;
+    
+        for (b1 = 0; b1 < 256; b1++)
+            for (b2 = 0; b2 < 256; b2++)
+                count_class_lookup16[(b1 << 8) + b2] =
+                        (count_class_lookup8[b1] << 8) |
+                        count_class_lookup8[b2];
+    }
+    
+
+####  setup_dirs_fds
+
+准备输出文件夹和fd
+
+  * 如果sync_id存在，且创建sync_dir文件夹，设置权限为0700（读写执行） 
+    * 如果报错，且errno不是EEXIST，则抛出异常。
+  * 创建out_dir，设置权限为0700（读写执行） 
+    * 如果报错，且errno不是EEXIST，则抛出异常。 
+      * maybe_delete_out_dir
+    * 如果创建成功 
+      * 如果设置了in_place_resume，就抛出异常”Resume attempted but old output directory not found”
+      * `out_dir_fd = open(out_dir, O_RDONLY)`以只读模式打开这个文件，并返回文件句柄out_dir_fd
+      * 如果没有定义宏`__sun`
+        * 如果打开out_dir失败，或者为out_dir通过flock建立互斥锁定失败，就抛出异常”Unable to flock() output directory.”
+  * 建立queue文件夹 
+    * 创建`out_dir/queue`文件夹，设置权限为0700 
+      * 创建`out_dir/queue/.state/`,设置权限为0700,该文件夹主要 **保存用于session resume和related tasks的queue metadata**
+        * 创建`out_dir/queue/.state/deterministic_done/`,设置权限为0700,该文件夹 **标记过去经历过deterministic fuzzing的queue entries** 。
+        * 创建`out_dir/queue/.state/auto_extras/`,设置权限为0700, **Directory with the auto-selected dictionary entries.**
+        * 创建`out_dir/queue/.state/redundant_edges/`,设置权限为0700, **保存当前被认为是多余的路径集合**
+        * 创建`out_dir/queue/.state/variable_behavior/`,设置权限为0700, **The set of paths showing variable behavior.**
+  * 如果sync_id存在 
+    * 创建`out_dir/.synced/`,设置权限为0700, **同步文件夹，用于跟踪cooperating fuzzers.**
+  * 建立crashes文件夹 
+    * 创建`out_dir/crashes`文件夹，设置权限为0700,用于记录crashes
+  * 建立hangs文件夹 
+    * 创建`out_dir/hangs`文件夹，设置权限为0700,用于记录hangs
+  * 通常有用的文件描述符 
+    * `dev_null_fd = open("/dev/null", O_RDWR);`以读写模式打开`/dev/null`
+    * `dev_urandom_fd = open("/dev/urandom", O_RDONLY);`,以只读模式打开`/dev/urandom`
+  * 建立Gnuplot输出文件夹 
+    * `fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL, 0600);`以只写方式打开`out_dir/plot_data`文件，如果文件不存在，就创建，并获取句柄
+    * `plot_file = fdopen(fd, "w");`根据句柄得到FILE* plot_file
+    * 向其中写入`# unix_time, cycles_done, cur_path, paths_total, pending_total, pending_favs, map_size, unique_crashes, unique_hangs, max_depth, execs_per_sec\n`
+
+####  read_testcases
+
+从输入文件夹中读取所有文件，然后将它们排队进行测试。
+
+  * 尝试访问`in_dir/queue`文件夹，如果存在就重新设置in_dir为`in_dir/queue`
+    * Auto-detect non-in-place resumption attempts.
+  * 扫描in_dir，并将结果保存在`struct dirent **nl`里 
+    * 不使用readdir,因为测试用例的顺序将随机地有些变化,并且将难以控制。
+  * 遍历nl,nl[i]->d_name的值为input文件夹下的文件名字符串 
+    * `u8 *fn = alloc_printf("%s/%s", in_dir, nl[i]->d_name);`
+    * `u8 *dfn = alloc_printf("%s/.state/deterministic_done/%s", in_dir, nl[i]->d_name);`
+    * 如果`shuffle_queue`的值为真，且nl_cnt大于1，则`shuffle_ptrs((void **) nl, nl_cnt)`，字面意思上就是重排nl里的指针的位置。
+    * 通过文件属性过滤掉`.`和`..`这样的regular文件，并检查文件大小，如果文件大小大于MAX_FILE，默认是1024*1024字节，即1M
+    * 通过access检查`in_dir/.state/deterministic_done/nl[i]->d_name`是否存在，这应该是为了用在resume恢复扫描使用 
+      * 如果存在就设置passed_det为1
+      * 这个检查是用来判断是否这个entry已完成deterministic fuzzing。在恢复异常终止的扫描时，我们不想重复deterministic fuzzing，因为这将毫无意义，而且可能非常耗时
+    * add_to_queue(fn, st.st_size, passed_det);
+    * 如果queued_paths为0，则代表输入文件夹为0，抛出异常
+    * 设置last_path_time为0
+    * queued_at_start的值设置为queued_paths 
+      * Total number of initial inputs
+
+####  add_to_queue(u8 *fname, u32 len, u8 passed_det)
+
+  * queue_entry是一个链表数据结构
+  * 先通过calloc动态分配一个queue_entry结构体，并 **初始化其fname为文件名fn，len为文件大小，depth为cur_depth + 1,passed_det为传递进来的passed_det**
+    
+        q->fname = fname;
+    q->len = len;
+    q->depth = cur_depth + 1;
+    q->passed_det = passed_det;
+    
+
+  * 如果`q->depth > max_depth`，则设置max_depth为q->depth
+  * 如果queue_top不为空，则设置`queue_top->next为q，queue_top = q;`，否则`q_prev100 = queue = queue_top = q;`
+    
+        static struct queue_entry *queue,     /* Fuzzing queue (linked list)      */
+    *queue_top, /* Top of the list                  */
+    *q_prev100; /* Previous 100 marker              */
+    
+
+  * queue计数器queued_paths和待fuzz的样例计数器pending_not_fuzzed加一
+  * cycles_wo_finds设置为0 
+    * Cycles without any new paths
+  * 如果`queued_paths % 100`得到0，则设置`q_prev100->next_100 = q; q_prev100 = q;`
+  * 设置last_path_time为当前时间。
+
+####  load_auto
+
+load自动生成的提取出来的词典token
+
+  * 遍历循环从i等于0到USE_AUTO_EXTRAS，默认50 
+    * 以只读模式尝试打开文件名为`alloc_printf("%s/.state/auto_extras/auto_%06u", in_dir, i)`的文件
+    * 如果打开失败，则结束
+    * 如果打开成功，则从fd读取最多`MAX_AUTO_EXTRA+1`个字节到tmp数组里，默认MAX_AUTO_EXTRA为32，这是单个auto extra文件的最大大小，读取出的长度保存到len里。
+    * maybe_add_auto(tmp, len);  
+};
+
+####  maybe_add_auto(u8 *mem, u32 len)
+
+  * 如果用户设置了MAX_AUTO_EXTRAS或者USE_AUTO_EXTRAS为0，则直接返回。
+  * 循环遍历i从1到len，将tmp[0]和mem[i]异或，如果相同，则结束循环。
+  * 如果结束时i=0，即tmp[0]和tmp[1]就相同，就直接返回。这里我推断tmp应该是从小到大排序的字节流。
+  * 如果len的长度为2，就和interesting_16数组里的元素比较，如果和其中某一个相同，就直接return。
+  * 如果len的长度为4，就和interesting_32数组里的元素比较，如果和其中某一个相同，就直接return。
+  * 将tmp和现有的extras数组里的元素比较，利用extras数组里保存的元素是按照size大小，从小到大排序这个特性，来优化代码。 
+    * 遍历extras数组，比较`memcmp_nocase(extras[i].data, mem, len)`,如果有一个相同，就直接return。
+    * static struct extra_data _extras; /_ Extra tokens to fuzz with */
+  * 设置auto_changed为1
+  * 遍历a_extras数组，比较`memcmp_nocase(a_extras[i].data, mem, len)`,如果相同，就将其hit_cnt值加一，这是代表在语料中被use的次数,然后跳转到`sort_a_extras`
+    * static struct extra_data _a_extras; /_ Automatically selected extras */ 
+        
+                struct extra_data {
+        u8 *data;                           /* Dictionary token data            */
+        u32 len;                            /* Dictionary token length          */
+        u32 hit_cnt;                        /* Use count in the corpus          */
+        
+
+  * 此时我们可能在处理一个不在之前的任何a_extras或者extras数组里的新entry了，处理逻辑是 
+    * 先比较a_extras_cnt和MAX_AUTO_EXTRAS，如果小于就代表a_extras数组没有填满，直接拷贝tmp和len，来构造出一个新项，加入到a_extras数组里
+    * 否则的话，就从a_extras数组的后半部分里，随机替换掉一个元素的a_extras[i].data为ck_memdup(mem, len)，并将len设置为len，hit_cnt设置为0。
+
+####  pivot_inputs
+
+逻辑上说这个函数就是为inputdir里的testcase，在output dir里创建hard link
+
+  * 初始化id=0
+  * 依次遍历queue里的queue_entry 
+    * 在q->fname里找到最后一个’/‘所在的位置，如果找不到，则`rsl = q->fname`,否则rsl指向’/‘后的第一个字符,其实也就是最后一个`/`后面的字符串
+    * 将rsl的前三个字节和`id_`进行比较 
+      * 如果相等，则设置`resuming_fuzz`为1,然后做一些恢复操作，不叙述。
+      * 如果不相等 
+        * 在rsl里寻找`,orig:`子串，如果找到了，将use_name指向该子串的冒号后的名字；如果没找到，就另`use_name = rsl`
+        * `nfn = alloc_printf("%s/queue/id:%06u,orig:%s", out_dir, id, use_name);`
+        * 尝试创建从input file到`alloc_printf("%s/queue/id:%06u,orig:%s", out_dir, id, use_name)`的硬链接
+    * 修改q的fname指向这个硬链接
+    * 如果q的passed_det为1，则mark_as_det_done(q),这主要是对应上面的resuming_fuzz的情况。 
+      * mark_as_det_done简单的说就是打开`out_dir/queue/.state/deterministic_done/use_name`这个文件，如果不存在就创建这个文件，然后设置q的passed_det为1。
+      * 这里的`use_name就是orig:后面的字符串`
+  * 如果设置了in_place_resume为1，则nuke_resume_dir() 
+    * nuke_resume_dir() 
+      * 删除`out_dir/_resume/.state/deterministic_done`文件夹下所有`id:`前缀的文件
+      * 删除`out_dir/_resume/.state/auto_extras`文件夹下所有`auto_`前缀的文件
+      * 删除`out_dir/_resume/.state/redundant_edges`文件夹下所有`id:`前缀的文件
+      * 删除`out_dir/_resume/.state/variable_behavior`文件夹下所有`id:`前缀的文件
+      * 删除文件夹`out_dir/_resume/.state`
+      * 删除`out_dir/_resume`文件夹下所有`id:`前缀的文件
+      * 如果全部删除成功就正常返回，如果有某一个删除失败就抛出异常。
+
+####  load_extras
+
+如果定义了extras_dir，则从extras_dir读取extras到extras数组里，并按size排序。
+
+####  find_timeout
+
+如果timeout_given没有被设置，则进入find_timeout  
+这个想法是，在不指定-t的情况下resuming sessions时，我们不希望一遍又一遍地自动调整超时时间，以防止超时值因随机波动而增长
+
+  * 如果resuming_fuzz为0，则直接return
+  * 如果in_place_resume为1，则`fn = alloc_printf("%s/fuzzer_stats", out_dir);`，否则`fn = alloc_printf("%s/../fuzzer_stats", in_dir);`
+  * 以只读方式打开fd，读取内容到tmp[4096]里，并在里面搜索”exec_timeout : “，如果搜索不到就直接返回，如果搜索到了，就读取这个timeout的数值，如果大于4就设置为exec_tmout的值。 
+    * EXP_ST u32 exec_tmout = EXEC_TIMEOUT; / _Configurable exec timeout (ms)_ /
+  * timeout_given = 3; 
+    * timeout_given, / _Specific timeout given?_ /
+
+####  detect_file_args
+
+这个函数其实就是识别参数里面有没有`@@`，如果有就替换为`out_dir/.cur_input`，如果没有就返回
+
+####  setup_stdio_file
+
+如果out_file为NULL，如果没有使用-f，就删除原本的`out_dir/.cur_input`，创建一个新的`out_dir/.cur_input`，保存其文件描述符在out_fd中
+
+####  check_binary
+
+check指定路径处要执行的程序是否存在，且它不能是一个shell script
+
+####  perform_dry_run
+
+执行所有的测试用例，以检查是否按预期工作
+
+  * 读取环境变量AFL_SKIP_CRASHES到skip_crashes，设置cal_failures为0
+  * 遍历queue 
+    * 打开q->fname，并读取到分配的内存use_mem里
+    * res = calibrate_case(argv, q, use_mem, 0, 1); 
+      * 校准测试用例，见下文
+    * 如果stop_soon被置为1，就直接return
+    * 如果res的结果为crash_mode或者FAULT_NOBITS 
+      * 打印`SAYF("len = %u, map size = %u, exec speed = %llu us\n", q->len, q->bitmap_size, q->exec_us);`
+    * 依据res的结果查看是哪种错误并进行判断。一共有以下几种错误类型 
+      * FAULT_NONE 
+        * 如果q是头结点，即第一个测试用例，则`check_map_coverage`，用以评估map coverage 
+          * 计数trace_bits发现的路径数，如果小于100，就直接返回
+          * 在trace_bits的数组后半段，如果有值就直接返回。
+          * 抛出警告`WARNF("Recompile binary with newer version of afl to improve coverage!")`
+        * 如果是crash_mode，则抛出异常，`FATAL("Test case '%s' does *NOT* crash", fn);`，该文件不崩溃
+      * FAULT_TMOUT 
+        * 如果指定了-t参数，则timeout_given值为2 
+          * 抛出警告`WARNF("Test case results in a timeout (skipping)");`，并设置q的cal_failed为CAL_CHANCES，cal_failures计数器加一。
+      * FAULT_CRASH 
+        * 如果没有指定mem_limit，则可能抛出建议增加内存的建议
+        * 但不管指定了还是没有，都会抛出异常`FATAL("Test case '%s' results in a crash", fn);`
+      * FAULT_ERROR 
+        * 抛出异常`Unable to execute target application`
+      * FAULT_NOINST 
+        * 这个样例运行没有出现任何路径信息，抛出异常`No instrumentation detected`
+      * FAULT_NOBITS 
+        * 如果这个样例有出现路径信息，但是没有任何新路径，抛出警告`WARNF("No new instrumentation output, test case may be useless.")`，认为这是无用路径。useless_at_start计数器加一
+    * 如果这个样例q的var_behavior为真，则代表它多次运行，同样的输入条件下，却出现不同的覆盖信息。 
+      * 抛出警告`WARNF("Instrumentation output varies across runs.");`，代表这个样例的路径输出可变
+    * 然后读取下一个queue，继续测试，直到结束。 
+        
+                enum {
+        /* 00 */ FAULT_NONE,
+        /* 01 */ FAULT_TMOUT,
+        /* 02 */ FAULT_CRASH,
+        /* 03 */ FAULT_ERROR,
+        /* 04 */ FAULT_NOINST,
+        /* 05 */ FAULT_NOBITS };
+        
+
+#### u8 calibrate_case(char _*argv, struct queue_entry_ q, u8 *use_mem, u32
+handicap, u8 from_queue)
+
+这个函数评估input文件夹下的case，来发现这些testcase的行为是否异常；以及在发现新的路径时，用以评估这个新发现的testcase的行为是否是可变（这里的可变是指多次执行这个case，发现的路径不同）等等
+
+  * 这个函数的参数为`char **argv, struct queue_entry *q, u8 *use_mem, u32 handicap, u8 from_queue`
+  * 创建first_trace[MAP_SIZE]
+  * 如果q->exec_cksum为0，代表这是这个case第一次运行，即来自input文件夹下，所以将first_run置为1。
+  * 保存原有的stage_cur、stage_max、stage_name
+  * 设置use_tmout为exec_tmout,如果from_queue是0或者resuming_fuzz被置为1，即代表不来自于queue中或者在resuming sessions的时候，则use_tmout的值被设置的更大。
+  * q->cal_failed++
+  * 设置stage_name为”calibration”,以及根据是否fast_cal为1，来设置stage_max的值为3还是CAL_CYCLES(默认为8)，含义是每个新测试用例（以及显示出可变行为的测试用例）的校准周期数，也就是说这个stage要执行几次的意思。
+  * 如果当前不是以dumb mode运行，且no_forkserver（禁用forkserver）为0，且forksrv_pid为0，则init_forkserver(argv)启动fork server，见后文。
+  * 如果 **这个queue不是来自input文件夹，而是评估新case** ，则此时`q->exec_cksum`不为空，拷贝trace_bits到first_trace里，然后计算`has_new_bits`的值，赋值给new_bits。
+  * 开始执行calibration stage，共执行stage_max轮 
+    * 如果 **这个queue不是来自input文件夹，而是评估新case** ，且第一轮calibration stage执行结束时，刷新一次展示界面`show_stats`，用来展示这次执行的结果，此后不再展示。
+    * write_to_testcase(use_mem, q->len) 
+      * 将从`q->fname`中读取的内容写入到`.cur_input`中
+    * `u8 run_target(argv, use_tmout)`,结果保存在fault中
+    * 如果这是`calibration stage`第一次运行，且不在dumb_mode，且共享内存里没有任何路径（即没有任何byte被置位），设置fault为`FAULT_NOINST`,然后goto abort_calibration。 
+      * 计算共享内存里有多少字节被置位了,通过count_bytes函数 
+        * `u32 count_bytes(u8 *mem)`
+    * 计算`hash32(trace_bits, MAP_SIZE, HASH_CONST)`的结果，其值为一个32位uint值，保存到cksum中
+    * 如果`q->exec_cksum`不等于cksum，即代表 **这是第一次运行，或者在相同的参数下，每次执行，cksum却不同，是一个路径可变的queue**
+      * `hnb = has_new_bits(virgin_bits)`
+      * 如果hnb大于new_bits，设置new_bits的值为hnb
+      * 如果`q->exec_cksum`不等于0，即代表这是判断是否是可变queue 
+        * i从0到MAP_SIZE遍历，如果first_trace[i]不等于trace_bits[i]， **代表发现了可变queue** ，且var_bytes为空，则将该字节设置为1，并将stage_max设置为`CAL_CYCLES_LONG`，即需要执行40次。
+        * 将var_detected设置为1
+      * 否则，即q->exec_cksum等于0，即代表这是第一次执行这个queue 
+        * 设置q->exec_cksum的值为之前计算出来的本次执行的cksum
+        * 拷贝trace_bits到first_trace中。
+  * 保存所有轮次总的执行时间，加到total_cal_us里，总的执行轮次，加到total_cal_cycles里
+  * 计算出一些统计信息，包括 
+    * 计算出单次执行时间的平均值保存到q->exec_us里
+    * 将最后一次执行所覆盖到的路径数保存到q->bitmap_size里
+    * `q->handicap = handicap;`
+    * `q->cal_failed = 0;`
+    * total_bitmap_size里加上这个queue所覆盖到的路径数
+    * total_bitmap_entries++
+    * update_bitmap_score(struct queue_entry *q)
+  * 如果fault为`FAULT_NONE`，且该queue是第一次执行，且不属于dumb_mode，而且new_bits为0，代表在这个样例所有轮次的执行里，都没有发现任何新路径和出现异常，设置fault为`FAULT_NOBITS`
+  * 如果new_bits为2，且`q->has_new_cov`为0，设置其值为1，并将queued_with_cov加一，代表有一个queue发现了新路径。
+  * 如果这个queue是可变路径，即var_detected为1，则计算var_bytes里被置位的tuple个数，保存到var_byte_count里，代表这些tuple具有可变的行为。
+  * 将这个queue标记为一个variable 
+    * `mark_as_variable(struct queue_entry *q)`
+      * 创建符号链接`out_dir/queue/.state/variable_behavior/fname`
+      * 设置queue的var_behavior为1
+    * 计数variable behavior的计数器`queued_variable`的值加一
+  * 恢复之前的stage值
+  * 如果不是第一次运行这个queue，展示`show_stats`
+  * 返回fault的值
+
+####  init_forkserver
+
+  * 建立管道st_pipe和ctl_pipe，在父子进程之间，是通过管道进行通信，一个用于传递状态，另一个用于传递命令。 
+    * 在继续往下读之前需要仔细阅读这篇文章
+    * [Linux 的进程间通信：管道](https://zhuanlan.zhihu.com/p/58489873)  
+
+  * fork出一个子进程，fork函数执行完毕后，如果创建新进程成功，则出现两个进程，一个是子进程，一个是父进程。在子进程中，fork函数返回0，在父进程中，fork返回新创建子进程的进程ID。我们可以通过fork返回的值来判断当前进程是子进程还是父进程。 
+    * forksrv_pid = fork()
+  * 子进程和父进程都会向下执行，我们通过pid来使它们执行不同的代码`if(!forksrv_pid)`
+    * 以下都是子进程要执行的代码 
+      * 在继续向下读之前，需要仔细阅读这篇文章 
+        * [进程间通信管道进阶篇：linux下dup/dup2函数的用法](https://www.cnblogs.com/GODYCA/archive/2013/01/05/2846197.html)
+      * 重定向文件描述符1和2到dev_null_fd，如果指定了out_file，则文件描述符0重定向到dev_null_fd，否则重定向到out_fd。 
+        * `dup2(dev_null_fd, 1);`
+        * `dup2(dev_null_fd, 2);`
+      * 重定向FORKSRV_FD到ctl_pipe[0],重定向FORKSRV_FD + 1到st_pipe[1] 
+        * 子进程只能读取命令
+        * 子进程只能发送(“写出”)状态
+      * 关闭子进程里的一些文件描述符 
+            
+                        close(ctl_pipe[0]);
+            close(ctl_pipe[1]);
+            close(st_pipe[0]);
+            close(st_pipe[1]);
+            
+            close(out_dir_fd);
+            close(dev_null_fd);
+            close(dev_urandom_fd);
+            close(fileno(plot_file));
+            
+
+      * 读取环境变量LD_BIND_LAZY，如果没有设置，则设置环境变量LD_BIND_NOW为1
+      * 设置环境变量ASAN_OPTIONS为`"abort_on_error=1:" "detect_leaks=0:" "symbolize=0:" "allocator_may_return_null=1"`，同理设置MSAN_OPTIONS
+      * `execv(target_path, argv)`带参数执行target,这个函数除非出错不然不会返回。 
+        * execv会替换掉原有的进程空间为target_path代表的程序，所以相当于后续就是去执行target_path，这个程序结束的话，子进程就结束。
+        * **而在这里非常特殊，第一个target会进入`__afl_maybe_log`里的`__afl_fork_wait_loop`，并充当fork server，在整个Fuzz的过程中，它都不会结束，每次要Fuzz一次target，都会从这个fork server fork出来一个子进程去fuzz。**
+      * 使用一个独特的bitmaps EXEC_FAIL_SIG(0xfee1dead)写入trace_bits，来告诉父进程执行失败，并结束子进程。
+  * 以下都是父进程要执行的代码 
+    * 关闭不需要的endpoints 
+        
+                  // 关闭不是需要的endpoints
+          close(ctl_pipe[0]);
+          close(st_pipe[1]);
+        
+          fsrv_ctl_fd = ctl_pipe[1];//父进程只能发送("写出")命令
+          fsrv_st_fd = st_pipe[0];//父进程只能读取状态
+        
+
+    * 等待fork server启动，但是不能等太久。（所以在调试时要注意这个…） 
+      * 从管道里读取4个字节到status里，如果读取成功，则代表fork server成功启动，就结束这个函数并返回。
+      * 如果超时，就抛出异常。
+  * 后续是一些子进程启动失败的异常处理逻辑，暂时不叙。
+
+####  has_new_bits(u8 *virgin_map)
+
+  * 检查有没有新路径或者某个路径的执行次数有所不同。
+  * 初始化current和virgin为trace_bits和virgin_map的u64首元素地址，设置ret的值为0
+  * 8个字节一组，每次从trace_bits，也就是共享内存里取出8个字节 
+    * 如果current不为0，且`current & virgin`不为0，即代表current发现了新路径或者某条路径的执行次数和之前有所不同 
+      * 如果ret当前小于2 
+        * 取current的首字节地址为cur，virgin的首字节地址为vir
+        * i的范围是0-7，比较`cur[i] && vir[i] == 0xff`，如果有一个为真，则设置ret为2 
+          * 这代表发现了之前没有出现过的tuple
+          * **注意==的优先级比 &&要高，所以先判断vir[i]是否是0xff，即之前从未被覆盖到，然后再和cur[i]进行逻辑与**
+        * 否则设置ret为1 
+          * 这代表仅仅只是改变了某个tuple的hit-count
+      * `*virgin &= ~*current`
+    * current和virgin移动到下一组8个字节，直到MAPSIZE全被遍历完。
+  * 如果传入给has_new_bits的参数`virgin_map`是`virgin_bits`,且ret不为0，就设置bitmap_changed为1 
+    * virgin_bits保存还没有被Fuzz覆盖到的byte，其初始值每位全被置位1,然后每次按字节置位。
+  * 返回ret的值。
+
+####  u32 count_bytes(u8 *mem)
+
+  * 初始化计数器ret的值为0，循环读取mem里的值，每次读取4个字节到u32变量v中
+  * 如果v为0，则代表这四个字节都是0，直接跳过，进入下一次循环
+  * 如果v不为0，则依次计算`v & FF(0),v & FF(1),v & FF(2),v&FF(3)`的结果，如果不为0，则计数器ret加一。 
+    * `#define FF(_b) (0xff << ((_b) << 3))`
+      * `(_b) << 3)`即`_b * 8`
+      * 即`0x000000ff`左移`(_b * 8)`位
+      * 最终结果可以是`0x000000ff`,`0x0000ff00`,`0x00ff0000`,`0xff000000`其中之一
+
+####  u8 run_target(char **argv, u32 timeout)
+
+  * 先清空trace_bits[MAP_SIZE]，将其全置为0，也就是清空共享内存。
+  * 如果dumb_mode等于1，且no_forkserver，则直接fork出一个子进程，然后让子进程execv去执行target，如果execv执行失败，则向trace_bits写入EXEC_FAIL_SIG
+  * 否则，就向控制管道写入`prev_timed_out`的值，命令Fork server开始fork出一个子进程进行fuzz，然后从状态管道读取fork server返回的fork出的子进程的ID到`child_pid`
+  * 无论实际执行的是上面两种的哪一种，在执行target期间，都设置计数器为timeout，如果超时，就杀死正在执行的子进程，并设置child_timed_out为1;
+  * 计算target执行时间exec_ms，并将total_execs这个执行次数计数器加一。
+  * 等待target执行结束，如果是dumb_mode，target执行结束的状态码将直接保存到status中，如果不是dumb_mode，则从状态管道中读取target执行结束的状态码。
+  * classify_counts((u64 *) trace_bits) 
+    * 具体地，target是将每个分支的执行次数用1个byte来储存，而fuzzer则进一步把这个执行次数归入到buckets中，举个例子，如果某分支执行了1次，那么落入第2个bucket，其计数byte仍为1；如果某分支执行了4次，那么落入第5个bucket，其计数byte将变为8，等等。
+    * 这样处理之后，对分支执行次数就会有一个简单的归类。例如，如果对某个测试用例处理时，分支A执行了32次；对另外一个测试用例，分支A执行了33次，那么AFL就会认为这两次的代码覆盖是相同的。当然，这样的简单分类肯定不能区分所有的情况，不过在某种程度上，处理了一些因为循环次数的微小区别，而误判为不同执行结果的情况.
+  * 设置prev_timed_out的值为child_timed_out。
+  * 接着依据status的值，向调用者返回结果。 
+    * `WIFSIGNALED(status)`若为异常结束子进程返回的状态，则为真 
+      * `WTERMSIG(status)`取得子进程因信号而中止的信号代码 
+        * 如果child_timed_out为1，且状态码为`SIGKILL`，则返回`FAULT_TMOUT`
+        * 否则返回`FAULT_CRASH`
+    * 如果是dumb_mode，且trace_bits为EXEC_FAIL_SIG，就返回`FAULT_ERROR`
+    * 如果`timeout`小于等于`exec_tmout`，且`slowest_exec_ms`小于`exec_ms`，设置`slowest_exec_ms`等于`exec_ms`
+    * 返回`FAULT_NONE`
+
+####  classify_counts(u64 *mem)
+
+  * 8个字节一组去循环读入，直到遍历完整个mem 
+    * 每次取两个字节`u16 *mem16 = (u16 *) mem`
+    * i从0到3，计算`mem16[i]`的值，在`count_class_lookup16[mem16[i]]`里找到对应的取值，并赋值给`mem16[i]`
+
+####  update_bitmap_score(struct queue_entry *q)
+
+每当我们发现一个新的路径，都会调用这个函数来判断其是不是更加地favorable，这个favorable的意思是说是否包含最小的路径集合来遍历到所有bitmap中的位，我们专注于这些集合而忽略其他的。
+
+  * 首先计算出这个case的fav_factor，计算方法是`q->exec_us * q->len`即执行时间和样例大小的乘积，以这两个指标来衡量权重。
+  * 遍历trace_bits数组，如果该字节的值不为0，则代表这是已经被覆盖到的path 
+    * 然后检查对应于这个path的top_rated是否存在 
+      * `static struct queue_entry *top_rated[MAP_SIZE]; /* Top entries for bitmap bytes */`
+      * 如果存在，就比较`fav_factor > top_rated[i]->exec_us * top_rated[i]->len`，即比较执行时间和样例大小的乘积，哪个更小。 
+        * 如果`top_rated[i]`的更小，则代表`top_rated[i]`的更优，不做任何处理，继续遍历下一个path。
+        * 如果q更小，就将`top_rated[i]`原先对应的queue entry的tc_ref字段减一，并将其trace_mini字段置为空。
+        * `u8 *trace_mini; /* Trace bytes, if kept */`
+        * `u32 tc_ref; /* Trace bytes ref count */`
+      * 然后设置`top_rated[i]`为q，即当前case，然后将其tc_ref的值加一
+      * 如果`q->trace_mini`为空，则将trace_bits经过minimize_bits压缩，然后存到trace_mini字段里
+      * 设置score_changed为1.
+
+#### void minimize_bits(u8 _dst, u8_ src)
+
+将trace_bits压缩为较小的位图。  
+简单的理解就是把原本是包括了是否覆盖到和覆盖了多少次的byte，压缩成是否覆盖到的bit。  
+在看这个函数和下一个函数cull_queue之前，建议把[经典算法系列之(一) – BitMap
+[数据的压缩存储]](https://blog.csdn.net/lxlmycsdnfree/article/details/78926359)读完。
+
+    
+    
+    static void minimize_bits(u8 *dst, u8 *src) {
+    
+        u32 i = 0;
+    
+        while (i < MAP_SIZE) {
+    
+            if (*(src++)) dst[i >> 3] |= 1 << (i & 7);
+            i++;
+    
+        }
+    
+    }
+    
+
+虽然dst是一个bitmap，但是实际上在这里我们还是用一个byte数组来操作它，所以就首先得做byte->bit的映射，比如说将src的前0-7个字节映射到dst的第一个字节(0-7位)
+
+    
+    
+    >>> 0>>3
+    0
+    >>> 1>>3
+    0
+    >>> 2>>3
+    0
+    ...
+    >>> 7>>3
+    0
+    >>> 8>>3
+    1
+    
+
+然后如果src里该字节的值不为0，i此时就代表这个字节的index索引，其与`0000
+0111`相与，最终的结果都只在0-7之间，这样我们就可以知道这个index在0-7之间对应的具体的bit是哪一个，最后通过或运算将该位置位。
+
+    
+    
+    >>> 0&7
+    0
+    >>> 1&7
+    1
+    >>> 2&7
+    2
+    >>> 3&7
+    3
+    >>> 4&7
+    4
+    >>> 5&7
+    5
+    >>> 6&7
+    6
+    >>> 7&7
+    7
+    >>> 8&7
+    0
+    >>> 9&7
+    1
+    
+
+####  cull_queue
+
+精简队列
+
+  * 如果score_changed为0，即top_rated没有变化，或者dumb_mode,就直接返回
+  * 设置score_changed的值为0
+  * 创建u8 temp_v数组，大小为`MAP_SIZE除8`，并将其初始值设置为0xff，其每位如果为1就代表还没有被覆盖到，如果为0就代表以及被覆盖到了。
+  * 设置queued_favored为0，pending_favored为0
+  * 开始遍历queue队列，设置其favored的值都为0
+  * 将i从0到MAP_SIZE迭代，这个迭代其实就是筛选出一组queue entry，它们就能够覆盖到所有现在已经覆盖到的路径，而且这个case集合里的case要更小更快，这并不是最优算法，只能算是贪婪算法。 
+    * 这又是个不好懂的位运算，`temp_v[i >> 3] & (1 << (i & 7))`与上面的差不多，中间的或运算改成了与，是为了检查该位是不是0，即判断该path对应的bit有没有被置位。 
+        
+                for (i = 0; i < MAP_SIZE; i++)
+          if (top_rated[i] && (temp_v[i >> 3] & (1 << (i & 7)))) {
+        ...
+        
+
+    * 如果`top_rated[i]`有值，且该path在temp_v里被置位 
+      * 就从temp_v中清除掉所有`top_rated[i]`覆盖到的path，将对应的bit置为0
+      * 设置`top_rated[i]->favored`为1，queued_favored计数器加一
+      * 如果`top_rated[i]`的was_fuzzed字段是0，代表其还没有fuzz过，则将pending_favored计数器加一
+    * 遍历queue队列 
+      * mark_as_redundant(q, !q->favored) 
+        * 也就是说，如果不是favored的case，就被标记成redundant_edges
+
+####  mark_as_redundant(struct queue_entry *q, u8 state)
+
+  * 如果`state和q->fs_redundant`相等，就直接返回
+  * 设置`q->fs_redundant`的值为state，
+  * 如果state为1 
+    * 尝试创建`out_dir/queue/.state/redundant_edges/fname`
+  * 如果state为0 
+    * 尝试删除`out_dir/queue/.state/redundant_edges/fname`
+
+####  show_init_stats
+
+在处理输入目录的末尾显示统计信息，以及一堆警告,以及几个硬编码的常量。
+
+  * 依据之前从calibrate_case里得到的total_cal_us和total_cal_cycles，计算出单轮执行的时间avg_us，如果大于10000，就警告`"The target binary is pretty slow! See %s/perf_tips.txt."`
+    * 如果avg_us大于50000，设置havoc_div为10 / _0-19 execs/sec_ /
+    * 大于20000，设置havoc_div为5 / _20-49 execs/sec_ /
+    * 如果大于10000，设置havoc_div为2 / _50-100 execs/sec_ /
+  * 如果不是resuming session，则对queue的大小和个数超限提出警告，且如果useless_at_start不为0，就警告有可以精简的样本。
+  * 如果timeout_given为0，则根据avg_us来计算出exec_tmout， **注意这里avg_us的单位是微秒，而exec_tmout单位是毫秒，所以需要除以1000**
+    * avg_us > 50000 
+      * exec_tmout = avg_us * 2 / 1000
+    * avg_us > 10000 
+      * exec_tmout = avg_us * 3 / 1000
+    * exec_tmout = avg_us * 5 / 1000
+    * 然后在上面计算出来的exec_tmout和所有样例中执行时间最长的样例进行比较，取最大值赋给exec_tmout
+    * 如果exec_tmout大于EXEC_TIMEOUT，就设置exec_tmout = EXEC_TIMEOUT 
+      * EXEC_TIMEOUT的值为1秒，即最大超时时间是1秒
+    * 打印出`"No -t option specified, so I'll use exec timeout of %u ms.", exec_tmout`
+    * 设置timeout_given为1
+  * 如果timeout_give不为0，且为3，代表这是resuming session，直接打印`"Applying timeout settings from resumed session (%u ms).", exec_tmout`,此时的timeout_give是我们从历史记录里读取出的。
+  * 如果是dumb_mode且没有设置环境变量AFL_HANG_TMOUT 
+    * 设置hang_tmout为EXEC_TIMEOUT和`exec_tmout * 2 + 100`中的最小值
+  * `All set and ready to roll!`
+
+####  find_start_position
+
+resume时,请尝试查找要从其开始的队列位置,这仅在resume时以及当我们可以找到原始的fuzzer_stats时才有意义.
+
+  * 如果不是resuming_fuzz，就直接返回
+  * 如果是in_place_resume,就打开`out_dir/fuzzer_stats`文件，否则打开`in_dir/../fuzzer_stats`文件
+  * 读这个文件的内容到tmp[4096]中，找到`cur_path`，并设置为ret的值，如果大于queued_paths就设置ret为0，返回ret。
+
+####  void write_stats_file(double bitmap_cvg, double stability, double eps)
+
+更新统计信息文件以进行无人值守的监视
+
+  * 创建文件`out_dir/fuzzer_stats`
+  * 写入统计信息
+  * start_time 
+    * fuzz运行的开始时间，start_time / 1000
+  * last_update 
+    * 当前时间
+  * fuzzer_pid 
+    * 获取当前pid
+  * cycles_done 
+    * `queue_cycle`在`queue_cur`为空，即执行到当前队列尾的时候才增加1，所以这代表queue队列被完全变异一次的次数。
+  * execs_done 
+    * total_execs，target的总的执行次数，每次`run_target`的时候会增加1
+  * execs_per_sec 
+    * 每秒执行的次数
+  * paths_total 
+    * queued_paths在每次`add_to_queue`的时候会增加1，代表queue里的样例总数
+  * paths_favored 
+    * queued_favored，有价值的路径总数
+  * paths_found 
+    * queued_discovered在每次`common_fuzz_stuff`去执行一次fuzz时，发现新的interesting case的时候会增加1，代表在fuzz运行期间发现的新queue entry。
+  * paths_imported 
+    * queued_imported是master-slave模式下，如果sync过来的case是interesting的，就增加1
+  * max_depth 
+    * 最大路径深度
+  * cur_path 
+    * current_entry一般情况下代表的是正在执行的queue entry的整数ID,queue首节点的ID是0
+  * pending_favs 
+    * pending_favored 等待fuzz的favored paths数
+  * pending_total 
+    * pending_not_fuzzed 在queue中等待fuzz的case数
+  * variable_paths 
+    * queued_variable在`calibrate_case`去评估一个新的test case的时候，如果发现这个case的路径是可变的，则将这个计数器加一，代表发现了一个可变case
+  * stability
+  * bitmap_cvg
+  * unique_crashes 
+    * unique_crashes这是在`save_if_interesting`时，如果fault是FAULT_CRASH，就将unique_crashes计数器加一
+  * unique_hangs 
+    * unique_hangs这是在`save_if_interesting`时，如果fault是FAULT_TMOUT，且exec_tmout小于hang_tmout，就以hang_tmout为超时时间再执行一次，如果还超时，就让hang计数器加一。
+  * last_path 
+    * 在`add_to_queue`里将一个新case加入queue时，就设置一次last_path_time为当前时间，`last_path_time / 1000`
+  * last_crash 
+    * 同上，在unique_crashes加一的时候，last_crash也更新时间，`last_crash_time / 1000`
+  * last_hang 
+    * 同上，在unique_hangs加一的时候，last_hang也更新时间，`last_hang_time / 1000`
+  * execs_since_crash 
+    * total_execs – last_crash_execs,这里last_crash_execs是在上一次crash的时候的总计执行了多少次
+  * exec_tmout 
+    * 配置好的超时时间，有三种可能的配置方式，见上文
+
+    
+    
+        fprintf(f, "start_time        : %llu\n"
+                   "last_update       : %llu\n"
+                   "fuzzer_pid        : %u\n"
+                   "cycles_done       : %llu\n"
+                   "execs_done        : %llu\n"
+                   "execs_per_sec     : %0.02f\n"
+                   "paths_total       : %u\n"
+                   "paths_favored     : %u\n"
+                   "paths_found       : %u\n"
+                   "paths_imported    : %u\n"
+                   "max_depth         : %u\n"
+                   "cur_path          : %u\n" /* Must match find_start_position() */
+                   "pending_favs      : %u\n"
+                   "pending_total     : %u\n"
+                   "variable_paths    : %u\n"
+                   "stability         : %0.02f%%\n"
+                   "bitmap_cvg        : %0.02f%%\n"
+                   "unique_crashes    : %llu\n"
+                   "unique_hangs      : %llu\n"
+                   "last_path         : %llu\n"
+                   "last_crash        : %llu\n"
+                   "last_hang         : %llu\n"
+                   "execs_since_crash : %llu\n"
+                   "exec_timeout      : %u\n" /* Must match find_timeout() */
+                   "afl_banner        : %s\n"
+                   "afl_version       : " VERSION "\n"
+                   "target_mode       : %s%s%s%s%s%s%s\n"
+                   "command_line      : %s\n"
+                   "slowest_exec_ms   : %llu\n",
+                start_time / 1000, get_cur_time() / 1000, getpid(),
+                queue_cycle ? (queue_cycle - 1) : 0, total_execs, eps,
+                queued_paths, queued_favored, queued_discovered, queued_imported,
+                max_depth, current_entry, pending_favored, pending_not_fuzzed,
+                queued_variable, stability, bitmap_cvg, unique_crashes,
+                unique_hangs, last_path_time / 1000, last_crash_time / 1000,
+                last_hang_time / 1000, total_execs - last_crash_execs,
+                exec_tmout, use_banner,
+                qemu_mode ? "qemu " : "", dumb_mode ? " dumb " : "",
+                no_forkserver ? "no_forksrv " : "", crash_mode ? "crash " : "",
+                persistent_mode ? "persistent " : "", deferred_mode ? "deferred " : "",
+                (qemu_mode || dumb_mode || no_forkserver || crash_mode ||
+                 persistent_mode || deferred_mode) ? "" : "default",
+                orig_cmdline, slowest_exec_ms);
+    
+
+  * 统计子进程的资源用量并写入。
+
+####  save_auto
+
+保存自动生成的extras
+
+  * 如果auto_changed为0，则直接返回
+  * 如果不为0，就设置为0，然后创建名为`alloc_printf("%s/queue/.state/auto_extras/auto_%06u", out_dir, i);`的文件，并写入a_extras的内容。
+
+####  通信管道基础知识
+
+    
+    
+                假设进程A拥有一个已打开的文件描述符fd3，它的状态如下
+                进程A的文件描述符表(before dup2)
+                ------------                fd0 0   | p0
+                ------------                fd1 1   | p1 -------------> 文件表1 ---------> vnode1
+                ------------                fd2 2   | p2
+                ------------                fd3 3   | p3 -------------> 文件表2 ---------> vnode2
+                ------------                ... ...
+                ... ...
+                ------------    
+                经下面调用：
+                n_fd = dup2(fd3, STDOUT_FILENO);后进程状态如下：
+    
+                进程A的文件描述符表(after dup2)
+                ------------                fd0 0   | p0
+                ------------                n_fd 1  | p1 ------------                ------------               \
+                fd2 2   | p2                  \
+                ------------                 _\|
+                fd3 3   | p3 -------------> 文件表2 ---------> vnode2
+    
+                在学习dup2时总是碰到“重定向”一词，上图完成的就是一个“从标准输出到文件的重定向”，经过dup2后进程A的任何目标为STDOUT_FILENO的I/O操作如printf等，其数据都将流入fd3所对应的文件中。下面是一个例子程序：
+                #define TESTSTR "Hello dup2\n"
+                int main() {
+                        int     fd3;
+    
+                        fd3 = open("testdup2.dat", 0666);
+                        if (fd < 0) {
+                                printf("open error\n");
+                                exit(-1);
+                        }
+    
+                        if (dup2(fd3, STDOUT_FILENO) < 0) {       
+                                printf("err in dup2\n");
+                        }
+                        printf(TESTSTR);
+                        return 0;
+                }
+                其结果就是你在testdup2.dat中看到"Hello dup2"。
+    
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **sakura** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/213431](/post/id/213431)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞挖掘](/tag/漏洞挖掘)
+  * [Fuzz](/tag/Fuzz)
+  * [AFL](/tag/AFL)
+
+ **+1** __9赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/qqapp/101430193/44110799D419F015C1D87EF97B55B122/40)
+sakura
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

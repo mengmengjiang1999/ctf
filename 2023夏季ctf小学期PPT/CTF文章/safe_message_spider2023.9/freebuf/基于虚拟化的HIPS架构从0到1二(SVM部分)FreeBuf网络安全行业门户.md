@@ -1,0 +1,447 @@
+上一章: [基于虚拟化的HIPS架构 从0到1(VT部分)](geek/264276.html "基于虚拟化的HIPS架构 从0到1\(VT部分\)")
+
+我们讨论了INTEL的 VT-X的情况,对于AMD的SVM,我们还没有做过多讨论,本篇文章就会继续讨论SVM的情况.
+
+网上关于AMD的资料几乎为0,我希望这篇文章给你带来启发
+
+## 1.准备工作
+
+首先我们要确保SVM是否是支持的:  
+![1618121740_6072940cc5af2149f5b11.png!small?1618121742246](https://image.3001.net/images/20210411/1618121740_6072940cc5af2149f5b11.png!small?1618121742246)这是万事开头
+
+之后分配VCPU结构区域跟上篇文章一样,我这边直接拿了上次的文章的代码,
+
+![1618121834_6072946a76bd82a40a7d9.png!small?1618121835891](https://image.3001.net/images/20210411/1618121834_6072946a76bd82a40a7d9.png!small?1618121835891)
+
+唯一不同的是,vcpu区域多了这些
+
+![1618121867_6072948bf02c1c02f8145.png!small?1618121869433](https://image.3001.net/images/20210411/1618121867_6072948bf02c1c02f8145.png!small?1618121869433)
+
+relative_hvm相当于一个全局变量,这部分我是参考zero-tang的noir虚拟机,我会在文末放参考资料
+
+guest_vmcb和host_state是重要的信息,分别代表:
+
+用户的VMCB区域(intel是叫做VMCS),主机的状态(AMD用一个msr叫做VM_HSAVE_PA来放主机状态的)
+
+他们大小都是一个page_size
+
+![1618122026_6072952a43f2566ced45a.png!small?1618122027857](https://image.3001.net/images/20210411/1618122026_6072952a43f2566ced45a.png!small?1618122027857)
+
+顺便一提vmcb的结构是这样的:  
+![1618122085_6072956585fe2d1bcafeb.png!small?1618122087936](https://image.3001.net/images/20210411/1618122085_6072956585fe2d1bcafeb.png!small?1618122087936)由_vmcb_control_area和_vmcb_state_save_area结构控制,结构如下:
+
+    
+    
+    typedef struct _vmcb_control_area
+    {
+    	UINT16 InterceptCrRead;             // +0x000
+    	UINT16 InterceptCrWrite;            // +0x002
+    	UINT16 InterceptDrRead;             // +0x004
+    	UINT16 InterceptDrWrite;            // +0x006
+    	UINT32 InterceptException;          // +0x008
+    	UINT32 InterceptMisc1;              // +0x00c
+    	UINT32 InterceptMisc2;              // +0x010
+    	UINT8 Reserved1[0x03c - 0x014];     // +0x014
+    	UINT16 PauseFilterThreshold;        // +0x03c
+    	UINT16 PauseFilterCount;            // +0x03e
+    	UINT64 IopmBasePa;                  // +0x040
+    	UINT64 MsrpmBasePa;                 // +0x048
+    	UINT64 TscOffset;                   // +0x050
+    	UINT32 GuestAsid;                   // +0x058
+    	UINT32 TlbControl;                  // +0x05c
+    	UINT64 VIntr;                       // +0x060
+    	UINT64 InterruptShadow;             // +0x068
+    	UINT64 ExitCode;                    // +0x070
+    	UINT64 ExitInfo1;                   // +0x078
+    	UINT64 ExitInfo2;                   // +0x080
+    	UINT64 ExitIntInfo;                 // +0x088
+    	UINT64 NpEnable;                    // +0x090
+    	UINT64 AvicApicBar;                 // +0x098
+    	UINT64 GuestPaOfGhcb;               // +0x0a0
+    	UINT64 EventInj;                    // +0x0a8
+    	UINT64 NCr3;                        // +0x0b0
+    	UINT64 LbrVirtualizationEnable;     // +0x0b8
+    	UINT64 VmcbClean;                   // +0x0c0
+    	UINT64 NRip;                        // +0x0c8
+    	UINT8 NumOfBytesFetched;            // +0x0d0
+    	UINT8 GuestInstructionBytes[15];    // +0x0d1
+    	UINT64 AvicApicBackingPagePointer;  // +0x0e0
+    	UINT64 Reserved2;                   // +0x0e8
+    	UINT64 AvicLogicalTablePointer;     // +0x0f0
+    	UINT64 AvicPhysicalTablePointer;    // +0x0f8
+    	UINT64 Reserved3;                   // +0x100
+    	UINT64 VmcbSaveStatePointer;        // +0x108
+    	UINT8 Reserved4[0x400 - 0x110];     // +0x110
+    };
+    static_assert(sizeof(_vmcb_control_area) == 0x400, "size check");
+    typedef struct _vmcb_state_save_area
+    {
+    	UINT16 EsSelector;                  // +0x000
+    	UINT16 EsAttrib;                    // +0x002
+    	UINT32 EsLimit;                     // +0x004
+    	UINT64 EsBase;                      // +0x008
+    	UINT16 CsSelector;                  // +0x010
+    	UINT16 CsAttrib;                    // +0x012
+    	UINT32 CsLimit;                     // +0x014
+    	UINT64 CsBase;                      // +0x018
+    	UINT16 SsSelector;                  // +0x020
+    	UINT16 SsAttrib;                    // +0x022
+    	UINT32 SsLimit;                     // +0x024
+    	UINT64 SsBase;                      // +0x028
+    	UINT16 DsSelector;                  // +0x030
+    	UINT16 DsAttrib;                    // +0x032
+    	UINT32 DsLimit;                     // +0x034
+    	UINT64 DsBase;                      // +0x038
+    	UINT16 FsSelector;                  // +0x040
+    	UINT16 FsAttrib;                    // +0x042
+    	UINT32 FsLimit;                     // +0x044
+    	UINT64 FsBase;                      // +0x048
+    	UINT16 GsSelector;                  // +0x050
+    	UINT16 GsAttrib;                    // +0x052
+    	UINT32 GsLimit;                     // +0x054
+    	UINT64 GsBase;                      // +0x058
+    	UINT16 GdtrSelector;                // +0x060
+    	UINT16 GdtrAttrib;                  // +0x062
+    	UINT32 GdtrLimit;                   // +0x064
+    	UINT64 GdtrBase;                    // +0x068
+    	UINT16 LdtrSelector;                // +0x070
+    	UINT16 LdtrAttrib;                  // +0x072
+    	UINT32 LdtrLimit;                   // +0x074
+    	UINT64 LdtrBase;                    // +0x078
+    	UINT16 IdtrSelector;                // +0x080
+    	UINT16 IdtrAttrib;                  // +0x082
+    	UINT32 IdtrLimit;                   // +0x084
+    	UINT64 IdtrBase;                    // +0x088
+    	UINT16 TrSelector;                  // +0x090
+    	UINT16 TrAttrib;                    // +0x092
+    	UINT32 TrLimit;                     // +0x094
+    	UINT64 TrBase;                      // +0x098
+    	UINT8 Reserved1[0x0cb - 0x0a0];     // +0x0a0
+    	UINT8 Cpl;                          // +0x0cb
+    	UINT32 Reserved2;                   // +0x0cc
+    	UINT64 Efer;                        // +0x0d0
+    	UINT8 Reserved3[0x148 - 0x0d8];     // +0x0d8
+    	UINT64 Cr4;                         // +0x148
+    	UINT64 Cr3;                         // +0x150
+    	UINT64 Cr0;                         // +0x158
+    	UINT64 Dr7;                         // +0x160
+    	UINT64 Dr6;                         // +0x168
+    	UINT64 Rflags;                      // +0x170
+    	UINT64 Rip;                         // +0x178
+    	UINT8 Reserved4[0x1d8 - 0x180];     // +0x180
+    	UINT64 Rsp;                         // +0x1d8
+    	UINT8 Reserved5[0x1f8 - 0x1e0];     // +0x1e0
+    	UINT64 Rax;                         // +0x1f8
+    	UINT64 Star;                        // +0x200
+    	UINT64 LStar;                       // +0x208
+    	UINT64 CStar;                       // +0x210
+    	UINT64 SfMask;                      // +0x218
+    	UINT64 KernelGsBase;                // +0x220
+    	UINT64 SysenterCs;                  // +0x228
+    	UINT64 SysenterEsp;                 // +0x230
+    	UINT64 SysenterEip;                 // +0x238
+    	UINT64 Cr2;                         // +0x240
+    	UINT8 Reserved6[0x268 - 0x248];     // +0x248
+    	UINT64 GPat;                        // +0x268
+    	UINT64 DbgCtl;                      // +0x270
+    	UINT64 BrFrom;                      // +0x278
+    	UINT64 BrTo;                        // +0x280
+    	UINT64 LastExcepFrom;               // +0x288
+    	UINT64 LastExcepTo;                 // +0x290
+    };
+    static_assert(sizeof(_vmcb_state_save_area) == 0x298, "size check");
+
+这个结构很关键.不要随便乱动
+
+## 2\. 初始化SVM
+
+  
+
+我们一样用我们的DPC Callback让我们每个核心处理器都同步执行这些代码
+
+![1618122625_607297817efcbf6098b99.png!small?1618122627111](https://image.3001.net/images/20210411/1618122625_607297817efcbf6098b99.png!small?1618122627111)
+
+  
+
+init_logical_processor的逻辑非常简单
+
+首先你必须要给msr的amd64_efer(0xC0000080)增加一个amd64_efer_svme_bit(0x1000)
+
+![1618123058_607299324d4335087286b.png!small?1618123059756](https://image.3001.net/images/20210411/1618123058_607299324d4335087286b.png!small?1618123059756)
+
+其次你要操作你要拦截的msr的列表,不设置的话我们没办法拦截到特定的msr的中断:
+
+跟AMD白皮书里面写的一样
+
+    
+    
+    ----                        Secure Virtual Machine Enable (SVME) Bit
+                        Bit 12, read/write. Enables the SVM extensions. (...) The
+                        effect of turning off EFER.SVME while a guest is running is
+                        undefined; therefore, the VMM should always prevent guests
+                        from writing EFER.
+                        ----                        Each MSR is controlled by two bits in the MSRPM. The LSB of
+                        the two bits controls read access to the MSR and the MSB
+                        controls write access. A value of 1 indicates that the
+                        operation is intercepted. This function locates an offset for
+                        IA32_MSR_EFER and sets the MSB bit. For details of logic, see
+                        "MSR Intercepts".
+
+这就是为啥之前用g_relative_hvm的原因,这些全局变量放一个结构里面就行
+
+<https://github.com/tandasat/SimpleSvm/blob/b3591f74b3d893c4f82348fe7157f037c5d70b5e/SimpleSvm/SimpleSvm.cpp#L1465>
+
+第三步,设置guest_vmcb
+
+Amd CPU的SVM不同于Intel VT-X 他的进入vm的方式是vmrun guest_vmcb
+
+而不是intel VT-X的 _write_vmcs(这一点AMD NO)
+
+所以我们要设置一下这个重要参数
+
+基本上 就是一些寄存器信息
+
+    
+    
+    vcpu->guest_vmcb->state_save.CsSelector = state_p.cs.selector;
+    	vcpu->guest_vmcb->state_save.CsAttrib = svm_attrib(state_p.cs.attrib);
+    	vcpu->guest_vmcb->state_save.CsLimit = state_p.cs.limit;
+    	vcpu->guest_vmcb->state_save.CsBase = state_p.cs.base;
+    
+    	vcpu->guest_vmcb->state_save.DsSelector = state_p.cs.selector;
+    	vcpu->guest_vmcb->state_save.DsAttrib = svm_attrib(state_p.ds.attrib);
+    	vcpu->guest_vmcb->state_save.DsLimit = state_p.ds.limit;
+    	vcpu->guest_vmcb->state_save.DsBase = state_p.ds.base;
+    
+    	vcpu->guest_vmcb->state_save.EsSelector = state_p.es.selector;
+    	vcpu->guest_vmcb->state_save.EsAttrib = svm_attrib(state_p.es.attrib);
+    	vcpu->guest_vmcb->state_save.EsLimit = state_p.es.limit;
+    	vcpu->guest_vmcb->state_save.EsBase = state_p.es.base;
+    
+    	vcpu->guest_vmcb->state_save.FsSelector = state_p.fs.selector;
+    	vcpu->guest_vmcb->state_save.FsAttrib = svm_attrib(state_p.fs.attrib);
+    	vcpu->guest_vmcb->state_save.FsLimit = state_p.fs.limit;
+    	vcpu->guest_vmcb->state_save.FsBase = state_p.fs.base;
+    
+    	vcpu->guest_vmcb->state_save.GsSelector = state_p.gs.selector;
+    	vcpu->guest_vmcb->state_save.GsAttrib = svm_attrib(state_p.gs.attrib);
+    	vcpu->guest_vmcb->state_save.GsLimit = state_p.gs.limit;
+    	vcpu->guest_vmcb->state_save.GsBase = state_p.gs.base;
+    
+    	vcpu->guest_vmcb->state_save.SsSelector = state_p.ss.selector;
+    	vcpu->guest_vmcb->state_save.SsAttrib = svm_attrib(state_p.ss.attrib);
+    	vcpu->guest_vmcb->state_save.SsLimit = state_p.ss.limit;
+    	vcpu->guest_vmcb->state_save.SsBase = state_p.ss.base;
+    
+    	vcpu->guest_vmcb->state_save.TrSelector = state_p.tr.selector;
+    	vcpu->guest_vmcb->state_save.TrAttrib = svm_attrib(state_p.tr.attrib);
+    	vcpu->guest_vmcb->state_save.TrLimit = state_p.tr.limit;
+    	vcpu->guest_vmcb->state_save.TrBase = state_p.tr.base;
+    	//gdtr
+    	vcpu->guest_vmcb->state_save.GdtrBase = state_p.gdtr.base;
+    	vcpu->guest_vmcb->state_save.GdtrLimit = state_p.gdtr.limit;
+    	//idtr
+    	vcpu->guest_vmcb->state_save.IdtrLimit = state_p.idtr.limit;
+    	vcpu->guest_vmcb->state_save.IdtrBase = state_p.idtr.base;
+    	//ldtr
+    	vcpu->guest_vmcb->state_save.LdtrSelector = state_p.ldtr.selector;
+    	vcpu->guest_vmcb->state_save.LdtrAttrib = svm_attrib(state_p.ldtr.attrib);
+    	vcpu->guest_vmcb->state_save.LdtrLimit = state_p.ldtr.limit;
+    	vcpu->guest_vmcb->state_save.LdtrBase = state_p.ldtr.base;
+    	//cr
+    	vcpu->guest_vmcb->state_save.Cr0 = state_p.cr0;
+    	vcpu->guest_vmcb->state_save.Cr2 = state_p.cr2;
+    	vcpu->guest_vmcb->state_save.Cr3 = state_p.cr3;
+    	vcpu->guest_vmcb->state_save.Cr4 = state_p.cr4;
+    	// Save Debug Registers
+    	vcpu->guest_vmcb->state_save.Dr6 = state_p.dr6;
+    	vcpu->guest_vmcb->state_save.Dr7 = state_p.dr7;
+    	vcpu->guest_vmcb->state_save.Rflags = 2;
+    
+    	vcpu->guest_vmcb->state_save.Rsp = vcpu->context_frame.Rsp;
+    	vcpu->guest_vmcb->state_save.Rip = vcpu->context_frame.Rip;
+    	vcpu->guest_vmcb->state_save.GPat = state_p.pat;
+    	vcpu->guest_vmcb->state_save.Efer = state_p.efer;
+    	vcpu->guest_vmcb->state_save.Star = state_p.star;
+    	vcpu->guest_vmcb->state_save.CStar = state_p.cstar;
+    	vcpu->guest_vmcb->state_save.SfMask = state_p.sfmask;
+    	vcpu->guest_vmcb->state_save.GsBase = state_p.gsswap;
+
+然后是关键的IopmBasePa、MsrpmBasePa,这两个要指向我们的relative_hvm所设置的东西(作用拦截msr中断)
+
+    
+    
+    vcpu->guest_vmcb->control.IopmBasePa = vcpu->relative_hvm->iopm.physical_address;
+    	vcpu->guest_vmcb->control.MsrpmBasePa = vcpu->relative_hvm->msr_bitmap.physical_address;
+
+  
+
+最后是GuestAsid,这个东西全称"Specify guest's address space ID" 我们要做到是顶级top
+level虚拟机,所以设置1就行
+
+具体可以看amd的白皮书的"CPUID Fn8000_000A_EBX SVM Revision and Feature Identification"
+这一章介绍
+
+最后最后一步,设置我们要处理的vmexit事件:
+
+结构如下:
+
+    
+    
+    typedef union _svm_instruction_intercept1
+    {
+    	struct
+    	{
+    		unsigned __int32 intercept_intr : 1;
+    		unsigned __int32 intercept_nmi : 1;
+    		unsigned __int32 intercept_smi : 1;
+    		unsigned __int32 intercept_init : 1;
+    		unsigned __int32 intercept_vint : 1;
+    		unsigned __int32 intercept_cr0_tsmp : 1;
+    		unsigned __int32 intercept_sidt : 1;
+    		unsigned __int32 intercept_sgdt : 1;
+    		unsigned __int32 intercept_sldt : 1;
+    		unsigned __int32 intercept_str : 1;
+    		unsigned __int32 intercept_lidt : 1;
+    		unsigned __int32 intercept_lgdt : 1;
+    		unsigned __int32 intercept_lldt : 1;
+    		unsigned __int32 intercept_ltr : 1;
+    		unsigned __int32 intercept_rdtsc : 1;
+    		unsigned __int32 intercept_rdpmc : 1;
+    		unsigned __int32 intercept_pushf : 1;
+    		unsigned __int32 intercept_popf : 1;
+    		unsigned __int32 intercept_cpuid : 1;
+    		unsigned __int32 intercept_rsm : 1;
+    		unsigned __int32 intercept_iret : 1;
+    		unsigned __int32 intercept_int : 1;
+    		unsigned __int32 intercept_invd : 1;
+    		unsigned __int32 intercept_pause : 1;
+    		unsigned __int32 intercept_hlt : 1;
+    		unsigned __int32 intercept_invlpg : 1;
+    		unsigned __int32 intercept_invlpga : 1;
+    		unsigned __int32 intercept_io : 1;
+    		unsigned __int32 intercept_msr : 1;
+    		unsigned __int32 intercept_task_switch : 1;
+    		unsigned __int32 intercept_ferr_freeze : 1;
+    		unsigned __int32 intercept_shutdown : 1;
+    	};
+    	unsigned __int32 value;
+    }svm_instruction_intercept1, * svm_instruction_intercept1_p;
+    
+    typedef union _nvc_svm_instruction_intercept2
+    {
+    	struct
+    	{
+    		unsigned __int16 intercept_vmrun : 1;
+    		unsigned __int16 intercept_vmmcall : 1;
+    		unsigned __int16 intercept_vmload : 1;
+    		unsigned __int16 intercept_vmsave : 1;
+    		unsigned __int16 intercept_stgi : 1;
+    		unsigned __int16 intercept_clgi : 1;
+    		unsigned __int16 intercept_skinit : 1;
+    		unsigned __int16 intercept_rdtscp : 1;
+    		unsigned __int16 intercept_icebp : 1;
+    		unsigned __int16 intercept_wbinvd : 1;
+    		unsigned __int16 intercept_monitor : 1;
+    		unsigned __int16 intercept_mwait : 1;
+    		unsigned __int16 intercept_mwait_c : 1;
+    		unsigned __int16 intercept_xsetbv : 1;
+    		unsigned __int16 reserved1 : 1;
+    		unsigned __int16 intercept_post_efer_write : 1;
+    	};
+    	unsigned __int16 value;
+    }svm_instruction_intercept2, * svm_instruction_intercept2_p;
+
+设置guest_vmcb的control字段来控制我们接受什么vmexit事件:
+
+    
+    
+    void svm::svm_setup_control_area(_vcpu_t* vcpu)
+    {
+    	svm_instruction_intercept1 intercept_misc_1;
+    	svm_instruction_intercept2 intercept_misc_2;
+    	intercept_misc_1.value = 0;
+    	intercept_misc_1.intercept_msr = 1; //中断msr
+    	intercept_misc_1.intercept_rdtsc = 1;// 中断rdtsc
+    	intercept_misc_2.value = 0;
+    	intercept_misc_2.intercept_vmrun = 1; //中断vmrun
+    	intercept_misc_2.intercept_vmmcall = 1;//中断vmcall
+    	intercept_misc_2.intercept_rdtscp = 1;//中断rdtscp
+    	vcpu->guest_vmcb->control.InterceptMisc1 = intercept_misc_1.value;
+    	vcpu->guest_vmcb->control.InterceptMisc2 = intercept_misc_2.value;
+    }
+
+  
+
+保存我们的guest_vmcb
+
+    
+    
+    __svm_vmsave(vcpu->guest_vmcb_physical_address);
+    
+
+指定host机状态存放位置(通过amd64_hsave_pa这个msr来控制区域(AMD挺迷惑的,为什么要用一个寄存器来存放host状态而不是intel的VMCS)):
+
+    
+    
+    __svm_vmsave(vcpu->host_state_physical_address);
+    	__writemsr(amd64_hsave_pa, vcpu->host_state_physical_address);
+
+## 3\. 进入SVM
+
+一切就绪后,在vm stack上开辟一个空间,用来给我们的vmexit_handler函数传值:
+
+    
+    
+    _svm_initial_stack_p stack = (_svm_initial_stack_p)((uintptr_t)vcpu->stack + _stack_size - sizeof(_svm_initial_stack));
+    	stack->guest_vmcb_pa = svm::svm_set_vmcb(vcpu);
+    	stack->vcpu = vcpu;
+    	stack->proc_id = processor_number;
+    	launch_svm(stack);
+    	__debugbreak();
+    	return false;
+
+还记得汇编中X64传参吗?
+
+从左到右四个参数传递是RCX，RDX，R8，R9, 其余在RSP里面传参
+
+返回信息寄存器是RAX
+
+知道这些,我们就可以写launch_svm了:
+
+这里有个坑是360的一个cc大佬提醒的我加上看了看zero tang的代码才想到
+
+就是svm的要切CR3,因为默认的驱动启动是挂靠在进程里面的,访问线性地址会炸,必须要切换成系统的CR3才行.之前被这个坑搞了好久,现在才搞定
+
+INTEL VTX的没这个问题,因为intel的VTX是在vmcs区域里面就指定了host cr3
+
+![1618124221_60729dbd062eb4ac1a16b.png!small?1618124222525](https://image.3001.net/images/20210411/1618124221_60729dbd062eb4ac1a16b.png!small?1618124222525)
+
+  
+
+  
+
+![1618124243_60729dd3b5572f774b02a.png!small?1618124245339](https://image.3001.net/images/20210411/1618124243_60729dd3b5572f774b02a.png!small?1618124245339)
+
+核心思想就是,vmrun
+guest_vmcb后,就已经到guest机里面了,这个时候就要等待vmrun执行结束,vmrun结束后就是host机区域,就可以操作我们的vmexit_handler,在进vmexit_handler之前,要用vmsave保存一次vmcb的情况
+
+这边给的参数1是栈,参数2是当前cpu的number 我们试试
+
+![1618124641_60729f61af55977067ca1.png!small?1618124643250](https://image.3001.net/images/20210411/1618124641_60729f61af55977067ca1.png!small?1618124643250)
+
+![1618124659_60729f73c3d4bdd68cd2f.png!small?1618124661500](https://image.3001.net/images/20210411/1618124659_60729f73c3d4bdd68cd2f.png!small?1618124661500)
+
+good 成功进入vmexit_handler
+
+## 4\. 后记
+
+没什么难的,所谓的难只不过是自己内心害怕自己搞不定罢了,,不过技术是给人用的还害怕搞不定???
+
+参考资料:
+
+>
+> <https://github.com/tandasat/SimpleSvm><-国际友人tandasat的simpleSVM,他的虚拟机有问题没办法在vmexit_handler中断
+>
+> [https://github.com/Zero-Tang/NoirVisor](https://github.com/Zero-> Tang/NoirVisor/)<\- Zero-Tang 很完备的虚拟机例子,本篇文章一些结构和代码是抄他的.不过抄的位置都已经标出
+

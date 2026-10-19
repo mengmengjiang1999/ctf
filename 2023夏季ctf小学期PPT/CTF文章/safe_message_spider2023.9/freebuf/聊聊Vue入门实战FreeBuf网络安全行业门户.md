@@ -1,0 +1,633 @@
+跟着[Vue官方文档](https://cn.vuejs.org/v2/guide/)学是最快最快的方式，不要去看什么书籍去入门，大概看了下都写的很一般，不排除某些章节写的还行~
+
+## 0.起初​
+
+初学者以html中以<script>引入的方式是最好的，不用下载，拿来即用。
+
+以hello vue为例，
+
+    
+    
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <!--引入vue-->
+        <script src="https://cdn.jsdelivr.net/npm/vue@2.5.16/dist/vue.js"></script>
+        <meta charset="UTF-8">
+        <title>Title</title>
+    </head>
+    <body>
+    <!--id与app里面的el元素#名称对应-->
+    <div id="app">
+    <!--双大号法引用-->
+        {{ message }}
+    </div>
+    <script>
+    <!--new一个Vue实例，并将数据和DOM建立关联,都是响应式的-->
+        var app1 = new Vue({
+            el: '#app',
+            data: {
+                //vue实例的数据 在外面使用
+                message: 'Hello Vue!'
+            }
+        })
+    </script>
+    </body>
+    </html>
+
+如果是idea 点击弹出来的谷歌浏览器 就可以在浏览器看到Hello Vue！恭喜你 已经入门了！就是这么简单
+
+![](https://image.3001.net/images/20210602/1622631602_60b764b25153d46bd31f1.png!small)
+
+![](https://image.3001.net/images/20210602/1622631620_60b764c4de7d66c37f415.png!small)
+
+学习vue最重要的是理解什么是双向绑定?
+
+当我们更新js代码的model数据时，html的view展示觉得数据就会改变；
+
+当我们改变view的数据时，MVVM就会自动更新model数据
+
+![](https://image.3001.net/images/20210602/1622631689_60b765099ec757f21020f.png!small)
+
+    
+    
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <script src="https://cdn.jsdelivr.net/npm/vue@2.5.16/dist/vue.js"></script>
+        <meta charset="UTF-8">
+        <title>Title</title>
+    </head>
+    <body>
+    <div id="app">
+        <input v-model="name"><br/>
+        你输入的name为:{{name}}
+    </div>
+    
+    <script>
+        var app1 = new Vue({
+            el: '#app',
+            data: {
+               name: '张三'
+            }
+        })
+    </script>
+    </body>
+    </html>
+
+![](https://image.3001.net/images/20210602/1622631722_60b7652ae1fd70c1f8c20.png!small)
+
+里面的原理其实是借助了订阅者发布者模型+数据劫持实现的，以通过监听所有的属性，一改变就通知订阅者，订阅者收到通知就执行函数从而更新视图。有兴趣可以参考[推荐这个](https://juejin.cn/post/6844903479044112391)。
+
+另外熟悉Vue实例的[生命周期](https://cn.vuejs.org/v2/guide/instance.html#%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F%E5%9B%BE%E7%A4%BA)也很重要，什么钩子在什么时候执行，不要求明白有个印象就行，这东西你用着用着就会明白。
+
+## 1.进入正题
+
+### 1.1插值
+
+在hello vue的例子中，提到了双括号法也叫Mustache语法，可以将绑定的数据插值到view中
+
+{{}}里面也可以是表达式，或者函数，不能是流程判断比如if() 或者复制语句
+
+    
+    
+    <body>
+    <div id="app">
+        {{name + '君'}}<br />   => 张三君
+        {{name?name+1:''}}<br /> => 张三1
+        {{name.split("")[0]}} => 张
+    </div>
+    
+    <script>
+        var app1 = new Vue({
+            el: '#app',
+            data: {
+               name: '张三'
+            }
+        })
+    </script>
+    </body>
+
+如果是HTML的属性值 就不能用双括号 只能用v-bind:
+
+例如 <div v-bind:id="dynamicId"></div>此时 id就是动态的，值取绑定的数据dynamicId，
+
+v-bind: 可以简写为: ,总而言之一看到v-bind: 或者: 就想到这个值是动态的
+
+可以使用:class :style来指定自己预先写好的class和 style 这样就可以复用class和style
+
+### 1.2 v-xxxx一览
+
+ **v-if**
+
+>  **v-else就是我们的if else,可以选择性的渲染 当然还可以v-else-if(2-10版)**
+    
+    
+    <body>
+    <div id="app" >
+        <h1 v-if="awesome">Vue is awesome!</h1> v-if要布尔值
+        <h1 v-else>Oh no </h1>    要紧跟v-if  
+    </div>
+    
+    <script>
+        var app1 = new Vue({
+            el: '#app',
+            data: {
+                awesome: true  
+            }
+        })
+    </script>
+    </body>
+
+####  **v-show**
+
+>  **v-if 是否展示 区别就是v-if 只有true才渲染 而v-show是都渲染 然后再根据条件进行css display**
+
+>  **注意v-show 不支持 <template>**
+
+![](https://image.3001.net/images/20210602/1622631740_60b7653c8b2959c027111.png!small)
+
+#### v-for
+
+>  **遍历列表 格式是item in items，要指定key ，也可以（item,index）in items ，index就是索引 当然也可以把in
+> 换成 of ,item of items 。如果items 是一个object 就会遍历他的属性**
+>  
+>  
+>     <body>
+>     <div id="app" >
+>         <ul>
+>             <li v-for="item in list" :key="item.name">
+>                 姓名：{{ item.name }}，年龄：{{item.age}}
+>             </li>
+>         </ul>
+>  
+>     </div>
+>  
+>     <script>
+>         var app1 = new Vue({
+>             el: '#app',
+>             data: {
+>                 list: [
+>                     {name:'张三',age:18},
+>                     {name:'李四',age:19},
+>                     {name:'王五',age:28}
+>                 ]
+>             }
+>         })
+>     </script>
+>     </body>
+
+![](https://image.3001.net/images/20210602/1622631753_60b76549e765282ac494d.png!small)
+
+v-on
+
+ **监听事件 有点击事件 键盘事件等等 最常用的就是单击事件和双击事件了 v-on 可以缩写成@ 比如@click**
+
+ **其他的事件参考[这个](https://www.runoob.com/jsref/dom-obj-event.html)**
+
+    
+    
+    <body>
+    <div id="app" >
+    <!--可以是表达式-->
+        <button v-on:click="counter += 1">Add 1</button>
+        <p>The button above has been clicked {{ counter }} times.</p>
+    <!--可以是方法-->
+        <button v-on:click="greet">Greet</button>
+    <!--方法可以传绑定的data-->
+        <button v-on:click="say(sayWord)">Say hello</button>
+    <!--或者传固定值-->
+        <button v-on:click="say('what')">Say what</button>
+    
+    </div>
+    
+    <script>
+        var app1 = new Vue({
+            el: '#app',
+            data: {
+                counter: 0,
+                sayWord: 'hello'
+            },
+            methods: {
+                greet: function () {
+                    alert('现在的counter是'+this.counter)
+                },
+                say: function (word) {
+                    alert('say '+ word)
+                }
+            }
+        })
+    </script>
+    </body>
+
+v-model
+
+ **指令是用在表单 <input> <textarea> <select>元素上创建双向绑定数据**
+
+ **可以是文本，多文本，复选框，选择按钮，选择框等使用v-model**
+
+ **v-model可以搭配三个修饰符使用：**
+
+ **v-model.lazy 输入完之后再响应；v-model.number 自动转成数字类型；v-model.trim 输入字符串会trim**
+
+>  
+>
+>
+>  
+>
+>  
+>  
+>     <body>
+>  
+>     <div id="app">
+>     <!--    文本-->
+>         <input v-model="message" placeholder="edit me">
+>         <p>Message is: {{ message }}</p>
+>     <!--    多行文本 -->
+>         <textarea v-model="message1" placeholder="add multiple
+> lines"></textarea>
+>         <p style="white-space: pre-line;">Message is: {{ message1 }}</p>
+>     <!--    复选框checkbox  多个就是v-model是个数组-->
+>         <input type="checkbox" id="checkbox" v-model="checked">
+>         <label for="checkbox">{{ checked }}</label><br/>
+>     <!--      选择按钮-->
+>         <input type="radio" id="one" value="One" v-model="picked">
+>         <label for="one">One</label>
+>         <input type="radio" id="two" value="Two" v-model="picked">
+>         <label for="two">Two</label><br/>
+>     <!--    选择框  多个就是v-model是个数组-->
+>         <select v-model="selected">
+>             <option disabled value="">请选择</option>
+>             <option>A</option>
+>             <option>B</option>
+>             <option>C</option>
+>         </select>
+>  
+>     </div>
+>     <script>
+>         var app1 = new Vue({
+>             el: '#app',
+>             data: {
+>                 message: '',
+>                 message1: '',
+>                 checked: false,
+>                 picked: '',
+>                 selected: ''
+>             }
+>         })
+>     </script>
+>     </body>
+
+## 2.计算和监听
+
+### 1.compute
+
+计算属性是方便哪些要二次计算的data，比如{{message.split("").reverse().join('')}} 真是
+
+老太太裹脚布又臭又长
+
+正确打开方式
+
+reversedMessage是message计算之后的属性 可以直接在html中使用
+
+可以看到{{}}里面写一个方法来处理message 是和compute一样的效果的
+
+两者的区别是计算属性是有缓存的，只要message不变 他就不会去重复计算，而方法是每一次都计算
+
+    
+    
+    <body>
+    <div id="app">
+    <!--    Hello Vue!
+    !euV olleH
+    !euV olleH
+    -->
+        {{ message }}<br/>
+        {{ reverse() }}<br/>
+        {{reversedMessage}}
+    </div>
+    <script>
+        var app1 = new Vue({
+            el: '#app',
+            data: {
+                message: 'Hello Vue!',
+    
+            },
+            methods: {
+              	//方法
+                reverse: function () {
+                    return  this.message.split('').reverse().join('')
+                }
+            },
+            //注意 不是methods里面
+            computed: {
+                // 计算属性
+                reversedMessage: function () {
+                    // `this` 指向 vm 实例
+                    return this.message.split('').reverse().join('')
+                }
+            }
+        })
+    </script>
+    </body>
+
+### 2.watch
+
+监听属性 但是除非万不得已 不要用watch回调来计算 最好用计算属性
+
+如下 一旦输入了姓和名 监听到改变之后就会把fullName重新计算，那还不如直接计算呢
+
+watch适用于当侦听器，一旦某个值发生改变就去做一系列的事情，比如说一旦输入了搜索条件 我就带着搜索条件查数据
+
+    
+    
+    <body>
+    
+    <div id="components-demo">
+    <!--    可以复用 而且里面的count互不干扰-->
+    <button-counter></button-counter>
+    <button-counter></button-counter>
+    </div>
+    <script>
+        //注意这个写在前面
+        // 定义一个名为 button-counter 的新组件
+        Vue.component('button-counter', {
+            data: function () { //这里和之前不同 是一个函数
+                return {
+                    count: 0
+                }
+            },
+            template: '<button v-on:click="count++">You clicked me {{ count }} times.</button>'
+        })
+        var app1 = new Vue({
+            el: '#components-demo'
+        })
+    </script>
+    </body>
+
+![](https://image.3001.net/images/20210602/1622631772_60b7655c521fad077b3b7.png!small)
+
+那么组件怎么互相通信呢？ 依靠props 属性
+
+下面是父传子数据 通过指定title进行渲染
+
+![](https://image.3001.net/images/20210602/1622631786_60b7656a7461208280a31.png!small)
+
+当然 以一个list去遍历渲染是更常规的 效果和上图一致
+注意props里面的参数可以是对象，数组，字符串等等，如果是对象那template里面引用的要指定属性 比如obj.title
+
+    
+    
+    <body>
+    
+    <div id="app">
+        <blog-post
+                v-for="post in posts"
+                :key="post.id"
+                :title="post.title"
+        ></blog-post>
+    </div>
+    <script>
+    <!--    注册一个组件名为blog-post-->
+        Vue.component('blog-post', {
+            //参数是title
+            props: ['title'],
+            template: '<h3>{{ title }}</h3>'
+        })
+    
+        new Vue({
+        el: '#app',
+        data: {
+            posts: [
+                { id: 1, title: 'My journey with Vue' },
+                { id: 2, title: 'Blogging with Vue' },
+                { id: 3, title: 'Why Vue is so fun' }
+            ]
+        }
+    })
+    </script>
+    </body>
+
+上面只是父传子数据 但是没有沟通 ，如果组件是一个改变字体的按钮 那父怎么知道字体有没有改变呢
+
+这就依赖于监听子组件事件
+
+下面的内容有点多,刚好回顾一下上面的知识
+
+●style 是动态的 用了 :style == v-bind:style ，因为style是动态的 所以值可以是动态的
+postFontSize，em是单位
+
+●这里用了组件复用 v-for对posts进行遍历，指定key 和参数post, 这里的post是一个obj
+
+●v-on:enlarge-text 是一个自定义组件 点击事件是点击了就触发某个动作，而这个也一样,达到了什么条件就触发后面的函数postFontSize
++= 0.1
+
+●达到了什么条件呢？组件里面有一个点击事件v-on:click 你点击了就触发点击事件，执行$emit('enlarge-text')
+
+●$emit('enlarge-text') 组件内通过emit来触发自定义组件enlarge-text
+
+ **所以是 点击Enlarge text- >触发点击事件执行$emit('enlarge-text')->$emit触发自定义组件执行postFontSize += 0.1-> 进行加0.1并渲染**
+
+    
+    
+    <body>
+    
+    <div id="blog-posts-events-demo">
+        <div :style="{ fontSize: postFontSize + 'em' }">
+            <blog-post
+                    v-for="post in posts"
+                    v-bind:key="post.id"
+                    v-bind:post="post"
+    				//注意 这里的自定义事件名称要和$emit 里面的名称一致
+                    v-on:enlarge-text="postFontSize += 0.1" 
+            ></blog-post>
+        </div>
+    </div>
+    
+    <script>
+        //注意这个写在前面
+        // 定义一个名为 button-counter 的新组件
+        Vue.component('blog-post', {
+            props: ['post'],//这里的props是一个对象post
+            template: `
+              <div class="blog-post">
+              <h3>{{ post.title }}</h3>
+              <button v-on:click="$emit('enlarge-text')">
+                Enlarge text
+              </button>
+              </div>
+            `
+        })
+        new Vue({
+            el: '#blog-posts-events-demo',
+            data: {
+                posts: [{
+                    id: 1,
+                    title: '新华报社'
+                }],
+                postFontSize: 1
+            }
+        })
+    </script>
+    </body>
+
+![](https://image.3001.net/images/20210602/1622631805_60b7657ddb8f48e71c92c.png!small)
+
+那子组件要传值到父组件怎么传呢？用$emit第二个参数 传入 和 $event 接收或者用一个方法接收
+
+    
+    
+    <body>
+    
+    <div id="blog-posts-events-demo">
+        <div :style="{ fontSize: postFontSize + 'em' }">
+            <blog-post
+                    v-for="post in posts"
+                    v-bind:key="post.id"
+                    v-bind:post="post"
+    				//方式一  用$event接收
+                    v-on:enlarge-text="postFontSize += $event"
+    				//方式二 用带参数的方法接收
+                    v-on:enlarge-text="changeSize"
+            ></blog-post>
+        </div>
+    </div>
+    
+    <script>
+        //注意这个写在前面
+        // 定义一个名为 button-counter 的新组件
+        Vue.component('blog-post', {
+            props: ['post'],
+            template: `
+              <div class="blog-post">
+              <h3>{{ post.title }}</h3>
+              <button v-on:click="$emit('enlarge-text',0.1)">
+                Enlarge text
+              </button>
+              <div v-html="post.content"></div>
+              </div>
+            `
+        })
+        new Vue({
+            el: '#blog-posts-events-demo',
+            data: {
+                posts: [{
+                    id: 1,
+                    title: '新华报社'
+                }],
+                postFontSize: 1
+            },
+            methods :{
+                changeSize: function (value) {
+                    this.postFontSize += value
+                }
+            }
+        })
+    </script>
+    </body>
+
+在组件上使用v-model
+
+    
+    
+    <custom-input v-model="searchText"></custom-input>
+    等价
+    <custom-input  v-bind:value="searchText"  v-on:input="searchText = $event">
+    </custom-input>
+
+如果是切换组件 比如一个标签里面有很多个界面 如何去切换使用不同的组件呢
+
+用<component> \+ is实现
+
+    
+    
+    <!-- 组件会在 `currentTabComponent` 改变时改变 -->
+    <component v-bind:is="currentTabComponent"></component>
+
+## 4.Vuex
+
+Vuex是vue比较重要的框架
+Vuex是一个状态管理模式，它采用集中式存储管理应用的所有组件的状态，并以相应的规则保证状态以一种可预测的方式发生变化。官网资料看一遍基本就明白
+这里就不再赘述
+
+实战 hbase分页的游标储存 下一页就要记录上一页最后一条记录的logid和recordTime 因为hbase只能根据上一个的游标查接下来的数据
+所以要储存每页最后一条的数据
+
+    
+    
+    import Vue from 'vue'
+    import Vuex from 'vuex'
+    
+    Vue.use(Vuex)
+    
+    export default new Vuex.Store({
+      state: {
+        pageCache: {},
+        page: {
+          preId: null,
+          preRecordTime: null
+        }
+      },
+      mutations: {
+        add(state, pageData) {
+          state.pageCache[pageData.pageNbr] = pageData
+        },
+        deleteAll(state) {
+          for (let key in state.pageCache) {
+            delete state.pageCache[key]
+          }
+          state.pageCache = {}
+        }
+      },
+      actions: {},
+      modules: {},
+    
+      // 定义 Getter
+      getters: {
+        getAll: (state) => {
+          return state.pageCache
+        },
+        getPreData: (state) => (index) => {
+          return state.pageCache[index]
+        },
+        getPreDataSize: (state) => {
+          return state.pageCache.length
+        }
+      }
+    })
+    
+    
+    getLastIdAndLastRecordTime(table) {
+      //每次查询都把最后一条数据塞到全局状态管理里面
+          if (table != null && table.length != 0) {
+            this.$store.commit('add', {
+              pageNbr: this.pageNbr,
+              id: table[table.length - 1].logId,
+              recordTime: table[table.length - 1].recordTime
+            })
+          }
+        },
+    
+    分页
+    const queryPage = this.pageNbr - 1
+    if (this.pageNbr > 1) {
+            if (this.isPre) {
+              //往前翻页 就拿到记录里面的最后上一页的数据
+              this.lastId = this.$store.getters.getPreData(queryPage).id
+              this.lastRecordTime = this.$store.getters.getPreData(queryPage).recordTime
+            } else {
+      		  //往后翻 就把拿当前list的最后一条数据
+              if (this.tableData != null && this.tableData.length != 0) {
+                this.lastId = this.tableData[this.tableData.length - 1].logId
+                this.lastRecordTime = this.tableData[this.tableData.length - 1].recordTime
+              }
+            }
+          } else {
+            //新进的 查询 就把历史记录的都删除掉
+            this.lastRecordTime = null
+            this.lastId = null
+            this.$store.commit('deleteAll')
+          }
+
+ **本文作者：魄罗@涂鸦智能安全团队**
+

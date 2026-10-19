@@ -1,0 +1,1656 @@
+*** 原创作者：魅影儿，本文属FreeBuf原创奖励计划，转载请注明来自FreeBuf.COM**
+
+![image030.gif](https://image.3001.net/images/20170511/1494496954946.gif!small)
+
+ **IEEE 802.11** **协议规定无线帧包含数据帧、控制帧和管理帧三类，本文将详细剖析此无线安全协议。**
+
+数据帧的任务是在工作站间传递数据，数据帧信息会因为所处的网络环境不同而发生变化。控制帧多用于为数据帧提供服务，保证工作站之间数据能可靠传输。控制帧能够选择通信信道、维护载波监听功能、清理工作区域、对收到的数据作出应答等。管理帧起监督作用。比如对
+STA加入无线网络、退出无线网络、在基站间的漫游等进行管理。
+
+IEEE
+802.11i提供给企业网络管理员使用的安全保护，只适应于网络中的数据通信。若管理员想管理或者控制无线网络的运行，基本上无能为力。目前管理、控制报文并未受到保护，机密性、真实性、完整性无法得到保证，容易受到仿冒或者监听。为了在一定程度上消除这个安全隐患，802.11w
+诞生了。它经由保护无线网络“管理帧”的过程来改善安全性，能够在一定程度上制止通过“管理帧“进攻网络的行为。
+
+## 1.1 802.11w协议内容
+
+### 1.1.1 无线管理帧
+
+IEEE规定的802.11管理帧的通用格式如图1-1所示。
+
+![image003.gif](https://image.3001.net/images/20170511/14944962917964.gif!small)
+
+ **图 1- 1 管理帧基本结构**
+
+管理帧十分具有弹性。帧主体中的数据，长度不会变化的位叫做固定式位；长度在一定范围内可变的位就叫做IE（information element，
+信息元素）位。信息元素指的就是长度有所变化的数据块。每一个数据块均会标注上类型编号与大小。不同IE的数据位具有不同的解释方式。802.11标准允许增加新的
+IE 。
+
+### 1.1.2 802.11w协议简介
+
+802.11w保护的管理帧，包括去认证帧、去关联帧、强健Action帧。强健Action帧主要包含： SpectrumManagement
+、Qos、DLS、Block Ask 、Radiomeasurement、Fast BSS Transition、 SA Query
+、ProtectedDual of Public Action、Vendor-specfic Protected帧[27] 。
+
+对于单播管理帧采用数据帧的临时密钥对其进行加密保护。对广播管理帧采用新提出的加密套件BIP进行保护，提供了完整性校验以及重放保护。
+
+802.11w协议一致性测试的内容主要包括两部分：管理帧保护和SA Query处理机制，SA Query处理机制中涉及的 SA Query
+Request和SA Query Response帧属于强壮Action帧，同样受 802.11w标准保护。
+
+### 1.1.3 RSNIE变更
+
+IE（Information Element，信息元素）是管理帧的组成成分，其长度可变。管理帧会通过
+IE来与别的系统交换信息。信息元素一般包括一个Element ID(元素识别码) 位、一个 Length(长度)位和一个长度不定的位。16bit的
+Capability Information （能力信息）位，用于在发送Beacon帧时通告一个服务集内的工作站本网络所具有的能力。它同样能够用于Probe
+Request 和 Probe Response帧中。每个bit位各自代表一个旗标，分别代表网络具备何种功能。STA 使用这些公告信息判断自己是否支持该
+BSS所有的功能。一般情况下，不具备性能通告中要求的能力的工作站，不能加入此服务集。首先AP通过信标帧广播
+RSN能力，使得无线工作站之间能够互换安全信息。版本 Version属于必要位，802.11定义了版本 0， 1保留未用，版本2以上未定义[22]
+。群组密码套件 Group Data
+CipherSuit在同一时间能且只能选择一种。并且所选套件必须和全部接入该服务集的工作站的组密码套件兼容。密码套件选项占四个字节，由厂商的OUI以及代表密码套件的编号组成，
+802.11系列协议所使用的OUI为00-0F-AC ，IEEE802.11w中定义的标准密码套件如表2-2所示；成对密码套件 Pairwise
+Cipher Suites(count+list) 作用是保护单播管理帧，它包含二字节的计数字段与4*n(n为正整数)
+字节它允许的密码套件描述符。除信息元素长度有受限外，协议并未规定其允许的密码套件数量；身份认证与密钥管理套件 Authentication andKey
+Management Suites(count+list)也存在好几种身份认证类型，它由一组四个字节的识别码组成。包括一个 OUI和一组套件类型标识符。
+AKM取不同值时对应的认证和密钥管理类型如表2-3所示。强健安全网络能力 RSN Capability 字段占两个字节，用于描述发送方的安全性能。
+
+802.11w协议提出在RSN信息元素的RSN capabilities（如表 1-1）中增加MFPR及MFPC位； AKM
+字段新增类型00-0F-AC:5和00-0F-AC:6；并且新增Group Management Cipher suit 字段。
+
+增加的MFPR和MFPC位用来协商保护管理帧能力，MFPR 位置1表示强制要求管理帧保护，MFPC位置 1
+表示支持管理帧保护；通过MFPR及MFPC位的设置来协商保护管理帧能力。
+
+AKM字段新增类型00-0F-AC:5及00-0F-AC:6分别表示认证类型为 802.1x及PSK，相较00-0F-AC:1和 00-0F-AC:2
+，把加密算法从SHA1变为SHA256。
+
+Group Management Cipher suit字段用来保护广播或多播管理帧[1]，新增密码套件BIP
+用来保护广播或多播的完整性，BIP协议运用AES加密算法，在CBC-MAC模式下计算认证码。健壮安全网络信息元素格式如图
+2-所示。![image004.gif](https://image.3001.net/images/20170511/14944963157487.gif!small)
+
+ **图 1- 2 强健安全网络信息元素格式**
+
+Element ID ：协议设定为48（十进制）。
+
+Length：定义了从该字段以后RSN IE字段的总字节数。
+
+Version：版本类型，值为1。
+
+Group Cipher Suite（组播加密套件）：该字段标识了使用何种加密算法进行组播加密，字段结构如图2-3。
+
+![image005.jpg](https://image.3001.net/images/20170511/14944963285907.jpg!small)
+
+ **图 1- 3 加密套件选择器格式**
+
+Pairwise Cipher Suite Count：多存在于STA发往AP的帧中，该字段为 1。而在AP广播所带的RSN IE中，该字段值为 AP
+支持的加密套件总数。
+
+Pairwise Cipher Suite List：该字段列出了所用的加密算法，格式类似组播加密算法的标识格式，数量与Pairwise
+CipherSuite Count字段的值一致。
+
+AKM Suite Count：标识使用的AuthenticationKey Management （AKM）套件的数量。
+
+AKM Suite List：结构同字段Pairwise CipherSuite List，具体值见表1-3[22] 。
+
+RSN Capability ：此字段用于描述发送端能力，后六位保留未用，必须设定为0，字段结构如表1-1 所示[22]。
+
+ **表 1- 1 RSN Capability字段结构**
+
+B0| B1| B2-B3| B4-B5| B6| B7| B8| B9| B10-B15  
+---|---|---|---|---|---|---|---|---  
+PreAuth| No Pairwise| PTKSA Replay Counter| GTKSA Replay Counter| MFPR| MFPC|
+Reserved| Peer Key Enabled|  
+  
+  
+ **表 1- 2 加密套件选择器**
+
+OUI| Suite type| Meaning  
+---|---|---  
+00-0F-AC| 0| Use group cipher suite  
+00-0F-AC| 1| WEP-40  
+00-0F-AC| 2| TKIP  
+00-0F-AC| 3| Reserved  
+00-0F-AC| 4| CCMP-default pairwise cipher suite for data frames in RSNA  
+00-0F-AC| 5| WEP-104  
+00-0F-AC| 6| BIP-default group management cipher suite in an RSNA with
+management frame protection enabled  
+00-0F-AC| 7| Group addressed traffic not allowed  
+00-0F-AC| 8-255| Reserved  
+Vendor OUI| Other| Vendor-specific  
+Other| Any| Reserved  
+  
+  
+
+ **表 1- 3 身份认证与密钥管理套件选择器**
+
+OUI| State type| Meaning  
+---|---|---  
+Authentication type| Key management type  
+00-0F-AC| 0| Reserved| Reserved  
+00-0F-AC| 1| Authentication negotiated over IEEE 802.1X or using PMKSA
+catching as defined in 8.4.6.2 – RSNA default| RSNA key management as defined
+in 8.5 or using PMKSA catching as defined in 8.4.6.2 – RSNA default  
+00-0F-AC| 2| PSK| RSNA key management as defined in 8.5, using PSK  
+00-0F-AC| 3-255| Reserved| Reserved  
+Vendor OUI| Any| Vendor-specific| Vendor-specific  
+Other| Any| Reserved| Reserved  
+  
+### 1.1.4 无线终端协商上线
+
+ **1.1.4.1 802.11w 能力协商**
+
+STA发送关联请求帧，AC解析关联请求帧中的RSNIE。在原有的基础上新增解析 MFPC位和MFPR位及Group Management Cipher
+Suite字段，解析完成后，对 MFPC及MFPR位按表1-4所示进行协商。当 AP
+没有保护管理帧功能时，允许STA上线；当AP开启保护管理帧功能时，分以下两种情况考虑。
+
+1) AP端的MFPC置1，MFPR置0，STA端的MFPC置0或1，MFPR置0时，允许STA上线，并回应关联响应报文，PMF
+Status字段的值为Inactive；若STA端的MFPC置1，MFPR置1，也允许STA上线，回应关联响应报文，PMF
+Status字段值为Active；若STA端的MFPC置0,MFPR置1，AP不允许STA上线，回应携带错误码31的关联响应报文。
+
+2) AP端的MFPC和MFPR都置1，STA端的MFPC置1，MFPR置0或1时，允许STA上线，回应关联响应报文，PMF
+Status字段的值是Active；若STA端的MFPC置0，MFPR置0或1，则回应携带错误码31的关联响应报文。
+
+然后对广播管理帧进行协商，若AP设置Group Management Cipher Suite为 BIP ，且STA默认为BIP，允许STA
+上线；否则，不允许 STA上线。
+
+  
+
+  
+
+  
+
+ **表 1- 4 扩展服务集中健壮管理帧协商原则**
+
+  
+
+  
+
+  
+
+AP MFPC| AP MFPR| STA MFPC| SPA MFPR| AP Action| STA Action  
+---|---|---|---|---|---  
+0| 0| 0| 0| The AP may associate with the STA| The STA may associate with the
+AP  
+1| 0| 0| 0| The AP may associate with the STA| The STA may associate with the
+AP  
+1| 0 or 1| 1| 0 or 1| The AP may associate with the STA| The STA may associate
+with the AP  
+1| 1| 0| 0| The AP shall reject associations from the STA with the Status
+Code“Robust management frame policy violation”| The STA shall not associate
+with the AP  
+0| 0| 1| 1| No action| The STA shall not try to associate with the AP  
+0| 0| 1| 0| The AP may associate with the STA| The STA may associate with the
+AP  
+1| 0 or 1| 0| 1| The STA advertises an invalid setting. The AP shall reject
+associations from the STA with the Status Code “Robust management frame policy
+violation”| The STA shall not try to associate with the AP  
+0| 1| 1| 0 or 1| No action| The AP advertises an invalid setting. The STA
+shall not try to associate with the AP  
+  
+  
+
+  
+
+  
+
+1.1.4.2 AKM套件协商
+
+  
+
+  
+
+  
+
+STA发送关联请求帧后与AC协商身份认证与密钥管理方式，以保证服务的私密性与完整性。
+
+AKM字段新增类型00-0F-AC:5及00-0F-AC:6对应 802.1x及PSK，相较于00-0F-AC:1， 00-0F-AC:2
+，变化体现在对密钥衍生算法进行了升级，并且使用AES-128-CMAC算法保证信息完整性；因此AKM套件 00-0F-AC ：5和00-0F-AC：6
+提升了 RSN的安全性能。
+
+被测设备对这些AKM套件若都支持，即支持00-0F-AC:1，00-0F-AC:2
+，00-0F-AC:5，00-0F-AC:6，则首先选00-0F-AC:5 ，对应的结果为 802.1x_SHA256。
+
+若支持PSK，即00-0F-AC:2，00-0F-AC:6 则首选00-0F-AC:6,结果为PSK_SHA256。
+
+若支持802.1x，即00-0F-AC:1,00-0F-AC:5则首选00-0F-AC:5, 结果为802.1x_SHA256。
+
+当协商的AKM为00-0F-AC：5 或6时，EAPOL-Key帧的填充和密钥衍生算法会发生改变，密钥衍生算法由prf
+变成kdf，具体改变在密钥协商一节中有介绍。
+
+  
+
+  
+
+  
+
+### 1.1.4.3 密钥协商
+
+  
+
+  
+
+  
+
+802.11w标准中，STA首次接入AP时，经由四次握手的过程完成单播及组播密钥的协商，对管理帧进行保护。
+
+CCMP安全协议中的密钥有单播密钥和组播密钥两种[30]。客户端认证成功后，单播密钥被通信双方 STA
+和AP同时拥有。单播密钥又名成对密钥。它的层次结构非常复杂：最顶层的是PMK（ Pairwise Master Key
+，成对主密钥），PMK主要用于导出所有别的成对密钥。当用户认证为802.1X 认证时， PMK在AP对STA认证完成后由 Radius
+服务器产生并下发给AP和STA。当客户端认证方式为 PSK 认证时，配置的PSK直接转换为PMK 。但是 ,真正用来保证AP和STA
+间安全连接的是成对临时密钥 PTK（Pairwise TemporaryKey）而非PMK 。 PTK是由PMK导出的一个单独加密组，代表一系列密钥。PTK
+由临时密钥 TK（Temporal Key）、密钥加密密钥KEC(EAPOL-Key Encryption Key) 和密钥认证密钥KCK(EAPOL-Key Conformation Key)三部分组成。其中，TK 用于加密通信数据； KEK同于加密EAPOL-Key中所携带的数据；KCK 用于对
+EAPOL-Key进行认证。STA重新关联到AP 时要更新 PTK，PTK的实时性由nonce 来保证 [26]。当STA和 AP
+生成一个新的PTK之后，AP再用它来传送组播临时密钥 GTK给STA。由PMK 生成由 PTK过程如图1-4所示，其中 AA 代表AP的Mac地址，
+SPA代表STA的MAC 地址。
+
+  
+
+  
+
+  
+
+  
+
+![image006.gif](https://image.3001.net/images/20170511/14944963751122.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 4 成对密钥衍生过程**
+
+  
+
+  
+
+  
+
+802.11w中的RSN四次握手协商密钥发生在PMK成功获取后，过程如图1-5。
+
+  
+
+  
+
+  
+
+![image007.gif](https://image.3001.net/images/20170511/14944964643316.gif!small)
+
+  
+
+  
+
+  
+
+ **图1- 5 四次握手密钥协商过程**
+
+  
+
+  
+
+  
+
+1)AP向STA发送Message 1帧，该帧中包含用于产生PTK的随机数Anonce,并表明目前正在进行PTK的发布过程，Message
+1没有受到任何的加密及认证保护。
+
+  
+
+  
+
+  
+
+2)STA收到Message
+1后得到Anonce并选择一个随机数Snonce用PRF算法计算出PTK，PTK=SHA1_PRF(PMK，Len(PMK),“Pairwisekeyexpansion”,MIN(AA,SA)||Max(AA,SA)||Min(ANonce,SNonce)||Max(ANonce,SNonce))；而后发送Message
+2帧给AP，该帧中包含Snonce及STA的RSN信息元素，并且该帧使用了计算得到的PTK中的前16个字节作为MIC KEY（又称KCK）对Message
+2进行MIC完整性校验。
+
+  
+
+  
+
+  
+
+3)AP收到Message
+2后，得到Snonce并计算出PTK、GTK、IGTK。同时使用计算出的PTK中的KCK对数据进行MIC校验。如果校验不成功，就会丢弃Message
+2。如果校验成功，则向STA 发送Message 3[25]。Message
+2帧中包含要求STA装入PTK（包括PTK中的TK、KEK和KCK）、GTK和IGTK及AP的RSN信息元素，并且AP对Message
+2帧进行了MIC认证。为实现对组播管理帧的保护，802.11w协议标准规定：AP对接收到的EAPOL-KeyMessage
+2进行解析，并且在原有EAPOL-Key基础上增加了IGTK/IPN协商，然后将IGTK和IPN协商结果添加到原来的EAPOL-Key之后，封装成新的EAPOL-KeyMessage3和RSN IE一起下发给STA。
+
+  
+
+  
+
+  
+
+4)STA收到Message 3后装入PTK、GTK和IGTK，并且发送特殊的空信息Message 4(EAPOL=Key帧的Key
+Data字段无任何数据)表示已经装入密钥，AP在收到Message 4后也装入PTK、GTK和IGTK。
+
+  
+
+  
+
+  
+
+至此，四次握手结束，通信过程中所需要的密钥被全部生成，通信双方安装密钥完毕，可以开始传输安全数据。另外，802.11w协议标准还规定当有客户端离开基础服务集时、或者密钥生存周期已到时、或者密钥加密的数据流量达到限制值时，通过组播握手进行GTK密钥、IGTK密钥的更新，并且这两个密钥以加密的方式被分发给通信客户端。IGTK随着GTK的变化而变化。IGTK是802.11w协议中新定义的密钥，BIP运用IGTK对广播管理帧进行签名。IGTK被同一BSS中的STA共享。四次握手协商密钥的过程较难理解，这也是实现802.11w协议一致性自动化测试套必须解决的难题，若不能正确区分各个密钥之间的关系，就无法正确修改程序中加密和解密函数的相关参数，无法对接收的报文正确解密，从而无法对802.11w协议进行一致性测试。
+
+  
+
+  
+
+  
+
+组播握手过程如图1-6所示。
+
+  
+
+  
+
+  
+
+![image008.gif](https://image.3001.net/images/20170511/14944964768195.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 6 组播握手密钥协商过程**
+
+  
+
+  
+
+  
+
+组播密钥层次结构如图1-7所示。
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+![image009.gif](https://image.3001.net/images/20170511/14944964934661.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 7 组播密钥衍生过程**
+
+  
+
+  
+
+  
+
+EAPOL-Key的具体格式如表1-5所示，其中Key Information字段格式如表 2-6所示。AKM协商为00-0F-AC： 5
+或00-0F-AC：6时将做如下改变。
+
+1) EAPOL-Key message 1中Key Information字段的Key Descriptor Version值为3。
+
+2) EAPOL-Keymessage 3中，在原有基础上，使用SHA256算法生成GTK，填充至EAPOL-Key帧keydata字段中，将EAPOL帧和KCK作为AES-128-CMAC算法的输入生成16字节MIC填充至MIC字段。
+
+3) 将BSSID、Gnonce、字符前缀和GMK作为SHA256算法的输入生成GTK。
+
+4) IGTK密钥需要添加到EAPOL-Key的Key Data字段中GTK之后，原802.11i协议中Message3的Key Data
+Length和Key Data字段将发生变化。
+
+  
+
+  
+
+  
+
+ **表 1- 5 EAPOL-Key Message 3格式**
+
+  
+
+  
+
+  
+
+Protocol Version – 1 octet| Packet Type – 1 octet| Packet BodyLength – 2
+octets  
+---|---|---  
+Descriptor Type – 1 octet  
+Key Information – 2 octets| Key Length – 2 octets  
+Key Replay Counter – 8 octets  
+Key Nonce – 32 octets  
+EAPOL - Key IV – 16 octets  
+Key RSC – 8 octets  
+Reserved - 8 octets  
+Key MIC –variable  
+Key Data Length – 2 octets| Key Data – n octets  
+  
+  
+
+  
+
+  
+
+ **表1- 6 Key Information字段格式**
+
+  
+
+  
+
+  
+
+B0 B1 B2 B3 B4 B5 B6 B7
+
+  
+
+  
+
+  
+
+Key Descriptor Version| Key Type| Reserved| Install| Key ACK  
+---|---|---|---|---  
+Key MIC| Secure| Error| Request| Encrypted Key Data| SMK Message| Reserved  
+  
+  
+
+  
+
+  
+
+### 1.1.4.4 STA 802.11w能力确认机制
+
+  
+
+  
+
+  
+
+在STA协商为11w并首次上线后，AC会首先发送一个加密的SA Query
+request报文，只有收到合法的响应后才完成这个STA上线，否则将STA踢下线。
+
+  
+
+  
+
+  
+
+### 1.1.5 保护管理报文的处理
+
+  
+
+  
+
+  
+
+802.11w保护的管理帧包括单播管理帧和广播管理帧，对单播管理帧和广播管理帧有不同的处理方式。如图1-8所示。
+
+  
+
+  
+
+  
+
+![image010.gif](https://image.3001.net/images/20170511/1494496526791.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 8 802.11w保护管理帧内容**
+
+  
+
+  
+
+  
+
+### 1.1.5.1 单播管理帧的处理
+
+  
+
+  
+
+  
+
+在AP和某一STA的PMF 协商成功之后（即STA支持11w；STA和 AP协商PTK和IGTK完成）， AP
+将会对部分单播管理帧进行加密，以提高单播管理帧的机密性、真实性和完整性并保证抗重放性。要求加密的单播管理帧包括：去认证帧、去关联帧和802.11w协议中规定的部分Action
+帧。在 PMF协商成功之前，STA不应发送单播健壮Action 帧 ,若AP收到此健壮Action帧，则直接在 AP端忽略此帧，不上送AC。
+
+在本功能中，要将收到的加密单播管理帧进行解密，解密单播管理帧时所用的TK和解密数据帧的TK相同，区别就是解密单播管理帧需要额外维护本地的
+Rx_ReplayCounter（接收重放计数器），Rx_ReplayCounter用来进行重放检测，它在协商/ 刷新
+TK时初始化为0。经过CCMP加密的帧，在原有帧的基础上添加了 8 字节的CCMP头和8字节的MIC 尾。先计算
+MIC对报文进行认证，而后对帧主体部分和MIC值进行加密，认证和加密使用的是同一个密钥TK 。受保护的单播管理帧格式如图 1-9所示。
+
+  
+
+  
+
+  
+
+![image011.gif](https://image.3001.net/images/20170511/14944965592866.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 9 受保护的单播管理帧格式**
+
+  
+
+  
+
+  
+
+### 1.1.5.2 广播管理帧的处理
+
+  
+
+  
+
+  
+
+保护管理帧能力协商成功之后，协议实体不仅对单播管理帧进行保护，对广播管理帧也会进行一定程度上的保护。但保护机制略有不同，具体体现在对广播管理帧的保护会使用一套新的加密套件BIP，以达到保护广播管理帧的完整性，增强广播管理帧抗重放性的目的。
+
+BIP的主要是通过在广播的管理帧的帧主体后面增加一个Manangement MIC InformationElement(简称MMIE)
+来实现的。MMIE的具体格式如表1-7所示，由Element ID 、 Length、Key ID、IPN和 IPN 五个字段构成。
+
+  
+
+  
+
+  
+
+ **表1- 7 MMIE格式**
+
+  
+
+  
+
+  
+
+其中，IPN是IGTK报文序列号，用来统计广播管理帧的数目，不同的报文其IPN
+值是不同的，IPN字段对广播管理帧实现重放检测，提供抗重放保护。MIC为当前报文及IGTK
+使用AES-128-CMAC计算后的值，用来对管理帧进行完整性校验。受保护的广播管理帧格式如图1-10所示。
+
+  
+
+  
+
+  
+
+![image012.gif](https://image.3001.net/images/20170511/14944965817929.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 10 受保护的广播管理帧格式**
+
+  
+
+  
+
+  
+
+在PMF协商成功的情况下，AP接收到的没有BIP保护的组播健壮管理帧将被丢弃。现将AP接收、发送广播管理帧的处理总结在表1-8中。
+
+  
+
+  
+
+  
+
+ **表 1- 8 AP 接收、发送广播管理帧的处理**
+
+  
+
+  
+
+  
+
+报文类型| 是否 IGTK 保护| Rx/Tx| AP处理  
+---|---|---|---  
+Deauthentication| Y| Rx| 忽略报文  
+Deauthentication| Y| Tx| 用户关闭无线服务，去使能射频或者通过命令行将所有STA踢下线。  
+Deauthentication| N| Rx| 忽略报文  
+Disassociation| Y| Rx| 检测广播管理帧完整性和重放保护，合法则将STA去关联  
+Disassociation| N| Rx| 忽略报文  
+  
+  
+
+  
+
+  
+
+### 1.1.5.3 主动SA Query处理
+
+  
+
+  
+
+  
+
+为防止被仿冒（重）关联报文干扰，导致AP对STA作出错误的响应，当AP 处在安全的连接，并收到与此STA具有相同MAC地址的（重）关联请求报文时，AP
+要拒绝此STA的（重）关联请求。并且发送附带 TIE（Timeout IE
+，时间间隔信息元素）的（重）关联响应报文，TIE格式如图2-12所示，其中设置保护管理帧关联返回时间，到了保护管理帧关联返回时间， AP
+才能再次接收此STA的（重）关联请求。（重）关联响应帧中状态码为30，表示关联拒绝，请稍后再试。而后， AP 启动SA Query
+机制，并且向STA发送SA Query 请求帧。若AP收到SA Query 响应帧，则认为当前已有的连接是可靠的，不启动新的连接；若未收到 SAQuery
+响应帧，则AP在判断客户端超时后，向STA重发一次 SA Query 请求帧，重发次数不能超过客户端检查重试次数；若AP自始至终未收到SA
+Query响应帧，则直接删除 STA。SAQuery无超时情况下的流程如图1-11所示。
+
+  
+
+  
+
+  
+
+![image013.gif](https://image.3001.net/images/20170511/14944965965859.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 11 SA Query无超时机制**
+
+  
+
+  
+
+  
+
+![image014.jpg](https://image.3001.net/images/20170511/14944966276930.jpg!small)
+
+  
+
+  
+
+  
+
+ **图 1- 12 TIE格式**
+
+  
+
+  
+
+  
+
+图1-12中，Element ID占一个字节，取值56；Length占一个字节，取值5；Timeout Interval
+Type占一个字节，如表1-9所示，取值3。
+
+  
+
+  
+
+  
+
+ **表 1- 9 时间间隔选择器**
+
+  
+
+  
+
+  
+
+Timeout Interval Type| Meaning| Units  
+---|---|---  
+0| Reserved|  
+  
+1| Reassociation deadline interval| Time units(TUs)  
+2| Key lifetime interval| Seconds  
+3| Association Comeback time| Times units  
+4-255| Reserved|  
+  
+  
+  
+
+  
+
+  
+
+SA Query 超时机制如图1-13所示。
+
+  
+
+  
+
+  
+
+![image015.gif](https://image.3001.net/images/20170511/14944966819220.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 13 SA Query超时机制**
+
+  
+
+  
+
+  
+
+SA Query帧格式如表1-10：其中，Category字段值为8，SA Query Action字段为0时表示安全关联请求帧，为1时表示安全关联响应帧。
+
+  
+
+  
+
+  
+
+ **表1- 10 SA Query帧格式**
+
+  
+
+  
+
+  
+
+### 1.1.5.4 被动SA Query处理
+
+  
+
+  
+
+  
+
+被动SA Query 处理是指：AP被动收到SAQuery
+请求报文后对其的处理。具体来说，如果STA实现了同AP之间的管理帧保护协商机制，当其收到未保护的去关联帧或者去认证帧后， STA
+需要启动SAQuery机制，并向AP发送SAQuery 请求帧。若 AP向此STA回复正确的SAQuery 响应帧 ,
+说明STA在线，可以继续使用SA；若AP 没有回应合法的 SAQuery Response 帧, STA就破坏掉安全关联，并且把此AP 的状态设置为未认证。
+
+  
+
+  
+
+  
+
+## 1.2 RSN安全框架
+
+  
+
+  
+
+  
+
+RSN全称Robust SecurityNetwork,即强健安全网络[32]，是 IEEE802.11i工作组致力于制定2004年IEEE通过的
+802.11i 安全标准时定义的新名词。定义它的初衷是增强无线MAC层的数据加密和认证性能。如今，RSN框架被延伸运用到 802.11w
+协议中，用于保护管理帧，从而提升无线网络安全性能。RSN使用高级加密标准AES（ AdvancedEncryption Standard
+）加密数据，使用端口控制协议（IEEE 802.1X）进行访问控制，运用基于802.1X 的成对密钥交换协议--可扩展认证协议EAP（ExtensibleAuthentication Protocol ）进行认证和密钥管理[38] 。一个真正的RSN网络中，只允许有
+RSN能力的无线设备接入。下图 1-14给出了用于支持这些功能的协议，图1-15列出了用于这些服务的密码学算法。
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+![image016.gif](https://image.3001.net/images/20170511/14944966962349.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 14 RSN服务和协议**
+
+  
+
+  
+
+  
+
+![image017.gif](https://image.3001.net/images/20170511/1494496716728.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 15 密码算法**
+
+  
+
+  
+
+  
+
+TKIP（Temporal Key Integrity Protocol，临时密钥完整性协议）保留了 WEP（Wired Equivalent
+Protocol，有线等效协议）的基本架构与过程方式。能在兼容现存的无线产品的基础上升级旧式 WEP硬件的安全性。是为WEP向CCMP平稳过渡而制定的协议。
+TKIP 和WEP一样，都是基于RC4算法的，RC4 算法存在很多漏洞，密码容易被破解，受它保护的数据机密性差。而
+CCMP是重新打造的加密协议，能提供最高级别的安全性。它基于AES加密算法和 CCM操作模式 ，AES是一种分组密码算法，从根本上改变了RC4
+的弊端，因而安全性较高，802.11w 协议规定保护管理帧只允许使用CCMP安全协议。
+
+  
+
+  
+
+  
+
+## 1.3CCMP数据保密机制
+
+  
+
+  
+
+  
+
+以AES（Advanced EncryptionStandard）为基础的链路层安全标准称为CCMP （CounterMode with CBC-Mac
+Protocol，带有密码分组连接消息认证码的计数器模式协议）。它定义了一套适用AES分组密码的规范，是目前无线局域网中最安全的数据保密协议，主要由
+AES与CCM两部分构成。AES是 CCMP 的核心算法，计算MIC与对数据加密和解密都要采用此算法。而CCM是指导 AES
+的操作模式。其名称也源自底层所使用的区块密码组CCM（Counter Mode withCBC-MAC）。
+
+  
+
+  
+
+  
+
+### 1.3.1 AES加密算法
+
+  
+
+  
+
+  
+
+AES属于分组加密算法。分组长度为128bit且仅允许密钥长度为128、 192或256比特。CCMP安全协议在采用 AES
+时，限制密钥与分组长度均为128比特。分组加密算法和序列加密算法相比有很多优点。例如：分组加密算法的加密和解密密码本不同；黑客依靠截获的部分明密文对破解密钥信息会难很多；对数据加密得到的密文非常随机；目前指导分组加密算法的操作模式已经非常成熟，不必担心因对加密算法操作不当引起安全问题。
+TKIP 采用RC4加密算法，以bit为单位对明文加密。CCMP 安全协议使用 AES加密算法，以128bit的分组为单位加密明文数据。 802.11w
+标准规定保护管理帧选用CCMP协议[38]。
+
+  
+
+  
+
+  
+
+### 1.3.1.1 AES的输与输出
+
+  
+
+  
+
+  
+
+AES加密需要输入的内容是明文和密钥，输出是密文[25]。解密时输入的内容是密文和密钥，输出明文[25]
+。采用AES加密或解密数据时，所有分组都需要经过多轮变换。各轮变换使用的轮密钥不同。每结束一轮变换，都会得到一个结果，称为状态[28]。
+状态、轮密钥、明文分组以及密文分组四者的长度一致。
+
+AES依据Nb(Nb=分组长度/32)和 Nk(Nk=密钥长度/32)计算出各个分组需要变换的轮数Nr[29]。 Nb
+和Nk取不同值时，Nr的取值如表1-11 所示。
+
+  
+
+  
+
+  
+
+ **表 1- 11 不同的Nb和Nk，Nr的取值**
+
+  
+
+  
+
+  
+
+Nr| Nb=4| Nb=6| Nb=8  
+---|---|---|---  
+Nk=4| 10| 12| 14  
+Nk=6| 12| 12| 14  
+Nk=8| 14| 14| 14  
+  
+  
+
+  
+
+  
+
+CCMP限定AES只能支持长度为128bit的分组与密钥，由 Nb和Nk的计算公式得Nb=4， Nk=4 ，查表可知Nr=10。
+
+AES对各个分组都进行Nr+1轮变换。每轮变换使用的密钥不同。这
+Nr+1个轮密钥是通过把初始密钥输入密钥扩展模块计算得出的。状态和轮密钥均使用字节的二维矩阵形式表示，前者为4行Nb 列，后者为 4行Nk列。当Nb=4 、
+Nk=4时，可用两个4行4 列的二维矩阵表示状态和轮密钥，如表 1-12、1-13所示[38]
+。每一列构成一个字。一个字中各字节间的顺序是从上到下，字和字间的顺序是从左到右 [38]。
+
+ **表 1- 12 状态矩阵**
+
+  
+
+  
+
+  
+
+P0| P4| P8| P12  
+---|---|---|---  
+P1| P5| P9| P13  
+P2| P6| P10| P14  
+P3| P7| P11| P15  
+  
+  
+
+  
+
+  
+
+**表 1- 13 轮密钥矩阵**
+
+  
+
+  
+
+  
+
+K0| K4| K8| K12  
+---|---|---|---  
+K1| K5| K9| K13  
+K2| K6| K10| K14  
+K3| K7| K11| K15  
+  
+  
+
+  
+
+  
+
+###  **1.3.1.2 AES的加解密过程**
+
+  
+
+  
+
+  
+
+AES加密过程总共包含三种类型的轮变换[38]：轮密钥加变换，第1~Nr-1轮变换和第 Nr轮变换。第1~Nr-1轮变换步骤一样，每轮都是通过字节代替、
+行移位、列混淆和轮密钥加四步完成；第 Nr 轮变换略有变化，只有字节替代、行移位和轮密钥加阶段，不执行列混淆操作。图1-16表示了 AES 的加密流程。
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+![image018.gif](https://image.3001.net/images/20170511/14944967325570.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 16 AES加密过程**
+
+  
+
+  
+
+  
+
+AES解密流程和加密流程类似，如图1-17所示。
+
+  
+
+  
+
+  
+
+![image019.gif](https://image.3001.net/images/20170511/14944967624951.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 17 AES解密过程**
+
+  
+
+  
+
+  
+
+（1）SubBytes与InySubBytes
+
+  
+
+  
+
+  
+
+SubBytes变换是一个简单的查表操作，该表指的是AES中定义的S盒，即图1-18中的SRD。S盒是一个16*16字节的矩阵，包含了8位所能表示的256个数的一个置换。状态中的每个字节按图1-18所示的方式进行替换。以被替换字节的高4位为行值、低4位为列值作为索引从S盒中取出对应元素作为输出。图1-18描述了字节代替变换操作。
+
+![image020.gif](https://image.3001.net/images/20170511/14944967731715.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 18 SubBytes变换**
+
+  
+
+  
+
+  
+
+InvSubBytes是SubBytes的逆运算，利用的是逆S盒。
+
+  
+
+  
+
+  
+
+（2）ShiftRows与InvShiftRows
+
+  
+
+  
+
+  
+
+ShiftRows[21]过程对状态中的各行依次进行循环左移。不同行移动的字节数不同。如果第i行移动Ci字节，那么第i行第j位的字节将移动到位置(j-Ci)modNb。Nb的值决定了偏移量C0、C1、C2、C3的大小。表1-14列出了分组长度为128bit，即Nb的值为4时，C0、C1、C2、C3的值[38]。
+
+  
+
+  
+
+  
+
+ **表 1- 14 Nb=4时，C0、C1、C2、C3的取值**
+
+  
+
+  
+
+  
+
+Nb| C0| C1| C2| C3  
+---|---|---|---|---  
+4| 0| 1| 2| 3  
+  
+  
+
+  
+
+  
+
+ShiftRows操作基本原理如图1-19所示。
+
+  
+
+  
+
+  
+
+![image021.gif](https://image.3001.net/images/20170511/14944967925073.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 19 ShiftRows操作基本原理**
+
+  
+
+  
+
+  
+
+InvShiftRows即逆向ShiftRows，它对状态中的底部3行进行相反方向的循环移位操作。
+
+  
+
+  
+
+  
+
+（3）MixColumns与InvMixColumns
+
+  
+
+  
+
+  
+
+MixColumns运算对状态中的各列独立地进行操作。每一列中的各个字节都被映射为一个新值，该值由此列中的4个字节通过函数变换得到。MixColumns变换过程如图1-20所示。
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+![image022.gif](https://image.3001.net/images/20170511/14944968064882.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 20 MixColumns变换**
+
+  
+
+  
+
+  
+
+InvMixColumns即逆向MixColumns，变换的方法也是和一个特定矩阵相乘。
+
+  
+
+  
+
+  
+
+（4）AddRoundKey
+
+  
+
+  
+
+  
+
+AddRoundKey即轮密钥加，该变换是通过将状态的一列中的四个字节与轮密钥的一个字进行列间的操作实现的。过程如图1-21所示[38]，对AddRoundKey进行逆运算结果还是其本身。
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+![image023.gif](https://image.3001.net/images/20170511/14944968222157.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 21 AddRoundKey 密钥加法变换**
+
+  
+
+  
+
+  
+
+### 2.3.2 CCM操作模式
+
+  
+
+  
+
+  
+
+CCMP规定AES只能加密长度为128比特的数据块。然而，实际要加密的明文长度却是时时变化的，为了使用AES，必须对待加密的明文进行处理。长度不够时进行填充，长度超过128bit时拆分为多个数据块，以此达到每个待加密的明文分组都是128bit的目的。除此之外，还要有指导AES对各个明文分组进行加密和解密的操作规则，称为AES的操作模式。能和AES结合使用的操作模式非常多。但是若选择的操作模式不合适，即使底层的加密算法很强大，还是容易出现安全问题。由于涉及到实现的安全性，操作模式的选择变得极其重要。操作模式分为电码本模式、密文分组链接模式、密文反馈模式、输出反馈模式五种。
+
+  
+
+  
+
+  
+
+计数器模式CTR（Counter）以其发展的非常成熟并且实现简单的特点受到了密码界的一致认可。然而，计数器模式仅能够指导AES对消息的的加密和解密过程，并不能用于消息认证。以CBC模式为基础的CBC-MAC（CipherBlock Chaining Message Authentication
+Code，密码分组消息认证码）模式，在国际上已被标准化，并经过了多年实践的检验，AES在CBC-MAC模式下能够用于生成MIC（Message
+Integrity Code，消息认证码）。
+
+  
+
+  
+
+  
+
+把CTR模式与CBC-MAC模式结合起来运用的操作模式叫做CCM操作模式。CCMP运用的就是CCM操作模式。CCM是一种组合过程模式。RFC3610详细介绍了CCM，既给出了用密钥加密明文的方式，又给出了用同一个密钥生成密码学上认为安全的完整性检验值的方式。2003年9月，NIST（National
+Instituteof Standards and
+Technology，美国国家标准与技术研究）展开了对CCM的研究。2004年5月，NIST批准了CCM，成为了CCMP的核心。在CCM操作模式下，AES使用CBC-MAC模式提供认证功能、确保消息完整性；使用CTR模式加密或者解密明文数据。
+
+  
+
+  
+
+  
+
+### 1.3.2.1 CBC-MAC模式
+
+  
+
+  
+
+  
+
+CBC-MAC模式按照图1-22所示的流程工作。首先使用AES对待加密的明文数据块的第一个分组进行加密运算。而后把加密结果和第二个明文分组异或，再用AES加密标准对异或结果加密。所得结果再和第三个明文分组异或，同样再用AES加密标准对异或结果加密。依次类推，直至所有明文分组加密完成，最后输出了消息的信息完整性校验码，附加在明文消息后。
+
+  
+
+  
+
+  
+
+![image024.gif](https://image.3001.net/images/20170511/1494496836216.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 22 CBC-MAC模式的应用过程**
+
+  
+
+  
+
+  
+
+明文消息经最后一轮加密后输出128bit的单个分组。它蕴含明文数据中全部分组的信息。输出分组的高64比特位是整个明文分组序列的MIC。接收端首先把收到的密文分组解密。若接收端使用和发送端相同的计算方法对明文数据操作后计算出的MIC值与实际接收到的MIC值不一致，就能断定密文数据在发送过程当中已经被攻击者篡改。在CBC-MAC模式下，每个明文数据块依次被执行加密和异或操作。
+
+  
+
+  
+
+  
+
+### 1.3.2.2 CTR模式
+
+  
+
+  
+
+  
+
+AES运用于CCMP中时，首先以128bit为单位将明文划分成一个个相连的数据块。再把每一个数据块和采用AES加密CTR值产生的输出按位异或，得到该明文数据块的密文。CTR的值随明文分组个数的增加不断加1。图1-23展示了CTR模式的应用过程。
+
+  
+
+  
+
+  
+
+![image025.gif](https://image.3001.net/images/20170511/14944968528813.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 23 CTR模式的应用过程**
+
+  
+
+  
+
+  
+
+图中，CTR值从1开始每次加1，从1增加到11。实际应用中，CTR的初始值是随机的，且依照一定的规律递增。解密密文的接收端同样拥有CTR的初始值和递增规律。为保证相同的明文分组被加密成不同的密文，提升抗攻击能力，每个明文分组对应的CTR值要求不同。然而，CTR值如果总是从同一个值开始并且按同一个规律增加，对于两条不同的消息，若含有某个相同的明文分组，还是会出现两个相同的但是分离的明文分组被加密成相同密文的情况，更易于攻击者提取消息的明文特征。通过对不同的待加密明文序列采用不同的CTR初始值的方法能够很好地解决此问题。接收端对收到的密文解密时，也是采取和发送端一样的方式先对密文进行分组，然后针对各个密文分组进行解密。方法是：首先加密CTR的值、然后把运算得出的结果和密文分组进行逐位异或运算的过程完成解密，还原出明文。
+
+  
+
+  
+
+  
+
+### 2.3.3 CCMP封装与解封装流程
+
+  
+
+  
+
+  
+
+CCMP协议是对MPDU进行操作。MPDU由MAC头部和明文数据两个部分构成。MAC头部中包含了一些无线局域网相关的信息，比如源地址和目的地址等。CCMP只保护MAC的承载数据部分，下层协议帧头和802.11帧头则保持不变。如图1-24所示。
+
+  
+
+  
+
+  
+
+![image026.gif](https://image.3001.net/images/20170511/14944968663113.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 24 CCMP封包过程**
+
+  
+
+  
+
+  
+
+1)封包编号PN（PacketNumber）用于检测重放攻击。每传一个报文PN值增加一。同一个临时密钥加密的报文的PN值都不相同。
+
+  
+
+  
+
+  
+
+2)从MAC头部中提取认证数据AAD（Additional Authentication
+Data）[23]。它包含帧标头的802.11协议版本、帧类型、传输系统位元、片段与次序位元、地址字段和顺序控制字段，这些字段必须通过真实性的检验，又不经过加密。AAD的最后两个字段
+--来自MAC标头的第四个地址字段（如果使用无线传输系统）以及服务品质标头信息字段是可选的。AAD结构如图1-25所示，其中，A1、A2、A3和A4分别代表MPDU中的四个地址；FC是MPDU帧控制字段；SC是序列号控制字段；QC是QoS控制字段。
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+![image027.jpg](https://image.3001.net/images/20170511/14944968824108.jpg!small)
+
+  
+
+  
+
+  
+
+ **图 1- 25 AAD结构**
+
+  
+
+  
+
+  
+
+从MAC头部中提取信息与PN组成CCMP nonce。由封包号码以及传送端地址构成的CCMP
+nonce使得不同的工作站能够拥有相同的封包编号。Nonce同时包含QoS会用到的优先性数据，Nonce结构如图1-26所示。Nonce
+Flags子字段构造如图1-27所示，协商为管理帧保护模式时Management 位置1，否则置0。
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+
+![image028.jpg](https://image.3001.net/images/20170511/14944968966671.jpg!small)
+
+  
+
+  
+
+  
+
+ **图 1- 26 Nonce 结构**
+
+  
+
+  
+
+  
+
+![image029.jpg](https://image.3001.net/images/20170511/14944969122470.jpg!small)
+
+  
+
+  
+
+  
+
+ **图 1- 27 Nonce Flags构造**
+
+  
+
+  
+
+  
+
+3)构造八字节的CCMP头部，添加到MAC头部和明文数据之间。CCMP头部的功能有两个。第一，头部中包含的48比特的分组号PN能够防止报文受到重放攻击。第二，能够在多点传送时通知接收端选用哪一组密钥。CCMP[22]头部字段中，6个字节用来表示48比特分组号值。CCMP将构成PN的六个位元组拆开，然后把密钥识别码Key
+ID填充进去。CCMP头部字段当中包含四个密钥槽。扩展初始向量Extended
+IV位元在CCMP中永远被设为1，这是因为报文数量可能非常多，导致PN字段值可能非常大，必定要用八个位元组的标头才能满足要求。CCMP标头帧格式图1-28所示。
+
+  
+
+  
+
+  
+
+![image030.gif](https://image.3001.net/images/20170511/14944969871310.gif!small)
+
+ **图1- 28 CCMP 封包格式**
+
+  
+
+  
+
+  
+
+4)把Nonce、AAD、CCMP头部和明文数据从左至右排成序列，再以128比特为单位分组，当最后一个分组不够128比特时，补零填充。而后计算MIC值，并添加至明文数据之后，用于保证MAC头部、CCMP头部和明文数据的完整性。
+
+  
+
+  
+
+  
+
+5)加密明文数据与MIC值，生成密文。
+
+  
+
+  
+
+  
+
+6)将MAC头部、CCMP头部和密文数据够成的报文放入队列中待传。
+
+  
+
+  
+
+  
+
+AES在CBC-Mac操作模式下计算MIC时，输入的第一个分组的内容来源于Nonce，第二个和第三个分组的内容均来源于AAD。除前三个分组之外才是用户数据。如图1-29所示。
+
+  
+
+  
+
+  
+
+![image031.gif](https://image.3001.net/images/20170511/14944970048343.gif!small)
+
+  
+
+  
+
+  
+
+ **图 1- 29 明文分组序列**
+
+  
+
+  
+
+  
+
+AES在CTR模式下执行加密操作时，不加密MAC头和CCMP头。仅加密明文数据部分和MIC。并且对二者的加密是分开进行的。首先把用户数据部分以128比特为单位进行划分再对各数据块加密。最后一个分组不足128比特也不用进行填充，直接取计数器加密结果的相同比特与其进行异或操作即可。这和CTR属于流模式的结构有关。
+
+  
+
+  
+
+  
+
+密文传送至接收端之后，接收端还原得到明文并检测接收数据的有效性还需要经历许多过程，如图1-30所示。
+
+  
+
+  
+
+  
+
+1)首先接收端根据密文消息序列的MAC头部中的源MAC地址选择正确的密钥。
+
+  
+
+  
+
+  
+
+2)在CCMP头部中，PN以明文形式被传送。接收端将读取到的PN值和接收到的上一帧的PN值做比较。前者小于后者时，该帧被认为是上一个帧的重传而被丢弃。
+
+  
+
+  
+
+  
+
+3)假定PN值匹配，就在CTR操作模式下用AES算法解密报文。解密要用到CTR的初始值。接收端从收到的帧中提取AAD与CCMP
+nonce。而后根据这二者的值计算CTR的初始值。AES解密与加密过程类似。先使用AES加密CTR的值，再运用加密的结果与收到的密文数据执行异或操作，还原出明文数据与MIC值。
+
+  
+
+  
+
+  
+
+4)接收端按照与发送端同样的方式计算MIC值。若计算所得结果与收到的报文中携带的MIC值相同，表明该帧有效；若存在差异，就能判定消息在传递
+
+  
+
+  
+
+  
+
+过程中已被篡改，接收端会丢掉该帧。
+
+  
+
+  
+
+  
+
+5)如果帧有效，CCMP会把解密后的报文的MAC头和CCMP头去掉，而后把去掉MAC头和CCMP头的明文分组向上层传递，将该分组与其它分组重组后获得完整的明文数据。
+
+  
+
+  
+
+  
+
+![image032.gif](https://image.3001.net/images/20170511/14944970205290.gif!small)
+
+  
+
+  
+
+  
+
+ **图1-30 CCMP 解封包过程**
+
+  
+
+  
+
+  
+
+### 2.3.4 CCMP安全性分析
+
+  
+
+  
+
+  
+
+CCMP的安全性主要取决于AES和CCM。
+
+  
+
+  
+
+  
+
+和无线局域网操作相关的信息存放在802.11MAC帧头中，以明文形式传送。若这些信息被伪造，接收端能够通过AES在CBC-MAC模式下计算出的MIC值检测出来，有效地防止重放攻击。
+
+  
+
+在CCMP中，AES加密算法在CTR模式与CBC-MAC模式下使用同一个密钥。很多人可能会怀疑其安全性。需要注意的是，这个相同的密钥并未直接用于加密，而是先和初始化IV结合产生出一个新的密钥。CTR和CBC-MAC模式构造IV的方法不同，因此二者生成的直接用于加密的密钥也不同。这种相同密钥不同IV的方法的安全性已经通过密码学专家的确认。
+
+  
+
+  
+
+  
+
+AES与CCM不仅具有可靠的理论基础，而且经受了长期实践的检验，备受网络安全界专家的青睐。以二者为基础的CCMP是目前无线局域网内等级最高的安全机制，必定会在今后的无线局域网产品中普及应用。
+
+ *** 原创作者：魅影儿，本文属FreeBuf原创奖励计划，转载请注明来自FreeBuf.COM**
+

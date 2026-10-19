@@ -1,0 +1,429 @@
+![20210806214222.jpg](https://image.3001.net/images/20210806/1628258363_610d403b1e7e139710a02.jpg!small)
+
+## 前言
+
+这又是一个关于域内基础概念与原理的系列，本系列将包含以下几篇文章：
+
+> 《内网渗透测试：内网环境与活动目录基础概念》
+>
+> 《内网渗透测试：活动目录 Active Directory 的查询》
+>
+> 《内网渗透测试：域用户组及域内权限划分》
+>
+> 《内网渗透测试：OU 组织单位》
+>
+> 《内网渗透测试：域用户和机器用户》
+>
+> 《内网渗透测试：域内权限访问控制》
+>
+> 《内网渗透测试：Windows 令牌窃取》
+>
+> 《内网渗透测试：Windows 组策略讲解》
+>
+> 《内网渗透测试：Windows 组策略后门》
+
+## 域用户
+
+大家都知道域用户是什么，就是域环境中的用户。和本地用户的帐户不同，域用户帐户保存在活动目录中。由于所有的用户帐户都集中保存在活动目录中，所以使得集中管理变成可能。
+
+我们知道，在工作组环境中，所有计算机是独立的，要让用户能够登录到计算机并使用计算机的资源，必须为每个用户建立本地用户帐户。而在域环境中，一个域用户可以在域中的任何一台计算机上登录，域用户可以不再使用固定的计算机。当计算机出现故障时，域用户可以登录到另一台计算机上继续工作，这样也使帐号的管理变得简单。
+
+域用户账户是在域内全局组 Domain Users 组中，本地用户账户在本地 User 组中。当计算机加入域时，会把 Domain Users
+组添加到本地的 User 组中。因此域用户可以在域中的任何一台计算机上登录。
+
+### 域用户的部分属性
+
+在下图创建用户时可以看到用户有很多属性，如姓、名、展示名等：
+
+![image-20210802202553477](https://image.3001.net/images/20210806/1628258363_610d403b7b03044edb9b2.png!small)
+
+这些属性都可以在 Active Directory 里面都可以查到：
+
+姓对应的属性为`sn`：
+
+    
+    
+    Adfind.exe -b "CN=JakeWilliam,CN=Users,DC=whoamianony,DC=org" sn  
+    # 将该用户设为 BaseDN 进行查询
+
+![image-20210802221750706](https://image.3001.net/images/20210806/1628258363_610d403bb1c46d5a4bba7.png!small)
+
+名对应的属性为`givenName`：
+
+    
+    
+    Adfind.exe -b "CN=JakeWilliam,CN=Users,DC=whoamianony,DC=org" givenName
+
+![image-20210802222013790](https://image.3001.net/images/20210806/1628258363_610d403bea2ccbccace28.png!small)
+
+展示名（姓名）对应的属性为`displayName`：
+
+    
+    
+    Adfind.exe -b "CN=JakeWilliam,CN=Users,DC=whoamianony,DC=org" displayName
+
+![image-20210802222139140](https://image.3001.net/images/20210806/1628258364_610d403c1fc2cdd8f8d8f.png!small)
+
+值得注意的是，这个`displayName`虽然跟域用户名往往一样，但是不能用于登陆。
+
+用户创建时间对应的属性为`whenCreated`：
+
+    
+    
+    Adfind.exe -b "CN=JakeWilliam,CN=Users,DC=whoamianony,DC=org" whenCreated
+
+![image-20210802222542294](https://image.3001.net/images/20210806/1628258364_610d403c5650fe4a44def.png!small)
+
+用户设置密码的时间对应的属性为`pwdLastSet`
+
+    
+    
+    Adfind.exe -b "CN=JakeWilliam,CN=Users,DC=whoamianony,DC=org" pwdLastSet
+
+![image-20210802222843209](https://image.3001.net/images/20210806/1628258364_610d403c7f302bfa7497d.png!small)
+
+用户上次登录时间对应的属性为`Lastlogon`：
+
+    
+    
+    Adfind.exe -b "CN=JakeWilliam,CN=Users,DC=whoamianony,DC=org" Lastlogon
+
+![image-20210802223030327](https://image.3001.net/images/20210806/1628258364_610d403cac362be564fea.png!small)
+
+### 域用户的 userAccountControl 属性
+
+还记得这个 userAccountControl 属性吗？我们之前在《内网渗透测试：活动目录 Active Directory 的查询》中讲 Active
+Directory 的按位查询时就是用的 userAccountControl 属性这个位字段做的实例。
+
+userAccountControl 属性记录了域用户账号的很多属性信息，该字段就是一个的位字段，其是由一个个位构成的：
+
+Property flag| Value in hexadecimal| Value in decimal  
+---|---|---  
+SCRIPT| 0x0001| 1  
+ACCOUNTDISABLE| 0x0002| 2  
+HOMEDIR_REQUIRED| 0x0008| 8  
+LOCKOUT| 0x0010| 16  
+PASSWD_NOTREQD| 0x0020| 32  
+PASSWD_CANT_CHANGE| 0x0040| 64  
+ENCRYPTED_TEXT_PWD_ALLOWED| 0x0080| 128  
+TEMP_DUPLICATE_ACCOUNT| 0x0100| 256  
+NORMAL_ACCOUNT| 0x0200| 512  
+INTERDOMAIN_TRUST_ACCOUNT| 0x0800| 2048  
+WORKSTATION_TRUST_ACCOUNT| 0x1000| 4096  
+SERVER_TRUST_ACCOUNT| 0x2000| 8192  
+DONT_EXPIRE_PASSWORD| 0x10000| 65536  
+MNS_LOGON_ACCOUNT| 0x20000| 131072  
+SMARTCARD_REQUIRED| 0x40000| 262144  
+TRUSTED_FOR_DELEGATION| 0x80000| 524288  
+NOT_DELEGATED| 0x100000| 1048576  
+USE_DES_KEY_ONLY| 0x200000| 2097152  
+DONT_REQ_PREAUTH| 0x400000| 4194304  
+PASSWORD_EXPIRED| 0x800000| 8388608  
+TRUSTED_TO_AUTH_FOR_DELEGATION| 0x1000000| 16777216  
+  
+根据每一位的名称便可以猜出这些位的含义了。比如，我们想查询所有设置了密码永不过期的用户：
+
+    
+    
+    Adfind.exe -b dc=whoamianony,dc=org -f "(userAccountControl:AND:=65536)" -bit -dn  
+    # DONT_EXPIRE_PASSWORD  0x10000  65536
+
+![image-20210802224422157](https://image.3001.net/images/20210806/1628258364_610d403ce803c565605c7.png!small)
+
+查询所有设置了约束委派的用户：
+
+    
+    
+    Adfind.exe -b dc=whoamianony,dc=org -f "(userAccountControl:AND:=524288)" -bit -dn  
+    # TRUSTED_FOR_DELEGATION 0x80000 524288
+
+![image-20210802224543461](https://image.3001.net/images/20210806/1628258365_610d403d2402510b13328.png!small)
+
+### 查询域用户
+
+当我们拥有一个域用户的权限时，可以枚举域内的所有用户，此时主要有两个方法。
+
+通过 SAMR 协议查询
+
+    
+    
+    net user /domain
+
+![image-20210802225353093](https://image.3001.net/images/20210806/1628258365_610d403d5543b50d30082.png!small)
+
+通过 Active Directory 查询
+
+    
+    
+    Adfind.exe -b dc=whoamianony,dc=org -f "(&(objectCategory=person)(objectClass=user))" -dn
+
+![image-20210802225613691](https://image.3001.net/images/20210806/1628258365_610d403d96eb26aab379f.png!small)
+
+## 机器用户
+
+即机器账号、计算机账号，所有加入域的主机都会有一个机器用户，用户名为机器名加`$`，如：`WIN7$`、`WINXP$`。在域环境中，普通域用户最多可以创建
+10 个计算机账户，但是本地账号不能创建计算机账户。
+
+默认情况下，加入域的机器默认在`CN=Computers`这个容器里面：
+
+![image-20210802230505363](https://image.3001.net/images/20210806/1628258365_610d403dcc00c7913b57b.png!small)
+
+而域内的域控则都在 Domain Controllers 这个容器下。
+
+### 机器用户跟 SYSTEM 用户的关系
+
+当你在 Active Directory 中随便打开 Domain Computer
+中的一台主机，查看其`objectClass`便可以发现他是`computer`类的实例，并且`computer`类的`user`类的子类。我们知道，域用户是`user`类的实例，而`computer`类的`user`类的子类则说明域用户有的属性，计算用户都有。甚至我们可以说，机器用户就是一种域用户。那我们能不能利用这个机器用户呢？
+
+其实本地用户 SYSTEM 就对应于域内的机器用户，在域内的用户名就是机器名加`$`，比如 WIN7，他的机器名是
+WIN7，那么他在域内登录的用户名就是`WIN7$`。
+
+当我们拿下一台内网主机后，发现没有域内用户，这个时候我们将当前用户提升到 SYSTEM，就可以在域内充当机器用户了。但是提升到 SYSTEM
+还需要利用一些提权方法。
+
+### 查找域内所有的机器
+
+我们可以通过`objectclass=Computer`或者`objectcategory=Computer`过滤语法在 Active Directory
+中查找域内的所有机器
+
+    
+    
+    Adfind.exe -b dc=whoamianony,dc=org -f "(objectclass=Computer)" -dn  
+    Adfind.exe -b dc=whoamianony,dc=org -f "(objectcategory=Computer)" -dn
+
+![image-20210802233117462](https://image.3001.net/images/20210806/1628258366_610d403e1da071b428aed.png!small)
+
+Adfind 工具对查询域内机器提供了一些快捷方式：
+
+    
+    
+    -sc computers_disabled    # 查询已禁用的计算机  
+    -sc computers_pwdnotreqd    # 查询不需要设置密码的计算机  
+    -sc computers_active    # 查询已启用且最后输入密码的计算机  
+    -sc computers_inactive    # 查询已被禁用或密码最后设置的计算机  
+      
+    Adfind.exe -b dc=whoamianony,dc=org -sc computers_pwdnotreqd -dn
+
+![image-20210802233929472](https://image.3001.net/images/20210806/1628258366_610d403e53c38ece3018c.png!small)
+
+![image-20210802233844333](https://image.3001.net/images/20210806/1628258366_610d403e85f419dad575c.png!small)
+
+域内的域控都在 Domain Controllers 这个容器下，可以通过指定 BaseDn 为 Domain Controllers
+这个容器，查看这个容器里面的机器来找到域内的所有域控：
+
+    
+    
+    Adfind.exe -b "OU=Domain Controllers,DC=whoamianony,DC=org" -f "(objectclass=Computer)" -dn  
+    Adfind.exe -b "OU=Domain Controllers,DC=whoamianony,DC=org" -f "(objectcategory=Computer)" -dn
+
+![image-20210802234505716](https://image.3001.net/images/20210806/1628258366_610d403eb57f6aa75a37f.png!small)
+
+## 查询域用户与域成员机器的对应关系
+
+在域环境中，域用户默认是可以登录域内任何一台机器的，这是因为域管理员在新增域用户时该域用户默认就会存在域用户组 Domain Users
+中，加入域的域成员机器会默认将全局组 Domain Users 加到其本地的 User 组中，而域成员机器本地组策略中的 “允许在本地登陆”
+属性中包含了本地的 Users 组。
+
+如下图可以可以看到域成员机器本地组策略中的 “允许在本地登陆” 属性中包含了本地的 Users 组：
+
+![image-20210803120031058](https://image.3001.net/images/20210806/1628258366_610d403ee6e078cf30c84.png!small)
+
+如下图可以看到域成员机器本地的 Users 组中包含了域全局组 Domain Users ：
+
+![image-20210803120133942](https://image.3001.net/images/20210806/1628258367_610d403f53343e68542da.png!small)
+
+因此域用户默认是可以在域中的任何一台计算机上登录的。
+
+但是这样可能会存在一些安全隐患，所以域管理员为了安全起见，通常会限制域用户只能登陆指定的计算机，或限制某台计算机只允许指定的用户登录。具体操作有以下两种。
+
+对域用户做限制，设置域用户只能登陆指定的计算机
+
+![image-20210803120732012](https://image.3001.net/images/20210806/1628258367_610d403f9989dbbf41627.png!small)
+
+如上图，设置该域用户只允许登录到 Client-PC 这台机器。
+
+对机器做限制，限制某台计算机只允许指定的用户登录
+
+这个可以通过下发组策略实现：
+
+![image-20210803121101654](https://image.3001.net/images/20210806/1628258367_610d403fedd7817b83d0e.png!small)
+
+可以看到，这台计算机运行 Administrators 组和 Users 组的用户登录，如果此时需要设置不再允许 Users 组的用户登录的话，直接将
+Users 组从里面删掉即可：
+
+![image-20210803121601047](https://image.3001.net/images/20210806/1628258368_610d4040422240ae1ca58.png!small)
+
+也可以直接在 “允许本地登陆” 中添加想要登陆的组和域成员名。
+
+### 查询指定域用户能够登录的主机
+
+域用户默认能本地登录域内的任何一台主机，但域管理员为了安全起见，通常会限制域用户只能登陆指定的计算机。在内网信息收集中，我们需要找到指定域用户能够登录的主机。
+
+在限制了域用户只能登录到某台主机之后，在 Active Directory
+里面，会为该域用户设置一个`userWorkStations`属性。这个属性保存了这个域用户能够登录到的主机。而这个字段对于域内任何用户都是可读的，我们可以通过读域用户的`userWorkStations`属性来查看域用户能够登录的主机：
+
+    
+    
+    Adfind.exe -b dc=whoamianony,dc=org -sc u:whoami userWorkstations
+
+还可以通过 PowerView 脚本查看：
+
+    
+    
+    Import-Module .\powerview.ps1  
+    Get-NetUser -Domain whoami.whoamianony.org
+
+### 查询指定主机上正在登陆的域用户
+
+在收集内网信息时，我们经常会查询指定主机上正在登陆的域用户。这一查询我们可以直接通过现有的工具实现，但首先我们要先看两个 Win32 API。
+
+`NetSessionEnum`是一个 Win32 API，用来提供有关在服务器上建立的会话的信息。
+
+    
+    
+    NET_API_STATUS NET_API_FUNCTION NetSessionEnum(  
+    LMSTR   servername,  
+    LMSTR   UncClientName,  
+    LMSTR   username,  
+    DWORD   level,  
+    LPBYTE  *bufptr,  
+    DWORD   prefmaxlen,  
+    LPDWORD entriesread,  
+    LPDWORD totalentries,  
+    LPDWORD resume_handle  
+    );
+
+可以看到这个 API 的第一个参数是`servername`，我们可以通过`servername`指定一个远程的主机，然后这个 API 会去调用远程主机的
+RPC，然后返回其他用户在访问这台远程主机的网络资源（例如文件共享）时所创建的网络会话，从而可以看到这个用户来自何处。
+
+但是该 API 并不能查询到是谁登陆了这台远程主机，但是可以看到访问这台远程主机的网络资源时所创建的网络会话。从这个网络会话中可以看到哪个域用户来自哪个
+IP。并且该 API 不需要在远程主机上有管理员权限。
+
+我们利用`NetWkstaUserEnum`这个 API 来列出当前登录到这台远程主机机器的所有用户的信息
+
+    
+    
+    NET_API_STATUS NET_API_FUNCTION NetWkstaUserEnum(  
+    LMSTR   servername,  
+    DWORD   level,  
+    LPBYTE  *bufptr,  
+    DWORD   prefmaxlen,  
+    LPDWORD entriesread,  
+    LPDWORD totalentries,  
+    LPDWORD resumehandle  
+    );
+
+这个 API 的第一个参数也是`servername`可以指定一个远程主机，然后会去调用这台远程主机的
+RPC，然后返回当前登录到这台远程主机的所有用户的信息。值得注意的是，调用该函数的用户需要具备机器A的本地管理员权限。但是该 API
+需要在远程主机上有管理员权限。
+
+目前有很多工具可以用来枚举域内某台主机上正在登陆的域用户，下面就简单介绍几个十分经典的工具，其本质还是调用了这两个 API 。
+
+ **psloggedon.exe**
+
+[psloggedon.exe](https://docs.microsoft.com/en-us/sysinternals/downloads/psloggedon)可以查看本地登陆的用户和通过本地计算机或远程计算机资源登陆的用户。如果指定的是用户名而不是机器名，psloggedon.exe
+会搜索网上邻居中的所有计算机，并显示该用户是否已经登录。该工具的某些功能可能需要管理员权限。
+
+    
+    
+    psloggedon.exe [-] [-l] [-x] [\\computername或username]
+
+如下所示，查询域控制器 DC 上正在登陆的用户：
+
+    
+    
+    psloggedon.exe \\DC
+
+![image-20210803143222020](https://image.3001.net/images/20210806/1628258368_610d404089b294fd57b63.png!small)
+
+ **PVEFindADUser.exe**
+
+[PVEFindADUser.exe](https://github.com/chrisdee/Tools/tree/master/AD/ADFindUsersLoggedOn)可用于查找活动目录用户登陆的位置、枚举域用户，以及查找在特定计算机上登陆的用户，包括查找本地用户、通过
+RDP 远程桌面登陆的用户、通过运行服务和计划任务的用户。运行该工具需要计算机配置 .NET Framework 2.0 环境。
+
+    
+    
+    PVEFindADUser.exe <参数>
+
+我们一般直接运行以下命令，即可显示域中所有计算机上当前登陆的所有用户：
+
+    
+    
+    PVEFindADUser.exe -current
+
+![image-20210803151119664](https://image.3001.net/images/20210806/1628258368_610d4040c01600c5de9f5.png!small)
+
+也可以通过`-target`指定查询的主机：
+
+    
+    
+    PVEFindADUser.exe -current -target DC.whoamianony.org
+
+![image-20210803145002019](https://image.3001.net/images/20210806/1628258369_610d404108630cd77aa99.png!small)
+
+### 查询域用户正在登录的主机
+
+查询域用户正在登录的主机可以定位域用户，比如我们在内网渗透中，常常会使用各种工具来获取当前域管理员在线登录的机器，入侵此机器，然后迁移到域管理登陆所在的进程，便拥有了域管理的权限。定位域用户正在登录的主机有两种常规方法，一是日志，二是会话。
+
+我们主要来讲第二种会话的方式，可以通过以下工具实现。
+
+ **psloggedon.exe**
+
+在网络中查找域管理员用户 Administrator 当前在线登录的用户：
+
+    
+    
+    psloggedon.exe whoamianony\administrator
+
+![image-20210803150640016](https://image.3001.net/images/20210806/1628258369_610d40414622c28c023bf.png!small)
+
+ **PVEFindADUser.exe**
+
+直接一把梭：
+
+    
+    
+    PVEFindADUser.exe -current
+
+![image-20210803151112950](https://image.3001.net/images/20210806/1628258369_610d404179bccfb12367e.png!small)
+
+ **PowerView.ps1**
+
+[PowerView.ps1](https://github.com/PowerShellEmpire/PowerTools/tree/master/PowerView)脚本可以用来获取当前域管理员在线登录的主机，其依赖
+PowerShell 和 WMI，是一个收集域信息很好用的脚本。
+
+Invoke-UserHunter：搜索域管理员当前在线登录的主机，并验证当前用户是否具有对这些主机的本地管理员访问权限。它可以使用 Get-NetSessions 和Get-NetLoggedon 扫描每台服务器并对扫描结果进行比较，从而找出目标用户集，并且无需管理员权限。
+
+如下，可以看到本地域有两个域管理员：
+
+![image-20210803151623606](https://image.3001.net/images/20210806/1628258369_610d4041ad291dfeed2ff.png!small)
+
+下面，我们通过 Invoke-UserHunter 来定位他们：
+
+    
+    
+    Import-Module .\powerview.ps1  
+    Invoke-UserHunter
+
+![image-20210803152059295](https://image.3001.net/images/20210806/1628258369_610d4041defe33838ad2b.png!small)
+
+也可以查找指定用户当前在线登录的主机：
+
+    
+    
+    Invoke-UserHunter -UserName whoami
+
+## Ending......
+
+![20210803153001.jpg](https://image.3001.net/images/20210806/1628258370_610d40422820d75871334.jpg!small)
+
+## 参考
+
+> <https://daiker.gitbook.io/windows-protocol/ldap-pian/10#4-cha-kan-yu-yong-> hu-deng-lu-guo-de-zhu-ji>
+>
+> <https://www.anquanke.com/post/id/196510#h2-4>
+>
+> <https://blog.csdn.net/qq_36119192/article/details/105130076>
+>
+> <https://www.freebuf.com/articles/network/243640.html>
+

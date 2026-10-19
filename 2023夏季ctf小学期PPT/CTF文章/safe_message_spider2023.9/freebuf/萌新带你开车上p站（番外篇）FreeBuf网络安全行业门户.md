@@ -1,0 +1,213 @@
+作者：萌新 合天智汇
+
+## 前言：  
+
+这道题目应该是pwnable.kr上Toddler's Bottle最难的题目了，涉及到相对比较难的堆利用的问题，所以拿出来分析。
+
+登录
+
+![v2-79d28bc1db8889e6252a03f9595a8a90.jpg](https://pic2.zhimg.com/v2-79d28bc1db8889e6252a03f9595a8a90.jpg)
+
+看看源程序
+
+![v2-2d349d492cfbc7623a12c9755176f6e5.jpg](https://pic4.zhimg.com/v2-2d349d492cfbc7623a12c9755176f6e5.jpg)
+
+程序中有几点要注意的地方：
+
+  1. 定义的OBJ结构体中一个指针4字节，buf[]数组8字节  
+
+  2. Unlink()的过程其实就是双向链表中摘下中间那一块的过程  
+
+  3. 主函数中malloc了三个结构体，并通过指针连成了双向链表A<->B<->C  
+
+  4. 打印出A的栈地址，堆地址，这两个地址这里记做stack,hep，待会儿在分析中会用到  
+
+  5. 漏洞在于gets函数会造成溢出，同时通过随后的unlink()进行利用  
+
+具体而言什么是unlink呢？
+
+unlinked
+是堆溢出中的一种常见形式，通过将双向列表中的空闲块拿出来与将要free的物理相邻的块进行合并。（将双向链表上的chunk卸载下来与物理chunk合并）。Unlink漏洞的利用条件就是有3个以上的空闲chunk链表，其中最前面的chunk存在有堆溢出。没错我们这次的题目就存在这个情况
+
+解链的原理相信学过数据结构的师傅们都清楚了
+
+![v2-878005f7dda4e95d7e39a580598fbcf2.jpg](https://pic2.zhimg.com/v2-878005f7dda4e95d7e39a580598fbcf2.jpg)
+
+对照着这次的程序，BK相当于A,P相当于B，FD相当于C
+
+这次需要用到的漏洞溢出漏洞技术称为Dword
+shoot。在进行双向链表的操作过程中，有溢出等的情况下，删除的chunk的fd、bk两个指针被恶意的改写的话，就会在链表删除的时候发生的漏洞。
+
+对应到本题的程序，将被删除的chunk为B,而我们可以通过溢出A来修改B的fd，bk，修改后会引发什么漏洞呢？我们接下来详细说明。
+
+把二进制文件下到本地分析
+
+![v2-05a68b7661d26123459834d73dc08361.jpg](https://pic3.zhimg.com/v2-05a68b7661d26123459834d73dc08361.jpg)
+
+要我们攻击的最终是目的是劫持返回地址，写入shellcode的地址，以及为了能够溢出A，修改B的指针等操作，我们都需要看看汇编中一些关键量的地址
+
+![v2-4b90e3b285007cd79a0da7427dadff6e.jpg](https://pic2.zhimg.com/v2-4b90e3b285007cd79a0da7427dadff6e.jpg)
+
+![v2-099752e56d98242787e9d8bf00b1a004.jpg](https://pic2.zhimg.com/v2-099752e56d98242787e9d8bf00b1a004.jpg)
+
+关键的地方：
+
+  1. A在栈上的地址是ebp-0x14，即ebp-0x14=stack=&A  
+
+  2. 最后的ret，作用是赋值给eip寄存器，而我们要做的就是修改esp寄存器的内容为shellcode的地址  
+
+  3. 通过lea esp,[ecx-0x4]可以知道esp的值来自[ecx-4]  
+
+  4. leave指令对esp没影响  
+
+  5. mov ecx,DWORD PTR[ebp-0x4]，可知，ecx的值来自[ebp-4]  
+
+  6. 综上，我们只需要把shellcode的地址写到[ebp-8]地址（事实上这样很不方便，我们下面实际上是把shellcode地址+4写到[ebp-4]地址,这样的话，shellcode地址+4-4，传给esp的时候恰好就是shellcode的地址）  
+
+推论：
+
+（1）由1得，ebp-4等于stack+0x14-0x4
+
+（2）heap_是A在堆中的地址，加上在buf前有fd，bk链各个指针共8个字节，所以shellcode的地址是写到了heap+0x8处，所以
+(shellcode地址+4)=（heap+0x8）+0x4
+
+只要实现了* (ebp-4)=&shellcode+4，则ecx就被覆盖成了&shellcode+4,然后执行了
+
+    
+    
+       0x08048603 <+212>:   lea    esp,[ecx-0x4]
+           0x08048606 <+215>:   ret    
+
+我们就拿到shell了
+
+我们前面留下了一个问题：
+
+被删除的chunk为B,修改B的fd，bk，修改后会引发什么漏洞
+
+先举个简单的例子看看
+
+设我们修改了B->fd=!!!!,B->bk=@@@@
+
+在调用unlink(B)时，
+
+    
+    
+        BK=P->bk;
+    	FD=P->fd;
+    	FD->bk=BK;
+    	BK->fd=FD;
+    对应执行的流程是这样子的
+    BK=*(B+4)=@@@@   //B->bk前还有B->fd,占4字节
+    FD=*(B)=!!!!
+    *(FD+4)=*(!!!!+4)=BK=@@@@
+    *(BK)=*(@@@@)=FD=!!!!
+
+通过红色字体的关系，我们知道，修改了B的fd,bk之后，就可以在进行覆盖操作
+
+这里我们设修改了B->bk=[ebp-4],B->fd=&shellcode+4
+
+则进过unlink(B)之后会有
+
+    
+    
+    *(&shellcode+4+4)=[ebp-4]   //这个结果无影响
+    * (ebp-4)=&shellcode+4    //实现了* (ebp-4)=&shellcode+4，因为*(ebp-4)覆给ecx，则ecx就被覆盖成了&shellcode+4,然后就可以拿到shell了
+
+接下来具体看看怎么布局
+
+我们知道
+
+shellcode地址+4=heap+0x8+0x4=heap+12,来修改B->fd
+
+ebp-4=stack+0x14-0x4=stack+16,来修改B->bk
+
+A的buf大小是8字节，写了shellcode地址花了4字节，因为最小单位为16字节，所以还剩16-4=12字节需要填充，我们填充12个A
+
+综上，得到了如下的布局
+
+![v2-3edb2578c570d1266ae72ceaa704a1fe.jpg](https://pic2.zhimg.com/v2-3edb2578c570d1266ae72ceaa704a1fe.jpg)
+
+shellcode的地址是什么呢
+
+![v2-badb340a405fd1d1ad0e3b0be5404b42.jpg](https://pic1.zhimg.com/v2-badb340a405fd1d1ad0e3b0be5404b42.jpg)
+
+而heap和stack的地址每次运行时都会打印出来的
+
+![v2-b4ba25d336d91020d218164f18afcc93.jpg](https://pic3.zhimg.com/v2-b4ba25d336d91020d218164f18afcc93.jpg)
+
+综上，写出exp：
+
+![v2-82e4b5d691492b278fb64dc9aebd53b0.jpg](https://pic1.zhimg.com/v2-82e4b5d691492b278fb64dc9aebd53b0.jpg)
+
+上传到服务器
+
+![v2-ca6126901b714d2a1ad2b29e3368c40d.jpg](https://pic4.zhimg.com/v2-ca6126901b714d2a1ad2b29e3368c40d.jpg)
+
+执行得到shell
+
+![v2-a2901b3fbf21b48f75767490cb688b80.jpg](https://pic2.zhimg.com/v2-a2901b3fbf21b48f75767490cb688b80.jpg)
+
+值得注意的是，本题的unlink利用是比较古老的方式了，现在的glibc已经加入了很多新的保护措施
+
+包括：
+
+Double Free检测
+
+该机制不允许释放一个已经处于free状态的chunk。因此，当攻击者将second
+chunk的size设置为-4的时候，就意味着该size的PREV_INUSE位为0，也就是说second chunk之前的first
+chunk(我们需要free的chunk)已经处于free状态，那么这时候再free(first)的话，就会报出double free错误。相关代码如下：
+
+#!c
+
+![v2-9384e3d43bb28259219e3cc3809d2f57.jpg](https://pic1.zhimg.com/v2-9384e3d43bb28259219e3cc3809d2f57.jpg)
+
+next size非法检测
+
+该机制检测next size是否在8到当前arena的整个系统内存大小之间。因此当检测到next size为-4的时候，就会报出invalid next
+size错误。相关代码如下：
+
+![22222.jpg](https://image.3001.net/images/20200424/1587717361_5ea2a4f1e0388.jpg!small)  
+
+双链表冲突检测
+
+该机制会在执行unlink操作的时候检测链表中前一个chunk的fd与后一个chunk的bk是否都指向当前需要unlink的chunk。这样攻击者就无法替换second
+chunk的fd与fd了。相关代码如下：
+
+![v2-1cb212df0433315b9cfa9c1b717c7734.jpg](https://pic1.zhimg.com/v2-1cb212df0433315b9cfa9c1b717c7734.jpg)
+
+也出现很多新的技巧的关于unlink的CTF题目，如：
+
+    
+    
+    HITCON 2014 stkof
+    0CTF 2016 – Zerostorage
+    0CTF 2015 'freenote' 
+    HITCON CTF 2016: Secret Holder
+    强网杯2018 silent2
+
+这些题目有兴趣的师傅们可以自行去pwn
+
+## 参考：  
+
+1.<https://paper.seebug.org/papers/Archive/drops2/Linux%E5%A0%86%E6%BA%A2%E5%87%BA%E6%BC%8F%E6%B4%9E%E5%88%A9%E7%94%A8%E4%B9%8Bunlink.html>
+
+2.https://heap-exploitation.dhavalkapil.com/attacks/unlink_exploit.html
+
+3\. <https://paper.seebug.org/papers/Archive/refs/2015-1029-yangkun-Gold-Mining-CTF.pdf>
+
+4\. <https://cysecguide.blogspot.com/2017/10/pwnablekr-unlink-solution.html>
+
+5.cft wiki
+
+推荐实验：
+
+ARM漏洞利用技术五--堆溢出：
+
+<http://www.hetianlab.com/expc.do?ec=ECIDf4f4-3f86-44b4-bd4c-e1c88520adde>
+
+（通过本实验了解堆溢出，包括intra-chunk和inter-chunk两种类型，分别掌握其特点。）
+
+声明：笔者初衷用于分享与普及网络知识，若读者因此作出任何危害网络安全行为后果自负，与合天智汇及原作者无关！
+
+  
+

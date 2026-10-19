@@ -1,0 +1,335 @@
+概述  
+
+360威胁情报中心曾在2018年2月发布了《2017中国高级持续性威胁（APT）研究报告》（详见参考资料[1]），报告指出利用Office漏洞、宏、DDE等相关技术进行APT攻击一直是APT组织的重要手段，整个2017年，先后有多个高危的Office漏洞以及相关利用技术被曝出，其中很大一部分已经被APT组织所使用。将Office作为攻击载体显然已经成为APT组织的首选。
+
+360威胁情报中心自然会对Office相关的漏洞和利用技术重点关注并做持续跟踪，而在近日，基于威胁情报中心的数据，我们捕获到了一批利用多个Office
+OLE特性绕过杀软检测并执行宏代码的样本。和大多数的样本一样，这批样本最终会使用Office中的宏代码下载执行相关的远控/窃密软件，而通过我们的关联分析，幕后团伙疑似为ProjectM。
+
+## 样本分析
+
+由于这类攻击样本在此前极少出现，所以相关杀软对这类样本的检出率还不够理想，以我们接下来分析的攻击样本在VirusTotal上的查杀情况来看，59家杀毒软件仅有3家能够检测查杀：
+
+![image.png](https://image.3001.net/images/20180322/15216842067132.png!small)  
+
+### 样本执行过程
+
+样本原始文件名为：Riggingin Pakistan
+Senate.doc（在巴基斯坦参议院索赔.doc），文档打开后会诱导用户允许文档编辑以触发OLE2Link，进而下载执行带有宏的Excel文档：
+
+![image.png](https://image.3001.net/images/20180322/15216842197002.png!small)  
+
+诱导执行带有恶意宏的Excel文档：
+
+![image.png](https://image.3001.net/images/20180322/15216842394434.png!small)  
+
+用户一旦单击“启用宏”，恶意宏代码则会继续下载执行窃密木马长期控制用户电脑，整个样本执行流程如下：
+
+![image.png](https://image.3001.net/images/20180322/15216842506395.png!small)  
+
+### 免杀技术分析
+
+样本使用了多种技巧对抗杀软检测，这从攻击样本在VirusTotal上的查杀情况仅有3家可以检测即可看出，免杀技巧分析如下。
+
+#### 静态免杀
+
+ **页脚中插入OLE2Link**
+
+样本在Office
+Word文档的页脚中插入OLE2Link对象以躲避杀软的检测，由于常见的基于OLE2Link的漏洞利用（比如CVE-2017-0199）都是在word\document.xml中插入远程的OLE对象，所以这导致大部分杀软并未检测到document.xml以外的组件中包含的威胁，样本在页脚中插入OLE2Link对象的分析如下：
+
+1、 页脚文件word\footer2.xml中包含了一个Link对象，id为rId2：
+
+![image.png](https://image.3001.net/images/20180322/15216843119239.png!small)  
+
+2、 word\\_rels\footer2.xml.rels中可以看到rId2的具体内容：
+
+![image.png](https://image.3001.net/images/20180322/15216843185755.png!small)  
+
+3、
+Link对象指向了hxxp://bit.ly/loleading，而bit.ly是一个生成短链接的网站，打开hxxp://bit.ly/loleading后将跳转至hxxp://www.0-day.us/img/doc/10.doc。于是当受害者打开Riggingin
+Pakistan Senate.doc后，WinWord.exe会将10.doc下载并加载。
+
+#### 动态免杀
+
+ **插入Excel.SheetMacroEnabled** **对象**
+
+下载回来的10.doc实际上是一个RTF文档，里面内嵌了一个Excel.SheetMacroEnabled对象，Excel.SheetMacroEnabled是一个启用宏的Excel对象，相当于把一个带宏的Excel嵌入了Word文档中：
+
+![image.png](https://image.3001.net/images/20180322/15216843341872.png!small)  
+
+下图分别是Excel.SheetMacroEnabled.12对象的对象名和CLSID：
+
+![image.png](https://image.3001.net/images/20180322/15216843415764.png!small)  
+
+![image.png](https://image.3001.net/images/20180322/15216843486161.png!small)  
+
+在OleView中查看Excel.SheetMacroEnabled对象，CLSID正是{00020832-0000-0000-C000-000000000046}，并且LocalServer指向了EXCEL.EXE，这表示该对象对应的COM组件是一个单独的EXE组件，COM将通过其远程处理架构（通常涉及远程过程调用（RPC））来将这个exe加载起来，也就是说EXCEL.EXE将会和之前的Eqnedt32.exe一样，由COM直接创建而不是由WinWord.exe启动，这个特点可以有效对抗一些通过进程链来动态检测威胁的杀毒软件的查杀：
+
+![image.png](https://image.3001.net/images/20180322/15216843652476.png!small)  
+
+### Payload分析
+
+样本通过下载回来的10.doc执行插入的Excel恶意宏代码，恶意宏代码进而下载执行多个窃密木马，相关分析如下：
+
+#### 执行宏代码
+
+10.doc内嵌的Excel文档对象被插入了10个恶意宏对象，这样会反复弹框要求用户允许执行宏，稍不注意可能就会中招：
+
+![image.png](https://image.3001.net/images/20180322/15216844202912.png!small)  
+  
+
+恶意宏代码被执行后首先会下载执行hxxp://0-day.us/img/10.vbs脚本：
+
+![image.png](https://image.3001.net/images/20180322/15216844345638.png!small)  
+
+并创建一个计划任务每分钟执行一次下载回来的VBS脚本：
+
+![image.png](https://image.3001.net/images/20180322/15216844425920.png!small)  
+
+最后设置多个注册表键值，主要功能为禁用各版本Office的受保护视图和启用所有宏等：
+
+![image.png](https://image.3001.net/images/20180322/15216844503877.png!small)  
+
+下载回来的10.VBS脚本会继续下载hxxp://www.0-day.us/img/exe/10.exe和hxxp://www.0-day.us/img/exe/door.exe然后启动执行，并删除之前的计划任务：
+
+![image.png](https://image.3001.net/images/20180322/15216844562742.png!small)  
+
+#### 10.exe
+
+hxxp://www.0-day.us/img/exe/10.exe由delphi编写，实际上算是一层外壳，用于保护里面加密存储的木马程序，代码中包含了许多对抗沙箱、杀软和分析人员的手段，包括代码加密\乱序、检测虚拟环境、路径、杀软进程、分析工具进程、检测调试等等，分析如下：
+
+l 10.exe首先将自身代码解密，把需要用到的API函数存放在申请的内存中，把用esi寄存器保存这块内存地址便于后续调用，然后开始遍历系统进程：
+
+![image.png](https://image.3001.net/images/20180322/15216844691900.png!small)
+
+![image.png](https://image.3001.net/images/20180322/1521684477270.png!small)  
+
+l 接着通过 Mov Eax,0x40000000 / Cupid 以及 Mov Eax, 0 / Cupid
+指令序列来获取虚拟CPU信息，然后将返回值与常见的虚拟化产品的特征值做比较，通过这样的方式来进行指定虚拟机的检测，检测诸如Xen、Parallels、Microsoft
+Hyper-V、Windows Virtual PC、KVM等虚拟机：
+
+  
+![image.png](https://image.3001.net/images/20180322/15216844878102.png!small)  
+
+l
+接着检查文件路径是否包含”sample”、”sandbox”、”malware”、”virus”、”self.”等字符串，检查进程中是否包含名为”avgsvc.exe”、”avgui.exe”、”avastsvc.exe”、”avastui.exe”、”avp.exe”、”
+bdagent.exe”、”bdwtxag.exe”、”dwengine.exe”的进程（检测杀软进程）和名为"procexp64.exe"、"procmon64.exe"、"procmon.exe"、"ollydbg.exe"、"procexp.exe"、"windbg.exe"的进程（检测调试分析工具）：
+
+![image.png](https://image.3001.net/images/20180322/15216844955241.png!small)  
+
+l 通过ZwQueryInfomationProcess以及PEB的BeingDebugged字段检测是否被调试：
+
+![image.png](https://image.3001.net/images/20180322/15216845064930.png!small)  
+
+  
+![image.png](https://image.3001.net/images/20180322/15216845207525.png!small)  
+
+l 该PE其实还是一个drop，其会进一步解密释放最终的远控木马：njRAT，njRAT是近年来最为活跃的木马家族之一,
+该木马家族使用.NET框架编写,具有键盘记录、获取浏览器密码、屏幕截图、文件\注册表\进程管理等功能，还可以通过控制端下发新的功能插件。但是正是由于其活跃和泛滥，各个杀软对其的分析查杀力度也比较大，所以这里的作者才对它做了重重保护，以期躲过杀软的查杀：
+
+![image.png](https://image.3001.net/images/20180322/15216845344441.png!small)  
+
+l 解密出来的njRAT的配置信息如下，可以看到C&C是115.186.136.237:5555
+
+![image.png](https://image.3001.net/images/20180322/15216845417337.png!small)  
+
+#### door.exe
+
+hxxp://www.0-day.us/img/exe/door.exe与10.exe如出一辙，只不过还增加了一层代码进行包裹，不过最终释放的木马也是njRAT，解密出来的njRAT的配置信息如下，可以看到C&C是：aqibseo.ddns.net:777
+
+![image.png](https://image.3001.net/images/20180322/15216845538634.png!small)  
+
+## 关联分析
+
+我们通过对下载域名关联样本的扩展，以及使用360威胁情报中心分析平台对相关样本和网络基础设施进行拓展，将攻击者与某个特定的APT攻击团伙进行了关联。
+
+### 域名扩展
+
+我们通过访问样本中下载执行恶意代码的域名hxxp://www.0-day.us，可以看到其开放了目录访问权限，其中包含了大量用于攻击的VBS脚本、Office
+Word样本以及各种远控木马：
+
+![image.png](https://image.3001.net/images/20180322/15216845781814.png!small)  
+
+很明显这是一个比较活跃的攻击武器库，并且截止目前还在活跃当中，我们粗略分析了其中的样本，包含且不限于使用了CVE-2017-0199、CVE-2017-11882、恶意宏等的Office
+Word文档，包含且不限于包装了诸如njRAT、LokiBot、NanoCore 等的远控/窃密木马。
+
+### 利用威胁情报平台拓展攻击线索
+
+当我们说起APT攻击线索的发现，似乎是一个挺神秘的事，在对事件的分析中，分析人员首先要面对的问题就是对事件的定性，这关系到后续是否要投入更多的精力对事件进行下一步的分析。对事件进行定性的常用方法，就是关联扩展更多的样本以确认其攻击的目的。在这里我们将使用360威胁分析平台（ti.360.net）来对该事件做关联分析，以期对本次事件定性。
+
+本次分析的样本的相关信息当然已经收录到360威胁情报中心的数据平台里，搜索一下其中一个C&C
+IP地址：115.186.136.237，我们得到如下的输出页面：
+
+![image.png](https://image.3001.net/images/20180322/15216845967687.png!small)  
+
+左上角的信息显示了该IP地址已经被打上了被多个漏洞利用以及远控木马使用的标签，地理位置信息则显示该IP地址属于巴基斯坦的一个互联网服务提供商（ISP），它为住宅和商业客户提供服务，而左下角则指向了相关的安全报告链接，这提示该IP地址在该报告中被提及。报告由Palo
+Alto于2017年10月27日发布，报告中提到了某个小型的针对美国政府的钓鱼攻击，而其中最终载荷QuasarRAT的C&C就是115.186.136.237，并指出该团伙很有可能是在巴基斯坦的人，直接点击相关安全报告链接可以查看到相关报告：
+
+![image.png](https://image.3001.net/images/20180322/15216846075514.png!small)  
+
+而我们这次发现的样本名称也与巴基斯坦有所相关，那么本次事件的作者也可能是Palo Alto报告中猜测的巴基斯坦的相关人员。
+
+我们还可以对样本使用的下载站点www[.]0-day.us做关联分析，当然继续使用360威胁情报中心进行关联扩展，输入www[.]0-day.us搜索，查看注册信息可以看到管理员邮箱为aqibseo0@gmail.com：
+
+![image.png](https://image.3001.net/images/20180322/15216846571764.png!small)  
+
+对该邮箱查询后发现使用这个邮箱注册的9个域名中，有两个域名已经被360威胁情报中心打上了恶意活动的标签，这是一个重要的线索，因为我们可以从中发现更多的历史样本、活动记录，从而完善整个攻击事件的拼图：
+
+![image.png](https://image.3001.net/images/20180322/15216846678827.png!small)  
+
+其中在fbcom.review这个域名的威胁情报中，我们找到一些历史样本并对其进行分析，其中MD5为d5b551f2fd484a7e753b9e5a1be50f98的样本是名为LokiBot的RAT，其访问了http://fbcom.review/lo/five8/fre.php，在http://fast-cargo.com/images/file/dde/1.exe中被下载，于是关联到一个新的域名：fast-cargo.com
+
+![image.png](https://image.3001.net/images/20180322/15216846771364.png!small)  
+
+继续点击左下角中的相关安全报告可以看到，相关报告中提到的样本与我们本次发现的样本几乎一模一样，区别只是本次发现的RTF样本是作为远程链接对象被嵌入到另一个DOC中，而不是直接作为投递的文档使用，应该是攻击者的早期版本：
+
+![image.png](https://image.3001.net/images/20180322/1521684692532.png!small)  
+
+此外fast-cargo.com关联到的样本大量使用了“订单（order）、付款（payment）”等词汇作为文件\邮件名，钓鱼邮件的内容也与此相关。这些特点与近年来泛滥的“钓鱼订单”攻击一致，所谓的“钓鱼订单”攻击，是一类主要针对各国外贸、商业公司的财务人员发起的、主要目的为窃取这些公司财产的攻击：
+
+![image.png](https://image.3001.net/images/20180322/15216847034876.png!small)  
+
+综上，通过360威胁情报中心的数据关联，使用这批样本的团伙或许就是Palo Alto报告中提及的参与过C-Major
+APT攻击行动的团伙ProjectM，并且在平时还参与一些针对各国外贸、商业公司的财务人员的“敛财”活动。
+
+### 移动端木马及溯源
+
+另外，我们发现该团伙在hxxp://www[.]0-day.us/img/中上传了一批最新的文件，其中hxxp://www[.]0-day.us/img/exe/15.bat这个文件引起了我们的注意。该文件是一个批处理文件，应该是由Cobalt
+Strike生成的攻击载荷，里面调用PowerShell去解压出一段ShellCode，再由ShellCode下载下一步的攻击载荷：
+
+![image.png](https://image.3001.net/images/20180322/15216847141608.png!small)  
+
+![image.png](https://image.3001.net/images/20180322/15216847195406.png!small)  
+
+在ShellCode中发现了一个硬编码的下载链接：hxxps://174[.]127.126.186/Vvt8M5jr3PfPk86RlT8Y0gvXaXyiP0MLuC，该链接应该是下载下一步攻击载荷的地址，但是分析时已经失效，我们通过360威胁情报分析平台上关联得到两个样本，其中MD5为fbe429a5485258e04717283cacba2134的样本是一个APK文件，看来这个团伙的攻击还涉及到Android平台：
+
+![image.png](https://image.3001.net/images/20180322/15216847361625.png!small)  
+
+该样本为测试用样本，所有行为都是依赖界面点击行为触发：
+
+![image.png](https://image.3001.net/images/20180322/15216847442236.png!small)  
+
+其实现功能比较全面，可以用于上传手机上的短信，联系人信息，通话记录，定位信息，DCIM下的照片，其还具备控制摄像头和录音的功能。其上传方式为HTTP
+POST方式，并且CC域名位于资源字符串中。另外其默认配置用于文件存储的路径为SDCard下的Huawei路径，我们推测其可能使用的华为手机进行测试：
+
+![image.png](https://image.3001.net/images/20180322/15216847619488.png!small)  
+
+该移动木马的资源文件中有两个独立的图片文件，两幅图片都与巴基斯坦相关，由于该木马是测试阶段的木马程序，我们有理由相信两幅图片可能是作者自己放置进去的：
+
+![image.png](https://image.3001.net/images/20180322/15216847861829.png!small)  
+
+使用360威胁情报分析平台继续搜索木马连接的域名：arydigital.biz
+
+![image.png](https://image.3001.net/images/20180322/15216848059686.png!small)  
+
+该域名有可能是攻击者长期使用和拥有的测试域名，其注册邮箱为michael.khana@gmail.com，从注册信息来看其同样指向了巴基斯坦，该邮箱还注册过其他两个域名，包括一个伪装成
+WhatsApp
+更新的网站和一个在线市场站点，根据注册时间推测其有可能是已经用于攻击或准备用于攻击所使用的域名，其更可能使用在用于社交网络或邮件的方式来投放和诱导攻击目标：
+
+![image.png](https://image.3001.net/images/20180322/15216848142342.png!small)  
+
+我们发现该邮箱注册的 GitHub 帐号在社区异常活跃，其长期关注和参与部分攻击相关的代码仓库。其在2017.7.22对一个开源Android
+RAT项目AhMyth上发过Issue询问木马客户端是否可以适配与HTTP的Web服务器使用，在2017.1.11在GitHub上讨论问题的时候留下
+Regards Tehseen Sagar的问候语，所以该GitHub账户ID极有可能是以其真实姓名连接而成：
+
+![image.png](https://image.3001.net/images/20180322/1521684824312.png!small)  
+
+其中Tehseen为穆斯林常用的名字，而Sagar作为姓氏也常用于巴基斯坦、印度等国家：
+
+![image.png](https://image.3001.net/images/20180322/15216848322834.png!small)  
+
+对whatsappupdat.com进行进一步关联分析，其曾经映射IP为79.143.189.123，该IP关联到FOREIGN家族的远控木马和恶意的Excel文档，其中包含PDB信息为F:\Projects\pios\tehs\micsa\mrias\obj\x86\Debug\wicsa.pdb。根据样本签名中的Cretivok，我们联系到Cretivok.com网站，其地址为巴基斯坦第一大城市卡拉奇：
+
+![image.png](https://image.3001.net/images/20180322/15216848407496.png!small)  
+
+并且找到在巴基斯坦的公司名称为Cretivok。其主要人员都具备从事 PC、Web 和 Android 的开发能力：
+
+![image.png](https://image.3001.net/images/20180322/15216848519518.png!small)  
+
+![image.png](https://image.3001.net/images/20180322/15216848555273.png!small)  
+
+该公司也位于卡拉奇，并且成立时间在2017年，其他成员和CEO的Linked in页面如下：
+
+https://www.linkedin.com/in/qazi-jalil-b1bab693/
+
+https://www.linkedin.com/in/farrukh-khalid-2ba17a120/
+
+https://www.linkedin.com/in/asim-bilal-0b8aa564/
+
+而移动端木马证书的创建时间也在2017.5月：
+
+![image.png](https://image.3001.net/images/20180322/15216848692783.png!small)  
+
+### 攻击者画像
+
+综合上述分析，我们将本次攻击事件中涉及的攻击者虚拟身份以及网络基础设施与Palo Alto报告中（见参考链接[2]和[3]）提及的参与过C-Major
+APT攻击行动的团伙ProjectM进行比较：
+
+**团伙** |  **本次事件涉及的团伙** |  **ProjectM**  
+---|---|---  
+相关C&C IP地址  |  115.186.136.237  |  115.186.136.237  
+域名及公司注册地  |  巴基斯坦卡拉奇  |  巴基斯坦卡拉奇  
+攻击手法  |  Office/VBS/njRAT等  |  Office/VBS/njRAT等  
+  
+我们有理由相信本次样本中涉及的攻击人员有较大的可能属于ProjectM团伙，且团队成员来自巴基斯坦，非常熟悉诸如网络渗透、漏洞利用以及针对 Windows
+和 Android终端的木马开发。
+
+## IOC
+
+**下载木马的地址**  
+---  
+www.0-day.us  
+**C &C**  
+174.127.126.186  
+115.186.136.237:5555  
+aqibseo.ddns.net:777  
+**样本MD5**  
+746b288b2ab3a549259f4e8203a311bc  
+f1b0f7e203409af349f964d7f5b005ad  
+ba16307ccf4e060eb2ae8fe2068dc21e  
+f29bee9afc79e4120b57cf4e7743f253  
+4c6c732207f5c124e4a89497a51b3f50  
+4c6c732207f5c124e4a89497a51b3f50  
+aca385ebb6000b89152701f6870c1696  
+6af6892083aa1c23bec6fe4daeed0bb6  
+474189427ffe3ffea133445bbce8e8e5  
+4c6c732207f5c124e4a89497a51b3f50  
+7d652bafc89acd693f0a6d940cbc57e6  
+181fe5e18d3774433da98d46d80e8a65  
+a053f5057893c5a7fef3e28ac64532f2  
+133bfe711c95bfcd1ccae2988b63ae8c  
+ee60ec3a163d09297a9ad0ae8b8987da  
+9960750d8f34f53079cbef8ff139491a  
+ee60ec3a163d09297a9ad0ae8b8987da  
+ee60ec3a163d09297a9ad0ae8b8987da  
+3550099425b5c16cc1e500d133e4695d  
+1ea1355cd1016c9d0f9f8b3dd5ff7ad7  
+bbf0c048330e3d157f6dc738c8bace80  
+0854f0f744d3797e38cc07304db68764  
+c0528af613e3d8c08324a796b3b10ee7  
+ee60ec3a163d09297a9ad0ae8b8987da  
+131c2dbfa3ef58cc1ac9ed5ccd89b425  
+1352161ba9b9599583019c4fc2acdea7  
+ef93fb9a755406397c5fcf040c2a9283  
+6da913bb8b1530aa3787811dcc41974f  
+8769c8e156b689fb0750a9747df11f4e  
+284acfeb8f427c3777a09478c7903c0d  
+  
+## 参考
+
+[1].<https://ti.360.net/blog/articles/apt-report-of-2017/>
+
+[2].<https://researchcenter.paloaltonetworks.com/2017/10/unit42-tracking-subaat-targeted-phishing-attacks-point-leader-threat-actors-repository/>
+
+[3].<https://researchcenter.paloaltonetworks.com/2016/03/unit42-projectm-link-found-between-pakistani-actor-and-operation-transparent-tribe/>
+
+[4].<https://blog.trendmicro.com/trendlabs-security-intelligence/cve-2017-11882-exploited-deliver-cracked-version-loki-infostealer/>
+
+[5].<https://documents.trendmicro.com/assets/appendix-CVE-2017-11882-exploited-to-deliver-a-cracked-version-of-the-loki-infostealer.pdf>
+
+[6].<https://www.darkreading.com/attacks-breaches/microsoft-office-docs-new-vessel-for-loki-malware/d/d-id/1330678>
+
+[7].[https://ti.360.net](https://ti.360.net/)
+
+  
+

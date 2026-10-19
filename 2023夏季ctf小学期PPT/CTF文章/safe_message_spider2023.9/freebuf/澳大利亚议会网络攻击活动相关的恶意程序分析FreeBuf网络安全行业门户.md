@@ -1,0 +1,99 @@
+**![maxresdefault.jpg](https://image.3001.net/images/20190305/1551791350_5c7e74f6e9895.jpg!small)****2月初，澳大利亚议会遭遇了一场有针对性的网络攻击。据[BBC消息](https://www.bbc.com/news/world-australia-47166590)，澳大利亚总理莫里森声称：黑客曾试图入侵澳大利亚议会网络系统，且在国家联邦选举前几个月，就已秘密潜伏在了执政的联盟党和反对党工党的网络中，好在澳大利亚网络安全中心（Australian
+Cyber Security Centre,
+ACSC）及时对攻击进行了遏制防范。另外，负责信息安全的澳大利亚信号局（ASD）将会与议会事务部（DPS）一起对该起攻击事件进行调查。**
+
+澳总理的声明中指出，攻击幕后黑手为活动于亚太地区的国家支持型APT黑客组织，但却未在官方声明中给出明显指向，也没公布任何与黑客组织相关的证据。只是澳大利亚网络安全中心（ACSC）[公布了此次网络攻击中黑客所使用的一些恶意程序样本](https://otx.alienvault.com/pulse/5c6a9eebaab50764aa34ca81)，为此，安全公司Cybaze-Yoroi 打算从这里入手，来分析该APT黑客组织的一些能力特点和攻击手法。
+
+## 技术分析
+
+据分析，所有给出的样本都为后渗透利用阶段程序，攻击者利用这些恶意程序来实现数据渗漏和横向渗透。另外，这些恶意程序都不属于如 Metasploit 或
+Empire的开源框架，而是完全定制化且基于C#和.NET开发的程序。
+
+### LazyCat DLL
+
+首先我们来看的是在安全社区中被标记名为LazyCat的样本，它属于渗透测试套装Mimikatz中的工具。
+
+![01.jpg](https://image.3001.net/images/20190305/1551790494_5c7e719e93527.jpg!small)从静态分析中可以看出，LazyCat样本涉及的库为.NET架构，无任何编码混淆，因此可以很容易地转化出其源码形式：
+
+![01.png](https://image.3001.net/images/20190305/1551790518_5c7e71b6df145.png!small)
+
+![02.png](https://image.3001.net/images/20190305/1551790564_5c7e71e473c20.png!small)从以上代码中可以看出，DumpMemory
+函数通过利用属于DbgHelp库的MiniDumpWriteDump方法，来监测和收集任意进程内存的内容，其执行结果将被储存在利用“Output”参数命名的一个文件中：
+
+![03.png](https://image.3001.net/images/20190305/1551790574_5c7e71ee2494d.png!small)而且，该样本还可以启动一个名为“TcpRelay”的服务，目的可能想在攻击者端和受害者网络之间建立一条路由，以便后续的横向深入渗透，其中的StartTcpRelay函数如下：
+
+![04.png](https://image.3001.net/images/20190305/1551790592_5c7e7200b014f.png!small)仔细查看源码，可见一个名为
+“RottenPotato” 的特殊模块，它其中包含了很多有意思的函数，如与 MS Windows环境中后渗透阶段相关的 “findNTLMBytes” 和
+“HandleMessageAuth”。关联分析后发现，该模块来自于GitHub上的一个开源攻击框架-<https://github.com/foxglovesec/RottenPotato>。其中的findNTLMBytes函数如下：
+
+![05.png](https://image.3001.net/images/20190305/1551790624_5c7e7220e4281.png!small)通过diff比对分析发现，这里的恶意RottenPoteto模块比GitHub上原版的RottenPoteto中多出了一些方法函数，由此可见，为了符合自身目的，攻击者已经对开源的RottenPotet做过武器化改装。这种开源工具的改装应用，加大了调查取证中的溯源和归因难度。LazyCat恶意程序还设置了一个专门的痕迹清理模块“LogEraser”：
+
+![06.png](https://image.3001.net/images/20190305/1551790703_5c7e726f0c895.png!small)“LogEraser”模块中最主要的方法函数为
+“RemoveETWLog”，其功能在于删除Windows系统下的事件日志跟踪记录（ETW）文件，以此来对攻击环境执行清扫。以下为删除Windows系统ETW文件的代码：  
+
+![07.png](https://image.3001.net/images/20190305/1551790723_5c7e72830b04d.png!small)由上图代码可以看出，恶意程序会检查所有和Windows日志相关的记录，如果某条记录ID与特定ID相符，则会执行删除。
+
+在我们的分析过程中，可能由于其引用了开源代码的原因，该恶意样本具备了一个中低的检出率。以下是VirusTotal的检测结果：
+
+###
+![08.png](https://image.3001.net/images/20190305/1551790745_5c7e7299b9f82.png!small)
+
+### Powerkatz DLL样本
+
+这个Powerkatz程序有两个样本，其属性分别如下：
+
+![02.jpg](https://image.3001.net/images/20190305/1551790813_5c7e72dd932c2.jpg!small)![03.jpg](https://image.3001.net/images/20190305/1551790820_5c7e72e480401.jpg!small)尽管这两个DLL样本之间的HASH值不同，但其功能基本一致，攻击者只是稍微对其中的一些字符串和变量名做了修改，目的估计是为了免杀处理。两个样本之间仅存在少许不同，且都具备有效的整体功能，样本对比如下图所示：
+
+![09.png](https://image.3001.net/images/20190305/1551790846_5c7e72fe5d059.png!small)两个样本的主类反编译源码中也显示了相同的功能，例如，从两样本的AsyncTask类比较来看，其具备基本一致的特征，因此，下文中我们将会统一把它看做是一个样本。
+
+![10.png](https://image.3001.net/images/20190305/1551790876_5c7e731cdb06a.png!small)这个样本由多个类和函数组成，我们可以把“StartNew”函数作为分析入口，顾名思义，如其名称所示，该函数可以在受害者系统中启动一个新的异步任务，且把_app当做任务对象参数传递。这个异步任务一旦启动，该函数会用重复1秒(1000ms)的休眠周期等待任务执行完成，然后向函数调用返回一个有效的状态码。这个样本模块可能会与其它恶意植入程序一起配合使用，隐秘地在后台执行任务。以下为StartNew函数代码：
+
+![11.png](https://image.3001.net/images/20190305/1551790902_5c7e7336e6f62.png!small)该样本名称虽和Github上的Powershell工具<https://github.com/digipenguin/powerkatz>同名，但两者代码完全不同。与前一个样本类似，该样本在VirusTotal上检出率也不算太高，28/70，如下：  
+
+![12.png](https://image.3001.net/images/20190305/1551790932_5c7e7354e7e7d.png!small)
+
+### 攻击侦查模块（Recon Module）
+
+该模块程序中的端口扫描样本属性如下：
+
+![04.jpg](https://image.3001.net/images/20190305/1551791029_5c7e73b51d2c8.jpg!small)和前面样本类似，该样本也是C#编写的，主要包含了“PortScanner”和“ReconCommonFuncs”两个主类，通过该样本，攻击者的植入程序才能开展下一步动作。该样本的两个主类：
+
+![13.png](https://image.3001.net/images/20190305/1551791054_5c7e73ced0853.png!small)从反映出的代码来看，实际上，“portScan”函数中内置了一个整型数组，其中包含了一系列常见的网络端口，涵盖了主要的本地网络服务，如HTTP,TELNET,
+RDP, POP, IMAP, SSH, SQL ...等等。如下：  
+
+![14.png](https://image.3001.net/images/20190305/1551791072_5c7e73e0c0f45.png!small)对于“portScan”函数中声明的每个端口，样本都会执行一个尝试连接的TCP扫描。如果连接成功，证明开启了相应的服务和端口，然后会把返回响应的服务banner信息存储在一个名为“StringBuilder”的对象中。样本程序会把所有扫描端口的响应进行连接，最后会把它写入到一个用“ReconCommonFuncs”
+类定义的文件中去。以下为执行端口扫描的具体代码：
+
+![15.png](https://image.3001.net/images/20190305/1551791095_5c7e73f7d17f8.png!small)以下是样本中调用C#的TcpClient执行扫描：
+
+![16.png](https://image.3001.net/images/20190305/1551791113_5c7e740973e70.png!small)在“ReconCommonFuncs”类中，提供了一些能用得到的实用函数，如“Append”和“GZipAndBase64”，这些函数意图一目了然。以下为“ReconCommonFuncs”类包括的函数：  
+
+###
+![17.png](https://image.3001.net/images/20190305/1551791137_5c7e7421cda07.png!small)Powershell客户端（Agent）
+
+该样本主要属性如下：
+
+![05.jpg](https://image.3001.net/images/20190305/1551791189_5c7e7455a5271.jpg!small)该样本名称为“OfficeCommu.dll”，攻击者可能想把它和正常的Office通信模块混淆，Office通信模块在大多Windows系统中都具备。并且，该样本就是一个用于后渗透阶段的应用型程序，目的在于创建一个Powershell客户端（Powershell
+Agent），用它作为攻击者植入程序解析脚本和执行Powershell命令的组件。以下为Powershell客户端的主要函数代码：
+
+##
+![18.PNG](https://image.3001.net/images/20190305/1551791218_5c7e747205879.png!small)总结
+
+从分析结果来看，攻击者选择了多模块方法来开发他们自身的网络入侵工具，并且利用程序库生态下的某些函数功能封装了深入且具备入侵性质的攻击，成功实现了复杂的恶意程序植入。
+
+尽管这些利用到的函数和库没有0day漏洞利用和相关技术，而且从澳大利亚议会提供的恶意程序样本来看，其检出率也相对较高，但也恰恰说明，攻击者倾向于对开源工具进行包装利用，再进行入侵工具的二次定制化开发，这样一方面可以缩短入侵程序的“上市时间”，也不会对资源的有效性和危险性形成影响。这种对已知技术的二次包装开发，也能在某种程度上绕过某些杀软，突破传统安全边界，实现隐秘植入。
+
+## IOC-hashes  
+
+> 1c113dce265e4d744245a7c55dadc80199ae972a9e0ecbd0c5ced57067cf755b
+>
+> 08a85f5fe8714b4842180c12c4d192bd186500af01ee39825f6d5100a2019ebc
+>
+> a95c9fe29a8ae0f618536fdf4874ede5412281e8dfb380bf1370a8d8794f787a
+>
+> b63ae455f3deaca297b616dd3356063112cfda6e6c5434c407781461ae69361f
+>
+> 1087a214ebe61ded9f61de81999868f399a1105188467e4e44182c02ee264a19
+
+ ***参考来源：[yoroi](https://blog.yoroi.company/research/the-arsenal-behind-the-australian-parliament-hack/)，clouds编译，转载请注明来自FreeBuf.COM**
+

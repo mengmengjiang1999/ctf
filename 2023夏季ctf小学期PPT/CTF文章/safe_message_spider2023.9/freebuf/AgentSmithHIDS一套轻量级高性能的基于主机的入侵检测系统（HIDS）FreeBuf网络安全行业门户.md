@@ -1,0 +1,372 @@
+![](https://image.3001.net/images/20200206/1580929810_5e3b1312ef27e.png!small)
+
+## AgentSmith-HIDS
+
+ **从技术角度来说，AgentSmith-HIDS严格意义上来说并不是一个传统的“基于主机的入侵检测系统”（HIDS），因为就该项目目前开源的部分来说，它还缺少了规则引擎以及相关的检测能力。但是它可以作为一个高性能的主机信息收集工具来帮助安全研究人员构建属于自己的HIDS。**
+
+而AgentSmit-HIDS的优秀特性（从内核态获取尽可能完整的数据）在跟用户态的HIDS相比，拥有巨大的优势：
+
+>
+> 1、性能更优秀：通过内核态驱动来获取相关信息，无需进行类似“遍历/proc”这样的操作来提升性能或进行数据补全；数据的传输使用的是共享内存，相对来说也有更好的性能表现。
+>
+> 2、更加难以躲避和绕过：由于我们的信息获取来自于内核态驱动，因此面对很恶意行为都无法绕过AgentSmith-HIDS的检测。
+>
+> 3、易于整合：AgentSmith-> HIDS不仅可以作为安全工具使用，也可以作为监控工具使用，或者帮助从业人员整理组织内部资产。我们通过内核模块对进程/用户/文件/网络连接进行整理，如果检测到了CMDB相关信息，那么整合后你将会得到一张从网络到主机/容器/业务信息的调用/依赖关系图；如果组织还部署有数据库审计工具的话，整合后你还可以得到数据库的用户/库表字段/应用/网络/主机容器的关系；除此之外，你还可以跟NIDS/威胁情报进行整合，达到溯源的目的。
+>
+> 4、用户态+内核态：AgentSmith-HIDS同时拥有内核态和用户态的模块，可以协同工作。
+
+### AgentSmith-HIDS实现了以下几个主要功能：
+
+> 1、内核栈模块通过Kprobe针对
+> execve、通信连接、进程注入、文件创建、DNS查询和LKM加载等行为设置了钩子，并且通过兼容Linux命名空间来对容器环境进行监控。
+>
+> 2、用户栈模块实用工具内置了检测功能，其中包括系统用户列表查询、系统端口监听列表查询、系统RPM LIST查询和系统定时任务查询。
+>
+> 3、AntiRootKit，基于[
+> _Tyton_](https://github.com/nbulischeck/tyton)实现，目前已经移植了PROC_FILE_HOOK、SYSCALL_HOOK、LKM_HIDDEN和INTERRUPTS_HOOK，目前仅支持Kernel
+> > 3.10。
+>
+> 4、cred 变化检测 （sudo/su/sshd除外）
+>
+> 5、用户登陆监控
+
+### 内核版本兼容性
+
+Kernel > 2.6.25
+
+AntiRootKit > 3.10
+
+### 容器兼容性
+
+行为源 | 节点名称  
+---|---  
+Host | 主机名  
+Docker | 容器名  
+k8s | POD名  
+  
+## AgentSmith-HIDS的组成部分
+
+> 1、内核驱动模块（LKM），通过Kprobe挂钩关键函数，完成数据捕获；
+>
+>
+> 2、用户态代理，接收驱动捕获的指令并进行处理，然后将数据发送给Kafka；并向服务器端发送heartbeat包来进行确认，然后接收并执行服务器发送的指令；
+>
+> 3、代理服务器（可选组件），向代理发送控制指令，查看当前代理的状态和数量等信息；
+
+Execve钩子
+
+通过挂钩sys_execve()/sys_execveat()/compat_sys_execve()/compat_sys_execveat()
+实现，使用样例如下：
+
+    
+    
+    {
+        "uid":"0",
+        "data_type":"59",
+        "run_path":"/opt/ltp/testcases/bin/growfiles",
+        "exe":"/opt/ltp/testcases/bin/growfiles",
+        "argv":"growfiles -W gf26 -D 0 -b -i 0 -L 60 -u -B 1000b -e 1 -r 128-32768:128 -R 512-64000 -T 4 -f gfsmallio-35861 -d /tmp/ltp-Ujxl8kKsKY ",
+        "pid":"35861",
+        "ppid":"35711",
+        "pgid":"35861",
+        "tgid":"35861",
+        "comm":"growfiles",
+        "nodename":"test",
+        "stdin":"/dev/pts/1",
+        "stdout":"/dev/pts/1",
+        "sessionid":"3",
+        "dip":"192.168.165.1",
+        "dport":"61726",
+        "sip":"192.168.165.128",
+        "sport":"22",
+        "sa_family":"1",
+        "pid_tree":"1(systemd)->1384(sshd)->2175(sshd)->2177(bash)->2193(fish)->35552(runltp)->35711(ltp-pan)->35861(growfiles)",
+        "tty_name":"pts1",
+        "socket_process_pid":"2175",
+        "socket_process_exe":"/usr/sbin/sshd",
+        "SSH_CONNECTION":"192.168.165.1 61726 192.168.165.128 22",
+        "LD_PRELOAD":"/root/ldpreload/test.so",
+        "user":"root",
+        "time":"1579575429143",
+        "local_ip":"192.168.165.128",
+        "hostname":"test",
+        "exe_md5":"01272152d4901fd3c2efacab5c0e38e5",
+        "socket_process_exe_md5":"686cd72b4339da33bfb6fe8fb94a301f"
+    }
+
+链接钩子
+
+通过挂钩sys_connect() 实现，使用样例如下：
+
+    
+    
+    {
+        "uid":"0",
+        "data_type":"42",
+        "sa_family":"2",
+        "fd":"4",
+        "dport":"1025",
+        "dip":"180.101.49.11",
+        "exe":"/usr/bin/ping",
+        "pid":"6294",
+        "ppid":"1941",
+        "pgid":"6294",
+        "tgid":"6294",
+        "comm":"ping",
+        "nodename":"test",
+        "sip":"192.168.165.153",
+        "sport":"45524",
+        "res":"0",
+        "sessionid":"1",
+        "user":"root",
+        "time":"1575721921240",
+        "local_ip":"192.168.165.153",
+        "hostname":"test",
+        "exe_md5":"735ae70b4ceb8707acc40bc5a3d06e04"
+    }
+
+DNS查询钩子
+
+通过挂钩sys_recvfrom() 实现，使用样例如下：
+
+    
+    
+    {
+        "uid":"0",
+        "data_type":"601",
+        "sa_family":"2",
+        "fd":"4",
+        "dport":"53",
+        "dip":"192.168.165.2",
+        "exe":"/usr/bin/ping",
+        "pid":"6294",
+        "ppid":"1941",
+        "pgid":"6294",
+        "tgid":"6294",
+        "comm":"ping",
+        "nodename":"test",
+        "sip":"192.168.165.153",
+        "sport":"53178",
+        "qr":"1",
+        "opcode":"0",
+        "rcode":"0",
+        "query":"www.baidu.com",
+        "sessionid":"1",
+        "user":"root",
+        "time":"1575721921240",
+        "local_ip":"192.168.165.153",
+        "hostname":"test",
+        "exe_md5":"39c45487a85e26ce5755a893f7e88293"
+    }
+
+文件创建钩子
+
+通过挂钩security_inode_create() 实现，使用样例如下：
+
+    
+    
+    {
+        "uid":"0",
+        "data_type":"602",
+        "exe":"/usr/lib/jvm/java-1.8.0-openjdk-1.8.0.232.b09-0.el7_7.x86_64/jre/bin/java",
+        "file_path":"/tmp/kafka-logs/replication-offset-checkpoint.tmp",
+        "pid":"3341",
+        "ppid":"1",
+        "pgid":"2657",
+        "tgid":"2659",
+        "comm":"kafka-scheduler",
+        "nodename":"test",
+        "sessionid":"3",
+        "user":"root",
+        "time":"1575721984257",
+        "local_ip":"192.168.165.153",
+        "hostname":"test",
+        "exe_md5":"215be70a38c3a2e14e09d637c85d5311",
+        "create_file_md5":"d41d8cd98f00b204e9800998ecf8427e"
+    }
+
+进程注入钩子
+
+通过挂钩sys_ptrace()实现，使用样例如下：
+
+    
+    
+    {
+        "uid":"0",
+        "data_type":"101",
+        "ptrace_request":"4",
+        "target_pid":"7402",
+        "addr":"00007ffe13011ee6",
+        "data":"-a",
+        "exe":"/root/ptrace/ptrace",
+        "pid":"7401",
+        "ppid":"1941",
+        "pgid":"7401",
+        "tgid":"7401",
+        "comm":"ptrace",
+        "nodename":"test",
+        "sessionid":"1",
+        "user":"root",
+        "time":"1575722717065",
+        "local_ip":"192.168.165.153",
+        "hostname":"test",
+        "exe_md5":"863293f9fcf1af7afe5797a4b6b7aa0a"
+    }
+
+LKM文件加载钩子
+
+通过挂钩load_module()实现，使用样例如下：
+
+    
+    
+    {
+        "uid":"0",
+        "data_type":"603",
+        "exe":"/usr/bin/kmod",
+        "lkm_file":"/root/ptrace/ptrace",
+        "pid":"29461",
+        "ppid":"9766",
+        "pgid":"29461",
+        "tgid":"29461",
+        "comm":"insmod",
+        "nodename":"test",
+        "sessionid":"13",
+        "user":"root",
+        "time":"1577212873791",
+        "local_ip":"192.168.165.152",
+        "hostname":"test",
+        "exe_md5":"0010433ab9105d666b044779f36d6d1e",
+        "load_file_md5":"863293f9fcf1af7afe5797a4b6b7aa0a"
+    }
+
+Cred修改钩子
+
+通过挂钩commit_creds()实现，使用样例如下：
+
+    
+    
+    {
+        "uid":"0",
+        "data_type":"604",
+        "exe":"/tmp/tt",
+        "pid":"27737",
+        "ppid":"26865",
+        "pgid":"27737",
+        "tgid":"27737",
+        "comm":"tt",
+        "old_uid":"1000",
+        "nodename":"test",
+        "sessionid":"42",
+        "user":"root",
+        "time":"1578396197131",
+        "local_ip":"192.168.165.152",
+        "hostname":"test",
+        "exe_md5":"d99a695d2dc4b5099383f30964689c55"
+    }
+
+用户登录警报
+
+    
+    
+    {
+        "data_type":"1001",
+        "status":"Failed",
+        "type":"password",
+        "user_exsit":"false",
+        "user":"sad",
+        "from_ip":"192.168.165.1",
+        "port":"63089",
+        "processor":"ssh2",
+        "time":"1578405483119",
+        "local_ip":"192.168.165.128",
+        "hostname":"localhost.localdomain"
+    }
+
+PROC文件钩子警报
+
+    
+    
+    {
+        "uid":"-1",
+        "data_type":"700",
+        "module_name":"autoipv6",
+        "hidden":"0",
+        "time":"1578384987766",
+        "local_ip":"192.168.165.152",
+        "hostname":"test"
+    }
+
+系统调用钩子警报
+
+    
+    
+    {
+        "uid":"-1",
+        "data_type":"701",
+        "module_name":"diamorphine",
+        "hidden":"1",
+        "syscall_number":"78",
+        "time":"1578384927606",
+        "local_ip":"192.168.165.152",
+        "hostname":"test"
+    }
+
+LKM隐藏警告
+
+    
+    
+    {
+        "uid":"-1",
+        "data_type":"702",
+        "module_name":"diamorphine",
+        "hidden":"1",
+        "time":"1578384927606",
+        "local_ip":"192.168.165.152",
+        "hostname":"test"
+    }
+
+拦截钩子警报
+
+    
+    
+    {
+        "uid":"-1",
+        "data_type":"703",
+        "module_name":"syshook",
+        "hidden":"1",
+        "interrupt_number":"2",
+        "time":"1578384927606",
+        "local_ip":"192.168.165.152",
+        "hostname":"test"
+    }
+
+## 性能测试
+
+### 测试环境
+
+CPU | Intel(R) Core(TM) i7-4870HQ CPU @ 2.50GHz 双核  
+---|---  
+RAM | 2GB  
+OS/Kernel | Centos7 / 3.10.0-1062.7.1.el7.x86_64  
+  
+### 测试结果
+
+钩子处理器 | 平均延迟(us)  
+---|---  
+execve_entry_handler | 10.4  
+connect_handler | 7.5  
+connect_entry_handler | 0.06  
+recvfrom_handler | 9.2  
+recvfrom_entry_handler | 0.17  
+fsnotify_post_handler | 0.07  
+  
+## 许可证协议
+
+> 本项目的开发与发布遵循GNU GPLv2开源许可证协议。
+
+## 项目地址
+
+> AgentSmith-HIDS：【[ _GitHub传送门_](https://github.com/EBWi11/AgentSmith-HIDS)】
+
+ *** 参考来源：[ _EBWi11_](https://github.com/EBWi11/AgentSmith-HIDS)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

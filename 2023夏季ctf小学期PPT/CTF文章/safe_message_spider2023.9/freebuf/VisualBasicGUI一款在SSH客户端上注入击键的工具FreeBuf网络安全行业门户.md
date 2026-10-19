@@ -1,0 +1,61 @@
+**今天给大家介绍的是一款注入工具，该工具名叫Visual Basic
+GUI，它可以通过X11转发会话来向SSH客户端注入击键数据。也就是说，这款工具可以利用X11转发SSH会话并在目标客户端中实现远程命令执行。**  
+
+![a.png](https://image.3001.net/images/20180314/15210359073564.png!small)  
+
+## 工具的目的
+
+SSH的常规运行模式要求客户端必须受到服务器端的信任，但是对于X11架构来说，服务器端也必须受到客户端的信任，而这将提供更加丰富的功能，例如允许远程服务器打开新窗口和拦截击键数据等等。虽然SSH连接的危险性是众所周知的，但绝大部分用户都认为自己不会因为SSH连接而导致自己的电脑被入侵。由于现在网上似乎没有使用SSH转发会话实现远程命令执行的PoC，所以“拯救地球”的任务就得我来了。
+
+### 工具下载
+
+VisualBasic GUI：【[GitHub传送门](https://github.com/xfee/vbg)】
+
+## 工具演示
+
+![b.gif](https://image.3001.net/images/20180314/15210359282758.gif!small)  
+
+### 如何实现？
+
+受信任的X11转发（-Y选项）会暴露大量的X11扩展功能，而攻击者就可以利用这些功能来实施攻击，比如说枚举已打开的窗口、记录/注入键盘和鼠标事件等等。本工具使用了wmctrl来检测客户端的资源管理器，并使用了XTEST扩展来注入键盘击键数据，然后向目标环境发送Payload。我还在sshd_config中添加了一个ForceCommand选项来运行脚本，而且该工具还可以读取并执行Payload。
+
+## 项目结构
+
+write_cmd.c负责通过发送键盘事件来实现数据输入。vbg.py是一个Python脚本，负责处理大多数的运行逻辑，例如检测窗口管理器、解析Payload、以及调用write_cmd等等。
+
+## 工具安装
+
+工具的安装命令如下：
+
+    
+    
+    wget https://raw.githubusercontent.com/xfee/vbg/master/setup.sh
+    chmod+x ./setup.sh
+    sudo ./setup.sh $username  
+    
+
+安装脚本将会下载相关的依赖组件，然后创建一个新用户，并自动配置SSH守护进程来模拟键盘事件。
+
+## 工具使用
+
+注：登录工具之后，用户也可以手动运行所有脚本。
+
+自动化WM检测以及Payload选取：
+
+    
+    
+    cd /opt/vbg && ./vbg.py -m cmd
+
+手动选取Payload：
+
+    
+    
+    cd /opt/vbg && ./vbg.py -m cmd -p payloads/i3_payload
+
+### 相关项目
+
+Rootstealer：【[GitHub传送门](https://github.com/CoolerVoid/rootstealer)】
+
+ ***
+参考来源：[vbg](https://github.com/xfee/vbg)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

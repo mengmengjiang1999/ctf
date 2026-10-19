@@ -1,0 +1,306 @@
+### 一. PE
+
+#### 1.PE文件简介
+
+PE是分节存储的
+
+硬盘对齐和内存对齐
+
+![image-20200816134902299](https://image.3001.net/images/20200929/1601341352_5f7287a83707c7799cfd2.png!small)
+
+![image-20200816140312112](https://image.3001.net/images/20200929/1601341413_5f7287e5098c1f2d26cf2.png!small)
+
+![image-20200816142046812](https://image.3001.net/images/20200929/1601341530_5f72885ae72c4281648ae.png!small)
+
+这里演示的是解析DOC头，其中最后的e_ifanew字段指示了真正的PE文件开始的地方，这里是E8，则向后推E8个字节，到真正的PE文件的开始的地方，而中间过程中的数据可以先理解为垃圾数据。
+
+![image-20200816143333376](https://image.3001.net/images/20200929/1601341588_5f7288947b1a52d1aced1.png!small)
+
+随后再在NT中还是按照大小推相关的标准PE头和可选PE头的字段的二进制
+
+ **TIPS：很详细的PE介绍：<https://blog.csdn.net/adam001521/article/details/84658708>**
+
+#### 2\. PE头字段说明（仅列出一些重要的）
+
+ **1.DOC头：**
+
+ **（1）WORD e_magic; “MZ”标记，用于判断是否是可执行文件**
+
+ **（2）DWORD e_ifanew; PE头相对于文件的偏移，用于可定位PE文件**
+
+ **2.PE标记（4字节）**
+
+ **3.标准PE头：20个字节**
+
+（1）WORD Machine; 程序运行的CPU型号，0X0任何处理器 /0x14C 386以及后续的处理器
+
+（2）WOED NumberOfSection; 文件中存在的节的总数，如果要新增或者合并，就要修改该值
+
+（3）DWORD TiemDataStamp; 时间戳，文件的创建时间（和操作系统的创建时间无关）编译器编写的
+
+（4）DWORD PointerToSymbolTable;
+
+（5）DWORD NUmberOfSymbols;
+
+（6）WORD SizeOfOptionHeader; 可选PE头的大小，32位PE文件默认E0h 64位PE文件默认为F0h,大小可以自定义
+
+（7）WORD Characteristics; 每个位有不同的含义，可执行文件的值为10F
+
+![image-20200816151056801](https://image.3001.net/images/20200929/1601341563_5f72887bb331738c7cac4.png!small)
+
+ **4.可选PE头：在32位机中大小是E0字节，64机中F0**
+
+（1）WORD Magic; 说明文件的类型，10B：32位下的PE文件，20B：64位下的PE文件
+
+（2）DWORD SizeOfCode; 所有代码节的和，必须是FileAlignment的整数倍，编译器修改的话没用
+
+（3）DWORD SizeOfInitializedData; 已初始化数据大小的和，必须是FileAlignment的整数倍，编译器修改的话没用
+
+（4）DWORD SizeOfUnInitializedData; 未初始化数据大小的和，必须是FileAlignment的整数倍，编译器修改的话没用
+
+ **（5）DWORD AddressOfEntryPoint; 程序入口**
+
+（6）DWORD BaseOfCode; 代码开始的基址，编译器修改没用
+
+（7）DWORD BaseOfData; 数据开始的基址，编译器修改没用
+
+（ **8）DWORD ImageBase; 内存镜像基址:内存中所有的数据的开始的地方**
+
+ **（9）DWORD SectionAlignment; 指定内存对齐时大小**
+
+ **（10）DWORD FileAlignment; 指定文件对齐时的大小**
+
+（11）DWORD SizeOfImage; 内存中整个PE文件的映射的尺寸，但必须是SectionAllignment的整数倍
+
+（12）DWORD SizeOfHeaders; 所有头+节表按照文件对齐后的大小，严格按照SectionAlignment对齐，否 则加载会出问题
+
+（12）DWORD CheckSum; 校验和，一些系统文件有要求，用来判断文件是否被修改
+
+（13）DWORD SizeOfStackReserve; 初始化时保留的堆栈的大小
+
+（14）DWORD SizeOfStaceCommit; 初始化时实际提交的大小
+
+（15）DWORD SizeOfHeapReserve; 初始化保留的堆的大小
+
+（16）DWORD SizeOfHeadCommit; 初始化时实际提交的堆的大小
+
+（17）DWORD NumberOfRvaAndSizes; 目录项数目
+
+#### 3\. 节表（一个节表40个字节）
+
+![image-20200817111800347](https://image.3001.net/images/20200929/1601341621_5f7288b57269d16aae220.png!small)
+
+![image-20200817105638355](https://image.3001.net/images/20200929/1601341641_5f7288c9a4b1e8bcf69c7.png!small)
+
+图中字段：（4）SizeOfRawData:左图中绿色块的大小
+
+（5）PointerToRawData:在文件中的偏移，左图中绿色块的开始地址
+
+（6）Characteristics:该字段会指明该节的属性（可读，可写，可执行）占32位
+
+    
+    
+    typedef struct_IMAGE_SECTION_HEADER {  
+    BYTE  Name[IMAGE_SIZEOF_SHORT_NAME];  
+    union {     
+    DWORD PhysicalAddress;    
+    DWORD VirtualSize; } Misc;  
+    DWORD VirtualAddress;  
+    DWORD SizeOfRawData;  
+    DWORD PointerToRawData;  
+    DWORDPointerToRelocations;  
+    DWORDPointerToLinenumbers;  
+    WORD  NumberOfRelocations;  
+    WORD  NumberOfLinenumbers;  
+    DWORD Characteristics;  
+    } IMAGE_SECTION_HEADER,*PIMAGE_SECTION_HEADER;
+
+关于区块从filebuffer到imagebuffer的转换过程以及内存中区块的某个地方与磁盘存储位置的换算：
+
+<https://www.52pojie.cn/thread-1023342-1-1.html>
+
+#### 4\. FileBuffer->ImageBuffer
+
+#### 5.代码节空白区添加代码
+
+#### 6.新增节，添加代码
+
+1.判断是否由足够的空间可以新增节：
+
+判断条件：SizeOfHeader - (DOS头+垃圾数据+PE标记+标准PE头+可选PE头+已存在节表)>=
+**2个节表的大小（要大于2个节表的原因是PE文件节表后面必须有40个字节的0）**
+
+2.需要修改的数据：
+
+（1）添加一个新的节表（可以从前面的复制一份）
+
+（2）在新增节表的后面填充一个节表大小的000(即若节表的大小为40字节，则后面空白区大小必须够80字节)
+
+（3）修改PE头中节的数量：NumberOfSection
+
+（4）修改SizeOfImage的大小
+
+（5）在原有的数据的最后，新增一个节的数据（内存对齐的整数倍）
+
+（6）修正新增节的属性
+
+#### 7\. 扩大节
+
+1.拉伸到内存
+
+2.分配一块新的空间，SizeOfImage + Ex
+
+3.将最后一个节的SizeOfRawData和VirtualSize改成N
+
+SizeofRawData = VirtualSize = N
+
+N = (SizeOfRawData或者VirtualSize 内存对齐后的值）+ Ex
+
+4.修改SizeOfImage的大小
+
+SizeOfImage SizeOfImage + Ex
+
+#### 8\. 静态和动态链接库
+
+1.静态链接库：（静态链接库中的代码全在lib文件中存放）
+
+（1）创建静态连接库项目
+
+（2）使用静态链接库：
+
+a. 将xxx.h 和 xxx.lib复制到要使用的项目中
+
+b.在需要使用的文件中包含：#include "xxx.h"
+
+c.在需要使用的文件中包含：#pragma comment(lib,"xxx.lib")
+
+（3）使用静态连接库方式二：
+
+a.将xxx.h 和 xxx.lib复制到要使用的项目中
+
+b.在需要使用的文件中包含：#include "xxx.h"
+
+c.右键项目的settings选项的Link选项卡中在object/library moduldes中添加xxx.lib即可
+
+![image-20200822194136803](https://image.3001.net/images/20200929/1601341668_5f7288e477c60501041f0.png!small)
+
+2.动态链接库：（动态链接库的代码时放在dll文件中存放，lib中可以理解存放代码的位置）
+
+（1）创建动态链接库
+
+（2）源文件是：
+
+![image-20200822194406963](https://image.3001.net/images/20200929/1601341687_5f7288f79ebd651289740.png!small)
+
+其中1.extern 表示这个是全局函数，可以供各个其他的函数调用；
+
+2.“C” 表示按照C语言的方式进行编译，链接 (若不按照C的方式，函数的名字在编译导出的时候会被替换)
+
+3.__declspec(dllexport)告诉编译器此函数为导出函数，即导出函数关键字
+
+（3）使用DLL方式一：隐式链接
+
+a.将*.dll 和 *.lib放到工程目录下
+
+b.将#pragma comment(lib,"DLL名.lib")添加到调用文件中
+
+c.加入函数的声明
+
+![image-20200822195112834](https://image.3001.net/images/20200929/1601341712_5f728910379608a2b1f4b.png!small)
+
+注意__declspec(dllimport) 告诉编译器此函数为导入函数
+
+（4）使用DLL方式二：显式调用
+
+![image-20200822195858152](https://image.3001.net/images/20200929/1601341734_5f728926ddf83c7cf5836.png!small)
+
+注意：
+
+1.Handle：代表系统的内核对象，如文件句柄，线程句柄，进程句柄
+
+2.HMODULE：是代表应用程序载入的模块
+
+3.HINTSTANCE：在win32下与HMODULE是相同的东西 win16遗留
+
+4.HWND：是窗口句柄
+
+其实就是一个无符号4字节整型，这样可以使得可读性好，拒绝被用作为运算
+
+（5）使用DLL：.def导出
+
+项目的头文件和cpp文件照常写，不用添加函数导出关键字信息
+
+创建动态链接库项目之后，在项目中创建一个.def文件
+
+![image-20200822201101849](https://image.3001.net/images/20200929/1601341756_5f72893cc97ffcf380ae7.png!small)
+
+#### 9\. 导出表
+
+可选PE头的最后一个属性，是一个16大小的结构数组数据目录项，其中第一个结构表示导出表。
+
+    
+    
+    IMAGE_DIRECTORY_ENTRY_RESOURCE  
+    ​  
+    struct _IMAGE_DATA_DIRECTORY{  
+    DWORD VirturalAddress;  //真正的导出表的位置  
+    DWORD Size  
+    }
+
+![image-20200825082822180](https://image.3001.net/images/20200929/1601341777_5f7289512caf99be3f1c4.png!small)
+
+![image-20200825084944790](https://image.3001.net/images/20200929/1601341796_5f7289646d71ab77317c2.png!small)
+
+注意导出表中导出函数地址/名称/序号表RVA又指向真正的地址。
+
+总结：为什么要分成3张表：
+
+1.函数导出的个数于函数名的个数未必一样，所以需要将函数地址和函数名称分开
+
+2.函数地址表是否一定大于函数名称表：未必，相同的函数地址可能有多个不同的名字
+
+3.如何根据函数名字获取一个函数的地址: 根据函数名称比对函数名称表地址中的函数名，根据下标确定函数序号，在根据函数序号确定函数的具体位置
+
+#### 10\. 重定位表
+
+数据目录项的第6个结构，就是重定位表。用于指向一个dll或exe中函数可能重名，需要重定位到实际的函数地址
+
+    
+    
+    typedef srtuct IMAGE_DATA_DIRECTORY{  
+    DWORD VirturalAddress;  
+    DWORD Size;  
+    }IMAGE_DATA_DIRECTORY,*PIMAGE_DAATA_DIRECTORY
+
+![image-20200829163119205](https://image.3001.net/images/20200929/1601341815_5f7289778880623fca81d.png!small)
+
+#### 11\. 移动导出表，重定位表
+
+为什么要移动各种表：
+
+  1. 这些表是编译器生成，里面存储了非常重要的信息
+
+  2. 程序启动的的时候，系统根据这些表做初始化的工作
+
+  3. 为了保护程序，可以对exe的二进制代码进行加密操作，但是问题是各种表的信息于客户字节的代码和数据都混在一起了，如果进行加密，那系统在初始化的时候就会出问题。
+
+  4. 总结就是:学会移动各种表，是对程序的加密/破解的基础
+
+  5. 在DLL中新增一个节，并返回新增后的FOA
+
+  6. 复制AddressOfFunctions 长度：4*NuberOfFunctions
+
+  7. 复制AddressOfNameOrdinals（序号表） 长度：NumberOfNames*2
+
+  8. 复制AddressIOfNames 长度：NumberOfNames*4
+
+  9. 复制所有的函数名：长度不确定，复制的时候直接修复AddressOfNames
+
+  10. 复制IMAGE_EXPORT_DIRECTORY结构
+
+  11. 修复IMAGE_EXPORT_DIRECTORY结构中的AddressOfFunctions,AddressOfNameOrdinals,AddressOfNames
+
+  12. 修复目录项中的值，指向新的IMAGE_EXPORT_DIRECTORY
+
+#### 12\. IAT表和导入表
+

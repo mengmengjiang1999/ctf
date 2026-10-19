@@ -1,0 +1,443 @@
+# 【技术分享】详细解析PHP mail()函数漏洞利用技巧
+
+阅读量 **348065**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-05-05 19:12:40
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：exploitbox.io
+
+原文地址：<https://exploitbox.io/paper/Pwning-PHP-Mail-Function-For-Fun-And-RCE.html>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+****
+
+****
+
+翻译：[ **myswsun**](http://bobao.360.cn/member/contribute?uid=2775084127)
+
+**预估稿费：300RMB**
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+**  
+**
+
+**0x00 前言**
+
+本白皮书旨在消除关于PHP mail函数在漏洞利用中的限制的一些误解，并展示利用的进一步发展。
+
+它提供了几个关于PHP mail()函数的新的漏洞利用和绕过技术的向量，在主要的PHP e-mail发送库（PHPMailer、Zend
+Framework/Zend-mail、SwiftMailer）都发现了多个致命的漏洞，它们还被数百万的web应用/项目（如WordPress、Drupal、Joomla等）和PHP编程框架（Zend、Yii2、Symphony、Laravel等）使用。
+
+这些技术包括被认为通过mail()函数不可利用的Exim向量。这个向量使mail()注入攻击提升到一个新的水平。
+
+成功利用mail函数可以使攻击者获得远程代码执行权限和其他恶意目的。
+
+  
+
+**0x01 SMTP协议——RFC2821**
+
+根据[ **RFC2821**](https://www.ietf.org/rfc/rfc2821.txt)
+，一个客户端email程序能通过下面的方式发送一系列SMTP命令给SMTP服务器：
+
+从理解PHP mail()函数/sendmail的邮件地址使用的角度看，重要的部分是SMTP客户端在两个地方指定了发送者的地址：
+
+在头部。
+
+在DATA命令中。
+
+前者被目的SMTP服务器用来在有问题的情况下回退邮件使用。
+
+后者被电子邮件客户端软件（如outlook、thunderbird等）使用，用来在‘From’地址字段显示发送者的信息（基于From头），同时决定（基于Reply-To头或者From头）点击回复按钮时选择哪个地址回复。
+
+  
+
+**0x02 mail()函数**
+
+Mail()是标准的PHP函数，被用来作为[ **PHP脚本**](http://php.net/manual/en/function.mail.php)
+中发送邮件的接口。函数原型如下：
+
+从攻击者的角度，最后一个参数是最有趣的，因为它允许注入额外的参数给系统安装的/usr/bin/sendmail程序，该程序使用mail()发送消息。
+
+**1\. 第5个参数（$ additional_parameters）**
+
+第5个参数是可选的。许多WEB应用使用它设置发送者地址/返回路径：
+
+或者：
+
+这个参数地址就传递给/usr/sbin/sendmail，其将使用这个电子邮件地址通知接收邮件服务器关于原始/发送者的信息（通过MAIL
+FROM命令），如果分发错误将返回错误信息。
+
+**2\. /usr/bin/sendmail接口调用mail()函数**
+
+/usr/bin/sendmail程序是用来发送邮件的接口。它由邮件传输代理（MTA）软件安装在系统上（如Sendmail、Postfix等）。
+
+当使用mail()发送邮件时，PHP脚本如下：
+
+PHP将调用execve()执行sendmail程序：
+
+并且通过它的标准输入传递下面的数据：
+
+-t和-i参数由PHP自动添加。参数-t使sendmail从标准输入中提取头，-i阻止sendmail将‘.‘作为输入的结尾。-f来自于mail()函数调用的第5个参数。
+
+有趣的事就在这，sendmail命令在系统shell的帮助下执行，给了注入攻击的机会，只需要传递不受信的输入到最后一个参数即可。
+
+  
+
+**0x03 通过mail()和$additional_parameters Sendmal命令注入**
+
+如果一个攻击者能够注入数据到mail()函数的第5个参数中，例如，通过不过滤的GET变量获取的$sender：
+
+攻击者能够通过PHP脚本请求注入任意的攻击参数给/usr/sbin/sendmail：
+
+其执行mail():
+
+将导致使用参数执行sendmail：
+
+**1\. escapeshellcmd()逃逸**
+
+重要的是mail()函数能通过下面函数内部执行命令逃逸：
+
+因此shell字符不能起作用。例如，设置$senders_email GET变量：
+
+不会导致shell_injection文件的创建，因为>字符会被escapeshellcmd()转义，sendmail最终如下调用：
+
+**2\. sendmail命令参数注入**
+
+攻击者能够注入额外的参数给sendmail命令，因为mail()调用的escapeshellcmd()函数默认不会转义$additional_parameters。它使得编程者可以自由的传入多个参数，但是可能是个漏洞。
+
+成功的注入能触发sendmail额外的功能。
+
+例如，如果攻击者设置$return变量为：
+
+Sendmail将在shell命令中如下调用：
+
+如果-LogFile是sendmail的一个可靠的参数，将能使得程序写一个日志文件为/tmp/output_file。
+
+结果是Sendmail MTA的/usr/sbin/sendmail接口中真的有这么一种日志功能实现，使用-X参数开启，能够用来保存攻击者的恶意代码。
+
+  
+
+**0x04 /usr/sbin/sendmail中不同的实现**
+
+如上文提到的，sendmail接口由MTA邮件软件(Sendmail, Postfix, Exim etc.)安装提供。
+
+尽管基本的功能（如-t –I –f参数）是相同的，其他功能和参数根据MTA的不同有变化。
+
+例如，-X参数是来日志记录，只在在上节中提到的版本实现了。在其他的里面简单的实现它作为一个假的开关，出于某些原因，不支持相关参数。
+
+正式由于这个，sendmail的man页也会根据MTA的变化而变化。
+
+下面是一些不同版本的sendmail接口的man页：
+
+  
+
+**0x05 已知的利用向量**
+
+关于mail()的第五个参数能被恶意利用最早披露于2011年Sogeti / ESEC发布的[ **文章**](http://esec-pentest.sogeti.com/posts/2011/11/03/using-mail-for-remote-code-execution.html)
+中。
+
+本文揭露了Sendmail MTA的2种利用向量，允许攻击者任意读写文件，并能通过-C和-X参数获得远程代码执行。
+
+这两种向量只能在Sendmail MTA中有效，呈现如下。
+
+**1\. Sendmail MTA：使用-C参数文件任意读**
+
+参考sendmail的man页：
+
+这两个参数能组合使用使得sendmail加载任意文件作为配置，且输出一系列错误消息内容（由于未知的配置行）。
+
+例如，如果攻击者注入：
+
+作为mail()的5th参数，下面的命令将被执行：
+
+保存下面的内容到/tmp/output.txt：
+
+对于远程攻击者是有效的。输出文件需要放在可写目录下面，且能通过web服务器得到。
+
+**2\. Sendmail MTA：任意文件写/远程代码执行**
+
+Sendmail MTA版本的/usr/sbin/sendmail的-X参数也能和下面参数组合使用：
+
+这个参数的描述如下：
+
+攻击者需要选择可写目录来保存临时文件。
+
+这允许成功发送一个消息给sendmail，同时通过-X参数保存日志文件到任意文件。
+
+这个PoC将保存$body 内的PHP代码到/tmp/poc.php日志文件中：
+
+因为攻击者能控制文件名和内容，如果攻击者将它保存到root目录下面的可写目录中去，这潜在的导致任意PHP代码执行：
+
+能通过一个GET请求执行它：
+
+为了实现这个，上传目录必须启用解析/执行PHP文件，有时由于安全原因，管理员或应用安装者会关掉它（通过在上传目录放置.htaccess规则文件）。
+
+也该注意到输出日志文件可能包含大量的调试信息。
+
+  
+
+**0x06 作者发现的新的攻击向量**
+
+由于复杂性和一些历史漏洞原因，Sendmail MTA很少被使用。
+
+现代linux分发中已不再默认包含它，且在基于Redhat的系统（如centos）上被Postfix
+MTA替换，在基于Debian的系统（如Ubuntu、Debian等）上被Exim MTA替代。
+
+这使得在真实环境中很难找到Sendmail MTA。即使找到了，有时也会因为一些限制导致利用失败（如修改webroot路径、php执行目录等）。
+
+在本文以前所有已知的向量都需要Senmail MTA，作者发现了一种新的利用向量，能在Exim和Postfix上使用。
+
+**1\. 所有的MTA：抢夺邮件/执行侦查**
+
+不会因为MTA改变而改变的参数之一如下
+
+如果攻击者控制mail()的第五个参数，只需简单的追加一个recipient：
+
+执行命令如下：
+
+发送邮件到攻击者的邮箱attacker@anyhost-domain.com：
+
+这揭露了：
+
+使用的操作系统版本（Debian）
+
+服务器IP
+
+使用的MTA版本（8.14.4，是Sendmail MTA）
+
+发送消息的脚本名，继而揭露电子邮件发送库/框架的名（如X-PHP-Originating-Script: 0:class.phpmailer.php）
+
+如果应用使用了电子邮件库（如PHPMailer、Zend-mail等）。可能会有版本头。如：
+
+知道了使用的库，攻击者能调整他们的攻击的系统、MTA和PHP电子邮件库。
+
+例如，PHPMailer库有版本有漏洞：PHPMailer < 5.2.18 Remote Code Execution (CVE-2016-10033)
+
+**2\. Sendmail MTA：增强型已存在文件写向量**
+
+-X参数需要全路径的认知是错误的，因此攻击者需要猜测漏洞网站的webroot。
+
+Sendmail也接受相对路径。这使得攻击者能简单的使用当前目录作为远程漏洞目录的参考。
+
+如果远程脚本运行在webroot的顶层，攻击者可能尝试注入下面的参数：
+
+而不是：
+
+另外参数太长了：
+
+可以减为：
+
+如果web应用限制了$sender字符串的长度时，这非常有效，同时还能绕过‘=‘字符的过滤。
+
+**3\. Sendmail MTA：通过sendmail.cf远程代码执行**
+
+在一个安全部署的web应用中，在上传目录的PHP脚本执行可能是被禁止的，且应用只允许上传静态文件（如纯文本、图片等）。
+
+发现的新的攻击向量能打破这些限制。因为sendmail接口允许通过-C参数加载一个自定义的Sendmail
+MTA配置文件，攻击者通过web应用的上传功能上传一个恶意的配置文件，使用它强制Sendmail执行恶意的代码。
+
+这能通过复制一份/etc/mail/sendmail.cf配置文件并使用下面的Sendmail配置替换文件末尾的默认的Mlocal邮件处理函数来实现：
+
+$sender payload将使用相对路径从upload/sendmail_cf_exec加载构造的Sendmail
+MTA配置文件（之前用静态文件上传者上传），使用它处理来自mail()函数的邮件。
+
+Sendmail MTA将启动/usr/bin/php进程并处理$body中的消息。
+
+除了使用静态文件上传的远程利用，这个向量很明显也能用于共享主机环境中。
+
+有这么一种场景，一个攻击者能简单的使用/tmp目录来存放恶意的配置文件，然后使用mail()漏洞加载配置并在受害者用户上下文中获得代码执行。
+
+**4\. Exim MTA：远程代码执行**
+
+Exim MTA是基于Debain系统中默认安装MTA软件。
+
+/usr/sbin/sendmail接口由Exim4提供，它有丰富的功能。
+
+研究表明-be选项对于攻击者很有用。
+
+Man页表明：
+
+研究Exim提供的exim语法/语言，发现了可以扩展的变量。exim语法允许扩展标准变量，如$h_subject或$recipients。更深入的研究发现${run}能扩展到shell命令的返回结果。
+
+例如，下面的字符串：
+
+成功执行/bin/true后会扩展为’yes’。
+
+这很快就能转化为任意远程代码执行payload，能执行在$body内的任意shell命令：
+
+这个利用向量似乎是最有效的，因为它能使得攻击者在装有Exim MTA的系统上得到RCE。
+
+一旦通过mail()注入的参数传给/usr/sbin/sendmail，代码将得到执行。
+
+不必写任何文件，因此开启PHP解析的可写目录也是不需要的。
+
+**5\. Postfix MTA：通过恶意的配置代码执行**
+
+研究表明Postfix是更复杂的。
+
+然而，在攻击者和目标在相同的共享主机环境中，攻击者决定使用哪种方式获得代码执行是可能的。
+
+某些设置也能使远程攻击成为可能。
+
+类似于Sendmail MTA，Postfix MTA提供的/usr/sbin/sendmail接口有-C开关，能用于加载一个自定义的配置。
+
+然而，攻击者的消息传递给postdrop命令处理，sendmail将失败。Postdrop将注意到-C配置，并停止进一步执行。
+
+但是通过创建一个自定义的main.cf Postfix配置能绕过这个限制，在/tmp/main.cf文件中如下配置：
+
+攻击者能在postfix_fake_bin目录存放一个恶意的bash脚本，并注入下面的参数给/usr/sbin/sendmail接口，下面的PoC通过mail()参数注入：
+
+如果目标web应用提供一个文件管理工具能使得攻击者创建目录/文件但不是PHP文件，那么这种场景也能远程利用。
+
+另一种远程场景，包含一个文件上传者能让用户上传ZIP文件。一个恶意的ZIP能包含main.cf，且postdrop脚本能提取到一个已知的位置。
+
+**6\. Sendmail MTA：通过文件读和文件追加造成拒绝服务**
+
+-C和-X参数能用来对目标执行拒绝服务攻击，方法是使用-C选项读取大的已知文件（如web服务器日志），并追加他们到一个可写目录下的文件中（如/tmp、/var/www/html/upload、/var/lib/php5/sessions等），以消耗磁盘空间。
+
+尽管这个例子只限于Sendmail MTA，这个向量也可能影响更多的MTA服务器，只要使用其他MTA支持的类似的参数来做到。
+
+  
+
+**0x07 参数注入点和漏洞实例**
+
+Mail()参数注入被认为几乎不可能利用，因为多年来5th个参数都被认为不太可能暴露到web应用控制面板外面来接收恶意输入，其通常受限于管理员用户，因此很少被远程利用。
+
+找到mail()参数注入漏洞，也不能保证一个成功的利用，因为依赖web服务器安装的MTA版本，直到现在也只有很少使用的Sendmail MTA的2个向量
+–X和-C（文件写/读）。
+
+基于这个原因，新的攻击向量出现了，将会非常有用，新的漏洞利用将有更多的可能性。
+
+**1\. 有漏洞的电子邮件库（PHPMailer/Zend-mail/SwiftMailer）**
+
+最近作者发现了一系列的mail()参数注入：
+
+可以在各自的咨询中看到，但是我们可以快速的浏览他们共享的问题，以PHPMailer为例。
+
+**2\. 通过PHP电子邮件库的SetFrom()方法的sender注入**
+
+类似其他的电子邮件库，PHPMailer类使用PHP mail()函数作为它的默认的载体。
+
+这个载体使用mailSend()函数实现：
+
+如你所见，它创建了$params变量，追加$this->Sender属性为-f字符串，以创建一个sendmail参数（信件发送者/MAIL
+FROM）传递给mail()函数，作为5th参数。
+
+$this->Sender属性的内部会通过调用PHPMailer类的setFrom()方法验证并设置。看起来如下：
+
+理论上，setFrom()应该很少暴露给不受信的用户输入，即使是，也有验证函数验证邮件满足RFC822协议，因此这不是个问题。
+
+[PHPMailer教程](https://github.com/PHPMailer/PHPMailer/wiki/Tutorial)显示了PHPMailer的基本用法：
+
+与名字暗示的相反，这个setFrom()例子不是用来存储地址的。
+
+不幸的是，由于函数名和代码片段的流行程度，很多脚本通过各种通讯录和反馈表单中的字段使用setFrom()来设置访问者的“From”地址。
+
+不知道他们应该使用AddReplyTo()添加。（设置DATA/Reply-To头，而不是MAIL FROM/信件Sender地址）
+
+使用setFrom()实现预期的通讯/反馈表单，即使不满足邮件最佳做法。
+
+这也将造成严重缺陷，如果使用setFrom()设置的是不受信的邮件地址给mail()函数的5th参数，将绕过RFC验证。这使得注入任意参数给/usr/sbin/sendmail是可能的，并导致致命的远程代码执行缺陷。
+
+正如所提到的，其他的PHP库有类似的缺陷，后来被命名为“PwnScriptum”。
+
+这个漏洞的demo的[细节](https://legalhackers.com/videos/PHPMailer-Exploit-Remote-Code-Exec-Vuln-CVE-2016-10033-PoC.html)显示了如何通过通讯表单成功漏洞利用。受限利用在[这里](https://legalhackers.com/exploits/CVE-2016-10033/10045/10034/10074/PwnScriptum_RCE_exploit.py)分享。
+
+**3\. 其他利用mail()漏洞的注入点/方式**
+
+等到供应商修复了漏洞，剩余的实例将在下个版本的白皮书描述。
+
+  
+
+**0x08 绕过技术**
+
+本节描述了一些绕过技术，可能用于类似的保护绕过。
+
+下面两种被用于绕过PHP 电子邮件库提供的保护。
+
+**1\. RFC3696和RFC822**
+
+RFC3696和RFC822标准如下：https://tools.ietf.org/html/rfc3696
+
+<https://www.ietf.org/rfc/rfc0822.txt> 。
+
+邮件采用下面格式：
+
+这些标准允许作者构建一个可靠的符合RFC的电子邮件地址，但是同时一个恶意的payload作为mail()的5th参数：
+
+当传递给有漏洞的PHP邮件库，然后是mail()函数，它将导致sendmail执行下面的参数：
+
+因此，攻击者打破了-f参数，且注入了额外的参数（arg no.4和arg no.5）。
+
+**2\. 绕过mail()使用的escapeshellcmd()**
+
+很直观的看到，通过mail()函数的5th参数传递的额外的参数应该被escapeshellcmd()函数转义。
+
+不幸的是，它和mail()函数内部执行的命令逃逸冲突。
+
+好的例子是CVE-2016-10033漏洞继而有CVE-2016-10045漏洞，因为这样的修复能被绕过，因为冲突：
+
+将导致下面的参数传递给sendmail程序：
+
+再次导致任意参数传递给/usr/sbin/sendmail。
+
+  
+
+**0x09 参考**
+
+[0] <https://legalhackers.com/>
+
+[1] <https://www.ietf.org/rfc/rfc2821.txt>
+
+[2] <http://php.net/manual/en/function.mail.php>
+
+[3] <http://www.sendmail.org/~ca/email/man/sendmail.html>
+
+[4] <http://www.postfix.org/mailq.1.html>
+
+[5] <https://linux.die.net/man/8/exim>
+
+[6] <https://legalhackers.com/videos/PHPMailer-Exploit-Remote-Code-Exec-Vuln-CVE-2016-10033-PoC.html>
+
+[7]
+<https://legalhackers.com/exploits/CVE-2016-10033/10045/10034/10074/PwnScriptum_RCE_exploit.py>
+
+[8] <https://exploitbox.io/vuln/WordPress-Exploit-4-6-RCE-CODE-EXEC-CVE-2016-10033.html>
+
+本文翻译自exploitbox.io [原文链接](https://exploitbox.io/paper/Pwning-PHP-Mail-Function-For-Fun-And-RCE.html)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **root** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/86028](/post/id/86028)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [exploitbox.io](https://exploitbox.io/paper/Pwning-PHP-Mail-Function-For-Fun-And-RCE.html)
+
+如若转载,请注明出处： <https://exploitbox.io/paper/Pwning-PHP-Mail-Function-For-Fun-And-RCE.html>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __2赞
+
+ __收藏
+
+![](https://p5.ssl.qhmsg.com/dm/200_200_100/t00df551a583a87f4e9.jpg) root
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

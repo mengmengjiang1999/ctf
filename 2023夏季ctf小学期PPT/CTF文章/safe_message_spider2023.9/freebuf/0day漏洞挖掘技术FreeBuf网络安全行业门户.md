@@ -1,0 +1,295 @@
+0day代码安全漏洞发现,推荐KICS社区项目。从第一天开始，它就作为开放源代码构建，任何人都可以找到自己的方式为该项目做出贡献.在数分钟之内，您可以与成千上万的安全专家和软件开发人员共享您的专业知识，快速识别代码安全漏洞.
+
+Checkmarx是用于现代企业软件开发的软件安全解决方案的全球领导者。Checkmarx提供了业界最全面的软件安全平台，可与DevOps结合使用，并提供静态和交互式应用程序安全测试，软件组成分析以及开发人员AppSec意识和培训计划，以减少和补救软件漏洞带来的风险。Checkmarx受到40％以上的《财富》
+100强企业和一半的《财富》 50强企业的信任.
+
+## 基础架构即代码
+
+基础架构即代码（IaC）是通过机器可读的定义文件（而不是物理硬件配置或交互式配置工具）来创建，配置和配置软件定义的计算（SDC），网络和存储基础架构。
+
+IaC自动执行通常与计算基础架构配置和实施相关的手动任务。通过这样做，您可以：
+
+> 加快新计算基础架构的配置和实施
+>
+> 减少扩展和管理大型基础架构所需的成本和资源
+>
+> 消除了多个人手动配置新设备或应用程序时不可避免发生的不一致。
+
+基础架构即代码的核心概念是：
+
+> 在代码中定义
+>
+> 存储在存储库中
+>
+> 陈述式或命令式
+>
+> 幂等与一致性
+>
+> 推或拉
+
+基础架构作为代码的主要好处：
+
+> 全自动部署
+>
+> 一致的环境
+>
+> 可重复的过程
+>
+> 可重复使用的组件（“ DRY”）
+>
+> 记录架构
+
+## 基础架构即代码测试
+
+基础架构即代码测试检查用于实例化基础架构的配置定义和脚本，以确保生成的资源安全。
+
+IaC安全测试工具必须能够使用相关格式的配置文件和脚本，进行测试以确保符合常见的配置强化标准（即，Internet安全基准中心以及许多其他标准），确定与特定操作环境相关的安全问题，确定嵌入式机密，并执行其他测试以支持组织特定的标准和合规性要求。可选地，工具可以自动纠正错误（例如，更改存储资源的读/写权限）。此功能专门在开发过程的上下文中检查IaC测试，但是工具也可能支持检查已部署的生产实例并响应那些系统中确定的问题
+
+## 安装
+
+有多种方法可以启动和运行KICS：
+
+KICS可以作为Docker映像（https://hub.docker.com/r/checkmarx/kics）使用，并且可以按以下方式使用：
+
+要在主机上扫描目录/文件，必须将其作为卷安装到容器上，并使用-p KICS参数在容器文件系统上指定路径（请参见下面的“扫描命令选项”部分）
+
+    
+    
+    docker pull checkmarx/kics:latest
+    docker run -v {​​​​path_to_host_folder_to_scan}​​​​:/path checkmarx/kics:latest scan -p "/path" -o "/path/results.json"
+    
+
+您可以使用`-q`CLI选项提供自己的查询目录路径（请参见下面的“
+CLI选项”部分），否则将使用默认目录。默认./assets/queries内置在映像中。
+
+#### 一线安装脚本
+
+运行以下命令以下载并安装kics。它将检测您当前的操作系统并下载适当的二进制软件包，默认安装到`./bin`查询的位置将与二进制文件放在`./bin/assets/queries`：
+
+    
+    
+    curl -sfL https://raw.githubusercontent.com/Checkmarx/kics/master/install.sh | bash
+    
+
+如果您要将其放置在其他地方，例如`/usr/local/bin`：
+
+    
+    
+    sudo curl -sfL https://raw.githubusercontent.com/Checkmarx/kics/master/install.sh | bash -s -- -b /usr/local/bin
+    
+
+KICS的发布过程非常简单。发布新版本时，我们将打包适用于Linux和Windows操作系统的KICS可执行文件。我们的安全性查询将包含在ZIP文件和tarball中，以便您可以使用开箱即用的查询来扫描IaC代码
+
+因此，您需要做的是：
+
+> 1.转到KICS版本（https://github.com/Checkmarx/kics/releases/latest）
+>
+> 2.根据您的操作系统下载KICS二进制文件
+>
+> 3.提取文件
+>
+> 4.如下所述，使用cli选项运行kics可执行文件（请注意，kics二进制文件应与查询目录位于同一目录中）
+>
+> `./kics scan -p <path-of-your-project-to-scan> -o <output-results.json>`
+
+#### 从源构建
+
+> 1.从https://golang.org/dl/下载并安装Go。
+>
+> 2.克隆存储库：
+>
+> `git clone https://github.com/Checkmarx/kics.git``cd kics`
+>
+> 3.扫一扫！
+>
+> `go run ./cmd/console/main.go scan -p <path-of-your-project-to-scan> -o
+> <output-results.json>`
+
+## 将KICS与Azure Pipelines集成
+
+您可以将KICS集成到Azure Pipelines CI / CD中。
+
+这使您能够在GitLab存储库中运行KICS扫描，并以代码（IaC）的形式简化对基础结构的漏洞和错误配置检查。
+
+### 教程
+
+以下教程是在Azure Pipelines CI中使用KICS的一种可能方法。您可以发挥创造力，并提出适合您的管道的不同解决方案。
+
+在这种情况下，我们指示作业下载并使用最新的Linux版本的KICS。
+
+1-在存储库的根目录中编辑或添加新的azure-pipelines.yml文件
+
+2-宣告一个新阶段
+
+    
+    
+    stages:
+    - stage: kics
+      displayName: kics
+    
+
+3-声明步骤-在这种情况下，这是一个脚本，我们遵循以下步骤：
+
+3.1-获取操作系统名称： `OS=$(uname -s)`
+
+3.2-声明版本和KICS二进制文件下载
+
+    
+    
+    get_latest_kics_release() {
+        curl --silent "https://api.github.com/repos/Checkmarx/kics/releases/latest" |
+            grep '"tag_name":' |
+            sed -E 's/.*"([^"]+)".*/\1/'
+    }
+    LATEST_TAG=$(get_latest_kics_release)
+    LATEST_VERSION=${LATEST_TAG#v}
+    PACKAGE_NAME=kics_${LATEST_VERSION}_${OS}_x64.tar.gz
+    TARGET_DIR=/home/vsts/kics
+    
+
+3.3-下载二进制文件
+
+    
+    
+    mkdir -p ${TARGET_DIR}
+    wget -q -c https://github.com/Checkmarx/kics/releases/download/${LATEST_TAG}/${PACKAGE_NAME} -O - | tar -xz -C ${TARGET_DIR}
+    
+
+3.4-开始扫描
+
+    
+    
+    ${TARGET_DIR}/kics --no-progress -q ${TARGET_DIR}/assets/queries -p ${PWD} -o ${PWD}/kics-results.json
+    
+
+3.5-消费结果
+
+    
+    
+    TOTAL_SEVERITY_COUNTER=`grep '"total_counter"':' ' kics-results.json | awk {'print $2'}`
+    export SEVERITY_COUNTER_HIGH=`grep '"HIGH"':' ' kics-results.json | awk {'print $2'} | sed 's/.$//'`
+    SEVERITY_COUNTER_MEDIUM=`grep '"INFO"':' ' kics-results.json | awk {'print $2'} | sed 's/.$//'`
+    SEVERITY_COUNTER_LOW=`grep '"LOW"':' ' kics-results.json | awk {'print $2'} | sed 's/.$//'`
+    SEVERITY_COUNTER_INFO=`grep '"MEDIUM"':' ' kics-results.json | awk {'print $2'} | sed 's/.$//'`
+    echo "TOTAL SEVERITY COUNTER $TOTAL_SEVERITY_COUNTER"
+    
+
+3.6-（可选）为CI定义一个断点
+
+    
+    
+    if [ "$SEVERITY_COUNTER_HIGH" -ge "1" ]; then
+        echo "Please fix all $SEVERITY_COUNTER_HIGH HIGH SEVERITY COUNTERS" && exit 1;
+    fi
+    
+
+这是工作的全部内容
+
+    
+    
+    trigger:
+    - master
+    
+    pool:
+      vmImage: 'ubuntu-latest'
+    
+    stages:
+    - stage: kics
+      displayName: kics
+    
+      jobs:
+      - job: runKics
+        displayName: runKics
+        steps:
+          - script: |
+              get_latest_kics_release() {
+                curl --silent "https://api.github.com/repos/Checkmarx/kics/releases/latest" |
+                  grep '"tag_name":' |
+                  sed -E 's/.*"([^"]+)".*/\1/'
+              }
+    
+              OS=$(uname -s)
+              LATEST_TAG=$(get_latest_kics_release)
+              LATEST_VERSION=${LATEST_TAG#v}
+              PACKAGE_NAME=kics_${LATEST_VERSION}_${OS}_x64.tar.gz
+              TARGET_DIR=/home/vsts/kics
+    
+              mkdir -p ${TARGET_DIR}
+              wget -q -c https://github.com/Checkmarx/kics/releases/download/${LATEST_TAG}/${PACKAGE_NAME} -O - | tar -xz -C ${TARGET_DIR}
+    
+              echo '--- START SCANNING ---'
+              ${TARGET_DIR}/kics --no-progress -q ${TARGET_DIR}/assets/queries -p ${PWD} -o ${PWD}/kics-results.json
+    
+              TOTAL_SEVERITY_COUNTER=`grep '"total_counter"':' ' kics-results.json | awk {'print $2'}`
+              export SEVERITY_COUNTER_HIGH=`grep '"HIGH"':' ' kics-results.json | awk {'print $2'} | sed 's/.$//'`
+              SEVERITY_COUNTER_MEDIUM=`grep '"INFO"':' ' kics-results.json | awk {'print $2'} | sed 's/.$//'`
+              SEVERITY_COUNTER_LOW=`grep '"LOW"':' ' kics-results.json | awk {'print $2'} | sed 's/.$//'`
+              SEVERITY_COUNTER_INFO=`grep '"MEDIUM"':' ' kics-results.json | awk {'print $2'} | sed 's/.$//'`
+              echo "TOTAL SEVERITY COUNTER $TOTAL_SEVERITY_COUNTER"
+    
+              if [ "$SEVERITY_COUNTER_HIGH" -ge "1" ]; then
+                echo "Please fix all $SEVERITY_COUNTER_HIGH HIGH SEVERITY COUNTERS" && exit 1;
+              fi
+
+特别感谢 来自 **Kaplan开源咨询公司的** **Lior Kaplan** 在创建KICS方面的协助。
+
+以下人员为KICS做出了巨大贡献。欢迎小伙伴们提出更多的建议！
+
+鲁本·席尔瓦（Ruben Silva）https://github.com/Ruben-Silva
+
+拉斐拉·苏亚雷斯（Rafaela Soares）https://github.com/rafaela-soares
+
+若昂·马丁斯
+
+乔尔·卡瓦略（Joel Carvalho）
+
+佩德罗·米莫索（Pedro Mimoso）
+
+努诺·阿劳霍（NunoAraújo）https://github.com/NunoAraujoCX
+
+法比奥·贡萨尔维斯（FábioGonçalves）https://github.com/fabioGoncalvesCx
+
+玛丽安娜·卡瓦略（Mariana Carvalho）https://github.com/mcarvalhox
+
+豪尔赫·克鲁兹（Jorge Cruz）https://github.com/jorge-cruz
+
+若昂·奥利维拉（JoãoOliveira）https://github.com/JoaoO1998
+
+迪奥戈·莱莫斯（Diogo Lemos）https://github.com/diogo-lemos
+
+亚历克斯·罗希曼 https://github.com/Alexaro1cx
+
+阿达尔·魏德曼 https://github.com/AdarWeidman
+
+埃利·特罗普（Eli Trop）https://github.com/elit-cx
+
+乔尔·索萨（Joel Sousa）https://github.com/joelsou5a
+
+圣安东尼奥 https://github.com/soniantao
+
+卡塔琳娜·阿劳霍（CatarinaAraújo）https://github.com/cataraujo190
+
+佩德罗·佩雷拉（Pedro Pereira）https://github.com/pedropereiraaa
+
+塞缪尔·费雷拉（Samuel Ferreira）﻿https://github.com/samuel-ferreira
+
+核心团队
+
+瑞·戈麦斯 https://github.com/ruigomescx
+
+罗杰里奥·佩索托（RogérioPeixoto）https://github.com/rogeriopeixotocx
+
+若昂·雷戈塔（JoãoReigota）https://github.com/joaoReigota1
+
+费利佩·阿夫拉（Felipe Avelar）https://github.com/felipe-avelar
+
+努诺·奥利维拉（Nuno Oliveira）https://github.com/nunoocx
+
+马克·米沙耶夫（Mark Mishaev）https://github.com/markmishaevcx
+
+伊戈尔·马可夫（Igor Markov）https://github.com/IgorMarkov
+
+奥里·本迪（Ori Bendet）https://github.com/oribendetcx
+
+埃雷兹·亚隆（Erez Yalon）https://github.com/erezyalon
+

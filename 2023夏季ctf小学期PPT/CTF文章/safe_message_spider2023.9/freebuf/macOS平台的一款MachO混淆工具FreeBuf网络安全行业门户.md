@@ -1,0 +1,150 @@
+**MachObfuscator是一种与编程语言无关的[Mach-O](https://en.wikipedia.org/wiki/Mach-O)应用程序混淆器（适用于Apple平台）。**
+
+##  当前状态
+
+✅ - 表示功能已完成， ❌ - 表示功能是待办事项/正在进行中。
+
+✅ Mach-O iOS
+
+✅ Mach-O macOS
+
+✅ iOS NIB（包括故事板）
+
+⚠️ macOS NIB（包括故事板） - 尚不支持绑定
+
+❌ MOM（CoreData）
+
+❌ Mach-O watchOS
+
+❌ Mach-O tvOS
+
+❌ 位码
+
+❌自动代码重新签名（需要手动重新签名所有图片，请参阅[resign.sh](https://github.com/kam800/MachObfuscator/blob/master/resign.sh)）
+
+##  概述
+
+MachObfuscator是一个二进制符号混淆器。这是什么意思？有一些重要的术语：
+
+> 1.混淆器 - 一种使软件难以逆向的工具。
+>
+> 2.二进制混淆器 - 一种混淆器，它在机器代码上运行，而不是在源代码上运行。
+>
+> 3.符号混淆器 - 一种仅混淆符号名称的混淆器，不会改变程序控制流。
+
+MachObfuscator 直接转换[Mach-O](https://en.wikipedia.org/wiki/Mach-O)文件中的符号。Mach-O格式主要用于Apple平台，作为可执行文件和库的机器代码容器。MachObfuscator不需要访问应用程序源代码以对其进行模糊处理。
+
+##  演示
+
+让我们看看MachObfuscator混淆SampleApp.app应用程序：
+
+![](https://image.3001.net/images/20190828/1566958777_5d65e4b9d6b93.gif!small)
+
+通过在[MachOView中](https://sourceforge.net/projects/machoview/)打开app的主要可执行文件可以看到结果。MachOView显示模糊的ObjC选择器：
+
+![](https://image.3001.net/images/20190828/1566958830_5d65e4eedeb49.png!small)
+
+![](https://image.3001.net/images/20190828/1566958854_5d65e5062b91f.png!small)
+
+和混淆的ObjC类名：
+
+![](https://image.3001.net/images/20190828/1566958874_5d65e51acb040.png!small)
+
+![](https://image.3001.net/images/20190828/1566958895_5d65e52faa7ae.png!small)
+
+上面仅显示了样本更改。MachObfuscator更改了更多Mach-O部分。
+
+##  用法细节
+
+    
+    
+    $ ./MachObfuscator
+    usage: ./MachObfuscator [-qvdhtD] [-m mangler_key] APP_BUNDLE
+      Obfuscates application APP_BUNDLE in-place.
+    Options:
+      -h, --help              帮助
+      -q, --quiet             安静模式 
+      -v, --verbose           输出详细信息
+      -d, --debug             调试模式，输出更详细的信息
+      --dry-run               不保存模糊文件
+      --erase-methtype        擦除methType部分
+      -D, --machoview-doom    MachOView在尝试打开二进制文件后崩溃（不适用于caesarMangler
+      --swift-reflection      混淆了Swift反射部分（typeref和reflstr）。
+      --objc-blacklist-selector NAME[,NAME...]  不会混淆给定的选择器
+      --objc-blacklist-selector-regex REGEXP    不会混淆与给定正则表达式匹配的选择器
+      --preserve-symtab       不会删除SYMTAB字符串
+      --erase-section SEGMENT,SECTION    SECTION擦除给定部分，例如：__TEXT，__ swift5_reflstr
+      --erase-source-file-names PREFIX   从二进制文件中擦除源文件路径。删除以给定前缀开头的路径,用常量字符串替换它们
+      --replace-cstring STRING          用给定的替换任意__cstring（谨慎使用）。匹配整个字符串，
+      --replace-cstring-with STRING      如果需要，可以添加填充0。这些选项必须成对使用。
+      --skip-all-frameworks            不会混淆框架
+      --skip-framework framework         不会混淆给定的框架
+      --obfuscate-framework framework    框架模糊了给定的框架（白名单为--skip-all-frameworks）
+      -m mangler_key,
+      --mangler mangler_key   选择mangler来生成混淆的符号
+    Development options:
+      --xx-no-analyze-dependencies       不分析依赖关系
+    Available manglers by mangler_key:
+      caesar - ROT13所有objc符号和dyld信息
+      realWords - 用随机单词替换objc符号（支持dyld信息混淆）
+
+简单化，MachObfuscator：
+
+> 1.查找应用包中的所有可执行文件，
+>
+> 2.以递归方式搜索所有依赖库，这些库的依赖关系等等，
+>
+> 3.搜索应用包中的所有NIB文件，
+>
+> 4.区分可模糊文件（应用程序包中的文件）和不可模糊文件（应用程序包外部的文件），
+>
+> 5.从整个依赖图中收集Obj-C符号，导出尝试和导入列表，
+>
+> 6.创建符号白名单和符号黑名单（在不可混淆的文件中使用的符号），
+>
+> 7.使用选定的漫游器修改白名单符号，导出尝试和导入列表，
+>
+> 8.替换可混淆文件中的符号，
+>
+> 9.清除可选的部分，
+>
+> 10.一次保存所有文件。
+
+MachObfuscator在Mach-O部分之后发生变化：
+
+> 1.__TEXT, __objc_classname - mangles符号名称
+>
+> 2.__TEXT, __objc_methname - mangles符号名称
+>
+> 3..__TEXT, __objc_methtype- mangles符号名称或可选（使用--erase-methtype参数启用）用0s 填充整个部分
+>
+> 4.__TEXT, __swift3_typeref，__TEXT, __swift4_typeref，__TEXT,
+> __swift5_typeref-用填充整段0小号
+>
+> 5.__TEXT, __swift3_reflstr，__TEXT, __swift4_reflstr， __TEXT,
+> __swift5_reflstr-用填充整段0小号
+>
+> 6.LC_DYLD_INFO_ONLY - mangles导出尝试和绑定列表
+>
+> 7.LC_SYMTAB- 用0s 填充整个部分
+>
+> 8.__TEXT,
+> __swift*是Swift的反射机制（[Mirror](https://developer.apple.com/documentation/swift/mirror)）使用的部分。Mirror即使在清除这些部分之后，也可以返回不太详细的数据。LC_SYMTAB用于lldb。
+>
+>
+> MachObfuscator不会影响崩溃符号，因为[dSYM](https://docs.fabric.io/apple/crashlytics/missing-> dsyms.html)是在编译期间生成的 - 即在混淆之前。
+
+##  特约
+
+如果您对改进MachObfuscator有任何想法，那就让我们在Twitter（@ kam800）上聊聊。  
+
+如果你想编写一些代码，但对Mach-O感到不舒服，我建议先做一些准备工作：  
+
+> 1.玩MachOView，打开一些二进制文件并尝试感受Mach-O布局。
+>
+> 2./usr/include/mach-o/loader.h从任何macOS 读取。
+>
+> 3.Mach+Loading.swift从MachObfuscator repo中读取。
+
+**参考来源：[GitHub](https://github.com/kam800/MachObfuscator)，FB小编周大涛编译，转载请注明来自FreeBuf.COM**
+

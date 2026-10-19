@@ -1,0 +1,411 @@
+## 一 前言
+
+### 1 **apache的目录结构：**
+
+    
+    
+    bin 	存在常用命令工具，例如：start.bat、httpd.bat
+    cgi-bin	存放linux下常用的命令。例如：xxx.sh
+    conf	apache的相关配置文件，例如：httpd.conf
+    error	错误日志记录
+    htdocs	放网站源码的地方
+    logs	日志
+    manual	手册
+    modules	扩展模块
+
+### 2 了解LAMP架构
+
+LAMP网站架构是目前国际流行的Web框架，该框架包括：Linux操作系统，Apache网络服务器，MySQL数据库，Perl、PHP或者Python编程语言
+
+ **流程：**
+
+1\. 用户发送http请求到达web服务器（例如apache）
+
+2\. web解析url获取需要的资源的路径，通过内核空间读取硬盘资源，如是静态资源，则构建响应报文，发回给用户
+
+3\. 如果是动态资源，将资源地址发给php解析器，解析php程序文件，解析完毕将内容发回给web服务器，web服务器构建响应报文，发回给用户
+
+4\. 如果涉及到数据库操作，则利用php-mysql驱动，获取数据库数据，返回给PHP解析器。  
+![1654308569_629abed99da2ed907682e.png!small?1654308569779](https://image.3001.net/images/20220604/1654308569_629abed99da2ed907682e.png!small?1654308569779)
+
+###  **3 那apache如何跟php通信的呢**
+
+1）把php编译时直接编译成apache的模块、module模块化的方式进行工作(apahce默认的这种方式)。
+
+2）CGI、通用网关接口、apache基于CGI跟hph通信
+
+3）fast CGI
+
+ **这里介绍第一种：**
+
+> #加载php5_module模块
+>
+> LoadModule php5_module php5apache2_2.dll 路径
+>
+> #添加可以执行php的文件类型，让.php解析为php
+>
+> AddType application/x-httpd-php .php
+>
+> #或者将addtype变为下面的（在apache 2.4.0~2.4.29中默认使用了该方式）
+>
+> <FilesMatch \\.php$>
+>
+> SetHandler application/x-httpd-php
+>
+> </FilesMatch>
+>
+> 以及
+>
+> <IfModule dir_module>
+>
+> DirectoryIndex index.html index.htm index.php index.phtml
+>
+> </IfModule>
+
+apache通过LoadModule来加载php5_module模块来解析php文件。也就是把php作为apache的一个子模块来运行。当通过web访问php文件时，apache就会调用php5_module来解析php代码。
+
+(其他两种后面会介绍)
+
+##  **二 window--** **未知扩展名解析漏洞**
+
+###  **漏洞原理：**
+
+apache默认一个文件可以有多个以点分割的后缀，比如test.php.xxx，当最右边的后缀（xxx）无法识别（不在mime.types文件内），则继续向左识别，知道识别到合法后缀才能进行解析
+
+###  **conf/mime.types文件（apache文件名扩展名的定义）:**
+
+![1654310329_629ac5b93bc29f9e7468a.png!small?1654310329342](https://image.3001.net/images/20220604/1654310329_629ac5b93bc29f9e7468a.png!small?1654310329342)
+
+###  **复现：**
+
+phpstudy部署apache
+
+![1654310973_629ac83d562afcee7f1b0.png!small?1654310973449](https://image.3001.net/images/20220604/1654310973_629ac83d562afcee7f1b0.png!small?1654310973449)
+
+访问1.txt.xxx,php可以向前解析
+
+![1654336209_629b2ad18f1330d99675d.png!small?1654336209742](https://image.3001.net/images/20220604/1654336209_629b2ad18f1330d99675d.png!small?1654336209742)
+
+之后访问1.php.xxx，报500错误
+
+![1654336301_629b2b2d476af792f746e.png!small?1654336301507](https://image.3001.net/images/20220604/1654336301_629b2b2d476af792f746e.png!small?1654336301507)
+
+为什么apache在对1.txt.xxx会向前解析，而1.php.xxx不会呢
+
+原因是php以 **FASTCGI的模式**
+工作于Apache中，此种模式下php遇到类似aaa.php.xxx这种不是php程序的文件，会触发500错误。
+
+查看phpinfo()，发现确实是这样的
+
+![1654336645_629b2c85203d71a183086.png!small?1654336645355](https://image.3001.net/images/20220604/1654336645_629b2c85203d71a183086.png!small?1654336645355)
+
+###  **apache和php三种结合方法**
+
+ **CGI**
+
+Web服务器并不能够直接运行动态脚本，为了解决Web服务器与外部应用程序（CGI程序）之间数据互通，于是出现了CGI（Common Gateway
+Interface）通用网关接口。简单理解，可以认为CGI是Web服务器和运行其上的应用程序进行“交流”的一种约定。
+
+  
+
+CGI是Web服务器和一个独立的进程之间的协议（或者接口），它会把HTTP请求Request的Header头设置成进程的 **环境变量**
+，HTTP请求的Body正文设置成进程的 **标准输入** ，HTTP响应Response（包含Header头和Body正文）设置为进程的 **标准输出**
+。
+
+![1654345445_629b4ee52cfaec3b5c420.png!small?1654345445417](https://image.3001.net/images/20220604/1654345445_629b4ee52cfaec3b5c420.png!small?1654345445417)
+
+通过CGI接口，Web服务器就能够获取客户端传递的数据，并转交给服务器端的CGI程序处理，然后返回结果给客户端。
+
+对于一个CGI程序，主要的工作是从环境变量和标准输入中读取数据，然后处理数据，最后向标准输出中输出数据。
+
+ **环境变量：**
+
+CGI程序还通过环境变量来得到输入， **操作系统** 提供了许多环境变量，它们定义了程序的执行环境，应用程序可以存取它们。
+**Web服务器和CGI接口** 又另外设置了一些环境变量，用来向CGI程序传递一些重要的参数。CGI的 **GET方法** 还通过
+**环境变量QUERY_STRING** 向CGI程序传递Form表单中的数据。
+
+ **标准输入输出：**
+
+当HTTP请求模式采用POST方式时，CGI程序通过 **标准输入流和有关环境变量** 来获取客户端传输数据；如采用GET方式时，CGI程序直接通过
+**环境变量** 获取客户端传输数据。当CGI程序要返回处理结果（一般为HTML文档）给客户端时，它通过标准输出流将该结果数据传递给服务器守护进程。
+
+ **CGI程序工作原理：**
+
+Web服务器一般只用来处理静态文件请求，一旦碰到动态脚本请求，Web服务器主进程就会Fork创建出一个新的进程来启动CGI程序，也就是将动态脚本交给CGI程序来处理。启动CGI程序需要一个过程，如读取配置文件、加载扩展等。当CGI程序启动后会去解析动态脚本，然后将结果返回给Web服务器，最后由Web服务器将结果返回给客户端，之前Fork出来的进程也随之关闭。
+
+![1654347143_629b55878be3be2f8e144.png!small?1654347144165](https://image.3001.net/images/20220604/1654347143_629b55878be3be2f8e144.png!small?1654347144165)
+
+ **PHP-CGI**
+
+PHP在运行的时候是依赖配置文件 **php.ini** 的，所以每当PHP-CGI开始工作的时候，它完全是一个新进程，需要重新加载PHP配置文件并初始化，这就造成了很大的资源和时间的浪费。每当客户端请求CGI时，Web服务器就会请求操作系统生成一个新的CGI解释器进程
+**php-cgi.exe** ，CGI的一个进程处理完一个请求后退出，下一个请求来时在先操作系统申请创建新进程。  
+![1654347426_629b56a2c09729c80d267.png!small?1654347427068](https://image.3001.net/images/20220604/1654347426_629b56a2c09729c80d267.png!small?1654347427068)
+
+ **Web服务器内置模块**
+
+（这里拿apache举例）
+
+Apache的mod_php模块，将PHP解释器做成模块加载到Apache服务器中。这样，Apache服务器在启动的时候，就会同时启动PHP模块。当客户端请求PHP文件时，Apache就不用再Fork创建出一个新进程来启动PHP解释器，而是直接将PHP文件交给运行中的PHP模块处理。
+
+在Apache服务器启动时，才会读取PHP的配置文件，加载PHP模块。在Apache运行过程中，不会在重新读取PHP配置文件。所以，每次修改PHP的配置文件php.ini后，必须重启Apache，新的PHP配置文件才会生效。
+
+ **FastCGI**
+
+> 由于CGI程序反复加载CGI而造成性能低下，如果CGI程序保持在内存中并接收FastCGI进程管理器调度，则可以提供良好的性能、伸缩性、Fail-> Over特性等。FastCGI就是常驻型的CGI，可以一直运行。在请求到达时不会耗费时间去Fork创建一个进程来处理
+
+ **详情参考：**
+
+> [CGI是什么 - 简书 (jianshu.com)](https://www.jianshu.com/p/c4dc22699a42)
+
+###  **不同模式和解析漏洞有什么关系**
+
+> 1、使用 **module模式** 与php结合的所有版本，apache **存在** 未知扩展名解析漏洞
+>
+> 2、使用 **fastcgi模式** 与php结合的所有版本，apache **不存在** 此漏洞未知扩展名解析漏洞
+>
+> 3、想利用此漏洞必须保证文件名至少带有一个“.php”.否则将默认被作为txt/html文档处理
+
+新版本phpstudy好像内置了fastcgi模式，我没在文件里面找到fastcgi模块
+
+![1654352466_629b6a52d4c19bd5f5780.png!small?1654352467141](https://image.3001.net/images/20220604/1654352466_629b6a52d4c19bd5f5780.png!small?1654352467141)
+
+然后查看了老版本的phpstudy，Apache 2.0 Handler使用的为module模式
+
+![1654352618_629b6aea2407baa064649.png!small?1654352618303](https://image.3001.net/images/20220604/1654352618_629b6aea2407baa064649.png!small?1654352618303)
+
+![1654352609_629b6ae1d888bf5d306c5.png!small?1654352614169](https://image.3001.net/images/20220604/1654352609_629b6ae1d888bf5d306c5.png!small?1654352614169)
+
+  
+
+为什么apache可以解析到后缀名为php,但是不解析执行php文件呢？
+
+>
+> apache看到文件1.php.xxx，按照多后缀名的解析规则，认为该文件是php程序文件，把该文件作为php程序文件处理，交给php解释器，但是php解释器却有着和Apache不同的后缀解析规则，可能只认最后一个后缀，故而认为1.php.xxx不是php程序文件，拒绝执行，但是却返回了本身的内容。
+
+## 三 kali环境测试文件解析漏洞
+
+### 1 多后缀名解析
+
+ **1）搭建**
+
+开启/etc/apache：service apache2 start
+
+在/var/www/html目录下创建一个1.php文件
+
+访问php文件，是module模块
+
+![1654359338_629b852a3d3e9d1fdbcc5.png!small?1654359338544](https://image.3001.net/images/20220605/1654359338_629b852a3d3e9d1fdbcc5.png!small?1654359338544)
+
+ **2 ）复现**
+
+访问kali的1.php.xxx，还是依旧无法解析php文件
+
+![1654399834_629c235aed3737fdd800e.png!small?1654399835241](https://image.3001.net/images/20220605/1654399834_629c235aed3737fdd800e.png!small?1654399835241)
+
+查看 **/etc/apache2/mods-available/php8.1.conf**
+
+    
+    
+    <FilesMatch ".+\.ph(ar|p|tml)$">  //重点这句
+        SetHandler application/x-httpd-php
+    </FilesMatch>
+
+被当做php程序执行的文件名要符合正则表达式：".+\\.ph(ar|p|tml)$"
+
+![1654400902_629c2786600068ad15f4e.png!small?1654400902739](https://image.3001.net/images/20220605/1654400902_629c2786600068ad15f4e.png!small?1654400902739)
+
+> '\r' 回车，回到当前行的行首，而不会换到下一行，如果接着输出的话，本行以前的内容会被逐一覆盖；
+>
+> '\n' 换行，就是输入完一行内容后，光标转到下一行的起始位置 ，不会回到行首。
+
+上面能执行的后缀名文件是phar,php,phtml
+
+因此上面的1.php.xxx文件php解释器就只看到xxx,不符合正则表达式，因此不解析执行
+
+所以只要把$去掉就可以把php.xxx当做php执行
+
+![1654409084_629c477cb8e1110cc4c43.png!small?1654409085057](https://image.3001.net/images/20220605/1654409084_629c477cb8e1110cc4c43.png!small?1654409085057)
+
+> 重新启动：service apache2 restart
+
+![1654408656_629c45d059bd79e6b6df1.png!small?1654408656753](https://image.3001.net/images/20220605/1654408656_629c45d059bd79e6b6df1.png!small?1654408656753)
+
+![1654408678_629c45e6b18a77e2e59ea.png!small?1654408680562](https://image.3001.net/images/20220605/1654408678_629c45e6b18a77e2e59ea.png!small?1654408680562)
+
+为什么1.php.jpg会当成php执行，而1.txt.jpg不会当成txt执行？后面一个可以理解，apache从右到左解析，解析到jpg（在mime.types文件内）就会当成jpg解析。但是php的话是因为sethandler设置了匹配到的文件就会按php文件执行
+
+> <FilesMatch ".+\\.ph(ar|p|tml)$">
+>
+> SetHandler application/x-httpd-php
+>
+> </FilesMatch>
+
+![1654408932_629c46e427b7fd3bcf3a2.jpg!small?1654408932464](https://image.3001.net/images/20220605/1654408932_629c46e427b7fd3bcf3a2.jpg!small?1654408932464)
+
+还有一种是addHandler(作用一样的，强制所有匹配的文件被一个指定的处理器处理。)
+
+![1654409183_629c47dfec779a1c9eb25.png!small?1654409184356](https://image.3001.net/images/20220605/1654409183_629c47dfec779a1c9eb25.png!small?1654409184356)
+
+  
+
+ **3） 利用条件：**
+
+> 1.使用module模式，且正则符合条件
+>
+> 2.文件中至少带一个.php
+>
+> 3.apache解析文件名从右向左解析，即使最右边的文件格式在mime.types文件内，只要文件中出现.php，就可以被php模块解析
+
+  
+
+### 2 特殊后缀名
+
+一开始访问到php3文件其实是访问不了的（ **当然你要是前面匹配模式下的$去掉没重新补上去的话也是可以访问到php3的** ）
+
+![1654411967_629c52bf625633145abf4.png!small?1654411967714](https://image.3001.net/images/20220605/1654411967_629c52bf625633145abf4.png!small?1654411967714)
+
+因为/etc/apache2/apache2.conf没有设置，apache不会解析执行php3，添加之后重启apache就可以了
+
+（addtype:添加可以执行php的文件类型）
+
+![1654412955_629c569b1b07071f7aef2.png!small?1654412955751](https://image.3001.net/images/20220605/1654412955_629c569b1b07071f7aef2.png!small?1654412955751)
+
+![1654413109_629c57356adac13323c4f.png!small?1654413110295](https://image.3001.net/images/20220605/1654413109_629c57356adac13323c4f.png!small?1654413110295)
+
+因此你可以输入特殊的后缀名，比如phtml,phar,要是有addtype的话也可以添加php3等，就可能可以实现绕过
+
+  
+
+## 四 apache httpd换行解析漏洞（CVE-2017-15715)
+
+###  **1 原理：**
+
+正则表达式在结尾处$ 符号，如果设置了 RegExp 对象的 Multiline 属性，则 $ 也匹配 '\n' 或 '\r'。
+
+因为 1.php\x0a = 1.php\n，所以我们在上传文件名后面加上\0xa（换行符），也会以php文件形式解析执行
+
+该漏洞属于用户配置不当产生的漏洞，与具体中间件版本无关。
+
+### 2 影响：
+
+2.4.0~2.4.29版本
+
+### 3 复现：
+
+环境为docker和vulhub,自行下载安装
+
+ **1）开启容器CVE-2017-15715**
+
+> cd vulhub/httpd/CVE-2017-15715/ （视情况而修改路径）
+>
+> docker-compose up -d （下载环境）
+>
+>   * #docker-compose up
+> -d运行后，会自动查找当前目录下的配置文件。如果配置文件中包含的环境均已经存在，则不会再次编译；如果配置文件中包含的环境不存在，则会自动进行编译。
+>
+
+>
+> docker ps (列出所有在运行的容器信息，这里开了8080端口)
+
+![1654418938_629c6dfac74ce2f068393.png!small?1654418939168](https://image.3001.net/images/20220605/1654418938_629c6dfac74ce2f068393.png!small?1654418939168)
+
+ **注：** 之前开过容器的记得要到之前开启容器目录下关闭
+
+> docker-compose down
+
+ **2） 访问**
+
+![1654419056_629c6e707b15e24804ab4.png!small?1654419056995](https://image.3001.net/images/20220605/1654419056_629c6e707b15e24804ab4.png!small?1654419056995)
+
+这里需要自己上传文件名，filename就是你上传的文件的文件名，直接上传文件失败，因此我们抓包查看一下情况
+
+![1654435588_629caf04c69687b748193.png!small?1654435589221](https://image.3001.net/images/20220605/1654435588_629caf04c69687b748193.png!small?1654435589221)
+
+先将evil.php后面加.，之后查看hex，将2e改为0a(\n的hex值)，之后上传
+
+![1654435569_629caef155fbaed20fdaf.png!small?1654435569759](https://image.3001.net/images/20220605/1654435569_629caef155fbaed20fdaf.png!small?1654435569759)
+
+访问到文件![1654435525_629caec511013ec452642.png!small?1654435525999](https://image.3001.net/images/20220605/1654435525_629caec511013ec452642.png!small?1654435525999)
+
+为什么写%0a,%0a是url编码，解码之后为\n
+
+![1654435971_629cb083bfff73101f900.png!small?1654435972210](https://image.3001.net/images/20220605/1654435971_629cb083bfff73101f900.png!small?1654435972210)
+
+ **3）代码分析**
+
+    
+    
+    <?php
+    if(isset($_FILES['file'])) {
+        $name = basename($_POST['name']);//只显示到最后一个文件（带后缀名）
+        $ext = pathinfo($name,PATHINFO_EXTENSION);//返回文件后缀名
+        if(in_array($ext, ['php', 'php3', 'php4', 'php5', 'phtml', 'pht'])) {
+            exit('bad file');
+        }
+        move_uploaded_file($_FILES['file']['tmp_name'], './' . $name);
+    } else {
+    
+    ?>
+
+这里获取文件名是需要单独post一个name的，因为如果通过$_FILES['file']['name']获取文件名的话，会把\x0a自动去除，所以$_FILES['file']['name']这种方式获取文件名就不会造成这个漏洞
+
+这里有漏洞主要是因为php模块在解析php文件中通过正则表达式验证可以解析的文件名，正则表达式在结尾处$ 符号，如果设置了 RegExp 对象的
+Multiline 属性，则 $ 也匹配 '\n' 或 '\r'。因此会把我们上传带\n的文件进行解析执行。
+
+## 四 Apche SSI远程命令执行漏洞（ssi-rce）
+
+### 1 SSI介绍
+
+ **SSI** （服务器端包含）是​​放置在HTML页面中的指令，并在服务页面时在服务器上对其进行评估。使用 SSI
+可以动态的创建一部分网页内容而不需要编写复杂的 JSP/ASP/PHP 等程序。
+
+从技术角度上来说， **SSI就是在HTML文件中，可以通过注释行调用的命令或指针，即允许通过在HTML页面注入脚本或远程执行任意命令** 。
+
+SSI可以完成查看时间、文件修改时间、CGI程序执行结果、执行系统命令、连接数据库等操作，功能很强大。
+
+  
+
+### 2 利用
+
+在测试任意文件上传漏洞的时候，目标服务端可能不允许上传php后缀的文件。如果目标服务器 **开启了SSI与CGI支持**
+，我们可以上传一个shtml文件，并利用 **<!--#exec cmd="ls /" -->**语法执行任意命令。默认扩展名是 **.stm、.shtm
+和 .shtml** 。
+
+### 3 影响范围
+
+apache全版本（支持SSI与CGI）
+
+### 4 复现
+
+ **1）开启靶场（vulhub）**
+
+> cd ~/Desktop/vulhub/httpd/ssi-rce]
+>
+> docker-compose up -d
+>
+> docker ps
+
+ **2）步骤**
+
+打开网址，随便上传一个php文件，之后报错
+
+![1654438532_629cba849fe68e663cdc2.png!small?1654438533100](https://image.3001.net/images/20220605/1654438532_629cba849fe68e663cdc2.png!small?1654438533100)
+
+创建脚本1.shtml
+
+    
+    
+    <pre>
+    <!--#exec cmd="ls" -->
+    </pre>
+
+上传成功
+
+![1654444670_629cd27e1487efdd50b53.png!small?1654444670583](https://image.3001.net/images/20220605/1654444670_629cd27e1487efdd50b53.png!small?1654444670583)
+
+访问该文件,成功执行
+
+![1654444702_629cd29e973d90f6a49de.png!small?1654444703064](https://image.3001.net/images/20220605/1654444702_629cd29e973d90f6a49de.png!small?1654444703064)
+
+  
+

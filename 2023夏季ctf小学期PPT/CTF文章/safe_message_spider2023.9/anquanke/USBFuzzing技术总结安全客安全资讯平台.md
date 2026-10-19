@@ -1,0 +1,183 @@
+# USB Fuzzing技术总结
+
+阅读量 **504208**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-08-28 14:30:40
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 Dave Jing Tian，文章来源：davejingtian.org
+
+原文地址：<https://davejingtian.org/2019/07/17/usb-fuzzing-a-usb-perspective/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01f8398c847ca15291.png)
+
+Syzkaller最近已经可以支持USB的模糊测试，并且已经在Linux内核中发现了80多个漏洞。我将通过这篇文章提供一些关于USB模糊测试的方法。
+
+## 1.了解USB堆栈结构
+
+由于协议的主从性质，USB分为两个部分：USB主机和USB设备。当我们谈论USB
+Fuzzing时，它通常指的是USB主机，例如带有标准USB端口的笔记本电脑。
+
+下图是Linux USB主机堆栈。从下到上是硬件，内核空间和用户空间。
+
+![](https://daveti.files.wordpress.com/2019/07/usbfuzz-host-arch.png?w=330&h=317)
+
+USB主机控制器设备（又名HCD）是连接到系统PCI总线的PCI设备，通过USB端口提供USB连接支持。根据USB技术的发展，它也被称为USB
+1.x的UHCI / OHCI，USB 2.x的EHCI和USB
+3.x控制器的XHCI。要使内核使用此控制器，我们需要一个USB主机控制器驱动程序，它可以设置PCI配置和DMA。上面是USB核心，实现底层USB协议栈，并使用通用内核API（submit
+/ recv URB）抽象发送/接收USB数据包的方式。上面是不同的USB设备驱动程序，例如USB
+HID驱动程序和USB大容量存储驱动程序。这些驱动程序可以实现不同的USB类协议，与内核中的其他子系统结合在一起。
+
+由于Linux也广泛用于嵌入式系统，例如一些USB加密狗，USB设备指的是USB加密狗硬件和Linux内的USB模式。它与USB主机模式完全不同。
+
+下图显示了Linux内核中的USB设备的堆栈。
+
+![](https://daveti.files.wordpress.com/2019/07/usbfuzz-gadget-arch.png?w=349&h=299)
+
+在底部，我们有USB设备控制器（aka，UDC）。与HCD一样，UDC也在PHY层内实现特定版本的USB标准。但是，与英特尔最常见的HCD不同，UDC
+IP可以从不同的硬件供应商中找到，例如DWC2 / 3，OMAP，TUSB和FUSB。这些控制器通常具有自己的设计规范，并且当它们支持USB On-The-Go（aka，OTG）模式时也可遵循HCD规范（例如，XHCI规范）。OTG允许UDC在USB主机和USB设备模式之间切换。例如，当Android设备与笔记本电脑作为MTP连接时，Android
+USB设备控制器处于USB设备模式。如果USB闪存驱动器插入Android设备，UDC将在USB主机模式下工作。支持OTG的UDC也被USB
+3.x标准中的双角色设备（DRD）控制器取代，因此，不需要OTG电缆来切换UDC的角色，因为角色切换是在用于DRD控制器的软件中完成的。
+
+要使用UDC，需要内核中的UDC驱动程序，通过行业标准总线提供连接和配置，包括AHB和AXI接口，以及为更高层设置DMA。与USB主机堆栈中的USB核心一样，USB设备堆栈中的USB设备核心提供API，通过回调和配置来注册和实现USB设备功能。例如，我们可以通过请求现有的大容量存储功能（f_mass_storage）将USB描述符传递到USB设备核心并实现典型的USB大容量存储设备。
+
+## 2.Syzkaller USB模糊器
+
+由于可编程USB硬件模糊器FaceDancer的出现，USB模糊测试开始吸引更多关注。它支持USB主机和设备模式仿真，并允许发送预先形成或格式错误的USB请求和响应。Umap
+/ Umap2
+提供了一个用Python编写的模糊测试框架，它具有面向FaceDancer的不同USB设备和响应模板。TTWE框架通过使用分别模拟USB主机和设备的2个FaceDancers在USB主机和USB设备之间启用MitM。此MitM允许两个方向的USB数据包突变，从而实现双方的模糊测试。
+
+所有这些解决方案都集中在USB主机堆栈上，因为通常都是会出现恶意的USB设备而不是恶意USB主机，例如笔记本电脑，而且大多数USB设备固件都是闭源的，因此难以分析。因此，大多数漏洞都在USB内核层（用于解析USB响应）和一些常见的USB驱动程序（例如，键盘）中找到。
+
+FaceDancer执行的很慢，这使得任何基于它的解决方案都无法进行扩展。反馈是另一个重要问题，模糊输入的变异基于模板和随机化，没有来自目标的实时反馈，比如代码覆盖率，除了系统日志记录以外。因此，模糊效率很值得怀疑的。
+
+为了摆脱硬件依赖性，vUSBf 使用QEMU /
+KVM运行内核映像并利用QEMU中的USB重定向协议将对USB设备的访问重定向到由模糊器控制的USB仿真器，如下所示：
+
+![](https://daveti.files.wordpress.com/2019/07/vusbf-arch.png?w=339&h=275)
+
+虽然vUSBf提供了一个漂亮的编排体系结构来并行运行多个QEMU实例来解决可扩展性问题，但模糊器本身基本上是基于模板的测试用例。反馈仍然依赖于系统日志记录，如下所示：
+
+![](https://daveti.files.wordpress.com/2019/07/potus-arch.png?w=326&h=242)
+
+SystemTap用于检测内核以确定crash数量。给定路径的crash数表示代码覆盖率。POTUS还在QEMU中实现通用USB虚拟设备，以使用可配置的设备描述符和数据传输来模拟不同的USB设备。VM中的Driver
+Exerciser使用系统调用来使用暴露给VM的不同设备节点。与vUSBf相比，POTUS包括模糊测试反馈机制并支持更多USB设备仿真。
+
+由于USB事件和操作发生在IRQ或内核上下文而不是进程上下文中，基于系统调用的跟踪和代码覆盖根本不起作用。我们需要能够在内核中的任何位置报告代码覆盖率。为此，我们需要使用扩展的KCOV内核API来注释与USB相关的内核源代码，以报告代码覆盖率。Syzkaller不使用QEMU，而是使用gadgetfs将fuzzer内核驱动程序暴露给用户空间，然后可以操作输入进行模糊测试。通过在内核配置中启用USB主机堆栈和USB设备堆栈并使用虚拟HCD和UDC驱动程序将它们连接在一起，如下所示，Syakaller能够模糊USB主机设备驱动程序，如USB
+HID。
+
+![](https://daveti.files.wordpress.com/2019/07/syzkaller-arch.png?w=549&h=189)
+
+Syzkaller
+USB模糊器可能是第一个真正的基于覆盖的USB主机设备驱动模糊器，这要归功于现有的Syzkaller基础架构以及同时桥接USB主机和设备的攻击测试。虽然它发现了大量的漏洞，但模糊器的局限性也暴露出来，发现的大多数问题都发生在驱动程序的初始化阶段。在用户空间中，模糊器能够通过探索USB设备描述符中的不同VID
+/ PID组合来配置模糊内核驱动程序。
+
+## 3.USB Fuzzing示例
+
+所有这些模糊测试解决方案都集中在USB主机堆栈上，尤其是USB主机设备驱动程序上。这是由于人们经常将USB引用到USB主机堆栈上，并且这些设备驱动程序包含了比内核中的其他组件（例如，Windows上的设备驱动程序）更多的漏洞。但是，在这一点上，我相信你已经意识到到目前为止，USB模糊测试所涵盖的内容是冰山一角。
+
+###  HCD驱动程序模糊测试
+
+要直接Fuzzing HCD驱动程序的内部输入，我们需要能够改变暴露给USB内核的内核API的参数，并从HCD驱动程序获取代码覆盖率。要直接Fuzzing
+HCD驱动程序的外部输入，我们需要改变DMA缓冲区和事件队列，以及来自HCD驱动程序的代码覆盖率。由于TX和RX的代码路径不同，因此在这两种情况下代码覆盖率通常也不同。
+
+因此，我们需要细粒度代码覆盖率报告来展示这种情况。在DMA缓冲区和事件队列上进行变换实质上是构建具有Fuzzing
+功能的HCD仿真器。对于常见的HCD驱动程序，例如Intel
+XHCI，QEMU已经提供了相应的HCD仿真，并且可以尝试在那里添加模糊测试功能。对于QEMU不提供HCD仿真的其他HCD驱动程序，需要从头开始构建HCD仿真。
+
+###  USB设备模糊测试
+
+我们没有对USB设备进行系统的模糊测试。嵌入式系统（例如Android设备）中USB
+OTG和DRD控制器的广泛采用将威胁模型扩展到了USB主机。例如，在USB充电期间，没有人希望他们的手机被黑客入侵。在架构上，Syzkaller USB
+fuzzer设想了一种模糊USB设备堆栈的方法，如下所示。
+
+![](https://daveti.files.wordpress.com/2019/07/syzkaller-arch-todo.png?w=543&h=190)
+
+用户空间模糊器不会让用户空间模糊器与USB内核驱动程序通信，而是操作USB主机设备驱动程序。有希望，模糊器活动将通过USB主机堆栈传播到USB设备/小工具堆栈。因此，我们需要配置内核以在同一内核映像中启用所有不同的设备功能，以及代码覆盖率报告。
+
+Syzkaller设想了一种模糊USB设备堆栈的方法。Syzkaller是一个系统调用模糊器，意味着输入突变发生在系统调用参数中，但这并不意味着我们必须在系统调用层（例如用户空间）进行模糊测试。再次查看上图，我们可以找到从模糊器到模糊测试目标的路径（例如USB主机设备驱动程序或USB设备驱动程序）。怎么知道所有模糊输入是否成功传播到目标而不是被中间层过滤？一个核心问题是基于系统调用的模糊测试是否适合内核中的USB模糊测试。同样，Syzkaller
+USB模糊器可以适应Syzkaller本身的限制，而不是考虑从头开始构建USB模糊器。
+
+缩短模糊测试路径是将模糊器输入到目标代码附近。例如，我们可以通过在QEMU中构建USB
+UDC仿真器/模糊器来摆脱整个USB主机堆栈，直接启用UDC驱动程序模糊测试。但是，这并不意味着任何DMA写入都可以转换为对上层USB设备驱动程序的有效USB请求。因此，模糊测试路径确实更短，但我们仍然希望更好的变异算法和更细的代码覆盖粒度。最后，我们可能需要在堆栈中的不同层上使用不同的模糊器，确保所有模糊输入都应用于目标而不进行过滤。例如，我们可能需要构建一个USB主机模糊器，直接向不同的USB设备驱动程序发送USB请求。
+
+###  Android USB模糊测试
+
+Android可能是最重的USB设备堆栈用户，通过维护自己的内核分支并实现额外的USB设备功能驱动程序（例如MTP）。与典型的USB主机相比，Android设备中的OTG
+/ DRD支持也使攻击面增加了一倍，最根本的挑战是运行Android内核映像，其中包含使用QEMU的真实Android设备使用的相应UDC /
+DRD驱动程序。由于SoC自定义和变化，在QEMU中运行非AOSP内核会带来额外的困难。这就是为什么许多Android模糊测试仍需要物理设备。
+
+###  协议引导/状态模糊测试
+
+要模糊USB主机或设备驱动程序，我们需要与目标建立虚拟连接，例如确保内核驱动程序已初始化并准备好处理输入，有状态并引导模糊器学习结构输入。最后，在包含其他层以重用现有协议和状态控制之间进行权衡，从而增加模糊路径和复杂性，并在模糊器中直接实现轻量级协议感知/状态模糊测试，以减少模糊测试路径。
+
+####  Type-C / USBIP / WUSB模糊测试
+
+除了USB主机和USB设备之外，USB中还有更多东西，包括USB
+Type-C，USBIP，WUSB等。虽然我们可以重用USB模糊测试中的一些技术，但这些技术引入了不同的软件堆栈。
+
+## 4.总结
+
+这篇文章探讨了USB模糊测试，这是软件安全和操作系统安全性最近的热门话题。我们首先要了解USB堆栈是什么，以及为什么USB比人们通常想象的更大，而不是将USB视为另一个软件。我们调查了一些以前关于USB模糊测试的工作，从使用专用硬件到运行QEMU。
+
+## 参考文献
+
+[1] <https://github.com/google/syzkaller>  
+[2]
+<https://github.com/google/syzkaller/blob/e90d7ed8d240b182d65b1796563d887a4f9dc2f6/docs/linux/found_bugs_usb.md>  
+[3]
+<https://docs.google.com/presentation/d/1z-giB9kom17Lk21YEjmceiNUVYeI6yIaG5_gZ3vKC-M/edit?usp=sharing>  
+[4] <http://goodfet.sourceforge.net/hardware/facedancer21/>  
+[5] <https://github.com/nccgroup/umap2>  
+[ 6] <https://github.com/schumilo/vUSBf>  
+[7] <https://www.usenix.org/conference/woot17/workshop-program/presentation/patrick-evans>  
+[8] <https://elinux.org/Tims_USB_Notes>  
+[9] <https://www.usenix.org/conference/woot14/workshop-program/presentation/van-tonder>  
+[10]<https://davejingtian.org/2017/06/01/understanding-kcov-play-with-fsanitize-coveragetrace-pc-from-the-user-space/>  
+[11] <https://blogs.synopsys.com/tousbornottousb/2018/05/03/usb-dual-role-replace-usb-on-the-go/>  
+[12]
+<https://github.com/google/syzkaller/commit/e90d7ed8d240b182d65b1796563d887a4f9dc2f6>  
+[13] [https://github. com/xairy/linux
+/commit/ff543afbf78902acea566fa4c635240ede651f77](https://github.%20com/xairy/linux%20/commit/ff543afbf78902acea566fa4c635240ede651f77)  
+[14]
+<https://github.com/xairy/linux/commit/700fb65580efc049133628e7b9f65453bb686231>
+
+本文翻译自davejingtian.org [原文链接](https://davejingtian.org/2019/07/17/usb-fuzzing-a-usb-perspective/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **0xbird** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/184954](/post/id/184954)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [davejingtian.org](https://davejingtian.org/2019/07/17/usb-fuzzing-a-usb-perspective/)
+
+如若转载,请注明出处： <https://davejingtian.org/2019/07/17/usb-fuzzing-a-usb-perspective/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞挖掘](/tag/漏洞挖掘)
+  * [USB](/tag/USB)
+
+ **+1** __9赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t0182953edce0965b12.png) 0xbird
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

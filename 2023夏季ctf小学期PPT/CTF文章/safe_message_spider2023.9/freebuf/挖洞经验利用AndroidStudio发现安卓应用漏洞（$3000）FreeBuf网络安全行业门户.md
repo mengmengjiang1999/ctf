@@ -1,0 +1,117 @@
+![](https://image.3001.net/images/20200812/1597224090.jpg!small)
+
+**本文讲述了作者在一次一次授权安全测试中，利用安卓平台集成开发环境Android
+Studio发现APP客户端身份验证绕过漏洞，获取用户密码。漏洞最终获得了APP官方总计$3000的奖励，一起来看看。**
+
+## 漏洞背景
+
+为了更好的解释漏洞发现，我先简单介绍一下目标测试APP的工作机制。由于该次APP安全测试是内部邀请测试，出于保密，所以原谅我不能放出很多的详细截图。
+
+该次测试项目通过HackerOne发起，测试APP所属公司是个大厂，平时都很难从其测试范围内发现漏洞，而且他们对漏洞上报者比较尊重。
+
+此次测试项目的客户端是一台安卓系统的硬件设备，其中包含了公司用于客户端的酒店餐饮管理应用服务。
+
+整个设备服务应用以Web面板形式体现，客户端可以通过该硬件设备Web面板或是其移动APP登录使用。但是，这里有一个小小的区别。在硬件Web面板菜单栏中包含了很多雇员、顾客、订单等的管理标签，但在其移动APP中，每个分类下都对应了一个单独的应用，如其专门分类了顾客应用、雇员应用、订单应用等等，所有这些应用都通过主包名com.comapny.engine实现调用连接。
+
+## 客户端身份校验绕过
+
+其实，早在2017年的时候，我就向目标公司上报过一个API身份验证型的高危漏洞，攻击者可以利用该漏洞，以低权限用户身份经此API实施管理员级别的危险操作。当时在漏洞上报后，目标公司告知我漏洞原因在于他们的服务端缺乏有效的安全校验措施。
+
+近期，正好该公司又推出了其移动APP应用，而恰巧我也完成了eLearnsecurity的在线APP安全学习课程（eLearnSecurity Mobile
+Application Penetration Tester），这下我觉得有得练手的机会了。
+
+## 技术细节
+
+我立马去到该公司网站下载其说明文档，看能否在模拟器上安装其APP进行测试。经过了解，我发现，该APP出于开发者安全测试目的，专门设置了一个沙箱安全域名（sandbox
+domain）。
+
+我在安卓模拟器安装好了所有APP后，就马上开始了安全测试。因为移动应用和网页应用都是基于相同后台服务端或API接口的，所以，首先我想确认这些APP是否还存在我2017年发现的那个高危漏洞，如果这些APP调用到了那个漏洞中的API接口，那么存在漏洞的概率就非常高了。
+
+接下来，我以普通用户身份登录其主APP-com.company.engine ，在我点击其中的顾客应用APP时，跳出了以下“你无权进行此项操作”的提示消息：
+
+![](https://image.3001.net/images/20200812/1597223562.png!small)
+
+好吧，这下就有点挑战性了。于是我决定对其顾客应用APP-com.company.customer进行反编译，想看看它内存的用户权限校验机制，这里我用到了MobSf移动安全框架。我先下载了其java源码，然后用文本编辑器打开，要从中找到上述涉及“权限”的方法函数，有两种快速方法：
+
+> 用文本编辑器查找源码中涉及 "Permission"的关键字
+>
+> 用android studio的logcat功能识别相关的消息函数
+
+第一种方法我没有发现，然后我转到了第二种方法的android studio工具中。这里，首先，需要从安卓设备中用以下方法获取到顾客应用APP：
+
+    
+    
+    adb pull /data/app/com.company.customer/base.apk
+
+然后，再把其源码传给android studio。当我用android
+studio的debug功能打开其APK文件后，不一会儿就在common2文件夹下发现了名为PermissionChecker.class的类，这应该就是我们要找的东西了。
+
+## 漏洞发现
+
+以下是PermissionChecker.class的相关源码截图：
+
+![](https://image.3001.net/images/20200812/1597223629.png!small)![](https://image.3001.net/images/20200812/1597223639.png!small)从源码中可以发现一个名为checkAccessPermission的函数，该函数会检查当前账户权限是否具备accessPermissionName，accessPermissionName是该类中的一个硬编码变量。
+
+![](https://image.3001.net/images/20200812/1597223664.png!small)为了更好地分析其运行机制，我们就来好好地调试一下该APP，首先，我在以下位置设置了断点：
+
+![](https://image.3001.net/images/20200812/1597223685.png!small)![](https://image.3001.net/images/20200812/1597223693.png!small)然后在调试模式下启动APP应用，但当APP打开后，我发现调试器debugger就停止了。之后，我发现原因在于变量accessPermissionName赋值为_ACCESS时，调试器发生了停止，因此，这也说明之前我的想法是对的，该checkAccessPermission函数会检查当前账户是否具备相应的权限。仔细观察以下源码：
+
+![](https://image.3001.net/images/20200812/1597223712.png!small)
+
+## 漏洞利用
+
+有了这个发现，我就马上去到其Web应用中查看我的当前账户权限，为什么呢？因为貌似我们只要把变量accessPermissionName的数值_ACCESS
+，替换成普通用户权限的XXX，那是否就能正常打开其APP应用了呢？  
+于是，我以管理员身份登录了其商户管理Web界面，在以下接口发起了请求：
+
+    
+    
+    /v3/merchant/{ID}/permissions 
+
+在以下响应消息中可以看到，我之前创建的那个普通账户角色名为TestRole ，且有一个名为MANUAL_ENTRY_ALLOWED的权限名。
+
+![](https://image.3001.net/images/20200812/1597223754.png!small)然后，我把APP调试模式下的accessPermissionName数值_ACCESS替换成了MANUAL_ENTRY_ALLOWED：
+
+![](https://image.3001.net/images/20200812/1597223769.png!small)![](https://image.3001.net/images/20200812/1597223778.png!small)
+
+后续，调试模式下，APP跳出了以下内容：
+
+![](https://image.3001.net/images/20200812/1597223796.png!small)也就是说，APP成功启动运行，而且从中我还可以看到一些顾客信息。只能简单的浏览这些信息吗？那我们尝试来进行一些添加或篡改操作吧。我点击了其中的顾客添加"Add
+Customer"
+按钮，调试器又启动了，像之前那样，我又再次把accessPermissionName数值_ACCESS替换成了MANUAL_ENTRY_ALLOWED，继续：
+
+![](https://image.3001.net/images/20200812/1597223817.png!small)之后，我发现只要添加页面一打开，当我插入必填字段并点击保存时，调试器就启动了，目的似乎在于执行权限检查，在不断重复上述的accessPermissionName变量赋值后，我最后还是成功添加了用户：
+
+![](https://image.3001.net/images/20200812/1597223839.png!small)
+
+## 漏洞上报
+
+我于7月17日晚10点上报了该漏洞，目标公司咨询我是否能在无调试器辅助情况下复现该漏洞，而且其公司安全团队认为该漏洞并不会影响其生产系统APP，但是我告诉他们这完全有影响，因为普通用户都可以从模拟器中登录实现，那生产环境也一样也会存在相同问题。
+
+四天后，目标公司安全团队确认漏洞有效，且影响所有调用PermissionChecker的所有APP应用，漏洞被评级为高危，奖励了我$2500。
+
+![](https://image.3001.net/images/20200812/1597223864.png!small)
+
+## 日志记录中泄露用户密码信息（passcode）
+
+安卓应用的日志记录是一个发现敏感信息泄露的地方，这个隐患问题不需要什么技术招式。我就直接说了。首先，用android studio打开主APP-com.company.engine，打开其中的logcat标签。我依次打开所有分类应用，然后再到logcat中查找敏感信息。我可以在其中找到我的绑定邮箱，另外，我发现
+MerchantService.class类中有一个名为doNotifyLocalProperites
+的函数，该函数会收集包含用户密码在内的敏感用户信息，并存储到APP应用日志中：
+
+![](https://image.3001.net/images/20200812/1597223896.png!small)
+
+通过这种日志记录，我可以看到管理员密码。那这样的话，如果管理员通过Web方式创建了管理员账户，那从这里的日志记录获取到他的密码，我就能在APP上进行登录，实现账户劫持。
+
+为了验证该逻辑，我从APP中退出了当前账户，之后，点击每一个分类应用，都提示需要输入密码(passcode)：
+
+![](https://image.3001.net/images/20200812/1597223914.png!small)![](https://image.3001.net/images/20200812/1597223923.png!small)之后，我用从上述日志记录中获取的管理员密码进行了登录，成功有效，就这样劫持了管理员账户：
+
+![](https://image.3001.net/images/20200812/1597223946.png!small)我于7月21日上报了该漏洞，目标公司团队觉得这仅只是依赖设备日志发现的问题，攻击者并不能直接访问生产环境设备，所以他们认为这不算是一个安全漏洞。但是，我坚称这并不是android
+studio工具的辅助作用，而是其源码本身的问题。我向他们说明了函数doNotifyLocalProperites会记录用户信息的情况：
+
+![](https://image.3001.net/images/20200812/1597223978.png!small)之后，目标公司确认该漏洞有效并奖励了我$300，但我觉得该漏洞是第一个漏洞修复后的遗留漏洞，其危害性应该相对较高。后续，经目标公司安全团队重新评估，把该漏洞评级为中危，并重新给予我$450+$50的奖励。
+
+![](https://image.3001.net/images/20200812/1597223998.png!small)
+
+ **参考来源：[co0nan](https://co0nan.gitbook.io/wirteups/)**
+

@@ -1,0 +1,36 @@
+{
+	"type":"MAC_LABEL",
+	"subtype":"OBJECT"
+}
+{
+	"file_name":"X_001.txt",
+	"label":{
+		"sec_class":"RESEARCH",
+		"sec_label":1,	
+		"inte_label":0
+	}
+}
+{
+	"file_name":"X_002.txt",
+	"label":{
+		"sec_class":"PRODUCE",
+		"sec_label":3,	
+		"inte_label":0
+	}
+}
+{
+	"file_name":"X_003.txt",
+	"label":{
+		"sec_class":"RESEARCH|PRODUCE",
+		"sec_label":2,	
+		"inte_label":0
+	}
+}
+{
+	"file_name":"X_004.txt",
+	"label":{
+		"sec_class":"PUBLIC",
+		"sec_label":1,	
+		"inte_label":0
+	}
+}

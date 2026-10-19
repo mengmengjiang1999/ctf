@@ -1,0 +1,183 @@
+****
+
+**ph0neutria是一个直接从野外采集恶意软件样本的工具。并且其所有采集的内容都将被存储在Viper中，以便于访问和管理。**
+
+该项目的灵感来源于[Ragpicker](https://github.com/robbyFux/Ragpicker%EF%BC%8C)（一款恶意软件爬虫工具）。而相比之下，ph0neutria的优势主要体现在以下几点：
+
+> 将爬取的范围限制为仅经常更新且可靠的来源。
+>
+> 最大化个别指标的有效性。
+>
+> 提供单一可靠且组织良好的存储机制。
+>
+> 不做Viper可以完成的工作。
+
+那么为什么将该工具命名为ph0neutria呢？ 如果你对巴西的蜘蛛有了解的话，你一定听过一种被称为“Phoneutria
+nigriventer”（外文名Brazillian Wandering
+Spider）的巴西游走蜘蛛。这种蜘蛛在2007年世界吉尼斯记录书上，被誉为是世界上最毒的动物。其爬行的速度极快，它们的腿强壮而带有尖刺，他们拥有与众不同的红色螯肢，会在愤怒时将他们展露出来。详见：<https://en.wikipedia.org/wiki/Brazilian_wandering_spider>
+
+##  **来源**
+
+URL feeds:
+
+> Malc0de
+>
+> Malshare
+>
+> VX Vault
+
+OSINT。如果需要，被动DNS将被用于生成一个域的最新IP列表，并会通过VirusTotal查找与IP相关的最新URL。注意，一次只能查询一个源，不要超过VirusTotal
+API的请求限制范围。从每个源获取到的URL列表都将由evenshtein
+distance（莱文斯坦距离）过滤，以减少相似项目的数量，在他们自己的线程中进行处理。
+
+> AlienVault OTX
+>
+> CyberCrime Tracker
+>
+> DNS-BH
+>
+> Payload Security (Hybrid Analysis)
+>
+> Shodan
+>
+> ThreatExpert
+
+##  **截图**
+
+**![Ph0neutria：一款从野外采集恶意软件样本的工具](https://image.3001.net/images/20180720/15320429924708.png!small)![Ph0neutria：一款从野外采集恶意软件样本的工具](https://image.3001.net/images/20180720/15320430157050.png!small)![Ph0neutria：一款从野外采集恶意软件样本的工具](https://image.3001.net/images/20180720/15320430156536.png!small)![Ph0neutria：一款从野外采集恶意软件样本的工具](https://image.3001.net/images/20180720/15320430159955.png!small)![Ph0neutria：一款从野外采集恶意软件样本的工具](https://image.3001.net/images/20180720/15320430152422.png!small)**
+
+##  **版本说明**
+
+> **0.6.0：** Tor代理需要pysocks（pip install pysocks）以及至少版本不低于2.10.0的python
+> requests，以支持SOCKS
+>
+> 理。
+>
+> **0.9.0：** 从Phage Malware Tracker（私有项目）中提取的OSINT功能 - 需要VirusTotal
+> API密钥。更强大的野外文件检索能力。本地URL和哈希缓存（以减少API负载）。
+>
+> **0.9.1：** 已更新使用V3 Viper API，不再兼容V2。
+
+##  **安装**
+
+以下脚本将为我们安装ph0neutria，Viper以及Tor：
+
+    
+    
+    wget https://raw.githubusercontent.com/phage-nz/ph0neutria/master/install.sh
+    chmod +x install.sh
+    sudo ./install.sh
+
+##  **可选**
+
+配置额外的ClamAV签名：
+
+    
+    
+    cd /tmp
+    git clone https://github.com/extremeshok/clamav-unofficial-sigs
+    cd clamav-unofficial-sigs
+    cp clamav-unofficial-sigs.sh /usr/local/bin
+    chmod 755 /usr/local/bin/clamav-unofficial-sigs.sh
+    mkdir /etc/clamav-unofficial-sigs
+    cp config/ /etc/clamav-unofficial-sigs
+    cd /etc/clamav-unofficial-sigs*
+
+重命名os.<yourdistro>.conf为os.conf：
+
+    
+    
+    mv os.ubuntu.conf os.conf
+
+修改配置文件：
+
+> **master.conf：** 搜索“Enabled Databases”并启用/禁用所需的源。
+>
+> **user.conf：**
+> 取消已启用源所需行的注释。user.conf覆盖master.conf。完成以下命令的设置后，你必须将user_configuration_complete="yes"的注释取消才能使配置生效。
+
+有关更多配置信息，请参阅：<https://github.com/extremeshok/clamav-unofficial-sigs>
+
+    
+    
+    mkdir /var/log/clamav-unofficial-sigs
+    clamav-unofficial-sigs.sh --install-cron
+    clamav-unofficial-sigs.sh --install-logrotate
+    clamav-unofficial-sigs.sh --install-man
+    clamav-unofficial-sigs.sh
+    cd /tmp/clamav-unofficial-sigs
+    cp systemd/* /etc/systemd
+    cd ..
+    rm -rf clamav-unofficial-sigs
+
+这个过程可能需要等待一段时间 - 在此期间ClamAV可能无法使用。
+
+##  **使用**
+
+在使用的过程中，大家务必要做自身的保护工作：
+
+> 在没有其它可用匿名VPN的情况下，切勿禁用Tor。
+>
+> 在隔离网络和专用硬件上运行。
+>
+> 在合适的沙箱中执行样本（请参阅：<https://github.com/phage-nz/malware-> hunting/tree/master/sandbox>）。
+>
+> 监控你的API密钥是否存在滥用的情况。
+
+确保Tor已启动：
+
+    
+    
+    service tor restart
+
+启动Viper API和Web界面：
+
+    
+    
+    cd /opt/viper
+    sudo -H -u spider python viper-web
+
+记下Viper启动时创建的管理员密码。使用此命令格式登录http://<viper IP>:<viper
+port>/admin（默认为：<http://127.0.0.1:8080/admin>）并从Tokens页面中检索API token。
+
+Viper web界面地址：http://<viper IP>:<viper port>
+(默认：[http://127.0.0.1:8080](http://127.0.0.1:8080/))。
+
+完整的配置文件在：/opt/ph0neutria/config/settings.conf
+
+启动 ph0neutria：
+
+    
+    
+    cd /opt/ph0neutria
+    sudo -H -u spider python run.py
+
+你可以随时按Ctrl+C来终止运行，你也可以随时启动它。
+
+如果你希望每天都运行一次，可以在/etc/cron.daily中创建以下脚本：
+
+    
+    
+    #!/bin/bash
+    cd /opt/ph0neutria && sudo -H -u spider python run.py
+
+ **已知问题**
+
+Viper标签将被强制转换为小写（通过Viper）。如果你觉得不习惯的话，那么你可以在viper/viper/core/database.py中将所有出现的.lower()删除即可。
+
+ **参考**
+
+> <http://malshare.com/doc.php> \- MalShare API 文档
+>
+> <http://viper-framework.readthedocs.io/en/latest/usage/web.html> \- Viper
+> API 文档
+>
+> <https://developers.virustotal.com/v2.0/reference> \- VirusTotal API 文档
+>
+> <https://www.hybrid-analysis.com/apikeys/info> \- Payload Security API 文档
+>
+> <https://otx.alienvault.com/api> \- AlienVault OTX API 文档
+
+###  ** *参考来源：[GitHub](https://github.com/phage-nz/ph0neutria)，FB 小编 secist
+编译，转载请注明来自FreeBuf.COM**  
+

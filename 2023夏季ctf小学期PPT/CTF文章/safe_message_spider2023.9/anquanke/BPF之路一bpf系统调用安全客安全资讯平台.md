@@ -1,0 +1,842 @@
+# BPF之路一bpf系统调用
+
+阅读量 **821455**
+
+|评论 **4**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-12-24 10:00:03
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t014777629d3be02c51.jpg)
+
+## 前言
+
+BPF是内核中的顶级模块, 十分精妙, 相关书籍有限, 而且还都是从应用的视角看待BPF的, 我想写一系列文章, 从一个安全研究员的视角观察BPF,
+以帮助更多的人学习和研究
+
+linux内核观测技术一书中, 利用源码树中已有的包裹函数作为入门的例子, 层层包装导致编译时依赖繁多, 代码复杂无法一眼看到底层, 不是很友好
+
+我们先明确: **用户空间所有的BPF相关函数, 归根结底都是对于bpf系统调用的包装** , 我们完全可以跳过这些包裹函数, 手写bpf相关系统调用
+
+最好的学习资料永远是man, 我翻译了manual中关于bpf系统调用的部分, 如下
+
+## 系统调用声明
+
+  * bpf – 在扩展BPF映射或者程序上执行命令
+
+    
+    
+    #include <linux/bpf.h>
+    int bpf(int cmd, union bpf_attr *attr, unsigned int size);
+    
+
+  * 此函数其实在`linux/bpf.h`中没有定义, 需要手动定义, 其实就是对于系统调用的包裹函数
+
+    
+    
+    int bpf(enum bpf_cmd cmd, union bpf_attr *attr, unsigned int size)
+    {
+        return syscall(__NR_bpf, cmd, attr, size);
+    }
+    
+
+## 描述
+
+`bpf()`系统调用会执行一系列exBPF相关的操作, eBPF类似于classic BPF(cBPF), 也用于进行网络包的过滤.
+对于cBPF与eBPF内核都会在加载前进行静态分析, 以确保安全性
+
+eBPF是cBPF的扩展, 包括调用一些固定的内核帮助函数(通过eBPF提供的BPF_CALL 操作码扩展), 并能访问一些共享数据结构, 如eBPF
+maps
+
+## eBPF设计架构
+
+eBPF映射是为了保存多类型数据的通用数据结构. 数据类型都被是为二进制的, 所以用户在创建映射时只需要指明key和value的大小, 换而言之,
+一个映射的key或者value可以是任意类型的数据
+
+用户进程可以创建多个映射(用键值对是数据不透明的字节) 并且通过文件描述符fd访问. 不同的eBPF程序可以并行访问相同的映射.
+映射里面保存什么取决于用户进程和eBPF程序
+
+有一个特殊的映射类型, 称之为程序数组(program-array). 这个类型的映射保存引用其他eBPF进程的文件描述符. 在这个映射中进行查找时,
+程序执行流会被就地重定位到另一个eBPF程序的开头, 并且不会返回到调用程序.嵌套最多32层 因此不会出现无限的套娃. 在运行时,
+程序的文件描述符保存在一个可以修改的映射中, 因此程序可以进入某种要求有目的的改变. 程序数组映射中引用的程序都必须事先通过`bpf()`加载到内核中.
+如果映射查找失败, 当前程序会继续执行
+
+大体上, eBPF程序都是被用户进程加载, 并在进程退出时自动卸载的. 有些特殊的情况, 如`tc-bpf()`, 就算加载BPF程序的进程退出了,
+BPF程序还会驻留在内核中. 在这个例子中, BPF程序的文件描述符被进程关闭后, 由tc子系统保持对BPF程序的引用.
+因此一个BPF程序是否在内核中存活取决于 通过bpf()载入内核后如何进一步附加在别的子系统上
+
+每一个eBPF程序都是结束前可以安全执行的指令集合. 内核中一个验证器会静态的检查一个BPF程序是否会终止, 是否安全. 在验证期间,
+内核会增加这个eBPF程序使用的所有映射的引用计数, 因此附加的映射不能被移除, 直到程序被卸载
+
+eBPF程序可以附加在各种事件上. 这些事件可以是网络数据包的到达, 追踪时间, 根据网络队列规则的分类事件, 以及未来会被加上的其他事件.
+一个新事件会触发eBPF程序的执行, 也可能在eBPF映射中保存事件相关的信息. 除了保存数据, eBPF程序还可能调用一些固定的内核帮助函数集合
+
+同一个eBPF程序可以附加到多个事件, 并且不同的eBPF程序可以访问同一个映射, 示意图如下
+
+    
+    
+    tracing     tracing    tracing    packet      packet     packet
+    event A     event B    event C    on eth0     on eth1    on eth2
+    |             |         |          |           |          ^
+    |             |         |          |           v          |
+    --> tracing <--     tracing      socket    tc ingress   tc egress
+         prog_1          prog_2      prog_3    classifier    action
+         |  |              |           |         prog_4      prog_5
+      |---  -----|  |------|          map_3        |           |
+    map_1       map_2                              --| map_4 |--    
+
+## 系统调用参数
+
+`bpf()`系统调用的执行的操作是由cmd参数决定的. 每一个操作都有通过`attr`传递的对应参数,
+这个参数是指向公用体类型`bpf_attr`的指针, `size`参数代表`attr`指针指向的数据长度
+
+`cmd`可以是下面的值
+
+  * `BPF_MAP_CREATE`: 创建一个映射, 返回一个引用此此映射的文件描述符. close-on-exec标志会自动设置
+  * `BPF_MAP_LOOKUP_ELEM`在指定的映射中根据key查找一个元素, 并返回他的值
+  * `BPF_MAP_UPDATE_ELEM`在指定映射中创建或者更新一个元素
+  * `BPF_MAP_DELETE_ELEM`在指定映射中根据key查找并删除一个元素
+  * `BFP_MAP_GET_NEXT_KEY`在指定映射中根据key查找一个元素, 并返回下一个元素的key
+  * `BPF_PROG_LOAD`: 验证并加载一个eBPF程序, 返回一个与此程序关联的新文件描述符. close-on-exec标志也会自动加上
+
+公用体`bfp_attr`由多种用于不同bfp命令的匿名结构体组成:
+
+    
+    
+    union bpf_attr {
+       struct {    /* 被BPF_MAP_CREATE使用 */
+           __u32         map_type;    /* 映射的类型 */
+           __u32         key_size;    /* key有多少字节 size of key in bytes */
+           __u32         value_size;  /* value有多少字节 size of value in bytes */
+           __u32         max_entries; /* 一个map中最多多少条映射maximum number of entries in a map */
+       };
+    
+       struct {    /* 被BPF_MAP_*_ELEM和BPF_MAP_GET_NEXT_KEY使用  */
+           __u32         map_fd;
+           __aligned_u64 key;
+           union {
+               __aligned_u64 value;
+               __aligned_u64 next_key;
+           };
+           __u64         flags;
+       };
+    
+       struct {    /* 被BPF_PROG_LOAD使用  */
+           __u32         prog_type;
+           __u32         insn_cnt;
+           __aligned_u64 insns;      /* 'const struct bpf_insn *' */
+           __aligned_u64 license;    /* 'const char *' */
+           __u32         log_level;  /* 验证器的详细级别 */
+           __u32         log_size;   /* 用户缓冲区的大小 size of user buffer */
+           __aligned_u64 log_buf;    /* 用户提供的char*缓冲区 user supplied 'char *' buffer */
+           __u32         kern_version;
+                                     /* checked when prog_type=kprobe  (since Linux 4.1) */
+       };
+    } __attribute__((aligned(8)));
+    
+
+## eBPF映射
+
+映射是一种保存不同类型数据的通用数据结构. 映射可以在不同eBPF内核程序中共享数据, 也可以在用户进程和内核之间共享数据.
+
+每一个映射都有如下属性
+
+  * 类型type
+  * 做多多少个元素
+  * key有多少字节
+  * value有多少字节
+
+下列包裹函数展示了如何使用多种bpf系统调用访问映射, 这些函数通过cmd参数代表不同的操作
+
+###  BPF_MAP_CREATE
+
+`BPF_MAP_CREATE`命令可用于创建新映射, 返回一个引用此映射的文件描述符
+
+    
+    
+    int bpf_create_map(enum bpf_map_type map_type,
+        unsigned int key_size,
+        unsigned int value_size,
+        unsigned int max_entries)
+    {
+        union bpf_attr attr = {    //设置attr指向的对象
+            .map_type = map_type,
+            .key_size = key_size,
+            .value_size = value_size,
+            .max_entries = max_entries
+        };
+    
+        return bpf(BPF_MAP_CREATE, &attr, sizeof(attr)); //进行系统调用
+    }
+    
+
+新映射的种类由`map_type`指定, 属性由`key_size, value_size, max_entries`指定, 如果成功的话返回文件描述符,
+失败的话返回-1
+
+`key_size, value_size`属性会在加载时被验证器使用, 来检查程序是否用正确初始化的key来调用`bfp_map_*_elem()`,
+检查映射元素value是否超过指定的value_size.
+
+例如一个映射创建时`key_size`为8, eBPF程序调用`bpf_map_lookup_elem(map_fd, fp - 4)`, 程序会被拒绝,
+因为kernel内的助手函数`bpf_map_lookup_elem(map_fd, void *key)`期望从key指向的位置读入8字节,
+但是`fp-4`(fp是栈顶)起始地址会导致访问栈时越界
+
+类似的, 如果一个映射用`value_size=1`创建, eBPF程序包含
+
+    
+    
+    value = bpf_map_lookup_elem(...);
+    *(u32 *) value = 1;
+    
+
+这个程序会被拒绝执行, 因为他访问的value指针超过了value_size指定的1字节限制
+
+目前下列值可用于`map_type`
+
+    
+    
+    enum bpf_map_type {
+                          BPF_MAP_TYPE_UNSPEC,  /* Reserve 0 as invalid map type */
+                          BPF_MAP_TYPE_HASH,
+                          BPF_MAP_TYPE_ARRAY,
+                          BPF_MAP_TYPE_PROG_ARRAY,
+                          BPF_MAP_TYPE_PERF_EVENT_ARRAY,
+                          BPF_MAP_TYPE_PERCPU_HASH,
+                          BPF_MAP_TYPE_PERCPU_ARRAY,
+                          BPF_MAP_TYPE_STACK_TRACE,
+                          BPF_MAP_TYPE_CGROUP_ARRAY,
+                          BPF_MAP_TYPE_LRU_HASH,
+                          BPF_MAP_TYPE_LRU_PERCPU_HASH,
+                          BPF_MAP_TYPE_LPM_TRIE,
+                          BPF_MAP_TYPE_ARRAY_OF_MAPS,
+                          BPF_MAP_TYPE_HASH_OF_MAPS,
+                          BPF_MAP_TYPE_DEVMAP,
+                          BPF_MAP_TYPE_SOCKMAP,
+                          BPF_MAP_TYPE_CPUMAP,
+                          BPF_MAP_TYPE_XSKMAP,
+                          BPF_MAP_TYPE_SOCKHASH,
+                          BPF_MAP_TYPE_CGROUP_STORAGE,
+                          BPF_MAP_TYPE_REUSEPORT_SOCKARRAY,
+                          BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE,
+                          BPF_MAP_TYPE_QUEUE,
+                          BPF_MAP_TYPE_STACK,
+                          /* See /usr/include/linux/bpf.h for the full list. */
+                      };
+    
+
+  * `map_type`选择内核中一个可用的map实现. 对于所有的map类型, eBPF程序都使用相同的`bpf_map_look_elem()`和`bpf_map_update_elem()`助手函数访问.
+
+###  BPF_MAP_LOOK_ELEM
+
+`BPF_MAP_LOOKUP_ELEM`命令用于在fd指向的映射中根据key查找对应元素
+
+    
+    
+    int bpf_lookup_elem(int fd, const void* key, void* value)
+    {
+        union bpf_attr attr = {
+            .map_fd = fd,
+            .key = ptr_to_u64(key),
+            .value = ptr_to_u64(value),
+        };
+    
+        return bpf(BPF_MAP_LOOKUP_ELEM, &attr, sizeof(attr));
+    }
+    
+
+如果找到一个元素那么会返回0并把元素的值保存在value中, value必须是指向`value_size`字节的缓冲区
+
+如果没找到, 会返回-1, 并把`errno`设置为`ENOENT`
+
+###  BPF_MAP_UPDATE_ELEM
+
+`BPF_MAP_UPDATE_ELEM`命令在fd引用的映射中用给定的`key/value`去创建或者更新一个元素
+
+    
+    
+    int bpf_update_elem(int fd, const void* key, const void* value, uint64_t flags)
+    {
+        union bpf_attr attr = {
+            .map_fd = fd,
+            .key = ptr_to_u64(key),
+            .value = ptr_to_u64(value),
+            .flags = flags,
+        };
+    
+        return bpf(BPF_MAP_UPDATE_ELEM, &attr, sizeof(attr));
+    }
+    
+
+`flags`参数应该被指定为下面中的一个
+
+  * `BPF_ANY`创建一个新元素或者更新一个已有的
+  * `BPF_NOEXIST`只在元素不存在的情况下创建一个新的元素
+  * `BPF_EXIST`更新一个已经存在的元素
+
+如果成功的话返回0, 出错返回-1, 并且`errno`会被设置为`EINVAL, EPERM, ENOMEM, E2BIG`
+
+  * `E2BIG`表示映射中的元素数量已经到达了创建时`max_entries`指定的上限
+  * `EEXIST`表示flag设置了`BPF_NOEXIST`但是`key`已有对应元素
+  * `ENOENT`表示flag设置了`BPF_EXIST`但是`key`没有对应元素
+
+###  BPF_MAP_DELETE_ELEM
+
+`BPF_MAP_DELETE_ELEM`命令用于在fd指向的映射汇总删除键为`key`的元素
+
+    
+    
+    int bpf_delete_elem(int fd, const void* key)
+    {
+        union bpf_attr attr = {
+            .map_fd = fd,
+            .key = ptr_to_u64(key),
+        };
+    
+        return bpf(BPF_MAP_DELETE_ELEM, &attr, sizeof(attr));
+    }
+    
+
+成功的话返回0, 如果对应元素不存在那么会返回-1, 并且`errno`会被设置为`ENOENT`
+
+###  BPF_MAP_GET_NEXT_KEY
+
+`BPF_MAP_GET_NEXT_KEY`命令用于在fd引用的映射中根据`key`查找对应元素, 并设置`next_key`指向下一个元素的键
+
+    
+    
+    int bpf_get_next_key(int fd, const void* key, void* next_key)
+    {
+        union bpf_attr attr = {
+            .map_fd = fd,
+            .key = ptr_to_u64(key),
+            .next_key = ptr_to_u64(next_key),
+        };
+    
+        return bpf(BPF_MAP_GET_NEXT_KEY, &attr, sizeof(attr));
+    }
+    
+
+如果`key`被找到了, 那么会返回0并设置指针`netx_pointer`指向下一个元素的键. 如果`key`没找到,
+会返回0并设置`next_pointer`指向映射中第一个元素的键. 如果`key`就是最后一个元素呀了, 那么会返回-1,
+并设置`errno`为`ENOENT`. `errno`其他可能的值为`ENOMEM, EFAULT, EPERM, EINVAL`.
+这个方法可用于迭代map中所有的元素
+
+###  close(map_fd)
+
+删除`map_fd`引用的映射. 当创建映射的用户进程退出时, 所有的映射都会被自动删除
+
+## eBPF映射的种类
+
+支持下列映射种类
+
+###  BPF_MAP_TYPE_HASH
+
+Hash-table映射有如下特征
+
+  * 映射由用户空间的程序创建和删除. 用户空间的程序和eBPF程序都可以进行查找, 更新, 删除操作
+  * 内核负责键值对的分配和释放工作
+  * 当到达`max_entries`数量极限时, 助手函数`map_update_elem()`无法插入新的元素, (这保证了eBPF不会耗尽内存)
+  * `map_update_elem()`会自动替换已经存在的元素
+
+Hash-table映射对于查找的速度优化过
+
+###  BPF_MAP_TYPE_ARRAY
+
+数组映射有如下特征
+
+  * 为了最快的超找速度优化过. 在未来, 验证器或者JIT编译器可能会识别使用常量键的`lookup()`操作并将其有优化为常量指针. 既然指针和`value_size`在eBPF生存期间都是常数, 也有可能把一个非常量键优化为直接的指针运算(类似于C数组中的基址寻址). 换而言之, `array_map_lookup_elem()`可能会被验证器或者JIT编译器内联, 同时保留从用户空间的并发访问能力
+  * 在初始化时, 所有的数组元素都被预先分配并0初始化
+  * 映射的键就是数组的下标, 必须是4字节的
+  * `map_delete_elem()`以`EINVAL`错误失败,因为数组中的元素不能被删除
+  * `map_update_elem()`会以非原子的方式替换一个元素. 想要原子更新的话应该使用hash-table映射. 但是有一个可用于数组的特殊情况: 内建的原子函数`__sync_fetch_and_add()`可用于32或者64位的原子计数器上. 例如: 如果值代表一个单独的计数器, 可以被用在整个值自身, 如果一个结构体包含多个计数器,此函数可以被用在单独的计数器上. 这对于事件的聚合和统计来说十分有用
+
+数组映射有如下用途
+
+  * 作为全局的eBPF变量: 只有一个元素, 键为0的数组. value是全局变量的集合, eBPF程序可使用这些变量保存时间的状态
+  * 聚合追踪事件到一组固定的桶中
+  * 统计网络事件, 例如数据包的数量和大小
+
+###  BPF_MAP_TYPE_PROG_ARRAY
+
+一个程序数组映射是一种特殊的数组映射, 其映射的值只包含引用其他eBPF程序的文件描述符.
+因此`key_size`和`value_size`都必须被指定为四字节(数组映射的index为4字节, 文件描述符为4字节).
+此映射助手函数`bpf_tail_call()`结合使用
+
+这意味着一个带有程序数组映射的eBPF程序可以从kernel一侧调用`void bpf_tail_call(void *context, void
+*prog_map, unsigned int index);` 因而用程序数组中一个给定程序替换自己的程序执行流.
+程序数组可以被当做一种切换到其他eBPF程序的跳表(jump-table), 被调用的程序会继续使用同一个栈. 当跳转到一个新程序时,
+他再也不会返回到原来的老程序
+
+如果用给的index在程序数组中没有发现eBPF程序(因为对应槽中没有一个有效的文件描述符, 或者index越界, 或者达到32层嵌套的限制),
+会继续执行当前eBPF程序. 这部分(跳转指令后面)可用于默认情况的错误处理
+
+程序数组映射在追踪或者网络中很有用, 可用于在自己的子程序中处理单个系统调用或者协议(原eBPF作为任务分配器, 根据每种情况调用对应的eBPF子程序).
+此方法有助于性能改善, 并有可能突破单个eBPF程序的指令数量限制. 在动态环境下,
+一个用户空间的守护进程可能在运行时间用更新版本的程序自动替换单个子程序, 以改变整个程序的行为. 比如在全局策略改版的情况下
+
+## 加载eBPF程序
+
+`BPF_PROG_LOAD`命令用于在内核中装载eBPF程序, 返回一个与eBPF程序关联的文件描述符
+
+    
+    
+    char bpf_log_buf[LOG_BUF_SIZE];
+    
+    int bpf_prog_load(enum bpf_prog_type type, const struct bpf_insn* insns, int insn_cnt, const char* license)
+    {
+        union bpf_attr attr = {
+            .prog_type = type,
+            .insns = ptr_to_u64(insns),
+            .insn_cnt = insn_cnt,
+            .license = ptr_to_u64(license),
+            .log_buf = ptr_to_u64(bpf_log_buf),
+            .log_size = LOG_BUF_SIZE,
+            .log_level = 1,
+        };
+    
+        return bpf(BPF_PROG_LOAD, &attr, sizeof(attr));
+    }
+    
+
+`prog_type`是下列可用程序类型之一
+
+    
+    
+    enum bpf_prog_type {
+        BPF_PROG_TYPE_UNSPEC, /* Reserve 0 as invalid program type */
+        BPF_PROG_TYPE_SOCKET_FILTER,
+        BPF_PROG_TYPE_KPROBE,
+        BPF_PROG_TYPE_SCHED_CLS,
+        BPF_PROG_TYPE_SCHED_ACT,
+        BPF_PROG_TYPE_TRACEPOINT,
+        BPF_PROG_TYPE_XDP,
+        BPF_PROG_TYPE_PERF_EVENT,
+        BPF_PROG_TYPE_CGROUP_SKB,
+        BPF_PROG_TYPE_CGROUP_SOCK,
+        BPF_PROG_TYPE_LWT_IN,
+        BPF_PROG_TYPE_LWT_OUT,
+        BPF_PROG_TYPE_LWT_XMIT,
+        BPF_PROG_TYPE_SOCK_OPS,
+        BPF_PROG_TYPE_SK_SKB,
+        BPF_PROG_TYPE_CGROUP_DEVICE,
+        BPF_PROG_TYPE_SK_MSG,
+        BPF_PROG_TYPE_RAW_TRACEPOINT,
+        BPF_PROG_TYPE_CGROUP_SOCK_ADDR,
+        BPF_PROG_TYPE_LWT_SEG6LOCAL,
+        BPF_PROG_TYPE_LIRC_MODE2,
+        BPF_PROG_TYPE_SK_REUSEPORT,
+        BPF_PROG_TYPE_FLOW_DISSECTOR,
+        /* See /usr/include/linux/bpf.h for the full list. */
+    };
+    
+
+eBPF程序类型的细节在后面, `bpf_attr`剩余区域按照如下设置
+
+  * `insns`是`struct bpf_insn`指令组成的数组
+  * `insn_cnt`是`insns`中指令的个数
+  * `license`是许可字符串, 为了与标志为`gpl_only`的助手函数匹配必须设置GPL
+  * `log_buf`是一个调用者分配的缓冲区, 内核中的验证器可以在里面保存验证的log信息. 这个log信息由多行字符串组成, 目的是让程序作者明白为什么验证器认为这个程序是不安全的(相当于编译器的日志), 随着验证器的发展, 输出格式可能会改变
+  * `log_size`是`log_buf`的缓冲区大小, 要是缓冲区不足以保存全部的验证器日志, 那么会返回-1, 并把`errno`设置为`ENOSPC`
+  * `log_level`是验证器日志的详细级别, 00表示验证器不会提供日志, 在这种情况下`log_buf`必须是空指针, `log_size`必须是0
+
+对返回的文件描述符调用`close()`会卸载eBPF程序
+
+映射可以被eBPF程序访问, 并被用于在eBPF程序之间, 在eBPF与用户程序之间交换数据. 例如, eBPF程序可以处理各种时间(kprobe,
+packet)并保存他们的数据到映射中, 并且用户空间的程序可以从映射中获取数据. 反过来用户空间的程序可以把映射当做一种配置机制,
+用eBPF程序检查过的值填充映射, 可以根据值动态的改变程序的行为
+
+## eBPF程序种类
+
+eBPF程序的种类决定了能调用哪些内核助手函数. 程序的种类也决定了程序的输入-`struct
+bpf_context`的格式(也就是首次运行时传递给eBPF程序的一些数据)
+
+例如, 作为socket过滤程序一个追踪程序不一定有一组相同的助手函数(可能都有的通用助手函数). 类似的,
+一个追踪程序的输入(context)是一些寄存器值的集合, 对于socket过滤器来说是一个网络数据包
+
+对于特定类型的eBPF程序可用函数集合未来可能会增加
+
+下列程序类型是支持的
+
+  * `BPF_PROG_TYPE_SOCKET_FILTER`, 目前, `BPF_PROG_TYPE_SOCKET_FILTER`其可用函数集合如下 
+    * `bpf_map_lookup_elem(map_fd, void *key)`: 在map_fd中寻找key
+    * `bpf_map_update_elem(map_fd, void *key, void *value)`: 更新key或者value
+    * `bpf_map_delete_elem(map_fd, void *key)`在map_fd中删除一个键
+    * `bpf_context`参数是一个指向`struct __sk_buff`(网络数据包缓冲区)的指针
+  * `BPF_PROG_TYPE_KPROBE`
+  * `BPF_PROG_TYPE_SCHED_CLS`
+  * `BPF_PROG_TYPE_SCHED_ACT`
+
+## 事件
+
+一但一个程序被加载, 他就可以附加到一个事件上. 各种内核子系统都有不同的方式去做到这一点
+
+从linux3.19开始, 如下调用会把程序`prog_fd`附加到先前通过socket()创建的套接字`sockfd`上
+
+    
+    
+    setsockopt(sockfd, SOL_SOCKET, SO_ATTACH_BPF, &prog_fd, sizeof(prog_fd));
+    
+
+自从linux4.1开始, 如下调用会把`prog_fd`指向的eBPF程序附加到一个perf事件描述符`event_fd`,
+这个描述符先前由`perf_event_open()`创建
+
+    
+    
+    ioctl(event_fd, PERF_EVENT_IOC_SET_BPF, prog_fd);
+    
+
+## 返回值
+
+对于一次成功的调用, 返回值取决于操作
+
+  * `BPF_MAP_CREATE`: 返回与eBPF映射关联的文件描述符
+  * `BPF_PROG_LOAD`: 返回与eBPF程序关联的文件描述符
+  * 其他命令: 0
+
+如果发生错误就返回-1, errno设置为错误原因
+
+## 其他相关笔记
+
+在linux4.4之前, 所有的bpf()命令都要求调用者有`CAP_SYS_ADMIN`的能力, 从linux4.4开始,
+非特权用户可以创建受限的`BPF_PROG_TYPE_SOCKET_FILTER`类型的程序和相关的映射. 然后他们不能在映射里面保存内核指针,
+现在只能使用如下助手函数
+
+  * get_random()
+  * get_smp_processer_id()
+  * tail_call())
+  * ktime_get_ns()
+
+非特权访问可以通过向`/proc/sys/kernel/unprivileged_bpf_disabled`写入1来阻止
+
+eBPF对象(映射和程序)可以在进程之间共享, 例如, 在fork()之后, 子进程会继承同一个指向eBPF对象的文件描述符.另外,
+引用eBPF对象的文件描述符也可以通过UNIX domin socket传递.
+引用eBPF对象的文件描述符也通过普通的方式使用`dup(2)`和类似的调用进行复制. 一个eBPF对象只在所有的文件描述符引用都关闭之后才会被析构
+
+eBPF程序可以使用受限的C语音写, 然后被编译成eBPF字节码. 在受限的C语音中, 很多特性都被删去了, 例如: 循环, 全局变量, 可变参函数,
+浮点数, 传递一个结构体作为函数参数. 内核源码的`samples/bpf/*_kern.c`文件中有些eBPF程序的样例
+
+为了更好的性能, 内核包含一个能翻译eBPF字节码为本地机器指令的及时编译器(JIT, just-in-time compiler).
+在linux4.15之前的内核, 这个JIT编译器是被默认禁止的,
+但可以通过向`/proc/sys/net/core/bpf_jit_enable`写入一个整数字符串来控制其行为
+
+  * 0: 禁用JIT编译器(默认的)
+  * 1: 正常的编译
+  * 2: 调试模式. 生成的指令会以十六进制的性质被复制到内核log中, 这个字节码可以通过内核源码树中`tools/net/bpf_jit_disasm.c`来进行反编译
+
+从4.15开始, 内核可以用`CONFIG_BPF_JIT_ALWAYS_ON`选项进行配置, 在这种情况下, JIT编译器总是会开启,
+并且`bpf_jit_enable`也初始化为1并且不可改变. (内核配置选项可以缓解潜在的针对BPF解释器的攻击)
+
+eBPF的JIT编译器目前对下列架构可用
+
+    
+    
+        *  x86-64 (since Linux 3.18; cBPF since Linux 3.0);
+       *  ARM32 (since Linux 3.18; cBPF since Linux 3.4);
+       *  SPARC 32 (since Linux 3.18; cBPF since Linux 3.5);
+       *  ARM-64 (since Linux 3.18);
+       *  s390 (since Linux 4.1; cBPF since Linux 3.7);
+       *  PowerPC 64 (since Linux 4.8; cBPF since Linux 3.1);
+       *  SPARC 64 (since Linux 4.12);
+       *  x86-32 (since Linux 4.18);
+       *  MIPS 64 (since Linux 4.18; cBPF since Linux 3.16);
+       *  riscv (since Linux 5.1).
+    
+
+## 代码样例
+
+为了更加直观, 我不引入内核源码树中的`bpf_help.h`, 也不使用loader, 以更加直观的展示BPF的用法
+
+###  数组映射的使用
+
+    
+    
+    //gcc ./bpf.c -o bpf
+    #include <stdio.h>
+    #include <stdlib.h>  //为了exit()函数
+    #include <stdint.h>    //为了uint64_t等标准类型的定义
+    #include <errno.h>    //为了错误处理
+    #include <linux/bpf.h>    //位于/usr/include/linux/bpf.h, 包含BPF系统调用的一些常量, 以及一些结构体的定义
+    #include <sys/syscall.h>    //为了syscall()
+    
+    //类型转换, 减少warning, 也可以不要
+    #define ptr_to_u64(x) ((uint64_t)x)
+    
+    //对于系统调用的包装, __NR_bpf就是bpf对应的系统调用号, 一切BPF相关操作都通过这个系统调用与内核交互
+    int bpf(enum bpf_cmd cmd, union bpf_attr *attr, unsigned int size)
+    {
+        return syscall(__NR_bpf, cmd, attr, size);
+    }
+    
+    //创建一个映射, 参数含义: 映射类型, key所占自己, value所占字节, 最多多少个映射
+    int bpf_create_map(enum bpf_map_type map_type, unsigned int key_size, unsigned int value_size, unsigned int max_entries)
+    {
+        union bpf_attr attr = {    //设置attr指向的对象
+            .map_type = map_type,
+            .key_size = key_size,
+            .value_size = value_size,
+            .max_entries = max_entries
+        };
+    
+        return bpf(BPF_MAP_CREATE, &attr, sizeof(attr)); //进行系统调用
+    }
+    
+    //在映射中更新一个键值对
+    int bpf_update_elem(int fd, const void* key, const void* value, uint64_t flags)
+    {
+        union bpf_attr attr = {
+            .map_fd = fd,
+            .key = ptr_to_u64(key),
+            .value = ptr_to_u64(value),
+            .flags = flags,
+        };
+    
+        return bpf(BPF_MAP_UPDATE_ELEM, &attr, sizeof(attr));
+    }
+    
+    //在映射中根据指针key指向的值搜索对应的值, 把值写入到value指向的内存中
+    int bpf_lookup_elem(int fd, const void* key, void* value)
+    {
+        union bpf_attr attr = {
+            .map_fd = fd,
+            .key = ptr_to_u64(key),
+            .value = ptr_to_u64(value),
+        };
+    
+        return bpf(BPF_MAP_LOOKUP_ELEM, &attr, sizeof(attr));
+    }
+    
+    int main(void){
+        //首先创建一个数组映射, 键和值都是4字节类型, 最多0x100个映射
+        int map_fd = bpf_create_map(BPF_MAP_TYPE_ARRAY, 4, 4, 0x100);
+        printf("BPF_map_fd: %d\n", map_fd);
+    
+        //按照key->key+1的规律填充这个数组映射
+        for(int idx=0; idx<0x20; idx+=1){
+            int value = idx+1;
+            //记住, 数组映射中的元素预先分配, 已经存在, 不可删除, 因此flag要么是BPF_ANY, 要么是BPF_EXISTS, 表示更新一个已有的值
+            if(bpf_update_elem(map_fd, &idx, &value, BPF_EXIST)<0){ 
+                perror("BPF update error");
+                exit(-1);
+            }
+        }
+    
+        //读入key
+        int key;
+        scanf("%d", &key);
+    
+        //尝试在数组映射中查找对应的值
+        int value;
+        if(bpf_lookup_elem(map_fd, &key, &value)<0){
+            perror("BPF lookup error");
+            exit(-1);
+        }
+        printf("key: %d => value: %d\n", key, value);
+    
+    }
+    
+
+运行结果
+
+![](https://p3.ssl.qhimg.com/t013d30c34a925f16ef.png)
+
+###  hash映射的使用
+
+    
+    
+    //gcc ./bpf.c -o bpf
+    #include <stdio.h>
+    #include <stdlib.h>  //为了exit()函数
+    #include <stdint.h>    //为了uint64_t等标准类型的定义
+    #include <errno.h>    //为了错误处理
+    #include <linux/bpf.h>    //位于/usr/include/linux/bpf.h, 包含BPF系统调用的一些常量, 以及一些结构体的定义
+    #include <sys/syscall.h>    //为了syscall()
+    
+    //类型转换, 减少warning, 也可以不要
+    #define ptr_to_u64(x) ((uint64_t)x)
+    
+    //对于系统调用的包装, __NR_bpf就是bpf对应的系统调用号, 一切BPF相关操作都通过这个系统调用与内核交互
+    int bpf(enum bpf_cmd cmd, union bpf_attr *attr, unsigned int size)
+    {
+        return syscall(__NR_bpf, cmd, attr, size);
+    }
+    
+    //创建一个映射, 参数含义: 映射类型, key所占自己, value所占字节, 最多多少个映射
+    int bpf_create_map(enum bpf_map_type map_type, unsigned int key_size, unsigned int value_size, unsigned int max_entries)
+    {
+        union bpf_attr attr = {    //设置attr指向的对象
+            .map_type = map_type,
+            .key_size = key_size,
+            .value_size = value_size,
+            .max_entries = max_entries
+        };
+    
+        return bpf(BPF_MAP_CREATE, &attr, sizeof(attr)); //进行系统调用
+    }
+    
+    //在映射中更新一个键值对
+    int bpf_update_elem(int fd, const void* key, const void* value, uint64_t flags)
+    {
+        union bpf_attr attr = {
+            .map_fd = fd,
+            .key = ptr_to_u64(key),
+            .value = ptr_to_u64(value),
+            .flags = flags,
+        };
+    
+        return bpf(BPF_MAP_UPDATE_ELEM, &attr, sizeof(attr));
+    }
+    
+    //在映射中根据指针key指向的值搜索对应的值, 把值写入到value指向的内存中
+    int bpf_lookup_elem(int fd, const void* key, void* value)
+    {
+        union bpf_attr attr = {
+            .map_fd = fd,
+            .key = ptr_to_u64(key),
+            .value = ptr_to_u64(value),
+        };
+    
+        return bpf(BPF_MAP_LOOKUP_ELEM, &attr, sizeof(attr));
+    }
+    
+    //字符串表
+    char *strtab[] = {
+        "The",
+        "Dog",
+        "DDDDog"
+    };
+    
+    int main(void){
+        //创建一个hash映射, 键为4字节的int, 值为一个char*指针, 因此大小分别是sizeof(int)与sizeof(char*), 最多0x100个
+        int map_fd = bpf_create_map(BPF_MAP_TYPE_HASH, sizeof(int), sizeof(char*), 0x100);
+        printf("BPF_map_fd: %d\n", map_fd);
+    
+        //用strtable初始化hash映射
+        for(int idx=0; idx<3; idx+=1){
+            char *value = strtab[idx];
+            //hash映射中元素预先是不存在的, 因此可以设置BPF_NOEXIST或者BPF_ANY标志
+            if(bpf_update_elem(map_fd, &idx, &value, BPF_NOEXIST)<0){
+                perror("BPF update error");
+                exit(-1);
+            }
+        }
+    
+        //读入键
+        int key;
+        scanf("%d", &key);
+    
+        //查找对应值, 把值作为char*类型
+        char *value;
+        if(bpf_lookup_elem(map_fd, &key, &value)<0){
+            perror("BPF lookup error");
+            exit(-1);
+        }
+        printf("key: %d => value: %s\n", key, value);
+    }
+    
+
+运行例子
+
+![](https://p1.ssl.qhimg.com/t01ffea74174a800d9b.png)
+
+###  加载BPF程序
+
+加载BPF程序涉及到如何用BPF汇编, 我们先不管BPF汇编, 直接使用固定的汇编代码, 然后加载后运行
+
+    
+    
+    //gcc ./bpf.c -o bpf
+    #include <stdio.h>
+    #include <stdlib.h>  //为了exit()函数
+    #include <stdint.h>    //为了uint64_t等标准类型的定义
+    #include <errno.h>    //为了错误处理
+    #include <linux/bpf.h>    //位于/usr/include/linux/bpf.h, 包含BPF系统调用的一些常量, 以及一些结构体的定义
+    #include <sys/syscall.h>    //为了syscall()
+    
+    //类型转换, 减少warning, 也可以不要
+    #define ptr_to_u64(x) ((uint64_t)x)
+    
+    //对于系统调用的包装, __NR_bpf就是bpf对应的系统调用号, 一切BPF相关操作都通过这个系统调用与内核交互
+    int bpf(enum bpf_cmd cmd, union bpf_attr *attr, unsigned int size)
+    {
+        return syscall(__NR_bpf, cmd, attr, size);
+    }
+    
+    //用于保存BPF验证器的输出日志
+    #define LOG_BUF_SIZE 0x1000
+    char bpf_log_buf[LOG_BUF_SIZE];
+    
+    //通过系统调用, 向内核加载一段BPF指令
+    int bpf_prog_load(enum bpf_prog_type type, const struct bpf_insn* insns, int insn_cnt, const char* license)
+    {
+        union bpf_attr attr = {
+            .prog_type = type,        //程序类型
+            .insns = ptr_to_u64(insns),    //指向指令数组的指针
+            .insn_cnt = insn_cnt,    //有多少条指令
+            .license = ptr_to_u64(license),    //指向整数字符串的指针
+            .log_buf = ptr_to_u64(bpf_log_buf),    //log输出缓冲区
+            .log_size = LOG_BUF_SIZE,    //log缓冲区大小
+            .log_level = 2,    //log等级
+        };
+    
+        return bpf(BPF_PROG_LOAD, &attr, sizeof(attr));
+    }
+    
+    //BPF程序就是一个bpf_insn数组, 一个struct bpf_insn代表一条bpf指令
+    struct bpf_insn bpf_prog[] = {
+        { 0xb7, 0, 0, 0, 0x2 }, //初始化一个struct bpf_insn, 指令含义: mov r0, 0x2;
+        { 0x95, 0, 0, 0, 0x0 }, //初始化一个struct bpf_insn, 指令含义: exit;
+    };
+    
+    int main(void){
+        //加载一个bpf程序
+        int prog_fd = bpf_prog_load(BPF_PROG_TYPE_SOCKET_FILTER, bpf_prog, sizeof(bpf_prog)/sizeof(bpf_prog[0]), "GPL");
+        if(prog_fd<0){
+            perror("BPF load prog");
+            exit(-1);
+        }
+        printf("prog_fd: %d\n", prog_fd);
+        printf("%s\n", bpf_log_buf);    //输出程序日志
+    }
+    
+
+运行情况
+
+![](https://p2.ssl.qhimg.com/t0145fd9379e8f9514e.png)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **一只狗** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/263803](/post/id/263803)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Pwn](/tag/Pwn)
+
+ **+1** __17赞
+
+ __收藏
+
+![](https://p2.ssl.qhimg.com/t0129dce3bc1ba3282b.jpg) 一只狗
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

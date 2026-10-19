@@ -1,0 +1,144 @@
+**在今年3月份的一次取证调查中，我们找回了一些文件。经过我们初步的判定，这些文件极有可能与一个知名组织Iron Tiger有关。**
+
+**从我们的研究分析中，我们认为攻击者在此次攻击中并没有使用任何高级的攻击技术。实际上，攻击者的主要目标是挖掘加密货币。在调查中，我们还发现了一些攻击者使用过的工具，例如password
+dumpers，Monero加密货币矿工，可移动可执行（PE）注入器，以及Gh0st
+RAT的修改版。尽管Bitdefender和TrendMicro已发布了对该组织使用的一些工具的详细描述报告[1]
+[2]，但我们却并没有找到对此特定修改版本Gh0st RAT的任何引用和参考信息。因此，这篇文章的目的就是向大家简要描述，该组织所使用的Gh0st
+RAT修改版。**
+
+## 恶意 **payload**
+
+首先，一个位于C:\ProgramData中的一个新文件夹下并以随机名称命名的恶意可执行文件会被执行。该文件一旦执行，就会删除一个批处理文件（install.bat）和一个cabinet文件（data.cab）。cabinet文件包含两个文件：部分加密的恶意shellcode和将执行恶意shellcode的动态链接库（DLL）。然后恶意可执行文件将执行批处理文件，该文件将解压缩并执行DLL文件。权限维持主要是通过创建新服务或新注册表项来实现的，具体取决于恶意软件具有的权限。一旦将执行传递给shellcode，它将使用单个字节作为eXclusive
+OR（XOR）循环中的密钥，来解密其余的加密数据。解密后，我们可以看到以下的字符串：
+
+    
+    
+    Microsoft.Windows.BNG|[C&C IP address]:443;|1;1;1;1;1;1;1;|00-24;|1
+
+shellcode的主要目标是在内存中加载和执行攻击者的插件。
+
+##  **被修改的Gh0st RAT**
+
+在分析以前的文件时，我们发现了一个名为'Plugins'的文件夹，里面有一些有趣的DLL和两个需要执行密码的文件（如下图所示）。
+
+![image-1.png](https://image.3001.net/images/20180504/1525390469666.png!small)
+
+逆向分析后，我们发现密码没有被硬编码。 相反，密码基于当前的年份和月份。例如，2018年3月份的密码是'201803'。
+
+第一个名为'Noodles'的文件，似乎是基于编译日期和功能的Gh0st
+RAT旧的修改版本。名为'Mozilla'的第二个文件是用于此次攻击的主要工具。我们可以在下面看到两个面板的外观：
+
+![image-2.png](https://image.3001.net/images/20180504/15253904926179.png!small)![image-3.png](https://image.3001.net/images/20180504/15253904926612.png!small)
+
+目前，这两种工具都可以侦听任何给定的端口，但只有'Mozilla'可以连接到绑定端口。支持的协议包括安全套接字层（SSL）和传输控制协议（TCP）。列表中其中一个协议被命名，但目前还不支持，并显示错误消息。这可能表明这个工具仍在开发中，并且计划增加额外的功能。
+
+![image-4.png](https://image.3001.net/images/20180504/15253905142328.png!small)
+
+另外，对Mozilla工具的分析确定了二进制内的程序数据库（PDB）路径：
+
+> K:\Mozilla\Mozillav6.0.x_dll\WorkActive\Release\Mozilla.pdb  
+>
+
+该工具严重依赖于插件。 当有新的受害者连接时，攻击者可以使用PluginManager将新插件加载到受感染的机器。
+
+![image-5.png](https://image.3001.net/images/20180504/15253905733836.png!small)
+
+大多数可用的插件都基于Gh0st RAT源码，并且可以在下面找到它们的摘要：  
+
+![table-2.png](https://image.3001.net/images/20180504/15253906185403.png!small)
+
+## 网络通信
+
+受害者和攻击者之间的网络流量使用Rivest Cipher
+4（RC4）加密。密钥对于每个请求都是唯一的，并且使用'XOR'和'AND'指令进行加密。密钥存储在请求的前28个字节中。我们编写了一个Python脚本，将网络捕获（PCAP）作为输入并对其进行解密，你可以在我们的Github存储库中找到它：<https://github.com/nccgroup/Cyber-Defence/tree/master/Scripts/gh0st_variant_c2>
+
+例如，下面我们可以在名为sent的机器上看到受害者和C2服务器之间的初始连接，
+
+数据到服务器..
+
+    
+    
+    [i] Found key: C8410061440A01c762FA9000
+    00000000: 0501570049004E00  2D00510047004F00  ..W.I.N.-.Q.G.O.
+    00000010: 3400430051004E00  49004F004E003500  4.C.Q.N.I.O.N.5.
+
+并且在PE文件的独特开头下面可以看到，因为插件已被传送到客户端。
+
+数据到客户端..
+
+    
+    
+    [i] Found key: C841006804EC089c84EA9020
+    00000000: 4D5A900003000000  04000000FFFF0000  MZ..............
+    00000010: B800000000000000  4000000000000000  ........@.......
+    00000020: 0000000000000000  0000000000000000  ................
+    00000030: 0000000000000000  00000000F0000000  ................
+    00000040: 0E1FBA0E00B409CD  21B8014CCD215468  ........!..L.!Th
+    00000050: 69732070726F6772  616D2063616E6E6F  is program canno
+    00000060: 742062652072756E  20696E20444F5320  t be run in DOS
+    00000070: 6D6F64652E0D0D0A  2400000000000000  mode....$.......
+
+## IOCs
+
+命令和控制（C&C) IP：
+
+> 23.227.207.137
+>
+> 89.249.65.194
+
+恶意文件目录：
+
+> C:\ProgramData\HIDMgr
+>
+> C:\ProgramData\Rascon
+>
+> C:\ProgramData\TrkSvr
+
+恶意服务名称：
+
+> HIDMgr
+>
+> RasconMan
+>
+> TrkSvr
+
+用于持久性的注册表项：
+
+    
+    
+    ‘rundll32.exe_malicious_DLL_path’ in ‘HKCU\Software\Microsoft\Windows\CurrentVersion\Run’
+
+文件名和哈希：
+
+文件名 | Hash(SHA-256)  
+---|---  
+Mozilla.exe | EE04B324F7E25B59D3412232A79D1878632D6817C3BB49500B214BF19AFA4E2C  
+Updateproxy.dll |
+0BA49FEB7784E6D33D821B36C5C669D09E58B6795ACA3EEBBF104B763B3B3C20  
+Telnet.dll | 33B7407E534B46BF8EC06D9F45ECD2D3C7D954340669E94CD7CEDCBAE5BAD2DD  
+Socks.dll | 6160AF383794212B6AD8AB9D6D104BBE7AEFB22410F3AB8EA238F98DABFC48B7  
+Shell.dll | C63B01C40038CA076072A35913F56D82E32FCEE3567650F3392B5C5DA0004548  
+Session.dll | D51EC4ACEAFA971E7ABD0CF4D27539A4212A448268EF1DB285CD9CE9024D6EB3  
+Screen.dll | BD8086DE44E16EFDD380E23E49C4058D956538B01E1AE999B679B6B76B643C7D  
+Port.dll | B44A9545B697B4D46D5B96862A6F19EA72F89FED279F56309B2F245AC8380BE0  
+File.dll | F4DF97108F18654089CFB863F2A45AA41D17A3CE8A44CCCC474F281A20123436  
+ConEmu.exe | D31D38403E039F5938AE8A5297F35EB5343BB9362D08499B1E07FAD3936CE6F7  
+Noodles.exe | A591D4D5B8D23FF12E44A301CE5D4D9BF966EBA0FC0068085B4B4EC3CE352963  
+Coal.exe (Malicious executable) |
+EEBFF21DEF49AF4E85C26523AF2AD659125A07A09DB50AC06BD3746483C89F9D  
+Abg.exe (Malicious executable) |
+97B9D7E16CD6B78A090E9FA7863BD9A57EA5BBE6AE443FA788603EEE5DA0BFC3  
+23d.exe (Malicious executable) |
+B6C21C26AEF75AD709F6C9CFA84BFA15B7EE709588382CE4BC3544A04BCEB661  
+89d.exe (Malicious executable) |
+DB9B9FA9EFA53662EC27F4B74B79E745F54B6C30C547A4E5BD2754E9F635F6DB  
+  
+## 参考
+
+<https://www.erai.com/CustomUploads/ca/wp/2015_12_wp_operation_iron_tiger.pdf>
+
+<https://labs.bitdefender.com/wp-content/uploads/downloads/operation-pzchao-inside-a-highly-specialized-espionage-infrastructure/>
+
+ ***参考来源：[nccgroup](https://www.nccgroup.trust/uk/about-us/newsroom-and-events/blogs/2018/april/decoding-network-data-from-a-gh0st-rat-variant/)，FB小编
+secist 编译，转载请注明来自FreeBuf.COM **  
+

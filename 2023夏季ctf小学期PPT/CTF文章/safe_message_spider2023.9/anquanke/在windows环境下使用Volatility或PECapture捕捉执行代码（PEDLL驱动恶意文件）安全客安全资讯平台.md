@@ -1,0 +1,295 @@
+# 在windows环境下使用Volatility或PE Capture捕捉执行代码（PE/DLL/驱动恶意文件）
+
+阅读量 **137324**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2016-02-22 13:48:19
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：360安全播报
+
+原文地址：<https://isc.sans.edu/diary/Hunting+for+Executable+Code+in+Windows+Environments/20745>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+可执行代码可以在微软视窗操作系统中采取不同的形式：它可以是一个可执行程序（一个可移植的可执行文件）、一个共享库（DLL）或驱动程序。在一个系统上执行代码的能力是攻击者的最终目标。他们每天都在努力寻找新的方法给系统传送恶意代码并入侵。这可能是通过一个软件漏洞、一个内嵌VBA宏的OLE文档、一个网页中恶意的JavaScript代码。这就是为什么在系统上要强制控制并了解哪些应用程序是可执行的。当一台电脑被攻破，有两种方法可以找到恶意代码：第一种是应用取证工具这样的被动反应，比如Volatility。第一步是做一个被感染的计算机内存的转储，然后分析它。下面的示例将列出在内存中发现的过程：
+
+    
+    
+    $ vol.py -f memory.dump --profile=Win7SP1x86 psxview
+    Offset(P)  Name                    PID pslist psscan thrdproc pspcdid csrss
+    ---------- -------------------- ------ ------ ------ -------- ------- -----    0x06541da0 svchost.exe            1140 True   True   False    True    True
+    0x06531b10 wuauclt.exe            1040 True   True   False    True    True
+    0x065e44d8 svchost.exe             952 True   True   False    True    True
+    ...
+    ...
+
+  
+
+但是有另一种更积极主动的方式：在执行系统时捕获可执行代码“live”。为了实现这一点，我使用了一种叫做PE
+Capture的好工具。这个工具有两个版本，一种完全免费的版本，有典型GUI的“图形化”工具。第二种作为Windows服务运行（对用户完全透明），被称为
+PE Capture Service。这种对于个人使用是免费的，但许可证是需要在企业环境中获得。该工具有两个有趣的功能：But there is
+another way which is more proactive:
+
+•正如它的名字所暗示的，它捕获在系统中加载的PE文件（可执行文件、DLL、驱动器）并且在特定的目录中保存文件副本（文件名MD5hash）
+
+•它记录可执行文件的名字，一个平面文件中MD5HASH值和执行时间戳。
+
+  
+
+安装非常简单：下载存档、在文件夹中提取文件、选择你的架构（x86或x64）、在C移动目录：PECaptureSvc
+（这个可以通过配置文件修改）和发射install.bat。就是这样！每次重启后都会自动启动服务。默认情况下，捕获的可执行文件保存在：
+
+    
+    
+    C:PECaptureSvcIntercepted[hostname][dd<dd-mm-yyyy<dd]
+
+日志文件是：
+
+    
+    
+    C:PECaptureSvcLogs[hostname][dd-mm-yyyy].log
+
+这里是一个日志条目样本：
+
+    
+    
+    18/02/2016 20:45:33C:totalcmdTOTALCMD64.EXE80F48C1F435FE040D33665030F719132
+
+请注意，一个排除数据库是可用的（以防止最常见的可执行代码被每天记录）。你可以定义正则表达式。可执行文件匹配它们不会被记录/捕获。例如：
+
+    
+    
+    C:MySafeTools*.exe*:CorporateTool.exe
+
+您还可以禁用其中两个主要功能之一。举例：日志记录并没有保存所提取的代码（请记住，在繁忙的系统中“被截取”的目录大小可能会迅速增长！）
+
+  
+
+更实际一些，下面是一个系统被新成束的勒索软件感染的例子。使用的样本facture037017.doc（63c2551118c5006f6ffe6773dadbff75）通过网络钓鱼电子邮件接收。
+
+  
+
+让我们在文件上双击“微软”word开始：
+
+    
+    
+    18/02/2016 20:46:20
+    C:Program FilesCommon FilesMicrosoft SharedOFFICE12MSOXEV.DLL
+    2403A9F058DFDD337CE9A67AE1ECAD63
+    18/02/2016 21:03:46
+    C:Program Files (x86)WinRARRarExt64.dll
+    C2CE5E4DF7B3766A7A59A6634F29ABB1
+    18/02/2016 21:05:29
+    C:Program Files (x86)Microsoft OfficeOffice12WINWORD.EXE
+    4E7782C13D82BAA36059745280135A84
+    18/02/2016 21:05:35
+    C:Program Files (x86)Microsoft OfficeOffice12WWLIB.DLL
+    C102BEDBE15445AA2938EBF0D5B281E0
+    18/02/2016 21:05:38
+    C:Program Files (x86)Microsoft OfficeOffice12OART.DLL
+    7F2C8065F1079D04BD8BC2B19750A596
+    18/02/2016 21:05:42
+    C:Program Files (x86)Common Filesmicrosoft sharedOFFICE12MSO.DLL
+    E7AAFC1A321ED0E3EF44B1ED8CF09FA2
+    18/02/2016 21:05:42
+    C:Program Files (x86)Microsoft OfficeOffice121033WWINTL.DLL
+    BEF1EAD605CF791FDBB48ADD71075509
+    18/02/2016 21:05:42
+    C:Program Files (x86)Common Filesmicrosoft sharedOFFICE12MSPTLS.DLL
+    34B820CE0B0A26CFAF78F6E57709FFB7
+    18/02/2016 21:05:44
+    C:Program Files (x86)Common Filesmicrosoft sharedOFFICE12MSORES.DLL
+    C7D010BD8BCEF2EB3FCA8F7CD3C08D9F
+    18/02/2016 21:05:46
+    C:Program Files (x86)Common Filesmicrosoft sharedOFFICE121033MSOINTL.DLL
+    4C5D603A632023BFDB8EDD4436882ABF
+    18/02/2016 21:05:47
+    C:Program Files (x86)Common Filesmicrosoft sharedOFFICE11msxml5.dll
+    FC5CB6727354B634CD8AD3EFB4B8F83D
+    18/02/2016 21:05:47
+    C:WindowsSystem32spooldriversx643PSCRIPT5.DLL
+    211A1CFF92CF7F70EB61606ABB729615
+    18/02/2016 21:05:47
+    C:WindowsSystem32spooldriversx643PS5UI.DLL
+    9699DB0085C06D5E1D03089D88CA13B9
+    18/02/2016 21:05:47
+    C:Program Files (x86)Common Filesmicrosoft sharedOFFICE12RICHED20.DLL
+    1A8B4857F2CAAED89E16B1ED1F24930D
+     Let's double-click on the file, Microsoft Word is started:
+    18/02/2016 20:46:20
+    C:Program FilesCommon FilesMicrosoft SharedOFFICE12MSOXEV.DLL
+    2403A9F058DFDD337CE9A67AE1ECAD63
+    18/02/2016 21:03:46
+    C:Program Files (x86)WinRARRarExt64.dll
+    C2CE5E4DF7B3766A7A59A6634F29ABB1
+    18/02/2016 21:05:29
+    C:Program Files (x86)Microsoft OfficeOffice12WINWORD.EXE
+    4E7782C13D82BAA36059745280135A84
+    18/02/2016 21:05:35
+    C:Program Files (x86)Microsoft OfficeOffice12WWLIB.DLL
+    C102BEDBE15445AA2938EBF0D5B281E0
+    18/02/2016 21:05:38
+    C:Program Files (x86)Microsoft OfficeOffice12OART.DLL
+    7F2C8065F1079D04BD8BC2B19750A596
+    18/02/2016 21:05:42
+    C:Program Files (x86)Common Filesmicrosoft sharedOFFICE12MSO.DLL
+    E7AAFC1A321ED0E3EF44B1ED8CF09FA2
+    18/02/2016 21:05:42
+    C:Program Files (x86)Microsoft OfficeOffice121033WWINTL.DLL
+    BEF1EAD605CF791FDBB48ADD71075509
+    18/02/2016 21:05:42
+    C:Program Files (x86)Common Filesmicrosoft sharedOFFICE12MSPTLS.DLL
+    34B820CE0B0A26CFAF78F6E57709FFB7
+    18/02/2016 21:05:44
+    C:Program Files (x86)Common Filesmicrosoft sharedOFFICE12MSORES.DLL
+    C7D010BD8BCEF2EB3FCA8F7CD3C08D9F
+    18/02/2016 21:05:46
+    C:Program Files (x86)Common Filesmicrosoft sharedOFFICE121033MSOINTL.DLL
+    4C5D603A632023BFDB8EDD4436882ABF
+    18/02/2016 21:05:47
+    C:Program Files (x86)Common Filesmicrosoft sharedOFFICE11msxml5.dll
+    FC5CB6727354B634CD8AD3EFB4B8F83D
+    18/02/2016 21:05:47
+    C:WindowsSystem32spooldriversx643PSCRIPT5.DLL
+    211A1CFF92CF7F70EB61606ABB729615
+    18/02/2016 21:05:47
+    C:WindowsSystem32spooldriversx643PS5UI.DLL
+    9699DB0085C06D5E1D03089D88CA13B9
+    18/02/2016 21:05:47
+    C:Program Files (x86)Common Filesmicrosoft sharedOFFICE12RICHED20.DLL
+    1A8B4857F2CAAED89E16B1ED1F24930D
+
+恶意文件包含VBA宏、VB6和正在装载的NET材料：
+
+    
+    
+    18/02/2016 21:05:48
+    C:PROGRA~2COMMON~1MICROS~1VBAVBA6VBE6.DLL
+    563482363CD86013E8EF29575D790D22
+    18/02/2016 21:05:48
+    C:Program Files (x86)Microsoft OfficeOffice12msproof6.dll
+    DA79517783552B80229705D9720B8E8D
+    18/02/2016 21:05:48
+    C:Windowswinsxsx86_microsoft.vc80.crt_1fc8b3b9a1e18e3b_8.0.50727.6195_none_d09154e044272b9amsvcp80.dll
+    0B3595A4FF0B36D68E5FC67FD7D70FDC
+    18/02/2016 21:05:49
+    C:Program Files (x86)Common Filesmicrosoft sharedPROOFMSLID.DLL
+    CB0C98DD5C3108F71BAA938B1ECD8B04
+    18/02/2016 21:05:49
+    C:PROGRA~2MICROS~3Office12OUTLFLTR.DLL
+    87BA0576429722DF5B92FD43F55FAD77
+    18/02/2016 21:05:49
+    C:PROGRA~2COMMON~1MICROS~1VBAVBA61033VBE6INTL.DLL
+    B64D8A3F75C4AB72242910D9F4BBEB75
+    18/02/2016 21:05:49
+    C:WindowsSysWOW64SCP32.DLL
+    F0283069C1B8E0A65A97F08186BFC9B2
+    18/02/2016 21:05:49
+    C:WindowsSysWOW64FM20.DLL
+    7D5AD5FAF64BF8AA1EB55B81A3AB830D
+    18/02/2016 21:05:49
+    C:WindowsSysWOW64FM20ENU.DLL
+    F2CE3C8E63F770DB3E59D503CE4CC311
+    18/02/2016 21:07:40
+    C:WindowsMicrosoft.NETFramework64v4.0.30319WMINet_Utils.dll
+    FDA2FEC6B42787EE1ED4EFD39359770B
+    The malicious document contains a VBA macro, VB6 and .Net material is now loaded:
+    18/02/2016 21:05:48
+    C:PROGRA~2COMMON~1MICROS~1VBAVBA6VBE6.DLL
+    563482363CD86013E8EF29575D790D22
+    18/02/2016 21:05:48
+    C:Program Files (x86)Microsoft OfficeOffice12msproof6.dll
+    DA79517783552B80229705D9720B8E8D
+    18/02/2016 21:05:48
+    C:Windowswinsxsx86_microsoft.vc80.crt_1fc8b3b9a1e18e3b_8.0.50727.6195_none_d09154e044272b9amsvcp80.dll
+    0B3595A4FF0B36D68E5FC67FD7D70FDC
+    18/02/2016 21:05:49
+    C:Program Files (x86)Common Filesmicrosoft sharedPROOFMSLID.DLL
+    CB0C98DD5C3108F71BAA938B1ECD8B04
+    18/02/2016 21:05:49
+    C:PROGRA~2MICROS~3Office12OUTLFLTR.DLL
+    87BA0576429722DF5B92FD43F55FAD77
+    18/02/2016 21:05:49
+    C:PROGRA~2COMMON~1MICROS~1VBAVBA61033VBE6INTL.DLL
+    B64D8A3F75C4AB72242910D9F4BBEB75
+    18/02/2016 21:05:49
+    C:WindowsSysWOW64SCP32.DLL
+    F0283069C1B8E0A65A97F08186BFC9B2
+    18/02/2016 21:05:49
+    C:WindowsSysWOW64FM20.DLL
+    7D5AD5FAF64BF8AA1EB55B81A3AB830D
+    18/02/2016 21:05:49
+    C:WindowsSysWOW64FM20ENU.DLL
+    F2CE3C8E63F770DB3E59D503CE4CC311
+    18/02/2016 21:07:40
+    C:WindowsMicrosoft.NETFramework64v4.0.30319WMINet_Utils.dll
+    FDA2FEC6B42787EE1ED4EFD39359770B
+    最后，这就下载了恶意有效载荷并通过VBA宏执行：
+    18/02/2016 21:08:58
+    C:UsersxavierAppDataLocalTempvcgfdrDYa.exe
+    A9188E2204532498472F2E837C3D4A97
+    And finally, here is our malicious payload is downloaded and executed by the VBA macro:
+    18/02/2016 21:08:58
+    C:UsersxavierAppDataLocalTempvcgfdrDYa.exe
+    A9188E2204532498472F2E837C3D4A97
+
+这确实是我们的成束的恶意软件据VirusTotal：A9188E2204532498472F2E837C3D4A97。
+
+当然，日志文件包含其他工具可重用的有用信息。我在用Splunk安装PECaptureSvc
+。文件有一个干净清晰的格式，于是在你的props.conf中创建新的sourcetype很容易：
+
+    
+    
+    [pecapturesvc]
+    DATETIME_CONFIG =
+    NO_BINARY_CHECK = true
+    category = Operating System
+    description = PECaptureSVC Log File
+    pulldown_type = true
+
+字段提取是有帮助的。我只提这两个领域：“filename”和“md5”得到这样一个有趣的活动报告：
+
+几个月前，在以前的日记中，我解释了如何从使用微软工具FCIV“清洁”系统生成一个列表的Hash值。现在你可以把两者结合起来，自动检测到组织中不规范的PE代码。用你“知道的”（好）的哈希创建一个Splunk的查找表并且在联机时互相比较。相同的Hash值，还可以提交到VirusTotal，如果你抛弃他们，PE文件还可以用您最喜爱的工具进一步分析。
+
+  
+
+另一个很好的观点是PE
+Capture不是一个普通的工具（目前为止）。我不知道有任何恶意软件检查PECaptureSvc.exe的存在，如同他们通常杀毒或调试的过程。
+
+本文翻译自360安全播报
+[原文链接](https://isc.sans.edu/diary/Hunting+for+Executable+Code+in+Windows+Environments/20745)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **默白** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/83507](/post/id/83507)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[360安全播报](https://isc.sans.edu/diary/Hunting+for+Executable+Code+in+Windows+Environments/20745)
+
+如若转载,请注明出处：
+<https://isc.sans.edu/diary/Hunting+for+Executable+Code+in+Windows+Environments/20745>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p2.ssl.qhmsg.com/dm/200_200_100/t011edf3404f95091e3.jpg) 默白
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

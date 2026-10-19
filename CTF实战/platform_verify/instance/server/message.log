@@ -1,0 +1,219 @@
+
+**************Begin new trust node proc****************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"connector_proc","receiver_u
+    uid":"file_dealer","route":"file_share","flow":"QUERY","state":"MATCH","flag":"L
+    OCAL","ljump":1,"rjump":1,"record_type":"MESSAGE","record_subtype":"CONN_SYNI","
+    record_num":1,"record_size":92,"expand_num":0,"expand_size":0,"msg_uuid":"a3117c
+    d6454079d376316bb4dd88f73fd0c31ce6ac7511c998b3fa0a95d14983"},
+"RECORD":[
+    {"uuid":"b16eb1b46c2d00f92a6fb8f3c7c304127fdf4da7db51f195acb18b9e432e71c6","serv
+        er_name":"crypt_hub","service":"trust_server","server_addr":"","flags":0,"nonce"
+        :"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"file_dealer","receiver_uuid
+    ":"","route":"file_share","flow":"FINISH","state":"MATCH","flag":"LOCAL","ljump"
+    :2,"rjump":1,"record_type":"MESSAGE","record_subtype":"CONN_SYNI","record_num":1
+    ,"record_size":92,"expand_num":0,"expand_size":0,"msg_uuid":"a3117cd6454079d3763
+    16bb4dd88f73fd0c31ce6ac7511c998b3fa0a95d14983"},
+"RECORD":[
+    {"uuid":"b16eb1b46c2d00f92a6fb8f3c7c304127fdf4da7db51f195acb18b9e432e71c6","serv
+        er_name":"crypt_hub","service":"trust_server","server_addr":"","flags":0,"nonce"
+        :"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"connector_proc","receiver_u
+    uid":"file_dealer","route":"file_share","flow":"QUERY","state":"MATCH","flag":"L
+    OCAL","ljump":1,"rjump":1,"record_type":"MESSAGE","record_subtype":"CONN_ACKI","
+    record_num":1,"record_size":146,"expand_num":0,"expand_size":0,"msg_uuid":"4c3ee
+    c138ebc43304b6f65464d6d1e487895f538fca3fbd11b43f404aea83518"},
+"RECORD":[
+    {"uuid":"0fc56bb95fc2a0e6685fec12f31ea1cc03d470fa819f89038822b9741741d8b2","clie
+        nt_name":"term","client_proc":"term","client_addr":"unknown addr","server_uuid":
+        "b16eb1b46c2d00f92a6fb8f3c7c304127fdf4da7db51f195acb18b9e432e71c6","server_name"
+        :"server","service":"trust_server","server_addr":"v","flags":0,"nonce":""}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"file_dealer","receiver_uuid
+    ":"","route":"file_share","flow":"FINISH","state":"MATCH","flag":"LOCAL","ljump"
+    :2,"rjump":1,"record_type":"MESSAGE","record_subtype":"CONN_ACKI","record_num":1
+    ,"record_size":146,"expand_num":0,"expand_size":0,"msg_uuid":"4c3eec138ebc43304b
+    6f65464d6d1e487895f538fca3fbd11b43f404aea83518"},
+"RECORD":[
+    {"uuid":"0fc56bb95fc2a0e6685fec12f31ea1cc03d470fa819f89038822b9741741d8b2","clie
+        nt_name":"term","client_proc":"term","client_addr":"unknown addr","server_uuid":
+        "b16eb1b46c2d00f92a6fb8f3c7c304127fdf4da7db51f195acb18b9e432e71c6","server_name"
+        :"server","service":"trust_server","server_addr":"v","flags":0,"nonce":""}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"4d6c65ac3a35033f4a011d66068
+    68ed3b2b0032a1192bb564a41f31a4e3918ca","receiver_uuid":"login_server","route":"l
+    ogin","flow":"QUERY","state":"MATCH","flag":"LOCAL","ljump":1,"rjump":3,"record_
+    type":"USER_DEFINE","record_subtype":"LOGIN","record_num":1,"record_size":101,"e
+    xpand_num":0,"expand_size":0,"msg_uuid":"7ab543dfd6b197f45ddbefa359d53b9b14f015d
+    da26b7454b3ab486ab4ef7f55"},
+"RECORD":[
+    {"user_name":"zhao","passwd":"w}
+    M4êÉÝòuºŸîÐÛ¡9;äþÆYØz¥GS›w{","proc_name":"","machine_uuid":"0fc56bb95fc2a0e66
+        85fec12f31ea1cc03d470fa819f89038822b9741741d8b2"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"4d6c65ac3a35033f4a011d66068
+    68ed3b2b0032a1192bb564a41f31a4e3918ca","receiver_uuid":"user_label","route":"add
+    r_label","flow":"QUERY","state":"MATCH","flag":"LOCAL","ljump":1,"rjump":1,"reco
+    rd_type":"USER_DEFINE","record_subtype":"LOGIN","record_num":1,"record_size":101
+    ,"expand_num":0,"expand_size":0,"msg_uuid":"d78aedbeef8a7522123298482f6828c5e348
+    0bbf74bbb40df226b59263511c27"},
+"RECORD":[
+    {"user_name":"zhao","passwd":"w}
+    M4êÉÝòuºŸîÐÛ¡9;äþÆYØz¥GS›w{","proc_name":"","machine_uuid":"0fc56bb95fc2a0e66
+        85fec12f31ea1cc03d470fa819f89038822b9741741d8b2"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"4d6c65ac3a35033f4a011d66068
+    68ed3b2b0032a1192bb564a41f31a4e3918ca","receiver_uuid":"key_event","route":"pcrq
+    uote-req","flow":"QUERY","state":"MATCH","flag":"LOCAL","ljump":1,"rjump":3,"rec
+    ord_type":"GENERAL_RETURN","record_subtype":"STRING","record_num":1,"record_size
+    ":21,"expand_num":0,"expand_size":0,"msg_uuid":"2e71af0846bec9a14e4b79f95f563026
+    32a24bb7f6dddfe198d588be0ede3c0d"},
+"RECORD":[
+    {"name":"pcrquote-req","return_value":"7|11|14"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"key_event","receiver_uuid":
+    "4d6c65ac3a35033f4a011d6606868ed3b2b0032a1192bb564a41f31a4e3918ca","route":"pcrq
+    uote-req","flow":"QUERY","state":"RESPONSE","flag":"NULL","ljump":2,"rjump":3,"r
+    ecord_type":"GENERAL_RETURN","record_subtype":"STRING","record_num":1,"record_si
+    ze":21,"expand_num":0,"expand_size":0,"msg_uuid":"2e71af0846bec9a14e4b79f95f5630
+    2632a24bb7f6dddfe198d588be0ede3c0d"},
+"RECORD":[
+    {"name":"pcrquote-req","return_value":"7|11|14"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"key_event","receiver_uuid":
+    ":crypt_client","route":"quote_nonce","flow":"QUERY","state":"MATCH","flag":"NUL
+    L","ljump":1,"rjump":1,"record_type":"GENERAL_RETURN","record_subtype":"STRING",
+    "record_num":1,"record_size":21,"expand_num":0,"expand_size":0,"msg_uuid":"15669
+    acd1b6f379e6fffd67f3391b28fd3e7aeba3c41e48b45fe47897a596aa1"},
+"RECORD":[
+    {"name":"pcrquote-req","return_value":"7|11|14"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"4d6c65ac3a35033f4a011d66068
+    68ed3b2b0032a1192bb564a41f31a4e3918ca","receiver_uuid":"key_event","route":"pcrq
+    uote-req","flow":"QUERY","state":"MATCH","flag":"LOCAL","ljump":1,"rjump":3,"rec
+    ord_type":"GENERAL_RETURN","record_subtype":"STRING","record_num":1,"record_size
+    ":21,"expand_num":0,"expand_size":0,"msg_uuid":"c48dbd91232c784d44f947814bcdbfa6
+    2fe2d3a8bd0bf28cb6f627339c358d7b"},
+"RECORD":[
+    {"name":"pcrquote-req","return_value":"7|11|14"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"key_event","receiver_uuid":
+    "4d6c65ac3a35033f4a011d6606868ed3b2b0032a1192bb564a41f31a4e3918ca","route":"pcrq
+    uote-req","flow":"QUERY","state":"RESPONSE","flag":"NULL","ljump":2,"rjump":3,"r
+    ecord_type":"GENERAL_RETURN","record_subtype":"STRING","record_num":1,"record_si
+    ze":21,"expand_num":0,"expand_size":0,"msg_uuid":"c48dbd91232c784d44f947814bcdbf
+    a62fe2d3a8bd0bf28cb6f627339c358d7b"},
+"RECORD":[
+    {"name":"pcrquote-req","return_value":"7|11|14"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"key_event","receiver_uuid":
+    ":crypt_client","route":"quote_nonce","flow":"QUERY","state":"MATCH","flag":"NUL
+    L","ljump":1,"rjump":1,"record_type":"GENERAL_RETURN","record_subtype":"STRING",
+    "record_num":1,"record_size":21,"expand_num":0,"expand_size":0,"msg_uuid":"09381
+    9c1ba668e39fa39b653d45ffb6f0ef32c51b90342b190f1635bd981b1c5"},
+"RECORD":[
+    {"name":"pcrquote-req","return_value":"7|11|14"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"4d6c65ac3a35033f4a011d66068
+    68ed3b2b0032a1192bb564a41f31a4e3918ca","receiver_uuid":"key_event","route":"pcrq
+    uote-req","flow":"QUERY","state":"MATCH","flag":"LOCAL","ljump":1,"rjump":3,"rec
+    ord_type":"GENERAL_RETURN","record_subtype":"STRING","record_num":1,"record_size
+    ":21,"expand_num":0,"expand_size":0,"msg_uuid":"399b4f152b7095e498347dafcce8a22c
+    745c16af09f9a8b90633ca395c467340"},
+"RECORD":[
+    {"name":"pcrquote-req","return_value":"7|11|14"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"key_event","receiver_uuid":
+    "4d6c65ac3a35033f4a011d6606868ed3b2b0032a1192bb564a41f31a4e3918ca","route":"pcrq
+    uote-req","flow":"QUERY","state":"RESPONSE","flag":"NULL","ljump":2,"rjump":3,"r
+    ecord_type":"GENERAL_RETURN","record_subtype":"STRING","record_num":1,"record_si
+    ze":21,"expand_num":0,"expand_size":0,"msg_uuid":"399b4f152b7095e498347dafcce8a2
+    2c745c16af09f9a8b90633ca395c467340"},
+"RECORD":[
+    {"name":"pcrquote-req","return_value":"7|11|14"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************
+{
+ "HEAD":{"tag":"MESG","version":65537,"sender_uuid":"key_event","receiver_uuid":
+    ":crypt_client","route":"quote_nonce","flow":"QUERY","state":"MATCH","flag":"NUL
+    L","ljump":1,"rjump":1,"record_type":"GENERAL_RETURN","record_subtype":"STRING",
+    "record_num":1,"record_size":21,"expand_num":0,"expand_size":0,"msg_uuid":"edbfc
+    98865a91530c4fb4657e57bbf9eb911e356fc1683d2ad117eb52f7acf2f"},
+"RECORD":[
+    {"name":"pcrquote-req","return_value":"7|11|14"}
+    ],
+"EXPAND" :[]
+}
+
+************************************************************

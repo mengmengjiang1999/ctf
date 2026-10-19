@@ -1,0 +1,350 @@
+II．背景和相关工作
+
+在这部分，我们展示关于深度学习和GANs的简短概述。然后，我们回顾密码破译的最新情况。
+
+A． 深度学习
+
+在90年代中期，一些机器学习方法，比如support vector machines[64],random
+forests[7]，和Gaussianprocesses[60]对大多数无关联人工工程（手动编码）特征的分离和回归效果显著。在21世纪00年代中期，随着存储和数据可用性的增涨，这些方法已经被深度学习取代。对深度学习的研究表明，可以有效地从数据中学习特征，而且手工编码的特点往往不入学习的特征。这些收益与相关联的特征有关，这些收益在人工工程方面的特征可能只有低纬编码特征。
+
+深度学习被广泛应用于解决各种问题，比如，与电脑视觉[39]，图像处理[70]，视频处理[16],[50]，语音识别[26]，自然语言识别[2],[12],[79]，或者博弈[24],[36],[45],[47]相关的问题。近年来,
+在健康相关问题上使用深层学习也有了显著的改进[13],[19]。
+
+深度学习在数据使用中已经提出一些隐私问题，从训练模型中可以学到什么，以及模型可以学习到比给定任务更多的私人信息的能力。由于这个原因，研究人员提出了隐私保护协作学习技术，这个技术依赖于差别隐私。然而，近期的工作表明，这些技术不是一开始想的那样保护隐私。特别是对方表明即使用隐私保护联合学习技术训练模型，训练模块仍然会受信息泄露，模块反演攻击的影响[31]。
+
+除了攻击那些从训练模块中提取出来的信息，最近发现可以细微的修改样例，这样它们在人类的眼睛里就好像没有被修改。但是始终被深度学习算法错误分类[52],[52],[43],[8],[9],[35],[41],[30]。与此同时，对此类问题已经提出了一些对策[53],[77]。然而，这仍然是一个开放的研究课题。
+
+B． 生成对抗网络
+
+生成对抗网络（GANs）代表了深度学习领域中的一个进步。GAN是由两个神经网络组成的，一个是生成式深度神经网络G，和一个判别式深度神经网络D。给定一个数据集L={X1，X2，……,Xn}，G的目标是从潜在的概率分布Pr（x）中生成能够被D接受“伪”样例。与此同时，D的目标是尝试从真实样本I中分辨出G中的伪样本。更常见的是，输入一个简单的噪声分布Z，是被GANs解决了这个问题的优化。可以按照如下概括：
+
+![是是是.png](https://image.3001.net/images/20180308/15204989905324.png!small)  
+
+这个模块尝试最小化 θG ,同时最大化θD。学习阶段认为是完整的,当D不能够从区分出由G生产伪样本和I生产的真实样本产品。
+
+自Goodfellow等人的初始工作以来[23]，GANs得到很多提高。Ragford等人提出了DCGAN[59]，DCGAN通过使用卷积神经网络代替多层感知器得到改进[23]。作为结果，和GANs相比，DCGAN能够产生更加可靠地图像样本[23]。
+
+其他的基于GANs上的工作包括BEGAN[5],DiscoGAN[33],ConditionalGAN[46]，AdaGAN[73],InfoGAN[11]，Laplacian
+Pyramid GAN[15]和StackGAN[78]。这些技术对之前的工作做出了改进，比如新的训练和使用GAN的方法。
+
+Arjovsky等人提出了WassersteinGAN（WGAN）[3]。WGAN通过梯度裁剪，提高了以前的GAN的学习的稳定性。这种方法的好处包括减少模式崩溃，并且通过有意义的学习曲线有助于确定最佳超参数。
+
+上面所有的工作都重点研究写实图像的生成。为了解决篇章生成的问题，Gulrajani等人，最近提出了Improved Wasserstein
+GAN(IWGAN)[27]。通过IWGAN，D和G都是简单卷积神经网络（CNNs）。通过G输入一个潜在的噪声向量，通过卷积层转发进行变换，并且输出一个有32个one-hot字符的向量。一个非线性的softmax应用于G的输出，之后转发到D。每一个IWGAN的输出字符都通过计算每一个由G生成的argmax的输出向量[57]。
+
+C． 密码破译
+
+在密码爆破攻击中，对手会通过重复测试多个备选密码，尝试识别一个或多个用户的密码。密码破译攻击可能跟密码的诞生的历史一样古老[6]，更正式的研究可以追溯到1979年[48]。
+
+有两个非常受欢迎的现代密码破译工具Johnthe
+Ripper（JTR）[71]和HashCat[28]。这两个工具实施多种类型的密码破译策略，包括：基于字典的攻击[63],[62]；基于规则的攻击[72]，[56]，其中包括从字典里的单词转换生成密码猜想。和基于Morkov模块的攻击，在这一攻击中，选中的密码的每一个字符都通过随机工程，考虑一个或多个前面的字符，以及在明文密码字典上训练的。JTR和hashCAT在密码破译方向都非常有效，尤其是，这里有一些例子，其中超过90%的来自线上服务的密码泄露已经成功恢复[57]。
+
+最初，Narayanan等人把Markov模块用于生成密码破译[49]。他们的方法是使用手动定义的密码规则。比如生成的密码的哪一部分是由字符和数字组成。这种技术随后由Weir等人作了升级[75]。Weir声明如何通过密码分发“学习”这些规则。这些早期的工作随后由Ma[42]和Durmuth[18]等人进行扩展。基于Markov模块的技术已经用来实施实时密码强度估计，以及评估明文数据库中的密码强度（参见[14],[10]）。
+
+Probabilisticcontext-free grammars
+(PCFGs)[32],[75]利用密码结构上的手工编码信息生成新的猜想。这一信息可以是隐含的（比如一个字典字后面跟着用户的生日）也可以是直言的（比如,要求密码至少含有六位字符，一个大写字符和一个数字）。之后从结果文法中随机选择合适的标记构造密码。
+
+最近Melicher团队[44]介绍了一个基于重复性神经网络的密码破译的方法[25],[69]。通过这一技术，训练神经网络使用来自多个网站泄露的密码。在密码生成期间，神经网络一次生成一个密码字符。每个新字符（包括特殊结束符）都是基于给出的密码的可能性选取的，与基于Markov模块的想法相似（这一技术也同样应用[44]执行实时密码强度评估）。用于[44]的评估表明他们的技术在进行大批量的密码破译时优于PCTGs，Markov模块，和用于JTR和HashCat的密码构造规则（通常在10^10到10^15范围内）。
+
+REFERENCES
+
+[1] M. Abadi, A. Chu, I. Goodfellow, H. B. McMahan, I.Mironov,K. Talwar, and
+L. Zhang, “Deep learning with differential privacy,” in Proceedingsof the 2016
+ACM SIGSAC Conference on Computer and Communications Security. ACM,2016, pp.
+308–318.
+
+[2] A. Abdulkader, A. Lakshmiratan, and J. Zhang. (2016)Introducing deeptext:
+Facebook’s text understanding engine.
+[Online].Available:https://tinyurl.com/jj359dv
+
+[3]M.Arjovsky,S.Chintala,andL.Bottou,“Wasserstein
+gan,”CoRR,vol.abs/1701.07875,2017.
+
+[4] G. Ateniese, L. V. Mancini, A. Spognardi, A. Villani,D. Vitali, and G.
+Felici, “Hacking smart machines with smarter ones: How toextract meaningful
+data from machine learning classifiers,”International Journalof Security and
+Networks, vol. 10, no. 3, pp. 137–150, 2015.
+
+[5] D. Berthelot, T. Schumm, and L. Metz, “Began:Boundary
+equilibriumgenerative adversarial networks,”arXiv preprint
+arXiv:1703.10717,2017.
+
+[6] H. Bidgoli, “Handbook of information
+securitythreats,vulnerabilities,prevention, detection, and management
+volume3,” 2006.
+
+[7] L. Breiman, “Random forests,”Machine learning, vol.45, no. 1, pp.5–32,
+2001.
+
+[8] N. Carlini and D. Wagner, “Defensive distillation isnot robust to
+adversarial examples,”arXiv preprint arXiv:1607.04311,2016.
+
+[9] ——, “Adversarial examples are not easily detected:Bypassing tendetection
+methods,”arXiv preprint arXiv:1705.07263, 2017.
+
+[10] C. Castelluccia, M. D̈urmuth,and D. Perito, “Adaptive password-strength
+meters from markov models.” In NDSS,2012.
+
+[11] X. Chen, Y. Duan, R. Houthooft, J. Schulman, I.Sutskever, and P. Abbeel,
+“Infogan: Interpretable representationlearning by information maximizing
+generative adversarial nets,” in Advancesin Neural Information Processing
+Systems, 2016, pp. 2172–2180.
+
+[12] R. Collobert, J. Weston, L. Bottou, M. Karlen, K.Kavukcuoglu, and P.
+Kuksa, “Natural language processing (almost) from scratch,”Journal of Machine
+Learning Research, vol. 12, no. Aug,pp. 2493–2537, 2011.
+
+[13] A. A. Cruz-Roa, J. E. A. Ovalle, A. Madabhushi, andF. A. G.Osorio, “A
+deep learning architecture for imagerepresentation, visual interpretability
+and automated basal-cell carcinomacancer detection,” in International
+Conference on Medical Image Computing and Computer-AssistedIntervention.
+Springer Berlin Heidelberg, 2013, pp. 403–410.
+
+[14] M. Dell’Amico, P. Michiardi, and Y. Roudier,“Password strength: An
+empirical analysis,” in INFOCOM, 2010 ProceedingsIEEE.IEEE,2010, pp. 1–9.
+
+[15] E. L. Denton, S. Chintala, R. Fergus et al., “Deepgenerative image models
+using a? laplacian pyramid of adversarial networks,” in Advances in neural
+information processing systems, 2015,pp. 1486–1494.
+
+[16] J. Donahue, L. A. Hendricks, S. Guadarrama, M.Rohrbach, S. Venugopalan,
+K. Saenko, and T. Darrell, “Long-term recurrent convolutionalnetworks for
+visual recognition and description,”2015 IEEE Conference onComputer Vision and
+Pattern Recognition (CVPR), pp. 2625–2634,2015.
+
+[17] B. Duc, S. Fischer, and J. Bigun, “Face authenticationwith gabor
+information on deformable graphs,”IEEE Transactions on ImageProcessing,vol. 8,
+no. 4, pp. 504–516, 1999.
+
+[18] M. D̈urmuth, F.Angelstorf, C. Castelluccia, D. Perito, and C.
+Abdelberi,“Omen: Faster passwordguessing using an ordered markov enumerator.”
+In ESSoS. Springer, 2015, pp.119–132.
+
+[19] R. Fakoor, F. Ladhak, A. Nazi, and M. Huber, “Usingdeep learning to
+enhance cancer diagnosis and classification,” in The 30th International
+Conference on Machine Learning(ICML 2013),WHEALTH workshop,2013.
+
+[20] S. Fiegerman. (2017) Yahoo says 500 million
+accountsstolen.[Online].Available:http://money.cnn.com/2016/09/22/technology/yahoo-data-breach/index.html
+
+[21] M. Frank, R. Biedert, E. Ma, I. Martinovic, and D.Song, “Touchalytics:On
+the applicability of touchscreen input as a behavioralbiometric for continuous
+authentication,”IEEE transactions on informationforensics and security, vol.
+8, no. 1, pp. 136–148, 2013.
+
+[22] M. Fredrikson, S. Jha, and T. Ristenpart, “Modelinversion attacks that
+exploit confidence information and basiccountermeasures,” in Proceedings of
+the 22nd ACM SIGSAC Conference on Computerand Communications Security. ACM,
+2015, pp. 1322–1333.
+
+[23] I. Goodfellow, J. Pouget-Abadie, M. Mirza, B. Xu, D.Warde-Farley,S.
+Ozair, A. Courville, and Y. Bengio, “Generativeadversarial nets,” in Advances
+in neural information processing systems, 2014, pp. 2672–2680.
+
+[24] Google DeepMind. (2016) Alphago, the first computerprogram to ever beat a
+professional player at the game
+ofGO.[Online].Available:https://deepmind.com/alpha-go
+
+[25] A. Graves, “Generating sequences with recurrentneural networks,”arXiv
+preprint arXiv:1308.0850, 2013.
+
+[26] A. Graves, A.-r. Mohamed, and G. Hinton, “Speechrecognition with deep
+recurrent neural networks,” in 2013 IEEE internationalconference on acoustics,
+speech and signal processing.IEEE, 2013, pp.6645–6649.
+
+[27] I. Gulrajani, F. Ahmed, M. Arjovsky, V. Dumoulin,and A. C.
+Courville,“Improved training of wasserstein gans,”CoRR,
+vol.abs/1704.00028,2017.
+
+[28] HashCat. (2017). [Online]. Available:https://hashcat.net
+
+[29] J. Hayes, L. Melis, G. Danezis, and E. D.Cristofaro, “LOGAN: Evaluating
+privacy leakage of generative models usinggenerative adversarial
+networks,”CoRR, vol. abs/1705.07663, 2017.
+
+[30] W. He, J. Wei, X. Chen, N. Carlini, and D. Song,“Adversarial example
+defenses: Ensembles of weak defenses are not strong,”arXivpreprint
+arXiv:1706.04701, 2017.
+
+[31] B. Hitaj, G. Ateniese, and F. Perez-Cruz, “Deepmodels under the
+GAN:Information leakage from collaborative deeplearning,”CCS’17, 2017.
+
+[32] P. G. Kelley, S. Komanduri, M. L. Mazurek, R. Shay,T. Vidas, L. Bauer,N.
+Christin, L. F. Cranor, and J. Lopez, “Guess again (andagain and again):
+Measuring password strength by simulating password-cracking algorithms,”in
+Security and Privacy (SP), 2012 IEEE Symposium on.IEEE, 2012, pp. 523–537.
+
+[33] T. Kim, M. Cha, H. Kim, J. Lee, and J. Kim,“Learning to discover cross-domain relations with generative adversarialnetworks,”arXiv preprint
+arXiv:1703.05192, 2017.
+
+[34] D. Kingma and J. Ba, “Adam: A method for stochastic
+optimization,”arXivpreprint arXiv:1412.6980, 2014.
+
+[35] J. Kos and D. Song, “Delving into adversarialattacks on deep
+policies,”arXiv preprint arXiv:1705.06452, 2017.
+
+[36] M. Lai, “Giraffe: Using deep reinforcement learningto play chess,”arXiv
+preprint arXiv:1509.01549, 2015.
+
+[37] Y. LeCun, B. Boser, J. Denker, D. Henderson, R.Howard, W. Hubbard,and L.
+Jackel, “Handwritten digit recognition with aback-propagation network,” in
+Advances in neural information processing systems2, NIPS 1989. Morgan Kaufmann
+Publishers, 1990, pp. 396–404.
+
+[38] Y. LeCun, B. Boser, J. S. Denker, D. Henderson, R.E. Howard,W. Hubbard,
+and L. D. Jackel, “Backpropagation applied tohandwritten zip code
+recognition,”Neural computation, vol. 1, no. 4, pp.541–551,1989.
+
+[39] Y. LeCun, K. Kavukcuoglu, C. Farabet et al.,“Convolutional networks and
+applications in vision.” In ISCAS, 2010, pp.253–256.
+
+[40]LinkedIn.Linkedin.[Online].Available:https://hashes.org/public.php
+
+[41] Y. Liu, X. Chen, C. Liu, and D. Song, “Delving intotransferable
+adversarial examples and black-box attacks,”arXivpreprint arXiv:1611.02770,
+2016.
+
+[42] J. Ma, W. Yang, M. Luo, and N. Li, “A study ofprobabilistic password
+models,” in Security and Privacy (SP), 2014 IEEESymposium on.IEEE, 2014, pp.
+689–704.
+
+[43] P. McDaniel, N. Papernot, and Z. B. Celik, “Machinelearning in
+adversarial settings,”IEEE Security & Privacy, vol.14, no. 3, pp. 68-72, 2016.
+
+[44] W. Melicher, B. Ur, S. M. Segreti, S. Komanduri, L.Bauer,N. Christin, and
+L. F. Cranor, “Fast, lean, and accurate:Modeling password guessability using
+neural networks,” in 25thUSENIX Security Symposium (USENIX Security 16).
+Austin, TX: USENIXAssociation,2016, pp. 175–191. [Online].
+Available:https://www.usenix.org/conference/usenixsecurity16/technical-sessions/presentation/melicher
+
+[45] C. Metz. (2016) Google’s GO victory is just aglimpse of how powerful ai
+will be. [Online]. Available:https://tinyurl.com/l6ddhg9
+
+[46] M. Mirza and S. Osindero, “Conditional generativeadversarial nets,”arXiv
+preprint arXiv:1411.1784, 2014.
+
+[47] V. Mnih, K. Kavukcuoglu, D. Silver, A. Graves, I.Antonoglou, D. Wierstra,
+and M. A. Riedmiller, “Playing atari with deepreinforcement learning,”CoRR,
+vol. abs/1312.5602, 2013.
+
+[48] R. Morris and K. Thompson, “Password security: Acase
+history,”Communications of the ACM, vol. 22, no. 11, pp. 594–597,1979.
+
+[49] A. Narayanan and V. Shmatikov, “Fast dictionaryattacks on passwords using
+time-space tradeoff,” in Proceedings of the 12th ACMconference on Computer and
+communications security. ACM, 2005, pp. 364–372.
+
+[50] Y. Pan, T. Mei, T. Yao, H. Li, and Y. Rui, “Jointlymodeling embedding and
+translation to bridge video and language,”2016 IEEEConference on Computer
+Vision and Pattern Recognition (CVPR), pp.4594–4602,2016.
+
+[51] N.Papernot,P. McDaniel,and I.Goodfellow, “Transferabilityin machine
+learning: from phenomena to black-box attacks using adversarial
+samples,”arXivpreprint arXiv:1605.07277, 2016.
+
+[52] N.Papernot,P.McDaniel,S. Jha,M.Fredrikson,Z.B.Celik, and A. Swami, “The
+limitations of deep learning in adversarial settings,”InProceedings of the 1st
+IEEE European Symposium on Security andPrivacy, 2015.
+
+[53] N. Papernot, P. McDaniel, X. Wu, S. Jha, and A.Swami, “Distillation as a
+defense to adversarial perturbations against deepneural networks,” in
+Proceedings of the 37th IEEE Symposium on Security andPrivacy,2015.
+
+[54] C. Percival and S. Josefsson, “The scryptpassword-based keyderivation
+function,” Tech. Rep., 2016.
+
+[55] S.Perez.(2017)Google plans to bring password-freelogins to android apps
+by year-end.
+
+[Online].Available:https://techcrunch.com/2016/05/23/google-plans-to-bring-password-free-logins-to-android-apps-by-year-end/
+
+[56] H.P.Position Markov
+Chains.(2017).[Online].Available:https://www.trustwave.com/Resources/SpiderLabs-Blog/Hashcat-Per-Position-Markov-Chains/
+
+[57]T.P.Project.(2017).[Online].Available:http://thepasswordproject.com/leakedpasswordlists
+and dictionaries
+
+[58] N. Provos and D. Mazieres, “Bcrypt algorithm,” inUSENIX, 1999.
+
+[59] A. Radford, L. Metz, and S. Chintala, “Unsupervisedrepresentation
+learning with deepconvolutional generative adversarial networks,” in 4th
+International Conferenceon Learning Representations, 2016.
+
+[60] C. E. Rasmussen and C. K. Williams,Gaussianprocesses for machine
+learning.MIT press Cambridge, 2006, vol. 1.
+
+[61]RockYou.(2010)Rockyou.[Online]. Available:
+http://downloads.skullsecurity.org/passwords/rockyou.txt.bz2
+
+[62]H.Rules.(2017).[Online].Available:https://github.com/hashcat/hashcat/tree/master/rules
+
+[63] J. T. R. K. Rules. (2017). [Online].
+Available:http://contest-2010.korelogic.com/rules.html
+
+[64] B. Sch ̈olkopf andA. J. Smola,Learning with kernels: support vector
+machines, regularization,optimization, and beyond. MIT press, 2002.
+
+[65] R. Shokri and V. Shmatikov, “Privacy-preserving deeplearning,” in
+Proceedings of the 22nd ACM SIGSAC conference on computer andcommunications
+security. ACM, 2015, pp. 1310–1321.
+
+[66] R. Shokri, M. Stronati, C. Song, and V. Shmatikov,“Membership inference
+attacks against machine learning models,” in Security andPrivacy (SP), 2017
+IEEE Symposium on. IEEE, 2017, pp. 3–18.
+
+[67] Z. Sitov ́a, J.ˇSedˇenka, Q. Yang, G. Peng, G. Zhou,P. Gasti, and K.
+S.Balagani, “Hmog: New behavioral biometric features forcontinuous
+authentication of smartphone users,”IEEE Transactions on InformationForensics
+and Security, vol. 11, no. 5, pp. 877–892, 2016.
+
+[68] T. SPIDERLABS. (2012) Korelogic-rules.
+[Online].Available:https://github.com/SpiderLabs/KoreLogic-Rules
+
+[69] I. Sutskever, J. Martens, and G. E. Hinton,“Generating text with
+recurrent neural networks,” inProceedings of the 28thInternational Conference
+on Machine Learning (ICML-11), 2011, pp. 1017–1024.
+
+[70] Y. Taigman, M. Yang, M. Ranzato,and L. Wolf,“Deepface:Closing the gap to
+human-level performance in face verification,”InProceedings of the 2014 IEEE
+Conference on Computer Vision and Pattern Recognition, ser. CVPR
+’14.Washington, DC, USA:IEEEComputer Society, 2014, pp. 1701–1708.[Online].
+Available:http://dx.doi.org/10.1109/CVPR.2014.220
+
+[71] J. the Ripper. (2017). [Online].Available:http://www.openwall.com/john/
+
+[72] J. the Ripper Markov Generator.(2017).
+[Online].Available:http://openwall.info/wiki/john/markov
+
+[73] I. Tolstikhin, S. Gelly, O. Bousquet, C.-J.Simon-Gabriel, andB. Sch
+̈olkopf,“Adagan: Boosting generative models,”arXiv preprint arXiv:1701.02386,
+2017.
+
+[74] F. Tram`er, F. Zhang, A. Juels, M. K. Reiter, and T.Ristenpart,
+“Stealingmachine learning models via prediction apis.” In USENIX,2016.
+
+[75] M. Weir, S. Aggarwal, B. De Medeiros, and B. Glodek,“Password cracking
+using probabilistic context-free grammars,” in Security andPrivacy, 2009 30th
+IEEESymposium on. IEEE, 2009, pp. 391–405.
+
+[76] Y. Wu, Y. Burda, R. Salakhutdinov, and R. Grosse,“On the quantitative
+analysis ofdecoder-based generative models,”arXiv preprint arXiv:1611.04273,
+2016.
+
+[77] V. Zantedeschi, M.-I. Nicolae, and A. Rawat,“Efficient defenses against
+adversarial attacks,”arXiv preprintarXiv:1707.06728, 2017.
+
+[78] H. Zhang, T. Xu, H. Li, S. Zhang, X. Huang, X. Wang,and D.
+Metaxas,“Stackgan: Text to photo-realistic image synthesis withstacked
+generative adversarial networks,”arXiv preprint arXiv:1612.03242, 2016.
+
+[79] X. Zhang and Y. A. LeCun, “Text understanding fromscratch,”arXiv preprint
+arXiv:1502.01710v5, 2016.
+
+[80] Y. Zhong, Y. Deng, and A. K. Jain, “Keystrokedynamics for ser
+uthentication,”in Computer Vision and Pattern RecognitionWorkshops (CVPRW),
+2012 IEEE Computer Society Conference on. IEEE, 2012,pp.117–123.
+
+  
+
+*参考来源：[PassGAN: A Deep Learning Approach for Password Guessing](https://arxiv.org/abs/1709.00440)，丁牛网安实验室小编EVA编辑，如需转载请标明出处及引用。  
+

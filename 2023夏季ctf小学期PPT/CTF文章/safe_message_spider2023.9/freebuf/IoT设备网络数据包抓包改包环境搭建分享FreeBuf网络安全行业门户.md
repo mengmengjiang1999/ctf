@@ -1,0 +1,245 @@
+##  一、路由器上进行抓包
+
+ **这部分主要还是比较底层的抓包。这里就不过多的介绍了，毕竟好多大神的文章都写的很详细，主要内容还是以第三为主。**
+
+ssh 或者其他方式登陆openwrt的终端模式，
+
+抓包命令大概这几条，
+
+###  **1.1基础 tcpdump -vv -i br-lan**
+
+> -vv 显示状态 显示抓了几条呀 都什么数据之类的。
+>
+> -i 指定网卡，比如wlan0 wifi，eth0 有线网卡，br-lan 一般都是指lan的网桥 就是包括wifi和lan部分。
+
+###  **1.2在基础上扩展：tcpdump -vv -s0 -i br-lan host 192.168.1.100 and tcp -w
+/tmp/1.cap**
+
+> -s 0 ：不限制包的长度，也是抓取完整的包。
+>
+> host：抓取指定ip的数据包
+>
+> tcp：当然就是tcp包啦。
+>
+> -w 文件路径： 保存抓到的数据包到指定文件 这里方便后期导出来到wireshark里分析哈哈。
+
+###  **1.3数据包导出，windows下可以用winscp，linux麻 我还是习惯scp**
+
+##  二、苹果手机底层抓包
+
+iot协议分析大多数都和app相关，所以有这部分小经验分享。
+
+ios系统是支持直接抓包，但是有个前提条件 ：必须用macos，或许是我没找到windows和linux下的对应工具吧。
+
+###  **2.1、天才宝贝第一步，usb数据线把手机和mac连接到一起 用访达查看手机的udid，复制出来（老mac用 itunes）**
+
+###
+![](https://image.3001.net/images/20200515/1589551724_5ebea26cdbf99.png!small)**2.2、第二步，用rvictl
+-s udid**
+
+![](https://image.3001.net/images/20200515/1589551797_5ebea2b5dedcc.png!small)
+
+###  **2.3、有请大白鲨登场 wireshark：**
+
+在界面里就能看到手机变成的虚拟网卡啦，用它进行抓包就好了。
+
+![](https://image.3001.net/images/20200515/1589551844_5ebea2e40686c.png!small)
+
+##  三、linux释放热点进行抓包代理
+
+最近主要做iot设备的安全审计工作，iot设备好多都没操作界面，不像手机还能导入证书什么的。对于https这种加密协议不好进行抓取，该包什么的也不方便。
+
+###  **3.1 环境搭建**
+
+> 硬件：笔记本最好有两张网卡，不管无限还是有线吧！
+>
+> 操作系统：kali
+>
+> 需要安装的程序：apt-get install bridge-utils hostapd dnsmasq
+
+###  3.2 网络环境：
+
+![](https://image.3001.net/images/20200513/1589385257_5ebc18290ef93.png!small)
+
+笔记本电脑有线网卡接入网络，无线网卡释放信号做ap用，iot设备连接到wifi后通过笔记本电脑nat到路由器上，
+
+这样能进行很多操作，可能有大佬要说，这个方式和用路由器又啥区别，其实没啥区别。只是burp suite用的比较方便，我能把更多精力放在其他工作上。
+
+###  **3.3 开启wifi热点**
+
+ifconfig wlan0 up
+
+rfkill list 看下wlan0 是否被blocked 如果被用rfkill list all
+
+修改hostapd.conf（/etc/hostapd/hostapd.conf）
+
+interface=wlan0 #无线设备名称，基本都是wlan0，可用iwconfig命令查看
+
+#使用的网桥名称，如果是用DHCP+NAT方式可忽略此行
+
+#bridge=br0
+
+#hostapd 0.6.8或者更高版本唯一选择
+
+driver=nl80211
+
+#终端看到的wifi名称，请自行修改
+
+ssid=iot
+
+#指明要选用的无线传输协议，这里表示使用802.11g
+
+hw_mode=g
+
+#802.11b/g都至多只有三条互不干扰的信道，即1,6,11，一般填这三个其中一个
+
+channel=1
+
+#验证身份的算法，1表示只支持wpa，2表示只支持wep,3表示两者都支持，wep已经被淘汰了，请不要使用。
+
+auth_algs=1
+
+#wpa加密方式，1代表支持wpa,2代表支持wap2,3代表两者都支持。
+
+wpa=1
+
+#wifi密码，请自行修改
+
+wpa_passphrase=12345678
+
+#对所有用户进行同样的认证，不进行单独的认证，如果需要，请设置为WPA-EAP。
+
+wpa_key_mgmt=WPA-PSK
+
+#控制支持加密数据的秘钥，CCMP比TKIP更强
+
+wpa_pairwise=CCMP
+
+启动ap ：
+
+hostapd /etc/hostapd/hostapd.conf
+
+这个时候能在手机看到iot这个ssid
+
+能连上 但是获取不到ip地址
+
+###  **3.4 开启网桥**
+
+这里为啥要开启网桥，我的想法是反正都要配置环境了，我就把usb有线网卡和wifi 都配置好，毕竟还是有的设备是通过网线上网哈哈。
+
+> brctl addbr br-lan //创建一个网桥 名字叫br-lan
+>
+> brctl addif br-lan eth1 //这个是我的usb网卡，大家不需要可以不加
+>
+> brctl addif br-lan wlan0 //把无线网卡加入br-lan
+>
+> ip addr add 10.8.8.1/24 dev br-lan
+
+![](https://image.3001.net/images/20200515/1589556342_5ebeb476c6932.png!small)
+
+![](https://image.3001.net/images/20200515/1589556365_5ebeb48d4e887.png!small)
+
+###  **3.5 开启dhcp和dns服务**
+
+这里需要配置dnsmasq
+
+编辑/etc/dnsmasq.conf
+
+listen-address=10.8.8.1 #网桥br-lan的IP
+
+interface=br-lan
+
+bind-interfaces
+
+#这个是重要的东西，设置dhcp的ip发配range，就是你的dhcp服务器分配多少个ip出来，ip的范围从哪里到哪里，默认是c类网段，
+
+#所以简略了掩码，后面增加一个租约时间，dhcp分配的ip是有租约的，租约过了是需要回收的。
+
+dhcp-range=10.8.8.100,10.8.8.200,12h
+
+dhcp-option=6,144.144.144.144,8.8.4.4 #6-->设置DNS服务器地址选项
+
+port=5353 #设置端口
+
+使用service dnsmasq restart 重启服务
+
+这时手机连接热点iot试试看是否能正常获取ip地址，这时手机还不能上网哦。
+
+###  **3.6 配置nat转发**
+
+sysctl -w net.ipv4.ip_forward=1
+
+iptables -P FORWARD ACCEPT
+
+iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+
+到这一步用手机测试通过iot这个wifi是否能正常上网。
+
+###  **3.7：将80端口到流量和443端口到流量都转发到burp suite上
+。这里提醒下不一定都是80和443哦，这里只是用常用的端口举例子，大家根据实际情况搞吧。**
+
+**这里的ip根据你自己的实际ip来写**
+
+    
+    
+    $ iptables -t nat -A PREROUTING -i br0 -p tcp --dport 80 -j DNAT --to-destination 192.168.2.107:80
+    $ iptables -t nat -A PREROUTING -i br0 -p tcp --dport 443 -j DNAT --to-destination 192.168.2.107:443
+
+###  **3.8:配置burp suite 透明代理。**
+
+![](https://image.3001.net/images/20200515/1589556466_5ebeb4f29cd84.png!small)
+首先设置下80端口的透明代理：
+
+**![](https://image.3001.net/images/20200515/1589556433_5ebeb4d11c00a.png!small)**这里设置好了之后用手机打开一个80端口的http网站，观察下burp
+suite里是否有反应
+
+这里说明下：这里不用在手机的wifi设置里设置代理了，因为上面已经通过iptables的命令做了指定端口的代理，只要是在iot这个wifi网络下都是走代理的
+
+**![](https://image.3001.net/images/20200515/1589556460_5ebeb4ecdd6d6.png!small)**
+
+设置下443 的https 代理模式：
+
+![](https://image.3001.net/images/20200515/1589556512_5ebeb52064e45.png!small)
+
+下面这一步比之前的多一个勾选 Force use of TLS 这个步骤。
+
+![](https://image.3001.net/images/20200515/1589556529_5ebeb531bf17f.png!small)
+
+一样的方式测试下是否能抓到数据包。
+
+![](https://image.3001.net/images/20200515/1589556563_5ebeb553969f9.png!small)
+
+出现这个页面是因为证书没导入。
+
+### 3.9:ios burp suite证书导入
+
+这里说下新版本的ios证书导入方式，打开burp suite的证书下载界面：我这里是开192.168.2.107:8080 就出现了。
+
+**![](https://image.3001.net/images/20200515/1589557035_5ebeb72b11472.png!small)**
+
+这样就装好证书了，但是打开证书信任，新版本的ios藏在比较深的地方：
+
+设置->通用设置->关于本机->证书设置（下拉到底）
+
+**![](https://image.3001.net/images/20200515/1589557180_5ebeb7bcd1bde.png!small)**
+
+关于本机
+
+**![](https://image.3001.net/images/20200515/1589557213_5ebeb7ddefe56.png!small)**
+
+证书设置（下拉到底）
+
+**![](https://image.3001.net/images/20200515/1589557316_5ebeb84471bed.png!small)**
+
+点开信任的证书
+
+![](https://image.3001.net/images/20200515/1589557347_5ebeb86362e58.png!small)
+
+##  小结：
+
+为啥要那么麻烦做burp suite透明代理呢？
+其实我平时主要工作还是iot部分的安全测试为主，iot设备好多情况下都不能通过wifi去设置代理，所以只能走上面的步骤。现在越来越多iot设备开始走顶层协议来，比如http、websocket、mtqq。
+写的比较乱，希望大家谅解。有机会再分享下设备端的证书导入什么的。
+
+ ***本文作者： question，转载请注明来自FreeBuf.COM**  
+

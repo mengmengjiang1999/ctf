@@ -1,0 +1,241 @@
+## 写在前面的话
+
+**ptrace(2)这个系统调用一般都跟调试离不开关系，它不仅是类Unix系统中本地调试器监控实现的主要机制，而且它还是strace系统调用常用的实现方法。ptrace()系统调用函数提供了一个进程（the
+“tracer”）监察和控制另一个进程（the
+“tracee”）的方法，它不仅可以监控系统调用，而且还能够[检查和改变“tracee”进程的内存和寄存器里的数据](https://nullprogram.com/blog/2016/09/03/)，甚至它还可以拦截系统调用。**
+
+![a.png](https://image.3001.net/images/20180704/15306341176214.png!small)这里的“拦截”我指的是tracer能够改变系统调用参数，改变系统调用的返回值，甚至屏蔽特定的系统调用。这也就意味着，一个tracer将能够完全实现自己的系统调用，这就非常有趣了，也就是说，一个tracer将可以模拟出一整套操作系统机制，而且这一切都不需要内核提供任何其他帮助。
+
+但问题在于，一个进程一次只能够绑定一个tracer，因此我们无法在调试进程（GDB）的过程中模拟出一套外部操作系统，而另一个问题就是模拟系统调用将耗费更多的资源开销。
+
+在这篇文章中，我将主要讨论x86-64架构下的Linux
+Ptrace，并且我还会使用到一些特定的Linux扩展。除此之外，我可能会忽略错误检查，但最终发布的完整源码将会解决这些问题。
+
+本文涉及到的可运行代码样本可以从【[这里](https://github.com/skeeto/ptrace-examples)】获取。
+
+## strace
+
+在开始之前，我们先看一看strace的实现骨架。Ptrace一直都没有相应的使用标准，但在不同的操作系统中它的接口都是类似的，尤其是它的核心功能，但多多少少都会有一些细微的差别。Ptrace(2)的原型类似如下：
+
+    
+    
+    long ptrace(int request, pid_t pid, void *addr, void *data);
+
+pid是tracee的进程ID，一个tracee一次只能绑定一个tracer，但一个tracer可以绑定多个tracee。
+
+request域负责选择一个指定的Ptrace函数，例如ioctl(2)接口。对于strace来说，只有下面是必须的：
+
+PTRACE_TRACEME:它的父进程必须跟踪这个进程。
+
+PTRACE_SYSCALL:继续运行，但是会在下一个系统调用入口暂停运行。
+
+PTRACE_GETREGS:获取tracee的寄存器备份。
+
+另外两个数据域，即addr和data，它们负责给选定的Ptrace函数提供参数，一般这两个数据都可以忽略，这里我选择传入0。
+
+strace接口本质上是其他命令的前缀：
+
+    
+    
+    $strace [strace options] program [arguments]
+
+我的最小化配置不包含任何参数，所以要做的第一件事就是假设它至少包含一个参数（fork(2)），通过argv传递。在加载目标程序之前，新的进程会告知内核它的父进程将会对它进行跟踪监视，tracee将会被这个Ptrace系统调用挂起：
+
+    
+    
+    pid_tpid = fork();
+    switch(pid) {
+        case -1: /* error */
+            FATAL("%s", strerror(errno));
+        case 0: /* child */
+            ptrace(PTRACE_TRACEME, 0, 0, 0);
+            execvp(argv[1], argv + 1);
+            FATAL("%s", strerror(errno));
+    }  
+    
+
+父进程将使用wait(2)来等待子进程的PTRACE_TRACEME，当wait(2)返回值之后，子进程将会被挂起：
+
+    
+    
+    wait pid(pid,0, 0);
+
+在允许子进程继续运行之前，我们将告诉操作系统tracee应该跟它的父进程一起终止。真实场景下的strace实现还需要设置其他的参数，例如PTRACE_O_TRACEFORK：
+
+    
+    
+    ptrace(PTRACE_SETOPTIONS,pid, 0, PTRACE_O_EXITKILL);
+
+捕捉系统调用的循环步骤如下：
+
+> 1\. 等待进程进入下一次系统调用。
+>
+> 2\. 打印系统调用信息。
+>
+> 3\. 允许系统调用执行，并等待返回结果。
+>
+> 4\. 打印系统调用的返回值。
+
+PTRACE_SYSCALL请求可以完成等待下一个系统调用以及等待系统调用结束这两个任务，跟之前一样，这里也需要使用wait(2)来等待tracee进入特定状态。
+
+    
+    
+    ptrace(PTRACE_SYSCALL,pid, 0, 0);
+    waitpid(pid,0, 0);  
+    
+
+wait(2)返回后，线程寄存器中将存储有系统调用号和相应参数。下一步就是收集系统调用信息，在不同的系统架构中这一步的实现方式也不同。在x86-64中，系统调用号是通过rax传递的，参数（最大为6）将传递给rdi、rsi、rdx、r10、r8和r9。读取寄存器还需要其他的Ptrace调用，但这里就不需要wait(2)了，因为tracee并不会改变状态。
+
+    
+    
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS,pid, 0, &ampregs);
+    longsyscall = regs.orig_rax;
+     
+    fprintf(stderr,"%ld(%ld, %ld, %ld, %ld, %ld, %ld)",
+            syscall,
+            (long)regs.rdi, (long)regs.rsi,(long)regs.rdx,
+            (long)regs.r10, (long)regs.r8,  (long)regs.r9);  
+    
+
+接下来就是另一个PTRACE_SYSCALL和wait(2)，然后利用PTRACE_GETREGS获取结果，结果将存储在rax中：
+
+    
+    
+    ptrace(PTRACE_GETREGS,pid, 0, &ampregs);
+    fprintf(stderr," = %ld\n", (long)regs.rax);  
+    
+
+这个样本程序的输出结果还是比较简陋的，其中没有包含系统调用的符号名，并且每一个参数都是按数字形式打印的，不过这已经足够奠定系统调用拦截的基础了。
+
+## 系统调用拦截
+
+假设我们想利用Ptrace去实现一个类似OpenBSD的pledge(2)这样的东西。基本思路如下：很多程序一般都有一个初始化过程，这个过程需要涉及到很多系统访问权限，例如打开文件和绑定套接字等等。初始化完成之后，它们会进入主循环，并处理输入数据，这里只需要使用到少量系统调用。
+
+在进入主循环之前，进程可以限制自身只进行少量操作，如果程序存在漏洞的话，pledge还可以限制漏洞利用代码所能完成的事情。当然了，我们不仅可以篡改系统调用参数，而且还可以修改系统调用号，并将其转换成一个不存在的系统调用，然后在errno中报告一个EPERM错误信息：
+
+    
+    
+    for(;;) {
+        /* Enter next system call */
+        ptrace(PTRACE_SYSCALL, pid, 0, 0);
+        waitpid(pid, 0, 0);
+        struct user_regs_struct regs;
+        ptrace(PTRACE_GETREGS, pid, 0, &ampregs);
+        /* Is this system call permitted? */
+        int blocked = 0;
+        if (is_syscall_blocked(regs.orig_rax)) {
+            blocked = 1;
+            regs.orig_rax = -1; // set to invalidsyscall
+            ptrace(PTRACE_SETREGS, pid, 0,&ampregs);
+        }
+     
+        /* Run system call and stop on exit */
+        ptrace(PTRACE_SYSCALL, pid, 0, 0);
+        waitpid(pid, 0, 0);
+        if (blocked) {
+            /* errno = EPERM */
+            regs.rax = -EPERM; // Operation notpermitted
+            ptrace(PTRACE_SETREGS, pid, 0,&ampregs);
+        }
+    }  
+    
+
+## 创建自定义的系统调用
+
+我将我新创建的模仿pledge的系统调用称为xpledge()，我选择的系统调用号是10000：
+
+    
+    
+    #define SYS_xpledge 10000
+
+下面是这个针对tracee的系统调用完整接口实现：
+
+    
+    
+    #define_GNU_SOURCE
+    #include<unistd.h>
+    #defineXPLEDGE_RDWR  (1 << 0)
+    #defineXPLEDGE_OPEN  (1 << 1)
+    #definexpledge(arg) syscall(SYS_xpledge, arg)  
+    
+
+如果传递的参数为0，则只允许执行一些基本的系统调用，包括内存分配等。PLEDGE_RDWR指定的是各种读写操作，如read(2)、readv(2)、pread(2)和preadv(2)等。
+
+在xpledge tracer中，我只需要检测这个系统调用：
+
+    
+    
+    /*Handle entrance */
+    switch(regs.orig_rax) {
+        case SYS_pledge:
+            register_pledge(regs.rdi);
+            break;
+    }  
+    
+
+操作系统将返回ENOSYS，因为它不是一个真正的系统调用，所以我们需要用success(0)重写返回结果：
+
+    
+    
+    /*Handle exit */
+    switch(regs.orig_rax) {
+        case SYS_pledge:
+            ptrace(PTRACE_POKEUSER, pid, RAX * 8,0);
+            break;
+    }  
+    
+
+样例程序的输出结果如下：
+
+    
+    
+    $./example
+    fread("/dev/urandom")[1]= 0xcd2508c7
+    XPledging...
+    XPledgefailed: Function not implemented
+    fread("/dev/urandom")[2]= 0x0be4a986
+    fread("/dev/urandom")[1]= 0x03147604  
+    
+
+在tracer下运行的结果如下：
+
+    
+    
+    $./xpledge ./example
+    fread("/dev/urandom")[1]= 0xb2ac39c4
+    XPledging...
+    fopen("/dev/urandom")[2]:Operation not permitted
+    fread("/dev/urandom")[1]= 0x2e1bd1c4  
+    
+
+## 外部系统模拟
+
+Linux下的Ptrace中有一个非常实用的函数：PTRACE_SYSMU，我们可以利用这个函数来实现系统模拟：
+
+    
+    
+    for(;;) {
+        ptrace(PTRACE_SYSEMU, pid, 0, 0);
+        waitpid(pid, 0, 0);
+        struct user_regs_struct regs;
+        ptrace(PTRACE_GETREGS, pid, 0, &ampregs);
+        switch (regs.orig_rax) {
+            case OS_read:
+                /* ... */
+            case OS_write:
+                /* ... */
+            case OS_open:
+                /* ... */
+            case OS_exit:
+                /* ... */
+            /* ... and so on ... */
+        }
+    }  
+    
+
+此代码框架在相同系统架构中的测试结果都是能够稳定运行的，大家可以根据自己的需要来修改代码。感谢大家的阅读，希望大家喜欢。
+
+ ***
+参考来源：[nullprogram](https://nullprogram.com/blog/2018/06/23/)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

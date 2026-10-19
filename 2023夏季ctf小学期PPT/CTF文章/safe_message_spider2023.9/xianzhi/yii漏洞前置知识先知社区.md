@@ -1,0 +1,430 @@
+### yii反序列化漏洞
+
+###### 安装
+
+    
+    
+    https://github.com/yiisoft/yii2/releases/tag/2.0.37
+
+下载yii-basic-app-2.0.37.tgz
+
+解压后进入/config/web.php，将cookieValidationKey改为任何值
+
+#### 前置知识
+
+##### 命名空间
+
+###### 定义命名空间
+
+namespace MyProject
+
+该语句之前不能有其他语句。在声明命名空间之前唯一合法的代码是用于定义源文件编码方式的 `declare` 语句。
+
+另外所有非 PHP 代码包括空白符都不能出现在命名空间的声明之前。比如html中有一段php代码,也是不行的
+
+同一个命名空间可以定义在多个文件中，即允许将同一个命名空间的内容分割存放在不同的文件中。
+
+###### 子命名空间
+
+PHP命名空间允许指定层次化的命名空间的名称，因此，命名空间可以使用分层次的方式定义。
+
+###### 同一个文件下多个命名空间
+
+同一个文件定义多个命名空间可以用大括号.
+
+    
+    
+    <?php
+    namespace MyProject {
+    
+    const CONNECT_OK = 1;
+    class Connection { /* ... */ }
+    function connect() { /* ... */  }
+    }
+    
+    namespace AnotherProject {
+    
+    const CONNECT_OK = 1;
+    class Connection { /* ... */ }
+    function connect() { /* ... */  }
+    }
+    ?>
+    
+
+当命名空间中的代码和非命名空间中的代码同时存在时,需要将非命名空间中的代码用namespace和大括号包裹起来
+
+    
+    
+    <?php
+      namespace Myproject {
+            const STATU = 'ok'
+        class Person {}
+        function connect() {}
+        }
+    
+        namespace {
+        $a = MyProject\connect();
+        echo MyProject\Connection::start();
+      }
+    
+
+###### 命名空间的使用
+
+类比访问文件夹中的文件，有相对文件名 相对路径 绝对路径
+
+PHP 命名空间中的元素使用同样的原理。例如，类名可以通过三种方式引用：
+
+  1. 相对文件名形式如 `foo.txt`。它会被解析为 `currentdirectory/foo.txt`，其中 currentdirectory 表示当前目录。因此如果当前目录是 `/home/foo`，则该文件名被解析为 `/home/foo/foo.txt`。
+  2. 相对路径名形式如 `subdirectory/foo.txt`。它会被解析为 `currentdirectory/subdirectory/foo.txt`。
+  3. 绝对路径名形式如 `/main/foo.txt`。它会被解析为 `/main/foo.txt`。
+
+PHP 命名空间中的元素使用同样的原理。例如，类名可以通过三种方式引用
+
+  1. 非限定名称，或不包含前缀的类名称，例如 `$a=new foo();` 或 `foo::staticmethod();`。如果当前命名空间是 `currentnamespace`，foo 将被解析为 `currentnamespace\foo`。如果使用 foo 的代码是全局的，不包含在任何命名空间中的代码，则 foo 会被解析为 `foo`。
+
+如果命名空间中的函数或常量未定义，则该非限定的函数名称或常量名称会被解析为全局函数名称或常量名称。
+
+  2. 限定名称,或包含前缀的名称，例如 `$a = new subnamespace\foo();` 或 `subnamespace\foo::staticmethod();`。如果当前的命名空间是 `currentnamespace`，则 foo 会被解析为 `currentnamespace\subnamespace\foo`。如果使用 foo 的代码是全局的，不包含在任何命名空间中的代码，foo 会被解析为 `subnamespace\foo`。
+
+  3. 完全限定名称，或包含了全局前缀操作符的名称，例如， `$a = new \currentnamespace\foo();` 或 `\currentnamespace\foo::staticmethod();`。在这种情况下，foo 总是被解析为代码中的文字名(literal name)`currentnamespace\foo`。
+
+例如
+
+    
+    
+    <?php
+    namespace Foo\Bar\subnamespace;
+    
+    const FOO = 1;
+    function foo() {}
+    class foo
+    {
+        static function staticmethod() {}
+    }
+    ?>
+    
+    
+    <?php
+    namespace Foo\Bar;
+    include 'file1.php';
+    
+    const FOO = 2;
+    function foo() {}
+    class foo
+    {
+        static function staticmethod() {}
+    }
+    
+    /* 非限定名称 */
+    foo(); // 解析为函数 Foo\Bar\foo 
+    foo::staticmethod(); // 解析为类 Foo\Bar\foo 的静态方法 staticmethod
+    echo FOO; // 解析为常量 Foo\Bar\FOO
+    
+    /* 限定名称 */
+    subnamespace\foo(); // 解析为函数 Foo\Bar\subnamespace\foo
+    subnamespace\foo::staticmethod(); // 解析为类 Foo\Bar\subnamespace\foo,
+                                      // 以及类的方法 staticmethod
+    echo subnamespace\FOO; // 解析为常量 Foo\Bar\subnamespace\FOO
+    
+    /* 完全限定名称 */
+    \Foo\Bar\foo(); // 解析为函数 Foo\Bar\foo
+    \Foo\Bar\foo::staticmethod(); // 解析为类 Foo\Bar\foo, 以及类的方法 staticmethod
+    echo \Foo\Bar\FOO; // 解析为常量 Foo\Bar\FOO
+    ?>
+
+任意全局的类、函数、常量，都可以使用全局限定名称，例如：\strlen()、\Exception等
+
+动态访问元素
+
+    
+    
+    <?php
+    class classname
+    {
+        function __construct()
+        {
+            echo __METHOD__,"\n";
+        }
+    }
+    function funcname()
+    {
+        echo __FUNCTION__,"\n";
+    }
+    const constname = "global";
+    
+    $a = 'classname';//这里,为什么能这样呢?在 PHP 中，类名、函数名和常量名都可以作为字符串来使用，可以通过字符串变量来动态地调用它们。
+    $obj = new $a; // 输出 classname::__construct
+    $b = 'funcname';
+    $b(); // 输出 funcname
+    echo constant('constname'), "\n"; // 输出 global
+    ?>
+    
+
+必须使用完全限定名称（包括命名空间前缀的类名称）。注意因为在动态的类名称、函数名称或常量名称中，限定名称和完全限定名称没有区别，因此其前导的反斜杠是不必要的。
+
+    
+    
+    <?php
+    namespace namespacename;
+    class classname
+    {
+        function __construct()
+        {
+            echo __METHOD__,"\n";
+        }
+    }
+    function funcname()
+    {
+        echo __FUNCTION__,"\n";
+    }
+    const constname = "namespaced";
+    
+    /* 注意，如果使用双引号，要这样写 "\\namespacename\\classname" */
+    
+    $a = '\namespacename\classname';
+    $obj = new $a; //完全限定名称 输出 namespacename\classname::__construct
+    $a = 'namespacename\classname';
+    $obj = new $a; //限定名称 也会输出 namespacename\classname::__construct
+    $b = 'namespacename\funcname';
+    $b(); //限定名称 输出 namespacename\funcname
+    $b = '\namespacename\funcname';
+    $b(); //完全限定名称 也会输出 namespacename\funcname
+    echo constant('\namespacename\constname'), "\n"; // 输出 namespaced
+    echo constant('namespacename\constname'), "\n"; // 也会输出 namespaced
+    ?>
+    
+
+###### namespace 关键字和 **NAMESPACE** 常量
+
+常量 **`__NAMESPACE__`** 的值是包含当前命名空间名称的字符串。在全局的，不包括在任何命名空间中的代码，它包含一个空的字符串。
+
+namespace关键字：用来显示当前命名空间或子命名空间中的元素
+
+    
+    
+    <?php
+    namespace foo;
+    use My\Full\Classname as Another;
+    
+    // 下面的例子与 use My\Full\NSname as NSname 相同
+    use My\Full\NSname;
+    
+    // 导入一个全局类
+    use ArrayObject;
+    
+    // 导入函数
+    use function My\Full\functionName;
+    
+    // 为函数设置别名
+    use function My\Full\functionName as func;
+    
+    // 导入常量
+    use const My\Full\CONSTANT;
+    
+    $obj = new namespace\Another; // 实例化 foo\Another 对象
+    $obj = new Another; // 实例化 My\Full\Classname　对象
+    NSname\subns\func(); // 调用函数 My\Full\NSname\subns\func
+    $a = new ArrayObject(array(1)); // 实例化 ArrayObject 对象
+    // 如果不使用 "use \ArrayObject" ，则实例化一个 foo\ArrayObject 对象
+    func(); // 调用函数 My\Full\functionName
+    echo CONSTANT; // 输出 My\Full\CONSTANT 的值
+    ?>
+
+通过use导入\使用别名，可以在一行中包含多个use语句
+
+导入是在编译时执行的，动态的类、函数、常量则不是
+
+导入操作只会影响非限定名称和限定名称，对于非限定名称（已经确定了）没有影响
+
+use语句必须放在文件最外层中使用（全局作用域中）或者命名空间声明内，不能放在块级作用域中（因为发生在编译时，而非运行时）
+
+导入规则是独立于每个文件的，意味着包含的文件不会继承父文件的导入规则
+
+use可以声明编组，通过单个use语句可以将来自同一个namespace的类、函数、常量一起编组导入（有点javasript中的结构的意思）
+
+    
+    
+    //一行包含多个use 语句
+    <?php
+      use MyProject\Test as Mt, OtherProject\Test as Ot;
+    ?>
+    
+    // 不会影响动态的类、函数、常量
+    <?php
+      use My\Full\Classname as Another, My\Full\NSname;
+    
+      $obj = new Another; // 实例化一个 My\Full\Classname 对象
+      $a = 'Another';
+      $obj = new $a;      // 实际化一个 Another 对象
+    ?>
+    
+    // 只会影响非限定名称、限定名称，对完全限定名称没有影响
+    <?php
+      use My\Full\Classname as Another, My\Full\NSname;
+    
+      $obj = new Another; // class My\Full\Classname 的实例对象
+      $obj = new \Another; // class Another 的实例对象
+      $obj = new Another\thing; // class My\Full\Classname\thing 的实例对象
+      $obj = new \Another\thing; // class Another\thing 的实例对象
+    ?>
+    
+    // use 编组导入 
+    <?php
+      use some\namespace\ClassA;
+      use some\namespace\ClassB;
+      use some\namespace\ClassC as C;
+    
+      use function some\namespace\fn_a;
+      use function some\namespace\fn_b;
+      use function some\namespace\fn_c;
+    
+      use const some\namespace\ConstA;
+      use const some\namespace\ConstB;
+      use const some\namespace\ConstC;
+    
+      // 等同于以下编组的 use 声明
+      use some\namespace\{ClassA, ClassB, ClassC as C};
+      use function some\namespace\{fn_a, fn_b, fn_c};
+      use const some\namespace\{ConstA, ConstB, ConstC}; 
+    ?>
+
+###### 全局空间
+
+如果没有定义任何命名空间，所有的类与函数的定义都是在全局空间，与 PHP 引入命名空间概念前一样。在名称前加上前缀 `\`
+表示该名称是全局空间中的名称，即使该名称位于其它的命名空间中时也是如此。
+
+    
+    
+    <?php
+    namespace A\B\C;
+    
+    /* 这个函数是 A\B\C\fopen */
+    function fopen() { 
+         /* ... */
+         $f = \fopen(...); // 调用全局的fopen函数
+         return $f;
+    } 
+    ?>
+
+###### 使用规则
+
+在命名空间内访问全局变量:
+
+    
+    
+    <?php
+    namespace A\B\C;
+    class Exception extends \Exception {}
+    
+    $a = new Exception('hi'); // $a 是类 A\B\C\Exception 的一个对象
+    $b = new \Exception('hi'); // $b 是类 Exception 的一个对象
+    
+    $c = new ArrayObject; // 致命错误, 找不到 A\B\C\ArrayObject 类
+    ?>
+
+###### 名称解析
+
+如果当前命名空间中不存在该函数或常量，PHP 会退而使用全局空间中的函数或常量。
+
+  * 非限定名称（Unqualified name）
+
+名称中不包含命名空间分隔符的标识符，例如 `Foo`
+
+  * 限定名称（Qualified name）
+
+名称中含有命名空间分隔符的标识符，例如 `Foo\Bar`
+
+  * 完全限定名称（Fully qualified name）
+
+名称中包含命名空间分隔符，并以命名空间分隔符开始的标识符，例如 `\Foo\Bar`。 `namespace\Foo` 也是一个完全限定名称。
+
+  * 相对名称（Relative name）
+
+这是个以 `namespace` 开头的标识符， 例如 `namespace\Foo\Bar`。
+
+名称解析遵循下列规则：
+
+  1. 完全限定名称总是会解析成没有前缀符号的命名空间名称。 `\A\B` 解析为 `A\B`。
+  2. 解析相对名称时，会用当前命名空间的名称替换掉 `namespace`。 如果名称出现在全局命名空间，会截掉 `namespace\` 前缀。 例如，在命名空间 `X\Y` 里的 `namespace\A` 会被解析成 `X\Y\A`。 在全局命名空间里，同样的名字却被解析成 `A`。
+  3. 对于限定名称，名字的第一段会根据当前 class/namespace 导入表进行翻译。 比如命名空间 `A\B\C` 被导入为 `C`， 名称 `C\D\E` 会被翻译成 `A\B\C\D\E`。
+  4. 对于限定名称，如果没有应用导入规则，就将当前命名空间添加为名称的前缀。 例如，位于命名空间 `A\B` 内的名称 `C\D\E` 会解析成 `A\B\C\D\E`。
+  5. 根据符号类型和对应的当前导入表，解析非限定名称。 这也就是说，根据 class/namespace 导入表翻译类名称； 根据函数导入表翻译函数名称； 根据常量导入表翻译常量名称。 比如，在 `use A\B\C;` 后，类似 `new C()` 这样的名称会解析为 `A\B\C()`。 类似的，`use function A\B\fn;` 后， `fn()` 的用法，解析名称为 `A\B\fn`。
+  6. 如果没有应用导入规则，对于类似 class 符号的非限定名称，会添加当前命名空间作为前缀。 比如命名空间 `A\B` 内的 `new C()` 会把名称解析为 `A\B\C`。
+  7. 如果没有应用导入规则，非限定名称指向函数或常量，且代码位于全局命名空间之外，则会在运行时解析名称。 假设代码位于命名空间 `A\B` 中， 下面演示了调用函数 `foo()` 是如何解析的：
+    1. 在当前命名空间中查找函数： `A\B\foo()`。
+    2. 它会尝试找到并调用 _全局_ 的函数 `foo()`。
+
+名称解析示例
+
+    
+    
+    <?php
+    namespace A;
+    use B\D, C\E as F;
+    
+    // 函数调用
+    
+    foo();      // 首先尝试调用定义在命名空间"A"中的函数foo()
+                // 再尝试调用全局函数 "foo"
+    
+    \foo();     // 调用全局空间函数 "foo" 
+    
+    my\foo();   // 调用定义在命名空间"A\my"中函数 "foo" 
+    
+    F();        // 首先尝试调用定义在命名空间"A"中的函数 "F" 
+                // 再尝试调用全局函数 "F"
+    
+    // 类引用
+    
+    new B();    // 创建命名空间 "A" 中定义的类 "B" 的一个对象
+                // 如果未找到，则尝试自动装载类 "A\B"
+    
+    new D();    // 使用导入规则，创建命名空间 "B" 中定义的类 "D" 的一个对象
+                // 如果未找到，则尝试自动装载类 "B\D"
+    
+    new F();    // 使用导入规则，创建命名空间 "C" 中定义的类 "E" 的一个对象
+                // 如果未找到，则尝试自动装载类 "C\E"
+    
+    new \B();   // 创建定义在全局空间中的类 "B" 的一个对象
+                // 如果未发现，则尝试自动装载类 "B"
+    
+    new \D();   // 创建定义在全局空间中的类 "D" 的一个对象
+                // 如果未发现，则尝试自动装载类 "D"
+    
+    new \F();   // 创建定义在全局空间中的类 "F" 的一个对象
+                // 如果未发现，则尝试自动装载类 "F"
+    
+    // 调用另一个命名空间中的静态方法或命名空间函数
+    
+    B\foo();    // 调用命名空间 "A\B" 中函数 "foo"
+    
+    B::foo();   // 调用命名空间 "A" 中定义的类 "B" 的 "foo" 方法
+                // 如果未找到类 "A\B" ，则尝试自动装载类 "A\B"
+    
+    D::foo();   // 使用导入规则，调用命名空间 "B" 中定义的类 "D" 的 "foo" 方法
+                // 如果类 "B\D" 未找到，则尝试自动装载类 "B\D"
+    
+    \B\foo();   // 调用命名空间 "B" 中的函数 "foo" 
+    
+    \B::foo();  // 调用全局空间中的类 "B" 的 "foo" 方法
+                // 如果类 "B" 未找到，则尝试自动装载类 "B"
+    
+    // 当前命名空间中的静态方法或函数
+    
+    A\B::foo();   // 调用命名空间 "A\A" 中定义的类 "B" 的 "foo" 方法
+                  // 如果类 "A\A\B" 未找到，则尝试自动装载类 "A\A\B"
+    
+    \A\B::foo();  // 调用命名空间 "A\B" 中定义的类 "B" 的 "foo" 方法
+                  // 如果类 "A\B" 未找到，则尝试自动装载类 "A\B"
+    ?>
+
+##### call_user_func_array
+
+调用回调函数，并把一个数组参数作为回调函数的参数
+
+call_user_func_array(callable `$callback`, array `$args`)
+
+callback:被调用的回调函数。
+
+args:要被传入回调函数的数组，这个数组得是索引数组。
+

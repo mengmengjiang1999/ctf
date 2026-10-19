@@ -1,0 +1,344 @@
+QRP是无线电通讯简语中的小功率通讯的代词，像FT8，JT9，JT65和WSPR这些数字模式是被设计用来在全球范围内以低功率发射和接收的模式（虽然不是每个人都只用低功率）。这些特殊设计的模式使得即使是微弱的信号也能被接收软件解码。2017年发布的FT8打败了JT9和JT65一跃成为迄今为止最受欢迎的数字模式。虽然WSRP的信标模式比建立联系的模式强一些，但WSRP也没有FT8强大。  
+
+这些微弱的信号模式除了被用来进行建立联系外，也是当前高频传播条件的重要指标。每个信息包都包含关于发送器位置的信息，所以你可以看到你收到的信息包来自何处和距离有多远。你也不需要像一个“火腿”（业余无线电爱好者）一样建立一个监测站。作为一个SWL(短波听众)，仅仅看看你能从多远的地方接收到信号，以及你能从世界上多少个国家“接收”到信号，就会非常有趣。
+
+本教程的灵感来自dg0opk关于使用单片机监控QRP的[视频](https://www.youtube.com/channel/UCZyjrcCis9ZVCrR4hezntzQ)和[博客文章](https://www.rtl-sdr.com/monitoring-ft8-jt65-jt9-on-multiple-bands-with-low-cost-single-board-pcs/)。我们将教你使用RTL-SDR V3和树莓派3建立一个超低成本的QRP监测站。总成本应该在56美元左右(RTL-SDR V3为21美元，Pi
+3为35美元)。
+
+通过这个设置，你将能够连续地同时监视同一频段内的多个模式(例如，同时监视20个FT8、JT65+JT9和WSPR测试仪)。在Linux中创建多通道的方法也可能对其他应用程序有用。如果你碰巧有一个upconverter（向上转换器）或一个更好的用于监视的SDR，比如SDRplay或Airspy
+HF+，那么它也可以替代RTL-SDR V3。我们需要的零件如下:
+
+  * RTL-SDR V3 (或 upconverter, 或其他的 HF & Linux capable SDR)
+  * Raspberry Pi 3 (或是其他类似的SBC平台)
+  * 有网
+  * 带通滤波器(可选,但是建议使用)
+  * 高频天线(这个简单,长导线就可以)
+
+### 使用RTL-SDR的QRP接收器的示例
+
+![image.png](https://image.3001.net/images/20180814/1534227522_5b727442a942d.png!small)  
+
+使用@rtlsdrblog
+V3加密器进行#FT8监视一周，使用90英尺长电线对30m进行直接采样。3151个独特的响应，2836个栅极和86个国家。来自#pskreporter的ADIF并与@GridTracker映射。pic.twitter.com/1c826gDoce  
+——Johnny(@cuoops) 2018年6月15日
+
+### 设置Raspberry Pi 3
+
+本文我们使用的是Raspberry Pi
+3，但是如果你想用其他的和这个类似或是比这个更好的SBC平台的话也可以。首先我们将通过RealVNC设置远程桌面连接的Raspberry Pi 3。
+
+  *     1. 首先给我们的Raspberry Pi 3安装系统，将Raspbian系统烧录在一张SD卡上，讲SD卡插入Pi中，插上鼠标和键盘，HDMI显示器和电源。
+  *     1. 开机后进入Raspberry Pi 3系统桌面，打开一个终端输入sudo raspi-config。在本地化设置中。将时区更改为UTC(localisation options -> time zones -> none of the above -> UTC)，为你的语言环境设置键盘，并启用VNC。
+  *     1. 在raspi-config中，同样在接口选项下启用VNC。
+  *     1. 使用Raspberry Pi RealVNC设置指令，设置一个RealVNC查看器帐户，或者通过本地网络连接，在终端使用“ifconfig”记录下Pi的ip。注意，注意，在上一步中启用VNC之后，你可以通过RealVNC设置服务器，以便在Raspberry Pi任务栏的右上角登录。
+  *     1. 此时，如果你愿意，可以删除HDMI监视器并连接到Pi / VNC。
+
+### 安装软件
+
+接着为你的Raspberry Pi 3安装软件
+
+#### RTL-SDR驱动
+
+我们先安装RTL-SDR驱动。我们需要V3的Keenerd驱动程序，因为这些驱动程序是允许我们在直接采样Q-branch模式下运行rtl_sdr软件的唯一驱动程序。这是RTL-SDR V3中HF接收所需要的。
+
+    
+    
+    sudo apt-get update
+    sudo apt-get install libusb-1.0-0-dev git cmake -y
+    git clone https://github.com/keenerd/rtl-sdr
+    cd rtl-sdr/
+    mkdir build
+    cd build
+    cmake ../ -DINSTALL_UDEV_RULES=ON
+    make
+    sudo make install
+    sudo cp ../rtl-sdr.rules /etc/udev/rules.d/
+    sudo ldconfig
+    echo 'blacklist dvb_usb_rtl28xxu' | sudo tee --append /etc/modprobe.d/blacklist-dvb_usb_rtl28xxu.conf
+
+现在重新启动以应用黑名单，并插入您的RTL-SDR。
+
+### PulseAudio & MPlayer
+
+我们需要使用PulseAudio来创建虚拟声卡驱动，我们还需要安装mplayer来播放音频。
+
+`sudo apt-get install pulseaudio pavucontrol mplayer -y`
+
+### CSDR
+
+CSDR是一个DSP函数库，我们将用它来设置多通道接收器。
+
+    
+    
+    sudo apt-get install libfftw3-dev -y
+    >cd ~
+    git clone https://github.com/simonyiszk/csdr
+    cd csdr
+
+在进一步讨论之前，对于Raspberry Pi
+33，我们建议编辑Makefile并将PARAMS_NEON标记更改为以下内容。Makefile可以用“sudo leafpad Makefile”命令打开
+
+    
+    
+    -march=armv8-a
+    -mtune=coretx-a53
+    -mfpu=neon-fp-armv8.
+
+同样在 PARAMS_RASPI 设置:
+
+    
+    
+    -mcpu=cortex-a53
+    -mfpu=neon-fp-armv8.
+
+此时我们并不能确定这玩意儿真的做了什么没有，但是看起来这段代码应该是用来优化Raspberry Pi 33
+CPU的。如果你使用的是其他的板子的话，你都需要看看这些设置在你的板子上都干了点啥。
+
+保存并关闭这个文件，然后运行
+
+    
+    
+    make
+    sudo make install
+
+### ncat
+
+ncat是一个TCP服务器，我们将使用它来帮助我们建立一个多通道的接收器。  
+sudo apt-get install nmap -y
+
+### Chrony
+
+我们将使用Chrony来调整QRP模式所需的时间偏移量。待会儿讨论怎么配置。
+
+> sudo apt-get install chrony -y
+
+### WSJT-X
+
+WSJT-X是一个我们将用来解码FT8，JT9，JT65和/或WSRP的软件。浏览器上打开WSIT-X的网站页面，下载用于Raspberry Pi
+33的.deb后缀的文件，然后双击下载的文件开始安装。
+
+### JTDX (可选)
+
+JTDX是另一个源于WSJT-X的解码器，有人说它比WSJT-X解码得更好，有更多的特性。然而，我们发现JTDX占用了更多的CPU资源，因此在Pi
+3上使用它进行多通道解码是很困难的。在本教程文章中，还没有为JTDX准备好的.deb安装文件，因此必须手动编译JTDX。
+
+下面的编译说明基于[N0KEG](http://n0keg.com/index.php/2017/07/28/build-jtdx-from-source-on-raspberrypi/)的教程，现在看起来有点过时了。
+
+安装
+
+`sudo apt-get install build-essential subversion git automake libtool libusb-dev gfortran gfortran-5 g++ g++-5 libusb-1.0-0-dev texinfo cmake asciidoc
+asciidoctor libqt5serialport5 libqt5serialport5-dev libfftw3-dev
+libqt5multimedia5 libqt5multimedia5-plugins libqt5multimediawidgets5
+qtmultimedia5-dev libudev-dev pavucontrol wget`
+
+多线程编译
+
+`export MAKEFLAGS='-j 4'`
+
+需要用 swapfile编译一个大文件
+
+> sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap
+> /swapfile && sudo swapon /swapfile
+
+下载、编译并安装最新的hamlib
+
+    
+    
+    cd ~
+    mkdir ~/hamlib-prefix && cd ~/hamlib-prefix && git clone git://git.code.sf.net/u/bsomervi/hamlib src
+    cd src
+    git checkout integration
+    ./bootstrap
+    ./configure
+    make
+    sudo make install
+    sudo ldconfig
+
+下载安装JTDX
+
+    
+    
+    cd~
+    wget https://www.release.jtdx.tech/Windows/Source%20code/src18.1.0.85.zip
+    mkdir ~/jtdx-prefix && mkdir ~/jtdx-prefix/build && mkdir ~/jtdx-prefix/src
+    unzip src18.1.0.85.zip
+    mv wsjtx/* ~/jtdx-prefix/src/
+    
+    
+    cd ~/jtdx-prefix/build
+    cmake -D CMAKE_PREFIX_PATH=~/hamlib-prefix ../src
+    cmake --build .
+    sudo cmake --build . --target install
+
+### GridTracker (可选)
+
+下载适配Raspberry Pi 3版本的GridTracker
+
+在<https://tagloomis.com/downloads>下载Raspberry Pi 3版本的GridTracker .
+这将允许你在Pi本身的地图上可视化你的QRP点。这个是可选的，因为你在
+[PSKreporter.info](https://pskreporter.info/) 也能完成同样的操作。
+
+    
+    
+    cd ~/Downloads
+    
+    tar -xzf GridTracker-Linux-Arm-1.18.0604.tar.gz -C ~
+
+### 音频安装
+
+我们首先需要为你想要同时监视的每个频率创建虚拟的音频接收器。下面的示例将设置两个在引导时加载的虚拟音频接收器。要设置另一个，只需从Virtual
+2多加几行，等等。首先打开Pulseaudio的default.pa文件：
+
+> sudo leafpad /etc/pulse/default.pa
+
+在这个文件末尾加下面几行：
+
+    
+    
+    load-module module-null-sink sink_name=**Virtual0** sink_properties=device.description="**Virtual0**"
+    load-module module-null-sink sink_name=**Virtual1** sink_properties=device.description="**Virtual1**"
+
+我们还建议禁用PulseAudio日志，因为这东西很占CPU。
+
+> sudo leafpad /etc/pulse/daemon.conf
+
+现在找到”log-level”然后把它改为”log-level = error”.删除log-level边的分号。保存后退出。
+
+    
+    
+    ; log-target = auto
+    log-level = error
+    ; log-meta = no
+
+现在可以通过重新引导或在命令行运行“pulseaudio -k”来重新加载pulseaudio。
+
+### 安装PTL-SDR
+
+现在，在终端窗口中运行下面的命令，使用ncat设置一个RTL-SDR TCP服务器。在本例中，中心频率设置为14.1 MHz (14100000
+Hz)。把这个改成你想要监控的频率。这里有一份完整的QRP波段列表。只要记住将中心频率从实际信号频率偏移几百kHz，就可以避免达到中心直流电峰值。
+
+`rtl_sdr -s 1200000 -f 14100000 -D 2 - | csdr convert_u8_f | ncat -4l 4952 -k
+--send-only --allow 127.0.0.1`
+
+Rel_stl命令中-s表示采样率，-f表示中心频率。-D 2 设置Q-branch为直接采样模式。
+
+在ncat -4l上设置TCP IPv4模式，端口是4952，-k允许进行多个连接，--send-only确保服务器只发送数据而不接收数据，并且—allow
+127.0.0.1确保只能进行本地连接。
+
+再打开一个第终端窗口/选项卡中运行下面的命令，生成一个SSB USB通道，以14.074 MHz监测20M
+FT8通道。注意“(14100000-14074000)”部分设置监测频率为“(中心频率调谐频率)”。在这个例子中，我们监控14.074
+MHz，也就是20M FT8频率。如果你在监测一个不同的波段，并且使用不同的中心频率，那么在这里改变偏移频率。利用csdr命令设置一个USB
+SSB解码器。关于使用csdr的更多信息可以在[csdr
+GitHub]页面([https://github.com/simonyiszk/csdr)上找到。注意，我们将fir_decimate_cc命令中的“transition](https://github.com/simonyiszk/csdr\)%E4%B8%8A%E6%89%BE%E5%88%B0%E3%80%82%E6%B3%A8%E6%84%8F%EF%BC%8C%E6%88%91%E4%BB%AC%E5%B0%86fir_decimate_cc%E5%91%BD%E4%BB%A4%E4%B8%AD%E7%9A%84%E2%80%9Ctransition)
+bandwidth”从GitHub页面上的csdr示例中使用的0.005减少到0.05。这个操作可以降低CPU的负荷，代价可能是干扰更强一点，但是在我们这次列出的例子中，没什么毛病。
+
+`ncat -v 127.0.0.1 4952 | csdr shift_addition_cc`python -c "print
+float(14100000-14074000)/1200000"`| csdr fir_decimate_cc 25 0.05 HAMMING |
+csdr bandpass_fir_fft_cc 0 0.5 0.05 | csdr realpart_cf | csdr agc_ff | csdr
+limit_ff | csdr convert_f_s16 | mplayer -nocache -rawaudio
+samplesize=2:channels=1:rate=48000 -demuxer rawaudio -`
+
+打开pavucontrol，可以进入Raspberry Pi Start Menu -> Sound & Video -> PulseAudio
+Volume control，或者简单地在命令行输入“pavucontrol”。单击“ Playback”选项卡，并设置MPlayer使用“Virtual
+0”音频接收器。  
+![image.png](https://image.3001.net/images/20180814/1534227568_5b727470da897.png!small)
+
+#### 修复时间延迟
+
+QRP模式(尤其是FT8)要求计算机时钟非常准确。这是因为信号预期在特定的时间间隔内被发送和接收。大多数人使用NTP将他们的计算机时钟同步到一个精确的时间。如果有网络连接，Raspbian会自动同步到NTP。
+
+然而，问题是RTL_SDR，CSDR，和mplayer同时运行在Raspberry Pi
+33上时，从输入到输出这段过程会产生一段时间大概2-3秒的延迟，而这段延迟是不能存在的。大多数延迟来自mplayer上的缓冲，这有助于减少CPU峰值时的负荷。WSJT-X规定数据包在正确的时间范围内可以被接收，如果超过了+/- 2秒，就不会解码它们。
+
+为了解决这个问题，我们需要稍微欺骗一下时钟，并将系统时间设置向前调几秒钟。感谢dg0opk让我们了解了这个方法，它包括用Chrony替换Raspberry
+Pi
+3默认的NTP软件，而Chrony我们是可以自己配置。Chrony在前一节中应该已经安装过了，安装它会自动禁用NTP并激活Chrony。使用以下命令打开它的配置文件：
+
+`sudo leafpad /etc/chrony/chrony.conf`
+
+第一个命令，设置一下让它可以有一个大概-2.5秒的偏移量
+
+`pool 2.debian.pool.ntp.org iburst offset -2.5`
+
+保存配置文件后退出，然后重启Chrony服务。
+
+`sudo invoke-rc.d chrony restart`
+
+#### 安装WSJT-X
+
+打开WSJ-T或者JTDX，进入File -> Settings -> Audio选项卡，设置声卡输入为“Virtual0.monitor”。
+
+![image.png](https://image.3001.net/images/20180814/1534227590_5b7274862a2cf.png!small)
+
+WSJT-X设置为FT8模式，现在你可以用它来解码信号。
+
+终端输入“jtdx”打开JTDX也一样。输入声卡的接口设置成和上面一样。
+
+WSJT-X使用RTL-SDR V3在Pi 3上以直接采样模式解码FT8  
+
+如果你没有看到解码信息，但是在光谱中看到信号，这个时候尝试下调整下你的时间偏移量。然后在WSJT-X数据流中应该可以看到，数据包到达的是太早还是太晚。当你获得解码数据后，相应地调整偏移时间。让“DT”列的值尽可能的接近0。DT列显示的是时间偏移量和准确时间。例如，-0.5表示数据包比预期提前了0.5秒。
+
+#### 设置WSJT-X向PSKReporter发送报告
+
+WSJT-X可以向pskreporter.info/pskmap报告你的位置，这个站点聚集了来自世界各地的QRP位点。在这里，你可以把你的接收器和附近的比较，看看你的天线和设置怎么样，并显示出你的信号能被多少个国家接收到。
+
+要设置它，只需在WSJT-X的 General
+settings中输入您的呼号和maidenhead网格详情，然后在Reporting选项卡下输入“Enable PSK Reporter
+Spotting”。
+
+如果你不是“火腿”，你仍然可以作为一个SWL(短波听众)来为网站做贡献。你的呼号可以是“hamprefix/SWL/city”。在https://pskreporter.info提供了一个示例。你可以在这里找到你的国家。你可以从这个计算器获得你的Maidenhead网格位置。只用它给你的前四个字符。
+
+多通道检测FT8 + JT9/JT65
+
+这一步我们将展示怎么样为附加的一些QRP模式（如JT65、JT9和WSPR）添加同步监控。首先我们将会说明如何设置dg0opk，在他的youtube视频里讲过用这种方法监控JT9和JT65。由于JT9和JT65频段距离FT8只有几个kHz，我们可以简单地打开WSJT-X的第二个实例，让它与FT8解码器侦听相同的音频，然后在WSJT-X中扩展解码带宽。
+
+  * 1.要做到这一点，在终端中输入wsjtx -r jt_decode 打开wsjt-x的第二个示例。
+  * 2.在WSJT-X高级设置中，将接收机带宽增加到4500赫兹。
+  * 3.将模式设置为JT9+J65，在数据窗口中，将“JT65 2500 JT9”设置为“JT65 4500 JT9”。
+
+FT8 + JT9/JT65 + WSPR
+
+现在要监视WSPR，我们需要打开第二个通道，因为WSJT-X可以监视的最大带宽是6000赫兹，WSPR在20m波段比FT8频率高28.1696 kHz。
+
+打开第二个终端窗口，再次运行ncat命令，确保更改了调优频率。在下面的示例中，我们将它更改为14.0956 MHz的20m WSPR频率。
+
+`ncat -v 127.0.0.1 4952 | csdr shift_addition_cc`python -c "print
+float(14100000-14095600)/1200000"`| csdr fir_decimate_cc 25 0.05 HAMMING |
+csdr bandpass_fir_fft_cc 0 0.5 0.05 | csdr realpart_cf | csdr agc_ff | csdr
+limit_ff | csdr convert_f_s16 | mplayer -nocache -rawaudio
+samplesize=2:channels=1:rate=48000 -demuxer rawaudio -`
+
+打开pavucontrol，可以进入树莓Pi Start Menu （开始菜单）-> Sound & Video（声音和音频） -> PulseAudio
+Volume control（PulseAudio音量控制），或者简单地在命令行输入“pavucontrol”。这里设置新播放器使用“Virtual
+1”音频接收器。
+
+输入“wsjtx -r wspr”打开wsjt-x的第三个示例。然后将输入声卡设置为“Virtual1”并且设置好WSRP模型。此时你的环境已经基本上搭建成功了。
+
+在Raspberry Pi 33上们我们成功的打开并运行了两个通道和三个WSJT-X解码实例。如果使用JTDX的话，因为它太占CPU了，我们实际上只能打开一两个实例。
+
+Grid Tracker
+
+GridTracker是一个很好用的软件，它可以自动在地图上标出你的位置。安装后在命令行运行./GridTracker就可以了。
+
+要为GridTracker设置WSJT-X，只需进入设置窗口的Reporting选项卡，并启用“Accept UDP Requests”。
+
+不过，对于Raspberry Pi
+33b的CPU来说，使用这两个通道和三个解码器运行GridTracker是有点吃力的。这就可能造成软件出现丢包，闪退和缓冲区负载过高的情况。
+
+![image.png](https://image.3001.net/images/20180814/1534227748_5b727524ceba9.png!small)  
+
+技巧和经验教训
+
+  * 我们刚开始尝试使用sox play和aplay作为音频播放器。这两个播放器刚开始的时候都没有延迟，因此不需要调整时钟。然而，一段时间后，播放器会不时地挂掉。又一段时间过去，它的运行时间越长，延迟时间就越长。我们不知道为什么。如果你正在运行速度更快的硬件，并且从未运行不足，那么这可能是一个更简单的解决方案。
+  * FT8绝对是最流行的模式，我们建议从这个开始。JT9和JT65几乎废了。
+  * 带滤波器能真正增强V3的接收效果。你可以在eBay上或qrp-labs.com上找到SV1AFN的DIY工具包。但是，加上这个东西需要进行一些改装。
+  * 我们已经让接收机稳定运行了3天，但是系统的长期稳定性还没有经过测试。尽管dg0opk已经表示他的类似的装置已经运行了半年多了。
+  * 你必须使用高频天线。这可能只是一根很长的电线(至少5米)。如果您使用的是RTL-SDR V3集合中的多用途偶极子组件，那么您需要使用两根电线来延长HF的臂长。只需在偶极子的每条上夹住大约5米或更多的电线。
+  * 我们用的是Raspberry Pi 3B，3B+的话可能会更好一点，多用几个也可能会提高性能。
+
+作者：RTL-SDR.COM  
+翻译：i春秋翻译小组-prison  
+翻译来源：<https://www.rtl-sdr.com/tutorial-setting-up-a-low-cost-qrp-ft8-jt9-wspr-etc-monitoring-station-with-an-rtl-sdr-v3-and-raspberry-pi-3/>
+
+大家有任何问题可以提问，更多文章可到[i春秋论坛](https://bbs.ichunqiu.com/portal.php?from=beef)阅读哟~  
+

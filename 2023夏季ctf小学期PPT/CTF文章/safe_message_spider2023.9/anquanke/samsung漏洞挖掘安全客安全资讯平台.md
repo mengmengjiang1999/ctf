@@ -1,0 +1,967 @@
+# samsung漏洞挖掘
+
+阅读量 **621954**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-09-30 13:00:27
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01ca847c50da347730.jpg)
+
+在学习了一些projectzero系列文章后的一些收获，这里主要讲下最近的一个mms exploit系列。
+
+该系列的文章以qmage的解析器codec为对象，详细介绍了发掘可研究点，获取对象信息，挖掘攻击面，寻找和构造攻击向量，编写有效的fuzzer以及最后根据某个漏洞编写exp的一套流程，本文包含了一些学习中感觉有价值的点和一些我踩坑的经历，一并发出来。
+
+## 发掘可研究点
+
+从以往的历史issue中，原作者发现samsung的图像解析器的代码提供商有Quramsoft，在测试手机 /system/lib64发掘到了相关so库：
+
+    
+    
+    libimagecodec.quram.so
+    libatomcore.quram.so
+    libagifencoder.quram.so
+    libSEF.quram.so
+    libsecjpegquram.so
+    libatomjpeg.quram.so
+    
+
+其中libimagecodec.quram.so是其中体积最大，使用最多，支持解析格式较多的一个库，因此原作者将此作为切入点，最终根据以往的漏洞，决定将切入点确定为通过MediaScanner
+service，其一般解析图像的路径是 scanSingleFile -> doScanFile ->
+processImageFile，其中processImageFile有一句重要的代码
+
+    
+    
+    BitmapFactory.decodeFile(path, mBitmapOptions);
+    
+
+该操作是解析图像的重点语句，它会调用底层厂商提供的解析器代码，因此可以以此作为深入挖掘的点
+
+## 获取对象信息
+
+溯源那句函数，发现其调用路径 BitmapFactory.decodeFile -> decodeStream ->
+decodeStreamInternal -> nativeDecodeStream ->
+doDecode，而在doDecode函数中发现其调用的是Skia组件的函数
+
+    
+    
+    SkCodec::MakeFromStream(std::move(stream), &result, &peeker);
+    
+    SkCodec::Result result = codec->getAndroidPixels(decodeInfo, decodingBitmap.getPixels(),
+                decodingBitmap.rowBytes(), &codecOptions);
+    
+
+据此根据分析samsung手机上的Skia的so库libhwui.so或者是libskia.so来获取根据必要的对象信息，这里一些基本的信息不再累述，原作者都有提到，这里提下其他的。
+
+提供下没有samsung手机但想获取相关so库的解决方法：
+
+  1. [已有的一些android手机的系统文件dump仓库](https://git.rip/dumps/samsung?page=1)，注意版本对应samsung的android10系统
+  2. 下载samsung的系统镜像，[sammobile网站](https://www.sammobile.com/firmwares/)，或者xda也有一些，在下载完了以后，将系统镜像解压出来，在解析system.img文件
+
+这里的话主要是下载一月和八月的系统镜像:
+
+  1. [N9760ZCU1BTA1_N9760CHC1BTA1_CHC(android10，2020-01-01)](https://www.sammobile.com/samsung/galaxy-note-10-plus/firmware/SM-N9760/CHC/download/N9760ZCU1BTA1/317963/)
+  2. [N9760ZCU3CTH1_N9760CHC3CTH1_CHC(android10，2020-08-01)](https://www.sammobile.com/samsung/galaxy-note-10-plus/firmware/SM-N9760/CHC/download/N9760ZCU3CTH1/362125/)
+
+    
+    
+    $ mkdir system
+    $ sudo mount -t ext4 system.img system
+    $ ls system
+    acct                default.prop           init.usb.rc          product_services
+    apex                dev                    init.zygote32.rc     publiccert.pem
+    audit_filter_table  dpolicy                init.zygote64_32.rc  res
+    bin                 dqmdbg                 keydata              sbin
+    bugreports          efs                    keyrefuge            sdcard
+    cache               etc                    lost+found           sepolicy_version
+    carrier             init                   mnt                  spu
+    charger             init.container.rc      odm                  storage
+    config              init.environ.rc        oem                  sys
+    d                   init.rc                omr                  system
+    data                init.recovery.qcom.rc  proc                 ueventd.rc
+    debug_ramdisk       init.usb.configfs.rc   product              vendor
+    
+
+## 挖掘攻击面
+
+这里除了逆向相应so库，建议去寻找是否有开源代码，这里的话原作者是从带有” _LL_ “的开源包中找到Skia的部分使用代码。
+
+libQmageDecoder.so大部分行为和Skia接口类似，但是他可以多几种格式多解析，且解析操作的路径也有所区别
+
+## 寻找和构造攻击向量
+
+对于系统自带的功能，可以去通过系统自带的apk中寻找，如在/system/app和/system/priv-app中可以找到类似默认携带的apk，这次使用的是/system/priv-app/SecSetting/SecSettings.apk，将其通过apktool解析，然后从res目录中找到我们需要的种子(这里的话需要旧版本的上android系统上去寻找)，除此之外，由于qmg文件又和media是相关联的，因此在system/media下也有相应的qmg文件
+
+    
+    
+    $ apktool d SecSettings.apk
+    $ cd SecSettings/res
+    $ ls drawable*/*|grep qmg
+    
+    $ for file in /system/media/*.qmg; do xxd -g 1 -l 16 $file; done
+    
+
+原作者一开始尝试触发的方式是将accessibility_light_easy_off.qmg文件在hex
+editor中修改了其对应的width和height位，然后在2020-2月的Gallery版本中打开，发现可以触发崩溃，崩溃进程是com.sec.android.gallery3d，因此可以以此去写fuzz
+
+原作者文章中并没介绍fuzzer的具体细节，更多的是在讲整体测试的一个架构，这里的话就主要记录下SkCodecFuzzer的搭建和源码分析以及效果，穿插着原作者的一些介绍
+
+搭建的一些条件直接参考SkCodecFuzzer的文档，原作者之所以这样搭建是因为想在x86上获得更好的测试，因此使用了/system/lib64/*和/system/bin/linker64文件去生成
+aarch64上可执行的ELF文件，然后在qemu-aarch64中测试
+
+    
+    
+    $ ls
+    androidpath  capstone-4.0.1  depot_tools  libbacktrace  ndk  skia  tmp
+    $ ls androidpath/
+    bin  lib64
+    $ ls androidpath/bin/
+    linker64
+    
+
+这里的话根据需要将skia同步至分支android10-release，不然后续会出现如这条[issue](https://github.com/googleprojectzero/SkCodecFuzzer/issues/1)错误
+
+    
+    
+    $ git clone https://github.com/google/skia
+    $ git checkout remotes/origin/android/10-release
+    $  git branch
+    * (HEAD detached at origin/android/10-release)
+      master
+    
+
+同时为了防止编译时候会出现该issue问题，capstone编译需要多增加一项针对aarch64的架构的选项
+
+    
+    
+    $ CAPSTONE_ARCHS=aarch64 CAPSTONE_BUILD_CORE_ONLY=yes ./make.sh cross-android64
+    
+
+另外如遇到该[issue错误](https://github.com/googleprojectzero/SkCodecFuzzer/issues/3)，需要修改SkCodecFuzzer的Makefile，除了将路径修正外，需要在CXXFLAGS后面加上一个
+-I$(SKIA_PATH)，这是为了Skia库内部文件相互引用时能根据相对路径，其解决方法很耗时，后续如果将skia库同步为android版本则无需添加该路径也可解决该问题
+
+    
+    
+    CXXFLAGS=-D_LIBCPP_ABI_NAMESPACE=__1 -I$(SKIA_PATH)/include/core -I$(SKIA_PATH)/include/codec -I$(SKIA_PATH)/include/config -I$(SKIA_PATH)/include/config/android -I$(CAPSTONE_PATH)/include -I$(LIBBACKTRACE_PATH)/include -I$(SKIA_PATH)
+    
+
+除此之外如遇到下面问题，直接patch掉AArch64BaseInfo.c中掉A64NamedImmMapper_fromString就好，这里并没有使用到，然后重新编译capstone
+
+    
+    
+    /home/test/Desktop/fuzz/SkCodecFuzzer/deps/capstone-4.0.1/libcapstone.a(AArch64BaseInfo.o): In function `A64NamedImmMapper_fromString':
+    AArch64BaseInfo.c:(.text+0xc8): undefined reference to `__ctype_tolower_loc'
+    
+
+遇到下面这些符号问题(基本上在android10上发生），其实看函数就知道是和内存分配的相关的，因此可以去查看bionic的相关库，发现在
+system/apex/com.android.runtime.release/bionic/ 下有 libc.so, libdl.so, libm.so
+三个文件，再看 /system/lib64 下的同名文件，发现这三者是符号链接，于是需要把源文件一起放到环境所需的lib64文件夹中
+
+    
+    
+    /home/test/Desktop/fuzz/SkCodecFuzzer/deps/androidpath/lib64/libmemunreachable.so: undefined reference to `malloc_iterate@LIBC_Q'
+    /home/test/Desktop/fuzz/SkCodecFuzzer/deps/androidpath/lib64/libmemunreachable.so: undefined reference to `malloc_disable@LIBC_Q'
+    /home/test/Desktop/fuzz/SkCodecFuzzer/deps/androidpath/lib64/libmemunreachable.so: undefined reference to `malloc_backtrace@LIBC_Q'
+    /home/test/Desktop/fuzz/SkCodecFuzzer/deps/androidpath/lib64/libselinux.so: undefined reference to `__system_properties_init@LIBC_Q'
+    /home/test/Desktop/fuzz/SkCodecFuzzer/deps/androidpath/lib64/libmemunreachable.so: undefined reference to `malloc_enable@LIBC_Q'
+    /home/test/Desktop/fuzz/SkCodecFuzzer/deps/androidpath/lib64/libmedia.so: undefined reference to `android_mallopt@LIBC_Q'
+    
+
+编译
+
+    
+    
+    $ make
+    /home/test/Desktop/fuzz/SkCodecFuzzer/deps/ndk/android-ndk-r20b/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++ -c -o loader.o loader.cc -D_LIBCPP_ABI_NAMESPACE=__1 -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia/include/core -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia/include/codec -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia/include/config -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia/include/config/android -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/capstone-4.0.1/include -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/libbacktrace/include -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia
+    /home/test/Desktop/fuzz/SkCodecFuzzer/deps/ndk/android-ndk-r20b/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++ -c -o common.o common.cc -D_LIBCPP_ABI_NAMESPACE=__1 -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia/include/core -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia/include/codec -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia/include/config -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia/include/config/android -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/capstone-4.0.1/include -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/libbacktrace/include -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia
+    /home/test/Desktop/fuzz/SkCodecFuzzer/deps/ndk/android-ndk-r20b/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++ -c -o tokenizer.o tokenizer.cc -D_LIBCPP_ABI_NAMESPACE=__1 -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia/include/core -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia/include/codec -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia/include/config -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia/include/config/android -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/capstone-4.0.1/include -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/libbacktrace/include -I/home/test/Desktop/fuzz/SkCodecFuzzer/deps/skia
+    /home/test/Desktop/fuzz/SkCodecFuzzer/deps/ndk/android-ndk-r20b/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang -c -o libdislocator.o ../third_party/libdislocator/libdislocator.so.c
+    /home/test/Desktop/fuzz/SkCodecFuzzer/deps/ndk/android-ndk-r20b/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++ -o loader loader.o common.o tokenizer.o libdislocator.o -L/home/test/Desktop/fuzz/SkCodecFuzzer/deps/capstone-4.0.1 -lcapstone -L/home/test/Desktop/fuzz/SkCodecFuzzer/deps/androidpath/lib64 -lhwui -ldl -lbacktrace -landroidicu -Wl,-rpath -Wl,/home/test/Desktop/fuzz/SkCodecFuzzer/deps/androidpath/lib64 -Wl,--dynamic-linker=/home/test/Desktop/fuzz/SkCodecFuzzer/deps/androidpath/bin/linker64
+    $ ls
+    common.cc  common.o         loader     loader.o  run.sh        tokenizer.h
+    common.h   libdislocator.o  loader.cc  Makefile  tokenizer.cc  tokenizer.o
+    $ file loader
+    loader: ELF 64-bit LSB shared object, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /home/test/Desktop/fuzz/SkCodecFuzzer/deps/androidpath/bin/linker64, with debug_info, not stripped
+    
+
+这里分析下这个fuzz的框架，根据run.sh脚本可知核心在loader中，所以直接分析loader链接前的各个目标文件的源码即可
+
+  * loader.cc
+
+    
+    
+    int main(int argc, char **argv) {
+      ParseEnvironmentConfig();
+      ParseArguments(argc, argv);
+      if (!VerifyConfiguration(argv[0])) {
+        return 1;
+      }
+    
+      InitMallocHooks();
+    
+      SetSignalHandler(GeneralSignalHandler);
+    
+      ProcessImage();
+      DestroyMallocHooks();
+    
+    
+      _exit(0);
+    }
+    
+
+main函数，逻辑看起来并不复杂，大致可以推断出ParseEnvironmentConfig和ParseArguments用于解析配置和参数，InitMallocHooks用以初始化内存分配hook，SetSignalHandler则相对应原文中原作者介绍的一些特殊的信号处理方式，ProcessImage则是主要进行fuzz的函数，DestroyMallocHooks负责清理工作。这里的话我们主要分析下InitMallocHooks，SetSignalHandler，ProcessImage和DestroyMallocHooks
+
+先来看下InitMallocHooks和DestroyMallocHooks这两个函数，原作者初始化和销毁都很简洁，可以看到各个hook底层调用的是afl的hook组件libdislocator.so.c中的函数，除此之外主要起了将重置hook函数和输出栈回溯信息的作用，这些afl组件主要是可以在内存错误发生时提供更为精确的检测，他会将malloc和free在底层实现为mmap和mprotect，将每个返回的块精确地放置在映射的内存页面的末尾，具体细节建议直接阅读源码
+
+因此作者通过这个功能，可以在需要时在libdislocator和jemalloc之间切换，便于记录运行时进程中发生的分配和释放操作。
+
+    
+    
+    static void *my_malloc_hook(size_t, const void *);
+    static void *my_realloc_hook(void *, size_t, const void *);
+    static void my_free_hook(void *, const void *);
+    
+    static void InitMallocHooks() {
+      __malloc_hook = my_malloc_hook;
+      __realloc_hook = my_realloc_hook;
+      __free_hook = my_free_hook;
+    }
+    
+    static void DestroyMallocHooks() {
+      __malloc_hook = NULL;
+      __realloc_hook = NULL;
+      __free_hook = NULL;
+    }
+    
+    static void *my_malloc_hook(size_t size, const void *caller) {
+      size_t aligned_size = size;
+      if (config::android_host) {
+        aligned_size = ((size + 7LL) & (~7LL));
+    
+        if (aligned_size < size) {
+          aligned_size = size;
+        }
+      }
+    
+      void *ret = afl_malloc(aligned_size);
+    
+      if (config::log_malloc) {
+        DestroyMallocHooks();
+    
+        fprintf(stderr, "malloc(%10zu) = {%p .. %p}",
+                size, ret, (void *)((size_t)ret + aligned_size));
+        PrintMallocBacktrace(caller);
+    
+        InitMallocHooks();
+      }
+    
+      return ret;
+    }
+    
+    static void *my_realloc_hook(void *ptr, size_t size, const void *caller) {
+      size_t aligned_size = size;
+      if (config::android_host) {
+        aligned_size = ((size + 7LL) & (~7LL));
+    
+        if (aligned_size < size) {
+          aligned_size = size;
+        }
+      }
+    
+      void *ret = afl_realloc(ptr, aligned_size);
+    
+      if (config::log_malloc) {
+        DestroyMallocHooks();
+    
+        fprintf(stderr, "realloc(%p, %zu) = {%p .. %p}",
+                ptr, size, ret, (void *)((size_t)ret + aligned_size));
+        PrintMallocBacktrace(caller);
+    
+        InitMallocHooks();
+      }
+    
+      return ret;
+    }
+    
+    static void my_free_hook(void *ptr, const void *caller) {
+      afl_free(ptr);
+    
+      if (config::log_malloc) {
+        DestroyMallocHooks();
+    
+        fprintf(stderr, "free(0x%.10zx)                                 ",
+                (size_t)ptr);
+        PrintMallocBacktrace(caller);
+    
+        InitMallocHooks();
+      }
+    }
+    
+
+来看 SetSignalHandler(GeneralSignalHandler)，可以看到出SetSignalHandler主要是让捕获
+SIGABRT（异常中止)，SIGFPE(算术异常)，SIGSEGV(段越界），SIGILL（非法指令），SIGBUS（非法地址）这五个信号，信号处理交给GeneralSignalHandler
+
+    
+    
+    void SetSignalHandler(void (*handler)(int, siginfo_t *, void *)) {
+      struct sigaction action;
+      memset(&action, 0, sizeof(action));
+    
+      action.sa_flags = SA_SIGINFO | SA_NODEFER;
+      action.sa_sigaction = handler;
+      if (sigaction(SIGABRT, &action, NULL) == -1) {
+        perror("sigabrt: sigaction");
+        _exit(1);
+      }
+      if (sigaction(SIGFPE, &action, NULL) == -1) {
+        perror("sigfpe: sigaction");
+        _exit(1);
+      }
+      if (sigaction(SIGSEGV, &action, NULL) == -1) {
+        perror("sigsegv: sigaction");
+        _exit(1);
+      }
+      if (sigaction(SIGILL, &action, NULL) == -1) {
+        perror("sigill: sigaction");
+        _exit(1);
+      }
+      if (sigaction(SIGBUS, &action, NULL) == -1) {
+        perror("sigbus: sigaction");
+        _exit(1);
+      }
+    }
+    
+
+GeneralSignalHandler，起因是因为qemu自身的crash处理机制只会显示出qemu的内部指令而不会有栈帧信息，这里的设计有一些小细节，比如double
+fault handler可以防止处理函数自身的崩溃，用各个traceid，更丰富完善的栈展开，log和地址记录
+
+    
+    
+    static void GeneralSignalHandler(int signo, siginfo_t *info, void *extra) {
+      // Restore original allocator.
+      DestroyMallocHooks();
+    
+      // Set a double fault handler in case we crash in this function (e.g. during
+      // stack unwinding).
+      SetSignalHandler(DoubleFaultHandler);
+    
+      // For an unknown reason, the Android abort() libc function blocks all signals
+      // other than SIGABRT from being handled, which may prevent us from catching
+      // a nested exception e.g. while unwinding the backtrace. In order to prevent
+      // this, we unblock all signals here.
+      sigset_t sigset;
+      sigemptyset(&sigset);
+      sigprocmask(SIG_SETMASK, &sigset, NULL);
+    
+      // Whether the signal is supported determines if we are pretending to print
+      // out an ASAN-like report (to be treated like an ASAN crash), or if we just
+      // print an arbitrary report and continue with the exception to be caught by
+      // the fuzzer as-is.
+      const char *signal_string = SignalString(signo);
+      const bool asan_crash = (signal_string != NULL);
+      const ucontext_t *context = (const ucontext_t *)extra;
+      const void *orig_pc = (const void *)context->uc_mcontext.pc;
+    
+      // If requested by the user, open the output log file.
+      int output_log_fd = -1;
+      if (!config::log_path.empty() && asan_crash) {
+        output_log_fd = open(config::log_path.c_str(), O_CREAT | O_WRONLY, 0755);
+      }
+    
+      const bool valid_pc = IsCodeAddressValid(orig_pc);
+      if (asan_crash) {
+        Log(output_log_fd,
+            "ASAN:SIG%s\n"
+            "=================================================================\n"
+            "==%d==ERROR: AddressSanitizer: %s on unknown address 0x%zx "
+            "(pc 0x%zx sp 0x%zx bp 0x%zx T0)\n",
+            signal_string, getpid(), signal_string, (size_t)info->si_addr,
+            orig_pc, context->uc_mcontext.sp, context->uc_mcontext.sp);
+      } else {
+        Log(output_log_fd, "======================================== %s\n",
+            strsignal(signo));
+      }
+    
+      if (valid_pc) {
+        globals::in_stack_unwinding = true;
+    
+        if (setjmp(globals::jbuf) == 0) {
+          StackUnwindContext unwind_context;
+          unwind_context.debug_malloc_unwind = false;
+          unwind_context.current_trace_id = 0;
+          unwind_context.first_trace_id = 3;
+          unwind_context.output_log_fd = output_log_fd;
+          unwind_context.backtrace_map = BacktraceMap::Create(getpid());
+    
+          if (!unwind_context.backtrace_map->Build()) {
+            delete unwind_context.backtrace_map;
+            unwind_context.backtrace_map = NULL;
+          }
+    
+          UnwindBacktrace(&unwind_context);
+        } else {
+          Log(output_log_fd,
+              "    !! <Exception caught while unwinding, stack probably corrupted?>"
+              "\n");
+        }
+    
+        globals::in_stack_unwinding = false;
+      } else {
+        SymbolizeAndLogAddress(output_log_fd, /*backtrace_map=*/NULL, /*index=*/0,
+                               orig_pc);
+      }
+    
+      if (valid_pc) {
+        // In case we are executing on a system with XOM (Execute Only Memory),
+        // the code sections might not be readable for the disassembler. Let's make
+        // sure the opcodes are indeed readable before proceeding.
+        const size_t disasm_len = 10 * 4;
+        const size_t uint_pc = (size_t)orig_pc;
+        const size_t pc_page_aligned = uint_pc & (~0xfffLL);
+        const size_t mprotect_length = (uint_pc + disasm_len) - pc_page_aligned;
+        mprotect((void *)pc_page_aligned, mprotect_length, PROT_READ | PROT_EXEC);
+    
+        csh handle;
+        cs_insn *insn;
+        if (cs_open(CS_ARCH_ARM64, CS_MODE_ARM, &handle) == CS_ERR_OK) {
+          size_t count = cs_disasm(handle, (const uint8_t *)orig_pc, disasm_len,
+                                   (uint64_t)orig_pc, /*count=*/0, &insn);
+    
+          if (count > 0) {
+            Log(output_log_fd, "\n==%d==DISASSEMBLY\n", getpid());
+    
+            for (size_t j = 0; j < count; j++) {
+              Log(output_log_fd, "    0x%zx:\t%s\t\t%s\n",
+                  insn[j].address, insn[j].mnemonic, insn[j].op_str);
+            }
+    
+            cs_free(insn, count);
+          }
+    
+          cs_close(&handle);
+        }
+      }
+    
+      Log(output_log_fd, "\n==%d==CONTEXT\n", getpid());
+      Log(output_log_fd,
+              "   x0=%.16llx  x1=%.16llx  x2=%.16llx  x3=%.16llx\n"
+              "   x4=%.16llx  x5=%.16llx  x6=%.16llx  x7=%.16llx\n"
+              "   x8=%.16llx  x9=%.16llx x10=%.16llx x11=%.16llx\n"
+              "  x12=%.16llx x13=%.16llx x14=%.16llx x15=%.16llx\n"
+              "  x16=%.16llx x17=%.16llx x18=%.16llx x19=%.16llx\n"
+              "  x20=%.16llx x21=%.16llx x22=%.16llx x23=%.16llx\n"
+              "  x24=%.16llx x25=%.16llx x26=%.16llx x27=%.16llx\n"
+              "  x28=%.16llx  FP=%.16llx  LR=%.16llx  SP=%.16llx\n",
+              context->uc_mcontext.regs[0], context->uc_mcontext.regs[1],
+              context->uc_mcontext.regs[2], context->uc_mcontext.regs[3],
+              context->uc_mcontext.regs[4], context->uc_mcontext.regs[5],
+              context->uc_mcontext.regs[6], context->uc_mcontext.regs[7],
+              context->uc_mcontext.regs[8], context->uc_mcontext.regs[9],
+              context->uc_mcontext.regs[10], context->uc_mcontext.regs[11],
+              context->uc_mcontext.regs[12], context->uc_mcontext.regs[13],
+              context->uc_mcontext.regs[14], context->uc_mcontext.regs[15],
+              context->uc_mcontext.regs[16], context->uc_mcontext.regs[17],
+              context->uc_mcontext.regs[18], context->uc_mcontext.regs[19],
+              context->uc_mcontext.regs[20], context->uc_mcontext.regs[21],
+              context->uc_mcontext.regs[22], context->uc_mcontext.regs[23],
+              context->uc_mcontext.regs[24], context->uc_mcontext.regs[25],
+              context->uc_mcontext.regs[26], context->uc_mcontext.regs[27],
+              context->uc_mcontext.regs[28], context->uc_mcontext.regs[29],
+              context->uc_mcontext.regs[30], context->uc_mcontext.sp);
+    
+      Log(output_log_fd, "\n==%d==ABORTING\n", getpid());
+    
+      if (output_log_fd != -1) {
+        close(output_log_fd);
+      }
+    
+      // Exit with the special exitcode to inform the fuzzer that a crash has
+      // occurred.
+      if (asan_crash) {
+        _exit(config::exitcode);
+      }
+    
+      signal(signo, NULL);
+    }
+    
+
+由于原作者一开始的出发点是想将编写一个类似命令行的工具的，因此可想而知ProcessImage函数处理逻辑也很简单，只需具备基本的解析功能即可，对比[frameworks/base/libs/hwui/jni/BitmapFactory.cpp:doDecode函数](https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/jni/BitmapFactory.cpp?q=doDecode)，发现ProcessImage的函数核心逻辑差不多都是就是精简的doDecode
+
+  1. 首先通过SkFILEStream::Make获得解析流
+  2. 通过SkCodec::MakeFromStream从stream中提取出SkCodec对象指针
+  3. 再通过SkAndroidCodec::MakeFromCodec从SkCodec对象指针中提取出SkAndroidCodec对象指针，该指针是具体测试的对象
+  4. 通过SkAndroidCodec::getInfo获取图像的基本信息，用于后续数据伪造，伪造图像信息的主函数便是SkImageInfo::Make
+  5. 最后测试的函数则是SkAndroidCodec::getAndroidPixels
+  6. 如果结果正确则将图像的基本信息写入输出文件
+
+    
+    
+    void ProcessImage() {
+      const char *input_file = config::input_file.c_str();
+      std::unique_ptr<SkFILEStream> stream = SkFILEStream::Make(input_file);
+      if (!stream) {
+        printf("[-] Unable to open a stream from file %s\n", input_file);
+        return;
+      }
+    
+      SkCodec::Result result;
+      std::unique_ptr<SkCodec> c = SkCodec::MakeFromStream(std::move(stream),
+                                                           &result);
+    
+      if (!c) {
+        printf("[-] Failed to create image decoder with message '%s'\n",
+               SkCodec::ResultToString(result));
+        return;
+      }
+    
+      std::unique_ptr<SkAndroidCodec> codec;
+      codec = SkAndroidCodec::MakeFromCodec(std::move(c));
+      if (!codec) {
+        printf("[-] SkAndroidCodec::MakeFromCodec returned null\n");
+        return;
+      }
+    
+      SkImageInfo info = codec->getInfo();
+      const int width = info.width();
+      const int height = info.height();
+      printf("[+] Detected image characteristics:\n"
+             "[+] Dimensions:      %d x %d\n"
+             "[+] Color type:      %d\n"
+             "[+] Alpha type:      %d\n"
+             "[+] Bytes per pixel: %d\n",
+             width, height, info.colorType(), info.alphaType(),
+             info.bytesPerPixel());
+    
+      SkColorType decodeColorType = kN32_SkColorType;
+      SkBitmap::HeapAllocator defaultAllocator;
+      SkBitmap::Allocator* decodeAllocator = &defaultAllocator;
+      SkAlphaType alphaType =
+          codec->computeOutputAlphaType(/*requireUnpremultiplied=*/false);
+      const SkImageInfo decodeInfo =
+          SkImageInfo::Make(width, height, decodeColorType, alphaType);
+    
+      SkImageInfo bitmapInfo = decodeInfo;
+      SkBitmap decodingBitmap;
+      if (!decodingBitmap.setInfo(bitmapInfo) ||
+          !decodingBitmap.tryAllocPixels(decodeAllocator)) {
+        printf("[-] decodingBitmap.setInfo() or decodingBitmap.tryAllocPixels() "
+               "failed\n");
+        return;
+      }
+    
+      result = codec->getAndroidPixels(
+          decodeInfo, decodingBitmap.getPixels(), decodingBitmap.rowBytes());
+    
+      if (result == SkCodec::kSuccess) {
+        printf("[+] codec->GetAndroidPixels() completed successfully\n");
+    
+        if (!config::output_file.empty()) {
+          FILE *f = fopen(config::output_file.c_str(), "w+b");
+          if (f != NULL) {
+            const size_t bytes_to_write = height * decodingBitmap.rowBytes();
+    
+            if (fwrite(decodingBitmap.getPixels(), 1, bytes_to_write, f) !=
+                bytes_to_write) {
+              printf("[-] Unable to write %zu bytes to the output file\n",
+                     bytes_to_write);
+            } else {
+              printf("[+] Successfully wrote %zu bytes to %s\n",
+                     bytes_to_write, config::output_file.c_str());
+            }
+    
+            fclose(f);
+          } else {
+            printf("[-] Unable to open output file %s\n",
+                   config::output_file.c_str());
+          }
+        }
+      } else {
+        printf("[-] codec->GetAndroidPixels() failed with message '%s'\n",
+               SkCodec::ResultToString(result));
+      }
+    }
+    
+
+## 在qemu中使用fork server模式，计算代码覆盖率，初始种子源
+
+这里的原作者为了提高fuzz的效率是用来了forkserver模式，同时patch了afl-qemu模式的elfload文件，在相关函数入口点增加了记录的操作等
+
+在计算代码覆盖率的话则是追踪了PC的覆盖率，可以转换为basicblock的覆盖率
+
+初始种子源则是通过samsung各版本手机上的apk内寻找
+
+## 编写有效的fuzzer
+
+原作者的话最终选择是谷歌的测试架构，猜测是OSS的组件
+
+## 编写exp的过程
+
+原作花了三篇文章去讲述其编写rce exp的过程，主要过程是尝试控制pc指针，构造内存破坏原语，使用MMS触发，绕过ASLR，RCE
+
+接下去的一些分析会需要一些基础，这里的话不再一一累述，有兴趣的同学可以去我的博客上逛下，之后会放一些整理归纳的文章
+
+基础点：
+
+Android堆（ps：在Android11之后就改为Scudo了）  
+ASLR  
+CFI  
+一些漏洞利用技巧
+
+###  选择品相好的bug
+
+这里给出四个有品相较好的bug
+
+  1. 与位图对象(Bitmap)关联的像素存储缓冲区
+  2. 临时的输出缓存存储区
+  3. 临时的RLE解析缓冲区
+  4. 临时的zlib解析缓冲区
+
+原作选择了第一个，理由有两点
+
+  1. 它是第一个malloc溢出部分（后面跟着的是RLE等对象），所以它可以做到最大范围破坏随后分配的对象
+  2. 它的size是受控的
+
+这里举一个例子，针对1120字节大小缓冲区溢出（40 x 7 x
+4)，破坏后面三个缓冲区。第一个（104字节）是位图结构，第二个（24字节）是RLE压缩的输入流，第三个（4120字节）是RLE解码器上下文结构。
+这里看来从Bitmap的溢出漏洞出发去写exp是很比较好的思路
+
+    
+    
+    [...]
+    [+] Detected image characteristics:
+    [+] Dimensions:      40 x 7
+    [+] Color type:      4
+    [+] Alpha type:      3
+    [+] Bytes per pixel: 4
+    malloc(      1120) = {0x408c13bba0 .. 0x408c13c000}
+    malloc(       104) = {0x408c13df98 .. 0x408c13e000}
+    malloc(        24) = {0x408c13ffe8 .. 0x408c140000}
+    malloc(      4120) = {0x408c141fe8 .. 0x408c143000}
+    ASAN:SIGSEGV
+    =================================================================
+    ==3746114==ERROR: AddressSanitizer: SEGV on unknown address 0x408c13c000 (pc 0x40071feb74 sp 0x4000d0b1f0 bp 0x4000d0b1f0 T0)
+        #0 0x00249b74 in libhwui.so (QuramQmageGrayIndexRleDecode+0xd8)
+        #1 0x002309d8 in libhwui.so (PVcodecDecoderIndex+0x110)
+        #2 0x00230854 in libhwui.so (__QM_WCodec_decode+0xe4)
+        #3 0x00230544 in libhwui.so (Qmage_WDecodeFrame_Low+0x198)
+        #4 0x0022c604 in libhwui.so (QuramQmageDecodeFrame+0x78)
+    [...]
+    
+
+确定使用Bitmap对象后，就需要查看与其相关的内存分配操作，其实说白了就是监控那些内存操作查看其是否会触发到Bitmap域内的函数，这里使用Frida脚本去hook堆相关的函数，并用堆栈跟踪记录所有这些调用
+
+    
+    
+    [10036] calloc(1120, 1) => 0x7bc1e95900
+        0x7cbba83684 libhwui.so!android::Bitmap::allocateHeapBitmap+0x34
+        0x7cbba88b54 libhwui.so!android::Bitmap::allocateHeapBitmap+0x9c
+        0x7cbd827178 libandroid_runtime.so!HeapAllocator::allocPixelRef+0x28
+        0x7cbbd1ae80 libhwui.so!SkBitmap::tryAllocPixels+0x50
+        0x7cbd820ae8 libandroid_runtime.so!0x187ae8
+        0x7cbd81fc8c libandroid_runtime.so!0x186c8c
+        0x70a04ff0 boot-framework.oat!0x2bbff0
+    [10036] malloc(160) => 0x7b8cd569e0
+        0x7cbddd35c4 libc++.so!operator new+0x24
+        0x7cbe67e608
+    [10036] malloc(24) => 0x7b8ca92580
+        0x7cbb87baf4 libhwui.so!QuramQmageGrayIndexRleDecode+0x58
+        0x7cbe67e608
+    [10036] calloc(1, 4120) => 0x7bc202c000
+        0x7cbb89fb14 libhwui.so!init_process_run_dec+0x20
+        0x7cbb87bb34 libhwui.so!QuramQmageGrayIndexRleDecode+0x98
+        0x7cbb8629d4 libhwui.so!PVcodecDecoderIndex+0x10c
+        0x7cbb862850 libhwui.so!__QM_WCodec_decode+0xe0
+        0x7cbb862540 libhwui.so!Qmage_WDecodeFrame_Low+0x194
+        0x7cbb85e600 libhwui.so!QuramQmageDecodeFrame+0x74
+    
+
+可以看到这里的calloc函数就可溯源到android::Bitmap::allocateHeapBitmap函数，然后通过对比[开源代码](https://cs.android.com/android/platform/superproject/+/master:frameworks/base/libs/hwui/hwui/Bitmap.cpp;drc=master;l=116)中的调用这个函数时各个变量含义和IDA中这个函数的反汇编代码基本上可以理清这个函数底层的具体操作
+
+    
+    
+    sk_sp<Bitmap> Bitmap::allocateHeapBitmap(size_t size, const SkImageInfo& info, size_t rowBytes) {
+        void* addr = calloc(size, 1);
+        if (!addr) {
+            return nullptr;
+        }
+        return sk_sp<Bitmap>(new Bitmap(addr, size, info, rowBytes));
+    }
+    
+    __int64 __usercall android::Bitmap::allocateHeapBitmap@<X0>(android::Bitmap *this@<X0>, const SkImageInfo *a2@<X2>, __int64 a3@<X1>, __int64 *a4@<X8>)
+    {
+      __int64 v4; // x21
+      const SkImageInfo *SkImageInfoUnit; // x23
+      android::Bitmap *v6; // x20
+      __int64 *v7; // x19
+      __int64 result; // x0
+      __int64 addr; // x22
+      __int64 bitmap; // x0
+      __int64 v11; // x8
+      __int64 bitmap_1; // x24
+    
+      v4 = a3;
+      SkImageInfoUnit = a2;
+      v6 = this;
+      v7 = a4;
+      result = calloc();
+      if ( result )
+      {
+        addr = result;
+        bitmap = operator new(0xA0uLL);
+        v11 = *(_QWORD *)(v4 + 8);
+        *(_DWORD *)(bitmap + 8) = 1;
+        *(_QWORD *)(bitmap + 0x18) = addr;
+        *(_QWORD *)(bitmap + 0x20) = SkImageInfoUnit;
+        *(_DWORD *)(bitmap + 0x30) = 1;
+        *(_BYTE *)(bitmap + 0x34) = 0;
+        *(_QWORD *)(bitmap + 0x40) = 0LL;
+        *(_QWORD *)(bitmap + 0x48) = 0LL;
+        *(_QWORD *)(bitmap + 0x38) = 0LL;
+        *(_BYTE *)(bitmap + 0x50) = 0;
+        bitmap_1 = bitmap;
+        *(_QWORD *)bitmap = 0x10LL;
+        *(_QWORD *)(bitmap + 0xC) = v11;
+        __stlr(0, (unsigned int *)(bitmap + 0x28));
+        *(_BYTE *)(bitmap + 0x51) = 0;
+        *(_QWORD *)bitmap = 0x10LL;
+        result = sub_446390(v4);
+        *(_BYTE *)(bitmap_1 + 0x7C) = 0;
+        *(_QWORD *)(bitmap_1 + 0x98) = 0LL;
+        *(_QWORD *)(bitmap_1 + 0x80) = addr;
+        *(_QWORD *)(bitmap_1 + 0x88) = v6;
+        *(_DWORD *)(bitmap_1 + 0x78) = -1;
+        *(_QWORD *)(bitmap_1 + 0x70) = 1LL;
+        *v7 = bitmap_1;
+      }
+      else
+      {
+        *v7 = 0LL;
+      }
+      return result;
+    }
+    
+
+这里的话为了来验证这两个位图相关的分配操作所分配的堆块是否可以是紧邻的，将Qmage文件大小更改为10×4，这样像素缓冲区就变成160(或者129到160之间的任何长度，这是相关的jemalloc
+bin大小)，这样的话malloc分配的堆块和calloc分配的堆块有更大的可能性分配到一类中
+
+    
+    
+    [15699] calloc(160, 1) => 0x7b88feb8c0
+        0x7cbba83684 libhwui.so!android::Bitmap::allocateHeapBitmap+0x34
+        0x7cbba88b54 libhwui.so!android::Bitmap::allocateHeapBitmap+0x9c
+        0x7cbd827178 libandroid_runtime.so!HeapAllocator::allocPixelRef+0x28
+        0x7cbbd1ae80 libhwui.so!SkBitmap::tryAllocPixels+0x50
+        0x7cbd820ae8 libandroid_runtime.so!0x187ae8
+        0x7cbd81fc8c libandroid_runtime.so!0x186c8c
+        0x70a04ff0 boot-framework.oat!0x2bbff0
+    [15699] malloc(160) => 0x7b88feb960
+        0x7cbddd35c4 libc++.so!operator new+0x24
+        0x7cbe582608
+    
+
+这里的话发现堆块确实是紧邻的，0x7b88feb960和0x7b88feb8c0相差0x160大小，经实验这两个堆块可以稳定分配利用
+
+这里的话可以看下android::Bitmap结构的布局，根据C++
+继承，虚表等点可以得到，然后根据一般利用C++结构体的写exp的思路，会关注各类函数指针或者只想缓冲区的指针等，用以后续覆盖伪造
+
+    
+    
+    struct android::Bitmap {
+    
+      /* +0x00 */ void *vtable;
+    
+      //
+      // class SK_API SkRefCntBase
+      //
+    
+      /* +0x08 */ mutable std::atomic<int32_t> fRefCnt;
+    
+      //
+      // class SK_API SkPixelRef : public SkRefCnt
+      //
+    
+      /* +0x0C */ int     fWidth;
+      /* +0x10 */ int     fHeight;
+      /* +0x18 */ void*   fPixels;
+      /* +0x20 */ size_t  fRowBytes;
+    
+      /* +0x28 */ mutable std::atomic<uint32_t> fTaggedGenID;
+    
+      struct /* SkIDChangeListener::List */ {
+      /* +0x30 */ std::atomic<int> fCount;
+      /* +0x34 */ SkOnce           fOSSemaphoreOnce;
+      /* +0x38 */ OSSemaphore*     fOSSemaphore;
+      } fGenIDChangeListeners;
+    
+      struct /* SkTDArray<SkIDChangeListener*> */ {
+      /* +0x40 */ SkIDChangeListener* fArray;
+      /* +0x48 */ int                 fReserve;
+      /* +0x4C */ int                 fCount;
+      } fListeners;
+    
+      /* +0x50 */ std::atomic<bool> fAddedToCache;
+    
+      /* +0x51 */ enum Mutability {
+      /* +0x51 */   kMutable,
+      /* +0x51 */   kTemporarilyImmutable,
+      /* +0x51 */   kImmutable,
+      /* +0x51 */ } fMutability : 8;
+    
+      //
+      // class ANDROID_API Bitmap : public SkPixelRef
+      //
+    
+      struct /* SkImageInfo */ {
+      /* +0x58 */ sk_sp<SkColorSpace> fColorSpace;
+      /* +0x60 */ int fWidth;
+      /* +0x64 */ int fHeight;
+      /* +0x68 */ SkColorType fColorType;
+      /* +0x6C */ SkAlphaType fAlphaType;
+      } mInfo;
+    
+      /* +0x70 */ const PixelStorageType mPixelStorageType;
+      /* +0x74 */ BitmapPalette mPalette;
+      /* +0x78 */ uint32_t mPaletteGenerationId;
+      /* +0x7C */ bool mHasHardwareMipMap;
+    
+      union {
+        struct {
+      /* +0x80 */ void* address;
+      /* +0x88 */ void* context;
+      /* +0x90 */ FreeFunc freeFunc;
+        } external;
+    
+        struct {
+      /* +0x80 */ void* address;
+      /* +0x88 */ int fd;
+      /* +0x90 */ size_t size;
+        } ashmem;
+    
+        struct {
+      /* +0x80 */ void* address;
+      /* +0x88 */ size_t size;
+        } heap;
+    
+        struct {
+      /* +0x80 */ GraphicBuffer* buffer;
+        } hardware;
+      } mPixelStorage;
+    
+      /* +0x98 */ sk_sp<SkImage> mImage;
+    };
+    
+
+构造代码执行原语
+
+这里的原作寻找的方式是通过填充Bitmap中各个结构体的方法去寻找的，然后查看这些因函数指针或者其他元素触发崩溃的栈回溯，根据是否是因为访问了非法地址（及填充的畸形数据）而导致的崩溃可以去找寻到能够控制
+pc 指针的漏洞，这里的话作者最终定位到了 Bitmap::~Bitmap destructor中
+mPixelStorage,external的freeFunc函数
+
+    
+    
+    case PixelStorageType::External:
+      mPixelStorage.external.freeFunc(mPixelStorage.external.address, mPixelStorage.external.context);
+      break;
+    
+
+因此，此poc也十分好写，参考上面Bitmap结构，可以将将Bitmap.external作如下设置
+
+    
+    
+    vtable 还是原来的值
+    fRefCnt = 1
+    mPixelStorageType = 0 （这个是switch判断选择exteral的case处理选项）
+    mPixelStorage.external.address = 0xaaaaaaaaaaaaaaaa
+    mPixelStorage.external.context = 0xbbbbbbbbbbbbbbbb
+    mPixelStorage.external.freeFunc = 0xcccccccccccccccc
+    
+
+构造ASLR oracle原语
+
+这里的原语是希望能够找寻到一个可泄露地址的工具，那做法和上面类似，也是通过崩溃进程和内存布局联系起来，Bitmap对象还包含其他一些可以尝试定位的指针，可以用0x41覆盖整个区域，然后查看进程如何崩溃，以确定访问哪些指针，在何处以及如何访问。
+
+这里最终定位到了一个循环语句中（在此之前都是些对位图基本属性的复制，合理性检查）
+
+    
+    
+    for (int y = 0; y < dstInfo.height(); y++) {
+      SkOpts::RGBA_to_BGRA((uint32_t*)dstPixels, (const uint32_t*)srcPixels, dstInfo.width());
+      dstPixels = SkTAddOffset<void>(dstPixels, dstRB);
+      srcPixels = SkTAddOffset<const void>(srcPixels, srcRB);
+    }
+    
+
+那就是从BGRA到RGBA转换的地方。 在这段代码段中，大多数变量的值都来自被我们伪造的android::Bitmap对象：
+
+    
+    
+    dstInfo.height() == mInfo.height
+    dstInfo.width() == mInfo.width
+    srcPixels == fPixels
+    srcRB == fRowBytes
+    
+
+也就是是说我们通过这个转换我们可以达到更大的灵活性，因为之前读取的数据大部分是像素信息和代码流程关系不大，但是这里的话可以尝试去访问更多的地址
+
+![](https://p0.ssl.qhimg.com/t01b73593195e915882.png)
+
+  * fPixels（偏移量0x18）-> 所探测的地址范围的开始
+  * mInfo.fHeight（偏移量0x64）-> 要探测的页面数
+
+这将导致Skia在mInfo.fHeight迭代中从fPixels地址开始以0x1000字节间隔大小读取四个字节。这等效于探索任意连续内存区域的是否可读，如果所有页面均已映射带有可读属性，则循环顺利结束，并且测试进程将保持存活状态；否则，它将在遇到访问测试范围内的第一个不可读页面时就会发生崩溃。也就是说，这个循环可以作为内存的探针
+
+至此算是完成了编写exp的前期准备，这里的思路大致可以归纳为
+
+  1. 品相好的内存破坏漏洞
+  2. 测试结构体内的函数指针
+  3. 测试代码可触发到的路径
+  4. 从影响到的代码块中找寻可以对内存访问或者泄露地址的原语
+
+由于后续的exp编写复现需要相应的设备，只能等以后补齐设备后在写下文了
+
+参考阅读：
+
+  * [MMS Exploit Part 1: Introduction to the Samsung Qmage Codec and Remote Attack Surface](https://googleprojectzero.blogspot.com/2020/07/mms-exploit-part-1-introduction-to-qmage.html)
+  * [MMS Exploit Part 2: Effective Fuzzing of the Qmage Codec](https://googleprojectzero.blogspot.com/2020/07/mms-exploit-part-2-effective-fuzzing-qmage.html)
+  * [MMS Exploit Part 3: Constructing the Memory Corruption Primitives](https://googleprojectzero.blogspot.com/2020/07/mms-exploit-part-3-constructing-primitives.html)
+  * [MMS Exploit Part 4: MMS Primer, Completing the ASLR Oracle](https://googleprojectzero.blogspot.com/2020/08/mms-exploit-part-4-completing-aslr-oracle.html)
+  * [MMS Exploit Part 5: Defeating Android ASLR, Getting RCE](https://googleprojectzero.blogspot.com/2020/08/mms-exploit-part-5-defeating-aslr-getting-rce.html)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Dawuge** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/218615](/post/id/218615)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [mms exploit](/tag/mms exploit)
+  * [samsung](/tag/samsung)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p2.ssl.qhimg.com/t01845a44b584369f66.png) Dawuge
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

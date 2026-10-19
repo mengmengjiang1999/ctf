@@ -1,0 +1,84 @@
+## **背景**
+
+CVE-2021-40444为微软MHTML远程命令执行漏洞，攻击者可通过传播Microsoft
+Office文档，诱导目标点击文档从而在目标机器上执行任意代码。该漏洞最初的利用思路是使用下载cab并释放、加载inf文件的形式执行恶意代码。独立安全研究员Eduardo
+B.在github公开了一种新的“无CAB”的漏洞利用方法及其POC。公众号之前发布的研判文章中已对在野利用中出现的新的Cabless利用链以及RAR文件隐藏载荷的巧妙方法进行了分析。本篇将进一步探究该利用链的技术本质，并在复现攻击场景的前提下尝试对利用链进行改进。
+
+## 基于URL Scheme的Cabless利用链
+
+与基于cab的攻击方式一样，新攻击链依然需要在Office文档中插入恶意htmlfile
+OLE对象，当目标用户点击文档后会请求访问远程html页面，而html页面中通过ActiveX控件调用".wsf:../" URL
+Scheme链接，最终调用wcript.exe执行RAR中嵌入的wsf脚本。
+
+'.wsf:../../../Downloads/?.wsf'
+
+URL Scheme也叫URL
+protocol，它的作用是通过链接启动对应的本地程序，格式为[scheme]://[host]/[path]?[query]。文件后缀名可同样用作scheme，调用相关文件类型绑定的程序。’?[query]’的存在则可利用URL
+Scheme与程序在处理路径时不同的行为，达到忽略真实后缀名，绕过扩展名校验的目的。在之前的攻击链中曾使用”.cpl”链接调用系统rundll32.exe程序将inf文件作为cpl文件加载执行。
+
+![1644915530_620b6b4a17564ba72d669.png!small?1644915530235](https://image.3001.net/images/20220215/1644915530_620b6b4a17564ba72d669.png!small?1644915530235)
+
+目前公开的配合RAR的Cabless利用链的POC有两个利用条件，一是猜测到WINRAR的存储位置，默认其位于用户目录的Downloads文件夹下，否则无法获取wsf脚本位置；二是明确wscript.exe运行的当前路径（例如Documents目录），否则无法构造正确的路径。下面将从不同的利用场景考虑，思考更灵活的URL
+Scheme构造方式。
+
+## 基于不同利用场景的利用链改进
+
+配合RAR的Cabless利用链在实际执行时有两种可能，用户直接在WinRAR中打开DOCX文件，以及先解压再打开，对这两条攻击路径进行分别的探究。
+
+ **直接在WINRAR中打开DOCX文件**
+
+当用户直接在WINRAR中打开压缩包中的DOCX文件时的进程树如下：
+
+![1644915554_620b6b62981222b4d54db.png!small?1644915554731](https://image.3001.net/images/20220215/1644915554_620b6b62981222b4d54db.png!small?1644915554731)
+
+WinRAR的当前路径为RAR文件所在文件夹。
+
+![1644915572_620b6b74668e6bf980db4.png!small?1644915572574](https://image.3001.net/images/20220215/1644915572_620b6b74668e6bf980db4.png!small?1644915572574)
+
+Word的当前路径为C:\Users\user\Documents，RAR中的DOCX文件被释放到%TEMP%临时文件夹中。
+
+![1644915589_620b6b8584d336f725657.png!small?1644915589613](https://image.3001.net/images/20220215/1644915589_620b6b8584d336f725657.png!small?1644915589613)
+
+wscript.exe被触发执行后的当前路径为WinRAR的路径（也就是压缩包所在的文件夹）。
+
+![1644915600_620b6b90cc72146782258.png!small?1644915600926](https://image.3001.net/images/20220215/1644915600_620b6b90cc72146782258.png!small?1644915600926)
+
+".wsf:"被用于Url
+Scheme唤起wscript.exe，而在被唤起后又被当作普通目录名去解析。’.wsf:’后的两个’.’可替换为其他内容，不影响执行，但是如果去掉这两个字符会在参数传递给wscript.exe时吞掉一个“../”导致找不到文件。这是因为wscript.exe解析路径的时候会将“.wsf:aa”整体当作一个host看待，后面拼接“../”就抵消了这层目录关系，相当于当前目录。
+
+基于以上测试可知，当DOCX文件在WinRAR中直接执行时虽然DOCX文件释放于临时目录，但wscript.exe的当前目录即是RAR文件所在的目录。由此我们可以构造此情况下100%可用的URL
+Scheme（直接从当前路径读取RAR文件）：
+
+'.wsf:aa/../exp.rar1?.wsf'
+
+ **先解压DOCX文件再打开**
+
+这种情况其实更复杂，也是公开的POC针对的场景，对应进程树：
+
+![1644915625_620b6ba93505288060de6.png!small?1644915625321](https://image.3001.net/images/20220215/1644915625_620b6ba93505288060de6.png!small?1644915625321)
+
+直接点击解压后的DOCX文件打开时，Word的当前路径为DOCX文件所在路径，wscript.exe的路径也将保持一致。
+
+![1644915638_620b6bb66d421ab6d6abe.png!small?1644915638633](https://image.3001.net/images/20220215/1644915638_620b6bb66d421ab6d6abe.png!small?1644915638633)
+
+值得注意的是，在一些情况下Word会将当前路径设置为C:\Users\Document，这可能是公开POC中构造路径的依据。但无论当前路径是什么，攻击者都必须成功获取(猜测)到RAR所在的文件夹。
+
+## 漏洞修复
+
+微软在9月的补丁中已将MHTML中使用URL Scheme的问题修复，在ieframe.dll中加入了一个新的校验函数IsValidSchemeName：
+
+![1644915657_620b6bc951d7ecf345e6d.png!small?1644915657533](https://image.3001.net/images/20220215/1644915657_620b6bc951d7ecf345e6d.png!small?1644915657533)
+
+该函数将对URL Scheme进行校验，诸如”.cpl”、“.wsf”这种以文件扩展名启动应用程序的方式由于以字符“.”开头无法通过该校验函数的判断。
+
+## 总结
+
+本文主要分析了CVE-2021-40444的Cabless利用链中存在的路径问题以及对之前技术研判内容进行补充。通过分析CVE-2021-40444新利用链，可以看到该漏洞的根本原因是Office文档可以通过MHTML协议请求访问远程HTML页面从而执行JavaScript代码，并最终通过Url
+Scheme启动本地应用程序执行投递的恶意代码，而中间投递恶意代码的方式是可以替换的。同时也给了作为初学者的笔者很多启发，在分析漏洞时需加入对根本问题的思考：在攻击链中哪些部分是必不可少的，哪些是可以替换的。必不可少的部分作为漏洞根本问题要更深入地分析，而可以替换的部分要尝试去挖掘可替换的新利用链。而对于防守方，把握漏洞本质与漏洞利用必经之路，方能以不变应万变彻底控制各种漏洞利用变体。
+
+## 参考
+
+https://mp.weixin.qq.com/s/-wqPh9OJnLuZWcY9MifuhQ
+
+https://github.com/Edubr2020/CVE-2021-40444--CABless
+

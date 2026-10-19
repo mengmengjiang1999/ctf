@@ -1,0 +1,162 @@
+这是wfuzz系列教程的最后一篇啦！  
+
+  * wfuzz 库
+    * wfuzz库参数
+    * 测试一个URL
+    * FuzzSession对象
+    * 生成Payload
+    * 生成Session
+
+## wfuzz 库
+
+* * *
+
+### wfuzz库参数
+
+在wfuzz库中包含所有 wfuzz命令行的参数。
+
+CLI Option| Library Option  
+---|---  
+<URL>| url=”url”  
+—recipe <filename>| recipe=”filename”  
+-oF <filename>| save=”filename”  
+-f filename,printer| printer=(“filename”,”printer”)  
+—dry-run| dryrun=True  
+-p addr| proxies=[(“ip”,”port”,”type”)]  
+-t N| concurrent=N  
+-s N| delay=0.0  
+-R depth| rlevel=depth  
+—follow| follow=True  
+-Z| scanmod=True  
+—req-delay N| req_delay=N  
+—conn-delay N| conn_delay=N  
+—script=<plugins>| script=”plugins”  
+—script-args n1=v1,…| script_args={n1:v1,}  
+-m iterator| iterator=”iterator”  
+-z payload| payloads=[(“name”,{default=””,encoder=[“md5”]},slice=””),]  
+-V alltype| allvars=”alltype”  
+-X method| method=”method”  
+—hc/hl/hw/hh N[,N]+| hc/hl/hw/hh=[N,N]  
+—sc/sl/sw/sh N[,N]+| sc/sl/sw/sh=[N,N]  
+—ss/hs regex| ss/hs=”regex”  
+—filter <filter>| filter=”filter exp”  
+—prefilter <filter>| prefilter=”filter exp”  
+-b cookie| cookie=[“cookie1=value1”,]  
+-d postdata| postdata=”postdata”  
+-H header| headers=[(“header1”,”value1”),]  
+—basic/ntlm/digest auth| auth=(“basic”,”user:pass”)  
+  
+这些参数可以在这些主库的接口中直接使用：`fuzz`, `payload`, `session`。
+
+* * *
+
+### 测试一个URL
+
+使用wfuzz库来测试一个URL是很简单的，首先，导入库文件：
+
+  1. `┌─[michael@parrot]─[~]`
+  2. `└──╼ $python`
+  3. `Python 2.7.14+ (default, Feb 6 2018, 19:12:18) `
+  4. `[GCC 7.3.0] on linux2`
+  5. `Type "help", "copyright", "credits" or "license" for more information.`
+  6. `>>> import wfuzz`
+
+现在，来体验一下使用库进行目录扫描是什么感觉：
+
+  1. `>>> import wfuzz`
+  2. `>>> for r in wfuzz.fuzz(url="http://testphp.vulnweb.com/FUZZ", hc=[404], payloads=[("file",dict(fn="wordlist/general/common.txt"))]):`
+  3. `... print r`
+  4. `...`
+  5. `00060: C=301 7 L 12 W 184 Ch "admin"`
+  6. `00183: C=403 10 L 29 W 263 Ch "cgi-bin"`
+  7. `00429: C=301 7 L 12 W 184 Ch "images"`
+  8. `...`
+
+扫描后，我们就得到了一个`FuzzResult`的对象`r`，从中我们可以得到所有的信息。
+
+* * *
+
+### FuzzSession对象
+
+FuzzSession对象拥有wfuzz API的所有函数方法。  
+FuzzSession对象允许我们在测试会话中获取一些参数。
+
+  1. `>>> import wfuzz`
+  2. `>>> s=wfuzz.FuzzSession(url="http://testphp.vulnweb.com/FUZZ")`
+  3. `>>> for r in s.fuzz(hc=[404], payloads=[("file",dict(fn="wordlist/general/common.txt"))]):`
+  4. `... print r`
+  5. `...`
+  6. `00060: C=301 7 L 12 W 184 Ch "admin"`
+  7. `00183: C=403 10 L 29 W 263 Ch "cgi-bin"`
+  8. `...`
+
+FuzzSession对象还可以当作上下文管理器来使用：
+
+  1. `>>> with wfuzz.FuzzSession(url="http://testphp.vulnweb.com/FUZZ", hc=[404], payloads=[("file",dict(fn="wordlist/general/common.txt"))]) as s:`
+  2. `... for r in s.fuzz():`
+  3. `... print r`
+  4. `...`
+  5. `00295: C=301 7 L 12 W 184 Ch "admin"`
+  6. `00418: C=403 10 L 29 W 263 Ch "cgi-bin"`
+
+* * *
+
+### 生成Payload
+
+`get_payload`方法可以生成wfuzz的payload，这是一个在不使用wfuzz payload
+plugins的情况下，使用编程的方法获得payload的方便快速的途径。
+
+  1. `>>> import wfuzz`
+  2. `>>> for r in wfuzz.get_payload(range(5)).fuzz(url="http://testphp.vulnweb.com/FUZZ"):`
+  3. `... print r`
+  4. `...`
+  5. `00012: C=404 7 L 12 W 168 Ch "0"`
+  6. `00013: C=404 7 L 12 W 168 Ch "1"`
+  7. `00014: C=404 7 L 12 W 168 Ch "2"`
+  8. `00015: C=404 7 L 12 W 168 Ch "3"`
+  9. `00016: C=404 7 L 12 W 168 Ch "4"`
+  10. `>>>`
+
+这个方法在需要多个payloads的时候可以这样使用：
+
+  1. `>>> import wfuzz`
+  2. `>>> for r in wfuzz.get_payloads([range(5), ["a","b"]]).fuzz(url="http://testphp.vulnweb.com/FUZZ/FUZ2Z"):`
+  3. `... print r`
+  4. `...`
+  5. `00028: C=404 7 L 12 W 168 Ch "4 - b"`
+  6. `00027: C=404 7 L 12 W 168 Ch "4 - a"`
+  7. `00024: C=404 7 L 12 W 168 Ch "2 - b"`
+  8. `00026: C=404 7 L 12 W 168 Ch "3 - b"`
+  9. `00025: C=404 7 L 12 W 168 Ch "3 - a"`
+  10. `00022: C=404 7 L 12 W 168 Ch "1 - b"`
+  11. `00021: C=404 7 L 12 W 168 Ch "1 - a"`
+  12. `00020: C=404 7 L 12 W 168 Ch "0 - b"`
+  13. `00023: C=404 7 L 12 W 168 Ch "2 - a"`
+  14. `00019: C=404 7 L 12 W 168 Ch "0 - a"`
+  15. `>>>`
+
+* * *
+
+### 生成Session
+
+`get_session`方法可以使用命令行的参数来生成编程下的 FuzzSession 对象。
+
+  1. `>>> import wfuzz`
+  2. `>>> for r in wfuzz.get_session("-z range,0-10 http://testphp.vulnweb.com/FUZZ").fuzz():`
+  3. `... print r`
+  4. `...`
+  5. `00002: C=404 7 L 12 W 168 Ch "1"`
+  6. `00011: C=404 7 L 12 W 168 Ch "10"`
+  7. `00008: C=404 7 L 12 W 168 Ch "7"`
+  8. `00001: C=404 7 L 12 W 168 Ch "0"`
+  9. `00003: C=404 7 L 12 W 168 Ch "2"`
+  10. `00004: C=404 7 L 12 W 168 Ch "3"`
+  11. `00005: C=404 7 L 12 W 168 Ch "4"`
+  12. `00006: C=404 7 L 12 W 168 Ch "5"`
+  13. `00007: C=404 7 L 12 W 168 Ch "6"`
+  14. `00009: C=404 7 L 12 W 168 Ch "8"`
+  15. `00010: C=404 7 L 12 W 168 Ch "9"`
+
+打完收工！  
+  
+

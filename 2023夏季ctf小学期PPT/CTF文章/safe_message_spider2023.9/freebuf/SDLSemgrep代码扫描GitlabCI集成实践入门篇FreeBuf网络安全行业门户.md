@@ -1,0 +1,355 @@
+# 背景
+
+做为一名甲方“安服崽”，SDL工作属于必不可少的日常工作项目之一，“安全左移”应该是在甲方做应用安全听的最多的词汇，本篇就
+**借助静态代码工具Semgrep与gitlab 尝试一次安全左移落地实践。**
+
+# 工具准备
+
+ **semgrep** 代码扫描引擎
+
+ **gitlab** 代码仓库管理
+
+ **gitlab runner**  
+Gitlab CI工具用于运行具体的一个job任务，例如代码打包、代码扫描等，通常由于考虑部署gitlab机器性能、安全、环境隔离等因素，通常gitlab
+runner会单独部署一台机器或者docker方式部署，具体原理可参考https://docs.gitlab.com/runner/
+
+# 环境搭建
+
+### gitlab 搭建
+
+默认已经搭建完成，通常公司内部都已搭建，或者安装 社区版本https://gitlab.cn/install/
+
+### gitlab runner 安装-启动-注册服务
+
+gitlabrunner 介绍
+https://docs.gitlab.cn/runner/，考虑部署gitlab机器性能、安全、环境隔离等因素，单独部署一台新的机器，与部署gitlab机器网络能通即可
+
+  * 安装  
+可根据机器版本选择合适的安装方式：https://packages.gitlab.com/runner/gitlab-runner/install#bash-python
+
+![image.png](https://image.3001.net/images/20220711/1657525919_62cbd69f3b21bd4f4eba1.png!small)
+
+  * 启动
+
+    
+    
+    systemctl  daemon-reload                   #重新加载配置
+    systemctl start gitlab-runner              #启动服务
+    systemctl enable gitlab-runner             #设置开机启动
+    systemctl restart gitlab-runner            #重启服务
+    
+
+  * 注册服务  
+安装了gitlab Runner之后，就可以为gitlab中的仓库注册一个Runner，注册的交互式命令如下
+
+    
+    
+    gitlab-runner register
+    
+
+![image.png](https://image.3001.net/images/20220711/1657526577_62cbd93160b1dc49e73ec.png!small)
+
+![image.png](https://image.3001.net/images/20220711/1657526398_62cbd87e81f0a8366af46.png!small)
+
+查看Runners settings的配置，可以看到已经成功注册，后续便可以使用该runner去运行我们的semgerp扫描器
+
+![image.png](https://image.3001.net/images/20220711/1657526699_62cbd9ab65dbede269d09.png!small)
+
+### semgrep 安装-扫描
+
+semgrep 教程：https://semgrep.dev/docs/getting-started/
+
+  * python pip安装  
+https://github.com/returntocorp/semgrep  
+使用python安装，建议python3.8版本，测试python3.6低版本版本时会存在异常报错，另外测试在mac系统上使用brew upgrade
+semgrep 方式安装扫描时，规则库引擎报错，检查发现使用brew安装不是最新版本，对部分规则库解析存在异常，一个小tick，安装：
+
+    
+    
+    $ python3 -m pip install --upgrade semgrep
+    
+
+当前安装版本0.91.0  
+![image.png](https://image.3001.net/images/20220711/1657527431_62cbdc87a9034b564a9fe.png!small)
+
+  * 本地规则扫描
+
+新建一个git项目，我这边直接拉取如下java 漏洞学习项目： https://github.com/JoyChou93/java-sec-code  
+拉取扫描规则库，这边就使用官方的 ：https://github.com/returntocorp/semgrep-rules  
+由于我们改项目为java项目，因此只使用java的规则库，我这边指定路径../semgrep-rules/java/
+，便可以自动引用改路径下所有的扫描规则，当然后续自定义规则便也可以在该路径下添加即可，可以看一下完整的扫描结果，使用了114条规则扫描了72个文件，发现151处问题，并且包含上下文引用
+
+    
+    
+    root@root ~/semgrep-test> semgrep scan --config ../semgrep-rules/java/
+    
+    Scanning across multiple languages:
+               java | 101 rules × 51 files
+        <multilang> |   9 rules × 21 files
+    
+      100%|████████████████████████████████████████████████████████████████████████████████████████████████████|72/72 tasks
+    
+    Findings:
+    
+      src/main/java/org/joychou/controller/CORS.java 
+         semgrep-rules.java.lang.security.audit.permissive-cors
+            https://find-sec-bugs.github.io/bugs.htm#PERMISSIVE_CORS Permissive CORS policy will allow a
+            malicious application to communicate with the victim application in an inappropriate way,
+            leading to spoofing, data theft, relay and other attacks.
+    
+             34┆ @RequestMapping("/vuln/setHeader")
+             35┆ private static String vuls2(HttpServletResponse response) {
+             36┆     // 后端设置Access-Control-Allow-Origin为*的情况下，跨域的时候前端如果设置withCredentials为true会异常
+             37┆     response.setHeader("Access-Control-Allow-Origin", "*");
+             38┆     return info;
+             39┆ }
+              ⋮┆----------------------------------------         semgrep-rules.java.spring.security.cve.cve-2022-22965
+            Method getCsrfToken_01 potentially vulnerable to CVE-2022-22965 due to plain binding of a
+            vulnerable POJO type.
+    
+             53┆ @RequestMapping("/sec/webMvcConfigurer")
+             54┆ public CsrfToken getCsrfToken_01(CsrfToken token) {
+             55┆     return token;
+             56┆ }
+              ⋮┆----------------------------------------         semgrep-rules.java.spring.security.cve.cve-2022-22965
+            Method getCsrfToken_02 potentially vulnerable to CVE-2022-22965 due to plain binding of a
+            vulnerable POJO type.
+    
+             62┆ @RequestMapping("/sec/httpCors")
+             63┆ public CsrfToken getCsrfToken_02(CsrfToken token) {
+             64┆     return token;
+             65┆ }
+              ⋮┆----------------------------------------         semgrep-rules.java.spring.security.cve.cve-2022-22965
+            Method getCsrfToken_03 potentially vulnerable to CVE-2022-22965 due to plain binding of a
+            vulnerable POJO type.
+    
+             71┆ @RequestMapping("/sec/corsFitler")
+             72┆ public CsrfToken getCsrfToken_03(CsrfToken token) {
+             73┆     return token;
+             74┆ }
+              ⋮┆----------------------------------------         semgrep-rules.java.spring.security.unrestricted-request-mapping
+            Detected a method annotated with 'RequestMapping' that does not specify the HTTP method.
+            CSRF protections are not enabled for GET, HEAD, TRACE, or OPTIONS, and by default all HTTP
+            methods are allowed when the HTTP method is not explicitly specified. This means that a
+            method that performs state changes could be vulnerable to CSRF attacks. To mitigate, add the
+            'method' field and specify the HTTP method (such as 'RequestMethod.POST').
+    
+             26┆ @RequestMapping("/vuln/origin")
+             27┆ private static String vuls1(HttpServletRequest request, HttpServletResponse response) {
+             28┆     String origin = request.getHeader("origin");
+             29┆     response.setHeader("Access-Control-Allow-Origin", origin); // 设置Origin值为Header中获取到的
+             30┆     response.setHeader("Access-Control-Allow-Credentials", "true");  // cookie
+             31┆     return info;
+             32┆ }
+              ⋮┆----------------------------------------             34┆ @RequestMapping("/vuln/setHeader")
+             35┆ private static String vuls2(HttpServletResponse response) {
+             36┆     // 后端设置Access-Control-Allow-Origin为*的情况下，跨域的时候前端如果设置withCredentials为true会异常
+             37┆     response.setHeader("Access-Control-Allow-Origin", "*");
+             38┆     return info;
+             39┆ }
+              ⋮┆----------------------------------------             42┆ @CrossOrigin("*")
+             43┆ @RequestMapping("/vuln/crossOrigin")
+             44┆ private static String vuls3(HttpServletResponse response) {
+             45┆     return info;
+             46┆ }
+              ⋮┆----------------------------------------             53┆ @RequestMapping("/sec/webMvcConfigurer")
+             54┆ public CsrfToken getCsrfToken_01(CsrfToken token) {
+             55┆     return token;
+             56┆ }
+              ⋮┆----------------------------------------             62┆ @RequestMapping("/sec/httpCors")
+             63┆ public CsrfToken getCsrfToken_02(CsrfToken token) {
+             64┆     return token;
+             65┆ }
+              ⋮┆----------------------------------------             71┆ @RequestMapping("/sec/corsFitler")
+             72┆ public CsrfToken getCsrfToken_03(CsrfToken token) {
+             73┆     return token;
+             74┆ }
+              ⋮┆----------------------------------------             78┆ @RequestMapping("/sec/checkOrigin")
+             79┆ public String seccode(HttpServletRequest request, HttpServletResponse response) {
+             80┆     String origin = request.getHeader("Origin");
+             81┆ 
+             82┆     // 如果origin不为空并且origin不在白名单内，认定为不安全。
+             83┆     // 如果origin为空，表示是同域过来的请求或者浏览器直接发起的请求。
+             84┆     if (origin != null && !SecurityUtil.checkURLbyEndsWith(origin, urlwhitelist)) {
+             85┆         return "Origin is not safe.";
+             86┆     }
+             87┆     response.setHeader("Access-Control-Allow-Origin", origin);
+               [hid 3 additional lines, adjust with --max-lines-per-finding] 
+    
+    
+    
+               .............
+    
+    
+    Some files were skipped.
+      Scan was limited to files tracked by git.
+    
+    Ran 114 rules on 72 files: 151 findings.
+    
+    A new version of Semgrep is available. See https://semgrep.dev/docs/upgrading
+    
+
+  * 与gitlab集成 CI
+
+拉取项目java-sec-code到本地，在项目根目录下吗新建文件.gitlab-ci.yml
+
+    
+    
+    # 自定义规则库后续把规则写在这个目录，/home/gitlab-runner/semgrep/
+    semgrep:
+      script: semgrep  scan --config "/home/gitlab-runner/semgrep-rules/java"
+      tags:
+          - semgrep
+      allow_failure: false
+    
+
+其中script为上述我们本地扫描执行的命令，因此需要在安装gitlab runner 的机器上一样使用python安装semgrep与
+拉取规则库,注意规则库放在gitlab-runner用户的目录下，否则会报权限不足问题  
+其中tags为上面自己新建的gitlab runner标签  
+![image.png](https://image.3001.net/images/20220711/1657528757_62cbe1b5c23af8d1ea5e1.png!small)  
+完成上述步骤后，push代码到 gitlab仓库，便可以自动触发CI扫描流程，切换到项目的CI/CD - jobs下查看扫描结果  
+![image.png](https://image.3001.net/images/20220711/1657529202_62cbe3728604d30e362b4.png!small)
+
+至此我们便完成了与semgrep
+与gitlab的集成，但是还未实现将安全扫描结果进行定向推送。其实semgrep提供了更为方便的CI集成方式，可以使用命令“semgrep ci”
+
+    
+    
+    semgrep:
+      script: semgrep  ci
+      tags:
+          - semgrep
+      allow_failure: false
+    
+
+当前想要与github、genkins集成也可以实现，可参考，满足语法规则即可  
+https://semgrep.dev/docs/semgrep-ci/sample-ci-configs/  
+可以看到如下过程，会自动从semgrep仓库拉取所有最新的扫描规则进行扫描  
+![image.png](https://image.3001.net/images/20220711/1657529471_62cbe47f4a008f589b471.png!small)  
+在扫描前适用 semgrep
+login命令进行登入授权，还可以将扫描结果推送到官方的dashboard平台https://semgrep.dev，本质为一个saas平台，适用改方式扫描推送如下图所示：
+
+![image.png](https://image.3001.net/images/20220711/1657529707_62cbe56b93dfa2db9b1c2.png!small)  
+可以看到该dashboard可以有一个比较完美的结果展示，包括发现了多少高中低危漏洞等。考虑大多少企业适用为内网环境，无法联网拉取扫描规则https://semgrep.dev/registry，同时鉴于扫描结果只能推送官方dashboard平台，存在数据泄漏安全风险，不满足合规要求，因此我们希望能自己在内网进行扫描结果推送，当前如果预算充足，也可以考虑dashboard平台私有化版本：  
+![image.png](https://image.3001.net/images/20220711/1657530003_62cbe693a8f94149370ac.png!small)
+
+  * 内网gitblab CI集成  
+分析dashboard展示其实就是对
+我们使用如下方式进行扫描结果的一个解析，高级版增加了一些推送，api等功能，因此我们只需要对这个结果自己解析然后进行邮件推送或者webhook方式不就可以了
+
+    
+    
+    semgrep  scan --config "/home/gitlab-runner/semgrep-rules/java"
+    
+
+semgrep可以支持json输出格式，使用python解析了如下部分关键字段，每个字段含义如注释，有了这些字段我们不是想干嘛就干嘛，比如邮件发送、钉钉webhook发送等，或者自己写一个简单的dashboard平台做统计都可以。
+
+    
+    
+    #线上环境使用方法
+    args_semgrep = ['semgrep', 'scan' , '--config', '/home/gitlab-runner/semgrep/','--json']
+    p = subprocess.Popen(args=args_semgrep,  stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,encoding='utf-8')
+    stdout, stderr =p.communicate()
+    print(stderr)
+    jsonout = json.loads(stdout)
+    #paths扫描了什么具体文件覆盖率
+    paths = jsonout["paths"]
+    #errors扫描出现错误信息
+    errors = jsonout["errors"]
+    #results扫描结果,results为list
+    results = jsonout["results"]
+    check_id = []
+    message = []
+    path = []
+    line = []
+    lines = []
+    severity = []
+    for item in results:
+        #check_id 规则库文件名
+        check_id.append(item["check_id"])
+        # message 漏洞详细描述
+        message.append(item["extra"]["message"])
+        #path 漏洞文件名
+        path.append(item["path"]) 
+        #对应漏洞文件名漏洞行数line
+        line.append(item["end"]["line"])
+        #对应漏洞文件名漏洞行数漏洞语句
+        lines.append(item["extra"]["lines"])
+        #漏洞危险等级
+        severity.append(item["extra"]["severity"])
+    
+
+当然解析字段还有点麻烦，我们最终目的是想扫描结果直接能够定向推送人，能够邮件推送扫描结果就可以，修改一下.gitlab-ci.yml文件执行我们的自定义脚本，使用python进行邮件推送，其中变量GITLAB_USER_EMAIL、CI_PROJECT_PATH为gitlab自带的全局变量，用于获取当前项目的用户邮箱与用户项目名路径
+
+    
+    
+    # 自定义规则库后续把规则写在这个目录，/home/gitlab-runner/semgrep/
+    semgrep-yxt: 
+      script: python3 /home/gitlab-runner/semgrep.py  -u $GITLAB_USER_EMAIL -p $CI_PROJECT_PATH
+      tags:
+         - semgrep
+      allow_failure: false
+    
+
+semgrep.py文件如下，并放到gitlab-runner机器上，让runner能够调用该脚步：
+
+    
+    
+    import argparse
+    import smtplib
+    import subprocess
+    import sys
+    import os
+    from email.header import Header
+    from email.mime.text import MIMEText
+    
+    
+    if len(sys.argv) <= 1:
+        print('\n%s -h for help.' % (sys.argv[0]))
+        exit(0)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-u', dest='user_email', help='用户邮箱变量 $GITLAB_USER_EMAIL')
+    parser.add_argument('-p', dest='project_path', help='项目名称变量 $CI_PROJECT_PATH ')
+    args = parser.parse_args()
+    
+    user_email = args.user_email
+    project_path = args.project_path
+    
+    args_semgrep = ['semgrep', 'scan', '--config', '/data/backend/semgrep/rules/java']
+    p = subprocess.Popen(args=args_semgrep, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         encoding='utf-8')
+    stdout, stderr = p.communicate()
+    
+    stdout1 = "hi~," + user_email + '\n' + stdout
+    
+    from_addr = 'ci.master@yxt.com'  # 邮件发送账号
+    smtp_server = 'mail.xxx.com'  # 固定写死　，写公司的邮件服务器
+    smtp_port = 25  # 固定端口
+    reciver = [user_email, xxx@xxx.com] # 可以写多个人，例如同时发给安全人员
+    print(reciver)
+    to_addrs = ','.join(reciver)
+    # 扫描的项目名称
+    project_name = project_path
+    stmp = smtplib.SMTP(smtp_server, smtp_port)
+    
+    try:
+        for recive in reciver:
+            # 组装发送内容
+            message = MIMEText(stdout1, 'plain', 'utf-8')  # 发送的内容
+            message['From'] = Header("ci.master", 'utf-8')  # 发件人
+            message['To'] = Header(recive, 'utf-8')
+            subject = 'Semgrep {0} 项目代码安全漏洞扫描 '.format(project_path)
+            message['Subject'] = Header(subject, 'utf-8')  # 邮件标题
+            stmp.sendmail(from_addr, recive, message.as_string())
+    except Exception as e:
+        print('邮件发送失败--' + str(e))
+    
+
+push 项目，邮件接收到扫描
+
+![image.png](https://image.3001.net/images/20220711/1657531974_62cbee46141ca4048edbf.png!small)
+
+至次，我们一个完整的semgrep 与gitlab
+CI集成便完成了，只要研发每次push，便会自动触发改扫描job，进行结果邮件推送，当然基于官方的扫描规则库，肯定会存在误报与漏报，下一篇继续分享如何优化我们自己的规则库，
+使扫描结果更准确。
+

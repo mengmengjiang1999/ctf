@@ -1,0 +1,434 @@
+## 前言
+
+​
+本文在《[free5gc+UERANSIM模拟5G网络环境搭建及基本使用](https://www.freebuf.com/articles/wireless/268397.html)》的环境基础上，分析核心网AV的产生原理，以及其中的关键参数及安全特性。UE和核心网是双向认证的过程，UE认证的核心网即MAC与XMAC之间的比对，核心网认证UE核心即
+RES与XRES之间的比对，以此为线索，利用free5gc+UERANSIM模拟5G网络环境，抓包分析了5G_AKA了协议的协商过程。
+
+## 0x01 5G AKA协议核心原理
+
+参考TS33.501、TS33.102 5G AKA认证协议核心是基于鉴权向量AV的产生与传输、MAC的验证、RES的认证，其核心简要概括如下：
+
+### 0x011 核心网 AV的产生：
+
+![5G_AKA_AV.JPG](https://image.3001.net/images/20210520/1621513084_60a6537c5d994ea518530.jpg!small)
+
+至于F1-F5算法通常采用Milenage算法。
+
+计算消息认证码(MAC)：MAC = F1K(SQN || RAND || AMF)；
+
+计算期望的认证应答(XRES)：XRES = F2K (RAND)；
+
+网络认证令牌(AUTN)：AUTN = (SQN⊕AK )|| AMF || MAC；
+
+AV：AV=RAND||XRES||CK||IK||AUTN；
+
+核心网发起认证时将AV传递到 UE。
+
+### 0x012 UE 对于核心网AV的认证
+
+![5G_AKA_UE_AUTH.JPG](https://image.3001.net/images/20210520/1621513100_60a6538ce024b7a6dc923.jpg!small)
+
+消息序列号(SQN):(SQN⊕AK )⊕AK
+
+预期的计算消息认证码（XMAC）： F1K(SQN || RAND || AMF)；
+
+ **UE认证的核心网即MAC与XMAC之间的比对。**
+
+### 0x013 核心网对于UE RES的认证
+
+如0x01 所示，核心网在生成AV的同时会记录XRES，UE认证MAC的同时会将RES返回核心网进行认证。
+
+ **核心网认证UE核心即 RES与XRES之间的比对。**
+
+### 0x014 认证模型中K是如何来的？
+
+如下图所示，5G 各网元密钥采用层次化的派生体系：
+
+![key
+top.PNG](https://image.3001.net/images/20210520/1621513132_60a653ac8247152507d06.png!small)
+
+每一个层级的密钥都有对应的KDF密钥导出函数进行推导，如K->Kausf 的推导，Kausf->Kseaf 的推导，具体参见《TS 33.501 5G
+系统安全架构和过程》的 Figure 6.2.2-1：网络节点的5G密钥分发和密钥导出方案 。
+
+至于UE 与核心网双向认证的模型中的K，应该就是本密钥层次模型中的顶层PermanentKey。
+
+## 0x02 free5gc+UERANSIM 模拟环境简述
+
+使用arp、ifconfig、docker inspect及网桥brctl
+相关命令，收集容器IP及Mac地址相关信息，可以梳理出UERANSIM+free5gc模拟环境组网，如下图所示：
+
+![top.jpg](https://image.3001.net/images/20210520/1621513146_60a653ba1940b2c824352.jpg!small)
+
+如上图所示：环境基于ubuntu 20.04 VMware虚机部署，5gc网元分别部署在虚机的docker容器中。5gc各模拟网元模拟RAN
+通过虚拟网桥进行数据交换。物理机上的VMware 虚拟网卡作为DN(互联网节点)通过虚拟网桥与容器中的UPF对接。
+
+## 0x03 5G_AKA协议过程解析：
+
+参照 3GPP TS33.501 5G支持两种UE和5GC双向认证方式: 5G AKA 及 EAP AKA。free5gc项目默认使用的是5G
+AKA，其协议流程如下图所示：
+
+![5G_AKA_flow.JPG](https://image.3001.net/images/20210520/1621513158_60a653c601b6361d7bba8.jpg!small)
+
+下文将基于UERANSIM+free5gc 模拟环境的报文、项目代码、协议标准三位一体的对该协议过程进行分析。这也是学习网络协议和知识的普适有效的手段。
+
+### 0x031.UDM:认证向量AV的产生与传输
+
+ **0x0311 协议流程的位置：**
+
+对应协议流程图step 1,setp 2
+
+ **0x0312 报文捕获：**
+
+wireshark 在网桥与 udm容器 相连的接口（veth......）进行抓包，可以看到udm发送给ausf的
+**Nudm_UEAuthentication_Get Response** 报文如下图所示:
+
+![Nudm_UEAuthentication_Get
+Response.JPG](https://image.3001.net/images/20210520/1621513177_60a653d903fee95bd75c9.jpg!small)
+
+这个消息披露了核心网对于UE的认证协议为5G_AKA，并携带了关键的authenticationVector(AV)鉴权向量信息。那么鉴权向量如何而来，请继续往下看。
+
+ **0x0313 协议原理：**
+
+标准的5G_AKA协议，l AV：AV=RAND||XRES||CK||IK||AUTN。参见 0x01 章节
+
+ **0x0314 代码实现：**
+
+AV向量相关的代码实现，重点关注 free5gc udm项目 **\udm\producer\generate_auth_data.go 中
+GenerateAuthDataProcedure 函数** 的实现。参见如下代码片段，这些AV相关的实现过程，基本和协议是匹配的：
+
+    
+    
+    //根据UE初始时发送过来的sui，解密拿到supi。基于supi和签约数据选择鉴权认证方法，这里是5G_AKA	
+    supi, err := suci.ToSupi(supiOrSuci, udm_context.UDM_Self().GetUdmProfileAHNPrivateKey())
+    //以supi为关键索引，拿到authSubs 认证对象。
+    authSubs, res, err := client.AuthenticationDataDocumentApi.QueryAuthSubsData(context.Background(), supi, nil)
+    
+    
+    //从authSubs认证对象中，拿出sqn
+    sqnStr := strictHex(authSubs.SequenceNumber, 12)
+    //随后对sqn做一些保序的操作......
+    
+    //生成RAND 参数
+    RAND := make([]byte, 16)
+    _, err = cryptoRand.Read(RAND)
+    
+    //生成AMF参数
+    AMF, err := hex.DecodeString("8000")
+    
+    //从authSubs认证对象中，拿出opc参数,authSubs对象的设计先不展开描述。
+    opcStr = authSubs.Opc.OpcValue
+    
+    //取出PermanentKey，在5G 秘钥体系中UE和核心网会预共享PermanentKey，其他秘钥通过PermanentKey派生。
+    kStr = authSubs.PermanentKey.PermanentKeyValue
+    k, err = hex.DecodeString(kStr)
+    
+    //计算摘要，摘要是UE认证核心网的关键。
+    err = milenage.F1(opc, k, RAND, sqn, AMF, macA, macS)
+    if err != nil {
+    	logger.UeauLog.Errorln("milenage F1 err ", err)
+    }
+    
+    // 计算 RES, CK, IK, AK, AKstar
+    // RES == XRES (expected RES) for server
+    err = milenage.F2345(opc, k, RAND, RES, CK, IK, AK, AKstar)
+    if err != nil {
+    	logger.UeauLog.Errorln("milenage F2345 err ", err)
+    }
+    
+    //计算AUTH载荷
+    SQNxorAK := make([]byte, 6)
+    for i := 0; i < len(sqn); i++ {
+    	SQNxorAK[i] = sqn[i] ^ AK[i]
+    }
+    AUTN := append(append(SQNxorAK, AMF...), macA...)
+    
+    
+    //AV向量封装与填充处理
+    
+    // 计算 XRES*
+    key := append(CK, IK...)
+    FC := UeauCommon.FC_FOR_RES_STAR_XRES_STAR_DERIVATION
+    P0 := []byte(authInfoRequest.ServingNetworkName)
+    P1 := RAND
+    P2 := RES
+    kdfValForXresStar := UeauCommon.GetKDFValue(
+    key, FC, P0, UeauCommon.KDFLen(P0), P1, UeauCommon.KDFLen(P1), P2, UeauCommon.KDFLen(P2))
+    xresStar := kdfValForXresStar[len(kdfValForXresStar)/2:]
+    
+    // 计算 Kausf
+    FC = UeauCommon.FC_FOR_KAUSF_DERIVATION
+    P0 = []byte(authInfoRequest.ServingNetworkName)
+    P1 = SQNxorAK
+    kdfValForKausf := UeauCommon.GetKDFValue(key, FC, P0, UeauCommon.KDFLen(P0), P1, UeauCommon.KDFLen(P1))
+    
+    //填充 rand, xresStar, autn, kausf
+    av.Rand = hex.EncodeToString(RAND)
+    av.XresStar = hex.EncodeToString(xresStar)
+    av.Autn = hex.EncodeToString(AUTN)
+    av.Kausf = hex.EncodeToString(kdfValForKausf)
+    
+
+### **0x032 AUSF: HXRES计算与传输**
+
+ **0x0321 协议流程的位置：**
+
+对应协议流程step3,step4 ,step5
+
+0x03211 报文捕获：
+
+wireshark 在网桥与 ausf容器 相连的接口（veth.....）进行抓包，可以看到ausf发送给amf的
+**Nausf_UEAuthentication_Authenticate Response **报文如下图所示:
+
+![Nausf_UEAuthentication_authenticate
+Response.JPG](https://image.3001.net/images/20210520/1621513206_60a653f600b6afe0bb14f.jpg!small)
+
+如上图所示，ausf存储 XRES,然后将基于从UDM收到的 AV,根据协议TS33.501附录A.5计算HXRES.并通过Kausf计算Kseaf
+；发送新的AV(RAND,AUTN,HXRES)到AMF/seaf.
+
+0x03212 协议原理：
+
+ **HXRES的计算：**
+
+![HXRES计算.JPG](https://image.3001.net/images/20210520/1621513221_60a6540563f59aa6b0040.jpg!small)
+
+> 即：从udm发送给ausf的AV中提取RAND和XRES，拼接后进行SHA-256运算求hash.
+
+0x03213 代码实现：
+
+重点关注 free5gc ausf项目 **\ausf\producer\ue_authentication.go
+文件中UeAuthPostRequestProcedure 函数** ，其函数关键逻辑如下：
+
+    
+    
+    // 根于supi拿到authInfoResult。(authInfoResult的定义此处先不展开)
+    authInfoResult, rsp, err := client.GenerateAuthDataApi.GenerateAuthData(context.Background(), supiOrSuci, authInfoReq)
+    
+    
+    // 通过XRES 计算HXRES;通过udm发送给ausf认证向量AV中的RAND和XRES进行SHA256计算得到HXRES
+    concat := authInfoResult.AuthenticationVector.Rand + authInfoResult.AuthenticationVector.XresStar
+    ......
+    hxresStarAll := sha256.Sum256(hxresStarBytes)
+    hxresStar := hex.EncodeToString(hxresStarAll[16:]) // last 128 bits
+    
+    
+    // 通过Kausf计算Kseaf,将kuasf,0x6c常亮，服务网络P0作为入参，计算Kseaf。
+    // 同时ausf将Ksauf、XRES和RAND作为上下文进行保存。
+    Kausf := authInfoResult.AuthenticationVector.Kausf
+    ......
+    Kseaf := UeauCommon.GetKDFValue(KausfDecode, UeauCommon.FC_FOR_KSEAF_DERIVATION, P0, UeauCommon.KDFLen(P0))
+    ausfUeContext.XresStar = authInfoResult.AuthenticationVector.XresStar
+    ausfUeContext.Kausf = Kausf
+    ausfUeContext.Kseaf = hex.EncodeToString(Kseaf)
+    ausfUeContext.Rand = authInfoResult.AuthenticationVector.Rand
+    
+    //ausf发送给amf的AV中 包含 RAND,AUTN,HXRES，除了XRES变为了HXRES，其他并无处理。·
+    var av5gAka models.Av5gAka
+    av5gAka.Rand = authInfoResult.AuthenticationVector.Rand
+    av5gAka.Autn = authInfoResult.AuthenticationVector.Autn
+    av5gAka.HxresStar = hxresStar
+    responseBody.Var5gAuthData = av5gAka
+    
+
+### 0x033 SEAF:向UE发送核心网认证请求
+
+0x0331 协议流程的位置：
+
+对应协议流程step6
+
+0x0332 报文捕获：
+
+wireshark 在网桥接口（br-........）进行抓包，可以看到amf/seaf 通过NG-AP信令（NAS消息）向UE发送**Authentication Request ** 消息 ：  
+![auth_req.JPG](https://image.3001.net/images/20210520/1621513243_60a6541b5e39be54d4978.jpg!small)
+
+如上图所示，seaf/amf 通过NAS 消息向UE侧发送
+AV,AV中包含RAND和AUTN载荷。同时还有ABBA(用Kamf秘钥推导)和ngKSI（Kamf秘钥标识）。
+
+0x0333 协议原理：
+
+ **ABBA的填充**
+
+![ABBA计算.JPG](https://image.3001.net/images/20210520/1621513254_60a65426edbeb39911969.jpg!small)
+
+> ABBA 由SEAF(AMF)传递给UE,UE用ABBA推导Kamf，默认值为0x000
+
+0x0334 代码实现：
+
+报文封装的实现过程，参加如下关键函数的关键处理片段：
+
+ **\amf\gmm\handler.go AuthenticationProcedure 函数** ：
+
+    
+    
+    ue.ABBA = []uint8{0x00, 0x00} // 配置为协议的默认值 0x0000
+    gmm_message.SendAuthenticationRequest(ue.RanUe[accessType])
+    
+
+**\amf\gmm\message\send.go SendAuthenticationRequest 函数**
+
+nasMsg, err := BuildAuthenticationRequest(amfUe)
+
+ **\amf\gmm\message\build.go BuildAuthenticationRequest 函数**
+
+    
+    
+    authenticationRequest.SpareHalfOctetAndNgksi = nasConvert.SpareHalfOctetAndNgksiToNas(ue.NgKsi)
+    //即 AuthenticationProcedure 定义的 []uint8{0x00, 0x00}
+    authenticationRequest.ABBA.SetABBAContents(ue.ABBA) 
+    ......
+    rand, err := hex.DecodeString(av5gAka.Rand)
+    //这个地方做了两次赋值，实际上RAND延续了ausf带过来的值
+    authenticationRequest.AuthenticationParameterRAND =
+    nasType.NewAuthenticationParameterRAND(nasMessage.AuthenticationRequestAuthenticationParameterRANDType)
+    copy(tmpArray[:], rand[0:16])
+    authenticationRequest.AuthenticationParameterRAND.SetRANDValue(tmpArray)
+    ......
+    autn, err := hex.DecodeString(av5gAka.Autn)
+    //这个地方做了两次赋值，实际上AUTN延续了ausf带过来的值
+    authenticationRequest.AuthenticationParameterAUTN =nasType.NewAuthenticationParameterAUTN(nasMessage.AuthenticationRequestAuthenticationParameterAUTNype)
+    authenticationRequest.AuthenticationParameterAUTN.SetLen(uint8(len(autn)))
+    copy(tmpArray[:], autn[0:16])
+    authenticationRequest.AuthenticationParameterAUTN.SetAUTN(tmpArray)
+    
+
+### 0x034 UE:UE认证核心网
+
+0x0341 协议流程的位置：
+
+对应协议流程step7,8
+
+0x0342 报文捕获：
+
+由于在编写本文时gNB和UE之间的空口部分，UERAMSIM项目实际上还未对外呈现，咱无法抓包分析，下图是用wireshark
+在网桥接口（br-........）抓到UE的认证响应报文：
+
+![auth
+response.JPG](https://image.3001.net/images/20210520/1621513276_60a6543ca1a97b65cac00.jpg!small)
+
+如上图，UE认证核心网成功返回RES载荷给AMF
+
+0x0343 协议原理：
+
+UE验证核心网的主要就是验证AUTH载荷中的MAC。UE通过预共享的PermanentKey、相同RAND和SQN参数，相同的Milenage函数（f1-f5)，计算出的XMAC摘要就应该和MAC相同。参见0x02章节
+
+0x0344 代码实现：
+
+UE验证过程重点关注： **UERANSIM\src\auth.cpp文件的
+NasMm::receiveAuthenticationRequest5gAka函数** 其主要逻辑片段如下：
+
+    
+    
+    //提取rand 和autn载荷
+    auto &rand = msg.authParamRAND->value;
+    auto &autn = msg.authParamAUTN->value;
+    ......
+    //传递usim卡对象(PermanentKey应该存储在usim对象中)，和RAND 实例化milenage对象
+    auto milenage = calculateMilenage(m_usim->m_sqn, rand);
+    .......
+    //实例化milenage对象同时，计算了AK、XMAC、res.....milenage f1-f5的调用应该在milenage对象实例化时已经完成。
+    auto &res = milenage.res;
+    auto &milenageAk = milenage.ak;
+    auto &milenageMac = milenage.mac_a;
+    ........
+    //将AK , XMAC 及autn 载荷（包含MAC）,传递给validateAutn函数进行验证。
+    auto autnCheck = validateAutn(milenageAk, milenageMac, autn);
+    
+
+### 0x035 SEAF: 验证HRES ，并向AUSF发送UE认证请求
+
+0x0351 协议流程的位置：
+
+对应协议流程step9,step10
+
+0x0352 报文捕获：
+
+wireshark 在网桥与 ausf容器 相连的接口（veth.......）进行抓包，可以看到seaf/amf发送给ausf的
+**Nausf_UEAuthentication_Authenticate Request** 报文如下图所示:
+
+![ue_auth_request.JPG](https://image.3001.net/images/20210520/1621513302_60a65456384a9d819edf6.jpg!small)
+
+如上图所示，SEAF在验证完UE的HRES之后，向AUSF发送UE认证请求,有效载荷至少包括UE_ID:supiOrsuci、网络服务名。
+
+0x0353 协议原理：
+
+3GPP TS33.501 附录 A.5 ，同本文 2.3.2章节
+
+0x0354 代码实现 :
+
+UE RES认证过程参见： **\amf\gmm\handler.go 文件的 HandleAuthenticationResponse** 关键代码片段：
+
+    
+    
+    resStar := authenticationResponse.AuthenticationResponseParameter.GetRES()
+    
+    // Calculate HRES* (TS 33.501 Annex A.5)
+    // 根据UE 发送过来的RES，使用sha256计算 HRES 
+    p0, err := hex.DecodeString(av5gAka.Rand)
+    ......
+    p1 := resStar[:]
+    concat := append(p0, p1...)
+    hResStarBytes := sha256.Sum256(concat)
+    hResStar := hex.EncodeToString(hResStarBytes[16:])
+    //比较新计算出来的HRES 和之前AUSF传过来的HRES,从而认证UE的合法性
+    if hResStar != av5gAka.HxresStar {
+    ue.GmmLog.Errorf("HRES* Validation Failure (received: %s, expected: %s)", hResStar, av5gAka.HxresStar)
+    ......
+    //认证成功后，将向ausf 发送UE认证请求，包含UE发送过来的RES
+    response, problemDetails, err := consumer.SendAuth5gAkaConfirmRequest(ue, hex.EncodeToString(resStar[:]))
+    
+
+### 0x036 AUSF:核心网认证UE（验证RES） ，并向SEAF发送证请求响应
+
+0x0361 协议流程的位置：
+
+对应协议流程step11,step12
+
+0x0362 报文捕获：
+
+wireshark 在网桥与 ausf容器 相连的接口（veth........）进行抓包，可以看到seaf/amf发送给ausf的
+**Nausf_UEAuthentication_Authenticate Response** 报文如下图所示:
+
+![Create
+201.JPG](https://image.3001.net/images/20210520/1621513319_60a65467ef386949ef3c9.jpg!small)
+
+AUSF认证UE成功后，将返回"201 Created", 表示为注册UE创建资源。资源URI 采用location载荷传输。
+
+0x0363 协议原理：
+
+参照 3GPP TS33.501 6.1.3.2.0的描述：
+
+![compare_RES.JPG](https://image.3001.net/images/20210520/1621513330_60a6547271fafaff3aa6f.jpg!small)
+
+> 对于本文关注的核心网验证 UE流程来说，核心点就是比较RES 和预存储的XRES(在本文2.2节描述)
+
+0x0364 代码实现：
+
+重点关注 free5gc ausf项目 **\ausf\producer\ue_authentication.go
+文件中Auth5gAkaComfirmRequestProcedure函数** ，其函数关键逻辑如下：
+
+    
+    
+    ausfCurrentContext := ausf_context.GetAusfUeContext(currentSupi)
+    servingNetworkName := ausfCurrentContext.ServingNetworkName
+    
+    // Compare the received RES* with the stored XRES*
+    //比较从seaf发送过来的RES,预存储在上线文信息中的XRES,来验证UE的合法性：
+    logger.Auth5gAkaComfirmLog.Infof("res*: %x\nXres*: %x\n", updateConfirmationData.ResStar, ausfCurrentContext.XresStar)
+    if strings.Compare(updateConfirmationData.ResStar,ausfCurrentContext.XresStar) == 0 
+    {   
+        //201 Created状态
+    	ausfCurrentContext.AuthStatus = models.AuthResult_SUCCESS  
+    	responseBody.AuthResult = models.AuthResult_SUCCESS
+    	success = true
+    	logger.Auth5gAkaComfirmLog.Infoln("5G AKA confirmation succeeded")
+    
+    
+
+## 0x04 总结
+
+利用free5GC+UERANSIM的模拟环境，通过抓包、协议分析、源码分析三位一体才能实现对协议真正的理解；有了对于协议和领域知识的深刻理解才能更进一步的深入研究5G安全。本文拿5G_AKA协议作为案例，关注认证相关细节。望各位读者举一反三，在5G安全研究道路上共同进步。
+
+## 参考资料
+
+3GPP：《TS 33.501 V17.0.0 (2020-12) 系统安全架构和过程》  
+中兴沉烽实验室：《free5gc+UERANSIM模拟5G网络环境搭建及基本使用》
+

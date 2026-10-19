@@ -1,0 +1,621 @@
+# 家用ISP网关MCU的缓冲区溢出漏洞利用
+
+阅读量 **218649**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-06-12 11:00:16
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：https://courk.cc/
+
+原文地址：<https://courk.cc/index.php/2018/06/01/a-remote-vulnerability/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p5.ssl.qhimg.com/t01e20995c332063c3a.jpg)
+
+由于原文冗长，本文是我在阅读文章思考后选取的一部分重点内容摘要。
+
+[TOC]
+
+## 硬件综述
+
+###  功能简介
+
+从用户的角度来看，我的STB／网关具有以下常用功能：
+
+  * 电视和宽带互联网可通过Cable获得。
+  * 它作为家用的网关，可以连接到以太网和WiFi， WPA2是默认启用的。
+  * 它也可以作为机顶盒使用，并可以连接到电视。由于附带的遥控器，可以控制此STB。  
+我们首先来看一下STB／网关和它的远程控制功能。我网购了很多这样的元件，把他们拆开。  
+  
+这个STB／网关由三个主要的PCB组成。  
+不出意料的，有一个是负责网关功能的，另一个作为STB。最后一个包含了一个屏幕和一堆按钮，用于用户的交互。  
+我费了点时间研究他们的工作、通讯机制。我接下来讲一下这个机制，也让你了解一下本文的主要内容。
+
+* * *
+
+## 网关板
+
+我们不会在这个上做很多事情，而且我也没有花太多时间研究它。
+
+大部分电路板的组件都被封装在焊接金属板的壳里，我不想拆。 主处理器是隐藏的，WiFi模块也是。
+对于好奇的读者，我仍然注释了以下图片。（译者注：对标注过的图片上元件不清楚的话，请参阅原文的图片，作者标注非常详细）  
+()  
+和STB相连的是这块小电路板：  
+  
+这些线路传送了电和各种信号。 STB板和网关板之间的主要通信总线似乎是以太网。 其他通信总线似乎包括UART和一些GPIO。
+
+## STB板
+
+在本文的范围内，STB部分将会更加有趣。
+
+如以下带注释的图片所示，电路板的正面主要装有大型处理器和一些RAM。  
+
+这些图片描述了最近的硬件版本。
+
+主CPU是Broadcom的BCM7252。 网上的资料不多，但根据一些新闻稿，它被描述为“高性能双核Brahma15 10.5K DMIPS CPU”。
+Brahma15似乎实际上接近Cortex A15架构，并且与ARMv7指令集兼容。
+
+有趣的是，一些以前版本的电路板使用了x86处理器。
+
+在底部，可以找到三个有趣的组件：
+
+  * 一个eMMC
+  * PIC单片机，PIC16F1527
+  * 一个RF远程通信集成电路CC2534  
+
+在这样的电路板上找到eMMC并不意外。 它包含STB的固件。 尽管这样，寻找PIC微控制器和RF集成电路会更惊人。
+
+## PIC微控制器
+
+PIC16F1527是一款小型8位微控制器，包装在一个64针脚的TQFP中。  
+  
+这个PIC的定位，称为“MCU”（微控制器单元），处理一堆简单和低级别的功能。
+
+例如，MCU负责：
+
+  * 处理UI板的按钮（下一节中的更多内容）
+  * 处理UI板的屏幕
+  * 与RF电路通信  
+MCU与主STB CPU进行通信，将其称为“MPU”（用于微处理器单元），通过两条UART总线和网关板通信。
+
+例如，当按下UI板上的一个按钮时，MCU将向MPU或网关发送几个字节（取决于哪一个被按下）来通知它该按钮已被按下。
+
+另外一个例子，如果MPU需要更新UI板的屏幕，它将通过向MCU发送命令来完成。  
+  
+幸好我在网上找到了PIC16F1527的[资料表](http://ww1.microchip.com/downloads/en/DeviceDoc/40001458D.pdf)。
+
+## RF集成电路
+
+CC2534的数据表还未公开。尽管如此，这个似乎是与CC2533引脚兼容的，并且似乎具有相似的特征。
+
+因此，该IC符合其制造商Texas Instrument的“用于2.4GHz IEEE 802.15.4和ZigBee应用的True System-on-Chip解决方案”。该IC用于与遥控器进行通信。
+
+这种遥控器其实不单单使用传统的红外LED与STB进行通信。 IR通信也会在设备安装期间使用。配对后，使用称为“Zigbee
+RF4CE”的2.4-GHz无线电协议。
+
+**“** Zigbee RF4CE规格为基于Zigbee远程控制和Zigbee输入控制的设备产品提供了即时，低成本，易于实施的网络解决方案。 Zigbee
+RF4CE规范旨在为广泛的产品提供低功耗，低延迟的控制，包括家庭娱乐设备，车库开门器，无钥匙进入系统等等。[http://www.zigbee.org/zigbee-for-developers/network-specifications/zigbeerf4ce/**”**](http://www.zigbee.org/zigbee-for-developers/network-specifications/zigbeerf4ce/**%22**)
+
+CC2534通过SPI总线与MCU通信。因此，遥控器发送的按键首先由RF电路接收，然后由MCU接收，最后由MPU接收。
+
+* * *
+
+###
+
+## UI板
+
+该电路板包含以下组件：
+
+  * 显示系统状态的屏幕
+  * 三个按钮。  
+按下按钮将执行以下操作：
+
+  * 按钮1：WiFi。 用于启用或禁用WiFi。
+  * 按钮2：WPS。 按下此按钮将允许设备连接到WiFi网络，而不需要WPA2密钥。 此功能默认启用。
+
+按钮3：电源。 用于开启和关闭STB。  
+  
+正如前文所言，屏幕和按钮都直接连到这些负责处理外部设备的MCU上。
+
+###  远程功能
+
+遥控器的内部揭示了两个主要的集成电路：其中一个是我没去玩的微控制器，另一个是另一个CC2534。CC2534和STB板上焊接一个部件的通信。  
+如下面所注释的图片所示，主板的一侧包含这些组件，另一侧则全都是触摸式金属圆片开关。  
+
+###  架构总结
+
+  
+对本文其余部分有用的关键点如下：
+
+  * PIC处理用户界面。 它通过两个不同的UART总线与网关板和STB板通信。
+  * PIC通过SPI总线与RF集成电路CC2534进行通信。
+  * STB板的CC2534与遥控器的CC2534通信。 所使用的无线电协议是“Zigbee RF4CE”。  
+现在可以理解体系结构，我们讨论在系统上运行的软件， 是时候dump一些固件了。
+
+* * *
+
+## 逆向工程
+
+###  eMMC固件提取
+
+用热风枪拆下，看到很多引脚，这里用的是153引脚的。我买了一个[读153和169脚eMMC固件的设备](https://www.aliexpress.com/item/Data-recovery-android-phone-DS3000-USB3-0-emmc153-169-tool-for-KYOCERA-Restore-Retrieve-contacts-Sms/32793507014.html),dump后分解SquashFS，是一个linux root的文件系统。  
+
+###  PIC固件提取
+
+因为这里加了保护所以不能直接从PIC的flash读，但是eMMC可以flash PIC的固件，所以只要从上面提出来的固件里找。
+
+###  **反汇编分析**
+
+（译者注：用IDA自带的PIC16xx指令集分析即可）我自己给radare2加上了[PIC的支持](https://github.com/radare/radare2/pull/10199)
+
+###  不破坏设备的固件dump
+
+每个设备都不太一样，我想到了用USB接口去拦截、篡改数据，触发一个远程升级，下载到固件。
+
+###  PIC bootloader的dump
+
+先要知道内存在flash上的布局，我要知道我想要的东西在哪？我反编译到0x200的时候，代码开始有意义了，所以0x200之前是bootloader（译者注：其实不用这么麻烦，查手册很快就能搞定）。
+
+Range | Type  
+---|---  
+0x0000 – 0x01FF | Bootloader  
+0x0200 – 0x3FFF | Main Code  
+  
+我为了dump bootloader，如下图连接。  
+  
+我最初遇到了困难，觉得像是用了哪种校验，举个两个栗子：
+
+    
+    
+    0x00003df0      0800           return
+    0x00003df2      2100           movlb 0x1
+    0x00003df4      0430           movlw 0x4
+    0x00003df6      c901           clr 0x49, f
+    0x00003df8      2000           movlb 0x0
+    0x00003dfa      c100           movwf 0x41
+    0x00003dfc      0800           return
+    0x00003dfe      5600           invalid    ; "These bytes do not decode to a valid instruction"
+    0x00003e00      ffff           invalid
+    0x00003e02      ffff           invalid
+    0x00003e04      ffff           invalid
+    0x00003e06      ffff           invalid
+    
+    
+    
+    0x00007dae      ed01           clr 0x6d, f
+    0x00007db0      dc2f           goto 0x7dc
+    0x00007db2      0230           movlw 0x2
+    0x00007db4      2100           movlb 0x1
+    0x00007db6      ed00           movwf 0x6d
+    0x00007db8      2000           movlb 0x0
+    0x00007dba      5514           bsf 0x55, 0
+    0x00007dbc      0800           return
+    0x00007dbe      8700           movwf 0x7    ; "Weird instruction to end and image. The return just above makes more sense"
+    0x00007dc0      ffff           invalid
+    0x00007dc2      ffff           invalid
+    0x00007dc4      ffff           invalid
+    
+
+果然是这样的，我最后确定这就是和`0x51`异或校验的。于是我重新写了一下。
+
+    
+    
+        include <p16f1527.inc>
+    
+        DUMP_CODE CODE 0x38C0
+    
+        MOVLB 0x03
+    
+        BCF PMCON1, CFGS
+    
+        CLRF 0x70
+        CLRF 0x71
+    
+        ; Loop through the bootloader data
+        loop:
+            MOVFW 0x70 
+            MOVWF PMADRL ; Store LSB of address
+            MOVFW 0x71 
+            MOVWF PMADRH ; Store MSB of address
+    
+            BSF PMCON1, RD ; Initiate read
+            NOP ; Ignored
+            NOP ; Ignored
+    
+            MOVFW PMDATL
+            MOVWF TX1REG
+    
+        busy_loop_2:
+            BTFSS TX1STA, 1
+            GOTO busy_loop_2
+    
+            MOVFW PMDATH
+            MOVWF TX1REG
+    
+        busy_loop_3:
+            BTFSS TX1STA, 1
+            GOTO busy_loop_3
+    
+            INCF 0x70, f
+            SKPNZ
+            INCF 0x71, f
+    
+    
+            MOVFW 0x71
+            XORLW 0x20
+            SKPNZ
+            GOTO resume
+    
+            GOTO loop
+    
+        ; Use to continue the normal
+        ; firmware execution safely     
+        resume:
+            MOVLB 0x2
+            BSF 0xC, 3
+            BSF 0xF, 0
+            RETURN
+    
+        END
+    
+
+* * *
+
+## 远程／STB RF 连接
+
+###  简介
+
+之前讲如何拿下固件，接下来我们研究如何远程攻击，这里用到了ZigBee，是我们主要的研究对象。
+
+**Zigbee RF4CE简介**
+
+RF4CE专为远程控制应用而设计，用于低速传输少量数据。  
+它位于由IEEE 802.15.4定义的物理层（PHY）和媒体访问控制（MAC）层之上。  
+
+  * PHY层  
+数据在2.4GHz ISM频段上传输。  
+RF4CE仅使用16个2.4GHz可能的Zigbee通道中的3个通道。
+使用的频道是分别对应于2425MHz，2450MHz和2475MHz频率的频道15,20和25。  
+使用的调制是O-QPSK。 使用DSSS可以提高噪声免疫力。
+
+  * MAC层  
+Zigbee数据包的一般结构如下。
+
+SIZE (BYTES) | 2 | 1 | 0 or 2 | 0, 2 or 8 | 0 or 2 | 0, 2 or 8 | * | 2  
+---|---|---|---|---|---|---|---|---  
+FIELD | Frame Control | Sequence Number | Destination PAN | Destination
+Address | Source PAN | SourceAddress | Payload | Checksum  
+  
+具体而言，帧控制由以下字段组成：
+
+BIT INDEX | 0-2 | 3 | 4 | 5 | 6 | 7-9 | 10-11 | 12-13 | 14-15  
+---|---|---|---|---|---|---|---|---|---  
+FIELD | Frame Type | Security Enable | Frame Pending | ACK | Intra PAN |
+Reserved | Destination Addressing Mode | Reserved | Source Addressing Mode  
+  
+  * 帧控制，位10-11和14-15：不同的寻址模式可用于源和目标。 长寻址模式意味着源地址或目标地址将由8个字节组成，而短寻址意味着将只使用两个字节。
+  * PAN代表个人区域网络， 这个概念是特定于Zigbee的。Zigbee节点只允许从同一个PAN发送数据到一个节点。
+  * 在我们的例子中，帧有效载荷将包含RF4CE层。
+
+AES-128-CCM *是CCM操作模式的衍生产品，并使用AES作为分组密码。 密钥长度为128位。  
+这个密钥在配对过程中在两个设备之间交换。 这个过程有点“混淆”，但基本上是明文的。  
+这里是将密钥分成37个种子，并通过使用以下XOR操作来计算密钥。  
+
+为了使攻击者更难以嗅探，传输关键种子的Zigbee数据包以非常低的输出功率发送。  
+不用说，这个密钥交换过程并不完美，它已经受到广泛的批评。不过，如果攻击者没有嗅探到配对过程，那么AES-128-CCM *就没什么重大问题。  
+在我们的远程和STB的情况下，这种配对过程和密钥交换仅在STB的第一次启动期间发生过一次。
+
+###  RF4CE 工具
+
+  * GNU Radio
+  * The IEEE 802.15.4 MAC and PHY layers are provided by the gr-ieee802-15-4 project
+  * HackRF
+  * PlutoSDR
+
+## PIC 缓冲区溢出
+
+###  简介
+
+因为注入RF4CE数据包是可能的，我开始fuzz STB。
+
+我很快发现发送大的RF4CE数据帧有时会让PIC卡住甚至重置。
+
+这显然像是一个缓冲区溢出。 但是如何利用PIC微控制器上的缓冲区溢出？ 考虑到PIC仅用于基本功能，是否有什么“邪恶”来实现？
+
+要回答这些问题，我首先必须介绍PIC Enhanced Midrange架构的基础知识。 已经熟悉它的读者可以随意跳过本节。
+我将着重指出在这样的设备上“利用”缓冲区溢出的要点。
+
+* * *
+
+###  PIC Midrange架构
+
+**指令集**
+
+PIC Enhanced Midrange架构支持以14位编码的49条指令。
+
+我不详细说明这些指令。
+
+**内存布局**
+
+PIC Enhanced Midrange 是Harvard架构。 这意味着指令存储器与数据存储器分开。
+
+PIC数据存储器分为几个128字节的存储区（bank）。 所有存储区具有相同的结构，详见下表。
+
+ADDRESS RANGE | MEMORY TYPE  
+---|---  
+0x000 – 0x00b | Core Registers  
+0x00c – 0x01f | Peripherals Registers  
+0x020 – 0x06f | General Purpose Registers  
+0x070 – 0x07f | Common RAM  
+  
+例如，我们从PIC中提取出来的数据表显示有四个存储区。  
+  
+我们来详细看一下这些内存区域：
+
+**寄存器**
+
+**核心寄存器**  
+核心寄存器都可以被存储区（bank）访问到：
+
+ADDRESS | REGISTER  
+---|---  
+0x00 | INDF0  
+0x01 | INDF1  
+0x02 | PCL  
+0x03 | STATUS  
+0x04 | FSR0L  
+0x05 | FSR0H  
+0x06 | FSR1L  
+0x07 | FSR1H  
+0x08 | BSR  
+0x09 | WREG  
+0x0a | PCLATH  
+0x0b | INTCON  
+  
+**INDFn** ， **FSRnL** 和 **FSRnH** 寄存器用于间接寻址。 这将在以下几节中解释。  
+ **PCL** 和 **PCLATH** 用于存储程序计数器。 这两个寄存器对我们来说非常重要，并将在下一节详细介绍。  
+ **WREG** 寄存器是工作寄存器。 该寄存器被用作大多数算术和逻辑指令的操作数之一。  
+ **BSR** 寄存器是Bank Select Register。 存储在该寄存器中的值是当前选择的存储块的索引。 让我们来看看下面的代码来理解它的含义。
+
+    
+    
+          0x00000000      2000           movlb 0x0
+          0x00000001      1008           movf 0x10, w
+    
+
+第一条指令将 **BSR** 的值设置为0x00，这意味着选择了Bank 0。 第二条指令从内存加载一个字节到 **WREG** 。 在选择Bank
+0时，加载寄存器 **PORTE** 对应的值。
+
+    
+    
+          0x00000000      2002           movlb 0x2
+          0x00000001      1008           movf 0x10, w
+    
+
+这里就用到了选用的存储区2，也就是说LATE的值会被用到。
+
+**外设寄存器**  
+外设寄存器用于和PIC的外设硬件交互，比如说，UART，SPI或者GPIO都是通过它来控制读写的。  
+ **通用寄存器**  
+就用来读写数据。  
+ **通用RAM寄存器**  
+就跟上面一样，它用于读写RAM的数据，这里的内存区域和所有的Bank是一样的。它不受BSR的影响。  
+ **PCL和PCLATH寄存器**  
+PCL存储程序计数器的LSB，而PCLATH存储MSB。 可以直接写入这些寄存器。 让我们来看看以下内容。
+
+    
+    
+          0x00000000      8831           movlp 0x8
+          0x00000001      4230           movlw 0x42
+          0x00000002      8200           movwf PCL
+    
+
+第一条指令将PCLATH寄存器加载到0x08。 这不会改变程序的执行流程，下面的指令继续执行，WREG设置为0x42。 最后，PCL设为WREG的值。
+
+当以这种方式改变PCL时，将根据PCL和PCLATH的值修改执行流程。 在这种情况下，PIC将跳转到位于ad 0x0842的指令。
+
+* * *
+
+###  PIC 缓冲区溢出漏洞利用
+
+PIC和平常的ARM、x86、mips的二进制漏洞不太一样。因为他是Harvard架构，代码和数据在不同的地址空间里，打shellcode的方式就不行了。  
+而且PIC16F1527的调用栈的方式不在数据内存中。调用栈是用硬件实现的，也就没法从内存里找到它的地址。这里exploit不能用覆盖返回地址的方式实现了。
+
+**SPI_transmit()**
+
+为了更好的理解程序，我们要从底层看RF4CE从SPI的CC2534收到的payload数据。如果检查之前一节讲到的SPI帧，我们需要关注的是DATA段
+
+LENGTH | CMD0 | CMD1 | SRCINDEX | PROFILEID | VENDORID | RXLQI | RXFLAGS | LEN
+| `DATA`  
+---|---|---|---|---|---|---|---|---|---  
+0x09 | 0x4a | 0x05 | 0x00 | 0x01 | 0x0000 | 0x94 | 0x01 | 0x02 | `0x0201`  
+  
+下表给出了相关内存空间调用的函数：
+
+ADDRESS / REGISTER | VALUE  
+---|---  
+0x032 | RF4CE Frame Payload Size  
+WREG | 0xAA  
+PCLATH | 0x03  
+BSR | 0x00  
+  
+  
+我们一步一步来看：
+
+  * 首先，值WREG存储在地址0x033（bank 0，偏移0x33）。该值实际上是指向数据缓冲区的指针的LSB字节，用于存储RF4CE有效载荷。
+  * 接下来，进入主循环。存储在0x033的 **RF4CE帧有效负载大小** 变量减少，并且检查是否能够接收更多的数据。 RF4CE帧有效载荷大小的值是该函数的参数。它已通过接收由CC2534发送的SPI数据的第一个字节进行检索。正如所料，不对此值边界进行检查。
+  * 数据字节通过使用间接寻址方法从从0x3AA开始的地址获取。接下来将该字节装入 **SSP2BUS** 外设寄存器。
+  * 一旦写入该寄存器，SPI传输开始。轮询SSP2STAT以等待传输结束。
+  * 传输结束后，接收到的字节从SSP2BUS中获取。该字节通过间接寻址存储到数据缓冲区。
+  * 最后，0x033处的字节（指向数据缓冲区的指针的LSB）增加。
+
+**溢出点**
+
+下图演示 **RF4CE** payload过大时发生的情况：  
+
+数据指针到达`0x03ff`后，溢出到`0x0300`（因为只有LSB实际增加）并且数据被写入到核心寄存器（Core
+Registers）。当PCL核心寄存器被覆盖时，执行流程被重定向。就用这个原理利用漏洞！
+
+尽管如此，我们所能操作的空间仍然相当有限。我们只能控制程序计数器的LSB。 MSB不能被更改，并且由PCLATH寄存器设置为`0x03`。
+
+因此，我们可以跳转到的地址，从`0x300`到`0x3ff`。
+
+* * *
+
+###  溢出利用
+
+**利用计划**
+
+正如之前所写，MCU连接到了UI板上，并且能实时的响应按钮。这包含了WPS按钮。  
+  
+这很直接，如果按钮按下，连接到PIC的GPIO **RC1** 与VCC连通，产生一个高电平。只要按钮按下，引脚接地，产生低电平。  
+在固件方面，处理这样的输入可能会有两种方式：中断，或者记录GPIO的状态。此处用的是第一个。
+
+在主循环的每一次迭代中，固件都会检查 **RC1** 输入的状态。 这是通过读取外设寄存器PORTC并检查位1是否置1来完成的。
+按钮未按下时，该位为’1’，按下按钮，该位置’0’。
+
+这里， **RC1** 被配置为输入。 可以通过不设置 **TRISC** 外设寄存器的1位将其配置为输出。 如果我们设置了这个位，即使没有按下按钮，
+**PORTC** 也会变为’0’。 **TRISC** 的值由启动时的固件配置，并且只做一次。
+
+这个很有用，因为这意味着如果我们能够翻转TRISC寄存器第1位的方法，固件实际上会按照WPS按钮按下来响应！
+
+我发现一个RF4CE的payload可以搞定。 再次说明，它只能用在这个固件版本上，但并不意味着其他固件不可被利用，因为还是可能有缓冲区溢出的。
+
+**Payload**
+
+从图上可以看到payload。  
+我已经把它分解成了几个段：  
+
+第一部分，索引范围从`0x00`到`0x05`包含了一些现在还没法解释的值，但你应该很快就会参透。 这些值写入预期的内存地址，从`0x3AA`开始。
+
+接下来，范围从`0x06`到`0x45`是padding。 这里的就是用与增加数据缓冲区指针的值。
+
+从`0x46`开始溢出。 数据现在写入公用RAM（Common RAM）。 实际上没啥用。 填充字节仍被使用。
+
+从索引`0x56`开始，才是最重要的。 核心寄存器（Core Register）最终被覆盖。 PCL寄存器被设置为`0x37`。
+由于在SPI_transmit函数的上下文中PCLATH寄存器等于`0x03`，PIC将跳转到位于`0x0337`的指令。
+
+指令地址如下：
+
+    
+    
+          0x00000336      9231           movlp 0x12
+    >>>>> 0x00000337      b822           call 0x2b8        ;should call 0x12b8 when pclath=0x12
+          0x00000338      8331           movlp 0x3
+    
+
+有个函数调用。 不过，要跳转到有效函数的开头，PCLATH寄存器应该设为0x12。 对我们来说，它仍等于0x03。
+这意味着PIC将实际上跳转到另一个函数中间的完全不同的地址。
+
+从这里起，PIC将执行数十次指令，并且几次跳转。 幸运的是，执行所有这些指令没有明显的副作用。 最后，执行下面的一段代码。
+
+    
+    
+    ```
+      0x000012a3      a500           movwf 0x25
+      0x000012a4      a030           movlw 0xa0
+      0x000012a5      4226           call 0x642       ;Read some more data from SPI bus
+      0x000012a6      9231           movlp 0x12
+      0x000012a7      3f08           movf 0x3f, w
+      0x000012a8      b200           movwf 0x32      ;dest_low
+      0x000012a9      a430           movlw 0xa4
+      0x000012aa      b301           clr 0x33, f     ;dest_high
+      0x000012ab      b400           movwf 0x34      ;src_low
+      0x000012ac      0330           movlw 0x3
+      0x000012ad      b500           movwf 0x35      ;src_high
+      0x000012ae      3e08           movf 0x3e, w      ;size
+      0x000012af      b600           movwf 0x36
+      0x000012b0      b701           clr 0x37, f
+      0x000012b1      d726           call 0x6d7       ;"memcpy"
+      0x000012b2      2700           movlb 0x7
+      0x000012b3      2308           movf 0x23, w
+      0x000012b4      0800           return
+      ```
+    
+
+首先调用从SPI总线读取更多字节的一段代码。固定数量的7个字节将在`0x3a3`开始的地址处被读取和写入（这个代码实际上是一开始就读取由CC2534发送的SPI数据的）。
+
+接下来，对`memcpy`函数进行一个有意思的调用。
+
+源地址设为`0x3a4`。如果仔细观察前面的表格，会看到可以控制的从`0x3a4`开始的大量数据。
+
+目标地址的MSB被设置为0x00，而我发现从地址`0x32`开始的低字节等于`0x83`。
+
+运气很好，`size`参数也可以控制。因为一个我没怎么去解释的原因，这个参数被加载了之前发送的RF4CE数据包的一个字节。例如，在发送exploit溢出的包之前发送像`0c0c0c0c0c0c0c0c0c0c0c0c0c`的数据，保证`size`参数被加载的值是`0x0c`。
+
+下表总结了`memcpy`的功能：  
+  
+你可以看到，多个核心寄存器（Core Register）能被控制m，这些字节的payload
+index从`0x00`到`0x05`、`0x5a`到`0x5f`。  
+为了保证程序能继续执行，要特别注意`PCLATH`和`INTCON`的值。  
+`TRISA`和`TRISB`设为和之前一样的值，相反，TRISC更改为模拟WPS按钮按下。
+
+可以通过将TRISC的1位设置为’1’并使用类似的payload完成“按钮释放”。
+
+* * *
+
+**完整的攻击场景**
+
+通过使用所有这些知识，恶意用户可以访问受保护的WiFi网络。
+
+在修补漏洞之前，可能会出现以下情况。
+
+  * 当受害者使用STB的遥控器时，攻击者嗅探RF4CE数据包。 尽管这些数据包的payload被加密，但足以注入特定的数据包。
+  * 攻击者发送旨在模拟WPS按钮按下的有效载荷。
+  * 攻击者发送一个类似的有效载荷，模拟WPS按钮释放。
+  * PIC固件被欺骗，认为WPS按钮已被物理按下。 它通知该事件的系统的网关部分。 WPS开始发现WiFi。
+  * 因为可以控制WPS，攻击者可以将自己的设备连接到受害者的WiFi网络。
+
+* * *
+
+## 总结
+
+STB上运行的Linux系统看起来像是设计时真的考虑了安全性：使用了加固的二进制文件，隔离由LXC容器执行，…
+
+尽管如此，因为看起来像是一个不和安全非常相关的子系统的两个漏洞，实际上可以远程触发WPS进程。
+
+在发现设备的时候，最后一个PIC固件受到缓冲区溢出的影响，但我没有找到利用它的办法。 PoC只能在之前的修订版本中实现。
+尽管如此，一个铁了心要打的攻击者可能在等另一个可能可以利用这个洞的PIC固件版本发布。 所以向厂商披露漏洞还是很重要。
+
+如今修复已经完成，PIC固件已在数月前迅速修补并部署。 所幸，这些漏洞如今已经不能再被利用了。
+
+本文翻译自https://courk.cc/ [原文链接](https://courk.cc/index.php/2018/06/01/a-remote-vulnerability/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Binker** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/147139](/post/id/147139)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [https://courk.cc/](https://courk.cc/index.php/2018/06/01/a-remote-vulnerability/)
+
+如若转载,请注明出处： <https://courk.cc/index.php/2018/06/01/a-remote-vulnerability/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [IoT](/tag/IoT)
+  * [漏洞利用](/tag/漏洞利用)
+  * [缓冲区溢出](/tag/缓冲区溢出)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://wx.qlogo.cn/mmopen/vi_32/iaSbF3rxN56VGb76IaTjV2IibX2vY6ib4vWYGIjSbic8mtBpIBEKfg70CwZYT5UNwc1ERcfDL2F2Pn4vUGDzd5pfJg/0)
+Binker
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

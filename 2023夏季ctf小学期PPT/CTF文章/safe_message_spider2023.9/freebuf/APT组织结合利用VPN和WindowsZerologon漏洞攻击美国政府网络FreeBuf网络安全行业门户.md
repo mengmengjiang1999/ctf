@@ -1,0 +1,134 @@
+**美国政府网络遭到攻击**
+
+美国网络安全和基础设施安全局（CISA）和联邦调查局（FBI）于10月9日发表了一则联合网络安全公告（Alert
+AA20-283A），就APT组织结合利用VPN和Windows
+Zerologon（CVE-2020-1472）漏洞攻击美国政府网络，进而未经授权访问选举支持系统，发出告警。
+
+根据该则安全公告，该攻击活动针对美国联邦和州、地方、部落和地区（SLTT）
+政府网络。虽然看起来攻击活动选定这些目标不是因为它们接近选举信息，但是美CISA警告称存放在政府网络上的选举信息可能存在风险。
+
+CISA已获悉未经授权访问选举支持系统的攻击活动实例，但是目前尚无证据表明选举数据的完整性受到了损害。
+
+在多起案例中，CISA观察到攻击者利用Fortinet FortiOS Secure Socket Layer
+（SSL）VPN中的CVE-2018-13379漏洞或MobileIron产品中的CVE-2020-15505漏洞入侵暴露在互联网上的服务器，获取网络访问权限。
+
+获得初始访问权限后，攻击者则利用Windows
+Netlogon身份验证协议中的CVE-2020-1472（Zerologon）漏洞将权限提升至域管理员，从而控制整个域和修改用户密码。随后，攻击者会借助合法的远程访问工具，例如VPN和Remote
+Desktop Protocol（RDP），使用受影响的凭据访问该环境。
+
+CISA未披露该APT组织的详情，但是表示所观察到的攻击活动不仅仅针对SLTT实体，还瞄准了多个行业部门。
+
+ **受到利用的漏洞**
+
+根据CISA发布的消息，攻击者在该攻击活动中主要结合利用了Fortinet FortiOS Secure Socket Layer
+（SSL）VPN中的CVE-2018-13379和Windows Zerologon CVE-2020-1472漏洞。
+
+CVE-2018-13379的CVSS 3.x基础评分为9.8，是个超危漏洞。该漏洞的类型为路径遍历，存在于FortiOS SSL VPN
+web门户，影响启用了SSL VPN服务的Fortinet FortiOS
+6.0.0版本至6.0.4版本，5.6.3版本至5.6.7版本和5.4.6版本至5.4.12版本。未经身份验证的攻击者可借助特殊构造的HTTP资源请求利用该漏洞下载FortiOS系统资源。厂商已在FortiOS
+5.4.13版本，5.6.8版本，6.0.5版本和6.2.0版本及之后版本中修复了该漏洞。
+
+微软在2020年8月周二补丁日披露了CVE-2020-1472（Zerologon）漏洞。微软在公告中表示，“当攻击者使用Netlogon远程协议（MS-NPRC）建立与域控制器连接的易受攻击的Netlogon安全通道时，存在特权提升漏洞。”对于该漏洞的CVSS评分，微软和NVD均给出了10分的最高分。如成功利用该漏洞，攻击者可以在网络中的设备上运行经特殊设计的应用程序。该漏洞影响Microsoft
+Windows Server 2008 R2 SP1，Windows Server 2012，Windows Server 2012 R2，Windows
+Server 2016，Windows Server 2019，Windows Server 1903版本，Windows Server
+1909版本，Windows Server 2004版本。
+
+微软目前尚未完全修复该漏洞。微软在8月发布公告时表示，由于有许多非Windows设备采用了Netlogon远程协议（MS-NRPC），为了确保使用易受攻击的Netlogon安全通道连接的设备的供应商可向客户提供更新，微软将分两个阶段修复该漏洞。初始部署阶段已于2020年8月11日开始，但是第二阶段的更新则计划在2021年第一季度发布。
+
+除了遭到CISA此次披露的攻击利用外，根据微软最近发布的告警，Zerologon漏洞已受到伊朗APT组织Mercury和俄罗斯网络犯罪团伙TA505的攻击利用。
+
+![1602572939_5f85528b4df6d8e264d27.png!small](https://image.3001.net/images/20201013/1602572939_5f85528b4df6d8e264d27.png!small)
+
+图：微软安全情报团队10月7日推特消息
+
+ **可被用于执行攻击的其他** **VPN** **漏洞**
+
+除了Fortinet
+FortiOS中的CVE-2018-13379漏洞，美CISA还警告称，攻击者可能利用其他类似的VPN漏洞攻击未修复的，面向互联网的网络边缘设备。CISA表示攻击者极有可能在将来利用下表中的漏洞攻击政府和关键基础设施网络，以获得初始访问。
+
+序号
+
+|
+
+CVE-ID
+
+|
+
+受影响的产品和版本  
+  
+---|---|---  
+  
+1
+
+|
+
+CVE-2019-19781
+
+|
+
+Citrix Application Delivery Controller；
+
+Citrix Gateway；
+
+Citrix SDWAN WANOP；  
+  
+2
+
+|
+
+CVE-2020-5902
+
+|
+
+F5 Big-IP设备（LTM，AAM，Advanced WAF，AFM，Analytics, APM, ASM, DDHD, DNS, FPS, GTM,
+Link Controller，PEM，SSLO，CGNAT）  
+  
+3
+
+|
+
+CVE-2019-11510
+
+|
+
+Pulse Connect Secure 9.0R1 - 9.0R3.3，8.3R1 - 8.3R7，8.2R1 - 8.2R12，8.1R1 -8.1R15；
+
+Pulse Policy Secure 9.0R1 - 9.0R3.1，5.4R1 - 5.4R7，5.3R1 - 5.3R12，5.2R1 -5.2R12，5.1R1 - 5.1R15；  
+  
+4
+
+|
+
+CVE-2020-15505
+
+|
+
+MobileIron Core & Connector 10.3.0.3及之前版本，
+10.4.0.0版本，10.4.0.1版本，10.4.0.2版本，10.4.0.3版本，10.5.1.0版本，10.5.2.0版本和10.6.0.0版本；
+
+Sentry 9.7.2及之前版本，和9.8.0版本；
+
+Monitor and Reporting Database (RDB) 2.0.0.1及之前版本；  
+  
+5
+
+|
+
+CVE-2020-1631
+
+|
+
+Juniper Junos OS
+12.3版本，12.3X48版本，14.1X53版本，15.1版本，15.1X49版本，15.1X53版本，17.2版本，17.3版本，17.4版本，18.1版本，18.2版本，18.3版本，18.4版本，19.1版本，19.2版本，19.3版本，19.4版本，20.1版本；  
+  
+6
+
+|
+
+CVE-2020-2021
+
+|
+
+Palo Alto Networks PAN-OS 9.1.3之前的9.1版本; PAN-OS 9.0.9之前的9.0版本; PAN-OS
+8.1.15之前的8.1版本,和PAN-OS 8.0 所有版本（已结束生命周期）
+

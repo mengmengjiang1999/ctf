@@ -1,0 +1,261 @@
+## 作者：黄金
+
+##  **一、Dubbo 简介**
+
+Dubbo 是一款典型的高扩展、高性能、高可用的 RPC 微服务框架，用于解决微服务架构下的服务治理与通信问题。其核心模块包含 **【RPC 通信】** 和
+**【服务治理】** ，其中服务治理又分为服务注册与发现、服务容错、负载均衡、流量调度等。今天将重点介绍 Dubbo 的 **服务注册与发现** 。
+
+##  **二、SPI 机制**
+
+在介绍服务注册发现之前，先简单介绍一下贯穿整个 Dubbo 源码，也是 Dubbo 实现自适应扩展的核心 -- **SPI 机制** ，下图为 Dubbo
+SPI 实现的简单类图。
+
+![](https://image.3001.net/images/20221221/1671587184_63a265703890378565fc1.jpg!small)
+
+• **1、Dubbo SPI 原理** ：通过读取相应的配置文件找到具体实现类，然后通过以下两种方式实例化对象：（1）通过 **自适应** 的
+**动态字节码编译** 技术，生成相应的 **动态代理类** ，（2）利用反射机制实现实例化。相较于 Java SPI，Dubbo SPI 实现了内部的
+IoC 和 Aop
+
+• **2、Dubbo SPI 优点** ：（1） **高扩展** ：用户可以根据实际业务需求扩展相应的实现模块，包含字节码编译技术、rpc
+协议、通信方式、注册方式等，（2） **解耦：** 通过封装 SPI 调用机制，架构上实现了上层应用与底层逻辑之间的解耦，为高扩展提供了支撑条件
+
+• **3、Dubbo SPI 常用样例** （以 getExtension 和 getAdaptiveExtension 为例）
+
+    
+    
+    配置文件内容
+    test1=com.dubbo.demo.service.TestServiceimpl
+    test2=com.dubbo.demo.service.TestServiceImpl2
+    
+    一、通过getExtension方法生成实例
+        ExtensionLoader<TestService> extensionLoader = ExtensionLoader.getExtensionLoader(TestService.class);
+        TestService t1 = extensionLoader.getExtension("test1");
+        TestService t2 = extensionLoader.getExtension("test2");
+       
+    二、通过getAdaptiveExtension生成实例（方法中需要@Adaptive注解，参数会对URL校验）
+        TestService testService = ExtensionLoader.getExtensionLoader(TestService.class).getAdaptiveExtension();
+        URL url = new URL("test", "localhost", 8080, new String[]{"test.service", "test1"});
+        testService.sayHello("bbb", url);
+
+调用 getAdaptiveExtension 方法最终会生成相应的代理类， **最终生成的代理类会根据 URL 参数里面的 protocol 决定**
+（以内部 Protocol 为例）
+
+![](https://image.3001.net/images/20221221/1671587185_63a2657103afd45b4f9ef.png!small)
+
+##  **三、服务注册**
+
+###  **1、服务注册流程**
+
+![](https://image.3001.net/images/20221221/1671587185_63a26571e778e929ccb32.png!small)
+
+###  **2、服务注册类图详解**
+
+![](https://image.3001.net/images/20221221/1671587187_63a265732ff626daf1979.png!small)
+
+###  **3、服务注册步骤**
+
+####  **（1）步骤一：初始化配置（类图：抽象 Config 与初始化配置）**
+
+首先需要实例化 ServiceConfig 实例，声明 “注册接口、接口实例、注册中心配置”，其中 “ServiceBean” 是实现 Spring 与
+Dubbo 整合的桥梁。然后会由 DubboBootstrap 调用 **initialize 方法** 实现 configManager 和
+Environment 的初始化，其中就包括将 ServiceConfig
+中的配置转换成内部封装的协议（ApplicationModel、ProviderModel 等）
+
+    
+    
+    private static void startWithExport() throws InterruptedException {
+        //初始化配置
+        ServiceConfig<DemoServiceImpl> service = new ServiceConfig<>();
+        service.setInterface(DemoService.class);
+        service.setRef(new DemoServiceImpl());
+        service.setApplication(new ApplicationConfig("dubbo-demo-api-provider"));
+        service.setRegistry(new RegistryConfig("zookeeper://127.0.0.1:2181"));
+        //服务注册入口
+        service.export();
+    }
+    
+    
+    public synchronized void export() {
+        if (bootstrap == null) {
+            bootstrap = DubboBootstrap.getInstance();
+            // compatible with api call.
+            if (null != this.getRegistry()) {
+                bootstrap.registries(this.getRegistries());
+            }
+            //初始化配置()
+            bootstrap.initialize();
+        }
+        ......        
+        if (shouldDelay()) {
+            DELAY_EXPORT_EXECUTOR.schedule(this::doExport, getDelay(), TimeUnit.MILLISECONDS);
+        } else {
+            //服务注册
+            doExport();
+        }
+    
+        exported();
+     }
+
+####  **（2）步骤二：组装 URL**
+
+根据初始化配置组转注册接口服务的 URL。其中 URL 也是 Dubbo 内部通过 @Adaptive 注解实现 SPI 的核心，通过修改 URL
+的头部协议（如：register、dubbo、injvm 等），在调用
+
+    
+    
+    private static final Protocol PROTOCOL = ExtensionLoader.getExtensionLoader(Protocol.class).getAdaptiveExtension();
+    PROTOCOL.export(wrapperInvoker)
+
+该方法的时候，会根据不同的协议切换不通的实现类，实现了 Dubbo 技术架构与业务逻辑的解耦。
+
+    
+    
+    private void doExportUrls() {
+        //组装后的URL格式样例
+        //registry://127.0.0.1:2181/org.apache.dubbo.registry.RegistryService?application=dubbo-demo-api-provider&dubbo=2.0.2&pid=26212®istry=zookeeper×tamp=1663049763199
+        List<URL> registryURLs = ConfigValidationUtils.loadRegistries(this, true);
+    
+        int protocolConfigNum = protocols.size();
+        for (ProtocolConfig protocolConfig : protocols) {
+            //组装pathKey : org.apache.dubbo.demo.DemoService
+            String pathKey = URL.buildKey(getContextPath(protocolConfig)
+                    .map(p -> p + "/" + path)
+                    .orElse(path), group, version);
+            //保存接口服务
+            repository.registerService(pathKey, interfaceClass);
+            //服务注册
+            doExportUrlsFor1Protocol(protocolConfig, registryURLs, protocolConfigNum);
+        }
+    }
+
+####  **（3）步骤三：Invoker 封装（类图：Ref - > Invoker）**
+
+通过内置的动态字节码编译（默认 javassist）生成 Invoker 代理类，然后通过反射机制生成 Wrapper 实例。其中 Invoker 是
+Dubbo 的核心模型，Invoker 是 Dubbo 中的实体域，也就是真实存在的。其他模型都向它靠拢或转换成它
+
+    
+    
+    private void doExportUrlsFor1Protocol(ProtocolConfig protocolConfig, List<URL> registryURLs, int protocolConfigNum) {
+        ......
+        //组装新的URL
+        //dubbo://2.0.0.1:20880/org.apache.dubbo.demo.DemoService?anyhost=true&application=dubbo-demo-api-provider&bind.ip=2.0.0.1&bind.port=20880&default=true&deprecated=false&dubbo=2.0.2&dynamic=true&generic=false&interface=org.apache.dubbo.demo.DemoService&methods=sayHello,sayHelloAsync&pid=46528&release=&service.name=ServiceBean:/org.apache.dubbo.demo.DemoService&side=provider×tamp=1663051456562
+        URL url = new URL(name, host, port, getContextPath(protocolConfig).map(p -> p + "/" + path).orElse(path), map);
+        ......
+        //Invoker封装
+        Invoker<?> invoker = PROXY_FACTORY.getInvoker(ref, (Class) interfaceClass,
+                 registryURL.addParameterAndEncoded(EXPORT_KEY, url.toFullString()));
+        //wrapper
+        DelegateProviderMetaDataInvoker wrapperInvoker = new DelegateProviderMetaDataInvoker(invoker, this);
+    
+        //服务注册(此时URL头部协议变成了register，实际会调用RegistryProtocol)
+        Exporter<?> exporter = PROTOCOL.export(wrapperInvoker);
+        exporters.add(exporter);
+    }
+    
+    # PROXY_FACTORY
+    public <T> Invoker<T> getInvoker(T proxy, Class<T> type, URL url) {
+        // 动态代理类生成，反射生成实例
+        final Wrapper wrapper = Wrapper.getWrapper(proxy.getClass().getName().indexOf('$') < 0 ? proxy.getClass() : type);
+        return new AbstractProxyInvoker<T>(proxy, type, url) {
+            @Override
+            protected Object doInvoke(T proxy, String methodName,
+                                      Class<?>[] parameterTypes,
+                                      Object[] arguments) throws Throwable {
+                return wrapper.invokeMethod(proxy, methodName, parameterTypes, arguments);
+            }
+        };
+    }
+
+####  **（4）步骤四：Exporter 封装（类图：Invoker- > Exporter）**
+
+此时会依次调用 RegistryProtocol 、DubboProtocol 将 Invoker 封装成 Exporter，并将封装后的 Exporter
+存储到本地 map 中（类似于 spring bean）。然后会调用底层通信服务（默认 netty）进行端口监听，此时会通过 **责任链模式** 封装
+Exchanger 与 Transporter，用于处理网络传输消息的编码 / 解码。
+
+    
+    
+    # RegistryProtocol : export
+    public <T> Exporter<T> export(final Invoker<T> originInvoker) throws RpcException {
+        ......
+        //此时URL头部协议已变成dubbo
+        //dubbo://2.0.0.1:20880/org.apache.dubbo.demo.DemoService?anyhost=true&application=dubbo-demo-api-provider&bind.ip=2.0.0.1&bind.port=20880&default=true&deprecated=false&dubbo=2.0.2&dynamic=true&generic=false&interface=org.apache.dubbo.demo.DemoService&methods=sayHello,sayHelloAsync&pid=56036&release=&service.name=ServiceBean:/org.apache.dubbo.demo.DemoService&side=provider×tamp=1663052353098
+        providerUrl = overrideUrlWithConfig(providerUrl, overrideSubscribeListener);
+        // export invoker
+        final ExporterChangeableWrapper<T> exporter = doLocalExport(originInvoker, providerUrl);
+    
+        // 此时Registry实例默认是ZookeeperRegistry
+        final Registry registry = getRegistry(originInvoker);
+    
+        final URL registeredProviderUrl = getUrlToRegistry(providerUrl, registryUrl);
+        
+        // decide if we need to delay publish
+        boolean register = providerUrl.getParameter(REGISTER_KEY, true);
+        if (register) {
+            //底层调用ZK，创建node节点
+            registry.register(registeredProviderUrl);
+        }
+        ....
+    }
+    
+    # RegistryProtocol : doLocalExport
+    private <T> ExporterChangeableWrapper<T> doLocalExport(final Invoker<T> originInvoker, URL providerUrl) {
+        String key = getCacheKey(originInvoker);
+    
+        return (ExporterChangeableWrapper<T>) bounds.computeIfAbsent(key, s -> {
+            Invoker<?> invokerDelegate = new InvokerDelegate<>(originInvoker, providerUrl);
+            //此时会调用DubboProtocol进行exporter封装
+            return new ExporterChangeableWrapper<>((Exporter<T>) protocol.export(invokerDelegate), originInvoker);
+        });
+    }
+    
+    
+    # DubboProtocol : export
+    public <T> Exporter<T> export(Invoker<T> invoker) throws RpcException { 
+        ......
+        // export service.
+        String key = serviceKey(url);
+        //exporter封装
+        DubboExporter<T> exporter = new DubboExporter<T>(invoker, key, exporterMap);
+        exporterMap.put(key, exporter);
+        ......
+        //开启服务监听
+        openServer(url);
+        optimizeSerialization(url);
+        
+        return exporter;
+    }
+
+####  **（5）步骤五：注册服务节点**
+
+封装 Exporter 并开启服务端口监听后，会调用注册中心（默认 Zookeeper）注册服务节点信息
+
+    
+    
+    # RegistryProtocol : export
+    public <T> Exporter<T> export(final Invoker<T> originInvoker) throws RpcException {
+        ......
+        //此时URL头部协议已变成dubbo
+        //dubbo://2.0.0.1:20880/org.apache.dubbo.demo.DemoService?anyhost=true&application=dubbo-demo-api-provider&bind.ip=2.0.0.1&bind.port=20880&default=true&deprecated=false&dubbo=2.0.2&dynamic=true&generic=false&interface=org.apache.dubbo.demo.DemoService&methods=sayHello,sayHelloAsync&pid=56036&release=&service.name=ServiceBean:/org.apache.dubbo.demo.DemoService&side=provider×tamp=1663052353098
+        providerUrl = overrideUrlWithConfig(providerUrl, overrideSubscribeListener);
+        // export invoker
+        final ExporterChangeableWrapper<T> exporter = doLocalExport(originInvoker, providerUrl);
+    
+        // 此时Registry实例默认是ZookeeperRegistry
+        final Registry registry = getRegistry(originInvoker);
+    
+        final URL registeredProviderUrl = getUrlToRegistry(providerUrl, registryUrl);
+        
+        // decide if we need to delay publish
+        boolean register = providerUrl.getParameter(REGISTER_KEY, true);
+        if (register) {
+            //底层调用ZK，创建node节点
+            registry.register(registeredProviderUrl);
+        }
+        ....
+    }
+
+##  **四、总结**
+
+至此，Dubbo 服务注册的整体流程已大致结束，文中如有不当或者错误观点，欢迎大家评论区指出。感兴趣的同学，可以关注后续 “Dubbo 架构设计与源码解析”
+系列的文章。
+

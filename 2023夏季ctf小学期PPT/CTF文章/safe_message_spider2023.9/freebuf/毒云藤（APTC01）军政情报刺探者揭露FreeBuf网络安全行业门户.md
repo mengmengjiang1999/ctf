@@ -1,0 +1,1580 @@
+# **第1章 概述**
+
+## 1\. 主要发现
+
+从2007年开始至今，360追日团队发现毒云藤组织对中国国防、政府、科技、教育以及海事机构等重点单位和部门进行了长达11年的网络间谍活动。该组织主要关注军工、中美关系、两岸关系和海洋相关领域，其关注的领域与我们之前发布的海莲花（OceanLotus）APT组织有一定相似的地方。
+
+360追日团队捕获毒云藤的首个木马出现在2007年12月。在之后的11年中我们先后捕获到了13个版本的恶意代码，涉及样本数量73个。该组织在初始攻击环节主要采用鱼叉式钓鱼邮件攻击，攻击之前对目标进行了深入调研和精心挑选，选用与目标所属行业或领域密切相关的内容构造诱饵文件和邮件，主要是采用相应具体领域相关会议材料、研究成果或通知公告等主题。期间漏洞文档样本数量10个，其中包含1个0day漏洞。这些木马的感染者遍布国内31个省级行政区。C&C域名数量为59个，回传的地址位于4个不同国家或地区。
+
+毒云藤在对中国持续11年的网络间谍活动中，下述相关时间点值得关注：
+
+  * 2007年12月，首次发现与该组织相关的木马。涉及海洋相关领域（疑似对某大型船务公司进行相关攻击）
+
+  * 2008年3月，对国内某高校重点实验室（某科研机构）
+
+  * 2009年2月，开始对军工行业展开攻击（某知名军工类期刊杂志社）
+
+  * 2009年10月，木马增加了特殊的对抗静态扫描的手法（API字符串逆序），相关手法沿用到大部分版本的木马中，并持续应用到2018年
+
+  * 2011年12月，木马增加了特殊的对抗动态检测的手法（错误API参数），相关手法沿用到大部分版本的木马中，并持续应用到2015年
+
+  * 2012年2月，首次发现基于zxshell代码的修改版后门1，其中关键功能是窃取如.doc\\.ppt\\.xls\\.wps类文档文件
+
+  * 2013年3月，对中科院，以及若干科技、海事等领域国家部委、局等进行了集中攻击
+
+  * 2013年10月，对中国某政府网站进行水坑攻击
+
+  * 2014年5月，发现zxshell修改版后门1的进化版本2，其中除了基于修改版1功能，增加了如“军”，“航”，“报告”关键字的搜索
+
+  * 2014年9月12日，首次发现与CVE-2014-4114（0day漏洞）相关事件和样本。
+
+  * 2014年10月14日，iSIGHT发布相关报告，并指出CVE-2014-4114（0day漏洞）。同日微软发布相关安全公告
+
+  * 2015年2月25日，对某军工领域协会组织（国防科技相关）、中国工程院等攻击，同时发现酷盘版样本
+
+  * 2017年10月，主要通过CVE-2017-8759漏洞文档对某大型媒体机构网站和泉州某机关相关人员实施鱼叉攻击
+
+  * 2018年4月，360威胁情报中心公开披露了该组织利用CVE-2017-8759漏洞文档的攻击恶意代码2
+
+  * 2018年5月，针对数家船舶重工企业、港口运营公司等海事行业机构发动攻击
+
+ ****
+
+**注：**
+
+ **以上首次攻击时间，是基于我们对该组织了解掌握的现有数据进行统计的，不代表我们已经掌握了该组织的全部攻击事件和行为。**
+
+##  2\. 命名由来  
+
+自2015年，国内在APT方向的相关研究逐渐起步并加快。继“海莲花”、“蓝宝菇”等组织曝光之后，毒云藤组织（APT-C-01）是又一个针对政府、军工、海事等领域敏感信息持续发起攻击的APT组织。
+
+该组织是360独立发现的，并率先披露了该组织的部分相关信息（参见：https://ti.360.net/blog/articles/analysis-of-apt-c-01/，发布时间：2018年4月），符合360对APT组织就行独立命名的条件。
+
+360威胁情报中心将APT-C-01组织命名为“毒云藤”，主要是考虑了以下几方面的因素：一是该组织在多次攻击行动中，都使用了Poison
+Ivy（毒藤）木马；二、该攻击组织在中转信息时，曾使用云盘作为跳板传输资料，这跟爬藤类植物凌空而越过墙体，颇有相似之处。根据360威胁情报中心对APT组织的命名规则（参见《2016年中国高级持续性威胁研究报告》），同时结合该组织关联地区常见的蔓藤植物，将APT-C-01组织命名为“毒云藤”。
+
+另，国内安天实验室于2018年9月19日发布APT攻击组织“绿斑”（GreenSpot）分析报告。根据360威胁情报中心与安天实验室之间达成的能力型厂商成果互认约定，360威胁情报中心发现的“毒云藤”（APT-C-01）对应“绿斑”（Green
+Spot），二者是同一组织。因此，我们把监测到的情况与该组织攻击特点也公布出来，共同为中国提升APT防御能力而努力。
+
+#  **  
+**
+
+#  **第2章 攻击目的和受害分析**
+
+##  1\. 攻击目的
+
+攻击组织的主要目的是窃取中国政府、科研相关行业领域的资料数据。相关数据主要以文档为主，关心的关键字主要包括以下关键字和扩展名的文件：
+
+ **关键字：**  
+---  
+ **“201** **”，“2014** **”，“2015**
+**年”，“报”，“报告”，“兵”，“部队”，“对台”，“工作”，“规划”，“国”，“国际”，“航”，“合作”，“机”，“机场”，“基地”，“极地”，“军”，“军事”，“科技”，“密”，“内部”，“十”，“十三”，“台”，“台湾”，“铁路”，“无人”，“项”，“雪”，“研”，“运输”，“战”，“站”，“中”**  
+ **扩展名：**  
+ **“doc** **”，“ppt** **”，“xls** **”，“pdf** **”，“rtf** **”，“rar** **”，“wps**
+**”，“doc*** **”，“ppt*** **”，“xls*** **”**  
+  
+**窃取用户主机相关信息**
+
+![image.png](https://image.3001.net/images/20180921/1537499799_5ba462978cd89.png!small)
+
+![image.png](https://image.3001.net/images/20180921/1537499808_5ba462a0c5abc.png!small)
+
+图 1相关窃取用户主机信息截图（示例）
+
+![image.png](https://image.3001.net/images/20180921/1537499821_5ba462adcc408.png!small)
+
+图 2被感染用户月统计（2014年7月-2015年6月）
+
+##  
+
+## 2\. 行业分布
+
+主要涉及：国防、政府、科技、教育等
+
+相关领域包括：海洋（南海、东海、测绘）、军工、涉台问题（两岸关系）、中美关系
+
+## 3\. 地域分布
+
+![image.png](https://image.3001.net/images/20180921/1537499829_5ba462b518942.png!small)
+
+图 3中国被感染地区分布图（2014年7月-2015年6月）
+
+![image.png](https://image.3001.net/images/20180921/1537499837_5ba462bd5297f.png!small)
+
+图 4中国被感染地区比例图
+
+ **地区**|  **数量**  
+---|---  
+ **北京**|  296  
+ **福建**|  55  
+ **广东**|  43  
+ **浙江**|  39  
+ **上海**|  32  
+  
+# **第3章 持续11年的活动**
+
+##  1\. 初始攻击
+
+### 1) 鱼叉式钓鱼邮件攻击
+
+鱼叉式钓鱼邮件攻击是APT中常用的攻击手法，主要在APT的初始攻击环节。简单理解就是利用邮件作为攻击前导，其中正文、附件都可能携带恶意代码，进一步主要以附件携带漏洞文档文件为主，大约90%的攻击都是该类攻击[1]。
+
+本小节主要介绍邮件携带漏洞文档和邮件携带二进制可执行文件这两种攻击方法。
+
+#### A. 携带漏洞文档
+
+  
+|  **MD5**|  **文件名**|  **病毒名**  
+---|---|---|---  
+ **邮件附件**|  a5d9edaa1b6cf820d54c19b2c6bd246d| 专业技术干部手册.rar|  
+  
+ **压缩包内PE**|  2fa75fdf4d57c182bc6c0438dd6cbf27| HandBook.chm|  
+  
+ **释放的PE**|  b04d7fa1c7e3a8274ba81f48f06a5f4e| hh.exe|
+Backdoor.Win32.FakeWinupdate  
+  
+  
+
+![image.png](https://image.3001.net/images/20180921/1537499862_5ba462d66ffd8.png!small)
+
+图 5携带漏洞文档案例1邮件截图
+
+![image.png](https://image.3001.net/images/20180921/1537499869_5ba462ddb448a.png!small)
+
+图 6携带漏洞文档案例1邮件附件压缩包截图
+
+![image.png](https://image.3001.net/images/20180921/1537499876_5ba462e4e6d00.png!small)
+
+图 7携带漏洞文档案例1诱饵CHM文档截图
+
+  
+| **MD5**|  **文件名**|  **病毒名**  
+---|---|---|---  
+ **邮件附件**|  19365fddc2fca8735d51def001704db3| 2013中国亚洲太平洋学会年会文件.doc|
+virus.exp.20120158  
+ **释放的PE**|  07561810d818905851ce6ab2c1152871| update.exe|
+Backdoor.Win32.ZxShell  
+  
+  
+
+![image.png](https://image.3001.net/images/20180921/1537499892_5ba462f4175b6.png!small)
+
+图 8携带漏洞文档案例1邮件截图
+
+  
+| **MD5**|  **文件名**|  **病毒名**  
+---|---|---|---  
+ **邮件附件**|  9fb6866c2cdd49387a520f421a04b882 | 中科院2013年研究项目材料.doc|
+virus.exp.20120158  
+ **释放的PE**|  f3ed0632cadd2d6beffb9d33db4188ed| update.exe|
+Backdoor.Win32.PoisonIvy  
+  
+  
+
+![image.png](https://image.3001.net/images/20180921/1537499899_5ba462fbd7a46.png!small)
+
+图 9携带漏洞文档案例2邮件截图
+
+![image.png](https://image.3001.net/images/20180921/1537499911_5ba4630769056.png!small)
+
+图 10携带漏洞文档案例2漏洞文档（释放后迷惑文档）截图
+
+#### B. 携带PE二进制可执行程序
+
+  
+|  **MD5**|  **文件名**|  **病毒名**  
+---|---|---|---  
+ **邮件附件**|  954f50f7ed8b4c11b59560769de0ec36| 关于推荐第十三届中国青年科技奖候选人的通知.rar|
+Dropper.Win32.FakeDoc  
+ **压缩包内PE**|  8c9670fbe68ab8719077d480242e6b9e| 关于推荐第十三届中国青年科技奖候选人的通知.exe|
+Dropper.Win32.FakeDoc  
+ **释放的PE**|  6a37ce66d3003ebf04d249ab049acb22| svchoct.exe|
+Backdoor.Win32.HttpBot  
+  
+  
+
+![image.png](https://image.3001.net/images/20180921/1537499921_5ba4631128ace.png!small)
+
+图 11携带PE二进制可执行程序案例邮件截图
+
+![image.png](https://image.3001.net/images/20180921/1537499928_5ba46318d9dc7.png!small)
+
+图 12携带PE二进制可执行程序案例邮件附件压缩包截图
+
+![image.png](https://image.3001.net/images/20180921/1537499935_5ba4631f932eb.png!small)
+
+图 13携带PE二进制可执行程序案例中木马释放迷惑文档打开后截图
+
+攻击组织在发送钓鱼邮件通常登录web邮件和通过相关工具（PHPMailer[2]）进行攻击邮件的发送。
+
+#### C. 携带自解压文件
+
+攻击组织通过向目标邮箱发送压缩形态的RAR自解压格式程序。
+
+![image.png](https://image.3001.net/images/20180921/1537500042_5ba4638a27e56.png!small)
+
+附件里面是木马文件：
+
+![image.png](https://image.3001.net/images/20180921/1537500048_5ba463906462f.png!small)
+
+该文件实际是一个RAR自解压格式程序，参数如下，点击这个exe，会直接运行里面的bat文件：
+
+![image.png](https://image.3001.net/images/20180921/1537500053_5ba46395ceebb.png!small)
+
+默认的批处理命令会把木马主体移动到temp目录下，然后执行起来，同时删除该批处理文件：
+
+![image.png](https://image.3001.net/images/20180921/1537500059_5ba4639b59b42.png!small)
+
+### 2) RLO **[3]** 伪装文档扩展名
+
+  
+|  **MD5**|  **文件名**|  **病毒名**  
+---|---|---|---  
+ **邮件附件**|  954f50f7ed8b4c11b59560769de0ec36|
+东海航保通信台站规划补充材料hangbaoexe.doc（真实扩展名cod.exe）| Dropper.Win32.FakeDoc  
+  
+  
+
+  
+
+![image.png](https://image.3001.net/images/20180921/1537500070_5ba463a6c190d.png!small)
+
+图 14伪装文档扩展名（RLO）样本截图
+
+### 3) 伪装图标隐藏扩展名
+
+  
+|  **MD5**|  **文件名**|  **病毒名**  
+---|---|---|---  
+ **邮件附件**|  cbeebf063f914eb3b5eba8b37302189f| “军民融合深度发展战略研究”咨询项目正式启动 .exe|
+Dropper.Win32.FakeFolder  
+  
+  
+
+![image.png](https://image.3001.net/images/20180921/1537500080_5ba463b09be15.png!small)
+
+图 15伪装图标隐藏扩展名案例1截图
+
+  
+| **MD5**|  **文件名**|  **病毒名**  
+---|---|---|---  
+ **邮件附件**|  ae004a5d4f1829594d830956c55d6ae4| 2014-03-18中国系统仿真学会科研项目经费自查xls
+_____________________________.exe| Dropper.Win32.FakeXls  
+  
+  
+
+![image.png](https://image.3001.net/images/20180921/1537500089_5ba463b9e3ef7.png!small)
+
+图 16伪装图标隐藏扩展名案例2截图
+
+![image.png](https://image.3001.net/images/20180921/1537500096_5ba463c0a7e18.png!small)
+
+图 17伪装图标隐藏扩展名案例2木马释放的迷惑文档截图
+
+## 2\. 漏洞分析
+
+### 1) CVE-2012-0158漏洞
+
+ **漏洞编号**|  **CVE-2012-0158**  
+---|---  
+ **说明**|  Windows
+常用控件中存在一个远程执行代码漏洞。攻击者可通过构建特制网页来利用此漏洞。当用户查看网页时，该漏洞可能允许远程执行代码。成功利用此漏洞的攻击者可以获得与登录用户相同的用户权限。  
+ **公布时间**|  2012年4月10日  
+ **参考链接**|  https://technet.microsoft.com/zh-cn/library/security/ms12-027.aspx
+http://www.cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2012-0158  
+  
+#### A. 漏洞文档执行流程
+
+![image.png](https://image.3001.net/images/20180921/1537500108_5ba463cc634e1.png!small)
+
+图 18漏洞文档（CVE-2012-0158）执行流程
+
+#### B. MHT格式
+
+![image.png](https://image.3001.net/images/20180921/1537500113_5ba463d1b3f5a.png!small)
+
+图 19漏洞文档两种形态（上MHT，下RTF）对比图
+
+CVE-2012-0158漏洞主要以
+rtf和doc格式为主，但本次攻击都是将doc文件保存为mht格式，导致杀软在漏洞检查时，因前置逻辑不匹配而漏检。相关漏洞文档文件在当时都是较低检出率。
+
+#### C. shellcode对比
+
+ **相关对比项**|  **共性描述**  
+---|---  
+ **shellcode**|  第一层shellcode都是异或0xA3用于解密，相关样本均为3层shellcode，并且数据结构一致  
+ **Magic** **值**|  值为：0x22776655，0xCACACACA，0xA02005CA，均一致  
+ **释放文件**|
+路径一致：正常文档文件：“%USERPROFILE%”，相关文档文件名会有变化，如：“关于对中船钦州大型海工修造及保障基地项目一期工程建设工作责任表的意见（37号）.doc”、“两会重要发布报告.doc”、“123.doc”等PE木马文件：“C:\Documents
+and Settings\All Users\「开始」菜单\程序\启动\update.exe”  
+ **清除痕迹**|
+解码相关注册表项，并删除。目的是为了清除office的打开失败等记录的历史信息。相关注册表项："Software\Microsoft\Office\12.0\Word\Resiliency\DisabledItems""Software\Microsoft\Office\12.0\Word\Resiliency\StartupItems""Software\Microsoft\Office\11.0\Word\Resiliency\DocumentRecovery""Software\Microsoft\Office\11.0\Word\Resiliency\DisabledItems""Software\Microsoft\Office\11.0\Word\Resiliency\StartupItems"  
+  
+通过我们对漏洞文档的shellcode对比可以发现相关结构和功能都基本一致，进一步我们也能推断相关漏洞文档是同一组织开发。
+
+### 2) CVE-2014-6352漏洞（0day）
+
+#### A. 背景介绍
+
+CVE-2014-4114漏洞是iSIGHT公司[4]在2014年10月14日发布相关报告，报告其中提到一个0day漏洞（CVE-2014-4114）用于俄罗斯相关主要针对北约、欧盟、电信和能源相关领域的网络间谍活动。微软也是在10月14日发布相关安全公告。
+
+而CVE-2014-6352是可以认为绕过CVE-2014-4114补丁的漏洞，微软之前的修补方案首先在生成Inf和exe文件后添加MakeFileUnsafe调用，来设置文件Zone信息，这样随后在漏洞执行inf安装时，会有一个安全提示。而CVE-2014-6352漏洞样本抛弃了使用inf来安装exe，转而直接执行exe。因为xp以上系统可执行文件的右键菜单第二项是以管理员权限执行，这样导致如果用户关闭了uac会导致没有任何安全提醒。所以微软6352的补丁是在调用右键菜单添加一个安全提示弹窗。
+
+ **漏洞编号**|  **CVE-2014-4114**  
+---|---  
+ **说明**|  Windows OLE 中存在一个漏洞，如果用户打开包含特制 OLE
+对象的文件，则该漏洞可能允许远程执行代码。成功利用此漏洞的攻击者可以获得与登录用户相同的用户权限。如果当前用户使用管理用户权限登录，则攻击者可随后安装程序；查看、更改或删除数据；或者创建拥有完全用户权限的新帐户。那些帐户被配置为拥有较少用户权限的用户比具有管理用户权限的用户受到的影响要小。  
+ **公布时间**|  2014年10月14日  
+ **参考链接**|  https://technet.microsoft.com/zh-cn/library/security/ms14-060.aspx
+https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-4114  
+  
+**漏洞编号**|  **CVE-2014-6352**  
+---|---  
+ **说明**|  在用户下载或接收，然后打开经特殊设计的包含 OLE 对象的 Microsoft Office
+文件时，会导致当前用户上下文中的远程执行代码漏洞。Microsoft 最初通过协调漏洞披露渠道了解到有关此漏洞的信息。此漏洞最初在 Microsoft
+安全通报 3010060 中进行了说明。Microsoft 获悉尝试使用此漏洞的有限攻击。此更新通过修改在访问 OLE
+对象时受影响的操作系统验证内存使用的方式来解决这些漏洞。  
+ **公布时间**|  2014年10月21日  
+ **参考链接**|  https://technet.microsoft.com/zh-cn/library/security/3010060.aspxhttps://technet.microsoft.com/zh-cn/library/security/ms14-064.aspx http://www.cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-6352  
+  
+#### B. 本次行动中相关介绍
+
+ **MD5**|  **文件名**|  **病毒名**  
+---|---|---  
+ **da807804fa5f53f7cbcaac82b901689c** ****|  指挥控制专委会评审责任书.ppsx|
+virus.exp.20146352  
+ **19f967e27e21802fe92bc9705ae0a770**|  南海课题项目建议书.ppsx| virus.exp.20146352  
+  
+  
+
+![image.png](https://image.3001.net/images/20180921/1537500131_5ba463e3b12b9.png!small)
+
+图 20漏洞文档（CVE-2014-6352）属性相关信息
+
+![image.png](https://image.3001.net/images/20180921/1537500137_5ba463e963d9d.png!small)
+
+图 21 CVE-2014-6352相关关键时间节点
+
+本次行动中的样本没有使用inf[5]来做跳板，而是直接使用exe，CVE-2014-4114漏洞触发后，默认调用的是右键菜单第二项，Windows7下正常是使用管理员权限打开，如果第二项是其他选项，则会将病毒路径作为参数传递，这也会产生部分兼容性问题。执行效果具体如下图所示：
+
+![image.png](https://image.3001.net/images/20180921/1537500143_5ba463ef3b0f9.png!small)
+
+图 22漏洞执行效果示意图
+
+**漏洞文档版本升级**
+
+![image.png](https://image.3001.net/images/20180921/1537500148_5ba463f4e13be.png!small)
+
+图 23沙虫漏洞文档样本（版本A）相关截图
+
+![image.png](https://image.3001.net/images/20180921/1537500163_5ba46403382fc.png!small)
+
+图 24沙虫漏洞文档样本（版本B）相关截图
+
+![image.png](https://image.3001.net/images/20180921/1537500168_5ba46408c40a7.png!small)
+
+图 25毒云藤漏洞文档样本（版本C）相关截图
+
+**版本**|  **时间**|  **厂商**|  **描述**  
+---|---|---|---  
+ **版本A**|  2014年10月14日（报告发布时间）| iSIGHT| UNC下载PE木马，利用inf安装启动PE木马  
+ **版本B**|  2014年10月16日（捕获样本时间）| Xecure lab[6]| 利用inf执行嵌入“.ppsx”文档内的PE木马  
+ **版本C**|  2014年9月12日（捕获样本时间）| 360| 没有利用inf，直接执行嵌入“.ppsx”文档内的PE木马  
+  
+### 3) CVE-2017-8759漏洞
+
+#### A.背景介绍
+
+CVE-2017-8759漏洞是FireEye公司在2017年9月12日披露的一个0Day漏洞（CVE-2017-8759）。微软也在9月12日发布了相关的安全公告。
+
+ **漏洞编号**|  **CVE-2017-8759**  
+---|---  
+ **说明**|  CVE-2017-8759是SOAP WSDL分析器代码注入漏洞，在解析SOAP
+WSDL定义的内容中它允许攻击者注入任意代码，影响所有.net环境。  
+ **公布时间**|  2017年9月12日  
+ **参考链接**|  https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2017-8759  
+  
+#### B.本次行动中相关介绍
+
+ **MD5**|  **文件名**|  **病毒名**  
+---|---|---  
+ **5d0b4cadfb149695d9fbc71dd1b36bef**|  2017两岸关系新进展与问题(内部).rtf|
+virus.exp.20178759  
+  
+Rtf文档中通过objautlink和objupdate控制字段自动更新链接，漏洞触发后导致mshta.exe执行远程指定的HTA文件。
+
+![image.png](https://image.3001.net/images/20180921/1537500177_5ba4641184490.png!small)
+
+HTA文件为一个嵌入了恶意VBS的html页面，该VBS调用POWERSHELL下载后续exe loader。
+
+![image.png](https://image.3001.net/images/20180921/1537500184_5ba4641871a89.png!small)
+
+## 3\. 持续渗透
+
+### 1) RAT演进
+
+RAT (Remote AccessTrojan)：远程访问木马，俗称远控。
+
+![image.png](https://mmbiz.qpic.cn/mmbiz_png/2AqAgxkehicib0Pq7wvXaezhGichxIqdCEZHPVGa5Ag4RHvQwlUduTibzm1se0n52ic2CiboH1DrrqwQpl5Nuw1MInCw/640?wx_fmt=png&tp=webp&wxfrom=5&wx_lazy=1&wx_co=1)
+
+图 26相关RAT演进时间轴
+
+**RAT**|  **最早**|  **最晚**  
+---|---|---  
+ **ZxShell**|  2007/12/26| 2014/10/14  
+ **Poison Ivy**|  2011/12/27| 2014/9/10  
+ **kbox**|  2015/2/11| 2015/5/4  
+ **puppet**|  2008/12/22| 2009/2/12  
+ **httpbot**|  2013/7/23| 2013/10/2  
+ **gh0st**|  2009/1/13| 2013/4/21  
+ **AresRemote**|  2009/5/5| 2009/5/5  
+ **shellcode**|  2011/7/13| 2015/5/5  
+ **XRAT**|  2013/11/6| 2013/11/6  
+ **FakeRising**|  2009/5/15| 2009/5/15  
+ **FakeWinupdate**|  2009/10/21| 2009/10/21  
+ **SBlog2014**|  
+|  
+  
+ **SBlog2015**|  
+|  
+  
+  
+相关后门程序总共涉及11个版本。相关比例数量如下：
+
+![image.png](https://image.3001.net/images/20180921/1537500221_5ba4643d8cc89.png!small)
+
+图 27 11个版本RAT分布比例
+
+**RAT**|  **数量**  
+---|---  
+ **ZxShell**|  23  
+ **Poison Ivy**|  17  
+ **kbox**|  15  
+ **puppet**|  4  
+ **httpbot**|  4  
+ **gh0st**|  4  
+ **FakeRising**|  2  
+ **AresRemote**|  1  
+ **shellcode**|  1  
+ **XRAT**|  1  
+ **FakeWinupdate**|  1  
+  
+### 2) RAT 13个版本分析
+
+![image.png](https://image.3001.net/images/20180921/1537500234_5ba4644ad2252.png!small)
+
+图 28 RAT相关版本分类
+
+#### A. Poison Ivy
+
+Poison Ivy木马本质上一款远程控制木马程序（RAT）。其中FireEye对Poison Ivy专门进行了一次研究分析[7]。
+
+本次报告中出现的PoisonIvy木马对应的生成器版本均为2.3.2，Poison
+Ivy木马生成器从1.0.0版本开始总共10个版本，最新版本为2.3.2。Poison
+Ivy木马生成器可以生成EXE和shellcode两种版本，在本次行动中生成的木马均为shellcode形态。进一步相关互斥体绝大部分均为默认：“)!VoqA.I4”。
+
+![image.png](https://image.3001.net/images/20180921/1537500246_5ba46456a2596.png!small)
+
+图 29 Posion Ivy生成器相关配置界面截图
+
+![image.png](https://image.3001.net/images/20180921/1537500251_5ba4645bd36f8.png!small)
+
+图 30外层和内层PI关系
+
+另外Poison Ivy木马均由外层母体依次异或key1和key2来得到shellcode。
+
+![image.png](https://image.3001.net/images/20180921/1537500256_5ba46460f0bc1.png!small)
+
+图 31 Poison Ivy木马（三个）相关异或解密对比图
+
+下表是相关PoisonIvy木马配置信息（ID和对应密码）列表。
+
+ **MD5**|  **ID**|  **密码**  
+---|---|---  
+ **d61c583eba31f2670ae688af070c87fc**|  14| 926  
+ **26d7f7aa3135e99581119f40986a8ac3**|  14| 8613  
+ **5ee2958b130f9cda8f5f3fc1dc5249cf**|  4| #My43@92  
+ **7639ed0f0c0f5ac48ec9a548a82e2f50**|  1013| @1234@  
+ **250c9ec3e77d1c6d999ce782c69fc21b**|  avex| admin  
+ **f3ed0632cadd2d6beffb9d33db4188ed**|  w6U900| admin  
+ **9b925250786571058dae5a7cbea71d28**|  zhan| ftp1234  
+ **ae004a5d4f1829594d830956c55d6ae4**|  zhan2| ftp1234  
+ **fccb13c00df25d074a78f1eeeb04a0e7**|  zhan2| ftp1234  
+ **a73d3f749e42e2b614f89c4b3ce97fe1**|  009-4| ftp443  
+ **785b24a55dd41c94060efe8b39dc6d4c**|  120707| hook32wins  
+ **36c23c569205d6586984a2f6f8c3a39e**|  90518| kkbox55  
+ **81e1332d15b29e8a19d0e97459d0a1de**|  90518| kkbox55  
+ **7c498b7ad4c12c38b1f4eb12044a9def**|  motices| ps135790  
+ **ca663597299b1cecaf57c14c6579b23b**|  010-4| ps1478  
+ **76782ecf9684595dbf86e5e37ba95cc8**|  13099| updatewin  
+ **c31549489bf0478ab4c367c563916ada**|  0314--Good| updatewin  
+  
+#### B. ZxShell
+
+ZxShell从2007年12月开始一直到2014年10月一直被毒云藤组织持续使用。由于相关版本差别较大，区分为内部公开版和源码公开版，第一个版指从2007年开始到2012年之前出现过的该组织使用的ZxShell木马，第二个版指从2012年开始到2014年出现过的该组织使用的相关ZxShell木马，相关木马是基于源码公开版进行开发，即我们称之为二次开发版。
+
+内部公开版和源码公开版均为3.0版本，前者无大范围公开，其中功能较丰富，后者相关源码传播较为广泛，其中功能较之前版本剔除部分。
+
+关于ZxShell的研究可以参看思科的ThreatSpotlight: Group 72, Opening the ZxShell报告[8]。
+
+  
+| **内部公开版**|  **源码公开版**|  **二次开发版**  
+---|---|---|---  
+ **CleanEvent**|  √| √| √  
+ **End**|  √| √| √  
+ **Execute**|  √| √| √  
+ **Help / ?**|  √| √| √  
+ **LoadDll**|  √| √| √  
+ **Ps**|  √| √| √  
+ **SC**|  √| √| √  
+ **ShareShell**|  √| √| √  
+ **SysInfo**|  √| √| √  
+ **TermSvc**|  √| √| √  
+ **TransFile**|  √| √| √  
+ **ZXNC**|  √| √| √  
+ **zxplug**|  √| √| √  
+ **CA**|  √| √| ×  
+ **CloseFW**|  √| √| ×  
+ **FileTime**|  √| √| ×  
+ **PortScan**|  √| √| ×  
+ **RunAs**|  √| √| ×  
+ **Shutdown**|  √| √| ×  
+ **Uninstall**|  √| √| ×  
+ **User**|  √| √| ×  
+ **ZXHttpProxy**|  √| √| ×  
+ **ZXHttpServer**|  √| √| ×  
+ **ZXSockProxy**|  √| √| ×  
+ **capsrv**|  √| ×| ×  
+ **Exit / Quit**|  √| ×| ×  
+ **FileMG**|  √| ×| ×  
+ **FindDialPass**|  √| ×| ×  
+ **FindPass**|  √| ×| ×  
+ **GetCMD**|  √| ×| ×  
+ **KeyLog**|  √| ×| ×  
+ **rPortMap**|  √| ×| ×  
+ **SYNFlood**|  √| ×| ×  
+ **winvnc**|  √| ×| ×  
+ **ZXARPS**|  √| ×| ×  
+ **总共指令数量**|  **35**|  **24**|  **13**  
+  
+从上表可以看出基于相关版本的木马，对应版本自带指令数量不断减少，也就是毒云藤组织剔除了较多已有的功能，在二次开发版中只保留了13个指令，进一步增量了其他指令和功能。二次开发版中相关新增功能如下表所示：
+
+**二次开发版与源码公开版对比**
+
+ **剔除功能**|  **保留功能**|  **新增功能**  
+---|---|---  
+克隆系统账号  
+暂时关闭windows自带防火墙  
+克隆一个文件的时间信息  
+端口扫描  
+以其他进程或用户的身份运行程序  
+注销 || 重启 || 关闭系统  
+卸装  
+系统帐户管理  
+代理服务器  
+HTTP 服务器  
+Socks 4 & 5 代理| 清除系统日记  
+结束本程序  
+运行一个程序  
+显示本信息  
+加载一个DLL或插入到指定的进程  
+进程管理  
+服务管理  
+共享一个Shell给别人.  
+查看系统详细信息  
+配置终端服务  
+从指定网址下载文件或上传文件到指定FTP服务器  
+NC  
+插件功能, 可添加自定义命令| IEPass获取IE密码  
+搜索敏感信息  
+加密写入文件：指定时间范围内；指定文件扩展名；指定关键字范围内  
+搜集信息回传到服务器  
+期间相关版本改动：修改监控日志文件加密写到日志adovbs.mof；添加配置字符的监控；增加了Profiles.log记录系统信息和文件信息  
+  
+我们捕获到的样本是基于ZxShell源码修改，保留原有结构，ZxShell本身指令比较多，有二十多种。我们捕获的样本除了保留部分指令外，剔除了大量指令，如：安装启动，克隆系统账户，关闭防火墙，端口扫描，代理服务器等功能。另外增加“IEPass”指令。
+
+![image.png](https://image.3001.net/images/20180921/1537500383_5ba464df5a52f.png!small)
+
+图 32包含IEPass指令相关代码截图
+
+**相关子版本迭代更新（二次开发版）**
+
+1、
+对比上一个版本,变化主要是搜集信息的部分,搜集文档的创建时间时间从半年前变成4年前，增加对“.wps”扩展名的文件搜集，改变原来的“.doc”为“.doc*”；
+
+2、 窃取的文档的创建时间又重新变成半年，文件打包部分修改，去除文件版本信息；
+
+3、 比较大的改动，修改监控日志文件加密写到日志adovbs.mof，添加配置字符的监控，增加，增加了Profiles.log记录系统信息和文件信息；
+
+4、 代码功能较上个版本更新较少，相关函数位置发生了变化，是对抗杀毒软件进行了相关调整。
+
+![image.png](https://image.3001.net/images/20180921/1537500391_5ba464e716abe.png!small)
+
+图 33包含相关关键字代码截图
+
+**ZxShell** **相关配置列表**
+
+ **上线密码**|  **标记**|  **关键字**  
+---|---|---  
+admin| fish1111| “201”,“报”，“项”  
+ps1357| ps1234| “军事”，“对台”，“工作”  
+ftp533| ftp1234| “军”，“项”  
+8613| spring| “军”，“航”，“报告”  
+661566| 大661566大| “极地”，“军”，“雪”  
+987| zxcvasdf| “对台”，“国际”，“军”  
+95279527| asusgo| “航”，“无人”，“军”  
+qwer1234| kano918| “航”，“军”，“部”  
+  
+#### C. 酷盘版
+
+相关样本伪装文件夹图标，执行后释放“svch0st.exe”的木马文件和用作迷惑用户的正常文件夹和“.doc”文档文件。
+
+“svch0st.exe”是一个采用ssl加密协议传输的一个木马程序，它会每过一个小时，执行一遍所有的木马流程，木马流程把包括获取电脑上的所有信息（相关信息包括：文件目录、系统版本，网卡信息、进程列表信息、打包指定文件、网络信息和磁盘信息），还有如果发现文件有相关关键字（如：“台”、“军”、“战”）的文件，打包，通过ssl协议的方式上传到攻击者事先注册的酷盘。
+
+C&C地址是酷盘地址[9]，通过酷盘提供的API进行文件上传。
+
+![image.png](https://image.3001.net/images/20180921/1537500418_5ba46502203ad.png!small)
+
+![image.png](https://image.3001.net/images/20180921/1537500425_5ba465091412f.png!small)
+
+图 34包含酷盘API地址的代码截图
+
+![image.png](https://image.3001.net/images/20180921/1537500432_5ba4651090e5d.png!small)
+
+图 35酷盘官网首页截图
+
+**酷盘版A** **相关功能描述** **（不释放Shellcode** **后门）**|  **酷盘版B** **相关功能描述**
+**（释放shellcode** **后门）**  
+---|---  
+1、 释放窃密木马子体  
+2、 获取系统信息  
+3、 搜索敏感文件  
+4、 打包加密上传敏感文件| 1、 释放窃密木马子体  
+2、 获取系统信息  
+3、 搜索敏感文件  
+4、 打包加密上传敏感文件  
+5、 释放Shellcode后门子体（增加）  
+6、 连接远程CC服务器（增加）  
+7、 执行远程命令（增加）  
+  
+**酷盘版相关配置信息列表**
+
+ **样本编译时间戳**|  **监控字符**|  **特征串**  
+---|---|---  
+ **2/11/2015 20:48:26**|  “2014","军"，“兵”| A-plus  
+ **2/11/2015 20:48:26**|  “台”，“军”，“战”| Aboutdoublewu  
+ **2/11/2015 20:48:26**|  “201”，“报”，“研”| book  
+ **2/11/2015 20:48:26**|  “国际”，“合作”，“军事”| wind  
+ **2/11/2015 20:48:26**|  “部队”，“机场”，“部队”| rankco  
+ **3/1/2015 22:08:18**|  “2014","军"，“兵”| A-plus  
+ **3/2/2015 8:21:01**|  “军”，“机”，“站”| ineedyou  
+ **3/2/2015 23:17:57**|  “十”，“国”，“中”| ineedyou  
+ **3/2/2015 23:17:57**|  “军”，“机”，“站”| ineedyou  
+ **3/2/2015 23:17:57**|  “十三”，“运输”，“铁路”| AJ  
+ **5/4/2015 16:48:12**|  “部队”，“台湾”，“基地”| rancor  
+ **5/4/2015 16:48:12**|  “军”，“科技”，“国”| furyman  
+ **5/4/2015 16:48:12**|  “201”，“密”，“内部”| king  
+ **5/4/2015 16:48:12**|  “2015年”，“工作”，“报告”| comein  
+ **5/4/2015 16:48:12**|  “201”，“报”，“研”| book  
+  
+#### D. 未知RAT
+
+未知RAT从外层dropper区分为文件夹和捆绑两个版本，其中的RAT分为4个版本，这4种RAT均为未知远控。
+
+  1.  **a)** **文件夹版**
+
+  
+
+![image.png](https://image.3001.net/images/20180921/1537500461_5ba4652d0c600.png!small)
+
+图 36未知RAT文件版执行后相关变化
+
+  1. **b)** **捆绑版**
+
+![image.png](https://image.3001.net/images/20180921/1537500481_5ba4654103721.png!small)
+
+![image.png](https://image.3001.net/images/20180921/1537500493_5ba4654dc185c.png!small)
+
+图 37未知RAT中利用到的数字签名
+
+#### E. 其他
+
+毒云藤组织在相关行动中使用的后门程序，进一步还包括gh0st、XRAT、HttpBot这三种RAT。
+
+### 3) 脚本加载的攻击载荷分析
+
+2018年初，360威胁情报中心发现了毒云藤组织使用的一个用于控制和分发攻击载荷的控制域名http://updateinfo.servegame.org，并对外披露了相关攻击技术和关联分析(详见https://ti.360.net/blog/articles/analysis-of-apt-c-01/)。
+
+在该攻击活动中，该组织结合CVE-2017-8759漏洞文档，下载恶意的HTA文件，执行相关脚本命令来下载执行后续的攻击载荷模块。
+
+![image.png](https://image.3001.net/images/20180921/1537500505_5ba46559aaacd.png!small)  
+![image.png](https://image.3001.net/images/20180921/1537500511_5ba4655f37fa8.png!small)
+
+#### A. Dropper分析
+
+Dropper程序由鱼叉邮件附带的漏洞文档触发下载执行。
+
+![image.png](https://image.3001.net/images/20180921/1537500516_5ba46564d53d5.png!small)
+
+并且进一步下载恶意的HTA文件，其执行PowerShell指令下载Loader程序，保存为officeupdate.exe并执行。
+
+![image.png](https://image.3001.net/images/20180921/1537500521_5ba46569eb4d8.png!small)
+
+#### B. Loader分析
+
+根据Loader程序中包含的字符串信息，制作者将其命名为SCLoaderByWeb，版本信息为1.0版，从字面意思为从Web获取的Shellcode
+Loader程序。其用来下载执行shellcode代码。
+
+![image.png](https://image.3001.net/images/20180921/1537500528_5ba465701af3c.png!small)
+
+Loader程序首先会尝试连接某常用网址，以判断网络联通性，如果没有联网，会每隔5秒尝试连接一次，直至能联网。
+
+然后从hxxp://updateinfo.servegame.org/tiny1detvghrt.tmp下载payload，如图：
+
+![image.png](https://image.3001.net/images/20180921/1537500533_5ba46575d2561.png!small)
+
+接着判断文件是否下载成功，如果没有下载成功会休眠1秒后，然后再次尝试下载payload：
+
+![image.png](https://image.3001.net/images/20180921/1537500541_5ba4657d72fdf.png!small)
+
+下载成功后，把下载的文件内容按每个字节分别和0xac，0x5c，0xdd异或解密(本质上就是直接每个字节异或0x2d)，如图：
+
+![image.png](https://image.3001.net/images/20180921/1537500548_5ba465846f2c8.png!small)
+
+之后把解密完的shellcode在新创建的线程中执行，如图：
+
+![image.png](https://image.3001.net/images/20180921/1537500553_5ba4658977e06.png!small)  
+![image.png](https://image.3001.net/images/20180921/1537500559_5ba4658f4c7f1.png!small)
+
+#### C. Shellcode分析
+
+分发域名地址托管的.tmp文件均为逐字节异或的shellcode，如下图为从分发域名下载的tinyq1detvghrt.tmp文件，该文件是和0x2d异或加密的数据。
+
+![image.png](https://image.3001.net/images/20180921/1537500563_5ba46593e490f.png!small)  
+![image.png](https://image.3001.net/images/20180921/1537500569_5ba465992a290.png!small)
+
+解密后发现是PoisonIvy生成的shellcode，标志如下：
+
+![image.png](https://image.3001.net/images/20180921/1537500577_5ba465a1a67ac.png!small)
+
+通过分析测试PoisonIvy木马生成的shellcode格式与该攻击载荷中使用的shellcode格式比较，得到每个配置字段在shellcode中的位置和含义。
+
+![image.png](https://image.3001.net/images/20180921/1537500583_5ba465a75145d.png!small)  
+![image.png](https://image.3001.net/images/20180921/1537500588_5ba465accd376.png!small)  
+![image.png](https://image.3001.net/images/20180921/1537500593_5ba465b1cdbfa.png!small)
+
+其shellcode配置字段的格式详细如下：  
+
+![image.png](https://image.3001.net/images/20180921/1537500648_5ba465e81481b.png!small)  
+
+在分析Poison Ivy中获取kernel32基址的代码逻辑时，发现其不兼容Windows 7版本系统，因为在Windows
+7下InitializationOrderModule的第2个模块是KernelBase.dll，所以其获取的实际是KernelBase的基址。
+
+  
+
+![image.png](https://image.3001.net/images/20180921/1537500661_5ba465f5f3251.png!small)![image.png](https://image.3001.net/images/20180921/1537500668_5ba465fc7af94.png!small)
+
+由于Poison
+Ivy已经停止更新，所以攻击团伙为了使shellcode能够执行在后续版本的Windows系统，其采用了代码Patch对获取kernel32基址的代码做了改进。
+
+其改进方法如下：
+
+  1. 在原有获取kernel32基址代码前增加跳转指令跳转到shellcode尾部，其patch代码增加在尾部；
+
+  2. patch代码首先获取InitializationOrderModule的第2个模块的基址(WinXP下为kernel32.dll,WIN7为kernelbase.dll)；
+
+  3. 然后获取InitializationOrderModule的第二个模块的LoadLibraryExA的地址(WinXP下的kernel32.dll和WIN7下的kernelbase.dll都有这个导出函数)
+
+  4. 最后通过调用LoadLibraryExA函数获取kernel32的基址。
+
+![image.png](https://image.3001.net/images/20180921/1537500679_5ba4660748247.png!small)
+
+攻击者针对shellcode的patch，使得其可以在不同的Windows系统版本通用。
+
+该shellcode的功能主要是远控木马的控制模块，和C2通信并实现远程控制。这里我们在Win7系统下模拟该木马的上线过程。
+
+![image.png](https://image.3001.net/images/20180921/1537500685_5ba4660d7488b.png!small)
+
+对控制域名上托管的其他shellcode文件进行解密，获得样本的上线信息统计如下：
+
+行动ID| 上线域名| 端口| 上线密码| 互斥体  
+---|---|---|---|---  
+2017| office.go.dyndns.org| 5566| !@#3432!@#@!| )!VoqA.I4  
+bing| zxcv201789.dynssl.com| 8088| zxc5566| )!VoqA.I4  
+ding1| microsoftword.serveuser.com| 53| 1wd3wa$RFGHY^%$| )!VoqA.I4  
+ding2| uswebmail163.sendsmtp.com| 53| 1wd3wa$RFGHY^%$| )!VoqA.I4  
+geiwoaaa| geiwoaaa.qpoe.com| 443| wyaaa8| )!VoqA.I4  
+jin_1| hy-zhqopin.mynumber.org| 80| HK#mq6!Z+.| )!VoqA.I4  
+jin_2| bearingonly.rebatesrule.net| 53| ~@FA<9p2c*| )!VoqA.I4  
+justdied| www.service.justdied.com| 80| ppt.168@| )!VoqA.I4  
+pouhui| pouhui.diskstation.org| 53| index#help| )!VoqA.I4  
+tina_1| fevupdate.ocry.com| 80| 168168| )!VoqA.I4  
+tina_2| wmiaprp.ezua.com| 53| 116688| )!VoqA.I4  
+tony_1| winsysupdate.dynamic-dns.net| 80| 0A@2q60#21| )!VoqA.I4  
+tony_2| officepatch.dnset.com| 53| aZ!@2q6U0#| )!VoqA.I4  
+  
+### 4) 最新控制木马分析
+
+在2018年5月，我们在该组织针对境内相关海事机构和单位的攻击活动中，发现了其使用的新的木马程序，其主要利用鱼叉邮件投递RAR自解压程序附件，当受害目标人员双击后执行。
+
+该远控模块的入口处，通过触发异常代码，在catch里执行恶意代码，如图：
+
+![image.png](https://image.3001.net/images/20180921/1537500700_5ba4661c8b4e2.png!small)
+
+然后再用同样的方法触发异常代码，进入第二层的代码:
+
+![image.png](https://image.3001.net/images/20180921/1537500706_5ba46622abec1.png!small)
+
+进入初始化套接字，并和C2建立连接的地方：
+
+![image.png](https://image.3001.net/images/20180921/1537500711_5ba46627d447a.png!small)
+
+连接zxcv201789.dynssl.com的8080端口，创建C&C通道：
+
+![image.png](https://image.3001.net/images/20180921/1537500717_5ba4662dd2297.png!small)
+
+其中向控制服务器发送上线包的地方有上线密码:asd88，如图：
+
+![image.png](https://image.3001.net/images/20180921/1537500723_5ba466337cf34.png!small)
+
+最后进入远控的功能循环部分：
+
+![image.png](https://image.3001.net/images/20180921/1537500729_5ba466396064b.png!small)
+
+图如下：
+
+![image.png](https://image.3001.net/images/20180921/1537500735_5ba4663f58389.png!small)
+
+功能包括：
+
+Token| 功能  
+---|---  
+0x04| 关闭连接  
+0x41| 远程shell  
+0x42| 进程枚举  
+0x43| 结束指定进程  
+0x51| 枚举驱动器  
+0x52| 列指定目录  
+0x53| 上传文件到受害者  
+0x54| 下载受害者的文件  
+0x55| 删除文件  
+0x56| 远程执行  
+  
+该木马程序中的字符串用的都是反转的字符串，通过C语言的strrev把字符串反转回来，这种方式，在该组织2015年的木马中也用到过。如图：
+
+![image.png](https://image.3001.net/images/20180921/1537500744_5ba46648a91e3.png!small)
+
+## 4\. C&C分析
+
+### 1) 动态域名
+
+![image.png](https://image.3001.net/images/20180921/1537500750_5ba4664e14c80.png!small)
+
+图 38动态域名服务商（ChangeIP）
+
+  
+
+  
+
+![image.png](https://image.3001.net/images/20180921/1537500755_5ba46653752e8.png!small)
+
+图 39动态域名服务商相关比例图
+
+ **动态域名服务商**|  **域名数量**  
+---|---  
+ **ChangeIP**|  30  
+ **No-IP**|  9  
+ **DynDNS**|  2  
+ **Afraid** **（FreeDNS** **）**|  1  
+ **dnsExit**|  1  
+ **非动态域名**|  6  
+  
+### 2) 域名涵义
+
+以下是取动态域名子域名（攻击组织注册的名称），进行相关映射涵义的研究分析。
+
+ **C &C**|  **名称**|  **网站名称**|  **网站地址**  
+---|---|---|---  
+ **chinamil**.lflink.com| chinamil| 中国军网| www.chinamil.com.cn[10]  
+红色战略网| www.chinamil.com  
+中国国防域名注册网| www.chinamil.cn  
+ **soagov**.sytes.net **soagov**.zapto.org **soasoa**.sytes.net|
+soagov，soasoa| 国家海洋局| www.soa.gov.cn  
+ **xinhua**.redirectme.net| xinhua| 新华网| www.xinhuanet.com  
+  
+**类别**|  **名称**  
+---|---  
+ **邮箱类**|  126mailserver、mail.sends、mail163、mailsends  
+ **杀软类**|  kav2011，safe360，cluster.safe360，rising  
+ **网络类**|  javainfo、webupdate、updates、netlink  
+ **姓名类**|  Sandy、jerry、jason  
+  
+### 3) 云盘
+
+酷盘相关样本目前两个Token：
+
+  
+|  **client_id**|  **client_secret**|  **refresh_token**  
+---|---|---|---  
+ **Token1**|  3edfe684ded31a7cca6378c0226f5629|
+bfa89eebf29032076e9cffb75549fee5| 75cdc35b1cdaee24047f3afb23a5ccce  
+ **Token2**|  7a5691b81bf4322fd88f5fa99407fbbc|
+d44cfa7dd3c852b69c59efacf766cc23| 14b6685330bf32a22688910e765b5dce  
+  
+我们通过对酷盘API的分析，得到攻击组织所使用的云盘帐号的信息，主要是包含一个中国移动的手机号码，该号码被用来注册云盘帐号。
+
+以下是我们通过该手机号进行的一些关联分析结果：
+
+![image.png](https://image.3001.net/images/20180921/1537500770_5ba466626aa1b.png!small)
+
+图 40谷歌搜索相关结果
+
+![image.png](https://image.3001.net/images/20180921/1537500775_5ba466678245c.png!small)
+
+图 41威风堂机车网该用户信息1
+
+![image.png](https://image.3001.net/images/20180921/1537500780_5ba4666ce7656.png!small)
+
+图 42威风堂机车网该用户信息2
+
+![image.png](https://image.3001.net/images/20180921/1537500787_5ba46673a7c01.png!small)
+
+图 43手机号机主相关支付宝和微信信息
+
+### 4) 第三方博客
+
+![image.png](https://image.3001.net/images/20180921/1537500793_5ba46679d66c2.png!small)
+
+图 44某第三方博客部分截图
+
+上图为毒云藤组织依托某第三方博客进行恶意代码传播。博客的域名通常在防火墙和各种安全软件的白名单里，使用这种方法将恶意代码存在博客中，可以躲避查杀和拦截。
+
+### 5) C&C的IP（ASN）
+
+![image.png](https://image.3001.net/images/20180921/1537500799_5ba4667fee68c.png!small)
+
+图 45 C&C IP关联分析
+
+### 6) 其他
+
+非动态域名中gaewaaa.upgrinfo.com这个域名有相关whois信息，具体如下图。
+
+![image.png](https://image.3001.net/images/20180921/1537500808_5ba4668843927.png!small)
+
+图 46域名注册信息
+
+另外一个非动态域名moneyaaa.beijingdasihei.com
+
+## 5\. 关联分析
+
+### 1) 整体关联
+
+从原始攻击邮件、漏洞文件、3种不同RAT（ZxShell，Poison
+Ivy和酷盘版）、以及相关域名、上线密码、文件扩展名、压缩包密码和关键字不同资源之间进行关联。
+
+![image.png](https://image.3001.net/images/20180921/1537500815_5ba4668f58b2c.png!small)
+
+图 47不同资源之间整体关联
+
+### 2) RAT迭代升级（对抗手法）
+
+  
+| **A**|  **B**|  **C**|  **D**|  **E**|  **F**|  **G**  
+---|---|---|---|---|---|---|---  
+  
+|  **开发环境**|  **加密方法**|  **自定义窃密函数**|  **Shellcode**|  **免杀对抗-静**|
+**免杀对抗-动**|  **伪装文档等**  
+ **httpbot**|  C++| ×| √| ×| √| √| √  
+ **Kbox**|  C++| √| √| √| √| √| √  
+ **Poison Ivy**|  C++| √| ×| √| √| √| ×  
+ **puppet**|  Borland C++| √| ×| ×| √| ×| √  
+ **XRAT**|  Delphi| √| ×| √| √| √| ×  
+ **gh0st**|  Borland C++| √| ×| ×| √| ×| √  
+ **FakeRising**|  Borland C++| ×| ×| ×| ×| ×| ×  
+ **AresRemote**|  C++| √| ×| ×| √| ×| √  
+ **shellcode**|  C++| √| ×| √| √|  
+| √  
+ **FakeWinupdate**|  C++| √| ×| ×| √| ×| ×  
+ **SBolg2014**|  C++| √| √| √| √| ×| √  
+ **SBolg2015**|  C++| √| ×| √| √| ×| ×  
+ **zxshell**|  C++| √| √|  
+| √| √| √  
+  
+**同源样本的典型手法：**
+
+####  A. 开发环境
+
+除了XRAT后门之外，其他的版本从2007年至2015年都是用了C++开发语言。
+
+#### B. 加密方法
+
+2011、memcache版、Voice64版、HTTPBOTS版、kanbox版、PI、XRAT都使用了连续2次异的解密方式，然后执行恶意代码。另外云盘版木马在上传文件也会对文件进行相关加密方法。
+
+![image.png](https://mmbiz.qpic.cn/mmbiz_png/2AqAgxkehicib0Pq7wvXaezhGichxIqdCEZGQtNhrzcBp6lroHWYq1bqJzlL7Cuiak6eyjgBCgp2EYN3ictZ0ymAsqw/640?wx_fmt=png&tp=webp&wxfrom=5&wx_lazy=1&wx_co=1)
+
+图 48未知RAT2011版（左），酷盘版（右）
+
+#### C. 窃密函数
+
+ZXShell版后门使用的自定义窃取函数和2015网盘版子体使用的窃取函数非常相似。同样都排除了A盘的搜索（通常为软盘驱动器盘符）；同样都预先遍历磁盘，将盘符列表保存在内存中，通过指针加5的方式读取内存中的盘符列表。
+
+![image.png](https://image.3001.net/images/20180921/1537500833_5ba466a178c96.png!small)
+
+图 49 ZxShell（左），酷盘版（右）
+
+#### D. Shellcode后门
+
+对比2011版（Poison
+Ivy）注入到系统的Shellcode和2015云盘版子体，可以看出使用了高度相似的Shellcode后门，上线地址尾部同样采用0x30填充。
+
+![image.png](https://image.3001.net/images/20180921/1537500853_5ba466b59ba65.png!small)
+
+图 50未知RAT2011版（左），酷盘版（右）
+
+相关shellcode木马文件检出结果（0检出）：
+
+https://www.virustotal.com/en/file/8cee670d7419d1fd0f8f0ac6a2bd981593c2c96ca0f6b8019317cf556337cfa8/analysis/
+
+#### E. 子体文件名（外层）
+
+通过对比2009版代码和和2011版代码，可以看出病毒释放的子体文件名都为~work.tmp、格式化字符串都为“%s\%s.bak”，并且代码相似度极高。
+
+使用~tmp.tmp、~tmp.zip、~mstmp.cpt作为木马临时文件名（07~09）。
+
+![image.png](https://image.3001.net/images/20180921/1537500860_5ba466bc94073.png!small)
+
+图 51未知RAT2009版（左），未知RAT2011版（右）
+
+#### F. 免杀对抗–API字符串逆序对抗静态扫描：
+
+HttpBot、酷盘、XRAT、未知RAT（07~11版）木马，代码编写过程中使用了逆序API字符串。木马执行时，通过_strrev函数将逆序字符串转换为正常API字符串，最后调用GetProcAddress函数动态获得API地址。逆序API字符串增加了字符串检测难度，使得API字符串不易被检测；除此之外，API地址是在木马动态执行中获得，在PE静态信息中很难被检测到，增加了API检测难度。
+
+毒云藤组织已知最早从2009年开始使用此方法，并且持续到2018年仍在使用。
+
+![image.png](https://image.3001.net/images/20180921/1537500866_5ba466c2863be.png!small)
+
+图 52未知RAT2009（上），酷盘（下）
+
+#### G. 免杀对抗–传递错误API参数对抗动态扫描：
+
+酷盘、Poison Ivy、XRAT、ZxShell、未知RAT（07~11版）木马，使用了GetClientRect函数对抗杀毒软件的动态扫描技术。
+
+GetClientRect原型为：BOOL GetClientRect(HWND hWnd,LPRECT
+lpRect);。作用是获得窗口坐标区域。其中第1个参数为目标窗口句柄，第2个参数为返回的坐标结构。木马调用GetClientRect，故意在第一个参数传递参数为0，这样使得GetClientRect函数在正常Windows操作系统中永远执行失败，返回值为0；
+
+目前很多杀毒软件使用了动态扫描技术（多用于启发式检测），在模拟执行GetClientRect函数时并没有考虑错误参数的情况，使得GetClientRect函数永远被模拟执行成功，返回值非0。这样一来，杀毒软件虚拟环境和用户真实系统就可以被木马区分，从而躲避杀毒软件检测。实测卡巴斯基虚拟机启发式扫描环境可以被木马检测到。
+
+毒云藤组织已知最早从2011年开始使用此方法，并且持续到2018年仍在使用。
+
+![image.png](https://image.3001.net/images/20180921/1537500873_5ba466c9a9ee8.png!small)
+
+图 53未知RAT2011（左上），zxshell（右上），酷盘（下）
+
+其中在酷盘使用了动态获取API的方式调用GetClientRect函数。
+
+#### H. 合法数字签名
+
+2011之前早期版本
+
+![image.png](https://image.3001.net/images/20180921/1537500881_5ba466d1e243a.png!small)
+
+  
+
+2015BLOG版本
+
+在2015年5月开始使用签名（疑似被盗用）
+
+签名：We Build Toolbars LLC
+
+# **第4章 幕后始作俑者**
+
+##  
+
+##  1\. 资源方法
+
+1、 漏洞文档：
+
+（1） 主要是释放的正常DOC：繁体、或某特定地区相关字体字符等。DOC代码页
+
+（2） 一些路径，如PPSX的DANK？
+
+2、 PE：字符串繁体、或某特定地区相关字体字符（BIG5等）等等。PE文件版本信息。上线ID\密码\互斥量等字符串
+
+3、 CC：
+
+（1） 非动态域名：韦氏拼音，注册信息
+
+（2） 动态域名：
+
+（3） 云盘
+
+4、 IP：或某特定地区、美国，主要区分CC的和邮件的
+
+5、 相关作息时间：PE时间戳、文档时间等等，结论比如集中在周一上午攻击等等
+
+ ****
+
+##  2\. 相关关联信息
+
+### 1) 域名whois信息
+
+域名为javainfo.upgrinfo.com，注册信息中的地址是某特定地区，相关人名使用的可能是韦氏拼音等。
+
+![image.png](https://image.3001.net/images/20180921/1537500912_5ba466f0ba16d.png!small)
+
+### 2) 关注的关键字
+
+![image.png](https://image.3001.net/images/20180921/1537500918_5ba466f6a00b4.png!small)
+
+图 54包含相关关键字代码截图
+
+ **关键字：**  
+---  
+ ******“对台”，“台”，“台湾”**  
+  
+**漏洞文件或木马程序原始文件名（诱饵文件名）相关列表：**
+
+![image.png](https://image.3001.net/images/20180921/1537500933_5ba46705cd0e3.png!small)
+
+###  3) PE样本中繁体字体、BIG5字符集
+
+Zxshell版本中帮助信息是乱码,实际是繁体中文。
+
+![image.png](https://image.3001.net/images/20180921/1537500944_5ba46710c3657.png!small)
+
+图 55 ZxShell相关代码截图
+
+![image.png](https://image.3001.net/images/20180921/1537500970_5ba4672acd154.png!small)
+
+图 56未知RAT2009
+
+### 4) 漏洞文档中繁体字体
+
+![image.png](https://image.3001.net/images/20180921/1537500987_5ba4673bee364.png!small)
+
+图 57漏洞文档（CVE-2014-4114）属性详细信息截图
+
+![image.png](https://image.3001.net/images/20180921/1537500993_5ba467413e6fe.png!small)
+
+图 58漏洞文档（CVE-2014-4114）内slide文件内容
+
+### 5) 释放的迷惑文档
+
+某特定地区默认字体：细明体
+
+  
+
+![image.png](https://image.3001.net/images/20180921/1537500998_5ba467468053b.png!small)
+
+图 59后门释放的迷惑文档
+
+![image.png](https://image.3001.net/images/20180921/1537501003_5ba4674b80d45.png!small)
+
+图 60新华网相关新闻截图
+
+# **第5章 组织能力或特性分析**
+
+ **主项**|  **子项**|  **毒云藤**|  **海莲花**  
+---|---|---|---  
+ **攻击目标**|  人员| 政府人员、行业专家| 政府人员、行业专家  
+行业、领域| 中国政府、科研院所、海事机构等 军事、两岸关系| 中国政府、科研院所、海事机构等  
+国家| 中国| 中国，其他  
+地域| 重点：北京、福建、广东、浙江、上海| 重点：北京、天津  
+ **概况**|  攻击者个人信息|  
+|  
+  
+规模|  
+|  
+  
+母语| 简体中文、繁体中文| 简体中文、越语  
+威胁等级| 高（5）| 高（4）  
+综合实力| 高（5）| 高（3）  
+ **涉及的行动** **（组织特有）**|  
+|  
+|  
+  
+ **涉及的组织** **（行动特有）**|  
+|  
+|  
+  
+ **攻击手法**|  常用语言或语种| 简体中文| 简体中文  
+攻击前导| 邮件+PE邮件+漏洞文档| 邮件+PE网站+PE（MAC）  
+发送邮件习惯| 用WEB邮箱Phpmail工具|  
+  
+0day利用的情况| 1个| 无  
+漏洞利用种类| CVE-2014-4114、CVE-2012-0158| 无  
+攻击平台| windows| Windows\Mac  
+横向移动|  
+|  
+  
+常用RAT类型| PI\ZXSHELL等| 未知  
+家族种类| 6个以上| 4  
+……|  
+|  
+  
+ **攻击目的**|  破坏| 无| 无  
+窃取| CC指令、遍历指定文件| CC指令  
+ **行动持续时间**|  首次攻击时间| 2007| 2012  
+最近攻击时间| 2018| 2018  
+活跃度| 非常活跃| 非常活跃  
+ **其他**|  C&C域名属性| 大量采用动态域名，基于NO-IP等| 未使用动态域名，但有域名信息保护  
+IP属性| ADSL，大部分归属地为某特定地区，另外有美国、中国香港|  
+  
+  
+#  **  
+**
+
+#  **附录1 文件MD5列表**
+
+03d762794a6fe96458d8228bb7561629
+
+0595f5005f237967dcfda517b26497d6
+
+07561810d818905851ce6ab2c1152871
+
+0e80fca91103fe46766dcb0763c6f6af
+
+1374e999e1cda9e406c19dfe99830ffc
+
+1396cafb08ca09fac5d4bd2f12c65059
+
+1ab54f5f0b847a1aaaf00237d3a9f0ba
+
+1aca8cd40d9b84cab225d333b09f9ba5
+
+1dc61f30feeb60995174692e8d864312
+
+250c9ec3e77d1c6d999ce782c69fc21b
+
+2579b715ea1b76a1979c415b139fdee7
+
+26d7f7aa3135e99581119f40986a8ac3
+
+27f683baed7b02927a591cdc0c850743
+
+28e4545e9944eb53897ee9acf67b1969
+
+2a96042e605146ead06b2ee4835baec3
+
+2c405d608b600655196a4aa13bdb3790
+
+30866adc2976704bca0f051b5474a1ee
+
+31c81459c10d3f001d2ccef830239c16
+
+3484302809ac3df6ceec857cb4f75fb1
+
+36c23c569205d6586984a2f6f8c3a39e
+
+382132e601d7a4ae39a4e7d89457597f
+
+3e12538b6eaf19ca163a47ea599cfa9b
+
+41c7e09170037fafe95bb691df021a20
+
+45e983ae2fca8dacfdebe1b1277102c9
+
+4e57987d0897878eb2241f9d52303713
+
+5696bbee662d75f9be0e8a9ed8672755
+
+5e4c2fbcd0308a0b9af92bf87383604f
+
+5ee2958b130f9cda8f5f3fc1dc5249cf
+
+5f1a1ff9f272539904e25d300f2bfbcc
+
+611cefaee48c5f096fb644073247621c
+
+67d5f04fb0e00addc4085457f40900a2
+
+6a37ce66d3003ebf04d249ab049acb22
+
+6ca3a598492152eb08e36819ee56ab83
+
+7639ed0f0c0f5ac48ec9a548a82e2f50
+
+76782ecf9684595dbf86e5e37ba95cc8
+
+785b24a55dd41c94060efe8b39dc6d4c
+
+7c498b7ad4c12c38b1f4eb12044a9def
+
+81232f4c5c7810939b3486fa78d666c2
+
+81e1332d15b29e8a19d0e97459d0a1de
+
+8abb22771fd3ca34d6def30ba5c5081c
+
+95f0b0e942081b4952e6daef2e373967
+
+9b925250786571058dae5a7cbea71d28
+
+9bcb41da619c289fcfdf3131bbf2be21
+
+9f9a24b063018613f7f290cc057b8c40
+
+a73d3f749e42e2b614f89c4b3ce97fe1
+
+a807486cfe05b30a43c109fdb6a95993
+
+a8417d19c5e5183d45a38a2abf48e43e
+
+acc598bf20fada204b5cfd4c3344f98a
+
+accb53eb0faebfca9f190815d143e04b
+
+adc3a4dfbdfe7640153ed0ea1c3cf125
+
+ae004a5d4f1829594d830956c55d6ae4
+
+b0be3c5fe298fb2b894394e808d5ffaf
+
+b244cced7c7f728bcc4d363f8260090d
+
+b301cd0e42803b0373438e9d4ca01421
+
+bd2272535c655aff1f1566b24a70ee97
+
+bd4b579f889bbe681b9d3ab11768ca07
+
+bfb9d13daf5a4232e5e45875e7e905d7
+
+c31549489bf0478ab4c367c563916ada
+
+c8755d732be4dc13eecd8e4c49cfab94
+
+c8fd2748a82e336f934963a79313aaa1
+
+ca663597299b1cecaf57c14c6579b23b
+
+d12099237026ae7475c24b3dfb5d18bc
+
+d61c583eba31f2670ae688af070c87fc
+
+dde2c03d6168089affdca3b5ec41f661
+
+e2e2cd911e099b005e0b2a80a34cfaac
+
+e9a9c0485ee3e32e7db79247fee8bba6
+
+ec7e11cfca01af40f4d96cbbacb41fed
+
+eff88ecf0c3e719f584371e9150061d2
+
+f0c29f89ffdb0f3f03e663ef415b9e4e
+
+f1b6ed2624583c913392dcd7e3ea6ae1
+
+f27a9cd7df897cf8d2e540b6530dceb3
+
+f29abd84d6cdec8bb5ce8d51e85ddafc
+
+f3ed0632cadd2d6beffb9d33db4188ed
+
+fbd0f2c62b14b576f087e92f60e7d132
+
+fccb13c00df25d074a78f1eeeb04a0e7
+
+0fb92524625fffda3425d08c94c014a1
+
+168365197031ffcdbe65ab13d71b64ec
+
+2b5ddabf1c6fd8670137cade8b60a034
+
+517c81b6d05bf285d095e0fd91cb6f03
+
+7deeb1b3cce6528add4f9489ce1ec5d6
+
+aa57085e5544d923f576e9f86adf9dc0
+
+cda1961d63aaee991ff97845705e08b8
+
+e07ca9f773bd772a41a6698c6fd6e551
+
+fb427874a13f6ea5e0fd1a0aec6a095c
+
+#  **附录2 C &C列表**
+
+126mailserver.serveftp.com
+
+access.webplurk.com
+
+aliago.dyndns.dk
+
+as1688.webhop.org
+
+babana.wikaba.com
+
+backaaa.beijingdasihei.com
+
+bt0116.servebbs.net
+
+ceepitbj.servepics.com
+
+check.blogdns.com
+
+china.serveblog.net
+
+chinamil.lflink.com
+
+cluster.safe360.dns05.com
+
+cnwww.m-music.net
+
+fff.dynamic-dns.net
+
+gaewaa.upgrinfo.com
+
+givemea.ygto.com
+
+givemeaaa.upgrinfo.com
+
+goldlion.mefound.com
+
+gugupd.008.net
+
+guliu2008.9966.org
+
+hyssjc.securitytactics.com
+
+jason.zyns.com
+
+javainfo.upgrinfo.com
+
+jerry.jkub.com
+
+kav2011.mooo.com
+
+kouwel.zapto.org
+
+laizaow.mefound.com
+
+localhosts.ddns.us
+
+mail.sends.sendsmtp.com
+
+mail163.mypop3.net
+
+mailsends.sendsmtp.com
+
+mediatvset.no-ip.org
+
+moneyaaa.beijingdasihei.com
+
+motices.ourhobby.com
+
+mp3.dnset.com
+
+netlink.vizvaz.com
+
+operater.solaris.nu
+
+pps.longmusic.com
+
+ps1688.webhop.org
+
+rising.linkpc.net
+
+safe360.dns05.com
+
+sandy.ourhobby.com
+
+soagov.sytes.net
+
+soagov.zapto.org
+
+soasoa.sytes.net
+
+ssy.ikwb.com
+
+ssy.mynumber.org
+
+svcsrset.ezua.com
+
+teacat.https443.org
+
+tong.wikaba.com
+
+updates.lflink.com
+
+usa08.serveftp.net
+
+waterfall.mynumber.org
+
+webupdate.dnsrd.com
+
+www.safe360.dns05.com
+
+www.ssy.ikwb.com
+
+www.tong.wikaba.com
+
+wwwdo.tyur.acmetoy.com
+
+xinhua.redirectme.net
+
+131.213.66.10
+
+146.0.32.168
+
+165.227.220.223
+
+188.166.67.36
+
+199.101.133.169
+
+45.32.8.137
+
+45.76.125.176
+
+45.76.228.61
+
+45.76.9.206
+
+45.77.171.209
+
+bearingonly.rebatesrule.net
+
+canberk.gecekodu.com
+
+emailser163.serveusers.com
+
+fevupdate.ocry.com
+
+geiwoaaa.qpoe.com
+
+hy-zhqopin.mynumber.org
+
+l63service.serveuser.com
+
+microsoftword.serveuser.com
+
+office.go.dyndns.org
+
+updateinfo.servegame.org
+
+uswebmail163.sendsmtp.com
+
+winsysupdate.dynamic-dns.net
+
+wmiaprp.ezua.com
+
+www.service.justdied.com
+
+zxcv201789.dynssl.com
+
+officepatch.dnset.com
+
+pouhui.diskstation.org
+
+comehigh.mefound.com
+
+annie165.zyns.com
+
+http://annie165.zyns.com/zxcvb.hta
+
+## PDF版本链接：
+
+https://ti.360.net/uploads/2018/09/20/6f8ad451646c9eda1f75c5d31f39f668.pdf  
+

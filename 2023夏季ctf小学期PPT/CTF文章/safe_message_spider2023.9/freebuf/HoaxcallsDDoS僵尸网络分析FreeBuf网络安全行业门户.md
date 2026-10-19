@@ -1,0 +1,199 @@
+**Hoaxcalls同时利用CVE-2020-8515和CVE-2020-5722进行传播。到目前为止，检测到的攻击流量增加了一倍，许多Grandstream
+UCM6200和Draytek Vigor设备已被感染。该恶意软件以Gafgyt/Bashlite代码为基础，并且能够发起各种DDoS攻击。**
+
+## DDoS Bot
+
+Hoaxcalls可通过IRC与C2服务器通信，它具有各种DDoS攻击功能。
+收到C2命令后，它可以使用CVE-2020-8515和CVE-2020-5722漏洞扫描攻击设备并进行传播。Hoaxcalls会初始化消息表，对特定消息进行异或解密，将消息提取并打印到控制台，然后再次对解密后的消息进行加密，加密采用字节XOR：
+
+> 0x1337C0D3
+>
+> 0x0420A941
+>
+> 0x4578BEAD
+>
+> 0x0000A10E
+>
+> 0x6531A466
+
+下表显示了解密字符串及其对应索引的完整列表。
+索引为0x1的解密字符串用于rand_alpha_str()，在恶意软件监控时使用索引为0x2、0x3、0x4、0x5、0x6、0x7、0x8、0x9和0xa的字符串。
+
+![](https://image.3001.net/images/20200410/1586480284_5e8fc49caf280.png!small)
+
+受感染主机通过IRC在TCP端口1337连接到C2服务器178.
+32.148.5，C2的IRC频道是#hellroom。昵称，身份和用户是以XTC|开头，后跟9个随机字符长度为13的字符串。
+下图显示了受感染主机通过IRC与C2服务器的通信。
+
+![](https://image.3001.net/images/20200410/1586480477_5e8fc55db0b59.png!small)
+
+根据C2服务器命令执行各种操作，下表显示了支持命令和DDoS攻击类型。
+
+![](https://image.3001.net/images/20200410/1586480549_5e8fc5a54f5e5.png!small)
+
+![](https://image.3001.net/images/20200410/1586480569_5e8fc5b9d86d1.png!small)
+
+下图为扫描攻击代码：
+
+![](https://image.3001.net/images/20200410/1586480617_5e8fc5e93cde6.png!small)
+
+![](https://image.3001.net/images/20200410/1586480625_5e8fc5f18b35d.png!small)
+
+上面描述的Flooder命令基于第1组的Hoaxcalls样本。在其他变种中存在细微差别，但在功能基本相同。
+第1组中的Hoaxcalls将Draytek和UCM扫描功能用作其C2
+Flooder命令集的一部分。第2组和第3组中将传播功能移出Flooder命令集，在执行时就开始攻击UCM和Draytek设备。下图显示了不同样本中的差异。
+
+![](https://image.3001.net/images/20200410/1586480848_5e8fc6d0bd60d.png!small)
+
+![](https://image.3001.net/images/20200410/1586480861_5e8fc6dd9b561.png!small)
+
+![](https://image.3001.net/images/20200410/1586480875_5e8fc6eb80c61.png!small)
+
+## 漏洞分析
+
+### CVE-2020-8515
+
+/www/cgi-bin/mainfunction.cgi在身份验证时未过滤keyPath参数，导致命令注入。
+攻击者可以利用特殊字符，例如％27％0A，绕过检查并执行命令。
+
+### CVE-2020-5722
+
+系统未正确验证user_name参数，当通过“Forgot
+Password”功能查询时进行SQL注入。攻击者可以利用默认用户名，例如admin进行攻击，也可以通过HTML注入来利用此漏洞。
+
+## 在野发现
+
+攻击者利用CVE-2020-8515将脚本下载到tmp目录并执行，使用CVE-2020-5722时会下载执行arm7文件，如下图所示。
+
+![](https://image.3001.net/images/20200410/1586481323_5e8fc8ab36349.png!small)
+
+下图显示了shell脚本内容。脚本执行后将下载运行不同体系结构的DDoS bot文件。检测到越来越多的攻击流量，表明许多设备已经被感染。
+
+![](https://image.3001.net/images/20200410/1586481433_5e8fc9190d47a.png!small)
+
+## 总结
+
+Hoaxcalls是一个新的DDOS僵尸网络，正在积极利用CVE-2020-8515和CVE-2020-5722进行传播，建议用户尽快修补漏洞。
+
+## IOCs
+
+### File (Sha256)
+
+ **Group1:**
+
+> 762ba1a2f7d62b8fc206ffb1bf39e89db651a1ab***4402f9939d91a5b7899d3 arm4
+>
+> ae447f9cad4f4909c576c577a94aa3d38be7b9636c9b7fb04a181caca42ea92b arm5
+>
+> 8777e47ab84fb681379b2253735aa1490d69e94201d57f06334c9ddfb1063637 arm6
+>
+> 695a0b2ef0d46027d2f106c060dade52b34e3bb7342a8eae906c7d2b15a99fc3 arm7
+>
+> 53aaee7d0de64b71ea0c61ec62b4f***9850f915b574b2560e98692057d32a1c i486
+>
+> df5ba0630a0fe701afccc129be7e9612cb4016dcc70273b748dad66dc152b6e9 i586
+>
+> e2dc3e0956a818fb22a77c50d9cfe91b7639c727db8a6838efd368ba277664b1 i686
+>
+> f4cf6a033aac287ff0b5171ce6f64836691b822f76705b04445f52f643da8c10 m68k
+>
+> 72492605815c59579170adef1519231a5e3f17ada26428d20bd7948041c812a3 mips
+>
+> 9a62763da3dc8c1de87***271a7b446e753016f72f5631e1c6eb17ff5425e7ab mips64
+>
+> b7b94fac1067217914d99f2d98b34c310a6c53eb36d3a430eea5df8217c4d1f8 mpsl
+>
+> 41ef0133acaca395ea957e796dc1b939b9825b1414541c616b8ca8bdfadb8d16 ppc
+>
+> c3ea39b0cc786dcda73821f60b42d84c9557e9e590d7f3b4a328eb7a6e6559f4 ppc440
+>
+> 19270639537a2241861eae2bbf4b4095fc6e1915e4dee476d2e4f277992733fd sh
+>
+> 82bb86e2041f4e37187ceb93bcbc48bd8311274ef33a166c6a8e0e9ffe33***5 sh4
+>
+> b32dcd47377b781c17a6ae7c88d4e1a4294d539ba8f452d980b78a9611d1cb6f spc
+>
+> aa69b3ac7b55fff5dde4491e4153954b31c36d528fdb390495b9bd7bc1a0c77b x86
+
+ **Group2:**
+
+> f31c7e7be06d8d6ec13337c76ca86b3692b3f5d7632e20b725d3542b3e316e62 arm4
+>
+> e31d945930048f0c06a84942212e5a14b75cee7538fbf0c9c0e1759546c7f6b9 arm5
+>
+> ded7ce9588d47885fc6a9a360e1d3561478d4be71d0971aaf76995621eb94db3 arm6
+>
+> 0820eba0c16325b9cd24c54d6655f6d9aeb2e28b4fc82d6da598b71139aceb5e arm7
+>
+> df4e8168357559280db011eaf88088a8493b6e20df4ace06069b93c6d28af3ee i486
+>
+> 931b1e85e19b138a4a3bf3890749b8884a5ff4a6b34c1df3b9083d7f304e5694 i586
+>
+> 06d019d1266bb345fc85df991b419474026d3e21a8b8a1328bad77fbfeb8cb00 m68k
+>
+> 6be47cf2f418d9729cdb1eb03885ab14e07a5955e63b06062fec97b567f959de mips
+>
+> 3c66db7df3f84633dbe6ed7b84911d7202c53968b88861f2463a152c839e89bf mips64
+>
+> 8a77f9843174a53a5909554589177ce7e32d6a36a6c6ef868e4c118f98069641 mpsl
+>
+> 7a5d8752049afdc8060d6a27407dcddfd9d7642c14600f586767c67afe0ef64b ppc
+>
+> c0df164ac0af7cca5cb02e66d181bc80ed9d58cec038b82ed170ebb75b78645f ppc440
+>
+> 72d6846b9e004662cd7f2d10fdc66d02ca9b5eb545582529a935f6ff5cd2a9e7 sh4
+>
+> 02eb5d0d8ddbd68ff459b3bb388484b841ac23cb9604b9a9e503f9dcf9c49186 spc
+>
+> 27fc18936f445fc0d2ede1d6fb301594d352d86268b4b1590dad535c7051c5ef x86
+
+ **Group3:**
+
+> f62819deb8fe2a96fa34137f6eb1d5e2e0a8e52594f9a51e78f4a2c13f5a7b96 arm4
+>
+> c0a958ea24c585d1bc99b562835e95f7d2c4a57674085df668dbbf7baa2b9fe8 arm5
+>
+> b6619dbeb420f4ee824115987c116540604356b115641d1f3c740846689b6a7b arm6
+>
+> 65100dbe19870b6be1b398c6185b25d3a502dfb2b5166ba0d1a938b607ea1880 arm7
+>
+> 527bd14dfec20820e84c64b0f0924ae1272d9d3920b38c998a131a21e53a5789 i486
+>
+> a27c04ce5769953e860ed473641c1a562293d01b75230bbcb803d66df4512daf i586
+>
+> 3ffc07cb1c7c08a5b43e4acfefbab9cb45df88bc9bd8dc2bcb489d350e18c8a1 i686
+>
+> 59f71ff3d2df1f8c3f12e2844b78545de1fdfdabc1d80a7221ad75b24af986e2 m68k
+>
+> 9fe8885439dec03cc0056324b5e2910d363ea139e7167bc9257c2cf7a9e1ba33 mips
+>
+> 0a210410ef5f5cb85b2aa0e0530cb7763f354850f25cd9763b1154126f92c699 mips64
+>
+> ef7b2e41bf4cbb4d99ca37f028ccae3f47a2b8e21b6fd46f15fe34d3bcf1395a mpsl
+>
+> 20d1e4ee888c2af8ee9b169f6c32290f3c378aa616519e374c7b15b6f7e4e3cf ppc
+>
+> eb225d38828ae996463586554ddc2d30507e9e472667ae92a61ccb13c39a42f4 ppc440
+>
+> 73bbf4b38904cc17b5267064dda940a080965aa55a1a9d93dd36d21720ea91dc sh
+>
+> 388acd6a1a2ce446247f88b2370fda71092bbc28f7af3cbd759d6f97b9ab26fd sh4
+>
+> 5dbf6618d2d5e54d209f2befd4873c1c361893e822ca614cca9bad18aca75e01 spc
+>
+> 54df5531d1fdd8bb4f1d499ccbe055506a840860fcc08bf4d31bcc8a02296113 x86
+
+ **Network**
+
+> 178[.]32[.]148[.]5:1337 (Command and Control)
+>
+> 18[.]185[.]109[.]135:1337 (Command and Control)
+>
+> 192[.]3[.]45[.]185 (Malware Hosting Server)
+>
+> 164[.]132[.]92[.]180(Malware Hosting Server)
+>
+> irc[.]hoaxcalls[.]pw (Malware Hosting Server)
+
+ ***参考来源：[unit42](https://unit42.paloaltonetworks.com/new-hoaxcalls-ddos-botnet/)，由Kriston编译，转载请注明来自FreeBuf.COM**
+

@@ -1,0 +1,277 @@
+# 【技术分享】Fuzzing Android：挖掘Android系统组件组件中的漏洞
+
+阅读量 **255624**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2016-11-24 10:12:59
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：blackhat
+
+原文地址：<https://www.blackhat.com/docs/eu-15/materials/eu-15-Blanda-Fuzzing-Android-A-Recipe-For-Uncovering-Vulnerabilities-Inside-System-Components-In-Android-wp.pdf>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+****
+
+**翻译：**[ **hac425**](http://bobao.360.cn/member/contribute?uid=2553709124)
+
+**稿费：240RMB（不服你也来投稿啊！）**
+
+**投稿方式：发送邮件至linwei#360.cn，或登陆**[
+**网页版**](http://bobao.360.cn/contribute/index) **在线投稿**
+
+**全文概述**
+
+本文重点介绍一种可用于发现Android系统组件中不同类型的漏洞的fuzzing方法。
+本文将介绍一种通用的漏洞挖掘方法以及他是怎么样应用在Android平台的。 以下是一个已经被发现漏洞的系统组件列表：
+Stagefright框架，mediaserver进程，Android APK安装进程，installd守护进程， dex2oat，ART。
+
+本文将涵盖许多主题，首先以实际的fuzzing过程开始,从数据/种子生成到测试用例执行,日志记录到最后Crash分类机制，并且讨论如何解决诸如错误,crash重现等挑战
+，整理出独特的crash，并根据crash的严重性对crash进行优先排序。 第二部分 本文将解释几个使用这种方法开发的工具的创造过程
+,接着将重点讨论工具的具体的技术细节，以及目前为止已经发现的bug，以及相关的CVE和可能可利用模式。
+
+  
+
+**Fuzzing简介**
+
+Fuzzing是这样一种行为:利用漏洞检查工具，发送数据到组件，或对指定格式进行填充，完成数以万计的检查任务，来帮助我们发现软件中不期望有的漏洞的行为.一个完整的Fuzzing过程主要包括,生成测试数据,把测试数据交给目标程序来处理,观察程序是否出现非预期的行为,然后又回到第一步,不断循环.目前而言,大部分的漏洞都是通过Fuzzing挖掘到的.
+
+**  
+**
+
+**Android中的Fuzzing方法**
+
+这一部分将介绍一系列可用于Fuzzing安卓系统组件的基本概念和方法 .
+
+**数据生成**
+
+Fuzzing通常可分为Bind
+fuzz,他的大致做法就是把测试数据的进行随机的变化,和智能fuzz,他的做法为首先需要用户定义好数据的大致结构,然后fuzzer基于这些规则进行随机数据生成,以及现在很火的反馈式fuzz,其特点为首先传入测试数据给程序,
+然后通过对程序指令进行监控,看看程序执行路径,以此来对数据进行变异. 以Fuzz文件处理程序为例,bind
+fuzz的做法就是以一些字节为单位将他设置为一些随机的边界值,来生成文件.而智能fuzz的行为是,用户根据文件的格式,定义好规则,然后fuzzer根据这些规则,生成文件.下面是一些常用的fuzz工具.
+
+Basic fuzzing framework (BFF) – mutational fuzzer targeting software that
+consumes file input
+
+Zzuf – application input fuzzer
+
+Radamsa – general purpose test case generator for fuzzing
+
+Fuzzbox – fuzzing tool specialized in targeting media codecs
+
+American Fuzzy Lop (AFL) – instrumentation driven file format fuzzer
+
+**提交数据给程序处理**
+
+这一部分极大的依赖于我们所要测试的系统组件是什么,我们需要根据目标系统组件获取数据的方式,为他定制这一部分的实施方法.
+
+**日志监控**
+
+Android系统提供了一种收集系统调试信息的方法,即为logcat,通过logcat我们可以从系统的应用程序和其他组件收集各种信息,包括系统组件崩溃时的现场等等
+同时logcat还支持过滤器来方便我们查看我们想要的日志..所以我们可以使用logcat作为我们对程序处理数据后的行为的监控器.下面是一个使用的例子.
+
+可以看到这里发现了一个程序 Fatal signal 11 (SIGSEGV) 的
+crash,这样的crash很有可能就是一个有用的crash(也许会带来一个可利用的漏洞)
+
+**分类机制**
+
+在Fuzzing进行了一定时间后会产生很多的crash,但是这些crash中有很多都是差不多的,分类机制的作用就是把大量的重复的crash识别出来,然后把每一个独特的crash保存起来,这样可以大大减少研究人员后期分析的工作量.在每次系统崩溃后,系统会在/data/tombstones生成一个tombstone文件.在该文件中包含很多有用的信息,其中包括了程序崩溃时pc寄存器的值,寄存器和sp寄存器附近的值,以及栈回溯.一般来说我们可以通过程序崩溃时pc寄存器的值来唯一确定一个crash.下面来看一个被恶意媒体文件导致media
+server崩溃之后生成的tombstone文件的内容.
+
+下面给出对 crash分类机制的实现方法.
+
+1.解析程序日志,确定造成程序crash的输入数据.
+
+2.拿这个输入数据再次测试
+
+3.对每一次的测试:
+
+a.拿到生成的tombstone
+
+b.解析tombstone文件拿到pc值
+
+c.检查这个pc值是否已经被记录过了.
+
+d.如果pc值是一个新的值,那么就把tombstone和测试用例保存起来.
+
+  
+
+**在Android中分析和调试 Crash**
+
+在安卓中有很多的方法和工具能够被用来找出在程序发生崩溃时,到底发生了什么.tombstone中包含的最相关的信息是崩溃的堆栈跟踪，造成崩溃的signal，signal的code，发生错误的地址和PC的值。例如对于segmentation
+fault signal 我们可以有一个code 1（SEGV_MAPERR），这意味着 地址未映射到对象或code
+2（SEGV_ACCERR），这意味着我们对这个映射对象没有权限。 Dmesg是用于调试Android上的崩溃的另一个选择。 这是类Unix
+操作系统中一个常见的命令,用于打印内核的消息缓冲区。 下面是2个Stagefright media framework崩溃的消息的示例
+。这个消息给出的是要访问不可访问的页,以及要向用户空间不可写的页写数据.
+
+以下是这些错误码在Dmesg中的对应的消息解释.
+
+GDB也可以在Android环境中用作更可靠的调试解决方案。要使用gdb来调试crash,需要使用可在Android平台下运行的gdbserver.首先我们需要将gdbserver附加到要调试的程序上并监听一个端口.
+
+之后需要把端口转发下,并在在pc上用gdb连到gdbserver上.
+
+然后为了方便调试,我们可以加载调试符号.
+
+如果在分析崩溃时我们有源代码,如果能把崩溃点对应到源代码中那自然是最好不过的了,这样可以很方便的帮助我们分析Crash,以便更好地了解发生了什么.这时我们就可以使用linux上的
+addr2line 命令了.要使用该命令你需要将PC寄存器的值传给这个程序.下面来一个示范.
+
+  
+
+**Fuzzing the media Framework in Android**
+
+这个项目的主要思路是先创建损坏但结构有效的媒体文件，然后把他们交给目标程序去解析,并且监控程序的状态,来发现潜在的问题.。 具体的实现是,通过使用定制开发
+Python脚本来向分布式的Android设备上发送畸形的文件， 记录结果并以自动化方式监控可能的问题。
+而让组件来解析我们的畸形文件用的是Stagefright命令行命令实现的 。最后通过使用定制的Crash分类机制来识别出独特的Crash。
+
+**音频和视频作为攻击向量**
+
+无论是在传统PC还是移动平台上,音频和视频文件都一直是最受欢迎的攻击向量.这样的一种现象的出现是有很多原因的.
+
+1.多媒体文件格式一般比较复杂,往往包含很多复杂的数据结构.这样解析这些数据时,程序犯错的可能性就会很大.而且考虑到效率等因素解析多媒体文件格式的程序基本都是用C写的,这也很容易造成一个内存崩溃.
+
+2.现在市面上有大量的多媒体文件解析器(播放器),他们对各种各样多媒体文件格式的解析方式不尽相同,这样一来攻击面又扩大了不少.
+
+3.用户们普遍认为一个音频或者视频文件并不会造成什么实质性的影响,于是他们往往会去下载和播放未知来源的视频或音频.
+
+4.可以未经用户明确同意播放音频或视频.比如:媒体文件在网页内播放，媒体文件通过MMS发送,这时系统会自动解析媒体文件.
+
+**The Stagefright framework**
+
+Stagefright框架在Android中负责解析各种多媒体文件的算法逻辑。 这个框架的一般体系结构可以在下图中观察到
+
+Stagefright 只是媒体播放器AwesomePlayer的客户端.这个组件
+实现了将视频和音频字幕源与相应的连接的功能，能够在播放用户提供的媒体文件时使视频与音频字幕同步。
+MediaExtractor组件通过给定的媒体文件类型调用适当的数据解析器。 最后，为了准备播放，AwesomePlayer使用OMXCodec
+组件，以便设置用于每个数据源的解码器
+
+**开始Fuzzing**
+
+stagefright命令行接口被用于在进行测试的Android设备上来解析每个恶意的媒体文件
+它可以从Android源码树定制，其主要能力是对媒体文件进行解码/编码，强制使用 软件或硬件编解码器和用于音频文件的回放功能。
+这个工具的完整的功能列表如下：
+
+畸形文件数据的生成是在连接着正在测试的Android设备的本地机器上完成的。 这个过程通常使用Basic Fuzzing Framework,zzuf或
+Fuzzbox这些开源的fuzz工具。 然后将畸形的文件发送到Android设备上，之后Android设备上通过使用
+stagefright命令行接口对畸形文件进行解析 。 在fuzzing过程中 使用上一节中指定的格式生成日志。 下面是一个在fuzzing
+Stagefright框架(媒体文件使用BFF变异)过程中收集到的日志:
+
+**  
+**
+
+**Fuzzing the application install process in Android**
+
+对于这个特定的项目，fuzzing已被用来使用多种方法修改APK的不同组件，并检查这如何影响Android中的安装过程。APK的内部的主要目标是由程序代码编译得到的
+classes.dex和 AndroidManifest.xml文件。事实上在apk的安装过程中其中一个 installd进程是以较高的系统
+特权运行的，这使得这个组件成为一个非常有吸引力的目标，因为在fuzzing期间发现的任何问题的可以在系统安全层面产生很大的影响。
+
+本节将概述项目中会涉及的Android进程。
+此外，该部分还会介绍两种不同的fuzz方法(用来测试两种不同的安卓版本:KitKat和Lollipop),在实际的fuzzing过程,他们会被视为一个单独的主题。
+
+**Android中应用程序安装过程的概述**
+
+PackageInstaller是Android上负责安装其他应用程序的默认应用程序。 包安装器调用InstallAppProgress
+activity来接收来自用户的指令。 此activity调用 Package Manager Service中以system权限运行的installd
+守护进程来安装apk，并且其主要功能是接收来自Package Manager Service的请求。
+
+在安装apk时系统地会调用两个主要的方法run_dexopt(KitKat)以及 run_dex2oat(ART)他们实际上是使用了dexopt
+和dex2oat两个命令行工具.这就是这次fuzzing的主要目标了.一个apk文件中有四个我们感兴趣的组件分别为,classes.dex
+manifest文件,META-INF文件夹,lib文件夹.
+
+下图为各个组件的概览.
+
+我们写的Android app的代码最后会被编译成.dex文件,并使用zip打包成为apk文件.下面是dex文件格式的一个概览.
+
+具体的文件格式可以参考:[http://blog.sina.com.cn/s/blog_66d7a4550101bkqg.html](http://blog.sina.com.cn/s/blog_66d7a4550101bkqg.html)
+
+**开始Fuzzing**
+
+这次的fuzzing考虑到了两个不同的Android版本,分别为KitKat和Lollipop.
+
+**Fuzzing KitKat**
+
+尽管dexopt可以作为一个独立的二进制程序在命令行中被使用,但是他却不能被用于fuzzing,原因是他需要非常多的参数,而且有些参数还不能通过shell环境变量传递给他.在这样的一种情况下我们的fuzz采用了正常的apk过程来使程序运行我们的测试数据.大体思路是:拿到大量的合法的apk文件,然后对他们中的classs.dex
+文件进行变异,之后在重打包为apk文件,最后把他交给Android的安装apk的进程去处理,并且监控其是否发生崩溃.
+
+以下是一些具体步骤:
+
+1.从种子apk文件中解压出classes.dex文件 : unzip –d </local/path/> </apk/path/>
+
+2.fuzz解压出的dex文件: <fuzz> –s <seed> classes.dex > fuzzed.dex
+
+3.在原来的apk文件中移除掉原来的dex文件: aapt r <original_apk> classes.dex
+
+4.使用fuzz得到的dex文件重打包为一个新的apk文件: aapt r <original_apk> classes.dex
+
+5.生成签名文件: keytool -genkey -v -keystore keystore.keystore -alias keystore
+-keyalg RSA -keysize 2048 -validity 10000
+
+6.移除apk中的META-INF目录: zip –delete </apk/path/> META-INF/*
+
+7.用我们刚刚生成的签名文件对apk签名.:jarsigner -verbose -sigalg SHA1withRSA -digestalg SHA1
+-keystore </keystore/path> </apk/path> <keystore_alias
+
+下面是在fuzz kikat时的部分日志.
+
+**Android Lollipop**
+
+和dexopt不同,dex2oat这个程序可以使用它的命令行参数来完成解析dex文件的工作,那么我们的fuzz就使用了这个工具的命令行接口来进行后续的fuzz.他需要两个参数分别为:
+输入的dex文件,和输出的 oat文件.其参数列表如下:
+
+那么在Lollipop上进行fuzz的思路就是,首先拿到一个初始化的dex文件集(可以从之前的那些apk文件中提取),然后对他们进行变异,之后把变异后的文件交给dex2oat去解析.如果检测到了崩溃,我们还需要把dex文件重新打包到apk文件中,然后使用apk的安装流程再次测试来确认这是一个可以重现的Crash.
+
+下面是一个fuzz的日志的例子.
+
+  
+
+**在Android上使用AFL**
+
+AFL是现在比较流行的一个Fuzz工具,他原本是运行在linux PC上的,后面经过Adrian
+Denkiewicz的修改使得我们可以在Android上使用这款神器.
+
+**Using AFL for Stagefright fuzzing**
+
+在Android上使用AFL的一个最大的挑战就是怎样完全自动化的进行整个Fuzzing过程.下面一个大体的思路.
+
+为了实现更加好的自动化fuzz效果使用了如下的架构.
+
+  
+
+**总结**
+
+Fuzz安卓的一些系统组件和Fuzz其他的位于PC的程序在本质上并无区别,只是在提交测试数据给程序执行这一步需要做的工作会更多以及对程序Crash的日志监控机制还不是太完善.
+
+本文翻译自blackhat
+[原文链接](https://www.blackhat.com/docs/eu-15/materials/eu-15-Blanda-Fuzzing-Android-A-Recipe-For-Uncovering-Vulnerabilities-Inside-System-Components-In-Android-wp.pdf)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **for_while** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/84979](/post/id/84979)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [blackhat](https://www.blackhat.com/docs/eu-15/materials/eu-15-Blanda-Fuzzing-Android-A-Recipe-For-Uncovering-Vulnerabilities-Inside-System-Components-In-Android-wp.pdf)
+
+如若转载,请注明出处： <https://www.blackhat.com/docs/eu-15/materials/eu-15-Blanda-Fuzzing-Android-A-Recipe-For-Uncovering-Vulnerabilities-Inside-System-Components-In-Android-wp.pdf>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __2赞
+
+ __收藏
+
+![](https://p2.ssl.qhmsg.com/dm/200_200_100/t011d66e4d0ee6ef2b8.jpg) for_while
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,200 @@
+**写这个脚本的起因是，某厂商对我司出售客户那边的产品做基线检查，发现操作系统存在很多不符合项，需进行整改。拿到了对方的检测报告，于是就有了这个脚本，原报告暂不方便直接给出，后续我处理一下再给出来吧。**  
+
+脚本Github链接：[基线检查&加固](https://github.com/starnightcyber/Miscellaneous/tree/master/%E5%9F%BA%E7%BA%BF%E6%A3%80%E6%9F%A5%26%E5%8A%A0%E5%9B%BA)
+
+## 检测项
+
+在CentOS 7.2上进行测试，检测项如下。（个人感觉涵盖了很多，还是可以增补的）
+
+    
+    
+    2 操作系统
+    2.1 帐号管理
+    2.1.1 检查是否设置除root之外UID为0的用户
+    2.1.2 检查是否按用户分配账号
+    2.1.3 检查是否删除与设备运行、维护等工作无关的账号
+    2.2 口令策略
+    2.2.1 检查是否设置口令生存周期
+    2.2.2 检查是否设置口令更改最小间隔天数
+    2.2.3 检查设备密码复杂度策略
+    2.2.4 检查是否设置口令过期前警告天数
+    2.2.5 检查是否存在空口令账号
+    2.2.6 检查密码重复使用次数限制
+    2.2.7 检查账户认证失败次数限制
+    2.3 认证授权
+    2.3.1 检查用户目录缺省访问权限设置
+    2.3.2 检查是否设置SSH登录前警告Banner
+    2.4 日志审计
+    2.4.1 检查是否对登录进行日志记录
+    2.4.2 检查是否启用cron行为日志功能
+    2.4.3 检查是否配置远程日志功能
+    2.4.4 检查是否配置su命令使用情况记录
+    2.4.5 检查日志文件权限设置
+    2.4.6 检查安全事件日志配置
+    2.5 文件权限
+    2.5.1 检查FTP用户上传的文件所具有的权限
+    2.5.2 检查重要目录或文件权限设置
+    2.6 网络通信
+    2.6.1 检查是否禁止root用户远程登录
+    2.6.2 检查使用IP协议远程维护的设备是否配置SSH协议，禁用Telnet协议
+    2.6.3 检查是否修改SNMP默认团体字
+    2.6.4 检查是否禁止root用户登录FTP
+    2.6.5 检查是否使用PAM认证模块禁止wheel组之外的用户su为root	
+    2.7 其他配置
+    2.7.1 检查是否禁止匿名用户登录FTP	
+    2.7.2 检查是否删除了潜在危险文件
+    2.7.3 检查是否设置命令行界面超时退出
+    2.7.4 检查系统是否禁用Ctrl+Alt+Delete组合键
+    2.7.5 检查root用户的path环境变量
+    2.7.6 检查历史命令设置
+    2.7.7 检查是否设置SSH成功登录后Banner
+    2.7.8 检查是否限制FTP用户登录后能访问的目录
+    2.7.9 检查是否关闭数据包转发功能
+    2.7.10 检查别名文件/etc/aliase
+    2.7.11 检查是否使用NTP（网络时间协议）保持时间同步
+    2.7.12 检查是否限制远程登录IP范围
+    2.7.13 检查NFS（网络文件系统）服务配置
+    2.7.14 检查是否配置定时自动屏幕锁定
+    2.7.15 检查是否安装chkrootkit进行系统监测
+    2.7.16 检查是否安装OS补丁
+    2.7.17 检查FTP banner设置
+    2.7.18 检查Telnet banner设置
+    2.7.19 检查系统内核参数配置
+    2.7.20 检查系统openssh安全配置
+    2.7.21 检查系统coredump设置
+    2.7.22 检查是否关闭不必要的服务和端口
+
+## 输出显示
+
+脚本中，有做文字颜色输出设定。
+
+    
+    
+    # ================ Global function for print result ===================
+    # 绿色字体输出
+    pass=$(($pass+1))
+    print_pass(){
+        echo -e "\033[32m检测结果 ==> PASS \033[0m"
+    }
+    # 红色字体输出
+    fail=$(($fail+1))
+    print_fail(){
+      echo -e "\033[31m检测结果 ==> FAIL \033[0m"
+    }
+    # 黄色字体输出
+    print_manual_check(){
+      echo -e "\033[33m请手工检测 ==> Manual \033[0m"
+    }
+    # 蓝色字体输出
+    print_info(){
+      echo -e "\033[34m$1 \033[0m"
+    }
+    # 紫色字体输出
+    print_check_point(){
+      echo ""
+      echo -e "\033[35m[No.$1] $2 \033[0m"
+      echo "------------------------------------------------------------------------"
+    }
+    print_summary(){
+      print_info "---------------------------- Summary -----------------------------"
+      echo -e "\033[35m全部检测项： $1 \033[0m"
+      echo -e "\033[32m通过检测项： $2 \033[0m"
+      echo -e "\033[31m失败检测项： $3 \033[0m"
+      echo -e "\033[33m手工检测项： $4 \033[0m"
+      print_info "------------------------------------------------------------------"
+    }
+
+## 输出示例
+
+在脚本检测过程中，也尽可能的输出更多的信息。  
+
+    
+    
+    ... 以上省略几百行
+    [No.45] 其他配置-20:检查系统openssh安全配置 
+    ------------------------------------------------------------------------    X11Forwarding => no 
+    MaxAuthTries => 4 
+    IgnoreRhosts => yes 
+    HostbasedAuthentication => no 
+    PermitEmptyPasswords => no 
+    检测结果 ==> PASS 
+    
+    [No.46] 其他配置-21:检查系统coredump设置 
+    ------------------------------------------------------------------------    设置* soft  core、* hard core为0，且注释掉ulimit -S -c 0 > /dev/null 2>&1 
+    检测结果 ==> FAIL 
+    
+    [No.47] 其他配置-22:检查是否关闭不必要的服务和端口 
+    ------------------------------------------------------------------------    ==>please check the output of the following command:  
+    # chkconfig --list 
+    请手工检测 ==> Manual 
+    ---------------------------- Summary ----------------------------- 
+    全部检测项： 47 
+    通过检测项： 24 
+    失败检测项： 15 
+    手工检测项： 8 
+    ------------------------------------------------------------------ 
+
+做简单的数据统计，便于了解大致的检测项的符合情况。  
+
+##
+![os_output.png](https://image.3001.net/images/20200521/1590052085_5ec644f51540d.png!small)脚本链接
+
+因为脚本比较长，有近1000行，不方便展示在这里，请移步：[starnightcyber/Miscellaneous/基线检查&加固/](https://github.com/starnightcyber/Miscellaneous/blob/master/%E5%9F%BA%E7%BA%BF%E6%A3%80%E6%9F%A5%26%E5%8A%A0%E5%9B%BA/baseline_os.sh)
+
+    
+    
+    print_info "---------------------- 正在执行操作系统基线检查 ----------------------"
+    index=0       # 检测项编号
+    pass=0        # 通过的检测项数
+    fail=0        # 未通过的检测项数
+    manual=0      # 需手工复核的检测项数
+    
+    
+    check_point="帐号管理-1:检查是否设置除root之外UID为0的用户"
+    index=$(($index+1))
+    print_check_point $index $check_point
+    
+    result=`/bin/cat /etc/passwd | /bin/awk -F: '($3 == 0) { print $1 }'`
+    print_info "UID为0的用户如下:"
+    print_info "[ $result ]"
+    
+    if [ "root" = $result  ]; then
+        pass=$(($pass+1))
+        print_pass
+    else
+        fail=$(($fail+1))
+    print_fail
+    fi
+    
+    
+    check_point="帐号管理-2:检查是否按用户分配账号 "
+    index=$(($index+1))
+    print_check_point $index $check_point
+    
+    up_uidmin=`(grep -v ^# /etc/login.defs |grep "^UID_MIN"|awk '($1="UID_MIN"){print $2}')`
+    up_uidmax=`(grep -v ^# /etc/login.defs |grep "^UID_MAX"|awk '($1="UID_MAX"){print $2}')`
+    users=`/bin/cat /etc/passwd | /bin/awk -F: '{if( $3>='$up_uidmin' && $3<='$up_uidmax' ) {print $1":"$3}}'`
+    print_info "系统中存在的用户如下:"
+    print_info "[ $users ]"
+    
+    if [ "$users" ]; then
+        pass=$(($pass+1))
+    print_pass
+    else
+        fail=$(($fail+1))
+    print_fail
+    fi
+    
+    ...
+    # 以下省略几百行
+
+## 说明
+
+以上脚本仅在CentOS 7.2上进行测试，在其它linux发行版本会存在一定的差异。
+
+如果发现脚本中有问题请与我联系，或者有新的想法 or 增加检测项，也可以私信我。
+
+如文章显示效果较差，请移步[github](https://github.com/starnightcyber/Miscellaneous/tree/master/%E5%9F%BA%E7%BA%BF%E6%A3%80%E6%9F%A5%26%E5%8A%A0%E5%9B%BA)或[cnblogs](https://www.cnblogs.com/Hi-blog/p/OS-Baseline-Check.html) 进行阅读。
+
+ ***本文作者：freewill，转载请注明来自FreeBuf.COM**  
+

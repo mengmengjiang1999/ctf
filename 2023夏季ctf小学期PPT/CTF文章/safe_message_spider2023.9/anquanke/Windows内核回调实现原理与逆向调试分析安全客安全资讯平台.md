@@ -1,0 +1,329 @@
+# Windows内核回调实现原理与逆向调试分析
+
+阅读量 **270539**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-02-03 10:30:31
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t01d1fcc87d526ddb34.jpg)
+
+## 主要内容
+
+针对进程行为的监控需求，以往很多安全软件都是采用的Hook技术拦截关键的系统调用，来实现对恶意软件进程创建的拦截。但在x64架构下，系统内核做了很多安全检测措施，特别是类似于KDP这样的技术，使得Hook方法不再有效。为此OS推出了基于回调实现的行为监控方案。本文借助IDA逆向分析该技术的实现原理并给出了关键数据结构及调用链，通过双机内核调试验证了该数据结构以及调用链的正确性。
+
+涉及到的内容如下：
+
+1、内核对象及内核对象管理；  
+2、进程回调；  
+3、内核调试；  
+4、Windbg双击调试；
+
+## 0 引言
+
+近年来，各种恶意软件新变种层出不穷，攻击方法、手段多种多样，造成了巨大的经济损失。作为防守的第一个环节就是能够识别出恶意进程创建的动作，而进程创建监控技术是为了能够让安全软件有机会拦截到此动作的技术。安全软件根据匹配算法判断是否准许该进程创建，以此达到保护用户数据安全的目的。x86架构下的实现方案多为Hook技术，通过拦截内核中进程创建的关键API如nt!NtCreateProcess或nt!NtCreateProcessEx，通过堆栈来回溯到关键参数，如待创建进程的exe全路径、父进程信息，然后根据获取到的全路径检测exe磁盘文件，同时也可以分析进程链最终确定是否放行该动作。但这种技术方案存在一些缺陷，一方面其破坏了内核的完整性，导致系统的稳定性下降；另一方面，这些API很多都是未公开的，也就意味着需要通过逆向工程等技术手段来分析OS内核镜像文件，定位到关键的API。但如果系统升级了，该API可能就不存在了，这也导致安全软件的兼容性特别差；最重要的是各个安全厂家的实现方案不一样，挂钩的点也不同，很容易出现相互竞争的情况，极有可能会导致BSoD（Blue
+Screen of
+Death）。另一种传统的基于特征码的拦截方式，也同样存在类似的问题。需要为每个子版本的系统关键API做逆向分析，取出特征码，当系统更新或者打补丁，则需要再次逆向分析取出特征码。工作量巨大，效率低下，适配性很低，如果没有及时更新特征码，很可能会使得监控失效，情况糟糕的时候会直接导致BSoD。为此，在x64架构下，内核一方面为了保护关键数据的完整性，另一方面也为了提高内核程序自身的稳定性，推出了诸如KDP（Kernel
+Data Protection）、PG等安全措施，使得传统的
+Hook技术失效；同时OS为了规范化安全相关信息的获取，使得安全软件能够在内核可控的情况下提供安全服务，Windows系统层面提供了一种基于回调的方式来通知安全软件注册的内核回调例程。这种方式优点是方便高效，可移植性好，稳定性高，且各个安全厂商之间也不会出现竞争的关系。
+
+本文基于逆向工程及内核调试技术，分析了该技术的具体实现及系统额外增加的数据检测机制。借助逆向工具IDA静态逆向分析了系统关键API的内部动作及具体的实现，相关的数据结构，得到该技术实际触发的调用源以及整个调用链。借助VMWare搭建双机调试环境，利用Windbg动态调试系统内核，查看系统中所涉及到的关键数据，并与PCHunter给出的数据做对比分析，验证了分析结论的正确性。此外还通过对调用链中的关键函数下断点，通过栈回溯技术，动态观察了整个调用链及触发时间。分析得到的关键数据结构和系统对数据做的检测校验算法可用于检测病毒木马等软件恶意构造的表项，且还可以应用到安全厂商对抗恶意代码时，自动构造表项来检测系统行为，完全脱离系统提供的注册卸载API。
+
+## 1 进程回调原理分析
+
+###  1.1 安装与卸载逆向分析
+
+根据微软官方技术文档MSDN上的说明，通过PsSetCreateProcessNotifyRoutine、PsSetCreateProcessNotifyRoutineEx和PsSetCreateProcessNotifyRoutineEx2这三API来安装一个进程创建、退出通知回调例程，当有进程创建或者退出时，系统会回调参数中指定的函数。以PsSetCreateProcessNotifyRoutine为例子，基于IDA逆向分析该API的具体实现。如图1所示，由图可知，该API内部仅仅是简单的调用另一个函数，其自身仅仅是一个stub，具体的实现在PspSetCreateProcessNotifyRoutine中，此函数的安装回调例程的关键实现如图所示。
+
+![](https://p0.ssl.qhimg.com/t01dc83203d6fe0eec2.png)
+
+![](https://p5.ssl.qhimg.com/t011c4a9b3c12ac9581.png)
+
+调用ExAllocateCallBack，创建出了一个回调对象，并将pNotifyRoutine和bRemovel作为参数传入，以初始化该回调对象，代码如图所示；其中pNotifyRoutine即是需要被回调的函数例程，此处的bRemovel为false，表示当前是安装回调例程。
+
+![](https://p0.ssl.qhimg.com/t016c43c4b29e830591.png)
+
+紧接着调用ExCompareExchangeCallBack将初始化好的CallBack对象添加到PspCreateProcessNotifyRoutine所维护的全局数组中。值得注意的是，ExCompareExchangeCallBack中在安装回调例程时，对回调例程有一个特殊的操作如图所示。
+
+![](https://p3.ssl.qhimg.com/t011c65f421783de5d8.png)
+
+与0x0F做了或操作，等价于将低4位全部置1；若ExCompareExchangeCallBack执行失败，则接着下一轮循环继续执行。由图2中第66行代码可知，循环的最大次数是0x40次。如果一直失败，可调用ExFreePoolWithTag释放掉pCallBack所占用的内存，且返回0xC000000D错误码。
+
+然后根据v3的值判断是通过上述三个API中的哪个安装的回调，来更新相应的全局变量。其中PspCreateProcessNotifyRoutineExCount和PspCreateProcessNotifyRoutineCount分别记录当前通过PsSetCreateProcessNotifyRoutineEx和PsSetCreateProcessNotifyRoutine安装回调例程的个数。PspNotifyEnableMask用以表征当前数组中是否安装了回调例程，该值在系统遍历回调数组执行回调例程时，用以判断数组是否为空，加快程序的执行效率。
+
+除了能够安装回调例程，这三个API也能卸载指定的回调例程。以PsSetCreateProcessNotifyRoutine为例，分析其实现的关键部分，如图所示。
+
+![](https://p5.ssl.qhimg.com/t01529cef5965edace8.png)
+
+通过一个while循环遍历PspCreateProcessNotifyRoutine数组，调用ExReferenceCallBackBlock取出数组中的每一项，该API内部会做一些检验动作且对返回的数据也做了特殊处理，如图所示。图6中*pCallBackObj即是取出回调对象中的回调例程的函数地址，通过判断其低4位是否为1来做一些数据的校验，如17行所示。系统做这个处理也是起到保护作用，防止恶意构造数据填入表中，劫持正常的系统调用流程。此外，图中第33行处的代码，在将回调例程返回给父调用时，也将回调例程的低4位全部清零，否则返回的地址是错误的，调用立马触发CPU异常。
+
+![](https://p4.ssl.qhimg.com/t012c2504cf537b2340.png)
+
+ExReferenceCallBackBlock成功返回后，调用ExGetCallBackBlockRoutine从返回的回调对象中取出回调例程，并判断取出的是否为当前指定需要卸载的项，如果是则调用ExDereferenceCallBackBlock递减引用计数，接着调用ExFreePoolWithTag释放掉Callback所占用的内存。期间也会更新PspCreateProcessNotifyRoutineExCount或PspCreateProcessNotifyRoutineCount的值。根据源码还可以得知，该数组总计64项，也即只能安装64个回调例程。如果遍历完数组的64项依旧没有找到，则返回0xC000007A错误码。
+
+###  1.2 OS执行回调例程分析
+
+回调例程安装完之后，如果有新的进程创建或退出，内核则便会遍历该数组来执行其中安装的每一项回调例程。通过IDA的交叉引用功能，可分析出内核其他地方对PspCreateProcessNotifyRoutine的交叉引用，如图所示，
+
+![](https://p0.ssl.qhimg.com/t01a034db4912e2069e.png)
+
+共计5个地方涉及到此变量。其中PspCallProcessNotifyRoutines是直接调用回调例程的函数，该函数的关键部分如图所示。
+
+![](https://p4.ssl.qhimg.com/t01ef299b2a3d11bfaa.png)
+
+通过while循环，遍历PspCreateProcessNotifyRoutine数组中安装的所有回调例程，依次执行。PspNotifyEnableMask
+&
+2的操作即为判断当前数组中是否安装有回调例程，加快程序的执行效率，这个变量的值在PsSetCreateProcessNotifyRoutine中安装回调例程时设置。bRemove
+&
+2这个if分支，是用来判断当前的回调例程是通过PsSetCreateProcessNotifyRoutine还是PsSetCreateProcessNotifyRoutineEx安装，因为这两个API安装的回调例程的原型不同，在实际调用时传入的参数也不同。两者的回调例程原分别为：void
+PcreateProcessNotifyRoutine(HANDLE ParentId,HANDLE ProcessId,BOOLEAN
+Create)和void PcreateProcessNotifyRoutineEx(PEPROCESS Process,HANDLE
+ProcessId,PPS_CREATE_NOTIFY_INFO
+CreateInfo)。此外，图8中IDA给出的伪C代码RoutineFun((unsigned
+__int64)RoutineFun)明显不对，因为回调例程的参数个数是3个，而IDA分析出的参数只有1个，显然有问题。直接看下反汇编代码即可得知，如图所示，
+
+![](https://p5.ssl.qhimg.com/t01bc3de98946bbfd49.png)
+
+根据x64下的调用约定可知，函数的前4个参数是通过rcx、rdx、r8和r9这四个寄存器传递，图给出的正是回调例程的前三个参数，_guard_dispatch_icall内部会直接取rax的值调用过去，而rax的值正是ExGetCallBackBlockRoutine调用返回的回调例程函数地址。
+
+上图中的第二个涉及到PspCreateProcessNotifyRoutine数组的是PspEnumerateCallback函数，该函数是系统内部函数，没有导出，其具体实现如图所示。
+
+![](https://p0.ssl.qhimg.com/t01692d31ee05f7e3c5.png)
+
+该函数根据dwEnumType来判断想要枚举的是哪个数组，由代码分析可知，系统内核维护了三个回调相关的数组，分别为镜像加载回调数组，进程创建退出回调数组，线程创建退出数组。类似之前的函数校验，这里也检测了索引是否超过0x40，超过了则返回0，以示失败。
+
+###  1.3 触发调用的调用链分析
+
+上节分析了回调例程的直接调用上级函数，本节分析整个调用链，主要分析调用源及调用过程中涉及到的关键函数。根据IDA给出的交叉引用图如图所示。
+
+![](https://p3.ssl.qhimg.com/t01ddffb1b93b09a8b5.png)
+
+涉及到的函数调用非常多，很多不相关的也被包含进来，不便于分析。经手动分析整理后的调用链，其链路中的关键API如图所示。
+
+![](https://p5.ssl.qhimg.com/t01308da4058486add1.png)
+
+虚线以上部分为用户态程序，虚线以下为内核态程序，红色标注的都是标准导出的API。根据图12可知，当用户态进程调用RtlCreateUserProcess、RtlCreateUserProcesersEx或RtlExitUserProcess时，内核都会去遍历PspCreateProcessNotifyRoutine数组，依次执行回调例程，通知给驱动程序做相应的处理。驱动接管之后，可以做安全校验处理，分析进程的父进程或者进一步分析进程链，此外还可以对即将被拉起的子进程做特征码匹配，PE指纹识别，导入表检测等防御手段。这种方式不需要去Hook任何API，也无需做特征码定位等重复繁琐的工作，完全基于系统提供的回调机制，且在Windows系统中都可以无缝衔接。且各个安全厂家之间也不存在相互竞争，大大缩小了系统蓝屏的风险。图12中NtCreateUserProcess调用PspInsertThread的原因是创建进程的API内部会创建该进程的主线程。将遍历回调例程数组的工作统一到PspInsertThread中，由其去调用下层的PspCallProcessNotifyRoutines更为合理。
+**  
+**
+
+## 2 实验
+
+###  2.1 观察系统中已安装的回调例程
+
+实验环境如表1所示，借助于VMWare进行双机调试。
+
+Guest OS Build 10.0.16299.125  
+Host OS Build 10.0.17134.885  
+Windbg版本 10.0.17134.1  
+VMWare 14.1.1 build-7528167  
+PCHunter V1.56
+
+在Windbg中观察PspCreateProcessNotifyRoutine数组，共计14项有效数据，如下所示；
+
+    
+    
+    1: kd> dd PspCreateProcessNotifyRoutineCount  l1
+    fffff802`151f4e78  00000009
+    
+    1: kd> dd PspCreateProcessNotifyRoutineExCount l1
+    fffff802`151f4e7c  00000005
+    
+    1: kd> dq PspCreateProcessNotifyRoutine l40
+    fffff802`14da2a80  ffffcc8b`d884b9bf  ffffcc8b`d8d9c96f
+    fffff802`14da2a90  ffffcc8b`d939975f  ffffcc8b`da00044f
+    fffff802`14da2aa0  ffffcc8b`d9bd382f  ffffcc8b`da41e8df
+    fffff802`14da2ab0  ffffcc8b`da53815f  ffffcc8b`da5ca8bf
+    fffff802`14da2ac0  ffffcc8b`dac5178f  ffffcc8b`dbef624f
+    fffff802`14da2ad0  ffffcc8b`dce333af  ffffcc8b`dcec67df
+    fffff802`14da2ae0  ffffcc8b`dc735def  ffffcc8b`dcabd32f
+    
+    拆解第一项，寻找其所对应的回调例程，如下:
+    1: kd> dq ffffcc8b`d884b9b0 l3
+    ffffcc8b`d884b9b0  00000000`00000020 fffff802`13fd6268
+    ffffcc8b`d884b9c0  00000000`00000000
+    由此可知，安装的回调例程起始地址为fffff802`13fd6268，且还可知道Remove为0，即这个是已经安装的。寻找该回调例程对应的驱动模块，如下：
+    
+    1: kd> u fffff802`13fd6268
+    360qpesv64+0x26268:
+    fffff802`13fd6268  mov  qword ptr [rsp+08h],rbx
+    fffff802`13fd626d  mov  qword ptr [rsp+10h],rbp
+    fffff802`13fd6272  mov  qword ptr [rsp+18h],rsi
+    fffff802`13fd6277  push rdi
+    
+    1: kd> lmvm 360qpesv64
+    start              end                 module name
+    fffff802`13fb0000 fffff802`14002000 360qpesv64
+    Loaded symbol image file: 360qpesv64.sys
+    Image path: 360qpesv64.sys
+    Image name: 360qpesv64.sys
+    Timestamp:  Wed May 27 20:13:22 2020 (5ECF2C52)
+    CheckSum:   00054A2A
+    ImageSize:  00052000
+    
+
+可知该回调例程是360官方提供。借助PCHunter来对比下，其给出的数据如图所示，
+
+![](https://p4.ssl.qhimg.com/t01b0899a556976aec5.png)
+
+###  2.2 动态调试回调例程
+
+以表项的第14项为例，内容如下，
+
+    
+    
+    1: kd> dq ffffcc8b`dcabd320 l3
+    ffffcc8b`dcabd320  00000000`00000020 fffff802`13d795b4
+    ffffcc8b`dcabd330  00000000`00000006
+    
+    1: kd> bp fffff802`13d795b4
+    1: kd> g
+    
+    断点命中，查看父进程相关信息，如下，
+    Breakpoint 0 hit
+    fffff802`13d795b4 48895c2408      mov     qword ptr [rsp+8],rbx
+    1: kd> dt _EPROCESS @$proc -yn ImageFileName
+    nt!_EPROCESS
+      +0x450 ImageFileName : [15]  "svchost.exe"
+    由此可知，是svchost.exe这个父进程创建或者销毁了一个子进程，更具体的信息如下分析；查看下当前的上下文环境；
+    
+    1: kd> r
+    rax=fffff80213d795b4 rbx=ffffcb8050526c80 rcx=ffffcc8bdd67e080
+    rdx=0000000000001f28 rsi=000000000000000d rdi=ffffcc8bdd67e080
+    rip=fffff80213d795b4 rsp=ffffcb8050526c38 rbp=ffffcb8050526ca9
+    r8=ffffcb8050526c80  r9=ffffcc8bdc735de0 r10=ffff9401cdcc2760
+    r11=0000000000000000 r12=0000000000000001 r13=0000000000000000
+    r14=ffffcc8bdcabd320 r15=fffff80214da2ae8
+    iopl=0         nv up ei pl zr na po nc
+    cs=0010  ss=0018  ds=002b  es=002b  fs=0053  gs=002b             efl=00000246
+    
+    根据x64的调用约定可知，rcx寄存器中存储的是EPROCESS对象指针，该对象存储的是即将被创建的子进程的相关信息，可以获取到的作为身份识别或者安全检测的关键信息如下：
+    1: kd> dt _EPROCESS ffffcc8bdd67e080 -yn ImageFile
+    ntdll!_EPROCESS
+       +0x448 ImageFilePointer : 0xffffcc8b`dc97c5c0 _FILE_OBJECT
+       +0x450 ImageFileName : [15]  "UpdateAssistan"
+    
+    1: kd> dt 0xffffcc8b`dc97c5c0 _FILE_OBJECT -yn FileName
+    ntdll!_FILE_OBJECT
+       +0x058 FileName : _UNICODE_STRING "\Windows\UpdateAssistant\UpdateAssistant.exe"
+    
+    1: kd> .process /p ffffcc8bdd67e080; !peb 186ef07000
+    Implicit process is now ffffcc8b`dd67e080
+    .cache forcedecodeuser done
+    PEB at 000000186ef07000
+        CurrentDirectory:  'C:\Windows\system32\'
+        WindowTitle:  'C:\Windows\UpdateAssistant\UpdateAssistant.exe'
+        ImageFile:    'C:\Windows\UpdateAssistant\UpdateAssistant.exe'
+    CommandLine:  'C:\Windows\UpdateAssistant\UpdateAssistant.exe /ClientID Win10Upgrade:VNL:NHV19:{} /CalendarRun'
+    
+    可以获取到该进程的EXE路径，创建时的命令行参数，父进程的PID等信息，这些足以用于安全软件的检测。
+    父进程的完整调用栈如下，
+    
+    1: kd> k
+     # Child-SP          RetAddr           Call Site
+    00 ffffcb80`50526c38 fffff802`14ef4ae5 0xfffff802`13d795b4
+    01 ffffcb80`50526c40 fffff802`14ef752c nt!PspCallProcessNotifyRoutines+0x249
+    02 ffffcb80`50526d10 fffff802`14f2797b nt!PspInsertThread+0x5a4
+    03 ffffcb80`50526dd0 fffff802`14b79553 nt!NtCreateUserProcess+0x9c7
+    04 ffffcb80`50527a10 00007ffe`547d1654 nt!KiSystemServiceCopyEnd+0x13
+    05 0000002f`4b67d258 00007ffe`50b406df ntdll!NtCreateUserProcess+0x14
+    06 0000002f`4b67d260 00007ffe`50b3d013 KERNELBASE!CreateProcessInternalW+0x1b3f
+    07 0000002f`4b67dec0 00007ffe`5216ee0f KERNELBASE!CreateProcessAsUserW+0x63
+    08 0000002f`4b67df30 00007ffe`4ce0a136 KERNEL32!CreateProcessAsUserWStub+0x5f
+    09 0000002f`4b67dfa0 00007ffe`4ce0bdd9 UBPM!UbpmpLaunchAction+0xb36
+    0a 0000002f`4b67e280 00007ffe`4ce08ee0 UBPM!UbpmLaunchTaskExe+0x279
+    0b 0000002f`4b67e490 00007ffe`4ce10a86 UBPM!UbpmpLaunchOneTask+0x6c0
+    0c 0000002f`4b67e8f0 00007ffe`4ce0b8bc UBPM!UbpmpHandleGroupSid+0x236
+    0d 0000002f`4b67ea10 00007ffe`4ce0b78b UBPM!UbpmpLaunchExeAction+0xec
+    0e 0000002f`4b67eaf0 00007ffe`4ce0b5a3 UBPM!UbpmpTakeAction+0xeb
+    0f 0000002f`4b67eb50 00007ffe`4ce0b193 UBPM!UbpmpPerformTriggerActions+0x293
+    10 0000002f`4b67eca0 00007ffe`4ce1316c UBPM!UbpmpHandleTriggerArrived+0x563
+    11 0000002f`4b67ef50 00007ffe`508c32d0 UBPM!UbpmpRepetitionArrived+0x1c
+    12 0000002f`4b67ef90 00007ffe`508c3033 EventAggregation!EaiSignalAggregateEvent+0x16c
+    13 0000002f`4b67f060 00007ffe`508c27aa EventAggregation!EaiSignalCallback+0xe7
+    14 0000002f`4b67f140 00007ffe`508c253e EventAggregation!EaiProcessNotification+0x1aa
+    15 0000002f`4b67f270 00007ffe`508caef8 EventAggregation!WnfEventCallback+0x506
+    16 0000002f`4b67f3a0 00007ffe`5476769f EventAggregation!AggregateEventWnfCallback+0x38
+    17 0000002f`4b67f3f0 00007ffe`54767a51 ntdll!RtlpWnfWalkUserSubscriptionList+0x29b
+    18 0000002f`4b67f4e0 00007ffe`5476b510 ntdll!RtlpWnfProcessCurrentDescriptor+0x105
+    19 0000002f`4b67f560 00007ffe`54766b59 ntdll!RtlpWnfNotificationThread+0x80
+    1a 0000002f`4b67f5c0 00007ffe`54764b70 ntdll!TppExecuteWaitCallback+0xe1
+    1b 0000002f`4b67f600 00007ffe`52171fe4 ntdll!TppWorkerThread+0x8d0
+    1c 0000002f`4b67f990 00007ffe`5479ef91 KERNEL32!BaseThreadInitThunk+0x14
+    1d 0000002f`4b67f9c0 00000000`00000000 ntdll!RtlUserThreadStart+0x21
+    
+    由于前四个参数是通过的寄存器传递的，所以无法直接通过栈来回溯到参数，但可以通过手动方式分析得到。分析ntdll!NtCreateUserProcess的调用父函数，其返回地址处的汇编代码如下所示：
+    
+    1: kd> ub 00007ffe`50b406df
+    KERNELBASE!CreateProcessInternalW+0x1b11:
+    00007ffe`50b406b1 488b842440040000 mov     rax,qword ptr [rsp+440h]
+    00007ffe`50b406b9 4889442420      mov     qword ptr [rsp+20h],rax
+    00007ffe`50b406be b800000002      mov     eax,2000000h
+    00007ffe`50b406c3 448bc8          mov     r9d,eax
+    00007ffe`50b406c6 448bc0          mov     r8d,eax
+    00007ffe`50b406c9 488d942448010000 lea     rdx,[rsp+148h]
+    00007ffe`50b406d1 488d8c24e0000000 lea     rcx,[rsp+0E0h]
+    00007ffe`50b406d9 ff1521901600    call    qword ptr [KERNELBASE!_imp_NtCreateUserProcess (00007ffe`50ca9700)]
+    
+    可知，NtCreateUserProcess第一个参数和第二个参数再rsp+0xE0和rsp+0x148处；查看该处的数据如下：
+    1: kd> dpu 0000002f`4b67d260+E0 0000002f`4b67d260+148 
+    0000002f`4b67d340  00000000`00000000
+    0000002f`4b67d348  00000000`00000004
+    0000002f`4b67d350  00000100`00000000
+    0000002f`4b67d358  00000000`00000020
+    0000002f`4b67d360  000001f2`d9b87cc0 "C:\Windows\UpdateAssistant\UpdateAssistant.exe"
+    0000002f`4b67d368  00000000`00000000
+    0000002f`4b67d370  00000000`00000000
+    0000002f`4b67d378  0000002f`00000000
+    0000002f`4b67d380  000001f2`d8d43580 "C:\Windows\UpdateAssistant\UpdateAssistant.exe /ClientI"
+    0000002f`4b67d388  00000000`00000000
+    0000002f`4b67d390  00000000`00008664
+    0000002f`4b67d398  000001f2`d9d73c40 "ALLUSERSPROFILE=C:\ProgramData"
+    0000002f`4b67d3a0  00000000`00000000
+    0000002f`4b67d3a8  00000000`00000000
+    
+
+由此可知，svchost拉起的子进程为UpdateAssistant.exe，与之前分析得到的参数也相吻合。从调用栈可知，是在svchost创建子进程UpdateAssistant.exe时遍历的回调例程，通知给驱动软件做相应的处理。
+
+## 3 结束语
+
+本文详细地分析了系统实现进程回调安全机制的内部原理，借助IDA工具逆向系统镜像文件，分析了实现的关键代码部分，得到了关键数据结构及系统额外做的数据检测校验算法。对关键全局变量的作用也做了详细解释。此外，通过逆向分析，给出了整个机制的调用源与调用链。最后基于双机调试环境，动态查看内核中维护的进程回调例程表，并且下断点实际动态调试了整个过程。对于驱动开发，内核安全相关方面的研究工作者提供了该技术实现原理与机制。基于得到的关键数据结构和系统数据检验保护算法，可以解密关键字段后检测表项中的恶意代码，也可以用于安全厂商在对抗过程中，完全脱离系统提供的API手工构建表项，达到监控系统行为的目的。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **void *** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/230073](/post/id/230073)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [逆向分析](/tag/逆向分析)
+  * [windows内核](/tag/windows内核)
+  * [内核回调](/tag/内核回调)
+
+ **+1** __5赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t013c5d4d3bc7c086d8.jpg) void *
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

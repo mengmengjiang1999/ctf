@@ -1,0 +1,136 @@
+![](https://image.3001.net/images/20191203/1575370363_5de63e7b60bfe.jpg!small)
+
+##  严重性与缓解方案
+
+**该漏洞并不是一个Openssh漏洞，所以它不会影响ssh。Libssh2是一个客户端C代码库，它能够帮助应用程序与SSH服务器建立连接。而且该漏洞也不是一个libssh漏洞，因为libssh并非C代码库，只不过它的功能跟libssh2类似而已。**
+
+该漏洞存在于libssh2
+v1.9.0及更早版本之中，目前该漏洞已经在libssh2的master分支成功修复，但是官方并没有发布包含漏洞修复方案的正式版。
+
+该漏洞涉及到越界读取的问题，并有可能导致目标服务出现拒绝服务或远程信息披露的风险。当libssh2被用来跟恶意SSH服务器建立连接时，便有可能触发该漏洞。当SSH服务器发送一条断开连接消息时，便会发生溢出。这也就意味着，该漏洞可以在连接过程的开始阶段，及身份认证完成之前被触发。
+
+##  触发漏洞
+
+该漏洞的原始位置位于[packet.c：480](https://www.freebuf.com/wp-admin/post.php?post=221898&action=edit#L480)处：
+
+    
+    
+    if(message_len < datalen-13) {
+
+datalen的值是一个不受信的值，它由远程SSH服务器控制。如果datalen==11，那么减法运算将会发生溢出，针对message_len的越界检测将会失效。Message_len是一个无符号的32位整型，它的值同样由远程SSH服务器控制，所以这将导致[第485行代码](https://www.freebuf.com/wp-admin/post.php?post=221898&action=edit#L485)发生越界读取：
+
+    
+    
+    language_len =
+    
+        _libssh2_ntohu32(data + 9 + message_len);
+
+越界读取通常来说会导致分段错误，但是本文所描述的问题将有可能导致代码调用[第499行](https://www.freebuf.com/wp-admin/post.php?post=221898&action=edit#L498-L501)的LIBSSH2_DISCONNECT：
+
+    
+    
+    if(session->ssh_msg_disconnect) {
+    
+            LIBSSH2_DISCONNECT(session, reason, message,
+    
+                               message_len, language, language_len);
+    
+        }
+
+具体情况取决于libssh2库是如何被使用的，因为session->ssh_msg_disconnect是一个回调函数，默认为NULL，但是用户也可以通过调用[libssh2_session_callback_set](https://www.freebuf.com/wp-admin/post.php?post=221898&action=edit#L522-L523)来自行设置。
+
+我在这里专门写了一个漏洞利用PoC：【[点我获取](https://github.com/kevinbackhouse/SecurityExploits/tree/8cbdbbe6363510f7d9ceec685373da12e6fc752d/libssh2/out_of_bounds_read_disconnect_CVE-2019-17498)】。它模拟了一个恶意SSH服务器，可以返回包含datalen==11和message_len==0x41414141的断开连接消息，这将导致libssh2出现分段错误并发生崩溃。
+
+##  Liibssh2整型溢出变种分析
+
+当我在将一个安全漏洞报告给厂商时，我通常会在报告中包含两个内容：
+
+> 1、漏洞的漏洞利用代码PoC；
+>
+> 2、QL查询，识别所有我认为需要修复的代码位置；
+
+###  在PoC中包含QL查询，个人认为有以下好处：
+
+> 1、如果代码包含多个相似的漏洞，那么我们就可以编写一个查询请求来枚举它们。
+>
+> 2、QL查询可以帮助我快速判断漏洞是否成功被修复。
+>
+> 3、QL查询可以将结果以单独URL的形式呈现给我，便于我们进行后续分析。
+
+创建一个PoC通常涉及到大量的工作，如果某个目标存在多个非常相似的漏洞，那我一般会针对其中一个漏洞写一个PoC，因为一个PoC足以证明漏洞的影响了。这个查询的目的并不是找到libssh2中所有的整形溢出漏洞，它的主要目的是找出该PoC触发的漏洞以及其他的相似变种。
+
+##  Semmle QL查询代码如下：
+
+    
+    
+    /**
+    
+         * @kind path-problem
+    
+         */
+    
+        import cpp
+    
+        import semmle.code.cpp.rangeanalysis.SimpleRangeAnalysis
+    
+        import semmle.code.cpp.dataflow.TaintTracking
+    
+        import DataFlow::PathGraph
+    
+        class Config extends DataFlow::Configuration {
+    
+          Config() { this = "_libssh2_ntohl bounds check overflow" }
+    
+          override predicate isSource(DataFlow::Node source) {
+    
+            source.asExpr().(FunctionCall).getTarget().getName().matches("_libssh2_ntoh%")
+    
+          }
+    
+          override predicate isSink(DataFlow::Node sink) {
+    
+            convertedExprMightOverflowNegatively(sink.asExpr()) and
+    
+            exists(RelationalOperation cmp | cmp.getAnOperand() = sink.asExpr())
+    
+          }
+    
+          override predicate isAdditionalFlowStep(DataFlow::Node source,
+    
+                                                  DataFlow::Node target) {
+    
+            exists(Field f |
+    
+              source.asExpr() = f.getAnAssignedValue() and
+    
+              target.asExpr() = f.getAnAccess())
+    
+            or
+    
+            target.asExpr().(AddExpr).getAnOperand() = source.asExpr()
+    
+            or
+    
+            target.asExpr().(SubExpr).getAnOperand() = source.asExpr()
+    
+          }
+    
+        }
+    
+        from Config cfg, DataFlow::PathNode source, DataFlow::PathNode sink
+    
+        where cfg.hasFlowPath(source, sink)
+    
+        select sink, source, sink,
+    
+          "possible integer overflow of tainted expression in bounds check"
+
+其中，isSource表示寻找到了针对_libssh2_ntohu32和
+_libssh2_ntohu64的调用，它们主要用来进行网络至主机的字节顺序转义。这些函数一般都可以用来寻找那些“攻击者控制的数据”。但是我这里使用的isSink目的是寻找对比晕眩，其中包含可能发生溢出的子表达式。比如说，message_len
+<
+datalen-13是一个比较表达式，而datalen-13则有可能发生溢出。我的查询还会重写isAdditionalFlowStep选项，并自定义数据流边界集。
+
+ *** 参考来源：[semmle](https://blog.semmle.com/libssh2-integer-overflow-CVE-2019-17498/)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+
+  
+

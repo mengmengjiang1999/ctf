@@ -1,0 +1,262 @@
+***本文原创作者：wrmsr，本文属FreeBuf原创奖励计划，未经许可禁止转载**  
+
+## 背景
+
+ **LONG LONG LONG
+AGO就发现通过Hook磁盘端口驱动程序中的IRP_MJ_SCSI派遣函数方式过不了KB了，最近又遇到这个问题就想借此机会分析一下，看看万能的KB是如何绕过Hook读取MBR的。**
+
+作为一款商用软件的KB，出于兼容性、稳定性等原因应该不会使用太特殊的方法，初步猜想会通过重载磁盘端口驱动，自建I/O通道来绕过我们读取MBR，至此我们就有了研究方向，下面来开始我们的研究。
+
+为了验证猜想，我搭建了双机调试环境，编写了两个Windbg脚本，编译了FakeMBR驱动程序。至于双机调试环境的搭建和Windbg脚本语法在这里就不说了，具体内容可以在网上找到资料，FakeMbr的编译和一般的驱动程序编译过程无异，在这里也不说了。对了FakeMbr的代码可以在Github找到，具体链接在文章的末尾。
+
+如果有些朋友对文章中说的相关内容不太了解，可以参考文章末尾给出的参考链接，学习相关内容。
+
+## 环境
+
+> 虚拟机 ：VMware Workstation 12
+>
+> 操作系统：Microsoft Windows 7 Ultimate 6.1.7600 Build 7600 X86
+>
+> 调试工具：Windbg 10.0.10586.567 X86
+>
+> 杀毒软件：卡巴斯基全方位安全软件 18.0.0.405(h)
+
+## 脚本
+
+### HelloKB.txt
+
+    
+    
+    $$ 功能 ： Hook指定的函数地址，打印相关信息，并对CompletionRoutine进行Hook
+    $$ 参数1： 函数地址
+    $$ 参数2： HelloKBC脚本路径
+    
+    $$ ---------------------------------------------------------------------------------------------------------------------    $$ $$>a< C:\HelloKB.txt stort_87608000!RaDriverScsiIrp C:\HelloKbC.txt
+    $$ 
+    $$ MZ at 87608000 - size 47000
+    $$   Name: storport.sys
+    $$   Loaded storport.sys module
+    $$ 
+    $$ RaDriverScsiIrp
+    
+    $$ IRP                                     kd> dt -r2 nt!_IRP poi(@esp + 0x8)
+    $$ StackLocation                           kd> dt -r2 nt!_IO_STACK_LOCATION poi(poi(@esp + 0x8) + 0x60)
+    $$ SRB                                     kd> dt -r2 storport!_SCSI_REQUEST_BLOCK poi(poi(poi(@esp + 0x8) + 0x60) +0x4)
+    $$ CDB                                     kd> dt -r2 storport!_CDB10 (poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30)
+    
+    $$ nt!_IO_STACK_LOCATION
+    $$ nt!_IO_STACK_LOCATION.CompletionRoutine kd> ? poi(poi(poi(@esp + 0x8) + 0x60) + 0x1c)
+    
+    $$ storport!_SCSI_REQUEST_BLOCK
+    $$ storport!_SCSI_REQUEST_BLOCK.CdbLength  kd> ? poi(poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0xa) & 0x0000`00ff
+    
+    $$ stortport!_CDB10
+    $$ stortport!_CDB10.LogicalBlockByte0      kd> ? poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x2) & 0x0000`00ff
+    $$ stortport!_CDB10.LogicalBlockByte1      kd> ? poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x3) & 0x0000`00ff
+    $$ stortport!_CDB10.LogicalBlockByte2      kd> ? poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x4) & 0x0000`00ff
+    $$ stortport!_CDB10.LogicalBlockByte3      kd> ? poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x5) & 0x0000`00ff
+    $$ ---------------------------------------------------------------------------------------------------------------------    
+    
+    bp10000 ${$arg1} "
+        r $t1=poi(poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0xa) & 0x0000`00ff
+        as /x ${/v:Length} $t1
+        .echo
+            .printf\"${$arg1} Length:%i\",$t1
+        .echo
+        .block
+        {
+            .if(${Length} == 0xa) 
+            {
+                ad ${/v:Length}
+    
+                r $t2=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x0) & 0x0000`ffff
+                .echo
+                    .printf\"${$arg1} OpCode:%i\",$t2
+                .echo            
+                .if($t2 == 0x28)
+                {
+                    r $t3=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x2) & 0x0000`00ff
+                    r $t4=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x3) & 0x0000`00ff
+                    r $t5=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x4) & 0x0000`00ff
+                    r $t6=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x5) & 0x0000`00ff
+                    .echo
+                        .printf\"${$arg1} LogicalBlockByte0:%i LogicalBlockByte1:%i LogicalBlockByte2:%i LogicalBlockByte3:%i\",$t3,$t4,$t5,$t6
+                    .echo   
+                    .if(($t3 | $t4 | $t5 | $t6) == 0)
+                    {
+                        r $t7=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x7) & 0x0000`00ff
+                        r $t8=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x8) & 0x0000`00ff
+                        .echo
+                            .printf\"${$arg1} TransferBlocksMsb:%i TransferBlocksLsb:%i\",$t7,$t8
+                        .echo  
+                        .if(($t7 | $t8) == 0)
+                        {
+                            gc
+                        }
+                        .else
+                        {
+                            .echo
+                                .printf\"${$arg1}!_CDB10\"
+                            .echo
+                            dt -r2 storport!_CDB10 (poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30)
+    
+                            r $t9=poi(poi(poi(@esp + 0x8) + 0x60) + 0x1c)
+                            .echo
+                                .printf\"${$arg1} CompletionRoutine:%i\",$t9
+                            .echo
+                            $$>a< ${$arg2} $t9
+                        }
+                    }
+                    .else
+                    {
+                        gc
+                    }
+                }
+                .elsif($t2 == 0x3c)
+                {
+                    r $t3=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x2) & 0x0000`00ff
+                    r $t4=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x3) & 0x0000`00ff
+                    r $t5=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x4) & 0x0000`00ff
+                    r $t6=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x5) & 0x0000`00ff
+                    .echo
+                        .printf\"${$arg1} LogicalBlockByte0:%i LogicalBlockByte1:%i LogicalBlockByte2:%i LogicalBlockByte3:%i\",$t3,$t4,$t5,$t6
+                    .echo   
+                    .if(($t3 | $t4 | $t5 | $t6) == 0)
+                    {
+                        r $t7=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x7) & 0x0000`00ff
+                        r $t8=poi((poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30) + 0x8) & 0x0000`00ff
+                        .echo
+                            .printf\"${$arg1} TransferBlocksMsb:%i TransferBlocksLsb:%i\",$t7,$t8
+                        .echo  
+                        .if(($t7 | $t8) == 0)
+                        {
+                            gc
+                        }
+                        .else
+                        {
+                            .echo
+                                .printf\"${$arg1}!_CDB10\"
+                            .echo
+                            dt -r2 storport!_CDB10 (poi(poi(poi(@esp + 0x8) + 0x60) +0x4) + 0x30)
+    
+                            r $t9=poi(poi(poi(@esp + 0x8) + 0x60) + 0x1c)
+                            .echo
+                                .printf\"${$arg1} CompletionRoutine:%i\",$t9
+                            .echo
+                            $$>a< ${$arg2} $t9
+                        }
+                    }
+                    .else
+                    {
+                        gc
+                    }
+                }
+                .else 
+                {
+                    gc
+                }
+            }
+            .else 
+            {
+                ad ${/v:Length}
+                gc
+            }
+        }
+    "
+
+### HelloKBC.txt
+
+    
+    
+    $$ 功能 ： Hook指定的函数地址，打印相关信息
+    $$ 参数1： 函数地址
+    
+    $$ -------------------------------------------------------------------------------------------------    $$ IRP                             kd> dt -r2 nt!_IRP poi(@esp + 0x8)
+    $$ MDL                             kd> dt -r2 nt!_MDL poi(poi(@esp + 0x8) + 0x4)
+    $$ IoStatus                        kd> dt -r2 nt!_IO_STATUS_BLOCK (poi(@esp + 0x8) + 0x18)
+    $$ StackLocation                   kd> dt -r2 nt!_IO_STACK_LOCATION poi(poi(@esp + 0x8) + 0x60)
+    
+    $$ nt!_IO_STATUS_BLOCK
+    $$ nt!_IO_STATUS_BLOCK.Status      kd> ? poi((poi(@esp + 0x8) + 0x18) + 0x0)
+    $$ nt!_IO_STATUS_BLOCK.Pointer     kd> ? poi((poi(@esp + 0x8) + 0x18) + 0x0)
+    $$ nt!_IO_STATUS_BLOCK.Information kd> ? poi((poi(@esp + 0x8) + 0x18) + 0x4)
+    
+    $$ nt!_MDL
+    $$ nt!_MDL.Size                    kd> ? poi(poi(poi(@esp + 0x8) + 0x4) + 0x4)
+    $$ nt!_MDL.MdlFlags                kd> ? poi(poi(poi(@esp + 0x8) + 0x4) + 0x6)
+    $$ nt!_MDL.Process                 kd> ? poi(poi(poi(@esp + 0x8) + 0x4) + 0x8)
+    $$ nt!_MDL.MappedSystemVa          kd> ? poi(poi(poi(@esp + 0x8) + 0x4) + 0xc)
+    $$ nt!_MDL.StartVa                 kd> ? poi(poi(poi(@esp + 0x8) + 0x4) + 0x10)
+    $$ nt!_MDL.ByteCount               kd> ? poi(poi(poi(@esp + 0x8) + 0x4) + 0x14)
+    $$ nt!_MDL.ByteOffset              kd> ? poi(poi(poi(@esp + 0x8) + 0x4) + 0x18)
+    $$ -------------------------------------------------------------------------------------------------    
+    
+    bp10001 ${$arg1} "
+        r $t1=poi((poi(@esp + 0x8) + 0x18) + 0x0)
+        .echo
+            .printf\"${$arg1} Status:%i\",$t1
+        .echo
+        .if($t1 == 0)
+        {
+            r $t2=poi(poi(poi(@esp + 0x8) + 0x4) + 0x10)
+            r $t3=poi(poi(poi(@esp + 0x8) + 0x4) + 0x14)
+            r $t4=poi(poi(poi(@esp + 0x8) + 0x4) + 0x18)
+            .echo
+                .printf\"${$arg1} StartVa:%i ByteCount:%i ByteOffset:%i\",$t2,$t3,$t4
+            .echo
+            .if($t3 == 0)
+            {
+                bc 10001
+                gc
+            }
+            .else
+            {
+                .echo
+                    .printf\"${$arg1}!MDL\"
+                .echo
+                dt -r2 nt!_MDL poi(poi(@esp + 0x8) + 0x4)
+    
+                db /c10 $t2 + $t4 L200
+                bc 10001
+            }
+        }
+        .else
+        {
+            bc 10001
+            gc
+        }
+    "
+
+## 分析
+
+首先，如果能在内存中找到重载的磁盘端口驱动程序镜像，猜想就算成功了一大半，如果找不到猜想也就算失败了，所以这一步很重要。可惜的是，这一步我一直没有太好的方法，只能用愚蠢的方法去暴力搜索物理内存。结果还被我给搜索到了，⊙﹏⊙‖∣，下面是我的具体操作过程。
+
+![001.png](https://image.3001.net/images/20180703/1530612463668.png!small)其次，我们已经在内存中找到了重载的磁盘端口驱动程序镜像，接下来就要继续验证我们的猜想，去确认该程序镜像是由KB加载并调用的，这里就用到了我之前编写的两个Windbg脚本，让系统在读取MBR的时候断下来，通过查看调用堆栈以及读取到的MBR内容来验证我们的猜想。具体过程如下。  
+
+![002.png](https://image.3001.net/images/20180703/15306125028735.png!small)![003.png](https://image.3001.net/images/20180703/15306125027907.png!small)![004.png](https://image.3001.net/images/20180703/15306125026356.png!small)![005.png](https://image.3001.net/images/20180703/15306125023033.png!small)![006_New.png](https://image.3001.net/images/20180703/15306125023779.png!small)最后，通过上面的分析，我们已经验证了我们的猜想，现在让我们来进一步确认我们的猜想，接下来我们要通过手工修改内存中的MBR内容，看看KB是否可以检测到病毒。十分抱歉这里我偷懒了，没有完善我的脚本。
+
+![007_New.png](https://image.3001.net/images/20180703/15306125398582.png!small)
+
+## 结语
+
+至此我们的分析工作就已经告一段落了，KB会先通过普通方式读取MBR，如果检测结果为病毒的话就不会使用高级方式继续检测MBR了。如果检测结果为非病毒的话就会使用高级方式就检测MBR，就是我们上面分析的方式。
+
+由于时间的关系我没有对KB进行更详细的分析，感兴趣的朋友可以继续完善脚本，直接修改KB读取到的MBR内容，看看KB是否还能检测到病毒。也可以根据回溯调用堆栈，具体分析一下KB的逻辑。
+
+## 资料
+
+> <https://www.malwaretech.com/2015/01/using-kernel-rootkits-to-concea.html>
+>
+> <https://www.malwaretech.com/2015/02/bootkit-disk-forensics-part-1.html>
+>
+> <https://www.malwaretech.com/2015/03/bootkit-disk-forensics-part-2.html>
+>
+> <https://www.malwaretech.com/2015/03/bootkit-disk-forensics-part-3.html>
+>
+> <https://github.com/MalwareTech/FakeMBR>
+>
+>
+> <https://www.seagate.com/staticfiles/support/disc/manuals/scsi/100293068a.pdf>
+
+ ***本文原创作者：wrmsr，本文属FreeBuf原创奖励计划，未经许可禁止转载**  
+

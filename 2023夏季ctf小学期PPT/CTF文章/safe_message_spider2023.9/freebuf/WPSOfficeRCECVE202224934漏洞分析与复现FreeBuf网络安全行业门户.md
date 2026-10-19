@@ -1,0 +1,98 @@
+## **漏洞概述**
+
+WPS
+Office的更新程序wpsupdate.exe从注册表HKEY_CURRENT_USER中读取自定义的更新服务器地址，下载自定义的更新程序并执行，导致任意代码执行。
+
+##  **影响范围**
+
+WPS
+Office版本小于或等于11.2.0.10382均存在该漏洞。（WPS版本号看最后一组，最后一组数字大即为新版本，11.1表示个人版，11.2表示企业版，11.6和11.8表示政企定制版）
+
+##  **复现环境**
+
+操作系统：Win7 sp1。WPS Office版本：WPS 2019 v11.8.2.10229。分析工具：Detect It
+Easy，OD，IDA，Openssl，数字签名复制工具sigthief.py。
+
+##  **分析过程**
+
+首先安装WPS 2019 v11.8.2.10229安装程序，根据网上公开的漏洞描述，漏洞存在于在更新程序C:\Program
+Files\Kingsoft\WPS
+Office\11.8.2.10229\wtoolex\wpsupdate.exe，该程序被UPX加壳，如下图所示。![](https://image.3001.net/images/20220401/1648776340_624654940a3e2769da699.png!small)脱壳后载入IDA进行反编译分析，在wpsupdate.exe代码中查找注册表HKEY_CURRENT_USER操作的相关代码，最终在函数47A5C0()中发现读取注册表等操作，比较可疑，如下图所示。  
+![](https://image.3001.net/images/20220401/1648776366_624654ae24b16b36a87ea.png!small)从反编译的代码可以看到其中包含了注册表HKEY_CURRENT_USER\Software\Kingsoft\Office\6.0\Common\UpdateSvr的读取操作，根据UpdateSvr字面意思，猜测为更新服务器。经逆向分析，此处的注册表键值UpdateSvr确实为自定义的更新服务器地址。此外，注册表HKEY_LOCAL_MACHINE\Software\Kingsoft\Office\6.0\Common\UpdateSvr，本地配置文件setup.cfg中的UpdateSvr等也可自定义更新服务器地址，如下图所示。  
+![](https://image.3001.net/images/20220401/1648776385_624654c1b6cd60030b7ec.png!small)获取到自定义更新服务器地址后，将自身版本，当前时间等信息组合成XML文件格式的数据集合，再使用AES加密（KEY:886B1AB6F1FC1D6670EFA2D121039A56
+，此后解密服务器返回的更新配置数据也使用该KEY）后发送到更新服务器，如下图所示。  
+![](https://image.3001.net/images/20220401/1648776405_624654d543ce9282cd4db.png!small)  
+发送成功后接收服务器返回的更新配置数据，同样使用AES解密，解密后的数据也是XML文件格式。解密后的配置信息中包含了下一步需要执行的更新操作，比如收集信息、下载文件、执行文件、删除文件、更新设置、注册表读取、注册表修改等操作，如下图所示。![](https://image.3001.net/images/20220401/1648776424_624654e83af55710be245.png!small)为了方便复现漏洞，这里主要分析下载和执行文件所需的XML数据格式。其中需要包含标签，其下再包含两个标签，其属性id的值为download和updatesetting，就可以实现下载更新程序并执行。自定义的更新配置信息如下图所示。  
+![](https://image.3001.net/images/20220401/1648776445_624654fd91aad35efcd28.png!small)其中标签中的svr属性值“http://127.0.0.1”表示更新程序的下载服务器地址，downdir属性值%localappdata%表示更新程序下载到本地后保存的文件夹名字，标签中的url属性值“/poc_calc_s.exe”表示更新程序的url地址，其中的文件名也是下载到本地后的文件名，md5属性值则是更新程序的MD5值，大小写不敏感，size属性值表示更新程序的大小，以字节为单位。
+
+  
+
+其中标签中的fun属性值“execute”表示运行“执行”功能函数，param属性值“JWxvY2FsYXBwZGF0YSVccG9jX2NhbGNfcy5leGU7ZEdWemRGOXdZWEpoYlE9PQ==”表示更新程序的路径和参数，需要使用base64编码。将其使用base64编码解开后，可以看到更新程序的路径“%localappdata%/poc_calc_s.exe”和另一段base64编码的数据，以分号“;”隔开，如下图所示。![](https://image.3001.net/images/20220401/1648776463_6246550ff2a538176a23f.png!small)  
+分号“;”后面的base64编码的数据“dGVzdF9wYXJhbQ==”表示更新程序的命令行参数，需要使用base64编码，出于演示的目的，这里传入参数test_param，如下图所示。  
+![](https://image.3001.net/images/20220401/1648776480_624655208bc698bd11c4d.png!small)另外，在执行被下载的更新程序前，试图在检查程序的数字签名，但只是检查了签名姓名是否包含“Kingsoft”等关键字，并未检查签名的有效性，可被绕过，如下图所示。  
+![](https://image.3001.net/images/20220401/1648776500_62465534edee3827da1fd.png!small)绕过方法是从WPS官方签名的程序中复制一份数字签名到自定义的更新程序中即可。每次更新操作执行成功后，会将当前时间保存到注册表HKCU\Software\Kingsoft\Office\\\6.0\Common\updateinfo\LastCheckTime中，如下图所示。![](https://image.3001.net/images/20220401/1648776520_6246554899e172370b076.png!small)注册表HKCU\Software\Kingsoft\Office\6.0\Common\updateinfo\CheckInterval，保存了更新的时间间隔，默认值为3小时，如下图所示。![](https://image.3001.net/images/20220401/1648776537_62465559d845eb588eb0a.png!small)  
+  
+如果更新程序wpsupdate.exe在启动时未传入命令行参数，则不会从注册表读取时间间隔数据，立即执行上述更新操作；如果传入了命令行参数（WPS主进程运行时将启动更新程序wpsupdate.exe并传入参数），则将当前时间与上次更新时间计算时间间隔，以此判断是否已到间隔时间。如果小于间隔时间，则不执行更新操作；否则将执行上述更新操作，如下图所示。  
+![](https://image.3001.net/images/20220401/1648776557_6246556d218bcfc0a746a.png!small)
+
+##  **利用场景**
+
+根据该漏洞的逆向分析结果，修改注册表HKEY_CURRENT_USER的自定义服务器地址等相关键值，可以使WPS
+Office的更新程序wpsupdate.exe从自定义服务器上下载自定义配置文件和更新程序并执行。
+
+ **1、未安装WPS主程序**
+
+发送钓鱼邮件，附件中包含EXE文件，其功能为修改注册表HKEY_CURRENT_USER相关键值，然后再释放wpsupdate.exe并启动，执行更新过程。这样一来使用可信进程wpsupdate.exe下载并执行的木马，在一定程序上可以增强免杀的效果，并且真正的木马放在服务器上，更新也灵活。
+
+ **2、已安装WPS主程序**
+
+发送钓鱼邮件，附件中包含EXE文件，其功能为修改注册表HKEY_CURRENT_USER相关键值。等WPS主进程启动wpsupdate.exe执行更新过程，达到使用可信进程下载木马并执行的木马，免杀效果较好，并且也实现了自启动的目的。  
+  
+
+##  **复现过程**
+
+执行以下操作，可以复现该漏洞的利用过程。  
+ **服务端**
+
+ **1、加密更新配置文件**
+
+明文的配置文件update_config.xml内容如下图所示。  
+![](https://image.3001.net/images/20220401/1648776616_624655a8e6febcee763a1.png!small)再使用openssl命令“openssl
+enc -aes-128-ecb -nosalt -K 886B1AB6F1FC1D6670EFA2D121039A56 -in
+update_config.xml -out update_config.bin”生成加密后的配置文件update_config.bin。
+
+ **2、编写自定义更新程序**
+
+测试程序无恶意功能，功能为启动系统计算器程序“c:\\\windows\\\system32\\\calc.exe”，如下图所示。![](https://image.3001.net/images/20220401/1648776636_624655bc5dbe8228f485c.png!small)  
+再使用命令“python .\sigthief.py -i .\wpsupdate.exe -t .\poc_calc.exe -o
+poc_calc_s.exe”复制wpsupdate.exe的数字签名到自定义的更新程序poc_calc_s.exe中，如下图所示。![](https://image.3001.net/images/20220401/1648776654_624655ce30bafe249ec88.png!small)  
+ **3、启动Web服务**
+
+启动简易web程序HFS.exe，将加密后的更新配置文件“update_config.bin”和更新程序“poc_calc_s.exe”拖入该程序即可，如下图所示。![](https://image.3001.net/images/20220401/1648776672_624655e0ab67710b164f8.png!small)  
+ **客户端**
+
+ **1、安装WPS主程序**
+
+安装WPS 2019 v11.8.2.10229.exe程序。
+
+ **2、修改注册表HKEY_CURRENT_USER**
+
+为简单起见，直接将update.reg文件导入注册表即可，其配置的更新服务器地址为：http://127.0.0.1/update_config.bin，如下图所示。![](https://image.3001.net/images/20220401/1648776690_624655f297cdc3e2ab4b1.png!small)  
+配置的更新时间间隔CheckInterval为0，即每次启动更新程序wpsupdate.exe不用等待时间间隔即可执行更新操作，方便测试，如下图所示。  
+![](https://image.3001.net/images/20220401/1648776715_6246560b73d7ec99eeae5.png!small)手动运行WPS更新程序wpsupdate.exe，实现从自定义服务器127.0.0.1下载自定义更新配置文件和自定义更新程序并执行，运行系统计算器，漏洞复现成功，如下图所示。  
+![](https://image.3001.net/images/20220401/1648776742_624656262146c8cfba328.png!small)手动运行WPS主程序C:\Program
+Files\Kingsoft\WPS
+Office\ksolaunch.exe（或者打开任意一个WPS文档），由WPS程序启动更新程序wpsupdate.exe，实现从自定义服务器127.0.0.1下载自定义更新配置文件和自定义更新程序并执行，运行系统计算器，漏洞复现成功，如下图所示。  
+![](https://image.3001.net/images/20220401/1648776781_6246564d5da23fa0f271d.png!small)  
+![](https://image.3001.net/images/20220401/1648776793_6246565982b9410c3cdc3.png!small)
+**备注：** 关注烽火台实验室公众号 **“Beacon Tower Lab”** 回复“CVE-2022-24934”可获取该漏洞研究相关工具。  
+ **由于传播、利用此提供的信息而造成任何直接或间接的后果及损害，均由使用本人负责，本公众号及文章作者不为此承担任何责任。**
+
+##  **参考链接**
+
+https://decoded.avast.io/luigicamastra/operation-dragon-castling-apt-group-targeting-betting-companies/
+
+https://www.zzwa.org.cn/3294/
+
+[原文链接](https://mp.weixin.qq.com/s?__biz=MzkzNjMxNDM0Mg==&mid=2247484171&idx=1&sn=bd0ec25ac10e2f7f8476e701c2f297af&chksm=c2a1d782f5d65e94d372ccbc42e723596ba88e06198f0a871c5f8a1ce5184ba0ab5d7927e032&token=1179532536&lang=zh_CN#rd)
+

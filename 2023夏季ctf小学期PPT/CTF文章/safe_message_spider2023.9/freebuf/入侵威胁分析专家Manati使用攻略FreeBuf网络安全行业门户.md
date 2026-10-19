@@ -1,0 +1,258 @@
+![](https://image.3001.net/images/20191008/1570542542_5d9c93ce27749.png!small)
+
+##  ManaTI项目
+
+**ManaTI是一款基于机器学习的入侵威胁分析工具，ManaTI项目的目标就是通过研发高精尖的机器学习技术来辅助研究人员对入侵威胁进行分析，并快速发现新的安全问题。通过引入机器学习技术，ManaTI可以发现目标元素更多的交叉关系以及引用关系。该项目包含用户分析交互的Web接口，并提供了分析数据以及机器学习输出。**
+
+该项目部分支持思科系统，关于该项目的更多信息，请访问[Stratosphere
+Lab](https://www.stratosphereips.org/projects-manati/)页面。
+
+##  稳定版本
+
+> Mon Sep 3 12:24:26 CEST 2018: Version 0.12.0a
+>
+> Sun Aug 12 16:21:19 CEST 2018: Version 0.11.0a
+>
+> Mon Jan 29 00:07:15 CEST 2018: Version 0.9.0a
+>
+> Fri Nov 10 19:16:52 CEST 2017: Version 0.8.0.537a
+>
+> Fri Mar 31 12:19:00 CEST 2017: Version 0.7.1
+>
+> Sun Mar 5 00:04:41 CEST 2017: Version 0.7
+>
+> Thu Nov 10 12:30:45 CEST 2016: Version 0.6.2.1
+>
+> Wed Oct 12 21:19:21 CEST 2016: Version 0.5.1
+>
+> Wed Sep 21 17:56:40 CEST 2016: Version 0.41
+>
+> Tue Sep 13 10:52:36 CEST 2016: Version 0.4
+>
+> Thu Aug 18 15:44:31 CEST 2016: Version 0.3
+>
+> Wed Jun 29 10:44:15 CEST 2016: Version 0.2
+
+###  工具运行截图
+
+![](https://image.3001.net/images/20191008/1570542561_5d9c93e13302e.png!small)
+
+##  工具安装
+
+ManaTI是一个基于Django的项目，并且使用的是Postgres数据库，该工具可在Linux和macOS系统下正常运行。我们建议大家在虚拟环境（Virtualenv）下配置和使用ManaTI。
+
+##  针对Linux平台的安装步骤如下：
+
+    
+    
+    sudo apt-get update ; sudo apt-get upgrade -y
+
+1、克隆代码库：
+
+    
+    
+    git clone git@github.com:stratosphereips/Manati.git; cd Manati
+
+如果你不想使用SSH，你也可以使用HTTPS：
+
+    
+    
+    git clone https://github.com/stratosphereips/Manati.git; cd Manati
+
+2、安装Virtualenv来为ManaTI搭建隔离的Python环境，并安装必要的Python库：
+
+    
+    
+    sudo apt-get install virtualenv python-pip python-dev libpq-dev build-essential libssl-dev libffi-dev
+
+3、创建Virtualenv文件夹：
+
+    
+    
+    virtualenv .vmanati
+
+4、激活Virtualenv：
+
+    
+    
+    source .vmanati/bin/activate
+
+5、安装PostgreSQL DB引擎：
+
+    
+    
+    sudo apt-get install postgresql-server-dev-all postgresql-9.5 postgresql-client-9.5
+
+6、创建环境变量文件，拷贝并将文件名.env.example修改为.env，然后将 .env-docker.example修改为.env-docker：
+
+> cp .env.example .env
+>
+> cp .env-docker.example .env-docker
+
+###  可选项
+
+我们可以修改数据库的密码以及名称，别忘了将配置映射到Postgres数据库设置中。
+
+7、安装工具所需的Python依赖库：
+
+    
+    
+    pip install -r requirements/local.txt
+
+也许你可能会遇到~/.cache目录的权限问题，我们可以直接通过下列命令来解决：
+
+    
+    
+    sudo chmod 777 ~/.cache
+
+如果你想部署到亚马逊AWS EC2上，你还需要运行下列命令：
+
+    
+    
+    pip install -r requirements/local.txt --no-cache-dir
+
+8、开启PostgreSQL：
+
+    
+    
+    sudo /etc/init.d/postgresql start
+
+##  配置数据库
+
+9、root权限：
+
+    
+    
+    su - postgres
+
+10、创建数据库：
+
+    
+    
+    psql
+    
+        create user manati_db_user with password 'password';
+    
+        create database manati_db;
+    
+        grant all privileges on database manati_db to manati_db_user;
+    
+        alter role manati_db_user createrole createdb;
+    
+        CTRL-D (to output the postgres db shell)
+
+###  可选项
+
+修改Postgres用户的默认密码：
+
+    
+    
+    psql
+    
+        \password;
+    
+        CTRL-D (to output the postgres db shell)
+
+##  验证数据库是否创建成功
+
+11、以Postgres用户身份运行：
+
+    
+    
+    psql -h localhost -d manati_db -U manati_db_user
+
+12、安装Redis-Server：
+
+    
+    
+    sudo apt-get install redis-server
+
+###  可选项
+
+如果你需要配置Redis，比如说，你想修改密码：
+
+    
+    
+    sudo vi /etc/redis/redis.conf
+
+找到“requirepass”那一行，然后配置密码：
+
+    
+    
+    requirepass passwodUser
+
+13、运行migrate文件：
+
+    
+    
+    python ./manage.py makemigrations guardian
+    
+        python ./manage.py migrate
+
+14、注册外部模块，每当你需要增加或移除外部模块时，你都需要运行下列命令：
+
+    
+    
+    python ./manage.py check_external_modules
+
+15、执行redis_worker.sh文件：
+
+    
+    
+    ./utility/redis_worker.sh
+
+16、创建超级用户，用于登录Web系统：
+
+    
+    
+    python manage.py createsuperuser
+
+##  工具运行
+
+不建议用户以root权限运行服务器，工具默认开启端口8000：
+
+    
+    
+    python ./manage.py runserver
+
+接下来，在浏览器中打开下列地址：
+
+    
+    
+    http://localhost:8000/manati_project/manati_ui
+
+如果你想通过外网打开服务器，你可以运行：
+
+    
+    
+    python ./manage.py runserver <ip-address>:8000
+
+###  备份数据库
+
+    
+    
+    pg_dump -U manati_db_user -W -F p manati_db > backup.sql # plain text
+
+###  恢复数据库
+
+    
+    
+    psql manati_db -f backup.sql -U manati_db_user
+
+##  浏览器支持
+
+![](https://image.3001.net/images/20191008/1570542664_5d9c944808074.png!small)
+
+##  项目地址
+
+> ManaTI：【[GitHub传送门](https://github.com/stratosphereips/Manati)】
+
+##  许可证协议
+
+ManaTI遵循GPLv3开源许可证协议。
+
+ ***
+参考来源：[stratosphereips](https://github.com/stratosphereips/Manati)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+
+  
+

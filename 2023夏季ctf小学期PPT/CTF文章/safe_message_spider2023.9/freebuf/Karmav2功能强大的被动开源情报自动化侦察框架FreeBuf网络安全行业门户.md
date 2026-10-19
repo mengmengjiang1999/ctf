@@ -1,0 +1,574 @@
+![](https://image.3001.net/images/20211123/1637677259_619cf8cb5e7f9cb421e2d.png!small)
+
+## 关于Karma_v2
+
+Karma_v2是一款功能强大的被动开源情报（OSINT）自动化侦察框架，可以为广大信息安全研究人员、渗透测试人员和漏洞Hunter提供帮助，以查找深层信息、更多资产、WAF/CDN绕过、内部/外部Infra、公开数据泄漏以及更多有关其目标的信息。
+
+注意，Karma_v2的正常使用和自动化需要[ _Shodan Premium
+API_](https://developer.shodan.io/api)密钥，Karma_v2可以直接将输出结果打印至屏幕上，或存储至文件/目录中。
+
+## 功能介绍
+
+  * 通过Shodan Dorks实现强大且灵活的结果查询；
+  * SSL SHA1校验和/指纹搜索；
+  * 仅命中范围内的IP；
+  * 验证每个具有SSL/TLS证书颁发者的IP是否与正则表达式匹配；
+  * 支持超出范围的IP；
+  * 查找所有端口，包括已知的、不常见的和动态端口；
+  * 获取目标存在的所有CVE漏洞；
+  * 获取每个IP、产品、操作系统、服务和组织的Banner信息；
+  * 获取Favicon图标；
+  * 使用Python 3 mmh3模块生成Favicon哈希；
+  * 基于Nuclei自定义模板的Favicon技术检测；
+  * ASN扫描
+  * BGP邻居
+  * ASN的IPv4和IPv6配置文件；
+  * 其他
+
+## 工具安装
+
+1、首先，我们需要使用下列命令将该项目源码克隆至本地：
+
+    
+    
+    # git clone https://github.com/Dheerajmadhukar/karma_v2.git
+
+2、接下来，我们还需要安装好Shodan和mmh3 Python模块：
+
+    
+    
+    # python3 -m pip install shodan mmh3
+
+3、然后安装好JSON Parser【JQ】：
+
+    
+    
+    # apt install jq -y
+
+4、安装httprobe来探测请求：
+
+    
+    
+    # GO111MODULE=on go get -v github.com/tomnomnom/httprobe
+
+5、安装Interlace实现多线程：
+
+    
+    
+    # git clone https://github.com/codingo/Interlace.git & install accordingly.
+
+6、安装Nuclei：
+
+    
+    
+    # GO111MODULE=on go get -v github.com/projectdiscovery/nuclei/v2/cmd/nuclei
+
+7、安装lolcat：
+
+    
+    
+    # apt install lolcat -y
+
+8、安装anew：
+
+    
+    
+    # GO111MODULE=on go get -u github.com/tomnomnom/anew
+
+接下来，我们就可以使用下列命令来测试Karma_v2是否安装成功了：
+
+    
+    
+    # cat > .token
+    
+    SHODAN_PREMIUM_API_HERE
+
+## 工具使用
+
+我们可以使用下列命令来查看工具的帮助信息：
+
+    
+    
+    $ bash karma_v2 -h
+
+![](https://image.3001.net/images/20211123/1637677373_619cf93dae476e35af4bd.png!small)
+
+## 工具运行模式&使用样例
+
+ ** **模式****
+
+|
+
+ ** **使用样例****  
+  
+---|---  
+  
+ ** **-ip****
+
+|
+
+bash karma_v2 -d <DOMAIN.TLD> -l <INTEGER> -ip  
+  
+ ** **-asn****
+
+|
+
+bash karma_v2 -d <DOMAIN.TLD> -l <INTEGER> -asn  
+  
+ ** **-cve****
+
+|
+
+bash karma_v2 -d <DOMAIN.TLD> -l <INTEGER> -cve  
+  
+ ** **-favicon****
+
+|
+
+bash karma_v2 -d <DOMAIN.TLD> -l <INTEGER> -favicon  
+  
+ ** **-leaks****
+
+|
+
+bash karma_v2 -d <DOMAIN.TLD> -l <INTEGER> -leaks  
+  
+ ** **-deep****
+
+|
+
+bash karma_v2 -d <DOMAIN.TLD> -l <INTEGER> -deep  
+  
+ ** **-count****
+
+|
+
+bash karma_v2 -d <DOMAIN.TLD> -l <INTEGER> -count  
+  
+## 工具使用演示
+
+### karma_v2 [mode -ip]
+
+ **演示视频：** 【[
+_点我观看_](https://asciinema.org/a/1aKFM3oyQZ14t9H8V0qjp2lUV?t=25&speed=5&theme=tango)】
+
+### karma_v2 [mode -asn]
+
+ **演示视频：** 【[
+_点我观看_](https://asciinema.org/a/0RcsIp6f6xxX81JmEHvvlepBT?t=25&speed=5&theme=tango)】
+
+### karma_v2 [mode -cve]
+
+ **演示视频：** 【[
+_点我观看_](https://asciinema.org/a/4Ri9FW97qnVV37v3Mb2mNTKz8?t=25&speed=5&theme=tango)】
+
+### karma_v2 [mode -favicon]
+
+ **演示视频：** 【[
+_点我观看_](https://asciinema.org/a/6bnPXhwacmCOanRRsdNIA1rs4?t=25&speed=5&theme=tango)】
+
+### karma_v2 [mode -leaks]
+
+ **演示视频：** 【[
+_点我观看_](https://asciinema.org/a/433322?t=25&speed=10&theme=tango)】
+
+### karma_v2 [mode -deep]
+
+其中，-deep支持上述所有的模式，包含-count、-ip、-asn、-favicon、-cve、-leaks！
+
+## 输出结果示例
+
+    
+    
+    output/bugcrowd.com-YYYY-MM-DD/
+    
+     
+    
+    .
+    
+    ├── ASNs_Detailed_bugcrowd.com.txt
+    
+    ├── Collect
+    
+    │   ├── host_domain_domain.tld.json.gz
+    
+    │   ├── ssl_SHA1_12289a814...83029f8944b6088d60204a92e_domain.tld.json.gz
+    
+    │   ├── ssl_SHA1_17537bf84...73cb1d684a495db7ea5aa611b_domain.tld.json.gz
+    
+    │   ├── ssl_SHA1_198d6d4ec...681b77585190078b07b37c5e1_domain.tld.json.gz
+    
+    │   ├── ssl_SHA1_26a9c5618...d60eae2947b42263e154d203f_domain.tld.json.gz
+    
+    │   ├── ssl_SHA1_3da3825a2...3b852a42470410183adc3b9ee_domain.tld.json.gz
+    
+    │   ├── ssl_SHA1_4d0eab730...68cf11d2db94cc2454c906532_domain.tld.json.gz
+    
+    │   ├── ssl_SHA1_8907dab4c...12fdbdd6c445a4a8152f6b7b7_domain.tld.json.gz
+    
+    │   ├── ssl_SHA1_9a9b99eba...5dc5106cea745a591bf96b044_domain.tld.json.gz
+    
+    │   ├── ssl_SHA1_a7c14d201...b6fd4bc4e95ab2897e6a0bsfd_domain.tld.json.gz
+    
+    │   ├── ssl_SHA1_a90f4ddb0...85780bdb06de83fefdc8a612d_domain.tld.json.gz
+    
+    │   ├── ssl_domain_domain.tld.json.gz
+    
+    │   ├── ssl_subjectCN_domain.tld.json.gz
+    
+    │   └── ssl_subject_domain.tld.json.gz
+    
+    |   └── . . .
+    
+    ├── IP_VULNS
+    
+    │   ├── 104.x.x.x.json.gz
+    
+    │   ├── 107.x.x.x.json.gz
+    
+    │   ├── 107.x.x.x.json.gz
+    
+    │   └── 99.x.x.x.json.gz
+    
+    |   └── . . .
+    
+    ├── favicons_domain.tld.txt
+    
+    ├── host_enum_domain.tld.txt
+    
+    ├── ips_inscope_domain.tld.txt
+    
+    ├── main_domain.tld.data
+    
+    ├── . . .
+
+## Karma_v2支持的Shodan Dork
+
+ ** **DORK****
+
+|
+
+ ** **DORK****
+
+|
+
+ ** **DORK****  
+  
+---|---|---  
+  
+ ** **ssl.cert.fingerprint****
+
+|
+
+ ** **http.status:"302" oauth****
+
+|
+
+ ** **"Server: Jetty"****  
+  
+ ** **ssl****
+
+|
+
+ ** **http.status:"302" sso****
+
+|
+
+ ** **X-Amz-Bucket-Region****  
+  
+ ** **org****
+
+|
+
+ ** **title:"401 Authorization Required"****
+
+|
+
+ ** **"development" org:"Amazon.com"****  
+  
+ ** **hostname****
+
+|
+
+ ** **http.html:"403 Forbidden"****
+
+|
+
+ ** **"X-Jenkins" "Set-Cookie: JSESSIONID" http.title:"Jenkins [Jenkins]"****  
+  
+ ** **ssl.cert.issuer.cn****
+
+|
+
+ ** **http.html:"500 Internal Server Error"****
+
+|
+
+ ** **http.favicon.hash:81586312 200****  
+  
+ ** **ssl.cert.subject.cn****
+
+|
+
+ ** **ssl.cert.subject.cn:*v-pn*****
+
+|
+
+ ** **product:"Kubernetes" port:"10250, 2379"****  
+  
+ ** **ssl.cert.expired:true****
+
+|
+
+ ** **title:"citrix gateway"****
+
+|
+
+ ** **port:"9100" http.title:"Node Exporter"****  
+  
+ ** **ssl.cert.subject.commonName****
+
+|
+
+ ** **http.html:"JFrog"****
+
+|
+
+ ** **http.title:"Grafana"****  
+  
+ ** **http.title:"Index of /"****
+
+|
+
+ ** **"X-Jfrog"****
+
+|
+
+ ** **http.title:"RabbitMQ"****  
+  
+ ** **ftp port:"10000"****
+
+|
+
+ ** **http.title:"dashboard"****
+
+|
+
+ ** **HTTP/1.1 307 Temporary Redirect "Location: /containers"****  
+  
+ ** **"Authentication: disabled" port:445 product:"Samba"****
+
+|
+
+ ** **http.title:"Openfire Admin Console"****
+
+|
+
+ ** **http.favicon.hash:1278323681****  
+  
+ ** **title:"Login - Adminer"****
+
+|
+
+ ** **http.title:"control panel"****
+
+|
+
+ ** **"MongoDB Server Information" port:27017 -authentication****  
+  
+ ** **http.title:"sign up"****
+
+|
+
+ ** **http.html:"* The wp-config.php creation script uses this file"****
+
+|
+
+ ** **port:"9200" all:"elastic indices"****  
+  
+ ** **http.title:"LogIn"****
+
+|
+
+ ** **clockwork****
+
+|
+
+ ** **"220" "230 Login successful." port:21****  
+  
+ ** **port:"11211" product:"Memcached"****
+
+|
+
+ ** **"port: 53" Recursion: Enabled****
+
+|
+
+ ** **title:"kibana"****  
+  
+ ** **port:9090 http.title:"Prometheus Time Series Collection and Processing
+Server"****
+
+|
+
+ ** **"default password"****
+
+|
+
+ ** **title:protected****  
+  
+ ** **http.component:Moodle****
+
+|
+
+ ** **http.favicon.hash:116323821****
+
+|
+
+ ** **html:"/login/?next=" title:"Django"****  
+  
+ ** **html:"/admin/login/?next=" title:"Django"****
+
+|
+
+ ** **title:"system dashboard" html:jira****
+
+|
+
+ ** **http.component:ruby port:3000****  
+  
+ ** **html:"secret_key_base"****
+
+|
+
+ ** **I will add more soon****
+
+|
+
+ ** **. . .****  
+  
+## Karma_v2新增的Shodan Dork
+
+ ** **DORK****
+
+|
+
+ ** **DORK****
+
+|
+
+ ** **DORK****  
+  
+---|---|---  
+  
+ ** **"netweaver"****
+
+|
+
+ ** **port:"2379" product:"etcd"****
+
+|
+
+ ** **http.title:"DisallowedHost"****  
+  
+ ** **ssl:"${target}" "-AkamaiGHost" "-GHost"****
+
+|
+
+ ** **ssl:"${target}" "-Cloudflare"****
+
+|
+
+ ** **ssl:"${target}" "-Cloudfront"****  
+  
+ ** **"X-Debug-Token-Link" port:443****
+
+|
+
+ ** **http.title:"shipyard" HTTP/1.1 200 OK Accept-Ranges: bytes Content-Length: 5664****
+
+|
+
+ ** **http.title:"TIBCO Jaspersoft:" port:"443" "1970"****  
+  
+ ** **"Confluence"****
+
+|
+
+ ** **http.title:"SonarQube"****
+
+|
+
+ ** **html:"jmx?qry=Hadoop:*"****  
+  
+ ** **http.title:"Directory Listing"****
+
+|
+
+ ** **http.title:"H-SPHERE"****
+
+|
+
+ ** **http.title:"Swagger UI - "****  
+  
+ ** **Server: Apache-Coyote/1.1 Tomcat-5.5"****
+
+|
+
+ ** **port:2375 product:"Docker"****
+
+|
+
+ ** **http.title:"phpinfo()"****  
+  
+ ** **http.title:"ID_VC_Welcome"****
+
+|
+
+ ** **"x-powered-by" "jboss"****
+
+|
+
+ ** **jboss http.favicon.hash:-656811182****  
+  
+ ** **http.title:"Welcome to JBoss"****
+
+|
+
+ ** **port:"8089, 8000" "splunkd"****
+
+|
+
+ ** **http.favicon.hash:-316785925****  
+  
+ ** **title:"splunkd" org:"Amazon.com"****
+
+|
+
+ ** **http.title:"oracle business intelligence sign in"****
+
+|
+
+ ** **http.title:"Oracle WebLogic Server Administration Console"****  
+  
+ ** **http.title:"Apache Status"****
+
+|
+
+ ** **I will add more soon****
+
+|
+
+ ** **. . .****  
+  
+![](https://image.3001.net/images/20211123/1637677512_619cf9c8702101e233bd0.png!small)
+
+## 项目地址
+
+ **Karma_v2：** 【[ _GitHub传送门_](https://github.com/Dheerajmadhukar/karma_v2)】
+
+## 参考资料
+
+  * [ _https://shodan.io/_](https://shodan.io/)
+  * [ _https://developer.shodan.io/api_](https://developer.shodan.io/api)
+

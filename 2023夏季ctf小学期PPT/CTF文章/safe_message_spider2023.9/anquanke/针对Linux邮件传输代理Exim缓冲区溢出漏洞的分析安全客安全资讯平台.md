@@ -1,0 +1,269 @@
+# 针对Linux邮件传输代理Exim缓冲区溢出漏洞的分析
+
+阅读量 **186338**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-03-08 14:00:47
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 Meh，文章来源：devco.re/blog
+
+原文地址：<https://devco.re/blog/2018/03/06/exim-off-by-one-RCE-exploiting-CVE-2018-6789-en/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t0156d2658a2e5f45a8.png)
+
+## 概述
+
+在2018年2月5日，我们报告了Exim在Base64解码函数中的溢出漏洞，并获得编号CVE-2018-6789。该漏洞在Exim的第一个版本中就已经存在，因此所有版本全都受到影响。根据我们的研究，该漏洞可以用于获得预授权远程代码执行（Pre-auth Remote Code
+Execution），直接导致了40万台以上的服务器都处于危险之中。目前，修复后的4.90.1版本已经发布，我们建议相关用户立即对Exim进行升级。  
+Exim官网上关于CVE-2018-6789的通告：<https://exim.org/static/doc/security/CVE-2018-6789.txt>
+
+## 影响版本
+
+4.90.1以下的全部Exim版本
+
+## 漏洞分析
+
+该漏洞成因在于Base64解码过程中，存在单字节溢出的问题。该问题是由于b64decode函数中解码缓冲区长度计算错误而导致。完整源代码请参考：<https://github.com/Exim/exim/blob/master/src/src/base64.c#L153>
+。相关函数如下：
+
+    
+    
+    b64decode(const uschar *code, uschar **ptr)
+    {
+    int x, y;
+    uschar *result = store_get(3*(Ustrlen(code)/4) + 1);
+    
+    *ptr = result;
+    // perform decoding
+    }
+    
+
+如上所示，Exim分配一个3*(len/4)+1字节的缓冲区来存储解码后的Base64数据。如果输入的内容不是有效的Base64字符串，且长度为4n+3时，Exim会分配3n+1字节的缓冲区，但实际上解码过程将会占用3n+2个字节，这就造成了一个字节的堆溢出。  
+通常情况下，这一问题不会产生影响，因为被覆盖的内存通常都是未使用的。然而，如果字符串达到了某些特定长度，那么该字节就会覆盖一些关键的数据。此外，由于我们可以控制该字节的内容，这就使得漏洞利用更为可行。  
+由于Base64解码函数是一个基础功能，因此这一漏洞可以轻易触发，从而导致远程代码执行。
+
+## 漏洞利用
+
+为了评估这一漏洞的严重程度，我们开发了一个针对Exim的SMTP守护进程的攻击方式。下面就描述了实现预授权（Pre-auth）远程代码执行的漏洞利用方式。我们需要通过欺骗内存管理机制来实现这一字节溢出漏洞的利用。在阅读本节之前，建议各位读者掌握堆开发的相关知识，参考阅读内容请见本文最后一节。  
+在漏洞利用过程中，需要用到如下内容：  
+Debian（Stretch）和Ubuntu（Zesty）；  
+使用apt-get安装的Exim4软件包中的SMTP守护进程（4.89/4.88）；  
+在配置中，启用CRAM-MD5身份验证机制（默认启用），或启用使用了Base64的其他任何身份验证机制；  
+基本的SMTP指令（EHLO、MAIL FROM/RCPT TO）以及AUTH。
+
+###  内存分配
+
+首先，我们对源代码进行回顾，并查找可以利用的内存分配过程。正如我们在前面所提到的，Exim使用自定义函数进行动态分配：
+
+    
+    
+    extern BOOL    store_extend_3(void *, int, int, const char *, int);  /* The */
+    extern void    store_free_3(void *, const char *, int);     /* value of the */
+    extern void   *store_get_3(int, const char *, int);         /* 2nd arg is   */
+    extern void   *store_get_perm_3(int, const char *, int);    /* __FILE__ in  */
+    extern void   *store_malloc_3(int, const char *, int);      /* every call,  */
+    extern void    store_release_3(void *, const char *, int);  /* so give its  */
+    extern void    store_reset_3(void *, const char *, int);    /* correct type */
+    
+
+函数store_free()和store_malloc()会直接调用glibc的malloc()和free()。其中，glibc需要使用一个较大的块（0x10字节），并将其元数据存储在每个分配到空间的首个0x10字节中（x86-64），并返回数据的位置。下图展现了块的结构：
+
+  
+元数据包括前一个块的大小（也就是正好在内存中的那一个块）、当前块的大小以及一些标志。其中，前三位（Bit）用于存储标志。在本文的例子中，0x81的大小意味着当前块是0x80字节，并且前一个块正在使用中。  
+在Exim中，大部分已发布的块都会被放入一个双向链表中，称为未分类容器（Unsorted
+Bin）。glibc会根据标志来对其进行维护，并将相邻的已发布块合并成一个更大的块，以避免碎片化。对于每个分配请求，glibc都会以先入先出（FIFO）的顺序来检查这些块，并重新使用它们。  
+考虑到性能问题，Exim使用了store_get()、store_release()、store_extend()以及store_reset()这四个函数来维护自身的链表结构。
+
+  
+考虑到storeblocks中每个块都至少有0x2000字节，这一点就成为了我们在漏洞利用上的限制。请注意，storeblock同样也是块中的数据。因此，如果我们查看内存，如下图所示：
+
+  
+我们列出用来排列堆数据的函数：
+
+####  EHLO主机名称
+
+针对每个EHLO（或HELO）命令，Exim会将主机名的指针存储在sender_host_name中。store_free()函数负责旧名称，store_malloc()函数负责新名称。  
+完整源代码参考：<https://github.com/Exim/exim/blob/master/src/src/smtp_in.c#L1833> 。
+
+    
+    
+      1839 /* Discard any previous helo name */
+      1840
+      1841 if (sender_helo_name != NULL)
+      1842   {
+      1843   store_free(sender_helo_name);
+      1844   sender_helo_name = NULL;
+      1845   }
+      ...
+      1884 if (yield) sender_helo_name = string_copy_malloc(start);
+      1885 return yield;
+    
+
+####  无法识别的命令
+
+针对每个无法识别的（带有不可打印字符的）命令，Exim都会分配一个缓冲区，将其转换为可打印的命令。store_get()负责存储错误消息。  
+完整源代码参考：<https://github.com/Exim/exim/blob/master/src/src/smtp_in.c#L5725> 。
+
+    
+    
+      5725   done = synprot_error(L_smtp_syntax_error, 500, NULL,
+      5726     US"unrecognized command");
+    
+
+####  AUTH
+
+在大多数身份验证过程中，Exim在与客户端的通信过程中使用Base64编码。编码和解码的字符串储存在由store_get()分配的缓冲区中。store_get()用于处理字符串，字符串中可包含不可打印的字符以及NULL字节，且不一定使用NULL作为终止符。
+
+####  在EHLO/HELO、MAIL、RCPT中重置
+
+当命令正确完成时，会调用smtp_reset()。该函数调用store_reset()，将块链重置到重置点，这也就意味着所有被store_get()分配的storeblock，都会在命令完成后被释放。其中，store_reset()在函数的开始处设置，负责重置。  
+完整源代码参考：<https://github.com/Exim/exim/blob/master/src/src/smtp_in.c#L3771> 。
+
+    
+    
+      3771 int
+      3772 smtp_setup_msg(void)
+      3773 {
+      3774 int done = 0;
+      3775 BOOL toomany = FALSE;
+      3776 BOOL discarded = FALSE;
+      3777 BOOL last_was_rej_mail = FALSE;
+      3778 BOOL last_was_rcpt = FALSE;
+      3779 void *reset_point = store_get(0);
+      3780
+      3781 DEBUG(D_receive) debug_printf("smtp_setup_msg enteredn");
+      3782
+      3783 /* Reset for start of new message. We allow one RSET not to be counted as a
+      3784 nonmail command, for those MTAs that insist on sending it between every
+      3785 message. Ditto for EHLO/HELO and for STARTTLS, to allow for going in and out of
+      3786 TLS between messages (an Exim client may do this if it has messages queued up
+      3787 for the host). Note: we do NOT reset AUTH at this point. */
+      3788
+      3789 smtp_reset(reset_point);
+    
+
+###  漏洞利用步骤
+
+为了充分利用这一点，解码后的Base64数据下的块应该易于被释放和控制。经过多次尝试，我们发现sender_host_name是一个比较不错的选择。我们对堆布局进行了调整，为Base64数据保留了一个空闲的块，位于sender_host_name之前。
+
+![](https://devco.re/assets/img/blog/20180306/4.png)
+
+  1. 将一个较大的块放入未分类容器中  
+首先，我们发送一个带有较长主机名称的EHLO信息，以使其分配及释放，并在未分类容器中保留一个0x6060长度（3个Storeblock长度）的块。
+
+  2. 获得第一个Storeblock  
+然后，我们通过发送一个无法识别的字符串，来触发store_get()，并在释放的块内分配Storeblock。
+
+  3. 获得第二个Storeblock并释放第一个Storeblock  
+我们再次发送EHLO消息，以此获得第二个存储区。由于EHLO完成后会调用smtp_reset，因此第一个块会被依次释放。  
+当堆布局准备好后，我们可以借助单字节溢出（Off-by-one）来覆盖原始块大小。我们将0x2021修改为0x20f1，这样就能让块稍微扩大一些。
+
+![](https://devco.re/assets/img/blog/20180306/5.png)
+
+  1. 发送Base64数据并触发单字节溢出  
+如果想要触发单字节溢出，我们就需要使用一个AUTH命令来发送Base64数据。溢出的字节正好可以覆盖下一个块的第一个字节，并能够扩展下一个块。
+
+  2. 将块调整为合适大小  
+由于此时我们已经将块进行了扩展，那么下一个块的起始就变为了原来块的内部。因此，我们需要让它看起来像是一个正常的块，从而通过glibc的检查。在这里，我们需要空字节和不可打印字符来实现伪造块大小的目的，所以我们要发送另一个Base64字符串。
+
+  3. 释放扩展块  
+因为我们还暂时不能直接对块进行编辑，所以首先要释放块，随后才能控制扩展块的内容。也就是说，我们应该发送一个新的EHLO消息来释放掉此前的主机名。然而，一条正常的EHLO消息会调用smtp_reset，这可能导致程序中断或崩溃。为了避免这种情况，我们要发送一个无效的主机名称，比如+。
+
+  4. 覆盖重叠Storeblock的下一个指针
+
+  
+在块被释放后，我们可以使用AUTH对其进行检索，并覆盖部分重叠的Storeblock。这里，我们使用一种称为“部分写入（Partial
+Write）”的技巧。借助该技巧，我们可以在不破坏地址空间布局随机化（ASLR）的情况下对指针进行修改。我们部分地改变了包含访问控制列表（ACL）字符串的Storeblock的下一个指针。ACL字符串被一组全局指针指向，例如：
+
+    
+    
+    uschar *acl_smtp_auth;
+    uschar *acl_smtp_data;
+    uschar *acl_smtp_etrn;
+    uschar *acl_smtp_expn;
+    uschar *acl_smtp_helo;
+    uschar *acl_smtp_mail;
+    uschar *acl_smtp_quit;
+    uschar *acl_smtp_rcpt;
+    
+
+这些指针在Exim进程开始时会进行初始化，并按照配置进行相应的设置。例如，如果在配置中有一行“acl_smtp_mail =
+acl_check_mail”，那么指针acl_smtp_mail会指向字符串acl_check_mail。不管什么时候使用到MAIL
+FROM，Exim都会进行一次ACL检查，并首先扩展acl_check_mail。在扩展时，Exim尝试在遇到${run{cmd}}时执行命令。因此，只要我们能够控制ACL字符串，就可以实现代码执行。在这里，我们并不需要直接劫持程序控制流，所以我们可以轻松地绕过诸如位置独立可执行文件（PIE）、NX等缓解措施。
+
+  1. 重置Storeblock并检索ACL Storeblock  
+现在，ACL Storeblock位于链表之中。一旦smtp_reset()被触发，它就会被释放，然后我们可以通过分配多个块来再次对其进行检索。
+
+  2. 覆盖ACL字符串并触发ACL检查  
+最后，我们覆盖包含ACL字符串的整个块。之后就可以发送EHLO、MAIL、RCPT等命令来触发ACL检查。一旦我们能触及配置中定义的ACL，就可以实现远程代码执行。
+
+## 修复方法
+
+升级到4.90.1版本或以上版本
+
+## 时间节点
+
+2018年2月5日 09:10 将漏洞情况报告给Exim  
+2018年2月6日 23:23 获得CVE编号  
+2018年2月10日 18:00 厂商发布补丁
+
+## 贡献
+
+本漏洞由DEVHORE研究团队的Meh发现。
+
+## 参考
+
+<https://exim.org/static/doc/security/CVE-2018-6789.txt>  
+<https://git.exim.org/exim.git/commit/cf3cd306062a08969c41a1cdd32c6855f1abecf1>  
+<https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2018-6789>  
+<http://www.openwall.com/lists/oss-security/2018/02/07/2>
+
+## 堆开发的相关资料
+
+<https://heap-exploitation.dhavalkapil.com/>  
+<https://github.com/shellphish/how2heap>  
+<https://www.slideshare.net/AngelBoy1/heap-exploitation-51891400> （中文）  
+<https://www.slideshare.net/AngelBoy1/advanced-heap-exploitaion> （中文）  
+<https://googleprojectzero.blogspot.tw/2014/08/the-poisoned-nul-byte-2014-edition.html>
+
+本文翻译自devco.re/blog [原文链接](https://devco.re/blog/2018/03/06/exim-off-by-one-RCE-exploiting-CVE-2018-6789-en/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **P!chu** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/100447](/post/id/100447)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [devco.re/blog](https://devco.re/blog/2018/03/06/exim-off-by-one-RCE-exploiting-CVE-2018-6789-en/)
+
+如若转载,请注明出处： <https://devco.re/blog/2018/03/06/exim-off-by-one-RCE-exploiting-CVE-2018-6789-en/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞](/tag/漏洞)
+  * [Exim](/tag/Exim)
+  * [CVE-2018-6789](/tag/CVE-2018-6789)
+  * [邮件服务器](/tag/邮件服务器)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t01bd1dba67fe13cdc6.png) P!chu
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

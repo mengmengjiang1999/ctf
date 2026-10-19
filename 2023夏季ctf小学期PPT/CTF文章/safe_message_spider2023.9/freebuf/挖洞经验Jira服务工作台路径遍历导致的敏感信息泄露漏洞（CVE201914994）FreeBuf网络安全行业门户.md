@@ -1,0 +1,139 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+![](https://image.3001.net/images/20191010/1570697598_5d9ef17e39092.jpg!small)
+
+ **本文中，作者通过对JIRA Servcie
+Desk应用下普通用户和管理员账户的权限测试，发现可以普通用户身份访问获取到管理员账户关键路径下的一些敏感信息，这些信息会对协同团队项目造成严重安全影响（CVE-2019-14994），最终漏洞获得了厂商$11,000的奖励。以下是作者对该漏洞的简单复现和分享。**
+
+## JIRA Servcie Desk介绍
+
+JIRA Servcie
+Desk是Atlassian旗下JIRA类应用的核心产品，它是一款服务台管理软件，专门用于接受和处理来自于团队或用户的问题或请求它还有其他类似于服务中心的附属功能包括处理服务协议、报告、队列，通过网站入口或者邮件等形式接收来自外部的问题及反馈。JIRA
+Servcie Desk是专门为终端用户提交工单到客户支持团队而设计的，它也可适用于开发团队，可与JIRA Software等同类产品配合使用。
+
+JIRA Servcie Desk主要有两个管理门户：
+
+> 用户门户（Customer portal）：主要通过/servicedesk/ 目录来实现访问
+>
+> 管理员门户（Administrative portal）：主要通过/secure/目录来实现访问
+
+## 漏洞情况
+
+该漏洞原理在于，如果攻击者是可以访问用户门户（Customer portal）的普通用户，那么，他就能遍历管理员门户（Administrative
+portal）中JIRA项目提交的所有实例问题清单，这些项目包括Jira Service Desk自身、Jira Core projects以及Jira
+Software等。
+
+![](https://image.3001.net/images/20191010/1570697224_5d9ef008794de.png!small)
+
+漏洞可利用的条件为：
+
+> 1、JIRA Servcie Desk中`anyone can email the service desk or raise a request in
+> the portal` 设置选项开启（任何人都可以向服务台发送电子邮件或在门户网站上提出请求）；
+>
+> 2、上述设置开启后，攻击者通过身份验证并能向JIRA Servcie Desk正常提交工单（Support Ticket）。
+
+漏洞影响版本：
+
+> All versions before 3.9.16
+>
+> 3.10.x
+>
+> 3.11.x
+>
+> 3.12.x
+>
+> 3.13.x
+>
+> 3.14.x
+>
+> 3.15.x
+>
+> 3.16.x before 3.16.8 (the fixed version for 3.16.x)
+>
+> 4.0.x
+>
+> 4.1.x before 4.1.3 (the fixed version for 4.1.x)
+>
+> 4.2.x before 4.2.5 (the fixed version for 4.2.x)
+>
+> 4.3.x before 4.3.4 (the fixed version for 4.3.x)
+>
+> 4.4.0 before 4.4.1 (the fixed version for 4.4.x)
+
+## 漏洞复现
+
+首先，我们要检查的是目标JIRA项目实例是否运行有JIRA Servcie Desk服务，可以通过以下链接来核实：
+
+> <https://target.com/servicedesk/>
+
+如果目标JIRA项目确实运行有JIRA Servcie Desk服务，那就会返回以下管理登录界面：
+
+![](https://image.3001.net/images/20191010/1570697307_5d9ef05b1b9e2.png!small)
+
+从以上登录界面中，点击其中的注册（ “Sign up” ）按钮，完成注册。注意，如果这里不显示注册（ “Sign up”
+）按钮，那么漏洞就不可利用，除非你有可登录进入管理界面的项目内部员工账号。注册完成后，我们可以来到用户门户（Customer portal）页面：
+
+![](https://image.3001.net/images/20191010/1570697325_5d9ef06d85430.png!small)
+
+接下来，我们就以该普通用户（Customer）的身份，来发起对管理员账户（Administrator）下安全目录/secure/的请求。结合Burp等其它抓包代理，（如果仅只用浏览器，由于URL的正常化将不会导致漏洞利用成功），我们构造请求如下：
+
+    
+    
+    GET /servicedesk/customer/../../secure/BrowseProjects.jspa HTTP/1.1
+    
+    Host: target.com
+    
+    Cookie: [authenticated as a customer]
+
+注意，这里根据不同的JIRA Servcie Desk版本，这里需要用到以下URL符号构造来进行路径遍历：
+
+> GET /servicedesk/customer/..;/..;/secure/BrowseProjects.jspa HTTP/1.1
+
+最后，如果目标JIRA Servcie Desk存在漏洞，则会返回显示一个貌似坏页的项目浏览（Browse Projects）页面：
+
+![](https://image.3001.net/images/20191010/1570697378_5d9ef0a2947fe.png!small)
+
+这也就是说，普通用户的Customer，可以去访问到一些管理员门户下的页面信息。然而，因为管理员门户中的大多功能都是通过APIs来实现的，但是其APIs对URL字符处理比较奇怪，存在问题，使得正常的浏览存在貌似坏页的问题。
+
+对该漏洞的进一步利用就是构造请求，结合jqlQuery查询，导出所有感兴趣的组织数据。试试：
+
+    
+    
+    GET /servicedesk/customer/../../sr/jira.issueviews:searchrequest-html-all-fields/temp/SearchRequest.html?jqlQuery=text+%7E+%22%22 HTTP/1.1
+    
+    Host: target.com
+    
+    Cookie: [authenticated as a customer]
+
+如果目标JIRA Servcie Desk服务端返回 “not
+found”，那你也可尝试通过请求以下URL来获取相关数据。请求会返回所有与查询相关的数据信息，当然你可以把jqlQuery查询参数更改成其它。
+
+> GET /servicedesk/customer/../../sr/jira.issueviews:searchrequest-> xml/temp/SearchRequest.xml?jqlQuery=text+%7E+%22%22 HTTP/1.1
+
+如以下查询返回了HTML的相关组织页面数据信息：
+
+![](https://image.3001.net/images/20191010/1570697460_5d9ef0f439d31.png!small)
+
+补充说明
+
+奇怪的是JIRA本身的身份验证机制，在它的正常情况下，如果普通用户或内部员工，通过浏览器访问上述我们所提到的管理员目录/secure/或/sr/，将会被阻止并重定向跳转到普通用户门户页面。这种简单的URL匹配重定向跳转，看似是JIRA自己对管理员门户的一种安全保护机制。之后，JIRA方给出了以下简单修复方案：
+
+    
+    
+    <rule>
+    
+            <from>^/[^?]*\.\..*$</from>
+    
+            <to type="temporary-redirect">/</to>
+    
+     </rule>
+
+这个修补方案有点可笑，它只声明了用户的有限访问规则，即访问到什么什么就实行跳转，要是修复方案实施之后，攻击者一样可以通过一些fuzz或编码技巧访问到管理员门户的相关功能。
+
+该漏洞是我在Bugcrowd平台中参与Atlassian Bug
+Bash众测项目发现的，由于该漏洞最终可对Atlassian的核心服务造成影响，有危及大量Atlassian客户的风险，最终Atlassian官方奖励了我$10,000，外加$1,000的“停止测试”奖金。由于我参考了Orange
+Tsai此前针对Atlassin另一产品的漏洞发现，感谢Orange Tsai，感谢Atlassian安全团队的Dan Ritter。
+
+ ***参考来源：[samcurry](https://samcurry.net/analysis-of-cve-2019-14994/)，clouds编译整理，转载请注明来自FreeBuf.COM  
+**
+

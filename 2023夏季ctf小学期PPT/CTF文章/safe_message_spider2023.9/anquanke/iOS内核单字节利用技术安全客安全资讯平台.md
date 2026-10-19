@@ -1,0 +1,777 @@
+# iOS内核单字节利用技术
+
+阅读量 **196546**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-08-03 10:00:27
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 googleprojectzero，文章来源：googleprojectzero.blogspot.com
+
+原文地址：<https://googleprojectzero.blogspot.com/2020/07/one-byte-to-rule-them-all.html>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01958d62724a3e544b.jpg)
+
+## 0x01 简介
+
+在过去的几年里，几乎所有的iOS内核利用都遵循相同的流程:内存破坏和伪造Mach port被用来访问内核task
+port，从而为用户空间提供完美的内核读/写原语。最近的iOS内核漏洞缓解措施，比如PAC和zone_require，似乎是为了打破常见的利用流程，但是，这些iOS内核利用从高层次上看是相同的，这引发了一个问题：针对内核task
+port真的是最好的漏洞利用流程吗？还是这种策略的趋势掩盖了其他可能更有趣的技术?现有的iOS内核缓解措施是否对其他未被发现的开发流是否同样有效?
+
+在这篇文章中，我将介绍一种新的iOS内核利用技术，它将控制一个字节的堆溢出直接转换为任意物理地址的读/写原语，同时完全避开当前的缓解措施，如KASLR、PAC和zone_require。通过读取一个特殊的硬件寄存器，可以在物理内存中定位到内核并构建一个内核读/写原语，而无需伪造内核task
+port。最后，我将讨论各种iOS缓解措施在阻止这一技术方面的效果，并对iOS内核利用的最新进展进行总结。您可以在这里找到[Poc](https://bugs.chromium.org/p/project-zero/issues/detail?id=1986#c7)代码。
+
+## 0x02 前置知识
+
+###  power 结构
+
+在查看XNU的源代码时，我经常关注一些对象（objects），方便在将来利用它进行操作或破坏。在发现
+[CVE-2020-3837](https://bugs.chromium.org/p/project-zero/issues/detail?id=1986)(oob_timestamp漏洞)后，我偶然发现了`vm_map_copy_t`的定义:
+
+    
+    
+    struct vm_map_copy {
+            int                     type;
+    #define VM_MAP_COPY_ENTRY_LIST          1
+    #define VM_MAP_COPY_OBJECT              2
+    #define VM_MAP_COPY_KERNEL_BUFFER       3
+            vm_object_offset_t      offset;
+            vm_map_size_t           size;
+            union {
+                    struct vm_map_header    hdr;      /* ENTRY_LIST */
+                    vm_object_t             object;   /* OBJECT */
+                    uint8_t                 kdata[0]; /* KERNEL_BUFFER */
+            } c_u;
+    };
+    
+
+我觉得这值得关注，有几个原因：
+
+  * 1.这个结构在头部有一个`type`字段，因此越界写入可能会将其从一种类型更改为另一种类型，从而导致类型混淆。因为iOS是小端(little-endian)，因此最低有效字节在内存中排在首位，这意味着即使是一个单字节溢出也足以将类型设置为三个值中的任何一个。
+  * 2.该类型区分任意可控数据（kdata）和内核指针（hdr和object）之间的交集。因此，破坏type可以让我们直接伪造指向内核对象的指针，而不需要执行任何重新分配。
+  * 3.我记得曾经读过关于`vm_map_copy_t`在以前的漏洞利用中（在iOS 10之前）被用作原语的内容，但我不记得在哪里或如何使用它。Ian Beer 也曾使用过vm_map_copy对象:[Splitting atoms in XNU](https://googleprojectzero.blogspot.com/2019/04/splitting-atoms-in-xnu.html)。
+
+通过对`osfmk/vm/vm_map.c`的深入研究，我发现vm_map_copyout_internal（）确实以非常有趣的方式使用了copy对象。但首先，让我们先介绍一下vm_map_copy是什么以及它如何工作。
+
+vm_map_copy表示进程虚拟地址空间的写时拷贝，它已经packaged，准备插入到另一个虚拟地址空间中。有三种内部表示形式：作为vm_map_entry对象的列表、作为vm_object或作为直接复制到目标中内联字节数组。我们将重点讨论类型1和3。
+
+基本上 `ENTRY_LIST` 类型是最强大且最通用的表示形式，而 `KERNEL_BUFFER`
+类型则是一种严格的优化。`vm_map_entry`列表由多个分配和多个间接层组成:每个`vm_map_entry` 描述了一个虚拟地址范围`[
+vme_start ，vme_end ）`，该范围由特定的 `vm_object` 映射，而该列表又包含一个 vm_page
+的列表，该列表描述vm_object支持的物理页面。
+
+![](https://p1.ssl.qhimg.com/t0160f30c87a86cb348.png)
+
+同时，如果要插入的数据不是共享内存，并且大小大约为两个pages或更少，则只需简单地分配 vm_map_copy
+即可将数据内容内联在同一分配中，而无需进行间接或其他分配。
+
+![](https://p3.ssl.qhimg.com/t0130ee1f88ff25d8b6.png)
+
+通过这种优化，vm_map_copy对象偏移0x20处的8个字节可以是指向vm_map_entry列表头的指针，也可以是完全由攻击者控制的数据，所有这些都取决于头部的type字段。因此，破坏vm_map_copy对象的第一个字节会导致内核将任意可控数据解释为vm_map_entry指针。
+
+![](https://p3.ssl.qhimg.com/t012b84a49e97dc998d.png)
+
+了解vm_map_copy的内部原理后，让我们回到vm_map_copyout_internal()。这个函数负责获取一个vm_map_copy并将其插入目标地址空间(由vm_map_t类型表示)。当进程之间共享内存时，它可以通过Mach消息发送一个外部内存描述符来实现:外部内存以vm_map_copy的形式存储在内核中，而vm_map_copyout_internal()是将其插入到接收进程中的函数。
+
+事实证明，如果vm_map_copyout_internal()处理一个损坏的vm_map_copy，其中包含一个指向伪造的vm_map_entry的指针，事情会变得相当令人兴奋。特别要考虑的是，如果伪造的vm_map_entry
+声称已连接，这会导致该函数立即尝试在page中进行错误操作:
+
+    
+    
+    kern_return_t
+    vm_map_copyout_internal(
+        vm_map_t                dst_map,
+        vm_map_address_t        *dst_addr,      /* OUT */
+        vm_map_copy_t           copy,
+        vm_map_size_t           copy_size,
+        boolean_t               consume_on_success,
+        vm_prot_t               cur_protection,
+        vm_prot_t               max_protection,
+        vm_inherit_t            inheritance)
+    {
+    ...
+        if (copy->type == VM_MAP_COPY_OBJECT) {
+    ...
+        }
+    ...
+        if (copy->type == VM_MAP_COPY_KERNEL_BUFFER) {
+    ...
+        }
+    ...
+        vm_map_lock(dst_map);
+    ...
+        adjustment = start - vm_copy_start;
+    ...
+        /*
+         *    Adjust the addresses in the copy chain, and
+         *    reset the region attributes.
+         */
+        for (entry = vm_map_copy_first_entry(copy);
+            entry != vm_map_copy_to_entry(copy);
+            entry = entry->vme_next) {
+    ...
+            entry->vme_start += adjustment;
+            entry->vme_end += adjustment;
+    ...
+            /*
+             * If the entry is now wired,
+             * map the pages into the destination map.
+             */
+            if (entry->wired_count != 0) {
+    ...
+                object = VME_OBJECT(entry);
+                offset = VME_OFFSET(entry);
+    ...
+                while (va < entry->vme_end) {
+    ...
+                    m = vm_page_lookup(object, offset);
+    ...
+                    vm_fault_enter(m,      // Calls pmap_enter_options()
+                        dst_map->pmap,     // to map m->vmp_phys_page.
+                        va,
+                        prot,
+                        prot,
+                        VM_PAGE_WIRED(m),
+                        FALSE,            /* change_wiring */
+                        VM_KERN_MEMORY_NONE,    /* tag - not wiring */
+                        &fault_info,
+                        NULL,             /* need_retry */
+                        &type_of_fault);
+    ...
+                    offset += PAGE_SIZE_64;
+                    va += PAGE_SIZE;
+               }
+           }
+       }
+    ...
+            vm_map_copy_insert(dst_map, last, copy);
+    ...
+        vm_map_unlock(dst_map);
+    ...
+    }
+    
+
+让我们一步步完成这个步骤。首先，处理其他vm_map_copy类型:
+
+    
+    
+        if (copy->type == VM_MAP_COPY_OBJECT) {
+    ...
+        }
+    ...
+        if (copy->type == VM_MAP_COPY_KERNEL_BUFFER) {
+    ...
+        }
+    
+
+这个 vm_map 是加锁的:
+
+    
+    
+       vm_map_lock(dst_map);
+    
+
+我们在vm_map_entry(fake)对象链表上输入一个for循环:
+
+    
+    
+        for (entry = vm_map_copy_first_entry(copy);
+            entry != vm_map_copy_to_entry(copy);
+            entry = entry->vme_next) {
+    
+
+我们处理的情况下，vm_map_entry是wired的，因此应该立即出现故障:
+
+    
+    
+            if (entry->wired_count != 0) {
+    
+
+设置后，我们将遍历wired条目中的每个虚拟地址。由于我们控制了伪造的vm_map_entry内容，所以我们可以控制读取的对象指针（类型为vm_objec）和偏移量：
+
+    
+    
+                object = VME_OBJECT(entry);
+                offset = VME_OFFSET(entry);
+    ...
+                while (va < entry->vme_end) {
+    
+
+我们为需要wired的内存的每个物理页查找vm_page
+结构。由于我们控制了伪造的vm_object和偏移量，我们可以使vm_page_lookup()返回一个指针，指向一个伪造的vm_page结构体，我们控制它的内容:
+
+    
+    
+                    m = vm_page_lookup(object, offset);
+    
+
+最后，我们调用vm_fault_enter（）在页面中进行故障处理：
+
+    
+    
+                    vm_fault_enter(m,      // Calls pmap_enter_options()
+                        dst_map->pmap,     // to map m->vmp_phys_page.
+                        va,
+                        prot,
+                        prot,
+                        VM_PAGE_WIRED(m),
+                        FALSE,            /* change_wiring */
+                        VM_KERN_MEMORY_NONE,    /* tag - not wiring */
+                        &fault_info,
+                        NULL,             /* need_retry */
+                        &type_of_fault);
+    
+
+vm_fault_enter（）的调用比较复杂，所以我不把代码放在这里。可以这样说，通过适当地设置伪造objects中的字段，就可以使用伪造的vm_page对象确定vm_fault_enter（），从而使用任意的物理页码调用pmap_enter_options():
+
+    
+    
+    kern_return_t
+    pmap_enter_options(
+            pmap_t pmap,
+            vm_map_address_t v,
+            ppnum_t pn,
+            vm_prot_t prot,
+            vm_prot_t fault_type,
+            unsigned int flags,
+            boolean_t wired,
+            unsigned int options,
+            __unused void   *arg)
+    
+
+pmap_enter_options（）负责修改目标的页表，以插入转换表条目，该转换表条目将建立从虚拟地址到物理地址的映射。似于 vm_map
+如何管理地址空间的虚拟映射的状态，pmap结构管理地址空间物理映射(即页表)的状态。并根据osfmk/arm/pmap.c中的源代码。在添加转换表条目之前，不会对提供的物理页码进行进一步验证。
+
+因此，我们破坏的vm_map_copy对象实际上为我们提供了一个非常强大的原语:将任意物理内存直接映射到用户空间中的进程中!
+
+![](https://p0.ssl.qhimg.com/t01b1ea7b998f7540af.png)
+
+我决定在iOS 13.3的oob_timestamp
+exploit所提供的内核读/写原语之上为vm_map_copy物理内存映射技术构建POC，有两个主要原因。
+
+首先，我没有一个较好的漏洞可以用来开发一个完整的exploit。尽管我最初是在试图利用oob_timestamp漏洞时偶然发现这个想法的，但很快就发现这个漏洞并不适合这种技术。
+
+其次，我希望独立实现该技术所使用的漏洞来评估该技术。似乎很有可能使该技术具有确定性（也就是说，没有故障案例）；在一个不可靠的的漏洞上实施它会使得很难单独进行评估。
+
+这种技术适合于kalloc.80
+至kalloc.32768的任何分配器区域中的可控一字节堆溢出(即65到32768字节的通用分配），为了便于在后文中参考，我将其称为“单字节利用技术”。
+
+我们已经列出了上述技术的基本要素:创建一个KERNEL_BUFFER类型的vm_map_copy，其中包含一个指向伪造的vm_map_entry列表的指针，将该类型破坏为ENTRY_LIST，使用vm_map_copyout_internal()接收它，并将任意物理内存映射到我们的地址空间中。但是，成功的利用要复杂得多：
+
+  * 1.我们还没有处理伪造的vm_map_entry/vm_object/vm_page将被构造在哪里。
+  * 2.我们需要确保在映射物理页面之后，调用vm_map_copyout_internal（）的内核线程不会崩溃，死机或死锁。
+  * 3.映射一个物理页面是非常好的，但是它本身可能还不足以实现任意内核读/写。这是因为: 
+    * kernelcache在物理内存中的加载地址是未知的，因此我们不能直接映射它的任何特定页面，而应该首先定位它。
+    * 一些硬件设备可能公开一个MMIO接口，该接口本身足够强大，可以构建某种读/写原语;但是，我不知道有任何这样的组件。
+
+因此，我们将需要映射多个物理地址，并且很可能需要使用从一个映射读取的数据来查找另一个映射的物理地址。也就是说，我们的映射原语不能是一次性的。
+
+  * 4.在for循环尝试将vm_map_copy_insert()复制到vm_map_copy_zone后，调用vm_map_copy_insert。因为KERNEL_BUFFER对象最初是使用kalloc()分配的，所以如果vm_map_copy的初始类型是KERNEL_BUFFER，这将导致死机。
+
+###  PAN 捷径
+
+单字节技术的一个重要前提条件是在已知地址上创建一个fake
+vm_map_entry对象。因为我们已经在oob_timestamp上构建了这个POC，因此我决定使用在利用那个bug时学到的一个技巧。在实际情况中，除了单字节溢出之外，可能还需要另一个漏洞来泄漏内核地址。
+
+在为oob_timestamp开发POC时，我了解到AGXAccelerator内核扩展提供了一个非常好的原语:OAccelSharedUserClient2和IOAccelCommandQueue2同时允许在用户空间和内核之间共享大范围的分页内存。访问用户/内核共享内存在开发exploits时非常有用，因为您可以在那里放置伪造的内核数据结构，并在内核访问它们时对它们进行操作。当然，这个AGXAccelerator原语并不是获得内核/用户共享内存的唯一方法；例如physmap还将大部分DRAM映射到虚拟内存中，因此它也可以用于将用户空间内存内容映射到内核中。但是，AGXAccelerator原语在实践中要方便得多：首先，它在一个受约束的地址范围内提供了一个非常大的连续内存共享区域；其次，它更容易泄漏相邻对象的地址来定位它。
+
+在iPhone 7之前，iOS设备不支持PAN(Privileged Access
+Never),也就是说所有的用户空间都是与内核共享内存的，您可以重写内核中的指针指向用户空间中伪造的数据结构。
+
+但是，当前iOS设备启用了PAN，因此内核直接访问用户空间内存将会直接出错。这就是AGXAccelerator共享内存原语非常好用的原因:如果您可以构建一个较大的共享内存区域并知道其在内核中的地址，基本上等同于关闭了PAN。
+
+当然，这句话的一个关键部分是“在内核中学习它的地址”；这样做通常需要一个漏洞。相反，由于我们已经依赖于oob_timestamp，我们将对共享内存地址进行简单的硬编码，动态地查找地址留给读者作为练习。
+
+###  POC panicking
+
+有了内核读/写和用户/内核共享内存缓冲区后，我们就可以编写POC了。
+
+我们首先在内核中创建共享内存区域，我们在共享内存中初始化一个伪造的vm_map_entry列表。列表包含3个条目:一个”ready”，一个”mapping”和一个”done”，这些条目表示每个映射操作的当前状态。
+
+![](https://p2.ssl.qhimg.com/t015327428a8ebb36ef.png)
+
+我们在Mach消息中包含一个伪造的vm_map_header的内存描述符发送到保留端口，外部内存作为vm_map_copy对象存储在内核中，该对象的类型为KERNEL_BUFFER(值为3)。
+
+![](https://p4.ssl.qhimg.com/t01e42695ed733ea6e7.png)
+
+我们模拟了一个单字节的堆溢出，该溢出会破坏 vm_map_copy 的 type 字段，并将其更改为ENTRY_LIST（值为1）。
+
+![](https://p5.ssl.qhimg.com/t019650a6151e0fa34d.png)
+
+我们启动一个线程，它接收在保留端口上的Mach消息。这会在破坏的vm_map_copy上触发对vm_map_copyout_internal()的调用。
+
+由于vm_map_entry列表初始化的配置，vm_map_copyout线程将在“done”条目上无限循环，为我们操作它做好准备。
+
+![](https://p4.ssl.qhimg.com/t0125a783933918f136.png)
+
+此时，我们有一个内核线程正在准备映射所需的任何物理页面。
+
+要映射一个页面，我们首先将“ready”条目设置为链接到它本身，然后将“done”条目设置为链接到“ready”条目。这将导致vm_map_copyout线程转换为”ready”。
+
+![](https://p5.ssl.qhimg.com/t01da168e11ade40966.png)
+
+在转换“ready”时，我们将“mapping”条目标记为与单个物理页面连接，并将其链接到“done”条目，我们将该条目链接到自身。我们还要填充伪造的vm_object和vm_page，以映射所需的物理页码。
+
+![](https://p5.ssl.qhimg.com/t0191724cf5d18d06cc.png)
+
+然后，我们可以通过将“ready”条目链接到“mapping”条目来执行映射。vm_map_copyout_internal()将映射到页面中，然后在“done”条目上转换，表示完成。
+
+![](https://p5.ssl.qhimg.com/t0108fb3fb43885b6fc.png)
+
+这为我们提供了一个可重用的原语，该原语将任意物理地址映射到进程中。作为初步的Poc,我映射了不存在的物理地址0x414140000并试图从中读取，从而触发EL0de
+LLC总线错误：
+
+![](https://p3.ssl.qhimg.com/t0128e3a5311d498f56.png)
+
+至此，我们已经证明了映射原语是正确的，但我们仍然不知道如何处理它。
+
+我首先想到的是，最简单的方法是在内存中查找kernelcache
+image。请注意，在目前的iphone上，即使使用直接的物理读/写原语，KTRR也会阻止我们修改内核image锁定的部分，因此我们不能仅仅修补内核的可执行代码。但是，kernelcache
+image的某些段在运行时仍然是可写的，包括含有sysctls的部分数据段。因为sysctls以前就被用于构建读/写原语，所以感觉这是一个稳定的方向。
+
+接下来的挑战是使用映射原语在物理内存中定位kernelcache，这样sysctl结构就可以映射到用户空间并进行修改。但首先，在我们弄清楚如何定位kernelcache之前，先来了解一下iPhone
+11 Pro的物理内存知识。
+
+iPhone 11 Pro在物理地址0x80000000有4GB的DRAM，因此物理DRAM地址的范围从0x800000000 到
+0x900000000。其中，0x801b80000 到0x8ec9b4000
+保留给应用处理器（AP），它是运行XNU内核和手机应用程序的主处理器。这个区域之外的内存为协处理器保留，例如：AOP(Always On
+Processor)、ANE(Apple Neural Engine)、SIO (possibly Apple SmartIO)、 AVE、ISP、
+IOP等。这些和其他区域的地址可以通过解析devicetree或在DRAM开始转储iboot-handoff区域来找到。
+
+![](https://p5.ssl.qhimg.com/t013484cd54aaaf6867.png)
+
+在boot时，kernelcache被连续加载到物理内存中，也就是说找到一个kernelcache页面就足以定位整个image了。另外，虽然KASLR可能会在虚拟内存中大量地减少kernelcache，但物理内存中的加载地址是相当有限的：在我的测试中，内核header总是加载在0x805000000和0x807000000之间的地址，范围只有32MB。
+
+事实证明，此范围比内核缓存本身小，为 0x23d4000
+字节，即35.8MB。因此，我们可以确定在运行时地址0x807000000包含一个kernelcache页面。
+
+但是，在尝试映射kernelcache时，我很快陷入了panic：
+
+    
+    
+    panic(cpu 4 caller 0xfffffff0156f0c98): "pmap_enter_options_internal: page belongs to PPL, " "pmap=0xfffffff031a581d0, v=0x3bb844000, pn=2103160, prot=0x3, fault_type=0x3, flags=0x0, wired=1, options=0x1"
+    
+
+该panic字符串似乎来自于pmap_enter_options_internal（）函数，它位于XNU(osfmk/arm/pmap.c)的源代码中，但是源代码中没有出现panic。因此，我逆向了kernelcache中的pmap_enter_options_internal()，以了解发生了什么。
+
+我了解到，问题在于我试图映射的page是Apple PPL（Protection Layer
+）中的一部分，该page是XNU内核的一部分，用于管理页面表，它被认为比内核的其他部分拥有更大的权限。PPL的目标是防止攻击者修改受保护的page。
+
+为了使受保护的pages不能被修改，PPL必须保护页表和页表元数据。因此，当我试图将一个受ppl保护的page映射到用户空间时，引发了panic。
+
+    
+    
+    if (pa_test_bits(pa, 0x4000 /* PP_ATTR_PPL? */)) {
+        panic("%s: page belongs to PPL, " ...);
+    }
+    
+    if (pvh_get_flags(pai_to_pvh(pai)) & PVH_FLAG_LOCKDOWN) {
+        panic("%s: page locked down, " ...);
+    }
+    
+
+PPL的存在使物理映射原语的使用更在复杂，因为尝试映射受PPL保护的页面将引起panic。而且kernelcache本身包含许多受ppl保护的page，将连续的35
+MB二进制文件拆分为较小的 PPL-free
+块，这些块不再桥接kernelcache的物理结构。因此，我们不再可以映射一个kernelcache页面的物理地址。
+
+而其他DRAM区域也是一个同样危险的雷区。PPL会抓取物理页面以供使用，并根据需要返回到内核，因此在运行时，PPL页面就像地雷一样分散在物理内存中。因此，在任何地方都没有确保不会被破坏的静态地址。
+
+![](https://p2.ssl.qhimg.com/t01b058e1073140d31e.gif)
+
+在A13上的AP
+DRAM的每一页上显示保护标志的map。黄色为PPL+LOCKDOWN，红色为PPL，绿色为LOCKDOWN，蓝色为unguarded(可映射)。
+
+## 0x03 两种技术
+
+###  DRAM 保护之路
+
+然而，这并不完全正确。应用程序处理器的DRAM区域可能是一个雷区，但在它之外的任何区域都不是。这包括协处理器使用的DRAM，以及系统任何其他的寻址组件，比如通过memory-mapped I/O (MMIO)访问系统组件的硬件寄存器。
+
+有了这么强大的原语，我希望可以使用多种技术来构建读/写原语。我希望通过直接访问特殊的硬件寄存器和协同处理器，可以完成许多事情。不幸的是，这不是我非常熟悉的领域，因此在这里我将介绍一次绕过PPL的尝试（失败）。
+
+我的想法是控制一些协处理器，同时使用协处理器和AP上的执行来攻击内核。首先，我们使用物理映射原语来修改DRAM中协处理器存储数据的部分，以便在该协处理器上执行代码。接下来，回到主处理器上，我们再次使用映射原语来映射和禁用协处理器的设备地址解析表或DART（基本上是IOMMU）。在协处理器上执行代码并禁用了相应的DART的情况下，我们可以从协处理器直接无保护地访问物理内存，从而使我们能够完全避开对PPL的保护（PPL只在AP上执行）。
+
+然而，每当我试图修改协处理器使用的DRAM的某些区域时，我就会遇到内核panic，特别是区域0x800000000 –
+0x801564000看起来是只读的:
+
+    
+    
+    panic(cpu 5 caller 0xfffffff0189fc598): "LLC Bus error from cpu1: FAR=0x16f507f10 LLC_ERR_STS/ADR/INF=0x11000ffc00000080/0x214000800000000/0x1 addr=0x800000000 cmd=0x14(acc_cifl2c_cmd_ncwr)"
+    
+    panic(cpu 5 caller 0xfffffff020ca4598): "LLC Bus error from cpu1: FAR=0x15f03c000 LLC_ERR_STS/ADR/INF=0x11000ffc00000080/0x214030800104000/0x1 addr=0x800104000 cmd=0x14(acc_cifl2c_cmd_ncwr)"
+    
+    panic(cpu 5 caller 0xfffffff02997c598): "LLC Bus error from cpu1: FAR=0x10a024000 LLC_ERR_STS/ADR/INF=0x11000ffc00000082/0x21400080154c000/0x1 addr=0x80154c000 cmd=0x14(acc_cifl2c_cmd_ncwr)"
+    
+
+这是非常奇怪的:这些地址在KTRR锁定区域之外，所以没有任何内容能够阻止对DRAM这部分的写操作。因此，必须在此物理范围上强制执行其他一些未记录的锁定。
+
+另一方面，0x801564000-0x801b80000仍然是可写的，对这个区域的不同区域写入会产生奇怪的系统行为，这支持了协处理器使用的数据被破坏的理论。例如，在某些区域写入会导致相机和手电筒失去响应，而在其他区域写入会导致手机在开启静音滑块时出现panic。
+
+为了方便了解可能发生的情况，我通过检查devicetree并dump内存来确定这个范围内的区域。最后，我发现在0x800000000 –
+0x801b80000范围内的协处理器固件段布局如下:
+
+![](https://p1.ssl.qhimg.com/t012099712ff2e84952.png)
+
+因此，被锁定的区域都是协处理器固件的所有 **TEXT 段,这表明，苹果已经增加了一个新的缓解措施，使协处理器** TEXT
+段在物理内存中只读，类似于AMCC(可能是苹果的内存控制器)上的KTRR，但不只是针对AP内核，而是针对协处理器固件。这可能是之前发布的xnu-6153.41.3源代码中引用的未记录的CTRR缓解措施，它似乎是A12及更高版本上KTRR的增强版；Ian
+Beer建议CTRR可以表示协处理器Text只读区域。
+
+然而，在这些协处理器上执行代码应该仍然是可行的：就像KTRR不能阻止AP上的利用一样，协处理器 Text
+锁定缓解也不能阻止对协处理器的攻击。因此，即使这种缓解会使事情变得更困难，但此时我们禁用DART并使用协处理器上的代码执行来写入受PPL保护的物理地址的方案，应该仍然可行。
+
+###  PPL的影响
+
+但是，PPL在应用程序处理器上强制执行的DART/IOMMU锁定确实是一个障碍。在boot时，XNU解析devicetree中的“pmap-io-ranges”属性来填充io_attr_table数组，该数组存储特定物理I/O地址的页面属性。然后，当尝试映射物理地址时，pmap_enter_options_internal()检查属性，看看是否应该不允许某些映射:
+
+    
+    
+    wimg_bits = pmap_cache_attributes(pn); // checks io_attr_table
+    if ( flags )
+        wimg_bits = wimg_bits & 0xFFFFFF00 | (u8)flags;
+    pte |= wimg_to_pte(wimg_bits);
+    if ( wimg_bits & 0x4000 )
+    {
+        xprr_perm = (pte >> 4) & 0xC | (pte >> 53) & 1 | (pte >> 53) & 2;
+        if ( xprr_perm == 0xB )
+            pte_perm_bits = 0x20000000000080LL;
+        else if ( xprr_perm == 3 )
+            pte_perm_bits = 0x20000000000000LL;
+        else
+            panic("Unsupported xPRR perm ...");
+        pte = pte_perm_bits | pte & ~0x600000000000C0uLL;
+    }
+    pmap_enter_pte(pmap, pte_p, pte, vaddr);
+    
+
+因此，只有清除了wimg字段中的0x4000位，我们才能将DART的I/O地址映射到我们的进程中。不幸的是，快速查看一下devicetree中的“pmap-io-ranges”属性，可以确认为每个DART设置了0x4000位:
+
+    
+    
+        addr         len        wimg     signature
+    0x620000000, 0x40000000,       0x27, 'PCIe'
+    0x2412C0000,     0x4000,     0x4007, 'DART' ; dart-sep
+    0x235004000,     0x4000,     0x4007, 'DART' ; dart-sio
+    0x24AC00000,     0x4000,     0x4007, 'DART' ; dart-aop
+    0x23B300000,     0x4000,     0x4007, 'DART' ; dart-pmp
+    0x239024000,     0x4000,     0x4007, 'DART' ; dart-usb
+    0x239028000,     0x4000,     0x4007, 'DART' ; dart-usb
+    0x267030000,     0x4000,     0x4007, 'DART' ; dart-ave
+    
+
+因此，我们无法将DART映射到用户空间以禁用它。
+
+即使PPL阻止我们映射页表和DART
+I/O地址，其他硬件组件的物理I/O地址仍然是可映射的。因此，仍然可以映射和读取某些系统组件的硬件寄存器来尝试定位内核。
+
+我最初的尝试是从IORVBAR读取，通过MMIO可访问ResetVector基地址寄存器。ResetVector是复位后在CPU上执行的第一段代码。因此，读取IORVBAR
+将为我们提供XNU ResetVector的物理地址，该地址将精确定位物理内存中的内核缓存（kernelcache）。
+
+IORVBAR映射在devicetree中每个CPU的“reg-private”地址后的偏移0x40000处;例如，在A13 CPU
+0上，它位于物理地址0x210050000。它包含同一组CoreSight和DBGWRAP
+的寄存器集的一部分，以前是用来绕过KTRR的，但是，我发现IORVBAR在A13上是不可访问的:尝试从中读取将导致panic。
+
+我花了一些时间在A13的SecureROM上搜索有意思的物理地址，后来Jann
+Horn建议我把KTRR锁定寄存器映射到苹果的内存控制器AMCC上。这些寄存器存储KTRR区域的物理内存边界，强制KTRR只读，以防止来自协处理器的攻击。
+
+![](https://p5.ssl.qhimg.com/t01e5a862dc73137ead.png)
+
+在物理地址0x200000680处映射和读取AMCC的RORGNBASEADDR寄存器，可以轻松地生成物理内存中包含kernelcache锁定区域的起始地址。使用安全缓解机制来破坏其他安全缓解机制是非常有意思的。
+
+在找到使用AMCC的正确方法之后，我研究了最后一种可能性，然后放弃绕过PPL。
+
+iOS配置了40位物理地址和16K pages
+(14位)。同时，传递给pmap_enter_options_internal()的任意物理页码是32位，当插入到级别3的转换表条目(L3
+TTE)时，它被移动14位，并用0xFFFF_FFFF_C000屏蔽。也就是说我们可以控制TTE的第45-14
+位，即使根据编程中TCR_EL1.IPS的物理地址大小，45-40位应该始终为零。
+
+如果硬件忽略了超出支持的最大物理地址大小的位，那么我们可以通过提供一个与DART
+I/O地址或页表完全匹配的物理页码来绕过PPL，但设置了一个高位。设置高位将导致映射地址无法匹配“pmap io
+ranges”中的任何地址，即使TTE将映射相同的物理地址。这样做很巧妙，因为它可以让我们绕过PPL作为内核读/写/执行的前提。
+
+不幸的是，实践证明，硬件实际上会检查超出支持的物理地址大小的TTE位是否为零。因此，我继续使用AMCC技巧来定位kernelcache。
+
+###  控制 sysctl
+
+此时，我们有了一个用于非ppl物理地址的物理读/写原语，并且知道了物理内存中的kernelcache的地址。下一步是构建一个虚拟的读/写原语。
+
+对于这一部分，我决定坚持使用已知的技术:利用sysctl()
+syscall使用的sysctl_oid树存储在kernelcache的可写内存中这一事实来操作它，并将app 沙盒允许的sysctl转换为内核读/写原语。
+
+XNU从FreeBSD继承了sysctls;它们提供对用户空间的某些内核变量的访问。例如，”hw.l1dcachesize”
+只读sysctl允许进程确定L1数据高速缓存线的大小。而“
+kern.securelevel”读/写sysctl控制“系统安全级别”，用于BSD内核部分的操作。
+
+sysctl被组织成树层次结构，树中的每个节点由sysctl_oid结构体表示。构建内核读取原语非常简单，只需为app沙盒中可读的sysctl映射sysctl_oid结构，并将目标变量指针(oid_arg1)更改为指向我们想要读取的虚拟地址。然后调用sysctl读取该地址。
+
+![](https://p5.ssl.qhimg.com/t0114af7b1bb2755a3b.png)
+
+使用sysctls构建写原语有点复杂，因为在容器沙箱配置文件中没有列出可写的sysctls。iOS 10.3.1的ziVA
+exploit通过将sysctl的oid_handler字段更改为调用copyin()来解决这个问题。但是，在像A13这样启用PAC的设备上，oid_handler是由PAC保护的，也就是说我们无法更改它的值。
+
+但是，在逆向hook_system_check_sysctlbyname()函数时，我注意到一个没有文档记录的行为:
+
+    
+    
+    // Sandbox check sysctl-read
+    ret = sb_evaluate(sandbox, 116u, &context);
+    if ( !ret )
+    {
+        // Sandbox check sysctl-write
+        if ( newlen | newptr && (namelen != 2 || name[0] != 0 || name[1] != 3) )
+            ret = sb_evaluate(sandbox, 117u, &context);
+        else
+            ret = 0;
+    }
+    
+
+出于某些原因，如果在沙箱中认为sysctl节点是可读的，那么就不会在特定的sysctl节点{0,3}上执行写检查!也就是说{0,3}在每个可读的沙箱中都是可写的，而不管沙箱配置文件是否允许对sysctl进行写操作。
+
+结果是，sysctl{0,3}的名称是“sysctl.name2mib”，这是一个可写的sysctl，用于将sysctl的字符串名转换为数字形式，这样查找起来更快。它用于实现sysctlnametomib()。因此，这个sysctl通常应该是可写的。
+
+## 0x04 回到主题
+
+###  pmap fields 之战
+
+我们已经研究了很久，但是还没有结束：我们必须打破僵局。就目前情况而言，vm_map_copyout_internal（）在“完成”的vm_map_entry
+上进行无限循环，它的vme_next指针指向自己。我们必须引导这一功能的安全返回，以保持系统的稳定。
+
+![](https://p1.ssl.qhimg.com/t01dc2fc5ee6f78d88d.png)
+
+有两个问题阻碍了这一点。首先，因为我们在pmap层将条目插入到页表中，而没有在vm_map层创建相应的虚拟条目，所以当前地址空间的pmap和vm_map视图之间存在冲突。如果没有解决这一问题，将导致进程退出时出现panic。其次，一旦循环中断，vm_map_copyout_internal()将调用vm_map_copy_insert()，这会在将破坏的vm_map_copy释放到错误区域时产生panic。
+
+我们将首先处理pmap/vm_map冲突。假设我们能够跳出for循环并允许vm_map_copyout_internal()返回。对vm_map_copy_insert()的调用发生在for循环遍历vm_map_copy中的所有条目之后，将它们从vm_map_copy的条目列表中unlinks，并将它们链接到vm_map的条目列表中。
+
+    
+    
+    static void
+    vm_map_copy_insert(
+        vm_map_t        map,
+        vm_map_entry_t  after_where,
+        vm_map_copy_t   copy)
+    {
+        vm_map_entry_t  entry;
+    
+        while (vm_map_copy_first_entry(copy) !=
+                   vm_map_copy_to_entry(copy)) {
+            entry = vm_map_copy_first_entry(copy);
+            vm_map_copy_entry_unlink(copy, entry);
+            vm_map_store_entry_link(map, after_where, entry,
+                VM_MAP_KERNEL_FLAGS_NONE);
+            after_where = entry;
+        }
+        zfree(vm_map_copy_zone, copy);
+    }
+    
+
+由于vm_map_copy的vm_map_entrys都是驻留在共享内存中的伪造对象，因此我们确实不希望将它们链接到 vm_map
+的条目列表中，在进程退出时将其释放。因此，最简单的解决方案是更新破坏的vm_map_copy 的条目列表，使其看起来为空。
+
+强制vm_map_copy
+的条目列表显示为空无疑使我们可以安全地从vm_map_copyout_internal（）返回，但是一旦进程退出，我们仍然会造成panic：
+
+    
+    
+    panic（cpu 3 caller 0xfffffff01f4b1c50）：“ pmap_tte_deallocate（）：pmap = 0xfffffff06cd8fd10 ttep = 0xfffffff0a90d0408 ptd = 0xfffffff132fc3ca0 refcnt = 0x2 \ n”
+    
+
+问题在于，在利用过程中，我们的映射原语强制pmap_enter_options()将3级转换表条目(L3
+TTEs)插入到流程的页表中，但在vm_map上层的相应计算从未产生。pmap和vm_map视图之间的区别很重要，因为pmap层要求在销毁pmap之前显式地删除所有物理映射，如果
+vm_map_entry 没有描述相应的虚拟映射，则vm_map层将不知道删除物理映射。
+
+由于PPL的原因，我们不能直接更新pmap，因此最简单的解决方法是获取一个指向带有错误页面的合法vm_map_entry的指针，并将其覆盖在pmap_enter_options()建立物理映射的虚拟地址范围之上。因此，我们将更新破坏的vm_map_copy条目列表，使其指向这个单一的“overlay”条目。
+
+最后，是时候将vm_map_copyout_internal()从for循环中断开了。
+
+    
+    
+        for (entry = vm_map_copy_first_entry(copy);
+            entry != vm_map_copy_to_entry(copy);
+            entry = entry->vme_next) {
+    
+
+vm_map_copy_to_entry(copy) 宏扩展为:
+
+    
+    
+        (struct vm_map_entry *)(&copy->c_u.hdr.links)
+    
+
+因此，为了跳出循环，我们需要处理一个vm_map_entry，其中vme_next
+指向最初传递给此函数的已损坏的vm_map_copy中c_u.hdr.links 字段。
+
+该函数目前在“done” vm_map_entry上转换，我们需要链接到一个最终的“overlay”
+vm_map_entry中，以解决pmap/vm_map冲突问题。因此，打破循环的最简单的方法是修改“overlay”条目的vme_next，使其指向&copy->c_u.hdr.links。然后更新“done”条目的vme_next，以指向覆盖条目。
+
+![](https://p5.ssl.qhimg.com/t01330383553e79f416.png)
+
+问题是前面提到的对vm_map_copy_insert()的调用，它释放vm_map_copy，好像它是ENTRY_LIST类型:
+
+    
+    
+    zfree(vm_map_copy_zone, copy);
+    
+
+但是，传递给zfree()的对象是已破坏的vm_map_copy，它是由kalloc()分配的;尝试将其释放到vm_map_copy_zone将导致panic。因此，我们需要确保将一个不同的、合法的vm_map_copy对象传递给zfree()。
+
+如果您查看了vm_map_copyout_internal（）的反汇编，vm_map_copy指针会在for循环期间溢出到堆栈中!
+
+    
+    
+    FFFFFFF007C599A4     STR     X28, [SP,#0xF0+copy]
+    FFFFFFF007C599A8     LDR     X25, [X28,#vm_map_copy.links.next]
+    FFFFFFF007C599AC     CMP     X25, X27
+    FFFFFFF007C599B0     B.EQ    loc_FFFFFFF007C59B98
+    ...                             ; The for loop
+    FFFFFFF007C59B98     LDP     X9, X19, [SP,#0xF0+dst_addr]
+    FFFFFFF007C59B9C     LDR     X8, [X19,#vm_map_copy.offset]
+    
+
+这样就可以很容易地确保传递给zfree()的指针是从vm_map_copy_zone分配的一个合法的vm_map_copy:只要在vm_map_copyout_internal()线程转换时扫描它的内核堆栈，并将指向破坏的vm_map_copy的指针与合法的指针交换。
+
+![](https://p2.ssl.qhimg.com/t013ec7b89b577f1900.gif)
+
+最后，我们已经完全修复了状态，允许vm_map_copyout_internal()中断循环并安全返回。
+
+在虚拟内核读/写原语和vm_map_copyout_internal()线程安全返回后，我们实现了我们的目标:通过将一个字节控制的堆溢出直接转换为任意物理地址映射原语。
+
+准确地说，一个几乎任意的物理地址映射原语。正如我们所看到的，PPL保护的地址无法使用此技术进行映射。
+
+单字节技术最初似乎与主流的攻击流相对应。在阅读了vm_map.c和pmap.c中的代码之后，我希望能够简单地将所有DRAM映射到我的地址空间，然后通过使用这些映射执行手动页表遍历来实现内核读/写。但实践证明，PPL通过阻止某些页面被映射来阻止这种技术在目前iOS上应用。
+
+有意思是，类似的研究在几年前也曾被提过，那时这样的研究本是可行的。为这篇文章做背景调查的时候,我遇到了一个由Aximum公司提出的名为“[iOS 6
+Kernel Security:A Hacker’s
+Guide](https://conference.hitb.org/hitbsecconf2012kul/materials/D1T2%20-%20Mark%20Dowd%20&%20Tarjei%20Mandt%20-%20iOS6%20Security.pdf)”:介绍了至少四个独立的原语，这些原语可以通过破坏vm_map_u
+copy_t的各个字段来构建：相邻内存泄漏、任意内存泄漏、扩展堆溢出，以及地址泄漏和已公开地址的堆溢出的组合。
+
+![](https://p0.ssl.qhimg.com/t01d70f290c995e92c7.png)
+
+在演示时，KERNEL_BUFFER 类型有一个稍微不同的结构，因此c_u.hdr.links.next 与存储vm_map_copy
+的kalloc（）分配大小的字段重叠。在某些平台上，仍然可以将一个字节的溢出转换为物理内存映射原语，但这将更加困难，因为这将需要映射空页和共享地址空间。但是，上述四种技术中使用的更大的溢出肯定会改变type和c_u.hdr.links.next字段。
+
+在OS X
+10.11和ios9中，修改vm_map_copy结构，删除KERNEL_BUFFER实例中冗余的分配大小和内联数据指针字段。这样做可能是为了减轻这种结构在利用中被频繁滥用的情况，尽管很难判断，因为这些字段是冗余的，可以简单地删除来清理代码。无论如何，删除这些字段将vm_map_copy更改为当前形式，将执行该技术所需的前提条件演变为单字节溢出。
+
+###  缓解机制
+
+那么，各种iOS内核漏洞攻击缓解措施在阻止单字节技术方面效果如何，如果进一步加强，效果会有多大？
+
+我考虑的缓解措施包括KASLR、PAN、PAC、PPL和zone_Required。还有许多其他的缓解措施，但它们要么不适用于堆溢出类漏洞，要么它们不是缓解这种特定技术的最佳方案。
+
+首先，内核地址随机化(KASLR)。在虚拟内存中移动kernelcache
+image，以及kernel_map和submaps(zone_map、kalloc_map等)的随机化，它们统称为“kernel
+heap”。内核堆随机化表明确实需要某种方法来确定我们在其中伪造的VM对象的内核/用户共享内存缓冲区的地址。。但是，一旦有了共享缓冲区的地址，两种形式的随机化都不会对该技术产生太大影响，原因有两个：首先，存在通用的iOS内核堆原语，vm_map_copy
+之前分配的区域，可用于将所有分配放入目标kalloc中。所以随机化不会阻止初始内存破坏。其次，在破坏发生后，授权的原语是任意物理读/写的，这与虚拟地址随机化无关。
+
+唯一影响exploit的地址随机化是物理内存中的kernelcache加载地址的随机化。当iOS启动时，iBoot以随机地址将内核缓存加载到物理DRAM中。正如第一部分所讨论的，这种物理随机化只有32
+MB，但是，改进的随机化不会有帮助，因为AMCC硬件寄存器可以被映射到物理内存中的内核缓存，而不管它位于哪里。
+
+其次考虑PAN，这是一种ARMv8.1安全缓解措施，可防止内核直接访问用户空间虚拟内存，从而防止覆盖指向内核对象的指针，以使它们指向用户空间中的伪造的对象的常见技术。绕过PAN是此技术的前提条件:我们需要在一个已知地址上建立vm_map_entry、vm_object和vm_page对象的结构。虽然对于这个POC来说，对共享缓冲区地址进行硬编码已经足够好了，但要真正利用它，还需要更好的技术。
+
+PAC，即指针身份验证代码，是苹果A12
+SOC中引入的ARMv8.3安全特性。iOS内核使用PAC有两个目的:首先是针对常见漏洞的利用缓解措施，其次是作为内核控制流完整性的一种形式，以防止使用内核读/写的攻击者获得任意代码执行。在这个设置中，我们只对PAC作为一种漏洞利用缓解措施感兴趣。
+
+Apple的网站上有一个表格显示了各种类型的指针是如何被PAC保护的，这些指针大部分都是被编译器自动PAC保护的，到目前为止PAC对c++对象的影响最大，尤其是IOKit。同时，单字节利用技术只涉及vm_map_copy、vm_map_entry、vm_object和vm_page对象，这些都是内核Mach部分中的普通C结构，因此不受PAC的影响。
+
+但是，在BlackHat 2019上，苹果公司的Ivan Krstić
+将很快用于保护某些“重要的数据结构成员”，包括“进程、任务、代码签名、虚拟内存子系统，IPC结构”。截至2020年5月，增强的PAC保护尚未发布，但如果实施，它可能会有效地阻止单字节技术。
+
+下一个缓解是PPL，它代表页面保护层。PPL在管理页表的代码和XNU内核之间创建了一个安全边界。这是除PAN之外唯一影响该利用技术的缓解措施。
+
+在实践中，PPL在允许将哪些物理地址映射到用户空间进程方面要严格得多。例如，用户空间进程访问内核缓存页面没有合法的用例，因此在kernelcache页面上设置PVH_FLAG_LOCKDOWN这样的标志可能是一个微弱但明智的步骤。一般而言，对于大多数进程而言，可能会使应用处理器的DRAM区域之外的地址（包括用于硬件组件的物理I/O地址）无法映射，可能会有一个特殊情况下逃逸权限。
+
+最后一个缓解是zone_require，这是在iOS
+13中引入的一个软件缓解机制，它在使用一些内核指针之前检查它们是否从预期的zalloc区域分配。我认为XNU的区域分配器最初并不是为了降低安全性，在漏洞利用期间经常成为目标，许多对象(特别是ipc_ports、tasks和threads)都是从专属zone分配的。
+
+理论上，zone_require可以用来保护从专属区域分配的几乎所有对象;但事实上，kernelcache中的绝大多数zone_require()检查都是在ipc_port对象上进行的。因为单字节技术避免了使用伪造的Mach
+ports，所以现有的zone_require()检查都不适用。
+
+但是，如果扩大了zone_require的使用范围，则有可能缓解该技术。特别是，一旦vm_map_copyout_internal()确定了vm_map_copy的类型为ENTRY_LIST，那么在vm_map_copy中插入一个zone_require()调用，将确保vm_map_copy不会是具有已破坏的KERNEL_BUFFER对象。当然，与所有缓解措施一样，这也不是100%可靠的:在exploit中使用该技术仍然可以，但是与单字节溢出相比，它可能需要更好的原语。
+
+## 0x05 “附录A”：漏洞利用史
+
+在我看来，在这篇文章中介绍的单字节利用技术与至少自iOS
+10以来采用的传统方法是有区别的。自从iOS10以来，我发现的24个原始公开漏洞中，有19个使用伪造Mach ports
+作为exploitation原语。在iOS10.3 以来公布的20个exploits中，有18个是通过构建一个伪造的内核task port，这使得Mach
+ports成为目前iOS内核利用的特性。
+
+在经历了使用单字节技术在模拟堆溢出的基础上构建内核读/写原语的过程之后，，我可以看到使用内核task
+port的逻辑。自从iOS10之后，我看到的大多数exploits都有一个相对模块化的设计和流程：获得初始原语，操作状态，采用漏洞利用技术来构建更强大的原语，再次对状态进行操作，然后应用另一种技术，等等，直到最后你有足够的能力来构建一个伪造的内核task
+port。整个过程都有所检查：初始破坏、挂起的Mach
+port、4字节读原语等等。每一种情况下的具体步骤顺序是不同的，但大体上来讲，不同exploits的设计是一致的。由于这种趋势，最后一个exploits的步骤几乎可以与其他任何exploits的步骤互换。
+
+这种模块化并不适用于这种单字节技术。一旦启动了vm_map_copyout_internal()循环，就会一直执行这个过程，直到获得内核读/写原语为止。并且由于vm_map_copyout_internal（）在循环期间持有
+vm_map
+锁，因此无法执行任何虚拟内存操作(比如分配虚拟内存)，而这些操作通常是常规漏洞利用中不可缺少的步骤。因此，编写这个exploit感觉有所不同，更麻烦。
+
+话虽如此，单字节方法给我直接的感觉是“技术上更精巧”:它将较弱的前提条件直接转化为非常强大的原语，同时避开了大多数缓解措施，避免了通用iOS漏洞利用中出现的大多数不稳定因素。在我所分析的24个iOS漏洞中，有22个依赖于重新分配一个最近被释放的对象的slot。除了SockPuppet这个例外，这是一个危险操作，因为另一个线程可能会重新分配该slot。此外，自从iOS
+11以来的19个exploits中有11个依赖于强制垃圾回收区域，这是一个更危险的步骤，通常需要几秒钟才能完成。
+
+同时，单字节技术没有内在的不稳定因素或大量的时间成本。看起来更像是我认为熟练的攻击者会感兴趣的技术类型。即使在漏洞利用过程中出了点问题，并且内核中取消了错误地址的引用，持有
+vm_map
+锁的也证明该错误会导致死锁而不是内核崩溃，exploit失败看起来像冷冻过程而不是系统崩溃。你甚至可以在应用切换UI中“kill”死锁应用，然后继续使用该设备。
+
+## 0x06 “附录B”：结论
+
+最后，我将回到本文最开始的三个问题：
+
+  * 1.将内核task port作为目标真的是最好的利用方法吗？
+  * 2.还是这种趋势掩盖了其他也许更好的技术？
+  * 3.现有的iOS内核缓解措施是否同样有效地防止了其他以前未被发现的漏洞利用方法？
+
+这些问题都太“模糊”，无法给出具体的答案，但是无论如何我都会尝试回答。
+
+对于第一个问题，我认为答案是否定的，内核task
+port不是唯一的最佳利用方法。单字节技术在大多数情况下都一样好用，而且在我个人看来，我希望还有其他尚未公布的技术也一样好用。
+
+对于第二个问题，关于内核task
+port的趋势是否已经掩盖了其他技术:我认为没有足够公开的iOS研究来给出结论，但我的直觉是肯定的。根据我自己的经验，了解我要寻找的漏洞类型影响了我所发现的漏洞，并且回顾过去的exploits指导了我在漏洞利用过程中的选择。
+
+最后，现有的iOS内核漏洞利用缓解措施是否有效地防止了未被发现的漏洞利用方法？在我为单字节技术开发了POC之后，我认为答案是否定的；但是在这次分析的最后，我不太确定。我不认为PPL是专门设计来防止这种技术的，PAC并没有做任何事情来阻止这种技术，但是将来PAC保护的指针可能会阻止这种技术。虽然zone_require根本没有影响该exploit，但是添加一行代码将是从单字节溢出增强为跨越区域边界的溢出所需的前提条件。因此，即使以目前的形式，Apple的内核漏洞利用缓解措施对于这种未公开的技术也无效。
+
+最后一个想法。在2018年公开的Deja-XNU中，Ian Beer考虑了四年前iOS内核利用的”state-of-the-art” ：
+
+一段时间以来，我一直想尝试的一个想法是，利用我在iOS学习到的知识，重新研究过去的漏洞，然后尝试再次利用它们，我希望这篇文章能让我们了解到几年前最新的iOS漏洞利用是什么样子的，如果我们能进一步思考目前最新的iOS漏洞利用是什么样子的话，这篇文章可能会对我们有所帮助。
+
+这是一个需要考虑的问题，因为作为防守方，我们从来没有看到过最前沿攻击者的能力。如果攻击者在私下使用的技术和防守方所知道的技术之间出现了差距，则防守方可能会浪费资源来缓解这种技术。
+
+我不认为这种技术代表了目前最新的技术。就像Deja-XNU一样，它可能代表了几年前的水平。值得考虑的是，在此期间，最新的技术可能会走向什么方向。
+
+本文翻译自googleprojectzero.blogspot.com
+[原文链接](https://googleprojectzero.blogspot.com/2020/07/one-byte-to-rule-them-all.html)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **qwert** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/212530](/post/id/212530)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[googleprojectzero.blogspot.com](https://googleprojectzero.blogspot.com/2020/07/one-byte-to-rule-them-all.html)
+
+如若转载,请注明出处： <https://googleprojectzero.blogspot.com/2020/07/one-byte-to-rule-them-all.html>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞分析](/tag/漏洞分析)
+
+ **+1** __2赞
+
+ __收藏
+
+![](https://p2.ssl.qhimg.com/t01de37baca165a5b78.png) qwert
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

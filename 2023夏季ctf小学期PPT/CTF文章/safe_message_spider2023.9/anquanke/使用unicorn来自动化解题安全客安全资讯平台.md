@@ -1,0 +1,416 @@
+# 使用unicorn来自动化解题
+
+阅读量 **254224**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-07-12 10:00:57
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t01088f147b2904dab8.jpg)
+
+## 介绍
+
+这里题目中的 **自动化解题** 可能有一些歧义，我这里指的是像 **TCTF 2021 FEA 、MTCTF 2021 100mazes**
+这样存在大量相似的模块或者功能需要通过解析来自动化的提取变量数据，然后根据这些变量数据来解题。
+
+最近很多比赛出现了 unicorn 相关的题目，所以特地去了解和学习了 unicorn 这款模拟执行工具。Unicorn 是一个基于 QEMU
+的轻量级、多平台、多架构的 CPU 模拟器框架，支持非常多的架构和功能，扩展性非常强，所以在我们 CTF 实战的时候，使用他来分析一些 **复杂的题目**
+或者 **不方便模拟的架构的题目** 都比较合适。
+
+## 使用方法
+
+这里我针对使用 Python 语言、AMD64
+架构进行介绍，其他架构的操作类似，也可以参考[官方样例程序](https://github.com/unicorn-engine/unicorn/tree/master/bindings/python)进行学习。
+
+###  导入模块并初始化模块
+
+    
+    
+    from unicorn import *
+    from unicorn.x86_const import *
+    uc = Uc(UC_ARCH_X86, UC_MODE_64)
+    
+
+导入之后接下来只需要对 uc 这个对象进行操作即可
+
+###  寄存器读写
+
+    
+    
+    uc.reg_write(UC_X86_REG_RAX, 0x71f3029efd49d41d)
+    uc.reg_write(UC_X86_REG_RBX, 0xd87b45277f133ddb)
+    uc.reg_write(UC_X86_REG_RCX, 0xab40d1ffd8afc461)
+    uc.reg_write(UC_X86_REG_RDX, 0x919317b4a733f01)
+    uc.reg_write(UC_X86_REG_RSI, 0x4c24e753a17ea358)
+    uc.reg_write(UC_X86_REG_RDI, 0xe509a57d2571ce96)
+    uc.reg_write(UC_X86_REG_R8, 0xea5b108cc2b9ab1f)
+    uc.reg_write(UC_X86_REG_R9, 0x19ec097c8eb618c1)
+    uc.reg_write(UC_X86_REG_R10, 0xec45774f00c5f682)
+    uc.reg_write(UC_X86_REG_R11, 0xe17e9dbec8c074aa)
+    uc.reg_write(UC_X86_REG_R12, 0x80f86a8dc0f6d457)
+    uc.reg_write(UC_X86_REG_R13, 0x48288ca5671c5492)
+    uc.reg_write(UC_X86_REG_R14, 0x595f72f6e4017f6e)
+    uc.reg_write(UC_X86_REG_R15, 0x1efd97aea331cccc)
+    uc.reg_write(UC_X86_REG_RSP, ADDRESS + 0x200000)
+    uc.reg_write(UC_X86_REG_RIP, CODE + 0x88)
+    rax = mu.reg_read(UC_X86_REG_RAX)
+    rbx = mu.reg_read(UC_X86_REG_RBX)
+    rcx = mu.reg_read(UC_X86_REG_RCX)
+    rdx = mu.reg_read(UC_X86_REG_RDX)
+    rsi = mu.reg_read(UC_X86_REG_RSI)
+    rdi = mu.reg_read(UC_X86_REG_RDI)
+    r8 = mu.reg_read(UC_X86_REG_R8)
+    r9 = mu.reg_read(UC_X86_REG_R9)
+    r10 = mu.reg_read(UC_X86_REG_R10)
+    r11 = mu.reg_read(UC_X86_REG_R11)
+    r12 = mu.reg_read(UC_X86_REG_R12)
+    r13 = mu.reg_read(UC_X86_REG_R13)
+    r14 = mu.reg_read(UC_X86_REG_R14)
+    r15 = mu.reg_read(UC_X86_REG_R15)
+    rsp = mu.reg_read(UC_X86_REG_RSP)
+    rip = mu.reg_read(UC_X86_REG_RIP)
+    
+
+支持对所有寄存器进行读写操作，只需要调用 reg_write 或者 reg_read 即可
+
+###  内存读写
+
+    
+    
+    uc.mem_write(CODE, CODE_DATA)
+    uc.mem_read(rbp, 8)
+    
+
+mem_write：第一个参数传递要写入的地址，第二个参数传递要写入的数据
+
+mem_read：第一个参数传递要读取的地址，第二个参数传递要读取的长度
+
+###  内存映射
+
+    
+    
+    uc.mem_map(ADDRESS, 2 * 1024 * 1024)
+    
+
+mem_map：第一个参数传递要映射的地址，第二个参数传递要映射的长度（按页对齐）。
+
+如果要执行代码，那么必须需要先映射一块内存地址，然后再通过内存的读写把代码数据写入后执行。
+
+###  钩子
+
+####  对每个块的回调
+
+    
+    
+    def hook_block(uc, address, size, user_data):
+        print(">>> Tracing basic block at 0x%x, block size = 0x%x" %(address, size))
+    uc.hook_add(UC_HOOK_BLOCK, hook_block)
+    
+
+####  对每一行代码的回调
+
+    
+    
+    def hook_code64(uc, address, size, user_data):
+        print(">>> Tracing instruction at 0x%x, instruction size = 0x%x" %(address, size))
+        rip = uc.reg_read(UC_X86_REG_RIP)
+        print(">>> RIP is 0x%x" %rip);
+    
+    uc.hook_add(UC_HOOK_CODE, hook_code64, None, ADDRESS, ADDRESS+20)
+    
+
+####  无效内存访问的回调
+
+    
+    
+    def hook_mem_invalid(uc, access, address, size, value, user_data):
+        if access == UC_MEM_WRITE_UNMAPPED:
+            print(">>> Missing memory is being WRITE at 0x%x, data size = %u, data value = 0x%x" \
+                    %(address, size, value))
+            # map this memory in with 2MB in size
+            uc.mem_map(0xaaaa0000, 2 * 1024*1024)
+            # return True to indicate we want to continue emulation
+            return True
+        else:
+            # return False to indicate we want to stop emulation
+            return False
+    
+    mu.hook_add(UC_HOOK_MEM_READ_UNMAPPED | UC_HOOK_MEM_WRITE_UNMAPPED, hook_mem_invalid)
+    
+
+####  内存访问的回调
+
+    
+    
+    def hook_mem_access(uc, access, address, size, value, user_data):
+        if access == UC_MEM_WRITE:
+            print(">>> Memory is being WRITE at 0x%x, data size = %u, data value = 0x%x" \
+                    %(address, size, value))
+        else:   # READ
+            print(">>> Memory is being READ at 0x%x, data size = %u" \
+                    %(address, size))
+    
+    uc.hook_add(UC_HOOK_MEM_WRITE, hook_mem_access)
+    uc.hook_add(UC_HOOK_MEM_READ, hook_mem_access)
+    
+
+####  针对某个指令的回调
+
+    
+    
+    def hook_syscall(uc, user_data):
+        arg_regs = [UC_X86_REG_RDI, UC_X86_REG_RSI, UC_X86_REG_RDX, UC_X86_REG_R10, UC_X86_REG_R8, UC_X86_REG_R9]
+        rax = uc.reg_read(UC_X86_REG_RAX)
+        if rax in SYSCALL_MAP.keys():
+            ff, n = SYSCALL_MAP[rax]
+            args = []
+            while n > 0:
+                args.append(uc.reg_read(arg_regs.pop(0)))
+                n -= 1
+            try:
+                ret = ff(uc, *args) & 0xffffffffffffffff
+            except Exception as e:
+                uc.emu_stop()
+                return
+        else:
+            ret = 0xffffffffffffffff
+        uc.reg_write(UC_X86_REG_RAX, ret)
+    
+    SYSCALL_MAP = {
+        0: (sys_read, 3),
+        1: (sys_write, 3),
+        60: (sys_exit, 1),
+    }
+    
+     uc.hook_add(UC_HOOK_INSN, hook_syscall, None, 1, 0, UC_X86_INS_SYSCALL)
+    
+
+由于并不是程序中的所有代码都可以成功模拟，所以需要对程序的内容进行一些 hook，通过这些 hook 来模拟一些代码的执行（例如 syscall
+无法模拟，就需要使用回调的方式模拟 syscall 的执行），也正是通过这些 Hook 操作，使得我们程序的灵活性大大增强，可以实现各种各样的功能。
+
+###  开始和结束
+
+    
+    
+    uc.emu_start(CODE, CODE + 0x3000 - 1)
+    uc.emu_stop()
+    
+
+emu_start：来执行模拟，第一个参数填写模拟的开始地址，第二个参数填写模拟的结束地址
+
+emu_stop：用来结束模拟
+
+## 实战
+
+通过对 unicorn 函数的基本学习，我们大概知道了 unicorn 该如何使用，接下来就来实战模拟来做一道题 – MTCTF2021 100mazes
+
+![](https://p3.ssl.qhimg.com/t01fb988c4ea76a5e07.png)
+
+题目实现了 100 个迷宫，并且每个迷宫的内容各不相同。
+
+![](https://p2.ssl.qhimg.com/t014d5cdf3c04c7728a.png)
+
+###  为何要用 unicorn？
+
+迷宫的逻辑比较简单，只要从它给出的起点开始走 15 步，并且这 15
+步不碰到任何的“墙壁”即可通过。但是任何一个迷宫都是使用代码进行写入迷宫数据，这使得我们难以直接使用 IDA
+提取所有数据，并且对于每个迷宫代表的行动方向的字符和起点也不一样，这使得我们很难手动对所有的函数进行处理。
+
+这时候，这样的题目我们可以可以考虑使用 unicorn 来提取迷宫的变量，从而自动化的处理，加快做题的速度，拿到一血。
+
+###  提取变量数据
+
+![](https://p0.ssl.qhimg.com/t0110683f6d30deb209.png)
+
+观察到栈上的数据是这样的，我们可以直接根据 rbp 来寻址提取各个数据的内容，然后再进行解密操作。
+
+###  寻找结束位置
+
+![](https://p0.ssl.qhimg.com/t0114bd0c6baaacc442.png)
+
+并且注意到这里有一个 getchar 函数，由于我们没有装载 libc，所以这个函数是无法被 unicorn
+所模拟的，我们就可以以这里为当前迷宫读取结束的位置，hook 所有执行到这个函数的代码，并且数据进行解析，并且在执行完这个函数后执行 retn
+到上一层的函数。
+
+###  代码分析
+
+由于本文主要侧重点不在于迷宫代码上，所以不分析如何求解这个迷宫的这个算法模型上，而是着重在于如何提取数据来实战应用上，这是一个解题的思路，当下次遇到的时候，可能就不再是迷宫题而是其他题目了，需要灵活的运用。from
+hashlib import md5
+
+    
+    
+    from hashlib import md5
+    from pwn import *
+    from unicorn import *
+    from unicorn.x86_const import *
+    
+    BASE = 0
+    CODE = BASE + 0x0
+    CODE_SIZE = 0x100000
+    STACK = 0x7F00000000
+    STACK_SIZE = 0x100000
+    FS = 0x7FF0000000
+    FS_SIZE = 0x100000
+    CODE_DATA = ""
+    
+    dx = [0, 0, -1, 1]
+    dy = [-1, 1, 0, 0]
+    str_map = "WSAD"
+    ans = ""
+    map_data = []
+    ans_map = {}
+    all_input = ""
+    
+    
+    def dfs(t, f_x, f_y, x, y):
+        global map_data, str_map, ans_map, ans, dx, dy
+        if t == 15:
+            # print('ok')
+            return True
+        for i in range(4):
+            nx = x + dx[i]
+            ny = y + dy[i]
+            if 0 <= nx < 25 and 0 <= ny < 25 and not (f_x == nx and f_y == ny) and chr(map_data[ny * 25 + nx]) == '.':
+                if dfs(t + 1, x, y, nx, ny):
+                    ans = str_map[i] + ans
+                    return True
+        return False
+    
+    
+    def hook_code(uc, address, size, user_data):
+        global map_data, str_map, ans_map, ans, all_input
+        # print('>>> Tracing instruction at 0x%x, instruction size = 0x%x' % (address, size))
+        assert isinstance(uc, Uc)
+        code = uc.mem_read(address, 4)
+        if code == b"\x48\x0F\xC7\xF0":
+            uc.reg_write(UC_X86_REG_RIP, address + 4)
+    
+        if address == 0x640:  # printf
+            rsp = uc.reg_read(UC_X86_REG_RSP)
+            retn_addr = u64(uc.mem_read(rsp, 8))
+            uc.reg_write(UC_X86_REG_RIP, retn_addr)
+        elif address == 0x650:  # getchar
+            rbp = uc.reg_read(UC_X86_REG_RBP)
+            maze_data = uc.mem_read(rbp - 0xC6A, 0x625)
+            step_data = uc.mem_read(rbp - 0x9F9, 4).decode()
+            xor_data = uc.mem_read(rbp - 0x9D0, 0x9C4)
+            lr_val = u32(uc.mem_read(rbp - 0x9F4, 4))
+            ur_val = u32(uc.mem_read(rbp - 0x9F0, 4))
+    
+            maze_data = list(maze_data)
+            for i in range(0, 0x9C4, 4):
+                maze_data[i // 4] ^= u32(xor_data[i: i + 4])
+    
+            for i in range(25):
+                line_data = ""
+                for j in range(25):
+                    line_data += chr(maze_data[i * 25 + j])
+                # print(line_data)
+    
+            map_data = maze_data
+            str_map = step_data
+            ans = ""
+            assert dfs(0, -1, -1, lr_val, ur_val)
+            # print(ans)
+            all_input += ans
+    
+            # leave;ret
+            rbp = uc.reg_read(UC_X86_REG_RBP)
+            new_rbp = u64(uc.mem_read(rbp, 8))
+            retn_addr = u64(uc.mem_read(rbp + 8, 8))
+            uc.reg_write(UC_X86_REG_RBP, new_rbp)
+            uc.reg_write(UC_X86_REG_RSP, rbp + 0x18)
+            uc.reg_write(UC_X86_REG_RIP, retn_addr)
+    
+    
+    def init(uc):
+        uc.mem_map(CODE, CODE_SIZE, UC_PROT_ALL)
+        uc.mem_map(STACK, STACK_SIZE, UC_PROT_ALL)
+    
+        uc.mem_write(CODE, CODE_DATA)
+        uc.reg_write(UC_X86_REG_RSP, STACK + 0x1000)
+    
+        uc.hook_add(UC_HOOK_CODE, hook_code)
+    
+    
+    if __name__ == '__main__':
+        with open('C:\\Users\\wjh\\Desktop\\100mazes', "rb") as f:
+            CODE_DATA = f.read()
+        uc = Uc(UC_ARCH_X86, UC_MODE_64)
+        main_addr = 0x00000000000A6AA8
+        main_end = 0x00000000000A7344
+        init(uc)
+        try:
+            uc.emu_start(CODE + main_addr, CODE + main_end)
+        except Exception as e:
+            print(e)
+    
+        print(all_input)
+        d = md5(all_input.encode()).hexdigest()
+        print("flag{" + d[0:8] + "-" + d[8:12] + "-" + d[12:16] + "-" + d[16:20] + "-" + d[20:32] + "}")
+    
+
+可以结合上述的描述来尝试理解一下代码，我这里分析几处比较重要的地方
+
+首先是，程序中除了代码空间还存在栈空间，所以我们除了需要映射代码空间，还需要映射一块足够大的栈空间，并且赋值给 RSP
+寄存器适当的位置（最好选择一个中间位置）。
+
+接下来我是用一个 hook
+钩子来对每一行指令进行检查（在实际使用的时候都最好先挂上这样的一个钩子便于确认程序在哪里出现了异常），并且为了偷懒，直接在这个钩子中对地址进行判断来做相应的操作。
+
+1.对 rdrand rax 这个指令直接跳过，因为似乎 unicorn
+无法正确的识别这个指令，并且这个指令对程序流程并没有实际上的影响，所以这里我直接跳过。
+
+![](https://p5.ssl.qhimg.com/t017506cba387d4f346.png)
+
+2.对 printf 函数直接跳过，但是由于 plt[@printf](https://github.com/printf "@printf")
+的实现问题，我这里需要手动模拟 retn 操作，这再次体现了 unicorn 的灵活性。
+
+3.对于遇到 getchar 函数的时候，执行读取迷宫数据操作，读取之后进行 dfs 寻找答案，并组合输出，由于题目要求的是对最后的所有输入取 md5 作为
+flag，所以这里还保存了所有的输入。这里我尝试手动模拟了 leave;ret
+来返回到主函数，不进行后续的验证，不知道还没有更好的解决方法，请各位师傅指教。
+
+## 总结
+
+unicorn 的实用价值非常的高，他的实现也非常的完善，相信以后在比赛中的出现也会越来越多，所以对于二进制方向的选手来说了解和掌握是必须的，例如这次比赛
+Pwn 也出了一道结合 unicorn 的题目。本文对于 unicorn 的应用做了一些最为基础的介绍，希望本文文章抛砖引玉，能够看到各位师傅
+unicorn 更为深刻的理解和使用。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **wjh** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/246451](/post/id/246451)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+  * [RE](/tag/RE)
+
+ **+1** __12赞
+
+ __收藏
+
+![](https://p4.ssl.qhimg.com/t0162586615c462960c.png) wjh
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

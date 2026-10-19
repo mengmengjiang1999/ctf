@@ -1,0 +1,546 @@
+# 【技术分享】PDF文件解析与PDF恶代分析中的一些坑
+
+阅读量 **317438**
+
+|评论 **3**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-11-01 10:45:16
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：安全客
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+作者：[redpain](http://bobao.360.cn/member/contribute?uid=2723660229)
+
+预估稿费：400RMB
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+**简介**
+
+最近在做文档类的恶代检测，写个总结。
+
+本篇文章负责介绍pdf文档的格式以及恶代分析中需要注意的问题以及相应工具推荐。希望能给各位做恶代分析时提供一些帮助。
+
+后序会更新一些其他文档格式解析与恶代分析内容等，欢迎各位关注（
+
+文章结构：
+
+**PDF文件格式介绍**
+
+**以二进制文本解析Pdf文档结构**
+
+**Pdf文件混淆**
+
+**关键字**
+
+**流的提取**
+
+**一些坑**
+
+**常用分析工具推荐**
+
+**References**
+
+**  
+**
+
+**PDF文件格式介绍**
+
+PDF（便携式文件格式，Portable Document Format）是由Adobe
+Systems于1993年基于文件交换所发展出的一种文件格式。Adobe公司素有“漏洞之王”的美誉，所以学习PDF文件格式对研究分析漏洞具有极大帮助。PDF格式较为复杂，本文以研究漏洞的目的分析PDF格式，探寻如何找出并分析PDF中存在的恶意代码，而并非做一个详细的PDF
+parser解析器，因此会省略对不相关关键字的介绍，请各位留意。
+
+PDF的结构可以从文件结构和逻辑结构两个方面来理解。PDF的文件结构指的是其文件物理组织方式，逻辑结构则指的是其内容的逻辑组织方式。
+
+**PDF的文件结构**
+
+PDF文件格式包含以下4个部分：
+
+**文件头——指明了该文件所遵从的PDF规范的版本号，它出现在PDF文件的第一行。**
+
+**文件体——又称对象集合，PDF文件的主要部分，由一系列对象组成。**
+
+**交叉引用表——对对象进行随机存取而设立的一个间接对象的地址索引表。（实际以偏移+索引的方式储存对象地址，下文会提及）**
+
+**文件尾——声明了交叉引用表的地址，即指明了文件体的根对象（Catalog），从而能够找到PDF文件中各个对象体的位置，达到随机访问。另外还保存了PDF文件的加密等安全信息。**
+
+**PDF文件格式图示：**
+
+**PDF文件的逻辑结构**
+
+本段主要介绍PDF文件体的读取方式。
+
+作为一种结构化的文件格式，一个PDF文档是由一些称为“对象”的模块组成的。每个对象都有数字标号，这样的话可以这些对象就可以被其他的对象所引用。这些对象不需要按照顺序出现在PDF文档里面，出现的顺序可以是任意的，比如一个PDF文件有3页，第3页可以出现在第1页以前，对象按照顺序出现唯一的好处就是能够增加文件的可读性，对象的信息以偏移+索引的形式保存在交叉引用表内。
+
+文件尾说明了根对象的对象号，并且说明交叉引用表的位置，通过对交叉引用表的查询可以找到目录对象(Catalog)。这个目录对象是该PDF文档的根对象，包含PDF文档的大纲(outline)和页面组对象（pages）引用。大纲对象是指PDF文件的书签树；页面组对象（pages）包含该文件的页面数，各个页面对象(page)的对象号。
+
+**PDF的层级结构图示：**
+
+页面（page）对象为PDF中最重要的对象，包含如何显示该页面的信息，例如使用的字体，包含的内容（文字，图片等），页面的大小。里面的信息可以直接给出，当然里面的子项更多的是对其他对象的引用，真正的信息存放在其他对象里面。页面中包含的信息是包含在一个称为流（stream）的对象里，这个流的长度（字节数）必须直接给出或指向另外一个对象（包含一个整数值，表明这个流的长度）。
+
+可见stream流对象我们恶代分析需要获取的重点。
+
+**页面信息图示：**
+
+理解了上面的内容之后，我们可以得出针对恶代分析的PDF文件的大致解析思路：
+
+**文件去除混淆（下详）**
+
+**↓**
+
+**查找关键字**
+
+**↓**
+
+**根据关键字获得可能存在恶意代码的流或者buffer**
+
+**↓**
+
+**解码流获取恶意代码**
+
+当然，也可以采取针对PDF层级结构的文档解析方式，见仁见智，因人而异。
+
+**  
+**
+
+**以二进制文本解析Pdf文档结构**
+
+PDF文件是一种文本和二进制混排的格式，但是Adobe更愿意让人把它当成二进制的文件，所以，PDF文件可以直接拖入16进制编辑器中打开。前面我们介绍了PDF的文件结构以及逻辑结构，现在我们在16进制编辑器中打开PDF文件，更直白的展示PDF的关键字段以及文件结构。
+
+    
+    
+    %PDF-1.6 #文件头+版本号，16进制读取文件0x25 0x50 0x44 0x46开头即证明是pdf文件
+    %çóÏÓ    #下面就是很多的Object对象
+    2 0 obj  #Object对象，其中2是Obj顺序号，0是Obj的版本号，obj也是对象开始的标志
+    <<       #<<>>之间为Object对象的字典内容，包含关键字
+    [/ICCBased 3 0 R]
+    >>
+    Endobj   #Object结束关键字
+    7 0 obj
+    <<
+    /Filter
+    /FlateDecode   #流对象的压缩方式为/FlateDecode  
+    /Length 148    #流对象的长度
+    >>
+    Stream         #流对象
+    #文件内容信息，注：此处为直观从而手动填写的
+    Endstream      #流对象结束标志
+    Endobj
+    8 0 obj
+    <<
+    /Contents 7 0 R              #页面内容对象的对象号为7
+    /MediaBox [0 0 595.2 841.68] #页面显示大小，以像素为单位
+    /PageIndex 1
+    /Parent 1 0 R               #其父对象号为1以及Pages对象
+    /Resources                  #该页包含的资源
+    <</Font <</F4 4 0 R >>      #字体的类型
+    /Shading <<>>
+    /XObject <<>>               #外部对象
+    /ColorSpace <</CS1 2 0 R>> 
+    >>
+    /Type /Page
+    >>
+    Endobj
+    1 0 obj
+    <<
+    /Count 1        #页码数量为1
+    /Kids [8 0 R ]  #kids对象说明它的子页对象为8
+    /Type /Pages
+    >>
+    Endobj
+    13 0 obj
+    <<
+    /Author (? Cryin')
+    /CreationDate (D:20100926145832+08'00')
+    /Title (? PDF文件格式分析)
+    >>
+    endobj
+    Xref           #表示交叉引用表开始
+    0 14           #0表明引用表描述的对象编号从0开始，8说明共有8个对象#此行在交叉引用表中可出现多个
+    0000000000 65536 f #一般pdf都是以这行开始交叉引用表的，起始地址0和产生号
+    0000003195 00000 n #表示对象1，就是catalog，3195为偏移地址n表示对象在使用
+    0000000018 00000 n
+    0000000051 00000 n
+    0000003464 00000 n
+    0000000000 00000 f
+    0000004282 00000 n
+    0000002728 00000 n
+    0000002992 00000 n
+    0000003256 00000 n
+    0000003892 00000 n
+    0000003620 00000 n
+    0000008660 00000 n
+    0000008712 00000 n
+    Trailer      #说明文件尾对象开始
+    <</Size 14   #14说明PDF文件对象数目
+    /Root 12 0 R #说明跟对象号为12
+    /Info 13 0 R>>
+    startxref
+    8980     #8980为交叉引用表的偏移地址，此处为十进制表示
+    %%EOF    #文件结束标志
+
+对于对象的额外解释：如果一个样本文件的交叉引用表格式如下
+
+    
+    
+    xref
+    0 5
+    0000000000 00000 n #第1行
+    0000004996 00000 n #第2行
+    0000000022 00000 n #第3行
+    0000005101 00000 n #第4行
+    0000004976 00000 n #第5行
+    0000004996 00000 n #第n行
+    4 0 obj
+    Xxxxx
+    endobj
+
+即交叉引用表中第五行顺序数为4的对象，其偏移为4976  
+
+**  
+**
+
+**Pdf文件混淆**
+
+如图，下面的样本进行了混淆
+
+    
+    
+    %PDF-1.5
+    1 0 obj
+    <</#54#79P#65 R 0 5
+    O#70e#6e#41c#74i#6fn 3 Pages C#61ta#6c#6f#67>>
+    endobj
+
+解释：<<>>代表obj对象之间的字典内容，保存了流的关键字和特征信息，因此去除混淆是必要的第一步操作，pdf文件的混淆只出现在这里#54代表0x54，上面的内容去除混淆之后即为
+
+    
+    
+    1 0 obj
+    <</TyPe R 0 5 OpenAction 3 Pages
+    Catalog>>
+    endobj
+
+**  
+**
+
+**关键字**
+
+下面介绍了PDF文件解析时所需要的关键字
+
+    
+    
+    obj            #obj对象开始
+    endobj         #obj对象结束
+    stream         #stream流对象开始
+    endstream      #stream流对象结束
+    xref           #交叉引用表开始
+    trailer        #文件尾对象开始
+    startxref      #交叉引用表结束
+    /Page        #文件页数
+    /Encrypt       #是否加密
+    /ObjStm        #objectstreams的数量，objectstreams可包含其他Object对象，即嵌套
+    /JS            #代表javascript嵌有JavaScript代码，可直接提取恶意代码
+    /JavaScript    #代表javascript嵌有JavaScript代码，可直接提取恶意代码
+    /AA            #以下三个为特定特征，打开对象自动执行
+    /OpenAction
+    /AcroForm
+    /URI           #内嵌url链接
+    /Filter        #/Filter字段出现，表示了下面的stream流进行了加密
+    /RichMedia     #富文本
+    /Launch        #执行Action的次数与OpenAction字段关联
+    #/xxxx 带斜杠的关键字包含在<<>>字典内部
+
+**  
+**
+
+**流的提取**
+
+****/Filter关键字之后保存了stream流的编码信息一共包括以下几种：  
+
+    
+    
+    /FlateDecode
+    /ASCIIHexDecode
+    /ASCII85Decode
+    /LZWDecode
+    /DCTDecode
+    /RunLengthDecode
+    /CCITTFaxDecode
+    /JBIG2Decode
+    /JPXDecode
+    /Crypt
+
+一共包括上面几种编码方式，按常见顺序进行了排序，可以级联编码。例如：
+
+    
+    
+    0 0 obj
+    <</Filter
+    [/FlateDecode /ASCIIHexDecode]
+    /Length 14278>>
+
+表示流先经过了ASCIIHexDecode再经过了FlateDecode编码解密是即先对流进行FlateDecode解码再对流进行ASCIIHexDecode解码目前遇到2种级联编码样本（如上），可能会有更多级联编码方式（3级或以上）解码后能够触发攻击的流对象为javascript脚本或者图片对象，常见的恶意攻击代码储存在javascript脚本中。  
+
+下面的图片是提取自样本中的PDF steam流文件中的js脚本，已经很明显是攻击代码了：
+
+**一些坑**
+
+PDF的恶意攻击样本毫无疑问会使用一些特殊手段对抗杀软的扫描检查，下面统计了一下恶意样本常见的规避行为
+
+交叉引用表坑1 引用表偏移不正确
+
+    
+    
+    Xref    #表示交叉引用表开始
+    0 2     #0表明引用表描述的对象编号从0开始，8说明共有8个对象
+    0000000000 65536 f #一般pdf都是以这行开始交叉引用表的，起始地址0和产生号
+    0000003195 00000 n #表示对象1，就是catalog，3195为偏移地址n表示对象在使用
+    startxref
+    8980  #8980为交叉引用表的偏移地址，此处为十进制表示
+    %%EOF #文件结束标志
+
+上面有提到过交叉引用表的偏移地址为固定数值，推测adobe的parser是从文件尾开始解析，获得交叉引用表的偏移地址(Xref中X在文档中所在的位置即为偏移地址)，找到交叉引用表再定位到各个对象，实际测试发现偏移地址可以不正确8980偏移地址实际可能为任意地址。
+
+坑2 引用表可以有多个
+
+    
+    
+    xref
+    0 4
+    0000000000 65535 f
+    0000000000 65536 n
+    0000039095 00000 n
+    0000000015 00000 n
+    trailer
+    <</ID
+    [<386e381fac5d8245e24ee620741d0d06><b15c4bebcdae6f2210f09460b841e7a3>]/Root
+    26 0 R/Size 28/Info 27 0 R>>
+    startxref
+    39630
+    %%EOF
+    <</Filter/FlateDecode/Length
+    6960/Subtype/Type1C>>
+    Stream
+    Ddd
+    endstream
+    xref
+    20 1
+    0000040341 00000 n
+    26 4
+    0000040380 00000 n
+    0000040484 00000 n
+    0000040677 00000 n
+    0000040734 00000 n
+    55 2
+    0000172790 00000 n
+    0000172925 00000 n
+    trailer
+    <</Root 26 0 R/Info 27 0
+    R/ID[<386E381FAC5D8245E24EE620741D0D06><39FE58436C8CC909F538F88909F1EE55>]/Size
+    63/Prev 39630>>
+    startxref
+    173446
+    %%EOF
+
+样本如上，正常来讲，一个文档只存在一个%EOF结束符，但是这个样本里出现了两个  
+
+**字符串长度**
+
+坑1 流对象长度可以直接跟对象
+
+正常一个字典语句中/Length之后的数值代表stream~endstream两个关键字之间流的长度，如下
+
+    
+    
+    7 0 obj
+    <</Filter/FlateDecode/Length 6960/Subtype/Type1C>>
+    stream
+
+但测试发现流的长度可以是obj对象
+
+    
+    
+    2 0 obj
+    << /Length 4 0 R /Filter
+    /FlateDecode >>
+    #对应的obj对象中包含的长度如下
+    4 0 obj
+    4880
+    endobj
+
+所以stream流对象压缩前的实际长度为4880虽然是PDF格式的正规使用方法，但同时也是规避杀软的一种手法。  
+
+坑2 流对象长度可以为任意值
+
+    
+    
+    7 0 obj
+    <</Filter/FlateDecode/Length
+    6960/Subtype/Type1C>>
+    stream
+
+同理，正常流对象长度为上图，实际测试发现样本
+
+    
+    
+    16 0 obj
+    <<
+    /Length ANIWAY_____LEN
+    >>
+    stream
+
+WTF is ANIWAY_LEN???
+长度可以为填ascii字符???所以，/Length后面可以不跟数值stream流的实际长度实际==关键字endstream偏移-关键字stream偏移-包含的0x0D或0x0A
+
+**解码问题**
+
+坑1 javascript可以支持文本和八进制
+
+    
+    
+    7 0 obj
+    << /Type /Action
+    /S /JavaScript
+    /JS (14516614115450146165156)
+    endobj
+    /JS 16 0 R
+    /S /JavaScript
+    >>
+    endobj
+    16 0 obj
+    <<
+    /Length ANIWAY_____LEN
+    >>
+    stream
+    function urpl(k,sc){
+    var c = "x75";
+    var kc=k+c;
+    var re = /MM/g;
+    sc = sc.replace(re,kc);
+    return sc;
+    }
+    padding_0c = "MM0c0cMM0c0c";
+    padding00="MM0000";
+    padding_41 = "MM4141";
+    var x1=0;
+    var x2=0;
+    var x3=0;
+    endstream
+    endobj
+
+有JS编程基础的肯定注意到了，因此在这里需要判断javascript内容在对象中还是在（）内亦或是否需要转码
+
+坑2 编码方式缩写形式
+
+    
+    
+    1 0 obj
+    <</Filter [/Fl /Fl] /Length 8331
+    >>
+    Stream
+    xœíÜYXù
+    ÷qÆÌ0K3ÆØRÆVdoUƒQ"[M!S(íRÓ¾0–h¥B*d•hß~5´©
+    endstream
+
+正常文件默认/Filter关键字之后会出现xxdecode关键字表示stream流编码方式，但测试发现样本可以没有xxdecode关键字，但同样进行了编码处理，如上/Fl字段即为/FlateDecode的简写，对应表如下：
+
+    
+    
+    /FlateDecode     /Fl
+    /ASCIIHexDecode  /AHx
+    /ASCII85Decode   /A85
+    /LZWDecode       /LZW
+    /RunLengthDecode /RL
+    /CCITTFaxDecode  /CCF
+    /JBIG2Decode #/JBIG2Decode其实和/DCTDecode解码方式是一样的
+    /DCTDecode       /DCT
+
+坑3 编码形式可以级联
+
+    
+    
+    10 0 obj
+    <</Filter
+    [/FlateDecode /ASCIIHexDecode]
+    /Length 14278>>
+
+如上表示流先经过了ASCIIHex加密再进行了FlateDecode加密解码时需要先进行FlateDecode解密之后再进行ASCIIHexDecode解密
+
+**  
+**
+
+**常用分析工具推荐**
+
+介绍完恶代格式后，推荐一些恶代分析的基本工具
+
+[**PdfStreamDumper**](http://www.freebuf.com/sectool/1211.html)
+
+stream流解析工具
+
+vb开源项目。工具存在一些bug，无法解析级联编码后的stream流，例如/Fl/Fl编码就无法解析
+
+[**PDFParser**](https://github.com/vincent0629/PDFParser)
+
+c++开源项目，pdf格式解析，逻辑比较清晰，可以参考
+
+[**ParanoiDF**](https://github.com/patrickdw123/ParanoiDF)
+
+python开源项目，恶代分析
+
+此外还有一些很赞的开源项目如pyew、peepdf等等，不一一贴地址了。
+
+**  
+**
+
+**References**
+
+[PDF, let me count the way…](https://blog.didierstevens.com/2008/04/29/pdf-let-me-count-the-ways/)
+
+[](https://github.com/Cryin/PDFTear)[Cryin/PDFTear](https://github.com/Cryin/PDFTear)
+
+[](http://www.adobe.com/content/dam/Adobe/en/devnet/pdf/pdfs/PDF32000_2008.pdf)[Adobe
+PDF
+官方文档](http://www.adobe.com/content/dam/Adobe/en/devnet/pdf/pdfs/PDF32000_2008.pdf)
+
+[](https://countuponsecurity.com/2014/09/22/malicious-documents-pdf-analysis-in-5-steps/?utm_source=tuicool&utm_medium=referral)[Malicious Document PDF
+analysis in 5 steps](https://countuponsecurity.com/2014/09/22/malicious-documents-pdf-analysis-in-5-steps/?utm_source=tuicool&utm_medium=referral)
+
+[](https://www.oschina.net/translate/pdf-file-analyzer-with-csharp-parsing-classes-vers)[](https://www.oschina.net/translate/pdf-file-analyzer-with-csharp-parsing-classes-vers)[C#实现的PDF解析器](https://www.oschina.net/translate/pdf-file-analyzer-with-csharp-parsing-classes-vers)
+
+本文翻译自安全客 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **red0range** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/87127](/post/id/87127)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [安全客]()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __5赞
+
+ __收藏
+
+![](https://p3.ssl.qhmsg.com/dm/200_200_100/t01f2e1710911543d4b.jpg) red0range
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

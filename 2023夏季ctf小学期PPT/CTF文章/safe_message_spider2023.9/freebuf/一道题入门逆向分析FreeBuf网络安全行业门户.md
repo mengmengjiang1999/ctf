@@ -1,0 +1,498 @@
+## **0x00 前言**
+
+**将自己学习逆向破解的知识总结一下，主要是逆向的入门知识以及自己的学习感悟，包括逆向时的一些思路和补丁，注册机，保护壳等方面的一些知识，有不到之处请师傅们斧正。**
+
+ **[演示程序【提取码：dd2b 】](https://pan.baidu.com/s/1pyvuQKdpz33hHz0g08blUQ)**
+
+ **[工具包【 提取码：wirx 】  
+](https://pan.baidu.com/s/1_WgFzy-vkrbSSpQoUUTPdg)**
+
+##  **0x01 基础篇**
+
+逆向一个小程序时，我们要做的第一步应该是收集信息，比如该程序有哪些功能，重要字符串，通过程序的一些行为猜测调用了哪些API函数，是否加壳等，这些信息有助于我们理解程序的运行逻辑，为后面的破解做好铺垫。比如我们通过PEID发现未加壳，进入不同的功能模块，发现了具有参考价值的重要字符串，通过弹窗行为可以猜测程序调用了Messagebox（）函数等API函数。搜集完信息后，我们可以加以猜测，猜对了可以减少工作量，比如Serial模块，猜测是程序会自动生成一个固定序列号或者利用用户输入值进行一定操作后生成新的序列号等。
+
+![图片.png](https://image.3001.net/images/20190615/1560587333_5d04ac4512176.png!small)
+**图一**
+
+通过图一可以看到程序主要有两个部分，一个是单纯地输入序列号，一个是要求输入用户名和序列号。
+
+###  **Serial部分**
+
+在Serial部分，尝试着随便输入几个序列号都报错，接下来通过OD打开，用智能搜索可以发现很多有价值的线索。经过前面的探索，现在我们已经知道了各个字符串出现的位置，并且我们甚至可以大概猜测出输入正确的序列号之后会出现的情况。
+
+![图片.png](https://image.3001.net/images/20190615/1560587343_5d04ac4f464d4.png!small)
+
+**图二**
+
+![图片.png](https://image.3001.net/images/20190615/1560587349_5d04ac55cc25d.png!small)
+
+**图三**
+
+双击Failed！后程序自动定位到相应汇编代码处。上下移动可以发现本模块的开始部分“0042F47E |. 55 push
+ebp”，用F2在此处下一个断点，继续运行程序会发现程序停留在断点处，使用F8继续运行，最终弹出报错框。
+
+![图片.png](https://image.3001.net/images/20190615/1560587357_5d04ac5d71e75.png!small)
+
+ **图四** ****
+
+![图片.png](https://image.3001.net/images/20190615/1560587363_5d04ac63c1f65.png!small)
+
+ **图五**
+![图片.png](https://image.3001.net/images/20190615/1560587370_5d04ac6ac40b5.png!small)
+
+**图六**
+
+分析进行到这里，很显然我们会猜想序列号为“Hello Dude！”，验证结果如下：
+
+![图片.png](https://image.3001.net/images/20190615/1560587377_5d04ac71cde44.png!small)
+**图七**
+
+ **重要汇编代码分析：** ****
+
+    
+    
+    0042F47E  |.  55 **** push ebp ****                  ****        ;  Serial部分开始处！
+    
+    0042F47F  |.  68 2CF54200   push Demo.0042F52C
+    
+    0042F484  |.  64:FF30           push dword ptr fs:[eax]
+    
+    0042F487  |.  64:8920            mov dword ptr fs:[eax],esp
+    
+    0042F48A  |.  8D45 FC          lea eax,[local.1]                 ;取参数1地址
+    
+    0042F48D  |.  BA 40F54200  mov edx,Demo.0042F540 ;  Hello
+    
+    0042F492  |.  E8 7142FDFF   **call Demo.00403708**       **;** **赋值给参数** **1**
+    
+     0042F497  |.  8D45 F8           lea eax,[local.2]                   ;取参数2地址
+    
+    0042F49A  |.  BA 50F54200   mov edx,Demo.0042F550 ;  Dude!
+    
+    0042F49F  |.  E8 6442FDFF   **call Demo.00403708**       **;** **赋值给参数** **2**
+    
+     0042F4A4  |.  FF75 FC           push [local.1]                          
+    
+    
+    0042F4A7  |.  68 60F54200   push Demo.0042F560        ;字符串空格的地址
+    
+    0042F4AC  |.  FF75 F8          push [local.2]                        
+    
+    0042F4AF  |.  8D45 F4          lea eax,[local.3]                     ;取参数3地址
+    
+    0042F4B2  |.  BA 03000000   mov edx,0x3
+    
+    0042F4B7  |.  E8 F044FDFF   **call Demo.004039AC**     **;** **拼接参数** **1，空格，参数2并赋值给参数3**
+    
+     0042F4BC  |.  8D55 F0           lea edx,[local.4]                    ;取参数4地址
+    
+    0042F4BF  |.  8B83 E0010000 mov eax,dword ptr ds:[ebx+0x1E0]
+    
+    0042F4C5  |.  E8 8EB5FEFF   **call Demo.0041AA58**     ; **将输入框中的** **字符串赋值给参数** **4**
+    
+     0042F4CA  |.  8B45 F0           mov eax,[local.4]
+    
+    0042F4CD  |.  8B55 F4           mov edx,[local.3]
+    
+    0042F4D0  |.  E8 2745FDFF  ******call Demo.004039FC**      ；判断参数3,4字符串是否相等
+    
+    0042F4D5  |.  75 1A       **jnz short Demo.0042F4F1**            ; 关键跳
+
+*******************************************************************************************
+
+    
+    
+    0042F4D7  |.  6A 00                push 0x0
+    
+    0042F4D9  |.  B9 64F54200   mov ecx,Demo.0042F564          ;  Congratz!
+    
+    0042F4DE  |.  BA 70F54200   mov edx,Demo.0042F570          ;  God Job dude !! =)
+    
+    0042F4E3  |.  A1 480A4300   mov eax,dword ptr ds:[0x430A48]
+    
+    0042F4E8  |.  8B00                 mov eax,dword ptr ds:[eax]
+    
+    0042F4EA  |.  E8 81ACFFFF   **call Demo.0042A170**               ;  弹出序列号正确时的结果
+    
+    0042F4EF  |.  EB 18               **jmp short Demo.0042F509**
+
+ ****
+
+*****************************************************************************
+
+ ****
+
+    
+    
+     **0042F4F1** |>  6A 00               push 0x0
+    
+    0042F4F3  |.  B9 84F54200   mov ecx,Demo.0042F584           ;  Failed!
+    
+    0042F4F8  |.  BA 8CF54200   mov edx,Demo.0042F58C         ;  Try Again!!
+    
+    0042F4FD  |.  A1 480A4300   mov eax,dword ptr ds:[0x430A48]
+    
+    0042F502  |.  8B00                  mov eax,dword ptr ds:[eax]
+    
+    0042F504  |.  E8 67ACFFFF   **call Demo.0042A170**               ;  弹出序列号错误时的结果
+
+*****************************************************************************
+
+ **Serial+Name部分：**
+
+通过查看文本字符串，再运行一下即可大致了解该部分程序的主要运行逻辑。
+
+![图片.png](https://image.3001.net/images/20190615/1560587389_5d04ac7de3e3c.png!small)
+
+**图八**
+
+可以看到“Try Again！”和“Sorry, The serial is
+incorrect！”分别出现了两次，考虑到要求输入用户名与序列号，猜测应该是先满足一个条件后，再判断是否满足另一个条件，只有两个条件都满足的情况下才弹出正确信息。同样，双击第一个“Try
+Again！”所在行，程序跳转至相应汇编代码处，上下移动可以发现这就是我们要寻找的关键代码。同样在入口代码处设置一个断点，继续运行，在输入框中随便输入一些信息，点击“Check
+it Baby！”按钮会发现程序动不了。
+
+![图片.png](https://image.3001.net/images/20190615/1560587397_5d04ac8533e06.png!small)
+
+ **图九**
+
+![图片.png](https://image.3001.net/images/20190615/1560587404_5d04ac8c6d5e5.png!small)
+
+ **图十**
+
+此时程序将停留在断点处，我们在OD中选择F8单步步过，一直按F8，最终会发现在堆栈窗口会冒出一个特别的值：“CW-4674-CRACKED”,猜测是我们需要的序列号。
+
+![图片.png](https://image.3001.net/images/20190615/1560587411_5d04ac937bad8.png!small)
+
+ **图十一**
+
+验证结果如下：
+
+![图片.png](https://image.3001.net/images/20190615/1560587417_5d04ac994b2a5.png!small)
+
+**图十二**
+
+ **重要汇编代码分析：**
+
+    
+    
+     0042F9A9  |.  55                           push ebp
+    
+    0042F9AA  |.  68 67FB4200         push Demo.0042FB67
+    
+    0042F9AF      64:FF30                 push dword ptr fs:[eax]
+    
+    0042F9B2  |.  64:8920                  mov dword ptr fs:[eax],esp
+    
+    0042F9B5  |.  C705 50174300>   mov dword ptr ds:[0x431750],0x29          **;全局变量赋值0x29**
+    
+     0042F9BF  |.  8D55 F0                 lea edx,[local.4] ;EDX 0012F92C            ；取第四个参数地址
+    
+    0042F9C2  |.  8B83 DC010000    mov eax,dword ptr ds:[ebx+0x1DC]
+    
+    0042F9C8  |.  E8 8BB0FEFF       call Demo.0041AA58                                       **;** 获取Name输入框中的内容并赋值给第四个参数
+    
+    0042F9CD  |.  8B45 F0                mov eax,[local.4]
+    
+    0042F9D0  |.  E8 DB40FDFF      call Demo.00403AB0
+    
+    0042F9D5 |. A3 6C174300          mov dword ptr ds:[0x43176C],eax           
+    
+    0042F9DA  |.  8D55 F0                lea edx,[local.4]
+    
+    0042F9DD  |.  8B83 DC010000   mov eax,dword ptr ds:[ebx+0x1DC]
+    
+    0042F9E3  |.  E8 70B0FEFF       call Demo.0041AA58
+    
+    0042F9E8  |.  8B45 F0                mov eax,[local.4]
+    
+    0042F9EB  |.  0FB600                 movzx eax,byte ptr ds:[eax] ****        ;EAX 39    
+    
+    0042F9EE  |.  8BF0                    mov esi,eax    
+    
+    0042F9F0  |.  C1E6 03               shl esi,0x3      
+    
+    0042F9F3  |.  2BF0                     sub esi,eax     
+    
+    0042F9F5  |.  8D55 EC               lea edx,[local.5]   ****
+    
+     0042F9F8  |.  8B83 DC010000   mov eax,dword ptr ds:[ebx+0x1DC]
+    
+    0042F9FE  |.  E8 55B0FEFF       call Demo.0041AA58
+    
+    0042FA03  |.  8B45 EC                mov eax,[local.5]   
+    
+    0042FA06  |.  0FB640 01             movzx eax,byte ptr ds:[eax+0x1] ****      ;EAX 38    
+    
+    0042FA0A  |.  C1E0 04                shl eax,0x4      **; EAX 380;将ea** **x中的内容左移四位**
+    
+     0042FA0D  |.  03F0                      add esi,eax     
+    
+    0042FA0F  |.  8935 54174300      mov dword ptr ds:[0x431754],esi
+    
+    0042FA15  |.  8D55 F0                 lea edx,[local.4]  
+    
+    0042FA18  |.  8B83 DC010000   mov eax,dword ptr ds:[ebx+0x1DC] 
+    
+    0042FA1E  |.  E8 35B0FEFF      call Demo.0041AA58 
+    
+    0042FA23  |.  8B45 F0                mov eax,[local.4] ****
+    
+     0042FA26  |.  0FB640 03           movzx eax,byte ptr ds:[eax+0x3] **;EAX 036**
+    
+     0042FA2A  |.  6BF0 0B              imul esi,eax,0xB    
+    
+    0042FA2D  |.  8D55 EC             lea edx,[local.5] 
+    
+    0042FA30  |.  8B83 DC010000  mov eax,dword ptr ds:[ebx+0x1DC] 
+    
+    0042FA36  |.  E8 1DB0FEFF     call Demo.0041AA58 
+    
+    0042FA3B  |.  8B45 EC              mov eax,[local.5] ****
+    
+    0042FA3E  |.  0FB640 02           movzx eax,byte ptr ds:[eax+0x2] **;EAX 37**
+    
+     0042FA42  |.  6BC0 0E              imul eax,eax,0xE     **; EAX 302**
+    
+     0042FA45  |.  03F0                    add esi,eax         ****
+    
+     0042FA47  |.  8935 58174300   mov dword ptr ds:[0x431758],esi
+    
+    0042FA4D  |.  A1 6C174300     mov eax,dword ptr ds:[0x43176C] 
+    
+    0042FA52  |.  E8 D96EFDFF    call Demo.00406930
+    
+    0042FA57  |.  83F8 04              **cmp eax,0x4**
+    
+     0042FA5A  |.  7D 1D                **jge short** **Demo.0042FA79**
+
+ ****
+
+****************************************************************************
+
+    
+    
+     0042FA5C  |.  6A 00                push 0x0
+    
+    0042FA5E  |.  B9 74FB4200   mov ecx,Demo.0042FB74              **** ; Try Again!
+    
+    0042FA63  |.  BA 80FB4200   mov edx,Demo.0042FB80                 ; Sorry , The serial is incorect !
+    
+    0042FA68  |.  A1 480A4300   mov eax,dword ptr ds:[0x430A48]
+    
+    0042FA6D  |.  8B00                mov eax,dword ptr ds:[eax]
+    
+    0042FA6F  |.  E8 FCA6FFFF  call Demo.0042A170
+    
+    0042FA74  |.  E9 BE000000    jmp Demo.0042FB37                         ;程序结束
+
+****************************************************************************
+
+ ****
+
+    
+    
+     **0042FA79** |>  8D55 F0              lea edx,[local.4] 
+    
+    0042FA7C  |.  8B83 DC010000 mov eax,dword ptr ds:[ebx+0x1DC]
+    
+    0042FA82  |.  E8 D1AFFEFF     call Demo.0041AA58
+    
+    0042FA87  |.  8B45 F0               mov eax,[local.4]                                      
+    ;算法开始
+    
+    0042FA8A  |.  0FB600                movzx eax,byte ptr ds:[eax]             **;EAX 039，取用户名字符串地址中的第一个字节入eax**
+    
+     0042FA8D  |. F72D 50174300    imul dword ptr ds:[0x431750]           **;EAX 921，乘以0x29** ****
+    
+    0042FA93  |. A3 50174300         mov dword ptr ds:[0x431750],eax ;
+    
+     0042FA98  |.  A1 50174300         mov eax,dword ptr ds:[0x431750]
+    
+    0042FA9D  |. 0105 50174300      add dword ptr ds:[0x431750],eax   ; 
+    
+    0042FAA3  |.  8D45 FC                lea eax,[local.1] 
+    
+    0042FAA6  |.  BA ACFB4200       mov edx,Demo.0042FBAC            ;CW   
+    
+    0042FAAB  |.  E8 583CFDFF      call Demo.00403708
+    
+    0042FAB0  |.  8D45 F8               lea eax,[local.2]     
+    
+    0042FAB3  |.  BA B8FB4200      mov edx,Demo.0042FBB8             **** ; CRACKED ****
+    
+     0042FAB8  |.  E8 4B3CFDFF     call Demo.00403708
+    
+    0042FABD  |.  FF75 FC               push [local.1]
+    
+    0042FAC0  |.  68 C8FB4200       push Demo.0042FBC8  **;  -**
+    
+     0042FAC5  |.  8D55 E8               lea edx,[local.6]                                     ; **取第六个参数地址**
+    
+     0042FAC8  |.  A1 50174300        mov eax,dword ptr ds:[0x431750]
+    
+    0042FACD  |.  E8 466CFDFF     call Demo.00406718                     **;EAX 1242H，取出算法计算结果变成字符串传入参数6**
+    
+     0042FAD2  |.  FF75 E8               **push [local.6]**                                    **;** **将ASCII** **”** **4674** **”** **压入栈0012F924**
+    
+     0042FAD5  |.  68 C8FB4200       push Demo.0042FBC8               **;  -**
+    
+     0042FADA  |.  FF75 F8                push [local.2]      
+    
+    0042FADD  |.  8D45 F4                lea eax,[local.3]
+    
+    0042FAE0  |.  BA 05000000         mov edx,0x5
+    
+    0042FAE5  |.  E8 C23EFDFF       call Demo.004039AC               **;拼接字符串** **；将** **CW-4674-CRACKED传入参数3**
+    
+     0042FAEA  |.  8D55 F0                 lea edx,[local.4]  
+    
+    0042FAED  |.  8B83 E0010000     mov eax,dword ptr ds:[ebx+0x1E0] ****
+    
+     0042FAF3  |.  E8 60AFFEFF        call Demo.0041AA58             **;** **将** **Serial输入框中的** **内容传入参数** **4**
+    
+     0042FAF8  |.  8B55 F0                  mov edx,[local.4]  
+    
+    0042FAFB  |.  8B45 F4                  mov eax,[local.3]                          **;EAX 0128A5CC ASCII** **“** **CW-4674-CRACKED** **”**
+    
+     0042FAFE  |.  E8 F93EFDFF       **call Demo.004039FC**           ; **寄存器传参比较参数3,4**
+    
+     0042FB03  |.  75 1A                      **jnz short Demo.0042FB1F** **;** **关键跳**
+
+ ****
+
+****************************************************************************
+
+    
+    
+     0042FB05  |.  6A 00                     push 0x0
+    
+    0042FB07  |.  B9 CCFB4200       mov ecx,Demo.0042FBCC      ; Congratz !!
+    
+    0042FB0C  |.  BA D8FB4200       mov edx,Demo.0042FBD8    **** ;Good job dude =)    
+    
+    0042FB11  |.  A1 480A4300         mov eax,dword ptr ds:[0x430A48]
+    
+    0042FB16  |.  8B00                      mov eax,dword ptr ds:[eax]  
+    
+    
+    0042FB18  |.  E8 53A6FFFF       call Demo.0042A170
+    
+    0042FB1D  |.  EB 18                    jmp short Demo.0042FB37
+
+****************************************************************************
+
+    
+    
+    0042FB1F  |>  6A 00                    push 0x0
+    
+    0042FB21  |.  B9 74FB4200         mov ecx,Demo.0042FB74     ;Try Again!
+    
+    0042FB26  |.  BA 80FB4200         mov edx,Demo.0042FB80     ;Sorry , The serial is incorect !
+    
+    0042FB2B  |.  A1 480A4300         mov eax,dword ptr ds:[0x430A48]
+    
+    0042FB30  |.  8B00                       mov eax,dword ptr ds:[eax] 
+    
+    0042FB32  |.  E8 39A6FFFF        call Demo.0042A170       **;弹出最终结果；点击确定后跳转至下一行0042FB3**
+
+## 0x02 高级篇
+
+###  **注册机** ****
+
+每次输入用户名后再通过堆栈窗口来查找序列号有些麻烦，我们可以编写一个注册机来让程序自动弹出正确序列号。我们可以通过打补丁使程序自动弹出正确序列号，补丁代码有多种设置方式，通常设置在
+**文件的空白区域** （补丁代码较少时）， **扩展最后节区后** 或者 **添加新节区后在打补丁**
+。下面我们通过第三种方式来实现：添加一个新区段后再打补丁。通过PE增加区段工具可以增加一个新的区段，不过增加完区段后，我们还要改变该区段的权限，使之可读可写可执行，这里我用的是LordPE：
+
+![图片.png](https://image.3001.net/images/20190615/1560587433_5d04aca942a95.png!small)
+
+ **图十三**
+
+![图片.png](https://image.3001.net/images/20190615/1560587440_5d04acb0a50cc.png!small)
+
+ **图十四**
+
+通过OD打开刚才增加了messagebox区段的程序，我们可以看到该区段在程序中的位置，接着调转到相应位置去编写补丁程序，下面演示中，我们从4EC010处开始编写。
+
+![图片.png](https://image.3001.net/images/20190615/1560587447_5d04acb7556f2.png!small)
+
+ **图十五**
+
+![图片.png](https://image.3001.net/images/20190615/1560587454_5d04acbe0c5a8.png!small)
+
+ **图十六**
+
+将 **call Acid_bur.0041AA58** 下面两行代码nop掉，并跳转至我们自己写的代码处：
+
+![图片.png](https://image.3001.net/images/20190615/1560587460_5d04acc4a8dd3.png!small)
+**图十七** ****
+
+![图片.png](https://image.3001.net/images/20190615/1560587467_5d04accb7756f.png!small)
+
+ **图十八**
+
+push的都是地址，可以修改标题和内容的地址，再调用相应的MessageboxA函数；当程序通过一系列的算法算出注册码的时候，再用弹窗注册机弹出。
+
+![图片.png](https://image.3001.net/images/20190615/1560587474_5d04acd232356.png!small)
+
+ **图十九**
+
+![图片.png](https://image.3001.net/images/20190615/1560587482_5d04acda0c715.png!small)
+
+ **图二十**
+
+补充：上述实例中，由于我们在增加的区段中调用的Messagebox( )为编写者自己封装的程序，因此当我们将其放置到其他环境中去运行时，可能会出现如下情况：
+![图片.png](https://image.3001.net/images/20190615/1560587490_5d04ace271d05.png!small)
+
+**图二十一**
+
+**![图片.png](https://image.3001.net/images/20190615/1560587496_5d04ace864e31.png!small)**
+
+ **图二十二**
+
+补充：只有使用Windows系统的库函数才能避免这类问题，比如上图中的jmp.&user32.MessageBoxA函数。
+
+![图片.png](https://image.3001.net/images/20190615/1560587502_5d04acee88d32.png!small)
+
+ **图二十三**
+
+###  **内嵌补丁**
+
+如果我们选择在程序的空白区域编写补丁代码，有时会报错:“在可执行文件中无法定位数据”，因为在增加代码后，整个代码长度可能会超出Code区段的大小。另外，有时会遇到对象程序经过运行时压缩（或加密处理）而难以直接修改的情况，此时我们都可以选择内嵌补丁。
+
+![图片.png](https://image.3001.net/images/20190615/1560587588_5d04ad448af56.png!small)
+**图二十四**
+
+内嵌补丁(Inline Code Patch)：难以直接修改指定代码时，插入并运行被称为“洞穴代码”的补丁代码后，对程序打补丁。
+
+![图片.png](https://image.3001.net/images/20190615/1560587581_5d04ad3d6eee3.png!small)
+
+ **图二十五**  
+
+左侧是典型的运行时压缩或加密代码，EP代码先将加密的OEP代码解密，然后再跳转到OEP代码处，若要打补丁的代码存在于经过加密的OEP区域是很难打补丁的，因为解密过程中可能会解出完全不同的结果。此时可以在文件中另外设置被称为“洞穴代码”的“补丁代码”，EP代码解密后修改JMP指令，运行洞穴代码。在洞穴代码中执行补丁代码后，再跳转到OEP处。即每次运行另外的补丁代码时都要对进程内存的代码打补丁。它与一般修改代码的方式不同在于：
+![图片.png](https://image.3001.net/images/20190615/1560587603_5d04ad539332b.png!small)
+
+**图二十六**  
+
+**保护壳：** 一段专门负责保护软件不被非法修改或反编译的程序。通常将 **壳** 分为两类，一类是压缩壳，另一类是加密壳。压缩壳可以帮助缩减 PE
+文件的大小，隐藏了 PE 文件内部代码和资源，便于网络传输和保存；加密壳最主要的功能是保护 PE
+免受代码逆向分析。由于加密壳的主要目的不再是压缩文件资源，所以加密壳保护的 PE
+程序通常比原文件大得多。目前加密壳大量用于对安全性要求高，对破解敏感的应用程序，同时也有恶意程序用于避免（降低）杀毒软件的检测查杀。
+
+![图片.png](https://image.3001.net/images/20190615/1560587611_5d04ad5b72281.png!small)
+**图二十七**
+
+ **壳的加载过程：**
+
+> a:保存入口参数；（加壳程序初始化时保存各寄存器的值，外壳执行完毕，恢复各寄存器值，最后再跳到原程序执行）
+>
+> b:获取所需函数 API；
+>
+> c:解密各区块数据；（处于保护源程序代码和数据的目的，一般会加密源程序文件的各个区块，在程序执行时外壳将这些区块数据解密，以让程序正常运行）
+>
+> d:跳转回原程序入口点。
+
+**脱壳技巧：**
+关于脱壳技巧部分，网络上有很多很棒的资源，我就不造轮子了，主要有这几种：单步跟踪法、ESP定律法、内存镜像法、一步到达OEP法、最后一次异常法、SFX自动脱壳法等等。
+
+ ***本文作者：Boringrole，转载请注明来自FreeBuf.COM**
+

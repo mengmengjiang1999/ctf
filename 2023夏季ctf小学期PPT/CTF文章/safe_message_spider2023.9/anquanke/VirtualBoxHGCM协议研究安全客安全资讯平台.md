@@ -1,0 +1,1781 @@
+# VirtualBox HGCM协议研究
+
+阅读量 **280246**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-04-27 10:30:29
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t0169ca5f34f2306385.png)
+
+## 0x00 前言
+
+最近开始研究VirtualBox虚拟机逃逸漏洞，针对于VirtualBox的虚拟机逃逸，我们重点关注它的`HGCM（host-guest
+communication mechanism）协议`，本文将结合源码分析和动态调试来分析此协议，最后我们还将实现一个HGCM协议的调用库。
+
+## 0x01 VirtualBox 通信协议
+
+###  引言
+
+VirtualBox中一个名为`HGCM`的协议相当于一个`RPC`，其作用是可以让Guest里的程序通过接口调用`Host`中的服务程序中的函数。该协议的接口封装在`vboxguest`驱动程序中。
+
+在Guest系统中，通过`VBoxGuestAdditions.iso`安装了一个名为`vboxguest`的驱动程序，该驱动程序主要就是提供接口给`Guset`系统里的程序，用于与`Host`主机进行通信。
+
+![](https://p0.ssl.qhimg.com/t01a3d2f1624c2176a1.png)
+
+除了`vboxguest`驱动，Guset还安装有`vboxsf`驱动和`vboxvideo`，其中`vboxsf`仍然使用的是`vboxguest`的接口，而`vboxvideo`则是`VirtualBox`虚拟出来的显示设备的驱动程序，独立于前面两个驱动。由此可见，Guest与Host之前的通信关键在于`vboxguest`驱动，因此，我们的研究将从该驱动出发。
+
+该驱动源码位于`src\VBox\Additions\common\VBoxGuest`目录，以Linux系统为例，其源文件为`VBoxGuest-linux.c`，首先从`file_operations`结构体可以看到有哪些操作
+
+    
+    
+    static struct file_operations   g_FileOpsUser =
+    {
+        owner:          THIS_MODULE,
+        open:           vgdrvLinuxOpen,
+        release:        vgdrvLinuxRelease,
+    #ifdef HAVE_UNLOCKED_IOCTL
+        unlocked_ioctl: vgdrvLinuxIOCtl,
+    #else
+        ioctl:          vgdrvLinuxIOCtl,
+    #endif
+    };
+    
+
+###  GUEST IOCTL
+
+可以看到定义了`vgdrvLinuxIOCtl`用于进行接口的访问，跟踪该函数，可以发现其调用了`vgdrvLinuxIOCtlSlow`函数，
+
+    
+    
+    static int vgdrvLinuxIOCtlSlow(struct file *pFilp, unsigned int uCmd, unsigned long ulArg, PVBOXGUESTSESSION pSession)
+    {
+        int                 rc;
+        VBGLREQHDR          Hdr;
+        PVBGLREQHDR         pHdr;
+        uint32_t            cbBuf;
+    
+        Log6(("vgdrvLinuxIOCtlSlow: pFilp=%p uCmd=%#x ulArg=%p pid=%d/%d\n", pFilp, uCmd, (void *)ulArg, RTProcSelf(), current->pid));
+    
+        /*
+         * Read the header.
+         */
+        if (RT_FAILURE(RTR0MemUserCopyFrom(&Hdr, ulArg, sizeof(Hdr))))
+        {
+            Log(("vgdrvLinuxIOCtlSlow: copy_from_user(,%#lx,) failed; uCmd=%#x\n", ulArg, uCmd));
+            return -EFAULT;
+        }
+        if (RT_UNLIKELY(Hdr.uVersion != VBGLREQHDR_VERSION))
+        {
+            Log(("vgdrvLinuxIOCtlSlow: bad header version %#x; uCmd=%#x\n", Hdr.uVersion, uCmd));
+            return -EINVAL;
+        }
+    
+        /*
+         * Buffer the request.
+         * Note! The header is revalidated by the common code.
+         */
+        cbBuf = RT_MAX(Hdr.cbIn, Hdr.cbOut);
+        if (RT_UNLIKELY(cbBuf > _1M*16))
+        {
+            Log(("vgdrvLinuxIOCtlSlow: too big cbBuf=%#x; uCmd=%#x\n", cbBuf, uCmd));
+            return -E2BIG;
+        }
+        if (RT_UNLIKELY(   Hdr.cbIn < sizeof(Hdr)
+                        || (cbBuf != _IOC_SIZE(uCmd) && _IOC_SIZE(uCmd) != 0)))
+        {
+            Log(("vgdrvLinuxIOCtlSlow: bad ioctl cbBuf=%#x _IOC_SIZE=%#x; uCmd=%#x\n", cbBuf, _IOC_SIZE(uCmd), uCmd));
+            return -EINVAL;
+        }
+        pHdr = RTMemAlloc(cbBuf);
+        if (RT_UNLIKELY(!pHdr))
+        {
+            LogRel(("vgdrvLinuxIOCtlSlow: failed to allocate buffer of %d bytes for uCmd=%#x\n", cbBuf, uCmd));
+            return -ENOMEM;
+        }
+        if (RT_FAILURE(RTR0MemUserCopyFrom(pHdr, ulArg, Hdr.cbIn)))
+        {
+            Log(("vgdrvLinuxIOCtlSlow: copy_from_user(,%#lx, %#x) failed; uCmd=%#x\n", ulArg, Hdr.cbIn, uCmd));
+            RTMemFree(pHdr);
+            return -EFAULT;
+        }
+        if (Hdr.cbIn < cbBuf)
+            RT_BZERO((uint8_t *)pHdr + Hdr.cbIn, cbBuf - Hdr.cbIn);
+    
+        /*
+         * Process the IOCtl.
+         */
+        rc = VGDrvCommonIoCtl(uCmd, &g_DevExt, pSession, pHdr, cbBuf);
+        .........................................................
+    
+
+可以看到，函数中首先将用户传入的数据转为`VBGLREQHDR Hdr;`结构体，该结构体定义如下
+
+    
+    
+    typedef struct VBGLREQHDR
+    {
+        /** IN: The request input size, and output size if cbOut is zero.
+         * @sa VMMDevRequestHeader::size  */
+        uint32_t        cbIn;
+        /** IN: Structure version (VBGLREQHDR_VERSION)
+         * @sa VMMDevRequestHeader::version */
+        uint32_t        uVersion;
+        /** IN: The VMMDev request type, set to VBGLREQHDR_TYPE_DEFAULT unless this is a
+         * kind of VMMDev request.
+         * @sa VMMDevRequestType, VMMDevRequestHeader::requestType */
+        uint32_t        uType;
+        /** OUT: The VBox status code of the operation, out direction only. */
+        int32_t         rc;
+        /** IN: The output size.  This is optional - set to zero to use cbIn as the
+         * output size. */
+        uint32_t        cbOut;
+        /** Reserved / filled in by kernel, MBZ.
+         * @sa VMMDevRequestHeader::fRequestor */
+        uint32_t        uReserved;
+    } VBGLREQHDR;
+    
+
+然后判断一些信息是否符合要求，这里，归纳如下
+
+    
+    
+    Hdr.uVersion = VBGLREQHDR_VERSION
+    Hdr.cbIn和Hdr.cbOut不能大于_1M*16
+    
+
+检查通过后，执行`rc = VGDrvCommonIoCtl(uCmd, &g_DevExt, pSession, pHdr,
+cbBuf);`，进入`VGDrvCommonIoCtl`函数，该函数位于`VBoxGuest.cpp`源文件
+
+    
+    
+    int VGDrvCommonIoCtl(uintptr_t iFunction, PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION pSession, PVBGLREQHDR pReqHdr, size_t cbReq)
+    {
+        uintptr_t const iFunctionStripped = VBGL_IOCTL_CODE_STRIPPED(iFunction);
+        int rc;
+    ...............................................................
+       /*
+         * Deal with variably sized requests first.
+         */
+        rc = VINF_SUCCESS;
+        if (   iFunctionStripped == VBGL_IOCTL_CODE_STRIPPED(VBGL_IOCTL_VMMDEV_REQUEST(0))
+            || iFunctionStripped == VBGL_IOCTL_CODE_STRIPPED(VBGL_IOCTL_VMMDEV_REQUEST_BIG) )
+        {
+            ........
+        }
+        else if (RT_LIKELY(pReqHdr->uType == VBGLREQHDR_TYPE_DEFAULT))
+        {
+            if (iFunctionStripped == VBGL_IOCTL_CODE_STRIPPED(VBGL_IOCTL_LOG(0)))
+            {
+                ........
+            }
+    #ifdef VBOX_WITH_HGCM
+            else if (iFunction == VBGL_IOCTL_IDC_HGCM_FAST_CALL) /* (is variable size, but we don't bother encoding it) */
+            {
+                .........
+            }
+            else if (   iFunctionStripped == VBGL_IOCTL_CODE_STRIPPED(VBGL_IOCTL_HGCM_CALL(0))
+    # if ARCH_BITS == 64
+                     || iFunctionStripped == VBGL_IOCTL_CODE_STRIPPED(VBGL_IOCTL_HGCM_CALL_32(0))
+    # endif
+                    )
+            {
+                ...........
+            }
+            else if (iFunctionStripped == VBGL_IOCTL_CODE_STRIPPED(VBGL_IOCTL_HGCM_CALL_WITH_USER_DATA(0)))
+            {
+                ..........
+            }
+    #endif /* VBOX_WITH_HGCM */
+            else
+            {
+                switch (iFunction)
+                {
+    
+
+由于我们想要进入HGCM相关的处理分支里，因此，想要满足`pReqHdr->uType == VBGLREQHDR_TYPE_DEFAULT`
+
+    
+    
+                switch (iFunction)
+                {
+    ............................................
+    #ifdef VBOX_WITH_HGCM
+                    case VBGL_IOCTL_HGCM_CONNECT:
+                        REQ_CHECK_SIZES(VBGL_IOCTL_HGCM_CONNECT);
+                        pReqHdr->rc = vgdrvIoCtl_HGCMConnect(pDevExt, pSession, (PVBGLIOCHGCMCONNECT)pReqHdr);
+                        break;
+    
+                    case VBGL_IOCTL_HGCM_DISCONNECT:
+                        REQ_CHECK_SIZES(VBGL_IOCTL_HGCM_DISCONNECT);
+                        pReqHdr->rc = vgdrvIoCtl_HGCMDisconnect(pDevExt, pSession, (PVBGLIOCHGCMDISCONNECT)pReqHdr);
+                        break;
+    #endif
+    
+
+这里的`iFunction`值就是我们在ioctl中传入的cmd，当cmd为`VBGL_IOCTL_HGCM_CONNECT`或者`VBGL_IOCTL_HGCM_DISCONNECT`时，可以建立或者断开一个`HGCM`服务。在一般情况下，使用HGCM调用Host中的服务时，要经过三个步骤`VBGL_IOCTL_HGCM_CONNECT`->`VBGL_IOCTL_HGCM_CALL`->`VBGL_IOCTL_HGCM_DISCONNECT`，即打开服务->调用函数->关闭服务。可以在`src\VBox\HostServices`目录下看到这些服务以及它们的源码
+
+    
+    
+    src\VBox\HostServices
+        DragAndDrop
+        GuestControl
+        GuestProperties
+        HostChannel
+        SharedClipboard
+        SharedFolders
+        SharedOpenGL
+    
+
+从这些服务名大致能知道它们的作用，其中`SharedClipboard`用于在Host和Guest之间共享`粘贴板`，`SharedFolders`用于共享`文件夹`，而`SharedOpenGL`用于`3D图形加速`。  
+继续分析HGCM服务的调用
+
+    
+    
+    pReqHdr->rc = vgdrvIoCtl_HGCMConnect(pDevExt, pSession, (PVBGLIOCHGCMCONNECT)pReqHdr);
+    
+
+可以知道此时将`pReqHdr`这个`VBGLREQHDR`结构体指针强制转换为`VBGLIOCHGCMCONNECT`结构体指针，该结构体定义如下
+
+    
+    
+    typedef struct VBGLIOCHGCMCONNECT
+    {
+        /** The header. */
+        VBGLREQHDR                  Hdr;
+        union
+        {
+            struct
+            {
+                HGCMServiceLocation Loc;
+            } In;
+            struct
+            {
+                uint32_t            idClient;
+            } Out;
+        } u;
+    } VBGLIOCHGCMCONNECT, RT_FAR *PVBGLIOCHGCMCONNECT;
+    
+    /**
+     * HGCM service location.
+     * @ingroup grp_vmmdev_req
+     */
+    typedef struct HGCMSERVICELOCATION
+    {
+        /** Type of the location. */
+        HGCMServiceLocationType type;
+    
+        union
+        {
+            HGCMServiceLocationHost host;
+        } u;
+    } HGCMServiceLocation;
+    
+    typedef enum
+    {
+        VMMDevHGCMLoc_Invalid    = 0,
+        VMMDevHGCMLoc_LocalHost  = 1,
+        VMMDevHGCMLoc_LocalHost_Existing = 2,
+        VMMDevHGCMLoc_SizeHack   = 0x7fffffff
+    } HGCMServiceLocationType;
+    
+    /**
+     * HGCM host service location.
+     * @ingroup grp_vmmdev_req
+     */
+    typedef struct
+    {
+        char achName[128]; /**< This is really szName. */
+    } HGCMServiceLocationHost;
+    
+
+###  VBGL_IOCTL_HGCM_CONNECT
+
+####  VbglR0HGCMInternalConnect
+
+进入`vgdrvIoCtl_HGCMConnect`函数,
+
+    
+    
+    static int vgdrvIoCtl_HGCMConnect(PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION pSession, PVBGLIOCHGCMCONNECT pInfo)
+    {
+        int rc;
+        HGCMCLIENTID idClient = 0;
+    
+        /*
+         * The VbglHGCMConnect call will invoke the callback if the HGCM
+         * call is performed in an ASYNC fashion. The function is not able
+         * to deal with cancelled requests.
+         */
+        Log(("VBOXGUEST_IOCTL_HGCM_CONNECT: %.128s\n",
+             pInfo->u.In.Loc.type == VMMDevHGCMLoc_LocalHost || pInfo->u.In.Loc.type == VMMDevHGCMLoc_LocalHost_Existing
+             ? pInfo->u.In.Loc.u.host.achName : "<not local host>"));
+    
+        rc = VbglR0HGCMInternalConnect(&pInfo->u.In.Loc, pSession->fRequestor, &idClient,
+                                       vgdrvHgcmAsyncWaitCallback, pDevExt, RT_INDEFINITE_WAIT);
+        Log(("VBOXGUEST_IOCTL_HGCM_CONNECT: idClient=%RX32 (rc=%Rrc)\n", idClient, rc));
+        if (RT_SUCCESS(rc))
+        {
+            /*
+             * Append the client id to the client id table.
+             * If the table has somehow become filled up, we'll disconnect the session.
+             */
+            unsigned i;
+            RTSpinlockAcquire(pDevExt->SessionSpinlock);
+            for (i = 0; i < RT_ELEMENTS(pSession->aHGCMClientIds); i++)
+                if (!pSession->aHGCMClientIds[i])
+                {
+                    pSession->aHGCMClientIds[i] = idClient;
+                    break;
+                }
+            RTSpinlockRelease(pDevExt->SessionSpinlock);
+            if (i >= RT_ELEMENTS(pSession->aHGCMClientIds))
+            {
+                LogRelMax(32, ("VBOXGUEST_IOCTL_HGCM_CONNECT: too many HGCMConnect calls for one session!\n"));
+                VbglR0HGCMInternalDisconnect(idClient, pSession->fRequestor, vgdrvHgcmAsyncWaitCallback, pDevExt, RT_INDEFINITE_WAIT);
+    
+                pInfo->u.Out.idClient = 0;
+                return VERR_TOO_MANY_OPEN_FILES;
+            }
+        }
+        pInfo->u.Out.idClient = idClient;
+        return rc;
+    }
+    
+
+从该函数可以看出，它将调用`VbglR0HGCMInternalConnect`函数，然后返回一个`idClient`即客户端号，并将该号码缓存到`pSession->aHGCMClientIds`数组中，同时将其返回给Guest中的请求程序。我们继续跟进`VbglR0HGCMInternalConnect`函数
+
+    
+    
+    DECLR0VBGL(int) VbglR0HGCMInternalConnect(HGCMServiceLocation const *pLoc, uint32_t fRequestor, HGCMCLIENTID *pidClient,
+                                              PFNVBGLHGCMCALLBACK pfnAsyncCallback, void *pvAsyncData, uint32_t u32AsyncData)
+    {
+        int rc;
+        if (   RT_VALID_PTR(pLoc)
+            && RT_VALID_PTR(pidClient)
+            && RT_VALID_PTR(pfnAsyncCallback))
+        {
+            /* Allocate request */
+            VMMDevHGCMConnect *pHGCMConnect = NULL;
+            rc = VbglR0GRAlloc((VMMDevRequestHeader **)&pHGCMConnect, sizeof(VMMDevHGCMConnect), VMMDevReq_HGCMConnect);
+            if (RT_SUCCESS(rc))
+            {
+                /* Initialize request memory */
+                pHGCMConnect->header.header.fRequestor = fRequestor;
+    
+                pHGCMConnect->header.fu32Flags = 0;
+    
+                memcpy(&pHGCMConnect->loc, pLoc, sizeof(pHGCMConnect->loc));
+                pHGCMConnect->u32ClientID = 0;
+    
+                /* Issue request */
+                rc = VbglR0GRPerform (&pHGCMConnect->header.header);
+                if (RT_SUCCESS(rc))
+                {
+                    /* Check if host decides to process the request asynchronously. */
+                    if (rc == VINF_HGCM_ASYNC_EXECUTE)
+                    {
+                        /* Wait for request completion interrupt notification from host */
+                        pfnAsyncCallback(&pHGCMConnect->header, pvAsyncData, u32AsyncData);
+                    }
+    
+                    rc = pHGCMConnect->header.result;
+                    if (RT_SUCCESS(rc))
+                        *pidClient = pHGCMConnect->u32ClientID;
+                }
+                VbglR0GRFree(&pHGCMConnect->header.header);
+            }
+        }
+        else
+            rc = VERR_INVALID_PARAMETER;
+        return rc;
+    }
+    
+
+该函数主要是新建了一个结构体，并从最开始`ioctl`操作中传入的结构体中复制`HGCMServiceLocation`结构体数据，然后传入`VbglR0GRPerform`函数。  
+VbglR0GRPerform函数实际上就是一个对`in`和`out`汇编指令的封装，操作IO接口，可以知道，其请求的端口地址为`g_vbgldata.portVMMDev
++ VMMDEV_PORT_OFF_REQUEST`
+
+####  VbglR0GRPerform
+
+    
+    
+    DECLR0VBGL(int) VbglR0GRPerform(VMMDevRequestHeader *pReq)
+    {
+        int rc = vbglR0Enter();
+        if (RT_SUCCESS(rc))
+        {
+            if (pReq)
+            {
+                RTCCPHYS PhysAddr = VbglR0PhysHeapGetPhysAddr(pReq);
+                if (   PhysAddr != 0
+                    && PhysAddr < _4G) /* Port IO is 32 bit. */
+                {
+                    ASMOutU32(g_vbgldata.portVMMDev + VMMDEV_PORT_OFF_REQUEST, (uint32_t)PhysAddr);
+                    /* Make the compiler aware that the host has changed memory. */
+                    ASMCompilerBarrier();
+                    rc = pReq->rc;
+                }
+                else
+                    rc = VERR_VBGL_INVALID_ADDR;
+            }
+            else
+                rc = VERR_INVALID_PARAMETER;
+        }
+        return rc;
+    }
+    
+
+通过查找`VMMDEV_PORT_OFF_REQUEST`的引用，可以发现`src\VBox\Devices\VMMDev\VMMDev.cpp`文件，可以知道这是VirtualBox虚拟出来的IO设备,在`vmmdevIOPortRegionMap`函数中，通过`PDMDevHlpIOPortRegister`函数为`VMMDEV_PORT_OFF_REQUEST`IO端口注册了一个处理函数。
+
+    
+    
+    static DECLCALLBACK(int) vmmdevIOPortRegionMap(PPDMDEVINS pDevIns, PPDMPCIDEV pPciDev, uint32_t iRegion,
+                                                   RTGCPHYS GCPhysAddress, RTGCPHYS cb, PCIADDRESSSPACE enmType)
+    {
+        LogFlow(("vmmdevIOPortRegionMap: iRegion=%d GCPhysAddress=%RGp cb=%RGp enmType=%d\n", iRegion, GCPhysAddress, cb, enmType));
+        RT_NOREF3(iRegion, cb, enmType);
+        PVMMDEV pThis = RT_FROM_MEMBER(pPciDev, VMMDEV, PciDev);
+    
+        Assert(enmType == PCI_ADDRESS_SPACE_IO);
+        Assert(iRegion == 0);
+        AssertMsg(RT_ALIGN(GCPhysAddress, 8) == GCPhysAddress, ("Expected 8 byte alignment. GCPhysAddress=%#x\n", GCPhysAddress));
+    
+        /*
+         * Register our port IO handlers.
+         */
+        int rc = PDMDevHlpIOPortRegister(pDevIns, (RTIOPORT)GCPhysAddress + VMMDEV_PORT_OFF_REQUEST, 1,
+                                         pThis, vmmdevRequestHandler, NULL, NULL, NULL, "VMMDev Request Handler");
+    
+
+因此我们在Guset中的`ASMOutU32(g_vbgldata.portVMMDev + VMMDEV_PORT_OFF_REQUEST,
+(uint32_t)PhysAddr);`请求最终被传入到虚拟设备中的`vmmdevRequestHandler`函数中进行处理。
+
+####  vmmdevRequestHandler
+
+    
+    
+    /**
+     * @callback_method_impl{FNIOMIOPORTOUT,
+     * Port I/O write andler for the generic request interface.}
+     */
+    static DECLCALLBACK(int) vmmdevRequestHandler(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t u32, unsigned cb)
+    {
+        uint64_t tsArrival;
+        STAM_GET_TS(tsArrival);
+    
+        RT_NOREF2(Port, cb);
+        PVMMDEV pThis = (VMMDevState *)pvUser;
+    
+        /*
+         * The caller has passed the guest context physical address of the request
+         * structure. We'll copy all of it into a heap buffer eventually, but we
+         * will have to start off with the header.
+         */
+        VMMDevRequestHeader requestHeader;
+        RT_ZERO(requestHeader);
+        PDMDevHlpPhysRead(pDevIns, (RTGCPHYS)u32, &requestHeader, sizeof(requestHeader));
+    
+    .........................................................
+                if (pRequestHeader)
+                {
+                    memcpy(pRequestHeader, &requestHeader, sizeof(VMMDevRequestHeader));
+    
+                    /* Try lock the request if it's a HGCM call and not crossing a page boundrary.
+                       Saves on PGM interaction. */
+                    VMMDEVREQLOCK   Lock   = { NULL, { 0, NULL } };
+                    PVMMDEVREQLOCK  pLock  = NULL;
+                    size_t          cbLeft = requestHeader.size - sizeof(VMMDevRequestHeader);
+                    if (cbLeft)
+                    {
+                        ...............................
+                    }
+    
+                    /*
+                     * Feed buffered request thru the dispatcher.
+                     */
+                    uint32_t fPostOptimize = 0;
+                    PDMCritSectEnter(&pThis->CritSect, VERR_IGNORED);
+                    rcRet = vmmdevReqDispatcher(pThis, pRequestHeader, u32, tsArrival, &fPostOptimize, &pLock);
+                    PDMCritSectLeave(&pThis->CritSect);
+    
+
+请求将被传入`vmmdevReqDispatcher`函数进行调度
+
+    
+    
+    /**
+     * Dispatch the request to the appropriate handler function.
+     *
+     * @returns Port I/O handler exit code.
+     * @param   pThis           The VMM device instance data.
+     * @param   pReqHdr         The request header (cached in host memory).
+     * @param   GCPhysReqHdr    The guest physical address of the request (for
+     *                          HGCM).
+     * @param   tsArrival       The STAM_GET_TS() value when the request arrived.
+     * @param   pfPostOptimize  HGCM optimizations, VMMDEVREQDISP_POST_F_XXX.
+     * @param   ppLock          Pointer to the lock info pointer (latter can be
+     *                          NULL).  Set to NULL if HGCM takes lock ownership.
+     */
+    static int vmmdevReqDispatcher(PVMMDEV pThis, VMMDevRequestHeader *pReqHdr, RTGCPHYS GCPhysReqHdr,
+                                   uint64_t tsArrival, uint32_t *pfPostOptimize, PVMMDEVREQLOCK *ppLock)
+    {
+        int rcRet = VINF_SUCCESS;
+        Assert(*pfPostOptimize == 0);
+    
+        switch (pReqHdr->requestType)
+        {
+        ...........................................
+    #ifdef VBOX_WITH_HGCM
+            case VMMDevReq_HGCMConnect:
+                vmmdevReqHdrSetHgcmAsyncExecute(pThis, GCPhysReqHdr, *ppLock);
+                pReqHdr->rc = vmmdevReqHandler_HGCMConnect(pThis, pReqHdr, GCPhysReqHdr);
+                Assert(pReqHdr->rc == VINF_HGCM_ASYNC_EXECUTE || RT_FAILURE_NP(pReqHdr->rc));
+                if (RT_SUCCESS(pReqHdr->rc))
+                    *pfPostOptimize |= VMMDEVREQDISP_POST_F_NO_WRITE_OUT;
+                break;
+    
+            case VMMDevReq_HGCMDisconnect:
+                vmmdevReqHdrSetHgcmAsyncExecute(pThis, GCPhysReqHdr, *ppLock);
+                pReqHdr->rc = vmmdevReqHandler_HGCMDisconnect(pThis, pReqHdr, GCPhysReqHdr);
+                Assert(pReqHdr->rc == VINF_HGCM_ASYNC_EXECUTE || RT_FAILURE_NP(pReqHdr->rc));
+                if (RT_SUCCESS(pReqHdr->rc))
+                    *pfPostOptimize |= VMMDEVREQDISP_POST_F_NO_WRITE_OUT;
+                break;
+    
+    # ifdef VBOX_WITH_64_BITS_GUESTS
+            case VMMDevReq_HGCMCall64:
+    # endif
+            case VMMDevReq_HGCMCall32:
+                vmmdevReqHdrSetHgcmAsyncExecute(pThis, GCPhysReqHdr, *ppLock);
+                pReqHdr->rc = vmmdevReqHandler_HGCMCall(pThis, pReqHdr, GCPhysReqHdr, tsArrival, ppLock);
+                Assert(pReqHdr->rc == VINF_HGCM_ASYNC_EXECUTE || RT_FAILURE_NP(pReqHdr->rc));
+                if (RT_SUCCESS(pReqHdr->rc))
+                    *pfPostOptimize |= VMMDEVREQDISP_POST_F_NO_WRITE_OUT;
+                break;
+    
+            case VMMDevReq_HGCMCancel:
+                pReqHdr->rc = vmmdevReqHandler_HGCMCancel(pThis, pReqHdr, GCPhysReqHdr);
+                break;
+    
+            case VMMDevReq_HGCMCancel2:
+                pReqHdr->rc = vmmdevReqHandler_HGCMCancel2(pThis, pReqHdr);
+                break;
+    #endif /* VBOX_WITH_HGCM */
+    ...........................................
+    
+
+在`VMMDevReq_HGCMConnect`时，使用`vmmdevReqHdrSetHgcmAsyncExecute`函数设置异步返回值，这样Guset系统驱动的`VbglR0HGCMInternalConnect`函数时将通过`pfnAsyncCallback(&pHGCMConnect->header,
+pvAsyncData,
+u32AsyncData);`等待设备这里的操作完成并获取结果；设备这里将调用`vmmdevReqHandler_HGCMConnect`连接HGCM服务，继续跟踪，
+
+####  vmmdevReqHandler_HGCMConnect
+
+    
+    
+    /** Handle VMMDevHGCMConnect request.
+     *
+     * @param   pThis           The VMMDev instance data.
+     * @param   pHGCMConnect    The guest request (cached in host memory).
+     * @param   GCPhys          The physical address of the request.
+     */
+    int vmmdevHGCMConnect(PVMMDEV pThis, const VMMDevHGCMConnect *pHGCMConnect, RTGCPHYS GCPhys)
+    {
+        int rc = VINF_SUCCESS;
+    
+        PVBOXHGCMCMD pCmd = vmmdevHGCMCmdAlloc(pThis, VBOXHGCMCMDTYPE_CONNECT, GCPhys, pHGCMConnect->header.header.size, 0,
+                                               pHGCMConnect->header.header.fRequestor);
+        if (pCmd)
+        {
+            vmmdevHGCMConnectFetch(pHGCMConnect, pCmd);
+    
+            /* Only allow the guest to use existing services! */
+            ASSERT_GUEST(pHGCMConnect->loc.type == VMMDevHGCMLoc_LocalHost_Existing);
+            pCmd->u.connect.pLoc->type = VMMDevHGCMLoc_LocalHost_Existing;
+    
+            vmmdevHGCMAddCommand(pThis, pCmd);
+            rc = pThis->pHGCMDrv->pfnConnect(pThis->pHGCMDrv, pCmd, pCmd->u.connect.pLoc, &pCmd->u.connect.u32ClientID);
+            if (RT_FAILURE(rc))
+                vmmdevHGCMRemoveCommand(pThis, pCmd);
+        }
+        else
+        {
+            rc = VERR_NO_MEMORY;
+        }
+    
+        return rc;
+    }
+    
+
+函数中主要是调用了`rc = pThis->pHGCMDrv->pfnConnect(pThis->pHGCMDrv, pCmd,
+pCmd->u.connect.pLoc,
+&pCmd->u.connect.u32ClientID);`进行服务连接，其中pThis在`vmmdevIOPortRegionMap`函数中初始化
+
+    
+    
+        PVMMDEV pThis = RT_FROM_MEMBER(pPciDev, VMMDEV, PciDev);
+    
+
+pThis->pHGCMDrv在`vmmdevConstruct`函数中被初始化
+
+    
+    
+            pThis->pHGCMDrv = PDMIBASE_QUERY_INTERFACE(pThis->pDrvBase, PDMIHGCMCONNECTOR);
+    
+
+通过调试，可以知道`pThis->pHGCMDrv->pfnConnect`最终指向的是`iface_hgcmConnect`函数
+
+    
+    
+    In file: /home/sea/Desktop/VirtualBox-6.0.0/src/VBox/Devices/VMMDev/VMMDevHGCM.cpp
+       450         /* Only allow the guest to use existing services! */
+       451         ASSERT_GUEST(pHGCMConnect->loc.type == VMMDevHGCMLoc_LocalHost_Existing);
+       452         pCmd->u.connect.pLoc->type = VMMDevHGCMLoc_LocalHost_Existing;
+       453 
+       454         vmmdevHGCMAddCommand(pThis, pCmd);
+     ► 455         rc = pThis->pHGCMDrv->pfnConnect(pThis->pHGCMDrv, pCmd, pCmd->u.connect.pLoc, &pCmd->u.connect.u32ClientID);
+       456         if (RT_FAILURE(rc))
+       457             vmmdevHGCMRemoveCommand(pThis, pCmd);
+       458     }
+       459     else
+       460     {
+    pwndbg> s
+       599 /* HGCM connector interface */
+       600 
+       601 static DECLCALLBACK(int) iface_hgcmConnect(PPDMIHGCMCONNECTOR pInterface, PVBOXHGCMCMD pCmd,
+       602                                            PHGCMSERVICELOCATION pServiceLocation,
+       603                                            uint32_t *pu32ClientID)
+     ► 604 {
+    
+
+其中iface_hgcmConnect函数源码如下
+
+####  iface_hgcmConnect
+
+    
+    
+    static DECLCALLBACK(int) iface_hgcmConnect(PPDMIHGCMCONNECTOR pInterface, PVBOXHGCMCMD pCmd,
+                                               PHGCMSERVICELOCATION pServiceLocation,
+                                               uint32_t *pu32ClientID)
+    {
+        Log9(("Enter\n"));
+    
+        PDRVMAINVMMDEV pDrv = RT_FROM_MEMBER(pInterface, DRVMAINVMMDEV, HGCMConnector);
+    
+        if (    !pServiceLocation
+            || (   pServiceLocation->type != VMMDevHGCMLoc_LocalHost
+                && pServiceLocation->type != VMMDevHGCMLoc_LocalHost_Existing))
+        {
+            return VERR_INVALID_PARAMETER;
+        }
+    
+        /* Check if service name is a string terminated by zero*/
+        size_t cchInfo = 0;
+        if (RTStrNLenEx(pServiceLocation->u.host.achName, sizeof(pServiceLocation->u.host.achName), &cchInfo) != VINF_SUCCESS)
+        {
+            return VERR_INVALID_PARAMETER;
+        }
+    
+        if (!pDrv->pVMMDev || !pDrv->pVMMDev->hgcmIsActive())
+            return VERR_INVALID_STATE;
+        return HGCMGuestConnect(pDrv->pHGCMPort, pCmd, pServiceLocation->u.host.achName, pu32ClientID);
+    }
+    
+
+这里，对于`pServiceLocation->type`字段，其值必须为`VMMDevHGCMLoc_LocalHost`或者`VMMDevHGCMLoc_LocalHost_Existing`。检查通过以后，就会继续调用`HGCMGuestConnect`函数  
+而`HGCMGuestConnect`函数是将数据封装为消息，然后调用`hgcmMsgPost`，`hgcmMsgPost`最后会调用`hgcmMsgPostInternal`函数向`HGCMThread`实例发送消息
+
+####  hgcmMsgPostInternal
+
+    
+    
+    DECLINLINE(int) hgcmMsgPostInternal(HGCMMsgCore *pMsg, PHGCMMSGCALLBACK pfnCallback, bool fWait)
+    {
+        LogFlow(("MAIN::hgcmMsgPostInternal: pMsg = %p, pfnCallback = %p, fWait = %d\n", pMsg, pfnCallback, fWait));
+        Assert(pMsg);
+    
+        pMsg->Reference(); /* paranoia? */
+    
+        int rc = pMsg->Thread()->MsgPost(pMsg, pfnCallback, fWait);
+    
+        pMsg->Dereference();
+    
+        LogFlow(("MAIN::hgcmMsgPostInternal: pMsg = %p, rc = %Rrc\n", pMsg, rc));
+        return rc;
+    }
+    
+
+通过gdb调试
+
+    
+    
+    In file: /home/sea/Desktop/VirtualBox-6.0.0/src/VBox/Main/src-client/HGCMThread.cpp
+       697     LogFlow(("MAIN::hgcmMsgPostInternal: pMsg = %p, pfnCallback = %p, fWait = %d\n", pMsg, pfnCallback, fWait));
+       698     Assert(pMsg);
+       699 
+       700     pMsg->Reference(); /* paranoia? */
+       701 
+     ► 702     int rc = pMsg->Thread()->MsgPost(pMsg, pfnCallback, fWait);
+       703 
+       704     pMsg->Dereference();
+       705 
+       706     LogFlow(("MAIN::hgcmMsgPostInternal: pMsg = %p, rc = %Rrc\n", pMsg, rc));
+       707     return rc;
+    pwndbg> p pMsg->Thread()->MsgPost
+    $11 = {int (HGCMThread * const, HGCMMsgCore *, PHGCMMSGCALLBACK, bool)} 0x7fe5d8646a5c <HGCMThread::MsgPost(HGCMMsgCore*, int (*)(int, HGCMMsgCore*), bool)>
+    
+
+HGCMThread::MsgPost函数只是简单的将消息插入到消息队列，当HGCMThread的线程取出消息时，便会进行处理。HGCMThread的主线程函数为`hgcmThread`
+
+####  hgcmThread
+
+    
+    
+    /* The main HGCM thread handler. */
+    static DECLCALLBACK(void) hgcmThread(HGCMThread *pThread, void *pvUser)
+    {
+        LogFlowFunc(("pThread = %p, pvUser = %p\n", pThread, pvUser));
+    
+        NOREF(pvUser);
+    
+        bool fQuit = false;
+    
+        while (!fQuit)
+        {
+            HGCMMsgCore *pMsgCore;
+            int rc = hgcmMsgGet(pThread, &pMsgCore);
+    
+            if (RT_FAILURE(rc))
+            {
+                /* The error means some serious unrecoverable problem in the hgcmMsg/hgcmThread layer. */
+                AssertMsgFailed(("%Rrc\n", rc));
+                break;
+            }
+    
+            uint32_t u32MsgId = pMsgCore->MsgId();
+    
+            switch (u32MsgId)
+            {
+                case HGCM_MSG_CONNECT:
+                {
+                    HGCMMsgMainConnect *pMsg = (HGCMMsgMainConnect *)pMsgCore;
+    
+                    LogFlowFunc(("HGCM_MSG_CONNECT pszServiceName %s, pu32ClientId %p\n",
+                                 pMsg->pszServiceName, pMsg->pu32ClientId));
+    
+                    /* Resolve the service name to the pointer to service instance.
+                     */
+                    HGCMService *pService;
+                    rc = HGCMService::ResolveService(&pService, pMsg->pszServiceName);
+    
+                    if (RT_SUCCESS(rc))
+                    {
+                        /* Call the service instance method. */
+                        rc = pService->CreateAndConnectClient(pMsg->pu32ClientId,
+                                                              0,
+                                                              pMsg->pHGCMPort->pfnGetRequestor(pMsg->pHGCMPort, pMsg->pCmd),
+                                                              pMsg->pHGCMPort->pfnIsCmdRestored(pMsg->pHGCMPort, pMsg->pCmd));
+    
+                        /* Release the service after resolve. */
+                        pService->ReleaseService();
+                    }
+                } break;
+    
+                case HGCM_MSG_DISCONNECT:
+                {
+    
+
+当收到`HGCM_MSG_CONNECT`消息时，调用`HGCMService::ResolveService(&pService,
+pMsg->pszServiceName)`得到对应服务的句柄，该函数实际上就是一个链表查找的过程
+
+    
+    
+    /** The method obtains a referenced pointer to the service with
+     *  specified name. The caller must call ReleaseService when
+     *  the pointer is no longer needed.
+     *
+     * @param ppSvc          Where to store the pointer to the service.
+     * @param pszServiceName The name of the service.
+     * @return VBox rc.
+     * @thread main HGCM
+     */
+    /* static */ int HGCMService::ResolveService(HGCMService **ppSvc, const char *pszServiceName)
+    {
+        LogFlowFunc(("ppSvc = %p name = %s\n",
+                     ppSvc, pszServiceName));
+    
+        if (!ppSvc || !pszServiceName)
+        {
+            return VERR_INVALID_PARAMETER;
+        }
+    
+        HGCMService *pSvc = sm_pSvcListHead;
+    
+        while (pSvc)
+        {
+            if (strcmp(pSvc->m_pszSvcName, pszServiceName) == 0)
+            {
+                break;
+            }
+    
+            pSvc = pSvc->m_pSvcNext;
+        }
+    
+        LogFlowFunc(("lookup in the list is %p\n", pSvc));
+    
+        if (pSvc == NULL)
+        {
+            *ppSvc = NULL;
+            return VERR_HGCM_SERVICE_NOT_FOUND;
+        }
+    
+        pSvc->ReferenceService();
+    
+        *ppSvc = pSvc;
+    
+        return VINF_SUCCESS;
+    }
+    
+
+而该服务链表是在`HGCM_MSG_LOAD`时通过`LoadService`初始化的
+
+    
+    
+                case HGCM_MSG_LOAD:
+                {
+                    HGCMMsgMainLoad *pMsg = (HGCMMsgMainLoad *)pMsgCore;
+    
+                    LogFlowFunc(("HGCM_MSG_LOAD pszServiceName = %s, pMsg->pszServiceLibrary = %s, pMsg->pUVM = %p\n",
+                                 pMsg->pszServiceName, pMsg->pszServiceLibrary, pMsg->pUVM));
+    
+                    rc = HGCMService::LoadService(pMsg->pszServiceLibrary, pMsg->pszServiceName, pMsg->pUVM, pMsg->pHgcmPort);
+                } break;
+    
+
+其中`LoadService`函数就是加载对应的名称的`动态库`，然后将句柄存储到链表中。  
+ResolveService得到服务模块句柄以后，就通过`CreateAndConnectClient`函数调用模块中初始化的函数
+
+    
+    
+                    if (RT_SUCCESS(rc))
+                    {
+                        /* Call the service instance method. */
+                        rc = pService->CreateAndConnectClient(pMsg->pu32ClientId,
+                                                              0,
+                                                              pMsg->pHGCMPort->pfnGetRequestor(pMsg->pHGCMPort, pMsg->pCmd),
+                                                              pMsg->pHGCMPort->pfnIsCmdRestored(pMsg->pHGCMPort, pMsg->pCmd));
+    
+                        /* Release the service after resolve. */
+                        pService->ReleaseService();
+                    }
+    
+
+CreateAndConnectClient函数如下
+
+    
+    
+    /* Create a new client instance and connect it to the service.
+     *
+     * @param pu32ClientIdOut If not NULL, then the method must generate a new handle for the client.
+     *                        If NULL, use the given 'u32ClientIdIn' handle.
+     * @param u32ClientIdIn   The handle for the client, when 'pu32ClientIdOut' is NULL.
+     * @param fRequestor      The requestor flags, VMMDEV_REQUESTOR_LEGACY if not available.
+     * @param fRestoring      Set if we're restoring a saved state.
+     * @return VBox status code.
+     */
+    int HGCMService::CreateAndConnectClient(uint32_t *pu32ClientIdOut, uint32_t u32ClientIdIn, uint32_t fRequestor, bool fRestoring)
+    {
+        LogFlowFunc(("pu32ClientIdOut = %p, u32ClientIdIn = %d, fRequestor = %#x, fRestoring = %d\n",
+                     pu32ClientIdOut, u32ClientIdIn, fRequestor, fRestoring));
+    
+        /* Allocate a client information structure. */
+        HGCMClient *pClient = new (std::nothrow) HGCMClient(fRequestor);
+    
+        if (!pClient)
+        {
+            Log1WarningFunc(("Could not allocate HGCMClient!!!\n"));
+            return VERR_NO_MEMORY;
+        }
+    
+        uint32_t handle;
+    
+        if (pu32ClientIdOut != NULL)
+        {
+            handle = hgcmObjGenerateHandle(pClient);
+        }
+        else
+        {
+            handle = hgcmObjAssignHandle(pClient, u32ClientIdIn);
+        }
+    
+        LogFlowFunc(("client id = %d\n", handle));
+    
+        AssertRelease(handle);
+    
+        /* Initialize the HGCM part of the client. */
+        int rc = pClient->Init(this);
+    
+        if (RT_SUCCESS(rc))
+        {
+            /* Call the service. */
+            HGCMMsgCore *pCoreMsg;
+    
+            rc = hgcmMsgAlloc(m_pThread, &pCoreMsg, SVC_MSG_CONNECT, hgcmMessageAllocSvc);
+    
+            if (RT_SUCCESS(rc))
+            {
+                HGCMMsgSvcConnect *pMsg = (HGCMMsgSvcConnect *)pCoreMsg;
+    
+                pMsg->u32ClientId = handle;
+                pMsg->fRequestor = fRequestor;
+                pMsg->fRestoring = fRestoring;
+    
+                rc = hgcmMsgSend(pMsg);
+    
+                if (RT_SUCCESS(rc))
+                {
+                    /* Add the client Id to the array. */
+                    if (m_cClients == m_cClientsAllocated)
+                    {
+                        const uint32_t cDelta = 64;
+    
+                        /* Guards against integer overflow on 32bit arch and also limits size of m_paClientIds array to 4GB*/
+                        if (m_cClientsAllocated < UINT32_MAX / sizeof(m_paClientIds[0]) - cDelta)
+                        {
+                            uint32_t *paClientIdsNew;
+    
+                            paClientIdsNew = (uint32_t *)RTMemRealloc(m_paClientIds,
+                                                                      (m_cClientsAllocated + cDelta) * sizeof(m_paClientIds[0]));
+                            Assert(paClientIdsNew);
+    
+                            if (paClientIdsNew)
+                            {
+                                m_paClientIds = paClientIdsNew;
+                                m_cClientsAllocated += cDelta;
+                            }
+                            else
+                            {
+                                rc = VERR_NO_MEMORY;
+                            }
+                        }
+                        else
+                        {
+                            rc = VERR_NO_MEMORY;
+                        }
+                    }
+    
+                    m_paClientIds[m_cClients] = handle;
+                    m_cClients++;
+                }
+            }
+        }
+    
+        if (RT_FAILURE(rc))
+        {
+            hgcmObjDeleteHandle(handle);
+        }
+        else
+        {
+            if (pu32ClientIdOut != NULL)
+            {
+                *pu32ClientIdOut = handle;
+            }
+    
+            ReferenceService();
+        }
+    
+        LogFlowFunc(("rc = %Rrc\n", rc));
+        return rc;
+    }
+    
+
+可以知道，模块的id值最终被存入`m_paClientIds[m_cClients]`，同时通过`*pu32ClientIdOut =
+handle;`将值返回。  
+整个过程大概描述如下
+
+![](https://p4.ssl.qhimg.com/t014e8eb668bcd7d8e6.png)
+
+###  VBGL_IOCTL_HGCM_CALL
+
+在分析完`VBGL_IOCTL_HGCM_CONNECT`操作以后，接下来就是分析`VBGL_IOCTL_HGCM_CALL`，其路线与前面分析的类似，首先会将IOCTL传入的数据指针转为`PVBGLIOCHGCMCALL`类型
+
+####  PVBGLIOCHGCMCALL
+
+    
+    
+    /**
+     * For VBGL_IOCTL_HGCM_CALL and VBGL_IOCTL_HGCM_CALL_WITH_USER_DATA.
+     *
+     * @note This is used by alot of HGCM call structures.
+     */
+    typedef struct VBGLIOCHGCMCALL
+    {
+        /** Common header. */
+        VBGLREQHDR  Hdr;
+        /** Input: The id of the caller. */
+        uint32_t    u32ClientID;
+        /** Input: Function number. */
+        uint32_t    u32Function;
+        /** Input: How long to wait (milliseconds) for completion before cancelling the
+         * call.  This is ignored if not a VBGL_IOCTL_HGCM_CALL_TIMED or
+         * VBGL_IOCTL_HGCM_CALL_TIMED_32 request. */
+        uint32_t    cMsTimeout;
+        /** Input: Whether a timed call is interruptible (ring-0 only).  This is ignored
+         * if not a VBGL_IOCTL_HGCM_CALL_TIMED or VBGL_IOCTL_HGCM_CALL_TIMED_32
+         * request, or if made from user land. */
+        bool        fInterruptible;
+        /** Explicit padding, MBZ. */
+        uint8_t     bReserved;
+        /** Input: How many parameters following this structure.
+         *
+         * The parameters are either HGCMFunctionParameter64 or HGCMFunctionParameter32,
+         * depending on whether we're receiving a 64-bit or 32-bit request.
+         *
+         * The current maximum is 61 parameters (given a 1KB max request size,
+         * and a 64-bit parameter size of 16 bytes).
+         *
+         * @note This information is duplicated by Hdr.cbIn, but it's currently too much
+         *       work to eliminate this. */
+        uint16_t    cParms;
+        /* Parameters follow in form HGCMFunctionParameter aParms[cParms] */
+    } VBGLIOCHGCMCALL, RT_FAR *PVBGLIOCHGCMCALL;
+    
+
+经过一些列调用，会来到`vgdrvIoCtl_HGCMCallInner`函数
+
+####  vgdrvIoCtl_HGCMCallInner
+
+    
+    
+    static int vgdrvIoCtl_HGCMCallInner(PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION pSession, PVBGLIOCHGCMCALL pInfo,
+                                        uint32_t cMillies, bool fInterruptible, bool f32bit, bool fUserData,
+                                        size_t cbExtra, size_t cbData)
+    {
+        const uint32_t  u32ClientId = pInfo->u32ClientID;
+        uint32_t        fFlags;
+        size_t          cbActual;
+        unsigned        i;
+        int             rc;
+    
+        /*
+         * Some more validations.
+         */
+        if (RT_LIKELY(pInfo->cParms <= VMMDEV_MAX_HGCM_PARMS)) /* (Just make sure it doesn't overflow the next check.) */
+        { /* likely */}
+        else
+        {
+            LogRel(("VBOXGUEST_IOCTL_HGCM_CALL: cParm=%RX32 is not sane\n", pInfo->cParms));
+            return VERR_INVALID_PARAMETER;
+        }
+    
+        cbActual = cbExtra + sizeof(*pInfo);
+    #ifdef RT_ARCH_AMD64
+        if (f32bit)
+            cbActual += pInfo->cParms * sizeof(HGCMFunctionParameter32);
+        else
+    #endif
+            cbActual += pInfo->cParms * sizeof(HGCMFunctionParameter);
+        if (RT_LIKELY(cbData >= cbActual))
+        { /* likely */}
+        else
+        {
+            LogRel(("VBOXGUEST_IOCTL_HGCM_CALL: cbData=%#zx (%zu) required size is %#zx (%zu)\n",
+                   cbData, cbData, cbActual, cbActual));
+            return VERR_INVALID_PARAMETER;
+        }
+        pInfo->Hdr.cbOut = (uint32_t)cbActual;
+    
+     ........................................................
+    
+            else
+                rc = VbglR0HGCMInternalCall(pInfo, cbInfo, fFlags, pSession->fRequestor,
+                                            vgdrvHgcmAsyncWaitCallback, pDevExt, cMillies);
+        }
+    .............................................................
+        return rc;
+    }
+    
+
+从中可以看到`cbActual += pInfo->cParms *
+sizeof(HGCMFunctionParameter);`，并且该值最后赋值`pInfo->Hdr.cbOut =
+(uint32_t)cbActual;`，由此可见`pInfo->cParms`代表需要调用的函数的参数个数，而pInfo结构体下方就是cParms个`HGCMFunctionParameter`结构体对象。与`VBGL_IOCTL_HGCM_CONNECT`类似，最后驱动也是通过`IO端口操作`将数据发送到Host中的虚拟设备中，然后在设备的`vmmdevReqDispatcher`函数中处理。  
+如下代码
+
+    
+    
+    # ifdef VBOX_WITH_64_BITS_GUESTS
+            case VMMDevReq_HGCMCall64:
+    # endif
+            case VMMDevReq_HGCMCall32:
+                vmmdevReqHdrSetHgcmAsyncExecute(pThis, GCPhysReqHdr, *ppLock);
+                pReqHdr->rc = vmmdevReqHandler_HGCMCall(pThis, pReqHdr, GCPhysReqHdr, tsArrival, ppLock);
+                Assert(pReqHdr->rc == VINF_HGCM_ASYNC_EXECUTE || RT_FAILURE_NP(pReqHdr->rc));
+                if (RT_SUCCESS(pReqHdr->rc))
+                    *pfPostOptimize |= VMMDEVREQDISP_POST_F_NO_WRITE_OUT;
+                break;
+    
+
+该操作仍然是异步处理，需要等待处理完成后回调函数响应，将结果通过IO端口传回Guest。操作主要是调用`vmmdevHGCMCall`来对相应的service里的函数进行调用。
+
+####  vmmdevHGCMCall
+
+    
+    
+    /**
+     * Handles VMMDevHGCMCall request.
+     *
+     * @returns VBox status code that the guest should see.
+     * @param   pThis           The VMMDev instance data.
+     * @param   pHGCMCall       The request to handle (cached in host memory).
+     * @param   cbHGCMCall      Size of the entire request (including HGCM parameters).
+     * @param   GCPhys          The guest physical address of the request.
+     * @param   enmRequestType  The request type. Distinguishes 64 and 32 bit calls.
+     * @param   tsArrival       The STAM_GET_TS() value when the request arrived.
+     * @param   ppLock          Pointer to the lock info pointer (latter can be
+     *                          NULL).  Set to NULL if HGCM takes lock ownership.
+     */
+    int vmmdevHGCMCall(PVMMDEV pThis, const VMMDevHGCMCall *pHGCMCall, uint32_t cbHGCMCall, RTGCPHYS GCPhys,
+                       VMMDevRequestType enmRequestType, uint64_t tsArrival, PVMMDEVREQLOCK *ppLock)
+    {
+    .............................................................
+            rc = vmmdevHGCMCallFetchGuestParms(pThis, pCmd, pHGCMCall, cbHGCMCall, enmRequestType, cbHGCMParmStruct);
+            if (RT_SUCCESS(rc))
+            {
+                /* Copy guest data to host parameters, so HGCM services can use the data. */
+                rc = vmmdevHGCMInitHostParameters(pThis, pCmd, (uint8_t const *)pHGCMCall);
+                if (RT_SUCCESS(rc))
+                {
+                    /*
+                     * Pass the function call to HGCM connector for actual processing
+                     */
+                    vmmdevHGCMAddCommand(pThis, pCmd);
+    
+    #if 0 /* DONT ENABLE - for performance hacking. */
+                    if (    pCmd->u.call.u32Function == 9
+                        &&  pCmd->u.call.cParms      == 5)
+                    {
+                        vmmdevHGCMRemoveCommand(pThis, pCmd);
+    
+                        if (pCmd->pvReqLocked)
+                        {
+                            VMMDevHGCMRequestHeader volatile *pHeader = (VMMDevHGCMRequestHeader volatile *)pCmd->pvReqLocked;
+                            pHeader->header.rc = VINF_SUCCESS;
+                            pHeader->result    = VINF_SUCCESS;
+                            pHeader->fu32Flags |= VBOX_HGCM_REQ_DONE;
+                        }
+                        else
+                        {
+                            VMMDevHGCMRequestHeader *pHeader = (VMMDevHGCMRequestHeader *)pHGCMCall;
+                            pHeader->header.rc = VINF_SUCCESS;
+                            pHeader->result    = VINF_SUCCESS;
+                            pHeader->fu32Flags |= VBOX_HGCM_REQ_DONE;
+                            PDMDevHlpPhysWrite(pThis->pDevInsR3, GCPhys, pHeader,  sizeof(*pHeader));
+                        }
+                        vmmdevHGCMCmdFree(pThis, pCmd);
+                        return VINF_HGCM_ASYNC_EXECUTE; /* ignored, but avoids assertions. */
+                    }
+    #endif
+    
+                    rc = pThis->pHGCMDrv->pfnCall(pThis->pHGCMDrv, pCmd,
+                                                  pCmd->u.call.u32ClientID, pCmd->u.call.u32Function,
+                                                  pCmd->u.call.cParms, pCmd->u.call.paHostParms, tsArrival);
+    ...................................................
+        return rc;
+    }
+    
+
+可以看出，vmmdevHGCMCall中首先是使用`vmmdevHGCMCallFetchGuestParms`函数和`vmmdevHGCMInitHostParameters`函数，将参数从Guest中拷贝到了设备本地缓冲区中，然后通过`pThis->pHGCMDrv->pfnCall`调用了对应的函数。  
+通过调试
+
+    
+    
+    In file: /home/sea/Desktop/VirtualBox-6.0.0/src/VBox/Devices/VMMDev/VMMDevHGCM.cpp
+       1107                 }
+       1108 #endif
+       1109 
+       1110                 rc = pThis->pHGCMDrv->pfnCall(pThis->pHGCMDrv, pCmd,
+       1111                                               pCmd->u.call.u32ClientID, pCmd->u.call.u32Function,
+     ► 1112                                               pCmd->u.call.cParms, pCmd->u.call.paHostParms, tsArrival);
+       1113 
+       1114                 if (rc == VINF_HGCM_ASYNC_EXECUTE)
+       1115                 {
+       1116                     /*
+       1117                      * Done.  Just update statistics and return.
+    pwndbg> s
+       638 }
+       639 
+       640 static DECLCALLBACK(int) iface_hgcmCall(PPDMIHGCMCONNECTOR pInterface, PVBOXHGCMCMD pCmd, uint32_t u32ClientID,
+       641                                         uint32_t u32Function, uint32_t cParms, PVBOXHGCMSVCPARM paParms, uint64_t tsArrival)
+    
+
+可以知道该函数指针指向的是`iface_hgcmCall`函数
+
+####  iface_hgcmCall
+
+    
+    
+    static DECLCALLBACK(int) iface_hgcmCall(PPDMIHGCMCONNECTOR pInterface, PVBOXHGCMCMD pCmd, uint32_t u32ClientID,
+                                            uint32_t u32Function, uint32_t cParms, PVBOXHGCMSVCPARM paParms, uint64_t tsArrival)
+    {
+        Log9(("Enter\n"));
+    
+        PDRVMAINVMMDEV pDrv = RT_FROM_MEMBER(pInterface, DRVMAINVMMDEV, HGCMConnector);
+    
+        if (!pDrv->pVMMDev || !pDrv->pVMMDev->hgcmIsActive())
+            return VERR_INVALID_STATE;
+    
+        return HGCMGuestCall(pDrv->pHGCMPort, pCmd, u32ClientID, u32Function, cParms, paParms, tsArrival);
+    }
+    
+
+该函数简单的调用了`HGCMGuestCall`函数，而`HGCMGuestCall`函数继续调用`HGCMService::GuestCall`函数，同样也是通过`hgcmMsgPost`将消息挂到队列中，等待`hgcmServiceThread`线程取出消息并处理。
+
+    
+    
+    /*
+     * The service thread. Loads the service library and calls the service entry points.
+     */
+    DECLCALLBACK(void) hgcmServiceThread(HGCMThread *pThread, void *pvUser)
+    {
+        HGCMService *pSvc = (HGCMService *)pvUser;
+        AssertRelease(pSvc != NULL);
+           /* Cache required information to avoid unnecessary pMsgCore access. */
+            uint32_t u32MsgId = pMsgCore->MsgId();
+    
+            switch (u32MsgId)
+            {
+               case SVC_MSG_GUESTCALL:
+                {
+                    HGCMMsgCall *pMsg = (HGCMMsgCall *)pMsgCore;
+    
+                    LogFlowFunc(("SVC_MSG_GUESTCALL u32ClientId = %d, u32Function = %d, cParms = %d, paParms = %p\n",
+                                 pMsg->u32ClientId, pMsg->u32Function, pMsg->cParms, pMsg->paParms));
+    
+                    HGCMClient *pClient = (HGCMClient *)hgcmObjReference(pMsg->u32ClientId, HGCMOBJ_CLIENT);
+    
+                    if (pClient)
+                    {
+                        pSvc->m_fntable.pfnCall(pSvc->m_fntable.pvService, (VBOXHGCMCALLHANDLE)pMsg, pMsg->u32ClientId,
+                                                HGCM_CLIENT_DATA(pSvc, pClient), pMsg->u32Function,
+                                                pMsg->cParms, pMsg->paParms, pMsg->tsArrival);
+    
+                        hgcmObjDereference(pClient);
+                    }
+                    else
+                    {
+                        rc = VERR_HGCM_INVALID_CLIENT_ID;
+                    }
+                } break;
+    
+
+代码中，通过`HGCMClient *pClient = (HGCMClient *)hgcmObjReference(pMsg->u32ClientId,
+HGCMOBJ_CLIENT);`获取到了`HGCMClient`服务对象，然后通过`pSvc->m_fntable.pfnCall`进入了对应服务的处理函数。  
+调试如下
+
+    
+    
+    In file: /home/sea/Desktop/VirtualBox-6.0.0/src/VBox/HostServices/SharedClipboard/service.cpp
+       407                                    void *pvClient,
+       408                                    uint32_t u32Function,
+       409                                    uint32_t cParms,
+       410                                    VBOXHGCMSVCPARM paParms[],
+       411                                    uint64_t tsArrival)
+     ► 412 {
+       413     RT_NOREF_PV(tsArrival);
+       414     int rc = VINF_SUCCESS;
+       415 
+       416     LogRel2(("svcCall: u32ClientID = %d, fn = %d, cParms = %d, pparms = %d\n",
+       417              u32ClientID, u32Function, cParms, paParms));
+    
+
+此时我们进入的是`SharedClipboard`服务的程序`svcCall`函数。对于`HostServices`目录下的各种服务都有一个`svcCall`函数的实现，由此可见，`svcCall`函数是服务程序的处理机入口。从代码可以看出这个函数是在`VBoxHGCMSvcLoad`中注册的
+
+    
+    
+    extern "C" DECLCALLBACK(DECLEXPORT(int)) VBoxHGCMSvcLoad (VBOXHGCMSVCFNTABLE *ptable)
+    {
+        int rc = VINF_SUCCESS;
+                g_pHelpers = ptable->pHelpers;
+    
+                ptable->cbClient = sizeof (VBOXCLIPBOARDCLIENTDATA);
+    
+                ptable->pfnUnload     = svcUnload;
+                ptable->pfnConnect    = svcConnect;
+                ptable->pfnDisconnect = svcDisconnect;
+                ptable->pfnCall       = svcCall;
+                ptable->pfnHostCall   = svcHostCall;
+                ptable->pfnSaveState  = svcSaveState;
+                ptable->pfnLoadState  = svcLoadState;
+                ptable->pfnRegisterExtension  = svcRegisterExtension;
+                ptable->pfnNotify     = NULL;
+                ptable->pvService     = NULL;
+    
+                /* Service specific initialization. */
+                rc = svcInit ();
+    .................................................
+    
+
+至此，我们对于`VBGL_IOCTL_HGCM_CALL`调用Service中的函数的整个流程也有所清楚了。
+
+###  VBGL_IOCTL_IDC_DISCONNECT
+
+对于`VBGL_IOCTL_IDC_DISCONNECT`，流程与前面类似，比较简单，调用了对应服务的`DisconnectClient`函数，然后使用`hgcmObjDereference(pClient);`将服务句柄从设备缓存列表中移除。
+
+    
+    
+                case HGCM_MSG_DISCONNECT:
+                {
+                    HGCMMsgMainDisconnect *pMsg = (HGCMMsgMainDisconnect *)pMsgCore;
+    
+                    LogFlowFunc(("HGCM_MSG_DISCONNECT u32ClientId = %d\n",
+                                 pMsg->u32ClientId));
+    
+                    HGCMClient *pClient = (HGCMClient *)hgcmObjReference(pMsg->u32ClientId, HGCMOBJ_CLIENT);
+    
+                    if (!pClient)
+                    {
+                        rc = VERR_HGCM_INVALID_CLIENT_ID;
+                        break;
+                    }
+    
+                    /* The service the client belongs to. */
+                    HGCMService *pService = pClient->pService;
+    
+                    /* Call the service instance to disconnect the client. */
+                    rc = pService->DisconnectClient(pMsg->u32ClientId, false);
+    
+                    hgcmObjDereference(pClient);
+                } break;
+    
+
+至此，我们对HGCM协议已经有了进一步的深刻了解。
+
+## 0x02 HGCM调用库封装
+
+经过上面的协议源代码分析，我们可以很轻松的写出HGCM的调用方法，国外`niklasb`大牛已经做了一个python版的封装库名为[3dpwn](https://github.com/niklasb/3dpwn/)，而这里，我们自己同样实现了一个C语言版
+
+###  hgcm.h
+
+    
+    
+    #ifndef HGM_HELPER_H
+    #define HGM_HELPER_H
+    
+    #define VBGLREQHDR_VERSION 0x10001
+    #define VBGLREQHDR_TYPE_DEFAULT 0
+    #define VERR_INTERNAL_ERROR -225
+    
+    #define VBGL_IOCTL_CODE_SIZE(func, size) (0xc0005600 + (size<<16) + func)
+    
+    #define VBGL_IOCTL_HGCM_CONNECT                    VBGL_IOCTL_CODE_SIZE(4, VBGL_IOCTL_HGCM_CONNECT_SIZE)
+    #define VBGL_IOCTL_HGCM_CONNECT_SIZE               sizeof(VBGLIOCHGCMCONNECT)
+    
+    # define VBGL_IOCTL_HGCM_DISCONNECT                 VBGL_IOCTL_CODE_SIZE(5, VBGL_IOCTL_HGCM_DISCONNECT_SIZE)
+    # define VBGL_IOCTL_HGCM_DISCONNECT_SIZE            sizeof(VBGLIOCHGCMDISCONNECT)
+    
+    #define IOCTL_HGCM_CALL 7
+    
+    /** Guest Physical Memory Address; limited to 64 bits.*/
+    typedef uint64_t                RTGCPHYS64;
+    /** Unsigned integer which can contain a 64 bits GC pointer. */
+    typedef uint64_t                RTGCUINTPTR64;
+    /** Guest context pointer, 64 bits.
+     */
+    typedef RTGCUINTPTR64           RTGCPTR64;
+    
+    typedef uint8_t bool;
+    
+    
+    typedef struct VBGLREQHDR
+    {
+        /** IN: The request input size, and output size if cbOut is zero.
+         * @sa VMMDevRequestHeader::size  */
+        uint32_t        cbIn;
+        /** IN: Structure version (VBGLREQHDR_VERSION)
+         * @sa VMMDevRequestHeader::version */
+        uint32_t        uVersion;
+        /** IN: The VMMDev request type, set to VBGLREQHDR_TYPE_DEFAULT unless this is a
+         * kind of VMMDev request.
+         * @sa VMMDevRequestType, VMMDevRequestHeader::requestType */
+        uint32_t        uType;
+        /** OUT: The VBox status code of the operation, out direction only. */
+        int32_t         rc;
+        /** IN: The output size.  This is optional - set to zero to use cbIn as the
+         * output size. */
+        uint32_t        cbOut;
+        /** Reserved / filled in by kernel, MBZ.
+         * @sa VMMDevRequestHeader::fRequestor */
+        uint32_t        uReserved;
+    } VBGLREQHDR;
+    
+    /**
+     * HGCM host service location.
+     * @ingroup grp_vmmdev_req
+     */
+    typedef struct
+    {
+        char achName[128]; /**< This is really szName. */
+    } HGCMServiceLocationHost;
+    
+    typedef enum
+    {
+        VMMDevHGCMLoc_Invalid    = 0,
+        VMMDevHGCMLoc_LocalHost  = 1,
+        VMMDevHGCMLoc_LocalHost_Existing = 2,
+        VMMDevHGCMLoc_SizeHack   = 0x7fffffff
+    } HGCMServiceLocationType;
+    
+    /**
+     * HGCM service location.
+     * @ingroup grp_vmmdev_req
+     */
+    typedef struct HGCMSERVICELOCATION
+    {
+        /** Type of the location. */
+        HGCMServiceLocationType type;
+    
+        union
+        {
+            HGCMServiceLocationHost host;
+        } u;
+    } HGCMServiceLocation;
+    
+    typedef struct VBGLIOCHGCMCONNECT
+    {
+        /** The header. */
+        VBGLREQHDR                  Hdr;
+        union
+        {
+            struct
+            {
+                HGCMServiceLocation Loc;
+            } In;
+            struct
+            {
+                uint32_t            idClient;
+            } Out;
+        } u;
+    } VBGLIOCHGCMCONNECT;
+    
+    /**
+     * For VBGL_IOCTL_HGCM_CALL and VBGL_IOCTL_HGCM_CALL_WITH_USER_DATA.
+     *
+     * @note This is used by alot of HGCM call structures.
+     */
+    typedef struct VBGLIOCHGCMCALL
+    {
+        /** Common header. */
+        VBGLREQHDR  Hdr;
+        /** Input: The id of the caller. */
+        uint32_t    u32ClientID;
+        /** Input: Function number. */
+        uint32_t    u32Function;
+        /** Input: How long to wait (milliseconds) for completion before cancelling the
+         * call.  This is ignored if not a VBGL_IOCTL_HGCM_CALL_TIMED or
+         * VBGL_IOCTL_HGCM_CALL_TIMED_32 request. */
+        uint32_t    cMsTimeout;
+        /** Input: Whether a timed call is interruptible (ring-0 only).  This is ignored
+         * if not a VBGL_IOCTL_HGCM_CALL_TIMED or VBGL_IOCTL_HGCM_CALL_TIMED_32
+         * request, or if made from user land. */
+        bool        fInterruptible;
+        /** Explicit padding, MBZ. */
+        uint8_t     bReserved;
+        /** Input: How many parameters following this structure.
+         *
+         * The parameters are either HGCMFunctionParameter64 or HGCMFunctionParameter32,
+         * depending on whether we're receiving a 64-bit or 32-bit request.
+         *
+         * The current maximum is 61 parameters (given a 1KB max request size,
+         * and a 64-bit parameter size of 16 bytes).
+         *
+         * @note This information is duplicated by Hdr.cbIn, but it's currently too much
+         *       work to eliminate this. */
+        uint16_t    cParms;
+        /* Parameters follow in form HGCMFunctionParameter aParms[cParms] */
+    } VBGLIOCHGCMCALL;
+    
+    
+    
+    /**
+     * HGCM parameter type.
+     */
+    typedef enum
+    {
+        VMMDevHGCMParmType_Invalid            = 0,
+        VMMDevHGCMParmType_32bit              = 1,
+        VMMDevHGCMParmType_64bit              = 2,
+        VMMDevHGCMParmType_PhysAddr           = 3,  /**< @deprecated Doesn't work, use PageList. */
+        VMMDevHGCMParmType_LinAddr            = 4,  /**< In and Out */
+        VMMDevHGCMParmType_LinAddr_In         = 5,  /**< In  (read;  host<-guest) */
+        VMMDevHGCMParmType_LinAddr_Out        = 6,  /**< Out (write; host->guest) */
+        VMMDevHGCMParmType_LinAddr_Locked     = 7,  /**< Locked In and Out */
+        VMMDevHGCMParmType_LinAddr_Locked_In  = 8,  /**< Locked In  (read;  host<-guest) */
+        VMMDevHGCMParmType_LinAddr_Locked_Out = 9,  /**< Locked Out (write; host->guest) */
+        VMMDevHGCMParmType_PageList           = 10, /**< Physical addresses of locked pages for a buffer. */
+        VMMDevHGCMParmType_Embedded           = 11, /**< Small buffer embedded in request. */
+        VMMDevHGCMParmType_ContiguousPageList = 12, /**< Like PageList but with physically contiguous memory, so only one page entry. */
+        VMMDevHGCMParmType_SizeHack           = 0x7fffffff
+    } HGCMFunctionParameterType;
+    
+    #  pragma pack(4)
+    
+    typedef struct
+    {
+        HGCMFunctionParameterType type;
+        union
+        {
+            uint32_t   value32;
+            uint64_t   value64;
+            struct
+            {
+                uint32_t size;
+    
+                union
+                {
+                    RTGCPHYS64 physAddr;
+                    RTGCPTR64  linearAddr;
+                } u;
+            } Pointer;
+            struct
+            {
+                uint32_t size;   /**< Size of the buffer described by the page list. */
+                uint32_t offset; /**< Relative to the request header, valid if size != 0. */
+            } PageList;
+            struct
+            {
+                uint32_t fFlags : 8;        /**< VBOX_HGCM_F_PARM_*. */
+                uint32_t offData : 24;      /**< Relative to the request header, valid if cb != 0. */
+                uint32_t cbData;            /**< The buffer size. */
+            } Embedded;
+        } u;
+    } HGCMFunctionParameter64;
+    
+    
+    typedef struct VBGLIOCHGCMDISCONNECT
+    {
+        /** The header. */
+        VBGLREQHDR          Hdr;
+        union
+        {
+            struct
+            {
+                uint32_t    idClient;
+            } In;
+        } u;
+    } VBGLIOCHGCMDISCONNECT;
+    
+    #endif
+    
+
+###  hgcm.c
+
+    
+    
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <stdint.h>
+    #include <string.h>
+    #include <unistd.h>
+    #include <fcntl.h>
+    #include <sys/ioctl.h>
+    #include <stdarg.h>
+    #include "hgcm.h"
+    
+    void die(char *msg) {
+       perror(msg);
+       exit(-1);
+    }
+    
+    
+    //device fd
+    int fd;
+    
+    int hgcm_connect(const char *service_name) {
+       VBGLIOCHGCMCONNECT data = {
+          .Hdr.cbIn = sizeof(VBGLIOCHGCMCONNECT),
+          .Hdr.uVersion = VBGLREQHDR_VERSION,
+          .Hdr.uType = VBGLREQHDR_TYPE_DEFAULT,
+          .Hdr.rc = VERR_INTERNAL_ERROR,
+          .Hdr.cbOut = sizeof(VBGLREQHDR) + sizeof(uint32_t),
+          .Hdr.uReserved = 0,
+          .u.In.Loc.type = VMMDevHGCMLoc_LocalHost_Existing
+       };
+       memset(data.u.In.Loc.u.host.achName,0,128);
+       strncpy(data.u.In.Loc.u.host.achName,service_name,128);
+       ioctl(fd,VBGL_IOCTL_HGCM_CONNECT,&data);
+       if (data.Hdr.rc) { //error
+          return -1;
+       }
+       return data.u.Out.idClient;
+    }
+    
+    HGCMFunctionParameter64 arg_buf[0x100];
+    
+    int hgcm_call(int client_id,int func,char *params_fmt,...) {
+       va_list ap;
+       char *p,*bval,*type;
+       uint32_t ival;
+       uint64_t lval;
+       HGCMFunctionParameter64 params;
+       uint16_t index = 0;
+    
+       va_start(ap,params_fmt);
+       for(p = params_fmt;*p;p++) {
+          if(*p!='%') {
+             continue;
+          }
+    
+          switch (*++p) {
+             case 'u': //整数类型
+                ival = va_arg(ap,uint32_t);
+                params.type = VMMDevHGCMParmType_32bit;
+                params.u.value64 = 0;
+                params.u.value32 = ival;
+                arg_buf[index++] = params;
+                break;
+             case 'l':
+                lval = va_arg(ap,uint64_t);
+                params.type = VMMDevHGCMParmType_64bit;
+                params.u.value64 = lval;
+                arg_buf[index++] = params;
+             case 'b': //buffer类型
+                type = va_arg(ap,char *);
+                bval = va_arg(ap,char *);
+                ival = va_arg(ap,uint32_t);
+                if (!strcmp(type,"in")) {
+                   params.type = VMMDevHGCMParmType_LinAddr_In;
+                } else if (!strcmp(type,"out")) {
+                   params.type = VMMDevHGCMParmType_LinAddr_Out;
+                } else {
+                   params.type = VMMDevHGCMParmType_LinAddr;
+                }
+                params.u.Pointer.size = ival;
+                params.u.Pointer.u.linearAddr = (uintptr_t)bval;
+                arg_buf[index++] = params;
+                break;
+          }
+       }
+       va_end(ap);
+       //printf("params count=%d\n",index);
+       uint8_t *data_buf = (uint8_t *)malloc(sizeof(VBGLIOCHGCMCALL) + sizeof(HGCMFunctionParameter64)*index);
+       VBGLIOCHGCMCALL data = {
+          .Hdr.cbIn = sizeof(VBGLIOCHGCMCALL) + sizeof(HGCMFunctionParameter64)*index,
+          .Hdr.uVersion = VBGLREQHDR_VERSION,
+          .Hdr.uType = VBGLREQHDR_TYPE_DEFAULT,
+          .Hdr.rc = VERR_INTERNAL_ERROR,
+          .Hdr.cbOut = sizeof(VBGLIOCHGCMCALL) + sizeof(HGCMFunctionParameter64)*index,
+          .Hdr.uReserved = 0,
+          .u32ClientID = client_id,
+          .u32Function = func,
+          .cMsTimeout = 100000, //忽略
+          .fInterruptible = 0,
+          .bReserved = 0,
+          .cParms = index
+       };
+       memcpy(data_buf,&data,sizeof(VBGLIOCHGCMCALL));
+       memcpy(data_buf+sizeof(VBGLIOCHGCMCALL),arg_buf,sizeof(HGCMFunctionParameter64)*index);
+    
+       /*for (int i=0;i<sizeof(VBGLIOCHGCMCALL)+sizeof(HGCMFunctionParameter64)*index;i++) {
+          printf("%02x",data_buf[i]);
+       }
+       printf("\n");*/
+    
+       ioctl(fd,VBGL_IOCTL_CODE_SIZE(IOCTL_HGCM_CALL,sizeof(VBGLIOCHGCMCALL) + sizeof(HGCMFunctionParameter64)*index),data_buf);
+       int error = ((VBGLIOCHGCMCALL *)data_buf)->Hdr.rc;
+       free(data_buf);
+    
+       if (error) { //error
+          return error;
+       }
+       /*for (int i=0;i<sizeof(VBGLIOCHGCMCALL)+sizeof(HGCMFunctionParameter64)*index;i++) {
+          printf("%02x",data_buf[i]);
+       }
+       printf("\n");*/
+    
+       return 0;
+    }
+    
+    int hgcm_disconnect(int client_id) {
+       VBGLIOCHGCMDISCONNECT data = {
+          .Hdr.cbIn = sizeof(VBGLIOCHGCMDISCONNECT),
+          .Hdr.uVersion = VBGLREQHDR_VERSION,
+          .Hdr.uType = VBGLREQHDR_TYPE_DEFAULT,
+          .Hdr.rc = VERR_INTERNAL_ERROR,
+          .Hdr.cbOut = sizeof(VBGLREQHDR),
+          .Hdr.uReserved = 0,
+          .u.In.idClient = client_id,
+       };
+       ioctl(fd,VBGL_IOCTL_HGCM_DISCONNECT,&data);
+       if (data.Hdr.rc) { //error
+          return -1;
+       }
+       return 0;
+    }
+    
+    int main() {
+       //打开设备
+       fd = open("/dev/vboxuser",O_RDWR);
+       if (fd == -1) {
+          die("open device error");
+       }
+       int idClient = hgcm_connect("VBoxGuestPropSvc");
+       printf("idClient=%d\n",idClient);
+       char ans[0x100] = {0};
+       int ret = hgcm_call(idClient,2,"%b%b","in","foo",4,"in","bar",4);
+       ret = hgcm_call(idClient,1,"%b%b%u%u","in","foo",4,"out",ans,0x100,0,0);
+    
+       printf("%s\n",ans);
+       printf("%d\n",hgcm_disconnect(idClient));
+    }
+    
+
+## 0x03 感想
+
+学习漏洞挖掘，不应该只依赖于现成的库或工具，就像本文，虽然`niklasb`大牛已经封装了`3dpwn`库，但是对于我们研究员来说，还是得先自己弄懂，自己动手写工具，才能明白其本质。
+
+## 0x04 参考链接
+
+[Investigating generic problems with the Linux Guest
+Additions](https://www.virtualbox.org/wiki/LinuxAdditionsDebug)  
+[corelabs-Breaking_Out_of_VirtualBox_through_3D_Acceleration-Francisco_Falcon.pdf](https://www.coresecurity.com/sites/default/files/private-files/publications/2016/05/corelabs-Breaking_Out_of_VirtualBox_through_3D_Acceleration-Francisco_Falcon.pdf)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **ha1vk@赛宁网安天虞实验室** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/238643](/post/id/238643)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Pwn](/tag/Pwn)
+  * [二进制安全](/tag/二进制安全)
+  * [虚拟机逃逸](/tag/虚拟机逃逸)
+  * [VirualBox逃逸](/tag/VirualBox逃逸)
+
+ **+1** __12赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t015704b4b2e374eb33.jpg) ha1vk@赛宁网安天虞实验室
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

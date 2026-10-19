@@ -1,0 +1,233 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+##  **0×1 概述**  
+
+**近日，腾讯御见威胁情报中心监测到一起利用邮件间接传播CVE-2017-11882漏洞文档以攻击商贸行业从业者的安全事件，与之前发布的“商贸信”事件不同的是，此次攻击者使用的手法有所变化：借用AutoIT程序以绕过安全软件的查杀，传播的后门程序为DarkComet远控木马程序，并且相关样本下载服务器是搭建在亚马逊云服务上，这样导致边界设备将无法直接对该服务器域名/IP进行拦截，进一步绕过安全检查。**
+
+此次事件中，攻击者首先将钓鱼邮件定向发送给贸易相关行业的受害者，一旦受害者打开邮件中的附件，将会向远程服务器加载一个恶意的OLE对象(CVE-2017-11882漏洞文档)，然后漏洞文档会下载一个自解压程序，自解压程序运行后先将相关文件解压到临时目录，然后通过autoit3程序执行混淆过的au3脚本文件，通过au3脚本文件解密出一个DarkComet后门程序，然后以傀儡进程的方式加载该后门程序，达到控制受害者机器的目的。大体攻击流程如下图所示：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222870542292.png!small)  
+
+##  **0×2 样本分析**
+
+MD5: 3ABAEED8930DD4C511340A882A05E79A
+
+捕获EML样本，打开后内容如下：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222870704166.png!small)  
+
+将邮件附件保存，得到Document Copy.docx （MD5:
+7A861F4F39AAA85C7547F7521544ED58）文件，该文件是一个内嵌恶意OLE对象的文档，文档打开后，会通过OLE对象加载机制从远程服务器加载另一个漏洞文档：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222871121077.png!small)  
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222871249559.png!small)  
+
+> https [:]//s3.amazonaws[.]com/rewqqq/SM.doc
+
+将目标文档下载分析后，可以知道SM.doc文档是一个利用CVE-2017-11882漏洞的恶意文档。文档打开后会通过漏洞执行远程hta脚本：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222871465369.png!small)  
+
+> https[:]//s3.amazonaws[.]com/rewqqq/awss.hta
+
+awss.hta脚本负责从远程服务器https[:]//s3.amazonaws[.]com/rewqqq/wizzy.exe
+
+下载一个后门木马程序保存到c:/windows/temp/shell.exe，然后执行该后门程序。
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222871611447.png!small)  
+
+通过工具查看该文件信息，可以知道该文件是一个WinRAR打包的自解压程序。
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222871734437.png!small)  
+
+用WinRAR打开该文件可以发现，该文件执行后会执行如下命令：
+
+    
+    
+    taa.exe xtb=ldp
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222871854031.png!small)  
+
+这里为了分析，我们可以使用解压工具进行解压，解压后得到如下文件：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/1522287196364.png!small)  
+
+其中taa.exe是一个带正常签名的AutoIT脚本解释器程序，用于执行au3脚本
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222872091259.png!small)  
+
+xtb=ldp文件是一个au3脚本文件，可以看到脚本内添加了大量无用的注释，这里作者通过这种方式防止杀软检测出此恶意脚本
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222872276008.png!small)  
+
+VT上xtb=ldp脚本的检测结果：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222872394596.png!small)  
+
+作者为了和杀软进行对抗，对该脚本添加大量无效注释，这个严重影响我们阅读该脚本，为了方便分析该脚本的功能，我们对该脚本进行简单的处理，处理后脚本关键代码片段如下：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222872547016.png!small)  
+
+通过调试该脚本，可以知道该脚本运行后会先检测当前主机是否存在avastui.exe进程，如果存在则先睡眠20秒，然后继续执行。脚本会读取当前目录下的fgx.mp3文件，从中读取sData、esData字段的内容，然后将数据进行解密，并将解密后的数据保存到当前目录下，文件名为随机生成的五位字符串，然后利用autoit3程序执行解密后的文件。我们将解密后的文件打开后，发现该文件是一个新的au3脚本文件。
+
+fgx.mp3文件中sData、esData字段部分内容如下：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222872711960.png!small)  
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/1522287283528.png!small)  
+
+解密出来的新au3脚本（此次文件名为BAKBS）部分内容如下：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222872964396.png!small)  
+
+为了方便阅读该脚本，我们对该脚本进行一点修改和注释。通过阅读该脚本代码，我们可以知道，该脚本主要实现如下功能：
+
+> 1\. 虚拟机检测
+>
+> 2\. 沙箱检测
+>
+> 3\. 禁用UAC
+>
+> 4\. 禁用任务管理器
+>
+> 5\. 开机自启
+>
+> 6\. 下载执行更新
+>
+> 7\. 执行本地脚本
+>
+> 8\. 解密并释放后门木马程序
+
+下面是修改后的脚本部分功能代码。
+
+核心功能代码片段：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222873157140.png!small)  
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222873369408.png!small)  
+
+虚拟机检测代码：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222873497367.png!small)  
+
+沙箱检测代码：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222873705989.png!small)  
+
+禁用UAC代码：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222873864755.png!small)  
+
+禁用任务管理器代码：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222874014509.png!small)  
+
+开机自启代码：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222874203836.png!small)  
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222874357987.png!small)  
+
+下载并执行代码：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222874513267.png!small)  
+
+解密并执行后门木马程序：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222874661495.png!small)  
+
+执行配置文件中指定的程序：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222874836972.png!small)  
+
+执行后门程序和目标程序时，先拷贝一个白签名程序(此处是RegSvcs.exe或Firefox.exe)，然后通过傀儡进程方式将目标进程注入到白进程中，以达到隐藏的目的：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222874972441.png!small)  
+
+下面我们来看下上面提到的解密出来的后门木马程序。
+
+该程序经过UPX加壳：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222875123252.png!small)  
+
+脱壳后，文件信息如下：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222875269568.png!small)  
+
+该程序是国外的一款远程控制软件，早期作者将其免费发布在网络上。由于该软件支持的功能非常多，发布后深受攻击者们喜爱，被广泛用于网络攻击，基于这种情况，作者在2012年出于法律问题将该项目停止。尽管作者不再更新，但是目前仍有大量攻击者使用该工具进行网络攻击。
+
+下面是DarkComet远控的的配置界面，可以看到，该软件支持的功能非常之多，并且支持灵活配置，其中主要包含资料窃取、键盘记录、视频/声音监控、桌面监控、系统控制等等。
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222875475697.png!small)  
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222875628518.png!small)  
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222875764438.png!small)  
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222876029185.png!small)  
+
+通过OD调试该远控木马程序，可以看到，样本运行后会读取资源区中的”DCDATA”资源，然后进行解密，解密后得到配置信息如下：
+
+    
+    
+    #BEGIN DARKCOMET DATA --    
+    MUTEX={DCMIN_MUTEX-B6DQQC7}
+    
+    SID={KAYANA}
+    
+    NETDATA={obyterry.hopto.org:1990}
+    
+    GENCODE={HMgiLefV9w0m}
+    
+    OFFLINEK={1}
+    
+    #EOF DARKCOMET DATA --
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222876268108.png!small)  
+
+通过解密出的信息可以知道，攻击者使用的控制服务器地址为：obyterry.hopto.org:1990
+
+下面是该后门程序执行相关功能的代码片段：
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222876413601.png!small)  
+
+![CVE-2017-11882新动态：利用AutoIT脚本释放DarkComet后门](https://image.3001.net/images/20180329/15222876541831.png!small)  
+
+##  **0×3 结语**
+
+攻击者通过该后门程序能够轻而易举地监控到受害者主机的一切行为，包括键盘输入、桌面操作、主机文件等等，如果受害者电脑有摄像头等设备，攻击者还能通过摄像头及麦克风来监控受害者的一举一动。根据腾讯威胁情报中心的数据来看，受害者大多为贸易相关的从业者，一旦这些人员被攻击，很容易造成公司核心资料外泄，对公司产生巨大威胁，因此我们在此提醒广大用户，对于陌生邮件一定要谨慎对待。
+
+##  **0×4 IOCs**
+
+###  **url:**
+
+> https[:]//s3.amazonaws[.]com/rewqqq/SM.doc
+>
+> https[:]//s3.amazonaws[.]com/rewqqq/awss.hta
+>
+> https[:]//s3.amazonaws[.]com/rewqqq/bghg.hta
+>
+> https[:]//s3.amazonaws[.]com/rewqqq/wizzy.exe
+>
+> https[:]//s3.amazonaws[.]com/rewqqq/anabel.exe
+
+###  **C2:**
+
+> obyterry.hopto.org:1990
+>
+> 95.213.251.165：1990
+
+###  **MD5:**
+
+> 155CD939247263FFB5F990A3F11FF234
+>
+> 7A861F4F39AAA85C7547F7521544ED58
+>
+> B1B033063B20CD46DA2C279972083B33
+>
+> 6392AFF364C00E9757C5C532F2385C10
+>
+> 0203472CD3D96F7A80526DAF6DB997A4
+
+ ***本文作者：腾讯电脑管家，转载请注明来自 FreeBuf.COM**
+

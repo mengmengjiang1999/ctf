@@ -1,0 +1,197 @@
+## 值得警惕的趋势
+
+攻击者不断推进攻击演化，勒索软件也正在迅速扩展到 Linux 平台与云平台中。最近，BlackMatter 勒索软件团伙、HelloKitty 勒索软件和
+REvil 勒索软件都在通过 ELF 恶意软件感染 ESXi 系统扩展攻击 Linux 目标。勒索软件转向攻击 Linux
+目标是一个值得警惕的重要趋势，通过该方式可以继续扩展攻击行动。![](https://image.3001.net/images/20210919/1632056679_614735672fd2dca24bb86.jpg!small)
+
+## 分析
+
+2021 年 8 月，Lacework 发现了一个 ChaChi 的 Linux
+变种（14abd57e8eb06191f12c0d84f9c1470b）。Chachi 是开源 Golang RAT 的定制变种，利用 DNS 隐蔽信道进行
+C&C 通信。该样本使用了 Palo Alto Networks 在七月份报告中的域名：
+
+> sbvjhs.xyz
+>
+> sbvjhs.club
+>
+> firefox-search.xy
+
+虽然最近才开始分析该样本，但该样本在 2021 年 6 月 14 日就被上传到 VirusTotal 中，最初只有 1/61 的检测率。
+
+在截至本文撰写时，检测率为
+20/61：![](https://image.3001.net/images/20210919/1632056686_6147356e1f4025e145eaa.png!small)
+
+Linux 的变种与 Windows 版本具有相同的特征，核心功能类似、文件大小（8MB+）类似、使用
+[Gobfuscate](https://github.com/unixpickle/gobfuscate)作为混淆工具等。Linux
+版本一个显著特征是包含日期和时间数据的调试输出。![](https://image.3001.net/images/20210919/1632056688_61473570569ea6579f85a.png!small)
+
+Chachi 利用 DNS 隧道进行通信，可以通过对 Name Server 的 Passive DNS 分析来识别 C&C 主机。分析表明，自从 2021
+年 6 月 23 日以来，大多数 ChaChi 的基础设施已经停止运作，只有 ns1.ccenter.tech 和 ns2.spm.best
+仍然在线。![](https://image.3001.net/images/20210919/1632056690_614735720640c1af013f8.png!small)
+
+在撰写本文时，Linux 变种的两个域名（sbvjhs.xyz 和 sbvjhs.club）解析在 Amazon 的 IP 地址 99.83.154.118
+上。这个 IP 是 AWS 全球加速器主机，VirusTotal 上有几个引擎将其标记为恶意。
+
+分析表明，该 IP 地址可能是被 Namecheap 用于域名停放，不应作为 ChaChi 的 IOC 指标。下表列出了已知的 Chachi
+NameServer 及其解析地址。
+
+HOSTNAME| IP_ADDR| ASN| COUNTRY| FIRST_SEEN| LAST_SEEN  
+---|---|---|---|---|---  
+ns1.englishdialoge.xyz| 160.20.147.184| 30823:”combahton GmbH”| Germany| Thu,
+26 Nov 2020 23:27:18 -0800| Thu, 24 Jun 2021 09:22:03 -0700  
+ns2.englishdialoge.xyz| 160.20.147.184| 30823:”combahton GmbH”| Germany| Thu,
+26 Nov 2020 23:27:18 -0800| Thu, 24 Jun 2021 09:22:03 -0700  
+ns1.englishdict.xyz| 172.96.189.167| 20068:”HAWKHOST”| Canada| Thu, 05 Nov
+2020 03:39:33 -0800| Thu, 24 Jun 2021 06:26:43 -0700  
+ns2.englishdict.xyz| 172.96.189.167| 20068:”HAWKHOST”| Canada| Thu, 05 Nov
+2020 03:39:33 -0800| Thu, 24 Jun 2021 06:26:43 -0700  
+ns1.english-breakfast.xyz| 172.96.189.22| 20068:”HAWKHOST”| Canada| Tue, 15
+Dec 2020 15:45:14 -0800| Thu, 24 Jun 2021 13:38:42 -0700  
+ns1.english-breakfast.xyz| 172.96.189.22| 20068:”HAWKHOST”| Canada| Tue, 15
+Dec 2020 15:45:14 -0800| Thu, 24 Jun 2021 13:38:42 -0700  
+ns1.pump-online.xyz| 172.96.189.246| 20068:”HAWKHOST”| Canada| Tue, 15 Dec
+2020 15:45:55 -0800| Thu, 24 Jun 2021 05:00:38 -0700  
+ns2.english-breakfast.xyz| 172.96.189.246| 20068:”HAWKHOST”| Canada| Tue, 15
+Dec 2020 15:45:14 -0800| Thu, 24 Jun 2021 13:38:42 -0700  
+ns2.english-breakfast.xyz| 172.96.189.246| 20068:”HAWKHOST”| Canada| Tue, 15
+Dec 2020 15:45:14 -0800| Thu, 24 Jun 2021 13:38:42 -0700  
+ns2.pump-online.xyz| 172.96.189.246| 20068:”HAWKHOST”| Canada| Tue, 15 Dec
+2020 15:45:55 -0800| Thu, 24 Jun 2021 05:00:38 -0700  
+ns1.blitzz.best| 185.185.27.3| 201206:”Droptop GmbH”| Germany| Sat, 06 Jun
+2020 01:29:35 -0700| Wed, 02 Jun 2021 11:14:52 -0700  
+ns2.blitzz.best| 185.185.27.3| 201206:”Droptop GmbH”| Germany| Sat, 06 Jun
+2020 01:29:35 -0700| Wed, 02 Jun 2021 11:14:52 -0700  
+ns1.firefox-search.xyz| 185.186.245.85| 40824:”WZCOM”| United States| Mon, 07
+Sep 2020 15:35:41 -0700| Wed, 23 Jun 2021 07:31:39 -0700  
+ns2.firefox-search.xyz| 185.186.245.85| 40824:”WZCOM”| United States| Mon, 07
+Sep 2020 15:35:41 -0700| Wed, 23 Jun 2021 07:31:39 -0700  
+ns1.reportservicefuture.website| 185.193.38.60| 57878:”Prager Connect GmbH”|
+France| Sat, 09 May 2020 11:04:41 -0700| Sun, 02 May 2021 08:04:13 -0700  
+ns2.reportservicefuture.website| 185.193.38.60| 57878:”Prager Connect GmbH”|
+France| Sat, 09 May 2020 11:04:41 -0700| Sun, 02 May 2021 08:04:13 -0700  
+ns1.wiki-text.xyz| 193.239.84.205| 9009:”M247 Ltd”| United Kingdom| Thu, 03
+Sep 2020 15:58:08 -0700| Wed, 23 Jun 2021 08:18:42 -0700  
+ns2.wiki-text.xyz| 193.239.84.205| 9009:”M247 Ltd”| United Kingdom| Thu, 03
+Sep 2020 15:58:08 -0700| Wed, 23 Jun 2021 08:18:42 -0700  
+ns1.visual-translator.xyz| 193.239.85.55| 9009:”M247 Ltd”| Romania| Thu, 03
+Sep 2020 14:35:02 -0700| Wed, 23 Jun 2021 08:18:41 -0700  
+ns2.visual-translator.xyz| 193.239.85.55| 9009:”M247 Ltd”| Romania| Thu, 03
+Sep 2020 14:35:02 -0700| Wed, 23 Jun 2021 08:18:41 -0700  
+ns1.sbvjhs.xyz| 194.187.249.102| 9009:”M247 Ltd”| France| Sat, 01 Aug 2020
+21:29:06 -0700| Wed, 23 Jun 2021 07:08:08 -0700  
+ns2.sbvjhs.xyz| 194.187.249.102| 9009:”M247 Ltd”| France| Sat, 01 Aug 2020
+21:29:06 -0700| Wed, 23 Jun 2021 07:08:08 -0700  
+ns1.statistics-update.xyz| 194.5.249.18| 64398:”Nxtservers Srl”| Romania| Fri,
+31 Jul 2020 09:23:54 -0700| Wed, 23 Jun 2021 06:56:20 -0700  
+ns2.statistics-update.xyz| 194.5.249.18| 64398:”Nxtservers Srl”| Romania| Fri,
+31 Jul 2020 09:23:54 -0700| Wed, 23 Jun 2021 06:56:20 -0700  
+ns1.accounting-consult.xyz| 194.5.249.180| 64398:”Nxtservers Srl”| Romania|
+Sun, 02 Aug 2020 06:27:13 -0700| Wed, 23 Jun 2021 07:37:33 -0700  
+ns2.accounting-consult.xyz| 194.5.249.180| 64398:”Nxtservers Srl”| Romania|
+Sun, 02 Aug 2020 06:27:13 -0700| Wed, 23 Jun 2021 07:37:33 -0700  
+ns1.ntservicepack.com| 194.5.250.216| 64398:”Nxtservers Srl”| Romania| Wed, 29
+Apr 2020 10:19:42 -0700| Tue, 24 Nov 2020 00:58:02 -0800  
+ns2.ntservicepack.com| 194.5.250.216| 64398:”Nxtservers Srl”| Romania| Wed, 29
+Apr 2020 10:19:42 -0700| Tue, 24 Nov 2020 00:58:02 -0800  
+ns1.starhouse.xyz| 198.252.100.37| 20068:”HAWKHOST”| United States| Thu, 26
+Nov 2020 21:55:56 -0800| Thu, 24 Jun 2021 14:24:10 -0700  
+ns2.starhouse.xyz| 198.252.100.37| 20068:”HAWKHOST”| United States| Thu, 26
+Nov 2020 21:55:56 -0800| Thu, 24 Jun 2021 14:24:10 -0700  
+ns1.ccenter.tech| 23.83.133.136| 19148:”LEASEWEB-USA-PHX-11”| United States|
+Wed, 24 Mar 2021 12:30:02 -0700| Tue, 31 Aug 2021 04:10:51 -0700  
+ns2.ccenter.tech| 23.83.133.136| 19148:”LEASEWEB-USA-PHX-11”| United States|
+Wed, 24 Mar 2021 12:30:02 -0700| Tue, 31 Aug 2021 04:10:51 -0700  
+ns1.transnet.wiki| 45.147.228.49| 30823:”combahton GmbH”| Germany| Wed, 24 Mar
+2021 12:30:03 -0700| Wed, 23 Jun 2021 08:13:07 -0700  
+ns2.transnet.wiki| 45.147.228.49| 30823:”combahton GmbH”| Germany| Wed, 24 Mar
+2021 12:30:03 -0700| Wed, 23 Jun 2021 08:13:07 -0700  
+ns1.productoccup.tech| 45.147.229.29| 30823:”combahton GmbH”| Germany| Tue, 23
+Mar 2021 03:17:32 -0700| Thu, 24 Jun 2021 07:16:58 -0700  
+ns2.productoccup.tech| 45.147.229.29| 30823:”combahton GmbH”| Germany| Tue, 23
+Mar 2021 03:17:32 -0700| Thu, 24 Jun 2021 07:16:58 -0700  
+ns2.spm.best| 72.52.178.23| 32244:”LIQUIDWEB”| United States| Fri, 23 Jul 2021
+04:32:25 -0700| Tue, 31 Aug 2021 06:03:43 -0700  
+ns1.sbvjhs.club| 89.38.225.208| 9009:”M247 Ltd”| Singapore| Sun, 02 Aug 2020
+05:45:47 -0700| Wed, 23 Jun 2021 11:33:13 -0700  
+ns2.sbvjhs.club| 89.38.225.208| 9009:”M247 Ltd”| Singapore| Sun, 02 Aug 2020
+05:45:47 -0700| Wed, 23 Jun 2021 11:33:13 -0700  
+ns1.serchtext.xyz| 89.41.26.173| 9009:”M247 Ltd”| United States| Mon, 02 Nov
+2020 13:30:18 -0800| Thu, 24 Jun 2021 06:26:39 -0700  
+ns2.serchtext.xyz| 89.41.26.173| 9009:”M247 Ltd”| United States| Mon, 02 Nov
+2020 13:30:18 -0800| Thu, 24 Jun 2021 06:26:39 -0700  
+  
+## 结论
+
+攻击者针对各种架构、各种平台发起攻击，扩大攻击范围。目前尚不清楚 Linux
+变种是否用于攻击，但在相关攻击基础设施离线前就观察到了，这些样本可能仍处在调试阶段。
+
+勒索软件的利润丰厚，攻击者不放弃任何可以增加利润的方式。虽然针对 Linux
+服务器和云基础设施的勒索软件攻击仍然很少见，但这对业务运营和客户数据构成极大的威胁。
+
+## IOC
+
+> ns1.accounting-consult.xyz  
+> ns1.blitzz.best  
+> ns1.ccenter.tech  
+> ns1.english-breakfast.xyz  
+> ns1.englishdialoge.xyz  
+> ns1.englishdict.xyz  
+> ns1.firefox-search.xyz  
+> ns1.ntservicepack.com  
+> ns1.productoccup.tech  
+> ns1.pump-online.xyz  
+> ns1.reportservicefuture.website  
+> ns1.sbvjhs.club  
+> ns1.sbvjhs.xyz  
+> ns1.serchtext.xyz  
+> ns1.spm.best  
+> ns1.starhouse.xyz  
+> ns1.statistics-update.xyz  
+> ns1.transnet.wiki  
+> ns1.visual-translator.xyz  
+> ns1.wiki-text.xyz  
+> ns2.accounting-consult.xyz  
+> ns2.blitzz.best  
+> ns2.ccenter.tech  
+> ns2.english-breakfast.xyz  
+> ns2.englishdialoge.xyz  
+> ns2.englishdict.xyz  
+> ns2.firefox-search.xyz  
+> ns2.ntservicepack.com  
+> ns2.productoccup.tech  
+> ns2.pump-online.xyz  
+> ns2.reportservicefuture.website  
+> ns2.sbvjhs.club  
+> ns2.sbvjhs.xyz  
+> ns2.serchtext.xyz  
+> ns2.spm.best  
+> ns2.starhouse.xyz  
+> ns2.statistics-update.xyz  
+> ns2.transnet.wiki  
+> ns2.visual-translator.xyz  
+> ns2.wiki-text.xyz  
+> 160.20.147.184  
+> 172.96.189.167  
+> 172.96.189.22  
+> 172.96.189.246  
+> 185.185.27.3  
+> 185.186.245.85  
+> 185.193.38.60  
+> 193.239.84.205  
+> 193.239.85.55  
+> 194.187.249.102  
+> 194.5.249.18  
+> 194.5.249.180  
+> 194.5.250.216  
+> 198.252.100.37  
+> 23.83.133.136  
+> 45.147.228.49  
+> 45.147.229.29  
+> 89.38.225.208  
+> 89.41.26.173  
+> 190e0ce36c1a63ec976f7e80618c620f75f853a370ea3e602253a98781f4e5c6
+
+## 参考来源
+
+> [Lacework](https://www.lacework.com/blog/pysa-ransomware-gang-adds-linux-> support/)
+

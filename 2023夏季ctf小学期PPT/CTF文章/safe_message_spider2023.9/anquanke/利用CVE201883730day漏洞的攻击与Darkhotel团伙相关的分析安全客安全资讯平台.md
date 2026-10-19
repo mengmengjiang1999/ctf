@@ -1,0 +1,342 @@
+# 利用CVE-2018-8373 0day漏洞的攻击与Darkhotel团伙相关的分析
+
+阅读量 **201723**
+
+|评论 **4**
+
+发布时间 : 2018-08-17 14:30:04
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01d05e48049e3a41aa.jpg)
+
+## 背景
+
+2018年8月15日，网络安全公司趋势科技公开了其在今年7月捕获到的一例在野0day漏洞攻击，该攻击利用了Windows VBScript
+Engine的代码执行漏洞，经过分析对比发现该0day漏洞和2018年4月360公司首次发现影响IE浏览器并通过Office文档进行攻击的“双杀”漏洞（详见参考[1]）使用了多个相同的攻击技术，极有可能是同一团伙所为。
+
+360威胁情报中心第一时间对该0day漏洞进行了分析确认，并通过大数据关联分析确认本次的0day在野攻击与DarkHotel APT组织存在关联。
+
+## 来源
+
+2018年8月15日，趋势科技公开了其在今年7月11日捕获到的一例在野0day漏洞攻击技术分析，该漏洞已于公开的前一天被微软修复，漏洞编号为：CVE-2018-8373。
+
+## 三个“双杀”0day漏洞时间线
+
+CVE-2018-8373其实是今年以来被发现的影响Windows VBScript
+Engine的第三个漏洞，其中前两个均为360公司的安全研究人员首次发现，这三个漏洞均影响IE浏览器，且可以通过微软Office文档进行攻击。三个“双杀”0day漏洞发现的时间线如下：
+
+**CVE** | **发现时间** | **修复时间** | **描述**  
+---|---|---|---  
+CVE-2018-8174 | 2018.4.18 | 2018.5.8 | 影响Office和IE的双杀漏洞，在野  
+CVE-2018-8242 |  | 2018.7.10 | 360安全研究人员发现并上报微软（参考[2]）  
+CVE-2018-8373 | 2018.7.11 | 2018.8.14 | 影响Office和IE的双杀漏洞，在野  
+  
+## 溯源与关联
+
+### 获得打码后的IOC
+
+360威胁情报中心通过大数据分析关联首先得到了趋势科技打码后的IOC地址：
+
+    
+    
+    http://windows-updater.net/realmuto/wood.php?who=1??????
+
+### 关联同源0day攻击样本
+
+并发现一个攻击时间和趋势科技发现在野“双杀”0day攻击在同一天的疑似使用该0day攻击的office文档样本，该Offce文档样本中内嵌的域名和趋势科技给出的域名格式一致（http://windows-updater.net/stack/ov.php?w= 1\x00who =1）
+
+### 确认与DarkHotel关联
+
+得到0day漏洞攻击所使用的域名后我们立即发现，该域名正是360威胁情报中心在今年5月发布的关于DarkHotel
+APT团伙最新的攻击活动中使用过的域名（详见参考[4]）:
+
+在360威胁情报中心威胁平台中输入该域名也会立即关联到DarkHotel：
+
+## CVE-2018-8373漏洞分析
+
+如下所示为趋势给出的对应POC触发代码：
+
+如下为该漏洞和今年5月360捕获的CVE-2018-8174的POC对比，CVE-2018-8174主要的漏洞原因在于Class_Terminater中可以对释放的内存对象继续赋值，从而导致释放后重用，而这次的CVE-2018-8373则是类的Propert
+Get操作中可以修改对应的类成员array的长度，从而导致之后的对象重用：
+
+![](https://p0.ssl.qhimg.com/t014d79405a50654916.png)
+
+如下为对应的的POC代码，POC代码很简单，VulClass类中定义了array成员变量，
+
+方法Class_Initialize及Public Default Property Get P。
+
+其中Class_Initialize是VB中一个已经弃用的方法，用于在类创建的时候实现对应的操作，重载后可以在类创建时完成相应的初始化工作，之后被new代替。
+
+Default Property为一个类属性，被Public Default Property Get
+P重载后，对该类的访问将触发相应的操作，在POC中即执行ReDim Preserve array(1)。
+
+ReDim用于对指定的内存重新分配，其最终在VB引擎中通过SafeArrayRedim函数实现，熟悉VB漏洞的话，可以知道该函数就是之前CVE-2015-6332漏洞的根源：
+
+![](https://p0.ssl.qhimg.com/t01682dac7280a5ee0a.png)
+
+POC中首先执行该行代码，new的时候对应执行以下函数VBScriptClass::InitializeClass，由于VulClass类中重载了Class_Initialize方法，因此通过vbscript!CScriptEntryPoint::Call派发进入到对应的编码者实现的Class_Initialize方法中：
+
+    
+    
+    Set cls = New VulClass
+
+![](https://p4.ssl.qhimg.com/t01f254e9f3d331ac75.png)
+
+Class_Initialize方法中修改对应的array长度：
+
+    
+    
+    Private Sub Class_Initialize
+    
+    ReDim array(2)
+    
+    End Sub
+
+可以看到此时生成的Array对象如下所示，其成员变量数为3，对应的pvData为0x0514dfd0：
+
+之后运行以下代码，VB引擎解析以下代码的顺序是从左自右扫描的，因此首先会进行cls.array(2)的操作：
+
+    
+    
+    cls.array(2) = cls
+
+此时会调用函数vbscript!AccessArray判断对应array（2）是否可访问，如下所示此时获取对应array的内存对象：
+
+经过一番判断之后，如下所示esi指向对应的array对象，依次获取array中每个成员的大小cbElements，此处为0x10，需要访问赋值的array
+index，此处为2，pvData，以此计算出array（2）对象的地址0514dfd0（pvData）+2（element）*10（cbElements）=0514ff0，0514ff0会被直接拷贝到求值栈上：
+
+如下所示拷贝到求值栈上的array(2)地址：
+
+![](https://p4.ssl.qhimg.com/t015da7f322f7519bca.png)
+
+通过内存访问断点可以跟踪对该地址的引用：
+
+之后执行等号右侧部分的操作，由于该VulClass类定义了Public Default Property Get P，因此会在赋值前执行其中对应的代码：
+
+    
+    
+    cls.array(2) = cls
+
+该段代码很简单，通过ReDim修改了array数组的长度，属性Preserve表示对数组中已赋值的那些数据不清空
+，但是该处并不影响对应的漏洞触发，该属性删掉也是可以的：
+
+    
+    
+    Public Default Property Get P
+    
+    ReDim Preserve array(1)
+    
+    End Property
+
+该重置array内存的操作实际通过函数RedimPreserveArray实现，如下所示传入的array对象：
+
+经过一番array类型判断后最终会调用SafeArrayRedim，该函数也就是前面提到的漏洞CVE-2015-6332的成因根源，其原型如下所示，*psa为对应array对象，*
+psaboundNew为新数组的大小+1：
+
+    
+    
+    HRESULT SafeArrayRedim(
+    
+    _Inout_ SAFEARRAY *psa,
+    
+    _In_ SAFEARRAYBOUND *psaboundNew
+    
+    );
+
+此时的参数如下所示：
+
+![](https://p4.ssl.qhimg.com/t01b9d8fe2075c63408.png)
+
+调用之后可以看到array对象的pvData已经被修改为0x084a0fe0，之前的pvData
+0514dfd0的内存地址已经被释放，包括我们之前存在赋值栈上的0x0514dff0：
+
+![](https://p2.ssl.qhimg.com/t01c1fceed2c32f7c25.png)
+
+最终调用函数AssignVar完成赋值，如下所示，具体赋值操作在红框中，之前会有一个VAR：：Clear的操作，用于释放之前的引用：
+
+VAR：：Clear会获取对应的array（2）的地址，从而造成崩溃：
+
+总结一下，cls.array(2) = cls这行代码中，cls.array（2）赋值前会保存array（2）的地址到求值栈上，之后cls中的Public
+Default Property Get
+P操作导致赋值前对array（）内存进行重新分配，即之前保存到求值栈上的指针指向的内存被释放，该指针在最终的赋值操作中作为赋值的目标地址，从而导致重用崩溃。
+
+## 样本分析
+
+360威胁情报中心通过大数据关联到本次0day攻击相关的一些payload文件，并对其中的一个后门程序进行了详细分析。
+
+### Zlib
+
+关联到的一个后门程序名为Zlib，其主要功能为：
+
+  1. 判断加载进程，如果为mmc.exe，则zlib模块是通过bypassuac的方式加载起来的，然后会通过rundll32加载zlib模块的导出函数uncormpress2（也就是恶意代码主函数），随后调用进程退出。
+  2. 判断加载进程，如果不是rundll32加载的（Dropper加载），在DllMain函数中创建线程；再判断操作系统是否为64位，如果为64位，直接执行恶意代码主函数，如果不是64位，把zlib模块文件拷贝到programdata目录下，然后通过劫持mmc，运行mmc.exe，加载zlib模块，实现bypassUAC，然后转到第一步。
+  3. 恶意代码的功能主要是从自身解密出URL，下载恶意payload，解密成dll，修改上线配置信息后，在内存中加载运行。
+
+具体流程如下所示：
+
+![](https://p3.ssl.qhimg.com/t0156fc4a40d0544320.png)
+
+详细分析如下：
+
+样本MD5：80705564b4f89915a04bd4c416cd63bc
+
+样本编译时间是2018年7月12日：
+
+![](https://p0.ssl.qhimg.com/t011c02792be9cbe2f5.png)
+
+样本入口首先会判断加载DLL的主程序是什么：
+
+![](https://p5.ssl.qhimg.com/t012c90a37c01b1b1a3.png)
+
+如果加载DLL的进程为mmc.exe，通过给rundll32.exe传参数调用DLL的uncompress2导出函数：
+
+![](https://p2.ssl.qhimg.com/t012291feba51457245.png)
+
+而该导出函数也被后面的调用进程不为rundll32.exe的流程的线程调用：
+
+![](https://p4.ssl.qhimg.com/t013d2a51e3385e6cde.png)
+
+如果加载的进程不为rundll32.exe，会直接进入MainThread线程，该处会先判断系统版本，如果是64位系统，直接下载并加载shellcode，如果不是的话，会进入LoadByMMC函数：
+
+![](https://p0.ssl.qhimg.com/t01bcb9b624be2ff984.png)
+
+该函数的作用主要是把当前DLL复制到ProgramData下，然后运行批处理，通过劫持mmc，绕过UAC加载DLL：
+
+    
+    
+    /c REG ADD "HKCU\\Software\\Classes\\CLSID\\{D5AB5662-131D-453D-88C8-9BBA87502ADE}\\InprocServer32" /ve /t REG_EXP AND_SZ /d "%s\\zlib1.dll" /f &
+    
+    REG ADD "HKCU\\Environment" /v "COR_PROFILER" /t REG_SZ /d "{D5AB5662-131D-453D-88C8-9BBA87502ADE}" /f &
+    
+    REG ADD "HKCU\\Environment" /v "COR_ENABLE_PROFILING" /t REG_SZ /d "1" /f &
+    
+    REG ADD "HKCU\\Environment" /v "COR_PROFILER_PATH" /t REG_SZ /d "%s\\zlib1.dll" /f &
+    
+    mmc gpedit.msc
+
+![](https://p2.ssl.qhimg.com/t01f722a982a1079f04.png)
+
+把操作系统版本和进程列表通过HTTP POST的方式发送到解密后的URL：
+
+![](https://p2.ssl.qhimg.com/t01e339dc897d894dbb.png)
+
+![](https://p0.ssl.qhimg.com/t013439f97989eaed7b.png)
+
+![](https://p2.ssl.qhimg.com/t01ce32a248d65811ae.png)
+
+URL的解密算法，如下：
+
+![](https://p5.ssl.qhimg.com/t01dd19bafdaa7df456.png)
+
+待解密的数据，和之前发过的报告的前面的标志是一样的：OCCUR和OCCID
+
+![](https://p3.ssl.qhimg.com/t017a95ab1313a65561.png)
+
+解密后的域名：
+
+![](https://p3.ssl.qhimg.com/t019dc21c9ac1b293b3.png)
+
+检验网络返回数据的合法性，还和以前发的报告的样本的算法是相同的：
+
+![](https://p5.ssl.qhimg.com/t013029d43b5bb25ae9.png)
+
+解密成DLL后，把DLL里面的URL配置信息修改成当前的url，如图：
+
+![](https://p1.ssl.qhimg.com/t01c471140b043e6f5f.png)
+
+寻找REFUR和REFID 这2个字段，按照同样的加密算法，加密并写回去：
+
+![](https://p0.ssl.qhimg.com/t01b591273acb4e4ecd.png)
+
+然后在内存中加载执行恶意代码：
+
+![](https://p5.ssl.qhimg.com/t01278fbc74fe722184.png)
+
+该恶意代码和之前代码的相同处：
+
+  1. 解密URL的代码一样
+  2. 判断网络回来数据的合法性的地方一样
+
+不同处：
+
+  1. 动态修改加载的DLL的上线URL和ID
+  2. ByPASS uac的方法在DLL里
+
+另外，360威胁情报中心还关联到一个新的DarkHotel使用的劫持Windows操作系统模块的后门mstfe.dll（MD5:
+5ce7342400cce1eff6dc70c9bfba965b），并发现新的C2：
+
+hxxp://documentsafeinfo.com/mohamed/salah.php
+
+hxxp://779999977.com/mohamed/salah.php
+
+![](https://p2.ssl.qhimg.com/t01156a4a86c9341407.png)
+
+![](https://p2.ssl.qhimg.com/t0143c61bab1d939216.png)
+
+ID为dr.john-1:
+
+![](https://p1.ssl.qhimg.com/t0144e9faf30231b645.png)
+
+## 总结
+
+360威胁情报中心对DarkHotel
+APT团伙的攻击活动一直保持着持续跟踪，从本次事件可以看出，该攻击团伙在近年中保持着相当高的活跃度，为了达成攻击目的甚至会不惜使用0day漏洞进行攻击。另一方面，以Office文档作为0day攻击载体依然是当前最为流行的攻击方式，而通过微软Office来利用第三方模块0day漏洞的攻击面已经成为黑客研究的热点。
+
+目前，基于360威胁情报中心的威胁情报数据的全线产品，包括360威胁情报平台（TIP）、天眼高级威胁检测系统、360
+NGSOC等，都已经支持对此APT攻击团伙最新攻击活动的检测。
+
+## IOC
+
+**URL**  
+---  
+http://documentsafeinfo.com/mohamed/salah.php  
+http://779999977.com/mohamed/salah.php  
+http://windows-updater.net/stack/ov.php  
+  
+## 参考
+
+[1].<http://blogs.360.cn/blog/cve-2018-8174-en/>
+
+[2].<http://blogs.360.cn/blog/from-a-patched-itw-0day-to-remote-code-execution-part-i-from-patch-to-new-0day/>
+
+[3].<https://blog.trendmicro.com/trendlabs-security-intelligence/use-after-free-uaf-vulnerability-cve-2018-8373-in-vbscript-engine-affects-internet-explorer-to-run-shellcode/>
+
+[4].<https://ti.360.net/blog/articles/analysis-of-darkhotel/>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **奇安信威胁情报中心** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/156793](/post/id/156793)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞分析](/tag/漏洞分析)
+  * [CVE-2018-8373](/tag/CVE-2018-8373)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t01dce0f9e833e11f13.png) 奇安信威胁情报中心
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

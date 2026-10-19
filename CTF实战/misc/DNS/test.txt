@@ -1,0 +1,663 @@
+Ether / IP / TCP 192.168.3.134:49393 > 103.235.46.39:https FA
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 40
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xe08f
+     src       = 192.168.3.134
+     dst       = 103.235.46.39
+     \options   \
+###[ TCP ]### 
+        sport     = 49393
+        dport     = https
+        seq       = 2232806246
+        ack       = 489996520
+        dataofs   = 5
+        reserved  = 0
+        flags     = FA
+        window    = 4096
+        chksum    = 0x344d
+        urgptr    = 0
+        options   = ''
+
+Ether / IP / TCP 192.168.3.134:49439 > 172.217.24.13:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xb1a3
+     src       = 192.168.3.134
+     dst       = 172.217.24.13
+     \options   \
+###[ TCP ]### 
+        sport     = 49439
+        dport     = https
+        seq       = 2297813199
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0xe638
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485000742, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / IP / TCP 192.168.3.134:49441 > 172.217.24.13:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xb1a3
+     src       = 192.168.3.134
+     dst       = 172.217.24.13
+     \options   \
+###[ TCP ]### 
+        sport     = 49441
+        dport     = https
+        seq       = 878923154
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0xc5dc
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485000784, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / IP / TCP 192.168.3.134:49440 > 172.217.24.13:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xb1a3
+     src       = 192.168.3.134
+     dst       = 172.217.24.13
+     \options   \
+###[ TCP ]### 
+        sport     = 49440
+        dport     = https
+        seq       = 586524715
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0x7cb2
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485000784, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / IP / TCP 192.168.3.134:49374 > 103.235.46.39:https FA
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 40
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xe08f
+     src       = 192.168.3.134
+     dst       = 103.235.46.39
+     \options   \
+###[ TCP ]### 
+        sport     = 49374
+        dport     = https
+        seq       = 1581398871
+        ack       = 3673602838
+        dataofs   = 5
+        reserved  = 0
+        flags     = FA
+        window    = 4096
+        chksum    = 0x5352
+        urgptr    = 0
+        options   = ''
+
+Ether / IP / TCP 192.168.3.134:49442 > 172.217.24.13:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xb1a3
+     src       = 192.168.3.134
+     dst       = 172.217.24.13
+     \options   \
+###[ TCP ]### 
+        sport     = 49442
+        dport     = https
+        seq       = 184550404
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0x37fe
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485000991, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / IP / TCP 192.168.3.134:49444 > 172.217.24.13:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xb1a3
+     src       = 192.168.3.134
+     dst       = 172.217.24.13
+     \options   \
+###[ TCP ]### 
+        sport     = 49444
+        dport     = https
+        seq       = 1978181584
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0x291b
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485001035, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / IP / TCP 192.168.3.134:49443 > 172.217.24.13:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xb1a3
+     src       = 192.168.3.134
+     dst       = 172.217.24.13
+     \options   \
+###[ TCP ]### 
+        sport     = 49443
+        dport     = https
+        seq       = 1553102666
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0x72f8
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485001035, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / IP / TCP 192.168.3.134:49445 > 142.251.43.14:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xbc80
+     src       = 192.168.3.134
+     dst       = 142.251.43.14
+     \options   \
+###[ TCP ]### 
+        sport     = 49445
+        dport     = https
+        seq       = 3143258700
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0x4111
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485001795, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / IP / TCP 192.168.3.134:49446 > 142.251.43.14:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xbc80
+     src       = 192.168.3.134
+     dst       = 142.251.43.14
+     \options   \
+###[ TCP ]### 
+        sport     = 49446
+        dport     = https
+        seq       = 2050563828
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0xb4d5
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485001975, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / IP / TCP 192.168.3.134:49447 > 142.251.43.14:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xbc80
+     src       = 192.168.3.134
+     dst       = 142.251.43.14
+     \options   \
+###[ TCP ]### 
+        sport     = 49447
+        dport     = https
+        seq       = 2271936140
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0xc7f5
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485001996, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / IP / TCP 192.168.3.134:49393 > 103.235.46.39:https FA
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 40
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xe08f
+     src       = 192.168.3.134
+     dst       = 103.235.46.39
+     \options   \
+###[ TCP ]### 
+        sport     = 49393
+        dport     = https
+        seq       = 2232806246
+        ack       = 489996520
+        dataofs   = 5
+        reserved  = 0
+        flags     = FA
+        window    = 4096
+        chksum    = 0x344d
+        urgptr    = 0
+        options   = ''
+
+Ether / IP / TCP 192.168.3.134:49395 > 103.235.46.39:https FA
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 40
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xe08f
+     src       = 192.168.3.134
+     dst       = 103.235.46.39
+     \options   \
+###[ TCP ]### 
+        sport     = 49395
+        dport     = https
+        seq       = 3299997447
+        ack       = 2708011653
+        dataofs   = 5
+        reserved  = 0
+        flags     = FA
+        window    = 4096
+        chksum    = 0x2b3c
+        urgptr    = 0
+        options   = ''
+
+Ether / IP / TCP 192.168.3.134:49276 > 74.125.204.188:5228 A
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 40
+     id        = 41784
+     flags     = 
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xfc2f
+     src       = 192.168.3.134
+     dst       = 74.125.204.188
+     \options   \
+###[ TCP ]### 
+        sport     = 49276
+        dport     = 5228
+        seq       = 1323652063
+        ack       = 3108886886
+        dataofs   = 5
+        reserved  = 0
+        flags     = A
+        window    = 2048
+        chksum    = 0xc20a
+        urgptr    = 0
+        options   = ''
+
+Ether / IP / TCP 74.125.204.188:5228 > 192.168.3.134:49276 A / Padding
+6
+###[ Ethernet ]### 
+  dst       = a4:83:e7:ac:41:cf
+  src       = e4:0e:ee:bb:fa:f6
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 52
+     id        = 29747
+     flags     = 
+     frag      = 0
+     ttl       = 39
+     proto     = tcp
+     chksum    = 0x4429
+     src       = 74.125.204.188
+     dst       = 192.168.3.134
+     \options   \
+###[ TCP ]### 
+        sport     = 5228
+        dport     = 49276
+        seq       = 3108886886
+        ack       = 1323652064
+        dataofs   = 8
+        reserved  = 0
+        flags     = A
+        window    = 265
+        chksum    = 0xa37a
+        urgptr    = 0
+        options   = [('NOP', None), ('NOP', None), ('Timestamp', (3227214779, 484748147))]
+###[ Padding ]### 
+           load      = '\uea95\\xabG\\xa5\\xbb\\x8e'
+
+Ether / IP / TCP 192.168.3.134:49374 > 103.235.46.39:https FA
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 40
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0xe08f
+     src       = 192.168.3.134
+     dst       = 103.235.46.39
+     \options   \
+###[ TCP ]### 
+        sport     = 49374
+        dport     = https
+        seq       = 1581398871
+        ack       = 3673602838
+        dataofs   = 5
+        reserved  = 0
+        flags     = FA
+        window    = 4096
+        chksum    = 0x5352
+        urgptr    = 0
+        options   = ''
+
+Ether / IP / TCP 192.168.3.134:49448 > 172.217.160.74:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0x2966
+     src       = 192.168.3.134
+     dst       = 172.217.160.74
+     \options   \
+###[ TCP ]### 
+        sport     = 49448
+        dport     = https
+        seq       = 1082935983
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0x2851
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485003857, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / IP / TCP 192.168.3.134:49449 > 172.217.160.74:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0x2966
+     src       = 192.168.3.134
+     dst       = 172.217.160.74
+     \options   \
+###[ TCP ]### 
+        sport     = 49449
+        dport     = https
+        seq       = 841829807
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0x32b7
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485004105, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / IP / TCP 192.168.3.134:49450 > 172.217.160.74:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0x2966
+     src       = 192.168.3.134
+     dst       = 172.217.160.74
+     \options   \
+###[ TCP ]### 
+        sport     = 49450
+        dport     = https
+        seq       = 1535990446
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0xfbf6
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485004201, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / IP / TCP 192.168.3.134:49451 > 172.217.160.74:https S
+6
+###[ Ethernet ]### 
+  dst       = e4:0e:ee:bb:fa:f6
+  src       = a4:83:e7:ac:41:cf
+  type      = IPv4
+###[ IP ]### 
+     version   = 4
+     ihl       = 5
+     tos       = 0x0
+     len       = 64
+     id        = 0
+     flags     = DF
+     frag      = 0
+     ttl       = 64
+     proto     = tcp
+     chksum    = 0x2966
+     src       = 192.168.3.134
+     dst       = 172.217.160.74
+     \options   \
+###[ TCP ]### 
+        sport     = 49451
+        dport     = https
+        seq       = 3961885191
+        ack       = 0
+        dataofs   = 11
+        reserved  = 0
+        flags     = S
+        window    = 65535
+        chksum    = 0x333e
+        urgptr    = 0
+        options   = [('MSS', 1460), ('NOP', None), ('WScale', 6), ('NOP', None), ('NOP', None), ('Timestamp', (485004399, 0)), ('SAckOK', b''), ('EOL', None)]
+
+Ether / ARP is at e4:0e:ee:bb:fa:f6 says 192.168.3.1 / Padding

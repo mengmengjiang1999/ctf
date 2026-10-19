@@ -1,0 +1,155 @@
+![](https://image.3001.net/images/20191014/1571043295_5da437df24440.png!small)
+
+## 写在前面的话
+
+**对于红队安全研究团队来说，一次成功的渗透测试必须是不被目标系统发现的，随着现代终端检测和响应（EDR）产品日趋成熟，红队也必须随之每日俱进。在这篇文章中，我们将跟大家介绍[
+_FireEye Mandiant红队研究人员_](https://www.fireeye.com/services/red-team-assessments.html)如何通过构造特殊Payload来绕过现代EDR产品，并获取到目标系统的完整命令控制访问权。**
+
+Shellcode注入或Shellcode执行往往是我们在目标系统上实现Payload执行的最优方法，那么什么是Shellcode呢？Michael
+Sikorski将其定义为：“用于描述任何自包含可执行代码的术语”。大多数商业渗透测试框架，比如说Empire、Cobalt
+Strike或MetaSploit，它们都内置有Shellcode生成器，而这种Shellcode生成器一般都是二进制或十六进制格式，具体需要取决于用户是将其以原始输出还是应用源码的形式生成的。
+
+## 我们为什么要使用Shellcode呢？
+
+对于Payload类型来说，Shellcode所能带来的灵活性非常高。Shellcode可以使用多种编程语言来编写，而且这些语言可以跟很多类型的Payload进行整合。除此之外，Shellcode的这种灵活性允许我们根据需求并在任何环境下构建定制的Payload。因为Shellcode可以直接以Payload作为载体运行，或注入到任何正在运行的进程中，我们就可以使用多种技术来躲避EDR产品的检测了，这些技术包括Shellcode代码混淆、编码以及加密等等，这样可以大幅增加商业EDR产品的检测难度。
+
+在这篇文章中，我们将介绍如何使用下列三种方法来隐蔽地运行Shellcode：
+
+> 1、CreateThread
+>
+> 2、CreateRemoteThread
+>
+> 3、QueueUserAPC
+
+其中的每一项技术都会对应一个Windows
+API函数，而这些函数将会负责分配Shellcode的执行线程，并最终实现Shellcode的运行。CreateThread主要负责Shellcode的执行，CreateRemoteThread和QueueUserAPC主要负责Shellcode的注入。
+
+### CreateThread工作流程
+
+> 1、为当前进程分配内存；
+>
+> 2、将Shellcode拷贝到分配的内存中；
+>
+> 3、修改新分配内存的保护机制，以允许Shellcode在内存空间中运行；
+>
+> 4、使用已分配内存段的基地址创建线程；
+>
+> 5、等待返回线程句柄；
+
+### CreateRemoteThread
+
+> 1、获取目标注入进程的进程ID；
+>
+> 2、打开目标进程；
+>
+> 3、在目标内存中分配可执行内存；
+>
+> 4、将Shellcode写入到已分配内存中；
+>
+> 5、使用已分配内存段的起始地址在远程进程中创建一个线程；
+
+![](https://image.3001.net/images/20191014/1571043311_5da437efaa1e5.png!small)
+
+### QueueUserAPC
+
+> 1、获取目标注入进程的进程ID；
+>
+> 2、打开目标进程；
+>
+> 3、为目标进程分配内存；
+>
+> 4、向已分配内存中写入Shellcode；
+>
+> 5、修改新分配内存的保护机制，以允许Shellcode在内存空间中运行；
+>
+> 6、使用已分配内存段的起始地址在远程进程中创建一个线程；
+>
+> 7、当线程进入“预警”状态时，将线程提交至执行队列；
+>
+> 8、将线程恢复至“预警”状态；
+
+![](https://image.3001.net/images/20191014/1571043320_5da437f8b1094.png!small)
+
+### 命令执行
+
+大家先停一下，我们整理一下：
+
+> 1、恶意代码就是我们的Shellcode - stage 0或stage 1代码是真正执行恶意操作的代码。
+>
+> 2、标准的“Shellcode运行程序”会通过注入或直接执行的方式来运行恶意代码。
+
+接下来，我们还需要一种执行已编译代码的方法，一般来说，我们可以通过可执行程序（exe）或动态链接库（DLL）来实现，不过红队研究人员更愿意使用lolbins命令来执行。
+
+## 信息整合
+
+我们将开发一个Shellcode运行工具（DLL），它可以利用lolbins实现，并且可以在不需要更新代码库的情况下实现注入式或非注入式的Shellcode，以此来保证灵活性。完成之后，我们将得到一个名叫[
+_DueDlligence_](https://github.com/fireeye/DueDLLigence)的C#
+Shellcode运行程序，源代码可以点击【[ _这里_](https://github.com/fireeye/DueDLLigence)】获取。
+
+[
+_DueDlligence_](https://github.com/fireeye/DueDLLigence)项目可以快速地在之前提到的技术之间进行切换，我们只需要修改下图中的全局变量值即可：
+
+![](https://image.3001.net/images/20191014/1571043331_5da438033cf85.png!small)
+
+DueDLLigence
+DLL包含三个非托管的导出函数，这三个导出函数使用了Rasautou，Control，和Coregen这三个原生的Windows命令（本文所使用的Shellcode样本只会弹出calc.exe）：
+
+![](https://image.3001.net/images/20191014/1571043335_5da438075177d.png!small)
+
+打开源代码之后，你会发现样本使用了下列导出函数：
+
+![](https://image.3001.net/images/20191014/1571043339_5da4380b80794.png!small)
+
+首先，我们要生成我们的Shellcode，下图中，我们使用了Cobalt
+Strike来生成“rev_dns”监听器的原始Shellcode。完成之后，我们需要在Linux中运行下列命令来生成base64编码版本的Shellcode：
+
+    
+    
+    base64 -w0 payload.bin > [outputFileName] 
+
+![](https://image.3001.net/images/20191014/1571043343_5da4380fc7455.png!small)
+
+![](https://image.3001.net/images/20191014/1571043347_5da4381347f42.png!small)
+
+接下来，我们需要用base64编码的我们自己的x86或x64 Payload替换第58行的base64编码的Shellcode，上图中我们生成了一个x86
+Payload，有需要的话你可以修改“use x64 Payload”来生成一个x64 Payload。
+
+此时，我们需要重新安装DueDLLigence（Visual
+Studio项目）中的未托管导出库，，因为有时当你使用不同的项目时，可能会导致DueDLLigence项目出现问题。你可以打开NuGet包管理终端，然后运行下列命令：
+
+    
+    
+    Install-Package UnmanagedExports -Version 1.2.7 command
+
+![](https://image.3001.net/images/20191014/1571043356_5da4381c26184.png!small)
+
+完成上述所有操作之后，需要构建源码和DLL。Visual Studio
+Pro自带的Dumpbin.exe可以帮助我们运行和测试生成的DLL，并查看导出函数：
+
+![](https://image.3001.net/images/20191014/1571043360_5da43820c0af8.png!small)
+
+我们可以使用其他的lolbin技术来扩展上图中的导出函数列表，不过大家尽量把不需要使用的移除掉以减小Payload的体积。
+
+## Shellcode注入技术的现代检测方法
+
+尽管Shellcode可以帮助我们规避检测，但还是有可能被检测到的，下面我们来分析几种进程注入技术。
+
+在我们的Shellcode运行程序中，Shellcode注入技术（CreateRemoteThread和QueueUserAPC）会以挂起状态生成一个进程，然后向目标进程中注入Shellcode。比如说，我们选择explorer.exe来作为注入目标，我们的Payload将通过MSIExec来运行。之后会生成一个进程树，cmd.exe将生成msiexec.exe，并最终生成explorer.exe。
+
+![](https://image.3001.net/images/20191014/1571043371_5da4382b15619.png!small)
+
+在企业环境中，可以使用SIEM来收集遥测数据，以检测cmd.exe -> msiexec.exe -> explorer.exe进程树的执行情况。根据父-子进程的关系，防御端可以通过异常检测来识别潜在的恶意软件。
+
+API钩子是EDR和反病毒产品常用的恶意软件检测技术，很多攻击者会使用类似PsSetCreateProcessNotifyRoutine(Ex)和PsSetCreateThreadNotifyRoutine(Ex)这样的内核程序来实现攻击。当进程注入发生时，一个进程会修改另一个进程地址空间中的内存保护机制，通过检测类似API的调用情况，随着红队和恶意攻击者继续开发新的进程注入技术，网络防御人员以及安全软件需要继续适应不断变化的环境。监视诸如virtualAllocex、virtualProtectEx、createRemoteThread和ntQueueAPCThread之类的Windows
+API函数调用可以为识别潜在恶意软件提供有价值的数据。除此之外，监视create
+process与create_suspended和create_hidden标志的使用可能有助于检测攻击者要注入的挂起或隐藏的进程。
+
+![](https://image.3001.net/images/20191014/1571043375_5da4382fda4df.png!small)
+
+## 总结
+
+使用Shellcode作为红队研究过程中Payload感染的最后阶段，不仅可以方便研究人员在各种各样的目标环境中执行Payload，而且还可以实现安全产品的规避。DueDLLigence
+Shellcode运行程序是一个动态工具，它可以给红队研究人员提供一种“现成”的安全产品规避方法。
+
+ *** 参考来源：[ _fireeye_](https://www.fireeye.com/blog/threat-research/2019/10/staying-hidden-on-the-endpoint-evading-detection-with-shellcode.html)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

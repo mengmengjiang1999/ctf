@@ -1,0 +1,144 @@
+# 0x0 背景介绍  
+
+近日深信服安全团队通过威胁情报的知识图谱系统跟踪到大量BlueHero挖矿团伙的活动记录，该团伙利用的“肉鸡”数量逐渐增多且频繁更换具有英语短语的URL，主要使用主流的Web
+RCE漏洞进行互联网传播。
+
+近一个月以来监测到数百个IP地址发起的恶意攻击数据包流量，该病毒样本在内网同时采用“永恒之蓝”漏洞和弱密码爆破进行传播，过程中的病毒样本与之前相比呈现差异性新增驱动程序等特点。  
+
+![图片1.png](https://image.3001.net/images/20200326/1585205682_5e7c51b2aa61d.png!small)
+
+# 0x1 流量特征
+
+该团伙主要采用Apache Struts 远程代码执行漏洞、WebLogic Server wls9-async 远程代码执行漏洞、ThinkPHP5
+任意代码执行漏洞、Drupal Drupalgeddon2 远程命令执行漏洞等进行传播，且主要针对常见的web端口（82 80 7001 443 8000
+81 8080），并将一串恶意连接命令写入对应的payload字段当中。如果被攻击目标存在脆弱性将会从互联网上下载并执行对应程序从而被感染。  
+![图片2.png](https://image.3001.net/images/20200326/1585205906_5e7c5292e95f2.png!small)在windows系统下主要使用powershell.exe
+、certutil.exe从互联网上下载样本母体download.exe后直接执行，保存在本地的常见路径为C: windows/temp
+或%systemroot%/temp.  
+
+![图片3.png](https://image.3001.net/images/20200326/1585205970_5e7c52d20f2da.png!small)利用S2传播的payload数据包字段如下：  
+
+![图片4.png](https://image.3001.net/images/20200326/1585205996_5e7c52ec1db54.png!small)  
+
+从数据流量与运行过程中的ini配置文件来看，该团伙在互联网上十分活跃且更新较为频繁，文件的大小从4085248KB增加到目前的7300096KB，攻击传播模块组件更加丰富，但是文件母体的命名一直都是download.exe，未曾发生变化。
+
+2020年2月份配置文件：
+
+![图片5.png](https://image.3001.net/images/20200326/1585206097_5e7c53514f5ff.png!small)2019年8月份配置文件：  
+
+![图片6.png](https://image.3001.net/images/20200326/1585206111_5e7c535fccfe3.png!small)2019年3月份的配置文件如下：  
+
+#
+![图片7.png](https://image.3001.net/images/20200326/1585206125_5e7c536d1a390.png!small)0x2
+样本分析
+
+该团伙的主要入口点样本为download.exe，在运行后释放文件C:\Users\G4rb3n\AppData\Local\Temp\cnmbd.exe并创建进程。  
+
+![图片8.png](https://image.3001.net/images/20200326/1585206170_5e7c539acd0c9.png!small)这个病毒文件是Gh0st远控，它会自复制到多个路径并为其添加任务计划及服务。  
+
+![图片9.png](https://image.3001.net/images/20200326/1585206186_5e7c53aa80eea.png!small)然后从C&C服务器下载传播模块lanmktmrm.exe。  
+
+![图片10.png](https://image.3001.net/images/20200326/1585206201_5e7c53b943a46.png!small)跟之前的变种相似，Corporate下的是mimikatz工具，随机名文件夹neiulgfnd下的是s扫描器和masscan扫描器，UnattendGC则是“永恒之蓝”攻击包。  
+
+![图片11.png](https://image.3001.net/images/20200326/1585206236_5e7c53dc521ad.png!small)除了对内网进行爆破/永恒之蓝攻击以外，传播模块还会对公网的指定B段、C段IP进行攻击。  
+
+![图片12.png](https://image.3001.net/images/20200326/1585206267_5e7c53fbc525a.png!small)各个漏洞攻击的payload硬编码在传播模块中。  
+
+![图片13.png](https://image.3001.net/images/20200326/1585206286_5e7c540ec3828.png!small)  
+
+利用了如下方式进行传播：
+
+PHPStudy后门
+
+永恒之蓝漏洞
+
+弱密码爆破
+
+Apache Struts2远程代码执行漏洞【CVE-2017-5638】
+
+ThinkPHP5任意代码执行漏洞【CNVD-2018-24942】
+
+Oracle Weblogic Server远程命令执行漏洞【CVE-2018-2628/CVE-2019-2725】
+
+Drupal Drupalgeddon2远程命令执行漏洞【CVE-2018-7600】
+
+Apache Solr漏洞【CVE-2019-0193】
+
+Tomcat漏洞【CVE-2018-12615】
+
+bcbeuy.exe是封装的XMRig挖矿程序，同目录还新增了一个名为WinRing0x64.sys可疑驱动。
+
+![图片14.png](https://image.3001.net/images/20200326/1585206384_5e7c5470df2d2.png!small)WinRing0x64.sys的驱动的核心代码如下：![图片15.png](https://image.3001.net/images/20200326/1585206399_5e7c547f341bc.png!small)
+
+# 0x3 加固建议
+
+深信服安全团队提醒广大用户，注意日常防范措施：
+
+1、及时给电脑打补丁，修复漏洞。
+
+2、对重要的数据文件定期进行非本地备份。
+
+3、深信服防火墙客户，建议升级到AF805版本，并开启人工智能引擎Save，以达到最好的防御效果。
+
+4、使用深信服安全产品，接入安全云脑，使用云查服务可以即时检测防御新威胁。
+
+5、深信服推出安全运营服务，通过以“人机共智”的服务模式帮助用户快速扩展安全能力，针对此类威胁安全运营服务提供设备安全设备策略检查、安全威胁检查、相关漏洞检查等服务，确保第一时间检测风险以及更新策略，防范此类威胁。
+
+![图片16.png](https://image.3001.net/images/20200326/1585206628_5e7c556468c2a.png!small)
+
+最后，建议企业对全网进行一次安全检查和杀毒扫描，加强防护工作。推荐使用深信服安全感知+防火墙+EDR，对内网进行感知、查杀和防护。
+
+# 0x4 IOC
+
+ **URL：**
+
+http://ero.bckl.ir/download.exe
+
+http://cb.fuckingmy.life
+
+http://mi.simimasai.fun
+
+http://fk.openyourass.xyz/download.exe
+
+http://194.180.224.106/download.exe
+
+http://ae86.decode0x.site:63145/cfg.ini
+
+http://194.180.224.106:63145/cfg.ini
+
+http://ae86.decode0x.host:63145/cfg.ini
+
+qlo.amqw.ir
+
+fk.openyourass.icu
+
+ae86.decode0x.pw
+
+ae86.decode0x.online
+
+ae86.decode0x.host
+
+ae86.decode0x.site
+
+fk.openyourass.xyz
+
+ **CC IP：**
+
+194.180.224.106
+
+ **Md5:**
+
+download.exe A**C9C3934102BFDC3BFAC36420272A8
+
+lanmktmrm.exe 805AB39690FFD07CF2AB558D2B514306
+
+bnczbtntl.exe 7672877800A4D7ADED0CA75F88432A25
+
+vfshost.exe 1F2E820A81AE38E9E8DC173975AB57A6
+
+fuacnkpp.exe EA774C81FE7B5D9708CAA278CF3F3C68
+
+dayvtvliy 8BD2C5E849ABC51E721568871E670DFC
+
+spoolsrv.exe 22BB1452CA9B**B8D346368D3F4DB6C2
+

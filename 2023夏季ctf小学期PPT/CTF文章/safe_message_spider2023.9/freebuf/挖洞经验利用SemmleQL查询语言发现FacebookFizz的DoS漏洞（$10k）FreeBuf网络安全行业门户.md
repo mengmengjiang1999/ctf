@@ -1,0 +1,200 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ **![facebook-fizz-tls-library.png](https://image.3001.net/images/20190329/1553843938_5c9dc6e2054ce.png!small)**
+**本文讲述的是Semmle公司研究员通过Semmle QL查询语言发现的，关于Facebook
+Fizz项目的一个拒绝服务漏洞（DoS），漏洞利用原理在于，攻击者可以远程针对目标服务器发送一个经过构造的恶意消息，触发服务器中Fizz程序逻辑实现死循环，最终造成目标服务器的拒绝服务攻击。**
+
+>
+> [Semmle](https://semmle.com/)属牛津大学孵化子公司，是一家安全初创企业，其公司宗旨为用独特方法去寻找代码中的漏洞，其理念为将代码当成数据，将分析问题变成对数据库的请求，可轻松自动化地应用于大规模代码的审查。目前，Semmle公司主要有两种产品，一种是代码变量分析环境Semmle
+> QL查询语言，另外一种为深层语义代码审查平台LGTM。
+
+## 漏洞前导 - Facebook TLS 1.3 协议实现库Fizz
+
+2018年8月，IETF正式发布TLS1.3协议的最终版本RFC
+8446，该协议在安全性、性能和隐私方面都有着重大改进，大大提升HTTPS连接的速度性能。这并不是一次大版本更新，而是一次迭代改进。TLS1.3增加了几项新功能，可以使互联网流量更加安全，包括加密握手消息以保证证书私密，重新设计密钥的派生方式，以及零往返连接设置，这使得某些请求比TLS1.2快。
+
+基于庞大的用户群体和随时随地的交流通信机制，为了方便灵活地在Facebook上实现TLS1.3，Facebook官方早前就在内部创建应用了一个用C++14编写的强大、高性能的TLS库
+- Fizz，除了TLS1.3附带的协议增强功能外，Fizz还提供了许多功能，包括默认支持异步I/O，以及分散和收集I/O以消除对额外数据副本的需求。
+
+随TLS1.3的发布，Facebook也于2018年8月在Github中[开源了Fizz技术](https://github.com/facebookincubator/fizz)，帮助推动TLS
+1.3协议在互联网中的应用实现。可以[点此](https://code.fb.com/security/fizz/)参考Facebook官方对Fizz的说明。
+
+## 漏洞严重性和相关的缓解措施
+
+该漏洞造成的影响是，恶意攻击者可以用TCP方式，针对部署了Facebook
+Fizz库的任何服务器，远程发送一个恶意消息，触发服务器形成一个无限循环程序逻辑，最终大量消耗资源致使服务器拒绝提供服务。由于攻击者可以利用该漏洞对服务造成中断破坏，但不具备未授权访问可能，所以其被定义分类为DoS类型漏洞。另外，攻击者构造发送的恶意消息大小仅只是64KB多，所以，其攻击成本虽然非常之低，但却能对服务器造成严重后果。
+
+以普通家用级别1M上传速度的互联网带宽连接来看，其每秒就能发送两个这样的恶意构造消息，按每个消息打掉一个CPU来算，组合起一个小型的僵尸网络，用不了多少时间，就能让一个数据中心瘫痪。
+
+漏洞上报后，Facebook非常重视，在第一时间就进行了确认修复。
+2019年2月20日的漏洞上报时间，2月25日就在Github中推出了补丁更新。另外Facebook还向我透露，他们在2月20日，就对所有使用了Fizz库的服务器进行了内部缓解修复。
+
+针对该漏洞，除了升级Fizz库外，也没什么具体的缓解措施，建议所有Fizz库用户和企业及时更新，其最新版本为[v2019.02.25.00](https://github.com/facebookincubator/fizz/tree/v2019.02.25.00)。
+
+## PoC验证测试
+
+我用C语言写了一个简单的PoC漏洞利用代码，其原理大概为：首先，开启目标服务器上的一个TCP
+socket，向其发送一个64KB多一点的恶意消息Payload。之后，待Payload发送完，这个PoC代码会立即关闭socket连接，由于目标服务器会陷入死循环逻辑，所以这点不好验证。当然，我还未对任何现实网站系统进行过验证性攻击，仅只在我自己搭建的部署有Fizz库的服务器应用中进行过测试，尽管如此，由于该漏洞存在于Fizz库的核心代码程序之中，所以，我可以非常确定地认为，<https://facebook.com>
+网站也存在该漏洞。
+
+虽然Facebook已对自身服务系统进行了升级更新，但考虑到广大的Fizz库用户和其不定的修补速度，我会在后续几个星期内选择公布具体的PoC漏洞利用代码。
+
+## 漏洞分析
+
+该漏洞原因在于，Fizz库源码[PlaintextRecordLayer.cpp](https://github.com/facebookincubator/fizz/blob/eaa81af854bef509c3c1d7c83df0cd0b084a0fef/fizz/record/PlaintextRecordLayer.cpp#L42)文件第42行length
++=，其+=会导致一个整型溢出。以下为其上下文代码片段：
+
+    
+    
+    auto length = cursor.readBE<uint16_t>();
+    if (buf.chainLength() < (cursor - buf.front()) + length) {
+      return folly::none;
+    }
+    length +=
+        sizeof(ContentType) + sizeof(ProtocolVersion) + sizeof(uint16_t);
+    buf.trimStart(length);
+    continue;
+
+以上代码从传入的网络包中读取了一个uint16_t格式数据，并把它赋值给length，换句话说，这个length值是攻击者可以控制的。接下来的第39行if语句，初看像一种边界检查，但实际上它是检查是否收到足够多的数据以继续解析，这也就是我们上述漏洞利用代码exploit需要发送64KB数据的原因所在了。也就是说，至少要接收到length传入的字节数之后，其第42行代码才会触发整数溢出。我们的漏洞利用代码exploit会做出
+length = 0xFFFB 的设置，这表示，在length
++=之后，length的值为0，也可以说，在接下来对trimStart的调用不会消耗任何数据，所以，在对循环的后续迭代中不会产生其它操作流程。
+
+对该漏洞的修补其实非常简单：使用一个比uint16_t类型更大的数据格式来计算加法+，这样，就不会导致整型溢出了。
+
+以上描述并不是漏洞利用代码exploit的详细工作机制，在我看来，length =
+0xFFFB的设置是整个漏洞利用机理中比较简单的一点，我觉得，对于大多读者来说，要想弄清构造恶意消息到触发代码整型溢出的过程，可能稍微有点难，但为了安全考虑，待一段时间Fizz用户更新修复后，我会公布完整的exploit代码。
+
+## 用Semmle QL发现该漏洞
+
+[Facebook博客](https://code.fb.com/security/fizz/)中，其工程师把Fizz描述为“最基础的安全实现”，并列出如错误状态机传输的常见缺陷的C++程序避免技术。我也承认Fizz的总体代码质量非常好，它是流行的底层C++风格，不会出现传统的C程序bug，尤其是，它不涉及任何手工内存存储管理，所以，也不太容易存在常见的缓冲区溢出类问题。另外，Facebook之后还告诉我，他们曾在Fizz代码中执行过Fuzzing缺陷查找和第三方代码审查措施。因此，可以说Facebook
+Fizz是一个高质量的代码项目，代码团队曾依照最佳实践对其进行开发审查。那么，怎么就存在这么一个漏洞呢？我是如何用QL（查询语言）来发现它呢？
+
+在PlaintextRecordLayer.cpp文件中第42行，显然包含了一个整型溢出，但其难点和关键就在于怎么来发现的。Fuzzing技术当然是一种行之有效的自动化缺陷查找手段了，但它是基于随机化生成输入的，所以，当碰到一些特殊代码路径时，它的发现效果可能就不太好。（与其对应的就是，像我前述的那样，编写漏洞利用代码exploit时，最难的部份也在于要弄清如何去构造一个输入，去触发那一行中存在的溢出漏洞）
+
+但是用QL（查询语言）方式就显得没这种限制了，无论触发条件有多难，都可以用QL方式去发现任何整型溢出bug。虽然QL方式的bug检查结果有些在实际环境中无法触发，但这种手段总比亡羊补牢要好。当然，我也不能期望开发人员去修复成千上万个本质上只是假设性的“bug”，所以，这种QL方式查询检查必须足够准确，才能得到有说服力和有效的溢出漏洞。
+
+> 中间表示：( intermediate representation，IR)
+> 指编译器对于源程序进行扫描后生成的内部表示，代表源程序的语义和语法结构，编译器的各个阶段都在IR上进行分析或优化变换，因而它对编译器的整体结构、效率和健壮性都有着极大的影响。
+
+一开始，我只是通过一种稍微复杂的QL查询方式发现了该漏洞，但我的同事Jonas
+Jensen想到了一种更加改进的QL查询方法，这种方法比我之前的方法更加准确，而且还体现了我们公司正在开发过程中的一种新型C++中间表示技术（IR,
+Intermediate
+Representation）。当同一操作具备多个源语法时，这种中间表示（IR）可以简化QL查询。例如，以下执行操作相同的三行代码：
+
+    
+    
+    x = x+1;
+    x += 1;
+    x++;
+
+如果不用IR，那么代码中对加法的查找将会把其中涉及的所有语法条目指令进行分离，但采用了IR方式后，其查询只需一个加法指令条目即可实现。利用IR方式，我们首先来编写一个查询，该查询可以查找出所有从较大数据类型向较小数据类型的转化，这些转化过程中就可能存在溢出。代码如下：
+
+    
+    
+    import cpp
+    import semmle.code.cpp.ir.IR  //导入semmle IR库
+    from ConvertInstruction conv
+    where conv.getResultSize() < conv.getUnary().getResultSize()
+    select conv
+
+如果你希望自行实现这种查询，需要下载QL for Eclipse和一个Fizz的快照，具体的QL for
+Eclipse用法可以点此参考，另外，你也可以通过我们的在线[LGTM分析平台](https://lgtm.com/query/6310671311835743063/)来进行查询发现，但这种方式的缺点是，它只能对最新的源码版本进行查询，由于Facebook在Github中修复了该漏洞，所以这种方式也不能复现了。
+
+如预期所料，我们上述构造的查询方式发现了代码中很多细微的转换，这样发现溢出漏洞的概率就增大了，但还需进一步缩小范围。攻击者可以触发的整型溢出属于安全漏洞，所以，我们要从查询方法中改进的是，需要去发现这些不同转换中存在的不可信输入值。
+
+Jonas改进的查询方法在其中加入了新的IR
+[污点跟踪库](https://github.com/Semmle/ql/blob/94699175a40a6d89608d3de34efcae8a88e61c0c/cpp/ql/src/semmle/code/cpp/ir/dataflow/TaintTracking.qll)
+TaintTracking.qll，用以发现表达式中的不可信用户输入。但这些不可信用户输入又从何而来呢？这通常取决于服务端应用，所以对用户输入的界定，能帮助服务端应用的攻击面建模。说到Fizz，最终我们发现，可以通过Facebook中另一个名为[Folly](https://github.com/facebook/folly)的库来实现用户的恶意输入。
+
+Folly库把数据存储在了一个名为I[OBuf的类](https://github.com/facebook/folly/blob/a255f1ff059f980ff0a2c7f567210e1da3ee2f1d/folly/io/IOBuf.h#L221)中，之后Fizz实现过程会读取这个IOBuf，所以，一种发现用户恶意输入的方法就是去检查IOBuf用于Fizz中的具体机制。但是，我们构建了另外一种更加简洁和通用的方法，它不仅只适用于Fizz，原理大概为：当数据通过套接层socket发送时，通常是按[网络字节顺序发送](https://tools.ietf.org/html/draft-newman-network-byte-order-01)的，所以，最后网络数据需要转化为主机字节顺序方式，通常这种转化需要用到[ ntohs 或
+ntohl 方法](https://linux.die.net/man/3/ntohs)，从这个层面来说，ntohs 或 ntohl
+方法可以算是不可信输入的绝佳 “代理” 了。唯一的问题是，Fizz根本没用到ntohs 或 ntohl 方法，它用到的是 [Endian
+类](https://github.com/facebook/folly/blob/a255f1ff059f980ff0a2c7f567210e1da3ee2f1d/folly/lang/Bits.h#L264)，我们可用以下QL类来识别Fizz字节顺序转换的
+Endian 类：
+
+    
+    
+    class EndianConvert extends Function {
+      EndianConvert() {
+        (this.getName() = "big") and
+        this.getDeclaringType().getName().matches("Endian")
+      }
+    }
+
+综合以上的各种分析和查询方式，我们编写了如下查询代码，它利用了污点跟踪（taint
+track）手段有针对性地去发现基于用户输入的不安全的表达式转换，大大缩小了查询范围，提高了溢出漏洞检查效率。整个QL查询代码如下：
+
+    
+    
+    /**
+     * @name Fizz Overflow
+     * @description Narrowing conversions on untrusted data could enable
+     *              an attacker to trigger an integer overflow.
+     * @kind path-problem
+     * @problem.severity warning
+     */
+    import cpp
+    import semmle.code.cpp.ir.dataflow.TaintTracking
+    import semmle.code.cpp.ir.IR
+    import DataFlow::PathGraph
+    /**
+     * The endianness conversion function `Endian::big()`.
+     * It is Folly's replacement for `ntohs` and `ntohl`.
+     */
+    class EndianConvert extends Function {
+      EndianConvert() {
+        this.getName() = "big" and
+        this.getDeclaringType().getName().matches("Endian")
+      }
+    }
+    class Cfg extends TaintTracking::Configuration {
+      Cfg() { this = "FizzOverflowIR" }
+      /** Holds if `source` is a call to `Endian::big()`. */
+      override predicate isSource(DataFlow::Node source) {
+        source.(CallInstruction).getCallTarget().(FunctionInstruction).getFunctionSymbol() instanceof
+          EndianConvert
+      }
+      /** Hold if `sink` is a narrowing conversion. */
+      override predicate isSink(DataFlow::Node sink) {
+        sink.getResultSize() < sink.(ConvertInstruction).getUnary().getResultSize()
+      }
+    }
+    from
+      Cfg cfg, DataFlow::PathNode source, DataFlow::PathNode sink, ConvertInstruction conv,
+      Type inputType, Type outputType
+    where
+      cfg.hasFlowPath(source, sink) and
+      conv = sink.getNode() and
+      inputType = conv.getUnary().getResultType() and
+      outputType = conv.getResultType()
+    select sink, source, sink,
+      "Conversion of untrusted data from " + inputType + " to " + outputType + "."
+
+最终，我们利用以上代码发现了前述的Facebook Fizz 拒绝服务漏洞。现在，再用它来对修复后的Fizz源码执行查询检查，已不能发现任何漏洞。  
+
+## 漏洞上报
+
+2019年2月20日，我们向Facebook官方报送了这个漏洞，3月13日，我们收到了Facebook的官方回复：
+
+> 你好，Kevin
+> Backhouse，鉴于你的上报漏洞，我们决定给予你$10000美金的奖励，最后Facebook会通过Bugcrowd平台向你兑现奖金。在此，我们对该赏金奖励做出一些解释说明：
+>
+>
+> 该漏洞如果被恶意攻击者利用，可以导致Faceb，ook网络基础设施的拒绝服务（DoS），虽然拒绝服务型漏洞不属于我们漏洞赏金范围，但你提交的漏洞印证了我们的架构中存在严重的风险隐患。
+>
+> 再次感谢，期待你继续向我们提交更多高质量漏洞！
+
+> 2019-02-20 通过Facebook白帽项目提交漏洞
+>
+> 2019-02-20 Facebook验证漏洞存在并转交给开发团队
+>
+> 2019-02-20 Facebook对所有服务器进行补丁修复
+>
+> 2019-02-25 Facebook在GitHub上释放修复补丁
+>
+> 2019-03-13 Facebook确认漏洞赏金
+>
+> 2019-03-19： Semmle公司披露漏洞，并被给予编号CVE-2019-3560
+
+***参考来源：[lgtm](https://lgtm.com/blog/facebook_fizz_CVE-2019-3560)，clouds编译，转载请注明来自FreeBuf.COM**
+

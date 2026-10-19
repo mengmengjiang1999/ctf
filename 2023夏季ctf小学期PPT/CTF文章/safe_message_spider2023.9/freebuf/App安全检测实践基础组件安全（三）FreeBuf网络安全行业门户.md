@@ -1,0 +1,64 @@
+## 系列文章
+
+>
+> [App安全检测实践基础：客户端程序安全（一）](https://www.freebuf.com/articles/terminal/255712.html)
+>
+> [App安全检测实践基础：组件安全（二）](https://www.freebuf.com/articles/terminal/256189.html)
+
+##  **目录**
+
+>  **BroadcastReceiver拒绝服务**
+>
+>  **BroadcastReceiver组件越权**
+>
+>  **Service拒绝服务**
+>
+>  **Service组件越权**
+
+![1606718390_5fc493b6ceb47501d1f03.png!small?1606718394540](https://image.3001.net/images/20201130/1606718390_5fc493b6ceb47501d1f03.png!small?1606718394540)
+
+BroadcastReceiver也就是“广播接收者”的意思，顾名思义，它就是用来接收来自系统和应用中的广播。
+
+在Android系统中，广播体现在方方面面，例如当开机完成后系统会产生一条广播，接收到这条广播就能实现开机启动服务的功能；当网络状态改变时系统会产生一条广播，接收到这条广播就能及时地做出提示和保存数据等操作；当电池电量改变时，系统会产生一条广播，接收到这条广播就能在电量低时告知用户及时保存进度，等等。
+
+Android中的广播机制设计的非常出色，很多事情原本需要开发者亲自操作的，现在只需等待广播告知自己就可以了，大大减少了开发的工作量和开发周期。而作为应用开发者，就需要数练掌握Android系统提供的一个开发利器，那就是BroadcastReceiver。
+
+Service(服务)是一个一种可以在后台执行长时间运行操作而没有用户界面的应用组件。服务可由其他应用组件启动（如Activity），服务一旦被启动将在后台一直运行，即使启动服务的组件（Activity）已销毁也不受影响。
+此外，组件可以绑定到服务，以与之进行交互，甚至是执行进程间通信 (IPC)。 例如，服务可以处理网络事务、播放音乐，执行文件 I/O
+或与内容提供程序交互，而所有这一切均可在后台进行，Service基本上分为两种形式：启动状态和绑定状态；启动状态，当应用组件（如 Activity）通过调用
+startService()
+启动服务时，服务即处于“启动”状态。一旦启动，服务即可在后台无限期运行，即使启动服务的组件已被销毁也不受影响，除非手动调用才能停止服务，
+已启动的服务通常是执行单一操作，而且不会将结果返回给调用方；而绑定状态，当应用组件通过调用 bindService()
+绑定到服务时，服务即处于“绑定”状态。绑定服务提供了一个客户端-服务器接口，允许组件与服务进行交互、发送请求、获取结果，甚至是利用进程间通信 (IPC)
+跨进程执行这些操作。 仅当与另一个应用组件绑定时，绑定服务才会运行。
+多个组件可以同时绑定到该服务，但全部取消绑定后，该服务即会被销毁。但无论哪种具体的Service启动类型，都是通过继承Service基类自定义而来，也都需要在AndroidManifest.xml中声明。
+
+Service在AndroidManifest.xml中的声明语法，其格式如下：
+
+> <service android:enabled=["true" | "false"] ———————是否可以被系统实例化，默认为 true因为父标签
+> 也有 enable 属性，所以必须两个都为默认值 true 的 情况下服务才会被激活，否则不会激活
+>
+> android:exported=["true" | "false"]
+> ——————————代表是否能被其他应用隐式调用，其默认值是由service中有无intent-filter决定的，如果有intent- filter，
+> 默认值为true，否则为false。为false的情况下，即使有intent-filter匹配，也无法打开，即无 法被其他应用隐式调用。
+>
+> android:icon="drawable resource" android:isolatedProcess=["true" |
+> "false"]————————设置 true 意味着，服务会在一个特殊的进程下运行，这个进程与系统其他进程分开且没有自己的权限。
+>
+> 与其通信的唯一途径是通过服务的API(bind and start)。 android:label="string resource"
+>
+> android:name="string" ———————————— 对应Service类名 android:permission="string"
+> ———————————— 是权限声明
+>
+> android:process="string" > ————————————
+> 是否需要在单独的进程中运行,当设置为android:process=”:remote”时，代表Service在单独的进程中
+> 运行。注意“：”很重要，它的意思是指要在当前进程名称前面附加上当前的包名，所以“remote”
+> 和”:remote”不是同一个意思，前者的进程名称为：remote，而后者的进程名称为：App- packageName:remote。 . . .
+> </service>
+
+## 影响范围
+
+> Android 所有版本
+
+##
+

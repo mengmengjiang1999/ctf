@@ -1,0 +1,104 @@
+数字货币并不是区块链技术的唯一应用，非同质化代币（NFT）在 2021 年也走入了大众视野。NFT
+是一种数字代币，通过区块链技术验证数字内容和所有权的真实性，例如艺术品、音乐、收藏品和游戏中的物品等。
+
+2021 年 3 月，数字艺术家 Beeple 创作的数字艺术品 `Everydays – The First 5000 Days`以创纪录的 6900
+万美元被拍出。NFT 引起了巨大的轰动。当月底，时任 Twitter 首席执行官 Jack Dorsey 发布的第一条推文的 NFT 以 290
+万美元的价格售出。`Nyan Cat`的创建者重新制作了 GIF 图片，并以 10 以太坊（约 60 万美元）的价格将该 NFT 出售。
+
+犯罪分子也盯上了 NFT。最近， **研究人员发现了一个看起来很奇怪的 Excel 文件，其中包含 NFT 相关信息，但该文档实际上还会在后台下载并执行
+BitRAT 恶意软件。**
+
+## 奇怪的 Excel 文件
+
+恶意 Excel 文件的来源不能确定，但有一些线索可供分析。该 XLSM 文件被命名为 `NFT_Items.xlsm`，该文件包含两个
+Sheet，其中一个是希伯来语命名的。Sheet 中描述的是交易 NFT 的合法 Discord 房间，包括 NFT
+的名称、潜在投资回报的预测以及销售数量。
+
+攻击者滥用 Discord 部署恶意文件，攻击者很可能是向以色列的 NFT 爱好者发送了相关消息，诱使用户下载并打开恶意 XLSM 文件。
+
+![image.png-473.3kB](https://image.3001.net/images/20220221/1645441982_621373bea49d3d37153b5.png!small)恶意文件
+
+恶意 XLSM 文件中包含恶意宏代码，启用宏后 XLSM 文件会释放一个批处理文件。使用 PowerShell 脚本从 Discord 下载另一个恶意样本
+`NFTEXE.exe`。
+
+![image.png-288.5kB](https://image.3001.net/images/20220221/1645441984_621373c02262fea653299.png!small)宏代码
+
+![image.png-55.4kB](https://image.3001.net/images/20220221/1645441985_621373c1781cfaffdd1b8.png!small)部分代码
+
+![image.png-41.3kB](https://image.3001.net/images/20220221/1645441985_621373c1d51897e348096.png!small)PowerShell
+脚本
+
+`NFTEXE.exe`是一个 .NET 文件，尝试执行 `ipconfig /renew`命令，随后通过 Discord 拉取另一个恶意文件
+`NFTEXE.png`。
+
+`NFTEXE.png`伪装成图像文件，所有的字符串都经过翻转。
+
+![image.png-118.5kB](https://image.3001.net/images/20220221/1645441986_621373c26d5befba365db.png!small)反转字符串
+
+样本发现自己在云环境中运行，就会断开链接不会下载 NFTEXE.png。
+
+下一阶段的恶意文件是 `Nnkngxzwxiuztittiqgz.dll`，.NET 的 DLL 文件在 2022 年 1 月 2 日编译。
+
+NFTEXE.exe 将自身复制到 `C:\Users\[username]\AppData\Roaming\Microsoft\Windows\Start
+Menu\Programs\Adobe\Cloud.exe`，在启动维持持久化。
+
+NFTEXE.exe 还将 MSBuild.exe 复制到
+`C:\Users\[username]\AppData\Local`并运行。随后，NFTEXE.exe 使用
+Nnkngxzwxiuztittiqgz.dll 将 Payload 注入正在运行的 MSBuild.exe 进程。
+
+## BitRAT
+
+2020 年 8 月，BitRAT 被首次披露，BitRAT 的典型特征是使用 HVNC 为攻击者提供远程访问。BitRAT 借用了 TinyNuke 的
+HVNC 代码，后者的源码在 2017 年泄露。BitRAT 在 HVNC 通信时会将 `AVE_MARIA`作为验证信息。
+
+![image.png-322.5kB](https://image.3001.net/images/20220221/1645441987_621373c353a93787e5946.png!small)BitRAT
+功能
+
+BitRAT 使用 Slowloris 实现 DDoS 功能：
+
+![image.png-65.3kB](https://image.3001.net/images/20220221/1645441988_621373c473b37db1d6bbb.png!small)Slowloris
+DDOS
+
+其他功能包括：
+
+> 从失陷主机的浏览器与应用程序中窃取凭据
+>
+> 门罗币挖矿
+>
+> 键盘击键记录
+>
+> 文件上传下载
+>
+> 麦克风窃听
+
+将窃取的数据存储在 base64 编码的 ADS 文件中。
+
+![image.png-267.5kB](https://image.3001.net/images/20220221/1645441989_621373c533ac26ec61ce2.png!small)写入文件
+
+通过文件名可以推断，每天都会以日期创建一个新文件。
+
+![image.png-62.7kB](https://image.3001.net/images/20220221/1645441989_621373c5f210bec5dac80.png!small)ADS
+文件
+
+BitRAT 使用的 C&C 服务器（205.185.118.52）是由防弹主机服务提供商 FranTech Solutions 提供的。
+
+## 结论
+
+NFT 是一种新兴的互联网现象，有些人将其视为投资和赚钱的机遇。攻击者也在通过 NFT 话题引诱受害者打开 XLSM 文件投递 BitRAT。
+
+## IOC
+
+> 88ef347ad571f74cf1a450d5dad85a097bb29ab9b416357501cdc4c00388f796  
+> 342a5102bc7eedb62d5192f7142ccc7413dc825a3703e818cf32094638ebd17a  
+>
+> hxxps://cdn.discordapp.com/attachments/923977279179202600/927289948825079828/NFT_LIST.xlsm  
+>
+> hxxps://cdn.discordapp.com/attachments/927290851930013766/927291495604699167/NFT_LIST.xlsm  
+>
+> hxxps://cdn.discordapp.com/attachments/923858595353874472/928279600659234826/NFTEXE.EXE  
+> 205.185.118.52
+
+## 参考来源
+
+> [Fortinet](https://www.fortinet.com/blog/threat-research/nft-lure-used-to-> distribute-bitrat)
+

@@ -1,0 +1,179 @@
+**“知物由学”是网易云易盾打造的一个品牌栏目，词语出自汉·王充《论衡·实知》。人，能力有高下之分，学习才知道事物的道理，而后才有智慧，不去求问就不会知道。“知物由学”希望通过一篇篇技术干货、趋势解读、人物思考和沉淀给你带来收获的同时，也希望打开你的眼界，成就不一样的你。**
+
+以下为文章正文：
+
+想知道Android App常见的保护方法及其对应的逆向分析方法吗？
+
+![1.jpg](https://image.3001.net/images/20180320/15215371211551.jpg!small)  
+
+网易云易盾资深安全工程师 钟亚平
+
+3月17日，安卓巴士全球开发者论坛在重庆举办，网易资深安全工程师钟亚平出席交流活动，并做《安卓APP逆向与保护》的演讲。在分享中，他介绍了 Android
+App常见保护方法及其对应的逆向分析方法，以及分析了常见的加固方案原理与对抗方法。
+
+安卓APP安全包含很多内容，本次分享了混淆代码、整体Dex加固、拆分 Dex 加固、虚拟机加固等方面。事实上，这些内容也是国内近几年Android
+App安全保护的一种主要趋势。
+
+## 一、混淆代码
+
+Java代码是非常容易反编译的，作为一种跨平台的、解释型语言，Java
+源代码被编译成中间“字节码”存储于class文件中。由于跨平台的需要，这些字节码带有许多的语义信息，很容易被反编译成Java源代码。为了很好地保护Java源代码，开发者往往会对编译好的class文件进行混淆处理。
+
+混淆就是对发布出去的程序进行重新组织和处理，使得处理后的代码与处理前代码完成相同的功能，而混淆后的代码很难被反编译，即使反编译成功也很难得出程序的真正语义。ProGuard就是一个混淆代码的开源项目，能够对字节码进行混淆、缩减体积、优化等处理。
+
+Proguard处理流程图如下所示，包含压缩、优化、混淆、预检四个主要环节：
+
+![2.jpg](https://image.3001.net/images/20180320/15215371341414.jpg!small)  
+
+> 压缩（Shrink）：检测并移除代码中无用的类、字段、方法和特性（Attribute）；
+>
+>
+> 优化（Optimize）：对字节码进行优化，移除无用的指令。优化代码，非入口节点类会加上private/static/final，没有用到的参数会被删除，一些方法可能会变成内联代码；
+>
+> 混淆（Obfuscate）：使用a、b、c、d这样简短而无意义的名称，对类、字段和方法进行重命名；
+>
+> 预检（Preveirfy）：在Java平台上对处理后的代码进行预检，确保加载的class文件是可执行的。
+
+在分享中，钟亚平展示了利用Proguard，对Dex2jar进行反编译处理后的Apk效果示例：
+
+![3.jpg](https://image.3001.net/images/20180320/15215371729018.jpg!small)  
+Proguard处理后  
+
+![4.jpg](https://image.3001.net/images/20180320/15215371774980.jpg!small)  
+
+Proguard混淆器不仅能够保护代码，而且能够精简编译后的程序大小，减少内存占用。
+
+### 混淆代码逆向分析
+
+如果想要反编译混淆代码，钟亚平分享了一个国外的工具DEGUADR，它能够通过统计的方式来解混淆。虽然这个工具的正确率达不到100%，但是能在一定程度上帮助反编译代码。
+
+![5.jpg](https://image.3001.net/images/20180320/15215371801049.jpg!small)  
+
+使用DEGUADR解混淆的示例：  
+
+![6.jpg](https://image.3001.net/images/20180320/15215371832713.jpg!small)  
+
+com.xxxxx.common.util.CryptoUtil网站也提供了一种反编译服务，如下所示：
+
+    
+    
+    java.lang.String a(byte[]) -> encodeToString
+    
+    java.lang.String a(byte[],boolean,java.lang.String) -> a 
+    
+    byte[] a(byte[],byte[]) -> encrypt 
+    
+    byte[] b(byte[]) -> getKey 
+    
+    byte[] b(byte[],byte[]) -> decrypt 
+    
+    byte[] d(java.lang.String) -> getKey 
+    
+    java.lang.String a(byte,char[]) -> a 
+    
+    java.lang.String a(java.io.File) -> getHash 
+    
+    java.lang.String a(java.lang.String) -> c 
+    
+    java.lang.String b(java.lang.String) -> encode
+
+## 二、整体Dex加固
+
+为了加强Android保护强度，随着安全技术的发展，又出现了新型的“加固技术”。DEX加固是对DEX文件进行加壳防护，防止被静态反编译工具破解而泄露源码，最刚开始出现的是整体加固技术方案。
+
+![7.jpg](https://image.3001.net/images/20180320/15215371876783.jpg!small)  
+
+整体加固技术的原理如上所示，包括替换application/classes.dex、解密/动态加载原classes.dex、调用原application相关方法、将原application对象/名称设置到系统内部相关变量四大环节。其中最为关键的一步就是解密/动态加载原classes.dex，通过加密编译好的最终dex源码文件，然后在一个新项目中用新项目的application启动来解密原项目代码并加载到内存中，再把当前进程替换为解密后的代码，能够很好地隐藏源码并防止直接性的反编译。
+
+### 整体Dex加固逆向分析
+
+整体Dex加固逆向分析有两种常用的方法。其一是在内存中暴力搜索 dex\n035，再 dump。以下是在32位系统中的效果示例：
+
+![8.jpg](https://image.3001.net/images/20180320/15215371905111.jpg!small)  
+
+另一种方法就是通过HookdvmDexFileOpenPartial(void* addr, int len, DvmDex**)。
+
+## 三、拆分Dex加固
+
+随着业务规模发展到一定程度，不断地加入新功能、添加新的类库，代码在急剧膨胀的同时，相应的apk包的大小也急剧增加，那么简单的整体加固方案就不能很好地满足安全需求，在整体加固方案之外又出现了拆分加固的技术方案。
+
+![9.jpg](https://image.3001.net/images/20180320/15215371985042.jpg!small)  
+
+但是如上所示，dex文件在加固时，针对中间缺失的一部分数据会以解密后的数据来替换，有的时候这种拆分替换也会导致数据不准确。那么到底应该拆分什么样的数据呢？就需要了解一下dex文件的数据结构。
+
+Dex文件结构极为复杂，以下图示选取了其中较为重要的内容。事实上，dex文件是一个以class为核心组装起来的文件，其中最重要的是classdata和classcode两部分，有其特定的接口和指令数据，选取这两部分来拆分的话，即使拆分出来也不会泄露class数据和字节码数据，反编译出来也不完整，安全性较高。
+
+![10.jpg](https://image.3001.net/images/20180320/15215372009535.jpg!small)  
+
+### 拆分Dex加固逆向分析
+
+对于dex拆分加固的逆向分析，如下所示，可以用classdata替换从而组装成新的dex文件，虽然和原来的dex文件不会完全一致，但也在一定程度上复原了被拆分数据的样子。
+
+![11.jpg](https://image.3001.net/images/20180320/15215372043699.jpg!small)  
+
+但要注意的是，这种方法仅适用于被拆分出去的数据变形一次性完成，也就是说，在有其他保护思路的情况下尽量避免使用，而且即使有需要也尽量选在用到这个类的时候才去恢复。
+
+此外还有一个更底层一些的工具dexhunter，这个工具较为前卫，但同时也有一些局限性，譬如部分指令数据会被优化，形成的代码界面不是很美观等等。
+
+![12.jpg](https://image.3001.net/images/20180320/15215372102838.jpg!small)  
+
+## 四、虚拟机加固
+
+虚拟机加固也属于dex拆分加固的一种，它是对字节做了一些变化处理。如下所示，这是一个正常安卓系统中的代码，在其中进行了虚拟机加固操作：
+
+![13.jpg](https://image.3001.net/images/20180320/15215372156928.jpg!small)  
+
+以add-int v0, v1, v2、sub-int v0, v1, v2、mul-int v0, v1,
+v2这三条指令进行替换，然后进行加固编译，这样子操作后，即使把替换后的数据恢复了，也不会以add-int v0, v1, v2、sub-int v0,
+v1, v2、mul-int v0, v1,
+v2这三条指令进行替换，然后进行加固编译，这样子操作后，即使把替换后的数据恢复了，也不会变形成为之前的字节码，安全系数较高。
+
+虚拟机加固逆向分析—HOOK JNI 接口
+
+这种方式下的逆向分析，一方面可以通过HOOK JNI 接口来实现，它有两种实现方式。
+
+其一是类成员/静态变量操作相关接口，比如：
+
+> GetStaticDoubleFieldSetStaticDoubleField GetDoubleField SetDoubleField …
+>
+> (byte, object, int,long…)
+
+其二是反射调用类方法，比如：
+
+> CallVoidMethodACallBooleanMethodA CallShortMethodA CallObjectMethodA …
+>
+> CallStaticVoidMethodACallStaticBooleanMethodA CallStaticShortMethodA
+> CallStaticObjectMethodA …
+>
+> (byte, int, long,double …)
+>
+> CallObjectMethodA(JNIEnv* env, jobject object, jmethoID method, …)
+
+![14.jpg](https://image.3001.net/images/20180320/15215372192089.jpg!small)  
+通过HOOKJNI 接口实现虚拟机加固逆向分析
+
+通过HOOK JNI
+接口不用逆向底层，就可以了解APP大致的调用流程。但是对于复杂的调用过程，或者虚拟化方法数量较多的情况，这种逆向分析手段看起来会比较混乱；对于不需要返射到Java层执行的指令，如算术、逻辑运算等，则无法监控到。
+
+### 虚拟机加固逆向分析—分析指令操作码映射
+
+另一方面，也可以通过分析指令操作码映射来逆向分析。在同一加固版本，或者映射关系相同的情况下，可以采取以下所示的方法：
+
+![15.jpg](https://image.3001.net/images/20180320/15215372239933.jpg!small)  
+
+但在实际情况中，每次加固时的映射关系都是随机变化的，如下所示，这种情况下就无法直接建立映射关系。  
+
+![16.jpg](https://image.3001.net/images/20180320/15215372277358.jpg!small)  
+
+不依赖于操作码的映射关系只与虚拟机结构有关，所以需要根据偏移关系建立映射关系，从而进行逆向分析。  
+
+![17.jpg](https://image.3001.net/images/20180320/15215372308603.jpg!small)  
+
+![18.jpg](https://image.3001.net/images/20180320/15215372343572.jpg!small)  
+
+以上就是此次《安卓APP逆向与保护》主题的全部分享内容。
+
+安卓APP逆向保护作为开发工作中的重要内容，一直是网易云易盾致力于提供的应用服务。“后续，我们将在SO加密保护方面进行更加深入的研究，钟亚平最后说到。
+
+ ***本文作者：wangyiyunyidun，转载请注明来自FreeBuf.COM**
+

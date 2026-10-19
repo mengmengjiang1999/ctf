@@ -1,0 +1,514 @@
+# Tenda AX12路由器设备分析（二）之UPnP协议
+
+阅读量 **260687**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-12-20 10:30:59
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## 0x01 前言
+
+在智能设备和家庭网络路由设备中，最常见的协议是UPnP协议，因此本篇文章将以最新的Tenda
+AX12路由器设备为支点，对UPnP协议由浅入深的讲解和如何在平时对UPnP服务进行分析和测试
+
+## 0x02 UPnP 介绍
+
+UPnP 是通用即插即用（Universal Plug and
+Play）服务的缩写，它是发现网络上各种设备提供的服务并于之交互的一种标准，现在越来越多的智能服务设备和家用网络的发展，为了使不同的智能设备之间进行网络互联互通，因此UPnP目前是家庭网络设备必须支持的特性之一，并且使用UPnP协议并不需要设备驱动程序，任何设备一旦连接上网络，所有在网络上的设备马上就能知道新加入的设备信息，以及新设备支持的服务和行为，这些设备之间能互相通信，也能直接使用和控制支持UPnP协议的设备，不需要人工设置。
+
+###  1）UPnP 协议栈和工作流程
+
+UPnP 使用各种不同的协议来实现其功能：
+
+  * SSDP: 简单服务发现协议，用于发现本地网络上的UPnP设备和在网络上单播他们可用的UPnP服务。
+  * SCPD: 服务控制点定义，用于定义UPnP设备提供的服务需要的Action。
+  * SOAP: 简单对象访问协议，用于实际的调用操作。
+  * GENA: 通用事件通知架构，用于定义控制点向UPnP设备发送订阅消息和接受信息。  
+
+###  2）SSDP协议
+
+当一个设备第一次接入局域网中时，设备会通过DHCP协议自动获取分配的IP，这是UPNP服务的第一步，获取IP。
+
+按照协议的规定，当一个UPnP客户端接入网络时，UPnP客户端会自动通过SSDP协议向一个特定的多播地址239.255.255.250:1900使用M-SEARCH HTTP方法发送”ssdp:discover”的消息，其中M-SEARCH方法特定于UPnP协议，多播IP地址239.255.255.250时一个特殊的广播IP地址，不像普通的IP那样会绑定到任何特定的服务器，端口1900是UPnP服务器将侦听广播的端口。
+
+对Tenda AX12 设备进行端口扫描，可以知道设备对外开放了那些端口，其中5000是Tenda设备的UPnP 协议开放的提供的服务端口
+
+> upnp的标准端口并不多，唯一的标准端口是UDP端口1900，用于接受通知；还有一些常用的端口 5431（Broadcom）、49152（Linux
+> IGD）和端口80、tenda 的设备是5000 和5500端口、edimax 是80端口、NetGear 部分设备是5000
+
+![](https://p5.ssl.qhimg.com/t010d729391e415e19a.png)
+
+当有设备监听多播地址上有UPnP客户端发送的消息的时候，设备会分析客户端请求的服务，如果自身提供了客户端请求的服务，设备则会通过单播的方式直接将带有Loaction的服务来响应客户端的请求。
+
+下面是UPnP客户端在Tenda AX12路由器中，利用SSDP协议在广播模式下使用HTTP over UDP(称为HTTPU)。Tenda
+AX12设备通过59452端口响应。
+
+    
+    
+    ('192.168.0.101', 1900)
+    M-SEARCH * HTTP/1.1
+    HOST: 239.255.255.250:1900
+    MAN: "ssdp:discover"
+    MX: 1
+    ST: ssdp:all
+    USER-AGENT: Google Chrome/87.0.4280.88 Windows
+    
+    
+    ('192.168.0.1', 59452)
+    NOTIFY * HTTP/1.1
+    HOST: 239.255.255.250:1900
+    CACHE-CONTROL: max-age=60
+    LOCATION: http://192.168.0.1:5000/rootDesc.xml
+    SERVER: Tenda/SNAPSHOT UPnP/1.1 MiniUPnPd/1.9
+    NT: urn:schemas-upnp-org:service:Layer3Forwarding:1
+    USN: uuid:1a0c85bc-f784-4e51-a590-7401b012a23f::urn:schemas-upnp-org:service:Layer3Forwarding:1
+    NTS: ssdp:alive
+    OPT: "http://schemas.upnp.org/upnp/1/0/"; ns=01
+    01-NLS: 946656165
+    BOOTID.UPNP.ORG: 946656165
+    CONFIGID.UPNP.ORG: 1337
+    
+
+这里介绍一下发送和返回信息的标头的定义：  
+HOST: 多播地址和端口  
+MAN: 设置查询的类型，例如:ssdp:discover  
+MX: 设置设备响应最长等待时间。  
+服务名称USN: 唯一标识一种服务实例  
+ST: 设置服务查询的目标，它可以是下面的类型：
+
+  * ssdp:all 搜索所有设备和服务
+  * upnp:rootdevice 仅搜索网络中的根设备
+  * uuid:device-UUID 查询UUID标识的设备
+  * urn:schemas-upnp-org:device:device-Type:version 查询device-Type字段指定的设备类型，设备类型和版本由UPNP组织定义。
+  * **urn:schemas-upnp-org:service:service-Type:version** 查询service-Type字段指定的服务类型，服务类型和版本由UPNP组织定义
+
+位置信息LOCATION: 发现结果和存在通知包含一个或多个URI,客户端利用位置信息可以找到它需要的服务。
+
+期限信息CACHE-CONTROL:
+客户端在自己的cache中保存此服务多长时间。如果期限过了，关于此服务的信息会被从cache中拿掉。当客户端接收到的发现结果或存在通知包含的USN和cache中的某条匹配，则更新。
+
+SERVER: 包含操作系统名、版本、产品和产品版本信息。
+
+正常情况下，这些数据包是设备会自动发送和处理的。使用抓包工具(wireshark)监听是可以看到这些数据包的。
+
+这里我将构造一段代码来说明如何使用python发送M-SEARCH来发现局域网中的存在的UPnP设备和服务。
+
+    
+    
+    import socket
+    import re
+    
+    ANY = "0.0.0.0"
+    DES_IP = "239.255.255.250"
+    PORT = 1900
+    xml_str = b'M-SEARCH * HTTP/1.1\r\n' \
+        + b'HOST: 239.255.255.250:1900\r\n' \
+        + b'MAN: "ssdp:discover"\r\n' \
+        + b'MX: 3\r\n' \
+        + b'ST: ssdp:all\r\n' \
+        + b'USER-AGENT: Google Chrome/87.0.4280.88 Windows\r\n\r\n\r\n'
+    
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind((ANY, PORT))
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
+    s.setsockopt(
+        socket.IPPROTO_IP,
+        socket.IP_ADD_MEMBERSHIP,
+        socket.inet_aton(DES_IP) + socket.inet_aton(ANY)
+    )
+    s.setblocking(False)
+    s.sendto(xml_str, (DES_IP, PORT))
+    while True:
+        try:
+            data, address = s.recvfrom(2048)
+        except Exception as e:
+            pass
+        else:
+            print(address)
+            print(data)
+    
+
+执行代码之后，Tenda AX12 中的UPnP服务监听请求之后，Tenda AX12 将会使用UDP单播响应UPnP
+请求，来说明设备或者程序提供那些UPnP的服务以及配置文件，对于每个服务和设备类型，则发送一条消息，其中标头中的LOCALTION值，会有Tenda
+AX12 路由器提供的服务和提供服务的参数以及URI。下图是Tenda AX12的UPnP协议输出的信息其中的一条，Tenda AX12在广播信息中MX:2
+的描述内响应了M-SEARCH查询，该设备是Server的值确定设备是Tenda设备，以及设备使用的UPnP
+的组件名称为MiniUPnPd，还有一个LOCATION标头，它的值是”<http://192.168.0.1:5000/rootDesc.xml>“
+
+![](https://p5.ssl.qhimg.com/t016de5c70af0c24035.png)
+
+###  3）SCPD
+
+在介绍SCPD之前，先了解设备提供的UPnP 服务描述信息，对Tenda
+AX12设备的UPnP提供了那些服务，目前我们是不知道的，但是我们获取到了设备的响应信息，其中可以利用返回的LOCATION信息来获取Tenda
+AX12设备UPnP的各种服务的定义以及虚拟设备的定义。
+
+在浏览器中访问”[http://192.168.0.1:5000/rootDesc.xml”，你会获取到目标设备的UPnP](http://192.168.0.1:5000/rootDesc.xml%22%EF%BC%8C%E4%BD%A0%E4%BC%9A%E8%8E%B7%E5%8F%96%E5%88%B0%E7%9B%AE%E6%A0%87%E8%AE%BE%E5%A4%87%E7%9A%84UPnP)
+信息。
+
+rootDesc.xml 文件内容很多，这里节选部分内容进行介绍
+
+首先是设备属性定义，不同厂商对这一块的定义和描述都是不同的。但常有的信息一般有设备类型、friendlyName、厂商名称、厂商的官网、型号描述、序列号等信息。
+
+    
+    
+    <deviceType>urn:schemas-upnp-org:device:InternetGatewayDevice:1</deviceType>
+    <friendlyName>Tenda router</friendlyName>
+    <manufacturer>Tenda</manufacturer>
+    <manufacturerURL>http://www.tenda.com.cn/</manufacturerURL>
+    <modelDescription>Tenda router</modelDescription>
+    <modelName>Tenda router</modelName>
+    <modelNumber>1</modelNumber>
+    <modelURL>http://www.tenda.com.cn/</modelURL>
+    <serialNumber>00000000</serialNumber>
+    <UDN>uuid:1a0c85bc-f784-4e51-a590-7401b012a23f</UDN>
+    
+
+接下来我们来分析服务，设备支持的服务列表中每个服务都有<serviceType>
+(服务类型)、<controlURL>（控制URL）、<eventSubURL>（事件订阅URL）、<SCPDURL> （SCPD URL）标签
+
+    
+    
+    <device>
+        <deviceType>urn:schemas-upnp-org:device:WANConnectionDevice:1</deviceType>
+        <friendlyName>WANConnectionDevice</friendlyName>
+        <manufacturer>MiniUPnP</manufacturer>
+        <manufacturerURL>http://miniupnp.free.fr/</manufacturerURL>
+        <modelDescription>MiniUPnP daemon</modelDescription>
+        <modelName>MiniUPnPd</modelName>
+        <modelNumber>20210823</modelNumber>
+        <modelURL>http://miniupnp.free.fr/</modelURL>
+        <serialNumber>00000000</serialNumber>
+        <UDN>uuid:1a0c85bc-f784-4e51-a590-7401b012a231</UDN>
+        <UPC>000000000000</UPC>
+        <serviceList>
+            <service>
+                <serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType>
+                <serviceId>urn:upnp-org:serviceId:WANIPConn1</serviceId>
+                <controlURL>/ctl/IPConn</controlURL>
+                <eventSubURL>/evt/IPConn</eventSubURL>
+                <SCPDURL>/WANIPCn.xml</SCPDURL>
+            </service>
+        </serviceList>
+    ...
+    
+
+后面会讲述以上的服务中的各种标签如何在实际中使用，先讲述对服务类型urn:schemas-upnp-org:service:WANIPConnection:1定义的服务Action和对应参数的XML文件。这里需要用到\<SCPDURL> 的值
+
+访问Tenda AX12 路由器的服务urn:schemas-upnp-org:service:WANIPConnection:1 可以直接在浏览器中打开
+<http://192.168.0.1:5000/WANIPCn.xml> 。
+
+XML文件的内容也很多，因此节选了部分来介绍，在action列表中有许多的action定义，这里的action是获取路由器设备外部的IP ，也就是WAN
+的IP地址，对action定义一般是
+<name>(action名称)、<argument><name>（action参数名）、<direction>（参数输入输出方向）、<relatedStateVariable>
+（变量名）。
+
+在<serviceStateTable>(变量列表)中有对action参数名对应变量名的定义<dataType>数据类型。
+
+    
+    
+    ...
+    <action>
+    <name>GetExternalIPAddress</name>
+        <argumentList>
+            <argument>
+                <name>NewExternalIPAddress</name>
+                <direction>out</direction>
+                <relatedStateVariable>ExternalIPAddress</relatedStateVariable>
+            </argument>
+        </argumentList>
+    </action>
+    ...
+    <serviceStateTable>
+    ...
+        <stateVariable sendEvents="yes">
+            <name>ExternalIPAddress</name>
+            <dataType>string</dataType>
+        </stateVariable>
+    ...
+    
+
+###  4）SOAP 调用
+
+根据SCPD.xml 文件内的信息，可简单易懂的是识别出设备内可以通过UPnP
+获取到的各种信息，以上述对获取设备外部IP的action定义为例，接下来进行SOAP调用。
+
+在进行调用之前，介绍一下什么是SOAP。
+
+> SOAP 是一种简单的基于XML的协议，它底层通过HTTP来交换信息。SOAP的优点是可以传递结构化的数据。
+>
+> 客户端生成的SOAP请求会被嵌入在一个HTTP POST请求中，发送到Web服务器。Web 服服务器再把这些请求转发给Web service
+> 请求处理器，它解析收到的SOAP 请求，调用Web service, 处理后再生成相应的额SOAP 应答。Web
+> 服务器的到SOAP应答后，会再通过HTTP 应答的方式把它送回到客户端。
+
+构建SOAP请求，需要包含下列元素：
+
+  * 必须的Envelope元素，可把此XML文档标识为一条SOAP消息。
+  * 可选的Header元素，包含头部信息
+  * 必须的Body元素，包含所有的调用和响应信息。
+  * 可选的Fault元素，提供有关处理此消息所发生错误的信息
+
+基本结构为
+
+    
+    
+    <?xml version="1.0"?>
+    <soap:Envelope
+    xmlns:soap="http://www.w3.org/2001/12/soap-envelope"
+    soap:encodingStyle="http://www.w3.org/2001/12/soap-encoding">
+    <soap:Header>
+      ...
+    </soap:Header>
+        <soap:Body>
+              ...
+              <soap:Fault>
+                ...
+              </soap:Fault>
+        </soap:Body>
+    </soap:Envelope>
+    
+
+使用python 来构造如下代码来获取Tenda 设备的外部IP，在代码中的注释都讲述了构造SOAP 调用需要的值意思。
+
+    
+    
+    import requests
+    # SOAP request URL
+    url = "http://192.168.0.1:5000/ctl/IPConn"
+    # 值来自于 rootDesc.xml文件中的 <serviceType>
+    service_type="urn:schemas-upnp-org:service:WANIPConnection:1"
+    # 值来自于SCPD XML中的<action>GetExternalIPAddress</action>
+    
+    action="GetExternalIPAddress"
+    # structured XML
+    payload = """<?xml version=\"1.0\" encoding=\"utf-8\"?>
+                <soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\">
+                    <soap:Body>
+                        <u:%s xmlns:u=\"%s\">
+                        </u:%s>
+                    </soap:Body>
+                </soap:Envelope>"""%(action,service_type,action)
+    #soap_action="urn:schemas-wifialliance-org:service:WFAWLANConfig:1#GetDeviceInfo"
+    soap_action="urn:schemas-upnp-org:service:WANIPConnection:1#GetExternalIPAddress"
+    # headers
+    headers = {
+        'Content-Type': 'text/xml; charset=utf-8',
+        'Host':'192.168.0.1:5000',
+        'Content-Length':'355',
+        'SOAPAction':'"%s"'%(soap_action)
+    
+    }
+    # POST request
+    response = requests.request("POST", url, headers=headers, data=payload)
+    # prints the response
+    print(response.text)
+    print(response)
+    
+
+执行过上述代码之后，Tenda AX12 设备UPnP服务器会返回响应，其中有我们要获取的设备的外部IP.
+
+    
+    
+    <?xml version="1.0"?>
+    <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:GetExternalIPAddressResponse xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1"><NewExternalIPAddress>192.168.1.4</NewExternalIPAddress></u:GetExternalIPAddressResponse></s:Body></s:Envelope>
+    
+
+接下来我们来使用SOAP调用来介绍一下UPnP协议最主要的功能—端口映射，这里以一个比较简单的案例来介绍UPnP端口映射
+
+在网络空间中，私有网络和公网交互的时候，私有网络使用的是内网IP地址，私有网络中的服务是无法被外网直接访问的，必须借助NAT网关设备把内网地址映射到网关的公网地址上，需要在NAT设备上为设备手动配置端口映射。但是如果多个设备都需要配置端口映射，并且端口不能冲突，那么配置就相当麻烦。但是路由设备中的UPnP服务可以自动为发送端口映射请求的设备进行端口分配，自动配置端口映射所需的操作。
+
+ps:大多数路由器是支持UPnP的，有的是默认开启，有的是手动启动，Tenda AX12是需要手动启动的。
+
+由于现在的路由器上的UPnP 端口映射都是自动的，这里了更好的理解和对UPnP进行后期的漏洞挖掘和测试，我将介绍如何手动给路由器的UPnP服务添加端口映射。
+
+添加端口映射的action 在 <http://192.168.0.1:5000/WANIPCn.xml>
+中，这里为了控制文章的篇幅，我并不想解释每个参数的意思，根据参数应该也不难理解吧。
+
+    
+    
+    <action>
+        <name>AddPortMapping</name>
+        <argumentList>
+            <argument>
+                <name>NewRemoteHost</name>
+                <direction>in</direction>            <relatedStateVariable>RemoteHost</relatedStateVariable>
+            </argument>
+            <argument>
+                <name>NewExternalPort</name>
+                <direction>in</direction>
+             <relatedStateVariable>ExternalPort</relatedStateVariable>
+            </argument>
+            <argument>
+            <name>NewProtocol</name>
+            <direction>in</direction>
+      <relatedStateVariable>PortMappingProtocol</relatedStateVariable>
+            </argument>
+            <argument>
+            <name>NewInternalPort</name>
+            <direction>in</direction>
+            <relatedStateVariable>InternalPort</relatedStateVariable>
+            </argument>
+            <argument>
+            <name>NewInternalClient</name>
+            <direction>in</direction>
+            <relatedStateVariable>InternalClient</relatedStateVariable>
+            </argument>
+            <argument>
+            <name>NewEnabled</name>
+            <direction>in</direction>
+            <relatedStateVariable>PortMappingEnabled</relatedStateVariable>
+            </argument>
+            <argument>
+            <name>NewPortMappingDescription</name>
+            <direction>in</direction>
+            <relatedStateVariable>PortMappingDescription</relatedStateVariable>
+            </argument>
+            <argument>
+            <name>NewLeaseDuration</name>
+            <direction>in</direction>
+            <relatedStateVariable>PortMappingLeaseDuration</relatedStateVariable>
+            </argument>
+        </argumentList>
+    </action>
+    
+
+根据AddPortMapping action的各种参数定义，很容易就开发出脚本
+
+    
+    
+    import requests
+    # SOAP request URL from <controlURL>
+    url = "http://192.168.0.1:5000/ctl/IPConn"
+    
+    soap_encoding = "http://schemas.xmlsoap.org/soap/encoding/"
+    soap_env = "http://schemas.xmlsoap.org/soap/envelope"
+    service_type = "urn:schemas-upnp-org:service:WANIPConnection:1"
+    # from <action>
+    action = "AddPortMapping"
+    service_ns="urn:schemas-upnp-org:service:WANIPConnection:1"
+    # structured XML
+    payload = """<?xml version=\"1.0\"?>
+                <soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" soap:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">
+                    <soap:Body>
+                        <m:%s xmlns:m=\"%s\">
+                <NewRemoteHost></NewRemoteHost>
+                <NewExternalPort>5501</NewExternalPort>
+                <NewProtocol>TCP</NewProtocol>
+                <NewInternalPort>8009</NewInternalPort>            <NewInternalClient>192.168.0.101</NewInternalClient>
+                <NewEnable>1</NewEnable>            <NewPortMappingDescription>lll</NewPortMappingDescription>
+                <NewLeaseDuration>0</NewLeaseDuration>
+                        </m:%s>
+                    </soap:Body>
+                </soap:Envelope>"""%(action,service_type,action)
+    print("AddPortMapping ----------------------------------- request-----------------")
+    print(payload)
+    soap_Action= "%s#%s"%(service_type,action)
+    # headers
+    headers = {
+        'Content-Type': 'text/xml; charset=utf-8',
+        'Host':'192.168.0.1:5000',
+        'Content-Length':'355',
+        'SOAPAction':'"%s"'%(soap_Action)
+    }
+    # POST request
+    response = requests.request("POST", url, headers=headers, data=payload)
+    # prints the response
+    print("AddPortMapping ----------------------------------- response-----------------")
+    print(response.text)
+    print(response)
+    
+
+映射的客户端端口必须是有效且开放的。不然会返回500，可以用python 开启8009端口
+
+![](https://p4.ssl.qhimg.com/t010e05d47e86943c2b.png)
+
+之后我们返回路由器查看UPnP服务的端口映射列表
+
+![](https://p3.ssl.qhimg.com/t0138f2338832969a9a.png)
+
+## 0x03 UPnP 可能存在的风险
+
+对于UPnP
+存在的安全性和风险，我将结合一下实际的漏洞和案例进行讲解，可能描述的风险点不能够涵盖所有UPnP存在的潜在危害，目的也是为了更好的在实际的漏洞挖掘过程中提供不同的思路。因此仅供参考。
+
+1） 缓冲区溢出漏洞
+
+对缓冲区（Buffer ） 的使用没有进行检查和限制，外部的攻击者，可以通过这里取得整个系统的控制权限，缓冲区溢出漏洞在UPnP中是最常见的的漏洞之一。
+
+[DD-WRT 45723 缓冲区溢出漏洞](https://www.exploit-db.com/exploits/49730)，
+漏洞产生的位置在处理SSDP协议处理函数对uuid的值的长度进行限制，导致缓冲区溢出。
+
+![](https://p4.ssl.qhimg.com/t01fdbe971f163e0939.png)
+
+[NetGear R6400 upnp 栈溢出漏洞
+CVE-2020-9373](https://cloud.tencent.com/developer/article/1599692) ,
+漏洞的产生点位于SSDP 协议处理，upnpd处理ssdp包时直接利用strcpy复制未经过滤的数据导致的栈溢出。
+
+2）命令注入漏洞
+
+[DIR-815 UPnP命令注入漏洞](https://shadow-file.blogspot.com/2013/02/dlink-dir-815-upnp-command-injection.html)
+在DIR-815路由器的固件中的/htdocs/cgibin中存在ssdpcgi_main函数，这个函数会把ST头的内容作为参数传递给M-search.sh，并执行。
+
+并且我在DIR-802固件中也发现了同样的漏洞，并且发现了多处UPnP的命令注入漏洞。
+
+目前嵌入式路由器中使用比较多的是miniUPnP，因为这个项目中没有使用到system等调用系统函数的代码，因此存在命令注入的可能性较小。小米路由器、Tenda路由器等都使用这个项目，相对来说，安全性还是很好的。
+
+![](https://p1.ssl.qhimg.com/t0166fd956e122db223.png)
+
+3） 拒绝服务漏洞
+
+由于UPnP协议并没有对用户进行权限认证，因此攻击者可以不断的根据目标设备UPnP提供的服务进行请求配置，攻击者可以不断的构造较小的HTTP数据包请求UPnP服务端，UPnP服务端将返回XML服务配置文件，可以放大攻击，从而给目标设备造成大量流量并最终导致网络瘫痪。
+
+4）信息泄露漏洞
+
+现在的主流路由器设备上UPnP协议存在此漏洞的比较少，不过补排除存在一些小众品牌的路由设备上依旧存在信息泄露漏洞，有可能会泄露设备的SSID和密钥等敏感信息。
+
+5）远程配置路由规则
+
+在前面讲解如何在Tenda
+AX12路由器上配置端口映射，在配置的过程中，并没有进行身份验证，并且NewInternalClient的值可以设置成其他设备的IP，这就意味着攻击者可以随意控制其他设备IP在路由器上的UPnP的端口映射。并且攻击者还可以进行端口映射的外部扫描，获取其他设备的端口情况。
+
+## 0x04 总结
+
+正片文章通过对Tenda
+AX12路由器的测试来讲解了UPnP协议相关的信息，了解UPnP的具体属性和UPnP的功能，以及如何手动的编写UPnP的相关脚本和代码，便于对UPnP进行更好的安全性测试。还可以根据UPnP的数据包特点，开发专门的Fuzz工具，进行模糊测试。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **大中午啊** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/263170](/post/id/263170)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [路由器](/tag/路由器)
+  * [UPnP](/tag/UPnP)
+  * [协议安全](/tag/协议安全)
+
+ **+1** __7赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t01ac7436631a1f31ef.png) 大中午啊
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

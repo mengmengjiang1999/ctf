@@ -1,0 +1,276 @@
+# 关键基础设施中基于AI的入侵检测技术的比较研究
+
+阅读量 **212054**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2020-09-15 10:00:56
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 SAFA OTOUMBURAK、KANTARCI、HUSSEIN MOUFTAH，文章来源：x-mol.com
+
+原文地址：<https://www.x-mol.com/paper/1290717755575246848>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t01d55d5e20394819af.jpg)
+
+志愿计算系统利用的是联网设备（笔记本电脑、PC、智能设备等），其所有者自愿将其作为存储和计算能力资源，已经成为众多应用中资源管理的重要机制。互联网中数据流量的增长和种类的增多，引起了（人们）对信息物理系统稳健性的关注，尤其是对关键基础设施方面。因此，实现一个高效的入侵检测系统来收集这些感知数据变得至关重要。在本文中，我们我们提出了一项人工智能(AI)驱动的入侵检测系统的比较研究，用于跟踪关键应用的无线连接传感器。具体来说，我们对机器学习、深度学习和强化学习解决方案的使用进行了深入分析，以识别收集到的流量中的入侵行为。我们在模拟中使用KDD’99作为真实攻击数据集来评估所提出的机制。结果显示了三种不同IDS的性能指标，即自适应监督和聚类混合IDS（ASCH-IDS）、受限玻尔兹曼机聚类IDS（RBC-IDS）和基于Q-learning的IDS（QL-IDS）来检测恶意行为。此外，我们还介绍了不同的强化学习技术，如“状态-行动-奖励-状态-行动”学习(SARSA)和时序差分学习(TD)的性能。通过模拟，我们证明了QL-IDS的检测率为100%，而SARSA-IDS和TD-IDS的检测率在99.5%左右。
+
+CCS概念： **安全与隐私→入侵检测系统** ； **网络→网络模拟** ； **网络性能分析**
+
+附加的关键词和短语：入侵检测、机器学习、深度学习、受限玻尔兹曼机、强化学习、无线传感器网络
+
+**ACM参考格式** ： _Safa Otoum_ ， _Burak Kantarci_ 和 _Hussein Mouftah_ ,
+2020。关键基础设施中基于AI的入侵检测技术比较研究。ACM Trans. Internet Technol. , (2020), 22页。
+
+## 1.介绍
+
+智能城市利用无线传感器的灵活性、自我部署和低成本的优势，来对其关键基础设施进行监控[1]。对关键基础设施的监控涉及到不同情况下的各种类型的传感器[2][3]。通过使用可靠和安全的数据汇聚和传输，可以满足医疗基础设施等关键基础设施的效率和可靠性[4][5]。传感器和它们之间的通信线路容易受到众多入侵者的攻击，这些入侵者可能会中断和操纵通信并传输的数据[6][7]。IDS是网络安全的重要组成部分，可以检测不同类型的入侵。在非常高的层次上，任何IDS的有效性取决于其检测到任何表现出入侵行为的恶意节点时发出警报的能力。IDS分为两套。基于异常的IDS和基于特征（基于签名）的IDS。前者旨在检测偏离正常行为的异常流量模式。为此，它建立特征的配置文件，以抓住所需的模式。提取的模式和所注意到的活动之间的差异可能导致报警。因此，理想情况下，基于异常的IDSs能够检测到未知的攻击。然而，值得注意的是，大多数IDS系统仍然存在假阳性(FP)决策的问题，即一个非恶意活动被标记为入侵事件[6]。除了基于异常的IDS外，签名式IDS采用规则补充机制，通过将系统活动与特定规则进行比较，来检测恶意行为。当注意到的活动符合已知的恶意模式时，就会检测到入侵事件。单纯采用基于特征的IDS的风险在于其在未知攻击的可能性上的精确度可能会低[6][8]。在之前的工作中，我们提出了几种基于人工智能(AI)的IDS方法，用于WSNs（无线传感器网络）监测关键基础设施[8][7]。所有这些方法都有以下共同的目的：特征检测和异常检测，通过遵循自适应监督程序，它们可以结合在IDS中。在本文中，我们对关键基础设施中的入侵检测进行了比较研究，比较了机器学习(随机森林和E-DBSCAN)、深度学习(受限玻尔兹曼机)和强化学习方法(Q-learning)的使用。我们还通过在之前提出的IDS中引入Q-learning、SARSA-learning和TD-learning的强化程序，来发展我们在[6][8][7]中提出的工作。本研究的主要贡献如下：
+
+(1)这项工作直接针对志愿计算，将之前提出的IDS应用于分布式数据，并对IDS性能进行评估。
+
+(2)它提出了一种入侵检测机制，其中引入了使用Q-learning的强化学习、SARSA学习和TD学习方法来估计IDS的性能。
+
+(3)本文首次采用机器学习、深度学习和强化学习方法对IDS的评估进行了全面和比较的研究。
+
+## 2.动机
+
+WSNs因其自我部署、灵活性和低成本的优势，成为关键基础设施中的主要技术，尤其是在监测和控制过程中。监控关键基础设施涉及到各种现象下的众多传感器。在大多数关键基础设施中，WSNs部署在一个开放的自然环境中，因此，节点可能会受到不同的攻击，这些攻击可以操纵聚合的感知数据。通信线路也容易受到众多入侵者的攻击，这些入侵者可能会中断并操纵通信和传输的数据。WSNs需要提供一个可接受的安全级别，以实现免受攻击的环境、可靠和安全的数据聚合与传输[4]。入侵检测系统(IDS)是网络安全的重要组成部分，特别是对传感器网络来说，它可以检测不同类型的入侵。在很高的层次上，任何IDS的有效性取决于其检测到任何表现出入侵行为的恶意节点时发出警报的能力[8]。
+
+本文其余部分的安排如下：第3节对本研究的相关工作进行布局。第4节介绍IDS的拓扑结构设置。第5节介绍了用于测试之前提出的IDS的方法。第6节介绍了实验和结果分析。最后，我们在第7节给出结论。
+
+## 3.相关工作
+
+已经有许多研究者提出过将机器学习与IDS整合。其中一些是针对未知的攻击[9]，而另一些则针对已知的攻击[10]。近年来，基于深度学习的技术已经被用于IDS中，并证明了它们在检测入侵行为方面的有效性[11][12]。
+
+### **3.1 基于机器学习的IDS**
+
+任何IDS的目标都是识别两种不同的行为模式：正常行为和恶意行为[13]。流行的机器学习算法旨在围绕一个中心点对行为模式进行聚类，它们是K-nearest
+neighbour（K近邻均值）和K-means（K均值）[14]。作为一种有监督的方法，支持向量机(SVM)也已被纳入考虑[15]，它将数据平面划分成更小的超平面，还能自动选择特征。
+
+基于自适应机器学习的IDS技术已经在许多研究中进行了测试，以提高分类的准确性，如[16]中提出的工作，研究人员通过展示自动化和自适应测试原型，提出了一个验证程序.[17]中的工作提出了一个自适应模型生成（AMG）作为模型生成器，它将实时自适应地工作以执行IDS。AMG可以实现对数据的实时评估，并将数据收集以及检测模型的生成和部署自动化。
+
+据我们所知，针对已知和未知入侵者的关键基础设施的自适应IDS解决方案仍然是一个开放的问题。在ASCH-IDS中，我们提出了一种动态调整技术，用于调整转发到异常和误用检测子系统的汇总感知数据的比例。
+
+### **3.2 基于深度学习的IDS**
+
+深度学习方法已被应用于IDS，并取得了高精确度的结果[18][19][20]。在[21]中，作者测试了深度信念网络(DBN)在入侵模式检测中的能力。在[18]中作者将DBN和SVM结合起来，引入了一种混合IDS方法，其中DBN作为特征选择器，SVM作为分类器。该混合方法的准确率达到≈92%。作者在[22]中提出了一种部分监督学习方法，其中分类器只用正常流量进行训练，因此任何关于恶意行为的知识都可以动态演化。作者将判别式受限玻尔兹曼机(DRBM)作为一种基于能量的分类器应用于异常检测。
+
+高维度在大数据应用中是一个宏大的挑战，因此作者在[23]中应用自动编码器在IDS的第一阶段降低维度，提取DBN的特征，对异常和正常行为模式进行分类。
+
+深度学习已经被引入到分布式计算中，如[24]和[25]中提出的作品。深度学习已经被引入到分布式计算中，如[24]和[25]中提出的作品。在[24]中，作者提出了模糊到事物计算中基于深度学习的网络攻击检测机制。在[25]中的工作证明了基于云的基础设施的灵活性以及在大规模机器学习领域的增强，以便将最高的计算和存储任务转移到云端，以受益于边缘计算能力。
+
+### **3.3基于强化学习的IDS**
+
+强化学习（Reinforcement
+Learning，RL）被认为是机器学习的一种延伸，它涉及到代理人采取行动来把奖励的概念最大化。在此之前，已有多篇研究将强化学习过程应用于IDSs中。在[26]中，研究者提出了一种分布式强化学习方法，在这种方法中，每个代理（即传感器）分析状态观测值，并将其传达给中心代理。级别较高的代理具备分析所收集数据的知识，他们将整体的异常状态报告给网络运营商[26]。作者在[27]中提出了强化学习–基于主机的IDS技术，通过一系列的系统调用，提出了一个马尔科夫奖励过程（MRP）来复制系统调用系列的行为，其中入侵检测问题被转换为预测MRP值函数。在[28]中介绍的工作提出了一种利用追求强化竞争学习(PRCL)进行在线聚类检测入侵的方法。研究人员在[29]中提出了一种自适应神经网络的入侵检测方法，利用强化学习方法自主检测新的攻击。在[30]中提出的工作利用数据流信息、强化学习和铺片编码（tile
+coding）来检测基于洪泛的分布式拒绝服务（DDoS）攻击。
+
+为此，利用基于Q的、状态-行动-奖励-状态-行动(SARSA)学习和时间差分学习(TD)强化学习，对适用于已知和未知攻击的关键监控基础设施的IDS进行全面的比较/评估，仍然是一个有待解决的问题。
+
+## 4.系统模型
+
+我们将之前工作[6]中所提出的基于WSN的关键基础设施监控的IDS模型，应用到志愿计算架构中。
+
+IDS由N集群组成，每个集群中都有C传感器。感知数据的聚合是由簇首（CH）负责，它从传感器收集数据，并将其引导到安装在中央节点即服务器上的IDS。然后再对聚合数据进行入侵检测。IDS包括：
+
+  1. 第4.1章节中的加权簇首选择；
+  2. 第4.2章节中的数据聚合；
+  3. 第5章节中的检测方法。
+
+而整个手稿所使用的注释都列在表1中。
+
+![](https://p5.ssl.qhimg.com/t01b6df37fed10360e6.jpg)
+
+### **4.1加权簇首(CH)选择**
+
+采用了簇首(CH)选择法进行数据收集和原因处理。
+簇首(CH)选择法是通过使用选择技术来实现的，即计算每个传感器节点的权重，并与其他节点的权重进行比较[31]。每个节点都有一个Gn权重，是它(RSSIsum)的函数，指的是其接收信号强度、迁移率和度。权重计算之后，节点将其权重与其唯一标识符（ID）一起广播。然后，它继续与邻近节点的权重进行比较，比如获得最低权重的传感器节点被选为CH[31][8][6]。
+
+权重取决于以下四个要素：迁移率和度差，是指不包括CH容量、累计时间和RSSIsum的节点度。选择过程经过的步骤如算法1所示
+其中Dn指节点n的度，Γ代表CH容量(即节点数)；∂n指n的度差，SRSstrength（n）代表n接收信号强度的总和；Mˇn代表节点n
+的迁移率系数；ℏn指节点n的累计时间，而Gn代表节点n的综合权重。在算法1中，n指的是任意节点，相应地，g _ℏn_ 、g _m、gsum_ 和 _gd_
+指的是ℏn、Mˇn和∂n。
+
+![](https://p4.ssl.qhimg.com/t01d3ea609ac6a8eba3.jpg)
+
+### **4.2数据聚合流程**
+
+每个CH从其对应的传感器收集数据，并将其发送到接收器。在我们之前和现在正在进行的研究中采用了[32]中提出的方法作为聚合流程。该方法依靠通过跟踪传感器的信任分数与估计传感器和聚合器之间的信任度来评估聚合器的信任分数[32]。公式(1)计算了CH的信任分数[32]，其中TCH表示CH的信任值，Tn是节点n的信任值，而为CH和节点n的信任估计值。
+
+### **参考文献（第一部分）**
+
+[1] I. Al-Ridhawi, S. Otoum, M. Aloqaily, Y. Jararweh, and Th. Baker.
+Providing secure and reliable communication for next generation networks in
+smart cities. _Sustainable Cities and Society_ , 56:102080, 2020.
+
+[2] L. Buttyan, D. Gessner, A. Hessler, and P. Langendoerfer. Application of
+wireless sensor networks in critical infrastructure protection: challenges and
+design options [security and privacy in emerging wireless networks]. _IEEE
+Wireless Communications_ , 17(5):44–49, October 2010.
+
+[3] Ismaeel Al Ridhawi, Yehia Kotb, Moayad Aloqaily, Yaser Jararweh, and Thar
+Baker. A profitable and energy-efficient cooperative fog solution for iot
+services. _IEEE Transactions on Industrial Informatics_ , 16(5):3578–3586,
+2019.
+
+[4] Safa Otoum, Burak Kantraci, and Hussein T. Mouftah. Hierarchical trust-based black-hole detection in wsn-based smart grid monitoring. _IEEE
+International Conference on Communications (ICC)_ , 2017.
+
+[5] M. Al-Khafajiy, S. Otoum, TH. Baker, M. Asim, Z. Maamar, M. Aloqaily, MJ.
+Taylor, and M. Randles. Intelligent control and security of fog resources in
+healthcare systems via a cognitive fog model. _ACM Transactions on Internet
+Technology_ , 2020.
+
+[6] Safa Otoum, Burak Kantarci, and Hussein T. Mouftah. Detection of known and
+unknown intrusive sensor behavior in critical applications. _IEEE Sensors
+Letters_ , 1(5):1–4, Oct 2017.
+
+[7] Safa Otoum, Burak Kantraci, and Hussein T. Mouftah. Adaptively supervised
+and intrusion-aware data aggregation for wireless sensor clusters in critical
+infrastructures. In _IEEE International Conference on Communications (ICC)_ ,
+pages 1–6, May 2018.
+
+[8] Safa Otoum, Burak Kantraci, and H. T. Mouftah. Mitigating false negative
+intruder decisions in wsn-based smart grid monitoring. In _13th International
+Wireless Communications and Mobile Computing Conference (IWCMC)_ , pages
+153–158, June 2017.
+
+[9] R. Jain and H. Shah. An anomaly detection in smart cities modeled as
+wireless sensor network. In _International Conference on Signal and
+Information Processing (IConSIP)_ , pages 1–5, Oct 2016.
+
+[10] C. Ioannou, V. Vassiliou, and C. Sergiou. An intrusion detection system
+for wireless sensor networks. In _24th International Conference on
+Telecommunications (ICT)_ , pages 1–5, May 2017.
+
+[11] Ahmad Javaid, Quamar Niyaz, Weiqing Sun, and Mansoor Alam. A deep
+learning approach for network intrusion detection system. In _Proceedings of
+the 9th EAI International Conference on Bio-inspired Information and
+Communications Technologies (Formerly BIONETICS)_ , pages 21–26, 2016.
+
+[12] C. Yin, Y. Zhu, J. Fei, and X. He. A deep learning approach for intrusion
+detection using recurrent neural networks. _IEEE Access_ , 5:21954–21961,
+2017.
+
+[13] L. Dali, A. Bentajer, E. Abdelmajid, K. Abouelmehdi, H. Elsayed, E.
+Fatiha, and B. Abderahim. A survey of intrusion detection system. In _2nd
+World Symposium on Web Applications and Networking (WSWAN)_ , pages 1–6, March
+2015.
+
+[14] Stefano Zanero and Sergio M. Savaresi. Unsupervised learning techniques
+for an intrusion detection system. In _ACM Symposium on Applied Computing_ ,
+SAC ’04, pages 412–419, New York, NY, USA, 2004. ACM.
+
+[15] Nico Görnitz, Marius Kloft, Konrad Rieck, and Ulf Brefeld. Active
+learning for network intrusion detection. In _Proceedings of the 2Nd ACM
+Workshop on Security and Artificial Intelligence_ , AISec ’09, pages 47–54,
+New York, NY, USA, 2009. ACM.
+
+[16] J. Straub. Testing automation for an intrusion detection system. In _IEEE
+Autotestcon_ , pages 1–6, Sept 2017.
+
+[17] Andrew Honig, Andrew Howard, Eleazar Eskin, and Sal Stolfo. Adaptive
+model generation: An architecture for deployment of data mining-based
+intrusion detection systems. pages 153–194. Kluwer Academic Publishers, 2002.A
+Comparative Study of AI-based Intrusion Detection Techniques in Critical
+Infrastructures 21
+
+[18] Mostafa A. Salama, Heba F. Eid, Rabie A. Ramadan, Ashraf Darwish, and
+Aboul Ella Hassanien. Hybrid intelligent intrusion detection scheme. In
+António Gaspar-Cunha, Ricardo Takahashi, Gerald Schaefer, and Lino Costa,
+editors, _Soft Computing in Industrial Applications_ , pages 293–303, Berlin,
+Heidelberg, 2011. Springer Berlin Heidelberg.
+
+[19] Arnaldo Gouveia and Miguel Correia. _A Systematic Approach for the
+Application of Restricted Boltzmann Machines in Network Intrusion Detection_ ,
+volume 10305. 05 2017.
+
+[20] Yazan Otoum, Dandan Liu, and Amiya Nayak. Dl-ids: a deep learning–based
+intrusion detection framework for securing iot. _Transactions on Emerging
+Telecommunications Technologies_ , n/a(n/a):e3803. e3803 ett.3803.
+
+[21] M. Z. Alom, V. Bontupalli, and T. M. Taha. Intrusion detection using deep
+belief networks. In _National Aerospace and Electronics Conference (NAECON)_ ,
+pages 339–344, June 2015.
+
+[22] Ugo Fiore, Francesco Palmieri, Aniello Castiglione, and Alfredo De
+Santis. Network anomaly detection with the restricted boltzmann machine.
+_Neurocomputing_ , 122:13 – 23, 2013.
+
+[23] Yuancheng Li, Rong Ma, and Runhai Jiao. A hybrid malicious code detection
+method based on deep learning. 9:205–216, 05 2015.
+
+[24] A. Abeshu and N. Chilamkurti. Deep learning: The frontier for distributed
+attack detection in fog-to-things computing. _IEEE Communications Magazine_ ,
+56(2):169–175, Feb 2018.
+
+[25] Rafał Kozik, Michał Choraś, Massimo Ficco, and Francesco Palmieri. A
+scalable distributed machine learning approach for attack detection in edge
+computing environments. _Journal of Parallel and Distributed Computing_ ,
+119:18 – 26, 2018.
+
+[26] Arturo Servin and Daniel Kudenko. Multi-agent reinforcement learning for
+intrusion detection. In _Adaptive Agents and Multi-Agent Systems III.
+Adaptation and Multi-Agent Learning_ , pages 211–223, Berlin, Heidelberg,
+2008. Springer Berlin Heidelberg.
+
+[27] Xin Xu and Tao Xie. A reinforcement learning approach for host-based
+intrusion detection using sequences of system calls. In _Advances in
+Intelligent Computing_ , pages 995–1003, Berlin, Heidelberg, 2005. Springer
+Berlin Heidelberg.
+
+[28] Indah Tiyas, Ali Barakbah, Tri Harsono, and Amang Sudarsono. Reinforced
+intrusion detection using pursuit reinforcement competitive learning. _EMITTER
+International Journal of EngineeringTechnology_ , 2(1):39–49, 2014.
+
+[29] James Cannady Georgia. Next generation intrusion detection: Autonomous
+reinforcement learning of network attacks. In _In Proceedings of the 23rd
+National Information Systems Secuity Conference_ , pages 1–12, 2000.
+
+[30] Arturo Servin. Towards traffic anomaly detection via reinforcement
+learning and data flow. pages 81–88.
+
+[31] Fatma Belabed and Ridha Bouallegue. An optimized weight-based clustering
+algorithm in wireless sensor networks. _2016 International Wireless
+Communications and Mobile Computing Conference (IWCMC)_ , 2016.
+
+[32] Wei Zhang, Sajal Das, and Yonghe Liu. A trust based framework for secure
+data aggregation in wireless sensor networks. _IEEE Communications Society on
+Sensor and Ad Hoc Communications and Networks_ , 2006.
+
+本文翻译自x-mol.com
+[原文链接](https://www.x-mol.com/paper/1290717755575246848)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **阿翻** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/216880](/post/id/216880)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [x-mol.com](https://www.x-mol.com/paper/1290717755575246848)
+
+如若转载,请注明出处： <https://www.x-mol.com/paper/1290717755575246848>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [AI](/tag/AI)
+  * [IDS](/tag/IDS)
+
+ **+1** __5赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t01245693434a341c77.png) 阿翻
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,426 @@
+**近日发现了一系列针对拉丁美洲的恶意行动，部署了两种常见的远控木马 njRAT 和 AsyncRAT。攻击者基于 .NET
+构建了一个恶意软件生成工具，便于其客户和合作方更容易进行恶意软件分发和使用。**
+
+![image.png-695.1kB](https://image.3001.net/images/20210831/1630389399_612dc4972100bc9d15d0e.png!small)
+
+在技术上，本次发现的恶意团伙 alosh 与知名恶意团伙 Aggah 有许多相似之处。尤其是在最终的 Payload 投递阶段，Aggah
+通常利用高度模块化的感染链，在 Pastebin、Web Archive 和 Blogger 等公共存储库上托管 Payload。然而，与 Aggah
+不同的是，alosh 倾向于使用被攻陷的网站来部署组件和 Payload，而不是公共存储库。
+
+完整感染链如下所示：
+
+![image.png-244.3kB](https://image.3001.net/images/20210831/1630389400_612dc498be46ab00faf13.png!small)
+
+启用宏的 Office 文档作为切入点，接着执行 PowerShell 和 VB 脚本，最终拉取远控木马。感染链的恶意文件是使用基于 .NET
+的恶意软件生成工具构建的，该工具名为 `3losh crypter rat`。
+
+## 攻击者
+
+攻击团伙使用 `alosh`作为昵称，从 2018 年开始就保持活跃。作为 `3losh crypter rat`的开发者，攻击者在 Facebook 和
+YouTube 上大做广告，展示了恶意软件的相关视频。尽管攻击者和本次攻击行动间并没有直接关联，但攻击者和之前的攻击行动存在多种关联。
+
+![image.png-69.1kB](https://image.3001.net/images/20210831/1630389401_612dc499bd1e45f2a84a8.png!small)
+
+![image.png-619.3kB](https://image.3001.net/images/20210831/1630389402_612dc49a5fcbb19a3a986.png!small)
+
+其中一个视频中发现了作者的电子邮件地址：
+
+![image.png-677.8kB](https://image.3001.net/images/20210831/1630389404_612dc49c89e1fc3b1fbc3.png!small)
+
+在 Web Archive 上，该攻击者使用两个不同的用户名：3losh-rat 和 alo0ch0011。由于违反了安全条款，被记录下的恶意文件已被删除。
+
+![image.png-247.9kB](https://image.3001.net/images/20210831/1630389406_612dc49ecd5dd78b0ed95.png!small)
+
+## 攻击基础设施
+
+有迹象表明，攻击者可能是巴西人。例如，攻击者拥有的域名（updatewin32.xyz）是在巴西注册的。
+
+![image.png-202.2kB](https://image.3001.net/images/20210831/1630389408_612dc4a0b4c4cfc8a6c8f.png!small)
+
+发现了多个以葡萄牙语命名的恶意文档（Documento.doc），构成 doc 文件的两个文件被称为
+`AquiTaLimpo`，葡萄牙俚语意为“这里很干净”。一个扩展名为 XML，另一个扩展名为 `.xml.rels`。
+
+![image.png-133kB](https://image.3001.net/images/20210831/1630389409_612dc4a1a226b4ede20f9.png!small)
+
+这些 XLSM 文件带有可下载 Payload 的 VBA 宏代码。宏名称为 `EstaPastaDeTrabalho`，葡萄牙语大意为“工作文件夹”。
+
+![image.png-102.5kB](https://image.3001.net/images/20210831/1630389410_612dc4a29016cd7594fd2.png!small)
+
+额外的元数据表明恶意文档的创建和最后修改标签也是葡萄牙语，表明攻击者生成恶意文档的电脑使用的是葡萄牙语。
+
+![image.png-140.6kB](https://image.3001.net/images/20210831/1630389411_612dc4a348c70576eb04c.png!small)
+
+作者使用常见的葡萄牙语名字，最后修改者名为“特洛伊骑士”，相同的名称也出现在 XLSM 文件的属性中。
+
+恶意软件作者在 2021 年 6 月和 2021 年 7 月在巴西向 VirusTotal 提交了带有葡萄牙语名称的测试文件，文件名为 `Exploit
+pronto paraenvio.rar`，意为“准备发送的 Exploit”。
+
+早期的测试文档只运行计算器，同一时间在巴西提交了大约 11 个文件。
+
+![image.png-145.1kB](https://image.3001.net/images/20210831/1630389411_612dc4a3f1af68340d1c2.png!small)
+
+攻击者持续调整测试构建恶意文档：
+
+![image.png-96.2kB](https://image.3001.net/images/20210831/1630389412_612dc4a4b54a3ad1799d1.png!small)
+
+## 受害者
+
+受害者主要位于拉丁美洲：
+
+![image.png-285kB](https://image.3001.net/images/20210831/1630389413_612dc4a565bc0ad93c5ef.png!small)
+
+恶意文档会伪装成类似酒店确认预定信息的内容，例如 `Fechas informativas para reservar Amérian Portal del
+Iguazú`，电子邮件内容是近乎完美的巴西葡萄牙语。
+
+![image.png-168.8kB](https://image.3001.net/images/20210831/1630389414_612dc4a68ee3a8ee8334d.png!small)
+
+## 感染链
+
+一些 Word 文档中包含下列 VBA 代码：
+
+![image.png-326.1kB](https://image.3001.net/images/20210831/1630389415_612dc4a7511755b16e9da.png!small)
+
+Maldocs 是 Office Open XML 文档，包含两个定义文件。一个是 `AquiTaLimpo.xml.rels`，另一个是包含 VBA
+的嵌入 XLSM 文件 `comments.xml.rels`。
+
+![image.png-395.7kB](https://image.3001.net/images/20210831/1630389416_612dc4a88f914b205b4ba.png!small)
+
+Word 文档打开后，加载 Excel 打开嵌入在文档中的 XLSM 文件，这就会启动宏代码。
+
+除了 Word 文档外，还有 PPAM 和 XLAM 文档也是攻击链的入口。最后释放远控木马 njRAT 或 AsyncRAT。
+
+最早发现的宏代码会下载 HTA 文件执行：
+
+![image.png-92.2kB](https://image.3001.net/images/20210831/1630389419_612dc4aba60d9dee07183.png!small)
+
+### HTA
+
+HTA 文件是转义的 JavaScript 代码片段，执行嵌入在 HTA 文件中的 VBScript 下载后续 PowerShell 脚本。
+
+![image.png-695.3kB](https://image.3001.net/images/20210831/1630389420_612dc4ac5b639d930dbe3.png!small)
+
+![image.png-191.7kB](https://image.3001.net/images/20210831/1630389422_612dc4aea2761090e37b6.png!small)
+
+### PowerShell
+
+脚本修改注册表实现持久化、创建自定义 VBS 以在重新启动后下载其他 Powershell 脚本。
+
+![image.png-256.3kB](https://image.3001.net/images/20210831/1630389423_612dc4afd350841c70941.png!small)
+
+脚本将检查反病毒软件，被针对的安全软件包括 ESET、Avast、McAfee、Malwarebytes、AVG。
+
+![image.png-306.5kB](https://image.3001.net/images/20210831/1630389424_612dc4b0c8d66969b090f.png!small)
+
+如果没有发现安全软件，将会继续执行：
+
+![image.png-113.9kB](https://image.3001.net/images/20210831/1630389425_612dc4b1cda6840adb076.png!small)
+
+多个脚本之间执行关系很复杂：
+
+![image.png-186.9kB](https://image.3001.net/images/20210831/1630389426_612dc4b287e7f8273c95e.png!small)
+
+PowerShell 的关键组件有：
+
+> Hexlified DLL：用于指定进程并将恶意软件注入其中
+>
+> Hexlified Payload：njRAT 或 AsyncRAT
+>
+> Base64 编码或纯文本命令将 DLL 反射加载到 PowerShell 进程中，目标进程的 image 路径和恶意软件 Payload
+> 字节作为参数传递给 DLL。使用的反射加载命令的示例是：
+>
+>
+> `[Reflection.Assembly]::Load($H5).GetType('VBNET.PE').GetMethod('Run').Invoke($null,[object[]]
+> ( 'C:\Windows\Microsoft.NET\Framework\v4.0.30319\aspnet_compiler.exe',$H1))`
+
+![image.png-242.2kB](https://image.3001.net/images/20210831/1630389427_612dc4b3e7ae85b20d400.png!small)
+
+DLL 是一个基于 .NET 的注入工具，使用 .NET Reactor 进行混淆，使用 de4dot
+可对其进行反混淆。只有一个导出函数接受上述两个参数并将恶意软件 Payload 部署到目标进程中。注入总共会重试五次。
+
+DLL 是 RunPE 的自定义版本，还包含将 ACL
+更改为内核对象的代码。尽管目前该代码从未被调用，也可能表明攻击者正从其他地方借用但从未使用过冗余代码。
+
+## Payload
+
+目前发现使用了两个恶意软件家族 AsyncRAT 和 njRAT，是被广泛使用的远控木马。
+
+许多恶意软件家族都开始使用受害者名称或 Group ID 识别不同的攻击目标，AsyncRAT 和 njRAT 都开始使用这种方法。
+
+发现的标识符表明目标都是拉丁美洲国家：
+
+![image.png-360.3kB](https://image.3001.net/images/20210831/1630389428_612dc4b4ed13993cfba01.png!small)
+
+## 构建工具
+
+攻击者使用名为 `Crypter 3losh RAT`的构建工具，根据运营人员的输入修改生成的脚本。
+
+### VBScript
+
+修改 HTA 文件中使用的 VBScript 脚本，接受 URL 生成新的 VBScript 命名为 `alosh-rat.vbs`。
+
+![image.png-150.7kB](https://image.3001.net/images/20210831/1630389429_612dc4b5a452e54e95801.png!small)
+
+### PowerShell
+
+修改 PowerShell 脚本中的 URL，在桌面输出名为 3.txt 的文件。
+
+![image.png-136.6kB](https://image.3001.net/images/20210831/1630389430_612dc4b6409c6b71c8bb3.png!small)
+
+### EXE
+
+使用两个嵌入式 PowerShell 脚本作为模板，生成两个新文件：
+
+![image.png-199.9kB](https://image.3001.net/images/20210831/1630389431_612dc4b705f2ef42e18df.png!small)
+
+## 关联关系
+
+本次攻击行动与 Aggah 的相似之处在于 PowerShell 脚本，使用相同的结构、语法和语义，甚至变量名称都相同。分发的恶意软件也很相似，都有
+AsyncRAT 和 njRAT。
+
+当然也有可能是构建工具的开发者将工具出售给了两个攻击组织。
+
+当然，二者也存在一些区别：
+
+  * Aggah 依赖 URL 重定向服务，但本次攻击行动未发现此类服务的使用
+  * Aggah 滥用公共托管服务，但本次攻击行动倾向于使用失陷网站或者自有网站部署恶意软件
+
+## 结论
+
+本次攻击行动的重点是拉丁美洲的旅游和酒店行业，从 2020 年 10
+月开始持续到现在。攻击者能够熟练编写有针对性的电子邮件，可能是因为攻击者就是拉丁美洲的。
+
+恶意软件构建工具使攻击者和合作方都可以快速进行攻击尝试，同时也在 Facebook、YouTube 和其他社交媒体上进行了宣传。
+
+为了保持隐蔽，使用了高度模块化的感染链。传播广为人知的远控木马家族 AsyncRAT 和 njRAT。
+
+## IOC
+
+> 9080f4537909efb164d08911e81e67def4939543605456357ea50f076291fd85  
+> 00627edeb9ce2f53fa615e6670ee58415be60f9a04c483b788e0e7add2992aba  
+> 56aa47ed75e94dad361eacb1b5bc40044ae34e120d2cbd15105283c2c6727948  
+> ac88d9e338570b2b79c60970db289beeaf8aa39e3f44d412c5a9f5881b480c5c  
+> 147a300e77514e4ed827c6e250f781fbf8d7f0360b5e5d995e0242a3e81a0075  
+> fa6a0108e64c04d4510afc3e54a367196bfb21dda3638971489b7705687aa65c  
+> 72c90f13ae2ae87c374ffb5b2e2db003882fadc040155149231587750f5ddbc7  
+> bdc3fd3eee890e62d0a81d80ae73b64c56c111940c4aea6fc5c367203dcd5513  
+> eef5993a740d3420cbb18375600f40aafa098958be5a71c0105f12c7b9df1887  
+> 61f1b9be329e3e6080f14c4af49acf641858157d3d94f7095ce64bbc1c6e7610  
+> f686254e7d47ad3bfa75a81ab7e0c7f97f786351fcf601ea8a001772e5c907d6  
+> e4d4cc7c45257ece991a5b93a713b78090aed990020d2c31fc5cf6f4bac99420  
+> e53ddc8d759efe84def8137b7ffb0e63740c1d24fb232d91028f4a7e4a01d4f1  
+> 1c1975beb0ebd44f954ac7824c4f2687386dd1cda1e9b7133271537457fedc02  
+> 73ac27b9c82d1ba56e9b632ab902220cffa20f33b5263c543c73b67b8e77219c  
+> f7bb7c7e066cea1a6874521cc8a5eef1714b758ae213b1b19026104c21ce01f1  
+> 05f0bf4bbaf08e709c7dbcbfc40e562b714b590f9b9e8dd9dfe9fe550663642a  
+> b8fe3837f4a592788f5b9ca3b4f6bcd0515df4bbaeefdbf9f44b2ae214acb4b6  
+> a448a9b6e883cf9c3bb5beef9764d22685e69e2ec213c91ad5d5bbc120634c0b  
+> f1b7bd87ea04aa5162b4baa2f37ea061bb9bddf14485a4a548850a0b44b2aa75  
+> 4b3d35a8df8a029f52e5ebc6ae981d427691c9d536dcef4178c4424bc046f57c  
+> a3abcf60dc3dcee74e9329ab48f71acfcd63653f2b47dd0846c38a208aac0d64  
+> 07b5910e731c2f4bde25d9919703031d8ac73b6344d9c0abf2b39a7e9f8d3b4f  
+> fc40cc9e5547c3ea65850419c19c72af81073289e94421139166eaa228993126  
+> 2f3b0ab840cdbfff6a0404f1049f9a6cee018541804b7c7bc7b7c72548191548  
+> 7670bba115c1df8eab2509e0d4f53c90f8f8fd22e09a730c3d495d9c951a1f03  
+> ce733816ccb171af8e89f3a334bd00f82c63c20b02fa6345ba67d1bd6365addb  
+> 7da245d4eeb382d2cb53de5c7bca042587887c7b52a2df784d58d843470e9c8e  
+> 24ff6109c93174a7be6eaf11bb359394be235666241a6f1fd78581b18334ec5d  
+> e7abfae672aad5700fd71c9117b727f90b0de271f5232995d261324d708fb2cc  
+> 7442306336019d939e92c7c0a2562be2198872bd7a7a12cbed29a1cdd2d11948  
+> f927ac2182f2a5b8d0da62608c9565ef856534051996c6a3c61f426df4d6f272  
+> 038384b895edc2a8ff3090d3a13261871562eb6caab74b9101d416be7bfae139  
+> ff93194ce80707a9f4e8ea4f2e63f8b3a48691ae3ae6cb2867a8c14301683b22  
+> fc78f0ca8c0a89722c66c029df32a2a8f3b07079d9afab57138a50032deb86d3  
+> c2577967641d4c528da21e257ddf399542cb5353b8f717e0cec1200ed8b04389  
+> 3d43ad8d86b3c38e68477238cb2cf53bf0c87da437f0fab6f224a04b38376a81  
+> 624c271f9c06ab2300bb19b6555cf834d5c9a56cc3d0fa2b2fb916b63f73d416  
+> cb94afd551f9cf0c607c85415ed62d51c8c52c098c759544052281a6b7037032  
+> 2c47541dd62d14f5495b23b60b414e2f86cc7b9d27822b88f65e423e041b8645  
+> e4171f3de977b6748459975c555126cafc578faffefa7dc93b1e46dd5b6d08ba  
+> 37cd7836f979bb993cb9c38da0c4edad72f70eeb876faf1b2e21660e4efb7f6d  
+> d4bcd6ff073ae1a032b43c46440a6e1a70f3d3450106e0cf65c69a299417de23  
+> 84c7cbd4484c84fa0fa8daebdf3aa0dd7eb0edc5be0957f224dbfe552b07144e  
+> e2129853b08f99aa4de49ff396608af37dc03dda6efa1fae1f82c5c4e7ab7fcd  
+> 6acba6585f5ae7cae0f1dac3af605861ae1f79847d75c082949ab8d2949aeff3  
+> 782af49032f0fffb21ff0f5c38d56e566f4a8b2e53f3a2e1986349cdde7f8e2e  
+> 486e4f7f5219e6fb03e01a0b488b87a2d85663937a7cd972871ee8ba175cd4f1  
+> a3643cb237606aaec04deff8246c539d3ccb72bfa0ce9c02a235c04d08b87909  
+> 06e2db6aa09791067071c4082dba6863de879852e95e678dab267026d7005770  
+> cd1be7351b0175c83ce3f8a7cede5a4fbe39ef750bfa31c2b8707ad2e6217948  
+> e91de341151086d4381599bc0129709b5d67ca4a5ef4a8dc085839e7b903f701  
+> 7f9b7d0a8b2d45728c729fcd8100726fd173ae089943349c5cc4162088cbf6e7  
+> 4c6951ea6db1d70a6bb016ee2bff6473e83f5cc064699e53bd99ec68dc11c8ad  
+> f6860ba876f3a50faf37e5498c859d40ac4f3fe90c379245b35b74f84c28137a  
+> 7be08b532949ac03c0861f63cdfe79395ee75d99ef040f1b921409338243b849  
+> 0459d34b98ffd24f0b9ad063a36d62e6b699041c0eba211ddf6e7a25a063f0e3  
+> b56e6c2513a4f50e8d15bccbeb252ae087f34556c144578cd20b830bb3c69b45  
+> 87183315cbf7b56aec5e47c658bce8890f04ce8355801d81d0ef93b90d6a3fff  
+> 21170aca6f904d55c88e4809f28c844c2daa5ad0ebd96a2e479f28725fc417eb  
+> 47b2d8028bf85302ed24bf9c145bbce184c756a6648d996085b9d0f93b1e50b5  
+> d4b2896b62990a75b9d5f858e575c039344a9fc9d219f7c25571f9c75c80b0b6  
+> 60cd0888629e035c94a74ab6ba475e6a306a58eaf554dd5e35973d06401dcade  
+> 46a571bee09c8b7284212a3e5f7054c6ffb3ccaafea93730253950279dff3363  
+> 777ee27781b10eda1626b32433ed99dbcc969c4360734bbcc744789d38ef0cea  
+> 7b701642379ec4270aaa6f436c969a60be516c5d48dc874a7a46114d7bc29edd  
+> edaab1e2458537d43981a1496c3eb7bd1d08876b42a36cebcbc538581c1f1bcc  
+> d1321dc8680d9ded1430b55eca3cd9fb8587eb4da27f522a87ec0fe9cbe08b42  
+> 786c44c88fa9a51d69e1f110b47b0b6c33f504969f8e49de3835f0497f0ab8ea  
+> eb4616d6234927f1763fabe82d7f73f26980323af6411951f2db4e244ef29654  
+> a25771c577fbbfb5cc28cdb598deb82192765e8bd376e78bc87909f62621b7a0  
+> d5f37a5630e46ef134e78b7d3828986afdfc33477f5b5776851b562ae8dc26b8  
+> 9165b9f24866c71b77654ac1c7667d93c30bbc29905e9469eb7e48f08104720c  
+> 91ccd22f96c1b407da7825ce155e6685765235aa6525c09f2f632429ce79512b  
+> 90674a2a4c31a65afc7dc986bae5da45342e2d6a20159c01587a8e0494c87371  
+> 82bd8e28f81160039e462330daee5190d7f474e76723aea057ddeadb201bc55c  
+> 24332968eb4cc46982b807d76da02fd1ad36235f04bc1e4962924355c9828733  
+> e3e91d69f464752c243cd40661334291be12466aa3d9294b86b419dae1f17c7e  
+> d5f37a5630e46ef134e78b7d3828986afdfc33477f5b5776851b562ae8dc26b8  
+> 9165b9f24866c71b77654ac1c7667d93c30bbc29905e9469eb7e48f08104720c  
+> 0cf9e86a1db39f106933ed31fc94cd318fab33d5f000e1fce80b2e5827a1adfc  
+> 418b71760c6de41ed293744610e252c7474decd221371ffa449411dde751be46  
+> dedb66e5c1313f5952cfa1b1280546c625d5b759cedb87e28950f1c18ef3caf7  
+> 43175b875ea94a762963d8b15d84b8c1b0882fa850343a5ce75325fb63612519  
+> 17506df03d616598708a6520f901b46bb1624a9f27dfc8a3875ce2c3f8c94fc2  
+> b9520bacbd60af9792b105232d453b8b7e4e6b0b1e9e505fb-0435d46c97b6e7  
+> 5a3bf8a7e4c103a834f08854a13e67ee4f176611be01bf27f3c7def0c988c768  
+> 5df520408cef3d532d41136ed3a2ac24f7a18d060bcf85778aa157c938b6e2dd  
+> 2a9edc18b10a532f7632d6b44f2610ca3a823c2b2be7a3fd3126b55af2c68ede  
+> a88857a647d4f0443d67c9d6b025abf76e16e05c0d1499eb2be67a10cd025745  
+> 1b3d41d44659ff038cf8aafdc5ff021646771106d957783aecdff725158c216c  
+> 991a6446da94bb297078bd1031019395b5ed58bd4a878df0cf8707448028b6ed  
+> a6007d0497b7b79206b7a32dd30ca1d7f4d36e5c548c34be44b7cbf35393e7e2  
+> e31247241e58720b205eeedd3184923641fea7f027245d6896e54ae5538b4f52  
+> 806a9803d28f2cdbbe98c4b86865c64be25e2c85e043ae7d76ed04018fd7c8f0  
+> 542a389b63f586e36063cc6dc72337955951013f1684386e1d2b325c0510daf7  
+> 143f92ade0221b8104c0add0ecbf5f75c84840ec2b9ceb2b1a3317f99d98a863  
+> cd889b56855cffe94ba55d0f4ea6ef13a4ea03e115a49788b1f073098541c83d  
+> b725efa51eafa756f41c4dcd43d01e28c15e90caf19df5bd615fcae8c5b1a1f0  
+> 839703f5db34e54afdd9a691516cd986bcbecd9856f202d26ca312d9214487d0  
+> http://updatewin32.xyz/office365/  
+> http://updatewin32.xyz/office365/10.doc  
+> http://updatewin32.xyz/office365/11.doc  
+> http://updatewin32.xyz/office365/12.doc  
+> http://updatewin32.xyz/office365/13.doc  
+> http://updatewin32.xyz/office365/14.doc  
+> http://updatewin32.xyz/office365/15.doc  
+> http://updatewin32.xyz/office365/16.doc  
+> http://updatewin32.xyz/office365/2.doc  
+> http://updatewin32.xyz/office365/3.doc  
+> http://updatewin32.xyz/office365/4.doc  
+> http://updatewin32.xyz/office365/5.doc  
+> http://updatewin32.xyz/office365/6.doc  
+> http://updatewin32.xyz/office365/7.doc  
+> http://updatewin32.xyz/office365/8.doc  
+> http://updatewin32.xyz/office365/9.doc  
+> https://updatewin32.xyz/async/paste.mp3  
+> https://updatewin32.xyz/async/msgbox.txt  
+> http://updatewin32.xyz/office365/msg.txt  
+> http://updatewin32.xyz/office365/chile.mp3  
+> https://www.diamantesviagens.com.br/terca.hta  
+> https://www.diamantesviagens.com.br/  
+> https://www.diamantesviagens.com.br/Clean.hta  
+> https://www.diamantesviagens.com.br/  
+> https://www.diamantesviagens.com.br/sexta.hta  
+> https://www.diamantesviagens.com.br/rei2.hta  
+> https://www.diamantesviagens.com.br/qpq.hta  
+> https://www.diamantesviagens.com.br/tv.hta  
+> https://www.diamantesviagens.com.br/fd.hta  
+> http://updatewin32.xyz/injext.mp3  
+> http://updatewin32.xyz/kilabword.mp3  
+> http://updatewin32.xyz/3.txt  
+> https://updatewin32.xyz/async/oms3.txt  
+> https://updatewin32.xyz/async/async3.txt  
+> https://elmerfloyd.com/wp/4.txt  
+> https://acscompany.com.br/33.txt  
+> https://celulosa-corp.com/3ASYNC.txt  
+> http://updatewin32.xyz/office365/chile3.txt  
+> http://updatewin32.xyz/n3.txt  
+> http://edc.com.ly/index/wp.txt  
+> https://bestbue-sec.com/VVpost2.txt  
+> http://wh890850.ispot.cc/~invoixec/kill/dInjector.png  
+> http://wh890850.ispot.cc/~invoixec/kill/test.ps1  
+> http://wh890850.ispot.cc/~invoixec/kill/run.ps1  
+> http://wh890850.ispot.cc/~invoixec/kill/vb.txt  
+> https://updatewin32.xyz/async/oms2.txt  
+> https://updatewin32.xyz/async/oms1.txt  
+> https://updatewin32.xyz/async/async2.txt  
+> https://updatewin32.xyz/async/async1.txt  
+> http://updatewin32.xyz/2.txt  
+> http://updatewin32.xyz/1.txt  
+> https://acscompany.com.br/22.txt  
+> https://acscompany.com.br/11.txt  
+> https://elmerfloyd.com/wp/1.txt  
+> https://elmerfloyd.com/wp/2.txt  
+> https://elmerfloyd.com/wp/3.txt  
+> https://celulosa-corp.com/1ASYNC.txt  
+> https://celulosa-corp.com/2ASYNC.txt  
+> https://updatewin32.xyz/office365/chile2.txt  
+> https://updatewin32.xyz/office365/chile1.txt  
+> https://www.diamantesviagens.com.br/terca.jpg  
+> https://www.diamantesviagens.com.br/RunPE.jpg  
+> https://www.diamantesviagens.com.br/  
+> https://www.diamantesviagens.com.br/sexta.jpg  
+> https://www.diamantesviagens.com.br/rei2.jpg  
+> https://www.diamantesviagens.com.br/qap.jpg  
+> https://www.diamantesviagens.com.br/tv.jpg  
+> https://www.diamantesviagens.com.br/fd.jpg  
+> http://updatewin32.xyz/n2.txt  
+> http://updatewin32.xyz/n1.txt  
+> 111234cdt.ddns.net:4782  
+> googleservice64.ddns.net:  
+> 5155potenzax63.linkpc.net  
+> 111234cdt.ddns.net:6606  
+> 111234cdt.ddns.net:7707  
+> 111234cdt.ddns.net:8808  
+> cdtpitbull.hopto.org:6606  
+> cdtpitbull.hopto.org:8808  
+> googleservice64.ddns.net:6606  
+> googleservice64.ddns.net:7707  
+> googleservice64.ddns.net:8808  
+> aliveafterguard.tech:5553  
+> 111234.ddns.net:6606  
+> 111234.ddns.net:7707  
+> 111234.ddns.net:8808  
+> cdt2021.hopto.org:6606  
+> cdt2021.hopto.org:7707  
+> cdt2021.hopto.org:8808  
+> micomico.ddns.net:4000  
+> https://drive.google.com/u/1/uc?id=1cU-jSCI6bT-yXlWCkJgay-> xWb8KUYRVC&export=download  
+> https://archive.org/details/firasZIGGSNEW1  
+> https://archive.org/download/firasZIGGSNEW1/firasZIGGSNEW1.txt  
+> https://archive.org/details/firasZIGGSNEW  
+> https://archive.org/details/firasZIGGSNEW/firasZIGGSNEW.txt  
+> https://archive.org/details/startilyasasync  
+> https://archive.org/details/4ilyasasync  
+> https://archive.org/details/3ilyasasync  
+> https://archive.org/details/2ilyasasync  
+> https://archive.org/details/1ilyasasync  
+> https://archive.org/details/4ilyas-normal  
+> https://archive.org/details/3ilyas-normal  
+> https://archive.org/details/2ilyas-normal  
+> https://archive.org/details/1ilyas-normal  
+> https://archive.org/details/4ilyascartgpu  
+> https://archive.org/details/3ilyascartgpu  
+> https://archive.org/details/2ilyascartgpu  
+> https://archive.org/details/1ilyascartgpu  
+> https://archive.org/details/4ilyas  
+> https://archive.org/details/3ilyas  
+> https://archive.org/details/2ilyas  
+> https://archive.org/details/1ilyas  
+> https://archive.org/details/startupbasg  
+> https://archive.org/details/Encodingbash  
+> https://archive.org/details/encoding-voice  
+> https://archive.org/details/1-voice  
+> https://archive.org/details/2jack-voice  
+> https://archive.org/details/encodingh-2firas  
+> https://archive.org/details/Allbash  
+> https://archive.org/details/startbash  
+> https://archive.org/details/serverbash  
+> https://archive.org/details/startupVoice  
+> https://archive.org/details/@3losh-rat  
+> https://archive.org/details/@alo0ch0011  
+> alo0ch@outlook.com
+
+## 参考来源
+
+> [TalosInstelligence](https://blog.talosintelligence.com/2021/08/rat-> campaign-targets-latin-america.html)
+

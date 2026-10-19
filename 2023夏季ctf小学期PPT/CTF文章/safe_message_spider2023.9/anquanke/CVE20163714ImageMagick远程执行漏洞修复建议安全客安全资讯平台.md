@@ -1,0 +1,187 @@
+# CVE-2016-3714ImageMagick远程执行漏洞修复建议
+
+阅读量 **168571**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2016-05-05 20:58:42
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：sobug
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+2016年5月
+
+目录
+
+0x01 前言.. 1
+
+0x02 影响版本范围.. 1
+
+0x03 攻击POC演示.. 1
+
+0x04修复方案.. 3
+
+0x06 参考来源.. 4
+
+版本
+
+|
+
+版本控制信息
+
+|
+
+更新日期
+
+|
+
+更新人
+
+|
+
+审批人  
+  
+---|---|---|---|---  
+  
+V1.0
+
+|
+
+创建
+
+|
+
+2016年5月
+
+|
+
+老狼
+
+|  
+  
+V1.1
+
+|  |  |  |  
+  
+V1.2
+
+|  |  |  |  
+|  |  |  |  
+  
+0x01 前言
+
+ImageMagick是一套功能强大、稳定而且开源的工具集和开发包,可以用来读、写和处理超过89种基本格式的图片文件,包括流行的TIFF、JPEG、GIF、
+PNG、PDF以及PhotoCD等格式。众多的网站平台都是用他渲染处理图片。可惜在3号时被公开了一些列漏洞,其中一个漏洞可导致远程执行代码(RCE),如果你处理用户提交的图片。该漏洞是针对在野外使用此漏洞。许多图像处理插件依赖于ImageMagick库,包括但不限于PHP的imagick,Ruby的rmagick和paperclip,以及NodeJS的ImageMagick等。
+
+产生原因是因为字符过滤不严谨所导致的执行代码. 对于文件名传递给后端的命令过滤不足,导致允许多种文件格式转换过程中远程执行代码。
+
+  
+
+0x02 影响版本范围
+
+ImageMagick 6.5.7-8 2012-08-17(手工测试风险存在)
+
+ImageMagick 6.7.7-10 2014-03-06(手工测试风险存在)
+
+低版本至6.9.3-9 released 2016-04-30
+
+  
+
+0x03 攻击POC演示
+
+先构建一个精心准备的图片:
+
+vi exp1.jpg
+
+push graphic-context
+
+viewbox 0 0 640 480
+
+fill 'url(https://"|id && ls -al /etc/passwd")'
+
+pop graphic-context
+
+执行攻击POC1,虽然有报错,但是两条命令都成功绕出执行了,
+
+就说明漏洞是存在的
+
+那么在制作一个远程下载反弹shell脚本,并且执行shell命令:
+
+执行成功,上接受服务器看去:
+
+Root权限的反弹shell就这样上来了.
+
+  
+
+0x04修复方案
+
+目前官方的最新修复补丁版本还未能出来,所以暂时建议做以下预防策略:
+
+1.在上传图片时需要通过文件内容来判断用户上传的是否为真实图片类型.
+
+2.使用策略配置文件来禁用ImageMagick的有风险的编码器
+
+对于ImageMagick全局策略配置文件在/etc/ImageMagick下对policy.xml最后一行进行增加下列配置:
+
+vi /etc/ImageMagick/policy.xml
+
+<policymap>
+
+<policy domain="coder" rights="none" pattern="EPHEMERAL" />
+
+<policy domain="coder" rights="none" pattern="URL" />
+
+<policy domain="coder" rights="none" pattern="HTTPS" />
+
+<policy domain="coder" rights="none" pattern="MVG" />
+
+<policy domain="coder" rights="none" pattern="MSL" />
+
+</policymap>
+
+在去执行攻击POC2看看,无法执行下载动作和执行命令了.
+
+0x06 参考来源
+
+https://imagetragick.com/
+
+[http://php.net/manual/zh/function.getimagesize.php](http://php.net/manual/zh/function.getimagesize.php)
+
+[https://bugzilla.redhat.com/show_bug.cgi?id=CVE-2016-3714](https://bugzilla.redhat.com/show_bug.cgi?id=CVE-2016-3714)
+
+[https://security-tracker.debian.org/tracker/CVE-2016-3714](https://security-tracker.debian.org/tracker/CVE-2016-3714)
+
+本文翻译自sobug [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **sobug** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/83871](/post/id/83871)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [sobug]()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p4.ssl.qhmsg.com/dm/200_200_100/t00df551a583a87f4e9.jpg) sobug
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,292 @@
+# sqlmap源码简析（一）
+
+本文章适合正在学习sqlmap运行原理的朋友，或者准备学习sqlmap的朋友，大佬就可以绕过了，写的比较基础。我也是一个小白，总结自己对sqlmap的理解，也分享一些自己觉得好用的方法给大家，欢迎大家帮我补充，有什么好用的技巧也可以分享一下，大家共同进步。本篇内容如果有什么不对的或者不好的地方希望大家不要喷我，但是欢迎帮我指正。最后希望大家可以关注我的专栏。  
+
+## 目录结构
+
+对照目录结构我们来梳理一下：
+
+这里我是下载的sqlmap最新版本1.4.3.12
+
+![image.png](https://image.3001.net/images/20200331/1585622036_5e82ac140cdb2.png!small)
+
+#
+![image.png](https://image.3001.net/images/20200331/1585621986_5e82abe25c326.png!small)
+
+1.data目录包含可以搭建的图形化界面模板，shell后门（里边的代码是经过加密的），udf提权功能，数据库注入检测载荷等
+
+2.doc目录是针对不同国家和地区的使用说明
+
+3.extra目录有一些额外功能，运行cmd、shellcode，icmp协议的反弹shell（是的icmp是可以用来反弹shell的，在平时的渗透过程中碰到传统的tcp，udp反弹shell不成功，可以考虑使用icmp协议或者DNS协议进行反弹shell），以及发出声响（beep）等
+
+4.lib/目录包含了sqlmap的多种连接库，如五种注入类型请求的参数、提权操作等。（这个目录需要我们重点关注）
+
+5.plugins/ 数据库信息和数据库通用事项
+
+6.tamper目录包含了各种绕过脚本（这个非常好用）
+
+7.thirdparty目录 sqlmap使用的第三方的插件
+
+sqlmap.conf sqlmap的配置文件，如各种默认参数（默认是没有设置参数、可设置默认参数进行批量或者自动化检测）
+
+sqlmap.py sqlmap主程序文件
+
+sqlmapapi.py sqlmap的api文件，可以将sqlmap集成到其他平台上
+
+swagger.yaml api文档
+
+## 入口文件
+
+sqlmap.py
+
+  
+
+我们先来看看五个比较重要的函数
+
+![image.png](https://image.3001.net/images/20200331/1585636693_5e82e555bcfa1.png!small)
+
+### dirtyPatches()
+
+对于程序的一些问题及修复，写成了补丁函数，优先执行。  
+
+在 DirtyPatches 中，首先设定了 httplib 的最大行长度（`httplib._MAXLINE`），接下来导入第三方的 windows 下的
+ip地址转换函数模块（`win_inet_pton`），然后对编码进行了一些替换，把 `cp65001` 替换为 `utf8`
+避免出现一些交互上的错误，这些操作对于 sqlmap 的实际功能影响并不是特别大，属于保证起用户体验和系统设置的正常选项，不需要进行过多关心。  
+  
+
+![image.png](https://image.3001.net/images/20200331/1585636642_5e82e5226710c.png!small)
+
+### resolveCrossReferences()  
+
+为了消除交叉引用的问题，一些子程序中的函数会被重写，在这个位置进行赋值  
+
+![image.png](https://image.3001.net/images/20200331/1585637054_5e82e6beab2b9.png!small)
+
+### checkEnvironment()
+
+这个函数的作用就是去检测运行环境，包括检查模块路径，检查 Python 版本，导入全局变量
+
+###
+![image.png](https://image.3001.net/images/20200331/1585637231_5e82e76f3b61f.png!small)
+
+这三个全局变量可以说贯穿宇sqlmap运行的整个过程，尤其是conf，kb
+
+![image.png](https://image.3001.net/images/20200331/1585637483_5e82e86b8f121.png!small)
+
+### setPaths(modulePath())
+
+获取路径
+
+![image.png](https://image.3001.net/images/20200331/1585637406_5e82e81ead831.png!small)
+
+### banner()
+
+该函数是为了打印banner信息
+
+###
+![image.png](https://image.3001.net/images/20200331/1585637658_5e82e91ad4dbc.png!small)  
+
+## 全局变量
+
+###  **cmdLineOptions**
+
+是一个AttribDict，AttribDict又是什么？
+
+这个类通过override了几个`super method`.
+
+修改原生的`dict`定制成了自己项目需要的属性字典.
+
+##
+![image.png](https://image.3001.net/images/20200331/1585638823_5e82eda77b276.png!small)
+
+原来的字典的用法:`dict1["key"]`
+
+现在的自定义字典的用法:`dict1.key`
+
+![image.png](https://image.3001.net/images/20200331/1585639208_5e82ef28d0c95.png!small)跟进cmdlineParser()
+
+这里将我们输入的命令行参数选项进行判断和拆分，转变成dict键值对的形式存入到cmdLineOptions  
+
+##
+![image.png](https://image.3001.net/images/20200331/1585639342_5e82efae94174.png!small)  
+
+## conf，kb
+
+1.init()中主要包含所有初始变量的初始值，这些初始值在 `init()`
+的设定主要是引用各种各样的函数来完成基础设置，我们没有必要依次对其进行分支，只需要用到的时候知道回来寻找就可以了。
+
+2.第二部分就是各种测试包括冒烟测试，模糊测试等
+
+测试过的 url 参数信息会保存到 kb.testedParams 中  
+
+3.测试完成之后就进入我们的工作流程
+
+![image.png](https://image.3001.net/images/20200331/1585639826_5e82f1928b2e8.png!small)
+
+  
+
+controller.py文件
+
+下边这部分代码就是核心的检测方法
+
+    
+    
+    for targetUrl, targetMethod, targetData, targetCookie, targetHeaders in kb.targets:
+    	try:
+    		if conf.checkInternet:
+    			infoMsg = "checking for Internet connection"
+    			logger.info(infoMsg)
+    
+    			if not checkInternet():
+    				warnMsg = "[%s] [WARNING] no connection detected" % time.strftime("%X")
+    				dataToStdout(warnMsg)
+    
+    				valid = False
+    				for _ in xrange(conf.retries):
+    					if checkInternet():
+    						valid = True
+    						break
+    					else:
+    						dataToStdout('.')
+    						time.sleep(5)
+    
+    				if not valid:
+    					errMsg = "please check your Internet connection and rerun"
+    					raise SqlmapConnectionException(errMsg)
+    				else:
+    					dataToStdout("\n")
+    
+    		conf.url = targetUrl
+    		conf.method = targetMethod.upper().strip() if targetMethod else targetMethod
+    		conf.data = targetData
+    		conf.cookie = targetCookie
+    		conf.httpHeaders = list(initialHeaders)
+    		conf.httpHeaders.extend(targetHeaders or [])
+    
+    		if conf.randomAgent or conf.mobile:
+    			for header, value in initialHeaders:
+    				if header.upper() == HTTP_HEADER.USER_AGENT.upper():
+    					conf.httpHeaders.append((header, value))
+    					break
+    
+    		conf.httpHeaders = [conf.httpHeaders[i] for i in xrange(len(conf.httpHeaders)) if conf.httpHeaders[i][0].upper() not in (__[0].upper() for __ in conf.httpHeaders[i + 1:])]
+    
+    		initTargetEnv()
+    		parseTargetUrl()
+    
+    		testSqlInj = False
+    
+    		if PLACE.GET in conf.parameters and not any((conf.data, conf.testParameter)):
+    			for parameter in re.findall(r"([^=]+)=([^%s]+%s?|\Z)" % (re.escape(conf.paramDel or "") or DEFAULT_GET_POST_DELIMITER, re.escape(conf.paramDel or "") or DEFAULT_GET_POST_DELIMITER), conf.parameters[PLACE.GET]):
+    				paramKey = (conf.hostname, conf.path, PLACE.GET, parameter[0])
+    
+    				if paramKey not in kb.testedParams:
+    					testSqlInj = True
+    					break
+    		else:
+    			paramKey = (conf.hostname, conf.path, None, None)
+    			if paramKey not in kb.testedParams:
+    				testSqlInj = True
+    
+    		if testSqlInj and conf.hostname in kb.vulnHosts:
+    			if kb.skipVulnHost is None:
+    				message = "SQL injection vulnerability has already been detected "
+    				message += "against '%s'. Do you want to skip " % conf.hostname
+    				message += "further tests involving it? [Y/n]"
+    
+    				kb.skipVulnHost = readInput(message, default='Y', boolean=True)
+    
+    			testSqlInj = not kb.skipVulnHost
+    
+    		if not testSqlInj:
+    			infoMsg = "skipping '%s'" % targetUrl
+    			logger.info(infoMsg)
+    			continue
+    
+    		if conf.multipleTargets:
+
+初始化当前检测的目标，包括：url，method，Data，Cookie，headers相关字段
+
+##
+![image.png](https://image.3001.net/images/20200331/1585640562_5e82f472e9eb0.png!small)
+
+从conf字典中取出来检测用的参数
+
+![image.png](https://image.3001.net/images/20200331/1585640741_5e82f525a1e80.png!small)
+
+检测是否已经测试过![image.png](https://image.3001.net/images/20200331/1585640955_5e82f5fb560ae.png!small)该目标  
+![image.png](https://image.3001.net/images/20200331/1585640840_5e82f588cfa9e.png!small)
+
+这部代码是针对多个目标  
+
+![image.png](https://image.3001.net/images/20200331/1585640956_5e82f5fc7ef1f.png!small)
+
+接下来再经过setupTargetEnv()函数，
+
+![image.png](https://image.3001.net/images/20200331/1585641386_5e82f7aa49efc.png!small)  
+
+这里看一下对于请求的处理方式，主要是将 get 或 post 发送的数据解析成字典形式，并保存到 conf.paramDict 中
+
+![image.png](https://image.3001.net/images/20200331/1585641577_5e82f869bf58f.png!small)
+
+![image.png](https://image.3001.net/images/20200331/1585641588_5e82f874d28df.png!small)
+
+  
+回归之前的 start()方法中的 foreach targets 的循环体中，在 setupTargetEnv()
+之后，我们现在已经知道了关于这个目标的所有的可以尝试注入测试的点都已经设置好了，并且都存在了 conf.paramDict 这个字典中了。  
+
+读取session文件（如果存在的话），并读取文件中的数据，保存到 kb 变量中  
+
+接下来就是checkWaf，这里就是检测是否有waf（这里有个奇怪的地方就是本次下载的sqlmap目录里边少了waf目录）
+
+接着检查空连接（nullConnection）、检查页面稳定性，以及对参数、测试列表进行排序
+
+nullConnection：根据官方手册，是一种不用获取页面内容就可以知道页面大小的方法，这种方法在布尔盲注中有非常好的效果  
+
+如果启用 --null-connection，计算页面相似率就只是很简单的通过页面的长度来计算  
+
+![image.png](https://image.3001.net/images/20200331/1585642149_5e82faa50695d.png!small)  
+
+页面相似率的算法在sqlmap的检测过程中起到了灰常重要，还有高斯分布在sqlmap进行异常检测的时候也起到了很重要的作用。我们放到第二篇说。
+
+  
+
+  
+
+  
+
+  
+  
+  
+
+###  
+  
+  
+  
+
+  
+
+#  
+
+  
+
+  
+  
+
+  
+
+  
+  
+  
+
+##  
+
+  
+
+ **  
+**
+
+###  
+
+  
+

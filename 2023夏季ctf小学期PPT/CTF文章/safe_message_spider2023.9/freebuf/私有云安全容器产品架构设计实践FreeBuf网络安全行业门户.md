@@ -1,0 +1,132 @@
+**目前市面上的容器（包含管理平台）安全产品具有多样性，也具有重叠性。对于私有云的安全问题，基于从整体架构上解决的理念，我们做了以下实践研究设计。**
+
+先看看整体的容器安全产品简要架构图：
+
+![1609767970_5ff31c226c629f8f06740.jpg!small](https://image.3001.net/images/20210104/1609767970_5ff31c226c629f8f06740.jpg!small)
+
+## 基线配置核查
+
+#### Docker基线配置核查
+
+CIS 基准是安全配置系统的配置基线和最佳做法，很多漏洞扫描工具也有集成基于CIS Benchmark 的扫描基线，以满足IT安全人员日常审计的需求。
+
+在针对Docker的基线检查，我们可以参考下：[CIS Docker Benchmark
+](https://www.cisecurity.org/benchmark/docker/)。
+
+ **docker-bench-security**
+就是基于以上标准的，它可以对容器镜像配置进行检查。这在配置核验中也是相对核心的一环，会检查Docker容器的几十个常见最佳实践。
+
+Github仓库：https://github.com/docker/docker-bench-security.git
+
+我们可以通过Docker-Compose运行，或者直接运行Shell脚本，然后通过Cronjob的方式定期运行：
+
+Kubectl和本地直接运行的操作细节我们这里暂不讨论，网上很多说明文章。
+
+平台自动化配置最后提取的日志，可以通过ELK或者Splunk筛选查看，也可以接入云管平台的接口，后面的介绍也不再赘述。
+
+目前类似的Docker安全实践有以下几种产品，部分的展示效果可能会更加优秀：
+
+  * Docker Bench Test
+
+  * drydock
+
+  * Actuary
+
+K8S基线配置核查
+
+我们在后面的描述里，都会拿开源的云管平台K8S为例。
+
+针对云管平台的基线检查，我们可以参考：[CIS K8S Benchmark
+](https://www.cisecurity.org/benchmark/kubernetes/)。
+
+对于这方面内容的的检查，推荐项目 **Kube-bench** 。它是由容器安全厂商Aqua推出的，能很好的涵盖针对K8S的基线检查。
+
+不过需要注意的是，由于不同版本的K8S的特性不同，部署Kube-bench前你要了解你要审计的K8S环境，具体大版本号是什么。
+
+Github仓库：<https://github.com/aquasecurity/kube-bench>
+
+![1609767119_5ff318cf310868dc9caeb.png!small?1609767119554](https://image.3001.net/images/20210104/1609767119_5ff318cf310868dc9caeb.png!small?1609767119554)
+
+目前一些Kubernetes的管理平台Rancher、Kubeoperator等已经支持集成kube-bench，如果已经在使用这些平台的话也可以使用平台上的相应功能来完成扫描。
+
+安装完成以后，可以在K8S集群节点定期运行 kube-bench：$ ./kube-bench <master|node>
+
+## 微服务API安全监测
+
+Cilium 是一个内核层的 API 感知网络和安全工具，它专注于解决安全网络连接，与 Docker、Kubernetes 等 Linux
+容器平台有良好的兼容性，增加了安全可视化以及控制逻辑。
+
+Github仓库：https://github.com/cilium/cilium
+
+它基于 Linux 内核技术 BPF（以前被称为 Berkeley packet filter）。其在底层进行实现的有趣之处在于，你可以直接应用和更新
+Cilium 安全策略，无需更改应用程序代码或容器配置。
+
+#### Docker-Compose快速安装Cilium
+
+Cilium的Docker-Compose的配置示例文件可以看这里：[cilium-example-yml](https://github.com/cilium/cilium/blob/master/examples/getting-started/docker-compose.yml)。
+
+在 Docker-Compose 安装方式的[快速开始指南](https://jimmysong.io/kubernetes-handbook/concepts/cilium-concepts.html)中，演示了如何使用 Label
+来选择容器，从而限制两个容器（应用）之间的流量访问权限的。
+
+官方示例的策略配置中，我们可以看到使用Cilium 直接在 L3/L4 层管理容器间访问策略的方式。
+
+例如下面的策略配置具有 id=app2 标签的容器可以使用 TCP 协议、80 端口访问具有标签 id=app1 标签的容器：
+
+    
+    
+    [{
+        "labels": [{"key": "name", "value": "l3-rule"}],
+        "endpointSelector": {"matchLabels":{"id":"app1"}},
+        "ingress": [{
+            "fromEndpoints": [
+                {"matchLabels":{"id":"app2"}}
+            ],
+            "toPorts": [{
+                    "ports": [{"port": "80", "protocol": "TCP"}]
+            }]
+        }]
+    }]
+
+将该配置保存成 JSON 文件，使用cilium policy import命令即可应用到 Cilium 网络中。
+
+#### Cilium联动Hubble+Grafana+Prometheus监控
+
+Cilium也可以采用Helm
+Chart部署的[方式](https://zhuanlan.zhihu.com/p/137549951)，也是官方推荐方式之一。
+
+而在这篇文章[里面](https://davidlovezoe.club/wordpress/archives/851)，提供了Hubble
+UI+Grafana的部署方式，除了Hubble自身的监控工具，还可以对接主流的云原生监控体系——Prometheus和Grafana，实现可扩展的监控策略。
+
+![1609767444_5ff31a148539fd9d8fc92.png!small?1609767446525](https://image.3001.net/images/20210104/1609767444_5ff31a148539fd9d8fc92.png!small?1609767446525)
+
+顺便说一句， **Grafaes** 是由IBM和谷歌于2017年底发布，它可以帮助大家打造 **元数据基建**
+，提供组件元数据API来定义虚拟机和容器的元数据，帮助优化云端安全的相关策略。
+
+最后，我们在Hubble UI里看到的效果如下：
+
+![1609767512_5ff31a581198f0233b262.png!small?1609767514523](https://image.3001.net/images/20210104/1609767512_5ff31a581198f0233b262.png!small?1609767514523)
+
+上图中的页面上半部分，是之前部署的一整套conectivity-check组件的数据流向图，官方叫做Service
+Map，默认情况下可以自动发现基于网络3层和4层的访问依赖路径，看上去非常cool，也有点分布式链路追踪图的感觉。点击某个服务，还能看到更为详细的关系图。
+
+下半页是kube-system命名空间下的数据流图，能看到Hubble-UI组件和Hubble组件是通过gRPC进行通信的。默认显示的是对于每条数据流路径的详细描述，包括发起请求的pod名称、发起请求的service名称、请求目标的pod名称、请求目标的service名称、目标IP、目标端口、目标7层信息、请求状态、最后一次查看时间等。
+
+## 漏洞CVE检查
+
+在对容器中的镜像进行检查的时候，可以很直观的进行应用和系统的CVE对比，升级版本和打补丁的工作，总是相对透明化一些的。这里主要讲讲Clair和Anchore。
+
+### Clair（可以集成平台）
+
+Clair是CoreOS的拳头安全产品，它会通过对容器的layer进行扫描，对镜像进行特征提取，依据特征匹配CVE漏洞。
+
+由于环境搭建依赖复杂众多，需要修改一些配置文件，同时需要go语言环境，使用难度相对较大。
+
+Clair提供了API，可以通过本地客户端进行扫描，也可以平台化对上传的镜像进行分析。
+
+这里推荐集成到Devsecops流程中去，以后可以自动对所有镜像进行安全扫描，参考Rigistry和CI/CD的做法：
+
+    
+    
+    #k8s cluster配置：
+    git clone https://
+

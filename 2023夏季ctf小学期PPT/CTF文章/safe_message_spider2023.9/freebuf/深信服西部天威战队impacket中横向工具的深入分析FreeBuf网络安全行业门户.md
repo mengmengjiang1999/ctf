@@ -1,0 +1,214 @@
+## impacket简介
+
+Impacket是用于处理网络协议的Python类的集合。Impacket专注于提供对数据包的简单编程访问，以及协议实现本身的某些协议（例如SMB1-3和MSRPC）。数据包可以从头开始构建，也可以从原始数据中解析，而面向对象的API使处理协议的深层次结构变得简单。该库提供了一组工具，作为在此库找到可以执行的操作的示例。
+
+## impacket横向移动工具
+
+psexec.py：微软工具psexec的python版本，支持了hash横向，通过windows服务进行横向移动。
+
+smbexec.py：类似于psexe的自定义版，其修改了psexec自动安装服务器到Admin$下的特点，smbexec通过手动安装服务器文件到自定义的位置。
+
+atexec：利用远程计划任务进行命令执行并获取结果。
+
+wmiexec.py：利用wmi组件，通过135端口上的RPC进行横向移动。
+
+dcomexecpy：利用windows提供的DCOM接口进行横向移动，目前支持MMC20.Application，ShellWindows和ShellBrowserWindow对象。
+
+## 深入分析工具特点
+
+### psexec.py
+
+前提条件：445端口
+
+参数使用帮助：
+
+(1) lget {file} 参数可以下载目标机器中的文件。
+
+(2) lput {src_file, dst_path} 参数用于上传文件到目标机器。
+
+(3) -codec 参数用于解码命令执行的返回结果。
+
+运行流程：
+
+1、连接远程计算机的admin$共享。
+
+2、上传windows服务程序到admin$共享。
+
+在impacket中，服务程序位于/impacket/examples/remcomsvc.py文件中，以二进制的数据进行保存，默认的exe已经被各大厂商杀毒软件标记，可自行修改其中的二进制数据为自己编写的exe上线cs。
+
+![1651127377_626a3451aafbd04ce5f23.png!small?1651127377326](https://image.3001.net/images/20220428/1651127377_626a3451aafbd04ce5f23.png!small?1651127377326)
+
+3、打开\\\target\pipe\svcctl管道，连接远程机器服务控制管理器SCM，创建并启动服务。
+
+4、服务程序启动之后创建stdin、stdout、stderr三个命名管道，用于命令执行的输入和结果的输出。
+
+![1651127880_626a36481ad9979ee432e.png!small?1651127879591](https://image.3001.net/images/20220428/1651127880_626a36481ad9979ee432e.png!small?1651127879591)
+
+5、命令执行结束后重新连接远程计算机服务控制管理器，停止服务、删除服务、删除服务程序。
+
+### smbexec.py
+
+前提条件：445端口
+
+参数帮助：
+
+(1) -share 参数指定使用的共享目录，默认为c$。
+
+(2) -service-name参数指定server的名称，默认为BTOBTO。
+
+(3) -shell_type 参数指定命令执行环境，可选cmd或者powershell，默认为cmd。
+
+(4) -mode 参数指定运行模式，支持SERVER和SHARE模式，默认为share模式。
+
+运行流程：(以默认的SHARE模式为例)
+
+1、打开\\\target\pipe\svcctl管道，连接远程机器服务控制管理器SCM
+
+2、根据命令行参数shell_type获取命令执行方式为cmd或者powershell
+
+![1651132602_626a48ba5d2ef742e4f5b.png!small?1651132601835](https://image.3001.net/images/20220428/1651132602_626a48ba5d2ef742e4f5b.png!small?1651132601835)
+
+3、创建名为service-name参数名称的服务，服务对应的程序为cmd或者powershell，由shell_type决定。
+
+4、命令执行结果重定向到__output文件中。
+
+5、连接远程共享，打开__output文件获取命令执行结果。
+
+### atexec.py
+
+前提：445端口
+
+注意：atexec.exe版本是通过初始化com组件创建远程计划任务的，该过程需要目标开放135端口，impacket采用的都是RPC协议，只需要开放445端口即可。
+
+运行流程：
+
+1、打开\\\target\pipe\atsvc管道，远程连接目标机器的远程计划任务管理器。
+
+2、创建一个随机名称的计划任务，计划任务对应的程序为cmd，拼接命令后将结果重定向到c:\windows\temp目录下的随机文件名.tmp中。
+
+![1651135125_626a52959e6987038d0ee.png!small?1651135125241](https://image.3001.net/images/20220428/1651135125_626a52959e6987038d0ee.png!small?1651135125241)
+
+计划任务默认配置信息如下：
+
+    
+    
+    <?xml version="1.0" encoding="UTF-16"?>
+    <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+      <Triggers>
+        <CalendarTrigger>
+          <StartBoundary>2015-07-15T20:35:13.2757294</StartBoundary>
+          <Enabled>true</Enabled>
+          <ScheduleByDay>
+            <DaysInterval>1</DaysInterval>
+          </ScheduleByDay>
+        </CalendarTrigger>
+      </Triggers>
+      <Principals>
+        <Principal id="LocalSystem">
+          <UserId>S-1-5-18</UserId>
+          <RunLevel>HighestAvailable</RunLevel>
+        </Principal>
+      </Principals>
+      <Settings>
+        <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+        <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+        <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+        <AllowHardTerminate>true</AllowHardTerminate>
+        <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+        <IdleSettings>
+          <StopOnIdleEnd>true</StopOnIdleEnd>
+          <RestartOnIdle>false</RestartOnIdle>
+        </IdleSettings>
+        <AllowStartOnDemand>true</AllowStartOnDemand>
+        <Enabled>true</Enabled>
+        <Hidden>true</Hidden>
+        <RunOnlyIfIdle>false</RunOnlyIfIdle>
+        <WakeToRun>false</WakeToRun>
+        <ExecutionTimeLimit>P3D</ExecutionTimeLimit>
+        <Priority>7</Priority>
+      </Settings>
+      <Actions Context="LocalSystem">
+        <Exec>
+          <Command>%s</Command>
+          <Arguments>%s</Arguments>
+        </Exec>
+      </Actions>
+    </Task>
+
+3、等待计划任务执行完成删除计划任务。
+
+4、连接远程ADMIN$共享，获取命令执行的结果。
+
+5、删除记录命令执行结果的文件。
+
+### wmiexec.py
+
+前提条件：135端口、445端口
+
+135端口用于连接wmi，445端口负责获取命令执行结果。
+
+参数帮助：
+
+(1) -noOutput 参数指定是否需要获取命令输出结果，如果该参数设置为True，wmiexec.py将不在依靠445端口，只需要135端口即可。
+
+(2) lput {src_file, dst_path} 参数用于上传文件到目标机器。
+
+(3) lget {file} 参数可以下载目标机器中的文件。
+
+(4) -codec 参数用于解码命令执行的返回结果。
+
+(5) lcd 参数用于切换工作路径。
+
+(6) -shell_type 参数指定命令执行环境，可选cmd或者powershell，默认为cmd。
+
+运行流程：
+
+1、根据noOutput参数值判断是否需要进行smb连接，如果该值为False，就先建立一个smb
+connection，如果该值为True，则直接通过DCOM连接远程计算机的//./root/cimv2。
+
+![1651136615_626a5867cfbf08314b027.png!small?1651136615417](https://image.3001.net/images/20220428/1651136615_626a5867cfbf08314b027.png!small?1651136615417)
+
+2、获取Win32_Process对象，根据shell_type参数选择去创建cmd或者powershell进程。
+
+![1651136778_626a590a1a2f50dc952c3.png!small?1651136777602](https://image.3001.net/images/20220428/1651136778_626a590a1a2f50dc952c3.png!small?1651136777602)
+
+3、如果需要获取命令执行结果，则创建进程时会将结果重定向到admin$共享下的文件中，文件名称为"__当前时间"
+
+    
+    
+    OUTPUT_FILENAME = '__' + str(time.time())
+
+![1651137147_626a5a7b83cdafcdbea4a.png!small?1651137147002](https://image.3001.net/images/20220428/1651137147_626a5a7b83cdafcdbea4a.png!small?1651137147002)
+
+4、通过连接远程计算机的admin$共享获取命令执行结果。
+
+### dcomexec.py
+
+前提条件：135端口、445端口
+
+135端口用于连接DCOM，445端口负责获取命令执行结果。
+
+dcomexec.py选用的DCOM接口有如下几个：
+
+1、ShellWindows
+
+适用windows 7, Windows 10, Windows Server 2012R2。
+
+CLSID为：9BA05972-F6A8-11CF-A442-00A0C90A8F39
+
+2、ShellBrowserWindow
+
+适用Windows 10, Windows Server 2012R2。
+
+CLSID为：C08AFD90-F2A1-11D1-8455-00A0C91F3880
+
+3、MMC20
+
+CLSID为：49B2791A-B1AE-4C90-9B8E-E860BA07F889
+
+dcomexec.py流程和wmiexec用法相似度很高，命令执行结果都是重定向到共享目录之后通过smb连接去获取。
+
+## 小结
+
+impacket横向移动工具的核心其实就是smbConnection以及RPC协议，深入理解这些协议后能对我们理解windows的认证机制有很大的帮助和提升。
+

@@ -1,0 +1,79 @@
+**大家好，今天给大家分享的是一个Msf框架中关于后渗透阶段的模块，这个模块有趣的地方在于，它在某种程度上来说是完全隐形的。开发者把这种技术叫Windows
+Rid劫持。**
+
+## 一. 模块简介
+
+首先我们简单了解下该技术所针对的核心——`RID`。Windows都使用安全帐户管理器（`SAM`）来存储本地用户和内置帐户的安全描述符。正如“安全主管如何工作”（链接[https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2003/cc779144(v=ws.10)）](https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2003/cc779144\(v=ws.10\)%EF%BC%89)中所述，每个帐户都有一个指定的RID来标识它。与域控制器不同，Windows工作站和服务器会将大部分数据存储在HKLM\SAM\SAM\Domains\Account\Users项中，这需要访问`System`权限。
+
+有时候，在某些环境中维持访问权限是相当棘手的，特别是在不可能执行诸如创建或将用户添加到管理员组、转储用户的凭据或散列哈希、部署持久的shell或任何可能触发对受害者发出警报的任何东西时。只有使用系统资源才能持久化的访问，那么还有什么更方便的呢？
+
+msf中的rid劫持模块实现了这一点。Rid_Hijack模块是一个关于后渗透阶段用来维持权限的模块，该模块将通过修改现有帐户的某些属性在目标系统上创建一个条目。它将通过设置一个相对标识符（`RID`）来更改帐户属性，该标识符应由目标机器上的一个现有账户拥有。利用一些Windows本地用户管理完整性的缺陷，该模块将允许使用一个已知帐户凭证（如GUEST帐户）进行身份验证，并使用另一个现有帐户（如Administrator帐户）的权限进行访问，即使禁用了Administrator账户。模块在MSF中名字为`post/windows/manage/rid_hijack`，如果没有下载的话可以去rapid7的github仓库中下载放在相应目录下启动Msfconsole后输入“`reload_all`”便可在`msf`中使用。链接如下：
+<https://github.com/rapid7/metasploit-framework/pull/9595>  
+
+Rid劫持模块会自动的将攻击者与受害者的任何现有帐户相关联。在模块执行后是非常正常的，因为hashdump和wmic命令加载lsass.exe模块执行之前运行的用户信息和其他进程。另一方面，当以任何人登录到机器时，通过使用由模块修改的注册表键来获得特权。此模块不会更改它所在的所有注册表项中的用户的RID，但只能在导致完整性问题被利用的一个注册表项中。这意味着它不会将所有系统数据中的RID从一个更改为另一个（例如在你的情况下，从501到500），这就是为什么这个攻击是完全隐秘的。
+
+## 二. 漏洞影响版本
+
+> Windows XP，2003.（32位）
+>
+> Windows 8.1专业版。（64位）
+>
+> Windows 10.（64位）
+>
+> Windows Server 2012.（64位）
+>
+> 该模块未经过测试，但可能适用于：•其他版本的Windows（x86和x64）
+
+## 三. 漏洞复现
+
+这个模块的工作原理就是在Windows受害者上建立一个`meterpreter`会话。它将尝试查看权限（并在需要时获取它们）并修改与指定帐户关联的注册表项。靶机IP：192.168.192.128
+操作系统为win7 64位。（测试账户5ecurity本身为普通权限）
+
+![1.png](https://image.3001.net/images/20180426/15247116665348.png!small)  
+
+该模块的利用基础是建立在拿到目标系统的`meterpreter`会话之后的，所以首先需要拿到目标系统的`meterpreter`会话。
+
+![2.png](https://image.3001.net/images/20180426/15247116805412.png!small)  
+
+加载msf中自带的`mimikatz`模块，用于抓取目标系统中的明文密码。
+
+![3.png](https://image.3001.net/images/20180426/15247116937054.png!small)  
+
+通过wgigest命令抓取普通账户5ecurity的密码为5ecurity。然后加载我们文中的主要利用模块。
+
+![4.png](https://image.3001.net/images/20180426/15247117069928.png!small)  
+
+输入`Show
+options`获取所需配置的参数。的简要说明：•GETSYSTEM：如果为true,将尝试获取目标系统的SYSTEM权限。•GUEST_ACCOUNT：如果为true，将使用目标系统用户帐户作为攻击者的帐户。•RID：将分配给攻击者帐户的RID。这个值应该由一个现有账户拥有，意图被劫持。默认设置为
+500
+。•USERNAME：设置后，将用作生效的用户帐户，并将其视为攻击者帐户。如果参数GUEST_ACCOUNT被指定，这个参数将被忽略。•PASSWORD：设置后，它会将帐户密码设置为该值。我们将需要配置的参数一一配置，指定meterpreter会话的session
+id给`Rid劫持`模块。
+
+![5.png](https://image.3001.net/images/20180426/15247117221967.png!small)  
+
+运行模块，可以看到模块运行的很顺利。
+
+![6.png](https://image.3001.net/images/20180426/15247117367533.png!small)  
+
+然后通过我们抓取到的普通权限账号5ecurity登录，就可以发现一些神奇的地方。
+
+![7.png](https://image.3001.net/images/20180426/15247117533195.png!small)
+
+再进行一些其他命令的操作确定自己的权限。
+
+![8.png](https://image.3001.net/images/20180426/15247117726830.png!small)  
+
+![9.png](https://image.3001.net/images/20180426/15247117908064.png!small)  
+
+使用普通权限的5ecurity账户在system32目录下成功进行写入操作。完成`Rid劫持`。
+
+##  **四. 参考链接**
+
+<http://www.5ecurity.cn/index.php/archives/245/>  
+
+<https://www.rapid7.com/db/modules/post/windows/manage/rid_hijack>
+
+<http://csl.com.co/rid-hijacking/>
+
+*** 本文作者5ecurity，转载注明来自Freebuf.com**
+

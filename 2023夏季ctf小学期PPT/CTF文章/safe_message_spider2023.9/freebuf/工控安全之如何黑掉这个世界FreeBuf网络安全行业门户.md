@@ -1,0 +1,289 @@
+***严正声明：本文仅限于技术讨论与分享，严禁用于非法途径。**
+
+![](https://image.3001.net/images/20220507/1651898551_6275f8b7482c4c63728d4.jpg!small)
+
+## 来吹吹牛逼
+
+嗨，兄弟们，我是FhoeniX42S，标题名字霸不霸气，手动滑稽。正好最近闲着没事，我去搞工控设备玩了一下，关于我为啥一直不更新，
+**都怪freebuf一分钱不给，害的我只能去电子厂上班打工，然后看那老板不爽，顺便黑掉了那里的数控机床，然后更新了这期** 。。。哈哈哈哈
+
+然后呢，说点啥呢，等freebuf给我发稿费了我去买点hak5的产品，和各位聊聊近源渗透。最近呢我还在搞内网和做病毒，回头和你们讲讲，其实我技术就那样，不过我还是想和各位分享一下技术。对吧。
+
+然后呢，我本人是学机电工程的，可是学习还没有讲plc，我自己稍微研究了一下，就会点皮毛，我们主要是搞联网的机器，以后学明白了我也会来分享一下哈，好了，不吹牛逼了，哦哦，马上andrax要更新了，我也会讲一下，好了，聊重点。。。
+
+## 基础
+
+### what is plc？？？？
+
+可编程逻辑控制器（Programmable Logic
+Controller，简称PLC），一种具有微处理器的数字电子设备，用于自动化控制的数字逻辑控制器，可以将控制指令随时加载存储器内存储与运行。可编程控制器由内部CPU，指令及数据存储器、输入输出单元、电源模块、数字模拟等单元所模块化组合成。PLC可接收（输入）及发送（输出）多种类型的电气或电子信号，并使用他们来控制或监督几乎所有种类的机械与电气系统。
+
+### 搞啥？？？
+
+西门子和modbus协议，当然其他的你们有兴趣也可以搞
+
+### s7协议
+
+西门子PLC使用私有协议进行通信，它是利用TPKT和ISO8073的二进制协议。西门子的PLC通信端口均为102端口,。西门子PLC协议有3个版本，S7Comm协议，早期S7CommPlus协议和最新的S7CommPlus协议。
+
+S7-200、S7-300、S7-400系列的PLC采用早期的西门子私有协议S7comm进行通信。该协议不像S7Comm-Plus那样具有加密功能，不涉及任何反重放攻击机制，可以被攻击者轻易利用
+
+<https://www.freebuf.com/articles/ics-articles/230676.html>  
+
+### modbus
+
+Modbus 是一种与其 一起使用的数据通信协议 **可编程逻辑控制器** (PLC) 。 Modbus
+已成为事实上的标准通信协议，现在是连接工业电子设备的常用方法。
+
+Modbus 协议使用字符串行通信线路、以太网或 Internet 协议套件作为传输层。
+
+Modbus 通常用于将工厂/系统监控计算机与 连接起来 **远程终端单元** (RTU) **和数据采集** 在电力行业的监控 (SCADA) 系统中，
+。 许多数据类型从工厂设备的工业控制中命名，例如梯形逻辑，因为它用于驱动继电器：单个物理输出称为线圈，单个物理输入称为离散输入或触点
+
+### 系统要求？？？
+
+kali{andrax}https://www.freebuf.com/sectool/283603.html，blackarch，ics windows
+
+![](https://image.3001.net/images/20220506/1651841098_6275184a580ca6606981a.png!small)![](https://image.3001.net/images/20220506/1651841105_62751851f2ff935eda8ad.png!small)![](https://image.3001.net/images/20220506/1651841117_6275185dc33838b3ff09f.png!small)
+
+![](https://image.3001.net/images/20220506/1651841126_6275186601aaa0486f7c7.png!small)ics
+Windows，我好久之前搞的。
+
+## modbus协议入侵
+
+这里，我们首先用shodan找到相关modbus协议的ip，具体怎么找我下面有，然后用nmap扫描指定端口，502，nmap显示mbap，说明这是modbus，ok，next
+
+![](https://image.3001.net/images/20220506/1651841366_627519569fc3014ca9d00.png!small)
+
+  
+
+modscan -d ip，为了消除误报，我们将使用 modscan 来获取更多信息
+
+![](https://image.3001.net/images/20220506/1651841405_6275197d954606c6eb6fa.png!small)
+
+  
+
+mbtget 来读取寄存器中的值，-n 4,我们有4个寄存器
+
+![](https://image.3001.net/images/20220506/1651841416_62751988486e614fc3414.png!small)
+
+  
+
+然后，我们来尝试一下改寄存器！！来一个while循环，-a 0是第一个寄存器，-w6 后面接着你要写入的数值
+
+![](https://image.3001.net/images/20220506/1651841431_6275199742ebe08b91524.png!small)
+
+回车，run，开始写入
+
+![](https://image.3001.net/images/20220506/1651841446_627519a62a8525bf70b91.png!small)
+
+look，第一个寄存器变了
+
+![](https://image.3001.net/images/20220506/1651841455_627519afae7de7c8765f8.png!small)
+
+  
+
+接下来，我们把第二个寄存器数值改成520，freebuf我爱你。。。  
+* * * *   
+* * * *   
+* ★ * ★ *   
+* ★ *   
+>>>\------I love you! ---->  
+* *   
+* ★ *   
+* *   
+* *   
+*
+
+回车！
+
+![](https://image.3001.net/images/20220506/1651841484_627519cc45a2690a41acb.png!small)
+
+第二个寄存器数值变成了520，当然，这个数值可能是电机转速。
+
+![](https://image.3001.net/images/20220506/1651841492_627519d4be092da69e068.png!small)
+
+## 攻击西门子s7系列
+
+### 理论：
+
+S7攻击利用
+
+重放攻击：
+
+重放攻击（Replay
+Attacks）又称重播攻击、回放攻击，是指攻击者发送一个目的主机已接收过的包，来达到欺骗系统的目的，主要用于身份认证过程，破坏认证的正确性。
+
+工控系统中的重放攻击，就是把上位机软件编译好的程序重新下装到PLC机器当中。而我们需要抓包截取的就是从开始连接到结束连接这一段的数据包，进行重新发送。
+
+重放攻击网上大家讲的比较详细和全面，这里我就不再累述了，例如这位工控大佬的<https://www.freebuf.com/articles/ics-articles/220239.html>，我主要讲一下工控系列的中间人攻击。
+
+中间人攻击：
+
+中间人攻击（Man-in-the-Middle
+Attack，简称“MITM攻击”）是一种间接的入侵攻击，这种攻击模式是通过各种技术手段将受入侵者控制的一台计算机虚拟放置在网络连接中的两台通信计算机之间，这台计算机就称为“中间人”。
+
+中间人攻击中有两个受害者，中间人对他俩实施攻击，攻击结果是A和B的传输内容，它们都需要经过中间人，但是两人（A和B）却不知道。聊天内容被中间人截获，如果截获信息有用户名和密码，危害就会更大，而且中间人攻击不会损害A和B的通讯。
+
+<https://www.freebuf.com/articles/ics-articles/230676.html>  
+
+### 实战吧！
+
+开源工控安全研究框架 ISF
+
+ISF是作者之前从事工业控制设备漏洞挖掘工作时积累的工控协议和POC代码等内容进行整合后的产物，后来将其中的一部分内容进行了开源，项目的地址是https://github.com/dark-lbp/isf，基于rsf。
+
+下面来演示一下对s7200/300的攻击。S7Comm协议主要用于S7-200，S7-300和S7-400
+PLC之间的通信，由于该协议未对操作进行校验，且未针对反重放攻击设置有效的保护的机制，因此攻击者通过伪造协议即可执行命令，isf中可以直接对其下达运行停止命令
+
+等等，说道着我还突然想起了之前有个未授权访问的漏洞，呆会讲
+
+![](https://image.3001.net/images/20220506/1651848236_6275342cd68655d8f9203.png!small)
+
+![](https://image.3001.net/images/20220506/1651848215_62753417dc57c9b2a537c.png!small)直接让其停止。
+
+isf还有好多功能，就不一一介绍了，还可以暴力破解哦https://cloud.tencent.com/developer/news/297902
+
+  
+
+## 未授权访问？？？？？？？？？
+
+<https://203.220.175.144/Portal/Portal.mwsl?PriNav=Start>  
+
+![1651848657_627535d11e6fde1def0c5.png!small?1651848649505](https://image.3001.net/images/20220506/1651848657_627535d11e6fde1def0c5.png!small?1651848649505)
+
+。。。。。。。。。。。。。。。。。。没啥好说。。。。。。。
+
+## plcscan工具
+
+![](https://image.3001.net/images/20220506/1651838682_62750edaca8e09e8795ed.png!small)
+
+西门子PLC
+
+  
+
+    
+    
+    127.0.0.1:102 S7comm (src_tsap=0x100, dst_tsap=0x102)
+       Module                   : 6ES7 151-8AB01-0AB0  v.0.2    	(36455337203135312d38414230312d304142302000c000020001)
+       Basic Hardware           : 6ES7 151-8AB01-0AB0  v.0.2    	(36455337203135312d38414230312d304142302000c000020001)
+       Basic Firmware           :                      v.3.2.6  	(202020202020202020202020202020202020202000c056030206)
+       Unknown (129)            : Boot Loader           A       	(426f6f74204c6f61646572202020202020202020000041200909)
+       Name of the PLC          : SIMATIC 300(xxxxxxxxx)        	(53494d4154494320333030280000000000000000002900000000000000000000)
+       Name of the module       : IM151-8 PN/DP CPU             	(494d3135312d3820504e2f445020435055000000000000000000000000000000)
+       Plant identification     :                               	(0000000000000000000000000000000000000000000000000000000000000000)
+       Copyright                : Original Siemens Equipment    	(4f726967696e616c205369656d656e732045717569706d656e74000000000000)
+       Serial number of module  : S C-BOUVxxxxxxxx              	(5320432d424f5556xxxxxxxxxx00000000000000000000000000000000000000)
+       Module type name         : IM151-8 PN/DP CPU             	(494d3135312d3820504e2f445020435055000000000000000000000000000000)
+    
+
+Modbus 设备
+
+  
+
+    
+    
+    127.0.0.1:502 Modbus/TCP
+       Unit ID: 0
+         Response error: ILLEGAL FUNCTION
+         Device info error: ILLEGAL FUNCTION
+       Unit ID: 255
+         Response error: GATEWAY TARGET DEVICE FAILED TO RESPOND
+         Device: Lantronix I WiPo V3.2.25`
+    
+
+<https://github.com/meeas/plcscan>  
+
+## smod
+
+### 这是啥
+
+Smod是一个模块化的Modbus渗透测试框架，可以用来测试Modbus协议所需的各种诊断和攻击功能。这是一个使用Python和Scapy的完整的Modbus协议实现。这个软件可以在python
+2.7.x下的Linux / OSX上运行。  
+近年来，Summery SCADA（过程控制网络）系统已经从专有封闭网络转向开源解决方案和支持TCP /
+IP的网络。这使他们容易受到我们传统计算机网络面临的相同安全漏洞的影响。由于Modbus/TCP协议简单且容易实现，而且广泛应用于电力、水力等工业系统。所以Smod框架均使用Modbus/TCP协议。而且Smod框架可以用来评估一个Modbus协议系统的漏洞  
+![](https://image.3001.net/images/20220507/1651896703_6275f17f361d910a93527.png!small)这里我直接在andrax里面跑的。blackarch里面也是有的，随意哈
+
+###
+![](https://image.3001.net/images/20220507/1651896815_6275f1ef9c9fe161b02ca.png!small)看一下模块哈
+
+功能：
+
+1、暴力破解PLC的UID  
+2、网络嗅探进行ARP地址欺骗  
+3、枚举Modbus PLC的功能  
+4、模糊读写单一或多个线圈功能  
+5、模糊读写单一或多个输入寄存器功能  
+6、测试读写单一或多个保持寄存器功能  
+7、测试单个PLC 所有功能  
+8、对单个或多个线圈写值进行Dos攻击  
+9、对单个或多个寄存器写值进行Dos攻击  
+10、对ARP地址欺骗进行Dos攻击
+
+### 暴力破解PLC的UID
+
+我们先使用/modbus/scanner/uid这个模块，然后set rhosts ，exploit，对uid进行破解
+
+![1651897011_6275f2b30a7fd420b09eb.png!small?1651897011438](https://image.3001.net/images/20220507/1651897011_6275f2b30a7fd420b09eb.png!small?1651897011438)
+
+### PLC功能枚举
+
+modbus/scanner/getfunc，set rhost和uid，exploit，然后打开百度翻译。。
+
+![](https://image.3001.net/images/20220507/1651897413_6275f445e1f69d5ecad79.png!small)![1651897509_6275f4a56a169392e01e1.png!small?1651897509561](https://image.3001.net/images/20220507/1651897509_6275f4a56a169392e01e1.png!small?1651897509561)
+
+[+] 支持功能代码 1（读取线圈）。[+] 支持功能代码 2（读取离散输入）。[+] 支持功能代码3（读取多个保持寄存器）。[+] 支持功能代码
+4（读取输入寄存器）。[+] 支持功能代码 5（写入单线圈）。[+] 支持功能代码 6（写入单个保持寄存器）。
+
+### 选择读取线圈
+
+我这个汗比，又忘记输uid了，k。我们先选择读取线圈看一下是否成功（/modbus/function/readCoils）,发现读取成功了Coils给了回应
+
+###
+![](https://image.3001.net/images/20220507/1651897336_6275f3f8a15300b5cd412.png!small)对保持寄存器进行读取
+
+modbus/function/readHoldingRegister，Quantity：0x0010（为读取寄存器连续个数，默认为10个，对应组态软件的通道数量，这里我们读取16个，所以换成16进制是0010）  
+StartAddr：0x0064（为寄存器起始地址，默认从0开始，这里我们从100开始，所以换成16进制是0064）  
+UID：1
+
+![1651897699_6275f5635d709a9b2026e.png!small?1651897699319](https://image.3001.net/images/20220507/1651897699_6275f5635d709a9b2026e.png!small?1651897699319)
+
+###
+![](https://image.3001.net/images/20220507/1651897853_6275f5fd870aba9de67e3.png!small)dos攻击！
+
+modbus/dos/writeAllCoils DOS 与写入所有线圈
+
+modbus/dos/writeAllRegister DOS 带写入所有寄存器功能
+
+modbus/dos/writeSingleCoils DOS 带写单线圈功能
+
+modbus/dos/writeSingleRegister DOS写单寄存器功能
+
+![](https://image.3001.net/images/20220507/1651898040_6275f6b8862d49accfc5c.png!small)ddos。我最爱的ddos！！！！！！！！！！！！！！！！！！！！！
+
+## 如何通过shoadn查找工业控制系统，嘿嘿
+
+Find Industrial Control Systems
+
+https://www.shodan.io/explore/category/industrial-control-systems
+
+> `# XZERES Wind Turbine $ shodan search 'title:"xzeres wind"' # PIPS
+> Automated License Plate Reader $ shodan search 'html:"PIPS Technology ALPR
+> Processors"' # Modbus $ shodan search 'port:502' # Niagara Fox $ shodan
+> search 'port:1911,4911 product:Niagara' # GE-SRTP $ shodan search
+> 'port:18245,18246 product:"general electric"' # MELSEC-Q $ shodan search
+> 'port:5006,5007 product:mitsubishi' # CODESYS $ shodan search 'port:2455
+> operating system' # S7 $ shodan search 'port:102' # BACnet $ shodan search
+> 'port:47808' # HART-IP $ shodan search 'port:5094 hart-ip' # Omron FINS $
+> shodan search 'port:9600 response code' # IEC 60870-5-104 $ shodan search
+> 'port:2404 asdu address' # DNP3 $ shodan search 'port:20000 source address'
+> # EtherNet/IP $ shodan search 'port:44818' # PCWorx $ shodan search
+> 'port:1962 PLC' # Crimson v3.0 $ shodan search 'port:789 product:"Red Lion
+> Controls"' # ProConOS $ shodan search 'port:20547 PLC'```
+
+## 总结一下叭
+
+工控ics，涉及的东西非常多，我也只是分享了最近的学的东西，可能有点菜，不过如果各位遇到什么问题可以评论区下面找我，我会一一解答，拜拜。
+
+![](https://image.3001.net/images/20220507/1651898510_6275f88e75119454e5c6f.jpg!small)
+

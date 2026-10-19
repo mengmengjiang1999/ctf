@@ -1,0 +1,347 @@
+***本文作者：Macr0phag3，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+
+## 前言
+
+ **想必熟悉 kali 或者接触过 smtp 相关分析的人都听说过 Swaks 这个工具。它号称 SMTP
+界的瑞士军刀。工具会使固然厉害，但是不知道原理总觉得缺了点什么。于是我就用 Python
+自己写了一个类似的工具，加上了邮件炸弹的功能，顺带分析一波原理。**
+
+## SMTP 协议
+
+SMTP 协议即简单邮件传输协议，属于 TCP/IP 协议簇，它是一组用于由源地址到目的地址传送邮件的规则，由它来控制信件的中转方式。SMTP
+服务器则是遵循 SMTP 协议的发送邮件服务器，用来发送或中转发出的电子邮件。
+
+SMTP 模型如下：
+
+![SMTP
+模型](https://image.3001.net/images/20180914/1536920596_5b9b8c14db7fd.png!small)
+
+简单的通信过程如下（以 163 邮箱为例；以下返回均为正常情况）：
+
+第一步是请求建立连接：
+
+telnet：`telnet 163mx03.mxmail.netease.com 25`
+
+返回：`220 163.com Anti-spam GT for Coremail System (163com[20141201])`
+
+第二步是打开传输通道：
+
+发送：`HELO <domain> <CRLF> `或 `EHLO <domain/address-literal> <CRLF>`。有什么区别呢？EHLO
+更新一些，会返回 smtp 服务器支持的命令，相对比 HELO 要有用，所以基本用的都是 EHLO。HELO / EHLO
+命令用于主机介绍它自己，可以被翻译为 Hello, I am <domain>.
+
+返回：`250 OK` 或：
+
+    
+    
+    250-mail
+    250-PIPELINING
+    250-AUTH LOGIN PLAIN
+    250-AUTH=LOGIN PLAIN
+    250-coremail 1Uxr2xKj7kG0xkI17xGrU7I0s8FY2U3Uj8Cz28x1UUUUU7Ic2I0Y2Urz44XGUCa0xDrUUUUj
+    250-STARTTLS
+    250-SIZE 73400320
+    250 8BITMIME
+
+可以看到，EHLO 返回信息更加详细。
+
+第三步是 MAIL 命令：
+
+发送：`MAIL FROM:<发送者邮箱> <CRLF>`
+
+返回：`250 Mail OK`
+
+第四步是 RCPT 命令：
+
+发送：`RCPT TO:<接受者邮箱>`
+
+返回：`250 Mail OK`
+
+第五步是 DATA 命令：
+
+发送：`DATA <CRLF>`
+
+返回：`354 End data with <CR><LF>.<CR><LF>`
+
+然后就可以输入邮件内容了，包括主题，邮件正文等等。
+
+第五步结束后，服务端会返回邮件发送成功与否的情况：
+
+返回：`<= 250 Mail OK queued as mx13,P8CowAB3KDAxa5tbCxAiEg--.29768S2 1536912177`
+
+这样，一封简单的邮件就发出去了。当然，邮件服务器在这个过程中会做各种判断，以免轻易接受垃圾邮件。
+
+完整的演示如下：
+
+    
+    
+    <= 220 163.com Anti-spam GT for Coremail System (163com[20141201])
+    => ehlo antispam
+    <= 250-mail
+    <= 250-PIPELINING
+    <= 250-AUTH LOGIN PLAIN
+    <= 250-AUTH=LOGIN PLAIN
+    <= 250-coremail 1Uxr2xKj7kG0xkI17xGrU7I0s8FY2U3Uj8Cz28x1UUUUU7Ic2I0Y2UFQXaMIUCa0xDrUUUUj
+    <= 250-STARTTLS
+    <= 250-SIZE 73400320
+    <= 250 8BITMIME
+    => mail from:<hr@huawei.com>
+    <= 250 Mail OK
+    => rcpt to:<手动打码@163.com>
+    <= 250 Mail OK
+    => data
+    <= 354 End data with <CR><LF>.<CR><LF>
+    => to: 手动打码@163.com
+    => from: hr@huawei.com
+    => subject: 这是一封垃圾邮件
+    =>
+    => DKIM？听上去很好吃
+    => SPF 不是防晒系数吗
+    => 我觉得 SMTP 很安全啊
+    => 我们不存在垃圾邮件，那些都是正常的邮件
+    => 邮件炸弹也是不存在的
+    => .
+    <= 250 Mail OK queued as mx3,NcCowADX4z1_bJtbcsNOQw--.37583S2 1536912511
+
+邮箱结果：
+
+![邮箱结果](https://image.3001.net/images/20180914/1536920614_5b9b8c26a2753.png!small)
+
+那么，说了这么多 Telnet 发邮件，和正常发邮件的的方式很不一样。我们都是通过 web 界面或者 GUI 发的，如下：
+
+![通过 web 界面或者 GUI
+发的](https://image.3001.net/images/20180914/1536920630_5b9b8c36efd6c.png!small)
+
+而我们使用 Telnet 直接发邮件，实际上是在模拟第二个 Send。
+
+说清楚 SMTP 了，接下来说伪造邮件发件人。
+
+## 伪造邮件发件人
+
+回顾之前的 Telnet 发邮件的过程，我们可以看到，我们使用 mail from: 声称自己是 hr@huawei.com，而且 SMTP
+协议本身也不要求对此声明做认证，所以伪造就是这样达成的。那么，经过这么多年的发展，厂商有对此做出了什么努力来解决这一问题呢？
+
+### SPF：发送方策略框架
+
+SPF 是为了防范垃圾邮件而提出来的一种 DNS 记录类型，它是一种 TXT 类型的记录，它用于登记某个域名拥有的用来外发邮件的所有 IP
+地址。发送人向接收方发送一封电子邮件后，邮件接收服务器接收电子邮件并执行如下操作：
+
+> 检查哪一个域声称发送了该邮件并检查该域的 SPF 记录的 DNS。
+
+> 确定发送服务器的 IP 地址是否与 SPF 记录中的某个已发布 IP 地址相匹配。
+
+> 对电子邮件进行打分：如果 IP 地址匹配，则邮件通过身份验证并获得一个正分。如果 IP
+> 地址不匹配，则邮件无法通过身份验证并获得一个负分。然后，对现有的防垃圾邮件筛选策略和启发式筛选应用这些结果。或者直接拒绝接受，返回 550
+> MI:SPF。
+
+我们查一下 163 的 SPF 记录：
+
+    
+    
+    > nslookup -q=TXT 163.com
+    Server:        202.117.112.3
+    Address:    202.117.112.3#53
+    
+    Non-authoritative answer:
+    163.com    text = "v=spf1 include:spf.163.com -all"
+    
+    Authoritative answers can be found from:
+    163.com    nameserver = ns5.nease.net.
+    163.com    nameserver = ns3.nease.net.
+    163.com    nameserver = ns6.nease.net.
+    163.com    nameserver = ns1.nease.net.
+    163.com    nameserver = ns4.nease.net.
+    163.com    nameserver = ns8.166.com.
+    163.com    nameserver = ns2.166.com.
+    ns1.nease.net    internet address = 123.58.173.177
+    ns3.nease.net    internet address = 220.181.36.234
+    ns4.nease.net    internet address = 123.125.48.245
+    ns5.nease.net    internet address = 121.195.179.18
+    ns6.nease.net    internet address = 52.215.24.44
+
+`v=spf1 include:spf.163.com -all`是什么意思呢？
+
+SPF 记录包含在一个 TXT 记录之中，格式如下：
+
+    
+    
+    v=spf1 [[pre] type [ext] ] ... [mod]
+
+1、v=spf1：SPF 的版本。如果使用 Sender ID 的话，这个字段就应该是 v=spf2
+
+2、pre：定义匹配时的返回值。可能的返回值包括：
+
+> +: 缺省值。在测试完成的时候表示通过。
+
+> -: 表示测试失败。这个值通常是 -all，表示没有其他任何匹配发生。
+
+> ~: 表示软失败，通常表示测试没有完成。
+
+> ?: 表示不置可否。这个值也通常在测试没有完成的时候使用。
+
+3、type：定义使用的确认测试的类型：
+
+> include：包含一个给定的域名的测试。以 include:domain 的形式书写。
+
+> all：终止测试序列。比如，如果选项是
+> -all，那么到达这条记录也就意味着测试失败了。但是如果无法确定，可以使用"?all"来表示，这样，测试将被接受。
+
+> ip4：使用 IPv4 进行验证。这个可以以 ip4:ipv4 或 ip4:ipv4/cidr 的形式使用。
+
+4、ext：定义对 type 的可选扩展。如果没有这个字段，那么仅使用单个记录进行问询。
+
+5、mod：这是最后的类型指示，作为记录的一个修正值。
+
+测试后有以下结果：
+
+> 通过；SPF记录指定要允许发送的主机；接受
+>
+> 硬失败；SPF记录已将主机指定为不允许发送；拒绝
+>
+> 软失败；SPF记录已将主机指定为不被允许发送但正在转换；接受但标记
+>
+> 中性；SPF记录明确指出，对有效性无关；接受
+>
+> 没有；该域没有SPF记录，或者SPF记录不对结果进行评估；接受
+
+所以，当我们声称 hr@qq.com 向 163 发送邮件的时候，163 会不予接受（因为 qq 是有 spf 记录的）：
+
+    
+    
+    <= 220 163.com Anti-spam GT for Coremail System (163com[20141201])
+    => ehlo antispam
+    <= 250-mail
+    <= 250-PIPELINING
+    <= 250-AUTH LOGIN PLAIN
+    <= 250-AUTH=LOGIN PLAIN
+    <= 250-coremail 1Uxr2xKj7kG0xkI17xGrU7I0s8FY2U3Uj8Cz28x1UUUUU7Ic2I0Y2UFsDjanUCa0xDrUUUUj
+    <= 250-STARTTLS
+    <= 250-SIZE 73400320
+    <= 250 8BITMIME
+    => mail from:<hr@qq.com>
+    <= 550 MI:SPF 163 mx45,X8CowEB5qUXsdZtbeT4JTQ--.35331S2 1536914924 http://mail.163.com/help/help_spam_16.htm?ip=手动打码&hostid=mx45&time=1536914924
+
+### DKIM 与 DMARC
+
+DKIM 是一种防范电子邮件欺诈的验证技术，通过消息加密认证的方式对邮件发送域名进行验证。
+
+DMARC
+是一种基于现有的SPF和DKIM协议的可扩展电子邮件认证协议，在邮件收发双方建立了邮件反馈机制，便于邮件发送方和邮件接收方共同对域名的管理进行完善和监督。
+
+感兴趣的话可以自行查阅资料。
+
+### 漏网之鱼
+
+又说了那么多，那么是否有了 SPF 可以一劳永逸呢？其实并不是。拿 163 与 qq 举例，查到发送方的 spf
+记录，并且是标记的是硬失败，当然是最好的，直接进行判断。但是如果发送方用的是软失败甚至没有 spf 记录呢？比如 huawei.com 就是软失败：
+
+    
+    
+    huawei.com text = "v=spf1 ip4:45.249.212.32 ip4:45.249.212.35 ip4:119.145.14.93 ip4:58.251.152.93 ip4:194.213.3.17 ip4:206.16.17.72 ip4:45.249.212.255 ip4:45.249.212.187/29 ip4:45.249.212.191 ip4:185.176.76.210 ~all"
+
+如果出现这样的情况，就得看厂商怎么做了，一般来说都是放行。
+
+## 邮件炸弹
+
+说完了伪造发件人，再来说说邮件炸弹。
+
+电子邮件炸弹是最古老的匿名攻击之一，通过设置一台机器不断的大量的向同一地址发送电子邮件，攻击者能够耗尽接受者网络的宽带。由于这种攻击方式简单易用，也有很多发匿名邮件的工具，而且只要对方获悉你的电子邮件地址就可以进行攻击，所以这是大家最值得防范的一个攻击手段。
+
+既然能伪造发件人，那么发送邮件炸弹看上去也不难。事实上的确如此。另外，由于大量的请求以及链接，会触发接收方各种抵制。接下来通过邮件炸弹的三种不同的方式谈谈。
+
+### 单线程
+
+单线程，发就好了，拿起死循环就是干：`while 1: xxxx`
+
+### 多线程：短连接
+
+短连接就是我们最容易想到的，多线程，每个线程发起一次链接请求，发完一封就停止。线程数少点还好，一多就疯狂提示：421 Too many
+connections。在 ehlo antispam 的时候就被干掉了。实测大多数情况，100 线程发 能成功 20
+封就已经很好了。而且发完一封就释放链接，蛮浪费的。而且在 smtp 服务器对频繁的连接请求很敏感的时候， ip 容易被 ban（如 qq）。
+
+### 多线程：长连接
+
+长连接：设定好线程数后，一旦 ehlo antispam 成功，就不停地重复 mail from 到 data，邮件发送成功后也不释放链接，一直发。若接收方
+smtp 服务器强制释放此链接，则重新 ehlo antispam。这样的话，如果不手动停止，就会一直尝试链接、发邮件。轰炸效率 plus。
+
+### email_hack
+
+根据上述的原理以及想法，我自己写了一个命令行的工具：email_hack
+
+    
+    
+    usage: email_hack.py [-h] -faddr FROM_ADDRESS -taddr TO_ADDRESS
+                         [-tnum THREADS_NUM] [-v VERBOSE] [-c CRAZY_MODE]
+    
+    optional arguments:
+      -h, --help            show this help message and exit
+      -faddr FROM_ADDRESS, --from_address FROM_ADDRESS
+                            fake from address
+      -taddr TO_ADDRESS, --to_address TO_ADDRESS
+                            the address you want to delivery
+      -tnum THREADS_NUM, --threads_num THREADS_NUM
+                            how many threads you want
+      -v VERBOSE, --verbose VERBOSE
+                            verbose level
+      -c CRAZY_MODE, --crazy_mode CRAZY_MODE
+                            Keep sending fake email (** Use with caution **)
+
+详细内容可以到 gayhub 看看：<https://github.com/Macr0phag3/email_hack>。
+
+ **伪造邮件效果：**
+
+163：
+
+![163邮箱](https://image.3001.net/images/20180914/1536920720_5b9b8c90bb57d.png!small)
+
+qq：
+
+![QQ邮箱](https://image.3001.net/images/20180917/1537184300_5b9f922c878c9.png!small)
+
+ **邮件炸弹效果：**
+
+![邮件炸弹效果](https://image.3001.net/images/20180914/1536920662_5b9b8c5616d0a.png!small)
+
+![邮件炸弹效果](https://image.3001.net/images/20180914/1536920678_5b9b8c660d5b2.png!small)
+
+## 防御方法
+
+### 伪造邮件发件人
+
+厂商：对 spf 记录采用 硬失败 的标记。且验证时预到软失败标记的时候，尽可能拒绝。有可能的话， 上DKIM 与 DMARC
+
+用户：对于很重要的邮件信息，不妨查看一下邮件原文。
+
+![](https://image.3001.net/images/20180917/1537184545_5b9f9321c34d3.png!small)
+
+![查看一下邮件原文](https://image.3001.net/images/20180917/1537184759_5b9f93f786f5b.png!small)
+
+若只有 一个 Received ，且列出的 IP 与宣称的地址不一致，则就是伪造的。虽然 Received 头可以伪造，但是新的 Received
+头会添加在消息的头部，所以，如果存在伪造的 Received，那么它总是在后面。
+
+若有多个 Received，第一个 Received 中 是正规的（网易、腾讯等等） SMTP 服务器
+转发过的，那么肯定是经过验证的合法用户才能转发过来，因为这些厂商都不会开匿名转发，此时只需要看 IP 与宣称身份是否一致，一致就 OK。若看着就
+不正规，则就要小心一些了。
+
+举2个例子：
+
+未被伪造：
+
+![未被伪造](https://image.3001.net/images/20180917/1537186883_5b9f9c43d8a0b.png!small)
+
+![未被伪造](https://image.3001.net/images/20180917/1537187010_5b9f9cc23e20d.png!small)
+
+伪造：
+
+![伪造](https://image.3001.net/images/20180917/1537187530_5b9f9eca3bed6.png!small)
+
+![伪造](https://image.3001.net/images/20180917/1537187456_5b9f9e8022bdb.png!small)
+
+### 邮件炸弹
+
+对大量并发的连接请求，不但要拒绝，而且要禁止其 IP 一段时间。经过测试，qq 在大量请求后会进行封禁，163只是拒绝连接，返回类似
+“请15分钟后再试”，其实还是可以接着发起连接请求的...
+╮(╯▽╰)╭。最后，在邮件多次发送失败的时候，直接断开连接，不要保留通道，强制发送端重新发起连接请求。
+
+ ***本文作者：Macr0phag3，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+

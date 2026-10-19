@@ -1,0 +1,211 @@
+## 一、漏洞介绍
+
+ **2020年3月10日，微软在其官方SRC发布了CVE-2020-0796的安全公告（ADV200005，MicrosoftGuidance for
+Disabling SMBv3 Compression）,公告表示在Windows
+SMBv3版本的客户端和服务端存在远程代码执行漏洞。同时指出该漏洞存在于MicroSoft Server Message Block
+3.1.1协议处理特定请求包的功能中，攻击者利用该漏洞可在目标SMB Server或者Client中执行任意代码。**
+
+启明星辰ADLab安全研究人员在对该漏洞进行研究的过程中发现目前流传的一些漏洞分析存在某些问题，因此对该漏洞进行了深入的分析，并在Windows
+10系统上进行了复现。
+
+## 二、漏洞复现
+
+采用Windows 10 1903版本进行复现。在漏洞利用后，验证程序提权结束后创建了一个system权限的cmd shell，如图1所示。
+
+![](https://image.3001.net/images/20200410/1586503248_5e901e5064c20.png!small)
+
+图1 CVE-2020-0796本地提权
+
+## 三、漏洞基本原理
+
+CVE-2020-0796漏洞存在于受影响版本的Windows驱动srv2.sys中。Windows SMB v3.1.1
+版本增加了对压缩数据的支持。图2所示为带压缩数据的SMB数据报文的构成。
+
+![](https://image.3001.net/images/20200410/1586503313_5e901e91c191a.png!small)
+
+图2 带压缩数据的SMB数据报文结构
+
+根据微软MS-SMB2协议文档，SMBCompression Transform Header的结构如图3所示。
+
+> ProtocolId：4字节，固定为0x424D53FC
+>
+> OriginalComressedSegmentSize：4字节，原始的未压缩数据大小
+>
+> CompressionAlgorithm：2字节，压缩算法
+>
+> Flags：2字节，详见协议文档
+>
+> Offset/Length：根据Flags的取值为Offset或者Length，Offset表示数据包中压缩数据相对于当前结构的偏移
+
+![](https://image.3001.net/images/20200410/1586503391_5e901edf770db.png!small)
+
+图3 SMB Compression Transform Header数据结构
+
+srv2.sys中处理SMBv3压缩数据包的解压函数Srv2DecompressData未严格校验数据包中OriginalCompressedSegmentSize和Offset/Length字段的合法性。而这两个字段影响了Srv2DecompressData中内存分配函数SrvNetAllocateBuffer的参数。如图4所示的Srv2DecompressData函数反编译代码，SrvNetAllocateBuffer实际的参数为OriginalCompressedSegmentSize+Offset。这两个参数都直接来源于数据包中SMB
+Compression Transform Header中的字段，而函数并未判断这两个字段是否合法，就直接将其相加后作为内存分配的参数(unsigned
+int类型）。
+
+![](https://image.3001.net/images/20200410/1586503455_5e901f1f57df7.png!small)
+
+图4 Srv2DecompressData函数的关键代码
+
+这里，OriginalCompressedSegmentSize+Offset可能小于实际需要分配的内存大小，从而在后续调用解压函数SmbCompressionDecompress过程中存在越界读取或者写入的风险。
+
+## 四、提权利用过程
+
+目前已公开的针对该漏洞的本地提权利用包含如下的主要过程：
+
+> （1）验证程序首先创建到SMS server的会话连接（记为session）。
+>
+> （2）验证程序获取自身token数据结构中privilege成员在内核中的地址（记tokenAddr）。
+>
+> （3）验证程序通过session发送畸形压缩数据（记为evilData）给SMB
+> server触发漏洞。其中，evilData包含tokenAddr、权限数据、溢出占位数据。
+>
+> （4） SMS server收到evilData后触发漏洞，并修改tokenAddr地址处的权限数据，从而提升验证程序的权限。
+>
+> （5）验证程序获取权限后对winlogon进行控制，来创建system用户shell。
+
+## 五、漏洞内存分配分析
+
+首先，看一下已公开利用的evilData数据包的内容，如图5所示。
+
+![](https://image.3001.net/images/20200410/1586503606_5e901fb6abe13.png!small)
+
+图5 提权poc发送的带压缩数据的SMB数据包
+
+数据包的内容很简单，其中几个关键字段数据如下：
+
+> OriginalSize ：0xffffffff
+>
+> Offset：0x10
+>
+> Real compressed data ：13字节的压缩数据，解压后应为1108字节’A’加8字节的token地址。
+>
+> SMB3 raw data ：实际上是由2个8字节的0x1FF2FFFFBC（总长0x10)加上0x13字节的压缩数据组成
+
+从上面的漏洞原理分析可知，漏洞成因是Srv2DecompressData函数对报文字段缺乏合法性判断造成内存分配不当。在该漏洞数据包中，OriginalSize
+是一个畸形值。OriginalSize+ Offset = 0xffffffff + 0x10 = 0xf
+是一个很小的值，其将会传递给SrvNetAllocateBuffer进行调用，下面具体分析内存分配情况。SrvNetAllocateBuffer的反编译代码如图6。
+
+![](https://image.3001.net/images/20200410/1586503903_5e9020df08fee.png!small)
+
+图6 SrvNetAllocateBuffer内存分配过程
+
+由于传给SrvNetAllocateBuffer的参数为0xf，根据SrvNetAllocateBuffer的处理流程可知，该请求内存将从SrvNetBufferLookasides表中分配。这里需要注意的是，变量SrvDisableNetBufferLookAsideList跟注册表项相关，系统默认状态下SrvDisableNetBufferLookAsideList为0。
+
+![](https://image.3001.net/images/20200410/1586503999_5e90213f2116c.png!small)
+
+图7 SrvDisableNetBufferLookAsideList变量初始化过程
+
+SrvNetBufferLookasides表通过函数SrvNetCreateBuffer初始化，实际SrvNetCreateBuffer循环调用了SrvNetBufferLookasideAllocate分配内存，调用SrvNetBufferLookasideAllocate的参数分别为[‘0x1100’,
+‘0x2100’, ‘0x4100’, ‘0x8100’, ‘0x10100’, ‘0x20100’, ‘0x40100’, ‘0x80100’,
+‘0x100100’]。在这里，内存分配参数为0xf，对应的lookaside表为0x1100大小的表项。
+
+![](https://image.3001.net/images/20200410/1586504171_5e9021eb852d8.png!small)
+
+图8 SrvNetCreateBuffer反编译代码
+
+SrvNetBufferLookasideAllocate函数实际是调用SrvNetAllocateBufferFromPool来分配内存，如图9所示。
+
+![](https://image.3001.net/images/20200410/1586508627_5e9033539933b.png!small)
+
+图9 SrvNetBufferLookasideAllocate反编译代码
+
+在函数SrvNetAllocateBufferFromPool中，对于用户请求的内存分配大小，内部通过ExAllocatePoolWithTag函数分配的内存实际要大于请求值（多出部分用于存储部分内存相关数据结构）。以请求分配0x1100大小为例，经过一系列判断后，最后分配的内存大小allocate_size=
+0x1100 + E8 + 2*(MmSizeOfMdl + 8)。
+
+![](https://image.3001.net/images/20200410/1586508655_5e90336f371b8.png!small)
+
+图10 SrvNetAllocateBufferFromPool函数部分反编译代码
+
+内存分配完毕之后，SrvNetAllocateBufferFromPool函数还对分配的内存进行了一系列初始化操作，最后返回了一个内存信息结构体指针作为函数的返回值。
+
+![](https://image.3001.net/images/20200410/1586508689_5e90339179adf.png!small)
+
+图11 SrvNetAllocateBufferFromPool初始化内存数据
+
+这里需要注意如下的数据关系：SrvNetAllocateBufferFromPool函数返回值return_buffer指向一个内存数据结构，该内存数据结构起始地址同实际分配内存（函数ExAllocatePoolWithTag分配的内存）起始地址的的偏移为0x1150；return_buffer+0x18位置指向了实际分配内存起始地址偏移0x50位置处，而最终return_buffer会作为函数SrvNetAllocateBuffer的返回值。其内存布局关系如图12。
+
+![](https://image.3001.net/images/20200410/1586508722_5e9033b246627.png!small)
+
+图12 SrvNetAllocateBuffer（0xf)返回的内存数据布局
+
+## 六、漏洞内存破坏分析
+
+回到漏洞解压函数Srv2DecompressData，在进行内存分配之后，Srv2DecompressData调用函数SmbCompressionDecompress开始解压被压缩的数据。其函数逻辑如图13所示。
+
+![](https://image.3001.net/images/20200410/1586508776_5e9033e89261e.png!small)
+
+图13 Srv2DecompressData解压压缩数据
+
+实际上，该函数调用了Windows库函数RtlDecompressBufferEx2来实现解压，根据RtlDecompressBufferEx2的函数原型来对应分析SmbCompressionDecompress函数的各个参数。
+
+> SmbCompressionDecompress(CompressAlgo，//压缩算法
+>
+> Compressed_buf，//指向数据包中的压缩数据
+>
+> Compressed_size，//数据包中压缩数据大小，计算得到
+>
+> UnCompressedBuf,//解压后的数据存储地址，*(alloc_buffer+0x18)+0x10
+>
+> UnCompressedSize,//压缩数据原始大小,源于数据包OriginalCompressedSegmentSize
+>
+> FinalUnCompressedSize)//最终解压后数据大小
+
+从反编译代码可以看出，函数SmbCompressionDecompress中保存解压后数据的地址为*(alloc_buffer+0x18)+0x10的位置，根据内存分配过程分析，alloc_buffer
++ 0x18指向了实际内存分配起始位置偏移0x50处，所以拷贝目的地址为实际内存分配起始地址偏移0x60位置处。
+
+在解压过程中，压缩数据解压后将存储到这个地址指向的内存中。根据evilData数据的构造过程，解压后的数据为占坑数据和tokenAddr。拷贝到该处地址后，tokenAddr将覆盖原内存数据结构中alloc_buffer+0x18处的数据。也就是解压缩函数SmbCompressionDecompress返回后，alloc_buffer+0x18将指向验证程序的tokenAddr内核地址。拷贝过程如图14所示：
+
+![](https://image.3001.net/images/20200410/1586508814_5e90340ebe677.png!small)
+
+图14 解压拷贝过程
+
+![](https://image.3001.net/images/20200410/1586509183_5e90357f9f0a2.png!small)
+
+图15 解压完成后内存布局
+
+继续看Srv2DecompressData的后续处理流程，解压成功后，函数判断offset的结果不为0。不为0则进行内存移动，内存拷贝的参数如下：
+
+    
+    
+    memmove(*(alloc_buffer+0x18)，SMB_payload，offset)
+
+此时alloc_buffer+0x18已经指向验证程序的tokenAddr内核地址，而SMB_payload此时指向evilData中的权限数据，offset则为0x10。因此，这个内存移动完成后，权限数据将写入tokenAddr处。这意味着，SMS
+Server成功修改了验证程序的权限，从而实现了验证程序的提权！
+
+还有一个细节需要注意，在解压时，Srv2DecompressData函数会判断实际的解压后数据大小FinalUnCompressedSize是否和数据包中原始数据大小OriginalCompressedSegmentSize一致，如图16所示。
+
+![](https://image.3001.net/images/20200410/1586509228_5e9035ac7a04e.png!small)
+
+图16 Srv2DecompressData检查压缩数据大小
+
+按理来说实际解压后的数据大小为0x1100，不等于数据包中的原始压缩数据大小0xffffffff，这里应该进入到后面内存释放的流程。然而，实际上在函数SmbCompressionDecompress中，调用RtlDecompressBufferEx2成功后会直接将OriginalCompressedSegmentSize赋值给FinalUnCompressedSize。这也是该漏洞关于任意地址写入成功的关键之一。
+
+![](https://image.3001.net/images/20200410/1586509248_5e9035c047c04.png!small)
+
+图17 SmbCompressionDecompres赋值FinalUnCompressedSize
+
+## 七、漏洞修复建议
+
+CVE-2020-0796是内存破坏漏洞，精心利用可导致远程代码执行，同时网络上已经出现该漏洞的本地提权利用代码。在此，建议受影响版本Windows用户及时根据微软官方漏洞防护公告对该漏洞进行防护。
+
+## 八、参考链接
+
+> 1.<https://fortiguard.com/encyclopedia/ips/48773>
+>
+> 2.<https://portal.msrc.microsoft.com/en-US/security-> guidance/advisory/ADV200005>
+>
+> 3.<https://portal.msrc.microsoft.com/en-US/security-> guidance/advisory/CVE-2020-0796>
+>
+> 4.<https://www.catalog.update.microsoft.com/Search.aspx?q=KB4551762>
+>
+> 5.<https://github.com/danigargu/CVE-2020-0796>
+>
+> 6.<https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-> smb2/5606ad47-5ee0-437a-817e-70c366052962>
+>
+> 7.<https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-> ntifs-rtldecompressbufferex2>
+
+ ***本文作者：ADLab，转载请注明来自FreeBuf.COM**
+

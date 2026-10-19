@@ -1,0 +1,269 @@
+**作者：深信服千里目安全实验室  
+原文链接：<https://mp.weixin.qq.com/s/CR6Iy3nTejR9Tfm4QCJxNw>**
+
+## 主要内容
+
+本文总结了SolarWinds供应链攻击的进展情况，主要包括新发现的技术点解读和攻击相关的最新动态。
+
+## 更加详尽的攻击链细节
+
+### 获取初始权限阶段
+
+#### 事件进展
+
+1月7号，美国网络安全与基础设施安全局（CISA）更新了其对SolarWinds供应链攻击事件的调查报告《Advanced Persistent
+Threat Compromise of Government Agencies, Critical Infrastructure, and Private
+Sector
+Organizations》。报告指出，攻击者在对SolarWinds植入SUNBURST后门之前，使用了密码猜测和密码喷洒技术攻陷了其云基础设施。
+
+Volexity 公司透漏了SolarWinds公司Outlook Web App
+(OWA)邮件系统的多因素认证（MFA）被绕过、Exchange服务器被漏洞（CVE-2020-0688）攻陷、特定邮件被窃取的技术细节。因为具有相同的TTP，所以认为与此次供应链攻击是同一组织所为。
+
+#### 技术点分析
+
+##### 密码猜测与密码喷洒
+
+密码猜测（password
+guessing）是一种常见的攻击方式，就是对一个账户的用户名不断地尝试不同的密码，直到猜测成功。攻击者通常会选择系统默认密码、常用弱口令、或者根据目标相关信息生成的密码字典进行密码爆破攻击。密码喷洒（password
+spraying）又称反向密码猜测，他的攻击方式和传统的密码猜测正好相反，密码喷洒是使用同一个密码去猜测不同的用户名，看看是哪个用户使用了这个密码。密码猜测是用户名固定，优先遍历密码；密码喷洒是密码固定，优先爆破用户名。密码喷洒对使用密码错误锁定用户机制的系统更加有效。
+
+下面对OWA进行攻击的测试截图说明密码猜测与密码喷洒的区别。可以看到密码喷洒不会造成用户锁定，因此没有使用设定的时间间隔，爆破速度很快；而密码猜测，在猜测一次密码之后就要等待一个时间间隔（这里设置为一分钟），避免造成账户被锁定。
+
+![image-20210114164312378](https://images.seebug.org/content/images/2021/01/19/1611024706000-image-20210114164312378.png-w331s)
+
+密码猜测
+
+![image-20210114164434650](https://images.seebug.org/content/images/2021/01/19/1611024706000-image-20210114164434650.png-w331s)
+
+密码喷洒
+
+##### OWA Duo MFA绕过
+
+Volexity的调查给出了攻击者绕过Duo MFA保护的OWA服务器的一些技术细节。
+
+从Exchange
+服务器的日志来看，攻击者使用了用户名和密码进行登录，但是没有输入Duo的第二认证因子。从Duo服务器的日志来看，也没有发起需要使用Duo进行二次认证的请求。Volexity
+公司通过OWA服务器导出的内存，可以确定用户的会话并没被劫持，但是攻击者直接使用了合法的Duo MFA的Cookie参数duo-sid。
+
+这是怎么做到的呢？
+
+首先，攻击者在OWA服务器中获得了Duo集成身份认证的秘钥（akey）。然后，攻击者利用这个秘钥构造了一个计算好的Cookie参数duo-sid。最后，攻击者使用用户名和密码进行登录，使用duo-sid来认证Duo MFA的检查，从而实现了最终的成功登录。
+
+攻击者利用的就是MFA本身的机制，并不是一个漏洞，所以没有触发任何安全防护机制。
+
+##### CVE-2020-0688
+
+Microsoft Exchange Control Panel (ECP) Vulnerability
+CVE-2020-0688，是2020年Exchange
+服务器比较严重的一个漏洞，攻击者只要拥有一个用户权限，就可以完全控制Exchange服务器，利用容易、危害严重。下图是本地测试的结果。
+
+![image-20210114173123916](https://images.seebug.org/content/images/2021/01/19/1611024707000-image-20210114173123916.png-w331s)
+
+关于漏洞更多的细节，可以参考文末ZDI的漏洞链接。
+
+##### OWA邮件窃取
+
+Volexity指出，攻击者在控制了Exchange服务器后，又做了很多操作，直到拖走指定用户的邮件。绝大多数操作都是通过PowerShell进行的，下面总结几个比较关键的操作。
+
+    
+    
+    # 获取Exchange 服务器用户名和角色
+    C:\Windows\system32\cmd.exe /C powershell.exe -PSConsoleFile exshell.psc1 -Command “Get-ManagementRoleAssignment -GetEffectiveUsers | select Name,Role,EffectiveUserName,AssignmentMethod,IsValid | ConvertTo-Csv -NoTypeInformation | % {$_ -replace ‘`n’,’_’} | Out-File C:\temp\1.xml”
+    
+    # 查询组织管理成员，sqlceip.exe其实是ADFind.exe
+    C:\Windows\system32\cmd.exe /C sqlceip.exe -default -f (name=”Organization Management”) member -list | sqlceip.exe -f objectcategory=* > .\SettingSync\log2.txt
+    
+    # 窃取指定用户邮件
+    C:\Windows\system32\cmd.exe /C powershell.exe -PSConsoleFile exshell.psc1 -Command “New-MailboxExportRequest -Mailbox foobar@organization.here -ContentFilter {(Received -ge ’03/01/2020′)} -FilePath ‘\\<MAILSERVER>\c$\temp\b.pst'”
+    
+    # 打包成一个加密压缩包
+    C:\Windows\system32\cmd.exe /C .\7z.exe a -mx9 -r0 -p[33_char_password]  “C:\Program Files\Microsoft\Exchange Server\V15\FrontEnd\HttpProxy\owa\auth\Redir.png” C:\Temp\b.pst???
+    
+    # 下载压缩包
+    https://owa.organization.here/owa/auth/Redir.png
+    
+    # 清除痕迹
+    C:\Windows\system32\cmd.exe /C powershell.exe -PSConsoleFile exshell.psc1 -Command “Get-MailboxExportRequest -Mailbox user@organization.here | Remove-MailboxExportRequest -Confirm:$False”
+
+### 后门植入阶段
+
+#### 关于SUNSPOT
+
+##### 事件跟进
+
+FireEye发现的SUNBURST后门的各类行为已经被分析的很清楚了，但是SUNBURST后门是如何被植入的一直是个不解之谜。近日，CrowdStrike和另一个公司，在调查SolarWinds供应链攻击时，
+又有了新发现。他们发现了另一个恶意软件，并命名为SUNSPOT
+。该恶意软件的功能就是修改SolarWinds的Orion产品的构建过程，将正常的代码替换成SUNBURST后门的代码，从而感染了Orion产品，形成了最终的供应链攻击。
+
+关于SUNSPOT的主要特点可以总结为以下几点：
+
+  1. SUNSPOT的目的就是在SolarWinds Orion IT管理产品中，植入SUNBURST后门。
+  2. SUNSPOT实时监控Orion产品的编译程序，在编译Orion产品的过程中会将其中的一个源代码文件替换为SUNBURST后门的代码，致使编译出来的产品都带有后门。
+  3. SUNSPOT具有一些保护机制， 避免由于代码替换引起的编译错误，所以不会被开发人员察觉。
+
+关于SUNBURST后门，我们已经知道是由SUNSPOT这款恶意软件植入的，但是SUNSPOT又是怎么植入的呢，这还需要相关调查小组继续深入跟踪。
+
+##### 技术点分析
+
+根据CrowdStrike的披露，SUNSPOT使用的技术点可以总结为以下的流程：
+
+**初始化和记录日志阶段**
+
+  1. SUNSPOT在磁盘上的文件名为taskhostsvc.exe，被开发人员内部命名为taskhostw.exe。SUNSPOT被加入计划任务，保证其开机自启动，从而实现权限维持。
+
+  2. SUNSPOT执行时，首先会创建名为 `{12d61a41-4b74-7610-a4d8-3028d2f56395}`的互斥体，保证其只有一个运行实例。创建一个加密的日志，路径为`C:\Windows\Temp\vmware-vmdmp.log`，伪装成vmware的日志文件。
+
+  3. 日志使用硬编码秘钥`FC F3 2A 83 E5 F6 D0 24 A6 BF CE 88 30 C2 48 E7`结合RC4算法进行加密，一个解密后日志样例格式如下：
+
+    
+    
+       0.000 START
+       22.781[3148] + 'msbuild.exe' [6252] 181.421[3148] - 0
+       194.343[3148] -       194.343[13760] + 'msbuild.exe' [6252] 322.812[13760] - 0
+       324.250[13760] -       324.250[14696] + 'msbuild.exe' [6252] 351.125[14696] - 0
+       352.031[14176] + 'msbuild.exe' [6252] 369.203[14696] -       375.093[14176] - 0
+       376.343[14176] -       376.343[11864] + 'msbuild.exe' [6252] 426.500[11864] - 0
+       439.953[11864] -       439.953[9204] + 'msbuild.exe' [6252] 485.343[9204] Solution directory: C:\Users\User\Source
+       485.343[ERROR] Step4('C:\Users\User\Source\Src\Lib\SolarWinds.Orion.Core.BusinessLayer\BackgroundInventory\InventoryManager.cs') fails
+
+  1. SUNSPOT之后会获取SeDebugPrivilege特权，方便后续读取其他进程内存。
+
+**劫持软件构建阶段**
+
+  1. 类似SUNBURST后门，SUNSPOT使用自定义的哈希算法处理字符串，寻找MsBuild.exe进程。
+  2. SUNSPOT通过`NtQueryInformationProcess`方法去查询MsBuild.exe进程的PEB，通过`_RTL_USER_PROCESS_PARAMETERS`结构体来获取其参数，通过解析出来的参数确定是否是Orion产品的构建过程。如果是的话么就进行下一步的源代码替换。
+  3. SUNSPOT在MsBuild.exe进程中找到Orion产品解决方案的工程文件路径，仅把其中InventoryManager.cs文件内容替换为SUNUBURST后门的代码。
+  4. SUNSPOT为防止自己的SUNBURST后门代码被修改而导致编译错误，还会对其进行MD5校验，MD5值为5f40b59ee2a9ac94ddb6ab9e3bd776ca。
+  5. SUNSPOT将正常的代码文件保存为InventoryManager.bk，将SUNBUIRST后门代码命名为InventoryManager.tmp，并替换原始的InventoryManager.cs文件。一旦包含后门的Orion产品构建完成，再将InventoryManager.bk恢复到正常的InventoryManager.cs文件中。
+  6. 为了防止代码兼容性导致的代码编译告警信息，攻击者在修改的代码中加入`#pragma warning disable`和`#pragma warning`声明，避免发生告警信息，引起开发人员的注意。
+  7. 在整个过程中，SUNSPOT会检查另一个互斥体{56331e4d-76a3-0390-a7ee-567adf5836b7}，如果存在程序会主动退出，避免对构建过程造成影响。
+
+#### 关于SUNBURST
+
+##### 事件跟进
+
+Securonix Threat Research的最新调研从另一个方面说明了为什么SolarWinds Orion产品中的后门很长时间没有被发现的原因。
+
+在SolarWinds的公告中，建议用户进行以下操作。
+
+![image-20210112164541208](https://images.seebug.org/content/images/2021/01/19/1611024707000-image-20210112164541208.png-w331s)
+
+SUNBURST后门是被SolarWinds文件夹下的Orion文件夹下的SolarWinds.BusinessLayerHost.exe进程加载并执行，但因为SolarWinds
+Orion产品本身就是监控类软件，为了自身更好地运行，官方建议加入AV/EDR的白名单中。攻击者正是利用这一点来大大降低被安全软件检测出来的可能性，再加上SUNBURST后门运行时对运行环境的严格检查，只靠AV/EDR的查杀几乎没有可能检测出来。
+
+Securonix Threat Research给出的一个建议叫”Watch the Watcher“很有深意，SolarWinds
+Orion产品本身是监控类软件，是个watcher，我们很应该监控（Watch）它的行为，否则一旦发生类似本次的攻击事件--来自信任软件的“叛变”，造成的危害可能会被放大很多倍。
+
+##### 技术点分析
+
+关于SUNBURST后门的具体行为，可以查看之前的分析文章《红队视角看Sunburst后门中的TTPs》。
+
+### 权限提升与权限维持阶段
+
+#### 事件跟进
+
+在权限提升与权限维持阶段，CISA发现攻击添加了额外的认证凭据（authentication credentials）,包括Azure和Microsoft
+365 (M365) 的令牌和证书。认证令牌应该是在AD FS环境下滥用Security Assertion Markup Language
+(SAML)生成的。微软在其Azure检测工具Azure-Sentinel中添加了相应的检测脚本，详情见文末参考链接。
+
+#### 技术点分析
+
+##### Golden SAML
+
+攻击者使用的技术通常被称为Golden SAML。
+
+一个正常的SAML认证过程如下图：
+
+![](https://images.seebug.org/content/images/2021/01/bb66057e-ce7e-47bb-9ca1-71006d7e6e7d.png-w331s)
+
+图来自Sygnia
+
+  1. 用户访问特定服务，比如AWS, Office 365。
+  2. 服务重定向到ADFS进行认证。
+  3. 用户使用域策略认证。
+  4. ADFS向用户返回签名的SAML令牌。
+  5. 用户使用签名的SAML令牌去访问特定服务。
+
+Golden SAML的攻击流程如下：
+
+![](https://images.seebug.org/content/images/2021/01/5f01abd5-1d69-4fa0-b1f5-aa3ad20d18a3.png-w331s)
+
+图来自Sygnia
+
+  1. 攻击者访问ADFS 服务器，并导出其中私钥和证书。
+
+  2. 攻击者访问特定服务，比如AWS, Office 365。
+
+  3. 服务重定向到ADFS进行认证。
+
+  4. 攻击者直接通过获取的私钥生成签名的SAML令牌，省去ADFS的认证过程。
+
+  5. 攻击者使用签名的SAML令牌去访问特定服务。
+
+针对AD FS的Golden SAML攻击和针对AD DS的Golden
+Ticket攻击流程和目的都很类似，目的就是构造高权限的凭据，绕过一些访问限制，达到权限维持的目的。
+
+## solarleaks公开售卖数据
+
+1月13日，自称SolarWinds供应链攻击的组织，注册了个网站公开售卖他们获取到的数据。其中包括微软的部分源代码、SolarWinds产品源代码、Cisco产品源代码和FireEye红队工具。
+
+网址：<http://solarleaks.net/>
+
+![image-20210114203330465](https://images.seebug.org/content/images/2021/01/19/1611024707000-image-20210114203330465.png-w331s)
+
+从网站的更新来看，还是有很多人在尝试购买这些数据，攻击者表示想要看样例文件确定数据的真假，需要先支付100 XMR。如下图。
+
+![image-20210114203402802](https://images.seebug.org/content/images/2021/01/19/1611024707000-image-20210114203402802.png-w331s)
+
+查看solarleaks.net的DNS数据，可以发现域名解析由NJALLA注册，这也是俄罗斯黑客组织Fancy Bear和Cozy
+Bear之前使用的注册商。其中SQA记录更是表明让人无处可查之意You Can Get No Info。
+
+![image-20210115150558773](https://images.seebug.org/content/images/2021/01/19/1611024707000-image-20210115150558773.png-w331s)
+
+攻击者在网站中声称，关于他们是如何获取到这些数据的线索跟25b23446e6c29a8a1a0aac37fc3b65543fae4a7a385ac88dc3a5a3b1f42e6a9e这个hash值有关，但是目前还没有任何公开文件和这个hash值有关。
+
+如果这些数据是真的，并被其他APT组织或黑产组织所利用，那么此次供应链攻击的影响可能会延续到下一个攻击事件中。
+
+## 参考链接
+
+1.Advanced Persistent Threat Compromise of Government Agencies, Critical
+Infrastructure, and Private Sector Organizations  
+<https://us-cert.cisa.gov/ncas/alerts/aa20-352a>
+
+2.Detecting Post-Compromise Threat Activity in Microsoft Cloud Environments  
+<https://us-cert.cisa.gov/ncas/alerts/aa21-008a>
+
+3.A Golden SAML Journey: SolarWinds Continued  
+<https://www.splunk.com/en_us/blog/security/a-golden-saml-journey-solarwinds-continued.html>
+
+4.Detection and Hunting of Golden SAML Attack  
+<https://www.sygnia.co/golden-saml-advisory>
+
+5.Dark Halo Leverages SolarWinds Compromise to Breach Organizations  
+<https://www.volexity.com/blog/2020/12/14/dark-halo-leverages-solarwinds-compromise-to-breach-organizations/>
+
+6.Securonix Threat Research: Detecting SolarWinds/SUNBURST/ECLIPSER Supply
+Chain Attacks  
+<https://www.securonix.com/detecting-solarwinds-sunburst-eclipser-supply-chain-attacks/>
+
+7.SUNSPOT: An Implant in the Build Process  
+<https://www.crowdstrike.com/blog/sunspot-malware-technical-analysis/>
+
+8.SprayingToolkit  
+<https://github.com/byt3bl33d3r/SprayingToolkit>
+
+9.CVE-2020-0688  
+<https://github.com/zcgonvh/CVE-2020-0688>
+
+10.ADFSDomainTrustMods  
+<https://github.com/Azure/Azure-Sentinel/blob/master/Detections/AuditLogs/ADFSDomainTrustMods.yaml>
+
+11.CVE-2020-0688: REMOTE CODE EXECUTION ON MICROSOFT EXCHANGE SERVER THROUGH
+FIXED CRYPTOGRAPHIC KEYS  
+<https://www.thezdi.com/blog/2020/2/24/cve-2020-0688-remote-code-execution-on-microsoft-exchange-server-through-fixed-cryptographic-keys·>
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1459/>
+

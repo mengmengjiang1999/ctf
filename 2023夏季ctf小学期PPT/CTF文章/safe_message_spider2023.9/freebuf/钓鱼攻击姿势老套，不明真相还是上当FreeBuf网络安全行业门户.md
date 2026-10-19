@@ -1,0 +1,109 @@
+**近日，深信服安全团队捕获到一起高度个性化的钓鱼攻击事件，攻击者针对用户企业伪造了多份带有专业内容的攻击文档，通过邮件发送到目标邮箱，企图诱导用户打开附件中的文档。经安全专家分析，该文档其实为带有漏洞利用的恶意文件，其利用了一个较老的Office漏洞CVE-2012-0158，该漏洞常被用于APT攻击，通常以RTF文件或MIME文件为载体，影响的众多Office版本。**
+
+##  **文档分析**
+
+打开该文档，内容上没有任何破绽，带有用户企业的页眉图标，内容也十分专业：
+
+![](https://image.3001.net/images/20190826/1566822490_5d63d05a6c0d5.png!small)
+
+不过，表面的伪装蒙混不过研究人员的眼睛，通过监控行为发现winword.exe运行后创建了一个PE文件rundll32.exe：
+
+> 进程: c:\program files\microsoft office\office12\winword.exe
+>
+> 目标: C:\Users\root\AppData\Local\Temp\rundll32.exe
+
+由于并没有开启宏功能，于是判断出该文档存在漏洞利用，接下来使用windbg附加到winword.exe上进行调试，在kernel32!WinExec处下断点，断下来后查看堆栈，发现一条cmd命令，作用为打开一个temp目录下的doc文档：
+
+![](https://image.3001.net/images/20190826/1566822513_5d63d07153983.png!small)
+
+虽然找到了可疑命令，但这个行为还不是要找的关键行为，于是单步调试，运行一会后看到一条kernerl32!_lcreat函数的执行，查看堆栈发现，创建的文件是在行为监控中看到的rundll32.exe文件：
+
+![](https://image.3001.net/images/20190826/1566822525_5d63d07d181a7.png!small)
+
+这里的分析过程中其实有一个插曲，当从行为中看到文件创建的动作，在调试时首先想到的就是在CreateFile函数下断点，但并没有中断下来，所以退而求其次在WinExec函数下了断点，当单步到这里时找到了原因，shellcode中使用了一个冷门的函数lcreat，并且通过参数知道其创建的文件为隐藏文件：
+
+> iAttribute Long
+>
+> 0——文件能够读写
+>
+> 1——创建只读文件
+>
+> 2——创建隐藏文件
+>
+> 3——创建系统文件
+
+继续单步能够看到lwrite写文件操作：
+
+![](https://image.3001.net/images/20190826/1566822531_5d63d083b252a.png!small)
+
+最后再次单步运行到WinExec函数，此处为运行释放的rundll.exe文件，在相同的目录下可看到释放的文件包括一个干净的doc文档，和该恶意EXE程序：
+
+![](https://image.3001.net/images/20190826/1566822545_5d63d0914ff9c.png!small)
+
+##  **恶意程序分析**
+
+rundll32.exe文件在行为上具有大量的反安全软件、反分析操作，具体如下：
+
+遍历根目录查找avast! sandbox路径：
+
+![](https://image.3001.net/images/20190826/1566822553_5d63d099ebf7c.png!small)
+
+查找cuckoo路径：
+
+![](https://image.3001.net/images/20190826/1566822561_5d63d0a15ddaa.png!small)
+
+查找分析软件进程，包括：
+
+> Filemon.exe、Regmon.exe、Procmon.exe、Tcpview.exe、wireshark.exe、
+>
+> dumpcap.exe、reghost.exe、cports.exe、smsniff.exe、SocketSniff.exe
+
+查找杀毒软件进程，包括：
+
+>
+> mcagent.exe、ekrn.exe、ccSvcHst.exe、avgui.exe、nis.exe、avfwsvc.exe、coreFrameworkHost.exe、AYRTSrv.aye、360Tray.exe、avgtray.exe、nanoav.exe、avp.exe、msseces.exe、AvastUI.exe、avgnt.exe
+
+在wksprt.exe;ctfmon.exe;explorer.exe中选择一个进程以挂起的方式创建，进行远程进程注入：
+
+![](https://image.3001.net/images/20190826/1566822570_5d63d0aac18b9.png!small)
+
+注入后会在进程内存中释放一个DLL文件并调用，程序的主要功能都在DLL文件中，包括自复制到temp目录并在注册表添加自启动：
+
+![](https://image.3001.net/images/20190826/1566822578_5d63d0b2b6345.png!small)
+
+获取主机信息发送到C&C服务器（域名已失效，本文使用修改hosts文件的方式抓取到传输的数据）：
+
+![](https://image.3001.net/images/20190826/1566822584_5d63d0b8deee1.png!small)
+
+##  **关于钓鱼攻击** **Q &A**
+
+Q：什么是钓鱼攻击？
+
+A：在网络攻击中，钓鱼攻击通常为冒充合法机构或人员向目标发送伪造的邮件，诱导目标点击或运行其中的恶意软件，以达到信息窃取、非法获得用户主机权限等目的。常见的手法有发送漏洞利用文档、发送带有恶意宏代码的文档、或发送伪装成文档的恶意可执行文件。
+
+Q：那要如何判断收到的文档是否为恶意呢？
+
+A：起初的一些钓鱼文档构造得较为粗糙，文档内容基本上是一些乱码，容易引起用户的怀疑。为了获得目标的信任，攻击者开始通过社会工程等方式收集到与目标相关的一些信息，定制高度个性化的攻击邮件。比如本次的攻击中，使用的文档内容就完全是用户的文档，很难从内容上判断是否为恶意，因此建议开启安全软件的实时防护功能，一但下载的附件被报出威胁，就不要轻易打开，先请专业的安全人员进行分析。
+
+Q：如果已经不小心点开了钓鱼邮件中的附件，要怎么办呢？
+
+A：如果不小心运行了其中的附件，也不要惊慌，首先要保留原始的邮件，反馈给安全研究人员进行分析，然后使用安全软件进行全盘查杀，隔离删除下载或释放到主机上的恶意程序。
+
+##  **解决方案**
+
+深信服为广大用户免费提供查杀工具，可下载如下工具，进行检测查杀。
+
+64位系统下载链接：
+
+> <http://edr.sangfor.com.cn/tool/SfabAntiBot_X64.7z>
+
+32位系统下载链接：
+
+> <http://edr.sangfor.com.cn/tool/SfabAntiBot_X86.7z>
+
+深信服安全团队提醒大家：
+
+不要点击来源不明的邮件附件，不从不明网站下载软件。
+
+ ***本文作者： 深信服千里目安全实验室，转载须注明来自FreeBuf.COM**  
+

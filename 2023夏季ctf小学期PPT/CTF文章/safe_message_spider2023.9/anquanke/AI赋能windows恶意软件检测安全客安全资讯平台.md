@@ -1,0 +1,211 @@
+# AI赋能windows恶意软件检测
+
+阅读量 **348382**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-11-08 10:00:43
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t016a4d4892278ae0e8.jpg)
+
+## 前言
+
+作为安全研究人员的基本功之一，我们通过分析程序所有的系统API调用就能大致知道程序的作用，或者至少可以知道程序是正常程序还是恶意软件。  
+因为系统API调用的序列反映出来是软件特定的行为顺序，这可以作为检测恶意软件的依据，所以检测程序是否恶意的关键是要找到一种合适的方法来处理API调用的顺序。  
+在深度学习中有一种方法称为LSTM对于处理时序数据非常有效，本文就是基于LSTM来进行检测。本文会详细介绍样本获取及特征、标签的处理流程，LSTM的原理并通过实战展示如何应用AI技术检测windows恶意软件。
+
+## LSTM
+
+LSTM是一种特殊的 RNN，能够学习长期依赖性。由 Hochreiter 和
+Schmidhuber（1997）提出的，并且在接下来的工作中被许多人改进和推广。LSTM
+在各种各样的问题上表现非常出色，现在被广泛使用。它被明确设计用来避免长期依赖性问题。  
+所有RNN都具有神经网络的链式重复模块。在标准的 RNN 中，这个重复模块具有非常简单的结构，例如只有单个 tanh 层，如下所示
+
+![](https://p3.ssl.qhimg.com/t01c06910a71d7d5c01.jpg)
+
+作为一种特殊的RNN，LSTM 也具有这种类似的链式结构，但重复模块具有不同的结构。不是一个单独的神经网络层，而是四个，并且以非常特殊的方式进行交互。
+
+![](https://p5.ssl.qhimg.com/t013f3c1e768ff2c40e.jpg)
+
+把上图中的重要标记拿出来
+
+![](https://p3.ssl.qhimg.com/t017387a69034a15dd0.jpg)
+
+图中黄色类似于CNN里的激活函数操作，粉色圆圈表示点操作，单箭头表示数据流向，箭头合并表示向量的合并（concat）操作，箭头分叉表示向量的拷贝操作。  
+LSTM结构的关键是细胞状态，用贯穿细胞的水平线表示。  
+细胞状态像传送带一样。它贯穿整个细胞却只有很少的分支，这样能保证信息不变的流过整个RNNs。细胞状态如下图所示
+
+![](https://p4.ssl.qhimg.com/t0118b057274c843454.jpg)
+
+LSTM网络能通过一种被称为门的结构对细胞状态进行删除或者添加信息。门能够有选择性的决定让哪些信息通过。其实门的结构很简单，就是一个sigmoid层和一个点乘操作的组合。如下图所示
+
+![](https://p5.ssl.qhimg.com/t01ffc1af797a85d3f7.jpg)
+
+因为sigmoid层的输出是0-1的值，这代表有多少信息能够流过sigmoid层。0表示都不能通过，1表示都能通过。  
+一个LSTM里面包含三个门来控制细胞状态,这三个门分别称为忘记门、输入门和输出门。
+
+LSTM的第一步就是决定细胞状态需要丢弃哪些信息。这部分操作是通过一个称为忘记门的sigmoid单元来处理的。它通过查看ht-1和xt信息来输出一个0-1之间的向量，该向量里面的0-1值表示细胞状态Ct-1中的哪些信息保留或丢弃多少。0表示不保留，1表示都保留。忘记门如下图所示。
+
+![](https://p1.ssl.qhimg.com/t01990cfc75ac32739e.jpg)
+
+比如我们试图拥有所有的语句来预测下一个单词，cell状态可以包括当前主题任务的性别，这样我们在下一句话输出时就能准确的使用代词“他”，“她”还是“它”！  
+下一步是决定给细胞状态添加哪些新的信息。这一步又分为两个步骤，首先，利用ht-1和xt通过一个称为输入门的操作来决定更新哪些信息。然后利用ht-1和xt通过一个tanh层得到新的候选细胞信息C~t，这些信息可能会被更新到细胞信息中。这两步描述如下图所示。
+
+![](https://p5.ssl.qhimg.com/t01a9f9db7a4f86e34b.jpg)
+
+下面将更新旧的细胞信息Ct-1，变为新的细胞信息Ct。更新的规则就是通过忘记门选择忘记旧细胞信息的一部分，通过输入门选择添加候选细胞信息C~t的一部分得到新的细胞信息Ct。更新操作如下图所示
+
+![](https://p4.ssl.qhimg.com/t014f9ed521e72f6df6.jpg)
+
+更新完细胞状态后需要根据输入的ht-1和xt来判断输出细胞的哪些状态特征，这里需要将输入经过一个称为输出门的sigmoid层得到判断条件，然后将细胞状态经过tanh层得到一个-1~1之间值的向量，该向量与输出门得到的判断条件相乘就得到了最终该RNN单元的输出。该步骤如下图所示
+
+![](https://p2.ssl.qhimg.com/t012a684f8ef83c8022.jpg)
+
+## 实战
+
+整体流程如下所示
+
+![](https://p2.ssl.qhimg.com/t0100fed02102df8cbd.jpg)
+
+## 构建数据集
+
+从AI的角度看，AI的三个要素是数据集、模型、算力。需要我们做的就是数据集和模型两部分。首先是数据集的部分，我们需要创建相关的数据集。如同我们之前提到的，我们需要创建window
+pe恶意软件的API调用序列数据集。  
+我们首先从github爬取或者下载样本文件，一方面用VirusTotal Service检测，用于给样本打标签，一方面将样本提交到Cuckoo
+Sandbox获取恶意软件的windows API调用序列，处理完成后就得到了实验所需的数据集。  
+这一部分比较简单，属于数据预处理的环节，我们直接看处理后得到的结果。  
+通过Cuckoo Sandbox获取恶意软件的windows API调用序列如下所示
+
+![](https://p2.ssl.qhimg.com/t01504c8ec219270436.jpg)
+
+通过VirusTotal Service检测得到的结果如下所示
+
+![](https://p3.ssl.qhimg.com/t0181658c7bbe36268b.jpg)
+
+数据集有了，接着我们开始搭建标准的LSTM模型来进行检测。
+
+## 搭建模型
+
+首先导入所需的库文件
+
+![](https://p5.ssl.qhimg.com/t01c649a9923284dad9.jpg)
+
+将API调用序列以及分类结果合并在一起
+
+![](https://p4.ssl.qhimg.com/t0169c7d9279b699268.jpg)
+
+最后一行相当于是将数据集划分成了两类，如果是Virus则打标签1，否则打标签为0  
+我们看看virus和非virus的分布情况
+
+![](https://p4.ssl.qhimg.com/t01c0cb4164ab1844c4.jpg)
+
+合并的数据集还不能直接输入给LSTM模型，目前这仅是一个文本语料库，我们需要将其向量化，创建一个基于tokenization的序列作为输入，这一步我们直接使用keras提供的keras.preprocessing.text.Tokenizer即可实现  
+下面的代码主要用到了fit_on_texts，这是为了基于API_calls列表更新内部vocabulary;texts_to_sequences则是为了将文本转为整数序列
+
+![](https://p3.ssl.qhimg.com/t01a3030d6008ef1987.jpg)
+
+然后搭建一个典型的LSTM模型
+
+![](https://p2.ssl.qhimg.com/t0160879bc630477fc3.jpg)
+
+使用均方误差(mse作为损失函数，优化器用rmsprop,度量指标用accuracy)
+
+![](https://p4.ssl.qhimg.com/t018371f67b87852c24.jpg)
+
+开始训练
+
+![](https://p3.ssl.qhimg.com/t01baa93df650709531.jpg)
+
+训练完毕  
+接着我们在测试集上进行测试，使用混淆矩阵来评估模型的性能
+
+![](https://p3.ssl.qhimg.com/t016292496c2222d876.jpg)
+
+这个矩阵怎么看呢？对于二分类问题来说，左上角是真阳性TP,右上角是假阳性FP,左下角是假阴性FN,右下角是真阴性TN。从上面的矩阵看到，其TP,TN都挺高，说明模型训练得不错
+
+## 总结：
+
+本文使用的LSTM基于API调用序列进行恶意软件检测，如果师傅们有兴趣，在两方面都可以进一步做些不同的尝试，比如
+
+1）模型选择方面，如果还是针对时序特征的话，可以试试其他的RNN比如GRU等
+
+2）在特征选择方面除了API调用序列这种特征，其他可以考虑的序列特征还有汇编文件的指令序列，比如在本实验基础上我们可以用gdb等工具直接由二进制文件生成汇编文件，提取指令序列，如下所示
+
+![](https://p0.ssl.qhimg.com/t01775a6d68c369e17c.jpg)
+
+在这些序列上应用和实战中相同的处理流程即可
+
+3）自己不愿意动手从二进制文件样本开始处理数据的话，可以尝试直接用微软在kaggle竞赛中放出来的，链接在这里：[https://www.kaggle.com/c/malware-classification，数据中对于每个恶意样本，给出了两个文件，分别是.asm文件和.bytes文件](https://www.kaggle.com/c/malware-classification%EF%BC%8C%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%AF%B9%E4%BA%8E%E6%AF%8F%E4%B8%AA%E6%81%B6%E6%84%8F%E6%A0%B7%E6%9C%AC%EF%BC%8C%E7%BB%99%E5%87%BA%E4%BA%86%E4%B8%A4%E4%B8%AA%E6%96%87%E4%BB%B6%EF%BC%8C%E5%88%86%E5%88%AB%E6%98%AF.asm%E6%96%87%E4%BB%B6%E5%92%8C.bytes%E6%96%87%E4%BB%B6)  
+分别如下所示
+
+![](https://p1.ssl.qhimg.com/t01dea218d467fa3d78.jpg)
+
+![](https://p0.ssl.qhimg.com/t01a82ca935e9ba8132.jpg)
+
+4）除了上述特征外，还可以考虑以下特征：  
+Virtual Adress and Size of the IMAGE_DATA_DIRECTORY  
+OS Version  
+Import Adress Table Adress  
+Ressources Size  
+Number Of Sections (we should look into section names)  
+Linker Version  
+Size of Stack Reserve  
+DLL Characteristics  
+Export Table Size and Adress  
+Address of Entry Point  
+Image Base  
+Number Of Import DLL  
+Number Of Import Functions  
+Number Of Sections  
+等  
+当然，具体选择什么特征，得根据手头的样本、掌握的AI技术等具体情况而定。
+
+## 参考
+
+1.<https://peerj.com/articles/cs-285/>  
+2.<https://colah.github.io/posts/2015-08-Understanding-LSTMs/>  
+3.<https://zhuanlan.zhihu.com/p/32085405>  
+4.<https://en.wikipedia.org/wiki/Long_short-term_memory>  
+5.<https://www.jianshu.com/p/95d5c461924c>  
+6.<http://www.bioinf.jku.at/publications/older/2604.pdf>  
+7.<https://github.com/omerbsezer/LSTM_RNN_Tutorials_with_Demo>  
+8.<https://github.com/jaungiers/LSTM-Neural-Network-for-Time-Series-Prediction>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **whoami** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/256969](/post/id/256969)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意软件](/tag/恶意软件)
+  * [人工智能](/tag/人工智能)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t010857340ce46bb672.jpg) whoami
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

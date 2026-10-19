@@ -1,0 +1,202 @@
+## 背景介绍
+
+**近期奇安信病毒响应中心在日常监测中，发现继Cerberus银行木马利用“新冠肺炎“传播以后，“新冠肺炎”勒索病毒也已经出现，另外Anubis银行木马也通过仿冒名为”covid-19“的软件进行传播，同时发现Cerberus将仿冒名”Coronavirus“改为”corona“继续传播。**
+
+随着近期“新冠肺炎“在全球的爆发，尤其在欧洲的失控，Android木马也相继出现蹭“新冠肺炎”的热度。目前已出现了利用“新冠肺炎”的勒索病毒，同时以欧洲
+作为主要传播地区的Anubis银行木马也“起死回生”。
+
+## 勒索样本分析
+
+人们对“新冠肺炎”的关注，促使了恶意木马作者也打起了主意，近日一款勒索病毒通过仿冒coronavirusapp网站，日常发送一些关于“新冠肺炎”的消息。同时诱骗用户下载勒索木马[Coronavirus_Tracker.apk](https://www.virustotal.com/gui/search/name:%22Coronavirus_Tracker.apk%22)，对用户实施勒索。
+
+恶意网站诱骗用户下载APK：
+
+![](https://image.3001.net/images/20200318/1584496678_5e71802622766.png!small)
+
+勒索木马样本信息：
+
+ **文件名**|
+**[Coronavirus_Tracker.apk](https://www.virustotal.com/gui/search/name:%22Coronavirus_Tracker.apk%22)**  
+---|---  
+ **应用名**|  Coronavirus Tracker  
+ **包名**|  com.device.security  
+ **MD5**|  D1D417235616E4A05096319BB4875F57  
+ **图标**|
+![](https://image.3001.net/images/20200318/1584496685_5e71802de9a9c.png!small)  
+  
+该勒索木马跟一般勒索病毒一样，运行后诱骗用户激活设备管理器，之后强制对用户手机进行锁屏，并修改用户手机解锁密码，同时对用户进行勒索。勒索软件威胁要在48小时之内索要100美元的比特币，否则会删除用户手机个人信息。
+
+激活设备管理器：
+
+![](https://image.3001.net/images/20200318/1584496695_5e7180376620d.png!small)
+
+勒索界面：
+
+![](https://image.3001.net/images/20200318/1584496702_5e71803e06909.png!small)
+
+由于该木马的解锁密码为硬编码，所以如果有用户不小心中招，请使用“4865083501“进行解锁：
+
+![](https://image.3001.net/images/20200318/1584496709_5e718045a0d67.png!small)
+
+## Anubis样本分析
+
+本次监测到的样本信息：
+
+ **文件名**|  **covid-19.apk**  
+---|---  
+ **应用名**|  Flash Player  
+ **包名**|  wocwvy.czyxoxmbauu.slsa  
+ **MD5**|  2C522F3527DEF8AC97958CD2C89A7C29  
+ **图标**|
+![](https://image.3001.net/images/20200318/1584496719_5e71804f88934.png!small)  
+  
+Anubis银行木马随着其作者在2019年被抓，也就预示着其更新将大不如以前，可能会像其它早期银行木马一样，慢慢消失在人们的视野中。对此奇安信病毒响应中心发布过的“Cerberus（地狱犬）-Anubis的邪恶传承者“（<https://ti.qianxin.com/blog/articles/cerberus-anubis-evil-Inheritor>）也说明了目前更为高调的Cerberus木马将取代Anubis成为新的威胁。然而“百足之虫，死而不僵“，因为Anubis木马源码已经公开，造成了很多攻击者可以在其基础上进行修改，形成新的变种。
+
+本次监测到的Anubis银行木马变种继承了之前的功能，代码核心以远控为主体，钓鱼、勒索等其它功能为辅，目的则为获取用户关键信息，窃取用户财产。不同之处在于，其将一部分配置信息加密存放在了本地等，而且配置信息中使用了大量的中文，其获取C2的方式也进行了改变。
+
+因为Anubis主要针对欧洲地区，在历史样本中也使用过日语、俄语、马其顿语、阿·拉伯语等，所以此次配置信息中使用中文应该为了给国外分析人员制造麻烦。
+
+存放在本地的XML文件：
+
+![](https://image.3001.net/images/20200318/1584496735_5e71805f33b99.png!small)
+
+读取本地文件并解密、拼接C2：[http://update-apk.net](http://update-apk.net/)然后进行下发控制指令。
+
+读取XML文件：
+
+![](https://image.3001.net/images/20200318/1584496740_5e71806449e99.png!small)
+
+进行解密、拼接：
+
+![](https://image.3001.net/images/20200318/1584496744_5e7180685157c.png!small)
+
+![](https://image.3001.net/images/20200318/1584496748_5e71806cc5f87.png!small)
+
+![](https://image.3001.net/images/20200318/1584496752_5e7180706481c.png!small)
+
+数据包：
+
+![](https://image.3001.net/images/20200318/1584496758_5e7180765132e.png!small)
+
+数据包经过解密后，发现了其下发指令，以及上传用户信息。
+
+主要远控指令及对应的功能：
+
+主要元控制指令| 指令对应的功能  
+---|---  
+Send_GO_SMS| 向指定电话号码发送指定内容  
+nymBePsG0| 获取用户手机通讯录  
+GetSWSGO| 获取用户手机短信  
+|telbookgotext=| 获取用户手机通讯录  
+getapps| 获取用户手机已安装应用  
+getpermissions| 获取已有的权限信息  
+startaccessibility| 权限请求  
+startpermission| 权限请求  
+=ALERT|| 提示消息  
+=PUSH|| 推送通知  
+startAutoPush| 根据不同国家，推送不同的消息  
+RequestPermissionGPS| 请求获取地理位置权限  
+|ussd=| 呼叫转移  
+|recordsound=| 录音  
+|replaceurl=| 替换URL  
+|startapplication=| 启动指定应用  
+getkeylogger| 获取键盘记录  
+stopsound| 停止录音  
+startsound| 开始录音  
+startscreenVNC| 开启VNC远控  
+deletefilefolder:| 删除文件  
+downloadfile:| 下载文件  
+opendir:| 获取文件路径  
+startforward=| 启动呼叫转移功能到指定号码  
+stopforward| 停止呼叫转移功能  
+|openbrowser=| 打开浏览器  
+|openactivity=| 启动ActivityURL,打开一个web页面  
+|cryptokey=| 对用户手机对应文件进行加密操作  
+|decryptokey=| 对用户手机对应文件进行解密操作  
+getip| 获取用户IP地址  
+  
+打开推特链接，获取备份的C2，进行解析后即为仿冒银行登录页面，目前备份的C2已删除，该推特最后更新于2015年。
+
+![](https://image.3001.net/images/20200318/1584496807_5e7180a7ae340.png!small)
+
+![](https://image.3001.net/images/20200318/1584496811_5e7180abc372a.png!small)
+
+## Cerberus样本分析
+
+另外我们还监测到了Cerberus木马将仿冒名”Coronavirus“改为”corona“继续传播。该样本恶意功能与之前相同，并没有发生改变，详细分析请查看“Cerberus（地狱犬）-Anubis的邪恶传承者“（<https://ti.qianxin.com/blog/articles/cerberus-anubis-evil-Inheritor>）。
+
+样本信息：
+
+ **文件名**|  **corona.apk**  
+---|---  
+ **应用名**|  Google Play  
+ **包名**|  cpymezxmapzsdforaduuda.illoyztchthogekxpd.fojccdfkzahlhfmcaeowdalsjp  
+ **MD5**|  599DB33D534D1E98EA63DD2CE30100A7  
+ **图标**|
+![](https://image.3001.net/images/20200318/1584496818_5e7180b226f2a.png!small)  
+  
+## 总结
+
+目前暂时没有发现Anubis、Cerberus仿冒国内应用，国内也没有发现相关的勒索木马。但随着国外“新冠肺炎“疫情的不断恶化。不排除Anubis、Cerberus以及其它恶意木马会针对国内用户。奇安信病毒响应中心会随时关注相关木马的实时动态，同时奇安信病毒响应中心提醒用户不要安装未知来源的APP，同时提高个人的安全意识。
+
+目前奇安信威胁情报中心文件深度分析平台：（<https://sandbox.ti.qianxin.com/sandbox/page>）已支持Android样本分析：
+
+![](https://image.3001.net/images/20200318/1584496827_5e7180bb5e823.png!small)
+
+同时基于奇安信威胁情报中心的威胁情报数据的全线产品，包括奇安信威胁情报平台（TIP）、天擎、天眼高级威胁检测系统、奇安信NGSOC等，都已经支持对此类攻击的精确检测。
+
+## IOC
+
+### 文件MD5：
+
+> 599DB33D534D1E98EA63DD2CE30100A7
+>
+> 2C522F3527DEF8AC97958CD2C89A7C29
+>
+> D1D417235616E4A05096319BB4875F57
+
+### C2:
+
+> <http://update-apk.net/o1o/a1.php>
+>
+> <http://update-apk.net/o1o/a2.php>
+>
+> <http://update-apk.net/o1o/a3.php>
+>
+> <http://update-apk.net/o1o/a4.php>
+>
+> <http://update-apk.net/o1o/a5.php>
+>
+> <http://update-apk.net/o1o/a6.php>
+>
+> <http://update-apk.net/o1o/a7.php>
+>
+> <http://update-apk.net/o1o/a8.php>
+>
+> <http://update-apk.net/o1o/a9.php>
+>
+> <http://update-apk.net/o1o/a10.php>
+>
+> <http://update-apk.net/o1o/a11.php>
+>
+> <http://update-apk.net/o1o/a12.php>
+>
+> <http://update-apk.net/o1o/a13.php>
+>
+> <http://update-apk.net/o1o/a14.php>
+>
+> <http://update-apk.net/o1o/a15.php>
+>
+> <http://update-apk.net/o1o/a16.php>
+>
+>
+> [https://coronaviruscovid19-information.com/tr/corona.apk](https://www.virustotal.com/gui/url/1898ee97d8be1e534412cb7b3fc115d0ff7268e52ef60f8f012b415a8a53203f)
+>
+> <http://coronaviruscovid19-information.com/tr/corona.apk>
+>
+> <https://coronaviruscovid19-information.com/en/corona.apk>
+>
+> <http://coronaviruscovid19-information.com/en/corona.apk>
+
+ ***本文作者：奇安信威胁情报中心，转载请注明来自FreeBuf.COM**
+

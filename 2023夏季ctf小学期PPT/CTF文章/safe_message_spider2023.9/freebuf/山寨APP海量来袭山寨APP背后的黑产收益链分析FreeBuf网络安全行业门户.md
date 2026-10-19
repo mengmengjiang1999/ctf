@@ -1,0 +1,340 @@
+# 一、 概述
+
+近期，安全友商Bitdefender发布一篇有关Zoom的分析报告，我们从中发现一起针对国内用户进行广告推广的山寨Zoom
+APP，对此我们专门对其进行了深入分析。
+
+经过深入分析，我们挖掘出一条山寨APP流量推广的灰色产业链，黑产人员通过往热门应用”插包”的方式，植入广告劫持模块进行刷量作弊，当正常用户被诱导安装使用了这些真假难辨的山寨应用后，即可实现对广告主的”薅羊毛”行为。
+
+涉及到的APP达到7245个，影响范围包括豌豆荚应在内的众多大型、小型应用商店，严重危害到开发厂商以及应用商店的利益。
+
+# 二、 产业链
+
+## 广告变现背景
+
+在对产业链介绍前，我们需要了解一些关于广告变现的市场背景，进而了解引发黑产兴趣的原因。
+
+根据相关行业人员统计，我国在移动广告上的投入是巨大的，所以黑产人员也盯上了这块甜美的蛋糕。
+
+![图片.png](https://image.3001.net/images/20200416/1587003969_5e97c241bfb43.png!small)
+
+而根据互联网信息可以大概知道用户量大的APP广告变现转化率至少在1%以上，只要用户量大那么广告收益是极为可观的。
+
+![图片.png](https://image.3001.net/images/20200416/1587003982_5e97c24e2cf41.png!small)
+
+## 产业链的实现过程
+
+下面介绍完整的产业链操作过程。
+
+![图片.png](https://image.3001.net/images/20200416/1587003994_5e97c25a801e3.png!small)  
+
+1\.
+黑产人员从各大应用商店上收集一些拥有一定下载量的应用（游戏APP居多），用来作为山寨的对象。根据奇安信Janus平台搜索到的这些下载量巨大的APP都存在山寨情况并且发布在豌豆荚平台上。
+
+![图片.png](https://image.3001.net/images/20200416/1587004000_5e97c260e486e.png!small)
+
+![图片.png](https://image.3001.net/images/20200416/1587004005_5e97c2656e0fc.png!small)
+
+2\. 黑产人员再对收集到的APP进行”插包”，导入广告厂商的SDK使用其广告接口，接着引入kdssa模块实现播放广告、控制广告收益流向黑产的功能。
+
+3\. 黑产人员在各种大小应用商店进行上架山寨APP，等待用户下载，列举部分下载地址。
+
+下载地址 | 商店名称  
+  
+---|---  
+**[https://alissl.ucdl.pp.uc.cn/fs08/2018/07/26/8/1_2bc75ba9f1a84abdb2bf64ac07cdd3da.apk?appid=7843957&packageid=600697744&md5=8777c6345d76fec195635d745cbea83a&apprd=7843957&pkg=com.p63.h5.g18.ph5zy.rh5_63_37cs_cpa&vcode=5&fname=](https://alissl.ucdl.pp.uc.cn/fs08/2018/07/26/8/1_2bc75ba9f1a84abdb2bf64ac07cdd3da.apk?appid=7843957&packageid=600697744&md5=8777c6345d76fec195635d745cbea83a&apprd=7843957&pkg=com.p63.h5.g18.ph5zy.rh5_63_37cs_cpa&vcode=5&fname=)战神破晓&iconUrl=[http://android-artworks.25pp.com/fs08/2018/08/04/2/109_8ca1c1c64f91a8d340477e2f3b4152c0_con.png&pos=pp_uc_appdownload/pp_cj_highspeed/1](http://android-artworks.25pp.com/fs08/2018/08/04/2/109_8ca1c1c64f91a8d340477e2f3b4152c0_con.png&pos=pp_uc_appdownload/pp_cj_highspeed/1)**
+|  豌豆荚  
+**<http://appfile1.redshu.com/appfile1/appfile1_2/20190729/1_3eb32d467f1dc6e2a90d8b5379ae2df0.apk>**
+|  红鼠游戏下载站  
+**<http://down-file.6789.com/2019/0817/jinhuangguan>[fengkuadu3ppunxtzx409818.apk** |
+6789网页导航  
+**<http://appfile1.lypk.net/appfile1/appfile1_2/20190723/110_65cb1b97b08ac8ca6ed39ef2a08c68b1.apk>**
+|  励志手游网  
+**<http://appfile1.9yaocn.com/appfile1/appfile1_2/20190723/110_65cb1b97b08ac8ca6ed39ef2a08c68b1.apk>**
+|  九妖手游网  
+**<http://ddx2.danji8.com/dj8/qiguaidedamaoxian-dj8.apk>** |  单机8  
+**<http://appfile1.mmet.cn/appfile1/appfile1_2/20190730/110_e2e11d404de77949ae22b82aa98f779e.apk>**
+|  分享吧下载站  
+**<http://appfile1.1666.com/appfile1/appfile1_2/20190723/110_4705cedbd1d7173b45ffdbd95a1ad719.apk>**
+|  1666网页游戏  
+**<http://appfile1.zb8.com/appfile1/appfile1_2/20190810/1_d163868f6ee88eb5ea32e5f0ed11314f.apk>**
+|  直播手游  
+**<http://appfile1.caiwan.com/appfile1/appfile1_2/20190723/110_a8a29bedb529fc4541e0cf3dc6284847.apk>**
+|  菜玩网  
+**<http://appfile1.guaiguai.com/appfile1/appfile1_3/20190907/110_a8a29bedb529fc4541e0cf3dc6284847.apk>**
+|  乖乖手游  
+**<http://appfile1.laitiao.com/appfile1/appfile1_2/20190723/110_30c64eff5367f5095a05f1bc7b61eba6.apk>**
+|  来挑  
+  
+4\. 热门山寨应用在不同应用商店上被正常用户进行下载使用。
+
+5\.
+山寨应用运行后通过kdssa模块，把广告收益流在广告平台注册的向黑产人员账户。从而实现了黑产人员对广告主的薅羊毛行为，当然也因为强行为被山寨APP”插包”播放广告的行为会一定程度降低用户对APP的评价，可能造成用户的流失。
+
+# 三、技术分析
+
+我们分析的样本主要分为两个版本。
+
+第一个版本的山寨APP样本是一款名字是”战神破晓”的应用，首次捕获时间为2018年7月。该版本功能只是在应用退出时让用户选择是否下载豌豆荚APP应用，并不会强制用户下载。
+
+![图片.png](https://image.3001.net/images/20200416/1587004056_5e97c29836902.png!small)
+
+![图片.png](https://image.3001.net/images/20200416/1587004060_5e97c29c26030.png!small)  
+
+时隔1年，该家族进行更新演变出第二个版本，随后开始大量的山寨各种应用，从上传时间可以获悉其后出现的应用间隔时间很短。
+
+MD5 | 首次捕获时间  
+  
+---|---  
+**8777c6345d76fec195635d745cbea83a** |  2018-09-23  
+**88285ee7c01ddedfb369d0bd2bcb3178** |  2019-06-14  
+**53966bdb3ff8d6d0f0cba70ca7d1fd41** |  2019-07-09  
+**c881a68401eb213b4feba9e249e9d792** |  2019-07-09  
+**55da7a1b3df4d848e3aadce77bdd1edd** |  2019-07-16  
+**e1f9dfc76082516282db6d00897eade6** |  2019-07-22  
+**3b1c9b1a2c6dd1b971cd2ec5b288a2b9** |  2019-07-22  
+**eb2d0a387dcbcebeb3cc5765c4e6eeaa** |  2019-07-22  
+**c3913e83192ee299395985654a00546f** |  2019-07-22  
+**c07ae57a8c254084964e6e5ffba6e14a** |  2019-07-22  
+**9bbf5afe3ebbe983434a8af4db2a6201** |  2019-07-22  
+**51a69b9103ec637ca3d4686f9e5745dd** |  2019-07-22  
+  
+  
+
+第二版本的sdk进行了代码更新，从SDK包结构前后对比，很明显的看到新版SDK功能进行了扩充。
+
+![图片.png](https://image.3001.net/images/20200416/1587004126_5e97c2de1b5c6.png!small)
+
+增加的功能模块作用是通过入各大广告商SDK，给应用增加广告模块，在启动界面进行展示。
+
+![图片.png](https://image.3001.net/images/20200416/1587004144_5e97c2f07c323.png!small)
+
+在展示广告前，将应用的的APP_ID、package_name、apk_sign等字段替换成黑产人员自己的数据，得以实现寄生在正规应用内来将广告收益流向自身。
+
+![图片.png](https://image.3001.net/images/20200416/1587004151_5e97c2f70361c.png!small)![图片.png](https://image.3001.net/images/20200416/1587004157_5e97c2fdbb528.png!small)
+
+根据样本特征“com.kdssa.sdk“，我们目前已发现到至少存在7245款APP遭到黑产进行山寨进行广告寄生推广。
+
+# 四、黑产人员分析
+
+经过自动化脚本处理完7245个样本数据后，得到的处理结果显示基本所有样本修改了应用的入口Activity组件实现开机广告展示，所有山寨应用的证书结构基本一致，结合代码结构可以侧面反映山寨应用的加工过程极大可能是经过自动化工具生成的。
+
+![图片.png](https://image.3001.net/images/20200416/1587004166_5e97c306157dd.png!small)
+
+通过奇安信Janus移动威胁情报平台，我们检索出国比较大型的内应用商店内部存在至少107个山寨APP，其中大部分山寨应用存在于豌豆荚应用商店。
+
+![图片.png](https://image.3001.net/images/20200416/1587004170_5e97c30acdd1c.png!small)
+
+经过技术分析，我们从山寨手法了解到黑产利用自己在广告平台申请的唯一ID来标识自己的身份从广告中获取收益。我们在Janus平台上使用APP标识SHA_1检索出的广告收益者，根据检索结果数量看出Janus上收录的山寨应用中基本使用的是同一个APP_ID，并且我们从VT上抽样下载的样本也都使用该APP_ID。
+
+![图片.png](https://image.3001.net/images/20200416/1587004176_5e97c310c4e07.png!small)![图片.png](https://image.3001.net/images/20200416/1587004180_5e97c314ba515.png!small)
+
+综上所述，可以确定广告收益人为同个黑产人员，且该SDK是黑产人员私有模块而非公开的广告SDK。
+
+# 总结
+
+奇安信病毒响应中心团队提醒广大应用开发厂商提高APP保护措施，防止黑产人员进行山寨行为严重损害企业利益，欢迎使用奇安信移动端安全防护产品。
+
+我们提供部分IOC如下：
+
+# IOC
+
+8777c6345d76fec195635d745cbea83a
+
+88285ee7c01ddedfb369d0bd2bcb3178
+
+53966bdb3ff8d6d0f0cba70ca7d1fd41
+
+c881a68401eb213b4feba9e249e9d792
+
+55da7a1b3df4d848e3aadce77bdd1edd
+
+e1f9dfc76082516282db6d00897eade6
+
+3b1c9b1a2c6dd1b971cd2ec5b288a2b9
+
+eb2d0a387dcbcebeb3cc5765c4e6eeaa
+
+c3913e83192ee299395985654a00546f
+
+c07ae57a8c254084964e6e5ffba6e14a
+
+9bbf5afe3ebbe983434a8af4db2a6201
+
+51a69b9103ec637ca3d4686f9e5745dd
+
+dbb8516e37e8737ffddbb040f9a34f67
+
+d279d***1a08f7f735380b940b2ae2da
+
+452fecd9f9961bdbba7c9781c63ee7fc
+
+e0b97f5b1a6e08bb96dc70dd8031aeeb
+
+064de4b0c65011ede8bde34d8e9719e9
+
+5a0b4cf99119dff38e50b188f4e12ec8
+
+afc2576f7f46aa7398586e9eec4b523c
+
+f0662fa84401de9ecdec5b313d601dac
+
+ab3b6b626e31711dcb00e702a4997e9c
+
+8a5b4529c9026c53db2b9e445b2865e1
+
+d2ed3795cab69ae6c7e6f04028675613
+
+28493613f1f05f368***9c576cd00b9c
+
+31cc1e4e5090ba292b3338db91a1a546
+
+4f7c07082d7159d9b87e708aaec47c26
+
+1429e7fa0c6a7f769dc04c0249c8ed2d
+
+bb1a50f89aa09331194d01da4150da3b
+
+0274bb8a6dd1938280c945aaa96ed83b
+
+ed11d1f561f72013445840ad70101df6
+
+2d40aa9a34015ed3a1bcdfab8a4cceff
+
+471870889105162878313f3e51715585
+
+367ccbdcf6f7235a3423a51c4d2774a0
+
+b955f68f067311992dc15cfdae8314ea
+
+919c77a66808162a0cddcaa7a3dc518a
+
+cd79abec5400047595fafceac6dcb4a8
+
+aba96ac927cd2b68cd0f856c5cea1f69
+
+2a57dcda25b0d3e96a42cbeba4f614d9
+
+4c362f5c1dbfb9a6c057c1d640f250e2
+
+d0286f66db7756f3691efa4b118af3c1
+
+9098a3c057567ac4d30ce4b8c353c6cb
+
+c39d273483e1b0f73ffba65aa97507ae
+
+ad1dcdaea2e8bd78a4cece867f5695d6
+
+b3a6b3a63f2bc3a04a23c9345656e3ea
+
+9362b9e857a26170e4cdad67a8012532
+
+4868008a87fe616d52a3363873743507
+
+4847c0ef06ee109c2d621b9b79d49830
+
+8a3d4ed60a115d0a8364a5f04b9e2811
+
+0815d***254ecd1bb29bafabb2d628de
+
+c718049f51d37ef82cdc35876dd23476
+
+c10bc336c6e6006c0394c64ee2ea5a41
+
+e84873642ba710055c8f33a1d18e20bb
+
+b2391e8090b97892652f919c6ed206ec
+
+2a10e9e9da75d718b9d304f9d6e3db82
+
+b82a5e4d531325ff8c464caee30938b0
+
+5cfd45ed99c8d378a7ec03b163c07457
+
+48dfbca2c4d8dce6cc3bdb1e7dded2bf
+
+b136f3c9a5a712506b80b5336b895eb1
+
+24f3c6f682d702c2bb6ae9725492930c
+
+d409acabdd5e7e56da91c1e86883cb3d
+
+71e1f74e626245414a00a21f6551654f
+
+27c009a26013fb8d6dcf529a809fa5fc
+
+23662fa0b9fe7d9dbeca0cf32d020bb1
+
+4d4a4bf1ad217b817d4748c77599087b
+
+fe68d64d9a249a3f9aa05377a93d510c
+
+31d4ba8566de5762ebe452e7c3ae440a
+
+02e6e2a2f254b2c31dd083fd85fa5b40
+
+384f9ff296395f72c222b08df2ec0571
+
+a0e8d66e265dcfcbd6349045fbfabec0
+
+ce8d8e03ad5edb92d58923acbec5068e
+
+98dd62763ee3a7f834e22ac5872e7a7b
+
+f66c99110a873f448fd924029cbbbf3f
+
+50cd068600dae96b1d464722940a3af8
+
+90e908b985f37c71ea485c5632e11478
+
+ce02ac46a8367a8c1638f9076bef0172
+
+8a43aa271f5b89e517035ed358be298f
+
+a12fae872b35225123d8660f150880dd
+
+d8ab07773306c7fba4c61d6421660816
+
+0312e6ce43a06289be72ddc8eb0cf8b0
+
+3367d72244de593e2deeb38dee79b762
+
+3ed86f910567d779af72f64a90851b74
+
+f18b0bff099121ee405f713d8732b376
+
+3f2bc62d7925ce4b7dda435c5e28bc1e
+
+997e328f0a0fd154aaab7a5d053a4000
+
+45e2c00ba4dc9bb7b3b66135047e860c
+
+f8f199991054908166b1c4222a72fb77
+
+5139eb0dab85734df809b0073c21f15d
+
+e23fa0a36fffb55a57756421739667bc
+
+6db24a16282417cdca0be7350e0d8222
+
+a41abb14c15656870610f73de19f8e09
+
+4254ed1c797fcedf2109f2eeccc375a8
+
+a3a8b795e6185a0b8c2a6423a7852b88
+
+5039f9134cf0af821beb8b99c3829f62
+
+0b220c4fd22bdf3a85edb68f54f8cc67
+
+33e6d3565e4e354af37d6d3d978f3745
+
+18447d152b1e72e3b370d0fbc2fcec7f
+
+7fa3f8bdf52c96fea8b2587319735443
+
+f8ff130567b5d9358c8fc027cbbc8fbe
+
+f02f5d703faf0ea89e16fb97aa41938d
+
+561751b81b1584cfa4951cd30e897ce4
+

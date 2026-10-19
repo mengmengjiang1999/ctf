@@ -1,0 +1,942 @@
+***本文作者：R00to1，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+
+## 介绍
+
+**最近看到大佬发了几篇tpot蜜罐的文章，都是介绍安装的，那我就来写个看看怎么使用的文章，抛砖引玉，共同进步。我的蜜罐也是从16版本升级到17的，感觉没什么太大的变化，内网跑了一年多，还算有点效果，能发现一些恶意攻击行为，有的是病毒的行为，有些则是内网用户在探测。。。。**
+
+>
+> <https://www.freebuf.com/sectool/178998.html><https://www.freebuf.com/sectool/134504.html>
+
+## 概述
+
+> 项目地址：<https://github.com/dtag-dev-sec/tpotce>
+
+![图片](https://image.3001.net/images/20181129/1543480063_5bffa2ff68fc8.png!small)
+
+## 蜜罐类型
+
+ **Conpot:** 低交互工控蜜罐，提供一系列通用工业控制协议, 能够模拟复杂的工控基础设施。
+
+ **Cowrie:** 基于kippo更改的中交互ssh蜜罐, 可以对暴力攻击账号密码等记录，并提供伪造的文件系统环境记录黑客操作行为,
+并保存通过wget/curl下载的文件以及通过SFTP、SCP上传的文件。
+
+ **Dionaea:**
+Dionaea是运行于Linux上的一个应用程序，将程序运行于网络环境下，它开放Internet常见服务的默认端口，当有外来连接时，模拟正常服务给予反馈，同时记录下出入网络数据流。网络数据流经由检测模块检测后按类别进行处理，如果有
+shellcode 则进行仿真执行；程序会自动下载 shellcode 中指定或后续攻击命令指定下载的恶意文件。
+
+ **Elasticpot:** 模拟elastcisearch RCE漏洞的蜜罐，通过伪造函数在/,/_search,
+/_nodes的请求上回应脆弱ES实例的JSON格式消息。
+
+ **Emobility:** 在T-Pot中使用的高交互蜜罐容器，
+旨在收集针对下一代交通基础设施的攻击动机和方法。Emobility蜜网包含一个中央收费系统，几个收费点，模拟用户的事务。一旦攻击者访问中控系统web界面，监控并处理运行收费交易，并与收费点交互。除此之外，在随机时间，黑客可能与正在收取车辆费用的用户进行交互。
+
+ **Glastopf:** 低交互型Web应用蜜罐,
+Glastopf蜜罐它能够模拟成千上万的web漏洞，针对攻击的不同攻击手段来回应攻击者，然后从对目标Web应用程序的攻击过程中收集数据。它的目标是针对自动化漏洞扫描/利用工具，通过对漏洞利用方式进行归类，针对某一类的利用方式返回对应的合理结果，以此实现低交互。
+
+ **Honeytrap:** 观察针对TCP或UDP服务的攻击，作为一个守护程序模拟一些知名的服务，并能够分析攻击字符串，执行相应的下载文件指令。
+
+ **Conpot:** 低交互工控蜜罐，提供一系列通用工业控制协议, 能够模拟复杂的工控基础设施。
+
+ **Cowrie:** 基于kippo更改的中交互ssh蜜罐, 可以对暴力攻击账号密码等记录，并提供伪造的文件系统环境记录黑客操作行为,
+并保存通过wget/curl下载的文件以及通过SFTP、SCP上传的文件。
+
+ **Dionaea:**
+Dionaea是运行于Linux上的一个应用程序，将程序运行于网络环境下，它开放Internet常见服务的默认端口，当有外来连接时，模拟正常服务给予反馈，同时记录下出入网络数据流。网络数据流经由检测模块检测后按类别进行处理，如果有
+shellcode 则进行仿真执行；程序会自动下载 shellcode 中指定或后续攻击命令指定下载的恶意文件。
+
+ **Elasticpot:** 模拟elastcisearch RCE漏洞的蜜罐，通过伪造函数在/,/_search,
+/_nodes的请求上回应脆弱ES实例的JSON格式消息。
+
+ **Emobility:** 在T-Pot中使用的高交互蜜罐容器，
+旨在收集针对下一代交通基础设施的攻击动机和方法。Emobility蜜网包含一个中央收费系统，几个收费点，模拟用户的事务。一旦攻击者访问中控系统web界面，监控并处理运行收费交易，并与收费点交互。除此之外，在随机时间，黑客可能与正在收取车辆费用的用户进行交互。
+
+ **Glastopf:** 低交互型Web应用蜜罐,
+Glastopf蜜罐它能够模拟成千上万的web漏洞，针对攻击的不同攻击手段来回应攻击者，然后从对目标Web应用程序的攻击过程中收集数据。它的目标是针对自动化漏洞扫描/利用工具，通过对漏洞利用方式进行归类，针对某一类的利用方式返回对应的合理结果，以此实现低交互。
+
+ **Honeytrap:** 观察针对TCP或UDP服务的攻击，作为一个守护程序模拟一些知名的服务，并能够分析攻击字符串，执行相应的下载文件指令。
+
+## Tpot架构
+
+tpot蜜罐是使用docker容器，利用docker-compose工具进行编排的。我没有全版本安装，只是标准安装，涉及以下docker
+images：文件位置：`/opt/tpot/etc/tpot.yml`
+
+    
+    
+    services:
+    
+    # Cowrie service
+      cowrie:
+        container_name: cowrie
+        restart: always
+        networks:
+         - cowrie_local
+        cap_add:
+         - NET_BIND_SERVICE
+        ports:
+         - "22:2222"
+         - "23:2223"
+        image: "dtagdevsec/cowrie:1710"
+        volumes:
+         - /data/cowrie/downloads:/home/cowrie/cowrie/dl
+         - /data/cowrie/keys:/home/cowrie/cowrie/etc
+         - /data/cowrie/log:/home/cowrie/cowrie/log
+         - /data/cowrie/log/tty:/home/cowrie/cowrie/log/tty
+    
+    # Dionaea service
+      dionaea:
+        container_name: dionaea
+        stdin_open: true
+        restart: always
+        networks:
+         - dionaea_local
+        cap_add:
+         - NET_BIND_SERVICE
+        ports:
+         - "20:20"
+         - "21:21"
+         - "42:42"
+         - "69:69/udp"
+         - "8081:80"
+         - "135:135"
+         - "443:443"
+         - "445:445"
+         - "1433:1433"
+         - "1723:1723"
+         - "1883:1883"
+         - "3306:3306"
+         - "5060:5060"
+         - "5060:5060/udp"
+         - "5061:5061"
+         - "27017:27017"
+        image: "dtagdevsec/dionaea:1710"
+        volumes:
+         - /data/dionaea/roots/ftp:/opt/dionaea/var/dionaea/roots/ftp
+         - /data/dionaea/roots/tftp:/opt/dionaea/var/dionaea/roots/tftp
+         - /data/dionaea/roots/www:/opt/dionaea/var/dionaea/roots/www
+         - /data/dionaea/roots/upnp:/opt/dionaea/var/dionaea/roots/upnp
+         - /data/dionaea:/opt/dionaea/var/dionaea
+         - /data/dionaea/binaries:/opt/dionaea/var/dionaea/binaries
+         - /data/dionaea/log:/opt/dionaea/var/log
+         - /data/dionaea/rtp:/opt/dionaea/var/dionaea/rtp
+    
+    # Elasticpot service
+      elasticpot:
+        container_name: elasticpot
+        restart: always
+        networks:
+         - elasticpot_local
+        ports:
+         - "9200:9200"
+        image: "dtagdevsec/elasticpot:1710"
+        volumes:
+         - /data/elasticpot/log:/opt/ElasticpotPY/log
+    
+    # ELK services
+    ## Elasticsearch service
+      elasticsearch:
+        container_name: elasticsearch
+        restart: always
+        environment:
+         - bootstrap.memory_lock=true
+         - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+        cap_add:
+         - IPC_LOCK
+        ulimits:
+          memlock:
+            soft: -1
+            hard: -1
+          nofile:
+            soft: 65536
+            hard: 65536
+    #    mem_limit: 2g
+        ports:
+         - "127.0.0.1:64298:9200"
+        image: "dtagdevsec/elasticsearch:1710"
+        volumes:
+         - /data:/data
+    
+    ## Kibana service
+      kibana:
+        container_name: kibana
+        restart: always
+        depends_on:
+          elasticsearch:
+            condition: service_healthy
+        ports:
+         - "127.0.0.1:64296:5601"
+        image: "dtagdevsec/kibana:1710"
+    
+    ## Logstash service
+      logstash:
+        container_name: logstash
+        restart: always
+        depends_on:
+          elasticsearch:
+            condition: service_healthy
+        env_file:
+         - /opt/tpot/etc/compose/elk_environment
+        image: "dtagdevsec/logstash:1710"
+        volumes:
+         - /data:/data
+         - /var/log:/data/host/log
+    
+    ## Elasticsearch-head service
+      head:
+        container_name: head
+        restart: always
+        depends_on:
+          elasticsearch:
+            condition: service_healthy
+        ports:
+         - "127.0.0.1:64302:9100"
+        image: "dtagdevsec/head:1710"
+    
+    # Ewsposter service
+      ewsposter:
+        container_name: ewsposter
+        restart: always
+        networks:
+         - ewsposter_local
+        env_file:
+         - /opt/tpot/etc/compose/elk_environment
+        image: "dtagdevsec/ewsposter:1710"
+        volumes:
+         - /data:/data
+         - /data/ews/conf/ews.ip:/opt/ewsposter/ews.ip
+    
+    # Glastopf service
+      glastopf:
+        container_name: glastopf
+        restart: always
+        networks:
+         - glastopf_local
+        ports:
+         - "80:80"
+        image: "dtagdevsec/glastopf:1710"
+        volumes:
+         - /data/glastopf/db:/opt/glastopf/db
+         - /data/glastopf/log:/opt/glastopf/log
+    
+    # Honeytrap service
+      honeytrap:
+        container_name: honeytrap
+        restart: always
+        network_mode: "host"
+        cap_add:
+         - NET_ADMIN
+        image: "dtagdevsec/honeytrap:1710"
+        volumes:
+         - /data/honeytrap/attacks:/opt/honeytrap/var/attacks
+         - /data/honeytrap/downloads:/opt/honeytrap/var/downloads
+         - /data/honeytrap/log:/opt/honeytrap/var/log
+    
+    # Mailoney service
+      mailoney:
+        container_name: mailoney
+        restart: always
+        networks:
+         - mailoney_local
+        ports:
+         - "25:2525"
+        image: "dtagdevsec/mailoney:1710"
+        volumes:
+         - /data/mailoney/log:/opt/mailoney/logs
+    
+    # Netdata service
+      netdata:
+        container_name: netdata
+        restart: always
+        network_mode: "host"
+        depends_on:
+          elasticsearch:
+            condition: service_healthy
+        cap_add:
+         - SYS_PTRACE
+        security_opt:
+         - apparmor=unconfined
+        image: "dtagdevsec/netdata:1710"
+        volumes:
+         - /proc:/host/proc:ro
+         - /sys:/host/sys:ro
+         - /var/run/docker.sock:/var/run/docker.sock
+    
+    # Rdpy service
+      rdpy:
+        container_name: rdpy
+        restart: always
+        networks:
+         - rdpy_local
+        ports:
+         - "3389:3389"
+        image: "dtagdevsec/rdpy:1710"
+        volumes:
+         - /data/rdpy/log:/var/log/rdpy
+    
+    # Spiderfoot service
+      spiderfoot:
+        container_name: spiderfoot
+        restart: always
+        networks:
+         - spiderfoot_local
+        ports:
+         - "127.0.0.1:64303:8080"
+        image: "dtagdevsec/spiderfoot:1710"
+        volumes:
+         - /data/spiderfoot/spiderfoot.db:/home/spiderfoot/spiderfoot.db
+    
+    # Ui-for-docker service
+      ui-for-docker:
+        container_name: ui-for-docker
+        command:  -H unix:///var/run/docker.sock --no-auth
+        restart: always
+        networks:
+         - ui-for-docker_local
+        ports:
+         - "127.0.0.1:64299:9000"
+        image: "dtagdevsec/ui-for-docker:1710"
+        volumes:
+         - /var/run/docker.sock:/var/run/docker.sock
+    
+    # Suricata service
+      suricata:
+        container_name: suricata
+        restart: always
+        network_mode: "host"
+        cap_add:
+         - NET_ADMIN
+         - SYS_NICE
+         - NET_RAW
+        image: "dtagdevsec/suricata:1710"
+        volumes:
+         - /data/suricata/log:/var/log/suricata
+    
+    # P0f service
+      p0f:
+        container_name: p0f
+        restart: always
+        network_mode: "host"
+        image: "dtagdevsec/p0f:1710"
+        volumes:
+         - /data/p0f/log:/var/log/p0f
+    
+    # Vnclowpot service
+      vnclowpot:
+        container_name: vnclowpot
+        restart: always
+        networks:
+         - vnclowpot_local
+        ports:
+         - "5900:5900"
+        image: "dtagdevsec/vnclowpot:1710"
+        volumes:
+         - /data/vnclowpot/log:/var/log/vnclowpot
+    
+
+## Container
+
+> 下面将按照网络隔离进行介绍各个Container的功能和作用:
+
+### etc_default
+
+该网络下包含以下四个容器:
+
+    
+    
+    logstash
+    kibana
+    head
+    elasticsearch
+    
+
+ELK+Elasticsearch-head service
+
+其实这个不用多说，主要是收集各个`Docker
+Container`抓取到的日志，然后`logstash`处理，`Elasticsearch`存储，`kibana`展示结果,另外添加了一个head插件,可以查看索引的状态,查看logstash的conf文件，即可知道各个日志的存放位置：
+
+logstash配置文件：`/etc/logstash/conf.d/logstash.conf`日志存放位置,将宿主机的/data目录映射到Docker
+Container中的/data：`/data`
+
+这四个Docker Container使用etc_default的 Connected
+networks，从而保证他们之间的通信，像logstash的配置文件中直接写明：
+
+    
+    
+    output {
+      elasticsearch {
+        hosts => ["elasticsearch:9200"]
+      }
+    
+
+另外老外做事真是严谨，无需对外映射的端口一律通过内部转发，比如Elasticsearch service的Docker Container的端口配置：
+
+    
+    
+        ports:
+        - "127.0.0.1:64298:9200"
+    
+
+最后用nginx进行资源的整合显示，配置文件路径：
+
+`/etc/nginx/sites-available/tpotweb.conf`
+
+    
+    
+        ### Kibana
+        location /kibana/ {
+            proxy_pass http://localhost:64296;
+            rewrite /kibana/(.*)$ /$1 break;
+        }
+    
+        ### ES
+        location /es/ {
+            proxy_pass http://localhost:64298/;
+            rewrite /es/(.*)$ /$1 break;
+        }
+    
+        ### head standalone
+        location /myhead/ {
+            proxy_pass http://localhost:64302/;
+            rewrite /myhead/(.*)$ /$1 break;
+        }
+    
+        ### portainer
+        location /ui {
+            proxy_pass http://127.0.0.1:64299;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $http_connection;
+            proxy_set_header Host $host;
+            proxy_redirect off;
+            rewrite /ui/(.*)$ /$1 break;
+        }
+    
+
+### etc_cowrie_local
+
+该网络下包含以下一个容器:
+
+    
+    
+    cowrie
+    
+
+> Cowrie是一款中度交互的SSH与Telnet蜜罐，用于记录攻击者的暴力破解攻击和shell交互。Cowrie由Michel Oosterhof开发。
+
+特性：
+
+部分有趣的特性：
+
+> 伪装的文件系统可增加/移除文件；完整的文件系统搭配有Debian 5.0；
+>
+> 可增加文件内容，攻击者就能用cat命令查看如/etc/passwd等文件；系统中进包含最少的文件内容；
+>
+> 会话日志记录在UML兼容格式中，便于重演；
+>
+> Cowrie保存文件，下载用wget/curl，或者为后续检查——上传采用SFTP和scp；
+
+Container 暴露的端口为:
+
+    
+    
+    2222/tcp  0.0.0.0:22
+    2223/tcp  0.0.0.0:23
+    
+
+宿主机日志存放位置:`/data/cowrie/log/cowrie.json`
+
+通过模拟攻击可以在Kibana中看到展示效果,比如攻击者的使用的用户名和密码等信息:
+
+![图片](https://image.3001.net/images/20181129/1543480076_5bffa30c90330.png!small)![图片](https://image.3001.net/images/20181129/1543480081_5bffa311df040.png!small)
+
+### etc_dionaea_local
+
+该网络下包含以下一个容器:
+
+    
+    
+    dionaea
+    
+
+> Dionaea是一款低交互式蜜罐，是Honeynet Project
+> 的开源项目。Dionaea蜜罐的设计目的是诱捕恶意攻击，获取恶意攻击会话与恶意代码程序样本。它通过模拟各种常见服务，捕获对服务的攻击数据，记录攻击源和目标IP、端口、协议类型等信息，以及完整的网络会话过程，自动分析其中可能包含的shellcode及其中的函数调用和下载文件，并获取恶意程序。
+> Container 暴露了若干端口:
+    
+    
+    135/tcp  0.0.0.0:135
+    1433/tcp  0.0.0.0:1433
+    1723/tcp  0.0.0.0:1723
+    1883/tcp  0.0.0.0:1883
+    20/tcp  0.0.0.0:20
+    21/tcp  0.0.0.0:21
+    27017/tcp  0.0.0.0:27017
+    3306/tcp  0.0.0.0:3306
+    42/tcp  0.0.0.0:42
+    443/tcp  0.0.0.0:443
+    445/tcp  0.0.0.0:445
+    5060/tcp  0.0.0.0:5060
+    5060/udp  0.0.0.0:5060
+    5061/tcp  0.0.0.0:5061
+    69/udp  0.0.0.0:69
+    80/tcp  0.0.0.0:8081
+    
+
+这里可以关注的信息比较多,比如内网如果存在勒索病毒可能会扫描445端口,并提交一些payload进行测试,或者3306数据库爆破等信息,通过Kibana可以查看:
+
+![图片](https://image.3001.net/images/20181129/1543480088_5bffa3183fdf4.jpg!small)
+
+### etc_elasticpot_local
+
+该网络下包含以下一个容器:
+
+    
+    
+    elasticpot
+    
+
+> elasticpot：模拟elastcisearch
+> RCE漏洞的蜜罐，通过伪造函数在/,/search,/nodes的请求上回应脆弱ES实例的JSON格式消息。
+
+Container 暴露端口:
+
+    
+    
+    9200/tcp  0.0.0.0:9200
+    
+
+可以详细的看到请求的url包含了什么:
+
+![图片](https://image.3001.net/images/20181129/1543480094_5bffa31e90d7b.png!small)
+
+### etc_ewsposter_local
+
+该网络下包含以下一个容器:
+
+    
+    
+    ewsposter
+    
+
+>
+> 默认情况下，捕获的数据将提交给社区后端。此社区后端使用数据提供[Sicherheitstacho]（https://sicherheitstacho.eu。您可以通过删除#
+> Ewsposter servicefrom 来选择退出提交/opt/tpot/etc/tpot.yml：
+
+停止T-Pot服务： `systemctl stop tpot`删除Ewsposter服务： `vim
+/opt/tpot/etc/tpot.yml`删除以下行，保存并退出vi（:x!）：
+
+    
+    
+    # Ewsposter service
+      ewsposter:
+        container_name: ewsposter
+        restart: always
+        networks:
+         - ewsposter_local
+        image: "dtagdevsec/ewsposter:1810"
+        volumes:
+         - /data:/data
+         - /data/ews/conf/ews.ip:/opt/ewsposter/ews.ip
+    
+
+启动T-Pot服务： `systemctl start tpot`
+
+### etc_glastopf_local
+
+该网络下包含以下一个容器:
+
+    
+    
+    glastopf
+    
+
+>
+> Glastopf是一款在开源社区非常不错的低交互式Web应用蜜罐软件，由于代码全部使用Python编写，能够在各种主流操作系统平台上进行广泛部署，同时它的安装和配置过程相对简单，方便研究者和安全兴趣爱好者使用。Glastopf蜜罐它能够模拟成千上万的web漏洞，针对攻击的不同攻击手段来回应攻击者，然后从对目标Web应用程序的攻击过程中收集数据。它的目标是针对自动化漏洞扫描/利用工具，通过对漏洞利用方式进行归类，针对某一类的利用方式返回对应的合理结果，以此实现低交互。
+
+Container 暴露端口:
+
+    
+    
+    80/tcp  0.0.0.0:80
+    
+
+访问情况如下:
+
+![图片](https://image.3001.net/images/20181129/1543480101_5bffa3254efa2.png!small)该结果使用awvs扫描得出的截图:![图片](https://image.3001.net/images/20181129/1543480106_5bffa32aadeac.png!small)
+
+### etc_mailoney_local
+
+该网络下包含以下一个容器:
+
+    
+    
+    mailoney
+    
+
+> Mailoney 是一个 SMTP 蜜罐,作者写这个项目的时候只是为了学习python,哈哈.
+
+Container 暴露端口:
+
+    
+    
+    2525/tcp  0.0.0.0:25
+    
+
+`mailoney.py`
+
+    
+    
+    __author__ = '@awhitehatter'
+    __version__ = '0.1'
+    
+    '''
+    add some nice comments here
+    '''
+    
+    import argparse
+    import os
+    import hpfeeds
+    import modules.postfix_creds
+    import modules.open_relay
+    import modules.schizo_open_relay
+    
+    
+    # parse the command line arguments to set the variables for the server
+    parser = argparse.ArgumentParser(description="Command line arguments")
+    parser.add_argument('-i',action='store', metavar='<ip address>', default='0.0.0.0', help='The IP address to listen on')
+    parser.add_argument('-p',action='store', metavar='<port>',  default='25', help='The port to listen on')
+    parser.add_argument('-s',action='store', metavar='mailserver', default=os.environ.get('MAILSERVER_NAME', None), help='A Name that\'ll show up as the mail server name')
+    parser.add_argument('-t',action='store', choices=['open_relay', 'postfix_creds', 'schizo_open_relay'], required=True, help='honeypot type')
+    parser.add_argument('-logpath',action='store', metavar='<logpath>',  default=os.environ.get('LOGPATH'), help='path for file logging')
+    parser.add_argument('-hpfserver', action='store', metavar='<hpfeeds-server>', default=os.environ.get('HPFEEDS_SERVER', None), help='HPFeeds Server')
+    parser.add_argument('-hpfport', action='store', metavar='<hpfeeds-port>', default=os.environ.get('HPFEEDS_PORT', None), help='HPFeeds Port')
+    parser.add_argument('-hpfident', action='store', metavar='<hpfeeds-ident>', default=os.environ.get('HPFEEDS_IDENT', None), help='HPFeeds Username')
+    parser.add_argument('-hpfsecret', action='store', metavar='<hpfeeds-secret>', default=os.environ.get('HPFEEDS_SECRET', None), help='HPFeeds Secret')
+    parser.add_argument('-hpfchannelprefix', action='store', metavar='<hpfeeds-channel-prefix>', default=os.environ.get('HPFEEDS_CHANNELPREFIX', None), help='HPFeeds Channel Prefix')
+    
+    args = parser.parse_args()
+    
+    # set own logpath
+    logpath="./logs/"
+    if args.logpath:
+        logpath=args.logpath
+    
+    # set the IP address variables
+    bind_ip = args.i
+    bind_port = int(args.p)
+    srvname = args.s
+    
+    def connect_hpfeeds():
+        # set hpfeeds related data
+        hpfeeds_server = args.hpfserver
+        hpfeeds_port = args.hpfport
+        hpfeeds_ident = args.hpfident
+        hpfeeds_secret = args.hpfsecret
+        hpfeeds_prefix = args.hpfchannelprefix
+    
+        if hpfeeds_server and hpfeeds_port and hpfeeds_ident and hpfeeds_secret and hpfeeds_prefix:
+            try:
+                hpc = hpfeeds.new(hpfeeds_server, int(hpfeeds_port), hpfeeds_ident, hpfeeds_secret)
+                return hpc, hpfeeds_prefix
+            except (hpfeeds.FeedException, socket.error, hpfeeds.Disconnect), e:
+                print "hpfeeds connection not successful"
+                logger.warn('Exception while connecting: {0}'.format(e))
+        return False, False
+    
+    
+    if __name__ == "__main__":
+    
+        banner = ('''
+        ****************************************************************
+        \tMailoney - A Simple SMTP Honeypot - Version: {}
+        ****************************************************************
+        '''.format(__version__))
+        print banner
+    
+        # create log directory (thanks @Bifrozt_Dev)
+        if not os.path.isdir(logpath):
+                os.mkdir(logpath)
+    
+        # call server type module, based on parsed arguments
+        if args.t == 'postfix_creds':
+            modules.postfix_creds.pfserver()
+        elif args.t == 'open_relay':
+            modules.open_relay.or_module()
+        elif args.t == 'schizo_open_relay':
+            modules.schizo_open_relay.module()
+        else:
+            print 'I don\'t know what this module is...Exiting...\r\n'
+    
+
+### etc_rdpy_local
+
+该网络下包含以下一个容器:
+
+    
+    
+    rdpy
+    
+
+> RDPY 是基于 Twisted Python 实现的微软 RDP 远程桌面协议。
+
+Container 暴露端口:
+
+    
+    
+    3389/tcp  0.0.0.0:3389
+    
+
+![图片](https://image.3001.net/images/20181129/1543480114_5bffa332cbc7d.png!small)
+
+![图片](https://image.3001.net/images/20181129/1543480119_5bffa3374fcf7.png!small)
+
+### etc_spiderfoot_local
+
+该网络下包含以下一个容器:
+
+    
+    
+    spiderfoot
+    
+
+>
+> SpiderFoot是一种侦察工具，可自动查询100多个公共数据源（OSINT），以收集有关IP地址，域名，电子邮件地址，姓名等相关情报。使用Python编写的免费开源的网站信息收集类工具，并且支持跨平台运行，适用于Linux、*BSD和Windows系统。此外，它还为用户提供了一个易于使用的GUI界面。在功能方面SpiderFoot也为我们考虑的非常周全，通过SpiderFoot我们可以获取相关目标的各种信息，例如网站子域、电子邮件地址、web服务器版本等等。SpiderFoot简单的基于Web的界面，使你能够在安装后立即启动扫描
+> – 只需简单的设置扫描目标域名，并启用相应的扫描模块即可
+>
+>
+> 官网地址：<http://www.spiderfoot.net/>github项目地址：<https://github.com/smicallef/spiderfoot>介绍文章:<https://www.freebuf.com/sectool/130007.html>
+
+Container 暴露端口:
+
+    
+    
+    8080/tcp  127.0.0.1:64303
+    
+
+![图片](https://image.3001.net/images/20181129/1543480124_5bffa33cbe181.png!small)
+
+### etc_ui-for-docker_local
+
+该网络下包含以下一个容器:
+
+    
+    
+    ui-for-docker
+    
+
+> ui-for-docker,UI展示用,没啥好说的.
+
+Container 暴露端口:
+
+    
+    
+    9000/tcp  127.0.0.1:64299
+    
+
+### etc_vnclowpot_local
+
+该网络下包含以下一个容器:
+
+    
+    
+    vnclowpot
+    
+
+> 这是一个vnc的蜜罐，当使用vnc客户端连接该端口，即可激活该蜜罐进行记录.
+
+Container 暴露端口:
+
+    
+    
+    5900/tcp  0.0.0.0:5900
+    
+
+![图片](https://image.3001.net/images/20181129/1543480130_5bffa34248c6b.png!small)![图片](https://image.3001.net/images/20181129/1543480135_5bffa34762c86.png!small)![图片](https://image.3001.net/images/20181129/1543480140_5bffa34cf0ff0.png!small)
+
+\----------------------巧黑板,划重点!!!----------------------
+### host(重点)
+
+该网络下包含以下四个重要容器:
+
+    
+    
+    netdata
+    p0f
+    honeytrap
+    suricata
+    
+
+> 该部分的容器主要是通过监控宿主机的物理接口来获取数据,进行分析整理.
+
+Container 执行的命令:
+
+    
+    
+    /usr/sbin/netdata -D -s /host -i 127.0.0.1 -p 64301
+    /bin/sh -c /bin/bash -c "exec /opt/p0f/p0f -u p0f -j -o /var/log/p0f/p0f.json -i $(/sbin/ip address | grep '^2: ' | awk '{ print $2 }' | tr -d [:punct:])"
+    /opt/honeytrap/sbin/honeytrap -D -C /opt/honeytrap/etc/honeytrap/honeytrap.conf -t 5 -u honeytrap -g honeytrap
+    /bin/sh -c update.sh && suricata -v -F /etc/suricata/capture-filter.bpf -i $(/sbin/ip address | grep '^2: ' | awk '{ print $2 }' | tr -d [:punct:])
+    
+
+p0f
+
+>
+> p0f是一款被动探测工具，能够通过捕获并分析目标主机发出的数据包来对主机上的操作系统进行鉴别，即使是在系统上装有性能良好的防火墙的情况下也没有问题。同时p0f在网络分析方面功能强大，可以用它来分析NAT、负载均衡、应用代理等。p0f是万能的被动操作系统指纹工具。p0f对于网络攻击非常有用，它利用SYN数据包实现操作系统被动检测技术，能够正确地识别目标系统类型。和其他扫描软件不同，它不向目标系统发送任何的数据，只是被动地接受来自目标系统的数据进行分析。因此，一个很大的优点是：几乎无法被检测到，而且p0f是专门系统识别工具，其指纹数据库非常详尽，更新也比较快，特别适合于安装在网关中。
+
+工作原理：当被动地拦截原始的TCP数据包中的数据，如可以访问数据包流经的网段，或数据包发往，或数据包来自你控制的系统；就能收集到很多有用的信息：TCP
+SYN 和SYN/ACK数据包就能反映TCP的链接参数，并且不同的TCP协议栈在协商这些参数的表现不同。
+
+P0f不增加任何直接或间接的网络负载，没有名称搜索、没有秘密探测、没有ARIN查询，什么都没有。某些高手还可以用P0f检测出主机上是否有防火墙存在、是否有NAT、是否存在负载平衡器等等！
+
+P0f是继Nmap和Xprobe2之后又一款远程操作系统被动判别工具。它支持：
+
+> 反连SYN 模式
+>
+> 正连SYN+ACK 模式
+>
+> 空连RST+ 模式
+>
+> 碎片ACK 模式
+
+P0f比较有特色的是它还可以探测：
+
+> A、是否运行于防火墙之后
+>
+> B、是否运行于NAT模式
+>
+> C、是否运行于负载均衡模式
+>
+> D、远程系统已启动时间
+>
+> E、远程系统的DSL和ISP信息等
+
+p0f 参数
+
+用法: p0f [ ...选项... ] [ '过滤规则' ]
+
+    
+    
+    网络接口选项:
+    
+      -i iface  - 指定监听的网络接口
+      -r file   - 读取由抓包工具抓到的网络数据包文件
+      -p        - 设置 -i参数 指定的网卡 为混杂模式
+      -L        - 列出所有可用接口
+    
+
+操作模式和输出设置:
+
+    
+    
+      -f file   - 指定指纹数据库 (p0f.fp) 路径，不指定则使用默认数据库。(默认：/etc/p0f/p0f.fp)
+      -o file   - 将信息写入指定的日志文件中。只有同一网卡的log文件才可以附加合并到本次监听中来。
+      -s name   - 回答 unix socket 的查询 API
+      -u user   - 以指定用户身份运行程序，工作目录会切换到到当前用户根目录下；
+      -d        - 以后台进程方式运行p0f (requires -o or -s)
+      -j        - Log in JSON format.
+    
+
+性能相关的选项:
+
+    
+    
+      -S limit  - 设置API并发数，默认为20，上限为100；
+      -t c,h    - 设置连接超时时间 (30s,120m)
+      -m c,h    - 设置最大网络连接数(connect)和同时追踪的主机数(host)(默认值: c = 1,000, h = 10,000).
+    
+
+通过 man tcpdump 命令可以了解更过 过滤选项表达式。阻止p0f查看网络流量。p0f -i eth0 –p
+//监听网卡eth0，并开启混杂模式。这样会监听到每一个网络连接。也可以直接在终端输入 p0f
+，然后回车，进行监听，一旦收到报文就会显示相关信息，并且不断刷新。示例：在终端输入 p0f 然后回车，就可进行监听。然后浏览器打开
+[www.baidu.com](http://www.baidu.com)即可，，就可以监听与百度的网络连接。也可通过其他方式。
+
+tpot中的启动参数为：
+
+    
+    
+    CMD        /bin/sh -c /bin/bash -c "exec /opt/p0f/p0f -u p0f -j -o /var/log/p0f/p0f.json -i $(/sbin/ip address | grep '^2: ' | awk '{ print $2 }' | tr -d [:punct:])"
+    
+
+日志存放位置：`/var/log/p0f/p0f.json`因为添加了-j参数，所以日志都json化了：
+
+![图片](https://image.3001.net/images/20181129/1543480148_5bffa3540bce8.png!small)
+
+![图片](https://image.3001.net/images/20181129/1543480153_5bffa359a02c4.png!small)
+
+基于以上策略，可以查看宿主机接口的所有连接数据：
+
+![图片](https://image.3001.net/images/20181129/1543480162_5bffa3621f975.png!small)
+
+Suricate
+
+> Suricate: 开源的网络安全威胁检测引擎。suricata具有IDS的功能外，还具有IPS功能，所谓的IPS即是Intrusion
+> Prevention
+> System（入侵防护系统），对不符合配置规则的报文进行直接阻断。suricata的阻断功能，是其本身所不具备的，只是通过和linux下通用的网络防火墙iptables/netfilter的联通来达到阻断网络的目的。
+
+suricata的IPS分为两种：
+
+1）drop：包含签名的数据包立即被丢弃，不会再发送。 接收器不会收到导致超时的消息。
+流的所有后续数据包都被丢弃。（实际测试http，用浏览器仍然可以访问，wget却不能访问）
+
+2）reject：主动拒绝数据包，接收者和发送者都会收到一个拒绝数据包。
+如果数据包涉及TCP，则它将成为重置数据包，否则将成为所有其他协议的ICMP错误数据包。NFQ支持多个队列处理，您应该在iptables规则和suricata命令行选项中明确指定。
+例如，您可以使用NFQ配置负载平衡，如下所示：
+
+    
+    
+    iptables -A INPUT -j NFQUEUE --queue-balance 0:3
+    suricata -c /etc/suricata/suricata.yaml -q 0 -q 1 -q 2 -q 3
+    
+
+tpot中的启动参数为：
+
+    
+    
+    /bin/sh -c update.sh && suricata -v -F /etc/suricata/capture-filter.bpf -i $(/sbin/ip address | grep '^2: ' | awk '{ print $2 }' | tr -d [:punct:])
+    
+
+日志位置:`data/suricata/log`
+
+![图片](https://image.3001.net/images/20181129/1543480167_5bffa3675c463.png!small)
+
+honeytrap
+
+>
+> Honeytrap可观察针对TCP或UDP服务的攻击，作为一个守护程序模拟一些知名的服务，并能够分析攻击字符串，执行相应的下载文件指令，当不产生TCP或者UDP协议的时候Honeytrap捕获不到任何信息，但有攻击者试图使用一些安全工具进行扫描的时候，Honeytrap即可捕获到连接信息。
+
+tpot中的启动参数为：
+
+    
+    
+    /opt/honeytrap/sbin/honeytrap -D -C /opt/honeytrap/etc/honeytrap/honeytrap.conf -t 5 -u honeytrap -g honeytrap
+    
+
+![图片](https://image.3001.net/images/20181129/1543480171_5bffa36bd7bed.png!small)
+
+netdata
+
+>
+> netdata是Linux系统实时性能监测工具，以web的可视化方式展示系统及应用程序的实时运行状态（包括cpu、内存、硬盘输入/输出、网络等linux性能的数据）
+>
+> Netdata文档地址：<https://github.com/firehol/netdata/wiki>
+
+Netdata用可视化的手段，将被监测者最细微的细节，展现了出来。这样便可以清晰地了解linux系统和应用程序此时的状况。
+
+> 优美的界面：bootstrap框架下的控制界面
+>
+> 自定义的控制界面：你可以使用简单的HTML代码去自定义控制界面(不需要使用javascript)
+>
+> 极其的快速而高效：程序使用C进行编写(默认安装下，预计只有2%的单核CPU使用率和少许的内存使用率)
+>
+> 零配置：你只需要去安装它，接着它就会自动地监测一切数据
+>
+> 零依赖：它的静态网络文件和网络接口拥有自己的网络服务器
+>
+> 可扩展：用它自身的插件API(可以使用许多方式来制作它的插件，从bash到node.js),你可以检测任何可以衡量的数据。
+>
+> 可嵌入：它可以在任何Linux内核可以运行的地方运行
+
+![图片](https://image.3001.net/images/20181129/1543480176_5bffa370a121e.png!small)
+
+写文章的时候tpot已经更新到18.11了，好吧，就这么结束把，一会update去。。。。。
+
+ ***本文作者：R00to1，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+

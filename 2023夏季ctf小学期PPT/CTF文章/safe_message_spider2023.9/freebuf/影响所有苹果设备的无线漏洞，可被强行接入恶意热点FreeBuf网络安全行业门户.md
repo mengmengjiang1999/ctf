@@ -1,0 +1,132 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ ***本文作者：qingxp9，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+
+## 前言
+
+ **CVE-2019-6203：苹果设备在PEAP认证上存在缺陷，攻击者可强迫苹果设备接入恶意热点。**
+
+该缺陷影响2019年3月25前的iOS、macOS、tvOS版本，包含MacBook、iPhone、iPad、Apple TV等多种苹果设备，演示视频如下。
+
+## 802.1X与PEAP简介
+
+IEEE 802.1X是由IEEE制定的关于用户接入网络的认证标准，它为想要连接到LAN或WLAN的设备提供了一种认证机制，通过EAP（Extensible
+Authentication
+Protocol，可扩展身份验证协议）进行认证，控制一个端口是否可以接入网络。802.1X工作在二层网络，EAP只是一个框架，由厂商来实现具体的认证方法，具有良好的扩展性。
+
+不同的厂商衍生出了LEAP、PEAP、EAP-TLS、EAP-MD5等具体的认证协议。其中，因为PEAP与Windows操作系统具有良好的协调性，可以通过Windows组策略进行管理，使得PEAP在部署时极其简单。同时，由于PEAP兼容几乎大部分厂商的设备，因此大多数企业在部署无线802.1X认证时都会选用PEAP。同时，为了避免部署PKI系统的复杂性，企业在部署无线网络时，一般都会选择采用PEAP-MSCHAP v2、AD认证（域账户）的架构。
+
+PEAP-MSCHAP v2的认证过程分为以下两个阶段。
+
+> 阶段一：验证服务器身份和建立TLS隧道。服务端将向客户端发送服务端的证书信息，通过后建立TLS隧道保护传输的数据。
+>
+> 阶段二：在TLS隧道内通过MSCHAP v2进行双向认证。
+
+一个具体的连接过程如下图：
+
+![1.jpg](https://image.3001.net/images/20190514/15578152795515.jpg!small)![](media/15573873612886/1.jpg)
+
+> Frame 5~14 为PEAP阶段一，建立了TLS隧道。
+>
+> Frame 15~21 为阶段二，TLS隧道内的7步MSCHAPv2认证交互。
+>
+> Frame 22~23 结束PEAP。
+>
+> Frame 24-27 WPA2的四步握手过程。
+
+其中MSCHAPv2的7步交互过程如下所示。
+
+> Authenticator -> Station – Initiation 开始。
+>
+> Station -> Authentication – Username 客户端提供用户名。
+>
+> Authenticator -> Station – Authenticator Challenge 提供验证者的Challenge。
+>
+> Station -> Authenticator – Peer Challenge & NTResponse
+> 提供客户端的Challenge并返回客户端的NTResponse。
+>
+> Authenticator -> Station – Authenticator Response 返回验证者的Authenticator
+> Response。
+>
+> Station -> Authenticator – Success 客户端返回验证成功。
+>
+> Authenticator -> Station – Success 验证者返回验证成功。
+
+在Frame 4、Frame 5中，验证者和客户端的Response都是通过双方的Challenge + passwordHash +
+Username计算得出的，发向对方进行身份验证。
+
+## WPE攻击
+
+2008年时，Joshua Wright和Brad Antoniewicz发布了FreeRadius-WPE（后来的同类工具有hostapd-wpe、hostapd-mana），通过建立虚假的PEAP-MSCHAPv2热点并接受任意的用户名请求，在阶段二中的Frame
+4阶段可获取到用户的Username、Challenge和NTResponse。
+
+![](https://image.3001.net/images/20190514/15578153025594.png!small)
+
+![](media/15573873612886/2.png)
+
+随后利用asleap/hashcat/JtR等工具暴破尝试还原出明文密码。
+
+![3.png](https://image.3001.net/images/20190514/15578153149554.png!small)![](media/15573873612886/3.png)
+
+由于PEAP-MSCHAP v2是双向认证的，我们的虚假热点暂时不知道真实密码没法计算出Response，于是WPE攻击到此就结束了。
+
+## 苹果设备CVE-2019-6203
+
+2018年8月，Dominic White发现如果跳过没法计算的Frame 5而直接发送代表验证成功的Frame 7 EAP-Success（下图中的17号帧），苹果设备会接受并进行接下来握手过程（原本按照状态机客户端该中止会话）。
+
+![](https://image.3001.net/images/20190514/15578153266264.jpg!small)![](media/15573873612886/4.jpg)
+
+最终，在不知道用户密码的情况下可以将苹果设备连入网络，达到了演示视频的效果。随后便可进行局域网中的中间人攻击、钓鱼等。
+
+该漏洞影响iOS 12.2以下、macOS Mojave 10.14.3以下的苹果设备，时间线如下。
+
+> 2 Aug 2018 – Dominic White@SensePost提交漏洞报告。
+>
+> 6 Aug 2018 – 漏洞确认。
+>
+> 25 Mar 2019 – 漏洞修复。
+>
+> 15 April 2019 – macOS、iOS、tvOS 更新安全说明，分配CVE-2019-6203。
+
+## PoC实验
+
+笔者的实验在Kali Linux中进行，目标设备为macOS Mojave 10.14.2，测试步骤如下。
+
+（1）安装hostapd-wpe、dnsmasq。
+
+    
+    
+    apt install hostapd-wpe dnsmasq
+    
+
+（2）在笔者的PoC代码项目页单击Star（这一步很重要）。<https://github.com/qingxp9/CVE-2019-6203-PoC>
+
+（3）下载并运行PoC。
+
+    
+    
+    git clone https://github.com/qingxp9/CVE-2019-6203-PoC
+    cd CVE-2019-6203-PoC
+    python CVE-2019-6203-PoC.py -i wlan0 -o eth0
+    
+
+![](media/15573873612886/5.png)
+
+![5.png](https://image.3001.net/images/20190514/1557815348382.png!small)
+
+（4）测试的苹果设备尝试连接该热点，输入任意的用户名及密码。信任热点的证书后便能接入该网络。
+
+![](https://image.3001.net/images/20190514/15578153597784.jpg!small)![](https://image.3001.net/images/20190514/15578153703915.png!small)![](https://image.3001.net/images/20190514/15578153788683.png!small)![](media/15573873612886/6.jpg)
+
+![](media/15573873612886/7.png)
+
+![](media/15573873612886/8.png)
+
+在真实的无线渗透环境中，我们会将热点名称修改与目标企业热点相同的名称，由于员工已经保存了该名称热点的信息，设备会自动利用储存的用户名和密码信息登录我们的恶意热点。唯一需要交互的就是信任证书，从业者应该能明白大部分用户会选择同意的：）。
+
+## 参考资源
+
+> <https://sensepost.com/blog/2019/understanding-peap-in-depth/>
+
+***本文作者：qingxp9，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+

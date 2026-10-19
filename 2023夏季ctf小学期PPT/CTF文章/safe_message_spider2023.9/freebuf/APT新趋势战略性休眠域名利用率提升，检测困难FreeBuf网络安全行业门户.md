@@ -1,0 +1,139 @@
+Palo Alto Networks发现， **攻击者越来越倾向于提前注册域名备用，利用这类战略性休眠域名的攻击越来越多。**
+例如，SolarWinds事件的攻击者在实际攻击中利用的C&C 域名，在数年前就已注册。
+
+APT 攻击的典型特征之一是长期潜伏在高价值目标处 ， **其部署的恶意软件通常会在失陷网络中保持较长的休眠状态。** 网络钓鱼和黑帽 SEO
+的攻击者也经常利用注册时间较长的域名，它们通常因为注册时长而获得良好信誉， **检测这种战略性休眠域名通常是更困难的。**
+
+战略性休眠域名在投入使用时会出现流量激增，基于此特征可以对该类域名进行检测。Palo Alto Networks 可通过 Passive DNS
+数据中每天筛选出大约 3 万个域名，这些域名都会在某天突然获得超过平日 10 倍的流量，并且域名中恶意域名所占比例是新注册域名（NRD）中的三倍多。
+
+![](https://image.3001.net/images/20220106/1641472137_61d6e089b83f5b4533dce.png!small)
+
+图 1 2021年9月每日检测战略性休眠域名的数量
+
+在 SolarWinds 供应链攻击中，SUNBURST 木马使用 DGA 算法窃取失陷主机的域信息。Palo Alto Networks为了发现类似的
+APT 攻击，将数据中包含大量新发现 DGA 子域名的域名标记为潜在的恶意域名。这些恶意域名平均有 161 个 DGA子域名，承载了突增流量的
+43.19%。以下展示几个典型的示例分析。
+
+## 检测战略性休眠域名
+
+众所周知，新注册域名被滥用的非常严重，但只关注新注册域名是远远不够的。攻击者越来越倾向于使用很久前注册的域名。
+**首先，注册时间更久的域名通常被认为信誉更好。其次，APT 使用的域名很有可能本就沉寂数年。**
+
+ **在域名休眠期间，恶意软件只向 C &C
+服务器发送极其有限的“心跳”流量**。只有在攻击者决定要对某些高价值目标进行后续攻击时，域名才会接收到更多流量。
+
+例如 SolarWinds 供应链攻击中使用的 C&C 域名 avsvmcloud.com 就是在 2018 年注册的，在 2020 年 3
+月开始接收大量流量前 **处于休眠状态长达两年** 。通过 Passvie DNS 数据可以发现，该域名的流量在投入使用后增加了大约 165 倍。
+
+Palo Alto Networks 通过在特定时间窗口内的 DNS 流量来量化域名的活跃度。根据活跃程度将域名分为三类：休眠域名（后
+75%）、标准域名（介于 75% 到 95% 之间）和活跃域名（前 5%）。
+
+合法服务的流量通常会逐渐增长，但一个域名长期处于休眠状态再突然出现大量流量是极不正常的。
+
+![](https://image.3001.net/images/20220106/1641472168_61d6e0a88b0d6b5647d46.png!small)
+
+图 2 投入使用前后时间与流量的关系图
+
+在 2021 年 9 月，每天大概可以检测大约 2.6 万个战略性休眠域名。如上所示，通过标准化后请求的流量平均会增长 11.3 倍。
+
+![](https://image.3001.net/images/20220106/1641472191_61d6e0bf622be80b506b4.png!small)
+
+图 3 域名分类组成情况
+
+将这些域名分为恶意（Malicious）、可疑（Suspicious）、不安全（Not Safe for
+Work）和其他，进一步评估这些域名的威胁。恶意域名包括恶意软件、C&C、网络钓鱼或者在 VirusTotal 上被任意厂商标记恶意的域名。可疑域名包括
+parking、可疑和高风险的域名等。而色情、成人、赌博和类似的内容被归类为不安全域名，其余域名标记为其他。
+
+3.8% 的战略性休眠域名是恶意的，这个比例相比新注册域名的 1.27%
+高三倍多。而恶意（Malicious）、可疑（Suspicious）、不安全（Not Safe for Work）的总和接近四分之一。
+
+## DGA 检测
+
+### SolarWinds
+
+在 SolarWinds 供应链攻击的休眠期，SUNBURST 木马定期与 C&C 域名 avsvmcloud.com 进行心跳通信，但流量极其有限。
+
+攻击者激活恶意软件后，大多数突增的 DNS 请求都是针对新子域名的。SUNBURST 木马通过 DGAstring.appsync-api.region.avsvmcloud.com 形式生成 DGA 域名请求，其中包含编码后的受害者身份、受感染组织的域以及使用安全产品的状态。
+
+攻击者在接收到请求时，根据传递的信息返回指向不同 C&C 服务器的 CNAME 记录。
+
+### 检测
+
+为了捕获类似的 C&C 流量，Palo Alto Networks会主动扫描战略性休眠域名的所有子域名，再根据 WHOIS 记录和其他附加信息识别合法服务。
+
+![](https://image.3001.net/images/20220106/1641472221_61d6e0dd4e852a087fa5c.png!small)
+
+图 4 DGA 域名占比累计分布图
+
+平均每天都能识别出两个可疑域名。在投入使用后，每个战略性休眠域名大约有 2443 个新出现的子域名，其中 161 个 DAG 子域名。上图显示了激活后
+DGA 流量百分比的累积分布图（CDF），域名中有一半的 DGA 流量占比超过 36.76%。
+
+## APT
+
+在 2021 年 7 月份，检测发现了 Pegasus 的异常 DNS 流量。检测发现的两个 C&C 域名（permalinking.com 和
+opposedarrangement.net）都是在 2019 年注册的，2021 年 7 月投入使用时才产生了大量的 DGA 流量。
+
+Pegasus 可以感染 iOS 和 Android 设备收集凭据信息并跟踪用户行为，包括通话记录和地理位置记录。
+
+![](https://image.3001.net/images/20220106/1641472247_61d6e0f701368fc6a7aef.png!small)
+
+图 5 域名访问情况统计
+
+如上所示，在 2021 年 7 月 18 日之前，每天平均有 15 个域名请求。投入使用后，DNS 流量增加了 56 倍。攻击者使用了多个子域名，如
+imgdsg4f35.permalinking.com 和 php78mp9v.opposedarrangement.net。总体而言，DGA
+流量随整体流量增加而增加，且 DGA 流量的占比也在显著增长。在 7 月 18 日之前，DGA 流量的百分比为 23.22%，之后为 42.04%。
+
+## 网络钓鱼
+
+也有攻击者在网络钓鱼攻击中使用类似于 SolarWinds 供应链攻击中所见的 DGA 子域名，相当于提供了与实际恶意网站间的一层代理。例如
+jcxivnmqfqoiopdlvejvgucpmrfgmhwdlrkvzqyb.ui1io.cn 在 URL
+中存在特定参数时，会将访问者重定向到另一个网络钓鱼的 DGA 域名
+gjahqfcyr.cn。否则，将用户重定向到合法的银行网站。因此，这个域名也就具备隐藏分流功能，对非受害者和爬虫隐藏实际的网络钓鱼内容。在 2021 年
+10 月 2 日，ui1io.cn 的 DGA 子域名被发现异常突增。
+
+![](https://image.3001.net/images/20220106/1641472273_61d6e1115d12e79d62a1f.png!small)
+
+图 6 页面跳转逻辑
+
+网络钓鱼攻击还会使用 DGA 字符串生成域名用于域名抢注。这些字符串将欺骗性部分和根域名分开，例如 mailingmarketing.net 是在 2020
+年注册的。在 2021 年 9 月 23 日将其作为战略性休眠域名检出，当时有 47 个新出现的 DGA 子域名，例如
+uk.id.login.update.ssl.encryption-6159368de39251d7a-login.id.security.trackid.piwikb7c1867dd7ba9c57.fd685e42f1d69c71708ff549fea71274.mailingmarketing.net
+这个子域名部署了一个虚假的病毒扫描页面。由于域名太长，受害者可能只注意到前面的部分就认为是合法的登录域名，尤其是移动端的浏览器通常无法完全显示 FQDN。
+
+## 通配符滥用
+
+有的黑产也会利用 DGA 子域名来构建基础设施，例如 fiorichiari.com 的一个通配符记录将所有子域名指向同一个 IP 地址。
+
+![](https://image.3001.net/images/20220106/1641472296_61d6e128563a434a40b8b.png!small)
+
+图 7 域名部署的网站
+
+该服务的运营商在 2021 年 7 月 27 日注册了域名，后续在2021 年 9 月 29 日发现了突增的 DNS 请求。
+
+这些域名都关联了随机生成的网站，文字内容都是使用随机字符串填充的网站模板，猜测是黑产用于黑帽 SEO 用途。
+
+## 结论
+
+攻击者越来越倾向于在攻击行动很久前就注册域名备用。APT
+使用的恶意软件本就可能休眠很长时间，突然启用就会产生更多流量。基于这种流量的突增特征，检测战略性休眠域名是非常有必要的。
+
+## IOC
+
+> avsvmcloud.com  
+> fiorichiari.com  
+> gjahqfcyr.cn  
+> imgdsg4f35.permalinking.com  
+> jcxivnmqfqoiopdlvejvgucpmrfgmhwdlrkvzqyb.ui1io.cn  
+> mailingmarketing.net  
+> opposedarrangement.net  
+> permalinking.com  
+> php78mp9v.opposedarrangement.net  
+> ui1io.cn  
+>
+> uk.id.login.update.ssl.encryption-6159368de39251d7a-login.id.security.trackid.piwikb7c1867dd7ba9c57.fd685e42f1d69c71708ff549fea71274.mailingmarketing.net
+
+## 参考来源
+
+> [Palo Alto Networks](https://unit42.paloaltonetworks.com/strategically-aged-> domain-detection/)
+

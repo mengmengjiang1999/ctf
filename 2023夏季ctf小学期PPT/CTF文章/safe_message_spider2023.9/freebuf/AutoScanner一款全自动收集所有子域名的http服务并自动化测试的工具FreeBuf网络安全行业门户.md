@@ -1,0 +1,47 @@
+## AutoScanner是什么
+
+AutoScanner是一款自动化扫描器，其功能主要是遍历所有子域名、及遍历主机所有端口寻找出所有http服务，并使用集成的工具进行扫描，最后集成扫描报告；  
+工具目前有：oneforall、masscan、nmap、crawlergo、dirsearch、xray、awvs、whatweb等
+
+## AutoScanner做了什么
+
+  * 自动下载项目所需要的tools
+
+  * 使用oneforall遍历子域名
+
+  * 使用masscan遍历主机所有开放端口
+
+  * 使用nmap扫描开放端口；得出所有http服务端口
+
+  * 使用crawlergo进行扫描
+
+  * 动态添加crawlergo扫描到的域名至任务清单
+
+  * 使用dirsearch进行目录文件扫描
+
+  * 扫描到的目录、文件传递到xray
+
+  * 使用xray进行被动扫描
+
+  * 扫描结束后生成两份报告，xray和 所有tools集成的一份报告
+
+大概的逻辑就是输入域名后，使用oneforall进行爆破获取子域名，并在每个子域名上使用masscan获取开放端口；使用nmap扫描获取到的开放端口以寻找http服务；之后利用各类工具扫描http服务并集成报告；
+
+此外，在各个工具直接做了一些逻辑处理，如masscan扫描到过多开放端口，直接忽略nmap扫描转而对域名进行http扫描；如nmap发现80和443同时开放http服务，忽略443；等等
+
+需要注意的是，项目中提供了awvs的扫描脚本，但是考虑到版权的原因项目中未集成awvs的安装包；
+
+## 项目地址
+
+    
+    
+    https://github.com/zongdeiqianxing/Autoscanner
+    
+
+## 截图展示
+
+部分截图可以看之前的[hscan](https://www.freebuf.com/sectool/260394.html)；  
+这儿展示下单独的tools的报告  
+![image](https://image.3001.net/images/20210226/1614303178_60384fca69d99d827d20d.png!small)![image](https://image.3001.net/images/20210226/1614303188_60384fd46237f3f83a971.png!small)  
+![image](https://image.3001.net/images/20210226/1614303146_60384faa68802c9db4be1.png!small)
+

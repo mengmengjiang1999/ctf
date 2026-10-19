@@ -1,0 +1,296 @@
+作者：Cradmin@Tencent Blade Team  
+来源：[腾讯安全应急响应中心](https://security.tencent.com/index.php/blog/msg/124?from=timeline&isappinstalled=0
+"腾讯安全应急响应中心")
+
+#### 0x01 背景
+
+中国武术博大精深，其中太极作为不以拙力胜人的功夫备受推崇。同样如果从攻击的角度窥视漏洞领域，也不难看出攻防之间的博弈不乏“太极”的身影，轻巧稳定易利用的漏洞与工具往往更吸引黑客，今天笔者要着墨分析的就是这样一个擅长“四两拨千斤”的0day漏洞。
+
+0day漏洞的攻击威力想必大家都听说过，内核0day更因为其影响范围广，修复周期长而备受攻击者的青睐。近期，国外安全研究者Vitaly
+Nikolenko在twitter[1]上公布了一个Ubuntu
+16.04的内核0day利用代码[2]，攻击者可以无门槛的直接利用该代码拿到Ubuntu的最高权限(root)；虽然只影响特定版本，但鉴于Ubuntu在全球拥有大量用户，尤其是公有云用户，所以该漏洞对企业和个人用户还是有不小的风险。
+
+笔者对该漏洞进行了技术分析，不管从漏洞原因还是利用技术看，都相当有代表性，是Data-Oriented
+Attacks在linux内核上的一个典型应用。仅利用传入的精心构造的数据即可控制程序流程，达到攻击目的，完全绕过现有的一些内存防护措施，有着“四两拨千斤”的效果
+。
+
+#### 0x02 漏洞原因
+
+这个漏洞存在于Linux内核的eBPF模块，我们先来简单了解下eBPF。
+
+eBPF(extended Berkeley Packet
+Filter)是内核源自于BPF的一套包过滤机制，严格来说，eBPF的功能已经不仅仅局限于网络包过滤，利用它可以实现kernel
+tracing，tracfic
+control，应用性能监控等强大功能。为了实现如此强大的功能，eBPF提供了一套类RISC指令集，并实现了该指令集的虚拟机，使用者通过内核API向eBPF提交指令代码来完成特定的功能。
+
+看到这里，有经验的安全研究者可能会想到，能向内核提交可控的指令代码去执行，很可能会带来安全问题。事实也确实如此，历史上BPF存在大量漏洞[3]。关于eBPF的更多细节，可以参考这里[4][5]。
+
+eBPF在设计时当然也考虑了安全问题，它在内核中实现了一套verifier机制，过滤不合规的eBPF代码。然而这次的漏洞就出在eBPF的verifier机制。
+
+从最初Vitaly Nikolenko公布的补丁截图，我们初步判断该漏洞很有可能和CVE-2017-16995是同一个漏洞洞[6]，但随后有2个疑问：
+
+  1. CVE-2017-16995在去年12月份，内核4.9和4.14及后续版本已经修复，为何Ubuntu使用的4.4版本没有修复？
+
+  2. CVE-2017-16995是Google Project Zero团队的Jann Horn发现的eBPF漏洞，存在于内核4.9和4.14版本[7]，作者在漏洞报告中对漏洞原因只有简短的描述，跟本次的漏洞是否完全相同？
+
+注：笔者所有的代码分析及调试均基于Ubuntu 14.04，内核版本为4.4.0-31-generic #50~14.04.1-Ubuntu[8]。
+
+先来回答第二个问题，中间的调试分析过程在此不表。
+
+参考以下代码，eBPF的verifer代码(kernel/bpf/verifier.c)中会对ALU指令进行检查(check_alu_op)，该段代码最后一个else分支检查的指令是：
+
+  1. BPF_ALU64|BPF_MOV|BPF_K，把64位立即数赋值给目的寄存器；
+
+  2. BPF_ALU|BPF_MOV|BPF_K，把32位立即数赋值给目的寄存器；
+
+但这里并没有对2条指令进行区分，直接把用户指令中的立即数insn->imm赋值给了目的寄存器，insn->imm和目的寄存器的类型是integer，这个操作会有什么影响呢？
+
+![](https://images.seebug.org/content/images/2018/04/23f7ee8a-735c-4e87-ab93-56658e7bcdff.png-w331s)
+
+我们再来看下，eBPF运行时代码(kernel/bpf/core.c)，对这2条指令的解释是怎样的(`__bpf_prog_run`)。
+
+参考以下代码，上面2条ALU指令分别对应`ALU_MOV_K`和`ALU64_MOV_K`，可以看出verifier和eBPF运行时代码对于2条指令的语义解释并不一样，DST是64bit寄存器，因此`ALU_MOV_K`得到的是一个32bit
+unsigned integer，而`ALU64_MOV_K`会对imm进行sign extension，得到一个signed 64bit integer。
+
+![](https://images.seebug.org/content/images/2018/04/aebd21a0-2503-420f-9cc5-c00eeb844ad4.png-w331s)
+
+至此，我们大概知道漏洞的原因，这个逻辑与CVE-2017-16995基本一致，虽然代码细节上有些不同(内核4.9和4.14对verifier进行了较大调整)。但这里的语义不一致又会造成什么影响？
+
+我们再来看下vefier中以下代码(`check_cond_jmp_op`)，这段代码是对BPF_JMP|BPF_JNE|BPF_IMM指令进行检查，这条指令的语义是：如果目的寄存器立即数==指令的立即数(insn->imm)，程序继续执行，否则执行pc+off处的指令；注意判断立即数相等的条件，因为前面ALU指令对32bit和64bit
+integer不加区分，不论imm是否有符号，在这里都是相等的。
+
+![](https://images.seebug.org/content/images/2018/04/7488dbe4-8580-4e3b-88ba-1157aac69e4b.png-w331s)
+
+再看下eBPF运行时对BPF_JMP|BPF_JNE|BPF_IMM指令的解释(__bpf_prog_run)，显然当imm为有符合和无符号时，因为sign
+extension，DST!=IMM结果是不一样的。
+
+![](https://images.seebug.org/content/images/2018/04/00b231e5-24dc-41f7-a95b-b9be3bb25381.png-w331s)
+
+注意这是条跳转指令，这里的语义不一致后果就比较直观了，相当于我们可以通过ALU指令的立即数，控制跳转指令的逻辑。这个想象空间就比较大了，也是后面漏洞利用的基础，比如可以控制eBPF程序完全绕过verifier机制的检查，直接在运行时执行恶意代码。
+
+值得一提的是，虽然这个漏洞的原因和CVE-2017-16995基本一样，但但控制跳转指令的思路和CVE-2017-16995中Jann
+Horn给的POC思路并不一样。感兴趣的读者可以分析下，CVE-2017-16995中POC，因为ALU sign
+extension的缺陷，导致eBPF中对指针的操作会计算不正确，从而绕过verifier的指针检查，最终读写任意kernel内存。但这种利用方法，在4.4的内核中是行不通的，因为4.4内核的eBPF不允许对指针类型进行ALU运算。
+
+到这里，我们回过头来看下第一个问题，既然漏洞原因一致，为什么Ubuntu 4.4的内核没有修复该漏洞呢？
+
+和Linux kernel的开发模式有关。
+
+Linux kernel分mainline，stable，longterm
+3种版本[9]，一般安全问题都会在mainline中修复，但对于longterm，仅会选择重要的安全补丁进行backport，因此可能会出现，对某个漏洞不重视或判断有误，导致该漏洞仍然存在于longterm版本中，比如本次的4.4
+longterm，最初Jann Horn并没有在报告中提到影响4.9以下的版本。
+
+关于Linux
+kernel对longterm版本的维护，争论由来已久[10]，社区主流意见是建议用户使用最新版本。但各个发行版(比如Ubuntu)出于稳定性及开发成本考虑，一般选择longterm版本作为base，自行维护一套kernel。
+
+对于嵌入式系统，这个问题更严重，大量厂商代码导致内核升级的风险及成本都远高于backport安全补丁，因此大部分嵌入式系统至今也都在使用比较老的longterm版本。比如Google
+Android在去年Pixel /Pixel XL 2发布时，内核版本才从3.18升级到4.4，原因也许是3.18已经进入EOL了(End of
+Life)，也就是社区要宣布3.18进入死亡期了，后续不会在backport安全补丁到3.18，而最新的mainline版本已经到了4.16。笔者去年也在Android
+kernel中发现了一个未修复的历史漏洞(已报告给google并修复)，但upstream在2年前就修复了。
+
+而Vitaly
+Nikolenko可能是基于CVE-2017-16995的报告，在4.4版本中发现存在类似漏洞，并找到了一个种更通用的利用方法(控制跳转指令)。
+
+#### 0x03 漏洞利用
+
+根据上一节对漏洞原因的分析，我们利用漏洞绕过eBPF
+verifier机制后，就可以执行任意eBPF支持的指令，当然最直接的就是读写任意内存。漏洞利用步骤如下：
+
+  1. 构造eBPF指令，利用ALU指令缺陷，绕过eBPF verifier机制；
+  2. 构造eBPF指令，读取内核栈基址；
+  3. 根据泄漏的SP地址，继续构造eBPF指令，读取task_struct地址，进而得到task_struct->cred地址；
+  4. 构造eBPF指令，覆写cred->uid, cred->gid为0，完成提权。
+
+漏洞利用的核心，在于精心构造的恶意eBPF指令，这段指令在Vitaly Nikolenko的exp中是16机制字符串(`char
+*__prog`)，并不直观，笔者为了方便，写了个小工具，把这些指令还原成比较友好的形式，当然也可以利用eBPF的调试机制，在内核log中打印出eBPF指令的可读形式。
+
+我们来看下这段eBPF程序，共41条指令(笔者写的小工具的输出)：
+
+    
+    
+    parsing eBPF prog, size 328, len 41
+    ins 0: code(b4) alu | = | imm, dst_reg 9, src_reg 0, off 0, imm ffffffff
+    ins 1: code(55) jmp | != | imm, dst_reg 9, src_reg 0, off 2, imm ffffffff
+    ins 2: code(b7) alu64 | = | imm, dst_reg 0, src_reg 0, off 0, imm 0
+    ins 3: code(95) jmp | exit | imm, dst_reg 0, src_reg 0, off 0, imm 0
+    ins 4: code(18) ld | BPF_IMM | u64, dst_reg 9, src_reg 1, off 0, imm 3
+    ins 5: code(00) ld | BPF_IMM | u32, dst_reg 0, src_reg 0, off 0, imm 0
+    ins 6: code(bf) alu64 | = | src_reg, dst_reg 1, src_reg 9, off 0, imm 0
+    ins 7: code(bf) alu64 | = | src_reg, dst_reg 2, src_reg a, off 0, imm 0
+    ins 8: code(07) alu64 | += | imm, dst_reg 2, src_reg 0, off 0, imm fffffffc
+    ins 9: code(62) st | BPF_MEM | u32, dst_reg a, src_reg 0, off fffffffc, imm 0
+    ins 10: code(85) jmp | call | imm, dst_reg 0, src_reg 0, off 0, imm 1
+    ins 11: code(55) jmp | != | imm, dst_reg 0, src_reg 0, off 1, imm 0
+    ins 12: code(95) jmp | exit | imm, dst_reg 0, src_reg 0, off 0, imm 0
+    ins 13: code(79) ldx | BPF_MEM | u64, dst_reg 6, src_reg 0, off 0, imm 0
+    ins 14: code(bf) alu64 | = | src_reg, dst_reg 1, src_reg 9, off 0, imm 0
+    ins 15: code(bf) alu64 | = | src_reg, dst_reg 2, src_reg a, off 0, imm 0
+    ins 16: code(07) alu64 | += | imm, dst_reg 2, src_reg 0, off 0, imm fffffffc
+    ins 17: code(62) st | BPF_MEM | u32, dst_reg a, src_reg 0, off fffffffc, imm 1
+    ins 18: code(85) jmp | call | imm, dst_reg 0, src_reg 0, off 0, imm 1
+    ins 19: code(55) jmp | != | imm, dst_reg 0, src_reg 0, off 1, imm 0
+    ins 20: code(95) jmp | exit | imm, dst_reg 0, src_reg 0, off 0, imm 0
+    ins 21: code(79) ldx | BPF_MEM | u64, dst_reg 7, src_reg 0, off 0, imm 0
+    ins 22: code(bf) alu64 | = | src_reg, dst_reg 1, src_reg 9, off 0, imm 0
+    ins 23: code(bf) alu64 | = | src_reg, dst_reg 2, src_reg a, off 0, imm 0
+    ins 24: code(07) alu64 | += | imm, dst_reg 2, src_reg 0, off 0, imm fffffffc
+    ins 25: code(62) st | BPF_MEM | u32, dst_reg a, src_reg 0, off fffffffc, imm 2
+    ins 26: code(85) jmp | call | imm, dst_reg 0, src_reg 0, off 0, imm 1
+    ins 27: code(55) jmp | != | imm, dst_reg 0, src_reg 0, off 1, imm 0
+    ins 28: code(95) jmp | exit | imm, dst_reg 0, src_reg 0, off 0, imm 0
+    ins 29: code(79) ldx | BPF_MEM | u64, dst_reg 8, src_reg 0, off 0, imm 0
+    ins 30: code(bf) alu64 | = | src_reg, dst_reg 2, src_reg 0, off 0, imm 0
+    ins 31: code(b7) alu64 | = | imm, dst_reg 0, src_reg 0, off 0, imm 0
+    ins 32: code(55) jmp | != | imm, dst_reg 6, src_reg 0, off 3, imm 0
+    ins 33: code(79) ldx | BPF_MEM | u64, dst_reg 3, src_reg 7, off 0, imm 0
+    ins 34: code(7b) stx | BPF_MEM | u64, dst_reg 2, src_reg 3, off 0, imm 0
+    ins 35: code(95) jmp | exit | imm, dst_reg 0, src_reg 0, off 0, imm 0
+    ins 36: code(55) jmp | != | imm, dst_reg 6, src_reg 0, off 2, imm 1
+    ins 37: code(7b) stx | BPF_MEM | u64, dst_reg 2, src_reg a, off 0, imm 0
+    ins 38: code(95) jmp | exit | imm, dst_reg 0, src_reg 0, off 0, imm 0
+    ins 39: code(7b) stx | BPF_MEM | u64, dst_reg 7, src_reg 8, off 0, imm 0
+    ins 40: code(95) jmp | exit | imm, dst_reg 0, src_reg 0, off 0, imm 0
+    parsed 41 ins, total 41
+
+稍微解释下，ins 0 和 ins 1 一起完成了绕过eBPF verifier机制。ins 0指令后，`regs[9] =
+0xffffffff`，但在verifier中，`regs[9].imm = -1`，当执行ins 1时，jmp指令判断`regs[9] ==
+0xffffffff`，注意regs[9]是64bit integer，因为sign extension，`regs[9] ==
+0xffffffff`结果为false，eBPF跳过2(off)条指令，继续往下执行；而在verifier中，jmp指令的`regs[9].imm ==
+insn->imm`结果为true，程序走另一个分支，会执行ins 3 jmp|exit指令，导致verifier认为程序已结束，不会去检查其余的dead
+code。
+
+这样因为eBPF的检测逻辑和运行时逻辑不一致，我们就绕过了verifier。后续的指令就是配合用户态exp完成对kernel内存的读写。
+
+这里还需要知道下eBPF的map机制，eBPF为了用户态更高效的与内核态交互，设计了一套map机制，用户态程序和eBPF程序都可以对map区域的内存进行读写，交换数据。利用代码中，就是利用map机制，完成用户态程序与eBPF程序的交互。
+
+`ins4-ins5: regs[9] = struct bpf_map
+*map`，得到用户态程序申请的map的地址，注意这2条指令，笔者的静态解析并不准确，获取map指针的指令，在eBPF
+verifier中，会对指令内容进行修改，替换map指针的值。
+
+    
+    
+    ins6-ins12: 调用bpf_map_lookup_elem(map, &key)，返回值为regs[0] = &map->value[0]
+    
+    ins13: regs[6] = *regs[0]， regs[6]得到map中key=0的value值
+    
+    ins14-ins20: 继续调用bpf_map_lookup_elem(map, &key)，regs[0] = &map->value[1]
+    
+    ins21: regs[7] = *regs[0]，regs[7]得到map中key=1的value值
+    
+    ins22-ins28: 继续调用bpf_map_lookup_elem(map, &key)，regs[0] = &map->value[2]
+    
+    ins29: regs[8] = *regs[0]，regs[8]得到map中key=2的value值
+    
+    ins30: regs[2] = regs[0]
+    
+    ins32: if(regs[6] != 0) jmp ins32 + 3，根据用户态传入的key值不同，做不同的操作
+    
+    ins33: regs[3] = *regs[7]，读取regs[7]中地址的内容，用户态的read原语，就在这里完成，regs[7]中的地址为用户态传入的任意内核地址
+    
+    ins34: *regs[2] = regs[3]，把上调指令读取的值返回给用户态
+    
+    ins36: if(regs[6] != 1) jmp ins36 + 2
+    
+    ins37: *regs[2] = regs[FP], 读取eBPF的运行时栈指针，返回给用户态，注意这个eBPF的栈指针实际上指向bpf_prog_run函数中的一个局部uint64数组，在内核栈上，从这个值可以得到内核栈的基址，这段指令对应用户态的get_fp
+    
+    ins39: *regs[7] = regs[8]，向regs[7]中的地址写入regs[8]，对应用户态的write原语，regs[7]中的地址为用户态传入的任意内核地址
+
+理解了这段eBPF程序，再看用户态exp就很容易理解了。需要注意的是，eBPF指令中的3个关键点：泄漏FP，读任意kernel地址，写任意kernel地址，在verifier中都是有检查的，但因为开始的2条指令完全绕过了verifier，导致后续的指令长驱直入。
+
+笔者在Ubuntu 14.04上提权成功：
+
+![](https://images.seebug.org/content/images/2018/04/97d5e12d-9204-4f5c-aeb5-5155b86375fc.png-w331s)
+
+这种攻击方式和传统的内存破坏型漏洞不同，不需要做复杂的内存布局，只需要修改用户态传入的数据，就可以达到控制程序指令流的目的，利用的是原有程序的正常功能，会完全绕过现有的各种内存防御机制(SMEP/SMAP等)，有一种四两拨千斤的效果。这也是这两年流行的Data-Oriented Attacks，在linux kernel中似乎并不多见。
+
+#### 0x04 漏洞影响范围&修复
+
+因为linux
+kernel的内核版本众多，对于安全漏洞的影响范围往往并不容易确认，最准确的方式是搞清楚漏洞根因后，从代码层面判断，但这也带来了高成本的问题，快速应急时，我们往往需要尽快确认漏洞影响范围。
+
+从前面的漏洞原理来看，笔者大致给一个全面的linux kernel受影响版本：
+
+3.18-4.4所有版本(包括longterm 3.18，4.1，4.4)；
+
+< 3.18，因内核eBPF还未引入verifier机制，不受影响。
+
+对于大量用户使用的各个发行版，还需要具体确认，因为该漏洞的触发，还需要2个条件
+
+  1. Kernel编译选项CONFIG_BPF_SYSCALL打开，启用了bpf syscall；
+
+  2. /proc/sys/kernel/unprivileged_bpf_disabled设置为0，允许非特权用户调用bpf syscall
+
+而Ubuntu正好满足以上3个条件。
+
+关于修复，upstream kernel在3月22日发布的4.4.123版已经修复该漏洞[11][12]，
+Ubuntu官方4月5日也正式发布了安全公告和修复版本[13][14]，没有修复的同学可以尽快升级了。
+
+但现在距漏洞Exp公开已经过去20多天了，在漏洞应急时，我们显然等不了这么久，回过头看看当初的临时修复方案：
+
+  1. 设置`/proc/sys/kernel/unprivileged_bpf_disabled`为1，也是最简单有效的方式，虽然漏洞仍然存在，但会让exp失效；
+
+  2. 使用Ubuntu的预发布源，更新Ubuntu 4.4的内核版本，因为是非正式版，其稳定性无法确认。
+
+Vitaly Nikolenko在twitter上公布的Ubuntu预发布源：all 4.4 ubuntu aws instances are
+vulnerable: echo “deb http://archive.ubuntu.com/ubuntu/xenial-proposed
+restricted main multiverse universe” > /etc/apt/sources.list && apt update &&
+apt install linux-image-4.4.0-117-generic
+
+Ubuntu的非正式内核版本，做了哪些修复，我们可以看下补丁的关键内容(注意这是Ubuntu的kernel版本，非upstream)：
+
+git diff Ubuntu-lts-4.4.0-116.140_14.04.1 Ubuntu-lts-4.4.0-117.141_14.04.1
+
+ALU指令区分了32bit和64bit立即数，同时regs[].imm改为了64bit integer
+
+![](https://images.seebug.org/content/images/2018/04/d64f0177-c46f-433d-beec-7ab4095a7246.png-w331s)
+
+还增加了一项有意思的检查，把所有的dead_code替换为nop指令，这个明显是针对exp来的，有点类似于exp的mitigation，upstream
+kernel可能并不一定喜欢这样的修复风格：）
+
+![](https://images.seebug.org/content/images/2018/04/03f65e4c-5c92-4dcf-a132-d3ac2e4ce8bb.png-w331s)
+
+关于这个漏洞，Ubuntu还有一些相关的修复代码，感兴趣的读者，可以自行发掘。
+
+我们再看下upstream kernel 4.4.123的修复，相比之下，要简洁的多，仅有3行代码改动[12]： 当处理32bit
+ALU指令时，如果imm为负数，直接忽略，认为是UNKNOWN_VALUE，这样也就避免了前面提到的verifer和运行时语义不一致的问题。
+
+![](https://images.seebug.org/content/images/2018/04/687e4972-ae17-4b7f-a95d-c2c2db163a57.png-w331s)
+
+另外Android kernel上，bpf sycall是没有启用的，所以不受该漏洞影响。
+
+#### 0x05 引发的思考
+
+我们回顾以下整个漏洞分析过程，有几点值得注意和思考：
+
+  1. eBPF作为内核提供的一种强大机制，因为其复杂的过滤机制，稍有不慎，将会引入致命的安全问题，笔者推测后续eBPF可能还会有类似安全漏洞。
+
+  2. 受限于linux kernel的开发模式及众多版本，安全漏洞的确认和修复可能存在被忽视的情况，出现N day变0 day的场景。
+
+  3. Vitaly Nikolenko公布漏洞exp后，有网友就提出了批评，在厂商发布正式补丁前，不应该公布细节。我们暂且不讨论Vitaly Nikolenko的动机，作为一名安全从业者，负责任的披露漏洞是基本守则。
+
+  4. 笔者所在公司使用的OS是经过专门的团队量身定制，进行了不少的安全加固和冗余组件裁剪，故不受到此次漏洞影响。可见维护一个安全可靠的OS不失为保障大型企业的安全方案之一。
+
+感谢阅读，行文匆忙，如有不正之处，敬请指出。
+
+#### 0x06 参考文档
+
+[1] <https://twitter.com/vnik5287/status/974439706896187392>  
+[2] <http://cyseclabs.com/exploits/upstream44.c>  
+[3] <https://cve.mitre.org/cgi-bin/cvekey.cgi?keyword=BPF>  
+[4] <https://www.ibm.com/developerworks/cn/linux/l-lo-eBPF-history/index.html>  
+[5] <https://www.kernel.org/doc/Documentation/networking/filter.txt>  
+[6] <https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2017-16995>  
+[7] [https://bugs.chromium.org/p/project-zero/issues/detail?id=1454&desc=3](https://bugs.chromium.org/p/project-zero/issues/detail?id=1454&desc=3)  
+[8] <http://kernel.ubuntu.com/git/ubuntu/ubuntu-trusty.git/tree/?h=Ubuntu-lts-4.4.0-31.50_14.04.1>  
+[9] <https://www.kernel.org/>  
+[10] <https://lwn.net/Articles/700530/>  
+[11] <https://lwn.net/Articles/749963/>  
+[12] <https://lkml.org/lkml/2018/3/19/1499>  
+[13] <https://usn.ubuntu.com/3619-1/>  
+[14] <https://usn.ubuntu.com/3619-2/>
+
+* * *
+
+![Paper](https://images.seebug.org/content/images/2017/08/0e69b04c-e31f-4884-8091-24ec334fbd7e.jpeg)
+本文由 Seebug Paper 发布，如需转载请注明来源。本文地址：<https://paper.seebug.org/563/>
+

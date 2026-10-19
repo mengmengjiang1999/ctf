@@ -1,0 +1,324 @@
+![image.png](https://image.3001.net/images/20190428/15564556696035.png!small)
+
+**APT34是一个来自于伊朗的APT组织，自2014年起，持续对中东及亚洲等地区发起APT攻击，涉猎行业主要包含政府、金融、能源、电信等。多年来，攻击武器库不断升级，攻击手法也不断推陈出新，并且攻击行为不会因为被曝光而终止。**
+
+##  APT34组织背景  
+
+4月17日，有国外媒体报道，一个名为“Lab
+Dookhtegan”的用户在Telegram上曝光了来自APT34组织的攻击工具包，一些APT34的受害者数据也同时被曝光出来。该事件如同以前的源代码泄露事件一样，极具爆炸性。APT34组织至少从2014年开始，持续对中东及亚洲的某些国家发起了多次攻击，攻击目标为政府、金融、能源、电信等行业。该组织的目标一般是伊朗的对立国家，所以有人猜测，该组织是伊朗的某个安全部门，或者是和伊朗政府长期合作的安全公司。
+该组织擅于使用社交媒体，在社交平台上伪造不同身份的互联网账号，通过社工手段来接近他们的攻击目标。同时，该组织的攻击武器库不断升级，攻击手法也越来越高明，他们将鱼叉钓鱼等攻击手段与新型攻击技术相融合，不断扩大现有目标的渗透范围。
+
+![image.png](https://image.3001.net/images/20190428/15564557404963.png!small)
+
+被曝光的APT34组织成员
+
+从此次泄露的Webshell列表不难看出，该组织在过去一段时间针对中国进行了大规模的攻击行为。下图中列出10多家被攻陷的标识为China的WEB站点，可以作为针对国内攻击的佐证。
+
+![image.png](https://image.3001.net/images/20190428/15564558115444.png!small)
+
+Lab Dookhtegan曾经声称每隔几天就会曝光一名组织人员的个人信息，不过现在Telegram和Twitter上的帐号已经被封锁。
+
+![image.png](https://image.3001.net/images/20190428/15564558436405.png!small)
+
+##  泄露工具介绍
+
+此次源代码泄露的事件中，包含了大量APT34组织常用的重要攻击武器，如：Webshells_and_Panel、 posion
+frog、Webmask、Glimpse。东巽科技2046Lab使用《铁穹高级持续性威胁预警系统》对这些攻击武器做了威胁检测，并从技术层面做了深入分析。  
+
+## 检测结果
+
+### 1.Webshell预警：【高危】
+
+![image.png](https://image.3001.net/images/20190428/15564558828655.png!small)![image.png](https://image.3001.net/images/20190428/15564558974543.png!small)
+
+### 2.文件沙箱检测预警：【高危】
+
+![image.png](https://image.3001.net/images/20190428/15564559215253.png!small)
+
+### 3.DNS隐蔽信道检测预警：发现利用DNS异常长域名传输的隐蔽隧道
+
+![image.png](https://image.3001.net/images/20190428/15564559426662.png!small)![image.png](https://image.3001.net/images/20190428/15564559532976.png!small)
+
+##  攻击武器分析  
+
+###  1.Webshells_and_Panel
+
+Webshells_and_Panel目录中主要包含了多种C#编写的Webshell工具，在Webshell目录中包含两个主要的文件夹，分别为HighShell和HyperShell。
+
+ **1.1 HighShell**
+
+在HighShell目录中只有HighShell.aspx，该Shell为针对Windows服务器的WebShell。打开后默认界面如下图：
+
+![image.png](https://image.3001.net/images/20190428/15564559775825.png!small)
+
+通过上面的图片可以看出，该版本为5.0版本，拥有认证、文件上传、命令执行、数据库操作等多项功能。
+
+使用该Webshell需要在“Login”标签后的红色输入框中输入连接密码( Th!sN0tF0rFAN) 后点“Do
+it”按钮，当输入框变为绿色即可通过该Webshell对服务器进行相关操作。下图为操作“command”命令并获得服务器信息的操作图：
+
+![image.png](https://image.3001.net/images/20190428/1556456001483.png!small)
+
+ **1.2 HyperShell**
+
+HyperShell包含多个文件，其中包含多个webshell的源码文件。以下为几个可以使用的webshell的功能。
+
+**simple.aspx**
+
+simple.aspx是一个简易的webshell，其包含认证、命令执行、文件上传功能。打开后如图所示：
+
+![image.png](https://image.3001.net/images/20190428/15564560228449.png!small)在Password输入框中输入连接密码(MkRg5dm8MOk)点击“Login”按钮后，即可对服务器进行命令控制及文件上传。密码连接如下图：
+
+![image.png](https://image.3001.net/images/20190428/15564560493204.png!small)下图为操作“command”命令并获得服务器信息的操作图：  
+![image.png](https://image.3001.net/images/20190428/15564560723742.png!small)
+
+**simpleDownload.aspx**
+
+simpleDownload.aspx只有一个上传功能，如下图：
+
+![image.png](https://image.3001.net/images/20190428/15564560932990.png!small)
+
+**HighShelllocal.aspx**
+
+HighShelllocal.aspx为HighShell的升级版，版本号为8.6.2，该版本功能与独立的5.0版大致相同主要对界面及功能进行了优化，界面图如下：
+
+![image.png](https://image.3001.net/images/20190428/15564561147386.png!small)
+
+###  2.poison frog
+
+**2.1 Agent**
+
+2.1.1 poisonfrog.ps1
+
+Agent仅仅只有一个文件，是失陷主机上用来种植后门程序的，名字是poisonfrog.ps1。该文件运行后，会在失陷主机的C:\Users\Public\Public目录下留下3个文件,dUpdater.ps1、hUpdater.ps1和UpdateTask.vbs。
+
+![image.png](https://image.3001.net/images/20190428/15564561362577.png!small)这个UpdateTask.vbs脚本就是主机上留下的后门程序，并且通过计划任务每10分钟运行一次。它的功能是执行dUpdater.ps1和hUpdater.ps1两个脚本。
+
+![image.png](https://image.3001.net/images/20190428/1556456158664.png!small)
+
+2.1.2 dUpdater.ps1
+
+这个脚本是远控脚本，生成DNS域名并访问控制服务器，接收远控指令，发送和接收文件。在生成DNS域名时使用了DGA.Changer算法，动态地计算服务器域名，
+2046Lab对这个DGA.Changer算法进行了复原：
+
+![image.png](https://image.3001.net/images/20190428/15564562032250.png!small)
+
+receive函数：
+
+运行EEA函数获取VVA域名，JJA参数设为r；
+
+尝试解析VVA域名，若失败，则抛出异常，并重新生成新域名且尝试解析新域名，重复操作直到域名解析成功；若成功，则取第一个成功解析的IP，并将该IP的每一段分别取出；
+
+若IP为1.2.3.*，则将NNA设为false，将RRA的值写入PPA的文件，并退出主函数；
+
+若NNA为true，修改RRA 的值，为IP的前三段，继续循环主函数；
+
+若IP为24.125.*.*，则将IP的第三段与第四段拼接作为C:\Users\Public\Public\$DDA\receivebox子文件夹名（PPA），将GGA设为1，将NNA设为true，继续循环主函数；
+
+若IP为11.24.237.110，则停止解析并退出主函数，该IP为OilRig曾经使用的IP。
+
+Send函数：
+
+运行Slaber检查发送的文件，运行EEA函数获取VVA域名，JJA参数设为s；
+
+尝试解析VVA域名，若失败，则抛出异常，并重新生成新域名且尝试解析新域名，重复操作直到域名解析成功；若成功，则取第一个成功解析的IP，并将该IP的每一段分别取出；
+
+若IP为1.2.3.*，则取出IP的第四段得值并循环主函数；
+
+若IP为11.24.237.110，则停止解析并退出该函数，同时删除要发送的文件。
+
+Slaber函数：
+
+检查发送的文件大小，超过600kb则报错，否则运行resolver函数。
+
+resolver函数：
+
+解析发送的文件，每30个字符为一组。
+
+processor函数：
+
+处理接收的文件，MMB为”sendbox”文件夹中的文件；
+
+若接收的文件名以”0”结尾，将接收的文件写入”sendbox”文件夹内，并使用UTF-8编码，随后移除之前接收的文件；
+
+若接收的文件名以”1”结尾，若接收文件内容里存在路径，则将该路径作为发送路径；
+
+若不存在则将”File not exist”字符串写入MMB文件，随后移除之前接收的文件；
+
+若接收的文件名以”2”结尾，将RRB设为”done”文件夹中的文件，将接收的文件移动至”done”文件夹下，再将该文件内容写入MMB文件，随后移除之前接收的文件。
+
+**2.1.3 hUpdater.ps1**
+
+解析"myleftheart.com"的IP，并尝试连接；
+
+若存在C:\Users\Public\Public\files\
+cfg.ini文件，则取相应参数字段如srv、usr、pas、prt、dom。将srv与prt的值通过”:”拼接为新字符串，并将该字符串使用http设置为代理服务器，将usr、pas、dom的值作为代理服务器的凭证；若不存在，则获取默认代理服务器；
+
+OOA：随机取0至9中的若干个整数，取的个数在1至9个随机选取，将取出的数拼接；
+
+DDA：为dUpdater.ps1脚本中的DDA；
+
+PPA：DDA的第5位插入OOA所得；
+
+从“<http://myleftheart.com/co/>$PPA”下载文件，设下载的文件内容为QQA，将QQA以“< >”作分隔，数组设为SSA。
+
+p为路径C:\Users\Public\Public\files\$SSA[0]。
+
+若SSA[2]长度大于0并且SSA[2]不存在“not”字符串，则从<http://myleftheart.com/fil/SSA>[3]下载文件至C:\Users\Public\Public\files\$SSA[2]，再将该内容写入路径p；
+
+若SSA[1]长度大于0并且SSA[1]不存在“not”字符串，则上传路径p的文件上传至<http://myleftheart.com/res/>$PPA$SSA[0]；
+
+若SSA[4]长度大于0并且SSA[4]不存在“not”字符串，则上传路径SSA[4]d的文件上传至<http://myleftheart.com/res/>$PPA$SSA[0]；
+
+若SSA中最后一个数据中值为“1”，则循环运行主函数；
+
+若SSA[0]
+长度大于0并且SSA[1]不存在”not”字符串，则上传路径p的文件至<http://myleftheart.com/res/>$PPA$SSA[0]，并删除路径p的文件。
+
+###  2.2 Server Side
+
+Server端是APT34用于管理失陷主机的的总控制端，可以从失陷主机上下载文件，上传文件到失陷主机。
+
+这个服务端提供了一个简单的登入界面。
+
+![image.png](https://image.3001.net/images/20190428/15564562897347.png!small)
+
+用户和密码的管理非常简单，仅仅通过一个json配置文件来管理。在泄露的文件里，使用了简单的用户名(blacktusk)和密码(fireinthehole)。
+
+下图中的GUID（ /7345SDFHSALKJDFHNASLFSDA3423423SAD22
+）的作用是引导浏览器进入登陆页面，这个GUID可以说是很重要的。
+
+![image.png](https://image.3001.net/images/20190428/15564563106206.png!small)在Server端，也提供了HTTP
+Agent和DNS Agent的主机列表。从这个列表中可以很方便地看到哪些主机现在是受到控制的。
+
+![image.png](https://image.3001.net/images/20190428/15564563771849.png!small)
+
+每个HTTP Agent和DNS Agent具有详细信息的页面，在这里，就可以对这个失陷的主机下发C&C的命令，上传或下载文件了。这里的DNS
+Agent可能是合并了Glimpse的某些功能，Glimpse在下面做了详细的介绍。  
+
+![image.png](https://image.3001.net/images/20190428/15564563961954.png!small)对于失陷主机，APT34使用一个默认的BAT远控脚本来获取主机信息，获取的信息非常的详细，包括系统、用户、组、域、特定注册表、计划任务、反病毒软件等等。
+
+![image.png](https://image.3001.net/images/20190428/15564564197086.png!small)![image.png](https://image.3001.net/images/20190428/15564564341342.png!small)
+
+###  3.Webmask
+
+该工具主要部署在攻击者服务器上，实现DNS代理，针对特定的DNS域名进行劫持，并将域名默认指向本地服务器，通过Squid3+ICAP实现HTTP/HTTPS代理，窃取受害者账号密码等敏感信息。
+
+![image.png](https://image.3001.net/images/20190428/15564564615902.png!small)
+
+dns-redir目录：
+
+> dnsd.py：DNS代理转发脚本
+>
+> config.json：配置文件
+
+![image.png](https://image.3001.net/images/20190428/15564565202044.png!small)
+
+dnsd.js: JS类型的DNS代理脚本，和dnsd.py功能类似a。
+
+本地模拟DNS代理功能截图展示如下：
+
+![image.png](https://image.3001.net/images/20190428/15564565431041.png!small)
+
+icap目录：
+
+> icap.py：需要和Squid3结合使用，构建http/https代理，并将代理中的敏感数据记录到本地。
+
+squid.conf配置文件：
+
+![image.png](https://image.3001.net/images/20190428/15564566701742.png!small)
+
+Squid3+ICAP实现透明代理服务器，icap.py脚本对密码等敏感数据进行提取，记录到本地log文件中。  
+
+![image.png](https://image.3001.net/images/20190428/15564565914855.png!small)
+
+icap脚本文件中针对应答response_body部分加入了劫持的代码，在受害者浏览器中加载指定的图片元素。
+
+![image.png](https://image.3001.net/images/20190428/15564566386009.png!small)
+
+### 4.Glimpse
+
+Glimpse是DNS远控工具，主要分为3个部分Agent、Panel和Server三个部分。从Glimpse
+Server中的某些代码来看，它的某些功能可能和poison frog是重合的，比如下发命令的方式。
+
+![image.png](https://image.3001.net/images/20190428/15564566969903.png!small)总体来说，Glimpse和上面介绍的poison
+frog非常类似。在泄露的资料中，也给了我们Glimpse的使用方法。  
+
+![image.png](https://image.3001.net/images/20190428/15564567159486.png!small)
+
+**4.1 Agent**
+
+同样，Glimpse中的Agent是运行在失陷主机上的后门程序，他的主要功能是接受命令，上传和下载文件。
+
+Agent使用主机上的C:\Users\Public\Libraries目录作为其工作目录。发送文件、接受文件都会在这个目录下的子目录内完成。
+
+![image.png](https://image.3001.net/images/20190428/15564567403954.png!small)Agent可以工作在两种模式下面，一种是ping模式，另一种是text模式。  
+
+![image.png](https://image.3001.net/images/20190428/15564567586784.png!small)
+
+ping模式主要用来交换主机信息。而text模式相当于Agent和Server的内部协议模式，可以接受内部指令。
+
+ **4.2 Panel**
+
+Panel用来查看总控的状态，可以看到有多少失陷主机被控制，同时在这里可以向失陷主机发送命令。
+
+![image.png](https://image.3001.net/images/20190428/15564567874705.png!small)![image.png](https://image.3001.net/images/20190428/1556456803439.png!small)
+
+可以看到，通过panel对失陷主机发送命令，并得到了返回结果。
+
+**4.3 Server**
+
+Server是总控端， 通过DNS隧道协议进行通信，能够 响应Agent发送的ping模式消息或TXT模式的命令 ， 同时也以TXT模式向Agent发送命令
+。 从某些地方的代码风格来看， Glimpse和poison frog应该是出于同一个团队的作品。
+
+![WechatIMG13.jpeg](https://image.3001.net/images/20190428/15564568811511.jpeg!small)
+
+Server端支持了更多的TXT模式的协议命令，我们可以简要的查看一下这些命令的含义。
+
+    
+    
+    if (action == 'M') { // in this place we check the request for type of connection ping or text type 
+    
+    if (action == 'W') { // in this place we check the request type if its text we response it 
+    
+    else if (action == 'D') { 
+    
+    else if (action == '0') { // ctrl[0] => action, if 0 = is there any file 
+    
+    else if (action == '1') { // ctrl[0] => action, if 1 = sending the file 
+    
+    else if (action == '2') {// ctrl[0] => action, if 2 = receiveing the file
+
+##  IOCs
+
+###  MD5：
+
+    
+    
+    cd0bbff03ce7946cd7c9dc339726d90a 
+    
+    9d3d8fe14927172ca5546bdb95d94762 
+    
+    5e17061bf2dce87d402ddd8531abb49f
+
+###  域名：
+
+    
+    
+    myleftheart.com 
+
+###  IP：
+
+    
+    
+    11.24.237.110 
+
+## 防护措施
+
+1.不要轻易打开可疑文件，如电子邮件、可疑链接、可疑文档等等。
+
+2.及时安装系统补丁，使用最新版本的软件。
+
+3.安装杀毒软件、及时更新病毒库。
+
+ ***本文作者：东巽科技，转载请注明来自FreeBuf.COM**
+

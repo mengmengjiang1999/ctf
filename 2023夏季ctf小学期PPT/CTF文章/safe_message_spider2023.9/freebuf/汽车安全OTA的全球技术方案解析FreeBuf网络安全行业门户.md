@@ -1,0 +1,67 @@
+>
+> 我们来讨论一下全世界科研人员对最先进的安全OTA（空中下载技术）的贡献和成就。我将会给大家分享世界上常见的六类OTA软件更新技术方案。分别是基于对称密钥加密的安全OTA更新技术；基于HASH算法的安全OTA更新技术；基于区块链技术的安全OTA更新技术；基于RSA和隐写术的安全OTA更新技术；基于对称密钥和非对称密钥双加密的安全OTA更新技术；基于硬件安全模块。（图1）
+
+![](https://image.3001.net/images/20200814/1597386199.png!small)
+
+图 1
+
+## 基于对称密钥加密技术
+
+2005年，Mahmud等人在核心期刊IEEE Intelligent Vehicles
+Symposium提出了一种智能汽车的安全更新技术。提议在原始主机厂、软件供应商（SS）之间共享一组链路密钥。在任何软件更新之前，使用一个链路密钥在软件供应商和车辆之间建立安全连接，形成可信通道。为了提高安全性，作者建议使用随机间隔至少发送两次加密后的软件副本。在收到加密软件的多个副本后，车辆终端解密并安装其中一个有效的安装包。参考文献:“Secure
+software upload in an intelligent vehicle via wireless communication links”
+
+2012年，Mansour等人设计了一种诊断和安全OTA系统，称为AiroDiag，用于连接车辆。图2为AiroDiag的架构。AiroDiag架构的主要分为:OEM、汽车和云端。AiroDiag采用了对称密钥技术，特别是采用了先进的加密标准来保证软件更新过程中的通信安全。在AiroDiag中，密钥存储在OEM端的数据库中。AiroDiag应用始终保持与网络的连接，处理来自车机端的任何连接请求。在AiroDiag中，软件更新过程由客户端触发。一旦触发软件更新过程，车辆首先与OEM建立安全连接。接下来，车辆将告知OEM端当前已安装软件的版本。如果有新软件可用，OEM将触发软件更新过程，并与汽车建立安全连接。参考：
+
+> AiroDiag: a sophisticated tool that diagnoses and updates vehicles software
+> over air
+
+![](https://image.3001.net/images/20200814/1597386263.png!small)
+
+## 基于哈希算法
+
+2008年
+Nilsson和Larson在IEEE大会上提出了一种用于车联网的安全OTA固件更新协议。在他的架构中分为了四个实体:车、服务器后端、互联网和无线基站（图3）。在这里，服务器后端是负责与网联车通信的主要单元。作者先将更新后的二进制文件划分为多个数据块。然后以相反的顺序对每个片段进行哈希处理，创建哈希表。最后，服务器后端使用预共享的加密密钥对的每个数据块进行加密，然后再将它们传输汽车终端。考虑到车辆中有限的资源，后端使用分块哈希加密作为加密技术。尽管这种变法可以确保不会受到窃听、拦截和篡改攻击，但是无法防止拒绝服务攻击。参考：
+
+> Secure firmware updates over the air in intelligent vehicles
+
+![](https://image.3001.net/images/20200814/1597386373.png!small)
+
+## 基于区块链技术
+
+2018年，Steger等人在工作中引入了区块链(BC)的架构来解决智能汽车OTA升级的安全和隐私问题。该体系结构的主要实体有:OEM、服务中心、汽车、云服务器和SW主机（图4）。该架构中，所有参与的实体组成一个集群，一旦出现了新的OTA包，SW主机上的程序就会触发软件更新过程。首先，SW主机向云服务器发送一个带有自己签名的存储请求。在验证成功后，云服务器发送一个二次确认包，包括自己的签名和软件上传过程中需要的文件描述符发送到SW主机中。将新软件上传到云服务器后，SW主机在区块中创建一个更新事件，其中包含关于新软件在云端位置等信息。然后SW主机中使用私钥签署这个事件，并最终将加密的事件广播给车辆。接着作者进行了本概念的验证测试，结果表明，该体系架构的性能优于基于证书的体系架构。参考：
+
+> Secure wireless automotive software updates using blockchains: A proof of
+> concept
+
+![](https://image.3001.net/images/20200814/1597386415.png!small)
+
+## RSA与隐写
+
+2018年Mayilsamy等人在期刊中提出了结合密码学和隐写术的方案来保护网联车的OTA软件更新。OEM后端、服务中心、汽车和云服务器是该方案的总架构（图
+5）。第一步是使用修改过的RSA算法来加密更新的OTA升级固件。第二步，利用隐写将第一步使用的密码沿覆盖图像的边缘区域隐藏。最后，云服务器存储加密映像。在汽车的软件更新过程中，服务中心首先下载隐写图。然后，服务中心解密OTA固件将更新后的软件安装到汽车中。仿真测试结果显示，在OEM端，加密1kB、15kB和20kB大小的文件所需的时间分别为3.05s、6.95s和8.03s。相反，在汽车终端，解密1kB、15kB和20kB大小的文件所需的时间分别为5.43s、905.05s和1590.92s。参考：
+
+> An integrated approach for data security in vehicle diagnostics over
+> internet protocol and software update over the air
+
+## 对称密钥与非对称密钥的组合加密算法
+
+2016年Steger等人在IEEE大会提出了一个名为SecUp的框架，用于对网联车进行安全高效的OTA软件更新。其中涉及到:OEM、服务中心、汽车终端和汽车维修人员（图5）。SecUp同时使用对称和非对称密钥加密来保护OTA更新过程。汽车维修人员使用NFC智能卡与PIN码对手持设备进行对称的身份验证，然后服务后端返回会话密钥，利用该会话密钥配合汽车RSA公钥将安装包加密下发到每个汽车。接收成功后，汽车在安装前对软件用私钥进行验证解密。SecUp的性能是通过对沃尔沃ECU更新实验测试的。结果显示，不同类型软件的更新持续时间介于6.77秒~
+33.19秒之间。参考：
+
+Generic framework enabling secure and efficient automotive wireless software
+updates
+
+![](https://image.3001.net/images/20200814/1597386470.png!small)
+
+## 硬件安全模块
+
+2016年Petri等人在国际汽车安全大会上提出了一种基于HSM的可信平台模块(Trusted Platform Module,
+TPM)的安全OTA更新机制。首先，网关ECU从远程服务器下载更新后的软件。然后ECU使用TPM中预定义的散列验证下载的软件。验证成功后，ECU将更新后的软件发送到目标ECU进行安装。使用TPM的好处是它支持许多流行的加密算法，例如RSA、SHA、AES。主要局限性是，每个ECU都需要一个HSM/TPM算法加密机，从而导致了额外成本。参考：
+
+> Evaluation of lightweight TPM for automotive software updates over the air
+
+本文我们讲解了六种常见的OTA更新方案，对比分析不同研究人员涉及安全OTA的架构、部署、技术功能等。而根据ABI市场研究数据报告，2022 年将有 2.03
+亿辆部汽车能通过 OTA 方式更新软件,其中至少 2200 万辆汽车还能通过 OTA
+更新固件，未来我们会接受到来自车辆OTA更新带来的安全问题的挑战，笔者也会重点关注全球OTA安全方案的进展。（完）
+

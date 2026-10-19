@@ -1,0 +1,120 @@
+time: 0.004259 :read 3 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/namelist.json!
+time: 0.004628 :read 4 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/dispatchnamelist.json!
+time: 0.004886 :read 1 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/typelist.json!
+time: 0.005602 :read 7 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/subtypelist.json!
+time: 0.005815 :read 1 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/baseflag.json!
+time: 0.006317 :read 3 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/memdb.json!
+time: 0.007351 :read 7 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/msghead.json!
+time: 0.007848 :read 2 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/msgrecord.json!
+time: 0.008991 :read 11 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/base_msg.json!
+time: 0.009978 :read 9 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/return.json!
+time: 0.010629 :read 3 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/dispatchrecord.json!
+time: 0.010995 :read 2 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/exmoduledefine.json!
+time: 0.011276 :read 1 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/sys_conn.json!
+time: 0.011957 :read 6 elem from file /root/centoscloud/cube-1.3/proc/main/base_define/cube_audit.json!
+time: 0.013784 :read 7 elem from file file_trans.json!
+time: 0.014678 :read 8 elem from file user_define.json!
+time: 0.016290 :read 7 elem from file mac_label.json!
+time: 0.017356 :proc_share_data_setvalue: set proc_name to server
+time: 0.018363 :read 4 elem from file user.list!
+time: 0.019428 :read 4 elem from file subject.list!
+time: 0.020425 :read 4 elem from file object.list!
+time: 0.020610 :this machine's local uuid is 7bb67b9b2a7e4cf3b09193a761e94d848d48b116797c0e73dd6bbe198d091c65
+
+time: 0.020716 :proc_share_data_setvalue: set uuid to {∂{õ*~LÛ∞ëìßaÈMÑçH±y|s›kæç	e
+time: 0.026904 :read 3 connector!
+
+time: 0.027082 :conn server center_server begin to listen!
+
+time: 0.028150 :read 7 policy from router_policy file!
+time: 0.029200 :read 8 policy from aspect policy file!
+time: 0.029478 :system plugin router_proc is prepared!
+time: 0.034177 :proc_share_data_setvalue: set uuid to ±n±¥l-
+time: 0.034351 :virtual_node init :change virtual node uuid to b16eb1b46c2d00f92a6fb8f3c7c304127fdf4da7db51f195acb18b9e432e71c6!
+time: 1.045434 :system plugin connector_proc is prepared!
+time: 1.045653 :ex_module connector_proc started successfully!
+time: 1.045860 :ex_module router_proc started successfully!
+time: 1.046078 :ex_module msg_print started successfully!
+time: 1.046251 :ex_module login_server started successfully!
+time: 1.046459 :ex_module virtual_node started successfully!
+time: 1.046619 :ex_module key_event started successfully!
+time: 1.046756 :ex_module user_label started successfully!
+time: 1.046896 :ex_module file_acl started successfully!
+time: 1.047045 :ex_module file_dealer started successfully!
+time: 1.047180 :ex_module recordlib started successfully!
+time: 1.047316 :instance load 10 module!
+
+time: 1.047447 :begin file_dealer start process! 
+
+time: 1.047625 :read 0 lib files!
+
+time: 1.047838 :proc_share_data_getvalue: get uuid value ±n±¥l-
+time: 1.047961 :proc_share_data_getvalue: get proc_name value server
+time: 1.048076 :proc_share_data_getvalue: get uuid value ±n±¥l-
+time: 1.048175 :proc_share_data_getvalue: get proc_name value server
+time: 1.048357 :client crypt_client connect succeed!
+
+time: 1.058679 :proc conn client receive 272 data!
+
+time: 1.058924 :send 331 data to conn crypt_client!
+
+time: 1.059042 :client crypt_client send 331 ack data to server !
+
+time: 1.063581 :router get proc connector_proc's message 
+time: 1.063723 :new msg match path file_share's policy
+time: 1.099986 :router get proc file_dealer's message 
+time: 1.033300 :create a new channel ac002324!
+
+time: 1.033410 :send 271 data to conn (null)!
+
+time: 2.045147 :channel set name term!
+
+time: 2.048465 :router get proc connector_proc's message 
+time: 2.048503 :new msg match path file_share's policy
+time: 2.053831 :router get proc file_dealer's message 
+time: 3.549026 :channel receive (4112 1) message from conn term!
+
+time: 3.549059 :client forward (4112 1) message to main proc!
+
+time: 3.550641 :router get proc connector_proc's message 
+time: 3.550671 :remote msg match path login's policy
+time: 3.550887 :aspect message to path addr_label's policy
+time: 7.133843 :channel receive (576 4) message from conn term!
+
+time: 7.133871 :client forward (576 4) message to main proc!
+
+time: 7.137969 :router get proc connector_proc's message 
+time: 7.137989 :remote msg match path pcrquote-req's policy
+time: 7.143256 :router get proc key_event's message 
+time: 7.143466 :aspect message to path quote_nonce's policy
+time: 7.143627 :send message to conn process!
+time: 7.145117 :send 201 data to conn crypt_client!
+
+time: 7.145130 :send (576  4)message 201 to conn crypt_client!
+
+time: 11.172586 :channel receive (576 4) message from conn term!
+
+time: 11.172623 :client forward (576 4) message to main proc!
+
+time: 11.177448 :router get proc connector_proc's message 
+time: 11.177504 :remote msg match path pcrquote-req's policy
+time: 11.182956 :router get proc key_event's message 
+time: 11.183175 :aspect message to path quote_nonce's policy
+time: 11.183351 :send message to conn process!
+time: 11.184129 :send 201 data to conn crypt_client!
+
+time: 11.184148 :send (576  4)message 201 to conn crypt_client!
+
+time: 15.204291 :channel receive (576 4) message from conn term!
+
+time: 15.204327 :client forward (576 4) message to main proc!
+
+time: 15.209289 :router get proc connector_proc's message 
+time: 15.209331 :remote msg match path pcrquote-req's policy
+time: 15.214646 :router get proc key_event's message 
+time: 15.214875 :aspect message to path quote_nonce's policy
+time: 15.215064 :send message to conn process!
+time: 15.216127 :send 201 data to conn crypt_client!
+
+time: 15.216143 :send (576  4)message 201 to conn crypt_client!
+

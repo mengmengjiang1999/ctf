@@ -1,0 +1,695 @@
+# Java框架级SSM代码审计思路
+
+阅读量 **1087774**
+
+|评论 **2**
+
+发布时间 : 2019-11-15 11:30:56
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01e75425e53ebc1f29.png)
+
+## SSM框架简介
+
+SSM框架，即SpringMVC+Spring+Mybatis三个开源框架整合在一起的缩写。
+
+在SSM框架之前生产环境中SSH框架占据多数，即Struts2+Spring+Hibernate三个开源框架整合而成。后因Struts2爆出众多高危漏洞，导致目前SSM逐渐代替SSH成为主流开发框架的选择。
+
+审计SSM框架首先就要对MVC设计模式和，web三层架构有一定程度的了解，限于篇幅原因这里就简单介绍一下
+
+###  SpringMVC
+
+是一种基于Java的实现MVC设计模式的请求驱动类型的轻量级Web框架，使用了MVC架构模式的思想，将web层进行职责解耦，基于请求驱动指的就是使用请求-响应模型，框架的目的就是帮助我们简化开发。
+
+###  Spring
+
+是分层的 Java SE/EE full-stack 轻量级开源框架，以 IOC（Inverse of Control，控制反转）和 AOP（Aspect
+Oriented Programming，面向切面编程）为内核，使用基本的 JavaBean 完成以前只可能由 EJB 完成的工作，取代了 EJB
+臃肿和低效的开发模式，Spring的用途不仅仅限于服务器端的开发。从简单性、可测试性和松耦合性角度而言，绝大部分Java应用都可以从Spring中受益
+
+###  Mybatis
+
+是支持定制化 SQL、存储过程以及高级映射的优秀的持久层框架。MyBatis  
+避免了几乎所有的 JDBC 代码和手动设置参数以及获取结果集。MyBatis  
+可以对配置和原生Map使用简单的 XML 或注解，将接口和 Java 的 POJOs(Plain Old Java  
+Objects,普通的 Java对象)映射成数据库中的记录。
+
+###  Servlet
+
+还有一项技术虽然名称没有出现在这三个开源框架中但是SpringMVC的底层就是以此技术进行构建的，这项技术就是Servlet
+
+Servlet是基于Java技术的Web组件，由容器管理并产生动态的内容。Servlet与客户端通过Servlet容器实现的请求/响应模型进行交互。
+
+相对以SSM框架搭建的java web项目进行审计，上述这些都是要有一定程度的了解的。
+
+## SSM框架代码执行流程和审计思路
+
+###  审计的出发点web.xml
+
+其实代码审计的核心思想就是追踪参数，而追踪参数的步骤就是程序执行的步骤，说白了代码审计就是一个跟踪程序执行步骤的一个过程，当我们知道了SSM框架的一个执行流程，自然就知道了如何如跟踪一个参数，剩下的就是去观察在参数传递的过程中有没有一些常见的漏洞点。
+
+我们这里通过一个简单的Demo来描述一下SSM框架搭建的项目是如何完成一次用户请求，它的流程是怎么样的，而参数又是怎样被传递怎样被过滤的，当我们明白了这些，就可以尝试自己上手一些SSM的项目审计。
+
+首先我把Demo的全部文件和文件结构粘贴出来
+
+![](https://p2.ssl.qhimg.com/t01a26829f366900c0b.png)
+
+这是一个简单的图书管理Demo目录，功能是对图书名称，数量和简介简单的增删改查
+
+首先不管我们是审计一个项目还是包括Tomcat加载一个项目一般都是由web.xml这个文件开始的
+
+当然一个项目中没有web.xml也是可以的，可以通过servlet3.0开始提供的一些新注解来达到和配置web.xml一样的效果，但是这样的项目很少会碰到，所以我们以主流的配置web.xml的项目来作为讲解。
+
+Tomcat会加载web.xml文件读取文件中的内容
+
+![](https://p5.ssl.qhimg.com/t019ee5892c3a738a36.png)
+
+web.xml文件主要的工作包括两部分：1、web.xml启动spring容器；2、DispathcheServlet的声明；3、其余工作是session过期，字符串编码等
+
+首先是生成DispatcherServlet类,DispatcherServlet是前端控制器设计模式的实现，提供Spring Web
+MVC的集中访问点（也就是把前端请求分发到目标controller），而且与Spring IoC容器无缝集成，从而可以获得Spring的所有好处。
+
+简单理解就是将我们的请求转发至我们的SpringMVC中去，交由我们SpringMVC的Controller来进行接下来的处理
+
+然后下面有一个<init-param>子标签，是生成DispatcherServlet时的初始化参数contextConfigLocation参数，Spring会根据这个参数去加载所有逗号分隔的xml文件，如果没有这个参数，Spring默认加载WEB-INF/DispatcherServlet-servlet.xml文件
+
+下面的<servlet-mapping>标签中还有一个子标签<url-pattern>里面的value是“/”代表拦截所有请求。
+
+下面的<filter>标签放在后面讲
+
+###  Spring核心配置文件applicationContext.xml
+
+然后我们根据加载顺序去看applicationContext.xml
+
+![](https://p5.ssl.qhimg.com/t01a5a5cb69a5ce9183.png)
+
+applicationContext.xml中包含了三个配置文件，这三个配置文件就是我们用Spring来整合SpringMVC和Mybaits的配置文件，其实这三个配置文件中的内容都可以直接写applicationContext.xml中因为applicationContext.xml是Spring的核心配置文件，例如生成Bean，配置连接池，生成sqlSessionFactory。但是为了便于理解，我们这些配置分别写在三个配置文件中，由applicationContext.xml将这三个xml进行关联，由下面这张截图我们可以清晰的看到applicationContext.xml将这三个配置文件关联了起来。
+
+![](https://p1.ssl.qhimg.com/t01bf5a58ad2d8a3632.png)
+
+首先数据经由DispatcherServlet派发至Spring-mvc的controller层所以我们先看Spring-mvc.xml这个配置文件
+
+![](https://p4.ssl.qhimg.com/t011b01626705eba646.png)
+
+<mvc:annotation-driven />标签
+
+如果在web.xml中servlet-mapping的url-pattern设置的是/，而不是如.do。表示将所有的文件，包含静态资源文件都交给spring
+mvc处理。就需要用到<mvc:annotation-driven
+/>了。如果不加，DispatcherServlet则无法区分请求是资源文件还是mvc的注解，而导致controller的请求报404错误
+
+<mvc:default-servlet-handler/>
+
+在Spring-mvc.xml中配置<mvc:default-servlet-handler />后，会在Spring
+MVC上下文中定义一个org.springframework.web.servlet.resource.DefaultServletHttpRequestHandler，它会像一个检查员，对进入DispatcherServlet的URL进行筛查，如果发现是静态资源的请求，就将该请求转由Web应用服务器默认的Servlet处理，如果不是静态资源的请求，才由DispatcherServlet继续处理，这么做是为了保证Spring-mvc优雅REST风格的资源URL。
+
+剩下两项一个是指定了返回的view所在的路径，另一个是指定SpringMVC注解的扫描路径
+
+不难看出这个配置文件中都是和Spring-mvc相关的配置。
+
+###  SSM之SpringMVC执行流程
+
+接下来就是我们SpringMVC controller层接受前台传入的数据,这里我们让demo跑起来以方便演示和讲解
+
+![](https://p5.ssl.qhimg.com/t01cf7b0d445c9d6abb.png)
+
+这是我们的index首页，我们看下页面源码
+
+![](https://p3.ssl.qhimg.com/t018a1a11d2edc3f322.png)
+
+可以看到a标签的超链接是<http://localhost:8080/SSMFrameWorkTest_war/book/allbook>
+
+    
+    
+    ${pageContext.request.contextPath}
+
+是JSP取得绝对路径的方法, 也就是取出部署的应用程序名或者是当前的项目名称,这样当我们把项目部署到生产环境中时不容易出错
+
+后台此时收到的请求路径为/book/allbook首先SpringMVC在项目启动时会去扫描我们指定的要扫描的路径也就是com.kuang.controller这个路径下的所有类，我们看下BookController这个类的代码
+
+![](https://p2.ssl.qhimg.com/t014025d69a2deeafd0.png)
+
+SpringMVC会扫描这个类中的所有注解，当看到[@Controller](https://github.com/Controller
+"@Controller")是会生成该controller的Bean，扫描到[@RequestMappting](https://github.com/RequestMappting
+"@RequestMappting")注解的时候会将[@RequestMappting](https://github.com/RequestMappting
+"@RequestMappting")中的URI和下面的方法形成映射。所以我们请求的URI是“/book/allBool”
+SpringMVC就会将数据交由BookController类的list方法来处理
+
+我们仔细观察list方法，里面调用了bookService参数的queryAllBook方法，这里使用到了两个注解[@Autowired](https://github.com/Autowired
+"@Autowired")，[@Qualifier](https://github.com/Qualifier
+"@Qualifier")，简单介绍下两个注解的作用
+
+[@Autowrite](https://github.com/Autowrite "@Autowrite")
+
+作用：自动按照类型注入,只要有唯一的类型匹配就能注入成功，当传入的类型不唯一时，则会报错。
+
+[@Qualiier](https://github.com/Qualiier "@Qualiier")
+
+作用：在自动按照类型注入的基础上，在按照bean的id注入。它在给类成员注入数据时，不能独立使用。但是再给方法的形参注入数据的时候，可以独立使用。
+
+由此可以看到bookService参数的类型是BookService类型，通过注解自动注入的Bean的id叫做BookServiceImpl
+
+###  SSM之Spring执行流程
+
+这里我们就要从SpringMVC的部分过渡到Spring的部分了,所谓的过渡就是我们从SpringMVC的Controller层去调用Service层而这Service就是我们使用Spring进行IOC控制和AOP编程的地方。
+
+首先我们需要先要去看spring-service.xml这个配置文件，
+
+![](https://p2.ssl.qhimg.com/t0197196d0bb58b7cca.png)
+
+这里我们看到了一个很重要的东西
+id为BookServiceImpl的bean，我们可以看到这个bean的class路径是com.kuang.service.BookServiceImpl，
+
+<bean>这个标签就牵扯到了Spring一大核心功能点 就是IOC(Inversion of
+Control)控制反转，名字听起来特别唬人，其实特别容易理解，就是本来写一个项目需要我们自己手动去new一个实例出来，用了Spring以后我们至于要把我们需要生成实例的那个类的路径，以及我们在new
+一个实例时需要传入的的参数，传入参数的方法可以是通过构造方法，也可以通过set方法，我们还可以给这个bean起一个名称来方便我们调用（如果不用id参数之名的话那么这个bean的名称默认为类名开头字母小写，比如BookServiceImpl，如不特别指定，那么生成的bean的名称就是bookServiceImpl）。Spring就会在启动时将这些我们指定好的类生成的实例放入IOC容器中供我们使用，通俗点说就是本来由我们手动生成实例的过程交由Spring来做了，这就是所谓的控制反转。
+
+接下来我们去看BookServiceImpl这个类的详细信息
+
+![](https://p1.ssl.qhimg.com/t01eef3fa92a965da1b.png)
+
+首先看到该类是实现了BookService这个接口，ok我们先去看BookService这个接口
+
+![](https://p4.ssl.qhimg.com/t0156ea6ff4bcb1c95d.png)
+
+可以看到接口中定义了四种方法，为了方便理解，这些方法的名字是对应着日常项目中最长用的操作数据库的四个方法即，增删改查。
+
+好了，看完了接口我们来看接口的实现类也就是BookServiceImpl。
+
+![](https://p2.ssl.qhimg.com/t0138c7990cbc191f7b.png)
+
+由于实现了BookService这个接口，自然也就需要实现该接口下的所有方法，我们找到queryAllBook方法，发现queryAllBook调用了bookMapper参数的queryAllBook方法，而bookMapper是BookMapper类型的参数。
+
+我们回过头来看spring-service.xml中的这一项配置，之前说了这一配置是将BookServiceImpl这个类生成一个bean并放入Spring
+的IOC容器中，<property>标签的意思是通过该类提供的set方法在bean生成时向指定的参数注入value，name属性就是指定的参数的名称，可以看到我们BookServiceImpl中确实有一个私有参数名叫bookMapper
+
+并且提供了该属性的set方法， ref属性是指要注入的value是其他的Bean类型，如果传入的是一些基本类型或者String类型就不需要用ref  
+将ref改成value就可以
+
+![](https://p2.ssl.qhimg.com/t01c5ccca5915591370.png)
+
+这里我们可以看到我们通过ref属性向BookServiceImpl这个类中的bookMapper参数注入了一个value，这个value是一个其他的bean类型，这个bean的id叫做bookMapper。此时由于我们Service层的BookServiceImpl的queryAllBook方法的实现方式其实就是调用了id为bookMapper的bean的queryAllBook方法。所以这个id为bookMapper的bean就是程序执行的下一步。
+
+###  SSM之Mybatis执行流程
+
+接下来就是是我们的web三层架构的数据访问层也就是我们Mybaits负责的部分，通常这一部分的包名会叫做xxxdao，也就是开发中常说的dao层，该包下面的类和接口通常都叫做xxxDao或者xxxMapper，当然不遵守这个规范也可以但是不推荐。此时我们的请求要从Spring负责的业务层过渡到Mybatis负责的数据层了，但是Mybaits和Spring的关系不像SpringMVC和Spring的关系一样可以无缝衔接，所以我们需要通过配置文件将Mybatis和Spring关联起来，这里我们看一下pom.xml
+
+![](https://p5.ssl.qhimg.com/t015041bab10b3bbd71.png)
+
+可以看到我们导入的包除了Mybatis本身，还倒入了一个mybatis-spring的包，目的就是为了将Mybatis和Spring做结合，spring-dao.xml也就是用来整合Spring和Mybatis的配置文件。
+
+刚才我们看到Spring启动加载bean时会注入一个id为bookMapper的bean但是我们并未在之前的任何配置文件包括注解中看到有这个bean的相关信息，所以我们接下来要看spring-dao.xml中有没有和这个bean有关的信息
+
+![](https://p3.ssl.qhimg.com/t0141941cc36a25cb4d.png)
+
+每项配置的作用基本都用注释的方式标明了
+
+<context:property-placeholder location=”classpath:database.properties”/>
+
+这里关联了一个properties文件
+
+![](https://p2.ssl.qhimg.com/t012e210a9b8f6515fa.png)
+
+里面是连接数据库和配置连接池时需要的信息，没什么好说的。
+
+我们着重看这个配置
+
+![](https://p5.ssl.qhimg.com/t016f39b9effd6ba7d7.png)
+
+这个配置通过生成MapperScannerConfigurer的bean来实现自动扫描com.kuang.dao下面的接口包，然后动态注入到Spring  
+IOC容器中，同样动态注入的bean的id默认为类名（开头字母小写），我们看下到目录下有哪些文件。
+
+![](https://p1.ssl.qhimg.com/t013b56d1d7378a197f.png)
+
+我们看到有一个叫BookMapper的接口文件，这样就明白了之前生成BookServiceImpl这个bean是通过<property>也就是通过BookServiceImpl类中的
+
+    
+    
+    public void setBookMapper(BookMapper bookMapper) {
+    
+    this.bookMapper = bookMapper;
+    
+    }
+
+方法注入的这个bookMapper是哪里来的了，是由我们配置了MapperScannerConfigurer这个bean后这个bean帮我们扫描dao包下的借口文件并生成bean然后再帮我们注入到Spring的IOC容器中，所以我们才可以在BookServiceImpl这个bean中通过<property>标签注入bookmapper这个bean
+
+然后我们来看这项配置
+
+![](https://p0.ssl.qhimg.com/t012242adf06e308b7e.png)
+
+这里是生成一个id为sqlSessionFactory的bean，这里就要引出Mybatis中的两个关键对象即sqlSessionFactory和sqlSession。
+
+简单介绍下这两个对象
+
+SqlSessionFactory
+
+SqlSessionFactory是MyBatis的关键对象，它是单个数据库映射关系经过编译后的内存镜像。SqlSessionFactory对象的实例可以通过SqlSessionBuilder对象获得，而SqlSessionBuilder则可以从XML配置文件或一个预先定制的Configuration的实例构建出SqlSessionFactory的实例。SqlSessionFactory是创建SqlSession的工厂。
+
+SqlSession
+
+SqlSession是执行持久化操作的对象，类似于JDBC中的Connection。它是应用程序与持久存储层之间执行交互操作的一个单线程对象。SqlSession对象完全包括以数据库为背景的所有执行SQL操作的方法，它的底层封装了JDBC连接，可以用SqlSession实例来直接执行已映射的SQL语句。
+
+SqlSessionFactory和SqlSession的实现过程：
+
+mybatis框架主要是围绕着SqlSessionFactory进行的，创建过程大概如下：
+
+(1)、定义一个Configuration对象，其中包含数据源、事务、mapper文件资源以及影响数据库行为属性设置settings
+
+(2)、通过配置对象，则可以创建一个SqlSessionFactoryBuilder对象
+
+(3)、通过 SqlSessionFactoryBuilder 获得SqlSessionFactory 的实例。
+
+(4)、SqlSessionFactory  
+的实例可以获得操作数据的SqlSession实例，通过这个实例对数据库进行
+
+如果是spring和mybaits整合之后的配置文件,一般以这种方式实现,SqlSessionFactory的创建:
+
+    
+    
+    <bean id="sqlSessionFactory" class="org.mybatis.spring.SqlSessionFactoryBean">
+    
+    <property name="dataSource" ref="dataSource"></property>
+    
+    <property name="mapperLocations"
+    value="classpath:com/cn/mapper/*.xml"></property>
+    
+    </bean>
+
+SqlSessionFactoryBean是一个工厂Bean，根据配置来创建SqlSessionFactory
+
+如果是单独的使用手动创建SqlSessionFactory和SqlSession话流程如下
+
+![](https://p2.ssl.qhimg.com/t01ca2bd0518ebf074f.png)
+
+看完了SqlSessionFactory和SqlSession的基础知识我们同时注意到下面这个<property>标签的value属性，“classpath:mybatis-config.xml”
+
+![](https://p1.ssl.qhimg.com/t014993be47c4e8595a.png)
+
+这里又引入了一个xml配置文件，还记得我上面刚说过spring-dao.xml是用来整合Spring和Mybatis的么？这个mybatis-config.xml就是我们Mybatis的配置文件。
+
+好了spring-dao.xml这个用来整合Spring和Mybatis的配置文件我们已经了解了，程序按着刚才的请求接着向下走。
+
+我们刚在走到了BookServiceImpl类的queryAllBook方法，然后该方法又是调用了bookMapper的queryAllBook方法。现在我们清楚了bookMapper的类型是BookMapper
+
+又从sping-dao.xml的配置文件中看到了该文件的位置位于com.kuang.dao路径下，我们现在就打开BookMapper.java文件看一看
+
+![](https://p4.ssl.qhimg.com/t01e1dfd8b54443976b.png)
+
+我们注意到这只是个接口，我们都知道接口是不能实例化的接口只是提供一个规范，这是我们就有疑问了，那我们调用的bookMapper的queryAllBook是怎么执行的？
+
+我们在仔细看下dao目录下的文件，
+
+![](https://p4.ssl.qhimg.com/t014cd6f1592c84e57d.png)
+
+发现还有一个名字和BookMapper.java名字一样的xml文件，我们打开看一下内容。
+
+![](https://p2.ssl.qhimg.com/t01ed7289bd70b42931.png)
+
+看到这个文件，虽然我们对mybatis的了解不多，但是我们应该大概明白了，为什么我们BookMapper明明只是接口，我们却可以实例化生成BookMapper的bean并且可以调用他的方法了。
+
+但是只有BookMapper.java和BookMapper.xml显然不能就是Mybatis的全部了，两个文件之间此时除了名字相同以外还没有什么直接联系，所以我们还需要关联起来，我们来看看mybatis-config.xml这个Mybatis的配置文件
+
+![](https://p5.ssl.qhimg.com/t01ae3013a33905b090.png)
+
+我们看到了<mappers>这个标签的resource属性的value就是我们BookMapper.xml的路径MyBatis 基于 sql
+映射配置的框架，sql 语句都写在 Mapper 配置文件中，当构建 SqlSession 类之后，就需要去读取 Mapper 配置文件中的 sql
+配置。而<mappers> 标签就是用来配置需要加载的 sql 映射配置文件路径的。
+
+也就是说最终由我们的Spring帮我生成BookMapper的代理对象然后由Mybaits通过<mappers>标签将BookMapper代理对象中的方法和BookMapper.xml中的配置进行一一的映射，并最终执行其中的Sql语句。
+
+我们看到我们此次请求最终调用的BookMapper的queryAllBook方法，这时我们就需要去BookMapper.xml去寻找与之对应的Sql语句了
+
+![](https://p2.ssl.qhimg.com/t01dd5f0423665cf676.png)
+
+很容易就找到了
+
+我们看到最后执行的sql语句是
+
+SELECT * from ssmbuild.books
+
+至此我们的请求已经完成从一开始的由DispatcherServlet这个前端控制器派发给SpringMVC并最终通过Mybatis  
+执行我们需要对数据库进行的操作。
+
+生产环境的业务代码，会比这个Demo复杂，但是整体的执行流程和思路并不会有什么太大的变化，所以审计思路也是如此。
+
+SSM框架有三种配置方式，即全局采用xml配置文件的形式，全局采取注解的配置方式，或者注解和xml配置文件配合使用的方式，区别只是在于写法不一样，执行流程不会因此发生太多改变。
+
+###  审计的重点filter过滤器
+
+此时在将web.xml时还有一个标签说放在后面讲，就是web.xml的<filter>标签
+
+SpringMVC时构建于Servlet之上的，所以Servlet中的过滤器自然也是可以使用，只不过不能配置在spring-mvc.xml中，而是要直接配置在web.xml中，因为是属于Servlet的技术嘛。
+
+我们重回web.xml
+
+![](https://p3.ssl.qhimg.com/t0134d382dee2f0f64a.png)
+
+为了方便之前的讲解，我将这两个filter注释掉了。也就是说这两个filter并没有生效。我们以下面的filter-name为XSSEscape的filter来进行讲解。
+
+首先我们此时程序是没有XSS防护的，所以存在存储型XSS漏洞，我们来尝试存储型XSS攻击
+
+![](https://p4.ssl.qhimg.com/t01e924deff327cf868.png)
+
+我们点击新增功能
+
+![](https://p4.ssl.qhimg.com/t01b5a32c1e27da65fe.png)
+
+看一下提交路径
+
+![](https://p5.ssl.qhimg.com/t014de4540d3dc6639a.png)
+
+去后台找与之对应的方法
+
+![](https://p0.ssl.qhimg.com/t014770948930173960.png)
+
+找到后在这里下断点看传入参数的详细信息
+
+![](https://p0.ssl.qhimg.com/t0182a3a69257f03be5.png)
+
+看到没有任何过滤XSS语句就这么直接传了进来
+
+![](https://p0.ssl.qhimg.com/t01abf95eed01452715.png)
+
+如果我们此时想要防御这个XSS攻击就可以在web.xml中配置上我们的<filter>
+
+![](https://p3.ssl.qhimg.com/t0159a8eba595c2ab11.png)
+
+这里声明了了我在com.kuang.filter的包路径下又一个类叫XssFilter是一个过滤器
+
+下面的<dispatcher>属性中的REQUEST的意思是
+
+只要发起的操作是一次HTTP请求，比如请求某个URL、发起了一个GET请求、表单提交方式为POST的POST请求、表单提交方式为GET的GET请求。一次重定向则前后相当于发起了两次请求，这些情况下有几次请求就会走几次指定过滤器。
+
+<dispatcher>属性2.4版本的servlet中添加的新的属性标签，总共有四个值REQUEST,FORWARD,INCLUDE和ERROR，以下把这四个值简单说明一下
+
+1、REQUEST
+
+只要发起的操作是一次HTTP请求，比如请求某个URL、发起了一个GET请求、表单提交方式为POST的POST请求、表单提交方式为GET的GET请求。一次重定向则前后相当于发起了两次请求，这些情况下有几次请求就会走几次指定过滤器。
+
+2、FOWARD
+
+只有当当前页面是通过请求转发转发过来的情形时，才会走指定的过滤器
+
+3、INCLUDE
+
+只要是通过<jsp:include page=”xxx.jsp” />，嵌入进来的页面，每嵌入的一个页面，都会走一次指定的过滤器。
+
+4、ERROR
+
+假如web.xml里面配置了<error-page></error-page>：
+
+例如
+
+    
+    
+    <error-page>
+    
+    <error-code>400</error-code>
+    
+    <location>/filter/error.jsp</location>
+    
+    </error-page>
+
+意思是HTTP请求响应的状态码只要是400、404、500三种状态码之一，容器就会将请求转发到error.jsp下，这就触发了一次error，走进了配置的DispatchFilter。需要注意的是注意一点的是，虽然把请求转发到error.jsp是一次forward的过程，但是配置成<dispatcher>FORWARD</dispatcher>并不会走DispatchFilter这个过滤器。
+
+这四种dispatcher方式可以单独使用，也可以组合使用，配置多个<dispatcher></dispatcher> 即可。
+
+在审计的时候的过滤器<dispatcher>属性中使用的值也是我们关注的一个点，
+
+<url-pattern>属性是指明我们要过滤访问哪些资源的请求，“/*”的意思就是拦截所有对后台的请求,
+包括对一个简单的对jsp页面的GET请求，同时我们可以具体的指定拦截对某一资源的请求，同时也可以设置对某些资源的请求不过滤单独进行放过，
+
+举例说明
+
+    
+    
+    <filter>
+    
+    <filter-name>XSSEscape</filter-name>
+    
+    <filter-class>com.springtest.filter.XssFilter</filter-class>
+    
+    </filter>
+    
+    <filter-mapping>
+    
+    <filter-name>XSSEscape</filter-name>
+    
+    <url-pattern>/com/app/UserControl</url-pattern>
+    
+    <dispatcher>REQUEST</dispatcher>
+    
+    </filter-mapping>
+
+既然等指定单独过滤特定资源，自然也就可以指定对特定资源的放行。
+
+如果设置全局的资源请求过滤的话肯定是不合理的，生产环境中又很多静态资源是不需要进行过滤的，所以我们可以指定将这些资源进行放行，
+
+例如
+
+    
+    
+    <filter>
+    
+    <filter-name> XSSEscape </filter-name>
+    
+    <filter-class> com.springtest.filter.XssFilter </filter-class>
+    
+    <init-param>
+    <!— 配置不需要被登录过滤器拦截的链接，只支持配后缀、前缀 及全路径，多个配置用逗号分隔 —>
+    
+    <param-name>excludedPaths</param-name>
+    
+    <param-value>/pages/*,*.html,*.js,*.ico</param-value>
+    
+    </init-param>
+    
+    </filter>
+    
+    <filter-mapping>
+    
+    <filter-name> XSSEscape </filter-name>
+    
+    <url-pattern>/*</url-pattern>
+    
+    </filter-mapping>
+
+这样我们的serlvet在路径选择时当有对 html js 和ico资源发起的请求就不回在将改请求转发至XssFilter类。
+
+我们在审计代码时  
+这里也是需要注意的一个点，因为有可能开发人员的错误配置导致本应该经过过滤器的请求，错误的给直接放行了，这样即使项目中有过滤器，也是不会生效的。
+
+明白了<filter>标签的作用我们就去看XssFilter这个类的内容
+
+![](https://p2.ssl.qhimg.com/t01f1825de82afd4eb2.png)
+
+可以看到filter包下有两个java类，我们先看XssFilter这个类
+
+![](https://p3.ssl.qhimg.com/t0156c19793512e7895.png)
+
+可以看到我们的XssFilter这个类实现了一个叫Filter的接口
+
+我们去看一下Filter接口的源码
+
+![](https://p0.ssl.qhimg.com/t013d3639f4b84efa41.png)
+
+可以看到Filter所属的包是javax.servlet
+
+Filter是Servlet的三大组件之一
+
+javax.servlet.Filter 是一个接口，过滤请求，实现请求的拦截或者放行，并且添加新的功能
+
+众所周知接口其实就是一个标准，所以我们想要编写自己的过滤器自然也要遵守这个标准即实现Filter这个接口。
+
+Filter接口中有三个方法，这里简单介绍一下
+
+init方法：
+
+在创建完过滤器对象之后被调用。只执行一次
+
+doFilter方法：
+
+执行过滤任务方法。执行多次。
+
+destroy方法：
+
+Web服务器停止或者Web应用重新加载，销毁过滤器对象。
+
+当 Servlet 容器开始调用某个 Servlet 程序时，如果发现已经注册了一个 Filter  
+程序来对该 Servlet 进行拦截，那么容器不再直接调用 Servlet 的 service  
+方法，而是调用 Filter 的 doFilter 方法，再由 doFilter 方法决定是否去激活 service  
+方法
+
+不难看出需要我们重点关注的方法是doFilter方法
+
+![](https://p4.ssl.qhimg.com/t01b14c64adb006be9b.png)
+
+这里的request的参数和response参数可以理解成封装了请求数据和相应数据的对象，我们需要过滤的数据就是存放在这两个对象中，
+
+最后一个参数FilterChain，通过名字我们猜这个参数是一个过滤链，查看一下FilterChain的源码
+
+![](https://p4.ssl.qhimg.com/t01c09f78e956711a39.png)
+
+看到FilterChain是一个接口，而且这个接口只有一个方法，那就是doFilter方法，FilterChain参数存在的意义就在于，在一个 Web
+应用程序中可以注册多个 Filter 程序，每个 Filter 程序都可以对一个或一组 Servlet 程序进行拦截。如果有多个 Filter
+程序都可以对某个 Servlet 程序的访问过程进行拦截，当针对该 Servlet 的访问请求到达时，Web 容器将把这多个 Filter 程序组合成一个
+Filter 链（也叫过滤器链），
+
+Filter 链中的各个 Filter 的拦截顺序与它们在 web.xml 文件中的映射顺序一致，上一个 Filter.doFilter 方法中调用
+FilterChain.doFilter 方法将激活下一个  
+Filter的doFilter 方法，最后一个 Filter.doFilter 方法中调用的 FilterChain.doFilter 方法将激活目标
+Servlet的service 方法 只要 Filter 链中任意一个 Filter 没有调用 FilterChain.doFilter 方法，则目标
+Servlet 的 service 方法都不会被执行
+
+介绍完FilterChain接下来大家应该发现，虽然名字叫过滤器
+
+但是调用chain.dofilter方法似乎并没有执行任何类似过滤的工作，没有看到任何类似黑名单或者白名单的过滤规则
+
+在调用chain.dofilter方法时我们传递了两个参数进去
+
+new XSSRequestWrapper((HttpServletRequest) request)和response
+
+这就是说我们传递了一个XSSRequestWrapper对象和ServletRespons对象，我们关心的当然是这个XSSRequestWrapper
+
+在传递参数的过程中我们通过调用XSSRequestWrapper的构造器，传递了HttpServletRequest对象，这里简单从继承关系让大家看一下HttpServletRequest和ServletRequest的关系
+
+![](https://p1.ssl.qhimg.com/t0121d09fdc3317da3a.png)
+
+既然这里生成了一个XSSRequestWrapper对象并传入的参数那我们自然要跟进一探究竟
+
+![](https://p5.ssl.qhimg.com/t01e548b172a213aded.png)
+
+正好filter下面有一个叫XSSRequestWrapper的类，我们看一下代码
+
+![](https://p5.ssl.qhimg.com/t015791095093db7c7c.png)
+
+看到这里大家应该恍然大悟，原来过滤的行为是在这里进行了，而XssFilter的存在只是在链式执行过滤器并最终将值传给Servlet时调用XSSRequestWrapper来进行过滤并获取过滤结果而已。
+
+这里对过滤规则就不过多赘述，网上有很多好的过滤规则，这里就不多提了。
+
+这里肯定有很多人并明白问什么不将过滤的逻辑代码写在XssFilter中而是又新写了一个类，不是多此一举么？
+
+这么做当然不是多此一举，首先解耦这个理由就已经足够充分了，其次我们看到XSSRequestWrapper继承了一个类  
+HttpServletRequestWrapper
+
+这里我们看一下HttpServletRequestWrapper类的继承关系
+
+![](https://p1.ssl.qhimg.com/t0162b7eec07607c131.png)
+
+我们可以看到HttpServletRequestWrapper是实现了HttpServletRequest接口的，我们这里提一下过滤这个概念，我们的想法是尽可能的把请求中的有危害的数据或者特殊符号过滤掉，然后将过滤后的数据转发向后面的业务代码并继续执行，而不是说发现请求数据中有特殊字符就直接停止执行，抛出异常，返回给用户一个400页面，所以既然要继续执行，那我们就要去修改或者转义HttpServletRequest对象中的恶意数据或者特殊字符。然而HttpServletRequest对象中的数据是不允许被修改的，也就是说HttpServletRequest对象没有提供给我们直接修改请求数据的方法。
+
+此时矛盾就来了，我们想要修改但是HttpServletRequest对象又不给提供，所以HttpServletRequestWrapper这个类就出现了，这里用到了常见的23中设计模式之一的装饰者模式，限于篇幅原因不可能对装饰者模式在进行讲解了，感兴趣的同学可以自己去研究。也就是说HttpServletRequestWrapper这个类的出现就是为了给我们提供修改request请求数据的方法的，到这里大家应该就明白了为什么需要单写一个类来进行过滤的行为，不是我们想着么写，而是框架就这么设计的，为的就是解耦。
+
+此时当HttpServletRequestWrapper将请求中的数据过滤完，并修改完成后返回然后作为chain.doFilter方法的形参进行传递。
+
+结合之前说的，最后一个 Filter.doFilter 方法中调用的 FilterChain.doFilter  
+方法将激活目标 Servlet的service 方法
+
+由于我们没有配置第二个Filter所以XssFilter中的chain.doFilter将会激活我们Servlet的service方法即DispatcherServlet的service方法，然后数据将传入我们的SpringMVC的Controller层交由我们的BookController来处理。
+
+我们这次使用filter来演示一下效果
+
+![](https://p0.ssl.qhimg.com/t017417958b4e9371dc.png)
+
+老地方下断
+
+![](https://p4.ssl.qhimg.com/t01b6449ac77f86f108.png)
+
+然后再次执行到这里时XSS语句中的特殊字符已经被Filter转义。
+
+![](https://p5.ssl.qhimg.com/t012fc126e27744a950.png)
+
+自然也就不会存在Xss的问题了。
+
+## SSM框架审计思路总结
+
+###  思路总结
+
+最后总结一下SSM框架的审计思路，审计思路其实就是我们代码的执行思路
+
+和审计非SSM框架代码的主要区别就是在于SSM框架的各种XML配置，和注解配置，需要我们根据XML中的配置和注解来查看代码的执行路径，SSM框架中常见的注解和注解中的属性，以及常见的标签和标签的各个属性。
+
+审计漏洞的方式同正常的java代码审计没有区别，网上有很多非常优秀的java代码审计文章，关于每个漏洞的审计方式写的都非常全面，我们需要的就只是将其移植到SSM框架的审计中来，我们明白SSM的执行流程了，自然就明白了该怎么在SSM框架中跟踪参数，例如刚刚讲的XSS漏洞，我们根据XML中的配置和注解中的配置一路跟到了Mybatis的mapper.xml这个映射文件，找到了最中执行的
+
+    
+    
+    insert into ssmbuild.books(bookName,bookCounts,detail)
+    
+    values (#{bookName}, #{bookCounts}, #{detail})
+
+这个sql语句，发现我们传入的books参数直到sql语句执行的前一刻都没有经过任何的过滤处理，所以此处插入数据库的参数自然是不可信的脏数据。
+
+当我们再次查询这条数据并返回到前端时就非常可能造成存储型XSS攻击
+
+我们在审计这类漏洞时，最简单的方法就是先去web.xml中去查看有没有配置相关的过滤器，如果有哪我们就去看看过滤器的规则是否严格，如果没有那就很有可能存在漏洞。
+
+###  补充知识
+
+最后还要提一个必要重要的Mybaits知识点就是Mybatis的预编译，关于java的预编译简单介绍一下
+
+非预编译的情况下我们每次执行sql都需要将slq和参数拼接在一起然后传给数据库编译执行，这样采用拼接的方式非常容易产生SQL注入漏洞，当然可以使用filter对参数进行过滤来避免产生SQL注入，
+
+而在预编译的情况下，程序会提前将我们的sql语句编译好，程序执行的时候只需要将传递进来的参数交由数据库进行操作就可以了，此时不论传来的参数是什么，都不会被当成时SQL语句的一部分，因为真正的SQL语句已经提前编译好了，所以即使不过滤也不会产生SQL注入这类漏洞，
+
+以下面这个mapper.xml中的SQL语句举例
+
+    
+    
+    insert into ssmbuild.books(bookName,bookCounts,detail)
+    
+    values (#{bookName}, #{bookCounts}, #{detail})
+
+#{bookName}这种形式的就是采用了预编译的形式传参，而以下这种形式
+
+    
+    
+    insert into ssmbuild.books(bookName,bookCounts,detail)
+    
+    values (‘${bookName}’,’${bookCounts}’, ‘${detail}’)
+
+‘${bookName}’这种写法就是没有使用预编译的形式进行传参数，此时如果不对传入的参数进行过滤和校验的话就会产生SQL注入漏洞
+
+‘${xxxx}’和#{xxxx}其实就是jdbc的Statement和PreparedStatement对象。
+
+###  学习建议
+
+整篇文章对SSM框架的整个执行流程和审计流程进行了简单的讲解，后续想要增强SSM框架的审计水平，推荐大家自己上手一些简单SSM框架搭建的项目，实战永远是最快的学习方式，大家在审计SSM框架可能遇到的最大的困难就是有很多新的之前没有碰到过的注解，和XML中一些SSM独有的标签，这些注解和标签数量很多，没有办法在一篇文章中讲完，大家碰到不懂的注解和标签都可以通过官方提供的文档和搜索引擎来寻找答案。
+
+最后感谢大家的耐心观看。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **天融信阿尔法实验室** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/192968](/post/id/192968)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Java](/tag/Java)
+  * [SSM](/tag/SSM)
+
+ **+1** __10赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t016dfbf6ffbd895d3b.png) 天融信阿尔法实验室
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

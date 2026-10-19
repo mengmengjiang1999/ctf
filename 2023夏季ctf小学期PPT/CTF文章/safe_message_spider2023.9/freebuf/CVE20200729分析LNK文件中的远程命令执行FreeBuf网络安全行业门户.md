@@ -1,0 +1,230 @@
+**本文是趋势科技漏洞研究中心一篇漏洞报告的摘录，漏洞报告中，来自趋势科技研究团队的John Simpson和Pengsu
+Cheng详细介绍了最近的一个Microsoft Windows
+.LNK文件中的远程命令执行(RCE)漏洞。下文是对其中关于CVE-2020-0729部分的摘录，有一些小的修改。**
+
+微软在2020年2月的“周二补丁日(Patch
+Tuesday)”上发布了99个CVE的安全补丁，一个月修复这么多漏洞实在是难以置信。由于利用广泛，很多人都在关注其中的[Scripting
+Engine漏洞](https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2020-0674)，但是还有一个“高危”漏洞也十分重要——[CVE-2020-0729](https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2020-0729)，这是一个Windows
+LNK文件（即快捷方式）中的RCE漏洞。这个漏洞之所以引人注目有一部分历史原因，以前LNK文件中的漏洞通常被用来传播恶意软件，例如著名的Stuxnet，并且大多数情况下，只要浏览包含该恶意LNK文件的文件夹就足以触发该漏洞，无论是在本地还是在网络共享中。所以问题就变成了，这个RCE漏洞还可以像之前的LNK文件漏洞一样被这样触发吗？由于LNK文件是二进制的格式，而且只包含一些[顶级结构](https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink/16cb4ca1-9339-4d0c-a68d-bf1d6cc0f943)信息，回答这个问题需要更多的研究。
+
+##  开始分析
+
+对于我们这些研究团队来说，微软的“周二补丁日”意味着我们要开始研究漏洞了，一般要解压给定Windows平台的纯安全(security
+only)补丁包，并根据微软的建议信息，尝试定位补丁中与漏洞有关的文件。2月份的补丁包里没有包含与处理LNK文件有关的常用DLL文件的更新，例如shell32.dll和windows.storage.dll，这就让我们很难找到问题在哪儿。但是，通过对文件列表的仔细检查，我们发现了一个特殊的DLL文件：StructuredQuery.dll。这个DLL文件之所以特殊，部分原因是因为我们之前看到过涉及到StructuredQuery的正式漏洞，例如
+[CVE-2018-0825](https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2018-0825)，只是这次的周二补丁中没有类似的建议。所以LNK文件和StructuredQuery之间有什么关系呢？我们在微软的开发者中心对StructuredQuery进行了搜索，并找到了一份关于头文件[structuredquery.h](https://docs.microsoft.com/en-us/windows/win32/api/structuredquery/)的文档，该文档提到这个头文件被用于Windows
+Search，而这正是LNK文件与StructuredQuery之间的联系。
+
+##  LNK文件的众多功能
+
+众所周知，LNK文件中包含为文件或文件夹创造快捷方式的二进制结构，但很少有人知道，LNK文件还可以直接包含搜索结果。通常情况下，当用户在Windows
+10中搜索文件时，资源管理器功能区会出现一个“Search”选项卡，用户可以在这里优化搜索功能，设置搜索的高级选项，还可以保存当前的搜索结果以供之后使用。该搜索结果是一个XML文件，扩展名为".search-ms"，对于这种格式的文件，只有一个[简单的文档介绍](https://docs.microsoft.com/en-us/windows/win32/search/-search-savedsearchfileformat)。
+
+![](https://image.3001.net/images/20200421/1587469460_5e9edc942746c.png!small)
+
+除了以这种方式保存搜索结果外，如果你将下图中地址栏上的搜索结果图标拖动到另一个文件夹中，会创建一个LNK文件，该文件包含"search-ms"
+XML文件中数据的序列化结果。
+
+![](https://image.3001.net/images/20200421/1587469468_5e9edc9cceccc.png!small)
+
+知道了这种方法后，我们用BinDiff看一下补丁中StructuredQuery的变化。
+
+![](https://image.3001.net/images/20200421/1587469478_5e9edca624e51.png!small)
+
+可以看到，只有一个函数有变化——StructuredQuery1::ReadPROPVARIANT()。由于相似度只有81%，函数的改变可以说相当大，对两者的流程图进行对比可以证实这一点：
+
+![](https://image.3001.net/images/20200421/1587469487_5e9edcaf0006b.png!small)
+
+所以说这个函数在LNK文件中做了什么呢？这就需要对上面提到的LNK文件中的search-ms文件结构进行一番深入研究了。
+
+根据[Shell Link(.LNK)二进制文件格式规范](https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink/16cb4ca1-9339-4d0c-a68d-bf1d6cc0f943)，Windows shell
+link文件包含几个必要组件和几个可选组件，每个shell link文件至少需要包含一个Shell Link Header，其格式如下：
+
+![](https://image.3001.net/images/20200421/1587469504_5e9edcc0b0ce7.png!small)
+
+除非另有说明，所有的多字节字段都使用小端模式表示。
+
+LinkFlags字段用来设置是否存在可选结构以及其他各种选项，例如shell
+link文件中的字符串是否使用Unicode编码。下面是LinkFlags字段的结构分布：
+
+![](https://image.3001.net/images/20200421/1587469514_5e9edcca95e59.png!small)
+
+有一个标志在大多数情况下都会被设置——HasLinkTargetIDList，在图中用位置"A"表示，即LinkFlags字段中第一个字节的最低有效位。如果设置了该标志，在Shell
+Link Header之后必须跟随一个LinkTargetIDList结构，该结构定义了链接的目标，并具有如下结构：
+
+![](https://image.3001.net/images/20200421/1587469522_5e9edcd235003.png!small)
+
+其中，IDList结构中包含了一个item ID列表。
+
+![](https://image.3001.net/images/20200421/1587469529_5e9edcd905885.png!small)
+
+ItemIDList的功能与文件路径类似，其中每个ItemID对应于路径结构中的一项，它可以代表文件系统中真实的文件夹，或者类似“控制面板”或者“保存的搜索”之类的虚拟文件夹，或者其他形式的嵌入式数据，作为“快捷方式”来执行特定的功能。想了解关于ItemID和ItemIDList的更多信息，请参阅微软的[Common
+Explorer Concepts](https://docs.microsoft.com/en-us/previous-versions/windows/desktop/legacy/cc144089\(v=vs.85))。对于这次的漏洞来说，重要的是包含有搜索结果的LNK文件中ItemIDList和ItemID的结构。
+
+当用户创建了一个存有搜索结果的快捷方式时，这个快捷方式会包含一个IDList结构，该结构以Delegate Folder
+ItemID开头，后面跟有一个和搜索有关的User Property View ItemID。通常来说，ItemID以下面的结构开头：
+
+![](https://image.3001.net/images/20200421/1587469537_5e9edce1c900c.png!small)
+
+从偏移0x0004开始的两个字节与ItemSize和ItemType一起用于确定ItemID的类型。例如，如果ItemSize是0x14，ItemType是0x1F，偏移0x0004处的两个字节大于ItemSize，则可以认为ItemID的剩余部分是一个16字节的全局唯一标识符(GUID)，LNK文件中的第一个ItemID通常是这种结构，指向一个文件或文件夹。如果ItemSize大于包含GUID所需大小，但是小于偏移0x0004处的两个字节，则称GUID后面的剩余数据为ExtraDataBlock，这段数据的前两个字节是一个大小字段，定义了之后数据的字节数。
+
+对于Delegate Folder ItemID来说，该位置也有一个2字节的大小字段，代表剩余结构的字节数。它具有以下结构：
+
+![](https://image.3001.net/images/20200421/1587469546_5e9edcea1811f.png!small)
+
+LNK文件中所有的GUID都以[RPC IDL](https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-dtyp/49e490b8-f972-45d6-a3a4-99f924998d97)的形式存储，即GUID的前三个字段中，每个字段都是一个整体，以小端模式存储（可以看做是一个DWORD后面跟两个WORD），后两个字段中的每个字节都是独立的，举例来说，GUID
+{01234567-1234-ABCD-9876-0123456789AB}可以用以下的二进制表示：
+
+    
+    
+    \x67\x45\x23\x01\x34\x12\xCD\xAB\x98\x76\x01\x23\x45\x67\x89\xAB
+
+并没有文档记录Delegate Folder ItemID的具体作用，但是该项中Item
+GUID字段指定的类很可能是用来处理接下来的ItemID的，因此整个路径结构的根命名空间就是这个由Item
+GUID指定的类。如果LNK文件中包含搜索结果，则Item
+GUID为{04731B67-D933-450A-90E6-4ACD2E9408FE}，代表CLSID_SearchFolder，是对Windows.Storage.Search.dll文件的引用。
+
+User Property View ItemID跟在Delegate Folder ItemID的后面，其结构与Delegate Folder
+ItemID类似：
+
+![](https://image.3001.net/images/20200421/1587469555_5e9edcf301f67.png!small)
+
+其中的PropertyStoreList字段很重要，该字段中包含一个或多个[序列化PropertyStore](https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-propstore/1e***eb3-e7d8-4a09-ac0e-8bcb14b6fa0e)项，每项都具有以下结构：
+
+![](https://image.3001.net/images/20200421/1587469564_5e9edcfce6f88.png!small)
+
+Property Store Data字段由一系列属性组成，这些属性都属于Property Format
+GUID字段指定的类，每个属性都由一个数字ID标识，即属性ID或者叫PID。PID和Property Format
+GUID组合在一起就是属性键，即PKEY。如果Property Format
+GUID字段等于{D5CDD505-2E9C-101B-9397-08002B2CF9AE}，那么PKEY的确定方式会稍有不同，且每个属性都会成为“属性包(Property
+Bag)”的一部分，具有以下结构：
+
+![](https://image.3001.net/images/20200421/1587469573_5e9edd05ea2a9.png!small)
+
+属性包中一些元素的Name字段格式为Key:FMTID或者Key:PID，这些元素就确定了剩余元素的PKEY，这种情况下，就必须按照顺序排列属性包中的其他元素以使其生效。
+
+如果Property Format
+GUID字段不等于我们上面提到的GUID值({D5CDD505-2E9C-101B-9397-08002B2CF9AE})，那么每个属性就由整数值PID标识，该属性具有以下结构：
+
+![](https://image.3001.net/images/20200421/1587469583_5e9edd0f171b6.png!small)
+
+其中TypedPropertyValue字段表示属性集中一个属性的类型值，具体可参考[Microsoft Object Linking and
+Embedding (OLE) Property Set Data Structures](https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-oleps/f122b9d7-e5cf-4484-8466-83f6fd94b3cc)规范第2.15小结。
+
+在Windows
+SDK的头文件中定义了很多不同的PKEY，但是很多PKEY都没有记录，只能通过检查相关库文件的调试符号中的引用来识别。对于包含搜索结果的LNK文件来说，User
+Property View ItemID中第一个PropertyStore中的Property Format
+GUID字段为{1E3EE840-BC2B-476C-8237-2ACD1A839B22}，包含一个ID值为2的属性，对应于PKEY_FilterInfo。
+
+PKEY_FilterInfo中的TypedPropertyValue结构中，type字段可选值中存在一个VT_STREAM，使用这个值表示TypedPropertyValue结构由0x0042的type值，两个填充字节，以及一个IndirectPropertyName组成。IndirectPropertyName指一个可选流数据的名称，该可选流数据可能包含用于简单属性集存储的PropertySetStream包，或者包含用于非简单属性集存储的"CONTENTS"流元素，具体参考[微软文档](https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-oleps/e3bdb608-4756-4a0c-b2fd-15b7eee52905)。IndirectPropertyName由宽字符串"prop"开头，后面跟一个十进制字符串，该十进制字符串是PropertySet包中的属性标识符，因为LNK文件使用的是序列化后VT_STREAM类型的属性，所以在查看IndirectPropertyName的时候，只检查它是否以"prop"开头，后面的值被忽略。这种情况下，TypedPropertyValue的结构如下：
+
+![](https://image.3001.net/images/20200421/1587469592_5e9edd18246e9.png!small)
+
+Stream Data字段的内容取决于该流属性的PKEY值，对于PKEY_FilterInfo来说，Stream
+Data包含一个PropertyStoreList，其中又包含更多的序列化PropertyStore，其结构如下：
+
+![](https://image.3001.net/images/20200421/1587469599_5e9edd1f89db8.png!small)
+
+PKEY_FilterInfo中的PropertyStoreList是.search-ms文件中"conditions"标签的序列化结果，“conditions”标签的结构如下：
+
+![](https://image.3001.net/images/20200421/1587469607_5e9edd27660bc.png!small)
+
+attribute标签的确切功能并没有记录，但是attribute标签中包含一个对应CONDITION_HISTORY的GUID，以及一个对应StructuredQuery中CConditionHistory类的CLSID，这就意味着，这种嵌套的condition和attribute结构可能表示搜索结果的历史记录，而attribute标签中的chs属性表示是否存在任何其他的历史记录。对上面这个结构进行序列化，并表示为一个PropertyStore，该PropertyStore放入PKEY_FilterInfo的PropertyStoreList中，这个PropertyStoreList会成为一个属性包，其中属性的Property
+Format
+GUID就是我们上面提到过的{D5CDD505-2E9C-101B-9397-08002B2CF9AE}。更具体地说，序列化后的Conditions结构包含在一个VT_STREAM类型的属性中，该属性由name字段的“Condition”来标识。综上，我们得到了一个结构如下的PropertyStore项：
+
+![](https://image.3001.net/images/20200421/1587469615_5e9edd2f4b82f.png!small)
+
+其中，Condition object通常是一个“Leaf Condition”或者包含多个嵌套对象的“Compound
+Condition”，其中的嵌套对象可以是一个或多个Leaf Condition或者其他Compound Condition。这两种condition
+object都以下面的结构开头：
+
+![](https://image.3001.net/images/20200421/1587469622_5e9edd3682b4e.png!small)
+
+其中，Leaf Condition的Condition
+GUID为{52F15C89-5A17-48E1-BBCD-46A3F89C7CC2}，Compound Condition的Condition
+GUID为{116F8D13-101E-4FA5-84D4-FF8279381935}。Attributes字段由attribute结构组成，attribute结构的数量由Number
+of Attributes字段决定，每个attribute结构对应于.search-ms文件中的一个attribute标签，以如下结构开头：
+
+![](https://image.3001.net/images/20200421/1587469629_5e9edd3d090be.png!small)
+
+Attribute的剩余结构由AttributeID和Attribute CLSID决定。如果是上面提到过的CONDITION_HISTORY
+attribute，那么AttributeID字段设为{9554087B-CEB6-45AB-99FF-50E8428E860D}，Attribute
+CLSID字段设为{C64B9B66-E53D-4C56-B9AE-FEDE4EE95DB1}，剩余结构是一个具有以下结构的ConditionHistory对象，注意其中的字段名称与XML中attribute标签的属性名称相同：
+
+![](https://image.3001.net/images/20200421/1587469635_5e9edd4387094.png!small)
+
+如果字段has_nested_condition的值大于0，那么CONDITION_HISTORY attribute就有一个嵌套的Conditon
+object，而这个Conditon object本身也有可能有一个嵌套的Conditon object……
+
+在读取完顶层的Attributes及其所有嵌套结构后，Compound Condition和Leaf Condition的结构开始不同，Compound
+Condition的剩余结构如下，其中的offset是相对Attributes字段结尾的偏移：
+
+![](https://image.3001.net/images/20200421/1587469641_5e9edd49b951a.png!small)
+
+numFixedObjects字段决定了后面还跟有多少condition（通常指Leaf Condition）。
+
+Leaf Condition的剩余结构如下，其中的offset是相对Attributes字段结尾的偏移：
+
+![](https://image.3001.net/images/20200421/1587469647_5e9edd4fdd609.png!small)
+
+其中，TokenInformationComplete字段是否出现取决于是否设置了上面对应的TokenInformationComplete
+flag，如果未设置，则该字段不存在，后面紧跟着下一个TokenInformationComplete flag，如果设置了，则紧接如下结构：
+
+![](https://image.3001.net/images/20200421/1587469656_5e9edd584d659.png!small)
+
+综上，下图显示了一个存有搜索结果的LNK文件可能的最简结构，简单起见，所有不相关结构都被删掉了：
+
+![](https://image.3001.net/images/20200421/1587469662_5e9edd5ef13d8.png!small)
+
+只包含一个Leaf Condition的搜索结果就具有上面这种最简结构，但大多数情况下，存有搜索结果的LNK文件内会有一个Compound
+Condition以及许多包含Leaf Condition的嵌套结构。
+
+##  漏洞
+
+既然我们已经了解了存有搜索结果的LNK文件的核心结构，那么现在可以关注漏洞本身了，漏洞在于如何处理Leaf
+Condition的PropertyVariant字段。
+
+Leaf
+Condition的PropertyVariant字段基本上是一个[PROPVARIANT结构](https://docs.microsoft.com/en-us/windows/win32/api/propidl/ns-propidl-propvariant)，该结构由一个2字节的类型以及属于该特定类型的数据组成。需要注意的是，StructuredQuery中的PROPVARIANT结构有一些不同，通常没有Microsoft规范中定义的填充字节。
+
+还有一点需要注意，如果其中的2字节类型值是0x1000 (VT_VECTOR)与另一个类型值的组合，那么结构中会有多个该特定类型的值。
+
+PropertyVariant字段的解析是由我们之前提到的有问题的函数StructuredQuery1::ReadPROPVARIANT()完成的。该函数首先读入2字节的类型值，检查该值中是否设置了VT_ARRAY位(0x2000)，因为StructuredQuery并不支持该选项：
+
+![](https://image.3001.net/images/20200421/1587469671_5e9edd67a1d56.png!small)
+
+之后函数会检查类型是否是VT_UI4(0x0013)，如果不是，进入switch语句处理所有其他类型。
+
+漏洞在于如何处理类型为VT_VARIANT(0x000C)的PropertyVariant。VT_VARIANT类型通常和VT_VECTOR一起使用，形成一系列的PropertyVariant结构。换句话说，这种类型就像是一个数组，数组中的每个元素可以是任何数据类型。
+
+如果PropertyVariant的类型被设置为VT_VARIANT(0x000C)，类型检查时会检查VT_VECTOR位是否设置。
+
+![](https://image.3001.net/images/20200421/1587469678_5e9edd6e46b0f.png!small)
+
+如果没有设置VT_VECTOR位，ReadPROPVARIANT()函数会通过调用CoTaskMemAlloc()分配一个24字节的缓冲区，缓冲区会传递到ReadPROPVARIANT()的递归调用中，目的是想将紧跟在VT_VARIANT字段后的属性填充进缓冲区。但是在传递到ReadPROPVARIANT()之前，缓冲区并没有进行初始化（例如将其充满空字节）。
+
+如果上面这个嵌套的属性类型为VT_CF(0X0047)，这类属性包含一个指向剪贴板数据的指针，ReadPROPVARIANT()同样会检查VT_VECTOR位，如果没有设置，函数会尝试写入流中接下来的4个字节，写入位置由之前分配的24字节缓冲区中的一个8字节值指定。
+
+![](https://image.3001.net/images/20200421/1587469684_5e9edd74c30a8.png!small)
+
+由于缓冲区没有被初始化，数据会被写入未定义的内存区域，从而可能导致任意代码执行。下图中，WinDBG（启用Page
+Heap）显示的异常以及堆栈跟踪情况表明程序尝试进行数据写入：
+
+![](https://image.3001.net/images/20200421/1587469692_5e9edd7cc3838.png!small)
+
+如果攻击者可以正确地操控内存分布，让未初始化缓冲区包含攻击者控制的数值，那么他们就可以向该数值指向的内存区域一次性写入任意4字节数据。
+
+##  总结
+
+不给出解决方案的漏洞分析是不完整的，对于这次的漏洞，解决方案很简单，将分配的24字节缓冲区初始化为空字节，确保攻击者无法利用该内存位置之前留下的数据作为缓冲区内容。微软在二月份发布了他们的[补丁](https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2020-0729)，需要指出的是，[三月份](https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2020-0684)的时候微软又修复了另一个LNK漏洞，但是三月份的这个漏洞与本漏洞没有关系。
+
+特别感谢来自趋势科技研究团队的John Simpson和Pengsu
+Cheng对于此次漏洞的详尽分析，有关于趋势科技研究中心的更多信息，请访问[http://go.trendmicro.com/tis/。](http://go.trendmicro.com/tis/%E3%80%82)
+
+在未来，威胁研究团队会带来更多漏洞分析报告，在此之前，请继续关注ZDI团队，获取最新的漏洞利用技术以及安全补丁信息。
+
+原文：[CVE-2020-0729: REMOTE CODE EXECUTION THROUGH .LNK
+FILES](https://www.thezdi.com/blog/2020/3/25/cve-2020-0729-remote-code-execution-through-lnk-files)，Trend Micro Research Team
+
+ ***本文作者：s1len0eye，转载请注明来自FreeBuf.COM**
+

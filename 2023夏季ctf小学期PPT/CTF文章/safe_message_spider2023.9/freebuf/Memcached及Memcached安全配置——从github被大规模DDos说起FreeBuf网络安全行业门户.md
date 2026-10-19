@@ -1,0 +1,217 @@
+笔者写这篇文章主要是由于之前Memcached的安全漏洞导致github被大规模DDos事情。
+
+![1
+\(2\).png](https://image.3001.net/images/20180309/15205599105282.png!small)  
+
+报道错误，还全网疯狂的传播，根本没有一个人意识到错误，把人家名字都搞错了，memcrashed不知道是谁第一个写错的（据我估计是 **360**
+开始的），然后就生生给杜撰了一个新服务。所以笔者觉的有义务给业界正正风，清下源，做安全就老老实实做点实际做点事情，学点知识，而不是天天炒鸡蛋盖饭，有啥意思？好了步入正题。
+
+## Memcached简介
+
+![2.png](https://image.3001.net/images/20180309/15205599374160.png!small)  
+
+Memcached
+是一个免费开源、高性能、分布式内存对象缓存系统，主要用于做为关系数据库的缓存，用来加速应用程序的访问，减轻主数据库的压力。Memcached
+是一个内存key-value存储，主要存储字符串或者小的对象等数据库调用，API调用或者页面渲染结果的数据。Memcached立足于简单、快速部署，可以解决大型数据库缓存的各种问题。
+
+Memcached同时又非常强大，支持包括C/C++, PHP,Java, Python, Ruby, Perl, Erlang, Lua等语言调用。
+
+Memcache是danga的一个项目，最早是LiveJournal 服务的，最初为了加速 LiveJournal
+访问速度而开发的，后来由于其强劲的性能和快捷而又强大功能使得被大型网站（曾经包括twitter，facebook）所采纳而广泛使用。
+
+Memcached在业界广泛应用，除了开发者LiveJournal自己外还有Wikipedia、Flickr、Bebo，WordPress.com，Craigslist、
+Mixi也在使用。
+
+![3.png](https://image.3001.net/images/20180309/15205599474408.png!small)  
+
+后来tweitter基于Memcached 1.4重度修改开发了twemcache 。facebook也修改开发出来自己的McDipper。
+
+![4.png](https://image.3001.net/images/20180309/15205599628552.png!small)  
+  
+
+## Memcache安装和启动
+
+我们第一部分也说了，memcached优点之一就是安装部署方便，安装过程非常简单（以centos为例,其他发行版请适当修改包管理工具的命令）。
+
+### 1、安装memcache服务端：
+
+    
+    
+    yum install memcached 
+
+![5.png](https://image.3001.net/images/20180309/1520559976988.png!small)
+
+### 2、服务启动：
+
+    
+    
+    /usr/bin/memcached –d -umemcached -p 11211 –U 0 -l 监听的IP地址 -m 64m -c 512
+
+![6.png](https://image.3001.net/images/20180309/15205599948519.png!small)
+
+  
+
+参数说明：
+
+-d选项是启动一个守护进程；
+
+-m是分配给Memcache使用的内存数量，单位是MB，我们设置64MB；
+
+-u是运行Memcache的用户，我们设置memcached；
+
+-l是监听的服务器IP地址，如果本机使用监听为127.0.0.1, **如果不指定默认是0.0.0.0:11211，会对所有地址开放；**
+
+-p是设置Memcache监听的tcp端口，默认是11211，最好是1024以上的端口；
+
+-U 是设置Memcache监听的udp端口， **默认是11211** ；
+
+ **如果不设置-p -U的话的默认是启动tcp和udp，监听11211端口；**
+
+-c选项是最大运行的并发连接数，默认是1024，我们设置512；
+
+-P是设置保存Memcache的pid文件；
+
+### 3、关闭memcache服务
+
+    
+    
+    kill `cat/tmp/memcached.pid`
+    kill Pid
+
+## Memcached 基本操作
+
+### 1、查看状态：
+
+    
+    
+    telnet  127.0.0.1 11211
+
+在telnet界面输入stats和version（查看版本）
+
+![7.png](https://image.3001.net/images/20180309/15205600217283.png!small)  
+
+ **说明：** ****
+
+> uptime：memcached运行的秒数
+>
+> cmd_get：查询缓存的次数。
+>
+> cmd_set：设置key=>value的次数
+>
+> get_hits：缓存命中的次数。
+>
+> curr_items：现在在缓存中的键值对个数
+
+### **version** **命令查看版本信息**
+
+ **![8.png](https://image.3001.net/images/20180309/15205600384469.png!small)  
+**
+
+ **stats slabs** **查看salabs** **的统计信息chunk** **大小，数目和使用情况等** 。
+
+![9.png](https://image.3001.net/images/20180309/15205600546838.png!small)  
+
+### 2、设置值和查询
+
+增加建值得格式：add 名称值类型（0，32），过期时间，字段长度
+
+查询格式：get 名称
+
+![10.png](https://image.3001.net/images/20180309/15205601674213.png!small)  
+
+我们设置了一个健值对，建为name，值为“Helloworld”，查询get name得到值正常。
+
+### 3、清理缓存flush_all
+
+![11.png](https://image.3001.net/images/20180309/15205601865306.png!small)  
+
+可见清理执行flush_all后所有信息都丢失。注意这个命令执行后，不会影响服务器的运行，会立即返回。同时不能释放memcached占用的内存，只不过设置把所有健值对过期。
+
+### 3、图形化的管理工具——phpMemcachedAdmin
+
+![12.jpg](https://image.3001.net/images/20180309/15205601397921.jpg!small)  
+
+通过Execute Commands on Servers按钮可以执行命令，通过Edit configuration可以修改配置。
+
+需要注意的是，这个软件没有任何安全措施，建议本机使用（限制特定IP），不要对外开放，不要对外开放，不要对外开放！
+
+## Memcached安全设置
+
+我们在第二部分，启动参数时候说了，默认情况下memcached会启动tcp、udp端口，而且监听0.0.0.0:11211是对任何地址访问。我们在第三部分也看到了，默认情况下，可以通过telnet做memcached做任何的操作，包括获取信息、添加健值、删除数据项目。而且一般情况下memcached是以root用户启动，可以作为攻击的点做提权获取更多的系统信息（redis也有这问题，用redis持久化写文件，添加证书、修改sshd配置项目，添加cron等，有很多服务器就是这样沦为肉鸡的）。
+
+ **我们开头介绍的针对github的大规模Ddos攻击也是由于互联网上对外开放udp
+11211的端口被人利用做反射式攻击。（mmp，为啥每次受害都是我？github郁闷的说）**
+
+1、设置启动用户
+
+我们说了用root启动，有极大的风险，所以启动的时候通过-u指定启动用户为一般用户（不可登陆的用户）。
+
+ **创建用户** ：useradd memcached -M -s/sbin/nologin
+
+memcached -u memcached …. 来启动服务
+
+### 2、限制本机或者内网访问
+
+ **监听内网IP**
+
+启动的时候就监听127.0.0.1 或者内网的IP地址比如192.168.0.11之类的地址就能够有效阻止其他非法的访问。监听ip的设置设置为-l
+ip地址来设置：
+
+    
+    
+    memcached -d -m1024 -u memcached -l 192.168.0.11 -p 11211 –U 0 -c1024
+
+Memcache服务器端设置监听通过内网的192.168.0.11的ip的11211tcp端口，不监听UDP端口，占用1024MB内存，并且允许最大1024个并发连接。
+
+### 3、防火墙限制
+
+防火墙是简单有效的方式，我们可以添加规则，只开放需要访问的ip，其他ip都禁止掉。以iptables为例，比如我们只开放192.168.0.13的端口。
+
+    
+    
+      
+    
+
+iptables -A INPUT-p tcp -s 192.168.0.13 --dport 11211 -jACCEPT
+
+iptables -A INPUT -ptcp --dport 11211 -j REJECT
+
+iptables -A INPUT -pudp --dport 11211 -j REJECT
+
+### 4、通过SASL 协议进行认证
+
+默认情况下官方不建议认证，因为memcached不支持点对点的加密，虽然可以通过SASL进行认证限制，但是不能保证的传输过信息的泄露，所以官方不建议通过互联网使用memcacheed。但是如果是在多用户环境下，比如公有云的情况下使用，为了安全可以考虑通过SASL协议（RFC2222)
+进行认证保证一下以保证安全。Memcached 在 1.4.3及后续版本支持SASL认证。
+
+要启用 SASL 认证，服务端编译要增加编译配置参数“–enable-sasl”，YUM 安装的新版本服务器默认支持：
+
+./configure –prefix=%{datadir} –enable-sasl
+
+然后在启动时可以追加 -S 参数，启动 SASL 认证支持。
+
+memcached -d -m1024 -u memcached -l 192.168.0.11 -p 11211 –U -c1024 –S
+
+注意增加-S参数后所有命令均失效，效果就是输入命令没有反应，直到telnet链接超时。
+
+  
+
+SASL有很多种认证机制，shadow、pam、ldap等，我们以 shadow方式认证为例介绍配置方法。
+
+首先，修改 /etc/sysconfig/saslauthd 文件，设置认证方式：
+
+vi /etc/sysconfig/saslauthd
+
+MECH=shadow
+
+然后，创建一个普通操系统用户，执行下面的命令将用户加入 SASL 认证数据库，并绑定应用 Memcached 应用：
+
+    
+    
+    saslpasswd2 -a memcached -c cacheuser
+
+ **重启saslauthd 服务并测试用户认证**
+
+ **** testsaslauthd -u `cacheuser` -p 密码
+
+测试成功后就可以在客户端使用了。
+

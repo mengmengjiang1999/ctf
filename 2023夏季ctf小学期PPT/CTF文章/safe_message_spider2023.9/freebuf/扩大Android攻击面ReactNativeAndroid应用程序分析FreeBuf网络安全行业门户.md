@@ -1,0 +1,118 @@
+![](https://image.3001.net/images/20200211/1581420685_5e42908d3eb14.png!small)
+
+**React
+Native是一款移动端应用程序框架，由于该框架允许开发人员使用React和原生平台功能，目前有很多Android和iOS应用程序都是基于该框架进行开发的。**
+
+在进行常规的侦察时，我们通常会将注意力放在尽可能地扩大攻击面上。因此我们需要深入研究各种针对移动平台开发的应用程序，以便找到更多的API或其他有意思的东西，比如说API密钥之类的敏感信息。
+
+在这篇文章中，我们将介绍如何根据APK文件来获取到React Native JavaScript，并根据这些信息分析出API以及其他敏感信息。
+
+一般来说，在对Android应用程序进行逆向分析时，我们需要使用[
+_dex2jar_](https://code.google.com/p/dex2jar/downloads/list)来对APK文件进行反编译，然后使用[
+_JD-GUI_](https://java-decompiler.github.io/)来进行下一步分析。那么在处理React
+Native应用程序时，如果应用程序拥有原生代码的话，就非常方便了，但是在大多数情况下，应用程序的核心逻辑都是用React
+JavaScript实现的，而这部分代码可以在无需dex2jar的情况下获取到。
+
+请注意：dex2jar的工作原理是将Java字节码转换为Dalvik字节码。因此，我们无法保证所有的输出都是有效的，此时就需要使用Smali工具来分析Dalvik字节码了。
+
+## 从React Native APK获取JavaSript
+
+在这个例子中，我们将从下面这个React Native应用程序中提取出JavaScript代码：
+
+> com.react_native_examples：【[ _点我获取_](https://apkpure.com/react-native-> examples/com.react_native_examples)】
+
+下载了上面这个APK文件之后，使用下列命令将其提取至一个新的文件夹中：
+
+    
+    
+    unzip React\ Native\ Examples_v1.0_apkpure.com.apk -d ReactNative
+
+切换到新创建的“ReactNative”目录，然后找到“assets”目录。在这个文件夹中，找到一个名为“index.android.bundle”的文件，这个文件将包含所有的React
+JavaScript代码。
+
+## 映射文件
+
+如果你能找到一个名叫“index.android.bundle.map”的文件，你就可以直接分析源代码了。map文件中包含了源码映射关系，可以帮助我们映射出代码中的识别符。如果你要逆向分析的React
+Native应用程序的assets文件夹中拥有这个映射文件，你就可以在该目录中创建一个名为“index.html”的文件来利用这个映射文件了，“index.html”文件的内容如下：
+
+    
+    
+    <script src="index.android.bundle"></script>
+
+保存文件，然后在Google Chrome中打开。接下来，打开开发者工具栏，点击“Source”标签，你就可以查看到映射出的JavaScript文件了：
+
+![](https://image.3001.net/images/20200211/1581420699_5e42909b13657.png!small)
+
+## 敏感凭证与节点
+
+React
+Native应用程序的其中一种模式是它需要使用一种第三方数据库，例如Firebase。在我们之前的研究过程中，发现了很多没有正确使用Firebase认证模型的应用程序，其中就涉及到API密钥的不正确使用。
+
+比如说，Donald Daters应用程序就会受到这种攻击向量的威胁，具体可以参考这篇【[
+_文章_](https://medium.com/@fs0c131y/how-i-found-the-database-of-the-donald-daters-app-af88b06e39ad)】。
+
+为了从index.android.bundle中提取Firebase API密钥，我们需要提取出下列字符串：
+
+> FIREBASE_API_KEY
+>
+> FIREBASE_AUTH_DOMAIN
+>
+> FIREBASE_DB_URL
+>
+> FIREBASE_BUCKET
+>
+> apiKey
+
+例子如下：
+
+    
+    
+    ❯ grep -rnis 'apiKey' index.android.bundle
+    ... omitted for brevity ...
+    
+    initializeApp({apiKey:"AIzaSyDokhX9fzFlJMfXjwbiiG-2fGDhi4kLPFI",
+    authDomain:"react-native-examples-bcc4d.firebaseapp.com",
+    databaseURL:"https://react-native-examples-bcc4d.firebaseio.com",
+    projectId:"react-native-examples-bcc4d",
+    storageBucket:"",
+    messagingSenderId:"928497342409"});
+    
+    ... omitted for brevity ...
+
+除了查找Firebase凭证之外，我们还可以利用index.android.bundle来分析API节点。在我们需要逆向分析的React
+Native应用程序中，我们通过在Chrome中浏览提取到的JavaScript文件，我们能够找到大量的API节点：
+
+![](https://image.3001.net/images/20200211/1581420715_5e4290ab66100.png!small)
+
+## Firebase接口分析
+
+下面的Python脚本可以用来跟Firebase数据库进行交互，在使用该脚本之前，请使用“pip install
+pyrebase”命令来安装pyrebase：
+
+    
+    
+    import pyrebase
+    
+    config = {
+      "apiKey": "FIREBASE_API_KEY",
+      "authDomain": "FIREBASE_AUTH_DOMAIN_ID.firebaseapp.com",
+      "databaseURL": "https://FIREBASE_AUTH_DOMAIN_ID.firebaseio.com",
+      "storageBucket": "FIREBASE_AUTH_DOMAIN_ID.appspot.com",
+    }
+    
+    firebase = pyrebase.initialize_app(config)
+    
+    db = firebase.database()
+    
+    print(db.get())
+
+上述脚本将会针对给定的Firebase数据库进行身份认证，然后输出数据库中的呢日哦那个。当然了，只有当我们给该脚本提供目标Firebase数据库的API密钥时，脚本才会有权限来读取数据库中的内容。如果你还想对目标数据库进行类似写入之类的操作，请参考Pyrebase的【[
+_操作手册_](https://github.com/thisbejim/Pyrebase)】。
+
+## 总结
+
+在这篇文找你盖章，我们演示了如何分析React Native
+Android应用程序以及其对应的JavaScript代码。一般来说，通过分析应用程序APK文件中的JavaScript，我们可以提取出目标应用中的敏感凭证数据以及API节点。
+
+ *** 参考来源：[ _assetnote_](https://blog.assetnote.io/bug-bounty/2020/02/01/expanding-attack-surface-react-native/)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

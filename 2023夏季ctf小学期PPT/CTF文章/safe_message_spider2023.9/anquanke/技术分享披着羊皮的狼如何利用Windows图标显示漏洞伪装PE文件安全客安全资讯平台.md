@@ -1,0 +1,167 @@
+# 【技术分享】披着羊皮的狼：如何利用Windows图标显示漏洞伪装PE文件
+
+阅读量 **152645**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2017-08-09 16:44:01
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：cybereason.com
+
+原文地址：<https://www.cybereason.com/labs-a-zebra-in-sheeps-clothing-how-a-microsoft-icon-display-bug-in-windows-allows-attackers-to-masquerade-pe-files-with-special-icons/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+译者：[興趣使然的小胃](http://bobao.360.cn/member/contribute?uid=2819002922)
+
+预估稿费：200RMB
+
+投稿方式：发送邮件至linwei#360.cn，或登陆网页版在线投稿
+
+**一、前言**
+
+****
+
+Windows系统图标显示功能中存在一个漏洞，利用这个漏洞，攻击者可以从本地主机中自动地 **“借用“**
+其他常用的图标，利用这些图标伪装PE文件，从而诱惑用户点击这类文件。这个漏洞的真正原因隐藏在Windows的图像处理代码中。该漏洞至少从Windows
+7起就已经存在，并且最新版的Windows 10系统仍然受该漏洞影响。
+
+我们在研究最近的一批恶意PE文件时发现了这个漏洞。当我们把文件从某个目录复制到另一个目录时，我们发现系统会出现一些比较奇怪的行为：某些文件的图标会发生改变。为了排除某些错误（比如操作人员过于疲惫导致操作失误）的可能性，我们将这些文件复制到另一个不同的目录，然后再次发现这些文件的图标会变成另一个常见的但又与当前文件完全无关的图标。这种现象成功吸引了我们的注意，促使我们深入调查，最终形成了这份报告。
+
+  
+
+**二、漏洞分析**
+
+****
+
+想要直观感受一下这种现象，可以先看看这个演示视频：
+
+这批恶意软件最早可以追溯到2017年4月份，其中包含几十个[Cerber勒索软件样本](https://www.cybereason.com/blog-ransomfree-detects-and-stops-new-cerber-variant-that-whitelists-security-products/)，这些样本全都存在这种现象。
+
+我们从这些样本中提取了图标，图标在Windows资源管理器中的呈现效果如下图所示：
+
+乍看起来，人们可能会认为这些图标只是被恶意软件选中使用的无害图标而已（虽然左上角的Cybereason图标看起来的确有点奇怪），然而，将这些图标转化为另一种内部图像格式后，我们就能发现这些图标的庐山真面目：
+
+正如我们看到的那样，这些文件看起来几乎完全一致，除了微乎其微的某些随机像素点的区别，这表明这些文件是自动生成的，以避免存在明显的基于图标的特征，虽然原始的图标看起来是有点奇怪。毋庸置疑，这些图像肯定是基于Adobe图标修改而得，是合法的黑白图标。
+
+原始的Adobe图标如下：
+
+然而，虽然许多恶意程序会使用窃取的资源来隐藏自己，以逃避安全程序和肉眼的检测过程，但本文涉及的这些案例并不属于这种情况，它们在屏幕上呈现的效果与它们的内在完全不同。除了模仿Adobe图标之外，这些图标都有一个共同点，就是它们都属于我们所说的
+**“真正单色图标（true monochrome icon）”** ，或者可以简称为 **TMI** 图标。
+
+**“TMI图标”** 指的是包含两种特定元素的图标：它们只有两种颜色（也就是说，它们每个像素的位数（ **bits-per-pixel，bpp**
+）为1），并且这两种颜色为纯黑色（0x000000）以及纯白（0xFFFFFF）色。需要注意的是，图标可能会使用其他颜色来进行单色渲染（比如黑白色），而不单单是纯单色（即bpp值高于1）。然而，本文讨论的这种现象
+**只存在于真正单色图标上** 。
+
+关于图标文件格式的详细文档，读者可以参考如下链接了解更多细节。
+
+<https://msdn.microsoft.com/en-us/library/ms997538.aspx>
+
+<https://msdn.microsoft.com/en-us/library/windows/desktop/dd183376%28v=vs.85%29.aspx>
+
+我们从某个Cerber样本中提取了这类文件，如下所示：
+
+经实验验证，我们发现这种图标切换异常现象对任何TMI图标而言都适用，无需特殊处理即可实现。为了证明这一点，我们使用一个十六进制编辑器创建了一个空的TMI图标（喜欢动手的读者可以亲自尝试做一个）：
+
+随后，我们将该图标作为一个“hello world”应用的唯一图标。在Windows资源管理器中，系统不会将其显示为单像素单色图标，而会显示成如下效果：
+
+在该目录下对文件进行重命名，图标发生了变化，如下图所示。
+
+所以，这到底是怎么回事？
+
+看起来该问题起源于系统对已渲染图标的缓存方式以及对TMI图标的特殊处理方式，使得它们无法覆盖已有的图标。
+
+Windows资源管理器以及基于资源管理器的其他应用都是通过使用 **comctl32.dll** 模块（用户体验控制库）中的 **CImageList**
+类来实现图标的缓存。CImageList类的官方说明文档如下：
+
+<https://msdn.microsoft.com/en-us/library/9xc4z2c7.aspx>
+
+系统将文件的路径映射为某个CImageList对象内部的一个索引来实现图标的缓存（这里包含多个图标缓存，不同大小的图标会对应不同的缓存）。因此，当用户查看某个文件时，若对应的图标之前已完成渲染，那么系统就会直接从缓存中获取图标。如果系统进程之前尚未处理过该路径，那么系统就会根据具体的文件类型进行渲染，并将其存到缓存中。这也就是为什么当我们查看包含多个图标文件或者具有图标的PE文件的某个目录时，系统会稍加延迟，逐渐显示文件的原因所在。当文件被复制或被重命名时，文件的图标会被再次渲染，因为此时系统会认为这些路径属于新的路径。
+
+这个处理逻辑的具体实现位于 **CImageList::_ReplaceIcon** 函数中：
+
+程序会根据给定的索引来添加或替换缓存图标：
+
+经过若干处理步骤后，函数会检查索引对应的当前图像是否包含一个alpha通道，如果包含（基本上都会包含该通道），函数就会设置一个标志，后续处理过程中会使用该标志来决定如何调用
+**DrawIconEx** ：
+
+如果程序设置了该标志，那么函数就会在之后的处理过程中，调用DrawIconEx来实际绘制给定的图标，以替换列表中已有的缓存图标，调用DrawIconEx时使用的是DI_MASK
+(1)标志而不是DI_NORMAL (3)标志。
+
+在文件内部，图标以及图像通常情况下会包含两个不同的像素图：分别为“colors”以及“mask”图层，后者可以作用于colors图层之上，如ICONINFO文档中描述的那样：
+
+<https://msdn.microsoft.com/en-us/library/windows/desktop/ms648052.aspx>
+
+因此，从本质上讲，图标中只有“mask”部分会被渲染，并会覆盖mask（[esi+7ch）的DC（Device
+Context，设备上下文），而并不会覆盖colors（[esi+78h）的DC。当图标为TMI图标时，这个处理过程就会导致没有任何新的像素被覆盖，并且系统在渲染图标时会借用CImageList当前索引所对应的之前的那个缓存图标！
+
+这个利用过程需要缓存处于饱满状态，这取决于这些函数的调用者。然而，对于类似资源管理器的组件而言（如“文件打开”对话框），缓存的大小通常是非常小的。
+
+使用这种组件的任何进程都可能复现这种现象。如下图所示，我们使用Outlook
+2016的“添加附件”窗口来查看被TMI图标填满的某个目录（免责声明：在访问单色图标目录之前，我们已经在同一窗口中浏览了几个包含图标的目录）：
+
+很显然，不仅图标文件会触发这个问题，任何包含图标的PE文件也会触发此类问题。触发条件在于此类图标是目标文件的 **唯一的**
+图标类型，因为Windows的算法会根据大小、并且按照高颜色深度（high-color-depth）到低颜色深度（low-color-depth）顺序，选择“最合适”的图标来渲染文件。
+
+既然如此，我们决定在我们的恶意软件数据库中，查找资源区中只包含 **真正单色图标**
+的那些样本，最终我们找到了数百个样本，这些样本最早可以追溯到2013年（是我们数据库中最早的样本）。毫无疑问，这些样本全部都可以触发这种现象。在良性样本数据库中进行类似搜索后，我们没有得到任何结果。
+
+根据样本所使用的不同图标，我们将样本分成几组：
+
+前面提到过，我们在4月17日检测到滥用Adobe图标的Cerber勒索软件样本，这也是我们第一次检测到的此类恶意软件样本。这里我们再举5个类似的样本，如下所示（截图中为这些样本当时在我们主机上的显示情况）：
+
+在virustotal上的地址分别为：
+
+[https://www.virustotal.com/en/file/10b2fd1e06c3ac73d23e67bb59c4294cef8485bdc1b116005c56bfb950f21e44/analysis/](https://www.virustotal.com/en/file/10b2fd1e06c3ac73d23e67bb59c4294cef8485bdc1b116005c56bfb950f21e44/analysis/%5D\(https://www.virustotal.com/en/file/10b2fd1e06c3ac73d23e67bb59c4294cef8485bdc1b116005c56bfb950f21e44/analysis/)
+
+[https://www.virustotal.com/en/file/4559b52596deb7a8181df722bebcf08921b97451d944840cf6bdf0c04c1bc364/analysis/](https://www.virustotal.com/en/file/4559b52596deb7a8181df722bebcf08921b97451d944840cf6bdf0c04c1bc364/analysis/%5D\(https://www.virustotal.com/en/file/4559b52596deb7a8181df722bebcf08921b97451d944840cf6bdf0c04c1bc364/analysis/)
+
+<https://www.virustotal.com/en/file/bf66c5ccfa0319fe695d8fe5afcb5492c909aff70748b550259ac20974a18f80/analysis/>
+
+[https://www.virustotal.com/en/file/f2bf40f15b44a28be2d9ff5c1572a84c6ba5a8942d6c1a01aa44db51aa2d1ccb/analysis/](https://www.virustotal.com/en/file/f2bf40f15b44a28be2d9ff5c1572a84c6ba5a8942d6c1a01aa44db51aa2d1ccb/analysis/%5D\(https://www.virustotal.com/en/file/f2bf40f15b44a28be2d9ff5c1572a84c6ba5a8942d6c1a01aa44db51aa2d1ccb/analysis/)
+
+[https://www.virustotal.com/en/file/f7c15cb91ddaebf03f523e4eed412377217b511ee8f37ba99a8d8b7832f227df/analysis/](https://www.virustotal.com/en/file/f7c15cb91ddaebf03f523e4eed412377217b511ee8f37ba99a8d8b7832f227df/analysis/%5D\(https://www.virustotal.com/en/file/f7c15cb91ddaebf03f523e4eed412377217b511ee8f37ba99a8d8b7832f227df/analysis/\))
+
+**三、总结**
+
+****
+
+本文分析的这些样本很有可能只是自动生成的PE文件中的冰山一角，这些PE文件会附加伪随机的资源作为掩护资源，并且这种漏洞从未被Cerber刻意利用（不过我们很难确定这个结论）。然而，我们还是找到了从2014年到2017年时间跨度内的一些样本，这些样本使用了单一的、空白的真正单色图标，这种模式与我们自己构造的利用文件非常类似。在我们看来，这足以证明这些文件的创建者已经掌握这个漏洞，并且过去已经积极利用过这个漏洞，因为如果不是这种情况，选择使用空白图标、而不是尝试模仿已有应用的图标是没有任何价值的一件事情。
+
+虽然这个漏洞不是一个严重的安全漏洞，但足以敦促我们保持对网络钓鱼邮件的警觉性。之前灌输给用户的安全建议同样适用于这种情况，那就是：不要打开可疑的邮件以及附件。此外，我们还建议用户勾掉“隐藏已知文件的扩展名”选项，这样能帮助我们识别可执行文件，如下图所示：
+
+我们已于2017年6月向微软报告了这个漏洞，本文的发布经过了微软的许可。
+
+本文翻译自cybereason.com [原文链接](https://www.cybereason.com/labs-a-zebra-in-sheeps-clothing-how-a-microsoft-icon-display-bug-in-windows-allows-attackers-to-masquerade-pe-files-with-special-icons/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **興趣使然的小胃** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/86587](/post/id/86587)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [cybereason.com](https://www.cybereason.com/labs-a-zebra-in-sheeps-clothing-how-a-microsoft-icon-display-bug-in-windows-allows-attackers-to-masquerade-pe-files-with-special-icons/)
+
+如若转载,请注明出处： <https://www.cybereason.com/labs-a-zebra-in-sheeps-clothing-how-a-microsoft-icon-display-bug-in-windows-allows-attackers-to-masquerade-pe-files-with-special-icons/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __1赞
+
+ __收藏
+
+![](https://p1.ssl.qhmsg.com/dm/200_200_100/t0104d1b8b4ca36e961.jpg) 興趣使然的小胃
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

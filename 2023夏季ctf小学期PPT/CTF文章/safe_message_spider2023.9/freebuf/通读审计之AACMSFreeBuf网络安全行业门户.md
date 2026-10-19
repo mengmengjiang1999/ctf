@@ -1,0 +1,343 @@
+## **0x00 前言**
+
+ **其实没什么好说的，该cms不是主流的cms，但是感觉该cms是一篇很好的MVC框架的例子，故记录下来。给大家分享一下自己代码审计的经验。**
+
+> Cms下载地址：<http://www.mycodes.net/45/4324.htm>
+
+##  **0x01 MVC框架的了解**
+
+首先我们需要对该cms进行通读代码，来具体了解一下该网站的结构，如何访问到某个模块，某个分支。否则就算我们挖到漏洞，也找不到利用点。
+
+老样子，我们从 index.php 来进行代码审计。
+
+![](https://image.3001.net/images/20200311/1583893435_5e684bbb6088e.png!small)
+
+上来 require 一个文件，我们打开该文件看看里面是怎么玩儿的。
+
+![](https://image.3001.net/images/20200311/1583893455_5e684bcf39efb.png!small)
+
+OK，可以看到定义了五个类。我们回到index.php继续往下读取。
+
+![](https://image.3001.net/images/20200311/1583893460_5e684bd442a14.png!small)
+
+调用 core 类的 instance 静态方法。随后调用init成员方法。我们看一下 instance 方法到底干了一些什么事情。
+
+![](https://image.3001.net/images/20200311/1583893464_5e684bd859d75.png!small)
+
+该方法返回实例化了自己本身的对象，从开发的角度来讲，这种叫做：单例模式。
+
+随后我们看一下 init 成员方法。
+
+![](https://image.3001.net/images/20200311/1583893470_5e684bde2357e.png!small)
+
+等等…，我们没记得PHP给我们提供$_G这个全局变量啊，这个变量从哪而来的？真的是莫名其妙。。。
+
+不卖关子了，其实这里我们忽略一个问题，当我们new对象时，会进入到构造方法。来进行初始化操作。构造方法在php中有两种格式。1. __construct
+魔术方法 2. 将成员方法定义为类名。
+
+好，init方法我们先放到这里不谈，先把构造方法的流程搞清楚早说。Mmp。一步一步来，不然裤裆可能会扯掉。。。
+
+![](https://image.3001.net/images/20200311/1583893484_5e684becbb445.png!small)
+
+找不到__construct，那么构造方法就是 core 成员方法了。
+
+![](https://image.3001.net/images/20200311/1583893489_5e684bf170976.png!small)
+
+33-36行都做了初始化操作，我们依次来看一下。
+
+![](https://image.3001.net/images/20200311/1583893494_5e684bf68005a.png!small)
+
+可以看到第64行又进行了包含操作。我们这里打开该文件看一下代码到底是怎么玩儿的。
+
+![](https://image.3001.net/images/20200311/1583893500_5e684bfce468a.png!small)
+
+定义了好多个函数。OK，我们回来继续往下审计，我们把目光放在83行的赋值操作。
+
+![](https://image.3001.net/images/20200311/1583893507_5e684c03512fd.png!small)
+
+因为看方法名凭自己感觉就是。XFF头。。。
+
+![](https://image.3001.net/images/20200311/1583893511_5e684c07af784.png!small)
+
+被preg_match正则表达式所限制，有点可惜。
+
+_init_env方法大致了解了我们继续往下读取看一下_init_config方法
+
+![](https://image.3001.net/images/20200311/1583893516_5e684c0c45ca3.png!small)
+
+注意第122行，将包含进来的$_config赋值给$_G['config']了。
+
+OK，我们继续往下通读 _init_input 方法。
+
+![](https://image.3001.net/images/20200311/1583893522_5e684c12b3310.png!small)
+
+我们跟进 daddslashes 方法来看一下。
+
+![](https://image.3001.net/images/20200311/1583893528_5e684c1815c84.png!small)
+
+只是将php中的addslashes封装起来了。
+
+回头我们继续看_init_output方法
+
+![](https://image.3001.net/images/20200311/1583893532_5e684c1c86b30.png!small)
+
+定义ob缓冲机制等。
+
+转回大头来，，我们最开始是想要通读init方法，现在已经千里之外了，当然我们要回去继续通读init方法了。。
+
+附张图吧，别忘了 =.=
+
+![](https://image.3001.net/images/20200311/1583893537_5e684c2176ded.png!small)
+
+好，跟着逻辑继续往下走。
+
+![](https://image.3001.net/images/20200311/1583893542_5e684c267abe2.png!small)
+
+我们看到 182 行 $this->db = DB::object('db_mysql')，调用DB类的object静态方法。
+
+我们看一下该方法做了一些什么。
+
+![](https://image.3001.net/images/20200311/1583893548_5e684c2c46aa3.png!small)
+
+OK，$this->db这个成员变量，是实例化db_mysql类的对象。随后调用 do_mysql 对象的set_config与connect方法：
+
+![](https://image.3001.net/images/20200311/1583893554_5e684c32a34db.png!small)
+
+我们跟进这两个方法做了什么处理
+
+![](https://image.3001.net/images/20200311/1583893559_5e684c373ca7e.png!small)
+
+293行图中注释，调用了 _dbconnect 方法，跟进它。
+
+![](https://image.3001.net/images/20200311/1583893564_5e684c3c40039.png!small)
+
+下面我们继续去通读
+
+    
+    
+    $this->_init_memory(); 
+    
+        $this->_init_session(); 
+    
+        $this->_init_setting(); 
+    
+        $this->_init_misc(); 
+
+这四句代码
+
+![](https://image.3001.net/images/20200311/1583893568_5e684c40f37cb.png!small)
+
+OK，我们继续读取最后一行代码，include template('index');
+
+![](https://image.3001.net/images/20200311/1583893576_5e684c48d6e31.png!small)
+
+成功显示出主页信息。
+
+##  **0x02 代码运行后的观察**
+
+我们发现我们读完这个框架之后，依旧是没看懂什么玩意啊？就一个Hello World。
+
+其实入口点不止index.php这一个文件。还有admin.php与article.php啊
+
+![](https://image.3001.net/images/20200311/1583893593_5e684c593a6b1.png!small)
+
+这两个入口点是我观察php运行后的结果之后观察出来的。我们打开主页到处随便点点就可以发现其他入口点。
+
+![](https://image.3001.net/images/20200311/1583893601_5e684c6160ecc.png!small)
+
+将鼠标指到“以a标签解释出来的 文章”，可以看到浏览器底部有跳转到article.php文件
+
+我们打开 article.php 来看一下代码是怎么写的。
+
+![](https://image.3001.net/images/20200311/1583893607_5e684c67873a4.png!small)
+
+如图：
+
+![](https://image.3001.net/images/20200311/1583893614_5e684c6ec919e.png!small)
+
+我们看一下 view 文件中的代码是怎么玩儿的。
+
+![](https://image.3001.net/images/20200311/1583893623_5e684c774f6e7.png!small)
+
+只是简单的查询一下article表中的信息。
+
+我这里通过表结构自己搭建一个SQL语句进行测试。
+
+    
+    
+    INSERT INTO pre_article(catid,title,username,`from`) VALUES(2,'Heihu577代码审计记录','Heihu577','T00ls'); 
+
+运行结果：
+
+![](https://image.3001.net/images/20200311/1583893636_5e684c84a08ba.png!small)
+
+再来看看 admin.php 文件中代码的流程。
+
+![](https://image.3001.net/images/20200311/1583893646_5e684c8eabe64.png!small)
+
+可以看到20行多包含了./source/function/function_admincp.php文件，我们打开看看是怎么玩儿的。
+
+![](https://image.3001.net/images/20200311/1583893653_5e684c952f8a7.png!small)
+
+定义了好多方法。
+
+经过25-28行的处理，没有登录的情况下强制性把我们定义到member模块下，而member所对应的文件是admin\admin_member.php
+如图：
+
+![](https://image.3001.net/images/20200311/1583893659_5e684c9b4e57a.png!small)
+
+进入改文件可以再次看到，之前所强制定义的$_REQUEST['operation']是在这里进行判断走分支的。如图：
+
+![](https://image.3001.net/images/20200311/1583893665_5e684ca188dfe.png!small)
+
+不同的$_REQUEST['operation']所对应不同的代码。
+
+我们当前在没有登录的情况之下，我们会进入到$operation=login分支
+
+![](https://image.3001.net/images/20200311/1583893672_5e684ca8508ed.png!small)
+
+用来进行登录验证的。我们可以打开admin.php文件看一下默认是否是登录框框。
+
+![](https://image.3001.net/images/20200311/1583893678_5e684cae976a9.png!small)
+
+OK，逻辑没有问题，当我们登录成功之后传入 ?action=member&operation=edit则会进入到另一个管理页面，我们可以看一下。
+
+![](https://image.3001.net/images/20200311/1583893684_5e684cb443c47.png!small)
+
+OK，admin.php入口文件的代码处理逻辑我们也搞清楚了，接下来我们开始挖掘漏洞。
+
+##  **0x03 宽字节注入漏洞**
+
+当我们安装该CMS时，我们可以注意到数据库字符集默认是GBK。而GBK可以导致宽字节注入漏洞，进行逃逸单引号的保护。
+
+![](https://image.3001.net/images/20200311/1583893690_5e684cbad3e95.png!small)
+
+因为该cms模块比较少，我这里就只审计admin.php入口文件所对应的模块了。
+
+在路径为 \admin\admin_member.php 的 php文件中。
+
+![](https://image.3001.net/images/20200311/1583893696_5e684cc065fc7.png!small)
+
+虽然$_POST已经被daddslashes函数进行过滤引号，但是当前处于GBK编码，我们可以用POST提交Payload：
+进行报错注入出user()函数返回信息。
+
+漏洞验证结果：
+
+![](https://image.3001.net/images/20200311/1583893703_5e684cc70b1d8.png!small)
+
+##  **0x04 后台万能密码登录漏洞**
+
+我们虽然可以通过该注入点拿到管理员的账号密码，但是我们可以看一下它的密码规则。
+
+![](https://image.3001.net/images/20200311/1583893708_5e684cccd7cbe.png!small)
+
+可以说是非常强悍了!虽然我们可以注入出来管理员密码，但是解密也是非常的繁琐。既然我们有管理员登录处的注入点，那就构造出一个万能密码出来吧。
+
+通过程序代码我们组织成中国汉字来理解。
+
+首先查询数据库中有没有该username字段，如果有，则继续往下判断。
+
+这里我们可以提交 POST：username=heihu%df ' or 1=1 #
+来查询到管理员的记录。但是后面又进行验证password字段，而password字段是查询到的username那条记录的值，我们无法获取。其次md5加密后又拼接上了盐再次进行md5加密，盐是salt字段，也是数据库中所获取的。所以我们只好使用UNION注入来查询出自己构造的表单。
+
+以POST方式发送构造Payload：
+
+    
+    
+    formhash=eba3baf7&admin_username=heihu%df' UNION SELECT 1,2,0x6433356536363866373765653433326661646534396637643763666436616434,4,1,6,7,8,9,10,11,12,13 -- &admin_password=3&loginsubmit=%26%23160%3B%C8%B7%B6%A8%26%23160%3B 
+
+漏洞验证结果：
+
+![](https://image.3001.net/images/20200311/1583893718_5e684cd62f39e.png!small)
+
+SQL原理解析：
+
+![](https://image.3001.net/images/20200311/1583893728_5e684ce01311b.png!small)
+
+（从1看到4对应着看，一部分是php代码执行过程，一部分是sql语句构造过程）
+
+##  **0x05 urldecode导致的注入漏洞**
+
+漏洞文件在： \admin\admin_misc.php，如图代码执行逻辑：
+
+![](https://image.3001.net/images/20200311/1583893734_5e684ce67df0f.png!small)
+
+$title受到urldecode函数处理，我们知道单引号之前是被转义过的。如果我们这样使urldecode函数进行处理“urldecode('%27
+')”，则函数会返回一个单引号。这个单引号是函数返回的，并不是外来的，所以不会被daddslashes影响。当我们在浏览器上直接提交?title=%27时，浏览器会自动给我们urldecode一下再发送出正常的请求，那么我们提交的值就是：'（一个名副其实的单引号），就会被daddslashes函数影响。所以我们提交url编码的百分号+27（%2527），就会成功让函数达到“urldecode('%27
+')”的效果。从而逃逸daddslashes函数的影响。
+
+废话不多说了，构造Payload：
+
+>
+> [http://127.0.0.1/Hacking/aacms/admin.php?action=misc&operation=custommenu_add&title=a%2527%20or%20updatexml(1,concat(1,user(),1),1)--%20&url=b](http://127.0.0.1/Hacking/aacms/admin.php?action=misc&operation=custommenu_add&title=a%2527%20or%20updatexml\(1,concat\(1,user\(\),1\),1\)--%20&url=b)
+
+漏洞验证结果：
+
+![](https://image.3001.net/images/20200311/1583893745_5e684cf11f95c.png!small)
+
+成功得到user()函数返回值。
+
+##  **0x06 二次注入漏洞**
+
+还是0x03的注入点，如果站点没有开启报错，那么我们就需要另找途径了。
+
+代码审计一定要亮起自己的钛合金狗眼，否则可能忽略一些小细节，一下子看到一个二次注入。。。
+
+![](https://image.3001.net/images/20200311/1583893766_5e684d0623ed2.png!small)
+
+我们再来看一下这个代码处理逻辑。
+
+![](https://image.3001.net/images/20200311/1583893771_5e684d0b6129d.png!small)
+
+所以我们把构造的单引号放到$url上，不能放在$title上，否则代码运行到select之后我们的引号打乱了sql语句的结构，代码就不能往下走了。
+
+构造Payload：
+
+>
+> [http://127.0.0.1/Hacking/aacms/admin.php?action=misc&operation=custommenu_add&title=12&url=1%2527,1),(user(),1,1)%20--%20](http://127.0.0.1/Hacking/aacms/admin.php?action=misc&operation=custommenu_add&title=12&url=1%2527,1\),\(user\(\),1,1\)%20--%20)
+
+二次注入查询地址：
+
+>
+> [http://127.0.0.1/Hacking/aacms/admin.php?action=misc&operation=custommenu](http://127.0.0.1/Hacking/aacms/admin.php?action=misc&operation=custommenu)
+
+漏洞验证结果：
+
+1、进行发送Payload请求。
+
+![](https://image.3001.net/images/20200311/1583893780_5e684d14a5866.png!small)2、进行二次注入
+
+![](https://image.3001.net/images/20200311/1583893786_5e684d1a47c92.png!small)
+
+##  **0x07 XSS漏洞**
+
+还是 0x03
+的注入点，我们知道它有过一个插入请求，并且我们成功的挖掘到了二次注入漏洞，但是我们很清楚的知道，我们的$_GET、$_POST、$_FILES等只经过addslashes函数过滤，并不会过滤HTML标签。
+
+我们可以看到文件的41-55行。
+
+![](https://image.3001.net/images/20200311/1583893793_5e684d21103d2.png!small)
+
+将查询出来的信息直接显示给前端。
+
+虽然说插入点在input标签的value值中，PHP做了addslashes函数处理，但是这是在前台，(’)就算被转移成(\’)，HTML也不会忽略他，还是把他当成实打实的引号解析。
+
+构造Payload：
+
+>
+> [http://127.0.0.1/Hacking/aacms/admin.php?action=misc&operation=custommenu_add&title=%22%20onclick=%27alert](http://127.0.0.1/Hacking/aacms/admin.php?action=misc&operation=custommenu_add&title=%22%20onclick=%27alert)(1)%27%3E&url=%22%20onclick=%27alert(1)%27%3E
+
+漏洞验证结果：
+
+1、发送Payload
+
+![](https://image.3001.net/images/20200311/1583893799_5e684d273da22.png!small)2、查看是否成功xss
+
+![](https://image.3001.net/images/20200311/1583893804_5e684d2cd02ee.png!small)
+
+##  **0x08 结束语**
+
+虽然审计出来的漏洞多在后台，但是以学习为主，先不管怎么样自我感觉这套CMS比较适合初学者白帽子往MVC框架方面的延伸。其次挖掘漏洞的一些过程我也能把我表达能力最强的一部分给大家表达出来，记录了一些非常经典的漏洞合集，让大家能够读懂。
+
+ ***本文原创作者：Heihu577，本文属于FreeBuf原创奖励计划，未经许可禁止转载**
+

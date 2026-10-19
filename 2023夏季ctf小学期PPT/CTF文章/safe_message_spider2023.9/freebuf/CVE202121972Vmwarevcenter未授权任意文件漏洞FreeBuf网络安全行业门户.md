@@ -1,0 +1,121 @@
+一 ，漏洞描述
+
+CVE-2021-21972 vmware
+vcenter的一个未授权的命令执行漏洞。该漏洞可以上传一个webshell至vcenter服务器的任意位置，然后执行webshell即可。
+
+vSphere Client（HTML5）在 vCenter Server 插件中存在一个远程执行代码漏洞。未授权的攻击者可以通过开放 443
+端口的服务器向 vCenter Server 发送精心构造的请求，从而在服务器上写入 webshell，最终造成远程任意代码执行。在
+CVE-2021-21972 VMware vCenter Server 远程代码漏洞
+中，攻击者可直接通过443端口构造恶意请求，执行任意代码，控制vCenter。
+
+二 受影响版本及漏洞评级
+
+VMware vCenter Server 7.0系列 < 7.0.U1c
+
+VMware vCenter Server 6.7系列 < 6.7.U3l
+
+VMware vCenter Server 6.5系列 < 6.5 U3n
+
+漏洞评级：严重 CVSS#3.1 :9.8
+
+FIRST CVSSv3 Calculator:  
+CVE-2021-21972:
+<https://www.first.org/cvss/calculator/3.1#CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H>
+
+三，安全版本
+
+VMware vCenter Server 7.0.U1c
+
+VMware vCenter Server 6.7.U3l
+
+VMware vCenter Server 6.5 U3n
+
+### 漏洞分析:
+
+vCenter Server 的 vROPS 插件的 API 未经过鉴权，存在一些敏感接口。其中 `uploadova`接口存在一个上传 OVA
+文件的功能：代码逻辑是将 TAR 文件解压后上传到 `/tmp/unicorn_ova_dir`目录。
+
+直接将 TAR 的文件名与 `/tmp/unicorn_ova_dir`拼接并写入文件。如果文件名内存在 `../`即可实现目录遍历。对于 Linux
+版本，可以创建一个包含 `../../home/vsphere-ui/.ssh/authorized_keys`的 TAR 文件并上传后利用 SSH 登陆.
+
+四，poc:
+
+## poc
+
+访问`https://<VC-IP-or-FQDN>/ui/vropspluginui/rest/services/updateova`
+
+如果404，则代表不存在漏洞，如果200，405 则代表存在漏洞
+
+![](https://image.3001.net/images/20210225/1614220345_60370c39c8483b961a125.png!small)
+
+  
+
+POC:https://github.com/QmF0c3UK/CVE-2021-21972-vCenter-6.5-7.0-RCE-POC
+
+Exp payload:https://github.com/NS-Sp4ce/CVE-2021-21972
+
+  
+
+## 修复方法及建议：
+
+按照官方提示，关闭插件https://kb.vmware.com/s/article/82374
+
+ **安全建议**
+
+1、升级VMware vCenter Server 与 VMware ESXi 至最新版本。
+
+2、针对 CVE-2021-21972 VMware vCenter Server 远程代码漏洞 与 CVE-2021-21973 VMware
+vCenter Server SSRF漏洞，可按照 https://kb.vmware.com/s/article/82374 相关措施进行缓解。
+
+ **To implement the workaround for CVE-2021-21972 and CVE-2021-21973 on Linux-based virtual appliances (vCSA) perform the following steps:**
+
+ **vCenter Server 7.0.1 Update 1**  
+Downloads and Documentation:  
+[https://my.vmware.com/web/vmware/downloads/details?downloadGroup=VC70U1C&productId=974](https://my.vmware.com/web/vmware/downloads/details?downloadGroup=VC70U1C&productId=974)  
+<https://docs.vmware.com/en/VMware-vSphere/7.0/rn/vsphere-vcenter-server-70u1c-release-notes.html>
+
+  
+
+ **vCenter Server 6.7 U3l**  
+Downloads and Documentation:  
+[https://my.vmware.com/web/vmware/downloads/details?downloadGroup=VC67U3L&productId=742&rPId=57171](https://my.vmware.com/web/vmware/downloads/details?downloadGroup=VC67U3L&productId=742&rPId=57171)  
+<https://docs.vmware.com/en/VMware-vSphere/6.7/rn/vsphere-vcenter-server-67u3l-release-notes.html>
+
+  
+
+ **vCenter Server 6.5 U3n**  
+Downloads and Documentation:  
+[https://my.vmware.com/web/vmware/downloads/details?downloadGroup=VC65U3N&productId=614&rPId=60942](https://my.vmware.com/web/vmware/downloads/details?downloadGroup=VC65U3N&productId=614&rPId=60942)  
+<https://docs.vmware.com/en/VMware-vSphere/6.5/rn/vsphere-vcenter-server-65u3n-release-notes.html>
+
+The vSphere Client (HTML5) contains a remote code execution vulnerability in a
+vCenter Server plugin. VMware has evaluated the severity of this issue to be
+in the [Critical severity
+range](https://www.vmware.com/support/policies/security_response.html)with a
+maximum CVSSv3 base score of
+[9.8](https://www.first.org/cvss/calculator/3.1#CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H).
+
+ **Known Attack Vectors**
+
+A malicious actor with network access to port 443 may exploit this issue to
+execute commands with unrestricted privileges on the underlying operating
+system that hosts vCenter Server.
+
+ **Resolution**
+
+To remediate CVE-2021-21972 apply the updates listed in the 'Fixed Version'
+column of the 'Response Matrix' below to affected deployments.
+
+ **Workarounds**
+
+Workarounds for CVE-2021-21972 have been listed in the 'Workarounds' column of
+the 'Response Matrix' below.
+
+  
+
+  
+
+the end.
+
+  
+

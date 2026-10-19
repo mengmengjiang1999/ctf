@@ -1,0 +1,101 @@
+## ctf比赛/学习资源整理，记得收藏！
+
+最近CTF比赛很多，对于想学习或者参加CTF比赛的朋友来说，CTF工具、练习靶场必不可少，今天给大家分享自己收藏的CTF资源，希望能对各位有所帮助。
+
+###  **CTF在线工具**
+
+首先给大家推荐我自己常用的3个CTF在线工具网站，内容齐全，收藏备用。 **  
+**
+
+1、CTF在线工具箱：http://ctf.ssleye.com/ 包含CTF比赛中常用的编码、加解密、算法。
+
+![1620546841_60979519b4bec7a850edc.png!small?1620546841981](https://image.3001.net/images/20210509/1620546841_60979519b4bec7a850edc.png!small?1620546841981)
+
+![1620546850_60979522d9516ce66af2b.png!small?1620546851224](https://image.3001.net/images/20210509/1620546850_60979522d9516ce66af2b.png!small?1620546851224)
+
+![1620546860_6097952cd4547c2fe30b7.png!small?1620546861351](https://image.3001.net/images/20210509/1620546860_6097952cd4547c2fe30b7.png!small?1620546861351)
+
+2、CTF加解密工具箱：http://www.atoolbox.net/Category.php?Id=27
+
+![1620546888_609795481236fa512aebb.png!small?1620546888815](https://image.3001.net/images/20210509/1620546888_609795481236fa512aebb.png!small?1620546888815)![1620546894_6097954e6e3f867b7d2da.png!small?1620546894678](https://image.3001.net/images/20210509/1620546894_6097954e6e3f867b7d2da.png!small?1620546894678)
+
+![1620546902_609795561fe8f893042c1.png!small?1620546902469](https://image.3001.net/images/20210509/1620546902_609795561fe8f893042c1.png!small?1620546902469)
+
+3、ctfhub在线工具：https://www.ctfhub.com/#/tools
+
+![1620546912_60979560c8bc065199734.png!small?1620546913117](https://image.3001.net/images/20210509/1620546912_60979560c8bc065199734.png!small?1620546913117)
+
+![1620546920_6097956848eb073fd5fa6.png!small?1620546920638](https://image.3001.net/images/20210509/1620546920_6097956848eb073fd5fa6.png!small?1620546920638)
+
+4、还有一些常用的网站
+
+> 字符串2进制互转：http://www.5ixuexiwang.com/str/from-> binary.php栅栏密码：http://www.practicalcryptography.com/ciphers/classical-> era/rail-> fence/语言加密(将明文加密为各种语言)：https://www.qqxiuzi.cn/bianma/wenbenjiami.php与佛论禅：https://www.keyfc.net/bbs/tools/tudoucode.aspx维吉尼亚解密：https://www.guballa.de/vigenere-> solver培根密码：https://mothereff.in/bacon摩尔斯电码：http://www.zhongguosou.com/zonghe/moErSiCodeConverter.aspx盲文在线解密：https://www.dcode.fr/braille-> alphabet凯撒密码：https://www.dcode.fr/caesar-> cipher进制转换：https://tool.oschina.net/hexconvert/词频分析：https://quipqiup.com/草料二维码：https://cli.im/UUencode：http://web.chacuo.net/charsetuuencodeURL编码解码：https://meyerweb.com/eric/tools/dencoder/Serpent加密解密：http://serpent.online-> domain-tools.com/ROT编码(5 13 18
+> 47)：https://www.qqxiuzi.cn/bianma/ROT5-13-18-47.phpMIME编码：https://dogmamix.com/MimeHeadersDecoder/MD5：https://www.cmd5.com/JS加密：https://tool.lu/js/JSfuck：https://utf-8.jp/public/jsfuck.htmlJJencode：https://www.120muban.com/tools/jjencode/CRC32：https://crc32generator.de/代码在线运行：https://tool.lu/coderunner/Base编码解码：http://ctf.ssleye.com/AES解密：http://tool.chacuo.net/cryptaesADFGVX密码：http://www.atoolbox.net/Tool.php?Id=917AAencode：https://utf-8.jp/public/aaencode.html
+
+###  **靶场篇**
+
+ **1、在线靶场**
+
+BugKu（简单，推荐新手入门，还有在线工具）https://ctf.bugku.com/index.html
+
+CTFhub靶场（含历年赛题） https://www.ctfhub.com/#/index
+
+CTFshow靶场（题较多） https://ctf.show/challenges
+
+网络攻防世界（挺好的网站，不过老是维护） https://adworld.xctf.org.cn/
+
+CTFwiki（含CTF各项知识点，扫盲专用）https://ctf-wiki.org/misc/recon/
+
+BUUCTF（推荐，但不适合新手）https://buuoj.cn/
+
+i春秋（推荐，还有漏洞复现环境）https://www.ichunqiu.com/competition
+
+xctf（知名）https://adworld.xctf.org.cn/
+
+浙大OJ（pwn手入门推荐）https://www.jarvisoj.com/
+
+ **2、自己搭建靶场**
+
+  *  **SQLI-LABS专有靶场**
+
+包含了大多数的sql注入类型，以一种闯关模式，对于sql注入进行漏洞利用 下载地址 https://github.com/Audi-1/sqli-labs
+
+  *  **DVWA专有靶场**
+
+推荐新手首选靶场，DVWA的目的是通过简单易用的界面来实践一些最常见的Web漏洞，这些漏洞具有不同的难度，是一个涵盖了多种漏洞一个综合的靶机
+https://github.com/ethicalhack3r/DVWA
+
+  *  **OWASP靶场**
+
+靶场由OWASP专门为Web安全研究者和初学者开发的一个靶场，包含了大量存在已知安全漏洞的训练实验环境和真实Web应用程序；
+
+靶场在官网下载后是一个集成虚拟机，可以直接在vm中打开，物理机访问ip即可访问到web平台，使用root owaspbwa
+登入就会返回靶场地址，直接可以访问靶场。dvwa适合了解漏洞和简单的漏洞利用，owaspbwa则就更贴近实际的复杂的业务环境。下载地址：https://sourceforge.net/projects/
+
+  * ####  **DSVW靶场**
+
+Damn Small Vulnerable Web (DSVW) 是使用 Python 语言开发的 Web应用漏洞 的演练系统。其系统只有一个 python
+的脚本文件组成, 当中涵盖了 26 种 Web应用漏洞环境, 并且脚本代码行数控制在了100行以内, 当前版本v0.1m。需要python (2.6.x 或
+2.7)并且得安装lxml库。下载地址：git clone https://github.com/stamparm/DSVW.git
+
+  * WebGoat靶场
+
+WebGoat是OWASP组织研制出的用于进行web漏洞实验的Java靶场程序，用来说明web应用中存在的安全漏洞。WebGoat运行在带有java虚拟机的平台之上，当前提供的训练课程有30多个，其中包括：跨站点脚本攻击（XSS）、访问控制、线程安全、操作隐藏字段、操纵参数、弱会话cookie、SQL盲注、数字型SQL注入、字符串型SQL注入、web服务、Open
+Authentication失效、危险的HTML注释等等。WebGoat提供了一系列web安全学习的教程，某些课程也给出了视频演示，指导用户利用这些漏洞进行攻击。GitHub地址为：https://github.com/WebGoat/WebGoat
+
+  * XVWA靶场
+
+Xtreme Vulnerable Web Application
+(XVWA)是一款使用PHP/MySQL编写的靶场，可以帮助初学者快速学习安全姿势。https://github.com/s4n7h0/xvwa
+
+  * Pikachu靶场
+
+一个好玩的 Web 安全漏洞测试平台，跟 DVWA
+类似，不过看上去比前者清晰（中文的），有简单的漏洞页面，不那么单调。项目地址：github.com/zhuifengshao
+
+  * Vulnhub靶场
+
+Vulnhub是一个提供各种漏洞环境的靶场平台，供安全爱好者学习渗透使用，大部分环境是做好的虚拟机镜像文件，镜像预先设计了多种漏洞，需要使用VMware或者VirtualBox运行。每个镜像会有破解的目标，大多是Boot2root，从启动虚机到获取操作系统的root权限和查看flag。
+
+下载链接https://download.vulnhub.com/breach/Breach-1.0.zip
+

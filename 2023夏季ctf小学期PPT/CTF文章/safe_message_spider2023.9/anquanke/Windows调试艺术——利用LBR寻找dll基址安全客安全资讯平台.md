@@ -1,0 +1,413 @@
+# Windows调试艺术——利用LBR寻找dll基址
+
+阅读量 **506442**
+
+|评论 **3**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-03-21 11:30:52
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01e352b0fcf599f0fa.jpg)
+
+windows调试艺术主要是记录我自己学习的windows知识，并希望尽可能将这些东西在某些实际方面体现出来。
+
+最近想写个自己的壳，但碰上了个大问题，如何定位在内存中各个DLL的加载基址呢？当然可以选择类似爆破的方式，但那未必太傻了，在翻阅了一些资料后发现了LDR链调试的方法，这实际上就是一种利用PEB关系链获得各个模块基址进而实现遍历其导出表的技术，通过这种技术我们可以轻易的在程序运行中获取到动态加载的api的实际地址进而实现各种各样的功能。恰好这又需要PEB、TEB等等的结构知识，就在此一并做个总结
+
+ps：全过程均是32位程序，64位的offset略有不同
+
+再ps：所有文中提到另外会写的……尽量不鸽（咕咕咕）
+
+再再ps：PEB、TEB的相关内容资料确实过少，笔者自己做了很多的探索，所以不免有错误之处，希望有问题的地方大家能指出，共同进步
+
+首先简单来看利用过程如下：
+
+    
+    
+    fs寄存器 -> TEB -> PEB -> PEB_LDR_DATA    -> LIST_ENTRY ->LDR_DATA_TABLE_ENTRY -> dll_base
+    
+
+下面我们就一个一个的详细来分析一下
+
+## fs寄存器
+
+我们常常可以看到类似这样的语句，从fs中拿到了某个值，这样的语句让逆向初学者一头雾水
+
+    
+    
+    mov     eax,dowrd ptr fs:[0x30]
+    
+
+我们可以试着用windbg来打印fs的值试试看它到底是个啥，r命令可以打印寄存器的值，而.formats可以把一个值的二进制啊十进制啊等各种形式都展示出来
+
+![](https://ws2.sinaimg.cn/large/006tKfTcly1g13kfk9vw7j30lc0a4gml.jpg)
+
+发现是0x3b，如果你处于内核态，那你会发现fs是0x30，而且不管你怎么试你会发现它就是这俩值，实际上，这是对应到GDTR的一个值，在intel手册中我们可以发现玄机，图中index是对应的GDT或LDT的第几项，RPL是特权级，TI的0和1分别表示为GDTR和LDTR
+
+![](https://ws1.sinaimg.cn/large/006tKfTcly1g13kgsj3doj30i607uacp.jpg)
+
+我们这里就先来看看0x3b的情况，0x3b的16位如下，
+
+0000000000111 | 0 | 11  
+---|---|---  
+index = 7 | TI =0 | RPL = 3  
+  
+说明这是个Ring3级别（也就是用户态），要在GDT里找第七项，当然这都是为了分析，实际上windbg为我们提供了dg命令，可以直接帮我们Display
+Selector
+
+![](https://ws3.sinaimg.cn/large/006tKfTcly1g13kxd2249j30qg05kq3i.jpg)
+
+可以看到，7ffdc000实际上就是TEB，说明我们用户态的fs实际上就是TEB了，那刚才的fs:[30]也就是TEB结构体中的某个东西了，这个我们一会在说，先看看内核态的0x30又是什么情况
+
+过程就不再重复了，只要将windbg切换到内核调试重复上面的过程即可，最后我们可以发现，指向的是一个叫做KPCR的结构，这个不再我们今天的讨论范围之内，只要知道它里面包含有TEB在内的很多重要的结构就行了
+
+那我们又要想了，Ring3切换到Ring0应该是很常见的，为什么fs的指向会变化呢？实际上，只要是负责进入Ring0的函数，比如KiFastSystemCall、KiFastCallEntry
+等等，都会涉及到对fs的操作，这里我们选取一段代码来实际看看
+
+    
+    
+    808696a1 6a00            push    0
+    808696a3 55              push    ebp
+    808696a4 53              push    ebx
+    808696a5 56              push    esi
+    808696a6 57              push    edi
+    808696a7 0fa0            push    fs   //原来的fs压栈保存
+    808696a9 bb30000000      mov     ebx,30h
+    808696ae 668ee3          mov     fs,bx   //将fs的值赋为30 
+    808696b1 64ff3500000000  push    dword ptr fs:[0]
+    808696b8 64c70500000000ffffffff mov dword ptr fs:[0],0FFFFFFFFh
+    808696c3 648b3524010000  mov     esi,dword ptr fs:[124h]   
+    808696ca ffb640010000    push    dword ptr [esi+140h]    
+    808696d0 83ec48          sub     esp,48h                  
+    808696d3 8b5c246c        mov     ebx,dword ptr [esp+6Ch]
+    
+
+退出Ring0时也是类似的，这里选择KiSystemCallExit函数来看看
+
+    
+    
+    80869945 8d6550          lea     esp,[ebp+50h]
+    80869948 0fa1            pop     fs                 //恢复之前的fs值
+    8086994a 8d6554          lea     esp,[ebp+54h]
+    8086994d 5f              pop     edi
+    8086994e 5e              pop     esi
+    8086994f 5b              pop     ebx
+    80869950 5d              pop     ebp
+    80869951 66817c24088000  cmp     word ptr [esp+8],80h
+    
+
+到这里我们对fs段寄存器的探索就到这里了，我们知道了在Ring3下它其实就是TEB，下一步我们就来探究TEB的相关内容
+
+## TEB
+
+TEB(Thread Environment
+Block，线程环境块)，说白了就是存放线程信息的一个结构体，每个线程维护着自己的一个TEB，且可以通过FS寄存器直接根据offset提取信息，很是方便。
+
+我们可以用windbg的dt命令来显示TEB的情况，因为内容过多所以就不再一一列举了
+
+![](https://ws2.sinaimg.cn/large/006tKfTcly1g13n3nz216j30qu0cw0vg.jpg)
+
+我们来看几个比较重要的内容，首先就是offset为0的TIB
+
+###  TIB（Thread Information Block，线程信息块）
+
+我们同样可以利用windbg的dt来查看
+
+![](https://ws4.sinaimg.cn/large/006tKfTcly1g13n5xwqkyj30vm07wabl.jpg)
+
+  * ExceptionList，即指向_EXCEPTION_REGISTRATION_RECORD结构的指针链表，和SEH相关，涉及到异常处理
+  * stackBase，该线程的stack地址
+  * stackLimit，该线程的stack的limit，实际上就是栈的结束位置
+  * self，即指向TEB的指针，在程序中看到的fs:[0x18]也就是拿到了TEB
+
+###  EnvironmentPointer
+
+0x1c为环境指针，指向的就是环境表，大家一定记得main函数有三个参数，第三个就是环境表的地址，环境一般都是以下的固定格式
+
+    
+    
+    name = value
+    
+
+比如我们在配置java的时候会添加一个JAVA_HOME的环境name，一个路径作为环境的value，环境表就是这样的环境变量组成的表
+
+###  _CLIENT_ID
+
+0x20的offset指向了这个结构体，也同样dt查看一下
+
+![](https://ws2.sinaimg.cn/large/006tKfTcly1g13nxkhgoej30ia03oq3b.jpg)
+
+UniqueProcess是当前进程的PID，而UniqueThread这是当前线程的TID
+
+###  ProcessEnvironmentBlock
+
+指向的是PEB，在程序中常见的ptr
+fs:[0x30]也就是拿到了PEB的地址，因为现在的windows已经有了地址随机化的功能，所以基本上都是用这种方式来拿到PEB的，有关PEB的东西我们接下来会细说
+
+###  ThreadLocalStoragePointer && TlsSlots && TlsExpansionSlots
+
+这兄弟仨的偏移分别是0x58、0x1480、0x1780（备注：这里的offset是64位的），他们和线程本地存储（ThreadLocalStorage）有关，简写为TLS，TLS又可以细分为静态TLS和动态TLS，之后的我会专门总结这方面的知识。
+
+ThreadLocalStoragePointer指向的是维护静态TLS数据的地址的指针，而TlsSlots则是存放动态Tls数据的slots数组，而当slots存放不下的时候（最多为0～63），这时候会分配新的内存来放置，TlsExpansionSlots就是指向这个新内存空间的指针
+
+###  LastErrorValue
+
+offset为0x34，顾名思义也就是最后的错误。举个例子来理解，在病毒文件执行时一般会检查是否在当前环境下已经运行，病毒会调用CreateMutex创建互斥体并根据函数的执行结果来判断，这时就会通过fs寄存器拿到TEB结构下的LastErrorValue，如果value大于0的话说明互斥体创建错误，病毒已经在执行了，如果是0的话那就说明没有错误，开始执行病毒文件
+
+###  CountOfOwnedCriticalSections
+
+offset为0x38，其作用是记录临界区的数量。所谓临界区（Critical
+Section）是一种轻量级的同步机制，它和上面提到过的Mutex不同，Mutex是内核的同步对象，而临界区完全是用户态在维护的，所以它只能在一个进程内供线程同步使用，但也正因为不需要关心它在内核和用户态之间的切换，所以它的执行效率要比其他的同步机制要大大提高，关于这些同步机制，在以后的windows调试艺术中还会慢慢的给大家带来。
+
+###  CsrClientThread
+
+offset为0x3c，其实和csrss（client service runtime
+subsystem）客户服务运行子系统相关，在进行相关操作时会用它来记录父进程的PID，同样这部分不是这里的重点，以后有机会继续写这个系列的话会写到这方面
+
+以上就是我会用到的TEB的内容，其余的部分有兴趣的可以自己再去研究
+
+## PEB
+
+当我们找到了TEB时实际上我们也就找到了PEB（Thread Environment
+Block，线程环境块），通过FS:[0x30]我们就可以轻松的拿到PEB的地址，PEB和TEB类似，但它为我们提供的却是进程相关的信息，当然，要想用好PEB，还得深入探究一下它到底能为我们提供什么。
+
+![](https://ws4.sinaimg.cn/large/006tKfTcly1g14rov93xfj30sy0iatd3.jpg)
+
+实际上PEB是一个进程内核对象，在没有开启随机化的情况下，它的地址在32位上就是0x7ffd7000，很明显是一个用户空间的可访问数据，当为了能在具体运行环境下拿到他的地址还是FS:[0x30]更为保险，当然也可以通过EPROCESS来访问，不过一是EPROCESS位于内核空间，访问需要Ring0权限，二来和要讨论的LDR调试也没关系，所以这里就不提了
+
+###  BeingDebugged &&NtGlobalFlag
+
+第一个兄弟一看便知，是用来判断我们是否处于调试状态的，win32有个API叫做IsDebuggerPresent，就是通过拿到它来判断程序是不是处于被调试状态的，你可以用它来实现最最简单的反调试，下面就是函数的源码：
+
+    
+    
+    IsDebuggerPresent(VOID)
+    {
+        return NtCurrentPeb()->BeingDebugged;
+    }
+    
+
+那你可能又会想了，为什么这么简单，如果我们在调试过程中手动修改内存不就可以绕过了吗？当然不是，实际上BeingDebufgged被设置为了true会导致一系列的“连锁反应”，首先就是NtGlobalFlag会进行修改，然后RtlCreateHeap中会用RtlDebugCreateHeap创建调试堆，这个调试堆里可有很多平常没有的数据。人家照样能发现你。
+
+###  ProcessHeap && HeapSegmentReserve &&
+HeapSegmentCommit&&NumberOfHeap&&MaximumNumberOfHeaps等等
+
+这几个都和堆相关，要认识他们就必须要先对heap的产生有一定的了解
+
+windows在创建一个新进程时，在用户态的初始化过程中会调用RtlCreateHeap来创建进程堆（process
+heap）而它的句柄就会保存到ProcessHeap里，而HeapSegmentReserve就是进程堆的保留大小，默认为1m，HeapSegmentCommit是进程堆的初始提交大小，其默认值为两个内存页大小，X86系统中普通内存页的大小为4KB。实际使用中我们可以用GetProcessHeap这个函数来拿到堆的句柄，但实际上这个函数归根结底也是通过PEB的ProcessHeap字段拿到的。
+
+NumberOfHeaps字段用来记录堆的数目，MaximumNumberOfHeaps也就是heap的最大数量，HeapDeCommitTotalFreeThreshold和HeapDeCommitFreeBlockThreshold则涉及到了堆的收缩和扩张问题
+
+当然，堆是门复杂的学问，windwos的堆管理机制比起linux来说要繁琐得多，以后还是会专门总结的。
+
+###  Fls相关
+
+Fls是涉及到纤程（fiber）的一系列字段，类比Tls相关的字段即可，纤程拥有独立的栈和寄存器，可以通过ConvertThreadToFiber将线程转换为纤程。纤程和线程最大的不同就是前者处于用户态，后者则是内核维护，简单说纤程就是我们掌握的线程。当年为了让UNIX的代码能够更快更正确（由于windows的内存管理机制较为复杂且牵扯到异常管理机制所以移植难以取得好的效果）的移植到windows平台上微软在操作系统中添加了fiber。
+
+###  Ldr
+
+这个字段是要讨论的重点，LDR调试中的ldr也就是指这个字段，它作为指针指向了_PEB_LDR_DATA结构体，如下所示
+
+    
+    
+    nt!_PEB_LDR_DATA
+       +0x000 Length           : Uint4B
+       +0x004 Initialized      : UChar
+       +0x008 SsHandle         : Ptr64 Void
+       +0x010 InLoadOrderModuleList : _LIST_ENTRY
+       +0x020 InMemoryOrderModuleList : _LIST_ENTRY
+       +0x030 InInitializationOrderModuleList : _LIST_ENTRY
+    
+
+前几个成员像是Length长度啊、Initialized是否初始化啊之类都非常简单，重要的是后三个，他们分别表示：
+
+    
+    
+    InLoadOrderModuleList;                //模块加载顺序
+    InMemoryOrderModuleList;              //模块在内存中的顺序
+    InInitializationOrderModuleList;      //模块初始化装载顺序
+    
+
+他们本身也是结构体，即_LIST_ENTRY
+
+    
+    
+    typedef struct _LIST_ENTRY {
+       struct _LIST_ENTRY *Flink;
+       struct _LIST_ENTRY *Blink;
+    } LIST_ENTRY, *PLIST_ENTRY, *RESTRICTED_POINTER PRLIST_ENTRY;
+    
+
+可以看到成员还是结构体，很显然就是个双向链表，而这些指针又指向了LDR_DATA_TABLE_ENTRY
+这个结构体结构体的第四个字段也就是DLL的加载基址，要特别注意，这个结构系统会为每个dll都维护一个，且由于构成了双向链表，我们可以轻易的通过一个dll找到下一个的基址，
+
+    
+    
+    typedef struct _LDR_DATA_TABLE_ENTRY
+    {
+         LIST_ENTRY InLoadOrderLinks;
+         LIST_ENTRY InMemoryOrderLinks;
+         LIST_ENTRY InInitializationOrderLinks;
+         PVOID DllBase;
+         PVOID EntryPoint;
+         ULONG SizeOfImage;
+         UNICODE_STRING FullDllName;
+         UNICODE_STRING BaseDllName;
+         ULONG Flags;
+         WORD LoadCount;
+         WORD TlsIndex;
+         union
+         {
+              LIST_ENTRY HashLinks;
+              struct
+              {
+                   PVOID SectionPointer;
+                   ULONG CheckSum;
+              };
+         };
+         union
+         {
+              ULONG TimeDateStamp;
+              PVOID LoadedImports;
+         };
+         _ACTIVATION_CONTEXT * EntryPointActivationContext;
+         PVOID PatchInformation;
+         LIST_ENTRY ForwarderLinks;
+         LIST_ENTRY ServiceTagLinks;
+         LIST_ENTRY StaticLinks;
+    } LDR_DATA_TABLE_ENTRY, *PLDR_DATA_TABLE_ENTRY;
+    
+
+到这里我们进行LDR调试的基础知识就差不多了，下面就该实战来利用LDR调试来获取各个dll的地址了
+
+## LDR调试
+
+我们可以根据上面的知识来先行来理一下思路
+
+    
+    
+    TEB+0x30 -> PEB
+    PEB+0x0c -> PEB_LDR_DATA
+    PEB_LDR_DATA -> LDR_DATA_TABLE_ENTRY
+    
+
+根据前面的学习，我们知道了PEB_LDR_DATA的一个结构体字段指向了LDR_DATA_TABLE_ENTRY，而之后LDR_DATA_TABLE_ENTRY用同样的结构体再指向下一个，下一个也用同样结构体的第二个成员指向上一个，形成了双向链表，为了理解方便，这里我们画图展示一下
+
+![](https://ws1.sinaimg.cn/large/006tKfTcly1g15uti2tjzj310i0gy75h.jpg)
+
+那我们的思路就明确了，首先我们通过PEB_LDR_TABLE拿到第一个LDR_DATA_TABLE_ENTRY就可以通过offset找到dll
+base，接着再用offset找到指向下一个的LDR_DATA_TABLE_ENTRY的指针Flink，就可以接着往下找，直到双链表再次指向最开始的地方，不说废话，动手操作一番
+
+我们首先利用 windbg拿到PEB的地址
+
+    
+    
+    0:000> !peb
+    PEB at 002c7000
+        InheritedAddressSpace:    No
+        ReadImageFileExecOptions: No
+        BeingDebugged:            Yes
+        ImageBaseAddress:         00400000
+        Ldr                       77b30c40
+        Ldr.Initialized:          Yes
+        Ldr.InInitializationOrderModuleList: 000c3200 . 000c37b0
+        Ldr.InLoadOrderModuleList:           000c32f8 . 000c46f0
+        Ldr.InMemoryOrderModuleList:         000c3300 . 000c46f8
+                Base TimeStamp                     Module
+              400000 000062e2 Jan 01 15:01:54 1970 C:UsersmacDesktopRE.exe
+            77a10000 C:WindowsSYSTEM32ntdll.dll
+            77220000 C:WindowsSystem32KERNEL32.DLL
+            757d0000 53015794 Feb 17 08:28:04 2014 C:WindowsSystem32KERNELBASE.dll
+            752e0000 0435cf49 Mar 28 20:55:37 1972 C:WindowsSystem32msvcrt.dll
+    
+
+windbg自己帮我们拿到了dll的加载基址，我们不去管它，自己继续调试
+
+    
+    
+    0:000> dd 000c32f8
+    000c32f8  000c31f0 77b30c4c 000c31f8 77b30c54
+    000c3308  00000000 00000000 00400000 00401280
+    
+
+一开始指向的应当是第一个LDR_DATA_TABLE_ENTRY，排除掉前三个结构体的6个sizeof(ptr)后，就是基址0x400000，显然就是原始模块加载基址，而第一个dword也就是Flink，第二个就是Blink，我们就跟着Flink接着往下找
+
+    
+    
+    0:000> dd 000c31f0
+    000c31f0  000c37a0 000c32f8 000c37a8 000c3300
+    000c3200  000c3b70 77b30c5c 77a10000 00000000
+    
+
+可以看到第二个LDR_DATA_TABLE_ENTRY的dll
+base字段也就是77a10000，根据我们windbg刚才打印!PEB给我们的信息对照，可以发现就是ntdll的基址，同样在使用Flink，又可以找到下一个。
+
+最后我们找到的是
+
+    
+    
+    0:000> dd 77b30c4c 
+    77b30c4c  000c32f8 000c46f0 000c3300 000c46f8
+    77b30c5c  000c3200 000c37b0 00000000 00000000
+    
+
+可以看到就是一开始的LDR_DATA_TABLE_ENTRY的Blink，而dll
+base字段已经是0了，这样我们就根据这个双向链表拿到了所有的dll的基址了，对照一开始weindbg提供给我们的，果然一点没错。
+
+当然可以继续尝试其他两条链的情况，这里就不再详细展示了，需要注意的是InInitializationOrderModuleList在不同版本的操作系统可能会存在得到的链表dll顺序不同的情况，所以不建议使用。下面给出获得dll基址的汇编代码
+
+    
+    
+    mov ebx, fs:[ 0x30 ]       // 拿到PEB
+    mov ebx, [ ebx + 0x0C ]    // 拿到PEB_LDR_DATA
+    mov ebx, [ ebx + 0x0C ]    // InLoadOrderModuleList1
+    mov ebx, [ ebx ]           // InLoadOrderModuleList2
+    mov ebx, [ ebx ]           // InLoadOrderModuleList3
+    mov ebx, [ ebx + 0x18 ]    // 拿到dll base字段内容
+    
+
+## 总结
+
+LDR链调试是一个很有意思的内容，它牵扯到了很多windows下的重要对象，如果只是去学习这项技术的话很容易，但是要搞清楚经过的每一个对象到底涉及到了其他的什么内容就很难了，不能只停留在这项技术的表面。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Asa9ao** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/173586](/post/id/173586)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [Windows](/tag/Windows)
+  * [PEB](/tag/PEB)
+  * [TEB](/tag/TEB)
+  * [LBR](/tag/LBR)
+
+ **+1** __5赞
+
+ __收藏
+
+![](https://p1.ssl.qhimg.com/t01898082a58ca4c715.png) Asa9ao
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

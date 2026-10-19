@@ -1,0 +1,224 @@
+2020年2月24日-28日，网络安全行业盛会RSA
+Conference将在旧金山拉开帷幕。今天，绿盟君将继续为大家介绍入选今年RSAC创新沙盒十强的初创公司： **Obsidian** 。
+
+一、公司介绍
+
+Obsidan Security公司成立于2017年，于2017年7月完成A轮950万美元融资，现总融资额已达2950万美元，主要由Greylock
+Partners、Wing和GV投资。
+
+Obsidian公司是一家为企业提供云检测与响应的公司，总部位于加利福尼亚州纽波特海滩。创始团队来自于Cylance、Carbon
+Black和NSA，Cylance前任CTO格兰·奇什霍尔德创立并出任CEO，Cylance前任首席数据科学家兼NSA计算机科学家马特·沃尔福担任CTO，Carbon
+Black公司前CTO兼联合创始人以及NSA计算机科学家本·约翰逊则担任首席数据科学家。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQvEEukunkseEZNPZGYAqEdRO0pvj8ibmJXicloMaSp41ib5vic4eCIhLia5Q/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289032_5e4fd088bb93c.jpg!small)
+
+Obsidian提出了一个新的理念-CDR(Cloud Detection
+andResponse)能为SaaS应用程序提供安全防护，并能帮助安全运营团队检测并响应入侵和内部威胁。旨在快速发现、调查和响应SaaS应用程序中的漏洞和内部威胁，在不影响业务的情况下实现持续的监控与分析。
+
+二、产品介绍
+
+01
+
+产品背景
+
+在过去的十年中，SaaS和公共云服务的使用取得了巨大的增长。组织已经或正在将其业务系统（包括电子邮件，协作，HR，销售，市场营销和运营）迁移到云中。在2019年ESG研究调查中，三分之二（67％）的参与者报告，现在超过20％的应用程序基于SaaS，而超过58％的组织在2019年报告使用了IaaS。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQFr8mEIozicgCJLzTpLBdlP38g8M0dtBIKysV5WNla6TkUzUT8GgB45g/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289037_5e4fd08d08ad3.png!small)
+
+2011-2019年使用基础架构即服务（IaaS）的组织百分比
+
+02
+
+云检测与响应（CDR）
+
+云检测与响应是Obsidian提出的一个新的理念，也是当前云安全体系中缺失的一部分。
+
+云访问安全代理（CASB）之类的解决方案采用的是预防策略。CASB在结构上像云环境的防火墙，充当组织基础架构与云服务之间的中介，主要是通过阻止访问来防止数据丢失和泄露以及恶意软件暴露。
+
+但是，正如Gartner在自适应安全的理念中提及，预防性（Prevention）控制并不足以保护云环境免受攻击。即使有了最好的预防性安全解决方案，攻击者仍可以穿透或绕过防御获取对云资产的访问权限。在云中，安全团队需要快速检测（Detection），调查并响应威胁（Response），这就需要可视化和丰富的用户上下文信息，以便实时的检测和响应可疑行为。而如今，这正是SaaS和云服务所缺少的功能。
+
+与EDR相比，云环境中的可视化问题有所不同，并且更为复杂。因为用户针对不同应用程序有不同的权限，因此SaaS应用程序需要在平台内进行授权管理。比如安全管理员想查看用户可以在Salesforce中访问的内容或他在G
+Suite中的操作，则管理员必须先获取相应权限和行为日志，并了解每个服务的授权模型和行为日志格式，然后再确定根据这些信息确定是否发生可疑的攻击事件。大量的访问记录和行为信息使得威胁检测变得异常复杂，通常相关的上下文数据会产生TB级数据，这使得真正的威胁或攻击事件空间被淹没在大量的数据流中。
+
+针对以前的需求，提出了云检测和响应（CDR）解决方案，CDR通过不断收集，规范化和分析来自SaaS和云服务的大量状态和行为数据，为安全专业人员提供了检测，调查和响应云中威胁所需的全面的可视化信息。
+
+因此，CDR需要提供以下核心功能：
+
+**1** **、** 全局可视化
+
+CDR需要提供一个全局可视化视图来显示用户跨云服务的访问和行为信息。这种全局可视化视图融合了状态和用户行为数据，并集成了威胁情报和相关上下文信息（位置、设备、浏览器等）。基于这种可视化视图，安全团队可以有效的实现不同阶段的威胁检测，并快速实现事件调查和响应。
+
+**2** **、** 自动检测
+
+CDR所要分析的数据通常比较大，因此，当前云环境的问题是威胁或是攻击行为通常会被淹没在大量的数据与告警中。因此，CDR利用机器学习和规则分析可以帮助SOC从大量的噪声数据中提取有价值的信息。
+
+**3** **、** 威胁预测
+
+CDR除了具有对已经威胁和攻击的检测能力外，还可以预测云环境中下一步可能发生的异常或威胁行为。这可使安全管理者能提前针对要发生的威胁行为做预防。
+
+03
+
+Obsidian平台
+
+Obsidian云检测和响应为SaaS提供了无缝的安全性。利用一种独特的以身份为中心的方法和机器学习，阻止云中的高级攻击。平台能为SaaS应用程序提供安全防护，并能帮助安全运营团队检测并响应入侵和内部威胁。旨在快速发现、调查和响应SaaS应用程序中的漏洞和内部威胁，在不影响业务的情况下实现持续的监控与分析。
+
+Obsidian是通过API集成作为SaaS服务的，由于不需要部署任何东西，解决方案可以在几分钟内启动，在几小时内就可以产生结果。
+
+Obsidian自动的收集并标准化云应用的相关数据，并基于威胁情报和上下文来丰富这些数据。Obsidian会基于机器学习和规则针对违规和内网威胁行为生成告警，并不断的从个人和群体行为模式中学习如何来访问数据资产。
+
+基于用户权限和行为的统一视图，Obsidian平台可以实现事件响应、调查和威胁狩猎。平台会建议通过删除过期的账号和修复错误配置从而增强云安全应用的安全性。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQa7y1I9Fl5gIziaicQvj0BibnxxlKHC1LoS0HH02Y7HDvRjVictibRumytyA/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289050_5e4fd09a92c18.png!small)
+
+Obsidian平台功能
+
+ **1** **、** 可见性
+
+Obsidian首次提出云中的用户、数据和应用程序的统一视图，并可以持续监视用户和服务帐户的行为，对威胁和卫生问题发出告警。可见性主要的功能如下：
+
+a) 每个服务的访问权限和特权清单
+
+b) 特权用户活动
+
+c) 跨SaaS应用程序的活动监视
+
+d)可通过API下载的规范化数据模型
+
+**2** **、** 告警
+
+根据基于规则的触发器和机器学习，可以获得关于违规、危险行为和策略违规的警告。Obsidian平台可以发现SaaS持久性、OAuth令牌滥用和其他相关异常信息。该功能模块包括：
+
+a) 内置规则实现对策略冲突和异常行为发出警报的内置规则
+
+b) 利用机器学习实现异常行为检测
+
+c) 优先处理警报，以减少超负荷的安全团队的警报疲劳
+
+d) 与SOAR和服务管理的可集成性
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQuGnzaDJpKRkKQNyT7zwdXFvkVZDzlVGOVSkkLXV7ZnhN4tdany39MA/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289058_5e4fd0a22fc0c.png!small)
+
+**3** **、** 报告
+
+可以根据不同角色，获得关于应用程序使用、新出现的威胁和风险行为的独特见解的报告。因此，平台具有如下功能：
+
+a) 根据组织中不同角色的需要定制报告和仪表板
+
+根据需求导出不同格式的数据
+
+**4** **、** 响应行为
+
+平台基于用户和其行业的统一视图，实现快速有效的异常检测和内部威胁识别，并通过追踪账号共享和文件上传与访问的历史行为来识别用户的横向移动。并能通过平台内置功能，阻断数据泄露和禁止账户滥用。因此，平台需要如下功能：
+
+a) 基于时间关联用户行为和其上下文信息实现异常检测和威胁识别；
+
+b) 提供推荐行为以指导处置。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQIGrS1O2JX7Lmtzy12YdzicfTZmAqJGQiahp0mDK2rehkuEI7azh4Ikgw/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289068_5e4fd0acf3e8d.jpg!small)
+
+案例
+
+ **1** **、** 账号保护
+
+a) 保护SaaS帐户不被破坏和滥用
+
+云环境下的关键是如何在不影响合法用户体验的情况下保证云资产的安全。通过全局可见性，Obsidian可以展示哪些用户可以访问SaaS应用程序，以及访问的级别。平台还可以持续监控用户在这些应用程序中做了什么，并删除不活跃的帐户，以缩小攻击面和降低成本。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQf35B7Iz4qrMUtbEdsibDsznawialSTlicUorfDiaAcdMOO4c61nXYqBusQ/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289078_5e4fd0b6347b7.png!small)
+
+上图可以看到每个服务上谁拥有什么特权，它们是否处于活动状态，以及它们如何使用这些特权。
+
+b) 访问特权帐户的目录
+
+获取每个服务中具有特权的帐户清单。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQtxibFg6oklbg7l57xreWiaY3WZOYFKAzQQHbOylePXorqwJYWhBmCKAw/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289087_5e4fd0bfdab81.png!small)
+
+c) 活跃账户与非活跃账号
+
+Obsidian能通过服务获得活动帐户和非活动帐户的粗略视图，其中包含活动情况的历史变化。并且基于这些账户的活动信息，清理不活跃的帐户，以改善身份日常清理和降低成本。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQBFTAkemSSlbuGyBxX8ZQPEFuOOH2C28kFsT7FcZ0z6CwibKpvSA9cNw/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289100_5e4fd0cc94858.png!small)
+
+d) 具有多种特权角色的用户
+
+一个用户具有多种特权，可能会对组织构成更高的风险。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQFqvvrrhmpLqHb58UZibV703ucXKEg75K9svRFJ47mexTadiceWdYXohQ/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289131_5e4fd0eb1727f.png!small)
+
+e) 不活动帐户的陈旧用户监控
+
+Obsidian可能监控账户的活跃情况，以便查用户是否已切换角色或离开公司。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQ2VkqUGrgTTkicviaFOdQ5zcVo5r58CHCbXpM3aURpy8r68xsx1Vu8YicA/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289139_5e4fd0f33e555.png!small)
+
+**2** **、** 威胁狩猎
+
+a) 纠正违规和威胁识别
+
+SaaS环境中的威胁检测非常困难，SaaS应用程序本质上是多云环境。Salesforce、G
+Suite、Slack和其他应用程序都有独特的身份和访问模式，并将有关权限和活动的信息保存在silos中。Obsidian提供了威胁检测、违约修复和安全加固的统一可视化,可以快速检测异常登录、SaaS持久性、数据过滤、横向移动、OAuth令牌滥用和其他威胁的指标，并迅速纠正违规、识别威胁。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQrib4nGfPSEiaYic8LwmZibOgBPhNayiaZrjGcr9F2HUk5dKJ77aFy7JZ6vg/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289148_5e4fd0fc4e0f6.jpg!small)
+
+b) 警告
+
+Obsidian在不需要进行任何配置的情况下，能够获得各种威胁的告警。Obidian的告警涵盖了众所周知的恶意攻击，并实现了告警严重度排序。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQJicapkVc4EJ84ZKD5L4VabNjmAmvfFDCYg38fWIG4icLZuvadYtJfjRw/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289157_5e4fd105bec74.jpg!small)
+
+c) 位置记录
+
+Obsidian可以监视用户从何处登录。检测异常登录和活动迹象等。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQSseanIz4oaiceNRjRYLuWts6hC1DlvkyxwicNuLiad3B1edFdhDprLUCA/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289165_5e4fd10d4da48.jpg!small)
+
+d) 威胁狩猎的活动视图
+
+Obsidian通过位置、事件类型、ISP、设备、特权、访问历史等方面的特权、活动和上下文的统一视图，积极主动地检测SaaS环境中的未知威胁。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQcF6GqPvucSUjlumibHAafEeYO51FibWrM2grICNGhWpgTNibqAFbuxH5g/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289173_5e4fd115731f0.jpg!small)
+
+**3** **、** 事件响应
+
+a) 基于全局可视化的快速响应
+
+事故响应小组能在不影响系统运行的情况进行检测，识别根因并快速评估影响。Obsidian通过收集、规范化和存储来自SaaS应用程序的大量状态和活动数据，从而实现快速的云事件响应。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQEwic2xM99t0IOwQ3Fb1XWiaicia5ibHsgmnmibwdeDzmkNBsvqx6J4HFQibvQ/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289183_5e4fd11f4bee6.jpg!small)
+
+通过使用关于用户、特权和活动的统一数据，Obsidian能有效地进行信息检索工作。平台将用户、访问和特权与活动联系起来，并通过位置、事件类型、IP地址和设备丰富了这一功能。
+
+b) 通过IP搜索
+
+搜索已知的恶意IP和感兴趣的IP地址，以查找与该地址相关的其他活动。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQnXxeQvMpJL5ficialmLncWAdQe9087KWpadCTib0GHHuSBdSib3b6Q2h1Q/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289207_5e4fd137ca4c9.png!small)
+
+c) 根据用户或文档搜索活动日志
+
+搜索与特定用户相关的所有活动，或在相关文档或资产上执行的所有活动。
+
+![https://mmbiz.qpic.cn/mmbiz_png/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQ6QJWqfsNBQIlh37wCfnl14rIxDsJicR8KRxyzTr3riaiaVbxxzlanCGHA/640?wx_fmt=png](https://image.3001.net/images/20200221/1582289217_5e4fd141af343.png!small)
+
+三、创新点和挑战
+
+云访问安全代理（CASB）之类的解决方案来采用预防策略，但并不足以保护云环境免受攻击。即使有了最好的预防性安全解决方案，攻击者仍可以穿透或绕过防御获取对云资产的访问权限。云检测与响应是Obsidian提出的一个新的理念，将xDR的理念应用在云端，云安全团队需要快速检测，调查并响应威胁。这就需要可视化和丰富的用户上下文信息，以便实时的检测和响应可疑行为。而如今，这正是SaaS和云服务所缺少的功能。云检测和响应（CDR）解决方案通过不断收集，规范化和分析来自SaaS和云服务的大量状态和行为数据，为安全专业人员提供了检测，调查和响应云中威胁所需的全面的可视化信息。Obsidian的创新，主要包括云环境的可见性、自动化检测和安全风险监控，都是SaaS的核心需求，解决了云安全的痛点。
+
+当然也需要看到其商业化有很大的挑战，xDR产品的成功应用需要用户安全团队有较高的安全运营能力，否则无法发挥其应有的作用。如果上云的企业（特别是中小企业）没有相关的运营能力，那应该要考虑支持云端应用的MDR服务，例如去年RSA会场外，Google组织的生态圈会展中有一家BlueVoyant公司，能够提供面向公有云的MDR服务，通过绝大部分能够自动化的Tier
+1服务和基于数据科学的Tier 2后台服务，可以为大量的云客户提供可扩展的安全运营服务。
+
+![https://mmbiz.qpic.cn/mmbiz_jpg/IpYUt4DIvZeedwPiagiaQxGbld6iaiaiaskicQ5VFiazfKkbiaKKibB3r9BcXcSQyxYKEHcLycZXpHrYMniaSsdY27mQ8EFg/640?wx_fmt=jpeg](https://image.3001.net/images/20200221/1582289225_5e4fd149d7e71.jpg!small)
+
+四、总结
+
+Obsidian的创始人来自Cylance和Carbon
+Black，分别有云端零信任和终端EDR的成功经验，相信能够将该产品能够理解云端SaaS应用的真实风险，基于检测和响应技术解决客户上云的痛点，也许CDR会是“后CASB”的新型产品，帮助客户及时发现并缓解威胁。
+
+· 参考链接 ·
+
+[1] CLOUD DETECTION AND RESPONSEIS THE MISSING ELEMENT OF CLOUD
+SECURITY，<https://www.obsidiansecurity.com/cloud-detection-and-response-missing-element/>
+
+[2] Obsidian官方网站，<https://www.obsidiansecurity.com/>
+

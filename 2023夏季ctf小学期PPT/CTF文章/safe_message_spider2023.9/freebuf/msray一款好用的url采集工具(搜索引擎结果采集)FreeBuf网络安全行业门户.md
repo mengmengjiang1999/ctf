@@ -1,0 +1,170 @@
+[![](https://image.3001.net/images/20220912/1662985998_631f270e1c8e30477c504.png!small)](https://github.com/super-l/msray/blob/main/resource/msray.png)
+
+以前发布了基于python的开源版本 - [superl-url](../sectool/203724.html)，点赞的小伙伴还挺多，但是后期实在是没时间维护，升级的事情一直搁置了。
+
+时隔四五年，这次使用GO语言重新设计与开发了，彻底摆脱python环境与依赖问题，并且资源占用更少，也支持跨平台运行！
+
+## MSRAY简介
+
+Msray，可根据指定的关键词，自动从多个搜索引擎获取搜索结果数据(并发), 并且支持自动去重复、自定义代理、webhook推送等。
+
+不仅仅是url采集！支持存储域名、网址(url)、标题、描述、结果来源的搜索引擎名称、IP地址、服务器所属国家等多种信息！
+
+msray是从msray-plus商业版中提取出来的精简版本,可免费使用无功能限制。
+
+下载地址：https://github.com/super-l/msray
+
+##
+运行效果[](https://github.com/super-l/msray#0-%E8%BF%90%E8%A1%8C%E6%95%88%E6%9E%9C)
+
+###
+[](https://github.com/super-l/msray#1-%E8%B0%B7%E6%AD%8C%E5%BC%95%E6%93%8Egoogle)1\.
+谷歌引擎(google)
+
+![](https://image.3001.net/images/20220912/1662986017_631f272151987d1050d8b.png!small)
+
+###
+[](https://github.com/super-l/msray#2-%E6%B3%95%E5%9B%BD%E5%BC%95%E6%93%8Eqwant)2\.
+法国引擎(QWANT)
+
+![](https://image.3001.net/images/20220912/1662986029_631f272de98dc7538c9a6.png!small)
+
+###
+[](https://github.com/super-l/msray#3-%E5%BF%85%E5%BA%94%E5%BC%95%E6%93%8Ebning)3\.
+必应引擎(bing)
+
+![](https://image.3001.net/images/20220912/1662986040_631f273813ddfd2f2e015.png!small)
+
+###
+[](https://github.com/super-l/msray#4-%E4%BF%84%E7%BD%97%E6%96%AF%E5%BC%95%E6%93%8Eyandex)4\.
+俄罗斯引擎(yandex)
+
+![](https://image.3001.net/images/20220912/1662986049_631f2741383764cfcc440.png!small)
+
+## 程序优势
+
+1\. 支持国外与国内多个主流搜索引擎，每个引擎的参数可单独控制；
+
+2\. 可自动检测当前网络属于国内还是国外，用于部分国外引擎的初始网络代理设定判断。
+
+3\. 无需特定环境与依赖，可直接运行;
+
+4\. 自动去重过滤。同时支持按url模式或者域名模式进行重复判断；
+
+5\. 支持webhook，采集的结果，可实时推送到自定义远程API接口；
+
+6\. CPU占用、内存资源占用低；
+
+7\. 跨平台，同时支持windows各主流版本操作系统、以及Centos、Ubuntu、Mac等各版本操作系统；
+
+8\. 支持自定义保存数据字段（域名、网址、所属引擎、标题、描述、IP、访问状态码等）
+
+9\. 支持自定义代理功能，同时支持本地txt载入代理，以及支持代理平台API接口，可自定义自动更新时间频率；
+
+下一版本新增多种过滤参数控制功能！域名后缀过滤、标题关键词过滤、域名级别过滤；
+
+## 目前支持的搜索引擎列表
+
+必应搜索引擎
+
+Google搜索引擎
+
+Yandex搜索引擎
+
+Qwant搜索引擎
+
+## 配置文件说明
+
+配置文件路径： config.yaml
+
+    
+    
+    system:
+      logLevel: debug           # 日志级别 建议debug或info
+      repeatCheckType: domain   # 重复过滤类型 域名=domain 网址=url
+    
+    result:
+      saveField:          # 需要存储的字段
+        engine: true	  # 存储使用的搜索引擎别名，如:bing | baidu | qwant
+        domain: true	  # 存储域名
+        url: true		  # 存储URL
+        title: true		  # 存储标题
+        description: false # 存储描述
+        ip: true		   # 存储IP	
+        country: false	   # 存储服务器所属国家
+        httpStatus: false  #状态码
+      timeout: 10         # 获取数据的网络请求超时时间
+    
+    engine:	 # 搜索引擎配置  比如：bing=必应
+      bing:	 
+        status: false	# 是否开启
+        delay: 1		# 每页采集后的延迟时间
+        page: 1			# 每个关键词采集的页数
+        language:
+        timeout: 10		# 请求超时时间
+      yandex:
+        status: false
+        delay: 10
+        page: 5
+        language:
+        timeout: 10
+      qwant:
+        status: false
+        delay: 1
+        page: 8
+        language:
+        timeout: 10
+      google:
+        status: true
+        delay: 3
+        page: 8
+        language:
+        timeout: 10
+        token: AB1-RNWjeJzLuTALlFyb8TyyKQZV:1662965962939
+      baidu:
+        status: false
+        delay: 1
+        page: 8
+        language:
+        timeout: 10
+    
+    webhook:
+      status: false                   # 是否开启推送
+      url: http://127.0.0.1/receive   # 接收推送数据的地址
+    
+    proxy:
+      status: true           # 是否启动代理功能
+      local:
+        path: data/proxy.txt  # 文件路径
+        isCommon: 1           # 线路类型 国外线路=1 国内线路2
+      api:
+        url:                  # 访问地址
+        intervalTime: 10      # 自动更新时间(秒)
+        protocolType: http    # 协议类型,如http/socks4
+        isCommon: 1           # 线路类型 国外线路=1 国内线路2
+    
+
+## 运行说明
+
+    
+    
+    msray.exe search -k 关键词
+    
+    如：
+    msray.exe search -k msray
+    
+
+采集完成后, 会在result目录下生成结果文件(每个关键词单独一个文件), 一行一个采集结果。
+
+注意：重复关键词采集，将会自动清空上次采集的内容；
+
+## 技巧分享
+
+借助webhook功能，你可以实现很多拓展与自定义功能哦！
+
+比如自动把搜索结果中的网站域名，存储到自己的数据库，又或者联动fofa、xray、goby、nessus等等软件实现安全漏扫扫描与检查。
+
+## 下载地址
+
+查看项目的release: <https://github.com/super-l/msray/releases/>
+

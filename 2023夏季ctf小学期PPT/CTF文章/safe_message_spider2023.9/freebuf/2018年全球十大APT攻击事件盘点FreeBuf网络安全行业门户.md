@@ -1,0 +1,408 @@
+## 前言
+
+ **APT攻击（Advanced Persistent Threat，高级持续性威胁）是利用先进的攻击手段对特定目标进行长期持续性网络攻击的攻击形式。**
+
+360威胁情报中心结合2018年全年国内外各个安全研究机构、安全厂商披露的重大APT攻击事件，以及近几年来披露的高级持续性威胁活动信息，并基于这些重大APT攻击事件的危害程度、攻击频度、攻击技术等，评选出2018年全球十大APT攻击事件。
+
+## 2018年全球十大APT攻击事件
+
+360威胁情报中心将基于每个APT攻击事件的背景信息、攻击组织、相关TTP（战术、技术、过程）进行描述，带你一起回顾这些重大攻击事件。
+
+### 韩国平昌冬奥会APT攻击事件
+
+ **评分：** 危害程度 ★★★ 攻击频度 ★★ 攻击技术 ★★★
+
+事件时间：韩国平昌奥运会期间，首次活动于2017年12月22日
+
+攻击组织： **Hades**
+
+受害目标：韩国平昌奥运会举办方
+
+相关攻击武器：Olympic Destroyer
+
+相关漏洞：无
+
+攻击入口：鱼叉邮件攻击
+
+ **主要攻击战术技术：**
+
+> 1.鱼叉邮件投递内嵌恶意宏的Word文档
+>
+> 2.利用PowerShell实现的图片隐写技术，其使用开源工具Invoke-PSImage实现
+>
+> 3.利用失陷网站用于攻击载荷的分发和控制回传
+>
+> 4.伪装成韩国国家反恐中心（NCTC）的电子邮件地址发送鱼叉邮件，以及注册伪装成韩国农业和林业部的恶意域名
+
+韩国平昌冬奥会APT攻击事件是由McAfee在今年伊始公开披露的APT事件，据相关新闻报道，其导致了奥运会网站的宕机和网络中断。卡巴斯基将该事件背后的攻击组织命名为Hades。
+
+韩国冬奥会攻击事件最为疑惑的是其攻击者的归属问题，并至今仍未有定论。在事件中使用的植入载荷Olympic
+Destroyer，其用于破坏文件数据的相关代码与过去Lazarus使用的载荷有部分相似，而美国部份媒体则声称该事件为俄罗斯情报机构实施并嫁祸给朝鲜。
+
+该事件再一次展现了APT攻击者利用和模仿其他组织的攻击技术和手法特点，制造false
+flag以迷惑安全人员并误导其做出错误的攻击来源归属的判断，而似乎制造false flag是Hades组织惯用的攻击手法。
+
+![image.png](https://image.3001.net/images/20190102/1546397108_5c2c25b486dd7.png!small)
+
+### VPNFilter：针对乌克兰IOT设备的恶意代码攻击事件
+
+ **评分：** 危害程度 ★★★★★ 攻击频度 ★★★★ 攻击技术 ★★★★
+
+事件时间：最早从2016年开始，2018年5月首次披露
+
+攻击组织： **疑似APT28**
+
+受害目标：主要为乌克兰
+
+相关攻击武器：VPNFilter
+
+相关漏洞：针对IOT设备的多种漏洞
+
+攻击入口：利用IOT设备漏洞远程获得初始控制权
+
+ **主要攻击战术技术：**
+
+> 1.使用多阶段的载荷植入，不同阶段载荷功能模块实现不同
+>
+> 2.使用针对多种型号IOT设备的公开漏洞利用技术和默认访问凭据获得对设备的控制权
+>
+> 3.实现包括：数据包嗅探、窃取网站登录凭据、以及监控Modbus SCADA工控协议
+>
+> 4.针对多种CPU架构编译和执行
+>
+> 5.使用Tor或SSL加密协议进行C2通信
+
+VPNFilter事件是2018年最为严重的针对IOT设备的攻击事件之一，并且实施该事件的攻击者疑似具有国家背景。美国司法部在后续也声称该事件与APT28组织有关。
+
+通过Cisco
+Talos的披露，该事件影响了至少全球54个国家和地区的50W设备，包括常用的小型路由器型号（例如Linksys，MikroTik，NETGEAR和TP-Link）、NAS设备等。
+
+VPNFilter恶意代码被制作成包含复杂而丰富的功能模块，实现多阶段的攻击利用，并被编译成支持多种CPU架构，使用已知公开的漏洞利用技术获得控制权。
+
+乌克兰特勤局（SBU）后续也公开披露其发现VPNFilter对其国内的氯气蒸馏站的攻击。
+
+![image.png](https://image.3001.net/images/20190102/1546397117_5c2c25bd69ef2.png!small)
+
+### APT28针对欧洲、北美地区的一系列定向攻击事件
+
+ **评分：** 危害程度 ★★★★ 攻击频度 ★★★★ 攻击技术 ★★★★★
+
+事件时间：贯穿整个2018年
+
+攻击组织： **APT28**
+
+受害目标：北美、欧洲、前苏联国家的政府组织
+
+相关攻击武器：Cannon、Zebrocy等
+
+相关漏洞：Office文档模板注入、疑似Lojack软件缺陷或0day漏洞
+
+攻击入口：鱼叉邮件、Office模板注入
+
+ **主要攻击战术技术：**
+
+> 1.鱼叉邮件发送使用了Office模板注入攻击技术的恶意文档
+>
+> 2.远程注入恶意宏代码并执行
+>
+> 3.释放Delphi版的Cannon和.Net和C#等多个语言版本的Zebrocy木马进行远程控制
+>
+> 4.以及针对LoJack计算机防盗软件植入UEFI rootkit木马程序，实现重装系统及更换硬盘都无法消除的持久化远程控制
+
+APT28组织在整个2018年频繁利用Office模板注入远程宏文档的攻击技术对包括北美国家的外交事务组织、欧洲国家的外交事务组织以及前苏联国家的政府实体进行定向攻击。这些攻击的攻击媒介都是通过鱼叉式网络钓鱼，使用注册到免费电子邮件提供商Seznam的电子邮件帐户，Seznam是一家位于捷克共和国的热门网络服务提供商，并且该攻击大部分文档都包含作者名Joohn。
+
+在2018年9月，ESET还发现APT28组织使用UEFI rootkit针对巴尔干半岛及中欧和东欧的政府组织进行定向攻击的活动。
+
+![image.png](https://image.3001.net/images/20190102/1546397124_5c2c25c4850c8.png!small)
+
+### 蓝宝菇APT组织针对中国的一系列定向攻击事件
+
+ **评分：** 危害程度 ★★★★ 攻击频度 ★★★ 攻击技术 ★★★
+
+事件时间：2018年4月（首次攻击时间为2011年）
+
+攻击组织： **蓝宝菇（BlueMushroom）**
+
+受害目标：中国政府、军工、科研、金融等重点单位和部门
+
+相关攻击武器：PowerShell后门
+
+相关漏洞：无
+
+攻击入口：鱼叉邮件和水坑攻击
+
+ **主要攻击战术技术：**
+
+> 1.鱼叉邮件投递内嵌PowerShell脚本的LNK文件，并利用邮件服务器的云附件方式进行投递
+>
+>
+> 2.当受害者被诱导点击恶意LNK文件后，会执行LNK文件所指向的PowerShell命令，进而提取出LNK文件中的其他诱导文件、持久化后门和PowerShell后门脚本。PowerShell后门会通过对受害者的电脑中的特定格式文件进行打包并上传到第三方云空间（如：亚马逊云，新浪云等）
+>
+> 3.从网络上接受新的PowerShell后门代码执行，从而躲避了一些杀软的查杀
+
+“蓝宝菇”APT组织在2018年对我国的政府、军工、科研、金融等重点单位和部门都发起了多次针对性攻击，攻击的技术以及手法也有所升级。从以往的PE木马升级到现在的非PE的脚本后门，以及采用云空间、云附件的手法接收回传的资料信息等都反映了蓝宝菇APT组织在攻击技术方面的更新。从近期360威胁情报中心监控到的攻击事件来看，未来蓝宝菇APT组织都会大量的使用PowerShell脚本等非PE后门来替代原有的PE木马数字武器。
+
+![image.png](https://image.3001.net/images/20190102/1546397132_5c2c25cc98fcc.png!small)
+
+### 海莲花APT组织针对我国和东南亚地区的定向攻击事件
+
+ **评分：** 危害程度 ★★★★ 攻击频度 ★★★★★ 攻击技术 ★★★
+
+事件时间：2018年全年（首次攻击时间为2012年）
+
+攻击组织： **海莲花（OceanLotus）**
+
+受害目标：东南亚国家、中国及其相关科研院所、海事机构、航运企业等
+
+相关攻击武器：Denis家族木马、Cobalt Strike、CACTUSTORCH框架木马
+
+相关漏洞：微软Office漏洞、MikroTik路由器漏洞、永恒之蓝漏洞
+
+攻击入口：鱼叉邮件和水坑攻击
+
+ **主要攻击战术技术：**
+
+> 1.鱼叉邮件投递内嵌恶意宏的Word文件、HTA文件、快捷方式文件、SFX自解压文件、捆绑后的文档图标的可执行文件等
+>
+> 2.入侵成功后通过一些内网渗透工具扫描渗透内网并横向移动，入侵重要服务器，植入Denis家族木马进行持久化控制
+>
+> 3.通过横向移动和渗透拿到域控或者重要的服务器权限，通过对这些重要机器的控制来设置水坑、利用第三方工具并辅助渗透
+>
+> 4.横向移动过程中还会使用一些逃避杀软检测的技术：包括白利用技术、PowerShell混淆技术等
+
+“海莲花”APT
+组织在2018年全年频繁的针对我国及东南亚国家进行持续的针对性攻击，比如针对柬埔寨和菲律宾的新的攻击活动，并且疑似利用了路由器的漏洞实施远程渗透。相关漏洞首次公开是由维基解密披露的CIA
+Vault7项目资料中提及并由国外安全研究人员发布了相关攻击利用代码。并且“海莲花”在2018年的攻击活动中使用了更加多样化的载荷投放形式，并使用多种白利用技术加载其恶意模块。
+
+### 蔓灵花APT组织针对中国、巴基斯坦的一系列定向攻击事件
+
+ **评分：** 危害程度 ★★★ 攻击频度 ★★★★ 攻击技术 ★★★
+
+事件时间：2018年初
+
+攻击组织： **蔓灵花（BITTER）**
+
+受害目标：中国、巴基斯坦
+
+相关攻击武器：“蔓灵花”特有的后门程序
+
+相关漏洞：InPage文字处理软件漏洞CVE-2017-12824、微软公式编辑器漏洞等
+
+攻击入口：鱼叉邮件攻击
+
+ **主要攻击战术技术：**
+
+> 1.鱼叉邮件投递内嵌Inpage漏洞利用文档、微软公式编辑器漏洞利用文档、伪造成文档/图片的可执行文件等
+>
+> 2.触发漏洞后释放/下载执行恶意木马，与C2保持通信，并根据C2返回的命令下载指定插件执行
+>
+> 3.下载执行多种远控插件进行远程控制
+
+“蔓灵花”APT组织在2018年利用InPage文档处理软件漏洞、微软公式编辑器漏洞、伪造文档图标的可执行文件等攻击手法，针对中国、巴基斯坦重要组织机构和人员多次发起定向攻击。多次攻击活动表明，蔓灵花习惯攻陷巴基斯坦政府网站用于下发后续木马，比如在11月针对巴基斯坦的攻击活动中，后续木马下发地址为：fst.gov.pk/images/winsvc，而fst.gov.pk则是巴基斯坦政府的相关网站。
+
+并且在2018年11月左右针对巴基斯坦的攻击中使用了大量InPage漏洞利用文档进行攻击。而InPage则是一个专门针对乌尔都语使用者（巴基斯坦国语）设计的文字处理软件。
+
+![image.png](https://image.3001.net/images/20190102/1546397141_5c2c25d54f42c.png!small)
+
+### APT38针对全球范围金融机构的攻击事件
+
+ **评分：** 危害程度 ★★★★★ 攻击频度 ★★★★ 攻击技术 ★★★★
+
+事件时间：最早于2014年，持续活跃至今
+
+攻击组织： **APT38**
+
+受害目标：金融机构，银行，ATM，SWIFT
+
+相关攻击武器：多种自制恶意程序
+
+相关漏洞：多种漏洞
+
+攻击入口：鱼叉攻击，水坑攻击
+
+ **主要攻击战术技术：**
+
+> 1.利用社交网络，搜索等多种方式对攻击目标进行详细的网络侦查
+>
+> 2.使用鱼叉攻击或水坑攻击对目标人员实施攻击并获得初始控制权
+>
+> 3.在目标网络横向移动，最终以获得SWIFT系统终端为目标
+>
+> 4.伪造或修改交易数据达到窃取资金
+>
+> 5.通过格式化硬盘或日志等方式清除痕迹。
+
+APT38被认为是朝鲜来源的APT组织，国外安全厂商通常称为Lazarus
+Group。近年来主要披露的攻击活动涉及全球金融和银行机构、中美洲在线赌场、以及虚拟电子货币相关的交易所和机构。FireEye在今年披露了一份详细的APT组织报告，并将其中以经济牟利为意图的，针对全球金融、银行机构攻击的威胁活动独立归属为一个新的组织名称，APT38以明确区分其与Lazarus之间的一些不同。
+
+美国司法部在今年9月也公开披露了一份非常详细的针对朝鲜黑客PARK JIN HYOK及其相关组织Chosun
+Expo过去实施的攻击活动的司法指控。在该报告中指出PARK黑客及其相关组织与过去SONY娱乐攻击事件、全球范围多个银行SWIFT系统被攻击事件、
+WannaCry、以及韩国、美国军事人员和机构被攻击的相关事件有关。
+
+APT38，作为目前以经济利益为动机的最为活跃的APT组织，我们也应该持续关注其使用的攻击技术和工具。
+
+![image.png](https://image.3001.net/images/20190102/1546397148_5c2c25dc826f8.png!small)
+
+### 疑似DarkHotel APT组织利用多个IE 0day“双杀”漏洞的定向攻击事件
+
+ **评分：** 危害程度 ★★★ 攻击频度 ★★ 攻击技术 ★★★★
+
+事件时间：首次发现于2018年5月，相同Payload在2月中旬被发现
+
+攻击组织： **DarkHotel**
+
+受害目标：中国
+
+相关攻击武器：劫持操作系统DLL文件（msfte.dll、NTWDBLIB.DLL）的插件式木马后门
+
+相关漏洞：CVE-2018-8174、CVE-2018-8373等
+
+攻击入口：鱼叉邮件攻击
+
+ **主要攻击战术技术：**
+
+> 1.鱼叉邮件投递包含IE 0day双杀漏洞的Word文档
+>
+> 2.漏洞利用成功后释放白利用文件执行恶意PowerShell下载下一阶段PowerShell脚本
+>
+> 3.下载回来的PowerShell脚本进行Bypass UAC，并通过劫持系统DLL文件下载核心木马模块
+>
+> 4.核心木马模块与C2地址通信下载执行更多的木马插件实现持久化控制
+
+Darkhotel（APT-C-06）是一个长期针对企业高管、国防工业、电子工业等重要机构实施网络间谍攻击活动的APT组织。2018年5月，360公司首次发现疑似该组织使用IE
+0day“双杀”漏洞针对中国的定向攻击。
+
+2018年8月15日，网络安全公司趋势科技公开了其在今年7月捕获到的一例在野0day漏洞攻击，经过分析对比发现该0day漏洞和2018年4月360公司首次发现影响IE浏览器并通过Office文档进行攻击的“双杀”漏洞使用了多个相同的攻击技术，极有可能是同一团伙所为。
+
+并且早在2018年2月中旬，360威胁情报中心就跟踪发现了DarkHotel
+APT团伙使用相同的恶意代码的定向攻击活动，并且结合威胁情报数据挖掘到了该团伙更多的样本，对该团伙近年来使用的多个版本的恶意代码进行了分析对比，梳理了样本演化过程。
+
+![image.png](https://image.3001.net/images/20190102/1546397155_5c2c25e3cf52d.png!small)
+
+### 疑似APT33使用Shamoon V3针对中东地区能源企业的定向攻击事件
+
+ **评分：** 危害程度 ★★★★ 攻击频度 ★★ 攻击技术 ★★★
+
+事件时间：2018年12月发现
+
+攻击组织： **疑似APT33**
+
+受害目标：中东和欧洲的石油和天然气公司
+
+相关攻击武器：Shamoon V3
+
+相关漏洞：无
+
+攻击入口：鱼叉邮件攻击
+
+ **主要攻击战术技术：**
+
+> 1.使用随机生成的数据覆盖系统上的MBR、分区和文件
+>
+> 2.恶意文件的文件描述模仿合法的产品名称
+
+安全人员于今年12月在VirusTotal上发现了新版本的Shamoon恶意代码，其使用随机生成的数据覆盖系统上的MBR，分区和文件。本次攻击活动可能主要针对欧洲和中东的石油、天然气公司。
+
+随后，国外安全厂商McAfee对Shamoon攻击所使用的新的工具集进行分析，并认为新的Shamoon版本作为其攻击工具集的一部分，其还包括一个.Net开发的攻击工具。McAfee指出该攻击活动可能与APT33有关。而后续FireEye对
+APT33组织近期的攻击活动与Shamoon攻击的联系也进行了分析说明。
+
+![image.png](https://image.3001.net/images/20190102/1546397184_5c2c2600ca687.png!small)
+
+### Slingshot：一个复杂的网络间谍活动
+
+ **评分：** 危害程度 ★★★★ 攻击频度 ★★ 攻击技术 ★★★★★
+
+事件时间：2012至2018年2月
+
+攻击组织： **疑似针对伊斯兰国和基地组织成员**
+
+受害目标：非洲和中东各国的路由器设备
+
+相关攻击武器：自制的攻击武器
+
+相关漏洞：CVE-2007-5633、CVE-2010-1592、CVE-2009-0824
+
+攻击入口：可能通过Windows漏洞利用或已感染的Mikrotik路由器
+
+ **主要攻击战术技术：**
+
+> 1.初始loader程序将合法的Windows库'scesrv.dll'替换为具有完全相同大小的恶意文件
+>
+> 2.包括内核层的加载器和网络嗅探模块，自定义的文件系统模块
+>
+> 3.可能通过Windows漏洞利用或已感染的Mikrotik路由器获得受害目标的初始控制权。
+
+Slingshot是由卡巴斯基在今年早些发现和披露的网络间谍活动，并且披露其是一个新的、高度复杂的攻击平台的一部分，其在复杂度上可以与Project
+Sauron和Regin相媲美。
+
+而后续，外媒对该曝光的活动也进行了报道。其中披露该攻击活动可能与美国联合特种作战司令部（JSOC）进行的一项军事计划有关，用于帮助军方和情报界通过感染受害目标常用的计算机收集有关恐怖分子的信息。
+
+卡巴斯基披露Slingshot至少影响了约100名受害者，主要分布于非洲和中东地区国家（如阿富汗、伊拉克、肯尼亚、苏丹、索马里、土耳其等）。其同时针对Windows和Mikrotik路由器平台实施持久性的攻击植入。
+
+![image.png](https://image.3001.net/images/20190102/1546397190_5c2c2606def7d.png!small)
+
+## 总结
+
+通过360威胁情报中心整理的2018年十大APT攻击事件，我们可以总结出以下一些观点：
+
+>
+> 工业制造业以及国家基础建设相关的行业和机构越来越多的成为APT组织的直接攻击目标，比如针对乌克兰路由器等IOT设备的VPNFilter恶意代码攻击和针对中东地区能源企业的定向攻击事件；
+>
+> APT组织通过不断变换攻击方式和更多的0day漏洞来尝试突破目标的安全防护。比如被利用的多个IE
+> 0day双杀漏洞、针对小众的InPage文字处理软件漏洞、针对路由器的漏洞攻击、躲避邮件或终端杀毒软件检测的Office模板注入攻击等；
+>
+>
+> 多个著名的APT团伙在2018年非常活跃，被国内外多个安全研究机构、安全厂商所披露。比如针对欧洲、北美地区进行频繁攻击的APT28，针对东南亚地区持续进行定向攻击的海莲花、蔓灵花等APT组织。
+
+## 参考链接
+
+[1].<https://www.welivesecurity.com/2018/09/27/lojax-first-uefi-rootkit-found-wild-courtesy-sednit-group/>
+
+[2].<https://www.securityweek.com/russia-hacked-olympics-computers-turned-blame-north-korea-report>
+
+[3].<https://www.justice.gov/opa/press-release/file/1092091/download>
+
+[4].<https://www.fireeye.com/blog/threat-research/2018/12/overruled-containing-a-potentially-destructive-adversary.html>
+
+[5].<https://www.fireeye.com/blog/threat-research/2018/10/apt38-details-on-new-north-korean-regime-backed-threat-group.html>
+
+[6].<https://www.cyberscoop.com/kaspersky-slingshot-isis-operation-socom-five-eyes/>
+
+[7].<https://www.bleepingcomputer.com/news/security/ukraine-says-it-stopped-a-vpnfilter-attack-on-a-chlorine-distillation-station/>
+
+[8].<https://unit42.paloaltonetworks.com/dear-joohn-sofacy-groups-global-campaign/>
+
+[9].<https://twitter.com/360TIC/status/1078908533125443584>
+
+[10].<https://ti.360.net/uploads/2018/07/05/5fc9c36b4cb81d4281599f0d3416931a.pdf>
+
+[11].<https://ti.360.net/blog/articles/oceanlotus-with-cve-2017-8570/>
+
+[12].<https://ti.360.net/blog/articles/oceanlotus-targets-chinese-university/>
+
+[13].<https://ti.360.net/blog/articles/latest-sample-and-c2-mechanism-of-apt-c-12/>
+
+[14].<https://ti.360.net/blog/articles/details-of-apt-c-12-of-operation-nuclearcrisis/>
+
+[15].<https://ti.360.net/blog/articles/analyzing-attack-of-cve-2018-8373-and-darkhotel/>
+
+[16].<https://ti.360.net/blog/articles/analysis-of-targeted-attack-against-pakistan-by-exploiting-inpage-vulnerability-and-related-apt-groups/>
+
+[17].<https://ti.360.net/blog/articles/analysis-of-darkhotel/>
+
+[18].<https://ti.360.net/blog/articles/analysis-of-apt-campaign-bitter/>
+
+[19].<https://securityaffairs.co/wordpress/72851/apt/vpnfilter-botnet-doj.html>
+
+[20].<https://securingtomorrow.mcafee.com/other-blogs/mcafee-labs/shamoon-attackers-employ-new-tool-kit-to-wipe-infected-systems/>
+
+[21].<https://securingtomorrow.mcafee.com/other-blogs/mcafee-labs/malicious-document-targets-pyeongchang-olympics/>
+
+[22].<https://securelist.com/threats-in-the-netherlands/88185/>
+
+[23].<https://securelist.com/apt-slingshot/84312/>
+
+[24].<https://blog.talosintelligence.com/2018/05/VPNFilter.html>
+
+ ***本文作者：360天眼实验室，转载请注明来自FreeBuf.COM**
+

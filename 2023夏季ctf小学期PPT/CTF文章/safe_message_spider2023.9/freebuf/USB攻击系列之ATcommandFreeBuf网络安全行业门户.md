@@ -1,0 +1,180 @@
+## **前言**
+
+最近我们在研究安卓车机，绝大多数车机都会有USB接口，因此关注了一些USB的攻击手段。
+
+##  **安卓AT command介绍**
+
+[文章](https://atcommands.org/)介绍了AT命令，AT 命令最初是由 Dennis Hayes 于 1981
+年开发用于控制调制解调器，当调制解调器在 **数据模式**
+下接受这些命令时（不需要单独的端口），允许：选择通信协议、设置线路速度、拨号号码、挂断电话等。现在大多数智能手机仍在使用它来支持电话功能。AT
+命令功能强大，包括重写设备固件、绕过 Android 安全机制、泄露敏感设备信息、执行屏幕解锁、注入触摸事件等。
+
+智能手机包含提供调制解调器功能的蜂窝基带处理器，使这些设备能够与蜂窝网络通信，并接受AT命令进行配置。除了标准化的调制解调器命令外，一些安卓设备制造商会添加自定义的AT命令，这些扩展的AT命令通常不调用与电话有关的功能，而是访问设备上的其他资源。
+
+在某些Android 智能手机上，AT 命令接口通过 USB 公开，未启用 USB 调试。
+
+##  **思考**
+
+1 **.** USB 的数据模式是什么意思？这种模式可以接收AT命令？
+
+2 **.** 正确的连接方式？手机需要设置什么驱动吗？
+
+3 **.** AT命令的格式？
+
+##  **开始寻找答案**
+
+###  **USB 的数据模式**
+
+通过查找资料，[USB基础知识](https://blog.51cto.com/bruceou/4967777)发现，USB确实有很多种模式，CDC-ACM
+(Abstract Control Model 抽象控制模型）允许任何通信设备提供串行通信接口（例如发送和接收AT命令的调制解调器设备）。
+
+###  **连接方式**
+
+[安卓手机与stm32串口通信](https://icode.best/i/06133144568096),我们找到了连接方式，就是手机连接OTG连接串口设备。
+
+[文章](https://forum.ubuntu.org.cn/viewtopic.php?t=63353)将N70与笔记本通过数据线相连，系统可以自动将其识别成modem，具体信息可以通过查看，大致的信息差不多应该是这样的：
+
+    
+    
+    tail /var/log/messages
+    
+    
+    Jul  6 19:32:26 myUbuntu kernel: [ 1613.716000] usb 1-2: new full speed USB device using uhci_hcd and address 4Jul  6 19:32:26 myUbuntu kernel: [ 1613.884000] usb 1-2: configuration #1 chosen from 1 choiceJul  6 19:32:26 myUbuntu kernel: [ 1614.328000] cdc_acm 1-2:1.8: ttyACM0: USB ACM device
+
+即说明系统自动调用了cdc_acm模块将手机驱动成了一个modem，设备号为/dev/ttyACM0
+
+于是，我们验证了身边的几款手机，连接后，手机均不能识别CDC-ACM ，也就是串口设备。
+
+![1657159924_62c640f4d21c9675a18f8.png!small?1657159941819](https://image.3001.net/images/20220707/1657159924_62c640f4d21c9675a18f8.png!small?1657159941819)
+
+###  **USB驱动或者配置**
+
+那是不是安卓手机缺少一些USB驱动或者配置呢？我们找到了[文章](https://blog.csdn.net/WCH_TechGroup/article/details/120350594),描述的很清晰，Android如何开启OTG功能/USB
+Host API功能。
+
+ **主机模式**
+
+Android
+设备充当USB主机，安卓此时充当类似于计算机PC的角色，可以连接键盘、鼠标、U盘以及嵌入式应用USB转串口、转I2C等设备。注意，此时不能再使用普通数据线，而应该使用OTG（On-The-Go）转接线。原理是Android设备通过USB接口中的ID信号线状态决定其接口是工作在主机还是设备模式。
+
+ **Android USB Host API功能的确认和开启**
+
+ **步骤一：** 确认系统是否包含 USB Host API 相关的库文件，习惯也称驱动文件。存放路径为：/system/lib。
+
+使用“adb shell”连接nesus5手机，查看结果如下图所示：
+
+![1657160008_62c6414808300f882ed28.png!small?1657160008004](https://image.3001.net/images/20220707/1657160008_62c6414808300f882ed28.png!small?1657160008004)
+
+  
+
+ **步骤二：** 确认 Android 系统是否已经开放了 USB Host 权限，由于需要修改系统文件，所以要保证 Android 设备已经具有
+Root 权限，Root 之后，可以通过手机助手或者“ES文件浏览器”等软件等操作系统文件。
+
+进入目录“/system/etc/permissons”，查看该目录下，是否有文件“android.hardware.usb.host.xml”，如果没有，则需要自己创建一个或者直接从其他系统中拷贝过来。之后打开该文件，添加如下内容：
+
+    
+    
+    <permissons><feature name="android.hardware.usb.host"/></permissions>
+
+nesus5手机里有。
+
+![1657160060_62c6417ce6f8ed46412ef.png!small?1657160062706](https://image.3001.net/images/20220707/1657160060_62c6417ce6f8ed46412ef.png!small?1657160062706)
+
+ **步骤三：**
+在该文件下查找是否存在名称为“handheld_core_hardware.xml”或者“tablet_core_hardware.xml”的文件。同理，未找到需要新建或者拷贝过来。打开文件，在<pernisssions>section
+中添加如下内容：
+
+    
+    
+    <feature name="android.hardware.usb.host">
+
+添加完成后文件内容如下所示：
+
+![1657160106_62c641aa82770a1f2106e.png!small?1657160106530](https://image.3001.net/images/20220707/1657160106_62c641aa82770a1f2106e.png!small?1657160106530)
+
+这个配置nesus5中没有，于是下载个Es File Explorer.apk，尝试添加，报错弹框：
+
+/system/etc/permissions/handheld_core_hardware.xml:openfailed：erofs read-only
+file system
+
+于是换一种[方案](https://www.bbsmax.com/A/lk5a4jZ4J1/)修改：
+
+1、执行mount | grep /system
+
+![1657160167_62c641e723a2ba9de9f70.jpg!small?1657160167067](https://image.3001.net/images/20220707/1657160167_62c641e723a2ba9de9f70.jpg!small?1657160167067)
+
+其中标明该目录权限:ro，即read-only，只读。
+
+2、查看完权限后就是修改权限。首先，输入命令cat /proc/mounts，可得到如下信息：
+
+![1657160194_62c64202edf40becdd10a.jpg!small?1657160194912](https://image.3001.net/images/20220707/1657160194_62c64202edf40becdd10a.jpg!small?1657160194912)
+
+找到/system的路径：/dev/block/platform/1021c000.rksdmmc/by-name/system
+
+3、执行命令 mount -o rw,remount /dev/block/platform/1021c000.rksdmmc/by-name/system
+/system其中，rw表示读写权限
+
+4、重新输入命令 mount | grep /system，即可看到/system的权限变为了rw（第一行）。
+
+![1657160220_62c6421cbea60d2eb8f58.jpg!small?1657160220717](https://image.3001.net/images/20220707/1657160220_62c6421cbea60d2eb8f58.jpg!small?1657160220717)
+
+然后用adb将目标文件导出，修改后adb导入到/sdcard，再从adcard移动到sys下的对应目录。原文件重命名为bak。重启 Android
+设备后桌面系统崩溃，无法做任何事，甚至按键无法关机。
+
+没有办法，救砖，adb进入su，重复以上修改权限的操作，文件还原，adb执行重启命令，重启后手机复原。
+
+###  **AT命令格式**
+
+虽然我们目前没有漏洞设备，但是万一遇到了呢？
+
+在ADB中使用AT命令，例如要发送at+spatgetcp2info命令
+
+    
+    
+    echo "at+spatgetcp2info\r">/proc/mdbg/at_cmdcat /proc/mdbg/at_cmd
+
+使用[AT命令连接WIFI](https://ost.51cto.com/posts/2042)
+
+使用AT指定将wifi-iot设备连接到WIFI
+
+工具：sscom
+
+核心步骤：
+
+1\. 启动station模式
+
+2\. 连接wifi热点
+
+3\. 启动DHCP客户端获取ip
+
+说明：第3步是必须的，这跟我们平时使用的不太一样，我们使用手机，电脑或其他设备连接到wifi热点时会自动启动DHCP客户端，给我们的感觉就是只有一步，只要连接成功就会获取到ip地址，但其实这是两步，使用AT指令时，这两步都需要执行。下面看一下具体AT指令执行步骤
+
+1\. AT+STARTSTA
+
+启动station模式
+
+> [12:20:21.994]发→◇AT+STARTSTA
+>
+> □
+>
+> [12:20:21.998]收←◆AT+STARTSTA
+>
+> OK
+
+2\. AT+SCAN
+
+扫描周围的热点信息，扫描并不会直接返回扫描到的热点信息，需要执行AT+SCANRESULT进行查看
+
+> [12:20:30.347]发→◇AT+SCAN
+>
+> □
+>
+> [12:20:30.351]收←◆AT+SCAN
+>
+> OK
+>
+>  
+>
+>
+> [12:20:31.128]收←◆+NOTICE:SCANFINISH
+

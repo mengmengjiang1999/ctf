@@ -1,0 +1,455 @@
+# 深入浅出——基于DynamoRIO的strace和ltrace
+
+阅读量 **433263**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2019-01-09 10:30:28
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p1.ssl.qhimg.com/t01558116930e8f16ab.png)
+
+## 前言
+
+DynamoRIO是一种流行的动态二进制插桩平台，能够实时跟踪二进制程序的动态执行过程，在动态分析领域具有广泛的应用。strace和ltrace是Linux平台两款调试分析神器，能够跟踪程序动态运行时的系统调用和库函数调用。本文将介绍基于DynamoRIO实现的、面向Windows应用程序的drstrace和drltrace，并对其源码实现进行简要剖析。
+
+## 0x00 概述
+
+###  DynamoRIO
+
+首先给出DynamoRIO官方的相关资料如下，学习时多以此为参考。
+
+  1. DynamoRIO官方网站：<https://www.dynamorio.org/>
+  2. Github地址：<https://github.com/DynamoRIO/dynamorio>
+  3. 下载传送门：<https://github.com/DynamoRIO/dynamorio/wiki/Downloads>
+  4. 官方教程PDF：[教程传送门](https://github.com/DynamoRIO/dynamorio/releases/download/release_7_0_0_rc1/DynamoRIO-tutorial-feb2017.pdf)
+
+本篇文章的实验环境：
+
+  1. windows 7 x64
+  2. vs2012
+  3. DynamoRIO-Windows-6.2.0-2
+
+###  strace && ltrace
+
+在linux平台上，strace和ltrace是两款重要的调试分析工具，熟练使用这两个工具可以极大提高分析人员的工作效率，诊断软件的各种疑难杂症。其中，strace能够跟踪所有由用户进程空间发出的系统调用，ltrace则能够跟踪进程调用的库函数信息。例如，下面的例子展示了利用strace来跟踪cat命令的系统调用信息。
+
+![](https://p4.ssl.qhimg.com/t01f2d92ec06e1e8a59.png)
+
+## 0x01 DynamoRIO 简要入门
+
+DynamoRIO是一款流行的动态二进制插桩工具，工作于操作系统与应用程序之间，通过将二进制程序的代码拷贝到代码缓存的方式模拟目标程序的执行。在动态模拟执行的过程中，可以根据分析需求，对二进制程序的运行状态进行监控与修改。
+
+DynamoRIO提供了丰富的API接口，开发者可以利用这些接口实现对指令、基本块、线程、系统调用等监控，从而实现二进制分析插件的开发。  
+下面简单介绍DynamoRIO的入门知识，详细信息请参考官方文档。
+
+###  基本组成
+
+此插桩平台主要包含以下内容：
+
+  1. DynamoRIO：负责解释并执行目标程序；提供丰富的跨平台API接口
+  2. Client ：通过API自定义分析操作来扩展DynamoRIO
+  3. DynamoRIO Extensions：主要指drmgr，drsyms，drwrap等官方提供的扩展接口
+
+DynamoRIO中有一个重要的概念： **事件** 。
+
+  1. 应用程序事件：应用程序在动态执行时的事件，包括进程创建，模块加载，系统调用等
+  2. DynamoRIO事件：包括基本快、轨迹流的创建等
+  3. 事件回调函数的注册：`dr_register_xx_event`,`dr_ungister_xx_event`等
+
+在DynamoRIO中，有两个重要的概念需要弄清： **transformation time** 和 **execution time**
+
+> transformation time：DynamoRIO对待分析应用程序进行代码变换的时间  
+>  execution time：待分析应用程序真正执行的时间
+
+在DynamoRIO的官方手册中，有这样一个示例来这两个时间概念进行解释说明：
+
+![](https://p3.ssl.qhimg.com/t01064c0b0d21800001.png)
+
+![](https://p4.ssl.qhimg.com/t01642d8058e7ced1e4.png)
+
+显然 **transformation time** 对应的代码主要决定在什么时候什么位置插入分析代码；而 **execution time**
+对应的代码则是待分析程序真正动态执行时执行的分析代码。
+
+###  运行方式：
+
+方法1：  
+`drrun -c <client> <client options> -- <app cmdline>`
+
+方法2：  
+`drconfig -reg <appname> -c <client> <client options>`  
+`drinject <app cmdline>`
+
+###  简单功能演示
+
+下面通过几个简单的官方示例来演示其功能，下面的功能演示均较为简单，主要让大家对动态二进制插桩技术和DynamoRIO有一个直观的认识，便于入门。
+
+####  Example1:bbcount
+
+分析notepad，统计其运行时的基本块信息，如图中所示，共有 6903773 个基本块得到执行。
+
+![](https://p2.ssl.qhimg.com/t0101e0cf5dfc00c9ec.png)
+
+####  Example2:inscount
+
+分析notepad，统计其运行的所有指令数目，插桩分析结果如图所示。
+
+![](https://p3.ssl.qhimg.com/t01af68180e0ca38626.png)
+
+####  Example3:countcalls
+
+countcalls 用来分析程序运行时的跳转指令信息，下图展示了notepad的执行过程中的直接call指令、间接call指令和ret返回指令的数量统计。
+
+![](https://p4.ssl.qhimg.com/t01c7c2e0197cb31086.png)
+
+####  Example4:bbsize
+
+bbsize用于分析程序运行时的基本块信息，如下图所示，信息包括基本块总数、最大基本块指令数、平均指令数。
+
+![](https://p3.ssl.qhimg.com/t01cc9640e6464445fb.png)
+
+## 0x02 drstrace的实现与源码剖析
+
+###  drstrace简介
+
+drstrace是基于DynamoRIO实现的windows平台系统调用跟踪工具，利用Dr.Memory框架来监视目标应用程序所执行的系统调用信息，在官方文件中包含有其源码以及已编译好的二进制插件。
+
+###  测试分析
+
+执行命令`drrun.exe -t drstrace -- notepad.exe`对记事本程序进行分析，写入一串字符串 **AAAAA….**
+并保存到文件 **This is TestFile.txt** 中，如下图所示，跟踪结果将记录在
+**drstrace.notepad.exe.06648.0000.log** 日志文件中。
+
+![](https://p5.ssl.qhimg.com/t012c93df8ba6c4378c.png)
+
+打开日志文件，观察到如下所示的结果片段，从结果中可以观察到，drstrace成功监控到文件的创建和写入操作，并捕获到了相应系统调用的参数信息。
+
+![](https://p3.ssl.qhimg.com/t01f9eb3d3732aeedaf.png)
+
+![](https://p1.ssl.qhimg.com/t01a0d62322f1d8ac22.png)
+
+###  源码剖析
+
+下面结合drstrace的源码（`drstrace.c`），对其实现流程进行剖析，完整代码可在DynamoRIO开发包中找到，这里重点对其主要流程和关键环节进行剖析。
+
+首先，在主函数中完成初始化工作以及各事件的回调函数的注册。
+
+    
+    
+    //完成相关初始化工作
+    drsym_init(0);
+    drmgr_init();
+    drx_init();
+    if (drsys_init(id, &ops) != DRMF_SUCCESS)
+       ASSERT(false, "drsys failed to init");
+    
+    dr_register_exit_event(exit_event);//注册应用程序退出事件的回调函数
+    dr_register_filter_syscall_event(event_filter_syscall);//注册系统调用事件的过滤函数
+    drmgr_register_pre_syscall_event(event_pre_syscall);//注册系统调用事件前的回调函数
+    drmgr_register_post_syscall_event(event_post_syscall);//注册系统调用事件后的回调函数
+    
+
+对于`dr_register_filter_syscall_event`函数的声明如下，官方文档中对此函数的解释为：注册系统调用事件的过滤函数，DynamoRIO会调用该过滤函数来决定是否执行执后续分析，只有此函数返回真时，`event_pre_syscall`和`event_pre_syscall`才会得到执行。此处`event_filter_syscall`函数直接返回`true`表明拦截所有系统调用。大家在自行开发分析插件时，可合理利用此函数，实现更高效的分析。
+
+    
+    
+    void dr_register_filter_syscall_event(bool (*func)(void *drcontext, int sysnum));
+    
+    static bool event_filter_syscall(void *drcontext, int sysnum)
+    {
+        return true; /* intercept everything */
+    }
+    
+
+函数`drmgr_register_pre_syscall_event`注册了在每一次系统调用事件前（即系统调用入口处）执行的回调函数`event_pre_syscall`，此函数原型如下，其整体流程如下：
+
+  1. 给出了相关变量的声明，包括`drsys_syscall_t`结构体等，
+  2. 调用`drsys_cur_syscall`函数，根据当前上下文状态`drcontext`来获取当前系统调用信息
+  3. 调用`drsys_syscall_name`函数，获取当前系统调用的名称信息
+  4. 调用`drsys_syscall_is_known`函数，判断当前的系统调用是否为已知
+  5. 调用`drsys_iterate_args`函数，获取当前系统调用的参数信息
+
+    
+    
+    static bool
+    event_pre_syscall(void *drcontext, int sysnum)
+    {
+        //声明相关变量
+        drsys_syscall_t *syscall;
+        bool known;
+        drsys_param_type_t ret_type;
+        const char *name;
+        drmf_status_t res;
+        buf_info_t buf;
+        buf.sofar = 0;
+    
+        if (drsys_cur_syscall(drcontext, &syscall) != DRMF_SUCCESS)//获取当前系统调用信息
+            ASSERT(false, "drsys_cur_syscall failed");
+    
+        if (drsys_syscall_name(syscall, &name) != DRMF_SUCCESS)//获取当前系统调用名称
+            ASSERT(false, "drsys_syscall_name failed");
+    
+        if (drsys_syscall_is_known(syscall, &known) != DRMF_SUCCESS)//判断当前系统调用是否为已知
+            ASSERT(false, "failed to find whether known");
+    
+        OUTPUT(&buf, "%s%sn", name, known ? "" : " (details not all known)");
+    
+        res = drsys_iterate_args(drcontext, drsys_iter_arg_cb, &buf);//获取系统调用参数信息
+        if (res != DRMF_SUCCESS && res != DRMF_ERROR_DETAILS_UNKNOWN)
+            ASSERT(false, "drsys_iterate_args failed pre-syscall");
+    
+        /* Flush prior to potentially waiting in the kernel */
+        FLUSH_BUFFER(outf, buf.buf, buf.sofar);
+    
+        return true;
+    }
+    
+
+函数`drmgr_register_post_syscall_event`注册了每一次系统调用事件后的回调函数`event_post_syscall`，其完整函数代码如下，整体执行流程为：
+
+  1. 声明所需变量
+  2. 函数`drsys_cur_syscall`获取当前系统调用信息
+  3. 函数`drsys_cur_syscall_result`获取当前系统调用的结果
+  4. 函数`drsys_iterate_args`获取参数信息
+
+    
+    
+    static void
+    event_post_syscall(void *drcontext, int sysnum)
+    {
+        //声明变量信息
+        drsys_syscall_t *syscall;
+        bool success = false;
+        uint errno;
+        drmf_status_t res;
+        buf_info_t buf;
+        buf.sofar = 0;
+    
+        if (drsys_cur_syscall(drcontext, &syscall) != DRMF_SUCCESS)//获取当前系统调用信息
+            ASSERT(false, "drsys_cur_syscall failed");
+    
+        if (drsys_cur_syscall_result(drcontext, &success, NULL, &errno) != DRMF_SUCCESS)
+            //获取当前系统调用的结果
+            ASSERT(false, "drsys_cur_syscall_result failed");
+    
+        if (success)
+            OUTPUT(&buf, "    succeeded =>n");
+        else
+            OUTPUT(&buf, "    failed (error="IF_WINDOWS_ELSE(PIFX, "%d")") =>n", errno);
+        res = drsys_iterate_args(drcontext, drsys_iter_arg_cb, &buf);//获取系统调用参数信息
+        if (res != DRMF_SUCCESS && res != DRMF_ERROR_DETAILS_UNKNOWN)
+            ASSERT(false, "drsys_iterate_args failed post-syscall");
+        FLUSH_BUFFER(outf, buf.buf, buf.sofar);
+    }
+    
+
+drstrace的主干代码流程如上所述，除此之外，在源码中还包括`print_arg`,`print_structure`,`safe_read_field`等与参数打印相关的自定义函数，主要思想是根据参数的类型在程序动态运行时读取系统内存数据，此处不再赘述，感兴趣的同学可以到源码中学习阅读。
+
+**注：** 默认情况下，drstrace跟踪所有子进程，可以通过参数`-no_follow_children`来修改
+
+## 0x03 drltrace的实现与源码剖析
+
+###  drltrace简介
+
+drltrace是DynamoRIO实现的针对库函数调用的跟踪工具，在官方资料中同样能够找到其源码`drltrace.c`以及二进制文件。
+
+###  测试分析
+
+直接执行如下图命令，对测试程序 **WriteFileEx1.exe** 进行分析。
+
+其中参数`only_from_app`表示只记录应用程序本身所调用的库函数信息，而不记录函数库彼此之间所调用的信息。（此参数具有实际的工作意义，因为在日常的逆向分析工作中，我们确实更多的关心应用程序本身调用了哪些库函数，从而根据API序列分析其行为，而并不关心一个库函数内部又调用的其他库函数信息，这种冗余信息会增添无谓的工作量）
+
+参数`print_ret_addr`表示打印出函数在应用程序中的返回地址。
+
+![](https://p5.ssl.qhimg.com/t01b3f4dfa4e07e0127.png)
+
+在结果文件中，成功监测到对 **kernel32.dll**
+的`CreateFileA->WriteFile->CloseHandle`的库函数调用序列，并提取了对应的函数参数信息和函数返回地址。
+
+![](https://p4.ssl.qhimg.com/t01c2206e5bb79882c1.png)
+
+###  源码剖析
+
+drltrace源码的主干部分同样是先完成初始化和事件回调函数注册工作，其中通过`dr_get_main_module()`函数获取主程序
+**WriteFileEx1.exe** 的模块信息，保存其起始地址 **exe_start**
+。然后进行回调函数的注册，这里最重要的一部分是通过`drmgr_register_module_load_event`函数注册的`event_module_load`回调函数，在每一个模块加载的时候都会执行此函数。
+
+    
+    
+    DR_EXPORT void
+    dr_client_main(client_id_t id, int argc, const char *argv[])
+    {
+        //相关初始化工作
+        module_data_t *exe;
+        ...
+        drmgr_init();
+        drwrap_init();
+        drx_init();
+        ...
+        //获取主应用程序的信息
+        exe = dr_get_main_module();
+        if (exe != NULL)
+            exe_start = exe->start;
+        dr_free_module_data(exe);
+    
+        dr_register_exit_event(event_exit);//注册程序退出事件的回调函数
+        drmgr_register_module_load_event(event_module_load);//注册模块加载事件的回调函数
+        drmgr_register_module_unload_event(event_module_unload);//注册模块卸载事件的回调函数
+        open_log_file();//打开日志文件进行记录
+    }
+    
+
+`event_module_load`回调函数的原型如下，其主要功能就是对每一个需要分析的模块执行`iterate_exports`函数；而`iterate_exports`的原型如下，其主要功能是通过`dr_symbol_export_iterator_start`、`dr_symbol_export_iterator_hasnext`和`dr_symbol_export_iterator_next`函数的配合，遍历模块内的每一个导出函数，对满足条件的导出函数执行`drwrap_wrap_ex`。
+
+    
+    
+    static void
+    event_module_load(void *drcontext, const module_data_t *info, bool loaded)
+    {
+        if (info->start != exe_start && library_matches_filter(info))
+            iterate_exports(info, true/*add*/);
+    }
+    static void
+    iterate_exports(const module_data_t *info, bool add)
+    {
+        dr_symbol_export_iterator_t *exp_iter =
+            dr_symbol_export_iterator_start(info->handle);
+        while (dr_symbol_export_iterator_hasnext(exp_iter)) {
+            dr_symbol_export_t *sym = dr_symbol_export_iterator_next(exp_iter);
+            app_pc func = NULL;
+            if (sym->is_code)
+                func = sym->addr;
+            if (op_ignore_underscore.get_value() && strstr(sym->name, "_") == sym->name)
+                func = NULL;
+            if (func != NULL) {
+                if (add) {
+                    ...                
+                        drwrap_wrap_ex(func, lib_entry, NULL, (void *) sym->name, 0);
+                    ...
+                } 
+                ...
+            }
+        }
+        dr_symbol_export_iterator_stop(exp_iter);
+    }
+    
+
+函数`drwrap_wrap_ex`的功能是对每一个满足条件的函数 **func** ，在其函数调用的入口处调用开发者自定义的分析函数
+**lib_entry** ，这里dltrace的 **lib_entry** 分析函数如下，其整体流程如下：
+
+  1. 完成相关变量的初始化工作
+  2. 通过`drwrap_get_drcontext`函数来获取，此次函数调用的上下文状态信息
+  3. 在仅监控主应用程序的条件下：首先获取函数的返回地址 **retaddr** ，然后判断返回地址是否位于主应用程序 **WriteFileEx1.exe** 的地址空间
+  4. 最后打印出参数信息和返回地址的信息。
+
+    
+    
+    static void
+    lib_entry(void *wrapcxt, INOUT void **user_data)
+    {
+        //初始化相关变量
+        const char *name = (const char *) *user_data;
+        const char *modname = NULL;
+        app_pc func = drwrap_get_func(wrapcxt);
+        module_data_t *mod;
+        thread_id_t tid;
+        uint mod_id;
+        app_pc mod_start, ret_addr;
+        drcovlib_status_t res;
+        //获取当前上下文信息
+        void *drcontext = drwrap_get_drcontext(wrapcxt);
+    
+        if (op_only_from_app.get_value()) {//仅记录主应用程序的库函数调用信息
+            app_pc retaddr =  NULL;
+            DR_TRY_EXCEPT(drcontext, {
+                retaddr = drwrap_get_retaddr(wrapcxt);//获取函数返回地址
+            }, { /* EXCEPT */
+                retaddr = NULL;
+            });
+            if (retaddr != NULL) {
+                mod = dr_lookup_module(retaddr);
+                if (mod != NULL) {//通过函数的返回地址判断函数的调用是否来自主应用程序
+                    bool from_exe = (mod->start == exe_start);
+                    dr_free_module_data(mod);
+                    if (!from_exe)
+                        return;
+                }
+            } else { return; }
+        }
+        ...
+        print_symbolic_args(name, wrapcxt, func); //打印参数信息
+        //打印函数返回地址信息
+        if (op_print_ret_addr.get_value()) {
+            ret_addr = drwrap_get_retaddr(wrapcxt);
+            res = drmodtrack_lookup(drcontext, ret_addr, &mod_id, &mod_start);
+            if (res == DRCOVLIB_SUCCESS) {
+                dr_fprintf(outf,
+                           op_print_ret_addr.get_value() ?
+                           " and return to module id:%d, offset:" PIFX : "",
+                           mod_id, ret_addr - mod_start);
+            }
+        }
+        ...
+    }
+    
+
+这里需要注意的是打印参数的`print_symbolic_args`函数，在此处其采用三种参数打印方式：
+
+  1. 通过`drsyscall`函数来获取已知库函数的参数类型，并以此为依据提取运行时参数信息
+  2. 在自定义的参数配置文件中找寻由用户定义的参数类型，然后据此提取运行时参数信息
+  3. 如果上述两步都无法找到参数类型信息，则在动态监控时，此参数标记为`type=<unknown>*`
+
+这里提到参数配置文件是指在drltrace工具包中的 **drltrace.config**
+文件，其内部包含了常见的函数参数信息，用于指导动态运行时的参数提取，其文件内容如下，后续开发者可以通过这个配置文件来补充函数和参数类型，从而丰富动态记录的内容。
+
+![](https://p2.ssl.qhimg.com/t01c879712f7c2f339f.png)
+
+## 结束语
+
+以上介绍了drstrace和drltrace的工具使用和源码实现，而DynamoRIO还有更丰富的功能等待大家去挖掘。
+
+除了DynamoRIO外，Pin是另外一种流行的动态二进制插桩工具，两者相比各有优势。从应用的角度而言，本人的总体感觉是DynamoRIO效率更高，而Pin的稳定性更好，而且编程接口更容易掌握，感兴趣的同学可以尝试学习运用一下。
+
+盼与大家共同学习提高。
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **_vige** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/169257](/post/id/169257)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [DynamoRIO](/tag/DynamoRIO)
+  * [strace](/tag/strace)
+  * [ltrace](/tag/ltrace)
+
+ **+1** __6赞
+
+ __收藏
+
+![](https://tvax2.sinaimg.cn/crop.0.0.512.512.180/ac111bb8ly8fwun6z07nbj20e80e8aag.jpg)
+_vige
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

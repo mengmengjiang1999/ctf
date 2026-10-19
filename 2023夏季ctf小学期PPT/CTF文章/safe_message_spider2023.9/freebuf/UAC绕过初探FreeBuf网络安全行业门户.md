@@ -1,0 +1,108 @@
+**笔者最近在学习UAC绕过的技术，通过对其他师傅的文章进行总结，成功利用DLL劫持绕过了UAC，并且可以以High Mandatory
+Level来启动进程。在此记录下学习过程，笔者也是初次接触，若各位师傅发现文章中的错误，望各位师傅斧正。**
+
+## 一、基础知识简述
+
+UAC：
+
+用户帐户控制（User Account Control，简写作UA
+C)是[微软](https://baike.baidu.com/item/%E5%BE%AE%E8%BD%AF)公司在其[Windows
+Vista](https://baike.baidu.com/item/Windows%20Vista)及更高版本操作系统中采用的一种控制机制，保护系统进行不必要的更改，提升操作系统的稳定性和安全性。
+
+管理员一般以较小的权限去运行管理员任务，低权限的管理员被称为被保护的管理员，这些管理员在执行管理员任务时，可以通过用户交互界面来提升权限去执行任务。
+
+![](https://image.3001.net/images/20191011/1570761791_5d9fec3f57b6c.png!small)
+
+普通用户执行管理员任务时会被要求提升到管理员权限，再去执行任务
+
+![](https://image.3001.net/images/20191011/1570761806_5d9fec4eafd1f.png!small)
+
+DLL文件：动态链接库文件，多数可执行文件并不是一个完整的文件，它被分为多个DLL文件，大多数EXE程序执行的时候均会调用DLL文件。
+
+当程序运行时调用DLL文件的过程：
+
+> 1.程序所在目录
+>
+> 2.系统目录即 SYSTEM32 目录
+>
+> 3.16位系统目录即 SYSTEM 目录
+>
+> 4.Windows目录
+>
+> 5.加载 DLL 时所在的当前目录
+>
+> 6.PATH环境变量中列出的目录
+
+可执行程序在调用DLL文件的过程中会在高优先级目录中查找（首先查找程序所在目录），当无法找到时会依次在较低优先级的目录中查找，当程序在高优先级的目录中找到所需的DLL文件后，则不会在低优先级的目录中查找。
+
+可执行程序的提权执行：
+
+一些可执行文件在执行时会自动提权运行，而且不会触发UAC机制。这些应用程序清单中都有<autoElevate>元素。
+
+如何查看可执行文件清单中是否有<autoElevate>元素：
+
+> 1、findstr/C:"<autoElevate>true" xxx.exe
+>
+> 2、使用sigcheck(微软数字签名工具)
+
+附上工具链接：
+
+> <https://docs.microsoft.com/zh-cn/sysinternals/downloads/sigcheck>
+
+这里使用一种可自动提权运行的可执行文件，且其调用dll的目录可以被写入恶意的dll文件，从而进行dll劫持：
+
+C:\Windows\SysWOW64\SystemPropertiesAdvanced.exe
+
+## 二、通过DLL劫持成功绕过UAC机制
+
+这里使用的是C:\Windows\SysWOW64\SystemPropertiesAdvanced.exe文件，进行dll劫持从而绕过UAC机制
+
+1、首先查看文件清单是否有<autoElevate>元素，可以默认提权执行
+
+![](https://image.3001.net/images/20191011/1570761873_5d9fec91d4b46.png!small)
+
+![](https://image.3001.net/images/20191011/1570761878_5d9fec96ce230.png!small)
+
+2、通过process monitor工具来查看SystemPropertiesAdvanced.exe执行时调用dll文件的过程
+
+添加过滤器方便查找dll的调用过程：
+
+![](https://image.3001.net/images/20191011/1570761896_5d9feca814c13.png!small)
+
+![](https://image.3001.net/images/20191011/1570761905_5d9fecb1aef4c.png!small)
+
+Windowsapps目录是win10应用商店的缓存/下载应用程序的目录，允许用户对其进行写操作，可以通过构造恶意的DLL文件并将其放入，进行DLL劫持并绕过UAC机制
+
+3、通过msfvenom构造payloads，将构造好的srrstr.dll放入到windowssapps目录下，通过构造的CMD.exe来绕过UAC
+
+![](https://image.3001.net/images/20191011/1570761912_5d9fecb8ef07c.png!small)
+
+![](https://image.3001.net/images/20191011/1570761920_5d9fecc010c27.png!small)
+
+4、再次运行SystemPropertiesAdvanced.exe，查看DLL劫持效果，发现成功绕过UAC机制（备注：这里在运行时没有进行二次调用，无法正常运行原来的程序，可能会影响被劫持程序的稳定性，这里的恶意DLL仅仅弹出CMD，就算被劫持的程序崩掉，CMD已经成功弹出，对实验结果影响不大），新的CMD不会触发UAC提示可以用regedit命令进行测试：
+
+![](https://image.3001.net/images/20191011/1570761926_5d9fecc67e6ec.png!small)
+
+![](https://image.3001.net/images/20191011/1570761930_5d9fecca9d38e.png!small)
+
+可以看到，此时的cmd.exe具有高完整性级别：
+
+![](https://image.3001.net/images/20191011/1570761934_5d9fecceaac55.png!small)
+
+除此以外还可以通过同样的方式由DLL劫持来创建会话，效果如下：
+
+![](https://image.3001.net/images/20191011/1570761939_5d9fecd357a38.png!small)
+
+## 参考资料链接：
+
+> <https://egre55.github.io/system-properties-uac-bypass/>
+>
+> <https://blog.csdn.net/vlily/article/details/47338327>
+>
+>
+> <https://payloads.online/archivers/2018-06-09/1#0x02-%E5%AF%BB%E6%89%BE%E8%BF%87%E7%A8%8B>
+>
+> <https://docs.microsoft.com/zh-cn/windows/win32/uxguide/winenv-uac>
+
+***本文作者：sssvvf，转载请注明来自FreeBuf.COM**
+

@@ -1,0 +1,92 @@
+![](https://image.3001.net/images/20200223/1582465413_5e52818554833.png!small)
+
+**在这篇文章中，我们将教大家如何利用Windows系统中的一个功能来绕过Windows
+10的用户组策略。虽然绕过用户组策略并不意味着就是“世界末日”了，但是这毕竟是一种违规的危险操作，而且根据不同的用户组策略配置，这种绕过行为也会产生不同的安全后果。目前，我们已在Windows
+7和Windows 10 64位企业版（10.18363
+1909）中进行了测试，而且利用过程不需要管理员权限。这种技术跟系统在用户登录时对用户账号注册表的加载过程有关，因此我们首先需要了解Windows账号的登录过程。**
+
+## 用户登录
+
+当用户登录一个Windows账号时会发生很多事情，其中一个就是为该账号加载用户定义的设置。这些设置是从用户的注册表配置单元中加载的，也就是HKEY_CURRENT_USER下的子项。这个注册表项中包含的都是操作系统以及各种已安装应用程序中与用户相关的配置。这个注册表项其实是存储在文件系统中的一个文件，路径为“%USERPROFILE%\NTUSER.dat”。当用户登录时，ProfSvc（用户属性服务）会定位这个文件，并调用[
+_NtLoadKeyEx_](http://undocumented.ntinternals.net/index.html?page=UserMode%2FUndocumented%20Functions%2FNT%20Objects%2FKey%2FNtLoadKey.html)来加载注册表配置单元。如果用户想要在登录会话期间修改注册表键，则必须通过相应的微软API来实现，而且还会检测相应注册表键的修改权限。
+
+## 问题分析
+
+如果我们在启用了”boot logging”功能之后运行ProcMon，就会发现目标设备的ProcMon服务有一个非常有趣的行为：
+
+![](https://image.3001.net/images/20200223/1582465452_5e5281ac9d6d5.png!small)
+
+ProfSvc在加载“%USERPROFILE%\NTUSER.dat”之前，只会检测
+“%USERPROFILE%\NTUSER.man”文件是否存在。那么，“NTUSER.man”是什么呢？它其实跟“NTUSER.dat”类似，但它主要针对的是“[
+_强制配置文件_](https://docs.microsoft.com/en-us/windows/client-management/mandatory-user-profile)”。因为非管理员账号拥有“%USERPROFILE%”路径的写入权限，因此我们可以通过自己构造的“NTUSER.man”来实现我们的目的。
+
+## 绕过用户组策略
+
+[ _组策略_](https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/hh831791\(v%3Dws.11\))是Windows系统提供的一种功能，它允许域管理员在主机级别或用户级别配置用户组策略。针对用户策略，相关设置会被在用户登录时推送至一个域用户的账号中，并存储在“%USERPROFILE%\NTUSER.dat”中。这些用户策略对域用户只读，以避免被篡改。
+
+![](https://image.3001.net/images/20200223/1582465497_5e5281d9c25c4.png!small)
+
+因为我们可以直接替换整个相关的注册表项，所以就可以绕过或者修改“被保护的”强制用户组策略了。
+
+为了实现这个目的，我们只需要做以下几件事情：
+
+> 1、制作我们自己的用户相关注册表项-“NTUSER.man”；
+>
+> 2、移除或替换注册表项中相应策略的键值；
+>
+> 3、将该文件存放到目标主机的“%USERPROFILE%”目录中；
+>
+> 4、注销并重新登录；
+
+## 组策略规则更新与覆盖修改
+
+如果你了解Windows的组策略，你就会知道系统在用户登录时会重新同步并应用当前已修改的组策略，但此时我们修改过的策略很可能会被覆盖掉。虽然我们可以通过将“SYSTEM”从构造注册表键值的ACL中移除来避免这种情况，但是Windows组策略客户端-GpSvc将会检测到这种操作，并在用户登录时修复ACL以便获取到写入权限，然后重写组策略。
+
+通过分析GpSvc对这种ACL的处理过程，我发现当GpSvc在检测到注册表中的组策略键值时，会调用内部函数ForceRegCreateKeyEx，这个函数会尝试利用写入权限来打开我们的组策略键值，如果失败，则会调用AddPolicyPermissionOnKey来获取该注册表项的相应权限，以恢复“SYSTEM”在该表项上的写入权限，并重新打开它然后覆盖组策略。
+
+![](https://image.3001.net/images/20200223/1582465542_5e528206bed3a.png!small)
+
+通过分析AddPolicyPermissionOnKey函数，我们发现该函数会修改注册表子项的ACL并添加“SYSTEM”角色，不过并不会删除已有的ACL项。这样的话一切就很明朗了，整个利用过程如下：
+
+![](https://image.3001.net/images/20200223/1582465725_5e5282bd42873.gif!small)
+
+上图中左侧为域控制器，右侧为该控制器所连接的主机。我们可以看到，域控制器在用户组策略中设置了“Remove Task
+Manager”规则，并且应用到了我们的域用户主机中。接下来，当我们在“%USERPROFILE%”目录中存放了特制的“NTUSER.man”文件后，用户的注销或登录操作将不会再让这个规则生效。
+
+## 漏洞利用PoC
+
+注意事项：漏洞利用PoC可能会损坏你现有的Windows账号，请不要在拥有管理员权限的域主机中执行。除此之外，我们也不建议大家在个人PC上测试，而且不要使用Administrator账号测试，因为测试完成后我们需要使用该账号来删除“NTUSER.man”文件。
+
+### 第一步：构造NTUSER.man
+
+1、准备一台测试用的Windwos主机，然后拿到一个拥有管理员权限的账号，把任意用户对应的“%USERPROFILE%\NTUSER.dat”文件拷贝到另一个目录中。
+
+2、在Administrator账号中打开注册表编辑器（regedit.exe），将注册表项“HKEY_LOCAL_MACHIN”备份好，然后点击“文件”-“加载配置单元”。
+
+3、打开新加载的注册表项，在响应的策略注册表项路径下清除或者添加任意策略。比如说，很多的用户策略会存放在“\Software\Microsoft\Windows\CurrentVersion\Policies\”路径下。
+
+4、在注册表配置单元的根节点，将权限修改为“Everyone”，即提供完整权限，并应用到该表项下的所有子项。
+
+5、针对我们希望覆盖或添加的“策略”，我们需要找到与之相关的子键，这些子键可能不会都在同一个表项下。比如，在“Remove Task
+Manager”的场景中，定义该策略的值位于“\Software\Microsoft\Windows\CurrentVersion\Policies\System”键中，因此我们需要在“System”子键中添加一个“DENY”规则，阻止SYSTEM获取该键的“写入/创建”权限，确保GpSvc无法执行覆盖操作。
+
+### 第二步：存放NTUSER.man
+
+1、接下来，我们要确保已创建好备份的拥有管理员权限的账号。
+
+2、将构造的注册表配置单元拷贝到目标主机的“%USERPROFILE%\NTUSER.man”路径下，然后覆盖用户组策略。
+
+3、注销并重新登录，现在所有的用户组策略都已经被我们在“NTUSER.man”中定义的配置给替换掉了。
+
+### 第三步：删除NTUSER.man
+
+测试完成后，我们需要注销当前账户，然后使用Administrator账号来删除用户配置目录中的“NTUSER.man”文件。
+
+## 总结
+
+我们在发现了该[
+_问题_](https://www.tenable.com/security/research/tra-2020-08)后，便立刻将信息上报给了[
+_微软官方_](https://static.tenable.com/research/tenable-vulnerability-disclosure-policy.pdf)，但微软方面认为这是一种“预期”的行为，并不属于安全漏洞的范畴。不过我们认为，虽然这并非一个非常严重的安全问题，但这种允许他人随意修改用户组策略的情况，早就已经超出了所谓“预期”的安全边界了。
+
+ *** 参考来源：[ _medium_](https://medium.com/tenable-techblog/bypass-windows-10-user-group-policy-and-more-with-this-one-weird-trick-552d4bc5cc1b)，FB小编Alpha_h4ck编译，转载请注明来自FreeBuf.COM**
+

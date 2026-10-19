@@ -1,0 +1,61 @@
+***本文中涉及到的相关漏洞已报送厂商并得到修复，本文仅限技术研究与讨论，严禁用于非法用途，否则产生的一切后果自行承担。**
+
+![1_YxD3C1C9qLsIGG4pqLv7ig.jpeg](https://image.3001.net/images/20180309/15205639523134.jpeg!small)
+
+**本文讲述了我在Facebook上发现的一个任意账户密码重置漏洞，利用该漏洞无需用户交互过程，就可以黑掉任何Facebook账户。总体来说，该漏洞非常简单，但影响和威胁严重度较高，最终我获得了Facebook方面奖励的$15000美元赏金。**
+
+## 漏洞情况
+
+该漏洞原理在于，我可以获取任意其他用户的密码重置权限，通过简单地密码重置操作，我就能获取到其他账户的消息、FB支付区域的借记卡信息、个人照片等其它隐私信息。最终，Facebook确认了该漏洞，并作出了迅速的修复措施。
+
+## 漏洞分析
+
+当Facebook用户忘记了登录密码之后，有一种方式就是，在以下'找回账户'的链接内输入个人手机号或注册邮箱来重置密码。
+
+>
+> [https://www.facebook.com/login/identify?ctx=recover&lwv=110](https://www.facebook.com/login/identify?ctx=recover&lwv=110)
+
+完成输入之后，Facebook会向用户手机或邮箱发送一个6位数验证代码，然后用户根据提示输入该6位数验证码，最后实现密码重置。
+
+一开始，我非常笨地去尝试暴力破解[www.facebook.com](http://www.facebook.com)上生成的这个6位数验证码，但在10多次无效测试后，我自己的账户就被锁定了，擦。
+
+之后，我就在beta.facebook.com和mbasic.beta.facebook.com上继续捣鼓，有意思的是，这两个Facebook的子域名站点在密码重置服务中，竟然未设置限制登录的尝试次数！
+
+## 漏洞测试-POC
+
+我想，那就针对这个发向账户手机或邮箱的6位数验证码做个暴力测试吧。按照Facebook的漏洞披露策略，测试过程不能对他人账户造成影响，于是呢，过了一会，我就用我自己的Facebook账户来进行测试。
+
+测试过程大致是这样的，在以下账户找回链接内，输入目标测试账户的注册手机号或邮箱地址：
+
+>
+> [https://beta.facebook.com/login/identify?ctx=recover&lwv=110](https://beta.facebook.com/login/identify?ctx=recover&lwv=110)
+>
+>
+> [https://mbasic.beta.facebook.com/login/identify?ctx=recover&lwv=110](https://mbasic.beta.facebook.com/login/identify?ctx=recover&lwv=110)
+
+输入之后，点'搜索'，链接会跳转到一个6位数验证码的确认页面，此时，拉出BurpSuite，对该页面中要输入的6位数验证码做暴力猜解。非常让我意想不到的是，在BurpSuite神器的助力下，在合理范围内数字组合和稍许时间后，竟然能有效发现目标测试账户的这个6位数验证码！
+
+最终，凭着这个6位数验证码就能有效重置目标账户密码，有效登录目标账户，实现‘找回账户’目的，当然也就成功地‘黑掉’了目标账户，是不是很简单也很厉害！废话不多说，一切尽在PoC中：
+
+## 视频演示
+
+## 存在漏洞的请求端
+
+> POST /recover/as/code/ HTTP/1.1
+>
+> Host: beta.facebook.com
+>
+> lsd=AVoywo13&n=XXXXX
+
+可对上面这个“n”参数涉及的6位XXXXX验证码进行暴力猜解，能有效发现发往测试目标账户的6位验证码，从而实现对目标账户的密码重置和登录。
+
+## 漏洞披露进程
+
+> 2016年2月22日 向Facebook安全团队上报漏洞
+>
+> 2016年2月23日 Facebook方面确认漏洞并完成快速修复
+>
+> 2016年3月2日 Facebook向我奖励了$15,000美元赏金
+
+ ***参考来源：[freecodecamp](https://medium.freecodecamp.org/responsible-disclosure-how-i-could-have-hacked-all-facebook-accounts-f47c0252ae4d)，FreeBuf小编clouds编译，转载请注明来自FreeBuf.COM**  
+

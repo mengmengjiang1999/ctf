@@ -1,0 +1,243 @@
+# 背景
+
+借助Yakit这个集成化工具平台的端口扫描相关能力，实现了准确快速且全面的端口扫描。并将过程在这里分享一下，望在诸君用到之时能有所帮助。
+
+# 资产膨胀解决
+
+我们在端口扫描的过程中，经常会遇到某些防火墙在单个ip上开放成百上千个端口，对扫描系统造成不小的压力，因此，在端口扫描工具设计之初就需要解决端口资产膨胀的问题。
+
+而我对于这个问题的解决分两步：
+
+1\. 头尾冷门端口阈值
+
+2\. 常见端口开放数量阈值
+
+第一步是对头尾冷门端口进行扫描，我选取的是1-5, 65530-65535。当开放的数量大于配置的阈值后，默认是存在防火墙端口膨胀情况。
+
+    
+    
+    //扫描头尾，添加端口开放ip到排除名单
+            println("\n--扫描头尾端口开放大于edgeAlive为排除项")
+            exsyn := []string{}
+    //内网ip
+            if ipPriv != nil{
+                    res, err := synscan.Scan(ipPriv, "1-5,65530-65535",synscan.excludeHosts(exip),synscan.wait(3))
+                    die(err)
+    
+                    for result := range res {
+                            exsyn = append(exsyn, result.Host)
+                    }
+                    
+            }
+    //外网ip
+            if ipPub != nil{
+                    res, err := synscan.Scan(ipPub, "1-5,65530-65535",synscan.excludeHosts(exip),synscan.wait(3))
+                    die(err)
+    
+                    for result := range res {
+                            exsyn = append(exsyn, result.Host)
+                    }
+                    
+            }
+
+第二步是对常见端口进行syn快速扫描。经过多次测试后，我选取了35+端口组成了top20，当top20开放数量大于配置阈值后，默认是存在防火墙端口膨胀情况。
+
+    
+    
+    //syn扫描top20开放数量大于等于maxAlive添加到新排除项
+            println("\n--扫描top20端口开放数量大于maxAlive为排除项")
+    
+            newh := 0
+            exsyn := []string{}
+            if ipPriv != nil{
+                    res, err := synscan.Scan(ipPriv, t20, synscan.excludeHosts(newexip),synscan.excludePorts(exPorts),synscan.wait(3))
+                    die(err)
+                    for result := range res {
+                            exsyn = append(exsyn,result.Host)
+                    }
+            }
+            if ipPub != nil{
+                    res, err := synscan.Scan(ipPub, t20, synscan.excludeHosts(newexip),synscan.excludePorts(exPorts),synscan.wait(3))
+                    die(err)
+                    exports := 0
+                    for result := range res {
+                            exsyn = append(exsyn,result.Host)
+                    }
+    
+            }
+
+当初始化扫描匹配到了上述阈值后仅进行Top20 TCP扫描以减小端口膨胀造成的压力。
+
+# 准确是第一目标
+
+端口扫描过程中，准确肯定是扫描器的追求之一，尤其是对于Top端口来说，为了达到不漏掉关键端口，我对Top20,Top100分别进行TCP
+connect扫描。速度较SYN扫描来说偏慢，但是准确度较高。
+
+    
+    
+    //top20 tcp扫描
+            println("\n--top20 tcp扫描")
+            res, err := servicescan.Scan(ips,t20,
+                    servicescan.active(true),
+                    //servicescan.all(),
+                    servicescan.web(),
+                    servicescan.proto("TCP"),
+                    servicescan.concurrent(cc),
+                    servicescan.excludeHosts(exip),
+                    servicescan.excludePorts(exPorts))
+            die(err)
+    
+    
+    //top100 tcp扫描
+            println("\n--top100 tcp扫描")
+            res, err := servicescan.Scan(ips,t100,
+                    servicescan.active(true),
+                    //servicescan.all(),
+                    servicescan.web(),
+                    servicescan.proto("TCP"),
+                    servicescan.concurrent(cc),
+                    servicescan.excludeHosts(newexip),
+                    servicescan.excludePorts(t20+","+exPorts))
+            die(err)
+
+# 快而全也要一手抓
+
+快而全则是端口扫描的另一个追求，在较快的速度下发现开放的冷门端口。
+
+针对top1000与全端口我采用了SYN+TCP的扫描模式，先使用SYN进行端口开放情况扫描,再使用TCP进行端口指纹识别。
+
+    
+    
+    //top1000 扫描
+            println("\n--top1000 SYN扫描")
+            openResults := []
+            if ipPriv != nil{
+                    res, err := synscan.Scan(ipPriv, t1000,
+                            synscan.excludeHosts(newexip),
+                            synscan.wait(5),
+                            synscan.excludePorts(t100+","+exPorts))
+                    die(err)
+    
+                    for result := range res {
+                            openResults = append(openResults, result)
+                            //result.Show()
+                    }
+            }
+            if ipPub != nil{
+                    res, err := synscan.Scan(ipPub, t1000,
+                            synscan.excludeHosts(newexip),
+                            synscan.wait(5),
+                            synscan.excludePorts(t100+","+exPorts))
+                    die(err)
+    
+                    for result := range res {
+                            openResults = append(openResults, result)
+                            //result.Show()
+                    }
+            }
+    
+    
+    
+    println("\n--top1000 tcp扫描")
+            res, err := servicescan.ScanFromSynResult(openResults,
+                    servicescan.active(true),
+                    //servicescan.all(),
+                    servicescan.web(),
+                    servicescan.proto("TCP"),
+                    servicescan.concurrent(cc))
+            die(err)
+
+# 命令行参数
+
+扫描器需要足够的可控，所以设置了较多命令行参数，其中包括输入，排除，配置等。
+
+`Usage: ___ ___ ___ | | |\/| | | |__| | | |__ | | | | |/\| | | | | |___ Common
+Usage: yak.exe scan.yak --l ip.txt --xif xip.txt --xpf xports.txt yak.exe
+scan.yak --l ip.txt --xif xip.txt --xpf xports.txt --t 50 yak.exe scan.yak --l
+ip.txt --xif xip.txt --xpf xports.txt --maxAlive 15 --edgeAlive 5 yak.exe
+scan.yak --l ip.txt --xif xip.txt --xpf xports.txt --o output yak.exe scan.yak
+--l ip.txt yak.exe scan.yak --l ip.txt --jf yak.exe scan.yak --l ip.txt --lv
+t1000 yak.exe scan.yak --l ip.txt --lv t1000 --p 1111,18822 yak.exe scan.yak
+--i 127.0.0.1/24 --xif xip.txt yak.exe scan.yak --i 127.0.0.1/24 --x 127.0.0.1
+扫描逻辑: 防止目标膨胀: 头尾扫描 --> top20syn --> 过滤 精确扫描重点端口: top20tcp --> top100tcp 快速扫描:
+top1000syn --> top1000tcp fullsyn --> fulltcp 常用结果提取:
+ipport|service|url|web_title|status_code|ssl_cert [OPTIONS] Flags: -h, --help
+Show help information --i string 扫描ip --l string 扫描ip文件 --o string 输出文件夹,
+默认为result --x string 排除的ip --xif string 排除的ip文件 --xpf string 排除的端口文件 --t int
+扫描tcp并发数, 默认100 --maxAlive int 最多允许top20的开放端口数(不包含), 避免防火墙造成的端口膨胀, 默认10
+--edgeAlive int 最多允许头尾10个端口开放数量(不包含), 避免防火墙造成的端口膨胀, 默认1 --lv string 端口扫描级别:
+full, t20, t100, t1000, none, 默认为full, none仅扫描自定义端口 --jf 跳过膨胀过滤扫描项 --p port
+指定目标端口,不能与--lv full一起使用`
+
+``
+
+# 输出格式
+
+对于端口扫描来说，好的输出格式一定是利于后续处理的。我选择生成三个文件，一个csv两个txt。
+
+csv在常用端口信息的基础上加入https证书信息的获取:
+
+![](https://image.3001.net/images/20221027/1666861354_635a492a9dccee9533796.png!small)
+
+而两个txt是最常用的ip:port 以及url:
+
+![](https://image.3001.net/images/20221027/1666861368_635a49388f3f968a581c4.png!small)
+
+url是在端口识别为http或ssl后才会生成
+
+![](https://image.3001.net/images/20221027/1666861386_635a494a87c8958abbda6.png!small)
+
+# 风险指纹识别
+
+最后，在完成脚本的过程中发现，其实result里是可以轻松获取到http相关的返回值而无需进行再次请求的。那么，为何不把result内的http
+header/body 数据拿出来做一个风险指纹的匹配呢，既不会增加太多扫描时间，又能精确初步定位到一些高风险资产。
+
+在设计中，为了快速进行匹配，我采取的指纹的数据结构为(*map*[string("特征")]string("名称")),
+分别对header与body建立指纹库，在端口扫描识别到为web资产后进行指纹的匹配。
+
+具体核心代码如下：
+
+    
+    
+    //指纹库定义，仅列出两个举例
+    BODY = make(map[string]string)
+    BODY["Error 404--Not Found"] = "Weblogic"
+    BODY["servletContextInitParams"] = "Spring env"
+    
+    HEADER = make(map[string]string)
+    HEADER["deleteMe"] = "Shiro"
+    HEADER["X-Jenkins"] = "Jenkins"
+    
+    //指纹识别函数
+    getFp := func(hd,bd){
+            fp := ""
+            tmp_fp := []string{}
+            for k,v := range HEADER{
+                    if str.Contains(hd, k){
+                            tmp_fp = append(tmp_fp,v)
+                    }
+            }
+            for k,v := range BODY{
+                    if str.Contains(bd, k){
+                            tmp_fp = append(tmp_fp,v)
+                    }
+            }
+            tmp_fp = str.RemoveRepeat(tmp_fp)
+            fp = str.Join(tmp_fp,"|")
+            return fp
+    }
+    
+    
+    //调用函数进行识别（注：result为端口扫描的结果result := range res）
+    fp = ""
+    parsehttp,e := str.ParseStringToHTTPResponse(result.Fingerprint.Banner)
+    if e == nil{
+            hd,_ := http.dumphead(parsehttp)
+            bd := http.GetAllBody(parsehttp)
+            fp = getFp(string(hd),string(bd))
+    }
+
+扫描结果的展示情况如下：
+
+![](https://image.3001.net/images/20221027/1666861437_635a497d6b3e87ba91e39.png!small)
+

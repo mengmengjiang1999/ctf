@@ -1,0 +1,743 @@
+# 【技术分享】Windows下的渗透测试之提权的基本套路（上）
+
+阅读量 **201001**
+
+|评论 **1**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2016-11-05 11:19:53
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章来源：fuzzysecurity
+
+原文地址：<http://www.fuzzysecurity.com/tutorials/16.html>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+**  
+**
+
+****
+
+**翻译：**[ **慕容禽兽**](http://bobao.360.cn/member/contribute?uid=2667655202)
+
+**稿费：228RMB（不服你也来投稿啊！）**
+
+**投稿方式：发送邮件至linwei#360.cn，或登陆 ** **[
+**网页版**](http://bobao.360.cn/contribute/index)**** 在线投稿**
+
+**从t0到t3 – 信息搜集**
+
+一开始，我们拥有的帐号是一个没有特权的普通账号。假设我们已经在远程或者在本地利用EXP进行了一次攻击并且获得了一个反弹回来的shell。根本上说，在时间t0，我们不知道被攻击的机器是做什么的，它和谁进行连接，我们拥有怎样的权限，甚至它的操作系统是哪个。
+
+因此，开始的时候，我们就需要快速的搜集一些至关重要的信息，这样我们就可以了解一下我们所处环境的情况。
+
+首先，先看看我们连接的什么类型的操作系统
+
+    
+    
+    C:Windowssystem32> systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
+    OS Name:                   Microsoft Windows 7 Professional
+    OS Version:                6.1.7601 Service Pack 1 Build 7601
+
+注：中文环境下，"OS Name"为"OS 名称"，"OS Version"为"OS 版本"
+
+接着，看下计算机名和我们使用的用户
+
+    
+    
+    C:Windowssystem32> hostname
+    b33f
+    C:Windowssystem32> echo %username%
+    user1
+
+现在我们有了基本的信息，接下来我们可以列出计算机上的其它用户，并且可以看一下我们当前用户的详细信息。从下面的结果可以看出，user1不是本地用户组Administrators的成员。
+
+    
+    
+    C:Windowssystem32> net users
+    User accounts for \B33F
+    -------------------------------------------------------------------------------    Administrator            b33f                     Guest
+    user1
+    The command completed successfully.
+    C:Windowssystem32> net user user1
+    User name                    user1
+    Full Name
+    Comment
+    User's comment
+    Country code                 000 (System Default)
+    Account active               Yes
+    Account expires              Never
+    Password last set            1/11/2014 7:47:14 PM
+    Password expires             Never
+    Password changeable          1/11/2014 7:47:14 PM
+    Password required            Yes
+    User may change password     Yes
+    Workstations allowed         All
+    Logon script
+    User profile
+    Home directory
+    Last logon                   1/11/2014 8:05:09 PM
+    Logon hours allowed          All
+    Local Group Memberships      *Users
+    Global Group memberships     *None
+    The command completed successfully.
+
+这是我们暂时需要了解的关于用户的所有信息。接下来我们需要从网络方面搜集信息了。
+
+首先，看一下网络连接和路由表。
+
+    
+    
+    C:Windowssystem32> ipconfig /all
+    Windows IP Configuration
+       Host Name . . . . . . . . . . . . : b33f
+       Primary Dns Suffix  . . . . . . . :
+       Node Type . . . . . . . . . . . . : Hybrid
+       IP Routing Enabled. . . . . . . . : No
+       WINS Proxy Enabled. . . . . . . . : No
+    Ethernet adapter Bluetooth Network Connection:
+       Media State . . . . . . . . . . . : Media disconnected
+       Connection-specific DNS Suffix  . :
+       Description . . . . . . . . . . . : Bluetooth Device (Personal Area Network)
+       Physical Address. . . . . . . . . : 0C-84-DC-62-60-29
+       DHCP Enabled. . . . . . . . . . . : Yes
+       Autoconfiguration Enabled . . . . : Yes
+    Ethernet adapter Local Area Connection:
+       Connection-specific DNS Suffix  . :
+       Description . . . . . . . . . . . : Intel(R) PRO/1000 MT Network Connection
+       Physical Address. . . . . . . . . : 00-0C-29-56-79-35
+       DHCP Enabled. . . . . . . . . . . : Yes
+       Autoconfiguration Enabled . . . . : Yes
+       Link-local IPv6 Address . . . . . : fe80::5cd4:9caf:61c0:ba6e%11(Preferred)
+       IPv4 Address. . . . . . . . . . . : 192.168.0.104(Preferred)
+       Subnet Mask . . . . . . . . . . . : 255.255.255.0
+       Lease Obtained. . . . . . . . . . : Saturday, January 11, 2014 3:53:55 PM
+       Lease Expires . . . . . . . . . . : Sunday, January 12, 2014 3:53:55 PM
+       Default Gateway . . . . . . . . . : 192.168.0.1
+       DHCP Server . . . . . . . . . . . : 192.168.0.1
+       DHCPv6 IAID . . . . . . . . . . . : 234884137
+       DHCPv6 Client DUID. . . . . . . . : 00-01-00-01-18-14-24-1D-00-0C-29-56-79-35
+       DNS Servers . . . . . . . . . . . : 192.168.0.1
+       NetBIOS over Tcpip. . . . . . . . : Enabled
+    C:Windowssystem32> route print
+    ===========================================================================
+    Interface List
+     18...0c 84 dc 62 60 29 ......Bluetooth Device (Personal Area Network)
+     13...00 ff 0c 0d 4f ed ......TAP-Windows Adapter V9
+     11...00 0c 29 56 79 35 ......Intel(R) PRO/1000 MT Network Connection
+      1...........................Software Loopback Interface 1
+     16...00 00 00 00 00 00 00 e0 Microsoft ISATAP Adapter
+     15...00 00 00 00 00 00 00 e0 Microsoft ISATAP Adapter #2
+     19...00 00 00 00 00 00 00 e0 Microsoft ISATAP Adapter #3
+     14...00 00 00 00 00 00 00 e0 Teredo Tunneling Pseudo-Interface
+    ===========================================================================
+    IPv4 Route Table
+    ===========================================================================
+    Active Routes:
+    Network Destination        Netmask          Gateway       Interface  Metric
+              0.0.0.0          0.0.0.0      192.168.0.1    192.168.0.104     10
+            127.0.0.0        255.0.0.0         On-link         127.0.0.1    306
+            127.0.0.1  255.255.255.255         On-link         127.0.0.1    306
+      127.255.255.255  255.255.255.255         On-link         127.0.0.1    306
+          192.168.0.0    255.255.255.0         On-link     192.168.0.104    266
+        192.168.0.104  255.255.255.255         On-link     192.168.0.104    266
+        192.168.0.255  255.255.255.255         On-link     192.168.0.104    266
+            224.0.0.0        240.0.0.0         On-link         127.0.0.1    306
+            224.0.0.0        240.0.0.0         On-link     192.168.0.104    266
+      255.255.255.255  255.255.255.255         On-link         127.0.0.1    306
+      255.255.255.255  255.255.255.255         On-link     192.168.0.104    266
+    ===========================================================================
+    Persistent Routes:
+      None
+    IPv6 Route Table
+    ===========================================================================
+    Active Routes:
+     If Metric Network Destination      Gateway
+     14     58 ::/0                     On-link
+      1    306 ::1/128                  On-link
+     14     58 2001::/32                On-link
+     14    306 2001:0:5ef5:79fb:8d2:b4e:3f57:ff97/128
+                                        On-link
+     11    266 fe80::/64                On-link
+     14    306 fe80::/64                On-link
+     14    306 fe80::8d2:b4e:3f57:ff97/128
+                                        On-link
+     11    266 fe80::5cd4:9caf:61c0:ba6e/128
+                                        On-link
+      1    306 ff00::/8                 On-link
+     14    306 ff00::/8                 On-link
+     11    266 ff00::/8                 On-link
+    ===========================================================================
+    Persistent Routes:
+      None
+
+arp -A 展示了ARP缓存表.
+
+    
+    
+    C:Windowssystem32> arp -A
+    Interface: 192.168.0.104 --- 0xb
+      Internet Address      Physical Address      Type
+      192.168.0.1           90-94-e4-c5-b0-46     dynamic
+      192.168.0.101         ac-22-0b-af-bb-43     dynamic
+      192.168.0.255         ff-ff-ff-ff-ff-ff     static
+      224.0.0.22            01-00-5e-00-00-16     static
+      224.0.0.251           01-00-5e-00-00-fb     static
+      224.0.0.252           01-00-5e-00-00-fc     static
+      239.255.255.250       01-00-5e-7f-ff-fa     static
+      255.255.255.255       ff-ff-ff-ff-ff-ff     static
+
+下面可以看到活动的网络连接和防火墙规则
+
+    
+    
+    C:Windowssystem32> netstat -ano
+    Active Connections
+      Proto  Local Address          Foreign Address        State           PID
+      TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       684
+      TCP    0.0.0.0:445            0.0.0.0:0              LISTENING       4
+      TCP    0.0.0.0:5357           0.0.0.0:0              LISTENING       4
+      TCP    127.0.0.1:5354         0.0.0.0:0              LISTENING       1400
+      TCP    192.168.0.104:139      0.0.0.0:0              LISTENING       4
+      TCP    [::]:135               [::]:0                 LISTENING       684
+      TCP    [::]:445               [::]:0                 LISTENING       4
+      TCP    [::]:5357              [::]:0                 LISTENING       4
+      UDP    0.0.0.0:5355           *:*                                    1100
+      UDP    0.0.0.0:52282          *:*                                    976
+      UDP    0.0.0.0:55202          *:*                                    2956
+      UDP    0.0.0.0:59797          *:*                                    1400
+      UDP    127.0.0.1:1900         *:*                                    2956
+      UDP    127.0.0.1:65435        *:*                                    2956
+      UDP    192.168.0.104:137      *:*                                    4
+      UDP    192.168.0.104:138      *:*                                    4
+      UDP    192.168.0.104:1900     *:*                                    2956
+      UDP    192.168.0.104:5353     *:*                                    1400
+      UDP    192.168.0.104:65434    *:*                                    2956
+      UDP    [::]:5355              *:*                                    1100
+      UDP    [::]:52281             *:*                                    976
+      UDP    [::]:52283             *:*                                    976
+      UDP    [::]:55203             *:*                                    2956
+      UDP    [::]:59798             *:*                                    1400
+      UDP    [::1]:1900             *:*                                    2956
+      UDP    [::1]:5353             *:*                                    1400
+      UDP    [::1]:65433            *:*                                    2956
+      UDP    [fe80::5cd4:9caf:61c0:ba6e%11]:1900  *:*                      2956
+      UDP    [fe80::5cd4:9caf:61c0:ba6e%11]:65432  *:*                     2956
+
+接下来的两个netsh命令是不能在所有操作系统都通用的命令的例子，netsh firewall命令只能在XP SP2及其以上版本的操作系统使用。
+
+    
+    
+    C:Windowssystem32> netsh firewall show state
+    Firewall status:
+    -------------------------------------------------------------------    Profile                           = Standard
+    Operational mode                  = Enable
+    Exception mode                    = Enable
+    Multicast/broadcast response mode = Enable
+    Notification mode                 = Enable
+    Group policy version              = Windows Firewall
+    Remote admin mode                 = Disable
+    Ports currently open on all network interfaces:
+    Port   Protocol  Version  Program
+    -------------------------------------------------------------------    No ports are currently open on all network interfaces.
+    C:Windowssystem32> netsh firewall show config
+    Domain profile configuration:
+    -------------------------------------------------------------------    Operational mode                  = Enable
+    Exception mode                    = Enable
+    Multicast/broadcast response mode = Enable
+    Notification mode                 = Enable
+    Allowed programs configuration for Domain profile:
+    Mode     Traffic direction    Name / Program
+    -------------------------------------------------------------------    Port configuration for Domain profile:
+    Port   Protocol  Mode    Traffic direction     Name
+    -------------------------------------------------------------------    ICMP configuration for Domain profile:
+    Mode     Type  Description
+    -------------------------------------------------------------------    Enable   2     Allow outbound packet too big
+    Standard profile configuration (current):
+    -------------------------------------------------------------------    Operational mode                  = Enable
+    Exception mode                    = Enable
+    Multicast/broadcast response mode = Enable
+    Notification mode                 = Enable
+    Service configuration for Standard profile:
+    Mode     Customized  Name
+    -------------------------------------------------------------------    Enable   No          Network Discovery
+    Allowed programs configuration for Standard profile:
+    Mode     Traffic direction    Name / Program
+    -------------------------------------------------------------------    Enable   Inbound              COMRaider / E:comraidercomraider.exe
+    Enable   Inbound              nc.exe / C:usersb33fdesktopnc.exe
+    Port configuration for Standard profile:
+    Port   Protocol  Mode    Traffic direction     Name
+    -------------------------------------------------------------------    ICMP configuration for Standard profile:
+    Mode     Type  Description
+    -------------------------------------------------------------------    Enable   2     Allow outbound packet too big
+    Log configuration:
+    -------------------------------------------------------------------    File location   = C:Windowssystem32LogFilesFirewallpfirewall.log
+    Max file size   = 4096 KB
+    Dropped packets = Disable
+    Connections     = Disable
+
+最后，我们大概的看一下计算机上的：计划任务，正在运行的进程，启动的服务，安装的驱动程序。
+
+这条命令将详细的展示出所有的计划任务：
+
+    
+    
+    C:Windowssystem32> schtasks /query /fo LIST /v
+    Folder: MicrosoftWindows Defender
+    HostName:                             B33F
+    TaskName:                             MicrosoftWindows DefenderMP Scheduled Scan
+    Next Run Time:                        1/22/2014 5:11:13 AM
+    Status:                               Ready
+    Logon Mode:                           Interactive/Background
+    Last Run Time:                        N/A
+    Last Result:                          1
+    Author:                               N/A
+    Task To Run:                          c:program fileswindows defenderMpCmdRun.exe Scan -ScheduleJob
+                                          -WinTask -RestrictPrivilegesScan
+    Start In:                             N/A
+    Comment:                              Scheduled Scan
+    Scheduled Task State:                 Enabled
+    Idle Time:                            Only Start If Idle for 1 minutes, If Not Idle Retry For 240 minutes
+    Power Management:                     No Start On Batteries
+    Run As User:                          SYSTEM
+    Delete Task If Not Rescheduled:       Enabled
+    Stop Task If Runs X Hours and X Mins: 72:00:00
+    Schedule:                             Scheduling data is not available in this format.
+    Schedule Type:                        Daily
+    Start Time:                           5:11:13 AM
+    Start Date:                           1/1/2000
+    End Date:                             1/1/2100
+    Days:                                 Every 1 day(s)
+    Months:                               N/A
+    Repeat: Every:                        Disabled
+    Repeat: Until: Time:                  Disabled
+    Repeat: Until: Duration:              Disabled
+    Repeat: Stop If Still Running:        Disabled
+    [..Snip..]
+
+下面的这条命令将正在运行的进程和该进程启动的服务列了出来：
+
+    
+    
+    C:Windowssystem32> tasklist /SVC
+    Image Name                     PID Services
+    ========================= ======== ============================================
+    System Idle Process              0 N/A
+    System                           4 N/A
+    smss.exe                       244 N/A
+    csrss.exe                      332 N/A
+    csrss.exe                      372 N/A
+    wininit.exe                    380 N/A
+    winlogon.exe                   428 N/A
+    services.exe                   476 N/A
+    lsass.exe                      484 SamSs
+    lsm.exe                        496 N/A
+    svchost.exe                    588 DcomLaunch, PlugPlay, Power
+    svchost.exe                    668 RpcEptMapper, RpcSs
+    svchost.exe                    760 Audiosrv, Dhcp, eventlog,
+                                       HomeGroupProvider, lmhosts, wscsvc
+    svchost.exe                    800 AudioEndpointBuilder, CscService, Netman,
+                                       SysMain, TrkWks, UxSms, WdiSystemHost,
+                                       wudfsvc
+    svchost.exe                    836 AeLookupSvc, BITS, gpsvc, iphlpsvc,
+                                       LanmanServer, MMCSS, ProfSvc, Schedule,
+                                       seclogon, SENS, ShellHWDetection, Themes,
+                                       Winmgmt, wuauserv
+    audiodg.exe                    916 N/A
+    svchost.exe                    992 EventSystem, fdPHost, netprofm, nsi,
+                                       WdiServiceHost, WinHttpAutoProxySvc
+    svchost.exe                   1104 CryptSvc, Dnscache, LanmanWorkstation,
+                                       NlaSvc
+    spoolsv.exe                   1244 Spooler
+    svchost.exe                   1272 BFE, DPS, MpsSvc
+    mDNSResponder.exe             1400 Bonjour Service
+    taskhost.exe                  1504 N/A
+    taskeng.exe                   1556 N/A
+    vmtoolsd.exe                  1580 VMTools
+    dwm.exe                       1660 N/A
+    explorer.exe                  1668 N/A
+    vmware-usbarbitrator.exe      1768 VMUSBArbService
+    TPAutoConnSvc.exe             1712 TPAutoConnSvc
+    [..Snip..]
+    
+    
+    C:Windowssystem32> net start
+    These Windows services are started:
+       Application Experience
+       Application Information
+       Background Intelligent Transfer Service
+       Base Filtering Engine
+       Bluetooth Support Service
+       Bonjour Service
+       COM+ Event System
+       COM+ System Application
+       Cryptographic Services
+       DCOM Server Process Launcher
+       Desktop Window Manager Session Manager
+       DHCP Client
+       Diagnostic Policy Service
+       Diagnostic Service Host
+       Diagnostic System Host
+       Distributed Link Tracking Client
+       Distributed Transaction Coordinator
+       DNS Client
+       Function Discovery Provider Host
+       Function Discovery Resource Publication
+       Group Policy Client
+    [..Snip..]
+
+这有时是有用的，一些第三方驱动程序,即使是有信誉的公司,也可能有比瑞士奶酪上的孔还多的的漏洞。这仅仅是有可能的,因为对ring0攻击在大多数人专业技能之外。
+
+    
+    
+    C:Windowssystem32> DRIVERQUERY
+    Module Name  Display Name           Driver Type   Link Date
+    ============ ====================== ============= ======================
+    1394ohci     1394 OHCI Compliant Ho Kernel        11/20/2010 6:01:11 PM
+    ACPI         Microsoft ACPI Driver  Kernel        11/20/2010 4:37:52 PM
+    AcpiPmi      ACPI Power Meter Drive Kernel        11/20/2010 4:47:55 PM
+    adp94xx      adp94xx                Kernel        12/6/2008 7:59:55 AM
+    adpahci      adpahci                Kernel        5/2/2007 1:29:26 AM
+    adpu320      adpu320                Kernel        2/28/2007 8:03:08 AM
+    AFD          Ancillary Function Dri Kernel        11/20/2010 4:40:00 PM
+    agp440       Intel AGP Bus Filter   Kernel        7/14/2009 7:25:36 AM
+    aic78xx      aic78xx                Kernel        4/12/2006 8:20:11 AM
+    aliide       aliide                 Kernel        7/14/2009 7:11:17 AM
+    amdagp       AMD AGP Bus Filter Dri Kernel        7/14/2009 7:25:36 AM
+    amdide       amdide                 Kernel        7/14/2009 7:11:19 AM
+    AmdK8        AMD K8 Processor Drive Kernel        7/14/2009 7:11:03 AM
+    AmdPPM       AMD Processor Driver   Kernel        7/14/2009 7:11:03 AM
+    amdsata      amdsata                Kernel        3/19/2010 9:08:27 AM
+    amdsbs       amdsbs                 Kernel        3/21/2009 2:35:26 AM
+    amdxata      amdxata                Kernel        3/20/2010 12:19:01 AM
+    AppID        AppID Driver           Kernel        11/20/2010 5:29:48 PM
+    arc          arc                    Kernel        5/25/2007 5:31:06 AM
+    [..Snip..]
+
+**t4 – WMIC的神秘艺术**
+
+我在这里单独的拿出WMIC(Windows Management Instrumentation Command-Line)来讲解，是因为它是Windows平台下最有用的命令行工具。
+
+WMIC在信息搜集和后渗透测试阶段非常实用。话虽这么说，其实它是有一点笨重的，因为它有时候会输出比我们需要的信息更多的信息。
+
+要完全讲完WMIC的使用，要耗费很长的时间。还有不得不提的是，一些输出可能会因为它的格式，很难在命令行下完美的展示出来。
+
+在这里安利两个WMIC的教程：
+
+[[Command-Line Ninjitsu
+(SynJunkie)]](http://synjunkie.blogspot.com/2008/03/command-line-ninjitsu.html)
+
+[[Windows WMIC Command Line
+(ComputerHope)]](http://www.computerhope.com/wmic.htm)
+
+不幸的是，一些windows默认的配置是不允许使用WMIC命令的，除非你是管理员组成员。经过我的测试，在XP下低权限用户是不能使用WMIC命令，但是在Windows
+7 和Windows 8下，低权限用户可以使用WMIC，且不用更改任何设置。这正是我们使用WMIC搜集目标机器信息的前提。
+
+下面是WMIC的命令行帮助：
+
+    
+    
+    C:Windowssystem32> wmic /?
+    [global switches] 
+    The following global switches are available:
+    /NAMESPACE           Path for the namespace the alias operate against.
+    /ROLE                Path for the role containing the alias definitions.
+    /NODE                Servers the alias will operate against.
+    /IMPLEVEL            Client impersonation level.
+    /AUTHLEVEL           Client authentication level.
+    /LOCALE              Language id the client should use.
+    /PRIVILEGES          Enable or disable all privileges.
+    /TRACE               Outputs debugging information to stderr.
+    /RECORD              Logs all input commands and output.
+    /INTERACTIVE         Sets or resets the interactive mode.
+    /FAILFAST            Sets or resets the FailFast mode.
+    /USER                User to be used during the session.
+    /PASSWORD            Password to be used for session login.
+    /OUTPUT              Specifies the mode for output redirection.
+    /APPEND              Specifies the mode for output redirection.
+    /AGGREGATE           Sets or resets aggregate mode.
+    /AUTHORITY           Specifies the  for the connection.
+    /?[:<BRIEF|FULL>]    Usage information.
+    For more information on a specific global switch, type: switch-name /?
+    The following alias/es are available in the current role:
+    ALIAS                    - Access to the aliases available on the local system
+    BASEBOARD                - Base board (also known as a motherboard or system board) management.
+    BIOS                     - Basic input/output services (BIOS) management.
+    BOOTCONFIG               - Boot configuration management.
+    CDROM                    - CD-ROM management.
+    COMPUTERSYSTEM           - Computer system management.
+    CPU                      - CPU management.
+    CSPRODUCT                - Computer system product information from SMBIOS.
+    DATAFILE                 - DataFile Management.
+    DCOMAPP                  - DCOM Application management.
+    DESKTOP                  - User's Desktop management.
+    DESKTOPMONITOR           - Desktop Monitor management.
+    DEVICEMEMORYADDRESS      - Device memory addresses management.
+    DISKDRIVE                - Physical disk drive management.
+    DISKQUOTA                - Disk space usage for NTFS volumes.
+    DMACHANNEL               - Direct memory access (DMA) channel management.
+    ENVIRONMENT              - System environment settings management.
+    FSDIR                    - Filesystem directory entry management.
+    GROUP                    - Group account management.
+    IDECONTROLLER            - IDE Controller management.
+    IRQ                      - Interrupt request line (IRQ) management.
+    JOB                      - Provides  access to the jobs scheduled using the schedule service.
+    LOADORDER                - Management of system services that define execution dependencies.
+    LOGICALDISK              - Local storage device management.
+    LOGON                    - LOGON Sessions.
+    MEMCACHE                 - Cache memory management.
+    MEMORYCHIP               - Memory chip information.
+    MEMPHYSICAL              - Computer system's physical memory management.
+    NETCLIENT                - Network Client management.
+    NETLOGIN                 - Network login information (of a particular user) management.
+    NETPROTOCOL              - Protocols (and their network characteristics) management.
+    NETUSE                   - Active network connection management.
+    NIC                      - Network Interface Controller (NIC) management.
+    NICCONFIG                - Network adapter management.
+    NTDOMAIN                 - NT Domain management.
+    NTEVENT                  - Entries in the NT Event Log.
+    NTEVENTLOG               - NT eventlog file management.
+    ONBOARDDEVICE            - Management of common adapter devices built into the motherboard (system board).
+    OS                       - Installed Operating System/s management.
+    PAGEFILE                 - Virtual memory file swapping management.
+    PAGEFILESET              - Page file settings management.
+    PARTITION                - Management of partitioned areas of a physical disk.
+    PORT                     - I/O port management.
+    PORTCONNECTOR            - Physical connection ports management.
+    PRINTER                  - Printer device management.
+    PRINTERCONFIG            - Printer device configuration management.
+    PRINTJOB                 - Print job management.
+    PROCESS                  - Process management.
+    PRODUCT                  - Installation package task management.
+    QFE                      - Quick Fix Engineering.
+    QUOTASETTING             - Setting information for disk quotas on a volume.
+    RDACCOUNT                - Remote Desktop connection permission management.
+    RDNIC                    - Remote Desktop connection management on a specific network adapter.
+    RDPERMISSIONS            - Permissions to a specific Remote Desktop connection.
+    RDTOGGLE                 - Turning Remote Desktop listener on or off remotely.
+    RECOVEROS                - Information that will be gathered from memory when the operating system fails.
+    REGISTRY                 - Computer system registry management.
+    SCSICONTROLLER           - SCSI Controller management.
+    SERVER                   - Server information management.
+    SERVICE                  - Service application management.
+    SHADOWCOPY               - Shadow copy management.
+    SHADOWSTORAGE            - Shadow copy storage area management.
+    SHARE                    - Shared resource management.
+    SOFTWAREELEMENT          - Management of the  elements of a software product installed on a system.
+    SOFTWAREFEATURE          - Management of software product subsets of SoftwareElement.
+    SOUNDDEV                 - Sound Device management.
+    STARTUP                  - Management of commands that run automatically when users log onto the computer 
+                               system.
+    SYSACCOUNT               - System account management.
+    SYSDRIVER                - Management of the system driver for a base service.
+    SYSTEMENCLOSURE          - Physical system enclosure management.
+    SYSTEMSLOT               - Management of physical connection points including ports,  slots and 
+                               peripherals, and proprietary connections points.
+    TAPEDRIVE                - Tape drive management.
+    TEMPERATURE              - Data management of a temperature sensor (electronic thermometer).
+    TIMEZONE                 - Time zone data management.
+    UPS                      - Uninterruptible power supply (UPS) management.
+    USERACCOUNT              - User account management.
+    VOLTAGE                  - Voltage sensor (electronic voltmeter) data management.
+    VOLUME                   - Local storage volume management.
+    VOLUMEQUOTASETTING       - Associates the disk quota setting with a specific disk volume.
+    VOLUMEUSERQUOTA          - Per user storage volume quota management.
+    WMISET                   - WMI service operational parameters management.
+    For more information on a specific alias, type: alias /?
+    CLASS     - Escapes to full WMI schema.
+    PATH      - Escapes to full WMI object paths.
+    CONTEXT   - Displays the state of all the global switches.
+    QUIT/EXIT - Exits the program.
+    For more information on CLASS/PATH/CONTEXT, type: (CLASS | PATH | CONTEXT) /?
+
+为了省时省力，我写了一个可以放在目标机器上，调用WMIC来提取下面信息（进程，服务，用户，用户组，网络连接，硬盘信息，网络共享信息，已安装补丁，启动项，已安装的软件，操作系统的相关信息，和时区）的脚本。
+
+[[下载点我]](http://www.fuzzysecurity.com/tutorials/files/wmic_info.rar)
+
+**从t5到t6 – 快速攻陷**
+
+在继续之前，你需要先看一下你已经搜集到的信息，下一步就是要寻找一下能被利用的系统缺陷来提升我们的权限。
+
+首先我们要看的是是补丁修正情况，我的WMIC脚本可以列出已安装的补丁，但是你也可以通过下面这条命令来查看：
+
+    
+    
+    C:Windowssystem32> wmic qfe get Caption,Description,HotFixID,InstalledOn
+    Caption                                     Description      HotFixID   InstalledOn
+    http://support.microsoft.com/?kbid=2727528  Security Update  KB2727528  11/23/2013
+    http://support.microsoft.com/?kbid=2729462  Security Update  KB2729462  11/26/2013
+    http://support.microsoft.com/?kbid=2736693  Security Update  KB2736693  11/26/2013
+    http://support.microsoft.com/?kbid=2737084  Security Update  KB2737084  11/23/2013
+    http://support.microsoft.com/?kbid=2742614  Security Update  KB2742614  11/23/2013
+    http://support.microsoft.com/?kbid=2742616  Security Update  KB2742616  11/26/2013
+    http://support.microsoft.com/?kbid=2750149  Update           KB2750149  11/23/2013
+    http://support.microsoft.com/?kbid=2756872  Update           KB2756872  11/24/2013
+    http://support.microsoft.com/?kbid=2756923  Security Update  KB2756923  11/26/2013
+    http://support.microsoft.com/?kbid=2757638  Security Update  KB2757638  11/23/2013
+    http://support.microsoft.com/?kbid=2758246  Update           KB2758246  11/24/2013
+    http://support.microsoft.com/?kbid=2761094  Update           KB2761094  11/24/2013
+    http://support.microsoft.com/?kbid=2764870  Update           KB2764870  11/24/2013
+    http://support.microsoft.com/?kbid=2768703  Update           KB2768703  11/23/2013
+    http://support.microsoft.com/?kbid=2769034  Update           KB2769034  11/23/2013
+    http://support.microsoft.com/?kbid=2769165  Update           KB2769165  11/23/2013
+    http://support.microsoft.com/?kbid=2769166  Update           KB2769166  11/26/2013
+    http://support.microsoft.com/?kbid=2770660  Security Update  KB2770660  11/23/2013
+    http://support.microsoft.com/?kbid=2770917  Update           KB2770917  11/24/2013
+    http://support.microsoft.com/?kbid=2771821  Update           KB2771821  11/24/2013
+    [..Snip..]
+
+这些输出的结果是不能直接被利用的，最好的方式是去找权限提升的EXP并且将这些编号与EXP编号进行对比。这些EXP包括，但不限于：KiTrap0D
+(KB979682), MS11-011 (KB2393802), MS10-059 (KB982799), MS10-021 (KB979683),
+MS11-080 (KB2592799)。
+
+如果有许多机器需要被安装，通常，一个技术员不会挨个机器手动装机。有一些自动安装的解决方案。这些方案是什么以及它们是如何工作的对我们的目的不重要，重要的是他们留下的用于安装过程的配置文件，这些安装文件包含大量的敏感信息，例如操作系统的产品密钥和管理员的密码。我们最感兴趣的就是管理员密码，因为我们可以用它来提升我们的权限。
+
+通常的，这些目录包含这些配置文件（检查整个系统的所有文件也是不错想法）：
+
+    
+    
+    c:sysprep.inf
+    c:sysprepsysprep.xml
+    %WINDIR%PantherUnattendUnattended.xml
+    %WINDIR%PantherUnattended.xml
+
+这些文件要么包含着明文密码，要么就是Base64加密后的密码。下面是一个例子：
+
+sysprep.inf 文件中的明文密码：
+
+    
+    
+    credentials.
+    [GuiUnattended]
+    OEMSkipRegional=1
+    OemSkipWelcome=1
+    AdminPassword=s3cr3tp4ssw0rd
+    TimeZone=20
+
+sysprep.xml 文件中的Base64加密后的密文：
+
+    
+    
+    credentials. Please people Base64 is not
+    encryption, I take more precautions to protect my coffee. The password here is "SuperSecurePassword".
+    <LocalAccounts>
+        <LocalAccount wcm:action="add">
+            <Password>
+                <Value>U3VwZXJTZWN1cmVQYXNzd29yZA==</Value>
+                <PlainText>false</PlainText>
+            </Password>
+            <Description>Local Administrator</Description>
+            <DisplayName>Administrator</DisplayName>
+            <Group>Administrators</Group>
+            <Name>Administrator</Name>
+        </LocalAccount>
+    </LocalAccounts>
+
+Unattended.xml 中同样是Base64加密后的密文：
+
+    
+    
+    <AutoLogon>
+        <Password>
+            <Value>U3VwZXJTZWN1cmVQYXNzd29yZA==</Value>
+            <PlainText>false</PlainText>
+        </Password>
+        <Enabled>true</Enabled>
+        <Username>Administrator</Username>
+    </AutoLogon>
+
+在我们的好基友Ben Campbell的推荐下，我将获取组策略首选项（Group Policy
+Preferences）保存的密码也作为快速攻陷目标机器的方式之一。GPP允许域管理员在域控制端远程向域内主机添加本地账户以方便管理。当你要攻击的计算机连接到了一个域，那么去寻找储存在SYSVOL中的Groups.xml文件是非常值得做的事。任何经过授权的用户都对该文件有读的权限。在这个xml文件中，密码是用AES加密的，但令人费解的是，在MSDN上，密码的密钥和加密方式都被公布了，这样我么就可以轻松的解密这个密码。
+
+除了Groups.xml，其他的策略选项文件也有可选的“cPassword”属性：
+
+例如以下这几个：
+
+    
+    
+    ServicesServices.xml
+    ScheduledTasksScheduledTasks.xml
+    PrintersPrinters.xml
+    DrivesDrives.xml
+    DataSourcesDataSources.xml
+
+这个漏洞可以手动的浏览SYSVOL文件夹，接下来我来做个示范：
+
+然而，我们都喜欢自动的方法，这样我们可以尽可能快的完成这个操作。这里主要有两种方式，取决于我们拥有的shell类型和权限的大小。
+
+（1）metasploit的一个模块（post/windows/gather/credentials/gpp
+
+）[[戳我]](https://www.rapid7.com/db/modules/post/windows/gather/credentials/gpp)
+
+（2）你可以使用PowerSploit[[戳我]](https://github.com/mattifestation/PowerSploit)的Get-GPPPassword功能。PowerSploit是一个强大的powershell框架，作者是Matt Graeber。
+
+接下来的事情，我们要找一个奇怪的注册表设置“AlwaysInstallElevated”，如果这个设置被启用，它允许任何权限的用户暂时使用NT
+AUTHORITYSYSTEM权限来安装*.msi文件。对我来说，你创建了一个低权限的用户（限制它们的操作系统的使用）但是给了它们使用SYSTEM权限来安装软件的能力是很奇怪的。想要进一步了解，请[[戳我]](http://www.greyhathacker.net/?p=185)
+
+为了能够使用这种方式，我们首先要执行以下语句：
+
+仅仅当存在键名：AlwaysInstallElevated且它的DWORD值是1才有效。
+
+    
+    
+    C:Windowssystem32> reg query HKLMSOFTWAREPoliciesMicrosoftWindowsInstallerAlwaysInstallElevated
+    C:Windowssystem32> reg query HKCUSOFTWAREPoliciesMicrosoftWindowsInstallerAlwaysInstallElevated
+
+在这种情况下，我们可以获取一个SYSTEM权限的shell了。
+
+为了完成这部分，我们将在操作系统上做一些快速的搜索，并且希望我们可以打动老天爷。
+
+接下来的这条命令可以搜索system32下的所有名字包含以下几个关键字的文件，当然你可以手动指定关键字。
+
+    
+    
+    C:Windowssystem32> dir /s *pass* == *cred* == *vnc* == *.config*
+
+搜索某些特定的文件类型，这可能搜索到大量的结果：
+
+    
+    
+    C:Windowssystem32> findstr /si password *.xml *.ini *.txt
+
+相似的，接下来的两条命令都是用来搜索注册表的，keyword是password，你可以替换成任何你想要的。
+
+    
+    
+    C:Windowssystem32> reg query HKLM /f password /t REG_SZ /s
+    C:Windowssystem32> reg query HKCU /f password /t REG_SZ /s
+
+本文翻译自fuzzysecurity
+[原文链接](http://www.fuzzysecurity.com/tutorials/16.html)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **慕容禽兽** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/84852](/post/id/84852)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [fuzzysecurity](http://www.fuzzysecurity.com/tutorials/16.html)
+
+如若转载,请注明出处： <http://www.fuzzysecurity.com/tutorials/16.html>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [安全知识](/tag/安全知识)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p3.ssl.qhmsg.com/dm/200_200_100/t00df551a583a87f4e9.jpg) 慕容禽兽
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+

