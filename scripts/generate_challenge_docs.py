@@ -555,23 +555,34 @@ def main() -> None:
 | --- | --- | --- | --- |
 """ + "\n".join(rows) + "\n"
     (ROOT / "docs" / "inventory.md").write_text(inventory, encoding="utf-8")
+    # 遍历 git 跟踪清单而非磁盘：磁盘含未跟踪杂物（如 .DS_Store）且
+    # Unicode 规范化形式在 macOS/Linux 间不一致，会导致两端生成的清单不同。
+    import subprocess
+
+    ls = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True
+    ).stdout.split(b"\0")
+    tracked = [Path(v.decode("utf-8")) for v in ls if v]
     checksum_rows = []
-    for artifact in sorted(ROOT.rglob("*"), key=lambda p: str(p.relative_to(ROOT)).casefold()):
-        if not artifact.is_file():
-            continue
-        relative = artifact.relative_to(ROOT)
+    for relative in sorted(tracked, key=lambda p: str(p).casefold()):
         if relative.parts[0] in {".git", ".github", ".vscode", "docs", "scripts"}:
             continue
         if (
             str(relative) in ROOT_DOCUMENTS
-            or artifact.name.casefold() == "readme.md"
-            or artifact.name == ".gitignore"
+            or relative.name.casefold() == "readme.md"
+            or relative.name == ".gitignore"
         ):
             continue
-        digest = hashlib.sha256()
-        with artifact.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
+        artifact = ROOT / relative
+        try:
+            if not artifact.is_file():
+                continue
+            digest = hashlib.sha256()
+            with artifact.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError:
+            continue
         checksum_rows.append(f"{digest.hexdigest()}  {relative}")
     (ROOT / "docs" / "SHA256SUMS").write_text(
         "\n".join(checksum_rows) + "\n", encoding="utf-8"
