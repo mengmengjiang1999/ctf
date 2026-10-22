@@ -17,4 +17,7 @@ jobs:
       - name: Verify generated indexes
         run: |
           python3 scripts/generate_challenge_docs.py
+          git status --porcelain -- docs/
+          git diff --stat -- docs/inventory.md docs/SHA256SUMS
+          git diff -- docs/inventory.md docs/SHA256SUMS | head -40
           git diff --exit-code -- docs/inventory.md docs/SHA256SUMS
